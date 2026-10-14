@@ -1,4 +1,4 @@
--- REVENIRE 20261029a — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 14 funcții fn_ofertare_ocr_*.
+-- REVENIRE 20261029a — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 16 funcții fn_ofertare_ocr_*.
 -- DATELE OCR SE PIERD (rulări, pagini citite, dezacorduri, rezervări, arbitraje, verificări, jurnalul linkurilor). Nu atinge
 -- text_extras, cantități sau alte tabele existente. Rândul 'ocr_local_ofertare' din procese_heartbeat se DEZACTIVEAZĂ (activ = false),
 -- nu se șterge (fn_ofertare_ocr_heartbeat îl reactivează la o reaplicare).
@@ -19,20 +19,32 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261029a: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF to_regclass('public.ofertare_ocr_rulari') IS NULL THEN RAISE EXCEPTION '20261029a: preconditie, migrarea nu e aplicata'; END IF;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 14
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 16
      OR (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%') <> 7 THEN
     RAISE EXCEPTION '20261029a: preconditie, alt numar de obiecte decat la aplicare';
   END IF;
-  -- aceeași expresie ca în $post$ din migrare
-  SELECT md5(string_agg(x, '|' ORDER BY x)) INTO v_fp FROM (
-    SELECT p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid)) || coalesce(p.proacl::text, '') AS x
+  -- aceeași expresie ca fn_ofertare_ocr_amprenta() din migrare, copiată INLINE (o funcție modificată nu se poate autovalida)
+  SELECT (SELECT md5(string_agg(x, '|' ORDER BY x)) FROM (
+    SELECT 'f:' || p.oid::regprocedure::text || ':' || md5(pg_get_functiondef(p.oid)) || ':' || pg_get_userbyid(p.proowner)
+           || ':' || coalesce(p.proacl::text, '') AS x
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%'
     UNION ALL
-    SELECT c.relname || ':' || coalesce(c.relacl::text, '') || ':' || (SELECT string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || a.attnotnull::text, ',' ORDER BY a.attnum)
-                                                                     FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)
-           || ':' || coalesce((SELECT string_agg(pg_get_constraintdef(k.oid), ',' ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid = c.oid), '')
-           || ':' || coalesce((SELECT string_agg(po.polname || pg_get_expr(po.polqual, po.polrelid), ',' ORDER BY po.polname) FROM pg_policy po WHERE po.polrelid = c.oid), '')
-      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%') s;
+    SELECT 't:' || c.relname || ':' || pg_get_userbyid(c.relowner) || ':' || coalesce(c.relacl::text, '') || ':' || c.relrowsecurity::text
+           || c.relforcerowsecurity::text
+           || ':' || (SELECT string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || ' ' || a.attnotnull::text || ' ' || a.attidentity::text
+                                        || ' ' || coalesce(pg_get_expr(d.adbin, d.adrelid), '') || ' ' || coalesce(a.attacl::text, ''), ',' ORDER BY a.attnum)
+                        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                       WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)
+           || ':' || coalesce((SELECT string_agg(k.conname || ' ' || pg_get_constraintdef(k.oid), ',' ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid = c.oid), '')
+           || ':' || coalesce((SELECT string_agg(pg_get_indexdef(i.indexrelid), ',' ORDER BY 1) FROM pg_index i WHERE i.indrelid = c.oid), '')
+           || ':' || coalesce((SELECT string_agg(pg_get_triggerdef(g.oid) || ' ' || g.tgenabled::text, ',' ORDER BY g.tgname) FROM pg_trigger g WHERE g.tgrelid = c.oid AND NOT g.tgisinternal), '')
+           || ':' || coalesce((SELECT string_agg(po.polname || ' ' || po.polcmd::text || ' ' || po.polpermissive::text || ' ' || po.polroles::regrole[]::text || ' '
+                                                 || coalesce(pg_get_expr(po.polqual, po.polrelid), '') || ' ' || coalesce(pg_get_expr(po.polwithcheck, po.polrelid), ''),
+                                                 ',' ORDER BY po.polname) FROM pg_policy po WHERE po.polrelid = c.oid), '')
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%'
+    UNION ALL
+    SELECT 's:' || c.relname || ':' || pg_get_userbyid(c.relowner) || ':' || coalesce(c.relacl::text, '')
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'S' AND c.relname LIKE 'ofertare\_ocr\_%') s) INTO v_fp;
   v_comentariu := obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class');
   IF v_comentariu IS NULL OR v_comentariu NOT LIKE '%amprenta=' || v_fp THEN
     RAISE EXCEPTION '20261029a: preconditie, obiectele s-au schimbat dupa aplicare (amprenta difera) - revenire manuala, cu review';
@@ -52,6 +64,8 @@ BEGIN
   DROP FUNCTION public.fn_ofertare_ocr_scrie_arbitraj(bigint, jsonb);
   DROP FUNCTION public.fn_ofertare_ocr_rezervare_abandon(bigint);
   DROP FUNCTION public.fn_ofertare_ocr_heartbeat(boolean, text);
+  DROP FUNCTION public.fn_ofertare_ocr_comparatie_gata(bigint, integer, text);
+  DROP FUNCTION public.fn_ofertare_ocr_amprenta();
   DROP TABLE public.ofertare_ocr_verificari;
   DROP TABLE public.ofertare_ocr_arbitraje;
   DROP TABLE public.ofertare_ocr_rezervari;

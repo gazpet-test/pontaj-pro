@@ -62,6 +62,12 @@ CREATE TABLE public.ofertare_ocr_rulari (
   stare            text NOT NULL DEFAULT 'ceruta'
                    CHECK (stare IN ('ceruta', 'preluata', 'citita', 'arbitrata', 'finalizata', 'oprita', 'anulata', 'esuata')),
   oprit_motiv      text CHECK (oprit_motiv IS NULL OR length(oprit_motiv) <= 300),
+  -- marcajul „compararea s-a încheiat” (o singură dată, în citita): numărul și amprenta dezacordurilor încărcate. Fără el, „zero
+  -- dezacorduri” nu se poate deosebi de „nu s-au încărcat” (review Copilot r2).
+  comparatie_nr     integer CHECK (comparatie_nr IS NULL OR comparatie_nr >= 0),
+  comparatie_sha256 text CHECK (comparatie_sha256 IS NULL OR comparatie_sha256 ~ '^[0-9a-f]{64}$'),
+  comparatie_la     timestamptz,
+  CHECK ((comparatie_nr IS NULL) = (comparatie_sha256 IS NULL) AND (comparatie_nr IS NULL) = (comparatie_la IS NULL)),
   protocol         text CHECK (protocol IS NULL OR protocol ~ '^[a-z0-9.-]{1,40}$'),
   pornit_de        uuid NOT NULL,
   pornit_la        timestamptz NOT NULL DEFAULT now(),
@@ -79,14 +85,17 @@ CREATE TABLE public.ofertare_ocr_pagini (
   pagina        integer NOT NULL CHECK (pagina BETWEEN 1 AND 9999),
   cititor       text NOT NULL CHECK (cititor IN ('lighton', 'mineru', 'reconciliat')),
   text          text NOT NULL CHECK (length(text) <= 200000),
-  stare         text NOT NULL CHECK (stare IN ('citit', 'incomplet', 'needs_human', 'reconciliat')),
+  -- exclus = pagina rutată în afara citirii de plan (planșă, formular, orientare nerezolvată...): text gol, motivul în garda
+  stare         text NOT NULL CHECK (stare IN ('citit', 'incomplet', 'exclus', 'needs_human', 'reconciliat')),
   protocol      text NOT NULL CHECK (protocol ~ '^[a-z0-9.-]{1,40}$'),
   model_rev     text NOT NULL CHECK (length(model_rev) BETWEEN 1 AND 200),
   raw_sha256    text NOT NULL CHECK (raw_sha256 ~ '^[0-9a-f]{64}$'),
   image_sha256  text CHECK (image_sha256 IS NULL OR image_sha256 ~ '^[0-9a-f]{64}$'),
   garda         jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(garda) = 'object'),
   creat_la      timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (rulare_id, document_id, pagina, cititor)
+  UNIQUE (rulare_id, document_id, pagina, cititor),
+  CHECK (stare <> 'exclus' OR (text = '' AND garda ? 'motiv_excludere')),
+  CHECK (cititor = 'reconciliat' OR stare = 'exclus' OR image_sha256 IS NOT NULL)
 );
 CREATE INDEX ofertare_ocr_pagini_doc_idx ON public.ofertare_ocr_pagini (document_id, pagina);
 
@@ -102,9 +111,12 @@ CREATE TABLE public.ofertare_ocr_dezacorduri (
   citire_mineru       text NOT NULL CHECK (length(citire_mineru) <= 50000),
   e_cantitate         boolean NOT NULL,
   anomalie_separator  boolean NOT NULL,
+  pagina_lighton_id   bigint NOT NULL REFERENCES public.ofertare_ocr_pagini(id),
+  pagina_mineru_id    bigint NOT NULL REFERENCES public.ofertare_ocr_pagini(id),
+  image_sha256        text NOT NULL CHECK (image_sha256 ~ '^[0-9a-f]{64}$'),
   creat_la            timestamptz NOT NULL DEFAULT now(),
   UNIQUE (rulare_id, document_id, item_id),
-  UNIQUE (rulare_id, item_sha256),
+  UNIQUE (rulare_id, document_id, item_sha256),
   CHECK (substring(item_id FROM '^p([0-9]{4})_')::int = pagina)
 );
 
@@ -135,7 +147,7 @@ CREATE TABLE public.ofertare_ocr_arbitraje (
   cost_usd            numeric(10,4) NOT NULL CHECK (cost_usd >= 0 AND cost_usd <= 1),
   creat_la            timestamptz NOT NULL DEFAULT now(),
   CHECK ((decizie = 'needs_human') = (text_ales IS NULL)),
-  CHECK (decizie <> 'text_propus' OR btrim(text_ales) <> '')
+  CHECK (decizie <> 'text_propus' OR text_ales ~ '[^[:space:]]')
 );
 
 CREATE TABLE public.ofertare_ocr_verificari (
@@ -293,11 +305,15 @@ BEGIN
   RETURN jsonb_build_object('rulare', jsonb_build_object('id', r.id, 'licitatie_id', r.licitatie_id, 'documente', r.documente, 'plafon_usd', r.plafon_usd));
 END $f$;
 
--- Tranziții: preluata→citita→arbitrata→finalizata (citita→arbitrata doar fără rezervări deschise); orice activă → oprita / esuata.
+-- Tranziții, cu dovada completitudinii (review Copilot r2):
+--   preluata → citita   : fiecare pagină înghețată are AMBELE citiri (lighton + mineru; citit / incomplet / exclus);
+--   citita → arbitrata  : marcajul „comparație încheiată” există, numărul de dezacorduri = cel declarat, FIECARE dezacord are
+--                         decizia lui, nicio rezervare deschisă;
+--   arbitrata → finalizata; orice activă → oprita / esuata (cu motiv).
 CREATE FUNCTION public.fn_ofertare_ocr_stare(p_rulare_id bigint, p_stare text, p_motiv text DEFAULT NULL)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE r record;
+DECLARE r record; v_lipsa int; v_dez int;
 BEGIN
   SELECT * INTO r FROM public.ofertare_ocr_rulari WHERE id = p_rulare_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Rulare inexistentă' USING ERRCODE = 'P0002'; END IF;
@@ -306,8 +322,24 @@ BEGIN
           OR (r.stare IN ('preluata', 'citita', 'arbitrata') AND p_stare IN ('oprita', 'esuata'))) THEN
     RAISE EXCEPTION 'Tranziție nepermisă % → %', r.stare, p_stare USING ERRCODE = '55000';
   END IF;
-  IF p_stare = 'arbitrata' AND r.cost_rezervat <> 0 THEN
-    RAISE EXCEPTION 'Mai sunt rezervări deschise: decontează-le sau abandonează-le înainte de arbitrata' USING ERRCODE = '55000';
+  IF p_stare = 'citita' THEN
+    SELECT count(*) INTO v_lipsa
+      FROM jsonb_array_elements(r.documente) x CROSS JOIN LATERAL jsonb_array_elements_text(x->'pagini') pg
+     WHERE (SELECT count(DISTINCT cititor) FROM public.ofertare_ocr_pagini p
+             WHERE p.rulare_id = r.id AND p.document_id = (x->>'document_id')::bigint AND p.pagina = pg::int AND p.cititor IN ('lighton', 'mineru')) <> 2;
+    IF v_lipsa > 0 THEN RAISE EXCEPTION '% pagini înghețate nu au ambele citiri (lighton + mineru)', v_lipsa USING ERRCODE = '55000'; END IF;
+  END IF;
+  IF p_stare = 'arbitrata' THEN
+    IF r.comparatie_nr IS NULL THEN RAISE EXCEPTION 'Compararea nu e marcată încheiată' USING ERRCODE = '55000'; END IF;
+    SELECT count(*) INTO v_dez FROM public.ofertare_ocr_dezacorduri WHERE rulare_id = r.id;
+    IF v_dez <> r.comparatie_nr THEN RAISE EXCEPTION 'Dezacorduri în BD (%) ≠ declarate (%)', v_dez, r.comparatie_nr USING ERRCODE = '55000'; END IF;
+    IF EXISTS (SELECT 1 FROM public.ofertare_ocr_dezacorduri d WHERE d.rulare_id = r.id
+                AND NOT EXISTS (SELECT 1 FROM public.ofertare_ocr_arbitraje a WHERE a.dezacord_id = d.id)) THEN
+      RAISE EXCEPTION 'Există dezacorduri fără decizie' USING ERRCODE = '55000';
+    END IF;
+    IF r.cost_rezervat <> 0 THEN
+      RAISE EXCEPTION 'Mai sunt rezervări deschise: decontează-le sau abandonează-le înainte de arbitrata' USING ERRCODE = '55000';
+    END IF;
   END IF;
   IF p_stare IN ('oprita', 'esuata') AND (p_motiv IS NULL OR btrim(p_motiv) = '' OR length(p_motiv) > 300) THEN
     RAISE EXCEPTION 'Motivul opririi e obligatoriu (max 300)' USING ERRCODE = '22023';
@@ -357,8 +389,9 @@ BEGIN
   RETURN v_n = 1;
 END $f$;
 
--- Pagina citită: doar în rularea potrivită, doar pagini înghețate, sha verificat. Idempotent și la reîncercare CONCURENTĂ
--- (ON CONFLICT DO NOTHING + recitire); „deja” doar dacă TOATE câmpurile imuabile coincid, altfel conflict append-only.
+-- Pagina citită: doar în rularea potrivită, doar pagini înghețate, sha verificat, imaginea obligatorie pentru cititori (exclus = text
+-- gol + motiv în garda). Idempotent și la reîncercare CONCURENTĂ (ON CONFLICT DO NOTHING + recitire); „deja” doar dacă TOATE
+-- câmpurile imuabile coincid, altfel conflict append-only.
 CREATE FUNCTION public.fn_ofertare_ocr_scrie_pagina(p_rulare_id bigint, p_document_id bigint, p_pagina integer, p_cititor text,
                                                     p_text text, p_stare text, p_model_rev text, p_raw_sha256 text,
                                                     p_image_sha256 text, p_garda jsonb)
@@ -371,6 +404,7 @@ BEGIN
   IF NOT ((p_cititor IN ('lighton', 'mineru') AND r.stare = 'preluata') OR (p_cititor = 'reconciliat' AND r.stare = 'arbitrata')) THEN
     RAISE EXCEPTION 'Citirile se scriu doar în preluata, textul reconciliat doar în arbitrata (acum: %)', r.stare USING ERRCODE = '55000';
   END IF;
+  IF (p_stare = 'exclus') AND p_cititor = 'reconciliat' THEN RAISE EXCEPTION 'Textul reconciliat nu poate fi exclus' USING ERRCODE = '22023'; END IF;
   IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r.documente) x
                   WHERE (x->>'document_id')::bigint = p_document_id AND (x->'pagini') @> to_jsonb(p_pagina)) THEN
     RAISE EXCEPTION 'Pagina % a documentului % nu e în rulare', p_pagina, p_document_id USING ERRCODE = '22023';
@@ -391,36 +425,77 @@ BEGIN
   RAISE EXCEPTION 'Pagina există deja cu alt conținut (append-only)' USING ERRCODE = '23505';
 END $f$;
 
--- Dezacordul canonic (din scripts/ocr_local compara): doar în citita, doar dacă paginile AMBILOR cititori există în BD.
--- Idempotent pe conținut identic; același item_id / item_sha256 cu alt conținut = conflict.
+-- Dezacordul canonic (din scripts/ocr_local compara): doar în citita, înainte de marcajul „comparație încheiată”, doar dacă paginile
+-- AMBILOR cititori există, nu sunt excluse și provin din ACEEAȘI imagine (image_sha256 egal). Proveniența fragmentelor: fiecare
+-- număr și fiecare cuvânt din citire_lighton / citire_mineru trebuie să existe în textul brut al cititorului respectiv (numerele
+-- delimitate, ca „56” să nu treacă din „0.056”; marcajele pipeline-ului ⟦…⟧ nu se verifică). Idempotent pe conținut identic.
 CREATE FUNCTION public.fn_ofertare_ocr_scrie_dezacord(p_rulare_id bigint, p_dezacord jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE r record; v_doc bigint; v_pag int; v_id bigint; v_old record; a jsonb := p_dezacord;
+DECLARE r record; pl record; pm record; v_doc bigint; v_pag int; v_id bigint; v_old record; a jsonb := p_dezacord; v_tok text; v_frag text; v_raw text; k int;
 BEGIN
   SELECT * INTO r FROM public.ofertare_ocr_rulari WHERE id = p_rulare_id FOR SHARE;
-  IF NOT FOUND OR r.stare <> 'citita' THEN RAISE EXCEPTION 'Dezacordurile se scriu doar în citita' USING ERRCODE = '55000'; END IF;
-  IF jsonb_typeof(a) <> 'object' OR jsonb_typeof(a->'e_cantitate') <> 'boolean' OR jsonb_typeof(a->'anomalie_separator') <> 'boolean' THEN
+  IF NOT FOUND OR r.stare <> 'citita' OR r.comparatie_nr IS NOT NULL THEN
+    RAISE EXCEPTION 'Dezacordurile se scriu doar în citita, înainte de încheierea comparației' USING ERRCODE = '55000';
+  END IF;
+  IF jsonb_typeof(a) <> 'object' OR jsonb_typeof(a->'e_cantitate') <> 'boolean' OR jsonb_typeof(a->'anomalie_separator') <> 'boolean'
+     OR jsonb_typeof(a->'citire_lighton') <> 'string' OR jsonb_typeof(a->'citire_mineru') <> 'string' THEN
     RAISE EXCEPTION 'Dezacord invalid' USING ERRCODE = '22023';
   END IF;
   v_doc := (a->>'document_id')::bigint; v_pag := (a->>'pagina')::int;
-  IF (SELECT count(*) FROM public.ofertare_ocr_pagini WHERE rulare_id = p_rulare_id AND document_id = v_doc AND pagina = v_pag
-         AND cititor IN ('lighton', 'mineru')) <> 2 THEN
+  SELECT * INTO pl FROM public.ofertare_ocr_pagini WHERE rulare_id = p_rulare_id AND document_id = v_doc AND pagina = v_pag AND cititor = 'lighton';
+  SELECT * INTO pm FROM public.ofertare_ocr_pagini WHERE rulare_id = p_rulare_id AND document_id = v_doc AND pagina = v_pag AND cititor = 'mineru';
+  IF pl.id IS NULL OR pm.id IS NULL OR pl.stare = 'exclus' OR pm.stare = 'exclus' THEN
     RAISE EXCEPTION 'Lipsesc citirile ambilor cititori pentru pagina % a documentului %', v_pag, v_doc USING ERRCODE = '55000';
   END IF;
-  INSERT INTO public.ofertare_ocr_dezacorduri (rulare_id, document_id, pagina, item_id, item_sha256, tip, citire_lighton, citire_mineru, e_cantitate, anomalie_separator)
+  IF pl.image_sha256 IS NULL OR pl.image_sha256 IS DISTINCT FROM pm.image_sha256 THEN
+    RAISE EXCEPTION 'Cele două citiri nu provin din aceeași imagine' USING ERRCODE = '55000';
+  END IF;
+  FOR k IN 1..(CASE WHEN a->>'tip' = 'structura_tabele' THEN 0 ELSE 2 END) LOOP  -- structura_tabele = descriere, nu fragment de text
+    v_frag := CASE k WHEN 1 THEN a->>'citire_lighton' ELSE a->>'citire_mineru' END;
+    v_raw := CASE k WHEN 1 THEN pl.text ELSE pm.text END;
+    v_frag := regexp_replace(v_frag, '⟦(tabel|tabel_neparsat|rowspan=[0-9]+|[a-z_]+_invalid=[^⟧]*)⟧|⟦(barat:|img)', ' ', 'g');  -- doar cuvintele-marcaj ale pipeline-ului
+    FOR v_tok IN SELECT m[1] FROM regexp_matches(v_frag, '([.,]?[0-9]+(?:[.,][0-9]+)*|[[:alpha:]]+)', 'g') AS m LOOP
+      IF v_tok ~ '^[0-9]' THEN
+        IF v_raw !~ ('(^|[^0-9.,])' || regexp_replace(v_tok, '([.])', '\\\1', 'g') || '(?![.,]?[0-9])') THEN
+          RAISE EXCEPTION 'Numărul % din dezacord nu apare în citirea % a paginii', v_tok, CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
+        END IF;
+      ELSIF strpos(v_raw, v_tok) = 0 THEN
+        RAISE EXCEPTION 'Cuvântul % din dezacord nu apare în citirea % a paginii', v_tok, CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
+      END IF;
+    END LOOP;
+  END LOOP;
+  INSERT INTO public.ofertare_ocr_dezacorduri (rulare_id, document_id, pagina, item_id, item_sha256, tip, citire_lighton, citire_mineru,
+                                               e_cantitate, anomalie_separator, pagina_lighton_id, pagina_mineru_id, image_sha256)
   VALUES (p_rulare_id, v_doc, v_pag, a->>'item_id', a->>'item_sha256', a->>'tip', a->>'citire_lighton', a->>'citire_mineru',
-          (a->>'e_cantitate')::boolean, (a->>'anomalie_separator')::boolean)
+          (a->>'e_cantitate')::boolean, (a->>'anomalie_separator')::boolean, pl.id, pm.id, pl.image_sha256)
   ON CONFLICT DO NOTHING RETURNING id INTO v_id;
   IF v_id IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'deja', false, 'id', v_id); END IF;
   SELECT * INTO v_old FROM public.ofertare_ocr_dezacorduri
-   WHERE rulare_id = p_rulare_id AND ((document_id = v_doc AND item_id = a->>'item_id') OR item_sha256 = a->>'item_sha256');
-  IF v_old.document_id = v_doc AND v_old.pagina = v_pag AND v_old.item_id = a->>'item_id' AND v_old.item_sha256 = a->>'item_sha256'
+   WHERE rulare_id = p_rulare_id AND document_id = v_doc AND (item_id = a->>'item_id' OR item_sha256 = a->>'item_sha256');
+  IF v_old.pagina = v_pag AND v_old.item_id = a->>'item_id' AND v_old.item_sha256 = a->>'item_sha256'
      AND v_old.tip = a->>'tip' AND v_old.citire_lighton = a->>'citire_lighton' AND v_old.citire_mineru = a->>'citire_mineru'
      AND v_old.e_cantitate = (a->>'e_cantitate')::boolean AND v_old.anomalie_separator = (a->>'anomalie_separator')::boolean THEN
     RETURN jsonb_build_object('ok', true, 'deja', true, 'id', v_old.id);
   END IF;
   RAISE EXCEPTION 'Dezacordul există deja cu alt conținut (append-only)' USING ERRCODE = '23505';
+END $f$;
+
+-- Marcajul „comparație încheiată”: o singură dată, în citita; numărul declarat trebuie să fie exact numărul din BD.
+CREATE FUNCTION public.fn_ofertare_ocr_comparatie_gata(p_rulare_id bigint, p_nr integer, p_sha256 text)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $f$
+DECLARE r record; v_n int;
+BEGIN
+  SELECT * INTO r FROM public.ofertare_ocr_rulari WHERE id = p_rulare_id FOR UPDATE;
+  IF NOT FOUND OR r.stare <> 'citita' OR r.comparatie_nr IS NOT NULL THEN
+    RAISE EXCEPTION 'Marcajul se pune o singură dată, în citita' USING ERRCODE = '55000';
+  END IF;
+  IF p_nr IS NULL OR p_nr < 0 OR p_sha256 IS NULL OR p_sha256 !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'Marcaj invalid' USING ERRCODE = '22023'; END IF;
+  SELECT count(*) INTO v_n FROM public.ofertare_ocr_dezacorduri WHERE rulare_id = p_rulare_id;
+  IF v_n <> p_nr THEN RAISE EXCEPTION 'Declarate % dezacorduri, în BD sunt %', p_nr, v_n USING ERRCODE = '55000'; END IF;
+  UPDATE public.ofertare_ocr_rulari SET comparatie_nr = p_nr, comparatie_sha256 = p_sha256, comparatie_la = now() WHERE id = p_rulare_id;
+  RETURN jsonb_build_object('ok', true, 'nr', p_nr);
 END $f$;
 
 -- Rezervare per apel plătit, ÎNAINTE de apel: atomic, granularitate 0,0001 USD (o sumă sub precizia stocată e refuzată, nu rotunjită
@@ -439,46 +514,52 @@ BEGIN
   RETURN v_id;
 END $f$;
 
--- Decontarea unei rezervări (o singură dată) + decizia arbitrului pe un dezacord existent al aceleiași rulări.
--- Textul ales e DERIVAT: ales_lighton → citire_lighton, ales_mineru → citire_mineru, text_propus → text nenul, needs_human → NULL.
--- Dacă rularea nu mai e în citita (oprită / anulată între timp), apelul plătit se DECONTEAZĂ oricum, dar decizia nu se înregistrează.
+-- Decontarea unei rezervări (o singură dată) — operația financiară se face și rămâne ÎNTOTDEAUNA, chiar dacă decizia e respinsă
+-- (duplicat, dezacord greșit, câmpuri invalide) sau rularea nu mai e în citita; decizia se încearcă separat (sub-bloc) și se
+-- înregistrează doar dacă e validă. Textul ales e DERIVAT: ales_lighton → citire_lighton, ales_mineru → citire_mineru,
+-- text_propus → text cu cel puțin un caracter non-spațiu, needs_human → NULL.
 CREATE FUNCTION public.fn_ofertare_ocr_scrie_arbitraj(p_rezervare_id bigint, p_arbitraj jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE z record; r record; d record; a jsonb := p_arbitraj; v_cost numeric; v_text text; v_id bigint;
+DECLARE z record; r record; d record; a jsonb := coalesce(p_arbitraj, '{}'::jsonb); v_cost numeric; v_text text; v_id bigint;
+        v_tin int; v_tout int; v_model text; v_motiv text;
 BEGIN
   SELECT * INTO z FROM public.ofertare_ocr_rezervari WHERE id = p_rezervare_id FOR UPDATE;
   IF NOT FOUND OR z.stare <> 'deschisa' THEN RAISE EXCEPTION 'Rezervare inexistentă sau deja închisă' USING ERRCODE = '55000'; END IF;
   SELECT * INTO r FROM public.ofertare_ocr_rulari WHERE id = z.rulare_id FOR UPDATE;
-  v_cost := (a->>'cost_usd')::numeric;
-  IF v_cost IS NULL OR v_cost < 0 OR v_cost > z.suma OR v_cost <> round(v_cost, 4) THEN
-    RAISE EXCEPTION 'Cost real invalid sau peste rezervare' USING ERRCODE = '22023';
-  END IF;
+  v_cost := CASE WHEN a->>'cost_usd' ~ '^[0-9]{1,2}(\.[0-9]{1,4})?$' THEN (a->>'cost_usd')::numeric END;
+  IF v_cost IS NULL OR v_cost > z.suma THEN RAISE EXCEPTION 'Cost real invalid sau peste rezervare' USING ERRCODE = '22023'; END IF;
+  v_tin := CASE WHEN a->>'tokens_in' ~ '^[0-9]{1,9}$' THEN (a->>'tokens_in')::int ELSE 0 END;
+  v_tout := CASE WHEN a->>'tokens_out' ~ '^[0-9]{1,9}$' THEN (a->>'tokens_out')::int ELSE 0 END;
+  v_model := left(coalesce(a->>'arbitru_model', ''), 100);
+  -- 1) decontarea: întotdeauna
   UPDATE public.ofertare_ocr_rezervari SET stare = 'decontata', cost_real = v_cost, inchisa_la = now() WHERE id = p_rezervare_id;
   UPDATE public.ofertare_ocr_rulari SET cost_rezervat = cost_rezervat - z.suma, cost_usd = cost_usd + v_cost WHERE id = r.id;
+  INSERT INTO public.ai_usage_log (function_name, model, tokens_in, tokens_out, cost_usd, ref_table, ref_id)
+  VALUES ('ofertare-ocr-arbitreaza', nullif(v_model, ''), v_tin, v_tout, v_cost, 'ofertare_ocr_rezervari', p_rezervare_id);
   IF r.stare <> 'citita' THEN
-    INSERT INTO public.ai_usage_log (function_name, model, tokens_in, tokens_out, cost_usd, ref_table, ref_id)
-    VALUES ('ofertare-ocr-arbitreaza', left(a->>'arbitru_model', 100), coalesce((a->>'tokens_in')::int, 0), coalesce((a->>'tokens_out')::int, 0),
-            v_cost, 'ofertare_ocr_rezervari', p_rezervare_id);
     RETURN jsonb_build_object('ok', true, 'decontat', true, 'arbitraj_inregistrat', false, 'motiv', 'rularea nu mai e în citita');
   END IF;
-  SELECT * INTO d FROM public.ofertare_ocr_dezacorduri WHERE id = (a->>'dezacord_id')::bigint;
-  IF NOT FOUND OR d.rulare_id <> r.id OR d.item_sha256 IS DISTINCT FROM a->>'item_sha256' THEN
-    RAISE EXCEPTION 'Dezacordul nu aparține rulării rezervării sau amprenta diferă' USING ERRCODE = '22023';
-  END IF;
-  IF jsonb_typeof(a->'e_cantitate') <> 'boolean' OR jsonb_typeof(a->'anomalie_separator') <> 'boolean' THEN
-    RAISE EXCEPTION 'Marcaje arbitru invalide' USING ERRCODE = '22023';
-  END IF;
-  v_text := CASE a->>'decizie' WHEN 'ales_lighton' THEN d.citire_lighton WHEN 'ales_mineru' THEN d.citire_mineru
-                               WHEN 'text_propus' THEN a->>'text' ELSE NULL END;
-  INSERT INTO public.ofertare_ocr_arbitraje (dezacord_id, rezervare_id, decizie, text_ales, motiv, e_cantitate_arbitru, anomalie_arbitru,
-                                             arbitru_model, prompt_versiune, cost_usd)
-  VALUES (d.id, p_rezervare_id, a->>'decizie', v_text, a->>'motiv', (a->>'e_cantitate')::boolean, (a->>'anomalie_separator')::boolean,
-          a->>'arbitru_model', a->>'prompt_versiune', v_cost)
-  RETURNING id INTO v_id;
-  INSERT INTO public.ai_usage_log (function_name, model, tokens_in, tokens_out, cost_usd, ref_table, ref_id)
-  VALUES ('ofertare-ocr-arbitreaza', a->>'arbitru_model', coalesce((a->>'tokens_in')::int, 0), coalesce((a->>'tokens_out')::int, 0),
-          v_cost, 'ofertare_ocr_arbitraje', v_id);
+  -- 2) decizia: separat; orice eroare o respinge fără să anuleze decontarea
+  BEGIN
+    SELECT * INTO d FROM public.ofertare_ocr_dezacorduri WHERE id = (a->>'dezacord_id')::bigint;
+    IF NOT FOUND OR d.rulare_id <> r.id OR d.item_sha256 IS DISTINCT FROM a->>'item_sha256' THEN
+      RAISE EXCEPTION 'Dezacordul nu aparține rulării rezervării sau amprenta diferă' USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_typeof(a->'e_cantitate') <> 'boolean' OR jsonb_typeof(a->'anomalie_separator') <> 'boolean' THEN
+      RAISE EXCEPTION 'Marcaje arbitru invalide' USING ERRCODE = '22023';
+    END IF;
+    v_text := CASE a->>'decizie' WHEN 'ales_lighton' THEN d.citire_lighton WHEN 'ales_mineru' THEN d.citire_mineru
+                                 WHEN 'text_propus' THEN a->>'text' ELSE NULL END;
+    INSERT INTO public.ofertare_ocr_arbitraje (dezacord_id, rezervare_id, decizie, text_ales, motiv, e_cantitate_arbitru, anomalie_arbitru,
+                                               arbitru_model, prompt_versiune, cost_usd)
+    VALUES (d.id, p_rezervare_id, a->>'decizie', v_text, a->>'motiv', (a->>'e_cantitate')::boolean, (a->>'anomalie_separator')::boolean,
+            a->>'arbitru_model', a->>'prompt_versiune', v_cost)
+    RETURNING id INTO v_id;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_motiv = MESSAGE_TEXT;
+    RETURN jsonb_build_object('ok', true, 'decontat', true, 'arbitraj_inregistrat', false, 'motiv', left(v_motiv, 200));
+  END;
   RETURN jsonb_build_object('ok', true, 'decontat', true, 'arbitraj_inregistrat', true, 'id', v_id);
 END $f$;
 
@@ -507,6 +588,37 @@ BEGIN
   RETURN true;
 END $f$;
 
+
+-- Amprenta obiectelor (revenirea refuză dacă diferă de cea înregistrată la aplicare). Acoperă: definiții, proprietar și ACL ale
+-- funcțiilor; pentru tabele: proprietar, ACL, RLS (activ / forțat), coloane (tip, NOT NULL, identity, DEFAULT, ACL pe coloană),
+-- constrângeri, indexuri, triggere (definiție + stare), politici (comandă, roluri, permisivă, USING, WITH CHECK); secvențele
+-- (proprietar, ACL). EXECUTE doar postgres (nu e expusă).
+CREATE FUNCTION public.fn_ofertare_ocr_amprenta()
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $f$
+  SELECT md5(string_agg(x, '|' ORDER BY x)) FROM (
+    SELECT 'f:' || p.oid::regprocedure::text || ':' || md5(pg_get_functiondef(p.oid)) || ':' || pg_get_userbyid(p.proowner)
+           || ':' || coalesce(p.proacl::text, '') AS x
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%'
+    UNION ALL
+    SELECT 't:' || c.relname || ':' || pg_get_userbyid(c.relowner) || ':' || coalesce(c.relacl::text, '') || ':' || c.relrowsecurity::text
+           || c.relforcerowsecurity::text
+           || ':' || (SELECT string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || ' ' || a.attnotnull::text || ' ' || a.attidentity::text
+                                        || ' ' || coalesce(pg_get_expr(d.adbin, d.adrelid), '') || ' ' || coalesce(a.attacl::text, ''), ',' ORDER BY a.attnum)
+                        FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                       WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)
+           || ':' || coalesce((SELECT string_agg(k.conname || ' ' || pg_get_constraintdef(k.oid), ',' ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid = c.oid), '')
+           || ':' || coalesce((SELECT string_agg(pg_get_indexdef(i.indexrelid), ',' ORDER BY 1) FROM pg_index i WHERE i.indrelid = c.oid), '')
+           || ':' || coalesce((SELECT string_agg(pg_get_triggerdef(g.oid) || ' ' || g.tgenabled::text, ',' ORDER BY g.tgname) FROM pg_trigger g WHERE g.tgrelid = c.oid AND NOT g.tgisinternal), '')
+           || ':' || coalesce((SELECT string_agg(po.polname || ' ' || po.polcmd::text || ' ' || po.polpermissive::text || ' ' || po.polroles::regrole[]::text || ' '
+                                                 || coalesce(pg_get_expr(po.polqual, po.polrelid), '') || ' ' || coalesce(pg_get_expr(po.polwithcheck, po.polrelid), ''),
+                                                 ',' ORDER BY po.polname) FROM pg_policy po WHERE po.polrelid = c.oid), '')
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%'
+    UNION ALL
+    SELECT 's:' || c.relname || ':' || pg_get_userbyid(c.relowner) || ':' || coalesce(c.relacl::text, '')
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'S' AND c.relname LIKE 'ofertare\_ocr\_%') s
+$f$;
+
 -- ── execuție ─────────────────────────────────────────────────────────────────────────────────────────────
 DO $exec$
 DECLARE f text;
@@ -521,10 +633,12 @@ BEGIN
                            'public.fn_ofertare_ocr_scrie_pagina(bigint,bigint,integer,text,text,text,text,text,text,jsonb)',
                            'public.fn_ofertare_ocr_scrie_dezacord(bigint,jsonb)', 'public.fn_ofertare_ocr_cost_rezerva(bigint,numeric)',
                            'public.fn_ofertare_ocr_scrie_arbitraj(bigint,jsonb)', 'public.fn_ofertare_ocr_rezervare_abandon(bigint)',
+                           'public.fn_ofertare_ocr_comparatie_gata(bigint,integer,text)',
                            'public.fn_ofertare_ocr_heartbeat(boolean,text)'] LOOP
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', f);
     EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', f);
   END LOOP;
+  REVOKE ALL ON FUNCTION public.fn_ofertare_ocr_amprenta() FROM PUBLIC, anon, authenticated, service_role;
 END $exec$;
 
 -- ── postcondiții + amprenta (folosită de revenire ca să refuze dacă obiectele s-au schimbat după aplicare) ──
@@ -552,23 +666,16 @@ BEGIN
             WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%' LOOP
     IF has_function_privilege('anon', f, 'EXECUTE')
        OR (f ~ '_(cerere|anuleaza|esantion|verifica)\(' AND (NOT has_function_privilege('authenticated', f, 'EXECUTE') OR has_function_privilege('service_role', f, 'EXECUTE')))
-       OR (f !~ '_(cerere|anuleaza|esantion|verifica)\(' AND (has_function_privilege('authenticated', f, 'EXECUTE') OR NOT has_function_privilege('service_role', f, 'EXECUTE'))) THEN
+       OR (f ~ '_amprenta\(' AND (has_function_privilege('authenticated', f, 'EXECUTE') OR has_function_privilege('service_role', f, 'EXECUTE')))
+       OR (f !~ '_(cerere|anuleaza|esantion|verifica|amprenta)\(' AND (has_function_privilege('authenticated', f, 'EXECUTE') OR NOT has_function_privilege('service_role', f, 'EXECUTE'))) THEN
       RAISE EXCEPTION '20261029a: postconditie executie %', f;
     END IF;
   END LOOP;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 14 THEN
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 16 THEN
     RAISE EXCEPTION '20261029a: numar functii neasteptat';
   END IF;
   -- amprenta: definițiile + ACL-urile funcțiilor și coloanele + ACL-urile + politicile + constrângerile tabelelor noi
-  SELECT md5(string_agg(x, '|' ORDER BY x)) INTO v_fp FROM (
-    SELECT p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid)) || coalesce(p.proacl::text, '') AS x
-      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%'
-    UNION ALL
-    SELECT c.relname || ':' || coalesce(c.relacl::text, '') || ':' || (SELECT string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod) || a.attnotnull::text, ',' ORDER BY a.attnum)
-                                                                     FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)
-           || ':' || coalesce((SELECT string_agg(pg_get_constraintdef(k.oid), ',' ORDER BY k.conname) FROM pg_constraint k WHERE k.conrelid = c.oid), '')
-           || ':' || coalesce((SELECT string_agg(po.polname || pg_get_expr(po.polqual, po.polrelid), ',' ORDER BY po.polname) FROM pg_policy po WHERE po.polrelid = c.oid), '')
-      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%') s;
+  v_fp := public.fn_ofertare_ocr_amprenta();
   EXECUTE format('COMMENT ON TABLE public.ofertare_ocr_rulari IS %L', 'Pilot OCR local (20261029a). Stare doar prin RPC. amprenta=' || v_fp);
   IF current_setting('gazpet.livrare_migrare', true)
        IS DISTINCT FROM '20261029a_ofertare_ocr_local:' || txid_current() THEN
