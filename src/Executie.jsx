@@ -32,6 +32,9 @@ import UnitatiProiectPanel from './UnitatiProiectPanel.jsx'
 import ProiectNouWizard from './ProiectNouWizard.jsx'
 import OfertarePF, { useAccesPF } from './OfertarePF.jsx'
 import { useDeciziiProiect, EtichetaDecizie, EchipaExtinsa, GeneratorProiect } from './ExecutieDeciziiEchipa.jsx'   // registrul deciziilor HR (PR3)
+// TKT-2026-0333: nr_contract scris doar în Execuție (fără contract_id) → semn + legare / înregistrare în Administrativ
+import ContractNelegatPanel from './ContractNelegatPanel.jsx'
+import { eContractNelegat, ETICHETA_CONTRACT_NELEGAT, TOOLTIP_CONTRACT_NELEGAT } from './executieContractLegatura.js'
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
@@ -101,6 +104,9 @@ export default function ExecutiePage() {
       }
     })()
   }, [])
+
+  // aceeași regulă ca în dashboard: owner sau can_manage_contracts
+  const canEdit = profile?.is_owner === true || profile?.can_manage_contracts === true
 
   // Navighează la contextul unui proiect
   const goToProiect = (id, tab = 'proiect') => {
@@ -223,6 +229,7 @@ export default function ExecutiePage() {
           proiectId={proiectIdStr}
           tab={tabStr}
           onBack={goBack}
+          canEdit={canEdit}
         />
       )}
 
@@ -239,7 +246,7 @@ export default function ExecutiePage() {
 // ===========================================================================
 // CONTEXT VIEW — banner proiect + renderează tab-ul cu proiectId prop
 // ===========================================================================
-function ProiectContextView({ proiectId, tab, onBack }) {
+function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
   const [proiect, setProiect] = useState(null)
   // Sub-tab izometrie: 'izometrie' | 'tronsoane'
   // Dacă vine cu tab=tronsoane (link vechi), auto-selectăm sub-tab tronsoane
@@ -313,7 +320,7 @@ function ProiectContextView({ proiectId, tab, onBack }) {
       </div>
 
       {/* Tab content cu proiectId prop */}
-      {tab === 'proiect'        && <TabProiectDashboard proiectId={proiectId} />}
+      {tab === 'proiect'        && <TabProiectDashboard proiectId={proiectId} canEdit={canEdit} />}
       {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
@@ -955,8 +962,14 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
               {p.nume}
             </div>
             {/* Badge-uri sănătate: apar doar când lipsesc legăturile */}
-            {p.nr_probleme > 0 && (
+            {(p.nr_probleme > 0 || eContractNelegat(p)) && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
+                {/* TKT-2026-0333: are_contract din view e true și pe nr_contract fără contract_id */}
+                {eContractNelegat(p) && (
+                  <span title={TOOLTIP_CONTRACT_NELEGAT} style={{ fontSize: 9, padding: '2px 8px', background: G.orange + '18', color: G.orange, borderRadius: 8, fontWeight: 700, border: `1px solid ${G.orange}44`, cursor: 'help' }}>
+                    {ETICHETA_CONTRACT_NELEGAT}
+                  </span>
+                )}
                 {!p.are_santier && (
                   <span style={{ fontSize: 9, padding: '2px 8px', background: G.red + '18', color: G.red, borderRadius: 8, fontWeight: 700, border: `1px solid ${G.red}44` }}>
                     🔴 Lipsă șantier
@@ -1250,7 +1263,7 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
               { label: valoriDiferite(p.valoare_initiala_lei, p.valoare_lei) ? 'Valoare contract (actualizată cu acte)' : 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
               ...(valoriDiferite(p.valoare_initiala_lei, p.valoare_lei) ? [{ label: 'Valoare inițială contract', value: fmtLei(p.valoare_initiala_lei) }] : []),
               { label: 'Valoare ofertă', value: p.oferta_valoare ? fmtLei(p.oferta_valoare) : '—' },
-              { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—' },
+              { label: 'Nr. contract', value: (p.nr_contract || p.numar_contract || '—') + (eContractNelegat(p) ? ` · ${ETICHETA_CONTRACT_NELEGAT}` : '') },
               { label: 'Data semnare', value: fmtDate(p.data_contract || p.contract_data_semnare) },
               { label: 'Acte adiționale', value: p.nr_acte_aditionale > 0 ? `${p.nr_acte_aditionale} acte · +${p.prelungire_totala_luni} luni` : '—' },
               { label: 'Ordine sistare', value: p.nr_ordine_sistare > 0 ? `${p.nr_ordine_sistare} ordine${p.este_sistat ? ' · ⏸ Activ' : ' · reluat'}` : '—' },
@@ -2966,7 +2979,7 @@ function ProbePresiune({ proiect }) {
 // TAB PROIECT — DASHBOARD (11.06.2026): pagina de aterizare la deschiderea
 // unui proiect: date contract, echipă (MP/RTE/RTS/Șef șantier/Transgaz), faze ISC, stadiu.
 // ══════════════════════════════════════════════════════════════════════════
-function TabProiectDashboard({ proiectId }) {
+function TabProiectDashboard({ proiectId, canEdit }) {
   const accesPF = useAccesPF()   // un singur hook; OfertarePF primește rezultatul ca prop
   const [p, setP] = useState(null)
   const [extra, setExtra] = useState(null)
@@ -3058,7 +3071,7 @@ function TabProiectDashboard({ proiectId }) {
     { label: 'Zile până la termen', value: p.zile_pana_termen != null ? `${p.zile_pana_termen} zile` : '—', warn: p.zile_pana_termen != null && p.zile_pana_termen < 30 },
     { label: valoriDiferite(extra.valoare_initiala_lei, p.valoare_lei) ? 'Valoare contract (actualizată cu acte)' : 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
     ...(valoriDiferite(extra.valoare_initiala_lei, p.valoare_lei) ? [{ label: 'Valoare inițială contract', value: fmtLei(extra.valoare_initiala_lei) }] : []),
-    { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—' },
+    { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—', warn: eContractNelegat(p) },
     { label: 'Acte adiționale', value: p.nr_acte_aditionale > 0 ? `${p.nr_acte_aditionale} acte` : '—' },
   ]
 
@@ -3090,6 +3103,9 @@ function TabProiectDashboard({ proiectId }) {
             </div>
           ))}
         </div>
+        {/* TKT-2026-0333: se afișează singur doar pe nr_contract fără contract_id; după legare reîncarcă proiectul */}
+        <ContractNelegatPanel proiect={{ ...p, valoare_initiala_lei: extra.valoare_initiala_lei }} canEdit={canEdit}
+          onSchimbat={() => setReloadKey(k => k + 1)} />
       </div>
 
       {/* Echipă proiect */}

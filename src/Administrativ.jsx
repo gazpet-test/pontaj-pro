@@ -774,7 +774,8 @@ function FurnizoriTab() {
 // ===========================================================================
 
 export default function AdministrativPage() {
-  const [tabDorit, setTab] = useState('documente')
+  // TKT-2026-0333: link direct din Execuție (/administrativ?tab=contracte_terti); un tab nepermis cade mai jos pe primul disponibil
+  const [tabDorit, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'documente')
   const [profile, setProfile] = useState(null)
   const [loadingProfile, setLoadingProfile] = useState(true)
 
