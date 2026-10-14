@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import {
-  ANTET_OCR, NUME_SECRET, OPERATII, apelDinCorp, citesteCorp, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal,
+  amprentaDezacord, ANTET_OCR, canonic, NUME_SECRET, OPERATII, apelDinCorp, citesteCorp, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal,
   limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, statusDinEroare, tokeniImagineMax,
 } from './ocrLocal.ts'
 
@@ -56,6 +56,19 @@ Deno.test('ocr-scrie: doar operațiile din listă, exact cheile, null doar unde 
   const p = apelDinCorp({ op: 'pagina', args: { rulare_id: 1, document_id: 2, pagina: 3, banda: 0, cititor: 'lighton', text: 't', stare: 'citit',
     model_rev: 'm', raw_sha256: 'h', image_sha256: null, garda: null, segmente: [['text', 't']] } })
   assert.ok(p.ok && p.fn === 'fn_ofertare_ocr_scrie_pagina' && Object.keys(p.args).length === 12)
+})
+
+// Paritatea amprentei cu scripts/ocr_local/compare.py item_hash (Jakarinos r3 P2): obiectele NEMODIFICATE din fișierul generat de
+// Python (testul Python test_amprente_edge_identice le recalculează în Python) trebuie să dea EXACT hash-ul lor în TS.
+Deno.test('amprenta dezacordului = compare.item_hash (Python), pe obiectele nemodificate din fișierul de paritate', async () => {
+  const fixt = JSON.parse(await Deno.readTextFile(new URL('./ocrLocal_amprente.json', import.meta.url)))
+  assert.ok(fixt.length >= 3)
+  for (const it of fixt) assert.equal(await amprentaDezacord(it), it.item_sha256, it.id)
+  assert.notEqual(await amprentaDezacord({ ...fixt[0], citire_lighton: fixt[0].citire_lighton + ' ' }), fixt[0].item_sha256)
+})
+Deno.test('canonic: separatorii Python și tipuri nepermise → excepție', () => {
+  assert.equal(canonic({ b: [1, true, null], a: '' }), '{"a": "", "b": [1, true, null]}')
+  assert.throws(() => canonic(1.5)); assert.throws(() => canonic({ a: undefined })); assert.throws(() => canonic(NaN))
 })
 
 Deno.test('erori RPC → coduri HTTP', () => {

@@ -32,7 +32,7 @@ function mediu(it: any, opt: Opt = {}) {
       if (fn === 'fn_ofertare_ocr_dezacord_arbitraj') return { data: 'citire' in opt ? opt.citire : dinBD(it), error: null }
       if (fn === 'fn_ofertare_ocr_arbitraj_rezerva') return { data: 'rezerva' in opt ? opt.rezerva : { rezervare_id: 7 }, error: null }
       if (fn === 'fn_ofertare_ocr_scrie_arbitraj') return { data: opt.scrie ?? { ok: true, decontat: true, arbitraj_inregistrat: true, id: 9 }, error: null }
-      if (fn === 'fn_ofertare_ocr_arbitraj_depasire') return { data: opt.depasire && 'data' in opt.depasire ? opt.depasire.data : (opt.depasire ? null : { ok: true, oprita: true }), error: opt.depasire?.error ?? null }
+      if (fn === 'fn_ofertare_ocr_arbitraj_depasire') return { data: opt.depasire && 'data' in opt.depasire ? opt.depasire.data : (opt.depasire ? null : { ok: true, stare: 'oprita', cheltuiala_blocata: true }), error: opt.depasire?.error ?? null }
       return { data: null, error: { message: 'neașteptat ' + fn } }
     },
   }
@@ -146,12 +146,12 @@ Deno.test('cost real peste rezervare: UN RPC tranzacțional, verificat explicit;
   const it = await itemDeTest(); const usage = { input_tokens: 400000, output_tokens: 1000 }
   const ok = mediu(it, { api: { usage } })
   const r = await arbitreaza(cerere(corpDe(it)), ok.m); const j = await r.json()
-  assert.equal(r.status, 500); assert.match(j.error, /rularea oprită/)
+  assert.equal(r.status, 500); assert.match(j.error, /cheltuiala blocată \(rularea: oprita\)/)
   const dp = ok.apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_depasire')!.args
   assert.deepEqual({ ...dp, p_cost_real: 0 }, { p_rezervare_id: 7, p_cost_real: 0, p_tokens_in: 400000, p_tokens_out: 1000, p_model: 'claude-sonnet-5' })
   assert.ok(dp.p_cost_real > ok.apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma)
   assert.ok(!fnuri(ok.apeluri).includes('fn_ofertare_ocr_scrie_arbitraj'))
-  for (const depasire of [{ error: { message: 'refuz' } }, { data: { ok: true } }, { data: null }]) {  // eșec: răspunsul NU pretinde succes
+  for (const depasire of [{ error: { message: 'refuz' } }, { data: { ok: true } }, { data: { ok: true, stare: 'citita', cheltuiala_blocata: false } }, { data: null }]) {  // eșec: răspunsul NU pretinde succes
     const e = mediu(it, { api: { usage }, depasire })
     const re = await arbitreaza(cerere(corpDe(it)), e.m); const je = await re.json()
     assert.equal(re.status, 500); assert.match(je.error, /EȘUAT/); assert.equal(je.rezervare_id, 7)

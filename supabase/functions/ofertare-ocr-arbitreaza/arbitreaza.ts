@@ -119,10 +119,10 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   if (peste) {
     const { data: dp, error: eDp } = await sb.rpc('fn_ofertare_ocr_arbitraj_depasire',
       { p_rezervare_id: rez, p_cost_real: real, p_tokens_in: tin, p_tokens_out: tout, p_model: MODEL })
-    if (eDp || !esteObiect(dp) || dp.ok !== true || dp.oprita !== true) {
+    if (eDp || !esteObiect(dp) || dp.ok !== true || dp.cheltuiala_blocata !== true) {
       return raspuns(500, { error: 'Cost real peste rezervare și înregistrarea depășirii a EȘUAT: rezervarea rămâne deschisă — oprește rularea manual', rezervare_id: rez, cost_real: real })
     }
-    return raspuns(500, { error: 'Cost real peste rezervare: decontat, costul real în ai_usage_log, needs_human, rularea oprită', rezervare_id: rez, cost_real: real })
+    return raspuns(500, { error: 'Cost real peste rezervare: decontat, costul real în ai_usage_log, needs_human, cheltuiala blocată (rularea: ' + String(dp.stare) + ')', rezervare_id: rez, cost_real: real, stare_rulare: dp.stare })
   }
   const { data: scris, error: eScr } = await sb.rpc('fn_ofertare_ocr_scrie_arbitraj', {
     p_rezervare_id: rez,

@@ -437,7 +437,7 @@ ZD=$(ca service_role - "$(AZ7 "$YT" "$ST" "$IB" 0.05)->>'rezervare_id'"); [ -n "
 DP() { echo "SELECT public.fn_ofertare_ocr_arbitraj_depasire($1, $2, 400000, 1000, 'claude-sonnet-5')"; }
 refuz "depășire: cost sub rezervare nu e depășire" service_role - "$(DP "$ZD" 0.04)" "Nu e o depășire"
 refuz "authenticated: arbitraj_depasire" authenticated "$OWNER" "$(DP "$ZD" 0.07)" "permission denied"
-asteapta "depășire: înregistrată și rularea oprită" "$(ca service_role - "SELECT (x->>'ok')||'|'||(x->>'oprita') FROM $(DP "$ZD" 0.0712 | sed 's/^SELECT //') x")" "true|true"
+asteapta "depășire: înregistrată, rularea oprită, cheltuiala blocată" "$(ca service_role - "SELECT (x->>'ok')||'|'||(x->>'stare')||'|'||(x->>'cheltuiala_blocata') FROM $(DP "$ZD" 0.0712 | sed 's/^SELECT //') x")" "true|oprita|true"
 asteapta "depășire: rezervarea la toată suma, rularea oprită cu motiv, costul real în jurnal, needs_human"   "$(q "SELECT z.stare||'|'||z.cost_real||'|'||r.stare||'|'||(r.oprit_motiv LIKE 'cost real 0.0712 peste rezervarea 0.0500%')::text||'|'||r.cost_usd||'|'||r.cost_rezervat FROM public.ofertare_ocr_rezervari z JOIN public.ofertare_ocr_rulari r ON r.id=z.rulare_id WHERE z.id=$ZD")|$(q "SELECT cost_usd FROM public.ai_usage_log WHERE ref_table='ofertare_ocr_rezervari' AND ref_id=$ZD")|$(q "SELECT decizie||'/'||prompt_versiune FROM public.ofertare_ocr_arbitraje WHERE dezacord_id=$YT")"   "decontata|0.0500|oprita|true|0.0720|0.0000|0.0712|needs_human/depasire"
 refuz "depășire a doua oară pe aceeași rezervare" service_role - "$(DP "$ZD" 0.08)" "închisă"
 asteapta "după depășire: nicio rezervare nouă (rularea oprită)" "$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'refuz'")" stare

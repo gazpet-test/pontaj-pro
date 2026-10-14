@@ -96,7 +96,7 @@ END $f$;
 CREATE FUNCTION public.fn_ofertare_ocr_arbitraj_depasire(p_rezervare_id bigint, p_cost_real numeric, p_tokens_in integer, p_tokens_out integer, p_model text)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE z record; r record; d record;
+DECLARE z record; r record; d record; v_stare text;
 BEGIN
   SELECT * INTO z FROM public.ofertare_ocr_rezervari WHERE id = p_rezervare_id FOR UPDATE;
   IF NOT FOUND OR z.stare <> 'deschisa' OR z.dezacord_id IS NULL THEN RAISE EXCEPTION 'Rezervare inexistentă, închisă sau nelegată de un dezacord' USING ERRCODE = '55000'; END IF;
@@ -108,7 +108,7 @@ BEGIN
          stare = CASE WHEN stare IN ('preluata', 'citita', 'arbitrata') THEN 'oprita' ELSE stare END,
          oprit_motiv = CASE WHEN stare IN ('preluata', 'citita', 'arbitrata') THEN left('cost real ' || p_cost_real || ' peste rezervarea ' || z.suma || ' (rezervarea ' || z.id || ')', 300) ELSE oprit_motiv END,
          terminata_la = CASE WHEN stare IN ('preluata', 'citita', 'arbitrata') THEN now() ELSE terminata_la END
-   WHERE id = r.id;
+   WHERE id = r.id RETURNING stare INTO v_stare;
   INSERT INTO public.ai_usage_log (function_name, model, tokens_in, tokens_out, cost_usd, ref_table, ref_id)
   VALUES ('ofertare-ocr-arbitreaza', nullif(left(coalesce(p_model, ''), 100), ''), greatest(coalesce(p_tokens_in, 0), 0), greatest(coalesce(p_tokens_out, 0), 0),
           p_cost_real, 'ofertare_ocr_rezervari', z.id);
@@ -118,7 +118,10 @@ BEGIN
     VALUES (d.id, z.id, 'needs_human', NULL, 'cost real peste rezervare', d.e_cantitate, d.anomalie_separator,
             coalesce(nullif(left(coalesce(p_model, ''), 100), ''), 'necunoscut'), 'depasire', z.suma);
   END IF;
-  RETURN jsonb_build_object('ok', true, 'oprita', true, 'decontat', z.suma, 'cost_real', p_cost_real);
+  -- starea REALĂ după blocare (review Copilot r3 P2): oprita, sau o stare terminală în care rularea ajunsese deja; în ambele cazuri
+  -- nicio cheltuială nouă nu mai e posibilă (rezervarea cere citita)
+  RETURN jsonb_build_object('ok', true, 'stare', v_stare, 'cheltuiala_blocata', v_stare IN ('oprita', 'finalizata', 'anulata', 'esuata'),
+                            'decontat', z.suma, 'cost_real', p_cost_real);
 END $f$;
 
 -- Rezervarea pentru arbitrajul UNUI dezacord: toate verificările înaintea apelului plătit, atomic sub blocarea rulării.
