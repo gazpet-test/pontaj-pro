@@ -4,6 +4,7 @@ import {
   instructiuniInregistrare, textToastInregistrare, partenerContract, fmtZi, fmtLeiSimplu, LINK_ADMIN_CONTRACTE,
   eContractOcupat, mesajEroareLegare, decizieLegaturaLaSalvare, autoDetectieSantierPermisa,
   stareLegaturaDinCitire, ghicesteSantier, santierInitial, aplicaLegaturaLaSalvare,
+  salveazaRandContract, salveazaContractSiLegatura,
 } from './executieContractLegatura.js'
 
 // Proiecte ca cele din TKT-2026-0333 (forma rândului din v_executie_dashboard)
@@ -185,9 +186,11 @@ function dbFals(raspuns = () => ({ data: null, error: null })) {
       const b = {
         select(c) { q.op = q.op || 'select'; q.coloane = c; return b },
         update(v) { q.op = 'update'; q.valori = v; return b },
+        insert(v) { q.op = 'insert'; q.valori = v; return b },
         eq(k, v) { q.filtre.push(['eq', k, v]); return b },
         neq(k, v) { q.filtre.push(['neq', k, v]); return b },
         maybeSingle() { cereri.push(q); return Promise.resolve(raspuns(q)) },
+        single() { cereri.push(q); return Promise.resolve(raspuns(q)) },
         then(ok, ko) { cereri.push(q); return Promise.resolve(raspuns(q)).then(ok, ko) },
       }
       return b
@@ -307,6 +310,85 @@ describe('aplicaLegaturaLaSalvare: fiecare UPDATE își verifică eroarea', () =
     expect(await aplicaLegaturaLaSalvare(f.db, { decizie: 'nimic' })).toEqual({ ok: true, mesaj: null })
     expect((await aplicaLegaturaLaSalvare(f.db, { decizie: 'avertizare' })).mesaj).toMatch(/nu e legat la niciun Șantier/)
     expect(f.cereri).toEqual([])
+  })
+})
+
+// Jakarinos r3 P2 — reproducerea: contract NOU, INSERT reușit, căutarea proiectului șantierului cade, modalul rămâne
+// deschis; înainte, a doua salvare făcea un nou INSERT (501 și 502 cu același număr, proiectul legat de 502)
+describe('editorul din Administrativ: un singur INSERT per contract nou', () => {
+  const payload = { numar_contract: '3063', denumire: 'Finta – Gheboaia', categorie: 'executie' }
+  const legatura = { categorie: 'executie', siteSelectat: '15', proiectLegat: null, dezleagaCerut: false, stareLegatura: 'ok', dateSync: { nr_contract: '3063' } }
+
+  it('INSERT reușit → eroare la legare → reîncercare → exact un INSERT, același id', async () => {
+    let idUrmator = 501
+    let legareaMerge = false
+    const f = dbFals(q => {
+      if (q.tabel === 'contracte_terti' && q.op === 'insert') return { data: { id: idUrmator++ }, error: null }
+      if (q.tabel === 'executie_proiecte' && q.op === 'select') return legareaMerge ? { data: { id: 27 }, error: null } : { data: null, error: { message: 'retea' } }
+      return { data: null, error: null }
+    })
+    // starea editorului: idContract (null = contract nou), actualizată prin laInserat — ca setIdContract din ContractModal
+    let idContract = null
+    const cereriLaInserat = []
+    const salvare = () => salveazaContractSiLegatura(f.db, {
+      idCurent: idContract, payload, creatDe: 'u-1', legatura,
+      laInserat: id => { cereriLaInserat.push(f.cereri.length); idContract = id },
+    })
+
+    const r1 = await salvare()
+    expect(r1).toMatchObject({ ok: true, id: 501, inserat: true })
+    expect(r1.legatura.mesaj).toMatch(/nu am putut găsi proiectul activ al șantierului/)   // modalul rămâne deschis
+    expect(idContract).toBe(501)
+    expect(cereriLaInserat).toEqual([1])            // id-ul reținut imediat după INSERT, înainte de orice pas de legare
+
+    legareaMerge = true
+    const r2 = await salvare()                       // reîncercarea din același modal
+    expect(r2).toMatchObject({ ok: true, id: 501, inserat: false, legatura: { ok: true, mesaj: null } })
+
+    const contracte = f.cereri.filter(c => c.tabel === 'contracte_terti')
+    expect(contracte.map(c => c.op)).toEqual(['insert', 'update'])   // exact un INSERT
+    expect(contracte[0].valori).toEqual({ ...payload, created_by: 'u-1' })
+    expect(contracte[1]).toMatchObject({ valori: payload, filtre: [['eq', 'id', 501]] })
+    const leg = f.updateuri().filter(c => c.tabel === 'executie_proiecte').at(-1)
+    expect(leg).toMatchObject({ valori: { contract_id: 501 }, filtre: [['eq', 'id', 27]] })   // proiectul legat de același contract
+    expect(cereriLaInserat).toHaveLength(1)
+  })
+
+  it('INSERT eșuat → nimic reținut, nicio cerere de legare', async () => {
+    const f = dbFals(q => q.op === 'insert' ? { data: null, error: { message: 'RLS' } } : { data: null, error: null })
+    let retinut = null
+    const r = await salveazaContractSiLegatura(f.db, { idCurent: null, payload, creatDe: 'u-1', legatura, laInserat: id => { retinut = id } })
+    expect(r).toEqual({ ok: false, eroareContract: { message: 'RLS' } })
+    expect(retinut).toBeNull()
+    expect(f.cereri.map(c => c.tabel)).toEqual(['contracte_terti'])
+  })
+
+  it('contract existent → UPDATE pe id, fără created_by, fără laInserat', async () => {
+    const f = dbFals()
+    let chemat = false
+    const r = await salveazaRandContract(f.db, { idCurent: 108, payload, creatDe: 'u-1' })
+    expect(r).toEqual({ id: 108, inserat: false })
+    expect(f.cereri).toEqual([{ tabel: 'contracte_terti', op: 'update', valori: payload, filtre: [['eq', 'id', 108]] }])
+    await salveazaContractSiLegatura(f.db, { idCurent: 108, payload, legatura: { categorie: 'altele' }, laInserat: () => { chemat = true } })
+    expect(chemat).toBe(false)
+  })
+
+  it('fără utilizator cunoscut, INSERT-ul nu trimite created_by (ca înainte)', async () => {
+    const f = dbFals(q => q.op === 'insert' ? { data: { id: 7 }, error: null } : { data: null, error: null })
+    await salveazaRandContract(f.db, { idCurent: null, payload, creatDe: null })
+    expect(f.cereri[0].valori).toEqual(payload)
+  })
+
+  it('excepție la legare după INSERT → id reținut, mesaj vizibil', async () => {
+    const f = dbFals(q => {
+      if (q.op === 'insert') return { data: { id: 600 }, error: null }
+      throw new Error('fetch failed')
+    })
+    let retinut = null
+    const r = await salveazaContractSiLegatura(f.db, { idCurent: null, payload, legatura, laInserat: id => { retinut = id } })
+    expect(retinut).toBe(600)
+    expect(r).toMatchObject({ ok: true, id: 600, inserat: true })
+    expect(r.legatura.mesaj).toMatch(/nu s-a putut actualiza \(fetch failed\)/)
   })
 })
 

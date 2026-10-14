@@ -17,7 +17,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { norm } from './lib/diacritice.js'
 import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
-import { decizieLegaturaLaSalvare, stareLegaturaDinCitire, santierInitial, aplicaLegaturaLaSalvare } from './executieContractLegatura.js'
+import { stareLegaturaDinCitire, santierInitial, salveazaContractSiLegatura } from './executieContractLegatura.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -1009,7 +1009,10 @@ function AnexaContractSection({ contractId, canWrite }) {
 // CONTRACT MODAL — cu categorie + sens + partener_text
 // ══════════════════════════════════════════════════════════
 function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSuccess }) {
-  const isNew = !item.id
+  // Jakarinos r3 P2 (#709): id-ul contractului stă în starea editorului. După un INSERT reușit se reține imediat,
+  // ca o salvare repetată (modal rămas deschis după o eroare la legare) să facă UPDATE, nu un al doilea INSERT.
+  const [idContract, setIdContract] = useState(item.id || null)
+  const isNew = !idContract
   const [f, setF] = useState({
     beneficiar_id: item.beneficiar_id || '',
     partener_text: item.partener_text || '',
@@ -1075,7 +1078,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         citire = await supabase
           .from('executie_proiecte')
           .select('id, cod_intern, nume, site_id')
-          .eq('contract_id', item.id)
+          .eq('contract_id', idContract)
           .maybeSingle()
       } catch (e) { citire = { data: null, error: { message: e?.message || String(e) } } }
     }
@@ -1108,7 +1111,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     if (file.type !== 'application/pdf') return onError('Doar fișiere PDF')
     setUploading(true)
     const ts = new Date().toISOString().replace(/[:.]/g, '-')
-    const path = `${item.id || 'new'}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+    const path = `${idContract || 'new'}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
     const { error } = await supabase.storage.from('contracte-terti').upload(path, file, { upsert: false })
     setUploading(false)
     if (error) return onError(`Upload eșuat: ${error.message}`)
@@ -1159,37 +1162,34 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         ? { tip_contract:f.categorie }
         : item.tip_contract === 'comodat' ? { tip_contract:'prestari_servicii' } : {}),
     }
-    let contractId = item.id
-    if (isNew) {
-      const { data: { user } } = await supabase.auth.getUser()
-      payload.created_by = user?.id
-      const { data, error } = await supabase.from('contracte_terti').insert(payload).select('id').single()
-      if (error) { setSaving(false); return onError(error.message) }
-      contractId = data.id
-    } else {
-      const { error } = await supabase.from('contracte_terti').update(payload).eq('id', item.id)
-      if (error) { setSaving(false); return onError(error.message) }
-    }
-    setSaving(false)
-
-    // ─── Sincronizare Șantier → Proiect Execuție → Contract ─────────────────
-    // Decizia + UPDATE-urile stau în executieContractLegatura.js (testate cu client fals); fiecare pas își verifică
-    // eroarea, iar „dezlegat” apare doar la succes. Legătura necitită (eroare / în curs) = nu se atinge nimic.
-    const decizie = decizieLegaturaLaSalvare({ categorie: f.categorie, siteSelectat: proiectExecId, proiectLegat, dezleagaCerut, stareLegatura })
-    let rezLegatura
+    // ─── Contract (INSERT o singură dată, apoi UPDATE pe același id) + Sincronizare Șantier → Proiect Execuție ───
+    // Logica stă în executieContractLegatura.js (testată cu client fals): id-ul nou se reține imediat după INSERT
+    // (setIdContract), fiecare pas de legare își verifică eroarea, „dezlegat” apare doar la succes, iar legătura
+    // necitită (eroare / în curs) nu se atinge. Butonul rămâne blocat (saving) până se termină și legarea.
+    let rez
     try {
-      rezLegatura = await aplicaLegaturaLaSalvare(supabase, {
-        decizie, contractId, siteSelectat: proiectExecId, proiectLegat,
-        dateSync: {
-          nr_contract:   f.numar_contract.trim() || null,
-          data_contract: f.data_semnare || null,
-          valoare_lei:   payload.valoare_lei,
-          valoare_eur:   payload.valoare_eur,
+      let creatDe = null
+      if (!idContract) { const { data: { user } } = await supabase.auth.getUser(); creatDe = user?.id ?? null }
+      rez = await salveazaContractSiLegatura(supabase, {
+        idCurent: idContract, payload, creatDe, laInserat: setIdContract,
+        legatura: {
+          categorie: f.categorie, siteSelectat: proiectExecId, proiectLegat, dezleagaCerut, stareLegatura,
+          dateSync: {
+            nr_contract:   f.numar_contract.trim() || null,
+            data_contract: f.data_semnare || null,
+            valoare_lei:   payload.valoare_lei,
+            valoare_eur:   payload.valoare_eur,
+          },
         },
       })
     } catch (e) {
-      rezLegatura = { ok: false, mesaj: `⚠️ Contractul a fost salvat, dar legătura cu Execuția nu s-a putut actualiza (${e?.message || e}). Verifică proiectul în Execuție.` }
+      setSaving(false)
+      return onError(`Salvarea nu s-a încheiat (${e?.message || e}). Verifică lista de contracte înainte să salvezi din nou.`)
     }
+    setSaving(false)
+    if (rez.eroareContract) return onError(rez.eroareContract.message)
+    const contractId = rez.id
+    const rezLegatura = rez.legatura
     if (rezLegatura.dezlegat) { setProiectLegat(null); setDezleagaCerut(false) }
     if (rezLegatura.mesaj) {
       onError(rezLegatura.mesaj)
@@ -1218,7 +1218,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   }
 
   return (
-    <ModalShell title={isNew ? '+ Contract nou' : `✏️ ${item.denumire}`} onClose={onClose} wide>
+    <ModalShell title={isNew ? '+ Contract nou' : `✏️ ${item.denumire || f.denumire}`} onClose={onClose} wide>
       <div style={{display:'flex', flexDirection:'column', gap:14}}>
         {/* Categorie + Sens */}
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>

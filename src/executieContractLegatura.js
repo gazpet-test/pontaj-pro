@@ -5,8 +5,8 @@
 // executie_proiecte, fără rând în contracte_terti și fără contract_id. Sincronizarea
 // există doar invers (Administrativ → Execuție, prin șantier). Aici stă logica pură:
 // cine e „nelegat”, ce contracte din Administrativ se potrivesc și ce trebuie completat
-// la înregistrare. Fără client Supabase importat: singura funcție cu I/O (aplicaLegaturaLaSalvare)
-// primește clientul ca parametru, ca să fie testată cu un client fals.
+// la înregistrare. Fără client Supabase importat: funcțiile cu I/O (aplicaLegaturaLaSalvare,
+// salveazaRandContract, salveazaContractSiLegatura) primesc clientul ca parametru, ca să fie testate cu un client fals.
 import { norm } from './lib/diacritice.js'
 
 export const ETICHETA_CONTRACT_NELEGAT = '⚠ Contract neînregistrat în Administrativ'
@@ -175,6 +175,36 @@ export async function aplicaLegaturaLaSalvare(db, { decizie, contractId, siteSel
     return { ok: true, mesaj: null }
   }
   return { ok: false, mesaj: salvatDar + 'legătura cu Execuția nu s-a modificat (decizie necunoscută).' }
+}
+
+// ── Salvarea completă din editor (Jakarinos r3 P2 pe #709) ──
+// Rândul contractului: INSERT la primul drum, apoi UPDATE pe același id. created_by doar la INSERT, ca înainte.
+export async function salveazaRandContract(db, { idCurent, payload, creatDe }) {
+  if (idCurent) {
+    const { error } = await db.from('contracte_terti').update(payload).eq('id', idCurent)
+    return error ? { error } : { id: idCurent, inserat: false }
+  }
+  const { data, error } = await db.from('contracte_terti')
+    .insert(creatDe != null ? { ...payload, created_by: creatDe } : payload).select('id').single()
+  return error ? { error } : { id: data.id, inserat: true }
+}
+// Contractul, apoi legătura spre Execuție. laInserat(id) se cheamă IMEDIAT după un INSERT reușit — înainte de legare —
+// ca editorul să rețină id-ul: dacă legarea dă eroare și modalul rămâne deschis, salvarea următoare face UPDATE pe
+// același contract, nu un al doilea INSERT (înainte: contractele 501 și 502 cu același număr).
+export async function salveazaContractSiLegatura(db, { idCurent, payload, creatDe, laInserat, legatura }) {
+  const r = await salveazaRandContract(db, { idCurent, payload, creatDe })
+  if (r.error) return { ok: false, eroareContract: r.error }
+  if (r.inserat && laInserat) laInserat(r.id)
+  const decizie = decizieLegaturaLaSalvare(legatura || {})
+  let rezLegatura
+  try {
+    rezLegatura = await aplicaLegaturaLaSalvare(db, {
+      decizie, contractId: r.id, siteSelectat: legatura?.siteSelectat, proiectLegat: legatura?.proiectLegat, dateSync: legatura?.dateSync,
+    })
+  } catch (e) {
+    rezLegatura = { ok: false, mesaj: `⚠️ Contractul a fost salvat, dar legătura cu Execuția nu s-a putut actualiza (${e?.message || e}). Verifică proiectul în Execuție.` }
+  }
+  return { ok: true, id: r.id, inserat: r.inserat, legatura: rezLegatura }
 }
 
 // Ce se completează în Administrativ → Contracte cu terți → „+ Contract nou”
