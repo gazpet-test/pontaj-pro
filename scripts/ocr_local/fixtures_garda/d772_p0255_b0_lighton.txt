@@ -1,0 +1,156 @@
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>16</td>
+      <td>11 + 425</td>
+      <td>16 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>17</td>
+      <td>12 + 465</td>
+      <td>17 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>18</td>
+      <td>13 + 710</td>
+      <td>18 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare Canal THC 3–2</td>
+    </tr>
+    <tr>
+      <td>19</td>
+      <td>14 + 778</td>
+      <td>19 – T200</td>
+      <td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>
+      <td>Traversare DJ298 (TD4–1) – montare tub protecție + grup anozi de zinc</td>
+    </tr>
+    <tr>
+      <td>20</td>
+      <td>15 + 510</td>
+      <td>20 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>21</td>
+      <td>16 + 500</td>
+      <td>21 – T200</td>
+      <td>1C–T200–S1</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>22</td>
+      <td>17 + 220</td>
+      <td>22 – T200</td>
+      <td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>
+      <td>Traversare DC70 (TD4–2) – montare tub protecție + grup anozi de zinc</td>
+    </tr>
+    <tr>
+      <td>23</td>
+      <td>18 + 355</td>
+      <td>23 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>24</td>
+      <td>19 + 400</td>
+      <td>24 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>25</td>
+      <td>20 + 500</td>
+      <td>25 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>26</td>
+      <td>21 + 410</td>
+      <td>26 – T200</td>
+      <td>1C–T200–S1–LE4<br>2TP–T200–S1–LE3<br>3DP–T200–S1–LE1<br>4A–T200–S1–LE2</td>
+      <td>Traversare DJ293 (TD5–1) – montare tub protecție + grup anozi de zinc + dispozitiv de drenare al curenților de dispersie</td>
+    </tr>
+    <tr>
+      <td>27</td>
+      <td>22 + 470</td>
+      <td>27 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>28</td>
+      <td>23 + 270</td>
+      <td>28 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>29</td>
+      <td>24 + 615</td>
+      <td>29 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare Mlaștin THC 5–1</td>
+    </tr>
+    <tr>
+      <td>30</td>
+      <td>25 + 600</td>
+      <td>30 – T200</td>
+      <td>1C–T200–S1</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>31</td>
+      <td>26 + 830</td>
+      <td>31 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>32</td>
+      <td>28 + 010</td>
+      <td>32 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>33</td>
+      <td>29 + 200</td>
+      <td>33 – T200</td>
+      <td>1C–T200–S1</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>34</td>
+      <td>30 + 000</td>
+      <td>34 – T200</td>
+      <td>1C–T200–S1</td>
+      <td>Traversare DE</td>
+    </tr>
+    <tr>
+      <td>35</td>
+      <td>30 + 920</td>
+      <td>35 – T200</td>
+      <td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>
+      <td>Traversare DC (TD7–1) – montare tub protecție + grup anozi de zinc</td>
+    </tr>
+    <tr>
+      <td>36</td>
+      <td>31 + 300</td>
+      <td>36 – T200</td>
+      <td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>

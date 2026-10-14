@@ -532,7 +532,8 @@ def _adauga(path, obj):
 
 @cu_lacat
 def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
-    """Un dezacord pe rand: structura_tabele -> needs_human fara AI (op needs_human); restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
+    """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
+    restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
     plafonul si legarea de BD sunt in edge). Decizia se scrie local imediat (decizii.jsonl). Nicio reincercare: orice refuz / eroare
     opreste pasul. Oprire automata a rularii daca needs_human > prag din arbitrajele Claude (dupa `minim`)."""
     rdir = pathlib.Path(rdir); r = rulare(rdir)
@@ -582,6 +583,8 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
         for it in items.values():
             if it['id'] in st['per_doc'][doc]['rezolvate'] or it['id'] in st['per_doc'][doc]['necunoscute']: continue
             if it['id'] not in ids: raise RuntimeError('Dezacordul %s nu are id in BD (reia compara)' % it['id'])
+            if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
+                om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
             if it['tip'] == 'structura_tabele':
                 om(d, ids, it, 'structura_tabele: un cititor vede tabel, celalalt text (fara arbitraj automat)'); st = stare_locala(); continue
             img = (d / it['image']).read_bytes()

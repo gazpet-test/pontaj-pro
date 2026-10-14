@@ -1,9 +1,10 @@
 """Teste CPU, fara endpoint real: python -m unittest ocr_local.test_ocr_local -v (PYTHONPATH=scripts)."""
-import hashlib, json, os, pathlib, shutil, tempfile, unittest
+import hashlib, json, os, pathlib, re, shutil, tempfile, time, unittest
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 from .geometry import classify, orientation, text_bands
 from .guard import Guard
+from .guard_legacy import repetition_reason, repeated_table_row
 from . import read as RD
 from .plan import plan, load_plan
 from .compare import compare_band, compare, segments
@@ -37,12 +38,77 @@ class Geometrie(unittest.TestCase):
     def test_garda(self):
         g = Guard(); self.assertIsNone(g('text obisnuit')); self.assertEqual(g('<td></td>' * 600), 'celule_goale_fara_continut')
         g.reset(); self.assertIsNotNone(g(('0123456789' * 20) * 4))
+
     @unittest.skipUnless((CODEX_OUT / 'pas6_text_20261013/pages.json').exists(), 'fixture Codex pas6 lipsa')
     def test_geometria_salvata_pas6(self):
         for p in json.loads((CODEX_OUT / 'pas6_text_20261013/pages.json').read_text(encoding='utf-8')):
             with Image.open(p['image']) as im: bs, m = text_bands(im)
             if p['bands']: self.assertEqual([b['box'] for b in bs], [b['crop_box'] for b in p['bands']])
             else: self.assertEqual(m['mode'], 'whole_page_fallback')
+
+GARDA_FIX = pathlib.Path(__file__).parent / 'fixtures_garda'
+GARDA_SHA = {'d772_p0255_b0_lighton.txt': 'fa5ac788a7e422e1090fb6ac7b97b610697e1d886ac0050aebc648376bc66e15',
+             'bucla_text_ovis_p85.txt': 'd80209522e0e79a941469f8f254e44444b5d497d308559acd467d54846251d3e',
+             'bucla_tabel_ovis_td31.txt': '86119174e96e6bf7cf7bc7694d7a1cb4d62c02749088081f9373907daf188523'}
+def garda_fix(nume):
+    b = (GARDA_FIX / nume).read_bytes(); assert hashlib.sha256(b).hexdigest() == GARDA_SHA[nume], nume
+    return b.decode('utf-8')
+def garda_flux(text, pas=16):
+    """Garda ca la citire: textul creste pe bucati; intoarce (motiv, detaliu, caractere la oprire)."""
+    g = Guard()
+    for n in range(pas, len(text) + pas, pas):
+        r = g(text[:n])
+        if r: return r, (g.event or {}).get('detail'), min(n, len(text))
+    return None, None, len(text)
+
+class GardaLinii(unittest.TestCase):
+    """Regula veche „linie lunga repetata” (alarma falsa d772 p0255_b0, r1): celulele <td> lungi conteaza doar de 4 ori LA RAND;
+    celelalte linii lungi raman pe regula veche (de 4 ori oriunde)."""
+    def test_tabel_real_d772_p0255_trece(self):
+        # tabel corect: aceeasi celula <td>1C–T200–S1<br>...</td> de 4 ori, nu la rand -> fara oprire
+        self.assertEqual(garda_flux(garda_fix('d772_p0255_b0_lighton.txt'))[0], None)
+    def test_bucla_reala_text_ramane_oprita(self):
+        # bucla reala Ovis (antet de pagina + <think> repetat): originalul e oprit exact ca inainte (acelasi motiv, acelasi punct)
+        t = garda_fix('bucla_text_ovis_p85.txt'); r, d, n = garda_flux(t)
+        self.assertEqual((r, d, n), ('bucla_previous_guard', 'Repeated long line (4 times)', len(t)))  # identic cu regula veche
+    def test_bucla_reala_tabel_ramane_oprita(self):
+        self.assertIsNotNone(garda_flux(garda_fix('bucla_tabel_ovis_td31.txt'))[0])
+    def test_bucle_cu_spatiere_variabila_oprite(self):
+        # cazurile Jakarinos r1: indentare crescatoare -> blocul de 200 nu se repeta identic; regula liniilor le prinde
+        cel = '<td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>'
+        self.assertIsNotNone(garda_flux('\n'.join(' ' * i + cel for i in range(20)))[0])
+        a = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1, km 12'
+        b = 'Traversare drum judetean DJ298 cu tub de protectie si grup anozi de zinc'
+        self.assertIsNotNone(garda_flux('\n'.join(' ' * i + (a if i % 2 else b) for i in range(40)))[0])
+        # Jakarinos r2: acelasi rand intreg (celula lunga + celula scurta), indentare crescatoare
+        rows = ['<table>'] + [' ' * i + x for i in range(20) for x in ('<tr>', cel, '<td>17 – T200</td>', '</tr>')] + ['</table>']
+        self.assertEqual(garda_flux('\n'.join(rows)), ('bucla_previous_guard', 'Repeated table row (4 times in a row)', garda_flux('\n'.join(rows))[2]))
+        # Jakarinos r3: (a) </tr> pe aceeasi linie cu ultima celula; (b) celule goale la capetele randului (vederea filtrata
+        # le comaseaza peste granitele de rand) -> regula randului lucreaza pe textul brut, cu delimitatori oriunde pe linie
+        a_ = ['<table>'] + [' ' * i + x for i in range(12) for x in ('<tr>', cel, '<td>17 – T200</td></tr>')] + ['</table>']
+        b_ = ['<table>'] + [' ' * i + x for i in range(12) for x in ('<tr>', '<td></td>', cel, '<td>17 – T200</td>', '<td></td>', '</tr>')] + ['</table>']
+        for t in (a_, b_):
+            for pas in (1, 7, 16, 64, 256):
+                self.assertEqual(garda_flux('\n'.join(t), pas)[:2], ('bucla_previous_guard', 'Repeated table row (4 times in a row)'))
+        # randuri goale identice (fara continut) nu sunt bucla pe aceasta regula
+        self.assertIsNone(repeated_table_row('\n'.join(['<tr>', '<td></td>', '<td>-</td>', '</tr>'] * 6)))
+        self.assertIsNone(repeated_table_row(garda_fix('d772_p0255_b0_lighton.txt')))
+        # Copilot r4: acelasi subtotal in 4 tabele separate (sau separat de text) nu e „la rand”
+        sub = '<tr><td>Total articol</td><td>sp.mat 0,00</td><td>sp.man 0,00</td></tr>'
+        self.assertIsNone(repeated_table_row('\n'.join('<table>\n%s\n</table>\nArticolul %d' % (sub, i) for i in range(4))))
+        self.assertIsNone(repeated_table_row('<table>' + ''.join('<tbody>%s</tbody>\ntext intre\n' % sub for _ in range(4)) + '</table>'))
+        self.assertIsNotNone(repeated_table_row('<table><thead>' + sub + '</thead><tbody>' + sub * 3 + '</tbody></table>'))  # acelasi tabel
+    def test_regula_linii(self):
+        lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
+        self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')
+        self.assertIsNone(repetition_reason('\n'.join([lin] * 3)))
+        rand = '<tr><td>1C–T200–S1</td><td>Traversare DE</td><td>12 + 465</td></tr>'
+        self.assertIsNotNone(repetition_reason('\n'.join([rand] * 4)))  # rand intreg pe o linie -> regula veche
+        cel = '      <td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>'
+        self.assertEqual(repetition_reason('\n\n'.join([cel] * 4)), 'Repeated table cell line (4 times in a row)')  # la rand, golurile nu rup
+        self.assertIsNone(repetition_reason('\n'.join([cel] * 3)))
+        self.assertIsNone(repetition_reason('\n'.join([cel, '<td>17 – T200</td>'] * 6)))  # celula repetata, dar nu la rand
+
 
 class Plan(unittest.TestCase):
     def test_text_confirmat_da_benzi_si_refuza_a_doua_rulare(self):
@@ -182,6 +248,99 @@ class Citire(unittest.TestCase):
                  patch('ocr_local.read.save', side_effect=lambda p, v: (_ for _ in ()).throw(OSError('disc plin')) if p.name == 'result.json' else real_save(p, v)):
                 with self.assertRaises(OSError): RD.run_reader(out, 'mineru', run_id='t', check_weights=False, check_server=False)
             self.assertTrue(lock.exists())
+    def _proto_local(self, port, lock):
+        p = RD.protocol(); rd = dict(p['readers']); rd['lighton'] = dict(rd['lighton'], endpoint='http://127.0.0.1:%d' % port)
+        return dict(p, readers=rd, gpu_lock=str(lock))
+    def test_bucla_reala_opreste_doar_banda_si_documentul_continua(self):
+        # Razvan 14.10: garda opreste DOAR banda. Server vLLM fals pe loopback: prima cerere = bucla reala Ovis td31 (streaming),
+        # restul = text normal; /metrics = 0 cereri in lucru. Garda reala opreste banda 1, celelalte se citesc, gpu.lock eliberat.
+        import http.server, threading
+        loop = garda_fix('bucla_tabel_ovis_td31.txt'); posts = []
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                b = b'vllm:num_requests_running{model_name="x"} 0.0\nvllm:num_requests_waiting{model_name="x"} 0.0\n'
+                self.send_response(200); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length'])); posts.append(1)
+                text = loop if len(posts) == 1 else 'text obisnuit pe banda %d' % len(posts)
+                self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+                try:
+                    for i in range(0, len(text), 40):
+                        self.wfile.write(b'data: ' + json.dumps({'choices': [{'delta': {'content': text[i:i + 40]}}]}).encode() + b'\n\n')
+                    self.wfile.write(b'data: ' + json.dumps({'choices': [{'delta': {}, 'finish_reason': 'stop'}]}).encode() + b'\n\ndata: [DONE]\n\n')
+                except OSError: pass  # clientul a inchis fluxul (garda)
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); lock = pathlib.Path(d) / 'gpu.lock'; bands = load_plan(out)['bands']; self.assertGreaterEqual(len(bands), 3)
+            with patch('ocr_local.read.protocol', return_value=self._proto_local(srv.server_address[1], lock)):
+                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False)
+                self.assertEqual(st['status'], 'complete'); self.assertEqual(len(posts), len(bands)); self.assertFalse(lock.exists())
+                self.assertEqual([g['band'] for g in st['benzi_garda']], [bands[0]['id']]); self.assertTrue(st['benzi_garda'][0]['signal'].startswith('bucla'))
+                r0 = json.loads((out / 'page0001' / bands[0]['id'] / 'lighton' / 'result.json').read_text(encoding='utf-8'))
+                self.assertEqual((r0['ok'], r0['backend_idle_confirmed']), (False, True)); self.assertTrue(r0['guard_event'])
+                for b in bands[1:]:
+                    self.assertTrue(json.loads((out / 'page0001' / b['id'] / 'lighton' / 'result.json').read_text(encoding='utf-8'))['ok'])
+                st = RD.run_reader(out, 'lighton', run_id='t2', check_weights=False, check_server=False)  # reluare: nimic nou, banda ramane marcata
+                self.assertEqual((st['status'], st['skipped_existing'], len(posts)), ('complete', len(bands), len(bands)))
+                self.assertEqual([g['band'] for g in st['benzi_garda']], [bands[0]['id']])
+    def test_garda_fara_vllm_confirmat_liber_opreste_tot(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); lock = pathlib.Path(d) / 'gpu.lock'; calls = []
+            def fake(data, o, cfg, dl):
+                calls.append(1); (o / 'request_started.json').write_text('{}'); return 'x', {'ok': False, 'signal': 'bucla_repeated200_ge4', 'error': None}
+            with patch.dict(RD.FUNCS, {'lighton': fake}), patch('ocr_local.read.backend_idle', return_value=False), \
+                 patch('ocr_local.read.protocol', return_value=dict(RD.protocol(), gpu_lock=str(lock))):
+                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False)
+            self.assertEqual((st['status'], len(calls)), ('stopped_no_retry', 1)); self.assertTrue(lock.exists())
+    def _metrics_srv(self, body, drip=False, mod=None):
+        import http.server, threading
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                try:
+                    if mod == 'antet':  # antetele picura (review r5 Jakarinos P2)
+                        for ch in b'HTTP/1.1 200 OK\r\nX-Lent: ' + b'a' * 400: self.wfile.write(bytes([ch])); self.wfile.flush(); time.sleep(0.01)
+                        return
+                    if mod == 'chunk':  # extensia unui chunk picura
+                        self.wfile.write(b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10;ext=')
+                        for _ in range(400): self.wfile.write(b'x'); self.wfile.flush(); time.sleep(0.01)
+                        return
+                    if mod == 'stall':  # picura pana aproape de termen, apoi tace (review r5 Copilot P2)
+                        self.send_response(200); self.end_headers()
+                        for _ in range(40): self.wfile.write(b'#'); self.wfile.flush(); time.sleep(0.01)
+                        time.sleep(4); return
+                    if mod == 'stall18':
+                        self.send_response(200); self.end_headers(); t = time.monotonic()
+                        while time.monotonic() - t < 1.8: self.wfile.write(b'#'); self.wfile.flush(); time.sleep(0.01)
+                        time.sleep(4); return
+                except OSError: return
+                self.send_response(200)
+                if drip:  # raspuns fara sfarsit: cate un octet, periodic (review r4 Jakarinos P2)
+                    self.end_headers()
+                    try:
+                        for _ in range(2000): self.wfile.write(b'#'); self.wfile.flush(); time.sleep(0.01)
+                    except OSError: pass
+                    return
+                self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        return dict(RD.protocol()['readers']['lighton'], endpoint='http://127.0.0.1:%d' % srv.server_address[1])
+    def test_backend_idle_citeste_metrics(self):
+        ocupat = self._metrics_srv(b'# HELP x\nvllm:num_requests_running{m="a"} 1.0\nvllm:num_requests_waiting{m="a"} 0.0\n')
+        self.assertFalse(RD.backend_idle(ocupat, timeout=0.3, poll=0.05))
+        liber = self._metrics_srv(b'vllm:num_requests_running{m="a"} 0.0\nvllm:num_requests_waiting{m="a"} 0.0\n')
+        self.assertTrue(RD.backend_idle(liber, timeout=2))
+        self.assertFalse(RD.backend_idle(self._metrics_srv(b'alt_metric 0\n'), timeout=0.3, poll=0.05))  # fara metricile vLLM = neconfirmat
+    def test_backend_idle_termen_absolut_si_pe_citire(self):
+        for cfg in (self._metrics_srv(b'', drip=True), self._metrics_srv(b'', mod='antet'), self._metrics_srv(b'', mod='chunk'),
+                    self._metrics_srv(b'', mod='stall')):
+            t0 = time.monotonic(); self.assertFalse(RD.backend_idle(cfg, timeout=0.5, poll=0.05))
+            self.assertLess(time.monotonic() - t0, 0.5 + 0.2)  # toleranta mica fata de buget (review r6)
+        # cazul Jakarinos r6: trafic pana aproape de termen (1,8 s din 2 s), apoi 4 s de tacere
+        t0 = time.monotonic(); self.assertFalse(RD.backend_idle(self._metrics_srv(b'', mod='stall18'), timeout=2.0, poll=0.05))
+        self.assertLess(time.monotonic() - t0, 2.0 + 0.2)
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []

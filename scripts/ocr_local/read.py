@@ -147,14 +147,63 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
 
 FUNCS = {'lighton': read_lighton, 'mineru': read_mineru}
 
+def garda_oprita(res):
+    """Banda oprita de o garda (bucla, celule goale): rezultat complet ca transport, dar continut respins. Nu termen, nu eroare."""
+    return res.get('ok') is False and bool(res.get('signal')) and res.get('signal') != 'deadline' and not res.get('error')
+
+def _garda(band, res):
+    ev = res.get('guard_event') or {}
+    return {'band': band['id'], 'page': band['page'], 'signal': res.get('signal'), 'detail': ev.get('detail'), 'guard_event': ev}
+
+def backend_idle(cfg, timeout=30.0, poll=0.5):
+    """vLLM confirmat liber: /metrics arata 0 cereri in lucru si 0 in asteptare (dupa ce clientul a inchis fluxul oprit de garda)."""
+    host, port = endpoint_parts(cfg['endpoint']); end = time.monotonic() + timeout
+    def citeste(box):
+        # cererea intr-un fir; la termen un timer inchide socketul (curatenie). Termenul il garanteaza join-ul de mai jos:
+        # pe Windows shutdown-ul nu deblocheaza prompt un recv (review r6 Jakarinos P2)
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=max(0.1, min(5.0, end - time.monotonic())))
+            conn.connect(); sock = conn.sock
+            def taie():
+                try: sock.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+            timer = threading.Timer(max(0.0, end - time.monotonic()), taie); timer.daemon = True; timer.start()
+            try:
+                conn.request('GET', '/metrics'); r = conn.getresponse(); chunks = []; size = 0
+                while r.status == 200:
+                    if time.monotonic() > end: raise TimeoutError('metrics peste termen')
+                    c = r.read1(65536) if hasattr(r, 'read1') else r.read(65536)
+                    if not c: break
+                    size += len(c); chunks.append(c)
+                    if size > 4 << 20: raise ValueError('metrics prea mari')
+                box['body'] = b''.join(chunks).decode('utf-8', 'replace')
+            finally: timer.cancel(); conn.close()
+        except BaseException as e: box['e'] = e
+    while True:
+        try:
+            box = {}; th = threading.Thread(target=citeste, args=(box,), daemon=True); th.start()
+            th.join(max(0.0, end - time.monotonic()))
+            if th.is_alive() or time.monotonic() > end: return False  # termen ABSOLUT: neconfirmat
+            if 'e' in box: raise box['e'] if isinstance(box['e'], (OSError, ValueError, http.client.HTTPException)) else OSError(str(box['e']))
+            body = box['body']; vals = {}
+            for line in body.splitlines():
+                for k in ('vllm:num_requests_running', 'vllm:num_requests_waiting'):
+                    if line.startswith(k + '{') or line.startswith(k + ' '): vals[k] = vals.get(k, 0.0) + float(line.rsplit(' ', 1)[1])
+            if len(vals) == 2 and not any(vals.values()): return True
+        except (OSError, ValueError, http.client.HTTPException): pass
+        if time.monotonic() >= end: return False
+        time.sleep(max(0.0, min(poll, end - time.monotonic())))  # nici pauza nu trece de termen
+
 def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=True, lock=True):
-    """Citeste toate benzile planului cu un singur cititor. Se opreste la primul rezultat incomplet (fara reincercare).
+    """Citeste toate benzile planului cu un singur cititor. Termen / eroare de transport / rezultat neconfirmat = oprire (fara reincercare).
+    O banda oprita de GARDA (decizie Razvan 14.10) opreste doar banda: dupa confirmarea ca vLLM e liber (/metrics), banda ramane
+    incompleta (la incarcare: stare „incomplet” cu motivul si guard_event; la arbitraj: om, fara Claude) si citirea continua.
     Returneaza starea; scrie <banda>/<cititor>/raw.txt + result.json si <plan>/read_<cititor>.json."""
     if reader not in READERS: raise ValueError('Cititor necunoscut')
     plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); proto = protocol(); cfg = proto['readers'][reader]
     endpoint_parts(cfg['endpoint'])
     state = {'reader': reader, 'run_id': run_id, 'protocol': proto['version'], 'model': cfg['model'], 'started': time.time(),
-             'bands': len(doc['bands']), 'done': 0, 'skipped_existing': 0, 'status': 'starting'}
+             'bands': len(doc['bands']), 'done': 0, 'skipped_existing': 0, 'benzi_garda': [], 'status': 'starting'}
     state['weights_sha256'] = verify_weights(cfg) if check_weights else None
     if check_server: verify_server(cfg)
     ctx = gpu_lock(proto['gpu_lock'], run_id) if lock else contextlib.nullcontext({'keep': False})
@@ -167,10 +216,13 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                 # reluare: rezultatul vechi se refoloseste DOAR daca e complet si al aceluiasi cititor / protocol / greutati / imagine
                 old = json.loads((out / 'result.json').read_text(encoding='utf-8'))
                 raw_old = (out / 'raw.txt').read_bytes() if (out / 'raw.txt').exists() else None
-                if (old.get('ok') is True and old.get('reader') == reader and old.get('protocol') == proto['version']
-                        and old.get('weights_sha256') == state['weights_sha256'] and old.get('image_sha256') == band['image_sha256']
-                        and raw_old is not None and hashlib.sha256(raw_old).hexdigest() == old.get('raw_sha256')):
+                acelasi = (old.get('reader') == reader and old.get('protocol') == proto['version']
+                           and old.get('weights_sha256') == state['weights_sha256'] and old.get('image_sha256') == band['image_sha256']
+                           and raw_old is not None and hashlib.sha256(raw_old).hexdigest() == old.get('raw_sha256'))
+                if acelasi and old.get('ok') is True:
                     state['skipped_existing'] += 1; continue
+                if acelasi and garda_oprita(old) and old.get('backend_idle_confirmed') is True:  # banda oprita de garda, inchisa curat
+                    state['skipped_existing'] += 1; state['benzi_garda'].append(_garda(band, old)); continue
                 state.update(status='interrupted_needs_review', band=band['id'], motiv='rezultat existent incompatibil'); break
             if (out / 'request_started.json').exists():
                 state.update(status='interrupted_needs_review', band=band['id']); break
@@ -182,8 +234,12 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                           protocol=proto['version'], weights_sha256=state['weights_sha256'], run_id=run_id, backend_idle_confirmed=False)
             save(out / 'result.json', result); state['done'] += 1
             if result['ok']: holder['keep'] = False
+            if not result['ok'] and garda_oprita(result) and backend_idle(cfg):
+                # doar banda: fluxul e inchis de client si vLLM e confirmat liber -> se marcheaza si se trece la banda urmatoare
+                result['backend_idle_confirmed'] = True; save(out / 'result.json', result)
+                holder['keep'] = False; state['benzi_garda'].append(_garda(band, result)); continue
             if not result['ok']:
-                holder['keep'] = True  # orice rezultat incomplet (termen, eroare de transport, garda): backend-ul nu e confirmat idle
+                holder['keep'] = True  # termen, eroare de transport, garda fara vLLM confirmat liber: backend-ul nu e confirmat idle
                 state.update(status='stopped_no_retry', band=band['id'], result=result, gpu_lock_pastrat=holder['keep']); break
         else:
             state['status'] = 'complete'

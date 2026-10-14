@@ -1,0 +1,65 @@
+SUBTRAVERSARE DC27 (TD 3-1)
+
+KM COTG 8+790
+
+<img src="images/bbox_48_95_984_838.jpg" />
+
+LEGENDA:
+
+1. Teava Ø 219,1 x 4,5 mm; L360NE SR EN ISO3183-2020; Clasa de locație 3,
+
+2. Curbă CMF 219,1/5/L360NE/30°/2,0 = 2 buc.,
+
+3. Tub de protectie Ø406,4 X12,5 mm SR 6898/1-95 = 16 m
+
+4. Inel distantier cu role MA75 = 11 buc
+
+5. Etansare cu burduf Ø16/Ø8
+
+6. Tub Ø 40 x 3,7 mm HDPE conform SR ISO 4427 - SDR 17,6
+
+7. Fibra optica Ø12 (48 fire)
+
+8. Camereta din fibra de sticla 0,62X1,035X0,74 = 1 buc
+
+NOTA:
+
+- SEMNELE DE CIRCULATIE PREZENTATE ALATURI VOR FI AMPLASATE PE PERIOADA DESFASURarii LUCRARILOR DE CONSTRUCTII - MONTAJ, DUPA CARE SE VOR DEZAFECTA. - COTELE NOTATE CU " * ", SE VOR STABILI LA MONTAJ.
+
+<img src="images/bbox_596_894_630_959.jpg" />
+
+1
+
+50
+
+2
+
+30
+
+3
+
+4
+
+<table border=1><tr><td colspan="4">DEPARTAMENTUL PROIECTARE SI CERCETARE</td><td>Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centru și N-E jud. Botoșani, 2. Conductă de transport gaze naturale Stăuceni - Ştefănești (inclusiv alimentarea cu energie electrică, protectie catodică și fibra optică)</td><td>SF + PT 10914</td></tr><tr><td>Ridicat TOPO</td><td>ing. Dobritoiu D.</td><td></td><td rowspan="3">scara: 1:100</td><td rowspan="3" colspan="2">SUBTRAVERSARE DRUM COMUNAL DC27 (TD3-1)</td></tr><tr><td>Proiectat</td><td>ing. Vasile C.</td><td></td></tr><tr><td>Verificat</td><td>ing. Bordi A.</td><td></td></tr><tr><td>Aprobat</td><td>ing. Bihorean A.</td><td></td><td>2026</td><td>Ds. nr. 10914 - 03 - 01</td><td>670x297</td></tr></table>
+
+
+<think>
+
+</think>
+
+SUBTRAVERSARE DRUM COMUNAL DC27
+
+(TD3-1)
+
+670x297
+ Code
+
+<table border=1><tr><td colspan="4">DEPARTAMENTUL PROIECTARE SI CERCETARE</td><td>Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centru și N-E jud. Botoșani, 2. Conductă de transport gaze naturale Stăuceni - Ştefănești (inclusiv alimentarea cu energie electrică, protectie catodică și fibra optică)</td><td>SF + PT 10914</td></tr><tr><td>Ridicat TOPO</td><td>ing. Dobritoiu D.</td><td></td><td rowspan="3">scara: 1:100</td><td rowspan="3" colspan="2">SUBTRAVERSARE DRUM COMUNAL DC27 (TD3-1)</td></tr><tr><td>Proiectat</td><td>ing. Vasile C.</td><td></td></tr><tr><td>Verificat</td><td>ing. Bordi A.</td><td></td></tr><tr><td>Aprobat</td><td>ing. Bihorean A.</td><td></td><td>2026</td><td>Ds. nr. 10914 - 03 - 01</td><td>670x297</td></tr></table>
+ Code
+
+<table border=1><tr><td colspan="4">DEPARTAMENTUL PROIECTARE SI CERCETARE</td><td>Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centru și N-E jud. Botoșani, 2. Conductă de transport gaze naturale Stăuceni - Ştefănești (inclusiv alimentarea cu energie electrică, protectie catodică și fibra optică)</td><td>SF + PT 10914</td></tr><tr><td>Ridicat TOPO</td><td>ing. Dobritoiu D.</td><td></td><td rowspan="3">scara: 1:100</td><td rowspan="3" colspan="2">SUBTRAVERSARE DRUM COMUNAL DC27 (TD3-1)</td></tr><tr><td>Proiectat</td><td>ing. Vasile C.</td><td></td></tr><tr><td>Verificat</td><td>ing. Bordi A.</td><td></td></tr><tr><td>Aprobat</td><td>ing. Bihorean A.</td><td></td><td>2026</td><td>Ds. nr. 10914 - 03 - 01</td><td>670x297</td></tr></table>
+ Code
+
+<table border=1><tr><td colspan="4">DEPARTAMENTUL PROIECTARE SI CERCETARE</td><td>Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centru și N-E jud. Botoșani, 2. Conductă de transport gaze naturale Stăuceni - Ştefănești (inclusiv alimentarea cu energie electrică, protectie catodică și fibra optică)</td><td>SF + PT 10914</td></tr><tr><td>Ridicat TOPO</td><td>ing. Dobritoiu D.</td><td></td><td rowspan="3">scara: 1:100</td><td rowspan="3" colspan="2">SUBTRAVERSARE DRUM COMUNAL DC27 (TD3-1)</td></tr><tr><td>Proiectat</td><td>ing. Vasile C.</td><td></td></tr><tr><td>Verificat</td><td>ing. Bordi A.</td><td></td></tr><tr><td>Aprobat</td><td>ing. Bihorean A.</td><td></td><td>2026</td><td>Ds. nr. 10914 - 03 - 01</td><td>670x297</td></tr></table>
+ Code
+

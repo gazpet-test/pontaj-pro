@@ -551,6 +551,22 @@ class Client(unittest.TestCase):
         C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge); a = C.arbitreaza(rdir, self.edge)
         self.assertGreaterEqual(a['om'], 1); self.assertTrue(all(x['dezacord_id'] for x in self.edge.ops('needs_human')))
         arb = [c['item']['tip'] for f, c in self.edge.calls if f == 'ofertare-ocr-arbitreaza']; self.assertNotIn('structura_tabele', arb)
+    def test_banda_oprita_de_garda_merge_la_om_fara_claude(self):
+        # Razvan 14.10: o banda oprita de garda nu opreste documentul; apare „incomplet” cu motivul + guard_event si merge la om, fara AI
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 10 m')
+        from .plan import load_plan
+        d = rdir / ('d%d' % DOC); b = load_plan(d)['bands'][0]; o = d / ('page%04d' % b['page']) / b['id'] / 'mineru'
+        res = json.loads((o / 'result.json').read_text()); ev = {'reason': 'bucla_previous_guard', 'detail': 'Repeated table row (4 times in a row)'}
+        res.update(ok=False, signal='bucla_previous_guard', guard_event=ev, error=None, backend_idle_confirmed=True); (o / 'result.json').write_text(json.dumps(res))
+        with patch.object(C, 'PRAG_GARDA', 1.0):  # o singura pagina in proba: pragul de pagini nu e subiectul testului
+            r = C.incarca_citiri(rdir, self.edge)
+        self.assertEqual(r['stare'], 'citita')
+        p = [x for k, x in self.edge.pagini.items() if k[3] == 'mineru' and x['stare'] == 'incomplet']
+        self.assertEqual(len(p), 1); self.assertEqual((p[0]['garda']['signal'], p[0]['garda']['guard_event']), ('bucla_previous_guard', ev))
+        C.compara_rulare(rdir, self.edge); a = C.arbitreaza(rdir, self.edge)
+        arb = [c['item']['tip'] for f, c in self.edge.calls if f == 'ofertare-ocr-arbitreaza']; self.assertNotIn('banda_intreaga', arb)
+        self.assertTrue(any(x['motiv'].startswith('banda_intreaga') for x in self.edge.ops('needs_human'))); self.assertGreaterEqual(a['om'], 1)
+        f = C.reconciliaza_rulare(rdir, self.edge); self.assertGreaterEqual(f['needs_human'], 1)
     def test_manifest_sha_ca_in_bd(self):
         self.assertEqual(C.manifest_sha([]), hashlib.sha256(b'').hexdigest())
         self.assertEqual(C.manifest_sha(['10|2|b\n', '1247|1|a\n']), hashlib.sha256(b'10|2|b\n1247|1|a\n').hexdigest())

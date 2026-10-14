@@ -1,0 +1,95 @@
+pe tronsoane imbinate prin sudură electrică în fir pe marginea șanțului și lansarea în șanț în poziție definitivă;
+
+asamblarea firului de conductă în șanț în poziție definitivă se va realiza prin suduri executate „la poziție” în gropi de poziție.
+
+Operațiile premergătoare montării conductei sunt:
+
+verificarea și rectificarea fundului șanțului: să fie format numai din portiuni drepte între două gropi de poziție adiacente și să nu prezinte obiecte tari care ar deteriora izolația conductei;
+
+verificarea izolației și anume: continuitatea cu izotestul cu scântei reglat pentru grosimea nominală a izolației a portiunilor pe care a fost sprijinită conducta la marginea șanțului; aderența de către ori este necesară; grosimea prin măsurare în caz de suspiciousne a nerealizării;
+
+verificarea corespondenței dintre profilarea firului de conductă cu cea a șanțului;
+
+verificarea utilajelor de lansare.
+
+Lansarea conductei se va realiza prin așezarea acesteia în șanțul săpat anterior, utilizându-se macarale mobile tip lansator. Schimbările de direcție în plan orizontal se vor realiza prin curbe cu raza R = 5xDN.
+
+Pentru a se evita în timpul lansării conductei depășirea limitei de elasticitate a materialului, lansarea conductei se va face cu respectarea următoarelor condiții:
+
+distanța dintre lansatoare : max. 20 m
+
+Înăltimea maximă de ridicare a firului de conductă în procesul de montare: 1,0 m.
+
+Pentru reducerea tensiunilor suplimentare datorate dilatații termice cât și pentru evitarea deteriorării izolației, montarea conductei în poziție definitivă se recomandă să se facă la o temperatură ambiantă de aproximativ 10–15°C (în diminețile zilelor de vară sau la prânzul zilelor de iarnă).
+
+Pe timp friguros, la temperaturi mai mici de +5°C, montarea conductei în poziție definitivă se va face cu respectarea tehnologiei procedurilor elaborate și calificate în acest sens de antreprenor pentru imbinarea țevilor prin sudură în stația de izolare, pe șantier și în atelierele de confectioni metalice.
+
+Montarea conductei în apropierea sau la traversarea altor instalatii existente montate subteran, va fi făcută cu respectarea condițiilor tehnice prevăzute în avize și impuse de proprietarii rețelelor respective.
+
+Operațiile după montarea conductei în poziție definitivă sunt:
+
+verificarea și izolarea tuturor sudurilor, executate în gropi de poziție;
+
+executarea „picioarelor de pământ” pentru asigurarea stabilității conductei, în zonele cu probabilitate mare de inundare naturală a șanțului;
+
+distanța maximă între „picioare”: cca. 6 m
+
+lătimea minimă a „piciorului”: cca. 1 m
+
+elaborarea „Schiței de inventar” a conductei montate, care va cuprinde:
+
+traseul conductei reperat pe teren, față de obiectele stabile, fixe;
+
+caracteristicile conductei: diametru, grosime de perete, standardul de fabricație, material;
+
+tipul izolației aplicate;
+
+suduri executate: tip, ștanța sudorului, distanța dintre suduri, reperarea sudurilor, control radiografic;
+
+■ curbele montate: tip, grade, reperare;
+
+adâncimi de montare;
+
+armături și accesorii pe conductă: tip, distanța față de puncte fixe.
+
+La terminarea executiei, constructorul va preda beneficiarului axul conductei în coordinate GPS și STEREO 1970.
+
+Traversările obstacolelor întălnite pe traseu (câi de comunicație, cursuri de ape, canale, alte instalatii etc.) sunt prezentate în caietul de sarcini – Traversări obstacole.
+
+D.P.C. MEDIAŞ Proiect Tehnic: "Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centrul și Nord-Estul județului Botoșani:
+
+1 – Conductă de transport gaze naturale Coșula – Săveni – Darabani; TG_INV_19598, 2 – Conductă de transport gaze naturale Stăuceni – Ştefănești; TG_INV_10914,
+
+3 – Conductă de transport gaze naturale Dorohoi – Darabani; TG_INV_10946, (inclusiv alimentarea cu energie electrică, protectie catodică și fibra optică")
+
+85
+
+<think>
+
+</think>
+
+D.P.C. MEDIAŞ Proiect Tehnic: "Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centrul și Nord-Estul județului Botoșani:
+
+1 – Conductă de transport gaze naturale Coșula – Săveni – Darabani; TG_INV_19598, 2 – Conductă de transport gaze naturale Stăuceni – Ştefănești; TG_INV_10914,
+
+3 – Conductă de transport gaze naturale Dorohoi – Darabani; TG_INV_10946, (inclusiv alimentarea cu energie electrică, protectie catodică și fibra optică")
+
+85
+
+<think>
+
+</think>
+
+D.P.C. MEDIAŞ Proiect Tehnic: "Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centrul și Nord-Estul județului Botoșani:
+
+1 – Conductă de transport gaze naturale Coșula – Săveni – Darabani; TG_INV_19598, 2 – Conductă de transport gaze naturale Stăuceni – Ştefănești; TG_INV_10914,
+
+3 – Conductă de transport gaze naturale Dorohoi – Darabani; TG_INV_10946, (inclusiv alimentarea cu energie electrică, protectie catodică și fibra optică")
+
+85
+
+<think>
+
+</think>
+
+D.P.C. MEDIAŞ Proiect Tehnic: "Dezvoltarea SNT în vederea alimentării cu gaze naturale a localităților din Centrul și Nord-Estul județului Botoșani:

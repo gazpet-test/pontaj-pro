@@ -4,6 +4,10 @@ Specificația: `docs/paw/PLAN_OCR_LOCAL_OFERTARE.md`. Adaptarea pipeline-ului Co
 de la un cititor (dots, prompt înghețat) la **două cititoare independente**: LightOnOCR-2-1B și MinerU2.5-Pro, ambele în vLLM pe loopback.
 Geometria (`geometry.py`), garda v3 (`guard*.py`) și regulile clientului (IP loopback literal, fără proxy / redirect / reîncercare, 180 s)
 sunt cele din Codex; garda primește tokenizer-ul din `protocol.json` (cale + SHA-256).
+Singura abatere de logică (14.10.2026, rularea r1, `guard_version` `empty-cells-v4-td-consecutive-rawrows`): în regula veche „linie lungă repetată”,
+liniile de celule `<td>` se socotesc buclă doar de 4 ori **la rând**. Celelalte linii lungi rămân pe regula veche (de 4 ori oriunde), ca să
+prindă și buclele cu spațiere variabilă pe care blocul de 200 de caractere nu le vede. Motiv: alarmă falsă pe un tabel corect (d772 p0255_b0).
+Un rând de tabel întreg identic (cu conținut) de 4 ori la rând rămâne buclă; rândurile se caută pe textul brut, cu delimitatorii oriunde pe linie. Teste pe texte reale în `fixtures_garda/`. Pe tot corpusul Codex (5.964 de ieșiri) verdictul se schimbă doar la pagina d772.
 
 **Ce NU face pachetul:** nu pornește servere sau modele, nu cheamă cloud (arbitrajul Sonnet 5 e în edge-ul `ofertare-ocr-arbitreaza`, D3b),
 nu scrie în BD (scrierea e prin `ofertare-ocr-scrie`, D3b), nu promovează nimic.
@@ -93,7 +97,12 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
 - **GPU**: `C:/Users/Public/paw-data/gpu.lock` creat exclusiv la începutul citirii (cu `run_id`), șters la final doar dacă e tot al rulării.
   Lock-ul altcuiva → refuz.
 - **Reluare**: banda cu `result.json` se sare; banda începută și neterminată (`request_started.json` fără rezultat) oprește rularea
-  (`interrupted_needs_review`) — nu se reîncearcă automat. Primul rezultat incomplet oprește cititorul (`stopped_no_retry`).
+  (`interrupted_needs_review`) — nu se reîncearcă automat. Termenul, o eroare de transport sau un rezultat neconfirmat opresc cititorul
+  (`stopped_no_retry`, `gpu.lock` păstrat). **O bandă oprită de gardă oprește DOAR banda** (decizie Răzvan 14.10.2026): după ce
+  `/metrics` din vLLM arată 0 cereri în lucru și 0 în așteptare (`backend_idle_confirmed`), banda rămâne incompletă (`benzi_garda` în
+  `read_<cititor>.json`; în BD stare `incomplet` cu `signal` + `guard_event`) și citirea continuă. Fără confirmarea vLLM liber → oprire ca
+  înainte. La comparare banda devine dezacord `banda_intreaga`, care la arbitraj merge la om (`needs_human`), **fără Claude**; pragul de
+  pagini incomplete (> 20%) rămâne.
 - **Comparare** (spec §2): cuvinte cu ș/ş, ț/ţ unificate DOAR la comparare; cifrele literal (separatorul zecimal niciodată normalizat);
   tabele rând cu rând (aliniere ordonată), rolurile cod / UM / cantitate din antet sau euristic. Celulele unite (LightOn: celule goale,
   MinerU: colspan) nu sunt dezacord DOAR dacă rândul n-are nicio cifră și conținutul nevid e identic; altfel merge la arbitru.
