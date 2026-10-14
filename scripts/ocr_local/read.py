@@ -160,8 +160,14 @@ def backend_idle(cfg, timeout=30.0, poll=0.5):
     host, port = endpoint_parts(cfg['endpoint']); end = time.monotonic() + timeout
     while True:
         try:
-            # termen ABSOLUT si pe citire (review r4 Jakarinos P2): un raspuns lent / fara sfarsit nu tine rularea peste `timeout`
+            # termen ABSOLUT pe orice citire (review r4/r5): la termen un timer inchide socketul, deci se intrerup si antetele,
+            # framing-ul chunked sau un raspuns care picura octeti; ca la read_lighton
             conn = http.client.HTTPConnection(host, port, timeout=max(0.1, min(5.0, end - time.monotonic())))
+            conn.connect(); sock = conn.sock
+            def taie():
+                try: sock.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+            timer = threading.Timer(max(0.0, end - time.monotonic()), taie); timer.daemon = True; timer.start()
             try:
                 conn.request('GET', '/metrics'); r = conn.getresponse(); chunks = []; size = 0
                 while r.status == 200:
@@ -171,7 +177,7 @@ def backend_idle(cfg, timeout=30.0, poll=0.5):
                     size += len(c); chunks.append(c)
                     if size > 4 << 20: raise ValueError('metrics prea mari')
                 body = b''.join(chunks).decode('utf-8', 'replace')
-            finally: conn.close()
+            finally: timer.cancel(); conn.close()
             if time.monotonic() > end: return False  # acceptat doar in termen
             vals = {}
             for line in body.splitlines():

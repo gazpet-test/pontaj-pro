@@ -294,11 +294,24 @@ class Citire(unittest.TestCase):
                  patch('ocr_local.read.protocol', return_value=dict(RD.protocol(), gpu_lock=str(lock))):
                 st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False)
             self.assertEqual((st['status'], len(calls)), ('stopped_no_retry', 1)); self.assertTrue(lock.exists())
-    def _metrics_srv(self, body, drip=False):
+    def _metrics_srv(self, body, drip=False, mod=None):
         import http.server, threading
         class H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a): pass
             def do_GET(self):
+                try:
+                    if mod == 'antet':  # antetele picura (review r5 Jakarinos P2)
+                        for ch in b'HTTP/1.1 200 OK\r\nX-Lent: ' + b'a' * 400: self.wfile.write(bytes([ch])); self.wfile.flush(); time.sleep(0.01)
+                        return
+                    if mod == 'chunk':  # extensia unui chunk picura
+                        self.wfile.write(b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10;ext=')
+                        for _ in range(400): self.wfile.write(b'x'); self.wfile.flush(); time.sleep(0.01)
+                        return
+                    if mod == 'stall':  # picura pana aproape de termen, apoi tace (review r5 Copilot P2)
+                        self.send_response(200); self.end_headers()
+                        for _ in range(40): self.wfile.write(b'#'); self.wfile.flush(); time.sleep(0.01)
+                        time.sleep(4); return
+                except OSError: return
                 self.send_response(200)
                 if drip:  # raspuns fara sfarsit: cate un octet, periodic (review r4 Jakarinos P2)
                     self.end_headers()
@@ -317,8 +330,10 @@ class Citire(unittest.TestCase):
         self.assertTrue(RD.backend_idle(liber, timeout=2))
         self.assertFalse(RD.backend_idle(self._metrics_srv(b'alt_metric 0\n'), timeout=0.3, poll=0.05))  # fara metricile vLLM = neconfirmat
     def test_backend_idle_termen_absolut_si_pe_citire(self):
-        t0 = time.monotonic(); self.assertFalse(RD.backend_idle(self._metrics_srv(b'', drip=True), timeout=0.5, poll=0.05))
-        self.assertLess(time.monotonic() - t0, 2.0)
+        for cfg in (self._metrics_srv(b'', drip=True), self._metrics_srv(b'', mod='antet'), self._metrics_srv(b'', mod='chunk'),
+                    self._metrics_srv(b'', mod='stall')):
+            t0 = time.monotonic(); self.assertFalse(RD.backend_idle(cfg, timeout=0.5, poll=0.05))
+            self.assertLess(time.monotonic() - t0, 1.0)
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []
