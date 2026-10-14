@@ -80,6 +80,18 @@ jobs:
         with:
           deno-version: v2.x
       - name: deno check (entrypoint + handler)
-        run: deno check --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/index.ts supabase/functions/ofertare-plansa-citeste/handler.ts supabase/functions/ofertare-cantitati-extrage/index.ts supabase/functions/ofertare-cantitati-extrage/handler.ts
+        run: deno check --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/index.ts supabase/functions/ofertare-plansa-citeste/handler.ts supabase/functions/ofertare-cantitati-extrage/index.ts supabase/functions/ofertare-cantitati-extrage/handler.ts supabase/functions/detect_plate_orphan_msgs/index.ts supabase/functions/detect_plate_orphan_msgs/handler.ts
       - name: deno test poarta
-        run: deno test --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts supabase/functions/detect_plate_orphan_msgs/acces_test.ts
+        run: deno test --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts supabase/functions/detect_plate_orphan_msgs/acces_test.ts supabase/functions/detect_plate_orphan_msgs/handler_test.ts
+      # PR #707 (securitate etapa 2 grup A): ocolirea cu antet intern + literal nu are voie să revină, cu ORICE valoare
+      # (testul de handler o prinde doar pentru valorile pe care le încearcă). index.ts rămâne doar entrypoint.
+      - name: detect_plate_orphan_msgs fără ocolire
+        run: |
+          set -euo pipefail
+          d=supabase/functions/detect_plate_orphan_msgs
+          if grep -nEi 'x-internal-mcp-bypass|adminbypass|admin_bypass' "$d/index.ts" "$d/handler.ts" "$d/acces.ts"; then
+            echo "::error::Ocolirea de autentificare a reapărut în $d (vezi PR #707)"; exit 1
+          fi
+          grep -q 'handler(req, depsReale())' "$d/index.ts" || { echo "::error::$d/index.ts trebuie doar să delege la handler (poarta e în handler → poartaPlate)"; exit 1; }
+          if grep -nE 'Deno\.env|req\.headers' "$d/index.ts"; then echo "::error::$d/index.ts nu citește antete sau env — tot trece prin handler"; exit 1; fi
+          echo "OK: fără ocolire, index.ts doar deleagă"
