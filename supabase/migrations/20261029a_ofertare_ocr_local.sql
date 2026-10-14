@@ -94,7 +94,9 @@ CREATE TABLE public.ofertare_ocr_pagini (
   garda         jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(garda) = 'object'),
   creat_la      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (rulare_id, document_id, pagina, cititor),
-  CHECK (stare <> 'exclus' OR (text = '' AND garda ? 'motiv_excludere')),
+  -- coalesce: fără cheie, jsonb_typeof dă NULL și un CHECK NULL ar trece (fail-closed explicit)
+  CHECK (stare <> 'exclus' OR (text = '' AND coalesce(jsonb_typeof(garda->'motiv_excludere') = 'string'
+                                AND btrim(garda->>'motiv_excludere') <> '' AND length(garda->>'motiv_excludere') <= 200, false))),
   CHECK ((cititor = 'reconciliat' AND stare IN ('reconciliat', 'needs_human')) OR (cititor <> 'reconciliat' AND stare IN ('citit', 'incomplet', 'exclus'))),
   CHECK (cititor = 'reconciliat' OR stare = 'exclus' OR image_sha256 IS NOT NULL)
 );
@@ -330,7 +332,7 @@ BEGIN
        SELECT 1 FROM public.ofertare_ocr_pagini l JOIN public.ofertare_ocr_pagini m
            ON m.rulare_id = l.rulare_id AND m.document_id = l.document_id AND m.pagina = l.pagina AND m.cititor = 'mineru'
         WHERE l.rulare_id = r.id AND l.document_id = (x->>'document_id')::bigint AND l.pagina = pg::int AND l.cititor = 'lighton'
-          AND ((l.stare = 'exclus' AND m.stare = 'exclus')
+          AND ((l.stare = 'exclus' AND m.stare = 'exclus' AND l.garda->>'motiv_excludere' = m.garda->>'motiv_excludere')
                OR (l.stare <> 'exclus' AND m.stare <> 'exclus' AND l.image_sha256 IS NOT NULL AND l.image_sha256 = m.image_sha256)));
     -- fiecare pagină: ambii excluși SAU ambii citiți din ACEEAȘI imagine (review Copilot r3 / Jakarinos r3)
     IF v_lipsa > 0 THEN RAISE EXCEPTION '% pagini înghețate nu au o pereche comparabilă (ambele citiri, aceeași imagine, sau ambele excluse)', v_lipsa USING ERRCODE = '55000'; END IF;
@@ -448,7 +450,7 @@ END $f$;
 CREATE FUNCTION public.fn_ofertare_ocr_scrie_dezacord(p_rulare_id bigint, p_dezacord jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE r record; pl record; pm record; v_doc bigint; v_pag int; v_id bigint; v_old record; a jsonb := p_dezacord; v_tok text; v_frag text; v_raw text; k int;
+DECLARE r record; pl record; pm record; v_doc bigint; v_pag int; v_id bigint; v_old record; a jsonb := p_dezacord; v_tok text; v_frag text; v_raw text; v_row text; k int;
 BEGIN
   SELECT * INTO r FROM public.ofertare_ocr_rulari WHERE id = p_rulare_id FOR SHARE;
   IF NOT FOUND OR r.stare <> 'citita' OR r.comparatie_nr IS NOT NULL THEN
@@ -471,10 +473,13 @@ BEGIN
   --  (1) fiecare bucată a fragmentului (celulă la rânduri de tabel, rând la text) apare ca subșir — semnele și simbolurile nu se pot adăuga;
   --  (2) fiecare număr (cu semn, separator inițial, procent) apare DELIMITAT — „56” nu vine din „0.056”, „.5” nu vine din „10.5”,
   --      „-5” / „5%” nu vin din „5”. Marcajele pipeline-ului (tabel, img, rowspan…) se scot; „barat” își păstrează conținutul.
-  FOR k IN 1..(CASE WHEN a->>'tip' = 'structura_tabele' THEN 0 ELSE 2 END) LOOP  -- structura_tabele = descriere, nu fragment de text
+  IF a->>'tip' = 'banda_intreaga' AND (a->>'citire_lighton' IS DISTINCT FROM pl.text OR a->>'citire_mineru' IS DISTINCT FROM pm.text) THEN
+    RAISE EXCEPTION 'banda_intreaga trebuie să conțină exact citirile brute ale paginii' USING ERRCODE = '22023';
+  END IF;
+  FOR k IN 1..(CASE WHEN a->>'tip' IN ('structura_tabele', 'banda_intreaga') THEN 0 ELSE 2 END) LOOP  -- descriere / citire brută verificată mai sus
     v_raw := public.fn_ofertare_ocr_canon(CASE k WHEN 1 THEN pl.text ELSE pm.text END);
     v_frag := CASE k WHEN 1 THEN a->>'citire_lighton' ELSE a->>'citire_mineru' END;
-    v_frag := regexp_replace(v_frag, '⟦barat: (.*?)⟧', ' \1 ', 'g');
+    v_frag := regexp_replace(v_frag, '⟦barat: ([^⟧]*)⟧', ' \1 ', 'g');
     v_frag := regexp_replace(v_frag, '⟦[^⟧]*⟧', E'\n', 'g');
     FOR v_tok IN SELECT btrim(regexp_replace(x, '\s+', ' ', 'g'))
                    FROM regexp_split_to_table(CASE WHEN a->>'tip' LIKE 'rand%' THEN replace(v_frag, ' | ', E'\n') ELSE v_frag END, E'\n') x LOOP
@@ -482,8 +487,16 @@ BEGIN
         RAISE EXCEPTION 'Fragmentul «%» nu apare în citirea % a paginii', left(v_tok, 60), CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
       END IF;
     END LOOP;
-    FOR v_tok IN SELECT m[1] FROM regexp_matches(v_frag, '([-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*[%‰]?)', 'g') AS m LOOP
-      IF v_raw !~ ('(^|[^0-9.,+±−-])' || regexp_replace(v_tok, '([.+*?^$(){}|\[\]\\-])', '\\\1', 'g') || '(?![.,]?[0-9]|[%‰])') THEN
+    -- rândurile de tabel: celulele trebuie să apară ÎMPREUNĂ, în ordine, ca un singur rând (nu celule din rânduri diferite)
+    IF a->>'tip' IN ('rand_tabel', 'rand_lipsa_lighton', 'rand_lipsa_mineru') THEN
+      v_row := btrim(regexp_replace(regexp_replace(v_frag, E'\n', ' ', 'g'), '[[:space:]]+', ' ', 'g'));
+      IF v_row <> '' AND strpos(v_raw, replace(v_row, ' | ', ' ')) = 0 AND strpos(v_raw, v_row) = 0
+         AND strpos(regexp_replace(v_raw, '[[:space:]]*\|[[:space:]]*', ' | ', 'g'), v_row) = 0 THEN
+        RAISE EXCEPTION 'Rândul «%» nu apare întreg (celulele împreună) în citirea % a paginii', left(v_row, 60), CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
+      END IF;
+    END IF;
+    FOR v_tok IN SELECT m[1] FROM regexp_matches(v_frag, '([-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?)', 'g') AS m LOOP
+      IF v_raw !~ ('(^|[^0-9.,+±−eE-])' || regexp_replace(v_tok, '([.+*?^$(){}|\[\]\\-])', '\\\1', 'g') || '(?![.,]?[0-9]|[%‰]|[eE][-+]?[0-9])') THEN
         RAISE EXCEPTION 'Numărul % din dezacord nu apare delimitat în citirea % a paginii', v_tok, CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
       END IF;
     END LOOP;
@@ -551,7 +564,7 @@ CREATE FUNCTION public.fn_ofertare_ocr_scrie_arbitraj(p_rezervare_id bigint, p_a
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE z record; r record; d record; a jsonb := coalesce(p_arbitraj, '{}'::jsonb); v_cost numeric; v_text text; v_id bigint;
-        v_tin int; v_tout int; v_model text; v_motiv text;
+        v_tin int; v_tout int; v_model text; v_motiv text; v_jurnal boolean := true;
 BEGIN
   SELECT * INTO z FROM public.ofertare_ocr_rezervari WHERE id = p_rezervare_id FOR UPDATE;
   IF NOT FOUND OR z.stare <> 'deschisa' THEN RAISE EXCEPTION 'Rezervare inexistentă sau deja închisă' USING ERRCODE = '55000'; END IF;
@@ -567,10 +580,10 @@ BEGIN
   BEGIN  -- jurnalul de cost e auxiliar: o eroare aici nu anulează decontarea (costul e deja în rulare și în rezervare)
     INSERT INTO public.ai_usage_log (function_name, model, tokens_in, tokens_out, cost_usd, ref_table, ref_id)
     VALUES ('ofertare-ocr-arbitreaza', nullif(v_model, ''), v_tin, v_tout, v_cost, 'ofertare_ocr_rezervari', p_rezervare_id);
-  EXCEPTION WHEN OTHERS THEN NULL;
+  EXCEPTION WHEN OTHERS THEN v_jurnal := false;
   END;
   IF r.stare <> 'citita' THEN
-    RETURN jsonb_build_object('ok', true, 'decontat', true, 'arbitraj_inregistrat', false, 'motiv', 'rularea nu mai e în citita');
+    RETURN jsonb_build_object('ok', true, 'decontat', true, 'jurnal_cost', v_jurnal, 'arbitraj_inregistrat', false, 'motiv', 'rularea nu mai e în citita');
   END IF;
   -- 2) decizia: separat; orice eroare o respinge fără să anuleze decontarea
   BEGIN
@@ -590,9 +603,9 @@ BEGIN
     RETURNING id INTO v_id;
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_motiv = MESSAGE_TEXT;
-    RETURN jsonb_build_object('ok', true, 'decontat', true, 'arbitraj_inregistrat', false, 'motiv', left(v_motiv, 200));
+    RETURN jsonb_build_object('ok', true, 'decontat', true, 'jurnal_cost', v_jurnal, 'arbitraj_inregistrat', false, 'motiv', left(v_motiv, 200));
   END;
-  RETURN jsonb_build_object('ok', true, 'decontat', true, 'arbitraj_inregistrat', true, 'id', v_id);
+  RETURN jsonb_build_object('ok', true, 'decontat', true, 'jurnal_cost', v_jurnal, 'arbitraj_inregistrat', true, 'id', v_id);
 END $f$;
 
 -- Abandonarea unei rezervări rămase deschise (apel pierdut): doar după 15 minute, auditată (suma trece în cost_abandonat,
@@ -629,11 +642,18 @@ RETURNS text LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = publi
 AS $f$
 DECLARE s text := coalesce(p, ''); m text[];
 BEGIN
-  s := regexp_replace(s, '<sup\b[^>]*>(.*?)</sup\s*>', '^{\1}', 'gi');
-  s := regexp_replace(s, '<sub\b[^>]*>(.*?)</sub\s*>', '_{\1}', 'gi');
-  s := regexp_replace(s, '<(s|del|strike)\b[^>]*>(.*?)</\1\s*>', ' \2 ', 'gi');
-  s := regexp_replace(s, '~~(.+?)~~', ' \1 ', 'g');
-  s := regexp_replace(s, '<[^>]*>', ' ', 'g');
+  -- ordinea și regulile din compare.py (supsub → barat → img → etichete din listă închisă → entități → titluri → bold pe perechi);
+  -- în ARE-ul PostgreSQL \b e backspace, deci delimitările se scriu explicit (review Jakarinos r4); conținutul cu [^<]* / [^*]*, nu .*?,
+  -- fiindcă în ARE lăcomia întregii expresii o dă primul cuantificator (un .*? după un cuantificator lacom ar deveni lacom)
+  s := regexp_replace(s, '<sup([[:space:]][^>]*)?>([^<]*)</sup[[:space:]]*>', '^{\2}', 'gi');
+  s := regexp_replace(s, '<sub([[:space:]][^>]*)?>([^<]*)</sub[[:space:]]*>', '_{\2}', 'gi');
+  s := regexp_replace(s, '<(span|font|div|p|td)([[:space:]][^>]*)?line-through[^>]*>([^<]*)</\1[[:space:]]*>', ' \3 ', 'gi');
+  s := regexp_replace(s, '<(s|del|strike)([[:space:]][^>]*)?>([^<]*)</\1[[:space:]]*>', ' \3 ', 'gi');
+  s := regexp_replace(s, '~~([^~[:space:]]([^~]*[^~[:space:]])?)~~', ' \1 ', 'g');
+  s := regexp_replace(s, '<img([[:space:]](("[^"]*"|''[^'']*''|[^''">])*))?/?>', ' ', 'gi');
+  s := regexp_replace(s, '<br[[:space:]]*/?>', ' ', 'gi');
+  s := regexp_replace(s, '</?(p|br|hr|h[1-6]|div|span|b|strong|em|i|u|small|big|font|center|li|ul|ol|dl|dt|dd|thead|tbody|tfoot|tr|td|th|table|caption|colgroup|col|section|article|header|footer|blockquote|pre|code|a)'
+                         '([[:space:]]+[A-Za-z_:][-A-Za-z0-9_:.]*[[:space:]]*=[[:space:]]*("[^"]*"|''[^'']*''))*[[:space:]]*/?>', ' ', 'gi');
   FOR m IN SELECT regexp_matches(s, '&#([0-9]{1,7});', 'g') LOOP
     s := replace(s, '&#' || m[1] || ';', chr(least(m[1]::int, 1114111)));
   END LOOP;
@@ -642,9 +662,10 @@ BEGIN
   END LOOP;
   s := replace(replace(replace(replace(replace(replace(s, '&lt;', '<'), '&gt;', '>'), '&quot;', '"'), '&#39;', ''''), '&apos;', ''''), '&nbsp;', ' ');
   s := replace(s, '&amp;', '&');
-  s := replace(s, '**', '');
   s := regexp_replace(s, '(^|\n)[ \t]*#{1,6}([ \t]+|$)', '\1', 'g');
-  RETURN btrim(regexp_replace(s, '\s+', ' ', 'g'));
+  -- bold doar ca pereche nelipită de cifre/litere/* (10**2 + 3**2 rămâne neschimbat, ca în compare.py BOLD)
+  s := regexp_replace(s, '(^|[^[:alnum:]_*])\*\*([^*[:space:]]([^*]*[^*[:space:]])?)\*\*($|[^[:alnum:]_*])', '\1\2\4', 'g');
+  RETURN btrim(regexp_replace(s, '[[:space:]]+', ' ', 'g'));
 END $f$;
 
 -- Amprenta obiectelor (revenirea refuză dacă diferă de cea înregistrată la aplicare). Acoperă: definiții, proprietar și ACL ale

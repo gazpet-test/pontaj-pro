@@ -111,7 +111,7 @@ asteapta "pdf: final repetat refuzat" "$(ca service_role - "SELECT public.fn_ofe
 
 # ── pagini ───────────────────────────────────────────────────────────────────────────────────────────────
 T1='Conductă DN 250 — 0,056'; H1=$(sha "$T1"); T2='Conductă DN 250 — 0.056'; H2=$(sha "$T2")
-T3='<p>Cantitate 10.5 m și 5 buc</p><table><tr><td>&#53;</td></tr></table>'; H3=$(sha "$T3")
+T3='<p>Cantitate 10.5 m și 5 buc, x<5 si z>3, 10**2 mc, 1e3 kg, m<sup>2</sup></p><table><tr><td>&#53;</td></tr><tr><td>Țeavă</td><td>m</td><td>5</td></tr><tr><td>Robinet</td><td>buc</td><td>10</td></tr></table>'; H3=$(sha "$T3")
 IA=$(sha imagineA); IB=$(sha imagineB); H0=$(sha '')
 # SP <rulare> <pagina> <cititor> <text> <sha> [model] [stare] [imagine|NULL] [garda]
 SP() { local img="'${8:-$IA}'" g="${9:-}"; [ "${8:-}" = NULL ] && img=NULL; [ -z "$g" ] && g='{}'
@@ -127,6 +127,8 @@ refuz "pagină neînghețată" service_role - "$(SP $R 400 lighton "$T1" "$H1")"
 refuz "sha greșit" service_role - "$(SP $R 325 lighton "$T1" "$(sha altceva)")" "raw_sha256"
 refuz "cititor fără imagine" service_role - "$(SP $R 325 lighton "$T1" "$H1" m citit NULL)" "check constraint"
 refuz "exclus fără motiv" service_role - "$(SP $R 327 lighton '' "$H0" m exclus NULL)" "check constraint"
+refuz "exclus cu motiv null" service_role - "$(SP $R 327 lighton '' "$H0" m exclus NULL '{"motiv_excludere":null}')" "check constraint"
+refuz "exclus cu motiv gol" service_role - "$(SP $R 327 lighton '' "$H0" m exclus NULL '{"motiv_excludere":"   "}')" "check constraint"
 refuz "cititor cu stare «reconciliat»" service_role - "$(SP $R 325 lighton "$T1" "$H1" m reconciliat)" "check constraint"
 asteapta "pagină scrisă" "$(ca service_role - "$(SP $R 325 lighton "$T1" "$H1")->>'deja'")" false
 asteapta "aceeași pagină: idempotent" "$(ca service_role - "$(SP $R 325 lighton "$T1" "$H1")->>'deja'")" true
@@ -156,6 +158,15 @@ refuz "proveniență: .5 din 10.5" service_role - "$(DZT p0326_b0_t1 ".5 m" ".5 
 refuz "proveniență: -5 din 5" service_role - "$(DZT p0326_b0_t2 "-5 buc" "-5 buc")" "nu apare\|Numărul"
 refuz "proveniență: «- 5» din 5" service_role - "$(DZT p0326_b0_t3 "și - 5 buc" "și - 5 buc")" "nu apare"
 refuz "proveniență: 5% din 5" service_role - "$(DZT p0326_b0_t4 "5% buc" "5% buc")" "nu apare\|Numărul"
+refuz "proveniență: «x 3» din «x<5 si z>3»" service_role - "$(DZT p0326_b0_t6 "x 3" "x 3")" "nu apare"
+refuz "proveniență: 102 din 10**2" service_role - "$(DZT p0326_b0_t7 "102 mc" "102 mc")" "nu apare"
+refuz "proveniență: 1 din 1e3" service_role - "$(DZT p0326_b0_t8 "1" "1")" "Numărul 1"
+refuz "proveniență: rând din celule ale unor rânduri diferite" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 326 p0326_b1_r1 "$(sha i7)" "Țeavă | m | 10" "Țeavă | m | 10")')" "Rândul"
+refuz "banda_intreaga diferită de citirea brută" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 326 p0326_b0_banda "$(sha i8)" "5 m" "5 m" banda_intreaga)')" "exact citirile brute"
+D4=$(ca service_role - "$(DZT p0326_b0_t9 "m^{2}" "m^{2}")->>'id'")
+[ -n "$D4" ] || esec "proveniență: exponent m^{2} respins"; ok "proveniență: <sup> canonic «m^{2}» acceptat (id $D4)"
+D5=$(ca service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 326 p0326_b1_r2 "$(sha i10)" "Țeavă | m | 5" "Țeavă | m | 5")')->>'id'")
+[ -n "$D5" ] || esec "proveniență: rând întreg respins"; ok "proveniență: rând întreg «Țeavă | m | 5» acceptat (id $D5)"
 D2=$(ca service_role - "$(DZT p0326_b0_t5 "10.5 m" "10.5")->>'id'")
 [ -n "$D2" ] || esec "proveniență: fragment legitim respins"; ok "proveniență: «10.5 m» / «10.5» acceptate (id $D2)"
 D3=$(ca service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 326 p0326_b1_r0 "$(sha i6)" "5" "5")')->>'id'")
@@ -182,24 +193,24 @@ asteapta "textul ales = citirea MinerU (nu «56» trimis)" "$(q "SELECT text_ale
 refuz "rezervare decontată de două ori" service_role - "SELECT public.fn_ofertare_ocr_scrie_arbitraj($Z1, '$(AR "$D1" "$(sha i1)" ales_mineru "" 0.01)')" "deja închisă"
 Z4=$(ca service_role - "SELECT public.fn_ofertare_ocr_cost_rezerva($R, 0.1)")
 asteapta "al doilea apel pe același dezacord: costul rămâne, decizia nu" "$(ca service_role - "SELECT x->>'arbitraj_inregistrat' FROM public.fn_ofertare_ocr_scrie_arbitraj($Z4, '$(AR "$D1" "$(sha i1)" ales_lighton "" 0.01)') x")" false
-for D in "$D2:p0326_b0_t5" "$D3:p0326_b1_r0"; do
+for D in "$D2:p0326_b0_t5" "$D3:p0326_b1_r0" "$D4:p0326_b0_t9" "$D5:p0326_b1_r2"; do
   Zx=$(ca service_role - "SELECT public.fn_ofertare_ocr_cost_rezerva($R, 0.05)")
   id=${D%%:*}; it=${D#*:}; hs=$(q "SELECT item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE id=$id")
   asteapta "arbitraj pe $it" "$(ca service_role - "SELECT public.fn_ofertare_ocr_scrie_arbitraj($Zx, '$(AR "$id" "$hs" ales_lighton "" 0.01)')->>'arbitraj_inregistrat'")" true
 done
 MAN=$(q "SELECT document_id||'|'||pagina||'|'||item_id||'|'||item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE rulare_id=$R" | LC_ALL=C sort | awk '{printf "%s\n", $0}' | sha256sum | cut -d' ' -f1)
 refuz "marcaj cu număr greșit" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 2, '$MAN')" "Declarate 2"
-refuz "marcaj cu număr corect și amprentă greșită" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 3, '$(sha lista)')" "Amprenta manifestului"
-asteapta "marcaj comparație încheiată (amprenta calculată ca pipeline-ul)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 3, '$MAN')->>'nr'")" 3
-refuz "marcaj a doua oară" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 3, '$MAN')" "o singură dată"
+refuz "marcaj cu număr corect și amprentă greșită" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 5, '$(sha lista)')" "Amprenta manifestului"
+asteapta "marcaj comparație încheiată (amprenta calculată ca pipeline-ul)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 5, '$MAN')->>'nr'")" 5
+refuz "marcaj a doua oară" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 5, '$MAN')" "o singură dată"
 refuz "dezacord după marcaj" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b1_r1 "$(sha i9)")')" "încheierea comparației"
 Z5=$(ca service_role - "SELECT public.fn_ofertare_ocr_cost_rezerva($R, 0.05)")
 refuz "citita → arbitrata cu rezervare deschisă" service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'arbitrata')" "rezervări deschise"
 asteapta "abandon înainte de 15 min refuzat" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rezervare_abandon($Z5)")" f
 q "UPDATE public.ofertare_ocr_rezervari SET creat_la = now() - interval '20 minutes' WHERE id=$Z5" >/dev/null
 asteapta "abandon după 15 min" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rezervare_abandon($Z5)")" t
-asteapta "cost / rezervat / abandonat" "$(q "SELECT cost_usd||'|'||cost_rezervat||'|'||cost_abandonat FROM public.ofertare_ocr_rulari WHERE id=$R")" "0.0650|0.0000|0.0500"
-asteapta "ai_usage_log: fiecare apel decontat" "$(q "SELECT count(*) FROM public.ai_usage_log WHERE function_name='ofertare-ocr-arbitreaza'")" 6
+asteapta "cost / rezervat / abandonat" "$(q "SELECT cost_usd||'|'||cost_rezervat||'|'||cost_abandonat FROM public.ofertare_ocr_rulari WHERE id=$R")" "0.0850|0.0000|0.0500"
+asteapta "ai_usage_log: fiecare apel decontat" "$(q "SELECT count(*) FROM public.ai_usage_log WHERE function_name='ofertare-ocr-arbitreaza'")" 8
 
 # ── eșantion (doar după înghețare) + verificare + reconciliere obligatorie ───────────────────────────────
 AID=$(q "SELECT id FROM public.ofertare_ocr_arbitraje WHERE dezacord_id=$D1")
@@ -246,6 +257,13 @@ ca service_role - "$(SP "$R4" 325 lighton "$T1" "$H1")" >/dev/null; ca service_r
 for c in lighton mineru; do ca service_role - "$(SP "$R4" 326 $c "$T3" "$H3")" >/dev/null; ca service_role - "$(SP "$R4" 327 $c '' "$H0" x exclus NULL "$EXCL")" >/dev/null; done
 refuz "citita cu cititori pe imagini diferite" service_role - "SELECT public.fn_ofertare_ocr_stare($R4, 'citita')" "pereche comparabilă"
 ca service_role - "SELECT public.fn_ofertare_ocr_stare($R4, 'oprita', 'test imagini')" >/dev/null
+R5=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'")
+ca service_role - "SELECT public.fn_ofertare_ocr_preia('lighton-mineru-v2')" >/dev/null
+for c in lighton mineru; do ca service_role - "$(SP "$R5" 325 $c "$T1" "$H1")" >/dev/null; ca service_role - "$(SP "$R5" 326 $c "$T3" "$H3")" >/dev/null; done
+ca service_role - "$(SP "$R5" 327 lighton '' "$H0" x exclus NULL "$EXCL")" >/dev/null
+ca service_role - "$(SP "$R5" 327 mineru '' "$H0" x exclus NULL '{"motiv_excludere":"formular"}')" >/dev/null
+refuz "citita cu motive de excludere diferite" service_role - "SELECT public.fn_ofertare_ocr_stare($R5, 'citita')" "pereche comparabilă"
+ca service_role - "SELECT public.fn_ofertare_ocr_stare($R5, 'oprita', 'test motive')" >/dev/null
 
 # ── heartbeat ────────────────────────────────────────────────────────────────────────────────────────────
 asteapta "heartbeat" "$(ca service_role - "SELECT public.fn_ofertare_ocr_heartbeat(true, 'test')")" t
