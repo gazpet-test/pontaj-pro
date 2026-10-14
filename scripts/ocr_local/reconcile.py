@@ -3,7 +3,8 @@ Arbitrajul insusi NU e aici (edge ofertare-ocr-arbitreaza, D3b): aici doar se va
 Fail-closed: dezacord fara decizie valida = needs_human; o pagina cu orice needs_human NU e propusa pentru promovare.
 Pastreaza tripletul (citire LightOn / citire MinerU / ales) pentru fiecare dezacord - tripleti.jsonl, append-only la nivel de rulare."""
 import json, pathlib
-from .compare import segments, tokens, flat_text, table_rows, match_rows
+import hashlib
+from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -72,8 +73,13 @@ def apply_band(raw_a, raw_b, items, decisions):
         if not it['tip'].startswith('rand_'): continue
         d = decisions.get(it['id'])
         if d is None or d['decizie'] == 'needs_human': needs = True; continue
-        pa = it['pozitie']['lighton']; new = chosen(it, d)
-        cells = [c.strip() for c in new.split(' | ')] if new.strip() else []
+        pa = it['pozitie']['lighton']
+        # celulele se iau ca vectori (nu din textul afisat): o celula care contine ' | ' nu se poate sparge gresit
+        if d['decizie'] == 'ales_lighton': cells = it.get('celule_lighton') or []
+        elif d['decizie'] == 'ales_mineru': cells = it.get('celule_mineru') or []
+        else:
+            if any(' | ' in x for x in (it.get('celule_lighton') or []) + (it.get('celule_mineru') or [])): needs = True; continue
+            cells = [x.strip() for x in d['text'].split(' | ')] if d['text'].strip() else []
         if it['tip'] == 'rand_tabel':
             if d['decizie'] == 'ales_lighton': continue
             if len(cells) != len(rows[tuple(pa)]) and d['decizie'] == 'text_propus': needs = True; continue
@@ -85,7 +91,7 @@ def apply_band(raw_a, raw_b, items, decisions):
             if d['decizie'] == 'ales_lighton': continue
             # se insereaza dupa randul LightOn precedent din aliniere; fara ancora sigura = om
             anchor = it.get('ancora_lighton')
-            if anchor is None: needs = True; continue
+            if anchor is None or not it.get('ancora_sigura'): needs = True; continue
             add.setdefault(tuple(anchor), []).append(cells)
     for si, (kind, val) in enumerate(segs):
         if kind != 'table': continue
@@ -99,13 +105,13 @@ def apply_band(raw_a, raw_b, items, decisions):
 def join_bands(texts, signals, min_n=8, max_n=200):
     """Benzile pas6 se suprapun (doua randuri de cerneala complete). Se taie din banda urmatoare cel mai lung inceput identic
     (tokeni, ș/ş unificate) cu sfarsitul benzii precedente, DOAR daca suprapunerea are >= 8 tokeni si acopera cel putin un rand
-    intreg al benzii urmatoare (contine o trecere la rand nou). Altfel cusatura e nesigura: None (pagina -> needs_human), nu se ghiceste."""
+    intreg si cel mult 3 randuri ale benzii urmatoare (geometria pas6: doua randuri de cerneala). Altfel cusatura e nesigura: None (pagina -> needs_human), nu se ghiceste."""
     from .compare import TOKEN, norm_word
     out = texts[0] if texts else ''
     for k, nxt in enumerate(texts[1:], 1):
         ta = [norm_word(m.group(0)) for m in TOKEN.finditer(out)]; mb = list(TOKEN.finditer(nxt)); tb = [norm_word(m.group(0)) for m in mb]
         n = next((n for n in range(min(max_n, len(ta), len(tb)), min_n - 1, -1) if ta[-n:] == tb[:n]), 0)
-        if n and '\n' in nxt[:mb[n - 1].end()].strip():
+        if n and 1 <= nxt[:mb[n - 1].end()].strip().count('\n') <= 3:  # suprapunerea pas6 = 1-3 randuri, nu o repetitie oarecare
             out = out + '\n' + nxt[mb[n - 1].end():].lstrip(); signals.append({'type': 'cusatura_suprapunere_taiata', 'banda': k, 'tokeni': n})
         else:
             signals.append({'type': 'cusatura_nesigura', 'banda': k, 'tokeni_suprapusi': n}); return None
@@ -121,6 +127,7 @@ def reconcile(plan_dir, decisions_path):
         if not line.strip(): continue
         try: d = json.loads(line)
         except ValueError: invalid.append({'motiv': 'json_invalid'}); continue
+        if not isinstance(d, dict) or not isinstance(d.get('id'), str): invalid.append({'motiv': 'nu_e_obiect_cu_id'}); continue
         if d.get('id') not in by_id: invalid.append({'id': d.get('id'), 'motiv': 'id_necunoscut'}); continue
         if d['id'] in decisions: invalid.append({'id': d['id'], 'motiv': 'decizie_dubla'}); decisions[d['id']] = None; continue
         decisions[d['id']] = d if valid_decision(d, by_id[d['id']], policy) else None
@@ -131,17 +138,27 @@ def reconcile(plan_dir, decisions_path):
         d = plan_dir / ('page%04d' % band['page']) / band['id']
         raw_a = (d / 'lighton' / 'raw.txt').read_text(encoding='utf-8'); raw_b = (d / 'mineru' / 'raw.txt').read_text(encoding='utf-8')
         bi = [i for i in items if i['band'] == band['id']]
+        # integritate: citirile de azi = cele din result.json si cele comparate; dezacordurile = exact ce produce comparatia acum
+        res = {r: json.loads((d / r / 'result.json').read_text(encoding='utf-8')) for r in ('lighton', 'mineru')}
+        for r, raw in (('lighton', raw_a), ('mineru', raw_b)):
+            if hashlib.sha256(raw.encode()).hexdigest() != res[r].get('raw_sha256') or res[r].get('image_sha256') != band['image_sha256']:
+                raise ValueError('Citirea %s a benzii %s nu mai corespunde rezultatului' % (r, band['id']))
+        _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'])
+        for x in fresh: x['plan_input_sha256'] = doc['input_sha256']
+        if sorted(item_hash(x) for x in fresh) != sorted(i.get('item_sha256') or '' for i in bi) or any(item_hash(i) != i.get('item_sha256') for i in bi):
+            raise ValueError('dezacorduri.jsonl nu corespunde citirilor pentru banda %s - ruleaza din nou compara' % band['id'])
         text, needs = apply_band(raw_a, raw_b, bi, decisions)
         p = pages.setdefault(band['page'], {'page': band['page'], 'bands': [], 'needs_human': False, 'arbitrat_de_claude_cantitati': 0})
         p['bands'].append({'band': band['id'], 'text': text, 'needs_human': needs, 'dezacorduri': len(bi)})
         p['needs_human'] = p['needs_human'] or needs
         for i in bi:
             dec = decisions.get(i['id'])
-            if dec and i['e_cantitate'] and dec['decizie'] != 'needs_human': p['arbitrat_de_claude_cantitati'] += 1
+            e_cant = bool(i['e_cantitate'] or (dec and dec['e_cantitate']))  # marcajul arbitrului se adauga, nu se pierde
+            if dec and e_cant and dec['decizie'] != 'needs_human': p['arbitrat_de_claude_cantitati'] += 1
             triplets.append({'id': i['id'], 'band': i['band'], 'page': i['page'], 'tip': i['tip'], 'image_sha256': i['image_sha256'],
                              'citire_lighton': i['citire_lighton'], 'citire_mineru': i['citire_mineru'],
                              'decizie': dec['decizie'] if dec else 'needs_human', 'text_ales': chosen(i, dec) if dec and dec['decizie'] != 'needs_human' else None,
-                             'motiv': dec['motiv'] if dec else 'fara decizie valida (fail-closed)', 'e_cantitate': i['e_cantitate'],
+                             'motiv': dec['motiv'] if dec else 'fara decizie valida (fail-closed)', 'e_cantitate': e_cant,
                              'anomalie_separator': i['anomalie_separator'] or bool(dec and dec['anomalie_separator']),
                              'arbitrat_de': 'claude' if dec else None, 'item_sha256': i.get('item_sha256'), 'arbitru_model': dec.get('arbitru_model') if dec else None,
                              'prompt_versiune': dec.get('prompt_versiune') if dec else None})

@@ -104,6 +104,9 @@ class Citire(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     with RD.gpu_lock(lock, 'r2'): pass
             self.assertFalse(lock.exists())
+            with RD.gpu_lock(lock, 'r1'):
+                lock.write_text('{"run_id": "r1", "token": "altul"}')  # inlocuit de altcineva cu acelasi run_id
+            self.assertTrue(lock.exists()); lock.unlink()
             lock.write_text('{"run_id": "altcineva"}')
             with self.assertRaises(RuntimeError):
                 with RD.gpu_lock(lock, 'r3'): pass
@@ -183,6 +186,15 @@ class Comparare(unittest.TestCase):
     def test_semn_exponent_procent_operator_raman_dezacorduri(self):
         for a, b in (('cantitate -5 mc', 'cantitate 5 mc'), ('abatere ±0,5', 'abatere 0,5'), ('1e-3 kg', '1e3 kg'), ('pantă 5%', 'pantă 5'), ('10**2 mc', '102 mc')):
             s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1, (a, b)); self.assertTrue(its[0]['diferenta_numerica'], (a, b))
+    def test_cod_cu_cratima_mutata_e_dezacord(self):
+        a = TABLE_A.replace('TSD04A1', 'AB-12C'); b = TABLE_A.replace('TSD04A1', 'AB12-C')
+        s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1); self.assertTrue(its[0]['triplet_diferit'])
+    def test_cantitate_semnata_mutata_de_coloana(self):
+        a = '<table><tr><td>1.</td><td>COD</td><td>-5</td><td></td></tr></table>'; b = '<table><tr><td>1.</td><td>COD</td><td></td><td>-5</td></tr></table>'
+        s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1)
+    def test_fragment_literal_cu_cratima(self):
+        s, its = compare_band(BAND, 'debit 10-20 m3', OK, 'debit 30-40 m3', OK)
+        self.assertEqual((its[0]['citire_lighton'], its[0]['citire_mineru']), ('10-20', '30-40'))
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -235,6 +247,37 @@ class Reconciliere(unittest.TestCase):
     def test_text_propus_in_text(self):
         r, items, out = self._run('lungime 1.250 m pe traseu', 'lungime 1.280 m pe traseu', [self.dec('text_propus', '1.258')])
         self.assertEqual(r['pages'][0]['text'], 'lungime 1.258 m pe traseu')
+    def test_ales_mineru_pastreaza_valoarea_exacta(self):
+        r, _, _ = self._run('Cantitate -10 m', 'Cantitate 20 m', [self.dec('ales_mineru')]); self.assertEqual(r['pages'][0]['text'], 'Cantitate 20 m')
+        r, _, _ = self._run('debit 10-20 m3', 'debit 30-40 m3', [self.dec('ales_mineru')]); self.assertEqual(r['pages'][0]['text'], 'debit 30-40 m3')
+    def test_citire_schimbata_dupa_comparare_refuzata(self):
+        d = tempfile.mkdtemp(); out = pathlib.Path(d) / 'out'
+        r, items, out = self._run('lungime 10 m', 'lungime 20 m', [self.dec('ales_lighton')])
+        o = out / 'page0001' / items[0]['band'] / 'lighton'; (o / 'raw.txt').write_text('lungime 999 m', encoding='utf-8')
+        (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
+    def test_dezacorduri_golite_refuzate(self):
+        r, items, out = self._run('lungime 10 m', 'lungime 20 m', [self.dec('ales_lighton')])
+        (out / 'dezacorduri.jsonl').write_text(''); (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
+    def test_celula_cu_bara_nu_se_sparge(self):
+        a = '<table><tr><td>1.</td><td>X1</td><td>otel | PE</td><td>m</td><td>2,00</td></tr></table>'
+        r, _, _ = self._run(a, a.replace('2,00', '3,00'), [self.dec('ales_mineru')])
+        self.assertIn('| otel | PE | m | 3,00 |', r['pages'][0]['text'])
+    def test_rand_la_inceputul_altui_tabel_needs_human(self):
+        t1 = '<table><tr><td>1.</td><td>A1</td><td>unu</td><td>m</td><td>1,00</td></tr></table>'
+        t2a = '<p>Titlu</p><table><tr><td>1.</td><td>B1</td><td>doi</td><td>m</td><td>2,00</td></tr></table>'
+        t2b = '<p>Titlu</p><table><tr><td>0.</td><td>B0</td><td>zero</td><td>m</td><td>9,00</td></tr><tr><td>1.</td><td>B1</td><td>doi</td><td>m</td><td>2,00</td></tr></table>'
+        r, items, _ = self._run(t1 + t2a, t1 + t2b, [self.dec('ales_mineru')])
+        self.assertEqual(items[0]['tip'], 'rand_lipsa_lighton'); self.assertTrue(r['pages'][0]['needs_human'])
+    def test_marcaj_cantitate_al_arbitrului_se_pastreaza(self):
+        r, items, out = self._run('lungime 10 m', 'lungime 20 m', [self.dec('ales_lighton')])
+        t = json.loads((out / 'tripleti.jsonl').read_text(encoding='utf-8').splitlines()[0]); self.assertTrue(t['e_cantitate'])
+        self.assertEqual(r['pages'][0]['arbitrat_de_claude_cantitati'], 1)
+    def test_linie_null_nu_crapa(self):
+        r, items, out = self._run('lungime 10 m', 'lungime 20 m', [])
+        (out / 'dec.jsonl').write_text('null\n{"id": ["x"]}\n'); (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        r = reconcile(out, out / 'dec.jsonl'); self.assertTrue(r['pages'][0]['needs_human']); self.assertEqual(r['summary']['decisions_invalid'], 2)
     def test_validare_schema(self):
         v = lambda d: valid_decision(d, None, POLICY)
         self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))

@@ -36,18 +36,19 @@ def verify_weights(cfg):
 def gpu_lock(path, run_id):
     """Lock-ul e al rularii: creat exclusiv la inceput, sters la final doar daca e tot al ei. Lock-ul altcuiva = refuz.
     Daca rularea seteaza holder['keep'] (cerere expirata: backend-ul poate lucra inca), lock-ul RAMANE - il ridica omul."""
-    path = pathlib.Path(path); holder = {'keep': False}
+    path = pathlib.Path(path); holder = {'keep': False}; token = os.urandom(16).hex()  # identitatea achizitiei, nu run_id-ul din CLI
     try:
-        with path.open('x', encoding='utf-8') as f: json.dump({'owner': 'ocr_local_ofertare', 'run_id': run_id, 'pid': os.getpid(), 'since': time.time()}, f)
+        with path.open('x', encoding='utf-8') as f: json.dump({'owner': 'ocr_local_ofertare', 'run_id': run_id, 'token': token, 'pid': os.getpid(), 'since': time.time()}, f)
     except FileExistsError:
         raise RuntimeError('GPU ocupat: %s exista (%s)' % (path, path.read_text(encoding='utf-8', errors='replace')[:200]))
     try: yield holder
     finally:
         try:
-            if holder['keep']:
-                path.write_text(json.dumps({'owner': 'ocr_local_ofertare', 'run_id': run_id, 'pid': os.getpid(), 'since': time.time(),
+            mine = json.loads(path.read_text(encoding='utf-8')).get('token') == token
+            if holder['keep'] and mine:
+                path.write_text(json.dumps({'owner': 'ocr_local_ofertare', 'run_id': run_id, 'token': token, 'pid': os.getpid(), 'since': time.time(),
                                             'pastrat': 'cerere expirata, backend neconfirmat idle - verifica serverul vLLM, apoi sterge manual'}), encoding='utf-8')
-            elif json.loads(path.read_text(encoding='utf-8')).get('run_id') == run_id: path.unlink()
+            elif mine and not holder['keep']: path.unlink()
         except (OSError, ValueError): pass
 
 def verify_server(cfg):
@@ -119,7 +120,7 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
     garda v3 se aplica dupa, ca semnal; termenul se impune cu un fir."""
     endpoint_parts(cfg['endpoint'])
     # transportul MinerU e httpx in biblioteca: fara proxy din mediu pentru loopback (imaginea nu pleaca de pe masina)
-    for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'): os.environ.pop(k, None)
+    for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'MINERU_VL_DEBUG_ENABLE'): os.environ.pop(k, None)  # si fara jurnalul de cereri al bibliotecii
     os.environ['NO_PROXY'] = os.environ['no_proxy'] = '127.0.0.1,::1,localhost'
     from PIL import Image
     import io

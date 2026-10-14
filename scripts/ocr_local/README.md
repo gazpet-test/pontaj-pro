@@ -44,9 +44,25 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
   (fail-closed); o pagină cu `needs_human` nu are text propus. Benzile suprapuse se cos tăind începutul identic (≥ 3 tokeni) — altfel semnal.
   Fiecare dezacord → rând în `tripleti.jsonl` (LightOn / MinerU / ales + motiv + model + versiune prompt).
 
+## După review-ul r1 (Copilot NO-GO, Jakarinos NO-GO, 14.10)
+
+- Tokeni cu semn / exponent / procent și operatori (-5≠5, 5%≠5, 10**2≠102); ** scos doar ca pereche de bold; cheile de rând
+  literale (AB-12C≠AB12-C); fragmentele pentru arbitru = subșirul exact din citire (10-20, nu 10 -20).
+- Fiecare dezacord are item_sha256 (plan, bandă, imagine, citiri, poziții, celule); decizia trebuie să-l poarte identic, cu model și
+  versiune de prompt din protocol.json → rbitru (lista de prompturi e GOALĂ până la D3b ⇒ azi orice decizie = 
+eeds_human).
+- Reconcilierea reface comparația din citiri și refuză dacă aw.txt / esult.json / dezacorduri.jsonl nu mai corespund; nu rescrie o
+  reconciliere existentă; celulele se iau ca vectori; un rând nou doar în interiorul aceluiași tabel (altfel 
+eeds_human); marcajul de
+  cantitate al arbitrului se adaugă; cusătura benzilor acceptată doar pe ≥ 8 tokeni și 1–3 rânduri întregi, altfel pagina = 
+eeds_human.
+- Citirea: rezultat vechi refolosit doar dacă e compatibil (cititor, protocol, greutăți, imagine, raw); gpu.lock cu jeton unic de
+  achiziție, PĂSTRAT la termen depășit (backend neconfirmat idle); atestare /v1/models (nume servit + rădăcina greutăților); MinerU
+  fără proxy și fără jurnalul de cereri al bibliotecii; căile din plan.json validate.
+
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
-38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **55 de dezacorduri** (~1,4 pe bandă),
+38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **58 de dezacorduri** (~1,5 pe bandă),
 dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat și `anomalie_separator`. Restul: diacritice (`protecție` /
 `protectie`, `Ștefănești` / `Štefănești`), `m³` / `m3`, `Ø` / `∅`, LaTeX la MinerU (`\( 100m^{2} \)`). Volum estimat pentru arbitraj pe 102
 (~1.447 pagini): de ordinul a câteva sute de decupaje, în plafonul de 15 $ din spec §8.

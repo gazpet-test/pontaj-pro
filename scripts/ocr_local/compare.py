@@ -87,7 +87,7 @@ def numeric_diff(a, b):
     na = [t for t in TOKEN.findall(a) if NUMBER.match(t)]; nb = [t for t in TOKEN.findall(b) if NUMBER.match(t)]
     return na != nb
 
-def cell_key(c): return ' '.join(norm_word(t) for t in TOKEN.findall(c)) + '|' + ''.join(ch for ch in c if not ch.isalnum() and not ch.isspace())
+def cell_key(c): return norm_word(re.sub(r'\s+', ' ', c.strip()))  # literal (doar spatiile si sedila unificate): AB-12C != AB12-C
 def row_key(r): return '␟'.join(cell_key(c) for c in r)
 
 def same_content(ca, cb):
@@ -131,13 +131,23 @@ def compare_text(seg_a, seg_b, base):
         if groups and a1 - groups[-1]['a2'] <= 2 and b1 - groups[-1]['b2'] <= 2: groups[-1].update(a2=a2, b2=b2)
         else: groups.append({'a1': a1, 'a2': a2, 'b1': b1, 'b2': b2})
     items = []
+    def literal(tl, segs, i1, i2):
+        # fragmentul exact din citire (cu tot ce e intre tokeni: cratime, semne, spatii), nu tokenii lipiti
+        if i1 >= i2: return ''
+        if tl[i1][1] == tl[i2 - 1][1]: return segs[tl[i1][1]][1][tl[i1][2]:tl[i2 - 1][3]]
+        parts = []
+        for si in range(tl[i1][1], tl[i2 - 1][1] + 1):
+            s = tl[i1][2] if si == tl[i1][1] else 0; e = tl[i2 - 1][3] if si == tl[i2 - 1][1] else len(segs[si][1])
+            parts.append(segs[si][1][s:e])
+        return '\n'.join(parts)
     for n, g in enumerate(groups):
-        fa = ' '.join(t[0] for t in ta[g['a1']:g['a2']]); fb = ' '.join(t[0] for t in tb[g['b1']:g['b2']])
+        fa = literal(ta, seg_a, g['a1'], g['a2']); fb = literal(tb, seg_b, g['b1'], g['b2'])
         items.append(dict(base, id='%s_t%d' % (base['band'], n), tip='text', citire_lighton=fa, citire_mineru=fb,
                           context_inainte=' '.join(t[0] for t in ta[max(0, g['a1'] - CONTEXT):g['a1']]),
                           context_dupa=' '.join(t[0] for t in ta[g['a2']:g['a2'] + CONTEXT]),
                           pozitie={'lighton': [g['a1'], g['a2']], 'mineru': [g['b1'], g['b2']]},
-                          diferenta_numerica=numeric_diff(fa, fb), anomalie_separator=separator_anomaly(fa, fb), e_cantitate=False))
+                          diferenta_numerica=numeric_diff(fa, fb), anomalie_separator=separator_anomaly(fa, fb),
+                          e_cantitate=base['kind'] == 'quantity_table' and numeric_diff(fa, fb)))
     return items, len(ka)
 
 def match_rows(ra, rb):
@@ -159,6 +169,9 @@ def match_rows(ra, rb):
 def compare_tables(seg_a, seg_b, base):
     ra = table_rows(seg_a); rb = table_rows(seg_b); items = []
     rows_a = [r[2] for r in ra]
+    first_b = {}; last_a = {}
+    for si, ri, _ in rb: first_b.setdefault(si, ri)
+    for si, ri, _ in ra: last_a[si] = ri
     anchor = None  # ultimul rand LightOn vazut in ordinea alinierii: ancora pentru un rand gasit doar de MinerU
     for n, (i, j, same) in enumerate(match_rows(ra, rb)):
         prev_anchor = anchor
@@ -182,7 +195,10 @@ def compare_tables(seg_a, seg_b, base):
         fa = ' | '.join(ca) if ca is not None else ''; fb = ' | '.join(cb) if cb is not None else ''
         prev = ra[i - 1][2] if i else None
         items.append(dict(base, id='%s_r%d' % (base['band'], n), tip=tip, citire_lighton=fa, citire_mineru=fb,
-                          celule_diferite=diff, roluri=rl, ancora_lighton=prev_anchor if a is None else None, triplet_diferit=bool(triplet), rand_anterior=' | '.join(prev) if prev else None,
+                          celule_diferite=diff, roluri=rl, celule_lighton=ca, celule_mineru=cb,
+                          ancora_lighton=prev_anchor if a is None else None,
+                          # ancora sigura doar in interiorul aceluiasi tabel: nici primul rand al tabelului MinerU, nici dupa ultimul rand al unui tabel LightOn
+                          ancora_sigura=bool(a is None and prev_anchor is not None and b[1] != first_b.get(b[0]) and prev_anchor[1] != last_a.get(prev_anchor[0])), triplet_diferit=bool(triplet), rand_anterior=' | '.join(prev) if prev else None,
                           pozitie={'lighton': [a[0], a[1]] if a else None, 'mineru': [b[0], b[1]] if b else None},
                           diferenta_numerica=numeric_diff(fa, fb), anomalie_separator=separator_anomaly(fa, fb), e_cantitate=bool(e_cant)))
     return items, len(ra)
@@ -204,7 +220,7 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
         for it in ti: it['semnal'] = 'structura_diferita'; it['e_cantitate'] = it['diferenta_numerica']
     return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri)}, ti + ri
 
-ITEM_FIELDS = ('plan_input_sha256', 'band', 'image_sha256', 'raw_sha256', 'tip', 'pozitie', 'citire_lighton', 'citire_mineru')
+ITEM_FIELDS = ('plan_input_sha256', 'band', 'image_sha256', 'raw_sha256', 'tip', 'pozitie', 'citire_lighton', 'citire_mineru', 'celule_lighton', 'celule_mineru')
 
 def item_hash(it):
     """Amprenta dezacordului: decizia arbitrului trebuie sa o poarte identic (o decizie veche nu se poate lipi pe alt dezacord)."""
