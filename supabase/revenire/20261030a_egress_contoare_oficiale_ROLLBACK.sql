@@ -1,7 +1,9 @@
 -- ============================================================================
 -- ROLLBACK TEHNIC pentru supabase/migrations/20261030a_egress_contoare_oficiale.sql (contoare oficiale Supabase).
 -- Readuce EXACT: egress_statistici (20260930e, md5 dd67c392…), egress_detector (20261002a, md5 2cc00f0d…), CHECK-ul
--- inițial pe storage_egress_alerte.tip; șterge supabase_usage_oficial și storage_egress_config.cota_cached_bytes.
+-- inițial pe storage_egress_alerte.tip, cota_ciclu_bytes = 268435456000 (250 GiB, valoarea live dinainte; doar dacă e încă
+-- 250000000000 pusă de migrare) + DEFAULT-ul ei; șterge supabase_usage_oficial (cu triggerul și funcția lui),
+-- storage_egress_config.cota_cached_bytes și oficial_activat_la.
 --
 -- ⚠ ARTEFACT DE TEST / REVENIRE EXCEPȚIONALĂ, FĂRĂ GO DE EXECUȚIE (supabase/revenire/README.md). Folosire doar la decizia
 --   lui Răzvan. PIERDE DATE: citirile din supabase_usage_oficial și alertele de tip oficial_egress / oficial_cached /
@@ -25,7 +27,7 @@ BEGIN
     RAISE EXCEPTION 'ROLLBACK TEHNIC 20261030a blocat: fără GO de execuție; armarea se face în aceeași tranzacție: SELECT set_config(''gazpet.rollback_tehnic_20261030a'', ''SCOATE_CONTOARE_OFICIALE:'' || txid_current(), true);' USING ERRCODE = '42501';
   END IF;
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM '0bf2bd142b86d1effbe462d2e4426e50'
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '0b731a96daf1e4af2918d07a7b4187ad'
+     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '0bee895a79cae0b8db55d02dc40c0f48'
      OR to_regclass('public.supabase_usage_oficial') IS NULL THEN
     RAISE EXCEPTION 'Precondiție rollback 20261030a: starea curentă nu e patch-ul 20261030a — nu se revine tacit peste o versiune neanalizată' USING ERRCODE = '55000';
   END IF;
@@ -148,8 +150,13 @@ DELETE FROM public.storage_egress_alerte WHERE tip IN ('oficial_egress', 'oficia
 ALTER TABLE public.storage_egress_alerte DROP CONSTRAINT storage_egress_alerte_tip_check;
 ALTER TABLE public.storage_egress_alerte ADD CONSTRAINT storage_egress_alerte_tip_check
   CHECK (tip IN ('obiect_repetat','prag_zilnic','cota_ciclu'));
-DROP TABLE public.supabase_usage_oficial;  -- politica, indexul și secvența pleacă odată cu tabela
-ALTER TABLE public.storage_egress_config DROP COLUMN cota_cached_bytes;
+DROP TABLE public.supabase_usage_oficial;  -- politica, indexul, secvența și triggerul pleacă odată cu tabela
+DROP FUNCTION public.supabase_usage_oficial_valideaza();
+-- cota egress necache: înapoi la valoarea live dinainte (268435456000 = 250 GiB) DOAR dacă e încă cea pusă de migrare;
+-- o valoare schimbată între timp de owner rămâne (decizie umană, nu se rescrie tacit)
+UPDATE public.storage_egress_config SET cota_ciclu_bytes = 268435456000, updated_at = now() WHERE id = 1 AND cota_ciclu_bytes = 250000000000;
+ALTER TABLE public.storage_egress_config ALTER COLUMN cota_ciclu_bytes SET DEFAULT 268435456000;
+ALTER TABLE public.storage_egress_config DROP COLUMN cota_cached_bytes, DROP COLUMN oficial_activat_la;
 COMMENT ON COLUMN public.storage_egress_config.cota_ciclu_bytes IS NULL;
 
 DO $rollback_post$
@@ -158,7 +165,9 @@ BEGIN
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM 'dd67c392797115482c54387408d7bcf6'
      OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '2cc00f0d41b9900c568fc82d9f5aec22'
      OR to_regclass('public.supabase_usage_oficial') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'storage_egress_config' AND column_name = 'cota_cached_bytes') THEN
+     OR to_regprocedure('public.supabase_usage_oficial_valideaza()') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'storage_egress_config'
+                  AND column_name IN ('cota_cached_bytes', 'oficial_activat_la')) THEN
     RAISE EXCEPTION 'Postcondiție rollback 20261030a: starea nu e exact 20260930e + 20261002a';
   END IF;
   SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'egress\_%';

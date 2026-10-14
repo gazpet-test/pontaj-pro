@@ -4,6 +4,7 @@
 # (implicit /tmp/pg_egress_oficial, 127.0.0.1:5973). Nu atinge producția.
 #   0. schelet + 20260930e + 20261002a (= live, amprentele verificate)
 #   1. fișierul fără marcaj de livrare → garda refuză
+#  1b. cota_ciclu_bytes ≠ 268435456000 (valoarea live) → precondiția 0g refuză
 #   2. aplicare cu marcaj (ca runnerul: --single-transaction) → suita oficial; suita veche monitor_egress_test.sql trece și ea
 #  2b. „colector oprit” sub concurență reală (două sesiuni) → o singură alertă
 #   3. reaplicare → refuz (precondiții: obiectele există / amprente schimbate)
@@ -58,6 +59,13 @@ if "${PSQL[@]}" -d "$BAZA" -f "$MIGRARE" >/tmp/egress_oficial_apl.out 2>&1; then
 grep -q 'garda de livrare (start)' /tmp/egress_oficial_apl.out || { cat /tmp/egress_oficial_apl.out; esec "1 refuz din alt motiv"; }
 [ "$(amprente)" = "$LIVE" ] || esec "1 s-a schimbat ceva"; ok "1 fără marcaj → refuz (garda start), nimic schimbat"
 
+# 1b. cota_ciclu_bytes diferită de valoarea live (268435456000) → precondiția 0g refuză (nu se rescrie tacit o cotă schimbată)
+q "UPDATE storage_egress_config SET cota_ciclu_bytes = 300000000000" >/dev/null
+if "${PSQL[@]}" -d "$BAZA" --single-transaction -c "$MARCAJ" -f "$MIGRARE" >/tmp/egress_oficial_apl.out 2>&1; then esec "1b cotă schimbată a trecut"; fi
+grep -q 'Precondiție 0g' /tmp/egress_oficial_apl.out || { cat /tmp/egress_oficial_apl.out; esec "1b refuz din alt motiv"; }
+q "UPDATE storage_egress_config SET cota_ciclu_bytes = 268435456000" >/dev/null
+ok "1b cota_ciclu_bytes ≠ 268435456000 → refuz Precondiție 0g"
+
 # 2. aplicare + suite
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "$MARCAJ" -f "$MIGRARE" >/tmp/egress_oficial_apl.out 2>&1 || { cat /tmp/egress_oficial_apl.out; esec "2 aplicare"; }
 ok "2 aplicare cu marcaj (pre + post trecute)"
@@ -71,7 +79,8 @@ q "TRUNCATE storage_descarcari_jurnal, storage_obiecte_blocate, storage_egress_a
 #     cheie de zi, ca peste miezul nopții UTC) și ține lock-ul consultativ până la COMMIT; sesiunea B rulează detectorul
 #     între timp. Cu lock: B așteaptă, apoi vede alerta lui A ⇒ 1 alertă. Fără lock: B n-ar vedea rândul necomis ⇒ 2.
 q "INSERT INTO supabase_usage_oficial (citit_la, ciclu_start, ciclu_sfarsit, egress_bytes, cached_egress_bytes, sursa)
-   VALUES (now() - interval '30 hours', current_date - 40, current_date - 10, 1, 1, 'dashboard')" >/dev/null
+   SELECT now() - interval '30 hours', (d - interval '1 month')::date, d, 1, 1, 'dashboard'
+     FROM (SELECT (egress_ciclu_start(now()) AT TIME ZONE 'UTC')::date AS d) x" >/dev/null
 "${PSQL[@]}" -d "$BAZA" -c "BEGIN; SELECT pg_advisory_xact_lock(hashtext('egress_colector_oprit'));
   INSERT INTO storage_egress_alerte (tip, cheie, detalii) VALUES ('colector_oprit', '2000-01-01', '{\"sesiune\":\"A\"}');
   SELECT pg_sleep(3); COMMIT;" >/tmp/egress_oficial_a.out 2>&1 &

@@ -13,8 +13,9 @@ const S = {
   btn: { background: 'transparent', border: `1px solid ${G.border}`, color: G.text, borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' },
   row: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
 }
-const GB = 1073741824
-const fmt = b => b >= GB ? `${(b / GB).toFixed(1)} GB` : `${Math.round((b || 0) / 1048576)} MB`
+// GB ZECIMALI, ca pagina Usage din Supabase și cotele din BD (250 GB = 250 × 10^9 bytes; migrarea 20261030a)
+const GB = 1e9, MB = 1e6
+const fmt = b => b >= GB ? `${(b / GB).toFixed(1)} GB` : `${Math.round((b || 0) / MB)} MB`
 const scurt = o => { const p = String(o || '').split('/'); return p.length > 2 ? `${p[0]}/…/${p[p.length - 1]}` : o }
 const COTA_PLAN = 250 * GB  // plan Pro: 250 GB pe fiecare contor (fallback dacă BD nu trimite cota)
 const procent = (b, cota) => cota ? Math.round(100 * (b || 0) / cota) : 0
