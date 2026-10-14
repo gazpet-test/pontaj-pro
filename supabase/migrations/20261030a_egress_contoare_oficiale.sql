@@ -19,7 +19,8 @@
 --   4. egress_detector(): pe lângă alertele existente (neschimbate), alerte 50/80% pe contoarele oficiale (egress și
 --      cached), o dată per prag per ciclu (dedupe ca la 'cota_ciclu': UNIQUE (tip, cheie), cheie = ciclu_start:procent);
 --      plus „colector oprit” dacă ultima citire oficială e mai veche de 26 h, cel mult o dată la 24 h (nu se emite dacă
---      există deja o alertă colector_oprit mai nouă de 24 h; cheia = ziua UTC rămâne plasă pentru rulări concurente).
+--      există deja o alertă colector_oprit mai nouă de 24 h; verificarea + inserarea sunt serializate cu
+--      pg_advisory_xact_lock(hashtext('egress_colector_oprit')), deci și rulările concurente o respectă).
 --      Pe contoarele oficiale NU se blochează nimic (doar notificare owner). Notificările izolate ca în 20261002a.
 --      Fără nicio citire oficială (colectorul încă nedecis) ⇒ nicio alertă „colector oprit”.
 --   5. CHECK-ul storage_egress_alerte.tip primește 'oficial_egress', 'oficial_cached', 'colector_oprit'.
@@ -263,13 +264,19 @@ BEGIN
   END IF;
 
   -- 5) colector oprit: ultima citire oficială (oricare ciclu) mai veche de 26 h → cel mult o alertă la 24 h (nu ziua
-  --    calendaristică: altfel miezul nopții UTC ar da a doua alertă la 5 minute după prima). Cheia = ziua UTC rămâne
-  --    plasa UNIQUE pentru rulări concurente. Fără nicio citire (colector încă nedecis/nepornit) ⇒ nimic.
+  --    calendaristică: altfel miezul nopții UTC ar da a doua alertă la 5 minute după prima). Verificarea + inserarea
+  --    sunt serializate cu un lock consultativ de tranzacție: o a doua rulare concurentă așteaptă commit-ul primeia și,
+  --    în READ COMMITTED (cron-ul), NOT EXISTS de după lock vede alerta ei (altfel, peste miezul nopții UTC, două
+  --    tranzacții cu chei de zi diferite ar trece amândouă). Cheia = ziua UTC rămâne plasa UNIQUE.
+  --    Fără nicio citire (colector încă nedecis/nepornit) ⇒ nimic.
   SELECT max(citit_la) INTO v_ultima FROM supabase_usage_oficial;
-  IF v_ultima IS NOT NULL AND v_ultima < now() - interval '26 hours'
-     AND NOT EXISTS (SELECT 1 FROM storage_egress_alerte WHERE tip = 'colector_oprit' AND created_at > now() - interval '24 hours') THEN
-    INSERT INTO storage_egress_alerte (tip, cheie, detalii) VALUES ('colector_oprit', to_char(v_azi, 'YYYY-MM-DD'),
-      jsonb_build_object('ultima_citire', v_ultima, 'ore', round(extract(epoch FROM now() - v_ultima) / 3600.0, 1))) ON CONFLICT DO NOTHING;
+  IF v_ultima IS NOT NULL AND v_ultima < now() - interval '26 hours' THEN
+    PERFORM pg_advisory_xact_lock(hashtext('egress_colector_oprit'));
+    INSERT INTO storage_egress_alerte (tip, cheie, detalii)
+    SELECT 'colector_oprit', to_char(v_azi, 'YYYY-MM-DD'),
+           jsonb_build_object('ultima_citire', v_ultima, 'ore', round(extract(epoch FROM now() - v_ultima) / 3600.0, 1))
+     WHERE NOT EXISTS (SELECT 1 FROM storage_egress_alerte WHERE tip = 'colector_oprit' AND created_at > now() - interval '24 hours')
+    ON CONFLICT DO NOTHING;
     IF FOUND THEN
       n_alerte := n_alerte + 1;
       BEGIN
@@ -296,7 +303,7 @@ DECLARE v_n integer;
 BEGIN
   -- p1. amprentele exacte ale funcțiilor înlocuite (LF, ca fișierul din repo)
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM '0bf2bd142b86d1effbe462d2e4426e50'
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '54e242a7e98187422f240d20ea6529da' THEN
+     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '0b731a96daf1e4af2918d07a7b4187ad' THEN
     RAISE EXCEPTION 'Postcondiție p1: amprentele egress_statistici/egress_detector nu corespund patch-ului';
   END IF;
   -- p2. tot 9 funcții egress_*; cele două înlocuite SECURITY DEFINER cu search_path fixat

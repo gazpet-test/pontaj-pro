@@ -4,6 +4,7 @@
 // Deblocare circuit breaker: egress_deblocheaza.
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from './lib/supabase.js'
+import { citireOficialaAfisata } from './monitorEgressCitire.js'
 
 const G = { bg: '#161B22', border: '#30363D', text: '#E6EDF3', muted: '#8B949E', blue: '#58A6FF', green: '#3FB950', yellow: '#D29922', red: '#F85149' }
 const S = {
@@ -63,14 +64,12 @@ export default function MonitorEgress({ profile }) {
 
   const c = d.ciclu || {}, cotaJurnal = c.cota || COTA_PLAN, pct = procent(c.bytes, cotaJurnal)
   // citirea oficială a ciclului curent; dacă lipsește (colector oprit peste schimbarea ciclului), ultima din ORICE ciclu.
-  // Ambele null = colectorul n-a scris încă / migrarea 20261030a neaplicată.
-  const curent = d.oficial || null, of = curent || d.oficial_ultima || null, dinCicluTrecut = !curent && !!of
+  // Ambele null = colectorul n-a scris încă / migrarea 20261030a neaplicată. Vechimea = a citirii afișate (monitorEgressCitire.js).
+  const { curent, of, dinCicluTrecut, citit, vechimeOre, veche } = citireOficialaAfisata(d)
   const cotaEgress = c.cota || COTA_PLAN, cotaCached = d.cota_cached || COTA_PLAN
   const pctOficial = curent ? Math.max(procent(curent.egress_bytes, cotaEgress), procent(curent.cached_egress_bytes, cotaCached)) : 0
   const zile = d.pe_zi || [], max = Math.max(1, ...zile.map(z => z.bytes))
   const blocate = d.blocate || []
-  const citit = of?.citit_la ? new Date(of.citit_la) : null
-  const vechimeOre = typeof d.oficial_vechime_ore === 'number' ? d.oficial_vechime_ore : citit ? (Date.now() - citit.getTime()) / 3600000 : 0
   const zi = x => x ? new Date(x).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit' }) : '—'
   const sufix = dinCicluTrecut ? `, ciclul ${zi(of.ciclu_start)}–${zi(of.ciclu_sfarsit)}` : ''
 
@@ -92,9 +91,9 @@ export default function MonitorEgress({ profile }) {
       {of ? <>
         <Bara eticheta={`Egress (oficial${sufix})`} bytes={of.egress_bytes} cota={cotaEgress} alerte={c.alerte_procent} />
         <Bara eticheta={`Cached egress (oficial${sufix})`} bytes={of.cached_egress_bytes} cota={cotaCached} alerte={c.alerte_procent} />
-        <div style={{ ...S.small, marginTop: 6, color: vechimeOre > 26 || dinCicluTrecut ? G.yellow : G.muted }}>
+        <div style={{ ...S.small, marginTop: 6, color: veche || dinCicluTrecut ? G.yellow : G.muted }}>
           Citit {citit ? citit.toLocaleString('ro-RO') : '—'} · sursa {of.sursa}
-          {vechimeOre > 26 ? ` · ⚠️ citire veche (${Math.round(vechimeOre)} h) — colectorul e oprit?` : ''}
+          {veche ? ` · ⚠️ citire veche (${Math.round(vechimeOre)} h) — colectorul e oprit?` : ''}
           {dinCicluTrecut ? ' · ⚠️ ultima citire e din ciclul anterior — lipsește citirea ciclului curent' : ''}
         </div>
       </> : <div style={{ ...S.small, marginTop: 10 }}>Egress / Cached egress (oficial): fără citire oficială încă. Cifrele facturate se văd în Dashboard Supabase → Usage.</div>}

@@ -5,6 +5,7 @@
 #   0. schelet + 20260930e + 20261002a (= live, amprentele verificate)
 #   1. fișierul fără marcaj de livrare → garda refuză
 #   2. aplicare cu marcaj (ca runnerul: --single-transaction) → suita oficial; suita veche monitor_egress_test.sql trece și ea
+#  2b. „colector oprit” sub concurență reală (două sesiuni) → o singură alertă
 #   3. reaplicare → refuz (precondiții: obiectele există / amprente schimbate)
 #   4. rollback tehnic PESTE DATE (citiri + alerte pe toate tipurile noi + o alertă veche): nearmat → refuz; armat →
 #      amprentele live, alertele noi și citirile scoase, alerta veche păstrată; reaplicare → suita oficial
@@ -65,6 +66,25 @@ suita "după 20261030a"
   || { cat /tmp/egress_oficial_vechi.out; esec "2 suita veche monitor_egress_test.sql pe 20261030a"; }
 ok "2 suita veche monitor_egress_test.sql trece pe detectorul nou"
 q "TRUNCATE storage_descarcari_jurnal, storage_obiecte_blocate, storage_egress_alerte, notifications; UPDATE storage_egress_config SET prag_zilnic_bytes = DEFAULT, cota_ciclu_bytes = DEFAULT" >/dev/null
+
+# 2b. „colector oprit” atomic între rulări concurente. Sesiunea A simulează o rulare care tocmai a emis alerta (cu altă
+#     cheie de zi, ca peste miezul nopții UTC) și ține lock-ul consultativ până la COMMIT; sesiunea B rulează detectorul
+#     între timp. Cu lock: B așteaptă, apoi vede alerta lui A ⇒ 1 alertă. Fără lock: B n-ar vedea rândul necomis ⇒ 2.
+q "INSERT INTO supabase_usage_oficial (citit_la, ciclu_start, ciclu_sfarsit, egress_bytes, cached_egress_bytes, sursa)
+   VALUES (now() - interval '30 hours', current_date - 40, current_date - 10, 1, 1, 'dashboard')" >/dev/null
+"${PSQL[@]}" -d "$BAZA" -c "BEGIN; SELECT pg_advisory_xact_lock(hashtext('egress_colector_oprit'));
+  INSERT INTO storage_egress_alerte (tip, cheie, detalii) VALUES ('colector_oprit', '2000-01-01', '{\"sesiune\":\"A\"}');
+  SELECT pg_sleep(3); COMMIT;" >/tmp/egress_oficial_a.out 2>&1 &
+PID_A=$!
+sleep 1
+T0=$(date +%s)
+q "SELECT egress_detector()" >/dev/null || esec "2b detectorul (sesiunea B)"
+T1=$(date +%s)
+wait "$PID_A" || { cat /tmp/egress_oficial_a.out; esec "2b sesiunea A"; }
+[ "$(q "SELECT count(*) FROM storage_egress_alerte WHERE tip = 'colector_oprit'")" = 1 ] || esec "2b două alerte colector_oprit la rulări concurente"
+[ $((T1 - T0)) -ge 1 ] || esec "2b sesiunea B nu a așteptat lock-ul"
+ok "2b colector_oprit: rularea concurentă așteaptă lock-ul și nu dublează alerta"
+q "TRUNCATE storage_egress_alerte, notifications, supabase_usage_oficial" >/dev/null
 
 # 3. reaplicare
 if "${PSQL[@]}" -d "$BAZA" --single-transaction -c "$MARCAJ" -f "$MIGRARE" >/tmp/egress_oficial_apl.out 2>&1; then esec "3 reaplicarea a trecut"; fi

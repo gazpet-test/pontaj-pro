@@ -149,6 +149,12 @@ DO $$ DECLARE v jsonb; BEGIN
   IF (SELECT count(*) FROM storage_egress_alerte WHERE tip = 'colector_oprit' AND cheie = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD')) <> 1 THEN
     RAISE EXCEPTION 'O6: alerta colector_oprit lipsă'; END IF;
   IF (v->>'notificari_esuate')::int < 1 THEN RAISE EXCEPTION 'O6: notificarea eșuată nu e raportată: %', v; END IF;
+  -- verificarea + inserarea s-au făcut sub lock-ul consultativ de tranzacție (concurența reală: harness-ul PG17, pasul 2b)
+  IF NOT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
+                   AND classid = ((hashtext('egress_colector_oprit')::bigint >> 32) & 4294967295)::oid
+                   AND objid = (hashtext('egress_colector_oprit')::bigint & 4294967295)::oid) THEN
+    RAISE EXCEPTION 'O6: detectorul nu ține lock-ul consultativ egress_colector_oprit';
+  END IF;
   PERFORM public.egress_detector();
   IF (SELECT count(*) FROM storage_egress_alerte WHERE tip = 'colector_oprit') <> 1 THEN RAISE EXCEPTION 'O6: colector_oprit dublat'; END IF;
   RAISE NOTICE 'O6 OK: colector oprit > 26 h → alertă; notificarea eșuată nu o anulează';

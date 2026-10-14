@@ -25,7 +25,7 @@ BEGIN
     RAISE EXCEPTION 'ROLLBACK TEHNIC 20261030a blocat: fără GO de execuție; armarea se face în aceeași tranzacție: SELECT set_config(''gazpet.rollback_tehnic_20261030a'', ''SCOATE_CONTOARE_OFICIALE:'' || txid_current(), true);' USING ERRCODE = '42501';
   END IF;
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM '0bf2bd142b86d1effbe462d2e4426e50'
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '54e242a7e98187422f240d20ea6529da'
+     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '0b731a96daf1e4af2918d07a7b4187ad'
      OR to_regclass('public.supabase_usage_oficial') IS NULL THEN
     RAISE EXCEPTION 'Precondiție rollback 20261030a: starea curentă nu e patch-ul 20261030a — nu se revine tacit peste o versiune neanalizată' USING ERRCODE = '55000';
   END IF;
