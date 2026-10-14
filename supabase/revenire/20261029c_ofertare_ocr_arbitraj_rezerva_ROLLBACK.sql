@@ -1,5 +1,5 @@
 -- REVENIRE 20261029c — readuce EXACT obiectele 20261029b: scoate fn_ofertare_ocr_arbitraj_rezerva / _dezacord_arbitraj /
--- _arbitraj_om, indexul și coloana
+-- _arbitraj_om / _arbitraj_depasire, indexul și coloana
 -- ofertare_ocr_rezervari.dezacord_id, readuce definiția originală a fn_ofertare_ocr_scrie_arbitraj și EXECUTE pentru service_role pe
 -- fn_ofertare_ocr_cost_rezerva, apoi re-ștampilează amprenta 20261029b (care trebuie să fie din nou cea de la aplicarea lui b).
 -- Legătura rezervare ↔ dezacord a rezervărilor existente se PIERDE (rezervările și costurile rămân). DOAR la cererea lui Răzvan.
@@ -54,6 +54,7 @@ BEGIN
   DROP FUNCTION public.fn_ofertare_ocr_arbitraj_rezerva(bigint, bigint, text, text, numeric);
   DROP FUNCTION public.fn_ofertare_ocr_dezacord_arbitraj(bigint, bigint, text, text);
   DROP FUNCTION public.fn_ofertare_ocr_arbitraj_om(bigint, bigint, text, text);
+  DROP FUNCTION public.fn_ofertare_ocr_arbitraj_depasire(bigint, numeric, integer, integer, text);
   DROP INDEX public.ofertare_ocr_rezervari_un_zbor;
   ALTER TABLE public.ofertare_ocr_rezervari DROP COLUMN dezacord_id;
   GRANT EXECUTE ON FUNCTION public.fn_ofertare_ocr_cost_rezerva(bigint,numeric) TO service_role;

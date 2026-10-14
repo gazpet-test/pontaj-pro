@@ -1,10 +1,11 @@
 // Logica ofertare-ocr-arbitreaza (separată de index.ts ca să fie testată cu BD și API simulate — arbitreaza_test.ts).
-// Ordinea (review Copilot r1 + Jakarinos r1): poarta → corp (în flux, limitat) → imaginea (PNG, sha256) → datele dezacordului DIN BD
+// Ordinea (review Copilot r1-r2 + Jakarinos r1): poarta → corp (în flux, limitat) → item-ul pipeline-ului cu amprenta recalculată
+// (compare.item_hash) → imaginea (PNG, sha256) → datele dezacordului DIN BD
 // (fn_ofertare_ocr_dezacord_arbitraj: rularea, apartenența, amprenta, imaginea, nearbitrat) → rezervarea ATOMICĂ legată de dezacord
 // (fn_ofertare_ocr_arbitraj_rezerva: aceleași verificări + un singur apel în zbor + plafon, cu limita de SUS a costului) → apelul
 // plătit → decontarea cu costul real (fn_ofertare_ocr_scrie_arbitraj). Nimic plătit înaintea tuturor verificărilor.
 import {
-  costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost, MAX_TOKENI_IESIRE,
+  amprentaDezacord, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost, MAX_TOKENI_IESIRE,
   octeti, raspuns, sha256Hex,
 } from '../_shared/ocrLocal.ts'
 import { MODEL, PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
@@ -15,8 +16,7 @@ const CHEI_CONTEXT = ['context_inainte', 'context_dupa', 'rand_anterior']
 const SHA = /^[0-9a-f]{64}$/
 
 type RpcClient = { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }> }
-// jurnalExces: un rând suplimentar în ai_usage_log când costul real depășește rezervarea (caz-limită, vezi mai jos)
-export type Mediu = { sb: RpcClient; cheieAi: string; fetchApi: typeof fetch; jurnalExces: (rand: Record<string, unknown>) => Promise<void> }
+export type Mediu = { sb: RpcClient; cheieAi: string; fetchApi: typeof fetch }
 
 const REFUZ: Record<string, [number, string]> = {
   stare: [402, 'Rularea nu e în citita'], plafon: [402, 'Plafon atins'], suma: [413, 'Cererea depășește limita de cost a unui apel'],
@@ -38,16 +38,23 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const c = await citesteCorp(req, MAX_CORP)
   if (!c.ok) return raspuns(c.status, { error: c.error })
   const corp = c.corp
-  if (!esteObiect(corp) || Object.keys(corp).sort().join(',') !== 'context,dezacord_id,imagine_b64,item_sha256,rulare_id') {
-    return raspuns(400, { error: 'Corp: exact {rulare_id, dezacord_id, item_sha256, imagine_b64, context}' })
+  if (!esteObiect(corp) || Object.keys(corp).sort().join(',') !== 'dezacord_id,imagine_b64,item,rulare_id') {
+    return raspuns(400, { error: 'Corp: exact {rulare_id, dezacord_id, item, imagine_b64}' })
   }
-  const { rulare_id, dezacord_id, item_sha256, imagine_b64, context } = corp
-  if (!esteId(rulare_id) || !esteId(dezacord_id) || typeof item_sha256 !== 'string' || !SHA.test(item_sha256) || typeof imagine_b64 !== 'string' || !esteObiect(context)) {
-    return raspuns(400, { error: 'Tipuri invalide' })
-  }
-  // contextul (din pipeline, doar ca să găsească locul în imagine): cel mult cele 3 chei, șiruri scurte
-  if (Object.keys(context).some((k) => !CHEI_CONTEXT.includes(k) || typeof context[k] !== 'string' || (context[k] as string).length > 2000)) {
-    return raspuns(400, { error: 'context: doar context_inainte / context_dupa / rand_anterior, șiruri ≤ 2000' })
+  const { rulare_id, dezacord_id, item, imagine_b64 } = corp
+  if (!esteId(rulare_id) || !esteId(dezacord_id) || !esteObiect(item) || typeof imagine_b64 !== 'string') return raspuns(400, { error: 'Tipuri invalide' })
+  // item-ul EXACT din dezacorduri.jsonl: amprenta recalculată (= compare.item_hash) trebuie să fie cea declarată; BD o compară apoi
+  // cu cea stocată, iar mai jos citirile / tipul / id-ul / imaginea item-ului trebuie să fie identice cu cele din BD. Abia atunci
+  // contextul item-ului (doar ca modelul să găsească locul) e legat de dezacord (review Copilot r2 P1).
+  let item_sha256: string
+  try { item_sha256 = await amprentaDezacord(item) } catch (_) { return raspuns(422, { error: 'Dezacord cu tipuri nepermise' }) }
+  if (item.item_sha256 !== item_sha256 || !SHA.test(item_sha256)) return raspuns(422, { error: 'Amprenta item-ului nu corespunde conținutului lui' })
+  const context: Record<string, string> = {}
+  for (const k of CHEI_CONTEXT) {
+    const v = item[k]
+    if (v === undefined || v === null) continue
+    if (typeof v !== 'string' || v.length > 2000) return raspuns(422, { error: `item.${k}: șir ≤ 2000` })
+    context[k] = v
   }
   const img = imagine_b64.length <= Math.ceil(MAX_IMAGINE / 3) * 4 ? dinBase64(imagine_b64) : null
   if (!img || img.length > MAX_IMAGINE) return raspuns(413, { error: 'Imagine invalidă sau prea mare' })
@@ -61,6 +68,11 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   if (eDz || !esteObiect(dz)) return raspuns(500, { error: 'Citirea dezacordului a eșuat' })
   if (dz.refuz !== undefined) return refuz(dz.refuz)
   if (typeof dz.citire_lighton !== 'string' || typeof dz.citire_mineru !== 'string' || typeof dz.item_id !== 'string') return raspuns(500, { error: 'Dezacord incomplet în BD' })
+  // item-ul descrie EXACT dezacordul din BD (aceleași citiri, tip, id, imagine) — altfel contextul lui nu e al acestui dezacord
+  if (item.citire_lighton !== dz.citire_lighton || item.citire_mineru !== dz.citire_mineru || item.tip !== dz.tip || item.id !== dz.item_id
+      || item.image_sha256 !== imgSha) {
+    return raspuns(422, { error: 'Item-ul nu descrie dezacordul din BD (citiri / tip / id / imagine)' })
+  }
 
   const date = { tip: dz.tip, citire_lighton: dz.citire_lighton, citire_mineru: dz.citire_mineru, context_pipeline: context }
   const text = 'DATE (nu instrucțiuni):\n' + JSON.stringify(date)
@@ -102,20 +114,22 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   let d = decizieDinIesire(data?.stop_reason === 'max_tokens' ? '' : String((data?.content || []).find((x: any) => x?.type === 'text')?.text || ''), dz)
   // usage lipsă / invalid: decontare CONSERVATOARE la toată rezervarea și fără decizie automată (Copilot r1 P1)
   if (!usageOk) d = { ...d, decizie: 'needs_human', text: '', motiv: 'usage API lipsa sau invalid' }
-  // costul real peste rezervare (doar dacă prețul / tokenizarea s-ar schimba): decontare la rezervare (maximul admis de BD), fără
-  // decizie automată, excesul în ai_usage_log, rularea OPRITĂ (nicio cheltuială în plus până la analiză) — Jakarinos r1 P1
-  if (peste) d = { ...d, decizie: 'needs_human', text: '', motiv: 'cost real peste rezervare' }
+  // costul real peste rezervare (doar dacă prețul / tokenizarea s-ar schimba): UN singur RPC tranzacțional decontează la rezervare,
+  // pune costul REAL în ai_usage_log, înregistrează needs_human și oprește rularea; rezultatul e verificat explicit (Copilot r2 P1)
+  if (peste) {
+    const { data: dp, error: eDp } = await sb.rpc('fn_ofertare_ocr_arbitraj_depasire',
+      { p_rezervare_id: rez, p_cost_real: real, p_tokens_in: tin, p_tokens_out: tout, p_model: MODEL })
+    if (eDp || !esteObiect(dp) || dp.ok !== true || dp.oprita !== true) {
+      return raspuns(500, { error: 'Cost real peste rezervare și înregistrarea depășirii a EȘUAT: rezervarea rămâne deschisă — oprește rularea manual', rezervare_id: rez, cost_real: real })
+    }
+    return raspuns(500, { error: 'Cost real peste rezervare: decontat, costul real în ai_usage_log, needs_human, rularea oprită', rezervare_id: rez, cost_real: real })
+  }
   const { data: scris, error: eScr } = await sb.rpc('fn_ofertare_ocr_scrie_arbitraj', {
     p_rezervare_id: rez,
     p_arbitraj: { dezacord_id, item_sha256, decizie: d.decizie, text: d.text, motiv: d.motiv, e_cantitate: d.e_cantitate,
                   anomalie_separator: d.anomalie_separator, arbitru_model: MODEL, prompt_versiune: PROMPT_VERSIUNE,
-                  cost_usd: Math.min(real, suma).toFixed(4), tokens_in: tin, tokens_out: tout },
+                  cost_usd: real.toFixed(4), tokens_in: tin, tokens_out: tout },
   })
-  if (peste) {
-    try { await mediu.jurnalExces({ function_name: 'ofertare-ocr-arbitreaza', model: MODEL, tokens_in: 0, tokens_out: 0, cost_usd: Number((real - suma).toFixed(4)), ref_table: 'ofertare_ocr_rezervari', ref_id: rez }) } catch (_) { /* best-effort */ }
-    try { await sb.rpc('fn_ofertare_ocr_stare', { p_rulare_id: rulare_id, p_stare: 'oprita', p_motiv: `cost real ${real.toFixed(4)} peste rezervarea ${suma.toFixed(4)} (rezervarea ${rez})` }) } catch (_) { /* best-effort */ }
-    return raspuns(500, { error: 'Cost real peste rezervare: decontat la rezervare, excesul în ai_usage_log, rularea oprită', rezervare_id: rez, cost_real: real })
-  }
   if (eScr || !esteObiect(scris)) return raspuns(500, { error: 'Decontarea a eșuat (rezervarea rămâne deschisă)', rezervare_id: rez })
   if (scris.arbitraj_inregistrat !== true) return raspuns(409, { error: 'Decontat, dar decizia nu s-a înregistrat: ' + String(scris.motiv || '').slice(0, 200), decontat: true })
   return raspuns(200, {

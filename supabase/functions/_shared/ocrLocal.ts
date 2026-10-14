@@ -101,6 +101,28 @@ export async function sha256Hex(date: Uint8Array | string): Promise<string> {
   return Array.from(h, (x) => x.toString(16).padStart(2, '0')).join('')
 }
 
+// ── amprenta unui dezacord, IDENTICĂ cu scripts/ocr_local/compare.py item_hash: sha256 peste
+// json.dumps({k: v pentru k ≠ item_sha256}, ensure_ascii=False, sort_keys=True) — separatori „, ” și „: ”, șirurile ca JSON.
+// Doar tipurile pe care le produce compare.py (șir, bool, null, întreg, listă, obiect); orice altceva → excepție (fail closed).
+// Folosită ca să lege CONTEXTUL trimis de pipeline de dezacordul din BD (review Copilot r2): item-ul întreg → amprenta = cea stocată.
+export function canonic(v: unknown): string {
+  if (v === null) return 'null'
+  if (typeof v === 'boolean') return v ? 'true' : 'false'
+  if (typeof v === 'number') {
+    if (!Number.isSafeInteger(v)) throw new Error('număr neîntreg în dezacord')
+    return String(v)
+  }
+  if (typeof v === 'string') return JSON.stringify(v)
+  if (Array.isArray(v)) return '[' + v.map(canonic).join(', ') + ']'
+  if (esteObiect(v)) return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ': ' + canonic(v[k])).join(', ') + '}'
+  throw new Error('tip nepermis în dezacord')
+}
+
+export async function amprentaDezacord(item: Record<string, unknown>): Promise<string> {
+  const { item_sha256: _ignorat, ...rest } = item
+  return await sha256Hex(canonic(rest))
+}
+
 // Imaginea benzii e PNG (scripts/ocr_local/plan.py): lățimea și înălțimea din IHDR, pentru limita de cost. null = nu e PNG valid.
 export function dimensiuniPng(b: Uint8Array): { w: number; h: number } | null {
   const sem = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]

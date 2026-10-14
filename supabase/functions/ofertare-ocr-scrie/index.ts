@@ -1,8 +1,9 @@
 // ofertare-ocr-scrie v1 (D3b, 14.10.2026; spec docs/paw/PLAN_OCR_LOCAL_OFERTARE.md §6) — singura cale de scriere a serverului AI în
-// tabelele pilotului OCR local: o listă ÎNCHISĂ de operații, fiecare = un RPC din migrarea 20261029b (EXECUTE doar service_role), cu
+// tabelele pilotului OCR local: o listă ÎNCHISĂ de operații, fiecare = un RPC din migrările 20261029b / 20261029c (EXECUTE doar service_role), cu
 // exact parametrii lui. DEPLOY cu verify_jwt = false: poarta e secretul din Vault.
 //
-// Cerere:  POST { "op": "preia" | "plan" | "pagina" | "dezacord" | "comparatie_gata" | "stare" | "rezervare_abandon" | "heartbeat",
+// Cerere:  POST { "op": "preia" | "plan" | "pagina" | "dezacord" | "comparatie_gata" | "stare" | "rezervare_abandon" | "heartbeat"
+//                       | "needs_human" (fn_ofertare_ocr_arbitraj_om, migrarea 20261029c: decizia needs_human fără apel plătit),
 //                 "args": { …exact cheile operației, vezi _shared/ocrLocal.ts OPERATII… } } cu antetul x-ocr-local-secret.
 // Răspuns: 200 { ok: true, rezultat } · 400 corp / operație · 401 neautorizat · 403 / 404 / 409 / 422 refuzul RPC-ului (mesajul lui) ·
 //          413 corp prea mare · 500 configurare / eroare.
@@ -10,7 +11,7 @@
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 //  (a) conținut EXTERN: textul citit de modelele OCR locale din documente de licitație (date), plus planul / dezacordurile produse de
 //      scripts/ocr_local — trecute ca parametri, nu interpretate aici; RPC-urile validează forma, starea rulării și proveniența;
-//  (b) scrie DOAR prin RPC-urile din listă: rulări (preluare, plan, stare, marcaj), pagini / dezacorduri append-only, abandonul unei
+//  (b) scrie DOAR prin RPC-urile din listă (inclusiv needs_human = arbitraj append-only fără cost): rulări (preluare, plan, stare, marcaj), pagini / dezacorduri append-only, abandonul unei
 //      rezervări de cost (după 15 min), heartbeat. Nu atinge ofertare_cantitati / text_extras, nu trimite mail, nu atinge drepturi;
 //      nu emite linkuri (ofertare-pdf-link) și nu cheltuie (ofertare-ocr-arbitreaza);
 //  (c) service_role: apelantul n-are cont Supabase; RPC-urile au EXECUTE doar service_role;

@@ -10,7 +10,9 @@
 --     ATOMIC sub blocarea rulării (FOR UPDATE), abia apoi rezervă, legat de dezacord (coloana nouă ofertare_ocr_rezervari.dezacord_id,
 --     un singur apel în zbor per dezacord — și index unic);
 --   * fn_ofertare_ocr_arbitraj_om: decizia needs_human FĂRĂ apel plătit (structura_tabele sau orice dezacord trimis direct la om),
---     cu o rezervare decontată la 0 — altfel rularea n-ar mai putea trece în arbitrata.
+--     cu o rezervare decontată la 0 — altfel rularea n-ar mai putea trece în arbitrata;
+--   * fn_ofertare_ocr_arbitraj_depasire: costul real peste rezervare, tratat ÎNTR-O tranzacție (decontare, ai_usage_log cu costul
+--     real, needs_human, rularea oprită) — review Copilot r2.
 -- fn_ofertare_ocr_scrie_arbitraj decontează rezervarea legată DOAR cu decizia acelui dezacord. fn_ofertare_ocr_cost_rezerva (fără
 -- dezacord) nu mai e executabilă de service_role (o singură cale de cheltuială).
 -- Amprenta din comentariul ofertare_ocr_rulari se re-ștampilează (revenirea 20261029b refuză până se revine întâi 20261029c).
@@ -34,7 +36,7 @@ BEGIN
   END IF;
   -- pornește DOAR peste obiectele exacte ale lui 20261029b (amprenta înregistrată la aplicare)
   v_fp := public.fn_ofertare_ocr_amprenta();
-  IF obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class') NOT LIKE '%amprenta=' || v_fp THEN
+  IF coalesce(obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class'), '') NOT LIKE '%amprenta=' || v_fp OR v_fp IS NULL THEN  -- comentariu lipsă = refuz (Jakarinos r2 P2)
     RAISE EXCEPTION '20261029c: obiectele 20261029b s-au schimbat dupa aplicare (amprenta difera)';
   END IF;
 END $pre$;
@@ -86,6 +88,37 @@ BEGIN
   VALUES (d.id, v_z, 'needs_human', NULL, p_motiv, d.e_cantitate, d.anomalie_separator, 'om', 'fara-ai', 0)
   RETURNING id INTO v_id;
   RETURN jsonb_build_object('ok', true, 'arbitraj_id', v_id, 'item_id', d.item_id);
+END $f$;
+
+-- Costul REAL al unui apel peste rezervarea lui (doar la o schimbare de preț / tokenizare — limita din edge e de sus): totul într-o
+-- singură tranzacție, sub blocarea rezervării și a rulării (review Copilot r2): rezervarea decontată la toată suma (maximul admis de
+-- constrângeri), costul REAL integral în ai_usage_log, decizia needs_human pe dezacordul rezervării, rularea OPRITĂ (dacă e activă).
+CREATE FUNCTION public.fn_ofertare_ocr_arbitraj_depasire(p_rezervare_id bigint, p_cost_real numeric, p_tokens_in integer, p_tokens_out integer, p_model text)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $f$
+DECLARE z record; r record; d record;
+BEGIN
+  SELECT * INTO z FROM public.ofertare_ocr_rezervari WHERE id = p_rezervare_id FOR UPDATE;
+  IF NOT FOUND OR z.stare <> 'deschisa' OR z.dezacord_id IS NULL THEN RAISE EXCEPTION 'Rezervare inexistentă, închisă sau nelegată de un dezacord' USING ERRCODE = '55000'; END IF;
+  IF p_cost_real IS NULL OR p_cost_real <= z.suma OR p_cost_real > 100 THEN RAISE EXCEPTION 'Nu e o depășire' USING ERRCODE = '22023'; END IF;
+  SELECT * INTO r FROM public.ofertare_ocr_rulari WHERE id = z.rulare_id FOR UPDATE;
+  SELECT * INTO d FROM public.ofertare_ocr_dezacorduri WHERE id = z.dezacord_id;
+  UPDATE public.ofertare_ocr_rezervari SET stare = 'decontata', cost_real = z.suma, inchisa_la = now() WHERE id = z.id;
+  UPDATE public.ofertare_ocr_rulari SET cost_rezervat = cost_rezervat - z.suma, cost_usd = cost_usd + z.suma,
+         stare = CASE WHEN stare IN ('preluata', 'citita', 'arbitrata') THEN 'oprita' ELSE stare END,
+         oprit_motiv = CASE WHEN stare IN ('preluata', 'citita', 'arbitrata') THEN left('cost real ' || p_cost_real || ' peste rezervarea ' || z.suma || ' (rezervarea ' || z.id || ')', 300) ELSE oprit_motiv END,
+         terminata_la = CASE WHEN stare IN ('preluata', 'citita', 'arbitrata') THEN now() ELSE terminata_la END
+   WHERE id = r.id;
+  INSERT INTO public.ai_usage_log (function_name, model, tokens_in, tokens_out, cost_usd, ref_table, ref_id)
+  VALUES ('ofertare-ocr-arbitreaza', nullif(left(coalesce(p_model, ''), 100), ''), greatest(coalesce(p_tokens_in, 0), 0), greatest(coalesce(p_tokens_out, 0), 0),
+          p_cost_real, 'ofertare_ocr_rezervari', z.id);
+  IF NOT EXISTS (SELECT 1 FROM public.ofertare_ocr_arbitraje WHERE dezacord_id = d.id) THEN
+    INSERT INTO public.ofertare_ocr_arbitraje (dezacord_id, rezervare_id, decizie, text_ales, motiv, e_cantitate_arbitru, anomalie_arbitru,
+                                               arbitru_model, prompt_versiune, cost_usd)
+    VALUES (d.id, z.id, 'needs_human', NULL, 'cost real peste rezervare', d.e_cantitate, d.anomalie_separator,
+            coalesce(nullif(left(coalesce(p_model, ''), 100), ''), 'necunoscut'), 'depasire', z.suma);
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'oprita', true, 'decontat', z.suma, 'cost_real', p_cost_real);
 END $f$;
 
 -- Rezervarea pentru arbitrajul UNUI dezacord: toate verificările înaintea apelului plătit, atomic sub blocarea rulării.
@@ -174,6 +207,8 @@ BEGIN
   GRANT EXECUTE ON FUNCTION public.fn_ofertare_ocr_dezacord_arbitraj(bigint,bigint,text,text) TO service_role;
   REVOKE ALL ON FUNCTION public.fn_ofertare_ocr_arbitraj_om(bigint,bigint,text,text) FROM PUBLIC, anon, authenticated;
   GRANT EXECUTE ON FUNCTION public.fn_ofertare_ocr_arbitraj_om(bigint,bigint,text,text) TO service_role;
+  REVOKE ALL ON FUNCTION public.fn_ofertare_ocr_arbitraj_depasire(bigint,numeric,integer,integer,text) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.fn_ofertare_ocr_arbitraj_depasire(bigint,numeric,integer,integer,text) TO service_role;
   REVOKE EXECUTE ON FUNCTION public.fn_ofertare_ocr_cost_rezerva(bigint,numeric) FROM service_role;
   IF has_function_privilege('anon', 'public.fn_ofertare_ocr_arbitraj_rezerva(bigint,bigint,text,text,numeric)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_ofertare_ocr_arbitraj_rezerva(bigint,bigint,text,text,numeric)', 'EXECUTE')
@@ -181,13 +216,14 @@ BEGIN
      OR has_function_privilege('service_role', 'public.fn_ofertare_ocr_cost_rezerva(bigint,numeric)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_ofertare_ocr_cost_rezerva(bigint,numeric)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.fn_ofertare_ocr_cost_rezerva(bigint,numeric)', 'EXECUTE')
-     OR EXISTS (SELECT 1 FROM unnest(ARRAY['public.fn_ofertare_ocr_dezacord_arbitraj(bigint,bigint,text,text)', 'public.fn_ofertare_ocr_arbitraj_om(bigint,bigint,text,text)']) f
+     OR EXISTS (SELECT 1 FROM unnest(ARRAY['public.fn_ofertare_ocr_dezacord_arbitraj(bigint,bigint,text,text)', 'public.fn_ofertare_ocr_arbitraj_om(bigint,bigint,text,text)',
+                              'public.fn_ofertare_ocr_arbitraj_depasire(bigint,numeric,integer,integer,text)']) f
                  WHERE has_function_privilege('anon', f, 'EXECUTE') OR has_function_privilege('authenticated', f, 'EXECUTE')
                     OR NOT has_function_privilege('service_role', f, 'EXECUTE')) THEN
     RAISE EXCEPTION '20261029c: postconditie executie';
   END IF;
   IF has_any_column_privilege('service_role', 'public.ofertare_ocr_rezervari', 'SELECT') OR has_any_column_privilege('authenticated', 'public.ofertare_ocr_rezervari', 'INSERT')
-     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 22 THEN
+     OR (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 23 THEN
     RAISE EXCEPTION '20261029c: postconditie obiecte';
   END IF;
   v_fp := public.fn_ofertare_ocr_amprenta();
