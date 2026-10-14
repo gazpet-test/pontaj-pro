@@ -3,7 +3,16 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./lib/supabase.js', () => ({ supabase: {} }))
-import OcrLocalSection, { eroarePlafon, documenteCandidate, textConfirmare, FEREASTRA_GPU, PLAFON_MAX, STARE_RULARE } from './OfertareOcrLocal.jsx'
+import OcrLocalSection, { eroarePlafon, documenteCandidate, textConfirmare, bugetRamas, FEREASTRA_GPU, PLAFON_MAX, MAX_DOCUMENTE, STARE_RULARE } from './OfertareOcrLocal.jsx'
+
+describe('OCR local — limitele RPC-ului și bugetul (review PR #702)', () => {
+  it('cel mult 50 de documente într-o cerere, ca fn_ofertare_ocr_cerere', () => expect(MAX_DOCUMENTE).toBe(50))
+  it('bugetul rămas scade și abandonatul și rezervatul, ca în BD; nu coboară sub 0', () => {
+    expect(bugetRamas({ plafon_usd: 15, cost_usd: 0, cost_rezervat: 0, cost_abandonat: 15 })).toBe(0)
+    expect(bugetRamas({ plafon_usd: 15, cost_usd: '1.2500', cost_rezervat: '0.0500', cost_abandonat: '0.2000' })).toBeCloseTo(13.5)
+    expect(bugetRamas({ plafon_usd: 1, cost_usd: 2 })).toBe(0)
+  })
+})
 
 describe('OCR local — plafonul, exact regula din fn_ofertare_ocr_cerere', () => {
   it('acceptă (0, 15] cu cel mult 2 zecimale, inclusiv virgula', () => {

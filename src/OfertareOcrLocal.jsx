@@ -12,7 +12,7 @@
 // Nimic nu pornește singur: serverul AI preia rularea doar când omul rulează `python -m ocr_local erp preia`, în fereastra GPU
 // (22:00–06:00), după „da pornire” al lui Răzvan. Promovarea textului în ofertă e separată (audit + „da promovare”).
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 
 const G = {
@@ -29,6 +29,10 @@ const S = {
 }
 export const FEREASTRA_GPU = '22:00–06:00'
 export const PLAFON_MAX = 15
+export const MAX_DOCUMENTE = 50   // limita din fn_ofertare_ocr_cerere (cardinality ≤ 50)
+// Bugetul rămas al unei rulări, exact ca în BD: plafon − (decontat + rezervat + abandonat). Abandonatul nu e cost decontat,
+// dar consumă plafonul (review PR #702 Jakarinos P2).
+export const bugetRamas = r => Math.max(0, (Number(r?.plafon_usd) || 0) - (Number(r?.cost_usd) || 0) - (Number(r?.cost_rezervat) || 0) - (Number(r?.cost_abandonat) || 0))
 export const STARE_RULARE = {
   ceruta:     ['⏳ cerută — așteaptă serverul AI', G.yellow],
   preluata:   ['🖥️ preluată — citire locală', G.blue],
@@ -65,27 +69,31 @@ export const textConfirmare = (plafon, nrDoc, nrPag) =>
   `${nrDoc} document(e), ${nrPag} pagini necitite. Citirea pe serverul AI se face în fereastra GPU ${FEREASTRA_GPU}; ` +
   `nimic nu intră în ofertă fără audit.\n\nContinui?`
 
-export default function OcrLocalSection({ licitatieId, profile, showToast }) {
-  const [drept, setDrept] = useState(null)           // { licId, permis }
+export default function OcrLocalSection({ licitatieId, profile, showToast, reloadKey = 0 }) {
+  const [drept, setDrept] = useState(null)           // { licId, permis } | { licId, eroare }
+  const [dreptTry, setDreptTry] = useState(0)
   const [docs, setDocs] = useState(null)
   const [sel, setSel] = useState({})                 // document_id → true
   const [plafon, setPlafon] = useState(String(PLAFON_MAX))
   const [rulari, setRulari] = useState([])
   const [busy, setBusy] = useState(false)
   const [eroare, setEroare] = useState(null)
+  const gen = useRef(0)                              // doar ultima încărcare își aplică rezultatul (review PR #702 Copilot P2)
   const toast = (m, t) => (showToast ? showToast(m, t) : null)
 
+  // Dreptul de decizie: încărcare / refuz / EROARE TEHNICĂ afișate distinct (review PR #702 P2); fail-closed: doar true deschide.
   useEffect(() => {
     let activ = true; setDrept(null)
     if (licitatieId && profile?.id) supabase.rpc('fn_ofertare_source_pack_poate_decide', { p_licitatie_id: licitatieId })
-      .then(({ data, error }) => { if (activ && !error) setDrept({ licId: licitatieId, permis: data === true }) })
-      .catch(() => {})
+      .then(({ data, error }) => { if (activ) setDrept(error ? { licId: licitatieId, eroare: error.message || 'eroare' } : { licId: licitatieId, permis: data === true }) })
+      .catch(e => { if (activ) setDrept({ licId: licitatieId, eroare: e?.message || 'eroare de rețea' }) })
     return () => { activ = false }
-  }, [licitatieId, profile?.id])
+  }, [licitatieId, profile?.id, dreptTry])
   const poateDecide = drept?.licId === licitatieId && drept?.permis === true
 
   const incarca = useCallback(async () => {
     if (!licitatieId) return
+    const g = ++gen.current
     setEroare(null)
     const [d, r] = await Promise.all([
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, pagini, pagini_necitite, lot_stare')
@@ -93,33 +101,47 @@ export default function OcrLocalSection({ licitatieId, profile, showToast }) {
       supabase.from('ofertare_ocr_rulari').select('id, stare, plafon_usd, cost_usd, cost_rezervat, cost_abandonat, pornit_la, preluata_la, terminata_la, oprit_motiv, documente')
         .eq('licitatie_id', licitatieId).order('id', { ascending: false }).limit(5),
     ])
+    if (g !== gen.current) return
     if (d.error || r.error) { setEroare((d.error || r.error).message); setDocs([]); return }
-    // eligibilitatea, paginat (licitațiile mari au sute de documente)
-    const elig = []
+    // eligibilitatea, paginat (licitațiile mari au sute de documente); o eroare = documentele rămân neeligibile (fail-closed)
+    const elig = []; let errElig = null
     for (let a = 0; ; a += 1000) {
       const { data, error } = await supabase.rpc('fn_ofertare_eligibilitate', { p_licitatie_id: licitatieId }).order('document_id').range(a, a + 999)
-      if (error) { setEroare(error.message); break }
+      if (error) { errElig = error.message; break }
       elig.push(...(data || [])); if (!data || data.length < 1000) break
     }
-    const cand = documenteCandidate(d.data, elig)
-    setDocs(cand); setRulari(r.data || [])
-    setSel(s => Object.keys(s).length ? s : Object.fromEntries(cand.filter(x => x.eligibil).map(x => [x.id, true])))
+    if (g !== gen.current) return
+    const cand = documenteCandidate(d.data, errElig ? [] : elig)
+    setDocs(cand); setRulari(r.data || []); if (errElig) setEroare('Eligibilitate: ' + errElig)
+    // bifele: doar documentele încă eligibile; implicit toate eligibile (cel mult limita RPC-ului)
+    setSel(s => {
+      const elg = new Set(cand.filter(x => x.eligibil).map(x => x.id))
+      const pastrate = Object.fromEntries(Object.entries(s).filter(([k, v]) => v && elg.has(Number(k))))
+      return Object.keys(pastrate).length ? pastrate : Object.fromEntries([...elg].slice(0, MAX_DOCUMENTE).map(id => [id, true]))
+    })
   }, [licitatieId])
-  useEffect(() => { incarca() }, [incarca])
+  useEffect(() => { incarca() }, [incarca, reloadKey])
+  // stare schimbată din alt tab (cerere / anulare / serverul AI): reîncărcare la revenirea în fereastră (review PR #702 Jakarinos P2)
+  useEffect(() => {
+    const f = () => { if (document.visibilityState === 'visible') incarca() }
+    document.addEventListener('visibilitychange', f); window.addEventListener('focus', f)
+    return () => { document.removeEventListener('visibilitychange', f); window.removeEventListener('focus', f) }
+  }, [incarca])
 
   const activa = rulari.find(x => ACTIVE.includes(x.stare))
   const alese = (docs || []).filter(d => d.eligibil && sel[d.id])
   const nrPag = alese.reduce((a, d) => a + d.nrPagini, 0)
   const errPlafon = eroarePlafon(plafon)
+  const prea = alese.length > MAX_DOCUMENTE
 
   const porneste = async () => {
-    if (busy || !poateDecide || activa || !alese.length || errPlafon) return
+    if (busy || !poateDecide || activa || !alese.length || errPlafon || prea) return
     const p = Number(String(plafon).trim().replace(',', '.'))
     if (!window.confirm(textConfirmare(p.toFixed(2), alese.length, nrPag))) return
     setBusy(true)
     const { data, error } = await supabase.rpc('fn_ofertare_ocr_cerere', { p_licitatie_id: licitatieId, p_document_ids: alese.map(d => d.id), p_plafon_usd: p })
     setBusy(false)
-    if (error) { setEroare(error.message); toast('OCR local: ' + error.message, 'err'); return }
+    if (error) { toast('OCR local: ' + error.message, 'err'); await incarca(); setEroare(error.message); return }  // starea se reîncarcă (alt tab, server)
     toast(`OCR local cerut: rularea #${data?.rulare_id} (plafon ${p.toFixed(2)} USD)`, 'ok'); incarca()
   }
   const anuleaza = async (r) => {
@@ -127,7 +149,7 @@ export default function OcrLocalSection({ licitatieId, profile, showToast }) {
     setBusy(true)
     const { error } = await supabase.rpc('fn_ofertare_ocr_anuleaza', { p_rulare_id: r.id })
     setBusy(false)
-    if (error) { setEroare(error.message); toast('Anulare: ' + error.message, 'err'); return }
+    if (error) { toast('Anulare: ' + error.message, 'err'); await incarca(); setEroare(error.message); return }
     toast(`Rularea #${r.id} anulată`, 'ok'); incarca()
   }
 
@@ -137,7 +159,9 @@ export default function OcrLocalSection({ licitatieId, profile, showToast }) {
         <div style={{ fontSize:14, fontWeight:700, color:G.text }}>🖨️ OCR local — paginile necitite</div>
         <span style={S.badge(G.ofertare)}>pilot</span>
         <span style={{ fontSize:11.5, color:G.muted }}>LightOn + MinerU pe serverul AI · Claude doar pe dezacorduri · fereastra GPU {FEREASTRA_GPU}</span>
+        <button style={{ ...S.btn, marginLeft:'auto' }} disabled={busy} onClick={() => { setDreptTry(k => k + 1); incarca() }} title="Reîncarcă starea (alt tab, serverul AI)">↻ Reîmprospătează</button>
       </div>
+      {drept?.licId === licitatieId && drept?.eroare && <div style={{ marginTop:8, fontSize:12, color:G.red }}>⚠️ Dreptul de pornire nu s-a putut verifica: {drept.eroare} — butonul rămâne ascuns; „↻ Reîmprospătează” reîncearcă.</div>}
       {eroare && <div style={{ marginTop:8, fontSize:12, color:G.red }}>⚠️ {eroare}</div>}
 
       {rulari.length > 0 && (
@@ -149,7 +173,7 @@ export default function OcrLocalSection({ licitatieId, profile, showToast }) {
               <div key={r.id} style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', fontSize:12, color:G.text, background:G.surface, border:`1px solid ${G.border2}`, borderRadius:8, padding:'7px 10px' }}>
                 <b>#{r.id}</b><span style={S.badge(c)}>{et}</span>
                 <span style={{ color:G.muted }}>{(r.documente || []).length} doc · {pag} pag</span>
-                <span style={{ color:G.muted }}>cost {usd(r.cost_usd)} / plafon {usd(r.plafon_usd)} USD{Number(r.cost_rezervat) > 0 ? ` (rezervat ${usd(r.cost_rezervat)})` : ''}</span>
+                <span style={{ color:G.muted }}>cost {usd(r.cost_usd)} / plafon {usd(r.plafon_usd)} USD{Number(r.cost_rezervat) > 0 ? ` · rezervat ${usd(r.cost_rezervat)}` : ''}{Number(r.cost_abandonat) > 0 ? ` · abandonat ${usd(r.cost_abandonat)}` : ''} · rămas {usd(bugetRamas(r))}</span>
                 <span style={{ color:G.dim }}>cerută {fmtData(r.pornit_la)}{r.terminata_la ? ` · încheiată ${fmtData(r.terminata_la)}` : ''}</span>
                 {r.oprit_motiv && <span style={{ color:G.orange }}>— {r.oprit_motiv}</span>}
                 {poateDecide && ACTIVE.includes(r.stare) && <button style={{ ...S.btn, marginLeft:'auto', color:G.red, borderColor:G.red + '66' }} disabled={busy} onClick={() => anuleaza(r)}>Anulează</button>}
@@ -176,7 +200,9 @@ export default function OcrLocalSection({ licitatieId, profile, showToast }) {
           </div>
 
           {!poateDecide ? (
-            <div style={{ marginTop:10, fontSize:11.5, color:G.muted }}>Pornirea o poate face doar owner-ul, responsabilul licitației sau un admin Ofertare.</div>
+            drept?.licId !== licitatieId ? <div style={{ marginTop:10, fontSize:11.5, color:G.muted }}>Se verifică dreptul de pornire…</div>
+            : drept?.eroare ? null  // eroarea tehnică e afișată sus, cu reîncercare
+            : <div style={{ marginTop:10, fontSize:11.5, color:G.muted }}>Pornirea o poate face doar owner-ul, responsabilul licitației sau un admin Ofertare.</div>
           ) : activa ? (
             <div style={{ marginTop:10, fontSize:11.5, color:G.muted }}>Există deja o rulare activă (#{activa.id}) — o nouă cerere după ce se încheie sau după anulare.</div>
           ) : (
@@ -184,10 +210,11 @@ export default function OcrLocalSection({ licitatieId, profile, showToast }) {
               <label style={{ fontSize:12, color:G.muted }}>Plafon (USD)
                 <input style={{ ...S.input, width:80, marginLeft:6 }} value={plafon} onChange={e => setPlafon(e.target.value)} inputMode="decimal" />
               </label>
-              <button style={{ ...S.btnP, opacity: (busy || !alese.length || errPlafon) ? 0.5 : 1 }} disabled={busy || !alese.length || !!errPlafon} onClick={porneste}>
+              <button style={{ ...S.btnP, opacity: (busy || !alese.length || errPlafon || prea) ? 0.5 : 1 }} disabled={busy || !alese.length || !!errPlafon || prea} onClick={porneste}>
                 {busy ? 'Se trimite…' : `🖨️ Pornește OCR local (${alese.length} doc · ${nrPag} pag)`}
               </button>
               {errPlafon && <span style={{ fontSize:11.5, color:G.orange }}>{errPlafon}</span>}
+              {prea && <span style={{ fontSize:11.5, color:G.orange }}>Cel mult {MAX_DOCUMENTE} documente într-o rulare (ai bifat {alese.length}) — debifează sau împarte în mai multe rulări.</span>}
               <span style={{ fontSize:11, color:G.dim, flexBasis:'100%' }}>
                 Procesare plătită doar pe dezacorduri (arbitraj Claude), oprită automat la plafon. Serverul AI o preia în fereastra GPU {FEREASTRA_GPU}; textul nu intră în ofertă fără audit.
               </span>

@@ -3642,6 +3642,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   // vadă și în „Acoperirea cerințelor" — altfel omul bifa sus și căuta manual, jos, același
   // număr de ordine. Se golește când schimbi licitația.
   const [selCerinte, setSelCerinte] = useState([])
+  const [ocrReload, setOcrReload] = useState(0)   // OCR local: eligibilitatea se schimbă din Loturi → reîncarcă secțiunea OCR
   const [packImportKey, setPackImportKey] = useState(0)   // P0c: după import din Source Pack, registrul se reîncarcă
   useEffect(() => { setSelCerinte([]) }, [l.id])
   const [clar, setClar] = useState(null)
@@ -3798,9 +3799,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             {tab === 'formulare' && <FormulareRegistruSection licitatie={l} profile={profile} showToast={showToast} />}
             {tab === 'documente' && <><OfertareTipareDeclansate licitatie={l} showToast={showToast} onCreat={() => setTab('clarificari')} /><DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
               intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} onGoLoturi={() => setTab('loturi')} /></>}
-            {tab === 'loturi' && <OfertareLoturi licitatieId={l.id} onSchimbare={onChanged} />}
+            {tab === 'loturi' && <OfertareLoturi licitatieId={l.id} onSchimbare={() => { setOcrReload(k => k + 1); onChanged?.() }} />}
             {/* Pilotul OCR local (14.10.2026): paginile necitite ale documentelor ELIGIBILE (poarta pe loturi de mai sus) */}
-            {tab === 'loturi' && <OcrLocalSection key={l.id} licitatieId={l.id} profile={profile} showToast={showToast} />}
+            {tab === 'loturi' && <OcrLocalSection key={l.id} licitatieId={l.id} profile={profile} showToast={showToast} reloadKey={ocrReload} />}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
