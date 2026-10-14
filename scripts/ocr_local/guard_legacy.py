@@ -6,13 +6,17 @@ import re, collections
 # (repeated_table_row, pe textul BRUT: vederea filtrata comaseaza celulele goale peste granitele de rand).
 CELL_LINE = re.compile(r'<td\b', re.I)
 ROW = re.compile(r'<tr\b[^>]*>(.*?)</tr\s*>', re.I | re.S)
+GAP_OTHER = re.compile(r'\s+|</?(?:thead|tbody|tfoot)\b[^>]*>', re.I)
 def repeated_table_row(text, times=4, min_content=20):
     """Acelasi rand <tr>...</tr> intreg (cu continut) de `times` ori LA RAND; delimitatorii pot sta oriunde pe linie,
     spatierea si indentarea nu conteaza. Nu „oriunde”: randurile de subtotal din devize sau straturile din fisele de
     foraj se repeta legitim, intercalate (corpus Codex: 71 de alarme false cu „oriunde”)."""
-    prev, run = None, 0
+    prev, run, end = None, 0, None
     for m in ROW.finditer(text):
         row = re.sub(r'\s*(<[^>]*>)\s*', r'\1', re.sub(r'\s+', ' ', m[1].lower())).strip()
+        # „la rand” = in acelasi tabel: intre doua randuri doar spatii sau <thead>/<tbody>/<tfoot>; alt tabel / text rupe sirul
+        if end is not None and GAP_OTHER.sub('', text[end:m.start()]): prev, run = None, 0
+        end = m.end()
         if len(re.sub(r'<[^>]*>|\s', '', row)) < min_content: prev, run = None, 0; continue  # randuri goale / doar structura
         run = run + 1 if row == prev else 1; prev = row
         if run >= times: return 'Repeated table row (4 times in a row)'

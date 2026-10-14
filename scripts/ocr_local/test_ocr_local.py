@@ -1,5 +1,5 @@
 """Teste CPU, fara endpoint real: python -m unittest ocr_local.test_ocr_local -v (PYTHONPATH=scripts)."""
-import hashlib, json, os, pathlib, re, shutil, tempfile, unittest
+import hashlib, json, os, pathlib, re, shutil, tempfile, time, unittest
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 from .geometry import classify, orientation, text_bands
@@ -93,6 +93,11 @@ class GardaLinii(unittest.TestCase):
         # randuri goale identice (fara continut) nu sunt bucla pe aceasta regula
         self.assertIsNone(repeated_table_row('\n'.join(['<tr>', '<td></td>', '<td>-</td>', '</tr>'] * 6)))
         self.assertIsNone(repeated_table_row(garda_fix('d772_p0255_b0_lighton.txt')))
+        # Copilot r4: acelasi subtotal in 4 tabele separate (sau separat de text) nu e „la rand”
+        sub = '<tr><td>Total articol</td><td>sp.mat 0,00</td><td>sp.man 0,00</td></tr>'
+        self.assertIsNone(repeated_table_row('\n'.join('<table>\n%s\n</table>\nArticolul %d' % (sub, i) for i in range(4))))
+        self.assertIsNone(repeated_table_row('<table>' + ''.join('<tbody>%s</tbody>\ntext intre\n' % sub for _ in range(4)) + '</table>'))
+        self.assertIsNotNone(repeated_table_row('<table><thead>' + sub + '</thead><tbody>' + sub * 3 + '</tbody></table>'))  # acelasi tabel
     def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
         self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')
@@ -289,16 +294,31 @@ class Citire(unittest.TestCase):
                  patch('ocr_local.read.protocol', return_value=dict(RD.protocol(), gpu_lock=str(lock))):
                 st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False)
             self.assertEqual((st['status'], len(calls)), ('stopped_no_retry', 1)); self.assertTrue(lock.exists())
+    def _metrics_srv(self, body, drip=False):
+        import http.server, threading
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                self.send_response(200)
+                if drip:  # raspuns fara sfarsit: cate un octet, periodic (review r4 Jakarinos P2)
+                    self.end_headers()
+                    try:
+                        for _ in range(2000): self.wfile.write(b'#'); self.wfile.flush(); time.sleep(0.01)
+                    except OSError: pass
+                    return
+                self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        return dict(RD.protocol()['readers']['lighton'], endpoint='http://127.0.0.1:%d' % srv.server_address[1])
     def test_backend_idle_citeste_metrics(self):
-        cfg = RD.protocol()['readers']['lighton']
-        with patch('ocr_local.read.http.client.HTTPConnection') as C:
-            C.return_value.getresponse.return_value.status = 200
-            C.return_value.getresponse.return_value.read.return_value = b'# HELP x\nvllm:num_requests_running{m="a"} 1.0\nvllm:num_requests_waiting{m="a"} 0.0\n'
-            self.assertFalse(RD.backend_idle(cfg, timeout=0))
-            C.return_value.getresponse.return_value.read.return_value = b'vllm:num_requests_running{m="a"} 0.0\nvllm:num_requests_waiting{m="a"} 0.0\n'
-            self.assertTrue(RD.backend_idle(cfg, timeout=0))
-            C.return_value.getresponse.return_value.read.return_value = b'alt_metric 0\n'  # fara metricile vLLM = neconfirmat
-            self.assertFalse(RD.backend_idle(cfg, timeout=0))
+        ocupat = self._metrics_srv(b'# HELP x\nvllm:num_requests_running{m="a"} 1.0\nvllm:num_requests_waiting{m="a"} 0.0\n')
+        self.assertFalse(RD.backend_idle(ocupat, timeout=0.3, poll=0.05))
+        liber = self._metrics_srv(b'vllm:num_requests_running{m="a"} 0.0\nvllm:num_requests_waiting{m="a"} 0.0\n')
+        self.assertTrue(RD.backend_idle(liber, timeout=2))
+        self.assertFalse(RD.backend_idle(self._metrics_srv(b'alt_metric 0\n'), timeout=0.3, poll=0.05))  # fara metricile vLLM = neconfirmat
+    def test_backend_idle_termen_absolut_si_pe_citire(self):
+        t0 = time.monotonic(); self.assertFalse(RD.backend_idle(self._metrics_srv(b'', drip=True), timeout=0.5, poll=0.05))
+        self.assertLess(time.monotonic() - t0, 2.0)
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []

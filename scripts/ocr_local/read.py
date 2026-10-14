@@ -160,10 +160,19 @@ def backend_idle(cfg, timeout=30.0, poll=0.5):
     host, port = endpoint_parts(cfg['endpoint']); end = time.monotonic() + timeout
     while True:
         try:
-            conn = http.client.HTTPConnection(host, port, timeout=5)
+            # termen ABSOLUT si pe citire (review r4 Jakarinos P2): un raspuns lent / fara sfarsit nu tine rularea peste `timeout`
+            conn = http.client.HTTPConnection(host, port, timeout=max(0.1, min(5.0, end - time.monotonic())))
             try:
-                conn.request('GET', '/metrics'); r = conn.getresponse(); body = r.read().decode('utf-8', 'replace') if r.status == 200 else ''
+                conn.request('GET', '/metrics'); r = conn.getresponse(); chunks = []; size = 0
+                while r.status == 200:
+                    if time.monotonic() > end: raise TimeoutError('metrics peste termen')
+                    c = r.read1(65536) if hasattr(r, 'read1') else r.read(65536)
+                    if not c: break
+                    size += len(c); chunks.append(c)
+                    if size > 4 << 20: raise ValueError('metrics prea mari')
+                body = b''.join(chunks).decode('utf-8', 'replace')
             finally: conn.close()
+            if time.monotonic() > end: return False  # acceptat doar in termen
             vals = {}
             for line in body.splitlines():
                 for k in ('vllm:num_requests_running', 'vllm:num_requests_waiting'):
