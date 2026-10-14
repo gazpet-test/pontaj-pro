@@ -52,6 +52,7 @@ def apply_band(raw_a, raw_b, items, decisions):
         it = items[0]; d = decisions.get(it['id'])
         if d is None or d['decizie'] == 'needs_human': return None, True
         return render(segments(chosen(it, d))), False
+    original = sa
     if any(i.get('semnal') == 'structura_diferita' for i in items) or ((sum(s[0] == 'table' for s in sa) > 0) != (sum(s[0] == 'table' for s in sb) > 0)):
         sa = flat_text(sa)
     needs = False
@@ -67,7 +68,7 @@ def apply_band(raw_a, raw_b, items, decisions):
         if any(ta[k][2] is None for k in range(a1, min(a2, len(ta)))) or (a1 < len(ta) and ta[a1][2] is None): needs = True; continue
         if a1 < a2: si, start = ta[a1][1], ta[a1][2]; end = ta[a2 - 1][3]
         elif a1 < len(ta): si, start = ta[a1][1], ta[a1][2]; end = start; new = new + ' '
-        elif ta: si, start = ta[-1][1], ta[-1][3]; end = start; new = ' ' + new
+        elif ta and ta[-1][3] is not None: si, start = ta[-1][1], ta[-1][3]; end = start; new = ' ' + new
         else: needs = True; continue
         if a1 < a2 and ta[a2 - 1][1] != si: needs = True; continue  # dezacord peste doua segmente - nu se coase automat
         edits.setdefault(si, []).append((start, end, new))
@@ -109,6 +110,8 @@ def apply_band(raw_a, raw_b, items, decisions):
             if (si, ri) not in drop: new_rows.append(rows.get((si, ri), r))
             new_rows += add.get((si, ri), [])
         segs[si][1] = new_rows
+    if sa is not original and not edits and not drop and not add and all(rows.get((si, ri)) == r for si, ri, r in table_rows(sa)):
+        return render(original), needs  # nicio schimbare aleasa: structura LightOn ramane cum a citit-o
     return render([tuple(s) for s in segs]), needs
 
 def join_bands(texts, signals, min_tokens=8, max_lines=3):

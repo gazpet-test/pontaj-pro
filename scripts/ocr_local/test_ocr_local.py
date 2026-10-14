@@ -264,6 +264,23 @@ class Comparare(unittest.TestCase):
     def test_bara_escapata_in_markdown(self):
         md = '| A | otel \\| PE | m | 5 |'
         self.assertEqual(segments(md)[0][1], [['A', 'otel | PE', 'm', '5']])
+    def test_copilot_r4_structura_si_diez(self):
+        s, its = compare_band(BAND, '<table><tr><td>COD</td><td>mc</td><td>5</td></tr></table>', OK, 'COD mc 5', OK)
+        self.assertEqual(its[0]['tip'], 'structura_tabele'); self.assertTrue(its[0]['e_cantitate'])
+        for x, y in (('#12 conducta', '12 conducta'), ('##ABC', 'ABC')):
+            s, its = compare_band(BAND, x, OK, y, OK); self.assertGreaterEqual(len(its), 1, (x, y))
+        s, its = compare_band(BAND, '# Titlu', OK, 'Titlu', OK); self.assertEqual(its, [])
+    def test_um_diferita_pe_pagina_de_cantitati_e_cantitate(self):
+        s, its = compare_band(BAND, TABLE_A, OK, TABLE_A.replace('100mc', 'kg'), OK); self.assertTrue(its[0]['e_cantitate'])
+    def test_jakarinos_r4_geometrie_caption_tag_exponent(self):
+        s, its = compare_band(BAND, '<table><tr><td colspan="2">Teava</td><td>5</td></tr></table>', OK,
+                              '<table><tr><td>Teava</td><td colspan="2">5</td></tr></table>', OK); self.assertEqual(len(its), 1)
+        s, its = compare_band(BAND, '<table><tr><td colspan="2">Teava</td></tr></table>', OK, '<table><tr><td>Teava</td><td></td></tr></table>', OK)
+        self.assertEqual(its, [])  # colspan = celule goale la celalalt cititor: aceeasi grila
+        tab = lambda c: '<table><caption>%s</caption><tr><td>1.</td><td>A</td><td>5</td></tr></table>' % c
+        s, its = compare_band(BAND, tab('Tronson A'), OK, tab('Tronson B'), OK); self.assertGreaterEqual(len(its), 1)
+        s, its = compare_band(BAND, 'x<b si z>3', OK, 'x 3', OK); self.assertGreaterEqual(len(its), 1)
+        s, its = compare_band(BAND, 'x<sup>2+3</sup>', OK, 'x<sup>2</sup>+3', OK); self.assertGreaterEqual(len(its), 1)
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -380,6 +397,12 @@ class Reconciliere(unittest.TestCase):
         tab = '<table><tr><td>1.</td><td>A</td></tr></table>'
         r, items, out = self._run('Titlu A' + tab + 'Titlu B', 'Titlu A Titlu B' + tab, [self.dec('ales_mineru')])
         self.assertTrue(r['pages'][0]['needs_human'])
+    def test_insert_dupa_ultimul_tabel_needs_human_fara_exceptie(self):
+        tab = '<table><tr><td>1.</td><td>A</td></tr></table>'
+        r, items, out = self._run(tab, tab + 'final', [self.dec('ales_mineru')]); self.assertTrue(r['pages'][0]['needs_human'])
+    def test_structura_diferita_ales_lighton_pastreaza_tabelul(self):
+        r, items, out = self._run('<table><tr><td>COD</td><td>mc</td><td>5</td></tr></table>', 'COD mc 5', [self.dec('ales_lighton')])
+        self.assertFalse(r['pages'][0]['needs_human']); self.assertEqual(r['pages'][0]['text'], '| COD | mc | 5 |')
     def test_validare_schema(self):
         v = lambda d: valid_decision(d, None, POLICY)
         self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))

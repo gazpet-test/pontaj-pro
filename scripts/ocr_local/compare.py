@@ -14,13 +14,15 @@ TOKEN = re.compile(NUM + r'|[^\W\d_]+|\S', re.U)  # semnele si comparatorii sunt
 NUMBER = re.compile('^' + NUM + '$')
 BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu lipit de cifre/litere: 10**2 + 3**2 ramane
 SUPSUB = re.compile(r'<(sup|sub)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)  # exponent/indice = semantica: devin ^x / _x, nu dispar
-def supsub(s): return SUPSUB.sub(lambda m: ('^' if m.group(1).lower() == 'sup' else '_') + m.group(2), s)
+def supsub(s): return SUPSUB.sub(lambda m: ('^{' if m.group(1).lower() == 'sup' else '_{') + m.group(2) + '}', s)  # x^{2+3} != x^{2}+3
 # doar etichete HTML dintr-o lista inchisa, cu atribute bine formate: 'x<y si z>3' sau 'x < 5 si y > 3' raman text (review Jakarinos r3)
 TAG = re.compile(r'</?(?:p|br|hr|h[1-6]|div|span|b|strong|em|i|u|s|small|big|font|center|li|ul|ol|dl|dt|dd|thead|tbody|tfoot|tr|td|th|table|caption|colgroup|col|section|article|header|footer|blockquote|pre|code|a|img)'
-                 r'(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s"\'<>=`]+))?)*\s*/?>', re.I)
+                 r'(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|\'[^\']*\'))*\s*/?>', re.I)
 TABLE_HTML = re.compile(r'<table\b.*?</table\s*>', re.I | re.S)
 ROW_HTML = re.compile(r'<tr\b.*?</tr\s*>', re.I | re.S)
-CELL_HTML = re.compile(r'<t[dh]\b[^>]*>(.*?)</t[dh]\s*>', re.I | re.S)
+CELL_HTML = re.compile(r'<t[dh]\b([^>]*)>(.*?)</t[dh]\s*>', re.I | re.S)
+SPAN = re.compile(r'\b(colspan|rowspan)\s*=\s*["\']?(\d+)', re.I)
+CAPTION = re.compile(r'<caption\b[^>]*>(.*?)</caption\s*>', re.I | re.S)
 MD_SEP = re.compile(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$')
 CONTEXT = 6
 
@@ -33,7 +35,18 @@ def clean_inline(s):
     return re.sub(r'\s+', ' ', s).strip()
 
 def html_rows(table):
-    return [[clean_inline(c) for c in CELL_HTML.findall(r)] for r in ROW_HTML.findall(table)]
+    """Geometria celulelor se pastreaza (review Jakarinos r4): colspan=N -> celula + N-1 celule goale (aceeasi grila ca LightOn,
+    care scrie celulele unite ca goale); rowspan=N -> marcaj vizibil in celula, comparat ca text (nu se poate dovedi echivalenta)."""
+    rows = []
+    for r in ROW_HTML.findall(table):
+        row = []
+        for attrs, body in CELL_HTML.findall(r):
+            spans = {k.lower(): int(v) for k, v in SPAN.findall(attrs)}
+            text = clean_inline(body)
+            if spans.get('rowspan', 1) > 1: text = (text + ' ⟦rowspan=%d⟧' % spans['rowspan']).strip()
+            row.append(text); row += [''] * (max(1, min(spans.get('colspan', 1), 50)) - 1)
+        rows.append(row)
+    return rows
 
 def md_rows(lines):
     rows = []
@@ -49,14 +62,16 @@ def md_rows(lines):
 def plain(s):
     s = re.sub(r'<br\s*/?>|</p\s*>|</h\d\s*>|</li\s*>|</div\s*>', '\n', s, flags=re.I)
     s = html.unescape(TAG.sub(' ', supsub(s)))
-    s = BOLD.sub(r'\1', re.sub(r'^\s*#{1,6}\s*', '', s, flags=re.M))
+    s = BOLD.sub(r'\1', re.sub(r'^[ \t]*#{1,6}(?:[ \t]+|$)', '', s, flags=re.M))  # doar titlu markdown real ('# Titlu'); '#12', '##ABC' raman
     return re.sub(r'[ \t]+', ' ', s).strip()
 
 def segments(raw):
     """Citirea -> secventa ordonata de segmente ('text', str) / ('table', [[celula]]). HTML si markdown, ambele."""
     out = []; pos = 0
     for m in TABLE_HTML.finditer(raw):
-        out += _md_split(raw[pos:m.start()]); out.append(('table', html_rows(m.group(0)))); pos = m.end()
+        out += _md_split(raw[pos:m.start()])
+        for cap in CAPTION.findall(m.group(0)): out.append(('text', clean_inline(cap)))  # titlul tabelului (tronsonul) se compara
+        out.append(('table', html_rows(CAPTION.sub(' ', m.group(0))))); pos = m.end()
     out += _md_split(raw[pos:])
     return [s for s in out if (s[0] == 'table' and s[1]) or (s[0] == 'text' and s[1].strip())]
 
@@ -222,12 +237,12 @@ def compare_tables(seg_a, seg_b, base):
             diff = [k for k in range(max(len(ca), len(cb))) if cell(ca, k) != cell(cb, k)]
             rl = roles(header, ca)
             has_digit = any(ch.isdigit() for x in ca + cb for ch in x)
-            e_cant = (len(ca) != len(cb) and has_digit) or rl.get('cantitate') in diff \
+            e_cant = base['kind'] == 'quantity_table' or (len(ca) != len(cb) and has_digit) or rl.get('cantitate') in diff \
                 or any(ch.isdigit() for k in diff for x in (ca[k] if k < len(ca) else '', cb[k] if k < len(cb) else '') for ch in x)
             triplet = len(ca) != len(cb) or any(rl.get(x) in diff for x in ('cod', 'um', 'cantitate'))
         else:
             tip = 'rand_lipsa_lighton' if a is None else 'rand_lipsa_mineru'; diff = None
-            rl = roles(header, ca or cb); e_cant = 'cantitate' in rl or any(ch.isdigit() for x in (ca or cb) for ch in x); triplet = True
+            rl = roles(header, ca or cb); e_cant = base['kind'] == 'quantity_table' or 'cantitate' in rl or any(ch.isdigit() for x in (ca or cb) for ch in x); triplet = True
             if a is None: anchor = safe_anchor(j)
         fa = ' | '.join(ca) if ca is not None else ''; fb = ' | '.join(cb) if cb is not None else ''
         prev = ra[i - 1][2] if i else None
@@ -254,7 +269,12 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
     if structura == 'diferita': sa, sb = flat_text(sa), flat_text(sb)
     ti, nt = compare_text(sa, sb, base); ri, nr = compare_tables(sa, sb, base)
     if structura == 'diferita':
-        for it in ti: it['semnal'] = 'structura_diferita'; it['e_cantitate'] = it['diferenta_numerica']
+        for it in ti: it['semnal'] = 'structura_diferita'; it['e_cantitate'] = it['e_cantitate'] or it['diferenta_numerica']
+        # tabel la un cititor, text la celalalt: dezacord explicit de structura, chiar daca textul aplatizat e identic (review Copilot r4)
+        ti.insert(0, dict(base, id='%s_structura' % band['id'], tip='structura_tabele',
+                          citire_lighton='%d tabele' % na, citire_mineru='%d tabele' % nb, pozitie={'lighton': None, 'mineru': None},
+                          diferenta_numerica=False, anomalie_separator=False, e_cantitate=True,
+                          motiv_pipeline='un cititor vede tabel, celalalt text'))
     return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri)}, ti + ri
 
 def canonical(it):

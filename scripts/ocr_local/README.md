@@ -95,6 +95,16 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 - În proba de mai jos toate benzile sunt rulate ca `quantity_table` (și cele de text), deci contorul `e_cantitate` din probă (76/84)
   e supraestimat față de o rulare reală.
 
+## După review-urile r4 (Copilot și Jakarinos, 14.10, fără P0)
+
+- Tabel la un cititor, text la celălalt → dezacord explicit `structura_tabele` (și când textul aplatizat e identic); cu `ales_lighton`
+  se păstrează structura LightOn.
+- `#` scos doar la titlu markdown real (`# Titlu`); `#12`, `##ABC` rămân. Exponent / indice grupate: `^{...}` / `_{...}`.
+- Geometria celulelor: `colspan=N` → celulă + N−1 celule goale (aceeași grilă ca LightOn); `rowspan` → marcaj vizibil comparat;
+  `<caption>` devine segment de text înaintea tabelului (tronsonul se compară). Etichete HTML doar cu atribute între ghilimele.
+- `e_cantitate` = orice dezacord pe pagini `quantity_table`, inclusiv rândurile de tabel și cazul structură diferită.
+- Inserare după un tabel final → `needs_human` (fără excepție).
+
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
 38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **84 de dezacorduri** (~2,2 pe bandă),
@@ -104,7 +114,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local -v` — 72 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local -v` — 77 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 
