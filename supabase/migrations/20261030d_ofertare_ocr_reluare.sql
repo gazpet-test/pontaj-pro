@@ -9,6 +9,8 @@
 --     deschisă, compararea încheiată, a mai rămas plafon, nicio altă rulare activă pe licitație, cel mult 3 reluări pe rulare.
 --     EXECUTE pentru NIMENI (nici service_role, nici edge): se rulează manual prin psql, cu „da”-ul lui Răzvan (poarta umană);
 --     pragul §8 din client rămâne activ după reluare (numără doar deciziile de după reluare).
+-- INVARIANT NOU (Copilot delta P2-1): pe o rulare care NU e oprita, oprit_motiv poate conține urma ultimei reluări
+-- („reluata #k (reluare_id N): <motivul opririi>”); autoritatea e `stare`, nu `oprit_motiv IS NOT NULL`.
 -- Nu atinge nicio tabelă / funcție existentă; re-ștampilează amprenta (revenirea lui e / c / b refuză cât d e aplicată).
 -- Revenire: supabase/revenire/20261030d_ofertare_ocr_reluare_ROLLBACK.sql.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid); fără BEGIN/COMMIT.

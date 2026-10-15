@@ -513,6 +513,9 @@ o="$(revenire_e || true)"; grep -q "amprenta difera\|postconditie revenire" <<<"
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLD" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire d nearmată: $o"; ok "refuz: revenire 20261030d nearmată"
 o="$(revenire_d || true)"; grep -q "jurnalul reluarilor are randuri" <<<"$o" || esec "revenire d cu istoric: $o"; ok "refuz: revenire 20261030d cu jurnal nevid"
 q "DELETE FROM public.ofertare_ocr_reluari" >/dev/null
+q "UPDATE public.ofertare_ocr_rulari SET oprit_motiv = 'reluata #3 (reluare_id 9): x' WHERE id = $R7" >/dev/null
+o="$(revenire_d || true)"; grep -q "urma reluarii in oprit_motiv" <<<"$o" || esec "revenire d cu urma reluarii: $o"; ok "refuz: revenire 20261030d cu urma reluării pe o rulare"
+q "UPDATE public.ofertare_ocr_rulari SET oprit_motiv = '$AUTO' WHERE id = $R7" >/dev/null
 revenire_d >/dev/null || { revenire_d; esec "revenire 20261030d"; }; ok "revenire 20261030d"
 asteapta "după revenirea d: amprenta b + c + e ștampilată, 25 de funcții, fără jurnal" \
   "$(q "SELECT obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class') LIKE 'Pilot OCR local (20261029b + 20261029c + 20261029e).%amprenta=' || public.fn_ofertare_ocr_amprenta()")|$(q "SELECT count(*) FROM pg_proc WHERE proname LIKE 'fn\_ofertare\_ocr\_%'")|$(q "SELECT to_regclass('public.ofertare_ocr_reluari') IS NULL")" "t|25|t"

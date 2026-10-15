@@ -49,6 +49,11 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.ofertare_ocr_reluari) THEN
     RAISE EXCEPTION '20261030d: jurnalul reluarilor are randuri (istoric) - exporta-l si goleste-l manual, cu review';
   END IF;
+  -- urma reluării din oprit_motiv („reluata #k (reluare_id N): …”) nu există în semantica b + c + e (Copilot delta P1-1): cât mai e
+  -- pe vreo rulare, revenirea refuză; se reconciliază manual (export + reformulare), cu review
+  IF EXISTS (SELECT 1 FROM public.ofertare_ocr_rulari WHERE oprit_motiv LIKE 'reluata #%') THEN
+    RAISE EXCEPTION '20261030d: rulari cu urma reluarii in oprit_motiv - reconciliaza-le manual (export + reformulare), cu review';
+  END IF;
   DROP FUNCTION public.fn_ofertare_ocr_reia(bigint, text);
   DROP TABLE public.ofertare_ocr_reluari;
 END $revenire$;
