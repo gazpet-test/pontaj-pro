@@ -126,13 +126,26 @@ def _md_split(chunk):
     if buf: out.append(('text', plain('\n'.join(buf))))
     return out
 
+# Varianta A (decizie Razvan 15.10.2026): comparatorul ramane LITERAL. Singura schimbare la tokeni: payload-ul base64 al unei imagini
+# inline (MinerU), strict in atributul src al marcajului ⟦img ...⟧ (atributele dinainte complete si intre ghilimele), devine UN token =
+# amprenta lui SHA-256. Fara pierdere: doua payload-uri diferite dau tokeni diferiti, deci nicio diferenta nu dispare; dispar doar
+# miile de tokeni base64 din alinierea difflib. Textul citit si pozitiile (sursa, reconcilierea) raman neatinse.
+# Granitele payload-ului sunt granite si in tokenizarea literala (fn_ofertare_ocr_granita, BD): dupa el vine '"' (token singur), iar
+# inceputul NU poate fi cifra (",9" / "64,9" ar fi un numar peste granita) - payload-urile care incep cu cifra raman tokenizate literal.
+B64_IMG = re.compile(r'⟦img (?:[A-Za-z][\w-]*="[^"]*" )*src="data:image/[A-Za-z0-9.+-]+;base64,([A-Za-z+/][A-Za-z0-9+/]*={0,2})"')
+
 def tokens(segs):
     """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere."""
     out = []
     for si, (kind, val) in enumerate(segs):
         # un tabel e un marcaj in fluxul de text: textul mutat de o parte pe alta a unui tabel devine dezacord (review Jakarinos r3)
         if kind != 'text': out.append((TABLE_MARK, si, None, None)); continue
-        for m in TOKEN.finditer(val): out.append((m.group(0), si, m.start(), m.end()))
+        pos = 0
+        for b in B64_IMG.finditer(val):
+            s, e = b.span(1)
+            out += [(m.group(0), si, pos + m.start(), pos + m.end()) for m in TOKEN.finditer(val[pos:s])]
+            out.append(('⟦b64 %s⟧' % hashlib.sha256(b.group(1).encode()).hexdigest(), si, s, e)); pos = e
+        out += [(m.group(0), si, pos + m.start(), pos + m.end()) for m in TOKEN.finditer(val[pos:])]
     return out
 
 def table_rows(segs):
@@ -153,6 +166,19 @@ def numeric_diff(a, b):
 
 def cell_key(c): return norm_word(re.sub(r'\s+', ' ', c.strip()))  # literal (doar spatiile si sedila unificate): AB-12C != AB12-C
 def row_key(r): return '␟'.join(cell_key(c) for c in r)
+
+REGULA_A = True  # comutator (teste, masuratori)
+
+def regula_a(ca, cb):
+    """Regula A (Razvan 15.10.2026, varianta A, gratuita, determinista): randul e acord automat DOAR daca e identic literal (cell_key,
+    celula cu celula, de la inceputul randului) dupa ce se scot celulele goale de la COADA randului la ambii cititori. LightOn scrie
+    celulele de dupa ultima valoare ca goale, MinerU nu (sau invers). Orice alta diferenta (spatii in celula, separator, celula
+    goala in interior, coloana mutata) ramane dezacord."""
+    def coada(r):
+        k = [cell_key(c) for c in r]
+        while k and not k[-1]: k.pop()
+        return k
+    return len(ca) != len(cb) and coada(ca) == coada(cb)
 
 def same_content(ca, cb):
     """LightOn scrie celulele unite ca celule goale, MinerU ca o singura celula (colspan). Acelasi continut nevid, in aceeasi
@@ -242,8 +268,9 @@ def match_rows(ra, rb):
         pairs += [(None, x, False) for x in range(j, b2)]
     return pairs
 
-def compare_tables(seg_a, seg_b, base):
+def compare_tables(seg_a, seg_b, base, acord_a=None):
     ra = table_rows(seg_a); rb = table_rows(seg_b); items = []
+    acord_a = [] if acord_a is None else acord_a  # randurile LightOn [segment, rand] acceptate prin regula A (raportate in sumar)
     rows_a = [r[2] for r in ra]
     pairs = match_rows(ra, rb)
     a2b = {i: j for i, j, _ in pairs if i is not None and j is not None}; b2a = {j: i for i, j in a2b.items()}
@@ -276,6 +303,7 @@ def compare_tables(seg_a, seg_b, base):
         anchor = None
         if a and b:
             if same_content(ca, cb): continue
+            if REGULA_A and regula_a(ca, cb): acord_a.append([a[0], a[1]]); continue
             tip = 'rand_tabel'
             cell = lambda r, k: norm_word(r[k]) if k < len(r) else None
             diff = [k for k in range(max(len(ca), len(cb))) if cell(ca, k) != cell(cb, k)]
@@ -311,7 +339,7 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
     na = sum(1 for s in sa if s[0] == 'table'); nb = sum(1 for s in sb if s[0] == 'table')
     structura = 'aceeasi' if (na > 0) == (nb > 0) else 'diferita'
     if structura == 'diferita': sa, sb = flat_text(sa), flat_text(sb)
-    ti, nt = compare_text(sa, sb, base); ri, nr = compare_tables(sa, sb, base)
+    acord_a = []; ti, nt = compare_text(sa, sb, base); ri, nr = compare_tables(sa, sb, base, acord_a)
     if structura == 'diferita':
         for it in ti: it['semnal'] = 'structura_diferita'; it['e_cantitate'] = it['e_cantitate'] or it['diferenta_numerica']
         # tabel la un cititor, text la celalalt: dezacord explicit de structura, chiar daca textul aplatizat e identic (review Copilot r4)
@@ -319,7 +347,8 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
                           citire_lighton='%d tabele' % na, citire_mineru='%d tabele' % nb, pozitie={'lighton': None, 'mineru': None},
                           diferenta_numerica=False, anomalie_separator=False, e_cantitate=True,
                           motiv_pipeline='un cititor vede tabel, celalalt text'))
-    return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri)}, ti + ri
+    return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri),
+            'acord_regula_a': acord_a}, ti + ri
 
 def canonical(it):
     return json.dumps({k: v for k, v in it.items() if k != 'item_sha256'}, ensure_ascii=False, sort_keys=True)

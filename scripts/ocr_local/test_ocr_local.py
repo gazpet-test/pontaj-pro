@@ -445,6 +445,47 @@ class Citire(unittest.TestCase):
                 st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False, lock=False)
             self.assertEqual(st['status'], 'stopped_no_retry'); self.assertEqual(len(calls), 1)
 
+class ComparareVariantaA(unittest.TestCase):
+    """Varianta A (Razvan 15.10.2026): comparator literal + regula A (celulele goale de la coada) + payload base64 = un token SHA-256."""
+    T = lambda self, *rows: '<table>' + ''.join('<tr>' + ''.join('<td>%s</td>' % c for c in r) + '</tr>' for r in rows) + '</table>'
+    def test_regula_a_doar_celule_goale_la_coada(self):
+        a = self.T(['1.4', 'Cheltuieli pentru relocarea utilitatilor', '', '', '']); b = self.T(['1.4', 'Cheltuieli pentru relocarea utilitatilor', ''])
+        s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(its, []); self.assertEqual(s['acord_regula_a'], [[0, 0]])
+        s, its = compare_band(BAND, self.T(['10.', 'CA02C1', 'Turnare', 'mc', '1,30', '']), OK, self.T(['10.', 'CA02C1', 'Turnare', 'mc', '1,30']), OK)
+        self.assertEqual(its, [])
+    def test_regula_a_nu_acopera_altceva(self):
+        for x, y in ((['A', '', '5'], ['A', '5']),                       # celula goala in interior: coloana mutata
+                     (['A', '5', ''], ['A', '', '5']),                   # valoarea mutata o coloana
+                     (['C30/37', '1,0 m', ''], ['C30/37', '1,0m']),      # spatiu in celula
+                     (['A', '0,056', ''], ['A', '0.056']),               # separator zecimal
+                     (['A', '5', ''], ['A', '7']),                       # cifra diferita
+                     (['', 'A', '5'], ['A', '5'])):                      # celula goala la INCEPUT
+            s, its = compare_band(BAND, self.T(x), OK, self.T(y), OK)
+            self.assertEqual(len(its), 1, (x, y)); self.assertEqual(s['acord_regula_a'], [], (x, y))
+        with patch('ocr_local.compare.REGULA_A', False):
+            s, its = compare_band(BAND, self.T(['A', '5', '']), OK, self.T(['A', '5']), OK); self.assertEqual(len(its), 1)
+    def test_base64_imagine_un_singur_token_fara_pierdere(self):
+        from .compare import tokens, TOKEN, B64_IMG
+        p = '/9j/4AAQSkZJRgABAQAAAQABAAD' + 'aBcD0123+/' * 300 + 'Q=='
+        img = lambda q: 'Schita <img src="data:image/jpeg;base64,%s"/> detaliu 5 m' % q
+        s, its = compare_band(dict(BAND, kind='continuous_text'), img(p), OK, img(p), OK); self.assertEqual(its, [])
+        segs = segments(img(p)); tk = tokens(segs)
+        self.assertEqual(sum(1 for t in tk if t[0].startswith('⟦b64 ')), 1)
+        self.assertLess(len(tk), 30)  # fara amprenta: ~1.500 de tokeni base64
+        # o diferenta oricat de mica in payload ramane dezacord
+        q = p[:500] + ('X' if p[500] != 'X' else 'Y') + p[501:]
+        s, its = compare_band(dict(BAND, kind='continuous_text'), img(p), OK, img(q), OK); self.assertEqual(len(its), 1)
+        # granitele amprentei sunt granite si in tokenizarea literala (cea refacuta in BD de fn_ofertare_ocr_granita)
+        val = segs[0][1]; lit = [(m.start(), m.end()) for m in TOKEN.finditer(val)]
+        granita = lambda i: not any(a < i < b for a, b in lit)
+        for t in tk:
+            if t[2] is not None: self.assertTrue(granita(t[2]) and granita(t[3]), t[0][:20])
+        # in afara formei stricte payload-ul ramane tokenizat literal: in alt, data-src, text simplu, payload care incepe cu cifra
+        for x in ('Schita <img alt="src=&quot;data:image/jpeg;base64,%s&quot;"/>' % p, 'Schita <img data-src="data:image/jpeg;base64,%s"/>' % p,
+                  'Schita src="data:image/jpeg;base64,%s"' % p, img('9' + p)):
+            self.assertFalse(any(t[0].startswith('⟦b64 ') for t in tokens(segments(x))), x[:50])
+        self.assertIsNotNone(B64_IMG.search(segments(img(p))[0][1]))
+
 class Comparare(unittest.TestCase):
     def test_separator_pe_cantitate_e_dezacord_marcat(self):
         s, its = compare_band(BAND, TABLE_A, OK, TABLE_B, OK)
