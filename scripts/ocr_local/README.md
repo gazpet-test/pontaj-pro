@@ -121,6 +121,21 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
   (`supabase/tests/ofertare_ocr_local_client_e2e.py`, rularea R8 din `scripts/test_ofertare_ocr_local.sh`, fără apel plătit).
   `plan.py` importă PIL doar în funcțiile care randează, ca `load_plan` / `compare` / `reconcile` / `client` să ruleze și fără PIL.
 
+## Reluarea după oprirea automată pe pragul §8 (20261030d, decizia A Razvan 15.10.2026)
+
+`oprita` e stare finală pentru client și edge. O rulare oprită AUTOMAT pe pragul de needs_human (motivul exact
+„needs_human pe N din M arbitraje Claude (> P%, spec §8)”) se poate relua, de cel mult 3 ori, doar așa:
+1. **omul**, cu „da”-ul lui Razvan, în psql (rolul postgres; funcția nu are EXECUTE pentru nimeni altcineva, nici pentru edge):
+   `SELECT public.fn_ofertare_ocr_reia(<rulare_id>, '<motiv, 10..300 caractere>');` — refuză dacă oprirea n-a fost cea automată,
+   dacă sunt rezervări deschise, plafonul e consumat, compararea nu e încheiată sau există altă rulare activă pe licitație;
+   scrie jurnalul `ofertare_ocr_reluari` (cine, când, de ce, costul și arbitrajele în acel moment), pune rularea în `citita` și lasă
+   urma `reluata #k (reluare_id N): <motivul opririi>` în `oprit_motiv` (singura dovadă pe care o acceptă clientul);
+2. pe server: `python -B -m ocr_local erp reluata <rulare_dir>` — confirmă din BD o reluare NOUĂ (urma cu un reluare_id nepreluat), mută marcajul local `oprita` în
+   `opriri_anterioare` (istoric) și fixează baza ferestrei: pragul §8 devine „prag pe epocă de reluare” — numără doar arbitrajele
+   de după reluare (semnalul vechi rămâne în istoric și în jurnal; necunoscutele vechi merg tot la om, fără apel); recuperează și
+   căderea dintre oprirea din BD și marcajul local;
+3. apoi pașii obișnuiți (`erp arbitreaza … [--max-apeluri N]`). O oprire cerută de om (`erp oprire`) NU se reia pe această cale.
+
 ## Comparatorul — varianta A (decizie Razvan 15.10.2026)
 
 După 5 runde Jakarinos NO-GO pe normalizări „fără context” (Š/Ș, Ø/∅, chenar, spații, separator), comparatorul rămâne **literal**

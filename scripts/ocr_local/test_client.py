@@ -47,7 +47,10 @@ class FakeEdge:
         self.arbitru = arbitru or (lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'ales_mineru', 'text': it['citire_mineru'],
                                                                  'motiv': 't', 'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5',
                                                                  'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}, 'arbitraj_id': 1}))
-        self.documente = [{'document_id': DOC, 'pagini': [1, 2]}]; self.om = set(); self.cade_dupa = None; self.comp = None; self.descarcari = 0; self.revalidari = 0; self.cl = True; self.cade_dupa_octeti = None; self.etag = '"v1"'; self.incomplete = False
+        self.documente = [{'document_id': DOC, 'pagini': [1, 2]}]; self.om = set(); self.cade_dupa = None; self.comp = None; self.descarcari = 0; self.revalidari = 0; self.cl = True; self.cade_dupa_octeti = None; self.etag = '"v1"'; self.incomplete = False; self.oprit_motiv = None; self.reluari = 0
+    def reia(self):  # = fn_ofertare_ocr_reia (20261030d), rulata de om in psql
+        assert self.stare == 'oprita'; self.reluari += 1; self.stare = 'citita'
+        self.oprit_motiv = 'reluata #%d (reluare_id %d): %s' % (self.reluari, 100 + self.reluari, self.oprit_motiv)
     def ops(self, op): return [a for f, c in self.calls if f == 'ofertare-ocr-scrie' and c['op'] == op for a in [c['args']]]
     def get(self, url, dest, max_octeti=C.MAX_PDF, timeout=0, la_antete=None):
         # descarcarea REALA (Edge.get: Content-Length, limita pe flux, PDF complet, antetele inaintea corpului) peste HTTP simulat
@@ -104,10 +107,12 @@ class FakeEdge:
             ok = {('preluata', 'citita'), ('citita', 'arbitrata'), ('arbitrata', 'finalizata')}
             if (self.stare, a['stare']) not in ok and not (a['stare'] in ('oprita', 'esuata') and self.stare in ('preluata', 'citita', 'arbitrata')):
                 return 409, {'error': 'Tranziție nepermisă %s → %s' % (self.stare, a['stare'])}
-            self.stare = a['stare']; return 200, {'ok': True, 'rezultat': {'ok': True}}
+            self.stare = a['stare']
+            if a['stare'] in ('oprita', 'esuata'): self.oprit_motiv = a['motiv']
+            return 200, {'ok': True, 'rezultat': {'ok': True}}
         if op == 'stare_rulare':
             if a['rulare_id'] != 7: return 200, {'ok': True, 'rezultat': {'exista': False}}
-            return 200, {'ok': True, 'rezultat': {'exista': True, 'id': 7, 'stare': self.stare, 'comparatie_nr': (self.comp or {}).get('nr'),
+            return 200, {'ok': True, 'rezultat': {'exista': True, 'id': 7, 'stare': self.stare, 'oprit_motiv': self.oprit_motiv, 'comparatie_nr': (self.comp or {}).get('nr'),
                                                   'comparatie_sha256': (self.comp or {}).get('sha256'),
                                                   'plan_sha256': C.plan_sha(list(self.plan.values())) if self.plan else None}}
         if op == 'rulari_active':
@@ -587,6 +592,89 @@ class Client(unittest.TestCase):
                                                           'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}})
         a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)
         self.assertEqual((a['stare'], a['apeluri_acum']), ('oprita', 1))
+    def test_reluata_dupa_oprirea_automata_fereastra_noua_a_pragului(self):
+        # 20261030d (laborator 15.10.2026): oprita pe pragul §8 -> omul ruleaza fn_ofertare_ocr_reia in BD -> `erp reluata` -> pragul
+        # numara doar deciziile de dupa reluare (altfel rularea s-ar opri din nou inaintea primului apel nou)
+        rdir = self.pana_la_plan()
+        scrie_citiri(rdir, 'lungime 10 m pe traseul dintre statia de reglare A si statia de masurare B, latime 5 m',
+                           'lungime 20 m pe traseul dintre statia de reglare A si statia de masurare B, latime 7 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        dec = lambda d: (lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': d, 'text': '' if d == 'needs_human' else it['citire_mineru'],
+                                                       'motiv': 'm', 'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-haiku-5-5',
+                                                       'prompt_versiune': 'arb-v2', 'cost_usd': 0.001}}))
+        self.edge.arbitru = dec('needs_human')
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5); self.assertEqual((a['stare'], a['apeluri_acum']), ('oprita', 1))
+        with self.assertRaises(RuntimeError): C.reluata(rdir, self.edge)              # BD inca oprita: clientul nu reia singur
+        self.assertEqual(C.arbitreaza(rdir, self.edge, max_apeluri=5)['stare'], 'oprita')  # marcajul local opreste orice pas
+        self.edge.reia()                                                               # = fn_ofertare_ocr_reia rulata de om (psql)
+        r = C.reluata(rdir, self.edge); self.assertEqual((r['stare'], r['reluare_id'], sum(r['baza'].values())), ('citita', 101, 1))
+        self.assertEqual(C.reluata(rdir, self.edge), {'deja': True, 'stare': 'citita', 'reluare_id': 101})
+        p = C.pasi(rdir); self.assertNotIn('oprita', p); self.assertEqual(len(p['opriri_anterioare']['valoare']), 1)
+        self.edge.arbitru = dec('ales_mineru')
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)                      # needs_human-ul vechi nu mai intra in prag
+        self.assertEqual((a['stare'], a['needs_human_claude']), ('proba', 0)); self.assertGreaterEqual(a['apeluri_acum'], 1)
+        self.assertEqual(a['claude'], a['apeluri_acum'])                               # fereastra = doar deciziile de dupa reluare
+        self.assertEqual(len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza']), 1 + a['apeluri_acum'])
+        self.edge.stare = 'oprita'; self.edge.oprit_motiv = 'needs_human pe 1 din 1 arbitraje Claude (> 15%, spec §8)'
+        C.marcheaza(rdir, 'oprita', self.edge.oprit_motiv); (rdir / 'oprire_ceruta.json').write_text('{"motiv": "om"}'); self.edge.reia()
+        with self.assertRaises(RuntimeError): C.reluata(rdir, self.edge)              # oprirea ceruta de om nu se reia pe aceasta cale
+    def _oprita_pe_prag(self):
+        rdir = self.pana_la_plan()
+        scrie_citiri(rdir, 'lungime 10 m pe traseul dintre statia de reglare A si statia de masurare B, latime 5 m',
+                           'lungime 20 m pe traseul dintre statia de reglare A si statia de masurare B, latime 7 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.dec = lambda d: (lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': d, 'text': '' if d == 'needs_human' else it['citire_mineru'],
+                                                            'motiv': 'm', 'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-haiku-5-5',
+                                                            'prompt_versiune': 'arb-v2', 'cost_usd': 0.001}}))
+        self.edge.arbitru = self.dec('needs_human')
+        self.assertEqual(C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)['stare'], 'oprita'); return rdir
+    def test_reluata_refuzul_dinaintea_platii_nu_intra_in_baza(self):
+        # Jakarinos r1 P1: un apel REFUZAT inainte de plata (rezultat 'refuz') lasa itemul eligibil; decizia noua pe el trebuie sa intre in prag
+        rdir = self._oprita_pe_prag(); d = rdir / ('d%d' % DOC)
+        luate = {json.loads(l)['id'] for l in (d / 'decizii.jsonl').read_text().splitlines()}
+        x = next(it for it in map(json.loads, (d / 'dezacorduri.jsonl').read_text().splitlines()) if it['id'] not in luate and it['tip'] not in ('structura_tabele', 'banda_intreaga'))
+        with (d / 'apeluri.jsonl').open('a') as f:
+            f.write(json.dumps({'id': x['id'], 'a': 'r1', 'faza': 'start', 'la': 0}) + '\n'); f.write(json.dumps({'id': x['id'], 'a': 'r1', 'faza': 'gata', 'rezultat': 'refuz'}) + '\n')
+        self.edge.reia(); r = C.reluata(rdir, self.edge); self.assertEqual(sum(r['baza'].values()), len(luate))  # refuzul nu e in baza
+        self.edge.arbitru = self.dec('needs_human')
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5, filtru={C.cheie_proba(x, DOC)})
+        self.assertEqual((a['stare'], a['apeluri_acum'], a['needs_human_claude']), ('oprita', 1, 1))   # decizia noua pe X a oprit epoca
+    def test_reluata_dupa_cadere_intre_oprirea_din_bd_si_marcajul_local(self):
+        # Jakarinos r1 P2: oprita in BD, marcajul local pierdut, omul reia -> `reluata` fixeaza totusi baza (altfel reoprire fara apel)
+        rdir = self._oprita_pe_prag()
+        p = C.pasi(rdir); del p['oprita']; C.save(rdir / 'pasi.json', p)                 # caderea dupa commit, inaintea marcajului
+        self.edge.reia()
+        r = C.reluata(rdir, self.edge); self.assertIn('fara marcaj local', r['oprire_reluata']); self.assertEqual(r['reluare_id'], 101)
+        self.assertEqual(C.reluata(rdir, self.edge)['deja'], True)                     # acelasi reluare_id: idempotent
+        self.edge.arbitru = self.dec('ales_mineru')
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=2)
+        self.assertEqual((a['stare'], a['needs_human_claude']), ('proba', 0)); self.assertGreaterEqual(a['apeluri_acum'], 1)
+    def test_reluata_fara_urma_in_bd_nu_reseteaza_pragul(self):
+        # Jakarinos r2 P1: oprirea a esuat INAINTEA commit-ului (BD tot citita, fara urma reluarii) -> reluata refuza, nimic resetat;
+        # arbitrajul urmator incearca din nou oprirea
+        rdir = self.pana_la_plan()
+        scrie_citiri(rdir, 'lungime 10 m pe traseul dintre statia de reglare A si statia de masurare B, latime 5 m',
+                           'lungime 20 m pe traseul dintre statia de reglare A si statia de masurare B, latime 7 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '', 'motiv': 'm',
+                                                          'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-haiku-5-5', 'prompt_versiune': 'arb-v2', 'cost_usd': 0.001}})
+        orig = self.edge._post
+        def cade(fn, corp, timeout=60):  # oprirea nu ajunge in BD
+            if fn == 'ofertare-ocr-scrie' and corp['op'] == 'stare' and corp['args']['stare'] == 'oprita': raise ConnectionResetError('inainte de commit')
+            return orig(fn, corp, timeout)
+        self.edge._post = cade
+        with self.assertRaises(ConnectionResetError): C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)
+        self.edge._post = orig; self.assertEqual(self.edge.stare, 'citita'); self.assertNotIn('oprita', C.pasi(rdir))
+        with self.assertRaises(RuntimeError): C.reluata(rdir, self.edge)              # citita fara urma = refuz
+        self.assertNotIn('reluare', C.pasi(rdir))
+        n = len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
+        self.assertEqual(C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)['stare'], 'oprita')   # pragul nu a fost resetat
+        self.assertEqual(len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza']), n)  # fara apel platit nou
+    def test_reluata_aceeasi_reluare_nu_reseteaza_din_nou(self):
+        # Jakarinos r2: aceeasi reluare folosita a doua oara, dupa alte rezultate, nu muta baza (altfel s-ar sterge epoca curenta)
+        rdir = self._oprita_pe_prag(); self.edge.reia(); C.reluata(rdir, self.edge); baza1 = C.baza_reluare(rdir)
+        self.edge.arbitru = self.dec('ales_mineru'); C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=2)
+        self.assertTrue(C.reluata(rdir, self.edge)['deja']); self.assertEqual(C.baza_reluare(rdir), baza1)
     def test_arbitrat_in_bd_fara_decizie_locala_devine_pierdut(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         self.edge.arbitru = lambda it: (409, {'error': 'Dezacord deja arbitrat', 'refuz': 'arbitrat'})

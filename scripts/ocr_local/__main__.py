@@ -34,7 +34,7 @@ def main(argv=None):
                          ('plan', 'CPU: planul per document + manifestul in BD (o singura data)'), ('incarca-citiri', 'citirile ambilor cititori in BD, apoi citita'),
                          ('compara', 'CPU: dezacordurile in BD + marcajul de comparatie'), ('arbitreaza', 'PLATIT: arbitrajul Claude pe dezacorduri, apoi arbitrata'),
                          ('reconciliaza', 'CPU: textul reconciliat in BD, apoi finalizata'), ('citeste', 'GPU: un cititor pe toate documentele (fara ERP)'),
-                         ('oprire', 'opreste rularea (motiv obligatoriu)'), ('stare', 'starea rularii din BD (doar citire) + pasii locali')):
+                         ('oprire', 'opreste rularea (motiv obligatoriu)'), ('reluata', 'DUPA fn_ofertare_ocr_reia in BD (om, psql): marcajul local oprita -> istoric, fereastra noua a pragului'), ('stare', 'starea rularii din BD (doar citire) + pasii locali')):
         s = es.add_parser(nume, help=ajutor); s.add_argument('rulare_dir')
         if nume == 'citeste': s.add_argument('--cititor', required=True, choices=['lighton', 'mineru'])
         if nume == 'oprire': s.add_argument('--motiv', required=True)
@@ -52,7 +52,7 @@ def main(argv=None):
                    'incarca-citiri': lambda: C.incarca_citiri(x.rulare_dir, edge), 'compara': lambda: C.compara_rulare(x.rulare_dir, edge),
                    'arbitreaza': lambda: C.arbitreaza(x.rulare_dir, edge, max_apeluri=x.max_apeluri, seed=x.seed, filtru=None if not x.filtru else {
                        C.cheie_proba(json.loads(l)) for l in x.filtru.read_text(encoding='utf-8').splitlines() if l.strip()}), 'reconciliaza': lambda: C.reconciliaza_rulare(x.rulare_dir, edge),
-                   'oprire': lambda: C.oprire(x.rulare_dir, edge, x.motiv), 'abandon': lambda: C.abandon(edge, x.rezervare),
+                   'oprire': lambda: C.oprire(x.rulare_dir, edge, x.motiv), 'reluata': lambda: C.reluata(x.rulare_dir, edge), 'abandon': lambda: C.abandon(edge, x.rezervare),
                    'stare': lambda: C.stare(x.rulare_dir, edge)}[x.pas]()
     elif x.cmd == 'plan':
         from .plan import plan
