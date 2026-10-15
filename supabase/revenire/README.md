@@ -201,4 +201,4 @@ SELECT set_config('gazpet.rollback_tehnic_20261030c', 'SCOATE_BMW_CARDATA:' || t
 -- <conținutul exact al fișierului>
 COMMIT;
 ```
-Precondiție = exact obiectele patch-ului (3 relații + 5 funcții, niciun alt view dependent); armare persistentă = refuz; DROP fără CASCADE; postcondiție = niciun obiect `bmw_cardata_*`; dezarmare la final. Testat în `scripts/test_bmw_cardata.sh` pasul 5 (nearmat → refuz; armat simplu peste date → refuz; CU_DATE → scos; reaplicare → suita; armat simplu pe tabele goale → scos).
+Precondiție = exact obiectele patch-ului (3 relații + 5 funcții, niciun alt view dependent); armare persistentă = refuz; `LOCK TABLE … IN ACCESS EXCLUSIVE MODE` pe ambele tabele (cu `lock_timeout` 5 s) ÎNAINTEA verificării „goale”, ca un INSERT concurent să nu fie numărat 0 și apoi șters de DROP (Jakarinos r1 P1-2); DROP fără CASCADE; postcondiție = niciun obiect `bmw_cardata_*`; dezarmare la final. Testat în `scripts/test_bmw_cardata.sh` pasul 5 (nearmat → refuz; armat simplu peste date → refuz; CU_DATE → scos; reaplicare → suita; cursă cu două sesiuni → revenirea așteaptă și refuză, mutantul fără LOCK pierde rândul; armat simplu pe tabele goale → scos).

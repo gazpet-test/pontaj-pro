@@ -14,7 +14,8 @@
 --     <conținutul acestui fișier>
 --     COMMIT;
 -- Siguranțe: armare persistentă (ALTER DATABASE/ROLE … SET) = refuz; armare legată de txid; precondiție = exact obiectele
---   patch-ului; DROP fără CASCADE; postcondiție = niciun obiect bmw_cardata_* rămas; dezarmare la final.
+--   patch-ului; LOCK ACCESS EXCLUSIVE pe ambele tabele ÎNAINTEA verificării „goale” (fără cursă cu un INSERT concurent);
+--   DROP fără CASCADE; postcondiție = niciun obiect bmw_cardata_* rămas; dezarmare la final.
 -- ============================================================================
 DO $rollback_pre$
 DECLARE v_armare text := current_setting('gazpet.rollback_tehnic_20261030c', true); v_n bigint;
@@ -39,7 +40,11 @@ BEGIN
                 AND r.ev_class <> 'public.v_bmw_cardata_vs_evogps'::regclass) THEN
     RAISE EXCEPTION 'Precondiție rollback 20261030c: alte view-uri depind de tabelele bmw_cardata_* — se reanalizează' USING ERRCODE = '55000';
   END IF;
+  -- Jakarinos r1 P1-2: fără lock, un INSERT concurent necomis nu se vede la count(*), iar DROP-ul de mai jos îl așteaptă și
+  -- apoi șterge rândul comis. Lock-ul cel mai tare, luat O DATĂ, în ordinea scriptului (citiri → locatii), înaintea numărării:
+  -- scrierile în curs se termină întâi, cele noi așteaptă după DROP (și cad pe tabel inexistent). lock_timeout ⇒ fără coadă.
   PERFORM set_config('lock_timeout', '5s', true);
+  LOCK TABLE public.bmw_cardata_citiri, public.bmw_cardata_locatii IN ACCESS EXCLUSIVE MODE;
   SELECT (SELECT count(*) FROM public.bmw_cardata_citiri) + (SELECT count(*) FROM public.bmw_cardata_locatii) INTO v_n;
   IF v_n > 0 AND v_armare IS DISTINCT FROM ('SCOATE_BMW_CARDATA_CU_DATE:' || txid_current()::text) THEN
     RAISE EXCEPTION 'ROLLBACK TEHNIC 20261030c blocat: tabelele au % rânduri (date de audit). Export + decizie, apoi armarea SCOATE_BMW_CARDATA_CU_DATE', v_n

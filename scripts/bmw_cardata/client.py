@@ -31,9 +31,15 @@ CONTAINER_NUME = 'GAZPET_ERP_ZILNIC'
 CONTAINER_SCOP = 'Kilometraj zilnic pentru ERP (append-only)'
 LIMITA_ZI_IMPLICIT = 10
 LIMITA_ZI_MAX = 49                 # sub limita BMW de 50/zi
-GAZDE_PERMISE = {'customer.bmwgroup.com', 'api-cardata.bmwgroup.com'}
+GAZDE_PERMISE = frozenset({'customer.bmwgroup.com', 'api-cardata.bmwgroup.com'})
+# verification_uri afisat omului: DOAR gazda serverului OAuth de productie (ghid BMW §2.3.2; link-ul …/oneid/link).
+# Swagger-ul device flow da ca exemplu customer-i.bmwgroup.com (mediul de integrare) — nu e acceptat.
+GAZDE_VERIFICARE = frozenset({'customer.bmwgroup.com'})
+EXPIRA_MAX_S = 3600                # fereastra de login urmarita cel mult 1 h (sub vechimea maxima a blocarii)
 CORP_MAX = 1024 * 1024
 DIR_IMPLICIT = r'C:\Users\Gazpet-Ai\.secrete'
+# radacina repo-ului din care ruleaza pachetul (scripts/bmw_cardata/client.py -> ../..), cu symlink/junction rezolvate
+RADACINA_REPO = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir))
 CONTAINER_RE = re.compile(r'^[A-Za-z0-9_-]{6,64}$')
 USER_CODE_RE = re.compile(r'^[A-Za-z0-9-]{4,32}$')
 
@@ -75,9 +81,33 @@ def _eroare_din(data):
 
 
 # ── stocare locala (in afara repo-ului) ─────────────────────────────────────────────────────
+def _in_interior(cale, radacina):
+    try:
+        cale, radacina = os.path.normcase(cale), os.path.normcase(radacina)
+        return os.path.commonpath([cale, radacina]) == radacina
+    except ValueError:   # alt disc (Windows) sau cai amestecate
+        return False
+
+
+def director_sigur(director):
+    """Calea reala a directorului de tokenuri/stare (symlink/junction rezolvate). Refuz daca e in repo-ul pachetului sau in
+    ORICE arbore git (un .git in el sau mai sus): tokenurile nu au voie sa ajunga intr-un folder care se poate comite."""
+    real = os.path.realpath(os.path.abspath(director))
+    if _in_interior(real, RADACINA_REPO):
+        raise EroareBMW(f'directorul local e in interiorul repo-ului ({real}) — tokenurile stau DOAR in afara lui (implicit {DIR_IMPLICIT})')
+    p = real
+    while True:
+        if os.path.lexists(os.path.join(p, '.git')):
+            raise EroareBMW(f'directorul local e intr-un arbore git ({p}) — refuz: tokenurile stau DOAR in afara oricarui repo')
+        parinte = os.path.dirname(p)
+        if parinte == p:
+            return real
+        p = parinte
+
+
 class Stocare:
     def __init__(self, director=None):
-        self.dir = os.path.abspath(director or os.environ.get('BMW_CARDATA_DIR') or DIR_IMPLICIT)
+        self.dir = director_sigur(director or os.environ.get('BMW_CARDATA_DIR') or DIR_IMPLICIT)
         self.f_client = os.path.join(self.dir, 'bmw_cardata_client_id.txt')
         self.f_tokenuri = os.path.join(self.dir, 'bmw_cardata_tokens.json')
         self.f_setup = os.path.join(self.dir, 'bmw_cardata_setup.json')
@@ -89,6 +119,9 @@ class Stocare:
     def scrie_atomic(self, cale, obiect):
         """JSON -> fisier temporar in acelasi director, fsync, os.replace (atomic pe acelasi volum)."""
         os.makedirs(os.path.dirname(cale), exist_ok=True)
+        # un subdirector inlocuit cu junction/symlink spre alt loc (ex. repo-ul) nu primeste nimic
+        if not _in_interior(os.path.realpath(os.path.dirname(cale)), self.dir):
+            raise EroareBMW(f'destinatie in afara directorului local (legatura?): {os.path.dirname(cale)}')
         fd, tmp = tempfile.mkstemp(prefix='.tmp_', suffix='.json', dir=os.path.dirname(cale))
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -197,18 +230,31 @@ class Blocare:
 
 
 # ── HTTP (urllib) ───────────────────────────────────────────────────────────────────────────
+class _FaraRedirect(urllib.request.HTTPRedirectHandler):
+    """Niciun redirect (Jakarinos r1 P1-1): urllib l-ar urma pastrand antetul Authorization, chiar spre http sau alt domeniu.
+    BMW nu are de ce sa redirectioneze API-ul sau endpointurile OAuth ⇒ orice 30x e eroare, iar tinta nu se contacteaza."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            fp.close()
+        except Exception:
+            pass
+        raise EroareBMW(f'redirect refuzat (HTTP {code}) de la {urllib.parse.urlsplit(req.full_url).hostname} — nu se urmeaza')
+
+
 class Http:
-    """Un singur punct de iesire in retea: doar https, doar gazdele BMW cunoscute. Intoarce (status, obiect JSON | None)."""
-    def __init__(self, timeout=30):
-        self.timeout = timeout
+    """Un singur punct de iesire in retea: doar https, doar gazdele BMW cunoscute, fara redirect-uri.
+    Intoarce (status, obiect JSON | None). `gazde` / `scheme` se schimba DOAR in teste (server local)."""
+    def __init__(self, timeout=30, gazde=GAZDE_PERMISE, scheme=('https',)):
+        self.timeout, self.gazde, self.scheme = timeout, frozenset(gazde), tuple(scheme)
+        self.opener = urllib.request.build_opener(_FaraRedirect)   # inlocuieste HTTPRedirectHandler-ul implicit
 
     def cerere(self, metoda, url, antete=None, corp=None):
         u = urllib.parse.urlsplit(url)
-        if u.scheme != 'https' or u.hostname not in GAZDE_PERMISE:
+        if u.scheme not in self.scheme or u.hostname not in self.gazde or u.username or u.password:
             raise EroareBMW(f'URL nepermis: {u.scheme}://{u.hostname}')
         req = urllib.request.Request(url, data=corp, method=metoda, headers=antete or {})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            with self.opener.open(req, timeout=self.timeout) as r:
                 status, octeti = r.status, r.read(CORP_MAX + 1)
         except urllib.error.HTTPError as e:
             status, octeti = e.code, e.read(CORP_MAX + 1)
@@ -230,6 +276,14 @@ def _post_form(http, url, campuri):
 
 
 # ── OAuth: device code flow + refresh ────────────────────────────────────────────────────────
+def verification_uri_permis(uri):
+    """https, gazda EXACTA din GAZDE_VERIFICARE (fara port, fara user@), fara spatii/backslash/caractere de control."""
+    if not isinstance(uri, str) or len(uri) > 200 or re.search(r'[\s\\\x00-\x1f\x7f]', uri):
+        return False
+    u = urllib.parse.urlsplit(uri)
+    return u.scheme == 'https' and u.netloc.lower() in GAZDE_VERIFICARE and u.hostname in GAZDE_VERIFICARE
+
+
 def login(st, http, ceas=time.time, dormi=time.sleep, afis=print):
     """Device Code Flow cu PKCE S256. Afiseaza DOAR verification_uri si user_code; asteapta autorizarea in browser."""
     client_id = st.client_id()
@@ -244,19 +298,23 @@ def login(st, http, ceas=time.time, dormi=time.sleep, afis=print):
         raise EroareBMW('device/code fara device_code')
     if not isinstance(user_code, str) or not USER_CODE_RE.match(user_code):
         raise EroareBMW('device/code: user_code lipsa sau in format neasteptat')
-    if not isinstance(uri, str) or not uri.startswith('https://') or len(uri) > 200 or re.search(r'\s', uri):
-        raise EroareBMW('device/code: verification_uri lipsa sau nesigur')
+    if not verification_uri_permis(uri):
+        raise EroareBMW('device/code: verification_uri lipsa sau in afara gazdei BMW permise (%s) — nu se afiseaza'
+                        % ', '.join(sorted(GAZDE_VERIFICARE)))
+    # RFC 8628 §3.5: intervalul serverului se respecta (implicit 5 s), fara plafon care l-ar scurta; slow_down adauga 5 s.
     expira = data.get('expires_in')
-    expira = expira if isinstance(expira, int) and not isinstance(expira, bool) and 30 <= expira <= 3600 else 300
+    expira = min(expira, EXPIRA_MAX_S) if isinstance(expira, int) and not isinstance(expira, bool) and expira >= 1 else 300
     interval = data.get('interval')
-    interval = interval if isinstance(interval, int) and not isinstance(interval, bool) and 1 <= interval <= 60 else 5
+    interval = interval if isinstance(interval, int) and not isinstance(interval, bool) and interval >= 1 else 5
+    if interval > expira:
+        raise EroareBMW(f'device/code: intervalul de interogare ({interval} s) depaseste valabilitatea codului ({expira} s)')
     afis(f'verification_uri: {uri}')
     afis(f'user_code: {user_code}')
     termen = ceas() + expira
     while True:
+        if ceas() + interval > termen:   # urmatoarea interogare permisa ar cadea dupa expirarea codului: oprim fluxul
+            raise ReloginNecesar('codul de autorizare expira inainte de urmatoarea interogare permisa — rulati login din nou')
         dormi(interval)
-        if ceas() > termen:
-            raise ReloginNecesar('codul de autorizare a expirat fara confirmare — rulati login din nou')
         status, data = _post_form(http, URL_TOKEN, {
             'client_id': client_id, 'device_code': device_code, 'grant_type': GRANT_DEVICE, 'code_verifier': verifier})
         if status == 200 and isinstance(data, dict) and data.get('access_token'):
@@ -266,7 +324,7 @@ def login(st, http, ceas=time.time, dormi=time.sleep, afis=print):
         if eroare == 'authorization_pending':
             continue
         if eroare == 'slow_down':
-            interval = min(interval + 5, 60)   # RFC 8628 §3.5: +5 s la fiecare slow_down
+            interval += 5                      # RFC 8628 §3.5: +5 s la fiecare slow_down, pentru tot restul fluxului
             continue
         if eroare == 'expired_token':
             raise ReloginNecesar('codul de autorizare a expirat — rulati login din nou')

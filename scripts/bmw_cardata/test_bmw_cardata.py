@@ -1,8 +1,9 @@
 """Teste fara retea si fara BD: python -B -m unittest bmw_cardata.test_bmw_cardata -v (PYTHONPATH=scripts).
 HTTP-ul BMW e simulat (HttpFals: raspunsuri pe rand, cererile inregistrate); psql e simulat in testele de scriere.
 Datele sunt FICTIVE (VIN de test, tokenuri inventate)."""
-import base64, contextlib, hashlib, io, json, os, re, tempfile, time, unittest, urllib.parse
+import base64, contextlib, hashlib, http.server, io, json, os, re, tempfile, threading, time, unittest, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 from decimal import Decimal
 
 from . import bd as B
@@ -581,6 +582,237 @@ class TestCli(Baza):
 
     def test_mascare(self):
         self.assertNotIn(AT1, M._mascheaza('eroare cu ' + AT1))
+
+
+# ── Jakarinos r1 ─────────────────────────────────────────────────────────────────────────────
+class ServerLocal:
+    """HTTP real pe 127.0.0.1 (port liber): /redirect/<cod> -> <cod> cu Location = self.tinta; /json -> 200; /eroare -> 403 JSON.
+    Inregistreaza fiecare cerere primita (metoda, cale, antetul Authorization)."""
+    def __init__(self):
+        self.cereri, parinte = [], self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def _raspunde(self):
+                n = int(self.headers.get('Content-Length') or 0)
+                if n:
+                    self.rfile.read(n)
+                parinte.cereri.append((self.command, self.path, self.headers.get('Authorization')))
+                if self.path.startswith('/redirect/'):
+                    self.send_response(int(self.path.split('/')[2]))
+                    self.send_header('Location', parinte.tinta)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+                cod, corp = (200, b'{"ok": true}') if self.path != '/eroare' else (403, b'{"exveErrorId": "CU-429"}')
+                self.send_response(cod)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(corp)))
+                self.end_headers()
+                self.wfile.write(corp)
+            do_GET = do_POST = _raspunde
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H)
+        self.port = self.srv.server_address[1]
+        self.tinta = f'http://127.0.0.1:{self.port}/tinta-secreta'
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def url(self, cale):
+        return f'http://127.0.0.1:{self.port}{cale}'
+
+    def lovituri_tinta(self):
+        return [c for c in self.cereri if c[1] == '/tinta-secreta']
+
+    def inchide(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+class TestRedirectTransportReal(unittest.TestCase):
+    """P1-1: Http (urllib REAL, nu HttpFals) nu urmeaza niciun redirect — tinta nu e contactata, Authorization nu pleaca."""
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ, {'NO_PROXY': '127.0.0.1,localhost', 'no_proxy': '127.0.0.1,localhost'})
+        self.env.start()
+        self.s = ServerLocal()
+        self.http = C.Http(timeout=5, gazde={'127.0.0.1'}, scheme=('http',))
+
+    def tearDown(self):
+        self.s.inchide()
+        self.env.stop()
+
+    def test_control_urllib_implicit_urmeaza_redirectul_cu_authorization(self):
+        # dovada ca scenariul reproduce problema: opener-ul implicit duce Bearer-ul la tinta redirectului
+        req = urllib.request.Request(self.s.url('/redirect/302'), headers={'Authorization': 'Bearer ' + AT1})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            r.read()
+        self.assertEqual(self.s.lovituri_tinta(), [('GET', '/tinta-secreta', 'Bearer ' + AT1)])
+
+    def test_niciun_redirect_urmat(self):
+        for tinta in (self.s.tinta, f'http://localhost:{self.s.port}/tinta-secreta'):     # aceeasi gazda / alt domeniu
+            self.s.tinta = tinta
+            for cod in (301, 302, 303, 307, 308):
+                for metoda, corp in (('GET', None), ('POST', b'a=1')):
+                    with self.subTest(tinta=tinta, cod=cod, metoda=metoda):
+                        with self.assertRaises(C.EroareBMW) as e:
+                            self.http.cerere(metoda, self.s.url(f'/redirect/{cod}'), {'Authorization': 'Bearer ' + AT1}, corp)
+                        self.assertIn('redirect refuzat', str(e.exception))
+                        self.assertNotIn(AT1, str(e.exception))
+        self.assertEqual(self.s.lovituri_tinta(), [])
+
+    def test_raspunsuri_normale_prin_transport_real(self):
+        self.assertEqual(self.http.cerere('GET', self.s.url('/json'), {'Authorization': 'Bearer x'}), (200, {'ok': True}))
+        self.assertEqual(self.http.cerere('GET', self.s.url('/eroare')), (403, {'exveErrorId': 'CU-429'}))
+
+    def test_gazdele_implicite_refuza_http_si_alte_gazde(self):
+        with self.assertRaises(C.EroareBMW):
+            C.Http().cerere('GET', self.s.url('/json'))
+        with self.assertRaises(C.EroareBMW):
+            C.Http().cerere('GET', 'https://customer.bmwgroup.com.evil.example/x')
+        with self.assertRaises(C.EroareBMW):
+            C.Http().cerere('GET', 'https://user:p@customer.bmwgroup.com/x')
+        self.assertEqual(self.s.cereri, [])
+
+
+class TestPollingRfc8628(Baza):
+    """P2-1: intervalul serverului se respecta fara plafon; slow_down +5 s; oprire daca intervalul depaseste timpul ramas."""
+    def device(self, interval, expira, uri='https://customer.bmwgroup.com/oneid/link'):
+        return (200, {'device_code': 'DEVICE-CODE-SECRET', 'user_code': 'ABCD1234', 'expires_in': expira, 'interval': interval,
+                      'verification_uri': uri})
+
+    def login(self, http):
+        C.login(self.st, http, ceas=self.ceas, dormi=self.ceas.dormi, afis=self.afis)
+
+    def test_interval_mare_nu_e_scurtat(self):
+        pend = (403, {'error': 'authorization_pending'})
+        http = HttpFals([self.device(120, 600), pend, (400, {'error': 'slow_down'}), pend,
+                         (200, {'access_token': AT1, 'refresh_token': RT1, 'expires_in': 3600})])
+        self.login(http)
+        self.assertEqual(self.ceas.dormit, [120, 120, 125, 125])
+
+    def test_slow_down_fara_plafon(self):
+        sd = (400, {'error': 'slow_down'})
+        http = HttpFals([self.device(58, 1000), sd, sd, (200, {'access_token': AT1, 'refresh_token': RT1, 'expires_in': 3600})])
+        self.login(http)
+        self.assertEqual(self.ceas.dormit, [58, 63, 68])
+
+    def test_interval_peste_timpul_ramas_opreste(self):
+        pend = (403, {'error': 'authorization_pending'})
+        http = HttpFals([self.device(200, 500), pend, pend, pend])
+        with self.assertRaises(C.ReloginNecesar):
+            self.login(http)
+        self.assertEqual(self.ceas.dormit, [200, 200])        # a treia interogare ar fi la 600 s > 500 s
+        self.assertEqual(len(http.cereri), 3)
+        self.assertIsNone(self.st.tokenuri())
+
+    def test_interval_mai_mare_decat_valabilitatea(self):
+        http = HttpFals([self.device(400, 300)])
+        with self.assertRaises(C.EroareBMW):
+            self.login(http)
+        self.assertEqual((self.iesire, self.ceas.dormit, len(http.cereri)), ([], [], 1))
+
+    def test_verification_uri_doar_gazda_bmw(self):
+        refuzate = ['https://evil.example/oneid/link', 'https://customer-i.bmwgroup.com/oneid/link',
+                    'https://customer.bmwgroup.com@evil.example/x', 'https://customer.bmwgroup.com:8443/x',
+                    'https://customer.bmwgroup.com.evil.example/x', 'http://customer.bmwgroup.com/x',
+                    'https://customer.bmwgroup.com/x y', 'https://customer.bmwgroup.com\\@evil.example/', None, 42]
+        for uri in refuzate:
+            with self.subTest(uri=uri):
+                self.assertFalse(C.verification_uri_permis(uri))
+        self.assertTrue(C.verification_uri_permis('https://customer.bmwgroup.com/oneid/link'))
+        http = HttpFals([self.device(5, 300, uri='https://bmw-login.example.com/oneid/link')])
+        with self.assertRaises(C.EroareBMW):
+            self.login(http)
+        self.assertEqual(self.iesire, [])                      # nimic afisat omului
+
+
+def legatura_director(tinta, legatura):
+    """Junction (Windows) / symlink (POSIX) spre un director; SkipTest daca sistemul nu permite."""
+    try:
+        if os.name == 'nt':
+            import _winapi
+            _winapi.CreateJunction(tinta, legatura)
+        else:
+            os.symlink(tinta, legatura, target_is_directory=True)
+    except (OSError, ImportError, AttributeError) as e:
+        raise unittest.SkipTest(f'nu pot crea junction/symlink: {e}')
+
+
+class TestDirectorSigur(unittest.TestCase):
+    """P2-2: tokenurile nu pot ajunge in repo (nici prin --dir / BMW_CARDATA_DIR, nici prin junction/symlink)."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = os.path.realpath(self.tmp.name)
+        self.legaturi = []
+
+    def tearDown(self):
+        for l in self.legaturi:
+            try:
+                os.rmdir(l) if os.name == 'nt' else os.unlink(l)   # scoate legatura, nu tinta
+            except OSError:
+                pass
+        self.tmp.cleanup()
+
+    def leaga(self, tinta, nume):
+        l = os.path.join(self.d, nume)
+        legatura_director(tinta, l)
+        self.legaturi.append(l)
+        return l
+
+    def test_repo_refuzat(self):
+        for cale in (C.RADACINA_REPO, os.path.join(C.RADACINA_REPO, 'scripts'),
+                     os.path.join(C.RADACINA_REPO, 'scripts', 'bmw_cardata', 'nu_exista_inca')):
+            with self.subTest(cale=cale):
+                with self.assertRaises(C.EroareBMW):
+                    C.Stocare(cale)
+
+    def test_variabila_de_mediu_in_repo_refuzata(self):
+        with mock.patch.dict(os.environ, {'BMW_CARDATA_DIR': os.path.join(C.RADACINA_REPO, 'scripts')}):
+            with self.assertRaises(C.EroareBMW):
+                C.Stocare()
+
+    def test_orice_arbore_git_refuzat(self):
+        os.makedirs(os.path.join(self.d, 'repo', '.git'))
+        os.makedirs(os.path.join(self.d, 'wt'))
+        with open(os.path.join(self.d, 'wt', '.git'), 'w') as f:   # worktree: .git e fisier
+            f.write('gitdir: x\n')
+        for cale in (os.path.join(self.d, 'repo'), os.path.join(self.d, 'repo', 'a', 'b'), os.path.join(self.d, 'wt', 'c')):
+            with self.subTest(cale=cale):
+                with self.assertRaises(C.EroareBMW):
+                    C.Stocare(cale)
+        C.Stocare(os.path.join(self.d, 'curat'))                    # in afara oricarui repo: acceptat
+
+    def test_legatura_spre_repo_refuzata(self):
+        l = self.leaga(os.path.join(C.RADACINA_REPO, 'scripts'), 'spre_repo')
+        with self.assertRaises(C.EroareBMW):
+            C.Stocare(l)
+        os.makedirs(os.path.join(self.d, 'g', '.git'))
+        os.makedirs(os.path.join(self.d, 'g', 'sub'))
+        l2 = self.leaga(os.path.join(self.d, 'g', 'sub'), 'spre_git')
+        with self.assertRaises(C.EroareBMW):
+            C.Stocare(l2)
+
+    def test_subdirector_inlocuit_cu_legatura_refuzat(self):
+        st = C.Stocare(os.path.join(self.d, 'stare'))
+        os.makedirs(st.dir)
+        afara = os.path.join(self.d, 'afara')
+        os.makedirs(afara)
+        legatura_director(afara, st.d_citiri)
+        self.legaturi.append(st.d_citiri)
+        with self.assertRaises(C.EroareBMW):
+            st.salveaza_citire(V.din_raspuns(telematic(), VIN, ACUM))
+        self.assertEqual(os.listdir(afara), [])
+
+    def test_cli_dir_in_repo_cod_1_fara_fisiere(self):
+        tinta = os.path.join(C.RADACINA_REPO, 'scripts')
+        inainte = set(os.listdir(tinta))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = M.main(['--dir', tinta, 'stare'])
+        self.assertEqual(rc, 1)
+        self.assertIn('repo', err.getvalue())
+        self.assertEqual(set(os.listdir(tinta)), inainte)
 
 
 if __name__ == '__main__':

@@ -25,6 +25,12 @@ Toate stau în `C:\Users\Gazpet-Ai\.secrete` (sau `--dir` / variabila `BMW_CARDA
 | `bmw_cardata.lock` | o singură rulare odată (refresh-ul rotește tokenul) | temporar |
 
 Tokenurile și client ID-ul **nu se afișează niciodată**, nici în erori (mesajele trec printr-o mască pentru șiruri lungi de tip token).
+Directorul (`--dir` / `BMW_CARDATA_DIR`) e **refuzat** dacă, după rezolvarea symlink/junction, e în repo sau în orice arbore git
+(un `.git` în el sau mai sus); un subdirector înlocuit cu o legătură spre alt loc nu primește nimic. Numele fișierelor de mai sus
+sunt și în `.gitignore`-ul repo-ului.
+
+Rețea: doar `https` spre `customer.bmwgroup.com` și `api-cardata.bmwgroup.com`, **fără redirect-uri** (urllib le-ar urma păstrând
+antetul `Authorization`, chiar spre http sau alt domeniu — orice 30x e eroare, iar ținta nu e contactată).
 
 ## Pașii pentru Răzvan
 
@@ -40,7 +46,9 @@ python -B -m bmw_cardata login
 ```
 1. `login` afișează **doar** două rânduri: `verification_uri: https://…` și `user_code: XXXXXXXX`. Deschizi linkul (sau butonul
    „Autentificarea aparatului” din pagina CarData a mașinii, care duce în același loc), te loghezi cu contul My BMW și introduci
-   codul. Scriptul așteaptă singur (respectă `interval`, `slow_down`, `expires_in`) și se termină cu `login OK`.
+   codul. Scriptul așteaptă singur și se termină cu `login OK`. Respectă RFC 8628: intervalul serverului fără plafon,
+   `slow_down` = +5 s, iar dacă următoarea interogare permisă ar cădea după `expires_in`, se oprește.
+   Linkul se afișează DOAR dacă e `https://customer.bmwgroup.com/…` (gazda exactă, fără port/utilizator); altfel `login` refuză.
    Codul expiră după câteva minute: dacă scrie „a expirat”, rulezi `login` din nou.
 2. `python -B -m bmw_cardata setup` — găsește VIN-ul mapat **PRIMARY** (dacă sunt mai multe: `--vin <VIN>`), creează containerul
    `GAZPET_ERP_ZILNIC` cu cele 12 chei de mai jos (sau îl refolosește, dacă există deja cu aceleași chei) și ține minte
@@ -141,7 +149,7 @@ Limita locală implicită: 10 cereri/zi UTC (`--limita-zi`, maxim 49).
 ## Teste
 
 ```bash
-PYTHONPATH=scripts python -B -m unittest bmw_cardata.test_bmw_cardata -v      # 46 teste, fără rețea, fără BD
+PYTHONPATH=scripts python -B -m unittest bmw_cardata.test_bmw_cardata -v      # 61 teste, fără rețea externă, fără BD
 PG_BIN=/c/Users/Public/pgsql/bin bash scripts/test_bmw_cardata.sh            # PG17 local: migrare + RLS + capăt-la-capăt + revenire
 ```
 Unittest (HTTP simulat): device flow cu PKCE (verifier ↔ challenge), `authorization_pending` / `slow_down` (+5 s) / `expired_token` /
@@ -149,7 +157,12 @@ termen depășit / `access_denied`; refresh (rotire atomică, refresh expirat lo
 429 și CU-429 venit ca 403 (stop + ziua blocată, fără retry), limita locală, antetele REST; setup (PRIMARY, container nou/refolosit);
 basicData o singură dată; validări (mile, NaN, exponent, INVALID, interval, viitor, locație (0,0), text de locație în cheie
 non-locație), reverificarea fișierului modificat; SQL-ul generat (textul ostil rămâne în literal, tag aleator, tag în document →
-refuz); niciun token în ieșire sau jurnal. Harness-ul SQL: vezi antetul `scripts/test_bmw_cardata.sh`.
+refuz); niciun token în ieșire sau jurnal. Plus (review Jakarinos r1): redirect-uri 301/302/303/307/308 pe GET și POST, spre
+aceeași gazdă și spre alt domeniu, cu **transport real** (http.server local) — ținta nu e contactată, iar un test de control arată
+că urllib-ul implicit ar fi dus `Authorization` acolo; interval de polling mare nu e scurtat, `slow_down` fără plafon, oprire când
+intervalul depășește timpul rămas; `verification_uri` doar pe gazda BMW; director în repo / arbore git / junction spre repo → refuz.
+Harness-ul SQL (vezi antetul `scripts/test_bmw_cardata.sh`) lucrează doar într-un director creat de el (mktemp + marker) și
+testează cursa revenire ↔ INSERT concurent cu două sesiuni (plus mutantul fără LOCK, care pierde rândul).
 
 ## Nesiguranțe (de verificat la primul `citeste`)
 

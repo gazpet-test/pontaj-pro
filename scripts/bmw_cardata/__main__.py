@@ -44,7 +44,11 @@ def main(argv=None):
         x.add_argument('--limita-zi', type=int, default=C.LIMITA_ZI_IMPLICIT,
                        help=f'limita locala de cereri CarData pe zi UTC (implicit {C.LIMITA_ZI_IMPLICIT}, max {C.LIMITA_ZI_MAX})')
     a = p.parse_args(argv)
-    st = C.Stocare(a.dir)
+    try:
+        st = C.Stocare(a.dir)   # refuza un director in repo / intr-un arbore git (fara jurnal: nu scriem acolo nimic)
+    except C.EroareBMW as e:
+        print(f'EROARE: {_mascheaza(e)}', file=sys.stderr)
+        return 1
     if a.cmd == 'stare':
         C.stare(st, C.Contor(st, a.limita_zi))
         return 0
