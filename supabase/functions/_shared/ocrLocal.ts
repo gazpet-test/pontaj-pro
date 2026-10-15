@@ -145,15 +145,27 @@ export function dinBase64(s: string): Uint8Array | null {
 // tokenii de text ≤ octeții promptului + ai datelor; imaginea: formula documentată (lățime × înălțime / 750, imaginile mari doar
 // se micșorează) dublată ca marjă; plus ambalajul mesajului; ieșirea ≤ max_tokens. Costul real nu poate depăși rezervarea decât dacă
 // prețul sau tokenizarea se schimbă — caz tratat separat (decontare la rezervare, needs_human, rularea oprită, excesul în jurnal).
-export const PRET_IN = 3 / 1e6, PRET_OUT = 15 / 1e6
+// Preturile oficiale pe model ($ / token; referinta Claude API, cache 06.10.2026 — laborator OCR 15.10): Sonnet 5 2 / 10 $ pe 1M,
+// Haiku 5.5 0,10 / 0,50 $ pe 1M pana la 100K tokeni de intrare (0,50 / 2,50 peste). Inainte: 3 / 15 (pretul vechi, cost raportat ~50%
+// peste cel real). Model necunoscut = exceptie (fail closed: nicio rezervare fara pret).
+export const PRETURI: Record<string, { in: number; out: number; prag?: number; peste?: { in: number; out: number } }> = {
+  'claude-sonnet-5': { in: 2 / 1e6, out: 10 / 1e6 },
+  'claude-haiku-5-5': { in: 0.10 / 1e6, out: 0.50 / 1e6, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } },
+}
 export const MAX_TOKENI_IESIRE = 1024
 export const AMBALAJ_TOKENI = 300
 export const rotunjesteSus = (x: number): number => Math.ceil(x * 1e4 - 1e-9) / 1e4
 export const tokeniImagineMax = (w: number, h: number): number => 2 * Math.ceil((w * h) / 750)
-export function limitaCost(octetiText: number, w: number, h: number): number {
-  return rotunjesteSus((octetiText + tokeniImagineMax(w, h) + AMBALAJ_TOKENI) * PRET_IN + MAX_TOKENI_IESIRE * PRET_OUT)
+function pret(model: string, tokIn: number): { in: number; out: number } {
+  const p = PRETURI[model]
+  if (!p) throw new Error('Model fara pret: ' + model)
+  return p.prag !== undefined && p.peste && tokIn > p.prag ? p.peste : p
 }
-export const costReal = (tokIn: number, tokOut: number): number => rotunjesteSus(tokIn * PRET_IN + tokOut * PRET_OUT)
+export function limitaCost(octetiText: number, w: number, h: number, model: string): number {
+  const tin = octetiText + tokeniImagineMax(w, h) + AMBALAJ_TOKENI, p = pret(model, tin)
+  return rotunjesteSus(tin * p.in + MAX_TOKENI_IESIRE * p.out)
+}
+export const costReal = (tokIn: number, tokOut: number, model: string): number => { const p = pret(model, tokIn); return rotunjesteSus(tokIn * p.in + tokOut * p.out) }
 export const octeti = (s: string): number => new TextEncoder().encode(s).length
 
 export type Decizie = { decizie: 'ales_lighton' | 'ales_mineru' | 'text_propus' | 'needs_human'; text: string; motiv: string; e_cantitate: boolean; anomalie_separator: boolean }

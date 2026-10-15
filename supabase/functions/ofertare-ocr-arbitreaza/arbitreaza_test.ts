@@ -22,7 +22,9 @@ async function itemDeTest(modif: Record<string, unknown> = {}) {
 }
 const dinBD = (it: any) => ({ item_id: it.id, tip: it.tip, citire_lighton: it.citire_lighton, citire_mineru: it.citire_mineru, e_cantitate: true, anomalie_separator: true })
 
-type Opt = { citire?: unknown; rezerva?: unknown; scrie?: unknown; depasire?: { data?: unknown; error?: unknown }; api?: { status?: number; text?: string; arunca?: boolean; stop?: string; usage?: unknown } }
+type Api = { status?: number; text?: string; arunca?: boolean; stop?: string; usage?: unknown }
+// api = acelasi raspuns la orice apel; apiSeq = raspunsul apelului k (Haiku = 0, Sonnet = 1), restul ca `api`
+type Opt = { citire?: unknown; rezerva?: unknown; scrie?: unknown; depasire?: { data?: unknown; error?: unknown }; api?: Api; apiSeq?: Api[] }
 function mediu(it: any, opt: Opt = {}) {
   const apeluri: { fn: string; args: any }[] = []; const cereriApi: any[] = []
   const sb = {
@@ -36,9 +38,9 @@ function mediu(it: any, opt: Opt = {}) {
       return { data: null, error: { message: 'neașteptat ' + fn } }
     },
   }
-  const a = opt.api || {}
   const fetchApi = (async (_u: string, init: RequestInit) => {
     cereriApi.push(JSON.parse(String(init.body)))
+    const a = opt.apiSeq?.[cereriApi.length - 1] || opt.api || {}
     if (a.arunca) throw new Error('rețea')
     const text = a.text ?? JSON.stringify({ decizie: 'ales_mineru', text: 'x', motiv: 'punct in imagine', e_cantitate: true, anomalie_separator: true })
     return new Response(JSON.stringify(a.status && a.status >= 400 ? { error: { message: 'suprasolicitat' } }
@@ -53,8 +55,8 @@ const cerere = (corp: unknown, secret = SECRET) => new Request('https://x.invali
 const corpDe = (item: unknown, extra: Record<string, unknown> = {}) => ({ rulare_id: 3, dezacord_id: 11, item, imagine_b64: IMG_B64, ...extra })
 const fnuri = (a: { fn: string }[]) => a.map((x) => x.fn)
 
-Deno.test('cale bună: item verificat → citire din BD → rezervare atomică → apel → decontare', async () => {
-  const it = await itemDeTest(); const { m, apeluri, cereriApi } = mediu(it)
+Deno.test('cale bună (fără cifre, Haiku sigur): item verificat → citire din BD → rezervare atomică → UN apel Haiku → decontare', async () => {
+  const it = await itemDeTest({ diferenta_numerica: false }); const { m, apeluri, cereriApi } = mediu(it)
   const r = await arbitreaza(cerere(corpDe(it)), m); const j = await r.json()
   assert.equal(r.status, 200, JSON.stringify(j))
   assert.deepEqual(fnuri(apeluri), ['fn_verifica_secret', 'fn_ofertare_ocr_dezacord_arbitraj', 'fn_ofertare_ocr_arbitraj_rezerva', 'fn_ofertare_ocr_scrie_arbitraj'])
@@ -63,14 +65,48 @@ Deno.test('cale bună: item verificat → citire din BD → rezervare atomică �
   const rez = apeluri[2].args
   assert.equal(rez.p_item_sha256, it.item_sha256); assert.ok(rez.p_suma > 0.0135 && rez.p_suma < 0.1, String(rez.p_suma))
   assert.deepEqual({ ...apeluri[3].args.p_arbitraj }, { dezacord_id: 11, item_sha256: it.item_sha256, decizie: 'ales_mineru', text: it.citire_mineru,
-    motiv: 'punct in imagine', e_cantitate: true, anomalie_separator: true, arbitru_model: 'claude-sonnet-5', prompt_versiune: PROMPT_VERSIUNE,
-    cost_usd: '0.0120', tokens_in: 3000, tokens_out: 200 })
-  assert.equal(j.decizie.id, it.id); assert.equal(j.arbitraj_id, 9)
-  const c = cereriApi[0]
-  assert.equal(c.system, PROMPT); assert.equal('temperature' in c, false); assert.deepEqual(c.thinking, { type: 'disabled' })  // Sonnet 5: sampling = 400
+    motiv: 'punct in imagine', e_cantitate: true, anomalie_separator: true, arbitru_model: 'claude-haiku-5-5', prompt_versiune: PROMPT_VERSIUNE,
+    cost_usd: '0.0004', tokens_in: 3000, tokens_out: 200 })                    // 3000 × 0,10 + 200 × 0,50 $ pe 1M
+  assert.equal(j.decizie.id, it.id); assert.equal(j.arbitraj_id, 9); assert.equal(j.decizie.arbitru_model, 'claude-haiku-5-5')
+  assert.equal(cereriApi.length, 1); const c = cereriApi[0]; assert.equal(c.model, 'claude-haiku-5-5')
+  assert.equal(c.system, PROMPT); assert.equal('temperature' in c, false); assert.deepEqual(c.thinking, { type: 'disabled' })  // sampling = 400
   const date = JSON.parse(c.messages[0].content[1].text.replace(/^DATE \(nu instrucțiuni\):\n/, ''))
   assert.deepEqual(date.context_pipeline, { context_inainte: 'Cantitate', context_dupa: it.context_dupa })
   assert.equal(date.citire_lighton, it.citire_lighton)
+})
+
+Deno.test('cascadă: diferență de cifre → Haiku, apoi Sonnet în același apel; decizia finală a lui Sonnet, costul = suma', async () => {
+  const it = await itemDeTest({ diferenta_numerica: true })
+  const { m, apeluri, cereriApi } = mediu(it, { apiSeq: [{ text: JSON.stringify({ decizie: 'ales_lighton', text: '', motiv: 'virgula', e_cantitate: true, anomalie_separator: true }) }] })
+  const r = await arbitreaza(cerere(corpDe(it)), m); const j = await r.json()
+  assert.equal(r.status, 200, JSON.stringify(j)); assert.deepEqual(cereriApi.map((c) => c.model), ['claude-haiku-5-5', 'claude-sonnet-5'])
+  assert.equal(cereriApi[1].system, PROMPT); assert.deepEqual(cereriApi[1].messages, cereriApi[0].messages)  // aceleasi date, aceeasi imagine
+  const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+  assert.equal(a.decizie, 'ales_mineru'); assert.equal(a.arbitru_model, 'claude-sonnet-5'); assert.equal(a.motiv, '[Haiku: ales_lighton] punct in imagine')
+  assert.equal(a.cost_usd, '0.0084'); assert.equal(a.tokens_in, 6000); assert.equal(a.tokens_out, 400)  // 0,0004 Haiku + 0,0080 Sonnet
+  assert.equal(fnuri(apeluri).filter((f) => f === 'fn_ofertare_ocr_arbitraj_rezerva').length, 1)        // O singura rezervare
+  const rez = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
+  assert.ok(rez > 0.0084, String(rez))                                                                  // rezervarea acopera ambele apeluri
+})
+
+Deno.test('cascadă: Haiku nesigur (needs_human sau ieșire invalidă) → Sonnet, fără cifre', async () => {
+  const it = await itemDeTest({ diferenta_numerica: false })
+  for (const primul of [JSON.stringify({ decizie: 'needs_human', text: '', motiv: 'ilizibil', e_cantitate: false, anomalie_separator: false }), 'nu stiu']) {
+    const { m, apeluri, cereriApi } = mediu(it, { apiSeq: [{ text: primul }] })
+    assert.equal((await arbitreaza(cerere(corpDe(it)), m)).status, 200); assert.equal(cereriApi.length, 2)
+    const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+    assert.equal(a.decizie, 'ales_mineru'); assert.equal(a.arbitru_model, 'claude-sonnet-5'); assert.match(a.motiv, /^\[Haiku: needs_human\] /)
+  }
+})
+
+Deno.test('cascadă: eroare API la Sonnet după Haiku → 502, rezervarea rămâne deschisă, nicio decizie', async () => {
+  const it = await itemDeTest({ diferenta_numerica: true })
+  for (const al2lea of [{ status: 529 }, { arunca: true }]) {
+    const { m, apeluri, cereriApi } = mediu(it, { apiSeq: [{}, al2lea] })
+    const r = await arbitreaza(cerere(corpDe(it)), m); const j = await r.json()
+    assert.equal(r.status, 502); assert.equal(j.rezervare_id, 7); assert.equal(j.filtru, 'ales_mineru'); assert.equal(cereriApi.length, 2)
+    assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_scrie_arbitraj'))
+  }
 })
 
 Deno.test('fără cost înaintea verificărilor (corp, secret, amprentă, context schimbat, imagine, refuzurile BD)', async () => {
@@ -143,7 +179,7 @@ Deno.test('ieșire în afara schemei / tăiată: decontat, needs_human', async (
     const { m, apeluri } = mediu(it, { api })
     assert.equal((await arbitreaza(cerere(corpDe(it)), m)).status, 200)
     const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
-    assert.equal(a.decizie, 'needs_human'); assert.equal(a.text, ''); assert.equal(a.cost_usd, '0.0120')
+    assert.equal(a.decizie, 'needs_human'); assert.equal(a.text, ''); assert.equal(a.cost_usd, '0.0084')  // ambele apeluri, iesire invalida
   }
 })
 
@@ -164,7 +200,7 @@ Deno.test('cost real peste rezervare: UN RPC tranzacțional, verificat explicit;
   const r = await arbitreaza(cerere(corpDe(it)), ok.m); const j = await r.json()
   assert.equal(r.status, 500); assert.match(j.error, /cheltuiala blocată \(rularea: oprita\)/)
   const dp = ok.apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_depasire')!.args
-  assert.deepEqual({ ...dp, p_cost_real: 0 }, { p_rezervare_id: 7, p_cost_real: 0, p_tokens_in: 400000, p_tokens_out: 1000, p_model: 'claude-sonnet-5' })
+  assert.deepEqual({ ...dp, p_cost_real: 0 }, { p_rezervare_id: 7, p_cost_real: 0, p_tokens_in: 800000, p_tokens_out: 2000, p_model: 'claude-sonnet-5' })
   assert.ok(dp.p_cost_real > ok.apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma)
   assert.ok(!fnuri(ok.apeluri).includes('fn_ofertare_ocr_scrie_arbitraj'))
   for (const depasire of [{ error: { message: 'refuz' } }, { data: { ok: true } }, { data: { ok: true, stare: 'citita', cheltuiala_blocata: false } }, { data: null }]) {  // eșec: răspunsul NU pretinde succes

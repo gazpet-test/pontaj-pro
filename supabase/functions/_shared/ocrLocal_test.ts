@@ -100,13 +100,16 @@ Deno.test('imagine: doar PNG cu dimensiuni din IHDR; base64 strict; sha', async 
   assert.equal(await sha256Hex(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
 })
 
-Deno.test('cost: limita = octeți text + imaginea (formula × 2) + ambalaj + max ieșire; rotunjire în sus', () => {
+Deno.test('cost: limita = octeți text + imaginea (formula × 2) + ambalaj + max ieșire; rotunjire în sus; preț pe model', () => {
   assert.equal(tokeniImagineMax(1500, 750), 3000)
-  const lim = limitaCost(octeti('ăș€'), 1500, 750)  // 7 octeți
-  assert.equal(lim, Math.ceil(((7 + 3000 + 300) * 3e-6 + MAX_TOKENI_IESIRE * 15e-6) * 1e4 - 1e-9) / 1e4)
+  const lim = limitaCost(octeti('ăș€'), 1500, 750, 'claude-sonnet-5')  // 7 octeți
+  assert.equal(lim, Math.ceil(((7 + 3000 + 300) * 2e-6 + MAX_TOKENI_IESIRE * 10e-6) * 1e4 - 1e-9) / 1e4)
   // orice consum real care respectă „un token ≥ un octet” și formula imaginii încape
-  assert.ok(costReal(7 + 1500 + 300, MAX_TOKENI_IESIRE) <= lim)
-  assert.equal(costReal(3000, 300), 0.0135); assert.equal(costReal(3001, 300), 0.0136)
+  assert.ok(costReal(7 + 1500 + 300, MAX_TOKENI_IESIRE, 'claude-sonnet-5') <= lim)
+  assert.equal(costReal(3000, 300, 'claude-sonnet-5'), 0.009); assert.equal(costReal(3001, 300, 'claude-sonnet-5'), 0.0091)
+  assert.equal(costReal(3000, 200, 'claude-haiku-5-5'), 0.0004)                    // 0,10 / 0,50 $ pe 1M
+  assert.equal(costReal(200_000, 0, 'claude-haiku-5-5'), 0.1)                     // peste 100K tokeni: 0,50 $ pe 1M
+  assert.throws(() => costReal(1, 1, 'claude-necunoscut')); assert.throws(() => limitaCost(1, 10, 10, 'claude-necunoscut'))
 })
 
 Deno.test('ieșirea arbitrului: schema strictă, altfel needs_human', () => {

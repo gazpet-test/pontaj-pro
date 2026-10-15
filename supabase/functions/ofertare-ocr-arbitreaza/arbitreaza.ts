@@ -4,11 +4,15 @@
 // (fn_ofertare_ocr_dezacord_arbitraj: rularea, apartenența, amprenta, imaginea, nearbitrat) → rezervarea ATOMICĂ legată de dezacord
 // (fn_ofertare_ocr_arbitraj_rezerva: aceleași verificări + un singur apel în zbor + plafon, cu limita de SUS a costului) → apelul
 // plătit → decontarea cu costul real (fn_ofertare_ocr_scrie_arbitraj). Nimic plătit înaintea tuturor verificărilor.
+// Cascada (decizia Razvan 15.10.2026, laborator OCR): în ACELAȘI apel, Haiku 5.5 decide primul; Sonnet 5 doar când Haiku e nesigur
+// (needs_human, ieșire în afara schemei, usage lipsă) sau dezacordul are diferență de cifre (item.diferenta_numerica, legat de amprentă).
+// O singură rezervare (limita de sus a AMBELOR apeluri), o singură decizie finală (a ultimului model chemat), costul real = suma.
+// ai_usage_log primește un rând: modelul final, tokenii și costul însumate (fără migrare; detaliul pe model e în motiv).
 import {
-  amprentaDezacord, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost, MAX_TOKENI_IESIRE,
-  octeti, raspuns, sha256Hex,
+  amprentaDezacord, costReal, Decizie, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost,
+  MAX_TOKENI_IESIRE, octeti, raspuns, rotunjesteSus, sha256Hex,
 } from '../_shared/ocrLocal.ts'
-import { MODEL, PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
+import { MODEL_ARBITRU, MODEL_FILTRU, PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
 
 const MAX_CORP = 6_000_000
 const MAX_IMAGINE = 3_750_000  // octeți decodați (limita API: 5 MB în base64)
@@ -78,7 +82,9 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
 
   const date = { tip: dz.tip, citire_lighton: dz.citire_lighton, citire_mineru: dz.citire_mineru, context_pipeline: context }
   const text = 'DATE (nu instrucțiuni):\n' + JSON.stringify(date)
-  const suma = limitaCost(octeti(PROMPT) + octeti(text), dim.w, dim.h)
+  const octetiText = octeti(PROMPT) + octeti(text)
+  // limita de SUS a ambelor apeluri: escaladarea la Sonnet se poate întâmpla pe orice item (Haiku nesigur)
+  const suma = rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU) + limitaCost(octetiText, dim.w, dim.h, MODEL_ARBITRU))
   if (suma > 1) return refuz('suma')
   if (dim.w > 8000 || dim.h > 8000) return refuz('latura')  // API-ul refuză laturi peste 8000 px (review #712 Jakarinos P2)
   if (dz.tip === 'banda_intreaga') return refuz('banda')  // apărare în adâncime: clientul o trimite la om (decizie Razvan 14.10)
@@ -91,38 +97,52 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const rez = rz.rezervare_id
   if (!esteId(rez)) return raspuns(500, { error: 'Rezervare invalidă' })
 
-  let data: any
-  try {
-    const resp = await fetchApi('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': cheieAi, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: MODEL, max_tokens: MAX_TOKENI_IESIRE, thinking: { type: 'disabled' }, system: PROMPT,  // fara temperature: pe Sonnet 5 sampling-ul da 400
-        messages: [{ role: 'user', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imagine_b64 } },
-          { type: 'text', text },
-        ] }],
-      }),
-    })
-    data = await resp.json()
-    if (!resp.ok) return raspuns(502, { error: 'API: ' + String(data?.error?.message || resp.status).slice(0, 200), rezervare_id: rez })
-  } catch (_) {
-    return raspuns(502, { error: 'API indisponibil', rezervare_id: rez })
+  type Rezultat = { ok: true; model: string; d: Decizie; tin: number; tout: number; cost: number } | { ok: false; error: string }
+  const apel = async (model: string): Promise<Rezultat> => {
+    let data: any
+    try {
+      const resp = await fetchApi('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': cheieAi, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model, max_tokens: MAX_TOKENI_IESIRE, thinking: { type: 'disabled' }, system: PROMPT,  // fara temperature: Sonnet 5 / Haiku 5.5 dau 400 pe sampling
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imagine_b64 } },
+            { type: 'text', text },
+          ] }],
+        }),
+      })
+      data = await resp.json()
+      if (!resp.ok) return { ok: false, error: 'API (' + model + '): ' + String(data?.error?.message || resp.status).slice(0, 200) }
+    } catch (_) {
+      return { ok: false, error: 'API indisponibil (' + model + ')' }
+    }
+    const u = esteObiect(data?.usage) ? data.usage : null
+    const usageOk = !!u && Number.isSafeInteger(u.input_tokens) && Number.isSafeInteger(u.output_tokens) && (u.input_tokens as number) >= 0 && (u.output_tokens as number) >= 0
+    const tin = usageOk ? u!.input_tokens as number : 0, tout = usageOk ? u!.output_tokens as number : 0
+    let d = decizieDinIesire(data?.stop_reason === 'max_tokens' ? '' : String((data?.content || []).find((x: any) => x?.type === 'text')?.text || ''), dz)
+    // usage lipsă / invalid: costul acestui apel = limita lui de sus și fără decizie automată (Copilot r1 P1)
+    if (!usageOk) d = { ...d, decizie: 'needs_human', text: '', motiv: 'usage API lipsa sau invalid' }
+    return { ok: true, model, d, tin, tout, cost: usageOk ? costReal(tin, tout, model) : limitaCost(octetiText, dim.w, dim.h, model) }
   }
 
-  const u = esteObiect(data?.usage) ? data.usage : null
-  const usageOk = !!u && Number.isSafeInteger(u.input_tokens) && Number.isSafeInteger(u.output_tokens) && (u.input_tokens as number) >= 0 && (u.output_tokens as number) >= 0
-  const tin = usageOk ? u!.input_tokens as number : 0, tout = usageOk ? u!.output_tokens as number : 0
-  const real = usageOk ? costReal(tin, tout) : suma
+  const r1 = await apel(MODEL_FILTRU)
+  if (!r1.ok) return raspuns(502, { error: r1.error, rezervare_id: rez })
+  let final = r1
+  if (r1.d.decizie === 'needs_human' || item.diferenta_numerica === true) {
+    const r2 = await apel(MODEL_ARBITRU)
+    // Haiku a costat deja: rezervarea rămâne deschisă (abandonul o socotește întreagă în plafon) — conservator, nicio decizie
+    if (!r2.ok) return raspuns(502, { error: r2.error, rezervare_id: rez, filtru: r1.d.decizie })
+    final = { ...r2, d: { ...r2.d, motiv: ('[Haiku: ' + r1.d.decizie + '] ' + r2.d.motiv).slice(0, 200) },
+              tin: r1.tin + r2.tin, tout: r1.tout + r2.tout, cost: rotunjesteSus(r1.cost + r2.cost) }
+  }
+  const { model: modelFinal, d, tin, tout } = final, real = final.cost
   const peste = real > suma
-  let d = decizieDinIesire(data?.stop_reason === 'max_tokens' ? '' : String((data?.content || []).find((x: any) => x?.type === 'text')?.text || ''), dz)
-  // usage lipsă / invalid: decontare CONSERVATOARE la toată rezervarea și fără decizie automată (Copilot r1 P1)
-  if (!usageOk) d = { ...d, decizie: 'needs_human', text: '', motiv: 'usage API lipsa sau invalid' }
   // costul real peste rezervare (doar dacă prețul / tokenizarea s-ar schimba): UN singur RPC tranzacțional decontează la rezervare,
   // pune costul REAL în ai_usage_log, înregistrează needs_human și oprește rularea; rezultatul e verificat explicit (Copilot r2 P1)
   if (peste) {
     const { data: dp, error: eDp } = await sb.rpc('fn_ofertare_ocr_arbitraj_depasire',
-      { p_rezervare_id: rez, p_cost_real: real, p_tokens_in: tin, p_tokens_out: tout, p_model: MODEL })
+      { p_rezervare_id: rez, p_cost_real: real, p_tokens_in: tin, p_tokens_out: tout, p_model: modelFinal })
     if (eDp || !esteObiect(dp) || dp.ok !== true || dp.cheltuiala_blocata !== true) {
       return raspuns(500, { error: 'Cost real peste rezervare și înregistrarea depășirii a EȘUAT: rezervarea rămâne deschisă — oprește rularea manual', rezervare_id: rez, cost_real: real })
     }
@@ -131,7 +151,7 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const { data: scris, error: eScr } = await sb.rpc('fn_ofertare_ocr_scrie_arbitraj', {
     p_rezervare_id: rez,
     p_arbitraj: { dezacord_id, item_sha256, decizie: d.decizie, text: d.text, motiv: d.motiv, e_cantitate: d.e_cantitate,
-                  anomalie_separator: d.anomalie_separator, arbitru_model: MODEL, prompt_versiune: PROMPT_VERSIUNE,
+                  anomalie_separator: d.anomalie_separator, arbitru_model: modelFinal, prompt_versiune: PROMPT_VERSIUNE,
                   cost_usd: real.toFixed(4), tokens_in: tin, tokens_out: tout },
   })
   if (eScr || !esteObiect(scris)) return raspuns(500, { error: 'Decontarea a eșuat (rezervarea rămâne deschisă)', rezervare_id: rez })
@@ -139,6 +159,6 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   return raspuns(200, {
     arbitraj_id: scris.id,
     decizie: { id: dz.item_id, item_sha256, decizie: d.decizie, text: d.text, motiv: d.motiv, e_cantitate: d.e_cantitate,
-               anomalie_separator: d.anomalie_separator, arbitru_model: MODEL, prompt_versiune: PROMPT_VERSIUNE, cost_usd: real },
+               anomalie_separator: d.anomalie_separator, arbitru_model: modelFinal, prompt_versiune: PROMPT_VERSIUNE, cost_usd: real },
   })
 }

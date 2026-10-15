@@ -1,5 +1,6 @@
-// ofertare-ocr-arbitreaza v1 (D3b, 14.10.2026; spec docs/paw/PLAN_OCR_LOCAL_OFERTARE.md §3, §8) — arbitrajul Claude Sonnet 5 pe UN
-// dezacord dintre cele două citiri OCR locale (LightOn / MinerU). DEPLOY cu verify_jwt = false: poarta e secretul din Vault.
+// ofertare-ocr-arbitreaza v2 (D3b 14.10.2026; cascada 15.10.2026, laborator OCR; spec docs/paw/PLAN_OCR_LOCAL_OFERTARE.md §3, §8) —
+// arbitrajul Claude pe UN dezacord dintre cele două citiri OCR locale (LightOn / MinerU): Haiku 5.5 decide primul, Sonnet 5 în același
+// apel când Haiku e nesigur sau dezacordul are diferență de cifre. DEPLOY cu verify_jwt = false: poarta e secretul din Vault.
 //
 // Cerere: POST { rulare_id, dezacord_id, item, imagine_b64 } cu antetul x-ocr-local-secret = Vault OCR_LOCAL_SECRET.
 //   item = obiectul EXACT din dezacorduri.jsonl: amprenta lui recalculată (= compare.item_hash) trebuie să fie cea stocată în BD, iar
@@ -22,7 +23,7 @@
 //      (JSON + promptul cere explicit să nu fie urmate ca instrucțiuni); ieșirea modelului e validată strict (schema §3), altfel needs_human;
 //  (b) scrie DOAR prin fn_ofertare_ocr_arbitraj_rezerva / fn_ofertare_ocr_scrie_arbitraj (rezervare, arbitraj append-only, ai_usage_log),
 //      plus, doar la cost peste rezervare: fn_ofertare_ocr_arbitraj_depasire (decontare, ai_usage_log, needs_human, rularea oprită);
-//      nu atinge ofertare_cantitati / text_extras, nu trimite mail, nu atinge drepturi; BANI: un apel Anthropic plătit, sub plafonul rulării;
+//      nu atinge ofertare_cantitati / text_extras, nu trimite mail, nu atinge drepturi; BANI: unul sau două apeluri Anthropic plătite (Haiku, apoi Sonnet), o rezervare pentru ambele, sub plafonul rulării;
 //  (c) service_role: apelantul n-are cont Supabase; RPC-urile au EXECUTE doar service_role; nicio citire directă din tabelele OCR;
 //  (d) cine pornește: doar deținătorul OCR_LOCAL_SECRET (verificat în BD, fail closed); rularea însăși e pornită de un utilizator
 //      autorizat (fn_ofertare_ocr_cerere, poarta pe cheltuială) și există doar în starea citita;

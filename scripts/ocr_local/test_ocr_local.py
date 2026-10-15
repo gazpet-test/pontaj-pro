@@ -436,7 +436,8 @@ class Comparare(unittest.TestCase):
         ts = (rad / 'supabase/functions/ofertare-ocr-arbitreaza/prompt.ts').read_text(encoding='utf-8')
         pol = json.loads((pathlib.Path(__file__).with_name('protocol.json')).read_text(encoding='utf-8'))['arbitru']
         self.assertEqual(pol['prompt_versiuni_admise'], [_re.search(r"PROMPT_VERSIUNE = '([^']+)'", ts).group(1)])
-        self.assertEqual(pol['modele_admise'], [_re.search(r"MODEL = '([^']+)'", ts).group(1)])
+        # cascada (15.10.2026): modelele admise = exact cele doua din edge (filtrul Haiku + arbitrul Sonnet), in aceasta ordine
+        self.assertEqual(pol['modele_admise'], [_re.search(r"MODEL_ARBITRU = '([^']+)'", ts).group(1), _re.search(r"MODEL_FILTRU = '([^']+)'", ts).group(1)])
     def test_amprente_edge_identice(self):
         # D3b: fisierul de paritate folosit de testul Deno (ofertare-ocr-arbitreaza recalculeaza amprenta in TS) e corect in Python
         from .compare import item_hash
