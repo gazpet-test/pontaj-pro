@@ -12,11 +12,13 @@ Un rând de tabel întreg identic (cu conținut) de 4 ori la rând rămâne bucl
 **Garda v5 (15.10.2026, laborator OCR, `empty-cells-v5-td-consecutive-rawrows-pipelineimg`):** pe calea MinerU, vederea gărzii nu mai
 conține payload-ul decupajelor de imagine puse de pipeline. `mineru_vl_utils` (`table_image_processor.replace_table_image_tokens`) maschează
 imaginile din tabele cu un token și le pune înapoi ca `<img src="data:image/jpeg;base64,<payload>"/>` — zeci de KB cu ~65 de caractere
-distincte, deci `unique_chars` suna fals. Scutirea e pe **proveniență**, nu pe formă: `imagini_pipeline(raw, mărimea benzii)` acceptă doar
-payload-urile în forma exactă a bibliotecii, base64 strict, decodate complet ca JPEG și cel mult cât banda; doar acelea se scot din vedere
-(`Guard(imagini)`). Un șir generat de model cu antet de imagine (ex. `QUJD…` repetat), același payload în `data-src` / `alt` / text simplu,
-un JPEG trunchiat sau mai mare decât banda rămân văzute. LightOn (în flux) nu are scutiri. Textul brut rămâne neschimbat;
-`view_stats.pipeline_images_stripped` arată câte s-au scos.
+distincte, deci `unique_chars` suna fals. Scutirea e pe **proveniență înregistrată**: `read_mineru` înfășoară
+`mineru_client.mask_and_encode_table_image` și notează, în firul citirii, fiecare data-URI pe care biblioteca îl codifică; garda
+(`Guard(imagini)`) scoate din vedere doar acele payload-uri, în forma exactă `<img src="data:image/jpeg;base64,…"/>`, fiecare de cel mult
+câte ori a fost codificat (un token de imagine repetat în buclă lasă copiile în plus vizibile). Orice altceva rămâne văzut: șir generat
+cu antet de imagine (`QUJD…`, JPEG valid cu repetiții după EOI sau în COM), payload în `data-src` / `alt` / text simplu / `image/png`.
+LightOn (în flux) nu are scutiri; dacă altă versiune a bibliotecii nu mai are funcția, nu se înregistrează nimic și garda e v4.
+Textul brut rămâne neschimbat; `view_stats.pipeline_images_stripped` și `decupaje_pipeline` (în rezultat) arată câte s-au scos / codificat.
 
 Cele 10 alarme din r1 (licitația 102), revizuite pe text brut:
 
@@ -30,8 +32,8 @@ Cele 10 alarme din r1 (licitația 102), revizuite pe text brut:
 
 Celelalte trei alarme false/benigne nu au o regulă care să le deosebească de buclele reale din același corpus, deci rămân (costul:
 banda merge la om/arbitru). **Banca de probă:** `python -B -m ocr_local.banca_garda <iesire.jsonl> <radacina>... [--fata-de baza.jsonl]`
-rulează garda ca la citire pe toate `raw*.txt` (LightOn / restul în flux la 128 de caractere; MinerU o dată pe text, cu decupajele verificate
-pe `<bandă>.png`; `--fara-scutire` = garda v4) și listează orice schimbare de motiv / detaliu / punct de oprire, plus fișierele noi / lipsă.
+rulează garda ca la citire pe toate `raw*.txt` (LightOn / restul în flux la 128 de caractere; MinerU o dată pe text — rulările vechi nu au
+înregistrarea, deci banca ia fiecare payload JPEG din forma exactă ca înregistrat o dată, aproximare; `--fara-scutire` = garda v4) și listează orice schimbare de motiv / detaliu / punct de oprire, plus fișierele noi / lipsă.
 v4 → v5 pe r1 (8.104 benzi) + corpusul Codex (5.960): se schimbă exact cele 4 benzi cu base64, nimic altceva.
 
 **Ce NU face pachetul:** nu pornește servere sau modele, nu cheamă cloud (arbitrajul Sonnet 5 e în edge-ul `ofertare-ocr-arbitreaza`, D3b),

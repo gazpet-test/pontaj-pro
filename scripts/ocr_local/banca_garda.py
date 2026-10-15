@@ -1,13 +1,13 @@
 """Banca de proba a garzii (doar citire): garda ruleaza pe toate raw*.txt din radacinile date, cum ruleaza la citire:
-LightOn / restul „in flux” (prefixe la fiecare 128 de caractere), MinerU o data pe textul intreg, cu decupajele JPEG verificate
-pe imaginea benzii (<banda>.png langa folderul cititorului; fara ea, fara scutire). Verdictele merg intr-un jsonl.
+LightOn / restul „in flux” (prefixe la fiecare 128 de caractere), MinerU o data pe textul intreg (vezi aproximarea din mineru()).
+Verdictele merg intr-un jsonl.
 Cu --fata-de <baza.jsonl> listeaza orice schimbare (motiv, detaliu, punct de oprire) si fisierele aparute / disparute.
 Orice schimbare de garda se judeca pe aceste cifre (alarme pierdute = bucle ratate posibile).
 
   python -B -m ocr_local.banca_garda <iesire.jsonl> <radacina>... [--fata-de baza.jsonl]
 """
 import argparse, collections, json, pathlib, sys
-from .guard import Guard, imagini_pipeline
+from .guard import Guard, IMG_PIPELINE
 
 PAS = 128
 
@@ -21,17 +21,17 @@ def in_flux(text, pas=PAS):
 
 FARA_SCUTIRE = False  # --fara-scutire: baza = garda v4 (fara imagini scutite)
 
-def mineru(text, png):
-    imagini = frozenset()
-    if png.exists() and not FARA_SCUTIRE:
-        from PIL import Image
-        with Image.open(png) as im: imagini = imagini_pipeline(text, im.size)
+def mineru(text):
+    # APROXIMARE de banca: la citire, scutirile vin din inregistrarea codificarii (read._inregistreaza_decupaje); rularile vechi
+    # nu au inregistrarea, asa ca aici fiecare payload JPEG din forma exacta conteaza ca inregistrat o data (textele sunt ale
+    # pipeline-ului). Copiile in plus raman vazute, ca la citire.
+    imagini = [] if FARA_SCUTIRE else list(dict.fromkeys(m[1] for m in IMG_PIPELINE.finditer(text)))
     g = Guard(imagini); r = g(text)
     return r, len(text), (g.event or {}).get('detail')
 
 def verdict(p):
     text = p.read_text(encoding='utf-8', errors='replace')
-    if p.parent.name == 'mineru': return mineru(text, p.parent.parent.with_suffix('.png'))
+    if p.parent.name == 'mineru': return mineru(text)
     return in_flux(text)
 
 def grupa(f):
