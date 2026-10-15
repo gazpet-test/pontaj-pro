@@ -484,14 +484,25 @@ class TestScriere(Baza):
         class R:
             returncode, stderr = 0, ''
             def __init__(self, out): self.stdout = out
-        for out, bun in (('BMW_REZULTAT|7|1|1\n', True), ('BMW_REZULTAT|deja|0|0\n', True),
-                         ('BMW_REZULTAT|7|1|0\n', False), ('BMW_REZULTAT|deja|0|1\n', False), ('BMW_REZULTAT|7|1\n', False)):
+        for out, bun in (('BMW_REZULTAT|7|1|1\n', True), ('BMW_REZULTAT|7|0|1\n', True), ('BMW_REZULTAT|deja|0|0\n', True),
+                         ('BMW_REZULTAT|7|1|0\n', False), ('BMW_REZULTAT|deja|0|1\n', False), ('BMW_REZULTAT|7|1\n', False),
+                         ('BMW_REZULTAT|deja|1|0\n', False),   # Jakarinos r4 P2: locatie inserata fara citire noua
+                         ('BMW_REZULTAT|deja|1|1\n', False), ('BMW_REZULTAT|7|2|1\n', False), ('BMW_REZULTAT|7|1|2\n', False),
+                         ('BMW_REZULTAT|7|0|0\n', False)):
             with self.subTest(out=out), mock.patch.object(B.subprocess, 'run', return_value=R(out)):
                 if bun:
                     B.ruleaza_psql('SELECT 1', psql='psql', pg={'sslmode': 'disable'})
                 else:
                     with self.assertRaises(B.EroareScriere):
                         B.ruleaza_psql('SELECT 1', psql='psql', pg={'sslmode': 'disable'})
+        # prin scrie(): rezultatul imposibil NU marcheaza fisierul ca procesat
+        self.setup_local()
+        self.st.salveaza_citire(V.din_raspuns(telematic(), VIN, datetime.now(timezone.utc) - timedelta(minutes=1)))
+        with mock.patch.object(B.subprocess, 'run', return_value=R('BMW_REZULTAT|deja|1|0\n')):
+            with self.assertRaises(B.EroareScriere):
+                B.scrie(self.st, psql='psql', pg={'sslmode': 'disable'}, afis=self.afis)
+        self.assertEqual(len(self.st.citiri_nescrise()), 1)
+        self.assertFalse(os.path.isdir(self.st.d_scrise) and os.listdir(self.st.d_scrise))
 
     def test_tag_in_document_refuzat(self):
         p = V.reverifica(json.loads(json.dumps(V.din_raspuns(telematic(), VIN, ACUM))), VIN, ACUM)

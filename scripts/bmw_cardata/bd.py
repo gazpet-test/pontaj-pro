@@ -103,7 +103,9 @@ def ruleaza_psql(sql, psql=PSQL_IMPLICIT, pg=None):
         if not m:
             raise EroareScriere('psql nu a intors linia BMW_REZULTAT — starea scrierii trebuie verificata manual')
         id_bd, loc, brut = m.group(1), int(m.group(2)), int(m.group(3))
-        if (id_bd == 'deja') != (brut == 0) or brut > 1 or loc > 1:
+        # singurele combinatii posibile: citire noua -> brut 1, locatie 0 sau 1; citire existenta ('deja') -> 0 si 0
+        posibil = (loc == 0 and brut == 0) if id_bd == 'deja' else (brut == 1 and loc in (0, 1))
+        if not posibil:
             raise EroareScriere(f'rezultat inconsistent (citire {id_bd}, locatie {loc}, brut {brut}) — verificati manual')
         return id_bd, loc
     finally:
