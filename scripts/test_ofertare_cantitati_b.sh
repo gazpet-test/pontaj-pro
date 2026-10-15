@@ -322,7 +322,7 @@ wait
 asteapta "licitația blocată FOR UPDATE: trimiterea nu așteaptă (< 2 s), înghețarea amânată" "$(( (T1 - T0) / 1000000 < 2000 ))|$(q "SELECT count(*) FROM public.ofertare_analiza_versiuni WHERE licitatie_id=7")|$(q "SELECT eroare FROM public.ofertare_analiza_erori WHERE clarificare_id=$CL7")" "1|0|amânat (lock ocupat)"
 q "INSERT INTO public.ofertare_loturi_jurnal (licitatie_id, actiune, vechi, nou) VALUES (7, 'licitatie_loturi', '{}', '{}')" >/dev/null
 svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
-asteapta "loturi schimbate după observație → înghețarea tardivă cu eligibilitate incertă" "$(q "SELECT eligibilitate FROM public.ofertare_analiza_versiuni WHERE licitatie_id=7")" modificata_dupa_moment
+asteapta "lock ocupat la trimitere → fără observație; înghețarea tardivă cu eligibilitate incertă" "$(q "SELECT (SELECT count(*) FROM public.ofertare_loturi_observatii WHERE licitatie_id=7) || '|' || eligibilitate FROM public.ofertare_analiza_versiuni WHERE licitatie_id=7")" "0|modificata_dupa_moment"
 asteapta "restanțele îngheață lic. 7 pe momentul trimiterii" "$(q "SELECT (v.moment_referinta = (SELECT la FROM public.ofertare_clarificari_jurnal WHERE clarificare_id=$CL7))::text FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=7")" true
 
 # ── commit-uri în ordine inversă: A (trimitere T1, înghețare amânată) comite DUPĂ ce B a înghețat pe T2 → snapshot incert ──
@@ -401,13 +401,20 @@ sleep 0.7
 svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
 wait
 svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
-asteapta "restanțe concurente la 23/24: exact o completare, apoi plafonul oprește" "$(q "SELECT count(*) FROM public.ofertare_analiza_completari WHERE snapshot_id=$S11")" 1
+asteapta "restanțe concurente la 23/24: exact o completare" "$(q "SELECT count(*) FROM public.ofertare_analiza_completari WHERE snapshot_id=$S11")" 1
+# plafonul izolat: snapshot încă recuperabil, 24 de încercări mai vechi de o oră → nicio încercare nouă
+q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES (951, 12, 'F3 12.pdf', 'lista_cantitati', 'lic12 text', now() - interval '20 days')" >/dev/null
+ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_decizie(951, '$(sha 'lic12 text')', 'f3', '*', 'text_confirmat', 'verificat pe PDF')" >/dev/null
 
 # ── înghețarea care așteaptă un setter de loturi: momentul e DUPĂ commit-ul lui, eligibilitate exactă (lic. 12) ──
 "${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT 1 FROM public.ofertare_licitatii WHERE id=12 FOR UPDATE;" -c "INSERT INTO public.ofertare_loturi_jurnal (licitatie_id, actiune, vechi, nou) VALUES (12, 'licitatie_loturi', '{}', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
 sleep 0.7
 ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_ingheata_manual(12,'toate','{}')" >/dev/null
 wait
+S12=$(q "SELECT id FROM public.ofertare_analiza_versiuni WHERE licitatie_id=12")
+q "INSERT INTO public.ofertare_analiza_erori (snapshot_id, faza, eroare, la) SELECT $S12, 'completare', 'test', now() - interval '2 hours' FROM generate_series(1, 24)" >/dev/null
+svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
+asteapta "plafon izolat: 24 de încercări vechi pe un snapshot recuperabil → nicio completare nouă" "$(q "SELECT (SELECT count(*) FROM public.ofertare_analiza_completari WHERE snapshot_id=$S12) || '|' || (SELECT (e->>'text_indisponibil') FROM public.ofertare_analiza_versiuni v, jsonb_array_elements(v.doc_manifest) e WHERE v.id=$S12 AND (e->>'document_id')::int=951)")" "0|false"
 asteapta "înghețarea după așteptarea setterului: moment după commit, netardivă, exactă" "$(q "SELECT (v.moment_referinta > (SELECT max(la) FROM public.ofertare_loturi_jurnal WHERE licitatie_id=12) + interval '1 second')::text || '|' || v.inghetat_tardiv || '|' || v.eligibilitate FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=12")" "true|false|exacta"
 
 # ── revenire ──
@@ -420,4 +427,6 @@ o="$(revenire || true)"; grep -q 'amprenta difera' <<<"$o" || esec "drift (rolur
 q "ALTER POLICY ofertare_cant_obs_select ON public.ofertare_cant_obs TO authenticated" >/dev/null
 revenire >/dev/null || esec "revenire: $(revenire | tail -3)"
 asteapta "după revenire: niciun obiect, triggerul scos, clarificările păstrate" "$(q "SELECT (to_regclass('public.ofertare_cant_obs') IS NULL)::text || (SELECT count(*) FROM pg_trigger WHERE tgname='trg_ofertare_cb_clarificari_jurnal') || (SELECT count(*) FROM public.ofertare_clarificari)")" "true011"
+livreaza >/dev/null || esec "reaplicarea după revenire: $(livreaza | tail -3)"
+asteapta "după revenire, migrarea se reaplică (20 de tabele, amprenta în comentariu)" "$(q "SELECT (to_regclass('public.ofertare_loturi_observatii') IS NOT NULL)::text || (obj_description('public.ofertare_analiza_versiuni'::regclass, 'pg_class') LIKE '%amprenta=' || public.fn_ofertare_cb_amprenta())::text")" truetrue
 echo PASS

@@ -379,10 +379,11 @@ CREATE TABLE public.ofertare_analiza_erori (
   la             timestamptz NOT NULL DEFAULT now()
 );
 
--- observațiile stării loturilor (review r5): câte rânduri avea ofertare_loturi_jurnal pentru licitație, văzute la `la`
--- (la = statement_timestamp(), anterior instantaneului numărării ⇒ tot ce s-a comis înainte de `la` e numărat). O înghețare tardivă
--- are eligibilitatea EXACTĂ doar dacă există o observație ≤ moment cu același număr ca acum (nimic comis după ea). Scrise de triggerul
--- clarificărilor (la trimitere) și de rutina de termen (pentru licitațiile cu termen viitor).
+-- observațiile stării loturilor (review r5 + r6): câte rânduri avea ofertare_loturi_jurnal pentru licitație la momentul `la`.
+-- Protocol: lock pe rândul licitației FOR NO KEY UPDATE (exclude setterii: FOR UPDATE / FOR SHARE), APOI la = clock_timestamp(),
+-- APOI numărarea sub același lock ⇒ n = exact rândurile comise înainte de la, și niciunul nu se poate comite până la sfârșitul
+-- tranzacției observatoare. Fără lock (ocupat) → fără observație (înghețarea tardivă rămâne incertă). O înghețare tardivă e EXACTĂ doar
+-- dacă există o observație ≤ moment cu același n ca acum. Scrise de triggerul clarificărilor și de rutina de termen.
 CREATE TABLE public.ofertare_loturi_observatii (
   id           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   licitatie_id bigint NOT NULL,
@@ -1159,14 +1160,21 @@ END $f$;
 CREATE FUNCTION public.fn_ofertare_cb_ingheata_la_termen()
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE l record; v_n integer := 0;
+DECLARE l record; v_n integer := 0; v_la timestamptz; v_cnt bigint;
 BEGIN
-  -- observațiile loturilor pentru licitațiile cu termen viitor, fără inițială (dovada eligibilității la înghețarea de la termen)
-  INSERT INTO public.ofertare_loturi_observatii (licitatie_id, la, n, sursa)
-  SELECT x.id, statement_timestamp(), (SELECT count(*) FROM public.ofertare_loturi_jurnal j WHERE j.licitatie_id = x.id), 'rutina_termen'
-    FROM public.ofertare_licitatii x LEFT JOIN public.ofertare_termen_clarificari t ON t.licitatie_id = x.id
-   WHERE coalesce(t.termen, x.termen_depunere) >= now()
-     AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = x.id AND v.tip = 'initiala' AND v.lot_domeniu = 'toate');
+  -- observațiile loturilor pentru licitațiile cu termen viitor, fără inițială (dovada eligibilității la înghețarea de la termen):
+  -- per licitație, lock FOR NO KEY UPDATE NOWAIT (ocupat → sărită), apoi la = clock_timestamp(), apoi numărarea
+  FOR l IN SELECT x.id FROM public.ofertare_licitatii x LEFT JOIN public.ofertare_termen_clarificari t ON t.licitatie_id = x.id
+            WHERE coalesce(t.termen, x.termen_depunere) >= now()
+              AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = x.id AND v.tip = 'initiala' AND v.lot_domeniu = 'toate') LOOP
+    BEGIN
+      PERFORM 1 FROM public.ofertare_licitatii WHERE id = l.id FOR NO KEY UPDATE NOWAIT;
+      v_la := clock_timestamp();
+      SELECT count(*) INTO v_cnt FROM public.ofertare_loturi_jurnal j WHERE j.licitatie_id = l.id;
+      INSERT INTO public.ofertare_loturi_observatii (licitatie_id, la, n, sursa) VALUES (l.id, v_la, v_cnt, 'rutina_termen');
+    EXCEPTION WHEN lock_not_available THEN NULL;
+    END;
+  END LOOP;
   FOR l IN SELECT x.id FROM public.ofertare_licitatii x LEFT JOIN public.ofertare_termen_clarificari t ON t.licitatie_id = x.id
             WHERE coalesce(t.termen, x.termen_depunere) < now()
               AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = x.id AND v.tip = 'initiala'
@@ -1205,11 +1213,14 @@ BEGIN
       EXCEPTION WHEN lock_not_available THEN v_lock := false;
       END;
     END IF;
-    -- observația loturilor ÎNAINTEA evenimentului (la ≤ moment); best-effort — lipsa ei face doar înghețarea tardivă incertă
-    IF v_ingheata THEN
+    -- observația loturilor ÎNAINTEA evenimentului, DOAR sub lock-ul licitației (la = clock_timestamp() după lock, numărare după la);
+    -- best-effort — lipsa ei face doar înghețarea tardivă incertă
+    IF v_ingheata AND v_lock THEN
+      DECLARE v_la timestamptz; v_n bigint;
       BEGIN
-        INSERT INTO public.ofertare_loturi_observatii (licitatie_id, la, n, sursa)
-        SELECT NEW.licitatie_id, statement_timestamp(), count(*), 'trimitere' FROM public.ofertare_loturi_jurnal j WHERE j.licitatie_id = NEW.licitatie_id;
+        v_la := clock_timestamp();
+        SELECT count(*) INTO v_n FROM public.ofertare_loturi_jurnal j WHERE j.licitatie_id = NEW.licitatie_id;
+        INSERT INTO public.ofertare_loturi_observatii (licitatie_id, la, n, sursa) VALUES (NEW.licitatie_id, v_la, v_n, 'trimitere');
       EXCEPTION WHEN OTHERS THEN NULL;
       END;
     END IF;
