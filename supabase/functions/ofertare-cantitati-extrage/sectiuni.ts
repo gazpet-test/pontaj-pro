@@ -22,10 +22,12 @@ export const SUPRAPUNERE = 2000   // ca un tabel rupt între felii să nu dispar
 
 // Antetele formularelor (eDevize / HG 907). Atât „Formular Xn" (antet + subsol de pagină), cât și titlul
 // listei, cu/fără diacritice. (?!\d) ca „C 60" să nu fie C6.
+// TKT-0329 B (PR3, Răcari lic. 15): și „Formularul F3” / „FORMULARUL C9”, „Lista cu cantitățile de lucrări” (cu articol), iar
+// centralizatoarele F1 / F2 (valori, fără cantități fizice) sunt 'lista_alt' — înainte cădeau în secțiunea F3 de dinaintea lor.
 const ANTETE: { tip: TipLista; re: RegExp }[] = [
-  { tip: 'lista_f3', re: /Formular\s*F\s*3(?!\d)|Lista\s+cu\s+cantit[aăâ][tțţ]i\s+de\s+lucr[aăâ]ri/gi },
-  { tip: 'lista_c6', re: /Formular\s*C\s*6(?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+de\s+resurse\s+materiale/gi },
-  { tip: 'lista_alt', re: /Formular\s*C\s*[789](?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+(?:cu\s+m[aâă]n|de\s+ore|privind\s+transport)/gi },
+  { tip: 'lista_f3', re: /Formular(?:ul)?\s*F\s*3(?!\d)|Lista\s+cu\s+cantit[aăâ][tțţ]i(?:le)?\s+de\s+lucr[aăâ]ri/gi },
+  { tip: 'lista_c6', re: /Formular(?:ul)?\s*C\s*6(?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+de\s+resurse\s+materiale/gi },
+  { tip: 'lista_alt', re: /Formular(?:ul)?\s*C\s*[789](?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+(?:cu\s+m[aâă]n|de\s+ore|privind\s+transport)|Formular(?:ul)?\s*F\s*[12](?!\d)/gi },
 ]
 const PAGINA = '⟦PAGINA'   // marcajul de pagină pus de citirea OCR (ofertare-ingest-doc)
 

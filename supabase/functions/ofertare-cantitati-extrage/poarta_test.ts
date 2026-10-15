@@ -106,3 +106,16 @@ Deno.test('cantitati/loturi: doar cel eligibil ajunge la AI; rândurile poartă 
   assertEquals(lot('F3.pdf'), [['necunoscut', null, 'nume_fisier', null]])   // fără lot în nume = necunoscut, NU toate
   assert(rows.every((x: any) => !('lot' in x)), 'coloana veche lot nu se scrie aici (nici înainte nu se scria)')
 })
+
+// --- TKT-0329 B: modul structurat ---
+Deno.test('structurat: x-radar-secret (chiar valid) -> 403, zero cost', async () => {
+  const { supa: s0, n } = fakeSupa({ profiles: PROFILE, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: DOCS }, { radarSecret: 'ok' })
+  const { supa } = cuPoartaLot(s0, DOCS.map((d) => d.id))
+  const deps = { db: supa, getUser, fetch: fakeFetch(n), chei: { A: 'a', G: 'g', O: 'o' } }
+  const r = await handler(cerereH({ 'x-radar-secret': 'ok' }, { licitatie_id: 95, mod: 'structurat', cerere_id: 1 }), deps)
+  assertEquals(r.status, 403); zeroCost(n)
+})
+Deno.test('structurat: fără cerere_id -> 402, zero cost; user fără drept -> 403', async () => {
+  const a = await ruleaza(OWNER, { licitatie_id: 95, mod: 'structurat' }); assertEquals(a.status, 402); zeroCost(a.n)
+  const b = await ruleaza(STRAIN, { licitatie_id: 95, mod: 'structurat', cerere_id: 1 }); assertEquals(b.status, 403); zeroCost(b.n)
+})

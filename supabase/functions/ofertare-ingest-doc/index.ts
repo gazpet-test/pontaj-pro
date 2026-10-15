@@ -33,6 +33,7 @@ import { metaObiect, gardaIncearca, incercareGarda } from '../_shared/gardaInges
 import { descarcaCuJurnal } from '../_shared/egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md), fail-open — garda de mai sus rămâne fail-closed
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'   // v16: aceeași regulă + plafon ca ofertare-citire-test
+import { scrieProvenienta } from '../_shared/provenientaText.ts'   // TKT-0329 B: proveniența textului (transcriere)
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -429,6 +430,10 @@ Deno.serve(async (req: Request) => {
     // Runda 3 (J2): documentul se scrie de SERVER, în aceeași tranzacție cu verificarea tokenului — o încercare veche nu mai
     // poate suprascrie progresul uneia noi. Respins → nimic scris; RPC pierdut → rezultat NECONFIRMAT (stare necunoscută).
     await inc.inchide({ rezultat: gata ? 'succes' : 'progres', hash, size: bytes.length, etag: meta?.etag ?? null, doc: upd })
+    if (inc.raspuns?.acceptat === true && textAcum) {
+      // TKT-0329 B: textul citit de ingest = TRANSCRIERE, scrisă de producător pe exact textul acceptat (integral doar la final, fără pagini necitite)
+      await scrieProvenienta(supabase, docId as number, textAcum, 'transcriere', 'ofertare-ingest-doc', gata && !listaNecitite.length ? 'integral' : 'partial', listaNecitite)
+    }
     if (inc.raspuns?.acceptat !== true) {
       const id = docId; docId = null
       return new Response(JSON.stringify({ ok: false, garda: 'rezultat_respins', error: 'garda: rezultat NECONFIRMAT — respins (token vechi/străin) sau fără răspuns (stare necunoscută): ' + (inc.raspuns?.motiv ?? 'fără răspuns'), doc_id: id, continua: false }), { headers: CORS })

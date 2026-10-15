@@ -7,6 +7,7 @@
 // UPDATE-ul e condiționat și pe status_procesare + procesat_la (orice reprocesare le schimbă) + fisier_path (un upload nou scrie la cale
 // nouă), deci nici fereastra dintre recitire și scriere.
 import { amprentaText } from './sursa.ts'
+import { scrieProvenienta } from '../_shared/provenientaText.ts'
 // shaText = SHA-256 al text_extras (calea text); obiectNeschimbat = recomparația identității obiectului din Storage (calea PDF).
 // inceput = ISO-ul intrării în handler: o citire_noi mai nouă decât el pe rând = „citit între timp” (alt apel), nu sursă schimbată.
 export type AmprentaSursa = { status: string | null; procesat_la: string | null; shaText?: string | null; fisier_path?: string | null; obiectNeschimbat?: () => Promise<boolean>; inceput?: string }
@@ -57,6 +58,8 @@ export async function scrieCitireNoi(db: any, id: number, citire: any, numeOrigi
     const { data: w, error } = await q.select('id')
     if (error) { upErr = error; break }
     scris = (w || []).length === 1
+    // TKT-0329 B: textul compus aici din citirea AI e o SINTEZĂ, nu transcriere — proveniența pe exact textul scris
+    if (scris && typeof upd.text_extras === 'string') await scrieProvenienta(db, id, upd.text_extras as string, 'sinteza_ai', 'ofertare-document-nou-citeste', 'integral')
   }
   // CAS epuizat: dacă ultimul UPDATE a ratat din cauza sursei (nu a rev-ului), mesajul corect e „sursă schimbată”, nu „scris simultan”
   if (!scris && !upErr && sursa) {
