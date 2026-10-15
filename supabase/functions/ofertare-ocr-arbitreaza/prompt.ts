@@ -5,7 +5,7 @@
 // dezacorduri (19%) sunt doar decor. Regulile 1-8 neschimbate; decizia ramane dupa imagine.
 export const PROMPT_VERSIUNE = 'arb-v2'
 // Cascada in ACELASI apel (decizia Razvan 15.10.2026, D varianta A): Haiku 5.5 primul filtru pe orice dezacord; Sonnet 5 cand Haiku e
-// nesigur (needs_human / iesire invalida / usage lipsa) sau dezacordul are cifre diferite (cifreDiferite). Acelasi prompt pentru ambele.
+// nesigur (needs_human / iesire invalida / usage lipsa) sau dezacordul are diferenta de cifre. Acelasi prompt pentru ambele.
 export const MODEL_FILTRU = 'claude-haiku-5-5'
 export const MODEL_ARBITRU = 'claude-sonnet-5'
 

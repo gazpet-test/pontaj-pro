@@ -181,27 +181,6 @@ export function diferentaNumerica(a: string, b: string): boolean {
   return na.length !== nb.length || na.some((t, i) => t !== nb[i])
 }
 
-// ── escaladarea la Sonnet pe cifre (laborator OCR 15.10.2026) ──
-// = diferentaNumerica (secvența tokenilor numerici, literală: separator, semn, granițe) pe citirile din BD, după ce se scoate DOAR
-// marcajul de celulă unită EXACT în forma și poziția în care îl pune compare.html_rows: ' ⟦rowspan=N⟧' la COADA textului celulei,
-// N întreg 2..50 fără zerouri în față (urmat de spațiu / „ | ” / sfârșit). Cifra lui descrie atributul HTML al cititorului, nu text
-// din document; pe r1, 206 dezacorduri urcau la Sonnet doar din ea. Marcajele ⟦*_invalid=…⟧ (conțin textul atributului, arbitrar)
-// și orice altă formă rămân comparate (Jakarinos arbitru-v2 r2 P2). Varianta pe „șirul cifrelor concatenate” a fost respinsă
-// (r1: „1 | 11” = „11 | 1”, „1 1/2” = „11/2”, „10mm±0,5” = „10mm0,5”).
-// Poziția și imbricarea (Jakarinos r3-r5 P2): marcajul se scoate doar dacă e urmat de „ | ” (granița de celulă la care compare unește
-// rândul) sau de sfârșitul citirii, și DOAR dacă, după scoaterea tuturor acestor marcaje, în citire nu mai rămâne NICIUN ⟦ sau ⟧
-// (niciun alt marcaj — barat, img, *_invalid, tabel — și nicio paranteză orfană): fără alt marcaj nu există imbricare de verificat.
-// Altfel citirea rămâne neatinsă și comparația e literală. „Cantitate ⟦rowspan=5⟧ m” rămâne neatins.
-// Decizia e pe PERECHE (Jakarinos r6 P1): dacă oricare citire nu se poate curăța, se compară AMBELE originale; altfel o cifră de
-// marcaj păstrată într-o citire putea egala o cantitate reală din cealaltă („Conducta ⟦rowspan=5⟧ | ⟦barat: veche⟧” vs
-// „Conducta ⟦rowspan=7⟧ | 5”).
-const MARCAJ_COADA = / ⟦rowspan=(?:[2-9]|[1-4][0-9]|50)⟧(?= \| |$)/g
-export const faraMarcajeStructura = (s: string): string | null => { const r = s.replace(MARCAJ_COADA, ' '); return /[⟦⟧]/.test(r) ? null : r }
-export function cifreDiferite(a: string, b: string): boolean {
-  const ca = faraMarcajeStructura(a), cb = faraMarcajeStructura(b)
-  return ca === null || cb === null ? diferentaNumerica(a, b) : diferentaNumerica(ca, cb)
-}
-
 export type Decizie = { decizie: 'ales_lighton' | 'ales_mineru' | 'text_propus' | 'needs_human'; text: string; motiv: string; e_cantitate: boolean; anomalie_separator: boolean }
 const CHEI_IESIRE = ['anomalie_separator', 'decizie', 'e_cantitate', 'motiv', 'text']
 

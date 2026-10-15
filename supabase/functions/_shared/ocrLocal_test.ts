@@ -1,39 +1,8 @@
 import { strict as assert } from 'node:assert'
 import {
   amprentaDezacord, ANTET_OCR, canonic, NUME_SECRET, OPERATII, apelDinCorp, citesteCorp, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal,
-  cifreDiferite, diferentaNumerica, limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, statusDinEroare, tokeniImagineMax,
+  diferentaNumerica, limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, statusDinEroare, tokeniImagineMax,
 } from './ocrLocal.ts'
-
-Deno.test('cifreDiferite (laborator 15.10) = diferentaNumerica fara marcajul ⟦rowspan=N⟧ al pipeline-ului (forma si pozitia exacte)', () => {
-  const egale: [string, string][] = [
-    ['1.2 | Amenajarea', '1.2 ⟦rowspan=5⟧ | Amenajarea'], ['6.2 | Probe', '6.2 ⟦rowspan=50⟧ | Probe'], ['A | 4.4', 'A | 4.4 ⟦rowspan=2⟧'],
-    ['masuri de protecție', 'masuri de protectie'], ['---', ''],
-  ]
-  for (const [a, b] of egale) assert.equal(cifreDiferite(a, b), false, JSON.stringify([a, b]))
-  // tot ce separa diferentaNumerica ramane separat (Jakarinos arbitru-v2 r1: granite, ordine, semne lipite de litere, separator)
-  const diferite: [string, string][] = [
-    ['1 | 11', '11 | 1'], ['12 | 3', '1 | 23'], ['1 1/2', '11/2'], ['10mm±0,5', '10mm0,5'], ['x-5', 'x5'], ['2,5', '2, 5'],
-    ['0,056', '0.056'], ['1.234', '1,234'], ['10 m', '20 m'], ['', '48 | 56 | 0'], ['3/4', '34'], ['1e3', '13'], ['2E-5', '2E5'],
-    ['1.2 ⟦rowspan=5⟧', '1.3'], ['5⟦rowspan=2⟧3', '53'],
-    // r2 P2: doar forma exacta a pipeline-ului; _invalid (textul atributului), N in afara 2..50, zero in fata, lipit -> comparate
-    ['Cantitate ⟦rowspan_invalid=5 m⟧', 'Cantitate ⟦rowspan_invalid=7 m⟧'], ['Teava ⟦colspan_invalid=2x⟧', 'Teava'],
-    ['A ⟦rowspan=51⟧', 'A'], ['A ⟦rowspan=1⟧', 'A'], ['A ⟦rowspan=05⟧', 'A'], ['A⟦rowspan=5⟧', 'A'], ['A ⟦rowspan=5⟧7', 'A 7'],
-    // r3 P2: marcajul trebuie sa fie coada celulei, nu in interiorul ei sau al altui marcaj
-    ['Cantitate ⟦rowspan=5⟧ m', 'Cantitate ⟦rowspan=7⟧ m'], ['Cantitate ⟦rowspan_invalid=x ⟦rowspan=5⟧ m⟧', 'Cantitate ⟦rowspan_invalid=x ⟦rowspan=7⟧ m⟧'],
-    ['X ⟦rowspan_invalid=x ⟦rowspan=5⟧ | 1', 'X ⟦rowspan_invalid=x ⟦rowspan=7⟧ | 1'],
-    // r4 P2: atributul invalid contine chiar „ | ” -> contextul se pastreaza pe tot sirul (si orice _invalid opreste scoaterea)
-    ['X ⟦rowspan_invalid=x | Y ⟦rowspan=5⟧ | z⟧', 'X ⟦rowspan_invalid=x | Y ⟦rowspan=7⟧ | z⟧'],
-    ['A ⟦rowspan=5⟧ | B ⟦colspan_invalid=q⟧', 'A ⟦rowspan=7⟧ | B ⟦colspan_invalid=q⟧'],
-    // r5 P2: paranteza orfana + alt marcaj (barat) -> orice alt ⟦ / ⟧ ramas opreste scoaterea
-    ['X ⟧ ⟦barat: Y ⟦rowspan=5⟧ | z⟧', 'X ⟧ ⟦barat: Y ⟦rowspan=7⟧ | z⟧'], ['A ⟦rowspan=5⟧ | ⟦barat: 1⟧', 'A ⟦rowspan=7⟧ | ⟦barat: 1⟧'],
-    ['A ⟦rowspan=5⟧ | B ⟧', 'A ⟦rowspan=7⟧ | B ⟧'], ['A ⟦rowspan=5⟧ | B ⟦', 'A ⟦rowspan=7⟧ | B ⟦'],
-    // r6 P1: decizia pe pereche - o citire necuratabila => ambele originale (si perechea inversata)
-    ['Conducta ⟦rowspan=5⟧ | ⟦barat: veche⟧', 'Conducta ⟦rowspan=7⟧ | 5'], ['Conducta ⟦rowspan=7⟧ | 5', 'Conducta ⟦rowspan=5⟧ | ⟦barat: veche⟧'],
-  ]
-  for (const [a, b] of diferite) assert.equal(cifreDiferite(a, b), true, JSON.stringify([a, b]))
-  // nicio pereche pe care diferentaNumerica o socoteste egala nu devine diferita (si invers doar prin marcaje)
-  for (const [a, b] of [...egale, ...diferite]) if (!diferentaNumerica(a, b)) assert.equal(cifreDiferite(a, b), false)
-})
 
 const BUN = 'a'.repeat(32) + '0123456789abcdef0123456789abcdef'
 function client(rasp: { data?: unknown; error?: unknown; arunca?: boolean } = {}) {

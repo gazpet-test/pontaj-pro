@@ -5,16 +5,14 @@
 // (fn_ofertare_ocr_arbitraj_rezerva: aceleași verificări + un singur apel în zbor + plafon, cu limita de SUS a costului) → apelul
 // plătit → decontarea cu costul real (fn_ofertare_ocr_scrie_arbitraj). Nimic plătit înaintea tuturor verificărilor.
 // Cascada (decizia Razvan 15.10.2026, laborator OCR): în ACELAȘI apel, Haiku 5.5 decide primul; Sonnet 5 doar când Haiku e nesigur
-// (needs_human, ieșire în afara schemei, usage lipsă) sau dezacordul are cifre diferite — calculate DOAR din citirile din BD
-// (cifreDiferite: șirul caracterelor numerice, separatorul literal, fără marcajele ⟦rowspan⟧; laborator OCR 15.10.2026, mai strânsă
-// decât diferentaNumerica). Marcajul diferenta_numerica al clientului nu mai decide escaladarea: în ambele sensuri (fals pe cifre
-// diferite: Jakarinos r1 P1-2; adevărat pe aceleași cifre) contează doar ce scrie în BD.
+// (needs_human, ieșire în afara schemei, usage lipsă) sau dezacordul are diferență de cifre — RECALCULATĂ din citirile din BD
+// (diferentaNumerica = compare.numeric_diff), sau marcată de client (mai strict, niciodată mai puțin; Jakarinos r1 P1-2).
 // O singură rezervare (limita de sus a AMBELOR apeluri), o singură decizie finală (a ultimului model chemat), costul real = suma.
 // După Haiku, dacă ce a rămas din rezervare nu mai acoperă limita lui Sonnet, NU se cheamă Sonnet: depășire (Jakarinos r1 P1-1).
 // ai_usage_log primește un rând: modelul final, tokenii și costul însumate (fără migrare); detaliul pe model — tokeni, cost, „estimat”
 // când usage lipsește — e în prefixul motivului (Jakarinos r1 P2).
 import {
-  amprentaDezacord, cifreDiferite, costReal, Decizie, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost,
+  amprentaDezacord, costReal, Decizie, decizieDinIesire, diferentaNumerica, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost,
   MAX_TOKENI_IESIRE, octeti, raspuns, rotunjesteSus, sha256Hex,
 } from '../_shared/ocrLocal.ts'
 import { MODEL_ARBITRU, MODEL_FILTRU, PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
@@ -144,7 +142,7 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   if (!r1.ok) return raspuns(502, { error: r1.error, rezervare_id: rez })
   const detaliu = (r: { model: string; d: Decizie; tin: number; tout: number; cost: number; estimat: boolean }) =>
     '[' + (r.model === MODEL_FILTRU ? 'Haiku' : 'Sonnet') + ': ' + r.d.decizie + ', ' + (r.estimat ? 'usage lipsa, cost estimat ' : r.tin + '/' + r.tout + ' tok, ') + r.cost.toFixed(4) + '$]'
-  const cifre = cifreDiferite(dz.citire_lighton, dz.citire_mineru)
+  const cifre = diferentaNumerica(dz.citire_lighton, dz.citire_mineru) || item.diferenta_numerica === true
   let final = r1
   if (r1.d.decizie === 'needs_human' || cifre) {
     // ce a rămas din rezervare trebuie să acopere limita de sus a lui Sonnet; altfel nu se mai cheltuie: depășire cu ce s-a consumat
