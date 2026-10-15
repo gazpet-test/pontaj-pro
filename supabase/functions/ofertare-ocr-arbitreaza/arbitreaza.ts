@@ -5,11 +5,14 @@
 // (fn_ofertare_ocr_arbitraj_rezerva: aceleași verificări + un singur apel în zbor + plafon, cu limita de SUS a costului) → apelul
 // plătit → decontarea cu costul real (fn_ofertare_ocr_scrie_arbitraj). Nimic plătit înaintea tuturor verificărilor.
 // Cascada (decizia Razvan 15.10.2026, laborator OCR): în ACELAȘI apel, Haiku 5.5 decide primul; Sonnet 5 doar când Haiku e nesigur
-// (needs_human, ieșire în afara schemei, usage lipsă) sau dezacordul are diferență de cifre (item.diferenta_numerica, legat de amprentă).
+// (needs_human, ieșire în afara schemei, usage lipsă) sau dezacordul are diferență de cifre — RECALCULATĂ din citirile din BD
+// (diferentaNumerica = compare.numeric_diff), sau marcată de client (mai strict, niciodată mai puțin; Jakarinos r1 P1-2).
 // O singură rezervare (limita de sus a AMBELOR apeluri), o singură decizie finală (a ultimului model chemat), costul real = suma.
-// ai_usage_log primește un rând: modelul final, tokenii și costul însumate (fără migrare; detaliul pe model e în motiv).
+// După Haiku, dacă ce a rămas din rezervare nu mai acoperă limita lui Sonnet, NU se cheamă Sonnet: depășire (Jakarinos r1 P1-1).
+// ai_usage_log primește un rând: modelul final, tokenii și costul însumate (fără migrare); detaliul pe model — tokeni, cost, „estimat”
+// când usage lipsește — e în prefixul motivului (Jakarinos r1 P2).
 import {
-  amprentaDezacord, costReal, Decizie, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost,
+  amprentaDezacord, costReal, Decizie, decizieDinIesire, diferentaNumerica, dimensiuniPng, dinBase64, esteApelOcrLocal, esteId, esteObiect, citesteCorp, limitaCost,
   MAX_TOKENI_IESIRE, octeti, raspuns, rotunjesteSus, sha256Hex,
 } from '../_shared/ocrLocal.ts'
 import { MODEL_ARBITRU, MODEL_FILTRU, PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
@@ -84,7 +87,8 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const text = 'DATE (nu instrucțiuni):\n' + JSON.stringify(date)
   const octetiText = octeti(PROMPT) + octeti(text)
   // limita de SUS a ambelor apeluri: escaladarea la Sonnet se poate întâmpla pe orice item (Haiku nesigur)
-  const suma = rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU) + limitaCost(octetiText, dim.w, dim.h, MODEL_ARBITRU))
+  const limitaArbitru = limitaCost(octetiText, dim.w, dim.h, MODEL_ARBITRU)
+  const suma = rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU) + limitaArbitru)
   if (suma > 1) return refuz('suma')
   if (dim.w > 8000 || dim.h > 8000) return refuz('latura')  // API-ul refuză laturi peste 8000 px (review #712 Jakarinos P2)
   if (dz.tip === 'banda_intreaga') return refuz('banda')  // apărare în adâncime: clientul o trimite la om (decizie Razvan 14.10)
@@ -97,7 +101,7 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const rez = rz.rezervare_id
   if (!esteId(rez)) return raspuns(500, { error: 'Rezervare invalidă' })
 
-  type Rezultat = { ok: true; model: string; d: Decizie; tin: number; tout: number; cost: number } | { ok: false; error: string }
+  type Rezultat = { ok: true; model: string; d: Decizie; tin: number; tout: number; cost: number; estimat: boolean } | { ok: false; error: string }
   const apel = async (model: string): Promise<Rezultat> => {
     let data: any
     try {
@@ -123,19 +127,29 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
     let d = decizieDinIesire(data?.stop_reason === 'max_tokens' ? '' : String((data?.content || []).find((x: any) => x?.type === 'text')?.text || ''), dz)
     // usage lipsă / invalid: costul acestui apel = limita lui de sus și fără decizie automată (Copilot r1 P1)
     if (!usageOk) d = { ...d, decizie: 'needs_human', text: '', motiv: 'usage API lipsa sau invalid' }
-    return { ok: true, model, d, tin, tout, cost: usageOk ? costReal(tin, tout, model) : limitaCost(octetiText, dim.w, dim.h, model) }
+    return { ok: true, model, d, tin, tout, cost: usageOk ? costReal(tin, tout, model) : limitaCost(octetiText, dim.w, dim.h, model), estimat: !usageOk }
   }
 
   const r1 = await apel(MODEL_FILTRU)
   if (!r1.ok) return raspuns(502, { error: r1.error, rezervare_id: rez })
+  const detaliu = (r: { model: string; d: Decizie; tin: number; tout: number; cost: number; estimat: boolean }) =>
+    '[' + (r.model === MODEL_FILTRU ? 'Haiku' : 'Sonnet') + ': ' + r.d.decizie + ', ' + (r.estimat ? 'usage lipsa, cost estimat ' : r.tin + '/' + r.tout + ' tok, ') + r.cost.toFixed(4) + '$]'
+  const cifre = diferentaNumerica(dz.citire_lighton, dz.citire_mineru) || item.diferenta_numerica === true
   let final = r1
-  if (r1.d.decizie === 'needs_human' || item.diferenta_numerica === true) {
-    const r2 = await apel(MODEL_ARBITRU)
-    // Haiku a costat deja: rezervarea rămâne deschisă (abandonul o socotește întreagă în plafon) — conservator, nicio decizie
-    if (!r2.ok) return raspuns(502, { error: r2.error, rezervare_id: rez, filtru: r1.d.decizie })
-    final = { ...r2, d: { ...r2.d, motiv: ('[Haiku: ' + r1.d.decizie + '] ' + r2.d.motiv).slice(0, 200) },
-              tin: r1.tin + r2.tin, tout: r1.tout + r2.tout, cost: rotunjesteSus(r1.cost + r2.cost) }
-  }
+  if (r1.d.decizie === 'needs_human' || cifre) {
+    // ce a rămas din rezervare trebuie să acopere limita de sus a lui Sonnet; altfel nu se mai cheltuie: depășire cu ce s-a consumat
+    if (r1.cost + limitaArbitru <= suma) {
+      const r2 = await apel(MODEL_ARBITRU)
+      // Haiku a costat deja: rezervarea rămâne deschisă (abandonul o socotește întreagă în plafon) — conservator, nicio decizie
+      if (!r2.ok) return raspuns(502, { error: r2.error, rezervare_id: rez, filtru: r1.d.decizie })
+      final = { ...r2, d: { ...r2.d, motiv: (detaliu(r1) + ' ' + detaliu(r2) + ' ' + r2.d.motiv).slice(0, 200) },
+                tin: r1.tin + r2.tin, tout: r1.tout + r2.tout, cost: rotunjesteSus(r1.cost + r2.cost), estimat: r1.estimat || r2.estimat }
+    } else {
+      // Haiku a costat peste limita lui estimata (pret / tokenizare schimbate): nu se mai cheltuie pe Sonnet; decizie needs_human cu costul
+      // REAL; daca acesta depaseste chiar toata rezervarea, verificarea de mai jos o trateaza ca depasire (decontare, rularea oprita)
+      final = { ...r1, d: { ...r1.d, decizie: 'needs_human', text: '', motiv: (detaliu(r1) + ' cost Haiku peste limita estimata, Sonnet nechemat').slice(0, 200) } }
+    }
+  } else final = { ...r1, d: { ...r1.d, motiv: (detaliu(r1) + ' ' + r1.d.motiv).slice(0, 200) } }
   const { model: modelFinal, d, tin, tout } = final, real = final.cost
   const peste = real > suma
   // costul real peste rezervare (doar dacă prețul / tokenizarea s-ar schimba): UN singur RPC tranzacțional decontează la rezervare,

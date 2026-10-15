@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import {
   amprentaDezacord, ANTET_OCR, canonic, NUME_SECRET, OPERATII, apelDinCorp, citesteCorp, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal,
-  limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, statusDinEroare, tokeniImagineMax,
+  diferentaNumerica, limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, statusDinEroare, tokeniImagineMax,
 } from './ocrLocal.ts'
 
 const BUN = 'a'.repeat(32) + '0123456789abcdef0123456789abcdef'
@@ -126,4 +126,10 @@ Deno.test('ieșirea arbitrului: schema strictă, altfel needs_human', () => {
     const d = decizieDinIesire(rau, it)
     assert.equal(d.decizie, 'needs_human', rau); assert.equal(d.text, ''); assert.equal(d.e_cantitate, true)
   }
+})
+
+Deno.test('diferentaNumerica = compare.numeric_diff (paritate pe ocrLocal_cifre.json, verificat și din Python)', async () => {
+  const cazuri: [string, string, boolean][] = JSON.parse(await Deno.readTextFile(new URL('./ocrLocal_cifre.json', import.meta.url)))
+  assert.ok(cazuri.length > 100)
+  for (const [a, b, asteptat] of cazuri) assert.equal(diferentaNumerica(a, b), asteptat, JSON.stringify([a, b]))
 })

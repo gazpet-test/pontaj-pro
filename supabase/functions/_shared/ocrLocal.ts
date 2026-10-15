@@ -168,6 +168,19 @@ export function limitaCost(octetiText: number, w: number, h: number, model: stri
 export const costReal = (tokIn: number, tokOut: number, model: string): number => { const p = pret(model, tokIn); return rotunjesteSus(tokIn * p.in + tokOut * p.out) }
 export const octeti = (s: string): number => new TextEncoder().encode(s).length
 
+// ── diferența de cifre, recalculată DIN BD (cascada, Jakarinos r1: marcajul clientului e consecvent prin amprentă, nu dovedit corect) ──
+// Port 1:1 din scripts/ocr_local/compare.py: NUM, LETTERS, TOKEN (alternanța în aceeași ordine: număr, litere, orice alt caracter) și
+// numeric_diff (secvența tokenilor numerici diferă). Paritatea e testată pe același fișier (ocrLocal_cifre.json) în Python și în Deno.
+const NUM = '[-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?'
+const LETTERS = 'A-Za-z\u00aa\u00b2\u00b3\u00b5\u00b9\u00ba\u00bc-\u00be\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f' +
+  '\u0370-\u03ff\u0400-\u04ff\u1e00-\u1eff\u2070-\u209f\u2150-\u2189'
+const NUMAR = new RegExp('^' + NUM + '$')
+export const tokeniPipeline = (s: string): string[] => s.match(new RegExp(NUM + '|[' + LETTERS + ']+|\\S', 'g')) || []
+export function diferentaNumerica(a: string, b: string): boolean {
+  const na = tokeniPipeline(a).filter((t) => NUMAR.test(t)), nb = tokeniPipeline(b).filter((t) => NUMAR.test(t))
+  return na.length !== nb.length || na.some((t, i) => t !== nb[i])
+}
+
 export type Decizie = { decizie: 'ales_lighton' | 'ales_mineru' | 'text_propus' | 'needs_human'; text: string; motiv: string; e_cantitate: boolean; anomalie_separator: boolean }
 const CHEI_IESIRE = ['anomalie_separator', 'decizie', 'e_cantitate', 'motiv', 'text']
 
