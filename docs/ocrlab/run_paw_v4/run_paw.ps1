@@ -1,16 +1,22 @@
 # run_paw.ps1 - lansator unic Paw (v2-server, 09.10.2026; = v2 de pe laptop 07.10, cai mutate pe serverul AI Gazpet-Claude)
-# Apel: run_paw.cmd <cine> <brief.md> <iesire.log> [model]
+# Apel: run_paw.cmd <cine> <brief.md> <iesire.log> [model] [imagini.txt]
 #   cine  : jak (Codex CLI, read-only) | cop (Copilot prin Edge CDP 9333; model = id conversatie) | ollie (Ollama local)
 #   brief : fisier .md sub C:\Users\Public\paw-data\brief sau C:\Users\Public\erp_review (citit ca DATE)
 #   out   : fisier sub C:\Users\Public\paw-data\out (scris de lansator; ultima linie = PAW_GATA / PAW_EROARE)
 # Reguli (verdict Copilot conv.2 + Jakarinos 07.10): liste inchise, cai canonicalizate (fara UNC/ADS/reparse),
 # argumente fara shell, timeout pe tot arborele, lock per conversatie Copilot, CDP doar loopback, fara ferestre ascunse.
+# v4 (laborator OCR, propunere 15.10.2026): DOAR pentru jak, [imagini.txt] = lista (o cale pe linie) de cel mult 10 fisiere .png
+#   sub C:\Users\Public\paw-data\banca; fiecare: cale sigura, <= 20 MB, semnatura PNG, decodabila, <= 40 MP. Se COPIAZA intr-un
+#   director nou al rularii (paw-data\tmp_img\<runid>) si se verifica pe copie (fara TOCTOU); Codex primeste copiile (--image=...).
 # ASCII only. Compatibil Windows PowerShell 5.1.
-param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "")
+param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "", [string]$Imagini = "")
 $ErrorActionPreference = "Stop"
 $DATA = "C:\Users\Public\paw-data"
 $BRIEF_ROOTS = @("$DATA\brief", "C:\Users\Public\erp_review")
 $OUT_ROOT = "$DATA\out"
+$IMG_ROOT = "$DATA\banca"
+$IMG_TMP = "$DATA\tmp_img"
+$IMG_MAX = 10; $IMG_MAX_BYTES = 20MB; $IMG_MAX_PIX = 40000000
 $JURNAL = "$DATA\paw_runs.log"
 $REPO = "C:\Users\Gazpet-Ai\gazpet-erp"
 $RUNID = (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + ([guid]::NewGuid().ToString("N").Substring(0, 6))
@@ -80,6 +86,41 @@ function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd
   return @{ timeout = $false; exit = $p.ExitCode; out = $so.Result; err = $errCurat.Trim() }
 }
 
+function VerificaPng([string]$f) {
+  $len = (Get-Item -LiteralPath $f -Force).Length
+  if ($len -le 8 -or $len -gt $IMG_MAX_BYTES) { throw "imagine de marime nepermisa ($len octeti): $f" }
+  $fs = [IO.File]::OpenRead($f)
+  try { $h = New-Object byte[] 8; [void]$fs.Read($h, 0, 8) } finally { $fs.Close() }
+  $sig = [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+  for ($i = 0; $i -lt 8; $i++) { if ($h[$i] -ne $sig[$i]) { throw "nu e PNG: $f" } }
+  Add-Type -AssemblyName System.Drawing
+  $img = $null; $pix = 0
+  try { $img = [System.Drawing.Image]::FromFile($f); $pix = [long]$img.Width * [long]$img.Height } catch { throw "PNG nedecodabil: $f" } finally { if ($img) { $img.Dispose() } }
+  if ($pix -le 0 -or $pix -gt $IMG_MAX_PIX) { throw "imagine prea mare ($pix pixeli): $f" }
+}
+function PregatesteImagini([string]$lista) {
+  $listaFull = CaleSigura $lista @($IMG_ROOT) $true
+  if ([IO.Path]::GetExtension($listaFull).ToLower() -ne ".txt") { throw "lista de imagini trebuie sa fie .txt" }
+  $linii = @(Get-Content -LiteralPath $listaFull -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  if ($linii.Count -lt 1 -or $linii.Count -gt $IMG_MAX) { throw ("lista de imagini: " + $linii.Count + " intrari (permis 1-" + $IMG_MAX + ")") }
+  if (-not (Test-Path -LiteralPath $IMG_TMP)) { New-Item -ItemType Directory -Path $IMG_TMP | Out-Null }
+  $dir = Join-Path $IMG_TMP $RUNID
+  New-Item -ItemType Directory -Path $dir | Out-Null
+  [void](CaleSigura (Join-Path $dir "x.png") @($IMG_TMP) $false)
+  $copii = @(); $k = 0
+  try {
+    foreach ($l in $linii) {
+      $src = CaleSigura $l @($IMG_ROOT) $true
+      if ([IO.Path]::GetExtension($src).ToLower() -ne ".png") { throw "doar .png: $src" }
+      $k++; $dst = Join-Path $dir ("img{0:D2}.png" -f $k)
+      Copy-Item -LiteralPath $src -Destination $dst
+      VerificaPng $dst
+      $copii += $dst
+    }
+  } catch { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue; throw }
+  return @{ dir = $dir; copii = $copii }
+}
+
 # --- validari ---
 try {
   if (-not $TOOLS.ContainsKey($Cine)) { throw "cine necunoscut '$Cine' (permis: jak, cop, ollie)" }
@@ -90,6 +131,11 @@ try {
   if ([IO.Path]::GetExtension($BriefFull).ToLower() -ne ".md") { throw "brief-ul trebuie sa fie .md" }
   $script:OutFull = CaleSigura $Out @($OUT_ROOT) $false
   if (-not (Test-Path -LiteralPath $T.exe -PathType Leaf)) { throw "executabil lipsa: " + $T.exe }
+  $script:Img = $null
+  if ($Imagini) {
+    if ($Cine -ne "jak") { throw "imaginile sunt permise doar pentru jak" }
+    $script:Img = PregatesteImagini $Imagini
+  }
   Set-Content -LiteralPath $script:OutFull -Value ("PAW_START " + $RUNID + " " + $Cine + " " + $Model + " " + $BriefFull) -Encoding UTF8
 } catch { Eroare ("validare: " + $_.Exception.Message) }
 
@@ -108,6 +154,7 @@ try {
       }
       $argv = @($CODEX_JS, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "-C", $REPO)
       if ($Model) { $argv += @("-m", $Model) }
+      if ($script:Img) { foreach ($c in $script:Img.copii) { $argv += @("--image=" + $c) } }
       # promptul (cu brief-ul inclus) merge pe stdin ("-"), nu ca argument: Arg() interzice ghilimele/linii noi
       $argv += @("-")
       $rez = Ruleaza $T.exe $argv $prompt $REPO $T.timeout $null
@@ -142,6 +189,7 @@ try {
     }
   }
   if ($lock) { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue; $lock = $null }
+  if ($script:Img) { Remove-Item -LiteralPath $script:Img.dir -Recurse -Force -ErrorAction SilentlyContinue }
   Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8
   if ($rez.err) { Add-Content -LiteralPath $script:OutFull -Value ("--- stderr ---`n" + $rez.err) -Encoding UTF8 }
   if ($rez.timeout) { Eroare ("timeout " + $T.timeout + "s (arbore oprit)") }
@@ -152,5 +200,6 @@ try {
   exit 0
 } catch {
   if ($lock) { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+  if ($script:Img) { Remove-Item -LiteralPath $script:Img.dir -Recurse -Force -ErrorAction SilentlyContinue }
   Eroare ("rulare: " + $_.Exception.Message)
 }
