@@ -182,11 +182,13 @@ export function diferentaNumerica(a: string, b: string): boolean {
 }
 
 // ── escaladarea la Sonnet pe cifre (laborator OCR 15.10.2026) ──
-// = diferentaNumerica (secvența tokenilor numerici, literală: separator, semn, granițe) pe citirile din BD, după ce se scot DOAR
-// marcajele structurale ale pipeline-ului ⟦rowspan=N⟧ / ⟦rowspan_invalid=…⟧ / ⟦colspan_invalid=…⟧: cifra lor descrie o celulă unită
-// (atributul HTML al cititorului), nu e text din document. Pe r1, 206 dezacorduri urcau la Sonnet doar din ea. O variantă pe „șirul
-// cifrelor concatenate” a fost respinsă (Jakarinos arbitru-v2 r1: „1 | 11” = „11 | 1”, „1 1/2” = „11/2”, „10mm±0,5” = „10mm0,5”).
-const MARCAJ_STRUCTURA = /⟦(?:rowspan=\d+|(?:rowspan|colspan)_invalid=[^⟧]*)⟧/g
+// = diferentaNumerica (secvența tokenilor numerici, literală: separator, semn, granițe) pe citirile din BD, după ce se scoate DOAR
+// marcajul de celulă unită EXACT în forma și poziția în care îl pune compare.html_rows: ' ⟦rowspan=N⟧' la COADA textului celulei,
+// N întreg 2..50 fără zerouri în față (urmat de spațiu / „ | ” / sfârșit). Cifra lui descrie atributul HTML al cititorului, nu text
+// din document; pe r1, 206 dezacorduri urcau la Sonnet doar din ea. Marcajele ⟦*_invalid=…⟧ (conțin textul atributului, arbitrar)
+// și orice altă formă rămân comparate (Jakarinos arbitru-v2 r2 P2). Varianta pe „șirul cifrelor concatenate” a fost respinsă
+// (r1: „1 | 11” = „11 | 1”, „1 1/2” = „11/2”, „10mm±0,5” = „10mm0,5”).
+const MARCAJ_STRUCTURA = / ⟦rowspan=(?:[2-9]|[1-4][0-9]|50)⟧(?=\s|$)/g
 export const faraMarcajeStructura = (s: string): string => s.replace(MARCAJ_STRUCTURA, ' ')
 export const cifreDiferite = (a: string, b: string): boolean => diferentaNumerica(faraMarcajeStructura(a), faraMarcajeStructura(b))
 

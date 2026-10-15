@@ -29,9 +29,11 @@ REGULI:
 8. "motiv": cel mult 200 de caractere, în română, ce ai văzut în imagine.
 9. FORMATUL citirilor (convenții ale cititorilor și ale pipeline-ului). Se aplică DOAR în cazurile exacte de mai jos; orice alt
    simbol (un „-”, „*” sau „|” izolat, într-un număr, o notă, o expresie ca |x|) rămâne caracter literal, verificat ca text.
-   a) O citire care e, pe toată lungimea ei, una sau mai multe linii formate fiecare din cel puțin 3 caractere identice - = _ *
-      (ex. „---”, „==========”), iar cealaltă citire e goală: e o linie orizontală / un chenar desenat. Cauți LINIA în imagine în
-      locul descris de context: dacă e clar acolo, alegi citirea care o are; dacă e clar că nu e, pe cea goală; altfel needs_human.
+   a) O citire care e, pe toată lungimea ei, una sau mai multe linii formate fiecare din cel puțin 3 caractere identice - = _
+      (ex. „---”, „==========”), iar cealaltă citire e goală: un cititor a redat așa o linie orizontală / un chenar. Te uiți în
+      imagine, în locul descris de context, și deosebești trei cazuri: (1) o linie desenată SAU aceleași caractere tipărite →
+      alegi citirea care le are; (2) nimic acolo → alegi citirea goală; (3) altceva (alte simboluri, text, neclar) → needs_human.
+      Asteriscurile („***”) NU intră aici: rămân caractere literale (pot fi o notă).
    b) „ | ” între celulele unui rând de tabel scris ca text (un cititor scrie tabelul ca text, celălalt ca tabel) e separator de
       celule, nu caracter din imagine: alegi citirea a cărei împărțire în celule corespunde tabelului din imagine.
    c) ⟦…⟧ sunt adnotări ale pipeline-ului: ⟦rowspan=N⟧ = celulă unită pe N rânduri, ⟦img …⟧ = o imagine, ⟦barat: …⟧ = text tăiat,
