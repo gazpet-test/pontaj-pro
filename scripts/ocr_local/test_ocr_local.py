@@ -3,7 +3,7 @@ import hashlib, json, os, pathlib, re, shutil, tempfile, time, unittest
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 from .geometry import classify, orientation, text_bands
-from .guard import Guard
+from .guard import Guard, view
 from .guard_legacy import repetition_reason, repeated_table_row
 from . import read as RD
 from .plan import plan, load_plan
@@ -49,10 +49,14 @@ class Geometrie(unittest.TestCase):
 GARDA_FIX = pathlib.Path(__file__).parent / 'fixtures_garda'
 GARDA_SHA = {'d772_p0255_b0_lighton.txt': 'fa5ac788a7e422e1090fb6ac7b97b610697e1d886ac0050aebc648376bc66e15',
              'bucla_text_ovis_p85.txt': 'd80209522e0e79a941469f8f254e44444b5d497d308559acd467d54846251d3e',
-             'bucla_tabel_ovis_td31.txt': '86119174e96e6bf7cf7bc7694d7a1cb4d62c02749088081f9373907daf188523'}
+             'bucla_tabel_ovis_td31.txt': '86119174e96e6bf7cf7bc7694d7a1cb4d62c02749088081f9373907daf188523',
+             'd772_p0342_b0_mineru_base64.txt': '117c37923582229f772532eedd79f47f23d152ed9ce462c9647e608031ae0973',
+             'bucla_d1247_p0963_b0_mineru.txt': 'db904c56bce405321fd91a4da5d58564ace02dbcb95451c4cba32ab61c857512'}
 def garda_fix(nume):
     b = (GARDA_FIX / nume).read_bytes(); assert hashlib.sha256(b).hexdigest() == GARDA_SHA[nume], nume
     return b.decode('utf-8')
+# base64 fara repetitii (blocul de 200 nu se repeta), 64 de caractere distincte, ~20k tokeni
+B64_ALEATOR = ''.join(__import__('random').Random(7).choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=30000))
 def garda_flux(text, pas=16):
     """Garda ca la citire: textul creste pe bucati; intoarce (motiv, detaliu, caractere la oprire)."""
     g = Guard()
@@ -98,6 +102,26 @@ class GardaLinii(unittest.TestCase):
         self.assertIsNone(repeated_table_row('\n'.join('<table>\n%s\n</table>\nArticolul %d' % (sub, i) for i in range(4))))
         self.assertIsNone(repeated_table_row('<table>' + ''.join('<tbody>%s</tbody>\ntext intre\n' % sub for _ in range(4)) + '</table>'))
         self.assertIsNotNone(repeated_table_row('<table><thead>' + sub + '</thead><tbody>' + sub * 3 + '</tbody></table>'))  # acelasi tabel
+    def test_imagine_base64_mineru_nu_e_bucla(self):
+        # r1 d772 p0342 (si p0382/p0384, d1247 p3): MinerU pune decupajul ca data-URI in src -> 34 KB cu ~65 caractere distincte;
+        # garda v4 suna pe unique_chars, v5 nu mai vede payload-ul
+        t = garda_fix('d772_p0342_b0_mineru_base64.txt')
+        for pas in (16, 128, 1024): self.assertIsNone(garda_flux(t, pas)[0])
+        self.assertEqual(view(t)[1]['data_uri_stripped'], 1)
+        b64 = 'iVBORw0KGgoAAAANSUhEUgAA' + B64_ALEATOR
+        for q in ('"', "'", ''):
+            self.assertIsNone(garda_flux('<img src=%sdata:image/png;base64,%s%s>' % (q, b64, q), 512)[0])
+    def test_base64_in_afara_src_ramane_vazut(self):
+        # doar payload-ul din src; acelasi base64 ca text, in alt sau cu alt tip MIME ramane in vedere (unique_chars suna)
+        b64 = B64_ALEATOR
+        for t in (b64, '<img alt="%s">' % b64, '<img src="data:text/plain;base64,%s">' % b64, '<a href="data:image/png;base64,%s">' % b64):
+            self.assertEqual(garda_flux(t, 512)[0], 'bucla_unique_chars_lt100_after3000tokens', t[:40])
+    def test_bucla_dupa_imagine_ramane_oprita(self):
+        # o imagine inline urmata de bucla reala: bucla e prinsa (blocul de 200 pe vederea fara payload)
+        t = '<img src="data:image/jpeg;base64,%s">\n' % ('Q' * 5000) + '<td>' + ' - ' * 2000 + '</td>'
+        self.assertEqual(garda_flux(t, 128)[0], 'bucla_repeated200_ge4')
+        # bucla reala r1 d1247 p0963 (MinerU, „- - -” intr-o celula) ramane oprita
+        self.assertEqual(garda_flux(garda_fix('bucla_d1247_p0963_b0_mineru.txt'), 128)[0], 'bucla_repeated200_ge4')
     def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
         self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')

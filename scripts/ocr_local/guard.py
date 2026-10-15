@@ -2,21 +2,25 @@
 import re, html, hashlib
 from .guard_base import Guard as PriorGuard
 from .guard_legacy import repetition_reason, repeated_table_row
-VERSION='empty-cells-v4-td-consecutive-rawrows'
+VERSION='empty-cells-v5-td-consecutive-rawrows-nodatauri'
 POLICY={'last_cells_without_nonempty':600,'repeated_block_chars':200,'repeated_block_occurrences':4,'diversity_tokens_gt':3000,'diversity_chars_lt':100}
 CELL=re.compile(r'<td\b([^>]*)>(.*?)</td\s*>',re.I|re.S)
 MARK='\ue000'
+# Imaginile inline (MinerU le pune ca <img src="data:image/...;base64,...">, zeci de KB cu ~65 de caractere distincte)
+# nu sunt text citit: in vedere ramane doar antetul data-URI. Strict: doar in atributul src, doar alfabetul base64.
+DATA_URI=re.compile(r'''(\bsrc\s*=\s*["']?data:image/[a-z0-9.+-]+;base64,)[A-Za-z0-9+/=]+''',re.I)
 def empty(m):
  # Strict whitespace/entity-only body; nested markup and semantic attributes stay.
  return not re.search(r'\b(?:title|alt|aria-label|data-value)\s*=',m[1],re.I) and not html.unescape(m[2]).strip()
 def view(text):
+ text,n_uri=DATA_URI.subn(r'\1',text)
  cells=list(CELL.finditer(text)); flags=[empty(m) for m in cells]
  masked=CELL.sub(lambda m:MARK if empty(m) else m[0],text)
  # Collapse adjacent empty cells across structural row boundaries, including
  # empty rows. Preserve every nonempty cell verbatim, including zero/dash.
  gap=r'(?:\s|\\n|\\r|\\t|</?tr\b[^>]*>)*'
  masked=re.sub(MARK+r'(?:'+gap+MARK+r')+',MARK,masked,flags=re.I)
- return masked,{'complete_cells':len(cells),'empty_cells':sum(flags),'last600_all_empty':len(flags)>=600 and all(flags[-600:]),'collapsed_markers':masked.count(MARK)}
+ return masked,{'complete_cells':len(cells),'empty_cells':sum(flags),'last600_all_empty':len(flags)>=600 and all(flags[-600:]),'collapsed_markers':masked.count(MARK),'data_uri_stripped':n_uri}
 class Guard:
  def __init__(self):self.semantic=PriorGuard();self.reset()
  def reset(self):self.semantic.reset();self.previous='';self.event=None;self.stats={}
