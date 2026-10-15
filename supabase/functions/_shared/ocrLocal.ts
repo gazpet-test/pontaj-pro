@@ -188,21 +188,14 @@ export function diferentaNumerica(a: string, b: string): boolean {
 // din document; pe r1, 206 dezacorduri urcau la Sonnet doar din ea. Marcajele ⟦*_invalid=…⟧ (conțin textul atributului, arbitrar)
 // și orice altă formă rămân comparate (Jakarinos arbitru-v2 r2 P2). Varianta pe „șirul cifrelor concatenate” a fost respinsă
 // (r1: „1 | 11” = „11 | 1”, „1 1/2” = „11/2”, „10mm±0,5” = „10mm0,5”).
-// Poziția (Jakarinos r3-r4 P2): marcajul se scoate doar dacă (1) e urmat de „ | ” (granița de celulă la care compare unește rândul)
-// sau de sfârșitul citirii, (2) pe TOT șirul de dinaintea lui nu e niciun ⟦ rămas deschis (nu e în interiorul altui marcaj, oricâte
-// „ | ” ar conține acela) și (3) citirea nu conține deloc marcaje ⟦*_invalid=…⟧ (textul atributului, arbitrar: atunci nimic nu se
-// scoate, comparația rămâne literală). „Cantitate ⟦rowspan=5⟧ m” rămâne neatins.
+// Poziția și imbricarea (Jakarinos r3-r5 P2): marcajul se scoate doar dacă e urmat de „ | ” (granița de celulă la care compare unește
+// rândul) sau de sfârșitul citirii, și DOAR dacă, după scoaterea tuturor acestor marcaje, în citire nu mai rămâne NICIUN ⟦ sau ⟧
+// (niciun alt marcaj — barat, img, *_invalid, tabel — și nicio paranteză orfană): fără alt marcaj nu există imbricare de verificat.
+// Altfel citirea rămâne neatinsă și comparația e literală. „Cantitate ⟦rowspan=5⟧ m” rămâne neatins.
 const MARCAJ_COADA = / ⟦rowspan=(?:[2-9]|[1-4][0-9]|50)⟧(?= \| |$)/g
 export function faraMarcajeStructura(s: string): string {
-  if (/⟦(?:rowspan|colspan)_invalid=/.test(s)) return s
-  let out = '', ultim = 0
-  for (const m of s.matchAll(MARCAJ_COADA)) {
-    const inainte = s.slice(0, m.index!)
-    const deschise = [...inainte].reduce((n, c) => n + (c === '⟦' ? 1 : c === '⟧' ? -1 : 0), 0)
-    if (deschise !== 0) continue
-    out += s.slice(ultim, m.index!) + ' '; ultim = m.index! + m[0].length
-  }
-  return out + s.slice(ultim)
+  const r = s.replace(MARCAJ_COADA, ' ')
+  return /[⟦⟧]/.test(r) ? s : r
 }
 export const cifreDiferite = (a: string, b: string): boolean => diferentaNumerica(faraMarcajeStructura(a), faraMarcajeStructura(b))
 

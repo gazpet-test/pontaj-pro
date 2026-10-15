@@ -24,6 +24,9 @@ Deno.test('cifreDiferite (laborator 15.10) = diferentaNumerica fara marcajul ⟦
     // r4 P2: atributul invalid contine chiar „ | ” -> contextul se pastreaza pe tot sirul (si orice _invalid opreste scoaterea)
     ['X ⟦rowspan_invalid=x | Y ⟦rowspan=5⟧ | z⟧', 'X ⟦rowspan_invalid=x | Y ⟦rowspan=7⟧ | z⟧'],
     ['A ⟦rowspan=5⟧ | B ⟦colspan_invalid=q⟧', 'A ⟦rowspan=7⟧ | B ⟦colspan_invalid=q⟧'],
+    // r5 P2: paranteza orfana + alt marcaj (barat) -> orice alt ⟦ / ⟧ ramas opreste scoaterea
+    ['X ⟧ ⟦barat: Y ⟦rowspan=5⟧ | z⟧', 'X ⟧ ⟦barat: Y ⟦rowspan=7⟧ | z⟧'], ['A ⟦rowspan=5⟧ | ⟦barat: 1⟧', 'A ⟦rowspan=7⟧ | ⟦barat: 1⟧'],
+    ['A ⟦rowspan=5⟧ | B ⟧', 'A ⟦rowspan=7⟧ | B ⟧'], ['A ⟦rowspan=5⟧ | B ⟦', 'A ⟦rowspan=7⟧ | B ⟦'],
   ]
   for (const [a, b] of diferite) assert.equal(cifreDiferite(a, b), true, JSON.stringify([a, b]))
   // nicio pereche pe care diferentaNumerica o socoteste egala nu devine diferita (si invers doar prin marcaje)
