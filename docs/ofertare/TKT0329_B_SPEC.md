@@ -1,6 +1,6 @@
 # TKT-2026-0329, varianta B: cantități structurate + audit al răspunsurilor Autorității
 
-**Stare:** SPECIFICAȚIE v8 (15.10.2026), după review r7 (NO-GO de la Jakarinos și de la Copilot).
+**Stare:** SPECIFICAȚIE v8 — **aprobată la review r8** (15.10.2026): Copilot GO, Jakarinos GO cu fix-uri (fără blocaj de schemă; fix-urile sunt obligații de implementare, §6.6).
 
 Nimic nu e implementat. Migrările, deploy-urile și orice cost AI se fac doar cu „da” de la Răzvan.
 **Decizie de pornire:** Răzvan, 14.10.2026, varianta B (`claude_context` #1758).
@@ -514,6 +514,19 @@ Eșantion definit: 50 de chei aleatoare (seed fixat) din licitațiile 5 și 103,
 - unit, Deno / vitest: DN, cheie, dedup, praguri, reguli de audit;
 - harness SQL: tabele, RLS, imuabilitate, rezervări, cerere, înghețare;
 - paritate H2.
+
+### 6.6 Obligații de implementare (review r8: Copilot GO, Jakarinos GO cu fix-uri; se închid în review-urile pe cod)
+- **PR2:**
+  - atomicitatea jurnal → înghețare: evenimentul declanșator e vizibil snapshot-ului;
+  - izolarea `text_confirmat`: același sha în documentele A și B, doar A confirmat → B rămâne nevalidat.
+- **PR3** (`pozitieDovedita()` + parser):
+  - **orice** cantitate fără dovadă numerică (de ex. sursa are `100 m`, modelul dă `1000 m`) ține cheia `incomplet`, **indiferent de zona de suprapunere**, și nu intră în agregare;
+  - convenții numerice contradictorii în același document (`1.234,56` și `1,234.56`, apoi `3.995 m`) păstrează ambiguitatea → cheia `incomplet`; testul se face și cu ordinea secțiunilor inversată;
+  - testul de agregare folosește o convenție demonstrabilă (`2.000,00 m + 1.995,00 m`). Fără convenție, rezultatul corect e `incomplet`.
+- **PR4:**
+  - conflictul semantic la același offset, **inclusiv** pe `e_total` / `e_subtotal` (detaliu vs total) → `conflict_sursa`, independent de ordinea observațiilor;
+  - propagarea `incomplet` până la H2.
+- **PR6:** un răspuns doar text și sursele parțiale nu produc automat `modificare_ulterioara`.
 
 ## 7. Plan pe PR-uri (fiecare: review Jakarinos + Copilot conv. 3, draft, merge prin chat cu „da”)
 
