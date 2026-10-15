@@ -6,6 +6,7 @@
 // indisponibilă, „continua” fără token) sau peste 60 MB în Storage → nicio descărcare, niciun rezultat. Reia → fără
 // scurtcircuitul mărime+etag. Nu se deployează (nu e importat de index.ts).
 import { assert, assertEquals, assertMatch } from 'jsr:@std/assert@1'
+import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'
 
 Deno.env.set('SUPABASE_URL', 'https://sb.test')
 Deno.env.set('SUPABASE_SERVICE_ROLE_KEY', 'service-test')
@@ -165,7 +166,7 @@ Deno.test({ ...Z, name: 'model: volum → claude-haiku-5-5, thinking disabled, f
   assertEquals([j.ok, j.status], [true, 'procesat'])
   assertEquals(ai.corpuri.length, 1)
   const c = ai.corpuri[0]
-  assertEquals(c.model, 'claude-haiku-5-5'); assertEquals(c.thinking, { type: 'disabled' }); assert(fara_esantionare(c)); assertEquals(c.max_tokens, 8000)
+  assertEquals(c.model, 'claude-haiku-5-5'); assertEquals(c.thinking, { type: 'disabled' }); assert(fara_esantionare(c)); assertEquals(c.max_tokens, 12000)
   const log = m.tabele.ai_usage_log
   assertEquals(log.length, 1); assertEquals(log[0].model, 'claude-haiku-5-5')
   assert(Math.abs(log[0].cost_usd - (10 * 0.10 + 5 * 0.50) / 1e6) < 1e-15, 'cost ' + log[0].cost_usd)
@@ -177,6 +178,31 @@ Deno.test({ ...Z, name: 'model: document critic → claude-sonnet-5 (thinking di
   await (await cere()).json()
   assertEquals(ai.corpuri[0].model, 'claude-sonnet-5'); assertEquals(ai.corpuri[0].thinking, { type: 'disabled' }); assert(fara_esantionare(ai.corpuri[0]))
   assert(Math.abs(m.tabele.ai_usage_log[0].cost_usd - (10 * 2 + 5 * 10) / 1e6) < 1e-15, 'cost ' + m.tabele.ai_usage_log[0].cost_usd)
+} })
+
+// ── REGULA DE TABEL + PLAFON (15.10.2026, proba Haiku 4.5 vs 5.5): F3 fără „ | ” pe doc 1294, felii tăiate la 8000 ─────────
+const textCerere = (c: any) => c.messages[0].content.find((b: any) => b.type === 'text').text as string
+const areRegulaTabel = (t: string) => t.includes(REGULA_TABEL) && t.includes('8 | TSD02B1 | 100 mc | 1,11170') && t.includes('INTERZIS') && !t.includes('celule prin " | "')
+Deno.test({ ...Z, name: 'tabel + plafon: Haiku 5.5 → regula TABELE în prompt (text ȘI antet) și max_tokens 12000; Sonnet 5 → aceeași regulă, 8000', fn: async () => {
+  ai.mod = 'ok'; ai.corpuri = []
+  mediu(doc({ pagini_procesate: 8 }), pdfMinimal(10))   // felie de mijloc → PROMPT_TEXT
+  await (await cere()).json()
+  assertEquals(ai.corpuri[0].model, 'claude-haiku-5-5'); assertEquals(ai.corpuri[0].max_tokens, 12000)
+  assertMatch(textCerere(ai.corpuri[0]), /Fragmentul are 2 pagini; prima este pagina 9/); assert(areRegulaTabel(textCerere(ai.corpuri[0])), 'regula lipsește din PROMPT_TEXT')
+  ai.corpuri = []
+  mediu(doc(), pdfMinimal(2))   // prima felie → PROMPT_ANTET
+  await (await cere()).json()
+  assertMatch(textCerere(ai.corpuri[0]), /===TEXT===/); assert(areRegulaTabel(textCerere(ai.corpuri[0])), 'regula lipsește din PROMPT_ANTET')
+  ai.corpuri = []
+  mediu(doc({ tip: 'fisa_date' }), pdfMinimal(2))
+  await (await cere()).json()
+  assertEquals(ai.corpuri[0].model, 'claude-sonnet-5'); assertEquals(ai.corpuri[0].max_tokens, 8000); assert(areRegulaTabel(textCerere(ai.corpuri[0])))
+} })
+Deno.test({ name: 'tabel + plafon: maxOut pe model; ofertare-citire-test folosește ACEEAȘI regulă și același plafon (fără copie locală)', fn: () => {
+  assertEquals([maxOut('claude-haiku-5-5'), maxOut('claude-sonnet-5'), maxOut('claude-haiku-4-5-20251001'), maxOut('claude-opus-5')], [12000, 8000, 8000, 8000])
+  const src = Deno.readTextFileSync(new URL('../ofertare-citire-test/index.ts', import.meta.url))
+  assert(src.includes("import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'"))
+  assert(src.includes('${REGULA_TABEL}') && src.includes('max_tokens: maxOut(m.id)') && !src.includes('max_tokens: 8000') && !src.includes('celule prin " | "'))
 } })
 
 // ── JURNALUL DE COST (Jakarinos r1 pe #724): fiecare răspuns facturat ajunge în ai_usage_log, exact un rând pe invocare ─────
@@ -195,7 +221,7 @@ Deno.test({ ...Z, name: 'cost: două apeluri sub prag (2×60K/1K) → 0,013 USD,
   assert(aproape(log[0].cost_usd, 0.013), 'cost ' + log[0].cost_usd)
 }) })
 
-Deno.test({ ...Z, name: 'cost: retry după max_tokens (felia înjumătățită) → ambele apeluri facturate, un singur rând', fn: () => cuUsage({ input_tokens: 1000, output_tokens: 8000 }, async () => {
+Deno.test({ ...Z, name: 'cost: retry după max_tokens (felia înjumătățită) → ambele apeluri facturate, un singur rând', fn: () => cuUsage({ input_tokens: 1000, output_tokens: 12_000 }, async () => {
   ai.corpuri = []; ai.coada = ['max', 'ok']
   const m = mediu(doc(), pdfMinimal(2))
   const j = await (await cere({ doc_id: 55, apeluri: 2 })).json()
@@ -203,8 +229,8 @@ Deno.test({ ...Z, name: 'cost: retry după max_tokens (felia înjumătățită) 
   assertMatch(ai.corpuri[1].messages[0].content[1].text, /Fragmentul are 1 pagină; prima este pagina 1/)
   assertEquals([j.ok, j.pagini_procesate, j.continua], [true, 1, true])
   const log = m.tabele.ai_usage_log
-  assertEquals(log.length, 1); assertEquals([log[0].tokens_in, log[0].tokens_out], [2000, 16_000])
-  assert(aproape(log[0].cost_usd, 2 * (1000 * 0.10 + 8000 * 0.50) / 1e6), 'cost ' + log[0].cost_usd)
+  assertEquals(log.length, 1); assertEquals([log[0].tokens_in, log[0].tokens_out], [2000, 24_000])
+  assert(aproape(log[0].cost_usd, 2 * (1000 * 0.10 + 12_000 * 0.50) / 1e6), 'cost ' + log[0].cost_usd)
 }) })
 
 Deno.test({ ...Z, name: 'cost: succes urmat de eroare (HTTP 500 / excepție) → costul primului apel rămâne în jurnal, un rând, exact un „esec”', fn: async () => {

@@ -8,9 +8,11 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
+import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'   // v3: aceeași regulă + plafon ca ingest-ul de producție
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
+// v3 (15.10.2026): regula de tabel fermă + max_tokens 12000 pe Haiku 5.5, IDENTIC cu ofertare-ingest-doc (_shared/transcriereTabel.ts).
 // v2 (15.10.2026, PR #724): haiku55 = proba de calitate Haiku 5.5 față de Haiku 4.5, înainte de schimbarea ingest-ului.
 // Prețuri din _shared/ocrLocal.ts PRETURI: Haiku 5.5 0,10 / 0,50 $ pe 1M până la 100K tokeni de intrare PE CERERE, 0,50 / 2,50
 // peste; Sonnet 5 2 / 10 (înainte 3 / 15). faraGandire: Haiku 5.5 gândește implicit și gândirea intră în max_tokens — ca în
@@ -30,7 +32,8 @@ const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers
 
 const REGULA_PAGINI = (prima: number, nr: number) =>
   `Fragmentul are ${nr} pagin${nr === 1 ? 'ă' : 'i'}; prima este pagina ${prima} a documentului. OBLIGATORIU: începe transcrierea FIECĂREI pagini cu o linie separată exact de forma ⟦PAGINA N⟧ (N = numărul paginii în document, deci ${prima}${nr > 1 ? `, ${prima + 1}, … ${prima + nr - 1}` : ''}). Nu sări niciun marcaj, chiar dacă pagina e goală sau e o planșă.`
-const PROMPT_TEXT = (prima: number, nr: number) => `Extrage TOT textul lizibil din acest fragment de document (licitație publică românească — caiet de sarcini / fișă de date / liste cantități / clarificări). Transcrie fidel, în ordinea de pe pagină, inclusiv tabele (rânduri separate prin linii noi, celule prin " | "). NU rezuma, NU comenta, NU adăuga nimic de la tine. Dacă o pagină e desen/planșă fără text, scrie doar [PLANȘĂ: <titlul din indicator, dacă se vede>].
+const PROMPT_TEXT = (prima: number, nr: number) => `Extrage TOT textul lizibil din acest fragment de document (licitație publică românească — caiet de sarcini / fișă de date / liste cantități / clarificări). Transcrie fidel, în ordinea de pe pagină, inclusiv tabele (după regula TABELE de mai jos). NU rezuma, NU comenta, NU adăuga nimic de la tine. Dacă o pagină e desen/planșă fără text, scrie doar [PLANȘĂ: <titlul din indicator, dacă se vede>].
+${REGULA_TABEL}
 ${REGULA_PAGINI(prima, nr)}
 Răspunde DOAR cu textul extras.`
 
@@ -77,7 +80,7 @@ Deno.serve(async (req: Request) => {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: m.id, max_tokens: 8000, ...(m.faraGandire ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: [
+        body: JSON.stringify({ model: m.id, max_tokens: maxOut(m.id), ...(m.faraGandire ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: [
           { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(pdfFelie) } },
           { type: 'text', text: PROMPT_TEXT(s + 1, e - s) },
         ] }] }),
