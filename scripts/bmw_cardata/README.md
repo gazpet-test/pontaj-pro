@@ -2,8 +2,12 @@
 
 Tichetul „integrare BMW CarData” (Răzvan, 14.10.2026). Scriptul citește prin API-ul oficial BMW CarData (REST) kilometrajul
 și, dacă mașina le trimite, combustibilul, autonomiile, SoC-ul bateriei și contoarele OBFCM, apoi le **adaugă** în Supabase
-(`public.bmw_cardata_citiri`). Poziția (lat/lon/heading) se ia și ea — decizia lui Răzvan: mașina e a lui și o conduce el —
-dar stă **separat** (`public.bmw_cardata_locatii`) și o vede **doar owner-ul**.
+(`public.bmw_cardata_citiri` — doar coloane numerice normalizate, vizibile owner-ului și modulului logistica). Poziția
+(lat/lon/heading) se ia și ea — decizia lui Răzvan: mașina e a lui și o conduce el — dar stă **separat**
+(`public.bmw_cardata_locatii`), ca și copia brută a răspunsului (`public.bmw_cardata_brut`); pe amândouă le vede **doar owner-ul**.
+
+**Append-only** înseamnă aici: la DML (UPDATE / DELETE / TRUNCATE refuzate de triggere, inclusiv pentru postgres). **Nu** e
+imutabilitate față de un administrator: proprietarul tabelelor / un superuser poate dezactiva triggerele sau șterge tabelele.
 
 **Stare la livrarea PR-ului:** nimic rulat pe API-ul real (niciun login, nicio cerere BMW), nimic scris în BD, migrarea
 `20261030c_bmw_cardata.sql` **neaplicată**. Tot ce e mai jos s-a testat simulat (vezi „Teste”).
@@ -100,7 +104,9 @@ Rezultatul fiecărei rulări: „Last Run Result” (0/1/2/3) + `bmw_cardata_jur
 Reguli de validare (`valideaza.py`): doar cheile de mai sus (orice altă cheie din răspuns se ignoră); valoarea = număr zecimal
 simplu (fără exponent, NaN, infinit), unitatea din lista permisă, timestamp ISO nu în viitor (> +10 min); `INVALID` / gol =
 lipsă, nu eroare. O valoare respinsă devine NULL și e listată la `citeste`; **odometrul lipsă sau invalid oprește citirea**.
-`raspuns_brut` păstrează doar cheile non-locație (value/unit/timestamp scurtate), iar BD-ul are CHECK că nu conține text de locație.
+`raspuns_brut` păstrează doar cheile non-locație (value/unit/timestamp scurtate) și se scrie în `bmw_cardata_brut` (DOAR owner).
+Tabela vizibilă modulului logistica (`bmw_cardata_citiri`) nu are nicio coloană json / text liber (în afară de `vin` și `sursa`,
+cu CHECK) — invariant verificat de postcondițiile migrării, nu doar convenție a scriptului (review Copilot r1 P1-1).
 `scrie` reverifică strict fișierul local (VIN = cel mapat, câmpuri, intervale, structură) înainte de BD.
 
 ## Ce știm despre API (cu marcaj)
@@ -132,13 +138,13 @@ Limita locală implicită: 10 cereri/zi UTC (`--limita-zi`, maxim 49).
 - **(a) Conținut extern citit:** răspunsurile JSON ale API-ului BMW CarData (telematicData, basicData, mappings, containers) și ale
   serverului OAuth BMW. Tratate ca date: allowlist de 12 chei, numere în intervale, nimic executat, nimic interpolat în SQL
   (document JSON într-un literal dollar-quoted cu tag aleator, conversii explicite în BD).
-- **(b) Ce scrie / face:** doar `INSERT` în `public.bmw_cardata_citiri` și `public.bmw_cardata_locatii` (append-only: triggere refuză
-  UPDATE/DELETE/TRUNCATE, și pentru postgres); fișierele locale de mai sus. La BMW: un container creat o dată, la `setup`.
-  Nu trimite mail, nu atinge bani, drepturi sau alte tabele.
+- **(b) Ce scrie / face:** doar `INSERT` în `public.bmw_cardata_citiri`, `public.bmw_cardata_locatii` și `public.bmw_cardata_brut`
+  (append-only la DML: triggere refuză UPDATE/DELETE/TRUNCATE, și pentru postgres; un administrator le poate totuși dezactiva);
+  fișierele locale de mai sus. La BMW: un container creat o dată, la `setup`. Nu trimite mail, nu atinge bani, drepturi sau alte tabele.
 - **(c) Identitate:** rolul `postgres` prin pooler (`aws-1-eu-central-1.pooler.supabase.com:5432`, parola din
   `%APPDATA%\postgresql\pgpass.conf`) — **sare peste RLS**. Justificare: tabelele nu au intenționat nicio politică de scriere pentru
   anon/authenticated/service_role, iar scriptul local nu are JWT de utilizator. Propunere pentru etapa 2: un rol dedicat cu
-  INSERT doar pe cele două tabele, în locul lui postgres.
+  INSERT doar pe cele trei tabele, în locul lui postgres.
 - **(d) Cine o poate porni:** Task Scheduler pe PC-ul local, sub contul Windows Gazpet-Ai, sau Răzvan manual. Nimic expus în
   rețea (fără endpoint, webhook sau edge function). Tokenul BMW se obține doar cu confirmarea lui Răzvan în contul My BMW.
 - **(e) Confirmare umană:** `login` (device code, în browser), aplicarea migrării (runner + acordul lui Răzvan), `setup --recreeaza`.
@@ -150,7 +156,7 @@ Limita locală implicită: 10 cereri/zi UTC (`--limita-zi`, maxim 49).
 ## Teste
 
 ```bash
-PYTHONPATH=scripts python -B -m unittest bmw_cardata.test_bmw_cardata -v      # 62 teste, fără rețea externă, fără BD
+PYTHONPATH=scripts python -B -m unittest bmw_cardata.test_bmw_cardata -v      # 64 teste, fără rețea externă, fără BD
 PG_BIN=/c/Users/Public/pgsql/bin bash scripts/test_bmw_cardata.sh            # PG17 local: migrare + RLS + capăt-la-capăt + revenire
 ```
 Unittest (HTTP simulat): device flow cu PKCE (verifier ↔ challenge), `authorization_pending` / `slow_down` (+5 s) / `expired_token` /

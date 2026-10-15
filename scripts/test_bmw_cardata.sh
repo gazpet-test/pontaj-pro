@@ -6,10 +6,12 @@
 # (cale canonică sub prefixul dedicat + marker cu PID-ul harness-ului); PGDATA_TEST nu mai e acceptat (Jakarinos r1 P1-3).
 #   0. schelet (= structura live 14.10 folosită de migrare) → suita TREBUIE să cadă pe T1 (discriminare)
 #   1. fără marcaj de livrare → garda refuză, nimic creat
+#  1b. mutant cu brutul vizibil modulului logistica → suita TREBUIE să cadă pe T5 (Copilot r1 P1-1)
 #   2. aplicare (ca runnerul: marcaj + --single-transaction) → suita SQL; gate-ul permanent 0e (control_0e.sql) = 0 rânduri
 #   3. reaplicare → refuz (Precondiție 0b), nimic dublat
-#   4. capăt-la-capăt Python → psql → BD: citire simulată (cu text ostil în raspuns_brut) scrisă de `python -m bmw_cardata scrie`;
-#      reluarea aceleiași citiri (confirmare pierdută) → „deja”, nimic dublat; locația în tabelul separat, nu în raspuns_brut
+#   4. capăt-la-capăt Python → psql → BD: citire simulată (cu text ostil în răspunsul brut) scrisă de `python -m bmw_cardata scrie`;
+#      citiri = doar coloane normalizate, locația și brutul în tabelele lor (doar owner); reluarea aceleiași citiri (confirmare
+#      pierdută) → „deja”, nimic dublat. Suita SQL (T5b) verifică: un user logistica nu vede nicio coordonată pe nicio relație.
 #   5. revenire: nearmat → refuz; armat simplu peste date → refuz; CU_DATE → obiectele dispar; reaplicare → suita;
 #      CURSA (două sesiuni): un INSERT concurent necomis + revenirea armată simplu → revenirea așteaptă lock-ul și refuză
 #      (rândul rămâne); mutantul FĂRĂ LOCK pierde rândul (dovada că testul discriminează);
@@ -75,7 +77,7 @@ ca_postgres "$PG_BIN/initdb$EXE" -D "$DATE_DIR" -U postgres --auth=trust --encod
 ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -l "$JURNAL_PG" -w -t 30 start \
   -o "-p $PORT -c listen_addresses=127.0.0.1 -c timezone=UTC ${SOCKET[*]}" >/dev/null || mediu "pg_ctl start (portul $PORT ocupat?)"
 q() { "${PSQL[@]}" -d "$BAZA" -Atc "$1"; }
-obiecte() { q "SELECT count(*) FROM pg_class WHERE relname IN ('bmw_cardata_citiri','bmw_cardata_locatii','v_bmw_cardata_vs_evogps')"; }
+obiecte() { q "SELECT count(*) FROM pg_class WHERE relname IN ('bmw_cardata_citiri','bmw_cardata_locatii','bmw_cardata_brut','v_bmw_cardata_vs_evogps')"; }
 OUT="$TMP/out"
 suita() { "${PSQL[@]}" -d "$BAZA" -f "$TESTE" >"$OUT" 2>&1 && grep -q SUITA_OK "$OUT" || { cat "$OUT"; esec "suita ($1)"; }
   echo "     [$1] $(grep -c 'OK T[0-9]' "$OUT") aserțiuni OK"; ok "suita ($1)"; }
@@ -95,9 +97,20 @@ grep -q 'garda de livrare (start)' "$OUT" || { cat "$OUT"; esec "1 refuz din alt
 [ "$(obiecte)" = 0 ] || esec "1 au apărut obiecte"
 ok "1 fără marcaj → refuz (garda start), nimic creat"
 
+# 1b. mutant (Copilot r1 P1-1): brutul vizibil modulului logistica ⇒ suita TREBUIE să cadă pe T5 (nu vede coordonate / brut)
+"${PSQL[@]}" -d postgres -c "CREATE DATABASE bmw_cardata_mut_test TEMPLATE $BAZA" >/dev/null
+MUT_BRUT="$TMP/migrare_brut_vizibil.sql"
+sed '/CREATE POLICY bmw_cardata_brut_select_owner/{n;s/bmw_cardata_este_owner()/bmw_cardata_poate_citi()/;}' "$MIGRARE_SURSA" > "$MUT_BRUT"
+[ "$(diff "$MIGRARE_SURSA" "$MUT_BRUT" | grep -c '^[<>]')" = 2 ] || esec "1b mutantul brut-vizibil nu a putut fi construit"
+"${PSQL[@]}" -d bmw_cardata_mut_test --single-transaction -c "$MARCAJ" -f "$MUT_BRUT" >"$OUT" 2>&1 || { cat "$OUT"; esec "1b aplicarea mutantului"; }
+if "${PSQL[@]}" -d bmw_cardata_mut_test -f "$TESTE" >"$OUT" 2>&1; then esec "1b suita trece cu brutul vizibil logistica (nu discriminează)"; fi
+grep -q 'ESEC TEST: T5' "$OUT" || { cat "$OUT"; esec "1b suita a căzut din alt motiv"; }
+"${PSQL[@]}" -d postgres -c "DROP DATABASE bmw_cardata_mut_test" >/dev/null
+ok "1b mutant cu brutul vizibil modulului logistica → suita cade pe T5"
+
 # 2. aplicare + suita
 aplica || { cat "$OUT"; esec "2 aplicare"; }
-[ "$(obiecte)" = 3 ] || esec "2 obiectele lipsesc"
+[ "$(obiecte)" = 4 ] || esec "2 obiectele lipsesc"
 ok "2 aplicare cu marcaj (pre + post trecute)"
 suita "după 20261030c"
 N0E="$("${PSQL[@]}" -d "$BAZA" -At -f "$RADACINA/scripts/control_0e.sql" 2>"$OUT" | grep -c . || true)"
@@ -136,14 +149,17 @@ scrie() { PYTHONPATH="$RADACINA/scripts" "$PY" -B -m bmw_cardata --dir "$D" scri
   --pg-port "$PORT" --pg-user postgres --pg-db "$BAZA" --pg-sslmode disable >"$OUT" 2>&1; }
 scrie || { cat "$OUT"; esec "4 scrie"; }
 grep -q 'scrisa (id ' "$OUT" || { cat "$OUT"; esec "4 scrie fără confirmare"; }
-[ "$(q "SELECT count(*) FROM bmw_cardata_citiri")|$(q "SELECT count(*) FROM bmw_cardata_locatii")" = "1|1" ] || esec "4 rânduri ≠ 1|1"
+nr3() { echo "$(q "SELECT count(*) FROM bmw_cardata_citiri")|$(q "SELECT count(*) FROM bmw_cardata_locatii")|$(q "SELECT count(*) FROM bmw_cardata_brut")"; }
+[ "$(nr3)" = "1|1|1" ] || esec "4 rânduri citiri|locatii|brut = $(nr3) ≠ 1|1|1"
 [ "$(q "SELECT odometru_km || '|' || combustibil_litri || '|' || soc_pct || '|' || (combustibil_pct IS NULL) FROM bmw_cardata_citiri")" = "48213.0|41.50|87.0|true" ] \
   || esec "4 valori greșite: $(q "SELECT odometru_km, combustibil_litri, soc_pct, combustibil_pct FROM bmw_cardata_citiri")"
-[ "$(q "SELECT raspuns_brut->'vehicle.drivetrain.fuelSystem.level'->>'unit' FROM bmw_cardata_citiri")" = "x\$\$;DROP--'" ] \
-  || esec "4 textul ostil nu s-a păstrat ca dată"
+[ "$(q "SELECT b.raspuns_brut->'vehicle.drivetrain.fuelSystem.level'->>'unit' FROM bmw_cardata_brut b JOIN bmw_cardata_citiri c ON c.id = b.citire_id AND c.citit_la = b.citit_la")" = "x\$\$;DROP--'" ] \
+  || esec "4 textul ostil nu s-a păstrat ca dată (în bmw_cardata_brut)"
 [ "$(q "SELECT lat || '|' || lon || '|' || heading FROM bmw_cardata_locatii")" = "44.936667|26.012345|181.0" ] || esec "4 locația"
-[ "$(q "SELECT count(*) FROM bmw_cardata_citiri WHERE raspuns_brut::text ~* 'latitude|longitude|heading'")" = 0 ] || esec "4 locație în brut"
-ok "4 scrie: 1 citire + 1 locație separată; textul ostil păstrat ca dată; fără locație în raspuns_brut"
+[ "$(q "SELECT count(*) FROM bmw_cardata_brut WHERE raspuns_brut::text ~* 'latitude|longitude|heading'")" = 0 ] || esec "4 scriptul a pus locație în brut"
+[ "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name = 'bmw_cardata_citiri' AND data_type IN ('json','jsonb')")" = 0 ] \
+  || esec "4 citiri are o coloană json"
+ok "4 scrie: 1 citire (doar coloane normalizate) + 1 locație + 1 brut (ambele doar owner); textul ostil păstrat ca dată în brut"
 F="$(ls "$D/bmw_cardata_citiri/scrise/"*.json)"
 PYTHONPATH="$RADACINA/scripts" "$PY" -B - "$F" "$D/bmw_cardata_citiri" <<'PY' || esec "4 refacerea fișierului"
 import json, os, sys
@@ -152,7 +168,7 @@ json.dump(d['citire'], open(os.path.join(sys.argv[2], os.path.basename(sys.argv[
 PY
 scrie || { cat "$OUT"; esec "4 a doua scriere"; }
 grep -q 'deja in BD' "$OUT" || { cat "$OUT"; esec "4 reluarea nu a fost recunoscută"; }
-[ "$(q "SELECT count(*) FROM bmw_cardata_citiri")|$(q "SELECT count(*) FROM bmw_cardata_locatii")" = "1|1" ] || esec "4 reluarea a dublat"
+[ "$(nr3)" = "1|1|1" ] || esec "4 reluarea a dublat: $(nr3)"
 ok "4 reluare (confirmare pierdută) → „deja”, nimic dublat"
 
 # 5. revenire
@@ -160,7 +176,7 @@ if "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" >"$OUT" 2>&1; the
 grep -q 'fără GO de execuție' "$OUT" || { cat "$OUT"; esec "5 refuz din alt motiv"; }
 if revino "$ARMARE" "$ROLLBACK"; then esec "5 rollback fără CU_DATE a trecut peste date"; fi
 grep -q 'date de audit' "$OUT" || { cat "$OUT"; esec "5 refuz (date) din alt motiv"; }
-[ "$(obiecte)" = 3 ] || esec "5 obiectele au dispărut la un refuz"
+[ "$(obiecte)" = 4 ] || esec "5 obiectele au dispărut la un refuz"
 ok "5 rollback nearmat → refuz; armat fără CU_DATE peste date → refuz"
 revino "$ARMARE_DATE" "$ROLLBACK" || { cat "$OUT"; esec "5 rollback armat CU_DATE"; }
 [ "$(obiecte)" = 0 ] || esec "5 au rămas obiecte"
@@ -171,7 +187,7 @@ suita "reaplicat după rollback"
 
 # 5c. CURSA (Jakarinos r1 P1-2): sesiunea A inserează o citire și ține tranzacția deschisă 3 s; sesiunea B (revenirea armată
 #     simplu, „doar tabele goale”) pornește la +1 s. Cu LOCK înaintea count(*): B așteaptă, vede rândul comis și refuză.
-INSERT_A="INSERT INTO public.bmw_cardata_citiri (id_citire, citit_la, vin, odometru_km, raspuns_brut, sursa) VALUES (gen_random_uuid(), now(), 'WBATEST0000000001', 1, '{}', 'bmw_cardata_rest');"
+INSERT_A="INSERT INTO public.bmw_cardata_citiri (id_citire, citit_la, vin, odometru_km, sursa) VALUES (gen_random_uuid(), now(), 'WBATEST0000000001', 1, 'bmw_cardata_rest');"
 cursa() {   # $1 = fișierul de revenire, $2 = armarea (implicit $ARMARE); întoarce codul lui B; B_SEC = cât a durat B
   "${PSQL[@]}" -d "$BAZA" -c "BEGIN; $INSERT_A SELECT pg_sleep(3); COMMIT;" >"$TMP/a.out" 2>&1 &
   local pid_a=$! t0 t1 rc
@@ -184,13 +200,13 @@ cursa() {   # $1 = fișierul de revenire, $2 = armarea (implicit $ARMARE); înto
 if cursa "$ROLLBACK"; then esec "5c revenirea a trecut cu un INSERT concurent (cursă)"; fi
 grep -q 'date de audit' "$OUT" || { cat "$OUT"; esec "5c refuz din alt motiv"; }
 [ "$B_SEC" -ge 1 ] || esec "5c revenirea nu a așteptat lock-ul (${B_SEC}s)"
-[ "$(obiecte)" = 3 ] && [ "$(q "SELECT count(*) FROM bmw_cardata_citiri")" = 1 ] || esec "5c rândul concurent s-a pierdut"
+[ "$(obiecte)" = 4 ] && [ "$(q "SELECT count(*) FROM bmw_cardata_citiri")" = 1 ] || esec "5c rândul concurent s-a pierdut"
 ok "5c cursă: revenirea a așteptat lock-ul (${B_SEC}s), a văzut INSERT-ul comis și a refuzat; rândul rămâne"
 revino "$ARMARE_DATE" "$ROLLBACK" || { cat "$OUT"; esec "5c curățare CU_DATE"; }
 aplica || { cat "$OUT"; esec "5c reaplicare"; }
 # mutantul fără LOCK pe același scenariu TREBUIE să piardă rândul — altfel testul de mai sus nu discriminează
 MUTANT="$TMP/rollback_fara_lock.sql"
-grep -v 'LOCK TABLE public.bmw_cardata_citiri, public.bmw_cardata_locatii' "$ROLLBACK" > "$MUTANT"
+grep -v 'LOCK TABLE public.bmw_cardata_citiri, public.bmw_cardata_locatii, public.bmw_cardata_brut' "$ROLLBACK" > "$MUTANT"
 [ "$(grep -c 'LOCK TABLE' "$MUTANT" || true)" = 0 ] && [ "$(grep -c 'LOCK TABLE' "$ROLLBACK")" = 1 ] || esec "5c mutantul nu a putut fi construit"
 cursa "$MUTANT" || { cat "$OUT"; esec "5c mutantul fără LOCK a refuzat — scenariul nu reproduce cursa"; }
 [ "$(obiecte)" = 0 ] || esec "5c mutantul nu a scos obiectele"
@@ -202,10 +218,10 @@ aplica || { cat "$OUT"; esec "5c reaplicare după mutant"; }
 ARMARE_RR="SET TRANSACTION ISOLATION LEVEL REPEATABLE READ; $ARMARE"
 if cursa "$ROLLBACK" "$ARMARE_RR"; then esec "5d revenirea a trecut la REPEATABLE READ"; fi
 grep -q 'DOAR la READ COMMITTED' "$OUT" || { cat "$OUT"; esec "5d refuz (RR) din alt motiv"; }
-[ "$(obiecte)" = 3 ] && [ "$(q "SELECT count(*) FROM bmw_cardata_citiri")" = 1 ] || esec "5d rândul concurent s-a pierdut (RR)"
+[ "$(obiecte)" = 4 ] && [ "$(q "SELECT count(*) FROM bmw_cardata_citiri")" = 1 ] || esec "5d rândul concurent s-a pierdut (RR)"
 if revino "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; $ARMARE_DATE" "$ROLLBACK"; then esec "5d revenirea a trecut la SERIALIZABLE"; fi
 grep -q 'DOAR la READ COMMITTED' "$OUT" || { cat "$OUT"; esec "5d refuz (SERIALIZABLE) din alt motiv"; }
-[ "$(obiecte)" = 3 ] || esec "5d obiectele au dispărut la refuzul SERIALIZABLE"
+[ "$(obiecte)" = 4 ] || esec "5d obiectele au dispărut la refuzul SERIALIZABLE"
 ok "5d REPEATABLE READ (cu INSERT concurent) și SERIALIZABLE → refuz explicit de izolare; rândul rămâne"
 revino "$ARMARE_DATE" "$ROLLBACK" || { cat "$OUT"; esec "5d curățare CU_DATE"; }
 aplica || { cat "$OUT"; esec "5d reaplicare"; }

@@ -469,6 +469,30 @@ class TestScriere(Baza):
         self.assertNotIn(':', afara.replace('::', ''))   # nicio variabila psql
         self.assertEqual(sql.count('$bmw_testtag$'), 2)
 
+    def test_brutul_merge_doar_in_tabela_owner(self):
+        # Copilot r1 P1-1: citiri (vizibila modulului logistica) primeste doar coloane normalizate; brutul -> bmw_cardata_brut
+        p = V.reverifica(json.loads(json.dumps(V.din_raspuns(telematic(), VIN, ACUM))), VIN, ACUM)
+        sql = B.construieste_sql(p, tag='bmw_t')
+        afara = re.sub(r'\$bmw_t\$.*?\$bmw_t\$', '', sql, flags=re.S)
+        citiri = re.search(r'INSERT INTO public\.bmw_cardata_citiri \(([^)]*)\)', afara).group(1)
+        self.assertNotIn('raspuns_brut', citiri)
+        self.assertNotIn('raspuns_brut', re.search(r'c AS \((.*?)\),\nl AS', afara, re.S).group(1))
+        self.assertIn('INSERT INTO public.bmw_cardata_brut (citire_id, citit_la, raspuns_brut)', afara)
+        self.assertEqual(afara.count("d.j->'raspuns_brut'"), 1)
+
+    def test_rezultat_psql_inconsistent_refuzat(self):
+        class R:
+            returncode, stderr = 0, ''
+            def __init__(self, out): self.stdout = out
+        for out, bun in (('BMW_REZULTAT|7|1|1\n', True), ('BMW_REZULTAT|deja|0|0\n', True),
+                         ('BMW_REZULTAT|7|1|0\n', False), ('BMW_REZULTAT|deja|0|1\n', False), ('BMW_REZULTAT|7|1\n', False)):
+            with self.subTest(out=out), mock.patch.object(B.subprocess, 'run', return_value=R(out)):
+                if bun:
+                    B.ruleaza_psql('SELECT 1', psql='psql', pg={'sslmode': 'disable'})
+                else:
+                    with self.assertRaises(B.EroareScriere):
+                        B.ruleaza_psql('SELECT 1', psql='psql', pg={'sslmode': 'disable'})
+
     def test_tag_in_document_refuzat(self):
         p = V.reverifica(json.loads(json.dumps(V.din_raspuns(telematic(), VIN, ACUM))), VIN, ACUM)
         p['raspuns_brut']['vehicle.vehicle.travelledDistance']['unit'] = 'bmw_x'

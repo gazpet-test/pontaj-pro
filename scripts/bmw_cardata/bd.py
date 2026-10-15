@@ -18,7 +18,7 @@ PG_IMPLICIT = {'host': 'aws-1-eu-central-1.pooler.supabase.com', 'port': '5432',
 # variabile care ar putea schimba tinta sau executia pe ascuns — scoase din mediul lui psql (ca in livrare_migrare.sh)
 MEDIU_SCOS = ('PGPASSWORD', 'PGOPTIONS', 'PGSERVICE', 'PGSERVICEFILE', 'PGSYSCONFDIR', 'PSQLRC', 'PGHOST', 'PGHOSTADDR',
               'PGPORT', 'PGDATABASE', 'PGUSER', 'PGTARGETSESSIONATTRS', 'PGLOADBALANCEHOSTS', 'PGSSLMODE', 'PGAPPNAME')
-REZULTAT_RE = re.compile(r'^BMW_REZULTAT\|(\d+|deja)\|(\d+)$', re.M)
+REZULTAT_RE = re.compile(r'^BMW_REZULTAT\|(\d+|deja)\|(\d+)\|(\d+)$', re.M)
 
 
 class EroareScriere(Exception):
@@ -45,9 +45,9 @@ def construieste_sql(rec_bd, tag=None):
         "SET LOCAL statement_timeout = '30s';\n"
         f"WITH d AS (SELECT {lit}::jsonb AS j),\n"
         "c AS (\n"
-        f"  INSERT INTO public.bmw_cardata_citiri (id_citire, citit_la, vin, odometru_la, {coloane}, raspuns_brut, sursa)\n"
+        f"  INSERT INTO public.bmw_cardata_citiri (id_citire, citit_la, vin, odometru_la, {coloane}, sursa)\n"
         "  SELECT (d.j->>'id_citire')::uuid, (d.j->>'citit_la')::timestamptz, d.j->>'vin', (d.j->>'odometru_la')::timestamptz,\n"
-        f"         {valori}, d.j->'raspuns_brut', d.j->>'sursa'\n"
+        f"         {valori}, d.j->>'sursa'\n"
         "  FROM d\n"
         "  ON CONFLICT (id_citire) DO NOTHING\n"
         "  RETURNING id, citit_la\n"
@@ -59,8 +59,15 @@ def construieste_sql(rec_bd, tag=None):
         "  FROM c CROSS JOIN d\n"
         "  WHERE jsonb_typeof(d.j->'locatie') = 'object'\n"
         "  RETURNING 1\n"
+        "),\n"
+        "b AS (\n"   # brutul: tabel DOAR owner (Copilot r1 P1-1), nu in citiri (vizibil modulului logistica)
+        "  INSERT INTO public.bmw_cardata_brut (citire_id, citit_la, raspuns_brut)\n"
+        "  SELECT c.id, c.citit_la, d.j->'raspuns_brut'\n"
+        "  FROM c CROSS JOIN d\n"
+        "  RETURNING 1\n"
         ")\n"
-        "SELECT 'BMW_REZULTAT|' || coalesce((SELECT id::text FROM c), 'deja') || '|' || (SELECT count(*) FROM l);\n"
+        "SELECT 'BMW_REZULTAT|' || coalesce((SELECT id::text FROM c), 'deja') || '|' || (SELECT count(*) FROM l)\n"
+        "       || '|' || (SELECT count(*) FROM b);\n"
     )
 
 
@@ -95,7 +102,10 @@ def ruleaza_psql(sql, psql=PSQL_IMPLICIT, pg=None):
         m = REZULTAT_RE.search(r.stdout or '')
         if not m:
             raise EroareScriere('psql nu a intors linia BMW_REZULTAT — starea scrierii trebuie verificata manual')
-        return m.group(1), int(m.group(2))
+        id_bd, loc, brut = m.group(1), int(m.group(2)), int(m.group(3))
+        if (id_bd == 'deja') != (brut == 0) or brut > 1 or loc > 1:
+            raise EroareScriere(f'rezultat inconsistent (citire {id_bd}, locatie {loc}, brut {brut}) — verificati manual')
+        return id_bd, loc
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
