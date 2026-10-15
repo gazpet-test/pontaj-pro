@@ -724,7 +724,8 @@ DECLARE c record; d record; v_id bigint; v_cache bigint; v_dov jsonb; v_cur text
 BEGIN
   SELECT * INTO c FROM public.ofertare_ai_cereri WHERE id = p_cerere_id;
   IF NOT FOUND OR c.stare <> 'activa' OR c.valabil_pana <= now() OR c.scop <> 'cant_extragere' THEN RETURN jsonb_build_object('refuz', 'cerere'); END IF;
-  SELECT id, licitatie_id, text_extras INTO d FROM public.ofertare_documente_atribuire WHERE id = p_document_id;
+  -- documentul FOR SHARE până la scrierea extragerii (review r4): text_extras nu se poate schimba între verificarea versiunii și INSERT
+  SELECT id, licitatie_id, text_extras INTO d FROM public.ofertare_documente_atribuire WHERE id = p_document_id FOR SHARE;
   IF NOT FOUND OR d.licitatie_id <> c.licitatie_id THEN RETURN jsonb_build_object('refuz', 'document'); END IF;
   IF NOT public.fn_ofertare_cb_doc_in_lot(p_document_id, c.lot_domeniu, c.lot_nr) THEN RETURN jsonb_build_object('refuz', 'lot'); END IF;
   -- doar versiunea CURENTĂ a documentului (review r3): sha-ul textului curent; fără text_extras, ultima proveniență
@@ -762,7 +763,8 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = publi
 AS $f$
 DECLARE x record; v_munca text; v_id bigint;
 BEGIN
-  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = p_extragere_id;
+  -- extragerea blocată FOR SHARE până după inserare (review r4): o închidere concurentă (FOR UPDATE) nu poate trece între verificare și INSERT
+  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = p_extragere_id FOR SHARE;
   IF NOT FOUND OR x.stare <> 'in_lucru' THEN RETURN jsonb_build_object('refuz', 'extragere'); END IF;
   IF p_felie_nr IS NULL OR p_felie_nr >= x.felii_total THEN RETURN jsonb_build_object('refuz', 'felie_nr'); END IF;
   v_munca := x.document_id || ':' || x.doc_sha256 || ':' || x.extractor_id || ':' || p_de_la || ':' || p_sha_felie;
@@ -993,11 +995,11 @@ END $f$;
 -- schimbat după moment. Documentele: ale licitației, create ≤ moment, neînlocuite ≤ moment, în lot. Textul e disponibil DOAR cu dovadă
 -- validă as-of. Rândul licitației se blochează FOR NO KEY UPDATE (din trigger NOWAIT → amânat), deci fără așteptări în trigger.
 CREATE FUNCTION public.fn_ofertare_cb_ingheata(p_licitatie_id bigint, p_lot_domeniu text, p_lot_nr integer[], p_declansator text,
-                                              p_clarificare_id bigint, p_de uuid, p_fara_asteptare boolean)
+                                              p_clarificare_id bigint, p_de uuid, p_fara_asteptare boolean, p_jurnal_id bigint DEFAULT NULL)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE l record; v_moment timestamptz; v_tardiv boolean; v_aprox boolean; v_termen timestamptz; v_nr integer[]; v_elig text;
-        v_prima timestamptz; v_clar_prima bigint; v_decl text; v_clar_id bigint;
+DECLARE l record; v_moment timestamptz; v_acum timestamptz; v_tardiv boolean; v_aprox boolean; v_termen timestamptz; v_nr integer[]; v_elig text;
+        v_prima timestamptz; v_prima_id bigint; v_clar_prima bigint; v_decl text; v_clar_id bigint;
         v_docs jsonb; v_clar jsonb; v_amp text; v_id bigint; v_existent bigint; v_cheie bigint;
 BEGIN
   v_nr := public.fn_ofertare_cb_lot_canonic(p_lot_nr);
@@ -1013,8 +1015,8 @@ BEGIN
   SELECT id INTO v_existent FROM public.ofertare_analiza_versiuni
    WHERE licitatie_id = p_licitatie_id AND lot_domeniu = p_lot_domeniu AND lot_nr = v_nr AND tip = 'initiala';
   IF v_existent IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'snapshot_id', v_existent, 'existent', true); END IF;
-  -- rândul licitației FOR NO KEY UPDATE (review r3): setterii de loturi (FOR UPDATE / FOR SHARE pe licitație) nu pot comite în timpul
-  -- înghețării → manifestul și marcajul de eligibilitate văd aceeași stare. Din trigger: NOWAIT (ocupat → amânat, fără așteptare).
+  -- rândul licitației FOR NO KEY UPDATE: setterii de loturi (FOR UPDATE / FOR SHARE pe licitație) nu pot comite cât ține înghețarea.
+  -- Din trigger: NOWAIT (ocupat → amânat, fără așteptare); triggerul îl ia deja ÎNAINTEA jurnalului.
   IF coalesce(p_fara_asteptare, false) THEN
     BEGIN
       PERFORM 1 FROM public.ofertare_licitatii WHERE id = p_licitatie_id FOR NO KEY UPDATE NOWAIT;
@@ -1024,24 +1026,29 @@ BEGIN
   ELSE
     PERFORM 1 FROM public.ofertare_licitatii WHERE id = p_licitatie_id FOR NO KEY UPDATE;
   END IF;
+  -- „acum” = DUPĂ obținerea lock-ului (review r4: now() e începutul tranzacției, dinaintea unei eventuale așteptări)
+  v_acum := clock_timestamp();
   SELECT x.id, t.termen AS termen_clarificari, x.termen_depunere INTO l
     FROM public.ofertare_licitatii x LEFT JOIN public.ofertare_termen_clarificari t ON t.licitatie_id = x.id WHERE x.id = p_licitatie_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Licitație inexistentă' USING ERRCODE = '22023'; END IF;
   v_termen := coalesce(l.termen_clarificari, l.termen_depunere);
   v_aprox := l.termen_clarificari IS NULL AND l.termen_depunere IS NOT NULL;
-  SELECT j.la, j.clarificare_id INTO v_prima, v_clar_prima FROM public.ofertare_clarificari_jurnal j
+  SELECT j.la, j.id, j.clarificare_id INTO v_prima, v_prima_id, v_clar_prima FROM public.ofertare_clarificari_jurnal j
    WHERE j.licitatie_id = p_licitatie_id AND j.eveniment = 'trimisa' ORDER BY j.la, j.id LIMIT 1;
-  v_moment := least(now(), coalesce(v_prima, 'infinity'::timestamptz), coalesce(v_termen, 'infinity'::timestamptz));
-  v_tardiv := v_moment < now();
+  v_moment := least(v_acum, coalesce(v_prima, 'infinity'::timestamptz), coalesce(v_termen, 'infinity'::timestamptz));
+  -- netardiv: momentul = acum (sub lock) SAU = evenimentul de jurnal scris de triggerul acestei tranzacții DUPĂ ce a luat lock-ul
+  v_tardiv := v_moment < v_acum AND NOT (p_jurnal_id IS NOT NULL AND v_prima_id = p_jurnal_id AND v_moment = v_prima);
   -- declanșatorul ține de moment, nu de cine a apelat
   IF v_prima IS NOT NULL AND v_moment = v_prima THEN v_decl := 'clarificare_trimisa'; v_clar_id := v_clar_prima;
   ELSIF v_termen IS NOT NULL AND v_moment = v_termen THEN v_decl := 'termen_clarificari'; v_clar_id := NULL;
   ELSE v_decl := p_declansator; v_clar_id := CASE WHEN p_declansator = 'clarificare_trimisa' THEN p_clarificare_id END;
   END IF;
-  -- eligibilitatea (fără istoric): marcată dacă loturile s-au schimbat la / după moment; tardiv, cu o marjă de 10 s înainte
-  -- (setterii sunt un singur RPC: unul început înainte de moment și comis după el cade în marjă)
-  v_elig := CASE WHEN EXISTS (SELECT 1 FROM public.ofertare_loturi_jurnal j WHERE j.licitatie_id = p_licitatie_id
-                                AND j.la >= v_moment - CASE WHEN v_tardiv THEN interval '10 seconds' ELSE interval '0' END)
+  -- eligibilitatea (fără istoric as-of). Netardiv: exactă (lock-ul ținut de la moment exclude orice setter în curs).
+  -- Tardiv: incertă dacă a existat o înghețare amânată / eșuată pe licitație (fail-closed, review r4) SAU loturile s-au schimbat
+  -- după moment − 1 h (marja acoperă un setter început înainte de moment: e un RPC sub statement_timeout-ul rolului authenticated).
+  v_elig := CASE WHEN NOT v_tardiv THEN 'exacta'
+                 WHEN EXISTS (SELECT 1 FROM public.ofertare_analiza_erori e WHERE e.licitatie_id = p_licitatie_id AND e.faza = 'ingheata')
+                   OR EXISTS (SELECT 1 FROM public.ofertare_loturi_jurnal j WHERE j.licitatie_id = p_licitatie_id AND j.la >= v_moment - interval '1 hour')
                  THEN 'modificata_dupa_moment' ELSE 'exacta' END;
   -- textul: candidatul = ultima proveniență ≤ moment, altfel (doar netardiv) textul curent; DISPONIBIL numai cu dovadă validă as-of
   -- (transcriere / text_confirmat ≤ moment) — o sinteză_ai sau un text fără dovadă = text_indisponibil (review r3)
@@ -1064,7 +1071,8 @@ BEGIN
            'document_id', a.id, 'tip', a.tip, 'familie', a.familie, 'sha256', a.sha,
            'text_indisponibil', a.dovada = '{}'::jsonb, 'text_dovada', a.dovada) ORDER BY a.id), '[]'::jsonb)
     INTO v_docs FROM dov a;
-  -- clarificările as-of, DOAR din jurnal (MVP: la nivel de licitație — clarificările nu au lot)
+  -- clarificările as-of, DOAR din jurnal (MVP: la nivel de licitație); „evenimente” = id-urile de jurnal ≤ moment văzute la înghețare
+  -- (fn_ofertare_cb_snapshot_incert compară pe EVENIMENTE, nu pe clarificări — review r4)
   SELECT coalesce(jsonb_agg(x ORDER BY (x->>'clarificare_id')::bigint), '[]'::jsonb) INTO v_clar FROM (
     SELECT jsonb_build_object('clarificare_id', j.clarificare_id,
              'text', (SELECT t.text FROM public.ofertare_clarificari_jurnal t WHERE t.clarificare_id = j.clarificare_id AND t.eveniment = 'trimisa'
@@ -1073,14 +1081,16 @@ BEGIN
                        AND t.la <= v_moment ORDER BY t.la DESC, t.id DESC LIMIT 1),
              'status', (SELECT t.eveniment FROM public.ofertare_clarificari_jurnal t WHERE t.clarificare_id = j.clarificare_id AND t.la <= v_moment
                          ORDER BY t.la DESC, t.id DESC LIMIT 1),
+             'evenimente', (SELECT jsonb_agg(t.id ORDER BY t.id) FROM public.ofertare_clarificari_jurnal t WHERE t.clarificare_id = j.clarificare_id
+                             AND t.la <= v_moment),
              'versiune_necunoscuta', NOT EXISTS (SELECT 1 FROM public.ofertare_clarificari_jurnal t WHERE t.clarificare_id = j.clarificare_id
                                                   AND t.eveniment = 'trimisa' AND t.la <= v_moment)) AS x
       FROM (SELECT DISTINCT clarificare_id FROM public.ofertare_clarificari_jurnal WHERE licitatie_id = p_licitatie_id AND la <= v_moment) j) s;
   v_amp := encode(sha256(convert_to(jsonb_build_object('lic', p_licitatie_id, 'lot', p_lot_domeniu, 'nr', v_nr, 'moment', v_moment,
                                                        'elig', v_elig, 'docs', v_docs, 'clar', v_clar)::text, 'UTF8')), 'hex');
   INSERT INTO public.ofertare_analiza_versiuni (licitatie_id, lot_domeniu, lot_nr, tip, declansator, clarificare_declansatoare_id, moment_referinta,
-    inghetat_tardiv, termen_aproximat, eligibilitate, inghetata_de, doc_manifest, clarificari, amprenta)
-  VALUES (p_licitatie_id, p_lot_domeniu, v_nr, 'initiala', v_decl, v_clar_id, v_moment, v_tardiv, v_aprox, v_elig, p_de, v_docs, v_clar, v_amp)
+    inghetat_tardiv, termen_aproximat, eligibilitate, inghetata_la, inghetata_de, doc_manifest, clarificari, amprenta)
+  VALUES (p_licitatie_id, p_lot_domeniu, v_nr, 'initiala', v_decl, v_clar_id, v_moment, v_tardiv, v_aprox, v_elig, v_acum, p_de, v_docs, v_clar, v_amp)
   ON CONFLICT DO NOTHING RETURNING id INTO v_id;
   IF v_id IS NULL THEN
     SELECT id INTO v_id FROM public.ofertare_analiza_versiuni WHERE licitatie_id = p_licitatie_id AND lot_domeniu = p_lot_domeniu AND lot_nr = v_nr AND tip = 'initiala';
@@ -1126,7 +1136,7 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = publi
 AS $f$
 BEGIN
   IF NOT public.fn_ofertare_cb_poate(p_licitatie_id) THEN RAISE EXCEPTION 'Fără drept' USING ERRCODE = '42501'; END IF;
-  RETURN public.fn_ofertare_cb_ingheata(p_licitatie_id, p_lot_domeniu, p_lot_nr, 'manual', NULL, auth.uid(), false);
+  RETURN public.fn_ofertare_cb_ingheata(p_licitatie_id, p_lot_domeniu, p_lot_nr, 'manual', NULL, auth.uid(), false, NULL);
 END $f$;
 
 -- înghețarea la termen (service_role; rutina Ofertare) — pentru toate licitațiile cu termenul trecut și fără inițială
@@ -1160,12 +1170,24 @@ AS $f$ SELECT public.fn_ofertare_cb_snapshot_efectiv_intern(p_snapshot_id) WHERE
 CREATE FUNCTION public.fn_ofertare_cb_trg_clarificari()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '200ms'
 AS $f$
-DECLARE v_r jsonb;
+DECLARE v_r jsonb; v_lock boolean := false; v_ingheata boolean; v_j bigint;
 BEGIN
   IF NEW.status IN ('trimisa', 'raspunsa', 'retrasa') AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status) THEN
+    v_ingheata := NEW.status = 'trimisa' AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = NEW.licitatie_id
+                                                          AND v.tip = 'initiala' AND v.lot_domeniu = 'toate');
+    -- lock-ul licitației ÎNAINTEA jurnalului (NOWAIT): evenimentul scris sub lock = momentul exact al înghețării (review r4)
+    IF v_ingheata THEN
+      BEGIN
+        PERFORM 1 FROM public.ofertare_licitatii WHERE id = NEW.licitatie_id FOR NO KEY UPDATE NOWAIT;
+        v_lock := true;
+      EXCEPTION WHEN lock_not_available THEN v_lock := false;
+      END;
+    END IF;
     BEGIN
-      INSERT INTO public.ofertare_clarificari_jurnal (clarificare_id, licitatie_id, eveniment, text, text_sha256)
-      VALUES (NEW.id, NEW.licitatie_id, NEW.status, coalesce(NEW.intrebare, ''), encode(sha256(convert_to(coalesce(NEW.intrebare, ''), 'UTF8')), 'hex'));
+      INSERT INTO public.ofertare_clarificari_jurnal (clarificare_id, licitatie_id, eveniment, text, text_sha256, la)
+      VALUES (NEW.id, NEW.licitatie_id, NEW.status, coalesce(NEW.intrebare, ''), encode(sha256(convert_to(coalesce(NEW.intrebare, ''), 'UTF8')), 'hex'),
+              clock_timestamp())
+      RETURNING id INTO v_j;
     EXCEPTION WHEN OTHERS THEN
       BEGIN
         INSERT INTO public.ofertare_analiza_erori (licitatie_id, clarificare_id, faza, eroare) VALUES (NEW.licitatie_id, NEW.id, 'jurnal', left(SQLERRM, 1000));
@@ -1173,10 +1195,13 @@ BEGIN
       END;
       RETURN NULL;
     END;
-    IF NEW.status = 'trimisa' AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = NEW.licitatie_id AND v.tip = 'initiala'
-                                                AND v.lot_domeniu = 'toate') THEN
+    IF v_ingheata THEN
       BEGIN
-        v_r := public.fn_ofertare_cb_ingheata(NEW.licitatie_id, 'toate', '{}', 'clarificare_trimisa', NEW.id, auth.uid(), true);
+        IF v_lock THEN
+          v_r := public.fn_ofertare_cb_ingheata(NEW.licitatie_id, 'toate', '{}', 'clarificare_trimisa', NEW.id, auth.uid(), true, v_j);
+        ELSE
+          v_r := jsonb_build_object('amanat', true);
+        END IF;
         IF coalesce((v_r->>'amanat')::boolean, false) THEN
           INSERT INTO public.ofertare_analiza_erori (licitatie_id, clarificare_id, faza, eroare) VALUES (NEW.licitatie_id, NEW.id, 'ingheata', 'amânat (lock ocupat)');
         END IF;
@@ -1247,6 +1272,11 @@ BEGIN
     -- aceeași condiție ca la scriere, re-verificată: același lot + exact manifestul snapshot-ului
     IF NOT FOUND OR cs.lot_domeniu <> s.lot_domeniu OR cs.lot_nr <> s.lot_nr OR NOT public.fn_ofertare_cb_manifest_egal(cs.doc_manifest, s.doc_manifest) THEN
       RAISE EXCEPTION 'Simulare străină snapshot-ului (lot / manifest)' USING ERRCODE = '22023';
+    END IF;
+    -- dovadă automată doar dintr-o simulare COMPLETĂ (review r4): calcul gata, snapshot fără text_indisponibil, nicio comparație incompletă
+    IF cs.stare <> 'gata' OR EXISTS (SELECT 1 FROM jsonb_array_elements(s.doc_manifest) e WHERE (e->>'text_indisponibil')::boolean)
+       OR EXISTS (SELECT 1 FROM public.ofertare_cant_cmp WHERE calcul_id = v_sim AND verdict = 'incomplet') THEN
+      RAISE EXCEPTION 'Simulare incompletă (calcul negata / text indisponibil / comparație incompletă): nu e dovadă automată' USING ERRCODE = '22023';
     END IF;
     FOR x IN SELECT jsonb_array_elements_text(coalesce(p_audit->'dovezi_simulare'->'cmp_ids', '[]')) LOOP
       IF NOT EXISTS (SELECT 1 FROM public.ofertare_cant_cmp WHERE id = x::bigint AND calcul_id = v_sim) THEN
@@ -1393,22 +1423,24 @@ BEGIN
                                 AND v.lot_domeniu = 'toate')
             GROUP BY j.licitatie_id LOOP
     BEGIN
-      PERFORM public.fn_ofertare_cb_ingheata(r.licitatie_id, 'toate', '{}', 'clarificare_trimisa', r.clar, NULL, false);
+      PERFORM public.fn_ofertare_cb_ingheata(r.licitatie_id, 'toate', '{}', 'clarificare_trimisa', r.clar, NULL, false, NULL);
       v_i := v_i + 1;
     EXCEPTION WHEN OTHERS THEN
       INSERT INTO public.ofertare_analiza_erori (licitatie_id, clarificare_id, faza, eroare) VALUES (r.licitatie_id, r.clar, 'ingheata', left(SQLERRM, 1000));
     END;
   END LOOP;
-  -- încercările se numără cu tot cu eșecuri (rândurile „completare” din erori, cu snapshot_id) — review r3
+  -- încercările se numără cu tot cu eșecuri; lock consultativ per snapshot + reverificarea pragurilor SUB lock (review r4: două rulări
+  -- concurente nu depășesc 24 și nu fac două încercări în aceeași oră)
   FOR r IN SELECT v.id FROM public.ofertare_analiza_versiuni v
             WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(v.doc_manifest) m
                            WHERE NOT (m->>'text_indisponibil')::boolean
                              AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_completari c, jsonb_array_elements(c.texte) t
-                                              WHERE c.snapshot_id = v.id AND (t->>'document_id') = (m->>'document_id') AND t->>'sha256' = m->>'sha256'))
-              AND (SELECT count(*) FROM public.ofertare_analiza_completari c WHERE c.snapshot_id = v.id)
-                  + (SELECT count(*) FROM public.ofertare_analiza_erori e WHERE e.snapshot_id = v.id AND e.faza = 'completare') < 24
-              AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_completari c WHERE c.snapshot_id = v.id AND c.creat_la > now() - interval '1 hour')
-              AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_erori e WHERE e.snapshot_id = v.id AND e.faza = 'completare' AND e.la > now() - interval '1 hour') LOOP
+                                              WHERE c.snapshot_id = v.id AND (t->>'document_id') = (m->>'document_id') AND t->>'sha256' = m->>'sha256')) LOOP
+    CONTINUE WHEN NOT pg_try_advisory_xact_lock(hashtext('ofertare_cb_completare:' || r.id));
+    CONTINUE WHEN (SELECT count(*) FROM public.ofertare_analiza_completari c WHERE c.snapshot_id = r.id)
+                  + (SELECT count(*) FROM public.ofertare_analiza_erori e WHERE e.snapshot_id = r.id AND e.faza = 'completare') >= 24
+               OR EXISTS (SELECT 1 FROM public.ofertare_analiza_completari c WHERE c.snapshot_id = r.id AND c.creat_la > now() - interval '1 hour')
+               OR EXISTS (SELECT 1 FROM public.ofertare_analiza_erori e WHERE e.snapshot_id = r.id AND e.faza = 'completare' AND e.la > now() - interval '1 hour');
     BEGIN
       PERFORM public.fn_ofertare_cb_completeaza_intern(r.id);
       v_c := v_c + 1;
@@ -1430,7 +1462,8 @@ BEGIN
   IF NOT FOUND OR NOT public.fn_ofertare_cb_poate(x.licitatie_id) THEN RAISE EXCEPTION 'Extragere inexistentă sau fără drept' USING ERRCODE = '42501'; END IF;
   IF p_motiv IS NULL OR length(btrim(p_motiv)) < 3 OR length(p_motiv) > 300 THEN RAISE EXCEPTION 'Motiv obligatoriu' USING ERRCODE = '22023'; END IF;
   IF x.stare NOT IN ('partial', 'esuat') THEN RAISE EXCEPTION 'Doar o extragere partial / esuat se redeschide' USING ERRCODE = '55000'; END IF;
-  IF p_cerere_id IS NOT DISTINCT FROM x.cerere_id THEN RAISE EXCEPTION 'Redeschiderea cere o cerere NOUĂ (cheltuiala se aprobă din nou)' USING ERRCODE = '22023'; END IF;
+  -- cerere NOUĂ: nici cea curentă, nici una folosită într-un ciclu anterior (review r4)
+  IF p_cerere_id IS NOT DISTINCT FROM x.cerere_id OR EXISTS (SELECT 1 FROM jsonb_array_elements(x.reluari) r WHERE (r->>'cerere_veche')::bigint = p_cerere_id) THEN RAISE EXCEPTION 'Redeschiderea cere o cerere NOUĂ (cheltuiala se aprobă din nou)' USING ERRCODE = '22023'; END IF;
   -- nicio încercare veche în zbor (review r3): extragere_inchide nu închide cu felii în zbor; verificat și aici
   IF EXISTS (SELECT 1 FROM public.ofertare_cant_felii WHERE extragere_id = p_extragere_id AND stare = 'in_zbor') THEN
     RAISE EXCEPTION 'Există felii în zbor' USING ERRCODE = '55000';
@@ -1443,7 +1476,7 @@ BEGIN
   IF NOT public.fn_ofertare_cb_doc_in_lot(x.document_id, c.lot_domeniu, c.lot_nr) THEN RAISE EXCEPTION 'Documentul nu e în lotul cererii' USING ERRCODE = '22023'; END IF;
   SELECT CASE WHEN d.text_extras IS NOT NULL THEN encode(sha256(convert_to(d.text_extras, 'UTF8')), 'hex')
               ELSE (SELECT p.sha256 FROM public.ofertare_doc_texte_prov p WHERE p.document_id = d.id ORDER BY p.constatat_la DESC, p.id DESC LIMIT 1) END
-    INTO v_cur FROM public.ofertare_documente_atribuire d WHERE d.id = x.document_id;
+    INTO v_cur FROM public.ofertare_documente_atribuire d WHERE d.id = x.document_id FOR SHARE;
   IF v_cur IS DISTINCT FROM x.doc_sha256 OR public.fn_ofertare_cb_text_valid(x.licitatie_id, x.document_id, x.doc_sha256) = '{}'::jsonb THEN
     RAISE EXCEPTION 'Versiunea extrasă nu mai e cea curentă sau nu mai are dovadă validă' USING ERRCODE = '55000';
   END IF;
@@ -1466,7 +1499,7 @@ $f$;
 
 -- incertitudinile unui snapshot, verificate LA CITIRE (review r3): orice motiv → auditul doar „nedeterminabil”.
 --   eligibilitate          = loturile s-au schimbat la / după moment (fără istoric as-of);
---   trimitere_anterioara   = o trimitere din jurnal ANTERIOARĂ momentului, comisă după înghețare (tranzacții comise în ordine inversă);
+--   eveniment_tarziu       = un eveniment de jurnal ≤ moment pe care înghețarea nu l-a văzut (comis după ea; comparat pe id de eveniment);
 --   jurnal_esuat           = o jurnalizare de clarificare eșuată până la moment (istoricul trimiterilor e incomplet).
 CREATE FUNCTION public.fn_ofertare_cb_snapshot_incert(p_snapshot_id bigint)
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -1474,12 +1507,11 @@ AS $f$
   SELECT coalesce(jsonb_agg(m ORDER BY m), '[]'::jsonb) FROM (
     SELECT 'eligibilitate' AS m FROM public.ofertare_analiza_versiuni s WHERE s.id = p_snapshot_id AND s.eligibilitate <> 'exacta'
     UNION ALL
-    SELECT 'trimitere_anterioara' FROM public.ofertare_analiza_versiuni s WHERE s.id = p_snapshot_id
-       AND EXISTS (SELECT 1 FROM public.ofertare_clarificari_jurnal j WHERE j.licitatie_id = s.licitatie_id AND j.eveniment = 'trimisa'
-                     AND j.la < s.moment_referinta)
-       AND EXISTS (SELECT 1 FROM public.ofertare_clarificari_jurnal j WHERE j.licitatie_id = s.licitatie_id AND j.eveniment = 'trimisa'
-                     AND j.la < s.moment_referinta
-                     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s.clarificari) c WHERE (c->>'clarificare_id')::bigint = j.clarificare_id))
+    -- orice eveniment de jurnal ≤ moment pe care înghețarea NU l-a văzut (comis după ea) — pe id de eveniment, nu pe clarificare
+    SELECT 'eveniment_tarziu' FROM public.ofertare_analiza_versiuni s WHERE s.id = p_snapshot_id
+       AND EXISTS (SELECT 1 FROM public.ofertare_clarificari_jurnal j WHERE j.licitatie_id = s.licitatie_id AND j.la <= s.moment_referinta
+                     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s.clarificari) c, jsonb_array_elements_text(coalesce(c->'evenimente', '[]')) e
+                                      WHERE e::bigint = j.id))
     UNION ALL
     SELECT 'jurnal_esuat' FROM public.ofertare_analiza_versiuni s WHERE s.id = p_snapshot_id
        AND EXISTS (SELECT 1 FROM public.ofertare_analiza_erori e WHERE e.licitatie_id = s.licitatie_id AND e.faza = 'jurnal' AND e.la <= s.moment_referinta)
