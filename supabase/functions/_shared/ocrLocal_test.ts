@@ -21,6 +21,9 @@ Deno.test('cifreDiferite (laborator 15.10) = diferentaNumerica fara marcajul ⟦
     // r3 P2: marcajul trebuie sa fie coada celulei, nu in interiorul ei sau al altui marcaj
     ['Cantitate ⟦rowspan=5⟧ m', 'Cantitate ⟦rowspan=7⟧ m'], ['Cantitate ⟦rowspan_invalid=x ⟦rowspan=5⟧ m⟧', 'Cantitate ⟦rowspan_invalid=x ⟦rowspan=7⟧ m⟧'],
     ['X ⟦rowspan_invalid=x ⟦rowspan=5⟧ | 1', 'X ⟦rowspan_invalid=x ⟦rowspan=7⟧ | 1'],
+    // r4 P2: atributul invalid contine chiar „ | ” -> contextul se pastreaza pe tot sirul (si orice _invalid opreste scoaterea)
+    ['X ⟦rowspan_invalid=x | Y ⟦rowspan=5⟧ | z⟧', 'X ⟦rowspan_invalid=x | Y ⟦rowspan=7⟧ | z⟧'],
+    ['A ⟦rowspan=5⟧ | B ⟦colspan_invalid=q⟧', 'A ⟦rowspan=7⟧ | B ⟦colspan_invalid=q⟧'],
   ]
   for (const [a, b] of diferite) assert.equal(cifreDiferite(a, b), true, JSON.stringify([a, b]))
   // nicio pereche pe care diferentaNumerica o socoteste egala nu devine diferita (si invers doar prin marcaje)
