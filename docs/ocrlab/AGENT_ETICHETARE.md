@@ -58,3 +58,29 @@ Claude doar cu Read; nicio scriere în BD, niciun apel plătit. Ieșirile în `p
 **Schimbare de lansator (cere „da”):** `run_paw jak` primește un argument opțional cu lista de imagini (`-i`), doar fișiere `.png` din
 `paw-data\banca`, verificate ca la brief (fără UNC / ADS / reparse), maxim 10 per apel. Fără `.ps1` / `.cmd` noi; Codex nu se
 pornește pe lângă lansator. Până la „da”: se pregătesc eșantionul și imaginile și rulează doar trecerea A (Opus) pe lotul de probă.
+
+## v2 — după Jakarinos r1 (GO cu condiții, `out\ocrlab_agent_etichetare_r1_jak.log`)
+- **P0 localizare:** ancorele `context_*` nu sunt garantat agreate și lipsesc la itemii de tabel (d772 p311 `p0311_b0_r4`). Ținta se dă
+  verificabil: pentru tabel = indexul tabelului pe bandă + antetul + rândurile vecine agreate (dacă există) + numărul rândului; pentru text =
+  ancoră doar dacă e identică la ambele cititoare, altfel paragraful întreg. Etichetatorul întoarce `tinta` = `unica` / `ambigua` / `lipsa`
+  și ce a localizat (rândul vecin de sus și de jos, transcrise). Acord = aceeași localizare ȘI aceeași valoare; `ambigua` / `lipsa` ⇒ afară,
+  numărat pe strat.
+- **P0 aritmetica:** nu mai respinge și nu mai „confirmă” etichete. Se raportează separat: transcrierea vizuală + `aritmetica` =
+  `consistenta` / `inconsistenta` / `neaplicabila` (rotunjire la 2 zecimale, operanzii luați din etichete, nu din OCR).
+- **P0 alarmele:** scoase din această bancă. Protocol separat (mai târziu): imagine + ieșirea OCR la punctul de oprire, cititor mascat,
+  plus benzi fără alarmă ca negative.
+- **P1 trecerea C:** primește pagina completă + antetul + decupajul la 300 dpi, într-o sesiune nouă, fără răspunsurile A/B; se aplică și
+  pe un eșantion de 10% din acorduri (verificarea localizării comune).
+- **P1 reprezentare comună:** cifrele ca șiruri (semn, separator, zerouri), `gol` ≠ `absent` ≠ `ilizibil`, celulă unită = valoarea o dată +
+  `unita_cu`, indici/exponenți ca `_x` / `^x`, text barat marcat. Unificarea spațiilor nu traversează granițe de celulă sau rând.
+- **P1 populații:** refăcute din `masoara` pe main la eșantionare (nu cifrele din tabelul de sus); `e_cantitate` se împarte la etichetare în
+  `cantitate_efectiva` / `cod` / `specificatie_numerica` / `text`. Ținta ≥300 se socotește pe `cantitate_efectiva`.
+- **P1 omisiuni comune:** 5 pagini întregi (aleator, `quantity_table`) transcrise integral A+B și comparate cu ambele citiri.
+- **P1 raport:** ponderat pe populații, interval cu grupare pe pagini, `nelamurit` rămâne în numitorul acoperirii.
+- **P1 independență:** fiecare trecere vede doar directorul ei de intrare (`banca\v1\in\<trecere>\<item>\`: imagine + ținta); citirile OCR și
+  etichetele celuilalt stau în `banca\v1\priv\`, în afara rădăcinii date etichetatorului. Arbitrul se evaluează doar după înghețare.
+- **P1 lansator:** rădăcină canonică cu delimitator, părinți fără reparse, PNG decodabil, ≤ 20 MB / ≤ 40 MP, argumente ca listă — intră în
+  propunerea de diff, cu review separat.
+- **P2 înghețare:** manifest cu SHA-256 pe PDF-uri, orientări, imagini, comparator, prompt, schemă, versiunile modelelor; 20% din pagini
+  rezervate, nefolosite la reglaj.
+- **Pilot 50 — praguri fixate înainte:** orice acord demonstrat pe ținta greșită sau orice scurgere între treceri ⇒ nu se extinde la 600.
