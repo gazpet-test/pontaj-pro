@@ -1,0 +1,282 @@
+Usage
+Current billing cycle
+All projects
+
+Organization is on the Pro Plan
+
+07 Oct 2026 - 07 Nov 2026
+
+Usage Summary
+
+Your plan includes a limited amount of usage. If exceeded, you will be charged for the overages. It may take up to 1 hour to refresh.
+
+MORE INFORMATION
+
+How billing works
+
+Supabase Plans
+
+You have not exceeded your Pro Plan quota in this billing cycle.
+
+Log IngestionUPCOMING
+
+4.652 / 20 GB (23%)
+
+Log QueryUPCOMING
+
+97.865 / 2,000 GB (5%)
+
+Storage Size
+
+14.586 / 100 GB (15%)
+
+Edge Function Invocations
+
+70,803 / 2,000,000 (4%)
+
+Realtime Concurrent Peak Connections
+
+12 / 500 (2%)
+
+Egress
+
+4.615 / 250 GB (2%)
+
+Cached Egress
+
+0.078 / 250 GB (<1%)
+
+Monthly Active Users
+
+6 / 100,000 MAU (<1%)
+
+Monthly Active SSO Users
+
+0 / 50 MAU 
+
+Monthly Active Third-Party Users
+
+0 / 100,000 MAU 
+
+Storage Image Transformations
+
+0 / 100 
+
+Realtime Messages
+
+0 / 5,000,000 
+
+Log Drain Events
+
+0 
+
+Micro Compute Hours
+
+196 hours ($2.63)
+
+Compute Hours
+
+Amount of hours your projects were active. Each project is a dedicated server and database.
+
+Paid plans come with $10 in Compute Credits to cover one project running on Micro Compute or parts of any compute add-on.
+
+Billing is based on the sum of Compute Hours used. Paused projects do not count towards usage.
+
+MORE INFORMATION
+
+Compute Add-ons
+
+Usage-billing for Compute
+
+Compute Hours usage
+
+Micro Compute Hours usage in period
+
+196 hours
+
+Compute Hours usage per day
+
+The data refreshes every hour.
+
+07 Oct
+08 Oct
+09 Oct
+10 Oct
+11 Oct
+12 Oct
+13 Oct
+14 Oct
+15 Oct
+0
+6
+12
+18
+24
+
+Egress
+
+Amount of data transmitted over all network connections
+
+Egress
+
+Contains any outgoing traffic including Database, Storage, Realtime, Auth, API, Edge Functions, Pooler and Log Drains.
+
+Billing is based on the total sum of uncached egress in GB throughout your billing period.
+
+Egress via cache hits is billed separately.
+
+MORE INFORMATION
+
+Documentation
+
+Egress usage
+
+Included in Pro Plan
+
+250 GB
+
+Used in period
+
+4.62 GB
+
+Overage in period
+
+0 GB
+
+Egress per day
+
+The breakdown of different egress types is inclusive of cached egress, even though it is billed separately. The data refreshes every hour.
+
+07 Oct
+08 Oct
+09 Oct
+10 Oct
+11 Oct
+12 Oct
+13 Oct
+14 Oct
+15 Oct
+0
+572MB
+1.1GB
+2.1GB
+
+Cached Egress
+
+Contains any outgoing traffic that is served from a cache hit. Includes API, Storage and Edge Functions.
+
+Billing is based on the total sum of cached egress in GB throughout your billing period.
+
+MORE INFORMATION
+
+Documentation
+
+Cached Egress usage
+
+Included in Pro Plan
+
+250 GB
+
+Used in period
+
+0.08 GB
+
+Overage in period
+
+0 GB
+
+Cached Egress per day
+
+The data refreshes every hour.
+
+07 Oct
+08 Oct
+09 Oct
+10 Oct
+11 Oct
+12 Oct
+13 Oct
+14 Oct
+0
+5MB
+10MB
+18MB
+
+Database & Storage Size
+
+Amount of resources your project is consuming
+
+Disk Size
+
+Each Supabase project comes with a dedicated disk. Each project gets 8 GB of disk for free. Billing is based on the provisioned disk size. Disk automatically scales up when you get close to it's size.
+
+Each hour your project is using more than 8 GB of GP3 disk, it incurs the overages in GB-Hrs, i.e. a 16 GB disk incurs 8 GB-Hrs every hour. Extra disk size costs $0.125/GB/month ($0.000171/GB-Hr).
+
+MORE INFORMATION
+
+Documentation
+
+Disk Management
+
+Disk size usage
+
+Included in Pro Plan
+
+8 GB GP3 disk per project
+
+Overage in period
+
+0 GP3 GB-Hrs
+
+Current disk size per project
+
+Breakdown of disk per project. Head to your project's disk management section to see database size used.
+
+Proiect-Test
+
+2 GB Disk provisioned
+More information
+Manage Disk
+
+Storage Size
+
+Sum of all objects in your storage buckets.
+
+Billing is prorated down to the hour and will be displayed GB-Hrs.
+
+MORE INFORMATION
+
+Storage
+
+Storage Size usage
+
+Included in Pro Plan
+
+100 GB
+
+Average in period
+
+14.59 GB
+
+Overage in period
+
+0 GB
+
+Average Storage Size per day
+
+The data refreshes every hour.
+
+07 Oct
+08 Oct
+09 Oct
+10 Oct
+11 Oct
+12 Oct
+13 Oct
+14 Oct
+15 Oct
+0
+3.7GB
+7.5GB
+13.8GB
+
