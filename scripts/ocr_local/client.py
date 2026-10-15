@@ -719,25 +719,26 @@ def reconciliaza_rulare(rdir, edge, n=4):
 @cu_lacat
 def reluata(rdir, edge):
     """DUPA reluarea din BD (fn_ofertare_ocr_reia, 20261030d — rulata de om prin psql, cu „da”-ul lui Razvan; clientul NU o poate face):
-    confirma din BD ca rularea e iar `citita`, muta marcajul local `oprita` in `opriri_anterioare` (istoric, nu se sterge) si fixeaza
-    baza ferestrei pragului §8: toate dezacordurile deja trimise la Claude / om pana acum. Idempotent. Refuza daca omul a cerut oprirea
-    (oprire_ceruta.json) — aceea nu se reia pe aceasta cale."""
+    confirma din BD o reluare NOUA — `citita` si urma ei in oprit_motiv („reluata #k (reluare_id N): …”, scrisa doar de
+    fn_ofertare_ocr_reia) cu un reluare_id nepreluat inca local —, muta marcajul local `oprita` (daca exista: caderea dupa commit poate
+    sa-l fi pierdut) in `opriri_anterioare` (istoric) si fixeaza baza ferestrei pragului §8 (prag pe epoca de reluare). Acelasi
+    reluare_id a doua oara = idempotent. Fara urma (ex. oprirea care n-a ajuns in BD) = refuz: nimic nu se reseteaza (Jakarinos r2 P1).
+    Refuza si daca omul a cerut oprirea (oprire_ceruta.json) — aceea nu se reia pe aceasta cale."""
     rdir = pathlib.Path(rdir); r = rulare(rdir)
     if (rdir / 'oprire_ceruta.json').exists(): raise RuntimeError('Oprire ceruta de om: nu se reia pe aceasta cale')
     s = stare_server(edge, r['rulare_id'])
-    if s['stare'] != 'citita': raise RuntimeError('BD nu arata rularea reluata (stare %s): ruleaza intai fn_ofertare_ocr_reia' % s['stare'])
-    p = pasi(rdir); o = p.get('oprita')
+    m = re.match(r'^reluata #([0-9]+) \(reluare_id ([0-9]+)\): ', s.get('oprit_motiv') or '')
+    if s['stare'] != 'citita' or not m:
+        raise RuntimeError('BD nu arata o reluare (stare %s): ruleaza intai fn_ofertare_ocr_reia' % s['stare'])
+    reluare_id = int(m.group(2)); p = pasi(rdir)
+    if ((p.get('reluare') or {}).get('valoare') or {}).get('reluare_id') == reluare_id: return {'deja': True, 'stare': 'citita', 'reluare_id': reluare_id}
+    o = p.get('oprita') or {'la': time.time(), 'valoare': 'oprire fara marcaj local (cadere dupa commit); motivul din BD: ' + s['oprit_motiv']}
     st = stare_arbitraj(rdir, r, baza_reluare(rdir))
-    if not o:
-        # fara marcaj local: fie reluarea e deja facuta (idempotent), fie procesul a cazut DUPA oprirea in BD si INAINTEA marcajului
-        # (Jakarinos r1 P2). In al doilea caz fereastra curenta tot e peste prag -> s-ar opri din nou fara niciun apel: se reia si aici.
-        if not peste_prag(st)[2]: return {'deja': True, 'stare': 'citita'}
-        o = {'la': time.time(), 'valoare': 'oprire in BD fara marcaj local (cadere dupa commit), fereastra peste prag'}
     baza = {str(doc): sorted(v['numarate']) for doc, v in st['per_doc'].items()}
     p['opriri_anterioare'] = {'la': time.time(), 'valoare': ((p.get('opriri_anterioare') or {}).get('valoare') or []) + [o]}
-    p['reluare'] = {'la': time.time(), 'valoare': {'baza': baza, 'oprire': o.get('valoare')}}
+    p['reluare'] = {'la': time.time(), 'valoare': {'baza': baza, 'oprire': o.get('valoare'), 'reluare_id': reluare_id, 'nr': int(m.group(1))}}
     p.pop('oprita', None); save(rdir / 'pasi.json', p)
-    return {'stare': 'citita', 'baza': {k: len(v) for k, v in baza.items()}, 'oprire_reluata': o.get('valoare')}
+    return {'stare': 'citita', 'reluare_id': reluare_id, 'baza': {k: len(v) for k, v in baza.items()}, 'oprire_reluata': o.get('valoare')}
 
 def oprire(rdir, edge, motiv):
     """FARA lacat (review r4 Jakarinos P2): merge si cat ruleaza `arbitreaza`. Intai marcajul local oprire_ceruta.json (verificat de

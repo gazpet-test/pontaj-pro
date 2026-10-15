@@ -93,7 +93,12 @@ BEGIN
   SELECT count(*) INTO v_arb FROM public.ofertare_ocr_arbitraje a JOIN public.ofertare_ocr_dezacorduri d ON d.id = a.dezacord_id WHERE d.rulare_id = r.id;
   INSERT INTO public.ofertare_ocr_reluari (rulare_id, oprit_motiv, motiv, cost_usd, arbitraje, reluat_de)
        VALUES (r.id, r.oprit_motiv, btrim(p_motiv), r.cost_usd, v_arb, left(session_user::text, 100)) RETURNING id INTO v_id;
-  UPDATE public.ofertare_ocr_rulari SET stare = 'citita', oprit_motiv = NULL, terminata_la = NULL WHERE id = r.id;
+  -- urma reluării, citită de client prin fn_ofertare_ocr_rulare_stare (oprit_motiv): `erp reluata` acceptă DOAR un reluare_id nou văzut
+  -- aici — „citita” fără urma asta (ex. oprirea care n-a ajuns în BD) nu resetează pragul (Jakarinos r2 P1)
+  UPDATE public.ofertare_ocr_rulari
+     SET stare = 'citita', terminata_la = NULL,
+         oprit_motiv = left('reluata #' || (SELECT count(*) FROM public.ofertare_ocr_reluari WHERE rulare_id = r.id) || ' (reluare_id ' || v_id || '): ' || r.oprit_motiv, 300)
+   WHERE id = r.id;
   RETURN jsonb_build_object('ok', true, 'stare', 'citita', 'reluare_id', v_id, 'arbitraje', v_arb, 'cost_usd', r.cost_usd);
 END $f$;
 

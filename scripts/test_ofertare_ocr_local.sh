@@ -496,10 +496,11 @@ q "UPDATE public.ofertare_ocr_rulari SET cost_abandonat = 0 WHERE id = $R7" >/de
 RX=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'"); [ -n "$RX" ] || esec "cererea RX"
 rq "altă rulare activă pe licitație" "$(RE "$R7" "$MOT")" "altă rulare activă"
 ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_anuleaza($RX)" >/dev/null
-asteapta "reluare permisă: oprita → citita, motivul opririi șters din rulare, jurnalul cu motivul, costul și arbitrajele" \
+asteapta "reluare permisă: oprita → citita, urma reluării în oprit_motiv, jurnalul cu motivul, costul și arbitrajele" \
   "$(q "SELECT (x->>'stare')||'|'||(x->>'arbitraje') FROM $(RE "$R7" "  $MOT  " | sed 's/^SELECT //') x")|$(q "SELECT stare||'|'||coalesce(oprit_motiv,'-')||'|'||(terminata_la IS NULL) FROM public.ofertare_ocr_rulari WHERE id=$R7")|$(q "SELECT oprit_motiv||'|'||motiv||'|'||cost_usd||'|'||reluat_de FROM public.ofertare_ocr_reluari WHERE rulare_id=$R7")" \
-  "citita|$(q "SELECT count(*) FROM public.ofertare_ocr_arbitraje a JOIN public.ofertare_ocr_dezacorduri d ON d.id=a.dezacord_id WHERE d.rulare_id=$R7")|citita|-|true|$AUTO|$MOT|0.0720|postgres"
+  "citita|$(q "SELECT count(*) FROM public.ofertare_ocr_arbitraje a JOIN public.ofertare_ocr_dezacorduri d ON d.id=a.dezacord_id WHERE d.rulare_id=$R7")|citita|reluata #1 (reluare_id $(q "SELECT max(id) FROM public.ofertare_ocr_reluari")): $AUTO|true|$AUTO|$MOT|0.0720|postgres"
 rq "reluare pe o rulare citita" "$(RE "$R7" "$MOT")" "Doar o rulare oprita se reia"
+asteapta "urma reluării vizibilă clientului (stare_rulare, service_role)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rulare_stare($R7)->>'oprit_motiv'")" "reluata #1 (reluare_id $(q "SELECT max(id) FROM public.ofertare_ocr_reluari")): $AUTO"
 asteapta "după reluare: rezervările merg din nou (stare citita)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rulare_stare($R7)->>'stare'")" citita
 for k in 2 3; do
   ca service_role - "SELECT public.fn_ofertare_ocr_stare($R7, 'oprita', '$AUTO')" >/dev/null
