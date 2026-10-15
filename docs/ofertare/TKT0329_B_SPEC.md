@@ -1,6 +1,6 @@
 # TKT-2026-0329, varianta B: cantități structurate + audit al răspunsurilor Autorității
 
-**Stare:** SPECIFICAȚIE v3 (15.10.2026), după review r2 (NO-GO de la Jakarinos și de la Copilot).
+**Stare:** SPECIFICAȚIE v4 (15.10.2026), după review r3 (NO-GO de la Jakarinos și de la Copilot).
 
 Nimic nu e implementat. Migrările, deploy-urile și orice cost AI se fac doar cu „da” de la Răzvan.
 **Decizie de pornire:** Răzvan, 14.10.2026, varianta B (`claude_context` #1758).
@@ -9,7 +9,7 @@ Nimic nu e implementat. Migrările, deploy-urile și orice cost AI se fac doar c
 **Istoric:**
 - **v1:** NO-GO de la amândoi (r1).
 - **v2:** acoperire tri-state, rezervare per apel, identitatea articolului, DN cu parserul existent, perechi de roluri, audit pe dovezi fără AI, imuabilitate, lot canonic, golden. Tot NO-GO (r2): Jakarinos 9×P1, Copilot 8×P1.
-- **v3**, schimbările:
+- **v3**, schimbările (tot NO-GO, r3: Jakarinos 6×P1, Copilot 7×P1):
   - plafonul e comun pe licitație și scop, cu `necunoscuta` în consum;
   - blocarea se face pe **muncă** (document + sha + extractor + felie), unic în toate stările, iar reluarea e doar umană;
   - deduplicarea se face doar pe repetarea aceleiași poziții;
@@ -25,6 +25,19 @@ Nimic nu e implementat. Migrările, deploy-urile și orice cost AI se fac doar c
   - lotul canonic e fără NULL;
   - declanșatoarele D1 sunt concrete;
   - migrarea de bază (PR2) e separată de migrarea H2 (PR4).
+- **v4**, schimbările:
+  - originea și completitudinea textului: `sinteza_ai` nu e sursă de extragere și nici de verificare a citatelor;
+  - perechea e `gata` doar cu sursa integrală, cel puțin o observație pe fiecare rol (sau decizie umană „verificat fără lungimi”) și cel puțin o cheie comună;
+  - validitatea calculului include algoritmul, pragurile și extractorul;
+  - rezervarea e o limită superioară demonstrabilă (octeți ≥ tokeni), iar o depășire blochează bugetul;
+  - înghețarea materializează textele tuturor documentelor din manifest și lucrează as-of termen, cu `inghetat_tardiv`;
+  - D1: trigger pe INSERT sau UPDATE, lacăt consultativ, `ON CONFLICT` care întoarce inițiala existentă, iar eroarea nu blochează clarificarea;
+  - identitatea completă a subiectului (lot, tip lucrare, DN, material, obiect sau total, proprietate), fără wildcard;
+  - „alegere între valori existente” ≠ modificare ulterioară;
+  - poziția = offset absolut al citatului găsit în cod;
+  - auditul e versionat pe rulare și pe hash-ul întrebării;
+  - o singură decizie sau alias activ, serializat;
+  - versiunea felierii și `sha_felie` intră în identitatea muncii.
 
 ## 1. Problema, pe cazul real
 
@@ -86,7 +99,7 @@ ofertare_audit_raspunsuri
 - **PR4:** o migrare mică, doar view-ul H2.
 
 **Obiectele noi:**
-- tabele: `ofertare_doc_texte`, `ofertare_cant_extrageri`, `ofertare_cant_felii`, `ofertare_ai_buget`, `ofertare_ai_cereri`, `ofertare_ai_rezervari`, `ofertare_cant_obs`, `ofertare_cant_doc_decizii`, `ofertare_cant_alias`, `ofertare_cant_calcul`, `ofertare_cant_cmp`, `ofertare_analiza_versiuni`, `ofertare_audit_raspunsuri`;
+- tabele: `ofertare_analiza_erori`, `ofertare_doc_texte`, `ofertare_cant_extrageri`, `ofertare_cant_felii`, `ofertare_ai_buget`, `ofertare_ai_cereri`, `ofertare_ai_rezervari`, `ofertare_cant_obs`, `ofertare_cant_doc_decizii`, `ofertare_cant_alias`, `ofertare_cant_calcul`, `ofertare_cant_cmp`, `ofertare_analiza_versiuni`, `ofertare_audit_raspunsuri`;
 - funcțiile din §4.3, §4.5, §5.3 și §5.4;
 - triggerele de imuabilitate.
 
@@ -107,20 +120,29 @@ ofertare_audit_raspunsuri
 - **Lotul canonic:** `lot_domeniu ∈ {toate, lista, necunoscut}`, `lot_nr int[] NOT NULL`, cu `CHECK ((lot_domeniu = 'lista') = (cardinality(lot_nr) > 0))`. Pentru `toate` / `necunoscut` = `'{}'`, fără NULL. Indexurile unice pe lot funcționează astfel corect.
 
 ### 4.1 Texte și observații
-- **`ofertare_doc_texte(licitatie_id, sha256, text, creat_la)`**, PK `(licitatie_id, sha256)`.
-  - Conține textul exact folosit la o extragere.
+- **`ofertare_doc_texte(licitatie_id, sha256, text, origine, completitudine, creat_la)`**, PK `(licitatie_id, sha256)`.
+  - Conține textul exact folosit la o extragere **și** textul fiecărui document din manifestul unui snapshot (§5.3).
+  - **`origine`:**
+    - `transcriere`: ingest / OCR, textul documentului;
+    - `sinteza_ai`: textul scris de `document-nou-citeste` când documentul nu avea text (`scriere.ts`: `DOCUMENT: … / Tip: …` + rezumat + Q&A ale modelului; PR6 adaugă și un marcaj explicit `analiza.citire_noi.text_sinteza = true` pentru citirile viitoare).
+    Un text `sinteza_ai` **nu e niciodată** sursă de extragere și nici de verificare a citatelor.
+  - **`completitudine`:** `integral | partial` (din `pagini_necitite` și `status_procesare` ale documentului la acel moment) + lista paginilor necitite.
   - Nu are SELECT pentru `authenticated`; se citește doar prin `fn_ofertare_doc_text(lic, sha)`, cu `fn_are_acces_ofertare`. Așa nu există un magazin global de texte între licitații.
 - **`ofertare_cant_obs`:**
   - **Proveniență:** `id`, `licitatie_id`, `document_id`, `doc_sha256`, `familie_id` (§5.2), `extragere_id`, `felie_nr`; lot canonic.
   - **Rol:** `rol_sursa` CHECK `f3 | c6 | lista_alt | atr | cs | fisa_date | memoriu | plansa | raspuns | alt`; `rol_decis_de` (`antet | marcaj | titlu | model | om`).
-  - **Poziția articolului:** `pagina`, `tabel_nr`, `rand_nr`, `cod_articol`, `denumire`, plus `pozitie_cheie` = `familie|pagina|tabel|rand|cod`. Identitatea pozițională folosită de deduplicare.
+  - **Poziția articolului:**
+    - `pagina` (din markerul absolut `⟦PAGINA n⟧` + `pagina_offset`), `cod_articol`, `denumire`;
+    - `offset_citat`: poziția absolută, în caractere, a citatului în textul documentului `doc_sha256`. Se calculează în cod: citatul modelului se caută **exact** în textul feliei, apoi se raportează la document. Nu e numerotarea modelului;
+    - `pozitie_dovedita` (bool);
+    - `pozitie_cheie` = `familie|doc_sha256|offset_citat`. Doar când poziția e dovedită.
   - **Tipul lucrării și măsura:**
     - `tip_lucrare` CHECK `conducta | bransament | protectie | alt`;
     - `masura` CHECK `lungime | montaj | proba | material | alt`.
   - **Obiect:** `obiect_brut`, `obiect_cheie`.
   - **Material și DN:** `material`, `dn_mm numeric[]`, `dn_model`, `dn_ambiguu`, `sdr`.
   - **Cantitate:** `um_norm`, `cantitate` (null ≠ 0), `e_total`, `e_subtotal`.
-  - **Citat și extractor:** `citat` (≤ 300), `extractor_id` (= `model@prompt_ver@normalizator_ver`), `hash_rand`.
+  - **Citat și extractor:** `citat` (≤ 300), `extractor_id` (= `model@prompt_ver@normalizator_ver@feliere_ver`), `hash_rand`.
   - Unic `(extragere_id, felie_nr, hash_rand)`.
 
 ### 4.2 Extrageri, felii, cache, blocarea muncii
@@ -128,22 +150,27 @@ ofertare_audit_raspunsuri
   - `id`, `licitatie_id`, `document_id`, `doc_sha256`, `familie_id`, `extractor_id`, `felii_total`;
   - `stare` (`in_lucru | gata | partial | esuat`), `obs_relevante` (numărul observațiilor cu UM = m), `cerere_id`, `pornit_de`, momentele de timp.
 - **Cache:** unic `(document_id, doc_sha256, extractor_id)` pe `stare = gata`.
-  - O extragere `gata` cu `obs_relevante = 0` rămâne `gata`, dar acoperirea o raportează explicit drept „fără lungimi” (§5.0). Nu e ascunsă.
-- **Munca** = `munca_id` = `document_id:doc_sha256:extractor_id:felie_nr`, independent de extragere.
+  - O extragere `gata` cu `obs_relevante = 0` rămâne `gata`, dar **nu poate susține singură o pereche `gata`** (§5.0).
+- **Munca** = `munca_id` = `document_id:doc_sha256:extractor_id:sha_felie`, independent de extragere. `sha_felie` e hash-ul textului exact al feliei; versiunea felierii e în `extractor_id`.
   - **`ofertare_cant_felii`:** `munca_id`, `incercare` (implicit 1), `extragere_id`, `de_la`, `pana_la`, `sha_felie`, `stare` (`in_zbor | gata | esuat | necunoscut`), `rezervare_id`.
   - **Unic `(munca_id, incercare)`:** două extrageri pornite în paralel pe același document și aceeași felie primesc același `munca_id`. A doua inserare e refuzată înaintea oricărui apel.
   - O felie `necunoscut` sau `esuat` **nu se reia**. O reluare cere `incercare + 1`, creată doar de RPC-ul de decizie umană (owner / responsabil), cu motiv.
   - Reluarea unei extrageri trece doar prin feliile fără `gata`.
 
 ### 4.3 Cheltuiala: buget pe licitație, cerere, rezervare per apel
-- **`ofertare_ai_buget(licitatie_id, scop, plafon_usd)`**, PK `(licitatie_id, scop)`, cu `scop ∈ (cant_extragere, audit_raspunsuri)`.
+- **`ofertare_ai_buget(licitatie_id, scop, plafon_usd, blocat)`**, PK `(licitatie_id, scop)`, cu `scop ∈ (cant_extragere, audit_raspunsuri)`.
   - Plafonul vine din D3: 5 / 3 USD. Îl poate ridica doar owner-ul, prin RPC, iar istoricul se păstrează.
   - **Plafonul e pe licitație și scop, comun tuturor cererilor.**
 - **`ofertare_ai_cereri`:** `id`, `licitatie_id`, lot canonic, `scop`, `aprobat_de`, `aprobat_la`, `valabil_pana`, `stare`.
   - O creează doar owner-ul sau responsabilul.
   - Orice cheltuială cere o cerere `activa`, inclusiv pentru worker-ul NAS sau orice proces automat. Secretul tehnic nu ține loc de acord.
 - **`ofertare_ai_rezervari`:** `id`, `cerere_id`, `licitatie_id`, `scop`, `munca_id`, `incercare`, `suma_rezervata`, `stare`, `cost_real`, momentele de timp.
-  - `suma_rezervata` = costul maxim al apelului: intrarea estimată după octeți + `max_tokens` la ieșire, la tariful maxim al modelului. Nicio reîncercare și niciun fallback automat.
+  - `suma_rezervata` = o **limită superioară demonstrabilă**:
+    - tokenii de intrare ≤ octeții UTF-8 ai promptului + datelor, pentru că un token de text are cel puțin un octet; regula e folosită deja la arbitrajul OCR;
+    - tokenii de ieșire ≤ `max_tokens`;
+    - prețul e tariful din cod pentru `model`.
+    Nicio reîncercare și niciun fallback automat.
+  - **Depășire:** dacă `cost_real > suma_rezervata` (tarif schimbat la furnizor), `deconteaza` înregistrează costul real, **blochează bugetul** licitației și scopului (`ofertare_ai_buget.blocat = true`, deblocabil doar de owner) și întoarce semnal de depășire. Nu se continuă tăcut.
   - Unic `(munca_id, incercare)` **în toate stările**: același apel nu poate primi a doua rezervare, nici după `necunoscuta`.
 - **Consumul plafonului**, o singură formulă canonică (`fn_ofertare_ai_consum(lic, scop)`), testată pe fiecare stare:
   `consum = Σ cost_real (decontata) + Σ suma_rezervata (deschisa | necunoscuta | abandonata)`.
@@ -154,9 +181,11 @@ ofertare_audit_raspunsuri
   - `abandoneaza(id)`: după 15 min, rămâne socotită.
 
 ### 4.4 Decizii umane: documente și aliasuri
-- **`ofertare_cant_doc_decizii(licitatie_id, document_id, doc_sha256, decizie, de, la, motiv, revoca_id)`**, cu `decizie ∈ (nu_e_sursa_cantitativa, rol_confirmat:<rol>)`.
+- **`ofertare_cant_doc_decizii(licitatie_id, document_id, doc_sha256, decizie, de, la, motiv, revoca_id)`**, cu `decizie ∈ (nu_e_sursa_cantitativa, rol_confirmat:<rol>, verificat_fara_lungimi, sursa_partiala_acceptata)`.
+  - **O singură decizie activă** per `(document_id, doc_sha256, clasa)`. RPC-ul serializează pe cheie (`pg_advisory_xact_lock`) și revocă explicit decizia anterioară.
   - Un document eligibil cu rol nerezolvat (`alt` sau `model` neconfirmat) ține acoperirea `incomplet` până la o decizie aici (§5.0).
 - **`ofertare_cant_alias(id, licitatie_id, cheie_a, cheie_b, confirmat_de, la, revoca_id)`:** append-only; o revocare e un rând nou.
+  - Perechea se păstrează canonic (`cheie_a < cheie_b`), cu o singură relație activă per pereche. Lanțurile se rezolvă la o cheie reprezentativă determinată (cea mai mică), serializate prin RPC.
 
 ### 4.5 Calcule și comparații
 - **`ofertare_cant_calcul`**, imuabil:
@@ -168,7 +197,7 @@ ofertare_audit_raspunsuri
     - `obs_manifest`;
     - `alias_manifest`: aliasurile active folosite, id + hash;
     - `decizii_manifest`;
-  - `acoperire jsonb` (pe perechi, §5.0), `amprenta` (sha256 canonic peste tot ce e mai sus), `creat_la`.
+  - `acoperire jsonb` (pe perechi, §5.0), `amprenta` (sha256 canonic peste tot ce e mai sus, **inclusiv** `algoritm_versiune`, `praguri` și `extractor_id` cerut), `creat_la`.
 - **`ofertare_cant_cmp`**, imuabil, câte un rând per (calcul, pereche de roluri, cheie):
   - `calcul_id`, `cheie`, `rol_a`, `rol_b`;
   - `val_a`, `val_b`, `obs_a[]`, `obs_b[]`;
@@ -181,7 +210,8 @@ ofertare_audit_raspunsuri
   - `id`, `licitatie_id`, lot canonic;
   - `tip` (`initiala | recalcul`), `declansator` (`clarificare_trimisa | termen_clarificari | manual`), `clarificare_declansatoare_id`;
   - `inghetata_la`, `inghetata_de`;
-  - `doc_manifest_curent` (documentele eligibile la înghețare, cu sha);
+  - `doc_manifest_curent` (documentele eligibile **as-of** `moment_referinta`, cu sha, `origine`, `completitudine`; textul fiecăruia e materializat în `ofertare_doc_texte` în aceeași tranzacție; dacă textul nu e disponibil → `text_indisponibil` pe document);
+  - `moment_referinta` (= `inghetata_la`, sau termenul-limită pentru declanșatorul `termen_clarificari`), `inghetat_tardiv` (bool);
   - `calcul_id` (nullable) + `coerenta` (`calcul_curent | calcul_depasit | fara_calcul`);
   - `acoperire`;
   - `clarificari jsonb`: clarificările **noastre** la acel moment, inclusiv cea care a declanșat înghețarea, cu text integral și status;
@@ -192,12 +222,13 @@ ofertare_audit_raspunsuri
 - **`ofertare_audit_raspunsuri`:**
   - **Context:** `id`, `licitatie_id`, lot, `versiune_analiza_id`, `document_id`, `doc_sha256`.
   - **Proveniența citirii:** `citire_sursa_tip` (`pdf | text`), `citire_sursa_sha`, `citire_completa`.
-  - **Perechea:** `pereche_idx`, `intrebare_text`, `raspuns_text`, `text_verificat` (bool, §5.4).
+  - **Rularea:** `audit_rulare_id` (o rulare = o citire anume: `citire_sursa_sha` + `citit_la`), `inlocuieste_id` (rezultatul aceleiași perechi dintr-o rulare anterioară).
+  - **Perechea:** `pereche_hash` (sha al întrebării normalizate; nu indexul, pentru că ordinea se poate schimba între citiri), `intrebare_text`, `raspuns_text`, `text_verificat` (bool, §5.4).
   - **Ancore și efect:** `ancore jsonb`, `efect`.
   - **Clasificare:** `clasificare`, `cauza`, `regula`.
   - **Dovezi:** `dovezi_istoric jsonb` (ID-uri din snapshot) și `dovezi_simulare jsonb` (`calcul_id` cu `tip = simulare` + ID-uri `cmp` din el). Funcția de scriere verifică apartenența fiecărui ID.
   - **Decizia omului:** `decizie_om`, `decis_de`, `decis_la`, `nota`, doar prin `fn_ofertare_audit_decide`.
-- Unic `(versiune_analiza_id, document_id, doc_sha256, pereche_idx)`.
+- Unic `(versiune_analiza_id, audit_rulare_id, pereche_hash)`. Rezultatele succesive sunt rânduri imuabile noi; UI arată ultima rulare, cu istoricul.
 
 ## 5. Logica
 
@@ -211,9 +242,12 @@ ofertare_audit_raspunsuri
   5. altfel `alt`, sau propunerea modelului marcată `model`.
 - **O pereche F3↔X este `gata` doar dacă toate condițiile sunt îndeplinite:**
   1. toate documentele eligibile cu rolul F3 și cu rolul X au o extragere `gata` pe sha-ul curent;
-  2. **niciun document eligibil nu are rol nerezolvat** (`alt` fără decizie `nu_e_sursa_cantitativa`, sau `model` neconfirmat). Altfel toate perechile sunt `incomplet` și apar lipsurile, pe document;
-  3. dacă un rol are extrageri `gata` dar 0 observații relevante, perechea poate fi `gata`, iar UI-ul afișează „rolul X: fără lungimi găsite în doc …”.
-- **Calculul curent e valid** doar dacă un manifest curent, calculat pe server (documente eligibile + sha + extrageri + aliasuri active + decizii), are amprenta egală cu `doc_manifest` + `alias_manifest` + `decizii_manifest` ale calculului. Altfel calculul e `depasit`.
+  2. textul lor e `transcriere` cu `completitudine = integral`, sau există o decizie `sursa_partiala_acceptata`. Un text `sinteza_ai` nu se extrage și ține perechea `incomplet`;
+  3. **niciun document eligibil nu are rol nerezolvat** (`alt` fără decizie `nu_e_sursa_cantitativa`, sau `model` neconfirmat);
+  4. **fiecare rol are cel puțin o observație relevantă**. Un rol cu 0 observații relevante ține perechea `incomplet` până la o decizie umană `verificat_fara_lungimi` pe documentele lui;
+  5. **există cel puțin o cheie comparabilă** între cele două roluri. Perechea fără nicio cheie comună e `incomplet`, niciodată `concordant`.
+  Altfel perechile sunt `incomplet`, cu lipsurile afișate pe document și pe motiv.
+- **Calculul curent e valid** doar dacă un manifest curent, calculat pe server (documente eligibile + sha + origine / completitudine + extrageri + aliasuri active + decizii **+ `algoritm_versiune`, pragurile și `extractor_id` cerute de codul activ**), are amprenta egală cu cea a calculului. Altfel calculul e `depasit`: un comparator sau un extractor nou invalidează H2 și clarificările până la recalcul sau re-extragere.
 - **H2 tri-state**, per pereche:
   - `necalculat`: fără calcul valid;
   - `incomplet`: blochează „verde”;
@@ -235,6 +269,7 @@ ofertare_audit_raspunsuri
   - **UM:** `ml → m`.
   - **`obiect_cheie`:** fără diacritice, fără prefixe de tip, cu toate tokenurile numerice și satul/localitatea.
   - **Material:** listă închisă.
+  - **Poziția:** citatul se caută exact (după normalizarea spațiilor) în textul feliei → `offset_citat` absolut, `pozitie_dovedita = true`. Dacă nu e găsit → `pozitie_dovedita = false`, iar rândul nu poate fi deduplicat; dacă apare în zona de suprapunere a feliilor, cheia lui poate primi cel mult `incomplet`, nu `concordant` (§5.2).
   - **`tip_lucrare` și `masura`:** valoarea modelului, verificată cu reguli pe denumire (`bransament` → `bransament`; `tub de protectie` → `protectie`; `montaj` / `proba` / `furnizare` → `masura`). La dezacord câștigă regula, iar rândul se marchează.
 
 ### 5.2 Comparația deterministă (PR4)
@@ -243,7 +278,8 @@ ofertare_audit_raspunsuri
   - părțile aceluiași fișier, prin `— pNN_pagA-B` (212 și 213 = părți complementare ale listei de cantități).
   - În comparație intră doar ultima versiune; părțile complementare se unesc.
 - **Deduplicarea se face doar pe repetarea aceleiași poziții:**
-  - aceeași `pozitie_cheie` (familie, pagină, tabel, rând, cod) apărută de două ori (suprapunerea de 2.000 de caractere dintre felii, pagină dublată la tăiere) = o observație;
+  - aceeași `pozitie_cheie` (familie + sha + `offset_citat` dovedit), apărută de două ori (suprapunerea de 2.000 de caractere dintre felii) = o observație;
+  - un rând cu poziție nedovedită aflat în zona de suprapunere → cheia lui are verdict cel mult `incomplet` (posibil dublat). Test obligatoriu: un tabel tăiat între două felii;
   - **valorile egale în poziții diferite NU sunt duplicate** (două poziții de câte 100 m pe aceeași stradă = 200 m);
   - dacă aceeași `pozitie_cheie` are valori diferite → `conflict_sursa`.
 - **Agregarea, per rol:**
@@ -268,9 +304,14 @@ ofertare_audit_raspunsuri
 
 ### 5.3 Înghețarea (D1)
 - **Declanșatoare:**
-  1. trigger `AFTER UPDATE` pe `ofertare_clarificari`, când **prima** clarificare a noastră pentru licitație și lot trece în `trimisa` → `fn_ofertare_analiza_ingheata(..., 'clarificare_trimisa', clarificare_id)`, în aceeași tranzacție. Clarificarea declanșatoare intră în snapshot;
-  2. la termenul-limită de clarificări, fără clarificare trimisă: rutina zilnică Ofertare (edge programat existent, nu `cron.job` nou) cheamă înghețarea cu `termen_clarificari`;
+  1. trigger `AFTER INSERT OR UPDATE OF status` pe `ofertare_clarificari`, când o clarificare a noastră ajunge în `trimisa` (inclusiv INSERT direct `trimisa` pentru clarificările depuse extern, `OfertareClarificari.jsx`) și nu există încă o inițială → `fn_ofertare_analiza_ingheata(..., 'clarificare_trimisa', clarificare_id)`. Clarificarea declanșatoare intră în snapshot;
+  2. la termenul-limită de clarificări, dacă nu există încă o inițială (indiferent dacă există clarificări trimise): rutina Ofertare cheamă înghețarea cu `termen_clarificari` și **`moment_referinta` = termenul**;
   3. butonul manual (responsabil).
+- **Concurență și idempotență:**
+  - funcția ia `pg_advisory_xact_lock(hash(lic, lot))`, apoi `INSERT … ON CONFLICT DO NOTHING` și **întoarce inițiala existentă** fără eroare;
+  - în trigger, orice excepție a înghețării e prinsă și scrisă în `ofertare_analiza_erori`; **niciodată** nu blochează actualizarea clarificării;
+  - test: două clarificări trecute concurent în `trimisa` și o înghețare manuală anterioară → o singură inițială, ambele clarificări trimise.
+- **As-of termen:** pentru `termen_clarificari`, manifestul cuprinde doar documentele și versiunile existente la `moment_referinta` (`created_at` / `seap_meta.publicat` ≤ termen). Dacă rularea are loc după termen și un document a fost reprocesat între timp, documentul e marcat `text_indisponibil` (nu se folosește textul nou), iar snapshot-ul are `inghetat_tardiv = true`.
 - **Funcția nu refuză niciodată.** Păstrează realitatea:
   - `doc_manifest_curent` = documentele eligibile de acum;
   - `coerenta`:
@@ -278,7 +319,8 @@ ofertare_audit_raspunsuri
     - `calcul_depasit`: există un calcul, dar documentele s-au schimbat;
     - `fara_calcul`.
   - Cu `calcul_depasit` / `fara_calcul`, acoperirea snapshot-ului e `incomplet`.
-- Idempotentă: o a doua inițială pe același lot e refuzată de indexul unic. Recalculurile sunt `tip = recalcul`. Fără AI.
+- **Materializarea textelor:** în aceeași tranzacție, textul fiecărui document din manifest se copiază în `ofertare_doc_texte` (cu origine și completitudine), inclusiv documentele fără extragere. Simularea retrospectivă (§5.4) folosește **doar** aceste texte. Documentele `text_indisponibil` sunt excluse din simulare, care se marchează `simulare_partiala`.
+- Recalculurile sunt `tip = recalcul`. Fără AI.
 
 ### 5.4 Auditul răspunsurilor (PR6; MVP = reguli + om)
 - **Input:** perechile din `citire_noi.intrebari_raspunse` ale documentelor `raspuns_clarificare` apărute după snapshot.
@@ -286,13 +328,15 @@ ofertare_audit_raspunsuri
   - `pdf` → `sursa_sha256` = sha-ul PDF-ului din `ofertare_seap_fisiere` / Storage;
   - `text` → `sha256(trim(text_extras))`.
   - `citire_completa = false` → auditul marchează documentul „citit parțial”, iar clasificarea maximă e `nedeterminabil`.
-- **`text_verificat`:** întrebarea și răspunsul produse de model se caută ca subșir în `text_extras`, după normalizarea spațiilor.
+- **`text_verificat`:** întrebarea și răspunsul produse de model se caută ca subșir, după normalizarea spațiilor, **doar** într-un text cu `origine = transcriere` al aceleiași versiuni (sha) a documentului. Un text `sinteza_ai`, adică rezumatul și perechile modelului, nu e niciodată sursă de verificare: fără transcriere, `text_verificat = false`.
   - Găsite → `true`.
   - Altfel → `false`: perechea nu poate primi automat `omisiune` sau `deja_observat`, doar `nedeterminabil` + cerere de verificare umană.
-- **Ancore**, deterministe: obiectul (`obiect_cheie` găsit exact în snapshot), tipul lucrării, DN, lotul, **proprietatea** (lungime pe obiect / total pe DN / referință de document) și cifrele cu UM. Cifrele singure servesc doar la găsirea candidaților.
+- **Ancore**, deterministe. **Identitatea subiectului** = lot + `tip_lucrare` + DN + material (când apare) + obiect (pentru proprietatea „lungime pe obiect”) sau „total” (pentru proprietatea „total pe DN”) + proprietatea. Cifrele cu UM servesc doar la găsirea candidaților.
+  - O dimensiune critică lipsă (lot, tip lucrare sau DN) **nu e wildcard**: regula nu se aplică, iar perechea merge la `nedeterminabil`.
 - **Clasificarea, în ordine:**
-  1. **`deja_observat`:** o clarificare **a noastră** din snapshot (`trimisa` / `raspunsa`) are aceleași ancore de **obiect + lot + proprietate** (sau, pentru totaluri, DN + tip lucrare + proprietatea „total”). Similaritatea textului găsește candidații; confirmarea cere ancorele. `cauza = intrebat_de_noi`.
-  2. **`modificare_ulterioara`:** valoarea sau cerința din snapshot (pe aceeași ancoră) diferă de efectul nou: valoare nouă în răspuns, document nou în familie, referință schimbată. `cauza = schimbat_de_raspuns | document_nou`.
+  1. **`deja_observat`:** o clarificare **a noastră** din snapshot (`trimisa` / `raspunsa`) are **aceeași identitate de subiect**, completă (vezi Ancore). Similaritatea textului găsește candidații; confirmarea cere identitatea. `cauza = intrebat_de_noi`.
+  2. **`modificare_ulterioara`:** efectul nou (valoarea sau cerința din răspuns, sau dintr-un document nou din familie) **nu se regăsește în niciun rol** al snapshot-ului pe aceeași identitate de subiect. `cauza = schimbat_de_raspuns | document_nou`.
+     - Dacă valoarea din răspuns **exista deja** în unul dintre roluri (de ex. Răcari: răspunsul confirmă 3.995 din ATR, iar F3 avea 6.400), răspunsul **alege între valori existente**: nu e modificare ulterioară și trece la regula 3.
   3. **`omisiune`**, numai cu dovadă:
      - **`detectat_neintrebat`:** snapshot-ul are un calcul valid (`calcul_curent`) cu `diferenta` sau `conflict_sursa` pe aceeași ancoră, iar noi n-am întrebat. `neasociat` singur **nu** ajunge;
      - **`analiza_incompleta`:** acoperirea snapshot-ului e `incomplet`, iar un **calcul `simulare`**, făcut cu comparatorul curent pe exact `doc_manifest_curent` (sha-urile) al snapshot-ului, dă `diferenta` / `conflict_sursa` pe aceeași ancoră. Simularea e imuabilă, are propriul manifest, algoritm, praguri și aliasuri, iar `pe_snapshot_id` o leagă de snapshot. Dovada intră în `dovezi_simulare`, cu eticheta „simulare retrospectivă”.
@@ -333,10 +377,14 @@ Pe golden se măsoară separat:
 Ținte: recall ≥ 15/16 străzi Dn 90, false-match 0, verdicte corecte pe toate cheile asociate. Ținta factuală, de confirmat pe golden: 13 `diferenta`, 3 `concordant`, total F3 6.400 / ATR 3.995, Dn 32 Δ ≈ 87 m.
 
 ### 6.2 Proba istorică (audit)
-- **Snapshot A, „istoric”:** cum eram (0 observații, 7 clarificări, `fara_calcul`, acoperire `incomplet`). Pe doc 1624, solicitarea 7 / răspunsul 16, auditul face un calcul `simulare` pe sha-urile din snapshot. Rezultatul trebuie să fie `omisiune / analiza_incompleta`, cu dovada în `dovezi_simulare`, etichetată „simulare retrospectivă”.
+- **Snapshot A, „istoric”** (regula 2 nu se aplică: 3.995 exista în ATR/CS/Fișă): cum eram (0 observații, 7 clarificări, `fara_calcul`, acoperire `incomplet`). Pe doc 1624, solicitarea 7 / răspunsul 16, auditul face un calcul `simulare` pe sha-urile din snapshot. Rezultatul trebuie să fie `omisiune / analiza_incompleta`, cu dovada în `dovezi_simulare`, etichetată „simulare retrospectivă”.
 - **Snapshot B, „nou fără întrebare”:** analiza nouă, cu calcul valid, fără clarificare de lungime. Dă `omisiune / detectat_neintrebat`, cu dovezi istorice.
 - **Snapshot C, „nou cu întrebare”:** o clarificare a noastră pe aceleași ancore (obiect / total Dn 90 + proprietatea „lungime”). Dă `deja_observat`.
-- **Negativ:** o clarificare a noastră cu aceleași cifre (Dn 90, 100 m), dar pe altă stradă, NU dă `deja_observat`.
+- **Negative:**
+  - o clarificare a noastră cu aceleași cifre (Dn 90, 100 m), dar pe altă stradă, NU dă `deja_observat`;
+  - una pe aceeași stradă, dar despre branșamente Dn 32, NU dă `deja_observat` pentru conducta Dn 90;
+  - una despre totalul Dn 90 pe alt lot NU dă `deja_observat`.
+- **Proveniență:** o pereche Q&A care apare doar într-un text `sinteza_ai` are `text_verificat = false` → `nedeterminabil`.
 
 ### 6.3 Fals-pozitive pe alte licitații
 Eșantion definit: 50 de chei aleatoare (seed fixat) din licitațiile 5 și 103, verificate de om pe documentele originale, nu pe registru. Ținta: fals-pozitive `diferenta` < 5%.
@@ -346,7 +394,10 @@ Eșantion definit: 50 de chei aleatoare (seed fixat) din licitațiile 5 și 103,
 - plafonul refuză înaintea apelului;
 - două extrageri concurente pe aceeași muncă (document + sha + extractor + felie): a doua e refuzată înaintea apelului; o felie `necunoscut` nu primește a doua rezervare;
 - două cereri de câte 5 USD pe aceeași licitație nu permit mai mult de 5 USD (plafon pe licitație); rezervările `necunoscuta` intră în consum;
-- un calcul depășit (document nou după calcul) dă H2 `necalculat`, nu verde;
+- un calcul depășit (document nou după calcul, sau `algoritm_versiune` / `extractor_id` nou) dă H2 `necalculat`, nu verde;
+- F3 și ATR cu 0 observații relevante, sau fără nicio cheie comună → perechea `incomplet`, niciodată verde;
+- un document cu `completitudine = partial` (fără decizie) → perechea `incomplet`;
+- o depășire `cost_real > suma_rezervata` blochează bugetul (test cu tarif simulat);
 - `x-radar-secret` pe modul structurat = refuz;
 - scrierea `service_role` peste observații, comparații, calcule sau snapshot = refuzată de trigger; tranzițiile de stare nepermise = refuzate;
 - `ofertare_doc_texte` nu e citibil direct de `authenticated`.
@@ -362,7 +413,7 @@ Eșantion definit: 50 de chei aleatoare (seed fixat) din licitațiile 5 și 103,
 |---|---|---|---|
 | PR1 | această specificație | — | — |
 | PR0b | `raspuns-set inventar` sub poarta owner/responsabil (scăpare de cost existentă) | — | — |
-| PR2 | migrarea de bază: §4 integral (13 tabele), funcțiile (buget, cerere, rezervă / deconteaza / necunoscută / abandonează, decizii, înghețare + trigger D1, scrierea auditului, decizie audit), triggere de imuabilitate și stări, harness SQL, revenire | **da** | — |
+| PR2 | migrarea de bază: §4 integral (14 tabele, cu `ofertare_analiza_erori`), funcțiile (buget, cerere, rezervă / deconteaza / necunoscută / abandonează, decizii, înghețare + trigger D1, scrierea auditului, decizie audit), triggere de imuabilitate și stări, harness SQL, revenire | **da** | — |
 | PR3 | `_shared/dn.ts` (mutare + teste), roluri pe secțiune, extragere structurată, cache, rezervare per felie | — | doar la rulare, pe cerere activă |
 | PR4 | familie / dedup / comparator + acoperire tri-state + H2 + tab Comparație + alias + înghețare UI + paritate | view H2 (migrare mică) | 0 |
 | PR5 | clarificari-propune primește contradicțiile structurate | — | — |
