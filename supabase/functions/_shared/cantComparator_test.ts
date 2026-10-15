@@ -6,7 +6,7 @@ let nextId = 1
 function o(p: Partial<Obs>): Obs {
   return { id: nextId++, document_id: 1, doc_sha256: 'a'.repeat(64), rol_sursa: 'f3', lot_domeniu: 'toate', lot_nr: [], pozitie_dovedita: true,
     valoare_ambigua: false, cantitate_offset: 100, tip_lucrare: 'conducta', masura: 'lungime', obiect_cheie: 'strada a', material: 'PE100',
-    dn_mm: [90], dn_ambiguu: false, um_norm: 'm', cantitate: 100, e_total: false, e_subtotal: false, ...p }
+    dn_mm: [90], dn_ambiguu: false, sdr: null, um_norm: 'm', cantitate: 100, e_total: false, e_subtotal: false, ...p }
 }
 function doc(p: Partial<DocManifest>): DocManifest {
   return { document_id: 1, sha256: 'a'.repeat(64), parte: 'F3', roluri: ['f3'], extragere: 'gata', extragere_id: 1, text_valid: true,
@@ -168,4 +168,64 @@ Deno.test('Răcari (fixture din text): F3 6.400 vs ATR pe străzi; 3 străzi con
   assertEquals(sumaF3, 6400)
   assertEquals(pereche.filter((c) => c.verdict === 'concordant').length, F.sume.egale_f3_atr)
   assertEquals(pereche.filter((c) => c.verdict === 'diferenta').length, 16 - F.sume.egale_f3_atr)
+})
+
+// ── review r1 (Copilot + Jakarinos): contraexemplele ca teste ──
+Deno.test('r1: conflict semantic pe măsură (lungime vs montaj, același offset) → conflict_sursa, nu se pierde prin filtrul de relevanță', () => {
+  for (const ordine of [0, 1]) {
+    const v = [o({ cantitate_offset: 7 }), o({ cantitate_offset: 7, masura: 'montaj' })]
+    if (ordine) v.reverse()
+    const k = cheieObs(v[0])!
+    assertEquals(agrega(v, DOCS, []).pe.get('f3')!.get(k)!.conflict, true)
+    const atr = o({ document_id: 2, doc_sha256: 'b'.repeat(64), rol_sursa: 'atr', cantitate_offset: 5 })
+    const c = compara([...v, atr], DOCS, []).cmp.find((x) => x.cheie === k && x.rol_a === 'f3' && x.rol_b === 'atr')!
+    assertEquals(c.verdict, 'conflict_sursa')
+  }
+})
+Deno.test('r1: un total fără detalii → suma_vs_total emisă (lipsa_a); subtotalurile au și ele suma_vs_subtotal', () => {
+  const t = o({ cantitate_offset: 3, cantitate: 500, e_total: true })
+  const k = cheieObs(t)!
+  const svt = compara([t], DOCS, []).cmp.find((c) => c.cheie === k + '#suma_vs_total')!
+  assertEquals(svt.verdict, 'lipsa_a')
+  const obs = [o({ cantitate_offset: 1, cantitate: 100 }), o({ cantitate_offset: 2, cantitate: 120, e_subtotal: true })]
+  const svs = compara(obs, DOCS, []).cmp.find((c) => c.cheie === k + '#suma_vs_subtotal')!
+  assertEquals([svs.verdict, svs.val_a, svs.val_b], ['diferenta', 100, 120])
+})
+Deno.test('r1: o lungime nedovedită FĂRĂ cheie (Dn lipsă) face perechea incompletă (nu dispare ca neasociată)', () => {
+  const obs = [o({}), o({ id: 9001, pozitie_dovedita: false, cantitate_offset: null, dn_mm: [] }),
+    o({ document_id: 2, doc_sha256: 'b'.repeat(64), rol_sursa: 'atr', cantitate_offset: 5 })]
+  const { cmp } = compara(obs, DOCS, [])
+  assert(cmp.some((c) => c.cheie === 'nedovedit:9001' && c.verdict === 'incomplet'))
+  const ac = acoperirePereche('f3', 'atr', DOCS, obs, cmp)
+  assertEquals(ac.stare, 'incomplet')
+  assert(ac.lipsuri.some((l) => l.motiv === 'chei incomplete'))
+})
+Deno.test('r1: acoperirea și agregarea folosesc același predicat (lungime în km contează; o „proba” în m nu acoperă documentul)', () => {
+  const doarProba = [o({ masura: 'proba' }), o({ document_id: 2, doc_sha256: 'b'.repeat(64), rol_sursa: 'atr', cantitate_offset: 5 })]
+  const ac = acoperirePereche('f3', 'atr', DOCS, doarProba, compara(doarProba, DOCS, []).cmp)
+  assert(ac.lipsuri.some((l) => l.document_id === 1 && l.motiv.startsWith('0 observații relevante')))
+  const km = [o({ um_norm: 'km', cantitate: 1.2 }), o({ document_id: 2, doc_sha256: 'b'.repeat(64), rol_sursa: 'atr', cantitate_offset: 5, cantitate: 1200 })]
+  const { cmp } = compara(km, DOCS, [])
+  const c = cmp.find((x) => x.rol_a === 'f3' && x.rol_b === 'atr')!
+  assertEquals([c.verdict, c.val_a, c.val_b], ['concordant', 1200, 1200])
+  assertEquals(acoperirePereche('f3', 'atr', DOCS, km, cmp).stare, 'gata')
+})
+Deno.test('r1: SDR diferit la același offset → conflict_sursa', () => {
+  const { conflicte } = deduplica([o({ cantitate_offset: 4, sdr: 11 }), o({ cantitate_offset: 4, sdr: 17.6 })])
+  assertEquals(conflicte.length, 1)
+})
+Deno.test('r1: amprenta include toate intrările acoperirii (text_valid, completitudine, decizii umane pe document)', async () => {
+  const baza = { licitatie_id: 15, lot_domeniu: 'toate', lot_nr: [], extractor_id: 'x', docs: DOCS, obs: [o({})], aliasuri: [], decizii: [] }
+  const a = (await calcul(baza)).calcul.amprenta
+  const variante: Partial<DocManifest>[] = [{ text_valid: false }, { completitudine: 'partial' }, { sursa_partiala_acceptata: true },
+    { rol_nerezolvat: true }, { verificat_fara_lungimi: ['f3'] }]
+  for (const v of variante) assert((await calcul({ ...baza, docs: [doc(v), DOCS[1]] })).calcul.amprenta !== a, JSON.stringify(v))
+  // ordinea rolurilor / a deciziilor de pe document nu schimbă amprenta
+  const r1 = await calcul({ ...baza, docs: [doc({ roluri: ['f3', 'cs'], verificat_fara_lungimi: ['cs', 'f3'] }), DOCS[1]] })
+  const r2 = await calcul({ ...baza, docs: [doc({ roluri: ['cs', 'f3'], verificat_fara_lungimi: ['f3', 'cs'] }), DOCS[1]] })
+  assertEquals(r1.calcul.amprenta, r2.calcul.amprenta)
+})
+Deno.test('r1: rotunjirea se face o singură dată, pe suma finală (0,0004 × 3 = 0,001, nu 0)', () => {
+  const { pe } = agrega([1, 2, 3].map((i) => o({ cantitate_offset: i, cantitate: 0.0004 })), DOCS, [])
+  assertEquals([...pe.get('f3')!.values()][0].val, 0.001)
 })

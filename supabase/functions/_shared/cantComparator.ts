@@ -6,9 +6,12 @@
 // - deduplicarea DOAR pe repetarea aceleiași poziții: observații dovedite cu același (document, sha, cantitate_offset) se comasează numai
 //   dacă TOATE câmpurile semantice coincid (obiect, Dn, material, tip, măsură, UM, valoare, total / subtotal); orice dezacord →
 //   conflict_sursa pe cheile implicate, independent de ordine; offseturi diferite = poziții distincte (valorile egale se ADUNĂ);
-// - o cantitate fără poziție dovedită (sau ambiguă) NU intră în agregare și ține cheia `incomplet` (§6.6 PR3);
-// - agregarea per rol, doar `masura = lungime`, separat pe tip_lucrare; totalurile / subtotalurile NU se adună cu detaliile — se compară
-//   separat (cheia „#total”) și cu suma detaliilor din același rol (suma_vs_total);
+// - deduplicarea rulează pe TOATE observațiile, apoi se aplică relevanța (un conflict lungime / montaj la același offset rămâne conflict);
+// - o cantitate fără poziție dovedită (sau ambiguă) NU intră în agregare și ține cheia `incomplet` (§6.6 PR3); fără cheie → rând
+//   `incomplet` pe rol, care blochează acoperirea perechilor rolului;
+// - agregarea per rol, doar `masura = lungime` (predicat comun cu acoperirea; km → m), separat pe tip_lucrare; sumele se rotunjesc o
+//   singură dată; totalurile / subtotalurile NU se adună cu detaliile — se compară separat (cheia „#total” / „#subtotal”) și ÎNTOTDEAUNA
+//   cu suma detaliilor din același rol (suma_vs_total / suma_vs_subtotal, lipsa_a când detaliile lipsesc);
 // - două documente NECOMPLEMENTARE ale aceluiași rol cu valori pe aceeași cheie → conflict_sursa (fără alegere); părțile aceluiași fișier
 //   (p01 / p02) sunt complementare și se adună;
 // - cheia = lot_domeniu|lot_nr|obiect_cheie|tip_lucrare|material|dn|um_norm; potrivire exactă + aliasurile active (reprezentantul = cea mai
@@ -30,7 +33,7 @@ export type Obs = {
   lot_domeniu: string; lot_nr: number[]
   pozitie_dovedita: boolean; valoare_ambigua: boolean; cantitate_offset: number | null
   tip_lucrare: string; masura: string; obiect_cheie: string | null; material: string | null
-  dn_mm: number[]; dn_ambiguu: boolean; um_norm: string | null; cantitate: number | null
+  dn_mm: number[]; dn_ambiguu: boolean; sdr: number | null; um_norm: string | null; cantitate: number | null
   e_total: boolean; e_subtotal: boolean
 }
 export type DocManifest = {
@@ -54,6 +57,13 @@ export type Acoperire = { stare: 'gata' | 'incomplet'; lipsuri: { document_id: n
 const rot = (x: number, r: number) => Math.round(x / r) * r
 const r3 = (x: number) => Math.round(x * 1000) / 1000
 
+// predicatul UNIC de relevanță (agregare + acoperire): măsura „lungime”, indiferent de UM (o lungime fără UM / fără cheie nu dispare,
+// ajunge neasociată sau incompletă)
+export const relevanta = (o: Obs) => o.masura === 'lungime'
+// UM-ul lungimilor adus la metri înainte de praguri (km → m); restul UM-urilor rămân în cheie (nu se potrivesc cu „m”)
+export const normUm = (o: Obs): Obs =>
+  o.um_norm === 'km' ? { ...o, um_norm: 'm', cantitate: o.cantitate === null ? null : o.cantitate * 1000 } : o
+
 // ── cheia ──
 export function cheieObs(o: Obs): string | null {
   if (o.dn_ambiguu || o.dn_mm.length !== 1 || !o.obiect_cheie || !o.um_norm) return null
@@ -74,8 +84,8 @@ export function reprezentanti(aliasuri: Alias[]): (k: string) => string {
 }
 
 // semnătura semantică a unei observații (tot ce, la același offset, trebuie să coincidă ca să fie aceeași poziție)
-const semantica = (o: Obs) => JSON.stringify([o.obiect_cheie, o.dn_mm, o.dn_ambiguu, o.material, o.tip_lucrare, o.masura, o.um_norm,
-  o.cantitate, o.e_total, o.e_subtotal, o.lot_domeniu, o.lot_nr, o.rol_sursa])
+const semantica = (o: Obs) => JSON.stringify([o.obiect_cheie, o.dn_mm, o.dn_ambiguu, o.sdr ?? null, o.material, o.tip_lucrare, o.masura,
+  o.um_norm, o.cantitate, o.e_total, o.e_subtotal, o.lot_domeniu, o.lot_nr, o.rol_sursa])
 
 export type Pozitie = { ids: number[]; reprezentant: Obs }
 // deduplicarea: grup = (document, sha, offset) pentru observațiile dovedite; conflict = semantici diferite în același grup
@@ -98,42 +108,56 @@ export function deduplica(obs: Obs[]): { pozitii: Pozitie[]; conflicte: Obs[][];
 type Agregat = { val: number | null; obs: number[]; incomplet: string | null; conflict: boolean; parti: Set<string> }
 const nou = (): Agregat => ({ val: null, obs: [], incomplet: null, conflict: false, parti: new Set() })
 
-// agregarea pe (rol, cheie): detaliile se adună; totalurile / subtotalurile merg pe cheia „#total” / „#subtotal”
-export function agrega(obs: Obs[], docs: DocManifest[], aliasuri: Alias[]): { pe: Map<string, Map<string, Agregat>>; neasociate: Obs[] } {
+// o observație relevantă care nu are cheie, dar nu poate fi ignorată: conflict semantic fără cheie sau cantitate nedovedită fără cheie
+export type Blocaj = { rol: Rol; obs: Obs; verdict: 'conflict_sursa' | 'incomplet'; motiv: string }
+
+// agregarea pe (rol, cheie): detaliile se adună; totalurile / subtotalurile merg pe cheia „#total” / „#subtotal”.
+// Deduplicarea rulează pe TOATE observațiile, înainte de filtrul de relevanță: un conflict la același offset între o variantă „lungime”
+// și una „montaj” / „proba” nu se pierde prin filtrare. Sumele se rotunjesc o singură dată, la final.
+export function agrega(obs: Obs[], docs: DocManifest[], aliasuri: Alias[]):
+  { pe: Map<string, Map<string, Agregat>>; neasociate: Obs[]; blocaje: Blocaj[] } {
   const rep = reprezentanti(aliasuri)
   const parte = new Map(docs.map((d) => [d.document_id, d.parte]))
-  const relevante = obs.filter((o) => o.masura === 'lungime')
-  const { pozitii, conflicte, nedovedite } = deduplica(relevante)
+  const { pozitii, conflicte, nedovedite } = deduplica(obs.map(normUm))
   const pe = new Map<string, Map<string, Agregat>>()
   const ia = (rol: string, k: string) => { if (!pe.has(rol)) pe.set(rol, new Map()); const m = pe.get(rol)!; if (!m.has(k)) m.set(k, nou()); return m.get(k)! }
-  const neasociate: Obs[] = []
+  const neasociate: Obs[] = [], blocaje: Blocaj[] = []
   const sufix = (o: Obs) => (o.e_total ? '#total' : o.e_subtotal ? '#subtotal' : '')
   const cheieFinala = (o: Obs) => { const k = cheieObs(o); return k === null ? null : rep(k) + sufix(o) }
   for (const p of pozitii) {
     const o = p.reprezentant
+    if (!relevanta(o)) continue
     const k = cheieFinala(o)
     if (k === null) { neasociate.push(o); continue }
     const a = ia(o.rol_sursa, k)
-    a.val = r3((a.val ?? 0) + (o.cantitate ?? 0))
+    a.val = (a.val ?? 0) + (o.cantitate ?? 0)
     a.obs.push(...p.ids)
     a.parti.add(parte.get(o.document_id) ?? String(o.document_id))
   }
   // aceeași cheie din documente NECOMPLEMENTARE (părți diferite) ale aceluiași rol → conflict_sursa
   for (const m of pe.values()) for (const a of m.values()) if (a.parti.size > 1) a.conflict = true
-  // conflictele semantice la același offset: toate cheile implicate (din oricare variantă) → conflict_sursa
-  for (const g of conflicte) for (const o of g) {
-    const k = cheieFinala(o)
-    if (k === null) { neasociate.push(o); continue }
-    const a = ia(o.rol_sursa, k); a.conflict = true; a.obs.push(o.id)
+  // conflictele semantice la același offset: dacă ORICARE variantă e lungime, toate cheile implicate → conflict_sursa;
+  // o variantă fără cheie → blocaj vizibil (nu dispare ca „neasociat”)
+  for (const g of conflicte) {
+    if (!g.some(relevanta)) continue
+    for (const o of g) {
+      const k = cheieFinala(o)
+      if (k === null) { blocaje.push({ rol: o.rol_sursa, obs: o, verdict: 'conflict_sursa', motiv: `conflict semantic la același offset, fără cheie (obs ${o.id})` }); continue }
+      const a = ia(o.rol_sursa, k); a.conflict = true; a.obs.push(o.id)
+    }
   }
-  // cantitățile nedovedite: cheia lor e incompletă (nu intră în sumă)
+  // cantitățile nedovedite / ambigue: cheia lor e incompletă (nu intră în sumă); fără cheie → blocaj „incomplet” pe rol
   for (const o of nedovedite) {
+    if (!relevanta(o)) continue
     const k = cheieFinala(o)
-    if (k === null) { neasociate.push(o); continue }
+    if (k === null) { blocaje.push({ rol: o.rol_sursa, obs: o, verdict: 'incomplet', motiv: `poziție nedovedită fără cheie (obs ${o.id})` }); continue }
     const a = ia(o.rol_sursa, k); a.incomplet = a.incomplet ?? `poziție nedovedită (obs ${o.id})`; a.obs.push(o.id)
   }
-  for (const m of pe.values()) for (const a of m.values()) a.obs = [...new Set(a.obs)].sort((x, y) => x - y)
-  return { pe, neasociate }
+  for (const m of pe.values()) for (const a of m.values()) {
+    a.obs = [...new Set(a.obs)].sort((x, y) => x - y)
+    if (a.val !== null) a.val = r3(a.val)
+  }
+  return { pe, neasociate, blocaje }
 }
 
 export function verdict(a: Agregat | undefined, b: Agregat | undefined, pr: Praguri):
@@ -154,7 +178,7 @@ export function verdict(a: Agregat | undefined, b: Agregat | undefined, pr: Prag
 
 // comparația pe perechi + suma_vs_total în fiecare rol
 export function compara(obs: Obs[], docs: DocManifest[], aliasuri: Alias[], pr: Praguri = PRAGURI_IMPLICITE): { cmp: Cmp[]; neasociate: Obs[] } {
-  const { pe, neasociate } = agrega(obs, docs, aliasuri)
+  const { pe, neasociate, blocaje } = agrega(obs, docs, aliasuri)
   const cmp: Cmp[] = []
   for (const [ra, rb] of PERECHI) {
     const A = pe.get(ra) ?? new Map(), B = pe.get(rb) ?? new Map()
@@ -164,17 +188,24 @@ export function compara(obs: Obs[], docs: DocManifest[], aliasuri: Alias[], pr: 
       cmp.push({ cheie: k, rol_a: ra, rol_b: rb, obs_a: a?.obs ?? [], obs_b: b?.obs ?? [], ...verdict(a, b, pr) })
     }
   }
-  // suma detaliilor vs totalul declarat, în același rol (rol_a = rol_b), pe cheia de bază
-  for (const [rol, m] of pe) for (const [k, t] of m) {
-    if (!k.endsWith('#total')) continue
-    const kb = k.slice(0, -'#total'.length)
+  // suma detaliilor vs totalul / subtotalul declarat, în același rol (rol_a = rol_b), pe cheia de bază; se emite ÎNTOTDEAUNA,
+  // și fără detalii (lipsa_a): un total declarat fără detaliile lui nu trece neobservat
+  for (const [rol, m] of pe) for (const [k, t] of [...m].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) {
+    const suf = k.endsWith('#total') ? '#total' : k.endsWith('#subtotal') ? '#subtotal' : null
+    if (!suf) continue
+    const kb = k.slice(0, -suf.length)
     const d = m.get(kb)
-    if (!d) continue
-    cmp.push({ cheie: kb + '#suma_vs_total', rol_a: rol as Rol, rol_b: rol as Rol, obs_a: d.obs, obs_b: t.obs, ...verdict(d, t, pr) })
+    cmp.push({ cheie: kb + (suf === '#total' ? '#suma_vs_total' : '#suma_vs_subtotal'), rol_a: rol as Rol, rol_b: rol as Rol,
+      obs_a: d?.obs ?? [], obs_b: t.obs, ...verdict(d, t, pr) })
   }
   for (const o of neasociate) {
     cmp.push({ cheie: `neasociat:${o.id}`, rol_a: o.rol_sursa, rol_b: o.rol_sursa, val_a: o.cantitate, val_b: null, obs_a: [o.id], obs_b: [],
       delta_abs: null, delta_rel: null, verdict: 'neasociat', motiv_incomplet: null, importanta: 0, de_semnalat: false })
+  }
+  for (const b of blocaje) {
+    cmp.push({ cheie: `${b.verdict === 'incomplet' ? 'nedovedit' : 'conflict'}:${b.obs.id}`, rol_a: b.rol, rol_b: b.rol, val_a: b.obs.cantitate,
+      val_b: null, obs_a: [b.obs.id], obs_b: [], delta_abs: null, delta_rel: null, verdict: b.verdict,
+      motiv_incomplet: b.verdict === 'incomplet' ? b.motiv : null, importanta: 0, de_semnalat: false })
   }
   return { cmp, neasociate }
 }
@@ -190,12 +221,14 @@ export function acoperirePereche(ra: Rol, rb: Rol, docs: DocManifest[], obs: Obs
       if (d.extragere !== 'gata') lipsuri.push({ document_id: d.document_id, motiv: `extragere ${d.extragere} (${rol})` })
       if (!d.text_valid) lipsuri.push({ document_id: d.document_id, motiv: 'text fără proveniență validă' })
       else if (d.completitudine !== 'integral' && !d.sursa_partiala_acceptata) lipsuri.push({ document_id: d.document_id, motiv: 'text parțial' })
-      const relevante = obs.filter((o) => o.document_id === d.document_id && o.doc_sha256 === d.sha256 && o.rol_sursa === rol && o.um_norm === 'm').length
+      const relevante = obs.filter((o) => o.document_id === d.document_id && o.doc_sha256 === d.sha256 && o.rol_sursa === rol && relevanta(o)).length
       if (!relevante && !d.verificat_fara_lungimi.includes(rol)) lipsuri.push({ document_id: d.document_id, motiv: `0 observații relevante (${rol})` })
     }
   }
   const aiPerechii = cmp.filter((c) => c.rol_a === ra && c.rol_b === rb)
-  if (aiPerechii.some((c) => c.verdict === 'incomplet')) lipsuri.push({ document_id: null, motiv: 'chei incomplete' })
+  // „incomplet” se propagă și din rândurile din interiorul unui rol al perechii (suma_vs_total, poziții nedovedite fără cheie)
+  const dinRol = cmp.filter((c) => c.rol_a === c.rol_b && (c.rol_a === ra || c.rol_a === rb))
+  if ([...aiPerechii, ...dinRol].some((c) => c.verdict === 'incomplet')) lipsuri.push({ document_id: null, motiv: 'chei incomplete' })
   if (!aiPerechii.some((c) => ['concordant', 'diferenta'].includes(c.verdict))) lipsuri.push({ document_id: null, motiv: 'nicio cheie comună comparabilă' })
   return { stare: lipsuri.length ? 'incomplet' : 'gata', lipsuri }
 }
@@ -228,7 +261,10 @@ export async function calcul(p: { licitatie_id: number; lot_domeniu: string; lot
   const acoperire: Record<string, Acoperire> = {}
   for (const [ra, rb] of PERECHI) acoperire[`${ra}-${rb}`] = acoperirePereche(ra, rb, p.docs, p.obs, cmp)
   const doc_manifest = [...p.docs].sort((a, b) => a.document_id - b.document_id)
-    .map((d) => ({ document_id: d.document_id, sha256: d.sha256, parte: d.parte, roluri: d.roluri, extragere: d.extragere, extragere_id: d.extragere_id }))
+    // TOATE intrările acoperirii intră în amprentă (o schimbare de proveniență / completitudine / decizie umană = alt calcul)
+    .map((d) => ({ document_id: d.document_id, sha256: d.sha256, parte: d.parte, roluri: [...d.roluri].sort(), extragere: d.extragere,
+      extragere_id: d.extragere_id, text_valid: d.text_valid, completitudine: d.completitudine, sursa_partiala_acceptata: d.sursa_partiala_acceptata,
+      rol_nerezolvat: d.rol_nerezolvat, verificat_fara_lungimi: [...d.verificat_fara_lungimi].sort() }))
   const obs_manifest = [...p.obs].sort((a, b) => a.id - b.id).map((o) => ({ id: o.id }))
   const alias_manifest = [...p.aliasuri].sort((a, b) => a.id - b.id).map((a) => ({ id: a.id, cheie_a: a.cheie_a, cheie_b: a.cheie_b }))
   const decizii_manifest = [...p.decizii].sort((a, b) => a.id - b.id).map((d) => ({ id: d.id }))
