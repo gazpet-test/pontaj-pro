@@ -326,10 +326,13 @@ try {
     }
   }
   if ($lock) { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue; $lock = $null }
+  $ImgFolosite = [bool]$script:ImgDirCreat
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8
   if ($rez.err) { Add-Content -LiteralPath $script:OutFull -Value ("--- stderr ---`n" + $rez.err) -Encoding UTF8 }
   if ($rez.timeout) { Eroare ("timeout " + $T.timeout + "s (arbore oprit)") }
+  # v4.2 (Jakarinos P2): o rulare cu imagini care iese nenul (ex. decodare esuata la consumator) nu se raporteaza ca reusita
+  if ($ImgFolosite -and $rez.exit -ne 0) { Eroare ("consumatorul a iesit cu " + $rez.exit + " pe o rulare cu imagini") }
   $dur = [int]((Get-Date) - $T0).TotalSeconds
   Add-Content -LiteralPath $script:OutFull -Value ("PAW_GATA " + $RUNID + " " + $Cine + " " + $Model + " " + $dur + "s exit=" + $rez.exit) -Encoding UTF8
   Jurnal "GATA" ([string]$rez.exit)
