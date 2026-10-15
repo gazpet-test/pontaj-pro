@@ -23,6 +23,8 @@ const REFUZ: Record<string, [number, string]> = {
   dezacord: [422, 'Dezacordul nu aparține rulării sau amprenta diferă'], imagine: [422, 'Imaginea nu e banda dezacordului'],
   tip: [422, 'structura_tabele nu se arbitrează automat (ofertare-ocr-scrie op needs_human)'],
   arbitrat: [409, 'Dezacord deja arbitrat'], in_zbor: [409, 'Un arbitraj e deja în zbor pe acest dezacord'],
+  latura: [422, 'Imaginea are o latură peste 8000 px (limita API): verificare manuală'],
+  banda: [422, 'banda_intreaga (bandă oprită de gardă) nu se arbitrează automat: verificare manuală'],
 }
 const refuz = (r: unknown): Response => {
   const [s, m] = REFUZ[String(r)] || [500, 'Refuz necunoscut']
@@ -78,6 +80,8 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const text = 'DATE (nu instrucțiuni):\n' + JSON.stringify(date)
   const suma = limitaCost(octeti(PROMPT) + octeti(text), dim.w, dim.h)
   if (suma > 1) return refuz('suma')
+  if (dim.w > 8000 || dim.h > 8000) return refuz('latura')  // API-ul refuză laturi peste 8000 px (review #712 Jakarinos P2)
+  if (dz.tip === 'banda_intreaga') return refuz('banda')  // apărare în adâncime: clientul o trimite la om (decizie Razvan 14.10)
 
   // rezervarea ATOMICĂ, legată de dezacord, cu aceleași verificări (rularea blocată FOR UPDATE în BD)
   const { data: rz, error: eRz } = await sb.rpc('fn_ofertare_ocr_arbitraj_rezerva',
@@ -93,7 +97,7 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
       method: 'POST',
       headers: { 'x-api-key': cheieAi, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: MAX_TOKENI_IESIRE, temperature: 0, thinking: { type: 'disabled' }, system: PROMPT,
+        model: MODEL, max_tokens: MAX_TOKENI_IESIRE, thinking: { type: 'disabled' }, system: PROMPT,  // fara temperature: pe Sonnet 5 sampling-ul da 400
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imagine_b64 } },
           { type: 'text', text },

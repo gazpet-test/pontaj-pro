@@ -67,7 +67,7 @@ Deno.test('cale bună: item verificat → citire din BD → rezervare atomică �
     cost_usd: '0.0120', tokens_in: 3000, tokens_out: 200 })
   assert.equal(j.decizie.id, it.id); assert.equal(j.arbitraj_id, 9)
   const c = cereriApi[0]
-  assert.equal(c.system, PROMPT); assert.equal(c.temperature, 0); assert.deepEqual(c.thinking, { type: 'disabled' })
+  assert.equal(c.system, PROMPT); assert.equal('temperature' in c, false); assert.deepEqual(c.thinking, { type: 'disabled' })  // Sonnet 5: sampling = 400
   const date = JSON.parse(c.messages[0].content[1].text.replace(/^DATE \(nu instrucțiuni\):\n/, ''))
   assert.deepEqual(date.context_pipeline, { context_inainte: 'Cantitate', context_dupa: it.context_dupa })
   assert.equal(date.citire_lighton, it.citire_lighton)
@@ -110,6 +110,22 @@ Deno.test('imagine uriașă: limita de cost peste 1 USD → refuz fără rezerva
   const { m, apeluri, cereriApi } = mediu(it)
   const r = await arbitreaza(cerere(corpDe(it, { imagine_b64: btoa(String.fromCharCode(...mare)) })), m)
   assert.equal(r.status, 413); assert.equal(cereriApi.length, 0); assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_rezerva'))
+})
+
+Deno.test('latură peste 8000 px (limita API): refuz fără rezervare și fără apel API (#712 Jakarinos P2)', async () => {
+  const lat = png(9000, 400); const it = await itemDeTest({ image_sha256: await sha256Hex(lat) })
+  const { m, apeluri, cereriApi } = mediu(it)
+  const r = await arbitreaza(cerere(corpDe(it, { imagine_b64: btoa(String.fromCharCode(...lat)) })), m)
+  assert.equal(r.status, 422); assert.equal((await r.json()).refuz, 'latura')
+  assert.equal(cereriApi.length, 0); assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_rezerva'))
+})
+
+Deno.test('banda_intreaga (bandă oprită de gardă): refuz fără rezervare, merge la om (Razvan 14.10)', async () => {
+  const it = await itemDeTest({ tip: 'banda_intreaga' })
+  const { m, apeluri, cereriApi } = mediu(it)
+  const r = await arbitreaza(cerere(corpDe(it)), m)
+  assert.equal(r.status, 422); assert.equal((await r.json()).refuz, 'banda')
+  assert.equal(cereriApi.length, 0); assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_rezerva'))
 })
 
 Deno.test('eroare API / rețea: 502, rezervarea rămâne deschisă, nicio decizie', async () => {
