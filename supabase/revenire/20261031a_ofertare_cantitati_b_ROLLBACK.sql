@@ -1,4 +1,4 @@
--- REVENIRE 20261031a — scoate schema TKT-0329 B (19 tabele, 48 de funcții fn_ofertare_cb_*, triggerul de pe ofertare_clarificari).
+-- REVENIRE 20261031a — scoate schema TKT-0329 B (20 de tabele, 48 de funcții fn_ofertare_cb_*, triggerul de pe ofertare_clarificari).
 -- DATELE NOI SE PIERD (texte, observații, calcule, snapshot-uri, audit, jurnalul clarificărilor, bugete / rezervări). Nu atinge date
 -- existente. Refuză dacă obiectele s-au schimbat după aplicare (amprenta din comentariu). DOAR la cererea lui Răzvan.
 -- Armare per tranzacție:
@@ -27,7 +27,7 @@ BEGIN
              public.ofertare_analiza_versiuni, public.ofertare_cant_obs, public.ofertare_cant_felii, public.ofertare_cant_extrageri,
              public.ofertare_ai_rezervari, public.ofertare_ai_cereri, public.ofertare_ai_buget, public.ofertare_cant_doc_decizii,
              public.ofertare_cant_alias, public.ofertare_doc_texte_prov, public.ofertare_doc_texte, public.ofertare_clarificari_jurnal,
-             public.ofertare_analiza_erori, public.ofertare_termen_clarificari, public.ofertare_ai_buget_jurnal;
+             public.ofertare_analiza_erori, public.ofertare_termen_clarificari, public.ofertare_ai_buget_jurnal, public.ofertare_loturi_observatii;
   FOR f IN SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_cb\_%' LOOP
     EXECUTE format('DROP FUNCTION %s', f);

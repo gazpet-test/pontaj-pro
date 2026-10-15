@@ -65,14 +65,14 @@ j() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.arg
 # ── livrare ──
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE" 2>&1 || true)"; grep -q 'garda start invalida' <<<"$o" || esec "fără gardă: $o"; ok "refuz: livrare fără gardă"
 livreaza >/dev/null || esec "livrare: $(livreaza | tail -3)"
-ok "livrare (19 tabele, 48 de funcții)"
+ok "livrare (20 de tabele, 48 de funcții)"
 o="$(livreaza || true)"; grep -q 'exista deja' <<<"$o" || esec "relivrare: $o"; ok "refuz: relivrare"
 
 # ── pregătire: loturi (102 / 3 / 5 / 6 fără loturi; 4 cu loturile 1 și 2), documente, texte ──
-q "INSERT INTO public.ofertare_licitatii(id, nr_anunt) VALUES (5, 'X5'), (6, 'X6'), (7, 'X7'), (8, 'X8'), (9, 'X9')" >/dev/null
-for L in 102 3 5 6 7 8 9; do ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza($L, 'fara_loturi')" >/dev/null; done
+q "INSERT INTO public.ofertare_licitatii(id, nr_anunt) VALUES (5, 'X5'), (6, 'X6'), (7, 'X7'), (8, 'X8'), (9, 'X9'), (10, 'X10'), (11, 'X11'), (12, 'X12')" >/dev/null
+for L in 102 3 5 6 7 8 9 10 11 12; do ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza($L, 'fara_loturi')" >/dev/null; done
 # fixture: loturile setate „de mult” pe licitațiile fără termen trecut (marja de 10 s a înghețării tardive ar marca altfel eligibilitatea)
-q "UPDATE public.ofertare_loturi_jurnal SET la = now() - interval '30 days' WHERE licitatie_id IN (5, 6, 7, 8, 9)" >/dev/null
+q "UPDATE public.ofertare_loturi_jurnal SET la = now() - interval '30 days' WHERE licitatie_id IN (5, 6, 7, 8, 9, 10, 11, 12)" >/dev/null
 ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(4, 'are_loturi', '[{\"nr\":1,\"participam\":true},{\"nr\":2,\"participam\":true}]')" >/dev/null
 q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES
    (901, 102, 'F3 lista.pdf', 'lista_cantitati', 'Strada A 100 m', now() - interval '20 days'),
@@ -138,6 +138,19 @@ sleep 0.7
 asteapta "text_extras schimbat concurent → extragerea pe sha-ul vechi refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 905, '$SHA5', '905', 'gpt-5-mini@p9@n1@f1', 1)")" 'd.get("refuz")')" versiune_veche
 wait
 q "UPDATE public.ofertare_documente_atribuire SET text_extras = 'text vechi fara text_scrie' WHERE id = 905" >/dev/null
+q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES (907, 102, 'scanat.pdf', 'alta', NULL, now() - interval '20 days')" >/dev/null
+svc "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan A', 'transcriere', 'ocr-local', 'integral', '{}')" >/dev/null
+X907=$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 907, '$(sha 'scan A')', '907', 'gpt-5-mini@p1@n1@f1', 1)")" 'd["extragere_id"]')
+svc "SELECT public.fn_ofertare_cb_extragere_inchide($X907, 'esuat')" >/dev/null
+C4=$(j "$(ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_cerere(102,'cant_extragere','toate','{}',24)")" 'd["cerere_id"]')
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan B', 'transcriere', 'ocr-local', 'integral', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
+sleep 0.7
+refuz "text_extras NULL + proveniență nouă concurentă → redeschiderea pe versiunea veche refuzată" authenticated "$RESP" "SELECT public.fn_ofertare_cb_extragere_redeschide($X907, $C4, 'reiau scanul')" 'nu mai e cea curentă'
+wait
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan C', 'transcriere', 'ocr-local', 'integral', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
+sleep 0.7
+asteapta "text_extras NULL + proveniență nouă concurentă → extragerea pe versiunea B refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 907, '$(sha 'scan B')', '907', 'gpt-5-mini@p1@n1@f1', 1)")" 'd.get("refuz")')" versiune_veche
+wait
 ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(901, '$SHA', 'f3', '*', 'rol_confirmat', 'este F3')" >/dev/null
 ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(901, '$SHA', 'f3', '*', 'nu_e_sursa_cantitativa', 'răzgândit')" >/dev/null
 asteapta "clasa „rol”: o singură decizie activă (rol_confirmat revocat)" "$(q "SELECT string_agg(decizie, ',') FROM public.ofertare_cant_doc_decizii d WHERE d.document_id=901 AND d.decizie IN ('rol_confirmat','nu_e_sursa_cantitativa') AND NOT EXISTS (SELECT 1 FROM public.ofertare_cant_doc_decizii r WHERE r.revoca_id=d.id)")" nu_e_sursa_cantitativa
@@ -295,7 +308,7 @@ asteapta "lock ocupat: clarificarea scrisă, înghețarea amânată (fără așt
 wait
 # a DOUA trimitere (lock liber) îngheață pe momentul PRIMEI (canonic), nu pe al ei
 CL6B=$(ca authenticated "$OWNER" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, status) VALUES (6, 'q6b', 'trimisa') RETURNING id")
-asteapta "a doua trimitere: inițiala pe momentul primei, declanșată de prima, doar ea în conținut" "$(q "SELECT (v.moment_referinta = (SELECT la FROM public.ofertare_clarificari_jurnal WHERE clarificare_id=$CL6))::text || '|' || (v.clarificare_declansatoare_id=$CL6) || '|' || v.inghetat_tardiv || '|' || jsonb_array_length(v.clarificari) || '|' || v.eligibilitate FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=6")" "true|true|true|1|modificata_dupa_moment"
+asteapta "a doua trimitere: inițiala pe momentul primei, declanșată de prima, doar ea în conținut" "$(q "SELECT (v.moment_referinta = (SELECT la FROM public.ofertare_clarificari_jurnal WHERE clarificare_id=$CL6))::text || '|' || (v.clarificare_declansatoare_id=$CL6) || '|' || v.inghetat_tardiv || '|' || jsonb_array_length(v.clarificari) || '|' || v.eligibilitate FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=6")" "true|true|true|1|exacta"
 asteapta "restanțele nu mai fac nimic pe licitația înghețată" "$(j "$(svc "SELECT public.fn_ofertare_cb_restante()")" 'd["inghetate"]')" 0
 
 # ── fără așteptări în trigger: rândul licitației ținut FOR UPDATE (ca de cerere / termen) nu blochează înghețarea ──
@@ -307,7 +320,9 @@ ca authenticated "$OWNER" "UPDATE public.ofertare_clarificari SET status='trimis
 T1=$(date +%s%N)
 wait
 asteapta "licitația blocată FOR UPDATE: trimiterea nu așteaptă (< 2 s), înghețarea amânată" "$(( (T1 - T0) / 1000000 < 2000 ))|$(q "SELECT count(*) FROM public.ofertare_analiza_versiuni WHERE licitatie_id=7")|$(q "SELECT eroare FROM public.ofertare_analiza_erori WHERE clarificare_id=$CL7")" "1|0|amânat (lock ocupat)"
+q "INSERT INTO public.ofertare_loturi_jurnal (licitatie_id, actiune, vechi, nou) VALUES (7, 'licitatie_loturi', '{}', '{}')" >/dev/null
 svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
+asteapta "loturi schimbate după observație → înghețarea tardivă cu eligibilitate incertă" "$(q "SELECT eligibilitate FROM public.ofertare_analiza_versiuni WHERE licitatie_id=7")" modificata_dupa_moment
 asteapta "restanțele îngheață lic. 7 pe momentul trimiterii" "$(q "SELECT (v.moment_referinta = (SELECT la FROM public.ofertare_clarificari_jurnal WHERE clarificare_id=$CL7))::text FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=7")" true
 
 # ── commit-uri în ordine inversă: A (trimitere T1, înghețare amânată) comite DUPĂ ce B a înghețat pe T2 → snapshot incert ──
@@ -366,6 +381,35 @@ ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_audit_decide($A1,'confirm
 refuz "a doua decizie" authenticated "$RESP" "SELECT public.fn_ofertare_cb_audit_decide($A1,'respins')" 'deja înregistrată'
 rq "clasificarea e imuabilă" "UPDATE public.ofertare_audit_raspunsuri SET clasificare='omisiune', cauza='detectat_neintrebat'" 'imuabile'
 
+# ── retrasa → trimisa pe o clarificare DEJA cunoscută, comisă după înghețare → eveniment_tarziu (lic. 10) ──
+K10=$(ca authenticated "$OWNER" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, status) VALUES (10, 'K', 'retrasa') RETURNING id")
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT 1 FROM public.ofertare_licitatii WHERE id=10 FOR SHARE;" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
+sleep 0.5
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_clarificari SET status='trimisa' WHERE id=$K10;" -c "SELECT pg_sleep(4);" -c "COMMIT;" >/dev/null 2>&1 &
+sleep 3
+ca authenticated "$OWNER" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, status) VALUES (10, 'B2', 'trimisa')" >/dev/null
+wait
+asteapta "retrasa → trimisa pe clarificare cunoscută, comisă după înghețare → eveniment_tarziu" "$(q "SELECT (clarificari::text LIKE '%\"clarificare_id\": $K10%')::text || '|' || public.fn_ofertare_cb_snapshot_incert(id) FROM public.ofertare_analiza_versiuni WHERE licitatie_id=10")" 'true|["eveniment_tarziu"]'
+
+# ── două restanțe concurente la pragul 23/24: o singură încercare (lic. 11) ──
+q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES (941, 11, 'F3 11.pdf', 'lista_cantitati', 'lic11 text', now() - interval '20 days')" >/dev/null
+ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_decizie(941, '$(sha 'lic11 text')', 'f3', '*', 'text_confirmat', 'verificat pe PDF')" >/dev/null
+S11=$(j "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_ingheata_manual(11,'toate','{}')")" 'd["snapshot_id"]')
+q "INSERT INTO public.ofertare_analiza_erori (snapshot_id, faza, eroare, la) SELECT $S11, 'completare', 'test', now() - interval '2 hours' FROM generate_series(1, 23)" >/dev/null
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT public.fn_ofertare_cb_restante();" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
+sleep 0.7
+svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
+wait
+svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
+asteapta "restanțe concurente la 23/24: exact o completare, apoi plafonul oprește" "$(q "SELECT count(*) FROM public.ofertare_analiza_completari WHERE snapshot_id=$S11")" 1
+
+# ── înghețarea care așteaptă un setter de loturi: momentul e DUPĂ commit-ul lui, eligibilitate exactă (lic. 12) ──
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT 1 FROM public.ofertare_licitatii WHERE id=12 FOR UPDATE;" -c "INSERT INTO public.ofertare_loturi_jurnal (licitatie_id, actiune, vechi, nou) VALUES (12, 'licitatie_loturi', '{}', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
+sleep 0.7
+ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_ingheata_manual(12,'toate','{}')" >/dev/null
+wait
+asteapta "înghețarea după așteptarea setterului: moment după commit, netardivă, exactă" "$(q "SELECT (v.moment_referinta > (SELECT max(la) FROM public.ofertare_loturi_jurnal WHERE licitatie_id=12) + interval '1 second')::text || '|' || v.inghetat_tardiv || '|' || v.eligibilitate FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=12")" "true|false|exacta"
+
 # ── revenire ──
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" 2>&1 || true)"; grep -q 'garda start invalida' <<<"$o" || esec "revenire nearmată: $o"; ok "refuz: revenire nearmată"
 q "ALTER TABLE public.ofertare_clarificari DISABLE TRIGGER trg_ofertare_cb_clarificari_jurnal" >/dev/null
@@ -375,5 +419,5 @@ q "ALTER POLICY ofertare_cant_obs_select ON public.ofertare_cant_obs TO authenti
 o="$(revenire || true)"; grep -q 'amprenta difera' <<<"$o" || esec "drift (rolurile politicii): $o"; ok "refuz: revenire după schimbarea rolurilor unei politici (amprenta)"
 q "ALTER POLICY ofertare_cant_obs_select ON public.ofertare_cant_obs TO authenticated" >/dev/null
 revenire >/dev/null || esec "revenire: $(revenire | tail -3)"
-asteapta "după revenire: niciun obiect, triggerul scos, clarificările păstrate" "$(q "SELECT (to_regclass('public.ofertare_cant_obs') IS NULL)::text || (SELECT count(*) FROM pg_trigger WHERE tgname='trg_ofertare_cb_clarificari_jurnal') || (SELECT count(*) FROM public.ofertare_clarificari)")" "true09"
+asteapta "după revenire: niciun obiect, triggerul scos, clarificările păstrate" "$(q "SELECT (to_regclass('public.ofertare_cant_obs') IS NULL)::text || (SELECT count(*) FROM pg_trigger WHERE tgname='trg_ofertare_cb_clarificari_jurnal') || (SELECT count(*) FROM public.ofertare_clarificari)")" "true011"
 echo PASS
