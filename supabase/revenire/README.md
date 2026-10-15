@@ -196,9 +196,9 @@ Scoate indexul unic parțial `executie_proiecte_contract_id_unic`. Nu atinge dat
 ## 20261030c — BMW CarData append-only (`20261030c_bmw_cardata_ROLLBACK.sql`, NEAPLICAT)
 Scoate `v_bmw_cardata_vs_evogps`, `bmw_cardata_locatii`, `bmw_cardata_citiri` (cu triggerele și politicile lor) și cele 5 funcții `bmw_cardata_*`; nu atinge `logistica_*` (view-ul doar le citea). Citirile sunt date de audit, deci două niveluri de armare: `SCOATE_BMW_CARDATA` merge DOAR pe tabele goale; `SCOATE_BMW_CARDATA_CU_DATE` pierde citirile și locațiile (export înainte, decizie explicită). Fără GO de execuție.
 ```sql
-BEGIN;
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: la REPEATABLE READ / SERIALIZABLE fișierul refuză (Jakarinos r2 P1)
 SELECT set_config('gazpet.rollback_tehnic_20261030c', 'SCOATE_BMW_CARDATA:' || txid_current(), true);
 -- <conținutul exact al fișierului>
 COMMIT;
 ```
-Precondiție = exact obiectele patch-ului (3 relații + 5 funcții, niciun alt view dependent); armare persistentă = refuz; `LOCK TABLE … IN ACCESS EXCLUSIVE MODE` pe ambele tabele (cu `lock_timeout` 5 s) ÎNAINTEA verificării „goale”, ca un INSERT concurent să nu fie numărat 0 și apoi șters de DROP (Jakarinos r1 P1-2); DROP fără CASCADE; postcondiție = niciun obiect `bmw_cardata_*`; dezarmare la final. Testat în `scripts/test_bmw_cardata.sh` pasul 5 (nearmat → refuz; armat simplu peste date → refuz; CU_DATE → scos; reaplicare → suita; cursă cu două sesiuni → revenirea așteaptă și refuză, mutantul fără LOCK pierde rândul; armat simplu pe tabele goale → scos).
+Precondiție = exact obiectele patch-ului (3 relații + 5 funcții, niciun alt view dependent); armare persistentă = refuz; `LOCK TABLE … IN ACCESS EXCLUSIVE MODE` pe ambele tabele (cu `lock_timeout` 5 s) ÎNAINTEA verificării „goale”, ca un INSERT concurent să nu fie numărat 0 și apoi șters de DROP (Jakarinos r1 P1-2); DROP fără CASCADE; postcondiție = niciun obiect `bmw_cardata_*`; dezarmare la final. Testat în `scripts/test_bmw_cardata.sh` pasul 5 (nearmat → refuz; armat simplu peste date → refuz; CU_DATE → scos; reaplicare → suita; cursă cu două sesiuni → revenirea așteaptă și refuză, mutantul fără LOCK pierde rândul; aceeași cursă la REPEATABLE READ și SERIALIZABLE → refuz explicit de izolare, mutantul fără garda de izolare pierde rândul la RR; armat simplu pe tabele goale → scos).

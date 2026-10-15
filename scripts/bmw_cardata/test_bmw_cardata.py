@@ -706,6 +706,23 @@ class TestPollingRfc8628(Baza):
         self.assertEqual(len(http.cereri), 3)
         self.assertIsNone(self.st.tokenuri())
 
+    def test_somn_prelungit_fara_cerere_dupa_expirare(self):
+        # Jakarinos r2 P2: PC suspendat in timpul asteptarii — trezire dupa expires_in ⇒ stop, fara cerere /token
+        pend = (403, {'error': 'authorization_pending'})
+        http = HttpFals([self.device(5, 300), pend, (200, {'access_token': AT1, 'refresh_token': RT1, 'expires_in': 3600})])
+        ceas, somnuri = self.ceas, []
+
+        def dormi(s):
+            somnuri.append(s)
+            ceas.t += s if len(somnuri) == 1 else 10000     # al doilea somn: suspendare de ~3 ore
+        with self.assertRaises(C.ReloginNecesar) as e:
+            C.login(self.st, http, ceas=ceas, dormi=dormi, afis=self.afis)
+        self.assertIn('in timpul asteptarii', str(e.exception))
+        self.assertEqual(somnuri, [5, 5])
+        self.assertEqual([urllib.parse.urlsplit(c[1]).path for c in http.cereri],
+                         ['/gcdm/oauth/device/code', '/gcdm/oauth/token'])   # o singura interogare, dinaintea suspendarii
+        self.assertIsNone(self.st.tokenuri())
+
     def test_interval_mai_mare_decat_valabilitatea(self):
         http = HttpFals([self.device(400, 300)])
         with self.assertRaises(C.EroareBMW):

@@ -47,7 +47,8 @@ python -B -m bmw_cardata login
 1. `login` afișează **doar** două rânduri: `verification_uri: https://…` și `user_code: XXXXXXXX`. Deschizi linkul (sau butonul
    „Autentificarea aparatului” din pagina CarData a mașinii, care duce în același loc), te loghezi cu contul My BMW și introduci
    codul. Scriptul așteaptă singur și se termină cu `login OK`. Respectă RFC 8628: intervalul serverului fără plafon,
-   `slow_down` = +5 s, iar dacă următoarea interogare permisă ar cădea după `expires_in`, se oprește.
+   `slow_down` = +5 s, iar dacă următoarea interogare permisă ar cădea după `expires_in` (sau PC-ul se trezește din
+   suspendare după expirare), se oprește fără nicio cerere în plus.
    Linkul se afișează DOAR dacă e `https://customer.bmwgroup.com/…` (gazda exactă, fără port/utilizator); altfel `login` refuză.
    Codul expiră după câteva minute: dacă scrie „a expirat”, rulezi `login` din nou.
 2. `python -B -m bmw_cardata setup` — găsește VIN-ul mapat **PRIMARY** (dacă sunt mai multe: `--vin <VIN>`), creează containerul
@@ -149,7 +150,7 @@ Limita locală implicită: 10 cereri/zi UTC (`--limita-zi`, maxim 49).
 ## Teste
 
 ```bash
-PYTHONPATH=scripts python -B -m unittest bmw_cardata.test_bmw_cardata -v      # 61 teste, fără rețea externă, fără BD
+PYTHONPATH=scripts python -B -m unittest bmw_cardata.test_bmw_cardata -v      # 62 teste, fără rețea externă, fără BD
 PG_BIN=/c/Users/Public/pgsql/bin bash scripts/test_bmw_cardata.sh            # PG17 local: migrare + RLS + capăt-la-capăt + revenire
 ```
 Unittest (HTTP simulat): device flow cu PKCE (verifier ↔ challenge), `authorization_pending` / `slow_down` (+5 s) / `expired_token` /
@@ -160,7 +161,7 @@ non-locație), reverificarea fișierului modificat; SQL-ul generat (textul ostil
 refuz); niciun token în ieșire sau jurnal. Plus (review Jakarinos r1): redirect-uri 301/302/303/307/308 pe GET și POST, spre
 aceeași gazdă și spre alt domeniu, cu **transport real** (http.server local) — ținta nu e contactată, iar un test de control arată
 că urllib-ul implicit ar fi dus `Authorization` acolo; interval de polling mare nu e scurtat, `slow_down` fără plafon, oprire când
-intervalul depășește timpul rămas; `verification_uri` doar pe gazda BMW; director în repo / arbore git / junction spre repo → refuz.
+intervalul depășește timpul rămas sau la trezirea după expirare (suspendare), fără cerere `/token`; `verification_uri` doar pe gazda BMW; director în repo / arbore git / junction spre repo → refuz.
 Harness-ul SQL (vezi antetul `scripts/test_bmw_cardata.sh`) lucrează doar într-un director creat de el (mktemp + marker) și
 testează cursa revenire ↔ INSERT concurent cu două sesiuni (plus mutantul fără LOCK, care pierde rândul).
 

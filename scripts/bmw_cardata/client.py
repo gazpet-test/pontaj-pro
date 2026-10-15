@@ -315,6 +315,8 @@ def login(st, http, ceas=time.time, dormi=time.sleep, afis=print):
         if ceas() + interval > termen:   # urmatoarea interogare permisa ar cadea dupa expirarea codului: oprim fluxul
             raise ReloginNecesar('codul de autorizare expira inainte de urmatoarea interogare permisa — rulati login din nou')
         dormi(interval)
+        if ceas() > termen:              # somn prelungit (suspendare / hibernare): codul a expirat, nicio cerere /token
+            raise ReloginNecesar('codul de autorizare a expirat in timpul asteptarii — rulati login din nou')
         status, data = _post_form(http, URL_TOKEN, {
             'client_id': client_id, 'device_code': device_code, 'grant_type': GRANT_DEVICE, 'code_verifier': verifier})
         if status == 200 and isinstance(data, dict) and data.get('access_token'):

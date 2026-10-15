@@ -12,7 +12,10 @@
 #      reluarea aceleiași citiri (confirmare pierdută) → „deja”, nimic dublat; locația în tabelul separat, nu în raspuns_brut
 #   5. revenire: nearmat → refuz; armat simplu peste date → refuz; CU_DATE → obiectele dispar; reaplicare → suita;
 #      CURSA (două sesiuni): un INSERT concurent necomis + revenirea armată simplu → revenirea așteaptă lock-ul și refuză
-#      (rândul rămâne); mutantul FĂRĂ LOCK pierde rândul (dovada că testul discriminează); armat simplu pe tabele goale → OK
+#      (rândul rămâne); mutantul FĂRĂ LOCK pierde rândul (dovada că testul discriminează);
+#      5d aceeași cursă la REPEATABLE READ (și SERIALIZABLE) → refuz explicit de izolare, rândul rămâne; mutantul fără garda
+#      de izolare pierde rândul la RR (snapshot fixat la armare); armat simplu pe tabele goale → OK
+#   Ca root (Linux): pgdata + pglog sunt chown postgres, $LUCRU 711 (doar traversare), markerul rămâne al lui root.
 #   6. validatorul runnerului acceptă migrarea; testele Python (unittest) trec
 # Ieșire: 0 = PASS · 1 = eșec · 2 = mediu.  PG_BIN / PYTHON / PGPORT_TEST se pot suprascrie (Windows: PG_BIN=/c/Users/Public/pgsql/bin).
 # ============================================================================
@@ -47,7 +50,15 @@ LUCRU="$(mktemp -d "$PREFIX_TMP/bmw_cardata_harness.XXXXXXXX")" || mediu "mktemp
 LUCRU="$(cd "$LUCRU" && pwd -P)"
 MARKER="$LUCRU/.marker_bmw_cardata_harness"
 printf 'bmw_cardata_harness %s\n' "$$" > "$MARKER"
-DATE_DIR="$LUCRU/pgdata"; TMP="$LUCRU/lucru"; mkdir "$TMP"
+DATE_DIR="$LUCRU/pgdata"; JURNAL_PG="$LUCRU/pglog/pg.log"; TMP="$LUCRU/lucru"
+mkdir "$TMP" "$DATE_DIR" "$LUCRU/pglog"; chmod 700 "$DATE_DIR" "$LUCRU/pglog"
+if [ "$(id -u)" = 0 ]; then
+  # ca root (Linux): mktemp e root:700 ⇒ postgres trebuie doar să TRAVERSEZE $LUCRU (711) și să DEȚINĂ pgdata + pglog;
+  # markerul și lucru/ rămân ale lui root (postgres nu le poate schimba), curățarea rămâne la root, după verificarea markerului
+  id postgres >/dev/null 2>&1 || mediu "utilizatorul postgres lipsește (ramura root)"
+  chmod 711 "$LUCRU"
+  chown postgres: "$DATE_DIR" "$LUCRU/pglog" || mediu "chown postgres pe directorul temporar"
+fi
 director_al_meu() {   # doar directorul creat aici: sub prefixul dedicat, fără „..”, canonic, cu markerul acestui proces
   case "$LUCRU" in "$PREFIX_TMP"/bmw_cardata_harness.*) ;; *) return 1 ;; esac
   case "$LUCRU" in *..*) return 1 ;; esac
@@ -61,7 +72,7 @@ curata() {
 trap 'curata; true' EXIT
 director_al_meu || esec "directorul de lucru nu trece propria verificare"
 ca_postgres "$PG_BIN/initdb$EXE" -D "$DATE_DIR" -U postgres --auth=trust --encoding=UTF8 --no-locale >/dev/null || mediu initdb
-ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -l "$LUCRU/pg.log" -w -t 30 start \
+ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -l "$JURNAL_PG" -w -t 30 start \
   -o "-p $PORT -c listen_addresses=127.0.0.1 -c timezone=UTC ${SOCKET[*]}" >/dev/null || mediu "pg_ctl start (portul $PORT ocupat?)"
 q() { "${PSQL[@]}" -d "$BAZA" -Atc "$1"; }
 obiecte() { q "SELECT count(*) FROM pg_class WHERE relname IN ('bmw_cardata_citiri','bmw_cardata_locatii','v_bmw_cardata_vs_evogps')"; }
@@ -161,11 +172,11 @@ suita "reaplicat după rollback"
 # 5c. CURSA (Jakarinos r1 P1-2): sesiunea A inserează o citire și ține tranzacția deschisă 3 s; sesiunea B (revenirea armată
 #     simplu, „doar tabele goale”) pornește la +1 s. Cu LOCK înaintea count(*): B așteaptă, vede rândul comis și refuză.
 INSERT_A="INSERT INTO public.bmw_cardata_citiri (id_citire, citit_la, vin, odometru_km, raspuns_brut, sursa) VALUES (gen_random_uuid(), now(), 'WBATEST0000000001', 1, '{}', 'bmw_cardata_rest');"
-cursa() {   # $1 = fișierul de revenire; întoarce codul lui B; B_SEC = cât a durat B
+cursa() {   # $1 = fișierul de revenire, $2 = armarea (implicit $ARMARE); întoarce codul lui B; B_SEC = cât a durat B
   "${PSQL[@]}" -d "$BAZA" -c "BEGIN; $INSERT_A SELECT pg_sleep(3); COMMIT;" >"$TMP/a.out" 2>&1 &
   local pid_a=$! t0 t1 rc
   sleep 1
-  t0=$(date +%s); set +e; revino "$ARMARE" "$1"; rc=$?; set -e; t1=$(date +%s)
+  t0=$(date +%s); set +e; revino "${2:-$ARMARE}" "$1"; rc=$?; set -e; t1=$(date +%s)
   wait "$pid_a" || { cat "$TMP/a.out"; esec "5c sesiunea A"; }
   B_SEC=$((t1 - t0)); return "$rc"
 }
@@ -185,6 +196,28 @@ cursa "$MUTANT" || { cat "$OUT"; esec "5c mutantul fără LOCK a refuzat — sce
 [ "$(obiecte)" = 0 ] || esec "5c mutantul nu a scos obiectele"
 ok "5c mutant fără LOCK: count(*) a văzut 0, DROP a așteptat INSERT-ul și a șters rândul comis ⇒ cursa e reală, testul discriminează"
 aplica || { cat "$OUT"; esec "5c reaplicare după mutant"; }
+
+# 5d. CURSA la REPEATABLE READ (Jakarinos r2 P1): snapshot-ul s-ar fixa la armare, înaintea LOCK-ului ⇒ INSERT-ul comis în
+#     timpul așteptării ar fi invizibil pentru count(*). Revenirea TREBUIE să refuze izolarea (și SERIALIZABLE), rândul rămâne.
+ARMARE_RR="SET TRANSACTION ISOLATION LEVEL REPEATABLE READ; $ARMARE"
+if cursa "$ROLLBACK" "$ARMARE_RR"; then esec "5d revenirea a trecut la REPEATABLE READ"; fi
+grep -q 'DOAR la READ COMMITTED' "$OUT" || { cat "$OUT"; esec "5d refuz (RR) din alt motiv"; }
+[ "$(obiecte)" = 3 ] && [ "$(q "SELECT count(*) FROM bmw_cardata_citiri")" = 1 ] || esec "5d rândul concurent s-a pierdut (RR)"
+if revino "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; $ARMARE_DATE" "$ROLLBACK"; then esec "5d revenirea a trecut la SERIALIZABLE"; fi
+grep -q 'DOAR la READ COMMITTED' "$OUT" || { cat "$OUT"; esec "5d refuz (SERIALIZABLE) din alt motiv"; }
+[ "$(obiecte)" = 3 ] || esec "5d obiectele au dispărut la refuzul SERIALIZABLE"
+ok "5d REPEATABLE READ (cu INSERT concurent) și SERIALIZABLE → refuz explicit de izolare; rândul rămâne"
+revino "$ARMARE_DATE" "$ROLLBACK" || { cat "$OUT"; esec "5d curățare CU_DATE"; }
+aplica || { cat "$OUT"; esec "5d reaplicare"; }
+# mutantul FĂRĂ garda de izolare (dar cu LOCK), la REPEATABLE READ, pierde rândul ⇒ garda e necesară, testul discriminează
+MUTANT_RR="$TMP/rollback_fara_garda_izolare.sql"
+sed '/^DO \$rollback_izolare\$/,/^END \$rollback_izolare\$;/d' "$ROLLBACK" > "$MUTANT_RR"
+[ "$(grep -c 'rollback_izolare' "$MUTANT_RR" || true)" = 0 ] && [ "$(grep -c 'LOCK TABLE' "$MUTANT_RR")" = 1 ] \
+  || esec "5d mutantul fără garda de izolare nu a putut fi construit"
+cursa "$MUTANT_RR" "$ARMARE_RR" || { cat "$OUT"; esec "5d mutantul RR a refuzat — scenariul nu reproduce problema snapshot-ului"; }
+[ "$(obiecte)" = 0 ] || esec "5d mutantul RR nu a scos obiectele"
+ok "5d mutant fără garda de izolare la RR: LOCK-ul a așteptat, dar count(*) din snapshot-ul vechi a văzut 0 ⇒ rândul comis pierdut; garda e necesară"
+aplica || { cat "$OUT"; esec "5d reaplicare după mutant"; }
 suita "reaplicat după cursă"
 revino "$ARMARE" "$ROLLBACK" || { cat "$OUT"; esec "5 rollback pe tabele goale"; }
 [ "$(obiecte)" = 0 ] || esec "5 rollback pe tabele goale nu a scos obiectele"

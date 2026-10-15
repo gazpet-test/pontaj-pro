@@ -9,14 +9,26 @@
 --     'SCOATE_BMW_CARDATA_CU_DATE:'  || txid_current()  — PIERDE citirile și locațiile (export înainte, decizie explicită).
 --
 -- Execuția documentată = UN SINGUR string (fișierul NU conține BEGIN/COMMIT):
---     BEGIN;
+--     BEGIN ISOLATION LEVEL READ COMMITTED;
 --     SELECT set_config('gazpet.rollback_tehnic_20261030c', 'SCOATE_BMW_CARDATA:' || txid_current(), true);
 --     <conținutul acestui fișier>
 --     COMMIT;
--- Siguranțe: armare persistentă (ALTER DATABASE/ROLE … SET) = refuz; armare legată de txid; precondiție = exact obiectele
---   patch-ului; LOCK ACCESS EXCLUSIVE pe ambele tabele ÎNAINTEA verificării „goale” (fără cursă cu un INSERT concurent);
---   DROP fără CASCADE; postcondiție = niciun obiect bmw_cardata_* rămas; dezarmare la final.
+-- Siguranțe: DOAR la izolarea READ COMMITTED (altfel refuz); armare persistentă (ALTER DATABASE/ROLE … SET) = refuz;
+--   armare legată de txid; precondiție = exact obiectele patch-ului; LOCK ACCESS EXCLUSIVE pe ambele tabele ÎNAINTEA
+--   verificării „goale” (fără cursă cu un INSERT concurent); DROP fără CASCADE; postcondiție = niciun obiect bmw_cardata_*
+--   rămas; dezarmare la final.
 -- ============================================================================
+-- Jakarinos r2 P1: la REPEATABLE READ / SERIALIZABLE snapshot-ul se fixează la prima interogare (armarea), ÎNAINTEA LOCK-ului;
+-- un INSERT comis cât așteptăm lock-ul ar rămâne invizibil pentru count(*), iar DROP-ul l-ar pierde. Doar READ COMMITTED
+-- ia un snapshot nou la fiecare instrucțiune (count-ul de după LOCK vede tot ce s-a comis până atunci).
+DO $rollback_izolare$
+BEGIN
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION 'ROLLBACK TEHNIC 20261030c blocat: izolarea tranzacției este „%”; revenirea rulează DOAR la READ COMMITTED (BEGIN ISOLATION LEVEL READ COMMITTED)', current_setting('transaction_isolation')
+      USING ERRCODE = '25001';
+  END IF;
+END $rollback_izolare$;
+
 DO $rollback_pre$
 DECLARE v_armare text := current_setting('gazpet.rollback_tehnic_20261030c', true); v_n bigint;
 BEGIN
