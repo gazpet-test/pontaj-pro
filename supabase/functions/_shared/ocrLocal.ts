@@ -202,8 +202,9 @@ export function sirCifre(s: string): string {
     if (CIFRA.test(c)) out += c
     else if ((c === '.' || c === ',') && cifra(u) && !lipitDeLitera(i)) out += c
     else if (c === '/' && cifra(anterior(i)) && cifra(u)) out += c
-    else if ('+-±−'.includes(c) && !lipitDeLitera(i) && (cifra(u) || ((t[u] === '.' || t[u] === ',') && cifra(urmator(u))))) out += c
+    else if ('+-±−'.includes(c) && (!lipitDeLitera(i) || ('eE'.includes(t[i - 1]) && cifra(i - 2))) && (cifra(u) || ((t[u] === '.' || t[u] === ',') && cifra(urmator(u))))) out += c
     else if ((c === '%' || c === '‰') && cifra(anterior(i))) out += c
+    else if ((c === 'e' || c === 'E') && cifra(i - 1) && (cifra(i + 1) || ('+-'.includes(t[i + 1] ?? '') && cifra(i + 2)))) out += 'e'  // exponent (NUM): 1e3 ≠ 13
   }
   return out
 }

@@ -13,7 +13,7 @@ Deno.test('sirCifre / cifreDiferite (laborator 15.10): separatorul literal, spat
   for (const [a, b] of egale) assert.equal(cifreDiferite(a, b), false, JSON.stringify([a, b, sirCifre(a), sirCifre(b)]))
   const diferite: [string, string][] = [
     ['0,056', '0.056'], ['1.234', '1,234'], ['10 m', '20 m'], ['', '48 | 56 | 0'], ['3/4', '34'], ['-5', '5'], ['5%', '5'], ['(.5)', '(5)'],
-    ['8 -15 KG', '8 15 KG'], ['1,0 m', '10 m'], ['1.2 ⟦rowspan=5⟧', '1.3'],
+    ['8 -15 KG', '8 15 KG'], ['1,0 m', '10 m'], ['1.2 ⟦rowspan=5⟧', '1.3'], ['1e3', '13'], ['2E-5', '2-5'], ['2E-5', '2E5'],
   ]
   for (const [a, b] of diferite) assert.equal(cifreDiferite(a, b), true, JSON.stringify([a, b, sirCifre(a), sirCifre(b)]))
   assert.equal(sirCifre('Km 16 + 580, 2860,67 m'), '16+580,2860,67')  // virgula urmata de cifra conteaza si dupa spatiu
