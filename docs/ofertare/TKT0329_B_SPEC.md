@@ -1,6 +1,6 @@
 # TKT-2026-0329, varianta B: cantități structurate + audit al răspunsurilor Autorității
 
-**Stare:** SPECIFICAȚIE v7 (15.10.2026), după review r6 (NO-GO de la Jakarinos și de la Copilot).
+**Stare:** SPECIFICAȚIE v8 (15.10.2026), după review r7 (NO-GO de la Jakarinos și de la Copilot).
 
 Nimic nu e implementat. Migrările, deploy-urile și orice cost AI se fac doar cu „da” de la Răzvan.
 **Decizie de pornire:** Răzvan, 14.10.2026, varianta B (`claude_context` #1758).
@@ -60,13 +60,21 @@ Nimic nu e implementat. Migrările, deploy-urile și orice cost AI se fac doar c
   - perechile Q&A se asociază pe blocuri de solicitare (antetul răspunsului e permis);
   - `modificare_ulterioara` cere absența dovedită prin căutare deterministă pe textul brut;
   - identitatea perechii e grupată pe Q+A, cu pozițiile ca listă.
-- **v7**, schimbările:
+- **v7**, schimbările (tot NO-GO, r7: Jakarinos 4×P1, Copilot 4×P1):
   - identitatea articolului = poziția tokenului cantității în sursă (`cantitate_offset`), cu valori brute în observație și grupare determinată în comparator;
   - absența e dovedită cu un parser numeric pe **tot** textul documentelor relevante (o fereastră locală dovedește doar prezența); efectele nenumerice → `nedeterminabil`;
   - jurnal imuabil al clarificărilor, cu textul exact la trimitere / răspuns; snapshot-ul reconstruiește din jurnal;
   - vedere efectivă canonică a completărilor;
   - `text_confirmat` e decizie pe document + sha;
   - un singur predicat `fn_ofertare_text_valid` pentru toate porțile.
+- **v8**, schimbările:
+  - `modificare_ulterioara` automat **doar** pentru `document_nou`, comparat prin comparator; un răspuns doar text → om. Dovada absenței din text liber iese din MVP;
+  - prezența unei valori: agregare în comparator (totaluri neimprimate) sau parser cu toate interpretările și convenția documentului;
+  - token ambiguu → `incomplet`;
+  - jurnal: versiunea trimisă (din `trimisa`) e separată de status; un singur trigger, întâi jurnalul, apoi înghețarea;
+  - predicatul de text pe document + sha;
+  - deduplicarea pe offset doar dacă metadatele coincid, altfel `conflict_sursa`;
+  - o singură funcție `pozitieDovedita()`.
 
 ## 1. Problema, pe cazul real
 
@@ -156,7 +164,7 @@ ofertare_audit_raspunsuri
     - `sinteza_ai`: rând de proveniență scris de `document-nou-citeste` (forma din `scriere.ts`) sau de `ofertare-plansa-citeste` (forma `PLANȘĂ:` / `Rezumat citire AI`, `handler.ts:108`). PR3 adaugă scrierea în ambele;
     - `transcriere_confirmata`: un text vechi (fără rând de proveniență), confirmat de om pe exact acel sha, prin decizia `text_confirmat` (§4.4). UI-ul îi arată primele și ultimele pagini, alături de PDF;
     - `necunoscuta`: orice altceva.
-    Doar `transcriere` și `transcriere_confirmata` pot fi sursă de extragere și de verificare a citatelor. Toate porțile folosesc **același predicat**, `fn_ofertare_text_valid(lic, sha)` = origine ∈ {`transcriere`, `transcriere_confirmata`}: acoperirea (§5.0), extragerea (§5.1), `text_verificat` și căutarea de absență (§5.4). Test obligatoriu: ingest → citire de planșă care suprascrie textul → `sinteza_ai`, nu `transcriere`.
+    Doar `transcriere` și `transcriere_confirmata` pot fi sursă de extragere și de verificare a citatelor. Toate porțile folosesc **același predicat**, `fn_ofertare_text_valid(lic, document_id, sha)` = există pentru **acest document și acest sha** un rând de proveniență `transcriere` sau o decizie `text_confirmat` activă. Manifestul reține ID-ul exact al rândului sau al deciziei. Confirmarea documentului A nu validează documentul B cu text identic (test). Predicatul e folosit de: acoperirea (§5.0), extragerea (§5.1), `text_verificat` și căutarea de absență (§5.4). Test obligatoriu: ingest → citire de planșă care suprascrie textul → `sinteza_ai`, nu `transcriere`.
   - **`completitudine`:** `integral | partial` (din `pagini_necitite` și `status_procesare` la acel moment).
   - Nu are SELECT pentru `authenticated`; se citește doar prin `fn_ofertare_doc_text(lic, sha)`, cu `fn_are_acces_ofertare`. Așa nu există un magazin global de texte între licitații.
 - **`ofertare_cant_obs`:**
@@ -168,8 +176,10 @@ ofertare_audit_raspunsuri
     - `citat_interval` `[inceput, sfarsit)`: intervalul absolut al citatului în document;
     - `pozitie_dovedita` = true **numai dacă citatul apare exact o dată** în textul feliei (după normalizarea spațiilor). Două sau mai multe apariții → nedovedită;
     - **`cantitate_offset`:** poziția absolută, în document, a **tokenului numeric al cantității**. Se găsește în cod: în intervalul citatului se caută valoarea `cantitate` cu parserul numeric (§5.4). Citatul trebuie să conțină cantitatea.
-      - `pozitie_dovedita` = true **numai dacă** citatul apare exact o dată în felie **și** în citat există exact un token numeric egal cu `cantitate` (cu UM-ul lui).
+      - `pozitie_dovedita` = true **numai dacă** citatul apare exact o dată în felie **și** în citat există exact un token numeric a cărui **interpretare unică**, după convenția documentului (§5.4, parserul), e egală cu `cantitate`, cu UM-ul lui.
+      - Un token ambiguu (de ex. `3.995` într-un document fără convenție stabilită) → `valoare_ambigua`, iar cheia lui e `incomplet`.
       - Altfel → nedovedită.
+      - O singură funcție, `pozitieDovedita()`, aplică toate condițiile (§5.1 o folosește).
     - **Identitatea articolului = `familie|doc_sha256|cantitate_offset`**: două observații sunt același articol **dacă și numai dacă** au același `cantitate_offset`. Fragmentele de context din citat nu contează.
       - Exemplu: `R1 Strada A 100 m; R2 Strada A 100 m` are două offseturi de cantitate distincte → 200 m, chiar dacă citatele se suprapun pe `R2`.
     - În observație se păstrează **doar valorile brute**: `rand_interval`, `citat_interval`, `cantitate_offset`. Nicio cheie derivată nu se persistă, deci nu depinde de ordinea extragerii.
@@ -269,10 +279,17 @@ ofertare_audit_raspunsuri
   - `clarificari jsonb`: clarificările **noastre** **as-of `moment_referinta`**, reconstruite **numai din jurnal**.
     - **`ofertare_clarificari_jurnal(id, clarificare_id, licitatie_id, eveniment, text, text_sha256, la)`**, append-only, imuabil. `eveniment ∈ (trimisa, raspunsa, retrasa)`.
     - Îl scrie un trigger pe `ofertare_clarificari` la INSERT / UPDATE de status, cu **textul exact al întrebării în acel moment**.
-    - Snapshot-ul ia, pentru fiecare clarificare, ultimul eveniment cu `la ≤ moment_referinta` și **textul din acel eveniment**, nu textul curent. O editare ulterioară nu poate contamina istoricul.
-    - Clarificările fără eveniment în jurnal (cele vechi, de dinainte de PR2) apar cu `versiune_necunoscuta` și **nu pot servi** drept dovadă `deja_observat` (→ `nedeterminabil`).
+    - **Versiunea trimisă și statusul sunt separate:**
+      - **textul** = textul din **ultimul eveniment `trimisa`** cu `la ≤ moment_referinta`; doar evenimentul `trimisa` îngheață versiunea trimisă;
+      - **statusul as-of** = ultimul eveniment de orice tip cu `la ≤ moment_referinta`. `raspunsa` / `retrasa` schimbă doar statusul, nu versiunea.
+      - O editare locală după trimitere nu atinge versiunea trimisă. Dacă se retrimite, apare un eveniment `trimisa` nou, cu textul nou.
+    - Clarificările fără eveniment `trimisa` în jurnal (cele vechi, de dinainte de PR2, sau cele al căror prim eveniment e `raspunsa`) apar cu `versiune_necunoscuta` și **nu pot servi** drept dovadă `deja_observat` (→ `nedeterminabil`).
+    - **Ordinea:** un **singur trigger** pe `ofertare_clarificari` (`fn_trg_clarificari_jurnal_ingheata`) inserează întâi evenimentul în jurnal, apoi, dacă e cazul, cheamă înghețarea, în aceeași tranzacție. Evenimentul declanșator e astfel vizibil snapshot-ului. Test dedicat.
     - Clarificarea declanșatoare intră în conținut doar dacă evenimentul ei `trimisa` are `la ≤ moment_referinta`; altfel e doar metadată (`clarificare_declansatoare_id`).
-    - Test: trimisă înainte de termen → înghețare eșuată → editată și trecută în `raspunsa` după termen → înghețare tardivă. Snapshot-ul conține textul trimis inițial;
+    - Teste:
+      - trimisă înainte de termen → înghețare eșuată → editată și trecută în `raspunsa` după termen → înghețare tardivă: snapshot-ul conține textul trimis inițial;
+      - trimisă cu textul A → editată local în B → `raspunsa`, toate înainte de termen: snapshot-ul conține A, cu status `raspunsa`;
+      - clarificare veche al cărei prim eveniment e `raspunsa`: `versiune_necunoscuta`;
   - `amprenta`.
 - Unic `(licitatie_id, lot_domeniu, lot_nr)` WHERE `tip = 'initiala'`.
 
@@ -330,9 +347,7 @@ ofertare_audit_raspunsuri
   - **UM:** `ml → m`.
   - **`obiect_cheie`:** fără diacritice, fără prefixe de tip, cu toate tokenurile numerice și satul/localitatea.
   - **Material:** listă închisă.
-  - **Poziția:** citatul se caută exact, după normalizarea spațiilor, în textul feliei.
-    - O singură apariție → `rand_interval` absolut și `pozitie_dovedita = true`.
-    - Zero sau mai multe apariții → `pozitie_dovedita = false`. Rândul nu poate fi deduplicat; dacă e în zona de suprapunere, cheia lui primește `incomplet` (§5.2).
+  - **Poziția:** `pozitieDovedita()` (§4.1) — citat unic în felie **și** token de cantitate unic, cu interpretare unică. Altfel `pozitie_dovedita = false`: rândul nu poate fi deduplicat, iar dacă e în zona de suprapunere, cheia lui primește `incomplet` (§5.2).
   - **`tip_lucrare` și `masura`:** valoarea modelului, verificată cu reguli pe denumire (`bransament` → `bransament`; `tub de protectie` → `protectie`; `montaj` / `proba` / `furnizare` → `masura`). La dezacord câștigă regula, iar rândul se marchează.
 
 ### 5.2 Comparația deterministă (PR4)
@@ -341,7 +356,7 @@ ofertare_audit_raspunsuri
   - părțile aceluiași fișier, prin `— pNN_pagA-B` (212 și 213 = părți complementare ale listei de cantități).
   - În comparație intră doar ultima versiune; părțile complementare se unesc.
 - **Deduplicarea se face doar pe repetarea aceleiași poziții:**
-  - observațiile cu poziție dovedită și **același `cantitate_offset`** (din felii suprapuse) = o observație. Comparatorul versionat face gruparea determinist, la fiecare calcul, independent de ordine, și o pune în manifest. Offseturile diferite = observații distincte;
+  - observațiile cu poziție dovedită și **același `cantitate_offset`** (din felii suprapuse) se grupează. Se comasează într-o observație **numai dacă toate câmpurile semantice coincid** (obiect_cheie, DN, material, tip_lucrare, masura, UM, valoare). Orice dezacord → `conflict_sursa` pe cheile implicate, fără să se aleagă o variantă. Gruparea se face determinist, la fiecare calcul, și intră în manifest. Offseturile diferite = observații distincte;
   - un rând cu poziție nedovedită în zona de suprapunere → cheia lui primește `incomplet` (posibil dublat).
   - Teste obligatorii:
     - un tabel tăiat între două felii;
@@ -349,7 +364,7 @@ ofertare_audit_raspunsuri
     - două rânduri identice ca text pe linii diferite → două observații, sau `incomplet` dacă nu se pot localiza unic;
     - două articole distincte pe aceeași linie, cu aceeași valoare → două observații, **inclusiv când citatul primului se întinde peste al doilea** (`R1 Strada A 100 m; R2` / `R2 Strada A 100 m`);
   - **valorile egale în poziții diferite NU sunt duplicate** (două poziții de câte 100 m pe aceeași stradă = 200 m);
-  - dacă aceeași `pozitie_cheie` are valori diferite → `conflict_sursa`.
+  - dacă același `cantitate_offset` are valori sau metadate diferite → `conflict_sursa`.
 - **Agregarea, per rol:**
   - suma pe cheie se face doar peste `masura = lungime`, separat pe `tip_lucrare` (conductă, branșament și protecție se compară fiecare separat; D4);
   - totalurile și subtotalurile nu se adună cu detaliile: se compară separat (`suma_vs_total`);
@@ -372,7 +387,7 @@ ofertare_audit_raspunsuri
 
 ### 5.3 Înghețarea (D1)
 - **Declanșatoare:**
-  1. trigger `AFTER INSERT OR UPDATE OF status` pe `ofertare_clarificari`, când o clarificare a noastră ajunge în `trimisa` (inclusiv INSERT direct `trimisa` pentru clarificările depuse extern, `OfertareClarificari.jsx`) și nu există încă o inițială → `fn_ofertare_analiza_ingheata(..., 'clarificare_trimisa', clarificare_id)`. Clarificarea declanșatoare intră în snapshot;
+  1. același trigger unic (`AFTER INSERT OR UPDATE OF status`, după scrierea în jurnal), când o clarificare a noastră ajunge în `trimisa` (inclusiv INSERT direct `trimisa` pentru clarificările depuse extern, `OfertareClarificari.jsx`) și nu există încă o inițială → `fn_ofertare_analiza_ingheata(..., 'clarificare_trimisa', clarificare_id)`. Clarificarea declanșatoare intră în snapshot;
   2. la termenul-limită de clarificări, dacă nu există încă o inițială (indiferent dacă există clarificări trimise): rutina Ofertare cheamă înghețarea cu `termen_clarificari` și **`moment_referinta` = termenul**;
   3. butonul manual (responsabil).
 - **Concurență și idempotență:**
@@ -417,19 +432,18 @@ ofertare_audit_raspunsuri
   - O dimensiune critică lipsă (lot, tip lucrare sau DN) **nu e wildcard**: regula nu se aplică, iar perechea merge la `nedeterminabil`.
 - **Clasificarea, în ordine:**
   1. **`deja_observat`:** o clarificare **a noastră** din snapshot (`trimisa` / `raspunsa`) are **aceeași identitate de subiect**, completă (vezi Ancore). Similaritatea textului găsește candidații; confirmarea cere identitatea. `cauza = intrebat_de_noi`.
-  2. **`modificare_ulterioara`:** efectul nou (valoarea sau cerința din răspuns, sau dintr-un document nou din familie) **lipsește demonstrabil** din snapshot pe aceeași identitate de subiect. `cauza = schimbat_de_raspuns | document_nou`.
-     - **Condiții:**
-       - toate documentele snapshot-ului cu rol relevant au text materializat, origine `transcriere` / `transcriere_confirmata` și completitudine `integral` (sau decizie umană);
-       - **parserul numeric determinist** (`_shared/numar.ts`, testat), rulat pe **tot** textul acestor documente, nu găsește valoarea nicăieri.
-         - Parserul recunoaște orice formă: `3.995`, `3995`, `3,995`, `3 995`, `3.995,00`, `3995.0`, separatori de mii cu punct, spațiu sau spațiu fin, zecimale cu virgulă sau punct, plus separatorii OCR obișnuiți.
-         - Compararea se face pe valoarea numerică normalizată + UM, cu toleranță de rotunjire 0,001.
-     - Rezultatul:
-       - valoarea apare undeva în acele texte → **nu e absentă**: dacă poate fi legată sigur de subiect (aceeași linie cu o ancoră), răspunsul „alege între valori existente” (regula 3); altfel → `nedeterminabil`. O fereastră locală poate dovedi doar prezența, nu absența;
-       - valoarea nu apare nicăieri → absența e dovedită.
-     - Pentru efecte **nenumerice** (cerințe, texte), MVP-ul nu are regulă de absență demonstrabilă → `nedeterminabil`.
-     - Lipsa din observațiile structurate **nu** e suficientă. O sursă relevantă `text_indisponibil`, `partial` sau `necunoscuta` → `nedeterminabil`.
-     - Teste: ancora și valoarea la mai mult de 2 linii distanță → „nu e absentă”; forme `3 995,00` / `3995.0` → găsite.
-     - Test obligatoriu: o valoare care exista într-un document exclus din simulare → `nedeterminabil`, nu `modificare_ulterioara`.
+  2. **`modificare_ulterioara`, în MVP doar `cauza = document_nou`:**
+     - o versiune nouă a unui document din familie (`seap_meta.inlocuieste_id`), apărută după `moment_referinta`, are pe **aceeași cheie** o valoare diferită de versiunea din snapshot;
+     - ambele versiuni au extragere completă (acoperire `gata` pe cheie, fără `incomplet` sau `conflict_sursa`), iar textul lor trece `fn_ofertare_text_valid` cu `completitudine = integral`. O sursă parțială nu ajunge, nici cu `sursa_partiala_acceptata`;
+     - comparația se face prin comparator (sume pe cheie, inclusiv totaluri obținute prin agregare), nu prin căutare de text.
+     - Un răspuns **doar text** care pare să schimbe ceva (fără document nou) **nu** primește automat `modificare_ulterioara`: merge la regula 3, apoi la `nedeterminabil`, pentru om. „Dovada absenței” din textul liber nu se automatizează în MVP.
+     - **Prezența unei valori** (folosită de regula 3 și de alegerea între valori existente) se stabilește în două feluri:
+       - comparatorul: suma pe aceeași cheie din snapshot egală cu valoarea, inclusiv totaluri **neimprimate**, de ex. ATR 2.000 + 1.995 = 3.995;
+       - **parserul numeric** (`_shared/numar.ts`) pe textul valid. Parserul întoarce **toate interpretările** unui token și aplică **convenția documentului**: dacă documentul are forme neambigue `1.234,56`, punctul înseamnă mii; dacă are `1,234.56`, invers; altfel un token `3.995` rămâne ambiguu, cu interpretările {3995, 3,995}. O interpretare compatibilă cu valoarea + UM ajunge pentru „prezentă”.
+     - Teste:
+       - ATR cu 2.000 + 1.995 fără total, răspunsul confirmă 3.995 → prezentă prin agregare, deci nu e modificare;
+       - `3.995 m` în sursă și răspunsul `3,9950 m` → interpretare compatibilă, plus cazul în care sensul e 3995;
+       - document nou cu altă valoare pe aceeași cheie → `modificare_ulterioara / document_nou`.
      - Dacă valoarea din răspuns **exista deja** în unul dintre roluri (de ex. Răcari: răspunsul confirmă 3.995 din ATR, iar F3 avea 6.400), răspunsul **alege între valori existente**: nu e modificare ulterioară și trece la regula 3.
   3. **`omisiune`**, numai cu dovadă:
      - **`detectat_neintrebat`:** snapshot-ul are un calcul valid (`calcul_curent`) cu `diferenta` sau `conflict_sursa` pe aceeași ancoră, iar noi n-am întrebat. `neasociat` singur **nu** ajunge;
