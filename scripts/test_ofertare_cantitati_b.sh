@@ -8,6 +8,8 @@
 # cache, muncă unică, „gata” doar cu toate feliile) · imuabilitate (și pentru postgres) · jurnal clarificări + înghețare D1
 # (INSERT direct trimisa, text din jurnal, as-of termen, tardiv, idempotentă) · completări · audit (dovezi străine refuzate,
 # automat de clasificare, decizie o singură dată) · termen (AI clar / neclar / om) · revenire (nearmată / armată / drift).
+# r3: moment canonic (a doua trimitere → momentul primei) · fără așteptări în trigger (licitația FOR UPDATE) · eligibilitate marcată ·
+# felie gata doar cu rezervare decontată · reluare prin redeschidere · text confirmat vechi materializat · simulare = exact snapshot-ul.
 # Utilizare: bash scripts/test_ofertare_cantitati_b.sh [--opreste]   Ieșire: 0 PASS · 1 eșec · 2 mediu
 # ============================================================================
 set -Eeuo pipefail
@@ -63,23 +65,24 @@ j() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.arg
 # ── livrare ──
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE" 2>&1 || true)"; grep -q 'garda start invalida' <<<"$o" || esec "fără gardă: $o"; ok "refuz: livrare fără gardă"
 livreaza >/dev/null || esec "livrare: $(livreaza | tail -3)"
-ok "livrare (19 tabele, 45 de funcții)"
+ok "livrare (19 tabele, 47 de funcții)"
 o="$(livreaza || true)"; grep -q 'exista deja' <<<"$o" || esec "relivrare: $o"; ok "refuz: relivrare"
 
 # ── pregătire: loturi (102 / 3 / 5 / 6 fără loturi; 4 cu loturile 1 și 2), documente, texte ──
-q "INSERT INTO public.ofertare_licitatii(id, nr_anunt) VALUES (5, 'X5'), (6, 'X6')" >/dev/null
-for L in 102 3 5 6; do ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza($L, 'fara_loturi')" >/dev/null; done
+q "INSERT INTO public.ofertare_licitatii(id, nr_anunt) VALUES (5, 'X5'), (6, 'X6'), (7, 'X7')" >/dev/null
+for L in 102 3 5 6 7; do ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza($L, 'fara_loturi')" >/dev/null; done
 ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(4, 'are_loturi', '[{\"nr\":1,\"participam\":true},{\"nr\":2,\"participam\":true}]')" >/dev/null
 q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES
    (901, 102, 'F3 lista.pdf', 'lista_cantitati', 'Strada A 100 m', now() - interval '20 days'),
    (902, 102, 'copie F3.pdf', 'lista_cantitati', 'Strada A 100 m', now() - interval '20 days'),
    (903, 102, 'ATR.pdf', 'alta', 'ATR Strada A 90 m', now() - interval '20 days'),
    (904, 102, 'CS.pdf', 'cs_volum', 'CS Strada A 90 m', now() - interval '20 days'),
+   (905, 102, 'vechi.pdf', 'alta', 'text vechi fara text_scrie', now() - interval '20 days'),
    (921, 4, 'lot2.pdf', 'lista_cantitati', 'lot 2 text', now() - interval '20 days'),
    (922, 4, 'lot1.pdf', 'lista_cantitati', 'lot 1 text', now() - interval '20 days')" >/dev/null
 ca authenticated "$OWNER" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[921]::bigint[], 'alocat', '{2}', 't')" >/dev/null
 ca authenticated "$OWNER" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[922]::bigint[], 'alocat', '{1}', 't')" >/dev/null
-asteapta "documentele noi sunt eligibile" "$(q "SELECT bool_and((public.fn_ofertare_document_eligibil(x)->>'eligibil')::boolean) FROM unnest(ARRAY[901,902,903,904,921,922]) x")" t
+asteapta "documentele noi sunt eligibile" "$(q "SELECT bool_and((public.fn_ofertare_document_eligibil(x)->>'eligibil')::boolean) FROM unnest(ARRAY[901,902,903,904,905,921,922]) x")" t
 sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 SHA=$(sha 'Strada A 100 m'); SHA3=$(sha 'ATR Strada A 90 m'); SHA4=$(sha 'CS Strada A 90 m'); SHA21=$(sha 'lot 2 text'); SHA22=$(sha 'lot 1 text')
 
@@ -115,6 +118,12 @@ asteapta "A confirmat de om → valid (decizie)" "$(j "$(svc "SELECT public.fn_o
 asteapta "B cu același sha NU e validat de confirmarea lui A" "$(svc "SELECT public.fn_ofertare_cb_text_valid(102, 902, '$SHA')")" '{}'
 X1=$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 901, '$SHA', '901', 'gpt-5-mini@p1@n1@f1', 1)")" 'd["extragere_id"]')
 asteapta "extragerea pe textul vechi confirmat păstrează decizia ca dovadă" "$(q "SELECT (prov_id IS NULL)::text || (dovada_decizie_id IS NOT NULL)::text FROM public.ofertare_cant_extrageri WHERE id=$X1")" truetrue
+# text confirmat de om pe un document vechi, fără text_scrie: extragerea îl materializează (doar pe sha-ul textului curent)
+SHA5=$(sha 'text vechi fara text_scrie'); SHAX=$(sha altceva)
+ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(905, '$SHAX', 'alt', '*', 'text_confirmat', 'alt sha')" >/dev/null
+asteapta "text confirmat pe alt sha decât textul curent → nematerializat" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 905, '$SHAX', '905', 'gpt-5-mini@p1@n1@f1', 1)")" 'd.get("refuz")')" text_nematerializat
+ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(905, '$SHA5', 'alt', '*', 'text_confirmat', 'verificat pe PDF')" >/dev/null
+asteapta "text confirmat vechi (fără text_scrie) → extragere pornită, text materializat" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 905, '$SHA5', '905', 'gpt-5-mini@p1@n1@f1', 1)")" 'd["ok"]')|$(q "SELECT count(*) FROM public.ofertare_doc_texte WHERE sha256='$SHA5'")" "True|1"
 ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(901, '$SHA', 'f3', '*', 'rol_confirmat', 'este F3')" >/dev/null
 ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(901, '$SHA', 'f3', '*', 'nu_e_sursa_cantitativa', 'răzgândit')" >/dev/null
 asteapta "clasa „rol”: o singură decizie activă (rol_confirmat revocat)" "$(q "SELECT string_agg(decizie, ',') FROM public.ofertare_cant_doc_decizii d WHERE d.document_id=901 AND d.decizie IN ('rol_confirmat','nu_e_sursa_cantitativa') AND NOT EXISTS (SELECT 1 FROM public.ofertare_cant_doc_decizii r WHERE r.revoca_id=d.id)")" nu_e_sursa_cantitativa
@@ -133,8 +142,10 @@ G0=$(j "$(svc "SELECT public.fn_ofertare_cb_felie_incepe($X4, 0, 0, 8, '$SHA4')"
 G1=$(j "$(svc "SELECT public.fn_ofertare_cb_felie_incepe($X4, 1, 8, 16, '$(sha g1)')")" 'd["felie_id"]')
 R2=$(j "$(svc "SELECT public.fn_ofertare_cb_rezerva($G0, 2.0000)")" 'd["rezervare_id"]')
 asteapta "a treia rezervare de 2 USD (altă cerere) depășește plafonul COMUN de 5" "$(j "$(svc "SELECT public.fn_ofertare_cb_rezerva($G1, 2.0000)")" 'd.get("refuz")')" plafon
-svc "SELECT public.fn_ofertare_cb_rezervare_necunoscuta($R2)" >/dev/null
+asteapta "felie „necunoscut” fără rezervare (apelul n-a plecat) refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_felie_inchide($G1, 'necunoscut')")" 'd.get("refuz")')" fara_rezervare
+asteapta "felie „gata” cu rezervarea încă deschisă refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_felie_inchide($G0, 'gata')")" 'd.get("refuz")')" rezervare_nedecontata
 svc "SELECT public.fn_ofertare_cb_felie_inchide($G0, 'necunoscut')" >/dev/null
+asteapta "felia „necunoscut” trece rezervarea deschisă în „necunoscuta”" "$(q "SELECT stare FROM public.ofertare_ai_rezervari WHERE id=$R2")" necunoscuta
 asteapta "rezervarea necunoscută rămâne în consum" "$(ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_consum_vezi(102,'cant_extragere')")" 4.0000
 rq "postgres nu modifică suma unei rezervări" "UPDATE public.ofertare_ai_rezervari SET suma_rezervata = 0.0001 WHERE id = $R1" 'imuabile'
 rq "tranziție nepermisă necunoscuta → decontata" "UPDATE public.ofertare_ai_rezervari SET stare='decontata', cost_real=0 WHERE id = $R2" 'tranziție'
@@ -166,15 +177,30 @@ grep -q 'sub consumul' <<<"$o" || esec "plafonul concurent: $o / $(cat /tmp/cb_c
 ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_cerere_anuleaza($C2)" >/dev/null
 G3=$(j "$(svc "SELECT public.fn_ofertare_cb_felie_incepe($X4, 1, 24, 32, '$(sha g3)')")" 'd.get("felie_id")')
 asteapta "rezervare refuzată după anularea cererii" "$(j "$(svc "SELECT public.fn_ofertare_cb_rezerva($G3, 0.1000)")" 'd.get("refuz")')" cerere
+
+# ── calea de reluare: extragere partial → rezervarea refuzată → redeschidere de om, cu cerere activă → rezervare + decontare + gata ──
+svc "SELECT public.fn_ofertare_cb_extragere_inchide($X4, 'partial')" >/dev/null
+asteapta "rezervare refuzată pe extragere închisă" "$(j "$(svc "SELECT public.fn_ofertare_cb_rezerva($G3, 0.1000)")" 'd.get("refuz")')" extragere
+asteapta "o nouă extragere pe aceeași muncă partial → de redeschis" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 904, '$SHA4', '904', 'gpt-5-mini@p1@n1@f1', 2)")" 'd.get("refuz")')" de_redeschis
+refuz "editorul nu redeschide" authenticated "$EDIT" "SELECT public.fn_ofertare_cb_extragere_redeschide($X4, $C1, 'reiau')" 'fără drept'
+refuz "redeschidere cu cererea anulată" authenticated "$RESP" "SELECT public.fn_ofertare_cb_extragere_redeschide($X4, $C2, 'reiau')" 'Cerere invalidă'
+ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_extragere_redeschide($X4, $C1, 'reiau feliile căzute')" >/dev/null
+asteapta "redeschisă: în lucru, pe cererea nouă, cu istoricul reluării" "$(q "SELECT stare || '|' || (cerere_id=$C1) || '|' || jsonb_array_length(reluari) FROM public.ofertare_cant_extrageri WHERE id=$X4")" "in_lucru|true|1"
+R3=$(j "$(svc "SELECT public.fn_ofertare_cb_rezerva($G3, 0.1000)")" 'd["rezervare_id"]')
+svc "SELECT public.fn_ofertare_cb_deconteaza($R3, 0.05, 10, 10, 'gpt-5-mini')" >/dev/null
+asteapta "după decontare felia se închide „gata”" "$(j "$(svc "SELECT public.fn_ofertare_cb_felie_inchide($G3, 'gata')")" 'd.get("ok")')" True
 svc "SELECT public.fn_ofertare_cb_text_scrie(921, 'lot 2 text', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}')" >/dev/null
 CL1L=$(j "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_cerere(4,'cant_extragere','lista','{1}',24)")" 'd["cerere_id"]')
 asteapta "documentul din lotul 2 refuzat pe o cerere pentru lotul 1" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($CL1L, 921, '$SHA21', '921', 'gpt-5-mini@p1@n1@f1', 1)")" 'd.get("refuz")')" lot
 
 # ── extragere: „gata” doar cu toate feliile; cache; imuabilitate ──
 svc "SELECT public.fn_ofertare_cb_obs_scrie($F0, '[{\"lot_domeniu\":\"toate\",\"lot_nr\":[],\"rol_sursa\":\"atr\",\"rol_decis_de\":\"marcaj\",\"pagina\":1,\"denumire\":\"Conducta PE Dn90\",\"rand_interval\":\"[0,17)\",\"citat_interval\":\"[0,17)\",\"cantitate_offset\":13,\"pozitie_dovedita\":true,\"tip_lucrare\":\"conducta\",\"masura\":\"lungime\",\"obiect_cheie\":\"a\",\"material\":\"PE100\",\"dn_mm\":[90],\"um_norm\":\"m\",\"cantitate\":90,\"citat\":\"ATR Strada A 90 m\",\"hash_rand\":\"$(sha x)\"}]')" >/dev/null
-svc "SELECT public.fn_ofertare_cb_felie_inchide($F0, 'gata')" >/dev/null
+asteapta "felia cu rezervarea decontată se închide „gata”" "$(j "$(svc "SELECT public.fn_ofertare_cb_felie_inchide($F0, 'gata')")" 'd.get("ok")')" True
 asteapta "„gata” refuzat cu o felie lipsă" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_inchide($X, 'gata')")" 'd.get("refuz")')" felii_negata
 F1=$(j "$(svc "SELECT public.fn_ofertare_cb_felie_incepe($X, 1, 8, 17, '$(sha y)')")" 'd["felie_id"]')
+asteapta "felie „gata” fără rezervare refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_felie_inchide($F1, 'gata')")" 'd.get("refuz")')" rezervare_nedecontata
+R4=$(j "$(svc "SELECT public.fn_ofertare_cb_rezerva($F1, 0.1000)")" 'd["rezervare_id"]')
+svc "SELECT public.fn_ofertare_cb_deconteaza($R4, 0.02, 10, 10, 'gpt-5-mini')" >/dev/null
 svc "SELECT public.fn_ofertare_cb_felie_inchide($F1, 'gata')" >/dev/null
 asteapta "extragere gata cu toate feliile; 1 observație relevantă" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_inchide($X, 'gata')")" 'd["obs_relevante"]')" 1
 asteapta "cache: aceeași versiune nu mai pornește extragere" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 903, '$SHA3', '903', 'gpt-5-mini@p1@n1@f1', 2)")" 'd["cache"]')" True
@@ -218,10 +244,11 @@ rq "snapshot-ul e imuabil (și pentru postgres)" "UPDATE public.ofertare_analiza
 q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES
    (911, 3, 'CS vechi.pdf', 'cs_volum', 'vechi', now() - interval '10 days'), (912, 3, 'raspuns nou.pdf', 'raspuns_clarificare', 'nou', now())" >/dev/null
 CL3=$(ca authenticated "$OWNER" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, status) VALUES (3, 'după termen', 'trimisa') RETURNING id")
-asteapta "după termen: moment = termenul, tardiv" "$(q "SELECT inghetat_tardiv || '|' || (moment_referinta < inghetata_la - interval '1 day') FROM public.ofertare_analiza_versiuni WHERE licitatie_id=3")" "true|true"
+asteapta "după termen: moment = termenul, tardiv, declanșator = termenul" "$(q "SELECT inghetat_tardiv || '|' || (moment_referinta < inghetata_la - interval '1 day') || '|' || declansator FROM public.ofertare_analiza_versiuni WHERE licitatie_id=3")" "true|true|termen_clarificari"
 asteapta "documentul apărut după termen NU e în manifest" "$(q "SELECT count(*) FROM public.ofertare_analiza_versiuni v, jsonb_array_elements(v.doc_manifest) e WHERE v.licitatie_id=3 AND (e->>'document_id')::int=912")" 0
 asteapta "tardiv fără proveniență ≤ termen → text_indisponibil (nu textul curent)" "$(q "SELECT e->>'text_indisponibil' FROM public.ofertare_analiza_versiuni v, jsonb_array_elements(v.doc_manifest) e WHERE v.licitatie_id=3 AND (e->>'document_id')::int=911")" true
-asteapta "clarificarea trimisă după termen NU e conținut (doar metadată)" "$(q "SELECT jsonb_array_length(clarificari) || '|' || clarificare_declansatoare_id FROM public.ofertare_analiza_versiuni WHERE licitatie_id=3")" "0|$CL3"
+asteapta "clarificarea trimisă după termen NU e conținut" "$(q "SELECT jsonb_array_length(clarificari) || '|' || coalesce(clarificare_declansatoare_id::text, '-') FROM public.ofertare_analiza_versiuni WHERE licitatie_id=3")" "0|-"
+asteapta "loturile setate după moment → eligibilitate marcată (fără istoric as-of)" "$(q "SELECT eligibilitate FROM public.ofertare_analiza_versiuni WHERE licitatie_id=3")" modificata_dupa_moment
 
 # ── jurnalizare eșuată → FĂRĂ înghețare; clarificarea rămâne ──
 q "ALTER TABLE public.ofertare_clarificari_jurnal ADD CONSTRAINT x_test_pica CHECK (licitatie_id <> 5) NOT VALID" >/dev/null
@@ -237,8 +264,20 @@ sleep 1
 CL6=$(ca authenticated "$OWNER" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, status) VALUES (6, 'q6', 'trimisa') RETURNING id")
 asteapta "lock ocupat: clarificarea scrisă, înghețarea amânată (fără așteptare)" "$(q "SELECT (SELECT count(*) FROM public.ofertare_analiza_versiuni WHERE licitatie_id=6) || '|' || (SELECT eroare FROM public.ofertare_analiza_erori WHERE clarificare_id=$CL6)")" "0|amânat (lock ocupat)"
 wait
-svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
-asteapta "restanțele: inițiala as-of momentul trimiterii, cu clarificarea" "$(q "SELECT (v.moment_referinta = (SELECT la FROM public.ofertare_clarificari_jurnal WHERE clarificare_id=$CL6))::text || '|' || jsonb_array_length(v.clarificari) FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=6")" "true|1"
+# a DOUA trimitere (lock liber) îngheață pe momentul PRIMEI (canonic), nu pe al ei
+CL6B=$(ca authenticated "$OWNER" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, status) VALUES (6, 'q6b', 'trimisa') RETURNING id")
+asteapta "a doua trimitere: inițiala pe momentul primei, declanșată de prima, doar ea în conținut" "$(q "SELECT (v.moment_referinta = (SELECT la FROM public.ofertare_clarificari_jurnal WHERE clarificare_id=$CL6))::text || '|' || (v.clarificare_declansatoare_id=$CL6) || '|' || v.inghetat_tardiv || '|' || jsonb_array_length(v.clarificari) || '|' || v.eligibilitate FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=6")" "true|true|true|1|exacta"
+asteapta "restanțele nu mai fac nimic pe licitația înghețată" "$(j "$(svc "SELECT public.fn_ofertare_cb_restante()")" 'd["inghetate"]')" 0
+
+# ── fără așteptări în trigger: rândul licitației ținut FOR UPDATE (ca de cerere / termen) nu blochează înghețarea ──
+CL7=$(ca authenticated "$OWNER" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, status) VALUES (7, 'q7', 'de_trimis') RETURNING id")
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT 1 FROM public.ofertare_licitatii WHERE id=7 FOR UPDATE;" -c "SELECT pg_sleep(4);" -c "COMMIT;" >/dev/null 2>&1 &
+sleep 1
+T0=$(date +%s%N)
+ca authenticated "$OWNER" "UPDATE public.ofertare_clarificari SET status='trimisa' WHERE id=$CL7" >/dev/null
+T1=$(date +%s%N)
+wait
+asteapta "licitația blocată FOR UPDATE: trimiterea nu așteaptă (< 2 s) și inițiala există" "$(( (T1 - T0) / 1000000 < 2000 ))|$(q "SELECT count(*) FROM public.ofertare_analiza_versiuni WHERE licitatie_id=7 AND tip='initiala'")" "1|1"
 
 # ── audit: dovezi străine, invariant per cauză, inlocuieste_id, decizia o singură dată ──
 H=$(sha a)
@@ -247,6 +286,21 @@ o="$(CA_LINII=20 svc "SELECT public.fn_ofertare_cb_audit_scrie('$AUD,\"clasifica
 grep -q 'străină snapshot' <<<"$o" || esec "dovadă străină: $o"; ok "refuz: dovadă istorică străină snapshot-ului"
 o="$(CA_LINII=20 svc "SELECT public.fn_ofertare_cb_audit_scrie('$AUD,\"clasificare\":\"deja_observat\",\"cauza\":\"intrebat_de_noi\",\"dovezi_istoric\":{\"clarificare_ids\":[$CL2]}}')" || true)"
 grep -q 'străină snapshot' <<<"$o" || esec "clarificare din afara snapshot-ului: $o"; ok "refuz: clarificare care nu era în snapshot"
+o="$(CA_LINII=20 svc "SELECT public.fn_ofertare_cb_audit_scrie('$AUD,\"clasificare\":\"modificare_ulterioara\",\"cauza\":\"document_nou\",\"dovezi_istoric\":{\"document_ids\":[905]}}')" || true)"
+grep -q 'nu e permisă înainte de PR6' <<<"$o" || esec "document_nou: $o"; ok "refuz: cauza document_nou (până la PR6)"
+o="$(CA_LINII=20 svc "SELECT public.fn_ofertare_cb_audit_scrie('$AUD,\"clasificare\":\"nedeterminabil\",\"dovezi_istoric\":{\"obs_ids\":[$OB]}}')" || true)"
+grep -q 'afara calculului' <<<"$o" || esec "obs fără calcul: $o"; ok "refuz: observație istorică fără calculul snapshot-ului"
+SNAP3=$(q "SELECT id FROM public.ofertare_analiza_versiuni WHERE licitatie_id=3")
+o="$(CA_LINII=20 svc "SELECT public.fn_ofertare_cb_audit_scrie('{\"versiune_analiza_id\":$SNAP3,\"document_id\":911,\"doc_sha256\":\"$H\",\"citire_id\":\"911:$H:t1\",\"citire_sursa_tip\":\"text\",\"citire_sursa_sha\":\"$H\",\"citire_completa\":true,\"executie_id\":\"$H\",\"pereche_id\":\"$H\",\"intrebare_text\":\"q\",\"raspuns_text\":\"r\",\"text_verificat\":true,\"asociere_dovedita\":true,\"efect\":\"confirmare\",\"regula\":\"reguli@1\",\"clasificare\":\"omisiune\",\"cauza\":\"detectat_neintrebat\",\"dovezi_istoric\":{}}')" || true)"
+grep -q 'eligibilitate modificată' <<<"$o" || esec "eligibilitate: $o"; ok "refuz: clasificare automată pe snapshot cu eligibilitate modificată după moment"
+# simularea: același lot + exact manifestul snapshot-ului
+o="$("${PSQL[@]}" -d "$BAZA" -Atc "SELECT public.fn_ofertare_cb_calcul_scrie(jsonb_build_object('licitatie_id',102,'lot_domeniu','toate','lot_nr','[]'::jsonb,'tip','simulare','pe_snapshot_id',$SNAP,'algoritm_versiune','c1','praguri','{}'::jsonb,'extractor_id','x','doc_manifest',(SELECT doc_manifest FROM public.ofertare_analiza_versiuni WHERE id=$SNAP) || jsonb_build_array(jsonb_build_object('document_id',904,'sha256','$H')),'obs_manifest','[]'::jsonb,'alias_manifest','[]'::jsonb,'decizii_manifest','[]'::jsonb,'acoperire','{}'::jsonb,'stare','gata','amprenta','$H'), '[]')" 2>&1 || true)"
+grep -q 'exact manifestul' <<<"$o" || esec "simulare cu document în plus: $o"; ok "refuz: simulare cu alt manifest decât snapshot-ul"
+SIM=$(q "SELECT public.fn_ofertare_cb_calcul_scrie(jsonb_build_object('licitatie_id',102,'lot_domeniu','toate','lot_nr','[]'::jsonb,'tip','simulare','pe_snapshot_id',$SNAP,'algoritm_versiune','c1','praguri','{}'::jsonb,'extractor_id','x','doc_manifest',(SELECT doc_manifest FROM public.ofertare_analiza_versiuni WHERE id=$SNAP),'obs_manifest',jsonb_build_array(jsonb_build_object('id',$OB)),'alias_manifest','[]'::jsonb,'decizii_manifest','[]'::jsonb,'acoperire','{}'::jsonb,'stare','gata','amprenta','$H'), jsonb_build_array(jsonb_build_object('cheie','k1-dn90','rol_a','f3','rol_b','atr','obs_b',jsonb_build_array($OB),'verdict','diferenta')))->>'calcul_id'")
+CMPS=$(q "SELECT id FROM public.ofertare_cant_cmp WHERE calcul_id=$SIM")
+HS=$(sha s)
+A2=$(j "$(svc "SELECT public.fn_ofertare_cb_audit_scrie('${AUD/\"pereche_id\":\"$H\"/\"pereche_id\":\"$HS\"},\"clasificare\":\"omisiune\",\"cauza\":\"analiza_incompleta\",\"dovezi_istoric\":{},\"dovezi_simulare\":{\"calcul_id\":$SIM,\"cmp_ids\":[$CMPS]}}')")" 'd["audit_id"]')
+ok "audit analiza_incompleta cu simularea exactă a snapshot-ului ($A2)"
 o="$(CA_LINII=20 svc "SELECT public.fn_ofertare_cb_audit_scrie('$AUD,\"clasificare\":\"omisiune\",\"cauza\":\"detectat_neintrebat\",\"dovezi_istoric\":{}}')" || true)"
 grep -q 'fără dovada minimă' <<<"$o" || esec "omisiune fără comparație: $o"; ok "refuz: detectat_neintrebat fără comparație diferenta / conflict_sursa"
 AUDX=${AUD/\"text_verificat\":true/\"text_verificat\":false}
@@ -271,5 +325,5 @@ q "ALTER POLICY ofertare_cant_obs_select ON public.ofertare_cant_obs TO authenti
 o="$(revenire || true)"; grep -q 'amprenta difera' <<<"$o" || esec "drift (rolurile politicii): $o"; ok "refuz: revenire după schimbarea rolurilor unei politici (amprenta)"
 q "ALTER POLICY ofertare_cant_obs_select ON public.ofertare_cant_obs TO authenticated" >/dev/null
 revenire >/dev/null || esec "revenire: $(revenire | tail -3)"
-asteapta "după revenire: niciun obiect, triggerul scos, clarificările păstrate" "$(q "SELECT (to_regclass('public.ofertare_cant_obs') IS NULL)::text || (SELECT count(*) FROM pg_trigger WHERE tgname='trg_ofertare_cb_clarificari_jurnal') || (SELECT count(*) FROM public.ofertare_clarificari)")" "true05"
+asteapta "după revenire: niciun obiect, triggerul scos, clarificările păstrate" "$(q "SELECT (to_regclass('public.ofertare_cant_obs') IS NULL)::text || (SELECT count(*) FROM pg_trigger WHERE tgname='trg_ofertare_cb_clarificari_jurnal') || (SELECT count(*) FROM public.ofertare_clarificari)")" "true07"
 echo PASS

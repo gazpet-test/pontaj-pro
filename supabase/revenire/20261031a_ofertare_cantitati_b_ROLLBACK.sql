@@ -1,4 +1,4 @@
--- REVENIRE 20261031a — scoate schema TKT-0329 B (19 tabele, 45 de funcții fn_ofertare_cb_*, triggerul de pe ofertare_clarificari).
+-- REVENIRE 20261031a — scoate schema TKT-0329 B (19 tabele, 47 de funcții fn_ofertare_cb_*, triggerul de pe ofertare_clarificari).
 -- DATELE NOI SE PIERD (texte, observații, calcule, snapshot-uri, audit, jurnalul clarificărilor, bugete / rezervări). Nu atinge date
 -- existente. Refuză dacă obiectele s-au schimbat după aplicare (amprenta din comentariu). DOAR la cererea lui Răzvan.
 -- Armare per tranzacție:

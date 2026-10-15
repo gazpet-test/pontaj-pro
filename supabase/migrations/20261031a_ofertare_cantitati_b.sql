@@ -195,6 +195,7 @@ CREATE TABLE public.ofertare_cant_extrageri (
   stare          text NOT NULL DEFAULT 'in_lucru' CHECK (stare IN ('in_lucru', 'gata', 'partial', 'esuat')),
   obs_relevante  integer CHECK (obs_relevante IS NULL OR obs_relevante >= 0),
   cerere_id      bigint NOT NULL REFERENCES public.ofertare_ai_cereri(id),
+  reluari        jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(reluari) = 'array'),
   pornit_de      uuid,
   creat_la       timestamptz NOT NULL DEFAULT now(),
   terminat_la    timestamptz,
@@ -316,9 +317,11 @@ CREATE TABLE public.ofertare_cant_cmp (
 );
 
 -- ── snapshot (imuabil) + completări (append-only) + jurnalul clarificărilor + erori ──────────────────────
+-- licitatie_id FĂRĂ FK (review r2, Jakarinos): inserarea din triggerul clarificărilor nu are voie să aștepte FOR KEY SHARE pe
+-- ofertare_licitatii (ținut FOR UPDATE de cerere / termen); existența licitației o verifică fn_ofertare_cb_ingheata.
 CREATE TABLE public.ofertare_analiza_versiuni (
   id                           bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  licitatie_id                 bigint NOT NULL REFERENCES public.ofertare_licitatii(id),
+  licitatie_id                 bigint NOT NULL,
   lot_domeniu                  text NOT NULL CHECK (lot_domeniu IN ('toate', 'lista', 'necunoscut')),
   lot_nr                       integer[] NOT NULL DEFAULT '{}',
   tip                          text NOT NULL CHECK (tip IN ('initiala', 'recalcul')),
@@ -327,6 +330,9 @@ CREATE TABLE public.ofertare_analiza_versiuni (
   moment_referinta             timestamptz NOT NULL,
   inghetat_tardiv              boolean NOT NULL,
   termen_aproximat             boolean NOT NULL DEFAULT false,
+  -- eligibilitatea / loturile NU au istoric as-of: „exacta” = momentul e acum SAU loturile nu s-au schimbat după moment;
+  -- altfel „modificata_dupa_moment” → auditul pe acest snapshot rămâne „nedeterminabil” (review r2, Jakarinos)
+  eligibilitate                text NOT NULL CHECK (eligibilitate IN ('exacta', 'modificata_dupa_moment')),
   inghetata_la                 timestamptz NOT NULL DEFAULT now(),
   inghetata_de                 uuid,
   doc_manifest                 jsonb NOT NULL CHECK (jsonb_typeof(doc_manifest) = 'array'),
@@ -451,7 +457,7 @@ BEGIN
   EXECUTE 'CREATE TRIGGER a01_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_ai_buget FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil(''plafon_usd'', ''blocat'', ''blocat_motiv'', ''setat_de'', ''setat_la'')';
   EXECUTE 'CREATE TRIGGER a01_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_ai_cereri FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil(''stare'', ''stare_la'')';
   EXECUTE 'CREATE TRIGGER a01_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_ai_rezervari FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil(''stare'', ''cost_real'', ''tokeni_in'', ''tokeni_out'', ''model'', ''inchisa_la'')';
-  EXECUTE 'CREATE TRIGGER a01_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_cant_extrageri FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil(''stare'', ''obs_relevante'', ''terminat_la'')';
+  EXECUTE 'CREATE TRIGGER a01_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_cant_extrageri FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil(''stare'', ''obs_relevante'', ''terminat_la'', ''cerere_id'', ''reluari'')';
   EXECUTE 'CREATE TRIGGER a01_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_cant_felii FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil(''stare'', ''rezervare_id'', ''inchisa_la'')';
   EXECUTE 'CREATE TRIGGER a01_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_audit_raspunsuri FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cb_imuabil(''decizie_om'', ''decis_de'', ''decis_la'', ''nota'')';
 END $imuabil$;
@@ -466,6 +472,8 @@ BEGIN
      OR (TG_TABLE_NAME = 'ofertare_ai_rezervari' AND OLD.stare = 'deschisa' AND NEW.stare IN ('decontata', 'necunoscuta', 'abandonata'))
      OR (TG_TABLE_NAME = 'ofertare_ai_rezervari' AND OLD.stare = 'necunoscuta' AND NEW.stare = 'abandonata')
      OR (TG_TABLE_NAME = 'ofertare_cant_extrageri' AND OLD.stare = 'in_lucru' AND NEW.stare IN ('gata', 'partial', 'esuat'))
+     -- redeschiderea (doar fn_ofertare_cb_extragere_redeschide: om, cu motiv și cerere activă) — calea de reluare (review r2)
+     OR (TG_TABLE_NAME = 'ofertare_cant_extrageri' AND OLD.stare IN ('partial', 'esuat') AND NEW.stare = 'in_lucru')
      OR (TG_TABLE_NAME = 'ofertare_cant_felii' AND OLD.stare = 'in_zbor' AND NEW.stare IN ('gata', 'esuat', 'necunoscut')) THEN
     RETURN NEW;
   END IF;
@@ -612,10 +620,11 @@ AS $f$
 DECLARE f record; x record; c record; b record; v_consum numeric; v_id bigint;
 BEGIN
   IF p_suma IS NULL OR p_suma < 0.0001 OR p_suma > 2 OR p_suma <> round(p_suma, 4) THEN RETURN jsonb_build_object('refuz', 'parametri'); END IF;
+  -- ordinea lock-urilor (aceeași peste tot): felie → extragere → cerere → buget (review r2: extragerea blocată, re-verificată)
   SELECT * INTO f FROM public.ofertare_cant_felii WHERE id = p_felie_id FOR UPDATE;
   IF NOT FOUND OR f.stare <> 'in_zbor' OR f.rezervare_id IS NOT NULL THEN RETURN jsonb_build_object('refuz', 'felie'); END IF;
-  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = f.extragere_id;
-  IF x.stare <> 'in_lucru' THEN RETURN jsonb_build_object('refuz', 'extragere'); END IF;
+  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = f.extragere_id FOR SHARE;
+  IF NOT FOUND OR x.stare <> 'in_lucru' THEN RETURN jsonb_build_object('refuz', 'extragere'); END IF;
   SELECT * INTO c FROM public.ofertare_ai_cereri WHERE id = x.cerere_id FOR UPDATE;
   IF c.stare <> 'activa' OR c.valabil_pana <= now() THEN RETURN jsonb_build_object('refuz', 'cerere'); END IF;
   IF NOT public.fn_ofertare_cb_doc_in_lot(x.document_id, c.lot_domeniu, c.lot_nr) THEN RETURN jsonb_build_object('refuz', 'lot'); END IF;
@@ -710,7 +719,7 @@ CREATE FUNCTION public.fn_ofertare_cb_extragere_incepe(p_cerere_id bigint, p_doc
                                                        p_familie_id text, p_extractor_id text, p_felii_total integer)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE c record; d record; v_id bigint; v_cache bigint; v_dov jsonb;
+DECLARE c record; d record; v_id bigint; v_cache bigint; v_dov jsonb; v_txt text;
 BEGIN
   SELECT * INTO c FROM public.ofertare_ai_cereri WHERE id = p_cerere_id;
   IF NOT FOUND OR c.stare <> 'activa' OR c.valabil_pana <= now() OR c.scop <> 'cant_extragere' THEN RETURN jsonb_build_object('refuz', 'cerere'); END IF;
@@ -720,12 +729,23 @@ BEGIN
   -- dovada = EXACT predicatul unic (proveniență de transcriere SAU text_confirmat), persistată pe extragere (review r1)
   v_dov := public.fn_ofertare_cb_text_valid(c.licitatie_id, p_document_id, p_sha256);
   IF v_dov = '{}'::jsonb THEN RETURN jsonb_build_object('refuz', 'text_nevalid'); END IF;
+  -- text confirmat de om pe un document vechi (fără text_scrie): se materializează din textul curent, DOAR dacă sha-ul coincide (review r2)
   IF NOT EXISTS (SELECT 1 FROM public.ofertare_doc_texte WHERE licitatie_id = c.licitatie_id AND sha256 = p_sha256) THEN
-    RETURN jsonb_build_object('refuz', 'text_nematerializat');
+    SELECT text_extras INTO v_txt FROM public.ofertare_documente_atribuire WHERE id = p_document_id;
+    IF v_txt IS NOT NULL AND encode(sha256(convert_to(v_txt, 'UTF8')), 'hex') = p_sha256 THEN
+      INSERT INTO public.ofertare_doc_texte (licitatie_id, sha256, text) VALUES (c.licitatie_id, p_sha256, v_txt) ON CONFLICT DO NOTHING;
+    ELSE
+      RETURN jsonb_build_object('refuz', 'text_nematerializat');
+    END IF;
   END IF;
   SELECT id INTO v_cache FROM public.ofertare_cant_extrageri WHERE document_id = p_document_id AND doc_sha256 = p_sha256
      AND extractor_id = p_extractor_id AND stare = 'gata';
   IF v_cache IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'cache', true, 'extragere_id', v_cache); END IF;
+  -- o extragere partial / esuat pe aceeași muncă se REDESCHIDE (fn_ofertare_cb_extragere_redeschide), nu se dublează
+  IF EXISTS (SELECT 1 FROM public.ofertare_cant_extrageri WHERE document_id = p_document_id AND doc_sha256 = p_sha256
+               AND extractor_id = p_extractor_id AND stare IN ('partial', 'esuat')) THEN
+    RETURN jsonb_build_object('refuz', 'de_redeschis');
+  END IF;
   INSERT INTO public.ofertare_cant_extrageri (licitatie_id, document_id, doc_sha256, prov_id, dovada_decizie_id, familie_id, extractor_id,
                                               felii_total, cerere_id, pornit_de)
   VALUES (c.licitatie_id, p_document_id, p_sha256, CASE WHEN v_dov->>'tip' = 'prov' THEN (v_dov->>'id')::bigint END,
@@ -755,13 +775,14 @@ END $f$;
 CREATE FUNCTION public.fn_ofertare_cb_felie_reia(p_felie_id bigint, p_motiv text)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE f record; v_lic bigint; v_id bigint; v_max integer;
+DECLARE f record; x record; v_id bigint; v_max integer;
 BEGIN
   SELECT * INTO f FROM public.ofertare_cant_felii WHERE id = p_felie_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Felie inexistentă' USING ERRCODE = '42501'; END IF;
-  SELECT licitatie_id INTO v_lic FROM public.ofertare_cant_extrageri WHERE id = f.extragere_id;
-  IF NOT public.fn_ofertare_cb_poate(v_lic) THEN RAISE EXCEPTION 'Fără drept' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = f.extragere_id FOR SHARE;
+  IF NOT public.fn_ofertare_cb_poate(x.licitatie_id) THEN RAISE EXCEPTION 'Fără drept' USING ERRCODE = '42501'; END IF;
   IF p_motiv IS NULL OR length(btrim(p_motiv)) < 3 THEN RAISE EXCEPTION 'Motiv obligatoriu' USING ERRCODE = '22023'; END IF;
+  IF x.stare <> 'in_lucru' THEN RAISE EXCEPTION 'Extragerea nu e în lucru (se redeschide întâi)' USING ERRCODE = '55000'; END IF;
   PERFORM pg_advisory_xact_lock(hashtext('ofertare_cb_felie:' || f.munca_id));
   SELECT max(incercare) INTO v_max FROM public.ofertare_cant_felii WHERE munca_id = f.munca_id;
   IF EXISTS (SELECT 1 FROM public.ofertare_cant_felii WHERE munca_id = f.munca_id AND incercare = v_max AND stare NOT IN ('esuat', 'necunoscut')) THEN
@@ -772,14 +793,32 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'felie_id', v_id, 'incercare', v_max + 1);
 END $f$;
 
+-- închiderea feliei (review r2, Copilot): „gata” DOAR cu rezervarea aceleiași munci + încercări DECONTATĂ; „necunoscut” DOAR cu o
+-- rezervare (apelul a plecat) — rezervarea deschisă devine „necunoscuta” (rămâne în consum); fără apel = „esuat”.
 CREATE FUNCTION public.fn_ofertare_cb_felie_inchide(p_felie_id bigint, p_stare text)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
+DECLARE f record; x record; r record;
 BEGIN
-  IF p_stare NOT IN ('gata', 'esuat', 'necunoscut') THEN RAISE EXCEPTION 'Stare invalidă' USING ERRCODE = '22023'; END IF;
-  -- rezervarea feliei e cea legată de rezerva(felie) (aceeași muncă + încercare); aici doar starea
-  UPDATE public.ofertare_cant_felii SET stare = p_stare, inchisa_la = now() WHERE id = p_felie_id AND stare = 'in_zbor';
-  IF NOT FOUND THEN RETURN jsonb_build_object('refuz', 'nu_e_in_zbor'); END IF;
+  IF p_stare IS NULL OR p_stare NOT IN ('gata', 'esuat', 'necunoscut') THEN RAISE EXCEPTION 'Stare invalidă' USING ERRCODE = '22023'; END IF;
+  SELECT * INTO f FROM public.ofertare_cant_felii WHERE id = p_felie_id FOR UPDATE;
+  IF NOT FOUND OR f.stare <> 'in_zbor' THEN RETURN jsonb_build_object('refuz', 'nu_e_in_zbor'); END IF;
+  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = f.extragere_id FOR SHARE;
+  IF f.rezervare_id IS NOT NULL THEN
+    SELECT * INTO r FROM public.ofertare_ai_rezervari WHERE id = f.rezervare_id FOR UPDATE;
+    IF r.munca_id <> f.munca_id OR r.incercare <> f.incercare THEN RETURN jsonb_build_object('refuz', 'rezervare_straina'); END IF;
+  END IF;
+  IF p_stare = 'gata' THEN
+    IF x.stare <> 'in_lucru' THEN RETURN jsonb_build_object('refuz', 'extragere'); END IF;
+    IF f.rezervare_id IS NULL THEN RETURN jsonb_build_object('refuz', 'rezervare_nedecontata'); END IF;
+    IF r.stare <> 'decontata' THEN RETURN jsonb_build_object('refuz', 'rezervare_nedecontata'); END IF;
+  ELSIF p_stare = 'necunoscut' THEN
+    IF f.rezervare_id IS NULL THEN RETURN jsonb_build_object('refuz', 'fara_rezervare'); END IF;
+    IF r.stare = 'deschisa' THEN
+      UPDATE public.ofertare_ai_rezervari SET stare = 'necunoscuta', inchisa_la = now() WHERE id = r.id;
+    END IF;
+  END IF;
+  UPDATE public.ofertare_cant_felii SET stare = p_stare, inchisa_la = now() WHERE id = p_felie_id;
   RETURN jsonb_build_object('ok', true);
 END $f$;
 
@@ -789,9 +828,10 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = publi
 AS $f$
 DECLARE f record; x record; o jsonb; v_n integer := 0;
 BEGIN
-  SELECT * INTO f FROM public.ofertare_cant_felii WHERE id = p_felie_id;
+  SELECT * INTO f FROM public.ofertare_cant_felii WHERE id = p_felie_id FOR SHARE;
   IF NOT FOUND OR f.stare <> 'in_zbor' THEN RAISE EXCEPTION 'Felia nu e în zbor' USING ERRCODE = '55000'; END IF;
-  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = f.extragere_id;
+  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = f.extragere_id FOR SHARE;
+  IF x.stare <> 'in_lucru' THEN RAISE EXCEPTION 'Extragerea nu e în lucru' USING ERRCODE = '55000'; END IF;
   IF jsonb_typeof(p_obs) <> 'array' OR jsonb_array_length(p_obs) > 2000 THEN RAISE EXCEPTION 'Observații invalide' USING ERRCODE = '22023'; END IF;
   FOR o IN SELECT * FROM jsonb_array_elements(p_obs) LOOP
     INSERT INTO public.ofertare_cant_obs (licitatie_id, document_id, doc_sha256, familie_id, extragere_id, felie_nr, lot_domeniu, lot_nr,
@@ -887,21 +927,36 @@ CREATE FUNCTION public.fn_ofertare_cb_calcul_scrie(p_calcul jsonb, p_cmp jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE v_lic bigint := (p_calcul->>'licitatie_id')::bigint; v_id bigint; c jsonb; v_snap bigint := (p_calcul->>'pe_snapshot_id')::bigint;
-        v_obs bigint[]; v_nr integer[];
+        v_obs bigint[]; v_nr integer[]; s record;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.ofertare_licitatii WHERE id = v_lic) THEN RAISE EXCEPTION 'Licitație inexistentă' USING ERRCODE = '22023'; END IF;
   v_nr := public.fn_ofertare_cb_lot_canonic(coalesce(ARRAY(SELECT jsonb_array_elements_text(p_calcul->'lot_nr')::int), '{}'));
   IF NOT public.fn_ofertare_cb_lot_ok(p_calcul->>'lot_domeniu', v_nr) THEN RAISE EXCEPTION 'Lot invalid' USING ERRCODE = '22023'; END IF;
-  IF v_snap IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni WHERE id = v_snap AND licitatie_id = v_lic) THEN
-    RAISE EXCEPTION 'Snapshot străin licitației' USING ERRCODE = '22023';
+  IF jsonb_typeof(p_calcul->'doc_manifest') IS DISTINCT FROM 'array' OR jsonb_typeof(p_calcul->'obs_manifest') IS DISTINCT FROM 'array' THEN
+    RAISE EXCEPTION 'Manifest invalid' USING ERRCODE = '22023';
   END IF;
   IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_calcul->'doc_manifest') e
               WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = (e->>'document_id')::bigint AND d.licitatie_id = v_lic)) THEN
     RAISE EXCEPTION 'Document străin licitației în manifest' USING ERRCODE = '22023';
   END IF;
+  -- simularea (review r2): pe ACELAȘI lot și pe EXACT documentele + sha-urile snapshot-ului (nu documente apărute după)
+  IF p_calcul->>'tip' = 'simulare' THEN
+    SELECT * INTO s FROM public.ofertare_analiza_versiuni WHERE id = v_snap AND licitatie_id = v_lic;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Snapshot străin licitației' USING ERRCODE = '22023'; END IF;
+    IF s.lot_domeniu <> p_calcul->>'lot_domeniu' OR s.lot_nr <> v_nr THEN RAISE EXCEPTION 'Simulare pe alt lot decât snapshot-ul' USING ERRCODE = '22023'; END IF;
+    IF NOT public.fn_ofertare_cb_manifest_egal(p_calcul->'doc_manifest', s.doc_manifest) THEN
+      RAISE EXCEPTION 'Simularea nu are exact manifestul snapshot-ului' USING ERRCODE = '22023';
+    END IF;
+  ELSIF v_snap IS NOT NULL THEN
+    RAISE EXCEPTION 'Doar simularea are snapshot' USING ERRCODE = '22023';
+  END IF;
   v_obs := ARRAY(SELECT (e->>'id')::bigint FROM jsonb_array_elements(p_calcul->'obs_manifest') e);
-  IF EXISTS (SELECT 1 FROM unnest(v_obs) o WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_cant_obs x WHERE x.id = o AND x.licitatie_id = v_lic)) THEN
-    RAISE EXCEPTION 'Observație străină licitației în manifest' USING ERRCODE = '22023';
+  -- fiecare observație: a licitației ȘI a unei perechi (document, sha) din manifestul calculului
+  IF EXISTS (SELECT 1 FROM unnest(v_obs) o WHERE NOT EXISTS (
+       SELECT 1 FROM public.ofertare_cant_obs x WHERE x.id = o AND x.licitatie_id = v_lic
+          AND EXISTS (SELECT 1 FROM jsonb_array_elements(p_calcul->'doc_manifest') e
+                       WHERE (e->>'document_id')::bigint = x.document_id AND e->>'sha256' = x.doc_sha256))) THEN
+    RAISE EXCEPTION 'Observație străină licitației sau manifestului de documente' USING ERRCODE = '22023';
   END IF;
   IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_calcul->'alias_manifest') e
               WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_cant_alias a WHERE a.id = (e->>'id')::bigint AND a.licitatie_id = v_lic))
@@ -927,13 +982,16 @@ BEGIN
 END $f$;
 
 -- ── înghețarea (D1), faza 1: manifest + clarificări as-of din jurnal; idempotentă, serializată ──
--- Documentele eligibile as-of moment: ale licitației, create ≤ moment, neînlocuite ≤ moment (seap_meta.inlocuieste_id), eligibile
--- pentru lot (fn_ofertare_document_eligibil). sha-ul = al textului curent; dacă documentul a fost reprocesat DUPĂ moment → text_indisponibil.
+-- Momentul e CANONIC, același pe toate căile (trigger, restanțe, termen, manual — review r2): moment = min(prima trimitere din
+-- jurnal, termenul de clarificări / depunere, acum). Tardiv = moment < acum: atunci NU se folosește textul curent (doar proveniența
+-- ≤ moment, altfel text_indisponibil), iar eligibilitatea (fără istoric) e marcată „modificata_dupa_moment” dacă loturile s-au
+-- schimbat după moment. Documentele: ale licitației, create ≤ moment, neînlocuite ≤ moment, în lot. Fără așteptări pe rânduri.
 CREATE FUNCTION public.fn_ofertare_cb_ingheata(p_licitatie_id bigint, p_lot_domeniu text, p_lot_nr integer[], p_declansator text,
-                                              p_clarificare_id bigint, p_de uuid, p_moment timestamptz, p_fara_asteptare boolean)
+                                              p_clarificare_id bigint, p_de uuid, p_fara_asteptare boolean)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE l record; v_moment timestamptz; v_tardiv boolean := false; v_aprox boolean := false; v_termen timestamptz; v_nr integer[];
+DECLARE l record; v_moment timestamptz; v_tardiv boolean; v_aprox boolean; v_termen timestamptz; v_nr integer[]; v_elig text;
+        v_prima timestamptz; v_clar_prima bigint; v_decl text; v_clar_id bigint;
         v_docs jsonb; v_clar jsonb; v_amp text; v_id bigint; v_existent bigint; v_cheie bigint;
 BEGIN
   v_nr := public.fn_ofertare_cb_lot_canonic(p_lot_nr);
@@ -954,9 +1012,17 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Licitație inexistentă' USING ERRCODE = '22023'; END IF;
   v_termen := coalesce(l.termen_clarificari, l.termen_depunere);
   v_aprox := l.termen_clarificari IS NULL AND l.termen_depunere IS NOT NULL;
-  v_moment := least(coalesce(p_moment, now()), now());
-  IF v_termen IS NOT NULL AND v_moment > v_termen THEN v_moment := v_termen; v_tardiv := true; END IF;
-  IF p_moment IS NOT NULL AND p_moment < now() - interval '1 minute' THEN v_tardiv := true; END IF;
+  SELECT j.la, j.clarificare_id INTO v_prima, v_clar_prima FROM public.ofertare_clarificari_jurnal j
+   WHERE j.licitatie_id = p_licitatie_id AND j.eveniment = 'trimisa' ORDER BY j.la, j.id LIMIT 1;
+  v_moment := least(now(), coalesce(v_prima, 'infinity'::timestamptz), coalesce(v_termen, 'infinity'::timestamptz));
+  v_tardiv := v_moment < now();
+  -- declanșatorul ține de moment, nu de cine a apelat
+  IF v_prima IS NOT NULL AND v_moment = v_prima THEN v_decl := 'clarificare_trimisa'; v_clar_id := v_clar_prima;
+  ELSIF v_termen IS NOT NULL AND v_moment = v_termen THEN v_decl := 'termen_clarificari'; v_clar_id := NULL;
+  ELSE v_decl := p_declansator; v_clar_id := CASE WHEN p_declansator = 'clarificare_trimisa' THEN p_clarificare_id END;
+  END IF;
+  v_elig := CASE WHEN v_tardiv AND EXISTS (SELECT 1 FROM public.ofertare_loturi_jurnal j WHERE j.licitatie_id = p_licitatie_id AND j.la > v_moment)
+                 THEN 'modificata_dupa_moment' ELSE 'exacta' END;
   WITH docs AS (
     SELECT d.id, d.tip, coalesce(d.seap_meta->>'inlocuieste_id', d.id::text) AS familie,
            (SELECT p.sha256 FROM public.ofertare_doc_texte_prov p WHERE p.document_id = d.id AND p.constatat_la <= v_moment
@@ -989,19 +1055,20 @@ BEGIN
                                                   AND t.eveniment = 'trimisa' AND t.la <= v_moment)) AS x
       FROM (SELECT DISTINCT clarificare_id FROM public.ofertare_clarificari_jurnal WHERE licitatie_id = p_licitatie_id AND la <= v_moment) j) s;
   v_amp := encode(sha256(convert_to(jsonb_build_object('lic', p_licitatie_id, 'lot', p_lot_domeniu, 'nr', v_nr, 'moment', v_moment,
-                                                       'docs', v_docs, 'clar', v_clar)::text, 'UTF8')), 'hex');
+                                                       'elig', v_elig, 'docs', v_docs, 'clar', v_clar)::text, 'UTF8')), 'hex');
   INSERT INTO public.ofertare_analiza_versiuni (licitatie_id, lot_domeniu, lot_nr, tip, declansator, clarificare_declansatoare_id, moment_referinta,
-    inghetat_tardiv, termen_aproximat, inghetata_de, doc_manifest, clarificari, amprenta)
-  VALUES (p_licitatie_id, p_lot_domeniu, v_nr, 'initiala', p_declansator, p_clarificare_id, v_moment, v_tardiv, v_aprox, p_de, v_docs, v_clar, v_amp)
+    inghetat_tardiv, termen_aproximat, eligibilitate, inghetata_de, doc_manifest, clarificari, amprenta)
+  VALUES (p_licitatie_id, p_lot_domeniu, v_nr, 'initiala', v_decl, v_clar_id, v_moment, v_tardiv, v_aprox, v_elig, p_de, v_docs, v_clar, v_amp)
   ON CONFLICT DO NOTHING RETURNING id INTO v_id;
   IF v_id IS NULL THEN
     SELECT id INTO v_id FROM public.ofertare_analiza_versiuni WHERE licitatie_id = p_licitatie_id AND lot_domeniu = p_lot_domeniu AND lot_nr = v_nr AND tip = 'initiala';
     RETURN jsonb_build_object('ok', true, 'snapshot_id', v_id, 'existent', true);
   END IF;
-  RETURN jsonb_build_object('ok', true, 'snapshot_id', v_id, 'existent', false, 'moment_referinta', v_moment, 'tardiv', v_tardiv);
+  RETURN jsonb_build_object('ok', true, 'snapshot_id', v_id, 'existent', false, 'moment_referinta', v_moment, 'tardiv', v_tardiv,
+                            'declansator', v_decl, 'eligibilitate', v_elig);
 END $f$;
 
--- faza 2: texte materializate (doar sha-urile din manifest, din textul curent când sha-ul coincide) + legătura cu calculul
+-- faza 2: texte materializate (doar sha-urile din manifest, din textul curent când sha-ul coincide); calculul NU se leagă aici (PR4)
 CREATE FUNCTION public.fn_ofertare_cb_completeaza_intern(p_snapshot_id bigint)
 RETURNS bigint LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
@@ -1018,7 +1085,9 @@ BEGIN
     END IF;
     v_texte := v_texte || jsonb_build_array(jsonb_build_object('document_id', (e->>'document_id')::bigint, 'sha256', e->>'sha256'));
   END LOOP;
-  IF EXISTS (SELECT 1 FROM public.ofertare_cant_calcul c WHERE c.licitatie_id = s.licitatie_id AND c.tip = 'curent') THEN v_coer := 'calcul_depasit'; END IF;
+  -- „depășit” doar față de un calcul curent al ACELUIAȘI lot (review r2)
+  IF EXISTS (SELECT 1 FROM public.ofertare_cant_calcul c WHERE c.licitatie_id = s.licitatie_id AND c.tip = 'curent'
+               AND c.lot_domeniu = s.lot_domeniu AND c.lot_nr = s.lot_nr) THEN v_coer := 'calcul_depasit'; END IF;
   INSERT INTO public.ofertare_analiza_completari (snapshot_id, texte, calcul_id, coerenta, motiv)
   VALUES (p_snapshot_id, v_texte, NULL, v_coer, 'PR2: calculul se leagă doar prin validatorul din PR4') RETURNING id INTO v_id;
   RETURN v_id;
@@ -1035,7 +1104,7 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = publi
 AS $f$
 BEGIN
   IF NOT public.fn_ofertare_cb_poate(p_licitatie_id) THEN RAISE EXCEPTION 'Fără drept' USING ERRCODE = '42501'; END IF;
-  RETURN public.fn_ofertare_cb_ingheata(p_licitatie_id, p_lot_domeniu, p_lot_nr, 'manual', NULL, auth.uid(), NULL, false);
+  RETURN public.fn_ofertare_cb_ingheata(p_licitatie_id, p_lot_domeniu, p_lot_nr, 'manual', NULL, auth.uid(), false);
 END $f$;
 
 -- înghețarea la termen (service_role; rutina Ofertare) — pentru toate licitațiile cu termenul trecut și fără inițială
@@ -1049,7 +1118,7 @@ BEGIN
               AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = x.id AND v.tip = 'initiala'
                                 AND v.lot_domeniu = 'toate') LOOP
     BEGIN
-      PERFORM public.fn_ofertare_cb_ingheata(l.id, 'toate', '{}', 'termen_clarificari', NULL, NULL, NULL, false);
+      PERFORM public.fn_ofertare_cb_ingheata(l.id, 'toate', '{}', 'termen_clarificari', NULL, NULL, false);
       v_n := v_n + 1;
     EXCEPTION WHEN OTHERS THEN
       INSERT INTO public.ofertare_analiza_erori (licitatie_id, faza, eroare) VALUES (l.id, 'ingheata', left(SQLERRM, 1000));
@@ -1064,8 +1133,10 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_
 AS $f$ SELECT public.fn_ofertare_cb_snapshot_efectiv_intern(p_snapshot_id) WHERE (SELECT public.fn_are_acces_ofertare()) $f$;
 
 -- ── jurnalul clarificărilor + înghețarea D1: UN singur trigger, întâi jurnalul, apoi înghețarea; nu blochează clarificarea ──
+-- Fără așteptări (review r2, Jakarinos): lock consultativ try, niciun FK spre rânduri ținute FOR UPDATE, lock_timeout scurt ca plasă;
+-- orice eșec = rând în ofertare_analiza_erori, iar fn_ofertare_cb_restante reface înghețarea pe ACELAȘI moment canonic.
 CREATE FUNCTION public.fn_ofertare_cb_trg_clarificari()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '200ms'
 AS $f$
 DECLARE v_r jsonb;
 BEGIN
@@ -1083,7 +1154,7 @@ BEGIN
     IF NEW.status = 'trimisa' AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = NEW.licitatie_id AND v.tip = 'initiala'
                                                 AND v.lot_domeniu = 'toate') THEN
       BEGIN
-        v_r := public.fn_ofertare_cb_ingheata(NEW.licitatie_id, 'toate', '{}', 'clarificare_trimisa', NEW.id, auth.uid(), NULL, true);
+        v_r := public.fn_ofertare_cb_ingheata(NEW.licitatie_id, 'toate', '{}', 'clarificare_trimisa', NEW.id, auth.uid(), true);
         IF coalesce((v_r->>'amanat')::boolean, false) THEN
           INSERT INTO public.ofertare_analiza_erori (licitatie_id, clarificare_id, faza, eroare) VALUES (NEW.licitatie_id, NEW.id, 'ingheata', 'amânat (lock ocupat)');
         END IF;
@@ -1104,9 +1175,9 @@ CREATE TRIGGER trg_ofertare_cb_clarificari_jurnal AFTER INSERT OR UPDATE OF stat
 CREATE FUNCTION public.fn_ofertare_cb_audit_scrie(p_audit jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE s record; v_snap bigint := (p_audit->>'versiune_analiza_id')::bigint; v_calc bigint; v_sim bigint; v_id bigint; x text;
+DECLARE s record; cs record; v_snap bigint := (p_audit->>'versiune_analiza_id')::bigint; v_calc bigint; v_sim bigint; v_id bigint; x text;
         v_cauza text := p_audit->>'cauza'; v_inl bigint := (p_audit->>'inlocuieste_id')::bigint; v_doc bigint := (p_audit->>'document_id')::bigint;
-        v_n_cmp integer := 0; v_n_cmp_sim integer := 0; v_n_clar integer := 0; v_n_doc integer := 0;
+        v_n_cmp integer := 0; v_n_cmp_sim integer := 0; v_n_clar integer := 0; v_obs_calc bigint[];
 BEGIN
   SELECT * INTO s FROM public.ofertare_analiza_versiuni WHERE id = v_snap;
   IF NOT FOUND THEN RAISE EXCEPTION 'Snapshot inexistent' USING ERRCODE = '22023'; END IF;
@@ -1117,37 +1188,42 @@ BEGIN
                                          AND a.document_id = v_doc AND a.pereche_id = p_audit->>'pereche_id') THEN
     RAISE EXCEPTION 'inlocuieste_id străin (alt snapshot / document / pereche)' USING ERRCODE = '22023';
   END IF;
+  -- eligibilitatea snapshot-ului nu e exactă as-of → nicio clasificare automată (review r2)
+  IF s.eligibilitate <> 'exacta' AND p_audit->>'clasificare' IS DISTINCT FROM 'nedeterminabil' THEN
+    RAISE EXCEPTION 'Snapshot cu eligibilitate modificată după moment: doar „nedeterminabil”' USING ERRCODE = '22023';
+  END IF;
+  -- document_nou cere dovada structurată a comparatorului (PR6); până atunci e refuzată (review r2, Copilot)
+  IF v_cauza = 'document_nou' OR jsonb_array_length(coalesce(p_audit->'dovezi_istoric'->'document_ids', '[]')) > 0 THEN
+    RAISE EXCEPTION 'Cauza document_nou nu e permisă înainte de PR6' USING ERRCODE = '22023';
+  END IF;
   v_calc := (public.fn_ofertare_cb_snapshot_efectiv_intern(v_snap)->>'calcul_id')::bigint;
+  SELECT ARRAY(SELECT (e->>'id')::bigint FROM public.ofertare_cant_calcul c, jsonb_array_elements(c.obs_manifest) e WHERE c.id = v_calc) INTO v_obs_calc;
   FOR x IN SELECT jsonb_array_elements_text(coalesce(p_audit->'dovezi_istoric'->'cmp_ids', '[]')) LOOP
     IF v_calc IS NULL OR NOT EXISTS (SELECT 1 FROM public.ofertare_cant_cmp WHERE id = x::bigint AND calcul_id = v_calc) THEN
       RAISE EXCEPTION 'Dovadă istorică străină snapshot-ului (cmp %)', x USING ERRCODE = '22023';
     END IF;
     IF EXISTS (SELECT 1 FROM public.ofertare_cant_cmp WHERE id = x::bigint AND verdict IN ('diferenta', 'conflict_sursa')) THEN v_n_cmp := v_n_cmp + 1; END IF;
   END LOOP;
+  -- „întrebat de noi”: doar clarificări care la moment erau trimise / răspunse, cu versiunea trimisă cunoscută (review r2)
   FOR x IN SELECT jsonb_array_elements_text(coalesce(p_audit->'dovezi_istoric'->'clarificare_ids', '[]')) LOOP
-    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s.clarificari) c WHERE (c->>'clarificare_id') = x AND NOT (c->>'versiune_necunoscuta')::boolean) THEN
-      RAISE EXCEPTION 'Clarificare străină snapshot-ului sau fără versiune trimisă (%)', x USING ERRCODE = '22023';
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s.clarificari) c WHERE (c->>'clarificare_id') = x AND NOT (c->>'versiune_necunoscuta')::boolean
+                     AND c->>'status' IN ('trimisa', 'raspunsa')) THEN
+      RAISE EXCEPTION 'Clarificare străină snapshot-ului, netrimisă la moment sau fără versiune (%)', x USING ERRCODE = '22023';
     END IF;
     v_n_clar := v_n_clar + 1;
   END LOOP;
+  -- observațiile istorice: DOAR din manifestul calculului efectiv al snapshot-ului (review r2, Copilot)
   FOR x IN SELECT jsonb_array_elements_text(coalesce(p_audit->'dovezi_istoric'->'obs_ids', '[]')) LOOP
-    IF NOT EXISTS (SELECT 1 FROM public.ofertare_cant_obs WHERE id = x::bigint AND licitatie_id = s.licitatie_id) THEN
-      RAISE EXCEPTION 'Observație străină licitației (%)', x USING ERRCODE = '22023';
+    IF v_calc IS NULL OR NOT (x::bigint = ANY (v_obs_calc)) THEN
+      RAISE EXCEPTION 'Observație din afara calculului snapshot-ului (%)', x USING ERRCODE = '22023';
     END IF;
-  END LOOP;
-  -- documente noi (cauza document_nou): ale licitației, apărute DUPĂ momentul snapshot-ului, versiuni ale unui document din manifest
-  FOR x IN SELECT jsonb_array_elements_text(coalesce(p_audit->'dovezi_istoric'->'document_ids', '[]')) LOOP
-    IF NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x::bigint AND d.licitatie_id = s.licitatie_id
-                     AND d.created_at > s.moment_referinta
-                     AND EXISTS (SELECT 1 FROM jsonb_array_elements(s.doc_manifest) m WHERE m->>'document_id' = d.seap_meta->>'inlocuieste_id')) THEN
-      RAISE EXCEPTION 'Document nou invalid (%)', x USING ERRCODE = '22023';
-    END IF;
-    v_n_doc := v_n_doc + 1;
   END LOOP;
   IF p_audit ? 'dovezi_simulare' AND p_audit->'dovezi_simulare' <> 'null'::jsonb THEN
     v_sim := (p_audit->'dovezi_simulare'->>'calcul_id')::bigint;
-    IF NOT EXISTS (SELECT 1 FROM public.ofertare_cant_calcul WHERE id = v_sim AND tip = 'simulare' AND pe_snapshot_id = v_snap) THEN
-      RAISE EXCEPTION 'Simulare străină snapshot-ului' USING ERRCODE = '22023';
+    SELECT * INTO cs FROM public.ofertare_cant_calcul WHERE id = v_sim AND tip = 'simulare' AND pe_snapshot_id = v_snap;
+    -- aceeași condiție ca la scriere, re-verificată: același lot + exact manifestul snapshot-ului
+    IF NOT FOUND OR cs.lot_domeniu <> s.lot_domeniu OR cs.lot_nr <> s.lot_nr OR NOT public.fn_ofertare_cb_manifest_egal(cs.doc_manifest, s.doc_manifest) THEN
+      RAISE EXCEPTION 'Simulare străină snapshot-ului (lot / manifest)' USING ERRCODE = '22023';
     END IF;
     FOR x IN SELECT jsonb_array_elements_text(coalesce(p_audit->'dovezi_simulare'->'cmp_ids', '[]')) LOOP
       IF NOT EXISTS (SELECT 1 FROM public.ofertare_cant_cmp WHERE id = x::bigint AND calcul_id = v_sim) THEN
@@ -1159,8 +1235,7 @@ BEGIN
   -- invariantul minim per cauză (spec §5.4)
   IF (v_cauza = 'intrebat_de_noi' AND v_n_clar = 0)
      OR (v_cauza = 'detectat_neintrebat' AND v_n_cmp = 0)
-     OR (v_cauza = 'analiza_incompleta' AND v_n_cmp_sim = 0)
-     OR (v_cauza = 'document_nou' AND v_n_doc = 0) THEN
+     OR (v_cauza = 'analiza_incompleta' AND v_n_cmp_sim = 0) THEN
     RAISE EXCEPTION 'Cauza % fără dovada minimă cerută', v_cauza USING ERRCODE = '22023';
   END IF;
   INSERT INTO public.ofertare_audit_raspunsuri (licitatie_id, lot_domeniu, lot_nr, versiune_analiza_id, document_id, doc_sha256, citire_id, citire_sursa_tip,
@@ -1279,27 +1354,32 @@ AS $f$
     ELSE '{}'::jsonb END
 $f$;
 
--- restanțele (service_role, rutina Ofertare): (a) înghețările amânate / eșuate din trigger — as-of MOMENTUL primei trimiteri din jurnal;
--- (b) completările lipsă / incomplete.
+-- restanțele (service_role, rutina Ofertare): (a) înghețările amânate / eșuate din trigger (momentul e recalculat canonic);
+-- (b) completările RECUPERABILE: un sha din manifest încă nematerializat, cel mult 24 de încercări pe snapshot
+-- (text_indisponibil e terminal — nu se reîncearcă la nesfârșit; review r2, Copilot).
 CREATE FUNCTION public.fn_ofertare_cb_restante()
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE r record; v_i integer := 0; v_c integer := 0;
 BEGIN
-  FOR r IN SELECT j.licitatie_id, min(j.la) AS prima, (array_agg(j.clarificare_id ORDER BY j.la, j.id))[1] AS clar
+  FOR r IN SELECT j.licitatie_id, (array_agg(j.clarificare_id ORDER BY j.la, j.id))[1] AS clar
              FROM public.ofertare_clarificari_jurnal j WHERE j.eveniment = 'trimisa'
               AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id = j.licitatie_id AND v.tip = 'initiala'
                                 AND v.lot_domeniu = 'toate')
             GROUP BY j.licitatie_id LOOP
     BEGIN
-      PERFORM public.fn_ofertare_cb_ingheata(r.licitatie_id, 'toate', '{}', 'clarificare_trimisa', r.clar, NULL, r.prima, false);
+      PERFORM public.fn_ofertare_cb_ingheata(r.licitatie_id, 'toate', '{}', 'clarificare_trimisa', r.clar, NULL, false);
       v_i := v_i + 1;
     EXCEPTION WHEN OTHERS THEN
       INSERT INTO public.ofertare_analiza_erori (licitatie_id, clarificare_id, faza, eroare) VALUES (r.licitatie_id, r.clar, 'ingheata', left(SQLERRM, 1000));
     END;
   END LOOP;
   FOR r IN SELECT v.id FROM public.ofertare_analiza_versiuni v
-            WHERE NOT coalesce((public.fn_ofertare_cb_snapshot_efectiv_intern(v.id)->>'complet')::boolean, false)
+            WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(v.doc_manifest) m
+                           WHERE m->>'sha256' IS NOT NULL
+                             AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_completari c, jsonb_array_elements(c.texte) t
+                                              WHERE c.snapshot_id = v.id AND (t->>'document_id') = (m->>'document_id') AND t->>'sha256' = m->>'sha256'))
+              AND (SELECT count(*) FROM public.ofertare_analiza_completari c WHERE c.snapshot_id = v.id) < 24
               AND NOT EXISTS (SELECT 1 FROM public.ofertare_analiza_completari c WHERE c.snapshot_id = v.id AND c.creat_la > now() - interval '1 hour') LOOP
     BEGIN
       PERFORM public.fn_ofertare_cb_completeaza_intern(r.id);
@@ -1310,6 +1390,42 @@ BEGIN
   END LOOP;
   RETURN jsonb_build_object('ok', true, 'inghetate', v_i, 'completate', v_c);
 END $f$;
+
+-- calea de reluare (review r2, Jakarinos): extragerea partial / esuat se redeschide de un OM, cu motiv și o cerere ACTIVĂ (cheltuiala
+-- nouă se aprobă din nou); feliile eșuate / necunoscute se reiau apoi cu fn_ofertare_cb_felie_reia, cele gata rămân.
+CREATE FUNCTION public.fn_ofertare_cb_extragere_redeschide(p_extragere_id bigint, p_cerere_id bigint, p_motiv text)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $f$
+DECLARE x record; c record;
+BEGIN
+  SELECT * INTO x FROM public.ofertare_cant_extrageri WHERE id = p_extragere_id FOR UPDATE;
+  IF NOT FOUND OR NOT public.fn_ofertare_cb_poate(x.licitatie_id) THEN RAISE EXCEPTION 'Extragere inexistentă sau fără drept' USING ERRCODE = '42501'; END IF;
+  IF p_motiv IS NULL OR length(btrim(p_motiv)) < 3 OR length(p_motiv) > 300 THEN RAISE EXCEPTION 'Motiv obligatoriu' USING ERRCODE = '22023'; END IF;
+  IF x.stare NOT IN ('partial', 'esuat') THEN RAISE EXCEPTION 'Doar o extragere partial / esuat se redeschide' USING ERRCODE = '55000'; END IF;
+  SELECT * INTO c FROM public.ofertare_ai_cereri WHERE id = p_cerere_id;
+  IF NOT FOUND OR c.licitatie_id <> x.licitatie_id OR c.scop <> 'cant_extragere' OR c.stare <> 'activa' OR c.valabil_pana <= now() THEN
+    RAISE EXCEPTION 'Cerere invalidă (altă licitație, alt scop sau neactivă)' USING ERRCODE = '22023';
+  END IF;
+  IF NOT public.fn_ofertare_cb_doc_in_lot(x.document_id, c.lot_domeniu, c.lot_nr) THEN RAISE EXCEPTION 'Documentul nu e în lotul cererii' USING ERRCODE = '22023'; END IF;
+  IF public.fn_ofertare_cb_text_valid(x.licitatie_id, x.document_id, x.doc_sha256) = '{}'::jsonb THEN
+    RAISE EXCEPTION 'Textul nu mai are dovadă validă' USING ERRCODE = '55000';
+  END IF;
+  UPDATE public.ofertare_cant_extrageri
+     SET stare = 'in_lucru', terminat_la = NULL, obs_relevante = NULL, cerere_id = p_cerere_id,
+         reluari = reluari || jsonb_build_array(jsonb_build_object('la', now(), 'de', auth.uid(), 'motiv', btrim(p_motiv),
+                                                                   'stare_veche', x.stare, 'cerere_veche', x.cerere_id))
+   WHERE id = p_extragere_id;
+  RETURN jsonb_build_object('ok', true);
+END $f$;
+
+-- egalitatea exactă a două manifeste de documente: mulțimea perechilor (document_id, sha256), intrările fără sha ignorate
+CREATE FUNCTION public.fn_ofertare_cb_manifest_egal(p_a jsonb, p_b jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp
+AS $f$
+  WITH a AS (SELECT DISTINCT (e->>'document_id')::bigint AS doc, e->>'sha256' AS sha FROM jsonb_array_elements(p_a) e WHERE e->>'sha256' IS NOT NULL),
+       b AS (SELECT DISTINCT (e->>'document_id')::bigint AS doc, e->>'sha256' AS sha FROM jsonb_array_elements(p_b) e WHERE e->>'sha256' IS NOT NULL)
+  SELECT NOT EXISTS (SELECT * FROM a EXCEPT SELECT * FROM b) AND NOT EXISTS (SELECT * FROM b EXCEPT SELECT * FROM a)
+$f$;
 
 -- ── amprenta (revenirea refuză dacă obiectele s-au schimbat după aplicare) ──
 CREATE FUNCTION public.fn_ofertare_cb_amprenta()
@@ -1362,7 +1478,7 @@ BEGIN
                            'public.fn_ofertare_cb_alias(bigint,text,text,boolean)', 'public.fn_ofertare_cb_ingheata_manual(bigint,text,integer[])',
                            'public.fn_ofertare_cb_audit_decide(bigint,text,text)', 'public.fn_ofertare_cb_text(bigint,text)',
                            'public.fn_ofertare_cb_snapshot_efectiv(bigint)', 'public.fn_ofertare_cb_consum_vezi(bigint,text)',
-                           'public.fn_ofertare_cb_termen_seteaza(bigint,timestamptz,text)'] LOOP
+                           'public.fn_ofertare_cb_termen_seteaza(bigint,timestamptz,text)', 'public.fn_ofertare_cb_extragere_redeschide(bigint,bigint,text)'] LOOP
     EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO authenticated', f);
   END LOOP;
   FOREACH f IN ARRAY ARRAY['public.fn_ofertare_cb_rezerva(bigint,numeric)', 'public.fn_ofertare_cb_deconteaza(bigint,numeric,integer,integer,text)',
@@ -1404,7 +1520,7 @@ BEGIN
               WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_cb\_%' AND has_function_privilege('anon', p.oid, 'EXECUTE')) THEN
     RAISE EXCEPTION '20261031a: anon are EXECUTE';
   END IF;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_cb\_%') <> 45 THEN
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_cb\_%') <> 47 THEN
     RAISE EXCEPTION '20261031a: numar functii neasteptat (%)', (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                                                                 WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_cb\_%');
   END IF;
