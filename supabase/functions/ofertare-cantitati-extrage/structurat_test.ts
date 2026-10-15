@@ -199,7 +199,7 @@ Deno.test('r6: deciziile de rol folosite trec în RPC-ul de grup; context_schimb
     { id: 78, document_id: 999, doc_sha256: sha, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }] })
   await RULEAZA(f)
   assertEquals(f.argsGrup[0].p_decizii, [77])
-  for (const refuzGrup of ['context_schimbat', 'grup_ocupat']) {
+  for (const refuzGrup of ['context_schimbat', 'grup_ocupat', 'cerere_ocupata']) {
     const g = fals({ refuzGrup })
     const r = await RULEAZA(g)
     assertEquals([g.ai(), g.apeluri], [0, ['extragere_incepe_grup']])

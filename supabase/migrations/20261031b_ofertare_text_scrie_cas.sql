@@ -148,6 +148,14 @@ BEGIN
   IF v_dec IS DISTINCT FROM (SELECT coalesce(array_agg(y ORDER BY y), '{}') FROM unnest(coalesce(p_decizii, '{}')) y) THEN
     RETURN jsonb_build_object('refuz', 'context_schimbat', 'decizii', to_jsonb(v_dec));
   END IF;
+  -- review r7 (Jakarinos): nici cererea nu se așteaptă cât timp ținem licitația — INSERT-ul extragerii cere FOR KEY SHARE pe cerere (FK),
+  -- iar o redeschidere în curs pe alt grup o poate ține FOR UPDATE în timp ce așteaptă un document al unui producător care, la rândul
+  -- lui, așteaptă licitația. Preblocare NOWAIT: ocupată = {refuz: 'cerere_ocupata'}, nimic pornit, reîncercat.
+  BEGIN
+    PERFORM 1 FROM public.ofertare_ai_cereri WHERE id = p_cerere_id FOR KEY SHARE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RETURN jsonb_build_object('refuz', 'cerere_ocupata');
+  END;
   RETURN public.fn_ofertare_cb_extragere_incepe(p_cerere_id, p_document_id, p_sha256, p_familie_id, p_extractor_id, p_felii_total);
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[]) FROM PUBLIC, anon, authenticated, service_role;

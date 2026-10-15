@@ -133,7 +133,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       p_decizii: dDoc.map((x) => Number(x.id)).filter((x) => Number.isFinite(x)) })
     if (ex.error) { raport.push({ document_id: d.id, eroare: 'extragere_incepe: ' + ex.error.message }); continue }
     // contextul s-a schimbat sub mutex (grup / decizii de rol) sau un document e ocupat de un producător: sărit, fail-closed, reîncercat
-    if (['grup_schimbat', 'context_schimbat', 'grup_ocupat'].includes(ex.data?.refuz)) { raport.push({ document_id: d.id, sarit: ex.data.refuz }); continue }
+    if (['grup_schimbat', 'context_schimbat', 'grup_ocupat', 'cerere_ocupata'].includes(ex.data?.refuz)) { raport.push({ document_id: d.id, sarit: ex.data.refuz }); continue }
     if (ex.data?.cache) { raport.push({ document_id: d.id, cache: true, extragere_id: ex.data.extragere_id }); continue }
     let x: number
     if (ex.data?.refuz === 'extragere_in_lucru') {
