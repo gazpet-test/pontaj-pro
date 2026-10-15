@@ -204,6 +204,9 @@ class Client(unittest.TestCase):
         a = C.arbitreaza(rdir, self.edge, max_apeluri=3, seed='x')
         self.assertEqual((a['stare'], a['apeluri_acum']), ('oprita', 1))
         self.assertEqual(len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza']), 1)
+        # oprirea deja prezenta inaintea probei: tot stare, nu exceptie (Jakarinos r4 P2); pasul normal ramane exceptie
+        self.assertEqual(C.arbitreaza(rdir, self.edge, max_apeluri=3)['stare'], 'oprita')
+        with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge)
     def test_proba_nu_finalizeaza_intentia_si_raporteaza_oprirea(self):
         # Jakarinos r2 P1-3: o intentie `arbitrata` ramasa nu se finalizeaza dintr-o proba; oprirea ceruta e raportata
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
