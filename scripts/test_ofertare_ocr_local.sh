@@ -462,6 +462,61 @@ asteapta "rulare_stare: R7 oprită, rezervări deschise listate, fără textul d
   "$(ca service_role - "SELECT (x->>'stare')||'|'||(x->'rezervari_deschise')::text||'|'||(x ? 'plan')||'|'||(x->>'dezacorduri') FROM public.fn_ofertare_ocr_rulare_stare($R7) x")" "oprita|[]|false|3"
 o="$(revenire_c || true)"; grep -q "amprenta difera\|postconditie revenire" <<<"$o" || esec "revenirea c peste e trebuia refuzată: $o"; ok "refuz: revenirea 20261029c cât 20261029e e aplicată"
 
+# ── 20261030d: reluarea oprita → citita DOAR după oprirea automată pe pragul §8 (laborator OCR, decizia A Răzvan 15.10.2026) ─────
+NUMED=20261030d_ofertare_ocr_reluare
+MIGD="$RADACINA/supabase/migrations/$NUMED.sql"; ROLLD="$RADACINA/supabase/revenire/${NUMED}_ROLLBACK.sql"
+livreaza_d() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUMED:' || txid_current(), true);" -f "$MIGD" 2>&1; }
+revenire_d() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261030d', 'OCR_LOCAL_D_REVENIRE:' || txid_current(), true);" -f "$ROLLD" 2>&1; }
+python3 "$RADACINA/scripts/livrare_validator.py" "$MIGD" >/dev/null || esec "validatorul refuză 20261030d"; ok "validator livrare 20261030d"
+o="$("${PSQL[@]}" -d "$BAZA" -f "$MIGD" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "d fără gardă: $o"; ok "refuz: 20261030d fără gardă"
+q "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'preluata'" >/dev/null
+o="$(livreaza_d || true)"; grep -q "amprenta difera" <<<"$o" || esec "d peste drift trebuia refuzată: $o"
+q "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'ceruta'" >/dev/null; ok "refuz: 20261030d peste drift în b/c/e"
+livreaza_d >/dev/null || { livreaza_d; esec "livrare 20261030d"; }; ok "livrare 20261030d"
+o="$(livreaza_d || true)"; grep -q "obiectele exista deja" <<<"$o" || esec "reaplicare d: $o"; ok "refuz: reaplicare 20261030d"
+asteapta "control 0e după d" "$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" 0
+AUTO="needs_human pe 4 din 24 arbitraje Claude (> 15%, spec §8)"; MOT="reluare proba arb-v2, da Razvan 15.10"
+RE() { echo "SELECT public.fn_ofertare_ocr_reia($1, '$2')"; }
+refuz "anon: reia" anon - "$(RE "$R7" "$MOT")" "permission denied"
+refuz "authenticated (owner): reia" authenticated "$OWNER" "$(RE "$R7" "$MOT")" "permission denied"
+refuz "service_role (edge): reia" service_role - "$(RE "$R7" "$MOT")" "permission denied"
+asteapta "authenticated (owner): citește jurnalul reluărilor (gol)" "$(ca authenticated "$OWNER" "SELECT count(*) FROM public.ofertare_ocr_reluari")" 0
+refuz "anon: jurnalul reluărilor" anon - "SELECT count(*) FROM public.ofertare_ocr_reluari" "permission denied"
+rq() { local o; o="$("${PSQL[@]}" -d "$BAZA" -Atc "$2" 2>&1 || true)"; grep -q "$3" <<<"$o" || esec "$1 trebuia refuzat ($3), primit: $o"; ok "refuz: $1"; }
+rq "oprire la depășire de cost (nu §8)" "$(RE "$R7" "$MOT")" "oprita automat pe pragul"
+q "UPDATE public.ofertare_ocr_rulari SET oprit_motiv = '$AUTO' WHERE id = $R7" >/dev/null
+rq "motiv prea scurt" "$(RE "$R7" "scurt")" "Motivul reluării e obligatoriu"
+rq "rulare fără comparare încheiată" "$(RE "$R7" "$MOT")" "nu a ajuns la comparare"
+q "UPDATE public.ofertare_ocr_rulari SET comparatie_nr = 3, comparatie_sha256 = repeat('a', 64), comparatie_la = now() WHERE id = $R7" >/dev/null
+q "UPDATE public.ofertare_ocr_rulari SET cost_rezervat = 0.01 WHERE id = $R7" >/dev/null
+rq "rezervare deschisă" "$(RE "$R7" "$MOT")" "rezervări deschise"
+q "UPDATE public.ofertare_ocr_rulari SET cost_rezervat = 0, cost_abandonat = 1 - cost_usd WHERE id = $R7" >/dev/null
+rq "plafon consumat" "$(RE "$R7" "$MOT")" "Plafonul rulării e consumat"
+q "UPDATE public.ofertare_ocr_rulari SET cost_abandonat = 0 WHERE id = $R7" >/dev/null
+RX=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'"); [ -n "$RX" ] || esec "cererea RX"
+rq "altă rulare activă pe licitație" "$(RE "$R7" "$MOT")" "altă rulare activă"
+ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_anuleaza($RX)" >/dev/null
+asteapta "reluare permisă: oprita → citita, motivul opririi șters din rulare, jurnalul cu motivul, costul și arbitrajele" \
+  "$(q "SELECT (x->>'stare')||'|'||(x->>'arbitraje') FROM $(RE "$R7" "  $MOT  " | sed 's/^SELECT //') x")|$(q "SELECT stare||'|'||coalesce(oprit_motiv,'-')||'|'||(terminata_la IS NULL) FROM public.ofertare_ocr_rulari WHERE id=$R7")|$(q "SELECT oprit_motiv||'|'||motiv||'|'||cost_usd||'|'||reluat_de FROM public.ofertare_ocr_reluari WHERE rulare_id=$R7")" \
+  "citita|$(q "SELECT count(*) FROM public.ofertare_ocr_arbitraje a JOIN public.ofertare_ocr_dezacorduri d ON d.id=a.dezacord_id WHERE d.rulare_id=$R7")|citita|-|true|$AUTO|$MOT|0.0720|postgres"
+rq "reluare pe o rulare citita" "$(RE "$R7" "$MOT")" "Doar o rulare oprita se reia"
+asteapta "după reluare: rezervările merg din nou (stare citita)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rulare_stare($R7)->>'stare'")" citita
+for k in 2 3; do
+  ca service_role - "SELECT public.fn_ofertare_ocr_stare($R7, 'oprita', '$AUTO')" >/dev/null
+  q "$(RE "$R7" "$MOT")" >/dev/null || esec "reluarea $k"
+done; ok "reluările 2 și 3 (oprire automată din nou prin fn_ofertare_ocr_stare)"
+ca service_role - "SELECT public.fn_ofertare_ocr_stare($R7, 'oprita', '$AUTO')" >/dev/null
+rq "a patra reluare" "$(RE "$R7" "$MOT")" "de 3 ori"
+asteapta "jurnal: 3 reluări, R7 lăsată oprita (R8 se poate cere)" "$(q "SELECT count(*) FROM public.ofertare_ocr_reluari WHERE rulare_id=$R7")|$(q "SELECT stare FROM public.ofertare_ocr_rulari WHERE id=$R7")" "3|oprita"
+o="$(revenire_e || true)"; grep -q "amprenta difera\|postconditie revenire" <<<"$o" || esec "revenirea e peste d trebuia refuzată: $o"; ok "refuz: revenirea 20261029e cât 20261030d e aplicată"
+o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLD" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire d nearmată: $o"; ok "refuz: revenire 20261030d nearmată"
+o="$(revenire_d || true)"; grep -q "jurnalul reluarilor are randuri" <<<"$o" || esec "revenire d cu istoric: $o"; ok "refuz: revenire 20261030d cu jurnal nevid"
+q "DELETE FROM public.ofertare_ocr_reluari" >/dev/null
+revenire_d >/dev/null || { revenire_d; esec "revenire 20261030d"; }; ok "revenire 20261030d"
+asteapta "după revenirea d: amprenta b + c + e ștampilată, 25 de funcții, fără jurnal" \
+  "$(q "SELECT obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class') LIKE 'Pilot OCR local (20261029b + 20261029c + 20261029e).%amprenta=' || public.fn_ofertare_ocr_amprenta()")|$(q "SELECT count(*) FROM pg_proc WHERE proname LIKE 'fn\_ofertare\_ocr\_%'")|$(q "SELECT to_regclass('public.ofertare_ocr_reluari') IS NULL")" "t|25|t"
+livreaza_d >/dev/null || esec "dus-întors d"; revenire_d >/dev/null || esec "dus-întors d (revenire)"; ok "dus-întors 20261030d"
+
 # ── clientul ERP (scripts/ocr_local/client.py) cap-coadă pe funcțiile REALE: preia → pdf-link → plan → citiri → dezacorduri →
 #    arbitraj (fără apel plătit, SqlEdge reface arbitreaza.ts) → reconciliat → finalizata ───────────────────────────────────
 R8=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'"); [ -n "$R8" ] || esec "cererea R8"

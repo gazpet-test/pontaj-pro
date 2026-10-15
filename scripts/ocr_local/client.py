@@ -588,6 +588,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     #   apeluri.jsonl: {id, k, faza: start} SCRIS INAINTEA POST-ului; {id, k, faza: gata, rezultat: decizie | refuz | pierdut} dupa.
     #   Un start fara gata = rezultat NECUNOSCUT (cadere, transport, 409 decontat, 500, 502): posibil platit -> niciodata alt apel Claude
     #   pe acel item (la reluare: needs_human fara AI) si socotit PERMANENT needs_human la prag, chiar dupa conversia la om.
+    # FEREASTRA PRAGULUI (20261030d, laborator 15.10.2026): dupa o reluare (`erp reluata`), pragul §8 numara DOAR arbitrajele de dupa
+    # ea; cele de dinainte (baza, pe document) raman rezolvate si in cost, dar nu mai opresc rularea a doua oara pentru acelasi motiv.
+    baza = {str(k): set(v) for k, v in ((pasi(rdir).get('reluare') or {}).get('valoare') or {}).get('baza', {}).items()}
     def stare_locala():
         st = {'claude': 0, 'needs_human_claude': 0, 'om': 0, 'necunoscute': 0, 'pierdute_claude': 0, 'cost_usd': 0.0, 'per_doc': {}}
         for doc, _ in documente(r):
@@ -596,8 +599,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             necunoscute = {x['id'] for x in ap if x['faza'] == 'start' and x['a'] not in gata} - claude
             pierdute_cl = {x['id'] for x in _jsonl(d / 'pierdute.jsonl') if x.get('sursa') == 'claude'} - claude - necunoscute
             om_ids = {x['id'] for x in _jsonl(d / 'decizii_om.jsonl')}; pierdute = {x['id'] for x in _jsonl(d / 'pierdute.jsonl')}
-            st['claude'] += len(dec); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec)
-            st['necunoscute'] += len(necunoscute); st['pierdute_claude'] += len(pierdute_cl); st['om'] += len(om_ids)
+            b = baza.get(str(doc), set()); dec_f = [x for x in dec if x['id'] not in b]  # doar fereastra de dupa reluare
+            st['claude'] += len(dec_f); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec_f)
+            st['necunoscute'] += len(necunoscute - b); st['pierdute_claude'] += len(pierdute_cl - b); st['om'] += len(om_ids)
             st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec)
             st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute}
         return st
@@ -701,6 +705,29 @@ def reconciliaza_rulare(rdir, edge, n=4):
     marcheaza(rdir, 'finalizata_intentie'); tranzitie(rdir, edge, r, 'finalizata')
     heartbeat(edge, True, 'rularea %d: finalizata' % r['rulare_id'])
     return {'pagini': len(rez), 'needs_human': nh, 'reincercari': len(reluari), 'stare': 'finalizata'}
+
+@cu_lacat
+def reluata(rdir, edge):
+    """DUPA reluarea din BD (fn_ofertare_ocr_reia, 20261030d — rulata de om prin psql, cu „da”-ul lui Razvan; clientul NU o poate face):
+    confirma din BD ca rularea e iar `citita`, muta marcajul local `oprita` in `opriri_anterioare` (istoric, nu se sterge) si fixeaza
+    baza ferestrei pragului §8: toate dezacordurile deja trimise la Claude / om pana acum. Idempotent. Refuza daca omul a cerut oprirea
+    (oprire_ceruta.json) — aceea nu se reia pe aceasta cale."""
+    rdir = pathlib.Path(rdir); r = rulare(rdir)
+    if (rdir / 'oprire_ceruta.json').exists(): raise RuntimeError('Oprire ceruta de om: nu se reia pe aceasta cale')
+    s = stare_server(edge, r['rulare_id'])
+    if s['stare'] != 'citita': raise RuntimeError('BD nu arata rularea reluata (stare %s): ruleaza intai fn_ofertare_ocr_reia' % s['stare'])
+    p = pasi(rdir); o = p.get('oprita')
+    if not o: return {'deja': True, 'stare': 'citita'}
+    baza = {}
+    for doc, _ in documente(r):
+        d = rdir / ('d%d' % doc)
+        ids = {x['id'] for f in ('decizii.jsonl', 'decizii_om.jsonl', 'pierdute.jsonl') for x in _jsonl(d / f)}
+        ids |= {x['id'] for x in _jsonl(d / 'apeluri.jsonl')}
+        baza[str(doc)] = sorted(ids)
+    p['opriri_anterioare'] = {'la': time.time(), 'valoare': ((p.get('opriri_anterioare') or {}).get('valoare') or []) + [o]}
+    p['reluare'] = {'la': time.time(), 'valoare': {'baza': baza, 'oprire': o.get('valoare')}}
+    del p['oprita']; save(rdir / 'pasi.json', p)
+    return {'stare': 'citita', 'baza': {k: len(v) for k, v in baza.items()}, 'oprire_reluata': o.get('valoare')}
 
 def oprire(rdir, edge, motiv):
     """FARA lacat (review r4 Jakarinos P2): merge si cat ruleaza `arbitreaza`. Intai marcajul local oprire_ceruta.json (verificat de
