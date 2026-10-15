@@ -580,6 +580,13 @@ class Client(unittest.TestCase):
         self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '', 'motiv': 'ilizibil',
                                                           'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}})
         a = C.arbitreaza(rdir, self.edge, minim=1); self.assertEqual(a['stare'], 'oprita'); self.assertEqual(self.edge.stare, 'oprita')
+    def test_proba_oprita_pe_prag_raporteaza_apelurile(self):
+        # Jakarinos r5 P2: oprirea automata pe pragul needs_human, in proba, spune cate apeluri platite s-au facut
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '', 'motiv': 'ilizibil',
+                                                          'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}})
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)
+        self.assertEqual((a['stare'], a['apeluri_acum']), ('oprita', 1))
     def test_arbitrat_in_bd_fara_decizie_locala_devine_pierdut(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         self.edge.arbitru = lambda it: (409, {'error': 'Dezacord deja arbitrat', 'refuz': 'arbitrat'})

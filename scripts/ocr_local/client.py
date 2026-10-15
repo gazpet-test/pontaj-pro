@@ -582,7 +582,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         n = st['claude'] + st['necunoscute'] + st['pierdute_claude']; nh = st['needs_human_claude'] + st['necunoscute'] + st['pierdute_claude']
         if not (n >= minim and nh / n > prag): return None
         motiv = 'needs_human pe %d din %d arbitraje Claude (> %d%%, spec §8)' % (nh, n, prag * 100)
-        tranzitie(rdir, edge, r, 'oprita', motiv); return dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='oprita', motiv=motiv)
+        tranzitie(rdir, edge, r, 'oprita', motiv); res = dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='oprita', motiv=motiv)
+        if proba: res['apeluri_acum'] = facute  # proba raporteaza mereu cate apeluri platite a facut (Jakarinos r5 P2)
+        return res
     def om(d, ids, it, motiv):
         """needs_human fara AI; „deja arbitrat” in BD (intrerupere dupa scriere) = decis -> pierdute (needs_human local)."""
         try: scrie(edge, 'needs_human', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item_sha256': it['item_sha256'], 'motiv': motiv})
