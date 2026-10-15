@@ -185,7 +185,13 @@ def cmd_eticheteaza(a):
     for lot in loturi:
         dest = out / (lot + '.json')
         if dest.exists(): print(lot, 'deja'); continue
-        cmd = ['cmd.exe', '/c', CLAUDE, '-p', '--restricted', '--tools', 'Read', '--strict-mcp-config', '--no-session-persistence',
+        if a.trecere == 'B':
+            arr, meta = _eticheteaza_b(tr, out, lot)
+            if arr is None: print(lot, 'EROARE', meta.get('eroare')); continue
+            dest.write_text(json.dumps({'meta': dict(meta, lot=lot, trecere='B', model='gpt-6-astra'), 'etichete': arr}, ensure_ascii=False, indent=1), encoding='utf-8')
+            print(lot, len(arr), 'etichete', meta['secunde'], 's', 'AUDIT ESUAT: %d unelte' % len(meta['unelte_folosite']) if meta['unelte_folosite'] else '')
+            continue
+        cmd =['cmd.exe', '/c', CLAUDE, '-p', '--restricted', '--tools', 'Read', '--strict-mcp-config', '--no-session-persistence',
                '--model', a.model, '--output-format', 'json']
         env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_API_KEY'}  # abonament, niciodata credit API
         t0 = time.time()
@@ -202,6 +208,83 @@ def cmd_eticheteaza(a):
                            for m, u in (j.get('modelUsage') or {}).items()}, 'prompt_sha256': _sha(PROMPT.encode())}
         dest.write_text(json.dumps({'meta': meta, 'etichete': arr}, ensure_ascii=False, indent=1), encoding='utf-8')
         print(lot, len(arr), 'etichete', sec, 's')
+
+
+RUN_PAW = r'C:\ProgramData\Gazpet\Paw\bin\run_paw.cmd'
+PAW = pathlib.Path(r'C:\Users\Public\paw-data')
+PROMPT_B = PROMPT.replace(
+    'In directorul curent sunt subdirectoare z01, z02, ... Fiecare are pagina.png\n(o pagina scanata dintr-o documentatie tehnica) si tinta.md (ce zona de pe pagina trebuie transcrisa, delimitata de doua ancore).',
+    'Ai primit imagini atasate, in ordine: imaginea 1 = z01, imaginea 2 = z02, ... (pagini scanate dintr-o documentatie tehnica).\n'
+    'Tintele (ce zona de pe fiecare pagina trebuie transcrisa, delimitata de doua ancore) sunt la final, ca JSON (diacriticele ca \\uXXXX).\n'
+    'NU citi niciun fisier de pe disc si NU rula comenzi: tot ce iti trebuie e in imaginile atasate si in tinte.').replace(
+    'citeste tinta.md, apoi pagina.png;', 'citeste tinta lui, apoi imaginea lui;')
+assert PROMPT_B != PROMPT
+
+
+def _eticheteaza_b(tr, out, lot):
+    """Trecerea B: Astra (Codex gpt-6-astra) prin lansatorul unic run_paw (v4, imagini). Izolarea nu se poate impune prin acces
+    (sandbox-ul read-only al Codex citeste discul): brief-ul contine tot, iar ORICE unealta folosita (exec / mcp / web) invalideaza lotul."""
+    zs = sorted(p.name for p in (tr / lot).iterdir() if p.is_dir())
+    lista = tr / lot / 'imagini.txt'
+    lista.write_text(''.join(str((tr / lot / z / 'pagina.png').resolve()) + '\n' for z in zs), encoding='ascii')
+    tinte = {z: (tr / lot / z / 'tinta.md').read_text(encoding='utf-8') for z in zs}
+    brief = PROMPT_B + '\nTINTE_START\n' + json.dumps(tinte, ensure_ascii=True, indent=1) + '\nTINTE_END\n'
+    if any(ord(ch) > 127 for ch in brief): sys.exit('brief-ul B nu e ASCII')
+    bp = PAW / 'brief' / ('banca_B_%s_%s.md' % (tr.parent.parent.name, lot)); bp.write_text(brief, encoding='ascii')
+    op = PAW / 'out' / ('banca_B_%s_%s.log' % (tr.parent.parent.name, lot))
+    t0 = time.time()
+    subprocess.run(['cmd.exe', '/c', RUN_PAW, 'jak', str(bp), str(op), 'gpt-6-astra', str(lista)], capture_output=True, text=True, timeout=1500)
+    sec = round(time.time() - t0); log = op.read_text(encoding='utf-8-sig')
+    if 'PAW_GATA' not in log.splitlines()[-1]: return None, {'secunde': sec, 'eroare': log.splitlines()[-1][:300]}
+    corp, _, err = log.partition('\n--- stderr ---\n')
+    unelte = [l for l in err.splitlines() if l.startswith(('exec', 'mcp:', 'web search'))]
+    meta = {'secunde': sec, 'unelte_folosite': unelte, 'brief_sha256': _sha(brief.encode()), 'log': str(op)}
+    try: arr = json.loads(corp[corp.index('['):corp.rindex(']') + 1])
+    except Exception as e: return None, dict(meta, eroare='parsare: %s' % e)
+    return arr, meta
+
+
+def _ws(s): return ' '.join(str(s if s is not None else '').split())
+def _loc(s): return ''.join(str(s if s is not None else '').split())
+
+
+def cheie(e, tip_zona):
+    """Ce trebuie sa fie identic intre doua etichete: localizarea (vecinii, fara spatii) + continutul (cifre / UM / cod literal,
+    spatiile unificate DOAR in interiorul unei celule / al textului). None = eticheta nu poate intra in acord (nesigur, ilizibil, tinta)."""
+    if e is None or e.get('tinta') != 'unica' or e.get('ilizibil') or e.get('incredere') != 'sigur': return None
+    if tip_zona == 'text': c = _ws(e.get('transcriere'))
+    else: c = json.dumps([[_ws(x) for x in r] for r in (e.get('randuri') or [])], ensure_ascii=False)
+    return _loc(e.get('vecin_sus')), _loc(e.get('vecin_jos')), c
+
+
+def _etichete(banca, trecere):
+    harta = json.loads((banca / 'priv' / ('harta_%s.json' % trecere)).read_text(encoding='utf-8')); out = {}; meta = {}
+    for f in sorted((banca / 'out' / trecere).glob('lot*.json')):
+        d = json.loads(f.read_text(encoding='utf-8')); meta[f.stem] = d['meta']
+        if d['meta'].get('unelte_folosite'): continue  # lot invalidat de audit
+        for e in d['etichete']:
+            k = '%s/%s' % (f.stem, e.get('zona'))
+            if k in harta: out[harta[k]] = e
+    return out, meta
+
+
+def cmd_compara(a):
+    banca = pathlib.Path(a.banca); es = {z['zona']: z for z in json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))['zone']}
+    ea, _ = _etichete(banca, a.x); eb, _ = _etichete(banca, a.y); rez = {}; c = collections.Counter()
+    for zona, z in es.items():
+        x, y = ea.get(zona), eb.get(zona)
+        if x is None or y is None: st = 'lipsa_eticheta'
+        else:
+            kx, ky = cheie(x, z['tip_zona']), cheie(y, z['tip_zona'])
+            if kx is None or ky is None: st = 'neeligibil'  # nesigur / ilizibil / tinta ambigua sau lipsa la cel putin unul
+            elif kx == ky: st = 'acord'
+            elif kx[2] == ky[2]: st = 'dezacord_localizare'
+            elif kx[:2] == ky[:2]: st = 'dezacord_continut'
+            else: st = 'dezacord_ambele'
+        rez[zona] = st; c[(z['strat'], st)] += 1
+    (banca / ('compara_%s_%s.json' % (a.x, a.y))).write_text(json.dumps(rez, ensure_ascii=False, indent=1), encoding='utf-8')
+    tot = collections.Counter(rez.values())
+    print(json.dumps({'total': dict(tot), 'per_strat': {'%s|%s' % k: v for k, v in sorted(c.items())}}, ensure_ascii=False, indent=1))
 
 
 def cmd_raport(a):
