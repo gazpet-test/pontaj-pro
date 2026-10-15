@@ -126,40 +126,58 @@ def _md_split(chunk):
     if buf: out.append(('text', plain('\n'.join(buf))))
     return out
 
-# Normalizarea de FORMAT (laborator OCR, 15.10.2026): tokenii care sunt doar decor sau marcaj nu intra in comparare. Segmentele si
-# pozitiile caracterelor raman neatinse (BD reface fragmentele din `sursa` cu aceeasi tokenizare), iar reconcilierea foloseste aceeasi
-# functie tokens(), deci `pozitie` ramane consecventa. Cifrele, semnele si unitatile NU se ating.
-DECOR_LINE = re.compile(r'^(?:=+|\*+|\|+|[=\-_*—–~]{3,})$')  # linie doar din '=' / '*' / '|' (orice lungime) sau >= 3 caractere de chenar
-LATEX_MARK = re.compile(r'\\(?:text|mathrm|mathbf|operatorname)\{|\\[ ,;:!()\[\]]|\\(?=[%$&#_])')
+# Normalizarea de FORMAT (laborator OCR, 15.10.2026; strans dupa Jakarinos r1 NO-GO): tokenii care sunt DOVEDIT doar decor sau
+# marcaj nu intra in comparare. Segmentele si pozitiile caracterelor raman neatinse (BD reface fragmentele din `sursa` cu aceeasi
+# tokenizare), reconcilierea foloseste aceeasi tokens() si refuza (needs_human) orice inlocuire care taie un marcaj sarit.
+# Cifrele, semnele, moneda si unitatile NU se ating. Un simbol se sare doar cand contextul dovedeste ca e marcaj, nu dupa pozitie.
+DECOR_LONG = re.compile(r'^[=\-_*—–~]{3,}$')                 # chenar: >= 3 caractere de chenar (doar ele, spatiile scoase)
+DECOR_SHORT = re.compile(r'^(?:={1,2}|\|+)$')               # '=' / '==' (doar langa un chenar lung) si '|' singur pe rand
+LATEX_TEXT = re.compile(r'\\(?:text|mathrm|mathbf|operatorname)\s*\{([^{}^_\\\n]*)\}')  # doar continut simplu, fara imbricare
+LATEX_SPACE = re.compile(r'\\[ ,;:!]|\\(?=[%$&#_])')        # spatiere LaTeX / escape (semnul ramane)
+LATEX_INLINE = re.compile(r'\\\((?:(?!\\\)).)*?\\\)|\\\[(?:(?!\\\]).)*?\\\]', re.S)
+DOLLAR_MATH = re.compile(r'\$([^$\n]+)\$')                   # $...$ doar cu marcaj matematic inauntru (\, ^, _, {) - altfel e moneda
 BULLETS = set('•■▪●◦·-–—')
-FOLD = str.maketrans('ăâîșşțţšĂÂÎȘŞȚŢŠ', 'aaissttsAAISSTTS')  # doar la comparare: protecție = protectie, Ștefănești = Štefănești
+FOLD_VARIANTE = str.maketrans('šŠ', 'șȘ')                    # Š/š = Ș citit gresit (ca sedila); mereu
+FOLD_LIPSA = str.maketrans('ăâîșțĂÂÎȘȚ', 'aaistAAIST')     # diacritica lipsa: doar fara numar vecin (10 paturi != 10 pături)
+
+def _lines(val):
+    pos = 0
+    for line in val.split('\n'):
+        yield pos, line; pos += len(line) + 1
 
 def _skip_spans(val):
-    """Intervalele de caractere [s, e) care sunt doar marcaj: linii de chenar, '=' de chenar la capat de linie, marcaj LaTeX."""
-    spans = []; pos = 0
-    for line in val.split('\n'):
+    """Intervalele [s, e) care sunt doar marcaj."""
+    spans = []; lines = list(_lines(val)); kind = []
+    for pos, line in lines:
+        st = line.replace(' ', '').replace('\t', '')
+        kind.append('lung' if st and DECOR_LONG.match(st) else 'scurt' if st and DECOR_SHORT.match(st) else 'gol' if not st else 'text')
+    for n, (pos, line) in enumerate(lines):
         st = line.strip()
-        if st and DECOR_LINE.match(st.replace(' ', '')): spans.append((pos, pos + len(line)))
-        elif st:
-            lead = len(line) - len(line.lstrip()); trail = len(line.rstrip())
-            # '=' / '|' singure la capat de rand = chenar ('= NR. SIMBOL ... =', '| Dotari 4.6 |'); '==' sau '||' raman
-            # ... doar cand vecinul (peste spatii) NU e cifra: '| 5' poate fi '15' citit gresit, '= 25' continua o egalitate
-            if st[0] in '=|' and st[:2] != st[0] * 2 and not st[1:].lstrip()[:1].isdigit(): spans.append((pos + lead, pos + lead + 1))
-            if (st[-1] in '=|' and len(st) > 1 and st[-2:] != st[-1] * 2 and st[-2:] != '\\|'
-                    and not st[:-1].rstrip()[-1:].isdigit()): spans.append((pos + trail - 1, pos + trail))
-            if line.count('$') and line.count('$') % 2 == 0:                                            # $...$ pereche pe rand
-                spans += [(pos + i, pos + i + 1) for i, ch in enumerate(line) if ch == '$']
-        pos += len(line) + 1
-    for m in LATEX_MARK.finditer(val):
-        spans.append((m.start(), m.end()))
-        if m.group(0).endswith('{'):                                                                    # acolada de inchidere
-            k = val.find('}', m.end())
-            if k >= 0 and '\n' not in val[m.end():k]: spans.append((k, k + 1))
+        if kind[n] == 'lung': spans.append((pos, pos + len(line))); continue
+        if kind[n] == 'scurt':
+            vec = [kind[x] for x in (n - 1, n + 1) if 0 <= x < len(lines)]
+            if st.startswith('|') or 'lung' in vec: spans.append((pos, pos + len(line)))   # '=' singur: doar lipit de un chenar lung
+            continue
+        if kind[n] != 'text': continue
+        lead = len(line) - len(line.lstrip()); trail = len(line.rstrip())
+        # '= ... =' (rand de chenar desenat): '=' la AMBELE capete, nedublate, vecinii interiori litere -> ambele '=' sunt chenar
+        if (len(st) > 2 and st[0] == '=' and st[-1] == '=' and st[1] != '=' and st[-2] != '='
+                and st[1:].lstrip()[:1].isalpha() and st[:-1].rstrip()[-1:].isalpha()):
+            spans += [(pos + lead, pos + lead + 1), (pos + trail - 1, pos + trail)]
+        # '|' la capat de rand: doar langa o LITERA ('| Dotari'), nu langa cifra ('| 5' poate fi '15') sau alt semn
+        if len(st) > 1 and st[0] == '|' and st[1] != '|' and st[1:].lstrip()[:1].isalpha(): spans.append((pos + lead, pos + lead + 1))
+        if len(st) > 1 and st[-1] == '|' and st[-2] not in '|\\' and st[:-1].rstrip()[-1:].isalpha(): spans.append((pos + trail - 1, pos + trail))
+    for m in DOLLAR_MATH.finditer(val):
+        if re.search(r'[\\^_{]', m.group(1)): spans += [(m.start(), m.start() + 1), (m.end() - 1, m.end())]
+    for m in LATEX_TEXT.finditer(val): spans += [(m.start(), m.start(1)), (m.end() - 1, m.end())]
+    for m in LATEX_SPACE.finditer(val): spans.append((m.start(), m.end()))
+    for m in LATEX_INLINE.finditer(val): spans += [(m.start(), m.start() + 2), (m.end() - 2, m.end())]
     return spans
 
 def tokens(segs):
-    """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere. Tokenii de marcaj (chenar, LaTeX) se sar;
-    literele rasfirate („D E N U M I R E”, >= 3 litere singure despartite de cate un spatiu) devin UN token, cu cheia lipita."""
+    """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere. Tokenii de marcaj se sar; literele
+    rasfirate (>= 5 MAJUSCULE singure despartite de cate un spatiu, ex. „D E N U M I R E”) devin UN token cu cheia lipita
+    (`A B C` = trei coduri, ramane)."""
     out = []
     for si, (kind, val) in enumerate(segs):
         # un tabel e un marcaj in fluxul de text: textul mutat de o parte pe alta a unui tabel devine dezacord (review Jakarinos r3)
@@ -167,24 +185,33 @@ def tokens(segs):
         spans = _skip_spans(val)
         toks = [(m.group(0), si, m.start(), m.end()) for m in TOKEN.finditer(val)
                 if not any(s <= m.start() and m.end() <= e for s, e in spans)]
+        up = lambda t: len(t[0]) == 1 and t[0].isalpha() and t[0].isupper()
         i = 0
         while i < len(toks):
             j = i
-            while (j + 1 < len(toks) and len(toks[j][0]) == 1 and toks[j][0].isalpha() and len(toks[j + 1][0]) == 1 and toks[j + 1][0].isalpha()
-                   and val[toks[j][3]:toks[j + 1][2]] == ' '): j += 1
-            if j - i >= 2: out.append((''.join(t[0] for t in toks[i:j + 1]), si, toks[i][2], toks[j][3])); i = j + 1
+            while j + 1 < len(toks) and up(toks[j]) and up(toks[j + 1]) and val[toks[j][3]:toks[j + 1][2]] == ' ': j += 1
+            if j - i >= 4: out.append((''.join(t[0] for t in toks[i:j + 1]), si, toks[i][2], toks[j][3])); i = j + 1
             else: out.append(toks[i]); i += 1
     return out
 
 def text_keys(tl, segs):
-    """Cheile de comparare: sedila + diacritice pliate; bulina de la inceput de rand urmata de text pe acelasi rand = '-'."""
-    keys = []
+    """Cheile de comparare: sedila si Š unificate; diacritica lipsa pliata doar fara numar vecin; bulina de la inceput de rand
+    urmata de o LITERA = '-' (`- 5 m` ramane minus)."""
+    keys = []; num = lambda k: 0 <= k < len(tl) and tl[k][2] is not None and bool(NUMBER.match(tl[k][0]))
     for k, (t, si, s, e) in enumerate(tl):
         if t in BULLETS and s is not None:
             val = segs[si][1]; nl = val.rfind('\n', 0, s) + 1; eol = val.find('\n', e); eol = len(val) if eol < 0 else eol
-            if not val[nl:s].strip() and val[e:eol].strip(): keys.append('-'); continue
-        keys.append(norm_word(t).translate(FOLD))
+            if not val[nl:s].strip() and val[e:eol].lstrip()[:1].isalpha(): keys.append('-'); continue
+        w = norm_word(t).translate(FOLD_VARIANTE)
+        keys.append(w if num(k - 1) or num(k + 1) else w.translate(FOLD_LIPSA))
     return keys
+
+def whole_lines(tl, segs, i1, i2):
+    """Tokenii [i1, i2) formeaza randuri INTREGI ale aceluiasi segment text (niciun alt token pe primul / ultimul rand)."""
+    if i1 >= i2 or tl[i1][2] is None or tl[i2 - 1][1] != tl[i1][1] or any(tl[k][2] is None for k in range(i1, i2)): return False
+    si = tl[i1][1]; val = segs[si][1]; s, e = tl[i1][2], tl[i2 - 1][3]
+    nl = val.rfind('\n', 0, s) + 1; eol = val.find('\n', e); eol = len(val) if eol < 0 else eol
+    return not any(t[1] == si and t[2] is not None and (nl <= t[2] < s or e <= t[2] < eol) for t in tl)
 
 def table_rows(segs):
     # randurile complet goale nu poarta informatie (LightOn mai adauga unul) - nu intra in aliniere
@@ -244,14 +271,15 @@ def compare_text(seg_a, seg_b, base):
     # bloc MUTAT (ordinea de citire difera, ex. antet pe doua coloane): o stergere la un cititor = o inserare la celalalt, aceiasi
     # tokeni, FARA cifre -> nu e dezacord (baza ramane LightOn). Cu cifre ramane dezacord: ordinea poate schimba carui text ii apartine.
     dele = [o for o in ops if o[0] == 'delete']; ins = [o for o in ops if o[0] == 'insert']; moved = set()
-    # Strict: doar cuvinte (>= 2) si punctuatie simpla — o acolada / un semn mutat schimba sensul (x^{2+3} != x^{2}+3) — si de
-    # aceeasi parte a oricarui tabel la ambii cititori (text mutat peste un tabel ramane dezacord `contine_tabel`).
+    # Strict (Jakarinos r1: „cu TVA” mutat intre doua preturi schimba asocierea): doar RANDURI INTREGI la ambii cititori, doar cuvinte
+    # (>= 2) si punctuatie simpla, de aceeasi parte a oricarui tabel (text mutat peste un tabel ramane dezacord `contine_tabel`).
     word = lambda t: t.isalpha()
     for d in dele:
         seq = ka[d[1]:d[2]]
-        if sum(map(word, seq)) < 2 or not all(word(t) or t in '.,:;"„”' for t in seq): continue
+        if sum(map(word, seq)) < 2 or not all(word(t) or t in '.,:;"„”' for t in seq) or not whole_lines(ta, seg_a, d[1], d[2]): continue
         for x in ins:
-            if x not in moved and kb[x[3]:x[4]] == seq and ka[:d[1]].count(TABLE_MARK) == kb[:x[3]].count(TABLE_MARK):
+            if (x not in moved and kb[x[3]:x[4]] == seq and ka[:d[1]].count(TABLE_MARK) == kb[:x[3]].count(TABLE_MARK)
+                    and whole_lines(tb, seg_b, x[3], x[4])):
                 moved.update((d, x)); break
     groups = []
     for op, a1, a2, b1, b2 in ops:

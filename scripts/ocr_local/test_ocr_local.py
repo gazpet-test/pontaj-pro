@@ -535,7 +535,8 @@ class NormalizareFormat(unittest.TestCase):
         for a, b in [('Titlu\n\n==============================\nText', 'Titlu\nText'),          # chenar de '='
                      ('Titlu\n---\nText', 'Titlu\nText'), ('A\n=\n==========\nB', 'A\nB'),
                      ('= NR. SIMBOL ART. CANTITATE =', 'NR. SIMBOL ART. CANTITATE'),          # '=' de chenar la capat de rand
-                     ('| Dotari', 'Dotari'), ('Text\n*\n\n*\nAlt', 'Text\nAlt'),
+                     ('| Dotari', 'Dotari'), ('Text\n***\nAlt', 'Text\nAlt'), ('Text\n|\nAlt', 'Text\nAlt'),
+                     ('Curent \\( 5 \\) A', 'Curent 5 A'), ('$\\Phi 14$ otel', '\\(\\Phi\\) 14 otel'),
                      ('Curent $0,04\\ \\text{A}$ maxim', 'Curent 0,04 A maxim'),              # LaTeX in jurul aceluiasi text
                      ('masuri de protecție', 'masuri de protectie'), ('Ștefănești', 'Štefănești'),  # diacritice
                      ('D E N U M I R E', 'DENUMIRE'), ('A R T I C O L', 'ARTICOL'),          # litere rasfirate
@@ -547,8 +548,23 @@ class NormalizareFormat(unittest.TestCase):
         for a, b in [('D = 10 - 16 MM', 'D = 10 -16 MM'), ('–16', '-16'), ('0,056', '0.056'), ('5 m3', '5 m³'),
                      ('$0,04$ A', '0,4 A'), ('x^{2+3}', 'x^{2}+3'), ('L = 25', 'L 25'), ('$ 100', '100'),
                      ('EPUIZAREA', 'EPUZAREA'), ('Total 1250 lei\nNota', 'Nota\nTotal 1250 lei'),  # bloc mutat CU cifre ramane
-                     ('| 5 buc', '5 buc'), ('Lungime 12 |', 'Lungime 12'), ('= 25 m', '25 m'), ('== Titlu', 'Titlu')]:
+                     ('| 5 buc', '5 buc'), ('Lungime 12 |', 'Lungime 12'), ('= 25 m', '25 m'), ('== Titlu', 'Titlu'),
+                     # regresiile Jakarinos r1 (laborator): operator / moneda / minus / asociere / LaTeX imbricat / coduri / diacritica langa cifra
+                     ('2\n*\n3', '2\n3'), ('100 $ si 200 $', '100 si 200'), ('- 5 m', '• 5 m'), ('Q =\n10 m', 'Q\n10 m'),
+                     ('Pret materiale cu TVA 100 lei si pret manopera 200 lei', 'Pret materiale 100 lei si pret manopera cu TVA 200 lei'),
+                     ('\\mathrm{x^{2}+3}', 'x^{2+3}'), ('Coduri A B C', 'Coduri ABC'), ('10 paturi', '10 pături'),
+                     ('Nota\n=\nTotal', 'Nota\nTotal'), ('A\ncu TVA\nB 100', 'A\nB 100\ncu TVA')]:
             self.assertTrue(self.dez(a, b), (a, b))
+    def test_reconcilierea_nu_taie_marcajul_sarit(self):
+        # Jakarinos r1 P1-4: ales_mineru peste `\mathrm{5}` ar lasa `\mathrm{6 si 9 V` -> pagina = needs_human
+        from .reconcile import apply_band
+        a, b = 'Curent \\mathrm{5} si 7 V', 'Curent 6 si 9 V'
+        _, its = compare_band(self.TXT, a, OK, b, OK); self.assertTrue(its)
+        txt, needs = apply_band(a, b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its})
+        self.assertTrue(needs, txt)
+        # fara marcaj taiat, aceeasi decizie se aplica normal
+        _, its = compare_band(self.TXT, 'Curent 5 si 7 V', OK, b, OK)
+        self.assertEqual(apply_band('Curent 5 si 7 V', b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its}), ('Curent 6 si 9 V', False))
     def test_sursa_ramane_exacta(self):
         # fragmentul pentru arbitru e tot subsirul exact din citire, chiar daca intre tokeni sunt marcaje sarite
         a = 'Curent $0,04\\ \\text{A}$ si 7 V'; b = 'Curent 0,04 A si 9 V'

@@ -5,7 +5,7 @@ Pastreaza tripletul (citire LightOn / citire MinerU / ales) pentru fiecare dezac
 import json, pathlib
 import hashlib
 import os
-from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result
+from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result, _skip_spans
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -77,6 +77,9 @@ def apply_band(raw_a, raw_b, items, decisions):
         elif ta and ta[-1][3] is not None: si, start = ta[-1][1], ta[-1][3]; end = start; new = ' ' + new
         else: needs = True; continue
         if a1 < a2 and ta[a2 - 1][1] != si: needs = True; continue  # dezacord peste doua segmente - nu se coase automat
+        # intervalul inlocuit atinge un marcaj sarit la comparare ($, \text{, }, \(, chenar): l-ar putea taia pe jumatate (ex. `\mathrm{6 si 9`)
+        # -> om (Jakarinos r1 laborator, P1-4)
+        if any((s < end and start < e) if end > start else s < start < e for s, e in _skip_spans(sa[si][1])): needs = True; continue
         edits.setdefault(si, []).append((start, end, new))
     segs = [list(s) for s in sa]
     for si, lst in edits.items():
