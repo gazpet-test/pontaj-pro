@@ -7,7 +7,7 @@
 # argumente fara shell, timeout pe tot arborele, lock per conversatie Copilot, CDP doar loopback, fara ferestre ascunse.
 # v4 (laborator OCR, propunere 15.10.2026): DOAR pentru jak, [imagini.txt] = lista (o cale pe linie) de cel mult 10 fisiere .png
 #   sub C:\Users\Public\paw-data\banca; fiecare: cale sigura, <= 20 MB, semnatura PNG, decodabila, <= 40 MP. Se COPIAZA intr-un
-#   director PRIVAT al rularii (%LOCALAPPDATA%\Temp\paw_img\<runid>) din handle-ul deschis o data (calea finala sub banca,
+#   director PRIVAT al rularii (%LOCALAPPDATA%\PawImg\<runid>, ACL protejat) din handle-ul deschis o data (calea finala sub banca,
 #   fara hardlink), plafonat in flux; pe copie: IHDR + lantul de chunk-uri pe octeti (fara decodor). Codex primeste copiile (--image=...).
 #   Model de amenintare: imaginile sunt ostile; procesele aceluiasi utilizator Windows nu sunt frontiera. [imagini.txt] e generat intern
 #   (banca.py), fara ghilimele: wrapperul CMD nu e frontiera pentru argumente neincrezatoare.
@@ -18,13 +18,15 @@ $DATA = "C:\Users\Public\paw-data"
 $BRIEF_ROOTS = @("$DATA\brief", "C:\Users\Public\erp_review")
 $OUT_ROOT = "$DATA\out"
 $IMG_ROOT = "$DATA\banca"
-$IMG_TMP = Join-Path $env:LOCALAPPDATA "Temp\paw_img"   # privat (ACL doar utilizatorul + SYSTEM/Admins), nu paw-data
-$IMG_MAX = 10; $IMG_MAX_BYTES = 20MB; $IMG_MAX_PIX = 40000000; $IMG_MAX_SIDE = 20000
-$IMG_TOT_BYTES = 60MB; $IMG_TOT_PIX = 120000000; $LISTA_MAX_BYTES = 16KB
+$IMG_TMP = Join-Path $env:LOCALAPPDATA "PawImg"   # baza proprie, ACL PROTEJAT creat de lansator (fara mostenire), verificat la fiecare rulare
+$IMG_MAX = 10; $IMG_MAX_BYTES = 20MB; $IMG_MAX_PIX = 25000000; $IMG_MAX_SIDE = 10000
+$IMG_TOT_BYTES = 60MB; $IMG_TOT_PIX = 100000000; $LISTA_MAX_BYTES = 16KB
+$IMG_MAX_DECOD = 128MB; $IMG_TOT_DECOD = 512MB   # octeti decodati (w*h*canale*adancime) - decodorul e cel din Codex (Rust image, local)
 $JURNAL = "$DATA\paw_runs.log"
 $REPO = "C:\Users\Gazpet-Ai\gazpet-erp"
 $RUNID = (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + ([guid]::NewGuid().ToString("N").Substring(0, 6))
 $T0 = Get-Date
+$script:ImgHandles = @()
 $TOOLS = @{
   jak   = @{ exe = "C:\Program Files\nodejs\node.exe"; modele = @("", "gpt-6-astra", "gpt-5.5-codex", "gpt-5.5"); timeout = 1200 }
   cop   = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @("6abc000f", "6ac5006f"); timeout = 1800 }
@@ -115,6 +117,26 @@ public static string FinalPath(Microsoft.Win32.SafeHandles.SafeFileHandle h) {
   return r;
 }
 "@
+function SecPrivat() {
+  $sec = New-Object System.Security.AccessControl.DirectorySecurity
+  $sec.SetAccessRuleProtection($true, $false)
+  $f = [System.Security.AccessControl.FileSystemRights]::FullControl
+  $inh = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
+  $pr = [System.Security.AccessControl.PropagationFlags]::None; $ok = [System.Security.AccessControl.AccessControlType]::Allow
+  foreach ($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User,
+                     (New-Object Security.Principal.SecurityIdentifier "S-1-5-18"), (New-Object Security.Principal.SecurityIdentifier "S-1-5-32-544"))) {
+    $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, $f, $inh, $pr, $ok)))
+  }
+  return $sec
+}
+function VerificaAclPrivat([string]$d) {
+  $acl = [IO.Directory]::GetAccessControl($d)
+  if (-not $acl.AreAccessRulesProtected) { throw "ACL mostenit pe $d (trebuie protejat)" }
+  $permis = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, "S-1-5-18", "S-1-5-32-544")
+  foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($r.AccessControlType -eq "Allow" -and ($permis -notcontains $r.IdentityReference.Value)) { throw ("ACL nepermis pe " + $d + ": " + $r.IdentityReference.Value) }
+  }
+}
 function SubRadacina([string]$final, [string]$root) {
   $rr = ([IO.Path]::GetFullPath($root)).TrimEnd("\") + "\"
   return $final.StartsWith($rr, [StringComparison]::OrdinalIgnoreCase)
@@ -128,9 +150,16 @@ function CitesteIhdr([byte[]]$h) {
   $w = ([long]$h[16] -shl 24) + ([long]$h[17] -shl 16) + ([long]$h[18] -shl 8) + [long]$h[19]
   $ht = ([long]$h[20] -shl 24) + ([long]$h[21] -shl 16) + ([long]$h[22] -shl 8) + [long]$h[23]
   if ($w -lt 1 -or $ht -lt 1 -or $w -gt $IMG_MAX_SIDE -or $ht -gt $IMG_MAX_SIDE -or ($w * $ht) -gt $IMG_MAX_PIX) { throw "dimensiuni PNG nepermise ($w x $ht)" }
-  return ($w * $ht)
+  $bd = [int]$h[24]; $ct = [int]$h[25]
+  $legal = @{ 0 = @(1, 2, 4, 8, 16); 2 = @(8, 16); 3 = @(1, 2, 4, 8); 4 = @(8, 16); 6 = @(8, 16) }
+  if (-not $legal.ContainsKey($ct) -or $legal[$ct] -notcontains $bd -or $h[26] -ne 0 -or $h[27] -ne 0 -or $h[28] -gt 1) { throw "IHDR nelegal (bit depth $bd, color type $ct)" }
+  $can = @{ 0 = 1; 2 = 3; 3 = 1; 4 = 2; 6 = 4 }[$ct]
+  # decodorul lucreaza cel putin pe 8 biti/esantion si de regula extinde paleta la RGBA: plafonul se ia pe cazul defavorabil (4 canale)
+  $decod = [long]$w * [long]$ht * [Math]::Max($can, 4) * [Math]::Max(1, [int]($bd / 8))
+  if ($decod -gt $IMG_MAX_DECOD) { throw "imagine prea mare decodata ($decod octeti)" }
+  return @{ pixeli = ($w * $ht); decod = $decod }
 }
-function CopiazaVerificat([string]$src, [string]$dst) {
+function CopiazaVerificat([string]$src, [string]$dst, [long]$buget) {
   $in = [IO.File]::Open($src, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
   try {
     $fin = [PawV4.Fs]::FinalPath($in.SafeFileHandle)
@@ -143,28 +172,35 @@ function CopiazaVerificat([string]$src, [string]$dst) {
       if (-not (SubRadacina $finOut $script:ImgDirFull)) { throw "destinatia rezolvata in afara directorului rularii: $finOut" }
       $buf = New-Object byte[] 65536; $tot = 0; $hdr = New-Object byte[] 33; $hn = 0
       while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
-        $tot += $n; if ($tot -gt $IMG_MAX_BYTES) { throw "imagine peste limita in timpul copierii: $src" }
+        $tot += $n; if ($tot -gt $IMG_MAX_BYTES -or $tot -gt $buget) { throw "imagine peste limita (per imagine sau agregat) in timpul copierii: $src" }
         if ($hn -lt 33) { $k = [Math]::Min(33 - $hn, $n); [Array]::Copy($buf, 0, $hdr, $hn, $k); $hn += $k }
         $out.Write($buf, 0, $n)
       }
     } finally { $out.Close() }
   } finally { $in.Close() }
-  return @{ octeti = $tot; pixeli = (CitesteIhdr $hdr) }
+  $ih = CitesteIhdr $hdr
+  # copia ramane deschisa DOAR pentru citire, fara FILE_SHARE_WRITE/DELETE, pana termina consumatorul: nu poate fi rescrisa,
+  # redenumita sau stearsa (nici directorul ei) intre verificare si citire (Jakarinos v4.1 P1)
+  $script:ImgHandles += [IO.File]::Open($dst, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  return @{ octeti = $tot; pixeli = $ih.pixeli; decod = $ih.decod }
 }
 function StructuraPng([string]$f) {
   # fara decodor in lansator (Jakarinos/Copilot P1): doar mersul pe chunk-uri, pe octeti, plafonat: fiecare chunk incape in fisier,
   # primul e IHDR, ultimul IEND, nimic dupa. Decodarea o face consumatorul (Codex trimite imaginea mai departe).
-  $b = [IO.File]::ReadAllBytes($f); $pos = 8; $n = 0; $prim = $null; $ultim = $null
+  $b = [IO.File]::ReadAllBytes($f); $pos = 8; $n = 0; $prim = $null; $ultim = $null; $idat = 0
   while ($pos -lt $b.Length) {
     if ($pos + 12 -gt $b.Length) { throw "PNG trunchiat: $f" }
     $len = ([long]$b[$pos] -shl 24) + ([long]$b[$pos + 1] -shl 16) + ([long]$b[$pos + 2] -shl 8) + [long]$b[$pos + 3]
     $tip = [Text.Encoding]::ASCII.GetString($b, $pos + 4, 4)
     if ($tip -notmatch '^[A-Za-z]{4}$' -or $len -gt ($b.Length - $pos - 12)) { throw "chunk PNG invalid: $f" }
-    if (-not $prim) { $prim = $tip }; $ultim = $tip; $pos += 12 + $len; $n++
+    if (-not $prim) { $prim = $tip } elseif ($tip -eq "IHDR") { throw "IHDR duplicat: $f" }
+    if ($tip -eq "IDAT") { $idat++ }
+    $ultim = $tip; $pos += 12 + $len; $n++
     if ($n -gt 100000) { throw "prea multe chunk-uri: $f" }
     if ($tip -eq "IEND") { break }
   }
-  if ($prim -ne "IHDR" -or $ultim -ne "IEND" -or $pos -ne $b.Length) { throw "structura PNG invalida: $f" }
+  if ($prim -ne "IHDR" -or $ultim -ne "IEND" -or $pos -ne $b.Length -or $idat -lt 1) { throw "structura PNG invalida: $f" }
+  # CRC-urile nu se verifica (cost in PowerShell); structura nu e sanitizare - decodarea ramane la consumator (documentat)
 }
 function PregatesteImagini([string]$lista) {
   $listaFull = CaleSigura $lista @($IMG_ROOT) $true
@@ -172,6 +208,7 @@ function PregatesteImagini([string]$lista) {
   $fs = [IO.File]::Open($listaFull, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
   try {
     if (-not (SubRadacina ([PawV4.Fs]::FinalPath($fs.SafeFileHandle)) $IMG_ROOT)) { throw "lista rezolvata in afara radacinii" }
+    if ([PawV4.Fs]::Links($fs.SafeFileHandle) -ne 1) { throw "hardlink refuzat (lista)" }
     $raw = New-Object byte[] ($LISTA_MAX_BYTES + 1); $got = 0
     while ($got -le $LISTA_MAX_BYTES -and ($n = $fs.Read($raw, $got, $raw.Length - $got)) -gt 0) { $got += $n }
   } finally { $fs.Close() }
@@ -185,20 +222,23 @@ function PregatesteImagini([string]$lista) {
   foreach ($l in $linii) { if ($l.Length -gt 260) { throw "linie prea lunga in lista de imagini" } }
   $dir = Join-Path $IMG_TMP $RUNID
   [void](CaleSigura (Join-Path $dir "x.png") @($IMG_TMP) $false)   # parintii existenti verificati (fara reparse) INAINTE de scriere
-  if (-not (Test-Path -LiteralPath $IMG_TMP)) { New-Item -ItemType Directory -Path $IMG_TMP | Out-Null }
+  if (-not (Test-Path -LiteralPath $IMG_TMP)) { [void][IO.Directory]::CreateDirectory($IMG_TMP, (SecPrivat)) }
+  VerificaAclPrivat $IMG_TMP
   [void](CaleSigura (Join-Path $dir "x.png") @($IMG_TMP) $false)
-  New-Item -ItemType Directory -Path $dir | Out-Null
+  if (Test-Path -LiteralPath $dir) { throw "directorul rularii exista deja: $dir" }
+  [void][IO.Directory]::CreateDirectory($dir, (SecPrivat))
+  VerificaAclPrivat $dir
   $script:ImgDirCreat = $dir
   $script:ImgDirFull = CaleSigura (Join-Path $dir "x.png") @($IMG_TMP) $false | Split-Path -Parent
-  $copii = @(); $k = 0; $totB = 0; $totP = 0
+  $copii = @(); $k = 0; $totB = 0; $totP = 0; $totD = 0
   try {
     foreach ($l in $linii) {
       $src = CaleSigura $l @($IMG_ROOT) $true
       if ([IO.Path]::GetExtension($src).ToLower() -ne ".png") { throw "doar .png: $src" }
       $k++; $dst = Join-Path $dir ("img{0:D2}.png" -f $k)
-      $r = CopiazaVerificat $src $dst
-      $totB += $r.octeti; $totP += $r.pixeli
-      if ($totB -gt $IMG_TOT_BYTES -or $totP -gt $IMG_TOT_PIX) { throw "plafonul agregat de imagini depasit" }
+      $r = CopiazaVerificat $src $dst ($IMG_TOT_BYTES - $totB)
+      $totB += $r.octeti; $totP += $r.pixeli; $totD += $r.decod
+      if ($totB -gt $IMG_TOT_BYTES -or $totP -gt $IMG_TOT_PIX -or $totD -gt $IMG_TOT_DECOD) { throw "plafonul agregat de imagini depasit" }
       StructuraPng $dst
       $copii += $dst
     }
@@ -206,13 +246,16 @@ function PregatesteImagini([string]$lista) {
   return @{ dir = $dir; copii = $copii }
 }
 function StergeDirImg([string]$d) {
-  # stergere doar daca directorul e tot cel creat (nu reparse, sub tmp_img)
+  # inchide intai copiile tinute deschise, apoi sterge doar directorul creat de rulare; orice abandon se jurnalizeaza
+  foreach ($h in $script:ImgHandles) { try { $h.Close() } catch {} }; $script:ImgHandles = @()
+  $motiv = $null
   try {
     $it = Get-Item -LiteralPath $d -Force -ErrorAction Stop
-    if ($it.Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
-    if (-not (SubRadacina $it.FullName $IMG_TMP)) { return }
-    Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction Stop
-  } catch { try { Add-Content -LiteralPath $JURNAL -Value ("{0} | tmp_img NESTERS: {1} | {2}" -f $RUNID, $d, $_.Exception.Message) -Encoding UTF8 } catch {} }
+    if ($it.Attributes -band [IO.FileAttributes]::ReparsePoint) { $motiv = "reparse" }
+    elseif (-not (SubRadacina $it.FullName $IMG_TMP)) { $motiv = "in afara bazei" }
+    else { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction Stop }
+  } catch { $motiv = $_.Exception.Message }
+  if ($motiv) { try { Add-Content -LiteralPath $JURNAL -Value ("{0} | tmp_img NESTERS: {1} | {2}" -f $RUNID, $d, $motiv) -Encoding UTF8 } catch {} }
 }
 
 # --- validari ---
