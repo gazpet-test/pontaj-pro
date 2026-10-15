@@ -100,13 +100,18 @@ Deno.test('cascadă: Haiku nesigur (needs_human sau ieșire invalidă) → Sonne
   }
 })
 
-Deno.test('cascadă: eroare API la Sonnet după Haiku → 502, rezervarea rămâne deschisă, nicio decizie', async () => {
+Deno.test('cascadă: eroare API / rețea la Sonnet după Haiku → decontare fail-closed: needs_human, Haiku real + limita Sonnet (Copilot r1 P1)', async () => {
   const it = await itemDeTest({ diferenta_numerica: true })
   for (const al2lea of [{ status: 529 }, { arunca: true }]) {
     const { m, apeluri, cereriApi } = mediu(it, { apiSeq: [{}, al2lea] })
     const r = await arbitreaza(cerere(corpDe(it)), m); const j = await r.json()
-    assert.equal(r.status, 502); assert.equal(j.rezervare_id, 7); assert.equal(j.filtru, 'ales_mineru'); assert.equal(cereriApi.length, 2)
-    assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_scrie_arbitraj'))
+    assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(cereriApi.length, 2); assert.equal(j.decizie.decizie, 'needs_human')
+    const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+    const rez = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
+    assert.equal(a.decizie, 'needs_human'); assert.equal(a.text, ''); assert.equal(a.arbitru_model, 'claude-sonnet-5')
+    assert.match(a.motiv, /^\[Haiku: ales_mineru, 3000\/200 tok, 0\.0004\$\] \[Sonnet: esuat \(.+\), cost estimat 0\.\d{4}\$\] la om$/)
+    assert.equal(a.tokens_in, 3000); assert.ok(Number(a.cost_usd) > 0.0004 && Number(a.cost_usd) <= rez, a.cost_usd)  // decontat in rezervare
+    assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_depasire'))
   }
 })
 

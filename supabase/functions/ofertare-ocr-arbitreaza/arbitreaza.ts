@@ -148,10 +148,18 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
     // ce a rămas din rezervare trebuie să acopere limita de sus a lui Sonnet; altfel nu se mai cheltuie: depășire cu ce s-a consumat
     if (incapeArbitrul(r1.cost, limitaArbitru, suma)) {
       const r2 = await apel(MODEL_ARBITRU)
-      // Haiku a costat deja: rezervarea rămâne deschisă (abandonul o socotește întreagă în plafon) — conservator, nicio decizie
-      if (!r2.ok) return raspuns(502, { error: r2.error, rezervare_id: rez, filtru: r1.d.decizie })
-      final = { ...r2, d: { ...r2.d, motiv: taie200(detaliu(r1) + ' ' + detaliu(r2) + ' ' + r2.d.motiv) },
-                tin: r1.tin + r2.tin, tout: r1.tout + r2.tout, cost: rotunjesteSus(r1.cost + r2.cost), estimat: r1.estimat || r2.estimat }
+      if (r2.ok) {
+        final = { ...r2, d: { ...r2.d, motiv: taie200(detaliu(r1) + ' ' + detaliu(r2) + ' ' + r2.d.motiv) },
+                  tin: r1.tin + r2.tin, tout: r1.tout + r2.tout, cost: rotunjesteSus(r1.cost + r2.cost), estimat: r1.estimat || r2.estimat }
+      } else {
+        // Haiku e deja platit; Sonnet a esuat (eroare API sau retea: posibil taxat). FAIL-CLOSED (Copilot cascada r1 P1): decontare in
+        // aceeasi rezervare cu needs_human, costul = Haiku real + limita lui Sonnet (estimat, incape in rezervare prin incapeArbitrul).
+        // Dezacordul devine arbitrat (needs_human), deci nu se mai poate plati inca o data dupa abandon (P1-2).
+        const costSonnet = limitaArbitru
+        final = { ...r1, model: MODEL_ARBITRU, estimat: true, cost: rotunjesteSus(r1.cost + costSonnet),
+                  d: { ...r1.d, decizie: 'needs_human', text: '',
+                       motiv: taie200(detaliu(r1) + ' [Sonnet: esuat (' + r2.error + '), cost estimat ' + costSonnet.toFixed(4) + '$] la om') } }
+      }
     } else {
       // Haiku a costat peste limita lui estimata (pret / tokenizare schimbate): nu se mai cheltuie pe Sonnet; decizie needs_human cu costul
       // REAL; daca acesta depaseste chiar toata rezervarea, verificarea de mai jos o trateaza ca depasire (decontare, rularea oprita)
