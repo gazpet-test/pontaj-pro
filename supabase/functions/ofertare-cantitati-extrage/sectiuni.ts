@@ -22,10 +22,12 @@ export const SUPRAPUNERE = 2000   // ca un tabel rupt între felii să nu dispar
 
 // Antetele formularelor (eDevize / HG 907). Atât „Formular Xn" (antet + subsol de pagină), cât și titlul
 // listei, cu/fără diacritice. (?!\d) ca „C 60" să nu fie C6.
+// TKT-0329 B (PR3, Răcari lic. 15): și „Formularul F3” / „FORMULARUL C9”, „Lista cu cantitățile de lucrări” (cu articol), iar
+// centralizatoarele F1 / F2 (valori, fără cantități fizice) sunt 'lista_alt' — înainte cădeau în secțiunea F3 de dinaintea lor.
 const ANTETE: { tip: TipLista; re: RegExp }[] = [
-  { tip: 'lista_f3', re: /Formular\s*F\s*3(?!\d)|Lista\s+cu\s+cantit[aăâ][tțţ]i\s+de\s+lucr[aăâ]ri/gi },
-  { tip: 'lista_c6', re: /Formular\s*C\s*6(?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+de\s+resurse\s+materiale/gi },
-  { tip: 'lista_alt', re: /Formular\s*C\s*[789](?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+(?:cu\s+m[aâă]n|de\s+ore|privind\s+transport)/gi },
+  { tip: 'lista_f3', re: /Formular(?:ul)?\s*F\s*3(?!\d)|Lista\s+cu\s+cantit[aăâ][tțţ]i(?:le)?\s+de\s+lucr[aăâ]ri/gi },
+  { tip: 'lista_c6', re: /Formular(?:ul)?\s*C\s*6(?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+de\s+resurse\s+materiale/gi },
+  { tip: 'lista_alt', re: /Formular(?:ul)?\s*C\s*[789](?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+(?:cu\s+m[aâă]n|de\s+ore|privind\s+transport)|Formular(?:ul)?\s*F\s*[12](?!\d)/gi },
 ]
 const PAGINA = '⟦PAGINA'   // marcajul de pagină pus de citirea OCR (ofertare-ingest-doc)
 
@@ -57,7 +59,16 @@ export function felii(t: string): string[] {
   return out
 }
 
-export type FelieDoc = { bucata: string; nr: number; din: number; tipSursa: TipLista | null; inceputSectiune: boolean }
+// TKT-0329 B (review r1): feliile CU offsetul lor în text, din aceeași aritmetică (nu prin căutarea conținutului — un text repetat ar da
+// offsetul primei apariții)
+export function feliiCuPozitie(t: string): { de: number; text: string }[] {
+  if (t.length <= FELIE) return [{ de: 0, text: t }]
+  const out: { de: number; text: string }[] = []
+  for (let i = 0; i < t.length; i += FELIE - SUPRAPUNERE) out.push({ de: i, text: t.slice(i, i + FELIE) })
+  return out
+}
+
+export type FelieDoc ={ bucata: string; nr: number; din: number; tipSursa: TipLista | null; inceputSectiune: boolean }
 
 // Feliile unui document. Doar lista_cantitati primește tip_sursa (pe secțiuni); celelalte tipuri
 // (cs_volum, alta) rămân ca înainte: tot textul feliat, fără tip_sursa.
