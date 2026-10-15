@@ -3,7 +3,7 @@ import hashlib, json, os, pathlib, re, shutil, tempfile, time, unittest
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 from .geometry import classify, orientation, text_bands
-from .guard import Guard, view
+from .guard import Guard, view, imagini_pipeline
 from .guard_legacy import repetition_reason, repeated_table_row
 from . import read as RD
 from .plan import plan, load_plan
@@ -55,8 +55,12 @@ GARDA_SHA = {'d772_p0255_b0_lighton.txt': 'fa5ac788a7e422e1090fb6ac7b97b610697e1
 def garda_fix(nume):
     b = (GARDA_FIX / nume).read_bytes(); assert hashlib.sha256(b).hexdigest() == GARDA_SHA[nume], nume
     return b.decode('utf-8')
-# base64 fara repetitii (blocul de 200 nu se repeta), 64 de caractere distincte, ~20k tokeni
-B64_ALEATOR = ''.join(__import__('random').Random(7).choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=30000))
+def jpeg_b64(w=220, h=220, seed=7):
+    """JPEG real (zgomot -> ~40 KB base64, fara blocuri de 200 repetate, ~65 caractere distincte), ca decupajele MinerU."""
+    import base64, io, random
+    im = Image.frombytes('RGB', (w, h), random.Random(seed).randbytes(w * h * 3)); b = io.BytesIO(); im.save(b, format='JPEG', quality=95)
+    return base64.b64encode(b.getvalue()).decode('ascii')
+MARIME_P0342 = (1241, 1754)  # banda d772 p0342_b0 (png)
 def garda_flux(text, pas=16):
     """Garda ca la citire: textul creste pe bucati; intoarce (motiv, detaliu, caractere la oprire)."""
     g = Guard()
@@ -102,26 +106,37 @@ class GardaLinii(unittest.TestCase):
         self.assertIsNone(repeated_table_row('\n'.join('<table>\n%s\n</table>\nArticolul %d' % (sub, i) for i in range(4))))
         self.assertIsNone(repeated_table_row('<table>' + ''.join('<tbody>%s</tbody>\ntext intre\n' % sub for _ in range(4)) + '</table>'))
         self.assertIsNotNone(repeated_table_row('<table><thead>' + sub + '</thead><tbody>' + sub * 3 + '</tbody></table>'))  # acelasi tabel
-    def test_imagine_base64_mineru_nu_e_bucla(self):
-        # r1 d772 p0342 (si p0382/p0384, d1247 p3): MinerU pune decupajul ca data-URI in src -> 34 KB cu ~65 caractere distincte;
-        # garda v4 suna pe unique_chars, v5 nu mai vede payload-ul
+    def test_decupaj_mineru_real_nu_e_bucla(self):
+        # r1 d772 p0342 (si p0382/p0384, d1247 p3): MinerU pune decupajul JPEG ca <img src="data:image/jpeg;base64,..."/> -> 34 KB cu
+        # ~65 caractere distincte; v4 suna pe unique_chars. v5: scutit DOAR payload-ul verificat ca JPEG real cel mult cat banda.
         t = garda_fix('d772_p0342_b0_mineru_base64.txt')
-        for pas in (16, 128, 1024): self.assertIsNone(garda_flux(t, pas)[0])
-        self.assertEqual(view(t)[1]['data_uri_stripped'], 1)
-        b64 = 'iVBORw0KGgoAAAANSUhEUgAA' + B64_ALEATOR
-        for q in ('"', "'", ''):
-            self.assertIsNone(garda_flux('<img src=%sdata:image/png;base64,%s%s>' % (q, b64, q), 512)[0])
-    def test_base64_in_afara_src_ramane_vazut(self):
-        # doar payload-ul din src; acelasi base64 ca text, in alt sau cu alt tip MIME ramane in vedere (unique_chars suna)
-        b64 = B64_ALEATOR
-        for t in (b64, '<img alt="%s">' % b64, '<img src="data:text/plain;base64,%s">' % b64, '<a href="data:image/png;base64,%s">' % b64):
-            self.assertEqual(garda_flux(t, 512)[0], 'bucla_unique_chars_lt100_after3000tokens', t[:40])
+        self.assertEqual(Guard()(t), 'bucla_unique_chars_lt100_after3000tokens')  # fara provenienta: ca inainte
+        im = imagini_pipeline(t, MARIME_P0342); self.assertEqual(len(im), 1)
+        g = Guard(im); self.assertIsNone(g(t))
+        self.assertEqual(view(t, im)[1]['pipeline_images_stripped'], 1)
+        b = jpeg_b64(); s = 'Tabel<table><tr><td><img src="data:image/jpeg;base64,%s"/></td><td>DN 400</td></tr></table>' % b
+        self.assertIsNone(Guard(imagini_pipeline(s, (1000, 1000)))(s))
+    def test_scutirea_cere_provenienta(self):
+        b = jpeg_b64(); img = '<img src="data:image/jpeg;base64,%s"/>' % b
+        self.assertEqual(Guard()(img), 'bucla_unique_chars_lt100_after3000tokens')  # LightOn / fara verificare: nimic scutit
+        # Jakarinos r1 P1: bucla generata cu antet de imagine („QUJD” = base64 valid, dar nu JPEG) -> nu se scuteste
+        for t in ('<img src="data:image/png;base64,' + 'QUJD' * 3000, '<img src="data:image/jpeg;base64,' + 'QUJD' * 3000 + '"/>'):
+            self.assertEqual(imagini_pipeline(t, (5000, 5000)), frozenset()); self.assertEqual(Guard(imagini_pipeline(t, (5000, 5000)))(t), 'bucla_repeated200_ge4')
+        # JPEG mai mare decat banda, trunchiat sau base64 nestrict -> nu se scuteste
+        self.assertEqual(imagini_pipeline(img, (100, 100)), frozenset())
+        self.assertEqual(imagini_pipeline('<img src="data:image/jpeg;base64,%s"/>' % b[:-400], (1000, 1000)), frozenset())
+        self.assertEqual(imagini_pipeline('<img src="data:image/jpeg;base64,%s"/>' % (b[:100] + '\n' + b[100:]), (1000, 1000)), frozenset())
+        # Jakarinos r1 P2: acelasi payload verificat, dar in alta forma (data-src, alt, text simplu, png) ramane in vedere
+        im = imagini_pipeline(img, (1000, 1000)); self.assertEqual(len(im), 1)
+        for t in ('<img data-src="data:image/jpeg;base64,%s"/>' % b, '<img alt="src=&quot;data:image/jpeg;base64,%s&quot;"/>' % b,
+                  'Exemplu src="data:image/jpeg;base64,%s"' % b, '<img src="data:image/png;base64,%s"/>' % b, b):
+            self.assertEqual(Guard(im)(t), 'bucla_unique_chars_lt100_after3000tokens', t[:40])
     def test_bucla_dupa_imagine_ramane_oprita(self):
-        # o imagine inline urmata de bucla reala: bucla e prinsa (blocul de 200 pe vederea fara payload)
-        t = '<img src="data:image/jpeg;base64,%s">\n' % ('Q' * 5000) + '<td>' + ' - ' * 2000 + '</td>'
-        self.assertEqual(garda_flux(t, 128)[0], 'bucla_repeated200_ge4')
+        # decupaj real scutit, urmat de bucla reala in aceeasi citire: bucla e prinsa
+        t = '<img src="data:image/jpeg;base64,%s"/>\n<td>' % jpeg_b64() + ' - ' * 2000 + '</td>'
+        self.assertEqual(Guard(imagini_pipeline(t, (1000, 1000)))(t), 'bucla_repeated200_ge4')
         # bucla reala r1 d1247 p0963 (MinerU, „- - -” intr-o celula) ramane oprita
-        self.assertEqual(garda_flux(garda_fix('bucla_d1247_p0963_b0_mineru.txt'), 128)[0], 'bucla_repeated200_ge4')
+        self.assertEqual(Guard(imagini_pipeline(garda_fix('bucla_d1247_p0963_b0_mineru.txt'), (5000, 5000)))(garda_fix('bucla_d1247_p0963_b0_mineru.txt')), 'bucla_repeated200_ge4')
     def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
         self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')

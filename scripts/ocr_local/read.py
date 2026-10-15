@@ -3,7 +3,7 @@ Reguli pastrate din pipeline-ul Codex: endpoint doar IP loopback literal, fara p
 garda v3, raw-ul nu se repara. Noi: verificarea SHA-256 a greutatilor la pornire, gpu.lock luat de rulare si eliberat la final,
 reluare idempotenta (banda cu result.json se sare; banda inceputa si neterminata NU se reincearca automat)."""
 import base64, contextlib, hashlib, http.client, ipaddress, json, os, pathlib, socket, threading, time, urllib.parse
-from .guard import Guard
+from .guard import Guard, imagini_pipeline
 from .plan import load_plan, save
 
 PACKAGE = pathlib.Path(__file__).parent
@@ -141,7 +141,7 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
     if 'e' in box: return '', {'ok': False, 'signal': None, 'error': type(box['e']).__name__ + ':' + str(box['e'])[:200], 'seconds': seconds}
     (out_dir / 'layout.json').write_text(json.dumps(box['c'], ensure_ascii=False, indent=1, default=str), encoding='utf-8')
     md = json2md(box['c']); raw = md if isinstance(md, str) else str(md)
-    g = Guard(); signal = g(raw)
+    g = Guard(imagini_pipeline(raw, img.size)); signal = g(raw)  # scutite doar decupajele JPEG reale puse de pipeline
     return raw, {'ok': not signal and bool(raw.strip()), 'signal': signal, 'guard_event': g.event, 'error': None, 'seconds': seconds,
                  'blocks': len(box['c'])}
 

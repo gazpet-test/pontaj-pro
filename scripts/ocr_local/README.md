@@ -9,11 +9,14 @@ liniile de celule `<td>` se socotesc buclă doar de 4 ori **la rând**. Celelalt
 prindă și buclele cu spațiere variabilă pe care blocul de 200 de caractere nu le vede. Motiv: alarmă falsă pe un tabel corect (d772 p0255_b0).
 Un rând de tabel întreg identic (cu conținut) de 4 ori la rând rămâne buclă; rândurile se caută pe textul brut, cu delimitatorii oriunde pe linie. Teste pe texte reale în `fixtures_garda/`. Pe tot corpusul Codex (5.964 de ieșiri) verdictul se schimbă doar la pagina d772.
 
-**Garda v5 (15.10.2026, laborator OCR, `empty-cells-v5-td-consecutive-rawrows-nodatauri`):** vederea gărzii nu mai conține payload-ul
-imaginilor inline: din `src="data:image/<tip>;base64,<payload>"` rămâne doar antetul (strict: doar atributul `src`, doar `image/*`,
-doar alfabetul base64; în text, `alt`, `href` sau alt tip MIME base64-ul rămâne văzut). MinerU pune decupajele de imagine așa în citire
-(zeci de KB cu ~65 de caractere distincte), iar regula `unique_chars` suna fals. Textul brut rămâne neschimbat; `view_stats.data_uri_stripped`
-arată câte s-au scos.
+**Garda v5 (15.10.2026, laborator OCR, `empty-cells-v5-td-consecutive-rawrows-pipelineimg`):** pe calea MinerU, vederea gărzii nu mai
+conține payload-ul decupajelor de imagine puse de pipeline. `mineru_vl_utils` (`table_image_processor.replace_table_image_tokens`) maschează
+imaginile din tabele cu un token și le pune înapoi ca `<img src="data:image/jpeg;base64,<payload>"/>` — zeci de KB cu ~65 de caractere
+distincte, deci `unique_chars` suna fals. Scutirea e pe **proveniență**, nu pe formă: `imagini_pipeline(raw, mărimea benzii)` acceptă doar
+payload-urile în forma exactă a bibliotecii, base64 strict, decodate complet ca JPEG și cel mult cât banda; doar acelea se scot din vedere
+(`Guard(imagini)`). Un șir generat de model cu antet de imagine (ex. `QUJD…` repetat), același payload în `data-src` / `alt` / text simplu,
+un JPEG trunchiat sau mai mare decât banda rămân văzute. LightOn (în flux) nu are scutiri. Textul brut rămâne neschimbat;
+`view_stats.pipeline_images_stripped` arată câte s-au scos.
 
 Cele 10 alarme din r1 (licitația 102), revizuite pe text brut:
 
@@ -27,8 +30,9 @@ Cele 10 alarme din r1 (licitația 102), revizuite pe text brut:
 
 Celelalte trei alarme false/benigne nu au o regulă care să le deosebească de buclele reale din același corpus, deci rămân (costul:
 banda merge la om/arbitru). **Banca de probă:** `python -B -m ocr_local.banca_garda <iesire.jsonl> <radacina>... [--fata-de baza.jsonl]`
-rulează garda în flux (la 128 de caractere) pe toate `raw*.txt` și listează verdictele schimbate. v4 → v5 pe r1 (8.104 benzi) + corpusul
-Codex (5.960): se schimbă exact cele 4 benzi cu base64, nimic altceva.
+rulează garda ca la citire pe toate `raw*.txt` (LightOn / restul în flux la 128 de caractere; MinerU o dată pe text, cu decupajele verificate
+pe `<bandă>.png`; `--fara-scutire` = garda v4) și listează orice schimbare de motiv / detaliu / punct de oprire, plus fișierele noi / lipsă.
+v4 → v5 pe r1 (8.104 benzi) + corpusul Codex (5.960): se schimbă exact cele 4 benzi cu base64, nimic altceva.
 
 **Ce NU face pachetul:** nu pornește servere sau modele, nu cheamă cloud (arbitrajul Sonnet 5 e în edge-ul `ofertare-ocr-arbitreaza`, D3b),
 nu scrie în BD (scrierea e prin `ofertare-ocr-scrie`, D3b), nu promovează nimic.
