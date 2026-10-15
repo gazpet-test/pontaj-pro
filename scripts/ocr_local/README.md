@@ -121,6 +121,22 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
   (`supabase/tests/ofertare_ocr_local_client_e2e.py`, rularea R8 din `scripts/test_ofertare_ocr_local.sh`, fără apel plătit).
   `plan.py` importă PIL doar în funcțiile care randează, ca `load_plan` / `compare` / `reconcile` / `client` să ruleze și fără PIL.
 
+## Comparatorul — varianta A (decizie Razvan 15.10.2026)
+
+După 5 runde Jakarinos NO-GO pe normalizări „fără context” (Š/Ș, Ø/∅, chenar, spații, separator), comparatorul rămâne **literal**
+(cum era în D3c) cu două excepții fără pierdere sau strict delimitate:
+- **Regula A** (`compare.regula_a`): un rând de tabel e acord automat doar dacă e identic literal (`cell_key`, celulă cu celulă de la
+  început) după ce se scot celulele goale de la **coada** rândului; rândurile acceptate apar în sumar (`acord_regula_a`). Orice altă
+  diferență (spații în celulă, separator zecimal, celulă goală în interior / la început, coloană mutată) rămâne dezacord.
+- **Imagini base64** (`compare.B64_IMG`): payload-ul din `src="data:image/…;base64,…"` al marcajului `⟦img …⟧` (atributele dinainte
+  complete, între ghilimele) devine **un token = SHA-256 al payload-ului**. Egalitatea rămâne literală (payload diferit ⇒ token diferit);
+  dispar doar miile de tokeni base64 din alinierea difflib. Textul citit, `sursa` și reconcilierea nu se schimbă; granițele tokenului
+  sunt granițe și în tokenizarea literală din BD (`fn_ofertare_ocr_granita`) — de aceea payload-urile care încep cu cifră rămân literale.
+  NB: `citire_*` (textul trimis la arbitru) rămâne literal, deci un dezacord cu imagine poartă tot payload-ul.
+
+Măsurat pe r1 (`masoara --fata-de` baza din main): **12.994 → 12.669** dezacorduri (−325 `rand_tabel`), cu cantitate 6.454 → 6.142;
+textul neschimbat (0 eliminări, 0 cifre/semne pierdute). Cele 4 benzi cu base64 rămân `banda_intreaga` până la o recitire cu garda v5.
+
 ## Reguli
 
 - **Selecția paginilor** (spec §1): doar paginile cerute (`--pagini` = `pagini_necitite`); un strat de text nativ (≥ 200 caractere) e doar

@@ -180,8 +180,48 @@ class Client(unittest.TestCase):
         rec = [x for k, x in self.edge.pagini.items() if k[3] == 'reconciliat']; self.assertEqual(len(rec), 1)
         # benzile de text au toate acelasi continut scurt: cusatura nu se poate dovedi (< 8 tokeni) -> pagina = needs_human, text gol
         self.assertEqual((rec[0]['pagina'], rec[0]['stare'], rec[0]['text'], f['needs_human']), (1, 'needs_human', '', 1))
+    def test_proba_max_apeluri_fara_arbitrata(self):
+        # laborator 15.10: proba platita = cel mult N apeluri pe invocare, fara `arbitrata`; reluarea continua; filtrul restrange
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); nb = c['dezacorduri']; self.assertGreaterEqual(nb, 2)
+        apeluri = lambda: len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=1, seed='x'); self.assertEqual((a['stare'], a['apeluri_acum'], apeluri()), ('proba', 1, 1))
+        self.assertNotEqual(self.edge.stare, 'arbitrata'); self.assertFalse(C.pasi(rdir).get('arbitrata'))
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, filtru=set())
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=5, filtru=set()); self.assertEqual((a['apeluri_acum'], apeluri()), (0, 1))  # filtru gol = nimic
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=100, seed='x'); self.assertEqual((a['stare'], apeluri()), ('proba', nb))   # restul, fara dubluri
+        self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata'); self.assertEqual(apeluri(), nb)                 # pasul normal inchide
+    def test_proba_oprire_ceruta_dupa_primul_apel(self):
+        # Jakarinos r3 P2: oprirea ceruta inainte de N se raporteaza ca stare, la fel ca la final; niciun apel dupa ea
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'a 10 b 11 c 12 d 13 e', 'a 20 b 21 c 22 d 23 e')
+        C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); self.assertGreaterEqual(c['dezacorduri'], 2)
+        orig = self.edge.post
+        def post(fn, corp, timeout=60):
+            r = orig(fn, corp, timeout)
+            if fn == 'ofertare-ocr-arbitreaza': C.save(rdir / 'oprire_ceruta.json', {'motiv': 'test', 'la': 0})
+            return r
+        self.edge.post = post
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=3, seed='x')
+        self.assertEqual((a['stare'], a['apeluri_acum']), ('oprita', 1))
+        self.assertEqual(len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza']), 1)
+        # oprirea deja prezenta inaintea probei: tot stare, nu exceptie (Jakarinos r4 P2); pasul normal ramane exceptie
+        self.assertEqual(C.arbitreaza(rdir, self.edge, max_apeluri=3)['stare'], 'oprita')
+        with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge)
+    def test_proba_nu_finalizeaza_intentia_si_raporteaza_oprirea(self):
+        # Jakarinos r2 P1-3: o intentie `arbitrata` ramasa nu se finalizeaza dintr-o proba; oprirea ceruta e raportata
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        C.marcheaza(rdir, 'arbitrata_intentie')
+        with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge, max_apeluri=0, filtru=set())
+        self.assertNotEqual(self.edge.stare, 'arbitrata')
+        self.assertEqual(C.cheie_proba({'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}, 772),
+                         C.cheie_proba({'document': 'd772', 'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}))
+        self.assertNotEqual(C.cheie_proba({'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}, 772),
+                            C.cheie_proba({'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}, 1247))
     def test_flux_tabel_reconciliat(self):
         from .test_ocr_local import TABLE_A, TABLE_B
+        from . import compare as CMP  # TABLE_A / TABLE_B difera doar prin separator: cu regula A ar fi acord automat
+        q = patch.object(CMP, 'REGULA_A', False); q.start(); self.addCleanup(q.stop)
         self.edge.documente = [{'document_id': DOC, 'pagini': [1]}]
         r = C.preia(self.work, self.edge); rdir = pathlib.Path(r['dir']); C.descarca(rdir, self.edge)
         (rdir / 'orientare').mkdir(); (rdir / 'orientare' / ('%d.json' % DOC)).write_text('{"1": 0}', encoding='utf-8')
@@ -540,6 +580,13 @@ class Client(unittest.TestCase):
         self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '', 'motiv': 'ilizibil',
                                                           'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}})
         a = C.arbitreaza(rdir, self.edge, minim=1); self.assertEqual(a['stare'], 'oprita'); self.assertEqual(self.edge.stare, 'oprita')
+    def test_proba_oprita_pe_prag_raporteaza_apelurile(self):
+        # Jakarinos r5 P2: oprirea automata pe pragul needs_human, in proba, spune cate apeluri platite s-au facut
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '', 'motiv': 'ilizibil',
+                                                          'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}})
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)
+        self.assertEqual((a['stare'], a['apeluri_acum']), ('oprita', 1))
     def test_arbitrat_in_bd_fara_decizie_locala_devine_pierdut(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         self.edge.arbitru = lambda it: (409, {'error': 'Dezacord deja arbitrat', 'refuz': 'arbitrat'})
