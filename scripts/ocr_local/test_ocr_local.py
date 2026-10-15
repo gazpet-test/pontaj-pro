@@ -3,7 +3,8 @@ import hashlib, json, os, pathlib, re, shutil, tempfile, time, unittest
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 from .geometry import classify, orientation, text_bands
-from .guard import Guard
+from .guard import Guard, view, IMG_PIPELINE
+import importlib.util
 from .guard_legacy import repetition_reason, repeated_table_row
 from . import read as RD
 from .plan import plan, load_plan
@@ -49,10 +50,17 @@ class Geometrie(unittest.TestCase):
 GARDA_FIX = pathlib.Path(__file__).parent / 'fixtures_garda'
 GARDA_SHA = {'d772_p0255_b0_lighton.txt': 'fa5ac788a7e422e1090fb6ac7b97b610697e1d886ac0050aebc648376bc66e15',
              'bucla_text_ovis_p85.txt': 'd80209522e0e79a941469f8f254e44444b5d497d308559acd467d54846251d3e',
-             'bucla_tabel_ovis_td31.txt': '86119174e96e6bf7cf7bc7694d7a1cb4d62c02749088081f9373907daf188523'}
+             'bucla_tabel_ovis_td31.txt': '86119174e96e6bf7cf7bc7694d7a1cb4d62c02749088081f9373907daf188523',
+             'd772_p0342_b0_mineru_base64.txt': '117c37923582229f772532eedd79f47f23d152ed9ce462c9647e608031ae0973',
+             'bucla_d1247_p0963_b0_mineru.txt': 'db904c56bce405321fd91a4da5d58564ace02dbcb95451c4cba32ab61c857512'}
 def garda_fix(nume):
     b = (GARDA_FIX / nume).read_bytes(); assert hashlib.sha256(b).hexdigest() == GARDA_SHA[nume], nume
     return b.decode('utf-8')
+def jpeg_b64(w=220, h=220, seed=7):
+    """JPEG real (zgomot -> ~40 KB base64, fara blocuri de 200 repetate, ~65 caractere distincte), ca decupajele MinerU."""
+    import base64, io, random
+    im = Image.frombytes('RGB', (w, h), random.Random(seed).randbytes(w * h * 3)); b = io.BytesIO(); im.save(b, format='JPEG', quality=95)
+    return base64.b64encode(b.getvalue()).decode('ascii')
 def garda_flux(text, pas=16):
     """Garda ca la citire: textul creste pe bucati; intoarce (motiv, detaliu, caractere la oprire)."""
     g = Guard()
@@ -98,6 +106,93 @@ class GardaLinii(unittest.TestCase):
         self.assertIsNone(repeated_table_row('\n'.join('<table>\n%s\n</table>\nArticolul %d' % (sub, i) for i in range(4))))
         self.assertIsNone(repeated_table_row('<table>' + ''.join('<tbody>%s</tbody>\ntext intre\n' % sub for _ in range(4)) + '</table>'))
         self.assertIsNotNone(repeated_table_row('<table><thead>' + sub + '</thead><tbody>' + sub * 3 + '</tbody></table>'))  # acelasi tabel
+    def test_decupaj_mineru_inregistrat_nu_e_bucla(self):
+        # r1 d772 p0342 (si p0382/p0384, d1247 p3): MinerU pune decupajul JPEG ca <img src="data:image/jpeg;base64,..."/> -> 34 KB cu
+        # ~65 caractere distincte; v4 suna pe unique_chars. v5: scutit DOAR payload-ul inregistrat la codificare (provenienta).
+        t = garda_fix('d772_p0342_b0_mineru_base64.txt')
+        self.assertEqual(Guard()(t), 'bucla_unique_chars_lt100_after3000tokens')  # fara inregistrare: ca inainte
+        p = IMG_PIPELINE.search(t)[1]  # payload-ul pe care pipeline-ul l-a codificat pentru aceasta banda
+        g = Guard([p]); self.assertIsNone(g(t)); self.assertEqual(view(t, [p])[1]['pipeline_images_stripped'], 1)
+    def test_scutirea_cere_inregistrarea(self):
+        b = jpeg_b64(); img = '<img src="data:image/jpeg;base64,%s"/>' % b
+        self.assertEqual(Guard()(img), 'bucla_unique_chars_lt100_after3000tokens')  # LightOn / neinregistrat: nimic scutit
+        self.assertIsNone(Guard([b])(img))
+        # Jakarinos r1 P1 / r2 P1: sir generat cu antet de imagine (QUJD..., JPEG valid + ABC*4000 dupa EOI / in COM) -> neinregistrat
+        import base64, io
+        mic = io.BytesIO(); Image.new('RGB', (16, 16)).save(mic, format='JPEG'); mic = mic.getvalue()
+        com = mic[:2] + b'\xff\xfe' + (2 + 12000).to_bytes(2, 'big') + b'ABC' * 4000 + mic[2:]
+        for x in ('QUJD' * 3000, base64.b64encode(mic + b'ABC' * 4000).decode(), base64.b64encode(com).decode()):
+            t = '<img src="data:image/jpeg;base64,%s"/>' % x
+            self.assertEqual(Guard([b])(t), 'bucla_repeated200_ge4', x[:20])
+        # bucla de tokeni de imagine: biblioteca pune acelasi data-URI la fiecare aparitie; e scutit de cate ori a fost codificat
+        self.assertIsNotNone(Guard([b])(img * 2))  # copia in plus ramane vazuta
+        self.assertIsNone(Guard([b, b])(img + '\n' + img))
+        # acelasi payload inregistrat, dar in alta forma decat cea a bibliotecii (data-src, alt escapat, text simplu, png) -> vazut
+        for t in ('<img data-src="data:image/jpeg;base64,%s"/>' % b, '<img alt="src=&quot;data:image/jpeg;base64,%s&quot;"/>' % b,
+                  'Exemplu src="data:image/jpeg;base64,%s"' % b, '<img src="data:image/png;base64,%s"/>' % b, b):
+            self.assertEqual(Guard([b])(t), 'bucla_unique_chars_lt100_after3000tokens', t[:40])
+    def test_bucla_dupa_imagine_ramane_oprita(self):
+        # decupaj inregistrat scutit, urmat de bucla reala in aceeasi citire: bucla e prinsa
+        b = jpeg_b64(); t = '<img src="data:image/jpeg;base64,%s"/>\n<td>' % b + ' - ' * 2000 + '</td>'
+        self.assertEqual(Guard([b])(t), 'bucla_repeated200_ge4')
+        # bucla reala r1 d1247 p0963 (MinerU, „- - -” intr-o celula) ramane oprita
+        self.assertEqual(Guard()(garda_fix('bucla_d1247_p0963_b0_mineru.txt')), 'bucla_repeated200_ge4')
+    @unittest.skipUnless(importlib.util.find_spec('mineru_vl_utils'), 'mineru_vl_utils lipsa')
+    def test_inregistrarea_pe_biblioteca_reala(self):
+        # biblioteca instalata: mask_and_encode_table_image (numele cautat in mineru_client) -> token_map -> replace_table_image_tokens;
+        # infasurarea noteaza exact data-URI-ul pus in text, doar in firul cu inregistrarea pornita
+        import mineru_vl_utils.mineru_client as MC
+        from mineru_vl_utils.structs import ContentBlock
+        from mineru_vl_utils.post_process.table_image_processor import replace_table_image_tokens
+        self.assertTrue(hasattr(MC, 'mask_and_encode_table_image'))
+        f = RD._inregistreaza_decupaje(getattr(MC.mask_and_encode_table_image, '__wrapped__', MC.mask_and_encode_table_image))
+        pag = Image.frombytes('RGB', (400, 400), __import__('random').Random(3).randbytes(400 * 400 * 3))
+        tab = ContentBlock('table', [0.05, 0.05, 0.95, 0.95], angle=0); ima = ContentBlock('image', [0.2, 0.2, 0.6, 0.6], angle=0)
+        RD._DECUPAJE.uris = []
+        try: _, tm = f(pag, tab, [(1, ima)], pag.crop((20, 20, 380, 380))); uris = list(RD._DECUPAJE.uris)
+        finally: RD._DECUPAJE.uris = None
+        self.assertEqual(uris, list(tm.values())); self.assertEqual(len(uris), 1)
+        (tok,) = tm; text = replace_table_image_tokens('<table><tr><td>%s</td><td>DN 400</td></tr></table>' % tok, tm)
+        self.assertIsNone(Guard(RD.decupaje_garda(uris))(text))
+        self.assertEqual(Guard()(text), 'bucla_unique_chars_lt100_after3000tokens')
+        f(pag, tab, [(1, ima)], pag.crop((20, 20, 380, 380)))  # fara inregistrare pornita: nu scrie nicaieri
+        self.assertIsNone(getattr(RD._DECUPAJE, 'uris', None))
+    @unittest.skipUnless(importlib.util.find_spec('mineru_vl_utils'), 'mineru_vl_utils lipsa')
+    def test_read_mineru_inregistreaza_per_citire(self):
+        # Jakarinos r3 P2: legarea completa prin read_mineru (patch instalat de read_mineru, colectare in work(), garda), cu un client
+        # simulat care face ce face two_step_extract (prepare_for_extract -> numele global mask_and_encode_table_image din mineru_client,
+        # apoi replace_table_image_tokens); doua citiri concurente pe pagini diferite -> fiecare isi scuteste doar decupajul ei
+        import io, random, threading
+        import mineru_vl_utils.mineru_client as MC
+        from mineru_vl_utils.structs import ContentBlock
+        from mineru_vl_utils.post_process.table_image_processor import replace_table_image_tokens
+        porniti = threading.Barrier(2)
+        class Client:
+            def two_step_extract(self, img):
+                tab = ContentBlock('table', [0.05, 0.05, 0.95, 0.95], angle=0); ima = ContentBlock('image', [0.2, 0.2, 0.6, 0.6], angle=0)
+                w, h = img.size; _, tm = MC.mask_and_encode_table_image(img, tab, [(1, ima)], img.crop((int(.05 * w), int(.05 * h), int(.95 * w), int(.95 * h))))
+                porniti.wait(5)  # ambele citiri au codificat inainte sa le citeasca vreuna
+                (tok,) = tm
+                return [{'type': 'table', 'bbox': tab.bbox, 'content': replace_table_image_tokens('<table><tr><td>%s</td><td>DN 400</td></tr></table>' % tok, tm)}]
+        vechi = RD._MINERU.get('client'); RD._MINERU['client'] = Client(); rez = {}
+        try:
+            def citeste(i, d):
+                b = io.BytesIO(); Image.frombytes('RGB', (400, 400), random.Random(i).randbytes(400 * 400 * 3)).save(b, format='PNG')
+                rez[i] = RD.read_mineru(b.getvalue(), pathlib.Path(d), {'endpoint': 'http://127.0.0.1:1', 'served_model_name': 'x'}, 30)
+            with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+                fire = [threading.Thread(target=citeste, args=(i, d)) for i, d in ((1, d1), (2, d2))]
+                for t in fire: t.start()
+                for t in fire: t.join(30)
+        finally:
+            if vechi is None: RD._MINERU.pop('client', None)
+            else: RD._MINERU['client'] = vechi
+        self.assertTrue(hasattr(MC.mask_and_encode_table_image, '__wrapped__'))
+        p = {}
+        for i in (1, 2):
+            raw, r = rez[i]; self.assertEqual((r['signal'], r['decupaje_pipeline'], r['ok']), (None, 1, True), r)
+            p[i] = IMG_PIPELINE.search(raw)[1]; self.assertEqual(Guard()(raw), 'bucla_unique_chars_lt100_after3000tokens')
+        self.assertNotEqual(p[1], p[2])
+        self.assertIsNotNone(Guard([p[2]])(rez[1][0]))  # decupajul altei citiri nu scuteste
     def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
         self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')
