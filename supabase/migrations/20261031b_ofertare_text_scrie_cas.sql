@@ -4,7 +4,10 @@
 -- textul dat trebuie să fie EXACT text_extras-ul curent (sha egal). Un producător întârziat (a scris textul A, între timp altul a scris B)
 -- nu mai poate insera o proveniență A „mai nouă” decât B → răspuns {refuz: 'text_depasit'}, nimic scris.
 -- Aceeași semnătură, aceleași drepturi (CREATE OR REPLACE păstrează ACL-ul), aceleași tabele. În plus (review r3): o funcție NOUĂ,
--- fn_ofertare_cb_extragere_incepe_grup (doar service_role) — pornirea extragerii cu contextul de grup verificat atomic.
+-- fn_ofertare_cb_extragere_incepe_grup (doar service_role) — pornirea extragerii cu contextul de grup verificat atomic, sub mutexul de
+-- grup = rândul licitației FOR UPDATE. Ca toate căile care schimbă mulțimea părților valide să participe (review r5):
+-- fn_ofertare_cb_decizie ia licitația FOR SHARE la început, iar fn_ofertare_cb_text_scrie o ia FOR KEY SHARE ÎNAINTEA documentului
+-- (ordinea comună licitație → document, fără ciclu de deadlock cu pornirea de grup).
 -- Depinde de 20261031a aplicată și NEMODIFICATĂ (amprenta din comentariu). Reîmprospătează amprenta 20261031a (revenirea ei rămâne posibilă).
 -- Revenire: supabase/revenire/20261031b_ofertare_text_scrie_cas_ROLLBACK.sql (pune la loc corpul din 20261031a).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh; fără BEGIN/COMMIT.
@@ -24,7 +27,8 @@ BEGIN
     RAISE EXCEPTION '20261031b: preconditie, obiectele 20261031a s-au schimbat dupa aplicare (amprenta difera)';
   END IF;
   IF pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%'
-     OR to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NOT NULL THEN
+     OR to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NOT NULL
+     OR pg_get_functiondef('public.fn_ofertare_cb_decizie(bigint,text,text,text,text,text)'::regprocedure) LIKE '%mutexul de grup%' THEN
     RAISE EXCEPTION '20261031b: deja aplicata';
   END IF;
 END $pre$;
@@ -35,6 +39,10 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = publi
 AS $f$
 DECLARE v_lic bigint; v_cur text; v_sha text; v_prov bigint;
 BEGIN
+  -- ordinea comună a lock-urilor: LICITAȚIE → document (PR3 review r5, Jakarinos: altfel ciclu cu pornirea de grup — ea ține licitația
+  -- FOR UPDATE și așteaptă documentul, iar inserarea în ofertare_doc_texte ar cere FOR KEY SHARE pe licitație ținând documentul)
+  SELECT licitatie_id INTO v_lic FROM public.ofertare_documente_atribuire WHERE id = p_document_id;
+  IF FOUND THEN PERFORM 1 FROM public.ofertare_licitatii WHERE id = v_lic FOR KEY SHARE; END IF;
   -- documentul FOR NO KEY UPDATE (review r5): o proveniență nouă nu poate apărea cât timp extragere_incepe / redeschide verifică
   -- versiunea curentă sub FOR SHARE (și invers: consumatorul așteaptă și vede versiunea nouă)
   SELECT licitatie_id, text_extras INTO v_lic, v_cur FROM public.ofertare_documente_atribuire WHERE id = p_document_id FOR NO KEY UPDATE;
@@ -48,6 +56,41 @@ BEGIN
   INSERT INTO public.ofertare_doc_texte_prov (licitatie_id, document_id, sha256, origine, producator, completitudine, pagini_necitite)
   VALUES (v_lic, p_document_id, v_sha, p_origine, p_producator, p_completitudine, coalesce(p_pagini_necitite, '{}')) RETURNING id INTO v_prov;
   RETURN jsonb_build_object('ok', true, 'sha256', v_sha, 'prov_id', v_prov);
+END $f$;
+
+CREATE OR REPLACE FUNCTION public.fn_ofertare_cb_decizie(p_document_id bigint, p_doc_sha256 text, p_rol text, p_sectiune text, p_decizie text, p_motiv text)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $f$
+DECLARE v_lic bigint; v_prec bigint; v_id bigint; v_clasa text; v_rol text := p_rol; v_sect text := p_sectiune; v_clase text[];
+BEGIN
+  SELECT licitatie_id INTO v_lic FROM public.ofertare_documente_atribuire WHERE id = p_document_id;
+  IF NOT FOUND OR NOT public.fn_ofertare_cb_poate(v_lic) THEN RAISE EXCEPTION 'Document inexistent sau fără drept' USING ERRCODE = '42501'; END IF;
+  -- 20261031b (PR3 review r5): deciziile (text_confirmat schimbă validitatea; rol_* intră în identitatea extractorului) participă la
+  -- mutexul de grup: licitația FOR SHARE, incompatibil cu FOR UPDATE-ul pornirii de grup (ordinea comună: licitație → document)
+  PERFORM 1 FROM public.ofertare_licitatii WHERE id = v_lic FOR SHARE;
+  v_clasa := CASE p_decizie WHEN 'text_confirmat' THEN 'provenienta' WHEN 'nu_e_sursa_cantitativa' THEN 'rol' WHEN 'rol_confirmat' THEN 'rol'
+                            WHEN 'verificat_fara_lungimi' THEN 'acoperire' WHEN 'sursa_partiala_acceptata' THEN 'sursa' END;
+  IF v_clasa IS NULL OR p_doc_sha256 IS NULL OR p_doc_sha256 !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'Decizie invalidă' USING ERRCODE = '22023'; END IF;
+  IF v_clasa = 'provenienta' THEN v_rol := NULL; v_sect := NULL;
+  ELSIF v_rol IS NULL OR v_sect IS NULL THEN RAISE EXCEPTION 'Rolul și secțiunea sunt obligatorii' USING ERRCODE = '22023'; END IF;
+  v_clase := CASE v_clasa WHEN 'rol' THEN ARRAY['nu_e_sursa_cantitativa', 'rol_confirmat'] ELSE ARRAY[p_decizie] END;
+  IF p_decizie = 'verificat_fara_lungimi' AND v_sect = '*' AND EXISTS (
+       SELECT 1 FROM public.ofertare_cant_obs WHERE document_id = p_document_id AND doc_sha256 = p_doc_sha256 AND rol_sursa = v_rol AND um_norm = 'm') THEN
+    RAISE EXCEPTION 'Documentul are observații cu lungimi pe acest rol: decizia se ia pe secțiune' USING ERRCODE = '55000';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('ofertare_cb_decizie:' || p_document_id || ':' || p_doc_sha256 || ':' || coalesce(v_rol, '-') || ':'
+                                         || coalesce(v_sect, '-') || ':' || v_clasa));
+  SELECT d.id INTO v_prec FROM public.ofertare_cant_doc_decizii d
+   WHERE d.document_id = p_document_id AND d.doc_sha256 = p_doc_sha256 AND d.rol IS NOT DISTINCT FROM v_rol
+     AND d.sectiune IS NOT DISTINCT FROM v_sect AND d.decizie = ANY (v_clase)
+     AND NOT EXISTS (SELECT 1 FROM public.ofertare_cant_doc_decizii r WHERE r.revoca_id = d.id) ORDER BY d.id DESC LIMIT 1;
+  IF v_prec IS NOT NULL THEN
+    INSERT INTO public.ofertare_cant_doc_decizii (licitatie_id, document_id, doc_sha256, decizie, revoca_id, motiv, decis_de)
+    VALUES (v_lic, p_document_id, p_doc_sha256, 'revocare', v_prec, 'înlocuită de o decizie nouă', auth.uid());
+  END IF;
+  INSERT INTO public.ofertare_cant_doc_decizii (licitatie_id, document_id, doc_sha256, rol, sectiune, decizie, motiv, decis_de)
+  VALUES (v_lic, p_document_id, p_doc_sha256, v_rol, v_sect, p_decizie, btrim(p_motiv), auth.uid()) RETURNING id INTO v_id;
+  RETURN jsonb_build_object('ok', true, 'decizie_id', v_id, 'inlocuieste', v_prec);
 END $f$;
 
 -- 20261031b (PR3, review r3 Copilot): pornirea extragerii cu contextul de GRUP verificat atomic. Convenția numerică a unei părți dintr-un

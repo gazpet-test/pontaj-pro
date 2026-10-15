@@ -445,6 +445,20 @@ q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_origin
 T1=$(date +%s%N)
 wait
 asteapta "grup: o parte nouă inserată în timpul pornirii așteaptă commit-ul ei (fără fantome); pornirea a reușit" "$(( (T1 - T0) / 1000000 > 1200 ))|$(grep -c '"ok": true' /tmp/cb_grup.out)" "1|1"
+# confirmarea umană a textului unei părți (schimbă mulțimea părților valide) AȘTEAPTĂ pornirea de grup în curs
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-v@d-y', 1, ARRAY['961:$G1']);" -c "SELECT pg_sleep(3);" -c "COMMIT;" >/tmp/cb_grup2.out 2>&1 &
+sleep 1
+T0=$(date +%s%N)
+ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(963, '$(sha 'grup p03')', 'f3', '*', 'text_confirmat', 'confirmat in timpul pornirii')" >/dev/null
+T1=$(date +%s%N)
+wait
+asteapta "grup: text_confirmat pe o parte așteaptă pornirea de grup în curs (mutexul licitației)" "$(( (T1 - T0) / 1000000 > 1200 ))|$(grep -c '"ok": true' /tmp/cb_grup2.out)" "1|1"
+# producătorul ÎNTÂI (text + proveniență ținute), pornirea de grup după: fără deadlock (ordinea comună licitație → document)
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_documente_atribuire SET text_extras = 'grup p03 v2' WHERE id = 963;" -c "SELECT public.fn_ofertare_cb_text_scrie(963, 'grup p03 v2', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}');" -c "SELECT pg_sleep(3);" -c "COMMIT;" >/tmp/cb_prod.out 2>&1 &
+sleep 1
+o="$(svc "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-u@d-y', 1, ARRAY['961:$G1'])" 2>&1 || true)"
+wait
+asteapta "grup: producător întâi + pornire de grup → fără deadlock; grupul schimbat e refuzat curat" "$(grep -ci deadlock <<<"$o$(cat /tmp/cb_prod.out)")|$(j "$o" 'd.get("refuz")')" "0|grup_schimbat"
 asteapta "grup: RPC-ul doar pentru service_role" "$(q "SELECT has_function_privilege('authenticated','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])','EXECUTE')::text || has_function_privilege('service_role','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])','EXECUTE')::text")" falsetrue
 o="$(revenire_b || true)"; [ -z "$(grep -i error <<<"$o")" ] || esec "revenire 31b: $o"
 asteapta "revenirea 20261031b: corpul din 20261031a la loc (fără text_depasit), RPC-ul de grup scos" "$(q "SELECT (pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%')::text || (to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NULL)::text")" falsetrue
