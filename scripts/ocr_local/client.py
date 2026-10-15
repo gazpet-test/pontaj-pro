@@ -530,9 +530,11 @@ def _adauga(path, obj):
     with path.open('a', encoding='utf-8', newline='\n') as f:
         f.write(json.dumps(obj, ensure_ascii=False) + '\n'); f.flush(); os.fsync(f.fileno())
 
-def cheie_proba(it):
-    """Cheia unui dezacord pentru filtrul probei: aceeasi banda si aceleasi doua citiri (independent de id / pozitie)."""
-    return (it.get('band'), it.get('tip'), it.get('citire_lighton'), it.get('citire_mineru'))
+def cheie_proba(it, doc=None):
+    """Cheia unui dezacord pentru filtrul probei: acelasi DOCUMENT, aceeasi banda, acelasi tip si aceleasi doua citiri (independent de
+    id / pozitie). `document` vine din `masoara --jsonl` ('d772'); in client documentul e cel al directorului (Jakarinos r2 P2)."""
+    d = it.get('document') or ('d%s' % doc if doc is not None else None)
+    return (d, it.get('band'), it.get('tip'), it.get('citire_lighton'), it.get('citire_mineru'))
 
 @cu_lacat
 def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None):
@@ -543,13 +545,17 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
 
     PROBA (laborator, 15.10.2026; `max_apeluri` setat): cel mult `max_apeluri` apeluri platite in aceasta invocare, apoi stop FARA
     `arbitrata` (pasul ramane deschis, reluabil). Itemii fara AI (structura_tabele, banda_intreaga) NU se ating; doar itemii cu
-    `cheie_proba` in `filtru` (daca e dat); ordinea = sha256(seed + item_sha256), ca esantionul sa nu fie primele pagini."""
+    `cheie_proba` in `filtru` (daca e dat); ordinea GLOBALA pe toate documentele = sha256(seed | document | item_sha256), ca esantionul
+    sa nu fie primele pagini / primul document. Proba NU face niciodata `arbitrata` (nici pe ramura de reluare a unei intentii) si
+    raporteaza `oprita` daca omul a cerut oprirea. Recuperarea apelurilor cu rezultat necunoscut (-> needs_human fara AI) ruleaza si
+    in proba, inaintea oricarui apel nou: e o obligatie de siguranta, nu o alegere a esantionului (Jakarinos r2)."""
     rdir = pathlib.Path(rdir); r = rulare(rdir); proba = max_apeluri is not None; facute = 0
     if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     activa(rdir)
     if not pasi(rdir).get('comparatie'): raise RuntimeError('Compararea nu e incheiata (pasul compara)')
     if pasi(rdir).get('arbitrata_intentie'):
+        if proba: raise RuntimeError('Pasul arbitreaza are deja intentia `arbitrata`: o proba nu il poate finaliza (ruleaza pasul normal)')
         tranzitie(rdir, edge, r, 'arbitrata'); return {'stare': 'arbitrata', 'reluat': True}
     # JURNALUL APELURILOR PLATITE (review r2 Jakarinos P1-1 / Copilot P1-2), per document, append-only + fsync:
     #   apeluri.jsonl: {id, k, faza: start} SCRIS INAINTEA POST-ului; {id, k, faza: gata, rezultat: decizie | refuz | pierdut} dupa.
@@ -584,47 +590,54 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         _adauga(d / 'decizii_om.jsonl', {'id': it['id'], 'decizie': 'needs_human', 'motiv': motiv})
     st = stare_locala(); oprit = opreste_daca_peste_prag(st)
     if oprit: return oprit
+    docs = []
     for doc, _ in documente(r):
         d = rdir / ('d%d' % doc); ids = load(d / 'dezacorduri_bd.json'); items = {it['id']: it for it in _jsonl(d / 'dezacorduri.jsonl')}
         for bid in sorted(st['per_doc'][doc]['necunoscute'] - st['per_doc'][doc]['rezolvate']):
             om(d, ids, items[bid], 'apel de arbitraj cu rezultat necunoscut (posibil cheltuit), fara decizie inregistrata')
-        st = stare_locala(); ordine = list(items.values())
-        if proba: ordine.sort(key=lambda it: sha(('%s|%s' % (seed or '', it['item_sha256'])).encode('utf-8')))
-        for it in ordine:
-            if it['id'] in st['per_doc'][doc]['rezolvate'] or it['id'] in st['per_doc'][doc]['necunoscute']: continue
-            if it['id'] not in ids: raise RuntimeError('Dezacordul %s nu are id in BD (reia compara)' % it['id'])
-            if proba and (it['tip'] in ('banda_intreaga', 'structura_tabele') or (filtru is not None and cheie_proba(it) not in filtru)): continue
-            if proba and facute >= max_apeluri: break
-            if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
-                om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
-            if it['tip'] == 'structura_tabele':
-                om(d, ids, it, 'structura_tabele: un cititor vede tabel, celalalt text (fara arbitraj automat)'); st = stare_locala(); continue
-            img = (d / it['image']).read_bytes()
-            if sha(img) != it['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % it['band'])
-            oprit = opreste_daca_peste_prag(st)
-            if oprit: return oprit
-            activa(rdir)  # `erp oprire` (fara lacat) cerut intre timp -> niciun apel platit nou
-            a = uuid.uuid4().hex  # identificator UNIC al incercarii (review r3 Jakarinos P1: doua procese nu pot inchide aceeasi incercare)
-            _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
-            status, j = edge.post('ofertare-ocr-arbitreaza', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it,
-                                                             'imagine_b64': base64.b64encode(img).decode('ascii')}, timeout=240)
-            if status == 409 and j.get('refuz') == 'arbitrat':
-                # decis deja in BD, decizia nu e locala: la reconciliere = needs_human (fail-closed); la prag = needs_human
-                _adauga(d / 'pierdute.jsonl', {'id': it['id'], 'sursa': 'claude', 'motiv': 'arbitrat in BD, decizie locala lipsa'})
-                _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'pierdut'}); st = stare_locala(); continue
-            if status != 200:
-                # refuz = respins INAINTEA apelului platit (poarta, plafon, stare, amprenta, in zbor): apelul se inchide; fara refuz (409
-                # decontat fara decizie, 500, 502, altceva) = posibil platit: ramane necunoscut (start fara gata)
-                if 'refuz' in j: _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': j['refuz']})
-                raise EdgeError('ofertare-ocr-arbitreaza (%s)' % it['id'], status, j)
-            dec = j['decizie']
-            if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])
-            _adauga(d / 'decizii.jsonl', dec); _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'decizie'})
-            st = stare_locala(); facute += 1
-            if st['claude'] % 25 == 0: heartbeat(edge, True, 'rularea %d: %d arbitraje' % (r['rulare_id'], st['claude']))
+        docs.append((doc, d, ids, items))
+    st = stare_locala()
+    ordine = [(doc, d, ids, it) for doc, d, ids, items in docs for it in items.values()]  # pasul normal: document cu document, in ordine
+    if proba: ordine.sort(key=lambda x: sha(('%s|%s|%s' % (seed or '', x[0], x[3]['item_sha256'])).encode('utf-8')))
+    for doc, d, ids, it in ordine:
+        if it['id'] in st['per_doc'][doc]['rezolvate'] or it['id'] in st['per_doc'][doc]['necunoscute']: continue
+        if it['id'] not in ids: raise RuntimeError('Dezacordul %s nu are id in BD (reia compara)' % it['id'])
+        if proba and (it['tip'] in ('banda_intreaga', 'structura_tabele') or (filtru is not None and cheie_proba(it, doc) not in filtru)): continue
+        if proba and facute >= max_apeluri: break
+        if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
+            om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
+        if it['tip'] == 'structura_tabele':
+            om(d, ids, it, 'structura_tabele: un cititor vede tabel, celalalt text (fara arbitraj automat)'); st = stare_locala(); continue
+        img = (d / it['image']).read_bytes()
+        if sha(img) != it['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % it['band'])
+        oprit = opreste_daca_peste_prag(st)
+        if oprit: return oprit
+        activa(rdir)  # `erp oprire` (fara lacat) cerut intre timp -> niciun apel platit nou
+        a = uuid.uuid4().hex  # identificator UNIC al incercarii (review r3 Jakarinos P1: doua procese nu pot inchide aceeasi incercare)
+        _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
+        status, j = edge.post('ofertare-ocr-arbitreaza', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it,
+                                                         'imagine_b64': base64.b64encode(img).decode('ascii')}, timeout=240)
+        if status == 409 and j.get('refuz') == 'arbitrat':
+            # decis deja in BD, decizia nu e locala: la reconciliere = needs_human (fail-closed); la prag = needs_human
+            _adauga(d / 'pierdute.jsonl', {'id': it['id'], 'sursa': 'claude', 'motiv': 'arbitrat in BD, decizie locala lipsa'})
+            _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'pierdut'}); st = stare_locala(); continue
+        if status != 200:
+            # refuz = respins INAINTEA apelului platit (poarta, plafon, stare, amprenta, in zbor): apelul se inchide; fara refuz (409
+            # decontat fara decizie, 500, 502, altceva) = posibil platit: ramane necunoscut (start fara gata)
+            if 'refuz' in j: _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': j['refuz']})
+            raise EdgeError('ofertare-ocr-arbitreaza (%s)' % it['id'], status, j)
+        dec = j['decizie']
+        if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])
+        _adauga(d / 'decizii.jsonl', dec); _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'decizie'})
+        st = stare_locala(); facute += 1
+        if st['claude'] % 25 == 0: heartbeat(edge, True, 'rularea %d: %d arbitraje' % (r['rulare_id'], st['claude']))
     st = stare_locala(); oprit = opreste_daca_peste_prag(st)  # si inaintea finalizarii arbitrajului
     if oprit: return oprit
-    if proba: return dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='proba', apeluri_acum=facute)
+    if proba:
+        res = dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='proba', apeluri_acum=facute)
+        try: activa(rdir)
+        except RuntimeError as e: res.update(stare='oprita', motiv=str(e))  # oprire ceruta in timpul probei: raportata, nu ascunsa
+        return res
     marcheaza(rdir, 'arbitrata_intentie'); tranzitie(rdir, edge, r, 'arbitrata')
     heartbeat(edge, True, 'rularea %d: arbitrata' % r['rulare_id'])
     return dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='arbitrata')

@@ -191,8 +191,21 @@ class Client(unittest.TestCase):
         a = C.arbitreaza(rdir, self.edge, max_apeluri=5, filtru=set()); self.assertEqual((a['apeluri_acum'], apeluri()), (0, 1))  # filtru gol = nimic
         a = C.arbitreaza(rdir, self.edge, max_apeluri=100, seed='x'); self.assertEqual((a['stare'], apeluri()), ('proba', nb))   # restul, fara dubluri
         self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata'); self.assertEqual(apeluri(), nb)                 # pasul normal inchide
+    def test_proba_nu_finalizeaza_intentia_si_raporteaza_oprirea(self):
+        # Jakarinos r2 P1-3: o intentie `arbitrata` ramasa nu se finalizeaza dintr-o proba; oprirea ceruta e raportata
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        C.marcheaza(rdir, 'arbitrata_intentie')
+        with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge, max_apeluri=0, filtru=set())
+        self.assertNotEqual(self.edge.stare, 'arbitrata')
+        self.assertEqual(C.cheie_proba({'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}, 772),
+                         C.cheie_proba({'document': 'd772', 'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}))
+        self.assertNotEqual(C.cheie_proba({'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}, 772),
+                            C.cheie_proba({'band': 'b', 'tip': 'text', 'citire_lighton': 'x', 'citire_mineru': 'y'}, 1247))
     def test_flux_tabel_reconciliat(self):
         from .test_ocr_local import TABLE_A, TABLE_B
+        from . import compare as CMP  # TABLE_A / TABLE_B difera doar prin separator: cu regula A ar fi acord automat
+        q = patch.object(CMP, 'REGULA_A', False); q.start(); self.addCleanup(q.stop)
         self.edge.documente = [{'document_id': DOC, 'pagini': [1]}]
         r = C.preia(self.work, self.edge); rdir = pathlib.Path(r['dir']); C.descarca(rdir, self.edge)
         (rdir / 'orientare').mkdir(); (rdir / 'orientare' / ('%d.json' % DOC)).write_text('{"1": 0}', encoding='utf-8')

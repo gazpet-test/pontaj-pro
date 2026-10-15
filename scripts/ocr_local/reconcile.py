@@ -5,7 +5,7 @@ Pastreaza tripletul (citire LightOn / citire MinerU / ales) pentru fiecare dezac
 import json, pathlib
 import hashlib
 import os
-from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result, _skip_spans
+from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result, _skip_spans, antete_repetate
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -80,6 +80,8 @@ def apply_band(raw_a, raw_b, items, decisions):
         # intervalul inlocuit atinge un marcaj sarit la comparare ($, \text{, }, \(, chenar): l-ar putea taia pe jumatate (ex. `\mathrm{6 si 9`)
         # -> om (Jakarinos r1 laborator, P1-4)
         if any((s < end and start < e) if end > start else s < start < e for s, e in _skip_spans(sa[si][1])): needs = True; continue
+        # fragmentul DONOR (MinerU / text propus) cu caractere de marcaj (\ { } $) poate fi taiat la un marcaj (`6} si 9`) -> om (Jakarinos r2 P1-2)
+        if any(ch in new for ch in '\\{}$'): needs = True; continue
         edits.setdefault(si, []).append((start, end, new))
     segs = [list(s) for s in sa]
     for si, lst in edits.items():
@@ -161,6 +163,8 @@ def reconcile(plan_dir, decisions_path):
         if decisions[d['id']] is None: invalid.append({'id': d['id'], 'motiv': 'schema'})
     decisions = {k: v for k, v in decisions.items() if v is not None}
     pages = {}; triplets = []
+    rd = lambda b, r: (plan_dir / ('page%04d' % b['page']) / b['id'] / r / 'raw.txt').read_bytes().decode('utf-8')
+    antete = antete_repetate([rd(b, 'lighton') for b in doc['bands']], [rd(b, 'mineru') for b in doc['bands']])  # ca in compare()
     for band in doc['bands']:
         d = plan_dir / ('page%04d' % band['page']) / band['id']
         raw_a = (d / 'lighton' / 'raw.txt').read_bytes().decode('utf-8'); raw_b = (d / 'mineru' / 'raw.txt').read_bytes().decode('utf-8')
@@ -170,7 +174,7 @@ def reconcile(plan_dir, decisions_path):
         for r, raw in (('lighton', raw_a), ('mineru', raw_b)):
             if hashlib.sha256(raw.encode()).hexdigest() != res[r].get('raw_sha256') or not check_result(res[r], r, band, proto):
                 raise ValueError('Citirea %s a benzii %s nu mai corespunde rezultatului' % (r, band['id']))
-        _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'])
+        _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'], antete)
         for x in fresh: x['plan_input_sha256'] = doc['input_sha256']
         # egalitate canonica COMPLETA (toate campurile, in ordine) intre dezacordurile salvate si comparatia refacuta acum
         if [canonical(x) for x in fresh] != [canonical(i) for i in bi] or any(item_hash(i) != i.get('item_sha256') for i in bi):

@@ -5,7 +5,7 @@ DOAR citire - nu scrie nimic in directorul rularii (spre deosebire de `compara`,
 """
 import argparse, collections, json, pathlib, re, sys
 
-from .compare import compare_band
+from .compare import compare_band, antete_repetate
 
 
 def bands(run_dir):
@@ -23,10 +23,12 @@ def bands(run_dir):
 
 
 def measure(run_dir):
-    items = []; n = 0
-    for doc, band, ra, sa, rb, sb in bands(run_dir):
+    items = []; n = 0; per_doc = {}
+    for x in bands(run_dir): per_doc.setdefault(x[0], []).append(x)
+    antete = {d: antete_repetate([x[2] for x in xs], [x[4] for x in xs]) for d, xs in per_doc.items()}
+    for doc, band, ra, sa, rb, sb in (x for xs in per_doc.values() for x in xs):
         n += 1
-        _, its = compare_band(band, ra, sa, rb, sb)
+        _, its = compare_band(band, ra, sa, rb, sb, antete[doc])
         for it in its: it['document'] = doc
         items += its
     return n, items
@@ -58,6 +60,38 @@ def eliminate(base_items, items):
     return out
 
 
+RISC = re.compile(r'[0-9]|[$€%‰+\-−–—=<>≤≥±×*/^]')
+
+def semne_pierdute(base_items, items):
+    """Audit pe TOKENI (Jakarinos r2 P2: eliminarile partiale): pentru fiecare dezacord text din baza, tokenii cu cifre / semne care
+    fac parte din DIFERENTA (apar de un numar diferit de ori la LightOn si MinerU) trebuie sa se regaseasca in dezacordurile noi
+    care il acopera, la aceeasi parte. Intoarce dezacordurile din baza cu un astfel de token pierdut."""
+    from .compare import TOKEN, NUMBER
+    def sp(it, w):
+        s = (it.get('sursa') or {}).get(w)
+        return None if not s else (s['seg'][0], s['start'], s['seg'][1], s['end'])
+    ov = lambda x, y: x is not None and y is not None and (x[0], x[1]) <= (y[2], y[3]) and (y[0], y[1]) <= (x[2], x[3])
+    new = {}
+    for it in items:
+        if it['tip'] == 'text': new.setdefault((it.get('document'), it['band']), []).append(it)
+    out = []
+    for it in base_items:
+        if it['tip'] != 'text': continue
+        tl = collections.Counter(t for t in TOKEN.findall(it['citire_lighton']) if RISC.search(t))
+        tm = collections.Counter(t for t in TOKEN.findall(it['citire_mineru']) if RISC.search(t))
+        diff = {'lighton': tl - tm, 'mineru': tm - tl}
+        if not any(diff.values()): continue
+        cov = [c for c in new.get((it.get('document'), it['band']), []) if ov(sp(it, 'lighton'), sp(c, 'lighton')) or ov(sp(it, 'mineru'), sp(c, 'mineru'))]
+        for w, d in diff.items():
+            have = collections.Counter(t for c in cov for t in TOKEN.findall(c['citire_' + w]))
+            toks = TOKEN.findall(it['citire_' + w])
+            # '-' / '=' / liniute conteaza doar langa un numar (altfel sunt chenar); cifrele si celelalte semne conteaza mereu
+            langa = {t for k, t in enumerate(toks) if any(NUMBER.match(x) for x in toks[max(0, k - 1):k + 2] if x is not t)}
+            lost = {t: n for t, n in d.items() if have[t] < n and (any(ch.isdigit() for ch in t) or t not in '-=–—' or t in langa)}
+            if lost: out.append((it, w, lost)); break
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(); ap.add_argument('run_dir'); ap.add_argument('--jsonl'); ap.add_argument('--exemple', type=int, default=0)
     ap.add_argument('--fata-de', help='JSONL de baza (masoara --jsonl pe codul vechi): listeaza dezacordurile text eliminate cu cifre / semne')
@@ -74,6 +108,9 @@ def main(argv=None):
         gone = eliminate(base, items); risc = [i for i in gone if re.search(r'[0-9$€%+\-−–=<>≤≥±×*/^]', i['citire_lighton'] + i['citire_mineru'])]
         print('eliminate: %d din %d text; cu cifre / semne: %d' % (len(gone), sum(i['tip'] == 'text' for i in base), len(risc)))
         for i in risc: print(' ', i.get('document'), i['band'], repr(i['citire_lighton'][:70]), '||', repr(i['citire_mineru'][:70]))
+        sem = semne_pierdute(base, items)
+        print('semne / cifre din diferenta pierdute (inclusiv eliminari partiale): %d' % len(sem))
+        for i, w, lost in sem: print(' ', i.get('document'), i['band'], w, lost, repr(i['citire_lighton'][:60]), '||', repr(i['citire_mineru'][:60]))
     if a.exemple:
         for it in [i for i in items if i['tip'] == 'text'][:a.exemple]:
             print(repr(it['citire_lighton'][:80]), '|', repr(it['citire_mineru'][:80]))

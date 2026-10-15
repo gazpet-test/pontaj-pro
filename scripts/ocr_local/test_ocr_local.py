@@ -8,6 +8,15 @@ from .guard_legacy import repetition_reason, repeated_table_row
 from . import read as RD
 from .plan import plan, load_plan
 from .compare import compare_band, compare, segments
+from . import compare as CMP
+
+def fara_a(fn):
+    """Garantiile dinaintea regulii A (Razvan 15.10.2026): mecanica de baza ramane testata cu regula A OPRITA."""
+    def w(*a, **k):
+        old = CMP.REGULA_A; CMP.REGULA_A = False
+        try: return fn(*a, **k)
+        finally: CMP.REGULA_A = old
+    w.__name__ = fn.__name__; return w
 from .reconcile import reconcile, valid_decision, join_bands
 
 CODEX_OUT = pathlib.Path(os.environ.get('CODEX_WORK', 'C:/Users/Gazpet-Ai/Documents/Codex/2026-10-10/git')) / 'outputs'
@@ -351,6 +360,7 @@ class Citire(unittest.TestCase):
             self.assertEqual(st['status'], 'stopped_no_retry'); self.assertEqual(len(calls), 1)
 
 class Comparare(unittest.TestCase):
+    @fara_a
     def test_separator_pe_cantitate_e_dezacord_marcat(self):
         s, its = compare_band(BAND, TABLE_A, OK, TABLE_B, OK)
         self.assertEqual(len(its), 1); it = its[0]
@@ -381,6 +391,7 @@ class Comparare(unittest.TestCase):
     def test_semne_separate_prin_spatiu_raman_dezacorduri(self):
         for a, b in (('abatere ± 0,5', 'abatere 0,5'), ('cantitate - 5', 'cantitate 5'), ('diametru ≤ 50', 'diametru 50'), ('valoare > 100', 'valoare 100')):
             s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1, (a, b))
+    @fara_a
     def test_colspan_cu_cifre_merge_la_arbitru(self):
         a = '<table><tr><td>1.</td><td>COD</td><td>Țeavă</td><td>mc</td><td>1 000,00</td><td></td></tr></table>'
         b = '<table><tr><td></td><td>1.</td><td>COD</td><td>Țeavă</td><td>mc</td><td>1 000,00</td></tr></table>'
@@ -446,6 +457,7 @@ class Comparare(unittest.TestCase):
         for x, y in (('pantă 5 %', 'pantă 5'), ('abatere 5 ‰', 'abatere 5'), ('cod A_B', 'cod AB'), ('valoare (5)', 'valoare 5'),
                      ('preț 100 €', 'preț 100'), ('suprafață m<sup>2</sup>', 'suprafață m2'), ('apă H<sub>2</sub>O', 'apă H2O')):
             s, its = compare_band(BAND, x, OK, y, OK); self.assertGreaterEqual(len(its), 1, (x, y))
+    @fara_a
     def test_celule_unite_fara_cifre_merg_la_arbitru(self):
         s, its = compare_band(BAND, '<table><tr><td></td><td>CODX</td><td>mc</td><td>conform proiect</td></tr></table>', OK,
                               '<table><tr><td>CODX</td><td>mc</td><td>conform proiect</td></tr></table>', OK)
@@ -540,9 +552,7 @@ class NormalizareFormat(unittest.TestCase):
                      ('Curent $0,04\\ \\text{A}$ maxim', 'Curent 0,04 A maxim'),              # LaTeX in jurul aceluiasi text
                      ('masuri de protecție', 'masuri de protectie'), ('Ștefănești', 'Štefănești'),  # diacritice
                      ('D E N U M I R E', 'DENUMIRE'), ('A R T I C O L', 'ARTICOL'),          # litere rasfirate
-                     ('- primul punct', '• primul punct'), ('- al doilea', '■ al doilea'),    # buline
-                     ('Persoana juridica Formularul F3\nSNTGN TRANSGAZ\nObiectiv',            # antet citit in alta ordine
-                      'Persoana juridica\nSNTGN TRANSGAZ\nFormularul F3\nObiectiv')]:
+                     ('- primul punct', '• primul punct'), ('- al doilea', '■ al doilea')]:  # buline
             self.assertEqual(self.dez(a, b), [], (a, b))
     def test_negativ_cifre_semne_unitati(self):
         for a, b in [('D = 10 - 16 MM', 'D = 10 -16 MM'), ('–16', '-16'), ('0,056', '0.056'), ('5 m3', '5 m³'),
@@ -553,8 +563,42 @@ class NormalizareFormat(unittest.TestCase):
                      ('2\n*\n3', '2\n3'), ('100 $ si 200 $', '100 si 200'), ('- 5 m', '• 5 m'), ('Q =\n10 m', 'Q\n10 m'),
                      ('Pret materiale cu TVA 100 lei si pret manopera 200 lei', 'Pret materiale 100 lei si pret manopera cu TVA 200 lei'),
                      ('\\mathrm{x^{2}+3}', 'x^{2+3}'), ('Coduri A B C', 'Coduri ABC'), ('10 paturi', '10 pături'),
-                     ('Nota\n=\nTotal', 'Nota\nTotal'), ('A\ncu TVA\nB 100', 'A\nB 100\ncu TVA')]:
+                     ('Nota\n=\nTotal', 'Nota\nTotal'), ('A\ncu TVA\nB 100', 'A\nB 100\ncu TVA'),
+                     # regresiile Jakarinos r2: niciun format pe rand cu cifre; doar comenzi LaTeX; coduri; asociere
+                     ('100 $/m^2 si 200 $/m^2', '100 /m^2 si 200 /m^2'), ('- x = 5', '• x = 5'), ('x\n= y =\nz', 'x\ny\nz'),
+                     ('Coduri A B C D E', 'Coduri ABCDE'), ('10 buc. paturi', '10 buc. pături'),
+                     ('Pret materiale 100 lei\ncu TVA\nPret manopera 200 lei', 'Pret materiale 100 lei\nPret manopera 200 lei\ncu TVA')]:
             self.assertTrue(self.dez(a, b), (a, b))
+    def test_antet_repetat_mutat(self):
+        # doar un antet de pagina repetat in document (antete_repetate) poate fi „mutat” fara dezacord
+        a = 'Persoana juridica Formularul F3\nSNTGN TRANSGAZ\nObiectiv'; b = 'Persoana juridica\nSNTGN TRANSGAZ\nFormularul F3\nObiectiv'
+        dz = lambda ant: [i for i in compare_band(self.TXT, a, OK, b, OK, ant)[1] if i['tip'] == 'text']
+        self.assertTrue(dz(frozenset())); self.assertEqual(dz(frozenset({'SNTGN TRANSGAZ'})), [])
+        self.assertTrue(dz(frozenset({'Formularul F3'})))                                   # rand cu cifre: niciodata antet
+        self.assertEqual(CMP.antete_repetate(['SNTGN TRANSGAZ\nx 1'] * 10, ['SNTGN TRANSGAZ'] * 10), frozenset({'SNTGN TRANSGAZ'}))
+        self.assertEqual(CMP.antete_repetate(['SNTGN TRANSGAZ'] * 9, ['SNTGN TRANSGAZ'] * 10), frozenset())   # sub prag la un cititor
+    def test_reconcilierea_nu_preia_donor_taiat(self):
+        # Jakarinos r2 P1-2: fragmentul preluat din MinerU cu marcaj taiat (`6} si 9`, insertie in \mathrm{) -> needs_human
+        from .reconcile import apply_band
+        for a, b in [('Curent 5 V', 'Curent \\mathrm{6} si 9 V'), ('Curent \\mathrm{5} V', 'Curent \\mathrm{6} si 5 V')]:
+            _, its = compare_band(self.TXT, a, OK, b, OK); self.assertTrue(its, (a, b))
+            txt, needs = apply_band(a, b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its})
+            self.assertTrue(needs, (a, b, txt))
+
+    def test_sursa_ramane_exacta(self):
+        # fragmentul pentru arbitru e tot subsirul exact din citire, chiar daca intre tokeni sunt marcaje sarite
+        a = 'Curent $0,04\\ \\text{A}$ si 7 V'; b = 'Curent 0,04 A si 9 V'
+        its = self.dez(a, b); self.assertEqual(len(its), 1)
+        seg = segments(a); src = its[0]['sursa']['lighton']
+        self.assertEqual(seg[src['seg'][0]][1][src['start']:src['end']], its[0]['citire_lighton'])
+
+    def test_base64_imagine_inline(self):
+        # MinerU pune decupajul imaginii inline: continutul codat nu intra in comparare, marcajul imaginii da
+        b64 = 'iVBORw0KGgoAAAANSUhEUgAA' * 40
+        a = 'Fig. 1 <img src="data:image/png;base64,%s"/> Corp' % b64
+        self.assertEqual(self.dez(a, a.replace(b64, b64[::-1])), [])                       # doar continutul codat difera
+        self.assertTrue(self.dez(a, 'Fig. 1 Corp'))                                        # imaginea lipsa la celalalt ramane
+        self.assertTrue(self.dez(a, a.replace('Fig. 1', 'Fig. 2')))
     def test_reconcilierea_nu_taie_marcajul_sarit(self):
         # Jakarinos r1 P1-4: ales_mineru peste `\mathrm{5}` ar lasa `\mathrm{6 si 9 V` -> pagina = needs_human
         from .reconcile import apply_band
@@ -565,17 +609,40 @@ class NormalizareFormat(unittest.TestCase):
         # fara marcaj taiat, aceeasi decizie se aplica normal
         _, its = compare_band(self.TXT, 'Curent 5 si 7 V', OK, b, OK)
         self.assertEqual(apply_band('Curent 5 si 7 V', b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its}), ('Curent 6 si 9 V', False))
-    def test_sursa_ramane_exacta(self):
-        # fragmentul pentru arbitru e tot subsirul exact din citire, chiar daca intre tokeni sunt marcaje sarite
-        a = 'Curent $0,04\\ \\text{A}$ si 7 V'; b = 'Curent 0,04 A si 9 V'
-        its = self.dez(a, b); self.assertEqual(len(its), 1)
-        seg = segments(a); src = its[0]['sursa']['lighton']
-        self.assertEqual(seg[src['seg'][0]][1][src['start']:src['end']], its[0]['citire_lighton'])
 
-BENCH =pathlib.Path('C:/Users/Public/paw-data/out/ocr_bench_20261014/runs')
+class RegulaA(unittest.TestCase):
+    """Regula A (Razvan 15.10.2026) + ancorarea coloanelor cu cifre (laborator)."""
+    def rows(self, a, b):
+        t = lambda r: '<table><tr>' + ''.join('<td>%s</td>' % c for c in r) + '</tr></table>'
+        return [i for i in compare_band(BAND, t(a), OK, t(b), OK)[1] if i['tip'].startswith('rand_')]
+    def test_pozitiv(self):
+        for a, b in [(['112', '4426977', 'FLANSA OARBA PN 160 DN= 80 OL37-2', 'BUC.', '0.42', '', '', '0.004'],
+                      ['112', '4426977', 'FLANSA OARBA PN 160 DN=80 OL37-2', 'BUC.', '0.42', '', '', '', '0.004']),  # exemplul din r1
+                     (['345', '7345849', 'SODA', 'KG', '302.00', '', '', '0.302'], ['345', '7345849', 'SODA', 'KG', '302.00', '', '', '', '0.302']),
+                     (['1.', 'COD', 'mc', '0,056'], ['1.', 'COD', 'mc', '0.056']),                    # separator zecimal (0,…)
+                     (['1.', 'COD', 'mc', '79,43'], ['1.', 'COD', 'mc', '79.43']),
+                     (['', 'Titlu', ''], ['Titlu']), (['', '', 'lei', 'lei'], ['lei', 'lei']),        # fara cifre: doar celule goale
+                     (['5', 'COD', 'PAPUCI', 'BUC.', '238.00'], ['5', 'COD', 'PAPUCI', '|BUC.', '238.00'])]:  # bara '|'
+            self.assertEqual(self.rows(a, b), [], (a, b))
+    def test_negativ(self):
+        for a, b in [(['7', 'MARCA LP 60', 'BUC.', '2'], ['7', 'MARCA', 'BUC.', '2']),            # cuvant cu cifre lipsa
+                     (['1.', 'COD', 'mc', '1.234'], ['1.', 'COD', 'mc', '1,234']),                # mii vs zecimal
+                     (['1.', 'COD', '-5', ''], ['1.', 'COD', '', '-5']),                           # cifra mutata de coloana
+                     (['A', '5 m', ''], ['A', '', '5 m']),
+                     (['1.', 'COD', 'Țeavă', 'mc', '1 000,00', ''], ['', '1.', 'COD', 'Țeavă', 'mc', '1 000,00']),
+                     (['4', 'OTEL', 'KG', '374.79', '', '0.375'], ['4', 'OTEL', 'KG', '374.79']),  # valoare lipsa la un cititor
+                     (['1.', 'COD', 'mc', '0,56'], ['1.', 'COD', 'mc', '0,65']), (['1', 'X', '2'], ['1', 'X', '-2'])]:
+            self.assertTrue(self.rows(a, b), (a, b))
+    def test_fara_ancorare_formularea_literala(self):
+        old = CMP.REGULA_A_ANCORARE; CMP.REGULA_A_ANCORARE = False
+        try: self.assertEqual(self.rows(['1.', 'COD', '-5', ''], ['1.', 'COD', '', '-5']), [])   # de aceea ancorarea e pornita
+        finally: CMP.REGULA_A_ANCORARE = old
+
+BENCH = pathlib.Path('C:/Users/Public/paw-data/out/ocr_bench_20261014/runs')
 
 class Benchmark(unittest.TestCase):
     @unittest.skipUnless((BENCH / '21d_mineru25_pro_vllm/results/a_098_control300/raw.txt').exists(), 'benchmark 14.10 lipsa')
+    @fara_a
     def test_a098_singurul_dezacord_pe_cantitate_e_separatorul(self):
         rd = lambda run: (BENCH / run / 'results/a_098_control300/raw.txt').read_text(encoding='utf-8')
         s, its = compare_band(BAND, rd('17_lightonocr2_vllm'), OK, rd('21d_mineru25_pro_vllm'), OK)
@@ -584,6 +651,7 @@ class Benchmark(unittest.TestCase):
         self.assertEqual((q[0]['citire_lighton'].split(' | ')[-1], q[0]['citire_mineru'].split(' | ')[-1]), ('0,056', '0.056'))
 
 class Reconciliere(unittest.TestCase):
+    # fixture-urile TABLE_A / TABLE_B difera doar prin separator (0,056 / 0.056): cu regula A ar fi acord automat
     def _run(self, a, b, decizii):
         d = tempfile.mkdtemp(); out = pathlib.Path(d) / 'out'
         Image.new('RGB', (300, 300), 'white').save(pathlib.Path(d) / 'i.png')
@@ -598,6 +666,7 @@ class Reconciliere(unittest.TestCase):
         return reconcile(out, out / 'dec.jsonl'), items, out
     def setUp(self):
         p = patch('ocr_local.reconcile.arbiter_policy', return_value=POLICY); p.start(); self.addCleanup(p.stop)
+        q = patch.object(CMP, 'REGULA_A', False); q.start(); self.addCleanup(q.stop)
     def dec(self, decizie, text=''): return {'decizie': decizie, 'text': text, 'motiv': 'test', 'e_cantitate': True, 'anomalie_separator': True,
                                              'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 't1'}
     def test_ales_mineru_pe_cantitate(self):
@@ -715,7 +784,8 @@ class Reconciliere(unittest.TestCase):
         self.assertTrue(r['pages'][0]['needs_human']); self.assertEqual(r['invalid_decisions'][0]['motiv'], 'schema')
     def test_prompt_neadmis_in_protocol_needs_human(self):
         patch.stopall()
-        r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); self.assertTrue(r['pages'][0]['needs_human'])
+        with patch.object(CMP, 'REGULA_A', False):  # stopall a oprit si comutatorul regulii A
+            r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); self.assertTrue(r['pages'][0]['needs_human'])
     def test_reconciliere_a_doua_oara_refuzata_fara_scriere(self):
         r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); before = (out / 'reconciliere' / 'reconciliat.json').read_bytes()
         with self.assertRaises(FileExistsError): reconcile(out, out / 'dec.jsonl')

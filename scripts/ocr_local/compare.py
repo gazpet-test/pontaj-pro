@@ -126,28 +126,35 @@ def _md_split(chunk):
     if buf: out.append(('text', plain('\n'.join(buf))))
     return out
 
-# Normalizarea de FORMAT (laborator OCR, 15.10.2026; strans dupa Jakarinos r1 NO-GO): tokenii care sunt DOVEDIT doar decor sau
-# marcaj nu intra in comparare. Segmentele si pozitiile caracterelor raman neatinse (BD reface fragmentele din `sursa` cu aceeasi
-# tokenizare), reconcilierea foloseste aceeasi tokens() si refuza (needs_human) orice inlocuire care taie un marcaj sarit.
-# Cifrele, semnele, moneda si unitatile NU se ating. Un simbol se sare doar cand contextul dovedeste ca e marcaj, nu dupa pozitie.
+# Normalizarea de FORMAT (laborator OCR, 15.10.2026; a treia forma, dupa Jakarinos r1 + r2 NO-GO): tokenii DOVEDIT decor sau marcaj
+# nu intra in comparare. Principiul (r2): nicio regula de format nu atinge un RAND CU CIFRE — langa cifre orice semn, moneda,
+# bulina, diacritica sau asociere poate conta (bani). Segmentele si pozitiile raman neatinse (BD reface fragmentele din `sursa`),
+# reconcilierea foloseste aceeasi tokens() si refuza (needs_human) orice editare care atinge un marcaj sarit, la ambii cititori.
 DECOR_LONG = re.compile(r'^[=\-_*—–~]{3,}$')                 # chenar: >= 3 caractere de chenar (doar ele, spatiile scoase)
 DECOR_SHORT = re.compile(r'^(?:={1,2}|\|+)$')               # '=' / '==' (doar langa un chenar lung) si '|' singur pe rand
 LATEX_TEXT = re.compile(r'\\(?:text|mathrm|mathbf|operatorname)\s*\{([^{}^_\\\n]*)\}')  # doar continut simplu, fara imbricare
 LATEX_SPACE = re.compile(r'\\[ ,;:!]|\\(?=[%$&#_])')        # spatiere LaTeX / escape (semnul ramane)
 LATEX_INLINE = re.compile(r'\\\((?:(?!\\\)).)*?\\\)|\\\[(?:(?!\\\]).)*?\\\]', re.S)
-DOLLAR_MATH = re.compile(r'\$([^$\n]+)\$')                   # $...$ doar cu marcaj matematic inauntru (\, ^, _, {) - altfel e moneda
+DOLLAR_MATH = re.compile(r'\$([^$\n]+)\$')                   # $...$ doar cu o COMANDA LaTeX inauntru (\text, \Omega) - altfel e moneda
+DATA_URI = re.compile(r'data:image/[A-Za-z0-9.+-]+;base64,([A-Za-z0-9+/=]{16,})')  # continutul imaginilor inline (MinerU), nu textul
 BULLETS = set('•■▪●◦·-–—')
-FOLD_VARIANTE = str.maketrans('šŠ', 'șȘ')                    # Š/š = Ș citit gresit (ca sedila); mereu
-FOLD_LIPSA = str.maketrans('ăâîșțĂÂÎȘȚ', 'aaistAAIST')     # diacritica lipsa: doar fara numar vecin (10 paturi != 10 pături)
+FOLD_VARIANTE = str.maketrans('šŠ∅⌀', 'șȘØØ')                # Š/š = Ș citit gresit (ca sedila); Ø / ∅ / ⌀ = diametru; mereu
+FOLD_LIPSA = str.maketrans('ăâîșțĂÂÎȘȚ', 'aaistAAIST')     # diacritica lipsa: doar pe rand FARA cifre (10 paturi != 10 pături)
+RASFIRATE = frozenset({'TOTAL', 'DENUMIRE', 'ARTICOL', 'LISTA'})  # singurele cuvinte rasfirate din r1 (corpus); coduri A B C D E raman
 
 def _lines(val):
     pos = 0
     for line in val.split('\n'):
         yield pos, line; pos += len(line) + 1
 
-def _skip_spans(val):
-    """Intervalele [s, e) care sunt doar marcaj."""
-    spans = []; lines = list(_lines(val)); kind = []
+def _line_has_digit(val, s, e):
+    nl = val.rfind('\n', 0, s) + 1; eol = val.find('\n', e); eol = len(val) if eol < 0 else eol
+    return any(ch.isdigit() for ch in val[nl:eol])
+
+def _skip_spans(val, chenar=True):
+    """Intervalele [s, e) care sunt doar marcaj. `chenar=False` (celule de tabel): doar marcajul LaTeX / imaginea inline, fara reguli
+    de chenar (o celula '---' poate insemna „nu e cazul” intr-o coloana de cantitati)."""
+    spans = []; lines = list(_lines(val)) if chenar else []; kind = []
     for pos, line in lines:
         st = line.replace(' ', '').replace('\t', '')
         kind.append('lung' if st and DECOR_LONG.match(st) else 'scurt' if st and DECOR_SHORT.match(st) else 'gol' if not st else 'text')
@@ -155,34 +162,39 @@ def _skip_spans(val):
         st = line.strip()
         if kind[n] == 'lung': spans.append((pos, pos + len(line))); continue
         if kind[n] == 'scurt':
-            vec = [kind[x] for x in (n - 1, n + 1) if 0 <= x < len(lines)]
-            if st.startswith('|') or 'lung' in vec: spans.append((pos, pos + len(line)))   # '=' singur: doar lipit de un chenar lung
+            # '|' singur; '=' singur doar lipit de un chenar lung SAU intre randuri bordate cu '=' fara cifre (antetul F3 spart de MinerU:
+            # „= NR. SIMBOL ART.” / „VAL MAT” / „=” / „= D E N U M I R E”) — `Nota\n=\nTotal` ramane
+            vec = [x for x in (n - 1, n + 1, n - 2, n + 2) if 0 <= x < len(lines) and kind[x] != 'gol'][:2]
+            bord = lambda x: kind[x] == 'text' and not any(ch.isdigit() for ch in lines[x][1]) and lines[x][1].strip()[:1] + lines[x][1].strip()[-1:] != '' \
+                and ('=' in (lines[x][1].strip()[0], lines[x][1].strip()[-1]))
+            if st.startswith('|') or any(kind[x] == 'lung' for x in vec) or any(bord(x) for x in vec): spans.append((pos, pos + len(line)))
             continue
-        if kind[n] != 'text': continue
+        if kind[n] != 'text' or any(ch.isdigit() for ch in line): continue                 # rand cu cifre: nimic nu se sare
         lead = len(line) - len(line.lstrip()); trail = len(line.rstrip())
-        # '= ... =' (rand de chenar desenat): '=' la AMBELE capete, nedublate, vecinii interiori litere -> ambele '=' sunt chenar
-        if (len(st) > 2 and st[0] == '=' and st[-1] == '=' and st[1] != '=' and st[-2] != '='
-                and st[1:].lstrip()[:1].isalpha() and st[:-1].rstrip()[-1:].isalpha()):
-            spans += [(pos + lead, pos + lead + 1), (pos + trail - 1, pos + trail)]
-        # '|' la capat de rand: doar langa o LITERA ('| Dotari'), nu langa cifra ('| 5' poate fi '15') sau alt semn
+        # '=' de chenar la capat de rand (antet de deviz „= NR. SIMBOL ART. … =”): nedublat, cu >= 2 cuvinte de >= 2 litere pe rand
+        # (`= y =`, `Q =` pot fi egalitati si raman)
+        if len([w for w in re.findall(r'[^\W\d_]+', st) if len(w) >= 2]) >= 2:
+            if len(st) > 1 and st[0] == '=' and st[1] != '=': spans.append((pos + lead, pos + lead + 1))
+            if len(st) > 1 and st[-1] == '=' and st[-2] != '=': spans.append((pos + trail - 1, pos + trail))
+        # '|' la capat de rand: doar langa o litera ('| Dotari')
         if len(st) > 1 and st[0] == '|' and st[1] != '|' and st[1:].lstrip()[:1].isalpha(): spans.append((pos + lead, pos + lead + 1))
         if len(st) > 1 and st[-1] == '|' and st[-2] not in '|\\' and st[:-1].rstrip()[-1:].isalpha(): spans.append((pos + trail - 1, pos + trail))
+    for m in DATA_URI.finditer(val): spans.append((m.start(1), m.end(1)))
     for m in DOLLAR_MATH.finditer(val):
-        if re.search(r'[\\^_{]', m.group(1)): spans += [(m.start(), m.start() + 1), (m.end() - 1, m.end())]
+        if re.search(r'\\[A-Za-z]', m.group(1)): spans += [(m.start(), m.start() + 1), (m.end() - 1, m.end())]
     for m in LATEX_TEXT.finditer(val): spans += [(m.start(), m.start(1)), (m.end() - 1, m.end())]
     for m in LATEX_SPACE.finditer(val): spans.append((m.start(), m.end()))
     for m in LATEX_INLINE.finditer(val): spans += [(m.start(), m.start() + 2), (m.end() - 2, m.end())]
     return spans
 
-def tokens(segs):
-    """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere. Tokenii de marcaj se sar; literele
-    rasfirate (>= 5 MAJUSCULE singure despartite de cate un spatiu, ex. „D E N U M I R E”) devin UN token cu cheia lipita
-    (`A B C` = trei coduri, ramane)."""
+def tokens(segs, chenar=True):
+    """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere. Tokenii de marcaj se sar; un cuvant din
+    RASFIRATE scris rasfirat („D E N U M I R E”) devine UN token cu cheia lipita."""
     out = []
     for si, (kind, val) in enumerate(segs):
         # un tabel e un marcaj in fluxul de text: textul mutat de o parte pe alta a unui tabel devine dezacord (review Jakarinos r3)
         if kind != 'text': out.append((TABLE_MARK, si, None, None)); continue
-        spans = _skip_spans(val)
+        spans = _skip_spans(val, chenar)
         toks = [(m.group(0), si, m.start(), m.end()) for m in TOKEN.finditer(val)
                 if not any(s <= m.start() and m.end() <= e for s, e in spans)]
         up = lambda t: len(t[0]) == 1 and t[0].isalpha() and t[0].isupper()
@@ -190,28 +202,49 @@ def tokens(segs):
         while i < len(toks):
             j = i
             while j + 1 < len(toks) and up(toks[j]) and up(toks[j + 1]) and val[toks[j][3]:toks[j + 1][2]] == ' ': j += 1
-            if j - i >= 4: out.append((''.join(t[0] for t in toks[i:j + 1]), si, toks[i][2], toks[j][3])); i = j + 1
+            w = ''.join(t[0] for t in toks[i:j + 1])
+            if j > i and w in RASFIRATE: out.append((w, si, toks[i][2], toks[j][3])); i = j + 1
             else: out.append(toks[i]); i += 1
     return out
 
+VECIN = 3  # tokeni: o diacritica / bulina langa un numar (10 buc. paturi / 10 buc. pături, - 5 m) ramane literala
+
 def text_keys(tl, segs):
-    """Cheile de comparare: sedila si Š unificate; diacritica lipsa pliata doar fara numar vecin; bulina de la inceput de rand
-    urmata de o LITERA = '-' (`- 5 m` ramane minus)."""
-    keys = []; num = lambda k: 0 <= k < len(tl) and tl[k][2] is not None and bool(NUMBER.match(tl[k][0]))
+    """Cheile de comparare: sedila, Š si Ø unificate mereu; diacritica lipsa pliata si bulina de inceput de rand (urmata de cuvant) =
+    '-' DOAR fara numar la cel mult VECIN tokeni. Vecinatatea in TOKENI e aceeasi la ambii cititori (Jakarinos r2 / laborator: o
+    regula pe „rand” e asimetrica, cititorii sparg randurile diferit si apar dezacorduri false)."""
+    keys = []; isnum = [s is not None and bool(NUMBER.match(t)) for t, _, s, _ in tl]
     for k, (t, si, s, e) in enumerate(tl):
-        if t in BULLETS and s is not None:
-            val = segs[si][1]; nl = val.rfind('\n', 0, s) + 1; eol = val.find('\n', e); eol = len(val) if eol < 0 else eol
-            if not val[nl:s].strip() and val[e:eol].lstrip()[:1].isalpha(): keys.append('-'); continue
+        if s is None: keys.append(t); continue
+        near = any(isnum[x] and tl[x][1] == si for x in range(max(0, k - VECIN), min(len(tl), k + VECIN + 1)) if x != k)
+        if t in BULLETS and not near:
+            val = segs[si][1]; nl = val.rfind('\n', 0, s) + 1
+            if not val[nl:s].strip() and k + 1 < len(tl) and tl[k + 1][1] == si and tl[k + 1][0][:1].isalpha(): keys.append('-'); continue
         w = norm_word(t).translate(FOLD_VARIANTE)
-        keys.append(w if num(k - 1) or num(k + 1) else w.translate(FOLD_LIPSA))
+        keys.append(w if near else w.translate(FOLD_LIPSA))
     return keys
 
-def whole_lines(tl, segs, i1, i2):
-    """Tokenii [i1, i2) formeaza randuri INTREGI ale aceluiasi segment text (niciun alt token pe primul / ultimul rand)."""
-    if i1 >= i2 or tl[i1][2] is None or tl[i2 - 1][1] != tl[i1][1] or any(tl[k][2] is None for k in range(i1, i2)): return False
+def _norm_line(s): return ' '.join(s.split())
+
+def block_lines(tl, segs, i1, i2):
+    """Randurile (normalizate) acoperite INTEGRAL de tokenii [i1, i2) ai aceluiasi segment text; None daca nu sunt randuri intregi."""
+    if i1 >= i2 or tl[i1][2] is None or tl[i2 - 1][1] != tl[i1][1] or any(tl[k][2] is None for k in range(i1, i2)): return None
     si = tl[i1][1]; val = segs[si][1]; s, e = tl[i1][2], tl[i2 - 1][3]
     nl = val.rfind('\n', 0, s) + 1; eol = val.find('\n', e); eol = len(val) if eol < 0 else eol
-    return not any(t[1] == si and t[2] is not None and (nl <= t[2] < s or e <= t[2] < eol) for t in tl)
+    if any(t[1] == si and t[2] is not None and (nl <= t[2] < s or e <= t[2] < eol) for t in tl): return None
+    return [x for x in (_norm_line(l) for l in val[nl:eol].split('\n')) if x]
+
+def antete_repetate(raws_a, raws_b, prag=10):
+    """Antetele / subsolurile de pagina ale documentului: randuri FARA cifre, cu litere, care apar in >= prag benzi la AMBII cititori.
+    Doar ele pot fi „mutate” fara dezacord (ordinea de citire a unui antet pe doua coloane nu poarta informatie)."""
+    def count(raws):
+        c = {}
+        for raw in raws:
+            for l in {_norm_line(x) for x in plain(raw).split('\n')}:
+                if l and not any(ch.isdigit() for ch in l) and any(ch.isalpha() for ch in l): c[l] = c.get(l, 0) + 1
+        return c
+    ca, cb = count(raws_a), count(raws_b)
+    return frozenset(l for l, n in ca.items() if n >= prag and cb.get(l, 0) >= prag)
 
 def table_rows(segs):
     # randurile complet goale nu poarta informatie (LightOn mai adauga unul) - nu intra in aliniere
@@ -229,8 +262,41 @@ def numeric_diff(a, b):
     na = [t for t in TOKEN.findall(a) if NUMBER.match(t)]; nb = [t for t in TOKEN.findall(b) if NUMBER.match(t)]
     return na != nb
 
-def cell_key(c): return norm_word(re.sub(r'\s+', ' ', c.strip()))  # literal (doar spatiile si sedila unificate): AB-12C != AB12-C
+def cell_key(c):
+    """Cheia celulei = cheile tokenilor ei (laborator 15.10.2026): spatiile dintre tokeni nu conteaza („fundație: 1,0” = „fundație:1,0”,
+    „100 mc” = „100mc”), dar tokenii raman literali („C30/37 1,3” != „C30/371,3”, AB-12C != AB12-C); LaTeX simplu, diacritice si Ø
+    ca la text, fara regulile de chenar."""
+    seg = [('text', re.sub(r'\s+', ' ', c.strip()))]; tl = tokens(seg, chenar=False)
+    return ' '.join(text_keys(tl, seg))
 def row_key(r): return '␟'.join(cell_key(c) for c in r)
+
+def num_norm(t):
+    """Numarul pentru regula A: separatorul zecimal unificat DOAR cand nu poate fi separator de mii (partea intreaga 0 sau alt numar
+    de cifre decat 3 dupa separator): 0,056 = 0.056 si 79,43 = 79.43, dar 1.234 != 1,234 (mii vs zecimal) si 1.234,56 ramane literal."""
+    m = re.fullmatch(r'([-+±−]?)(\d+)[.,](\d+)', t)
+    if not m or (m.group(2).lstrip('-') != '0' and len(m.group(3)) == 3): return t
+    return '%s%s.%s' % m.groups()
+
+def regula_a(ca, cb):
+    """Regula A (Razvan 15.10.2026, gratuita, determinista): rand acord automat daca secventa tokenilor NUMERICI e identica la ambii
+    cititori (aceeasi ordine, separatorul zecimal unificat prin num_norm) si restul difera doar prin spatii / celule goale / bare '|'.
+    „MARCA LP 60” vs „MARCA” NU e acord (secventa numerica difera). Baza ramane randul LightOn (celulele lui)."""
+    def cells(row):  # celulele nevide (fara bare '|'), cu pozitia lor in rand si tokenii cu numerele unificate
+        out = []
+        for k, c in enumerate(row):
+            toks = [num_norm(t) if NUMBER.match(t) else t for t in cell_key(c).split(' ') if t and t != '|']
+            if toks: out.append((k, toks))
+        return out
+    xa, xb = cells(ca), cells(cb)
+    if not REGULA_A_ANCORARE:  # formularea din 15.10 literal: doar secventa tokenilor, oricum ar fi impartiti pe celule
+        return [t for _, ts in xa for t in ts] == [t for _, ts in xb for t in ts]
+    if [t for _, t in xa] != [t for _, t in xb]: return False
+    # ANCORARE (laborator, peste formularea din 15.10): o celula cu cifre trebuie sa stea in aceeasi coloana numarata de la inceputul
+    # SAU de la sfarsitul randului la ambii cititori — altfel cifra s-a mutat de coloana (cantitate vs pret) si ramane dezacord
+    # (testele Copilot / Jakarinos: cantitate semnata mutata, colspan cu cifre, celula cu cifra mutata fara antet)
+    return all(i == j or len(ca) - i == len(cb) - j for (i, t), (j, _) in zip(xa, xb) if any(ch.isdigit() for x in t for ch in x))
+
+REGULA_A_ANCORARE = True
 
 def same_content(ca, cb):
     """LightOn scrie celulele unite ca celule goale, MinerU ca o singura celula (colspan). Acelasi continut nevid, in aceeasi
@@ -264,22 +330,23 @@ def find_header(rows, upto):
         if any(re.search(r'cantit|u\.?\s*m\.?$', norm_word(c), re.I) for c in r): return r
     return None
 
-def compare_text(seg_a, seg_b, base):
+def compare_text(seg_a, seg_b, base, antete=frozenset()):
     ta = tokens(seg_a); tb = tokens(seg_b)
     ka = text_keys(ta, seg_a); kb = text_keys(tb, seg_b)
     ops = [o for o in difflib.SequenceMatcher(a=ka, b=kb, autojunk=False).get_opcodes() if o[0] != 'equal']
     # bloc MUTAT (ordinea de citire difera, ex. antet pe doua coloane): o stergere la un cititor = o inserare la celalalt, aceiasi
     # tokeni, FARA cifre -> nu e dezacord (baza ramane LightOn). Cu cifre ramane dezacord: ordinea poate schimba carui text ii apartine.
     dele = [o for o in ops if o[0] == 'delete']; ins = [o for o in ops if o[0] == 'insert']; moved = set()
-    # Strict (Jakarinos r1: „cu TVA” mutat intre doua preturi schimba asocierea): doar RANDURI INTREGI la ambii cititori, doar cuvinte
-    # (>= 2) si punctuatie simpla, de aceeasi parte a oricarui tabel (text mutat peste un tabel ramane dezacord `contine_tabel`).
-    word = lambda t: t.isalpha()
+    # Strict (Jakarinos r1 + r2: un rand „cu TVA” mutat langa preturi schimba asocierea): doar ANTETE DE PAGINA repetate in document
+    # (antete_repetate: randuri fara cifre, in >= 10 benzi la ambii cititori), randuri intregi la ambii, aceiasi tokeni, de aceeasi
+    # parte a oricarui tabel.
     for d in dele:
-        seq = ka[d[1]:d[2]]
-        if sum(map(word, seq)) < 2 or not all(word(t) or t in '.,:;"„”' for t in seq) or not whole_lines(ta, seg_a, d[1], d[2]): continue
+        seq = ka[d[1]:d[2]]; la = block_lines(ta, seg_a, d[1], d[2])
+        if not la or not all(l in antete for l in la): continue
         for x in ins:
-            if (x not in moved and kb[x[3]:x[4]] == seq and ka[:d[1]].count(TABLE_MARK) == kb[:x[3]].count(TABLE_MARK)
-                    and whole_lines(tb, seg_b, x[3], x[4])):
+            lb = block_lines(tb, seg_b, x[3], x[4])
+            if (x not in moved and kb[x[3]:x[4]] == seq and lb and all(l in antete for l in lb)
+                    and ka[:d[1]].count(TABLE_MARK) == kb[:x[3]].count(TABLE_MARK)):
                 moved.update((d, x)); break
     groups = []
     for op, a1, a2, b1, b2 in ops:
@@ -334,8 +401,11 @@ def match_rows(ra, rb):
         pairs += [(None, x, False) for x in range(j, b2)]
     return pairs
 
-def compare_tables(seg_a, seg_b, base):
+REGULA_A = True
+
+def compare_tables(seg_a, seg_b, base, acord_a=None):
     ra = table_rows(seg_a); rb = table_rows(seg_b); items = []
+    acord_a = [] if acord_a is None else acord_a
     rows_a = [r[2] for r in ra]
     pairs = match_rows(ra, rb)
     a2b = {i: j for i, j, _ in pairs if i is not None and j is not None}; b2a = {j: i for i, j in a2b.items()}
@@ -368,8 +438,9 @@ def compare_tables(seg_a, seg_b, base):
         anchor = None
         if a and b:
             if same_content(ca, cb): continue
+            if REGULA_A and regula_a(ca, cb): acord_a.append([a[0], a[1]]); continue
             tip = 'rand_tabel'
-            cell = lambda r, k: norm_word(r[k]) if k < len(r) else None
+            cell = lambda r, k: cell_key(r[k]) if k < len(r) else None
             diff = [k for k in range(max(len(ca), len(cb))) if cell(ca, k) != cell(cb, k)]
             rl = roles(header, ca)
             has_digit = any(ch.isdigit() for x in ca + cb for ch in x)
@@ -390,7 +461,7 @@ def compare_tables(seg_a, seg_b, base):
                           diferenta_numerica=numeric_diff(fa, fb), anomalie_separator=separator_anomaly(fa, fb), e_cantitate=bool(e_cant)))
     return items, len(ra)
 
-def compare_band(band, raw_a, res_a, raw_b, res_b):
+def compare_band(band, raw_a, res_a, raw_b, res_b, antete=frozenset()):
     base = {'band': band['id'], 'page': band['page'], 'kind': band['kind'], 'image': band['image'], 'image_sha256': band['image_sha256'],
             'cititori': {r: {'protocol': x.get('protocol'), 'weights_sha256': x.get('weights_sha256')} for r, x in (('lighton', res_a), ('mineru', res_b))},
             'raw_sha256': {'lighton': hashlib.sha256(raw_a.encode()).hexdigest(), 'mineru': hashlib.sha256(raw_b.encode()).hexdigest()}}
@@ -403,7 +474,7 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
     na = sum(1 for s in sa if s[0] == 'table'); nb = sum(1 for s in sb if s[0] == 'table')
     structura = 'aceeasi' if (na > 0) == (nb > 0) else 'diferita'
     if structura == 'diferita': sa, sb = flat_text(sa), flat_text(sb)
-    ti, nt = compare_text(sa, sb, base); ri, nr = compare_tables(sa, sb, base)
+    acord_a = []; ti, nt = compare_text(sa, sb, base, antete); ri, nr = compare_tables(sa, sb, base, acord_a)
     if structura == 'diferita':
         for it in ti: it['semnal'] = 'structura_diferita'; it['e_cantitate'] = it['e_cantitate'] or it['diferenta_numerica']
         # tabel la un cititor, text la celalalt: dezacord explicit de structura, chiar daca textul aplatizat e identic (review Copilot r4)
@@ -411,7 +482,8 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
                           citire_lighton='%d tabele' % na, citire_mineru='%d tabele' % nb, pozitie={'lighton': None, 'mineru': None},
                           diferenta_numerica=False, anomalie_separator=False, e_cantitate=True,
                           motiv_pipeline='un cititor vede tabel, celalalt text'))
-    return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri)}, ti + ri
+    return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri),
+            'acord_regula_a': acord_a}, ti + ri
 
 def canonical(it):
     return json.dumps({k: v for k, v in it.items() if k != 'item_sha256'}, ensure_ascii=False, sort_keys=True)
@@ -434,7 +506,7 @@ def segmente(raw):
 def compare(plan_dir):
     from .read import protocol
     from .plan import load_plan, save
-    plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); summary = []; items = []; proto = protocol()
+    plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); summary = []; items = []; proto = protocol(); loaded = []
     for band in doc['bands']:
         d = plan_dir / ('page%04d' % band['page']) / band['id']; got = {}
         for reader in ('lighton', 'mineru'):
@@ -444,7 +516,11 @@ def compare(plan_dir):
             if not check_result(res, reader, band, proto) or hashlib.sha256(raw.encode()).hexdigest() != res.get('raw_sha256'):
                 raise ValueError('Citirea %s/%s nu e a protocolului / greutatilor / imaginii curente sau raw-ul s-a schimbat' % (band['id'], reader))
             got[reader] = (raw, res)
-        s, its = compare_band(band, got['lighton'][0], got['lighton'][1], got['mineru'][0], got['mineru'][1])
+        loaded.append((band, got))
+    # antetele repetate se calculeaza pe TOT documentul (aceeasi functie in reconcile.py), apoi comparatia benzilor
+    antete = antete_repetate([g['lighton'][0] for _, g in loaded], [g['mineru'][0] for _, g in loaded])
+    for band, got in loaded:
+        s, its = compare_band(band, got['lighton'][0], got['lighton'][1], got['mineru'][0], got['mineru'][1], antete)
         for it in its: it['plan_input_sha256'] = doc['input_sha256']; it['item_sha256'] = item_hash(it)
         summary.append(s); items += its
     out = {'bands': len(summary), 'bands_identical': sum(1 for s in summary if s.get('disagreements') == 0),
