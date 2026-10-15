@@ -1,8 +1,11 @@
 // Promptul arbitrului OCR local — VERSIONAT (spec §3). Orice schimbare de text = versiune nouă aici ȘI în
 // scripts/ocr_local/protocol.json → arbitru.prompt_versiuni_admise (testul Python test_prompt_arbitru_admis le leagă).
-export const PROMPT_VERSIUNE = 'arb-v1'
+// arb-v2 (laborator OCR 15.10.2026, dupa proba pe r1): regula 9 explica conventiile de FORMAT ale citirilor. In proba, 12 din 14
+// escaladari au venit din Haiku nesigur pe linii de chenar ('---', '====='), pe '|' si pe marcajele ⟦rowspan⟧ — pe r1, 2.367 de
+// dezacorduri (19%) sunt doar decor. Regulile 1-8 neschimbate; decizia ramane dupa imagine.
+export const PROMPT_VERSIUNE = 'arb-v2'
 // Cascada in ACELASI apel (decizia Razvan 15.10.2026, D varianta A): Haiku 5.5 primul filtru pe orice dezacord; Sonnet 5 cand Haiku e
-// nesigur (needs_human / iesire invalida / usage lipsa) sau dezacordul are diferenta de cifre. Acelasi prompt pentru ambele.
+// nesigur (needs_human / iesire invalida / usage lipsa) sau dezacordul are cifre diferite (cifreDiferite). Acelasi prompt pentru ambele.
 export const MODEL_FILTRU = 'claude-haiku-5-5'
 export const MODEL_ARBITRU = 'claude-sonnet-5'
 
@@ -24,6 +27,15 @@ REGULI:
    citiri e doar de separator (sau imaginea arată un separator ambiguu), pui "anomalie_separator": true.
 7. "e_cantitate": true dacă locul conține o cantitate, o valoare sau o dimensiune (număr care poate intra într-un calcul).
 8. "motiv": cel mult 200 de caractere, în română, ce ai văzut în imagine.
+9. FORMATUL citirilor (convenții ale cititorilor și ale pipeline-ului, NU caractere de căutat ca text în imagine):
+   a) O citire formată doar din linii de - = _ * (ex. „---”, „==========”) înseamnă o linie orizontală / un chenar desenat.
+      Cauți LINIA în imagine în locul descris: dacă linia există acolo, alegi citirea care o are; dacă nu există, pe cea fără ea.
+   b) „ | ” separă celule de tabel (un cititor poate scrie un tabel ca text cu „|”); nu e un caracter din imagine. Alegi citirea
+      a cărei împărțire în celule corespunde tabelului din imagine.
+   c) ⟦…⟧ sunt adnotări ale pipeline-ului: ⟦rowspan=N⟧ = celulă unită pe N rânduri, ⟦img …⟧ = o imagine, ⟦barat: …⟧ = text tăiat,
+      ⟦tabel⟧ = un tabel în fluxul de text, ⟦tabel_neparsat⟧ = tabel nerecunoscut. Le verifici ca structură (celula e unită? e o
+      imagine? textul e tăiat?), nu le cauți ca text.
+   d) Regulile 5 și 6 rămân: pe cifre și cantități orice îndoială = needs_human; separatorul nu se normalizează.
 
 Răspunzi EXCLUSIV cu un singur obiect JSON, fără alt text, fără blocuri de cod:
 {"decizie": "ales_lighton" | "ales_mineru" | "text_propus" | "needs_human", "text": "<textul ales sau propus; gol la needs_human>", "motiv": "<max 200 caractere>", "e_cantitate": true | false, "anomalie_separator": true | false}`
