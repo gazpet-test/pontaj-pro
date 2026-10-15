@@ -474,15 +474,15 @@ wait
 asteapta "grup: document ocupat de producător → grup_ocupat imediat; producătorul termină fără deadlock" "$(j "$o" 'd.get("refuz")')|$(( (T1 - T0) / 1000000 < 1000 ))|$(grep -ci deadlock /tmp/cb_prod2.out)|$(grep -c '"ok": true' /tmp/cb_prod2.out)" "grup_ocupat|1|0|1"
 # ciclul în trei sesiuni (review r7, Jakarinos): T1 ține documentul B (alt grup), T2 ține cererea FOR UPDATE și așteaptă documentul B
 # (ca o redeschidere), T3 pornește grupul A → NU așteaptă cererea (cerere_ocupata); T1 termină cu text_scrie; nicio sesiune în deadlock
-"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_documente_atribuire SET text_extras = 'Strada A 100 m' WHERE id = 901;" -c "SELECT pg_sleep(2.5);" -c "SELECT public.fn_ofertare_cb_text_scrie(901, 'Strada A 100 m', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}');" -c "COMMIT;" >/tmp/cb_t1.out 2>&1 &
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_documente_atribuire SET text_extras = 'Strada A 100 m' WHERE id = 901;" -c "SELECT pg_sleep(2.5);" -c "SELECT public.fn_ofertare_cb_text_scrie(901, 'Strada A 100 m', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}');" -c "COMMIT;" -c "SELECT 'COMIS';" >/tmp/cb_t1.out 2>&1 &
 sleep 0.5
-"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT 1 FROM public.ofertare_ai_cereri WHERE id = $C1 FOR UPDATE;" -c "SELECT 1 FROM public.ofertare_documente_atribuire WHERE id = 901 FOR SHARE;" -c "COMMIT;" >/tmp/cb_t2.out 2>&1 &
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT 1 FROM public.ofertare_ai_cereri WHERE id = $C1 FOR UPDATE;" -c "SELECT 1 FROM public.ofertare_documente_atribuire WHERE id = 901 FOR SHARE;" -c "COMMIT;" -c "SELECT 'COMIS';" >/tmp/cb_t2.out 2>&1 &
 sleep 0.7
 T0=$(date +%s%N)
 o="$(svc "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-r@d-z', 1, ARRAY['961:$G1','963:$(sha 'grup p03 v3')'], ARRAY[$DR]::bigint[])" 2>&1 || true)"
 T1=$(date +%s%N)
 wait
-asteapta "grup: cererea ținută de altă tranzacție → cerere_ocupata imediat; cele trei sesiuni fără deadlock" "$(j "$o" 'd.get("refuz")')|$(( (T1 - T0) / 1000000 < 1000 ))|$(cat /tmp/cb_t1.out /tmp/cb_t2.out | grep -ci deadlock)" "cerere_ocupata|1|0"
+asteapta "grup: cererea ținută de altă tranzacție → cerere_ocupata imediat; T1 scrie proveniența și comite; T2 comite; fără deadlock" "$(j "$o" 'd.get("refuz")')|$(( (T1 - T0) / 1000000 < 1000 ))|$(cat /tmp/cb_t1.out /tmp/cb_t2.out | grep -ci "deadlock|error")|$(grep -c '"ok": true' /tmp/cb_t1.out)|$(grep -c "^COMIS$" /tmp/cb_t1.out)|$(grep -c "^COMIS$" /tmp/cb_t2.out)" "cerere_ocupata|1|0|1|1|1"
 asteapta "grup: RPC-ul doar pentru service_role" "$(q "SELECT has_function_privilege('authenticated','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[])','EXECUTE')::text || has_function_privilege('service_role','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[])','EXECUTE')::text")" falsetrue
 o="$(revenire_b || true)"; [ -z "$(grep -i error <<<"$o")" ] || esec "revenire 31b: $o"
 asteapta "revenirea 20261031b: corpul din 20261031a la loc (fără text_depasit), RPC-ul de grup scos" "$(q "SELECT (pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%')::text || (to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[])') IS NULL)::text")" falsetrue
