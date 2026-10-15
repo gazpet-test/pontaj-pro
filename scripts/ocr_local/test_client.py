@@ -1,7 +1,7 @@
 """Teste CPU pentru client.py (fara retea): python -B -m unittest ocr_local.test_client -v (PYTHONPATH=scripts).
 Edge-urile sunt simulate de FakeEdge, care reface verificarile BD relevante pentru client (acoperirea planului, benzile si imaginile
 planului, proveniența dezacordului = item-ul exact cu amprenta lui, amprenta manifestului de comparatie, starile rularii)."""
-import hashlib, io, json, os, pathlib, re, tempfile, unittest
+import hashlib, io, json, os, pathlib, re, ssl, tempfile, unittest, urllib.error
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 from . import client as C
@@ -613,6 +613,26 @@ class Client(unittest.TestCase):
         self.assertEqual(e.n, 4)
         for op in ('comparatie_gata', 'tranzitie', 'preia', 'plan', 'heartbeat'):
             with self.assertRaises(ValueError): C.scrie_reluabil(Refuz(200), op, {})
+    def test_edge_real_refuz_cu_corp_intrerupt_si_tls_nu_se_reiau(self):
+        # Jakarinos reincercare r1 P2: prin Edge.post REAL, un 400/409/500 al carui corp cade la citire ramane refuz (1 apel), iar TLS nu se reia
+        class CorpCade:
+            def read(self, *a): raise TimeoutError('The read operation timed out')
+            def close(self): pass
+        class Op:
+            n = 0
+            def __init__(self, fabrica): self.fabrica = fabrica
+            def open(self, req, timeout=0): self.n += 1; raise self.fabrica(req)
+        for status in (400, 409, 500):
+            op = Op(lambda req, s=status: urllib.error.HTTPError(req.full_url, s, 'x', {}, CorpCade()))
+            with patch.object(C, 'PAUZE_REIA', (0, 0, 0)), self.assertRaises(C.EdgeError) as cm:
+                C.scrie_reluabil(C.Edge('0' * 64, op=op), 'pagina', {})
+            self.assertEqual((op.n, cm.exception.status), (1, status))
+        op = Op(lambda req: urllib.error.URLError(ssl.SSLCertVerificationError('certificat invalid')))
+        with patch.object(C, 'PAUZE_REIA', (0, 0, 0)), self.assertRaises(urllib.error.URLError): C.scrie_reluabil(C.Edge('0' * 64, op=op), 'pagina', {})
+        self.assertEqual(op.n, 1)
+        op = Op(lambda req: urllib.error.URLError(TimeoutError('timed out')))  # retea: se reia
+        with patch.object(C, 'PAUZE_REIA', (0, 0, 0)), self.assertRaises(urllib.error.URLError): C.scrie_reluabil(C.Edge('0' * 64, op=op), 'pagina', {})
+        self.assertEqual(op.n, 4)
 
 if __name__ == '__main__':
     unittest.main()

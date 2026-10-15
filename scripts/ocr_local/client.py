@@ -12,7 +12,7 @@ documentului: plan.json, benzile, citirile, dezacorduri.jsonl, decizii.jsonl, re
 Reguli: fara redirect, fara proxy, URL-ul semnat acceptat doar pe bucketul ofertare al proiectului; nicio reincercare automata a unui
 apel platit; orice refuz al BD opreste pasul (mesajul BD, fara secret). Oprire automata (spec §8): garda pe > 20% din pagini,
 needs_human > 15% din arbitrajele Claude (dupa minim 20)."""
-import base64, concurrent.futures, functools, hashlib, http.client, json, os, pathlib, re, shutil, time, urllib.error, urllib.request, uuid
+import base64, concurrent.futures, functools, hashlib, http.client, json, os, pathlib, re, shutil, ssl, time, urllib.error, urllib.request, uuid
 
 BASE = 'https://dxczwkbciseqniprspcu.supabase.co'
 SEMNAT = BASE + '/storage/v1/object/sign/ofertare/'
@@ -68,7 +68,11 @@ class Edge:
                                      headers={'Content-Type': 'application/json', 'x-ocr-local-secret': self.secret})
         try:
             with self.op.open(req, timeout=timeout) as r: status, body = r.status, r.read()
-        except urllib.error.HTTPError as e: status, body = e.code, e.read()
+        except urllib.error.HTTPError as e:
+            status = e.code
+            # statusul e deja primit: un corp pierdut nu transforma refuzul in eroare de retea (reluata inutil, Jakarinos reincercare r1 P2)
+            try: body = e.read()
+            except (OSError, http.client.HTTPException): return status, {'error': 'corpul raspunsului HTTP %s nu a putut fi citit' % status}
         try: return status, json.loads(body.decode('utf-8'))
         except ValueError: return status, {'error': 'raspuns ne-JSON'}
     def get(self, url, dest, max_octeti=MAX_PDF, timeout=300, la_antete=None):
@@ -143,7 +147,7 @@ def scrie_reluabil(edge, op, args, jurnal=None):
             if e.status not in HTTP_TRANZITORII or pauza is None: raise
             motiv = 'HTTP %s' % e.status
         except (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError) as e:
-            if pauza is None: raise
+            if pauza is None or isinstance(getattr(e, 'reason', None), ssl.SSLError): raise  # TLS (certificat) = definitiv, nu se reia
             motiv = type(e).__name__
         if jurnal is not None: jurnal.append({'op': op, 'incercarea': i + 1, 'motiv': motiv})
         time.sleep(pauza)
