@@ -613,6 +613,38 @@ class Client(unittest.TestCase):
         self.edge.arbitru = dec('needs_human'); self.edge.stare = 'oprita'; C.marcheaza(rdir, 'oprita', 'needs_human pe 1 din 1 arbitraje Claude (> 15%, spec §8)')
         (rdir / 'oprire_ceruta.json').write_text('{"motiv": "om"}'); self.edge.stare = 'citita'
         with self.assertRaises(RuntimeError): C.reluata(rdir, self.edge)              # oprirea ceruta de om nu se reia pe aceasta cale
+    def _oprita_pe_prag(self):
+        rdir = self.pana_la_plan()
+        scrie_citiri(rdir, 'lungime 10 m pe traseul dintre statia de reglare A si statia de masurare B, latime 5 m',
+                           'lungime 20 m pe traseul dintre statia de reglare A si statia de masurare B, latime 7 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.dec = lambda d: (lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': d, 'text': '' if d == 'needs_human' else it['citire_mineru'],
+                                                            'motiv': 'm', 'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-haiku-5-5',
+                                                            'prompt_versiune': 'arb-v2', 'cost_usd': 0.001}}))
+        self.edge.arbitru = self.dec('needs_human')
+        self.assertEqual(C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5)['stare'], 'oprita'); return rdir
+    def test_reluata_refuzul_dinaintea_platii_nu_intra_in_baza(self):
+        # Jakarinos r1 P1: un apel REFUZAT inainte de plata (rezultat 'refuz') lasa itemul eligibil; decizia noua pe el trebuie sa intre in prag
+        rdir = self._oprita_pe_prag(); d = rdir / ('d%d' % DOC)
+        luate = {json.loads(l)['id'] for l in (d / 'decizii.jsonl').read_text().splitlines()}
+        x = next(it for it in map(json.loads, (d / 'dezacorduri.jsonl').read_text().splitlines()) if it['id'] not in luate and it['tip'] not in ('structura_tabele', 'banda_intreaga'))
+        with (d / 'apeluri.jsonl').open('a') as f:
+            f.write(json.dumps({'id': x['id'], 'a': 'r1', 'faza': 'start', 'la': 0}) + '\n'); f.write(json.dumps({'id': x['id'], 'a': 'r1', 'faza': 'gata', 'rezultat': 'refuz'}) + '\n')
+        self.edge.stare = 'citita'; r = C.reluata(rdir, self.edge); self.assertEqual(sum(r['baza'].values()), len(luate))  # refuzul nu e in baza
+        self.edge.arbitru = self.dec('needs_human')
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=5, filtru={C.cheie_proba(x, DOC)})
+        self.assertEqual((a['stare'], a['apeluri_acum'], a['needs_human_claude']), ('oprita', 1, 1))   # decizia noua pe X a oprit epoca
+    def test_reluata_dupa_cadere_intre_oprirea_din_bd_si_marcajul_local(self):
+        # Jakarinos r1 P2: oprita in BD, marcajul local pierdut, omul reia -> `reluata` fixeaza totusi baza (altfel reoprire fara apel)
+        rdir = self._oprita_pe_prag()
+        p = C.pasi(rdir); del p['oprita']; C.save(rdir / 'pasi.json', p)                 # caderea dupa commit, inaintea marcajului
+        self.edge.stare = 'citita'
+        with patch.object(C, 'MIN_NH', 1):
+            r = C.reluata(rdir, self.edge); self.assertIn('fara marcaj local', r['oprire_reluata'])
+            self.assertEqual(C.reluata(rdir, self.edge), {'deja': True, 'stare': 'citita'})  # acum fereastra e goala: idempotent
+            self.edge.arbitru = self.dec('ales_mineru')
+            a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=2)
+        self.assertEqual((a['stare'], a['needs_human_claude']), ('proba', 0)); self.assertGreaterEqual(a['apeluri_acum'], 1)
     def test_arbitrat_in_bd_fara_decizie_locala_devine_pierdut(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         self.edge.arbitru = lambda it: (409, {'error': 'Dezacord deja arbitrat', 'refuz': 'arbitrat'})

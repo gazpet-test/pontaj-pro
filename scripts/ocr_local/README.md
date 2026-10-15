@@ -130,7 +130,9 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
    dacă sunt rezervări deschise, plafonul e consumat, compararea nu e încheiată sau există altă rulare activă pe licitație;
    scrie jurnalul `ofertare_ocr_reluari` (cine, când, de ce, costul și arbitrajele în acel moment) și pune rularea în `citita`;
 2. pe server: `python -B -m ocr_local erp reluata <rulare_dir>` — confirmă `citita` din BD, mută marcajul local `oprita` în
-   `opriri_anterioare` (istoric) și fixează baza ferestrei: pragul §8 numără de acum doar arbitrajele de după reluare;
+   `opriri_anterioare` (istoric) și fixează baza ferestrei: pragul §8 devine „prag pe epocă de reluare” — numără doar arbitrajele
+   de după reluare (semnalul vechi rămâne în istoric și în jurnal; necunoscutele vechi merg tot la om, fără apel); recuperează și
+   căderea dintre oprirea din BD și marcajul local;
 3. apoi pașii obișnuiți (`erp arbitreaza … [--max-apeluri N]`). O oprire cerută de om (`erp oprire`) NU se reia pe această cale.
 
 ## Comparatorul — varianta A (decizie Razvan 15.10.2026)

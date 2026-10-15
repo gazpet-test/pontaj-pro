@@ -2,7 +2,7 @@
 -- 20261030d — Ofertare: pilot OCR local, RELUAREA unei rulări oprite automat pe pragul de needs_human (spec §8), decizia A Răzvan
 -- 15.10.2026 (laborator OCR). fn_ofertare_ocr_stare (20261029b) face din „oprita” o stare finală; proba pe r1 (licitația 102) s-a
 -- oprit singură după 24 de decizii (4 needs_human, > 15%), iar proba cu promptul arb-v2 cere aceeași rulare înapoi în „citita”.
---   * ofertare_ocr_reluari — jurnalul reluărilor (append-only): rularea, motivul opririi reluate, motivul reluării, costul și
+--   * ofertare_ocr_reluari — jurnalul reluărilor (append-only pentru rolurile aplicației; postgres îl poate modifica): rularea, motivul opririi reluate, motivul reluării, costul și
 --     numărul de arbitraje în acel moment, cine a rulat-o; citire ca celelalte tabele OCR (accesul Ofertare), scriere DOAR prin RPC;
 --   * fn_ofertare_ocr_reia(rulare, motiv) — oprita → citita, DOAR dacă: oprirea a fost cea AUTOMATĂ pe pragul §8 (oprit_motiv în
 --     forma exactă scrisă de scripts/ocr_local/client.py arbitreaza), motivul reluării are 10..300 de caractere, nicio rezervare

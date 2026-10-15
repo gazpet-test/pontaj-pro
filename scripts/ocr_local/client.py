@@ -560,6 +560,32 @@ def cheie_proba(it, doc=None):
     d = it.get('document') or ('d%s' % doc if doc is not None else None)
     return (d, it.get('band'), it.get('tip'), it.get('citire_lighton'), it.get('citire_mineru'))
 
+# FEREASTRA PRAGULUI = „prag pe epoca de reluare” (20261030d, laborator 15.10.2026; Copilot P2-1): dupa o reluare (`erp reluata`),
+# pragul §8 numara DOAR arbitrajele de dupa ea. Baza = itemii pe care pragul ii numara deja la reluare: decizii Claude, apeluri cu rezultat
+# necunoscut, pierdute Claude (NU refuzurile dinaintea platii: itemul lor ramane eligibil si o decizie noua pe el intra in prag — Jakarinos
+# r1 P1). Itemii din baza raman rezolvati si in cost (necunoscutele tot la om, fara apel); semnalul vechi ramane in istoric, nu dispare.
+def baza_reluare(rdir):
+    return {str(k): set(v) for k, v in ((pasi(rdir).get('reluare') or {}).get('valoare') or {}).get('baza', {}).items()}
+def stare_arbitraj(rdir, r, baza):
+    st = {'claude': 0, 'needs_human_claude': 0, 'om': 0, 'necunoscute': 0, 'pierdute_claude': 0, 'cost_usd': 0.0, 'per_doc': {}}
+    for doc, _ in documente(r):
+        d = rdir / ('d%d' % doc); ap = _jsonl(d / 'apeluri.jsonl'); dec = _jsonl(d / 'decizii.jsonl')
+        claude = {x['id'] for x in dec}; gata = {x['a'] for x in ap if x['faza'] == 'gata'}
+        necunoscute = {x['id'] for x in ap if x['faza'] == 'start' and x['a'] not in gata} - claude
+        pierdute_cl = {x['id'] for x in _jsonl(d / 'pierdute.jsonl') if x.get('sursa') == 'claude'} - claude - necunoscute
+        om_ids = {x['id'] for x in _jsonl(d / 'decizii_om.jsonl')}; pierdute = {x['id'] for x in _jsonl(d / 'pierdute.jsonl')}
+        b = baza.get(str(doc), set()); dec_f = [x for x in dec if x['id'] not in b]  # doar fereastra de dupa reluare
+        st['claude'] += len(dec_f); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec_f)
+        st['necunoscute'] += len(necunoscute - b); st['pierdute_claude'] += len(pierdute_cl - b); st['om'] += len(om_ids)
+        st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec)
+        st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute, 'numarate': claude | necunoscute | pierdute_cl}
+    return st
+def peste_prag(st, prag=None, minim=None):
+    # arbitraje Claude cu rezultat necunoscut / pierdut = needs_human (conservator); verificat dupa reluare, inaintea fiecarui apel
+    prag = PRAG_NH if prag is None else prag; minim = MIN_NH if minim is None else minim
+    n = st['claude'] + st['necunoscute'] + st['pierdute_claude']; nh = st['needs_human_claude'] + st['necunoscute'] + st['pierdute_claude']
+    return n, nh, n >= minim and nh / n > prag
+
 @cu_lacat
 def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None):
     """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
@@ -588,27 +614,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     #   apeluri.jsonl: {id, k, faza: start} SCRIS INAINTEA POST-ului; {id, k, faza: gata, rezultat: decizie | refuz | pierdut} dupa.
     #   Un start fara gata = rezultat NECUNOSCUT (cadere, transport, 409 decontat, 500, 502): posibil platit -> niciodata alt apel Claude
     #   pe acel item (la reluare: needs_human fara AI) si socotit PERMANENT needs_human la prag, chiar dupa conversia la om.
-    # FEREASTRA PRAGULUI (20261030d, laborator 15.10.2026): dupa o reluare (`erp reluata`), pragul §8 numara DOAR arbitrajele de dupa
-    # ea; cele de dinainte (baza, pe document) raman rezolvate si in cost, dar nu mai opresc rularea a doua oara pentru acelasi motiv.
-    baza = {str(k): set(v) for k, v in ((pasi(rdir).get('reluare') or {}).get('valoare') or {}).get('baza', {}).items()}
-    def stare_locala():
-        st = {'claude': 0, 'needs_human_claude': 0, 'om': 0, 'necunoscute': 0, 'pierdute_claude': 0, 'cost_usd': 0.0, 'per_doc': {}}
-        for doc, _ in documente(r):
-            d = rdir / ('d%d' % doc); ap = _jsonl(d / 'apeluri.jsonl'); dec = _jsonl(d / 'decizii.jsonl')
-            claude = {x['id'] for x in dec}; gata = {x['a'] for x in ap if x['faza'] == 'gata'}
-            necunoscute = {x['id'] for x in ap if x['faza'] == 'start' and x['a'] not in gata} - claude
-            pierdute_cl = {x['id'] for x in _jsonl(d / 'pierdute.jsonl') if x.get('sursa') == 'claude'} - claude - necunoscute
-            om_ids = {x['id'] for x in _jsonl(d / 'decizii_om.jsonl')}; pierdute = {x['id'] for x in _jsonl(d / 'pierdute.jsonl')}
-            b = baza.get(str(doc), set()); dec_f = [x for x in dec if x['id'] not in b]  # doar fereastra de dupa reluare
-            st['claude'] += len(dec_f); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec_f)
-            st['necunoscute'] += len(necunoscute - b); st['pierdute_claude'] += len(pierdute_cl - b); st['om'] += len(om_ids)
-            st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec)
-            st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute}
-        return st
+    baza = baza_reluare(rdir)
+    stare_locala = lambda: stare_arbitraj(rdir, r, baza)
     def opreste_daca_peste_prag(st):
-        # arbitraje Claude cu rezultat necunoscut / pierdut = needs_human (conservator); verificat dupa reluare, inaintea fiecarui apel
-        n = st['claude'] + st['necunoscute'] + st['pierdute_claude']; nh = st['needs_human_claude'] + st['necunoscute'] + st['pierdute_claude']
-        if not (n >= minim and nh / n > prag): return None
+        n, nh, peste = peste_prag(st, prag, minim)
+        if not peste: return None
         motiv = 'needs_human pe %d din %d arbitraje Claude (> %d%%, spec §8)' % (nh, n, prag * 100)
         tranzitie(rdir, edge, r, 'oprita', motiv); res = dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='oprita', motiv=motiv)
         if proba: res['apeluri_acum'] = facute  # proba raporteaza mereu cate apeluri platite a facut (Jakarinos r5 P2)
@@ -717,16 +727,16 @@ def reluata(rdir, edge):
     s = stare_server(edge, r['rulare_id'])
     if s['stare'] != 'citita': raise RuntimeError('BD nu arata rularea reluata (stare %s): ruleaza intai fn_ofertare_ocr_reia' % s['stare'])
     p = pasi(rdir); o = p.get('oprita')
-    if not o: return {'deja': True, 'stare': 'citita'}
-    baza = {}
-    for doc, _ in documente(r):
-        d = rdir / ('d%d' % doc)
-        ids = {x['id'] for f in ('decizii.jsonl', 'decizii_om.jsonl', 'pierdute.jsonl') for x in _jsonl(d / f)}
-        ids |= {x['id'] for x in _jsonl(d / 'apeluri.jsonl')}
-        baza[str(doc)] = sorted(ids)
+    st = stare_arbitraj(rdir, r, baza_reluare(rdir))
+    if not o:
+        # fara marcaj local: fie reluarea e deja facuta (idempotent), fie procesul a cazut DUPA oprirea in BD si INAINTEA marcajului
+        # (Jakarinos r1 P2). In al doilea caz fereastra curenta tot e peste prag -> s-ar opri din nou fara niciun apel: se reia si aici.
+        if not peste_prag(st)[2]: return {'deja': True, 'stare': 'citita'}
+        o = {'la': time.time(), 'valoare': 'oprire in BD fara marcaj local (cadere dupa commit), fereastra peste prag'}
+    baza = {str(doc): sorted(v['numarate']) for doc, v in st['per_doc'].items()}
     p['opriri_anterioare'] = {'la': time.time(), 'valoare': ((p.get('opriri_anterioare') or {}).get('valoare') or []) + [o]}
     p['reluare'] = {'la': time.time(), 'valoare': {'baza': baza, 'oprire': o.get('valoare')}}
-    del p['oprita']; save(rdir / 'pasi.json', p)
+    p.pop('oprita', None); save(rdir / 'pasi.json', p)
     return {'stare': 'citita', 'baza': {k: len(v) for k, v in baza.items()}, 'oprire_reluata': o.get('valoare')}
 
 def oprire(rdir, edge, motiv):
