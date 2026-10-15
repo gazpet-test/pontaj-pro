@@ -540,117 +540,66 @@ class Comparare(unittest.TestCase):
         self.assertEqual([k for k, _ in segments(md)], ['table'])
 
 class NormalizareFormat(unittest.TestCase):
-    """Laborator OCR 15.10.2026: diferentele doar de format nu sunt dezacord; cifrele, semnele si unitatile raman (cazuri reale din r1)."""
+    """Normalizarea varianta A (Razvan 15.10.2026): doar chenar pe rand intreg, Š / Ø, base64, spatiile dintre tokeni. Tot restul
+    ramane dezacord (inclusiv toate contraexemplele Jakarinos r1-r4)."""
     TXT = dict(BAND, kind='text')
     def dez(self, a, b): return [i for i in compare_band(self.TXT, a, OK, b, OK)[1] if i['tip'] == 'text']
-    def test_pozitiv_format(self):
-        for a, b in [('Titlu\n\n==============================\nText', 'Titlu\nText'),          # chenar de '='
-                     ('Titlu\n---\nText', 'Titlu\nText'), ('A\n=\n==========\nB', 'A\nB'),
-                     ('= NR. SIMBOL ART. CANTITATE =', 'NR. SIMBOL ART. CANTITATE'),          # '=' de chenar la capat de rand
-                     ('| Dotari', 'Dotari'), ('Text\n***\nAlt', 'Text\nAlt'), ('Text\n|\nAlt', 'Text\nAlt'),
-                     ('Curent \\( 5 \\) A', 'Curent 5 A'), ('$\\Phi 14$ otel', '\\(\\Phi\\) 14 otel'),
-                     ('Curent $0,04\\ \\text{A}$ maxim', 'Curent 0,04 A maxim'),              # LaTeX in jurul aceluiasi text
-                     ('Ștefănești', 'Štefănești'),                                            # Š = Ș (varianta)
-                     ('D E N U M I R E', 'DENUMIRE'), ('A R T I C O L', 'ARTICOL'),          # litere rasfirate
-                     ('- primul punct', '• primul punct'), ('- al doilea', '■ al doilea')]:  # buline
+    def test_pozitiv(self):
+        for a, b in [('Titlu\n\n==============================\nText', 'Titlu\nText'), ('Titlu\n---\nText', 'Titlu\nText'),
+                     ('A\n***\nB', 'A\nB'), ('A\n= = = = = =\nB', 'A\nB'), ('A\n_____\nB', 'A\nB'),
+                     ('Ștefănești', 'Štefănești'), ('Plasa Ø8', 'Plasa ∅8'), ('Plasa Ø8', 'Plasa ⌀8'),
+                     ('fundatie: 1,0 m', 'fundatie:1,0 m')]:
             self.assertEqual(self.dez(a, b), [], (a, b))
-    def test_negativ_cifre_semne_unitati(self):
-        for a, b in [('D = 10 - 16 MM', 'D = 10 -16 MM'), ('–16', '-16'), ('0,056', '0.056'), ('5 m3', '5 m³'),
-                     ('$0,04$ A', '0,4 A'), ('x^{2+3}', 'x^{2}+3'), ('L = 25', 'L 25'), ('$ 100', '100'),
-                     ('EPUIZAREA', 'EPUZAREA'), ('Total 1250 lei\nNota', 'Nota\nTotal 1250 lei'),  # bloc mutat CU cifre ramane
-                     ('| 5 buc', '5 buc'), ('Lungime 12 |', 'Lungime 12'), ('= 25 m', '25 m'), ('== Titlu', 'Titlu'),
-                     # regresiile Jakarinos r1 (laborator): operator / moneda / minus / asociere / LaTeX imbricat / coduri / diacritica langa cifra
+    def test_negativ(self):
+        for a, b in [('D = 10 - 16 MM', 'D = 10 -16 MM'), ('–16', '-16'), ('0,056', '0.056'), ('5 m3', '5 m³'), ('EPUIZAREA', 'EPUZAREA'),
+                     # ce NU se mai normalizeaza (varianta A): diacritice, litere rasfirate, buline, '=' / '|' de capat, LaTeX, antete mutate
+                     ('masuri de protecție', 'masuri de protectie'), ('D E N U M I R E', 'DENUMIRE'), ('- primul punct', '• primul punct'),
+                     ('= NR. SIMBOL ART. CANTITATE =', 'NR. SIMBOL ART. CANTITATE'), ('| Dotari', 'Dotari'), ('Nota\n=\nTotal', 'Nota\nTotal'),
+                     ('Curent $0,04\\ \\text{A}$ maxim', 'Curent 0,04 A maxim'), ('$\\Phi 14$', '\\(\\Phi\\) 14'),
+                     ('Persoana juridica F3\nSNTGN TRANSGAZ\nObiectiv', 'Persoana juridica\nSNTGN TRANSGAZ\nF3\nObiectiv'),
+                     ('Text\n*\nAlt', 'Text\nAlt'), ('Text\n|\nAlt', 'Text\nAlt'), ('A\n--\nB', 'A\nB'),       # chenar < 3 caractere
+                     ('A\n---- 5\nB', 'A\nB'), ('A\n~~~~\nB', 'A\nB'),                                     # nu doar = - _ *
+                     # contraexemplele Jakarinos r1-r4
                      ('2\n*\n3', '2\n3'), ('100 $ si 200 $', '100 si 200'), ('- 5 m', '• 5 m'), ('Q =\n10 m', 'Q\n10 m'),
-                     ('Pret materiale cu TVA 100 lei si pret manopera 200 lei', 'Pret materiale 100 lei si pret manopera cu TVA 200 lei'),
-                     ('\\mathrm{x^{2}+3}', 'x^{2+3}'), ('Coduri A B C', 'Coduri ABC'), ('10 paturi', '10 pături'),
-                     ('Nota\n=\nTotal', 'Nota\nTotal'), ('A\ncu TVA\nB 100', 'A\nB 100\ncu TVA'),
-                     # regresiile Jakarinos r2: niciun format pe rand cu cifre; doar comenzi LaTeX; coduri; asociere
-                     ('100 $/m^2 si 200 $/m^2', '100 /m^2 si 200 /m^2'), ('- x = 5', '• x = 5'), ('x\n= y =\nz', 'x\ny\nz'),
-                     ('Coduri A B C D E', 'Coduri ABCDE'), ('10 buc. paturi', '10 buc. pături'),
+                     ('\\mathrm{x^{2}+3}', 'x^{2+3}'), ('Coduri A B C D E', 'Coduri ABCDE'), ('10 paturi', '10 pături'),
+                     ('- x + y = 5', '• x + y = 5'), ('- x - y\n= 5', '• x - y\n= 5'), ('100 \\$/\\text{m} si 200 \\$/\\text{m}', '100 /m si 200 /m'),
+                     ('Debit intrare =\nDebit iesire =\n5', 'Debit intrare\nDebit iesire\n5'),
                      ('Pret materiale 100 lei\ncu TVA\nPret manopera 200 lei', 'Pret materiale 100 lei\nPret manopera 200 lei\ncu TVA')]:
             self.assertTrue(self.dez(a, b), (a, b))
-    def test_antet_repetat_mutat(self):
-        # doar un antet de pagina repetat in document (antete_repetate), in marginea unei benzi lungi, poate fi „mutat” fara dezacord
-        corp = '\nRand unu\nRand doi\nRand trei\nRand patru\nRand cinci'
-        a = 'Persoana juridica Formularul F3\nSNTGN TRANSGAZ\nObiectiv' + corp; b = 'Persoana juridica\nSNTGN TRANSGAZ\nFormularul F3\nObiectiv' + corp
-        dz = lambda ant: [i for i in compare_band(self.TXT, a, OK, b, OK, ant)[1] if i['tip'] == 'text']
-        self.assertTrue(dz(frozenset())); self.assertEqual(dz(frozenset({'SNTGN TRANSGAZ'})), [])
-        self.assertTrue(dz(frozenset({'Formularul F3'})))                                   # rand cu cifre: niciodata antet
-        self.assertEqual(CMP.antete_repetate(['SNTGN TRANSGAZ\nx 1'] * 10, ['SNTGN TRANSGAZ'] * 10), frozenset({'SNTGN TRANSGAZ'}))
-        self.assertEqual(CMP.antete_repetate(['SNTGN TRANSGAZ'] * 9, ['SNTGN TRANSGAZ'] * 10), frozenset())   # sub prag la un cititor
-    def test_jakarinos_r3(self):
-        # contraexemplele r3, cu regula A pornita: toate raman dezacord
-        for a, b in [('- x + y = 5', '• x + y = 5'), ('10 buc. de paturi', '10 buc. de pături'),
-                     ('100 $/\\text{m} si 200 $/\\text{m}', '100 /m si 200 /m'), ('Debit intrare =\nDebit iesire + 5', 'Debit intrare\nDebit iesire + 5')]:
-            self.assertTrue(self.dez(a, b), (a, b))
-        # „cu TVA” repetat in 10 benzi (deci in antete_repetate): banda scurta, fara margine -> ramane dezacord
-        a = 'Pret materiale 100 lei\ncu TVA\nPret manopera 200 lei'; b = 'Pret materiale 100 lei\nPret manopera 200 lei\ncu TVA'
-        ant, voc = CMP.context_document([a] * 10, [b] * 10); self.assertIn('cu TVA', ant)
-        self.assertTrue([i for i in compare_band(self.TXT, a, OK, b, OK, ant, voc)[1] if i['tip'] == 'text'])
-    def test_diacritice_cu_vocabular(self):
-        # diacritica lipsa se pliaza doar cand LightOn scrie in tot documentul DOAR forma cu diacritice
-        voc = CMP.vocabular(['masuri de protecție catodica'] * 30 + ['protectie'])  # 30 la 1: canonica (>= 95%)
-        dz = lambda a, b, v: [i for i in compare_band(self.TXT, a, OK, b, OK, frozenset(), v)[1] if i['tip'] == 'text']
-        self.assertEqual(dz('masuri de protecție', 'masuri de protectie', voc), [])
-        self.assertTrue(dz('masuri de protecție', 'masuri de protectie', None))                       # fara vocabular: literal
-        self.assertTrue(dz('masuri de protecție', 'masuri de protectie', CMP.vocabular(['protecție'] * 9)))  # sub 10 aparitii
-        self.assertTrue(dz('masuri de protecție', 'masuri de protectie', CMP.vocabular(['protecție', 'protectie'] * 12)))  # ambele frecvente
-        self.assertTrue(dz('10 buc. pături', '10 buc. paturi', CMP.vocabular(['pături'] * 12)))            # langa numar: literal
-    def test_reconcilierea_nu_preia_donor_taiat(self):
-        # Jakarinos r2 P1-2: fragmentul preluat din MinerU cu marcaj taiat (`6} si 9`, insertie in \mathrm{) -> needs_human
-        from .reconcile import apply_band
-        for a, b in [('Curent 5 V', 'Curent \\mathrm{6} si 9 V'), ('Curent \\mathrm{5} V', 'Curent \\mathrm{6} si 5 V')]:
-            _, its = compare_band(self.TXT, a, OK, b, OK); self.assertTrue(its, (a, b))
-            txt, needs = apply_band(a, b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its})
-            self.assertTrue(needs, (a, b, txt))
-        # si pe randuri de tabel (Jakarinos r3 P1-5)
-        t = lambda r: '<table><tr>' + ''.join('<td>%s</td>' % c for c in r) + '</tr></table>'
-        a, b = t(['1', 'Curent', '5 V']), t(['1', 'Curent', '6} si 9 V'])
-        _, its = compare_band(BAND, a, OK, b, OK); self.assertTrue(its)
-        self.assertTrue(apply_band(a, b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its})[1])
-
     def test_sursa_ramane_exacta(self):
-        # fragmentul pentru arbitru e tot subsirul exact din citire, chiar daca intre tokeni sunt marcaje sarite
-        a = 'Curent $0,04\\ \\text{A}$ si 7 V'; b = 'Curent 0,04 A si 9 V'
-        its = self.dez(a, b); self.assertEqual(len(its), 1)
+        # fragmentul pentru arbitru e subsirul exact din citire, chiar daca intre tokeni e un interval sarit (base64)
+        b64 = 'iVBORw0KGgoAAAANSUhEUgAA' * 4
+        a = 'Fig <img src="data:image/png;base64,%s"/> are 7 V' % b64; b = 'Fig <img src="data:image/png;base64,%s"/> are 9 V' % b64[::-1]
+        its = self.dez(a, b); self.assertEqual(len(its), 1); self.assertEqual(its[0]['citire_lighton'], '7')
         seg = segments(a); src = its[0]['sursa']['lighton']
         self.assertEqual(seg[src['seg'][0]][1][src['start']:src['end']], its[0]['citire_lighton'])
-
     def test_base64_imagine_inline(self):
         # MinerU pune decupajul imaginii inline: continutul codat nu intra in comparare, marcajul imaginii da
         b64 = 'iVBORw0KGgoAAAANSUhEUgAA' * 40
         a = 'Fig. 1 <img src="data:image/png;base64,%s"/> Corp' % b64
-        self.assertEqual(self.dez(a, a.replace(b64, b64[::-1])), [])                       # doar continutul codat difera
-        self.assertTrue(self.dez(a, 'Fig. 1 Corp'))                                        # imaginea lipsa la celalalt ramane
+        self.assertEqual(self.dez(a, a.replace(b64, b64[::-1])), [])
+        self.assertTrue(self.dez(a, 'Fig. 1 Corp'))
         self.assertTrue(self.dez(a, a.replace('Fig. 1', 'Fig. 2')))
-    def test_reconcilierea_nu_taie_marcajul_sarit(self):
-        # Jakarinos r1 P1-4: ales_mineru peste `\mathrm{5}` ar lasa `\mathrm{6 si 9 V` -> pagina = needs_human
+    def test_reconcilierea_nu_taie_intervalul_sarit(self):
+        # Jakarinos r1 P1-4: o inlocuire care traverseaza un rand de chenar sarit -> needs_human; fara el, aceeasi decizie se aplica
         from .reconcile import apply_band
-        a, b = 'Curent \\mathrm{5} si 7 V', 'Curent 6 si 9 V'
+        a, b = 'Cota 5\n-----\nnivel 7', 'Cota 6\nnivel 9'
         _, its = compare_band(self.TXT, a, OK, b, OK); self.assertTrue(its)
         txt, needs = apply_band(a, b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its})
-        self.assertTrue(needs, txt)
-        # fara marcaj taiat, aceeasi decizie se aplica normal
-        _, its = compare_band(self.TXT, 'Curent 5 si 7 V', OK, b, OK)
-        self.assertEqual(apply_band('Curent 5 si 7 V', b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its}), ('Curent 6 si 9 V', False))
+        self.assertEqual(len(its), 1); self.assertTrue(needs, txt)  # un singur fragment, peste randul de chenar
+        a2 = 'Cota 5 nivel 7'; _, its = compare_band(self.TXT, a2, OK, 'Cota 6 nivel 9', OK)
+        self.assertEqual(apply_band(a2, 'Cota 6 nivel 9', its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its}), ('Cota 6 nivel 9', False))
 
 class RegulaA(unittest.TestCase):
-    """Regula A (Razvan 15.10.2026) + ancorarea coloanelor cu cifre (laborator)."""
+    """Regula A (Razvan 15.10.2026, forma stricta): toate celulele nevide identice si in aceeasi coloana de la inceputul randului."""
     def rows(self, a, b, n=1):
-        # n randuri cu aceeasi forma: grila tabelului (latimea dominanta) exista doar de la 5 randuri
         t = lambda r: '<table>' + ''.join('<tr>' + ''.join('<td>%s</td>' % (c if c != '#' else str(k)) for c in r) + '</tr>' for k in range(n)) + '</table>'
         return [i for i in compare_band(BAND, t(a), OK, t(b), OK)[1] if i['tip'].startswith('rand_')]
     def test_pozitiv(self):
-        # ultima coloana a grilei (tabel de >= 5 randuri, fiecare rand cu latimea dominanta a tabelului lui): exemplul din r1
-        for a, b in [(['#', '4426977', 'FLANSA OARBA PN 160 DN= 80 OL37-2', 'BUC.', '0.42', '', '', '0.004'],
-                      ['#', '4426977', 'FLANSA OARBA PN 160 DN=80 OL37-2', 'BUC.', '0.42', '', '', '', '0.004']),
-                     (['#', '7345849', 'SODA', 'KG', '302.00', '', '', '0.302'], ['#', '7345849', 'SODA', 'KG', '302.00', '', '', '', '0.302'])]:
-            self.assertEqual(self.rows(a, b, n=6), [], (a, b))
-            self.assertTrue(self.rows(a, b, n=1), (a, b))                                   # un singur rand: grila nedovedita
         for a, b in [(['1.', 'COD', 'mc', '0,056'], ['1.', 'COD', 'mc', '0.056']),                    # separator zecimal (0,…)
                      (['1.', 'COD', 'mc', '79,43'], ['1.', 'COD', 'mc', '79.43']),
-                     (['', 'Titlu', ''], ['Titlu']), (['', '', 'lei', 'lei'], ['lei', 'lei']),        # fara cifre: doar celule goale
-                     (['5', 'COD', 'PAPUCI', 'BUC.', '238.00'], ['5', 'COD', 'PAPUCI', '|BUC.', '238.00'])]:  # bara '|'
+                     (['47', '6730', 'MACARA PE PNEURI 15-19,9TF', '32.000', '', ''], ['47', '6730', 'MACARA PE PNEURI 15-19,9TF', '32.000']),
+                     (['112', '4426977', 'FLANSA OARBA PN 160 DN= 80 OL37-2', 'BUC.', '0.42'], ['112', '4426977', 'FLANSA OARBA PN 160 DN=80 OL37-2', 'BUC.', '0.42'])]:
             self.assertEqual(self.rows(a, b), [], (a, b))
     def test_negativ(self):
         for a, b in [(['7', 'MARCA LP 60', 'BUC.', '2'], ['7', 'MARCA', 'BUC.', '2']),            # cuvant cu cifre lipsa
@@ -660,15 +609,16 @@ class RegulaA(unittest.TestCase):
                      (['1.', 'COD', 'Țeavă', 'mc', '1 000,00', ''], ['', '1.', 'COD', 'Țeavă', 'mc', '1 000,00']),
                      (['4', 'OTEL', 'KG', '374.79', '', '0.375'], ['4', 'OTEL', 'KG', '374.79']),  # valoare lipsa la un cititor
                      (['1.', 'COD', 'mc', '0,56'], ['1.', 'COD', 'mc', '0,65']), (['1', 'X', '2'], ['1', 'X', '-2']),
-                     (['1', 'Teava', 'm', '5', ''], ['1', 'Teava', 'm', '', '5', '']),             # Jakarinos r3 P1-1
-                     (['1', 'paturi', '10'], ['1', 'pături', '10'])]:                              # Jakarinos r3: celula nu se pliaza
+                     (['', 'Titlu', ''], ['Titlu']), (['', '', 'lei', 'lei'], ['lei', 'lei']),      # text mutat de coloana
+                     (['112', '4426977', 'FLANSA', 'BUC.', '0.42', '', '', '0.004'], ['112', '4426977', 'FLANSA', 'BUC.', '0.42', '', '', '', '0.004']),
+                     (['5', 'COD', 'PAPUCI', 'BUC.', '238.00'], ['5', 'COD', 'PAPUCI', '|BUC.', '238.00']),  # bara din celula se compara
+                     (['1', 'Rezultat', '|-5|'], ['1', 'Rezultat', '-5']),                         # Jakarinos r4: modul
+                     (['1', 'Teava', 'm', '5', ''], ['1', 'Teava', 'm', '', '5', '']),             # Jakarinos r3: cantitate -> pret
+                     (['1', 'Teava', 'm', '', '5', '10'], ['1', 'Teava', '', 'm', '5', '10']),     # Jakarinos r4: unitatea mutata
+                     (['1', 'paturi', '10'], ['1', 'pături', '10'])]:                              # Jakarinos r3: diacritica in celula
             self.assertTrue(self.rows(a, b), (a, b))
-        # si in tabel lung: cantitatea care nu e ultima celula nu se ancoreaza de la sfarsit
-        self.assertTrue(self.rows(['#', 'Teava', 'm', '5', ''], ['#', 'Teava', 'm', '', '5', ''], n=6))
-    def test_fara_ancorare_formularea_literala(self):
-        old = CMP.REGULA_A_ANCORARE; CMP.REGULA_A_ANCORARE = False
-        try: self.assertEqual(self.rows(['1.', 'COD', '-5', ''], ['1.', 'COD', '', '-5']), [])   # de aceea ancorarea e pornita
-        finally: CMP.REGULA_A_ANCORARE = old
+        # Jakarinos r4 P1-1: ultima celula, tabel lung, latimi dominante diferite -> dezacord (fara exceptia „ultima coloana”)
+        self.assertTrue(self.rows(['#', 'Teava', 'm', '5'], ['#', 'Teava', 'm', '', '5'], n=6))
 
 BENCH = pathlib.Path('C:/Users/Public/paw-data/out/ocr_bench_20261014/runs')
 

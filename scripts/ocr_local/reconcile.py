@@ -5,7 +5,7 @@ Pastreaza tripletul (citire LightOn / citire MinerU / ales) pentru fiecare dezac
 import json, pathlib
 import hashlib
 import os
-from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result, _skip_spans, context_document
+from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result, _skip_spans
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -77,11 +77,9 @@ def apply_band(raw_a, raw_b, items, decisions):
         elif ta and ta[-1][3] is not None: si, start = ta[-1][1], ta[-1][3]; end = start; new = ' ' + new
         else: needs = True; continue
         if a1 < a2 and ta[a2 - 1][1] != si: needs = True; continue  # dezacord peste doua segmente - nu se coase automat
-        # intervalul inlocuit atinge un marcaj sarit la comparare ($, \text{, }, \(, chenar): l-ar putea taia pe jumatate (ex. `\mathrm{6 si 9`)
+        # intervalul inlocuit atinge un interval sarit la comparare (rand de chenar, base64 al unei imagini): l-ar putea taia pe jumatate
         # -> om (Jakarinos r1 laborator, P1-4)
         if any((s < end and start < e) if end > start else s < start < e for s, e in _skip_spans(sa[si][1])): needs = True; continue
-        # fragmentul DONOR (MinerU / text propus) cu caractere de marcaj (\ { } $) poate fi taiat la un marcaj (`6} si 9`) -> om (Jakarinos r2 P1-2)
-        if any(ch in new for ch in '\\{}$'): needs = True; continue
         edits.setdefault(si, []).append((start, end, new))
     segs = [list(s) for s in sa]
     for si, lst in edits.items():
@@ -101,9 +99,6 @@ def apply_band(raw_a, raw_b, items, decisions):
         else:
             if any(' | ' in x for x in (it.get('celule_lighton') or []) + (it.get('celule_mineru') or [])): needs = True; continue
             cells = [x.strip() for x in d['text'].split(' | ')] if d['text'].strip() else []
-        # randul DONOR (MinerU / text propus) cu caractere de marcaj (\ { } $) poate fi taiat la un marcaj (`6} si 9 V`) -> om
-        # (Jakarinos r3 P1-5: garda din bucla de text nu acoperea randurile de tabel)
-        if d['decizie'] != 'ales_lighton' and any(ch in x for x in cells for ch in '\\{}$'): needs = True; continue
         if it['tip'] == 'rand_tabel':
             if d['decizie'] == 'ales_lighton': continue
             if len(cells) != len(rows[tuple(pa)]) and d['decizie'] == 'text_propus': needs = True; continue
@@ -166,8 +161,6 @@ def reconcile(plan_dir, decisions_path):
         if decisions[d['id']] is None: invalid.append({'id': d['id'], 'motiv': 'schema'})
     decisions = {k: v for k, v in decisions.items() if v is not None}
     pages = {}; triplets = []
-    rd = lambda b, r: (plan_dir / ('page%04d' % b['page']) / b['id'] / r / 'raw.txt').read_bytes().decode('utf-8')
-    antete, vocab = context_document([rd(b, 'lighton') for b in doc['bands']], [rd(b, 'mineru') for b in doc['bands']])  # ca in compare()
     for band in doc['bands']:
         d = plan_dir / ('page%04d' % band['page']) / band['id']
         raw_a = (d / 'lighton' / 'raw.txt').read_bytes().decode('utf-8'); raw_b = (d / 'mineru' / 'raw.txt').read_bytes().decode('utf-8')
@@ -177,7 +170,7 @@ def reconcile(plan_dir, decisions_path):
         for r, raw in (('lighton', raw_a), ('mineru', raw_b)):
             if hashlib.sha256(raw.encode()).hexdigest() != res[r].get('raw_sha256') or not check_result(res[r], r, band, proto):
                 raise ValueError('Citirea %s a benzii %s nu mai corespunde rezultatului' % (r, band['id']))
-        _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'], antete, vocab)
+        _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'])
         for x in fresh: x['plan_input_sha256'] = doc['input_sha256']
         # egalitate canonica COMPLETA (toate campurile, in ordine) intre dezacordurile salvate si comparatia refacuta acum
         if [canonical(x) for x in fresh] != [canonical(i) for i in bi] or any(item_hash(i) != i.get('item_sha256') for i in bi):

@@ -195,6 +195,37 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
 dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat și `anomalie_separator`. Restul: diacritice (`protecție` /
 `protectie`, `Ștefănești` / `Štefănești`), `m³` / `m3`, `Ø` / `∅`, LaTeX la MinerU (`\( 100m^{2} \)`). Volum estimat pentru arbitraj pe 102
 (~1.447 pagini): de ordinul a câteva sute de decupaje, în plafonul de 15 $ din spec §8.
+Realitatea pe 102 (rularea r1, 1.426 pagini): **12.994 de dezacorduri** — vezi mai jos.
+
+## Normalizare și regula A (laborator OCR, decizia Răzvan 15.10.2026, varianta A)
+
+După patru runde Jakarinos NO-GO pe reguli contextuale (diacritice după vocabular, antete mutate, LaTeX, buline, `=` / `|` de capăt —
+fiecare spartă de un contraexemplu construit), comparatorul păstrează DOAR regulile fără context, care nu pot purta sens:
+
+- rânduri ÎNTREGI de chenar (≥ 3 caractere din `= - _ *` și nimic altceva pe rând) — doar în text, niciodată în celule;
+- `Š` = `Ș` și `Ø` = `∅` = `⌀` (variante de citire ale aceluiași semn), plus sedila deja unificată;
+- conținutul base64 al imaginilor inline (MinerU pune decupajul în `<img src="data:…">`); marcajul imaginii rămâne comparat;
+- spațiile dintre tokeni (și în celule: `fundație: 1,0` = `fundație:1,0`, dar `C30/37 1,3` ≠ `C30/371,3`).
+
+**Regula A** (rând de tabel acord fără AI): toate celulele nevide identice (tokeni; numerele cu separatorul zecimal unificat doar unde nu
+poate fi separator de mii — `0,056` = `0.056`, `1.234` ≠ `1,234`) și în ACEEAȘI coloană de la începutul rândului. Diferă deci doar celulele
+goale de după ultima celulă nevidă, spațiile și separatorul. Barele `|` din celule se compară; o celulă mutată de coloană rămâne dezacord.
+
+Tot restul merge la Judecător. Reconcilierea refuză (`needs_human`) o înlocuire care traversează un interval sărit. Măsurătoare fără
+scriere: `python -B -m ocr_local.masoara <dir_rulare> [--jsonl iesire.jsonl] [--fata-de baza.jsonl]` (cu `--fata-de`: dezacordurile
+eliminate față de o comparație de bază + auditul pe tokeni al cifrelor / semnelor pierdute).
+
+Pe r1: 12.994 → **10.079** dezacorduri (text 8.024 → 5.656, rand_tabel 3.084 → 2.536, regula A: 349 de rânduri); cu cantități 6.454 → 5.483.
+Audit: nicio cifră / semn pierdut (cele 9 semnalări sunt `-` din rânduri de chenar `---`; dezacordul pe cifră rămâne).
+
+**Regulile B și C — specificație, neimplementate** (decizia 15.10: pe 102 scot 0 dezacorduri; cod când vine o licitație cu prețuri):
+- *B, proba aritmetică pe devize*: coloanele cantitate / preț unitar / valoare din antet; o citire care satisface cant × preț ≈ valoare
+  (toleranța = rotunjirea valorii la zecimalele ei + cant × rotunjirea prețului) câștigă fără AI dacă cealaltă nu; totalurile pe capitol
+  dau o verificare în plus; ambele trec / ambele pică = nedecis. Pe 102: devizele sunt „fără valori”; relația kg → tone ține doar pe 71%
+  din rândurile corecte (coeficienți de pierdere) — NU e o probă de adevăr.
+- *C, rând citit de un singur cititor*: acceptat doar dacă se potrivește în secvență (nr. curent între vecini, cod în formatul coloanei)
+  ȘI trece proba B. Altfel Judecător.
+- O decizie fără AI cere o cale nouă în BD (decizie deterministă, acceptată la reconciliere) — schemă, deci review Copilot și „da”.
 
 ## Teste
 
