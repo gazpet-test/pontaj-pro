@@ -12,7 +12,7 @@ documentului: plan.json, benzile, citirile, dezacorduri.jsonl, decizii.jsonl, re
 Reguli: fara redirect, fara proxy, URL-ul semnat acceptat doar pe bucketul ofertare al proiectului; nicio reincercare automata a unui
 apel platit; orice refuz al BD opreste pasul (mesajul BD, fara secret). Oprire automata (spec §8): garda pe > 20% din pagini,
 needs_human > 15% din arbitrajele Claude (dupa minim 20)."""
-import base64, concurrent.futures, functools, hashlib, http.client, json, os, pathlib, re, shutil, time, urllib.error, urllib.request, uuid
+import base64, concurrent.futures, functools, hashlib, http.client, json, os, pathlib, re, shutil, ssl, time, urllib.error, urllib.request, uuid
 
 BASE = 'https://dxczwkbciseqniprspcu.supabase.co'
 SEMNAT = BASE + '/storage/v1/object/sign/ofertare/'
@@ -68,7 +68,11 @@ class Edge:
                                      headers={'Content-Type': 'application/json', 'x-ocr-local-secret': self.secret})
         try:
             with self.op.open(req, timeout=timeout) as r: status, body = r.status, r.read()
-        except urllib.error.HTTPError as e: status, body = e.code, e.read()
+        except urllib.error.HTTPError as e:
+            status = e.code
+            # statusul e deja primit: un corp pierdut nu transforma refuzul in eroare de retea (reluata inutil, Jakarinos reincercare r1 P2)
+            try: body = e.read()
+            except (OSError, http.client.HTTPException): return status, {'error': 'corpul raspunsului HTTP %s nu a putut fi citit' % status}
         try: return status, json.loads(body.decode('utf-8'))
         except ValueError: return status, {'error': 'raspuns ne-JSON'}
     def get(self, url, dest, max_octeti=MAX_PDF, timeout=300, la_antete=None):
@@ -127,6 +131,26 @@ def scrie(edge, op, args):
     status, j = edge.post('ofertare-ocr-scrie', {'op': op, 'args': args})
     if status != 200: raise EdgeError('ofertare-ocr-scrie/' + op, status, j)
     return j.get('rezultat')
+
+# Reincercare per item (sarcina 4, laborator 15.10.2026): pe r1, 12 opriri ale lui incarca-citiri au fost timeout-uri de 60 s pe cate O cerere
+# (edge-ul raspundea 200, dar ~6 din ~30.000 au durat 34-50 s) - un singur mesaj lent oprea tot pasul. Se reincearca DOAR op-urile append-only
+# cu „deja” in BD (acelasi continut -> acelasi id, alt continut -> 23505): reluarea nu poate dubla sau schimba nimic.
+RELUABILE = ('pagina', 'dezacord')
+PAUZE_REIA = (5, 15, 45)  # secunde intre incercari; dupa ultima eroarea se ridica (pasul ramane reluabil, ca inainte)
+HTTP_TRANZITORII = (429, 502, 503, 504, 546)  # gateway / limita / worker oprit; restul (refuzuri, 500 de business) NU se reiau
+
+def scrie_reluabil(edge, op, args, jurnal=None):
+    if op not in RELUABILE: raise ValueError('op %s nu e idempotent: nu se reincearca' % op)
+    for i, pauza in enumerate(PAUZE_REIA + (None,)):
+        try: return scrie(edge, op, args)
+        except EdgeError as e:
+            if e.status not in HTTP_TRANZITORII or pauza is None: raise
+            motiv = 'HTTP %s' % e.status
+        except (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError) as e:
+            if pauza is None or isinstance(getattr(e, 'reason', None), ssl.SSLError): raise  # TLS (certificat) = definitiv, nu se reia
+            motiv = type(e).__name__
+        if jurnal is not None: jurnal.append({'op': op, 'incercarea': i + 1, 'motiv': motiv})
+        time.sleep(pauza)
 
 def heartbeat(edge, ok, mesaj):
     try: scrie(edge, 'heartbeat', {'ok': ok, 'mesaj': mesaj[:300]})
@@ -465,9 +489,9 @@ def incarca_citiri(rdir, edge, n=4):
                                  'stare': 'citit' if ok else 'incomplet', 'model_rev': model_rev(reader, res), 'raw_sha256': res['raw_sha256'],
                                  'image_sha256': b['image_sha256'], 'segmente': segmente(raw) if ok else None,
                                  'garda': {k: res.get(k) for k in ('ok', 'signal', 'guard_event', 'finish_reason', 'error') if k in res}})
-    rez = paralel(lambda a: scrie(edge, 'pagina', a), de_scris, n)
+    reluari = []; rez = paralel(lambda a: scrie_reluabil(edge, 'pagina', a, reluari), de_scris, n)
     deja = sum(1 for x in rez if (x or {}).get('deja'))
-    out = {'scrise': len(rez) - deja, 'deja': deja, 'lipsa': len(lipsa), 'lipsa_exemple': lipsa[:20], 'pagini_ocr': len(pagini_ocr), 'pagini_incomplete': len(garda)}
+    out = {'scrise': len(rez) - deja, 'deja': deja, 'reincercari': len(reluari), 'lipsa': len(lipsa), 'lipsa_exemple': lipsa[:20], 'pagini_ocr': len(pagini_ocr), 'pagini_incomplete': len(garda)}
     # pragul se evalueaza INAINTEA returului pe citiri lipsa: o lipsa (cititor oprit) e o pagina incompleta (review r1 Copilot P1-2 / Jakarinos P2-5)
     if pagini_ocr and len(garda) / len(pagini_ocr) > PRAG_GARDA:
         motiv = 'garda / citire incompleta sau lipsa pe %d din %d pagini (> %d%%, spec §8)' % (len(garda), len(pagini_ocr), PRAG_GARDA * 100)
@@ -485,7 +509,7 @@ def manifest_sha(linii):
 def compara_rulare(rdir, edge, n=4):
     """compare.compare per document (CPU), apoi fiecare dezacord in BD (proveniența verificata acolo) si marcajul „comparatie incheiata”."""
     from .compare import compare
-    rdir = pathlib.Path(rdir); r = rulare(rdir); linii = []; total = 0
+    rdir = pathlib.Path(rdir); r = rulare(rdir); linii = []; total = 0; reluari = []
     if pasi(rdir).get('comparatie'): return {'deja': True}
     activa(rdir)
     intentie = pasi(rdir).get('comparatie_intentie')
@@ -494,7 +518,7 @@ def compara_rulare(rdir, edge, n=4):
         if intentie: items = _jsonl(d / 'dezacorduri.jsonl')  # dezacordurile sunt deja in BD; se reface doar marcajul
         else:
             _, items = compare(d)
-            rez = paralel(lambda it: scrie(edge, 'dezacord', {'rulare_id': r['rulare_id'], 'dezacord': dict(it, document_id=doc, pagina=it['page'], item_id=it['id'])}), items, n)
+            rez = paralel(lambda it: scrie_reluabil(edge, 'dezacord', {'rulare_id': r['rulare_id'], 'dezacord': dict(it, document_id=doc, pagina=it['page'], item_id=it['id'])}, reluari), items, n)
             save(d / 'dezacorduri_bd.json', {it['id']: x['id'] for it, x in zip(items, rez)})
         linii += ['%d|%d|%s|%s\n' % (doc, it['page'], it['id'], it['item_sha256']) for it in items]; total += len(items)
     h = manifest_sha(linii); marcaj = {'nr': total, 'sha256': h}
@@ -507,7 +531,7 @@ def compara_rulare(rdir, edge, n=4):
         if (s.get('comparatie_nr'), s.get('comparatie_sha256')) != (total, h): raise
     marcheaza(rdir, 'comparatie', marcaj)
     heartbeat(edge, True, 'rularea %d: %d dezacorduri incarcate' % (r['rulare_id'], total))
-    return {'dezacorduri': total, 'sha256': h}
+    return {'dezacorduri': total, 'sha256': h, 'reincercari': len(reluari)}
 
 def _jsonl(path):
     """Jurnal JSONL append-only. O ultima linie FARA terminator (scriere intrerupta) se repara conservator: se muta in
@@ -638,10 +662,10 @@ def reconciliaza_rulare(rdir, edge, n=4):
                              'stare': 'needs_human' if p['needs_human'] else 'reconciliat', 'model_rev': rev, 'raw_sha256': sha(text.encode('utf-8')),
                              'image_sha256': None, 'segmente': None,
                              'garda': {'semnale': p.get('semnale') or [], 'arbitrat_de_claude_cantitati': p['arbitrat_de_claude_cantitati'], 'benzi': len(p['bands'])}})
-    rez = paralel(lambda a: scrie(edge, 'pagina', a), de_scris, n)
+    reluari = []; rez = paralel(lambda a: scrie_reluabil(edge, 'pagina', a, reluari), de_scris, n)
     marcheaza(rdir, 'finalizata_intentie'); tranzitie(rdir, edge, r, 'finalizata')
     heartbeat(edge, True, 'rularea %d: finalizata' % r['rulare_id'])
-    return {'pagini': len(rez), 'needs_human': nh, 'stare': 'finalizata'}
+    return {'pagini': len(rez), 'needs_human': nh, 'reincercari': len(reluari), 'stare': 'finalizata'}
 
 def oprire(rdir, edge, motiv):
     """FARA lacat (review r4 Jakarinos P2): merge si cat ruleaza `arbitreaza`. Intai marcajul local oprire_ceruta.json (verificat de
