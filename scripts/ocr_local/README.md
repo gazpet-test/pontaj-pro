@@ -55,6 +55,12 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
 | 9 | `reconciliaza <dir>` | `reconcile.reconcile` per document → textul reconciliat (`reconciliat` / `needs_human`) → `finalizata` |
 | — | `oprire <dir> --motiv …` · `abandon --rezervare N` · `stare <dir>` | oprește rularea · abandonează o rezervare rămasă deschisă (după 15 min) · starea din BD (doar citire) + pașii locali |
 
+- **Reîncercare per item** (pașii 6, 7, 9; laborator 15.10.2026): DOAR scrierile append-only `pagina` / `dezacord` (aceeași cerere → `deja`
+  cu același id în BD; alt conținut → refuz 23505) se reiau pe același item după timeout / conexiune căzută / HTTP 429·502·503·504·546,
+  cu pauze 5 s, 15 s, 45 s; apoi eroarea se ridică și pasul rămâne reluabil, ca înainte. Refuzurile (4xx), 500 și tranzițiile de stare NU se reiau.
+  Pe r1 (102), 12 opriri ale `incarca-citiri` veneau din ~6 cereri din ~30.000 care au durat 34–50 s (edge-ul a răspuns 200). Rezultatul pasului
+  raportează `reincercari`.
+
 - **Egress din Supabase Storage** (cerere Răzvan 14.10, după Huedin — o eroare redescărca în buclă, ~600× plafonul), `erp descarca`
   sub lacătul rulării ȘI al registrului comun al documentelor (`<work>/_pdf_registru`): fiecare PDF se descarcă O SINGURĂ DATĂ PE
   RULARE; copia rulării (`pdf/<doc>.pdf`, SHA-256 + ETag în meta) e singura sursă pentru orice reluare — nicio redescărcare, nicio

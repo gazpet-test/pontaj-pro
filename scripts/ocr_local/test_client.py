@@ -571,5 +571,48 @@ class Client(unittest.TestCase):
         self.assertEqual(C.manifest_sha([]), hashlib.sha256(b'').hexdigest())
         self.assertEqual(C.manifest_sha(['10|2|b\n', '1247|1|a\n']), hashlib.sha256(b'10|2|b\n1247|1|a\n').hexdigest())
 
+    # sarcina 4 (laborator 15.10): o cerere lenta / pierduta nu mai opreste pasul; se reia doar item-ul, doar pe op-urile idempotente
+    def lent_o_data(self, op, dupa_commit=True, exc=TimeoutError):
+        orig = self.edge.post; stare = {'dat': False}
+        def post(fn, corp, timeout=60):
+            if not stare['dat'] and fn == 'ofertare-ocr-scrie' and corp['op'] == op:
+                stare['dat'] = True
+                if dupa_commit: orig(fn, corp, timeout)  # BD a aplicat, raspunsul nu mai vine (cazul r1: 200 dupa 34-50 s)
+                raise exc('The read operation timed out')
+            return orig(fn, corp, timeout)
+        self.edge.post = post
+    def test_incarca_citiri_reia_itemul_lent(self):
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); self.lent_o_data('pagina')
+        with patch.object(C, 'PAUZE_REIA', (0, 0, 0)):
+            r = C.incarca_citiri(rdir, self.edge)
+        self.assertEqual((r['stare'], r['reincercari'], r['deja']), ('citita', 1, 1))  # a doua trimitere = „deja” in BD, nimic dublat
+    def test_compara_reia_itemul_pierdut_inainte_de_commit(self):
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge)
+        self.lent_o_data('dezacord', dupa_commit=False, exc=ConnectionResetError)
+        with patch.object(C, 'PAUZE_REIA', (0, 0, 0)):
+            c = C.compara_rulare(rdir, self.edge)
+        self.assertEqual((c['reincercari'], c['dezacorduri']), (1, self.edge.comp['nr']))
+    def test_reluare_epuizata_ridica_eroarea(self):
+        class Mort:
+            n = 0
+            def post(self, fn, corp, timeout=60): self.n += 1; raise TimeoutError('timed out')
+        e = Mort(); j = []
+        with patch.object(C, 'PAUZE_REIA', (0, 0, 0)), self.assertRaises(TimeoutError): C.scrie_reluabil(e, 'pagina', {}, j)
+        self.assertEqual((e.n, len(j)), (4, 3))
+    def test_refuzurile_si_opurile_neidempotente_nu_se_reiau(self):
+        class Refuz:
+            n = 0
+            def __init__(self, status): self.status = status
+            def post(self, fn, corp, timeout=60): self.n += 1; return self.status, {'error': 'x'}
+        for status in (400, 409, 500):
+            e = Refuz(status)
+            with patch.object(C, 'PAUZE_REIA', (0, 0, 0)), self.assertRaises(C.EdgeError): C.scrie_reluabil(e, 'dezacord', {})
+            self.assertEqual(e.n, 1)
+        e = Refuz(503)
+        with patch.object(C, 'PAUZE_REIA', (0, 0, 0)), self.assertRaises(C.EdgeError): C.scrie_reluabil(e, 'dezacord', {})
+        self.assertEqual(e.n, 4)
+        for op in ('comparatie_gata', 'tranzitie', 'preia', 'plan', 'heartbeat'):
+            with self.assertRaises(ValueError): C.scrie_reluabil(Refuz(200), op, {})
+
 if __name__ == '__main__':
     unittest.main()
