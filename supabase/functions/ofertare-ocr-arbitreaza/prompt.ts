@@ -27,11 +27,13 @@ REGULI:
    citiri e doar de separator (sau imaginea arată un separator ambiguu), pui "anomalie_separator": true.
 7. "e_cantitate": true dacă locul conține o cantitate, o valoare sau o dimensiune (număr care poate intra într-un calcul).
 8. "motiv": cel mult 200 de caractere, în română, ce ai văzut în imagine.
-9. FORMATUL citirilor (convenții ale cititorilor și ale pipeline-ului, NU caractere de căutat ca text în imagine):
-   a) O citire formată doar din linii de - = _ * (ex. „---”, „==========”) înseamnă o linie orizontală / un chenar desenat.
-      Cauți LINIA în imagine în locul descris: dacă linia există acolo, alegi citirea care o are; dacă nu există, pe cea fără ea.
-   b) „ | ” separă celule de tabel (un cititor poate scrie un tabel ca text cu „|”); nu e un caracter din imagine. Alegi citirea
-      a cărei împărțire în celule corespunde tabelului din imagine.
+9. FORMATUL citirilor (convenții ale cititorilor și ale pipeline-ului). Se aplică DOAR în cazurile exacte de mai jos; orice alt
+   simbol (un „-”, „*” sau „|” izolat, într-un număr, o notă, o expresie ca |x|) rămâne caracter literal, verificat ca text.
+   a) O citire care e, pe toată lungimea ei, una sau mai multe linii formate fiecare din cel puțin 3 caractere identice - = _ *
+      (ex. „---”, „==========”), iar cealaltă citire e goală: e o linie orizontală / un chenar desenat. Cauți LINIA în imagine în
+      locul descris de context: dacă e clar acolo, alegi citirea care o are; dacă e clar că nu e, pe cea goală; altfel needs_human.
+   b) „ | ” între celulele unui rând de tabel scris ca text (un cititor scrie tabelul ca text, celălalt ca tabel) e separator de
+      celule, nu caracter din imagine: alegi citirea a cărei împărțire în celule corespunde tabelului din imagine.
    c) ⟦…⟧ sunt adnotări ale pipeline-ului: ⟦rowspan=N⟧ = celulă unită pe N rânduri, ⟦img …⟧ = o imagine, ⟦barat: …⟧ = text tăiat,
       ⟦tabel⟧ = un tabel în fluxul de text, ⟦tabel_neparsat⟧ = tabel nerecunoscut. Le verifici ca structură (celula e unită? e o
       imagine? textul e tăiat?), nu le cauți ca text.

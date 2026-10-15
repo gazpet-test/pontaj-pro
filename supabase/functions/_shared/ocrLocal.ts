@@ -181,34 +181,14 @@ export function diferentaNumerica(a: string, b: string): boolean {
   return na.length !== nb.length || na.some((t, i) => t !== nb[i])
 }
 
-// ── escaladarea la Sonnet pe cifre (laborator OCR 15.10.2026, mai strânsă decât diferentaNumerica) ──
-// Proba pe r1: 2.043 de dezacorduri (17%) urcau la Sonnet pe diferentaNumerica și când cifrele erau aceleași, dar diferea tăierea în
-// tokeni („2,5” / „2, 5”, „C30/37 2,7” / „C30/372,7”) sau marcajul pipeline-ului ⟦rowspan=N⟧ (cifra lui nu e din document; 206 cazuri).
-// Aici se compară ȘIRUL caracterelor numerice, în ordine: cifrele; separatorii . , doar înaintea unei cifre și nu lipiți de o literă
-// („BUC. 4” nu contează); bara / între cifre; semnele + - ± − înaintea unui număr, nelipite de o literă (TG-INV-10914 nu contează);
-// % ‰ după o cifră. Spațiile nu contează. Separatorul rămâne LITERAL (0,056 ≠ 0.056 → escaladează); un număr prezent doar la un
-// cititor = șir diferit → escaladează (cantitatea neconfirmată de al doilea cititor). Ce nu escaladează decide Haiku, tot după imagine.
+// ── escaladarea la Sonnet pe cifre (laborator OCR 15.10.2026) ──
+// = diferentaNumerica (secvența tokenilor numerici, literală: separator, semn, granițe) pe citirile din BD, după ce se scot DOAR
+// marcajele structurale ale pipeline-ului ⟦rowspan=N⟧ / ⟦rowspan_invalid=…⟧ / ⟦colspan_invalid=…⟧: cifra lor descrie o celulă unită
+// (atributul HTML al cititorului), nu e text din document. Pe r1, 206 dezacorduri urcau la Sonnet doar din ea. O variantă pe „șirul
+// cifrelor concatenate” a fost respinsă (Jakarinos arbitru-v2 r1: „1 | 11” = „11 | 1”, „1 1/2” = „11/2”, „10mm±0,5” = „10mm0,5”).
 const MARCAJ_STRUCTURA = /⟦(?:rowspan=\d+|(?:rowspan|colspan)_invalid=[^⟧]*)⟧/g
-const CIFRA = /^[0-9]$/, LITERA = new RegExp('^[' + LETTERS + ']$')
-export function sirCifre(s: string): string {
-  const t = [...s.replace(MARCAJ_STRUCTURA, ' ')]
-  const urmator = (i: number): number => { let k = i + 1; while (k < t.length && /\s/.test(t[k])) k++; return k }   // primul nespațiu după i
-  const anterior = (i: number): number => { let k = i - 1; while (k >= 0 && /\s/.test(t[k])) k--; return k }      // primul nespațiu înainte de i
-  const cifra = (k: number) => k >= 0 && k < t.length && CIFRA.test(t[k])
-  const lipitDeLitera = (i: number) => i > 0 && LITERA.test(t[i - 1])
-  let out = ''
-  for (let i = 0; i < t.length; i++) {
-    const c = t[i], u = urmator(i)
-    if (CIFRA.test(c)) out += c
-    else if ((c === '.' || c === ',') && cifra(u) && !lipitDeLitera(i)) out += c
-    else if (c === '/' && cifra(anterior(i)) && cifra(u)) out += c
-    else if ('+-±−'.includes(c) && (!lipitDeLitera(i) || ('eE'.includes(t[i - 1]) && cifra(i - 2))) && (cifra(u) || ((t[u] === '.' || t[u] === ',') && cifra(urmator(u))))) out += c
-    else if ((c === '%' || c === '‰') && cifra(anterior(i))) out += c
-    else if ((c === 'e' || c === 'E') && cifra(i - 1) && (cifra(i + 1) || ('+-'.includes(t[i + 1] ?? '') && cifra(i + 2)))) out += 'e'  // exponent (NUM): 1e3 ≠ 13
-  }
-  return out
-}
-export const cifreDiferite = (a: string, b: string): boolean => sirCifre(a) !== sirCifre(b)
+export const faraMarcajeStructura = (s: string): string => s.replace(MARCAJ_STRUCTURA, ' ')
+export const cifreDiferite = (a: string, b: string): boolean => diferentaNumerica(faraMarcajeStructura(a), faraMarcajeStructura(b))
 
 export type Decizie = { decizie: 'ales_lighton' | 'ales_mineru' | 'text_propus' | 'needs_human'; text: string; motiv: string; e_cantitate: boolean; anomalie_separator: boolean }
 const CHEI_IESIRE = ['anomalie_separator', 'decizie', 'e_cantitate', 'motiv', 'text']

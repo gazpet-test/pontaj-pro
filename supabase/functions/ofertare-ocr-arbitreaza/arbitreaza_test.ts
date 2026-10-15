@@ -126,11 +126,11 @@ Deno.test('cascadă: diferența de cifre RECALCULATĂ din BD — marcajul fals a
   const e = mediu(it2); assert.equal((await arbitreaza(cerere(corpDe(it2)), e.m)).status, 200); assert.equal(e.cereriApi.length, 1)
 })
 
-Deno.test('cascadă (laborator 15.10): escaladarea pe cifre = șirul numeric din BD; forma și marcajele ⟦rowspan⟧ nu escaladează', async () => {
+Deno.test('cascadă (laborator 15.10): escaladarea pe cifre din BD; doar marcajele ⟦rowspan⟧ nu mai escaladează', async () => {
   const haikuSigur = { apiSeq: [{ text: JSON.stringify({ decizie: 'ales_lighton', text: '', motiv: 'vazut', e_cantitate: true, anomalie_separator: false }) }] }
   const cazuri: [string, string, number][] = [
     ['1.2 | Amenajarea terenului |  | ', '1.2 ⟦rowspan=5⟧ | Amenajarea terenului |  | ', 1],   // marcaj de celula unita
-    ['2,5', '2, 5', 1], ['Preparare beton clasa C30/37 2,7 mc', 'Preparare beton clasa C30/372,7 mc', 1],   // aceleasi cifre, alta taiere
+    ['2,5', '2, 5', 2], ['1 | 11', '11 | 1', 2], ['1 1/2', '11/2', 2], ['10mm±0,5', '10mm0,5', 2],   // Jakarinos arbitru-v2 r1
     ['0,056', '0.056', 2], ['lungime 10 m', 'lungime 20 m', 2], ['', '48 | 56 | 0', 2], ['3/4', '34', 2],   // separator, valoare, lipsa, fractie
   ]
   for (const [l, mi, n] of cazuri) {

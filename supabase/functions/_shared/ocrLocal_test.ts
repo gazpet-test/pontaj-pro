@@ -1,22 +1,24 @@
 import { strict as assert } from 'node:assert'
 import {
   amprentaDezacord, ANTET_OCR, canonic, NUME_SECRET, OPERATII, apelDinCorp, citesteCorp, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal,
-  cifreDiferite, diferentaNumerica, limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, sirCifre, statusDinEroare, tokeniImagineMax,
+  cifreDiferite, diferentaNumerica, limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, statusDinEroare, tokeniImagineMax,
 } from './ocrLocal.ts'
 
-Deno.test('sirCifre / cifreDiferite (laborator 15.10): separatorul literal, spatiile si marcajele ⟦rowspan⟧ nu conteaza', () => {
+Deno.test('cifreDiferite (laborator 15.10) = diferentaNumerica fara marcajele structurale ⟦rowspan⟧ / ⟦*_invalid⟧', () => {
   const egale: [string, string][] = [
-    ['2,5', '2, 5'], ['114,3 X 4,  \n5mm', '114,3 X 4,5mm'], ['C30/37 2,7 mc', 'C30/372,7 mc'], ['- 16', '-16'], ['4.000  \nCURBA', '4.000 CURBA'],
-    ['1.2 | Amenajarea', '1.2 ⟦rowspan=5⟧ | Amenajarea'], ['Teava ⟦colspan_invalid=2x⟧', 'Teava'], ['BUC. 4.000', 'BUC 4.000'],
-    ['TG-INV-10914', 'TG_INV_10914'], ['masuri de protecție', 'masuri de protectie'], ['---', ''], ['ARC6 S 7666/2', 'ARC6 S 7666 / 2'],
+    ['1.2 | Amenajarea', '1.2 ⟦rowspan=5⟧ | Amenajarea'], ['Teava ⟦colspan_invalid=2x⟧', 'Teava'], ['6.2 ⟦rowspan_invalid=0⟧ | Probe', '6.2 | Probe'],
+    ['masuri de protecție', 'masuri de protectie'], ['---', ''],
   ]
-  for (const [a, b] of egale) assert.equal(cifreDiferite(a, b), false, JSON.stringify([a, b, sirCifre(a), sirCifre(b)]))
+  for (const [a, b] of egale) assert.equal(cifreDiferite(a, b), false, JSON.stringify([a, b]))
+  // tot ce separa diferentaNumerica ramane separat (Jakarinos arbitru-v2 r1: granite, ordine, semne lipite de litere, separator)
   const diferite: [string, string][] = [
-    ['0,056', '0.056'], ['1.234', '1,234'], ['10 m', '20 m'], ['', '48 | 56 | 0'], ['3/4', '34'], ['-5', '5'], ['5%', '5'], ['(.5)', '(5)'],
-    ['8 -15 KG', '8 15 KG'], ['1,0 m', '10 m'], ['1.2 ⟦rowspan=5⟧', '1.3'], ['1e3', '13'], ['2E-5', '2-5'], ['2E-5', '2E5'],
+    ['1 | 11', '11 | 1'], ['12 | 3', '1 | 23'], ['1 1/2', '11/2'], ['10mm±0,5', '10mm0,5'], ['x-5', 'x5'], ['2,5', '2, 5'],
+    ['0,056', '0.056'], ['1.234', '1,234'], ['10 m', '20 m'], ['', '48 | 56 | 0'], ['3/4', '34'], ['1e3', '13'], ['2E-5', '2E5'],
+    ['1.2 ⟦rowspan=5⟧', '1.3'], ['5⟦rowspan=2⟧3', '53'],
   ]
-  for (const [a, b] of diferite) assert.equal(cifreDiferite(a, b), true, JSON.stringify([a, b, sirCifre(a), sirCifre(b)]))
-  assert.equal(sirCifre('Km 16 + 580, 2860,67 m'), '16+580,2860,67')  // virgula urmata de cifra conteaza si dupa spatiu
+  for (const [a, b] of diferite) assert.equal(cifreDiferite(a, b), true, JSON.stringify([a, b]))
+  // nicio pereche pe care diferentaNumerica o socoteste egala nu devine diferita (si invers doar prin marcaje)
+  for (const [a, b] of [...egale, ...diferite]) if (!diferentaNumerica(a, b)) assert.equal(cifreDiferite(a, b), false)
 })
 
 const BUN = 'a'.repeat(32) + '0123456789abcdef0123456789abcdef'
