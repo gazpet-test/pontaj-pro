@@ -123,6 +123,8 @@ Deno.test('preluarea unei extrageri rămase în lucru: felie gata = numărată; 
   const rc = await RULEAZA(c)
   assertEquals(c.ai(), 0)
   assert(JSON.stringify(rc.body.raport).includes('asteapta_om'))
+  // r4: o felie care așteaptă omul lasă extragerea în lucru (fără închidere din contorul local)
+  assert(!c.apeluri.some((x) => x.startsWith('extragere_inchide')))
 })
 
 Deno.test('convenția doar din părțile cu text VALID: o parte nevalidă nu dovedește convenția celeilalte', async () => {

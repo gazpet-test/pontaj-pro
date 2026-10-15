@@ -57,13 +57,19 @@ END $f$;
 -- {refuz: 'grup_schimbat'}. Apoi pornește extragerea în aceeași tranzacție (fn_ofertare_cb_extragere_incepe, neschimbată).
 CREATE FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(p_cerere_id bigint, p_document_id bigint, p_sha256 text, p_familie_id text,
                                                           p_extractor_id text, p_felii_total integer, p_manifest text[])
-RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s'
 AS $f$
 DECLARE v_lic bigint; v_rad text; v_cur text[]; v_dat text[];
 BEGIN
   SELECT licitatie_id, regexp_replace(nume_original, '\s+—\s+p\d{2}_pag\d+-\d+\.pdf$', '', 'i') INTO v_lic, v_rad
     FROM public.ofertare_documente_atribuire WHERE id = p_document_id;
   IF NOT FOUND THEN RETURN jsonb_build_object('refuz', 'document'); END IF;
+  -- review r4: mutexul de GRUP = rândul licitației FOR UPDATE, ținut până la pornirea extragerii. Serializează tot ce poate schimba
+  -- MULȚIMEA părților sau eligibilitatea lor, fără protocol nou: o parte nouă / o versiune care înlocuiește (INSERT în
+  -- ofertare_documente_atribuire → verificarea FK ia FOR KEY SHARE pe licitație, incompatibil cu FOR UPDATE), setterii de loturi
+  -- (licitatie_loturi_seteaza = FOR UPDATE, documente_lot_seteaza = FOR SHARE pe licitație). Fantomele nu mai pot apărea între
+  -- calculul mulțimii și pornire.
+  PERFORM 1 FROM public.ofertare_licitatii WHERE id = v_lic FOR UPDATE;
   -- lock-urile grupului, în ordine deterministă (producătorii țin FOR NO KEY UPDATE pe document cât scriu text + proveniență)
   PERFORM 1 FROM public.ofertare_documente_atribuire d
    WHERE d.licitatie_id = v_lic AND regexp_replace(d.nume_original, '\s+—\s+p\d{2}_pag\d+-\d+\.pdf$', '', 'i') = v_rad

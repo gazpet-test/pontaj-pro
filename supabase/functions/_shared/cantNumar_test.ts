@@ -135,3 +135,18 @@ Deno.test('r2 (P2): m2 / m3 / m² / m³ lângă cantitate și în antet', () => 
   const t = '| Lucrare | Cant. (m3) |\n|---|---|\n| sapatura | 120 |\n'
   assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '| sapatura | 120 |', cantitate: 120, um: 'mc', conventie: 'ro' }).pozitie_dovedita, true)
 })
+
+// ── review r4 (Jakarinos): reproducerile, ca teste ──
+Deno.test('r4: exponentul unei unități (m3 / m2) nu e cantitate; codurile cu cifre lipite (DN90, PE100) nu sunt tokeni', () => {
+  const t = 'Conducta PE100 DN90: volum 120 m3\n'
+  const c = 'Conducta PE100 DN90: volum 120 m3'
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: c, cantitate: 3, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: c, cantitate: 100, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: c, cantitate: 120, um: 'mc', conventie: 'ro' }).pozitie_dovedita, true)
+  const s = 'refacere 35 m2\n'
+  assertEquals(pozitieDovedita({ felie: s, felie_de_la: 0, citat: 'refacere 35 m2', cantitate: 2, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+})
+Deno.test('r4: prefixul de diametru recunoscut oricâte spații ar fi („Conducta DN     90” sub antetul „Denumire (m)”)', () => {
+  const t = '| Denumire (m) | Cant |\n|---|---|\n| Conducta DN     90 | 120 |\n'
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '| Conducta DN     90 | 120 |', cantitate: 90, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+})

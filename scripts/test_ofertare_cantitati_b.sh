@@ -437,6 +437,14 @@ asteapta "grup: manifest fără p02 (parte curentă validă lipsă) → grup_sch
 asteapta "grup: manifestul exact → extragerea pornește" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-x@d-y', 1, ARRAY['962:$G2','961:$G1'])")" 'd.get("ok")')" True
 q "UPDATE public.ofertare_documente_atribuire SET text_extras = 'grup p02 revizuit 1.160,00 m' WHERE id = 962" >/dev/null
 asteapta "grup: p02 schimbat după manifest (sha diferit, fără proveniență) → grup_schimbat" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-z@d-y', 1, ARRAY['961:$G1','962:$G2'])")" 'd.get("refuz")')" grup_schimbat
+# fantomă: cât timp o pornire de grup își ține tranzacția, o parte NOUĂ în aceeași licitație (INSERT, cu FK spre licitație) AȘTEAPTĂ
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-w@d-y', 1, ARRAY['961:$G1']);" -c "SELECT pg_sleep(3);" -c "COMMIT;" >/tmp/cb_grup.out 2>&1 &
+sleep 1
+T0=$(date +%s%N)
+q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES (963, 102, 'Lista G — p03_pag21-30.pdf', 'lista_cantitati', 'grup p03', now())" >/dev/null
+T1=$(date +%s%N)
+wait
+asteapta "grup: o parte nouă inserată în timpul pornirii așteaptă commit-ul ei (fără fantome); pornirea a reușit" "$(( (T1 - T0) / 1000000 > 1200 ))|$(grep -c '"ok": true' /tmp/cb_grup.out)" "1|1"
 asteapta "grup: RPC-ul doar pentru service_role" "$(q "SELECT has_function_privilege('authenticated','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])','EXECUTE')::text || has_function_privilege('service_role','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])','EXECUTE')::text")" falsetrue
 o="$(revenire_b || true)"; [ -z "$(grep -i error <<<"$o")" ] || esec "revenire 31b: $o"
 asteapta "revenirea 20261031b: corpul din 20261031a la loc (fără text_depasit), RPC-ul de grup scos" "$(q "SELECT (pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%')::text || (to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NULL)::text")" falsetrue

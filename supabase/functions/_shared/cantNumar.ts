@@ -16,7 +16,9 @@
 export type Conventie = 'ro' | 'en' | 'nedeterminata' | 'contradictorie'
 
 // separatorul de mii prin spațiu NEÎNTRERUPT / fin („3 995,00”) e acceptat; spațiul obișnuit NU (ar lipi „Dn 90 120 m” în 90120)
-const RE_TOKEN = /(?<![\d.,])\d{1,3}(?:[\u00a0\u202f\u2009]\d{3})+(?:[.,]\d+)?(?!\d)|(?<![\d.,])\d+(?:[.,]\d+)*(?!\d)/g
+// review r4: cifrele lipite de o liter\u0103 \u00eenainte NU sunt num\u0103r (\u201em3\u201d, \u201em2\u201d, \u201eDN90\u201d, \u201ePE100\u201d, \u201eSA11G1\u201d) \u2014 exponentul unei unit\u0103\u021bi sau
+// un cod nu poate deveni o cantitate dovedit\u0103
+const RE_TOKEN = /(?<![\d.,\p{L}])\d{1,3}(?:[\u00a0\u202f\u2009]\d{3})+(?:[.,]\d+)?(?!\d)|(?<![\d.,\p{L}])\d+(?:[.,]\d+)*(?!\d)/gu
 const curataSp = (t: string) => t.replace(/[\u00a0\u202f\u2009]/g, '')
 // datele calendaristice nu sunt cantități și nu sunt dovadă de convenție (15.10.2026 ar arăta ca mii cu punct)
 const RE_DATA = /^\d{1,2}\.\d{1,2}\.\d{2,4}$/
@@ -116,7 +118,8 @@ function singurInCelula(t: string, de: number, pana: number): boolean {
 
 export function umLanga(t: string, de: number, pana: number): Set<string> {
   const out = new Set<string>()
-  if (RE_PREFIX_DN.test(t.slice(Math.max(0, de - 6), de))) return out
+  // prefixul de diametru, oricâte spații ar fi între el și număr (review r4): se caută de la începutul rândului până la token
+  if (RE_PREFIX_DN.test(t.slice(t.lastIndexOf('\n', de - 1) + 1, de))) return out
   const singur = singurInCelula(t, de, pana)
   const dupa = RE_UM_DUPA.exec(t.slice(pana, pana + 40))
   if (dupa && (!dupa[2] || singur)) { const u = umNorm(dupa[4]); if (u) out.add(u) }

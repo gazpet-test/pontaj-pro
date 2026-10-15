@@ -159,7 +159,9 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         const u = await deps.ultimaIncercare(fi.data.munca_id)
         if (u?.stare === 'gata') { gata++; continue }
         if (!(u && u.stare === 'in_zbor' && u.rezervare_id === null)) {
-          if (u?.stare === 'in_zbor') conflict = true
+          // review r4: orice felie care așteaptă omul (esuat / necunoscut / în zbor la alt worker) lasă extragerea în lucru — omul o reia
+          // (felie_reia) și rularea următoare o preia; starea finală nu se decide dintr-un contor local care nu vede munca lui
+          conflict = true
           raport.push({ document_id: d.id, felie: f.nr, asteapta_om: u?.stare ?? 'necunoscut' }); continue
         }
         felieId = u.id
