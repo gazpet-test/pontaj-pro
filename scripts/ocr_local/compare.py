@@ -126,14 +126,65 @@ def _md_split(chunk):
     if buf: out.append(('text', plain('\n'.join(buf))))
     return out
 
+# Normalizarea de FORMAT (laborator OCR, 15.10.2026): tokenii care sunt doar decor sau marcaj nu intra in comparare. Segmentele si
+# pozitiile caracterelor raman neatinse (BD reface fragmentele din `sursa` cu aceeasi tokenizare), iar reconcilierea foloseste aceeasi
+# functie tokens(), deci `pozitie` ramane consecventa. Cifrele, semnele si unitatile NU se ating.
+DECOR_LINE = re.compile(r'^(?:=+|\*+|\|+|[=\-_*—–~]{3,})$')  # linie doar din '=' / '*' / '|' (orice lungime) sau >= 3 caractere de chenar
+LATEX_MARK = re.compile(r'\\(?:text|mathrm|mathbf|operatorname)\{|\\[ ,;:!()\[\]]|\\(?=[%$&#_])')
+BULLETS = set('•■▪●◦·-–—')
+FOLD = str.maketrans('ăâîșşțţšĂÂÎȘŞȚŢŠ', 'aaissttsAAISSTTS')  # doar la comparare: protecție = protectie, Ștefănești = Štefănești
+
+def _skip_spans(val):
+    """Intervalele de caractere [s, e) care sunt doar marcaj: linii de chenar, '=' de chenar la capat de linie, marcaj LaTeX."""
+    spans = []; pos = 0
+    for line in val.split('\n'):
+        st = line.strip()
+        if st and DECOR_LINE.match(st.replace(' ', '')): spans.append((pos, pos + len(line)))
+        elif st:
+            lead = len(line) - len(line.lstrip()); trail = len(line.rstrip())
+            # '=' / '|' singure la capat de rand = chenar ('= NR. SIMBOL ... =', '| Dotari 4.6 |'); '==' sau '||' raman
+            # ... doar cand vecinul (peste spatii) NU e cifra: '| 5' poate fi '15' citit gresit, '= 25' continua o egalitate
+            if st[0] in '=|' and st[:2] != st[0] * 2 and not st[1:].lstrip()[:1].isdigit(): spans.append((pos + lead, pos + lead + 1))
+            if (st[-1] in '=|' and len(st) > 1 and st[-2:] != st[-1] * 2 and st[-2:] != '\\|'
+                    and not st[:-1].rstrip()[-1:].isdigit()): spans.append((pos + trail - 1, pos + trail))
+            if line.count('$') and line.count('$') % 2 == 0:                                            # $...$ pereche pe rand
+                spans += [(pos + i, pos + i + 1) for i, ch in enumerate(line) if ch == '$']
+        pos += len(line) + 1
+    for m in LATEX_MARK.finditer(val):
+        spans.append((m.start(), m.end()))
+        if m.group(0).endswith('{'):                                                                    # acolada de inchidere
+            k = val.find('}', m.end())
+            if k >= 0 and '\n' not in val[m.end():k]: spans.append((k, k + 1))
+    return spans
+
 def tokens(segs):
-    """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere."""
+    """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere. Tokenii de marcaj (chenar, LaTeX) se sar;
+    literele rasfirate („D E N U M I R E”, >= 3 litere singure despartite de cate un spatiu) devin UN token, cu cheia lipita."""
     out = []
     for si, (kind, val) in enumerate(segs):
         # un tabel e un marcaj in fluxul de text: textul mutat de o parte pe alta a unui tabel devine dezacord (review Jakarinos r3)
         if kind != 'text': out.append((TABLE_MARK, si, None, None)); continue
-        for m in TOKEN.finditer(val): out.append((m.group(0), si, m.start(), m.end()))
+        spans = _skip_spans(val)
+        toks = [(m.group(0), si, m.start(), m.end()) for m in TOKEN.finditer(val)
+                if not any(s <= m.start() and m.end() <= e for s, e in spans)]
+        i = 0
+        while i < len(toks):
+            j = i
+            while (j + 1 < len(toks) and len(toks[j][0]) == 1 and toks[j][0].isalpha() and len(toks[j + 1][0]) == 1 and toks[j + 1][0].isalpha()
+                   and val[toks[j][3]:toks[j + 1][2]] == ' '): j += 1
+            if j - i >= 2: out.append((''.join(t[0] for t in toks[i:j + 1]), si, toks[i][2], toks[j][3])); i = j + 1
+            else: out.append(toks[i]); i += 1
     return out
+
+def text_keys(tl, segs):
+    """Cheile de comparare: sedila + diacritice pliate; bulina de la inceput de rand urmata de text pe acelasi rand = '-'."""
+    keys = []
+    for k, (t, si, s, e) in enumerate(tl):
+        if t in BULLETS and s is not None:
+            val = segs[si][1]; nl = val.rfind('\n', 0, s) + 1; eol = val.find('\n', e); eol = len(val) if eol < 0 else eol
+            if not val[nl:s].strip() and val[e:eol].strip(): keys.append('-'); continue
+        keys.append(norm_word(t).translate(FOLD))
+    return keys
 
 def table_rows(segs):
     # randurile complet goale nu poarta informatie (LightOn mai adauga unul) - nu intra in aliniere
@@ -188,10 +239,23 @@ def find_header(rows, upto):
 
 def compare_text(seg_a, seg_b, base):
     ta = tokens(seg_a); tb = tokens(seg_b)
-    ka = [norm_word(t[0]) for t in ta]; kb = [norm_word(t[0]) for t in tb]
+    ka = text_keys(ta, seg_a); kb = text_keys(tb, seg_b)
+    ops = [o for o in difflib.SequenceMatcher(a=ka, b=kb, autojunk=False).get_opcodes() if o[0] != 'equal']
+    # bloc MUTAT (ordinea de citire difera, ex. antet pe doua coloane): o stergere la un cititor = o inserare la celalalt, aceiasi
+    # tokeni, FARA cifre -> nu e dezacord (baza ramane LightOn). Cu cifre ramane dezacord: ordinea poate schimba carui text ii apartine.
+    dele = [o for o in ops if o[0] == 'delete']; ins = [o for o in ops if o[0] == 'insert']; moved = set()
+    # Strict: doar cuvinte (>= 2) si punctuatie simpla — o acolada / un semn mutat schimba sensul (x^{2+3} != x^{2}+3) — si de
+    # aceeasi parte a oricarui tabel la ambii cititori (text mutat peste un tabel ramane dezacord `contine_tabel`).
+    word = lambda t: t.isalpha()
+    for d in dele:
+        seq = ka[d[1]:d[2]]
+        if sum(map(word, seq)) < 2 or not all(word(t) or t in '.,:;"„”' for t in seq): continue
+        for x in ins:
+            if x not in moved and kb[x[3]:x[4]] == seq and ka[:d[1]].count(TABLE_MARK) == kb[:x[3]].count(TABLE_MARK):
+                moved.update((d, x)); break
     groups = []
-    for op, a1, a2, b1, b2 in difflib.SequenceMatcher(a=ka, b=kb, autojunk=False).get_opcodes():
-        if op == 'equal': continue
+    for op, a1, a2, b1, b2 in ops:
+        if (op, a1, a2, b1, b2) in moved: continue
         # dezacorduri apropiate (cel mult 2 tokeni egali intre ele) = un singur decupaj pentru arbitru
         if groups and a1 - groups[-1]['a2'] <= 2 and b1 - groups[-1]['b2'] <= 2: groups[-1].update(a2=a2, b2=b2)
         else: groups.append({'a1': a1, 'a2': a2, 'b1': b1, 'b2': b2})

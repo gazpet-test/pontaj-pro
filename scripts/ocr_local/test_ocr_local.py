@@ -527,7 +527,36 @@ class Comparare(unittest.TestCase):
         s, its = compare_band(BAND, TABLE_A, OK, md, OK); self.assertEqual(its, [])
         self.assertEqual([k for k, _ in segments(md)], ['table'])
 
-BENCH = pathlib.Path('C:/Users/Public/paw-data/out/ocr_bench_20261014/runs')
+class NormalizareFormat(unittest.TestCase):
+    """Laborator OCR 15.10.2026: diferentele doar de format nu sunt dezacord; cifrele, semnele si unitatile raman (cazuri reale din r1)."""
+    TXT = dict(BAND, kind='text')
+    def dez(self, a, b): return [i for i in compare_band(self.TXT, a, OK, b, OK)[1] if i['tip'] == 'text']
+    def test_pozitiv_format(self):
+        for a, b in [('Titlu\n\n==============================\nText', 'Titlu\nText'),          # chenar de '='
+                     ('Titlu\n---\nText', 'Titlu\nText'), ('A\n=\n==========\nB', 'A\nB'),
+                     ('= NR. SIMBOL ART. CANTITATE =', 'NR. SIMBOL ART. CANTITATE'),          # '=' de chenar la capat de rand
+                     ('| Dotari', 'Dotari'), ('Text\n*\n\n*\nAlt', 'Text\nAlt'),
+                     ('Curent $0,04\\ \\text{A}$ maxim', 'Curent 0,04 A maxim'),              # LaTeX in jurul aceluiasi text
+                     ('masuri de protecție', 'masuri de protectie'), ('Ștefănești', 'Štefănești'),  # diacritice
+                     ('D E N U M I R E', 'DENUMIRE'), ('A R T I C O L', 'ARTICOL'),          # litere rasfirate
+                     ('- primul punct', '• primul punct'), ('- al doilea', '■ al doilea'),    # buline
+                     ('Persoana juridica Formularul F3\nSNTGN TRANSGAZ\nObiectiv',            # antet citit in alta ordine
+                      'Persoana juridica\nSNTGN TRANSGAZ\nFormularul F3\nObiectiv')]:
+            self.assertEqual(self.dez(a, b), [], (a, b))
+    def test_negativ_cifre_semne_unitati(self):
+        for a, b in [('D = 10 - 16 MM', 'D = 10 -16 MM'), ('–16', '-16'), ('0,056', '0.056'), ('5 m3', '5 m³'),
+                     ('$0,04$ A', '0,4 A'), ('x^{2+3}', 'x^{2}+3'), ('L = 25', 'L 25'), ('$ 100', '100'),
+                     ('EPUIZAREA', 'EPUZAREA'), ('Total 1250 lei\nNota', 'Nota\nTotal 1250 lei'),  # bloc mutat CU cifre ramane
+                     ('| 5 buc', '5 buc'), ('Lungime 12 |', 'Lungime 12'), ('= 25 m', '25 m'), ('== Titlu', 'Titlu')]:
+            self.assertTrue(self.dez(a, b), (a, b))
+    def test_sursa_ramane_exacta(self):
+        # fragmentul pentru arbitru e tot subsirul exact din citire, chiar daca intre tokeni sunt marcaje sarite
+        a = 'Curent $0,04\\ \\text{A}$ si 7 V'; b = 'Curent 0,04 A si 9 V'
+        its = self.dez(a, b); self.assertEqual(len(its), 1)
+        seg = segments(a); src = its[0]['sursa']['lighton']
+        self.assertEqual(seg[src['seg'][0]][1][src['start']:src['end']], its[0]['citire_lighton'])
+
+BENCH =pathlib.Path('C:/Users/Public/paw-data/out/ocr_bench_20261014/runs')
 
 class Benchmark(unittest.TestCase):
     @unittest.skipUnless((BENCH / '21d_mineru25_pro_vllm/results/a_098_control300/raw.txt').exists(), 'benchmark 14.10 lipsa')
@@ -610,7 +639,8 @@ class Reconciliere(unittest.TestCase):
         shutil.rmtree(out / 'reconciliere')
         with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
     def test_id_duplicat_refuzat(self):
-        r, items, out = self._run('x 1 a b c d e f 2 y', 'x 9 a b c d e f 8 y', [])
+        # cuvinte, nu litere singure: „a b c d e f” ar fi lipite in UN token (litere rasfirate) si cele doua dezacorduri s-ar uni
+        r, items, out = self._run('x 1 aa bb cc dd ee ff 2 y', 'x 9 aa bb cc dd ee ff 8 y', [])
         its = [json.loads(l) for l in (out / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertGreaterEqual(len(its), 2); its[1]['id'] = its[0]['id']
         (out / 'dezacorduri.jsonl').write_text('\n'.join(json.dumps(i, ensure_ascii=False) for i in its), encoding='utf-8')
