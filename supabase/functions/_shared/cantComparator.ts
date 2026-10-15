@@ -67,7 +67,9 @@ export const normUm = (o: Obs): Obs =>
 // ── cheia ──
 export function cheieObs(o: Obs): string | null {
   if (o.dn_ambiguu || o.dn_mm.length !== 1 || !o.obiect_cheie || !o.um_norm) return null
-  return [o.lot_domeniu, o.lot_nr.join(','), o.obiect_cheie, o.tip_lucrare, o.material ?? '', o.dn_mm[0], o.um_norm].join('|')
+  // UM canonic în cheie (km → m): cheia exportată (aliasuri) = cheia folosită la agregare
+  const um = o.um_norm === 'km' ? 'm' : o.um_norm
+  return [o.lot_domeniu, o.lot_nr.join(','), o.obiect_cheie, o.tip_lucrare, o.material ?? '', o.dn_mm[0], um].join('|')
 }
 
 // aliasurile active → reprezentantul componentei (cea mai mică cheie, determinist, indiferent de ordinea aliasurilor)
@@ -118,14 +120,15 @@ export function agrega(obs: Obs[], docs: DocManifest[], aliasuri: Alias[]):
   { pe: Map<string, Map<string, Agregat>>; neasociate: Obs[]; blocaje: Blocaj[] } {
   const rep = reprezentanti(aliasuri)
   const parte = new Map(docs.map((d) => [d.document_id, d.parte]))
-  const { pozitii, conflicte, nedovedite } = deduplica(obs.map(normUm))
+  // deduplicarea pe valorile BRUTE (1 km și 1000 m la același offset = două citiri diferite → conflict); normalizarea UM vine după
+  const { pozitii, conflicte, nedovedite } = deduplica(obs)
   const pe = new Map<string, Map<string, Agregat>>()
   const ia = (rol: string, k: string) => { if (!pe.has(rol)) pe.set(rol, new Map()); const m = pe.get(rol)!; if (!m.has(k)) m.set(k, nou()); return m.get(k)! }
   const neasociate: Obs[] = [], blocaje: Blocaj[] = []
   const sufix = (o: Obs) => (o.e_total ? '#total' : o.e_subtotal ? '#subtotal' : '')
   const cheieFinala = (o: Obs) => { const k = cheieObs(o); return k === null ? null : rep(k) + sufix(o) }
   for (const p of pozitii) {
-    const o = p.reprezentant
+    const o = normUm(p.reprezentant)
     if (!relevanta(o)) continue
     const k = cheieFinala(o)
     if (k === null) { neasociate.push(o); continue }
@@ -227,15 +230,25 @@ export function acoperirePereche(ra: Rol, rb: Rol, docs: DocManifest[], obs: Obs
   }
   const aiPerechii = cmp.filter((c) => c.rol_a === ra && c.rol_b === rb)
   // „incomplet” se propagă și din rândurile din interiorul unui rol al perechii (suma_vs_total, poziții nedovedite fără cheie)
-  const dinRol = cmp.filter((c) => c.rol_a === c.rol_b && (c.rol_a === ra || c.rol_a === rb))
-  if ([...aiPerechii, ...dinRol].some((c) => c.verdict === 'incomplet')) lipsuri.push({ document_id: null, motiv: 'chei incomplete' })
+  if (randuriPereche(cmp, ra, rb).some((c) => c.verdict === 'incomplet')) lipsuri.push({ document_id: null, motiv: 'chei incomplete' })
+  // o lungime dovedită fără cheie nu e comparată cu nimic: perechea nu e „gata” până la asociere (alias) / decizia omului
+  if (randuriPereche(cmp, ra, rb).some((c) => c.verdict === 'neasociat')) lipsuri.push({ document_id: null, motiv: 'lungimi neasociate' })
   if (!aiPerechii.some((c) => ['concordant', 'diferenta'].includes(c.verdict))) lipsuri.push({ document_id: null, motiv: 'nicio cheie comună comparabilă' })
   return { stare: lipsuri.length ? 'incomplet' : 'gata', lipsuri }
 }
 
+// rândurile care contează pentru o pereche: cele ale perechii + cele din interiorul rolurilor ei (suma_vs_total / subtotal, conflicte
+// fără cheie, poziții nedovedite, neasociate)
+export function randuriPereche(cmp: Cmp[], ra: Rol, rb: Rol): Cmp[] {
+  return cmp.filter((c) => (c.rol_a === ra && c.rol_b === rb) || (c.rol_a === c.rol_b && (c.rol_a === ra || c.rol_a === rb)))
+}
+
 // ── H2 tri-state pe pereche: necalculat (fără calcul valid) / incomplet / gata + verdictul comparatorului ──
-export function h2(calculValid: boolean, ac: Acoperire | undefined, cmpPereche: Cmp[]): { stare: 'necalculat' | 'incomplet' | 'gata'; diferente: number; conflicte: number } {
+// primește TOATE rândurile calculului și filtrează singur (anomaliile din interiorul rolurilor nu se pot pierde la apel)
+export function h2(calculValid: boolean, ac: Acoperire | undefined, cmp: Cmp[], ra: Rol, rb: Rol):
+  { stare: 'necalculat' | 'incomplet' | 'gata'; diferente: number; conflicte: number } {
   if (!calculValid || !ac) return { stare: 'necalculat', diferente: 0, conflicte: 0 }
+  const cmpPereche = randuriPereche(cmp, ra, rb)
   const diferente = cmpPereche.filter((c) => c.verdict === 'diferenta').length
   const conflicte = cmpPereche.filter((c) => c.verdict === 'conflict_sursa').length
   if (ac.stare !== 'gata' || cmpPereche.some((c) => c.verdict === 'incomplet')) return { stare: 'incomplet', diferente, conflicte }

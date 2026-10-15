@@ -56,7 +56,7 @@ Deno.test('§6.6: incomplet se propagă până la H2 (perechea nu e gata)', asyn
   const r = await calcul({ licitatie_id: 15, lot_domeniu: 'toate', lot_nr: [], extractor_id: 'x', docs: DOCS, obs, aliasuri: [], decizii: [] })
   const ac = r.calcul.acoperire['f3-atr']
   assertEquals(ac.stare, 'incomplet')
-  assertEquals(h2(true, ac, r.cmp.filter((c) => c.rol_a === 'f3' && c.rol_b === 'atr') as any).stare, 'incomplet')
+  assertEquals(h2(true, ac, r.cmp as any, 'f3', 'atr').stare, 'incomplet')
   assertEquals(r.calcul.stare, 'incomplet')
 })
 Deno.test('§6.6 PR3: agregare cu convenție demonstrabilă (2.000,00 + 1.995,00 = 3.995) vs ATR 3.995 → concordant', () => {
@@ -130,7 +130,7 @@ Deno.test('acoperire: gata doar cu toate condițiile; fiecare lipsă e numită p
   assertEquals(acoperirePereche('f3', 'atr', DOCS, fara, compara(fara, DOCS, []).cmp).lipsuri.some((l) => l.motiv === 'nicio cheie comună comparabilă'), true)
 })
 Deno.test('H2: fără calcul valid = necalculat (lipsa nu e „nu există”)', () => {
-  assertEquals(h2(false, { stare: 'gata', lipsuri: [] }, []).stare, 'necalculat')
+  assertEquals(h2(false, { stare: 'gata', lipsuri: [] }, [], 'f3', 'atr').stare, 'necalculat')
 })
 
 // ── amprenta ──
@@ -228,4 +228,40 @@ Deno.test('r1: amprenta include toate intrările acoperirii (text_valid, complet
 Deno.test('r1: rotunjirea se face o singură dată, pe suma finală (0,0004 × 3 = 0,001, nu 0)', () => {
   const { pe } = agrega([1, 2, 3].map((i) => o({ cantitate_offset: i, cantitate: 0.0004 })), DOCS, [])
   assertEquals([...pe.get('f3')!.values()][0].val, 0.001)
+})
+
+// ── review r2 (Copilot + Jakarinos): contraexemplele ca teste ──
+const ATR5 = (p: Partial<Obs> = {}) => o({ document_id: 2, doc_sha256: 'b'.repeat(64), rol_sursa: 'atr', cantitate_offset: 5, ...p })
+Deno.test('r2: 1 km și 1000 m la același offset = două citiri diferite → conflict_sursa (în ambele ordini)', () => {
+  for (const ordine of [0, 1]) {
+    const v = [o({ cantitate_offset: 8, um_norm: 'km', cantitate: 1 }), o({ cantitate_offset: 8, um_norm: 'm', cantitate: 1000 })]
+    if (ordine) v.reverse()
+    assertEquals(deduplica(v).conflicte.length, 1)
+    const c = compara([...v, ATR5({ cantitate: 1000 })], DOCS, []).cmp.find((x) => x.rol_a === 'f3' && x.rol_b === 'atr')!
+    assertEquals(c.verdict, 'conflict_sursa')
+  }
+})
+Deno.test('r2: aliasul pe cheia exportată funcționează și pentru o lungime în km (cheia e canonică, km → m)', () => {
+  const f3 = o({ obiect_cheie: 'strada unu', um_norm: 'km', cantitate: 1.2 }), atr = ATR5({ obiect_cheie: 'strada 1', cantitate: 1200 })
+  const [x, y] = [cheieObs(f3)!, cheieObs(atr)!].sort()
+  const { cmp } = compara([f3, atr], DOCS, [{ id: 1, cheie_a: x, cheie_b: y }])
+  const p = cmp.filter((c) => c.rol_a === 'f3' && c.rol_b === 'atr')
+  assertEquals(p.map((c) => [c.verdict, c.val_a, c.val_b]), [['concordant', 1200, 1200]])
+  assertEquals(acoperirePereche('f3', 'atr', DOCS, [f3, atr], cmp).stare, 'gata')
+})
+Deno.test('r2: o cheie comună concordantă + o lungime dovedită NEASOCIATĂ → acoperire și H2 incomplete (fără false-green)', async () => {
+  const obs = [o({}), o({ cantitate_offset: 300, dn_mm: [], cantitate: 500 }), ATR5()]
+  const r = await calcul({ licitatie_id: 15, lot_domeniu: 'toate', lot_nr: [], extractor_id: 'x', docs: DOCS, obs, aliasuri: [], decizii: [] })
+  const ac = r.calcul.acoperire['f3-atr']
+  assertEquals(ac.stare, 'incomplet')
+  assert(ac.lipsuri.some((l) => l.motiv === 'lungimi neasociate'))
+  assertEquals(h2(true, ac, r.cmp as any, 'f3', 'atr').stare, 'incomplet')
+})
+Deno.test('r2: H2 numără și anomaliile din interiorul rolurilor (conflict fără cheie, suma_vs_subtotal diferită)', () => {
+  const gata = { stare: 'gata' as const, lipsuri: [] }
+  const conf = [o({}), o({ cantitate_offset: 9, dn_mm: [] }), o({ cantitate_offset: 9, dn_mm: [], masura: 'montaj' }), ATR5()]
+  assertEquals(h2(true, gata, compara(conf, DOCS, []).cmp, 'f3', 'atr').conflicte, 2)
+  const sub = [o({}), o({ cantitate_offset: 2, cantitate: 120, e_subtotal: true }), ATR5()]
+  const h = h2(true, gata, compara(sub, DOCS, []).cmp, 'f3', 'atr')
+  assertEquals([h.stare, h.diferente], ['gata', 1])
 })
