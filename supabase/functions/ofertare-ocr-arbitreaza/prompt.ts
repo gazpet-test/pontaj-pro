@@ -1,7 +1,10 @@
 // Promptul arbitrului OCR local — VERSIONAT (spec §3). Orice schimbare de text = versiune nouă aici ȘI în
 // scripts/ocr_local/protocol.json → arbitru.prompt_versiuni_admise (testul Python test_prompt_arbitru_admis le leagă).
 export const PROMPT_VERSIUNE = 'arb-v1'
-export const MODEL = 'claude-sonnet-5'
+// Cascada in ACELASI apel (decizia Razvan 15.10.2026, D varianta A): Haiku 5.5 primul filtru pe orice dezacord; Sonnet 5 cand Haiku e
+// nesigur (needs_human / iesire invalida / usage lipsa) sau dezacordul are diferenta de cifre. Acelasi prompt pentru ambele.
+export const MODEL_FILTRU = 'claude-haiku-5-5'
+export const MODEL_ARBITRU = 'claude-sonnet-5'
 
 export const PROMPT = `Ești arbitrul unei citiri OCR duble pe documente de licitație (Gazpet Instal SRL, construcții de rețele de gaze și apă).
 Aceeași bandă de pagină a fost citită de două modele OCR independente, LightOn și MinerU, care NU sunt de acord într-un loc.
