@@ -336,23 +336,10 @@ Eșantion definit: 50 de chei aleatoare (seed fixat) din licitațiile 5 și 103,
 - Textul OCR local pentru documentele scanate (laboratorul OCR).
 - Audit retroactiv pe licitațiile închise.
 
-## 9. Decizii pentru Răzvan (A/B/C)
+## 9. Decizii Răzvan (15.10.2026, prin chat: A la toate)
 
-- **D1 — înghețarea analizei inițiale**
-  - **A (recomandat):** automat la prima clarificare a noastră trimisă sau, dacă nu trimitem nimic, la termenul-limită de clarificări. Plus buton manual pentru responsabil.
-  - **B:** doar manual.
-  - **C:** la fiecare calcul, cu istoric.
-- **D2 — modelul de extragere**
-  - **A (recomandat):** gpt-5-mini, cu normalizarea deterministă după.
-  - **B:** Sonnet 5.5 (de ~5–10× mai scump).
-  - **C:** A, cu B doar pe feliile fără DN sau obiect.
-- **D3 — plafonul pe cererea de extragere**
-  - **A (recomandat):** 5 USD pe licitație (auditul nu costă în MVP), ridicabil de owner.
-  - **B:** 10 USD.
-  - **C:** alte valori.
-- **D4 — întinderea MVP**
-  - **A (recomandat):** doar lungimi (UM = m: conducte, branșamente, tuburi de protecție), cu DN și material.
-  - **B:** toate cantitățile F3.
-- **D5 — probele**
-  - **A (recomandat):** golden Răcari (§6.0) făcut de om sau verificat de om, apoi o licitație activă cu termen de clarificări deschis.
-  - **B:** direct pe o licitație activă.
+- **D1:** înghețarea se face automat la prima clarificare a noastră trimisă sau la termenul-limită de clarificări, plus buton manual pentru responsabil.
+- **D2:** extragerea folosește gpt-5-mini, cu normalizare deterministă după.
+- **D3:** plafon pe licitație de 5 USD pentru extragere și 3 USD pentru audit, ridicabile de owner. În MVP auditul nu face apeluri AI, deci plafonul de audit rămâne rezervat pentru extinderea din §8.
+- **D4:** MVP-ul acoperă doar lungimile (UM = m: conducte, branșamente, tuburi de protecție), cu DN și material.
+- **D5:** proba de acceptanță e întâi Răcari (licitația 15, golden din §6.0), apoi o licitație activă cu termen de clarificări deschis.
