@@ -1,3 +1,5 @@
+// v16 (15.10.2026): regula de tabel fermă (" | " pe fiecare celulă, cu exemplu F3 + contraexemplu) în ambele prompturi
+// (text + antet) și max_tokens 12000 pe Haiku 5.5 — după proba Haiku 4.5 vs 5.5 pe 7 documente (_shared/transcriereTabel.ts).
 // v14 (12.10.2026, loturi MVP 20261024b): poarta unică pe loturi înainte de orice cost — neeligibil → {ok:false, blocat_lot}.
 // v13 (30.09.2026, DRAFT, nedeployat): GARDA — fără cale anonimă (secret de serviciu sau utilizator cu acces Ofertare),
 // contor persistent de încercări/descărcări cu blocare, scurtcircuit pe mărime+etag/sha256. Vezi docs/INGEST_GARDA.md.
@@ -30,6 +32,7 @@ import { GARDA, identificaApelant, dejaIngeratLaHash, sha256Hex, plasaExactOnce,
 import { metaObiect, gardaIncearca, incercareGarda } from '../_shared/gardaIngest.ts'
 import { descarcaCuJurnal } from '../_shared/egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md), fail-open — garda de mai sus rămâne fail-closed
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
+import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'   // v16: aceeași regulă + plafon ca ofertare-citire-test
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -60,7 +63,7 @@ const APELURI_PER_INVOCARE = 2
 const MAX_CHUNK_BYTES = 24_000_000
 const MAX_TEXT = 900_000
 const AVERT_REZERVA = 300   // loc pentru avertismentul „TRUNCHIAT” adăugat după tăiere
-const MAX_OUT = 8000
+// v16 (15.10.2026): plafonul de ieșire vine din _shared/transcriereTabel.ts — 12000 pe Haiku 5.5, 8000 în rest.
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-ingest-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -70,7 +73,8 @@ const marcaj = (n: number) => `⟦PAGINA ${n}⟧`
 const REGULA_PAGINI = (prima: number, nr: number) =>
   `Fragmentul are ${nr} pagin${nr === 1 ? 'ă' : 'i'}; prima este pagina ${prima} a documentului. OBLIGATORIU: începe transcrierea FIECĂREI pagini cu o linie separată exact de forma ⟦PAGINA N⟧ (N = numărul paginii în document, deci ${prima}${nr > 1 ? `, ${prima + 1}, … ${prima + nr - 1}` : ''}). Nu sări niciun marcaj, chiar dacă pagina e goală sau e o planșă.`
 
-const PROMPT_TEXT = (prima: number, nr: number) => `Extrage TOT textul lizibil din acest fragment de document (licitație publică românească — caiet de sarcini / fișă de date / liste cantități / clarificări). Transcrie fidel, în ordinea de pe pagină, inclusiv tabele (rânduri separate prin linii noi, celule prin " | "). NU rezuma, NU comenta, NU adăuga nimic de la tine. Dacă o pagină e desen/planșă fără text, scrie doar [PLANȘĂ: <titlul din indicator, dacă se vede>].
+const PROMPT_TEXT = (prima: number, nr: number) => `Extrage TOT textul lizibil din acest fragment de document (licitație publică românească — caiet de sarcini / fișă de date / liste cantități / clarificări). Transcrie fidel, în ordinea de pe pagină, inclusiv tabele (după regula TABELE de mai jos). NU rezuma, NU comenta, NU adăuga nimic de la tine. Dacă o pagină e desen/planșă fără text, scrie doar [PLANȘĂ: <titlul din indicator, dacă se vede>].
+${REGULA_TABEL}
 ${REGULA_PAGINI(prima, nr)}
 Răspunde DOAR cu textul extras.`
 
@@ -78,7 +82,8 @@ const PROMPT_ANTET = (prima: number, nr: number) => `Ești la PRIMA felie a unui
 Răspunde în DOUĂ părți separate de linia ===TEXT===:
 Partea 1 — EXCLUSIV JSON: {"obiectiv": "...", "beneficiar": "...", "proiectant": "...", "proiect_nr": "...", "revizie": "...", "data": "...", "pare_scanat": true|false} (null unde nu apare).
 ===TEXT===
-Partea 2 — tot textul extras, cu aceleași reguli: transcriere fidelă, tabele cu " | ", [PLANȘĂ: ...] pentru desene, fără rezumat.
+Partea 2 — tot textul extras, cu aceleași reguli: transcriere fidelă, tabele după regula TABELE de mai jos, [PLANȘĂ: ...] pentru desene, fără rezumat.
+${REGULA_TABEL}
 ${REGULA_PAGINI(prima, nr)}`
 
 function b64(bytes: Uint8Array): string {
@@ -342,7 +347,7 @@ Deno.serve(async (req: Request) => {
         method: 'POST',
         headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: MODEL, max_tokens: MAX_OUT,
+          model: MODEL, max_tokens: maxOut(MODEL),
           // Sonnet 5 și Haiku 5.5 gândesc implicit (adaptive) și gândirea intră în max_tokens — la transcriere e inutilă
           // și scumpă. Haiku 5.5 acceptă 'disabled' doar la effort low/medium/high (implicit medium) — nu trimitem effort.
           // Fără temperature/top_p/top_k: modelele 5.x le resping cu 400 (vezi ofertare-ocr-arbitreaza).
