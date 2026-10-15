@@ -47,7 +47,8 @@ const BUCKET = 'ofertare'
 type Model = { id: string; in: number; out: number; felie: number; prag?: number; peste?: { in: number; out: number } }
 const MODELE: Record<string, Model> = {
   haiku: { id: 'claude-haiku-5-5', in: 0.10 / 1e6, out: 0.50 / 1e6, felie: 8, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } },
-  sonnet: { id: 'claude-sonnet-5', in: 3 / 1e6, out: 15 / 1e6, felie: 2 },
+  // Sonnet 5: 2 / 10 $ pe 1M (sursa: _shared/ocrLocal.ts PRETURI['claude-sonnet-5']; înainte 3 / 15, cost raportat ~50% peste cel real).
+  sonnet: { id: 'claude-sonnet-5', in: 2 / 1e6, out: 10 / 1e6, felie: 2 },
 }
 // Costul unui singur apel: rata se alege după tokenii de intrare ai ACELUI apel (prompt > prag ⇒ rata „peste”).
 export function costApel(M: Model, tokIn: number, tokOut: number): number {
@@ -148,13 +149,31 @@ Deno.serve(async (req: Request) => {
   let pornitDe: string | null = null   // cine a pornit citirea (procesat_de)
   // încercarea acordată de gardă (token + lease); null până la „continua”. inchide() trimite _rezultat O SINGURĂ dată.
   let inc: Incercare | null = null
+  // Consumul facturat al invocării (Jakarinos r1 / PR #724): fiecare răspuns Claude cu `usage` se adună aici ÎNAINTE de orice
+  // verificare, iar jurnalul se scrie O SINGURĂ dată — pe succes sau în fail() — ca un apel plătit urmat de un eșec să nu
+  // dispară din ai_usage_log și nici să nu fie dublat.
+  const uz = { model: '', tokIn: 0, tokOut: 0, cost: 0, scris: false }
+  const jurnalizeaza = async (siFaraConsum: boolean): Promise<string | null> => {
+    if (uz.scris || !uz.model || (!siFaraConsum && uz.tokIn === 0 && uz.tokOut === 0)) return null
+    uz.scris = true
+    try {
+      const { error } = await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: uz.model, tokens_in: uz.tokIn, tokens_out: uz.tokOut, cost_usd: uz.cost, ref_table: 'ofertare_documente_atribuire', ref_id: docId })
+      if (!error) return null
+      console.error('ai_usage_log doc', docId, error.message)
+      return 'ai_usage_log: ' + (error.message || 'insert eșuat')
+    } catch (e: any) {
+      console.error('ai_usage_log doc', docId, e?.message || e)
+      return 'ai_usage_log: ' + String(e?.message || e)
+    }
+  }
 
   const fail = async (msg: string) => {
+    const eJurnal = await jurnalizeaza(false)   // costul apelurilor deja facturate rămâne în jurnal și pe drumul de eroare
     // runda 3 (J2): cu token, starea 'eroare' se scrie de server ATOMIC cu eșecul (o încercare preluată nu mai atinge documentul);
     // fără token (erori înainte de gardă, fără descărcare), ca înainte
     if (inc) await inc.inchide({ rezultat: 'esec', eroare: msg, doc: { status_procesare: 'eroare', eroare: msg.slice(0, 500) } })
     else if (docId) { try { await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: msg.slice(0, 500) }).eq('id', docId) } catch (_) {} }
-    return new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
+    return new Response(JSON.stringify({ error: msg, ...(eJurnal ? { jurnal_cost_eroare: eJurnal } : {}) }), { status: 200, headers: CORS })
   }
 
   try {
@@ -261,6 +280,7 @@ Deno.serve(async (req: Request) => {
     }
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
     const MODEL = M.id, PAGINI_PER_FELIE = M.felie
+    uz.model = MODEL
 
     const { data: blob, error: dlErr } = await descarcaCuJurnal(supabase, BUCKET, row.fisier_path, 'edge:ofertare-ingest-doc', row.id ?? docId)
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
@@ -294,7 +314,6 @@ Deno.serve(async (req: Request) => {
     let textNou = ''
     let antet: any = null
     let pareScanat: boolean | null = null
-    let tokIn = 0, tokOut = 0, costUsd = 0
     let plafon = false
     let primaPlafon = Infinity   // prima pagină lăsată necitită din cauza plafonului
     // paginile necitite se acumulează peste invocări (documentul mare se citește în mai multe runde)
@@ -335,9 +354,10 @@ Deno.serve(async (req: Request) => {
         }),
       })
       const data = await resp.json()
-      if (!resp.ok) return await fail(`Claude paginile ${sAbs + 1}-${eAbs}: ` + (data.error?.message || resp.status))
+      // consumul se adună înainte de verificarea statusului: orice răspuns cu `usage` e facturabil
       const ti = data.usage?.input_tokens || 0, to = data.usage?.output_tokens || 0
-      tokIn += ti; tokOut += to; costUsd += costApel(M, ti, to)
+      uz.tokIn += ti; uz.tokOut += to; uz.cost += costApel(M, ti, to)
+      if (!resp.ok) return await fail(`Claude paginile ${sAbs + 1}-${eAbs}: ` + (data.error?.message || resp.status))
 
       if (data.stop_reason === 'max_tokens' && (e - s) > 1) {
         felie = Math.max(1, Math.ceil((e - s) / 2))
@@ -378,9 +398,8 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    try {
-      await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: costUsd, ref_table: 'ofertare_documente_atribuire', ref_id: docId })
-    } catch (_) {}
+    // fără throw: eroarea jurnalului nu oprește citirea, dar se raportează în răspuns (jurnal_cost_eroare) și în log
+    const eJurnal = await jurnalizeaza(true)
 
     const gata = poz >= nPag
     let textAcum = ((start === 0 ? '' : (row.text_extras || '')) + '\n' + textNou).trim()
@@ -410,7 +429,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: false, garda: 'rezultat_respins', error: 'garda: rezultat NECONFIRMAT — respins (token vechi/străin) sau fără răspuns (stare necunoscută): ' + (inc.raspuns?.motiv ?? 'fără răspuns'), doc_id: id, continua: false }), { headers: CORS })
     }
 
-    return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: tokIn, tokens_out: tokOut }), { headers: CORS })
+    return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: uz.tokIn, tokens_out: uz.tokOut, ...(eJurnal ? { jurnal_cost_eroare: eJurnal } : {}) }), { headers: CORS })
   } catch (e: any) {
     // excepție după „continua” → fail() închide încercarea ca 'esec' cu mesajul ei (o singură dată)
     return await fail('Eroare neasteptata: ' + String(e?.message || e))

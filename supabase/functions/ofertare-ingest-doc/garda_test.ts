@@ -15,21 +15,24 @@ const SECRET = 's'.repeat(40)
 Deno.env.set('OFERTARE_INGEST_SECRET', SECRET)
 
 // Anthropic simulat: text cu marcaje, eroare HTTP sau excepție de rețea
-// corpuri = cererile trimise (model / thinking / sampling); usage + stop_reason configurabile (Haiku 5.5, 15.10.2026)
-const ai = { mod: 'ok' as 'ok' | 'http500' | 'arunca' | 'refuz', apeluri: 0, corpuri: [] as any[], usage: { input_tokens: 10, output_tokens: 5 } }
+// corpuri = cererile trimise (model / thinking / sampling); usage + stop_reason configurabile (Haiku 5.5, 15.10.2026).
+// coada = modul pe apel, în ordine (gol → ai.mod): 'max' = text cu stop_reason max_tokens.
+type ModAi = 'ok' | 'http500' | 'arunca' | 'refuz' | 'max'
+const ai = { mod: 'ok' as ModAi, apeluri: 0, corpuri: [] as any[], usage: { input_tokens: 10, output_tokens: 5 }, coada: [] as ModAi[] }
 const fetchReal = globalThis.fetch
 globalThis.fetch = ((input: any, init?: any) => {
   const u = String(input?.url ?? input)
   if (u.startsWith('https://api.anthropic.com/')) {
     ai.apeluri++
     ai.corpuri.push(JSON.parse(init.body))
-    if (ai.mod === 'refuz') return Promise.resolve(new Response(JSON.stringify({ content: [], usage: ai.usage, stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } }), { status: 200 }))
-    if (ai.mod === 'arunca') return Promise.reject(new TypeError('error sending request: connection reset'))
-    if (ai.mod === 'http500') return Promise.resolve(new Response(JSON.stringify({ error: { message: 'overloaded' } }), { status: 500 }))
+    const mod = ai.coada.shift() ?? ai.mod
+    if (mod === 'refuz') return Promise.resolve(new Response(JSON.stringify({ content: [], usage: ai.usage, stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } }), { status: 200 }))
+    if (mod === 'arunca') return Promise.reject(new TypeError('error sending request: connection reset'))
+    if (mod === 'http500') return Promise.resolve(new Response(JSON.stringify({ error: { message: 'overloaded' } }), { status: 500 }))
     const txt = String(JSON.parse(init.body).messages[0].content[1].text)
     const prima = Number(/prima este pagina (\d+)/.exec(txt)?.[1] ?? 1), nr = Number(/Fragmentul are (\d+)/.exec(txt)?.[1] ?? 1)
     const corp = Array.from({ length: nr }, (_, i) => `⟦PAGINA ${prima + i}⟧\nText pagina ${prima + i}`).join('\n')
-    return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: corp }], usage: ai.usage, stop_reason: 'end_turn' }), { status: 200 }))
+    return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: corp }], usage: ai.usage, stop_reason: mod === 'max' ? 'max_tokens' : 'end_turn' }), { status: 200 }))
   }
   if (u.startsWith('https://sb.test/')) return Promise.reject(new Error('rețea Supabase reală în test: ' + u))
   return fetchReal(input, init)
@@ -60,7 +63,7 @@ function pdfMinimal(n: number): Uint8Array {
 
 // elig (loturi 20261024b): răspunsul porții unice — implicit eligibil; 'eroare_rpc' = RPC căzut, 'arunca' = excepție
 type Elig = { eligibil: boolean; motiv: string; licitatie_id: number } | 'eroare_rpc' | 'arunca'
-type Opt = { elig?: Elig; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; metaSize?: number; rezultatEsueaza?: boolean; marcajRespins?: boolean; respinge?: boolean; laIncearca?: () => void; aiArunca?: boolean }
+type Opt = { elig?: Elig; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; metaSize?: number; rezultatEsueaza?: boolean; marcajRespins?: boolean; respinge?: boolean; laIncearca?: () => void; aiArunca?: boolean; jurnalEsueaza?: boolean }
 function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
   const toate: string[] = []
   const tabele: Record<string, any[]> = { ofertare_documente_atribuire: [rand], ofertare_ingest_coada: [{ licitatie_id: rand.licitatie_id, cerut_de: 'u-worker' }], ai_usage_log: [] }
@@ -79,6 +82,7 @@ function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
       single: () => Promise.resolve(pot()[0] ? { data: structuredClone(pot()[0]), error: null } : { data: null, error: { message: 'no rows' } }),
       then: (ok: any, ko: any) => new Promise((res, rej) => {
         if (op.tip === 'upd' && t === 'ofertare_documente_atribuire') g.scrieriDirecte.push(structuredClone(op.patch))
+        if (op.tip === 'ins' && t === 'ai_usage_log' && opt.jurnalEsueaza) return res({ data: null, error: { message: 'permission denied for table ai_usage_log' } })
         if (op.tip === 'ins') { tabele[t].push(structuredClone(op.patch)); return res({ data: null, error: null }) }
         const rows = pot()
         if (op.tip === 'upd') for (const r of rows) Object.assign(r, structuredClone(op.patch))
@@ -167,13 +171,89 @@ Deno.test({ ...Z, name: 'model: volum → claude-haiku-5-5, thinking disabled, f
   assert(Math.abs(log[0].cost_usd - (10 * 0.10 + 5 * 0.50) / 1e6) < 1e-15, 'cost ' + log[0].cost_usd)
 } })
 
-Deno.test({ ...Z, name: 'model: document critic → claude-sonnet-5 neschimbat (thinking disabled, preț 3/15)', fn: async () => {
+Deno.test({ ...Z, name: 'model: document critic → claude-sonnet-5 (thinking disabled, preț 2/10 ca în _shared/ocrLocal.ts)', fn: async () => {
   ai.mod = 'ok'; ai.corpuri = []
   const m = mediu(doc({ tip: 'fisa_date' }), pdfMinimal(2))
   await (await cere()).json()
   assertEquals(ai.corpuri[0].model, 'claude-sonnet-5'); assertEquals(ai.corpuri[0].thinking, { type: 'disabled' }); assert(fara_esantionare(ai.corpuri[0]))
-  assert(Math.abs(m.tabele.ai_usage_log[0].cost_usd - (10 * 3 + 5 * 15) / 1e6) < 1e-15)
+  assert(Math.abs(m.tabele.ai_usage_log[0].cost_usd - (10 * 2 + 5 * 10) / 1e6) < 1e-15, 'cost ' + m.tabele.ai_usage_log[0].cost_usd)
 } })
+
+// ── JURNALUL DE COST (Jakarinos r1 pe #724): fiecare răspuns facturat ajunge în ai_usage_log, exact un rând pe invocare ─────
+const aproape = (a: number, b: number) => Math.abs(a - b) < 1e-12
+const cuUsage = async (usage: { input_tokens: number; output_tokens: number }, fn: () => Promise<void>) => {
+  const vechi = ai.usage; ai.usage = usage
+  try { await fn() } finally { ai.usage = vechi; ai.coada = []; ai.mod = 'ok' }
+}
+Deno.test({ ...Z, name: 'cost: două apeluri sub prag (2×60K/1K) → 0,013 USD, nu rata mare pe 120K; un singur rând', fn: () => cuUsage({ input_tokens: 60_000, output_tokens: 1000 }, async () => {
+  ai.corpuri = []
+  const m = mediu(doc(), pdfMinimal(10))
+  const j = await (await cere({ doc_id: 55, apeluri: 2 })).json()
+  assertEquals([j.ok, j.status, ai.corpuri.length], [true, 'procesat', 2])
+  const log = m.tabele.ai_usage_log
+  assertEquals(log.length, 1); assertEquals([log[0].tokens_in, log[0].tokens_out], [120_000, 2000])
+  assert(aproape(log[0].cost_usd, 0.013), 'cost ' + log[0].cost_usd)
+}) })
+
+Deno.test({ ...Z, name: 'cost: retry după max_tokens (felia înjumătățită) → ambele apeluri facturate, un singur rând', fn: () => cuUsage({ input_tokens: 1000, output_tokens: 8000 }, async () => {
+  ai.corpuri = []; ai.coada = ['max', 'ok']
+  const m = mediu(doc(), pdfMinimal(2))
+  const j = await (await cere({ doc_id: 55, apeluri: 2 })).json()
+  assertEquals(ai.corpuri.length, 2)
+  assertMatch(ai.corpuri[1].messages[0].content[1].text, /Fragmentul are 1 pagină; prima este pagina 1/)
+  assertEquals([j.ok, j.pagini_procesate, j.continua], [true, 1, true])
+  const log = m.tabele.ai_usage_log
+  assertEquals(log.length, 1); assertEquals([log[0].tokens_in, log[0].tokens_out], [2000, 16_000])
+  assert(aproape(log[0].cost_usd, 2 * (1000 * 0.10 + 8000 * 0.50) / 1e6), 'cost ' + log[0].cost_usd)
+}) })
+
+Deno.test({ ...Z, name: 'cost: succes urmat de eroare (HTTP 500 / excepție) → costul primului apel rămâne în jurnal, un rând, exact un „esec”', fn: async () => {
+  for (const al2 of ['http500', 'arunca'] as ModAi[]) await cuUsage({ input_tokens: 60_000, output_tokens: 1000 }, async () => {
+    ai.coada = ['ok', al2]
+    const m = mediu(doc(), pdfMinimal(10))
+    const j = await (await cere({ doc_id: 55, apeluri: 2 })).json()
+    assert(j.error, al2); assertEquals(j.jurnal_cost_eroare, undefined, al2)
+    assert(m.exactOnce(), al2); assertEquals(rezultate(m), ['esec'], al2)
+    const log = m.tabele.ai_usage_log
+    assertEquals(log.length, 1, al2); assertEquals([log[0].tokens_in, log[0].tokens_out, log[0].model], [60_000, 1000, 'claude-haiku-5-5'], al2)
+    assert(aproape(log[0].cost_usd, 0.0065), al2 + ' cost ' + log[0].cost_usd)
+  })
+} })
+
+Deno.test({ ...Z, name: 'cost: eroare înainte de orice apel Claude (download) → niciun rând în jurnal', fn: async () => {
+  const m = mediu(doc(), null)
+  const j = await (await cere()).json()
+  assertMatch(j.error, /^download/); assertEquals(m.tabele.ai_usage_log.length, 0)
+} })
+
+Deno.test({ ...Z, name: 'cost: insert în ai_usage_log eșuat → raportat în răspuns (jurnal_cost_eroare), citirea nu cade', fn: async () => {
+  ai.mod = 'ok'
+  const m = mediu(doc(), pdfMinimal(2), { jurnalEsueaza: true })
+  const j = await (await cere()).json()
+  assertEquals([j.ok, j.status], [true, 'procesat']); assertMatch(j.jurnal_cost_eroare, /^ai_usage_log: permission denied/)
+  assert(m.exactOnce()); assertEquals(rezultate(m), ['succes'])
+  // și pe drumul de eroare
+  ai.coada = ['ok', 'http500']
+  try {
+    const m2 = mediu(doc(), pdfMinimal(10), { jurnalEsueaza: true })
+    const j2 = await (await cere({ doc_id: 55, apeluri: 2 })).json()
+    assertMatch(j2.error, /^Claude paginile 9-10/); assertMatch(j2.jurnal_cost_eroare, /^ai_usage_log: permission denied/)
+    assert(m2.exactOnce()); assertEquals(rezultate(m2), ['esec'])
+  } finally { ai.coada = [] }
+} })
+
+Deno.test({ ...Z, name: 'refuz urmat de continuare cu offset (bucata p49+) → paginile refuzate necitite cu numerotarea originală, restul citite', fn: () => cuUsage({ input_tokens: 10, output_tokens: 5 }, async () => {
+  ai.coada = ['refuz', 'ok']
+  const m = mediu(doc({ pagina_offset: 48 }), pdfMinimal(10))
+  const j = await (await cere({ doc_id: 55, apeluri: 2 })).json()
+  assertEquals([j.ok, j.status, j.continua], [true, 'partial', false])
+  assertEquals(j.pagini_necitite, [49, 50, 51, 52, 53, 54, 55, 56])
+  const t = String(m.rand().text_extras)
+  assertMatch(t, /⟦PAGINA 49⟧\n\[PAGINA 49: NECITITĂ — modelul a refuzat transcrierea \(cyber\)\]/)
+  assertMatch(t, /⟦PAGINA 57⟧\nText pagina 57/); assertMatch(t, /⟦PAGINA 58⟧\nText pagina 58/)
+  assertEquals(m.tabele.ai_usage_log.length, 1); assertEquals(m.tabele.ai_usage_log[0].tokens_in, 20)   // refuzul e facturat
+  assert(m.exactOnce())
+}) })
 
 Deno.test({ ...Z, name: 'cost: Haiku 5.5 peste 100K tokeni de intrare pe apel → rata 0,50 / 2,50; pragul e pe apel, nu pe sumă', fn: async () => {
   const H = { id: 'claude-haiku-5-5', in: 0.10 / 1e6, out: 0.50 / 1e6, felie: 8, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } }
