@@ -29,8 +29,8 @@
     }
   },
   "arbitru": {
-    "nota": "Deciziile acceptate la reconciliere: doar modelul si versiunile de prompt de aici. arb-v1 = promptul din supabase/functions/ofertare-ocr-arbitreaza/prompt.ts (D3b); orice alta versiune = needs_human (fail-closed). Test: test_prompt_arbitru_admis.",
-    "modele_admise": ["claude-sonnet-5"],
+    "nota": "Deciziile acceptate la reconciliere: doar modelele si versiunile de prompt de aici (cascada Haiku 5.5 -> Sonnet 5 in acelasi apel, decizia Razvan 15.10.2026: decizia finala poarta modelul care a decis). arb-v1 = promptul din supabase/functions/ofertare-ocr-arbitreaza/prompt.ts (D3b); orice alta versiune = needs_human (fail-closed). Test: test_prompt_arbitru_admis.",
+    "modele_admise": ["claude-sonnet-5", "claude-haiku-5-5"],
     "prompt_versiuni_admise": ["arb-v1"]
   },
   "guard_tokenizer": {
