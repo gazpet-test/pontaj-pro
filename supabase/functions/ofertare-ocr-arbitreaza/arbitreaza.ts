@@ -26,6 +26,9 @@ const SHA = /^[0-9a-f]{64}$/
 const taie200 = (s: string): string => Array.from(s).slice(0, 200).join('')
 // bani comparati in unitati intregi de 0,0001 USD (rezervarea si costurile sunt deja rotunjite la 4 zecimale): 0,0011 + 0,0204 = 0,0215
 const unitati = (x: number): number => Math.round(x * 1e4)
+/** Dupa Haiku: mai incape limita de sus a lui Sonnet in rezervare? (exportat pentru testul de regresie la limita exacta) */
+export const incapeArbitrul = (costFiltru: number, limitaArbitru: number, suma: number): boolean =>
+  unitati(costFiltru) + unitati(limitaArbitru) <= unitati(suma)
 
 type RpcClient = { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }> }
 export type Mediu = { sb: RpcClient; cheieAi: string; fetchApi: typeof fetch }
@@ -143,7 +146,7 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   let final = r1
   if (r1.d.decizie === 'needs_human' || cifre) {
     // ce a rămas din rezervare trebuie să acopere limita de sus a lui Sonnet; altfel nu se mai cheltuie: depășire cu ce s-a consumat
-    if (unitati(r1.cost) + unitati(limitaArbitru) <= unitati(suma)) {
+    if (incapeArbitrul(r1.cost, limitaArbitru, suma)) {
       const r2 = await apel(MODEL_ARBITRU)
       // Haiku a costat deja: rezervarea rămâne deschisă (abandonul o socotește întreagă în plafon) — conservator, nicio decizie
       if (!r2.ok) return raspuns(502, { error: r2.error, rezervare_id: rez, filtru: r1.d.decizie })

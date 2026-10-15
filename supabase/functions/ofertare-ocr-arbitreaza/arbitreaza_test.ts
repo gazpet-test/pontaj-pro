@@ -2,7 +2,7 @@
 // oricărui cost, citirile DIN BD, nicio decizie la eroarea API, schema strictă, usage lipsă / cost peste rezervare fail-closed.
 import { strict as assert } from 'node:assert'
 import { amprentaDezacord, ANTET_OCR, sha256Hex } from '../_shared/ocrLocal.ts'
-import { arbitreaza } from './arbitreaza.ts'
+import { arbitreaza, incapeArbitrul } from './arbitreaza.ts'
 import { PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
 
 const SECRET = 'c'.repeat(64)
@@ -279,4 +279,11 @@ Deno.test('decontat dar decizia respinsă de BD: 409, fără decizie în răspun
   const { m } = mediu(it, { scrie: { ok: true, decontat: true, arbitraj_inregistrat: false, motiv: 'duplicate key' } })
   const r = await arbitreaza(cerere(corpDe(it)), m); const j = await r.json()
   assert.equal(r.status, 409); assert.equal(j.decizie, undefined); assert.equal(j.decontat, true)
+})
+
+Deno.test('bani in unitati de 0,0001 USD: exact la limita Sonnet incape, cu 0,0001 peste nu (Jakarinos cascada r3 P2)', () => {
+  assert.equal(0.0011 + 0.0204 <= 0.0215, false)                // virgula mobila: comparatia veche ar fi refuzat escaladarea
+  assert.equal(incapeArbitrul(0.0011, 0.0204, 0.0215), true)     // exact la limita
+  assert.equal(incapeArbitrul(0.0012, 0.0204, 0.0215), false)    // 0,0001 peste
+  assert.equal(incapeArbitrul(0, 0.0204, 0.0215), true)
 })
