@@ -552,7 +552,10 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     rdir = pathlib.Path(rdir); r = rulare(rdir); proba = max_apeluri is not None; facute = 0
     if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
-    activa(rdir)
+    try: activa(rdir)
+    except RuntimeError as e:
+        if not proba: raise
+        return {'stare': 'oprita', 'motiv': str(e), 'apeluri_acum': 0}  # proba: oprirea raportata la fel oriunde (Jakarinos r4 P2)
     if not pasi(rdir).get('comparatie'): raise RuntimeError('Compararea nu e incheiata (pasul compara)')
     if pasi(rdir).get('arbitrata_intentie'):
         if proba: raise RuntimeError('Pasul arbitreaza are deja intentia `arbitrata`: o proba nu il poate finaliza (ruleaza pasul normal)')
