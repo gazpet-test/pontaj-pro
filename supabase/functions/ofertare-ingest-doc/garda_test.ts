@@ -15,18 +15,21 @@ const SECRET = 's'.repeat(40)
 Deno.env.set('OFERTARE_INGEST_SECRET', SECRET)
 
 // Anthropic simulat: text cu marcaje, eroare HTTP sau excepție de rețea
-const ai = { mod: 'ok' as 'ok' | 'http500' | 'arunca', apeluri: 0 }
+// corpuri = cererile trimise (model / thinking / sampling); usage + stop_reason configurabile (Haiku 5.5, 15.10.2026)
+const ai = { mod: 'ok' as 'ok' | 'http500' | 'arunca' | 'refuz', apeluri: 0, corpuri: [] as any[], usage: { input_tokens: 10, output_tokens: 5 } }
 const fetchReal = globalThis.fetch
 globalThis.fetch = ((input: any, init?: any) => {
   const u = String(input?.url ?? input)
   if (u.startsWith('https://api.anthropic.com/')) {
     ai.apeluri++
+    ai.corpuri.push(JSON.parse(init.body))
+    if (ai.mod === 'refuz') return Promise.resolve(new Response(JSON.stringify({ content: [], usage: ai.usage, stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } }), { status: 200 }))
     if (ai.mod === 'arunca') return Promise.reject(new TypeError('error sending request: connection reset'))
     if (ai.mod === 'http500') return Promise.resolve(new Response(JSON.stringify({ error: { message: 'overloaded' } }), { status: 500 }))
     const txt = String(JSON.parse(init.body).messages[0].content[1].text)
     const prima = Number(/prima este pagina (\d+)/.exec(txt)?.[1] ?? 1), nr = Number(/Fragmentul are (\d+)/.exec(txt)?.[1] ?? 1)
     const corp = Array.from({ length: nr }, (_, i) => `⟦PAGINA ${prima + i}⟧\nText pagina ${prima + i}`).join('\n')
-    return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: corp }], usage: { input_tokens: 10, output_tokens: 5 }, stop_reason: 'end_turn' }), { status: 200 }))
+    return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: corp }], usage: ai.usage, stop_reason: 'end_turn' }), { status: 200 }))
   }
   if (u.startsWith('https://sb.test/')) return Promise.reject(new Error('rețea Supabase reală în test: ' + u))
   return fetchReal(input, init)
@@ -35,7 +38,7 @@ globalThis.fetch = ((input: any, init?: any) => {
 let handler: (req: Request) => Promise<Response> = () => { throw new Error('handler necapturat') }
 const serveOrig = Object.getOwnPropertyDescriptor(Deno, 'serve')!
 Object.defineProperty(Deno, 'serve', { configurable: true, value: (h: any) => { handler = h; return {} } })
-const { _deps } = await import(new URL('./index.ts', import.meta.url).href)
+const { _deps, costApel } = await import(new URL('./index.ts', import.meta.url).href)
 Object.defineProperty(Deno, 'serve', serveOrig)
 
 function pdfMinimal(n: number): Uint8Array {
@@ -147,6 +150,53 @@ Deno.test({ ...Z, name: 'edge: document pe felii (Sonnet, 2 pagini/felie) → �
   const j2 = await (await cere()).json()
   assertEquals([j2.ok, j2.continua, j2.status], [true, false, 'procesat'])
   assert(m.exactOnce()); assertEquals(rezultate(m), ['progres', 'succes']); assertEquals(m.g.incercari.length, 2)
+} })
+
+// ── MODEL (15.10.2026): volumele pe Haiku 5.5, criticele rămân pe Sonnet 5; cerere validă pentru modelele 5.x ──────────
+const fara_esantionare = (c: any) => !('temperature' in c) && !('top_p' in c) && !('top_k' in c) && !('output_config' in c)
+Deno.test({ ...Z, name: 'model: volum → claude-haiku-5-5, thinking disabled, fără temperature/top_p/top_k; cost Haiku 5.5 în ai_usage_log', fn: async () => {
+  ai.mod = 'ok'; ai.corpuri = []
+  const m = mediu(doc(), pdfMinimal(2))
+  const j = await (await cere()).json()
+  assertEquals([j.ok, j.status], [true, 'procesat'])
+  assertEquals(ai.corpuri.length, 1)
+  const c = ai.corpuri[0]
+  assertEquals(c.model, 'claude-haiku-5-5'); assertEquals(c.thinking, { type: 'disabled' }); assert(fara_esantionare(c)); assertEquals(c.max_tokens, 8000)
+  const log = m.tabele.ai_usage_log
+  assertEquals(log.length, 1); assertEquals(log[0].model, 'claude-haiku-5-5')
+  assert(Math.abs(log[0].cost_usd - (10 * 0.10 + 5 * 0.50) / 1e6) < 1e-15, 'cost ' + log[0].cost_usd)
+} })
+
+Deno.test({ ...Z, name: 'model: document critic → claude-sonnet-5 neschimbat (thinking disabled, preț 3/15)', fn: async () => {
+  ai.mod = 'ok'; ai.corpuri = []
+  const m = mediu(doc({ tip: 'fisa_date' }), pdfMinimal(2))
+  await (await cere()).json()
+  assertEquals(ai.corpuri[0].model, 'claude-sonnet-5'); assertEquals(ai.corpuri[0].thinking, { type: 'disabled' }); assert(fara_esantionare(ai.corpuri[0]))
+  assert(Math.abs(m.tabele.ai_usage_log[0].cost_usd - (10 * 3 + 5 * 15) / 1e6) < 1e-15)
+} })
+
+Deno.test({ ...Z, name: 'cost: Haiku 5.5 peste 100K tokeni de intrare pe apel → rata 0,50 / 2,50; pragul e pe apel, nu pe sumă', fn: async () => {
+  const H = { id: 'claude-haiku-5-5', in: 0.10 / 1e6, out: 0.50 / 1e6, felie: 8, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } }
+  assert(Math.abs(costApel(H, 100_000, 1000) - (100_000 * 0.10 + 1000 * 0.50) / 1e6) < 1e-12)   // exact pe prag = rata mică
+  assert(Math.abs(costApel(H, 100_001, 1000) - (100_001 * 0.50 + 1000 * 2.50) / 1e6) < 1e-12)
+  // pe handler: un apel de 150K tokeni intră la rata mare
+  ai.mod = 'ok'; ai.usage = { input_tokens: 150_000, output_tokens: 2000 }
+  try {
+    const m = mediu(doc(), pdfMinimal(2))
+    await (await cere()).json()
+    assert(Math.abs(m.tabele.ai_usage_log[0].cost_usd - (150_000 * 0.50 + 2000 * 2.50) / 1e6) < 1e-12, 'cost ' + m.tabele.ai_usage_log[0].cost_usd)
+  } finally { ai.usage = { input_tokens: 10, output_tokens: 5 } }
+} })
+
+Deno.test({ ...Z, name: 'refuz: stop_reason refusal → paginile feliei NECITITE (status partial), nu „procesat” cu text gol', fn: async () => {
+  ai.mod = 'refuz'
+  try {
+    const m = mediu(doc(), pdfMinimal(2))
+    const j = await (await cere()).json()
+    assertEquals(j.ok, true); assertEquals(m.rand().status_procesare, 'partial')
+    assertEquals([...(m.rand().pagini_necitite ?? [])].sort(), [1, 2])
+    assert(m.exactOnce())
+  } finally { ai.mod = 'ok' }
 } })
 
 Deno.test({ ...Z, name: 'edge: download eșuat / PDF corupt / Claude HTTP 500 / update final cu eroare → EXACT un „esec” fiecare', fn: async () => {

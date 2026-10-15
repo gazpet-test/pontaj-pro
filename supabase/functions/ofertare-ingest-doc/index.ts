@@ -40,9 +40,19 @@ const BUCKET = 'ofertare'
 // Haiku nu pierde conținut, dar mută text între pagini (4 din 23 greșite); Sonnet ≈ Opus.
 // Documentele critice (fișa de date, clarificări, formulare) → Sonnet 5, felii de 2 pagini;
 // volumele (caiete, planșe, alta) → Haiku, felii de 8.
-const MODELE: Record<string, { id: string; in: number; out: number; felie: number }> = {
-  haiku: { id: 'claude-haiku-4-5-20251001', in: 1 / 1e6, out: 5 / 1e6, felie: 8 },
+// v15 (15.10.2026): volumele trec de pe Haiku 4.5 (1 / 5 $ pe 1M) pe Haiku 5.5. Prețul Haiku 5.5 e copiat din
+// _shared/ocrLocal.ts PRETURI['claude-haiku-5-5'] (nu se importă, ca să nu legăm funcția de modulul OCR):
+// 0,10 / 0,50 $ pe 1M până la 100K tokeni de intrare PE CERERE, 0,50 / 2,50 $ peste (pragul se aplică pe fiecare apel).
+// Atenție: tokenizerul Haiku 5.5 numără ~30% mai mulți tokeni pe același text decât Haiku 4.5.
+type Model = { id: string; in: number; out: number; felie: number; prag?: number; peste?: { in: number; out: number } }
+const MODELE: Record<string, Model> = {
+  haiku: { id: 'claude-haiku-5-5', in: 0.10 / 1e6, out: 0.50 / 1e6, felie: 8, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } },
   sonnet: { id: 'claude-sonnet-5', in: 3 / 1e6, out: 15 / 1e6, felie: 2 },
+}
+// Costul unui singur apel: rata se alege după tokenii de intrare ai ACELUI apel (prompt > prag ⇒ rata „peste”).
+export function costApel(M: Model, tokIn: number, tokOut: number): number {
+  const r = M.prag !== undefined && M.peste && tokIn > M.prag ? M.peste : M
+  return tokIn * r.in + tokOut * r.out
 }
 const TIPURI_CRITICE = ['fisa_date', 'clarificare', 'raspuns_clarificare', 'formular']
 const APELURI_PER_INVOCARE = 2
@@ -250,7 +260,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
-    const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
+    const MODEL = M.id, PAGINI_PER_FELIE = M.felie
 
     const { data: blob, error: dlErr } = await descarcaCuJurnal(supabase, BUCKET, row.fisier_path, 'edge:ofertare-ingest-doc', row.id ?? docId)
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
@@ -284,7 +294,7 @@ Deno.serve(async (req: Request) => {
     let textNou = ''
     let antet: any = null
     let pareScanat: boolean | null = null
-    let tokIn = 0, tokOut = 0
+    let tokIn = 0, tokOut = 0, costUsd = 0
     let plafon = false
     let primaPlafon = Infinity   // prima pagină lăsată necitită din cauza plafonului
     // paginile necitite se acumulează peste invocări (documentul mare se citește în mai multe runde)
@@ -314,8 +324,10 @@ Deno.serve(async (req: Request) => {
         headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({
           model: MODEL, max_tokens: MAX_OUT,
-          // Sonnet 5 gândește implicit (adaptive) și gândirea intră în max_tokens — la transcriere e inutilă și scumpă.
-          ...(MODEL === MODELE.sonnet.id ? { thinking: { type: 'disabled' } } : {}),
+          // Sonnet 5 și Haiku 5.5 gândesc implicit (adaptive) și gândirea intră în max_tokens — la transcriere e inutilă
+          // și scumpă. Haiku 5.5 acceptă 'disabled' doar la effort low/medium/high (implicit medium) — nu trimitem effort.
+          // Fără temperature/top_p/top_k: modelele 5.x le resping cu 400 (vezi ofertare-ocr-arbitreaza).
+          thinking: { type: 'disabled' },
           messages: [{ role: 'user', content: [
             { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(pdfFelie) } },
             { type: 'text', text: primaFelie ? PROMPT_ANTET(sAbs + 1, e - s) : PROMPT_TEXT(sAbs + 1, e - s) },
@@ -324,7 +336,8 @@ Deno.serve(async (req: Request) => {
       })
       const data = await resp.json()
       if (!resp.ok) return await fail(`Claude paginile ${sAbs + 1}-${eAbs}: ` + (data.error?.message || resp.status))
-      tokIn += data.usage?.input_tokens || 0; tokOut += data.usage?.output_tokens || 0
+      const ti = data.usage?.input_tokens || 0, to = data.usage?.output_tokens || 0
+      tokIn += ti; tokOut += to; costUsd += costApel(M, ti, to)
 
       if (data.stop_reason === 'max_tokens' && (e - s) > 1) {
         felie = Math.max(1, Math.ceil((e - s) / 2))
@@ -332,7 +345,11 @@ Deno.serve(async (req: Request) => {
       }
 
       let txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
-      if (data.stop_reason === 'max_tokens') {
+      if (data.stop_reason === 'refusal') {
+        // Haiku 5.5 are clasificatori de siguranță fără fallback pe server: felia refuzată NU e citită — se spune cinstit.
+        txt = ''
+        for (let p = sAbs + 1; p <= eAbs; p++) { necitite.add(p); txt += `\n${marcaj(p)}\n[PAGINA ${p}: NECITITĂ — modelul a refuzat transcrierea (${data.stop_details?.category ?? 'fără categorie'})]\n` }
+      } else if (data.stop_reason === 'max_tokens') {
         // O singură pagină care nu încape în plafon: parțial citită = necitită, ca să nu
         // pretindem ce n-avem. Textul rămâne, e util, dar pagina e marcată.
         txt += `\n[PAGINA ${sAbs + 1}: transcriere trunchiată la plafon — pagină extrem de densă]\n`
@@ -362,7 +379,7 @@ Deno.serve(async (req: Request) => {
     }
 
     try {
-      await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * PRICE_IN + tokOut * PRICE_OUT, ref_table: 'ofertare_documente_atribuire', ref_id: docId })
+      await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: costUsd, ref_table: 'ofertare_documente_atribuire', ref_id: docId })
     } catch (_) {}
 
     const gata = poz >= nPag
