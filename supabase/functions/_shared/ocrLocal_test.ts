@@ -18,6 +18,9 @@ Deno.test('cifreDiferite (laborator 15.10) = diferentaNumerica fara marcajul ⟦
     // r2 P2: doar forma exacta a pipeline-ului; _invalid (textul atributului), N in afara 2..50, zero in fata, lipit -> comparate
     ['Cantitate ⟦rowspan_invalid=5 m⟧', 'Cantitate ⟦rowspan_invalid=7 m⟧'], ['Teava ⟦colspan_invalid=2x⟧', 'Teava'],
     ['A ⟦rowspan=51⟧', 'A'], ['A ⟦rowspan=1⟧', 'A'], ['A ⟦rowspan=05⟧', 'A'], ['A⟦rowspan=5⟧', 'A'], ['A ⟦rowspan=5⟧7', 'A 7'],
+    // r3 P2: marcajul trebuie sa fie coada celulei, nu in interiorul ei sau al altui marcaj
+    ['Cantitate ⟦rowspan=5⟧ m', 'Cantitate ⟦rowspan=7⟧ m'], ['Cantitate ⟦rowspan_invalid=x ⟦rowspan=5⟧ m⟧', 'Cantitate ⟦rowspan_invalid=x ⟦rowspan=7⟧ m⟧'],
+    ['X ⟦rowspan_invalid=x ⟦rowspan=5⟧ | 1', 'X ⟦rowspan_invalid=x ⟦rowspan=7⟧ | 1'],
   ]
   for (const [a, b] of diferite) assert.equal(cifreDiferite(a, b), true, JSON.stringify([a, b]))
   // nicio pereche pe care diferentaNumerica o socoteste egala nu devine diferita (si invers doar prin marcaje)
