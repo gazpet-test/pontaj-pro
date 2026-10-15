@@ -530,13 +530,22 @@ def _adauga(path, obj):
     with path.open('a', encoding='utf-8', newline='\n') as f:
         f.write(json.dumps(obj, ensure_ascii=False) + '\n'); f.flush(); os.fsync(f.fileno())
 
+def cheie_proba(it):
+    """Cheia unui dezacord pentru filtrul probei: aceeasi banda si aceleasi doua citiri (independent de id / pozitie)."""
+    return (it.get('band'), it.get('tip'), it.get('citire_lighton'), it.get('citire_mineru'))
+
 @cu_lacat
-def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
+def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None):
     """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
     restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
     plafonul si legarea de BD sunt in edge). Decizia se scrie local imediat (decizii.jsonl). Nicio reincercare: orice refuz / eroare
-    opreste pasul. Oprire automata a rularii daca needs_human > prag din arbitrajele Claude (dupa `minim`)."""
-    rdir = pathlib.Path(rdir); r = rulare(rdir)
+    opreste pasul. Oprire automata a rularii daca needs_human > prag din arbitrajele Claude (dupa `minim`).
+
+    PROBA (laborator, 15.10.2026; `max_apeluri` setat): cel mult `max_apeluri` apeluri platite in aceasta invocare, apoi stop FARA
+    `arbitrata` (pasul ramane deschis, reluabil). Itemii fara AI (structura_tabele, banda_intreaga) NU se ating; doar itemii cu
+    `cheie_proba` in `filtru` (daca e dat); ordinea = sha256(seed + item_sha256), ca esantionul sa nu fie primele pagini."""
+    rdir = pathlib.Path(rdir); r = rulare(rdir); proba = max_apeluri is not None; facute = 0
+    if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     activa(rdir)
     if not pasi(rdir).get('comparatie'): raise RuntimeError('Compararea nu e incheiata (pasul compara)')
@@ -579,10 +588,13 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
         d = rdir / ('d%d' % doc); ids = load(d / 'dezacorduri_bd.json'); items = {it['id']: it for it in _jsonl(d / 'dezacorduri.jsonl')}
         for bid in sorted(st['per_doc'][doc]['necunoscute'] - st['per_doc'][doc]['rezolvate']):
             om(d, ids, items[bid], 'apel de arbitraj cu rezultat necunoscut (posibil cheltuit), fara decizie inregistrata')
-        st = stare_locala()
-        for it in items.values():
+        st = stare_locala(); ordine = list(items.values())
+        if proba: ordine.sort(key=lambda it: sha(('%s|%s' % (seed or '', it['item_sha256'])).encode('utf-8')))
+        for it in ordine:
             if it['id'] in st['per_doc'][doc]['rezolvate'] or it['id'] in st['per_doc'][doc]['necunoscute']: continue
             if it['id'] not in ids: raise RuntimeError('Dezacordul %s nu are id in BD (reia compara)' % it['id'])
+            if proba and (it['tip'] in ('banda_intreaga', 'structura_tabele') or (filtru is not None and cheie_proba(it) not in filtru)): continue
+            if proba and facute >= max_apeluri: break
             if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
                 om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
             if it['tip'] == 'structura_tabele':
@@ -608,10 +620,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
             dec = j['decizie']
             if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])
             _adauga(d / 'decizii.jsonl', dec); _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'decizie'})
-            st = stare_locala()
+            st = stare_locala(); facute += 1
             if st['claude'] % 25 == 0: heartbeat(edge, True, 'rularea %d: %d arbitraje' % (r['rulare_id'], st['claude']))
     st = stare_locala(); oprit = opreste_daca_peste_prag(st)  # si inaintea finalizarii arbitrajului
     if oprit: return oprit
+    if proba: return dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='proba', apeluri_acum=facute)
     marcheaza(rdir, 'arbitrata_intentie'); tranzitie(rdir, edge, r, 'arbitrata')
     heartbeat(edge, True, 'rularea %d: arbitrata' % r['rulare_id'])
     return dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='arbitrata')

@@ -180,6 +180,17 @@ class Client(unittest.TestCase):
         rec = [x for k, x in self.edge.pagini.items() if k[3] == 'reconciliat']; self.assertEqual(len(rec), 1)
         # benzile de text au toate acelasi continut scurt: cusatura nu se poate dovedi (< 8 tokeni) -> pagina = needs_human, text gol
         self.assertEqual((rec[0]['pagina'], rec[0]['stare'], rec[0]['text'], f['needs_human']), (1, 'needs_human', '', 1))
+    def test_proba_max_apeluri_fara_arbitrata(self):
+        # laborator 15.10: proba platita = cel mult N apeluri pe invocare, fara `arbitrata`; reluarea continua; filtrul restrange
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); nb = c['dezacorduri']; self.assertGreaterEqual(nb, 2)
+        apeluri = lambda: len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=1, seed='x'); self.assertEqual((a['stare'], a['apeluri_acum'], apeluri()), ('proba', 1, 1))
+        self.assertNotEqual(self.edge.stare, 'arbitrata'); self.assertFalse(C.pasi(rdir).get('arbitrata'))
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, filtru=set())
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=5, filtru=set()); self.assertEqual((a['apeluri_acum'], apeluri()), (0, 1))  # filtru gol = nimic
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=100, seed='x'); self.assertEqual((a['stare'], apeluri()), ('proba', nb))   # restul, fara dubluri
+        self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata'); self.assertEqual(apeluri(), nb)                 # pasul normal inchide
     def test_flux_tabel_reconciliat(self):
         from .test_ocr_local import TABLE_A, TABLE_B
         self.edge.documente = [{'document_id': DOC, 'pagini': [1]}]
