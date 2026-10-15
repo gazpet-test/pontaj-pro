@@ -157,6 +157,42 @@ class GardaLinii(unittest.TestCase):
         self.assertEqual(Guard()(text), 'bucla_unique_chars_lt100_after3000tokens')
         f(pag, tab, [(1, ima)], pag.crop((20, 20, 380, 380)))  # fara inregistrare pornita: nu scrie nicaieri
         self.assertIsNone(getattr(RD._DECUPAJE, 'uris', None))
+    @unittest.skipUnless(importlib.util.find_spec('mineru_vl_utils'), 'mineru_vl_utils lipsa')
+    def test_read_mineru_inregistreaza_per_citire(self):
+        # Jakarinos r3 P2: legarea completa prin read_mineru (patch instalat de read_mineru, colectare in work(), garda), cu un client
+        # simulat care face ce face two_step_extract (prepare_for_extract -> numele global mask_and_encode_table_image din mineru_client,
+        # apoi replace_table_image_tokens); doua citiri concurente pe pagini diferite -> fiecare isi scuteste doar decupajul ei
+        import io, random, threading
+        import mineru_vl_utils.mineru_client as MC
+        from mineru_vl_utils.structs import ContentBlock
+        from mineru_vl_utils.post_process.table_image_processor import replace_table_image_tokens
+        porniti = threading.Barrier(2)
+        class Client:
+            def two_step_extract(self, img):
+                tab = ContentBlock('table', [0.05, 0.05, 0.95, 0.95], angle=0); ima = ContentBlock('image', [0.2, 0.2, 0.6, 0.6], angle=0)
+                w, h = img.size; _, tm = MC.mask_and_encode_table_image(img, tab, [(1, ima)], img.crop((int(.05 * w), int(.05 * h), int(.95 * w), int(.95 * h))))
+                porniti.wait(5)  # ambele citiri au codificat inainte sa le citeasca vreuna
+                (tok,) = tm
+                return [{'type': 'table', 'bbox': tab.bbox, 'content': replace_table_image_tokens('<table><tr><td>%s</td><td>DN 400</td></tr></table>' % tok, tm)}]
+        vechi = RD._MINERU.get('client'); RD._MINERU['client'] = Client(); rez = {}
+        try:
+            def citeste(i, d):
+                b = io.BytesIO(); Image.frombytes('RGB', (400, 400), random.Random(i).randbytes(400 * 400 * 3)).save(b, format='PNG')
+                rez[i] = RD.read_mineru(b.getvalue(), pathlib.Path(d), {'endpoint': 'http://127.0.0.1:1', 'served_model_name': 'x'}, 30)
+            with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+                fire = [threading.Thread(target=citeste, args=(i, d)) for i, d in ((1, d1), (2, d2))]
+                for t in fire: t.start()
+                for t in fire: t.join(30)
+        finally:
+            if vechi is None: RD._MINERU.pop('client', None)
+            else: RD._MINERU['client'] = vechi
+        self.assertTrue(hasattr(MC.mask_and_encode_table_image, '__wrapped__'))
+        p = {}
+        for i in (1, 2):
+            raw, r = rez[i]; self.assertEqual((r['signal'], r['decupaje_pipeline'], r['ok']), (None, 1, True), r)
+            p[i] = IMG_PIPELINE.search(raw)[1]; self.assertEqual(Guard()(raw), 'bucla_unique_chars_lt100_after3000tokens')
+        self.assertNotEqual(p[1], p[2])
+        self.assertIsNotNone(Guard([p[2]])(rez[1][0]))  # decupajul altei citiri nu scuteste
     def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
         self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')

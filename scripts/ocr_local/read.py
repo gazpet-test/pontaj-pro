@@ -139,12 +139,12 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
     os.environ['NO_PROXY'] = os.environ['no_proxy'] = '127.0.0.1,::1,localhost'
     from PIL import Image
     import io
+    # Daca alta versiune a bibliotecii nu mai are numele, nu se inregistreaza nimic -> garda fara scutiri (= v4, sigur). Idempotent.
+    import mineru_vl_utils.mineru_client as MC
+    if hasattr(MC, 'mask_and_encode_table_image') and not hasattr(MC.mask_and_encode_table_image, '__wrapped__'):
+        MC.mask_and_encode_table_image = _inregistreaza_decupaje(MC.mask_and_encode_table_image)
     if 'client' not in _MINERU:
         from mineru_vl_utils import MinerUClient
-        # Daca alta versiune a bibliotecii nu mai are numele, nu se inregistreaza nimic -> garda fara scutiri (= v4, sigur)
-        import mineru_vl_utils.mineru_client as MC
-        if hasattr(MC, 'mask_and_encode_table_image') and not hasattr(MC.mask_and_encode_table_image, '__wrapped__'):
-            MC.mask_and_encode_table_image = _inregistreaza_decupaje(MC.mask_and_encode_table_image)
         _MINERU['client'] = MinerUClient(backend='http-client', server_url=cfg['endpoint'], model_name=cfg['served_model_name'], image_analysis=True,
                                          http_timeout=int(deadline), max_retries=0, use_tqdm=False)
     from mineru_vl_utils.post_process import json2md
