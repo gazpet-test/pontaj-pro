@@ -38,3 +38,13 @@ Deno.test('r1: ordinea nu depinde de tipul documentului — F3 într-un cs_volum
   const atr = '⟦PAGINA 1⟧\n003 SA11G1 M 570.000\n⟦PAGINA 2⟧\nAVIZ TEHNIC DE RACORDARE\n'
   assertEquals(sectiuniRol(atr, 'Liste', 'lista_cantitati').map((x) => [x.rol, x.decis_de]), [['f3', 'titlu'], ['atr', 'marcaj']])
 })
+
+Deno.test('r2: antetul guvernează doar de la pagina lui; pagina ATR dinainte rămâne ATR (pe secțiune, nu global)', () => {
+  const t = '⟦PAGINA 1⟧\nAVIZ TEHNIC DE RACORDARE\nstr. A 52 m\n⟦PAGINA 2⟧\nFormularul F3\nLista cu cantitatile de lucrari\n003 SA11G1 M 570.000\n'
+  const s = sectiuniRol(t, 'Memoriu tehnic', 'alta')
+  assertEquals(s.map((x) => [x.rol, x.decis_de]), [['atr', 'marcaj'], ['f3', 'antet']])
+  assertEquals(t.slice(s[1].de, s[1].pana).startsWith('⟦PAGINA 2⟧'), true)
+  // memoriu cu un F3 anexat la final: paginile memoriului rămân memoriu
+  const m = '⟦PAGINA 1⟧\nMemoriu tehnic\n⟦PAGINA 2⟧\ntext\n⟦PAGINA 3⟧\nFormularul F3\n003 X M 10.000\n'
+  assertEquals(sectiuniRol(m, 'Memoriu tehnic', 'alta').map((x) => [x.rol, x.pagini]), [['memoriu', [1, 2]], ['f3', [3, 3]]])
+})

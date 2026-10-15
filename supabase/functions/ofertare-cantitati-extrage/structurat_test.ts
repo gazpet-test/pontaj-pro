@@ -9,12 +9,13 @@ const ACUM = new Date(Date.now() + 3600e3).toISOString()
 const DOC = { id: 212, nume_original: 'Liste de cantitati — p01_pag1-104.pdf', tip: 'lista_cantitati', text_extras: TEXT_F3, seap_meta: null, lot_stare: 'comun' }
 
 type Opt = { cerere?: any; refuzRezerva?: string; aiEroare?: boolean; aiAruncă?: boolean; cache?: boolean; pesteRezervare?: boolean
-  inLucru?: number | null; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[] }
+  inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[] }
 function fals(opt: Opt = {}) {
   const apeluri: string[] = []
   let obsScrise: any[] = []
   const toateObs: any[][] = []
   let aiApeluri = 0
+  let nDoc = 0
   const extractori: string[] = []
   const deps: DepsStructurat = {
     rpc: async (fn, args) => {
@@ -37,10 +38,10 @@ function fals(opt: Opt = {}) {
     },
     cerere: async () => opt.cerere === undefined
       ? { id: 5, licitatie_id: 15, scop: 'cant_extragere', stare: 'activa', valabil_pana: ACUM, lot_domeniu: 'toate', lot_nr: [] } : opt.cerere,
-    documente: async () => opt.docs ?? [DOC],
+    documente: async () => { nDoc++; return nDoc > 1 && opt.docsDupa ? opt.docsDupa : (opt.docs ?? [DOC]) },
     deciziiRol: async () => [],
     lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
-    extragereInLucru: async () => opt.inLucru ?? null,
+    extragereInLucru: async () => (opt.inLucru ? { id: opt.inLucru, cerere_id: opt.inLucruCerere ?? 5 } : null),
     ultimaIncercare: async () => opt.ultima ?? null,
     ai: async () => {
       aiApeluri++
@@ -164,4 +165,23 @@ Deno.test('părțile aceluiași PDF au aceeași rădăcină; deciziile umane pe 
     { de: 10, pana: 20, pagini: [2, 3] as [number, number], rol: 'alt' as const, decis_de: 'titlu' as const }]
   const r = aplicaDecizii(s, [{ rol: 'atr', sectiune: '2-3', decizie: 'rol_confirmat' }, { rol: 'memoriu', sectiune: '1-1', decizie: 'nu_e_sursa_cantitativa' }])
   assertEquals(r.map((x) => [x.rol, x.decis_de]), [[null, 'titlu'], ['atr', 'om']])
+})
+
+Deno.test('r2: preluarea doar pe ACEEAȘI cerere; pe altă cerere = refuz, fără apeluri', async () => {
+  const f = fals({ inLucru: 41, inLucruCerere: 4, feliiExistente: true, ultima: { id: 98, stare: 'in_zbor', rezervare_id: null } })
+  const r = await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe']])
+  assert(JSON.stringify(r.body.raport).includes('in_lucru_pe_alta_cerere'))
+})
+Deno.test('r2: rezervarea refuzată „felie” (alt worker a rezervat-o între timp) NU închide felia', async () => {
+  const f = fals({ refuzRezerva: 'felie' })
+  await RULEAZA(f)
+  assertEquals(f.ai(), 0)
+  assert(!f.apeluri.includes('felie_inchide:esuat'))
+})
+Deno.test('r2: o parte a grupului schimbată după calculul convenției → tot grupul sărit (fail-closed), fără apeluri', async () => {
+  const f = fals({ docsDupa: [{ ...DOC, text_extras: TEXT_F3 + 'revizie\n' }] })
+  const r = await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri], [0, []])
+  assert(JSON.stringify(r.body.raport).includes('grup_schimbat'))
 })

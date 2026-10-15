@@ -61,14 +61,24 @@ export function sectiuniRol(text: string, nume: string, tip: string): SectiuneRo
   const pe: { de: number; pana: number; nr: number | null; rol: Rol; decis_de: DecisDe }[] = []
   // aceeași ordine pentru ORICE tip de document (review r1): 1. antetul formularului (F3 / C6 / C7–C9 / F1–F2) pe secțiunea lui;
   // 2. fără antet, pe pagină: marcajul ATR; 3. altfel titlul / tipul (o listă de cantități fără antet = F3 după titlu)
-  const areAntet = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz/i.test(t)
-  if (areAntet) {
-    for (const s of sectiuniLista(t)) pe.push({ de: s.de, pana: s.pana, nr: null, rol: ROL_ANTET[s.tip], decis_de: 'antet' })
-  } else {
-    for (const p of pagini(t)) {
+  // review r2: antetul guvernează DOAR de la pagina pe care apare primul antet încolo; paginile dinaintea lui (memoriu, ATR) își păstrează
+  // marcajul / titlul
+  const mAntet = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz/i.exec(t)
+  let k = t.length
+  if (mAntet) {
+    const pag = t.lastIndexOf('⟦PAGINA', mAntet.index)
+    k = pag >= 0 ? pag : mAntet.index
+    // o listă de cantități fără marcaje de pagină: textul dinaintea primului antet ține de formular (copertă / deviz general)
+    if (pag < 0 && tip === 'lista_cantitati') k = 0
+  }
+  if (k > 0) {
+    for (const p of pagini(t.slice(0, k))) {
       const atr = paginaAreMarcajAtr(t.slice(p.de, p.pana))
       pe.push({ de: p.de, pana: p.pana, nr: p.nr, rol: atr ? 'atr' : titlu.rol, decis_de: atr ? 'marcaj' : titlu.decis_de })
     }
+  }
+  if (mAntet) {
+    for (const s of sectiuniLista(t.slice(k))) pe.push({ de: k + s.de, pana: k + s.pana, nr: null, rol: ROL_ANTET[s.tip], decis_de: 'antet' })
   }
   // comasare: pagini consecutive cu același rol și aceeași sursă a deciziei
   const out: SectiuneRol[] = []

@@ -32,7 +32,7 @@ export type DepsStructurat = {
   deciziiRol: (licitatieId: number) => Promise<Decizie[]>
   lotDocument: (licitatieId: number, docIds: number[]) => Promise<Map<number, { domeniu: 'toate' | 'lista' | 'necunoscut'; loturi: number[] }>>
   // extragerea „in_lucru” existentă pe (document, sha, extractor) și ultima încercare a unei munci — citite ca utilizator
-  extragereInLucru: (documentId: number, sha: string, extractorId: string) => Promise<number | null>
+  extragereInLucru: (documentId: number, sha: string, extractorId: string) => Promise<{ id: number; cerere_id: number } | null>
   ultimaIncercare: (mucaId: string) => Promise<{ id: number; stare: string; rezervare_id: number | null } | null>
   ai: (prompt: string) => Promise<RezultatAI>
   acum: () => number
@@ -124,6 +124,9 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       }
     }
     const extractorId = await extractorCuContext(ctxConv.conventie, ctxConv.manifest, dDoc)
+    // review r2: contextul convenției trebuie să fie ÎNCĂ cel curent când începe partea — fiecare parte din manifestul grupului are același
+    // sha și e încă validă; altfel tot grupul e sărit (fail-closed), iar rularea următoare recalculează
+    if (!(await grupCurent(deps, p.licitatie_id, ctxConv.manifest))) { raport.push({ document_id: d.id, sarit: 'grup_schimbat' }); continue }
     // 4. extragerea (predicatul de text valid + lotul cererii + cache verificate în RPC); una „in_lucru” rămasă se preia
     const familie = String(d?.seap_meta?.inlocuieste_id ?? d.id)
     const ex = await deps.rpc('fn_ofertare_cb_extragere_incepe', { p_cerere_id: c.id, p_document_id: d.id, p_sha256: d.sha, p_familie_id: familie,
@@ -134,7 +137,9 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     if (ex.data?.refuz === 'extragere_in_lucru') {
       const preluata = await deps.extragereInLucru(d.id, d.sha, extractorId)
       if (!preluata) { raport.push({ document_id: d.id, refuz: 'extragere_in_lucru' }); continue }
-      x = preluata
+      // review r2: preluarea doar pe ACEEAȘI cerere (rularea → aprobarea ei); pe altă cerere = închidere / redeschidere de om
+      if (preluata.cerere_id !== c.id) { raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id }); continue }
+      x = preluata.id
       raport.push({ document_id: d.id, preluata: x })
     } else if (ex.data?.refuz) { raport.push({ document_id: d.id, refuz: ex.data.refuz }); continue }
     else x = ex.data.extragere_id as number
@@ -158,6 +163,11 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
 
       const prompt = `${PROMPT_STRUCTURAT(d.nume_original, f.s.rol)}\n\n--- BUCATA ${f.nr + 1}/${felii.length} ---\n${f.text}`
       const rz = await deps.rpc('fn_ofertare_cb_rezerva', { p_felie_id: felieId, p_suma: sumaRezervata(prompt) })
+      if (rz.data?.refuz === 'felie' || rz.data?.refuz === 'munca_deja_rezervata') {
+        // review r2: felia a fost rezervată între timp de alt worker (preluare concurentă) — NU o închidem; e munca lui
+        raport.push({ document_id: d.id, felie: f.nr, refuz_rezervare: rz.data.refuz, nota: 'rezervată concurent, lăsată worker-ului ei' })
+        continue
+      }
       if (rz.error || rz.data?.refuz) {
         // apelul NU a plecat: felia e „esuat” (fără rezervare); oprim la plafon / buget blocat / cerere
         await deps.rpc('fn_ofertare_cb_felie_inchide', { p_felie_id: felieId, p_stare: 'esuat' })
@@ -227,6 +237,19 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   }
   return { status: 200, body: { ok: true, mod: 'structurat', extractor: EXTRACTOR_ID, felii_apelate: feliiApelate,
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport } }
+}
+
+// părțile grupului sunt încă exact cele din manifest (același sha, text încă valid)
+async function grupCurent(deps: DepsStructurat, lic: number, manifest: string[]): Promise<boolean> {
+  const acum = new Map((await deps.documente(lic)).map((d) => [d.id, d.text_extras]))
+  for (const m of manifest) {
+    const [id, sha] = m.split(':')
+    const t = acum.get(Number(id))
+    if (!t || (await sha256Hex(t)) !== sha) return false
+    const v = await deps.rpc('fn_ofertare_cb_text_valid', { p_licitatie_id: lic, p_document_id: Number(id), p_sha256: sha })
+    if (v.error || !v.data || typeof v.data !== 'object' || !v.data.tip) return false
+  }
+  return true
 }
 
 export function parseRaspuns(txt: string): unknown[][] | null {

@@ -99,7 +99,7 @@ export async function normalizeazaRand(r: RandModel, ctx: ContextFelie): Promise
   const cm = cantitateModel(r.cantitate, ctx.conventie)
   const cantitate = cm === 'ambigua' ? null : cm
   if (cm === 'ambigua') note.push('cantitate_model_ambigua')
-  const poz = pozitieDovedita({ felie: ctx.felie, felie_de_la: ctx.felie_de_la, citat, cantitate, um, conventie: ctx.conventie })
+  const poz = pozitieDovedita({ felie: ctx.felie, felie_de_la: ctx.felie_de_la, citat, cantitate, um, conventie: ctx.conventie, text_doc: ctx.textDoc })
   // Dn-ul codului vine din SURSĂ (denumire + citat), nu din dn_text-ul modelului; dn_text e doar propunerea de comparat
   const dnCod = dnDinText(`${denumire} ${citat}`).dn
   const dnModelTxt = text(r.dn_text, 100)

@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert@1'
+import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { conventieDocument, interpretari, pozitieDovedita, valoareInDocument } from './cantNumar.ts'
 
 Deno.test('interpretari: unic vs ambiguu', () => {
@@ -104,4 +104,34 @@ Deno.test('r1 (P2): separatorul de mii prin spațiu neîntrerupt / fin („3 99
   assertEquals([p.pozitie_dovedita, p.cantitate_offset], [true, t.indexOf('3 995')])
   // spațiul obișnuit NU e separator de mii („Dn 90 120 m” nu devine 90120)
   assertEquals(pozitieDovedita({ felie: 'Dn 90 120 m', felie_de_la: 0, citat: 'Dn 90 120 m', cantitate: 90120, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+})
+
+// ── review r2 (Jakarinos / Copilot): reproducerile, ca teste ──
+Deno.test('r2: diametrul din denumire nu ia unitatea coloanei vecine („| Conducta DN90 | m | 120 |”)', () => {
+  const t = '| Conducta DN90 | m | 120 |\n'
+  const c = '| Conducta DN90 | m | 120 |'
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: c, cantitate: 90, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+  const p = pozitieDovedita({ felie: t, felie_de_la: 0, citat: c, cantitate: 120, um: 'm', conventie: 'ro' })
+  assertEquals([p.pozitie_dovedita, p.cantitate_offset], [true, t.indexOf('120')])
+  // F3 eDevize: cantitatea singură în celulă, unitatea la capătul celulei dinainte
+  const f = '**003 SA11G1** [2] M | 130.000 | | | TEAVA PVC D= 90 MM |\n'
+  assertEquals(pozitieDovedita({ felie: f, felie_de_la: 0, citat: f.trim(), cantitate: 130, um: 'm', conventie: 'en' }).pozitie_dovedita, true)
+  assertEquals(pozitieDovedita({ felie: f, felie_de_la: 0, citat: f.trim(), cantitate: 90, um: 'm', conventie: 'en' }).pozitie_dovedita, false)
+})
+Deno.test('r2: un număr tăiat la marginea feliei („100” din „1000”) nu e dovedit — tokenii din textul întreg', () => {
+  const doc = 'x'.repeat(54985) + '\nConducta m 1000'
+  const felie = doc.slice(0, 55000)
+  assert(felie.endsWith('Conducta m 100'))
+  const p = pozitieDovedita({ felie, felie_de_la: 0, citat: 'Conducta m 100', cantitate: 100, um: 'm', conventie: 'ro', text_doc: doc })
+  assertEquals(p.pozitie_dovedita, false)
+  // aceeași felie, la offset nenul în document: offseturile rămân absolute
+  const d2 = 'abc\n' + 'Conducta m 1000 si\n'
+  const q = pozitieDovedita({ felie: d2.slice(4), felie_de_la: 4, citat: 'Conducta m 1000', cantitate: 1000, um: 'm', conventie: 'ro', text_doc: d2 })
+  assertEquals([q.pozitie_dovedita, q.cantitate_offset, q.citat_interval], [true, d2.indexOf('1000'), [4, 4 + 'Conducta m 1000'.length]])
+})
+Deno.test('r2 (P2): m2 / m3 / m² / m³ lângă cantitate și în antet', () => {
+  assertEquals(pozitieDovedita({ felie: 'sapatura 120 m3\n', felie_de_la: 0, citat: 'sapatura 120 m3', cantitate: 120, um: 'mc', conventie: 'ro' }).pozitie_dovedita, true)
+  assertEquals(pozitieDovedita({ felie: 'refacere 35 m²\n', felie_de_la: 0, citat: 'refacere 35 m²', cantitate: 35, um: 'mp', conventie: 'ro' }).pozitie_dovedita, true)
+  const t = '| Lucrare | Cant. (m3) |\n|---|---|\n| sapatura | 120 |\n'
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '| sapatura | 120 |', cantitate: 120, um: 'mc', conventie: 'ro' }).pozitie_dovedita, true)
 })
