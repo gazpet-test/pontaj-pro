@@ -21,6 +21,11 @@ const MAX_CORP = 6_000_000
 const MAX_IMAGINE = 3_750_000  // octeți decodați (limita API: 5 MB în base64)
 const CHEI_CONTEXT = ['context_inainte', 'context_dupa', 'rand_anterior']
 const SHA = /^[0-9a-f]{64}$/
+// motivul intra in parametrul jsonb al decontarii: taiat pe PUNCTE DE COD (nu unitati UTF-16), altfel o pereche surogat rupta face
+// parametrul invalid DUPA apelul platit si rezervarea ramane deschisa (Jakarinos cascada r2 P1)
+const taie200 = (s: string): string => Array.from(s).slice(0, 200).join('')
+// bani comparati in unitati intregi de 0,0001 USD (rezervarea si costurile sunt deja rotunjite la 4 zecimale): 0,0011 + 0,0204 = 0,0215
+const unitati = (x: number): number => Math.round(x * 1e4)
 
 type RpcClient = { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }> }
 export type Mediu = { sb: RpcClient; cheieAi: string; fetchApi: typeof fetch }
@@ -138,20 +143,20 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   let final = r1
   if (r1.d.decizie === 'needs_human' || cifre) {
     // ce a rămas din rezervare trebuie să acopere limita de sus a lui Sonnet; altfel nu se mai cheltuie: depășire cu ce s-a consumat
-    if (r1.cost + limitaArbitru <= suma) {
+    if (unitati(r1.cost) + unitati(limitaArbitru) <= unitati(suma)) {
       const r2 = await apel(MODEL_ARBITRU)
       // Haiku a costat deja: rezervarea rămâne deschisă (abandonul o socotește întreagă în plafon) — conservator, nicio decizie
       if (!r2.ok) return raspuns(502, { error: r2.error, rezervare_id: rez, filtru: r1.d.decizie })
-      final = { ...r2, d: { ...r2.d, motiv: (detaliu(r1) + ' ' + detaliu(r2) + ' ' + r2.d.motiv).slice(0, 200) },
+      final = { ...r2, d: { ...r2.d, motiv: taie200(detaliu(r1) + ' ' + detaliu(r2) + ' ' + r2.d.motiv) },
                 tin: r1.tin + r2.tin, tout: r1.tout + r2.tout, cost: rotunjesteSus(r1.cost + r2.cost), estimat: r1.estimat || r2.estimat }
     } else {
       // Haiku a costat peste limita lui estimata (pret / tokenizare schimbate): nu se mai cheltuie pe Sonnet; decizie needs_human cu costul
       // REAL; daca acesta depaseste chiar toata rezervarea, verificarea de mai jos o trateaza ca depasire (decontare, rularea oprita)
-      final = { ...r1, d: { ...r1.d, decizie: 'needs_human', text: '', motiv: (detaliu(r1) + ' cost Haiku peste limita estimata, Sonnet nechemat').slice(0, 200) } }
+      final = { ...r1, d: { ...r1.d, decizie: 'needs_human', text: '', motiv: taie200(detaliu(r1) + ' cost Haiku peste limita estimata, Sonnet nechemat') } }
     }
-  } else final = { ...r1, d: { ...r1.d, motiv: (detaliu(r1) + ' ' + r1.d.motiv).slice(0, 200) } }
+  } else final = { ...r1, d: { ...r1.d, motiv: taie200(detaliu(r1) + ' ' + r1.d.motiv) } }
   const { model: modelFinal, d, tin, tout } = final, real = final.cost
-  const peste = real > suma
+  const peste = unitati(real) > unitati(suma)
   // costul real peste rezervare (doar dacă prețul / tokenizarea s-ar schimba): UN singur RPC tranzacțional decontează la rezervare,
   // pune costul REAL în ai_usage_log, înregistrează needs_human și oprește rularea; rezultatul e verificat explicit (Copilot r2 P1)
   if (peste) {

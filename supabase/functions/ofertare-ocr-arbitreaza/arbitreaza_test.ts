@@ -140,6 +140,37 @@ Deno.test('cascadă: usage lipsă la Haiku → cost estimat marcat in motiv, Son
   assert.equal(a.arbitru_model, 'claude-sonnet-5'); assert.match(a.motiv, /^\[Haiku: needs_human, usage lipsa, cost estimat 0\.\d{4}\$\] \[Sonnet: ales_mineru, 3000\/200 tok/)
 })
 
+Deno.test('motivul taiat pe puncte de cod: nicio pereche surogat rupta in parametrul jsonb (Jakarinos cascada r2 P1)', async () => {
+  const it = await itemDeTest({ citire_lighton: 'masuri de protecție', citire_mineru: 'masuri de protectie', diferenta_numerica: false })
+  const motiv = 'a'.repeat(155) + '😀' + 'b'.repeat(20)
+  const { m, apeluri } = mediu(it, { api: { text: JSON.stringify({ decizie: 'ales_mineru', text: '', motiv: motiv.slice(0, 157), e_cantitate: false, anomalie_separator: false }) } })
+  assert.equal((await arbitreaza(cerere(corpDe(it)), m)).status, 200)
+  const scris = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj.motiv as string
+  assert.ok(Array.from(scris).length <= 200); assert.equal(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(scris), false, scris)
+  assert.doesNotThrow(() => JSON.parse(JSON.stringify(scris)))
+})
+
+Deno.test('cascadă: depășire produsă doar de Sonnet → RPC de depășire cu suma ambelor costuri și modelul Sonnet', async () => {
+  const it = await itemDeTest({ diferenta_numerica: true })
+  const { m, apeluri, cereriApi } = mediu(it, { apiSeq: [{}, { usage: { input_tokens: 400000, output_tokens: 1000 } }] })
+  const r = await arbitreaza(cerere(corpDe(it)), m)
+  assert.equal(r.status, 500); assert.equal(cereriApi.length, 2)
+  const dp = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_depasire')!.args
+  assert.equal(dp.p_model, 'claude-sonnet-5'); assert.equal(dp.p_tokens_in, 403000); assert.equal(dp.p_tokens_out, 1200)
+  assert.equal(dp.p_cost_real, 0.8104)                                                          // 0,0004 Haiku + 0,8100 Sonnet
+  assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_scrie_arbitraj'))
+})
+
+Deno.test('cascadă: usage lipsă doar la Sonnet → needs_human, costul Sonnet = limita lui, marcat estimat', async () => {
+  const it = await itemDeTest({ diferenta_numerica: true })
+  const { m, apeluri } = mediu(it, { apiSeq: [{}, { usage: null }] })
+  assert.equal((await arbitreaza(cerere(corpDe(it)), m)).status, 200)
+  const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+  const rez = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
+  assert.equal(a.decizie, 'needs_human'); assert.match(a.motiv, /\[Sonnet: needs_human, usage lipsa, cost estimat /)
+  assert.ok(Number(a.cost_usd) <= rez && Number(a.cost_usd) > 0.0004, a.cost_usd)               // Haiku masurat + limita Sonnet, sub rezervare
+})
+
 Deno.test('fără cost înaintea verificărilor (corp, secret, amprentă, context schimbat, imagine, refuzurile BD)', async () => {
   const it = await itemDeTest()
   const contextSchimbat = { ...it, context_inainte: 'alt loc din bandă' }                     // amprenta veche: refuz (Copilot / Jakarinos r2)
