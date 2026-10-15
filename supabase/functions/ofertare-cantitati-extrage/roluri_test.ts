@@ -31,3 +31,10 @@ Deno.test('lista de cantități: rolul din antet (F3 / C6 / C9); fără antet = 
   assertEquals(sectiuniRol(t, 'Liste', 'lista_cantitati').map((x) => [x.rol, x.decis_de]), [['f3', 'antet'], ['c6', 'antet']])
   assertEquals(sectiuniRol('003 SA11G1 M 570.000', 'Liste', 'lista_cantitati').map((x) => [x.rol, x.decis_de]), [['f3', 'titlu']])
 })
+
+Deno.test('r1: ordinea nu depinde de tipul documentului — F3 într-un cs_volum = f3; pagină ATR într-o listă fără antet = atr', () => {
+  const f3 = 'Formularul F3\nLista cu cantitatile de lucrari\n003 SA11G1 M 570.000\n'
+  assertEquals(sectiuniRol(f3, '2. Caiet sarcini', 'cs_volum').map((x) => [x.rol, x.decis_de]), [['f3', 'antet']])
+  const atr = '⟦PAGINA 1⟧\n003 SA11G1 M 570.000\n⟦PAGINA 2⟧\nAVIZ TEHNIC DE RACORDARE\n'
+  assertEquals(sectiuniRol(atr, 'Liste', 'lista_cantitati').map((x) => [x.rol, x.decis_de]), [['f3', 'titlu'], ['atr', 'marcaj']])
+})

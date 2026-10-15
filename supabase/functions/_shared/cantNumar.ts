@@ -15,7 +15,9 @@
 
 export type Conventie = 'ro' | 'en' | 'nedeterminata' | 'contradictorie'
 
-const RE_TOKEN = /(?<![\d.,])\d+(?:[.,]\d+)*(?![\d])/g
+// separatorul de mii prin spațiu NEÎNTRERUPT / fin („3 995,00”) e acceptat; spațiul obișnuit NU (ar lipi „Dn 90 120 m” în 90120)
+const RE_TOKEN = /(?<![\d.,])\d{1,3}(?:[\u00a0\u202f\u2009]\d{3})+(?:[.,]\d+)?(?!\d)|(?<![\d.,])\d+(?:[.,]\d+)*(?!\d)/g
+const curataSp = (t: string) => t.replace(/[\u00a0\u202f\u2009]/g, '')
 // datele calendaristice nu sunt cantități și nu sunt dovadă de convenție (15.10.2026 ar arăta ca mii cu punct)
 const RE_DATA = /^\d{1,2}\.\d{1,2}\.\d{2,4}$/
 
@@ -24,9 +26,8 @@ export type Token = { text: string; de_la: number; pana_la: number }
 export function tokeniNumerici(t: string, offsetBaza = 0): Token[] {
   const out: Token[] = []
   for (const m of t.matchAll(RE_TOKEN)) {
-    let tx = m[0]
-    // punctuația de final de propoziție („100 m.” nu; „100.” da) — un separator fără cifre după e tăiat de regex
-    out.push({ text: tx, de_la: offsetBaza + (m.index ?? 0), pana_la: offsetBaza + (m.index ?? 0) + tx.length })
+    // text = forma de interpretat (fără spațiile de mii); de_la / pana_la = intervalul exact din sursă
+    out.push({ text: curataSp(m[0]), de_la: offsetBaza + (m.index ?? 0), pana_la: offsetBaza + (m.index ?? 0) + m[0].length })
   }
   return out
 }
@@ -81,6 +82,55 @@ export function valoareInDocument(tok: string, c: Conventie): number | 'ambigua'
   return 'ambigua'
 }
 
+// ── UM (mutat aici din cantNormalizare: poziția dovedită cere UM-ul tokenului) ──
+const faraDiacritice = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+export function umNorm(v: unknown): string | null {
+  const t = faraDiacritice(String(v ?? '')).toLowerCase().replace(/\s+/g, '').replace(/\.$/, '')
+  if (!t) return null
+  if (/^(m|ml|m\.l|mliniar|metri|metru)$/.test(t)) return 'm'
+  if (/^(mc|m\.c|m3)$/.test(t)) return 'mc'
+  if (/^(mp|m\.p|m2)$/.test(t)) return 'mp'
+  if (/^(buc|bucati|boc)$/.test(t)) return 'buc'
+  if (/^km$/.test(t)) return 'km'
+  return /^[a-z0-9.%/]{1,10}$/.test(t) ? t : null
+}
+
+// UM-urile „lângă” un token: cuvântul imediat după / înainte (peste separatori de tabel) sau unitatea din antetul coloanei
+// tabelului markdown în care stă tokenul („LUNGIME (m)”). Fără UM dovedit, tokenul NU e cantitatea (spec §4.1: „cu UM-ul lui”).
+const RE_UM_DUPA = /^[\s|\])*]*([A-Za-zĂÂÎȘȚăâîșț]{1,8}(?:\.[A-Za-z]{1,3})?\.?)(?![A-Za-z0-9])/
+const RE_UM_INAINTE = /(?<![A-Za-z0-9])([A-Za-zĂÂÎȘȚăâîșț]{1,8}(?:\.[A-Za-z]{1,3})?\.?)[\s|[(*]*$/
+const RE_SEPARATOR_TABEL = /^\s*\|?\s*:?-{3,}/
+const RE_UM_ANTET = /\((m|ml|mp|mc|buc|km)\)|\b(metri|ml)\b/i
+export function umLanga(t: string, de: number, pana: number): Set<string> {
+  const out = new Set<string>()
+  const dupa = RE_UM_DUPA.exec(t.slice(pana, pana + 40))
+  if (dupa) { const u = umNorm(dupa[1]); if (u) out.add(u) }
+  const inainte = RE_UM_INAINTE.exec(t.slice(Math.max(0, de - 40), de))
+  if (inainte) { const u = umNorm(inainte[1]); if (u) out.add(u) }
+  // antetul coloanei: rândul curent e un rând de tabel; antetul = rândul dinaintea separatorului |---|
+  const ls = t.lastIndexOf('\n', de - 1) + 1
+  const le0 = t.indexOf('\n', pana)
+  const linie = t.slice(ls, le0 < 0 ? t.length : le0)
+  if (linie.includes('|')) {
+    const col = (t.slice(ls, de).match(/\|/g) || []).length
+    let p = ls - 1
+    for (let k = 0; k < 400 && p > 0; k++) {
+      const a = t.lastIndexOf('\n', p - 1) + 1
+      const l = t.slice(a, p)
+      if (RE_SEPARATOR_TABEL.test(l)) {
+        const h0 = t.lastIndexOf('\n', a - 2) + 1
+        const cel = t.slice(h0, a - 1).split('|')[col] || ''
+        const m = RE_UM_ANTET.exec(faraDiacritice(cel))
+        if (m) { const u = umNorm(m[1] || m[2]); if (u) out.add(u) }
+        break
+      }
+      if (!l.includes('|')) break
+      p = a - 1
+    }
+  }
+  return out
+}
+
 // ── poziția dovedită (spec §4.1): citat unic în felie (spații normalizate) ȘI exact un token al cărui interpretare unică (după
 // convenția documentului) e egală cu cantitatea; un token ambiguu care ar putea fi cantitatea → valoare_ambigua.
 export type Pozitie = {
@@ -110,6 +160,7 @@ export function pozitieDovedita(p: {
   felie_de_la: number         // offsetul absolut al feliei în document
   citat: string
   cantitate: number | null
+  um: string | null           // UM-ul normalizat al rândului; fără UM nu se poate dovedi poziția
   conventie: Conventie
 }): Pozitie {
   const nu = (motiv: string, extra: Partial<Pozitie> = {}): Pozitie =>
@@ -124,11 +175,16 @@ export function pozitieDovedita(p: {
   const randPana = nl < 0 ? p.felie.length : nl
   const baza = { citat_interval: [p.felie_de_la + a, p.felie_de_la + b] as [number, number],
                  rand_interval: [p.felie_de_la + randDe, p.felie_de_la + randPana] as [number, number] }
+  if (!p.um) return nu('fara_um', baza)
   let potrivite: Token[] = [], ambigue = 0
-  for (const k of tokeniNumerici(p.felie.slice(a, b), p.felie_de_la + a)) {
+  // tokenurile din TOATĂ felia care ating citatul: un citat nu poate tăia un număr („Conducta 100” din „Conducta 1000 m” = 1000)
+  for (const k of tokeniNumerici(p.felie)) {
+    if (k.pana_la <= a || k.de_la >= b) continue
+    if (!umLanga(p.felie, k.de_la, k.pana_la).has(p.um)) continue
     const v = valoareInDocument(k.text, p.conventie)
+    const abs = { ...k, de_la: p.felie_de_la + k.de_la, pana_la: p.felie_de_la + k.pana_la }
     if (v === 'ambigua') { if (interpretari(k.text).some((x) => egal(x, p.cantitate!))) ambigue++ }
-    else if (v !== null && egal(v, p.cantitate)) potrivite.push(k)
+    else if (v !== null && egal(v, p.cantitate)) potrivite.push(abs)
   }
   if (ambigue) return nu('token_ambiguu', { ...baza, valoare_ambigua: true })
   if (potrivite.length === 0) return nu('cantitate_nedovedita', baza)

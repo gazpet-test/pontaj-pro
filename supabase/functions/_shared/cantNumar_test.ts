@@ -28,7 +28,7 @@ Deno.test('§6.6: convenții contradictorii în același document → ambiguitat
     assertEquals(conv, 'contradictorie')
     assertEquals(valoareInDocument('3.995', conv), 'ambigua')
     const off = t.indexOf(c)
-    const p = pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Conducta Dn 90 3.995 m', cantitate: 3995, conventie: conv })
+    const p = pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Conducta Dn 90 3.995 m', cantitate: 3995, um: 'm', conventie: conv })
     assertEquals([p.pozitie_dovedita, p.valoare_ambigua, p.motiv], [false, true, 'token_ambiguu'])
     assertEquals(p.citat_interval, [off, off + c.length - 1])
   }
@@ -38,8 +38,8 @@ Deno.test('§6.6: agregare cu convenție demonstrabilă (2.000,00 + 1.995,00); f
   const t = 'Str. A conducta Dn 90 2.000,00 m\nStr. B conducta Dn 90 1.995,00 m\n'
   const conv = conventieDocument(t).conventie
   assertEquals(conv, 'ro')
-  const pa = pozitieDovedita({ felie: t, felie_de_la: 1000, citat: 'Str. A conducta Dn 90 2.000,00 m', cantitate: 2000, conventie: conv })
-  const pb = pozitieDovedita({ felie: t, felie_de_la: 1000, citat: 'Str. B conducta Dn 90 1.995,00 m', cantitate: 1995, conventie: conv })
+  const pa = pozitieDovedita({ felie: t, felie_de_la: 1000, citat: 'Str. A conducta Dn 90 2.000,00 m', cantitate: 2000, um: 'm', conventie: conv })
+  const pb = pozitieDovedita({ felie: t, felie_de_la: 1000, citat: 'Str. B conducta Dn 90 1.995,00 m', cantitate: 1995, um: 'm', conventie: conv })
   assertEquals([pa.pozitie_dovedita, pb.pozitie_dovedita], [true, true])
   assertEquals(pa.cantitate_offset, 1000 + t.indexOf('2.000,00'))
   assertEquals(pb.cantitate_offset, 1000 + t.indexOf('1.995,00'))
@@ -47,22 +47,22 @@ Deno.test('§6.6: agregare cu convenție demonstrabilă (2.000,00 + 1.995,00); f
   const u = 'Str. A conducta Dn 90 2.000 m\nStr. B conducta Dn 90 1.995 m\n'
   const cu = conventieDocument(u).conventie
   assertEquals(cu, 'nedeterminata')
-  const qa = pozitieDovedita({ felie: u, felie_de_la: 0, citat: 'Str. A conducta Dn 90 2.000 m', cantitate: 2000, conventie: cu })
+  const qa = pozitieDovedita({ felie: u, felie_de_la: 0, citat: 'Str. A conducta Dn 90 2.000 m', cantitate: 2000, um: 'm', conventie: cu })
   assertEquals([qa.pozitie_dovedita, qa.valoare_ambigua], [false, true])
 })
 
 Deno.test('§6.6: cantitate fără dovadă numerică (sursa 100 m, modelul 1000 m) → nedovedită', () => {
   const t = 'Strada A conducta 100 m\n'
-  const p = pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Strada A conducta 100 m', cantitate: 1000, conventie: 'ro' })
+  const p = pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Strada A conducta 100 m', cantitate: 1000, um: 'm', conventie: 'ro' })
   assertEquals([p.pozitie_dovedita, p.motiv], [false, 'cantitate_nedovedita'])
 })
 
 Deno.test('citat multiplu / negăsit / spații normalizate; offseturi absolute (spec: R1 / R2 pe aceeași linie)', () => {
   const t = 'R1 Strada A 100 m; R2 Strada A 100 m\n'
-  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Strada A 100 m', cantitate: 100, conventie: 'ro' }).motiv, 'citat_multiplu')
-  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Strada B 100 m', cantitate: 100, conventie: 'ro' }).motiv, 'citat_negasit')
-  const p1 = pozitieDovedita({ felie: t, felie_de_la: 50, citat: 'R1  Strada   A 100 m', cantitate: 100, conventie: 'ro' })
-  const p2 = pozitieDovedita({ felie: t, felie_de_la: 50, citat: 'R2 Strada A 100 m', cantitate: 100, conventie: 'ro' })
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Strada A 100 m', cantitate: 100, um: 'm', conventie: 'ro' }).motiv, 'citat_multiplu')
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Strada B 100 m', cantitate: 100, um: 'm', conventie: 'ro' }).motiv, 'citat_negasit')
+  const p1 = pozitieDovedita({ felie: t, felie_de_la: 50, citat: 'R1  Strada   A 100 m', cantitate: 100, um: 'm', conventie: 'ro' })
+  const p2 = pozitieDovedita({ felie: t, felie_de_la: 50, citat: 'R2 Strada A 100 m', cantitate: 100, um: 'm', conventie: 'ro' })
   assertEquals([p1.pozitie_dovedita, p2.pozitie_dovedita], [true, true])
   assertEquals(p1.cantitate_offset, 50 + t.indexOf('100'))
   assertEquals(p2.cantitate_offset, 50 + t.lastIndexOf('100'))
@@ -71,6 +71,37 @@ Deno.test('citat multiplu / negăsit / spații normalizate; offseturi absolute (
 
 Deno.test('Răcari (formatul F3 eDevize): 570.000 cu convenția EN a listei = 570 m; fără convenție = ambiguu', () => {
   const t = '003 SA11G1 [ 2] M 570.000\nTEAVA PVC ... D= 90 MM\n'
-  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '003 SA11G1 [ 2] M 570.000', cantitate: 570, conventie: 'en' }).pozitie_dovedita, true)
-  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '003 SA11G1 [ 2] M 570.000', cantitate: 570, conventie: 'nedeterminata' }).motiv, 'token_ambiguu')
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '003 SA11G1 [ 2] M 570.000', cantitate: 570, um: 'm', conventie: 'en' }).pozitie_dovedita, true)
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '003 SA11G1 [ 2] M 570.000', cantitate: 570, um: 'm', conventie: 'nedeterminata' }).motiv, 'token_ambiguu')
+})
+
+// ── review r1 (Jakarinos / Copilot): reproducerile, ca teste ──
+Deno.test('r1: un citat nu poate tăia un număr („Conducta 100” din „Conducta 1000 m”; „995 m” din „3.995 m”)', () => {
+  const t = 'Conducta 1000 m\n'
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Conducta 100', cantitate: 100, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+  const u = 'Retea 3.995 m\n'
+  const p = pozitieDovedita({ felie: u, felie_de_la: 0, citat: '995 m', cantitate: 995, um: 'm', conventie: 'nedeterminata' })
+  assertEquals([p.pozitie_dovedita, p.motiv], [false, 'cantitate_nedovedita'])
+})
+Deno.test('r1: tokenul trebuie să fie cantitatea CU UM-ul ei (nu diametrul, nu alt UM)', () => {
+  const t = 'Conducta PEHD DN90 120 m\n'
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Conducta PEHD DN90 120 m', cantitate: 90, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'Conducta PEHD DN90 120 m', cantitate: 120, um: 'm', conventie: 'ro' }).pozitie_dovedita, true)
+  const k = 'Conducta 10 km\n'
+  assertEquals(pozitieDovedita({ felie: k, felie_de_la: 0, citat: 'Conducta 10 km', cantitate: 10, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
+  assertEquals(pozitieDovedita({ felie: k, felie_de_la: 0, citat: 'Conducta 10 km', cantitate: 10, um: null, conventie: 'ro' }).motiv, 'fara_um')
+})
+Deno.test('r1: UM din antetul coloanei unui tabel markdown („LUNGIME (m)”); F3 „M 570.000”', () => {
+  const t = '| Nr | STRADA | DIAMETRU | LUNGIME (m) |\n|---|---|---|---|\n| 1 | ORACA | 90 | 52 |\n'
+  const p = pozitieDovedita({ felie: t, felie_de_la: 0, citat: '| 1 | ORACA | 90 | 52 |', cantitate: 52, um: 'm', conventie: 'nedeterminata' })
+  assertEquals([p.pozitie_dovedita, p.cantitate_offset], [true, t.indexOf('52')])
+  // 90 e în coloana DIAMETRU, fără UM de lungime în antet → nu e cantitatea
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '| 1 | ORACA | 90 | 52 |', cantitate: 90, um: 'm', conventie: 'nedeterminata' }).pozitie_dovedita, false)
+})
+Deno.test('r1 (P2): separatorul de mii prin spațiu neîntrerupt / fin („3 995,00 m”)', () => {
+  const t = 'lungime totala 3 995,00 m\n'
+  const p = pozitieDovedita({ felie: t, felie_de_la: 0, citat: 'lungime totala 3 995,00 m', cantitate: 3995, um: 'm', conventie: 'nedeterminata' })
+  assertEquals([p.pozitie_dovedita, p.cantitate_offset], [true, t.indexOf('3 995')])
+  // spațiul obișnuit NU e separator de mii („Dn 90 120 m” nu devine 90120)
+  assertEquals(pozitieDovedita({ felie: 'Dn 90 120 m', felie_de_la: 0, citat: 'Dn 90 120 m', cantitate: 90120, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
 })

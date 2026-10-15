@@ -19,6 +19,7 @@ export function rolDinTitlu(nume: string, tip: string): { rol: Rol; decis_de: De
   if (tip === 'raspuns_clarificare' || /\braspuns\b|\bclarificar/.test(n)) return { rol: 'raspuns', decis_de: 'titlu' }
   if (tip === 'fisa_date' || /fisa\s*(de\s*)?date|fisadate/.test(n)) return { rol: 'fisa_date', decis_de: 'titlu' }
   if (tip === 'cs_volum' || /caiet(ul)?\s*(de\s*)?sarcini/.test(n)) return { rol: 'cs', decis_de: 'titlu' }
+  if (tip === 'lista_cantitati' || /lista?\s+de\s+cantit/.test(n)) return { rol: 'f3', decis_de: 'titlu' }
   if (/\bplans[ae]\b/.test(n)) return { rol: 'plansa', decis_de: 'titlu' }
   if (/memoriu|\bpth\b|proiect\s+tehnic/.test(n)) return { rol: 'memoriu', decis_de: 'titlu' }
   return { rol: 'alt', decis_de: 'titlu' }
@@ -58,11 +59,11 @@ export function sectiuniRol(text: string, nume: string, tip: string): SectiuneRo
   const t = text || ''
   const titlu = rolDinTitlu(nume, tip)
   const pe: { de: number; pana: number; nr: number | null; rol: Rol; decis_de: DecisDe }[] = []
-  if (tip === 'lista_cantitati') {
-    // 1. antetul formularului; o listă fără niciun antet rămâne F3 după TITLU (tipul documentului), nu după antet
-    const sect = sectiuniLista(t)
-    const areAntet = /Formular\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz/i.test(t)
-    for (const s of sect) pe.push({ de: s.de, pana: s.pana, nr: null, rol: ROL_ANTET[s.tip], decis_de: areAntet ? 'antet' : 'titlu' })
+  // aceeași ordine pentru ORICE tip de document (review r1): 1. antetul formularului (F3 / C6 / C7–C9 / F1–F2) pe secțiunea lui;
+  // 2. fără antet, pe pagină: marcajul ATR; 3. altfel titlul / tipul (o listă de cantități fără antet = F3 după titlu)
+  const areAntet = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz/i.test(t)
+  if (areAntet) {
+    for (const s of sectiuniLista(t)) pe.push({ de: s.de, pana: s.pana, nr: null, rol: ROL_ANTET[s.tip], decis_de: 'antet' })
   } else {
     for (const p of pagini(t)) {
       const atr = paginaAreMarcajAtr(t.slice(p.de, p.pana))

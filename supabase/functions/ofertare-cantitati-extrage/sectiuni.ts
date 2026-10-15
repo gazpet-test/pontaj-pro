@@ -59,7 +59,16 @@ export function felii(t: string): string[] {
   return out
 }
 
-export type FelieDoc = { bucata: string; nr: number; din: number; tipSursa: TipLista | null; inceputSectiune: boolean }
+// TKT-0329 B (review r1): feliile CU offsetul lor în text, din aceeași aritmetică (nu prin căutarea conținutului — un text repetat ar da
+// offsetul primei apariții)
+export function feliiCuPozitie(t: string): { de: number; text: string }[] {
+  if (t.length <= FELIE) return [{ de: 0, text: t }]
+  const out: { de: number; text: string }[] = []
+  for (let i = 0; i < t.length; i += FELIE - SUPRAPUNERE) out.push({ de: i, text: t.slice(i, i + FELIE) })
+  return out
+}
+
+export type FelieDoc ={ bucata: string; nr: number; din: number; tipSursa: TipLista | null; inceputSectiune: boolean }
 
 // Feliile unui document. Doar lista_cantitati primește tip_sursa (pe secțiuni); celelalte tipuri
 // (cs_volum, alta) rămân ca înainte: tot textul feliat, fără tip_sursa.

@@ -48,3 +48,23 @@ Deno.test('modelul dă alt Dn decât codul → dn_ambiguu; rând fără citat �
   const fara = randDinTablou([1, null, null, null, 'x', null, null, null, null, 'm', 1, 0, 0, null, null, null])!
   assertEquals(await normalizeazaRand(fara, ctx), null)
 })
+
+Deno.test('r1: hash_rand păstrează diferențele semantice (total vs detaliu; Dn) și e stabil pe același rând', async () => {
+  const felie = 'Conducta PE100 De 110 200 m\n'
+  const ctx = { textDoc: felie, felie, felie_de_la: 0, conventie: 'ro' as const, lot_domeniu: 'toate' as const, lot_nr: [], rol_sursa: 'cs', rol_decis_de: 'titlu' as const }
+  const baza = [1, null, null, null, 'Conducta PE100 De 110', 'Str. A', 'PE100', 'De 110', null, 'm', 200, 0, 0, 'conducta', 'lungime', 'Conducta PE100 De 110 200 m']
+  const a = (await normalizeazaRand(randDinTablou(baza)!, ctx))!
+  const a2 = (await normalizeazaRand(randDinTablou(baza)!, ctx))!
+  const tot = baza.slice(); tot[11] = 1
+  const b = (await normalizeazaRand(randDinTablou(tot)!, ctx))!
+  const alt = baza.slice(); alt[5] = 'Str. B'
+  const c = (await normalizeazaRand(randDinTablou(alt)!, ctx))!
+  assertEquals(a.obs.hash_rand, a2.obs.hash_rand)
+  assertEquals(new Set([a.obs.hash_rand, b.obs.hash_rand, c.obs.hash_rand]).size, 3)
+})
+Deno.test('r1: mai multe Dn propuse de model → dn_ambiguu, dn_model null', async () => {
+  const felie = 'Conducta PEHD DN90 120 m\n'
+  const ctx = { textDoc: felie, felie, felie_de_la: 0, conventie: 'ro' as const, lot_domeniu: 'toate' as const, lot_nr: [], rol_sursa: 'cs', rol_decis_de: 'titlu' as const }
+  const n = (await normalizeazaRand(randDinTablou([1, null, null, null, 'Conducta PEHD DN90', null, null, 'Dn 90/110', null, 'm', 120, 0, 0, 'conducta', 'lungime', 'Conducta PEHD DN90 120 m'])!, ctx))!
+  assertEquals([n.obs.dn_mm, n.obs.dn_model, n.obs.dn_ambiguu], [[90], null, true])
+})

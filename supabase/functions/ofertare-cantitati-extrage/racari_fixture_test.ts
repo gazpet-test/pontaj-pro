@@ -26,7 +26,7 @@ Deno.test('Răcari F3: cele 16 rânduri Dn 90 din text, cu convenția EN a liste
 
 Deno.test('Răcari F3 fără convenție: „570.000” e ambiguu (570 / 570.000) → nedovedit; „1160.000” (4 cifre întregi) e unic → dovedit', () => {
   const rez = F.f3_dn90.map((e: any) => {
-    const p = pozitieDovedita({ felie: e.rand_text, felie_de_la: 0, citat: e.rand_text, cantitate: e.cantitate, conventie: 'nedeterminata' })
+    const p = pozitieDovedita({ felie: e.rand_text, felie_de_la: 0, citat: e.rand_text, cantitate: e.cantitate, um: 'm', conventie: 'nedeterminata' })
     return [e.cantitate_text, p.pozitie_dovedita, p.valoare_ambigua]
   })
   assertEquals(rez.filter((x: any) => x[1]).map((x: any) => x[0]), ['1160.000'])

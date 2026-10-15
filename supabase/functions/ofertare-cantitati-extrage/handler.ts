@@ -534,6 +534,16 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
       }
       return m
     },
+    extragereInLucru: async (docId, sha, extractorId) => {
+      const { data } = await dbU.from('ofertare_cant_extrageri').select('id').eq('document_id', docId).eq('doc_sha256', sha)
+        .eq('extractor_id', extractorId).eq('stare', 'in_lucru').maybeSingle()
+      return data?.id ?? null
+    },
+    ultimaIncercare: async (munca) => {
+      const { data } = await dbU.from('ofertare_cant_felii').select('id, stare, rezervare_id').eq('munca_id', munca)
+        .order('incercare', { ascending: false }).limit(1)
+      return data?.[0] ?? null
+    },
     ai: async (prompt) => {
       const x = await cheama('openai_mini', prompt, '', '', deps.chei.O)
       // „incomplete” (tăiat la plafonul de ieșire) e un rezultat incert: nu se scrie ca extragere completă

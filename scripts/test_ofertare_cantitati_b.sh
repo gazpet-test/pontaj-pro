@@ -67,6 +67,13 @@ o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE" 2>&1 || true)"; 
 livreaza >/dev/null || esec "livrare: $(livreaza | tail -3)"
 ok "livrare (20 de tabele, 48 de funcții)"
 o="$(livreaza || true)"; grep -q 'exista deja' <<<"$o" || esec "relivrare: $o"; ok "refuz: relivrare"
+# 20261031b (PR3): proveniența doar pentru textul CURENT al documentului
+MIGRARE_B="$RADACINA/supabase/migrations/20261031b_ofertare_text_scrie_cas.sql"; ROLLBACK_B="$RADACINA/supabase/revenire/20261031b_ofertare_text_scrie_cas_ROLLBACK.sql"
+livreaza_b() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '20261031b_ofertare_text_scrie_cas:' || txid_current(), true);" -f "$MIGRARE_B" 2>&1; }
+revenire_b() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261031b', 'TEXT_SCRIE_CAS_REVENIRE:' || txid_current(), true);" -f "$ROLLBACK_B" 2>&1; }
+o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE_B" 2>&1 || true)"; grep -q 'garda start invalida' <<<"$o" || esec "31b fără gardă: $o"; ok "refuz: 20261031b fără gardă"
+livreaza_b >/dev/null || esec "livrare 31b: $(livreaza_b | tail -3)"; ok "livrare 20261031b"
+o="$(livreaza_b || true)"; grep -q 'deja aplicata' <<<"$o" || esec "relivrare 31b: $o"; ok "refuz: relivrare 20261031b"
 
 # ── pregătire: loturi (102 / 3 / 5 / 6 fără loturi; 4 cu loturile 1 și 2), documente, texte ──
 q "INSERT INTO public.ofertare_licitatii(id, nr_anunt) VALUES (5, 'X5'), (6, 'X6'), (7, 'X7'), (8, 'X8'), (9, 'X9'), (10, 'X10'), (11, 'X11'), (12, 'X12')" >/dev/null
@@ -138,18 +145,18 @@ sleep 0.7
 asteapta "text_extras schimbat concurent → extragerea pe sha-ul vechi refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 905, '$SHA5', '905', 'gpt-5-mini@p9@n1@f1', 1)")" 'd.get("refuz")')" versiune_veche
 wait
 q "UPDATE public.ofertare_documente_atribuire SET text_extras = 'text vechi fara text_scrie' WHERE id = 905" >/dev/null
-q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES (907, 102, 'scanat.pdf', 'alta', NULL, now() - interval '20 days')" >/dev/null
+q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES (907, 102, 'scanat.pdf', 'alta', 'scan A', now() - interval '20 days')" >/dev/null
 svc "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan A', 'transcriere', 'ocr-local', 'integral', '{}')" >/dev/null
 X907=$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 907, '$(sha 'scan A')', '907', 'gpt-5-mini@p1@n1@f1', 1)")" 'd["extragere_id"]')
 svc "SELECT public.fn_ofertare_cb_extragere_inchide($X907, 'esuat')" >/dev/null
 C4=$(j "$(ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_cerere(102,'cant_extragere','toate','{}',24)")" 'd["cerere_id"]')
-"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan B', 'transcriere', 'ocr-local', 'integral', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_documente_atribuire SET text_extras = 'scan B' WHERE id = 907;" -c "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan B', 'transcriere', 'ocr-local', 'integral', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
 sleep 0.7
-refuz "text_extras NULL + proveniență nouă concurentă → redeschiderea pe versiunea veche refuzată" authenticated "$RESP" "SELECT public.fn_ofertare_cb_extragere_redeschide($X907, $C4, 'reiau scanul')" 'nu mai e cea curentă'
+refuz "producător concurent (text + proveniență în aceeași tranzacție) → redeschiderea pe versiunea veche refuzată" authenticated "$RESP" "SELECT public.fn_ofertare_cb_extragere_redeschide($X907, $C4, 'reiau scanul')" 'nu mai e cea curentă'
 wait
-"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan C', 'transcriere', 'ocr-local', 'integral', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_documente_atribuire SET text_extras = 'scan C' WHERE id = 907;" -c "SELECT public.fn_ofertare_cb_text_scrie(907, 'scan C', 'transcriere', 'ocr-local', 'integral', '{}');" -c "SELECT pg_sleep(2);" -c "COMMIT;" >/dev/null 2>&1 &
 sleep 0.7
-asteapta "text_extras NULL + proveniență nouă concurentă → extragerea pe versiunea B refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 907, '$(sha 'scan B')', '907', 'gpt-5-mini@p1@n1@f1', 1)")" 'd.get("refuz")')" versiune_veche
+asteapta "producător concurent (text + proveniență) → extragerea pe versiunea B refuzată" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe($C1, 907, '$(sha 'scan B')', '907', 'gpt-5-mini@p1@n1@f1', 1)")" 'd.get("refuz")')" versiune_veche
 wait
 ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(901, '$SHA', 'f3', '*', 'rol_confirmat', 'este F3')" >/dev/null
 ca authenticated "$RESP" "SELECT public.fn_ofertare_cb_decizie(901, '$SHA', 'f3', '*', 'nu_e_sursa_cantitativa', 'răzgândit')" >/dev/null
@@ -416,6 +423,12 @@ q "INSERT INTO public.ofertare_analiza_erori (snapshot_id, faza, eroare, la) SEL
 svc "SELECT public.fn_ofertare_cb_restante()" >/dev/null
 asteapta "plafon izolat: 24 de încercări vechi pe un snapshot recuperabil → nicio completare nouă" "$(q "SELECT (SELECT count(*) FROM public.ofertare_analiza_completari WHERE snapshot_id=$S12) || '|' || (SELECT (e->>'text_indisponibil') FROM public.ofertare_analiza_versiuni v, jsonb_array_elements(v.doc_manifest) e WHERE v.id=$S12 AND (e->>'document_id')::int=951)")" "0|false"
 asteapta "înghețarea după așteptarea setterului: moment după commit, netardivă, exactă" "$(q "SELECT (v.moment_referinta > (SELECT max(la) FROM public.ofertare_loturi_jurnal WHERE licitatie_id=12) + interval '1 second')::text || '|' || v.inghetat_tardiv || '|' || v.eligibilitate FROM public.ofertare_analiza_versiuni v WHERE v.licitatie_id=12")" "true|false|exacta"
+
+# ── 20261031b: proveniența unui text care NU mai e cel curent e refuzată (producător întârziat) ──
+asteapta "text_scrie pe alt text decât text_extras-ul curent → text_depasit, nimic scris" "$(j "$(svc "SELECT public.fn_ofertare_cb_text_scrie(903, 'text vechi intarziat', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}')")" 'd.get("refuz")')|$(q "SELECT count(*) FROM public.ofertare_doc_texte_prov WHERE document_id=903")" "text_depasit|1"
+o="$(revenire_b || true)"; [ -z "$(grep -i error <<<"$o")" ] || esec "revenire 31b: $o"
+asteapta "revenirea 20261031b: corpul din 20261031a la loc (fără text_depasit)" "$(q "SELECT pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%'")" f
+livreaza_b >/dev/null || esec "reaplicare 31b: $(livreaza_b | tail -3)"; ok "reaplicare 20261031b după revenirea ei"
 
 # ── revenire ──
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" 2>&1 || true)"; grep -q 'garda start invalida' <<<"$o" || esec "revenire nearmată: $o"; ok "refuz: revenire nearmată"

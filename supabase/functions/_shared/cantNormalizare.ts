@@ -1,7 +1,8 @@
 // TKT-0329 B (PR3): normalizarea deterministă a unui rând extras de model → observație pentru fn_ofertare_cb_obs_scrie (spec §4.1,
 // §5.1). Modelul propune; codul decide DN-ul, UM-ul, materialul, cheia obiectului, tipul lucrării / măsura și poziția (pozitieDovedita).
 import { dnDinText } from './dn.ts'
-import { type Conventie, pozitieDovedita, valoareInDocument } from './cantNumar.ts'
+import { type Conventie, pozitieDovedita, umNorm, valoareInDocument } from './cantNumar.ts'
+export { umNorm }
 
 const faraDiacritice = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '')
 
@@ -21,18 +22,6 @@ const text = (v: unknown, max: number): string | null => {
   if (v === null || v === undefined) return null
   const t = String(v).trim()
   return !t || /^(null|n\/a|nu e cazul|-|—)$/i.test(t) ? null : t.slice(0, max)
-}
-
-// ── UM ──
-export function umNorm(v: unknown): string | null {
-  const t = faraDiacritice(String(v ?? '')).toLowerCase().replace(/\s+/g, '').replace(/\.$/, '')
-  if (!t) return null
-  if (/^(m|ml|m\.l|mliniar|metri|metru|ml\.)$/.test(t)) return 'm'
-  if (/^(mc|m\.c|m3)$/.test(t)) return 'mc'
-  if (/^(mp|m\.p|m2)$/.test(t)) return 'mp'
-  if (/^(buc|buc\.|bucati|boc|boc\.)$/.test(t)) return 'buc'
-  if (/^(km)$/.test(t)) return 'km'
-  return /^[a-z0-9.%/]{1,10}$/.test(t) ? t : null
 }
 
 // ── material: listă închisă (CHECK ^[A-Z0-9]{2,12}$) ──
@@ -110,20 +99,21 @@ export async function normalizeazaRand(r: RandModel, ctx: ContextFelie): Promise
   const cm = cantitateModel(r.cantitate, ctx.conventie)
   const cantitate = cm === 'ambigua' ? null : cm
   if (cm === 'ambigua') note.push('cantitate_model_ambigua')
-  const poz = pozitieDovedita({ felie: ctx.felie, felie_de_la: ctx.felie_de_la, citat, cantitate, conventie: ctx.conventie })
+  const poz = pozitieDovedita({ felie: ctx.felie, felie_de_la: ctx.felie_de_la, citat, cantitate, um, conventie: ctx.conventie })
   // Dn-ul codului vine din SURSĂ (denumire + citat), nu din dn_text-ul modelului; dn_text e doar propunerea de comparat
   const dnCod = dnDinText(`${denumire} ${citat}`).dn
   const dnModelTxt = text(r.dn_text, 100)
-  const dnModel = dnModelTxt ? (dnDinText(dnModelTxt).dn.length === 1 ? dnDinText(dnModelTxt).dn[0] : null) : null
+  const dnModelToate = dnModelTxt ? dnDinText(dnModelTxt).dn : []
+  // mai multe Dn propuse de model = ambiguitate păstrată (review r1), nu „fără propunere”
+  const dnModel = dnModelToate.length === 1 ? dnModelToate[0] : null
   // dezacordul cu modelul sau mai multe Dn → ambiguu, fără corecție automată (inclusiv modelul vede un Dn pe care codul nu-l găsește)
-  const dnAmbiguu = dnCod.length > 1 || (dnModel !== null && (dnCod.length !== 1 || dnCod[0] !== dnModel))
+  const dnAmbiguu = dnCod.length > 1 || dnModelToate.length > 1 || (dnModel !== null && (dnCod.length !== 1 || dnCod[0] !== dnModel))
   if (dnAmbiguu) note.push('dn_ambiguu')
   const tm = tipSiMasura(denumire, r.tip_lucrare, r.masura, um)
   if (tm.dezacord) note.push('tip_masura_corectat_de_regula')
   const sdrM = /sdr\s*(\d{1,2}(?:[.,]\d)?)/i.exec(`${denumire} ${text(r.sdr, 20) ?? ''}`)
   const sdr = sdrM ? Number(sdrM[1].replace(',', '.')) : null
   const offsetPagina = poz.citat_interval ? poz.citat_interval[0] : null
-  const hashRand = await sha256Hex(JSON.stringify([poz.citat_interval, poz.cantitate_offset, denumire, cantitate, um, citat]))
   const obs: Record<string, unknown> = {
     lot_domeniu: ctx.lot_domeniu, lot_nr: ctx.lot_nr,
     rol_sursa: ctx.rol_sursa, rol_decis_de: ctx.rol_decis_de,
@@ -137,10 +127,13 @@ export async function normalizeazaRand(r: RandModel, ctx: ContextFelie): Promise
     material: materialNorm(r.material, denumire),
     dn_mm: dnCod, dn_model: dnModel, dn_ambiguu: dnAmbiguu, sdr,
     um_norm: um, cantitate, e_total: r.e_total === 1 || r.e_total === true, e_subtotal: r.e_subtotal === 1 || r.e_subtotal === true,
-    citat, hash_rand: hashRand,
+    citat,
   }
   if (!poz.pozitie_dovedita) note.push('pozitie:' + poz.motiv)
   // CHECK din BD: o poziție dovedită nu poate fi și ambiguă
   if (obs.pozitie_dovedita && obs.valoare_ambigua) obs.pozitie_dovedita = false
+  // identitatea rândului în felie = TOATĂ proiecția semantică normalizată (review r1): două interpretări ale aceleiași poziții care
+  // diferă prin obiect / Dn / material / tip / măsură / total / subtotal NU se contopesc la ON CONFLICT — ajung la comparator (conflict_sursa)
+  obs.hash_rand = await sha256Hex(JSON.stringify(Object.keys(obs).sort().map((k) => [k, obs[k]])))
   return { obs, note }
 }
