@@ -18,7 +18,7 @@ BEGIN
   END IF;
 END $pre$;
 
-DROP FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[]);
+DROP FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[]);
 
 CREATE OR REPLACE FUNCTION public.fn_ofertare_cb_decizie(p_document_id bigint, p_doc_sha256 text, p_rol text, p_sectiune text, p_decizie text, p_motiv text)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
@@ -72,7 +72,7 @@ END $f$;
 DO $post$
 BEGIN
   IF pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%'
-     OR to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NOT NULL
+     OR to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[])') IS NOT NULL
      OR pg_get_functiondef('public.fn_ofertare_cb_decizie(bigint,text,text,text,text,text)'::regprocedure) LIKE '%mutexul de grup%' THEN
     RAISE EXCEPTION '20261031b: postconditie revenire';
   END IF;

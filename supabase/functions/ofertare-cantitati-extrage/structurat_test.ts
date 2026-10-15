@@ -9,12 +9,13 @@ const ACUM = new Date(Date.now() + 3600e3).toISOString()
 const DOC = { id: 212, nume_original: 'Liste de cantitati — p01_pag1-104.pdf', tip: 'lista_cantitati', text_extras: TEXT_F3, seap_meta: null, lot_stare: 'comun' }
 
 type Opt = { cerere?: any; refuzRezerva?: string; aiEroare?: boolean; aiAruncă?: boolean; cache?: boolean; pesteRezervare?: boolean
-  inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; grupSchimbat?: boolean; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[] }
+  inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; grupSchimbat?: boolean; refuzGrup?: string; decizii?: any[]; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[] }
 function fals(opt: Opt = {}) {
   const apeluri: string[] = []
   let obsScrise: any[] = []
   const toateObs: any[][] = []
   let aiApeluri = 0
+  const argsGrup: any[] = []
   let nDoc = 0
   const extractori: string[] = []
   const deps: DepsStructurat = {
@@ -23,7 +24,9 @@ function fals(opt: Opt = {}) {
       apeluri.push(fn.replace('fn_ofertare_cb_', '') + (fn.endsWith('inchide') ? ':' + args.p_stare : ''))
       switch (fn) {
         case 'fn_ofertare_cb_extragere_incepe_grup':
+          argsGrup.push(args)
           if (opt.grupSchimbat) return { data: { refuz: 'grup_schimbat' }, error: null }
+          if (opt.refuzGrup) return { data: { refuz: opt.refuzGrup }, error: null }
           extractori.push(String(args.p_extractor_id))
           if (opt.cache) return { data: { ok: true, cache: true, extragere_id: 7 }, error: null }
           if (opt.inLucru !== undefined) return { data: { refuz: 'extragere_in_lucru' }, error: null }
@@ -40,7 +43,7 @@ function fals(opt: Opt = {}) {
     cerere: async () => opt.cerere === undefined
       ? { id: 5, licitatie_id: 15, scop: 'cant_extragere', stare: 'activa', valabil_pana: ACUM, lot_domeniu: 'toate', lot_nr: [] } : opt.cerere,
     documente: async () => { nDoc++; return nDoc > 1 && opt.docsDupa ? opt.docsDupa : (opt.docs ?? [DOC]) },
-    deciziiRol: async () => [],
+    deciziiRol: async () => opt.decizii ?? [],
     lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
     extragereInLucru: async () => (opt.inLucru ? { id: opt.inLucru, cerere_id: opt.inLucruCerere ?? 5 } : null),
     ultimaIncercare: async () => opt.ultima ?? null,
@@ -51,7 +54,7 @@ function fals(opt: Opt = {}) {
     },
     acum: () => 0,
   }
-  return { deps, apeluri, obs: () => obsScrise, prima: () => toateObs[0] || [], ai: () => aiApeluri, extractori }
+  return { deps, apeluri, obs: () => obsScrise, prima: () => toateObs[0] || [], ai: () => aiApeluri, extractori, argsGrup }
 }
 const RULEAZA = (f: ReturnType<typeof fals>) => extrageStructurat(f.deps, { licitatie_id: 15, cerere_id: 5 })
 
@@ -189,4 +192,17 @@ Deno.test('r3: grupul schimbat (verificat atomic în RPC-ul de grup) → tot gru
   const r = await RULEAZA(f)
   assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup']])
   assert(JSON.stringify(r.body.raport).includes('grup_schimbat'))
+})
+Deno.test('r6: deciziile de rol folosite trec în RPC-ul de grup; context_schimbat / grup_ocupat = sărit, fără apeluri de muncă', async () => {
+  const sha = await (await import('../_shared/cantNormalizare.ts')).sha256Hex(TEXT_F3)
+  const f = fals({ decizii: [{ id: 77, document_id: 212, doc_sha256: sha, rol: 'f3', sectiune: '*', decizie: 'rol_confirmat' },
+    { id: 78, document_id: 999, doc_sha256: sha, rol: 'atr', sectiune: '*', decizie: 'rol_confirmat' }] })
+  await RULEAZA(f)
+  assertEquals(f.argsGrup[0].p_decizii, [77])
+  for (const refuzGrup of ['context_schimbat', 'grup_ocupat']) {
+    const g = fals({ refuzGrup })
+    const r = await RULEAZA(g)
+    assertEquals([g.ai(), g.apeluri], [0, ['extragere_incepe_grup']])
+    assert(JSON.stringify(r.body.raport).includes(refuzGrup))
+  }
 })

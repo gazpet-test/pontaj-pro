@@ -24,7 +24,7 @@ const TIPURI_ELIGIBILE = ['lista_cantitati', 'cs_volum', 'fisa_date', 'alta', 'r
 export type Raspuns = { status: number; body: Record<string, unknown> }
 export type RezultatAI = { txt: string; inF: number; outF: number; eroare?: string; necunoscut?: boolean }
 export type Document = { id: number; nume_original: string; tip: string; text_extras: string | null; seap_meta: any; lot_stare: string | null }
-export type Decizie = { document_id: number; doc_sha256: string; rol: string; sectiune: string; decizie: string }
+export type Decizie = { id?: number; document_id: number; doc_sha256: string; rol: string; sectiune: string; decizie: string }
 export type DepsStructurat = {
   rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: any; error: any }>
   cerere: (id: number) => Promise<{ id: number; licitatie_id: number; scop: string; stare: string; valabil_pana: string; lot_domeniu: string; lot_nr: number[] } | null>
@@ -129,9 +129,11 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     // apoi, în aceeași tranzacție, predicatul de text valid + lotul cererii + cache. O extragere „in_lucru” rămasă se preia.
     const familie = String(d?.seap_meta?.inlocuieste_id ?? d.id)
     const ex = await deps.rpc('fn_ofertare_cb_extragere_incepe_grup', { p_cerere_id: c.id, p_document_id: d.id, p_sha256: d.sha, p_familie_id: familie,
-      p_extractor_id: extractorId, p_felii_total: felii.length, p_manifest: ctxConv.manifest })
+      p_extractor_id: extractorId, p_felii_total: felii.length, p_manifest: ctxConv.manifest,
+      p_decizii: dDoc.map((x) => Number(x.id)).filter((x) => Number.isFinite(x)) })
     if (ex.error) { raport.push({ document_id: d.id, eroare: 'extragere_incepe: ' + ex.error.message }); continue }
-    if (ex.data?.refuz === 'grup_schimbat') { raport.push({ document_id: d.id, sarit: 'grup_schimbat' }); continue }
+    // contextul s-a schimbat sub mutex (grup / decizii de rol) sau un document e ocupat de un producător: sărit, fail-closed, reîncercat
+    if (['grup_schimbat', 'context_schimbat', 'grup_ocupat'].includes(ex.data?.refuz)) { raport.push({ document_id: d.id, sarit: ex.data.refuz }); continue }
     if (ex.data?.cache) { raport.push({ document_id: d.id, cache: true, extragere_id: ex.data.extragere_id }); continue }
     let x: number
     if (ex.data?.refuz === 'extragere_in_lucru') {

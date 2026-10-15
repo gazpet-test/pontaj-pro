@@ -27,7 +27,7 @@ BEGIN
     RAISE EXCEPTION '20261031b: preconditie, obiectele 20261031a s-au schimbat dupa aplicare (amprenta difera)';
   END IF;
   IF pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%'
-     OR to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NOT NULL
+     OR to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[])') IS NOT NULL
      OR pg_get_functiondef('public.fn_ofertare_cb_decizie(bigint,text,text,text,text,text)'::regprocedure) LIKE '%mutexul de grup%' THEN
     RAISE EXCEPTION '20261031b: deja aplicata';
   END IF;
@@ -97,12 +97,14 @@ END $f$;
 -- PDF împărțit (p01 / p02 …) se calculează pe toate părțile valide ale grupului; extractorul o poartă în identitate. Aici, sub lock-uri
 -- FOR SHARE pe TOATE documentele grupului (în ordinea id-urilor), mulțimea curentă a părților (aceeași rădăcină de nume, tip eligibil,
 -- text nevid, ultima versiune, eligibile pe loturi, text valid) trebuie să fie EXACT manifestul dat (document:sha); altfel
--- {refuz: 'grup_schimbat'}. Apoi pornește extragerea în aceeași tranzacție (fn_ofertare_cb_extragere_incepe, neschimbată).
+-- {refuz: 'grup_schimbat'}; deciziile de rol active = exact cele date, altfel 'context_schimbat'; un document ocupat = 'grup_ocupat'.
+-- Apoi pornește extragerea în aceeași tranzacție (fn_ofertare_cb_extragere_incepe, neschimbată).
 CREATE FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(p_cerere_id bigint, p_document_id bigint, p_sha256 text, p_familie_id text,
-                                                          p_extractor_id text, p_felii_total integer, p_manifest text[])
+                                                          p_extractor_id text, p_felii_total integer, p_manifest text[],
+                                                          p_decizii bigint[])
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s'
 AS $f$
-DECLARE v_lic bigint; v_rad text; v_cur text[]; v_dat text[];
+DECLARE v_lic bigint; v_rad text; v_cur text[]; v_dat text[]; v_dec bigint[];
 BEGIN
   SELECT licitatie_id, regexp_replace(nume_original, '\s+—\s+p\d{2}_pag\d+-\d+\.pdf$', '', 'i') INTO v_lic, v_rad
     FROM public.ofertare_documente_atribuire WHERE id = p_document_id;
@@ -113,10 +115,16 @@ BEGIN
   -- (licitatie_loturi_seteaza = FOR UPDATE, documente_lot_seteaza = FOR SHARE pe licitație). Fantomele nu mai pot apărea între
   -- calculul mulțimii și pornire.
   PERFORM 1 FROM public.ofertare_licitatii WHERE id = v_lic FOR UPDATE;
-  -- lock-urile grupului, în ordine deterministă (producătorii țin FOR NO KEY UPDATE pe document cât scriu text + proveniență)
-  PERFORM 1 FROM public.ofertare_documente_atribuire d
-   WHERE d.licitatie_id = v_lic AND regexp_replace(d.nume_original, '\s+—\s+p\d{2}_pag\d+-\d+\.pdf$', '', 'i') = v_rad
-   ORDER BY d.id FOR SHARE;
+  -- lock-urile grupului, în ordine deterministă, FĂRĂ AȘTEPTARE (review r6): ținând licitația, pornirea nu așteaptă niciodată un document
+  -- blocat de un producător (UPDATE text_extras / text_scrie în curs) — ar putea închide un ciclu document → licitație. Ocupat =
+  -- {refuz: 'grup_ocupat'}, nimic pornit; rularea următoare reîncearcă.
+  BEGIN
+    PERFORM 1 FROM public.ofertare_documente_atribuire d
+     WHERE d.licitatie_id = v_lic AND regexp_replace(d.nume_original, '\s+—\s+p\d{2}_pag\d+-\d+\.pdf$', '', 'i') = v_rad
+     ORDER BY d.id FOR SHARE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RETURN jsonb_build_object('refuz', 'grup_ocupat');
+  END;
   SELECT coalesce(array_agg(x.id || ':' || x.sha ORDER BY x.id), '{}') INTO v_cur FROM (
     SELECT d.id, encode(sha256(convert_to(d.text_extras, 'UTF8')), 'hex') AS sha
       FROM public.ofertare_documente_atribuire d
@@ -131,16 +139,25 @@ BEGIN
   IF v_cur IS DISTINCT FROM v_dat OR NOT ((p_document_id || ':' || p_sha256) = ANY (v_cur)) THEN
     RETURN jsonb_build_object('refuz', 'grup_schimbat', 'curent', to_jsonb(v_cur));
   END IF;
+  -- review r6: și deciziile de ROL active pe acest document + sha (intră în identitatea extractorului și în secțiunile extrase) trebuie
+  -- să fie exact cele folosite de apelant; o decizie comisă între citire și pornire → {refuz: 'context_schimbat'}, nimic pornit.
+  -- (Deciziile se serializează cu pornirea prin licitația FOR SHARE din fn_ofertare_cb_decizie.)
+  SELECT coalesce(array_agg(x.id ORDER BY x.id), '{}') INTO v_dec FROM public.ofertare_cant_doc_decizii x
+   WHERE x.document_id = p_document_id AND x.doc_sha256 = p_sha256 AND x.decizie IN ('rol_confirmat', 'nu_e_sursa_cantitativa')
+     AND NOT EXISTS (SELECT 1 FROM public.ofertare_cant_doc_decizii r WHERE r.revoca_id = x.id);
+  IF v_dec IS DISTINCT FROM (SELECT coalesce(array_agg(y ORDER BY y), '{}') FROM unnest(coalesce(p_decizii, '{}')) y) THEN
+    RETURN jsonb_build_object('refuz', 'context_schimbat', 'decizii', to_jsonb(v_dec));
+  END IF;
   RETURN public.fn_ofertare_cb_extragere_incepe(p_cerere_id, p_document_id, p_sha256, p_familie_id, p_extractor_id, p_felii_total);
 END $f$;
-REVOKE ALL ON FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[]) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[]) TO service_role;
+REVOKE ALL ON FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[]) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[]) TO service_role;
 
 DO $post$
 DECLARE v_fp text;
 BEGIN
-  IF has_function_privilege('anon', 'public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])', 'EXECUTE') THEN
+  IF has_function_privilege('anon', 'public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[])', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[],bigint[])', 'EXECUTE') THEN
     RAISE EXCEPTION '20261031b: postconditie drepturi extragere_incepe_grup';
   END IF;
   IF has_function_privilege('anon', 'public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])', 'EXECUTE')
