@@ -426,8 +426,20 @@ asteapta "înghețarea după așteptarea setterului: moment după commit, netard
 
 # ── 20261031b: proveniența unui text care NU mai e cel curent e refuzată (producător întârziat) ──
 asteapta "text_scrie pe alt text decât text_extras-ul curent → text_depasit, nimic scris" "$(j "$(svc "SELECT public.fn_ofertare_cb_text_scrie(903, 'text vechi intarziat', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}')")" 'd.get("refuz")')|$(q "SELECT count(*) FROM public.ofertare_doc_texte_prov WHERE document_id=903")" "text_depasit|1"
+# ── 20261031b: pornirea extragerii cu contextul de GRUP verificat atomic (părțile p01 / p02 ale aceluiași PDF) ──
+q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip, text_extras, created_at) VALUES
+   (961, 102, 'Lista G — p01_pag1-10.pdf', 'lista_cantitati', 'grup p01 570.000 m', now() - interval '20 days'),
+   (962, 102, 'Lista G — p02_pag11-20.pdf', 'lista_cantitati', 'grup p02 1160.000 m', now() - interval '20 days')" >/dev/null
+svc "SELECT public.fn_ofertare_cb_text_scrie(961, 'grup p01 570.000 m', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}')" >/dev/null
+svc "SELECT public.fn_ofertare_cb_text_scrie(962, 'grup p02 1160.000 m', 'transcriere', 'ofertare-ingest-doc', 'integral', '{}')" >/dev/null
+G1=$(sha 'grup p01 570.000 m'); G2=$(sha 'grup p02 1160.000 m')
+asteapta "grup: manifest fără p02 (parte curentă validă lipsă) → grup_schimbat" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-x@d-y', 1, ARRAY['961:$G1'])")" 'd.get("refuz")')" grup_schimbat
+asteapta "grup: manifestul exact → extragerea pornește" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-x@d-y', 1, ARRAY['962:$G2','961:$G1'])")" 'd.get("ok")')" True
+q "UPDATE public.ofertare_documente_atribuire SET text_extras = 'grup p02 revizuit 1.160,00 m' WHERE id = 962" >/dev/null
+asteapta "grup: p02 schimbat după manifest (sha diferit, fără proveniență) → grup_schimbat" "$(j "$(svc "SELECT public.fn_ofertare_cb_extragere_incepe_grup($C1, 961, '$G1', '961', 'gpt-5-mini@p1@n2@f1@c-en-z@d-y', 1, ARRAY['961:$G1','962:$G2'])")" 'd.get("refuz")')" grup_schimbat
+asteapta "grup: RPC-ul doar pentru service_role" "$(q "SELECT has_function_privilege('authenticated','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])','EXECUTE')::text || has_function_privilege('service_role','public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])','EXECUTE')::text")" falsetrue
 o="$(revenire_b || true)"; [ -z "$(grep -i error <<<"$o")" ] || esec "revenire 31b: $o"
-asteapta "revenirea 20261031b: corpul din 20261031a la loc (fără text_depasit)" "$(q "SELECT pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%'")" f
+asteapta "revenirea 20261031b: corpul din 20261031a la loc (fără text_depasit), RPC-ul de grup scos" "$(q "SELECT (pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%')::text || (to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NULL)::text")" falsetrue
 livreaza_b >/dev/null || esec "reaplicare 31b: $(livreaza_b | tail -3)"; ok "reaplicare 20261031b după revenirea ei"
 
 # ── revenire ──

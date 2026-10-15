@@ -124,14 +124,14 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       }
     }
     const extractorId = await extractorCuContext(ctxConv.conventie, ctxConv.manifest, dDoc)
-    // review r2: contextul convenției trebuie să fie ÎNCĂ cel curent când începe partea — fiecare parte din manifestul grupului are același
-    // sha și e încă validă; altfel tot grupul e sărit (fail-closed), iar rularea următoare recalculează
-    if (!(await grupCurent(deps, p.licitatie_id, ctxConv.manifest))) { raport.push({ document_id: d.id, sarit: 'grup_schimbat' }); continue }
-    // 4. extragerea (predicatul de text valid + lotul cererii + cache verificate în RPC); una „in_lucru” rămasă se preia
+    // 4. extragerea, prin RPC-ul de GRUP (20261031b, review r3): sub lock-uri pe toate documentele grupului, mulțimea curentă a părților
+    // valide trebuie să fie EXACT manifestul convenției (altfel „grup_schimbat”, tot grupul sărit, rularea următoare recalculează);
+    // apoi, în aceeași tranzacție, predicatul de text valid + lotul cererii + cache. O extragere „in_lucru” rămasă se preia.
     const familie = String(d?.seap_meta?.inlocuieste_id ?? d.id)
-    const ex = await deps.rpc('fn_ofertare_cb_extragere_incepe', { p_cerere_id: c.id, p_document_id: d.id, p_sha256: d.sha, p_familie_id: familie,
-      p_extractor_id: extractorId, p_felii_total: felii.length })
+    const ex = await deps.rpc('fn_ofertare_cb_extragere_incepe_grup', { p_cerere_id: c.id, p_document_id: d.id, p_sha256: d.sha, p_familie_id: familie,
+      p_extractor_id: extractorId, p_felii_total: felii.length, p_manifest: ctxConv.manifest })
     if (ex.error) { raport.push({ document_id: d.id, eroare: 'extragere_incepe: ' + ex.error.message }); continue }
+    if (ex.data?.refuz === 'grup_schimbat') { raport.push({ document_id: d.id, sarit: 'grup_schimbat' }); continue }
     if (ex.data?.cache) { raport.push({ document_id: d.id, cache: true, extragere_id: ex.data.extragere_id }); continue }
     let x: number
     if (ex.data?.refuz === 'extragere_in_lucru') {
@@ -144,7 +144,9 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     } else if (ex.data?.refuz) { raport.push({ document_id: d.id, refuz: ex.data.refuz }); continue }
     else x = ex.data.extragere_id as number
 
-    let gata = 0, lasataInLucru = false
+    // conflict = altă rulare lucrează pe aceleași munci (rezervare concurentă, încercare în zbor cu rezervare): starea finală NU se
+    // decide din contorul local — extragerea rămâne în lucru și se preia (review r3)
+    let gata = 0, lasataInLucru = false, conflict = false
     for (const f of felii) {
       if (deps.acum() - t0 > buget) { oprit = 'buget_timp'; lasataInLucru = true; break }
       if (p.max_felii && feliiApelate >= p.max_felii) { oprit = 'max_felii'; lasataInLucru = true; break }
@@ -156,7 +158,10 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         // altfel (esuat / necunoscut / în zbor cu rezervare) așteaptă omul
         const u = await deps.ultimaIncercare(fi.data.munca_id)
         if (u?.stare === 'gata') { gata++; continue }
-        if (!(u && u.stare === 'in_zbor' && u.rezervare_id === null)) { raport.push({ document_id: d.id, felie: f.nr, asteapta_om: u?.stare ?? 'necunoscut' }); continue }
+        if (!(u && u.stare === 'in_zbor' && u.rezervare_id === null)) {
+          if (u?.stare === 'in_zbor') conflict = true
+          raport.push({ document_id: d.id, felie: f.nr, asteapta_om: u?.stare ?? 'necunoscut' }); continue
+        }
         felieId = u.id
       } else if (fi.error || fi.data?.refuz) { raport.push({ document_id: d.id, felie: f.nr, refuz: fi.data?.refuz ?? fi.error?.message }); continue }
       else felieId = fi.data.felie_id as number
@@ -165,6 +170,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       const rz = await deps.rpc('fn_ofertare_cb_rezerva', { p_felie_id: felieId, p_suma: sumaRezervata(prompt) })
       if (rz.data?.refuz === 'felie' || rz.data?.refuz === 'munca_deja_rezervata') {
         // review r2: felia a fost rezervată între timp de alt worker (preluare concurentă) — NU o închidem; e munca lui
+        conflict = true
         raport.push({ document_id: d.id, felie: f.nr, refuz_rezervare: rz.data.refuz, nota: 'rezervată concurent, lăsată worker-ului ei' })
         continue
       }
@@ -228,7 +234,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
     }
     // închiderea controlată: la oprirea pe timp / număr de felii extragerea rămâne în lucru (se preia la rularea următoare); altfel
     // gata (toate feliile) / partial / esuat — RPC-ul refuză cât timp există felii în zbor (atunci rămâne în lucru și se preia)
-    if (lasataInLucru) raport.push({ document_id: d.id, extragere_id: x, stare: 'in_lucru (se preia la rularea următoare)' })
+    if (lasataInLucru || conflict) raport.push({ document_id: d.id, extragere_id: x, stare: 'in_lucru (se preia la rularea următoare)' + (conflict ? ' — muncă concurentă' : '') })
     else {
       const st = gata === felii.length ? 'gata' : gata > 0 ? 'partial' : 'esuat'
       const ic = await deps.rpc('fn_ofertare_cb_extragere_inchide', { p_extragere_id: x, p_stare: st })
@@ -237,19 +243,6 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   }
   return { status: 200, body: { ok: true, mod: 'structurat', extractor: EXTRACTOR_ID, felii_apelate: feliiApelate,
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport } }
-}
-
-// părțile grupului sunt încă exact cele din manifest (același sha, text încă valid)
-async function grupCurent(deps: DepsStructurat, lic: number, manifest: string[]): Promise<boolean> {
-  const acum = new Map((await deps.documente(lic)).map((d) => [d.id, d.text_extras]))
-  for (const m of manifest) {
-    const [id, sha] = m.split(':')
-    const t = acum.get(Number(id))
-    if (!t || (await sha256Hex(t)) !== sha) return false
-    const v = await deps.rpc('fn_ofertare_cb_text_valid', { p_licitatie_id: lic, p_document_id: Number(id), p_sha256: sha })
-    if (v.error || !v.data || typeof v.data !== 'object' || !v.data.tip) return false
-  }
-  return true
 }
 
 export function parseRaspuns(txt: string): unknown[][] | null {

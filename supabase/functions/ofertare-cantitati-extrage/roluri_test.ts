@@ -48,3 +48,9 @@ Deno.test('r2: antetul guvernează doar de la pagina lui; pagina ATR dinainte r�
   const m = '⟦PAGINA 1⟧\nMemoriu tehnic\n⟦PAGINA 2⟧\ntext\n⟦PAGINA 3⟧\nFormularul F3\n003 X M 10.000\n'
   assertEquals(sectiuniRol(m, 'Memoriu tehnic', 'alta').map((x) => [x.rol, x.pagini]), [['memoriu', [1, 2]], ['f3', [3, 3]]])
 })
+
+Deno.test('r3: memoriu → F3 → pagină ATR explicită: ATR-ul de după antet nu moștenește F3', () => {
+  const t = '⟦PAGINA 1⟧\nMemoriu tehnic\n⟦PAGINA 2⟧\nFormularul F3\n003 X M 10.000\n⟦PAGINA 3⟧\nAVIZ TEHNIC DE RACORDARE\nstr. A 52 m\n⟦PAGINA 4⟧\n003 Y M 20.000\n'
+  assertEquals(sectiuniRol(t, 'Memoriu tehnic', 'alta').map((x) => [x.rol, x.decis_de, x.pagini]),
+    [['memoriu', 'titlu', [1, 1]], ['f3', 'antet', [2, 2]], ['atr', 'marcaj', [3, 3]], ['f3', 'antet', [4, 4]]])
+})

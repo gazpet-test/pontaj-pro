@@ -78,7 +78,18 @@ export function sectiuniRol(text: string, nume: string, tip: string): SectiuneRo
     }
   }
   if (mAntet) {
-    for (const s of sectiuniLista(t.slice(k))) pe.push({ de: k + s.de, pana: k + s.pana, nr: null, rol: ROL_ANTET[s.tip], decis_de: 'antet' })
+    // review r3: în interiorul unei secțiuni de formular, o pagină FĂRĂ antet propriu dar cu marcaj ATR explicit e ATR (ex. memoriu →
+    // F3 → anexa ATR). O pagină fără niciun semnal rămâne a formularului (continuarea lui) — o pagină de memoriu reluată fără marcaj nu se
+    // poate distinge determinist și se corectează prin decizia omului pe secțiune.
+    const RE_ANTET_PAG = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz/i
+    for (const s of sectiuniLista(t.slice(k))) {
+      const de = k + s.de, pana = k + s.pana
+      for (const pg of pagini(t.slice(de, pana))) {
+        const txt = t.slice(de + pg.de, de + pg.pana)
+        const atr = !RE_ANTET_PAG.test(txt) && paginaAreMarcajAtr(txt)
+        pe.push({ de: de + pg.de, pana: de + pg.pana, nr: pg.nr, rol: atr ? 'atr' : ROL_ANTET[s.tip], decis_de: atr ? 'marcaj' : 'antet' })
+      }
+    }
   }
   // comasare: pagini consecutive cu același rol și aceeași sursă a deciziei
   const out: SectiuneRol[] = []

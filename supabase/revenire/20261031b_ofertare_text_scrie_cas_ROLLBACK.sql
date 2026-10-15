@@ -1,4 +1,4 @@
--- REVENIRE 20261031b — pune la loc corpul fn_ofertare_cb_text_scrie din 20261031a (fără verificarea textului curent).
+-- REVENIRE 20261031b — pune la loc corpul fn_ofertare_cb_text_scrie din 20261031a (fără verificarea textului curent) și scoate fn_ofertare_cb_extragere_incepe_grup.
 -- Nu atinge date. Refuză dacă obiectele s-au schimbat după aplicare (amprenta din comentariu). DOAR la cererea lui Răzvan.
 -- Armare per tranzacție:
 --   SELECT set_config('gazpet.revenire_20261031b', 'TEXT_SCRIE_CAS_REVENIRE:' || txid_current(), true);
@@ -17,6 +17,8 @@ BEGIN
     RAISE EXCEPTION '20261031b: preconditie, obiectele s-au schimbat dupa aplicare (amprenta difera) - revenire manuala, cu review';
   END IF;
 END $pre$;
+
+DROP FUNCTION public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[]);
 
 CREATE OR REPLACE FUNCTION public.fn_ofertare_cb_text_scrie(p_document_id bigint, p_text text, p_origine text, p_producator text,
                                                             p_completitudine text, p_pagini_necitite integer[])
@@ -37,7 +39,8 @@ END $f$;
 
 DO $post$
 BEGIN
-  IF pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%' THEN
+  IF pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%'
+     OR to_regprocedure('public.fn_ofertare_cb_extragere_incepe_grup(bigint,bigint,text,text,text,integer,text[])') IS NOT NULL THEN
     RAISE EXCEPTION '20261031b: postconditie revenire';
   END IF;
   EXECUTE format('COMMENT ON TABLE public.ofertare_analiza_versiuni IS %L', 'TKT-0329 B (20261031a). Imuabil. amprenta=' || public.fn_ofertare_cb_amprenta());

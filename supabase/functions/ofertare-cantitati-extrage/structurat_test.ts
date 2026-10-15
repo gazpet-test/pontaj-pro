@@ -9,7 +9,7 @@ const ACUM = new Date(Date.now() + 3600e3).toISOString()
 const DOC = { id: 212, nume_original: 'Liste de cantitati — p01_pag1-104.pdf', tip: 'lista_cantitati', text_extras: TEXT_F3, seap_meta: null, lot_stare: 'comun' }
 
 type Opt = { cerere?: any; refuzRezerva?: string; aiEroare?: boolean; aiAruncă?: boolean; cache?: boolean; pesteRezervare?: boolean
-  inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[] }
+  inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; grupSchimbat?: boolean; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[] }
 function fals(opt: Opt = {}) {
   const apeluri: string[] = []
   let obsScrise: any[] = []
@@ -22,7 +22,8 @@ function fals(opt: Opt = {}) {
       if (fn === 'fn_ofertare_cb_text_valid') return { data: (opt.nevalide || []).includes(Number(args.p_document_id)) ? {} : { tip: 'prov', id: 1 }, error: null }
       apeluri.push(fn.replace('fn_ofertare_cb_', '') + (fn.endsWith('inchide') ? ':' + args.p_stare : ''))
       switch (fn) {
-        case 'fn_ofertare_cb_extragere_incepe':
+        case 'fn_ofertare_cb_extragere_incepe_grup':
+          if (opt.grupSchimbat) return { data: { refuz: 'grup_schimbat' }, error: null }
           extractori.push(String(args.p_extractor_id))
           if (opt.cache) return { data: { ok: true, cache: true, extragere_id: 7 }, error: null }
           if (opt.inLucru !== undefined) return { data: { refuz: 'extragere_in_lucru' }, error: null }
@@ -68,7 +69,7 @@ Deno.test('drumul normal: extragere → felie → rezervare → apel → deconta
   const f = fals()
   const r = await RULEAZA(f)
   assertEquals(r.status, 200)
-  assertEquals(f.apeluri, ['extragere_incepe', 'felie_incepe', 'rezerva', 'deconteaza', 'obs_scrie', 'felie_inchide:gata', 'extragere_inchide:gata'])
+  assertEquals(f.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'deconteaza', 'obs_scrie', 'felie_inchide:gata', 'extragere_inchide:gata'])
   const o = f.obs()[0]
   assertEquals([o.rol_sursa, o.rol_decis_de, o.cantitate, o.pozitie_dovedita, o.dn_mm, o.um_norm], ['f3', 'antet', 1160, true, [90], 'm'])
   assertEquals(o.cantitate_offset, TEXT_F3.indexOf('1160.000'))
@@ -78,14 +79,14 @@ Deno.test('drumul normal: extragere → felie → rezervare → apel → deconta
 Deno.test('cache: a doua extragere pe aceeași versiune = 0 apeluri AI', async () => {
   const f = fals({ cache: true })
   await RULEAZA(f)
-  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe']])
+  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup']])
 })
 
 Deno.test('plafonul refuză ÎNAINTEA apelului: felia „esuat”, oprire, extragerea închisă controlat (esuat)', async () => {
   const f = fals({ refuzRezerva: 'plafon' })
   const r = await RULEAZA(f)
   assertEquals(f.ai(), 0)
-  assertEquals(f.apeluri, ['extragere_incepe', 'felie_incepe', 'rezerva', 'felie_inchide:esuat', 'extragere_inchide:esuat'])
+  assertEquals(f.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'felie_inchide:esuat', 'extragere_inchide:esuat'])
   assertEquals(r.body.oprit, 'rezervare:plafon')
 })
 
@@ -93,14 +94,14 @@ Deno.test('eroare SAU excepție la apel → rezervarea „necunoscuta” + felia
   for (const o of [{ aiEroare: true }, { aiAruncă: true }]) {
     const f = fals(o)
     await RULEAZA(f)
-    assertEquals(f.apeluri, ['extragere_incepe', 'felie_incepe', 'rezerva', 'rezervare_necunoscuta', 'felie_inchide:necunoscut', 'extragere_inchide:esuat'])
+    assertEquals(f.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'rezervare_necunoscuta', 'felie_inchide:necunoscut', 'extragere_inchide:esuat'])
   }
 })
 
 Deno.test('un rând nenormalizabil → felia „esuat”, fără observații (nu „gata” cu un candidat pierdut)', async () => {
   const f = fals({ raspuns: JSON.stringify({ r: [RAND, ['trunchiat']] }) })
   await RULEAZA(f)
-  assertEquals(f.apeluri, ['extragere_incepe', 'felie_incepe', 'rezerva', 'deconteaza', 'felie_inchide:esuat', 'extragere_inchide:esuat'])
+  assertEquals(f.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'deconteaza', 'felie_inchide:esuat', 'extragere_inchide:esuat'])
   assertEquals(f.obs(), [])
 })
 
@@ -114,10 +115,10 @@ Deno.test('cost peste rezervare → oprire după felie; extragerea închisă con
 Deno.test('preluarea unei extrageri rămase în lucru: felie gata = numărată; reluare autorizată (în zbor fără rezervare) = continuată', async () => {
   const a = fals({ inLucru: 41, feliiExistente: true, ultima: { id: 99, stare: 'gata', rezervare_id: 1 } })
   await RULEAZA(a)
-  assertEquals([a.ai(), a.apeluri], [0, ['extragere_incepe', 'felie_incepe', 'extragere_inchide:gata']])
+  assertEquals([a.ai(), a.apeluri], [0, ['extragere_incepe_grup', 'felie_incepe', 'extragere_inchide:gata']])
   const b = fals({ inLucru: 41, feliiExistente: true, ultima: { id: 98, stare: 'in_zbor', rezervare_id: null } })
   await RULEAZA(b)
-  assertEquals(b.apeluri, ['extragere_incepe', 'felie_incepe', 'rezerva', 'deconteaza', 'obs_scrie', 'felie_inchide:gata', 'extragere_inchide:gata'])
+  assertEquals(b.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'deconteaza', 'obs_scrie', 'felie_inchide:gata', 'extragere_inchide:gata'])
   const c = fals({ inLucru: 41, feliiExistente: true, ultima: { id: 97, stare: 'necunoscut', rezervare_id: 3 } })
   const rc = await RULEAZA(c)
   assertEquals(c.ai(), 0)
@@ -170,7 +171,7 @@ Deno.test('părțile aceluiași PDF au aceeași rădăcină; deciziile umane pe 
 Deno.test('r2: preluarea doar pe ACEEAȘI cerere; pe altă cerere = refuz, fără apeluri', async () => {
   const f = fals({ inLucru: 41, inLucruCerere: 4, feliiExistente: true, ultima: { id: 98, stare: 'in_zbor', rezervare_id: null } })
   const r = await RULEAZA(f)
-  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe']])
+  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup']])
   assert(JSON.stringify(r.body.raport).includes('in_lucru_pe_alta_cerere'))
 })
 Deno.test('r2: rezervarea refuzată „felie” (alt worker a rezervat-o între timp) NU închide felia', async () => {
@@ -178,10 +179,12 @@ Deno.test('r2: rezervarea refuzată „felie” (alt worker a rezervat-o între 
   await RULEAZA(f)
   assertEquals(f.ai(), 0)
   assert(!f.apeluri.includes('felie_inchide:esuat'))
+  // r3: conflict de muncă → extragerea NU se închide din contorul local (alt worker poate termina felia)
+  assert(!f.apeluri.some((x) => x.startsWith('extragere_inchide')))
 })
-Deno.test('r2: o parte a grupului schimbată după calculul convenției → tot grupul sărit (fail-closed), fără apeluri', async () => {
-  const f = fals({ docsDupa: [{ ...DOC, text_extras: TEXT_F3 + 'revizie\n' }] })
+Deno.test('r3: grupul schimbat (verificat atomic în RPC-ul de grup) → tot grupul sărit, fără apeluri de muncă', async () => {
+  const f = fals({ grupSchimbat: true })
   const r = await RULEAZA(f)
-  assertEquals([f.ai(), f.apeluri], [0, []])
+  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup']])
   assert(JSON.stringify(r.body.raport).includes('grup_schimbat'))
 })
