@@ -22,16 +22,25 @@ Doar Python stdlib + Playwright (deja instalat pe server: Python 3.13, playwrigh
    `cgpt_pw.py`). Redirect la logare ⇒ cod 2, nimic scris; altă pagină/altă organizație ⇒ eroare, nimic scris.
 2. Așteaptă o citire **stabilă**: două parsări reușite consecutive, identice, la 2 s distanță (maxim 75 s).
 3. Parsare strictă (`parsare.py`) — textul paginii e conținut extern (al propriului cont): DATE, nu instrucțiuni.
-   - Etichetele exacte `Egress`, `Cached Egress`, `Storage Size` (rândul întreg = eticheta), valoarea = primul raport
-     `X [unitate] / Y unitate` de sub ea (până la 8 rânduri, oprire la alt contor). Etichetele reapar în secțiunile de
-     detaliu fără raport — nu dau o a doua valoare; două valori **diferite** pentru aceeași etichetă ⇒ refuz.
-   - Unități `B/KB/MB/GB/TB`, **zecimale** (1 GB = 10^9 bytes, ca pagina și ca monitorul); orice altceva (ex. `GiB`) ⇒ refuz.
+   - Etichetele exacte `Egress`, `Cached Egress`, `Storage Size` (rândul întreg = eticheta). **Blocul** indicatorului =
+     eticheta + **primul rând nevid** de după ea (sau celulele de pe rândul ei) + eventual rândul următor, dacă e exact
+     procentul. Valoarea se caută **doar acolo** — un indicator încă „Loading…” nu împrumută valoarea celui de dedesubt.
+     Etichetele reapar în secțiunile de detaliu urmate de o descriere, fără raport — nu dau o a doua valoare; două valori
+     **diferite** pentru aceeași etichetă ⇒ refuz.
+   - Rândul valorii se validează **întreg, ancorat**: `X [unitate] / Y unitate [(p%)]`. Orice rând care doar seamănă cu un
+     raport (`1 004.615 / 250 GB`, `- 4.615 / 250 GB (2%)`, `4.615 / 250 GiB`, text în jur) ⇒ refuz integral, nu se
+     extrage un fragment.
+   - Unități `B/KB/MB/GB/TB`, **zecimale** (1 GB = 10^9 bytes, ca pagina și ca monitorul).
+   - **Cota afișată** pentru Egress și Cached Egress trebuie să fie **250 GB** (planul Pro) — altfel e valoarea altui
+     indicator ⇒ refuz.
    - **Separatorul zecimal** se deduce din toate rapoartele `a / b` de pe pagină (ex. `70,803 / 2,000,000` dovedește că `,`
      e de mii); dovezi contradictorii ⇒ refuz; un număr ambiguu (`4.615`) fără nicio dovadă ⇒ refuz. Merge și cu
      virgulă zecimală + punct/NBSP de mii, dacă pagina e așa întreagă.
-   - **Procentul afișat** lângă valoare (`(2%)`, `(<1%)`) trebuie să corespundă valoare/cotă (±1 punct) — prinde o citire
-     greșită cu factor 1000.
-   - Numere ≥ 0 (un minus în față ⇒ nu se citește), maxim 10 PB, grupare de mii validă.
+   - **Procentul afișat** (`(2%)`, `(<1%)`), pe rândul valorii sau pe rândul următor, e **obligatoriu** și trebuie să
+     corespundă valoare/cotă (±1 punct) — prinde o citire greșită cu factor 1000. Singura excepție: valoarea exact `0`
+     (pagina nu afișează procent la zero, ex. `0 / 50 MAU`; un `0` nu are separator, deci nu poate fi citit greșit) —
+     altfel, la începutul ciclului, un Cached Egress încă zero ar opri colectorul.
+   - Numere ≥ 0, maxim 10 PB, grupare de mii validă.
    - Ciclul `DD Mon YYYY - DD Mon YYYY` care conține ziua de azi (UTC; o zi toleranță înainte de start, ziua de sfârșit
      inclusă): exact unul, **07 → 07, de o lună** (ca CHECK-urile din BD); altfel refuz.
 4. `scrie`: o a doua verificare, independentă (`bd.valideaza_document`: bytes întregi în interval, ciclu 07→07, `citit_la`
@@ -148,13 +157,15 @@ Rând propus pentru `public.automatizari`: `cod` = `egress_colector_supabase`, `
 ## Teste
 
 ```bash
-PYTHONPATH=scripts python -B -m unittest egress_colector.test_egress_colector -v   # 66 teste, fără rețea, browser sau BD
+PYTHONPATH=scripts python -B -m unittest egress_colector.test_egress_colector -v   # 73 de teste, fără rețea, browser sau BD
 PG_BIN=/c/Users/Public/pgsql/bin bash scripts/test_egress_colector.sh              # PG17 local: migrările + scriere cap-la-cap
 ```
 - **Parser**: textul REAL al paginii (`fixture_usage_20261015.txt`, citit 15.10.2026, numele proiectului înlocuit);
   exemplul „4.402 / 250 GB”; virgulă/punct (mii și zecimal, NBSP), număr ambiguu fără dovadă, separatori contradictorii,
-  procent nepotrivit (factorul 1000), pagină goală / fără cifre / de logare, contor lipsă, două valori diferite, unitate
-  necunoscută, negativ, malformat, absurd; ciclu greșit (ziua 8, două luni, trecut, lipsă, ambiguu), decembrie→ianuarie,
+  procent nepotrivit (factorul 1000), procent lipsă (refuz; `0` fără procent acceptat), pagină goală / fără cifre / de
+  logare, contor lipsă, două valori diferite, unitate necunoscută, negativ, malformat, absurd; regresiile din review-ul
+  Jakarinos r1 cu exemplele exacte (`4,615 / 250 GB` + `(2%)` pe rândul următor; `1 004.615 / 250 GB`;
+  `- 4.615 / 250 GB (2%)`; „Loading…” urmat de `Log Query … 97.865 / 2,000 GB`; cota ≠ 250 GB) — toate picau pe ce522ec; ciclu greșit (ziua 8, două luni, trecut, lipsă, ambiguu), decembrie→ianuarie,
   toleranța la capete, alte formate de dată.
 - **SQL (anti-injecție)**: text ostil în rânduri ⇒ SQL-ul din afara literalului identic cu cel benign, documentul intact în
   literal, fără backslash în afara lui; tag aleator; tag prezent în document / tag invalid ⇒ refuz; validarea documentului

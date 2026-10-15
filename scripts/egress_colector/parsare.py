@@ -7,15 +7,26 @@ Textul paginii e continut extern (al propriului cont): DATE, nu instructiuni. Se
   ciclul          „07 Oct 2026 - 07 Nov 2026” → ciclu_start = 2026-10-07, ciclu_sfarsit = 2026-11-07 (EXCLUSIV)
 Unitate: GB ZECIMAL (1 GB = 10^9 bytes), ca pagina si ca monitorul (docs/MONITOR_EGRESS.md, sectiunea C).
 
-Structura reala (citita 15.10.2026, „Usage Summary”): eticheta pe un rand, valoarea „4.615 / 250 GB\xa0\xa0(2%)” pe randul
-urmator; aceleasi etichete reapar mai jos in sectiunile de detaliu, fara raport „a / b” (doar „Used in period 4.62 GB”).
+Structura reala (citita 15.10.2026, „Usage Summary”): eticheta pe un rand, valoarea „4.615 / 250 GB  (2%)” (doua NBSP
+inainte de procent) pe randul urmator; aceleasi etichete reapar mai jos in sectiunile de detaliu, urmate de o descriere,
+fara raport „a / b” (acolo e doar „Used in period 4.62 GB”).
+
+Blocul unui indicator (review Jakarinos r1, PR #713) = eticheta + PRIMUL rand nevid de dupa ea (sau celulele de pe randul
+ei, cazul tabel) + eventual randul urmator, daca el e exact procentul. Valoarea se cauta DOAR acolo: un indicator inca
+„Loading…” nu imprumuta valoarea indicatorului de dedesubt. Randul valorii se valideaza INTREG, ancorat:
+„X [unitate] / Y unitate [(p%)]”; orice rand care doar seamana cu un raport („1 004.615 / 250 GB”, „- 4.615 / 250 GB”,
+„4.615 / 250 GiB”) ⇒ refuz integral, nu se extrage un fragment.
 
 Garzi impotriva unei citiri gresite cu un factor de 1000 (punct de mii vs punct zecimal):
   * separatorul zecimal al paginii se deduce din TOATE rapoartele „a / b” de pe ea (ex. „2,000,000” ⇒ ',' e de mii) si
     dovezile contradictorii opresc citirea; un numar ambiguu („4.615”) fara nicio dovada pe pagina ⇒ eroare;
-  * procentul afisat langa valoare („(2%)”, „(<1%)”) trebuie sa se potriveasca cu valoare / cota.
-Orice abatere (eticheta lipsa sau cu doua valori diferite, numar ambiguu/malformat/negativ, unitate necunoscuta, procent
-nepotrivit, ciclu care nu e 07→07 de o luna sau nu contine ziua curenta) ⇒ EroareParsare; nimic nu ajunge in BD.
+  * procentul afisat („(2%)”, „(<1%)”), pe randul valorii sau pe randul urmator, e OBLIGATORIU si trebuie sa corespunda
+    valoare / cota (±1 punct). Singura exceptie: valoarea exact „0” (pagina nu afiseaza procent la zero, ex. „0 / 50 MAU”;
+    un 0 nu are separator, deci nu poate fi citit gresit);
+  * cota afisata pentru Egress si Cached Egress trebuie sa fie 250 GB (planul Pro).
+Orice abatere (eticheta lipsa sau cu doua valori diferite, rand de valoare in format nesuportat, numar ambiguu / malformat /
+negativ, unitate necunoscuta, procent lipsa sau nepotrivit, cota neasteptata, ciclu care nu e 07→07 de o luna sau nu contine
+ziua curenta) ⇒ EroareParsare; nimic nu ajunge in BD.
 """
 import re
 from dataclasses import dataclass, field
@@ -25,17 +36,19 @@ from decimal import Decimal, ROUND_HALF_UP
 ETICHETE = (('egress', 'Egress'), ('cached_egress', 'Cached Egress'), ('storage_size', 'Storage Size'))
 UNITATI = {'B': 1, 'KB': 10 ** 3, 'MB': 10 ** 6, 'GB': 10 ** 9, 'TB': 10 ** 12}
 MAX_BYTES = 10 ** 16          # 10 PB: peste asta e o citire gresita, nu trafic real (si incape sigur in bigint)
-FEREASTRA = 8                 # cate randuri nevide dupa eticheta se cauta valoarea
 MAX_LINIE = 200               # randurile pastrate in raspuns_brut se taie la atat
 TOLERANTA_PROCENT = Decimal(1)
+COTE_ASTEPTATE = {'Egress': 250 * 10 ** 9, 'Cached Egress': 250 * 10 ** 9}   # plan Pro, GB zecimali
 
-_NBSP = '  '
-_SEP_RE = re.compile(r'[.,  ]')
-NUM = r'\d(?:[\d.,  ]*\d)?'
+_NBSP = '\u00a0\u202f'
+_SEP_RE = re.compile(r'[.,\u00a0\u202f]')
+NUM = r'\d(?:[\d.,\u00a0\u202f]*\d)?'
 UNIT = r'(?:[KMGT]?B)'
-_INAINTE = r'(?<![\w.,\-−])'      # nu din mijlocul altui numar si nu dupa minus (valorile negative nu se citesc)
-RAPORT_RE = re.compile(rf'{_INAINTE}(?P<v>{NUM})\s*(?P<uv>{UNIT})?\s*/\s*(?P<q>{NUM})\s*(?P<uq>{UNIT})(?!\w)')
-PROCENT_RE = re.compile(rf'\s*\(\s*(?P<lt><)?\s*(?P<p>{NUM})\s*%\s*\)')
+_PROCENT = rf'\(\s*(?P<lt><)?\s*(?P<p>{NUM})\s*%\s*\)'
+# randul valorii, INTREG (fullmatch): „4.615 / 250 GB  (2%)”, sau fara procent (atunci procentul e pe randul urmator)
+VALOARE_RE = re.compile(rf'\s*(?P<v>{NUM})\s*(?P<uv>{UNIT})?\s*/\s*(?P<q>{NUM})\s*(?P<uq>{UNIT})(?:\s*{_PROCENT})?\s*')
+PROCENT_RE = re.compile(rf'\s*{_PROCENT}\s*')                      # randul procentului, INTREG
+SEAMANA_RAPORT_RE = re.compile(r'\d[^/\n]{0,20}/\s*[-\u2212]?\d')     # „cifra … / cifra”: daca nu e VALOARE_RE ⇒ refuz
 # orice raport „numar [unitate] / numar” de pe pagina — doar ca dovada a conventiei de separatori
 RAPORT_LARG_RE = re.compile(rf'(?<![\w.,/])(?P<v>{NUM})\s*[A-Za-z]{{0,5}}\s*/\s*(?P<q>{NUM})(?!\d)')
 
@@ -44,7 +57,7 @@ LUNI = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6, 'jul': 7, 'a
         'september': 9, 'october': 10, 'november': 11, 'december': 12}
 _D1 = r'(?P<{p}z>\d{{1,2}})\s+(?P<{p}l>[A-Za-z]{{3,9}})\.?,?\s+(?P<{p}a>\d{{4}})'           # 07 Oct 2026
 _D2 = r'(?P<{p}l>[A-Za-z]{{3,9}})\.?\s+(?P<{p}z>\d{{1,2}}),?\s+(?P<{p}a>\d{{4}})'           # Oct 07, 2026
-INTERVAL_RE = [re.compile(rf'(?<!\d){d.format(p="s")}\s*(?:-|–|—|to)\s*{d.format(p="e")}(?!\d)')
+INTERVAL_RE = [re.compile(rf'(?<!\d){d.format(p="s")}\s*(?:-|\u2013|\u2014|to)\s*{d.format(p="e")}(?!\d)')
                for d in (_D1, _D2)]
 
 
@@ -69,8 +82,8 @@ class Citire:
 
 
 def _norm(s):
-    """Spatiile (inclusiv NBSP) comprimate — pentru comparat etichete si pentru textul pastrat."""
-    return ' '.join(s.replace(' ', ' ').replace(' ', ' ').split())
+    """Spatiile (inclusiv NBSP/NNBSP) comprimate — pentru comparat etichete si pentru textul pastrat."""
+    return ' '.join(s.replace('\u00a0', ' ').replace('\u202f', ' ').split())
 
 
 def _taie(s):
@@ -168,44 +181,62 @@ def _celule(linie):
     return [c for c in (x.strip() for x in linie.split('\t')) if c]
 
 
+def _valoare(sir, urmator, eticheta):
+    """sir = textul valorii (primul rand nevid de dupa eticheta, sau celulele de pe randul ei); urmator = randul nevid de
+    dupa el (procentul, daca nu e pe acelasi rand). Intoarce (match, procent | None, text) sau None daca sir nu e o
+    valoare (ex. „Loading…”, descrierea din sectiunile de detaliu). Un rand care seamana cu un raport dar nu e exact
+    „X [u] / Y u [(p%)]” ⇒ EroareParsare (nu se extrage un fragment)."""
+    m = VALOARE_RE.fullmatch(sir)
+    if not m:
+        if SEAMANA_RAPORT_RE.search(sir):
+            raise EroareParsare(f'„{eticheta}”: format de valoare nesuportat {_taie(sir)!r} — refuz integral')
+        return None
+    if m.group('p') is not None:
+        return m, (m.group('lt'), m.group('p'), _norm(sir[m.end('uq'):])), _taie(sir)
+    mp = PROCENT_RE.fullmatch(urmator) if urmator is not None else None
+    if mp:
+        return m, (mp.group('lt'), mp.group('p'), _norm(urmator)), _taie(sir + ' ' + urmator)
+    return m, None, _taie(sir)
+
+
 def gaseste_raport(linii, eticheta):
-    """Rapoartele „X [u] / Y u” de dupa randurile care SUNT eticheta (prima celula = eticheta exacta): pe acelasi rand
-    (celulele urmatoare, cazul tabel) sau pe primul rand cu raport din urmatoarele FEREASTRA, oprindu-se la alt contor.
-    Intoarce [(match, sirul_cautat, rand)]."""
+    """linii = randurile NEVIDE ale paginii. Pentru fiecare rand care ESTE eticheta (prima celula = eticheta exacta),
+    valoarea din blocul ei: celulele de pe acelasi rand (cazul tabel) sau primul rand nevid de dupa ea, + procentul (pe
+    acelasi rand sau pe urmatorul). Nimic mai departe: blocul se termina acolo, deci nu se poate lua valoarea altui
+    indicator. Intoarce [(match, procent | None, text)]."""
     gasite, et = [], eticheta.casefold()
-    alte = {e.casefold() for _, e in ETICHETE}
     for i, linie in enumerate(linii):
         cel = _celule(linie)
         if not cel or _norm(cel[0]).casefold() != et:
             continue
-        rest = '\t'.join(cel[1:])
-        m = RAPORT_RE.search(rest)
-        if m:
-            gasite.append((m, rest, linie))
+        if len(cel) > 1:
+            sir, urmator = '\t'.join(cel[1:]), (linii[i + 1] if i + 1 < len(linii) else None)
+        elif i + 1 < len(linii):
+            sir, urmator = linii[i + 1], (linii[i + 2] if i + 2 < len(linii) else None)
+        else:
             continue
-        for linie2 in linii[i + 1:i + 1 + FEREASTRA]:
-            c2 = _celule(linie2)
-            if c2 and _norm(c2[0]).casefold() in alte:
-                break                                   # a inceput alt contor
-            m = RAPORT_RE.search(linie2)
-            if m:
-                gasite.append((m, linie2, linie2))
-                break
+        v = _valoare(sir, urmator, eticheta)
+        if v:
+            gasite.append(v)
     return gasite
 
 
-def verifica_procent(sir, dupa, b, cota, eticheta, zecimal):
-    """Procentul afisat imediat dupa raport, daca exista, trebuie sa corespunda (±1 punct; „<1%” ⇒ sub 1%)."""
-    m = PROCENT_RE.match(sir, dupa)
-    if not m:
-        return None
-    p = numar(m.group('p'), zecimal)
+def verifica_procent(procent, tok_v, b, cota, eticheta, zecimal):
+    """Procentul afisat e OBLIGATORIU (exceptie: valoarea exact „0”, unde pagina nu-l afiseaza) si trebuie sa corespunda
+    valoare / cota (±1 punct; „<1%” ⇒ sub 1%)."""
+    if procent is None:
+        if tok_v == '0':
+            return None
+        raise EroareParsare(f'„{eticheta}”: lipseste procentul afisat langa valoare — fara el nu se poate verifica '
+                            f'separatorul (factor 1000); refuz')
+    lt, p_tok, text = procent
+    p = numar(p_tok, zecimal)
     real = Decimal(b) * 100 / Decimal(cota)
-    bun = real <= p if m.group('lt') else abs(real - p) <= TOLERANTA_PROCENT
+    bun = real <= p if lt else abs(real - p) <= TOLERANTA_PROCENT
     if not bun:
-        raise EroareParsare(f'„{eticheta}”: procentul afisat ({_norm(m.group(0))}) nu corespunde valorii citite '
+        raise EroareParsare(f'„{eticheta}”: procentul afisat ({text}) nu corespunde valorii citite '
                             f'({real:.2f}% din cota) — separator citit gresit? refuz')
-    return _norm(m.group(0))
+    return text
 
 
 def contor(linii, eticheta, zecimal):
@@ -213,19 +244,23 @@ def contor(linii, eticheta, zecimal):
     if not gasite:
         raise EroareParsare(f'„{eticheta}”: nu am gasit „X / Y GB” sub eticheta (pagina inca se incarca sau s-a schimbat)')
     rezultate = {}
-    for m, sir, rand in gasite:
+    for m, procent, rand in gasite:
         uq = m.group('uq')
         uv = m.group('uv') or uq
         b = in_bytes(numar(m.group('v'), zecimal), uv)
         cota = in_bytes(numar(m.group('q'), zecimal), uq)
         if cota <= 0:
-            raise EroareParsare(f'„{eticheta}”: cota nula ({_norm(m.group(0))!r})')
-        verifica_procent(sir, m.end(), b, cota, eticheta, zecimal)
+            raise EroareParsare(f'„{eticheta}”: cota nula ({rand!r})')
+        if eticheta in COTE_ASTEPTATE and cota != COTE_ASTEPTATE[eticheta]:
+            raise EroareParsare(f'„{eticheta}”: cota afisata {gb(cota)} GB ≠ {gb(COTE_ASTEPTATE[eticheta])} GB (plan Pro) — '
+                                f'valoarea altui indicator? refuz')
+        verifica_procent(procent, m.group('v'), b, cota, eticheta, zecimal)
         rezultate.setdefault(b, (m, rand, cota))
     if len(rezultate) > 1:
         raise EroareParsare(f'„{eticheta}”: {len(rezultate)} valori diferite pe pagina — refuz (ambiguu)')
     (b, (m, rand, cota)), = rezultate.items()
-    return b, cota, _taie(m.group(0)), _taie(rand)
+    valoare = m.group('v') + (' ' + m.group('uv') if m.group('uv') else '') + ' / ' + m.group('q') + ' ' + m.group('uq')
+    return b, cota, _taie(valoare), rand
 
 
 # ── ciclul ────────────────────────────────────────────────────────────────────────────────────────────────────────────

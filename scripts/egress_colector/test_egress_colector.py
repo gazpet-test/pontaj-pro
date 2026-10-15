@@ -107,8 +107,8 @@ class TestSeparatoare(unittest.TestCase):
         self.assertEqual(c.zecimal, ',')
 
     def test_nbsp_ca_separator_de_mii(self):
-        c = P.parseaza(pagina(egress='1\u00a0234,5 / 250 GB', cached='0,08 / 250 GB', storage='14,586 / 100 GB',
-                              extra='Realtime Messages\n0 / 5\u00a0000\u00a0000'), AZI)
+        c = P.parseaza(pagina(egress='1\u00a0234,5 / 250 GB (494%)', cached='0,08 / 250 GB (<1%)',
+                              storage='14,586 / 100 GB (15%)', extra='Realtime Messages\n0 / 5\u00a0000\u00a0000'), AZI)
         self.assertEqual(c.egress_bytes, 1234500000000)
 
     def test_ambiguu_fara_dovada_pe_pagina(self):
@@ -132,8 +132,25 @@ class TestSeparatoare(unittest.TestCase):
         with self.assertRaisesRegex(P.EroareParsare, 'procentul'):
             P.parseaza(pagina(cached='5.5 / 250 GB (<1%)'), AZI)
 
-    def test_fara_procent_e_acceptat(self):
-        self.assertEqual(P.parseaza(pagina(egress='4.615 / 250 GB'), AZI).egress_bytes, 4615000000)
+    def test_fara_procent_refuz(self):
+        # procentul e obligatoriu (Jakarinos r1 P1): fara el nu se poate verifica separatorul
+        with self.assertRaisesRegex(P.EroareParsare, 'lipseste procentul'):
+            P.parseaza(pagina(egress='4.615 / 250 GB'), AZI)
+
+    def test_zero_fara_procent_acceptat(self):
+        # pagina reala nu afiseaza procent la zero („0 / 50 MAU”); „0” nu are separator, deci nu poate fi citit gresit
+        self.assertEqual(P.parseaza(pagina(cached='0 / 250 GB'), AZI).cached_egress_bytes, 0)
+        with self.assertRaisesRegex(P.EroareParsare, 'lipseste procentul'):
+            P.parseaza(pagina(cached='0.000 / 250 GB'), AZI)
+
+    def test_procent_pe_randul_urmator(self):
+        self.assertEqual(P.parseaza(pagina(egress='4.615 / 250 GB\n(2%)'), AZI).egress_bytes, 4615000000)
+        self.assertEqual(P.parseaza(pagina(egress='4.615 / 250 GB\n\n' + NB + '(2%)'), AZI).egress_bytes, 4615000000)
+
+    def test_r1_p1_procent_pe_randul_urmator_nepotrivit(self):
+        # Jakarinos r1 P1, exemplul exact: „4,615 / 250 GB\n(2%)” era acceptat ca 4615 GB
+        with self.assertRaisesRegex(P.EroareParsare, 'procentul'):
+            P.parseaza(pagina(egress='4,615 / 250 GB\n(2%)'), AZI)
 
     def test_peste_cota(self):
         self.assertEqual(P.parseaza(pagina(egress='260.5 / 250 GB (104%)'), AZI).egress_bytes, 260500000000)
@@ -194,13 +211,39 @@ class TestPaginiProaste(unittest.TestCase):
         self.assertEqual(P.parseaza(pagina(egress='1.6 TB / 250 GB (640%)'), AZI).egress_bytes, 1600000000000)
 
     def test_unitate_necunoscuta(self):
-        with self.assertRaisesRegex(P.EroareParsare, 'nu am gasit'):
-            P.parseaza(pagina(egress='4.615 / 250 GiB'), AZI)
+        with self.assertRaisesRegex(P.EroareParsare, 'format de valoare nesuportat'):
+            P.parseaza(pagina(egress='4.615 / 250 GiB (2%)'), AZI)
 
     def test_valoare_negativa(self):
-        for v in ('-4.615 / 250 GB', '\u22124.615 / 250 GB'):
-            with self.subTest(v=v), self.assertRaisesRegex(P.EroareParsare, 'nu am gasit'):
+        for v in ('-4.615 / 250 GB (2%)', '\u22124.615 / 250 GB (2%)'):
+            with self.subTest(v=v), self.assertRaisesRegex(P.EroareParsare, 'format de valoare nesuportat'):
                 P.parseaza(pagina(egress=v), AZI)
+
+    def test_r1_p2_camp_numeric_intreg(self):
+        # Jakarinos r1 P2, exemplele exacte: fragmentul \u201e004.615\u201d / \u201e4.615\u201d NU se mai extrage
+        for v in ('1 004.615 / 250 GB', '- 4.615 / 250 GB (2%)', '1 004.615 / 250 GB (2%)', 'Egress: 4.615 / 250 GB (2%)',
+                  '4.615 / 250 GB (2%) extra'):
+            with self.subTest(v=v), self.assertRaisesRegex(P.EroareParsare, 'format de valoare nesuportat'):
+                P.parseaza(pagina(egress=v), AZI)
+
+    def test_r1_p2_bloc_propriu_loading(self):
+        # Jakarinos r1 P2, exemplul exact: \u201eCached Egress\u201d inca \u201eLoading\u2026\u201d, dedesubt \u201eLog Query \u2026 97.865 / 2,000 GB\u201d;
+        # inainte, cautarea fugea la Log Query \u21d2 cached = 97.865 GB
+        t = pagina(cached='Loading\u2026\n\nLog Query\n\n97.865 / 2,000 GB' + NB + '(5%)')
+        with self.assertRaisesRegex(P.EroareParsare, '\u201eCached Egress\u201d: nu am gasit'):
+            P.parseaza(t, AZI)
+
+    def test_r1_p2_cota_asteptata(self):
+        # valoarea altui indicator lipita direct sub eticheta: cota 2,000 GB \u2260 250 GB \u21d2 refuz
+        with self.assertRaisesRegex(P.EroareParsare, 'cota afisata 2000 GB'):
+            P.parseaza(pagina(cached='97.865 / 2,000 GB' + NB + '(5%)'), AZI)
+        with self.assertRaisesRegex(P.EroareParsare, 'cota afisata 100 GB'):
+            P.parseaza(pagina(egress='14.586 / 100 GB (15%)'), AZI)
+
+    def test_valoarea_doar_pe_primul_rand_al_blocului(self):
+        # sub eticheta, un rand de text oarecare, apoi un raport: raportul NU mai e luat (blocul s-a terminat)
+        with self.assertRaisesRegex(P.EroareParsare, '\u201eEgress\u201d: nu am gasit'):
+            P.parseaza(pagina(egress='Updating\u2026\n4.615 / 250 GB (2%)'), AZI)
 
     def test_numar_malformat(self):
         for v in ('4..615 / 250 GB', '4,61,5 / 250 GB'):
@@ -212,7 +255,8 @@ class TestPaginiProaste(unittest.TestCase):
             P.parseaza(pagina(egress='20,000 TB / 250 GB'), AZI)
 
     def test_celule_pe_acelasi_rand(self):
-        t = '07 Oct 2026 - 07 Nov 2026\nEgress\t4.615 / 250 GB\t(2%)\nCached Egress\t0.078 / 250 GB\t(<1%)\nStorage Size\t1.5 / 100 GB\n0 / 5,000,000'
+        t = ('07 Oct 2026 - 07 Nov 2026\nEgress\t4.615 / 250 GB\t(2%)\nCached Egress\t0.078 / 250 GB\t(<1%)\n'
+             'Storage Size\t1.5 / 100 GB\n(2%)\n0 / 5,000,000')
         c = P.parseaza(t, AZI)
         self.assertEqual((c.egress_bytes, c.cached_egress_bytes, c.storage_size_bytes), (4615000000, 78000000, 1500000000))
 
@@ -490,7 +534,8 @@ class TestPagina(unittest.TestCase):
         self.assertEqual(pw.cdp, 'http://127.0.0.1:9333')
 
     def test_asteapta_valori_stabile(self):
-        pw, tab = _pw([pagina(egress='4.1 / 250 GB'), pagina(egress='4.402 / 250 GB'), pagina(egress='4.402 / 250 GB')])
+        pw, tab = _pw([pagina(egress='4.1 / 250 GB (2%)'), pagina(egress='4.402 / 250 GB (2%)'),
+                       pagina(egress='4.402 / 250 GB (2%)')])
         c, _ = G.citeste(self.parse, playwright_factory=pw, pauza_ms=0)
         self.assertEqual(c.egress_bytes, 4402000000)
 
