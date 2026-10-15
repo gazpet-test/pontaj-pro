@@ -5,7 +5,7 @@ Pastreaza tripletul (citire LightOn / citire MinerU / ales) pentru fiecare dezac
 import json, pathlib
 import hashlib
 import os
-from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result, _skip_spans, antete_repetate
+from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result, _skip_spans, context_document
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -101,6 +101,9 @@ def apply_band(raw_a, raw_b, items, decisions):
         else:
             if any(' | ' in x for x in (it.get('celule_lighton') or []) + (it.get('celule_mineru') or [])): needs = True; continue
             cells = [x.strip() for x in d['text'].split(' | ')] if d['text'].strip() else []
+        # randul DONOR (MinerU / text propus) cu caractere de marcaj (\ { } $) poate fi taiat la un marcaj (`6} si 9 V`) -> om
+        # (Jakarinos r3 P1-5: garda din bucla de text nu acoperea randurile de tabel)
+        if d['decizie'] != 'ales_lighton' and any(ch in x for x in cells for ch in '\\{}$'): needs = True; continue
         if it['tip'] == 'rand_tabel':
             if d['decizie'] == 'ales_lighton': continue
             if len(cells) != len(rows[tuple(pa)]) and d['decizie'] == 'text_propus': needs = True; continue
@@ -164,7 +167,7 @@ def reconcile(plan_dir, decisions_path):
     decisions = {k: v for k, v in decisions.items() if v is not None}
     pages = {}; triplets = []
     rd = lambda b, r: (plan_dir / ('page%04d' % b['page']) / b['id'] / r / 'raw.txt').read_bytes().decode('utf-8')
-    antete = antete_repetate([rd(b, 'lighton') for b in doc['bands']], [rd(b, 'mineru') for b in doc['bands']])  # ca in compare()
+    antete, vocab = context_document([rd(b, 'lighton') for b in doc['bands']], [rd(b, 'mineru') for b in doc['bands']])  # ca in compare()
     for band in doc['bands']:
         d = plan_dir / ('page%04d' % band['page']) / band['id']
         raw_a = (d / 'lighton' / 'raw.txt').read_bytes().decode('utf-8'); raw_b = (d / 'mineru' / 'raw.txt').read_bytes().decode('utf-8')
@@ -174,7 +177,7 @@ def reconcile(plan_dir, decisions_path):
         for r, raw in (('lighton', raw_a), ('mineru', raw_b)):
             if hashlib.sha256(raw.encode()).hexdigest() != res[r].get('raw_sha256') or not check_result(res[r], r, band, proto):
                 raise ValueError('Citirea %s a benzii %s nu mai corespunde rezultatului' % (r, band['id']))
-        _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'], antete)
+        _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'], antete, vocab)
         for x in fresh: x['plan_input_sha256'] = doc['input_sha256']
         # egalitate canonica COMPLETA (toate campurile, in ordine) intre dezacordurile salvate si comparatia refacuta acum
         if [canonical(x) for x in fresh] != [canonical(i) for i in bi] or any(item_hash(i) != i.get('item_sha256') for i in bi):

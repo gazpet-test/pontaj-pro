@@ -612,7 +612,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         if sha(img) != it['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % it['band'])
         oprit = opreste_daca_peste_prag(st)
         if oprit: return oprit
-        activa(rdir)  # `erp oprire` (fara lacat) cerut intre timp -> niciun apel platit nou
+        try: activa(rdir)  # `erp oprire` (fara lacat) cerut intre timp -> niciun apel platit nou
+        except RuntimeError as e:
+            if not proba: raise
+            # proba: oprirea se raporteaza la fel inainte de N si la final (Jakarinos r3 P2), nu ca exceptie intr-un caz si stare in celalalt
+            return dict({k: v for k, v in stare_locala().items() if k != 'per_doc'}, stare='oprita', motiv=str(e), apeluri_acum=facute)
         a = uuid.uuid4().hex  # identificator UNIC al incercarii (review r3 Jakarinos P1: doua procese nu pot inchide aceeasi incercare)
         _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
         status, j = edge.post('ofertare-ocr-arbitreaza', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it,

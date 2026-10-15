@@ -550,7 +550,7 @@ class NormalizareFormat(unittest.TestCase):
                      ('| Dotari', 'Dotari'), ('Text\n***\nAlt', 'Text\nAlt'), ('Text\n|\nAlt', 'Text\nAlt'),
                      ('Curent \\( 5 \\) A', 'Curent 5 A'), ('$\\Phi 14$ otel', '\\(\\Phi\\) 14 otel'),
                      ('Curent $0,04\\ \\text{A}$ maxim', 'Curent 0,04 A maxim'),              # LaTeX in jurul aceluiasi text
-                     ('masuri de protecție', 'masuri de protectie'), ('Ștefănești', 'Štefănești'),  # diacritice
+                     ('Ștefănești', 'Štefănești'),                                            # Š = Ș (varianta)
                      ('D E N U M I R E', 'DENUMIRE'), ('A R T I C O L', 'ARTICOL'),          # litere rasfirate
                      ('- primul punct', '• primul punct'), ('- al doilea', '■ al doilea')]:  # buline
             self.assertEqual(self.dez(a, b), [], (a, b))
@@ -570,13 +570,32 @@ class NormalizareFormat(unittest.TestCase):
                      ('Pret materiale 100 lei\ncu TVA\nPret manopera 200 lei', 'Pret materiale 100 lei\nPret manopera 200 lei\ncu TVA')]:
             self.assertTrue(self.dez(a, b), (a, b))
     def test_antet_repetat_mutat(self):
-        # doar un antet de pagina repetat in document (antete_repetate) poate fi „mutat” fara dezacord
-        a = 'Persoana juridica Formularul F3\nSNTGN TRANSGAZ\nObiectiv'; b = 'Persoana juridica\nSNTGN TRANSGAZ\nFormularul F3\nObiectiv'
+        # doar un antet de pagina repetat in document (antete_repetate), in marginea unei benzi lungi, poate fi „mutat” fara dezacord
+        corp = '\nRand unu\nRand doi\nRand trei\nRand patru\nRand cinci'
+        a = 'Persoana juridica Formularul F3\nSNTGN TRANSGAZ\nObiectiv' + corp; b = 'Persoana juridica\nSNTGN TRANSGAZ\nFormularul F3\nObiectiv' + corp
         dz = lambda ant: [i for i in compare_band(self.TXT, a, OK, b, OK, ant)[1] if i['tip'] == 'text']
         self.assertTrue(dz(frozenset())); self.assertEqual(dz(frozenset({'SNTGN TRANSGAZ'})), [])
         self.assertTrue(dz(frozenset({'Formularul F3'})))                                   # rand cu cifre: niciodata antet
         self.assertEqual(CMP.antete_repetate(['SNTGN TRANSGAZ\nx 1'] * 10, ['SNTGN TRANSGAZ'] * 10), frozenset({'SNTGN TRANSGAZ'}))
         self.assertEqual(CMP.antete_repetate(['SNTGN TRANSGAZ'] * 9, ['SNTGN TRANSGAZ'] * 10), frozenset())   # sub prag la un cititor
+    def test_jakarinos_r3(self):
+        # contraexemplele r3, cu regula A pornita: toate raman dezacord
+        for a, b in [('- x + y = 5', '• x + y = 5'), ('10 buc. de paturi', '10 buc. de pături'),
+                     ('100 $/\\text{m} si 200 $/\\text{m}', '100 /m si 200 /m'), ('Debit intrare =\nDebit iesire + 5', 'Debit intrare\nDebit iesire + 5')]:
+            self.assertTrue(self.dez(a, b), (a, b))
+        # „cu TVA” repetat in 10 benzi (deci in antete_repetate): banda scurta, fara margine -> ramane dezacord
+        a = 'Pret materiale 100 lei\ncu TVA\nPret manopera 200 lei'; b = 'Pret materiale 100 lei\nPret manopera 200 lei\ncu TVA'
+        ant, voc = CMP.context_document([a] * 10, [b] * 10); self.assertIn('cu TVA', ant)
+        self.assertTrue([i for i in compare_band(self.TXT, a, OK, b, OK, ant, voc)[1] if i['tip'] == 'text'])
+    def test_diacritice_cu_vocabular(self):
+        # diacritica lipsa se pliaza doar cand LightOn scrie in tot documentul DOAR forma cu diacritice
+        voc = CMP.vocabular(['masuri de protecție catodica'] * 30 + ['protectie'])  # 30 la 1: canonica (>= 95%)
+        dz = lambda a, b, v: [i for i in compare_band(self.TXT, a, OK, b, OK, frozenset(), v)[1] if i['tip'] == 'text']
+        self.assertEqual(dz('masuri de protecție', 'masuri de protectie', voc), [])
+        self.assertTrue(dz('masuri de protecție', 'masuri de protectie', None))                       # fara vocabular: literal
+        self.assertTrue(dz('masuri de protecție', 'masuri de protectie', CMP.vocabular(['protecție'] * 9)))  # sub 10 aparitii
+        self.assertTrue(dz('masuri de protecție', 'masuri de protectie', CMP.vocabular(['protecție', 'protectie'] * 12)))  # ambele frecvente
+        self.assertTrue(dz('10 buc. pături', '10 buc. paturi', CMP.vocabular(['pături'] * 12)))            # langa numar: literal
     def test_reconcilierea_nu_preia_donor_taiat(self):
         # Jakarinos r2 P1-2: fragmentul preluat din MinerU cu marcaj taiat (`6} si 9`, insertie in \mathrm{) -> needs_human
         from .reconcile import apply_band
@@ -584,6 +603,11 @@ class NormalizareFormat(unittest.TestCase):
             _, its = compare_band(self.TXT, a, OK, b, OK); self.assertTrue(its, (a, b))
             txt, needs = apply_band(a, b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its})
             self.assertTrue(needs, (a, b, txt))
+        # si pe randuri de tabel (Jakarinos r3 P1-5)
+        t = lambda r: '<table><tr>' + ''.join('<td>%s</td>' % c for c in r) + '</tr></table>'
+        a, b = t(['1', 'Curent', '5 V']), t(['1', 'Curent', '6} si 9 V'])
+        _, its = compare_band(BAND, a, OK, b, OK); self.assertTrue(its)
+        self.assertTrue(apply_band(a, b, its, {i['id']: {'decizie': 'ales_mineru', 'text': ''} for i in its})[1])
 
     def test_sursa_ramane_exacta(self):
         # fragmentul pentru arbitru e tot subsirul exact din citire, chiar daca intre tokeni sunt marcaje sarite
@@ -612,14 +636,18 @@ class NormalizareFormat(unittest.TestCase):
 
 class RegulaA(unittest.TestCase):
     """Regula A (Razvan 15.10.2026) + ancorarea coloanelor cu cifre (laborator)."""
-    def rows(self, a, b):
-        t = lambda r: '<table><tr>' + ''.join('<td>%s</td>' % c for c in r) + '</tr></table>'
+    def rows(self, a, b, n=1):
+        # n randuri cu aceeasi forma: grila tabelului (latimea dominanta) exista doar de la 5 randuri
+        t = lambda r: '<table>' + ''.join('<tr>' + ''.join('<td>%s</td>' % (c if c != '#' else str(k)) for c in r) + '</tr>' for k in range(n)) + '</table>'
         return [i for i in compare_band(BAND, t(a), OK, t(b), OK)[1] if i['tip'].startswith('rand_')]
     def test_pozitiv(self):
-        for a, b in [(['112', '4426977', 'FLANSA OARBA PN 160 DN= 80 OL37-2', 'BUC.', '0.42', '', '', '0.004'],
-                      ['112', '4426977', 'FLANSA OARBA PN 160 DN=80 OL37-2', 'BUC.', '0.42', '', '', '', '0.004']),  # exemplul din r1
-                     (['345', '7345849', 'SODA', 'KG', '302.00', '', '', '0.302'], ['345', '7345849', 'SODA', 'KG', '302.00', '', '', '', '0.302']),
-                     (['1.', 'COD', 'mc', '0,056'], ['1.', 'COD', 'mc', '0.056']),                    # separator zecimal (0,…)
+        # ultima coloana a grilei (tabel de >= 5 randuri, fiecare rand cu latimea dominanta a tabelului lui): exemplul din r1
+        for a, b in [(['#', '4426977', 'FLANSA OARBA PN 160 DN= 80 OL37-2', 'BUC.', '0.42', '', '', '0.004'],
+                      ['#', '4426977', 'FLANSA OARBA PN 160 DN=80 OL37-2', 'BUC.', '0.42', '', '', '', '0.004']),
+                     (['#', '7345849', 'SODA', 'KG', '302.00', '', '', '0.302'], ['#', '7345849', 'SODA', 'KG', '302.00', '', '', '', '0.302'])]:
+            self.assertEqual(self.rows(a, b, n=6), [], (a, b))
+            self.assertTrue(self.rows(a, b, n=1), (a, b))                                   # un singur rand: grila nedovedita
+        for a, b in [(['1.', 'COD', 'mc', '0,056'], ['1.', 'COD', 'mc', '0.056']),                    # separator zecimal (0,…)
                      (['1.', 'COD', 'mc', '79,43'], ['1.', 'COD', 'mc', '79.43']),
                      (['', 'Titlu', ''], ['Titlu']), (['', '', 'lei', 'lei'], ['lei', 'lei']),        # fara cifre: doar celule goale
                      (['5', 'COD', 'PAPUCI', 'BUC.', '238.00'], ['5', 'COD', 'PAPUCI', '|BUC.', '238.00'])]:  # bara '|'
@@ -631,8 +659,12 @@ class RegulaA(unittest.TestCase):
                      (['A', '5 m', ''], ['A', '', '5 m']),
                      (['1.', 'COD', 'Țeavă', 'mc', '1 000,00', ''], ['', '1.', 'COD', 'Țeavă', 'mc', '1 000,00']),
                      (['4', 'OTEL', 'KG', '374.79', '', '0.375'], ['4', 'OTEL', 'KG', '374.79']),  # valoare lipsa la un cititor
-                     (['1.', 'COD', 'mc', '0,56'], ['1.', 'COD', 'mc', '0,65']), (['1', 'X', '2'], ['1', 'X', '-2'])]:
+                     (['1.', 'COD', 'mc', '0,56'], ['1.', 'COD', 'mc', '0,65']), (['1', 'X', '2'], ['1', 'X', '-2']),
+                     (['1', 'Teava', 'm', '5', ''], ['1', 'Teava', 'm', '', '5', '']),             # Jakarinos r3 P1-1
+                     (['1', 'paturi', '10'], ['1', 'pături', '10'])]:                              # Jakarinos r3: celula nu se pliaza
             self.assertTrue(self.rows(a, b), (a, b))
+        # si in tabel lung: cantitatea care nu e ultima celula nu se ancoreaza de la sfarsit
+        self.assertTrue(self.rows(['#', 'Teava', 'm', '5', ''], ['#', 'Teava', 'm', '', '5', ''], n=6))
     def test_fara_ancorare_formularea_literala(self):
         old = CMP.REGULA_A_ANCORARE; CMP.REGULA_A_ANCORARE = False
         try: self.assertEqual(self.rows(['1.', 'COD', '-5', ''], ['1.', 'COD', '', '-5']), [])   # de aceea ancorarea e pornita

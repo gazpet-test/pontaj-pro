@@ -5,7 +5,7 @@ DOAR citire - nu scrie nimic in directorul rularii (spre deosebire de `compara`,
 """
 import argparse, collections, json, pathlib, re, sys
 
-from .compare import compare_band, antete_repetate
+from .compare import compare_band, context_document
 
 
 def bands(run_dir):
@@ -25,10 +25,10 @@ def bands(run_dir):
 def measure(run_dir):
     items = []; n = 0; per_doc = {}
     for x in bands(run_dir): per_doc.setdefault(x[0], []).append(x)
-    antete = {d: antete_repetate([x[2] for x in xs], [x[4] for x in xs]) for d, xs in per_doc.items()}
+    ctx = {d: context_document([x[2] for x in xs], [x[4] for x in xs]) for d, xs in per_doc.items()}
     for doc, band, ra, sa, rb, sb in (x for xs in per_doc.values() for x in xs):
         n += 1
-        _, its = compare_band(band, ra, sa, rb, sb, antete[doc])
+        _, its = compare_band(band, ra, sa, rb, sb, *ctx[doc])
         for it in its: it['document'] = doc
         items += its
     return n, items

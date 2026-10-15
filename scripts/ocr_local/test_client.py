@@ -191,6 +191,19 @@ class Client(unittest.TestCase):
         a = C.arbitreaza(rdir, self.edge, max_apeluri=5, filtru=set()); self.assertEqual((a['apeluri_acum'], apeluri()), (0, 1))  # filtru gol = nimic
         a = C.arbitreaza(rdir, self.edge, max_apeluri=100, seed='x'); self.assertEqual((a['stare'], apeluri()), ('proba', nb))   # restul, fara dubluri
         self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata'); self.assertEqual(apeluri(), nb)                 # pasul normal inchide
+    def test_proba_oprire_ceruta_dupa_primul_apel(self):
+        # Jakarinos r3 P2: oprirea ceruta inainte de N se raporteaza ca stare, la fel ca la final; niciun apel dupa ea
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'a 10 b 11 c 12 d 13 e', 'a 20 b 21 c 22 d 23 e')
+        C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); self.assertGreaterEqual(c['dezacorduri'], 2)
+        orig = self.edge.post
+        def post(fn, corp, timeout=60):
+            r = orig(fn, corp, timeout)
+            if fn == 'ofertare-ocr-arbitreaza': C.save(rdir / 'oprire_ceruta.json', {'motiv': 'test', 'la': 0})
+            return r
+        self.edge.post = post
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=3, seed='x')
+        self.assertEqual((a['stare'], a['apeluri_acum']), ('oprita', 1))
+        self.assertEqual(len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza']), 1)
     def test_proba_nu_finalizeaza_intentia_si_raporteaza_oprirea(self):
         # Jakarinos r2 P1-3: o intentie `arbitrata` ramasa nu se finalizeaza dintr-o proba; oprirea ceruta e raportata
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
