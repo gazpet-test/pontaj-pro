@@ -115,6 +115,21 @@ def read_lighton(image_bytes, out_dir, cfg, deadline):
                  'seconds': round(time.monotonic() - started, 2), 'usage': usage}
 
 _MINERU = {}
+_DECUPAJE = threading.local()  # payload-urile data-URI codificate de pipeline in firul citirii curente (provenienta pentru garda)
+def _inregistreaza_decupaje(f):
+    """mask_and_encode_table_image (mineru_vl_utils) codifica decupajele din tabele -> token_map {token: data-URI}; biblioteca
+    pune apoi data-URI-ul in locul tokenului. Le notam aici, in firul care citeste (prepare_for_extract e sincron in two_step_extract)."""
+    def w(*a, **k):
+        img, token_map = f(*a, **k)
+        lst = getattr(_DECUPAJE, 'uris', None)
+        if lst is not None: lst.extend(token_map.values())
+        return img, token_map
+    w.__wrapped__ = f
+    return w
+def decupaje_garda(uris):
+    """Payload-urile JPEG inregistrate, cu multiplicitate (garda scoate fiecare de cel mult atatea ori)."""
+    p = 'data:image/jpeg;base64,'
+    return [u[len(p):] for u in uris if isinstance(u, str) and u.startswith(p)]
 def read_mineru(image_bytes, out_dir, cfg, deadline):
     """Clientul oficial MinerU (two_step_extract + json2md), ca in benchmark (21d). Clientul nu e streaming:
     garda v3 se aplica dupa, ca semnal; termenul se impune cu un fir."""
@@ -124,6 +139,10 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
     os.environ['NO_PROXY'] = os.environ['no_proxy'] = '127.0.0.1,::1,localhost'
     from PIL import Image
     import io
+    # Daca alta versiune a bibliotecii nu mai are numele, nu se inregistreaza nimic -> garda fara scutiri (= v4, sigur). Idempotent.
+    import mineru_vl_utils.mineru_client as MC
+    if hasattr(MC, 'mask_and_encode_table_image') and not hasattr(MC.mask_and_encode_table_image, '__wrapped__'):
+        MC.mask_and_encode_table_image = _inregistreaza_decupaje(MC.mask_and_encode_table_image)
     if 'client' not in _MINERU:
         from mineru_vl_utils import MinerUClient
         _MINERU['client'] = MinerUClient(backend='http-client', server_url=cfg['endpoint'], model_name=cfg['served_model_name'], image_analysis=True,
@@ -133,17 +152,20 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
         json.dump({'time': time.time(), 'input_sha256': hashlib.sha256(image_bytes).hexdigest()}, f)
     img = Image.open(io.BytesIO(image_bytes)).convert('RGB'); box = {}
     def work():
-        try: box['c'] = _MINERU['client'].two_step_extract(img)
+        _DECUPAJE.uris = []
+        try: box['c'] = _MINERU['client'].two_step_extract(img); box['uris'] = list(_DECUPAJE.uris)
         except BaseException as e: box['e'] = e
+        finally: _DECUPAJE.uris = None
     started = time.monotonic(); th = threading.Thread(target=work, daemon=True); th.start(); th.join(float(deadline))
     seconds = round(time.monotonic() - started, 2)
     if th.is_alive(): return '', {'ok': False, 'signal': 'deadline', 'error': None, 'seconds': seconds}
     if 'e' in box: return '', {'ok': False, 'signal': None, 'error': type(box['e']).__name__ + ':' + str(box['e'])[:200], 'seconds': seconds}
     (out_dir / 'layout.json').write_text(json.dumps(box['c'], ensure_ascii=False, indent=1, default=str), encoding='utf-8')
     md = json2md(box['c']); raw = md if isinstance(md, str) else str(md)
-    g = Guard(); signal = g(raw)
+    dec = decupaje_garda(box.get('uris', ()))
+    g = Guard(dec); signal = g(raw)  # scutite doar decupajele codificate de pipeline in aceasta citire
     return raw, {'ok': not signal and bool(raw.strip()), 'signal': signal, 'guard_event': g.event, 'error': None, 'seconds': seconds,
-                 'blocks': len(box['c'])}
+                 'blocks': len(box['c']), 'decupaje_pipeline': len(dec)}
 
 FUNCS = {'lighton': read_lighton, 'mineru': read_mineru}
 
