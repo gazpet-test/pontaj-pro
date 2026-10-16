@@ -52,3 +52,11 @@ Măsurătoare: replan rt1 (Răcari) și r1 (102) — câte pagini trec la citire
 - r1 (21, etichetate vizual): **toate 21 sunt text/tabel, nicio planșă**; 3 au cantități (d772 p313 tabele diametru/lungime/cantitate,
   d1247 p402 și p410 liste cu UM și cantitate). 248 de dezacorduri, 0 opriri de gardă.
 Concluzie: excluderea pe pixeli a pierdut în tăcere pagini cu cantități și pe r1; costul variantei B = zgomotul planșelor (154 de dezacorduri pe 15 pagini).
+
+## Jakarinos r2 (implementare, ULTIMA rundă): GO cu condiții — `out\ocrlab_clasificator_r2_jak.log`
+Fără P0; a verificat independent cele 4.442 de benzi neafectate (identice) și că cele 141 recuperate din d205 = vechea citire forțată.
+Riscuri rămase, pentru decizia Razvan:
+1. Pragul „pagină albă” (0,002) nu e validat (minimul observat în 2.032 de pagini: 0,0041); excluderea exista deja prin `unknown`, nu e regresie.
+2. Pragurile de oprire automată trebuie urmărite pe rularea întreagă (pe eșantionul de 49 de pagini recuperate, 11 opriri de gardă = 22%; pe Răcari întreg, 18+12 din 960 de benzi).
+3. Zgomotul planșelor: 144 de dezacorduri eligibile la arbitraj pe 15 planșe; HIGH-RISK nu le elimină (de urmărit la triere).
+4. Condiție operațională: rutarea v2 se aplică doar pe rulare nouă / director nou (planul vechi e reutilizat de client).
