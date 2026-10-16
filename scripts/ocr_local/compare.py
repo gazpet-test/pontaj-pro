@@ -1,7 +1,7 @@
 """Pasul 3 (CPU): compararea celor doua citiri pe fiecare banda. Identic = acceptat local; orice diferenta = dezacord pentru arbitru.
 Niveluri (spec §2): cuvant (ș/ş, ț/ţ unificate DOAR la comparare), cifra (separatorul zecimal NICIODATA normalizat),
 rand de tabel (celule, cu rolurile cod / UM / cantitate cand se pot deduce). Textul citit ramane literal; nimic nu se corecteaza aici."""
-import difflib, hashlib, html, json, pathlib, re
+import difflib, hashlib, html, json, pathlib, re, threading
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
 # Numerele pastreaza semnul, exponentul si procentul; semnele, comparatorii si operatorii sunt tokeni separati: -5 vs 5, 5% vs 5,
@@ -18,8 +18,15 @@ LETTERS = ('A-Za-z\u00aa\u00b2\u00b3\u00b5\u00b9\u00ba\u00bc-\u00be\u00c0-\u00d6
 TOKEN = re.compile(NUM + '|[' + LETTERS + ']+|\\S')  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
 NUMBER = re.compile('^' + NUM + '$')
 BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu lipit de cifre/litere: 10**2 + 3**2 ramane
+# PROVENIENTA (laborator 16.10.2026, decizia Razvan A): fiecare marcaj pus de PIPELINE trece prin _m(). In modul normal _m e identitatea
+# (textul, segmentele si BD raman neschimbate); in modul provenienta (segmente_provenienta) marcajul e delimitat cu doua caractere din zona
+# privata Unicode, puse DOAR aici - deci se stie ce a scris pipeline-ul fara sa se ghiceasca din forma textului (lectia #1765). Orice
+# caracter privat venit din citire e neutralizat inainte; paritatea cu parsarea normala se verifica (altfel: fara masti, fail-closed).
+PA, PB = '', ''
+_PROV = threading.local()
+def _m(s): return PA + s + PB if getattr(_PROV, 'on', False) else s
 SUPSUB = re.compile(r'<(sup|sub)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)  # exponent/indice = semantica: devin ^x / _x, nu dispar
-def supsub(s): return SUPSUB.sub(lambda m: ('^{' if m.group(1).lower() == 'sup' else '_{') + m.group(2) + '}', s)  # x^{2+3} != x^{2}+3
+def supsub(s): return SUPSUB.sub(lambda m: _m('^{' if m.group(1).lower() == 'sup' else '_{') + m.group(2) + _m('}'), s)  # x^{2+3} != x^{2}+3
 # doar etichete HTML dintr-o lista inchisa, cu atribute bine formate: 'x<y si z>3' sau 'x < 5 si y > 3' raman text (review Jakarinos r3)
 TAG = re.compile(r'</?(?:p|br|hr|h[1-6]|div|span|b|strong|em|i|u|small|big|font|center|li|ul|ol|dl|dt|dd|thead|tbody|tfoot|tr|td|th|table|caption|colgroup|col|section|article|header|footer|blockquote|pre|code|a)'
                  r'(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|\'[^\']*\'))*\s*/?>', re.I)
@@ -32,14 +39,15 @@ CSS_STRIKE = re.compile(r'<(span|font|div|p|td)\b[^>]*line-through[^>]*>(.*?)</\
 MD_STRIKE = re.compile(r'~~(?=\S)(.+?)(?<=\S)~~', re.S)
 def strike_marker(s):
     # o valoare barata nu e text activ: devine marcaj comparat ⟦barat: ...⟧ (HTML <s>/<del>/<strike> si markdown ~~...~~)
-    s = CSS_STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(2), s)
-    return MD_STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(1), STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(2), s))
+    b = lambda x: ' ' + _m('⟦barat: ') + x + _m('⟧') + ' '
+    s = CSS_STRIKE.sub(lambda m: b(m.group(2)), s)
+    return MD_STRIKE.sub(lambda m: b(m.group(1)), STRIKE.sub(lambda m: b(m.group(2)), s))
 IMG = re.compile(r'<img\b((?:"[^"]*"|\'[^\']*\'|[^\'">])*)>', re.I)
 IMG_ATTR = re.compile(r'\b(alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.I)
 def img_marker(s):
     # imaginea nu dispare: alt/title (substitutul textual) devin un marcaj comparat (review Copilot r5)
     # toate atributele, textual (alt, title, src, ...): nicio diferenta din eticheta nu dispare (review Jakarinos r6, Copilot r6 P2)
-    return IMG.sub(lambda m: ' ⟦img ' + re.sub(r'\s+', ' ', re.sub(r'\s+/$', '', m.group(1)).strip()) + '⟧ ', s)
+    return IMG.sub(lambda m: ' ' + _m('⟦img ' + re.sub(r'\s+', ' ', re.sub(r'\s+/$', '', m.group(1)).strip()) + '⟧') + ' ', s)
 CAPTION = re.compile(r'<caption\b[^>]*>(.*?)</caption\s*>', re.I | re.S)
 MD_SEP = re.compile(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$')
 CONTEXT = 6
@@ -60,13 +68,13 @@ def html_rows(table):
         row = []
         for attrs, body in CELL_HTML.findall(r):
             text = clean_inline(body); spans = {}
-            if re.search(r'line-through', attrs, re.I) and text: text = '⟦barat: %s⟧' % text  # bararea pusa pe celula insasi
+            if re.search(r'line-through', attrs, re.I) and text: text = _m('⟦barat: ') + text + _m('⟧')  # bararea pusa pe celula insasi
             for k, a, b, c in SPAN.findall(attrs):
                 v = (a or b or c).strip()
                 # doar intreg valid 1..50 se interpreteaza; orice altceva ('2x', '51', '0') ramane marcaj vizibil, nu se ghiceste
                 if re.fullmatch(r'\d+', v) and 1 <= int(v) <= 50: spans[k.lower()] = int(v)
-                else: text = (text + ' ⟦%s_invalid=%s⟧' % (k.lower(), v)).strip()
-            if spans.get('rowspan', 1) > 1: text = (text + ' ⟦rowspan=%d⟧' % spans['rowspan']).strip()
+                else: text = (text + ' ' + _m('⟦%s_invalid=%s⟧' % (k.lower(), v))).strip()
+            if spans.get('rowspan', 1) > 1: text = (text + ' ' + _m('⟦rowspan=%d⟧' % spans['rowspan'])).strip()
             row.append(text); row += [''] * (spans.get('colspan', 1) - 1)
         rows.append(row)
     return rows
@@ -101,7 +109,7 @@ def segments(raw):
         stray_cells = any(plain(CELL_HTML.sub(' ', r)).strip() for r in ROW_HTML.findall(body))
         if (opens_td != sum(len(CELL_HTML.findall(r)) for r in ROW_HTML.findall(body)) or opens_tr != len(ROW_HTML.findall(body))
                 or stray.strip() or stray_cells):  # text in afara randurilor / celulelor = neparsat, nu ignorat
-            out.append(('text', '⟦tabel_neparsat⟧ ' + plain(re.sub(r'</?t[dhr]\b[^>]*>', ' | ', body, flags=re.I))))
+            out.append(('text', _m('⟦tabel_neparsat⟧') + ' ' + plain(re.sub(r'</?t[dhr]\b[^>]*>', ' | ', body, flags=re.I))))
         else: out.append(('table', rows))
         pos = m.end()
     out += _md_split(raw[pos:])
@@ -113,7 +121,7 @@ def _md_split(chunk):
     # bucati de tabel HTML neconsumate de TABLE_HTML (ex. <table> fara </table>, </table> orfan): nu se sterg ca etichete -
     # tot fragmentul intra ca text marcat ⟦tabel_neparsat⟧, cu celulele separate vizibil (review Copilot r6)
     if TABLE_PIECE.search(chunk):
-        return [('text', '⟦tabel_neparsat⟧ ' + plain(re.sub(r'</?t[dhr]\b[^>]*>', ' | ', chunk, flags=re.I)))]
+        return [('text', _m('⟦tabel_neparsat⟧') + ' ' + plain(re.sub(r'</?t[dhr]\b[^>]*>', ' | ', chunk, flags=re.I)))]
     out = []; buf = []; tab = []
     for ln in chunk.split('\n'):
         if ln.strip().startswith('|') and ln.strip().count('|') >= 2:
@@ -392,3 +400,43 @@ def compare(plan_dir):
     with (plan_dir / 'dezacorduri.jsonl').open('w', encoding='utf-8') as f:
         for it in items: f.write(json.dumps(it, ensure_ascii=False) + '\n')
     return out, items
+
+
+def _desparte(x):
+    """Textul fara delimitatorii privati + masca (True = caracter scris de pipeline)."""
+    out, mask, inm = [], [], False
+    for ch in x:
+        if ch == PA: inm = True; continue
+        if ch == PB: inm = False; continue
+        out.append(ch); mask.append(inm)
+    return ''.join(out), mask
+
+def segmente_provenienta(raw, flat=False):
+    """Segmentele citirii (identice cu segments / flat_text) + mastile de provenienta pe fiecare text / celula, sau None daca paritatea
+    cu parsarea normala nu tine (atunci trierea e fail-closed: HIGH-RISK)."""
+    norm = segments(raw)
+    _PROV.on = True
+    try: prov = segments(raw.replace(PA, '�').replace(PB, '�'))
+    finally: _PROV.on = False
+    if flat: norm, prov = flat_text(norm), flat_text(prov)
+    if len(norm) != len(prov): return None
+    masti = []
+    for (kn, vn), (kp, vp) in zip(norm, prov):
+        if kn != kp: return None
+        if kn == 'text':
+            t, m = _desparte(vp)
+            if t != vn: return None
+            masti.append(m)
+        else:
+            if len(vn) != len(vp): return None
+            rows = []
+            for rn, rp in zip(vn, vp):
+                if len(rn) != len(rp): return None
+                cells = []
+                for cn, cp in zip(rn, rp):
+                    t, m = _desparte(cp)
+                    if t != cn: return None
+                    cells.append(m)
+                rows.append(cells)
+            masti.append(rows)
+    return norm, masti
