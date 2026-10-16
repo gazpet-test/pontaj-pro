@@ -28,6 +28,8 @@
 #   ating si nu blocheaza. La iesirea normala, lock-ul se elibereaza dupa ce job-ul ramane doar cu lansatorul (ActiveProcesses=1).
 # v4.3 r5 (dupa Jakarinos r4 P2-1): ActiveProcesses=1 e OBLIGATORIU - timeout sau interogare esuata -> PAW_EROARE copii_ramasi,
 #   fara PAW_GATA si fara eliberare explicita a lock-ului (il inchide sistemul la iesirea lansatorului, cand job-ul omoara copiii).
+# v4.3 r6 (dupa Jakarinos r5): orice citire esuata a job-ului (-2), inclusiv prima, -> PAW_EROARE job_interogare_esuata; la prima
+#   detectie a unui driver orfan, jurnalul primeste "<runid> | astept_driver pid=..." (semnal explicit pentru teste/diagnoza).
 # ASCII only. Compatibil Windows PowerShell 5.1.
 param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "", [string]$Imagini = "")
 $ErrorActionPreference = "Stop"
@@ -145,10 +147,17 @@ function DriverOrfani() {
 function AsteaptaFaraDriverRamas() {
   # r4 (Jakarinos r3 P1, varianta A): dupa lock, INAINTE de orice contact CDP. Un driver orfan e de regula in curs de oprire de catre
   # Job-ul rularii moarte (milisecunde); daca ramane peste $DRIVER_ASTEPTARE s (ex. rulare v4.2 fara job), refuz fara sa-l ating.
+  # r6 (Jakarinos r5 P2-b): la PRIMA detectie a unui driver orfan viu, rularea scrie in jurnal "<runid> | astept_driver pid=..."
+  # (semnal explicit, verificabil din afara, ca rularea a ajuns la verificare si asteapta, fara contact CDP).
   $t = Get-Date
+  $semnalat = $false
   while ($true) {
     $o = DriverOrfani
     if ($o.Count -eq 0) { return }
+    if (-not $semnalat) {
+      Add-Content -LiteralPath $JURNAL -Value ("{0} | astept_driver pid={1}" -f $RUNID, ($o -join ",")) -Encoding UTF8
+      $semnalat = $true
+    }
     if (((Get-Date) - $t).TotalSeconds -ge $DRIVER_ASTEPTARE) {
       Eroare ("driver_ramas pid=" + ($o -join ",") + " (driver Playwright orfan de la o rulare anterioara; inchide-l si reia)")
     }
@@ -159,17 +168,25 @@ function AsteaptaJobGol([int]$sec) {
   # r5 (Jakarinos r4 P2-1): conditie OBLIGATORIE la gem/cop. Intoarce $true doar daca nu exista job (jak/ollie) sau daca in job a
   # ramas doar lansatorul (ActiveProcesses = 1); timeout sau interogare esuata -> $false, iar apelantul da PAW_EROARE copii_ramasi
   # FARA sa elibereze lock-ul (il inchide sistemul la moartea lansatorului, cand job-ul omoara si copiii ramasi).
-  $a = [PawV43.Job]::Active()
-  if ($a -eq -1) { return $true }
+  # r6 (Jakarinos r5 P2-a): ORICE -2 (interogare esuata), la ORICE citire - inclusiv prima -, inseamna imediat esec; o citire
+  # buna ulterioara nu il mai poate acoperi. Fiecare valoare se citeste o singura data si se evalueaza pe loc.
   $t = Get-Date
   while ($true) {
     $a = [PawV43.Job]::Active()
     $script:JobActiv = $a
-    if ($a -eq 1) { return $true }
-    if ($a -lt 0) { return $false }                                   # -2 = interogarea job-ului a esuat
+    if ($a -eq -2) { return $false }                                  # interogarea job-ului a esuat -> job_interogare_esuata
+    if ($a -eq -1) { return $true }                                   # fara job (jak/ollie)
+    if ($a -eq 1) { return $true }                                    # doar lansatorul
+    if ($a -lt 1) { $script:JobActiv = -2; return $false }            # valoare imposibila (0 sau alt negativ) = interogare nevalida
     if (((Get-Date) - $t).TotalSeconds -ge $sec) { return $false }
     Start-Sleep -Milliseconds 200
   }
+}
+function MotivJob([string]$dupa) {
+  if ($script:JobActiv -eq -2) { $m = "job_interogare_esuata (ActiveProcesses neconfirmat; lock-ul ramane tinut pana la iesirea lansatorului)" }
+  else { $m = "copii_ramasi activi=" + $script:JobActiv + " dupa " + $JOB_GOL_ASTEPTARE + "s (lock-ul ramane tinut pana la iesirea lansatorului)" }
+  if ($dupa) { $m += " (dupa " + $dupa + ")" }
+  return $m
 }
 function EroareFaraEliberare([string]$motiv) {
   # r5: PAW_EROARE fara inchiderea explicita a lock-ului - handle-ul il inchide sistemul la iesirea procesului (job-ul omoara atunci
@@ -507,7 +524,7 @@ try {
   # r5 (Jakarinos r4 P2-1): lock liber DOAR cand in job a ramas doar lansatorul; altfel PAW_EROARE copii_ramasi, fara PAW_GATA
   if (-not (AsteaptaJobGol $JOB_GOL_ASTEPTARE)) {
     try { if ($rez) { Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8; if ($rez.err) { Add-Content -LiteralPath $script:OutFull -Value ("--- stderr ---`n" + $rez.err) -Encoding UTF8 } } } catch {}
-    EroareFaraEliberare ("copii_ramasi activi=" + $script:JobActiv + " dupa " + $JOB_GOL_ASTEPTARE + "s (lock-ul ramane tinut pana la iesirea lansatorului)")
+    EroareFaraEliberare (MotivJob "")
   }
   EliberezLock
   $ImgFolosite = [bool]$script:ImgDirCreat
@@ -527,7 +544,7 @@ try {
 } catch {
   $mesaj = "rulare: " + $_.Exception.Message
   if (-not (AsteaptaJobGol $JOB_GOL_ASTEPTARE)) {
-    EroareFaraEliberare ("copii_ramasi activi=" + $script:JobActiv + " dupa " + $JOB_GOL_ASTEPTARE + "s (dupa " + $mesaj + ")")
+    EroareFaraEliberare (MotivJob $mesaj)
   }
   EliberezLock
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }

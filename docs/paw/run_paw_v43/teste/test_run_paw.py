@@ -17,7 +17,11 @@ DRIVER_ASTEPTARE_TEST = 8
 JOB_GOL_REAL = "$JOB_GOL_ASTEPTARE = 15"
 JOB_GOL_TEST = 3
 FLAGS_JOB_REAL = "e.B.LimitFlags = 0x2000;"
-FLAGS_JOB_BARIERA = "e.B.LimitFlags = 0x2000 | 0x800;"   # + JOB_OBJECT_LIMIT_BREAKAWAY_OK, DOAR in run_paw_bariera.ps1
+ACTIVE_REAL = "  if (job == IntPtr.Zero) return -1;\n"
+ACTIVE_INJ = ("  if (job == IntPtr.Zero) return -1;\n"
+              "  if (System.Threading.Interlocked.Increment(ref injCitiri) == 1) return -2;   // INJECTIE TEST: prima citire esueaza\n")
+ACTIVE_INJ_CAMP = "static IntPtr job = IntPtr.Zero;\n"
+FLAGS_JOB_BARIERA ="e.B.LimitFlags = 0x2000 | 0x800;"   # + JOB_OBJECT_LIMIT_BREAKAWAY_OK, DOAR in run_paw_bariera.ps1
 
 # driver Playwright FALS: python.exe (acelasi exe ca stub-urile) cu "<FAKE_CLI> run-driver" in linia de comanda; harness-ul
 # rescrie $PW_DRIVER_EXE / $PW_DRIVER_CLI spre el, deci lansatorul il recunoaste exact ca pe un driver real
@@ -146,6 +150,12 @@ class Lansator(unittest.TestCase):
         cls.ps1_bariera = os.path.join(cls.bin, "run_paw_bariera.ps1")
         with open(cls.ps1_bariera, "w", encoding="ascii", newline="") as f:
             f.write(src.replace(FLAGS_JOB_REAL, FLAGS_JOB_BARIERA))
+        # copie cu injectie de defect (r6, Jakarinos r5 P2-a): PRIMA citire ActiveProcesses intoarce -2 (interogare esuata),
+        # urmatoarele sunt reale (deci 1) - lansatorul trebuie sa dea job_interogare_esuata, nu PAW_GATA
+        assert src.count(ACTIVE_REAL) == 1 and src.count(ACTIVE_INJ_CAMP) == 1
+        cls.ps1_inj = os.path.join(cls.bin, "run_paw_inj.ps1")
+        with open(cls.ps1_inj, "w", encoding="ascii", newline="") as f:
+            f.write(src.replace(ACTIVE_INJ_CAMP, ACTIVE_INJ_CAMP + "static int injCitiri = 0;\n").replace(ACTIVE_REAL, ACTIVE_INJ))
         cod = [l for l in src.splitlines() if not l.lstrip().startswith("#")]
         assert not any("paw-data\"" in l and cls.data not in l for l in cod), "a ramas o cale spre paw-data-ul real"
         cls.ps1 = os.path.join(cls.bin, "run_paw.ps1")
@@ -187,8 +197,8 @@ class Lansator(unittest.TestCase):
         Lansator.n += 1
         return os.path.join(self.data, "out", "caz%02d.log" % Lansator.n)
 
-    def run_paw(self, cine, brief, out, model=None):
-        argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.ps1,
+    def run_paw(self, cine, brief, out, model=None, ps1=None):
+        argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1 or self.ps1,
                 "-Cine", cine, "-Brief", brief, "-Out", out]
         if model:
             argv += ["-Model", model]
@@ -467,22 +477,44 @@ class Lansator(unittest.TestCase):
             time.sleep(0.1)
         return False
 
+    def semnale_driver(self):
+        j = os.path.join(self.data, "paw_runs.log")
+        if not os.path.exists(j):
+            return []
+        with open(j, encoding="utf-8-sig", errors="replace") as f:
+            return re.findall(r"\| astept_driver pid=([0-9,]+)", f.read())
+
+    def asteapta_semnal_driver(self, drv, p, limita=60):
+        # r6: asteapta semnalul explicit al rularii noi ("astept_driver pid=..." cu pid-ul driverului viu). Se opreste cu esec daca,
+        # inainte de semnal, rularea atinge CDP-ul sau se termina (exact ce face mutatia fara asteptare).
+        inainte = len(self.semnale_driver_initiale) if hasattr(self, "semnale_driver_initiale") else 0
+        t0 = time.time()
+        while time.time() - t0 < limita:
+            if any(str(drv) in s.split(",") for s in self.semnale_driver()[inainte:]):
+                return
+            if self.cdp_atins():
+                self.fail("B a atins CDP-ul fara sa fi semnalat astept_driver pid=%d (driverul vechi inca traia)" % drv)
+            if p.poll() is not None:
+                so = p.stdout.read().decode("utf-8", "replace")
+                if "nu asculta" in so or "loopback" in so:
+                    self.skipTest("CDP 9333 indisponibil/neloopback")
+                self.fail("B s-a terminat fara semnalul astept_driver pid=%d: %s" % (drv, so))
+            time.sleep(0.05)
+        self.fail("niciun semnal astept_driver pid=%d in %ds" % (drv, limita))
+
+    def setUp(self):
+        self.semnale_driver_initiale = self.semnale_driver()
+
     def driver_ramas_asteptat_apoi_ruleaza(self, cine, model, lock_nume):
         self.curata_marcaje()
         d = self.driver_orfan()
         p = None
         try:
             p = self.porneste(cine, self.brief_stub_ok, model)
-            if not self.asteapta_lock_tinut(os.path.join(self.data, lock_nume), p):
-                rc, linie, txt = self.termina(p)
-                if "nu asculta" in linie or "loopback" in linie:
-                    self.skipTest("CDP 9333 indisponibil/neloopback")
-                self.fail("rularea nu a ajuns la lock: " + txt)
-            t0 = time.time()
-            while time.time() - t0 < 3:                       # driverul vechi traieste: niciun contact CDP
-                self.assertEqual(self.cdp_atins(), [], "contact CDP cat driverul vechi traia")
-                self.assertTrue(viu(d))
-                time.sleep(0.05)
+            self.asteapta_semnal_driver(d, p)                 # r6: semnal explicit "astept_driver pid=<d>"
+            self.assertTrue(viu(d))
+            self.assertEqual(self.cdp_atins(), [], "contact CDP cat driverul vechi traia")
+            self.assertIsNone(p.poll(), "rularea s-a terminat cat driverul vechi traia")
             self.omoara(d)
             t_mort = time.time()
             rc, linie, txt = self.termina(p)
@@ -592,9 +624,9 @@ class Lansator(unittest.TestCase):
             self.assertFalse(viu(py), "python-ul lui A nu a murit odata cu lansatorul")
             self.assertTrue(viu(drv), "bariera: driverul lui A trebuie sa fie inca viu cand porneste B")
             b = self.porneste(cine, self.brief_stub_ok, model)
-            self.assertTrue(self.asteapta_lock_tinut(os.path.join(self.data, ("lock_cop_" + model) if model else "lock_gem"), b),
-                            "B nu a ajuns la lock")         # bariera 2: B a trecut de LuaLock, deci e la asteptarea driverului
-            time.sleep(2)
+            # bariera 2 (r6, Jakarinos r5 P2-b): semnal EXPLICIT de la B - jurnalul "astept_driver pid=<drv>" - ca B a ajuns la
+            # verificarea driverului si l-a vazut viu; fara semnal (ex. B atinge CDP-ul sau iese) testul pica aici
+            self.asteapta_semnal_driver(drv, b)
             self.assertTrue(viu(drv), "driverul lui A trebuia sa traiasca pe tot intervalul (traieste pana la eliberare)")
             self.assertEqual(self.cdp_atins(), [], "B a atins CDP-ul cat driverul lui A traia")
             self.assertIsNone(b.poll(), "B s-a terminat cat driverul lui A traia")
@@ -676,6 +708,25 @@ class Lansator(unittest.TestCase):
                 p.kill(); p.wait(timeout=30)
             if nepot:
                 self.omoara(nepot)
+
+    # --- r6 (Jakarinos r5 P2-a): -2 la PRIMA citire a job-ului -> job_interogare_esuata, fara succes ---
+    def interogare_esuata(self, cine, model):
+        o = self.out()
+        rc, linie, so = self.run_paw(cine, self.brief_stub_ok, o, model=model, ps1=self.ps1_inj)
+        if "nu asculta" in linie or "loopback" in linie:
+            self.skipTest("CDP 9333 indisponibil/neloopback")
+        self.assertEqual(rc, 2, so)
+        self.assertRegex(linie, r"^PAW_EROARE \S+ job_interogare_esuata ")
+        with open(o, encoding="utf-8-sig") as f:
+            cont = f.read()
+        self.assertNotIn("PAW_GATA", cont)
+        self.assertIn("raspuns", cont)                         # rularea propriu-zisa a avut loc; doar confirmarea job-ului a esuat
+
+    def test_gem_interogare_job_esuata_la_prima_citire(self):
+        self.interogare_esuata("gem", None)
+
+    def test_cop_interogare_job_esuata_la_prima_citire(self):
+        self.interogare_esuata("cop", "6abc000f")
 
     def test_gem_copii_ramasi_fara_succes(self):
         self.copii_ramasi("gem", None, "lock_gem")
