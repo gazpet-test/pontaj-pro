@@ -244,6 +244,9 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
     const l = doc.slice(a, b)
     if (RE_TOTAL_RAND.test(l)) return k === 0 ? doarLinia : { linie, bloc: doc.slice(ls, pana), de_la: ls, pana_la: pana, continuare: true }
     if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || RE_INCEPUT_ARTICOL.test(l)) return doarLinia
+    // review Jakarinos r2 (P1): un articol fără nr. și fără UM („SA11H1 120.000”) nu e continuare — linia care începe cu un cod sau
+    // conține o cantitate în formatul listei (trei zecimale: „120.000”) oprește blocul (incert → doar linia cantității)
+    if (codComparabil(l.trim().split(/\s+/)[0]) !== null || /(?<![\d.,])\d+\.\d{3}(?![\d.,])/.test(l)) return doarLinia
     if (tokeniNumerici(l, a).some((t) => [...umLanga(doc, t.de_la, t.pana_la)].some((u) => UM_ANCORA.has(u)))) return doarLinia
     pana = b
   }
