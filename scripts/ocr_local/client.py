@@ -560,8 +560,53 @@ def cheie_proba(it, doc=None):
     d = it.get('document') or ('d%s' % doc if doc is not None else None)
     return (d, it.get('band'), it.get('tip'), it.get('citire_lighton'), it.get('citire_mineru'))
 
+# FEREASTRA PRAGULUI = „prag pe epoca de reluare” (20261030d, laborator 15.10.2026; Copilot P2-1): dupa o reluare (`erp reluata`),
+# pragul §8 numara DOAR arbitrajele de dupa ea. Baza = itemii pe care pragul ii numara deja la reluare: decizii Claude, apeluri cu rezultat
+# necunoscut, pierdute Claude (NU refuzurile dinaintea platii: itemul lor ramane eligibil si o decizie noua pe el intra in prag — Jakarinos
+# r1 P1). Itemii din baza raman rezolvati si in cost (necunoscutele tot la om, fara apel); semnalul vechi ramane in istoric, nu dispare.
+def baza_reluare(rdir):
+    return {str(k): set(v) for k, v in ((pasi(rdir).get('reluare') or {}).get('valoare') or {}).get('baza', {}).items()}
+def stare_arbitraj(rdir, r, baza):
+    st = {'claude': 0, 'needs_human_claude': 0, 'om': 0, 'necunoscute': 0, 'pierdute_claude': 0, 'cost_usd': 0.0, 'per_doc': {}}
+    for doc, _ in documente(r):
+        d = rdir / ('d%d' % doc); ap = _jsonl(d / 'apeluri.jsonl')
+        # deciziile trecerii doar_haiku (restante DEFER, politica proprie - decizia Razvan 16.10) NU intra in pragul §8
+        # Proveniența trecerii doar_haiku (Copilot r1 P1-2, Jakarinos r1 P1): o decizie iese din prag DOAR daca (id, a) e marcat ÎNAINTEA
+        # apelului in decizii_doar_haiku.jsonl, apeluri.jsonl are acel (id, a) incheiat cu decizie, iar decizia (scrisa de server) are
+        # modelul Haiku si eticheta [doar_haiku] in motiv. Un marcaj fara aceste dovezi nu scoate nimic din prag.
+        dh = {(x['id'], x['a']) for x in _jsonl(d / 'decizii_doar_haiku.jsonl') if isinstance(x, dict) and 'a' in x}
+        # tentativa (id, a) dovedita: incheiata cu decizie SAU doar pornita (cadere intre decizii.jsonl si `gata` - Jakarinos r2 P2);
+        # in ambele cazuri si marcajul (id, a) trebuie sa existe, iar decizia sa fie a lui Haiku cu eticheta serverului
+        ap_dec = {(x['id'], x['a']) for x in ap if (x['faza'] == 'gata' and x.get('rezultat') == 'decizie') or x['faza'] == 'start'}
+        dec_toate = _jsonl(d / 'decizii.jsonl')
+        def din_haiku(x):
+            return (x.get('arbitru_model') == 'claude-haiku-5-5' and '[doar_haiku]' in (x.get('motiv') or '')
+                    and any(i == x['id'] and (i, a) in dh for i, a in ap_dec))
+        dec = [x for x in dec_toate if not din_haiku(x)]
+        claude = {x['id'] for x in dec_toate}; gata = {x['a'] for x in ap if x['faza'] == 'gata'}
+        start_nec = [(x['id'], x['a']) for x in ap if x['faza'] == 'start' and x['a'] not in gata and x['id'] not in claude]
+        necunoscute = {i for i, _ in start_nec}
+        # o tentativa doar_haiku cu rezultat necunoscut ramane la om (conversie), dar nu intra in prag (Jakarinos r1 P2: caderea dupa
+        # marcaj nu trebuie sa opreasca rularea); orice alta necunoscuta intra in prag ca pana acum
+        nec_prag = {i for i, a in start_nec if (i, a) not in dh}
+        pierdute_cl = {x['id'] for x in _jsonl(d / 'pierdute.jsonl') if x.get('sursa') == 'claude'} - claude - necunoscute
+        om_ids = {x['id'] for x in _jsonl(d / 'decizii_om.jsonl')}; pierdute = {x['id'] for x in _jsonl(d / 'pierdute.jsonl')}
+        b = baza.get(str(doc), set()); dec_f = [x for x in dec if x['id'] not in b]  # doar fereastra de dupa reluare
+        st['claude'] += len(dec_f); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec_f)
+        st['necunoscute'] += len(nec_prag - b); st['pierdute_claude'] += len(pierdute_cl - b); st['om'] += len(om_ids)
+        st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec_toate)
+        st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute, 'numarate': claude | necunoscute | pierdute_cl}
+    return st
+def peste_prag(st, prag=None, minim=None):
+    # arbitraje Claude cu rezultat necunoscut / pierdut = needs_human (conservator); verificat dupa reluare, inaintea fiecarui apel
+    prag = PRAG_NH if prag is None else prag; minim = MIN_NH if minim is None else minim
+    n = st['claude'] + st['necunoscute'] + st['pierdute_claude']; nh = st['needs_human_claude'] + st['necunoscute'] + st['pierdute_claude']
+    return n, nh, n >= minim and nh / n > prag
+
+CHEI_CONTEXT_ARBITRU = ('context_inainte', 'context_dupa', 'rand_anterior')  # = CHEI_CONTEXT din edge-ul ofertare-ocr-arbitreaza
+
 @cu_lacat
-def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None):
+def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None, triere=False, doar_haiku=False):
     """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
     restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
     plafonul si legarea de BD sunt in edge). Decizia se scrie local imediat (decizii.jsonl). Nicio reincercare: orice refuz / eroare
@@ -574,7 +619,29 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     raporteaza `oprita` daca omul a cerut oprirea. Recuperarea apelurilor cu rezultat necunoscut (-> needs_human fara AI) ruleaza si
     in proba, inaintea oricarui apel nou: e o obligatie de siguranta, nu o alegere a esantionului (Jakarinos r2)."""
     rdir = pathlib.Path(rdir); r = rulare(rdir); proba = max_apeluri is not None; facute = 0
+    # TRIERE (laborator 16.10.2026, decizia Razvan A; ocr_local/triere.py): doar HIGH_RISK (numere diferite in CONTINUT, bara la un singur
+    # cititor, provenienta nestabilita) merge la Claude. MARCAJE / DEFER: in proba se sar (neatinse); in pasul normal -> needs_human FARA AI,
+    # cu motivul clasei (restant explicit pentru om, nu „corect”). Clasa se calculeaza din citirile de pe disc, verificate pe amprenta.
+    clase = {}
+    def clasa_item(d, it):
+        cheie = (str(d), it['band'])  # banda e unica doar in document: cheia include documentul (Jakarinos r1 P1 - cache intre documente)
+        if cheie not in clase:
+            from .triere import triaza_banda
+            bd = d / ('page%04d' % it['page']) / it['band']; raws = {}
+            for rd in ('lighton', 'mineru'):
+                raw = (bd / rd / 'raw.txt').read_bytes().decode('utf-8') if (bd / rd / 'raw.txt').exists() else ''
+                if sha(raw.encode('utf-8')) != it['raw_sha256'][rd]: raise RuntimeError('Citirea %s a benzii %s nu mai e cea comparata' % (rd, it['band']))
+                raws[rd] = raw
+            toate = [x for x in _jsonl(d / 'dezacorduri.jsonl') if x['band'] == it['band']]
+            clase[cheie] = triaza_banda(raws['lighton'], raws['mineru'], toate)
+        return clase[cheie].get(it['id'], ('HIGH_RISK', 'item necunoscut la triere'))
     if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
+    # Decizia Razvan 16.10 (varianta A, #737): DEFER / MARCAJE NU se trimit in masa la om; raman restante pentru o a doua trecere ieftina,
+    # decisa separat. Pana atunci --triere e permis DOAR in proba (unde restul se sare, neatins).
+    if triere and not proba: raise ValueError('--triere doar in proba (--max-apeluri): DEFER/MARCAJE raman restante, nu merg in masa la om')
+    # TRECEREA doar_haiku (decizia Razvan 16.10): doar restantele DEFER fara nicio cifra in citiri, un apel Haiku fara escaladare (edge
+    # mod=doar_haiku, poarta pe cifre si in edge); needs_human ramane restant si NU intra in pragul §8 (decizii_doar_haiku.jsonl).
+    if doar_haiku and not (proba and triere): raise ValueError('--doar-haiku doar in proba, impreuna cu --triere')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     try: activa(rdir)
     except RuntimeError as e:
@@ -588,23 +655,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     #   apeluri.jsonl: {id, k, faza: start} SCRIS INAINTEA POST-ului; {id, k, faza: gata, rezultat: decizie | refuz | pierdut} dupa.
     #   Un start fara gata = rezultat NECUNOSCUT (cadere, transport, 409 decontat, 500, 502): posibil platit -> niciodata alt apel Claude
     #   pe acel item (la reluare: needs_human fara AI) si socotit PERMANENT needs_human la prag, chiar dupa conversia la om.
-    def stare_locala():
-        st = {'claude': 0, 'needs_human_claude': 0, 'om': 0, 'necunoscute': 0, 'pierdute_claude': 0, 'cost_usd': 0.0, 'per_doc': {}}
-        for doc, _ in documente(r):
-            d = rdir / ('d%d' % doc); ap = _jsonl(d / 'apeluri.jsonl'); dec = _jsonl(d / 'decizii.jsonl')
-            claude = {x['id'] for x in dec}; gata = {x['a'] for x in ap if x['faza'] == 'gata'}
-            necunoscute = {x['id'] for x in ap if x['faza'] == 'start' and x['a'] not in gata} - claude
-            pierdute_cl = {x['id'] for x in _jsonl(d / 'pierdute.jsonl') if x.get('sursa') == 'claude'} - claude - necunoscute
-            om_ids = {x['id'] for x in _jsonl(d / 'decizii_om.jsonl')}; pierdute = {x['id'] for x in _jsonl(d / 'pierdute.jsonl')}
-            st['claude'] += len(dec); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec)
-            st['necunoscute'] += len(necunoscute); st['pierdute_claude'] += len(pierdute_cl); st['om'] += len(om_ids)
-            st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec)
-            st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute}
-        return st
+    baza = baza_reluare(rdir)
+    stare_locala = lambda: stare_arbitraj(rdir, r, baza)
     def opreste_daca_peste_prag(st):
-        # arbitraje Claude cu rezultat necunoscut / pierdut = needs_human (conservator); verificat dupa reluare, inaintea fiecarui apel
-        n = st['claude'] + st['necunoscute'] + st['pierdute_claude']; nh = st['needs_human_claude'] + st['necunoscute'] + st['pierdute_claude']
-        if not (n >= minim and nh / n > prag): return None
+        n, nh, peste = peste_prag(st, prag, minim)
+        if not peste: return None
         motiv = 'needs_human pe %d din %d arbitraje Claude (> %d%%, spec §8)' % (nh, n, prag * 100)
         tranzitie(rdir, edge, r, 'oprita', motiv); res = dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='oprita', motiv=motiv)
         if proba: res['apeluri_acum'] = facute  # proba raporteaza mereu cate apeluri platite a facut (Jakarinos r5 P2)
@@ -632,11 +687,23 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         if it['id'] in st['per_doc'][doc]['rezolvate'] or it['id'] in st['per_doc'][doc]['necunoscute']: continue
         if it['id'] not in ids: raise RuntimeError('Dezacordul %s nu are id in BD (reia compara)' % it['id'])
         if proba and (it['tip'] in ('banda_intreaga', 'structura_tabele') or (filtru is not None and cheie_proba(it, doc) not in filtru)): continue
+        if triere and it['tip'] not in ('banda_intreaga', 'structura_tabele'):
+            k, motiv_t = clasa_item(d, it)
+            if doar_haiku:
+                if k != 'DEFER' or any(ch.isnumeric() for ch in it['citire_lighton'] + it['citire_mineru']): continue
+            elif k != 'HIGH_RISK':
+                if proba: continue
+                om(d, ids, it, ('%s: %s (triere, fara arbitraj automat)' % (k, motiv_t))[:200]); st = stare_locala(); continue
         if proba and facute >= max_apeluri: break
         if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
             om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
         if it['tip'] == 'structura_tabele':
             om(d, ids, it, 'structura_tabele: un cititor vede tabel, celalalt text (fara arbitraj automat)'); st = stare_locala(); continue
+        # contextul trimis arbitrului e plafonat in edge (CHEI_CONTEXT, sir <= 2000, altfel 422 inaintea rezervarii): in proba se sare,
+        # in pasul normal merge la om fara AI (laborator 16.10: proba doar_haiku oprita de un rand_anterior lung)
+        if any(isinstance(it.get(k), str) and len(it[k]) > 2000 for k in CHEI_CONTEXT_ARBITRU):
+            if proba: continue
+            om(d, ids, it, 'context peste 2000 de caractere (limita arbitrului): verificare manuala'); st = stare_locala(); continue
         img = (d / it['image']).read_bytes()
         if sha(img) != it['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % it['band'])
         oprit = opreste_daca_peste_prag(st)
@@ -647,9 +714,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             # proba: oprirea se raporteaza la fel inainte de N si la final (Jakarinos r3 P2), nu ca exceptie intr-un caz si stare in celalalt
             return dict({k: v for k, v in stare_locala().items() if k != 'per_doc'}, stare='oprita', motiv=str(e), apeluri_acum=facute)
         a = uuid.uuid4().hex  # identificator UNIC al incercarii (review r3 Jakarinos P1: doua procese nu pot inchide aceeasi incercare)
+        if doar_haiku: _adauga(d / 'decizii_doar_haiku.jsonl', {'id': it['id'], 'a': a})  # modul, INAINTEA apelului (Jakarinos r1 P2)
         _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
-        status, j = edge.post('ofertare-ocr-arbitreaza', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it,
-                                                         'imagine_b64': base64.b64encode(img).decode('ascii')}, timeout=240)
+        corp = {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it, 'imagine_b64': base64.b64encode(img).decode('ascii')}
+        if doar_haiku: corp['mod'] = 'doar_haiku'
+        status, j = edge.post('ofertare-ocr-arbitreaza', corp, timeout=240)
         if status == 409 and j.get('refuz') == 'arbitrat':
             # decis deja in BD, decizia nu e locala: la reconciliere = needs_human (fail-closed); la prag = needs_human
             _adauga(d / 'pierdute.jsonl', {'id': it['id'], 'sursa': 'claude', 'motiv': 'arbitrat in BD, decizie locala lipsa'})
@@ -658,6 +727,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             # refuz = respins INAINTEA apelului platit (poarta, plafon, stare, amprenta, in zbor): apelul se inchide; fara refuz (409
             # decontat fara decizie, 500, 502, altceva) = posibil platit: ramane necunoscut (start fara gata)
             if 'refuz' in j: _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': j['refuz']})
+            elif status in (400, 413, 422):  # validari ale edge-ului, toate INAINTEA rezervarii (fara plata): apelul se inchide ca refuz
+                _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': 'validare_%d' % status})
+                if proba: st = stare_locala(); continue  # proba sare itemul; pasul normal se opreste ca pana acum
             raise EdgeError('ofertare-ocr-arbitreaza (%s)' % it['id'], status, j)
         dec = j['decizie']
         if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])
@@ -701,6 +773,30 @@ def reconciliaza_rulare(rdir, edge, n=4):
     marcheaza(rdir, 'finalizata_intentie'); tranzitie(rdir, edge, r, 'finalizata')
     heartbeat(edge, True, 'rularea %d: finalizata' % r['rulare_id'])
     return {'pagini': len(rez), 'needs_human': nh, 'reincercari': len(reluari), 'stare': 'finalizata'}
+
+@cu_lacat
+def reluata(rdir, edge):
+    """DUPA reluarea din BD (fn_ofertare_ocr_reia, 20261030d — rulata de om prin psql, cu „da”-ul lui Razvan; clientul NU o poate face):
+    confirma din BD o reluare NOUA — `citita` si urma ei in oprit_motiv („reluata #k (reluare_id N): …”, scrisa doar de
+    fn_ofertare_ocr_reia) cu un reluare_id nepreluat inca local —, muta marcajul local `oprita` (daca exista: caderea dupa commit poate
+    sa-l fi pierdut) in `opriri_anterioare` (istoric) si fixeaza baza ferestrei pragului §8 (prag pe epoca de reluare). Acelasi
+    reluare_id a doua oara = idempotent. Fara urma (ex. oprirea care n-a ajuns in BD) = refuz: nimic nu se reseteaza (Jakarinos r2 P1).
+    Refuza si daca omul a cerut oprirea (oprire_ceruta.json) — aceea nu se reia pe aceasta cale."""
+    rdir = pathlib.Path(rdir); r = rulare(rdir)
+    if (rdir / 'oprire_ceruta.json').exists(): raise RuntimeError('Oprire ceruta de om: nu se reia pe aceasta cale')
+    s = stare_server(edge, r['rulare_id'])
+    m = re.match(r'^reluata #([0-9]+) \(reluare_id ([0-9]+)\): ', s.get('oprit_motiv') or '')
+    if s['stare'] != 'citita' or not m:
+        raise RuntimeError('BD nu arata o reluare (stare %s): ruleaza intai fn_ofertare_ocr_reia' % s['stare'])
+    reluare_id = int(m.group(2)); p = pasi(rdir)
+    if ((p.get('reluare') or {}).get('valoare') or {}).get('reluare_id') == reluare_id: return {'deja': True, 'stare': 'citita', 'reluare_id': reluare_id}
+    o = p.get('oprita') or {'la': time.time(), 'valoare': 'oprire fara marcaj local (cadere dupa commit); motivul din BD: ' + s['oprit_motiv']}
+    st = stare_arbitraj(rdir, r, baza_reluare(rdir))
+    baza = {str(doc): sorted(v['numarate']) for doc, v in st['per_doc'].items()}
+    p['opriri_anterioare'] = {'la': time.time(), 'valoare': ((p.get('opriri_anterioare') or {}).get('valoare') or []) + [o]}
+    p['reluare'] = {'la': time.time(), 'valoare': {'baza': baza, 'oprire': o.get('valoare'), 'reluare_id': reluare_id, 'nr': int(m.group(1))}}
+    p.pop('oprita', None); save(rdir / 'pasi.json', p)
+    return {'stare': 'citita', 'reluare_id': reluare_id, 'baza': {k: len(v) for k, v in baza.items()}, 'oprire_reluata': o.get('valoare')}
 
 def oprire(rdir, edge, motiv):
     """FARA lacat (review r4 Jakarinos P2): merge si cat ruleaza `arbitreaza`. Intai marcajul local oprire_ceruta.json (verificat de

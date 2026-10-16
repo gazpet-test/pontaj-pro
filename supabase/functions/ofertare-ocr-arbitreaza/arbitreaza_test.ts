@@ -2,7 +2,7 @@
 // oricărui cost, citirile DIN BD, nicio decizie la eroarea API, schema strictă, usage lipsă / cost peste rezervare fail-closed.
 import { strict as assert } from 'node:assert'
 import { amprentaDezacord, ANTET_OCR, sha256Hex } from '../_shared/ocrLocal.ts'
-import { arbitreaza, incapeArbitrul } from './arbitreaza.ts'
+import { arbitreaza, bazaFaraDiacritice, doarDiacritice, incapeArbitrul, propunereDoarDiacritice } from './arbitreaza.ts'
 import { PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
 
 const SECRET = 'c'.repeat(64)
@@ -291,4 +291,134 @@ Deno.test('bani in unitati de 0,0001 USD: exact la limita Sonnet incape, cu 0,00
   assert.equal(incapeArbitrul(0.0011, 0.0204, 0.0215), true)     // exact la limita
   assert.equal(incapeArbitrul(0.0012, 0.0204, 0.0215), false)    // 0,0001 peste
   assert.equal(incapeArbitrul(0, 0.0204, 0.0215), true)
+})
+
+// MODUL doar_haiku (laborator 16.10.2026): a doua trecere ieftina pe restantele fara cifre
+Deno.test('doar_haiku: un singur apel Haiku, fără Sonnet chiar la needs_human; rezervarea = limita lui Haiku', async () => {
+  const it = await itemDeTest({ citire_lighton: 'masuri de protecție', citire_mineru: 'masuri de protectie', diferenta_numerica: false })
+  const nh = { text: JSON.stringify({ decizie: 'needs_human', text: '', motiv: 'nesigur', e_cantitate: false, anomalie_separator: false }) }
+  const { m, apeluri, cereriApi } = mediu(it, { api: nh })
+  const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+  assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(cereriApi.length, 1); assert.equal(cereriApi[0].model, 'claude-haiku-5-5')
+  assert.equal(j.decizie.decizie, 'needs_human'); assert.equal(j.decizie.arbitru_model, 'claude-haiku-5-5')
+  assert.ok(j.decizie.motiv.includes('[doar_haiku]'))
+  const { m: m2, apeluri: a2 } = mediu(it, { api: nh })
+  await arbitreaza(cerere(corpDe(it)), m2)  // cascada normala pe acelasi item: rezervare mai mare (include Sonnet)
+  const sumaHaiku = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
+  const sumaCascada = a2.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
+  assert.ok(sumaHaiku > 0 && sumaHaiku < sumaCascada, `${sumaHaiku} < ${sumaCascada}`)
+})
+
+Deno.test('doar_haiku: refuz ÎNAINTEA rezervării dacă citirile din BD conțin vreo cifră (fără cost)', async () => {
+  const it = await itemDeTest({ citire_lighton: 'lungime 10 m', citire_mineru: 'lungime 10 rn', diferenta_numerica: false })
+  const { m, apeluri, cereriApi } = mediu(it)
+  const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+  assert.equal(r.status, 422); assert.equal(j.refuz, 'mod_cifre'); assert.equal(cereriApi.length, 0)
+  assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_rezerva'))
+})
+
+Deno.test('doar_haiku: mod necunoscut sau chei în plus = 400, fără nicio citire din BD', async () => {
+  const it = await itemDeTest({ citire_lighton: 'abc', citire_mineru: 'abd', diferenta_numerica: false })
+  for (const extra of [{ mod: 'doar_sonnet' }, { mod: 'doar_haiku', alt: 1 }]) {
+    const { m, apeluri } = mediu(it)
+    const r = await arbitreaza(cerere(corpDe(it, extra)), m); assert.equal(r.status, 400); assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_dezacord_arbitraj'))
+  }
+})
+
+Deno.test('doar_haiku: cifre Unicode (², fullwidth, arabe) în citiri = refuz înaintea rezervării', async () => {
+  for (const [a, b] of [['suprafata m²', 'suprafata m³'], ['lungime １２', 'lungime １３'], ['١٠ m', '٢٠ m']]) {
+    const it = await itemDeTest({ citire_lighton: a, citire_mineru: b, diferenta_numerica: false })
+    const { m, apeluri, cereriApi } = mediu(it)
+    const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+    assert.equal(r.status, 422, a); assert.equal(j.refuz, 'mod_cifre'); assert.equal(cereriApi.length, 0)
+    assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_rezerva'))
+  }
+})
+
+Deno.test('doar_haiku: text_propus cu cifre devine needs_human (nu se acceptă o cifră inventată pe calea ieftină)', async () => {
+  const it = await itemDeTest({ citire_lighton: 'masuri de protectie', citire_mineru: 'masuri de protectle', diferenta_numerica: false })
+  const tp = { text: JSON.stringify({ decizie: 'text_propus', text: 'masuri de protectie 12', motiv: 'corectat', e_cantitate: false, anomalie_separator: false }) }
+  const { m, apeluri } = mediu(it, { api: tp })
+  const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+  assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, 'needs_human'); assert.equal(j.decizie.text, '')
+  assert.equal(apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj.decizie, 'needs_human')
+})
+
+Deno.test('regula 10: baza fără diacritice — ș ş š → s, ț ţ → t, ă â → a, î → i; majuscule, cifre, spații păstrate', () => {
+  assert.equal(bazaFaraDiacritice('Ștefănești ŞANŢ šimek ÎNCĂ'), 'Stefanesti SANT simek INCA')
+  assert.ok(doarDiacritice('teavă', 'țeavă')); assert.ok(doarDiacritice('Štefănești', 'Ștefănești')); assert.ok(doarDiacritice('SITUATIILOR', 'SITUAȚIILOR'))
+  assert.ok(!doarDiacritice('teava', 'teava')); assert.ok(!doarDiacritice('teava', 'Teava')); assert.ok(!doarDiacritice('teava', 'teava ')); assert.ok(!doarDiacritice('teava', 'leava'))
+})
+
+Deno.test('regula 10: pereche doar de diacritice — text_propus care schimbă și altceva = needs_human; doar diacritice = acceptat', async () => {
+  const it = await itemDeTest({ citire_lighton: 'Štefănești teavă', citire_mineru: 'Stefanesti țeavă', diferenta_numerica: false })
+  const tp = (text: string) => ({ text: JSON.stringify({ decizie: 'text_propus', text, motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) })
+  for (const [text, asteptat] of [['Ștefănești țeavă', 'text_propus'], ['Ștefănești țeavă PE', 'needs_human'], ['ștefănești țeavă', 'needs_human'],
+                                   ['Ștefănești  țeavă', 'needs_human'], ['Ștefănești ţeava', 'text_propus']] as const) {
+    for (const mod of [{ mod: 'doar_haiku' }, {}]) {
+      const { m, apeluri } = mediu(it, { api: tp(text) })
+      const r = await arbitreaza(cerere(corpDe(it, mod)), m); const j = await r.json()
+      assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, asteptat, text + ' ' + JSON.stringify(mod))
+      const scris = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+      assert.equal(scris.decizie, asteptat)
+      if (asteptat === 'needs_human') { assert.equal(scris.text, ''); assert.ok(scris.motiv.startsWith('[diacritice]')) }
+      if ('mod' in mod) assert.ok(scris.motiv.includes('[doar_haiku]'), scris.motiv)
+    }
+  }
+})
+
+Deno.test('regula 10: pereche care diferă și prin altceva — verificarea de diacritice nu se aplică', async () => {
+  const it = await itemDeTest({ citire_lighton: 'teavă PE', citire_mineru: 'țeavă PF', diferenta_numerica: false })
+  const tp = { text: JSON.stringify({ decizie: 'text_propus', text: 'țeavă PE', motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) }
+  const { m } = mediu(it, { api: tp })
+  const j = await (await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m)).json()
+  assert.equal(j.decizie.decizie, 'text_propus')
+})
+
+Deno.test('prompt arb-v3: regula 10 cere ordinea a→b, fără semne adăugate, nume străine păstrate, verificare automată', () => {
+  for (const f of ['Nu adaugi niciodată un semn', 'normalizare asumată', 'Šimek', 'se verifică automat', '(c) are prioritate']) assert.ok(PROMPT.includes(f), f)
+})
+
+Deno.test('regula 10: semnele combinante din afara listei NU se scot — ≠ ≰, U+034F, U+FE0F, U+200B schimbă baza (Jakarinos arb-v3 r2 P1)', async () => {
+  assert.notEqual(bazaFaraDiacritice('p ≠ q'), bazaFaraDiacritice('p = q')); assert.notEqual(bazaFaraDiacritice('a ≰ b'), bazaFaraDiacritice('a ≤ b'))
+  for (const inv of ['\u034F', '\uFE0F', '\u200B', '\u0338']) assert.notEqual(bazaFaraDiacritice('teava' + inv), bazaFaraDiacritice('teava'), inv)
+  assert.equal(bazaFaraDiacritice('șţăîâšž'), 'staiasz')  // ș ţ ă î â š ž
+  const it = await itemDeTest({ citire_lighton: 'teavă | p = q', citire_mineru: 'țeavă | p = q', diferenta_numerica: false })
+  for (const text of ['țeavă | p ≠ q', 'țeavă | p = q\u034F', 'țeavă\uFE0F | p = q']) {
+    const tp = { text: JSON.stringify({ decizie: 'text_propus', text, motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) }
+    // doar_haiku (un apel) si cascada cu Sonnet decizia finala (Haiku nesigur → Sonnet propune)
+    const nh = { text: JSON.stringify({ decizie: 'needs_human', text: '', motiv: 'nesigur', e_cantitate: false, anomalie_separator: false }) }
+    for (const [mod, opt] of [[{ mod: 'doar_haiku' }, { api: tp }], [{}, { apiSeq: [nh, tp] }]] as const) {
+      const { m, apeluri, cereriApi } = mediu(it, opt as any)
+      const r = await arbitreaza(cerere(corpDe(it, mod)), m); const j = await r.json()
+      assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, 'needs_human', text); assert.equal(j.decizie.text, '')
+      const sc = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args
+      assert.equal(sc.p_arbitraj.decizie, 'needs_human'); assert.ok(sc.p_arbitraj.motiv.startsWith('[diacritice]'))
+      assert.equal(cereriApi.length, 'mod' in mod ? 1 : 2); assert.ok(Number(sc.p_arbitraj.cost_usd) > 0, 'cost pastrat')
+    }
+  }
+})
+
+Deno.test('regula 10: detectarea larga nu poate fi ocolita cu é sau semne din afara listei; validarea stricta (Jakarinos arb-v3 r3 P1)', async () => {
+  assert.ok(doarDiacritice('teavă | René | p = q', 'țeavă | Rene | p = q')); assert.ok(doarDiacritice('teavă | a\u0301 | p = q', 'țeavă | a\u0301\u0306 | p = q'))
+  assert.ok(!doarDiacritice('ă', 'a\u0306'))  // aceeasi litera in NFC / NFD = nu e dezacord de diacritice
+  assert.ok(propunereDoarDiacritice('țeavă | René | p = q', 'teavă | René | p = q', 'țeavă | Rene | p = q'))
+  assert.ok(!propunereDoarDiacritice('țeavă | René | p > q', 'teavă | René | p = q', 'țeavă | Rene | p = q'))
+  const nh = { text: JSON.stringify({ decizie: 'needs_human', text: '', motiv: 'nesigur', e_cantitate: false, anomalie_separator: false }) }
+  for (const [l, mi, prop, asteptat] of [
+    ['teavă | René | p = q', 'țeavă | Rene | p = q', 'țeavă | René | p > q', 'needs_human'],
+    ['teavă | a\u0301 | p = q', 'țeavă | a\u0301\u0306 | p = q', 'țeavă | a\u0301 | p > q', 'needs_human'],
+    ['teavă | René | p = q', 'țeavă | Rene | p = q', 'țeavă | René | p = q', 'text_propus'],
+  ] as const) {
+    const it = await itemDeTest({ citire_lighton: l, citire_mineru: mi, diferenta_numerica: false })
+    const tp = { text: JSON.stringify({ decizie: 'text_propus', text: prop, motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) }
+    for (const [mod, opt] of [[{ mod: 'doar_haiku' }, { api: tp }], [{}, { apiSeq: [nh, tp] }]] as const) {
+      const { m, apeluri } = mediu(it, opt as any)
+      const r = await arbitreaza(cerere(corpDe(it, mod)), m); const j = await r.json()
+      assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, asteptat, prop + ' ' + JSON.stringify(mod))
+      const sc = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+      assert.ok(Number(sc.cost_usd) > 0)
+      if (asteptat === 'needs_human') { assert.equal(sc.text, ''); assert.ok(sc.motiv.startsWith('[diacritice]')) }
+    }
+  }
 })

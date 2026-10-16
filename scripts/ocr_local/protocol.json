@@ -31,7 +31,7 @@
   "arbitru": {
     "nota": "Deciziile acceptate la reconciliere: doar modelele si versiunile de prompt de aici (cascada Haiku 5.5 -> Sonnet 5 in acelasi apel, decizia Razvan 15.10.2026: decizia finala poarta modelul care a decis). arb-v1 = promptul D3b; arb-v2 = acelasi + regula 9 (formatul citirilor, laborator 15.10.2026), ultima = cea din supabase/functions/ofertare-ocr-arbitreaza/prompt.ts; deciziile arb-v1 deja platite raman valabile; orice alta versiune = needs_human (fail-closed). Test: test_prompt_arbitru_admis.",
     "modele_admise": ["claude-sonnet-5", "claude-haiku-5-5"],
-    "prompt_versiuni_admise": ["arb-v1", "arb-v2"]
+    "prompt_versiuni_admise": ["arb-v1", "arb-v2", "arb-v3"]
   },
   "guard_tokenizer": {
     "path": "C:/Users/Gazpet-Ai/Documents/Codex/2026-10-10/git/work/model_dots_windows/tokenizer.json",

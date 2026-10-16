@@ -1,0 +1,94 @@
+{
+ "r1": {
+  "clase": {
+   "HIGH_RISK": 5926,
+   "DEFER": 5973,
+   "OM": 682,
+   "MARCAJE": 88
+  },
+  "motive": {
+   "continut diferit langa cifre (numar, UM, semn, cod, coloana)": 5038,
+   "continut diferit fara nicio cifra": 5657,
+   "banda_intreaga": 10,
+   "rand lipsa la un cititor, cu cifre": 888,
+   "continut identic, difera doar marcajele pipeline-ului": 88,
+   "structura_tabele": 672,
+   "rand lipsa la un cititor, fara cifre": 316
+  },
+  "per_tip": {
+   "text": {
+    "HIGH_RISK": 2573,
+    "DEFER": 5451
+   },
+   "banda_intreaga": {
+    "OM": 10
+   },
+   "rand_tabel": {
+    "HIGH_RISK": 2465,
+    "DEFER": 206,
+    "MARCAJE": 88
+   },
+   "rand_lipsa_lighton": {
+    "HIGH_RISK": 711,
+    "DEFER": 275
+   },
+   "structura_tabele": {
+    "OM": 672
+   },
+   "rand_lipsa_mineru": {
+    "HIGH_RISK": 177,
+    "DEFER": 41
+   }
+  }
+ },
+ "rt1": {
+  "clase": {
+   "HIGH_RISK": 3844,
+   "DEFER": 3024,
+   "MARCAJE": 9,
+   "OM": 95
+  },
+  "motive": {
+   "continut diferit langa cifre (numar, UM, semn, cod, coloana)": 2843,
+   "continut diferit fara nicio cifra": 2805,
+   "continut identic, difera doar marcajele pipeline-ului": 9,
+   "structura_tabele": 63,
+   "banda_intreaga": 32,
+   "rand lipsa la un cititor, fara cifre": 219,
+   "rand lipsa la un cititor, cu cifre": 1001
+  },
+  "per_tip": {
+   "text": {
+    "HIGH_RISK": 1448,
+    "DEFER": 2567,
+    "MARCAJE": 2
+   },
+   "rand_tabel": {
+    "DEFER": 238,
+    "HIGH_RISK": 1395,
+    "MARCAJE": 7
+   },
+   "structura_tabele": {
+    "OM": 63
+   },
+   "banda_intreaga": {
+    "OM": 32
+   },
+   "rand_lipsa_mineru": {
+    "DEFER": 123,
+    "HIGH_RISK": 696
+   },
+   "rand_lipsa_lighton": {
+    "HIGH_RISK": 305,
+    "DEFER": 96
+   }
+  }
+ },
+ "proba_arbv2": {
+  "DEFER|decis": 4,
+  "HIGH_RISK|decis": 94,
+  "HIGH_RISK|needs_human": 15,
+  "MARCAJE|decis": 1,
+  "MARCAJE|needs_human": 3
+ }
+}

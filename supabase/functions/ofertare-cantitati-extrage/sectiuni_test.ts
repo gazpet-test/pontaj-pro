@@ -185,3 +185,15 @@ Deno.test('handler: reluare (de_la) exact pe felia C6 → fără căutarea obiec
   assert(scrise(r.n).every((x) => x.tip_sursa === 'lista_c6'))
   assertEquals(r.j.raport, [{ doc: DOC_LISTA.nume_original, bucata: '2/3', tip_sursa: 'lista_c6', pozitii: 2 }])
 })
+
+Deno.test('TKT-0329 B: formele Răcari — „Formularul F3”, „FORMULARUL C9”, F1 / F2 separate de F3', () => {
+  const t = [
+    '**FORMULARUL F1 - Centralizatorul cheltuielilor pe obiectiv**', 'TOTAL 100',
+    '**FORMULARUL F2 - Centralizatorul cheltuielilor pe obiect**', 'TOTAL 100',
+    '**FORMULARUL F3**', '**Lista cu cantitatile de lucrari**', '003 SA11G1 [ 2] M 570.000',
+    '# FORMULARUL C9', 'LISTA COMPONENTILOR', '| 1 | transport | 220.470 |',
+    'Formularul F1 - Centralizatorul', 'Formularul F3', 'Lista cu cantitatile de lucrari', '003 SA11G1 [ 2] M 130.000', '',
+  ].join('\n')
+  const s = sectiuniLista(t).map((x) => [x.tip, t.slice(x.de, x.pana).includes('SA11G1')])
+  assertEquals(s, [['lista_alt', false], ['lista_f3', true], ['lista_alt', false], ['lista_f3', true]])
+})

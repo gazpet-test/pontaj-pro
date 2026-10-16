@@ -34,6 +34,7 @@ import { eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligi
 import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
 import { poateCheltui } from './poarta.ts'
 import { feliiDocument, type TipLista } from './sectiuni.ts'
+import { extrageStructurat } from './structurat.ts'
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a)
@@ -179,6 +180,8 @@ Nu scrie NIMIC în afara JSON-ului — nici explicații, nici comentarii.`
 export type Deps = {
   db: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch
   chei: { A: string; G: string; O: string }
+  // TKT-0329 B: clientul utilizatorului (citirile din tabelele noi au SELECT doar pentru authenticated, cu fn_are_acces_ofertare)
+  dbUtilizator?: (jwt: string) => any
 }
 export function depsReale(): Deps {
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!
@@ -190,6 +193,7 @@ export function depsReale(): Deps {
       return u?.user?.id || null
     },
     chei: { A: Deno.env.get('ANTHROPIC_API_KEY') || '', G: Deno.env.get('GEMINI_API_KEY') || '', O: Deno.env.get('OPENAI_API_KEY') || '' },
+    dbUtilizator: (jwt) => createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } }),
   }
 }
 
@@ -199,6 +203,13 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   aiFetch = deps.fetch
 
   let uidApelant: string | null = null
+  // TKT-0329 B: modul `structurat` (observații în ofertare_cant_obs, pe cerere de cheltuială activă) — x-radar-secret REFUZAT
+  // (secretul tehnic nu ține loc de acord, spec §4.3); doar utilizator owner / responsabil.
+  let bodyBrut = ''
+  try { bodyBrut = await req.clone().text() } catch { /* gol */ }
+  let modCerut = ''
+  try { modCerut = String(JSON.parse(bodyBrut || '{}')?.mod || '') } catch { /* gol */ }
+  if (modCerut === 'structurat') return await ruleazaStructurat(req, deps, bodyBrut)
   if (!(await secretOk(req, db))) {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim()
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
@@ -469,4 +480,76 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // NU se mai scrie nimic aici. Scrierea se face pe felie, mai sus. O a doua inserare la final
   // ar re-scrie tot ce s-a scris deja — exact asa au aparut cele 77 de duplicate pe Domnesti.
   return json({ ...comun, scrise: scriseTotal })
+}
+
+// ── TKT-0329 B: modul structurat ──
+async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Promise<Response> {
+  if (req.headers.get('x-radar-secret')) return json({ error: 'Modul structurat nu acceptă x-radar-secret: pornește doar un utilizator, pe o cerere aprobată.' }, 403)
+  const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim()
+  if (!jwt) return json({ error: 'fără autentificare' }, 401)
+  const uid = await deps.getUser(jwt)
+  if (!uid) return json({ error: 'token invalid' }, 401)
+  let body: any = {}; try { body = JSON.parse(bodyBrut || '{}') } catch { /* gol */ }
+  const licId = Number(body.licitatie_id), cerereId = Number(body.cerere_id)
+  if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
+  if (!cerereId) return json({ error: 'cerere_id lipsă — extragerea structurată pornește doar pe o cerere de cheltuială aprobată' }, 402)
+  const db = deps.db
+  const [{ data: prof }, { data: lic }] = await Promise.all([
+    db.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
+    db.from('ofertare_licitatii').select('responsabil_id, stare_loturi').eq('id', licId).maybeSingle(),
+  ])
+  if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uid))
+    return json({ error: 'Extragerea costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
+  if (!deps.chei.O) return json({ error: 'OPENAI_API_KEY lipsă din secretele funcției' }, 500)
+  if (!deps.dbUtilizator) return json({ error: 'configurare: client utilizator lipsă' }, 500)
+  const dbU = deps.dbUtilizator(jwt)
+  // poarta pe loturi ÎNAINTE de orice apel (fail-closed); RPC-ul extragerii o reverifică pe lotul cererii
+  const elig = await eligibilitateLicitatie(db, licId)
+  if (!elig.ok) return json({ ok: false, blocat_lot: true, motiv: 'eroare_poarta', error: mesajLot('eroare_poarta') + ' — nu s-a procesat nimic' })
+  aiFetch = deps.fetch
+  const r = await extrageStructurat({
+    rpc: (fn, args) => db.rpc(fn, args),
+    cerere: async (id) => {
+      const { data } = await dbU.from('ofertare_ai_cereri').select('id, licitatie_id, scop, stare, valabil_pana, lot_domeniu, lot_nr').eq('id', id).maybeSingle()
+      return data ?? null
+    },
+    documente: async (l) => {
+      const { data } = await db.from('ofertare_documente_atribuire').select('id, nume_original, tip, text_extras, seap_meta, lot_stare')
+        .eq('licitatie_id', l).order('id')
+      return (data || []).filter((d: any) => esteEligibil(elig.harta, d.id))
+    },
+    deciziiRol: async (l) => {
+      const { data } = await dbU.from('ofertare_cant_doc_decizii').select('id, document_id, doc_sha256, rol, sectiune, decizie, revoca_id').eq('licitatie_id', l)
+      const revocate = new Set((data || []).filter((x: any) => x.revoca_id).map((x: any) => x.revoca_id))
+      return (data || []).filter((x: any) => !revocate.has(x.id) && ['rol_confirmat', 'nu_e_sursa_cantitativa'].includes(x.decizie))
+    },
+    lotDocument: async (l, ids) => {
+      const m = new Map<number, { domeniu: 'toate' | 'lista' | 'necunoscut'; loturi: number[] }>()
+      const { data: docs } = await db.from('ofertare_documente_atribuire').select('id, lot_stare').in('id', ids)
+      const { data: dl } = await db.from('ofertare_document_loturi').select('document_id, lot_nr').in('document_id', ids)
+      for (const d of docs || []) {
+        const loturi = (dl || []).filter((x: any) => x.document_id === d.id).map((x: any) => Number(x.lot_nr)).sort((a: number, b: number) => a - b)
+        m.set(d.id, lic?.stare_loturi === 'fara_loturi' || d.lot_stare === 'comun' ? { domeniu: 'toate', loturi: [] }
+          : d.lot_stare === 'alocat' && loturi.length ? { domeniu: 'lista', loturi } : { domeniu: 'necunoscut', loturi: [] })
+      }
+      return m
+    },
+    extragereInLucru: async (docId, sha, extractorId) => {
+      const { data } = await dbU.from('ofertare_cant_extrageri').select('id, cerere_id').eq('document_id', docId).eq('doc_sha256', sha)
+        .eq('extractor_id', extractorId).eq('stare', 'in_lucru').maybeSingle()
+      return data ? { id: Number(data.id), cerere_id: Number(data.cerere_id) } : null
+    },
+    ultimaIncercare: async (munca) => {
+      const { data } = await dbU.from('ofertare_cant_felii').select('id, stare, rezervare_id').eq('munca_id', munca)
+        .order('incercare', { ascending: false }).limit(1)
+      return data?.[0] ?? null
+    },
+    ai: async (prompt) => {
+      const x = await cheama('openai_mini', prompt, '', '', deps.chei.O)
+      // „incomplete” (tăiat la plafonul de ieșire) e un rezultat incert: nu se scrie ca extragere completă
+      return x.eroare ? { txt: '', inF: x.inF, outF: x.outF, eroare: x.eroare } : { txt: x.txt, inF: x.inF, outF: x.outF, necunoscut: x.stop !== 'completed' }
+    },
+    acum: () => Date.now(),
+  }, { licitatie_id: licId, cerere_id: cerereId, max_felii: Number(body.max_felii) || 0 })
+  return json(r.body, r.status)
 }

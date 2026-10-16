@@ -1,3 +1,5 @@
+// v16 (15.10.2026): regula de tabel fermă (" | " pe fiecare celulă, cu exemplu F3 + contraexemplu) în ambele prompturi
+// (text + antet) și max_tokens 12000 pe Haiku 5.5 — după proba Haiku 4.5 vs 5.5 pe 7 documente (_shared/transcriereTabel.ts).
 // v14 (12.10.2026, loturi MVP 20261024b): poarta unică pe loturi înainte de orice cost — neeligibil → {ok:false, blocat_lot}.
 // v13 (30.09.2026, DRAFT, nedeployat): GARDA — fără cale anonimă (secret de serviciu sau utilizator cu acces Ofertare),
 // contor persistent de încercări/descărcări cu blocare, scurtcircuit pe mărime+etag/sha256. Vezi docs/INGEST_GARDA.md.
@@ -30,6 +32,8 @@ import { GARDA, identificaApelant, dejaIngeratLaHash, sha256Hex, plasaExactOnce,
 import { metaObiect, gardaIncearca, incercareGarda } from '../_shared/gardaIngest.ts'
 import { descarcaCuJurnal } from '../_shared/egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md), fail-open — garda de mai sus rămâne fail-closed
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
+import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'   // v16: aceeași regulă + plafon ca ofertare-citire-test
+import { scrieProvenienta } from '../_shared/provenientaText.ts'   // TKT-0329 B: proveniența textului (transcriere)
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -40,16 +44,27 @@ const BUCKET = 'ofertare'
 // Haiku nu pierde conținut, dar mută text între pagini (4 din 23 greșite); Sonnet ≈ Opus.
 // Documentele critice (fișa de date, clarificări, formulare) → Sonnet 5, felii de 2 pagini;
 // volumele (caiete, planșe, alta) → Haiku, felii de 8.
-const MODELE: Record<string, { id: string; in: number; out: number; felie: number }> = {
-  haiku: { id: 'claude-haiku-4-5-20251001', in: 1 / 1e6, out: 5 / 1e6, felie: 8 },
-  sonnet: { id: 'claude-sonnet-5', in: 3 / 1e6, out: 15 / 1e6, felie: 2 },
+// v15 (15.10.2026): volumele trec de pe Haiku 4.5 (1 / 5 $ pe 1M) pe Haiku 5.5. Prețul Haiku 5.5 e copiat din
+// _shared/ocrLocal.ts PRETURI['claude-haiku-5-5'] (nu se importă, ca să nu legăm funcția de modulul OCR):
+// 0,10 / 0,50 $ pe 1M până la 100K tokeni de intrare PE CERERE, 0,50 / 2,50 $ peste (pragul se aplică pe fiecare apel).
+// Atenție: tokenizerul Haiku 5.5 numără ~30% mai mulți tokeni pe același text decât Haiku 4.5.
+type Model = { id: string; in: number; out: number; felie: number; prag?: number; peste?: { in: number; out: number } }
+const MODELE: Record<string, Model> = {
+  haiku: { id: 'claude-haiku-5-5', in: 0.10 / 1e6, out: 0.50 / 1e6, felie: 8, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } },
+  // Sonnet 5: 2 / 10 $ pe 1M (sursa: _shared/ocrLocal.ts PRETURI['claude-sonnet-5']; înainte 3 / 15, cost raportat ~50% peste cel real).
+  sonnet: { id: 'claude-sonnet-5', in: 2 / 1e6, out: 10 / 1e6, felie: 2 },
+}
+// Costul unui singur apel: rata se alege după tokenii de intrare ai ACELUI apel (prompt > prag ⇒ rata „peste”).
+export function costApel(M: Model, tokIn: number, tokOut: number): number {
+  const r = M.prag !== undefined && M.peste && tokIn > M.prag ? M.peste : M
+  return tokIn * r.in + tokOut * r.out
 }
 const TIPURI_CRITICE = ['fisa_date', 'clarificare', 'raspuns_clarificare', 'formular']
 const APELURI_PER_INVOCARE = 2
 const MAX_CHUNK_BYTES = 24_000_000
 const MAX_TEXT = 900_000
 const AVERT_REZERVA = 300   // loc pentru avertismentul „TRUNCHIAT” adăugat după tăiere
-const MAX_OUT = 8000
+// v16 (15.10.2026): plafonul de ieșire vine din _shared/transcriereTabel.ts — 12000 pe Haiku 5.5, 8000 în rest.
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-ingest-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -59,7 +74,8 @@ const marcaj = (n: number) => `⟦PAGINA ${n}⟧`
 const REGULA_PAGINI = (prima: number, nr: number) =>
   `Fragmentul are ${nr} pagin${nr === 1 ? 'ă' : 'i'}; prima este pagina ${prima} a documentului. OBLIGATORIU: începe transcrierea FIECĂREI pagini cu o linie separată exact de forma ⟦PAGINA N⟧ (N = numărul paginii în document, deci ${prima}${nr > 1 ? `, ${prima + 1}, … ${prima + nr - 1}` : ''}). Nu sări niciun marcaj, chiar dacă pagina e goală sau e o planșă.`
 
-const PROMPT_TEXT = (prima: number, nr: number) => `Extrage TOT textul lizibil din acest fragment de document (licitație publică românească — caiet de sarcini / fișă de date / liste cantități / clarificări). Transcrie fidel, în ordinea de pe pagină, inclusiv tabele (rânduri separate prin linii noi, celule prin " | "). NU rezuma, NU comenta, NU adăuga nimic de la tine. Dacă o pagină e desen/planșă fără text, scrie doar [PLANȘĂ: <titlul din indicator, dacă se vede>].
+const PROMPT_TEXT = (prima: number, nr: number) => `Extrage TOT textul lizibil din acest fragment de document (licitație publică românească — caiet de sarcini / fișă de date / liste cantități / clarificări). Transcrie fidel, în ordinea de pe pagină, inclusiv tabele (după regula TABELE de mai jos). NU rezuma, NU comenta, NU adăuga nimic de la tine. Dacă o pagină e desen/planșă fără text, scrie doar [PLANȘĂ: <titlul din indicator, dacă se vede>].
+${REGULA_TABEL}
 ${REGULA_PAGINI(prima, nr)}
 Răspunde DOAR cu textul extras.`
 
@@ -67,7 +83,8 @@ const PROMPT_ANTET = (prima: number, nr: number) => `Ești la PRIMA felie a unui
 Răspunde în DOUĂ părți separate de linia ===TEXT===:
 Partea 1 — EXCLUSIV JSON: {"obiectiv": "...", "beneficiar": "...", "proiectant": "...", "proiect_nr": "...", "revizie": "...", "data": "...", "pare_scanat": true|false} (null unde nu apare).
 ===TEXT===
-Partea 2 — tot textul extras, cu aceleași reguli: transcriere fidelă, tabele cu " | ", [PLANȘĂ: ...] pentru desene, fără rezumat.
+Partea 2 — tot textul extras, cu aceleași reguli: transcriere fidelă, tabele după regula TABELE de mai jos, [PLANȘĂ: ...] pentru desene, fără rezumat.
+${REGULA_TABEL}
 ${REGULA_PAGINI(prima, nr)}`
 
 function b64(bytes: Uint8Array): string {
@@ -138,13 +155,31 @@ Deno.serve(async (req: Request) => {
   let pornitDe: string | null = null   // cine a pornit citirea (procesat_de)
   // încercarea acordată de gardă (token + lease); null până la „continua”. inchide() trimite _rezultat O SINGURĂ dată.
   let inc: Incercare | null = null
+  // Consumul facturat al invocării (Jakarinos r1 / PR #724): fiecare răspuns Claude cu `usage` se adună aici ÎNAINTE de orice
+  // verificare, iar jurnalul se scrie O SINGURĂ dată — pe succes sau în fail() — ca un apel plătit urmat de un eșec să nu
+  // dispară din ai_usage_log și nici să nu fie dublat.
+  const uz = { model: '', tokIn: 0, tokOut: 0, cost: 0, scris: false }
+  const jurnalizeaza = async (siFaraConsum: boolean): Promise<string | null> => {
+    if (uz.scris || !uz.model || (!siFaraConsum && uz.tokIn === 0 && uz.tokOut === 0)) return null
+    uz.scris = true
+    try {
+      const { error } = await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: uz.model, tokens_in: uz.tokIn, tokens_out: uz.tokOut, cost_usd: uz.cost, ref_table: 'ofertare_documente_atribuire', ref_id: docId })
+      if (!error) return null
+      console.error('ai_usage_log doc', docId, error.message)
+      return 'ai_usage_log: ' + (error.message || 'insert eșuat')
+    } catch (e: any) {
+      console.error('ai_usage_log doc', docId, e?.message || e)
+      return 'ai_usage_log: ' + String(e?.message || e)
+    }
+  }
 
   const fail = async (msg: string) => {
+    const eJurnal = await jurnalizeaza(false)   // costul apelurilor deja facturate rămâne în jurnal și pe drumul de eroare
     // runda 3 (J2): cu token, starea 'eroare' se scrie de server ATOMIC cu eșecul (o încercare preluată nu mai atinge documentul);
     // fără token (erori înainte de gardă, fără descărcare), ca înainte
     if (inc) await inc.inchide({ rezultat: 'esec', eroare: msg, doc: { status_procesare: 'eroare', eroare: msg.slice(0, 500) } })
     else if (docId) { try { await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: msg.slice(0, 500) }).eq('id', docId) } catch (_) {} }
-    return new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
+    return new Response(JSON.stringify({ error: msg, ...(eJurnal ? { jurnal_cost_eroare: eJurnal } : {}) }), { status: 200, headers: CORS })
   }
 
   try {
@@ -250,7 +285,8 @@ Deno.serve(async (req: Request) => {
       }
     }
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
-    const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
+    const MODEL = M.id, PAGINI_PER_FELIE = M.felie
+    uz.model = MODEL
 
     const { data: blob, error: dlErr } = await descarcaCuJurnal(supabase, BUCKET, row.fisier_path, 'edge:ofertare-ingest-doc', row.id ?? docId)
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
@@ -284,7 +320,6 @@ Deno.serve(async (req: Request) => {
     let textNou = ''
     let antet: any = null
     let pareScanat: boolean | null = null
-    let tokIn = 0, tokOut = 0
     let plafon = false
     let primaPlafon = Infinity   // prima pagină lăsată necitită din cauza plafonului
     // paginile necitite se acumulează peste invocări (documentul mare se citește în mai multe runde)
@@ -313,9 +348,11 @@ Deno.serve(async (req: Request) => {
         method: 'POST',
         headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: MODEL, max_tokens: MAX_OUT,
-          // Sonnet 5 gândește implicit (adaptive) și gândirea intră în max_tokens — la transcriere e inutilă și scumpă.
-          ...(MODEL === MODELE.sonnet.id ? { thinking: { type: 'disabled' } } : {}),
+          model: MODEL, max_tokens: maxOut(MODEL),
+          // Sonnet 5 și Haiku 5.5 gândesc implicit (adaptive) și gândirea intră în max_tokens — la transcriere e inutilă
+          // și scumpă. Haiku 5.5 acceptă 'disabled' doar la effort low/medium/high (implicit medium) — nu trimitem effort.
+          // Fără temperature/top_p/top_k: modelele 5.x le resping cu 400 (vezi ofertare-ocr-arbitreaza).
+          thinking: { type: 'disabled' },
           messages: [{ role: 'user', content: [
             { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(pdfFelie) } },
             { type: 'text', text: primaFelie ? PROMPT_ANTET(sAbs + 1, e - s) : PROMPT_TEXT(sAbs + 1, e - s) },
@@ -323,8 +360,10 @@ Deno.serve(async (req: Request) => {
         }),
       })
       const data = await resp.json()
+      // consumul se adună înainte de verificarea statusului: orice răspuns cu `usage` e facturabil
+      const ti = data.usage?.input_tokens || 0, to = data.usage?.output_tokens || 0
+      uz.tokIn += ti; uz.tokOut += to; uz.cost += costApel(M, ti, to)
       if (!resp.ok) return await fail(`Claude paginile ${sAbs + 1}-${eAbs}: ` + (data.error?.message || resp.status))
-      tokIn += data.usage?.input_tokens || 0; tokOut += data.usage?.output_tokens || 0
 
       if (data.stop_reason === 'max_tokens' && (e - s) > 1) {
         felie = Math.max(1, Math.ceil((e - s) / 2))
@@ -332,7 +371,11 @@ Deno.serve(async (req: Request) => {
       }
 
       let txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
-      if (data.stop_reason === 'max_tokens') {
+      if (data.stop_reason === 'refusal') {
+        // Haiku 5.5 are clasificatori de siguranță fără fallback pe server: felia refuzată NU e citită — se spune cinstit.
+        txt = ''
+        for (let p = sAbs + 1; p <= eAbs; p++) { necitite.add(p); txt += `\n${marcaj(p)}\n[PAGINA ${p}: NECITITĂ — modelul a refuzat transcrierea (${data.stop_details?.category ?? 'fără categorie'})]\n` }
+      } else if (data.stop_reason === 'max_tokens') {
         // O singură pagină care nu încape în plafon: parțial citită = necitită, ca să nu
         // pretindem ce n-avem. Textul rămâne, e util, dar pagina e marcată.
         txt += `\n[PAGINA ${sAbs + 1}: transcriere trunchiată la plafon — pagină extrem de densă]\n`
@@ -361,9 +404,8 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    try {
-      await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * PRICE_IN + tokOut * PRICE_OUT, ref_table: 'ofertare_documente_atribuire', ref_id: docId })
-    } catch (_) {}
+    // fără throw: eroarea jurnalului nu oprește citirea, dar se raportează în răspuns (jurnal_cost_eroare) și în log
+    const eJurnal = await jurnalizeaza(true)
 
     const gata = poz >= nPag
     let textAcum = ((start === 0 ? '' : (row.text_extras || '')) + '\n' + textNou).trim()
@@ -388,12 +430,16 @@ Deno.serve(async (req: Request) => {
     // Runda 3 (J2): documentul se scrie de SERVER, în aceeași tranzacție cu verificarea tokenului — o încercare veche nu mai
     // poate suprascrie progresul uneia noi. Respins → nimic scris; RPC pierdut → rezultat NECONFIRMAT (stare necunoscută).
     await inc.inchide({ rezultat: gata ? 'succes' : 'progres', hash, size: bytes.length, etag: meta?.etag ?? null, doc: upd })
+    if (inc.raspuns?.acceptat === true && textAcum) {
+      // TKT-0329 B: textul citit de ingest = TRANSCRIERE, scrisă de producător pe exact textul acceptat (integral doar la final, fără pagini necitite)
+      await scrieProvenienta(supabase, docId as number, textAcum, 'transcriere', 'ofertare-ingest-doc', gata && !listaNecitite.length ? 'integral' : 'partial', listaNecitite)
+    }
     if (inc.raspuns?.acceptat !== true) {
       const id = docId; docId = null
       return new Response(JSON.stringify({ ok: false, garda: 'rezultat_respins', error: 'garda: rezultat NECONFIRMAT — respins (token vechi/străin) sau fără răspuns (stare necunoscută): ' + (inc.raspuns?.motiv ?? 'fără răspuns'), doc_id: id, continua: false }), { headers: CORS })
     }
 
-    return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: tokIn, tokens_out: tokOut }), { headers: CORS })
+    return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: uz.tokIn, tokens_out: uz.tokOut, ...(eJurnal ? { jurnal_cost_eroare: eJurnal } : {}) }), { headers: CORS })
   } catch (e: any) {
     // excepție după „continua” → fail() închide încercarea ca 'esec' cu mesajul ei (o singură dată)
     return await fail('Eroare neasteptata: ' + String(e?.message || e))
