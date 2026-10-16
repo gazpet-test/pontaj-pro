@@ -202,14 +202,12 @@ class Client(unittest.TestCase):
         C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); self.assertGreaterEqual(c['dezacorduri'], 1)
         apeluri = lambda: len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
         a = C.arbitreaza(rdir, self.edge, max_apeluri=10, triere=True); self.assertEqual((a['apeluri_acum'], apeluri()), (0, 0))
-        a = C.arbitreaza(rdir, self.edge, triere=True); self.assertEqual((a['stare'], apeluri()), ('arbitrata', 0))
-        om = [json.loads(l) for l in (rdir / ('d%d' % DOC) / 'decizii_om.jsonl').read_text(encoding='utf-8').splitlines() if l.strip()]
-        self.assertTrue(om)
-        self.assertTrue(all(x['motiv'].startswith('DEFER:') for x in om))
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, triere=True)  # pasul normal: refuz (decizia Razvan 16.10)
+        self.assertFalse((rdir / ('d%d' % DOC) / 'decizii_om.jsonl').exists()); self.assertEqual(apeluri(), 0)
     def test_triere_cu_numere_merge_la_claude(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
         C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); nb = c['dezacorduri']
-        a = C.arbitreaza(rdir, self.edge, triere=True); self.assertEqual((a['stare'], a['claude']), ('arbitrata', nb))
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=100, triere=True); self.assertEqual((a['stare'], a['claude']), ('proba', nb))
     def test_proba_oprire_ceruta_dupa_primul_apel(self):
         # Jakarinos r3 P2: oprirea ceruta inainte de N se raporteaza ca stare, la fel ca la final; niciun apel dupa ea
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'a 10 b 11 c 12 d 13 e', 'a 20 b 21 c 22 d 23 e')

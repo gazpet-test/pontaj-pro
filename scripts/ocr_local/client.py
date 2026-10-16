@@ -617,6 +617,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             clase[cheie] = triaza_banda(raws['lighton'], raws['mineru'], toate)
         return clase[cheie].get(it['id'], ('HIGH_RISK', 'item necunoscut la triere'))
     if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
+    # Decizia Razvan 16.10 (varianta A, #737): DEFER / MARCAJE NU se trimit in masa la om; raman restante pentru o a doua trecere ieftina,
+    # decisa separat. Pana atunci --triere e permis DOAR in proba (unde restul se sare, neatins).
+    if triere and not proba: raise ValueError('--triere doar in proba (--max-apeluri): DEFER/MARCAJE raman restante, nu merg in masa la om')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     try: activa(rdir)
     except RuntimeError as e:
