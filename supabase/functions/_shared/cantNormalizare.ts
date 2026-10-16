@@ -1,7 +1,7 @@
 // TKT-0329 B (PR3): normalizarea deterministă a unui rând extras de model → observație pentru fn_ofertare_cb_obs_scrie (spec §4.1,
 // §5.1). Modelul propune; codul decide DN-ul, UM-ul, materialul, cheia obiectului, tipul lucrării / măsura și poziția (pozitieDovedita).
 import { dnDinText } from './dn.ts'
-import { blocRand, codComparabil, type Conventie, pozitieDovedita, umNorm, valoareInDocument } from './cantNumar.ts'
+import { blocRand, codComparabil, type Conventie, identificatoriLinie, pozitieDovedita, umNorm, valoareInDocument } from './cantNumar.ts'
 export { umNorm }
 
 const faraDiacritice = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -85,13 +85,17 @@ export async function sha256Hex(s: string): Promise<string> {
 }
 
 // val 2, PR-A „dovada pe rând”: `off` = offsetul cantității în textDoc (pozitieDovedita primește textul întreg, deci offsetul ei e
-// direct în textDoc). Codul de articol (dacă e un cod real) trebuie să fie pe LINIA cantității; Dn-urile din denumire+citat trebuie să
-// fie toate în BLOCUL rândului (linia + continuările de dedesubt). Un Dn în plus în bloc = ambiguitate păstrată, nu corecție.
+// direct în textDoc). Codul de articol declarat de model trebuie să fie un IDENTIFICATOR ÎNTREG al LINIEI cantității (un cod declarat
+// care nu e un identificator valid — ex. cu spații — nu poate fi verificat → nedovedit); Dn-urile din denumire+citat trebuie să fie toate
+// în BLOCUL rândului (linia + continuarea delimitată pozitiv, vezi blocRand). Un Dn în plus în bloc = ambiguitate păstrată, nu corecție.
 export function verificaRand(textDoc: string, off: number, codModel: unknown, dnCod: number[]):
   { motiv: 'cod_alt_rand' | 'dn_alt_rand' | null; dnInPlus: boolean } {
   const b = blocRand(textDoc, off)
+  const codBrut = String(codModel ?? '').replace(/\*/g, '').trim()
   const cod = codComparabil(codModel)
-  if (cod && !b.linie.replace(/[\s*]/g, '').toUpperCase().includes(cod)) return { motiv: 'cod_alt_rand', dnInPlus: false }
+  // un cod cu spații în interior, care altfel ar arăta a cod (are cifre), nu se poate verifica ca identificator → nedovedit
+  const codNeverificabil = !cod && /\s/.test(codBrut) && /\d/.test(codBrut) && /[A-Za-z]/.test(codBrut)
+  if (cod ? !identificatoriLinie(b.linie).has(cod) : codNeverificabil) return { motiv: 'cod_alt_rand', dnInPlus: false }
   const dnBloc = dnDinText(b.bloc).dn
   if (dnCod.some((d) => !dnBloc.includes(d))) return { motiv: 'dn_alt_rand', dnInPlus: false }
   return { motiv: null, dnInPlus: dnBloc.some((d) => !dnCod.includes(d)) }

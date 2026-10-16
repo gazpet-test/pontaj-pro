@@ -2,7 +2,7 @@ import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { aplicaDecizii, type DepsStructurat, EXTRACTOR_ID, extractorCuContext, extrageStructurat, radacinaParte, sumaRezervata } from './structurat.ts'
 import { feliiCuPozitie, FELIE, SUPRAPUNERE } from './sectiuni.ts'
 
-const TEXT_F3 = 'Formularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. Platanului\n003 SA11G1 [ 2] M 1160.000\nTEAVA PVC ... DISTRIBUTIE D= 90 MM\n'
+const TEXT_F3 = 'Formularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. Platanului\n003 SA11G1 [ 2] M 1160.000\nTEAVA PVC ... DISTRIBUTIE D= 90 MM\n0.000 0 Total=\n'
 const RAND = [null, null, null, 'SA11G1', 'TEAVA PVC ... DISTRIBUTIE D= 90 MM', 'Str. Platanului', 'PVC', 'D= 90 MM', null, 'M', '1160.000', 0, 0,
   'conducta', 'lungime', '003 SA11G1 [ 2] M 1160.000']
 const ACUM = new Date(Date.now() + 3600e3).toISOString()
