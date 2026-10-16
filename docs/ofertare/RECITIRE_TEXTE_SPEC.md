@@ -1,5 +1,7 @@
 # Recitirea textelor documentelor (Haiku 4.5 → Haiku 5.5) — specificație v3
 
+**Notă (16.10.2026, decizia lui Răzvan, varianta C):** documentul rămâne intrare pentru proiectul A (protocolul general de versiune a textului, înaintea valului 2). Valul 1 se face prin `RECITIRE_VAL1_PROCEDURA.md`.
+
 **Stare: propunere (PR draft, doar documentație).** Nu se aplică nicio migrare, nu se face deploy, nu se cheltuie nimic și nu se scrie nimic în BD până la:
 - GO-urile review-ului (Copilot + Jakarinos, două runde);
 - „da”-ul lui Răzvan pe preview-ul cu cifre.
