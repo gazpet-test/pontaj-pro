@@ -4,7 +4,7 @@ Document unic, cap-coadă (decizia Razvan 16.10.2026). **Orice PR care schimbă 
 afectată + un rând în „Istoric revizii”); CI-ul `pipeline-citire-doc.yml` pică altfel. Căile urmărite:
 - **scripturi:** `scripts/ocr_local/**`, `scripts/recitire_val1/**`, `worker/ofertare/**`;
 - **funcții edge:** `supabase/functions/ofertare-ocr-*`, `ofertare-ingest-doc`, `ofertare-cantitati-extrage`, `ofertare-citire-test`, `ofertare-pdf-link`, `ofertare-document-nou-citeste`, `ofertare-plansa-citeste`, `ofertare-word-text`, `ofertare-seap-import`, `ofertare-seap-veghe`;
-- **cod comun:** `_shared/{transcriereTabel, provenientaText, gardaIngest*, cantNumar, cantNormalizare, cantComparator, dn}.ts`;
+- **cod comun:** `_shared/{transcriereTabel, provenientaText, gardaIngest*, cantNumar, cantNormalizare, cantComparator, cantAcoperire, dn}.ts`;
 - **migrări / reveniri:** `*ofertare_ocr*`, `*ofertare_cant*`, `*ofertare_text_scrie*`, `*ofertare_citire_umbra*`, `*ofertare_ingest_garda*`.
 
 Autori: partea 1 (ingest Haiku 5.5, proveniență / CAS, recitire, cantități — TKT-0329) = sesiunea Ofertare; partea 2 (OCR local,
@@ -206,6 +206,12 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 - **Amprenta:** canonică.
 - **PR4b**, după proba pe lic. 15: edge-ul „Recalculează”, tab-ul Comparație, view-ul H2.
 
+**Completitudinea (val 2, PR-B1: `_shared/cantAcoperire.ts`, funcții pure, încă nelegate de comparator)**
+- **Ancorele:** rândurile numerotate (listă) sau de tabel markdown cu o cantitate cu UM real; nu sunt ancore proza, rândurile de total („total” ÎNAINTEA cantității), indicele „[ 2]” și codul numeric al materialului. În tabel, cantitatea e tokenul singur în celulă (nu capitolul „82 M CUB”).
+- **Tabelele și golurile:** șirurile de ancore numerotate; nr. repetat = același articol (rândul de material), reluare de la 1 = tabel nou, numerele lipsă = goluri (recall: rânduri pierdute la citire SAU numerotare care sare în PDF — de verificat).
+- **Metrica de calitate a recitirii:** ancore + perechi cod+cantitate distincte + goluri (`scripts/recitire_val1/masoara_ancore.ts <texte.csv> [doc]`, read-only). Înlocuiește `cantitati_m` ca semnal.
+- **B2** (următorul): rândurile extrase comparate cu ancorele; golul sau acoperirea sub prag → tabelul „incomplet”. Limită cunoscută: listele de utilaje în ore fără coloană UM (ex. 167) nu au ancore.
+
 | | |
 |---|---|
 | Cine o pornește | **Owner sau responsabilul licitației** (poarta pe cheltuială în edge) și DOAR pe o **cerere** activă (`fn_ofertare_cb_cerere`: owner / responsabil / admin Ofertare). Cererea cere un **plafon** setat de owner (`fn_ofertare_cb_buget_seteaza`, scopul `cant_extragere`, ≤ 100 USD). `x-radar-secret` e refuzat în acest mod. |
@@ -358,3 +364,4 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #746 | `fereastra.ts`: coada `pg_net` numărată doar pe cererile spre funcțiile Ofertare + `vercel-relay` (coada globală nu se golea din cauza joburilor altor module) |
 | 16.10.2026 | (acest PR) | Pilotul recitirii: costul confirmat din tokeni la precizia fiecărui tabel (staging `numeric(10,4)` față de `ai_usage_log` `numeric(10,6)`) + `--reconciliaza` pentru o oprire pe „cost neconfirmat” |
 | 16.10.2026 | (acest PR) | Val 2, PR-A: dovada pe rând — codul pe linia cantității, Dn-ul în blocul rândului (`blocRand`, `verificaRand`) |
+| 16.10.2026 | (acest PR) | Val 2, PR-B1: completitudinea tabelelor — ancore, secvența nr. crt., goluri (`_shared/cantAcoperire.ts`) + metrica pe texte (`masoara_ancore.ts`) |
