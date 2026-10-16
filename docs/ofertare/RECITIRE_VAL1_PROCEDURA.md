@@ -1,4 +1,4 @@
-# Recitirea valului 1 (listele de cantități, Haiku 4.5 → Haiku 5.5): procedură unică, v4
+# Recitirea valului 1 (listele de cantități, Haiku 4.5 → Haiku 5.5): procedură unică, v5
 
 **Decizia lui Răzvan (16.10.2026): varianta C.**
 - Acum: această procedură (varianta B), DOAR pentru cele 20 de documente din valul 1.
@@ -9,7 +9,7 @@
 - „da”-ul lui Răzvan pe citire;
 - „da”-ul lui Răzvan pe preview-ul cu cifre, înainte de aplicare.
 
-v2 = r1 (NO-GO de la ambii revieweri), cu toate observațiile închise. v3 = r2 (NO-GO, ambii), plus deciziile chat-ului din 16.10: plafonul de 1,00 USD; anunțul către utilizatori = decizia lui Răzvan. v4 = r3: Copilot 1 P1 + 1 P2, Jakarinos 3 P1. Listele schimbărilor sunt la §10, §11 și §12.
+v2 = r1 (NO-GO de la ambii revieweri), cu toate observațiile închise. v3 = r2 (NO-GO, ambii), plus deciziile chat-ului din 16.10: plafonul de 1,00 USD; anunțul către utilizatori = decizia lui Răzvan. v4 = r3: Copilot 1 P1 + 1 P2, Jakarinos 3 P1. v5 = r4: Copilot GO; Jakarinos 1 P1 + 1 P2. Listele schimbărilor sunt la §10–§13.
 
 ## 1. De ce merge aici o procedură simplă
 
@@ -170,14 +170,31 @@ Scripturile `fereastra_deschide.sql` și `fereastra_inchide.sql` sunt idempotent
    - Scriptul refuză dacă un job din allowlist lipsește (redenumit) sau nu e inactiv după pas.
    - Joburile necunoscute, a căror comandă nu menționează Ofertare (de exemplu un dispatcher generic), rămân în riscul acceptat.
 3. **Golirea activității asincrone:** `net.http_post` e asincron. O cerere poate fi deja scoasă din coadă și să ruleze, fără răspuns încă. Durata maximă a unei funcții edge pe planul plătit e de 400 s; timeout-ul HTTP de 150 s e distinct.
-   - **Condiția:** se notează `T_stop`, momentul în care toți producătorii sunt opriți (joburile + worker-ul NAS). Nimic nu pornește (nici citirea, nici aplicarea) înainte de **`T_stop` + 8 minute** (400 s + marjă) ȘI fără coada `net.http_request_queue` goală.
+   - **Condiția:** se notează `T_stop`, momentul în care toți producătorii sunt opriți (joburile + worker-ul NAS). Apoi se notează `T_gol`, primul moment ≥ `T_stop` în care coada `net.http_request_queue` e goală.
+   - Nimic nu pornește (nici citirea, nici aplicarea) înainte de **`T_gol` + 15 minute**, iar la acel moment coada e tot goală.
+     - Cererile scoase din coadă înainte de `T_gol` rulează cel mult 400 s.
+     - O funcție pornită astfel care lansează la rândul ei alta prin HTTP (lanțul concret `ofertare-seap-veghe` → `ofertare-seap-import`, `ofertare-seap-veghe/index.ts` l.371), cu un apel ocolind `pg_net`, se termină cel mult la 2 × 400 s = 13,3 minute. Asta acoperă un lanț pe două niveluri; 15 minute lasă marjă.
+   - **Suplimentar, pentru lanțul SEAP:**
+     - fereastra NU se deschide la mai puțin de 30 de minute după programările `ofertare_seap_veghe_0520` / `_1250`, iar ultima lor rulare (`cron.job_run_details.end_time`) trebuie să fie mai veche de 30 de minute;
+     - în fereastră nu există apel manual de import SEAP (decizia lui Răzvan, cu anunțul de la pct. 6).
+   - Lanțurile mai lungi de 2 niveluri, necunoscute azi, rămân în riscul acceptat.
+   - Așteptarea e măsurată de la `T_gol` și NU se deduce din ultimul răspuns.
    - Așteptarea e măsurată de la oprire și NU se deduce din ultimul răspuns: acoperă și cererile deja scoase din coadă.
-   - Test: o cerere scoasă din coadă, fără răspuns → fereastra nu se declară goală înainte de `T_stop` + 8 minute.
+   - Teste:
+     - o cerere scoasă din coadă la `T_stop` + 7 minute, fără răspuns → nimic nu pornește înainte de `T_gol` + 15 minute;
+     - simularea veghe → import → nimic nu pornește înainte de terminarea lanțului.
 4. Confirmă că nu există job în curs (`cron.job_run_details`, `status = 'running'`).
 5. Worker-ul NAS e oprit pe server; se confirmă `worker_heartbeat.ultimul` mai vechi de 10 minute (≥ 400 s). Starea inițială (pornit / oprit) e în `fereastra_stare.csv`.
 6. **Utilizatorii.** Anunțul către utilizatori NU e un pas al procedurii și NU îl trimite nicio sesiune Claude: nici mesaj, nici mail. Decide Răzvan dacă, cum și cui anunță, sau alege o fereastră în care nu lucrează nimeni în Ofertare (de exemplu seara). Chat-ul îi duce întrebarea.
 
 **Închiderea** reactivează EXACT joburile care erau active în `fereastra_stare.csv` și repornește worker-ul NAS dacă era pornit, cu verificarea heartbeat-ului proaspăt.
+- **Se rulează IMEDIAT la ORICE oprire după deschidere**, nu doar după aplicare:
+  - eroare sau oprire a pilotului (cost neconfirmat, apel străin, plafon, `sursa_schimbata`);
+  - eroare la asamblare;
+  - un „da” pe preview care întârzie;
+  - aplicare eșuată.
+  Pilotul și scripturile se termină cu un cod distinct, iar `README.md` cere `fereastra_inchide.sql` ca prim pas la orice cod ≠ 0. Joburile nu rămân oprite cât se așteaptă o decizie. Reluarea = o fereastră nouă, cu toate verificările din nou.
+- Test: timeout cu cost neconfirmat în citire → închiderea readuce exact starea inițială.
 - Se rulează și după o aplicare eșuată.
 - E verificată prin `SELECT`, apoi marchează fișierul `CLOSED`.
 
@@ -364,4 +381,11 @@ Nu se creează tabele, migrări, funcții edge sau joburi. Nota din `registru_au
 | Laboratorul recitește `fisier_path`, deci o schimbare temporară a căii nu se vede (Jakarinos #2) | Citirea se face în fereastră (scriitorii automați ai căii și ai Storage-ului opriți); `fisier_path`, `size_bytes`, `pagina_offset` și Storage verificate înainte și după fiecare invocare; restul (UI) intră în riscul acceptat |
 | Exportul după COMMIT poate prelua o modificare ulterioară drept reper (Jakarinos #3) | `RETURNING` → `aplicare_provizoriu.csv` în tranzacție; după COMMIT, `aplica_rezultat.sql` verifică egalitatea, fără să redefinească; altfel nu devine referință |
 | Selecția joburilor după comandă (Copilot P2) | Allowlist explicit al joburilor cunoscute, plus comanda; refuz dacă un job din allowlist lipsește sau a rămas activ |
+
+## 13. Schimbări v4 → v5 (review r4)
+
+| Observație | Rezolvare |
+|---|---|
+| Golirea: cerere scoasă târziu din coadă; lanțul veghe → import care ocolește `pg_net` (Jakarinos P1) | `T_gol` + 15 minute (2 niveluri × 400 s + marjă), cu coada goală la final; fereastra la ≥ 30 de minute după rularea veghei SEAP; fără import manual în fereastră; teste dedicate; lanțurile mai lungi intră în riscul acceptat |
+| Închiderea ferestrei la eșec în citire / asamblare (Jakarinos P2) | Închidere imediată la orice cod ≠ 0 după deschidere, inclusiv la așteptarea unei decizii; test pe cazul de timeout |
 
