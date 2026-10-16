@@ -33,8 +33,11 @@ for bad in "banda='p58'" "orientare=45" "backend='alt'" "stare='promovat'" "ok=f
   $P -d umbra -c "UPDATE ofertare_citire_umbra SET $bad WHERE id=1" >/dev/null 2>&1 && echo "!! ACCEPTAT $bad" || echo "refuz ok: $bad"
 done
 $P -d umbra -c "$INS VALUES (213,1,0,'p0001_b0','$H',1,'$H',0,'laborator','cititor3','claude_cli','m','c3-v1',true,'x','$H',NULL,'abonament','laborator')" >/dev/null
-$P -d umbra -c "UPDATE ofertare_citire_umbra SET stare='promovat', stare_la=now() WHERE id=3" >/dev/null 2>&1 && echo "!! promovat fara CAS acceptat" || echo "refuz ok: promovat fara text_extras_sha256"
-$P -d umbra -c "UPDATE ofertare_citire_umbra SET stare='promovat', stare_la=now() WHERE id=1" && echo "promovat cu CAS: ok"
+$P -d umbra -c "BEGIN; SELECT set_config('gazpet.promovare_umbra', 'UMBRA_PROMOVARE:' || txid_current(), true); UPDATE ofertare_citire_umbra SET stare='promovat', stare_la=now() WHERE id=3; COMMIT;" >/dev/null 2>&1 && echo "!! promovat fara CAS acceptat" || echo "refuz ok: promovat fara text_extras_sha256"
+$P -d umbra -c "UPDATE ofertare_citire_umbra SET stare='promovat', stare_la=now() WHERE id=1" >/dev/null 2>&1 && echo "!! promovat fara armare" || echo "refuz ok: promovare fara armarea CAS"
+$P -d umbra -c "BEGIN; SELECT set_config('gazpet.promovare_umbra', 'UMBRA_PROMOVARE:' || txid_current(), true); UPDATE ofertare_citire_umbra SET stare='promovat', stare_la=now() WHERE id=1; COMMIT;" && echo "promovat armat, cu CAS: ok"
+$P -d umbra -c "$INS VALUES (213,2,0,'p0002_b0','$H',2,'$H',0,'laborator','cititor3','claude_cli','m','c3-v1',true,'x','$H','$H','abonament','laborator')" >/dev/null && $P -d umbra -tAc "SELECT text_sha256 = encode(sha256(convert_to('x','UTF8')),'hex') FROM ofertare_citire_umbra WHERE pagina=2"
+$P -d umbra -c "INSERT INTO ofertare_citire_umbra (document_id, pagina, pagina_offset, banda, pdf_sha256, pagina_pdf, image_sha256, orientare, orientare_sursa, cititor, backend, model, prompt_versiune, ok, text, text_sha256, cost, citit_de, stare, stare_la) VALUES (213,3,0,'p0003_b0','$H',3,'$H',0,'laborator','cititor3','claude_cli','m','c3-v1',true,'x','$H','abonament','laborator','bun',now())" >/dev/null 2>&1 && echo "!! insert direct ne-neevaluat" || echo "refuz ok: insert doar neevaluat"
 $P -d umbra -c "UPDATE ofertare_citire_umbra SET text='y' WHERE id=1" >/dev/null 2>&1 && echo "!! modificare promovat" || echo "refuz ok: promovat nemodificabil"
 $P -d umbra -c "DELETE FROM ofertare_citire_umbra WHERE id=1" >/dev/null 2>&1 && echo "!! stergere promovat" || echo "refuz ok: promovat nesters"
 $P -d umbra -c "DELETE FROM ofertare_documente_atribuire WHERE id=212" >/dev/null 2>&1 && echo "!! cascada a sters promovat" || echo "refuz ok: cascada blocata de promovat"

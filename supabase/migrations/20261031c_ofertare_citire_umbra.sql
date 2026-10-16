@@ -47,7 +47,7 @@ CREATE TABLE public.ofertare_citire_umbra (
   ok                  boolean NOT NULL,                                                  -- false = garda / eroare (text gol)
   semnal              text CHECK (semnal IS NULL OR length(semnal) <= 200),
   text                text NOT NULL CHECK (length(text) <= 200000),
-  text_sha256         text NOT NULL CHECK (text_sha256 ~ '^[0-9a-f]{64}$'),
+  text_sha256         text NOT NULL CHECK (text_sha256 ~ '^[0-9a-f]{64}$'),  -- SUPRASCRIS de trigger din text (Copilot r2 P2-1), nu declarat
   text_extras_sha256  text CHECK (text_extras_sha256 IS NULL OR text_extras_sha256 ~ '^[0-9a-f]{64}$'),  -- productia LA CITIRE (CAS)
   comparatie          jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(comparatie) = 'object' AND pg_column_size(comparatie) <= 20000),
   secunde             numeric(8,1) CHECK (secunde IS NULL OR secunde >= 0),
@@ -67,19 +67,36 @@ CREATE TABLE public.ofertare_citire_umbra (
 CREATE INDEX ofertare_citire_umbra_doc_idx ON public.ofertare_citire_umbra (document_id, pagina);
 CREATE INDEX ofertare_citire_umbra_stare_idx ON public.ofertare_citire_umbra (stare, document_id);
 
--- un rand PROMOVAT e proveniența unei schimbari de productie: nu se sterge (nici prin cascada de la document, nici direct)
--- si nu se mai modifica (review Copilot r1, ON DELETE CASCADE vs audit)
+-- PAZA (review Copilot r1 + r2): (1) un rand nou intra DOAR ca 'neevaluat' (importul umbrei nu poate pretinde „promovat”);
+-- (2) trecerea la 'promovat' cere armarea tranzactiei de catre fluxul de promovare CAS (de construit, cu preview si da-ul lui Razvan):
+--     set_config('gazpet.promovare_umbra', 'UMBRA_PROMOVARE:' || txid_current(), true) - armarea persistenta e refuzata;
+-- (3) un rand PROMOVAT e proveniența unei schimbari de productie: nu se mai modifica si nu se sterge (nici prin cascada de la document).
 CREATE FUNCTION public.fn_ofertare_citire_umbra_pazeste() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 BEGIN
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    NEW.text_sha256 := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');  -- hash-ul textului calculat aici, orice ar fi trimis scriitorul
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.stare IS DISTINCT FROM 'neevaluat' THEN
+      RAISE EXCEPTION 'ofertare_citire_umbra: un rand nou intra doar ca neevaluat' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF OLD.stare = 'promovat' THEN
     RAISE EXCEPTION 'ofertare_citire_umbra %: randul promovat e provenienta unei schimbari de productie (nu se sterge / modifica)', OLD.id
       USING ERRCODE = '55000';
   END IF;
+  IF TG_OP = 'UPDATE' AND NEW.stare = 'promovat' THEN
+    IF current_setting('gazpet.promovare_umbra', true) IS DISTINCT FROM 'UMBRA_PROMOVARE:' || txid_current()
+       OR EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.promovare_umbra=%') THEN
+      RAISE EXCEPTION 'ofertare_citire_umbra %: promovarea doar prin fluxul CAS armat pe tranzactie', OLD.id USING ERRCODE = '55000';
+    END IF;
+  END IF;
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END $f$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_citire_umbra_pazeste() FROM PUBLIC, anon, authenticated, service_role;
-CREATE TRIGGER ofertare_citire_umbra_pazeste BEFORE UPDATE OR DELETE ON public.ofertare_citire_umbra
+CREATE TRIGGER ofertare_citire_umbra_pazeste BEFORE INSERT OR UPDATE OR DELETE ON public.ofertare_citire_umbra
   FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_citire_umbra_pazeste();
 
 ALTER TABLE public.ofertare_citire_umbra ENABLE ROW LEVEL SECURITY;
