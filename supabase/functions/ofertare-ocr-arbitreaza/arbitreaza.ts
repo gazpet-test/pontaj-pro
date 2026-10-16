@@ -26,9 +26,11 @@ const SHA = /^[0-9a-f]{64}$/
 const taie200 = (s: string): string => Array.from(s).slice(0, 200).join('')
 // bani comparati in unitati intregi de 0,0001 USD (rezervarea si costurile sunt deja rotunjite la 4 zecimale): 0,0011 + 0,0204 = 0,0215
 const unitati = (x: number): number => Math.round(x * 1e4)
-// regula 10 (arb-v3): literele de baza fara semne diacritice (NFD + fara \p{M}): ș ş š → s, ț ţ → t, ă â → a, î → i; majusculele,
-// cifrele, semnele si spatiile raman. Perechea „difera doar prin diacritice” = aceeasi baza, texte diferite (Jakarinos arb-v3 r1 P1)
-export const bazaFaraDiacritice = (s: string): string => s.normalize('NFD').replace(/\p{M}/gu, '')
+// regula 10 (arb-v3): literele de baza fara semnele diacritice dintr-o lista INCHISA, si doar pe o litera latina A-Z / a-z:
+// circumflex U+0302 (â î), breve U+0306 (ă), caron U+030C (š ž), virgula U+0326 (ș ț), sedila U+0327 (ş ţ). Orice alt semn combinant
+// (U+0338 din ≠ ≰, U+034F, selectorii de variante ...) ramane in baza, deci schimba comparatia: majusculele, cifrele, operatorii,
+// semnele si spatiile raman. Perechea „difera doar prin diacritice” = aceeasi baza, texte diferite (Jakarinos arb-v3 r1 P1, r2 P1)
+export const bazaFaraDiacritice = (s: string): string => s.normalize('NFD').replace(/([A-Za-z])[\u0302\u0306\u030C\u0326\u0327]+/g, '$1')
 export const doarDiacritice = (a: string, b: string): boolean => a !== b && bazaFaraDiacritice(a) === bazaFaraDiacritice(b)
 /** Dupa Haiku: mai incape limita de sus a lui Sonnet in rezervare? (exportat pentru testul de regresie la limita exacta) */
 export const incapeArbitrul = (costFiltru: number, limitaArbitru: number, suma: number): boolean =>

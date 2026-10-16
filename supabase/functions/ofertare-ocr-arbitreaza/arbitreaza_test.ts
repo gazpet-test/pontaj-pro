@@ -378,3 +378,23 @@ Deno.test('regula 10: pereche care diferă și prin altceva — verificarea de d
 Deno.test('prompt arb-v3: regula 10 cere ordinea a→b, fără semne adăugate, nume străine păstrate, verificare automată', () => {
   for (const f of ['Nu adaugi niciodată un semn', 'normalizare asumată', 'Šimek', 'se verifică automat', '(c) are prioritate']) assert.ok(PROMPT.includes(f), f)
 })
+
+Deno.test('regula 10: semnele combinante din afara listei NU se scot — ≠ ≰, U+034F, U+FE0F, U+200B schimbă baza (Jakarinos arb-v3 r2 P1)', async () => {
+  assert.notEqual(bazaFaraDiacritice('p ≠ q'), bazaFaraDiacritice('p = q')); assert.notEqual(bazaFaraDiacritice('a ≰ b'), bazaFaraDiacritice('a ≤ b'))
+  for (const inv of ['\u034F', '\uFE0F', '\u200B', '\u0338']) assert.notEqual(bazaFaraDiacritice('teava' + inv), bazaFaraDiacritice('teava'), inv)
+  assert.equal(bazaFaraDiacritice('șţăîâšž'), 'staiasz')  // ș ţ ă î â š ž
+  const it = await itemDeTest({ citire_lighton: 'teavă | p = q', citire_mineru: 'țeavă | p = q', diferenta_numerica: false })
+  for (const text of ['țeavă | p ≠ q', 'țeavă | p = q\u034F', 'țeavă\uFE0F | p = q']) {
+    const tp = { text: JSON.stringify({ decizie: 'text_propus', text, motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) }
+    // doar_haiku (un apel) si cascada cu Sonnet decizia finala (Haiku nesigur → Sonnet propune)
+    const nh = { text: JSON.stringify({ decizie: 'needs_human', text: '', motiv: 'nesigur', e_cantitate: false, anomalie_separator: false }) }
+    for (const [mod, opt] of [[{ mod: 'doar_haiku' }, { api: tp }], [{}, { apiSeq: [nh, tp] }]] as const) {
+      const { m, apeluri, cereriApi } = mediu(it, opt as any)
+      const r = await arbitreaza(cerere(corpDe(it, mod)), m); const j = await r.json()
+      assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, 'needs_human', text); assert.equal(j.decizie.text, '')
+      const sc = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args
+      assert.equal(sc.p_arbitraj.decizie, 'needs_human'); assert.ok(sc.p_arbitraj.motiv.startsWith('[diacritice]'))
+      assert.equal(cereriApi.length, 'mod' in mod ? 1 : 2); assert.ok(Number(sc.p_arbitraj.cost_usd) > 0, 'cost pastrat')
+    }
+  }
+})
