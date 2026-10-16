@@ -1,7 +1,7 @@
 // TKT-0329 B (PR3): normalizarea deterministă a unui rând extras de model → observație pentru fn_ofertare_cb_obs_scrie (spec §4.1,
 // §5.1). Modelul propune; codul decide DN-ul, UM-ul, materialul, cheia obiectului, tipul lucrării / măsura și poziția (pozitieDovedita).
 import { dnDinText } from './dn.ts'
-import { type Conventie, pozitieDovedita, umNorm, valoareInDocument } from './cantNumar.ts'
+import { blocRand, codComparabil, type Conventie, identificatoriLinie, pozitieDovedita, umNorm, valoareInDocument } from './cantNumar.ts'
 export { umNorm }
 
 const faraDiacritice = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -84,6 +84,30 @@ export async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('')
 }
 
+// val 2, PR-A „dovada pe rând”: `off` = offsetul cantității în textDoc (pozitieDovedita primește textul întreg, deci offsetul ei e
+// direct în textDoc). Codul de articol declarat de model trebuie să fie un IDENTIFICATOR ÎNTREG al LINIEI cantității; Dn-urile din
+// denumire+citat trebuie să fie toate în BLOCUL rândului (linia + continuarea delimitată pozitiv, vezi blocRand). Un Dn în plus în bloc =
+// ambiguitate păstrată, nu corecție. Review Jakarinos r2 (P1): un cod declarat într-un format nerecunoscut („SA11H1,”, „SA11H1[2]”,
+// „670 1153”, „a)”) nu se poate verifica → nedovedit; singurele excepții sunt marcajele de „fără cod” (gol, „-”, „null”, „n/a”).
+const FARA_COD = /^(?:|-|—|null|n\/a|nu e cazul)$/i
+export function verificaRand(textDoc: string, off: number, codModel: unknown, dnCod: number[]):
+  { motiv: 'cod_alt_rand' | 'cod_neverificabil' | 'dn_alt_rand' | null; dnInPlus: boolean; continuare: [number, number] | null } {
+  const b = blocRand(textDoc, off)
+  const codBrut = String(codModel ?? '').replace(/\*/g, '').trim()
+  if (!FARA_COD.test(codBrut)) {
+    const cod = codComparabil(codBrut)
+    if (cod === null) return { motiv: 'cod_neverificabil', dnInPlus: false, continuare: null }
+    if (!identificatoriLinie(b.linie).has(cod)) return { motiv: 'cod_alt_rand', dnInPlus: false, continuare: null }
+  }
+  const dnBloc = dnDinText(b.bloc).dn
+  if (dnCod.some((d) => !dnBloc.includes(d))) return { motiv: 'dn_alt_rand', dnInPlus: false, continuare: null }
+  // decizia Răzvan 16.10 (varianta A): un Dn care NU e pe linia cantității, ci doar pe liniile de dedesubt, e o dovadă de clasă
+  // separată (orientarea listei nu se poate dovedi din text — risc rezidual documentat) → intervalul întregului bloc, pentru bifa umană
+  const dnLinie = dnDinText(b.linie).dn
+  const continuare = b.continuare && dnCod.some((d) => !dnLinie.includes(d)) ? [b.de_la, b.pana_la] as [number, number] : null
+  return { motiv: null, dnInPlus: dnBloc.some((d) => !dnCod.includes(d)), continuare }
+}
+
 export type ContextFelie = {
   textDoc: string; felie: string; felie_de_la: number; conventie: Conventie
   lot_domeniu: 'toate' | 'lista' | 'necunoscut'; lot_nr: number[]
@@ -129,7 +153,17 @@ export async function normalizeazaRand(r: RandModel, ctx: ContextFelie): Promise
     um_norm: um, cantitate, e_total: r.e_total === 1 || r.e_total === true, e_subtotal: r.e_subtotal === 1 || r.e_subtotal === true,
     citat,
   }
-  if (!poz.pozitie_dovedita) note.push('pozitie:' + poz.motiv)
+  // val 2, PR-A: o poziție dovedită trebuie să aibă pe RÂNDUL cantității codul de articol (dacă modelul a dat unul) și Dn-urile codului
+  if (obs.pozitie_dovedita && poz.cantitate_offset !== null) {
+    const rd = verificaRand(ctx.textDoc, poz.cantitate_offset, r.cod_articol, dnCod)
+    if (rd.motiv) { obs.pozitie_dovedita = false; note.push('pozitie:' + rd.motiv) }
+    else {
+      if (rd.dnInPlus) { obs.dn_ambiguu = true; if (!dnAmbiguu) note.push('dn_ambiguu') }
+      // marcajul persistat (fără coloană nouă): rand_interval = tot blocul (linia cantității + continuarea), deci un interval care
+      // trece de sfârșitul liniei cantității = „Dn dovedit din continuare” — B2 / PR4b le arată separat, pentru bifa umană
+      if (rd.continuare) { obs.rand_interval = `[${rd.continuare[0]},${rd.continuare[1]})`; note.push('dn_din_continuare') }
+    }
+  } else if (!poz.pozitie_dovedita) note.push('pozitie:' + poz.motiv)
   // CHECK din BD: o poziție dovedită nu poate fi și ambiguă
   if (obs.pozitie_dovedita && obs.valoare_ambigua) obs.pozitie_dovedita = false
   // identitatea rândului în felie = TOATĂ proiecția semantică normalizată (review r1): două interpretări ale aceleiași poziții care

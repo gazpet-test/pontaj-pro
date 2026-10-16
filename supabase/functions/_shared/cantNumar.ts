@@ -215,3 +215,101 @@ export function pozitieDovedita(p: {
   if (potrivite.length > 1) return nu('token_multiplu', baza)
   return { pozitie_dovedita: true, valoare_ambigua: false, motiv: 'ok', ...baza, cantitate_offset: potrivite[0].de_la }
 }
+
+// ── rândul sursei în jurul cantității (val 2, PR-A „dovada pe rând”): codul și Dn-ul se verifică pe rândul cantității, nu oriunde în
+// citatul ales de model (riscul DN63/DN110: o cantitate dovedită lângă denumirea altui rând). Rândul de tabel markdown („|…|”) = linia
+// lui. Altfel = linia cantității; liniile de DEDESUBT intră în bloc DOAR cu delimitare POZITIVĂ (review Jakarinos r1, P1): lista F3
+// pdftotext închide fiecare articol cu rândul lui „0.000 0 Total=” („003 SA11G1 [ 2] M 1160.000” / denumirea / „0.000 0 Total=”), deci
+// continuarea e acceptată numai dacă se termină într-o astfel de linie de total, în cel mult LINII_CONTINUARE linii, fără să treacă
+// printr-un început de articol (nr. crt. + cod) sau printr-o linie-ancoră (token numeric cu UM real) sau peste o linie goală / un marcaj
+// de pagină / sfârșitul textului. Orice altceva = apartenență incertă → blocul rămâne DOAR linia cantității (fail-closed: în listele cu
+// denumirea DEASUPRA cantității, denumirea de dedesubt e a articolului următor; rândul rămâne nedovedit, nu primește Dn-ul vecinului).
+export const LINII_CONTINUARE = 4
+// linia de total a articolului: fără litere în afară de „Total=” (cifre, punctuație și glife citite greșit, ex. „0.000 ✓ 0 Total=”)
+const RE_TOTAL_RAND = /^[^\p{L}]*\btotal[ea]?\s*=[^\p{L}]*$/iu
+const RE_INCEPUT_ARTICOL = /^\s*\**\s*\d{1,4}[.)]?\s+\**[A-Z0-9][A-Za-z0-9.\-\/]{2,}/
+// doar unitățile reale fac o linie ancoră (umNorm întoarce și cuvinte oarecare: „TEAVA 20.80” nu e un rând nou)
+const UM_ANCORA = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'l', 'set', 'ora', 'h'])
+
+// ── orientarea listei, certificată pe DOCUMENT (review Jakarinos r5, P1): local, „Total= / denumire / Total=” e ambiguu — poate fi
+// „articol, denumire DEDESUBT, total” sau „denumire DEASUPRA, total, articol” repetat. Ce le deosebește e structura întregii liste:
+// în aranjamentul „dedesubt” (a) primul articol NU e precedat de o linie „… Total=” (deasupra lui e antetul / începutul) și
+// (b) FIECARE articol are o linie „Total=” proprie (pe linia lui sau sub ea) înaintea articolului următor / sfârșitului textului.
+// Aranjamentul „deasupra” le încalcă pe amândouă (primul articol vine după totalul primei denumiri; ultimul n-are total după el).
+// Articol = început de articol (nr. + cod) cu o cantitate în formatul listei („300.000”). Fără niciun articol → necertificat.
+const RE_CANT_LISTA = /(?<![\d.,])\d+[.,]\d{3}(?![\d.,])/
+const RE_TOTAL_ORIUNDE = /\btotal[ea]?\s*=/i
+let cacheOrientare: { doc: string; dedesubt: boolean } | null = null
+export function orientareDedesubt(doc: string): boolean {
+  if (cacheOrientare?.doc === doc) return cacheOrientare.dedesubt
+  const L = doc.split('\n')
+  const art: number[] = []
+  L.forEach((l, i) => { if (RE_INCEPUT_ARTICOL.test(l) && RE_CANT_LISTA.test(l)) art.push(i) })
+  let ok = art.length > 0
+  if (ok) {
+    let p = art[0] - 1
+    while (p >= 0 && (!L[p].trim() || L[p].startsWith('⟦PAGINA'))) p--
+    if (p >= 0 && RE_TOTAL_ORIUNDE.test(L[p])) ok = false
+  }
+  for (let k = 0; ok && k < art.length; k++) {
+    const sfarsit = k + 1 < art.length ? art[k + 1] : L.length
+    let are = false
+    for (let j = art[k]; j < sfarsit && !are; j++) are = RE_TOTAL_ORIUNDE.test(L[j])
+    if (!are) ok = false
+  }
+  cacheOrientare = { doc, dedesubt: ok }
+  return ok
+}
+
+export function blocRand(doc: string, off: number): { linie: string; bloc: string; de_la: number; pana_la: number; continuare: boolean } {
+  const ls = doc.lastIndexOf('\n', off - 1) + 1
+  const le0 = doc.indexOf('\n', off)
+  const le = le0 < 0 ? doc.length : le0
+  const linie = doc.slice(ls, le)
+  const doarLinia = { linie, bloc: linie, de_la: ls, pana_la: le, continuare: false }
+  if ((linie.match(/\|/g) || []).length >= 2) return doarLinia
+  // review Jakarinos r3/r4 (P1): denumirea e DEDESUBTUL cantității doar dacă deasupra rândului e sigur că NU e o denumire. Singura
+  // dovadă acceptată: prima linie ne-goală de deasupra (marcajele de pagină sunt transparente — denumirea poate fi pe pagina
+  // precedentă) închide articolul precedent („… Total=”). Antetul listei, începutul textului sau orice altceva = incert → doar linia
+  // (primul articol al fiecărei liste rămâne pe linia lui). Un „Total=” chiar pe linia cantității = articolul e întreg pe linie.
+  if (/\btotal[ea]?\s*=/i.test(linie)) return doarLinia
+  if (!orientareDedesubt(doc)) return doarLinia
+  let p = ls - 1, sus = ''
+  while (p > 0) {
+    const a = doc.lastIndexOf('\n', p - 1) + 1
+    const l = doc.slice(a, p)
+    if (l.trim() && !l.startsWith('⟦PAGINA')) { sus = l; break }
+    p = a - 1
+  }
+  if (!RE_TOTAL_RAND.test(sus)) return doarLinia
+  let pana = le
+  for (let k = 0; k <= LINII_CONTINUARE && pana < doc.length; k++) {
+    const a = pana + 1
+    const b0 = doc.indexOf('\n', a)
+    const b = b0 < 0 ? doc.length : b0
+    const l = doc.slice(a, b)
+    if (RE_TOTAL_RAND.test(l)) return k === 0 ? doarLinia : { linie, bloc: doc.slice(ls, pana), de_la: ls, pana_la: pana, continuare: true }
+    if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || RE_INCEPUT_ARTICOL.test(l)) return doarLinia
+    // review Jakarinos r2 (P1): un articol fără nr. și fără UM („SA11H1 120.000”) nu e continuare — linia care începe cu un cod sau
+    // conține o cantitate în formatul listei (trei zecimale: „120.000”) oprește blocul (incert → doar linia cantității)
+    if (codComparabil(l.trim().split(/\s+/)[0]) !== null || /(?<![\d.,])\d+\.\d{3}(?![\d.,])/.test(l)) return doarLinia
+    if (tokeniNumerici(l, a).some((t) => [...umLanga(doc, t.de_la, t.pana_la)].some((u) => UM_ANCORA.has(u)))) return doarLinia
+    pana = b
+  }
+  return doarLinia
+}
+
+// codul de articol al modelului, comparabil: majuscule, fără „*”; doar coduri „reale” (≥ 3 caractere, cel puțin o cifră și o literă
+// sau ≥ 5 cifre) — un „1” sau „a)” nu se verifică. Un cod cu spații în interior nu e un identificator → null (nu se verifică), dar
+// nici nu poate dovedi nimic: verificaRand îl tratează ca „cod declarat, negăsit”.
+export function codComparabil(v: unknown): string | null {
+  const t = String(v ?? '').replace(/\*/g, '').trim().toUpperCase()
+  if (t.length < 3 || t.length > 40 || !/^[A-Z0-9][A-Z0-9.\-\/]*$/.test(t)) return null
+  return /\d/.test(t) && (/[A-Z]/.test(t) || /\d{5,}/.test(t)) ? t : null
+}
+
+// identificatorii întregi ai unei linii (review Jakarinos r1, P1: codul se compară ca identificator, nu ca subșir — „SA11G1” nu se
+// potrivește în „SA11G10”, iar „SA11G1M” nu se poate fabrica din „SA11G1 M”)
+export function identificatoriLinie(linie: string): Set<string> {
+  return new Set(linie.toUpperCase().split(/[\s|*\[\](),;:]+/).map((x) => x.replace(/^[.\-\/]+|[.\-\/]+$/g, '')).filter(Boolean))
+}
