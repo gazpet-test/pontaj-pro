@@ -8,7 +8,7 @@
 // supraviețuiește reluărilor. Un registru ilizibil oprește rularea (nu se pornește „unul nou”).
 // Utilizare (chat, pe serverul AI): deno run -A scripts/recitire_val1/citeste.ts <dir_val>
 //   mediu: SUPABASE_URL, SUPABASE_ANON_KEY, RV1_EMAIL, RV1_PAROLA (contul claudetest@; nu se scriu nicăieri)
-import { type Apel, costHaiku55, ORDINE, PLAFON_USD, poatePorni, type Registru, registruValid, REZERVARE_APEL_USD, normalizeazaFelie } from './lib.ts'
+import { type Apel, costHaiku55, numericPostgres, ORDINE, PLAFON_USD, poatePorni, type Registru, registruValid, REZERVARE_APEL_USD, normalizeazaFelie } from './lib.ts'
 
 export type Identitate = { fisier_path: string; size_bytes: number | null; pagina_offset: number; pagini: number | null }
 export type StorageInfo = { etag: string | null; size: number | null; updated_at: string | null }
@@ -116,9 +116,29 @@ export function costPotrivit(rand: RandStaging, u: RandUsage, doc: number): numb
   if (rand.tokens_in === null || rand.tokens_out === null || rand.cost_usd === null) return null
   if (nr(u.ref_id) !== doc || u.model !== MODEL || nr(u.tokens_in) !== rand.tokens_in || nr(u.tokens_out) !== rand.tokens_out) return null
   const c = costHaiku55(rand.tokens_in, rand.tokens_out)
-  const lafel = (v: unknown, zecimale: number) => v !== null && v !== undefined && Number.isFinite(Number(v))
-    && Math.abs(Number(v) - Math.round(c * 10 ** zecimale) / 10 ** zecimale) <= 10 ** -(zecimale + 3)
-  return lafel(rand.cost_usd, 4) && lafel(u.cost_usd, 6) ? Math.round(c * 1e6) / 1e6 : null
+  // egalitate EXACTĂ cu ce a scris Postgres din numărul laboratorului, la scala fiecărei coloane (fără toleranță)
+  const lafel = (v: unknown, scala: number) => v !== null && v !== undefined && Number.isFinite(Number(v)) && Number(v) === Number(numericPostgres(c, scala))
+  // costul confirmat = valoarea din ai_usage_log (scala 6), cea mai precisă înregistrată
+  return lafel(rand.cost_usd, 4) && lafel(u.cost_usd, 6) ? Number(numericPostgres(c, 6)) : null
+}
+
+// citirea COMPLETĂ a rândurilor usage (Jakarinos, #747): PostgREST limitează răspunsul (implicit 1000 de rânduri), deci un apel străin
+// dincolo de prima pagină ar trece nevăzut. Se citesc pagini ordonate după id până la o pagină incompletă, iar totalul trebuie să fie
+// EXACT numărul raportat (count: exact) al aceleiași interogări; altfel eroare (= oprire, fail-closed).
+export const PAGINA_USAGE = 500
+export async function citesteComplet<T extends { id: number }>(pagina: (de: number, pana: number) => Promise<{ randuri: T[]; total: number | null }>): Promise<T[]> {
+  const toate: T[] = []
+  let total: number | null = null
+  for (let de = 0; ; de += PAGINA_USAGE) {
+    const p = await pagina(de, de + PAGINA_USAGE - 1)
+    if (p.total === null) throw new Error('usage: numărul total lipsește')
+    if (total !== null && p.total !== total) throw new Error('usage: totalul s-a schimbat în timpul citirii')
+    total = p.total
+    toate.push(...p.randuri)
+    if (p.randuri.length < PAGINA_USAGE) break
+  }
+  if (toate.length !== total || new Set(toate.map((x) => x.id)).size !== toate.length) throw new Error(`usage: citire incompletă (${toate.length} din ${total})`)
+  return toate
 }
 
 // reconcilierea (comanda --reconciliaza): un apel rămas „neconfirmat” (oprirea anterioară) se reconfirmă DIN BD cu aceleași reguli —
@@ -182,22 +202,24 @@ if (import.meta.main) {
   const fis = `${dir}/rulare.json`
   // T0 = acum − 10 min (toleranța de ceas față de created_at din BD); rândurile deja existente de la T0 se înregistrează ca „văzute”
   // (usage_ids, ultim_staging_id), deci filtrul created_at ≥ T0 nu poate ascunde rândurile primului apel
+  // rândurile usage ale laboratorului de la T0: citire COMPLETĂ, paginată și verificată (comună inițializării, citirii și reconcilierii)
+  const usageDe = (t0: string) => citesteComplet<RandUsage>(async (de, pana) => {
+    const { data, error, count } = await sb.from('ai_usage_log').select('id, ref_id, model, tokens_in, tokens_out, cost_usd, created_at', { count: 'exact' })
+      .eq('function_name', 'ofertare-citire-test').gte('created_at', t0).order('id').range(de, pana)
+    if (error) throw new Error('usage: citire eșuată')
+    return { randuri: (data || []) as RandUsage[], total: count }
+  })
   const t0 = new Date(Date.now() - 10 * 60_000).toISOString()
-  const { data: u0, error: eu } = await sb.from('ai_usage_log').select('id').eq('function_name', 'ofertare-citire-test').gte('created_at', t0)
+  let u0: RandUsage[] = []
+  try { u0 = await usageDe(t0) } catch { console.error('nu pot citi complet starea inițială (usage)'); Deno.exit(2) }
   const { data: s0, error: es } = await sb.from('ofertare_citire_test').select('id').order('id', { ascending: false }).limit(1)
-  if (eu || es) { console.error('nu pot citi starea inițială (usage / staging)'); Deno.exit(2) }
+  if (es) { console.error('nu pot citi starea inițială (staging)'); Deno.exit(2) }
   const inc = await incarcaRegistru(fis, () => ({ t0, plafon_usd: PLAFON_USD, apeluri: [], oprit: null, documente: [],
-    ultim_staging_id: Number(s0?.[0]?.id ?? 0), usage_ids: (u0 || []).map((x: any) => Number(x.id)) }))
+    ultim_staging_id: Number(s0?.[0]?.id ?? 0), usage_ids: u0.map((x) => Number(x.id)) }))
   if ('eroare' in inc) { console.error(`${inc.eroare}: ${fis} — decide chat-ul; NU se pornește alt registru`); Deno.exit(3) }
   const s = inc.s
   if (Deno.args[1] === '--reconciliaza') {
     // reconcilierea unei opriri pe „cost neconfirmat”: doar citiri din BD + registrul; niciun apel AI
-    const usageDe = async (t0: string) => {
-      const { data, error } = await sb.from('ai_usage_log').select('id, ref_id, model, tokens_in, tokens_out, cost_usd, created_at')
-        .eq('function_name', 'ofertare-citire-test').gte('created_at', t0).order('id')
-      if (error) throw new Error('usage: citire eșuată')
-      return (data || []) as RandUsage[]
-    }
     const r = await reconciliaza({ usage: usageDe, staging: async () => [], salveaza: async (st) => {
       await Deno.writeTextFile(fis + '.tmp', JSON.stringify(st, null, 1)); await Deno.rename(fis + '.tmp', fis) } }, s,
       async (id) => { const { data } = await sb.from('ofertare_citire_test').select('*').eq('id', id).maybeSingle(); return (data ?? null) as RandStaging | null })
@@ -238,12 +260,7 @@ if (import.meta.main) {
       if (error) throw new Error(`staging: ${error.message}`)
       return (data || []) as RandStaging[]
     },
-    usage: async (t0) => {
-      const { data, error } = await sb.from('ai_usage_log').select('id, ref_id, model, tokens_in, tokens_out, cost_usd, created_at')
-        .eq('function_name', 'ofertare-citire-test').gte('created_at', t0).order('id')
-      if (error) throw new Error(`usage: ${error.message}`)
-      return (data || []) as RandUsage[]
-    },
+    usage: usageDe,
     salveaza: async (st) => { await Deno.writeTextFile(fis + '.tmp', JSON.stringify(st, null, 1)); await Deno.rename(fis + '.tmp', fis) },
     acum: () => Date.now(),
   }

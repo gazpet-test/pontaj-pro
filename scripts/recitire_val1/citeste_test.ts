@@ -218,3 +218,36 @@ Deno.test('reconciliaza: usage străin în plus / lipsă / cost nepotrivit / fă
     assertEquals([r.ok, salvari, s.oprit, s.apeluri[0].stare], [false, 0, 'x', 'neconfirmat'], nume)
   }
 })
+
+// ── Jakarinos #747 r1 ──
+Deno.test('cost: paritate cu Postgres — rotunjirea ZECIMALĂ a șirului JS (13000/8091 → 0.005345, nu 0.005346)', async () => {
+  const { costHaiku55, numericPostgres } = await import('./lib.ts')
+  const c = costHaiku55(13000, 8091)
+  assertEquals(String(c), '0.0053454999999999996')
+  assertEquals([numericPostgres(c, 6), numericPostgres(c, 4)], ['0.005345', '0.0053'])
+  assertEquals([numericPostgres(costHaiku55(13219, 8440), 6), numericPostgres(costHaiku55(13219, 8440), 4)], ['0.005542', '0.0055'])
+  assertEquals([numericPostgres(5e-7, 6), numericPostgres(5e-7, 4), numericPostgres(0.00004999, 4), numericPostgres(0.00005, 4), numericPostgres(1.5, 0)], ['0.000001', '0.0000', '0.0000', '0.0001', '2'])
+  // treapta de sus: > 100 000 tokeni de intrare
+  assertEquals(costHaiku55(100_001, 0), 100_001 * (0.50 / 1e6))
+  assertEquals(costHaiku55(100_000, 0), 100_000 * (0.10 / 1e6))
+  // perechea reală a cazului 13000/8091, ca în BD, e CONFIRMATĂ
+  const { costPotrivit } = await import('./citeste.ts')
+  const r: RandStaging = { id: 1, doc_id: 212, model: 'claude-haiku-5-5', pagina_de_la: 1, pagina_pana_la: 8, text: 'x', tokens_in: 13000, tokens_out: 8091, cost_usd: 0.0053, eroare: null, created_at: 't' }
+  const u: RandUsage = { id: 2, ref_id: 212, model: 'claude-haiku-5-5', tokens_in: 13000, tokens_out: 8091, cost_usd: 0.005345, created_at: 't' }
+  assertEquals(costPotrivit(r, u, 212), 0.005345)
+  assertEquals(costPotrivit(r, { ...u, cost_usd: 0.005346 }, 212), null)
+})
+
+Deno.test('usage: citire completă paginată — un apel străin dincolo de prima pagină NU scapă; trunchierea / totalul schimbat → eroare', async () => {
+  const { citesteComplet, PAGINA_USAGE } = await import('./citeste.ts')
+  const toate = Array.from({ length: 2 * PAGINA_USAGE + 1 }, (_, i) => ({ id: i + 1 }))
+  const r = await citesteComplet(async (de, pana) => ({ randuri: toate.slice(de, pana + 1), total: toate.length }))
+  assertEquals(r.length, toate.length)
+  assertEquals(r.at(-1)!.id, toate.length)                                     // ultimul rând (străinul) e văzut
+  let e1 = ''; try { await citesteComplet(async (de, pana) => ({ randuri: toate.slice(de, Math.min(pana + 1, 1000)), total: toate.length })) } catch (e) { e1 = String(e) }
+  assert(/incompletă/.test(e1), e1)
+  let n = 0, e2 = ''; try { await citesteComplet(async (de, pana) => ({ randuri: toate.slice(de, pana + 1), total: toate.length + (n++ > 0 ? 1 : 0) })) } catch (e) { e2 = String(e) }
+  assert(/schimbat/.test(e2), e2)
+  let e3 = ''; try { await citesteComplet(async () => ({ randuri: [], total: null })) } catch (e) { e3 = String(e) }
+  assert(/total/.test(e3))
+})
