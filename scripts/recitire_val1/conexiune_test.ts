@@ -46,7 +46,10 @@ Deno.test('psql: conninfo cu verify-full + sslrootcert ca cuvinte-cheie, FĂRĂ 
   assert(argumenteSigure(['-X', '-1', '-q', '-f', 'C:\\repo\\scripts\\recitire_val1\\pas0.sql'], dir))
   for (const a of [['-h', 'x'], ['-hx'], ['--host=x'], ['-d', 'x'], ['-U', 'x'], ['-p', '1'], ['postgresql://u:p@h/db'], ['host=x sslmode=disable'],
     ['-Xdpostgresql://t@127.0.0.1:5432/postgres?sslmode=disable'], ['-X1'], ['-c', 'select 1'], ['-c', '\\connect x'], ['-f', 'C:/alt/aplica.sql'],
-    ['-f', `${dir}/altceva.sql`], ['-f', `${dir}/../x/aplica.sql`], ['-f'], ['-v'], ['-v', '-d'], ['--set=x=1'], ['-o', 'f'], ['-1', 'x']]) {
+    ['-f', `${dir}/altceva.sql`], ['-f', `${dir}/../x/aplica.sql`], ['-f'], ['-v'], ['-v', '-d'], ['--set=x=1'], ['-o', 'f'], ['-1', 'x'],
+    // r3: fără -f (stdin → \connect), -f dublat, subdirector cu nume permis
+    [], ['-X'], ['-X', '-1', '-v', 'ON_ERROR_STOP=1'], ['-f', `${dir}/aplica.sql`, '-f', `${dir}/pas0.sql`], ['-f', `${dir}/alt/aplica.sql`],
+    ['-f', `${dir}x/aplica.sql`]]) {
     assertEquals(argumenteSigure(a, dir), false, JSON.stringify(a))
   }
 })
