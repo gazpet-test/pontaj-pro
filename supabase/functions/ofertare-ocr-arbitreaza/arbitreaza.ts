@@ -40,7 +40,12 @@ const REFUZ: Record<string, [number, string]> = {
   arbitrat: [409, 'Dezacord deja arbitrat'], in_zbor: [409, 'Un arbitraj e deja în zbor pe acest dezacord'],
   latura: [422, 'Imaginea are o latură peste 8000 px (limita API): verificare manuală'],
   banda: [422, 'banda_intreaga (bandă oprită de gardă) nu se arbitrează automat: verificare manuală'],
+  mod_cifre: [422, 'Modul doar_haiku e permis doar pe dezacorduri fără nicio cifră în citiri (restul merge pe cascadă)'],
 }
+// MODUL doar_haiku (laborator 16.10.2026, decizia Razvan: a doua trecere ieftină pentru restanțele DEFER): un singur apel Haiku, fără
+// escaladare; nesigurul rămâne needs_human. Poartă SERVER-SIDE: refuzat dacă oricare dintre citirile DIN BD conține vreo cifră ASCII —
+// clientul nu poate trimite pe calea ieftină un dezacord cu numere (HIGH_RISK), nici din greșeală. Rezervarea = limita lui Haiku.
+const MODURI = ['doar_haiku']
 const refuz = (r: unknown): Response => {
   const [s, m] = REFUZ[String(r)] || [500, 'Refuz necunoscut']
   return raspuns(s, { error: m, refuz: String(r) })
@@ -55,10 +60,14 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const c = await citesteCorp(req, MAX_CORP)
   if (!c.ok) return raspuns(c.status, { error: c.error })
   const corp = c.corp
-  if (!esteObiect(corp) || Object.keys(corp).sort().join(',') !== 'dezacord_id,imagine_b64,item,rulare_id') {
-    return raspuns(400, { error: 'Corp: exact {rulare_id, dezacord_id, item, imagine_b64}' })
+  const chei = esteObiect(corp) ? Object.keys(corp).sort().join(',') : ''
+  if (chei !== 'dezacord_id,imagine_b64,item,rulare_id' && chei !== 'dezacord_id,imagine_b64,item,mod,rulare_id') {
+    return raspuns(400, { error: 'Corp: exact {rulare_id, dezacord_id, item, imagine_b64[, mod]}' })
   }
   const { rulare_id, dezacord_id, item, imagine_b64 } = corp
+  const mod = (corp as Record<string, unknown>).mod
+  if (mod !== undefined && !MODURI.includes(mod as string)) return raspuns(400, { error: 'mod necunoscut' })
+  const doarHaiku = mod === 'doar_haiku'
   if (!esteId(rulare_id) || !esteId(dezacord_id) || !esteObiect(item) || typeof imagine_b64 !== 'string') return raspuns(400, { error: 'Tipuri invalide' })
   // item-ul EXACT din dezacorduri.jsonl: amprenta recalculată (= compare.item_hash) trebuie să fie cea declarată; BD o compară apoi
   // cu cea stocată, iar mai jos citirile / tipul / id-ul / imaginea item-ului trebuie să fie identice cu cele din BD. Abia atunci
@@ -96,7 +105,9 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const octetiText = octeti(PROMPT) + octeti(text)
   // limita de SUS a ambelor apeluri: escaladarea la Sonnet se poate întâmpla pe orice item (Haiku nesigur)
   const limitaArbitru = limitaCost(octetiText, dim.w, dim.h, MODEL_ARBITRU)
-  const suma = rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU) + limitaArbitru)
+  const suma = doarHaiku ? rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU))
+    : rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU) + limitaArbitru)
+  if (doarHaiku && /[0-9]/.test(dz.citire_lighton + dz.citire_mineru)) return refuz('mod_cifre')  // înaintea rezervării: nimic cheltuit
   if (suma > 1) return refuz('suma')
   if (dim.w > 8000 || dim.h > 8000) return refuz('latura')  // API-ul refuză laturi peste 8000 px (review #712 Jakarinos P2)
   if (dz.tip === 'banda_intreaga') return refuz('banda')  // apărare în adâncime: clientul o trimite la om (decizie Razvan 14.10)
@@ -144,7 +155,8 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
     '[' + (r.model === MODEL_FILTRU ? 'Haiku' : 'Sonnet') + ': ' + r.d.decizie + ', ' + (r.estimat ? 'usage lipsa, cost estimat ' : r.tin + '/' + r.tout + ' tok, ') + r.cost.toFixed(4) + '$]'
   const cifre = diferentaNumerica(dz.citire_lighton, dz.citire_mineru) || item.diferenta_numerica === true
   let final = r1
-  if (r1.d.decizie === 'needs_human' || cifre) {
+  if (doarHaiku) final = { ...r1, d: { ...r1.d, motiv: taie200(detaliu(r1) + ' [doar_haiku] ' + r1.d.motiv) } }
+  else if (r1.d.decizie === 'needs_human' || cifre) {
     // ce a rămas din rezervare trebuie să acopere limita de sus a lui Sonnet; altfel nu se mai cheltuie: depășire cu ce s-a consumat
     if (incapeArbitrul(r1.cost, limitaArbitru, suma)) {
       const r2 = await apel(MODEL_ARBITRU)

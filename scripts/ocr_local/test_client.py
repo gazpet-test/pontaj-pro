@@ -204,6 +204,24 @@ class Client(unittest.TestCase):
         a = C.arbitreaza(rdir, self.edge, max_apeluri=10, triere=True); self.assertEqual((a['apeluri_acum'], apeluri()), (0, 0))
         with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, triere=True)  # pasul normal: refuz (decizia Razvan 16.10)
         self.assertFalse((rdir / ('d%d' % DOC) / 'decizii_om.jsonl').exists()); self.assertEqual(apeluri(), 0)
+    def test_doar_haiku_restante_defer_fara_prag(self):
+        # laborator 16.10 (decizia Razvan): a doua trecere doar pe DEFER fara cifre, mod=doar_haiku; needs_human NU intra in pragul §8
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungimea conductei este mare', 'lungimea conductel este mare')
+        C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); nb = c['dezacorduri']; self.assertGreaterEqual(nb, 1)
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, max_apeluri=5, doar_haiku=True)        # fara --triere
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, triere=True, doar_haiku=True)          # fara proba
+        self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '',
+                                                         'motiv': 'nesigur', 'e_cantitate': False, 'anomalie_separator': False,
+                                                         'arbitru_model': 'claude-haiku-5-5', 'prompt_versiune': 'arb-v2', 'cost_usd': 0.0005}, 'arbitraj_id': 1})
+        a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=50, triere=True, doar_haiku=True)
+        self.assertEqual((a['stare'], a['apeluri_acum'], a['needs_human_claude']), ('proba', nb, 0))  # needs_human nesocotit, fara oprire
+        corpuri = [x for f, x in self.edge.calls if f == 'ofertare-ocr-arbitreaza']; self.assertTrue(all(x.get('mod') == 'doar_haiku' for x in corpuri))
+        self.assertEqual(self.edge.stare, 'citita')
+    def test_doar_haiku_sare_peste_cifre(self):
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=50, triere=True, doar_haiku=True)
+        self.assertEqual(a['apeluri_acum'], 0); self.assertFalse([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
     def test_triere_cu_numere_merge_la_claude(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
         C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); nb = c['dezacorduri']

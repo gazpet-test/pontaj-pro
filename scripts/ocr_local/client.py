@@ -569,15 +569,18 @@ def baza_reluare(rdir):
 def stare_arbitraj(rdir, r, baza):
     st = {'claude': 0, 'needs_human_claude': 0, 'om': 0, 'necunoscute': 0, 'pierdute_claude': 0, 'cost_usd': 0.0, 'per_doc': {}}
     for doc, _ in documente(r):
-        d = rdir / ('d%d' % doc); ap = _jsonl(d / 'apeluri.jsonl'); dec = _jsonl(d / 'decizii.jsonl')
-        claude = {x['id'] for x in dec}; gata = {x['a'] for x in ap if x['faza'] == 'gata'}
+        d = rdir / ('d%d' % doc); ap = _jsonl(d / 'apeluri.jsonl')
+        # deciziile trecerii doar_haiku (restante DEFER, politica proprie - decizia Razvan 16.10) NU intra in pragul §8
+        dh = {x['id'] for x in _jsonl(d / 'decizii_doar_haiku.jsonl')}
+        dec = [x for x in _jsonl(d / 'decizii.jsonl') if x['id'] not in dh]; dec_toate = _jsonl(d / 'decizii.jsonl')
+        claude = {x['id'] for x in dec_toate}; gata = {x['a'] for x in ap if x['faza'] == 'gata'}
         necunoscute = {x['id'] for x in ap if x['faza'] == 'start' and x['a'] not in gata} - claude
         pierdute_cl = {x['id'] for x in _jsonl(d / 'pierdute.jsonl') if x.get('sursa') == 'claude'} - claude - necunoscute
         om_ids = {x['id'] for x in _jsonl(d / 'decizii_om.jsonl')}; pierdute = {x['id'] for x in _jsonl(d / 'pierdute.jsonl')}
         b = baza.get(str(doc), set()); dec_f = [x for x in dec if x['id'] not in b]  # doar fereastra de dupa reluare
         st['claude'] += len(dec_f); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec_f)
         st['necunoscute'] += len(necunoscute - b); st['pierdute_claude'] += len(pierdute_cl - b); st['om'] += len(om_ids)
-        st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec)
+        st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec_toate)
         st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute, 'numarate': claude | necunoscute | pierdute_cl}
     return st
 def peste_prag(st, prag=None, minim=None):
@@ -587,7 +590,7 @@ def peste_prag(st, prag=None, minim=None):
     return n, nh, n >= minim and nh / n > prag
 
 @cu_lacat
-def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None, triere=False):
+def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None, triere=False, doar_haiku=False):
     """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
     restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
     plafonul si legarea de BD sunt in edge). Decizia se scrie local imediat (decizii.jsonl). Nicio reincercare: orice refuz / eroare
@@ -620,6 +623,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     # Decizia Razvan 16.10 (varianta A, #737): DEFER / MARCAJE NU se trimit in masa la om; raman restante pentru o a doua trecere ieftina,
     # decisa separat. Pana atunci --triere e permis DOAR in proba (unde restul se sare, neatins).
     if triere and not proba: raise ValueError('--triere doar in proba (--max-apeluri): DEFER/MARCAJE raman restante, nu merg in masa la om')
+    # TRECEREA doar_haiku (decizia Razvan 16.10): doar restantele DEFER fara nicio cifra in citiri, un apel Haiku fara escaladare (edge
+    # mod=doar_haiku, poarta pe cifre si in edge); needs_human ramane restant si NU intra in pragul §8 (decizii_doar_haiku.jsonl).
+    if doar_haiku and not (proba and triere): raise ValueError('--doar-haiku doar in proba, impreuna cu --triere')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     try: activa(rdir)
     except RuntimeError as e:
@@ -667,7 +673,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         if proba and (it['tip'] in ('banda_intreaga', 'structura_tabele') or (filtru is not None and cheie_proba(it, doc) not in filtru)): continue
         if triere and it['tip'] not in ('banda_intreaga', 'structura_tabele'):
             k, motiv_t = clasa_item(d, it)
-            if k != 'HIGH_RISK':
+            if doar_haiku:
+                if k != 'DEFER' or re.search(r'[0-9]', it['citire_lighton'] + it['citire_mineru']): continue
+            elif k != 'HIGH_RISK':
                 if proba: continue
                 om(d, ids, it, ('%s: %s (triere, fara arbitraj automat)' % (k, motiv_t))[:200]); st = stare_locala(); continue
         if proba and facute >= max_apeluri: break
@@ -686,8 +694,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             return dict({k: v for k, v in stare_locala().items() if k != 'per_doc'}, stare='oprita', motiv=str(e), apeluri_acum=facute)
         a = uuid.uuid4().hex  # identificator UNIC al incercarii (review r3 Jakarinos P1: doua procese nu pot inchide aceeasi incercare)
         _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
-        status, j = edge.post('ofertare-ocr-arbitreaza', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it,
-                                                         'imagine_b64': base64.b64encode(img).decode('ascii')}, timeout=240)
+        corp = {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it, 'imagine_b64': base64.b64encode(img).decode('ascii')}
+        if doar_haiku: corp['mod'] = 'doar_haiku'
+        status, j = edge.post('ofertare-ocr-arbitreaza', corp, timeout=240)
         if status == 409 and j.get('refuz') == 'arbitrat':
             # decis deja in BD, decizia nu e locala: la reconciliere = needs_human (fail-closed); la prag = needs_human
             _adauga(d / 'pierdute.jsonl', {'id': it['id'], 'sursa': 'claude', 'motiv': 'arbitrat in BD, decizie locala lipsa'})
@@ -699,6 +708,7 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             raise EdgeError('ofertare-ocr-arbitreaza (%s)' % it['id'], status, j)
         dec = j['decizie']
         if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])
+        if doar_haiku: _adauga(d / 'decizii_doar_haiku.jsonl', {'id': it['id'], 'a': a})  # INAINTEA deciziei: niciodata socotita la prag
         _adauga(d / 'decizii.jsonl', dec); _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'decizie'})
         st = stare_locala(); facute += 1
         if st['claude'] % 25 == 0: heartbeat(edge, True, 'rularea %d: %d arbitraje' % (r['rulare_id'], st['claude']))

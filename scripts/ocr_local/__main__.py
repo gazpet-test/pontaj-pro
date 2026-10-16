@@ -41,6 +41,7 @@ def main(argv=None):
         if nume == 'arbitreaza':  # proba platita (laborator): N apeluri, fara `arbitrata`; filtrul = JSONL de la `masoara --jsonl`
             s.add_argument('--max-apeluri', type=int); s.add_argument('--filtru', type=pathlib.Path); s.add_argument('--seed')
             s.add_argument('--triere', action='store_true', help='doar HIGH_RISK la Claude (ocr_local/triere.py)')
+            s.add_argument('--doar-haiku', action='store_true', help='a doua trecere: restante DEFER fara cifre, un apel Haiku (doar in proba, cu --triere)')
     es.add_parser('abandon', help='abandoneaza o rezervare deschisa (dupa 15 min)').add_argument('--rezervare', type=int, required=True)
     x = p.parse_args(argv)
     if x.cmd == 'erp':
@@ -51,7 +52,7 @@ def main(argv=None):
             edge = C.Edge(C.citeste_secret(x.secret_file))
             res = {'preia': lambda: C.preia(x.work, edge), 'descarca': lambda: C.descarca(x.rulare_dir, edge), 'plan': lambda: C.plan_rulare(x.rulare_dir, edge),
                    'incarca-citiri': lambda: C.incarca_citiri(x.rulare_dir, edge), 'compara': lambda: C.compara_rulare(x.rulare_dir, edge),
-                   'arbitreaza': lambda: C.arbitreaza(x.rulare_dir, edge, max_apeluri=x.max_apeluri, seed=x.seed, triere=x.triere, filtru=None if not x.filtru else {
+                   'arbitreaza': lambda: C.arbitreaza(x.rulare_dir, edge, max_apeluri=x.max_apeluri, seed=x.seed, triere=x.triere, doar_haiku=x.doar_haiku, filtru=None if not x.filtru else {
                        C.cheie_proba(json.loads(l)) for l in x.filtru.read_text(encoding='utf-8').splitlines() if l.strip()}), 'reconciliaza': lambda: C.reconciliaza_rulare(x.rulare_dir, edge),
                    'oprire': lambda: C.oprire(x.rulare_dir, edge, x.motiv), 'reluata': lambda: C.reluata(x.rulare_dir, edge), 'abandon': lambda: C.abandon(edge, x.rezervare),
                    'stare': lambda: C.stare(x.rulare_dir, edge)}[x.pas]()

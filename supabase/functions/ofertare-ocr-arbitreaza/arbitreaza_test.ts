@@ -292,3 +292,35 @@ Deno.test('bani in unitati de 0,0001 USD: exact la limita Sonnet incape, cu 0,00
   assert.equal(incapeArbitrul(0.0012, 0.0204, 0.0215), false)    // 0,0001 peste
   assert.equal(incapeArbitrul(0, 0.0204, 0.0215), true)
 })
+
+// MODUL doar_haiku (laborator 16.10.2026): a doua trecere ieftina pe restantele fara cifre
+Deno.test('doar_haiku: un singur apel Haiku, fără Sonnet chiar la needs_human; rezervarea = limita lui Haiku', async () => {
+  const it = await itemDeTest({ citire_lighton: 'masuri de protecție', citire_mineru: 'masuri de protectie', diferenta_numerica: false })
+  const nh = { text: JSON.stringify({ decizie: 'needs_human', text: '', motiv: 'nesigur', e_cantitate: false, anomalie_separator: false }) }
+  const { m, apeluri, cereriApi } = mediu(it, { api: nh })
+  const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+  assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(cereriApi.length, 1); assert.equal(cereriApi[0].model, 'claude-haiku-5-5')
+  assert.equal(j.decizie.decizie, 'needs_human'); assert.equal(j.decizie.arbitru_model, 'claude-haiku-5-5')
+  assert.ok(j.decizie.motiv.includes('[doar_haiku]'))
+  const { m: m2, apeluri: a2 } = mediu(it, { api: nh })
+  await arbitreaza(cerere(corpDe(it)), m2)  // cascada normala pe acelasi item: rezervare mai mare (include Sonnet)
+  const sumaHaiku = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
+  const sumaCascada = a2.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
+  assert.ok(sumaHaiku > 0 && sumaHaiku < sumaCascada, `${sumaHaiku} < ${sumaCascada}`)
+})
+
+Deno.test('doar_haiku: refuz ÎNAINTEA rezervării dacă citirile din BD conțin vreo cifră (fără cost)', async () => {
+  const it = await itemDeTest({ citire_lighton: 'lungime 10 m', citire_mineru: 'lungime 10 rn', diferenta_numerica: false })
+  const { m, apeluri, cereriApi } = mediu(it)
+  const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+  assert.equal(r.status, 422); assert.equal(j.refuz, 'mod_cifre'); assert.equal(cereriApi.length, 0)
+  assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_rezerva'))
+})
+
+Deno.test('doar_haiku: mod necunoscut sau chei în plus = 400, fără nicio citire din BD', async () => {
+  const it = await itemDeTest({ citire_lighton: 'abc', citire_mineru: 'abd', diferenta_numerica: false })
+  for (const extra of [{ mod: 'doar_sonnet' }, { mod: 'doar_haiku', alt: 1 }]) {
+    const { m, apeluri } = mediu(it)
+    const r = await arbitreaza(cerere(corpDe(it, extra)), m); assert.equal(r.status, 400); assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_dezacord_arbitraj'))
+  }
+})
