@@ -8,7 +8,7 @@
 // supraviețuiește reluărilor. Un registru ilizibil oprește rularea (nu se pornește „unul nou”).
 // Utilizare (chat, pe serverul AI): deno run -A scripts/recitire_val1/citeste.ts <dir_val>
 //   mediu: SUPABASE_URL, SUPABASE_ANON_KEY, RV1_EMAIL, RV1_PAROLA (contul claudetest@; nu se scriu nicăieri)
-import { type Apel, ORDINE, PLAFON_USD, poatePorni, type Registru, REZERVARE_APEL_USD, normalizeazaFelie } from './lib.ts'
+import { type Apel, ORDINE, PLAFON_USD, poatePorni, type Registru, registruValid, REZERVARE_APEL_USD, normalizeazaFelie } from './lib.ts'
 
 export type Identitate = { fisier_path: string; size_bytes: number | null; pagina_offset: number; pagini: number | null }
 export type StorageInfo = { etag: string | null; size: number | null; updated_at: string | null }
@@ -119,7 +119,9 @@ export async function incarcaRegistru(fis: string, nou: () => Stare): Promise<{ 
   }
   try {
     const s = JSON.parse(txt) as Stare
-    if (typeof s.t0 !== 'string' || !Array.isArray(s.apeluri) || !Array.isArray(s.usage_ids) || !Array.isArray(s.documente)) return { eroare: 'registru cu formă invalidă' }
+    if (!Array.isArray(s.documente)) return { eroare: 'registru cu formă invalidă (documente)' }
+    const v = registruValid(s)
+    if (v) return { eroare: `registru invalid: ${v}` }
     return { s }
   } catch { return { eroare: 'registru corupt (JSON invalid)' } }
 }
@@ -135,8 +137,14 @@ if (import.meta.main) {
   const { error: eAuth } = await sb.auth.signInWithPassword({ email: env('RV1_EMAIL'), password: env('RV1_PAROLA') })
   if (eAuth) { console.error('autentificare eșuată'); Deno.exit(2) }
   const fis = `${dir}/rulare.json`
-  const inc = await incarcaRegistru(fis, () => ({ t0: new Date().toISOString(), plafon_usd: PLAFON_USD, apeluri: [], oprit: null, documente: [],
-    ultim_staging_id: 0, usage_ids: [] }))
+  // T0 = acum − 10 min (toleranța de ceas față de created_at din BD); rândurile deja existente de la T0 se înregistrează ca „văzute”
+  // (usage_ids, ultim_staging_id), deci filtrul created_at ≥ T0 nu poate ascunde rândurile primului apel
+  const t0 = new Date(Date.now() - 10 * 60_000).toISOString()
+  const { data: u0, error: eu } = await sb.from('ai_usage_log').select('id').eq('function_name', 'ofertare-citire-test').gte('created_at', t0)
+  const { data: s0, error: es } = await sb.from('ofertare_citire_test').select('id').order('id', { ascending: false }).limit(1)
+  if (eu || es) { console.error('nu pot citi starea inițială (usage / staging)'); Deno.exit(2) }
+  const inc = await incarcaRegistru(fis, () => ({ t0, plafon_usd: PLAFON_USD, apeluri: [], oprit: null, documente: [],
+    ultim_staging_id: Number(s0?.[0]?.id ?? 0), usage_ids: (u0 || []).map((x: any) => Number(x.id)) }))
   if ('eroare' in inc) { console.error(`${inc.eroare}: ${fis} — decide chat-ul; NU se pornește alt registru`); Deno.exit(3) }
   const s = inc.s
   if (s.oprit) { console.error(`rulare oprită anterior: ${s.oprit} — decide chat-ul (registru: ${fis})`); Deno.exit(3) }

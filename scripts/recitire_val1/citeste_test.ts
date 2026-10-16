@@ -40,7 +40,7 @@ function mediu(sc: Scenariu) {
   }
   return { d, apeluri: () => nrApel, ultima: () => ultimaSalvare }
 }
-const nou = (): Stare => ({ t0: 't0', plafon_usd: 1, apeluri: [], oprit: null, documente: [], ultim_staging_id: 0, usage_ids: [] })
+const nou = (): Stare => ({ t0: '2026-10-16T19:50:00.000Z', plafon_usd: 1, apeluri: [], oprit: null, documente: [], ultim_staging_id: 0, usage_ids: [] })
 
 Deno.test('pilot: citire completă, felii de 8, cost confirmat din BD (usage atribuit)', async () => {
   const m = mediu({ pagini: { 212: 20 } })
@@ -163,8 +163,15 @@ Deno.test('r1 (ambii): registrul valului — lipsă → nou; corupt / formă inv
   assert('eroare' in await incarcaRegistru(fis, nouS))
   await Deno.writeTextFile(fis, '{"t0": "x"}')
   assert('eroare' in await incarcaRegistru(fis, nouS))
-  await Deno.writeTextFile(fis, JSON.stringify({ ...nou(), t0: 'T0-vechi' }))
+  await Deno.writeTextFile(fis, JSON.stringify({ ...nou(), t0: '2026-10-16T19:50:00.000Z' }))
   const r = await incarcaRegistru(fis, nouS)
-  assertEquals('s' in r && r.s.t0, 'T0-vechi')
+  assertEquals('s' in r && r.s.t0, '2026-10-16T19:50:00.000Z')
+  // r2: registrul e contabilitate, nu autoritate — plafon schimbat / lipsă, rezervare sau cost invalid → eroare
+  const ap = (x: object) => ({ nr: 1, document_id: 212, de_la: 1, felie: 8, stare: 'confirmat', rezervat_usd: 0.53, cost_usd: 0.01, staging_id: 1, ...x })
+  for (const rau of [{ plafon_usd: 10 }, { plafon_usd: undefined }, { apeluri: [ap({ cost_usd: 0.99 })] }, { apeluri: [ap({ rezervat_usd: 0.01 })] },
+      { apeluri: [ap({ cost_usd: Number.NaN })] }, { apeluri: [ap({ stare: 'rezervat', cost_usd: 0.01 })] }, { usage_ids: [1, 1] }, { t0: 'nu-e-data' }]) {
+    await Deno.writeTextFile(fis, JSON.stringify({ ...nou(), t0: '2026-10-16T19:50:00.000Z', ...rau }))
+    assert('eroare' in await incarcaRegistru(fis, nouS), JSON.stringify(rau))
+  }
   await Deno.remove(dir, { recursive: true })
 })

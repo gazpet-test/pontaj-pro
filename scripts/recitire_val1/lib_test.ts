@@ -21,6 +21,15 @@ Deno.test('buget: rezervarea de 0,53 înaintea apelului; plafonul 1,00 lasă 0,4
   assertEquals(poatePorni(r).ok, false)
 })
 
+Deno.test('r2: plafonul e constanta — un registru cu plafon 10 sau fără plafon nu poate porni apeluri', () => {
+  const r: Registru = { t0: 'x', plafon_usd: 10, apeluri: [], oprit: null }
+  assertEquals(poatePorni(r).ok, false)
+  assertEquals(poatePorni({ ...r, plafon_usd: undefined as unknown as number }).ok, false)
+  r.plafon_usd = PLAFON_USD
+  r.apeluri.push({ nr: 1, document_id: 212, de_la: 1, felie: 8, stare: 'confirmat', rezervat_usd: REZERVARE_APEL_USD, cost_usd: 0.99, staging_id: 1 })
+  assertEquals(poatePorni(r).ok, false)
+})
+
 Deno.test('buget: un apel neconfirmat rămâne socotit la 0,53 și oprește rularea', () => {
   const r: Registru = { t0: 'x', plafon_usd: PLAFON_USD, apeluri: [
     { nr: 1, document_id: 212, de_la: 1, felie: 8, stare: 'neconfirmat', rezervat_usd: REZERVARE_APEL_USD, cost_usd: null, staging_id: null }], oprit: null }

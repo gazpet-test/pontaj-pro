@@ -17,6 +17,27 @@ export type Apel = {
 }
 export type Registru = { t0: string; plafon_usd: number; apeluri: Apel[]; oprit: string | null }
 const cent = (x: number) => Math.round(x * 1e6) / 1e6
+// validarea SEMANTICĂ a registrului persistent (orice abatere → oprire): plafonul = constanta, rezervările = 0,53, costurile finite,
+// 0 ≤ cost ≤ rezervare (peste rezervare = limita superioară încălcată), stări cunoscute, id-uri unice
+export function registruValid(r: Registru & { usage_ids?: unknown; ultim_staging_id?: unknown }): string | null {
+  if (typeof r.t0 !== 'string' || Number.isNaN(Date.parse(r.t0))) return 't0 invalid'
+  if (r.plafon_usd !== PLAFON_USD) return `plafon_usd ${r.plafon_usd} ≠ ${PLAFON_USD}`
+  if (!Array.isArray(r.apeluri)) return 'apeluri lipsă'
+  const nrs = new Set<number>()
+  for (const a of r.apeluri) {
+    if (!Number.isInteger(a.nr) || nrs.has(a.nr)) return `apel cu nr invalid / dublat (${a.nr})`
+    nrs.add(a.nr)
+    if (!['rezervat', 'confirmat', 'neconfirmat'].includes(a.stare)) return `apel ${a.nr}: stare invalidă`
+    if (a.rezervat_usd !== REZERVARE_APEL_USD) return `apel ${a.nr}: rezervare ${a.rezervat_usd} ≠ ${REZERVARE_APEL_USD}`
+    if (a.stare === 'confirmat' && !(typeof a.cost_usd === 'number' && Number.isFinite(a.cost_usd) && a.cost_usd >= 0 && a.cost_usd <= REZERVARE_APEL_USD)) {
+      return `apel ${a.nr}: cost confirmat invalid (${a.cost_usd})`
+    }
+    if (a.stare !== 'confirmat' && a.cost_usd !== null) return `apel ${a.nr}: cost pe un apel neconfirmat`
+  }
+  if (!Array.isArray(r.usage_ids) || r.usage_ids.some((x) => !Number.isInteger(x)) || new Set(r.usage_ids as number[]).size !== r.usage_ids.length) return 'usage_ids invalide'
+  if (!Number.isInteger(r.ultim_staging_id) || (r.ultim_staging_id as number) < 0) return 'ultim_staging_id invalid'
+  return null
+}
 // consumul socotit: costul confirmat + rezervarea întreagă pentru tot ce nu e confirmat
 export function consum(r: Registru): number {
   return cent(r.apeluri.reduce((s, a) => s + (a.stare === 'confirmat' ? (a.cost_usd ?? 0) : a.rezervat_usd), 0))
@@ -24,7 +45,9 @@ export function consum(r: Registru): number {
 export function poatePorni(r: Registru): { ok: boolean; motiv?: string } {
   if (r.oprit) return { ok: false, motiv: `rulare oprită: ${r.oprit}` }
   if (r.apeluri.some((a) => a.stare !== 'confirmat')) return { ok: false, motiv: 'un apel anterior nu e confirmat în BD' }
-  if (cent(consum(r) + REZERVARE_APEL_USD) > r.plafon_usd) return { ok: false, motiv: `plafon: ${consum(r)} + ${REZERVARE_APEL_USD} > ${r.plafon_usd}` }
+  // plafonul e CONSTANTA aprobată, nu valoarea din fișier (registrul e contabilitate, nu autoritate)
+  if (r.plafon_usd !== PLAFON_USD) return { ok: false, motiv: `registru cu plafon ${r.plafon_usd} ≠ ${PLAFON_USD} aprobat` }
+  if (cent(consum(r) + REZERVARE_APEL_USD) > PLAFON_USD) return { ok: false, motiv: `plafon: ${consum(r)} + ${REZERVARE_APEL_USD} > ${PLAFON_USD}` }
   return { ok: true }
 }
 

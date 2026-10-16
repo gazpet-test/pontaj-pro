@@ -63,8 +63,11 @@ export async function deschide(db: Db, st: StareF | null, salveaza: (s: StareF) 
   const active = dupa.filter((j) => tinta(j) && j.active)
   if (active.length) return { cod: 2, mesaj: `joburi încă active: ${active.map((j) => j.jobname).join(', ')}`, stare: st }
   if (st.t_joburi_oprite === null) { st.t_joburi_oprite = db.acum(); await salveaza(st) }
+  // ORICE activitate observată (rulare cron în curs, heartbeat NAS după oprire, coadă ocupată) invalidează golirea: ea se
+  // reia de la zero abia după ce activitatea dispare — liniștea se dovedește pe interval, nu prin verificarea punctuală
+  const invalideaza = async () => { if (st!.t_stop !== null || st!.t_gol !== null) { st!.t_stop = null; st!.t_gol = null; await salveaza(st!) } }
   const inCurs = await db.inCurs(dupa.filter(tinta).map((j) => j.jobid))
-  if (inCurs > 0) return { cod: 5, mesaj: `${inCurs} rulări cron Ofertare încă în curs; reia`, stare: st }
+  if (inCurs > 0) { await invalideaza(); return { cod: 5, mesaj: `${inCurs} rulări cron Ofertare încă în curs; golirea se reia după ele`, stare: st } }
   const veghe = await db.vegheUltimaRulare()
   if (veghe !== null && db.acum() - veghe < DUPA_VEGHE_MS) return { cod: 5, mesaj: `veghea SEAP a rulat acum ${Math.round((db.acum() - veghe) / MIN)} min; reia după 30 min`, stare: st }
   for (const j of dupa.filter((x) => VEGHE.includes(x.jobname ?? ''))) {
@@ -73,17 +76,17 @@ export async function deschide(db: Db, st: StareF | null, salveaza: (s: StareF) 
     if (db.acum() - p < DUPA_VEGHE_MS) return { cod: 5, mesaj: `programarea ${j.jobname} a fost acum ${Math.round((db.acum() - p) / MIN)} min; reia după 30 min`, stare: st }
   }
   const hb = await db.heartbeat()
+  if (hb !== null && st.t_stop !== null && hb > st.t_stop) await invalideaza()     // NAS a bătut DUPĂ oprire → golirea de la capăt
   if (hb !== null && db.acum() - hb < HEARTBEAT_OPRIT_MS) {
-    if (st.t_stop !== null) { st.t_stop = null; st.t_gol = null; await salveaza(st) }   // NAS revenit → golirea de la capăt
     return { cod: 5, mesaj: 'oprește worker-ul NAS (ofertare-worker); heartbeat-ul trebuie să fie mai vechi de 10 min', stare: st }
   }
   if (st.t_stop === null) { st.t_stop = Math.max(st.t_joburi_oprite, hb ?? 0); await salveaza(st) }
   const coada = await db.coada()
-  if (coada > 0) return { cod: 5, mesaj: `coada pg_net are ${coada} cereri; reia`, stare: st }
+  if (coada > 0) { if (st.t_gol !== null) { st.t_gol = null; await salveaza(st) } return { cod: 5, mesaj: `coada pg_net are ${coada} cereri; golirea se reia după ea`, stare: st } }
   if (st.t_gol === null) { st.t_gol = db.acum(); await salveaza(st) }
   const ramas = st.t_gol + GOLIRE_MS - db.acum()
   if (ramas > 0) return { cod: 5, mesaj: `golire: mai sunt ${Math.ceil(ramas / MIN)} min (T_gol + 15 min)`, stare: st }
-  if ((await db.coada()) > 0) return { cod: 5, mesaj: 'coada pg_net nu mai e goală; reia', stare: st }
+  if ((await db.coada()) > 0) { st.t_gol = null; await salveaza(st); return { cod: 5, mesaj: 'coada pg_net nu mai e goală; golirea se reia', stare: st } }
   return { cod: 0, mesaj: 'GATA: fereastră deschisă și golită', stare: st }
 }
 
@@ -105,6 +108,21 @@ export async function inchide(db: Db, st: StareF | null, salveaza: (s: StareF) =
   return { cod: 0, mesaj: 'fereastră închisă: joburile și worker-ul NAS readuse la starea inițială', stare: st }
 }
 
+// starea ferestrei: DOAR absența fișierului permite o stare nouă; ilizibil / corupt / formă invalidă → eroare (fără suprascriere)
+export async function incarcaStare(fis: string): Promise<{ st: StareF | null } | { eroare: string }> {
+  let txt: string
+  try { txt = await Deno.readTextFile(fis) } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return { st: null }
+    return { eroare: `stare ilizibilă (${String(e).slice(0, 120)})` }
+  }
+  try {
+    const st = JSON.parse(txt) as StareF
+    if (!['OPEN', 'CLOSED'].includes(st.stare) || !Array.isArray(st.joburi) || typeof st.nas_pornit !== 'boolean'
+        || st.joburi.some((j) => typeof j.jobid !== 'number' || typeof j.active !== 'boolean')) return { eroare: 'stare cu formă invalidă' }
+    return { st }
+  } catch { return { eroare: 'stare coruptă (JSON invalid)' } }
+}
+
 if (import.meta.main) {
   const [cmd, dir] = Deno.args
   if (!['deschide', 'inchide'].includes(cmd) || !dir) { console.error('utilizare: fereastra.ts deschide|inchide <dir>'); Deno.exit(2) }
@@ -123,8 +141,9 @@ if (import.meta.main) {
     acum: () => Date.now(),
   }
   const fis = `${dir}/fereastra_stare.json`
-  let st: StareF | null = null
-  try { st = JSON.parse(await Deno.readTextFile(fis)) } catch { st = null }
+  const inc = await incarcaStare(fis)
+  if ('eroare' in inc) { await c.end(); console.error(`ATENȚIE [2] ${inc.eroare}: ${fis} — NU se suprascrie; decide chat-ul`); Deno.exit(2) }
+  const st = inc.st
   const salveaza = async (s: StareF) => { await Deno.writeTextFile(fis + '.tmp', JSON.stringify(s, null, 1)); await Deno.rename(fis + '.tmp', fis) }
   const r = cmd === 'deschide' ? await deschide(db, st, salveaza) : await inchide(db, st, salveaza)
   await c.end()

@@ -1,5 +1,5 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { ALLOWLIST, type Db, deschide, GOLIRE_MS, inchide, type Job, type StareF, ultimaProgramare } from './fereastra.ts'
+import { ALLOWLIST, type Db, deschide, GOLIRE_MS, inchide, incarcaStare, type Job, type StareF, ultimaProgramare } from './fereastra.ts'
 
 const MIN = 60_000
 function lume(o: { coada?: number; hb?: number | null; veghe?: number | null; inCurs?: number } = {}) {
@@ -131,4 +131,44 @@ Deno.test('r1: un job Ofertare NOU (absent din snapshot) → refuz și rămâne 
   const r = await deschide(L.db, L.salvat(), L.salveaza)
   assertEquals(r.cod, 2)
   assertEquals(L.joburi.find((j) => j.jobid === 200)!.active, true)
+})
+
+const gata = async (L: ReturnType<typeof lume>) => { await deschide(L.db, null, L.salveaza); L.avans(GOLIRE_MS + MIN); assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 0) }
+
+Deno.test('r2: o rulare cron apărută după golire → golirea se reia de la zero (încă 15 min după ce se termină)', async () => {
+  const L = lume(); await gata(L)
+  L.w.inCurs = 1; L.avans(MIN)
+  assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 5)
+  L.w.inCurs = 0; L.avans(MIN)
+  assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 5)
+  L.avans(GOLIRE_MS - MIN); assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 5)
+  L.avans(2 * MIN); assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 0)
+})
+
+Deno.test('r2: heartbeat NAS DUPĂ oprire (deja vechi de >10 min la verificare) → golirea de la capăt, nu GATA', async () => {
+  const L = lume(); await gata(L)
+  L.w.hb = L.t() + 5 * MIN; L.avans(16 * MIN)                          // NAS a bătut la +5, verificăm la +16
+  assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 5)
+  L.avans(GOLIRE_MS); assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 0)
+})
+
+Deno.test('r2: coada ocupată după T_gol → T_gol nou și încă 15 min după golire', async () => {
+  const L = lume()
+  await deschide(L.db, null, L.salveaza)                                 // T_gol = 0
+  L.avans(7 * MIN); L.w.coada = 2
+  assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 5)
+  L.avans(9 * MIN); L.w.coada = 0
+  assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 5)  // la +16 de la vechiul T_gol: NU GATA
+  L.avans(GOLIRE_MS); assertEquals((await deschide(L.db, L.salvat(), L.salveaza)).cod, 0)
+})
+
+Deno.test('r2: starea ferestrei — lipsă → nouă; coruptă / formă invalidă → eroare, fără suprascriere', async () => {
+  const dir = await Deno.makeTempDir(); const fis = `${dir}/fereastra_stare.json`
+  assertEquals(await incarcaStare(fis), { st: null })
+  await Deno.writeTextFile(fis, '{ corupt'); assert('eroare' in await incarcaStare(fis))
+  await Deno.writeTextFile(fis, '{"stare": "OPEN"}'); assert('eroare' in await incarcaStare(fis))
+  await Deno.writeTextFile(fis, JSON.stringify({ run_id: 'r', stare: 'OPEN', creat_la: 1, joburi: [{ jobid: 1, jobname: 'x', active: true, command: 'c' }],
+    nas_pornit: false, t_joburi_oprite: null, t_stop: null, t_gol: null }))
+  assert('st' in await incarcaStare(fis))
+  await Deno.remove(dir, { recursive: true })
 })
