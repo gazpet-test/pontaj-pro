@@ -305,18 +305,20 @@ def cmd_compara(a):
 def cmd_raport(a):
     banca = pathlib.Path(a.banca); harta = json.loads((banca / 'priv' / ('harta_%s.json' % a.trecere)).read_text(encoding='utf-8'))
     es = {z['zona']: z for z in json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))['zone']}
-    c = collections.Counter(); sec = 0; lip = 0; ref = 0
+    c = collections.Counter(); sec = 0; lip = 0; ref = 0; unelte = 0
     for f in sorted((banca / 'out' / a.trecere).glob('lot*.json')):
         if f.name.endswith('.raw.txt'): continue
-        d = json.loads(f.read_text(encoding='utf-8')); lot = f.stem; sec += d['meta']['secunde']; ref += len(d['meta']['refuzuri_acces'] or [])
+        d = json.loads(f.read_text(encoding='utf-8')); lot = f.stem; sec += d['meta']['secunde']; ref += len(d['meta'].get('refuzuri_acces') or [])
+        unelte += len(d['meta'].get('unelte_folosite') or [])  # trecerea B: orice unealta invalideaza lotul
         got = {e.get('zona'): e for e in d['etichete']}
         for key, zona in harta.items():
             if not key.startswith(lot + '/'): continue
             e = got.get(key.split('/')[1])
             if e is None: lip += 1; continue
             s = es[zona]['strat']; c[(s, e.get('tinta'), e.get('incredere'), bool(e.get('ilizibil')))] += 1
-    print(json.dumps({'secunde': sec, 'lipsa_din_raspuns': lip, 'refuzuri_acces': ref,
-                      'per_strat': {'|'.join(map(str, k)): v for k, v in sorted(c.items())}}, ensure_ascii=False, indent=1))
+    print(json.dumps({'secunde': sec, 'lipsa_din_raspuns': lip, 'refuzuri_acces': ref, 'unelte_folosite': unelte,
+                      'per_strat': {'|'.join(map(str, k)): v for k, v in sorted(c.items(), key=lambda kv: tuple(map(str, kv[0])))}},
+                     ensure_ascii=False, indent=1))
 
 
 def main(argv=None):
@@ -328,8 +330,10 @@ def main(argv=None):
     p = sp.add_parser('eticheteaza'); p.add_argument('banca'); p.add_argument('--trecere', required=True, choices=['A', 'B']); p.add_argument('--lot')
     p.add_argument('--model', default='opus')
     p = sp.add_parser('raport'); p.add_argument('banca'); p.add_argument('--trecere', required=True)
+    p = sp.add_parser('compara'); p.add_argument('banca'); p.add_argument('x'); p.add_argument('y')
     a = ap.parse_args(argv)
-    {'zone': cmd_zone, 'esantion': cmd_esantion, 'pregateste': cmd_pregateste, 'eticheteaza': cmd_eticheteaza, 'raport': cmd_raport}[a.cmd](a)
+    {'zone': cmd_zone, 'esantion': cmd_esantion, 'pregateste': cmd_pregateste, 'eticheteaza': cmd_eticheteaza, 'raport': cmd_raport,
+     'compara': cmd_compara}[a.cmd](a)
 
 
 if __name__ == '__main__':
