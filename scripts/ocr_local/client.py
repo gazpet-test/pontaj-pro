@@ -586,8 +586,13 @@ def peste_prag(st, prag=None, minim=None):
     n = st['claude'] + st['necunoscute'] + st['pierdute_claude']; nh = st['needs_human_claude'] + st['necunoscute'] + st['pierdute_claude']
     return n, nh, n >= minim and nh / n > prag
 
+# PLAFON LOCAL AL PROBEI (laborator 16.10.2026, proba arb-v2 <= 2 USD, aprobarea Razvan #1769): inaintea FIECARUI apel platit,
+# cheltuiala probei (suma cost_usd din deciziile noi ale invocarii) + limita prudenta a urmatorului apel trebuie sa ramana <= max_usd.
+# Limita prudenta = max(REZERVA_APEL_USD, cel mai scump apel vazut in proba). Plafonul rularii din BD ramane poarta tare (edge).
+REZERVA_APEL_USD = 0.05
+
 @cu_lacat
-def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None):
+def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None, max_usd=None):
     """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
     restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
     plafonul si legarea de BD sunt in edge). Decizia se scrie local imediat (decizii.jsonl). Nicio reincercare: orice refuz / eroare
@@ -599,8 +604,10 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     sa nu fie primele pagini / primul document. Proba NU face niciodata `arbitrata` (nici pe ramura de reluare a unei intentii) si
     raporteaza `oprita` daca omul a cerut oprirea. Recuperarea apelurilor cu rezultat necunoscut (-> needs_human fara AI) ruleaza si
     in proba, inaintea oricarui apel nou: e o obligatie de siguranta, nu o alegere a esantionului (Jakarinos r2)."""
-    rdir = pathlib.Path(rdir); r = rulare(rdir); proba = max_apeluri is not None; facute = 0
+    rdir = pathlib.Path(rdir); r = rulare(rdir); proba = max_apeluri is not None; facute = 0; plafon_local = False
     if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
+    if max_usd is not None and (not proba or not (0 < max_usd <= 15)): raise ValueError('--max-usd doar in proba (--max-apeluri), intre 0 si 15')
+    cost_proba = 0.0; cel_mai_scump = 0.0
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     try: activa(rdir)
     except RuntimeError as e:
@@ -647,6 +654,8 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         if it['id'] not in ids: raise RuntimeError('Dezacordul %s nu are id in BD (reia compara)' % it['id'])
         if proba and (it['tip'] in ('banda_intreaga', 'structura_tabele') or (filtru is not None and cheie_proba(it, doc) not in filtru)): continue
         if proba and facute >= max_apeluri: break
+        if max_usd is not None and cost_proba + max(REZERVA_APEL_USD, cel_mai_scump) > max_usd + 1e-9:
+            plafon_local = True; break
         if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
             om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
         if it['tip'] == 'structura_tabele':
@@ -676,12 +685,14 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         dec = j['decizie']
         if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])
         _adauga(d / 'decizii.jsonl', dec); _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'decizie'})
+        c = float(dec.get('cost_usd') or 0); cost_proba += c; cel_mai_scump = max(cel_mai_scump, c)
         st = stare_locala(); facute += 1
         if st['claude'] % 25 == 0: heartbeat(edge, True, 'rularea %d: %d arbitraje' % (r['rulare_id'], st['claude']))
     st = stare_locala(); oprit = opreste_daca_peste_prag(st)  # si inaintea finalizarii arbitrajului
     if oprit: return oprit
     if proba:
-        res = dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='proba', apeluri_acum=facute)
+        res = dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='proba', apeluri_acum=facute, cost_proba_usd=round(cost_proba, 4))
+        if max_usd is not None: res.update(max_usd=max_usd, oprita_de_plafonul_local=bool(plafon_local))
         try: activa(rdir)
         except RuntimeError as e: res.update(stare='oprita', motiv=str(e))  # oprire ceruta in timpul probei: raportata, nu ascunsa
         return res

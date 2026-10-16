@@ -196,6 +196,20 @@ class Client(unittest.TestCase):
         a = C.arbitreaza(rdir, self.edge, max_apeluri=5, filtru=set()); self.assertEqual((a['apeluri_acum'], apeluri()), (0, 1))  # filtru gol = nimic
         a = C.arbitreaza(rdir, self.edge, max_apeluri=100, seed='x'); self.assertEqual((a['stare'], apeluri()), ('proba', nb))   # restul, fara dubluri
         self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata'); self.assertEqual(apeluri(), nb)                 # pasul normal inchide
+    def test_proba_plafon_local_usd(self):
+        # laborator 16.10: --max-usd opreste INAINTEA apelului care ar putea depasi plafonul (cost probei + max(0,05, cel mai scump))
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); nb = c['dezacorduri']; self.assertGreaterEqual(nb, 2)
+        apeluri = lambda: len([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, max_usd=2)                  # doar in proba
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, max_apeluri=5, max_usd=0)   # plafon invalid
+        with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, max_apeluri=5, max_usd=16)  # peste plafonul rularii
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=100, seed='x', max_usd=0.055)  # 0 + 0,05 <= 0,055; apoi 0,01 + 0,05 > 0,055
+        self.assertEqual((a['stare'], a['apeluri_acum'], apeluri(), a['oprita_de_plafonul_local']), ('proba', 1, 1, True))
+        self.assertEqual(a['cost_proba_usd'], 0.01)
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=100, seed='x', max_usd=0.04)   # nici primul apel nu incape
+        self.assertEqual((a['apeluri_acum'], apeluri(), a['oprita_de_plafonul_local']), (0, 1, True))
+        self.assertFalse(C.pasi(rdir).get('arbitrata'))
     def test_proba_oprire_ceruta_dupa_primul_apel(self):
         # Jakarinos r3 P2: oprirea ceruta inainte de N se raporteaza ca stare, la fel ca la final; niciun apel dupa ea
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'a 10 b 11 c 12 d 13 e', 'a 20 b 21 c 22 d 23 e')
