@@ -1,6 +1,6 @@
 -- Recitirea valului 1, după COMMIT-ul confirmat al revino.sql (procedura §7.5): read-only prin construcție (scrie doar în obiecte
 -- temporare). VERIFICĂ egalitatea BD cu revenire_provizoriu.csv; doar atunci → revenire_rezultat.csv (se comite în repo).
---   psql "$RV1_PG_URL" -X -1 -v ON_ERROR_STOP=1 -v provizoriu=<dir>/revenire_provizoriu.csv -v rezultat=<dir>/revenire_rezultat.csv \
+--   deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -v provizoriu=<dir>/revenire_provizoriu.csv -v rezultat=<dir>/revenire_rezultat.csv \
 --        -f scripts/recitire_val1/revino_rezultat.sql
 \set ON_ERROR_STOP 1
 CREATE TEMP TABLE rv_p (document_id bigint, sha_vechi text, status_procesare text, pagini_necitite integer[], procesat_la timestamptz,

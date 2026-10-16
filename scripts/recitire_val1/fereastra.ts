@@ -4,6 +4,7 @@
 // Coduri: 0 = gata (deschisă și golită / închisă) · 5 = de așteptat / de reluat (mesajul spune ce) · 6 = pornește worker-ul NAS și reia ·
 //         2 = mediu / refuz. Mediu: RV1_PG_URL (conexiunea postgres, ca la psql). Worker-ul NAS îl oprește / pornește chat-ul pe server;
 //         scriptul doar verifică heartbeat-ul. Anunțul către utilizatori = decizia lui Răzvan, NU un pas al scriptului.
+import { caSupabase, categorieEroare, optiuniDeno, parseazaUrl } from './conexiune.ts'
 export const ALLOWLIST = ['ofertare_ingest_worker', 'ofertare_extragere_worker', 'ofertare_seap_veghe_0520', 'ofertare_seap_veghe_1250',
   'ofertare_radar_0500', 'ofertare_radar_1230', 'ofertare_raport_zilnic_0430', 'ofertare_alerte_0540', 'ofertare_alerte_1310',
   'ofertare_alerte_atentie_0630', 'ofertare_alerta_pagini_goale_0615', 'ofertare_clarificari_reminder_0600', 'ofertare_participari_sapt']
@@ -146,8 +147,14 @@ if (import.meta.main) {
   const [cmd, dir] = Deno.args
   if (!['deschide', 'inchide'].includes(cmd) || !dir) { console.error('utilizare: fereastra.ts deschide|inchide <dir>'); Deno.exit(2) }
   const url = Deno.env.get('RV1_PG_URL'); if (!url) { console.error('lipsește RV1_PG_URL'); Deno.exit(2) }
+  await Deno.mkdir(dir, { recursive: true })               // directorul ferestrei (<dir_val>/fereastra_N) se creează aici
   const { Client } = await import('https://deno.land/x/postgres@v0.19.3/mod.ts')
-  const c = new Client(url); await c.connect()
+  let c: InstanceType<typeof Client>
+  try { c = new Client(optiuniDeno(parseazaUrl(url), (await caSupabase()).pem)); await c.connect() } catch (e) {
+    // fără fallback necriptat: orice eșec (URL, TLS, certificat, autentificare) → cod 2, fără să atingem nimic; mesaj FIX pe categorie
+    console.error(`ATENȚIE [2] conexiunea postgres a eșuat: ${categorieEroare(e)}`)
+    Deno.exit(2)
+  }
   const ms = (v: unknown) => (v ? new Date(v as string).getTime() : null)
   const db: Db = {
     joburi: async () => (await c.queryObject<Job>('SELECT jobid::int AS jobid, jobname, active, command, schedule FROM cron.job ORDER BY jobid')).rows,

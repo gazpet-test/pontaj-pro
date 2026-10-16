@@ -154,7 +154,27 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 | 6. `verifica.sql`, după 24h | chat, read-only | 0 | derivat pe text depășit → eșec, decide Răzvan. Derivate fără versiune → „nedovedit”, listate. |
 | R. `revino.sql` | chat, cu „da” | 0 | CAS pe starea exactă de după aplicare. Textul și metadatele vechi revin. Proveniența `sinteza_ai` / `revenire-recitire` face înghețarea să aleagă textul vechi, marcat `text_indisponibil`. |
 
-Testele: 44 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `scripts/test_recitire_val1.sh`.
+**Conexiunea postgres a recitirii** (`RV1_PG_URL`, ca postgres; #744, după prima pornire din 16.10):
+- **Problema:** deno-postgres v0.19.3 nu verifica certificatul pooler-ului și trecea tăcut pe necriptat.
+- **Acum** conexiunea se face DOAR criptat și verificat: `verify-full`, adică lanțul de certificate și numele de gazdă, cu CA-ul Supabase din repo. Fișierul e `scripts/recitire_val1/supabase-prod-ca-2021.crt`: Supabase Root 2021 CA, public, sha256 `80:70:25:AD:…:CA:FA`, valid până la 26.04.2031.
+- **`conexiune.ts`** e comun pentru tot ce se conectează:
+  - URL-ul se citește cu parametrii decodați și e permis doar `sslmode=verify-full`;
+  - erorile au mesaje fixe pe categorii (TLS / autentificare / rețea), fără parolă.
+- **`fereastra.ts`** folosește `tls: { enabled, enforce, caCertificates }`. Orice eșec → cod 2, fără nicio schimbare.
+- **psql se rulează DOAR prin `scripts/recitire_val1/psql.ts`:**
+  - conexiunea se dă ca cuvinte-cheie libpq (`sslmode=verify-full sslrootcert=…`); parola doar în mediul procesului;
+  - `-X` e impus și stdin e închis, deci nu poate intra un `\connect` pe stdin;
+  - argumentele trec pe o listă albă structurală: `-X -1 -q -v NUME=…` și exact un `-f`, cu calea exactă a unuia din cele 6 scripturi ale procedurii;
+  - erorile de conectare ale psql apar doar pe categorii;
+  - executabilul se ia din `RV1_PSQL` (pe serverul AI: `C:/Users/Public/pgsql/bin/psql.exe`).
+- **Verificat pe viu** (tenant inexistent):
+  - CA-ul nostru: TLS trece;
+  - CA greșit: `certificate verify failed`;
+  - formele de ocolire (`-Xd…sslmode=disable`, `\connect` pe stdin, `-h`): refuzate.
+
+**Worker-ul NAS** se oprește și pornește de pe serverul AI (pașii 1 și 8 din README): `terra_ssh.py '…/docker stop|start gazpet-ofertare-worker'`.
+
+Testele: 49 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `scripts/test_recitire_val1.sh`.
 
 ### 1.4 Cantitățile structurate și comparatorul (TKT-0329 B: 20261031a, `ofertare-cantitati-extrage`, `_shared/cantComparator.ts`)
 
@@ -263,7 +283,8 @@ paritate verificată (fail-closed).
   (`cost + rezervat + abandonat ≤ plafon_usd`) = **poarta tare**; un plafon local în client e doar estimare (#736 respins).
 - **Pragul §8**: needs_human > 15 % din arbitrajele Claude (după minim 20) → rularea `oprita`. Reluarea doar prin
   `fn_ofertare_ocr_reia` (max 3 pe rulare), numărătoarea pe epoca reluării.
-- Validările 4xx ale edge-ului (înaintea rezervării) nu opresc proba (#741).
+- Validările 4xx ale edge-ului (400 / 413 / 422, înaintea rezervării, nimic cheltuit) nu opresc proba: item-ul e notat refuzat
+  (`validare_<status>`) și sărit; un context > 2000 de caractere e sărit de client înainte de apel (#741).
 
 ### 2.7 Reconcilierea (`reconcile.py`)
 Baza = LightOn; deciziile validate strict (schemă, model și versiune admise); dezacord fără decizie validă = needs_human; o pagină cu
@@ -323,8 +344,9 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #738 | `--triere` doar în probă |
 | 16.10.2026 | #739 | Modul doar_haiku (edge + client) |
 | 16.10.2026 | #740 | Tabelul de umbră 20261031c |
-| 16.10.2026 | #741 | Validările 4xx nu opresc proba |
+| 16.10.2026 | #741 | Clientul: validările 4xx nu opresc proba, contextul > 2000 sărit înainte de apel |
 | 16.10.2026 | #742 | Prompt arb-v3 (diacritice) |
 | 16.10.2026 | (acest PR) | Documentul pipeline-ului + CI |
 | 16.10.2026 | (acest PR) | Partea 1, scrisă de sesiunea Ofertare: §1.0 sursele, §1.1 ingest + căile vecine, §1.2 proveniența / CAS (31a / 31b), §1.3 laboratorul + recitirea valului 1 (#734), §1.4 cantități + comparator (#726 #729 #731), §1.5 porțile; căile CI extinse |
+| 16.10.2026 | #744 | Recitirea valului 1: conexiunea postgres doar cu TLS `verify-full` și CA-ul Supabase (`conexiune.ts`, `fereastra.ts`), wrapper-ul `psql.ts` (listă albă de argumente, stdin închis, erori pe categorii), directoarele create de scripturi, worker-ul NAS în README |
 | 16.10.2026 | #742 (r4) | Poarta deterministă pe `text_propus` la perechile doar de diacritice (Jakarinos r1–r4) |

@@ -1,6 +1,6 @@
 -- Recitirea valului 1, pasul 0 (procedura §8): reverificarea READ-ONLY că cele 20 de documente au tot zero derivate și sunt „procesat”.
 -- Eșuează (exit ≠ 0) la orice abatere. Se rulează înaintea citirii și înaintea aplicării.
---   psql "$RV1_PG_URL" -X -1 -v ON_ERROR_STOP=1 -f scripts/recitire_val1/pas0.sql
+--   deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -f scripts/recitire_val1/pas0.sql
 \set ON_ERROR_STOP 1
 \ir derivate.sql
 \pset footer off
