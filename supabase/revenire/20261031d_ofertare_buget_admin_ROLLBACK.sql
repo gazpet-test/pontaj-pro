@@ -11,6 +11,11 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261031d: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  -- review Jakarinos r2 (P1): verificarea de după LOCK vede acțiunile comise între timp DOAR în READ COMMITTED (snapshot nou pe
+  -- instrucțiune); în REPEATABLE READ / SERIALIZABLE snapshot-ul e fixat la prima instrucțiune și rândul adminului ar scăpa
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION '20261031d: revenirea cere izolare read committed (are %)', current_setting('transaction_isolation');
+  END IF;
   IF to_regprocedure('public.fn_ofertare_cb_este_admin()') IS NULL
      OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ofertare_ai_buget_jurnal'::regclass AND attname = 'rol' AND NOT attisdropped) THEN
     RAISE EXCEPTION '20261031d: preconditie, migrarea nu e aplicata';

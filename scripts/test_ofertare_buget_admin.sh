@@ -115,23 +115,43 @@ refuz "adminul nu deblochează" authenticated "$ADMIN" "SELECT public.fn_ofertar
 asteapta "owner-ul deblochează, jurnal cu rol owner" "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_buget_deblocheaza(102,'cant_extragere')->>'ok'")|$(q "SELECT rol FROM public.ofertare_ai_buget_jurnal WHERE actiune='deblocare' ORDER BY id DESC LIMIT 1")" "true|owner"
 
 # ── concurență (review r1, P2): două sesiuni reale; prima ține tranzacția deschisă 3 s după apel ──
-tx_bg() {  # $1 uid, $2 sql, $3 fișierul de ieșire — apelul + pg_sleep(3) + COMMIT, în fundal
+tx_bg() {  # $1 uid, $2 sql, $3 fișierul de ieșire, $4 secunde ținute după apel — apelul + pg_sleep + COMMIT, în fundal; PID în $BG
   "${PSQL[@]}" -d "$BAZA" -At -c "SET SESSION AUTHORIZATION authenticator;" -c "BEGIN;" -c "SET LOCAL ROLE authenticated;" \
-    -c "SELECT set_config('request.jwt.claims', '{\"sub\":\"$1\",\"role\":\"authenticated\"}', true);" -c "$2" -c "SELECT pg_sleep(3);" -c "COMMIT;" >"$3" 2>&1 &
+    -c "SELECT set_config('request.jwt.claims', '{\"sub\":\"$1\",\"role\":\"authenticated\"}', true);" -c "$2" -c "SELECT pg_sleep(${4:-0});" -c "COMMIT;" >"$3" 2>&1 &
+  BG=$!
 }
+# review r2 (P2): suprapunerea se DOVEDEȘTE — așteaptă (max 5 s) să existe o sesiune a bazei blocată pe un lock
+blocata() {  # $1 (opțional) fragment din interogarea sesiunii blocate
+  local i
+  for i in $(seq 1 50); do
+    [ "$(q "SELECT count(*) FROM pg_stat_activity WHERE datname = '$BAZA' AND wait_event_type = 'Lock' AND query LIKE '%${1:-}%'")" -ge 1 ] && { echo da; return; }
+    sleep 0.1
+  done
+  echo nu
+}
+# wait în shell-ul PĂRINTE (review r2, P2: un wait dintr-o substituție $(...) nu vede copiii părintelui); rezultatul în variabila $2
+asteapta_pid() { local r=0; wait "$1" || r=$?; printf -v "$2" %s "$r"; }
 q "INSERT INTO public.ofertare_licitatii(id, nr_anunt) VALUES (5, 'X5'), (6, 'X6'), (7, 'X7')" >/dev/null
-# owner pune 50 și ține tranzacția; adminul cere 4 în paralel → așteaptă lock-ul rândului, apoi vede 50 > 5 → refuzat
-tx_bg "$OWNER" "SELECT public.fn_ofertare_cb_buget_seteaza(5,'cant_extragere',50)" /tmp/ba_t1.out; sleep 0.8
-o="$(CA_LINII=20 ca authenticated "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(5,'cant_extragere',4)" || true)"; wait
-grep -q 'peste limita adminului' <<<"$o" || esec "owner întâi, admin concurent: $o"
-asteapta "concurență owner(50) întâi → adminul așteaptă și e refuzat; plafonul rămâne 50" "$(plafon 5)" "50.00"
-# adminul pune 4 și ține; owner-ul cere 50 în paralel → așteaptă, apoi reușește (owner-ul nu e limitat)
-tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(6,'cant_extragere',4)" /tmp/ba_t2.out; sleep 0.8
-asteapta "concurență admin(4) întâi → owner-ul așteaptă și pune 50" "$(seteaza "$OWNER" 6 50; wait)|$(plafon 6)" "owner|50.00"
-# doi admini în paralel (5 și 3) → amândoi reușesc pe rând, plafonul final ≤ 5, două rânduri de jurnal admin
-tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(7,'cant_extragere',5)" /tmp/ba_t3.out; sleep 0.8
-seteaza "$ADMIN" 7 3 >/dev/null; wait
-asteapta "concurență admin/admin → final ≤ 5, ambele în jurnal" "$(plafon 7)|$(q "SELECT count(*) FROM public.ofertare_ai_buget_jurnal WHERE licitatie_id=7 AND rol='admin'")" "3.00|2"
+# owner pune 50 și ține 3 s; adminul cere 4 → BLOCAT pe rândul bugetului, apoi vede 50 > 5 → refuzat
+tx_bg "$OWNER" "SELECT public.fn_ofertare_cb_buget_seteaza(5,'cant_extragere',50)" /tmp/ba_t1.out 3; P1=$BG; sleep 0.5
+tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(5,'cant_extragere',4)" /tmp/ba_t1b.out 0; P2=$BG
+B=$(blocata); asteapta_pid $P1 R1; asteapta_pid $P2 R2
+asteapta "concurență owner(50) întâi → adminul blocat, apoi refuzat; owner comis; plafonul 50" \
+  "$B|$R1|$(grep -c 'peste limita adminului' /tmp/ba_t1b.out)|$(plafon 5)" "da|0|1|50.00"
+# adminul pune 4 și ține 3 s; owner-ul cere 50 → BLOCAT, apoi reușește; ambele comise, ambele în jurnal, în ordine
+tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(6,'cant_extragere',4)" /tmp/ba_t2.out 3; P1=$BG; sleep 0.5
+tx_bg "$OWNER" "SELECT public.fn_ofertare_cb_buget_seteaza(6,'cant_extragere',50)" /tmp/ba_t2b.out 0; P2=$BG
+B=$(blocata); asteapta_pid $P1 R1; asteapta_pid $P2 R2
+asteapta "concurență admin(4) întâi → owner-ul blocat, apoi 50; ambele comise, jurnal admin→owner" \
+  "$B|$R1|$R2|$(plafon 6)|$(q "SELECT string_agg(rol || ':' || plafon_nou, ',' ORDER BY id) FROM public.ofertare_ai_buget_jurnal WHERE licitatie_id=6")" \
+  "da|0|0|50.00|admin:4.00,owner:50.00"
+# doi admini (5 ținut 3 s, apoi 3) → al doilea blocat; ambele comise; final 3 ≤ 5
+tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(7,'cant_extragere',5)" /tmp/ba_t3.out 3; P1=$BG; sleep 0.5
+tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(7,'cant_extragere',3)" /tmp/ba_t3b.out 0; P2=$BG
+B=$(blocata); asteapta_pid $P1 R1; asteapta_pid $P2 R2
+asteapta "concurență admin/admin → al doilea blocat; ambele comise; final 3; jurnal 5,3" \
+  "$B|$R1|$R2|$(plafon 7)|$(q "SELECT string_agg(plafon_nou::text, ',' ORDER BY id) FROM public.ofertare_ai_buget_jurnal WHERE licitatie_id=7 AND rol='admin'")" \
+  "da|0|0|3.00|5.00,3.00"
 
 # ── revenire ──
 # amprenta: o schimbare de drepturi pe helper după aplicare → revenirea refuză; drepturile puse la loc → revenirea trece de amprentă
@@ -151,17 +171,25 @@ livreaza_nume 20261031a_ofertare_cantitati_b "$MIG_A" >/dev/null
 livreaza_nume 20261031b_ofertare_text_scrie_cas "$MIG_B" >/dev/null
 DEF_31A=$(q "SELECT md5(pg_get_functiondef('public.fn_ofertare_cb_buget_seteaza(bigint,text,numeric)'::regprocedure))")
 livreaza >/dev/null || esec "livrare (a doua bază)"
-seteaza "$OWNER" 102 7 >/dev/null
+# izolarea (review r2, P1): revenirea refuză tot ce nu e READ COMMITTED (snapshot-ul fix ar ascunde o acțiune comisă în timpul așteptării)
+o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;" \
+  -c "SELECT set_config('gazpet.revenire_20261031d', 'BUGET_ADMIN_REVENIRE:' || txid_current(), true);" -f "$ROLLBACK" 2>&1 || true)"
+grep -q 'cere izolare read committed' <<<"$o" || esec "revenire în REPEATABLE READ: $o"; ok "refuz: revenire în REPEATABLE READ"
+# plafon ≤ 5, ca adminul să ajungă REAL la INSERT-ul în jurnal (review r2, P2)
+seteaza "$OWNER" 102 3 >/dev/null
 J0=$(q "SELECT count(*) FROM public.ofertare_ai_buget_jurnal")
-# concurență (review r1, P1): revenirea ține lock-ul pe jurnal (SHARE) 3 s înainte de COMMIT; un admin care cere plafonul în
-# paralel așteaptă și apoi EȘUEAZĂ (coloana / funcția s-au schimbat) — nicio acțiune de admin nu rămâne după revenire
+# concurență (review r1 P1 / r2 P2): revenirea ia lock-ul pe jurnal și îl ține 3 s ÎNAINTEA DDL-ului; adminul (2 ≤ 5, plafon 3)
+# trece de verificări, se BLOCHEAZĂ pe INSERT-ul în jurnal (dovedit în pg_stat_activity), apoi eșuează după revenire
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261031d', 'BUGET_ADMIN_REVENIRE:' || txid_current(), true);" \
-  -f "$ROLLBACK" -c "SELECT pg_sleep(3);" >/tmp/ba_rev.out 2>&1 &
-sleep 0.8
-o="$(CA_LINII=20 ca authenticated "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(102,'cant_extragere',2)" || true)"; wait
-grep -qi 'error' <<<"$o" || esec "adminul concurent cu revenirea trebuia să eșueze: $o"
-grep -qi 'error' /tmp/ba_rev.out && esec "revenirea concurentă: $(cat /tmp/ba_rev.out)"
-asteapta "concurență revenire întâi → adminul eșuează, jurnalul fără rând nou, plafonul 7" "$(q "SELECT count(*) FROM public.ofertare_ai_buget_jurnal")|$(plafon 102)" "$J0|7.00"
+  -c "LOCK TABLE public.ofertare_ai_buget_jurnal IN SHARE MODE;" -c "SELECT pg_sleep(3);" -f "$ROLLBACK" >/tmp/ba_rev.out 2>&1 &
+PR=$!; sleep 0.5
+tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(102,'cant_extragere',2)" /tmp/ba_rev_admin.out 0; PA=$BG
+B=$(blocata 'buget_seteaza'); asteapta_pid $PR RR; asteapta_pid $PA RA
+asteapta "concurență revenire întâi → adminul blocat pe jurnal; revenirea comisă; adminul eșuează; jurnal neschimbat; plafon 3" \
+  "$B|$RR|$([ "$RA" != 0 ] && echo esec)|$(grep -c 'peste limita' /tmp/ba_rev_admin.out)|$(q "SELECT count(*) FROM public.ofertare_ai_buget_jurnal")|$(plafon 102)" \
+  "da|0|esec|0|$J0|3.00"
+seteaza "$OWNER" 102 7 >/dev/null 2>&1 || true
+q "UPDATE public.ofertare_ai_buget SET plafon_usd = 7 WHERE licitatie_id = 102 AND scop = 'cant_extragere'" >/dev/null
 asteapta "după revenire: corpul din 31a, fără helper, fără coloana rol, plafonul păstrat, amprenta în comentariu" \
   "$(q "SELECT (md5(pg_get_functiondef('public.fn_ofertare_cb_buget_seteaza(bigint,text,numeric)'::regprocedure)) = '$DEF_31A')::text || ',' || (to_regprocedure('public.fn_ofertare_cb_este_admin()') IS NULL)::text || ',' || (NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.ofertare_ai_buget_jurnal'::regclass AND attname='rol' AND NOT attisdropped))::text || ',' || (SELECT plafon_usd FROM public.ofertare_ai_buget WHERE licitatie_id=102 AND scop='cant_extragere') || ',' || (obj_description('public.ofertare_analiza_versiuni'::regclass, 'pg_class') LIKE '%amprenta=' || public.fn_ofertare_cb_amprenta())::text")" \
   "true,true,true,7.00,true"
@@ -177,8 +205,12 @@ livreaza_nume 20261031b_ofertare_text_scrie_cas "$MIG_B" >/dev/null || esec "rea
 livreaza >/dev/null || esec "reaplicare 31d după 31b: $(livreaza | tail -3)"
 # concurență (review r1, P1): o acțiune de admin în curs ÎNAINTEA revenirii → revenirea așteaptă commit-ul ei, o vede și refuză
 asteapta "înainte: niciun rând de admin în jurnal" "$(q "SELECT count(*) FROM public.ofertare_ai_buget_jurnal WHERE rol='admin'")" 0
-tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(4,'cant_extragere',2)" /tmp/ba_t4.out; sleep 0.8
-o="$(revenire || true)"; wait
-grep -q 'actiuni de admin' <<<"$o" || esec "revenire cu un admin concurent: $o"; ok "refuz: revenirea vede acțiunea de admin comisă în timp ce aștepta lock-ul"
+tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(4,'cant_extragere',2)" /tmp/ba_t4.out 3; PA=$BG; sleep 0.5
+revenire >/tmp/ba_rev2.out 2>&1 &
+PR=$!
+B=$(blocata 'gazpet.revenire_20261031d'); asteapta_pid $PA RA; asteapta_pid $PR RR
+asteapta "concurență admin întâi → revenirea blocată pe LOCK; adminul comis; revenirea vede rândul și refuză" \
+  "$B|$RA|$([ "$RR" != 0 ] && echo refuz)|$(grep -c 'actiuni de admin' /tmp/ba_rev2.out)|$(q "SELECT count(*) FROM public.ofertare_ai_buget_jurnal WHERE rol='admin'")" \
+  "da|0|refuz|1|1"
 asteapta "reaplicare: adminul setează din nou ≤ 5" "$(seteaza "$OWNER" 102 5 >/dev/null; seteaza "$ADMIN" 102 1)" admin
 echo PASS
