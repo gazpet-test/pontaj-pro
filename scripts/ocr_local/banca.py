@@ -221,6 +221,19 @@ PROMPT_B = PROMPT.replace(
 assert PROMPT_B != PROMPT
 
 
+def _raspuns_codex(log):
+    """Log-ul run_paw jak: ecoul brief-ului (BRIEF_START..BRIEF_END), apoi evenimentele Codex. Intoarce (raspunsul final = blocul
+    de dupa ULTIMA linie 'codex', pana la 'tokens used'; liniile de dupa BRIEF_END pentru audit). Brief-ul nu intra in niciuna."""
+    L = log.splitlines()
+    k = max((i for i, l in enumerate(L) if l.strip() == 'BRIEF_END'), default=-1)
+    lin = [l.strip() for l in L[k + 1:]]
+    ic = [i for i, l in enumerate(lin) if l == 'codex']
+    if not ic: return None, lin
+    bloc = lin[ic[-1] + 1:]
+    if 'tokens used' in bloc: bloc = bloc[:bloc.index('tokens used')]
+    return '\n'.join(bloc), lin
+
+
 def _eticheteaza_b(tr, out, lot):
     """Trecerea B: Astra (Codex gpt-6-astra) prin lansatorul unic run_paw (v4, imagini). Izolarea nu se poate impune prin acces
     (sandbox-ul read-only al Codex citeste discul): brief-ul contine tot, iar ORICE unealta folosita (exec / mcp / web) invalideaza lotul."""
@@ -236,9 +249,11 @@ def _eticheteaza_b(tr, out, lot):
     subprocess.run(['cmd.exe', '/c', RUN_PAW, 'jak', str(bp), str(op), 'gpt-6-astra', str(lista)], capture_output=True, text=True, timeout=1500)
     sec = round(time.time() - t0); log = op.read_text(encoding='utf-8-sig')
     if 'PAW_GATA' not in log.splitlines()[-1]: return None, {'secunde': sec, 'eroare': log.splitlines()[-1][:300]}
-    corp, _, err = log.partition('\n--- stderr ---\n')
-    unelte = [l for l in err.splitlines() if l.startswith(('exec', 'mcp:', 'web search'))]
+    corp, lin = _raspuns_codex(log)
+    # audit pe TOT log-ul de dupa ecoul brief-ului (run_paw nu separa stderr): orice exec / mcp / web invalideaza lotul
+    unelte = [l for l in lin if l == 'exec' or l.startswith(('exec ', 'mcp:', 'web search', 'web_search'))]
     meta = {'secunde': sec, 'unelte_folosite': unelte, 'brief_sha256': _sha(brief.encode()), 'log': str(op)}
+    if corp is None: return None, dict(meta, eroare='raspuns codex negasit in log')
     try: arr = json.loads(corp[corp.index('['):corp.rindex(']') + 1])
     except Exception as e: return None, dict(meta, eroare='parsare: %s' % e)
     return arr, meta
@@ -310,7 +325,7 @@ def main(argv=None):
     p = sp.add_parser('esantion'); p.add_argument('banca'); p.add_argument('--n', type=int, default=50); p.add_argument('--samanta', type=int, default=20261015)
     p.add_argument('--rescrie', action='store_true')
     p = sp.add_parser('pregateste'); p.add_argument('rulare'); p.add_argument('banca'); p.add_argument('--trecere', required=True, choices=['A', 'B'])
-    p = sp.add_parser('eticheteaza'); p.add_argument('banca'); p.add_argument('--trecere', required=True, choices=['A']); p.add_argument('--lot')
+    p = sp.add_parser('eticheteaza'); p.add_argument('banca'); p.add_argument('--trecere', required=True, choices=['A', 'B']); p.add_argument('--lot')
     p.add_argument('--model', default='opus')
     p = sp.add_parser('raport'); p.add_argument('banca'); p.add_argument('--trecere', required=True)
     a = ap.parse_args(argv)
