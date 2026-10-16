@@ -878,6 +878,20 @@ class Triere(unittest.TestCase):
         a2 = self.tab(['<td>1</td>', '<td>Teava</td>', '<td>10</td>', '<td></td>'])
         b2 = self.tab(['<td>1</td>', '<td>Teava</td>', '<td></td>', '<td>10</td>'])
         self.assertEqual(self._cls(a2, b2)[0], ['HIGH_RISK'])
+    def test_material_tehnologie_fara_cifre_high(self):
+        # decizia Razvan 16.10.2026: material / tehnologie diferit fara cifre schimba incadrarea cantitatii -> HIGH_RISK
+        self.assertEqual(self._cls('Conducta din PEHD ingropata.', 'Conducta din PVC ingropata.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Executie prin foraj orizontal dirijat.', 'Executie prin sant deschis.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Săpătură manuală în teren.', 'Săpătură mecanizată în teren.')[0], ['HIGH_RISK'])
+        a = self.tab(['<td>Teava</td>', '<td>OTEL</td>']); b = self.tab(['<td>Teava</td>', '<td>FONTA</td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+    def test_material_doar_daca_e_in_diferenta(self):
+        # termenul identic la ambii cititori nu muta itemul; „pe” (prepozitie) nu e termen
+        self.assertEqual(self._cls('Conducta din PEHD este pozata.', 'Conducta din PEHD este pozala.')[0], ['DEFER'])
+        self.assertEqual(self._cls('Se aseaza pe pat de nisip.', 'Se aseaza pa pat de nisip.')[0], ['DEFER'])
+        from .triere import termeni_material
+        self.assertEqual(termeni_material('țeavă oțel', 'teava OTEL'), [])  # diacriticele / majusculele nu fac diferenta
+        self.assertEqual(termeni_material('PEHD', 'PVC'), ['PEHD', 'PVC'])
     def test_text_fara_numere_defer_si_cu_numere_high(self):
         self.assertEqual(self._cls('Lungimea conductei este mare.', 'Lungimea conductel este mare.')[0], ['DEFER'])
         self.assertEqual(self._cls('Lungimea este 10 m.', 'Lungimea este 16 m.')[0], ['HIGH_RISK'])

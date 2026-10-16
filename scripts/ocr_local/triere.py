@@ -7,10 +7,11 @@ continut, comparat distinct (bara isi pastreaza tinta).
 - HIGH_RISK: continutul difera SI exista cel putin o cifra in continutul unuia dintre cititori (fragment / rand intreg): orice diferenta
              langa numere (UM „bar”/„bai”, semn „=”/„−”, cod „NTPEE-2018”/„NTPER-2018”, separator, coloana) e risc pe cantitati
              (Jakarinos r1 P1). Provenienta nestabilita / pozitie nerezolvata = HIGH_RISK (fail-closed).
-- DEFER:     continutul difera, dar NU exista nicio cifra in continut la niciun cititor.
+- HIGH_RISK si fara cifre, cand diferenta atinge un termen de material / tehnologie (TERMENI_MATERIAL, decizia Razvan 16.10.2026).
+- DEFER:     continutul difera, dar NU exista nicio cifra in continut la niciun cititor si nu se schimba material / tehnologie.
 - OM:        structura_tabele / banda_intreaga (merg la om ca pana acum, fara AI).
 Nu schimba itemii, amprentele sau contractul cu BD; e o decizie a clientului la arbitraj."""
-import re
+import collections, re, unicodedata
 from .compare import TOKEN, segmente_provenienta, segments, cell_key, norm_word
 
 CLASE = ('HIGH_RISK', 'MARCAJE', 'DEFER', 'OM')
@@ -79,9 +80,36 @@ def _rand(prov, poz):
     return [_continut(c, m) for c, m in zip(val[ri], masti[si][ri])]
 
 
-def _decide(a, b, egale):
+# Termeni de material / tehnologie (decizia Razvan 16.10.2026, observatia Gemini pe pipeline): o diferenta FARA cifre care atinge
+# unul din ei schimba incadrarea cantitatii (PEHD/PVC, OL/OTEL, foraj orizontal/sant deschis, manual/mecanizat, SDR citit ca litere)
+# -> HIGH_RISK, nu DEFER. Comparare pe tokeni fara diacritice, majuscule. „PE” simplu e EXCLUS (prepozitia „pe”; PE80/PE100 au cifre
+# si sunt deja HIGH_RISK). Masurat: r1 14/5.973 DEFER (0,2%), Racari 35/3.024 (1,2%).
+TERMENI_MATERIAL = frozenset((
+    'PEHD', 'HDPE', 'PVC', 'PP', 'PPR', 'OL', 'OLT', 'OTEL', 'INOX', 'FONTA', 'CUPRU', 'ALUMINIU', 'POLIETILENA', 'POLIPROPILENA',
+    'BETON', 'BETONAT', 'ASFALT', 'BALAST', 'NISIP', 'PIATRA', 'ZINCAT', 'BITUM', 'BITUMINOS', 'SDR', 'PN', 'DN', 'IZOLAT', 'IZOLATIE',
+    'ARMAT', 'PREIZOLAT',
+    'FORAJ', 'ORIZONTAL', 'DIRIJAT', 'SANT', 'DESCHIS', 'SUBTRAVERSARE', 'SUBTRAVERSARI', 'MANUAL', 'MANUALA', 'MECANIC', 'MECANICA',
+    'MECANIZAT', 'MECANIZATA', 'SUDURA', 'ELECTROFUZIUNE', 'SUBTERAN', 'SUBTERANA', 'AERIAN', 'AERIANA', 'MONTAJ', 'DEMONTAJ',
+    'DEMOLARE', 'REFACERE', 'SPRIJINIRE', 'EPUISMENT'))
+
+
+def _tokeni_baza(s):
+    s = ''.join(c for c in unicodedata.normalize('NFD', s or '') if not unicodedata.category(c).startswith('M'))
+    return collections.Counter(t.upper() for t in re.findall(r'\w+', s))
+
+
+def termeni_material(a, b):
+    """Termenii de material / tehnologie din DIFERENTA dintre doua texte (tokeni prezenti la unul si nu la celalalt)."""
+    ta, tb = _tokeni_baza(a), _tokeni_baza(b)
+    return sorted(t for t in set((ta - tb) + (tb - ta)) if t in TERMENI_MATERIAL)
+
+
+def _decide(a, b, egale, dif=None):
+    """a / b = contextul pentru cifre (vecinatatea / randul); dif = (x, y) = ce difera efectiv, pentru termenii de material."""
     if egale: return 'MARCAJE', 'continut identic, difera doar marcajele pipeline-ului'
     if CIFRA.search(a) or CIFRA.search(b): return 'HIGH_RISK', 'continut diferit langa cifre (numar, UM, semn, cod, coloana)'
+    m = termeni_material(*(dif or (a, b)))
+    if m: return 'HIGH_RISK', 'material / tehnologie diferit fara cifre (%s)' % ', '.join(m[:3])
     return 'DEFER', 'continut diferit fara nicio cifra'
 
 
@@ -94,11 +122,14 @@ def clasa(item, pa, pb):
             sa, sb = (item.get('sursa') or {}).get('lighton'), (item.get('sursa') or {}).get('mineru')
             ca, cb = _fragment(pa, sa), _fragment(pb, sb)
             if _tokeni(ca) == _tokeni(cb): return _decide(ca, cb, True)
-            return _decide(_vecinatate(pa, sa), _vecinatate(pb, sb), False)
+            return _decide(_vecinatate(pa, sa), _vecinatate(pb, sb), False, dif=(ca, cb))
         ra = _rand(pa, item['pozitie']['lighton']); rb = _rand(pb, item['pozitie']['mineru'])
         if ra is None or rb is None:  # rand doar la un cititor
             r = ' | '.join(rb if ra is None else ra)
-            return ('HIGH_RISK', 'rand lipsa la un cititor, cu cifre') if CIFRA.search(r) else ('DEFER', 'rand lipsa la un cititor, fara cifre')
+            if CIFRA.search(r): return 'HIGH_RISK', 'rand lipsa la un cititor, cu cifre'
+            m = termeni_material(r, '')
+            if m: return 'HIGH_RISK', 'rand lipsa la un cititor, material / tehnologie (%s)' % ', '.join(m[:3])
+            return 'DEFER', 'rand lipsa la un cititor, fara cifre'
         return _decide(' | '.join(ra), ' | '.join(rb), [cell_key(c) for c in ra] == [cell_key(c) for c in rb])
     except (IndexError, KeyError, TypeError, ValueError):
         return 'HIGH_RISK', 'pozitie nerezolvata'
