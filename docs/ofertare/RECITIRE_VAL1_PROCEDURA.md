@@ -179,7 +179,6 @@ Scripturile `fereastra_deschide.sql` și `fereastra_inchide.sql` sunt idempotent
      - în fereastră nu există apel manual de import SEAP (decizia lui Răzvan, cu anunțul de la pct. 6).
    - Lanțurile mai lungi de 2 niveluri, necunoscute azi, rămân în riscul acceptat.
    - Așteptarea e măsurată de la `T_gol` și NU se deduce din ultimul răspuns.
-   - Așteptarea e măsurată de la oprire și NU se deduce din ultimul răspuns: acoperă și cererile deja scoase din coadă.
    - Teste:
      - o cerere scoasă din coadă la `T_stop` + 7 minute, fără răspuns → nimic nu pornește înainte de `T_gol` + 15 minute;
      - simularea veghe → import → nimic nu pornește înainte de terminarea lanțului.
