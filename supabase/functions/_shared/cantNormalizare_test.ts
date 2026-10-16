@@ -163,6 +163,25 @@ Deno.test('PR-A r3: cod declarat în format nerecunoscut („SA11H1,”, „SA11
   const ok = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
   assertEquals(ok.obs.pozitie_dovedita, true)
 })
+Deno.test('PR-A r4: deasupra cantității e o denumire (nu „Total=” / pagină / antet / început) → continuarea nu se acceptă → nedovedit', async () => {
+  for (const linie of ['TEAVA PVC DN110 120', 'TEAVA PVC DN110 120.00', 'TEAVA PVC DN110 120,000', 'TEAVA PVC DN110\nSA11H1, 120', 'TEAVA PVC DN110\nSA11H1[2] 120']) {
+    const t = `TEAVA PVC DN63\n001 SA11D1 M 300.000\n${linie}\n0.000 0 Total=\n`
+    const n = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN110', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
+    assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true], linie)
+  }
+  // același rând cu „Total=” al articolului precedent deasupra, cu linie goală între: aranjamentul e sigur → dovedit
+  const ok = '000 X1A1 M 5.000\nALT ARTICOL\n0.000 0 Total=\n\n001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 0 Total=\n'
+  const m = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: ok, felie: ok }))!
+  assertEquals(m.obs.pozitie_dovedita, true)
+  // linia de total cu o glifă citită greșit („0.000 ✓ 0 Total=”) rămâne linie de total (deasupra și dedesubt)
+  const gl = '0.000 ✓ 0 Total=\n001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 ✓ 0 Total=\n'
+  const g = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: gl, felie: gl }))!
+  assertEquals(g.obs.pozitie_dovedita, true)
+  // antetul listei („= … =”) deasupra primului articol → dovedit
+  const ant = '= NR. SIMBOL ART. CANTITATE UM =\n001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 0 Total=\n'
+  const a = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: ant, felie: ant }))!
+  assertEquals(a.obs.pozitie_dovedita, true)
+})
 Deno.test('PR-A r3: formatele reale din textul 212 rămân dovedite (articol + material, denumire fără prețuri)', async () => {
   const t = '003 SA11G1 [ 2] M 1160.000\nTEAVA PVC NEPLASTIF.TIP G MONT.LA CONSTR.INDUSTR. IN CONDUCTE DE DISTRIBUTIE D= 90 MM\n0.000 0 Total=\n' +
     '003 6701152 M 1160.000\n@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.2 COD 64000115\n0.003 3 Total=\n'

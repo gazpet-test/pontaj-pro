@@ -225,7 +225,8 @@ export function pozitieDovedita(p: {
 // de pagină / sfârșitul textului. Orice altceva = apartenență incertă → blocul rămâne DOAR linia cantității (fail-closed: în listele cu
 // denumirea DEASUPRA cantității, denumirea de dedesubt e a articolului următor; rândul rămâne nedovedit, nu primește Dn-ul vecinului).
 export const LINII_CONTINUARE = 4
-const RE_TOTAL_RAND = /^[\s\d.,*]*\btotal[ea]?\s*=[\s\d.,*|]*$/i
+// linia de total a articolului: fără litere în afară de „Total=” (cifre, punctuație și glife citite greșit, ex. „0.000 ✓ 0 Total=”)
+const RE_TOTAL_RAND = /^[^\p{L}]*\btotal[ea]?\s*=[^\p{L}]*$/iu
 const RE_INCEPUT_ARTICOL = /^\s*\**\s*\d{1,4}[.)]?\s+\**[A-Z0-9][A-Za-z0-9.\-\/]{2,}/
 // doar unitățile reale fac o linie ancoră (umNorm întoarce și cuvinte oarecare: „TEAVA 20.80” nu e un rând nou)
 const UM_ANCORA = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'l', 'set', 'ora', 'h'])
@@ -236,6 +237,13 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
   const linie = doc.slice(ls, le)
   const doarLinia = { linie, bloc: linie, de_la: ls, pana_la: le, continuare: false }
   if ((linie.match(/\|/g) || []).length >= 2) return doarLinia
+  // review Jakarinos r3 (P1): denumirea e DEDESUBTUL cantității doar dacă deasupra rândului nu e o denumire. Continuarea se acceptă
+  // numai când linia ne-goală de deasupra închide articolul precedent („… Total=”) sau e un marcaj de pagină / antetul listei
+  // („= NR. SIMBOL ART. … =”) / începutul textului; altfel (ex. „TEAVA PVC DN63” deasupra) aranjamentul e incert → doar linia.
+  let p = ls - 1
+  while (p > 0 && !doc.slice(doc.lastIndexOf('\n', p - 1) + 1, p).trim()) p = doc.lastIndexOf('\n', p - 1)
+  const sus = p > 0 ? doc.slice(doc.lastIndexOf('\n', p - 1) + 1, p) : ''
+  if (p > 0 && !RE_TOTAL_RAND.test(sus) && !sus.startsWith('⟦PAGINA') && !/^\s*=.*=\s*$/.test(sus)) return doarLinia
   let pana = le
   for (let k = 0; k <= LINII_CONTINUARE && pana < doc.length; k++) {
     const a = pana + 1
