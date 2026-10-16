@@ -885,6 +885,22 @@ class Triere(unittest.TestCase):
         self.assertEqual(self._cls('Săpătură manuală în teren.', 'Săpătură mecanizată în teren.')[0], ['HIGH_RISK'])
         a = self.tab(['<td>Teava</td>', '<td>OTEL</td>']); b = self.tab(['<td>Teava</td>', '<td>FONTA</td>'])
         self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+    def test_material_cazurile_jakarinos_750_r1(self):
+        # materiale inversate intre celule: nu se anuleaza pe rand
+        a = self.tab(['<td>Conducta principala PEHD</td>', '<td>Conducta secundara PVC</td>'])
+        b = self.tab(['<td>Conducta principala PVC</td>', '<td>Conducta secundara PEHD</td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+        # termen identic, calificativ diferit
+        self.assertEqual(self._cls('Conducta cu sudura in teren.', 'Conducta fara sudura in teren.')[0], ['HIGH_RISK'])
+        # flexiuni
+        self.assertEqual(self._cls('Sapaturi manuale in teren.', 'Sapaturi mecanizate in teren.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Indepartarea betonului de pe traseu.', 'Indepartarea asfaltului de pe traseu.')[0], ['HIGH_RISK'])
+        from .triere import termeni_material
+        self.assertEqual(termeni_material('verificarea sudurii', 'verificarea'), ['SUDURII'])
+        # SDR cu valoarea citita ca litere
+        self.assertEqual(self._cls('Teava PEHD SDR ll gaze.', 'Teava PEHD SDR lI gaze.')[0], ['HIGH_RISK'])
+        # „santier” nu e „sant”
+        self.assertEqual(termeni_material('organizare de santier', 'organizare de santer'), [])
     def test_material_doar_daca_e_in_diferenta(self):
         # termenul identic la ambii cititori nu muta itemul; „pe” (prepozitie) nu e termen
         self.assertEqual(self._cls('Conducta din PEHD este pozata.', 'Conducta din PEHD este pozala.')[0], ['DEFER'])
