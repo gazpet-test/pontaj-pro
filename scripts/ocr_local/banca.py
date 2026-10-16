@@ -263,6 +263,34 @@ def _ws(s): return ' '.join(str(s if s is not None else '').split())
 def _loc(s): return ''.join(str(s if s is not None else '').split())
 
 
+SEDILA = str.maketrans('şţŞŢ', 'șțȘȚ')
+
+
+def _norm_celule(r):
+    r = [_ws(x).translate(SEDILA) for x in r]
+    while r and not r[-1]: r.pop()  # celulele goale de la coada randului (numarul de coloane goale difera intre etichetatori)
+    return r
+
+
+def _ancora_ok(x, y, sens):
+    """Ancorele transcrise mai scurt de un etichetator: cea de SUS se compara pe sufix (textul lipit de zona), cea de JOS pe prefix."""
+    x, y = x.translate(SEDILA), y.translate(SEDILA)
+    if x == y: return True
+    if not x or not y or x.startswith('(') or y.startswith('('): return False
+    return (x.endswith(y) or y.endswith(x)) if sens < 0 else (x.startswith(y) or y.startswith(x))
+
+
+def acord_normalizat(x, y, tip_zona):
+    """Compararea normalizata (unealta, decizia Razvan 16.10): ancore pe sufix / prefix, celule goale de coada scoase, ş=ș, ţ=ț.
+    Cifrele, UM, codurile si literele raman literale."""
+    kx, ky = cheie(x, tip_zona), cheie(y, tip_zona)
+    if kx is None or ky is None: return None
+    if not (_ancora_ok(kx[0], ky[0], -1) and _ancora_ok(kx[1], ky[1], 1)): return False
+    if tip_zona == 'text': return _ws(x.get('transcriere')).translate(SEDILA) == _ws(y.get('transcriere')).translate(SEDILA)
+    rx = [_norm_celule(r) for r in (x.get('randuri') or [])]; ry = [_norm_celule(r) for r in (y.get('randuri') or [])]
+    return rx == ry
+
+
 def cheie(e, tip_zona):
     """Ce trebuie sa fie identic intre doua etichete: localizarea (vecinii, fara spatii) + continutul (cifre / UM / cod literal,
     spatiile unificate DOAR in interiorul unei celule / al textului). None = eticheta nu poate intra in acord (nesigur, ilizibil, tinta)."""
@@ -296,6 +324,7 @@ def cmd_compara(a):
             elif kx[2] == ky[2]: st = 'dezacord_localizare'
             elif kx[:2] == ky[:2]: st = 'dezacord_continut'
             else: st = 'dezacord_ambele'
+        if st.startswith('dezacord') and acord_normalizat(x, y, z['tip_zona']): st = 'acord_normalizat'
         rez[zona] = st; c[(z['strat'], st)] += 1
     (banca / ('compara_%s_%s.json' % (a.x, a.y))).write_text(json.dumps(rez, ensure_ascii=False, indent=1), encoding='utf-8')
     tot = collections.Counter(rez.values())
