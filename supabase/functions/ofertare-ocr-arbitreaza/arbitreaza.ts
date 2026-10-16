@@ -76,8 +76,8 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   if (chei !== 'dezacord_id,imagine_b64,item,rulare_id' && chei !== 'dezacord_id,imagine_b64,item,mod,rulare_id') {
     return raspuns(400, { error: 'Corp: exact {rulare_id, dezacord_id, item, imagine_b64[, mod]}' })
   }
-  const { rulare_id, dezacord_id, item, imagine_b64 } = corp
-  const mod = (corp as Record<string, unknown>).mod
+  // cheile sunt validate mai sus; valorile raman unknown pana la verificarile de tip de mai jos (deno check, TS2339)
+  const { rulare_id, dezacord_id, item, imagine_b64, mod } = corp as Record<string, unknown>
   if (mod !== undefined && !MODURI.includes(mod as string)) return raspuns(400, { error: 'mod necunoscut' })
   const doarHaiku = mod === 'doar_haiku'
   if (!esteId(rulare_id) || !esteId(dezacord_id) || !esteObiect(item) || typeof imagine_b64 !== 'string') return raspuns(400, { error: 'Tipuri invalide' })
