@@ -156,7 +156,7 @@ CREATE TABLE public.ofertare_cant_doc_decizii (
   document_id  bigint NOT NULL REFERENCES public.ofertare_documente_atribuire(id),
   doc_sha256   text NOT NULL CHECK (doc_sha256 ~ '^[0-9a-f]{64}$'),
   rol          text CHECK (rol IS NULL OR rol IN ('f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns', 'alt')),
-  sectiune     text CHECK (sectiune IS NULL OR sectiune ~ '^(\*|[0-9]{1,5}-[0-9]{1,5})$'),
+  sectiune     text CHECK (sectiune IS NULL OR sectiune ~ '^([*]|[0-9]{1,5}-[0-9]{1,5})$'),
   decizie      text NOT NULL CHECK (decizie IN ('nu_e_sursa_cantitativa', 'rol_confirmat', 'verificat_fara_lungimi',
                                                 'sursa_partiala_acceptata', 'text_confirmat', 'revocare')),
   revoca_id    bigint REFERENCES public.ofertare_cant_doc_decizii(id),
