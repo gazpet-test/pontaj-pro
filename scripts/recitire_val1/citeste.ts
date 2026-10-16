@@ -130,6 +130,7 @@ export async function incarcaRegistru(fis: string, nou: () => Stare): Promise<{ 
 if (import.meta.main) {
   const dir = Deno.args[0]
   if (!dir) { console.error('utilizare: citeste.ts <dir_val>'); Deno.exit(2) }
+  await Deno.mkdir(dir, { recursive: true })
   const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.39.0')
   const { PDFDocument } = await import('https://esm.sh/pdf-lib@1.17.1')
   const env = (k: string) => { const v = Deno.env.get(k); if (!v) { console.error(`lipsește ${k}`); Deno.exit(2) } return v! }

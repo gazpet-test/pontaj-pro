@@ -1,7 +1,7 @@
 -- Recitirea valului 1, după COMMIT-ul confirmat al aplica.sql (procedura §5.5): READ-ONLY. Recitește din BD și VERIFICĂ egalitatea
 -- cu aplicare_provizoriu.csv (valorile din RETURNING); NU le redefinește. Doar dacă totul e egal → aplicare_rezultat.csv
 -- (referința CAS a revenirii, se comite în repo).
---   psql "$RV1_PG_URL" -X -1 -v ON_ERROR_STOP=1 -v provizoriu=<dir>/aplicare_provizoriu.csv -v rezultat=<dir>/aplicare_rezultat.csv \
+--   deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -v provizoriu=<dir>/aplicare_provizoriu.csv -v rezultat=<dir>/aplicare_rezultat.csv \
 --        -f scripts/recitire_val1/aplica_rezultat.sql
 \set ON_ERROR_STOP 1
 -- read-only prin construcție: scrie doar în obiecte temporare (READ ONLY ar interzice și CREATE TEMP); harness-ul verifică

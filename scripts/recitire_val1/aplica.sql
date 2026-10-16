@@ -1,6 +1,6 @@
 -- Recitirea valului 1, pasul 3 (procedura §5): APLICAREA. O singură tranzacție, totul sau nimic.
--- Rulare (chat, în fereastra deschisă cu fereastra.ts, după „da”-ul lui Răzvan pe preview, care citează sha256 al manifestului):
---   psql "$RV1_PG_URL" -X -1 -v ON_ERROR_STOP=1 -v manifest=<dir>/manifest_aprobat.csv -v texte=<dir>/texte.csv \
+-- Rulare DOAR prin psql.ts (TLS verify-full cu CA-ul Supabase; README) — chat, în fereastra deschisă cu fereastra.ts, după „da”-ul lui Răzvan pe preview, care citează sha256 al manifestului):
+--   deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -v manifest=<dir>/manifest_aprobat.csv -v texte=<dir>/texte.csv \
 --        -v manifest_sha256=<sha din „da”> -v provizoriu=<dir>/aplicare_provizoriu.csv -f scripts/recitire_val1/aplica.sql
 -- Apoi, DOAR la exit 0: aplica_rezultat.sql (read-only) → aplicare_rezultat.csv. La orice eroare: fereastra.ts inchide.
 \set ON_ERROR_STOP 1

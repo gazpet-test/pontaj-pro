@@ -1,7 +1,7 @@
 -- Recitirea valului 1, pasul 4 (procedura §6): verificarea după 24h. READ-ONLY. Afișează raportul și EȘUEAZĂ (exit ≠ 0) la:
 -- sha / metadate schimbate, altă proveniență decât prov_id, orice derivat cu versiunea sursei ≠ sha_nou („pe text depășit”).
 -- Derivatele fără versiune a sursei = „nedovedit” (listate pentru Răzvan, nu fac verificarea să eșueze). Nu repară nimic.
---   psql "$RV1_PG_URL" -X -1 -v ON_ERROR_STOP=1 -v rezultat=<dir>/aplicare_rezultat.csv -f scripts/recitire_val1/verifica.sql
+--   deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -v rezultat=<dir>/aplicare_rezultat.csv -f scripts/recitire_val1/verifica.sql
 \set ON_ERROR_STOP 1
 -- read-only prin construcție: scrie doar în obiecte temporare (READ ONLY ar interzice și CREATE TEMP); harness-ul verifică
 CREATE TEMP TABLE rv_r (document_id bigint, sha_nou text, status_procesare text, pagini_necitite integer[], procesat_la timestamptz,

@@ -1,5 +1,5 @@
 -- Recitirea valului 1 (procedura §7): REVENIREA, la nevoie și cu „da”-ul lui Răzvan. Fereastră deschisă, o tranzacție, totul sau nimic.
---   psql "$RV1_PG_URL" -X -1 -v ON_ERROR_STOP=1 -v manifest=<dir>/manifest_aprobat.csv -v manifest_sha256=<sha comis> \
+--   deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -v manifest=<dir>/manifest_aprobat.csv -v manifest_sha256=<sha comis> \
 --        -v rezultat=<dir>/aplicare_rezultat.csv -v documente='212,213' (sau 'toate') -v provizoriu=<dir>/revenire_provizoriu.csv \
 --        -f scripts/recitire_val1/revino.sql
 -- Apoi, DOAR la exit 0: revino_rezultat.sql → revenire_rezultat.csv. La orice eroare: fereastra.ts inchide.
