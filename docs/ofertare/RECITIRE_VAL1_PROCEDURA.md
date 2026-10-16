@@ -170,7 +170,7 @@ Scriptul `fereastra.ts deschide|inchide <dir>` e idempotent (implementarea: Deno
    - Scriptul refuză dacă un job din allowlist lipsește (redenumit) sau nu e inactiv după pas.
    - Joburile necunoscute, a căror comandă nu menționează Ofertare (de exemplu un dispatcher generic), rămân în riscul acceptat.
 3. **Golirea activității asincrone:** `net.http_post` e asincron. O cerere poate fi deja scoasă din coadă și să ruleze, fără răspuns încă. Durata maximă a unei funcții edge pe planul plătit e de 400 s; timeout-ul HTTP de 150 s e distinct.
-   - **Condiția:** se notează `T_stop`, momentul în care toți producătorii sunt opriți (joburile + worker-ul NAS). Apoi se notează `T_gol`, primul moment ≥ `T_stop` în care coada `net.http_request_queue` e goală.
+   - **Condiția:** se notează `T_stop`, momentul în care toți producătorii sunt opriți (joburile + worker-ul NAS). Apoi se notează `T_gol`, primul moment ≥ `T_stop` în care coada `net.http_request_queue` (DOAR cererile spre `/functions/v1/ofertare-*`; joburile altor module țin coada globală mereu ocupată, 16.10) e goală.
    - Nimic nu pornește (nici citirea, nici aplicarea) înainte de **`T_gol` + 15 minute**, iar la acel moment coada e tot goală.
      - Cererile scoase din coadă înainte de `T_gol` rulează cel mult 400 s.
      - O funcție pornită astfel care lansează la rândul ei alta prin HTTP (lanțul concret `ofertare-seap-veghe` → `ofertare-seap-import`, `ofertare-seap-veghe/index.ts` l.371), cu un apel ocolind `pg_net`, se termină cel mult la 2 × 400 s = 13,3 minute. Asta acoperă un lanț pe două niveluri; 15 minute lasă marjă.

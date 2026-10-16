@@ -199,3 +199,12 @@ Deno.test('r3: un timp lipsă / text / NaN / în ordine greșită în starea fer
   }
   await Deno.remove(dir, { recursive: true })
 })
+
+Deno.test('coada: se numără doar cererile spre funcțiile Ofertare (joburile altor module nu blochează fereastra)', async () => {
+  const { SQL_COADA_OFERTARE } = await import('./fereastra.ts')
+  assert(/FROM net\.http_request_queue WHERE url ILIKE '%\/functions\/v1\/ofertare-%'/.test(SQL_COADA_OFERTARE))
+  // același tipar pe URL-uri reale: Ofertare prinse, celelalte nu
+  const prinde = (u: string) => /\/functions\/v1\/ofertare-/i.test(u)
+  assert(prinde('https://x.supabase.co/functions/v1/ofertare-ingest-doc') && prinde('https://x.supabase.co/functions/v1/ofertare-seap-veghe'))
+  assert(!prinde('https://x.supabase.co/functions/v1/redirect-mai-gov') && !prinde('https://x.supabase.co/functions/v1/rag-utilaj-x'))
+})
