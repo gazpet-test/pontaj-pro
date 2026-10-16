@@ -26,6 +26,8 @@
 #   existe niciun driver Playwright ORFAN (node.exe din pachetul playwright al acestui Python, cu cli.js run-driver, al carui
 #   parinte python sau lansator nu mai traieste); timeout -> PAW_EROARE driver_ramas. Driverele rularilor vii (alt lock) nu se
 #   ating si nu blocheaza. La iesirea normala, lock-ul se elibereaza dupa ce job-ul ramane doar cu lansatorul (ActiveProcesses=1).
+# v4.3 r5 (dupa Jakarinos r4 P2-1): ActiveProcesses=1 e OBLIGATORIU - timeout sau interogare esuata -> PAW_EROARE copii_ramasi,
+#   fara PAW_GATA si fara eliberare explicita a lock-ului (il inchide sistemul la iesirea lansatorului, cand job-ul omoara copiii).
 # ASCII only. Compatibil Windows PowerShell 5.1.
 param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "", [string]$Imagini = "")
 $ErrorActionPreference = "Stop"
@@ -57,6 +59,9 @@ $GEMPW = Join-Path $PSScriptRoot "gemini_pw.py"
 $PW_DRIVER_EXE = Join-Path (Split-Path $TOOLS.gem.exe) "Lib\site-packages\playwright\driver\node.exe"
 $PW_DRIVER_CLI = Join-Path (Split-Path $PW_DRIVER_EXE) "package\cli.js"
 $DRIVER_ASTEPTARE = 30   # secunde de asteptat un driver ramas de la o rulare anterioara, apoi PAW_EROARE driver_ramas
+$JOB_GOL_ASTEPTARE = 15  # r5: secunde de asteptat ca in job sa ramana doar lansatorul, apoi PAW_EROARE copii_ramasi (lock neeliberat explicit)
+$script:PastreazaLock = $false
+$script:JobActiv = $null
 
 function Jurnal([string]$stare, [string]$exitcod) {
   $dur = [int]((Get-Date) - $T0).TotalSeconds
@@ -64,7 +69,7 @@ function Jurnal([string]$stare, [string]$exitcod) {
   Add-Content -LiteralPath $JURNAL -Value $linie -Encoding UTF8
 }
 function Eroare([string]$motiv) {
-  EliberezLock
+  if (-not $script:PastreazaLock) { EliberezLock }
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   try { if ($script:OutFull) { Add-Content -LiteralPath $script:OutFull -Value ("PAW_EROARE " + $RUNID + " " + $motiv) -Encoding UTF8 } } catch {}
   try { Jurnal ("EROARE " + $motiv) "-" } catch {}
@@ -151,16 +156,26 @@ function AsteaptaFaraDriverRamas() {
   }
 }
 function AsteaptaJobGol([int]$sec) {
-  # r4 (optional cerut de Jakarinos): la iesirea normala, lock-ul se elibereaza abia cand in job a ramas doar lansatorul
-  if ([PawV43.Job]::Active() -lt 0) { return }
+  # r5 (Jakarinos r4 P2-1): conditie OBLIGATORIE la gem/cop. Intoarce $true doar daca nu exista job (jak/ollie) sau daca in job a
+  # ramas doar lansatorul (ActiveProcesses = 1); timeout sau interogare esuata -> $false, iar apelantul da PAW_EROARE copii_ramasi
+  # FARA sa elibereze lock-ul (il inchide sistemul la moartea lansatorului, cand job-ul omoara si copiii ramasi).
+  $a = [PawV43.Job]::Active()
+  if ($a -eq -1) { return $true }
   $t = Get-Date
-  while ([PawV43.Job]::Active() -gt 1) {
-    if (((Get-Date) - $t).TotalSeconds -ge $sec) {
-      try { Add-Content -LiteralPath $JURNAL -Value ("{0} | job cu {1} procese active la eliberarea lock-ului" -f $RUNID, [PawV43.Job]::Active()) -Encoding UTF8 } catch {}
-      return
-    }
+  while ($true) {
+    $a = [PawV43.Job]::Active()
+    $script:JobActiv = $a
+    if ($a -eq 1) { return $true }
+    if ($a -lt 0) { return $false }                                   # -2 = interogarea job-ului a esuat
+    if (((Get-Date) - $t).TotalSeconds -ge $sec) { return $false }
     Start-Sleep -Milliseconds 200
   }
+}
+function EroareFaraEliberare([string]$motiv) {
+  # r5: PAW_EROARE fara inchiderea explicita a lock-ului - handle-ul il inchide sistemul la iesirea procesului (job-ul omoara atunci
+  # si copiii ramasi, care tin si ei copii ale handle-ului mostenit)
+  $script:PastreazaLock = $true
+  Eroare $motiv
 }
 function VerificaCanalGem() {
   # r3 (Jakarinos r2 P2b): gem refuza pana exista paw-data\gem_canal_validat, scris DOAR de Razvan dupa testul de canal din
@@ -250,10 +265,10 @@ static IntPtr job = IntPtr.Zero;
 public struct ACC { public long u; public long k; public long pu; public long pk; public uint pf; public uint total; public uint active; public uint term; }
 [DllImport("kernel32.dll", SetLastError = true)]
 static extern bool QueryInformationJobObject(IntPtr job, int cls, ref ACC info, int len, IntPtr ret);
-public static int Active() {   // procese active in job (lansatorul inclus); -1 = fara job
+public static int Active() {   // procese active in job (lansatorul inclus); -1 = fara job; -2 = interogare esuata
   if (job == IntPtr.Zero) return -1;
   ACC a = new ACC();
-  if (!QueryInformationJobObject(job, 1, ref a, Marshal.SizeOf(typeof(ACC)), IntPtr.Zero)) return -1;
+  if (!QueryInformationJobObject(job, 1, ref a, Marshal.SizeOf(typeof(ACC)), IntPtr.Zero)) return -2;
   return (int)a.active;
 }
 public static IntPtr LeagaDeLansator() {
@@ -489,7 +504,12 @@ try {
       }
     }
   }
-  AsteaptaJobGol 15; EliberezLock   # r4: lock liber abia cand in job a ramas doar lansatorul
+  # r5 (Jakarinos r4 P2-1): lock liber DOAR cand in job a ramas doar lansatorul; altfel PAW_EROARE copii_ramasi, fara PAW_GATA
+  if (-not (AsteaptaJobGol $JOB_GOL_ASTEPTARE)) {
+    try { if ($rez) { Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8; if ($rez.err) { Add-Content -LiteralPath $script:OutFull -Value ("--- stderr ---`n" + $rez.err) -Encoding UTF8 } } } catch {}
+    EroareFaraEliberare ("copii_ramasi activi=" + $script:JobActiv + " dupa " + $JOB_GOL_ASTEPTARE + "s (lock-ul ramane tinut pana la iesirea lansatorului)")
+  }
+  EliberezLock
   $ImgFolosite = [bool]$script:ImgDirCreat
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8
@@ -505,7 +525,11 @@ try {
   Write-Host ("PAW_GATA " + $RUNID + " " + $dur + "s")
   exit 0
 } catch {
-  AsteaptaJobGol 15; EliberezLock
+  $mesaj = "rulare: " + $_.Exception.Message
+  if (-not (AsteaptaJobGol $JOB_GOL_ASTEPTARE)) {
+    EroareFaraEliberare ("copii_ramasi activi=" + $script:JobActiv + " dupa " + $JOB_GOL_ASTEPTARE + "s (dupa " + $mesaj + ")")
+  }
+  EliberezLock
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
-  Eroare ("rulare: " + $_.Exception.Message)
+  Eroare $mesaj
 }
