@@ -137,7 +137,7 @@ tx_bg "$OWNER" "SELECT public.fn_ofertare_cb_buget_seteaza(5,'cant_extragere',50
 tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(5,'cant_extragere',4)" /tmp/ba_t1b.out 0; P2=$BG
 B=$(blocata); asteapta_pid $P1 R1; asteapta_pid $P2 R2
 asteapta "concurență owner(50) întâi → adminul blocat, apoi refuzat; owner comis; plafonul 50" \
-  "$B|$R1|$(grep -c 'peste limita adminului' /tmp/ba_t1b.out)|$(plafon 5)" "da|0|1|50.00"
+  "$B|$R1|$([ "$R2" != 0 ] && echo esec)|$(grep -c 'peste limita adminului' /tmp/ba_t1b.out)|$(plafon 5)" "da|0|esec|1|50.00"
 # adminul pune 4 și ține 3 s; owner-ul cere 50 → BLOCAT, apoi reușește; ambele comise, ambele în jurnal, în ordine
 tx_bg "$ADMIN" "SELECT public.fn_ofertare_cb_buget_seteaza(6,'cant_extragere',4)" /tmp/ba_t2.out 3; P1=$BG; sleep 0.5
 tx_bg "$OWNER" "SELECT public.fn_ofertare_cb_buget_seteaza(6,'cant_extragere',50)" /tmp/ba_t2b.out 0; P2=$BG
@@ -188,8 +188,8 @@ B=$(blocata 'buget_seteaza'); asteapta_pid $PR RR; asteapta_pid $PA RA
 asteapta "concurență revenire întâi → adminul blocat pe jurnal; revenirea comisă; adminul eșuează; jurnal neschimbat; plafon 3" \
   "$B|$RR|$([ "$RA" != 0 ] && echo esec)|$(grep -c 'peste limita' /tmp/ba_rev_admin.out)|$(q "SELECT count(*) FROM public.ofertare_ai_buget_jurnal")|$(plafon 102)" \
   "da|0|esec|0|$J0|3.00"
-seteaza "$OWNER" 102 7 >/dev/null 2>&1 || true
-q "UPDATE public.ofertare_ai_buget SET plafon_usd = 7 WHERE licitatie_id = 102 AND scop = 'cant_extragere'" >/dev/null
+# după revenire RPC-ul owner-ului (corpul din 31a) funcționează: pune 7, cu rezultat verificat (review r3, P3)
+asteapta "după revenire: owner-ul setează 7 prin RPC" "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_cb_buget_seteaza(102,'cant_extragere',7)->>'ok'")|$(plafon 102)" "true|7.00"
 asteapta "după revenire: corpul din 31a, fără helper, fără coloana rol, plafonul păstrat, amprenta în comentariu" \
   "$(q "SELECT (md5(pg_get_functiondef('public.fn_ofertare_cb_buget_seteaza(bigint,text,numeric)'::regprocedure)) = '$DEF_31A')::text || ',' || (to_regprocedure('public.fn_ofertare_cb_este_admin()') IS NULL)::text || ',' || (NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.ofertare_ai_buget_jurnal'::regclass AND attname='rol' AND NOT attisdropped))::text || ',' || (SELECT plafon_usd FROM public.ofertare_ai_buget WHERE licitatie_id=102 AND scop='cant_extragere') || ',' || (obj_description('public.ofertare_analiza_versiuni'::regclass, 'pg_class') LIKE '%amprenta=' || public.fn_ofertare_cb_amprenta())::text")" \
   "true,true,true,7.00,true"
