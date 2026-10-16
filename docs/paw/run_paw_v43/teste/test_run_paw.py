@@ -14,6 +14,10 @@ STUB = r'''import sys, os, time
 if len(sys.argv) < 3 or sys.argv[1] != "trimite":
     print("GEM_EROARE comanda_necunoscuta stub"); sys.exit(3)
 t = open(sys.argv[2], encoding="utf-8-sig").read()
+if "STUB_AGATAT" in t:
+    open("stub_pornit_%d" % os.getpid(), "w").close()
+    time.sleep(120)                                       # "ciorna" la jumatate: lansatorul e omorat intre timp
+    print("NU TREBUIA SA AJUNG AICI"); sys.exit(0)
 if "STUB_LENT" in t:
     open("stub_pornit_%d" % os.getpid(), "w").close()   # cwd = paw-data-ul temporar
     time.sleep(8)
@@ -22,6 +26,36 @@ if "STUB_OK" in t:
     print("GEM_MODEL: Gemini 4 Argon (stub)"); print("raspuns simulat"); sys.exit(0)
 print("GEM_EROARE fara_tab_gemini simulat"); sys.exit(3)
 '''
+
+STUB_COP = r'''import sys, os, time
+if len(sys.argv) > 1 and sys.argv[1] == "stare":
+    print("URL: stub | genereaza: False | editor vizibil: 1"); sys.exit(0)
+if len(sys.argv) > 2 and sys.argv[1] == "trimite":
+    t = open(sys.argv[2], encoding="utf-8-sig").read()
+    if "STUB_AGATAT" in t:
+        open("stub_pornit_%d" % os.getpid(), "w").close()
+        time.sleep(120)
+    print("raspuns cop simulat"); sys.exit(0)
+print("EROARE: comanda stub"); sys.exit(3)
+'''
+
+
+def viu(pid):
+    import ctypes
+    k = ctypes.windll.kernel32
+    h = k.OpenProcess(0x00100000 | 0x1000, False, pid)    # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    try:
+        return k.WaitForSingleObject(h, 0) == 0x102            # WAIT_TIMEOUT = inca ruleaza
+    finally:
+        k.CloseHandle(h)
+
+
+def sha(p):
+    import hashlib
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest().upper()
 
 
 class Lansator(unittest.TestCase):
@@ -48,7 +82,15 @@ class Lansator(unittest.TestCase):
         cls.brief_ok = cls.scrie(os.path.join(cls.data, "brief"), "ok.md", "Intrebare de arhitectura (test).")
         cls.brief_stub_ok = cls.scrie(os.path.join(cls.data, "brief"), "stub_ok.md", "STUB_OK")
         cls.brief_lent = cls.scrie(os.path.join(cls.data, "brief"), "stub_lent.md", "STUB_LENT")
-        cls.brief_txt =cls.scrie(os.path.join(cls.data, "brief"), "b.txt", "x")
+        cls.brief_agatat = cls.scrie(os.path.join(cls.data, "brief"), "stub_agatat.md", "STUB_AGATAT")
+        cls.brief_txt = cls.scrie(os.path.join(cls.data, "brief"), "b.txt", "x")
+        with open(os.path.join(cls.bin, "cgpt_pw.py"), "w", encoding="ascii") as f:
+            f.write(STUB_COP)
+        # marcajul de canal validat, legat de hash-ul gemini_pw.py din bin-ul temporar (stub-ul)
+        cls.marcaj = os.path.join(cls.data, "gem_canal_validat")
+        cls.marcaj_ok = "CANAL_VALIDAT %s 2026-10-16T12:00:00 test\n" % sha(cls.stub)
+        with open(cls.marcaj, "w", encoding="ascii") as f:
+            f.write(cls.marcaj_ok)
         cls.brief_afara = cls.scrie(cls.afara, "b.md", "x")
         cls.n = 0
 
@@ -211,6 +253,92 @@ class Lansator(unittest.TestCase):
         self.assertIs(deschis, False, "lock-ul castigatorului a putut fi deschis in timpul rularii")
         self.assertTrue(os.path.exists(lock))
         self.assertTrue(self.eliberat(lock))
+
+    # --- r3 (Jakarinos r2 P2b): gem refuza fara marcajul de canal validat pentru ACEST gemini_pw.py ---
+    def cu_marcaj(self, continut, contine):
+        try:
+            if continut is None:
+                os.remove(self.marcaj)
+            else:
+                with open(self.marcaj, "w", encoding="ascii") as f:
+                    f.write(continut)
+            o = self.out()
+            self.eroare("gem", self.brief_stub_ok, o, contine=contine)
+            with open(o, encoding="utf-8-sig") as f:
+                self.assertNotIn("raspuns simulat", f.read())
+        finally:
+            with open(self.marcaj, "w", encoding="ascii") as f:
+                f.write(self.marcaj_ok)
+
+    def test_gem_fara_marcaj_canal(self):
+        self.cu_marcaj(None, "validare: canal gem nevalidat: lipseste")
+
+    def test_gem_marcaj_alta_versiune(self):
+        self.cu_marcaj("CANAL_VALIDAT " + "0" * 64 + " 2026-10-16 test\n", "validat pentru alta versiune de gemini_pw.py")
+
+    def test_gem_marcaj_gol_sau_fara_hash(self):
+        self.cu_marcaj("", "validat pentru alta versiune")
+        self.cu_marcaj("CANAL_VALIDAT\n", "validat pentru alta versiune")
+        self.cu_marcaj("canal validat, am verificat eu\n", "validat pentru alta versiune")
+
+    def test_gem_marcaj_cu_prefix_de_hash_refuzat(self):
+        self.cu_marcaj("CANAL_VALIDAT " + sha(self.stub)[:40] + "\n", "validat pentru alta versiune")
+
+    # --- r3 (Jakarinos r2 P1): lansatorul omorat in timpul rularii -> copilul moare, lock-ul se elibereaza abia dupa ---
+    def omoara_lansatorul(self, cine, model, lock_nume):
+        lock = os.path.join(self.data, lock_nume)
+        for x in os.listdir(self.data):
+            if x.startswith("stub_pornit"):
+                os.remove(os.path.join(self.data, x))
+        argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.ps1,
+                "-Cine", cine, "-Brief", self.brief_agatat, "-Out", self.out()]
+        if model:
+            argv += ["-Model", model]
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        copil = None
+        t0 = time.time()
+        while time.time() - t0 < 60 and p.poll() is None:
+            m = [x for x in os.listdir(self.data) if x.startswith("stub_pornit_")]
+            if m:
+                copil = int(m[0].split("_")[-1])
+                break
+            time.sleep(0.1)
+        if copil is None:
+            so, se = p.communicate(timeout=60)
+            txt = so.decode("utf-8", "replace")
+            if "nu asculta" in txt or "loopback" in txt:
+                self.skipTest("CDP 9333 indisponibil/neloopback")
+            self.fail("copilul nu a pornit: " + txt + se.decode("utf-8", "replace"))
+        self.assertTrue(viu(copil))
+        with self.assertRaises(PermissionError):
+            open(lock, "r+b").close()                       # lock tinut in timpul rularii
+        p.kill()                                            # TerminateProcess DOAR pe powershell (nu pe arbore)
+        p.wait(timeout=30)
+        p.stdout.close(); p.stderr.close()
+        eliberat_cu_copil_viu = False
+        t0 = time.time()
+        liber = False
+        while time.time() - t0 < 30:
+            try:
+                open(lock, "r+b").close()
+                liber = True
+                eliberat_cu_copil_viu = viu(copil)           # in momentul eliberarii copilul trebuie sa fie deja mort
+                break
+            except PermissionError:
+                time.sleep(0.05)
+        try:
+            self.assertTrue(liber, "lock-ul nu s-a eliberat dupa moartea lansatorului")
+            self.assertFalse(eliberat_cu_copil_viu, "lock-ul s-a eliberat cat copilul inca rula")
+            self.assertFalse(viu(copil), "copilul a supravietuit lansatorului")
+        finally:
+            if viu(copil):
+                subprocess.run(["taskkill", "/F", "/PID", str(copil)], capture_output=True)
+
+    def test_gem_lansator_omorat_copilul_moare_inainte_de_lock(self):
+        self.omoara_lansatorul("gem", None, "lock_gem")
+
+    def test_cop_lansator_omorat_copilul_moare_inainte_de_lock(self):
+        self.omoara_lansatorul("cop", "6abc000f", "lock_cop_6abc000f")
 
     # --- dupa lock: doar stub-ul ruleaza ---
     def test_gem_cod_eroare_devine_motiv_si_lock_eliberat(self):

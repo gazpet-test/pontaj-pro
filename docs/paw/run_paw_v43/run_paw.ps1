@@ -18,6 +18,9 @@
 #   paw-data\lock_gem. Erori: PAW_EROARE <id> <cod gemini_pw>.
 # v4.3 r2 (dupa Jakarinos r1, P1-a): lock-urile (lock_gem si lock_cop_<conv>) = handle FileShare.None tinut pe toata rularea;
 #   fisierul nu se mai sterge (nici la recuperare, nici la curatare) - v4.2 stergea dupa cale lock-ul altei rulari.
+# v4.3 r3 (dupa Jakarinos r2): la gem/cop lansatorul intra intr-un Job Object KILL_ON_JOB_CLOSE inainte de orice copil, iar
+#   handle-ul de lock e mostenit de copii: lansatorul moare -> copiii mor -> abia apoi lock-ul e liber. gem refuza fara
+#   paw-data\gem_canal_validat (scris doar dupa testul de canal, legat de hash-ul gemini_pw.py).
 # ASCII only. Compatibil Windows PowerShell 5.1.
 param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "", [string]$Imagini = "")
 $ErrorActionPreference = "Stop"
@@ -84,15 +87,34 @@ function LuaLock([string]$cale) {
   # sau iesirea procesului). Fisierul de lock NU se sterge niciodata: nu exista "lock expirat" de recuperat si nicio stergere pe o
   # observatie veche. Daca rularea care il tinea a murit, sistemul a inchis handle-ul si urmatoarea rulare il deschide direct
   # (recuperare atomica, facuta de kernel). Cat e tinut, nu poate fi deschis, rescris, redenumit sau sters de alt proces.
-  # Handle-ul nu e mostenibil (copiii lansati prin Ruleaza nu il primesc).
+  # r3 (Jakarinos r2 P1): handle-ul e MOSTENIBIL - copiii porniti prin Ruleaza (python gem/cop) primesc o copie, deci lock-ul ramane
+  # tinut cat traieste oricare dintre ei; impreuna cu Job Object-ul (LeagaCopiiiDeLansator) asta inseamna: lansatorul moare ->
+  # sistemul omoara copiii -> abia dupa moartea ultimului lock-ul se elibereaza.
   $full = CaleSigura $cale @($DATA) $false
-  try { $fs = [IO.File]::Open($full, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+  $share = [IO.FileShare]([int][IO.FileShare]::None -bor [int][IO.FileShare]::Inheritable)
+  try { $fs = [IO.File]::Open($full, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, $share) }
   catch [System.IO.IOException] { throw ("ocupat de alta rulare (" + (Split-Path -Leaf $full) + " e tinut deschis)") }
   try {
     if (-not (SubRadacina ([PawV4.Fs]::FinalPath($fs.SafeFileHandle)) $DATA)) { throw "lock rezolvat in afara radacinii de date" }
     $fs.SetLength(0); $b = [Text.Encoding]::ASCII.GetBytes($RUNID + " pid=" + $PID); $fs.Write($b, 0, $b.Length); $fs.Flush()
   } catch { $fs.Close(); throw }
   $script:LockFs = $fs
+}
+function LeagaCopiiiDeLansator() {
+  # r3 (Jakarinos r2 P1): Job Object cu JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, in care intra INSUSI lansatorul, INAINTE de orice copil
+  # gem/cop: copiii porniti dupa aceea sunt automat in job (fara fereastra intre Start si Assign). Handle-ul job-ului il tine doar
+  # lansatorul (nemostenibil); cand lansatorul moare (sau iese), sistemul inchide handle-ul si omoara tot arborele.
+  [void][PawV43.Job]::LeagaDeLansator()
+}
+function VerificaCanalGem() {
+  # r3 (Jakarinos r2 P2b): gem refuza pana exista paw-data\gem_canal_validat, scris DOAR de Razvan dupa testul de canal din
+  # LANSATOR_UNIC_PAW.md (atasament detectat + refuz ciorna_cu_atasamente fara Enter + raspuns PAW_OK). Prima linie:
+  # "CANAL_VALIDAT <SHA-256 gemini_pw.py> ..." - o versiune noua de gemini_pw.py cere un test de canal nou.
+  $m = CaleSigura (Join-Path $DATA "gem_canal_validat") @($DATA) $false
+  if (-not (Test-Path -LiteralPath $m -PathType Leaf)) { throw ("canal gem nevalidat: lipseste " + $m + " (se scrie doar dupa testul de canal)") }
+  $prim = [string](Get-Content -LiteralPath $m -TotalCount 1 -Encoding ASCII)
+  $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $GEMPW).Hash
+  if ($prim -notmatch ('^CANAL_VALIDAT ' + $h + '(\s|$)')) { throw "canal gem validat pentru alta versiune de gemini_pw.py (sau marcaj invalid) - refa testul de canal" }
 }
 function EliberezLock() {
   # inchide DOAR handle-ul acestei rulari; fisierul ramane (urmatoarea rulare il deschide)
@@ -146,6 +168,38 @@ public static string FinalPath(Microsoft.Win32.SafeHandles.SafeFileHandle h) {
   if (r.StartsWith(@"\\?\UNC\")) throw new System.IO.IOException("cale UNC");
   if (r.StartsWith(@"\\?\")) r = r.Substring(4);
   return r;
+}
+"@
+# r3 (Jakarinos r2 P1): Job Object KILL_ON_JOB_CLOSE pentru lansator + copii (vezi LeagaCopiiiDeLansator)
+Add-Type -Namespace PawV43 -Name Job -MemberDefinition @"
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+static extern IntPtr CreateJobObjectW(IntPtr sa, string name);
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool SetInformationJobObject(IntPtr job, int cls, ref EXT info, int len);
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool QueryInformationJobObject(IntPtr job, int cls, ref EXT info, int len, IntPtr ret);
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool AssignProcessToJobObject(IntPtr job, IntPtr proc);
+[DllImport("kernel32.dll")]
+static extern IntPtr GetCurrentProcess();
+[StructLayout(LayoutKind.Sequential)]
+public struct BASIC { public long t1; public long t2; public uint LimitFlags; public UIntPtr ws1; public UIntPtr ws2; public uint act; public UIntPtr aff; public uint pri; public uint sch; }
+[StructLayout(LayoutKind.Sequential)]
+public struct IOC { public ulong a; public ulong b; public ulong c; public ulong d; public ulong e; public ulong f; }
+[StructLayout(LayoutKind.Sequential)]
+public struct EXT { public BASIC B; public IOC I; public UIntPtr m1; public UIntPtr m2; public UIntPtr m3; public UIntPtr m4; }
+static IntPtr job = IntPtr.Zero;
+public static IntPtr LeagaDeLansator() {
+  if (job != IntPtr.Zero) return job;
+  IntPtr j = CreateJobObjectW(IntPtr.Zero, null);   // SA null = handle nemostenibil
+  if (j == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject");
+  EXT e = new EXT(); e.B.LimitFlags = 0x2000;       // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+  if (!SetInformationJobObject(j, 9, ref e, Marshal.SizeOf(typeof(EXT)))) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject");
+  EXT v = new EXT();
+  if (!QueryInformationJobObject(j, 9, ref v, Marshal.SizeOf(typeof(EXT)), IntPtr.Zero) || (v.B.LimitFlags & 0x2000) == 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "KILL_ON_JOB_CLOSE neconfirmat");
+  if (!AssignProcessToJobObject(j, GetCurrentProcess())) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject");
+  job = j;   // handle-ul ramane deschis pana la moartea lansatorului (nu se inchide explicit)
+  return j;
 }
 "@
 function SecPrivat() {
@@ -301,6 +355,7 @@ try {
   if (-not (Test-Path -LiteralPath $T.exe -PathType Leaf)) { throw "executabil lipsa: " + $T.exe }
   $script:Img = $null
   if ($Cine -eq "gem" -and -not (Test-Path -LiteralPath $GEMPW -PathType Leaf)) { throw "lipseste gemini_pw.py langa lansator" }
+  if ($Cine -eq "gem") { VerificaCanalGem }
   if ($Imagini) {
     if ($Cine -ne "jak") { throw "imaginile sunt permise doar pentru jak" }
     $script:Img = PregatesteImagini $Imagini
@@ -337,6 +392,7 @@ try {
       if (-not $ns) { throw "Edge CDP 9333 nu asculta" }
       if ($ns | Where-Object { $_ -notmatch "127\.0\.0\.1:9333" }) { throw "CDP 9333 nu e doar pe loopback - refuz" }
       # v4.3 r2: lock per conversatie = handle exclusiv pe toata rularea (v4.2 stergea dupa cale lock-ul altei rulari)
+      LeagaCopiiiDeLansator   # r3: inainte de lock si de orice copil cgpt_pw.py
       LuaLock (Join-Path $DATA ("lock_cop_" + $Model))
       $envc = @{ CGPT_TINTA = $Model }
       $st = Ruleaza $T.exe @($CGPT, "stare") "" $DATA 60 $envc
@@ -352,6 +408,7 @@ try {
     }
     "gem" {
       # v4.3: lock global INAINTE de orice atingere a browserului; apoi CDP doar pe loopback; apoi gemini_pw.py (brief = cale validata)
+      LeagaCopiiiDeLansator   # r3: inainte de lock si de orice copil gemini_pw.py
       LuaLock (Join-Path $DATA "lock_gem")
       $ns = (& netstat.exe -ano | Select-String ":9333 " | Select-String "LISTENING")
       if (-not $ns) { throw "Edge CDP 9333 nu asculta" }
