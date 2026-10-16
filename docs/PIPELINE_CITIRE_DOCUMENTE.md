@@ -324,6 +324,7 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #739 | Modul doar_haiku (edge + client) |
 | 16.10.2026 | #740 | Tabelul de umbră 20261031c |
 | 16.10.2026 | #741 | Validările 4xx nu opresc proba |
-| 16.10.2026 | #742 | Prompt arb-v3 (regula 10 diacritice) + poarta deterministă pe `text_propus` (Jakarinos r1–r4) |
+| 16.10.2026 | #742 | Prompt arb-v3 (diacritice) |
 | 16.10.2026 | (acest PR) | Documentul pipeline-ului + CI |
 | 16.10.2026 | (acest PR) | Partea 1, scrisă de sesiunea Ofertare: §1.0 sursele, §1.1 ingest + căile vecine, §1.2 proveniența / CAS (31a / 31b), §1.3 laboratorul + recitirea valului 1 (#734), §1.4 cantități + comparator (#726 #729 #731), §1.5 porțile; căile CI extinse |
+| 16.10.2026 | #742 (r4) | Poarta deterministă pe `text_propus` la perechile doar de diacritice (Jakarinos r1–r4) |
