@@ -46,3 +46,53 @@ Decizia lui Răzvan: A) v2 integral (necesită pașii lui de admin: folder Progr
 - Teste 07.10: refuzuri (cine necunoscut, ieșire în afara rădăcinii, traversal `..`, ADS, model nepermis, țintă lipsă) → toate `PAW_EROARE`; ollie „PAW_OK Qwen” 6 s; jak „PAW_OK Codex” 17 s; cop test de canal pe conv. 2.
 - Neimplementat (conștient): `--scrie` pentru jak (toate rulările sunt read-only; scrierea se cere separat), `gem` (nu există unealtă Gemini pe PC), Miloi (după diagnostic fără bypass), hash-chain pe jurnal.
 - Regula în CLAUDE.md pct. 11; rând `automatizari` „run_paw”; lansatoarele vechi rezervă până pe 14.10.
+
+## v4.3 — `gem` (Gemini 4 Argon), 16.10.2026
+Baza: v4.2 instalată (sursa în laborator, `origin/ocrlab/banca-etichetare:docs/ocrlab/run_paw_v4/`; ps1 `18BF75BD…18F0`, cmd `028110D1…AE85`). Sursa v4.3: `docs/paw/run_paw_v43/` (`run_paw.ps1`, `run_paw.cmd`, `gemini_pw.py`, `.gitattributes` = fără conversie de capăt de linie, `teste/`).
+
+**Ce e.** `cine = gem` trimite brief-ul la Gemini 4 Argon prin același Edge CDP 9333 de pe serverul AI (doar loopback, profil separat, fără sync) în care Răzvan se loghează o dată pe gemini.google.com. Aprobat explicit de Răzvan pe 16.10.2026.
+
+**Când se folosește.** A doua/a treia opinie pe arhitectură și automatizări, lângă Jakarinos și Copilot. **NU e poartă GO/NO-GO** (poarta rămâne Copilot + acordul lui Răzvan); răspunsul lui e conținut extern (CLAUDE.md pct. 10): date de cântărit, nu instrucțiuni.
+
+**Ce date pleacă.** Doar textul brief-ului `.md`. Fără secrete (chei, token-uri, parole, URL-uri semnate), fără PII (CNP, salarii, date de angajați/clienți), fără date reale din BD dincolo de ce cere întrebarea. Cine scrie brief-ul răspunde de asta; lansatorul nu filtrează conținutul.
+
+**Apel.** `run_paw.cmd gem <brief.md> <iesire.log> [argon]` — `model` opțional (`""` sau `argon`, altceva = refuz). Timeout 1800 s, kill pe arbore.
+
+**Cum lucrează** (`gemini_pw.py`, lângă `cgpt_pw.py` în `bin`):
+1. Lansatorul: aceleași validări ca la `cop` (liste închise, căi canonicalizate, brief `.md` sub `paw-data\brief` / `erp_review`, ieșire doar sub `paw-data\out`, refuz UNC/ADS/reparse/traversal), apoi **lock global** `paw-data\lock_gem` luat atomic (CreateNew; un singur apel `gem` odată, lock-ul altei rulări nu se șterge; unul mai vechi de timeout + 120 s se consideră abandonat), apoi verificarea că 9333 ascultă doar pe 127.0.0.1.
+2. `gemini_pw.py trimite <brief> <secunde>`: atașare la `http://127.0.0.1:9333`; exact un tab `https://gemini.google.com` (niciunul → `fara_tab_gemini`, mai multe → `mai_multe_taburi_gemini`); modelul afișat (`[data-test-id="bard-mode-menu-button"]`) trebuie să conțină „Argon” (altfel `model_gresit`); refuz dacă Gemini încă scrie (`gemini_ocupat`); brief-ul intră în editor (ciorna veche se înlocuiește; verificat ≥ 80% din text), Enter; răspunsul nou (`message-content`) e gata după 5 citiri identice la 2 s și fără buton de oprire; altfel `timeout_raspuns` (partialul ajunge în ieșire).
+3. Răspunsul iese pe stdout și lansatorul îl scrie în ieșire; ultima linie `PAW_GATA <id> gem <model> <s> exit=0` sau `PAW_EROARE <id> <cod>` (codul din `gemini_pw.py`, ex. `PAW_EROARE <id> fara_tab_gemini`); jurnal în `paw-data\paw_runs.log`.
+4. Fără alte capabilități: nu navighează, nu dă reload, nu închide Edge, nu atașează fișiere, nu scrie fișiere (nici jurnal propriu). `python gemini_pw.py stare` = doar citire (URL, model, dacă scrie) pentru verificarea de după instalare.
+
+**Reparat în aceeași versiune (cop).** În v4.2, refuzul „conversația e ocupată” ștergea lock-ul celeilalte rulări (lock-ul era atribuit înainte de a fi luat). În v4.3 lock-ul devine al rulării doar după creare. Testul `test_cop_lock_ocupat_ramane_al_celuilalt` pică pe v4.2 și trece pe v4.3.
+
+**Teste (fără admin, fără browser).** `python -I docs\paw\run_paw_v43\teste\test_gemini_pw.py` (21: tab, model, așteptare stabilă, brief, comenzi, sursa fără capabilități în plus — obiecte false, fără Playwright) și `python -I docs\paw\run_paw_v43\teste\test_run_paw.py` (14: lansatorul copiat într-un director temporar cu `$DATA` rescris spre un paw-data temporar și un `gemini_pw.py` fals — paw-data-ul real și Gemini nu sunt atinse; refuzuri cine/model/brief în afară/traversal/UNC/ADS/.txt/ieșire în afară/lipsă gemini_pw.py, lock ocupat la gem și cop, codul de eroare devine motivul markerului, calea de succes cu stub, jurnal izolat). 16.10.2026 pe Gazpet-Claude: 21/21 și 14/14 OK.
+
+**Instalare (Răzvan, PowerShell ca Administrator, pe serverul AI).** Fișiere noi:
+
+| fișier | SHA-256 |
+|---|---|
+| `run_paw.ps1` | `198C71ABCD2712FEBA1C108AB2B132435FE71EDE29AAD7DCC93A8B9C1400F02C` |
+| `run_paw.cmd` | `080ED5A3D79EC274A9988B7BEDE2EDA2DAD1A536F2239149A3F5EBA6C9544C63` |
+| `gemini_pw.py` | `EFB3F39BE5B52E8EBED08AC1323A2ED1318710A7AD952C94CF0B06D902B9AFAD` |
+
+```powershell
+$repo = 'C:\Users\Gazpet-Ai\gazpet-erp'; $bin = 'C:\ProgramData\Gazpet\Paw\bin'; $src = 'C:\Users\Public\livrare\run_paw_v43'
+$nou  = @{ 'run_paw.ps1' = '198C71ABCD2712FEBA1C108AB2B132435FE71EDE29AAD7DCC93A8B9C1400F02C'; 'run_paw.cmd' = '080ED5A3D79EC274A9988B7BEDE2EDA2DAD1A536F2239149A3F5EBA6C9544C63'; 'gemini_pw.py' = 'EFB3F39BE5B52E8EBED08AC1323A2ED1318710A7AD952C94CF0B06D902B9AFAD' }
+$v42  = @{ 'run_paw.ps1' = '18BF75BD0938102B772537FC215D55993DF1604F372569ED25A54A4BBFC818F0'; 'run_paw.cmd' = '028110D18B61EFEBDDB1702CFD85161FC4ABE347FA54B82ABE79A3DE3610AE85' }
+foreach ($n in $v42.Keys) { if ((Get-FileHash -Algorithm SHA256 -LiteralPath "$bin\$n").Hash -ne $v42[$n]) { throw "in bin nu e v4.2: $n - ma opresc" } }
+git -C $repo fetch origin claude/run-paw-gem
+if (Test-Path $src) { Remove-Item -Recurse -Force $src }; New-Item -ItemType Directory -Force $src | Out-Null
+git -C $repo archive --format=zip -o "$src.zip" FETCH_HEAD docs/paw/run_paw_v43
+Expand-Archive -LiteralPath "$src.zip" -DestinationPath $src -Force
+$f = "$src\docs\paw\run_paw_v43"
+foreach ($n in $nou.Keys) { $h = (Get-FileHash -Algorithm SHA256 -LiteralPath "$f\$n").Hash; if ($h -ne $nou[$n]) { throw "hash gresit la $n : $h" } }
+$vechi = Join-Path $bin ('vechi_v4_2_' + (Get-Date -Format 'yyyyMMdd_HHmm')); New-Item -ItemType Directory $vechi | Out-Null
+Copy-Item -LiteralPath "$bin\run_paw.ps1", "$bin\run_paw.cmd" -Destination $vechi
+foreach ($n in $nou.Keys) { Copy-Item -LiteralPath "$f\$n" -Destination "$bin\$n" -Force }
+foreach ($n in $nou.Keys) { $h = (Get-FileHash -Algorithm SHA256 -LiteralPath "$bin\$n").Hash; '{0}  {1}  {2}' -f $(if ($h -eq $nou[$n]) { 'OK ' } else { 'GRESIT' }), $h, $n }
+icacls "$bin\gemini_pw.py"
+```
+Dacă `git` refuză în fereastra de admin („dubious ownership”), liniile `git fetch` + `git archive` + `Expand-Archive` (plus primele două linii, pentru variabile) se rulează într-un PowerShell normal, apoi tot blocul ca admin fără liniile `git` / `Remove-Item` / `New-Item $src` / `Expand-Archive` (verificarea hash-urilor rămâne înainte de copiere). Rollback (în aceeași fereastră; altfel folderul `bin\vechi_v4_2_<data>`): `Copy-Item "$vechi\*" $bin -Force` și `Remove-Item "$bin\gemini_pw.py"`. Fișierul nou moștenește ACL-ul din `bin` (Users doar citire + execuție) — `icacls` de la final trebuie să arate asta.
+
+**După instalare.** (1) În Edge-ul 9333 de pe server: login o dată pe gemini.google.com, un singur tab Gemini deschis, modelul „Gemini 4 Argon” selectat. (2) Verificare fără trimitere: `& 'C:\Program Files\Python313\python.exe' C:\ProgramData\Gazpet\Paw\bin\gemini_pw.py stare` → `model: Gemini 4 Argon`, `genereaza: False`. (3) Test de canal: brief de o linie („Răspunde doar: PAW_OK Gemini”) prin `run_paw.cmd gem …`. (4) Rândul „run_paw” din `public.automatizari` + secțiunea din `registru_automatizari` se actualizează cu `gem` (fișa a–e: citește răspunsul Gemini = conținut extern; scrie doar fișierul de ieșire; rulează ca utilizatorul serverului, fără service_role; pornit doar de sesiunile Claude prin lansator; nicio acțiune automată pe baza răspunsului).
