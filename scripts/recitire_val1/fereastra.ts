@@ -108,6 +108,23 @@ export async function inchide(db: Db, st: StareF | null, salveaza: (s: StareF) =
   return { cod: 0, mesaj: 'fereastră închisă: joburile și worker-ul NAS readuse la starea inițială', stare: st }
 }
 
+// validarea completă a stării: câmpurile există (nu doar „acceptă undefined”), timpii sunt null sau numere finite, iar cei
+// nenuli respectă creat_la ≤ t_joburi_oprite ≤ t_stop ≤ t_gol — altfel un t_gol lipsă / invalid ar sări peste cele 15 minute
+export function stareValida(st: StareF): string | null {
+  if (!st || typeof st !== 'object') return 'nu e obiect'
+  for (const k of ['run_id', 'stare', 'creat_la', 'joburi', 'nas_pornit', 't_joburi_oprite', 't_stop', 't_gol']) if (!(k in st)) return `lipsește ${k}`
+  if (typeof st.run_id !== 'string' || !st.run_id) return 'run_id'
+  if (!['OPEN', 'CLOSED'].includes(st.stare)) return 'stare'
+  if (!(typeof st.creat_la === 'number' && Number.isFinite(st.creat_la))) return 'creat_la'
+  if (typeof st.nas_pornit !== 'boolean') return 'nas_pornit'
+  if (!Array.isArray(st.joburi) || st.joburi.some((j) => !Number.isInteger(j?.jobid) || typeof j.active !== 'boolean')) return 'joburi'
+  const timp = (x: unknown) => x === null || (typeof x === 'number' && Number.isFinite(x))
+  if (!timp(st.t_joburi_oprite) || !timp(st.t_stop) || !timp(st.t_gol)) return 't_joburi_oprite / t_stop / t_gol nu sunt null sau număr finit'
+  const lant = [st.creat_la, st.t_joburi_oprite, st.t_stop, st.t_gol].filter((x): x is number => x !== null)
+  if (lant.some((x, i) => i > 0 && x < lant[i - 1])) return 'ordinea timpilor (creat_la ≤ t_joburi_oprite ≤ t_stop ≤ t_gol)'
+  return null
+}
+
 // starea ferestrei: DOAR absența fișierului permite o stare nouă; ilizibil / corupt / formă invalidă → eroare (fără suprascriere)
 export async function incarcaStare(fis: string): Promise<{ st: StareF | null } | { eroare: string }> {
   let txt: string
@@ -117,9 +134,8 @@ export async function incarcaStare(fis: string): Promise<{ st: StareF | null } |
   }
   try {
     const st = JSON.parse(txt) as StareF
-    if (!['OPEN', 'CLOSED'].includes(st.stare) || !Array.isArray(st.joburi) || typeof st.nas_pornit !== 'boolean'
-        || st.joburi.some((j) => typeof j.jobid !== 'number' || typeof j.active !== 'boolean')) return { eroare: 'stare cu formă invalidă' }
-    return { st }
+    const v = stareValida(st)
+    return v ? { eroare: `stare invalidă: ${v}` } : { st }
   } catch { return { eroare: 'stare coruptă (JSON invalid)' } }
 }
 

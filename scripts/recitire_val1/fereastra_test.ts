@@ -172,3 +172,19 @@ Deno.test('r2: starea ferestrei — lipsă → nouă; coruptă / formă invalid�
   assert('st' in await incarcaStare(fis))
   await Deno.remove(dir, { recursive: true })
 })
+
+Deno.test('r3: un timp lipsă / text / NaN / în ordine greșită în starea ferestrei → eroare, niciodată GATA', async () => {
+  const dir = await Deno.makeTempDir(); const fis = `${dir}/fereastra_stare.json`
+  const baza = { run_id: 'r', stare: 'OPEN', creat_la: 1000, joburi: [{ jobid: 1, jobname: 'x', active: true, command: 'c' }], nas_pornit: false,
+    t_joburi_oprite: 2000, t_stop: 3000, t_gol: 4000 }
+  await Deno.writeTextFile(fis, JSON.stringify(baza)); assert('st' in await incarcaStare(fis))
+  for (const k of ['t_joburi_oprite', 't_stop', 't_gol', 'creat_la', 'run_id']) {
+    const fara: Record<string, unknown> = { ...baza }; delete fara[k]
+    await Deno.writeTextFile(fis, JSON.stringify(fara)); assert('eroare' in await incarcaStare(fis), `lipsă ${k}`)
+    await Deno.writeTextFile(fis, JSON.stringify({ ...baza, [k]: k === 'run_id' ? '' : 'invalid' })); assert('eroare' in await incarcaStare(fis), `text ${k}`)
+  }
+  await Deno.writeTextFile(fis, JSON.stringify(baza).replace('"t_gol":4000', '"t_gol":1e999')); assert('eroare' in await incarcaStare(fis), 'infinit')
+  await Deno.writeTextFile(fis, JSON.stringify({ ...baza, t_gol: 2500 })); assert('eroare' in await incarcaStare(fis), 'ordine')
+  await Deno.writeTextFile(fis, JSON.stringify({ ...baza, t_stop: null, t_gol: null })); assert('st' in await incarcaStare(fis))
+  await Deno.remove(dir, { recursive: true })
+})
