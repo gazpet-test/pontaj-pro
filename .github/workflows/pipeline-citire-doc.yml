@@ -1,0 +1,65 @@
+name: Pipeline citire documente - documentatia la zi
+
+# Lista de cai se tine in sincron cu antetul documentului (completata de Ofertare 16.10: ingest + cai vecine, surse SEAP, worker NAS, recitire, cantitati).
+# Decizia Razvan 16.10.2026: orice PR care schimba pipeline-ul de citire a documentelor (OCR local, ingest, cantitati, citire test,
+# migrarile lor) trebuie sa actualizeze in ACELASI PR docs/PIPELINE_CITIRE_DOCUMENTE.md (si randul din „Istoric revizii”).
+on:
+  pull_request:
+    paths:
+      - 'scripts/ocr_local/**'
+      - 'supabase/functions/ofertare-ocr-*/**'
+      - 'supabase/functions/ofertare-ingest-doc/**'
+      - 'supabase/functions/ofertare-cantitati-extrage/**'
+      - 'supabase/functions/ofertare-citire-test/**'
+      - 'supabase/functions/ofertare-pdf-link/**'
+      - 'supabase/functions/ofertare-document-nou-citeste/**'
+      - 'supabase/functions/ofertare-plansa-citeste/**'
+      - 'supabase/functions/ofertare-word-text/**'
+      - 'supabase/functions/ofertare-seap-import/**'
+      - 'supabase/functions/ofertare-seap-veghe/**'
+      - 'supabase/functions/_shared/transcriereTabel.ts'
+      - 'supabase/functions/_shared/provenientaText.ts'
+      - 'supabase/functions/_shared/gardaIngest*.ts'
+      - 'supabase/functions/_shared/cantNumar.ts'
+      - 'supabase/functions/_shared/cantNormalizare.ts'
+      - 'supabase/functions/_shared/cantComparator.ts'
+      - 'supabase/functions/_shared/dn.ts'
+      - 'worker/ofertare/**'
+      - 'scripts/recitire_val1/**'
+      - 'supabase/migrations/*ofertare_ingest_garda*'
+      - 'supabase/migrations/*ofertare_ocr*'
+      - 'supabase/migrations/*ofertare_cant*'
+      - 'supabase/migrations/*ofertare_citire_umbra*'
+      - 'supabase/migrations/*ofertare_text_scrie*'
+      - 'supabase/revenire/*ofertare_ocr*'
+      - 'supabase/revenire/*ofertare_cant*'
+      - 'supabase/revenire/*ofertare_citire_umbra*'
+      - 'supabase/revenire/*ofertare_text_scrie*'
+
+permissions:
+  contents: read
+
+jobs:
+  documentatia-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: PR-ul actualizeaza docs/PIPELINE_CITIRE_DOCUMENTE.md
+        env:
+          BAZA: ${{ github.event.pull_request.base.sha }}
+          VARF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BAZA" "$VARF" > /tmp/schimbate.txt
+          echo "Fisiere schimbate in PR:"; cat /tmp/schimbate.txt
+          urmarite=$(grep -E '^(scripts/ocr_local/|scripts/recitire_val1/|worker/ofertare/|supabase/functions/ofertare-ocr-[^/]+/|supabase/functions/ofertare-(ingest-doc|cantitati-extrage|citire-test|pdf-link|document-nou-citeste|plansa-citeste|word-text|seap-import|seap-veghe)/|supabase/functions/_shared/(transcriereTabel|provenientaText|gardaIngest[A-Za-z]*|cantNumar|cantNormalizare|cantComparator|dn)\.ts$|supabase/(migrations|revenire)/[^/]*(ofertare_ocr|ofertare_cant|ofertare_citire_umbra|ofertare_text_scrie|ofertare_ingest_garda))' /tmp/schimbate.txt || true)
+          if [ -z "$urmarite" ]; then echo "Nicio cale urmarita schimbata."; exit 0; fi
+          if grep -qx 'docs/PIPELINE_CITIRE_DOCUMENTE.md' /tmp/schimbate.txt; then
+            echo "OK: documentul pipeline-ului e actualizat in acest PR."
+          else
+            echo "::error file=docs/PIPELINE_CITIRE_DOCUMENTE.md::PR-ul schimba pipeline-ul de citire (mai jos) fara sa actualizeze docs/PIPELINE_CITIRE_DOCUMENTE.md (sectiunea afectata + un rand in Istoric revizii)."
+            echo "$urmarite"
+            exit 1
+          fi
