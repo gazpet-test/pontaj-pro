@@ -202,9 +202,10 @@ Deno.test('r3: un timp lipsă / text / NaN / în ordine greșită în starea fer
 
 Deno.test('coada: se numără doar cererile spre funcțiile Ofertare (joburile altor module nu blochează fereastra)', async () => {
   const { SQL_COADA_OFERTARE } = await import('./fereastra.ts')
-  assert(/FROM net\.http_request_queue WHERE url ILIKE '%\/functions\/v1\/ofertare-%'/.test(SQL_COADA_OFERTARE))
-  // același tipar pe URL-uri reale: Ofertare prinse, celelalte nu
-  const prinde = (u: string) => /\/functions\/v1\/ofertare-/i.test(u)
-  assert(prinde('https://x.supabase.co/functions/v1/ofertare-ingest-doc') && prinde('https://x.supabase.co/functions/v1/ofertare-seap-veghe'))
-  assert(!prinde('https://x.supabase.co/functions/v1/redirect-mai-gov') && !prinde('https://x.supabase.co/functions/v1/rag-utilaj-x'))
+  // tiparele ILIKE din SQL, aplicate pe URL-uri reale: Ofertare + releul (seap-import pe Vercel) prinse, celelalte module nu
+  const tipare = [...SQL_COADA_OFERTARE.matchAll(/ILIKE '([^']+)'/g)].map((m) => new RegExp('^' + m[1].replace(/[.*+?^${}()|[\]\\/]/g, '\\$&').replace(/%/g, '.*') + '$', 'i'))
+  assertEquals(tipare.length, 2)
+  const prinde = (u: string) => tipare.some((t) => t.test(u))
+  for (const u of ['ofertare-ingest-doc', 'ofertare-seap-veghe', 'ofertare-radar-scan', 'vercel-relay']) assert(prinde(`https://x.supabase.co/functions/v1/${u}`), u)
+  for (const u of ['redirect-mai-gov', 'rag-utilaj-x', 'egress-detector']) assert(!prinde(`https://x.supabase.co/functions/v1/${u}`), u)
 })

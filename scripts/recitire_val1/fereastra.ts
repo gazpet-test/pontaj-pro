@@ -14,7 +14,9 @@ export const NAS = 'ofertare-worker'
 // rag_utilaj_*, egress_detector_5min …) țin coada GLOBALĂ mereu ocupată (16.10, fereastra_1: 1→3→2→2 în 15 min), iar ele nu ating
 // documentele Ofertare. Toți producătorii Ofertare din allowlist cheamă /functions/v1/ofertare-* (direct sau prin ofertare_ingest_tick /
 // ofertare_extragere_tick); lanțul veghe → import ocolește coada și e acoperit de T_gol + 15 min și de distanța de 30 min (§5).
-export const SQL_COADA_OFERTARE = `SELECT count(*) FROM net.http_request_queue WHERE url ILIKE '%/functions/v1/ofertare-%'`
+// + vercel-relay (Jakarinos, #746): releul pornește și seap-import / plansa-felii / pdf-sparge pe Vercel (api/seap-import.js scrie
+// documente Ofertare), deci TOATE cererile lui intră în golire, conservator (azi îl cheamă din cron doar joburile HR, preluate în 1–2 min).
+export const SQL_COADA_OFERTARE = `SELECT count(*) FROM net.http_request_queue WHERE url ILIKE '%/functions/v1/ofertare-%' OR url ILIKE '%/functions/v1/vercel-relay%'`
 const MIN = 60_000
 export const GOLIRE_MS = 15 * MIN, HEARTBEAT_OPRIT_MS = 10 * MIN, DUPA_VEGHE_MS = 30 * MIN
 
