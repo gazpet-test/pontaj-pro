@@ -4,6 +4,7 @@
 // Coduri: 0 = gata (deschisă și golită / închisă) · 5 = de așteptat / de reluat (mesajul spune ce) · 6 = pornește worker-ul NAS și reia ·
 //         2 = mediu / refuz. Mediu: RV1_PG_URL (conexiunea postgres, ca la psql). Worker-ul NAS îl oprește / pornește chat-ul pe server;
 //         scriptul doar verifică heartbeat-ul. Anunțul către utilizatori = decizia lui Răzvan, NU un pas al scriptului.
+import { caSupabase, categorieEroare, optiuniDeno, parseazaUrl } from './conexiune.ts'
 export const ALLOWLIST = ['ofertare_ingest_worker', 'ofertare_extragere_worker', 'ofertare_seap_veghe_0520', 'ofertare_seap_veghe_1250',
   'ofertare_radar_0500', 'ofertare_radar_1230', 'ofertare_raport_zilnic_0430', 'ofertare_alerte_0540', 'ofertare_alerte_1310',
   'ofertare_alerte_atentie_0630', 'ofertare_alerta_pagini_goale_0615', 'ofertare_clarificari_reminder_0600', 'ofertare_participari_sapt']
@@ -142,23 +143,6 @@ export async function incarcaStare(fis: string): Promise<{ st: StareF | null } |
   } catch { return { eroare: 'stare coruptă (JSON invalid)' } }
 }
 
-// conexiunea postgres: DOAR criptată și verificată (rustls) cu CA-ul Supabase („Supabase Root 2021 CA”, fișierul public din repo,
-// sha256 80:70:25:AD:…:CA:FA) — pooler-ul trimite certificatul intermediar. enforce: true = fără trecere pe necriptat (16.10: v0.19.3
-// fără CA a trecut tăcut pe „non-encrypted connection”). RV1_PG_CA poate indica alt fișier PEM.
-export async function caSupabase(): Promise<string> {
-  const cale = Deno.env.get('RV1_PG_CA') ?? new URL('./supabase-prod-ca-2021.crt', import.meta.url)
-  const pem = await Deno.readTextFile(cale)
-  if (!pem.includes('-----BEGIN CERTIFICATE-----')) throw new Error('CA-ul nu e un certificat PEM')
-  return pem
-}
-export function optiuniConexiune(url: string, caPem: string) {
-  const u = new URL(url)
-  if (!['postgres:', 'postgresql:'].includes(u.protocol)) throw new Error('RV1_PG_URL nu e un URL postgres')
-  if (/sslmode=(disable|allow|prefer)/i.test(u.search)) throw new Error('RV1_PG_URL cere sslmode slab; TLS e obligatoriu')
-  return { hostname: u.hostname, port: Number(u.port || 5432), user: decodeURIComponent(u.username), password: decodeURIComponent(u.password),
-    database: decodeURIComponent(u.pathname.slice(1)) || 'postgres', tls: { enabled: true, enforce: true, caCertificates: [caPem] } }
-}
-
 if (import.meta.main) {
   const [cmd, dir] = Deno.args
   if (!['deschide', 'inchide'].includes(cmd) || !dir) { console.error('utilizare: fereastra.ts deschide|inchide <dir>'); Deno.exit(2) }
@@ -166,9 +150,9 @@ if (import.meta.main) {
   await Deno.mkdir(dir, { recursive: true })               // directorul ferestrei (<dir_val>/fereastra_N) se creează aici
   const { Client } = await import('https://deno.land/x/postgres@v0.19.3/mod.ts')
   let c: InstanceType<typeof Client>
-  try { c = new Client(optiuniConexiune(url, await caSupabase())); await c.connect() } catch (e) {
-    // fără fallback necriptat: orice eșec (TLS, certificat, autentificare) → cod 2, fără să atingem nimic
-    console.error(`ATENȚIE [2] conexiunea postgres a eșuat (TLS obligatoriu, CA Supabase): ${String(e).replace(/:[^:@/]*@/, ':***@').slice(0, 300)}`)
+  try { c = new Client(optiuniDeno(parseazaUrl(url), (await caSupabase()).pem)); await c.connect() } catch (e) {
+    // fără fallback necriptat: orice eșec (URL, TLS, certificat, autentificare) → cod 2, fără să atingem nimic; mesaj FIX pe categorie
+    console.error(`ATENȚIE [2] conexiunea postgres a eșuat: ${categorieEroare(e)}`)
     Deno.exit(2)
   }
   const ms = (v: unknown) => (v ? new Date(v as string).getTime() : null)
