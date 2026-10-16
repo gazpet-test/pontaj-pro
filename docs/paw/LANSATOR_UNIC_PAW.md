@@ -47,7 +47,7 @@ Decizia lui Răzvan: A) v2 integral (necesită pașii lui de admin: folder Progr
 - Neimplementat (conștient): `--scrie` pentru jak (toate rulările sunt read-only; scrierea se cere separat), `gem` (nu există unealtă Gemini pe PC), Miloi (după diagnostic fără bypass), hash-chain pe jurnal.
 - Regula în CLAUDE.md pct. 11; rând `automatizari` „run_paw”; lansatoarele vechi rezervă până pe 14.10.
 
-## v4.3 — `gem` (Gemini 4 Argon), 16.10.2026 (r3 după Jakarinos r1 + r2)
+## v4.3 — `gem` (Gemini 4 Argon), 16.10.2026 (r4 după Jakarinos r1–r3)
 Baza: v4.2 instalată (sursa în laborator, `origin/ocrlab/banca-etichetare:docs/ocrlab/run_paw_v4/`; ps1 `18BF75BD…18F0`, cmd `028110D1…AE85`). Sursa v4.3: `docs/paw/run_paw_v43/` (`run_paw.ps1`, `run_paw.cmd`, `gemini_pw.py`, `.gitattributes` = fără conversie de capăt de linie, `teste/`).
 
 **Ce e.** `cine = gem` trimite brief-ul la Gemini 4 Argon prin același Edge CDP 9333 de pe serverul AI (doar loopback, profil separat, fără sync) în care Răzvan se loghează o dată pe gemini.google.com. Aprobat explicit de Răzvan pe 16.10.2026.
@@ -59,12 +59,19 @@ Baza: v4.2 instalată (sursa în laborator, `origin/ocrlab/banca-etichetare:docs
 **Apel.** `run_paw.cmd gem <brief.md> <iesire.log> [argon]` — `model` opțional (`""` sau `argon`, altceva = refuz). Timeout 1800 s, kill pe arbore.
 
 **Cum lucrează** (`gemini_pw.py`, lângă `cgpt_pw.py` în `bin`):
-1. Lansatorul: aceleași validări ca la `cop` (liste închise, căi canonicalizate, brief `.md` sub `paw-data\brief` / `erp_review`, ieșire doar sub `paw-data\out`, refuz UNC/ADS/reparse/traversal), apoi **marcajul de canal validat** (r3: `paw-data\gem_canal_validat` cu hash-ul `gemini_pw.py` instalat, altfel refuz — vezi testul de canal de la final), apoi **Job Object**, apoi **lock global** `paw-data\lock_gem`, apoi verificarea că 9333 ascultă doar pe 127.0.0.1.
+1. Lansatorul: aceleași validări ca la `cop` (liste închise, căi canonicalizate, brief `.md` sub `paw-data\brief` / `erp_review`, ieșire doar sub `paw-data\out`, refuz UNC/ADS/reparse/traversal), apoi **marcajul de canal validat** (r3: `paw-data\gem_canal_validat` cu hash-ul `gemini_pw.py` instalat, altfel refuz — vezi testul de canal de la final), apoi **Job Object**, apoi **lock global** `paw-data\lock_gem`, apoi **așteptarea driverelor Playwright orfane** (r4), apoi verificarea că 9333 ascultă doar pe 127.0.0.1.
 2. **Lock (r2, Jakarinos P1-a; la fel pentru `lock_cop_<conv>`)**: exclusivitatea = un handle deschis cu `FileShare.None`, ținut pe toată rularea. Fișierul de lock nu se mai șterge niciodată — nici la „recuperare”, nici la curățare —, deci nu mai există lock „expirat” de înlocuit și nicio ștergere făcută pe baza unei observații vechi. Dacă rularea care îl ținea a murit, sistemul i-a închis handle-ul și următoarea rulare îl deschide direct (recuperare atomică, făcută de kernel). Cât timp e ținut, alt proces nu-l poate deschide, rescrie, redenumi sau șterge; refuzul e `ocupat de alta rulare (lock_gem e tinut deschis)`. **Viața copiilor e legată de lansator** (r3, Jakarinos r2 P1), la `gem` și `cop`:
    - Înainte de lock și de orice copil, lansatorul intră el însuși într-un Job Object cu `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, verificat după setare. Copiii porniți după aceea sunt automat în job, fără fereastră între pornire și atribuire.
    - Handle-ul job-ului îl ține doar lansatorul și nu se moștenește. Când lansatorul moare (sau iese), sistemul omoară tot arborele.
-   - Handle-ul de lock e **moștenit** de copii (python `gemini_pw.py` / `cgpt_pw.py`). Lock-ul rămâne deci ținut cât trăiește oricare dintre ei: lansator mort → copii omorâți → abia apoi lock liber. Fără asta, o rulare nouă ar fi putut lua lock-ul cât copilul vechi încă scria în ciornă.
+   - Handle-ul de lock e **moștenit** de copii (python `gemini_pw.py` / `cgpt_pw.py`). Lock-ul rămâne deci ținut cât trăiește oricare dintre ei: lansator mort → copii omorâți → abia apoi lock liber. Fără asta, o rulare nouă ar fi putut lua lock-ul cât copilul vechi încă scria în ciornă. Excepție: driverul Playwright nu moștenește lock-ul (vezi mai jos).
    - La `jak` / `ollie` comportamentul rămâne cel din v4.2 (timeout = `taskkill /T`), ca un eventual server Ollama pornit de CLI să nu fie omorât la ieșire.
+   - **Driverul Playwright (r4, Jakarinos r3 P1, varianta A aleasă de Răzvan).** Python pornește driverul Node al Playwright (`node.exe <playwright>\driver\package\cli.js run-driver`) cu `close_fds`, deci driverul nu moștenește lock-ul. Job-ul omoară arborele fără o ordine garantată, așa că putea rămâne o fereastră: python mort → lock liber → driverul vechi încă trimite comenzi CDP. De aceea:
+     - după ce iau lock-ul și **înainte de orice contact CDP**, `gem` și `cop` așteaptă până nu mai există niciun driver Playwright **orfan**;
+     - după 30 s fără schimbare, rularea se oprește cu `PAW_EROARE <id> driver_ramas pid=…`, fără să atingă procesul;
+     - **orfan** = `node.exe` exact din pachetul `playwright` al Python-ului folosit (`C:\Program Files\Python313\Lib\site-packages\playwright\driver\node.exe`), cu cli.js-ul pachetului și `run-driver` în linia de comandă, al cărui părinte (python) sau bunic (lansatorul / consola) nu mai trăiește. Părinții se verifică și după data creării, ca un PID refolosit să nu fie luat drept părinte;
+     - driverele cu lanț întreg aparțin unor rulări vii (de ex. `cop` pe altă conversație, sau un apel manual) și nici nu blochează, nici nu sunt atinse;
+     - `PLAYWRIGHT_NODEJS_PATH` e scos din mediul copiilor, ca driverul să fie mereu cel din pachet;
+     - la ieșirea normală, lock-ul se eliberează abia când în job a rămas doar lansatorul (`ActiveProcesses = 1`, cel mult 15 s de așteptare).
 
    Calea lock-ului trece prin aceleași verificări (fără reparse, sub `paw-data`, calea finală a handle-ului verificată).
 3. `gemini_pw.py trimite <brief> <secunde>`: atașare la `http://127.0.0.1:9333`; exact un tab `https://gemini.google.com` (niciunul → `fara_tab_gemini`, mai multe → `mai_multe_taburi_gemini`); modelul afișat (`[data-test-id="bard-mode-menu-button"]`) trebuie să conțină „Argon” (altfel `model_gresit`); refuz dacă Gemini încă scrie (`gemini_ocupat`); refuz dacă ciorna are deja atașamente (`ciorna_cu_atasamente`); brief-ul intră în editor (ciorna veche se înlocuiește). **Înainte de Enter (r2, P1-b)**: textul din ciornă trebuie să fie *identic* cu brief-ul după o normalizare explicită (CRLF/CR → LF, NBSP → spațiu, caractere de lățime zero scoase, orice șir de spații albe — inclusiv linii goale — → un spațiu, capete tăiate), altfel `text_neintrat`; atașamentele se verifică din nou. Răspunsul nou (`message-content`) e gata după 5 citiri identice la 2 s și fără buton de oprire; altfel `timeout_raspuns` (parțialul ajunge în ieșire).
@@ -76,8 +83,14 @@ Baza: v4.2 instalată (sursa în laborator, `origin/ocrlab/banca-etichetare:docs
 
 **Teste (fără admin, fără browser).** 16.10.2026 pe Gazpet-Claude:
 - `python -I docs\paw\run_paw_v43\teste\test_gemini_pw.py` — 32/32 OK. Obiecte false, fără Playwright: tab, model, așteptare stabilă, brief (inclusiv limita înainte de strip), ciornă (identică după normalizare, trunchiată, trunchiată > 80%, aceeași lungime cu alt conținut, text în plus, goală, cu atașamente), comenzi, sursa fără capabilități în plus și Enter doar după verificarea ciornei.
-- `python -I docs\paw\run_paw_v43\teste\test_run_paw.py` — 22/22 OK. Lansatorul e copiat într-un director temporar, cu `$DATA` rescris spre un paw-data temporar și cu `gemini_pw.py` / `cgpt_pw.py` false; paw-data-ul real, Gemini și ChatGPT nu sunt atinse. Acoperă:
+- `python -I docs\paw\run_paw_v43\teste\test_run_paw.py` — 29/29 OK. Lansatorul e copiat într-un director temporar, cu `$DATA` rescris spre un paw-data temporar și cu `gemini_pw.py` / `cgpt_pw.py` false; paw-data-ul real, Gemini și ChatGPT nu sunt atinse. Acoperă:
   - **r3: lansatorul omorât în timpul rulării** (gem și cop; `TerminateProcess` doar pe PowerShell, nu pe arbore): copilul moare, iar în momentul în care lock-ul devine liber copilul e deja mort. Testul pică pe r2 („lock-ul s-a eliberat cât copilul încă rula”);
+  - **r4: driver Playwright rămas** (fals: același exe, `cli.js run-driver`, recunoscut exact ca unul real), pentru gem și cop:
+    - un driver orfan care trăiește → rularea nouă ia lock-ul, dar **nu atinge CDP** cât trăiește driverul; după moartea lui rulează până la `PAW_GATA`;
+    - dacă driverul rămâne peste timeout → `PAW_EROARE <id> driver_ramas pid=<pid>`, fără niciun contact CDP, iar driverul nu e atins;
+    - un driver cu lanț întreg (rulare vie) nu blochează și nu e atins;
+    - **observator concurent** (eșantion la ~10 ms): A rulează python → driver (`close_fds`), A e omorât, B pornește imediat; B nu atinge CDP-ul cât python-ul sau driverul lui A trăiesc;
+    - pe o mutație fără așteptare (echivalentul r3), 4 din 4 teste de driver pică;
   - **r3: marcajul de canal**: lipsă, alt hash, gol / fără hash / text liber, prefix de hash → refuz la validare, fără rulare;
   - refuzuri: cine, model, brief în afară, traversal, UNC, ADS, `.txt`, ieșire în afară, lipsă `gemini_pw.py`;
   - lock ținut de alt proces viu (gem și cop): refuz, iar lock-ul celuilalt rămâne neatins;
@@ -102,7 +115,7 @@ Baza: v4.2 instalată (sursa în laborator, `origin/ocrlab/banca-etichetare:docs
 
 | fișier | SHA-256 |
 |---|---|
-| `run_paw.ps1` | `CEA0B5805DEB0FDEF6F1415B4E70C872067831744D71300D0E9D2651799C91B4` |
+| `run_paw.ps1` | `5FBEEF587B110EE393B160485AD531F2FC48252B4B0ED653024BC81DFDB90FA2` |
 | `run_paw.cmd` | `080ED5A3D79EC274A9988B7BEDE2EDA2DAD1A536F2239149A3F5EBA6C9544C63` |
 | `gemini_pw.py` | `85E6E43874EF1F133CB3A95EB908AEE4E7213335A4B051EA46AA3CBE09107176` |
 
@@ -110,7 +123,7 @@ Pasul 1 — sursa și hash-urile (PowerShell normal; merge și ca admin dacă `g
 ```powershell
 $ErrorActionPreference = 'Stop'
 $repo = 'C:\Users\Gazpet-Ai\gazpet-erp'; $src = 'C:\Users\Public\livrare\run_paw_v43'
-$nou  = @{ 'run_paw.ps1' = 'CEA0B5805DEB0FDEF6F1415B4E70C872067831744D71300D0E9D2651799C91B4'; 'run_paw.cmd' = '080ED5A3D79EC274A9988B7BEDE2EDA2DAD1A536F2239149A3F5EBA6C9544C63'; 'gemini_pw.py' = '85E6E43874EF1F133CB3A95EB908AEE4E7213335A4B051EA46AA3CBE09107176' }
+$nou  = @{ 'run_paw.ps1' = '5FBEEF587B110EE393B160485AD531F2FC48252B4B0ED653024BC81DFDB90FA2'; 'run_paw.cmd' = '080ED5A3D79EC274A9988B7BEDE2EDA2DAD1A536F2239149A3F5EBA6C9544C63'; 'gemini_pw.py' = '85E6E43874EF1F133CB3A95EB908AEE4E7213335A4B051EA46AA3CBE09107176' }
 git -C $repo fetch origin claude/run-paw-gem; if ($LASTEXITCODE -ne 0) { throw 'git fetch a esuat' }
 if (Test-Path -LiteralPath $src) { Remove-Item -LiteralPath $src -Recurse -Force }
 New-Item -ItemType Directory -Path $src | Out-Null
@@ -121,14 +134,15 @@ foreach ($n in $nou.Keys) { $h = (Get-FileHash -Algorithm SHA256 -LiteralPath (J
 'SURSA OK'
 ```
 
-Pasul 2 — instalarea (PowerShell **ca Administrator**, când nicio sesiune nu folosește Paw). Oprește la orice eroare.
+Pasul 2 — instalarea (PowerShell **ca Administrator**). Oprește la orice eroare.
+- **Precondiție operațională (r4, Jakarinos r3 P2b):** pe toată durata instalării **toate lansările Paw sunt oprite**. Răzvan anunță în chat „instalez run_paw, nicio sesiune nu pornește run_paw / cgpt_pw / gemini_pw până confirm”. Chat-ul transmite asta sesiunilor de programare și pune pe pauză rutinele care pornesc Paw, iar Răzvan confirmă în chat după `INSTALAT v4.3 OK`. Verificările de mai jos sunt doar plasă de siguranță: între ultima verificare și copiere tot poate porni o rulare, de aceea oprirea lansărilor e obligatorie, nu opțională.
 - **Refuză dacă există rulări v4.2 în curs** (r3, Jakarinos r2 P2a): procese cu `run_paw.ps1` / `run_paw.cmd` / `cgpt_pw.py` / `gemini_pw.py` în linia de comandă (Codex sau Ollama pornite de lansator trăiesc doar sub un astfel de proces) sau lock-uri `lock_cop_*` mai noi de 35 de minute (v4.2 le șterge la final; un lock v4.2 rămas l-ar ignora v4.3 și ar rezulta două rulări pe aceeași conversație). Verificarea se face o dată înainte de backup și încă o dată chiar înainte de copiere.
 - Backup-ul e verificat pe hash înainte de a atinge `bin`.
 - La orice eroare sau hash GREȘIT după copiere, restaurează automat v4.2 din backup și verifică restaurarea.
 ```powershell
 $ErrorActionPreference = 'Stop'
 $bin = 'C:\ProgramData\Gazpet\Paw\bin'; $f = 'C:\Users\Public\livrare\run_paw_v43\docs\paw\run_paw_v43'
-$nou = @{ 'run_paw.ps1' = 'CEA0B5805DEB0FDEF6F1415B4E70C872067831744D71300D0E9D2651799C91B4'; 'run_paw.cmd' = '080ED5A3D79EC274A9988B7BEDE2EDA2DAD1A536F2239149A3F5EBA6C9544C63'; 'gemini_pw.py' = '85E6E43874EF1F133CB3A95EB908AEE4E7213335A4B051EA46AA3CBE09107176' }
+$nou = @{ 'run_paw.ps1' = '5FBEEF587B110EE393B160485AD531F2FC48252B4B0ED653024BC81DFDB90FA2'; 'run_paw.cmd' = '080ED5A3D79EC274A9988B7BEDE2EDA2DAD1A536F2239149A3F5EBA6C9544C63'; 'gemini_pw.py' = '85E6E43874EF1F133CB3A95EB908AEE4E7213335A4B051EA46AA3CBE09107176' }
 $v42 = @{ 'run_paw.ps1' = '18BF75BD0938102B772537FC215D55993DF1604F372569ED25A54A4BBFC818F0'; 'run_paw.cmd' = '028110D18B61EFEBDDB1702CFD85161FC4ABE347FA54B82ABE79A3DE3610AE85' }
 $data = 'C:\Users\Public\paw-data'
 function HashF([string]$p) { if (Test-Path -LiteralPath $p -PathType Leaf) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash } else { 'LIPSA' } }
@@ -147,7 +161,7 @@ New-Item -ItemType Directory -Path $vechi | Out-Null
 foreach ($n in $v42.Keys) { Copy-Item -LiteralPath (Join-Path $bin $n) -Destination (Join-Path $vechi $n) }
 foreach ($n in $v42.Keys) { if ((HashF (Join-Path $vechi $n)) -ne $v42[$n]) { throw "backup neverificat ($n) - ma opresc, bin neatins" } }
 "BACKUP OK: $vechi"
-RulariActive   # a doua verificare, chiar inainte de copiere (fereastra ramasa: milisecunde)
+RulariActive   # a doua verificare, chiar inainte de copiere - plasa de siguranta, nu inlocuieste oprirea lansarilor
 try {
   foreach ($n in $nou.Keys) { Copy-Item -LiteralPath (Join-Path $f $n) -Destination (Join-Path $bin $n) -Force }
   foreach ($n in $nou.Keys) { $h = HashF (Join-Path $bin $n); if ($h -ne $nou[$n]) { throw "dupa copiere: hash GRESIT la $n ($h)" } }

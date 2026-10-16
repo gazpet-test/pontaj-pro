@@ -21,6 +21,11 @@
 # v4.3 r3 (dupa Jakarinos r2): la gem/cop lansatorul intra intr-un Job Object KILL_ON_JOB_CLOSE inainte de orice copil, iar
 #   handle-ul de lock e mostenit de copii: lansatorul moare -> copiii mor -> abia apoi lock-ul e liber. gem refuza fara
 #   paw-data\gem_canal_validat (scris doar dupa testul de canal, legat de hash-ul gemini_pw.py).
+# v4.3 r4 (dupa Jakarinos r3, varianta A aleasa de Razvan): driverul Node al Playwright nu mosteneste lock-ul si Job-ul omoara
+#   arborele fara ordine garantata. De aceea gem/cop, dupa ce iau lock-ul si INAINTE de orice contact CDP, asteapta sa nu mai
+#   existe niciun driver Playwright ORFAN (node.exe din pachetul playwright al acestui Python, cu cli.js run-driver, al carui
+#   parinte python sau lansator nu mai traieste); timeout -> PAW_EROARE driver_ramas. Driverele rularilor vii (alt lock) nu se
+#   ating si nu blocheaza. La iesirea normala, lock-ul se elibereaza dupa ce job-ul ramane doar cu lansatorul (ActiveProcesses=1).
 # ASCII only. Compatibil Windows PowerShell 5.1.
 param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "", [string]$Imagini = "")
 $ErrorActionPreference = "Stop"
@@ -48,6 +53,10 @@ $TOOLS = @{
 $CODEX_JS = "C:\Users\Gazpet-Ai\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js"
 $CGPT = Join-Path $PSScriptRoot "cgpt_pw.py"
 $GEMPW = Join-Path $PSScriptRoot "gemini_pw.py"
+# r4 (Jakarinos r3 P1, varianta A): driverul Node al Playwright din Python-ul folosit de gem/cop (node.exe <driver>\package\cli.js run-driver)
+$PW_DRIVER_EXE = Join-Path (Split-Path $TOOLS.gem.exe) "Lib\site-packages\playwright\driver\node.exe"
+$PW_DRIVER_CLI = Join-Path (Split-Path $PW_DRIVER_EXE) "package\cli.js"
+$DRIVER_ASTEPTARE = 30   # secunde de asteptat un driver ramas de la o rulare anterioara, apoi PAW_EROARE driver_ramas
 
 function Jurnal([string]$stare, [string]$exitcod) {
   $dur = [int]((Get-Date) - $T0).TotalSeconds
@@ -106,6 +115,53 @@ function LeagaCopiiiDeLansator() {
   # lansatorul (nemostenibil); cand lansatorul moare (sau iese), sistemul inchide handle-ul si omoara tot arborele.
   [void][PawV43.Job]::LeagaDeLansator()
 }
+function DriverOrfani() {
+  # r4: driverele Playwright (node.exe din pachetul playwright al Python-ului gem/cop, linie de comanda cu cli.js-ul pachetului si
+  # "run-driver") al caror lant parinte (python) -> bunic (lansatorul/consola) nu mai e intreg. Un driver cu lantul intreg apartine
+  # unei rulari VII (alt lock, ex. cop pe alta conversatie, sau un apel manual) si se ignora. Nu se omoara nimic - doar se citeste.
+  # Parintii se verifica si pe timpul crearii (un PID refolosit, mai nou decat copilul, nu conteaza ca parinte).
+  $toate = @(Get-CimInstance Win32_Process)
+  $dupaPid = @{}; foreach ($x in $toate) { $dupaPid[[int]$x.ProcessId] = $x }
+  $rez = @()
+  foreach ($d in $toate) {
+    if (-not $d.ExecutablePath -or -not $d.CommandLine) { continue }
+    if ($d.ExecutablePath -ine $PW_DRIVER_EXE) { continue }
+    if ($d.CommandLine.IndexOf($PW_DRIVER_CLI, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $d.CommandLine -notmatch '(^|\s)run-driver(\s|$)') { continue }
+    $intreg = $false
+    $p = $dupaPid[[int]$d.ParentProcessId]
+    if ($p -and $p.CreationDate -le $d.CreationDate) {
+      $l = $dupaPid[[int]$p.ParentProcessId]
+      if ($l -and $l.CreationDate -le $p.CreationDate) { $intreg = $true }
+    }
+    if (-not $intreg) { $rez += [int]$d.ProcessId }
+  }
+  return ,$rez
+}
+function AsteaptaFaraDriverRamas() {
+  # r4 (Jakarinos r3 P1, varianta A): dupa lock, INAINTE de orice contact CDP. Un driver orfan e de regula in curs de oprire de catre
+  # Job-ul rularii moarte (milisecunde); daca ramane peste $DRIVER_ASTEPTARE s (ex. rulare v4.2 fara job), refuz fara sa-l ating.
+  $t = Get-Date
+  while ($true) {
+    $o = DriverOrfani
+    if ($o.Count -eq 0) { return }
+    if (((Get-Date) - $t).TotalSeconds -ge $DRIVER_ASTEPTARE) {
+      Eroare ("driver_ramas pid=" + ($o -join ",") + " (driver Playwright orfan de la o rulare anterioara; inchide-l si reia)")
+    }
+    Start-Sleep -Milliseconds 300
+  }
+}
+function AsteaptaJobGol([int]$sec) {
+  # r4 (optional cerut de Jakarinos): la iesirea normala, lock-ul se elibereaza abia cand in job a ramas doar lansatorul
+  if ([PawV43.Job]::Active() -lt 0) { return }
+  $t = Get-Date
+  while ([PawV43.Job]::Active() -gt 1) {
+    if (((Get-Date) - $t).TotalSeconds -ge $sec) {
+      try { Add-Content -LiteralPath $JURNAL -Value ("{0} | job cu {1} procese active la eliberarea lock-ului" -f $RUNID, [PawV43.Job]::Active()) -Encoding UTF8 } catch {}
+      return
+    }
+    Start-Sleep -Milliseconds 200
+  }
+}
 function VerificaCanalGem() {
   # r3 (Jakarinos r2 P2b): gem refuza pana exista paw-data\gem_canal_validat, scris DOAR de Razvan dupa testul de canal din
   # LANSATOR_UNIC_PAW.md (atasament detectat + refuz ciorna_cu_atasamente fara Enter + raspuns PAW_OK). Prima linie:
@@ -131,6 +187,7 @@ function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd
   $psi.StandardOutputEncoding = [Text.Encoding]::UTF8; $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
   if ($env) { foreach ($k in $env.Keys) { $psi.EnvironmentVariables[$k] = [string]$env[$k] } }
   $psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"; $psi.EnvironmentVariables["PYTHONUTF8"] = "1"
+  [void]$psi.EnvironmentVariables.Remove("PLAYWRIGHT_NODEJS_PATH")   # r4: driverul ramane mereu node.exe-ul din pachet (identificabil)
   $p = [System.Diagnostics.Process]::Start($psi)
   if ($stdinText -ne $null) { $p.StandardInput.Write($stdinText) }
   $p.StandardInput.Close()
@@ -189,6 +246,16 @@ public struct IOC { public ulong a; public ulong b; public ulong c; public ulong
 [StructLayout(LayoutKind.Sequential)]
 public struct EXT { public BASIC B; public IOC I; public UIntPtr m1; public UIntPtr m2; public UIntPtr m3; public UIntPtr m4; }
 static IntPtr job = IntPtr.Zero;
+[StructLayout(LayoutKind.Sequential)]
+public struct ACC { public long u; public long k; public long pu; public long pk; public uint pf; public uint total; public uint active; public uint term; }
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool QueryInformationJobObject(IntPtr job, int cls, ref ACC info, int len, IntPtr ret);
+public static int Active() {   // procese active in job (lansatorul inclus); -1 = fara job
+  if (job == IntPtr.Zero) return -1;
+  ACC a = new ACC();
+  if (!QueryInformationJobObject(job, 1, ref a, Marshal.SizeOf(typeof(ACC)), IntPtr.Zero)) return -1;
+  return (int)a.active;
+}
 public static IntPtr LeagaDeLansator() {
   if (job != IntPtr.Zero) return job;
   IntPtr j = CreateJobObjectW(IntPtr.Zero, null);   // SA null = handle nemostenibil
@@ -394,6 +461,7 @@ try {
       # v4.3 r2: lock per conversatie = handle exclusiv pe toata rularea (v4.2 stergea dupa cale lock-ul altei rulari)
       LeagaCopiiiDeLansator   # r3: inainte de lock si de orice copil cgpt_pw.py
       LuaLock (Join-Path $DATA ("lock_cop_" + $Model))
+      AsteaptaFaraDriverRamas   # r4: inainte de orice contact CDP (stare/trimite)
       $envc = @{ CGPT_TINTA = $Model }
       $st = Ruleaza $T.exe @($CGPT, "stare") "" $DATA 60 $envc
       $stareTxt = $st.out
@@ -410,6 +478,7 @@ try {
       # v4.3: lock global INAINTE de orice atingere a browserului; apoi CDP doar pe loopback; apoi gemini_pw.py (brief = cale validata)
       LeagaCopiiiDeLansator   # r3: inainte de lock si de orice copil gemini_pw.py
       LuaLock (Join-Path $DATA "lock_gem")
+      AsteaptaFaraDriverRamas   # r4: inainte de orice contact CDP (gemini_pw.py)
       $ns = (& netstat.exe -ano | Select-String ":9333 " | Select-String "LISTENING")
       if (-not $ns) { throw "Edge CDP 9333 nu asculta" }
       if ($ns | Where-Object { $_ -notmatch "127\.0\.0\.1:9333" }) { throw "CDP 9333 nu e doar pe loopback - refuz" }
@@ -420,7 +489,7 @@ try {
       }
     }
   }
-  EliberezLock
+  AsteaptaJobGol 15; EliberezLock   # r4: lock liber abia cand in job a ramas doar lansatorul
   $ImgFolosite = [bool]$script:ImgDirCreat
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8
@@ -436,7 +505,7 @@ try {
   Write-Host ("PAW_GATA " + $RUNID + " " + $dur + "s")
   exit 0
 } catch {
-  EliberezLock
+  AsteaptaJobGol 15; EliberezLock
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   Eroare ("rulare: " + $_.Exception.Message)
 }

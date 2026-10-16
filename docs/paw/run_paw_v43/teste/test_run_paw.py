@@ -10,10 +10,33 @@ AICI = os.path.dirname(os.path.abspath(__file__))
 SURSA = os.path.join(AICI, "..", "run_paw.ps1")
 DATA_REAL = r'$DATA = "C:\Users\Public\paw-data"'
 
-STUB = r'''import sys, os, time
+DRIVER_EXE_REAL = 'Join-Path (Split-Path $TOOLS.gem.exe) "Lib\\site-packages\\playwright\\driver\\node.exe"'
+DRIVER_CLI_REAL = '$PW_DRIVER_CLI = Join-Path (Split-Path $PW_DRIVER_EXE) "package\\cli.js"'
+DRIVER_ASTEPTARE_REAL = "$DRIVER_ASTEPTARE = 30"
+DRIVER_ASTEPTARE_TEST = 8
+
+# driver Playwright FALS: python.exe (acelasi exe ca stub-urile) cu "<FAKE_CLI> run-driver" in linia de comanda; harness-ul
+# rescrie $PW_DRIVER_EXE / $PW_DRIVER_CLI spre el, deci lansatorul il recunoaste exact ca pe un driver real
+STUB_COMUN = r'''import sys, os, time, subprocess
+FAKE_CLI = r"@FAKE_CLI@"
+def cdp_atins():                                           # orice contact CDP al unui canal real ar incepe aici
+    open("cdp_atins_%d" % os.getpid(), "w").close()
+def porneste_driver():
+    d = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", FAKE_CLI, "run-driver"], close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    open("driver_%d" % d.pid, "w").close()
+'''
+
+STUB = STUB_COMUN + r'''
 if len(sys.argv) < 3 or sys.argv[1] != "trimite":
     print("GEM_EROARE comanda_necunoscuta stub"); sys.exit(3)
+cdp_atins()
 t = open(sys.argv[2], encoding="utf-8-sig").read()
+if "STUB_DRIVER" in t:
+    porneste_driver()
+    open("stub_pornit_%d" % os.getpid(), "w").close()
+    time.sleep(120)
+    print("NU TREBUIA SA AJUNG AICI"); sys.exit(0)
 if "STUB_AGATAT" in t:
     open("stub_pornit_%d" % os.getpid(), "w").close()
     time.sleep(120)                                       # "ciorna" la jumatate: lansatorul e omorat intre timp
@@ -27,11 +50,17 @@ if "STUB_OK" in t:
 print("GEM_EROARE fara_tab_gemini simulat"); sys.exit(3)
 '''
 
-STUB_COP = r'''import sys, os, time
+STUB_COP = STUB_COMUN + r'''
 if len(sys.argv) > 1 and sys.argv[1] == "stare":
+    cdp_atins()
     print("URL: stub | genereaza: False | editor vizibil: 1"); sys.exit(0)
 if len(sys.argv) > 2 and sys.argv[1] == "trimite":
+    cdp_atins()
     t = open(sys.argv[2], encoding="utf-8-sig").read()
+    if "STUB_DRIVER" in t:
+        porneste_driver()
+        open("stub_pornit_%d" % os.getpid(), "w").close()
+        time.sleep(120)
     if "STUB_AGATAT" in t:
         open("stub_pornit_%d" % os.getpid(), "w").close()
         time.sleep(120)
@@ -71,6 +100,12 @@ class Lansator(unittest.TestCase):
             src = f.read()
         assert src.count(DATA_REAL) == 1, "linia $DATA nu a fost gasita exact o data"
         src = src.replace(DATA_REAL, '$DATA = "' + cls.data + '"')
+        cls.fake_cli = os.path.join(cls.tmp, "fake_playwright", "driver", "package", "cli.js")
+        for a, b in ((DRIVER_EXE_REAL, '"' + os.path.realpath(sys.executable) + '"'),
+                     (DRIVER_CLI_REAL, '$PW_DRIVER_CLI = "' + cls.fake_cli + '"'),
+                     (DRIVER_ASTEPTARE_REAL, "$DRIVER_ASTEPTARE = %d" % DRIVER_ASTEPTARE_TEST)):
+            assert src.count(a) == 1, "linia de rescris lipseste: " + a
+            src = src.replace(a, b)
         cod = [l for l in src.splitlines() if not l.lstrip().startswith("#")]
         assert not any("paw-data\"" in l and cls.data not in l for l in cod), "a ramas o cale spre paw-data-ul real"
         cls.ps1 = os.path.join(cls.bin, "run_paw.ps1")
@@ -78,14 +113,15 @@ class Lansator(unittest.TestCase):
             f.write(src)
         cls.stub = os.path.join(cls.bin, "gemini_pw.py")
         with open(cls.stub, "w", encoding="ascii") as f:
-            f.write(STUB)
+            f.write(STUB.replace("@FAKE_CLI@", cls.fake_cli))
         cls.brief_ok = cls.scrie(os.path.join(cls.data, "brief"), "ok.md", "Intrebare de arhitectura (test).")
         cls.brief_stub_ok = cls.scrie(os.path.join(cls.data, "brief"), "stub_ok.md", "STUB_OK")
         cls.brief_lent = cls.scrie(os.path.join(cls.data, "brief"), "stub_lent.md", "STUB_LENT")
         cls.brief_agatat = cls.scrie(os.path.join(cls.data, "brief"), "stub_agatat.md", "STUB_AGATAT")
         cls.brief_txt = cls.scrie(os.path.join(cls.data, "brief"), "b.txt", "x")
         with open(os.path.join(cls.bin, "cgpt_pw.py"), "w", encoding="ascii") as f:
-            f.write(STUB_COP)
+            f.write(STUB_COP.replace("@FAKE_CLI@", cls.fake_cli))
+        cls.brief_driver = cls.scrie(os.path.join(cls.data, "brief"), "stub_driver.md", "STUB_DRIVER")
         # marcajul de canal validat, legat de hash-ul gemini_pw.py din bin-ul temporar (stub-ul)
         cls.marcaj = os.path.join(cls.data, "gem_canal_validat")
         cls.marcaj_ok = "CANAL_VALIDAT %s 2026-10-16T12:00:00 test\n" % sha(cls.stub)
@@ -339,6 +375,187 @@ class Lansator(unittest.TestCase):
 
     def test_cop_lansator_omorat_copilul_moare_inainte_de_lock(self):
         self.omoara_lansatorul("cop", "6abc000f", "lock_cop_6abc000f")
+
+    # --- r4 (Jakarinos r3, varianta A): niciun contact CDP cat traieste un driver Playwright ramas de la o rulare anterioara ---
+    def curata_marcaje(self):
+        for x in os.listdir(self.data):
+            if x.startswith(("stub_pornit_", "cdp_atins_", "driver_")):
+                os.remove(os.path.join(self.data, x))
+
+    def cdp_atins(self):
+        return [x for x in os.listdir(self.data) if x.startswith("cdp_atins_")]
+
+    def driver_orfan(self, secunde=120):
+        # driver ramas: parintele (o rulare "moarta") a iesit deja -> lant rupt, exact ca dupa moartea lansatorului + python
+        cod = ("import subprocess, sys; d = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(%d)', r'%s', 'run-driver'], "
+               "close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print(d.pid)") % (secunde, self.fake_cli)
+        r = subprocess.run([sys.executable, "-c", cod], capture_output=True, timeout=30)
+        pid = int(r.stdout.decode().strip())
+        self.assertTrue(viu(pid))
+        return pid
+
+    def omoara(self, pid):
+        if viu(pid):
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        t0 = time.time()
+        while viu(pid) and time.time() - t0 < 10:
+            time.sleep(0.05)
+
+    def porneste(self, cine, brief, model=None):
+        argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.ps1, "-Cine", cine, "-Brief", brief, "-Out", self.out()]
+        if model:
+            argv += ["-Model", model]
+        return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def termina(self, p):
+        so, se = p.communicate(timeout=180)
+        linii = [l for l in so.decode("utf-8", "replace").splitlines() if l.startswith("PAW_")]
+        return p.returncode, (linii[-1] if linii else ""), so.decode("utf-8", "replace") + se.decode("utf-8", "replace")
+
+    def asteapta_lock_tinut(self, lock, p, limita=60):
+        # rularea noua a luat lock-ul (deci e DUPA LuaLock, in asteptarea driverului) - sonda scurta, doar pana il vedem tinut
+        t0 = time.time()
+        while time.time() - t0 < limita and p.poll() is None:
+            try:
+                open(lock, "r+b").close()
+            except PermissionError:
+                return True
+            except FileNotFoundError:
+                pass                                          # inca necreat (prima rulare pe acest lock)
+            time.sleep(0.1)
+        return False
+
+    def driver_ramas_asteptat_apoi_ruleaza(self, cine, model, lock_nume):
+        self.curata_marcaje()
+        d = self.driver_orfan()
+        p = None
+        try:
+            p = self.porneste(cine, self.brief_stub_ok, model)
+            if not self.asteapta_lock_tinut(os.path.join(self.data, lock_nume), p):
+                rc, linie, txt = self.termina(p)
+                if "nu asculta" in linie or "loopback" in linie:
+                    self.skipTest("CDP 9333 indisponibil/neloopback")
+                self.fail("rularea nu a ajuns la lock: " + txt)
+            t0 = time.time()
+            while time.time() - t0 < 3:                       # driverul vechi traieste: niciun contact CDP
+                self.assertEqual(self.cdp_atins(), [], "contact CDP cat driverul vechi traia")
+                self.assertTrue(viu(d))
+                time.sleep(0.05)
+            self.omoara(d)
+            t_mort = time.time()
+            rc, linie, txt = self.termina(p)
+            self.assertEqual(rc, 0, txt)
+            self.assertTrue(linie.startswith("PAW_GATA "), txt)
+            atinse = self.cdp_atins()
+            self.assertTrue(atinse, "rularea nu a ajuns deloc la CDP dupa moartea driverului")
+            self.assertGreaterEqual(os.path.getmtime(os.path.join(self.data, atinse[0])), t_mort - 0.5)
+        finally:
+            self.omoara(d)
+            if p is not None and p.poll() is None:            # nu lasam o rulare in fundal peste testele urmatoare
+                p.kill(); p.wait(timeout=30)
+
+    def test_gem_driver_ramas_asteptat_apoi_ruleaza(self):
+        self.driver_ramas_asteptat_apoi_ruleaza("gem", None, "lock_gem")
+
+    def test_cop_driver_ramas_asteptat_apoi_ruleaza(self):
+        self.driver_ramas_asteptat_apoi_ruleaza("cop", "6abc000f", "lock_cop_6abc000f")
+
+    def driver_ramas_timeout(self, cine, model):
+        self.curata_marcaje()
+        d = self.driver_orfan()
+        try:
+            rc, linie, so = self.run_paw(cine, self.brief_stub_ok, self.out(), model=model)
+            if "nu asculta" in linie or "loopback" in linie:
+                self.skipTest("CDP 9333 indisponibil/neloopback")
+            self.assertEqual(rc, 2, so)
+            self.assertRegex(linie, r"^PAW_EROARE \S+ driver_ramas pid=%d " % d)
+            self.assertEqual(self.cdp_atins(), [], "contact CDP desi driverul vechi traia")
+            self.assertTrue(viu(d), "lansatorul a atins (omorat) un proces strain")
+        finally:
+            self.omoara(d)
+
+    def test_gem_driver_ramas_timeout_driver_ramas(self):
+        self.driver_ramas_timeout("gem", None)
+
+    def test_cop_driver_ramas_timeout_driver_ramas(self):
+        self.driver_ramas_timeout("cop", "6abc000f")
+
+    def test_driver_al_unei_rulari_vii_nu_blocheaza(self):
+        # driver cu lant intreg (parinte viu, bunic viu) = alta rulare vie (ex. cop pe alta conversatie): ignorat, neatins
+        self.curata_marcaje()
+        cod = ("import subprocess, sys, time; d = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)', r'%s', 'run-driver'], "
+               "close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+               "open(r'%s', 'w').write(str(d.pid)); time.sleep(60)") % (self.fake_cli, os.path.join(self.tmp, "viu_pid"))
+        parinte = subprocess.Popen([sys.executable, "-c", cod])
+        try:
+            t0 = time.time()
+            while not os.path.exists(os.path.join(self.tmp, "viu_pid")) and time.time() - t0 < 20:
+                time.sleep(0.05)
+            time.sleep(0.2)
+            with open(os.path.join(self.tmp, "viu_pid")) as f:
+                d = int(f.read())
+            t0 = time.time()
+            rc, linie, so = self.run_paw("gem", self.brief_stub_ok, self.out())
+            if "nu asculta" in linie or "loopback" in linie:
+                self.skipTest("CDP 9333 indisponibil/neloopback")
+            self.assertEqual(rc, 0, so)
+            self.assertLess(time.time() - t0, DRIVER_ASTEPTARE_TEST, "rularea a asteptat dupa driverul unei rulari vii")
+            self.assertTrue(viu(d))
+        finally:
+            parinte.kill(); parinte.wait()
+            try:
+                self.omoara(d)
+            except NameError:
+                pass
+            if os.path.exists(os.path.join(self.tmp, "viu_pid")):
+                os.remove(os.path.join(self.tmp, "viu_pid"))
+
+    def observator_lansator_omorat(self, cine, model):
+        # observator concurent: A ruleaza python -> driver (close_fds, deci fara lock mostenit); A e omorat si B porneste imediat.
+        # Esantionare la ~10 ms: B nu are voie sa atinga CDP-ul cat driverul lui A inca traieste.
+        import threading
+        self.curata_marcaje()
+        a = self.porneste(cine, self.brief_driver, model)
+        t0 = time.time()
+        drv = py = None
+        while time.time() - t0 < 60 and a.poll() is None and (drv is None or py is None):
+            for x in os.listdir(self.data):
+                if x.startswith("driver_"):
+                    drv = int(x.split("_")[-1])
+                if x.startswith("stub_pornit_"):
+                    py = int(x.split("_")[-1])
+            time.sleep(0.05)
+        if drv is None or py is None:
+            rc, linie, txt = self.termina(a)
+            if "nu asculta" in linie or "loopback" in linie:
+                self.skipTest("CDP 9333 indisponibil/neloopback")
+            self.fail("A nu a pornit driverul: " + txt)
+        for x in self.cdp_atins():
+            os.remove(os.path.join(self.data, x))           # contactul lui A nu conteaza; urmarim doar B
+        esantioane, gata = [], threading.Event()
+        def observa():
+            while not gata.is_set():
+                esantioane.append((time.time(), viu(py), viu(drv), bool(self.cdp_atins())))
+                time.sleep(0.01)
+        th = threading.Thread(target=observa); th.start()
+        try:
+            a.kill(); a.wait(timeout=30); a.stdout.close(); a.stderr.close()
+            b = self.porneste(cine, self.brief_stub_ok, model)
+            rc, linie, txt = self.termina(b)
+        finally:
+            gata.set(); th.join()
+            self.omoara(drv); self.omoara(py)
+        self.assertEqual(rc, 0, txt)
+        rele = [e for e in esantioane if e[3] and (e[1] or e[2])]
+        self.assertEqual(rele, [], "B a atins CDP-ul cat python/driverul lui A traia")
+        self.assertTrue(any(e[3] for e in esantioane), "B nu a ajuns la CDP")
+        self.assertGreater(len(esantioane), 50)
+
+    def test_gem_observator_lansator_omorat_driver(self):
+        self.observator_lansator_omorat("gem", None)
+
+    def test_cop_observator_lansator_omorat_driver(self):
+        self.observator_lansator_omorat("cop", "6abc000f")
 
     # --- dupa lock: doar stub-ul ruleaza ---
     def test_gem_cod_eroare_devine_motiv_si_lock_eliberat(self):
