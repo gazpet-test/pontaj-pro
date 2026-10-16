@@ -46,3 +46,10 @@ Paritate: 10.024/10.024 (normal + aplatizat). Teste: 193 OK.
 | r1 (102) | 12.669 | 5.926 | 5.973 | 88 | 682 | ~28 USD (față de ~45) |
 | Răcari | 6.972 | 3.844 | 3.024 | 9 | 95 | ~18 USD |
 Proba arb-v2 reclasificată: HIGH_RISK 109 (15 needs_human = 13,8%, sub pragul de 15%); DEFER 4; MARCAJE 4 (3 needs_human).
+
+## Jakarinos r2 (ULTIMA rundă, #1766): NO-GO — `out\ocrlab_triere_r2b_jak.log` → decide Razvan
+Sigur: proveniența (paritate, fără efect pe BD); nicio cantitate greșită acceptată — DEFER/MARCAJE merg la om fără AI și blochează pagina.
+Rămas: diferențe reale care OCOLESC arbitrul (ajung direct la om): UM fără cifre pe rând (r1 d1247 p967 / p1284 „ore”/„cre”), cod fără cifre
+în fereastră (Răcari d204 p62 „RGD”/„PGD”), exponent vs cifră („10²”/„102” → MARCAJE), „src” scris în textul alt (regex), bară pe text fără cifre.
+Variante pentru Razvan: A) merge cu acest risc (AI pe HIGH_RISK, restul la om / la o trecere ieftină ulterioară); B) doar proveniența;
+C) fără merge.
