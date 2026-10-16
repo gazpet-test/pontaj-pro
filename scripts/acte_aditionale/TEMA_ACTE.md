@@ -3,7 +3,7 @@
 Responsabil: Jakarinos (Codex). Verifică: Claude. Aprobă: Răzvan. Doar Claude scrie în BD, și doar după „da” de la Răzvan (decizia #1559).
 Pe serverul AI (din 13.10.2026) rulezi prin `run_paw jak`, cu **--sandbox read-only**: nu scrii nimic, nici măcar în folderul rulării. Raportul îl scrii în răspunsul tău, iar Claude îl salvează ca `RAPORT_ACTE.md`.
 
-## Ce primești (folderul rulării e dat în brief, de forma `C:\Users\Public\paw-data\acte\<AAAA-LL-ZZ>\`)
+## Ce primești (folderul rulării e dat în brief, de forma `C:\Users\Public\paw\acte\<AAAA-LL-ZZ>\`)
 - `lista.tsv` — fișierele noi/modificate de pe NAS de săptămâna asta (id proiect, cod, copie locală, cale NAS, KB, data, motiv NOU/MODIFICAT/BASELINE).
 - `P<id>\` — copiile locale ale acelor fișiere (originalele rămân pe NAS, la care NU ai acces).
 - `png\P<id>\<nume>_p<N>.png` — paginile PDF-urilor deja randate (cele mai multe acte sunt scanări fără text); `png\index.tsv`.
