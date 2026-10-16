@@ -1,4 +1,4 @@
-# Recitirea valului 1 (listele de cantități, Haiku 4.5 → Haiku 5.5): procedură unică, v2
+# Recitirea valului 1 (listele de cantități, Haiku 4.5 → Haiku 5.5): procedură unică, v3
 
 **Decizia lui Răzvan (16.10.2026): varianta C.**
 - Acum: această procedură (varianta B), DOAR pentru cele 20 de documente din valul 1.
@@ -9,7 +9,7 @@
 - „da”-ul lui Răzvan pe citire;
 - „da”-ul lui Răzvan pe preview-ul cu cifre, înainte de aplicare.
 
-v2 = r1 (NO-GO de la ambii revieweri), cu toate observațiile închise; lista e la §10.
+v2 = r1 (NO-GO de la ambii revieweri), cu toate observațiile închise. v3 = r2 (NO-GO, ambii), plus deciziile chat-ului din 16.10: plafonul de 1,00 USD; anunțul către utilizatori = decizia lui Răzvan. Listele schimbărilor sunt la §10 și §11.
 
 ## 1. De ce merge aici o procedură simplă
 
@@ -24,7 +24,7 @@ Toate sunt `procesat`, iar ingest-ul le sare (`ofertare-ingest-doc`, l.209). Ce 
 - legătura textului cu PDF-ul citit: §3, §5;
 - revenirea: §7.
 
-**Riscul acceptat explicit de Răzvan:** un scriitor care a citit textul vechi ÎNAINTE de aplicare și salvează un derivat DUPĂ ea. Ar fi o funcție edge pornită manual din UI chiar în minutele ferestrei. Blocarea tabelelor nu-l poate opri, pentru că salvează după COMMIT. Verificarea de la §6 îl scoate la vedere ca „proveniență nedovedită”, iar revenirea rămâne posibilă.
+**Riscul acceptat explicit de Răzvan:** un scriitor care a citit textul vechi ÎNAINTE de aplicare și salvează un derivat DUPĂ ea. Ar fi o funcție edge pornită manual din UI chiar în minutele ferestrei; blocarea tabelelor nu-l poate opri, pentru că salvează după COMMIT. Verificarea de la §6 îl DETECTEAZĂ: „nedovedit” sau „pe text depășit”. Remedierea e o decizie separată a lui Răzvan. **Revenirea prin această procedură NU e garantată în acest caz**, pentru că §7 refuză orice derivat. Tot în riscul acceptat intră o schimbare a PDF-ului în Storage chiar în minutele ferestrei de aplicare.
 
 ## 2. Documentele
 
@@ -78,7 +78,10 @@ Funcția edge `ofertare-citire-test` (laboratorul), DEJA deployată.
   - `pdf_sha256`, calculat pe octeți;
   - numărul real de pagini (pdf-lib);
   - din `storage.objects`: `eTag`, `size`, `updated_at`.
-- **După ULTIMA felie**, repetă exact aceeași citire. Orice diferență: documentul e aruncat (marcat `sursa_schimbata`), iar staging-ul lui nu se folosește.
+- **Între invocări și după ULTIMA felie**, pilotul reverifică `storage.objects` (`eTag`, `size`, `updated_at`), prin API-ul Storage (`info`), ÎNAINTE și DUPĂ fiecare invocare. Toate trebuie să fie egale cu prima amprentă.
+  - Orice scriere în Storage (upload, înlocuire, chiar și „B, apoi înapoi A”) mută `updated_at` înainte, deci contraexemplul A → B → A e prins. Laboratorul descarcă PDF-ul în interiorul invocării, deci între cele două verificări care o încadrează.
+  - După ultima felie, pilotul recalculează și `pdf_sha256` pe octeți.
+  - Orice diferență: documentul e aruncat (`sursa_schimbata`), iar staging-ul lui nu se folosește.
 - **Fiecare id de staging** reținut trebuie să aibă `doc_id`-ul documentului, `model = 'claude-haiku-5-5'`, intervalul așteptat și `created_at` între cele două amprente.
 
 ### Bugetul: rezervare înaintea fiecărui apel, nu sumă după
@@ -89,7 +92,8 @@ Pilotul ține un registru persistent, `rulare.json`, pe disc, scris ÎNAINTE de 
 - **Confirmarea costului:** rezervarea se înlocuiește cu costul real numai dacă rândul din `ofertare_citire_test` există, cu `tokens_in` / `tokens_out` / `cost_usd` corecte, și există și rândul din `ai_usage_log`. Pilotul le citește din BD; nu se bazează pe `ok: true` din răspuns.
 - **Fără confirmare** (timeout, eroare de rețea, rând lipsă): rezervarea de 0,53 RĂMÂNE, iar **rularea se oprește** până decide chat-ul.
 - **Monitorizare:** înainte și după fiecare apel, pilotul numără rândurile `ofertare-citire-test` din `ai_usage_log` de la `T0`. Un rând care nu e al lui înseamnă că cineva a pornit laboratorul în paralel: rularea se oprește.
-- **Plafonul dur e de decis de Răzvan** (vezi §9). Cu rezervarea de 0,53, un plafon de 0,80 lasă doar 0,27 USD utilizabili, iar costul așteptat e ~0,33 USD (~0,005 USD pe 8 pagini în laborator). **Propun plafon dur 1,00 USD**, adică 0,47 utilizabili, cât acceptase chat-ul inițial. Costul real rămâne ~0,33.
+- **Plafonul dur: 1,00 USD.** E decizia chat-ului / a lui Răzvan, 16.10, cu varianta C. Cu rezervarea de 0,53 rămân 0,47 USD utilizabili. Costul așteptat e ~0,33 USD (~0,005 USD pe 8 pagini în laborator).
+- **Invariant:** o invocare = cel mult UN apel AI. Pilotul trimite `apeluri: 1`, iar laboratorul limitează la `apeluri` (`index.ts` l.63, l.76). Testul din pilot numără rândurile noi din `ai_usage_log` după fiecare invocare: mai mult de 1 → oprire.
 
 ### Felii eșuate
 
@@ -136,7 +140,10 @@ Condiții OBLIGATORII; nicio excepție nu le poate trece peste:
   - `integritate_ok`, `calitate_ok`, `motive`, id-urile de staging.
 - `preview.md`.
 
-Manifestul APROBAT conține documentele cu integritatea trecută și calitatea trecută (sau acceptată nominal). El și preview-ul se comit în repo.
+**Manifestul APROBAT** (`manifest_aprobat.csv`) conține, per document: `integritate_ok`, `calitate_ok`, `calitate_acceptata_nominal`, plus motivul acceptării.
+- Intră doar documentele cu `integritate_ok = true` și (`calitate_ok` sau `calitate_acceptata_nominal`).
+- Manifestul și `preview.md` se comit în repo, iar „da”-ul lui Răzvan citează **commit-ul și sha256-ul lui `manifest_aprobat.csv`**.
+- `aplica.sql` primește acest sha256 ca variabilă (`-v manifest_sha256=…`) și îl verifică ÎNAINTE de orice mutație (§5).
 
 ## 5. Pasul 3: aplicarea (un script, psql ca postgres, fereastră de mentenanță, cu „da”-ul lui Răzvan pe preview)
 
@@ -145,25 +152,32 @@ Manifestul APROBAT conține documentele cu integritatea trecută și calitatea t
 Scripturile `fereastra_deschide.sql` și `fereastra_inchide.sql` sunt idempotente.
 
 **Deschiderea:**
-1. Salvează ÎNTÂI starea tuturor joburilor cron (`jobid`, `jobname`, `active`) într-un fișier local `fereastra_stare.csv`.
+1. Starea inițială se salvează O SINGURĂ DATĂ pe fereastră, în `fereastra_stare.csv`, care conține run-id, `stare = OPEN`, joburile cu `active` și starea worker-ului NAS (pornit sau oprit).
+   - O a doua deschidere găsește fișierul `OPEN` și îl REFOLOSEȘTE, fără să-l suprascrie. Nu se pierde starea originală (test: deschide → deschide → închide).
 2. Dezactivează, după COMANDĂ (`command ILIKE '%ofertare%'`), nu doar după prefix, tot ce atinge Ofertare. Lista se afișează și se verifică.
-3. Așteaptă 5 minute: `net.http_post` e asincron, iar o funcție edge pornită înainte durează cel mult 150 s.
-4. Confirmă că nu există job în curs (`cron.job_run_details`) și nici cereri `pg_net` recente fără răspuns către funcțiile Ofertare (`net.http_request_queue`).
-5. Worker-ul NAS e oprit pe server; confirmă `worker_heartbeat.ultimul` mai vechi de 10 minute.
-6. Utilizatorii sunt anunțați (Răzvan): fără acțiuni Ofertare în UI cât ține fereastra, cam 10 minute.
+3. **Golirea activității asincrone:** `net.http_post` e asincron. Durata maximă a unei funcții edge pe planul plătit e de 400 s (timeout-ul HTTP de 150 s e distinct).
+   - Condiția: coada `net.http_request_queue` e goală ȘI ultima cerere `pg_net` creată spre o funcție Ofertare e mai veche de 8 minute (400 s + marjă), după `net._http_response.created`.
+   - Altfel se așteaptă și se reverifică.
+4. Confirmă că nu există job în curs (`cron.job_run_details`, `status = 'running'`).
+5. Worker-ul NAS e oprit pe server; se confirmă `worker_heartbeat.ultimul` mai vechi de 10 minute (≥ 400 s). Starea inițială (pornit / oprit) e în `fereastra_stare.csv`.
+6. **Utilizatorii.** Anunțul către utilizatori NU e un pas al procedurii și NU îl trimite nicio sesiune Claude: nici mesaj, nici mail. Decide Răzvan dacă, cum și cui anunță, sau alege o fereastră în care nu lucrează nimeni în Ofertare (de exemplu seara). Chat-ul îi duce întrebarea.
 
-**Închiderea** reactivează EXACT joburile care erau active în `fereastra_stare.csv`. Se rulează și după o aplicare eșuată; e verificată prin `SELECT`.
+**Închiderea** reactivează EXACT joburile care erau active în `fereastra_stare.csv` și repornește worker-ul NAS dacă era pornit, cu verificarea heartbeat-ului proaspăt.
+- Se rulează și după o aplicare eșuată.
+- E verificată prin `SELECT`, apoi marchează fișierul `CLOSED`.
 
 ### Scriptul `aplica.sql`
 
 Se rulează cu `psql -v ON_ERROR_STOP=1 -1`. E o singură tranzacție, totul sau nimic.
 
-1. **Gărzi:**
+1. **Gărzi (înainte de orice mutație):**
+   - `sha256` al conținutului `manifest_aprobat.csv`, încărcat linie cu linie în ordine, = `:manifest_sha256` (cel din „da”). Altfel `RAISE`.
    - `session_user = 'postgres'`;
    - `SET LOCAL lock_timeout = '5s'`;
    - `\copy` în tabele temporare pentru `manifest_aprobat.csv` și `texte/*.txt`;
    - contractul de intrare, cu `RAISE` la orice abatere:
      - id-urile ⊆ whitelist și unice;
+     - pentru fiecare rând, `integritate_ok = true` și (`calitate_ok` sau `calitate_acceptata_nominal` cu motiv);
      - toate documentele există;
      - `licitatie_id` și `pagini` sunt egale cu manifestul;
      - `sha256(text) = sha_nou`.
@@ -184,12 +198,16 @@ Se rulează cu `psql -v ON_ERROR_STOP=1 -1`. E o singură tranzacție, totul sau
      - `pagini_procesate = pagini`;
      - `procesat_la = clock_timestamp()`;
      - `RETURNING` → `meta_aplicat`.
-   - proveniența: `INSERT ofertare_doc_texte_prov`, cu `origine = 'transcriere'`, producător `recitire-haiku-5-5`, `completitudine = 'integral'` (integritatea a trecut), `constatat_la = clock_timestamp()`; `RETURNING id` → `prov_id`.
+   - proveniența: `INSERT ofertare_doc_texte_prov`, cu `origine = 'transcriere'`, producător `recitire-haiku-5-5`, `completitudine = 'integral'` (integritatea a trecut), `constatat_la = greatest(clock_timestamp(), max(constatat_la al documentului) + 1 µs)`, luat sub lock; `RETURNING id` → `prov_id`.
 4. **Postcondiții, cu `RAISE`, nu doar `SELECT`:**
    - pentru fiecare document, sha-ul curent = `sha_nou`;
    - `fn_ofertare_cb_text_valid` → `{tip: 'prov', id: prov_id}`;
    - exact 20 de documente (sau câte are manifestul) modificate.
-5. **Rezultatul** e scris cu `\copy (SELECT …) TO 'aplicare_rezultat.csv'`: `document_id`, `sha_nou`, `meta_aplicat`, `prov_id`, momentul. Fișierul se comite în repo și e referința CAS a revenirii.
+5. **Rezultatul NU se exportă din tranzacția de mutație.**
+   - Exportul dintr-o tranzacție încă deschisă ar putea exista chiar dacă COMMIT-ul eșuează.
+   - După ce `aplica.sql` se termină cu COMMIT confirmat (exit 0), rulează separat `aplica_rezultat.sql`, read-only. El RECITEȘTE din BD, per document: sha-ul curent, metadatele (`meta_aplicat`) și proveniența `recitire-haiku-5-5` (`prov_id`, `constatat_la`).
+   - Verifică cu `RAISE` că sha-ul = `sha_nou`, apoi exportă în `aplicare_rezultat.csv`.
+   - Abia acest fișier se comite în repo și e referința CAS a revenirii.
 
 ## 6. Pasul 4: verificarea după 24h (read-only)
 
@@ -199,6 +217,7 @@ Se rulează cu `psql -v ON_ERROR_STOP=1 -1`. E o singură tranzacție, totul sau
 - **derivatele (§2.1):**
   - zero → OK;
   - orice rând cu versiunea sursei (sha) egală cu `sha_nou` → OK „pe textul nou”;
+  - orice rând cu versiunea sursei DIFERITĂ de `sha_nou` → **„derivat pe text depășit”**. Verificarea EȘUEAZĂ (exit ≠ 0) și raportul merge la Răzvan;
   - orice rând fără versiune a sursei → **„proveniență nedovedită”**, listat pentru Răzvan, indiferent de `created_at`.
 
 Nu se repară nimic automat.
@@ -214,10 +233,15 @@ Per document:
    - identitatea și Storage.
 
    Altfel `RAISE`.
-2. **Zero derivate și zero decizii** pe document (§2.1), fără filtru temporal. Altfel `RAISE` și decide Răzvan.
+2. **Proveniență, derivate, decizii:**
+   - proveniența documentului trebuie să fie EXACT {`prov_id` din `aplicare_rezultat.csv`};
+   - orice altă proveniență, orice decizie, extragere sau derivat (§2.1), fără filtru temporal → `RAISE`, iar decide Răzvan.
 3. **Restaurarea:** textul vechi din `ofertare_doc_texte` (`licitatie_id`, `sha_vechi`) și `meta_vechi` din manifestul comis.
-4. **Proveniența** `sinteza_ai` / `revenire-recitire` pe `sha_vechi`, cu `constatat_la = clock_timestamp()`. Înghețarea alege din nou textul vechi, ca `text_indisponibil`, deci echivalent pentru B.
-5. Rezultatul se scrie în `revenire_rezultat.csv`.
+4. **Proveniența** `sinteza_ai` / `revenire-recitire` pe `sha_vechi`, cu `constatat_la = greatest(clock_timestamp(), max(constatat_la al documentului) + 1 µs)` sub lock.
+   - **Postcondiție cu `RAISE`:** ultima proveniență a documentului (aceeași ordonare ca în `fn_ofertare_cb_ingheata`: `constatat_la DESC, id DESC`) are `sha_vechi`, iar `fn_ofertare_cb_text_valid(lic, doc, sha_vechi) = '{}'`.
+   - Înghețarea alege deci din nou textul vechi, ca `text_indisponibil`, echivalent pentru B.
+   - NU se apelează `fn_ofertare_cb_ingheata`: ar scrie un snapshot.
+5. Rezultatul se exportă DUPĂ COMMIT, read-only, prin `revino_rezultat.sql` → `revenire_rezultat.csv`, cu aceeași regulă ca la §5.
 
 ## 8. Livrarea (PR-ul acesta)
 
@@ -226,7 +250,7 @@ Per document:
 `scripts/recitire_val1/`:
 - `citeste.ts`, `asambleaza.ts`;
 - `fereastra_deschide.sql`, `fereastra_inchide.sql`;
-- `aplica.sql`, `verifica.sql`, `revino.sql`;
+- `aplica.sql` + `aplica_rezultat.sql` (read-only, după COMMIT), `verifica.sql`, `revino.sql` + `revino_rezultat.sql`;
 - `README.md` (ordinea pașilor).
 
 ### Teste Deno
@@ -278,13 +302,10 @@ Nu se creează tabele, migrări, funcții edge sau joburi. Nota din `registru_au
 
 **Separat:** `ofertare-citire-test` are doar poarta de acces Ofertare, nu și poarta pe cheltuială. Se închide printr-un PR mic, după valul 1. Până atunci, monitorizarea pilotului (§3) oprește rularea dacă apar apeluri străine.
 
-## 9. Decizie cerută lui Răzvan
+## 9. Decizii luate
 
-**Plafonul dur al citirii.** Cu rezervarea de 0,53 USD pe apel (cazul cel mai rău, demonstrat):
-- **0,80 USD** lasă 0,27 utilizabili, sub costul așteptat de 0,33. Citirea s-ar opri înainte de final.
-- **1,00 USD** (propus) lasă 0,47 utilizabili.
-
-Costul real așteptat rămâne ~0,33 USD.
+- **Plafonul dur al citirii: 1,00 USD**, cu rezervarea de 0,53 pe apel (chat-ul, pe aprobarea lui Răzvan din 16.10).
+- **Anunțul către utilizatori** pentru fereastră: decizia lui Răzvan, nu un pas automat.
 
 ## 10. Schimbări v1 → v2 (review r1)
 
@@ -300,3 +321,19 @@ Costul real așteptat rămâne ~0,33 USD.
 | Contractul SQL (Jakarinos #8) | Whitelist, unicitate, existență, `licitatie_id` / `pagini`, NULL-safe, postcondiții cu `RAISE`; `formulare_registru` adăugat |
 | Fereastra care nu se poate restaura (Copilot P2) | `fereastra_stare.csv` salvat întâi; închiderea idempotentă, rulată și după eșec |
 | Endpoint fără poartă pe cheltuială (Copilot P2) | Monitorizare + oprire în pilot; PR separat |
+
+## 11. Schimbări v2 → v3 (review r2)
+
+| Observație | Rezolvare |
+|---|---|
+| Revenirea se autorefuza pe proveniența aplicării (Jakarinos #1, Copilot P1) | Se cere EXACT `prov_id`; orice altă proveniență / decizie / derivat → refuz. Riscul de la §1 e reformulat: revenirea nu e garantată după un derivat întârziat. |
+| Feliile nelegate de octeții citiți, A → B → A (Jakarinos #2) | `updated_at` / `eTag` / `size` din Storage, verificate înainte și după FIECARE invocare; o scriere mută `updated_at`. |
+| Golirea `pg_net`, limita de 400 s (Jakarinos #3) | Coada goală + nicio cerere spre Ofertare în ultimele 8 minute; heartbeat NAS ≥ 10 minute. |
+| Starea ferestrei suprascrisă la redeschidere (Jakarinos #4, Copilot P2) | `fereastra_stare.csv` creat o singură dată (`OPEN` → `CLOSED`), refolosit la reluare; testul deschide → deschide → închide. |
+| Worker-ul NAS nerepornit (Jakarinos #5) | Starea lui inițială salvată; închiderea îl repornește și verifică heartbeat-ul. |
+| Derivat cu sha-ul sursei greșit la 24h (Jakarinos #6) | Clasa „pe text depășit” → verificarea eșuează. |
+| Export înainte de COMMIT (Copilot P1) | Export read-only separat, după COMMIT confirmat, recitit din BD (`aplica_rezultat.sql`, `revino_rezultat.sql`). |
+| Aplicarea nelegată de preview, integritatea neimpusă în SQL (Copilot P1) | Câmpurile `integritate_ok` / `calitate_*` în manifest, verificate în SQL; sha256 al manifestului din „da” verificat înainte de mutații. |
+| Ordonarea provenienței la revenire (Copilot P2) | `greatest(clock_timestamp(), max + 1 µs)` sub lock (și la aplicare); postcondiția cu `RAISE` pe ultima proveniență + text nevalid. |
+| Plafonul / anunțul (chat 16.10) | 1,00 USD; anunțul = decizia lui Răzvan. |
+
