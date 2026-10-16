@@ -1,5 +1,6 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { type Deps, incarcaRegistru, type RandStaging, type RandUsage, ruleaza, type Stare } from './citeste.ts'
+import { type Deps, incarcaRegistru, type RandStaging, type RandUsage, reconciliaza, ruleaza, type Stare } from './citeste.ts'
+import { poatePorni } from './lib.ts'
 
 // laborator simulat: documente cu n pagini; fiecare apel scrie un rând de staging + un rând usage (cost fix), după scenariu
 type Felie = { text?: string; eroare?: string | null; tokens?: boolean; usage?: Partial<RandUsage> | false; staging?: false | Partial<RandStaging>; primit?: boolean; ok?: boolean }
@@ -27,9 +28,9 @@ function mediu(sc: Scenariu) {
       if (sc.schimbaStorage?.(nrApel)) storageVer++
       const faraTokeni = o.tokens === false
       if (o.staging !== false) staging.push({ id: ++idSt, doc_id: doc, model: 'claude-haiku-5-5', pagina_de_la: deLa, pagina_pana_la: panaLa,
-        text: o.text ?? text(deLa, panaLa), tokens_in: faraTokeni ? null : 1000, tokens_out: faraTokeni ? null : 100, cost_usd: faraTokeni ? null : 0.005,
+        text: o.text ?? text(deLa, panaLa), tokens_in: faraTokeni ? null : 13219, tokens_out: faraTokeni ? null : 8440, cost_usd: faraTokeni ? null : 0.0055,
         eroare: o.eroare ?? null, created_at: iso(), ...(o.staging ?? {}) })
-      if (o.usage !== false && !faraTokeni) usage.push({ id: ++idU, ref_id: doc, model: 'claude-haiku-5-5', tokens_in: 1000, tokens_out: 100, cost_usd: 0.005, created_at: iso(), ...(o.usage ?? {}) })
+      if (o.usage !== false && !faraTokeni) usage.push({ id: ++idU, ref_id: doc, model: 'claude-haiku-5-5', tokens_in: 13219, tokens_out: 8440, cost_usd: 0.005542, created_at: iso(), ...(o.usage ?? {}) })
       ceas += 1000
       return { primit: o.primit ?? true, ok: o.ok ?? true }
     },
@@ -48,7 +49,7 @@ Deno.test('pilot: citire completă, felii de 8, cost confirmat din BD (usage atr
   assertEquals(cod, 0)
   assertEquals(stare.documente[0].stare, 'citit')
   assertEquals(stare.documente[0].felii.map((f) => [f.de_la, f.pana_la]), [[1, 8], [9, 16], [17, 20]])
-  assertEquals(stare.apeluri.every((a) => a.stare === 'confirmat' && a.cost_usd === 0.005), true)
+  assertEquals(stare.apeluri.every((a) => a.stare === 'confirmat' && a.cost_usd === 0.005542), true)
   assertEquals(stare.usage_ids.length, 3)
 })
 
@@ -174,4 +175,46 @@ Deno.test('r1 (ambii): registrul valului — lipsă → nou; corupt / formă inv
     assert('eroare' in await incarcaRegistru(fis, nouS), JSON.stringify(rau))
   }
   await Deno.remove(dir, { recursive: true })
+})
+
+// ── 16.10, fereastra_2: staging numeric(10,4) față de ai_usage_log numeric(10,6) ──
+Deno.test('cost: staging 0.0055 (4 zecimale) și usage 0.005542 (6 zecimale), aceiași tokeni → confirmat la costul exact 0.005542', async () => {
+  const m = mediu({ pagini: { 212: 8 } })
+  const { cod, stare } = await ruleaza(m.d, nou(), [212])
+  assertEquals([cod, stare.apeluri[0].stare, stare.apeluri[0].cost_usd], [0, 'confirmat', 0.005542])
+})
+Deno.test('cost: un cost care nu rezultă din tokeni (în oricare tabel) → neconfirmat', async () => {
+  for (const c of [{ usage: { cost_usd: 0.006 } }, { staging: { cost_usd: 0.0099 } }, { usage: { cost_usd: 0.0055 } }] as Felie[]) {
+    const m = mediu({ pagini: { 212: 8 }, felie: () => c })
+    assertEquals((await ruleaza(m.d, nou(), [212])).cod, 3, JSON.stringify(c))
+  }
+})
+
+Deno.test('reconciliaza: apelul oprit pe „cost neconfirmat” (cazul real) → confirmat din BD, oprirea ridicată, plafonul eliberat', async () => {
+  const s = nou()
+  s.oprit = 'apel 1: cost neconfirmat'
+  s.apeluri.push({ nr: 1, document_id: 212, de_la: 1, felie: 8, stare: 'neconfirmat', rezervat_usd: 0.53, cost_usd: null, staging_id: 78 })
+  const st: RandStaging = { id: 78, doc_id: 212, model: 'claude-haiku-5-5', pagina_de_la: 1, pagina_pana_la: 8, text: 'x', tokens_in: 13219, tokens_out: 8440,
+    cost_usd: 0.0055, eroare: null, created_at: '2026-10-16T12:10:47.202Z' }
+  const us: RandUsage = { id: 5354, ref_id: 212, model: 'claude-haiku-5-5', tokens_in: 13219, tokens_out: 8440, cost_usd: 0.005542, created_at: '2026-10-16T12:10:47.298Z' }
+  let salvat: Stare | null = null
+  const d = { usage: async () => [us], staging: async () => [], salveaza: async (x: Stare) => { salvat = structuredClone(x) } }
+  const r = await reconciliaza(d, s, async (id) => (id === 78 ? st : null))
+  assert(r.ok, r.motiv)
+  assertEquals([salvat!.oprit, salvat!.apeluri[0].stare, salvat!.apeluri[0].cost_usd, salvat!.usage_ids], [null, 'confirmat', 0.005542, [5354]])
+  assert(poatePorni(salvat!).ok)
+})
+Deno.test('reconciliaza: usage străin în plus / lipsă / cost nepotrivit / fără staging → nimic confirmat, registrul neschimbat', async () => {
+  const baza = () => { const s = nou(); s.oprit = 'x'; s.apeluri.push({ nr: 1, document_id: 212, de_la: 1, felie: 8, stare: 'neconfirmat', rezervat_usd: 0.53, cost_usd: null, staging_id: 78 }); return s }
+  const st: RandStaging = { id: 78, doc_id: 212, model: 'claude-haiku-5-5', pagina_de_la: 1, pagina_pana_la: 8, text: 'x', tokens_in: 13219, tokens_out: 8440,
+    cost_usd: 0.0055, eroare: null, created_at: '2026-10-16T12:10:47.202Z' }
+  const us = (x: Partial<RandUsage> = {}): RandUsage => ({ id: 5354, ref_id: 212, model: 'claude-haiku-5-5', tokens_in: 13219, tokens_out: 8440, cost_usd: 0.005542,
+    created_at: '2026-10-16T12:10:47.298Z', ...x })
+  for (const [nume, u, sid] of [['străin în plus', [us(), us({ id: 9, ref_id: 999 })], 78], ['lipsă', [], 78], ['cost', [us({ cost_usd: 0.01 })], 78],
+      ['moment', [us({ created_at: '2026-10-16T13:10:47Z' })], 78], ['fără staging', [us()], null]] as const) {
+    const s = baza(); if (sid === null) s.apeluri[0].staging_id = null
+    let salvari = 0
+    const r = await reconciliaza({ usage: async () => [...u], staging: async () => [], salveaza: async () => { salvari++ } }, s, async () => st)
+    assertEquals([r.ok, salvari, s.oprit, s.apeluri[0].stare], [false, 0, 'x', 'neconfirmat'], nume)
+  }
 })

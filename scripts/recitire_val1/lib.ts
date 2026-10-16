@@ -10,6 +10,9 @@ export const radacinaParte = (nume: string) => nume.replace(/\s+—\s+p\d{2}_pag
 // ── bugetul (§3): rezervare 0,53 USD înaintea FIECĂRUI apel; costul se confirmă doar din BD ──
 export const PLAFON_USD = 1.00
 export const REZERVARE_APEL_USD = 0.53   // context 1M × 0,50 $/M (treapta de sus) + 12 000 × 2,50 $/M = 0,50 + 0,03
+// costul real al unui apel Haiku 5.5 din tokeni (ca laboratorul, _shared/ocrLocal.ts): 0,10 / 0,50 $ pe 1M până la 100k tokeni de intrare
+// PE CERERE, 0,50 / 2,50 $ peste (treapta după tokenii de intrare ai acelui apel)
+export const costHaiku55 = (tin: number, tout: number) => tin > 100_000 ? tin * 0.50e-6 + tout * 2.50e-6 : tin * 0.10e-6 + tout * 0.50e-6
 export type Apel = {
   nr: number; document_id: number; de_la: number; felie: number
   stare: 'rezervat' | 'confirmat' | 'neconfirmat'   // rezervat = trimis, încă neconfirmat în BD; neconfirmat = oprire, rezervarea rămâne
