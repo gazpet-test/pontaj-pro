@@ -49,6 +49,14 @@ Nimic din mediu nu se scrie în fișiere.
 | 9 | După 24h (read-only) | `deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -v rezultat=<dir_val>/aplicare_rezultat.csv -f scripts/recitire_val1/verifica.sql` | 0 (altfel → la Răzvan) |
 | R | Revenirea (**„da”**, în fereastră) | `deno run -A scripts/recitire_val1/psql.ts -X -1 -v ON_ERROR_STOP=1 -v manifest=… -v manifest_sha256=… -v rezultat=<dir_val>/aplicare_rezultat.csv -v documente='212,213' -v provizoriu=<dir_val>/revenire_provizoriu.csv -f scripts/recitire_val1/revino.sql`, apoi `revino_rezultat.sql` | 0 |
 
+**Oprire pe „cost neconfirmat”** (pilotul, cod 3): registrul păstrează rezervarea de 0,53. NU se editează manual.
+- `deno run -A scripts/recitire_val1/citeste.ts <dir_val> --reconciliaza` (fără apeluri AI) reconfirmă apelul din BD:
+  - exact rândul de staging al apelului;
+  - exact un rând `ai_usage_log` neatribuit, cu aceiași tokeni și costul recalculat din tokeni;
+  - momentul ±2 min.
+- Dacă trece, oprirea se ridică și rezervarea devine costul real. Altfel nu se schimbă nimic și decide Răzvan.
+- Apoi o fereastră nouă și pașii 1–2.
+
 ## Manifestul aprobat
 
 Sursa e `manifest_candidat.csv`, scris de `asambleaza.ts`. Conține doar documentele cu integritatea trecută.

@@ -10,6 +10,25 @@ export const radacinaParte = (nume: string) => nume.replace(/\s+—\s+p\d{2}_pag
 // ── bugetul (§3): rezervare 0,53 USD înaintea FIECĂRUI apel; costul se confirmă doar din BD ──
 export const PLAFON_USD = 1.00
 export const REZERVARE_APEL_USD = 0.53   // context 1M × 0,50 $/M (treapta de sus) + 12 000 × 2,50 $/M = 0,50 + 0,03
+// costul unui apel Haiku 5.5, calculat IDENTIC cu laboratorul (ofertare-citire-test/index.ts, MODELE.haiku55 + costApel): aceleași
+// constante float (0.10 / 1e6 …, NU 0.1e-6), aceeași ordine a operațiilor, aceeași treaptă (tin > 100 000 → treapta de sus)
+const H55 = { in: 0.10 / 1e6, out: 0.50 / 1e6, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } }
+export const costHaiku55 = (tin: number, tout: number) => { const r = tin > H55.prag ? H55.peste : H55; return tin * r.in + tout * r.out }
+// ce scrie Postgres când primește numărul JS (serializat JSON = String(x)) într-o coloană numeric(p, scala): rotunjirea ZECIMALĂ,
+// jumătate în sus (departe de zero), a ȘIRULUI zecimal — NU a valorii float (ex. 0.0053454999999999996 → 0.005345 la scala 6)
+export function numericPostgres(x: number, scala: number): string {
+  if (!Number.isFinite(x) || x < 0) throw new Error('cost invalid')
+  const s = String(x)
+  const m = /^(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/i.exec(s)
+  if (!m) throw new Error(`format numeric neașteptat: ${s}`)
+  let cifre = m[1] + (m[2] ?? ''), virgula = m[1].length + Number(m[3] ?? 0)   // valoarea = 0.cifre × 10^virgula, ca șir zecimal exact
+  if (virgula < 0) { cifre = '0'.repeat(-virgula) + cifre; virgula = 0 }
+  const intreg = cifre.slice(0, virgula).padEnd(virgula, '0') || '0', frac = cifre.slice(virgula)
+  let n = BigInt(intreg + frac.slice(0, scala).padEnd(scala, '0'))
+  if ((frac[scala] ?? '0') >= '5') n += 1n                                       // jumătate în sus, pe cifra următoare a șirului
+  const t = n.toString().padStart(scala + 1, '0')
+  return scala ? `${t.slice(0, -scala)}.${t.slice(-scala)}` : t
+}
 export type Apel = {
   nr: number; document_id: number; de_la: number; felie: number
   stare: 'rezervat' | 'confirmat' | 'neconfirmat'   // rezervat = trimis, încă neconfirmat în BD; neconfirmat = oprire, rezervarea rămâne

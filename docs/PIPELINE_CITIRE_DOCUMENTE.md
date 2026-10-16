@@ -174,7 +174,12 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 
 **Worker-ul NAS** se oprește și pornește de pe serverul AI (pașii 1 și 8 din README): `terra_ssh.py '…/docker stop|start gazpet-ofertare-worker'`.
 
-Testele: 49 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `scripts/test_recitire_val1.sh`.
+**Confirmarea costului** (#747, după fereastra_2 din 16.10):
+- `ofertare_citire_test.cost_usd` e `numeric(10,4)`, iar `ai_usage_log.cost_usd` e `numeric(10,6)`.
+- Pilotul recalculează costul din tokeni (tariful Haiku 5.5, pe treaptă) și îl compară cu fiecare rând, la precizia lui. Costul confirmat e cel exact.
+- O oprire pe „cost neconfirmat” se rezolvă cu `citeste.ts <dir_val> --reconciliaza` (fără AI), nu editând registrul.
+
+Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `scripts/test_recitire_val1.sh`.
 
 ### 1.4 Cantitățile structurate și comparatorul (TKT-0329 B: 20261031a, `ofertare-cantitati-extrage`, `_shared/cantComparator.ts`)
 
@@ -351,3 +356,4 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #744 | Recitirea valului 1: conexiunea postgres doar cu TLS `verify-full` și CA-ul Supabase (`conexiune.ts`, `fereastra.ts`), wrapper-ul `psql.ts` (listă albă de argumente, stdin închis, erori pe categorii), directoarele create de scripturi, worker-ul NAS în README |
 | 16.10.2026 | #742 (r4) | Poarta deterministă pe `text_propus` la perechile doar de diacritice (Jakarinos r1–r4) |
 | 16.10.2026 | #746 | `fereastra.ts`: coada `pg_net` numărată doar pe cererile spre funcțiile Ofertare + `vercel-relay` (coada globală nu se golea din cauza joburilor altor module) |
+| 16.10.2026 | (acest PR) | Pilotul recitirii: costul confirmat din tokeni la precizia fiecărui tabel (staging `numeric(10,4)` față de `ai_usage_log` `numeric(10,6)`) + `--reconciliaza` pentru o oprire pe „cost neconfirmat” |
