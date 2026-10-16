@@ -273,6 +273,10 @@ paritate verificată (fail-closed).
 ### 2.6 Arbitrul (`ofertare-ocr-arbitreaza`)
 - **Cascadă** (implicit): Haiku 5.5 pe orice dezacord; Sonnet 5 când Haiku e nesigur sau citirile diferă în cifre. Prompt versionat
   (`arb-v3`, #742: regula 10 diacritice); `protocol.json` → `prompt_versiuni_admise` (deciziile plătite pe versiuni vechi rămân valabile).
+- **Poarta de diacritice** (#742, determinist, după decizia finală — Haiku sau Sonnet): dacă cele două citiri diferă doar prin semne
+  combinante (detectare LARGĂ: NFD fără `\p{M}`), un `text_propus` e acceptat doar dacă are aceeași bază ca UNA dintre citiri, cu lista
+  ÎNCHISĂ de semne scoase (U+0302 U+0306 U+030C U+0326 U+0327, doar după A-Z / a-z); altfel `needs_human`, text gol, cost real
+  păstrat. Prinde ≠ / ≰ și semnele invizibile. Dezacordurile mixte (litere + diacritice) nu intră sub poartă.
 - **doar_haiku** (#739): un apel Haiku, fără escaladare, refuz server-side dacă citirile din BD au vreo cifră (`\p{N}`); deciziile nu intră
   în pragul §8 (proveniență legată de tentativă + model + eticheta serverului).
 - **Bani**: rezervare ATOMICĂ în BD pe limita de sus a apelului (`fn_ofertare_ocr_arbitraj_rezerva`), plafonul rulării
@@ -345,3 +349,4 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | (acest PR) | Documentul pipeline-ului + CI |
 | 16.10.2026 | (acest PR) | Partea 1, scrisă de sesiunea Ofertare: §1.0 sursele, §1.1 ingest + căile vecine, §1.2 proveniența / CAS (31a / 31b), §1.3 laboratorul + recitirea valului 1 (#734), §1.4 cantități + comparator (#726 #729 #731), §1.5 porțile; căile CI extinse |
 | 16.10.2026 | #744 | Recitirea valului 1: conexiunea postgres doar cu TLS `verify-full` și CA-ul Supabase (`conexiune.ts`, `fereastra.ts`), wrapper-ul `psql.ts` (listă albă de argumente, stdin închis, erori pe categorii), directoarele create de scripturi, worker-ul NAS în README |
+| 16.10.2026 | #742 (r4) | Poarta deterministă pe `text_propus` la perechile doar de diacritice (Jakarinos r1–r4) |

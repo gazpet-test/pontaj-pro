@@ -26,6 +26,18 @@ const SHA = /^[0-9a-f]{64}$/
 const taie200 = (s: string): string => Array.from(s).slice(0, 200).join('')
 // bani comparati in unitati intregi de 0,0001 USD (rezervarea si costurile sunt deja rotunjite la 4 zecimale): 0,0011 + 0,0204 = 0,0215
 const unitati = (x: number): number => Math.round(x * 1e4)
+// regula 10 (arb-v3): literele de baza fara semnele diacritice dintr-o lista INCHISA, si doar pe o litera latina A-Z / a-z:
+// circumflex U+0302 (â î), breve U+0306 (ă), caron U+030C (š ž), virgula U+0326 (ș ț), sedila U+0327 (ş ţ). Orice alt semn combinant
+// (U+0338 din ≠ ≰, U+034F, selectorii de variante ...) ramane in baza, deci schimba comparatia: majusculele, cifrele, operatorii,
+// semnele si spatiile raman. Perechea „difera doar prin diacritice” = aceeasi baza, texte diferite (Jakarinos arb-v3 r1 P1, r2 P1)
+export const bazaFaraDiacritice = (s: string): string => s.normalize('NFD').replace(/([A-Za-z])[\u0302\u0306\u030C\u0326\u0327]+/g, '$1')
+// DETECTAREA e separata de validare si e LARGA (Jakarinos arb-v3 r3 P1): perechea intra sub poarta daca, fara ORICE semn combinant
+// (NFD + \p{M}), citirile sunt identice — inclusiv cand difera si prin e/é sau prin semne din afara listei. Mai larg = mai strict.
+const bazaLarga = (s: string): string => s.normalize('NFD').replace(/\p{M}/gu, '')
+export const doarDiacritice = (a: string, b: string): boolean => a.normalize('NFD') !== b.normalize('NFD') && bazaLarga(a) === bazaLarga(b)
+// VALIDAREA e STRICTA: propunerea are aceeasi baza (lista inchisa) cu UNA dintre citiri, deci schimba doar semnele din lista
+export const propunereDoarDiacritice = (text: string, a: string, b: string): boolean =>
+  bazaFaraDiacritice(text) === bazaFaraDiacritice(a) || bazaFaraDiacritice(text) === bazaFaraDiacritice(b)
 /** Dupa Haiku: mai incape limita de sus a lui Sonnet in rezervare? (exportat pentru testul de regresie la limita exacta) */
 export const incapeArbitrul = (costFiltru: number, limitaArbitru: number, suma: number): boolean =>
   unitati(costFiltru) + unitati(limitaArbitru) <= unitati(suma)
@@ -64,8 +76,8 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   if (chei !== 'dezacord_id,imagine_b64,item,rulare_id' && chei !== 'dezacord_id,imagine_b64,item,mod,rulare_id') {
     return raspuns(400, { error: 'Corp: exact {rulare_id, dezacord_id, item, imagine_b64[, mod]}' })
   }
-  const { rulare_id, dezacord_id, item, imagine_b64 } = corp
-  const mod = (corp as Record<string, unknown>).mod
+  // cheile sunt validate mai sus; valorile raman unknown pana la verificarile de tip de mai jos (deno check, TS2339)
+  const { rulare_id, dezacord_id, item, imagine_b64, mod } = corp as Record<string, unknown>
   if (mod !== undefined && !MODURI.includes(mod as string)) return raspuns(400, { error: 'mod necunoscut' })
   const doarHaiku = mod === 'doar_haiku'
   if (!esteId(rulare_id) || !esteId(dezacord_id) || !esteObiect(item) || typeof imagine_b64 !== 'string') return raspuns(400, { error: 'Tipuri invalide' })
@@ -182,6 +194,13 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
       final = { ...r1, d: { ...r1.d, decizie: 'needs_human', text: '', motiv: taie200(detaliu(r1) + ' cost Haiku peste limita estimata, Sonnet nechemat') } }
     }
   } else final = { ...r1, d: { ...r1.d, motiv: taie200(detaliu(r1) + ' ' + r1.d.motiv) } }
+  // pe o pereche care difera doar prin diacritice, text_propus poate schimba DOAR diacritice: alta litera de baza, cifra, semn, spatiu
+  // sau majuscula = needs_human (verificare determinista, nu doar in prompt; Jakarinos arb-v3 r1 P1). Costul ramane cel real.
+  if (final.d.decizie === 'text_propus' && doarDiacritice(dz.citire_lighton, dz.citire_mineru)
+      && !propunereDoarDiacritice(final.d.text, dz.citire_lighton, dz.citire_mineru)) {
+    final = { ...final, d: { ...final.d, decizie: 'needs_human', text: '',
+              motiv: taie200('[diacritice] text propus schimba si alte caractere: la om ' + final.d.motiv) } }
+  }
   const { model: modelFinal, d, tin, tout } = final, real = final.cost
   const peste = unitati(real) > unitati(suma)
   // costul real peste rezervare (doar dacă prețul / tokenizarea s-ar schimba): UN singur RPC tranzacțional decontează la rezervare,
