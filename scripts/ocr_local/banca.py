@@ -156,7 +156,38 @@ def cmd_pregateste(a):
         man['%s/%s' % (lot, d.name)] = z['zona']
     priv = banca / 'priv'; priv.mkdir(exist_ok=True)
     (priv / ('harta_%s.json' % a.trecere)).write_text(json.dumps(man, indent=1), encoding='utf-8')
+    _scrie_legatura(banca, a.trecere)
     print(len(man), 'zone in', tr)
+
+
+# Legatura cu esantionul (Jakarinos #721 r2 P1-7): intrarile, harta si rezultatele unei treceri sunt valabile DOAR pentru esantion.json
+# din care au fost pregatite; `esantion --rescrie` le invalideaza (refuz la etichetare / comparare / raport, nu acceptare tacita).
+def _sha_esantion(banca): return _sha((banca / 'esantion.json').read_bytes())
+def _scrie_legatura(banca, trecere):
+    (banca / 'priv' / ('legatura_%s.json' % trecere)).write_text(json.dumps({'esantion_sha256': _sha_esantion(banca)}), encoding='utf-8')
+def _verifica_legatura(banca, trecere):
+    f = banca / 'priv' / ('legatura_%s.json' % trecere)
+    if not f.exists(): sys.exit('trecerea %s nu e legata de esantion (lipseste priv/legatura_%s.json): ruleaza `leaga`' % (trecere, trecere))
+    sha = json.loads(f.read_text(encoding='utf-8'))['esantion_sha256']
+    if sha != _sha_esantion(banca): sys.exit('trecerea %s a fost pregatita pentru alt esantion.json (rescris?): refuzat' % trecere)
+    return sha
+
+
+def cmd_leaga(a):
+    """Pentru bancile pregatite inainte de legatura: verifica zona cu zona ca intrarile (tinta.md + sha imaginii) si harta corespund
+    EXACT esantionului curent, si abia atunci scrie legatura. Orice nepotrivire = refuz, nimic scris."""
+    banca = pathlib.Path(a.banca); tr = banca / 'in' / a.trecere
+    es = json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))['zone']
+    harta = json.loads((banca / 'priv' / ('harta_%s.json' % a.trecere)).read_text(encoding='utf-8'))
+    if len(harta) != len(es): sys.exit('harta are %d zone, esantionul %d' % (len(harta), len(es)))
+    for k, z in enumerate(es):
+        lot, zn = 'lot%02d' % (k // 10 + 1), 'z%02d' % (k % 10 + 1); d = tr / lot / zn
+        if harta.get('%s/%s' % (lot, zn)) != z['zona']: sys.exit('harta nu corespunde la %s/%s' % (lot, zn))
+        if _sha((d / 'pagina.png').read_bytes()) != z['image_sha256']: sys.exit('imaginea %s/%s nu e cea din esantion' % (lot, zn))
+        t = TINTA_TEXT if z['tip_zona'] == 'text' else TINTA_TABEL
+        if (d / 'tinta.md').read_text(encoding='utf-8') != t.format(z=zn, sus=_margine(z['ancora_sus'], -1), jos=_margine(z['ancora_jos'], 1)):
+            sys.exit('tinta %s/%s nu corespunde esantionului' % (lot, zn))
+    _scrie_legatura(banca, a.trecere); print('legat', a.trecere, len(es), 'zone', _sha_esantion(banca)[:16])
 
 
 PROMPT = """Esti etichetator pentru o banca de proba OCR. In directorul curent sunt subdirectoare z01, z02, ... Fiecare are pagina.png
@@ -181,6 +212,7 @@ Raspunde DOAR cu un tablou JSON, un obiect per subdirector, in ordinea z01, z02,
 
 def cmd_eticheteaza(a):
     banca = pathlib.Path(a.banca); tr = banca / 'in' / a.trecere; out = banca / 'out' / a.trecere; out.mkdir(parents=True, exist_ok=True)
+    sha_es = _verifica_legatura(banca, a.trecere)
     loturi = [a.lot] if a.lot else sorted(p.name for p in tr.iterdir() if p.is_dir())
     for lot in loturi:
         dest = out / (lot + '.json')
@@ -188,7 +220,8 @@ def cmd_eticheteaza(a):
         if a.trecere == 'B':
             arr, meta = _eticheteaza_b(tr, out, lot)
             if arr is None: print(lot, 'EROARE', meta.get('eroare')); continue
-            dest.write_text(json.dumps({'meta': dict(meta, lot=lot, trecere='B', model='gpt-6-astra'), 'etichete': arr}, ensure_ascii=False, indent=1), encoding='utf-8')
+            dest.write_text(json.dumps({'meta': dict(meta, lot=lot, trecere='B', model='gpt-6-astra', esantion_sha256=sha_es), 'etichete': arr},
+                                       ensure_ascii=False, indent=1), encoding='utf-8')
             print(lot, len(arr), 'etichete', meta['secunde'], 's', 'AUDIT ESUAT: %d unelte' % len(meta['unelte_folosite']) if meta['unelte_folosite'] else '')
             continue
         cmd =['cmd.exe', '/c', CLAUDE, '-p', '--restricted', '--tools', 'Read', '--strict-mcp-config', '--no-session-persistence',
@@ -205,7 +238,7 @@ def cmd_eticheteaza(a):
             print(lot, 'EROARE parsare', e); continue
         meta = {'lot': lot, 'trecere': a.trecere, 'secunde': sec, 'turnuri': j.get('num_turns'), 'refuzuri_acces': j.get('permission_denials'),
                 'modele': {m: {k: u.get(k) for k in ('inputTokens', 'outputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens')}
-                           for m, u in (j.get('modelUsage') or {}).items()}, 'prompt_sha256': _sha(PROMPT.encode())}
+                           for m, u in (j.get('modelUsage') or {}).items()}, 'prompt_sha256': _sha(PROMPT.encode()), 'esantion_sha256': sha_es}
         dest.write_text(json.dumps({'meta': meta, 'etichete': arr}, ensure_ascii=False, indent=1), encoding='utf-8')
         print(lot, len(arr), 'etichete', sec, 's')
 
@@ -299,6 +332,32 @@ def acord_normalizat(x, y, tip_zona):
     return rx == ry
 
 
+def localizare_ok(e, z):
+    """Ancorele etichetei = ancorele INGHETATE ale tintei din esantion (Jakarinos #721 r2 P1-6): doua etichete identice pe o zona
+    gresita nu mai intra in acord. La margine (ancora None) eticheta trebuie sa scrie placeholder-ul „(...)”. Toleranta = cea
+    de la _ancora_ok (spatii, ş=ș, ancora transcrisa mai scurt pe sufix / prefix, fara numere schimbate la granita)."""
+    for camp, sens in (('sus', -1), ('jos', 1)):
+        t, v = z.get('ancora_' + camp), e.get('vecin_' + camp)
+        if not isinstance(v, str): return False
+        if t is None:
+            if not _loc(v).startswith('('): return False
+            continue
+        tv, vv = _loc_tinta(t), _loc_tinta(v)
+        if tv == vv: continue
+        # ancora tintei e autoritara: o eticheta care o CONTINE exact (cu context in plus spre exterior) e pe locul ei;
+        # una mai SCURTA trece doar cu regulile stricte (minim 8 caractere, fara numere schimbate la granita)
+        if len(vv) > len(tv): ok = vv.endswith(tv) if sens < 0 else vv.startswith(tv)
+        else: ok = _ancora_ok(tv, vv, sens)
+        if not ok: return False
+    return True
+
+
+def _loc_tinta(s):
+    """Forma de comparare a ancorelor fata de tinta: fara spatii, ş=ș, fara buline, fara separatoarele de celule goale de la capete."""
+    s = _loc(s).translate(SEDILA).replace('▪', '').replace('•', '')
+    return s.strip('|')
+
+
 def cheie(e, tip_zona):
     """Ce trebuie sa fie identic intre doua etichete: localizarea (vecinii, fara spatii) + continutul (cifre / UM / cod literal,
     spatiile unificate DOAR in interiorul unei celule / al textului). None = eticheta nu poate intra in acord (nesigur, ilizibil, tinta)."""
@@ -317,10 +376,14 @@ def cheie(e, tip_zona):
 
 
 def _etichete(banca, trecere):
+    sha_es = _verifica_legatura(banca, trecere)
     harta = json.loads((banca / 'priv' / ('harta_%s.json' % trecere)).read_text(encoding='utf-8')); out = {}; meta = {}
     for f in sorted((banca / 'out' / trecere).glob('lot*.json')):
         d = json.loads(f.read_text(encoding='utf-8')); meta[f.stem] = d['meta']
         if d['meta'].get('unelte_folosite'): continue  # lot invalidat de audit
+        # rezultat pentru alt esantion = refuzat; fara camp = rezultat dinainte de legatura, valabil doar pentru ca intrarile lui au
+        # fost verificate zona cu zona de `leaga` (si `pregateste` nu poate rescrie in/ existent)
+        if d['meta'].get('esantion_sha256', sha_es) != sha_es: meta[f.stem] = dict(d['meta'], invalid='alt esantion'); continue
         ids = [e.get('zona') for e in d['etichete']]
         if len(ids) != len(set(ids)): meta[f.stem] = dict(d['meta'], invalid='zona duplicata in raspuns'); continue
         for e in d['etichete']:
@@ -335,6 +398,9 @@ def cmd_compara(a):
     for zona, z in es.items():
         x, y = ea.get(zona), eb.get(zona)
         if x is None or y is None: st = 'lipsa_eticheta'
+        elif z.get('localizare') != 'unica': st = 'tinta_ambigua'  # ancore neunice in esantion: nu se masoara acordul (P1-6)
+        elif cheie(x, z['tip_zona']) is not None and not localizare_ok(x, z): st = 'localizare_gresita_' + a.x
+        elif cheie(y, z['tip_zona']) is not None and not localizare_ok(y, z): st = 'localizare_gresita_' + a.y
         else:
             kx, ky = cheie(x, z['tip_zona']), cheie(y, z['tip_zona'])
             if kx is None or ky is None: st = 'neeligibil'  # nesigur / ilizibil / tinta ambigua sau lipsa la cel putin unul
@@ -350,7 +416,8 @@ def cmd_compara(a):
 
 
 def cmd_raport(a):
-    banca = pathlib.Path(a.banca); harta = json.loads((banca / 'priv' / ('harta_%s.json' % a.trecere)).read_text(encoding='utf-8'))
+    banca = pathlib.Path(a.banca); sha_es = _verifica_legatura(banca, a.trecere)
+    harta = json.loads((banca / 'priv' / ('harta_%s.json' % a.trecere)).read_text(encoding='utf-8'))
     es = {z['zona']: z for z in json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))['zone']}
     c = collections.Counter(); sec = 0; lip = 0; ref = 0; unelte = 0
     # numitorul = TOATE tintele din harta (Jakarinos #721 r2): lot fara rezultat si lot invalidat se raporteaza separat, nu dispar
@@ -361,6 +428,7 @@ def cmd_raport(a):
         d = json.loads(f.read_text(encoding='utf-8')); sec += d['meta']['secunde']; ref += len(d['meta'].get('refuzuri_acces') or [])
         unelte += len(d['meta'].get('unelte_folosite') or [])  # trecerea B: orice unealta invalideaza lotul
         if d['meta'].get('unelte_folosite'): stare_lot[lot] = 'invalidat_audit'; c[('*', 'lot_invalidat', None, False)] += n; continue
+        if d['meta'].get('esantion_sha256', sha_es) != sha_es: stare_lot[lot] = 'alt_esantion'; c[('*', 'lot_alt_esantion', None, False)] += n; continue
         stare_lot[lot] = 'valid'
         got = {e.get('zona'): e for e in d['etichete']}
         for key, zona in harta.items():
@@ -384,9 +452,10 @@ def main(argv=None):
     p.add_argument('--model', default='opus')
     p = sp.add_parser('raport'); p.add_argument('banca'); p.add_argument('--trecere', required=True)
     p = sp.add_parser('compara'); p.add_argument('banca'); p.add_argument('x'); p.add_argument('y')
+    p = sp.add_parser('leaga'); p.add_argument('banca'); p.add_argument('--trecere', required=True, choices=['A', 'B'])
     a = ap.parse_args(argv)
     {'zone': cmd_zone, 'esantion': cmd_esantion, 'pregateste': cmd_pregateste, 'eticheteaza': cmd_eticheteaza, 'raport': cmd_raport,
-     'compara': cmd_compara}[a.cmd](a)
+     'compara': cmd_compara, 'leaga': cmd_leaga}[a.cmd](a)
 
 
 if __name__ == '__main__':
