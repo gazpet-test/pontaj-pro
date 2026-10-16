@@ -225,7 +225,8 @@ def _raspuns_codex(log):
     """Log-ul run_paw jak: ecoul brief-ului (BRIEF_START..BRIEF_END), apoi evenimentele Codex. Intoarce (raspunsul final = blocul
     de dupa ULTIMA linie 'codex', pana la 'tokens used'; liniile de dupa BRIEF_END pentru audit). Brief-ul nu intra in niciuna."""
     L = log.splitlines()
-    k = max((i for i, l in enumerate(L) if l.strip() == 'BRIEF_END'), default=-1)
+    # PRIMUL BRIEF_END = sfarsitul ecoului; o iesire care repeta linia nu poate reseta auditul (Jakarinos #721 r2)
+    k = min((i for i, l in enumerate(L) if l.strip() == 'BRIEF_END'), default=-1)
     if k < 0: return None, ['exec (log fara BRIEF_END: nu se poate audita)']  # log incomplet = lot invalid
     lin = [l.strip() for l in L[k + 1:]]
     ic = [i for i, l in enumerate(lin) if l == 'codex']
@@ -265,7 +266,7 @@ def _loc(s): return ''.join(str(s if s is not None else '').split())
 
 
 SEDILA = str.maketrans('şţŞŢ', 'șțȘȚ')
-ANCORA_MIN = 8  # caractere fara spatii; sub atat, ancora transcrisa mai scurt nu mai identifica locul
+ANCORA_NORM_MIN = 8  # caractere fara spatii; sub atat, ancora transcrisa mai scurt nu mai identifica locul (NU e ANCORA_MIN, tokenii zonelor)
 
 
 def _norm_celule(r):
@@ -279,8 +280,12 @@ def _ancora_ok(x, y, sens):
     x, y = x.translate(SEDILA), y.translate(SEDILA)
     if x == y: return True
     if not x or not y or x.startswith('(') or y.startswith('('): return False
-    if min(len(x), len(y)) < ANCORA_MIN: return False  # o ancora prea scurta poate fi sufixul / prefixul altui loc (Jakarinos #721 r2)
-    return (x.endswith(y) or y.endswith(x)) if sens < 0 else (x.startswith(y) or y.startswith(x))
+    if min(len(x), len(y)) < ANCORA_NORM_MIN: return False  # o ancora prea scurta poate fi sufixul / prefixul altui loc (Jakarinos #721 r2)
+    scurt, lung = (x, y) if len(x) <= len(y) else (y, x)
+    if sens < 0: ok, rest, granita = lung.endswith(scurt), lung[:len(lung) - len(scurt)], lung[len(lung) - len(scurt) - 1:][:2]
+    else: ok, rest, granita = lung.startswith(scurt), lung[len(scurt):], lung[len(scurt) - 1:len(scurt) + 1]
+    # partea in plus nu are voie sa schimbe un numar: fara cifre in ea si fara cifra lipita de granita (1|Materiale vs 11|Materiale, Total|10 vs Total|100)
+    return ok and not any(ch.isdigit() for ch in rest) and not all(ch.isdigit() for ch in granita)
 
 
 def acord_normalizat(x, y, tip_zona):
@@ -298,8 +303,16 @@ def cheie(e, tip_zona):
     """Ce trebuie sa fie identic intre doua etichete: localizarea (vecinii, fara spatii) + continutul (cifre / UM / cod literal,
     spatiile unificate DOAR in interiorul unei celule / al textului). None = eticheta nu poate intra in acord (nesigur, ilizibil, tinta)."""
     if e is None or e.get('tinta') != 'unica' or e.get('ilizibil') or e.get('incredere') != 'sigur': return None
-    if tip_zona == 'text': c = _ws(e.get('transcriere'))
-    else: c = json.dumps([[_ws(x) for x in r] for r in (e.get('randuri') or [])], ensure_ascii=False)
+    # schema obligatorie dupa tip (Jakarinos #721 r2): o eticheta fara ancore / continut nu e „zona goala”, e incompleta -> neeligibila
+    if not isinstance(e.get('vecin_sus'), str) or not isinstance(e.get('vecin_jos'), str): return None
+    gol = 'gol' in (e.get('continut') or [])
+    if tip_zona == 'text':
+        if not isinstance(e.get('transcriere'), str) or (not e['transcriere'].strip() and not gol): return None
+        c = _ws(e.get('transcriere'))
+    else:
+        r = e.get('randuri')
+        if not isinstance(r, list) or not all(isinstance(x, list) and all(isinstance(v, str) for v in x) for x in r) or (not r and not gol): return None
+        c = json.dumps([[_ws(x) for x in r] for r in r], ensure_ascii=False)
     return _loc(e.get('vecin_sus')), _loc(e.get('vecin_jos')), c
 
 
@@ -308,6 +321,8 @@ def _etichete(banca, trecere):
     for f in sorted((banca / 'out' / trecere).glob('lot*.json')):
         d = json.loads(f.read_text(encoding='utf-8')); meta[f.stem] = d['meta']
         if d['meta'].get('unelte_folosite'): continue  # lot invalidat de audit
+        ids = [e.get('zona') for e in d['etichete']]
+        if len(ids) != len(set(ids)): meta[f.stem] = dict(d['meta'], invalid='zona duplicata in raspuns'); continue
         for e in d['etichete']:
             k = '%s/%s' % (f.stem, e.get('zona'))
             if k in harta: out[harta[k]] = e
@@ -338,17 +353,23 @@ def cmd_raport(a):
     banca = pathlib.Path(a.banca); harta = json.loads((banca / 'priv' / ('harta_%s.json' % a.trecere)).read_text(encoding='utf-8'))
     es = {z['zona']: z for z in json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))['zone']}
     c = collections.Counter(); sec = 0; lip = 0; ref = 0; unelte = 0
-    for f in sorted((banca / 'out' / a.trecere).glob('lot*.json')):
-        if f.name.endswith('.raw.txt'): continue
-        d = json.loads(f.read_text(encoding='utf-8')); lot = f.stem; sec += d['meta']['secunde']; ref += len(d['meta'].get('refuzuri_acces') or [])
+    # numitorul = TOATE tintele din harta (Jakarinos #721 r2): lot fara rezultat si lot invalidat se raporteaza separat, nu dispar
+    loturi = sorted({k.split('/')[0] for k in harta}); stare_lot = {}
+    for lot in loturi:
+        f = banca / 'out' / a.trecere / (lot + '.json'); n = sum(1 for k in harta if k.startswith(lot + '/'))
+        if not f.exists(): stare_lot[lot] = 'lipsa'; c[('*', 'lot_lipsa', None, False)] += n; continue
+        d = json.loads(f.read_text(encoding='utf-8')); sec += d['meta']['secunde']; ref += len(d['meta'].get('refuzuri_acces') or [])
         unelte += len(d['meta'].get('unelte_folosite') or [])  # trecerea B: orice unealta invalideaza lotul
+        if d['meta'].get('unelte_folosite'): stare_lot[lot] = 'invalidat_audit'; c[('*', 'lot_invalidat', None, False)] += n; continue
+        stare_lot[lot] = 'valid'
         got = {e.get('zona'): e for e in d['etichete']}
         for key, zona in harta.items():
             if not key.startswith(lot + '/'): continue
             e = got.get(key.split('/')[1])
             if e is None: lip += 1; continue
             s = es[zona]['strat']; c[(s, e.get('tinta'), e.get('incredere'), bool(e.get('ilizibil')))] += 1
-    print(json.dumps({'secunde': sec, 'lipsa_din_raspuns': lip, 'refuzuri_acces': ref, 'unelte_folosite': unelte,
+    print(json.dumps({'tinte': len(harta), 'loturi': collections.Counter(stare_lot.values()), 'secunde': sec, 'lipsa_din_raspuns': lip,
+                      'refuzuri_acces': ref, 'unelte_folosite': unelte,
                       'per_strat': {'|'.join(map(str, k)): v for k, v in sorted(c.items(), key=lambda kv: tuple(map(str, kv[0])))}},
                      ensure_ascii=False, indent=1))
 
