@@ -1,9 +1,11 @@
 # Pipeline-ul de citire a documentelor (Ofertare) — de la PDF la BD
 
 Document unic, cap-coadă (decizia Razvan 16.10.2026). **Orice PR care schimbă pipeline-ul îl actualizează în același PR** (secțiunea
-afectată + un rând în „Istoric revizii”); CI-ul `pipeline-citire-doc.yml` pică altfel. Căile urmărite: `scripts/ocr_local/**`,
-`supabase/functions/ofertare-ocr-*`, `ofertare-ingest-doc`, `ofertare-cantitati-extrage`, `ofertare-citire-test`, `ofertare-pdf-link`, migrările /
-revenirile `*ofertare_ocr*`, `*ofertare_cant*`, `*ofertare_text_scrie*`, `*ofertare_citire_umbra*`.
+afectată + un rând în „Istoric revizii”); CI-ul `pipeline-citire-doc.yml` pică altfel. Căile urmărite:
+- **scripturi:** `scripts/ocr_local/**`, `scripts/recitire_val1/**`, `worker/ofertare/**`;
+- **funcții edge:** `supabase/functions/ofertare-ocr-*`, `ofertare-ingest-doc`, `ofertare-cantitati-extrage`, `ofertare-citire-test`, `ofertare-pdf-link`, `ofertare-document-nou-citeste`, `ofertare-plansa-citeste`, `ofertare-word-text`, `ofertare-seap-import`, `ofertare-seap-veghe`;
+- **cod comun:** `_shared/{transcriereTabel, provenientaText, gardaIngest*, cantNumar, cantNormalizare, cantComparator, dn}.ts`;
+- **migrări / reveniri:** `*ofertare_ocr*`, `*ofertare_cant*`, `*ofertare_text_scrie*`, `*ofertare_citire_umbra*`, `*ofertare_ingest_garda*`.
 
 Autori: partea 1 (ingest Haiku 5.5, proveniență / CAS, recitire, cantități — TKT-0329) = sesiunea Ofertare; partea 2 (OCR local,
 arbitru, cititor_3, umbra) = laboratorul OCR; asamblarea = chatul principal.
@@ -32,19 +34,172 @@ flowchart TD
 
 ---
 
-## Partea 1 — Ingest AI, proveniență, recitire, cantități *(de completat de sesiunea Ofertare)*
+## Partea 1 — Surse, ingest AI, proveniență, recitire, cantități (sesiunea Ofertare)
 
-### 1.1 Ingest (`ofertare-ingest-doc`, Haiku 5.5)
-*[Ofertare]*
+### 1.0 De unde vin documentele
 
-### 1.2 Proveniența textului și CAS (20261031a/b)
-*[Ofertare]*
+Toate documentele ajung în `ofertare_documente_atribuire`: rândul documentului, plus fișierul în Storage, bucket `ofertare`, la `fisier_path`.
 
-### 1.3 Recitire / citire test (`ofertare-citire-test`)
-*[Ofertare]*
+| Sursă | Cine o pornește | Ce scrie | Cost |
+|---|---|---|---|
+| **SEAP**: importul inițial al documentației | `ofertare-seap-import`, pornit din UI sau de veghe | rânduri de document + fișierele în Storage (`seap_cod`, `seap_meta`; `inlocuieste_id` la versiuni noi) | 0 (fără AI) |
+| **SEAP**: documente apărute ulterior (clarificări, erate) | `ofertare-seap-veghe` (joburile cron `ofertare_seap_veghe_0520` / `_1250`, ora UTC), care cheamă importul prin HTTP | la fel | 0 |
+| **Arhive** (zip / rar) desfăcute pe NAS | worker-ul NAS (`worker/ofertare/`) | părți `… — pNN_pagA-B.pdf` cu `pagina_offset` | 0 |
+| **Manual** (încărcare în fișa licitației) | utilizator Ofertare, din UI | rând + fișier | 0 |
 
-### 1.4 Cantități (`ofertare-cantitati-extrage`, TKT-0329 B)
-*[Ofertare]*
+Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `text_extras`, e pasul următor (§1.1).
+
+**Ce poate merge prost și cum se revine:**
+
+| Situație | Revenire |
+|---|---|
+| Fișier de sistem (`__MACOSX`, `.DS_Store`) | ingest-ul îl marchează `ignorat`, fără cost |
+| Non-PDF (docx, xls, dwg) | rămâne fișier; `.docx` se citește cu `ofertare-word-text` |
+| Același fișier importat de două ori (copii între licitații) | Nu se deduplică. Recitirea valului 1 a citit separat copiile din lic. 103 (§1.3). |
+
+### 1.1 Citirea în text (`ofertare-ingest-doc` și căile vecine)
+
+**`ofertare-ingest-doc`**: drumul principal pentru PDF-uri, inclusiv scanate.
+
+| Element | Valoare |
+|---|---|
+| Model, pe tipul documentului | Volumele (caiete, liste, `alta`): **`claude-haiku-5-5`** (din 15.10, commit `6f8a22c`; înainte Haiku 4.5), felii de **8** pagini. Documentele critice (`fisa_date`, `clarificare`, `raspuns_clarificare`, `formular`): **`claude-sonnet-5`**, felii de **2**. Un parametru `model` poate forța alegerea. |
+| Setări | `max_tokens` = `maxOut(model)` din `_shared/transcriereTabel.ts`: **12 000** pe Haiku 5.5, 8 000 în rest. `thinking` dezactivat, fără `temperature`. |
+| Prompturi | `PROMPT_ANTET` pe prima felie: JSON cu obiectiv, beneficiar, proiectant, revizie, apoi `===TEXT===`. `PROMPT_TEXT` pe celelalte. Amândouă au **regula de tabel** (`REGULA_TABEL`: o linie pe rând, celulele separate prin ` \| `, inclusiv cele goale) și marcajele `⟦PAGINA N⟧`. |
+| Numerotarea paginilor | Absolută: `pagina_offset` + pagina locală. `asiguraMarcaje` renumerotează secvențial când numărul marcajelor = numărul paginilor din felie. |
+| Reluare | Cel mult 2 apeluri pe invocare. Progresul (`pagini_procesate`, `pagini_felie`) e salvat, iar invocarea următoare continuă de unde a rămas. |
+| `max_tokens` atins | Felia se înjumătățește. O pagină singură care tot nu încape → pagină **necitită** (`pagini_necitite`). |
+| Refuz (`stop_reason = refusal`) | Paginile feliei → necitite. |
+| Felie peste 24 MB | Se înjumătățește. Pagina singură prea mare → necitită. |
+| Text peste 900 000 de caractere | `taie_pagina.ts` taie la ultima pagină întreagă; paginile tăiate → necitite + avertisment. |
+| Fișier peste 60 MB | Refuzat de edge. Îl citește worker-ul NAS (`citire_mare.ts`, pe felii). |
+| Sărite | `procesat`; `partial` fără `reia: true`; `plansa` (are calea ei); documentele sparte în bucăți (se citesc bucățile); `ignorat`; documentele neeligibile pe loturi (poarta loturi 20261024b, înainte de orice descărcare sau AI) |
+| Scrierea | **Garda de ingest** (20260930k): `ofertare_ingest_garda_incearca` (token, lease de 10 min, max 5 eșecuri, max 80 de descărcări), apoi `ofertare_ingest_garda_rezultat`. Acesta scrie rândul documentului (coloane din whitelist) în aceeași tranzacție cu verificarea tokenului, deci un token vechi e respins. Apoi proveniența (§1.2). |
+| Cine o pornește | Un utilizator cu acces Ofertare care e **owner sau responsabilul licitației** (poarta pe cheltuială). Sau worker-ul NAS, cu `x-ingest-secret` = `OFERTARE_INGEST_SECRET`, pe coada `ofertare_ingest_coada` (butonul „☁ Pe server”). Cheia anon nu trece niciodată. |
+| Cost | Haiku 5.5: 0,10 / 0,50 USD pe milion de tokeni (intrare / ieșire), sub pragul de 100k tokeni pe cerere; peste, 0,50 / 2,50. Sonnet 5: 2 / 10. Fiecare apel ajunge în `ai_usage_log`. Laboratorul a măsurat ~0,005 USD pe 8 pagini cu Haiku 5.5. |
+
+**Worker-ul NAS** (`worker/ofertare/ingest.ts`): consumă aceeași coadă.
+- PDF-urile cu strat de text (≥ 85 % pagini cu text) se scot **gratuit**, cu `pdftotext`, cu aceleași marcaje.
+- Antetul se citește cu Haiku 4.5 (~0,001 USD; încă Haiku 4.5 în worker).
+- Scanurile trec prin edge-ul de mai sus.
+- PDF-urile peste 60 MB se citesc local, pe felii.
+- Scrie tot prin gardă. Nu scrie proveniență.
+
+**Căile vecine** (scriu și ele `text_extras` sau date din citire):
+
+| Funcție | Ce face | Model / cost | Cine o pornește | Proveniența |
+|---|---|---|---|---|
+| `ofertare-document-nou-citeste` | Rezumatul unui document apărut ulterior în SEAP → `analiza.citire_noi`. `text_extras` doar dacă era gol (CAS pe `analiza` și pe sha). | `claude-sonnet-5`; PDF-ul întreg doar pentru owner / responsabil / secretul intern | utilizator Ofertare, sau rutina cu `x-radar-secret` | `sinteza_ai` (nu e transcriere, deci nu e valid pentru cantități) |
+| `ofertare-plansa-citeste` | Planșele A0, felie cu felie (tăiate de `/api/plansa-felii`): tabelele de dimensionare, cartușul, adnotările → `ofertare_cantitati` + `textPlansa` | `claude-opus-5`, cel mult `FELII_PE_RULARE` pe rulare | owner / responsabil | `sinteza_ai` |
+| `ofertare-word-text` | `.doc` / `.docx` → text, fără AI | 0 | ca ingest-ul | — (scrie prin gardă) |
+
+**Ce poate merge prost și cum se revine:**
+
+| Situație | Efect | Revenire |
+|---|---|---|
+| Model care pierde cantități (Haiku 4.5, laborator 15.10: 44–63 % pe listele scanate) | text incomplet | **Recitirea** (§1.3) |
+| Pagini necitite (refuz, prea mari) | `status_procesare = 'partial'` și `pagini_necitite` | `reia: true` după mărirea plafonului, sau OCR local (partea 2) |
+| Rezultat întârziat de la o încercare veche | respins de gardă (tokenul) | automat |
+| Worker oprit la mijloc (memorie) | lease expirat → încercarea se preia; după 5 eșecuri `blocat` | reactivare doar de owner (`ofertare_ingest_garda_reactiveaza`) |
+
+### 1.2 Proveniența textului și CAS (20261031a, 20261031b)
+
+**De ce există.** `text_extras` nu spune singur cum a fost produs. Pentru cantitățile structurate (§1.4) contează dacă textul e o **transcriere** sau o **sinteză AI**.
+
+| Element | Ce este |
+|---|---|
+| `ofertare_doc_texte` | Arhiva content-addressed `(licitatie_id, sha256) → text`. Imuabilă, cu `CHECK` pe sha. Aici stau textele vechi după înlocuire. |
+| `ofertare_doc_texte_prov` | Append-only, pe `(document, sha)`: `origine` (`transcriere` / `sinteza_ai`), `producator`, `completitudine` (`integral` / `partial`), `pagini_necitite`, `constatat_la` |
+| `fn_ofertare_cb_text_scrie` (31a, refăcută în **31b**) | Funcția prin care producătorii scriu proveniența (`_shared/provenientaText.ts`, best-effort: o eroare nu oprește producătorul) |
+| `fn_ofertare_cb_text_valid(_asof)` | Predicatul unic. Textul e **valid** pentru un document și un sha dacă ultima proveniență e `transcriere`, SAU dacă există o decizie umană `text_confirmat` nerevocată. Altfel `{}`. |
+| Înghețarea (`fn_ofertare_cb_ingheata`) | Alege, pentru fiecare document, ultima proveniență ≤ moment. Un text fără dovadă intră în snapshot ca `text_indisponibil`. |
+
+**Cum lucrează `fn_ofertare_cb_text_scrie` după 31b:**
+- **Ordinea lock-urilor:** licitația `FOR KEY SHARE`, apoi documentul `FOR NO KEY UPDATE`. E aceeași ordine ca la pornirea extragerii de grup, deci fără ciclu de deadlock.
+- **CAS:** proveniența se scrie DOAR dacă textul dat are exact sha-ul `text_extras`-ului curent. Altfel răspunsul e `{refuz: 'text_depasit'}` și nu se scrie nimic.
+- **Efectul:** un producător întârziat nu poate scrie o proveniență „mai nouă” pentru un text deja înlocuit.
+
+| | |
+|---|---|
+| Cine o pornește | Producătorii, ca service_role: ingest, `document-nou-citeste`, `plansa-citeste`. Worker-ul NAS și `word-text` NU scriu proveniență, deci textele lor nu sunt valide pentru cantități până la o confirmare umană. |
+| Cost | 0 |
+| Ce poate merge prost | Proveniența lipsă (texte mai vechi de 31a/31b, toate textele de dinainte de 16.10) → textul nu e valid pentru cantități. Se rezolvă cu `text_confirmat` (decizie umană, `fn_ofertare_cb_decizie`) sau cu o recitire. |
+| Revenire | `supabase/revenire/20261031b_…_ROLLBACK.sql` (corpul din 31a) și `20261031a_…_ROLLBACK.sql`. Amândouă sunt armate pe tranzacție. 31a și 31b sunt APLICATE pe 16.10. |
+
+### 1.3 Recitirea textelor și laboratorul de citire (`ofertare-citire-test`, `scripts/recitire_val1/`)
+
+**Laboratorul (`ofertare-citire-test`)**
+- Citește un document cu un model ales (`haiku` = 4.5, `haiku55`, `sonnet`, `opus`), pe felii, cu exact promptul și regula de tabel ale ingest-ului.
+- Scrie DOAR în `ofertare_citire_test` (text, tokeni, cost, eroare pe felie) și în `ai_usage_log`. Nu atinge documentul.
+- Pe el s-a făcut proba din 15.10: Haiku 5.5 față de Haiku 4.5 pe primele 8 pagini.
+- **Atenție:** poarta lui e doar „acces Ofertare”, NU poarta pe cheltuială. Orice utilizator Ofertare poate porni apeluri plătite. De închis după valul 1: recitirea valului 1 îl folosește cu `claudetest@`, care e admin, nu owner.
+
+**Recitirea, varianta C** (decizia lui Răzvan, 16.10)
+
+- **Valul 1:** procedură unică (`docs/ofertare/RECITIRE_VAL1_PROCEDURA.md` v5, scripturile din `scripts/recitire_val1/`, #734). Cuprinde 20 de liste de cantități:
+  - 13 citite cu Haiku 4.5;
+  - 7 copii ale lic. 5 în lic. 103.
+
+  Toate 20 au zero date derivate.
+- **Valul 2 (celelalte ~950 de documente):** abia după protocolul general de versiune a textului (varianta A, `docs/ofertare/RECITIRE_TEXTE_SPEC.md` v3, doar intrare).
+
+| Pas | Cine | Cost | Ce poate merge prost → revenire |
+|---|---|---|---|
+| 0. `pas0.sql`: cele 20 de documente au tot zero derivate și sunt `procesat` | chat, read-only | 0 | o abatere → oprire, decide Răzvan |
+| 1. `fereastra.ts deschide`: snapshot-ul joburilor (o dată), cele 13 joburi Ofertare oprite, worker-ul NAS oprit, golirea `T_gol` + 15 min. Orice activitate nouă reia așteptarea. | chat, seara, cu „da”-ul lui Răzvan | 0 | stare coruptă → oprire fără suprascriere. **La orice eroare după deschidere: `fereastra.ts inchide`** (repune exact joburile și worker-ul). |
+| 2. `citeste.ts`: laboratorul, Haiku 5.5, secvențial, UN apel pe invocare | chat, cu „da” | plafon **dur 1,00 USD** pe val (rezervare persistentă de 0,53 USD înaintea fiecărui apel, cazul cel mai rău). Așteptat ~0,33 USD. | apel fără exact un rând de staging, usage neatribuit, apel străin, sursă schimbată → oprire, cu rezervarea păstrată. Registrul valului e unul singur (`rulare.json`) și ilizibil = oprire. |
+| 3. `asambleaza.ts`: marcaje brute exacte (fără reparare), acoperire 1..pagini, identitatea citirii = cea din BD, convenția numerică pe grupul de părți (212 + 213) | chat, local | 0 | integritatea nu se poate excepta. Calitatea (`cantitati_m` nou ≥ vechi) se poate accepta nominal de Răzvan. |
+| 4. Preview → „da”-ul lui Răzvan, cu commit-ul + sha256 al `manifest_aprobat.csv` | Răzvan | — | — |
+| 5. `aplica.sql`: o tranzacție psql ca postgres | chat | 0 | Pași: `LOCK TABLE … IN SHARE MODE` pe tabelele derivate, apoi CAS pe text, identitate, metadate, PDF-ul din Storage și licitație, apoi arhivarea textului vechi și nou, apoi `UPDATE`, apoi proveniența `transcriere` / `recitire-haiku-5-5`. Orice abatere → `RAISE`, nimic scris. După COMMIT, `aplica_rezultat.sql` verifică egalitatea cu `RETURNING`. |
+| 6. `verifica.sql`, după 24h | chat, read-only | 0 | derivat pe text depășit → eșec, decide Răzvan. Derivate fără versiune → „nedovedit”, listate. |
+| R. `revino.sql` | chat, cu „da” | 0 | CAS pe starea exactă de după aplicare. Textul și metadatele vechi revin. Proveniența `sinteza_ai` / `revenire-recitire` face înghețarea să aleagă textul vechi, marcat `text_indisponibil`. |
+
+Testele: 44 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `scripts/test_recitire_val1.sh`.
+
+### 1.4 Cantitățile structurate și comparatorul (TKT-0329 B: 20261031a, `ofertare-cantitati-extrage`, `_shared/cantComparator.ts`)
+
+**Extragerea (modul `structurat`, PR3 #729)**
+
+| Pas | Ce face |
+|---|---|
+| Intrarea | Doar documentele cu **text valid** (§1.2). Celelalte sunt sărite (`text_nevalid`). |
+| Rolurile | Rolurile pe secțiuni (`f3`, `c6`, `atr`, `cs`, `fisa_date`, `memoriu`, `plansa`…), din antet, marcaje sau titlu. Deciziile omului (`rol_confirmat` / `nu_e_sursa_cantitativa`) le înlocuiesc. |
+| Feliile | Felii cu poziție. Modelul `openai_mini` (cheia `OPENAI_API_KEY`) întoarce rânduri. |
+| Normalizarea în cod (`_shared/cantNumar.ts`, `cantNormalizare.ts`, `dn.ts`) | Cantitatea e **dovedită** doar dacă tokenul întreg e găsit în textul documentului, are UM-ul alăturat sau UM-ul din antetul coloanei, și nu e diametru sau exponent. **Convenția numerică** (`3.995` = 3995 sau 3,995) se ia doar din dovezi tari, pe GRUPUL de părți ale aceluiași PDF. Un token ambiguu → `valoare_ambigua` → cheia `incomplet`. |
+| Pornirea | Prin `fn_ofertare_cb_extragere_incepe_grup` (31b), sub mutexul licitației: documentele `FOR SHARE NOWAIT`, verificarea manifestului de grup, verificarea deciziilor de rol, apoi cererea. |
+| Scrierea | Rezultatul intră în tabelele imuabile `ofertare_cant_extrageri` / `_felii` / `_obs`. |
+
+**Comparatorul (`_shared/cantComparator.ts`, PR4a #731; funcții pure, încă nelegat de UI)**
+- **Deduplicarea:** pe valori brute, doar la același (document, sha, offset) cu semantică identică. Orice dezacord → `conflict_sursa`.
+- **Agregarea:** `masura = lungime` (km → m), pe rol și cheie (`lot|obiect|tip|material|dn|um`), cu aliasuri umane.
+- **Totalurile:** `suma_vs_total` și `suma_vs_subtotal`, emise mereu.
+- **Pragurile:**
+  - H2: diferență relativă > 0,1 %;
+  - „de semnalat”: > 1 m ȘI > 1 %.
+- **Acoperirea pe perechi:** `gata` doar cu toate condițiile îndeplinite. Neasociatele, cheile incomplete și anomaliile din roluri o blochează.
+- **H2:** tri-state, `necalculat` / `incomplet` / `gata`.
+- **Amprenta:** canonică.
+- **PR4b**, după proba pe lic. 15: edge-ul „Recalculează”, tab-ul Comparație, view-ul H2.
+
+| | |
+|---|---|
+| Cine o pornește | **Owner sau responsabilul licitației** (poarta pe cheltuială în edge) și DOAR pe o **cerere** activă (`fn_ofertare_cb_cerere`: owner / responsabil / admin Ofertare). Cererea cere un **plafon** setat de owner (`fn_ofertare_cb_buget_seteaza`, scopul `cant_extragere`, ≤ 100 USD). `x-radar-secret` e refuzat în acest mod. |
+| Cost | Fiecare felie e plătită printr-o rezervare atomică în BD (`fn_ofertare_cb_rezerva`, apoi `fn_ofertare_cb_deconteaza` / `_necunoscuta` / `_abandon`). Consumul = decontat + deschis + necunoscut + abandonat. Depășirea rezervării → bugetul `blocat` (deblocare doar de owner). |
+| Ce poate merge prost | Text nevalid → documentul e sărit. Grup schimbat sau ocupat → `grup_schimbat` / `grup_ocupat`, se reia. Felie cu rezultat necunoscut → socotită în consum, reluată doar de om (`fn_ofertare_cb_extragere_redeschide`). Cantități ambigue → `incomplet`, nu se adună. |
+| Revenire | Tabelele sunt imuabile: o extragere nouă (alt sha / extractor) nu șterge istoricul. Migrarea are `supabase/revenire/20261031a_ofertare_cantitati_b_ROLLBACK.sql`, armată. |
+| Starea la 16.10 | 31a + 31b + edge-urile deployate. **Proba plătită pe lic. 15 (Răcari) e amânată până după recitirea 212 / 213.** Plafonul și pornirea le face Răzvan; cererea o poate face `claudetest@`. După recitire, 212 / 213 au proveniență `transcriere`, deci nu mai cer `text_confirmat`. |
+
+### 1.5 Porțile și plafoanele (rezumat)
+
+| Pas plătit | Cine îl poate porni | Plafon / control |
+|---|---|---|
+| Ingest (`ofertare-ingest-doc`) | owner sau responsabilul licitației, sau worker-ul NAS (secret) | per apel în `ai_usage_log`, fără plafon pe licitație |
+| `document-nou-citeste` (PDF întreg) | owner / responsabil / secretul intern. Rezumatul din textul existent: oricine are acces Ofertare. | per apel |
+| `plansa-citeste` | owner / responsabil | `FELII_PE_RULARE` pe rulare |
+| Laboratorul (`ofertare-citire-test`) | **orice utilizator Ofertare (gaură, de închis după valul 1)** | — |
+| Recitirea valului 1 | chat, cu „da”-ul lui Răzvan, prin laborator | 1,00 USD dur pe val, rezervare 0,53 pe apel |
+| Extragerea cantităților | owner / responsabil, pe cererea activă | plafonul `cant_extragere` (owner), rezervare atomică |
+| Arbitrul OCR (partea 2) | client, cu „da” pe sumă | plafonul rulării în BD |
 
 ---
 
@@ -167,3 +322,4 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #741 | Validările 4xx nu opresc proba |
 | 16.10.2026 | #742 | Prompt arb-v3 (diacritice) |
 | 16.10.2026 | (acest PR) | Documentul pipeline-ului + CI |
+| 16.10.2026 | (acest PR) | Partea 1, scrisă de sesiunea Ofertare: §1.0 sursele, §1.1 ingest + căile vecine, §1.2 proveniența / CAS (31a / 31b), §1.3 laboratorul + recitirea valului 1 (#734), §1.4 cantități + comparator (#726 #729 #731), §1.5 porțile; căile CI extinse |
