@@ -126,7 +126,7 @@ Condiții OBLIGATORII; nicio excepție nu le poate trece peste:
 
 - Renumerotarea e strictă: `N` → `N + pagina_offset`. Pentru 213 rezultă exact 105..176.
 - Feliile se lipesc ca în ingest: `text + '\n'`, apoi `trim()`.
-- Rezultă `texte/<id>.txt` și `sha_nou`.
+- Rezultă `texte.csv` (`document_id`, textul în base64, ca `py` să nu interpreteze nimic) și `sha_nou`.
 
 ### Raportul (vechi / nou)
 
@@ -159,10 +159,10 @@ Condiții OBLIGATORII; nicio excepție nu le poate trece peste:
 
 ### Fereastra
 
-Scripturile `fereastra_deschide.sql` și `fereastra_inchide.sql` sunt idempotente.
+Scriptul `fereastra.ts deschide|inchide <dir>` e idempotent (implementarea: Deno; are nevoie de fișierul de stare, de reluări și de așteptări).
 
 **Deschiderea:**
-1. Starea inițială se salvează O SINGURĂ DATĂ pe fereastră, în `fereastra_stare.csv`, care conține run-id, `stare = OPEN`, joburile cu `active` și starea worker-ului NAS (pornit sau oprit).
+1. Starea inițială se salvează O SINGURĂ DATĂ pe fereastră, în `fereastra_stare.json`, care conține run-id, `stare = OPEN`, joburile cu `active` și starea worker-ului NAS (pornit sau oprit).
    - O a doua deschidere găsește fișierul `OPEN` și îl REFOLOSEȘTE, fără să-l suprascrie. Nu se pierde starea originală (test: deschide → deschide → închide).
 2. **Joburile de oprit:**
    - **Allowlist explicit**, adică joburile cunoscute care pot atinge documentele sau tabelele §2.1, verificate pe 16.10: `ofertare_ingest_worker`, `ofertare_extragere_worker`, `ofertare_seap_veghe_0520`, `ofertare_seap_veghe_1250`, `ofertare_radar_0500`, `ofertare_radar_1230`, `ofertare_raport_zilnic_0430`, `ofertare_alerte_0540`, `ofertare_alerte_1310`, `ofertare_alerte_atentie_0630`, `ofertare_alerta_pagini_goale_0615`, `ofertare_clarificari_reminder_0600`, `ofertare_participari_sapt`.
@@ -183,16 +183,16 @@ Scripturile `fereastra_deschide.sql` și `fereastra_inchide.sql` sunt idempotent
      - o cerere scoasă din coadă la `T_stop` + 7 minute, fără răspuns → nimic nu pornește înainte de `T_gol` + 15 minute;
      - simularea veghe → import → nimic nu pornește înainte de terminarea lanțului.
 4. Confirmă că nu există job în curs (`cron.job_run_details`, `status = 'running'`).
-5. Worker-ul NAS e oprit pe server; se confirmă `worker_heartbeat.ultimul` mai vechi de 10 minute (≥ 400 s). Starea inițială (pornit / oprit) e în `fereastra_stare.csv`.
+5. Worker-ul NAS e oprit pe server; se confirmă `worker_heartbeat.ultimul` mai vechi de 10 minute (≥ 400 s). Starea inițială (pornit / oprit) e în `fereastra_stare.json`.
 6. **Utilizatorii.** Anunțul către utilizatori NU e un pas al procedurii și NU îl trimite nicio sesiune Claude: nici mesaj, nici mail. Decide Răzvan dacă, cum și cui anunță, sau alege o fereastră în care nu lucrează nimeni în Ofertare (de exemplu seara). Chat-ul îi duce întrebarea.
 
-**Închiderea** reactivează EXACT joburile care erau active în `fereastra_stare.csv` și repornește worker-ul NAS dacă era pornit, cu verificarea heartbeat-ului proaspăt.
+**Închiderea** reactivează EXACT joburile care erau active în `fereastra_stare.json` și repornește worker-ul NAS dacă era pornit, cu verificarea heartbeat-ului proaspăt.
 - **Se rulează IMEDIAT la ORICE oprire după deschidere**, nu doar după aplicare:
   - eroare sau oprire a pilotului (cost neconfirmat, apel străin, plafon, `sursa_schimbata`);
   - eroare la asamblare;
   - un „da” pe preview care întârzie;
   - aplicare eșuată.
-  Pilotul și scripturile se termină cu un cod distinct, iar `README.md` cere `fereastra_inchide.sql` ca prim pas la orice cod ≠ 0. Joburile nu rămân oprite cât se așteaptă o decizie. Reluarea = o fereastră nouă, cu toate verificările din nou.
+  Pilotul și scripturile se termină cu un cod distinct, iar `README.md` cere `fereastra.ts inchide` ca prim pas la orice cod ≠ 0. Joburile nu rămân oprite cât se așteaptă o decizie. Reluarea = o fereastră nouă, cu toate verificările din nou.
 - Test: timeout cu cost neconfirmat în citire → închiderea readuce exact starea inițială.
 - Se rulează și după o aplicare eșuată.
 - E verificată prin `SELECT`, apoi marchează fișierul `CLOSED`.
@@ -205,7 +205,7 @@ Se rulează cu `psql -v ON_ERROR_STOP=1 -1`. E o singură tranzacție, totul sau
    - `sha256` al conținutului `manifest_aprobat.csv`, încărcat linie cu linie în ordine, = `:manifest_sha256` (cel din „da”). Altfel `RAISE`.
    - `session_user = 'postgres'`;
    - `SET LOCAL lock_timeout = '5s'`;
-   - `\copy` în tabele temporare pentru `manifest_aprobat.csv` și `texte/*.txt`;
+   - `\copy` în tabele temporare pentru `manifest_aprobat.csv` (o dată ca linii brute, pentru sha256, și o dată tipizat) și `texte.csv`;
    - contractul de intrare, cu `RAISE` la orice abatere:
      - id-urile ⊆ whitelist și unice;
      - pentru fiecare rând, `integritate_ok = true` și (`calitate_ok` sau `calitate_acceptata_nominal` cu motiv);
@@ -282,7 +282,7 @@ Per document:
 
 `scripts/recitire_val1/`:
 - `citeste.ts`, `asambleaza.ts`;
-- `fereastra_deschide.sql`, `fereastra_inchide.sql`;
+- `fereastra.ts`, `pas0.sql`, `derivate.sql` (lista §2.1, ca funcție TEMPORARĂ `pg_temp`, fără obiecte noi în BD);
 - `aplica.sql` + `aplica_rezultat.sql` (read-only, după COMMIT), `verifica.sql`, `revino.sql` + `revino_rezultat.sql`;
 - `README.md` (ordinea pașilor).
 
@@ -354,7 +354,7 @@ Nu se creează tabele, migrări, funcții edge sau joburi. Nota din `registru_au
 | CAS-ul revenirii pe `procesat_la` (Jakarinos #6, Copilot P1) | `RETURNING` → `aplicare_rezultat.csv` (`meta_aplicat`, `prov_id`), comis în repo |
 | Marcajele reparate de `asiguraMarcaje` (Jakarinos #7) | Marcajele brute stricte, fără reparare; raport separat brut / normalizat; convenția pe grupul 212 + 213; listarea diferențelor pentru verificare umană |
 | Contractul SQL (Jakarinos #8) | Whitelist, unicitate, existență, `licitatie_id` / `pagini`, NULL-safe, postcondiții cu `RAISE`; `formulare_registru` adăugat |
-| Fereastra care nu se poate restaura (Copilot P2) | `fereastra_stare.csv` salvat întâi; închiderea idempotentă, rulată și după eșec |
+| Fereastra care nu se poate restaura (Copilot P2) | `fereastra_stare.json` salvat întâi; închiderea idempotentă, rulată și după eșec |
 | Endpoint fără poartă pe cheltuială (Copilot P2) | Monitorizare + oprire în pilot; PR separat |
 
 ## 11. Schimbări v2 → v3 (review r2)
@@ -364,7 +364,7 @@ Nu se creează tabele, migrări, funcții edge sau joburi. Nota din `registru_au
 | Revenirea se autorefuza pe proveniența aplicării (Jakarinos #1, Copilot P1) | Se cere EXACT `prov_id`; orice altă proveniență / decizie / derivat → refuz. Riscul de la §1 e reformulat: revenirea nu e garantată după un derivat întârziat. |
 | Feliile nelegate de octeții citiți, A → B → A (Jakarinos #2) | `updated_at` / `eTag` / `size` din Storage, verificate înainte și după FIECARE invocare; o scriere mută `updated_at`. |
 | Golirea `pg_net`, limita de 400 s (Jakarinos #3) | Coada goală + nicio cerere spre Ofertare în ultimele 8 minute; heartbeat NAS ≥ 10 minute. |
-| Starea ferestrei suprascrisă la redeschidere (Jakarinos #4, Copilot P2) | `fereastra_stare.csv` creat o singură dată (`OPEN` → `CLOSED`), refolosit la reluare; testul deschide → deschide → închide. |
+| Starea ferestrei suprascrisă la redeschidere (Jakarinos #4, Copilot P2) | `fereastra_stare.json` creat o singură dată (`OPEN` → `CLOSED`), refolosit la reluare; testul deschide → deschide → închide. |
 | Worker-ul NAS nerepornit (Jakarinos #5) | Starea lui inițială salvată; închiderea îl repornește și verifică heartbeat-ul. |
 | Derivat cu sha-ul sursei greșit la 24h (Jakarinos #6) | Clasa „pe text depășit” → verificarea eșuează. |
 | Export înainte de COMMIT (Copilot P1) | Export read-only separat, după COMMIT confirmat, recitit din BD (`aplica_rezultat.sql`, `revino_rezultat.sql`). |
