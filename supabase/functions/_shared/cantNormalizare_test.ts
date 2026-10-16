@@ -221,6 +221,17 @@ Deno.test('PR-A r6: „denumire → Total= → articol” repetat (denumirea DEA
   const m = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN110', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: u, felie: u }))!
   assertEquals(m.obs.pozitie_dovedita, false)
 })
+Deno.test('decizia A (Răzvan 16.10): Dn dovedit doar din continuare → nota dn_din_continuare + rand_interval = tot blocul; Dn pe linie → fără notă', async () => {
+  const t = PRE + '001 SA11D1 M 300.000\nTEAVA PVC D= 63 MM\n0.000 0 Total=\n002 SA11H1 M 120.000 TEAVA PVC D= 110 MM\n0.000 0 Total=\n'
+  const ctx = { ...ctxF3, textDoc: t, felie: t }
+  const a = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC D= 63 MM', 300, '001 SA11D1 M 300.000'), ctx))!
+  const de = t.indexOf('001 SA11D1'), pana = t.indexOf('\n0.000 0 Total=', de)
+  assertEquals([a.obs.pozitie_dovedita, a.note.includes('dn_din_continuare'), a.obs.rand_interval], [true, true, `[${de},${pana})`])
+  const b = (await normalizeazaRand(randF3('SA11H1', 'TEAVA PVC D= 110 MM', 120, '002 SA11H1 M 120.000'), ctx))!
+  const de2 = t.indexOf('002 SA11H1')
+  assertEquals([b.obs.pozitie_dovedita, b.note.includes('dn_din_continuare'), b.obs.rand_interval],
+    [true, false, `[${de2},${t.indexOf('\n', de2)})`])
+})
 Deno.test('PR-A r6: orientareDedesubt — certificată doar cu primul articol fără total deasupra și cu total propriu pentru fiecare articol', () => {
   const bun = '= NR =\n001 A1B1 M 1.000\nX\n0.000 0 Total=\n\n⟦PAGINA 2⟧\n002 A1B2 M 2.000 Y 0.000 0 Total=\n003 A1B3 M 3.000\nZ\n0.000 ✓ 0 Total=\n'
   assertEquals(orientareDedesubt(bun), true)

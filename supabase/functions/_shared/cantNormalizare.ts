@@ -91,17 +91,21 @@ export async function sha256Hex(s: string): Promise<string> {
 // „670 1153”, „a)”) nu se poate verifica → nedovedit; singurele excepții sunt marcajele de „fără cod” (gol, „-”, „null”, „n/a”).
 const FARA_COD = /^(?:|-|—|null|n\/a|nu e cazul)$/i
 export function verificaRand(textDoc: string, off: number, codModel: unknown, dnCod: number[]):
-  { motiv: 'cod_alt_rand' | 'cod_neverificabil' | 'dn_alt_rand' | null; dnInPlus: boolean } {
+  { motiv: 'cod_alt_rand' | 'cod_neverificabil' | 'dn_alt_rand' | null; dnInPlus: boolean; continuare: [number, number] | null } {
   const b = blocRand(textDoc, off)
   const codBrut = String(codModel ?? '').replace(/\*/g, '').trim()
   if (!FARA_COD.test(codBrut)) {
     const cod = codComparabil(codBrut)
-    if (cod === null) return { motiv: 'cod_neverificabil', dnInPlus: false }
-    if (!identificatoriLinie(b.linie).has(cod)) return { motiv: 'cod_alt_rand', dnInPlus: false }
+    if (cod === null) return { motiv: 'cod_neverificabil', dnInPlus: false, continuare: null }
+    if (!identificatoriLinie(b.linie).has(cod)) return { motiv: 'cod_alt_rand', dnInPlus: false, continuare: null }
   }
   const dnBloc = dnDinText(b.bloc).dn
-  if (dnCod.some((d) => !dnBloc.includes(d))) return { motiv: 'dn_alt_rand', dnInPlus: false }
-  return { motiv: null, dnInPlus: dnBloc.some((d) => !dnCod.includes(d)) }
+  if (dnCod.some((d) => !dnBloc.includes(d))) return { motiv: 'dn_alt_rand', dnInPlus: false, continuare: null }
+  // decizia Răzvan 16.10 (varianta A): un Dn care NU e pe linia cantității, ci doar pe liniile de dedesubt, e o dovadă de clasă
+  // separată (orientarea listei nu se poate dovedi din text — risc rezidual documentat) → intervalul întregului bloc, pentru bifa umană
+  const dnLinie = dnDinText(b.linie).dn
+  const continuare = b.continuare && dnCod.some((d) => !dnLinie.includes(d)) ? [b.de_la, b.pana_la] as [number, number] : null
+  return { motiv: null, dnInPlus: dnBloc.some((d) => !dnCod.includes(d)), continuare }
 }
 
 export type ContextFelie = {
@@ -153,7 +157,12 @@ export async function normalizeazaRand(r: RandModel, ctx: ContextFelie): Promise
   if (obs.pozitie_dovedita && poz.cantitate_offset !== null) {
     const rd = verificaRand(ctx.textDoc, poz.cantitate_offset, r.cod_articol, dnCod)
     if (rd.motiv) { obs.pozitie_dovedita = false; note.push('pozitie:' + rd.motiv) }
-    else if (rd.dnInPlus) { obs.dn_ambiguu = true; if (!dnAmbiguu) note.push('dn_ambiguu') }
+    else {
+      if (rd.dnInPlus) { obs.dn_ambiguu = true; if (!dnAmbiguu) note.push('dn_ambiguu') }
+      // marcajul persistat (fără coloană nouă): rand_interval = tot blocul (linia cantității + continuarea), deci un interval care
+      // trece de sfârșitul liniei cantității = „Dn dovedit din continuare” — B2 / PR4b le arată separat, pentru bifa umană
+      if (rd.continuare) { obs.rand_interval = `[${rd.continuare[0]},${rd.continuare[1]})`; note.push('dn_din_continuare') }
+    }
   } else if (!poz.pozitie_dovedita) note.push('pozitie:' + poz.motiv)
   // CHECK din BD: o poziție dovedită nu poate fi și ambiguă
   if (obs.pozitie_dovedita && obs.valoare_ambigua) obs.pozitie_dovedita = false
