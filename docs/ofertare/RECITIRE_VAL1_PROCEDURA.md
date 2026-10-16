@@ -1,4 +1,4 @@
-# Recitirea valului 1 (listele de cantități, Haiku 4.5 → Haiku 5.5): procedură unică, v3
+# Recitirea valului 1 (listele de cantități, Haiku 4.5 → Haiku 5.5): procedură unică, v4
 
 **Decizia lui Răzvan (16.10.2026): varianta C.**
 - Acum: această procedură (varianta B), DOAR pentru cele 20 de documente din valul 1.
@@ -9,7 +9,7 @@
 - „da”-ul lui Răzvan pe citire;
 - „da”-ul lui Răzvan pe preview-ul cu cifre, înainte de aplicare.
 
-v2 = r1 (NO-GO de la ambii revieweri), cu toate observațiile închise. v3 = r2 (NO-GO, ambii), plus deciziile chat-ului din 16.10: plafonul de 1,00 USD; anunțul către utilizatori = decizia lui Răzvan. Listele schimbărilor sunt la §10 și §11.
+v2 = r1 (NO-GO de la ambii revieweri), cu toate observațiile închise. v3 = r2 (NO-GO, ambii), plus deciziile chat-ului din 16.10: plafonul de 1,00 USD; anunțul către utilizatori = decizia lui Răzvan. v4 = r3: Copilot 1 P1 + 1 P2, Jakarinos 3 P1. Listele schimbărilor sunt la §10, §11 și §12.
 
 ## 1. De ce merge aici o procedură simplă
 
@@ -78,7 +78,17 @@ Funcția edge `ofertare-citire-test` (laboratorul), DEJA deployată.
   - `pdf_sha256`, calculat pe octeți;
   - numărul real de pagini (pdf-lib);
   - din `storage.objects`: `eTag`, `size`, `updated_at`.
-- **Între invocări și după ULTIMA felie**, pilotul reverifică `storage.objects` (`eTag`, `size`, `updated_at`), prin API-ul Storage (`info`), ÎNAINTE și DUPĂ fiecare invocare. Toate trebuie să fie egale cu prima amprentă.
+- **Citirea se face ÎN fereastra de mentenanță (§5), nu înaintea ei.**
+  - Fereastra durează ~30–40 de minute: ~64 de apeluri × ~20 s, plus aplicarea.
+  - Scriitorii automați ai lui `fisier_path` și ai obiectelor din Storage sunt opriți pe toată durata: importul / veghea SEAP (cron), worker-ul NAS și ingest-ul.
+- **Pilotul reverifică, ÎNAINTE și DUPĂ fiecare invocare:**
+  - rândul documentului: `fisier_path`, `size_bytes`, `pagina_offset`;
+  - `storage.objects` (`eTag`, `size`, `updated_at`), prin API-ul Storage (`info`).
+  Toate trebuie să fie egale cu prima amprentă.
+- **Ce prinde verificarea:**
+  - o scriere în Storage mută `updated_at`, deci A → B → A pe obiect e prins;
+  - o schimbare a CĂII, chiar temporară, în interiorul unei singure invocări (A → B → A pe `fisier_path`) nu poate veni de la scriitorii automați, care sunt opriți; vine cel mult de la UI și intră în riscul acceptat (§1).
+- După ultima felie, pilotul recalculează și `pdf_sha256` pe octeți. Orice diferență: documentul e aruncat (`sursa_schimbata`), iar staging-ul lui nu se folosește.
   - Orice scriere în Storage (upload, înlocuire, chiar și „B, apoi înapoi A”) mută `updated_at` înainte, deci contraexemplul A → B → A e prins. Laboratorul descarcă PDF-ul în interiorul invocării, deci între cele două verificări care o încadrează.
   - După ultima felie, pilotul recalculează și `pdf_sha256` pe octeți.
   - Orice diferență: documentul e aruncat (`sursa_schimbata`), iar staging-ul lui nu se folosește.
@@ -154,10 +164,15 @@ Scripturile `fereastra_deschide.sql` și `fereastra_inchide.sql` sunt idempotent
 **Deschiderea:**
 1. Starea inițială se salvează O SINGURĂ DATĂ pe fereastră, în `fereastra_stare.csv`, care conține run-id, `stare = OPEN`, joburile cu `active` și starea worker-ului NAS (pornit sau oprit).
    - O a doua deschidere găsește fișierul `OPEN` și îl REFOLOSEȘTE, fără să-l suprascrie. Nu se pierde starea originală (test: deschide → deschide → închide).
-2. Dezactivează, după COMANDĂ (`command ILIKE '%ofertare%'`), nu doar după prefix, tot ce atinge Ofertare. Lista se afișează și se verifică.
-3. **Golirea activității asincrone:** `net.http_post` e asincron. Durata maximă a unei funcții edge pe planul plătit e de 400 s (timeout-ul HTTP de 150 s e distinct).
-   - Condiția: coada `net.http_request_queue` e goală ȘI ultima cerere `pg_net` creată spre o funcție Ofertare e mai veche de 8 minute (400 s + marjă), după `net._http_response.created`.
-   - Altfel se așteaptă și se reverifică.
+2. **Joburile de oprit:**
+   - **Allowlist explicit**, adică joburile cunoscute care pot atinge documentele sau tabelele §2.1, verificate pe 16.10: `ofertare_ingest_worker`, `ofertare_extragere_worker`, `ofertare_seap_veghe_0520`, `ofertare_seap_veghe_1250`, `ofertare_radar_0500`, `ofertare_radar_1230`, `ofertare_raport_zilnic_0430`, `ofertare_alerte_0540`, `ofertare_alerte_1310`, `ofertare_alerte_atentie_0630`, `ofertare_alerta_pagini_goale_0615`, `ofertare_clarificari_reminder_0600`, `ofertare_participari_sapt`.
+   - Plus orice job a cărui comandă conține `ofertare`.
+   - Scriptul refuză dacă un job din allowlist lipsește (redenumit) sau nu e inactiv după pas.
+   - Joburile necunoscute, a căror comandă nu menționează Ofertare (de exemplu un dispatcher generic), rămân în riscul acceptat.
+3. **Golirea activității asincrone:** `net.http_post` e asincron. O cerere poate fi deja scoasă din coadă și să ruleze, fără răspuns încă. Durata maximă a unei funcții edge pe planul plătit e de 400 s; timeout-ul HTTP de 150 s e distinct.
+   - **Condiția:** se notează `T_stop`, momentul în care toți producătorii sunt opriți (joburile + worker-ul NAS). Nimic nu pornește (nici citirea, nici aplicarea) înainte de **`T_stop` + 8 minute** (400 s + marjă) ȘI fără coada `net.http_request_queue` goală.
+   - Așteptarea e măsurată de la oprire și NU se deduce din ultimul răspuns: acoperă și cererile deja scoase din coadă.
+   - Test: o cerere scoasă din coadă, fără răspuns → fereastra nu se declară goală înainte de `T_stop` + 8 minute.
 4. Confirmă că nu există job în curs (`cron.job_run_details`, `status = 'running'`).
 5. Worker-ul NAS e oprit pe server; se confirmă `worker_heartbeat.ultimul` mai vechi de 10 minute (≥ 400 s). Starea inițială (pornit / oprit) e în `fereastra_stare.csv`.
 6. **Utilizatorii.** Anunțul către utilizatori NU e un pas al procedurii și NU îl trimite nicio sesiune Claude: nici mesaj, nici mail. Decide Răzvan dacă, cum și cui anunță, sau alege o fereastră în care nu lucrează nimeni în Ofertare (de exemplu seara). Chat-ul îi duce întrebarea.
@@ -205,8 +220,10 @@ Se rulează cu `psql -v ON_ERROR_STOP=1 -1`. E o singură tranzacție, totul sau
    - exact 20 de documente (sau câte are manifestul) modificate.
 5. **Rezultatul NU se exportă din tranzacția de mutație.**
    - Exportul dintr-o tranzacție încă deschisă ar putea exista chiar dacă COMMIT-ul eșuează.
-   - După ce `aplica.sql` se termină cu COMMIT confirmat (exit 0), rulează separat `aplica_rezultat.sql`, read-only. El RECITEȘTE din BD, per document: sha-ul curent, metadatele (`meta_aplicat`) și proveniența `recitire-haiku-5-5` (`prov_id`, `constatat_la`).
-   - Verifică cu `RAISE` că sha-ul = `sha_nou`, apoi exportă în `aplicare_rezultat.csv`.
+   - **În** tranzacție, valorile EXACTE din `RETURNING` (`sha_nou`, `meta_aplicat`, `prov_id`, `constatat_la`) se scriu, prin `\copy`, în `aplicare_provizoriu.csv`. Fișierul e PROVIZORIU: nu e referință cât timp COMMIT-ul nu e confirmat.
+   - După COMMIT confirmat (exit 0), rulează `aplica_rezultat.sql`, read-only. El recitește din BD și VERIFICĂ, cu `RAISE`, că sha-ul, metadatele și proveniența sunt EGALE cu cele din `aplicare_provizoriu.csv`. Nu le redefinește.
+   - Dacă verificarea trece, fișierul provizoriu devine `aplicare_rezultat.csv`, cu aceleași valori.
+   - Dacă nu trece, un scriitor a modificat ceva între COMMIT și verificare: e raportat lui Răzvan și NU devine referință. Test: o modificare doar de metadate între COMMIT și export → eșec.
    - Abia acest fișier se comite în repo și e referința CAS a revenirii.
 
 ## 6. Pasul 4: verificarea după 24h (read-only)
@@ -290,9 +307,11 @@ Copilot + Jakarinos, 2 runde. Merge-ul îl face chat-ul.
 ### Rularea (fiecare pas cu „da”-ul lui Răzvan)
 
 1. Pasul 0: preview read-only (§2.1); trebuie să iasă zero.
-2. Citirea.
+2. Fereastra se deschide (seara sau când decide Răzvan), apoi citirea în fereastră.
 3. Preview-ul cu cifre.
-4. Fereastra, aplicarea, închiderea ferestrei.
+4. Aplicarea, în ACEEAȘI fereastră, după „da”-ul lui Răzvan pe preview, apoi închiderea ferestrei.
+   - Dacă „da”-ul întârzie, fereastra se închide după citire și se redeschide pentru aplicare, cu toate verificările din nou.
+   - CAS-ul pe Storage și pe identitate rămâne obligatoriu.
 5. Verificarea după 24h.
 6. Proba B plătită pe lic. 15, pe sha-urile noi.
 
@@ -336,4 +355,13 @@ Nu se creează tabele, migrări, funcții edge sau joburi. Nota din `registru_au
 | Aplicarea nelegată de preview, integritatea neimpusă în SQL (Copilot P1) | Câmpurile `integritate_ok` / `calitate_*` în manifest, verificate în SQL; sha256 al manifestului din „da” verificat înainte de mutații. |
 | Ordonarea provenienței la revenire (Copilot P2) | `greatest(clock_timestamp(), max + 1 µs)` sub lock (și la aplicare); postcondiția cu `RAISE` pe ultima proveniență + text nevalid. |
 | Plafonul / anunțul (chat 16.10) | 1,00 USD; anunțul = decizia lui Răzvan. |
+
+## 12. Schimbări v3 → v4 (review r3)
+
+| Observație | Rezolvare |
+|---|---|
+| Golirea `pg_net`: o cerere scoasă din coadă e încă în zbor (Copilot P1, Jakarinos #1) | `T_stop` + 8 minute, măsurat de la oprire, plus coada goală; nu se mai deduce din ultimul răspuns; test dedicat |
+| Laboratorul recitește `fisier_path`, deci o schimbare temporară a căii nu se vede (Jakarinos #2) | Citirea se face în fereastră (scriitorii automați ai căii și ai Storage-ului opriți); `fisier_path`, `size_bytes`, `pagina_offset` și Storage verificate înainte și după fiecare invocare; restul (UI) intră în riscul acceptat |
+| Exportul după COMMIT poate prelua o modificare ulterioară drept reper (Jakarinos #3) | `RETURNING` → `aplicare_provizoriu.csv` în tranzacție; după COMMIT, `aplica_rezultat.sql` verifică egalitatea, fără să redefinească; altfel nu devine referință |
+| Selecția joburilor după comandă (Copilot P2) | Allowlist explicit al joburilor cunoscute, plus comanda; refuz dacă un job din allowlist lipsește sau a rămas activ |
 
