@@ -183,8 +183,19 @@ Deno.test('r3: un timp lipsă / text / NaN / în ordine greșită în starea fer
     await Deno.writeTextFile(fis, JSON.stringify(fara)); assert('eroare' in await incarcaStare(fis), `lipsă ${k}`)
     await Deno.writeTextFile(fis, JSON.stringify({ ...baza, [k]: k === 'run_id' ? '' : 'invalid' })); assert('eroare' in await incarcaStare(fis), `text ${k}`)
   }
-  await Deno.writeTextFile(fis, JSON.stringify(baza).replace('"t_gol":4000', '"t_gol":1e999')); assert('eroare' in await incarcaStare(fis), 'infinit')
-  await Deno.writeTextFile(fis, JSON.stringify({ ...baza, t_gol: 2500 })); assert('eroare' in await incarcaStare(fis), 'ordine')
-  await Deno.writeTextFile(fis, JSON.stringify({ ...baza, t_stop: null, t_gol: null })); assert('st' in await incarcaStare(fis))
+  for (const k of ['creat_la', 't_joburi_oprite', 't_stop', 't_gol']) {
+    await Deno.writeTextFile(fis, JSON.stringify(baza).replace(`"${k}":${(baza as any)[k]}`, `"${k}":1e999`)); assert('eroare' in await incarcaStare(fis), `infinit ${k}`)
+  }
+  // ordinea greșită, pe fiecare pereche vecină
+  for (const o of [{ creat_la: 2500 }, { t_joburi_oprite: 3500 }, { t_stop: 4500 }, { t_gol: 2500 }]) {
+    await Deno.writeTextFile(fis, JSON.stringify({ ...baza, ...o })); assert('eroare' in await incarcaStare(fis), `ordine ${JSON.stringify(o)}`)
+  }
+  // etape sărite (null-urile nu ascund o etapă lipsă) → eroare; combinațiile cumulative valide → acceptate
+  for (const o of [{ t_joburi_oprite: null, t_stop: null }, { t_joburi_oprite: null }, { t_stop: null }, { t_joburi_oprite: null, t_gol: null }]) {
+    await Deno.writeTextFile(fis, JSON.stringify({ ...baza, ...o })); assert('eroare' in await incarcaStare(fis), `etapă sărită ${JSON.stringify(o)}`)
+  }
+  for (const o of [{ t_gol: null }, { t_stop: null, t_gol: null }, { t_joburi_oprite: null, t_stop: null, t_gol: null }]) {
+    await Deno.writeTextFile(fis, JSON.stringify({ ...baza, ...o })); assert('st' in await incarcaStare(fis), `cumulativ valid ${JSON.stringify(o)}`)
+  }
   await Deno.remove(dir, { recursive: true })
 })

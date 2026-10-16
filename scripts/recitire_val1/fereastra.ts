@@ -120,6 +120,9 @@ export function stareValida(st: StareF): string | null {
   if (!Array.isArray(st.joburi) || st.joburi.some((j) => !Number.isInteger(j?.jobid) || typeof j.active !== 'boolean')) return 'joburi'
   const timp = (x: unknown) => x === null || (typeof x === 'number' && Number.isFinite(x))
   if (!timp(st.t_joburi_oprite) || !timp(st.t_stop) || !timp(st.t_gol)) return 't_joburi_oprite / t_stop / t_gol nu sunt null sau număr finit'
+  // etapele sunt cumulative: t_gol cere t_stop, t_stop cere t_joburi_oprite (o etapă lipsă nu poate fi sărită)
+  if (st.t_gol !== null && st.t_stop === null) return 't_gol fără t_stop'
+  if (st.t_stop !== null && st.t_joburi_oprite === null) return 't_stop fără t_joburi_oprite'
   const lant = [st.creat_la, st.t_joburi_oprite, st.t_stop, st.t_gol].filter((x): x is number => x !== null)
   if (lant.some((x, i) => i > 0 && x < lant[i - 1])) return 'ordinea timpilor (creat_la ≤ t_joburi_oprite ≤ t_stop ≤ t_gol)'
   return null
