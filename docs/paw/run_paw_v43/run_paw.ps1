@@ -15,8 +15,9 @@
 # v4.3 (16.10.2026, aprobat de Razvan): + gem = Gemini 4 Argon, consultant/reviewer suplimentar (NU poarta GO/NO-GO).
 #   gemini_pw.py (langa acest fisier): tab unic gemini.google.com, modelul afisat trebuie sa contina "Argon", brief-ul in editor,
 #   raspuns stabil (5 citiri identice la 2 s) pe stdout; fara navigare, fara atasamente, fara fisiere scrise. Lock global
-#   paw-data\lock_gem luat atomic (CreateNew), eliberat doar de rularea care l-a luat. Erori: PAW_EROARE <id> <cod gemini_pw>.
-#   Reparat si la cop: refuzul "conversatie ocupata" nu mai sterge lock-ul celeilalte rulari.
+#   paw-data\lock_gem. Erori: PAW_EROARE <id> <cod gemini_pw>.
+# v4.3 r2 (dupa Jakarinos r1, P1-a): lock-urile (lock_gem si lock_cop_<conv>) = handle FileShare.None tinut pe toata rularea;
+#   fisierul nu se mai sterge (nici la recuperare, nici la curatare) - v4.2 stergea dupa cale lock-ul altei rulari.
 # ASCII only. Compatibil Windows PowerShell 5.1.
 param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "", [string]$Imagini = "")
 $ErrorActionPreference = "Stop"
@@ -34,6 +35,7 @@ $RUNID = (Get-Date -Format "yyyyMMdd-HHmmss") + "-" + ([guid]::NewGuid().ToStrin
 $T0 = Get-Date
 $script:ImgHandles = @()
 $script:GemCod = $null
+$script:LockFs = $null
 $TOOLS = @{
   jak   = @{ exe = "C:\Program Files\nodejs\node.exe"; modele = @("", "gpt-6-astra", "gpt-5.5-codex", "gpt-5.5"); timeout = 1200 }
   cop   = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @("6abc000f", "6ac5006f"); timeout = 1800 }
@@ -50,6 +52,7 @@ function Jurnal([string]$stare, [string]$exitcod) {
   Add-Content -LiteralPath $JURNAL -Value $linie -Encoding UTF8
 }
 function Eroare([string]$motiv) {
+  EliberezLock
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   try { if ($script:OutFull) { Add-Content -LiteralPath $script:OutFull -Value ("PAW_EROARE " + $RUNID + " " + $motiv) -Encoding UTF8 } } catch {}
   try { Jurnal ("EROARE " + $motiv) "-" } catch {}
@@ -76,21 +79,24 @@ function CaleSigura([string]$p, [string[]]$roots, [bool]$trebuieSaExiste) {
   if (-not $ok) { throw "in afara radacinilor permise: $full" }
   return $full
 }
-function LuaLock([string]$cale, [int]$maxVarsta) {
-  # v4.3: lock atomic (CreateNew) - doua rulari nu pot lua acelasi lock; unul mai vechi decat timeout-ul se considera abandonat
-  for ($i = 0; $i -lt 2; $i++) {
-    try {
-      $fs = [IO.File]::Open($cale, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-      try { $b = [Text.Encoding]::ASCII.GetBytes($RUNID); $fs.Write($b, 0, $b.Length) } finally { $fs.Close() }
-      return
-    } catch [System.IO.IOException] {
-      if (-not (Test-Path -LiteralPath $cale -PathType Leaf)) { throw }
-      $age = ((Get-Date) - (Get-Item -LiteralPath $cale -Force).LastWriteTime).TotalSeconds
-      if ($age -lt $maxVarsta) { throw ("ocupat de alta rulare (lock " + (Split-Path -Leaf $cale) + " de " + [int]$age + "s)") }
-      Remove-Item -LiteralPath $cale -Force
-    }
-  }
-  throw ("lock-ul " + $cale + " nu a putut fi luat")
+function LuaLock([string]$cale) {
+  # v4.3 r2 (Jakarinos P1-a): exclusivitatea = un HANDLE deschis cu FileShare.None, tinut pe TOATA rularea (pana la EliberezLock
+  # sau iesirea procesului). Fisierul de lock NU se sterge niciodata: nu exista "lock expirat" de recuperat si nicio stergere pe o
+  # observatie veche. Daca rularea care il tinea a murit, sistemul a inchis handle-ul si urmatoarea rulare il deschide direct
+  # (recuperare atomica, facuta de kernel). Cat e tinut, nu poate fi deschis, rescris, redenumit sau sters de alt proces.
+  # Handle-ul nu e mostenibil (copiii lansati prin Ruleaza nu il primesc).
+  $full = CaleSigura $cale @($DATA) $false
+  try { $fs = [IO.File]::Open($full, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+  catch [System.IO.IOException] { throw ("ocupat de alta rulare (" + (Split-Path -Leaf $full) + " e tinut deschis)") }
+  try {
+    if (-not (SubRadacina ([PawV4.Fs]::FinalPath($fs.SafeFileHandle)) $DATA)) { throw "lock rezolvat in afara radacinii de date" }
+    $fs.SetLength(0); $b = [Text.Encoding]::ASCII.GetBytes($RUNID + " pid=" + $PID); $fs.Write($b, 0, $b.Length); $fs.Flush()
+  } catch { $fs.Close(); throw }
+  $script:LockFs = $fs
+}
+function EliberezLock() {
+  # inchide DOAR handle-ul acestei rulari; fisierul ramane (urmatoarea rulare il deschide)
+  if ($script:LockFs) { try { $script:LockFs.Close() } catch {}; $script:LockFs = $null }
 }
 function Arg([string]$a) { if ($a -match '["\r\n]') { throw "argument interzis" }; if ($a -match '\s' -or $a -eq "") { return '"' + $a + '"' } else { return $a } }
 function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env) {
@@ -303,7 +309,6 @@ try {
 } catch { Eroare ("validare: " + $_.Exception.Message) }
 
 # --- rulare ---
-$lock = $null
 try {
   $rez = $null
   switch ($Cine) {
@@ -331,14 +336,8 @@ try {
       $ns = (& netstat.exe -ano | Select-String ":9333 " | Select-String "LISTENING")
       if (-not $ns) { throw "Edge CDP 9333 nu asculta" }
       if ($ns | Where-Object { $_ -notmatch "127\.0\.0\.1:9333" }) { throw "CDP 9333 nu e doar pe loopback - refuz" }
-      $lockC = Join-Path $DATA ("lock_cop_" + $Model)
-      if (Test-Path -LiteralPath $lockC) {
-        $age = ((Get-Date) - (Get-Item -LiteralPath $lockC).LastWriteTime).TotalSeconds
-        if ($age -lt ($T.timeout + 120)) { throw "conversatia $Model e ocupata de alta rulare (lock de " + [int]$age + "s)" }
-        Remove-Item -LiteralPath $lockC -Force
-      }
-      New-Item -ItemType File -Path $lockC -Value $RUNID | Out-Null
-      $lock = $lockC   # v4.3: abia acum lock-ul e al acestei rulari (inainte, refuzul "ocupat" stergea lock-ul celeilalte)
+      # v4.3 r2: lock per conversatie = handle exclusiv pe toata rularea (v4.2 stergea dupa cale lock-ul altei rulari)
+      LuaLock (Join-Path $DATA ("lock_cop_" + $Model))
       $envc = @{ CGPT_TINTA = $Model }
       $st = Ruleaza $T.exe @($CGPT, "stare") "" $DATA 60 $envc
       $stareTxt = $st.out
@@ -353,9 +352,7 @@ try {
     }
     "gem" {
       # v4.3: lock global INAINTE de orice atingere a browserului; apoi CDP doar pe loopback; apoi gemini_pw.py (brief = cale validata)
-      $lockG = Join-Path $DATA "lock_gem"
-      LuaLock $lockG ($T.timeout + 120)
-      $lock = $lockG
+      LuaLock (Join-Path $DATA "lock_gem")
       $ns = (& netstat.exe -ano | Select-String ":9333 " | Select-String "LISTENING")
       if (-not $ns) { throw "Edge CDP 9333 nu asculta" }
       if ($ns | Where-Object { $_ -notmatch "127\.0\.0\.1:9333" }) { throw "CDP 9333 nu e doar pe loopback - refuz" }
@@ -366,7 +363,7 @@ try {
       }
     }
   }
-  if ($lock) { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue; $lock = $null }
+  EliberezLock
   $ImgFolosite = [bool]$script:ImgDirCreat
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8
@@ -382,7 +379,7 @@ try {
   Write-Host ("PAW_GATA " + $RUNID + " " + $dur + "s")
   exit 0
 } catch {
-  if ($lock) { Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue }
+  EliberezLock
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   Eroare ("rulare: " + $_.Exception.Message)
 }

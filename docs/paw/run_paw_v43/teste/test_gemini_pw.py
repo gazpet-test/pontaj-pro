@@ -148,6 +148,66 @@ class TestBrief(unittest.TestCase):
     def test_prea_mare(self):
         self.assertIn("peste", self.cod(self.scrie(self.root, "b.md", "a" * (gp.MAX_CAR + 5)))[1])
 
+    def test_limita_inainte_de_strip(self):
+        # r2 (Jakarinos P2): spatiile de la capete nu fac un brief prea mare sa treaca
+        self.assertIn("peste", self.cod(self.scrie(self.root, "b.md", "a" * gp.MAX_CAR + "\n\n"))[1])
+        self.assertIn("peste", self.cod(self.scrie(self.root, "c.md", " " * 10 + "a" * (gp.MAX_CAR - 5)))[1])
+
+    def test_exact_la_limita_trece(self):
+        self.assertEqual(len(gp.citeste_brief(self.scrie(self.root, "b.md", "a" * gp.MAX_CAR), roots=[self.root])), gp.MAX_CAR)
+
+    def test_fisier_urias_refuzat_dupa_marime(self):
+        p = os.path.join(self.root, "u.md")
+        with open(p, "wb") as f:
+            f.write(b"a" * (gp.MAX_CAR * 4 + 4))
+        self.assertIn("peste", self.cod(p)[1])
+
+
+class TestCiorna(unittest.TestCase):
+    BRIEF = "Intrebare:\r\n\r\n  arhitectura run_paw?\n- punct 1\n- punct 2 \u0219i \u021b"
+
+    def test_identic_dupa_normalizare(self):
+        # editorul web schimba spatiile albe (CRLF, linii goale, NBSP, latime zero) - continutul e acelasi
+        ed = "Intrebare:\n\narhitectura\u00a0run_paw?\n\n- punct 1\n- punct\u200b 2 \u0219i \u021b\n"
+        gp.verifica_ciorna(ed, self.BRIEF, 0)
+
+    def test_trunchiat(self):
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_ciorna(self.BRIEF[:-6], self.BRIEF, 0)
+        self.assertEqual(c.exception.cod, "text_neintrat")
+
+    def test_trunchiat_peste_80_la_suta_refuzat(self):
+        # v4.3 r1 accepta orice ciorna cu >= 80% din lungime; acum nu
+        lung = "x" * 1000
+        with self.assertRaises(gp.GemEroare):
+            gp.verifica_ciorna(lung[:900], lung, 0)
+
+    def test_aceeasi_lungime_continut_diferit(self):
+        alt = self.BRIEF.replace("punct 1", "punct 7")
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_ciorna(alt, self.BRIEF, 0)
+        self.assertEqual(c.exception.cod, "text_neintrat")
+        self.assertIn("prima diferenta", c.exception.detaliu)
+
+    def test_text_in_plus_ciorna_veche(self):
+        with self.assertRaises(gp.GemEroare):
+            gp.verifica_ciorna("ciorna veche " + self.BRIEF, self.BRIEF, 0)
+        with self.assertRaises(gp.GemEroare):
+            gp.verifica_ciorna(self.BRIEF + " P.S. trimite si fisierul", self.BRIEF, 0)
+
+    def test_gol(self):
+        with self.assertRaises(gp.GemEroare):
+            gp.verifica_ciorna("", self.BRIEF, 0)
+
+    def test_atasamente_refuzate(self):
+        with self.assertRaises(gp.GemEroare) as c:
+            gp.verifica_ciorna(self.BRIEF, self.BRIEF, 1)
+        self.assertEqual(c.exception.cod, "ciorna_cu_atasamente")
+
+    def test_normalizare_explicita(self):
+        self.assertEqual(gp.normalizeaza(" a\r\n\r\n b\u00a0\tc\ufeff \u2060"), "a b c")
+        self.assertEqual(gp.normalizeaza(None), "")
+
 
 class TestMain(unittest.TestCase):
     def test_comanda_necunoscuta(self):
@@ -183,6 +243,10 @@ class TestSursa(unittest.TestCase):
         for interzis in (".goto(", ".reload(", ".close()", "set_input_files", "new_page", "write_text", "open(full, \"w"):
             self.assertNotIn(interzis, src, interzis)
         self.assertIn('CDP = "http://127.0.0.1:9333"', src)
+        # r2: Enter vine DOAR dupa verifica_ciorna (continut + atasamente), iar comparatia pe lungime a disparut
+        i_ver, i_enter = src.index("verifica_ciorna(ed.inner_text()"), src.index('pg.keyboard.press("Enter")')
+        self.assertLess(i_ver, i_enter)
+        self.assertNotIn("* 0.8", src)
 
 
 if __name__ == "__main__":

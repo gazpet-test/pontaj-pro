@@ -6,7 +6,9 @@
 #      python gemini_pw.py trimite <brief.md> [secunde_max=600]
 # iesire: stdout UTF-8; la eroare ultima linie "GEM_EROARE <cod> <detaliu>" si exit 3.
 # coduri: fara_tab_gemini, mai_multe_taburi_gemini, model_gresit, gemini_ocupat, editor_lipsa, text_neintrat,
-#         brief_invalid, timeout_raspuns, cdp_indisponibil, eroare_playwright, comanda_necunoscuta
+#         ciorna_cu_atasamente, brief_invalid, timeout_raspuns, cdp_indisponibil, eroare_playwright, comanda_necunoscuta
+# r2 (16.10.2026, dupa Jakarinos r1): ciorna = brief-ul exact (normalizare explicita), refuz cu atasamente in ciorna,
+#   limita de marime pe textul citit inainte de strip.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
 import sys, time, os
@@ -18,6 +20,9 @@ EDITOR = 'rich-textarea [contenteditable="true"], div.ql-editor[contenteditable=
 RASPUNS = "message-content"
 MODEL = '[data-test-id="bard-mode-menu-button"]'
 STOP = 'button[aria-label*="Stop" i]:visible, button[aria-label*="Opre" i]:visible'
+ZONA = 'input-area-v2, input-container, .input-area-container, .input-area'       # zona de compunere
+ATAS = ('uploader-file-preview, uploader-file-preview-container, file-preview, [data-test-id*="file-preview"], '
+        '[data-test-id*="uploaded-file"], [class*="file-preview"]')                # atasamente in ciorna (de validat cu "stare")
 MODEL_CERUT = "Argon"
 BRIEF_ROOTS = [r"C:\Users\Public\paw-data\brief", r"C:\Users\Public\erp_review"]
 MAX_CAR = 200000          # brief-uri mai mari nu se trimit (editorul web devine nesigur)
@@ -48,16 +53,41 @@ def citeste_brief(cale, roots=BRIEF_ROOTS):
         raise GemEroare("brief_invalid", "in afara radacinilor: " + full)
     if not full.lower().endswith(".md"):
         raise GemEroare("brief_invalid", "nu e .md")
+    # r2 (Jakarinos P2): limita se aplica pe textul CITIT, inainte de strip (spatiile nu "scurteaza" un brief prea mare)
     try:
+        if os.path.getsize(full) > MAX_CAR * 4 + 3:          # UTF-8: cel mult 4 octeti/caracter + BOM
+            raise GemEroare("brief_invalid", "peste %d caractere" % MAX_CAR)
         with open(full, "r", encoding="utf-8-sig") as f:
-            text = f.read(MAX_CAR + 1).strip()
+            brut = f.read(MAX_CAR + 1)
+    except GemEroare:
+        raise
     except Exception as e:
         raise GemEroare("brief_invalid", "necitibil: " + type(e).__name__)
+    if len(brut) > MAX_CAR:
+        raise GemEroare("brief_invalid", "peste %d caractere" % MAX_CAR)
+    text = brut.strip()
     if not text:
         raise GemEroare("brief_invalid", "gol")
-    if len(text) > MAX_CAR:
-        raise GemEroare("brief_invalid", "peste %d caractere" % MAX_CAR)
     return text
+
+
+def normalizeaza(t):
+    # r2 (Jakarinos P1-b): normalizare EXPLICITA pentru compararea ciornei cu brief-ul: CRLF/CR -> LF, NBSP -> spatiu,
+    # caractere de latime zero eliminate, orice sir de spatii albe (inclusiv linii goale) -> un singur spatiu, capete taiate
+    t = (t or "").replace("\r\n", "\n").replace("\r", "\n").replace("\u00a0", " ")
+    for z in ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"):
+        t = t.replace(z, "")
+    return " ".join(t.split())
+
+
+def verifica_ciorna(text_editor, brief, n_atasamente):
+    # inainte de Enter: ciorna nu are atasamente si contine EXACT brief-ul (dupa normalizare) - nimic in plus, nimic lipsa
+    if n_atasamente:
+        raise GemEroare("ciorna_cu_atasamente", "%d atasament(e) in ciorna - nu trimit" % n_atasamente)
+    a, b = normalizeaza(text_editor), normalizeaza(brief)
+    if a != b:
+        i = next((k for k in range(min(len(a), len(b))) if a[k] != b[k]), min(len(a), len(b)))
+        raise GemEroare("text_neintrat", "ciorna difera de brief (%d/%d car. normalizate, prima diferenta la %d)" % (len(a), len(b), i))
 
 
 def e_tab_gemini(url):
@@ -128,10 +158,16 @@ def _mesaje(pg):
     return pg.locator(RASPUNS).all_inner_texts()
 
 
+def _atasamente(pg):
+    # fisiere/imagini deja puse in ciorna (zona de compunere); uploader-file-preview exista doar in compunere
+    return pg.locator(ZONA).locator(ATAS).count() + pg.locator("uploader-file-preview").count()
+
+
 def stare(pg):
     spune("URL:", pg.url)
     spune("model:", _model_afisat(pg).strip().encode("ascii", "replace").decode("ascii"))
-    spune("genereaza:", _genereaza(pg), "| editor:", pg.locator(EDITOR).count(), "| raspunsuri:", pg.locator(RASPUNS).count())
+    spune("genereaza:", _genereaza(pg), "| editor:", pg.locator(EDITOR).count(), "| raspunsuri:", pg.locator(RASPUNS).count(),
+          "| atasamente in ciorna:", _atasamente(pg))
 
 
 def trimite(pg, text, maxs):
@@ -143,14 +179,16 @@ def trimite(pg, text, maxs):
     if ed.count() == 0:
         raise GemEroare("editor_lipsa", "editorul nu e vizibil")
     ed = ed.first
+    n = _atasamente(pg)
+    if n:
+        raise GemEroare("ciorna_cu_atasamente", "%d atasament(e) in ciorna inainte de scriere - nu trimit" % n)
     ed.click()
     pg.keyboard.press("Control+A")      # ciorna ramasa in editor se inlocuieste, nu se lipeste in fata brief-ului
     pg.keyboard.press("Delete")
     pg.keyboard.insert_text(text)
     pg.wait_for_timeout(800)
-    lung = len(ed.inner_text())
-    if lung < len(text) * 0.8:
-        raise GemEroare("text_neintrat", "%d/%d caractere in editor" % (lung, len(text)))
+    # r2 (Jakarinos P1-b): continut identic (normalizat), nu doar lungime; atasamentele se verifica din nou chiar inainte de Enter
+    verifica_ciorna(ed.inner_text(), text, _atasamente(pg))
     pg.keyboard.press("Enter")
     spune("GEM_MODEL:", model.encode("ascii", "replace").decode("ascii"))
     spune("TRIMIS (%d car.); astept raspunsul..." % len(text))
