@@ -2,7 +2,7 @@
 // oricărui cost, citirile DIN BD, nicio decizie la eroarea API, schema strictă, usage lipsă / cost peste rezervare fail-closed.
 import { strict as assert } from 'node:assert'
 import { amprentaDezacord, ANTET_OCR, sha256Hex } from '../_shared/ocrLocal.ts'
-import { arbitreaza, bazaFaraDiacritice, doarDiacritice, incapeArbitrul } from './arbitreaza.ts'
+import { arbitreaza, bazaFaraDiacritice, doarDiacritice, incapeArbitrul, propunereDoarDiacritice } from './arbitreaza.ts'
 import { PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
 
 const SECRET = 'c'.repeat(64)
@@ -395,6 +395,30 @@ Deno.test('regula 10: semnele combinante din afara listei NU se scot — ≠ ≰
       const sc = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args
       assert.equal(sc.p_arbitraj.decizie, 'needs_human'); assert.ok(sc.p_arbitraj.motiv.startsWith('[diacritice]'))
       assert.equal(cereriApi.length, 'mod' in mod ? 1 : 2); assert.ok(Number(sc.p_arbitraj.cost_usd) > 0, 'cost pastrat')
+    }
+  }
+})
+
+Deno.test('regula 10: detectarea larga nu poate fi ocolita cu é sau semne din afara listei; validarea stricta (Jakarinos arb-v3 r3 P1)', async () => {
+  assert.ok(doarDiacritice('teavă | René | p = q', 'țeavă | Rene | p = q')); assert.ok(doarDiacritice('teavă | a\u0301 | p = q', 'țeavă | a\u0301\u0306 | p = q'))
+  assert.ok(!doarDiacritice('ă', 'a\u0306'))  // aceeasi litera in NFC / NFD = nu e dezacord de diacritice
+  assert.ok(propunereDoarDiacritice('țeavă | René | p = q', 'teavă | René | p = q', 'țeavă | Rene | p = q'))
+  assert.ok(!propunereDoarDiacritice('țeavă | René | p > q', 'teavă | René | p = q', 'țeavă | Rene | p = q'))
+  const nh = { text: JSON.stringify({ decizie: 'needs_human', text: '', motiv: 'nesigur', e_cantitate: false, anomalie_separator: false }) }
+  for (const [l, mi, prop, asteptat] of [
+    ['teavă | René | p = q', 'țeavă | Rene | p = q', 'țeavă | René | p > q', 'needs_human'],
+    ['teavă | a\u0301 | p = q', 'țeavă | a\u0301\u0306 | p = q', 'țeavă | a\u0301 | p > q', 'needs_human'],
+    ['teavă | René | p = q', 'țeavă | Rene | p = q', 'țeavă | René | p = q', 'text_propus'],
+  ] as const) {
+    const it = await itemDeTest({ citire_lighton: l, citire_mineru: mi, diferenta_numerica: false })
+    const tp = { text: JSON.stringify({ decizie: 'text_propus', text: prop, motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) }
+    for (const [mod, opt] of [[{ mod: 'doar_haiku' }, { api: tp }], [{}, { apiSeq: [nh, tp] }]] as const) {
+      const { m, apeluri } = mediu(it, opt as any)
+      const r = await arbitreaza(cerere(corpDe(it, mod)), m); const j = await r.json()
+      assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, asteptat, prop + ' ' + JSON.stringify(mod))
+      const sc = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+      assert.ok(Number(sc.cost_usd) > 0)
+      if (asteptat === 'needs_human') { assert.equal(sc.text, ''); assert.ok(sc.motiv.startsWith('[diacritice]')) }
     }
   }
 })

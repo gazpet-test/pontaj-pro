@@ -31,7 +31,13 @@ const unitati = (x: number): number => Math.round(x * 1e4)
 // (U+0338 din ≠ ≰, U+034F, selectorii de variante ...) ramane in baza, deci schimba comparatia: majusculele, cifrele, operatorii,
 // semnele si spatiile raman. Perechea „difera doar prin diacritice” = aceeasi baza, texte diferite (Jakarinos arb-v3 r1 P1, r2 P1)
 export const bazaFaraDiacritice = (s: string): string => s.normalize('NFD').replace(/([A-Za-z])[\u0302\u0306\u030C\u0326\u0327]+/g, '$1')
-export const doarDiacritice = (a: string, b: string): boolean => a !== b && bazaFaraDiacritice(a) === bazaFaraDiacritice(b)
+// DETECTAREA e separata de validare si e LARGA (Jakarinos arb-v3 r3 P1): perechea intra sub poarta daca, fara ORICE semn combinant
+// (NFD + \p{M}), citirile sunt identice — inclusiv cand difera si prin e/é sau prin semne din afara listei. Mai larg = mai strict.
+const bazaLarga = (s: string): string => s.normalize('NFD').replace(/\p{M}/gu, '')
+export const doarDiacritice = (a: string, b: string): boolean => a.normalize('NFD') !== b.normalize('NFD') && bazaLarga(a) === bazaLarga(b)
+// VALIDAREA e STRICTA: propunerea are aceeasi baza (lista inchisa) cu UNA dintre citiri, deci schimba doar semnele din lista
+export const propunereDoarDiacritice = (text: string, a: string, b: string): boolean =>
+  bazaFaraDiacritice(text) === bazaFaraDiacritice(a) || bazaFaraDiacritice(text) === bazaFaraDiacritice(b)
 /** Dupa Haiku: mai incape limita de sus a lui Sonnet in rezervare? (exportat pentru testul de regresie la limita exacta) */
 export const incapeArbitrul = (costFiltru: number, limitaArbitru: number, suma: number): boolean =>
   unitati(costFiltru) + unitati(limitaArbitru) <= unitati(suma)
@@ -191,7 +197,7 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   // pe o pereche care difera doar prin diacritice, text_propus poate schimba DOAR diacritice: alta litera de baza, cifra, semn, spatiu
   // sau majuscula = needs_human (verificare determinista, nu doar in prompt; Jakarinos arb-v3 r1 P1). Costul ramane cel real.
   if (final.d.decizie === 'text_propus' && doarDiacritice(dz.citire_lighton, dz.citire_mineru)
-      && bazaFaraDiacritice(final.d.text) !== bazaFaraDiacritice(dz.citire_lighton)) {
+      && !propunereDoarDiacritice(final.d.text, dz.citire_lighton, dz.citire_mineru)) {
     final = { ...final, d: { ...final.d, decizie: 'needs_human', text: '',
               motiv: taie200('[diacritice] text propus schimba si alte caractere: la om ' + final.d.motiv) } }
   }
