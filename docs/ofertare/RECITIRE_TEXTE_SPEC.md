@@ -1,10 +1,11 @@
-# Recitirea textelor documentelor (Haiku 4.5 → Haiku 5.5) — specificație v2
+# Recitirea textelor documentelor (Haiku 4.5 → Haiku 5.5) — specificație v3
 
 **Stare: propunere (PR draft, doar documentație).** Nu se aplică nicio migrare, nu se face deploy, nu se cheltuie nimic și nu se scrie nimic în BD până la:
 - GO-urile review-ului (Copilot + Jakarinos, două runde);
 - „da”-ul lui Răzvan pe preview-ul cu cifre.
 
-v2 = r1 (NO-GO de la ambii revieweri) + cerința chat-ului din 16.10: aplicarea pe VAL, cu o singură acțiune, plus o cale psql pentru pornire și aplicare. Lista schimbărilor e la §13.
+v2 = r1 (NO-GO de la ambii revieweri) + cerința chat-ului din 16.10: aplicarea pe VAL, cu o singură acțiune, plus o cale psql pentru pornire și aplicare.
+v3 = r2 (NO-GO de la ambii revieweri). Piesa centrală nouă e **gardul** (§4.1): cât timp un document e într-un val deschis, triggerele din BD refuză ORICE schimbare de text, decizie sau derivat pe el, venită pe altă cale decât funcțiile recitirii. Listele schimbărilor sunt la §13 (v1 → v2) și §14 (v2 → v3).
 
 ## 1. De ce
 
@@ -25,14 +26,22 @@ Răzvan a aprobat recitirea cu Haiku 5.5 (16.10). Primul val cuprinde DOAR liste
 5. **Ce înseamnă „invalidat”.**
    - Datele B, legate de `doc_sha256`, nu se mai aplică noului sha. Rămân ca istoric.
    - Orice alt derivat existent pe document BLOCHEAZĂ aplicarea, cu refuzul `derivate`. NU se aplică peste date derivate care n-ar ști că textul s-a schimbat.
-6. **Banii au o limită superioară demonstrabilă.**
-   - Fiecare apel rezervă un plafon superior: tokenii de intrare numărați exact (`count_tokens`) × tariful treptei, plus `max_tokens` × tariful de ieșire.
+6. **Banii au o rezervare conservatoare, iar depășirea oprește valul.** `count_tokens` e o estimare, deci nu o tratăm ca limită exactă.
+   - Rezervarea pe apel = 2 × `count_tokens` × tariful de intrare + `max_tokens` × tariful de ieșire.
+   - Treapta tarifară e cea de JOS numai dacă 2 × `count_tokens` < 100k; altfel se rezervă la treapta de SUS.
+   - `max_tokens` e o constantă de server (12 000), validată în SQL, nu un parametru al edge-ului.
+   - Request-ul trimis e exact cel numărat; edge-ul îl construiește o singură dată (test dedicat).
    - Rezervarea și decontarea se serializează pe rândul valului, iar decontarea se face o singură dată.
-   - Dacă costul real depășește rezervarea, valul se blochează (`blocat = true`). Un rezultat necunoscut rămâne socotit la rezervare.
+   - Dacă costul real depășește rezervarea, valul se blochează (`blocat = true`) și nu mai pleacă niciun apel. Depășirea maximă e deci cea a unui singur apel.
+     - Cu felii de 8 pagini (~25k tokeni): cel mult ~0,01 USD peste plafon.
+     - Un apel peste prag (> 50k tokeni numărați) se rezervă la treapta de sus, deci depășirea vine doar dintr-o eroare de numărare de peste 2×.
+   - Un rezultat necunoscut rămâne socotit la rezervare.
 7. **Consimțământul e înregistrat, nu presupus.** Pornirea citirii și aplicarea cer o decizie înregistrată cu autor și motiv, într-una din două forme:
    - owner-ul, din UI sau RPC;
-   - postgres prin psql, cu motiv obligatoriu.
+   - postgres prin psql (`session_user = 'postgres'`, §5), cu motiv obligatoriu.
    Secretul tehnic al edge-ului doar EXECUTĂ un val deja aprobat.
+   - Motivul și jurnalul consemnează operatorul; ele nu dovedesc singure acordul lui Răzvan. Acordul lui e „da”-ul din chat, citat în motiv. Așa e regula pentru orice acțiune pe date reale (CLAUDE.md pct. 3).
+   - **Aplicarea e legată de preview-ul văzut:** `aplica_val` primește manifestul aprobat (documentele și `sha_nou`-urile din preview) și nu aplică nimic din afara lui.
 
 ## 3. Primul val: listele de cantități (preview, BD 16.10, read-only; interogările în Anexa A)
 
@@ -81,12 +90,14 @@ ofertare_recitire_doc            -- un document din val (planul e IMUABIL după 
   -- execuție:
   stare ('planificat' | 'in_citire' | 'citit' | 'aplicat' | 'respins' | 'esuat' | 'depasit' | 'revenit'),
   pdf_sha256 (fixat O DATĂ la prima revendicare, necondiționat), pagini_pdf (numărul real de pagini, din pdf-lib),
-  token uuid, lease_pana, pagini_procesate, pagini_felie (dimensiunea curentă a feliei, persistată la înjumătățire),
+  token uuid, lease_pana, incercari (contor persistent, ≤ 5), urmatoarea_dupa (backoff), pagini_procesate, pagini_felie (dimensiunea curentă a feliei, persistată la înjumătățire),
   text_partial, sha_nou, completitudine ('integral' | 'partial'), pagini_necitite int[], raport jsonb, cost_usd, motiv
   UNIQUE (recitire_id, document_id); un document e în cel mult UN val cu stare ≠ 'inchis'
 ofertare_recitire_rezervari      -- un apel AI
   id, recitire_doc_id, token, incercare, suma_rezervata, cost_real, stare ('deschisa' | 'decontata' | 'necunoscuta'),
   creat_la, inchisa_la; UNIQUE (recitire_doc_id, incercare)
+ofertare_recitire_aprobari       -- manifestul aprobat pentru aplicare (imuabil): exact ce a văzut omul în preview
+  id, recitire_id, manifest jsonb ([{recitire_doc_id, document_id, sha_nou}]), actor_uid NULL, actor_rol, motiv, la
 ofertare_recitire_jurnal         -- append-only: fiecare decizie umană / admin
   id, recitire_id, recitire_doc_id NULL, actiune ('planifica' | 'aproba_citire' | 'aplica_val' | 'aplica' | 'respinge' | 'revino'
   | 'deblocheaza' | 'inchide'), actor_uid NULL, actor_rol ('owner' | 'postgres'), motiv (NOT NULL, ≥ 10 caractere), rezultat jsonb, la
@@ -97,13 +108,46 @@ ofertare_recitire_jurnal         -- append-only: fiecare decizie umană / admin
 | De la | Spre | Funcția |
 |---|---|---|
 | `planificat` | `in_citire` | `revendica` |
-| `in_citire` | `in_citire` | `progres`, `revendica` după expirarea lease-ului |
+| `planificat` | `depasit` | `revendica` (identitatea documentului diferă de plan) |
+| `planificat` | `esuat` | `revendica` (copie cu sursa `esuat` / `respins` / `depasit`) |
+| `in_citire` | `in_citire` | `progres`, `fixeaza_pdf`, `revendica` după expirarea lease-ului |
 | `in_citire` | `citit` | `text_pune` / `refoloseste` |
-| `in_citire` | `esuat` | `esueaza` |
-| `citit` | `aplicat` / `respins` / `depasit` | `aplica` / `respinge` |
-| `aplicat` | `revenit` / `depasit` | `revino` |
+| `in_citire` | `esuat` | `esueaza`; `revendica` la a 6-a încercare sau la `pdf_schimbat` |
+| `in_citire` | `depasit` | `revendica` / `fixeaza_pdf` (identitatea documentului diferă de plan) |
+| `citit` | `aplicat` / `respins` | `aplica` / `aplica_val` / `respinge` |
+| `citit` | `depasit` | `aplica` / `aplica_val`, DOAR la CAS de identitate eșuat (persistat în afara sub-blocului, §7) |
+| `aplicat` | `revenit` | `revino` |
+| `aplicat` | `depasit` | `revino`, la CAS eșuat |
 
 Stările `respins`, `esuat`, `depasit` și `revenit` sunt terminale. **Nicio altă tranziție nu e permisă**, iar orice altă combinație dă refuz.
+
+### 4.1 Gardul (triggerele din migrare)
+
+**Pe ce se aplică.** Un document e „îngrădit” cât timp are un rând `ofertare_recitire_doc` într-un val cu `stare <> 'inchis'`.
+
+**Ce refuză.** Pe un document îngrădit, triggerele refuză orice operație de mai jos venită pe altă cale decât funcțiile recitirii:
+
+| Trigger | Ce refuză |
+|---|---|
+| `BEFORE UPDATE` pe `ofertare_documente_atribuire` | schimbarea oricăreia dintre coloanele `text_extras`, `fisier_path`, `size_bytes`, `pagina_offset`, `pagini`, `status_procesare`, `pagini_necitite`, `analiza` |
+| `BEFORE INSERT OR UPDATE` pe tabelele derivate din §3 | `ofertare_cerinte`, `ofertare_cantitati`, `ofertare_clauze_contract`, `ofertare_triere`, `ofertare_raspuns_set_doc`; la cerințe și la cantitățile vechi verifică și `surse_document_ids` |
+| `BEFORE INSERT` pe `ofertare_doc_texte_prov` și `ofertare_cant_doc_decizii` | rânduri noi pe documentul îngrădit (`text_scrie`, `text_confirmat`, decizii de rol) |
+| `BEFORE INSERT` pe `ofertare_cant_extrageri` | pornirea unei extrageri B pe document |
+
+**Cum se trece prin gard.** Funcțiile recitirii setează local, în tranzacție, `gazpet.recitire_scriere = '<recitire_doc_id>'`. Triggerul lasă să treacă numai scrierea pe ACEL document. GUC-ul nu poate fi setat prin PostgREST (nu e expus); un apel direct din SQL al altui rol nu ajunge la tabele fără privilegii.
+
+**Gardul ține de la `planifica` până la `inchide`.** `inchide` refuză:
+- dacă un document e încă `in_citire`;
+- mai devreme de 1 oră după ultima aplicare (fereastră pentru producătorii întârziați: funcțiile edge rulează cel mult 150 s).
+
+**Ce rezolvă gardul:**
+- **Producătorii întârziați:** un extractor care a citit textul vechi și salvează după aplicare e refuzat la INSERT.
+- **Scriitorii necunoscuți ai lui `text_extras`** (ingest, NAS, SEAP, `document-nou-citeste`, UI): oricine ar fi, e refuzat. Inventarul de la §5.1 rămâne pentru diagnostic, dar siguranța nu depinde de completitudinea lui.
+- **`text_confirmat`** apărut după planificare pe sha-ul vechi.
+
+**Costul.** Un SELECT pe un index parțial (`ofertare_recitire_doc` pe documentele din valuri deschise), doar la scrierile pe tabelele de mai sus.
+
+**Erorile.** Triggerele dau `RAISE EXCEPTION` cu SQLSTATE `55006` (`document_in_recitire`). Producătorii existenți tratează deja erorile de BD ca erori de business; refuzul nu pierde date, ci doar amână lucrul.
 
 ## 5. Funcții
 
@@ -111,7 +155,11 @@ Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`.
 
 **Poarta de identitate:**
 - Funcțiile **owner** cer `auth.uid()` cu `is_owner`. EXECUTE e dat lui `authenticated`, dar corpul verifică owner-ul.
-- Funcțiile **admin** (`_admin`) cer `auth.uid() IS NULL` și `current_user = 'postgres'`. EXECUTE e revocat de la PUBLIC, anon, authenticated și service_role.
+- Funcțiile **admin** (`_admin`) au trei protecții:
+  - corpul verifică `session_user = 'postgres'` și `auth.uid() IS NULL`. `current_user` NU e o verificare: într-o funcție `SECURITY DEFINER` el e owner-ul funcției;
+  - EXECUTE e revocat de la PUBLIC, anon, authenticated și service_role, și nu e acordat nimănui;
+  - harness-ul testează un rol DB non-API, căruia i se acordă EXECUTE în mod deliberat: apelul lui e refuzat de verificarea `session_user`.
+  - Înainte de prima folosire se verifică read-only că sesiunea psql a chat-ului (pooler) are `session_user = 'postgres'`.
 - Funcțiile **service_role** au EXECUTE doar pentru service_role.
 - Fiecare decizie owner / admin scrie un rând în `ofertare_recitire_jurnal`, cu motiv obligatoriu.
 
@@ -119,18 +167,19 @@ Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`.
 |---|---|---|
 | `planifica(p_nume, p_plafon_usd, p_docs jsonb, p_motiv)` / `planifica_admin(…)` | owner / postgres | Vezi mai jos. |
 | `aproba_citire(p_recitire_id, p_motiv)` / `_admin` | owner / postgres | `planificat` → `aprobat`. Abia acum edge-ul poate citi. |
-| `revendica(p_recitire_doc_id, p_pdf_sha256, p_pagini_pdf)` | service_role | Vezi mai jos. |
-| `rezerva(p_recitire_doc_id, p_token, p_incercare, p_tokeni_intrare, p_max_iesire)` | service_role | Vezi mai jos. |
+| `revendica(p_recitire_doc_id)` | service_role | Vezi mai jos. Se cheamă ÎNAINTE de descărcare. |
+| `fixeaza_pdf(p_recitire_doc_id, p_token, p_pdf_sha256, p_pagini_pdf, p_fisier_path, p_size_bytes)` | service_role | Vezi mai jos. Se cheamă după descărcare. |
+| `rezerva(p_recitire_doc_id, p_token, p_incercare, p_tokeni_numarati)` | service_role | Vezi mai jos. |
 | `deconteaza(p_rezervare_id, p_token, p_tokeni_in, p_tokeni_out)` / `necunoscuta(p_rezervare_id, p_token)` | service_role | Vezi mai jos. |
 | `progres(p_recitire_doc_id, p_token, p_pagini_procesate, p_pagini_felie, p_text_partial)` | service_role | CAS pe token și pe lease. `pagini_procesate` trebuie să crească strict (monoton) sau să rămână egal, cu o felie mai mică (înjumătățire persistată). Prelungește lease-ul. |
 | `text_pune(p_recitire_doc_id, p_token, p_text, p_completitudine, p_pagini_necitite, p_raport)` | service_role | CAS pe token. Pune textul în `ofertare_doc_texte` pentru licitația documentului și trece rândul `citit`, cu `sha_nou`. **Nu atinge documentul.** |
 | `refoloseste(p_recitire_doc_id, p_token, p_raport)` | service_role | Vezi mai jos. |
 | `esueaza(p_recitire_doc_id, p_token, p_motiv)` | service_role | `in_citire` → `esuat`. |
-| `aplica_val(p_recitire_id, p_motiv)` / `aplica_val_admin(…)` | owner / postgres | §7. |
+| `aplica_val(p_recitire_id, p_manifest jsonb, p_motiv)` / `aplica_val_admin(…)` | owner / postgres | §7. `p_manifest = [{recitire_doc_id, sha_nou}]`, exact cel din preview. Se salvează în `ofertare_recitire_aprobari`. |
 | `aplica(p_recitire_doc_id, p_sha_nou, p_motiv)` / `_admin` | owner / postgres | Un singur document, același corp ca §7, pentru excepții. |
 | `respinge(p_recitire_doc_id, p_motiv)` / `_admin` | owner / postgres | `citit` → `respins`. |
 | `revino(p_recitire_doc_id, p_motiv)` / `_admin` | owner / postgres | §9. |
-| `deblocheaza(p_recitire_id, p_motiv)` / `_admin`; `inchide(…)` / `_admin` | owner / postgres | Deblochează valul după o depășire, respectiv îl închide. |
+| `deblocheaza(p_recitire_id, p_motiv)` / `_admin`; `inchide(…)` / `_admin` | owner / postgres | Deblochează valul după o depășire, respectiv îl închide; `inchide` ridică gardul §4.1. |
 
 **`planifica` / `planifica_admin`**
 - Creează valul. Primește `p_docs = [{document_id, mod, sursa_document_id?}]`.
@@ -139,29 +188,42 @@ Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`.
   - n-are text, e `plansa` sau are `status_procesare` ≠ `procesat`;
   - are o extragere B `in_lucru`;
   - e într-un alt val deschis;
-  - are proveniență sau `text_confirmat` pe `sha_vechi`;
+  - are pe `sha_vechi` proveniență sau `text_confirmat`. EXCEPȚIE: proveniența `sinteza_ai` / `revenire-recitire` scrisă de `revino` nu dă validitate, deci nu blochează un val nou după o revenire;
   - are o încercare de ingest vie (gardă cu `in_curs_pana > now()`).
 - Pentru `refolosire`, refuză dacă sursa nu e `mod = 'ai'` în același val sau dacă diferă oricare dintre: `size_bytes`, md5-ul textului vechi, `pagina_offset`, `pagini`.
 
-**`revendica`**
+**`revendica`** (ÎNAINTE de orice descărcare)
 - Lock pe rândul planului `FOR UPDATE`. Cere valul `aprobat`, ne`blocat` și ne`inchis`.
-- Starea trebuie să fie `planificat`, sau `in_citire` cu lease expirat.
-- Fixează `pdf_sha256` și `pagini_pdf` la prima revendicare. La reluări ele trebuie să fie IDENTICE, altfel `esuat`, cu motivul `pdf_schimbat`.
-- Verifică identitatea documentului (`fisier_path`, `size_bytes`, `sha_vechi`) față de plan, altfel `depasit`.
+- Starea trebuie să fie `planificat`, sau `in_citire` cu lease expirat, iar `urmatoarea_dupa ≤ now()`.
+- `incercari + 1`; la a 6-a încercare trece în `esuat` (`prea_multe_incercari`). Backoff: `urmatoarea_dupa = now() + 2^incercari minute`.
+- Verifică identitatea documentului față de plan (`fisier_path`, `size_bytes`, `sha_vechi`), altfel `depasit`.
+- La `refolosire`:
+  - sursa `esuat` / `respins` / `depasit` → copia trece în `esuat` (`sursa_esuata`);
+  - sursa încă necitită → `asteapta_sursa`, FĂRĂ încercare consumată și FĂRĂ descărcare.
 - Emite un token nou și un lease de 10 minute.
-- La `refolosire`: refuz `asteapta_sursa` până când sursa e `citit` sau `aplicat`. Sursa trebuie să aibă același `pdf_sha256` (copia îl calculează din propriii octeți), altfel `esuat`, cu motivul `pdf_diferit_de_sursa`.
+
+**`fixeaza_pdf`** (după descărcare)
+- CAS pe token.
+- La prima trecere fixează necondiționat `pdf_sha256` și `pagini_pdf`. La reluări valorile trebuie să fie IDENTICE, altfel `esuat` (`pdf_schimbat`).
+- `p_fisier_path` și `p_size_bytes` trebuie să fie egale cu planul, altfel `depasit`.
+- La `refolosire`, `pdf_sha256` trebuie să fie egal cu al sursei, altfel `esuat` (`pdf_diferit_de_sursa`).
+
+O descărcare eșuată (PDF corupt, 404, peste 60 MB) se închide cu `esueaza`, sau rămâne pe lease; oricum consumă o încercare. Descărcările sunt deci limitate la 5 pe document, cu backoff.
 
 **`rezerva`**
 - Lock pe val `FOR UPDATE`.
-- Suma rezervată = `p_tokeni_intrare` × tariful treptei alese de `p_tokeni_intrare`, plus `p_max_iesire` × tariful de ieșire al aceleiași trepte.
+- Suma rezervată = 2 × `p_tokeni_numarati` × tariful de intrare + `MAX_IESIRE` × tariful de ieșire.
+  - `MAX_IESIRE` = 12 000 e o constantă în SQL; edge-ul trimite exact această valoare ca `max_tokens`.
+  - Treapta de JOS se aplică numai dacă 2 × `p_tokeni_numarati` < 100 000; altfel treapta de SUS.
+  - Tarifele (pe model) sunt constante în funcție, nu parametri.
 - Refuză dacă:
   - valul e `blocat` sau `inchis`;
   - documentul nu e `in_citire` cu acest token;
-  - consumul (decontat + deschis + necunoscut) plus suma rezervată depășește plafonul.
+  - consumul (decontat + deschis + necunoscut) plus suma rezervată depășește plafonul. Atunci valul devine `blocat` (`plafon`): nu se mai revendică nimic și nu se mai descarcă nimic până la `deblocheaza`.
 
 **`deconteaza` / `necunoscuta`**
 - Iau lock pe val, apoi pe rezervare. Merg numai pe o rezervare `deschisa` și se aplică o singură dată.
-- `cost_real` se calculează în SQL din tokenii raportați de API, nu din costul trimis de edge.
+- `cost_real` se calculează în SQL din tokenii raportați de API (`usage.input_tokens` / `output_tokens`), cu treapta stabilită de tokenii de intrare REALI. Costul nu vine de la edge.
 - `cost_real > suma_rezervata` → valul devine `blocat` (`depasire_rezervare`), iar costul rămâne auditat.
 
 **`refoloseste`**
@@ -169,6 +231,23 @@ Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`.
 - Copiază în `ofertare_doc_texte` textul sursei sub `(licitatia copiei, sha)`. Arhiva are cheia `(licitatie_id, sha256)`, iar proveniența o referă.
 - Copiază `sha_nou`, `completitudine` și `pagini_necitite`.
 - Raportul îl calculează edge-ul față de textul VECHI al copiei. Costul e 0.
+
+### 5.1 Scriitorii rândului de document și ai derivatelor (inventar, pentru diagnostic)
+
+Siguranța NU depinde de completitudinea acestui tabel: gardul §4.1 e la nivel de BD și prinde și scriitorii necunoscuți. Tabelul arată ce se întâmplă cu fiecare cale cunoscută cât timp documentul e îngrădit.
+
+| Scriitor | Ce scrie | Calea / lock-urile | Pe un document îngrădit |
+|---|---|---|---|
+| `ofertare-ingest-doc` | `text_extras` + metadate | `ofertare_ingest_garda_rezultat`: gardă → document | refuzat de trigger; nici nu pornește pe `procesat` |
+| worker NAS (`worker/ofertare/ingest.ts`, `citire_mare.ts`), `ofertare-word-text` | `text_extras` (pdftotext / docx) | aceeași gardă | refuzat de trigger |
+| `ofertare-document-nou-citeste` (`scriere.ts`) | `analiza.citire_noi`; `text_extras` doar dacă era gol | CAS pe `analiza` / sha | refuzat de trigger (`analiza` e în lista coloanelor îngrădite) |
+| `ofertare-plansa-citeste` | `text_extras` al planșelor | propriu | nu e cazul: `plansa` e exclus din val |
+| `ofertare-seap-import` / `seap-veghe`, `_shared/codSeap.mjs` | metadate SEAP pe rând (`seap_meta`, `seap_cod`, …) | UPDATE direct | permis: nu atinge coloanele îngrădite |
+| UI `OfertareLicitatii.jsx` | lot, relevanță, tip | UPDATE prin RLS | permis pe coloanele neîngrădite; refuzat pe cele îngrădite |
+| `fn_ofertare_cb_text_scrie` (31b) | proveniență | licitație → document | refuzat de trigger (proveniență pe document îngrădit) |
+| `fn_ofertare_cb_decizie` | `text_confirmat`, roluri | licitație `FOR SHARE` → advisory | refuzat de trigger |
+| `fn_ofertare_cb_extragere_incepe(_grup)` | extragere B | licitație `FOR UPDATE` → documente `NOWAIT` | refuzat de trigger |
+| `ofertare-cerinte`, `ofertare-clauze-formulare`, `ofertare-triere`, `ofertare-raspuns-set`, `ofertare-cantitati-extrage` (F3 vechi) | derivatele din §3 | INSERT / UPDATE | refuzat de trigger |
 
 ## 6. Citirea: edge `ofertare-ingest-doc`, mod nou `recitire`, plus un job de pas
 
@@ -178,12 +257,16 @@ Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`.
 - `x-ingest-secret` (cel vechi) e refuzat pe acest mod.
 
 **Pașii.**
-1. Descarcă PDF-ul (`ofertare` / `fisier_path`), cu limita de 60 MB. Calculează sha256 pe octeți și numărul real de pagini (pdf-lib), apoi apelează `revendica`.
-2. La `mod = 'refolosire'`: dacă `revendica` a trecut, calculează raportul față de textul vechi al copiei și apelează `refoloseste`. **Niciun apel AI**, prin construcție: ramura AI nu există pentru acest mod.
+1. `revendica` (token + încercare). Abia apoi descarcă PDF-ul (`ofertare` / `fisier_path`, limita de 60 MB), calculează sha256 pe octeți și numărul real de pagini (pdf-lib), apoi `fixeaza_pdf`.
+2. La `mod = 'refolosire'`: dacă `fixeaza_pdf` a trecut, calculează raportul față de textul vechi al copiei și apelează `refoloseste`. **Niciun apel AI**, prin construcție: ramura AI nu există pentru acest mod.
 3. La `mod = 'ai'`:
    - aceleași felii, prompturi și marcaje `⟦PAGINA N⟧` ca ingest-ul, numerotate ABSOLUT: `pagina_offset + pagina locală`;
    - Haiku 5.5 forțat; dimensiunea feliei se reia din `pagini_felie` (înjumătățirea persistă);
-   - pentru fiecare apel: `count_tokens` (gratuit, exact) → `rezerva` → apel → `deconteaza` (cu `usage` din răspuns), sau `necunoscuta` la timeout sau eroare de rețea;
+   - pentru fiecare apel:
+     - request-ul (model, prompt, felia PDF, `max_tokens` = 12 000) se construiește O DATĂ și e imuabil;
+     - `count_tokens` pe ACEL request (gratuit; e o estimare, de aici marja 2×);
+     - `rezerva`, apoi apelul cu exact același request;
+     - `deconteaza` cu `usage` din răspuns, sau `necunoscuta` la timeout sau eroare de rețea;
    - după fiecare felie, `progres`; cel mult 2 apeluri pe invocare;
    - la sfârșit, raportul (§6.1) și `text_pune`.
 4. Edge-ul NU trece prin garda de ingest, NU scrie `ofertare_documente_atribuire` și NU schimbă `status_procesare`.
@@ -217,7 +300,18 @@ Raportul se calculează pentru textul vechi și pentru cel nou, cu `_shared/cant
 
 ## 7. Aplicarea pe val: `aplica_val` (owner) / `aplica_val_admin` (postgres)
 
-**O singură acțiune.** Documentele `citit` ale valului se parcurg în ordinea `(licitatie_id, document_id)`. Fiecare document rulează într-un sub-bloc (savepoint): un refuz anulează doar acel document, iar restul continuă.
+**O singură acțiune, pe manifestul aprobat.**
+- Se parcurg DOAR documentele din `p_manifest`, în ordinea `(licitatie_id, document_id)`. Fiecare trebuie să fie `citit` și să aibă `sha_nou` egal cu cel din manifest.
+- Un document `citit` după preview și absent din manifest NU se atinge.
+- Manifestul și motivul se salvează în `ofertare_recitire_aprobari` înainte de prima aplicare.
+
+**Semantica sub-blocului (savepoint):**
+- Fiecare document rulează într-un `BEGIN … EXCEPTION … END` plpgsql. Orice refuz din §8 e un `RAISE` cu cod propriu (SQLSTATE `P0R01`…`P0R09`), deci TOATE efectele documentului (gardă, arhivă, `UPDATE`, proveniență) se anulează. Testul verifică garda octet cu octet.
+- În handler, DUPĂ rollback-ul sub-blocului, se persistă numai rezultatul permis:
+  - la CAS de identitate eșuat (`text_depasit`), tranziția `citit` → `depasit`;
+  - la orice alt refuz, documentul rămâne `citit`;
+  - în ambele cazuri, rândul de jurnal și motivul în rezultat.
+- Lock-urile luate de un sub-bloc reușit se păstrează până la sfârșitul tranzacției. Ordinea globală `(licitatie_id, document_id)` și `NOWAIT` (§8) exclud ciclurile.
 
 **Criteriile de trecere.** Un document se aplică automat numai dacă îndeplinește TOATE condițiile:
 
@@ -235,9 +329,10 @@ Cine nu trece rămâne `citit`, cu motivul în rezultat. Se poate aplica individ
 
 ## 8. Aplicarea unui document (corpul comun al `aplica` și al `aplica_val`)
 
-Ordinea lock-urilor e fixă: **rând plan → licitație `FOR KEY SHARE` → gardă de ingest `FOR UPDATE` → document `FOR NO KEY UPDATE`**.
-- Garda și documentul vin după licitație, la fel ca în `text_scrie` (31b).
-- Garda vine ÎNAINTEA documentului, ca în `ofertare_ingest_garda_rezultat`, care ia garda și apoi documentul. Ciclurile sunt excluse (testul din §10).
+Ordinea lock-urilor e fixă: **rând plan → licitație `FOR KEY SHARE` → gardă de ingest `FOR UPDATE NOWAIT` → document `FOR NO KEY UPDATE NOWAIT`**.
+- Garda și documentul vin după licitație, la fel ca în `text_scrie` (31b), și se iau cu `NOWAIT`. Dacă le ține altcineva, refuzul e `document_ocupat`: documentul rămâne `citit` și se reia mai târziu.
+- Ținând licitația, aplicarea nu așteaptă niciodată o resursă pe care o poate ține un scriitor „document-întâi”. Asta rupe ciclul în trei sesiuni găsit de Copilot: `garda_rezultat` (gardă → document) × `aplica` (licitație → gardă) × un producător (document → `text_scrie` → licitație). Același tipar ca `NOWAIT` din #729.
+- Gardul §4.1 oricum refuză scrierile pe text ale producătorului pe un document îngrădit.
 
 Pașii:
 1. Rândul trebuie să fie `citit`; `sha_nou` trebuie să fie egal cu parametrul (doar la `aplica`).
@@ -245,20 +340,25 @@ Pașii:
 3. **Garda de ingest:** `INSERT … ON CONFLICT DO NOTHING`, apoi `FOR UPDATE`.
    - Dacă `in_curs_pana > now()` → refuz `ingest_in_curs`.
    - Altfel `incercare_token = NULL` și `in_curs_pana = NULL`, ca un `ofertare_ingest_garda_rezultat` întârziat, cu tokenul vechi, să fie respins.
-   - `ingerat_hash`, `size` și `etag` rămân, deci un ingest nou dă `deja_ingerat`.
+   - **Un ingest ULTERIOR (după `inchide`)** nu suprascrie textul: ingest-ul sare documentele cu `status_procesare = 'procesat'` (`ofertare-ingest-doc`, l.209). Doar `partial` + `reia` le reia, iar `aplica_val` aplică numai textele integrale, deci rezultatul e `procesat`.
+   - NU ne bazăm pe `deja_ingerat`: pentru cele 20 de documente garda e nouă, fără `ingerat_size` / `etag`.
+   - Test dedicat: gardă absentă → aplicare → un ingest pornit fără `reia` → documentul e sărit.
 4. Lock pe document. **CAS de identitate:** `sha256(text_extras) = sha_vechi`, `fisier_path`, `size_bytes` și `pagina_offset` = cele din plan. Altfel rândul trece în `depasit` și răspunsul e `text_depasit`.
 5. **Precondiții sub lock**, fiecare cu un refuz numit:
    - extragere B `in_lucru` pe document → `extragere_in_lucru`;
    - ORICE derivat din lista §3 → `derivate`, cu numărătorile. Lista e fixă în funcție; un tabel nou de derivate o extinde explicit.
+   - Rezultatele întârziate, salvate după aplicare, nu pot apărea cât timp valul e deschis: gardul §4.1 le refuză la INSERT. Verificarea de aici acoperă ce exista DINAINTE.
 6. **Arhivare:**
    - textul vechi: `INSERT INTO ofertare_doc_texte … ON CONFLICT DO NOTHING`, fără proveniență;
    - metadatele vechi sunt deja în `meta_vechi` și se verifică egale cu cele curente, altfel `depasit`.
 7. `UPDATE` pe document:
    - `text_extras`, `pagini_necitite`;
    - `status_procesare = 'procesat'`, după criteriile de mai sus;
-   - `procesat_la = now()`;
+   - `procesat_la = clock_timestamp()`;
    - `pagini_procesate = pagini_pdf`.
 8. Proveniența: `INSERT ofertare_doc_texte_prov`, cu `origine = 'transcriere'`, producătorul `recitire-haiku-5-5`, completitudinea și paginile necitite.
+   - `constatat_la` = `greatest(clock_timestamp(), max(constatat_la al documentului) + 1 µs)`, luat DUPĂ lock-uri, nu `now()` de la începutul tranzacției.
+   - Ordinea pe document e deci strict monotonă, iar înghețarea vede ultima activare. Altă proveniență pe document nu poate apărea între timp: gardul §4.1.
 9. Rândul trece în `aplicat`. Se scrie în jurnal.
 
 **Efectul asupra TKT-0329 B:**
@@ -268,14 +368,18 @@ Pașii:
 
 ## 9. Revenirea: `revino` (owner) / `revino_admin` (postgres)
 
-Aceeași ordine a lock-urilor ca la §8. Pașii:
+Aceeași ordine a lock-urilor ca la §8, inclusiv `NOWAIT`. Revenirea e posibilă numai cât valul e deschis, deci gardul e activ. După `inchide`, o revenire = un val nou.
+
+Pașii:
 1. Rândul trebuie să fie `aplicat`. CAS: `sha256(text_extras) = sha_nou`, iar `fisier_path`, `size_bytes` și `pagina_offset` sunt cele din plan. Altfel `depasit`.
 2. Extragerea B `in_lucru` blochează revenirea; un derivat apărut DUPĂ aplicare o blochează și el (refuz `derivate`).
 3. Textul vechi se pune înapoi din arhivă, cu `CHECK` pe sha. Se pun înapoi și TOATE câmpurile din `meta_vechi`.
 4. **Istoricul activării.** Se inserează un rând de proveniență pentru `sha_vechi` cu `origine = 'sinteza_ai'` și producătorul `revenire-recitire`.
    - Motivul: înghețarea alege ultima proveniență, care trebuie să fie din nou textul vechi.
    - Rândul NU face textul valid: `sinteza_ai` = „fără dovadă”, iar înghețarea îl marchează `text_indisponibil` (31a l.1071).
-   - Pe sha-ul vechi nu există altă proveniență sau `text_confirmat`; `planifica` a refuzat altfel. Starea B dinainte de recitire se reproduce exact: textul vechi există, dar nu e valid.
+   - `constatat_la` monoton, ca la §8, pasul 8.
+   - Pe sha-ul vechi nu există altă proveniență sau `text_confirmat`: `planifica` a refuzat altfel, iar gardul a refuzat orice decizie nouă pe document de atunci. Pasul se REVERIFICĂ sub lock, cu refuzul `decizie_pe_sha_vechi`, fără să revoce vreo decizie umană.
+   - Contractul e **echivalența semantică pentru B**, nu identitatea stării: înainte nu existau proveniențe, după revenire există una `sinteza_ai`. Testul compară rezultatul `fn_ofertare_cb_ingheata` (sha ales, `text_indisponibil`, dovada) dinainte de aplicare cu cel de după revenire.
 5. Garda e tratată ca la §8, pasul 3.
 6. Rândul trece în `revenit` (terminal). Se scrie în jurnal.
 
@@ -334,6 +438,40 @@ O nouă recitire a aceluiași document se face printr-un val nou.
 - un derivat apărut după aplicare blochează revenirea.
 
 **Identitate:** funcțiile `_admin` refuză orice `auth.uid()` nenul și orice rol ≠ postgres; un motiv sub 10 caractere e refuzat.
+
+**Gardul (§4.1), câte un test pe fiecare trigger:**
+- un `UPDATE text_extras` direct (ca garda / NAS) pe un document îngrădit → `55006`;
+- `ofertare_ingest_garda_rezultat` cu token valid pe un document îngrădit → refuzat, textul rămâne;
+- `text_scrie`, `decizie text_confirmat`, `extragere_incepe` → refuzate;
+- un INSERT în fiecare tabel derivat (inclusiv prin `surse_document_ids`) → refuzat;
+- metadate SEAP / lot pe același rând → permise;
+- după `inchide`, toate sunt din nou permise;
+- `inchide` mai devreme de 1 oră după ultima aplicare → refuz.
+
+**Ciclul în trei sesiuni (Copilot r2):** T1 `garda_rezultat` ține garda; T3 ține documentul (UPDATE direct, apoi `text_scrie`); T2 `aplica` ține licitația. Rezultatul: T2 primește `document_ocupat` (`NOWAIT`), fără deadlock, iar T1 / T3 sunt refuzate de gard.
+
+**Sub-bloc:** un CAS sau un derivat care eșuează DUPĂ lock-ul și modificarea gărzii lasă garda neschimbată, comparată octet cu octet. Persistă doar `citit` → `depasit` / jurnalul.
+
+**Manifest:** un document devenit `citit` după preview și absent din manifest nu e aplicat; un `sha_nou` diferit față de manifest → neaplicat.
+
+**Bani:**
+- `usage` real peste estimarea `count_tokens` (simulat 1,9×) intră în rezervare;
+- simulat 2,5× → val `blocat`, iar apelul următor nu mai pleacă;
+- traversarea pragului de 100k → rezervare la treapta de sus;
+- `max_tokens` diferit de constantă → refuz;
+- un request modificat după numărare → testul edge eșuează (request imuabil).
+
+**Cron:**
+- un PDF corupt → 5 încercări cu backoff, apoi `esuat`; numărul descărcărilor e ≤ 5;
+- plafonul atins → val `blocat`, iar jobul nu mai revendică;
+- o copie cu sursa `esuat` → `esuat`, fără descărcare.
+
+**`revino`:**
+- o proveniență concurentă cu timestamp mai vechi nu bate activarea (`constatat_la` monoton);
+- `fn_ofertare_cb_ingheata`, dinainte de aplicare față de după revenire, e echivalentă pentru B;
+- după revenire, `planifica` acceptă documentul într-un val nou.
+
+**Identitate admin:** un rol DB non-API căruia i se acordă deliberat EXECUTE → refuzat de `session_user`.
 
 **Edge (Deno, cu mock-uri):**
 - fără owner și fără secretul intern → 403;
@@ -408,6 +546,21 @@ O nouă recitire a aceluiași document se face printr-un val nou.
   - `aplica_val`, cu criterii deterministe;
   - căile `_admin` prin psql, cu motiv obligatoriu și jurnal;
   - pornirea citirii prin `aproba_citire`, executată de job.
+
+## 14. Schimbări v2 → v3
+
+- **Jakarinos #2 (ingest ulterior):** ingest-ul sare `procesat`, iar aplicarea pe val dă doar texte integrale. Nu ne mai bazăm pe `deja_ingerat`, iar gardul acoperă fereastra valului.
+- **Jakarinos #3 (derivate întârziate) + Copilot P1 (inventarul scriitorilor):** gardul prin triggere (§4.1) și inventarul de la §5.1.
+- **Jakarinos #4 (`text_confirmat` după planificare):** gardul o refuză; reverificare sub lock la revenire.
+- **Jakarinos #5 (timestamp-ul provenienței):** `constatat_la` monoton, după lock-uri.
+- **Jakarinos #6 (descărcări nelimitate):** `revendica` ÎNAINTE de descărcare, cu contor ≤ 5 și backoff; plafonul atins blochează valul; copiile cu sursa eșuată se închid.
+- **Jakarinos #7 (aprobarea legată de preview):** `aplica_val` cu manifest imuabil.
+- **Jakarinos #8 + Copilot P1 (`current_user` în `SECURITY DEFINER`):** `session_user`, plus ACL și testul cu rol non-API.
+- **Jakarinos #9 + Copilot P1 (savepoint):** semantica explicită, cu tranzițiile complete în tabel.
+- **Jakarinos #10:** proveniența de revenire nu blochează un val nou.
+- **Jakarinos #1 + Copilot P2 (bani):** marja 2× pe `count_tokens`, treapta tarifară conservatoare, `max_tokens` constantă de server, request imuabil, cost calculat din `usage` real. Depășirea e cel mult cea a unui apel.
+- **Copilot P1 (ciclul în trei sesiuni):** `NOWAIT` pe gardă și document, plus test.
+- **Copilot P2 (revenirea):** contractul e echivalența semantică pentru B, cu test comparativ pe `ingheata`.
 
 ## Anexa A — interogările preview-ului (read-only, rulate pe 16.10)
 
