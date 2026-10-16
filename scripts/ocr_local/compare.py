@@ -22,9 +22,11 @@ BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu 
 # (textul, segmentele si BD raman neschimbate); in modul provenienta (segmente_provenienta) marcajul e delimitat cu doua caractere din zona
 # privata Unicode, puse DOAR aici - deci se stie ce a scris pipeline-ul fara sa se ghiceasca din forma textului (lectia #1765). Orice
 # caracter privat venit din citire e neutralizat inainte; paritatea cu parsarea normala se verifica (altfel: fara masti, fail-closed).
-PA, PB = '', ''
+PA, PB = '', ''   # marcaj scris de pipeline
+PC, PD = '', ''   # continut CITIT care e taiat (barat): ramane continut, dar se compara ca taiat (Jakarinos r1 P1)
 _PROV = threading.local()
 def _m(s): return PA + s + PB if getattr(_PROV, 'on', False) else s
+def _t(s): return PC + s + PD if getattr(_PROV, 'on', False) else s
 SUPSUB = re.compile(r'<(sup|sub)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)  # exponent/indice = semantica: devin ^x / _x, nu dispar
 def supsub(s): return SUPSUB.sub(lambda m: _m('^{' if m.group(1).lower() == 'sup' else '_{') + m.group(2) + _m('}'), s)  # x^{2+3} != x^{2}+3
 # doar etichete HTML dintr-o lista inchisa, cu atribute bine formate: 'x<y si z>3' sau 'x < 5 si y > 3' raman text (review Jakarinos r3)
@@ -39,15 +41,22 @@ CSS_STRIKE = re.compile(r'<(span|font|div|p|td)\b[^>]*line-through[^>]*>(.*?)</\
 MD_STRIKE = re.compile(r'~~(?=\S)(.+?)(?<=\S)~~', re.S)
 def strike_marker(s):
     # o valoare barata nu e text activ: devine marcaj comparat ⟦barat: ...⟧ (HTML <s>/<del>/<strike> si markdown ~~...~~)
-    b = lambda x: ' ' + _m('⟦barat: ') + x + _m('⟧') + ' '
+    b = lambda x: ' ' + _m('⟦barat: ') + _t(x) + _m('⟧') + ' '
     s = CSS_STRIKE.sub(lambda m: b(m.group(2)), s)
     return MD_STRIKE.sub(lambda m: b(m.group(1)), STRIKE.sub(lambda m: b(m.group(2)), s))
 IMG = re.compile(r'<img\b((?:"[^"]*"|\'[^\']*\'|[^\'">])*)>', re.I)
+SRC_ATTR = re.compile(r'(\bsrc\s*=\s*["\'])([^"\']*)(["\'])', re.I)
 IMG_ATTR = re.compile(r'\b(alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.I)
 def img_marker(s):
     # imaginea nu dispare: alt/title (substitutul textual) devin un marcaj comparat (review Copilot r5)
     # toate atributele, textual (alt, title, src, ...): nicio diferenta din eticheta nu dispare (review Jakarinos r6, Copilot r6 P2)
-    return IMG.sub(lambda m: ' ' + _m('⟦img ' + re.sub(r'\s+', ' ', re.sub(r'\s+/$', '', m.group(1)).strip()) + '⟧') + ' ', s)
+    # provenienta: doar cadrul ⟦img ⟧ si VALOAREA lui src (referinta / payload-ul imaginii) sunt ale pipeline-ului; alt, title si restul
+    # atributelor sunt text CITIT si raman continut (Jakarinos r1 P1: alt „10,5 mc” vs „105 mc” nu poate fi „doar marcaj”)
+    def one(m):
+        a = re.sub(r'\s+', ' ', re.sub(r'\s+/$', '', m.group(1)).strip())
+        a = SRC_ATTR.sub(lambda x: x.group(1) + _m(x.group(2)) + x.group(3), a)
+        return ' ' + _m('⟦img ') + a + _m('⟧') + ' '
+    return IMG.sub(one, s)
 CAPTION = re.compile(r'<caption\b[^>]*>(.*?)</caption\s*>', re.I | re.S)
 MD_SEP = re.compile(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$')
 CONTEXT = 6
@@ -68,7 +77,7 @@ def html_rows(table):
         row = []
         for attrs, body in CELL_HTML.findall(r):
             text = clean_inline(body); spans = {}
-            if re.search(r'line-through', attrs, re.I) and text: text = _m('⟦barat: ') + text + _m('⟧')  # bararea pusa pe celula insasi
+            if re.search(r'line-through', attrs, re.I) and text: text = _m('⟦barat: ') + _t(text) + _m('⟧')  # bararea pusa pe celula insasi
             for k, a, b, c in SPAN.findall(attrs):
                 v = (a or b or c).strip()
                 # doar intreg valid 1..50 se interpreteaza; orice altceva ('2x', '51', '0') ramane marcaj vizibil, nu se ghiceste
@@ -403,12 +412,15 @@ def compare(plan_dir):
 
 
 def _desparte(x):
-    """Textul fara delimitatorii privati + masca (True = caracter scris de pipeline)."""
-    out, mask, inm = [], [], False
+    """Textul fara delimitatorii privati + masca pe caracter: 0 = continut, 1 = scris de pipeline, 2 = continut citit TAIAT.
+    Adancime (nu boolean): un marcaj in interiorul altuia ramane marcaj pana la ultima inchidere (Jakarinos r1 P2)."""
+    out, mask, dm, dt = [], [], 0, 0
     for ch in x:
-        if ch == PA: inm = True; continue
-        if ch == PB: inm = False; continue
-        out.append(ch); mask.append(inm)
+        if ch == PA: dm += 1; continue
+        if ch == PB: dm = max(0, dm - 1); continue
+        if ch == PC: dt += 1; continue
+        if ch == PD: dt = max(0, dt - 1); continue
+        out.append(ch); mask.append(1 if dm else 2 if dt else 0)
     return ''.join(out), mask
 
 def segmente_provenienta(raw, flat=False):
@@ -416,7 +428,7 @@ def segmente_provenienta(raw, flat=False):
     cu parsarea normala nu tine (atunci trierea e fail-closed: HIGH-RISK)."""
     norm = segments(raw)
     _PROV.on = True
-    try: prov = segments(raw.replace(PA, '�').replace(PB, '�'))
+    try: prov = segments(raw.replace(PA, '�').replace(PB, '�').replace(PC, '�').replace(PD, '�'))
     finally: _PROV.on = False
     if flat: norm, prov = flat_text(norm), flat_text(prov)
     if len(norm) != len(prov): return None

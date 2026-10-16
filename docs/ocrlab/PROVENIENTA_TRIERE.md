@@ -30,3 +30,19 @@ motivul clasei (restant explicit pentru om, nu „corect”).
 Proba arb-v2 reclasificată: HIGH_RISK 57 (12 needs_human = 21%), DEFER 56 (3 needs_human), MARCAJE 4 (3 needs_human).
 Risc rămas: pe HIGH_RISK, needs_human ~21% > pragul §8 de 15% — un arbitraj complet se poate opri pe prag (cazuri grele reale: rânduri
 decalate, coduri, plus 2 răspunsuri Sonnet în afara schemei = defect separat al arbitrului).
+
+## v2 — după Jakarinos r1 (NO-GO, `out\ocrlab_triere_r1_jak.log`)
+Reparat, cu test pentru fiecare contraexemplu:
+- **DEFER doar fără cifre**: conținut diferit + cel puțin o cifră în conținut (fragment + 2 tokeni vecini la text; rândul întreg la tabel) =
+  HIGH_RISK. Prinde UM („6 bar”/„6 bai”, d204 p10), semn („= 0,0013”/„− 0,0013”, d203 p67), cod („NTPEE-2018”/„NTPER-2018”, d203 p49).
+- **Imagini**: doar cadrul ⟦img ⟧ și valoarea lui `src` sunt marcaj; `alt`, `title` și celelalte atribute sunt conținut („10,5 mc”/„105 mc”).
+- **Bara**: conținutul tăiat rămâne conținut, încadrat distinct (U+E002/U+E003 în proveniență) → „<s>10</s> 20” ≠ „10 <s>20</s>”.
+- **Imbricare**: măștile pe adâncime, nu boolean (sup în alt).
+- **Client**: cache-ul trierii pe (document, bandă), nu doar pe bandă (r1 d772/d1247 au benzi cu același id).
+Paritate: 10.024/10.024 (normal + aplatizat). Teste: 193 OK.
+
+| | dezacorduri | HIGH_RISK | DEFER | MARCAJE | OM | cost estimat (0,0048/apel) |
+|---|---|---|---|---|---|---|
+| r1 (102) | 12.669 | 5.926 | 5.973 | 88 | 682 | ~28 USD (față de ~45) |
+| Răcari | 6.972 | 3.844 | 3.024 | 9 | 95 | ~18 USD |
+Proba arb-v2 reclasificată: HIGH_RISK 109 (15 needs_human = 13,8%, sub pragul de 15%); DEFER 4; MARCAJE 4 (3 needs_human).

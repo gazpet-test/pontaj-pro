@@ -885,6 +885,20 @@ class Triere(unittest.TestCase):
     def test_imagine_diferita_e_marcaj(self):
         a = 'Plan <img src="data:image/jpeg;base64,QUJDREVG"/> gata'; b = 'Plan <img src="data:image/jpeg;base64,WFlaV1ZV"/> gata'
         self.assertEqual(self._cls(a, b)[0], ['MARCAJE'])
+    def test_contraexemple_jakarinos_r1_langa_cifre(self):
+        # UM, semn, cod, alt-ul imaginii, tinta barei: continut diferit langa cifre = HIGH_RISK (nu DEFER / MARCAJE)
+        self.assertEqual(self._cls('etanseitate de 6 bar.', 'etanseitate de 6 bai.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('coeficient = 0,0013 pe km', 'coeficient − 0,0013 pe km')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('conform NTPEE-2018 art', 'conform NTPER-2018 art')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Cant <img alt="10,5 mc" src="a.png"/> gata', 'Cant <img alt="105 mc" src="a.png"/> gata')[0], ['HIGH_RISK'])
+        a = self.tab(['<td>Teava</td>', '<td><s>10</s> 20</td>']); b = self.tab(['<td>Teava</td>', '<td>10 <s>20</s></td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+    def test_imbricare_sup_in_alt(self):
+        from .compare import segmente_provenienta
+        a = 'X <img alt="10<sup>2</sup>" src="a.png"/> 99'; b = 'X <img alt="10<sup>3</sup>" src="a.png"/> 99'
+        self.assertIsNotNone(segmente_provenienta(a)); self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+    def test_doar_src_diferit_e_marcaj(self):
+        self.assertEqual(self._cls('Plan <img alt="schita" src="a.png"/> gata', 'Plan <img alt="schita" src="b.png"/> gata')[0], ['MARCAJE'])
     def test_caracter_privat_in_citire_fail_closed(self):
         self.assertEqual(self._cls('Text  normal fara cifre', 'Text normal fara cifre')[0], ['HIGH_RISK'])
     def test_paritate_segmente_neschimbate(self):

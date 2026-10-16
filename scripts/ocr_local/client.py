@@ -605,7 +605,8 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     # cu motivul clasei (restant explicit pentru om, nu „corect”). Clasa se calculeaza din citirile de pe disc, verificate pe amprenta.
     clase = {}
     def clasa_item(d, it):
-        if it['band'] not in clase:
+        cheie = (str(d), it['band'])  # banda e unica doar in document: cheia include documentul (Jakarinos r1 P1 - cache intre documente)
+        if cheie not in clase:
             from .triere import triaza_banda
             bd = d / ('page%04d' % it['page']) / it['band']; raws = {}
             for rd in ('lighton', 'mineru'):
@@ -613,8 +614,8 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
                 if sha(raw.encode('utf-8')) != it['raw_sha256'][rd]: raise RuntimeError('Citirea %s a benzii %s nu mai e cea comparata' % (rd, it['band']))
                 raws[rd] = raw
             toate = [x for x in _jsonl(d / 'dezacorduri.jsonl') if x['band'] == it['band']]
-            clase[it['band']] = triaza_banda(raws['lighton'], raws['mineru'], toate)
-        return clase[it['band']].get(it['id'], ('HIGH_RISK', 'item necunoscut la triere'))
+            clase[cheie] = triaza_banda(raws['lighton'], raws['mineru'], toate)
+        return clase[cheie].get(it['id'], ('HIGH_RISK', 'item necunoscut la triere'))
     if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     try: activa(rdir)
