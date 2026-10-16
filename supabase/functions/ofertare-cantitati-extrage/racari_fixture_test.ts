@@ -13,7 +13,7 @@ Deno.test('Răcari F3: cele 16 rânduri Dn 90 din text, cu convenția EN a liste
     // val 2 (PR-A): în lista F3 pdftotext denumirea (cu „D= 90 MM”) e pe liniile de SUB rândul cantității, între „Total=” al
     // articolului precedent și „Total=” al lui — sursa se reface ca în text (rândul markdown rămâne singur)
     const md = (e.rand_text as string).includes('|')
-    const sus = md ? '' : '0.000 0 Total=\n'
+    const sus = md ? '' : '= NR. SIMBOL ART. =\n000 X0A0 M 1.000\nALT ARTICOL\n0.000 0 Total=\n'
     const felie = md ? e.rand_text as string : `${sus}${e.rand_text}\n${e.denumire_text}\n0.000 0 Total=`
     const r = randDinTablou([null, null, null, e.cod_articol_text, e.denumire_text, e.obiect, null, null, null, 'M', e.cantitate_text, 0, 0,
       'conducta', 'lungime', md ? felie : e.rand_text])!

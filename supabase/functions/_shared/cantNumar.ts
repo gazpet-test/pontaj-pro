@@ -230,6 +230,37 @@ const RE_TOTAL_RAND = /^[^\p{L}]*\btotal[ea]?\s*=[^\p{L}]*$/iu
 const RE_INCEPUT_ARTICOL = /^\s*\**\s*\d{1,4}[.)]?\s+\**[A-Z0-9][A-Za-z0-9.\-\/]{2,}/
 // doar unitățile reale fac o linie ancoră (umNorm întoarce și cuvinte oarecare: „TEAVA 20.80” nu e un rând nou)
 const UM_ANCORA = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'l', 'set', 'ora', 'h'])
+
+// ── orientarea listei, certificată pe DOCUMENT (review Jakarinos r5, P1): local, „Total= / denumire / Total=” e ambiguu — poate fi
+// „articol, denumire DEDESUBT, total” sau „denumire DEASUPRA, total, articol” repetat. Ce le deosebește e structura întregii liste:
+// în aranjamentul „dedesubt” (a) primul articol NU e precedat de o linie „… Total=” (deasupra lui e antetul / începutul) și
+// (b) FIECARE articol are o linie „Total=” proprie (pe linia lui sau sub ea) înaintea articolului următor / sfârșitului textului.
+// Aranjamentul „deasupra” le încalcă pe amândouă (primul articol vine după totalul primei denumiri; ultimul n-are total după el).
+// Articol = început de articol (nr. + cod) cu o cantitate în formatul listei („300.000”). Fără niciun articol → necertificat.
+const RE_CANT_LISTA = /(?<![\d.,])\d+[.,]\d{3}(?![\d.,])/
+const RE_TOTAL_ORIUNDE = /\btotal[ea]?\s*=/i
+let cacheOrientare: { doc: string; dedesubt: boolean } | null = null
+export function orientareDedesubt(doc: string): boolean {
+  if (cacheOrientare?.doc === doc) return cacheOrientare.dedesubt
+  const L = doc.split('\n')
+  const art: number[] = []
+  L.forEach((l, i) => { if (RE_INCEPUT_ARTICOL.test(l) && RE_CANT_LISTA.test(l)) art.push(i) })
+  let ok = art.length > 0
+  if (ok) {
+    let p = art[0] - 1
+    while (p >= 0 && (!L[p].trim() || L[p].startsWith('⟦PAGINA'))) p--
+    if (p >= 0 && RE_TOTAL_ORIUNDE.test(L[p])) ok = false
+  }
+  for (let k = 0; ok && k < art.length; k++) {
+    const sfarsit = k + 1 < art.length ? art[k + 1] : L.length
+    let are = false
+    for (let j = art[k]; j < sfarsit && !are; j++) are = RE_TOTAL_ORIUNDE.test(L[j])
+    if (!are) ok = false
+  }
+  cacheOrientare = { doc, dedesubt: ok }
+  return ok
+}
+
 export function blocRand(doc: string, off: number): { linie: string; bloc: string; de_la: number; pana_la: number; continuare: boolean } {
   const ls = doc.lastIndexOf('\n', off - 1) + 1
   const le0 = doc.indexOf('\n', off)
@@ -242,6 +273,7 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
   // precedentă) închide articolul precedent („… Total=”). Antetul listei, începutul textului sau orice altceva = incert → doar linia
   // (primul articol al fiecărei liste rămâne pe linia lui). Un „Total=” chiar pe linia cantității = articolul e întreg pe linie.
   if (/\btotal[ea]?\s*=/i.test(linie)) return doarLinia
+  if (!orientareDedesubt(doc)) return doarLinia
   let p = ls - 1, sus = ''
   while (p > 0) {
     const a = doc.lastIndexOf('\n', p - 1) + 1
