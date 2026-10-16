@@ -603,6 +603,8 @@ def peste_prag(st, prag=None, minim=None):
     n = st['claude'] + st['necunoscute'] + st['pierdute_claude']; nh = st['needs_human_claude'] + st['necunoscute'] + st['pierdute_claude']
     return n, nh, n >= minim and nh / n > prag
 
+CHEI_CONTEXT_ARBITRU = ('context_inainte', 'context_dupa', 'rand_anterior')  # = CHEI_CONTEXT din edge-ul ofertare-ocr-arbitreaza
+
 @cu_lacat
 def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None, triere=False, doar_haiku=False):
     """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
@@ -697,6 +699,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue
         if it['tip'] == 'structura_tabele':
             om(d, ids, it, 'structura_tabele: un cititor vede tabel, celalalt text (fara arbitraj automat)'); st = stare_locala(); continue
+        # contextul trimis arbitrului e plafonat in edge (CHEI_CONTEXT, sir <= 2000, altfel 422 inaintea rezervarii): in proba se sare,
+        # in pasul normal merge la om fara AI (laborator 16.10: proba doar_haiku oprita de un rand_anterior lung)
+        if any(isinstance(it.get(k), str) and len(it[k]) > 2000 for k in CHEI_CONTEXT_ARBITRU):
+            if proba: continue
+            om(d, ids, it, 'context peste 2000 de caractere (limita arbitrului): verificare manuala'); st = stare_locala(); continue
         img = (d / it['image']).read_bytes()
         if sha(img) != it['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % it['band'])
         oprit = opreste_daca_peste_prag(st)
@@ -720,6 +727,9 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
             # refuz = respins INAINTEA apelului platit (poarta, plafon, stare, amprenta, in zbor): apelul se inchide; fara refuz (409
             # decontat fara decizie, 500, 502, altceva) = posibil platit: ramane necunoscut (start fara gata)
             if 'refuz' in j: _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': j['refuz']})
+            elif status in (400, 413, 422):  # validari ale edge-ului, toate INAINTEA rezervarii (fara plata): apelul se inchide ca refuz
+                _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': 'validare_%d' % status})
+                if proba: st = stare_locala(); continue  # proba sare itemul; pasul normal se opreste ca pana acum
             raise EdgeError('ofertare-ocr-arbitreaza (%s)' % it['id'], status, j)
         dec = j['decizie']
         if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])

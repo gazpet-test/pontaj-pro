@@ -259,6 +259,30 @@ class Client(unittest.TestCase):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
         C.incarca_citiri(rdir, self.edge); c = C.compara_rulare(rdir, self.edge); nb = c['dezacorduri']
         a = C.arbitreaza(rdir, self.edge, max_apeluri=100, triere=True); self.assertEqual((a['stare'], a['claude']), ('proba', nb))
+    def test_proba_422_inaintea_platii_se_sare(self):
+        # laborator 16.10: o validare 422 a edge-ului (inaintea rezervarii) nu mai opreste proba si nu lasa o tentativa necunoscuta
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (422, {'error': 'item.rand_anterior: sir <= 2000'})
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=10, seed='x'); self.assertEqual(a['stare'], 'proba')
+        st = C.stare_arbitraj(rdir, C.rulare(rdir), {}); self.assertEqual(st['necunoscute'], 0)
+        ap = [json.loads(l) for l in (rdir / ('d%d' % DOC) / 'apeluri.jsonl').read_text(encoding='utf-8').splitlines() if l.strip()]
+        self.assertTrue(all(x.get('refuz') == 'validare_422' for x in ap if x['faza'] == 'gata'))
+        with self.assertRaises(C.EdgeError): C.arbitreaza(rdir, self.edge)  # pasul normal se opreste ca pana acum
+    def test_context_lung_sarit_in_proba(self):
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        d = rdir / ('d%d' % DOC); items = [json.loads(l) for l in (d / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines() if l.strip()]
+        lung = {it['id'] for it in items if any(isinstance(it.get(k), str) and len(it[k]) > 2000 for k in C.CHEI_CONTEXT_ARBITRU)}
+        orig = C._jsonl
+        def jl(p):
+            xs = orig(p)
+            if p.name == 'dezacorduri.jsonl': xs = [dict(x, context_inainte='a' * 2001) if i == 0 else x for i, x in enumerate(xs)]
+            return xs
+        with patch.object(C, '_jsonl', jl):
+            a = C.arbitreaza(rdir, self.edge, max_apeluri=10, seed='x')
+        trimise = [x['item']['id'] for f, x in self.edge.calls if f == 'ofertare-ocr-arbitreaza']
+        self.assertNotIn(items[0]['id'], trimise); self.assertEqual(a['stare'], 'proba')
     def test_proba_oprire_ceruta_dupa_primul_apel(self):
         # Jakarinos r3 P2: oprirea ceruta inainte de N se raporteaza ca stare, la fel ca la final; niciun apel dupa ea
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'a 10 b 11 c 12 d 13 e', 'a 20 b 21 c 22 d 23 e')
