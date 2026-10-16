@@ -10,6 +10,13 @@ export const ALLOWLIST = ['ofertare_ingest_worker', 'ofertare_extragere_worker',
   'ofertare_alerte_atentie_0630', 'ofertare_alerta_pagini_goale_0615', 'ofertare_clarificari_reminder_0600', 'ofertare_participari_sapt']
 export const VEGHE = ['ofertare_seap_veghe_0520', 'ofertare_seap_veghe_1250']
 export const NAS = 'ofertare-worker'
+// coada pg_net: se numără DOAR cererile spre funcțiile edge Ofertare. Joburile altor module (redirect-mai-gov la fiecare minut,
+// rag_utilaj_*, egress_detector_5min …) țin coada GLOBALĂ mereu ocupată (16.10, fereastra_1: 1→3→2→2 în 15 min), iar ele nu ating
+// documentele Ofertare. Toți producătorii Ofertare din allowlist cheamă /functions/v1/ofertare-* (direct sau prin ofertare_ingest_tick /
+// ofertare_extragere_tick); lanțul veghe → import ocolește coada și e acoperit de T_gol + 15 min și de distanța de 30 min (§5).
+// + vercel-relay (Jakarinos, #746): releul pornește și seap-import / plansa-felii / pdf-sparge pe Vercel (api/seap-import.js scrie
+// documente Ofertare), deci TOATE cererile lui intră în golire, conservator (azi îl cheamă din cron doar joburile HR, preluate în 1–2 min).
+export const SQL_COADA_OFERTARE = `SELECT count(*) FROM net.http_request_queue WHERE url ILIKE '%/functions/v1/ofertare-%' OR url ILIKE '%/functions/v1/vercel-relay%'`
 const MIN = 60_000
 export const GOLIRE_MS = 15 * MIN, HEARTBEAT_OPRIT_MS = 10 * MIN, DUPA_VEGHE_MS = 30 * MIN
 
@@ -17,7 +24,7 @@ export type Job = { jobid: number; jobname: string | null; active: boolean; comm
 export type Db = {
   joburi: () => Promise<Job[]>
   seteazaActiv: (jobid: number, activ: boolean) => Promise<void>
-  coada: () => Promise<number>                         // net.http_request_queue
+  coada: () => Promise<number>                         // net.http_request_queue, DOAR cererile spre funcțiile Ofertare (SQL_COADA_OFERTARE)
   heartbeat: () => Promise<number | null>               // worker_heartbeat.ultimul (ms) pentru NAS
   vegheUltimaRulare: () => Promise<number | null>        // max(end_time / start_time) al joburilor de veghe SEAP (ms)
   inCurs: (jobids: number[]) => Promise<number>          // cron.job_run_details cu status 'running' pe aceste joburi
@@ -160,7 +167,7 @@ if (import.meta.main) {
     joburi: async () => (await c.queryObject<Job>('SELECT jobid::int AS jobid, jobname, active, command, schedule FROM cron.job ORDER BY jobid')).rows,
     inCurs: async (ids) => Number((await c.queryArray(`SELECT count(*) FROM cron.job_run_details WHERE status = 'running' AND jobid = ANY($1)`, [ids])).rows[0][0]),
     seteazaActiv: async (id, a) => { await c.queryArray('SELECT cron.alter_job(job_id := $1, active := $2)', [id, a]) },
-    coada: async () => Number((await c.queryArray('SELECT count(*) FROM net.http_request_queue')).rows[0][0]),
+    coada: async () => Number((await c.queryArray(SQL_COADA_OFERTARE)).rows[0][0]),
     heartbeat: async () => ms((await c.queryArray('SELECT ultimul FROM public.worker_heartbeat WHERE nume = $1', [NAS])).rows[0]?.[0]),
     vegheUltimaRulare: async () => ms((await c.queryArray(
       `SELECT max(coalesce(d.end_time, d.start_time)) FROM cron.job_run_details d JOIN cron.job j ON j.jobid = d.jobid WHERE j.jobname = ANY($1)`, [VEGHE])).rows[0]?.[0]),
