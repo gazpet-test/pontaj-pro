@@ -273,13 +273,18 @@ paritate verificată (fail-closed).
 ### 2.6 Arbitrul (`ofertare-ocr-arbitreaza`)
 - **Cascadă** (implicit): Haiku 5.5 pe orice dezacord; Sonnet 5 când Haiku e nesigur sau citirile diferă în cifre. Prompt versionat
   (`arb-v3`, #742: regula 10 diacritice); `protocol.json` → `prompt_versiuni_admise` (deciziile plătite pe versiuni vechi rămân valabile).
+- **Poarta de diacritice** (#742, determinist, după decizia finală — Haiku sau Sonnet): dacă cele două citiri diferă doar prin semne
+  combinante (detectare LARGĂ: NFD fără `\p{M}`), un `text_propus` e acceptat doar dacă are aceeași bază ca UNA dintre citiri, cu lista
+  ÎNCHISĂ de semne scoase (U+0302 U+0306 U+030C U+0326 U+0327, doar după A-Z / a-z); altfel `needs_human`, text gol, cost real
+  păstrat. Prinde ≠ / ≰ și semnele invizibile. Dezacordurile mixte (litere + diacritice) nu intră sub poartă.
 - **doar_haiku** (#739): un apel Haiku, fără escaladare, refuz server-side dacă citirile din BD au vreo cifră (`\p{N}`); deciziile nu intră
   în pragul §8 (proveniență legată de tentativă + model + eticheta serverului).
 - **Bani**: rezervare ATOMICĂ în BD pe limita de sus a apelului (`fn_ofertare_ocr_arbitraj_rezerva`), plafonul rulării
   (`cost + rezervat + abandonat ≤ plafon_usd`) = **poarta tare**; un plafon local în client e doar estimare (#736 respins).
 - **Pragul §8**: needs_human > 15 % din arbitrajele Claude (după minim 20) → rularea `oprita`. Reluarea doar prin
   `fn_ofertare_ocr_reia` (max 3 pe rulare), numărătoarea pe epoca reluării.
-- Validările 4xx ale edge-ului (înaintea rezervării) nu opresc proba (#741).
+- Validările 4xx ale edge-ului (400 / 413 / 422, înaintea rezervării, nimic cheltuit) nu opresc proba: item-ul e notat refuzat
+  (`validare_<status>`) și sărit; un context > 2000 de caractere e sărit de client înainte de apel (#741).
 
 ### 2.7 Reconcilierea (`reconcile.py`)
 Baza = LightOn; deciziile validate strict (schemă, model și versiune admise); dezacord fără decizie validă = needs_human; o pagină cu
@@ -339,9 +344,10 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #738 | `--triere` doar în probă |
 | 16.10.2026 | #739 | Modul doar_haiku (edge + client) |
 | 16.10.2026 | #740 | Tabelul de umbră 20261031c |
-| 16.10.2026 | #741 | Validările 4xx nu opresc proba |
+| 16.10.2026 | #741 | Clientul: validările 4xx nu opresc proba, contextul > 2000 sărit înainte de apel |
 | 16.10.2026 | #742 | Prompt arb-v3 (diacritice) |
 | 16.10.2026 | (acest PR) | Documentul pipeline-ului + CI |
 | 16.10.2026 | (acest PR) | Partea 1, scrisă de sesiunea Ofertare: §1.0 sursele, §1.1 ingest + căile vecine, §1.2 proveniența / CAS (31a / 31b), §1.3 laboratorul + recitirea valului 1 (#734), §1.4 cantități + comparator (#726 #729 #731), §1.5 porțile; căile CI extinse |
 | 16.10.2026 | #744 | Recitirea valului 1: conexiunea postgres doar cu TLS `verify-full` și CA-ul Supabase (`conexiune.ts`, `fereastra.ts`), wrapper-ul `psql.ts` (listă albă de argumente, stdin închis, erori pe categorii), directoarele create de scripturi, worker-ul NAS în README |
+| 16.10.2026 | #742 (r4) | Poarta deterministă pe `text_propus` la perechile doar de diacritice (Jakarinos r1–r4) |
 | 16.10.2026 | #746 | `fereastra.ts`: coada `pg_net` numărată doar pe cererile spre funcțiile Ofertare + `vercel-relay` (coada globală nu se golea din cauza joburilor altor module) |
