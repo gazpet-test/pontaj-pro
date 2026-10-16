@@ -22,17 +22,18 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261031c: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF to_regclass('public.ofertare_citire_umbra') IS NOT NULL THEN RAISE EXCEPTION '20261031c: deja aplicata'; END IF;
-  IF to_regclass('public.ofertare_documente_atribuire') IS NULL OR to_regclass('public.ofertare_licitatii') IS NULL
-     OR to_regprocedure('public.fn_are_acces_ofertare()') IS NULL THEN
+  IF to_regclass('public.ofertare_documente_atribuire') IS NULL OR to_regprocedure('public.fn_are_acces_ofertare()') IS NULL
+     OR to_regprocedure('public.fn_ofertare_citire_umbra_pazeste()') IS NOT NULL THEN
     RAISE EXCEPTION '20261031c: preconditie (tabele / functia de acces Ofertare lipsa)';
   END IF;
 END $pre$;
 
 CREATE TABLE public.ofertare_citire_umbra (
   id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  licitatie_id        bigint NOT NULL REFERENCES public.ofertare_licitatii(id) ON DELETE CASCADE,
+  -- licitatia NU se stocheaza: se deriva din document (review Copilot r1 P1-1 - nicio pereche licitatie/document incoerenta)
   document_id         bigint NOT NULL REFERENCES public.ofertare_documente_atribuire(id) ON DELETE CASCADE,
   pagina              integer NOT NULL CHECK (pagina BETWEEN 1 AND 10000),            -- pagina in documentul din BD (dupa pagina_offset)
+  pagina_offset       integer NOT NULL CHECK (pagina_offset BETWEEN 0 AND 10000),     -- maparea document -> PDF OBSERVATA la citire (P2-1)
   banda               text NOT NULL CHECK (banda ~ '^p[0-9]{4}_b[0-9]{1,2}$'),        -- banda din planul pipeline-ului
   pdf_sha256          text NOT NULL CHECK (pdf_sha256 ~ '^[0-9a-f]{64}$'),             -- PDF-ul de pe NAS (potrivit pe SHA cu BD)
   pagina_pdf          integer NOT NULL CHECK (pagina_pdf BETWEEN 1 AND 10000),        -- pagina in PDF-ul de pe NAS (parinte la split)
@@ -58,10 +59,28 @@ CREATE TABLE public.ofertare_citire_umbra (
   citit_la            timestamptz NOT NULL DEFAULT now(),
   CHECK (ok OR text = ''),
   CHECK ((stare = 'neevaluat') = (stare_la IS NULL)),
-  UNIQUE (document_id, banda, image_sha256, model, prompt_versiune)
+  CHECK (pagina_pdf = pagina + pagina_offset),
+  CHECK ((backend = 'claude_cli') = (cost = 'abonament')),                                         -- P2-2: backend <-> cost
+  CHECK (stare <> 'promovat' OR (ok AND text_extras_sha256 IS NOT NULL)),                          -- P2-2: promovat doar citire ok, cu CAS
+  UNIQUE (document_id, banda, image_sha256, backend, model, prompt_versiune)                       -- P1-2: backend in cheie
 );
 CREATE INDEX ofertare_citire_umbra_doc_idx ON public.ofertare_citire_umbra (document_id, pagina);
-CREATE INDEX ofertare_citire_umbra_lic_idx ON public.ofertare_citire_umbra (licitatie_id, stare);
+CREATE INDEX ofertare_citire_umbra_stare_idx ON public.ofertare_citire_umbra (stare, document_id);
+
+-- un rand PROMOVAT e proveniența unei schimbari de productie: nu se sterge (nici prin cascada de la document, nici direct)
+-- si nu se mai modifica (review Copilot r1, ON DELETE CASCADE vs audit)
+CREATE FUNCTION public.fn_ofertare_citire_umbra_pazeste() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $f$
+BEGIN
+  IF OLD.stare = 'promovat' THEN
+    RAISE EXCEPTION 'ofertare_citire_umbra %: randul promovat e provenienta unei schimbari de productie (nu se sterge / modifica)', OLD.id
+      USING ERRCODE = '55000';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_citire_umbra_pazeste() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER ofertare_citire_umbra_pazeste BEFORE UPDATE OR DELETE ON public.ofertare_citire_umbra
+  FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_citire_umbra_pazeste();
 
 ALTER TABLE public.ofertare_citire_umbra ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.ofertare_citire_umbra FROM PUBLIC, anon, authenticated, service_role;
@@ -92,6 +111,9 @@ BEGIN
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'ofertare_citire_umbra') <> 1 THEN
     RAISE EXCEPTION '20261031c: postconditie politici';
   END IF;
+  FOREACH rol IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
+    IF has_function_privilege(rol, 'public.fn_ofertare_citire_umbra_pazeste()', 'EXECUTE') THEN RAISE EXCEPTION '20261031c: postconditie executie / %', rol; END IF;
+  END LOOP;
   IF current_setting('gazpet.livrare_migrare', true)
        IS DISTINCT FROM '20261031c_ofertare_citire_umbra:' || txid_current() THEN
     RAISE EXCEPTION '20261031c: garda final invalida';
