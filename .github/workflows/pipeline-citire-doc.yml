@@ -23,6 +23,7 @@ on:
       - 'supabase/functions/_shared/cantNumar.ts'
       - 'supabase/functions/_shared/cantNormalizare.ts'
       - 'supabase/functions/_shared/cantComparator.ts'
+      - 'supabase/functions/_shared/cantAcoperire.ts'
       - 'supabase/functions/_shared/dn.ts'
       - 'worker/ofertare/**'
       - 'scripts/recitire_val1/**'
@@ -54,7 +55,7 @@ jobs:
           set -euo pipefail
           git diff --name-only "$BAZA" "$VARF" > /tmp/schimbate.txt
           echo "Fisiere schimbate in PR:"; cat /tmp/schimbate.txt
-          urmarite=$(grep -E '^(scripts/ocr_local/|scripts/recitire_val1/|worker/ofertare/|supabase/functions/ofertare-ocr-[^/]+/|supabase/functions/ofertare-(ingest-doc|cantitati-extrage|citire-test|pdf-link|document-nou-citeste|plansa-citeste|word-text|seap-import|seap-veghe)/|supabase/functions/_shared/(transcriereTabel|provenientaText|gardaIngest[A-Za-z]*|cantNumar|cantNormalizare|cantComparator|dn)\.ts$|supabase/(migrations|revenire)/[^/]*(ofertare_ocr|ofertare_cant|ofertare_citire_umbra|ofertare_text_scrie|ofertare_ingest_garda))' /tmp/schimbate.txt || true)
+          urmarite=$(grep -E '^(scripts/ocr_local/|scripts/recitire_val1/|worker/ofertare/|supabase/functions/ofertare-ocr-[^/]+/|supabase/functions/ofertare-(ingest-doc|cantitati-extrage|citire-test|pdf-link|document-nou-citeste|plansa-citeste|word-text|seap-import|seap-veghe)/|supabase/functions/_shared/(transcriereTabel|provenientaText|gardaIngest[A-Za-z]*|cantNumar|cantNormalizare|cantComparator|cantAcoperire|dn)\.ts$|supabase/(migrations|revenire)/[^/]*(ofertare_ocr|ofertare_cant|ofertare_citire_umbra|ofertare_text_scrie|ofertare_ingest_garda))' /tmp/schimbate.txt || true)
           if [ -z "$urmarite" ]; then echo "Nicio cale urmarita schimbata."; exit 0; fi
           if grep -qx 'docs/PIPELINE_CITIRE_DOCUMENTE.md' /tmp/schimbate.txt; then
             echo "OK: documentul pipeline-ului e actualizat in acest PR."
