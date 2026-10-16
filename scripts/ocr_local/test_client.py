@@ -171,7 +171,7 @@ class Client(unittest.TestCase):
     def test_plan_manifest_si_reluare(self):
         rdir = self.pana_la_plan(); m = self.edge.ops('plan')[0]['plan']
         p1, p2 = sorted(m, key=lambda e: e['pagina'])
-        self.assertEqual(p2['exclus'], 'exclus_neclasificat'); self.assertNotIn('benzi', p2)
+        self.assertEqual(p2['exclus'], 'exclus_pagina_alba'); self.assertNotIn('benzi', p2)
         self.assertIsNone(p1['exclus']); self.assertTrue(p1['benzi'])
         self.assertEqual(C.plan_rulare(rdir, self.edge), {'deja': True, 'pagini': 2}); self.assertEqual(len(self.edge.ops('plan')), 1)
     def test_flux_complet(self):

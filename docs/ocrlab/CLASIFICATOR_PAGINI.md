@@ -32,3 +32,15 @@ fără om și fără semnal în fluxul ERP (pagina apare doar ca `exclus` cu mot
 Pozitiv: pagină „drawing” → `route = 'ocr'`, o bandă, semnal `clasificare_incerta`. Negativ: `orientare_nerezolvata` rămâne exclusă;
 `--exclude-pagini` exclude exact paginile date, cu motiv; plan identic pe paginile `quantity_table` / `continuous_text` (aceleași benzi, aceleași sha).
 Măsurătoare: replan rt1 (Răcari) și r1 (102) — câte pagini trec la citire, iar pentru r1 lista celor 21, cu etichetă vizuală.
+
+## v2 — după Jakarinos r1 (GO cu condiții, `out\ocrlab_clasificator_r1_jak.log`) și implementare
+- Pagina scoasă din excludere se citește ca `quantity_table` (nu păstrează `drawing`): orice dezacord rămâne „cu cantitate” = HIGH-RISK.
+  Fără DEFER după tipul paginii (P1: altfel s-ar fi amânat și cele 140 de pagini de cantități recuperate).
+- Semnalul `clasificare_incerta` (cu candidatul) ajunge în `reconciliat.json` → `garda.semnale` în BD (P1 propagare), fără schemă nouă.
+- Excludere rămasă din pixeli: doar pagina practic albă (`ink_density < 0,002`, `exclus_pagina_alba`), și doar când omul n-a dat `kind`.
+- `--exclude-pagini`: amânat (P2). `versions.routing = 'v2-fara-excludere-pixeli'`; planul se refuce pe o rulare nouă (planul din BD e imuabil).
+- Teste: 180 OK (noi: plansă / neclasificat citite, orientare nerezolvată rămâne exclusă, semnal în reconciliere; actualizate: formular, pagină albă).
+- Măsurătoare CPU (`clasificator_v2_masurare.json`, script `replan_v2.py`): Răcari d205 +141, d203 +13, d204 +11, d1624 +4 pagini la citire;
+  r1 d772 +19 (13 grid_form, 6 drawing), d1247 +2. Toate benzile paginilor neafectate identice (sha): 390 pe Răcari, 4.052 pe r1.
+- De făcut pentru runda 2 (GPU, ~49 de pagini noi ≈ 5 min): citirea paginilor recuperate (Răcari PTh/d1624 + r1), alarme / dezacorduri /
+  pragurile de oprire pe pagini-planșă, etichete vizuale pe cele 21 din r1.
