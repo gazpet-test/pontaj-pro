@@ -47,9 +47,10 @@ BEGIN
   IF EXISTS (SELECT 1 FROM rv_m WHERE NOT (calitate_ok IS TRUE OR (calitate_acceptata_nominal IS TRUE AND length(btrim(coalesce(motiv_acceptare, ''))) >= 10))) THEN
     RAISE EXCEPTION 'calitate neacceptată (nici calitate_ok, nici acceptare nominală cu motiv)';
   END IF;
-  IF (SELECT count(*) FROM rv_t) <> v_n OR (SELECT count(DISTINCT document_id) FROM rv_t) <> v_n
+  -- texte.csv poate conține și textele documentelor scoase din aprobare: se cere EXACT un text pentru fiecare document din manifest
+  IF (SELECT count(DISTINCT document_id) FROM rv_t) <> (SELECT count(*) FROM rv_t)
      OR EXISTS (SELECT 1 FROM rv_m LEFT JOIN rv_t USING (document_id) WHERE rv_t.document_id IS NULL) THEN
-    RAISE EXCEPTION 'texte.csv nu corespunde manifestului';
+    RAISE EXCEPTION 'texte.csv nu corespunde manifestului (lipsă sau dublat)';
   END IF;
   IF EXISTS (SELECT 1 FROM rv_m JOIN rv_t USING (document_id)
               WHERE encode(sha256(decode(rv_t.text_b64, 'base64')), 'hex') IS DISTINCT FROM rv_m.sha_nou) THEN
@@ -70,6 +71,7 @@ BEGIN
   FOR m IN SELECT * FROM rv_m ORDER BY licitatie_id, document_id LOOP
     PERFORM 1 FROM public.ofertare_licitatii WHERE id = m.licitatie_id FOR KEY SHARE;
     SELECT * INTO d FROM public.ofertare_documente_atribuire WHERE id = m.document_id FOR NO KEY UPDATE NOWAIT;
+    IF d.licitatie_id IS DISTINCT FROM m.licitatie_id THEN RAISE EXCEPTION 'doc %: licitația s-a schimbat (CAS, sub lock)', m.document_id; END IF;
     IF encode(sha256(convert_to(d.text_extras, 'UTF8')), 'hex') IS DISTINCT FROM m.sha_vechi THEN RAISE EXCEPTION 'doc %: textul s-a schimbat (CAS)', m.document_id; END IF;
     IF d.fisier_path IS DISTINCT FROM m.fisier_path OR d.size_bytes IS DISTINCT FROM m.size_bytes OR d.pagina_offset IS DISTINCT FROM m.pagina_offset
        OR d.pagini IS DISTINCT FROM m.pagini THEN RAISE EXCEPTION 'doc %: identitatea s-a schimbat (CAS)', m.document_id; END IF;

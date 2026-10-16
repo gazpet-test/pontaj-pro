@@ -1,6 +1,6 @@
 // Recitirea valului 1 (procedura §5, „Fereastra”): deschiderea / verificarea / închiderea ferestrei de mentenanță.
-//   deno run -A scripts/recitire_val1/fereastra.ts deschide <dir>   — idempotent: refolosește <dir>/fereastra_stare.json (OPEN), nu-l rescrie
-//   deno run -A scripts/recitire_val1/fereastra.ts inchide <dir>    — reactivează EXACT joburile active inițial; la ORICE eroare după deschidere
+//   deno run -A scripts/recitire_val1/fereastra.ts deschide <dir_val>/fereastra_N   — idempotent: refolosește fereastra_stare.json (OPEN), nu-l rescrie
+//   deno run -A scripts/recitire_val1/fereastra.ts inchide <dir_val>/fereastra_N    — reactivează EXACT joburile active inițial; la ORICE eroare după deschidere
 // Coduri: 0 = gata (deschisă și golită / închisă) · 5 = de așteptat / de reluat (mesajul spune ce) · 6 = pornește worker-ul NAS și reia ·
 //         2 = mediu / refuz. Mediu: RV1_PG_URL (conexiunea postgres, ca la psql). Worker-ul NAS îl oprește / pornește chat-ul pe server;
 //         scriptul doar verifică heartbeat-ul. Anunțul către utilizatori = decizia lui Răzvan, NU un pas al scriptului.
@@ -12,46 +12,71 @@ export const NAS = 'ofertare-worker'
 const MIN = 60_000
 export const GOLIRE_MS = 15 * MIN, HEARTBEAT_OPRIT_MS = 10 * MIN, DUPA_VEGHE_MS = 30 * MIN
 
-export type Job = { jobid: number; jobname: string | null; active: boolean; command: string }
+export type Job = { jobid: number; jobname: string | null; active: boolean; command: string; schedule?: string }
 export type Db = {
   joburi: () => Promise<Job[]>
   seteazaActiv: (jobid: number, activ: boolean) => Promise<void>
   coada: () => Promise<number>                         // net.http_request_queue
   heartbeat: () => Promise<number | null>               // worker_heartbeat.ultimul (ms) pentru NAS
   vegheUltimaRulare: () => Promise<number | null>        // max(end_time / start_time) al joburilor de veghe SEAP (ms)
+  inCurs: (jobids: number[]) => Promise<number>          // cron.job_run_details cu status 'running' pe aceste joburi
   acum: () => number
 }
 export type StareF = { run_id: string; stare: 'OPEN' | 'CLOSED'; creat_la: number; joburi: Job[]; nas_pornit: boolean
   t_joburi_oprite: number | null; t_stop: number | null; t_gol: number | null }
 export type Rezultat = { cod: 0 | 2 | 5 | 6; mesaj: string; stare: StareF | null }
 const tinta = (j: Job) => ALLOWLIST.includes(j.jobname ?? '') || /ofertare/i.test(j.command)
+// ultima programare (UTC, ca pg_cron) ≤ acum pentru un orar „m h * * *”; alt format → null (refuz: nu se poate verifica)
+export function ultimaProgramare(schedule: string, acum: number): number | null {
+  const m = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(schedule.trim())
+  if (!m) return null
+  const d = new Date(acum)
+  let t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), Number(m[2]), Number(m[1]))
+  if (t > acum) t -= 24 * 60 * MIN
+  return t
+}
 
 export async function deschide(db: Db, st: StareF | null, salveaza: (s: StareF) => Promise<void>): Promise<Rezultat> {
   if (st?.stare === 'CLOSED') return { cod: 2, mesaj: 'fereastra din acest director e ÎNCHISĂ; o fereastră nouă = alt director', stare: st }
+  // allowlist-ul se verifică la FIECARE rulare (un job redenumit / șters între rulări → refuz, niciodată GATA)
+  const toate = await db.joburi()
+  const lipsa = ALLOWLIST.filter((n) => !toate.some((j) => j.jobname === n))
+  if (lipsa.length) return { cod: 2, mesaj: `joburi din allowlist absente (redenumite?): ${lipsa.join(', ')}${st ? '' : ' — nimic schimbat'}`, stare: st }
   if (!st) {
     const joburi = await db.joburi()
-    const lipsa = ALLOWLIST.filter((n) => !joburi.some((j) => j.jobname === n))
-    if (lipsa.length) return { cod: 2, mesaj: `joburi din allowlist absente (redenumite?): ${lipsa.join(', ')} — nimic schimbat`, stare: null }
     const hb = await db.heartbeat()
     // starea inițială se salvează O SINGURĂ DATĂ, ÎNAINTEA oricărei schimbări
     st = { run_id: crypto.randomUUID(), stare: 'OPEN', creat_la: db.acum(), joburi, nas_pornit: hb !== null && db.acum() - hb < HEARTBEAT_OPRIT_MS,
       t_joburi_oprite: null, t_stop: null, t_gol: null }
     await salveaza(st)
   }
-  for (const j of st.joburi.filter(tinta)) {
-    const acum = (await db.joburi()).find((x) => x.jobid === j.jobid)
-    if (acum?.active) await db.seteazaActiv(j.jobid, false)
+  // un job Ofertare NOU (absent din snapshot) → refuz FĂRĂ să-l ating (închiderea nu l-ar ști restaura)
+  const noi0 = (await db.joburi()).filter((j) => tinta(j) && !st!.joburi.some((x) => x.jobid === j.jobid))
+  if (noi0.length) return { cod: 2, mesaj: `joburi Ofertare apărute după deschidere: ${noi0.map((j) => j.jobname).join(', ')} — neatinse`, stare: st }
+  // un job țintă din snapshot găsit ACTIV (reactivat între rulări) → se oprește din nou ȘI așteptarea golirii o ia de la capăt
+  let reoprit = false
+  for (const j of (await db.joburi()).filter((x) => tinta(x) && st!.joburi.some((y) => y.jobid === x.jobid))) {
+    if (j.active) { await db.seteazaActiv(j.jobid, false); reoprit = true }
   }
+  if (reoprit && st.t_joburi_oprite !== null) { st.t_joburi_oprite = null; st.t_stop = null; st.t_gol = null; await salveaza(st) }
   const dupa = await db.joburi()
   const active = dupa.filter((j) => tinta(j) && j.active)
   if (active.length) return { cod: 2, mesaj: `joburi încă active: ${active.map((j) => j.jobname).join(', ')}`, stare: st }
-  const noi = dupa.filter((j) => tinta(j) && !st!.joburi.some((x) => x.jobid === j.jobid))
-  if (noi.length) return { cod: 2, mesaj: `joburi Ofertare apărute după deschidere: ${noi.map((j) => j.jobname).join(', ')}`, stare: st }
   if (st.t_joburi_oprite === null) { st.t_joburi_oprite = db.acum(); await salveaza(st) }
+  const inCurs = await db.inCurs(dupa.filter(tinta).map((j) => j.jobid))
+  if (inCurs > 0) return { cod: 5, mesaj: `${inCurs} rulări cron Ofertare încă în curs; reia`, stare: st }
   const veghe = await db.vegheUltimaRulare()
   if (veghe !== null && db.acum() - veghe < DUPA_VEGHE_MS) return { cod: 5, mesaj: `veghea SEAP a rulat acum ${Math.round((db.acum() - veghe) / MIN)} min; reia după 30 min`, stare: st }
+  for (const j of dupa.filter((x) => VEGHE.includes(x.jobname ?? ''))) {
+    const p = ultimaProgramare((j as Job & { schedule?: string }).schedule ?? '', db.acum())
+    if (p === null) return { cod: 2, mesaj: `orarul veghei ${j.jobname} nu e „m h * * *”; nu pot verifica distanța de 30 min`, stare: st }
+    if (db.acum() - p < DUPA_VEGHE_MS) return { cod: 5, mesaj: `programarea ${j.jobname} a fost acum ${Math.round((db.acum() - p) / MIN)} min; reia după 30 min`, stare: st }
+  }
   const hb = await db.heartbeat()
-  if (hb !== null && db.acum() - hb < HEARTBEAT_OPRIT_MS) return { cod: 5, mesaj: 'oprește worker-ul NAS (ofertare-worker); heartbeat-ul trebuie să fie mai vechi de 10 min', stare: st }
+  if (hb !== null && db.acum() - hb < HEARTBEAT_OPRIT_MS) {
+    if (st.t_stop !== null) { st.t_stop = null; st.t_gol = null; await salveaza(st) }   // NAS revenit → golirea de la capăt
+    return { cod: 5, mesaj: 'oprește worker-ul NAS (ofertare-worker); heartbeat-ul trebuie să fie mai vechi de 10 min', stare: st }
+  }
   if (st.t_stop === null) { st.t_stop = Math.max(st.t_joburi_oprite, hb ?? 0); await salveaza(st) }
   const coada = await db.coada()
   if (coada > 0) return { cod: 5, mesaj: `coada pg_net are ${coada} cereri; reia`, stare: st }
@@ -88,7 +113,8 @@ if (import.meta.main) {
   const c = new Client(url); await c.connect()
   const ms = (v: unknown) => (v ? new Date(v as string).getTime() : null)
   const db: Db = {
-    joburi: async () => (await c.queryObject<Job>('SELECT jobid::int AS jobid, jobname, active, command FROM cron.job ORDER BY jobid')).rows,
+    joburi: async () => (await c.queryObject<Job>('SELECT jobid::int AS jobid, jobname, active, command, schedule FROM cron.job ORDER BY jobid')).rows,
+    inCurs: async (ids) => Number((await c.queryArray(`SELECT count(*) FROM cron.job_run_details WHERE status = 'running' AND jobid = ANY($1)`, [ids])).rows[0][0]),
     seteazaActiv: async (id, a) => { await c.queryArray('SELECT cron.alter_job(job_id := $1, active := $2)', [id, a]) },
     coada: async () => Number((await c.queryArray('SELECT count(*) FROM net.http_request_queue')).rows[0][0]),
     heartbeat: async () => ms((await c.queryArray('SELECT ultimul FROM public.worker_heartbeat WHERE nume = $1', [NAS])).rows[0]?.[0]),

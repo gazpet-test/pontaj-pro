@@ -46,6 +46,7 @@ BEGIN
              FROM rv_m JOIN rv_r USING (document_id) WHERE rv_m.document_id = ANY (v_docs) ORDER BY rv_m.licitatie_id, rv_m.document_id LOOP
     PERFORM 1 FROM public.ofertare_licitatii WHERE id = m.licitatie_id FOR KEY SHARE;
     SELECT * INTO d FROM public.ofertare_documente_atribuire WHERE id = m.document_id FOR NO KEY UPDATE NOWAIT;
+    IF d.licitatie_id IS DISTINCT FROM m.licitatie_id THEN RAISE EXCEPTION 'doc %: licitația s-a schimbat (CAS, sub lock)', m.document_id; END IF;
     -- CAS pe starea EXACTĂ de după aplicare (aplicare_rezultat.csv) + identitate + Storage
     IF encode(sha256(convert_to(d.text_extras, 'UTF8')), 'hex') IS DISTINCT FROM m.sha_nou THEN RAISE EXCEPTION 'doc %: textul nu mai e cel recitit (CAS)', m.document_id; END IF;
     IF d.status_procesare IS DISTINCT FROM m.a_status OR d.pagini_necitite IS DISTINCT FROM m.a_necitite OR d.procesat_la IS DISTINCT FROM m.a_procesat_la

@@ -1,53 +1,58 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { type Deps, type RandStaging, ruleaza, type Stare } from './citeste.ts'
+import { type Deps, incarcaRegistru, type RandStaging, type RandUsage, ruleaza, type Stare } from './citeste.ts'
 
 // laborator simulat: documente cu n pagini; fiecare apel scrie un rând de staging + un rând usage (cost fix), după scenariu
+type Felie = { text?: string; eroare?: string | null; tokens?: boolean; usage?: Partial<RandUsage> | false; staging?: false | Partial<RandStaging>; primit?: boolean; ok?: boolean }
 type Scenariu = {
   pagini: Record<number, number>
-  felie?: (doc: number, deLa: number, panaLa: number, nrApel: number) => { text?: string; eroare?: string | null; tokens?: boolean; usage?: boolean; staging?: boolean; primit?: boolean; ok?: boolean }
-  straine?: (nrApel: number) => number      // apeluri străine înregistrate înaintea apelului nr
+  felie?: (doc: number, deLa: number, panaLa: number, nrApel: number) => Felie
+  straine?: (nrApel: number) => Partial<RandUsage>[]     // rânduri usage străine scrise în timpul apelului nr
   schimbaStorage?: (nrApel: number) => boolean
 }
 function mediu(sc: Scenariu) {
   const staging: RandStaging[] = []
-  const usage: { cost: number }[] = []
-  let nrApel = 0, idSt = 100, storageVer = 1, salvari = 0, ultimaSalvare: Stare | null = null
+  const usage: RandUsage[] = []
+  let nrApel = 0, idSt = 100, idU = 500, storageVer = 1, ultimaSalvare: Stare | null = null, ceas = Date.parse('2026-10-16T20:00:00Z')
+  const iso = () => new Date(ceas).toISOString()
   const text = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => `⟦PAGINA ${a + i}⟧\nr`).join('\n')
   const d: Deps = {
     identitate: async (doc) => ({ fisier_path: `p/${doc}.pdf`, size_bytes: 10, pagina_offset: 0, pagini: sc.pagini[doc] }),
     storage: async () => ({ etag: 'e', size: 10, updated_at: `v${storageVer}` }),
     pdf: async (path) => ({ sha256: 'h', pagini: sc.pagini[Number(path.slice(2, -4))] }),
     lab: async (doc, de_la0, felie) => {
-      nrApel++
-      for (let i = 0; i < (sc.straine?.(nrApel) ?? 0); i++) usage.push({ cost: 0.01 })
+      nrApel++; ceas += 1000
       const deLa = de_la0 + 1, panaLa = Math.min(de_la0 + felie, sc.pagini[doc])
       const o = sc.felie?.(doc, deLa, panaLa, nrApel) ?? {}
+      for (const x of sc.straine?.(nrApel) ?? []) usage.push({ id: ++idU, ref_id: 999, model: 'claude-haiku-5-5', tokens_in: 1, tokens_out: 1, cost_usd: 0.005, created_at: iso(), ...x })
       if (sc.schimbaStorage?.(nrApel)) storageVer++
+      const faraTokeni = o.tokens === false
       if (o.staging !== false) staging.push({ id: ++idSt, doc_id: doc, model: 'claude-haiku-5-5', pagina_de_la: deLa, pagina_pana_la: panaLa,
-        text: o.text ?? text(deLa, panaLa), tokens_in: o.tokens === false ? null : 1000, tokens_out: 100, cost_usd: o.tokens === false ? null : 0.005,
-        eroare: o.eroare ?? null, created_at: 't' })
-      if (o.usage !== false && o.tokens !== false) usage.push({ cost: 0.005 })
+        text: o.text ?? text(deLa, panaLa), tokens_in: faraTokeni ? null : 1000, tokens_out: faraTokeni ? null : 100, cost_usd: faraTokeni ? null : 0.005,
+        eroare: o.eroare ?? null, created_at: iso(), ...(o.staging ?? {}) })
+      if (o.usage !== false && !faraTokeni) usage.push({ id: ++idU, ref_id: doc, model: 'claude-haiku-5-5', tokens_in: 1000, tokens_out: 100, cost_usd: 0.005, created_at: iso(), ...(o.usage ?? {}) })
+      ceas += 1000
       return { primit: o.primit ?? true, ok: o.ok ?? true }
     },
     staging: async (doc, a, b, dupa) => staging.filter((r) => r.doc_id === doc && r.pagina_de_la === a && r.pagina_pana_la === b && r.id > dupa),
-    usage: async () => ({ n: usage.length, cost: usage.reduce((x, u) => x + u.cost, 0) }),
-    salveaza: async (s) => { salvari++; ultimaSalvare = structuredClone(s) },
-    acum: () => 't',
+    usage: async () => usage.map((u) => ({ ...u })),
+    salveaza: async (s) => { ultimaSalvare = structuredClone(s) },
+    acum: () => ceas,
   }
-  return { d, apeluri: () => nrApel, salvari: () => salvari, ultima: () => ultimaSalvare }
+  return { d, apeluri: () => nrApel, ultima: () => ultimaSalvare }
 }
-const nou = (): Stare => ({ t0: 't0', plafon_usd: 1, apeluri: [], oprit: null, documente: [], ultim_staging_id: 0, usage_n: 0 })
+const nou = (): Stare => ({ t0: 't0', plafon_usd: 1, apeluri: [], oprit: null, documente: [], ultim_staging_id: 0, usage_ids: [] })
 
-Deno.test('pilot: citire completă, felii de 8, cost confirmat din BD', async () => {
+Deno.test('pilot: citire completă, felii de 8, cost confirmat din BD (usage atribuit)', async () => {
   const m = mediu({ pagini: { 212: 20 } })
   const { cod, stare } = await ruleaza(m.d, nou(), [212])
   assertEquals(cod, 0)
   assertEquals(stare.documente[0].stare, 'citit')
   assertEquals(stare.documente[0].felii.map((f) => [f.de_la, f.pana_la]), [[1, 8], [9, 16], [17, 20]])
   assertEquals(stare.apeluri.every((a) => a.stare === 'confirmat' && a.cost_usd === 0.005), true)
+  assertEquals(stare.usage_ids.length, 3)
 })
 
-Deno.test('pilot: rezervarea e salvată ÎNAINTEA apelului (registrul pe disc are „rezervat” înainte de răspuns)', async () => {
+Deno.test('pilot: rezervarea e salvată ÎNAINTEA apelului', async () => {
   const m = mediu({ pagini: { 212: 8 } })
   let vazutRezervat = false
   const lab0 = m.d.lab
@@ -70,27 +75,49 @@ Deno.test('pilot: răspuns nerecepționat → rezervarea rămâne, oprire', asyn
   const { cod, stare } = await ruleaza(m.d, nou(), [212])
   assertEquals(cod, 3)
   assertEquals(stare.apeluri.at(-1)!.stare, 'neconfirmat')
-  assert(/nerecepționat/.test(stare.oprit!))
 })
 
-Deno.test('pilot: ok fără rând de staging (scriere pierdută) → oprire, nu cost 0', async () => {
-  const m = mediu({ pagini: { 212: 8 }, felie: () => ({ staging: false, usage: false }) })
+Deno.test('r1 Jakarinos #1: eroare de laborator fără staging și fără usage (poate fi după apelul AI) → NU cost 0, oprire', async () => {
+  for (const ok of [false, true]) {
+    const m = mediu({ pagini: { 212: 16 }, felie: () => ({ staging: false, usage: false, ok }) })
+    const { cod, stare } = await ruleaza(m.d, nou(), [212])
+    assertEquals([cod, m.apeluri(), stare.apeluri[0].stare], [3, 1, 'neconfirmat'])
+  }
+})
+
+Deno.test('r1 Jakarinos #2: usage străin cu același cost nu substituie usage-ul propriu lipsă', async () => {
+  const m = mediu({ pagini: { 212: 8 }, felie: () => ({ usage: false }), straine: () => [{ ref_id: 999 }] })
   const { cod, stare } = await ruleaza(m.d, nou(), [212])
-  assertEquals(cod, 3)
-  assertEquals(stare.apeluri[0].stare, 'neconfirmat')
+  assertEquals([cod, stare.apeluri[0].stare], [3, 'neconfirmat'])
 })
 
-Deno.test('pilot: cost în staging fără rând usage → neconfirmat, oprire', async () => {
-  const m = mediu({ pagini: { 212: 8 }, felie: () => ({ usage: false }) })
-  const { cod } = await ruleaza(m.d, nou(), [212])
-  assertEquals(cod, 3)
+Deno.test('r1 Jakarinos #2: tokens_out null / staging datat în viitor / model sau tokeni diferiți → neconfirmat', async () => {
+  const cazuri: Felie[] = [
+    { staging: { tokens_out: null } },
+    { staging: { created_at: '2099-01-01T00:00:00Z' } },
+    { usage: { model: 'claude-haiku-4-5-20251001' } },
+    { usage: { tokens_in: 999 } },
+    { usage: { created_at: '2099-01-01T00:00:00Z' } },
+  ]
+  for (const c of cazuri) {
+    const m = mediu({ pagini: { 212: 8 }, felie: () => c })
+    const { cod, stare } = await ruleaza(m.d, nou(), [212])
+    assertEquals([cod, stare.apeluri[0].stare], [3, 'neconfirmat'], JSON.stringify(c))
+  }
+})
+
+Deno.test('pilot: apel respins de API (rând cu eroare, fără tokeni, fără usage) → confirmat 0; cu usage → oprire', async () => {
+  const m = mediu({ pagini: { 212: 8 }, felie: (_d, _a, _b, n) => (n === 1 ? { tokens: false, eroare: '529 overloaded' } : {}) })
+  const { cod, stare } = await ruleaza(m.d, nou(), [212])
+  assertEquals([cod, stare.apeluri[0].cost_usd, stare.documente[0].stare], [0, 0, 'citit'])
+  const m2 = mediu({ pagini: { 212: 8 }, felie: () => ({ tokens: false, eroare: 'x' }), straine: () => [{ ref_id: 212 }] })
+  assertEquals((await ruleaza(m2.d, nou(), [212])).cod, 3)
 })
 
 Deno.test('pilot: apel străin în laborator între apeluri → oprire', async () => {
-  const m = mediu({ pagini: { 212: 16 }, straine: (n) => (n === 1 ? 1 : 0) })
-  const { cod, stare } = await ruleaza(m.d, nou(), [212])
+  const m = mediu({ pagini: { 212: 16 }, straine: (n) => (n === 1 ? [{}] : []) })
+  const { cod } = await ruleaza(m.d, nou(), [212])
   assertEquals(cod, 3)
-  assert(/străin|neconfirmat/.test(stare.oprit!))
 })
 
 Deno.test('pilot: felie trunchiată → înjumătățire 8 → 4 și continuă de la aceeași pagină', async () => {
@@ -99,22 +126,21 @@ Deno.test('pilot: felie trunchiată → înjumătățire 8 → 4 și continuă d
   assertEquals(stare.documente[0].felii.map((f) => [f.de_la, f.pana_la]), [[1, 4], [5, 8]])
 })
 
-Deno.test('pilot: marcaje greșite până la felia 1 → documentul eșuează, nu se repară', async () => {
-  // orice felie care conține pagina 2 vine cu marcajul 2 dublat
+Deno.test('pilot: marcaje greșite până la felia 1 (inclusiv numărul tipărit la o pagină) → documentul eșuează, nu se repară', async () => {
   const m = mediu({ pagini: { 212: 2 }, felie: (_d, a, b) => (a <= 2 && b >= 2
-    ? { text: Array.from({ length: b - a + 1 }, (_, i) => `⟦PAGINA ${a + i}⟧ x`).join('\n') + '\n⟦PAGINA 2⟧ y' } : {}) })
+    ? { text: a === b ? '⟦PAGINA 999⟧ x' : Array.from({ length: b - a + 1 }, (_, i) => `⟦PAGINA ${a + i}⟧ x`).join('\n') + '\n⟦PAGINA 2⟧ y' } : {}) })
   const { cod, stare } = await ruleaza(m.d, nou(), [212])
   assertEquals(cod, 0)
   assertEquals(stare.documente[0].stare, 'esuat')
-  assert(/pagina 2: marcaje după 3 încercări/.test(stare.documente[0].motiv!))
-  assertEquals(m.apeluri(), 3 + 1 + 3)   // 1-2 la feliile 8 / 4 / 2 (eșuează) → 1-1 (felia 1, trece) → 2-2 de 3 ori
+  assertEquals(m.apeluri(), 3 + 1 + 3)   // 1-2 la feliile 8 / 4 / 2 (eșuează) → 1-1 (trece) → 2-2 (marcaj 999) de 3 ori
 })
 
-Deno.test('pilot: Storage schimbat în timpul citirii → documentul e aruncat (sursa_schimbata)', async () => {
-  const m = mediu({ pagini: { 212: 16 }, schimbaStorage: (n) => n === 1 })
-  const { stare } = await ruleaza(m.d, nou(), [212])
-  assertEquals(stare.documente[0].stare, 'esuat')
-  assert(/sursa_schimbata/.test(stare.documente[0].motiv!))
+Deno.test('r1 (ambii): sursa schimbată → documentul aruncat ȘI rularea oprită (cod 3), următorul document necitit', async () => {
+  const m = mediu({ pagini: { 212: 16, 213: 8 }, schimbaStorage: (n) => n === 1 })
+  const { cod, stare } = await ruleaza(m.d, nou(), [212, 213])
+  assertEquals(cod, 3)
+  assert(/sursa_schimbata/.test(stare.oprit!))
+  assertEquals(stare.documente.map((x) => [x.document_id, x.stare]), [[212, 'esuat']])
 })
 
 Deno.test('pilot: reluare — documentele terminate nu se recitesc; rulare oprită nu pornește', async () => {
@@ -126,4 +152,19 @@ Deno.test('pilot: reluare — documentele terminate nu se recitesc; rulare oprit
   const m2 = mediu({ pagini: { 212: 8 } })
   assertEquals((await ruleaza(m2.d, s, [212])).cod, 3)
   assertEquals(m2.apeluri(), 0)
+})
+
+Deno.test('r1 (ambii): registrul valului — lipsă → nou; corupt / formă invalidă → eroare (nu un registru nou)', async () => {
+  const dir = await Deno.makeTempDir()
+  const fis = `${dir}/rulare.json`
+  const nouS = () => nou()
+  assert('s' in await incarcaRegistru(fis, nouS))
+  await Deno.writeTextFile(fis, '{ corupt')
+  assert('eroare' in await incarcaRegistru(fis, nouS))
+  await Deno.writeTextFile(fis, '{"t0": "x"}')
+  assert('eroare' in await incarcaRegistru(fis, nouS))
+  await Deno.writeTextFile(fis, JSON.stringify({ ...nou(), t0: 'T0-vechi' }))
+  const r = await incarcaRegistru(fis, nouS)
+  assertEquals('s' in r && r.s.t0, 'T0-vechi')
+  await Deno.remove(dir, { recursive: true })
 })

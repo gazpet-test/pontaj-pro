@@ -31,15 +31,12 @@ export function poatePorni(r: Registru): { ok: boolean; motiv?: string } {
 // ── marcajele (§4): brute, stricte; renumerotare N → N + offset ──
 const RE_MARCAJ = /⟦PAGINA (\d+)⟧/g
 export const marcajeBrute = (t: string) => [...t.matchAll(RE_MARCAJ)].map((m) => Number(m[1]))
-// felia [de_la..pana_la] (1-based, inclusiv, numerotare LOCALĂ a PDF-ului, ca în laborator) trebuie să aibă exact marcajele
-// de_la..pana_la, o dată fiecare, în ordine. Excepție unică, neambiguă: felia de 1 pagină cu exact 1 marcaj (oricare număr —
-// modelul repetă uneori numărul tipărit) → marcajul se rescrie la de_la. Altfel → null (felia nu trece).
+// felia [de_la..pana_la] (1-based, inclusiv, numerotare LOCALĂ a PDF-ului, ca în laborator) trebuie să aibă EXACT marcajele
+// de_la..pana_la, o dată fiecare, în ordine — fără nicio reparare, nici la felia de 1 pagină (procedura §4). Altfel → null.
 export function normalizeazaFelie(t: string, de_la: number, pana_la: number): string | null {
   const m = marcajeBrute(t)
   const asteptat = Array.from({ length: pana_la - de_la + 1 }, (_, i) => de_la + i)
-  if (m.length === asteptat.length && m.every((x, i) => x === asteptat[i])) return t
-  if (de_la === pana_la && m.length === 1) return t.replace(RE_MARCAJ, `⟦PAGINA ${de_la}⟧`)
-  return null
+  return m.length === asteptat.length && m.every((x, i) => x === asteptat[i]) ? t : null
 }
 export type Felie = { id: number; de_la: number; pana_la: number; text: string }
 // acoperirea EXACTĂ 1..pagini, fără goluri / suprapuneri (feliile date sunt cele alese, una per interval)

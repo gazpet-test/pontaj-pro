@@ -1,16 +1,21 @@
 // Recitirea valului 1, pasul 1 (procedura §3): pilotul citirii plătite prin laboratorul ofertare-citire-test (scrie DOAR în
 // ofertare_citire_test). Rulează ÎN fereastra de mentenanță, secvențial, câte UN apel AI pe invocare. Plafon dur 1,00 USD cu
-// rezervare persistentă de 0,53 USD înaintea fiecărui apel; costul se confirmă doar din BD (rândul de staging + rândul ai_usage_log).
-// Orice incertitudine → oprire (cod 3); README: la orice cod ≠ 0, ÎNTÂI fereastra_inchide.sql.
+// rezervare persistentă de 0,53 USD înaintea fiecărui apel; costul se confirmă doar din BD: EXACT un rând de staging (document, model,
+// interval, momentul apelului) + EXACT un rând ai_usage_log nou, atribuit (document, model, tokeni, cost). Orice incertitudine, apel străin
+// sau sursă schimbată → oprire (cod 3); README: la orice cod ≠ 0, ÎNTÂI fereastra.ts inchide.
 //
-// Utilizare (chat, pe serverul AI): deno run -A scripts/recitire_val1/citeste.ts <director_lucru>
+// Registrul (rulare.json) e al VALULUI, nu al ferestrei: stă în <dir_val> (același pentru toate ferestrele), are un singur T0 și
+// supraviețuiește reluărilor. Un registru ilizibil oprește rularea (nu se pornește „unul nou”).
+// Utilizare (chat, pe serverul AI): deno run -A scripts/recitire_val1/citeste.ts <dir_val>
 //   mediu: SUPABASE_URL, SUPABASE_ANON_KEY, RV1_EMAIL, RV1_PAROLA (contul claudetest@; nu se scriu nicăieri)
-import { type Apel, ORDINE, PLAFON_USD, poatePorni, type Registru, REZERVARE_APEL_USD, normalizeazaFelie, sha256Hex } from './lib.ts'
+import { type Apel, ORDINE, PLAFON_USD, poatePorni, type Registru, REZERVARE_APEL_USD, normalizeazaFelie } from './lib.ts'
 
 export type Identitate = { fisier_path: string; size_bytes: number | null; pagina_offset: number; pagini: number | null }
 export type StorageInfo = { etag: string | null; size: number | null; updated_at: string | null }
 export type RandStaging = { id: number; doc_id: number; model: string; pagina_de_la: number; pagina_pana_la: number; text: string | null
   tokens_in: number | null; tokens_out: number | null; cost_usd: number | null; eroare: string | null; created_at: string }
+export type RandUsage = { id: number; ref_id: number | null; model: string | null; tokens_in: number | null; tokens_out: number | null
+  cost_usd: number | null; created_at: string }
 export type RaspunsLab = { primit: boolean; ok?: boolean; error?: string }
 export type Deps = {
   identitate: (doc: number) => Promise<Identitate>
@@ -18,23 +23,28 @@ export type Deps = {
   pdf: (path: string) => Promise<{ sha256: string; pagini: number }>
   lab: (doc: number, de_la0: number, felie: number) => Promise<RaspunsLab>       // primit=false → timeout / rețea (necunoscut)
   staging: (doc: number, deLa: number, panaLa: number, dupaId: number, t0: string) => Promise<RandStaging[]>
-  usage: (t0: string) => Promise<{ n: number; cost: number }>                    // rândurile ofertare-citire-test din ai_usage_log de la t0
+  usage: (t0: string) => Promise<RandUsage[]>                                    // rândurile ofertare-citire-test din ai_usage_log de la t0
   salveaza: (r: Stare) => Promise<void>
-  acum: () => string
+  acum: () => number                                                             // ms
 }
 export type Amprenta = { identitate: Identitate; storage: StorageInfo; pdf_sha256: string; pagini_pdf: number }
 export type RezultatDoc = { document_id: number; stare: 'citit' | 'esuat'; motiv: string | null; amprenta: Amprenta | null
   felii: { id: number; de_la: number; pana_la: number }[] }
-export type Stare = Registru & { documente: RezultatDoc[]; ultim_staging_id: number; usage_n: number }
+export type Stare = Registru & { documente: RezultatDoc[]; ultim_staging_id: number; usage_ids: number[] }
 
 const egal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const MAX_INCERCARI_INTERVAL = 3
+const MODEL = 'claude-haiku-5-5'
+export const TOLERANTA_CEAS_MS = 120_000   // diferența ceas server (created_at) ↔ ceas pilot, în jurul intervalului apelului
+const nr = (x: unknown) => (x === null || x === undefined ? null : Number(x))
 
 export async function ruleaza(d: Deps, s: Stare, docs: number[] = ORDINE): Promise<{ cod: 0 | 3; stare: Stare }> {
   const opreste = async (motiv: string) => { s.oprit = motiv; await d.salveaza(s); return { cod: 3 as const, stare: s } }
   for (const doc of docs) {
     if (s.documente.some((x) => x.document_id === doc)) continue
     const rez: RezultatDoc = { document_id: doc, stare: 'esuat', motiv: null, amprenta: null, felii: [] }
+    // sursa schimbată (oricând) → documentul e aruncat ȘI rularea se oprește (procedura §3 / §5: închiderea imediată a ferestrei)
+    const sursaSchimbata = async (cand: string) => { rez.motiv = `sursa_schimbata (${cand})`; s.documente.push(rez); return await opreste(`doc ${doc}: ${rez.motiv}`) }
     const id0 = await d.identitate(doc)
     const st0 = await d.storage(id0.fisier_path)
     const p0 = await d.pdf(id0.fisier_path)
@@ -45,43 +55,46 @@ export async function ruleaza(d: Deps, s: Stare, docs: number[] = ORDINE): Promi
     while (pos <= p0.pagini) {
       const pp = poatePorni(s)
       if (!pp.ok) return await opreste(pp.motiv!)
-      if (!(await sursaNeschimbata())) { rez.motiv = 'sursa_schimbata (înaintea apelului)'; break }
-      const u0 = await d.usage(s.t0)
-      if (u0.n !== s.usage_n) return await opreste(`apel străin în laborator: ${u0.n - s.usage_n} rânduri ai_usage_log neatribuite`)
+      if (!(await sursaNeschimbata())) return await sursaSchimbata('înaintea apelului')
+      const straine0 = (await d.usage(s.t0)).filter((u) => !s.usage_ids.includes(u.id))
+      if (straine0.length) return await opreste(`apel străin în laborator: ${straine0.length} rânduri ai_usage_log neatribuite`)
       const pana = Math.min(pos + felie - 1, p0.pagini)
       const apel: Apel = { nr: s.apeluri.length + 1, document_id: doc, de_la: pos, felie, stare: 'rezervat', rezervat_usd: REZERVARE_APEL_USD, cost_usd: null, staging_id: null }
       s.apeluri.push(apel); await d.salveaza(s)                                    // rezervarea e pe disc ÎNAINTEA apelului
+      const tStart = d.acum()
       const r = await d.lab(doc, pos - 1, felie)
+      const tEnd = d.acum()
+      const neconfirmat = async (motiv: string) => { apel.stare = 'neconfirmat'; return await opreste(`apel ${apel.nr}: ${motiv}`) }
+      if (!r.primit) return await neconfirmat('răspuns nerecepționat (timeout / rețea)')
       const randuri = await d.staging(doc, pos, pana, s.ultim_staging_id, s.t0)
-      const u1 = await d.usage(s.t0)
-      if (!r.primit) { apel.stare = 'neconfirmat'; return await opreste(`apel ${apel.nr}: răspuns nerecepționat (timeout / rețea)`) }
-      if (randuri.length > 1) { apel.stare = 'neconfirmat'; return await opreste(`apel ${apel.nr}: ${randuri.length} rânduri de staging`) }
+      const noi = (await d.usage(s.t0)).filter((u) => !s.usage_ids.includes(u.id))
+      // ORICE apel fără EXACT un rând de staging e incert (laboratorul poate eșua și după apelul AI) → rezervarea rămâne, oprire
+      if (randuri.length !== 1) return await neconfirmat(`${randuri.length} rânduri de staging (${r.error ?? (r.ok ? 'ok' : 'fără ok')})`)
       const rand = randuri[0]
-      if (!rand) {
-        // laboratorul a răspuns fără rând de staging: eroare ÎNAINTEA apelului AI (descărcare, lot) — confirmat doar dacă nici usage nu a crescut
-        if (u1.n !== u0.n) { apel.stare = 'neconfirmat'; return await opreste(`apel ${apel.nr}: usage fără rând de staging`) }
-        // „ok” fără rând = laboratorul a pierdut scrierea în staging (INSERT neverificat, index.ts l.100) → apel posibil facturat
-        if (r.ok) { apel.stare = 'neconfirmat'; return await opreste(`apel ${apel.nr}: laboratorul a răspuns ok fără rând de staging`) }
-        apel.stare = 'confirmat'; apel.cost_usd = 0
-        rez.motiv = `laborator fără apel AI: ${r.error ?? 'necunoscut'}`; break
+      const t = Date.parse(rand.created_at)
+      if (rand.doc_id !== doc || rand.model !== MODEL || rand.pagina_de_la !== pos || rand.pagina_pana_la !== pana
+          || !(t >= tStart - TOLERANTA_CEAS_MS && t <= tEnd + TOLERANTA_CEAS_MS)) {
+        return await neconfirmat(`rândul de staging ${rand.id} nu corespunde apelului (document / model / interval / moment)`)
       }
       s.ultim_staging_id = Math.max(s.ultim_staging_id, rand.id)
       apel.staging_id = rand.id
-      if (rand.tokens_in === null) {
-        // apel AI respins de API (!resp.ok): rând cu eroare, fără usage — nefacturat
-        if (u1.n !== u0.n) { apel.stare = 'neconfirmat'; return await opreste(`apel ${apel.nr}: usage pentru un apel respins`) }
+      if (rand.tokens_in === null && rand.tokens_out === null && rand.cost_usd === null && rand.eroare !== null) {
+        // apel respins de API (!resp.ok): rând cu eroare, fără tokeni — nefacturat; cere ZERO rânduri usage noi
+        if (noi.length) return await neconfirmat(`usage nou (${noi.length}) pentru un apel respins de API`)
         apel.stare = 'confirmat'; apel.cost_usd = 0
       } else {
-        if (u1.n !== u0.n + 1 || Math.abs((u1.cost - u0.cost) - (rand.cost_usd ?? -1)) > 1e-6) {
-          apel.stare = 'neconfirmat'; return await opreste(`apel ${apel.nr}: cost neconfirmat (usage +${u1.n - u0.n}, staging ${rand.cost_usd})`)
-        }
+        const u = noi[0]
+        const ok = noi.length === 1 && rand.tokens_in !== null && rand.tokens_out !== null && rand.cost_usd !== null
+          && nr(u.ref_id) === doc && u.model === MODEL && nr(u.tokens_in) === rand.tokens_in && nr(u.tokens_out) === rand.tokens_out
+          && Math.abs(Number(u.cost_usd) - rand.cost_usd) <= 1e-9
+          && Date.parse(u.created_at) >= tStart - TOLERANTA_CEAS_MS && Date.parse(u.created_at) <= tEnd + TOLERANTA_CEAS_MS
+        if (!ok) return await neconfirmat(`cost neconfirmat (usage noi: ${noi.length}; staging tokeni ${rand.tokens_in}/${rand.tokens_out}, cost ${rand.cost_usd})`)
         apel.stare = 'confirmat'; apel.cost_usd = rand.cost_usd
-        s.usage_n = u1.n
+        s.usage_ids.push(u.id)
       }
       await d.salveaza(s)
-      if (!(await sursaNeschimbata())) { rez.motiv = 'sursa_schimbata (după apel)'; break }
-      const bun = rand.eroare === null && rand.text !== null && rand.model === 'claude-haiku-5-5' && rand.doc_id === doc
-        && rand.pagina_de_la === pos && rand.pagina_pana_la === pana && normalizeazaFelie(rand.text, pos, pana) !== null
+      if (!(await sursaNeschimbata())) return await sursaSchimbata('după apel')
+      const bun = rand.eroare === null && rand.text !== null && normalizeazaFelie(rand.text, pos, pana) !== null
       if (bun) { rez.felii.push({ id: rand.id, de_la: pos, pana_la: pana }); pos = pana + 1; incercari = 0; continue }
       // felie eșuată (trunchiată / refuzată / marcaje) → înjumătățire; la felia 1, încă cel mult 3 încercări, apoi documentul nu trece
       if (felie > 1) { felie = Math.max(1, Math.floor(felie / 2)); continue }
@@ -89,18 +102,32 @@ export async function ruleaza(d: Deps, s: Stare, docs: number[] = ORDINE): Promi
     }
     if (!rez.motiv) {
       const p1 = await d.pdf(id0.fisier_path)
-      if (p1.sha256 !== p0.sha256 || !(await sursaNeschimbata())) rez.motiv = 'sursa_schimbata (la final)'
-      else rez.stare = 'citit'
+      if (p1.sha256 !== p0.sha256 || !(await sursaNeschimbata())) return await sursaSchimbata('la final')
+      rez.stare = 'citit'
     }
     s.documente.push(rez); await d.salveaza(s)
   }
   return { cod: 0, stare: s }
 }
 
+// registrul valului: există → îl folosește (ilizibil = oprire); lipsește → unul nou, cu T0 = acum
+export async function incarcaRegistru(fis: string, nou: () => Stare): Promise<{ s: Stare } | { eroare: string }> {
+  let txt: string
+  try { txt = await Deno.readTextFile(fis) } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return { s: nou() }
+    return { eroare: `registru ilizibil (${String(e).slice(0, 120)})` }
+  }
+  try {
+    const s = JSON.parse(txt) as Stare
+    if (typeof s.t0 !== 'string' || !Array.isArray(s.apeluri) || !Array.isArray(s.usage_ids) || !Array.isArray(s.documente)) return { eroare: 'registru cu formă invalidă' }
+    return { s }
+  } catch { return { eroare: 'registru corupt (JSON invalid)' } }
+}
+
 // ── rularea reală (rețea) ──
 if (import.meta.main) {
   const dir = Deno.args[0]
-  if (!dir) { console.error('utilizare: citeste.ts <director_lucru>'); Deno.exit(2) }
+  if (!dir) { console.error('utilizare: citeste.ts <dir_val>'); Deno.exit(2) }
   const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2.39.0')
   const { PDFDocument } = await import('https://esm.sh/pdf-lib@1.17.1')
   const env = (k: string) => { const v = Deno.env.get(k); if (!v) { console.error(`lipsește ${k}`); Deno.exit(2) } return v! }
@@ -108,12 +135,10 @@ if (import.meta.main) {
   const { error: eAuth } = await sb.auth.signInWithPassword({ email: env('RV1_EMAIL'), password: env('RV1_PAROLA') })
   if (eAuth) { console.error('autentificare eșuată'); Deno.exit(2) }
   const fis = `${dir}/rulare.json`
-  let s: Stare
-  try { s = JSON.parse(await Deno.readTextFile(fis)) } catch {
-    const t0 = new Date().toISOString()
-    const { count } = await sb.from('ai_usage_log').select('id', { count: 'exact', head: true }).eq('function_name', 'ofertare-citire-test').gte('created_at', t0)
-    s = { t0, plafon_usd: PLAFON_USD, apeluri: [], oprit: null, documente: [], ultim_staging_id: 0, usage_n: count ?? 0 }
-  }
+  const inc = await incarcaRegistru(fis, () => ({ t0: new Date().toISOString(), plafon_usd: PLAFON_USD, apeluri: [], oprit: null, documente: [],
+    ultim_staging_id: 0, usage_ids: [] }))
+  if ('eroare' in inc) { console.error(`${inc.eroare}: ${fis} — decide chat-ul; NU se pornește alt registru`); Deno.exit(3) }
+  const s = inc.s
   if (s.oprit) { console.error(`rulare oprită anterior: ${s.oprit} — decide chat-ul (registru: ${fis})`); Deno.exit(3) }
   const d: Deps = {
     identitate: async (doc) => {
@@ -150,12 +175,13 @@ if (import.meta.main) {
       return (data || []) as RandStaging[]
     },
     usage: async (t0) => {
-      const { data, error } = await sb.from('ai_usage_log').select('cost_usd').eq('function_name', 'ofertare-citire-test').gte('created_at', t0)
+      const { data, error } = await sb.from('ai_usage_log').select('id, ref_id, model, tokens_in, tokens_out, cost_usd, created_at')
+        .eq('function_name', 'ofertare-citire-test').gte('created_at', t0).order('id')
       if (error) throw new Error(`usage: ${error.message}`)
-      return { n: (data || []).length, cost: (data || []).reduce((x: number, r: any) => x + Number(r.cost_usd || 0), 0) }
+      return (data || []) as RandUsage[]
     },
     salveaza: async (st) => { await Deno.writeTextFile(fis + '.tmp', JSON.stringify(st, null, 1)); await Deno.rename(fis + '.tmp', fis) },
-    acum: () => new Date().toISOString(),
+    acum: () => Date.now(),
   }
   try {
     const { cod, stare } = await ruleaza(d, s)

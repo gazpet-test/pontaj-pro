@@ -12,8 +12,9 @@ CREATE TEMP VIEW rv_raport AS
 WITH b AS (   -- derivatele CU versiunea sursei (sha): pe text nou / pe text depășit
   SELECT r.document_id, 'decizii_b' AS tabel, z.doc_sha256 = r.sha_nou AS pe_nou FROM rv_r r JOIN public.ofertare_cant_doc_decizii z ON z.document_id = r.document_id
   UNION ALL SELECT r.document_id, 'extrageri_b', e.doc_sha256 = r.sha_nou FROM rv_r r JOIN public.ofertare_cant_extrageri e ON e.document_id = r.document_id
-  UNION ALL SELECT r.document_id, 'snapshot', (x->>'sha256') IS NOT DISTINCT FROM r.sha_nou
-    FROM rv_r r JOIN public.ofertare_analiza_versiuni s ON true, jsonb_array_elements(s.doc_manifest) x WHERE (x->>'document_id')::bigint = r.document_id
+  UNION ALL SELECT r.document_id, 'snapshot', (x->>'sha256') = r.sha_nou
+    FROM rv_r r JOIN public.ofertare_analiza_versiuni s ON true, jsonb_array_elements(s.doc_manifest) x
+   WHERE (x->>'document_id')::bigint = r.document_id AND x->>'sha256' IS NOT NULL      -- fără sha → „nedovedit” (mai jos)
 ), n AS (     -- derivatele FĂRĂ versiunea sursei: nedovedite
   SELECT r.document_id, 'cerinte' AS tabel FROM rv_r r JOIN public.ofertare_cerinte c ON c.sursa_document_id = r.document_id OR r.document_id = ANY (c.surse_document_ids)
   UNION ALL SELECT r.document_id, 'cantitati' FROM rv_r r JOIN public.ofertare_cantitati q ON r.document_id = ANY (q.surse_document_ids)
@@ -24,6 +25,8 @@ WITH b AS (   -- derivatele CU versiunea sursei (sha): pe text nou / pe text dep
   UNION ALL SELECT r.document_id, 'analiza' FROM rv_r r JOIN public.ofertare_documente_atribuire d ON d.id = r.document_id
     WHERE d.analiza ? 'citire_noi' OR d.analiza ? 'citire_ai'
   UNION ALL SELECT r.document_id, 'garda_ingest' FROM rv_r r JOIN public.ofertare_ingest_garda g ON g.doc_id = r.document_id
+  UNION ALL SELECT r.document_id, 'snapshot_fara_sha' FROM rv_r r JOIN public.ofertare_analiza_versiuni s ON true, jsonb_array_elements(s.doc_manifest) x
+   WHERE (x->>'document_id')::bigint = r.document_id AND x->>'sha256' IS NULL
 )
 SELECT r.document_id,
   (SELECT encode(sha256(convert_to(text_extras, 'UTF8')), 'hex') FROM public.ofertare_documente_atribuire WHERE id = r.document_id) = r.sha_nou AS sha_ok,

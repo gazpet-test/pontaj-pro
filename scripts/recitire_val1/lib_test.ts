@@ -38,8 +38,10 @@ Deno.test('marcaje: felia trece doar cu exact de_la..pana_la, o dată fiecare, �
   assertEquals(normalizeazaFelie('⟦PAGINA 9⟧ a', 9, 10), null)                       // lipsă
   assertEquals(normalizeazaFelie('⟦PAGINA 10⟧ a ⟦PAGINA 9⟧ b', 9, 10), null)         // ordine
   assertEquals(normalizeazaFelie('⟦PAGINA 9⟧ a ⟦PAGINA 11⟧ b', 9, 10), null)         // în afara intervalului
-  // felia de 1 pagină cu UN marcaj (numărul tipărit) → rescris, neambiguu
-  assertEquals(normalizeazaFelie('⟦PAGINA 3⟧ text', 7, 7), '⟦PAGINA 7⟧ text')
+  // felia de 1 pagină: tot exact — numărul greșit NU se rescrie (999 / 3 pentru pagina 7 → refuz)
+  assertEquals(normalizeazaFelie('⟦PAGINA 7⟧ text', 7, 7), '⟦PAGINA 7⟧ text')
+  assertEquals(normalizeazaFelie('⟦PAGINA 999⟧ text', 7, 7), null)
+  assertEquals(normalizeazaFelie('⟦PAGINA 3⟧ text', 7, 7), null)
   assertEquals(normalizeazaFelie('⟦PAGINA 7⟧ a ⟦PAGINA 7⟧ b', 7, 7), null)
 })
 

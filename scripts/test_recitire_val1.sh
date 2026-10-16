@@ -125,6 +125,10 @@ refuz_aplica "rol ≠ postgres" m_212.csv t_212.csv "$(sha m_212.csv)" 'garda: s
 cas() { q "$2" >/dev/null; refuz_aplica "CAS $1" m_212.csv t_212.csv "$(sha m_212.csv)" "$3"; q "$4" >/dev/null; }
 cas "text" "UPDATE public.ofertare_documente_atribuire SET text_extras = text_extras || ' ' WHERE id = 212" 'textul s-a schimbat' \
     "UPDATE public.ofertare_documente_atribuire SET text_extras = rtrim(text_extras, ' ') WHERE id = 212"
+# texte.csv cu MAI MULTE texte decât manifestul (aprobare pe subset) trece de garda textelor; pică abia la CAS-ul de text
+q "UPDATE public.ofertare_documente_atribuire SET text_extras = text_extras || ' ' WHERE id = 212" >/dev/null
+refuz_aplica "subset aprobat: texte în plus acceptate (pică la CAS, nu la texte)" m_212.csv texte.csv "$(sha m_212.csv)" 'textul s-a schimbat'
+q "UPDATE public.ofertare_documente_atribuire SET text_extras = rtrim(text_extras, ' ') WHERE id = 212" >/dev/null
 cas "identitate" "UPDATE public.ofertare_documente_atribuire SET fisier_path = 'x' WHERE id = 212" 'identitatea' \
     "UPDATE public.ofertare_documente_atribuire SET fisier_path = 'lic15/212.pdf' WHERE id = 212"
 cas "metadate" "UPDATE public.ofertare_documente_atribuire SET procesat_la = procesat_la + interval '1 microsecond' WHERE id = 212" 'metadatele' \
@@ -177,6 +181,9 @@ C1="$(ck)"; rez >/dev/null || esec "aplica_rezultat: $(rez)"; [ "$(ck)" = "$C1" 
 # ── verifica ──
 ver() { "$PG_BIN/psql" -X -q -1 -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -v rezultat="$LUCRU/aplicare_rezultat.csv" -f "$S/verifica.sql" 2>&1; }
 o="$(ver)" || esec "verifica: $o"; grep -q 'verificare OK' <<<"$o" || esec "verifica: $o"; [ "$(ck)" = "$C1" ] || esec "verifica a scris"; ok "verifica: OK, read-only"
+q "ALTER TABLE public.ofertare_analiza_versiuni DISABLE TRIGGER USER; INSERT INTO public.ofertare_analiza_versiuni (licitatie_id, lot_domeniu, tip, declansator, moment_referinta, inghetat_tardiv, eligibilitate, doc_manifest, clarificari, amprenta) VALUES (15, 'toate', 'initiala', 'manual', now(), false, 'exacta', '[{\"document_id\": 213}]', '[]', repeat('a', 64)); ALTER TABLE public.ofertare_analiza_versiuni ENABLE TRIGGER USER" >/dev/null
+o="$(ver)" || esec "verifica cu snapshot fără sha: $o"; grep -q 'snapshot_fara_sha' <<<"$o" || esec "snapshot fără sha nelistat: $o"; ok "verifica: snapshot fără sha → „nedovedit”, nu eșec"
+q "ALTER TABLE public.ofertare_analiza_versiuni DISABLE TRIGGER USER; DELETE FROM public.ofertare_analiza_versiuni; ALTER TABLE public.ofertare_analiza_versiuni ENABLE TRIGGER USER" >/dev/null
 q "INSERT INTO public.ofertare_cerinte (id, licitatie_id, sursa_document_id) VALUES (901, 15, 212)" >/dev/null
 o="$(ver)" || esec "verifica cu nedovedit: $o"; grep -q 'cerinte:1' <<<"$o" || esec "nedovedit nelistat: $o"; ok "verifica: derivat fără versiune → „nedovedit” listat"
 q "INSERT INTO public.ofertare_cant_doc_decizii (licitatie_id, document_id, doc_sha256, decizie, motiv, decis_de)

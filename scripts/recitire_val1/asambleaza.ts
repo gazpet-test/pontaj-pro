@@ -1,7 +1,7 @@
 // Recitirea valului 1, pasul 2 (procedura §4): asamblarea + raportul, local, determinist, fără AI, fără scrieri în BD.
-// Intrare: <dir>/rulare.json (de la citeste.ts). Ieșire în <dir>: texte.csv (document_id, text_b64), manifest.json,
+// Intrare: <dir_val>/rulare.json (de la citeste.ts). Ieșire în <dir>: texte.csv (document_id, text_b64), manifest.json,
 // manifest_candidat.csv (formatul lui manifest_aprobat.csv; excepțiile nominale de calitate le completează chat-ul cu Răzvan),
-// preview.md. Utilizare: deno run -A scripts/recitire_val1/asambleaza.ts <dir>   (mediu: ca la citeste.ts)
+// preview.md. Utilizare: deno run -A scripts/recitire_val1/asambleaza.ts <dir_val>   (mediu: ca la citeste.ts)
 import { acoperire, asambleaza, conventieGrup, criterii, diferente, type Felie, normalizeazaFelie, radacinaParte, raport, type Raport,
   sha256Hex, WHITELIST } from './lib.ts'
 import type { Amprenta, Stare } from './citeste.ts'
@@ -26,7 +26,11 @@ export async function construieste(intrari: Intrare[]): Promise<Iesire[]> {
   const asamblat = new Map<number, { text: string | null; problema: string | null }>()
   for (const x of intrari) {
     if (!WHITELIST.includes(x.document_id as typeof WHITELIST[number])) throw new Error(`document în afara whitelist-ului: ${x.document_id}`)
-    let problema = acoperire(x.felii, x.amprenta.pagini_pdf)
+    // identitatea CURENTĂ din BD trebuie să fie cea CITITĂ (amprenta pilotului) — altfel nimic nu se asamblează (offset, cale, mărime)
+    const ai = x.amprenta.identitate
+    let problema: string | null = (x.doc.fisier_path !== ai.fisier_path || x.doc.size_bytes !== ai.size_bytes || x.doc.pagina_offset !== ai.pagina_offset
+      || x.doc.pagini !== ai.pagini) ? 'identitate_schimbata (BD ≠ amprenta citirii)' : null
+    problema = problema ?? acoperire(x.felii, x.amprenta.pagini_pdf)
     const normalizate: Felie[] = []
     for (const f of x.felii) {
       const n = normalizeazaFelie(f.text, f.de_la, f.pana_la)
@@ -34,7 +38,7 @@ export async function construieste(intrari: Intrare[]): Promise<Iesire[]> {
       normalizate.push({ ...f, text: n })
     }
     if (x.amprenta.pagini_pdf !== x.doc.pagini) problema = problema ?? `pagini_pdf ${x.amprenta.pagini_pdf} ≠ pagini ${x.doc.pagini}`
-    asamblat.set(x.document_id, { text: problema ? null : asambleaza(normalizate, x.doc.pagina_offset), problema })
+    asamblat.set(x.document_id, { text: problema ? null : asambleaza(normalizate, ai.pagina_offset), problema })
   }
   const out: Iesire[] = []
   for (const grup of prima.values()) {
