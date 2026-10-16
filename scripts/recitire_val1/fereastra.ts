@@ -142,12 +142,35 @@ export async function incarcaStare(fis: string): Promise<{ st: StareF | null } |
   } catch { return { eroare: 'stare coruptă (JSON invalid)' } }
 }
 
+// conexiunea postgres: DOAR criptată și verificată (rustls) cu CA-ul Supabase („Supabase Root 2021 CA”, fișierul public din repo,
+// sha256 80:70:25:AD:…:CA:FA) — pooler-ul trimite certificatul intermediar. enforce: true = fără trecere pe necriptat (16.10: v0.19.3
+// fără CA a trecut tăcut pe „non-encrypted connection”). RV1_PG_CA poate indica alt fișier PEM.
+export async function caSupabase(): Promise<string> {
+  const cale = Deno.env.get('RV1_PG_CA') ?? new URL('./supabase-prod-ca-2021.crt', import.meta.url)
+  const pem = await Deno.readTextFile(cale)
+  if (!pem.includes('-----BEGIN CERTIFICATE-----')) throw new Error('CA-ul nu e un certificat PEM')
+  return pem
+}
+export function optiuniConexiune(url: string, caPem: string) {
+  const u = new URL(url)
+  if (!['postgres:', 'postgresql:'].includes(u.protocol)) throw new Error('RV1_PG_URL nu e un URL postgres')
+  if (/sslmode=(disable|allow|prefer)/i.test(u.search)) throw new Error('RV1_PG_URL cere sslmode slab; TLS e obligatoriu')
+  return { hostname: u.hostname, port: Number(u.port || 5432), user: decodeURIComponent(u.username), password: decodeURIComponent(u.password),
+    database: decodeURIComponent(u.pathname.slice(1)) || 'postgres', tls: { enabled: true, enforce: true, caCertificates: [caPem] } }
+}
+
 if (import.meta.main) {
   const [cmd, dir] = Deno.args
   if (!['deschide', 'inchide'].includes(cmd) || !dir) { console.error('utilizare: fereastra.ts deschide|inchide <dir>'); Deno.exit(2) }
   const url = Deno.env.get('RV1_PG_URL'); if (!url) { console.error('lipsește RV1_PG_URL'); Deno.exit(2) }
+  await Deno.mkdir(dir, { recursive: true })               // directorul ferestrei (<dir_val>/fereastra_N) se creează aici
   const { Client } = await import('https://deno.land/x/postgres@v0.19.3/mod.ts')
-  const c = new Client(url); await c.connect()
+  let c: InstanceType<typeof Client>
+  try { c = new Client(optiuniConexiune(url, await caSupabase())); await c.connect() } catch (e) {
+    // fără fallback necriptat: orice eșec (TLS, certificat, autentificare) → cod 2, fără să atingem nimic
+    console.error(`ATENȚIE [2] conexiunea postgres a eșuat (TLS obligatoriu, CA Supabase): ${String(e).replace(/:[^:@/]*@/, ':***@').slice(0, 300)}`)
+    Deno.exit(2)
+  }
   const ms = (v: unknown) => (v ? new Date(v as string).getTime() : null)
   const db: Db = {
     joburi: async () => (await c.queryObject<Job>('SELECT jobid::int AS jobid, jobname, active, command, schedule FROM cron.job ORDER BY jobid')).rows,

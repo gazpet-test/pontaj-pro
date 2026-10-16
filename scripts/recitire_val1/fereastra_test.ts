@@ -199,3 +199,16 @@ Deno.test('r3: un timp lipsă / text / NaN / în ordine greșită în starea fer
   }
   await Deno.remove(dir, { recursive: true })
 })
+
+Deno.test('TLS: conexiunea cere TLS obligatoriu cu CA-ul Supabase; sslmode slab sau alt protocol → refuz', async () => {
+  const { caSupabase, optiuniConexiune } = await import('./fereastra.ts')
+  const ca = await caSupabase()
+  assert(ca.includes('BEGIN CERTIFICATE'))
+  const o = optiuniConexiune('postgresql://postgres.abc:p%40ss@aws-0-eu-central-1.pooler.supabase.com:5432/postgres', ca)
+  assertEquals([o.hostname, o.port, o.user, o.password, o.database, o.tls.enabled, o.tls.enforce, o.tls.caCertificates.length],
+    ['aws-0-eu-central-1.pooler.supabase.com', 5432, 'postgres.abc', 'p@ss', 'postgres', true, true, 1])
+  for (const rau of ['postgresql://u:p@h:5432/postgres?sslmode=disable', 'postgresql://u:p@h/postgres?sslmode=prefer', 'mysql://u:p@h/x']) {
+    let err = ''; try { optiuniConexiune(rau, ca) } catch (e) { err = String(e) }
+    assert(err !== '', rau)
+  }
+})
