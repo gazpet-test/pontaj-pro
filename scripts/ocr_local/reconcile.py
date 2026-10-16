@@ -187,8 +187,10 @@ def reconcile(plan_dir, decisions_path):
                              'anomalie_separator': i['anomalie_separator'] or bool(dec and dec['anomalie_separator']),
                              'arbitrat_de': 'claude' if dec else None, 'item_sha256': i.get('item_sha256'), 'arbitru_model': dec.get('arbitru_model') if dec else None,
                              'prompt_versiune': dec.get('prompt_versiune') if dec else None})
+    incerte = {pg['page']: [x for x in pg.get('signals', []) if x.get('type') == 'clasificare_incerta'] for pg in doc.get('pages', [])}
     for p in pages.values():
-        p['semnale'] = []
+        # semnalul clasificatorului (pagina citita desi pixelii o socoteau plansa / formular) ajunge in garda.semnale din BD
+        p['semnale'] = [{'type': 'clasificare_incerta', 'candidate': x.get('candidate')} for x in incerte.get(p['page'], [])]
         p['text'] = None if p['needs_human'] else join_bands([b['text'] for b in p['bands']], p['semnale'])
         if p['text'] is None: p['needs_human'] = True
     out = {'pages': sorted(pages.values(), key=lambda x: x['page']), 'invalid_decisions': invalid,

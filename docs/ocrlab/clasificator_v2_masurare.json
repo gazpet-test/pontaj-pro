@@ -1,0 +1,100 @@
+{
+ "rt1_d205": {
+  "rute_vechi": {
+   "ocr": 35,
+   "exclus_drawing": 140,
+   "exclus_neclasificat": 1
+  },
+  "rute_noi": {
+   "ocr": 176
+  },
+  "tranzitii": {
+   "exclus_drawing->ocr": 140,
+   "exclus_neclasificat->ocr": 1
+  },
+  "benzi_neafectate": 39,
+  "benzi_neafectate_diferite": [],
+  "semnale_clasificare": 141
+ },
+ "rt1_d203": {
+  "rute_vechi": {
+   "ocr": 97,
+   "exclus_neclasificat": 5,
+   "exclus_drawing": 8
+  },
+  "rute_noi": {
+   "ocr": 110
+  },
+  "tranzitii": {
+   "exclus_neclasificat->ocr": 5,
+   "exclus_drawing->ocr": 8
+  },
+  "benzi_neafectate": 167,
+  "benzi_neafectate_diferite": [],
+  "semnale_clasificare": 13
+ },
+ "rt1_d204": {
+  "rute_vechi": {
+   "ocr": 110,
+   "exclus_neclasificat": 4,
+   "exclus_drawing": 7
+  },
+  "rute_noi": {
+   "ocr": 121
+  },
+  "tranzitii": {
+   "exclus_neclasificat->ocr": 4,
+   "exclus_drawing->ocr": 7
+  },
+  "benzi_neafectate": 112,
+  "benzi_neafectate_diferite": [],
+  "semnale_clasificare": 11
+ },
+ "rt1_d1624": {
+  "rute_vechi": {
+   "ocr": 26,
+   "exclus_drawing": 4
+  },
+  "rute_noi": {
+   "ocr": 30
+  },
+  "tranzitii": {
+   "exclus_drawing->ocr": 4
+  },
+  "benzi_neafectate": 72,
+  "benzi_neafectate_diferite": [],
+  "semnale_clasificare": 4
+ },
+ "r1_d772": {
+  "rute_vechi": {
+   "ocr": 177,
+   "exclus_grid_form": 13,
+   "exclus_drawing": 6
+  },
+  "rute_noi": {
+   "ocr": 196
+  },
+  "tranzitii": {
+   "exclus_grid_form->ocr": 13,
+   "exclus_drawing->ocr": 6
+  },
+  "benzi_neafectate": 342,
+  "benzi_neafectate_diferite": [],
+  "semnale_clasificare": 19
+ },
+ "r1_d1247": {
+  "rute_vechi": {
+   "ocr": 1249,
+   "exclus_grid_form": 2
+  },
+  "rute_noi": {
+   "ocr": 1251
+  },
+  "tranzitii": {
+   "exclus_grid_form->ocr": 2
+  },
+  "benzi_neafectate": 3710,
+  "benzi_neafectate_diferite": [],
+  "semnale_clasificare": 2
+ }
+}

@@ -7,6 +7,7 @@ import hashlib, io, json, pathlib, re, time
 # (client.py) sa poata fi testat cap-coada pe functiile SQL reale si in WSL, fara PIL (scripts/test_ofertare_ocr_local.sh).
 PACKAGE = pathlib.Path(__file__).parent
 KINDS = ('continuous_text', 'quantity_table', 'grid_form', 'drawing', 'unknown')
+BLANK_INK = 0.002  # sub 0,2% pixeli de cerneala = pagina alba (acelasi prag ca classify -> 'unknown')
 NATIVE_MIN_CHARS = 200  # doar SEMNAL: un strat de text nativ (poate fi OCR ascuns, gresit) NU scuteste pagina de dubla citire (review Copilot r1)
 
 def sha(data): return hashlib.sha256(data).hexdigest()
@@ -54,7 +55,8 @@ def plan(source, output, *, pages=None, clockwise=None, orientations=None, kind=
     protocol_bytes = (PACKAGE / 'protocol.json').read_bytes()
     doc = {'schema_version': '2.0.0', 'source': str(source), 'input_sha256': sha(src), 'status': 'planning',
            'versions': {'pipeline': '0.2.0', 'protocol': json.loads(protocol_bytes)['version'], 'protocol_sha256': sha(protocol_bytes),
-                        'guard': 'empty-cells-v3-consecutive600', 'guard_sha256': sha((PACKAGE / 'guard.py').read_bytes())},
+                        'guard': 'empty-cells-v3-consecutive600', 'guard_sha256': sha((PACKAGE / 'guard.py').read_bytes()),
+                        'routing': 'v2-fara-excludere-pixeli'},
            'selection': {'pages_requested': pages, 'clockwise_override': clockwise, 'orientations_confirmed': {str(k): v for k, v in sorted(orientations.items())}, 'kind_override': kind, 'dpi': dpi},
            'pages': [], 'bands': [],
            'limits': ['Clasificarea pixelilor da candidati, nu semantica.', 'Orientarea automata nerezolvata blocheaza pagina.',
@@ -65,10 +67,15 @@ def plan(source, output, *, pages=None, clockwise=None, orientations=None, kind=
         p['classification'] = classify(image); category = kind or p['classification']['candidate']
         p['routing_category'] = category
         rotated, orient = orientation(image, orientations.get(number, clockwise)); p['orientation'] = orient
-        if category in ('grid_form', 'drawing'):
-            p['route'] = 'exclus_' + category; continue
-        if category == 'unknown':
-            p['route'] = 'exclus_neclasificat'; continue
+        # Rutarea v2 (laborator OCR 16.10.2026, design docs/ocrlab/CLASIFICATOR_PAGINI.md, Jakarinos r1 GO cu conditii): pixelii NU mai
+        # exclud pagini. Pe Racari, 140/176 pagini din lista de cantitati ieseau 'drawing' (lista tiparita subtire + chenarul paginii).
+        # grid_form / drawing / unknown = semnal; pagina se citeste ca o banda intreaga de tip quantity_table (cea mai prudenta: orice
+        # dezacord e posibila cantitate, deci HIGH-RISK - clasificarea geometrica nu decide prioritatea semantica).
+        if kind is None and p['classification'].get('features', {}).get('ink_density', 1) < BLANK_INK:
+            p['route'] = 'exclus_pagina_alba'; continue  # practic fara cerneala: nimic de pierdut (cea mai slaba pagina de lista ~1%)
+        if category in ('grid_form', 'drawing', 'unknown'):
+            p['signals'].append({'type': 'clasificare_incerta', 'candidate': category, 'features': p['classification'].get('features')})
+            category = 'quantity_table'; p['routing_category'] = category
         if orient['status'] == 'unresolved':
             p['route'] = 'orientare_nerezolvata'; p['signals'].append({'type': 'orientation_unresolved', 'candidates': orient['candidates']}); continue
         corrected, skew = deskew(rotated); p['deskew'] = skew

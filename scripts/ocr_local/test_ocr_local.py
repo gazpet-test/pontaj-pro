@@ -226,7 +226,25 @@ class Plan(unittest.TestCase):
     def test_formular_exclus(self):
         with tempfile.TemporaryDirectory() as d:
             p = pathlib.Path(d); lines_image().save(p / 'i.png')
-            doc = plan(p / 'i.png', p / 'out', clockwise=0, kind='grid_form'); self.assertEqual(doc['pages'][0]['route'], 'exclus_grid_form')
+            doc = plan(p / 'i.png', p / 'out', clockwise=0, kind='grid_form')
+            # rutarea v2: pixelii (sau kind) nu mai exclud; pagina se citeste ca banda intreaga quantity_table, cu semnal
+            pg = doc['pages'][0]; self.assertEqual(pg['route'], 'ocr'); self.assertEqual(pg['routing_category'], 'quantity_table')
+            self.assertEqual([s['candidate'] for s in pg['signals'] if s['type'] == 'clasificare_incerta'], ['grid_form'])
+            self.assertEqual(len(doc['bands']), 1); self.assertEqual(doc['bands'][0]['kind'], 'quantity_table')
+            self.assertEqual(doc['versions']['routing'], 'v2-fara-excludere-pixeli')
+    def test_plansa_si_neclasificat_citite(self):
+        for kind in ('drawing', 'unknown'):
+            with tempfile.TemporaryDirectory() as d:
+                p = pathlib.Path(d); lines_image().save(p / 'i.png')
+                doc = plan(p / 'i.png', p / 'out', clockwise=0, kind=kind)
+                self.assertEqual(doc['pages'][0]['route'], 'ocr'); self.assertEqual(doc['bands'][0]['kind'], 'quantity_table')
+                self.assertIn({'type': 'clasificare_incerta', 'candidate': kind},
+                              [{k: s[k] for k in ('type', 'candidate')} for s in doc['pages'][0]['signals'] if s['type'] == 'clasificare_incerta'])
+    def test_orientare_nerezolvata_ramane_exclusa_si_cu_kind_incert(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d); lines_image().save(p / 'i.png')
+            doc = plan(p / 'i.png', p / 'out', kind='drawing')
+            self.assertEqual(doc['pages'][0]['route'], 'orientare_nerezolvata'); self.assertFalse(doc['bands'])
     def test_pdf_text_nativ_sarit_si_selectie_pagini(self):
         import fitz
         with tempfile.TemporaryDirectory() as d:
@@ -237,7 +255,7 @@ class Plan(unittest.TestCase):
             self.assertEqual([x['page'] for x in doc['pages']], [1, 3])
             # textul nativ e doar semnal: pagina NU ocoleste dubla citire
             self.assertIn('text_nativ_prezent', [s['type'] for s in doc['pages'][0]['signals']]); self.assertNotEqual(doc['pages'][0]['route'], 'text_nativ')
-            self.assertEqual(doc['pages'][1]['route'], 'exclus_neclasificat')
+            self.assertEqual(doc['pages'][1]['route'], 'exclus_pagina_alba')
             with self.assertRaises(ValueError): plan(p / 'a.pdf', p / 'out2', pages=[9])
 
 class Citire(unittest.TestCase):
@@ -683,10 +701,10 @@ class Benchmark(unittest.TestCase):
         self.assertEqual((q[0]['citire_lighton'].split(' | ')[-1], q[0]['citire_mineru'].split(' | ')[-1]), ('0,056', '0.056'))
 
 class Reconciliere(unittest.TestCase):
-    def _run(self, a, b, decizii):
+    def _run(self, a, b, decizii, kind='quantity_table'):
         d = tempfile.mkdtemp(); out = pathlib.Path(d) / 'out'
         Image.new('RGB', (300, 300), 'white').save(pathlib.Path(d) / 'i.png')
-        doc = plan(pathlib.Path(d) / 'i.png', out, clockwise=0, kind='quantity_table'); band = doc['bands'][0]
+        doc = plan(pathlib.Path(d) / 'i.png', out, clockwise=0, kind=kind); band = doc['bands'][0]
         for reader, raw in (('lighton', a), ('mineru', b)):
             o = out / 'page0001' / band['id'] / reader; o.mkdir(parents=True)
             (o / 'raw.txt').write_bytes(raw.encode('utf-8')); proto = RD.protocol()
@@ -697,6 +715,12 @@ class Reconciliere(unittest.TestCase):
         return reconcile(out, out / 'dec.jsonl'), items, out
     def setUp(self):
         p = patch('ocr_local.reconcile.arbiter_policy', return_value=POLICY); p.start(); self.addCleanup(p.stop)
+    def test_semnal_clasificare_incerta_ajunge_in_reconciliere(self):
+        r, _, _ = self._run('lungime 10 m', 'lungime 10 m', [], kind='drawing')
+        pg = r['pages'][0]; self.assertFalse(pg['needs_human'])
+        self.assertIn({'type': 'clasificare_incerta', 'candidate': 'drawing'}, pg['semnale'])
+        r2, _, _ = self._run('lungime 10 m', 'lungime 10 m', [])
+        self.assertNotIn('clasificare_incerta', [s['type'] for s in r2['pages'][0]['semnale']])
     def dec(self, decizie, text=''): return {'decizie': decizie, 'text': text, 'motiv': 'test', 'e_cantitate': True, 'anomalie_separator': True,
                                              'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 't1'}
     def test_ales_mineru_pe_cantitate(self):
