@@ -18,6 +18,10 @@ BEGIN
   IF coalesce(obj_description('public.ofertare_analiza_versiuni'::regclass, 'pg_class'), '') NOT LIKE '%amprenta=' || public.fn_ofertare_cb_amprenta() THEN
     RAISE EXCEPTION '20261031d: preconditie, obiectele s-au schimbat dupa aplicare (amprenta difera) - revenire manuala, cu review';
   END IF;
+  -- review Jakarinos r1 (P1): scrierile în jurnal se blochează ÎNAINTEA verificării, până la COMMIT (SHARE intră în conflict cu
+  -- ROW EXCLUSIVE al INSERT-ului): o acțiune de admin concurentă fie s-a comis deja (o vedem → refuz), fie așteaptă revenirea
+  -- și apoi eșuează pe funcția veche / coloana scoasă — nu se poate strecura între verificare și DROP COLUMN.
+  LOCK TABLE public.ofertare_ai_buget_jurnal IN SHARE MODE;
   IF EXISTS (SELECT 1 FROM public.ofertare_ai_buget_jurnal WHERE rol = 'admin') THEN
     RAISE EXCEPTION '20261031d: jurnalul are actiuni de admin - revenirea ar pierde rolul lor; revenire manuala, cu review';
   END IF;
@@ -57,7 +61,10 @@ BEGIN
     RAISE EXCEPTION '20261031d: postconditie revenire buget_seteaza';
   END IF;
   v_fp := public.fn_ofertare_cb_amprenta();
-  EXECUTE format('COMMENT ON TABLE public.ofertare_analiza_versiuni IS %L', 'TKT-0329 B (20261031a + 20261031b). Imuabil. amprenta=' || v_fp);
+  -- eticheta după ce e aplicat de fapt (review r1: 31b poate fi revenit înaintea lui 31d)
+  EXECUTE format('COMMENT ON TABLE public.ofertare_analiza_versiuni IS %L', 'TKT-0329 B (20261031a'
+    || CASE WHEN pg_get_functiondef('public.fn_ofertare_cb_text_scrie(bigint,text,text,text,text,integer[])'::regprocedure) LIKE '%text_depasit%'
+            THEN ' + 20261031b' ELSE '' END || '). Imuabil. amprenta=' || v_fp);
   IF current_setting('gazpet.revenire_20261031d', true) IS DISTINCT FROM 'BUGET_ADMIN_REVENIRE:' || txid_current() THEN
     RAISE EXCEPTION '20261031d: garda final invalida';
   END IF;
