@@ -575,7 +575,9 @@ def stare_arbitraj(rdir, r, baza):
         # apelului in decizii_doar_haiku.jsonl, apeluri.jsonl are acel (id, a) incheiat cu decizie, iar decizia (scrisa de server) are
         # modelul Haiku si eticheta [doar_haiku] in motiv. Un marcaj fara aceste dovezi nu scoate nimic din prag.
         dh = {(x['id'], x['a']) for x in _jsonl(d / 'decizii_doar_haiku.jsonl') if isinstance(x, dict) and 'a' in x}
-        ap_dec = {(x['id'], x['a']) for x in ap if x['faza'] == 'gata' and x.get('rezultat') == 'decizie'}
+        # tentativa (id, a) dovedita: incheiata cu decizie SAU doar pornita (cadere intre decizii.jsonl si `gata` - Jakarinos r2 P2);
+        # in ambele cazuri si marcajul (id, a) trebuie sa existe, iar decizia sa fie a lui Haiku cu eticheta serverului
+        ap_dec = {(x['id'], x['a']) for x in ap if (x['faza'] == 'gata' and x.get('rezultat') == 'decizie') or x['faza'] == 'start'}
         dec_toate = _jsonl(d / 'decizii.jsonl')
         def din_haiku(x):
             return (x.get('arbitru_model') == 'claude-haiku-5-5' and '[doar_haiku]' in (x.get('motiv') or '')

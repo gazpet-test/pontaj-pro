@@ -239,6 +239,17 @@ class Client(unittest.TestCase):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'suprafata in m² mare', 'suprafata in m³ mare')
         C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         a = C.arbitreaza(rdir, self.edge, max_apeluri=50, triere=True, doar_haiku=True); self.assertEqual(a['apeluri_acum'], 0)
+    def test_doar_haiku_cadere_intre_decizie_si_gata(self):
+        # Jakarinos r2 P2: decizia Haiku salvata, `gata` lipsa -> tot exclusa din prag (marcaj + start pe aceeasi tentativa)
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungimea conductei este mare', 'lungimea conductel este mare')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '',
+                                                         'motiv': '[Haiku: needs_human] [doar_haiku] nesigur', 'e_cantitate': False, 'anomalie_separator': False,
+                                                         'arbitru_model': 'claude-haiku-5-5', 'prompt_versiune': 'arb-v2', 'cost_usd': 0.0005}, 'arbitraj_id': 1})
+        C.arbitreaza(rdir, self.edge, max_apeluri=1, triere=True, doar_haiku=True)
+        d = rdir / ('d%d' % DOC); ap = (d / 'apeluri.jsonl').read_text(encoding='utf-8').splitlines()
+        (d / 'apeluri.jsonl').write_text(''.join(l + chr(10) for l in ap if '"gata"' not in l), encoding='utf-8')  # caderea simulata
+        st = C.stare_arbitraj(rdir, C.rulare(rdir), {}); self.assertEqual((st['claude'], st['needs_human_claude'], st['necunoscute']), (0, 0, 0))
     def test_doar_haiku_sare_peste_cifre(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
         C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
