@@ -279,7 +279,8 @@ paritate verificată (fail-closed).
   (`cost + rezervat + abandonat ≤ plafon_usd`) = **poarta tare**; un plafon local în client e doar estimare (#736 respins).
 - **Pragul §8**: needs_human > 15 % din arbitrajele Claude (după minim 20) → rularea `oprita`. Reluarea doar prin
   `fn_ofertare_ocr_reia` (max 3 pe rulare), numărătoarea pe epoca reluării.
-- Validările 4xx ale edge-ului (înaintea rezervării) nu opresc proba (#741).
+- Validările 4xx ale edge-ului (400 / 413 / 422, înaintea rezervării, nimic cheltuit) nu opresc proba: item-ul e notat refuzat
+  (`validare_<status>`) și sărit; un context > 2000 de caractere e sărit de client înainte de apel (#741).
 
 ### 2.7 Reconcilierea (`reconcile.py`)
 Baza = LightOn; deciziile validate strict (schemă, model și versiune admise); dezacord fără decizie validă = needs_human; o pagină cu
@@ -339,7 +340,7 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #738 | `--triere` doar în probă |
 | 16.10.2026 | #739 | Modul doar_haiku (edge + client) |
 | 16.10.2026 | #740 | Tabelul de umbră 20261031c |
-| 16.10.2026 | #741 | Validările 4xx nu opresc proba |
+| 16.10.2026 | #741 | Clientul: validările 4xx nu opresc proba, contextul > 2000 sărit înainte de apel |
 | 16.10.2026 | #742 | Prompt arb-v3 (diacritice) |
 | 16.10.2026 | (acest PR) | Documentul pipeline-ului + CI |
 | 16.10.2026 | (acest PR) | Partea 1, scrisă de sesiunea Ofertare: §1.0 sursele, §1.1 ingest + căile vecine, §1.2 proveniența / CAS (31a / 31b), §1.3 laboratorul + recitirea valului 1 (#734), §1.4 cantități + comparator (#726 #729 #731), §1.5 porțile; căile CI extinse |
