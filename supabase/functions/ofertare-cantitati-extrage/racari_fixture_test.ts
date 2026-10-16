@@ -10,18 +10,19 @@ const F = JSON.parse(await Deno.readTextFile(new URL('../../tests/fixtures/tkt03
 Deno.test('Răcari F3: cele 16 rânduri Dn 90 din text, cu convenția EN a listei → dovedite, Dn 90, total 6.400 m', async () => {
   let total = 0
   for (const e of F.f3_dn90) {
-    // val 2 (PR-A): în lista F3 pdftotext denumirea (cu „D= 90 MM”) e pe liniile de SUB rândul cantității — sursa se reface ca în text
-    const felie = (e.rand_text as string).includes('|') ? e.rand_text as string : `${e.rand_text}
-${e.denumire_text}
-0.000 0 Total=`
+    // val 2 (PR-A): în lista F3 pdftotext denumirea (cu „D= 90 MM”) e pe liniile de SUB rândul cantității, între „Total=” al
+    // articolului precedent și „Total=” al lui — sursa se reface ca în text (rândul markdown rămâne singur)
+    const md = (e.rand_text as string).includes('|')
+    const sus = md ? '' : '0.000 0 Total=\n'
+    const felie = md ? e.rand_text as string : `${sus}${e.rand_text}\n${e.denumire_text}\n0.000 0 Total=`
     const r = randDinTablou([null, null, null, e.cod_articol_text, e.denumire_text, e.obiect, null, null, null, 'M', e.cantitate_text, 0, 0,
-      'conducta', 'lungime', felie])!
+      'conducta', 'lungime', md ? felie : e.rand_text])!
     const n = (await normalizeazaRand(r, { textDoc: felie, felie, felie_de_la: 0, conventie: 'en', lot_domeniu: 'toate', lot_nr: [],
       rol_sursa: 'f3', rol_decis_de: 'antet' }))!
     assertEquals([n.obs.pozitie_dovedita, n.obs.um_norm, n.obs.cantitate], [true, 'm', e.cantitate], `obiect ${e.obiect}`)
     assert((n.obs.dn_mm as number[]).includes(90), `Dn 90 lipsă pe ${e.obiect}`)
     // offsetul în felie = offsetul fixture-ului relativ la începutul rândului
-    assertEquals(n.obs.cantitate_offset, e.cantitate_offset - e.rand_interval[0])
+    assertEquals(n.obs.cantitate_offset, sus.length + e.cantitate_offset - e.rand_interval[0])
     total += n.obs.cantitate as number
   }
   assertEquals([F.f3_dn90.length, total], [16, 6400])

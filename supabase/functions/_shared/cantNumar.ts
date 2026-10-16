@@ -237,13 +237,19 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
   const linie = doc.slice(ls, le)
   const doarLinia = { linie, bloc: linie, de_la: ls, pana_la: le, continuare: false }
   if ((linie.match(/\|/g) || []).length >= 2) return doarLinia
-  // review Jakarinos r3 (P1): denumirea e DEDESUBTUL cantității doar dacă deasupra rândului nu e o denumire. Continuarea se acceptă
-  // numai când linia ne-goală de deasupra închide articolul precedent („… Total=”) sau e un marcaj de pagină / antetul listei
-  // („= NR. SIMBOL ART. … =”) / începutul textului; altfel (ex. „TEAVA PVC DN63” deasupra) aranjamentul e incert → doar linia.
-  let p = ls - 1
-  while (p > 0 && !doc.slice(doc.lastIndexOf('\n', p - 1) + 1, p).trim()) p = doc.lastIndexOf('\n', p - 1)
-  const sus = p > 0 ? doc.slice(doc.lastIndexOf('\n', p - 1) + 1, p) : ''
-  if (p > 0 && !RE_TOTAL_RAND.test(sus) && !sus.startsWith('⟦PAGINA') && !/^\s*=.*=\s*$/.test(sus)) return doarLinia
+  // review Jakarinos r3/r4 (P1): denumirea e DEDESUBTUL cantității doar dacă deasupra rândului e sigur că NU e o denumire. Singura
+  // dovadă acceptată: prima linie ne-goală de deasupra (marcajele de pagină sunt transparente — denumirea poate fi pe pagina
+  // precedentă) închide articolul precedent („… Total=”). Antetul listei, începutul textului sau orice altceva = incert → doar linia
+  // (primul articol al fiecărei liste rămâne pe linia lui). Un „Total=” chiar pe linia cantității = articolul e întreg pe linie.
+  if (/\btotal[ea]?\s*=/i.test(linie)) return doarLinia
+  let p = ls - 1, sus = ''
+  while (p > 0) {
+    const a = doc.lastIndexOf('\n', p - 1) + 1
+    const l = doc.slice(a, p)
+    if (l.trim() && !l.startsWith('⟦PAGINA')) { sus = l; break }
+    p = a - 1
+  }
+  if (!RE_TOTAL_RAND.test(sus)) return doarLinia
   let pana = le
   for (let k = 0; k <= LINII_CONTINUARE && pana < doc.length; k++) {
     const a = pana + 1
