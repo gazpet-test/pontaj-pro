@@ -83,15 +83,16 @@ def _rand(prov, poz):
 # Termeni de material / tehnologie (decizia Razvan 16.10.2026, observatia Gemini pe pipeline): o diferenta FARA cifre care atinge
 # unul din ei schimba incadrarea cantitatii (PEHD/PVC, OL/OTEL, foraj orizontal/sant deschis, manual/mecanizat, SDR citit ca litere)
 # -> HIGH_RISK, nu DEFER. Comparare pe tokeni fara diacritice, majuscule. „PE” simplu e EXCLUS (prepozitia „pe”; PE80/PE100 au cifre
-# si sunt deja HIGH_RISK). Masurat (dupa Jakarinos r1): r1 21/5.973 DEFER (0,35%), Racari 38/3.024 (1,3%).
+# si sunt deja HIGH_RISK). Masurat (dupa Jakarinos r2): r1 37/5.973 DEFER (0,6%), Racari 43/3.024 (1,4%).
 # Doua feluri de termeni (Jakarinos #750 r1 P1 flexiuni): EXACTE = sigle scurte (doar tokenul intreg); RADACINI = cuvinte de >= 5 litere,
 # potrivite pe inceput, ca sa prinda flexiunile (betonului, sudurii, manuale, mecanizate, polietilena / polietilenei ...). „SANT” e exact
 # (radacina ar prinde „santier”). Fail-safe: o potrivire in plus duce doar la arbitraj, nu la pierdere.
 TERMENI_EXACTI = frozenset(('PEHD', 'HDPE', 'PVC', 'PP', 'PPR', 'OL', 'OLT', 'INOX', 'SDR', 'PN', 'DN', 'SANT', 'SANTURI', 'SANTUL',
-                            'SANTULUI', 'OTEL', 'OTELUL', 'OTELULUI'))
+                            'SANTULUI', 'SANTURILE', 'SANTURILOR', 'OTEL', 'OTELUL', 'OTELULUI'))
 RADACINI = ('FONTA', 'FONTE', 'CUPRU', 'ALUMINIU', 'POLIETILEN', 'POLIPROPILEN', 'BETON', 'ASFALT', 'BALAST', 'NISIP', 'PIATR', 'ZINCAT',
             'BITUM', 'IZOLAT', 'IZOLATI', 'PREIZOLAT', 'ARMAT', 'FORAJ', 'ORIZONTAL', 'DIRIJAT', 'DESCHIS', 'SUBTRAVERS', 'MANUAL', 'MECANIC',
-            'MECANIZAT', 'SUDUR', 'ELECTROFUZ', 'SUBTERAN', 'AERIAN', 'MONTAJ', 'DEMONTAJ', 'DEMOL', 'REFACER', 'SPRIJIN', 'EPUISM')
+            'MECANIZAT', 'SUDUR', 'SUDAR', 'ELECTROFUZ', 'SUBTERAN', 'AERIAN', 'MONTAJ', 'MONTAR', 'DEMONTAJ', 'DEMONTAR', 'DEMOL', 'REFACER',
+            'SPRIJIN', 'EPUISM')
 TERMENI_MATERIAL = TERMENI_EXACTI | frozenset(RADACINI)  # pentru documentare / teste
 # calificative care schimba sensul unui termen ramas identic („cu / fara sudura”, „nu se izoleaza”) (Jakarinos #750 r1 P1)
 CALIFICATIVE = frozenset(('CU', 'FARA', 'NU', 'NE', 'INCLUSIV', 'EXCLUSIV'))
@@ -129,7 +130,13 @@ def _decide(a, b, egale, dif=None, perechi=None):
     randurile cu acelasi numar de celule: materialul se compara celula cu celula (un material mutat intre celule nu se anuleaza)."""
     if egale: return 'MARCAJE', 'continut identic, difera doar marcajele pipeline-ului'
     if CIFRA.search(a) or CIFRA.search(b): return 'HIGH_RISK', 'continut diferit langa cifre (numar, UM, semn, cod, coloana)'
-    if perechi is not None: m = sorted({t for x, y in perechi for t in _material_in_context((x, y), (x, y))})
+    if perechi is not None:
+        # celula cu celula; contextul calificativelor = TOT randul (calificativul poate sta in alta celula: [Sudura | cu]) (Jakarinos r2 P1)
+        m = sorted({t for x, y in perechi for t in _material_in_context((x, y), (a, b))})
+    elif dif is None and termeni_material(a, '') + termeni_material(b, ''):
+        # rand cu numar diferit de celule si termen de material in el: delimitarea s-a pierdut, iar materialele mutate se pot anula
+        # pe tokeni -> conservator HIGH_RISK (Jakarinos #750 r2 P1)
+        m = sorted(set(termeni_material(a, '') + termeni_material(b, '')))[:3] + ['(celule diferite)']
     else: m = _material_in_context(dif or (a, b), (a, b))
     if m: return 'HIGH_RISK', 'material / tehnologie diferit fara cifre (%s)' % ', '.join(m[:3])
     return 'DEFER', 'continut diferit fara nicio cifra'

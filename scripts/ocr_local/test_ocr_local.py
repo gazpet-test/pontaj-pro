@@ -901,6 +901,18 @@ class Triere(unittest.TestCase):
         self.assertEqual(self._cls('Teava PEHD SDR ll gaze.', 'Teava PEHD SDR lI gaze.')[0], ['HIGH_RISK'])
         # „santier” nu e „sant”
         self.assertEqual(termeni_material('organizare de santier', 'organizare de santer'), [])
+    def test_material_cazurile_jakarinos_750_r2(self):
+        # delimitarea celulelor pierduta la un cititor: materialele mutate nu se anuleaza
+        a = self.tab(['<td>Conducta principala PEHD</td>', '<td>Conducta secundara PVC</td>'])
+        b = self.tab(['<td>Conducta principala PVC Conducta secundara PEHD</td>'])
+        self.assertEqual(self._cls(a, b)[0][-1], 'HIGH_RISK')
+        # calificativ in alta celula decat termenul
+        a = self.tab(['<td>Sudura</td>', '<td>cu</td>']); b = self.tab(['<td>Sudura</td>', '<td>fara</td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+        from .triere import termeni_material
+        self.assertEqual(termeni_material('montare conducta', 'conducta'), ['MONTARE'])
+        self.assertEqual(termeni_material('sudare cap la cap', 'cap la cap'), ['SUDARE'])
+        self.assertEqual(termeni_material('refacerea santurilor', 'refacerea'), ['SANTURILOR'])
     def test_material_doar_daca_e_in_diferenta(self):
         # termenul identic la ambii cititori nu muta itemul; „pe” (prepozitie) nu e termen
         self.assertEqual(self._cls('Conducta din PEHD este pozata.', 'Conducta din PEHD este pozala.')[0], ['DEFER'])

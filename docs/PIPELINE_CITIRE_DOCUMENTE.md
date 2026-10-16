@@ -269,7 +269,7 @@ paritate verificată (fail-closed).
 ### 2.5 Trierea (`triere.py`, #737 / #738)
 | Clasă | Regula | Ce se întâmplă |
 |---|---|---|
-| HIGH_RISK | conținut diferit lângă cifre (număr, UM, semn, cod, coloană), proveniență nestabilită; **sau** diferența fără cifre atinge un termen de material / tehnologie (`TERMENI_MATERIAL`: PEHD/PVC, OL/OȚEL, FONTĂ, BETON, FORAJ/ȘANȚ, MANUAL/MECANIZAT, SUDURĂ, MONTAJ …, cu flexiuni prin rădăcini; „PE” simplu exclus; la rânduri pe perechi de celule; plus calificativ „cu/fără/nu” sau valoare SDR citită ca litere lângă un termen) | arbitrul plătit (cascadă) |
+| HIGH_RISK | conținut diferit lângă cifre (număr, UM, semn, cod, coloană), proveniență nestabilită; **sau** diferența fără cifre atinge un termen de material / tehnologie (`TERMENI_MATERIAL`: PEHD/PVC, OL/OȚEL, FONTĂ, BETON, FORAJ/ȘANȚ, MANUAL/MECANIZAT, SUDURĂ, MONTAJ …, cu flexiuni prin rădăcini; „PE” simplu exclus; la rânduri pe perechi de celule (rând cu număr diferit de celule și termen de material = HIGH_RISK); plus calificativ „cu/fără/nu” sau valoare SDR citită ca litere lângă un termen) | arbitrul plătit (cascadă) |
 | DEFER | conținut diferit, nicio cifră (Unicode) la niciun cititor | **restanță** (nu în masă la om) — a doua trecere decisă separat |
 | MARCAJE | conținutul identic, diferă doar marcajele pipeline-ului | om |
 | OM | `structura_tabele`, `banda_intreaga` | om, fără AI |
@@ -368,4 +368,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 16.10.2026 | #746 | `fereastra.ts`: coada `pg_net` numărată doar pe cererile spre funcțiile Ofertare + `vercel-relay` (coada globală nu se golea din cauza joburilor altor module) |
 | 16.10.2026 | (acest PR) | Pilotul recitirii: costul confirmat din tokeni la precizia fiecărui tabel (staging `numeric(10,4)` față de `ai_usage_log` `numeric(10,6)`) + `--reconciliaza` pentru o oprire pe „cost neconfirmat” |
 | 16.10.2026 | #721 | Banca fără om (`banca.py`): zone, eșantion înghețat, etichetarea Opus (+ pilotul Astra, neextins), compararea pe ținta înghețată, legătura cu hash-ul eșantionului (Jakarinos r1 design, r2 implementare) |
-| 16.10.2026 | #750 | Trierea: diferențele fără cifre care ating un termen de material / tehnologie trec din DEFER în HIGH_RISK (r1 21/5.973, Răcari 38/3.024; decizia Razvan după observația Gemini; Jakarinos r1: celule, calificative, flexiuni) |
+| 16.10.2026 | #750 | Trierea: diferențele fără cifre care ating un termen de material / tehnologie trec din DEFER în HIGH_RISK (r1 37/5.973, Răcari 43/3.024; decizia Razvan după observația Gemini; Jakarinos r1–r2: celule, calificative, flexiuni, rânduri cu celule diferite) |
