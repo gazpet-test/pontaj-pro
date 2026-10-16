@@ -44,3 +44,11 @@ Măsurătoare: replan rt1 (Răcari) și r1 (102) — câte pagini trec la citire
   r1 d772 +19 (13 grid_form, 6 drawing), d1247 +2. Toate benzile paginilor neafectate identice (sha): 390 pe Răcari, 4.052 pe r1.
 - De făcut pentru runda 2 (GPU, ~49 de pagini noi ≈ 5 min): citirea paginilor recuperate (Răcari PTh/d1624 + r1), alarme / dezacorduri /
   pragurile de oprire pe pagini-planșă, etichete vizuale pe cele 21 din r1.
+
+## Măsurătoarea GPU a paginilor recuperate (16.10, ~6 min GPU, „da” Razvan) — `clasificator_v2_recuperate.json`
+49 de pagini (Răcari PTh 24 + d1624 4 + r1 21), citite LightOn + MinerU, planuri noi doar pe ele:
+- planșe reale (15, etichetate vizual): 8 opriri de gardă (bandă → `banda_intreaga` → om, fără arbitraj), 154 de dezacorduri.
+- text/tabel recuperat Răcari (13): 100 de dezacorduri; 3 opriri de gardă (d1624 p27/29/30, tabele rotite, LightOn `bucla_previous_guard`).
+- r1 (21, etichetate vizual): **toate 21 sunt text/tabel, nicio planșă**; 3 au cantități (d772 p313 tabele diametru/lungime/cantitate,
+  d1247 p402 și p410 liste cu UM și cantitate). 248 de dezacorduri, 0 opriri de gardă.
+Concluzie: excluderea pe pixeli a pierdut în tăcere pagini cu cantități și pe r1; costul variantei B = zgomotul planșelor (154 de dezacorduri pe 15 pagini).
