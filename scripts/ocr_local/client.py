@@ -587,7 +587,7 @@ def peste_prag(st, prag=None, minim=None):
     return n, nh, n >= minim and nh / n > prag
 
 @cu_lacat
-def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None):
+def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=None, seed=None, triere=False):
     """Un dezacord pe rand: structura_tabele si banda_intreaga (banda oprita de garda) -> needs_human fara AI (op needs_human);
     restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
     plafonul si legarea de BD sunt in edge). Decizia se scrie local imediat (decizii.jsonl). Nicio reincercare: orice refuz / eroare
@@ -600,6 +600,22 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
     raporteaza `oprita` daca omul a cerut oprirea. Recuperarea apelurilor cu rezultat necunoscut (-> needs_human fara AI) ruleaza si
     in proba, inaintea oricarui apel nou: e o obligatie de siguranta, nu o alegere a esantionului (Jakarinos r2)."""
     rdir = pathlib.Path(rdir); r = rulare(rdir); proba = max_apeluri is not None; facute = 0
+    # TRIERE (laborator 16.10.2026, decizia Razvan A; ocr_local/triere.py): doar HIGH_RISK (numere diferite in CONTINUT, bara la un singur
+    # cititor, provenienta nestabilita) merge la Claude. MARCAJE / DEFER: in proba se sar (neatinse); in pasul normal -> needs_human FARA AI,
+    # cu motivul clasei (restant explicit pentru om, nu „corect”). Clasa se calculeaza din citirile de pe disc, verificate pe amprenta.
+    clase = {}
+    def clasa_item(d, it):
+        cheie = (str(d), it['band'])  # banda e unica doar in document: cheia include documentul (Jakarinos r1 P1 - cache intre documente)
+        if cheie not in clase:
+            from .triere import triaza_banda
+            bd = d / ('page%04d' % it['page']) / it['band']; raws = {}
+            for rd in ('lighton', 'mineru'):
+                raw = (bd / rd / 'raw.txt').read_bytes().decode('utf-8') if (bd / rd / 'raw.txt').exists() else ''
+                if sha(raw.encode('utf-8')) != it['raw_sha256'][rd]: raise RuntimeError('Citirea %s a benzii %s nu mai e cea comparata' % (rd, it['band']))
+                raws[rd] = raw
+            toate = [x for x in _jsonl(d / 'dezacorduri.jsonl') if x['band'] == it['band']]
+            clase[cheie] = triaza_banda(raws['lighton'], raws['mineru'], toate)
+        return clase[cheie].get(it['id'], ('HIGH_RISK', 'item necunoscut la triere'))
     if filtru is not None and not proba: raise ValueError('--filtru doar impreuna cu --max-apeluri (proba)')
     if pasi(rdir).get('arbitrata'): return {'deja': True}
     try: activa(rdir)
@@ -646,6 +662,11 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH, max_apeluri=None, filtru=
         if it['id'] in st['per_doc'][doc]['rezolvate'] or it['id'] in st['per_doc'][doc]['necunoscute']: continue
         if it['id'] not in ids: raise RuntimeError('Dezacordul %s nu are id in BD (reia compara)' % it['id'])
         if proba and (it['tip'] in ('banda_intreaga', 'structura_tabele') or (filtru is not None and cheie_proba(it, doc) not in filtru)): continue
+        if triere and it['tip'] not in ('banda_intreaga', 'structura_tabele'):
+            k, motiv_t = clasa_item(d, it)
+            if k != 'HIGH_RISK':
+                if proba: continue
+                om(d, ids, it, ('%s: %s (triere, fara arbitraj automat)' % (k, motiv_t))[:200]); st = stare_locala(); continue
         if proba and facute >= max_apeluri: break
         if it['tip'] == 'banda_intreaga':  # banda oprita de garda (citire incompleta): verificare manuala, fara Claude (Razvan 14.10)
             om(d, ids, it, ('banda_intreaga: ' + (it.get('motiv_pipeline') or 'citire incompleta') + ' - garda, verificare manuala (fara arbitraj automat)')[:200]); st = stare_locala(); continue

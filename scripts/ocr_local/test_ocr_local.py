@@ -849,3 +849,59 @@ class Reconciliere(unittest.TestCase):
         sig = []; self.assertIsNone(join_bands(['unu doi trei', 'trei patru'], sig)); self.assertEqual(sig[0]['type'], 'cusatura_nesigura')
 
 if __name__ == '__main__': unittest.main()
+
+
+class Triere(unittest.TestCase):
+    # laborator 16.10.2026 (decizia Razvan A): provenienta marcajelor + trierea pe numere din CONTINUT
+    BAND = {'id': 'p0001_b0', 'page': 1, 'kind': 'quantity_table', 'image': 'x.png', 'image_sha256': '0' * 64}
+    RES = {'ok': True}
+    def _cls(self, a, b):
+        from .triere import triaza_banda
+        _, its = compare_band(self.BAND, a, self.RES, b, self.RES)
+        tr = triaza_banda(a, b, its); return [tr[i['id']][0] for i in its], its
+    def tab(self, *rows):
+        return '<table>' + ''.join('<tr>' + ''.join(c for c in r) + '</tr>' for r in rows) + '</table>'
+    def test_doar_rowspan_e_marcaj(self):
+        a = self.tab(['<td>Antet</td>', '<td>UM</td>'], ['<td rowspan="8">Fluid</td>', '<td>m</td>'])
+        b = self.tab(['<td>Antet</td>', '<td>UM</td>'], ['<td rowspan="9">Fluid</td>', '<td>m</td>'])
+        c, _ = self._cls(a, b); self.assertEqual(c, ['MARCAJE'])
+    def test_rowspan_scris_de_ocr_ca_text_e_continut(self):
+        # „⟦rowspan=3⟧” venit din CITIRE nu e marcaj de pipeline: cifra 3 e continut
+        a = self.tab(['<td>Antet</td>', '<td>UM</td>'], ['<td>Fluid ⟦rowspan=3⟧</td>', '<td>m</td>'])
+        b = self.tab(['<td>Antet</td>', '<td>UM</td>'], ['<td>Fluid</td>', '<td>m</td>'])
+        c, _ = self._cls(a, b); self.assertEqual(c, ['HIGH_RISK'])
+    def test_numere_diferite_si_mutate(self):
+        a = self.tab(['<td>1</td>', '<td>Teava</td>', '<td>m</td>', '<td>10</td>'])
+        b = self.tab(['<td>1</td>', '<td>Teava</td>', '<td>m</td>', '<td>12</td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+        a2 = self.tab(['<td>1</td>', '<td>Teava</td>', '<td>10</td>', '<td></td>'])
+        b2 = self.tab(['<td>1</td>', '<td>Teava</td>', '<td></td>', '<td>10</td>'])
+        self.assertEqual(self._cls(a2, b2)[0], ['HIGH_RISK'])
+    def test_text_fara_numere_defer_si_cu_numere_high(self):
+        self.assertEqual(self._cls('Lungimea conductei este mare.', 'Lungimea conductel este mare.')[0], ['DEFER'])
+        self.assertEqual(self._cls('Lungimea este 10 m.', 'Lungimea este 16 m.')[0], ['HIGH_RISK'])
+    def test_bara_la_un_singur_cititor(self):
+        self.assertEqual(self._cls('Cantitate <s>10</s> m', 'Cantitate 10 m')[0], ['HIGH_RISK'])
+    def test_imagine_diferita_e_marcaj(self):
+        a = 'Plan <img src="data:image/jpeg;base64,QUJDREVG"/> gata'; b = 'Plan <img src="data:image/jpeg;base64,WFlaV1ZV"/> gata'
+        self.assertEqual(self._cls(a, b)[0], ['MARCAJE'])
+    def test_contraexemple_jakarinos_r1_langa_cifre(self):
+        # UM, semn, cod, alt-ul imaginii, tinta barei: continut diferit langa cifre = HIGH_RISK (nu DEFER / MARCAJE)
+        self.assertEqual(self._cls('etanseitate de 6 bar.', 'etanseitate de 6 bai.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('coeficient = 0,0013 pe km', 'coeficient − 0,0013 pe km')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('conform NTPEE-2018 art', 'conform NTPER-2018 art')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Cant <img alt="10,5 mc" src="a.png"/> gata', 'Cant <img alt="105 mc" src="a.png"/> gata')[0], ['HIGH_RISK'])
+        a = self.tab(['<td>Teava</td>', '<td><s>10</s> 20</td>']); b = self.tab(['<td>Teava</td>', '<td>10 <s>20</s></td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+    def test_imbricare_sup_in_alt(self):
+        from .compare import segmente_provenienta
+        a = 'X <img alt="10<sup>2</sup>" src="a.png"/> 99'; b = 'X <img alt="10<sup>3</sup>" src="a.png"/> 99'
+        self.assertIsNotNone(segmente_provenienta(a)); self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+    def test_doar_src_diferit_e_marcaj(self):
+        self.assertEqual(self._cls('Plan <img alt="schita" src="a.png"/> gata', 'Plan <img alt="schita" src="b.png"/> gata')[0], ['MARCAJE'])
+    def test_caracter_privat_in_citire_fail_closed(self):
+        self.assertEqual(self._cls('Text  normal fara cifre', 'Text normal fara cifre')[0], ['HIGH_RISK'])
+    def test_paritate_segmente_neschimbate(self):
+        from .compare import segmente_provenienta
+        for raw in (self.tab(['<td rowspan="2">a <s>b</s></td>', '<td>x<sup>2</sup></td>']), 'Text ~~taiat~~ si <img alt="z"/> | a | b |\n| 1 | 2 |'):
+            norm, masti = segmente_provenienta(raw); self.assertEqual(norm, segments(raw))
