@@ -26,6 +26,10 @@ const SHA = /^[0-9a-f]{64}$/
 const taie200 = (s: string): string => Array.from(s).slice(0, 200).join('')
 // bani comparati in unitati intregi de 0,0001 USD (rezervarea si costurile sunt deja rotunjite la 4 zecimale): 0,0011 + 0,0204 = 0,0215
 const unitati = (x: number): number => Math.round(x * 1e4)
+// regula 10 (arb-v3): literele de baza fara semne diacritice (NFD + fara \p{M}): ș ş š → s, ț ţ → t, ă â → a, î → i; majusculele,
+// cifrele, semnele si spatiile raman. Perechea „difera doar prin diacritice” = aceeasi baza, texte diferite (Jakarinos arb-v3 r1 P1)
+export const bazaFaraDiacritice = (s: string): string => s.normalize('NFD').replace(/\p{M}/gu, '')
+export const doarDiacritice = (a: string, b: string): boolean => a !== b && bazaFaraDiacritice(a) === bazaFaraDiacritice(b)
 /** Dupa Haiku: mai incape limita de sus a lui Sonnet in rezervare? (exportat pentru testul de regresie la limita exacta) */
 export const incapeArbitrul = (costFiltru: number, limitaArbitru: number, suma: number): boolean =>
   unitati(costFiltru) + unitati(limitaArbitru) <= unitati(suma)
@@ -182,6 +186,13 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
       final = { ...r1, d: { ...r1.d, decizie: 'needs_human', text: '', motiv: taie200(detaliu(r1) + ' cost Haiku peste limita estimata, Sonnet nechemat') } }
     }
   } else final = { ...r1, d: { ...r1.d, motiv: taie200(detaliu(r1) + ' ' + r1.d.motiv) } }
+  // pe o pereche care difera doar prin diacritice, text_propus poate schimba DOAR diacritice: alta litera de baza, cifra, semn, spatiu
+  // sau majuscula = needs_human (verificare determinista, nu doar in prompt; Jakarinos arb-v3 r1 P1). Costul ramane cel real.
+  if (final.d.decizie === 'text_propus' && doarDiacritice(dz.citire_lighton, dz.citire_mineru)
+      && bazaFaraDiacritice(final.d.text) !== bazaFaraDiacritice(dz.citire_lighton)) {
+    final = { ...final, d: { ...final.d, decizie: 'needs_human', text: '',
+              motiv: taie200('[diacritice] text propus schimba si alte caractere: la om ' + final.d.motiv) } }
+  }
   const { model: modelFinal, d, tin, tout } = final, real = final.cost
   const peste = unitati(real) > unitati(suma)
   // costul real peste rezervare (doar dacă prețul / tokenizarea s-ar schimba): UN singur RPC tranzacțional decontează la rezervare,

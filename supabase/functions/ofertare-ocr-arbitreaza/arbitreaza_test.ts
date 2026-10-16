@@ -2,7 +2,7 @@
 // oricărui cost, citirile DIN BD, nicio decizie la eroarea API, schema strictă, usage lipsă / cost peste rezervare fail-closed.
 import { strict as assert } from 'node:assert'
 import { amprentaDezacord, ANTET_OCR, sha256Hex } from '../_shared/ocrLocal.ts'
-import { arbitreaza, incapeArbitrul } from './arbitreaza.ts'
+import { arbitreaza, bazaFaraDiacritice, doarDiacritice, incapeArbitrul } from './arbitreaza.ts'
 import { PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
 
 const SECRET = 'c'.repeat(64)
@@ -342,4 +342,39 @@ Deno.test('doar_haiku: text_propus cu cifre devine needs_human (nu se acceptă o
   const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
   assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, 'needs_human'); assert.equal(j.decizie.text, '')
   assert.equal(apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj.decizie, 'needs_human')
+})
+
+Deno.test('regula 10: baza fără diacritice — ș ş š → s, ț ţ → t, ă â → a, î → i; majuscule, cifre, spații păstrate', () => {
+  assert.equal(bazaFaraDiacritice('Ștefănești ŞANŢ šimek ÎNCĂ'), 'Stefanesti SANT simek INCA')
+  assert.ok(doarDiacritice('teavă', 'țeavă')); assert.ok(doarDiacritice('Štefănești', 'Ștefănești')); assert.ok(doarDiacritice('SITUATIILOR', 'SITUAȚIILOR'))
+  assert.ok(!doarDiacritice('teava', 'teava')); assert.ok(!doarDiacritice('teava', 'Teava')); assert.ok(!doarDiacritice('teava', 'teava ')); assert.ok(!doarDiacritice('teava', 'leava'))
+})
+
+Deno.test('regula 10: pereche doar de diacritice — text_propus care schimbă și altceva = needs_human; doar diacritice = acceptat', async () => {
+  const it = await itemDeTest({ citire_lighton: 'Štefănești teavă', citire_mineru: 'Stefanesti țeavă', diferenta_numerica: false })
+  const tp = (text: string) => ({ text: JSON.stringify({ decizie: 'text_propus', text, motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) })
+  for (const [text, asteptat] of [['Ștefănești țeavă', 'text_propus'], ['Ștefănești țeavă PE', 'needs_human'], ['ștefănești țeavă', 'needs_human'],
+                                   ['Ștefănești  țeavă', 'needs_human'], ['Ștefănești ţeava', 'text_propus']] as const) {
+    for (const mod of [{ mod: 'doar_haiku' }, {}]) {
+      const { m, apeluri } = mediu(it, { api: tp(text) })
+      const r = await arbitreaza(cerere(corpDe(it, mod)), m); const j = await r.json()
+      assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, asteptat, text + ' ' + JSON.stringify(mod))
+      const scris = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
+      assert.equal(scris.decizie, asteptat)
+      if (asteptat === 'needs_human') { assert.equal(scris.text, ''); assert.ok(scris.motiv.startsWith('[diacritice]')) }
+      if ('mod' in mod) assert.ok(scris.motiv.includes('[doar_haiku]'), scris.motiv)
+    }
+  }
+})
+
+Deno.test('regula 10: pereche care diferă și prin altceva — verificarea de diacritice nu se aplică', async () => {
+  const it = await itemDeTest({ citire_lighton: 'teavă PE', citire_mineru: 'țeavă PF', diferenta_numerica: false })
+  const tp = { text: JSON.stringify({ decizie: 'text_propus', text: 'țeavă PE', motiv: 'vazut', e_cantitate: false, anomalie_separator: false }) }
+  const { m } = mediu(it, { api: tp })
+  const j = await (await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m)).json()
+  assert.equal(j.decizie.decizie, 'text_propus')
+})
+
+Deno.test('prompt arb-v3: regula 10 cere ordinea a→b, fără semne adăugate, nume străine păstrate, verificare automată', () => {
+  for (const f of ['Nu adaugi niciodată un semn', 'normalizare asumată', 'Šimek', 'se verifică automat', '(c) are prioritate']) assert.ok(PROMPT.includes(f), f)
 })
