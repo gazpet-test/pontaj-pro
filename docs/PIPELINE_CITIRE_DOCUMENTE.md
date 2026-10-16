@@ -5,7 +5,7 @@ afectată + un rând în „Istoric revizii”); CI-ul `pipeline-citire-doc.yml`
 - **scripturi:** `scripts/ocr_local/**`, `scripts/recitire_val1/**`, `worker/ofertare/**`;
 - **funcții edge:** `supabase/functions/ofertare-ocr-*`, `ofertare-ingest-doc`, `ofertare-cantitati-extrage`, `ofertare-citire-test`, `ofertare-pdf-link`, `ofertare-document-nou-citeste`, `ofertare-plansa-citeste`, `ofertare-word-text`, `ofertare-seap-import`, `ofertare-seap-veghe`;
 - **cod comun:** `_shared/{transcriereTabel, provenientaText, gardaIngest*, cantNumar, cantNormalizare, cantComparator, dn}.ts`;
-- **migrări / reveniri:** `*ofertare_ocr*`, `*ofertare_cant*`, `*ofertare_text_scrie*`, `*ofertare_citire_umbra*`, `*ofertare_ingest_garda*`.
+- **migrări / reveniri:** `*ofertare_ocr*`, `*ofertare_cant*`, `*ofertare_text_scrie*`, `*ofertare_citire_umbra*`, `*ofertare_ingest_garda*`, `*ofertare_buget*`.
 
 Autori: partea 1 (ingest Haiku 5.5, proveniență / CAS, recitire, cantități — TKT-0329) = sesiunea Ofertare; partea 2 (OCR local,
 arbitru, cititor_3, umbra) = laboratorul OCR; asamblarea = chatul principal.
@@ -208,7 +208,7 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 
 | | |
 |---|---|
-| Cine o pornește | **Owner sau responsabilul licitației** (poarta pe cheltuială în edge) și DOAR pe o **cerere** activă (`fn_ofertare_cb_cerere`: owner / responsabil / admin Ofertare). Cererea cere un **plafon** setat de owner (`fn_ofertare_cb_buget_seteaza`, scopul `cant_extragere`, ≤ 100 USD). `x-radar-secret` e refuzat în acest mod. |
+| Cine o pornește | **Owner sau responsabilul licitației** (poarta pe cheltuială în edge) și DOAR pe o **cerere** activă (`fn_ofertare_cb_cerere`: owner / responsabil / admin Ofertare). Cererea cere un **plafon** (`fn_ofertare_cb_buget_seteaza`, scopul `cant_extragere`): owner ≤ 100 USD sau admin Ofertare ≤ 5,00 USD (20261031d; adminul nu atinge un plafon > 5 existent), cu rolul în `ofertare_ai_buget_jurnal.rol`. `x-radar-secret` e refuzat în acest mod. |
 | Cost | Fiecare felie e plătită printr-o rezervare atomică în BD (`fn_ofertare_cb_rezerva`, apoi `fn_ofertare_cb_deconteaza` / `_necunoscuta` / `_abandon`). Consumul = decontat + deschis + necunoscut + abandonat. Depășirea rezervării → bugetul `blocat` (deblocare doar de owner). |
 | Ce poate merge prost | Text nevalid → documentul e sărit. Grup schimbat sau ocupat → `grup_schimbat` / `grup_ocupat`, se reia. Felie cu rezultat necunoscut → socotită în consum, reluată doar de om (`fn_ofertare_cb_extragere_redeschide`). Cantități ambigue → `incomplet`, nu se adună. |
 | Revenire | Tabelele sunt imuabile: o extragere nouă (alt sha / extractor) nu șterge istoricul. Migrarea are `supabase/revenire/20261031a_ofertare_cantitati_b_ROLLBACK.sql`, armată. |
@@ -223,7 +223,7 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 | `plansa-citeste` | owner / responsabil | `FELII_PE_RULARE` pe rulare |
 | Laboratorul (`ofertare-citire-test`) | **orice utilizator Ofertare (gaură, de închis după valul 1)** | — |
 | Recitirea valului 1 | chat, cu „da”-ul lui Răzvan, prin laborator | 1,00 USD dur pe val, rezervare 0,53 pe apel |
-| Extragerea cantităților | owner / responsabil, pe cererea activă | plafonul `cant_extragere` (owner), rezervare atomică |
+| Extragerea cantităților | owner / responsabil, pe cererea activă | plafonul `cant_extragere` (owner ≤ 100 / admin Ofertare ≤ 5; deblocarea doar owner), rezervare atomică |
 | Arbitrul OCR (partea 2) | client, cu „da” pe sumă | plafonul rulării în BD |
 
 ---
@@ -369,3 +369,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 16.10.2026 | (acest PR) | Pilotul recitirii: costul confirmat din tokeni la precizia fiecărui tabel (staging `numeric(10,4)` față de `ai_usage_log` `numeric(10,6)`) + `--reconciliaza` pentru o oprire pe „cost neconfirmat” |
 | 16.10.2026 | #721 | Banca fără om (`banca.py`): zone, eșantion înghețat, etichetarea Opus (+ pilotul Astra, neextins), compararea pe ținta înghețată, legătura cu hash-ul eșantionului (Jakarinos r1 design, r2 implementare) |
 | 16.10.2026 | #750 | Trierea: diferențele fără cifre care ating un termen de material / tehnologie trec din DEFER în HIGH_RISK (r1 37/5.973, Răcari 43/3.024; decizia Razvan după observația Gemini; Jakarinos r1–r2: celule, calificative, flexiuni, rânduri cu celule diferite) |
+| 16.10.2026 | (acest PR) | 20261031d: plafonul AI setat și de admin Ofertare (≤ 5 USD; owner ≤ 100), jurnalul pe rol, deblocarea rămâne la owner — decizia Răzvan 16.10 |
