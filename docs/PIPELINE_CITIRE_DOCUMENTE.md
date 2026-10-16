@@ -329,6 +329,16 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | Apel cu rezultat necunoscut | item → needs_human, socotit la prag | automat la reluare |
 | Migrare | — | `supabase/revenire/*_ROLLBACK.sql`, armată pe tranzacție |
 
+### 2.12 Banca fără om (`banca.py`, unealtă de laborator — nu scrie în BD, nu cheltuie)
+Măsoară cititorii și arbitrul pe zone etichetate pe imagine. Zona = textul dintre două ancore unice agreate de ambii cititori;
+eșantion înghețat (`esantion.json`, hash); `pregateste` copiază imaginea (sha verificat) + ținta; harta zonă ↔ lot stă în `priv/`
+(etichetatorul nu vede id-urile). Etichetare: **A = Opus** (`claude -p --restricted --tools Read`, abonament) — singura folosită;
+B = Astra prin `run_paw jak` (pilot 16.10, NU se extinde — decizia Razvan; auditul invalidează lotul la orice exec/mcp/web).
+Compararea: acord doar dacă ambele etichete sunt „sigur”, cu schema completă, pe ținta EXACTĂ (ancorele verificate față de
+ancorele înghețate; țintele ambigue nu se măsoară); `acord_normalizat` = doar diferențe de format. Intrările și rezultatele sunt legate
+de hash-ul eșantionului: un eșantion rescris = refuz (`leaga` verifică zonă cu zonă băncile vechi). Zonele cu ancora pe același rând
+cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\excluse_ancora.json`.
+
 ---
 
 ## Istoric revizii
@@ -357,3 +367,4 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #742 (r4) | Poarta deterministă pe `text_propus` la perechile doar de diacritice (Jakarinos r1–r4) |
 | 16.10.2026 | #746 | `fereastra.ts`: coada `pg_net` numărată doar pe cererile spre funcțiile Ofertare + `vercel-relay` (coada globală nu se golea din cauza joburilor altor module) |
 | 16.10.2026 | (acest PR) | Pilotul recitirii: costul confirmat din tokeni la precizia fiecărui tabel (staging `numeric(10,4)` față de `ai_usage_log` `numeric(10,6)`) + `--reconciliaza` pentru o oprire pe „cost neconfirmat” |
+| 16.10.2026 | #721 | Banca fără om (`banca.py`): zone, eșantion înghețat, etichetarea Opus (+ pilotul Astra, neextins), compararea pe ținta înghețată, legătura cu hash-ul eșantionului (Jakarinos r1 design, r2 implementare) |
