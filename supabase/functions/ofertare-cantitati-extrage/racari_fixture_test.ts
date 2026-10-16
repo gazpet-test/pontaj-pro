@@ -10,7 +10,10 @@ const F = JSON.parse(await Deno.readTextFile(new URL('../../tests/fixtures/tkt03
 Deno.test('Răcari F3: cele 16 rânduri Dn 90 din text, cu convenția EN a listei → dovedite, Dn 90, total 6.400 m', async () => {
   let total = 0
   for (const e of F.f3_dn90) {
-    const felie = e.rand_text as string
+    // val 2 (PR-A): în lista F3 pdftotext denumirea (cu „D= 90 MM”) e pe liniile de SUB rândul cantității — sursa se reface ca în text
+    const felie = (e.rand_text as string).includes('|') ? e.rand_text as string : `${e.rand_text}
+${e.denumire_text}
+0.000 0 Total=`
     const r = randDinTablou([null, null, null, e.cod_articol_text, e.denumire_text, e.obiect, null, null, null, 'M', e.cantitate_text, 0, 0,
       'conducta', 'lungime', felie])!
     const n = (await normalizeazaRand(r, { textDoc: felie, felie, felie_de_la: 0, conventie: 'en', lot_domeniu: 'toate', lot_nr: [],

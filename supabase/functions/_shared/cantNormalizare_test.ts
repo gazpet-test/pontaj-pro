@@ -68,3 +68,46 @@ Deno.test('r1: mai multe Dn propuse de model → dn_ambiguu, dn_model null', asy
   const n = (await normalizeazaRand(randDinTablou([1, null, null, null, 'Conducta PEHD DN90', null, null, 'Dn 90/110', null, 'm', 120, 0, 0, 'conducta', 'lungime', 'Conducta PEHD DN90 120 m'])!, ctx))!
   assertEquals([n.obs.dn_mm, n.obs.dn_model, n.obs.dn_ambiguu], [[90], null, true])
 })
+
+// ── val 2, PR-A: dovada pe rând (codul pe linia cantității, Dn-ul în blocul rândului) ──
+const F3 = '⟦PAGINA 3⟧\n001 SA11D1 [ 2] M 300.000\nTEAVA PVC ... DE DISTRIBUTIE D= 63 MM\n0.000 0 Total=\n' +
+  '002 SA11H1 [ 2] M 120.000\nTEAVA PVC ... DE DISTRIBUTIE D= 110 MM\n0.000 0 Total=\n'
+const ctxF3 = { textDoc: F3, felie: F3, felie_de_la: 0, conventie: 'en' as const, lot_domeniu: 'toate' as const, lot_nr: [], rol_sursa: 'f3', rol_decis_de: 'antet' as const }
+const randF3 = (cod: string | null, den: string, cant: number, citat: string) =>
+  randDinTablou([3, null, null, cod, den, 'Str. A', 'PVC', null, null, 'M', cant, 0, 0, 'conducta', 'lungime', citat])!
+
+Deno.test('PR-A: rândurile corecte rămân dovedite (Dn 63 cu 300, Dn 110 cu 120)', async () => {
+  const a = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC D= 63 MM', 300, '001 SA11D1 [ 2] M 300.000'), ctxF3))!
+  const b = (await normalizeazaRand(randF3('SA11H1', 'TEAVA PVC D= 110 MM', 120, '002 SA11H1 [ 2] M 120.000'), ctxF3))!
+  assertEquals([a.obs.pozitie_dovedita, a.obs.dn_mm, a.obs.dn_ambiguu], [true, [63], false])
+  assertEquals([b.obs.pozitie_dovedita, b.obs.dn_mm, b.obs.dn_ambiguu], [true, [110], false])
+})
+Deno.test('PR-A: riscul DN63/DN110 — denumirea Dn 110 lipită de cantitatea rândului Dn 63 → nedovedit (dn_alt_rand)', async () => {
+  const n = (await normalizeazaRand(randF3(null, 'TEAVA PVC D= 110 MM', 300, '001 SA11D1 [ 2] M 300.000'), ctxF3))!
+  assertEquals([n.obs.pozitie_dovedita, n.obs.dn_mm], [false, [110]])
+  assertEquals(n.note.includes('pozitie:dn_alt_rand'), true)
+})
+Deno.test('PR-A: codul de articol al altui rând → nedovedit (cod_alt_rand); un „cod” fără cifre nu se verifică', async () => {
+  const n = (await normalizeazaRand(randF3('SA11H1', 'TEAVA PVC D= 63 MM', 300, '001 SA11D1 [ 2] M 300.000'), ctxF3))!
+  assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:cod_alt_rand')], [false, true])
+  const m = (await normalizeazaRand(randF3('a)', 'TEAVA PVC D= 63 MM', 300, '001 SA11D1 [ 2] M 300.000'), ctxF3))!
+  assertEquals(m.obs.pozitie_dovedita, true)
+})
+Deno.test('PR-A: blocul rândului se oprește la ancora următoare și nu urcă deasupra (denumirea de sus = alt rând)', async () => {
+  // continuarea Dn 110 e sub rândul 002; rândul 001 nu „vede” Dn 110 (se oprește la ancora 002)
+  const t = '001 SA11D1 [ 2] M 300.000\n002 SA11H1 [ 2] M 120.000\nTEAVA PVC D= 110 MM\n'
+  const ctx = { ...ctxF3, textDoc: t, felie: t }
+  const n = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC D= 110 MM', 300, '001 SA11D1 [ 2] M 300.000'), ctx))!
+  assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true])
+  // denumirea DEASUPRA cantității: nu e găsită (fail-closed)
+  const sus = 'TEAVA PVC D= 63 MM\n001 SA11D1 [ 2] M 300.000\n'
+  const s = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC D= 63 MM', 300, '001 SA11D1 [ 2] M 300.000'), { ...ctxF3, textDoc: sus, felie: sus }))!
+  assertEquals(s.obs.pozitie_dovedita, false)
+})
+Deno.test('PR-A: rândul de tabel markdown = linia lui; un Dn în plus pe rând → dn_ambiguu, dovedit', async () => {
+  const t = '| Nr | Denumire | UM | Cant |\n|---|---|---|---|\n| 1 | Conducta PE100 De 90 | m | 120 | racord De 63 |\n| 2 | Conducta PE100 De 110 | m | 80 |\n'
+  const ctx = { ...ctxF3, textDoc: t, felie: t, conventie: 'ro' as const, rol_sursa: 'cs' }
+  const n = (await normalizeazaRand(randDinTablou([1, null, null, null, 'Conducta PE100 De 90', null, 'PE100', null, null, 'm', 120, 0, 0,
+    'conducta', 'lungime', '| 1 | Conducta PE100 De 90 | m | 120 |'])!, ctx))!
+  assertEquals([n.obs.pozitie_dovedita, n.obs.dn_mm, n.obs.dn_ambiguu], [true, [90], true])
+})

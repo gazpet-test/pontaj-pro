@@ -215,3 +215,41 @@ export function pozitieDovedita(p: {
   if (potrivite.length > 1) return nu('token_multiplu', baza)
   return { pozitie_dovedita: true, valoare_ambigua: false, motiv: 'ok', ...baza, cantitate_offset: potrivite[0].de_la }
 }
+
+// ── rândul sursei în jurul cantității (val 2, PR-A „dovada pe rând”): codul și Dn-ul se verifică pe rândul cantității, nu oriunde în
+// citatul ales de model (riscul DN63/DN110: o cantitate dovedită lângă denumirea altui rând). Rândul de tabel markdown („|…|”) = linia
+// lui. Altfel (listă pdftotext / F3: „003 SA11G1 [ 2] M 1160.000” urmat de denumirea pe liniile de dedesubt) = linia cantității + liniile
+// de continuare de DEDESUBT, până la o linie goală sau la următoarea linie-ancoră (un token numeric cu UM lângă el = rândul următor),
+// cel mult LINII_CONTINUARE. Nu se urcă deasupra: acolo e denumirea rândului precedent (fail-closed: denumirea scrisă deasupra cantității
+// nu e găsită → rândul rămâne nedovedit, nu primește Dn-ul vecinului).
+export const LINII_CONTINUARE = 4
+const RE_TOTAL_RAND = /\btotal[ea]?\s*=/i
+// doar unitățile reale fac o linie ancoră (umNorm întoarce și cuvinte oarecare: „TEAVA 20.80” nu e un rând nou)
+const UM_ANCORA = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'l', 'set', 'ora', 'h'])
+export function blocRand(doc: string, off: number): { linie: string; bloc: string; de_la: number; pana_la: number } {
+  const ls = doc.lastIndexOf('\n', off - 1) + 1
+  const le0 = doc.indexOf('\n', off)
+  const le = le0 < 0 ? doc.length : le0
+  const linie = doc.slice(ls, le)
+  if ((linie.match(/\|/g) || []).length >= 2) return { linie, bloc: linie, de_la: ls, pana_la: le }
+  let pana = le
+  for (let k = 0; k < LINII_CONTINUARE && pana < doc.length; k++) {
+    const a = pana + 1
+    const b0 = doc.indexOf('\n', a)
+    const b = b0 < 0 ? doc.length : b0
+    const l = doc.slice(a, b)
+    if (!l.trim() || l.startsWith('⟦PAGINA')) break
+    // ancora rândului următor: un token numeric cu UM lângă el (nu și rândul „0.000 0 Total=” al aceluiași articol)
+    if (!RE_TOTAL_RAND.test(l) && tokeniNumerici(l, a).some((t) => [...umLanga(doc, t.de_la, t.pana_la)].some((u) => UM_ANCORA.has(u)))) break
+    pana = b
+  }
+  return { linie, bloc: doc.slice(ls, pana), de_la: ls, pana_la: pana }
+}
+
+// codul de articol al modelului, comparabil: fără spații, majuscule; doar coduri „reale” (≥ 3 caractere, cel puțin o cifră și o literă
+// sau ≥ 5 cifre) — un „1” sau „a)” nu se verifică
+export function codComparabil(v: unknown): string | null {
+  const t = String(v ?? '').replace(/[\s*]/g, '').toUpperCase()
+  if (t.length < 3 || t.length > 40 || !/^[A-Z0-9][A-Z0-9.\-\/]*$/.test(t)) return null
+  return /\d/.test(t) && (/[A-Z]/.test(t) || /\d{5,}/.test(t)) ? t : null
+}
