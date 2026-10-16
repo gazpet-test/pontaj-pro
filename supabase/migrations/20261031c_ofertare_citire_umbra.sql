@@ -88,6 +88,9 @@ BEGIN
       USING ERRCODE = '55000';
   END IF;
   IF TG_OP = 'UPDATE' AND NEW.stare = 'promovat' THEN
+    IF OLD.stare IS DISTINCT FROM 'bun' THEN  -- se promoveaza doar o citire evaluata ca buna (Copilot r3 P2)
+      RAISE EXCEPTION 'ofertare_citire_umbra %: se promoveaza doar din starea bun', OLD.id USING ERRCODE = '55000';
+    END IF;
     IF current_setting('gazpet.promovare_umbra', true) IS DISTINCT FROM 'UMBRA_PROMOVARE:' || txid_current()
        OR EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.promovare_umbra=%') THEN
       RAISE EXCEPTION 'ofertare_citire_umbra %: promovarea doar prin fluxul CAS armat pe tranzactie', OLD.id USING ERRCODE = '55000';
