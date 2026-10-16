@@ -14,7 +14,10 @@ import re
 from .compare import TOKEN, segmente_provenienta, segments, cell_key, norm_word
 
 CLASE = ('HIGH_RISK', 'MARCAJE', 'DEFER', 'OM')
-CIFRA = re.compile(r'[0-9]')
+class _Cifra:  # orice caracter numeric Unicode (², ³, fullwidth, arabe ...), nu doar ASCII (Copilot / Jakarinos, PR #739)
+    @staticmethod
+    def search(s): return any(ch.isnumeric() for ch in s)
+CIFRA = _Cifra()
 
 
 def _continut(text, mask):

@@ -107,7 +107,8 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
   const limitaArbitru = limitaCost(octetiText, dim.w, dim.h, MODEL_ARBITRU)
   const suma = doarHaiku ? rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU))
     : rotunjesteSus(limitaCost(octetiText, dim.w, dim.h, MODEL_FILTRU) + limitaArbitru)
-  if (doarHaiku && /[0-9]/.test(dz.citire_lighton + dz.citire_mineru)) return refuz('mod_cifre')  // înaintea rezervării: nimic cheltuit
+  // orice caracter numeric Unicode (\p{N}: 0-9, ², ³, cifre fullwidth / arabe ...), nu doar ASCII (Copilot r1 P1-1, Jakarinos r1 P2)
+  if (doarHaiku && /\p{N}/u.test(dz.citire_lighton + dz.citire_mineru)) return refuz('mod_cifre')  // înaintea rezervării: nimic cheltuit
   if (suma > 1) return refuz('suma')
   if (dim.w > 8000 || dim.h > 8000) return refuz('latura')  // API-ul refuză laturi peste 8000 px (review #712 Jakarinos P2)
   if (dz.tip === 'banda_intreaga') return refuz('banda')  // apărare în adâncime: clientul o trimite la om (decizie Razvan 14.10)
@@ -155,7 +156,10 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
     '[' + (r.model === MODEL_FILTRU ? 'Haiku' : 'Sonnet') + ': ' + r.d.decizie + ', ' + (r.estimat ? 'usage lipsa, cost estimat ' : r.tin + '/' + r.tout + ' tok, ') + r.cost.toFixed(4) + '$]'
   const cifre = diferentaNumerica(dz.citire_lighton, dz.citire_mineru) || item.diferenta_numerica === true
   let final = r1
-  if (doarHaiku) final = { ...r1, d: { ...r1.d, motiv: taie200(detaliu(r1) + ' [doar_haiku] ' + r1.d.motiv) } }
+  // doar_haiku: o propunere de text cu caractere numerice nu e un DEFER (nici una inventată de model): needs_human, restant (Jakarinos r1)
+  if (doarHaiku && r1.d.decizie === 'text_propus' && /\p{N}/u.test(r1.d.text)) {
+    final = { ...r1, d: { ...r1.d, decizie: 'needs_human', text: '', motiv: taie200(detaliu(r1) + ' [doar_haiku] text propus cu cifre: la om') } }
+  } else if (doarHaiku) final = { ...r1, d: { ...r1.d, motiv: taie200(detaliu(r1) + ' [doar_haiku] ' + r1.d.motiv) } }
   else if (r1.d.decizie === 'needs_human' || cifre) {
     // ce a rămas din rezervare trebuie să acopere limita de sus a lui Sonnet; altfel nu se mai cheltuie: depășire cu ce s-a consumat
     if (incapeArbitrul(r1.cost, limitaArbitru, suma)) {

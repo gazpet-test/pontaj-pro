@@ -211,12 +211,34 @@ class Client(unittest.TestCase):
         with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, max_apeluri=5, doar_haiku=True)        # fara --triere
         with self.assertRaises(ValueError): C.arbitreaza(rdir, self.edge, triere=True, doar_haiku=True)          # fara proba
         self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '',
-                                                         'motiv': 'nesigur', 'e_cantitate': False, 'anomalie_separator': False,
+                                                         'motiv': '[Haiku: needs_human] [doar_haiku] nesigur', 'e_cantitate': False, 'anomalie_separator': False,
                                                          'arbitru_model': 'claude-haiku-5-5', 'prompt_versiune': 'arb-v2', 'cost_usd': 0.0005}, 'arbitraj_id': 1})
         a = C.arbitreaza(rdir, self.edge, minim=1, max_apeluri=50, triere=True, doar_haiku=True)
         self.assertEqual((a['stare'], a['apeluri_acum'], a['needs_human_claude']), ('proba', nb, 0))  # needs_human nesocotit, fara oprire
         corpuri = [x for f, x in self.edge.calls if f == 'ofertare-ocr-arbitreaza']; self.assertTrue(all(x.get('mod') == 'doar_haiku' for x in corpuri))
         self.assertEqual(self.edge.stare, 'citita')
+    def test_doar_haiku_marcaj_fals_nu_scoate_din_prag(self):
+        # Copilot r1 P1-2 / Jakarinos r1 P1: un id in decizii_doar_haiku.jsonl fara tentativa reala nu scoate o decizie normala din prag
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'needs_human', 'text': '',
+                                                         'motiv': 'nesigur', 'e_cantitate': True, 'anomalie_separator': False,
+                                                         'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 'arb-v2', 'cost_usd': 0.01}, 'arbitraj_id': 1})
+        C.arbitreaza(rdir, self.edge, minim=50, max_apeluri=1, seed='x')
+        d = rdir / ('d%d' % DOC); dec = [json.loads(l) for l in (d / 'decizii.jsonl').read_text(encoding='utf-8').splitlines() if l.strip()]
+        C._adauga(d / 'decizii_doar_haiku.jsonl', {'id': dec[0]['id'], 'a': 'inexistent'})
+        st = C.stare_arbitraj(rdir, C.rulare(rdir), {}); self.assertEqual((st['claude'], st['needs_human_claude']), (1, 1))
+    def test_doar_haiku_necunoscuta_nu_intra_in_prag(self):
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungimea conductei este mare', 'lungimea conductel este mare')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (502, {'error': 'gateway'})
+        with self.assertRaises(C.EdgeError): C.arbitreaza(rdir, self.edge, max_apeluri=5, triere=True, doar_haiku=True)
+        st = C.stare_arbitraj(rdir, C.rulare(rdir), {})
+        self.assertEqual(st['necunoscute'], 0); self.assertTrue(any(v['necunoscute'] for v in st['per_doc'].values()))  # la om, nu la prag
+    def test_doar_haiku_sare_peste_superscript(self):
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'suprafata in m² mare', 'suprafata in m³ mare')
+        C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        a = C.arbitreaza(rdir, self.edge, max_apeluri=50, triere=True, doar_haiku=True); self.assertEqual(a['apeluri_acum'], 0)
     def test_doar_haiku_sare_peste_cifre(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m')
         C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)

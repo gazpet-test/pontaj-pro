@@ -324,3 +324,22 @@ Deno.test('doar_haiku: mod necunoscut sau chei în plus = 400, fără nicio citi
     const r = await arbitreaza(cerere(corpDe(it, extra)), m); assert.equal(r.status, 400); assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_dezacord_arbitraj'))
   }
 })
+
+Deno.test('doar_haiku: cifre Unicode (², fullwidth, arabe) în citiri = refuz înaintea rezervării', async () => {
+  for (const [a, b] of [['suprafata m²', 'suprafata m³'], ['lungime １２', 'lungime １３'], ['١٠ m', '٢٠ m']]) {
+    const it = await itemDeTest({ citire_lighton: a, citire_mineru: b, diferenta_numerica: false })
+    const { m, apeluri, cereriApi } = mediu(it)
+    const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+    assert.equal(r.status, 422, a); assert.equal(j.refuz, 'mod_cifre'); assert.equal(cereriApi.length, 0)
+    assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_rezerva'))
+  }
+})
+
+Deno.test('doar_haiku: text_propus cu cifre devine needs_human (nu se acceptă o cifră inventată pe calea ieftină)', async () => {
+  const it = await itemDeTest({ citire_lighton: 'masuri de protectie', citire_mineru: 'masuri de protectle', diferenta_numerica: false })
+  const tp = { text: JSON.stringify({ decizie: 'text_propus', text: 'masuri de protectie 12', motiv: 'corectat', e_cantitate: false, anomalie_separator: false }) }
+  const { m, apeluri } = mediu(it, { api: tp })
+  const r = await arbitreaza(cerere(corpDe(it, { mod: 'doar_haiku' })), m); const j = await r.json()
+  assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(j.decizie.decizie, 'needs_human'); assert.equal(j.decizie.text, '')
+  assert.equal(apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj.decizie, 'needs_human')
+})
