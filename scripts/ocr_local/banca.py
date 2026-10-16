@@ -226,6 +226,7 @@ def _raspuns_codex(log):
     de dupa ULTIMA linie 'codex', pana la 'tokens used'; liniile de dupa BRIEF_END pentru audit). Brief-ul nu intra in niciuna."""
     L = log.splitlines()
     k = max((i for i, l in enumerate(L) if l.strip() == 'BRIEF_END'), default=-1)
+    if k < 0: return None, ['exec (log fara BRIEF_END: nu se poate audita)']  # log incomplet = lot invalid
     lin = [l.strip() for l in L[k + 1:]]
     ic = [i for i, l in enumerate(lin) if l == 'codex']
     if not ic: return None, lin
@@ -264,6 +265,7 @@ def _loc(s): return ''.join(str(s if s is not None else '').split())
 
 
 SEDILA = str.maketrans('şţŞŢ', 'șțȘȚ')
+ANCORA_MIN = 8  # caractere fara spatii; sub atat, ancora transcrisa mai scurt nu mai identifica locul
 
 
 def _norm_celule(r):
@@ -277,6 +279,7 @@ def _ancora_ok(x, y, sens):
     x, y = x.translate(SEDILA), y.translate(SEDILA)
     if x == y: return True
     if not x or not y or x.startswith('(') or y.startswith('('): return False
+    if min(len(x), len(y)) < ANCORA_MIN: return False  # o ancora prea scurta poate fi sufixul / prefixul altui loc (Jakarinos #721 r2)
     return (x.endswith(y) or y.endswith(x)) if sens < 0 else (x.startswith(y) or y.startswith(x))
 
 
