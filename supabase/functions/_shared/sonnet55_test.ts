@@ -46,3 +46,21 @@ Deno.test('Sonnet 5.5: toate cele 18 funcții cer claude-sonnet-5-5; claude-sonn
     for (const l of linii) assert.ok(/ALIAS/.test(l), f + ': claude-sonnet-5 în afara aliasului: ' + l.trim())
   }
 })
+
+// Jakarinos r1 #755 (P2): rata cache read pe Sonnet 5.5. Skill-ul claude-api (Migrating to Claude Sonnet 5.5 + models.md): Sonnet 5.5
+// = prețurile Sonnet 5 — 2 / 10 $ pe 1M, cache write 5 min 2,50 (1,25×), cache read 0,20 (0,1×). Doar Opus 5.5 are 0,05× (0,20 pe
+// 4 $) și Fable 5.1 0,025×. Testul evaluează FORMULA REALĂ din genereaza-capitol (singura funcție atinsă cu cache) pe un cache hit.
+Deno.test('Sonnet 5.5, cache: genereaza-capitol taxează cache read 0,20 $/MTok și cache write 2,50 $/MTok (formula din sursă, cache hit)', () => {
+  const s = sursa('ofertare-genereaza-capitol/index.ts')
+  const pret = s.match(/^const PRICE_IN = ([0-9.]+) \/ 1e6, PRICE_OUT = ([0-9.]+) \/ 1e6/m)
+  assert.ok(pret, 'PRICE_IN / PRICE_OUT negăsite'); const PRICE_IN = Number(pret![1]) / 1e6, PRICE_OUT = Number(pret![2]) / 1e6
+  const f = s.match(/cost \+= (\(u\.input_tokens \|\| 0\) \* PRICE_IN \+ cacheW \* PRICE_IN \* [0-9.]+ \+ cacheR \* PRICE_IN \* [0-9.]+ \+ \(u\.output_tokens \|\| 0\) \* PRICE_OUT)/)
+  assert.ok(f, 'formula de cost negăsită')
+  const cost = new Function('u', 'cacheW', 'cacheR', 'PRICE_IN', 'PRICE_OUT', 'return ' + f![1]) as (u: any, w: number, r: number, i: number, o: number) => number
+  const aproape = (a: number, b: number) => Math.abs(a - b) < 1e-9
+  // cache hit: 1M tokeni citiți din cache, 2.000 necache-uiți, 500 ieșire
+  assert.ok(aproape(cost({ input_tokens: 2000, output_tokens: 500 }, 0, 1_000_000, PRICE_IN, PRICE_OUT), 2000 * 2e-6 + 0.20 + 500 * 10e-6))
+  assert.ok(aproape(cost({}, 0, 1_000_000, PRICE_IN, PRICE_OUT), 0.20))          // cache read 0,20 $/MTok
+  assert.ok(aproape(cost({}, 1_000_000, 0, PRICE_IN, PRICE_OUT), 2.50))          // cache write 5 min 2,50 $/MTok
+  assert.ok(aproape(cost({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, 0, 0, PRICE_IN, PRICE_OUT), 12))  // 2 + 10
+})
