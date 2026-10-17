@@ -429,7 +429,7 @@ Deno.serve(async (req: Request) => {
     // INTERDICȚIILE 3, 4, 5 la scriere (scriere.ts): întâi urma pentru cerințele neconfirmate, apoi textul condiționat de versiune;
     // textul nescris → urma închisă. Fix 17.10.2026: ordinea inversă + `obsId` citit înainte de `let` dădeau ReferenceError pe conflict.
     const sc = await scrieCapitolCuUrma(supabase, { capId, licitatieId: cap.licitatie_id, versiune: cap.versiune || 1, text, neconfirmate, actorUid })
-    if (!sc.ok) return fail(sc.mesaj, sc.motiv === 'conflict' ? { conflict: true, versiune_asteptata: cap.versiune || 1 } : sc.motiv === 'fara_urma' ? { fara_urma: true } : {})
+    if (!sc.ok) return fail(sc.mesaj, { ...(sc.motiv === 'conflict' ? { conflict: true, versiune_asteptata: cap.versiune || 1 } : sc.motiv === 'fara_urma' ? { fara_urma: true } : {}), ...(sc.urma_neinchisa ? { urma_neinchisa: sc.urma_neinchisa } : {}) })
     const obsId = sc.obsId
 
     const goluri = (text.match(/\[DE COMPLETAT:/g) || []).length

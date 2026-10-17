@@ -4,12 +4,14 @@
 // Rezultatul era ReferenceError (TDZ), prins de catch-ul general ca „Eroare neasteptata”: mesajul de conflict (INTERDICȚIA 4) nu
 // ajungea la om. În plus, dacă urma eșua, textul era deja scris, deși mesajul spunea „NU s-a salvat”. Acum ordinea e cea din
 // comentariul INTERDICȚIEI 5: întâi urma, apoi textul. Urma eșuată → textul NU se scrie. Textul nescris (conflict / eroare) →
-// urma se închide ('rezolvata'), ca să nu rămână o observație despre un text inexistent.
+// urma se închide ('rezolvata' + rezolvat_la + raspuns, cum cere CHECK-ul tabelei), ca să nu rămână o observație despre un text
+// inexistent; dacă închiderea eșuează, eroarea se loghează și pleacă în răspuns (urma_neinchisa), nu se înghite.
 type Bd = { from: (t: string) => any }
 export type Cerinta = { id: number; text_cerinta?: string | null }
+export type UrmaNeinchisa = { obsId: number; eroare: string }
 export type Rezultat =
   | { ok: true; obsId: number | null }
-  | { ok: false; motiv: 'fara_urma' | 'eroare' | 'conflict'; mesaj: string }
+  | { ok: false; motiv: 'fara_urma' | 'eroare' | 'conflict'; mesaj: string; urma_neinchisa?: UrmaNeinchisa }
 
 export async function amprenta(c: Cerinta): Promise<string> {
   // SHA-256 COMPLET (Copilot 24.09: identificarea exactă a intrării folosite; Web Crypto n-are MD5).
@@ -45,11 +47,23 @@ export async function scrieCapitolCuUrma(supabase: Bd, p: {
   const { data: scris, error: eUpd } = await supabase.from('ofertare_pt_capitole')
     .update({ continut: p.text, sursa: 'ai' }).eq('id', p.capId).eq('versiune', p.versiune)
     .select('id')
-  if (eUpd || !scris?.length) {
-    // urma nu descrie nicio versiune scrisă → o închidem, ca să nu rămână o observație despre un text inexistent
-    if (obsId) await supabase.from('ofertare_pt_observatii').update({ stare: 'rezolvata', raspuns: 'generarea nu s-a salvat (conflict de versiune / eroare la scriere)' }).eq('id', obsId)
+  let urma: UrmaNeinchisa | undefined
+  if ((eUpd || !scris?.length) && obsId) {
+    // urma nu descrie nicio versiune scrisă → o închidem, ca să nu rămână o observație despre un text inexistent.
+    // CHECK ofertare_pt_observatii_inchidere_chk (20260913_ofertare_pt_revizii.sql): stare <> 'deschisa' cere rezolvat_la + raspuns
+    // (Jakarinos r1 #756 P1: fără rezolvat_la UPDATE-ul era respins, eroarea ignorată, urma rămânea deschisă). Eroarea închiderii NU se
+    // înghite: se loghează și pleacă în răspuns (urma_neinchisa), ca omul să știe că observația a rămas deschisă.
+    const { error: eInch } = await supabase.from('ofertare_pt_observatii').update({
+      stare: 'rezolvata', rezolvat_la: new Date().toISOString(), rezolvat_de: p.actorUid,
+      raspuns: 'generarea nu s-a salvat (conflict de versiune / eroare la scriere)',
+    }).eq('id', obsId)
+    if (eInch) {
+      console.error('[ofertare-genereaza-capitol] urma ' + obsId + ' nu s-a putut închide: ' + (eInch.message || eInch))
+      urma = { obsId, eroare: String(eInch.message || eInch) }
+    }
   }
-  if (eUpd) return { ok: false, motiv: 'eroare', mesaj: 'textul nu s-a salvat: ' + eUpd.message }
-  if (!scris?.length) return { ok: false, motiv: 'conflict', mesaj: 'Capitolul a fost modificat de altcineva cat timp se genera — textul generat NU s-a scris, ca sa nu se piarda munca lui. Reincarca si porneste din nou daca mai e nevoie.' }
+  const nota = urma ? ` ATENȚIE: observația #${urma.obsId} (cerințe neconfirmate) a rămas DESCHISĂ — închiderea a eșuat (${urma.eroare}); închide-o manual.` : ''
+  if (eUpd) return { ok: false, motiv: 'eroare', mesaj: 'textul nu s-a salvat: ' + eUpd.message + nota, ...(urma ? { urma_neinchisa: urma } : {}) }
+  if (!scris?.length) return { ok: false, motiv: 'conflict', mesaj: 'Capitolul a fost modificat de altcineva cat timp se genera — textul generat NU s-a scris, ca sa nu se piarda munca lui. Reincarca si porneste din nou daca mai e nevoie.' + nota, ...(urma ? { urma_neinchisa: urma } : {}) }
   return { ok: true, obsId }
 }
