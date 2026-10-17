@@ -223,7 +223,8 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
           // doar rândurile de lungime, ca să rămână mai puține rânduri de pierdut
           pierdute++
           // mostre în raport (conținut extern = date): primele 3 rânduri pierdute, trunchiate, pentru diagnoză
-          if (mostre.length < 3) mostre.push(JSON.stringify(a).slice(0, 240))
+          // review Jakarinos r4 (P2): serializarea mostrei nu poate întrerupe închiderea feliei (ex. imbricare adâncă → RangeError)
+          if (mostre.length < 3) { let m: string; try { m = JSON.stringify(a) } catch { m = '[mostră neserializabilă]' } mostre.push(String(m).slice(0, 240)) }
           continue
         }
         for (const k of n.note) note[k] = (note[k] || 0) + 1

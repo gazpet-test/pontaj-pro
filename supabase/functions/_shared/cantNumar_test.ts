@@ -165,7 +165,7 @@ Deno.test('limită cunoscută (#754 r2): ultima celulă fără „|” NU se dov
   // celula închisă rămâne cum era: „| M | 120.00 |” sub antet → dovedită
   assertEquals(dov(C6 + '30 | 7334280 TEAVA PE80 DN 90 | M | 120.00 |\n', '| M | 120.00 |', 120), true)
 })
-Deno.test('review Jakarinos r1 (P1): prețul din ultima coloană nu devine cantitate; UM-ul nu vine de pe rândul următor', () => {
+Deno.test('review Jakarinos r1 (P1): prețul din ultima coloană nu devine cantitate; în acest tabel, UM-ul «m» de pe rândul următor nu se atribuie cantității 120 (limita generală rămâne documentată)', () => {
   // ultima coloană = „Pret unitar (lei/m)” → prețul 50 NU e dovedit ca 50 m
   const pret = '| Cod | Denumire | Cantitate | UM | Pret unitar (lei/m)\n|---|---|---|---|---|\n| SA11G1 | TEAVA PE80 DN 90 | 120 | m | 50.00\n'
   assertEquals(dov(pret, '| m | 50.00', 50), false)
