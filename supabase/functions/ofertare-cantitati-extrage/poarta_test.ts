@@ -131,19 +131,39 @@ const UMA = [
 const viitor = () => new Date(Date.now() + 3600e3).toISOString()
 const CERERE = () => ({ id: 7, licitatie_id: 95, scop: 'cant_extragere', stare: 'activa', valabil_pana: viitor(), lot_domeniu: 'toate', lot_nr: [] })
 const BUGET = { licitatie_id: 95, scop: 'cant_extragere', plafon_usd: 5 as number | string, blocat: false, blocat_motiv: null as string | null }
-type OptS = { cereri?: Record<string, unknown>[]; buget?: Record<string, unknown>[]; req?: Request }
+// ACL-ul din 20261031a, simulat (Jakarinos r1 #753, P2): service_role NU are drept pe tabelele TKT-0329 B (cereri, buget, decizii,
+// extrageri, felii) — citirea lor întoarce eroare de permisiune; clientul utilizatorului le vede (policy fn_are_acces_ofertare).
+// `erori` = tabele unde citirea pică (eroare simulată pe acel client). `acces` = jurnalul citirilor pe client, inclusiv cele refuzate.
+const EROARE_ACL = { code: '42501', message: 'permission denied' }
+const DOAR_UTILIZATOR = ['ofertare_ai_cereri', 'ofertare_ai_buget', 'ofertare_cant_doc_decizii', 'ofertare_cant_extrageri', 'ofertare_cant_felii']
+function cuACL<T extends { from: (t: string) => any }>(supa: T, erori: string[], acces: string[]): T {
+  const negat = () => {
+    const b: any = { select: () => b, eq: () => b, in: () => b, order: () => b, limit: () => b, not: () => b, like: () => b,
+      maybeSingle: () => Promise.resolve({ data: null, error: EROARE_ACL }),
+      then: (ok: any, ko: any) => Promise.resolve({ data: null, error: EROARE_ACL }).then(ok, ko) }
+    return b
+  }
+  return { ...supa, from: (t: string) => { acces.push(t); return erori.includes(t) ? negat() : supa.from(t) } } as T
+}
+type OptS = { cereri?: Record<string, unknown>[]; buget?: Record<string, unknown>[]; req?: Request; eroareService?: string[]; eroareUtilizator?: string[] }
 function ruleazaS(uid: string, body: Record<string, unknown>, o: OptS = {}) {
-  const { supa: s0, n } = fakeSupa({ profiles: PROFILE_S, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: DOCS,
-    user_module_access: UMA, ofertare_ai_cereri: o.cereri ?? [CERERE()], ofertare_ai_buget: o.buget ?? [BUGET] })
-  const { supa } = cuPoartaLot(s0, DOCS.map((d) => d.id))
-  const deps = { db: supa, getUser, fetch: fakeFetch(n), chei: { A: 'a', G: 'g', O: 'o' }, dbUtilizator: () => supa }
-  return handler(o.req ?? cerere(uid, body), deps).then(async (r) => ({ status: r.status, corp: await r.text(), n }))
+  // service_role: profiles, licitații, documente, user_module_access — FĂRĂ cereri / buget (nici nu le are în date, nici drept)
+  const { supa: s0, n } = fakeSupa({ profiles: PROFILE_S, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: DOCS, user_module_access: UMA })
+  const accesService: string[] = [], accesUtilizator: string[] = [], jwts: string[] = []
+  const { supa } = cuPoartaLot(cuACL(s0, [...DOAR_UTILIZATOR, ...(o.eroareService ?? [])], accesService), DOCS.map((d) => d.id))
+  // utilizator (authenticated): cererile, bugetul, deciziile — ce îi dă RLS-ul
+  const { supa: u0, n: nU } = fakeSupa({ ofertare_ai_cereri: o.cereri ?? [CERERE()], ofertare_ai_buget: o.buget ?? [BUGET], ofertare_cant_doc_decizii: [] })
+  const usr = cuACL(u0, o.eroareUtilizator ?? [], accesUtilizator)
+  const deps = { db: supa, getUser, fetch: fakeFetch(n), chei: { A: 'a', G: 'g', O: 'o' },
+    dbUtilizator: (jwt: string) => { jwts.push(jwt); return usr } }
+  return handler(o.req ?? cerere(uid, body), deps)
+    .then(async (r) => ({ status: r.status, corp: await r.text(), n, nU, accesService, accesUtilizator, jwts }))
 }
 const S = { licitatie_id: 95, mod: 'structurat', cerere_id: 7 }
 // trecut de poartă = a ajuns în extrageStructurat (răspunsul modului; documentele de test nu au text valid, deci 0 felii)
 const trecut = (r: { status: number; corp: string }) => { assertEquals(r.status, 200, r.corp); assertEquals(JSON.parse(r.corp).mod, 'structurat') }
-const refuzAdmin = (r: { status: number; corp: string; n: any }, motiv: string) => {
-  assertEquals(r.status, 403, r.corp); assertEquals(JSON.parse(r.corp).motiv, motiv); zeroCost(r.n)
+const refuzAdmin = (r: { status: number; corp: string; n: any; nU: any }, motiv: string) => {
+  assertEquals(r.status, 403, r.corp); assertEquals(JSON.parse(r.corp).motiv, motiv); zeroCost(r.n); assertEquals(r.nU.scrieri, 0)
 }
 
 Deno.test('structurat/admin: owner trece (neschimbat)', async () => { trecut(await ruleazaS(OWNER, S)) })
@@ -186,8 +206,37 @@ Deno.test('structurat/admin: editor Ofertare (non-admin) și admin pe alt modul 
     assertEquals(r.status, 403); zeroCost(r.n)
     const j = JSON.parse(r.corp)
     assertEquals(j.error, 'Extragerea costă — o pornește doar ownerul sau responsabilul licitației.'); assertEquals(j.motiv, undefined)
-    assert(!r.n.citiri.includes('ofertare_ai_cereri') && !r.n.citiri.includes('ofertare_ai_buget'), u)
+    for (const t of ['ofertare_ai_cereri', 'ofertare_ai_buget']) assert(!r.accesService.includes(t) && !r.accesUtilizator.includes(t), `${u} ${t}`)
+    assertEquals(r.jwts, [], 'clientul utilizatorului nici nu e creat la poartă pentru ne-admini')
   }
+})
+Deno.test('structurat/admin: poarta citește cererea și bugetul cu clientul UTILIZATORULUI (JWT-ul apelantului), nu cu service_role', async () => {
+  const r = await ruleazaS(ADMIN, S)
+  trecut(r)
+  assertEquals(r.jwts[0], ADMIN, 'primul client de utilizator e creat la poartă, cu JWT-ul apelantului')
+  assertEquals(r.accesUtilizator.slice(0, 2).sort(), ['ofertare_ai_buget', 'ofertare_ai_cereri'])
+  for (const t of ['ofertare_ai_cereri', 'ofertare_ai_buget']) assert(!r.accesService.includes(t), `service_role n-are drept pe ${t}`)
+  assert(r.accesService.includes('user_module_access'), 'adminul se verifică cu service_role (ca profiles)')
+  assert(!r.accesUtilizator.includes('user_module_access'))
+})
+Deno.test('structurat/admin: dovada ACL — dacă cererea / bugetul s-ar citi cu service_role, adminul eligibil ar fi refuzat', async () => {
+  // același scenariu, dar „utilizatorul” are ACL-ul lui service_role: citirea pică → refuz. Poarta trece doar pentru că folosește clientul bun.
+  const r = await ruleazaS(ADMIN, S, { eroareUtilizator: ['ofertare_ai_cereri', 'ofertare_ai_buget'] })
+  refuzAdmin(r, 'cerere')
+})
+Deno.test('structurat/admin: eroare de citire pe clientul utilizatorului -> refuz (fail-closed), zero cost', async () => {
+  refuzAdmin(await ruleazaS(ADMIN, S, { eroareUtilizator: ['ofertare_ai_cereri'] }), 'cerere')
+  refuzAdmin(await ruleazaS(ADMIN, S, { eroareUtilizator: ['ofertare_ai_buget'] }), 'buget_lipsa')
+})
+Deno.test('structurat/admin: eroare de citire pe service_role (user_module_access / profiles) -> refuz ca ne-admin, zero cost', async () => {
+  // user_module_access căzut: adminul nu poate fi dovedit → refuzul vechi, fără client de utilizator
+  const a = await ruleazaS(ADMIN, { ...S }, { eroareService: ['user_module_access'] })
+  assertEquals(a.status, 403); zeroCost(a.n); assertEquals(JSON.parse(a.corp).motiv, undefined); assertEquals(a.jwts, [])
+  // profiles căzut: owner-ul nu mai poate fi dovedit (și nu e admin) → refuz, fail-closed
+  const b = await ruleazaS(OWNER, S, { eroareService: ['profiles'] })
+  assertEquals(b.status, 403); zeroCost(b.n)
+  // profiles căzut pentru un admin: condițiile de admin nu depind de profiles (verificate separat) → trece pe ramura de admin
+  trecut(await ruleazaS(ADMIN, S, { eroareService: ['profiles'] }))
 })
 Deno.test('structurat/admin: anon (fără Authorization / JWT nevalidat de Auth / „Bearer ” gol) -> 401, zero cost', async () => {
   for (const h of [{}, { Authorization: `Bearer ${JWT_FALS_SERVICE}` }, { Authorization: 'Bearer ' }] as Record<string, string>[]) {

@@ -6,7 +6,8 @@
 //   (2) plafonul curent din ofertare_ai_buget pe (licitație, 'cant_extragere') e ≤ 5,00 USD (un plafon > 5 = pus de owner → adminul nu
 //       pornește; owner / responsabil rămân ca acum);
 //   (3) bugetul NU e blocat.
-// Funcție pură (testată în poarta_admin_test.ts + poarta_test.ts); citirile le face handler-ul cu clientul service_role.
+// Funcție pură (testată în poarta_admin_test.ts + poarta_test.ts). Citirile le face handler-ul: user_module_access cu service_role,
+// cererea și bugetul cu clientul UTILIZATORULUI (20261031a revocă service_role pe ele; SELECT doar authenticated, cu fn_are_acces_ofertare).
 // Întoarce null = trece; altfel motivul refuzului. Fail-closed: orice lipsă / valoare neinterpretabilă = refuz.
 export const PLAFON_ADMIN_USD = 5
 

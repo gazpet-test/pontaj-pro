@@ -504,13 +504,19 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
     // 17.10.2026 (decizia Răzvan „B”): un ADMIN Ofertare pornește DOAR pe o cerere activă a licitației, cu plafon ≤ 5 USD și buget
     // neblocat (poarta_admin.ts). Adminul = aceeași interogare ca fn_ofertare_cb_este_admin (20261031d, neapelabilă din API).
     // Ne-adminii primesc exact refuzul de până acum, fără citiri în cereri / buget. Orice eroare de citire = refuz (fail-closed).
+    // Clienții (Jakarinos r1 #753, P1-b): user_module_access cu service_role, ca profiles mai sus și ca celelalte edge-uri cu poartă de
+    // modul (detect_plate_orphan_msgs, extract-talon-ai, ofertare-raspuns-set) — tabelul nu e în lista de REVOKE din 20261031a.
+    // ofertare_ai_cereri / ofertare_ai_buget: 20261031a le REVOCĂ service_role (SELECT doar authenticated, policy fn_are_acces_ofertare(),
+    // pe care un admin Ofertare o îndeplinește) → se citesc cu clientul UTILIZATORULUI, ca în extrageStructurat.
     const { data: uma, error: eUma } = await db.from('user_module_access').select('profile_id')
       .eq('profile_id', uid).eq('module', 'ofertare').eq('access_level', 'admin').limit(1)
     const esteAdmin = !eUma && Array.isArray(uma) && uma.length > 0
     if (!esteAdmin) return json({ error: MESAJ_ADMIN.nu_e_admin }, 403)
+    if (!deps.dbUtilizator) return json({ error: 'configurare: client utilizator lipsă' }, 500)
+    const dbAdmin = deps.dbUtilizator(jwt)
     const [{ data: cer, error: eCer }, { data: bug, error: eBug }] = await Promise.all([
-      db.from('ofertare_ai_cereri').select('id, licitatie_id, scop, stare, valabil_pana').eq('id', cerereId).maybeSingle(),
-      db.from('ofertare_ai_buget').select('plafon_usd, blocat').eq('licitatie_id', licId).eq('scop', 'cant_extragere').maybeSingle(),
+      dbAdmin.from('ofertare_ai_cereri').select('id, licitatie_id, scop, stare, valabil_pana').eq('id', cerereId).maybeSingle(),
+      dbAdmin.from('ofertare_ai_buget').select('plafon_usd, blocat').eq('licitatie_id', licId).eq('scop', 'cant_extragere').maybeSingle(),
     ])
     const motiv = motivRefuzAdmin({ este_admin: true, licitatie_id: licId, cerere_id: cerereId,
       cerere: eCer ? null : cer ?? null, buget: eBug ? null : bug ?? null, acum: Date.now() })
