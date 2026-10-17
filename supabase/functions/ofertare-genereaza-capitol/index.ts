@@ -45,6 +45,7 @@ import { termenRO } from '../_shared/oraRO.ts'
 // în generare (raportate în `cerinte_excluse_lot`); cele 'necunoscut' NU blochează în MVP, dar apar în `cerinte_lot_necunoscut`.
 import { caleBlocata, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'
 import { COLOANE_SURSE, filtreazaClarificari } from '../_shared/provenientaClar.ts'   // proveniența derivatelor (20261025a)
+import { scrieCapitolCuUrma } from './scriere.ts'   // INTERDICȚIILE 3-5 la scriere (fix obsId 17.10.2026)
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
@@ -425,43 +426,11 @@ Deno.serve(async (req: Request) => {
     const text = bucati.join('\n\n')
     const data = rezultate[0].data
 
-    // INTERDICȚIA 3 — sursa='ai' mereu. De aici incolo poarta tine capitolul blocat pana cand
-    // un om il deschide, il citeste si il salveaza (UI-ul pune atunci sursa='om').
-    // INTERDICȚIA 4 (18.09.2026, gasita de o recenzie independenta) — scrierea e conditionata de
-    // VERSIUNEA citita la inceput. Verificarile de mai sus (lacat, text de om) se fac inainte de
-    // apelurile la model, care dureaza minute: daca intre timp un om a editat capitolul, scrierea
-    // dupa `id` ii stergea munca fara sa se vada. Acum, daca versiunea s-a schimbat, nu scriem.
-    const { data: scris, error: eUpd } = await supabase.from('ofertare_pt_capitole')
-      .update({ continut: text, sursa: 'ai' }).eq('id', capId).eq('versiune', cap.versiune || 1)
-      .select('id')
-    if (eUpd || !scris?.length) {
-      // urma nu descrie nicio versiune scrisă → o închidem, ca să nu rămână o observație despre un text inexistent
-      if (obsId) await supabase.from('ofertare_pt_observatii').update({ stare: 'rezolvata', raspuns: 'generarea nu s-a salvat (conflict de versiune / eroare la scriere)' }).eq('id', obsId)
-    }
-    if (eUpd) return fail('textul nu s-a salvat: ' + eUpd.message)
-    if (!scris?.length) return fail(
-      'Capitolul a fost modificat de altcineva cat timp se genera — textul generat NU s-a scris, ca sa nu se piarda munca lui. Reincarca si porneste din nou daca mai e nevoie.',
-      { conflict: true, versiune_asteptata: cap.versiune || 1 })
-
-    // INTERDICȚIA 5, urma persistentă — ÎNAINTE de scrierea textului: observație DESCHISĂ pe capitol cu actorul care a
-    // confirmat, id-urile cerințelor neconfirmate și amprenta (MD5) textelor trimise modelului. Dacă urma nu se poate scrie,
-    // textul NU se salvează (refuz) — flagul cu_neconfirmate nu înlocuiește urma. Costul modelului e deja plătit; e prețul
-    // corect față de un capitol „generat complet" fără urmă.
-    let obsId: number | null = null
-    if (neconfirmate.length) {
-      const amprente = await Promise.all(neconfirmate.map(async (c: any) => {
-        // SHA-256 COMPLET (Copilot 24.09: identificarea exactă a intrării folosite; Web Crypto n-are MD5).
-        const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(c.text_cerinta || '')))
-        return `#${c.id}:sha256:${Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('')}`
-      }))
-      const { data: obsRow, error: eObs } = await supabase.from('ofertare_pt_observatii').insert({
-        licitatie_id: cap.licitatie_id, capitol_id: capId, cerut_de: actorUid, stare: 'deschisa',
-        text: `⚠️ Generare v${(cap.versiune || 1) + 1} cu ${neconfirmate.length} cerințe NECONFIRMATE de om (fără E2), confirmată explicit de ${actorUid || 'service_role'}: ${amprente.join(', ')} (id:sha256 al textului trimis modelului). ` +
-              'Răspunsurile la ele nu sunt bază verificată: confirmă cerințele în registru (sau exceptează-le) și regenerează / corectează textul înainte de depunere.',
-      }).select('id').single()
-      if (eObs || !obsRow?.id) return fail('Urma pentru cerințele neconfirmate nu s-a putut scrie (' + (eObs?.message || '?') + ') — textul generat NU s-a salvat.', { fara_urma: true })
-      obsId = obsRow.id
-    }
+    // INTERDICȚIILE 3, 4, 5 la scriere (scriere.ts): întâi urma pentru cerințele neconfirmate, apoi textul condiționat de versiune;
+    // textul nescris → urma închisă. Fix 17.10.2026: ordinea inversă + `obsId` citit înainte de `let` dădeau ReferenceError pe conflict.
+    const sc = await scrieCapitolCuUrma(supabase, { capId, licitatieId: cap.licitatie_id, versiune: cap.versiune || 1, text, neconfirmate, actorUid })
+    if (!sc.ok) return fail(sc.mesaj, sc.motiv === 'conflict' ? { conflict: true, versiune_asteptata: cap.versiune || 1 } : sc.motiv === 'fara_urma' ? { fara_urma: true } : {})
+    const obsId = sc.obsId
 
     const goluri = (text.match(/\[DE COMPLETAT:/g) || []).length
     return new Response(JSON.stringify({
