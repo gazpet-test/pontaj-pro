@@ -157,7 +157,7 @@ Deno.test({ ...Z, name: 'edge: document pe felii (Sonnet, 2 pagini/felie) → �
   assert(m.exactOnce()); assertEquals(rezultate(m), ['progres', 'succes']); assertEquals(m.g.incercari.length, 2)
 } })
 
-// ── MODEL (15.10.2026): volumele pe Haiku 5.5, criticele rămân pe Sonnet 5; cerere validă pentru modelele 5.x ──────────
+// ── MODEL (15.10.2026; Sonnet 5.5 din 17.10): volumele pe Haiku 5.5, criticele pe Sonnet 5.5; cerere validă pentru modelele 5.x ──────────
 const fara_esantionare = (c: any) => !('temperature' in c) && !('top_p' in c) && !('top_k' in c) && !('output_config' in c)
 Deno.test({ ...Z, name: 'model: volum → claude-haiku-5-5, thinking disabled, fără temperature/top_p/top_k; cost Haiku 5.5 în ai_usage_log', fn: async () => {
   ai.mod = 'ok'; ai.corpuri = []
@@ -172,18 +172,18 @@ Deno.test({ ...Z, name: 'model: volum → claude-haiku-5-5, thinking disabled, f
   assert(Math.abs(log[0].cost_usd - (10 * 0.10 + 5 * 0.50) / 1e6) < 1e-15, 'cost ' + log[0].cost_usd)
 } })
 
-Deno.test({ ...Z, name: 'model: document critic → claude-sonnet-5 (thinking disabled, preț 2/10 ca în _shared/ocrLocal.ts)', fn: async () => {
+Deno.test({ ...Z, name: 'model: document critic → claude-sonnet-5-5 (thinking between_tools — disabled = 400 pe 5.5; preț 2/10 ca în _shared/ocrLocal.ts)', fn: async () => {
   ai.mod = 'ok'; ai.corpuri = []
   const m = mediu(doc({ tip: 'fisa_date' }), pdfMinimal(2))
   await (await cere()).json()
-  assertEquals(ai.corpuri[0].model, 'claude-sonnet-5'); assertEquals(ai.corpuri[0].thinking, { type: 'disabled' }); assert(fara_esantionare(ai.corpuri[0]))
+  assertEquals(ai.corpuri[0].model, 'claude-sonnet-5-5'); assertEquals(ai.corpuri[0].thinking, { type: 'between_tools' }); assert(fara_esantionare(ai.corpuri[0]))
   assert(Math.abs(m.tabele.ai_usage_log[0].cost_usd - (10 * 2 + 5 * 10) / 1e6) < 1e-15, 'cost ' + m.tabele.ai_usage_log[0].cost_usd)
 } })
 
 // ── REGULA DE TABEL + PLAFON (15.10.2026, proba Haiku 4.5 vs 5.5): F3 fără „ | ” pe doc 1294, felii tăiate la 8000 ─────────
 const textCerere = (c: any) => c.messages[0].content.find((b: any) => b.type === 'text').text as string
 const areRegulaTabel = (t: string) => t.includes(REGULA_TABEL) && t.includes('8 | TSD02B1 | 100 mc | 1,11170') && t.includes('INTERZIS') && !t.includes('celule prin " | "')
-Deno.test({ ...Z, name: 'tabel + plafon: Haiku 5.5 → regula TABELE în prompt (text ȘI antet) și max_tokens 12000; Sonnet 5 → aceeași regulă, 8000', fn: async () => {
+Deno.test({ ...Z, name: 'tabel + plafon: Haiku 5.5 → regula TABELE în prompt (text ȘI antet) și max_tokens 12000; Sonnet 5.5 → aceeași regulă, 8000', fn: async () => {
   ai.mod = 'ok'; ai.corpuri = []
   mediu(doc({ pagini_procesate: 8 }), pdfMinimal(10))   // felie de mijloc → PROMPT_TEXT
   await (await cere()).json()
@@ -196,10 +196,10 @@ Deno.test({ ...Z, name: 'tabel + plafon: Haiku 5.5 → regula TABELE în prompt 
   ai.corpuri = []
   mediu(doc({ tip: 'fisa_date' }), pdfMinimal(2))
   await (await cere()).json()
-  assertEquals(ai.corpuri[0].model, 'claude-sonnet-5'); assertEquals(ai.corpuri[0].max_tokens, 8000); assert(areRegulaTabel(textCerere(ai.corpuri[0])))
+  assertEquals(ai.corpuri[0].model, 'claude-sonnet-5-5'); assertEquals(ai.corpuri[0].max_tokens, 8000); assert(areRegulaTabel(textCerere(ai.corpuri[0])))
 } })
 Deno.test({ name: 'tabel + plafon: maxOut pe model; ofertare-citire-test folosește ACEEAȘI regulă și același plafon (fără copie locală)', fn: () => {
-  assertEquals([maxOut('claude-haiku-5-5'), maxOut('claude-sonnet-5'), maxOut('claude-haiku-4-5-20251001'), maxOut('claude-opus-5')], [12000, 8000, 8000, 8000])
+  assertEquals([maxOut('claude-haiku-5-5'), maxOut('claude-sonnet-5-5'), maxOut('claude-sonnet-5'), maxOut('claude-haiku-4-5-20251001'), maxOut('claude-opus-5')], [12000, 8000, 8000, 8000, 8000])
   const src = Deno.readTextFileSync(new URL('../ofertare-citire-test/index.ts', import.meta.url))
   assert(src.includes("import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'"))
   assert(src.includes('${REGULA_TABEL}') && src.includes('max_tokens: maxOut(m.id)') && !src.includes('max_tokens: 8000') && !src.includes('celule prin " | "'))

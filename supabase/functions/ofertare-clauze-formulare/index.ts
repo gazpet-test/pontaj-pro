@@ -29,10 +29,11 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { documentEligibil, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
+import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools (17.10.2026)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
-const MODEL = 'claude-sonnet-5'
-const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
+const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
+const PRICE_IN = 2 / 1e6, PRICE_OUT = 10 / 1e6  // Sonnet 5.5: 2 / 10 $ pe 1M, ca Sonnet 5 (înainte 3 / 15 — greșit, cost raportat +50%)
 const MAX_TEXT = 140_000, FEREASTRA = 1500
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
 
@@ -188,7 +189,7 @@ async function completare(db: any, licId: number, formId: number, KEY: string): 
   const date = { firma, licitatie: lic, echipa_propusa: ech || [], documente_firma_active: acte || [] }
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, max_tokens: 6000, thinking: { type: 'disabled' }, system: PROMPT_COMPLETARE,
+    body: JSON.stringify({ model: MODEL, max_tokens: 6000, thinking: faraGandire(MODEL), system: PROMPT_COMPLETARE,
       messages: [{ role: 'user', content: `FORMULAR: ${f.cod || ''} ${f.denumire} (din ${sursa})\n\n=== TEXTUL FORMULARULUI ===\n${sablon}\n\n=== DATELE GAZPET (JSON) ===\n${JSON.stringify(date)}` }] }),
   })
   const data = await resp.json()
@@ -232,7 +233,7 @@ Deno.serve(async (req: Request) => {
   const { text: txtModel, ferestre } = textPentruModel(text)
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, max_tokens: 12000, thinking: { type: 'disabled' }, system: ce === 'clauze' ? PROMPT_CLAUZE : PROMPT_FORMULARE,
+    body: JSON.stringify({ model: MODEL, max_tokens: 12000, thinking: faraGandire(MODEL), system: ce === 'clauze' ? PROMPT_CLAUZE : PROMPT_FORMULARE,
       messages: [{ role: 'user', content: `DOCUMENT: ${doc.nume_original}${ferestre ? ' (pasaje relevante — documentul e lung)' : ''}\n\n${txtModel}` }] }),
   })
   const data = await resp.json()

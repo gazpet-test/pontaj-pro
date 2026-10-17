@@ -12,7 +12,9 @@ export const PROMPT_VERSIUNE = 'arb-v3'
 // Cascada in ACELASI apel (decizia Razvan 15.10.2026, D varianta A): Haiku 5.5 primul filtru pe orice dezacord; Sonnet 5 cand Haiku e
 // nesigur (needs_human / iesire invalida / usage lipsa) sau dezacordul are diferenta de cifre. Acelasi prompt pentru ambele.
 export const MODEL_FILTRU = 'claude-haiku-5-5'
-export const MODEL_ARBITRU = 'claude-sonnet-5'
+// 17.10.2026: arbitrul trece pe Sonnet 5.5 (același preț 2 / 10 $ și același tokenizer, deci aceeași limită de sus a costului).
+// Deciziile deja plătite pe 'claude-sonnet-5' rămân admise la reconciliere (protocol.json → modele_admise, ca istoric).
+export const MODEL_ARBITRU = 'claude-sonnet-5-5'
 
 export const PROMPT = `Ești arbitrul unei citiri OCR duble pe documente de licitație (Gazpet Instal SRL, construcții de rețele de gaze și apă).
 Aceeași bandă de pagină a fost citită de două modele OCR independente, LightOn și MinerU, care NU sunt de acord într-un loc.

@@ -47,8 +47,8 @@ const MIN_CARACTERE = 200
 // Registrul (100.000 de caractere pe licitatia 1) nu mai intra de 6 ori in prompt.
 // ============================================================================
 
-const MODEL = 'claude-sonnet-5'
-const PRET_IN = 3 / 1e6, PRET_OUT = 15 / 1e6
+const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
+const PRET_IN = 2 / 1e6, PRET_OUT = 10 / 1e6  // Sonnet 5.5: 2 / 10 $ pe 1M, ca Sonnet 5 (înainte 3 / 15 — greșit, cost raportat +50%)
 
 // --- ajutoare -----------------------------------------------------------------
 const enc = new TextEncoder()

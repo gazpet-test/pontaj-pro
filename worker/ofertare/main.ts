@@ -30,7 +30,7 @@ const BUCATA_MAX = Math.max(6_000, Number(env('WORKER_BUCATA_MAX', '20000')) || 
 const SHA = env('WORKER_GIT_SHA', '?'), BRANCH = env('REPO_BRANCH', 'main')
 // Decizie Răzvan 22.09.2026 („2"): documentele din corpus (caiete, memorii, PT, formulare) se citesc cu Sonnet (5x mai ieftin);
 // fișa de date și clarificările rămân pe modelul cozii (Opus implicit), cum a recomandat și Jakarinos.
-const MODEL_CORPUS = env('WORKER_MODEL_CORPUS', 'claude-sonnet-5')
+const MODEL_CORPUS = env('WORKER_MODEL_CORPUS', 'claude-sonnet-5-5')  // Sonnet 5.5 (17.10.2026); 'claude-sonnet-5' din env e mapat tot la 5.5 în core
 const TIPURI_OPUS = new Set(['clarificare', 'raspuns_clarificare'])
 const PAUZA_MS = 15_000, HEARTBEAT_MS = 30_000, VERIFICA_GIT_MS = 5 * 60_000
 const MAX_INCERCARI = 3, LEASE_TICK_MS = 4 * 60_000

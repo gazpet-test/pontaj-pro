@@ -67,7 +67,7 @@ async function callAI(pdfBase64: string, mediaType: string) {
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-5-5',  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
       max_tokens: 8192,
       system: SYSTEM_PROMPT,
       messages: [{

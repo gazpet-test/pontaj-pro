@@ -15,7 +15,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const GRAPH = 'https://graph.facebook.com/v22.0';
 const BUCKET = 'rapoarte-zilnice';
-const MODEL = 'claude-sonnet-5';
+const MODEL = 'claude-sonnet-5-5';  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info',

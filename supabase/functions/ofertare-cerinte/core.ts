@@ -25,9 +25,16 @@ import { exempleFeedback } from './exemple.ts'
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // v9: modelul se poate cere din body. Implicit Opus (cum a fost dintotdeauna); Sonnet costa
 // ~40% mai putin si la citire s-a dovedit la egalitate — de comparat pe extragere inainte de comutare.
-const MODELE: Record<string, { in: number; out: number }> = {
+// 17.10.2026: Sonnet 5.5 la 2 / 10 $ pe 1M (pretul vechi 3 / 15 era gresit: costul raportat ~50% peste cel real).
+export const MODELE: Record<string, { in: number; out: number }> = {
   'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 },
-  'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 },
+  'claude-sonnet-5-5': { in: 2 / 1e6, out: 10 / 1e6 },
+}
+// Cererile vechi (env-ul workerului WORKER_MODEL_CORPUS, coada) pot trimite inca 'claude-sonnet-5': merg pe Sonnet 5.5, nu cad pe Opus.
+const ALIAS: Record<string, string> = { 'claude-sonnet-5': 'claude-sonnet-5-5' }
+export const modelCerut = (m: unknown, implicit: string): string => {
+  const x = typeof m === 'string' ? (Object.hasOwn(ALIAS, m) ? ALIAS[m] : m) : ''   // hasOwn: fara chei mostenite ('constructor')
+  return Object.hasOwn(MODELE, x) ? x : implicit
 }
 const MODEL_IMPLICIT = 'claude-opus-5'
 const BUCATA_MAX_DEFAULT = 150_000          // caractere per apel; sub limita de context, cu loc pentru răspuns
@@ -167,7 +174,7 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
 
   try {
     const { licitatie_id, sectiune, reset, doc_id, bucata, bucata_max, model } = body || {}
-    const MODEL = (typeof model === 'string' && MODELE[model]) ? model : MODEL_IMPLICIT
+    const MODEL = modelCerut(model, MODEL_IMPLICIT)
     const PRICE_IN = MODELE[MODEL].in, PRICE_OUT = MODELE[MODEL].out
     // v7: mărimea bucății se poate cere din body (workerul server trimite 40k): bucăți mai mici =
     // răspuns mai scurt și apel sub 150s (gateway IDLE_TIMEOUT / pg_net timeout); același număr

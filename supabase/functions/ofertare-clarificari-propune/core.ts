@@ -10,8 +10,15 @@ import { termenRO } from '../_shared/oraRO.ts'
 import { caleBlocata, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 import { COLOANE_SURSE, filtreazaClarificari } from '../_shared/provenientaClar.ts'   // proveniența derivatelor (20261025a)
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
-const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
-const MODEL_IMPLICIT = 'claude-sonnet-5'
+// 17.10.2026: Sonnet 5.5 (implicit) la 2 / 10 $ pe 1M — pretul vechi 3 / 15 era gresit (cost raportat ~50% peste cel real).
+export const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5-5': { in: 2 / 1e6, out: 10 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
+export const MODEL_IMPLICIT = 'claude-sonnet-5-5'
+// coada (ofertare_clarificari_coada.model) poate avea inca 'claude-sonnet-5' scris: merge pe Sonnet 5.5
+const ALIAS: Record<string, string> = { 'claude-sonnet-5': 'claude-sonnet-5-5' }
+export const modelCerut = (m: unknown): string => {
+  const x = typeof m === 'string' ? (Object.hasOwn(ALIAS, m) ? ALIAS[m] : m) : ''   // hasOwn: fara chei mostenite ('constructor')
+  return Object.hasOwn(MODELE, x) ? x : MODEL_IMPLICIT
+}
 const MAX_PROPUNERI = 12
 
 const PROMPT = `Ești consilierul de ofertare al unui constructor român de conducte de gaze (rețele de distribuție, conducte de transport, branșamente, SRM), care pregătește o ofertă într-o licitație publică (SEAP, Legea 98/2016 sau 99/2016). Sarcina ta: să propui SOLICITĂRILE DE CLARIFICĂRI pe care ofertantul trebuie să le trimită autorității contractante înainte de termenul de depunere.
@@ -118,7 +125,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
   try {
     const licId = Number(body?.licitatie_id)
     if (!licId) return fail('licitatie_id obligatoriu')
-    const MODEL = (typeof body?.model === 'string' && MODELE[body.model]) ? body.model : MODEL_IMPLICIT
+    const MODEL = modelCerut(body?.model)
     const { data: lic } = await supabase.from('ofertare_licitatii').select('id, nr_anunt, autoritate, obiect, termen_depunere, valoare_estimata, moneda, tip_procedura, criteriu, garantie_participare, loturi').eq('id', licId).single()
     if (!lic) return fail('licitatie negasita')
 

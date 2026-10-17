@@ -39,13 +39,14 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 // deployul a picat cu „Module not found". 2.116.0 are build denonext complet.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
+import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools (17.10.2026)
 import { marcheazaRiscTransport, matriceDinBD, repartizeazaDinMatrice } from './repartizare.ts'
 import { adnoteazaBonus, bonusPersoana, coduriPePersoana, LIMITA_CANDIDATI_CRITERII, liniiFirma, MAX_CRITERII_CARACTERE, PREFERINTE_COD, selecteazaCriterii, SQL_CRITERII, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
-const MODEL = 'claude-sonnet-5'
-const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
+const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
+const PRICE_IN = 2 / 1e6, PRICE_OUT = 10 / 1e6  // Sonnet 5.5: 2 / 10 $ pe 1M, ca Sonnet 5 (înainte 3 / 15 — greșit, cost raportat +50%)
 const MAX_BYTES = 28_000_000
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -261,8 +262,9 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         model: MODEL, max_tokens: 8000,
         // Sonnet 5 gândește implicit (adaptive) și gândirea intră în max_tokens: Potlogi a ieșit gol la 8000.
-        // Extragere structurată — nu avem nevoie de gândire.
-        thinking: { type: 'disabled' },
+        // Extragere structurată — nu avem nevoie de gândire. Sonnet 5.5 (17.10.2026): 'disabled' dă 400, cea mai joasă setare
+        // e 'between_tools' (fără gândire extinsă; doar la effort ≤ high — nu trimitem effort, implicit high).
+        thinking: faraGandire(MODEL),
         messages: [{ role: 'user', content: [
           { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
           { type: 'text', text },

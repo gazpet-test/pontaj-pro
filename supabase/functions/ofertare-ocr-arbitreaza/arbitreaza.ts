@@ -16,6 +16,7 @@ import {
   MAX_TOKENI_IESIRE, octeti, raspuns, rotunjesteSus, sha256Hex,
 } from '../_shared/ocrLocal.ts'
 import { MODEL_ARBITRU, MODEL_FILTRU, PROMPT, PROMPT_VERSIUNE } from './prompt.ts'
+import { faraGandire } from '../_shared/gandire.ts'
 
 const MAX_CORP = 6_000_000
 const MAX_IMAGINE = 3_750_000  // octeți decodați (limita API: 5 MB în base64)
@@ -141,7 +142,9 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
         method: 'POST',
         headers: { 'x-api-key': cheieAi, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: MAX_TOKENI_IESIRE, thinking: { type: 'disabled' }, system: PROMPT,  // fara temperature: Sonnet 5 / Haiku 5.5 dau 400 pe sampling
+          // fara temperature: modelele 5.x dau 400 pe sampling. Gandirea oprita PE MODEL: Haiku 5.5 'disabled', Sonnet 5.5 'between_tools'
+          // ('disabled' = 400 pe Sonnet 5.5; between_tools = 400 pe orice alt model) — acelasi corp merge la ambele in cascada.
+          model, max_tokens: MAX_TOKENI_IESIRE, thinking: faraGandire(model), system: PROMPT,
           messages: [{ role: 'user', content: [
             { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imagine_b64 } },
             { type: 'text', text },
