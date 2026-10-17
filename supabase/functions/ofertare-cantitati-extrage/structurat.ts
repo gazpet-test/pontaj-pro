@@ -12,13 +12,15 @@ import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_sh
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
 
-export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p2', normalizator: 'n3', feliere: 'f1' }
+export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f2' }
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
 // tariful din cod pentru limita superioară a rezervării (developers.openai.com/api/docs/pricing, 11.09.2026) — o depășire reală
 // (tarif schimbat) blochează bugetul la decontare (§4.3)
 export const TARIF = { in: 0.25 / 1e6, out: 2 / 1e6 }
 export const MAX_IESIRE = 16000
-const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
+// f2 (proba Răcari p2): 'lista_alt' (F1 / F2 centralizatoare, C7 manoperă, C8 utilaje, C9 transport) NU se mai trimite la model — nu
+// conține lungimi, iar modelul extrăgea ore / tone ca rânduri (felii pierdute degeaba, cost)
+const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
 const TIPURI_ELIGIBILE = ['lista_cantitati', 'cs_volum', 'fisa_date', 'alta', 'raspuns_clarificare']
 
 export type Raspuns = { status: number; body: Record<string, unknown> }
@@ -50,8 +52,8 @@ Răspunde EXCLUSIV cu JSON: {"r":[ [${CAMPURI_RAND.join(', ')}], ... ]}
 - um: unitatea exactă din document; cantitate: cifra EXACT cum e scrisă în document, ca TEXT (ex. "570.000", "3.995,00"), null dacă lipsește;
 - e_total / e_subtotal: 1 dacă rândul e un total / subtotal declarat, altfel 0;
 - tip_lucrare: conducta | bransament | protectie | alt; masura: lungime | montaj | proba | material | alt;
-- citat: fragmentul copiat VERBATIM, continuu, din document (max. 300 de caractere) care conține cantitatea și unitatea ei — fără „...”, fără prescurtări, fără reformulări; dacă rândul e lung, copiază doar porțiunea continuă din jurul cantității.
-REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document; FIECARE rând are exact ${CAMPURI_RAND.length} elemente, în ordinea de mai sus (null pentru ce lipsește); cantitatea scrisă în rând se dă întotdeauna, nu null. NU include totalurile valorice (RON / lei / valoare) și nici antetele de tabel. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Fără nimic în afara JSON-ului.`
+- citat: copiat VERBATIM, continuu, din document (max. 300 de caractere), fără „...”, fără prescurtări, fără reordonări: într-o listă / un tabel = linia rândului de la ÎNCEPUTUL ei (nr. crt. și cod) până după cantitate și unitate, exact cum apare (ex. "003 SA11G1 [ 2] M 1160.000"); într-un text (caiet de sarcini, memoriu) = propoziția care conține cantitatea, cu denumirea / Dn-ul ei.
+REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document. FIECARE rând e un TABLOU JSON cu exact ${CAMPURI_RAND.length} elemente, în ordinea de mai sus (null pentru ce lipsește) — codul articolului și denumirea în elemente SEPARATE, nu lipite. Exemplu: [12, "F3", "003", "SA11G1", "TEAVA PVC IN CONDUCTE DE DISTRIBUTIE D= 90 MM", "Str. Platanului", "PVC", "D= 90 MM", null, "M", "1160.000", 0, 0, "conducta", "lungime", "003 SA11G1 [ 2] M 1160.000"]. Include DOAR rândurile care au o cantitate scrisă. NU include totalurile valorice (RON / lei / valoare) și nici antetele de tabel. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Fără nimic în afara JSON-ului.`
 
 // limita superioară demonstrabilă a costului unui apel: octeții UTF-8 ai promptului ≥ tokenii de intrare; ieșirea ≤ MAX_IESIRE
 export function sumaRezervata(prompt: string): number {

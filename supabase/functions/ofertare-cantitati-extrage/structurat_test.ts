@@ -127,11 +127,30 @@ Deno.test('review r4 (P2): un rând neserializabil (imbricare adâncă) nu într
   const er = (r.body as any).raport.find((x: any) => x.eroare)
   assert(er.mostre.length === 1 && er.mostre[0].length <= 240)
 })
-Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p2 (normalizatorul neschimbat, n3)', async () => {
+Deno.test('p3: rândul-OBIECT cu cheile exacte = rândul tablou; obiect cu cheie străină / tablou de 15 sau 17 elemente → pierde felia', async () => {
+  const obiect = Object.fromEntries(['pagina', 'tabel', 'rand', 'cod_articol', 'denumire', 'obiect', 'material', 'dn_text', 'sdr', 'um', 'cantitate',
+    'e_total', 'e_subtotal', 'tip_lucrare', 'masura', 'citat'].map((k, i) => [k, RAND[i]]))
+  const a = fals({ raspuns: JSON.stringify({ r: [obiect] }) })
+  await RULEAZA(a)
+  assertEquals([a.apeluri.slice(-2), a.obs().length, a.obs()[0]?.cantitate], [['felie_inchide:gata', 'extragere_inchide:gata'], 1, 1160])
+  for (const rau of [{ ...obiect, ore: 3 }, RAND.slice(1), [...RAND, null]]) {
+    const f = fals({ raspuns: JSON.stringify({ r: [RAND, rau] }) })
+    await RULEAZA(f)
+    assertEquals(f.apeluri.slice(-2), ['felie_inchide:esuat', 'extragere_inchide:esuat'], JSON.stringify(rau).slice(0, 40))
+  }
+})
+Deno.test('f2: secțiunile lista_alt (C7 manoperă / C8 utilaje / C9 / F1–F2) nu se trimit la model', async () => {
+  const text = 'Formularul F3\nLista cu cantitatile de lucrari\n= NR =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 1160.000\nTEAVA D= 90 MM\n0.000 0 Total=\n' +
+    '⟦PAGINA 9⟧\nFORMULAR C7\nLista consumurilor cu mana de lucru\n1 | 102 BETONIST | om-ore | 6.740\n'
+  const f = fals({ docs: [{ ...DOC, text_extras: text }] })
+  await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri.filter((x) => x === 'felie_incepe').length], [1, 1])
+})
+Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n4, feliere f2', async () => {
   const f = fals({ raspuns: 'nu e JSON' })
   const r = await RULEAZA(f)
   assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
-  assert(EXTRACTOR_ID.includes('@p2@n3@'))
+  assert(EXTRACTOR_ID.includes('@p3@n4@f2'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {
