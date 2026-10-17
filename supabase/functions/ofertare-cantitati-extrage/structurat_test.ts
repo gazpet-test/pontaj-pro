@@ -165,7 +165,7 @@ Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelul
   const f = fals({ raspuns: 'nu e JSON' })
   const r = await RULEAZA(f)
   assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
-  assert(EXTRACTOR_ID.includes('@p3@n4@f1'))
+  assert(EXTRACTOR_ID.includes('@p4@n4@f1'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {
@@ -265,4 +265,13 @@ Deno.test('r6: deciziile de rol folosite trec în RPC-ul de grup; context_schimb
     assertEquals([g.ai(), g.apeluri], [0, ['extragere_incepe_grup']])
     assert(JSON.stringify(r.body.raport).includes(refuzGrup))
   }
+})
+
+Deno.test('p4: promptul cere OBIECTE cu exact cheile CAMPURI_RAND, cu un exemplu care se normalizează ca rândul tablou', async () => {
+  const { PROMPT_STRUCTURAT } = await import('./structurat.ts')
+  const p = PROMPT_STRUCTURAT('doc.pdf', 'f3')
+  assert(p.includes('OBIECT JSON') && !p.includes('TABLOU JSON'))
+  const ex = JSON.parse(p.slice(p.indexOf('Exemplu: ') + 9, p.indexOf('}', p.indexOf('Exemplu: ')) + 1))
+  const { CAMPURI_RAND } = await import('../_shared/cantNormalizare.ts')
+  assertEquals(Object.keys(ex), [...CAMPURI_RAND])
 })
