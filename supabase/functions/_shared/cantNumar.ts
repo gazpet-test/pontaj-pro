@@ -110,9 +110,14 @@ const RE_PREFIX_DN = /(?:\bdn|\bde|ø|Ø|φ|\bd\s*=)\s*$/i
 function singurInCelula(t: string, de: number, pana: number): boolean {
   const ls = t.lastIndexOf('\n', de - 1) + 1
   const le0 = t.indexOf('\n', pana)
-  const linie = t.slice(ls, le0 < 0 ? t.length : le0)
-  const st = t.lastIndexOf('|', de - 1), dr = t.indexOf('|', pana)
-  if (!linie.includes('|') || st < ls || dr < 0 || (le0 >= 0 && dr > le0)) return false
+  const le = le0 < 0 ? t.length : le0
+  const linie = t.slice(ls, le)
+  const st = t.lastIndexOf('|', de - 1)
+  let dr = t.indexOf('|', pana)
+  // proba Răcari (C6): ultima celulă a unui rând de tabel poate să nu aibă „|” de închidere („| M.C. | 0.19”) — sfârșitul liniei e
+  // marginea celulei, dar DOAR pe un rând de tabel (≥ 2 separatori) și doar dacă tokenul e chiar ultimul conținut al liniei
+  if ((dr < 0 || dr > le) && (linie.match(/\|/g) || []).length >= 2) dr = le
+  if (!linie.includes('|') || st < ls || dr < 0 || dr > le) return false
   return t.slice(st + 1, de).replace(/[\s*]/g, '') === '' && t.slice(pana, dr).replace(/[\s*]/g, '') === ''
 }
 

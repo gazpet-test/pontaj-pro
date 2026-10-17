@@ -8,11 +8,11 @@
 // Dependențele sunt injectabile (structurat_test.ts): baza (RPC service_role), citirile ca utilizator (tabelele noi au SELECT doar
 // pentru authenticated) și apelul AI.
 import { conventieDocument, type Conventie } from '../_shared/cantNumar.ts'
-import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_shared/cantNormalizare.ts'
+import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex, umNorm } from '../_shared/cantNormalizare.ts'
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
 
-export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p1', normalizator: 'n3', feliere: 'f1' }
+export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p2', normalizator: 'n4', feliere: 'f1' }
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
 // tariful din cod pentru limita superioară a rezervării (developers.openai.com/api/docs/pricing, 11.09.2026) — o depășire reală
 // (tarif schimbat) blochează bugetul la decontare (§4.3)
@@ -50,8 +50,8 @@ Răspunde EXCLUSIV cu JSON: {"r":[ [${CAMPURI_RAND.join(', ')}], ... ]}
 - um: unitatea exactă din document; cantitate: cifra EXACT cum e scrisă în document, ca TEXT (ex. "570.000", "3.995,00"), null dacă lipsește;
 - e_total / e_subtotal: 1 dacă rândul e un total / subtotal declarat, altfel 0;
 - tip_lucrare: conducta | bransament | protectie | alt; masura: lungime | montaj | proba | material | alt;
-- citat: fragmentul EXACT din document (max. 300 de caractere) care conține denumirea, cantitatea și unitatea ei.
-REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document. Fără nimic în afara JSON-ului.`
+- citat: fragmentul copiat VERBATIM, continuu, din document (max. 300 de caractere) care conține cantitatea și unitatea ei — fără „...”, fără prescurtări, fără reformulări; dacă rândul e lung, copiază doar porțiunea continuă din jurul cantității.
+REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document; FIECARE rând are exact ${CAMPURI_RAND.length} elemente, în ordinea de mai sus (null pentru ce lipsește); cantitatea scrisă în rând se dă întotdeauna, nu null. NU include totalurile valorice (RON / lei / valoare) și nici antetele de tabel. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Fără nimic în afara JSON-ului.`
 
 // limita superioară demonstrabilă a costului unui apel: octeții UTF-8 ai promptului ≥ tokenii de intrare; ieșirea ≤ MAX_IESIRE
 export function sumaRezervata(prompt: string): number {
@@ -212,17 +212,28 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       const obs: Record<string, unknown>[] = []
       const note: Record<string, number> = {}
       let pierdute = randuri ? 0 : 1
+      const mostre: string[] = randuri ? [] : [String(r.txt || '').slice(0, 240)]
       for (const a of randuri || []) {
         const rm = randDinTablou(a)
         const n = rm ? await normalizeazaRand(rm, { textDoc: text, felie: f.text, felie_de_la: f.de_la, conventie: ctxConv.conventie,
           lot_domeniu: lot.domeniu, lot_nr: lot.domeniu === 'lista' ? lot.loturi : [], rol_sursa: f.s.rol, rol_decis_de: f.s.decis_de }) : null
-        if (!n) { pierdute++; continue }
+        if (!n) {
+          // proba Răcari: un rând nenormalizabil care, sigur, NU e o lungime (UM citit și diferit de m / km, ex. KG, M.C., BUC., RON)
+          // nu mai pierde felia — se numără separat; orice alt rând nenormalizabil (UM lipsă / lungime / tablou scurt) o pierde în
+          // continuare (un candidat de lungime pierdut nu poate lăsa în urmă o felie „gata”)
+          const um = rm ? umNorm(rm.um) : null
+          if (rm && um !== null && um !== 'm' && um !== 'km') { note['rand_irelevant_ignorat'] = (note['rand_irelevant_ignorat'] || 0) + 1; continue }
+          pierdute++
+          // mostre în raport (conținut extern = date): primele 3 rânduri pierdute, trunchiate, pentru diagnoză
+          if (mostre.length < 3) mostre.push(JSON.stringify(a).slice(0, 240))
+          continue
+        }
         for (const k of n.note) note[k] = (note[k] || 0) + 1
         obs.push(n.obs)
       }
       if (pierdute) {
         await deps.rpc('fn_ofertare_cb_felie_inchide', { p_felie_id: felieId, p_stare: 'esuat' })
-        raport.push({ document_id: d.id, felie: f.nr, eroare: randuri ? `${pierdute} rânduri nenormalizabile — felia nu e completă` : 'raspuns neinterpretabil' })
+        raport.push({ document_id: d.id, felie: f.nr, eroare: randuri ? `${pierdute} rânduri nenormalizabile — felia nu e completă` : 'raspuns neinterpretabil', mostre, note })
       } else {
         const os = await deps.rpc('fn_ofertare_cb_obs_scrie', { p_felie_id: felieId, p_obs: obs })
         if (os.error) {

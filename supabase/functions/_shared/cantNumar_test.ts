@@ -150,3 +150,14 @@ Deno.test('r4: prefixul de diametru recunoscut oricâte spații ar fi („Conduc
   const t = '| Denumire (m) | Cant |\n|---|---|\n| Conducta DN     90 | 120 |\n'
   assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '| Conducta DN     90 | 120 |', cantitate: 90, um: 'm', conventie: 'ro' }).pozitie_dovedita, false)
 })
+
+Deno.test('proba Răcari (C6): ultima celulă fără „|” de închidere — UM din celula vecină; doar pe rând de tabel, doar ultimul token', () => {
+  const t = '| 30 | 7334280 TEAVA PE80 DN 90 | M | 120.00\n'
+  assertEquals(pozitieDovedita({ felie: t, felie_de_la: 0, citat: '| M | 120.00', cantitate: 120, um: 'm', conventie: 'en' }).pozitie_dovedita, true)
+  // tokenul nu e ultimul conținut al liniei → nu e singur în celulă
+  const u = '| 30 | 7334280 TEAVA PE80 DN 90 | M | 120.00 x\n'
+  assertEquals(pozitieDovedita({ felie: u, felie_de_la: 0, citat: '| M | 120.00 x', cantitate: 120, um: 'm', conventie: 'en' }).pozitie_dovedita, false)
+  // un singur separator (nu e rând de tabel) → nu trece peste „|”
+  const v = 'TEAVA M | 120.00\n'
+  assertEquals(pozitieDovedita({ felie: v, felie_de_la: 0, citat: 'M | 120.00', cantitate: 120, um: 'm', conventie: 'en' }).pozitie_dovedita, false)
+})

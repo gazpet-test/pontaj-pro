@@ -103,9 +103,32 @@ Deno.test('eroare SAU excepție la apel → rezervarea „necunoscuta” + felia
 
 Deno.test('un rând nenormalizabil → felia „esuat”, fără observații (nu „gata” cu un candidat pierdut)', async () => {
   const f = fals({ raspuns: JSON.stringify({ r: [RAND, ['trunchiat']] }) })
-  await RULEAZA(f)
+  const r = await RULEAZA(f)
   assertEquals(f.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'deconteaza', 'felie_inchide:esuat', 'extragere_inchide:esuat'])
   assertEquals(f.obs(), [])
+  // proba Răcari: raportul poartă mostre din rândurile pierdute (diagnoză)
+  const er = (r.body as any).raport.find((x: any) => x.eroare)
+  assertEquals([er.mostre.length, er.mostre[0]], [1, '["trunchiat"]'])
+})
+Deno.test('proba Răcari: rândul nenormalizabil SIGUR irelevant (UM citit, nu m / km: KG, M.C., RON) nu pierde felia; UM m sau lipsă o pierde', async () => {
+  const fara = (um: string | null) => [null, null, null, '2100402', 'CIMENT METALURGIC', null, null, null, null, um, '77.50', 0, 0, 'alt', 'material', null]
+  for (const um of ['KG', 'M.C.', 'RON', 'BUC.']) {
+    const f = fals({ raspuns: JSON.stringify({ r: [RAND, fara(um)] }) })
+    const r = await RULEAZA(f)
+    assertEquals(f.apeluri.slice(-2), ['felie_inchide:gata', 'extragere_inchide:gata'], um)
+    assertEquals([f.obs().length, (r.body as any).raport.find((x: any) => x.note)?.note?.rand_irelevant_ignorat], [1, 1], um)
+  }
+  for (const um of ['M', 'ml', null]) {
+    const f = fals({ raspuns: JSON.stringify({ r: [RAND, fara(um)] }) })
+    await RULEAZA(f)
+    assertEquals(f.apeluri.slice(-2), ['felie_inchide:esuat', 'extragere_inchide:esuat'], String(um))
+  }
+})
+Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p2, normalizator n4', async () => {
+  const f = fals({ raspuns: 'nu e JSON' })
+  const r = await RULEAZA(f)
+  assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
+  assert(EXTRACTOR_ID.includes('@p2@n4@'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {
