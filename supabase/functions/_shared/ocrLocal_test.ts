@@ -107,6 +107,8 @@ Deno.test('cost: limita = octeți text + imaginea (formula × 2) + ambalaj + max
   // orice consum real care respectă „un token ≥ un octet” și formula imaginii încape
   assert.ok(costReal(7 + 1500 + 300, MAX_TOKENI_IESIRE, 'claude-sonnet-5') <= lim)
   assert.equal(costReal(3000, 300, 'claude-sonnet-5'), 0.009); assert.equal(costReal(3001, 300, 'claude-sonnet-5'), 0.0091)
+  // Sonnet 5.5 (arbitrul din 17.10.2026): același preț și tokenizer → aceeași limită de sus și același cost real ca Sonnet 5
+  assert.equal(limitaCost(octeti('ăș€'), 1500, 750, 'claude-sonnet-5-5'), lim); assert.equal(costReal(3000, 300, 'claude-sonnet-5-5'), 0.009)
   assert.equal(costReal(3000, 200, 'claude-haiku-5-5'), 0.0004)                    // 0,10 / 0,50 $ pe 1M
   assert.equal(costReal(200_000, 0, 'claude-haiku-5-5'), 0.1)                     // peste 100K tokeni: 0,50 $ pe 1M
   assert.throws(() => costReal(1, 1, 'claude-necunoscut')); assert.throws(() => limitaCost(1, 10, 10, 'claude-necunoscut'))

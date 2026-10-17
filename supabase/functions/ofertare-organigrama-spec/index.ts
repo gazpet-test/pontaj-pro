@@ -22,8 +22,8 @@ import { termenRO } from '../_shared/oraRO.ts'
 import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
-const MODEL = 'claude-sonnet-5'
-const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
+const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
+const PRICE_IN = 2 / 1e6, PRICE_OUT = 10 / 1e6  // Sonnet 5.5: 2 / 10 $ pe 1M, ca Sonnet 5 (înainte 3 / 15 — greșit, cost raportat +50%)
 const FEREASTRA = 1800, MAX_FERESTRE = 12
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
 const faraDiac = (s: unknown) => String(s || '').toLowerCase().replace(/[ăâ]/g, 'a').replace(/î/g, 'i').replace(/[șş]/g, 's').replace(/[țţ]/g, 't')

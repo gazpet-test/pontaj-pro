@@ -592,8 +592,9 @@ class Comparare(unittest.TestCase):
         # versiunea curenta = ultima admisa; cele vechi raman admise doar ca istoric (deciziile deja platite raman valabile):
         # arb-v1 -> arb-v2 (15.10.2026) -> arb-v3 (16.10.2026, regula 10 diacritice)
         self.assertEqual(pol['prompt_versiuni_admise'], ['arb-v1', 'arb-v2', _re.search(r"PROMPT_VERSIUNE = '([^']+)'", ts).group(1)])
-        # cascada (15.10.2026): modelele admise = exact cele doua din edge (filtrul Haiku + arbitrul Sonnet), in aceasta ordine
-        self.assertEqual(pol['modele_admise'], [_re.search(r"MODEL_ARBITRU = '([^']+)'", ts).group(1), _re.search(r"MODEL_FILTRU = '([^']+)'", ts).group(1)])
+        # cascada (15.10.2026): modelele admise = cele doua din edge (arbitrul Sonnet + filtrul Haiku), in aceasta ordine, precedate de
+        # istoric: claude-sonnet-5 (arbitrul pana la 17.10.2026; deciziile deja platite pe el raman valabile, ca arb-v1)
+        self.assertEqual(pol['modele_admise'], ['claude-sonnet-5', _re.search(r"MODEL_ARBITRU = '([^']+)'", ts).group(1), _re.search(r"MODEL_FILTRU = '([^']+)'", ts).group(1)])
     def test_cifre_edge_identice(self):
         # cascada (15.10): edge-ul recalculeaza diferenta de cifre din BD (diferentaNumerica in TS); fisierul de paritate e corect in Python
         from .compare import numeric_diff

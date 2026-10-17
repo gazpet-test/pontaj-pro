@@ -51,8 +51,11 @@ const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
 // 2m53s). Sonnet 5 scrie același capitol în jumătate din timp; generarea în fundal (fără limită)
 // rămâne de făcut — vezi task.
-const MODEL = 'claude-sonnet-5'
-const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
+const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
+const PRICE_IN = 2 / 1e6, PRICE_OUT = 10 / 1e6  // Sonnet 5.5: 2 / 10 $ pe 1M, ca Sonnet 5 (înainte 3 / 15 — greșit, cost raportat +50%)
+// Cache pe Sonnet 5.5 (pagina oficială de prețuri platform.claude.com/docs/en/about-claude/pricing, verificată 17.10.2026 + mailul
+// Anthropic din 17.10): cache hit = 0,05 × intrarea = 0,10 $/MTok (pe Sonnet 5 era 0,1× = 0,20). Scrierea 5 min rămâne 1,25× = 2,50.
+const PRICE_CACHE_READ = 0.10 / 1e6
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -400,7 +403,7 @@ Deno.serve(async (req: Request) => {
         const cacheW = u.cache_creation_input_tokens || 0, cacheR = u.cache_read_input_tokens || 0
         tin += (u.input_tokens || 0) + cacheW + cacheR
         tout += u.output_tokens || 0
-        cost += (u.input_tokens || 0) * PRICE_IN + cacheW * PRICE_IN * 1.25 + cacheR * PRICE_IN * 0.1 + (u.output_tokens || 0) * PRICE_OUT
+        cost += (u.input_tokens || 0) * PRICE_IN + cacheW * PRICE_IN * 1.25 + cacheR * PRICE_CACHE_READ + (u.output_tokens || 0) * PRICE_OUT
       }
       await supabase.from('ai_usage_log').insert({
         function_name: 'ofertare-genereaza-capitol', model: MODEL,

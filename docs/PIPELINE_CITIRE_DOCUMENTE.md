@@ -21,7 +21,7 @@ flowchart TD
   E --> F[Citire GPU<br/>LightOn + MinerU<br/>garda v5]
   F --> G[Comparator literal<br/>+ proveniența marcajelor]
   G --> H{Triere}
-  H -->|HIGH_RISK| I[Arbitru plătit<br/>Haiku 5.5 → Sonnet 5<br/>rezervare + plafon BD + prag §8]
+  H -->|HIGH_RISK| I[Arbitru plătit<br/>Haiku 5.5 → Sonnet 5.5<br/>rezervare + plafon BD + prag §8]
   H -->|DEFER fără cifre| J[Restanță<br/>doar_haiku la decizie separată]
   H -->|MARCAJE / OM| K[La om]
   F -->|bandă oprită de gardă| L[cititor_3<br/>Opus, abonament]
@@ -63,8 +63,8 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 
 | Element | Valoare |
 |---|---|
-| Model, pe tipul documentului | Volumele (caiete, liste, `alta`): **`claude-haiku-5-5`** (din 15.10, commit `6f8a22c`; înainte Haiku 4.5), felii de **8** pagini. Documentele critice (`fisa_date`, `clarificare`, `raspuns_clarificare`, `formular`): **`claude-sonnet-5`**, felii de **2**. Un parametru `model` poate forța alegerea. |
-| Setări | `max_tokens` = `maxOut(model)` din `_shared/transcriereTabel.ts`: **12 000** pe Haiku 5.5, 8 000 în rest. `thinking` dezactivat, fără `temperature`. |
+| Model, pe tipul documentului | Volumele (caiete, liste, `alta`): **`claude-haiku-5-5`** (din 15.10, commit `6f8a22c`; înainte Haiku 4.5), felii de **8** pagini. Documentele critice (`fisa_date`, `clarificare`, `raspuns_clarificare`, `formular`): **`claude-sonnet-5-5`** (din 17.10; înainte `claude-sonnet-5`, același preț), felii de **2**. Un parametru `model` poate forța alegerea. |
+| Setări | `max_tokens` = `maxOut(model)` din `_shared/transcriereTabel.ts`: **12 000** pe Haiku 5.5, 8 000 în rest. Gândirea oprită pe model (`_shared/gandire.ts` → `faraGandire`): Haiku 5.5 `thinking: {type: 'disabled'}`, Sonnet 5.5 `{type: 'between_tools'}` (pe 5.5 `disabled` dă 400; `between_tools` = fără gândire extinsă, doar la effort ≤ high — nu trimitem effort, implicit high). Fără `temperature`. |
 | Prompturi | `PROMPT_ANTET` pe prima felie: JSON cu obiectiv, beneficiar, proiectant, revizie, apoi `===TEXT===`. `PROMPT_TEXT` pe celelalte. Amândouă au **regula de tabel** (`REGULA_TABEL`: o linie pe rând, celulele separate prin ` \| `, inclusiv cele goale) și marcajele `⟦PAGINA N⟧`. |
 | Numerotarea paginilor | Absolută: `pagina_offset` + pagina locală. `asiguraMarcaje` renumerotează secvențial când numărul marcajelor = numărul paginilor din felie. |
 | Reluare | Cel mult 2 apeluri pe invocare. Progresul (`pagini_procesate`, `pagini_felie`) e salvat, iar invocarea următoare continuă de unde a rămas. |
@@ -76,7 +76,7 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 | Sărite | `procesat`; `partial` fără `reia: true`; `plansa` (are calea ei); documentele sparte în bucăți (se citesc bucățile); `ignorat`; documentele neeligibile pe loturi (poarta loturi 20261024b, înainte de orice descărcare sau AI) |
 | Scrierea | **Garda de ingest** (20260930k): `ofertare_ingest_garda_incearca` (token, lease de 10 min, max 5 eșecuri, max 80 de descărcări), apoi `ofertare_ingest_garda_rezultat`. Acesta scrie rândul documentului (coloane din whitelist) în aceeași tranzacție cu verificarea tokenului, deci un token vechi e respins. Apoi proveniența (§1.2). |
 | Cine o pornește | Un utilizator cu acces Ofertare care e **owner sau responsabilul licitației** (poarta pe cheltuială). Sau worker-ul NAS, cu `x-ingest-secret` = `OFERTARE_INGEST_SECRET`, pe coada `ofertare_ingest_coada` (butonul „☁ Pe server”). Cheia anon nu trece niciodată. |
-| Cost | Haiku 5.5: 0,10 / 0,50 USD pe milion de tokeni (intrare / ieșire), sub pragul de 100k tokeni pe cerere; peste, 0,50 / 2,50. Sonnet 5: 2 / 10. Fiecare apel ajunge în `ai_usage_log`. Laboratorul a măsurat ~0,005 USD pe 8 pagini cu Haiku 5.5. |
+| Cost | Haiku 5.5: 0,10 / 0,50 USD pe milion de tokeni (intrare / ieșire), sub pragul de 100k tokeni pe cerere; peste, 0,50 / 2,50. Sonnet 5.5: 2 / 10 (ca Sonnet 5). Fiecare apel ajunge în `ai_usage_log`. Laboratorul a măsurat ~0,005 USD pe 8 pagini cu Haiku 5.5. |
 
 **Worker-ul NAS** (`worker/ofertare/ingest.ts`): consumă aceeași coadă.
 - PDF-urile cu strat de text (≥ 85 % pagini cu text) se scot **gratuit**, cu `pdftotext`, cu aceleași marcaje.
@@ -89,7 +89,7 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 
 | Funcție | Ce face | Model / cost | Cine o pornește | Proveniența |
 |---|---|---|---|---|
-| `ofertare-document-nou-citeste` | Rezumatul unui document apărut ulterior în SEAP → `analiza.citire_noi`. `text_extras` doar dacă era gol (CAS pe `analiza` și pe sha). | `claude-sonnet-5`; PDF-ul întreg doar pentru owner / responsabil / secretul intern | utilizator Ofertare, sau rutina cu `x-radar-secret` | `sinteza_ai` (nu e transcriere, deci nu e valid pentru cantități) |
+| `ofertare-document-nou-citeste` | Rezumatul unui document apărut ulterior în SEAP → `analiza.citire_noi`. `text_extras` doar dacă era gol (CAS pe `analiza` și pe sha). | `claude-sonnet-5-5` (din 17.10), 2 / 10 USD pe milion (înainte logat greșit la 3 / 15); PDF-ul întreg doar pentru owner / responsabil / secretul intern | utilizator Ofertare, sau rutina cu `x-radar-secret` | `sinteza_ai` (nu e transcriere, deci nu e valid pentru cantități) |
 | `ofertare-plansa-citeste` | Planșele A0, felie cu felie (tăiate de `/api/plansa-felii`): tabelele de dimensionare, cartușul, adnotările → `ofertare_cantitati` + `textPlansa` | `claude-opus-5`, cel mult `FELII_PE_RULARE` pe rulare | owner / responsabil | `sinteza_ai` |
 | `ofertare-word-text` | `.doc` / `.docx` → text, fără AI | 0 | ca ingest-ul | — (scrie prin gardă) |
 
@@ -278,7 +278,10 @@ paritate verificată (fail-closed).
 `erp arbitreaza --triere` e permis doar în probă (`--max-apeluri`) până la decizia pentru DEFER.
 
 ### 2.6 Arbitrul (`ofertare-ocr-arbitreaza`)
-- **Cascadă** (implicit): Haiku 5.5 pe orice dezacord; Sonnet 5 când Haiku e nesigur sau citirile diferă în cifre. Prompt versionat
+- **Cascadă** (implicit): Haiku 5.5 pe orice dezacord; Sonnet 5.5 (din 17.10; înainte Sonnet 5) când Haiku e nesigur sau citirile diferă în cifre.
+  Gândirea oprită pe model în același corp de cerere: Haiku `disabled`, Sonnet 5.5 `between_tools` (`_shared/gandire.ts`). Același preț
+  (2 / 10) și același tokenizer → aceeași limită de sus a rezervării. `protocol.json` → `modele_admise` = `claude-sonnet-5` (istoric,
+  deciziile deja plătite rămân valabile), `claude-sonnet-5-5`, `claude-haiku-5-5`. Prompt versionat
   (`arb-v3`, #742: regula 10 diacritice); `protocol.json` → `prompt_versiuni_admise` (deciziile plătite pe versiuni vechi rămân valabile).
 - **Poarta de diacritice** (#742, determinist, după decizia finală — Haiku sau Sonnet): dacă cele două citiri diferă doar prin semne
   combinante (detectare LARGĂ: NFD fără `\p{M}`), un `text_propus` e acceptat doar dacă are aceeași bază ca UNA dintre citiri, cu lista
@@ -320,6 +323,7 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | r1 (102), arbitraj complet / doar HIGH_RISK (5.926) | ~57 / ~28 USD | `paw-data/ocrlab/masurare_triere.json` |
 | GPU, Răcari 960 de benzi | LightOn 36 min, MinerU 38 min | noaptea 15→16.10 |
 | cititor_3 (Opus, abonament) | 11–32 s / bandă (mediana 19 s) | 42 de benzi Răcari |
+| Prețuri folosite la rezervare / decontare | Haiku 5.5 0,10 / 0,50 (peste 100k: 0,50 / 2,50); Sonnet 5.5 = Sonnet 5 = 2 / 10 USD pe milion | `_shared/ocrLocal.ts` → `PRETURI` (17.10: Sonnet 5.5 adăugat) |
 
 ### 2.11 Ce poate merge prost și cum se revine
 | Situație | Efect | Revenire |
@@ -375,5 +379,5 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 16.10.2026 | (acest PR) | Val 2, PR-A: dovada pe rând — codul pe linia cantității, Dn-ul în blocul rândului (`blocRand`, `verificaRand`) |
 | 17.10.2026 | (acest PR) | `ofertare-cantitati-extrage`, modul structurat: poarta admin Ofertare (`poarta_admin.ts`) — cerere activă exactă + plafon curent ≤ 5 USD + buget neblocat; owner / responsabil neschimbați; fără migrare, fără drepturi noi — decizia Răzvan 17.10 („B”). r2 (Jakarinos r1): cererea și bugetul citite cu clientul utilizatorului (service_role e revocat pe ele în 31a), testele cu ACL separat pe clienți |
 | 17.10.2026 | (acest PR) | Extractorul `p2` (normalizator `n3` neschimbat) după proba Răcari: citat verbatim, mostre în raport; ultima celulă fără „|” și UM-ul de peste capătul liniei rămân limite cunoscute (C) |
-
 | 17.10.2026 | (acest PR) | Extractorul `p3` / `n4`: citatul = linia rândului (rânduri lungi: ultimele ≤ 300 caractere până după cantitate), rânduri-obiect cu chei exacte |
+| 17.10.2026 | (acest PR) | Trecerea Sonnet 5 → Sonnet 5.5 (`claude-sonnet-5-5`, același preț 2 / 10, același tokenizer): ingest pe documentele critice, arbitrul OCR (cascada Haiku → Sonnet 5.5; `modele_admise` păstrează `claude-sonnet-5` ca istoric), `document-nou-citeste`, `citire-test` (`sonnet`), worker-ul NAS (`WORKER_MODEL_CORPUS` implicit 5.5; `claude-sonnet-5` venit din env / coadă e mapat la 5.5 în `ofertare-cerinte`). `thinking: disabled` → `between_tools` pe Sonnet 5.5 (`_shared/gandire.ts`); prețurile 3 / 15 greșite corectate la 2 / 10 |

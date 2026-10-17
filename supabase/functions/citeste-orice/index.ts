@@ -17,8 +17,8 @@ import { esteApelIntern } from '../_shared/poartaIntern.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ai-documente-inbox'
-const MODEL = 'claude-sonnet-5'
-const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
+const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
+const PRICE_IN = 2 / 1e6, PRICE_OUT = 10 / 1e6  // Sonnet 5.5: 2 / 10 $ pe 1M, ca Sonnet 5 (înainte 3 / 15 — greșit, cost raportat +50%)
 const MAX_IMG_BYTES = 4_500_000
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type, apikey', 'Content-Type': 'application/json' }

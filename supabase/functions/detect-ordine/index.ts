@@ -12,8 +12,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { esteApelIntern } from '../_shared/poartaIntern.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
-const MODEL = 'claude-sonnet-5'
-const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
+const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
+const PRICE_IN = 2 / 1e6, PRICE_OUT = 10 / 1e6  // Sonnet 5.5: 2 / 10 $ pe 1M, ca Sonnet 5 (înainte 3 / 15 — greșit, cost raportat +50%)
 const BUCKET_EMAIL = 'documente-proiect'
 const RX_ORDIN = /ordin[^a-z]*(de)?[^a-z]*(incep|re[- ]?incep|sistar|reluar)/i
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type, apikey', 'Content-Type': 'application/json' }

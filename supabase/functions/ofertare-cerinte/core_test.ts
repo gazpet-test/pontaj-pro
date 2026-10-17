@@ -1,5 +1,5 @@
 import { deepStrictEqual as assertEquals } from 'node:assert/strict'
-import { extrageCerinte, mapaPozitii, verificaPasaj } from './core.ts'
+import { extrageCerinte, mapaPozitii, MODELE, modelCerut, verificaPasaj } from './core.ts'
 
 const autentic = 'Ofertantul va prezenta personal autorizat pentru toate categoriile de lucrări cerute în documentația de atribuire.'
 const document = `⟦PAGINA 2⟧\n${'Context fără citat. '.repeat(20)}\n⟦PAGINA 7⟧\n${autentic}`
@@ -161,4 +161,12 @@ Deno.test('Poarta loturi (fișa de date): fără excepție în cod — fișa nee
   assertEquals(blocat.apeluri.rpc, [{ nume: 'fn_ofertare_document_eligibil', args: { p_document_id: 3 } }])
   const ok = await extrage(1, { corp: { licitatie_id: 1, sectiune: 'II' } })
   assertEquals([ok.apeluri.ai, ok.scrise.length, ok.scrise[0].lot_domeniu], [1, 1, 'necunoscut'])
+})
+
+Deno.test('model (17.10.2026): Sonnet 5.5 la 2/10 $; cererile vechi „claude-sonnet-5” merg pe 5.5, nu cad pe Opus; necunoscut → implicit', () => {
+  assertEquals(MODELE['claude-sonnet-5-5'], { in: 2 / 1e6, out: 10 / 1e6 }); assertEquals(MODELE['claude-sonnet-5'], undefined)
+  assertEquals(modelCerut('claude-sonnet-5', 'claude-opus-5'), 'claude-sonnet-5-5')
+  assertEquals(modelCerut('claude-sonnet-5-5', 'claude-opus-5'), 'claude-sonnet-5-5')
+  assertEquals(modelCerut('claude-opus-5', 'claude-opus-5'), 'claude-opus-5')
+  assertEquals([modelCerut(undefined, 'claude-opus-5'), modelCerut('claude-fable-5-1', 'claude-opus-5'), modelCerut('constructor', 'claude-opus-5')], ['claude-opus-5', 'claude-opus-5', 'claude-opus-5'])
 })

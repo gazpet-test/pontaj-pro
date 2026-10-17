@@ -34,6 +34,7 @@ import { descarcaCuJurnal } from '../_shared/egress.ts'   // monitor egress (doc
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'   // v16: aceeași regulă + plafon ca ofertare-citire-test
 import { scrieProvenienta } from '../_shared/provenientaText.ts'   // TKT-0329 B: proveniența textului (transcriere)
+import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools; Haiku 5.5 rămâne pe 'disabled'
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -51,8 +52,8 @@ const BUCKET = 'ofertare'
 type Model = { id: string; in: number; out: number; felie: number; prag?: number; peste?: { in: number; out: number } }
 const MODELE: Record<string, Model> = {
   haiku: { id: 'claude-haiku-5-5', in: 0.10 / 1e6, out: 0.50 / 1e6, felie: 8, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } },
-  // Sonnet 5: 2 / 10 $ pe 1M (sursa: _shared/ocrLocal.ts PRETURI['claude-sonnet-5']; înainte 3 / 15, cost raportat ~50% peste cel real).
-  sonnet: { id: 'claude-sonnet-5', in: 2 / 1e6, out: 10 / 1e6, felie: 2 },
+  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5, același preț): 2 / 10 $ pe 1M (sursa: _shared/ocrLocal.ts PRETURI['claude-sonnet-5-5']).
+  sonnet: { id: 'claude-sonnet-5-5', in: 2 / 1e6, out: 10 / 1e6, felie: 2 },
 }
 // Costul unui singur apel: rata se alege după tokenii de intrare ai ACELUI apel (prompt > prag ⇒ rata „peste”).
 export function costApel(M: Model, tokIn: number, tokOut: number): number {
@@ -352,7 +353,8 @@ Deno.serve(async (req: Request) => {
           // Sonnet 5 și Haiku 5.5 gândesc implicit (adaptive) și gândirea intră în max_tokens — la transcriere e inutilă
           // și scumpă. Haiku 5.5 acceptă 'disabled' doar la effort low/medium/high (implicit medium) — nu trimitem effort.
           // Fără temperature/top_p/top_k: modelele 5.x le resping cu 400 (vezi ofertare-ocr-arbitreaza).
-          thinking: { type: 'disabled' },
+          // Sonnet 5.5 (17.10.2026) dă 400 pe 'disabled': acolo 'between_tools' (fără gândire extinsă, effort implicit high).
+          thinking: faraGandire(MODEL),
           messages: [{ role: 'user', content: [
             { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(pdfFelie) } },
             { type: 'text', text: primaFelie ? PROMPT_ANTET(sAbs + 1, e - s) : PROMPT_TEXT(sAbs + 1, e - s) },

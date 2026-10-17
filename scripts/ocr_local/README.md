@@ -36,7 +36,7 @@ rulează garda ca la citire pe toate `raw*.txt` (LightOn / restul în flux la 12
 înregistrarea, deci banca ia fiecare payload JPEG din forma exactă ca înregistrat o dată, aproximare; `--fara-scutire` = garda v4) și listează orice schimbare de motiv / detaliu / punct de oprire, plus fișierele noi / lipsă.
 v4 → v5 pe r1 (8.104 benzi) + corpusul Codex (5.960): se schimbă exact cele 4 benzi cu base64, nimic altceva.
 
-**Ce NU face pachetul:** nu pornește servere sau modele, nu cheamă cloud (arbitrajul Sonnet 5 e în edge-ul `ofertare-ocr-arbitreaza`, D3b),
+**Ce NU face pachetul:** nu pornește servere sau modele, nu cheamă cloud (arbitrajul — cascada Haiku 5.5 → Sonnet 5.5 din 17.10.2026, înainte Sonnet 5 — e în edge-ul `ofertare-ocr-arbitreaza`, D3b),
 nu scrie în BD (scrierea e prin `ofertare-ocr-scrie`, D3b), nu promovează nimic.
 Contractul cu BD (migrarea 20261029b, D3a): întâi manifestul planului (`fn_ofertare_ocr_plan`: benzile + `image_sha256` per pagină,
 excluderile cu motiv), apoi fiecare citire cu `compare.segmente(raw)`; dezacordurile se încarcă din `dezacorduri.jsonl` cu `id` →
