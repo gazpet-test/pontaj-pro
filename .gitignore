@@ -12,3 +12,12 @@ supabase/.temp/
 CLAUDE.local.md
 .claude/settings.local.json
 
+
+# BMW CarData (scripts/bmw_cardata): tokenuri / stare locală — NU în repo (scriptul refuză oricum un --dir în repo)
+bmw_cardata_client_id.txt
+bmw_cardata_tokens.json
+bmw_cardata_setup.json
+bmw_cardata_cereri.json
+bmw_cardata_jurnal.log
+bmw_cardata.lock
+bmw_cardata_citiri/
