@@ -110,18 +110,14 @@ Deno.test('un rând nenormalizabil → felia „esuat”, fără observații (nu
   const er = (r.body as any).raport.find((x: any) => x.eroare)
   assertEquals([er.mostre.length, er.mostre[0]], [1, '["trunchiat"]'])
 })
-Deno.test('proba Răcari: rândul nenormalizabil SIGUR irelevant (UM citit, nu m / km: KG, M.C., RON) nu pierde felia; UM m sau lipsă o pierde', async () => {
-  const fara = (um: string | null) => [null, null, null, '2100402', 'CIMENT METALURGIC', null, null, null, null, um, '77.50', 0, 0, 'alt', 'material', null]
-  for (const um of ['KG', 'M.C.', 'RON', 'BUC.']) {
-    const f = fals({ raspuns: JSON.stringify({ r: [RAND, fara(um)] }) })
+Deno.test('proba Răcari r2: orice rând nenormalizabil pierde felia, oricare ar fi UM-ul declarat (fără „irelevant” nedovedit); mostre ≤ 3, ≤ 240', async () => {
+  const fara = (um: string | null) => [null, null, null, '2100402', 'CIMENT METALURGIC ' + 'X'.repeat(300), null, null, null, null, um, '77.50', 0, 0, 'alt', 'material', null]
+  for (const um of ['KG', 'M.C.', 'RON', 'BUC.', 'm.liniar', 'N/A', 'M', null]) {
+    const f = fals({ raspuns: JSON.stringify({ r: [RAND, fara(um), fara(um), fara(um), fara(um)] }) })
     const r = await RULEAZA(f)
-    assertEquals(f.apeluri.slice(-2), ['felie_inchide:gata', 'extragere_inchide:gata'], um)
-    assertEquals([f.obs().length, (r.body as any).raport.find((x: any) => x.note)?.note?.rand_irelevant_ignorat], [1, 1], um)
-  }
-  for (const um of ['M', 'ml', null]) {
-    const f = fals({ raspuns: JSON.stringify({ r: [RAND, fara(um)] }) })
-    await RULEAZA(f)
     assertEquals(f.apeluri.slice(-2), ['felie_inchide:esuat', 'extragere_inchide:esuat'], String(um))
+    const er = (r.body as any).raport.find((x: any) => x.eroare)
+    assertEquals([er.eroare.startsWith('4 rânduri'), er.mostre.length, er.mostre.every((m: string) => m.length <= 240)], [true, 3, true], String(um))
   }
 })
 Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p2, normalizator n4', async () => {

@@ -115,10 +115,30 @@ function singurInCelula(t: string, de: number, pana: number): boolean {
   const st = t.lastIndexOf('|', de - 1)
   let dr = t.indexOf('|', pana)
   // proba Răcari (C6): ultima celulă a unui rând de tabel poate să nu aibă „|” de închidere („| M.C. | 0.19”) — sfârșitul liniei e
-  // marginea celulei, dar DOAR pe un rând de tabel (≥ 2 separatori) și doar dacă tokenul e chiar ultimul conținut al liniei
-  if ((dr < 0 || dr > le) && (linie.match(/\|/g) || []).length >= 2) dr = le
+  // marginea celulei DOAR pe un rând de tabel (≥ 2 separatori), dacă tokenul e chiar ultimul conținut al liniei ȘI antetul coloanei
+  // lui e o coloană de CANTITATE (review Jakarinos r1: altfel ultima coloană „Pret unitar (lei/m)” devenea cantitate dovedită)
+  if ((dr < 0 || dr > le) && (linie.match(/\|/g) || []).length >= 2 && st >= ls &&
+      coloanaDeCantitate(t, ls, (t.slice(ls, de).match(/\|/g) || []).length)) dr = le
   if (!linie.includes('|') || st < ls || dr < 0 || dr > le) return false
   return t.slice(st + 1, de).replace(/[\s*]/g, '') === '' && t.slice(pana, dr).replace(/[\s*]/g, '') === ''
+}
+
+// antetul coloanei `col` a tabelului care conține linia de la `ls`: prima linie de tabel de deasupra (≤ 60, contigue, ≥ 2 „|”) a cărei
+// celulă `col` are litere (rândul de numerotare „0 | 1 | 2” se sare); coloana e de cantitate dacă antetul spune „cantitate” /
+// „consum” și NU „preț / valoare / tarif / lei / ron / greutate”. Fără antet găsit → nu (fail-closed).
+const RE_ANTET_CANTITATE = /cantit|consum|\bcant\b/i
+const RE_ANTET_NU = /pret|valoare|tarif|\blei\b|\bron\b|greutate|total/i
+function coloanaDeCantitate(t: string, ls: number, col: number): boolean {
+  let p = ls - 1
+  for (let k = 0; k < 60 && p > 0; k++) {
+    const a = t.lastIndexOf('\n', p - 1) + 1
+    const l = t.slice(a, p)
+    if ((l.match(/\|/g) || []).length < 2) return false
+    const cel = faraDiacritice(l.split('|')[col] ?? '')
+    if (/[A-Za-z]/.test(cel)) return RE_ANTET_CANTITATE.test(cel) && !RE_ANTET_NU.test(cel)
+    p = a - 1
+  }
+  return false
 }
 
 export function umLanga(t: string, de: number, pana: number): Set<string> {
@@ -126,9 +146,13 @@ export function umLanga(t: string, de: number, pana: number): Set<string> {
   // prefixul de diametru, oricâte spații ar fi între el și număr (review r4): se caută de la începutul rândului până la token
   if (RE_PREFIX_DN.test(t.slice(t.lastIndexOf('\n', de - 1) + 1, de))) return out
   const singur = singurInCelula(t, de, pana)
-  const dupa = RE_UM_DUPA.exec(t.slice(pana, pana + 40))
+  // UM-ul vecin se caută DOAR pe aceeași linie (review Jakarinos r1, P1: „\s” trecea peste newline și lua UM-ul rândului următor)
+  const ls0 = t.lastIndexOf('\n', de - 1) + 1
+  const le1 = t.indexOf('\n', pana)
+  const capLinie = le1 < 0 ? t.length : le1
+  const dupa = RE_UM_DUPA.exec(t.slice(pana, Math.min(pana + 40, capLinie)))
   if (dupa && (!dupa[2] || singur)) { const u = umNorm(dupa[4]); if (u) out.add(u) }
-  const inainte = RE_UM_INAINTE.exec(t.slice(Math.max(0, de - 40), de))
+  const inainte = RE_UM_INAINTE.exec(t.slice(Math.max(ls0, de - 40), de))
   if (inainte && (!inainte[3] || singur)) { const u = umNorm(inainte[1]); if (u) out.add(u) }
   // antetul coloanei: rândul curent e un rând de tabel; antetul = rândul dinaintea separatorului |---|
   const ls = t.lastIndexOf('\n', de - 1) + 1

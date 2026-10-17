@@ -8,7 +8,7 @@
 // Dependențele sunt injectabile (structurat_test.ts): baza (RPC service_role), citirile ca utilizator (tabelele noi au SELECT doar
 // pentru authenticated) și apelul AI.
 import { conventieDocument, type Conventie } from '../_shared/cantNumar.ts'
-import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex, umNorm } from '../_shared/cantNormalizare.ts'
+import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_shared/cantNormalizare.ts'
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
 
@@ -218,11 +218,9 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         const n = rm ? await normalizeazaRand(rm, { textDoc: text, felie: f.text, felie_de_la: f.de_la, conventie: ctxConv.conventie,
           lot_domeniu: lot.domeniu, lot_nr: lot.domeniu === 'lista' ? lot.loturi : [], rol_sursa: f.s.rol, rol_decis_de: f.s.decis_de }) : null
         if (!n) {
-          // proba Răcari: un rând nenormalizabil care, sigur, NU e o lungime (UM citit și diferit de m / km, ex. KG, M.C., BUC., RON)
-          // nu mai pierde felia — se numără separat; orice alt rând nenormalizabil (UM lipsă / lungime / tablou scurt) o pierde în
-          // continuare (un candidat de lungime pierdut nu poate lăsa în urmă o felie „gata”)
-          const um = rm ? umNorm(rm.um) : null
-          if (rm && um !== null && um !== 'm' && um !== 'km') { note['rand_irelevant_ignorat'] = (note['rand_irelevant_ignorat'] || 0) + 1; continue }
+          // orice rând nenormalizabil pierde felia (review Jakarinos r1, P1: „UM diferit de m / km” nu dovedește că rândul e
+          // irelevant — umNorm întoarce și forme necunoscute, iar UM-ul modelului nu e verificat în sursă); promptul p2 cere în C6
+          // doar rândurile de lungime, ca să rămână mai puține rânduri de pierdut
           pierdute++
           // mostre în raport (conținut extern = date): primele 3 rânduri pierdute, trunchiate, pentru diagnoză
           if (mostre.length < 3) mostre.push(JSON.stringify(a).slice(0, 240))
