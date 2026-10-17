@@ -110,35 +110,13 @@ const RE_PREFIX_DN = /(?:\bdn|\bde|ø|Ø|φ|\bd\s*=)\s*$/i
 function singurInCelula(t: string, de: number, pana: number): boolean {
   const ls = t.lastIndexOf('\n', de - 1) + 1
   const le0 = t.indexOf('\n', pana)
-  const le = le0 < 0 ? t.length : le0
-  const linie = t.slice(ls, le)
-  const st = t.lastIndexOf('|', de - 1)
-  let dr = t.indexOf('|', pana)
-  // proba Răcari (C6): ultima celulă a unui rând de tabel poate să nu aibă „|” de închidere („| M.C. | 0.19”) — sfârșitul liniei e
-  // marginea celulei DOAR pe un rând de tabel (≥ 2 separatori), dacă tokenul e chiar ultimul conținut al liniei ȘI antetul coloanei
-  // lui e o coloană de CANTITATE (review Jakarinos r1: altfel ultima coloană „Pret unitar (lei/m)” devenea cantitate dovedită)
-  if ((dr < 0 || dr > le) && (linie.match(/\|/g) || []).length >= 2 && st >= ls &&
-      coloanaDeCantitate(t, ls, (t.slice(ls, de).match(/\|/g) || []).length)) dr = le
-  if (!linie.includes('|') || st < ls || dr < 0 || dr > le) return false
+  const linie = t.slice(ls, le0 < 0 ? t.length : le0)
+  const st = t.lastIndexOf('|', de - 1), dr = t.indexOf('|', pana)
+  // limită cunoscută (proba Răcari C6, #754 r1–r2): ultima celulă fără „|” de închidere („| M.C. | 0.19”) NU se închide la
+  // sfârșitul liniei — rolul coloanei (cantitate vs. preț) nu se poate dovedi din text (aliniere, antete pe mai multe linii);
+  // rândurile rămân nedovedite până la orientarea din geometria PDF (C)
+  if (!linie.includes('|') || st < ls || dr < 0 || (le0 >= 0 && dr > le0)) return false
   return t.slice(st + 1, de).replace(/[\s*]/g, '') === '' && t.slice(pana, dr).replace(/[\s*]/g, '') === ''
-}
-
-// antetul coloanei `col` a tabelului care conține linia de la `ls`: prima linie de tabel de deasupra (≤ 60, contigue, ≥ 2 „|”) a cărei
-// celulă `col` are litere (rândul de numerotare „0 | 1 | 2” se sare); coloana e de cantitate dacă antetul spune „cantitate” /
-// „consum” și NU „preț / valoare / tarif / lei / ron / greutate”. Fără antet găsit → nu (fail-closed).
-const RE_ANTET_CANTITATE = /cantit|consum|\bcant\b/i
-const RE_ANTET_NU = /pret|valoare|tarif|\blei\b|\bron\b|greutate|total/i
-function coloanaDeCantitate(t: string, ls: number, col: number): boolean {
-  let p = ls - 1
-  for (let k = 0; k < 60 && p > 0; k++) {
-    const a = t.lastIndexOf('\n', p - 1) + 1
-    const l = t.slice(a, p)
-    if ((l.match(/\|/g) || []).length < 2) return false
-    const cel = faraDiacritice(l.split('|')[col] ?? '')
-    if (/[A-Za-z]/.test(cel)) return RE_ANTET_CANTITATE.test(cel) && !RE_ANTET_NU.test(cel)
-    p = a - 1
-  }
-  return false
 }
 
 export function umLanga(t: string, de: number, pana: number): Set<string> {
