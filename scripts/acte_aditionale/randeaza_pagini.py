@@ -1,6 +1,6 @@
 # randeaza_pagini.py — pe serverul AI (13.10.2026): PDF-urile copiate de scan_acte.ps1 → PNG, ca Jakarinos (Codex,
 # --sandbox read-only prin run_paw) sa poata citi scanarile fara sa scrie nimic. DOAR CITIRE pe copiile locale.
-# Folosire: python randeaza_pagini.py <folder rulare>   (ex. C:\Users\Public\paw-data\acte\2026-10-16)
+# Folosire: python randeaza_pagini.py <folder rulare>   (ex. C:\Users\Public\paw\acte\2026-10-16)
 # Iesire:   <folder>\png\P<id>\<nume>_p<N>.png  (max 20 de pagini per fisier, 110 dpi) + <folder>\png\index.tsv
 import csv, os, sys
 import pymupdf

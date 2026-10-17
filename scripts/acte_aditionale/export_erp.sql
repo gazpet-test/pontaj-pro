@@ -1,5 +1,5 @@
 -- Export ERP pentru verificarea saptamanala a actelor aditionale (task #15, automatizari #69). DOAR SELECT.
--- Claude il ruleaza prin Supabase MCP si scrie rezultatul (coloana erp) in C:\Users\Public\paw-data\acte\<AAAA-LL-ZZ>\erp.md
+-- Claude il ruleaza prin Supabase MCP si scrie rezultatul (coloana erp) in C:\Users\Public\paw\acte\<AAAA-LL-ZZ>\erp.md
 -- proiecte.tsv se exporta separat:
 --   SELECT E'id\tcod\tcale\n' || string_agg(id || E'\t' || cod_intern || E'\t' || coalesce(nas_folder_path,''), E'\n' ORDER BY id) FROM executie_proiecte WHERE activ AND id <> 24;
 WITH p AS (SELECT id, cod_intern, contract_id, valoare_lei, garantie_buna_exec_pct FROM executie_proiecte WHERE activ AND id<>24),
