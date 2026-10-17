@@ -133,24 +133,39 @@ Deno.test('p3: rândul-OBIECT cu cheile exacte = rândul tablou; obiect cu cheie
   const a = fals({ raspuns: JSON.stringify({ r: [obiect] }) })
   await RULEAZA(a)
   assertEquals([a.apeluri.slice(-2), a.obs().length, a.obs()[0]?.cantitate], [['felie_inchide:gata', 'extragere_inchide:gata'], 1, 1160])
+  // observația completă (inclusiv pozitie_dovedita, intervale, hash_rand) e identică cu cea din rândul tablou
+  const t = fals({ raspuns: JSON.stringify({ r: [RAND] }) })
+  await RULEAZA(t)
+  assertEquals(a.obs(), t.obs())
   for (const rau of [{ ...obiect, ore: 3 }, RAND.slice(1), [...RAND, null]]) {
     const f = fals({ raspuns: JSON.stringify({ r: [RAND, rau] }) })
     await RULEAZA(f)
     assertEquals(f.apeluri.slice(-2), ['felie_inchide:esuat', 'extragere_inchide:esuat'], JSON.stringify(rau).slice(0, 40))
   }
 })
-Deno.test('f2: secțiunile lista_alt (C7 manoperă / C8 utilaje / C9 / F1–F2) nu se trimit la model', async () => {
+Deno.test('review #757 r1 (P1): secțiunile lista_alt (C7 …) rămân extrase — eticheta euristică nu dovedește absența lungimilor', async () => {
   const text = 'Formularul F3\nLista cu cantitatile de lucrari\n= NR =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 1160.000\nTEAVA D= 90 MM\n0.000 0 Total=\n' +
     '⟦PAGINA 9⟧\nFORMULAR C7\nLista consumurilor cu mana de lucru\n1 | 102 BETONIST | om-ore | 6.740\n'
   const f = fals({ docs: [{ ...DOC, text_extras: text }] })
   await RULEAZA(f)
-  assertEquals([f.ai(), f.apeluri.filter((x) => x === 'felie_incepe').length], [1, 1])
+  assertEquals([f.ai(), f.apeluri.filter((x) => x === 'felie_incepe').length], [2, 2])
 })
-Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n4, feliere f2', async () => {
+Deno.test('review #757 r1 (P2): rând de listă > 300 caractere — citatul = ultimele ≤ 300 caractere continue până după cantitate → dovedit', async () => {
+  const den = 'TEAVA PVC NEPLASTIF.TIP G MONT.LA CONSTR.INDUSTR. IN CONDUCTE DE DISTRIBUTIE '.repeat(4)
+  const linie = `003 SA11G1 ${den}D= 90 MM [ 2] M 1160.000`
+  const text = `Formularul F3\nLista cu cantitatile de lucrari\n= NR =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n${linie}\n0.000 0 Total=\n`
+  assert(linie.length > 300)
+  const citat = linie.slice(linie.length - 300)
+  const rand = [null, null, null, 'SA11G1', 'TEAVA PVC D= 90 MM', 'Str. A', 'PVC', 'D= 90 MM', null, 'M', '1160.000', 0, 0, 'conducta', 'lungime', citat]
+  const f = fals({ docs: [{ ...DOC, text_extras: text }], raspuns: JSON.stringify({ r: [rand] }) })
+  await RULEAZA(f)
+  assertEquals([f.obs()[0]?.pozitie_dovedita, f.obs()[0]?.cantitate], [true, 1160])
+})
+Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n4', async () => {
   const f = fals({ raspuns: 'nu e JSON' })
   const r = await RULEAZA(f)
   assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
-  assert(EXTRACTOR_ID.includes('@p3@n4@f2'))
+  assert(EXTRACTOR_ID.includes('@p3@n4@f1'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {
