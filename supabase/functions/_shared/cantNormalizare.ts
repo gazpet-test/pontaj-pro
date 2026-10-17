@@ -12,7 +12,16 @@ export const CAMPURI_RAND = ['pagina', 'tabel', 'rand', 'cod_articol', 'denumire
 export type RandModel = Partial<Record<(typeof CAMPURI_RAND)[number], unknown>>
 
 export function randDinTablou(a: unknown): RandModel | null {
-  if (!Array.isArray(a) || a.length < CAMPURI_RAND.length) return null
+  // proba Răcari p2: modelul întoarce uneori OBIECTE cu cheile câmpurilor în loc de tablou — acceptate DOAR cu chei exact din
+  // CAMPURI_RAND (nicio cheie străină; cheile lipsă = null). Tabloul cu alt număr de elemente rămâne respins (poziții ambigue).
+  if (a && typeof a === 'object' && !Array.isArray(a)) {
+    const o = a as Record<string, unknown>
+    if (!Object.keys(o).length || Object.keys(o).some((k) => !(CAMPURI_RAND as readonly string[]).includes(k))) return null
+    const r: RandModel = {}
+    CAMPURI_RAND.forEach((c) => { r[c] = o[c] ?? null })
+    return r
+  }
+  if (!Array.isArray(a) || a.length !== CAMPURI_RAND.length) return null
   const r: RandModel = {}
   CAMPURI_RAND.forEach((c, i) => { r[c] = a[i] })
   return r
