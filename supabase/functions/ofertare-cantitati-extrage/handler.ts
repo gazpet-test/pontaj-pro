@@ -33,6 +33,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import { eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligibilLot.ts'
 import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
 import { poateCheltui } from './poarta.ts'
+import { MESAJ_ADMIN, motivRefuzAdmin } from './poarta_admin.ts'
 import { feliiDocument, type TipLista } from './sectiuni.ts'
 import { extrageStructurat } from './structurat.ts'
 
@@ -204,7 +205,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 
   let uidApelant: string | null = null
   // TKT-0329 B: modul `structurat` (observații în ofertare_cant_obs, pe cerere de cheltuială activă) — x-radar-secret REFUZAT
-  // (secretul tehnic nu ține loc de acord, spec §4.3); doar utilizator owner / responsabil.
+  // (secretul tehnic nu ține loc de acord, spec §4.3); doar utilizator owner / responsabil, sau admin Ofertare în condițiile din
+  // poarta_admin.ts (cerere activă exactă + plafon ≤ 5 USD + buget neblocat; 17.10.2026).
   let bodyBrut = ''
   try { bodyBrut = await req.clone().text() } catch { /* gol */ }
   let modCerut = ''
@@ -498,8 +500,22 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
     db.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
     db.from('ofertare_licitatii').select('responsabil_id, stare_loturi').eq('id', licId).maybeSingle(),
   ])
-  if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uid))
-    return json({ error: 'Extragerea costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
+  if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uid)) {
+    // 17.10.2026 (decizia Răzvan „B”): un ADMIN Ofertare pornește DOAR pe o cerere activă a licitației, cu plafon ≤ 5 USD și buget
+    // neblocat (poarta_admin.ts). Adminul = aceeași interogare ca fn_ofertare_cb_este_admin (20261031d, neapelabilă din API).
+    // Ne-adminii primesc exact refuzul de până acum, fără citiri în cereri / buget. Orice eroare de citire = refuz (fail-closed).
+    const { data: uma, error: eUma } = await db.from('user_module_access').select('profile_id')
+      .eq('profile_id', uid).eq('module', 'ofertare').eq('access_level', 'admin').limit(1)
+    const esteAdmin = !eUma && Array.isArray(uma) && uma.length > 0
+    if (!esteAdmin) return json({ error: MESAJ_ADMIN.nu_e_admin }, 403)
+    const [{ data: cer, error: eCer }, { data: bug, error: eBug }] = await Promise.all([
+      db.from('ofertare_ai_cereri').select('id, licitatie_id, scop, stare, valabil_pana').eq('id', cerereId).maybeSingle(),
+      db.from('ofertare_ai_buget').select('plafon_usd, blocat').eq('licitatie_id', licId).eq('scop', 'cant_extragere').maybeSingle(),
+    ])
+    const motiv = motivRefuzAdmin({ este_admin: true, licitatie_id: licId, cerere_id: cerereId,
+      cerere: eCer ? null : cer ?? null, buget: eBug ? null : bug ?? null, acum: Date.now() })
+    if (motiv) return json({ error: MESAJ_ADMIN[motiv], motiv }, 403)
+  }
   if (!deps.chei.O) return json({ error: 'OPENAI_API_KEY lipsă din secretele funcției' }, 500)
   if (!deps.dbUtilizator) return json({ error: 'configurare: client utilizator lipsă' }, 500)
   const dbU = deps.dbUtilizator(jwt)
