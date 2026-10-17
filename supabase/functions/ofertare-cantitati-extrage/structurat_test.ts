@@ -120,11 +120,11 @@ Deno.test('proba Răcari r2: orice rând nenormalizabil pierde felia, oricare ar
     assertEquals([er.eroare.startsWith('4 rânduri'), er.mostre.length, er.mostre.every((m: string) => m.length <= 240)], [true, 3, true], String(um))
   }
 })
-Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p2, normalizator n4', async () => {
+Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p2 (normalizatorul neschimbat, n3)', async () => {
   const f = fals({ raspuns: 'nu e JSON' })
   const r = await RULEAZA(f)
   assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
-  assert(EXTRACTOR_ID.includes('@p2@n4@'))
+  assert(EXTRACTOR_ID.includes('@p2@n3@'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {

@@ -112,9 +112,6 @@ function singurInCelula(t: string, de: number, pana: number): boolean {
   const le0 = t.indexOf('\n', pana)
   const linie = t.slice(ls, le0 < 0 ? t.length : le0)
   const st = t.lastIndexOf('|', de - 1), dr = t.indexOf('|', pana)
-  // limită cunoscută (proba Răcari C6, #754 r1–r2): ultima celulă fără „|” de închidere („| M.C. | 0.19”) NU se închide la
-  // sfârșitul liniei — rolul coloanei (cantitate vs. preț) nu se poate dovedi din text (aliniere, antete pe mai multe linii);
-  // rândurile rămân nedovedite până la orientarea din geometria PDF (C)
   if (!linie.includes('|') || st < ls || dr < 0 || (le0 >= 0 && dr > le0)) return false
   return t.slice(st + 1, de).replace(/[\s*]/g, '') === '' && t.slice(pana, dr).replace(/[\s*]/g, '') === ''
 }
@@ -124,13 +121,9 @@ export function umLanga(t: string, de: number, pana: number): Set<string> {
   // prefixul de diametru, oricâte spații ar fi între el și număr (review r4): se caută de la începutul rândului până la token
   if (RE_PREFIX_DN.test(t.slice(t.lastIndexOf('\n', de - 1) + 1, de))) return out
   const singur = singurInCelula(t, de, pana)
-  // UM-ul vecin se caută DOAR pe aceeași linie (review Jakarinos r1, P1: „\s” trecea peste newline și lua UM-ul rândului următor)
-  const ls0 = t.lastIndexOf('\n', de - 1) + 1
-  const le1 = t.indexOf('\n', pana)
-  const capLinie = le1 < 0 ? t.length : le1
-  const dupa = RE_UM_DUPA.exec(t.slice(pana, Math.min(pana + 40, capLinie)))
+  const dupa = RE_UM_DUPA.exec(t.slice(pana, pana + 40))
   if (dupa && (!dupa[2] || singur)) { const u = umNorm(dupa[4]); if (u) out.add(u) }
-  const inainte = RE_UM_INAINTE.exec(t.slice(Math.max(ls0, de - 40), de))
+  const inainte = RE_UM_INAINTE.exec(t.slice(Math.max(0, de - 40), de))
   if (inainte && (!inainte[3] || singur)) { const u = umNorm(inainte[1]); if (u) out.add(u) }
   // antetul coloanei: rândul curent e un rând de tabel; antetul = rândul dinaintea separatorului |---|
   const ls = t.lastIndexOf('\n', de - 1) + 1
