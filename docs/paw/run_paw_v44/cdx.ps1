@@ -1,6 +1,6 @@
 # v4.4: native Windows sandbox candidate; real certification is mandatory.
 . (Join-Path $PSScriptRoot 'cdx_security.ps1')
-$GIT_EXE = 'C:\Program Files\Git\cmd\git.exe'
+$GIT_EXE = 'C:\Program Files\Git\bin\git.exe'
 function GitCdx([string[]]$a,[string]$cwd,[bool]$fetch=$false) {
  AssertCdxAdminAcl $GIT_EXE
  AssertCdxGitConfig (Join-Path $REPO '.git\config')
@@ -33,8 +33,10 @@ function GetCdxAuthorization($binding) {
  AssertCdxAdminAcl $marker;AssertCdxSingleFile $marker
  $c=Get-Content -LiteralPath $marker -Raw|ConvertFrom-Json
  AssertCdxHashes $binding $c.binding
- if($c.schema -ne 5 -or $c.protocol -ne 'cdx-probes-r4' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
+ if($c.schema -ne 7 -or $c.protocol -ne 'cdx-probes-r6' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
  AssertCdxCertificatePolicy $c
+ AssertCdxNetworkCertificate $c
+ AssertCdxParentPatchCertificate $c
  return $null
 }
 function RuleazaCdx {
@@ -42,6 +44,7 @@ function RuleazaCdx {
  LuaLock (Join-Path $DATA 'lock_cdx')
  $reportPath=Join-Path $OUT_ROOT ($RUNID+'.json')
  $report=@{schema=2;windows_info=GetCdxWindowsInfo;run_id=$RUNID;status='started';phase='binding';worktree_preserved=$true;branch_preserved=$true;containment='native-elevated candidate; certificate required; Job is lifetime only'}
+ $sensitiveBefore=$null;$sensitiveChecked=$false;$sensitiveFailure=$null
  try {
   $binding=GetCdxBinding
   $permit=GetCdxAuthorization $binding
@@ -89,9 +92,20 @@ function RuleazaCdx {
    $native=Join-Path $fixtures 'native-curl.exe'
    Copy-Item -LiteralPath $permit.native_source -Destination $native
    if((HashCdx $native) -ne $permit.native_sha256){throw 'cdx_native_probe_copy_changed'}
+   AssertCdxSingleFile $permit.patch_source;AssertCdxAdminAcl $permit.patch_source
+   if((HashCdx $permit.patch_source) -ne $permit.patch_sha256){throw 'cdx_patch_probe_changed'}
+   $patchNative=Join-Path $fixtures 'native-patch.exe'
+   Copy-Item -LiteralPath $permit.patch_source -Destination $patchNative
+   if((HashCdx $patchNative) -ne $permit.patch_sha256){throw 'cdx_patch_probe_copy_changed'}
    [IO.File]::WriteAllText((Join-Path $fixtures 'write-source.txt'),'PAW_CHANGED')
    $report.certification_id=$permit.id;WriteCdxJson $reportPath $report
    $prompt=([string]$permit.brief_text).Replace('__WORKTREE__',$target)
+  }
+  if(-not $permit){
+   $sensitiveBefore=GetCdxSensitiveSnapshot $PSScriptRoot $cdxHomePath $REPO
+   $report.parent_apply_patch='policy-enforced, not OS-attested'
+   $report.sensitive_files=@{status='captured';before=$sensitiveBefore;scope='16 fixed paths; final-state hashes only, no prevention or full-disk coverage'}
+   WriteCdxJson $reportPath $report
   }
   $argv=@((Join-Path $runtime 'package\bin\codex.js'),'exec','--json','--ignore-user-config','--ignore-rules','--ephemeral','--sandbox','workspace-write','-C',$target,
    '-c','approval_policy=never','-c','windows.sandbox=elevated','-c','sandbox_workspace_write.network_access=false',
@@ -99,7 +113,14 @@ function RuleazaCdx {
   $rez=Ruleaza (Join-Path $runtime 'node.exe') $argv $prompt $target $T.timeout (GetCdxEnvironment $target $runtime $cdxHomePath) $true
   [IO.File]::WriteAllText((Join-Path $OUT_ROOT ($RUNID+'.events.jsonl')),$rez.out,(New-Object Text.UTF8Encoding($false)))
   $report.codex_exit=$rez.exit;$report.timeout=$rez.timeout
-  if(-not(AsteaptaJobGol $JOB_GOL_ASTEPTARE)){$report.status='failed';$report.phase='job_not_idle';WriteCdxJson $reportPath $report;EroareFaraEliberare (MotivJob 'cdx')}
+  $jobIdle=AsteaptaJobGol $JOB_GOL_ASTEPTARE
+  if($sensitiveBefore){
+   $sensitiveChecked=$true;$report.sensitive_files.job_idle=$jobIdle
+   $sensitiveFailure=$null
+   try{UpdateCdxSensitiveReport $report $sensitiveBefore $PSScriptRoot $cdxHomePath $REPO}catch{$sensitiveFailure=$_}
+  }
+  if(-not $jobIdle){$report.status='failed';$report.phase='job_not_idle';WriteCdxJson $reportPath $report;EroareFaraEliberare (MotivJob 'cdx')}
+  if($sensitiveFailure){throw $sensitiveFailure}
   $report.phase='post_validation'
   if($permit){
    $links=@(ClearCdxCertificationLinks $target $permit.link_probes)
@@ -139,6 +160,11 @@ function RuleazaCdx {
   WriteCdxJson $reportPath $report;return $rez
  } catch {
   $report.status='failed';$report.reason=$_.Exception.Message
+  if($sensitiveBefore -and -not $sensitiveChecked){
+   $sensitiveChecked=$true;$report.sensitive_files.job_idle=$false
+   try{UpdateCdxSensitiveReport $report $sensitiveBefore $PSScriptRoot $cdxHomePath $REPO}
+   catch{$report.sensitive_check_error=$_.Exception.Message}
+  }
   WriteCdxJson $reportPath $report
   throw
  }

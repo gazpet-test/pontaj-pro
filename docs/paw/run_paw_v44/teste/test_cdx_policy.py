@@ -8,6 +8,7 @@ class Policy(unittest.TestCase):
   with tempfile.TemporaryDirectory(prefix='policy-',dir=HERE) as d:
    root=pathlib.Path(d).resolve();bin=root/'bin';bin.mkdir()
    shutil.copyfile(HERE/'cdx_security.ps1',bin/'cdx_security.ps1')
+   (bin/'cdx_wfp.ps1').write_text("function GetCdxWfpBinding($sid) { return $script:wfpFixture }")
    script=r"""
 $ErrorActionPreference='Stop'
 $root='__ROOT__';$PAW_ROOT=$root
@@ -41,7 +42,10 @@ function Case($name,[scriptblock]$body,[bool]$reject=$false){
  $ok=$false;$reason='';try{& $body;$ok=(-not $reject)}catch{$reason=$_.Exception.Message;$ok=$reject}
  $results.Add(@{name=$name;ok=$ok;detail=$reason})
 }
+$script:wfpFixture='PINNED_WFP'
 $baseline=GetCdxBinding
+Case 'wfp_binding_change_invalidates' {$script:wfpFixture='WRONG_WFP';AssertCdxHashes $baseline (GetCdxBinding)} $true
+$script:wfpFixture='PINNED_WFP'
 Case 'windows_build_ubr_change_does_not_invalidate' {
  $info1=GetCdxWindowsInfo;$script:build='99999';$script:ubr=9999;$info2=GetCdxWindowsInfo
  if($info1.windows_build -eq $info2.windows_build -or $info1.windows_ubr -eq $info2.windows_ubr){throw 'Missing updated telemetry'}

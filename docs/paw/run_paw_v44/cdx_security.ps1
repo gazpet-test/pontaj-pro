@@ -48,10 +48,14 @@ function GetCdxTree([string]$root,[bool]$skipRootGit=$false) {
 function AssertCdxAdminAcl([string]$path) {
  [void](AssertCdxPath $path)
  $acl=Get-Acl -LiteralPath $path
- $admins=@('S-1-5-18','S-1-5-32-544')
+ # SYSTEM, Administrators si TrustedInstaller (proprietarul standard din Program Files/Windows) = scriitori admisi.
+ $admins=@('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
  if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $admins){throw 'cdx_acl_owner_not_admin'}
- $write=[int][Security.AccessControl.FileSystemRights]::Write -bor [int][Security.AccessControl.FileSystemRights]::Delete -bor [int][Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [int][Security.AccessControl.FileSystemRights]::ChangePermissions -bor [int][Security.AccessControl.FileSystemRights]::TakeOwnership
+ # Drepturi de scriere, inclusiv GENERIC_ALL (0x10000000) si GENERIC_WRITE (0x40000000).
+ $write=[int][Security.AccessControl.FileSystemRights]::Write -bor [int][Security.AccessControl.FileSystemRights]::Delete -bor [int][Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [int][Security.AccessControl.FileSystemRights]::ChangePermissions -bor [int][Security.AccessControl.FileSystemRights]::TakeOwnership -bor 0x10000000 -bor 0x40000000
  foreach($r in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+  # Un ACE InheritOnly nu se aplica obiectului insusi (ex. CREATOR OWNER din Program Files); copiii se verifica separat.
+  if($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly){continue}
   if($r.AccessControlType -eq 'Allow' -and ([int]$r.FileSystemRights -band $write) -and $r.IdentityReference.Value -notin $admins){throw 'cdx_acl_non_admin_writer'}
  }
 }
@@ -152,10 +156,10 @@ function GetCdxBinding {
  $manifest=Join-Path $PSScriptRoot 'cdx_runtime_manifest.json';AssertCdxAdminAcl $manifest
  AssertCdxHashes (GetCdxTreeHashes $runtime) (Get-Content -LiteralPath $manifest -Raw|ConvertFrom-Json)
  $bin=[ordered]@{}
- foreach($name in @('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_install.json','cdx_runtime_manifest.json')) {
+ foreach($name in @('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','cdx_install.json','cdx_runtime_manifest.json')) {
   $p=Join-Path $PSScriptRoot $name;AssertCdxAdminAcl $p;AssertCdxSingleFile $p;$bin[$name]=HashCdx $p
  }
- $git='C:\Program Files\Git\cmd\git.exe'
+ $git='C:\Program Files\Git\bin\git.exe'
  AssertCdxAdminAcl (Split-Path (Split-Path $git));AssertCdxAdminAcl (Split-Path $git);AssertCdxAdminAcl $git;AssertCdxSingleFile $git
  $bin['git.exe']=HashCdx $git
  if($cfg.git_credential_helper) {
@@ -164,12 +168,14 @@ function GetCdxBinding {
   AssertCdxAdminAcl (Split-Path (Split-Path $helper));AssertCdxAdminAcl (Split-Path $helper);AssertCdxAdminAcl $helper;AssertCdxSingleFile $helper
   $bin['git-credential-manager.exe']=HashCdx $helper
  }
+ . (Join-Path $PSScriptRoot 'cdx_wfp.ps1')
+ $wfp=GetCdxWfpBinding $cfg.offline_sid
  $script:CdxInstall=$cfg
  $auth=Join-Path $cfg.codex_home 'auth.json';AssertCdxSingleFile $auth
  $authAcl=(Get-Acl -LiteralPath $auth).Sddl
  [void](AssertCdxPath $cfg.codex_home)
  $homeAcl=(Get-Acl -LiteralPath $cfg.codex_home).Sddl
- return [ordered]@{schema=4;codex_version=$cfg.version;auth_acl_sddl=$authAcl;codex_home_acl_sddl=$homeAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');identity=$cfg.reader_sid;isolation=$cfg.isolation}
+ return [ordered]@{schema=5;wfp=$wfp;codex_version=$cfg.version;auth_acl_sddl=$authAcl;codex_home_acl_sddl=$homeAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');identity=$cfg.reader_sid;isolation=$cfg.isolation}
 }
 # Windows CRT quoting for controlled internal arguments (not a shell command).
 function ArgCdx([string]$value) {
@@ -186,7 +192,7 @@ function ArgCdx([string]$value) {
 }
 function GetCdxEnvironment([string]$target,[string]$runtime,[string]$codexHome) {
  # No inherited secrets, proxies, NODE_OPTIONS, PYTHONPATH, Git config injection or profile.
- return @{SystemRoot=$env:SystemRoot;WINDIR=$env:SystemRoot;ComSpec=(Join-Path $env:SystemRoot 'System32\cmd.exe');PATH=($runtime+';'+$env:SystemRoot+'\System32;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0');TEMP=(Join-Path $target '.tmp');TMP=(Join-Path $target '.tmp');CODEX_HOME=$codexHome;GIT_CONFIG_GLOBAL='NUL';GIT_CONFIG_NOSYSTEM='1';GIT_TERMINAL_PROMPT='0';GCM_INTERACTIVE='Never';GIT_OPTIONAL_LOCKS='0'}
+ return @{PATHEXT='.COM;.EXE;.BAT;.CMD';SystemDrive=$env:SystemDrive;SystemRoot=$env:SystemRoot;WINDIR=$env:SystemRoot;ComSpec=(Join-Path $env:SystemRoot 'System32\cmd.exe');PATH=($runtime+';'+$env:SystemRoot+'\System32;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0');TEMP=(Join-Path $target '.tmp');TMP=(Join-Path $target '.tmp');CODEX_HOME=$codexHome;GIT_CONFIG_GLOBAL='NUL';GIT_CONFIG_NOSYSTEM='1';GIT_TERMINAL_PROMPT='0';GCM_INTERACTIVE='Never';GIT_OPTIONAL_LOCKS='0'}
 }
 function AssertCdxGitConfig([string]$path) {
  if(-not(Test-Path -LiteralPath $path)){return}
@@ -237,4 +243,44 @@ function OpenCdxInstallBarrier([bool]$exclusive=$false) {
  $h=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
  if([PawCdx.Files]::Links($h.SafeFileHandle) -ne 1){$h.Dispose();throw 'cdx_install_lock_hardlink'}
  return $h
+}
+
+function AssertCdxNetworkCertificate($c) {
+ $hasDenied=$null -ne $c.PSObject.Properties['network_denied']
+ $hasException=$null -ne $c.PSObject.Properties['network_denied_except_dns']
+ if($hasException) {
+  if($hasDenied -or $c.network_denied_except_dns -isnot [bool] -or $c.network_denied_except_dns -ne $true -or $c.dns_exception_accepted -isnot [bool] -or $c.dns_exception_accepted -ne $true -or [string]::IsNullOrWhiteSpace($c.dns_exception_reason) -or $c.scope -notmatch 'DNS'){throw 'cdx_dns_exception_invalid'}
+ } elseif(-not $hasDenied -or $c.network_denied -isnot [bool] -or $c.network_denied -ne $true -or $c.dns_exception_accepted -isnot [bool] -or $c.dns_exception_accepted -ne $false) {throw 'cdx_network_claim_invalid'}
+}
+
+function AssertCdxParentPatchAcceptance($review) {
+ if($review.parent_apply_patch_residual_accepted -isnot [bool] -or $review.parent_apply_patch_residual_accepted -ne $true -or $review.parent_apply_patch_residual_reason -isnot [string] -or [string]::IsNullOrWhiteSpace($review.parent_apply_patch_residual_reason)){throw 'cdx_parent_patch_residual_not_accepted'}
+}
+function AssertCdxParentPatchCertificate($certificate) {
+ AssertCdxParentPatchAcceptance $certificate
+ if($certificate.parent_apply_patch -cne 'policy-enforced, not OS-attested' -or -not ([string]$certificate.scope).Contains('parent_apply_patch=policy-enforced, not OS-attested')){throw 'cdx_parent_patch_scope_invalid'}
+}
+function GetCdxSensitiveSnapshot([string]$bin,[string]$codexHome,[string]$repo) {
+ # Small fixed set; no auth.json contents or hash, no recursive scan. Absence is a state.
+ $paths=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','install.ps1','gemini_pw.py','cdx_install.json','cdx_runtime_manifest.json','cdx_sandbox_validat.json')|ForEach-Object {Join-Path $bin $_}
+ $paths+=@((Join-Path $codexHome 'config.toml'),(Join-Path $repo '.git\config'),(Join-Path $repo '.git\config.worktree'))
+ $snapshot=[ordered]@{}
+ foreach($path in $paths){
+  $full=AssertCdxPath $path
+  try{$item=Get-Item -LiteralPath $full -Force -ErrorAction Stop}
+  catch [System.Management.Automation.ItemNotFoundException] {$snapshot[$full]='ABSENT';continue}
+  if($item.PSIsContainer){throw 'cdx_sensitive_not_file'}
+  AssertCdxSingleFile $full
+  $snapshot[$full]=HashCdx $full
+ }
+ return $snapshot
+}
+function UpdateCdxSensitiveReport($report,$before,[string]$bin,[string]$codexHome,[string]$repo) {
+ try {
+  $after=GetCdxSensitiveSnapshot $bin $codexHome $repo
+  $changed=@($before.Keys|Where-Object {$before[$_] -cne $after[$_]})
+  $report.sensitive_files.after=$after;$report.sensitive_files.changed_paths=$changed
+  $report.sensitive_files.status=if($changed.Count){'changed'}else{'unchanged'}
+ } catch {$report.sensitive_files.status='unreadable';$report.sensitive_files.error=$_.Exception.Message;throw}
+ if($changed.Count){throw 'cdx_sensitive_files_changed'}
 }

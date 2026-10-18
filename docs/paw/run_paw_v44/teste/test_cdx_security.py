@@ -105,13 +105,13 @@ Case 'evidence_expired_cannot_reseal' {$e=EvidenceFixture;$e.run_started_utc=[Da
 Case 'evidence_missing_times' {[void](AssertCdxEvidenceFresh @{})} $true
 Case 'evidence_future_completion' {$e=EvidenceFixture;$e.run_completed_utc=[DateTime]::UtcNow.AddHours(1).ToString('o');[void](AssertCdxEvidenceFresh $e)} $true
 Case 'evidence_end_before_start' {$e=EvidenceFixture;$e.run_completed_utc=[DateTime]::UtcNow.AddHours(-1).ToString('o');[void](AssertCdxEvidenceFresh $e)} $true
-Case 'certificate_patch_denial' {
+Case 'unsupported_fictional_patch_schema_refused' {
  $r=ReviewFixture
  AssertEventReview $r @('{"type":"item.completed","item":{"id":"patch1","type":"file_change","status":"failed","changes":[{"path":"C:\\one-canary","diff":"-CANARY_WRITE_INITIAL\n+PAW_CHANGED"}],"error":"Access denied"}}') @(@{id='one';tool_type='file_change';action_tokens=@('C:\one-canary','CANARY_WRITE_INITIAL','PAW_CHANGED')})
-}
-Case 'certificate_file_tool_denial' {
+} $true
+Case 'unsupported_fictional_read_tool_refused' {
  AssertEventReview (ReviewFixture) @('{"type":"item.completed","item":{"id":"read1","type":"tool_call","status":"failed","arguments":{"path":"C:\\one-canary"},"error":"Access denied"}}') @(@{id='one';tool_type='tool_call';action_tokens=@('C:\one-canary')})
-}
+} $true
 $nativeProbe=@(@{id='native-read';tool_type='command_execution';action_tokens=@('native.exe');instruction='native.exe # native-read'})
 $nativeEvent='{"type":"item.completed","item":{"id":"native1","type":"command_execution","command":"native.exe # native-read","exit_code":37,"aggregated_output":"curl: (37) Access denied"}}'
 function NativeReview {$r=ReviewFixture;$r.probes[0].id='native-read';$r.probes[0].native_execution_observed=$true;return $r}
@@ -144,6 +144,17 @@ function Get-Acl {param([string]$LiteralPath) return $script:aclFixture}
 Case 'admin_acl_readers_allowed' {$script:aclFixture=AclFixture 'S-1-5-32-544' $false;AssertCdxAdminAcl $root}
 Case 'admin_acl_world_write_rejected' {$script:aclFixture=AclFixture 'S-1-5-32-544' $true;AssertCdxAdminAcl $root} $true
 Case 'non_admin_owner_rejected' {$script:aclFixture=AclFixture 'S-1-1-0' $false;AssertCdxAdminAcl $root} $true
+function AclFixtureRule($sid,$rights,$inherit,$prop) {
+ $a=New-Object Security.AccessControl.DirectorySecurity
+ $a.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+ $a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')),'FullControl','Allow')))
+ $a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)),[Security.AccessControl.FileSystemRights]$rights,[Security.AccessControl.InheritanceFlags]$inherit,[Security.AccessControl.PropagationFlags]$prop,'Allow')))
+ return $a
+}
+Case 'trustedinstaller_writer_allowed' {$script:aclFixture=AclFixtureRule 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464' 'FullControl' 'ContainerInherit,ObjectInherit' 'None';AssertCdxAdminAcl $root}
+Case 'creator_owner_inherit_only_ignored' {$script:aclFixture=AclFixtureRule 'S-1-3-0' 'FullControl' 'ContainerInherit,ObjectInherit' 'InheritOnly';AssertCdxAdminAcl $root}
+Case 'creator_owner_effective_write_rejected' {$script:aclFixture=AclFixtureRule 'S-1-3-0' 'Modify' 'None' 'None';AssertCdxAdminAcl $root} $true
+Case 'users_inherit_only_write_ignored_but_effective_rejected' {$script:aclFixture=AclFixtureRule 'S-1-5-32-545' 'Modify' 'ContainerInherit,ObjectInherit' 'None';AssertCdxAdminAcl $root} $true
 
 Case 'install_barrier_handle_not_inherited' {
  $PAW_ROOT=$root;$script:aclFixture=AclFixture 'S-1-5-32-544' $false

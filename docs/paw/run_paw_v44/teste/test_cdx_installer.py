@@ -4,7 +4,7 @@ HERE=pathlib.Path(__file__).resolve().parents[1]
 class Prepare(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(prefix='prepare-',dir=HERE);self.root=pathlib.Path(self.tmp.name).resolve();self.src=self.root/'source';self.src.mkdir()
-  for n in ('install.ps1','cdx_security.ps1','SHA256.json','run_paw.cmd','run_paw.ps1','cdx.ps1','certifica_cdx.ps1','gemini_pw.py'):shutil.copyfile(HERE/n,self.src/n)
+  for n in ('install.ps1','cdx_security.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','SHA256.json','run_paw.cmd','run_paw.ps1','cdx.ps1','certifica_cdx.ps1','gemini_pw.py'):shutil.copyfile(HERE/n,self.src/n)
   self.hash=hashlib.sha256((self.src/'SHA256.json').read_bytes()).hexdigest().upper();self.stage=self.root/'stage'
  def tearDown(self):self.tmp.cleanup()
  def run_prepare(self,manifest=None):
@@ -15,6 +15,9 @@ class Prepare(unittest.TestCase):
   self.assertFalse((self.stage/'cdx_sandbox_validat.json').exists());self.assertFalse((self.stage/'cdx_install.json').exists())
  def test_wrong_manifest_refuses(self):
   r=self.run_prepare('0'*64);self.assertNotEqual(r.returncode,0);self.assertFalse(self.stage.exists())
+ def test_tampered_wfp_refuses(self):
+  with (self.src/'cdx_wfp.cs').open('a') as f:f.write('\n// tampered')
+  r=self.run_prepare();self.assertNotEqual(r.returncode,0);self.assertFalse(self.stage.exists())
  def test_tampered_helper_refuses(self):
   with (self.src/'cdx.ps1').open('a') as f:f.write('\n# tampered')
   r=self.run_prepare();self.assertNotEqual(r.returncode,0);self.assertFalse(self.stage.exists())

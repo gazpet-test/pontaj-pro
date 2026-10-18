@@ -12,7 +12,7 @@ param([ValidateSet('Prepare','Install')][string]$Phase='Prepare',
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'cdx_security.ps1')
 $PAW_ROOT='C:\ProgramData\Gazpet\Paw';$Destination=Join-Path $PAW_ROOT 'bin'
-$files=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','gemini_pw.py','install.ps1')
+$files=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','gemini_pw.py','install.ps1')
 $Stage=AssertCdxPath $Stage
 function GetLegacyHelperPlan([string]$destination,[string]$expectedHash) {
  # BEFORE changing any ancestor ACL: never turn an untrusted old helper into trusted code.
@@ -39,6 +39,13 @@ function CopyLegacyHelper($plan,[string]$incoming) {
  Copy-Item -LiteralPath $plan.source -Destination $dest
  AssertCdxSingleFile $dest
  if((HashCdx $dest) -cne $plan.sha256 -or (HashCdx $plan.source) -cne $plan.sha256){throw 'Legacy helper changed during copy'}
+}
+function ProtectLegacyHelperPlan($plan,[string]$readerSid) {
+ if(-not $plan){return $null}
+ $before=GetLegacyHelperPlan (Split-Path $plan.source) $plan.sha256
+ if($before.sddl -cne $plan.sddl){throw 'Legacy helper ACL changed before protection'}
+ SetCdxAdminAcl $plan.source $readerSid
+ return GetLegacyHelperPlan (Split-Path $plan.source) $plan.sha256
 }
 function VerifyStage($root) {
  $m=Join-Path $root 'SHA256.json';AssertCdxSingleFile $m
@@ -90,6 +97,12 @@ function AssertNoPawProcesses {
 
 $legacyPlan=GetLegacyHelperPlan $Destination $LegacyHelperSha256
 AssertNoPawProcesses
+# Resolve existing local setup, read-only; do not load another editable source script as admin.
+$offlineAccount=New-Object Security.Principal.NTAccount([Environment]::MachineName,'CodexSandboxOffline')
+$offlineSid=$offlineAccount.Translate([Security.Principal.SecurityIdentifier]).Value
+# Trust/hash review happened BEFORE any ACL changes. Protect the reviewed helper's
+# own ACL before changing ancestors, so inheritance cannot invalidate its SDDL snapshot.
+$legacyPlan=ProtectLegacyHelperPlan $legacyPlan $readerSid
 $gazpet=Split-Path $PAW_ROOT
 foreach($d in @($gazpet,$PAW_ROOT)){
  if(-not(Test-Path -LiteralPath $d)){[void][IO.Directory]::CreateDirectory($d)}
@@ -99,7 +112,7 @@ $lock=Join-Path $PAW_ROOT 'install.lock'
 if(-not(Test-Path -LiteralPath $lock)){[IO.File]::WriteAllText($lock,'Paw installation barrier')}
 AssertCdxSingleFile $lock;SetCdxAdminAcl $lock $readerSid
 $barrier=OpenCdxInstallBarrier $true
-$held=@();$backup=$null;$newRuntime=$null
+$held=@();$backup=$null;$newRuntime=$null;$wfpInstalled=$false;$swapComplete=$false
 try {
  # Open existing public locks READ ONLY and never truncate/write them as admin.
  $data='C:\Users\Public\paw-data';[void](AssertCdxPath $data)
@@ -143,15 +156,25 @@ try {
   AssertCdxAdminAcl $helper;AssertCdxSingleFile $helper
  }
  # Auth is NOT copied/generated. Admin/operator provisions login separately before certification.
- WriteCdxJson (Join-Path $incoming 'cdx_install.json') ([ordered]@{schema=2;isolation='native-elevated-candidate';reader_sid=$readerSid;reader=$Reader;runtime_root=$newRuntime;codex_home=$cdxHomePath;git_credential_helper=$helper;version=$pkg.version})
+ WriteCdxJson (Join-Path $incoming 'cdx_install.json') ([ordered]@{schema=2;isolation='native-elevated-candidate';reader_sid=$readerSid;reader=$Reader;offline_sid=$offlineSid;runtime_root=$newRuntime;codex_home=$cdxHomePath;git_credential_helper=$helper;version=$pkg.version})
  WriteCdxJson (Join-Path $incoming 'cdx_runtime_manifest.json') (GetCdxTreeHashes $newRuntime)
  VerifyStage $incoming
  foreach($e in GetCdxTree $incoming){SetCdxAdminAcl $e.FullName $readerSid}
  AssertNoPawProcesses
+ # All artifacts checked before any WFP mutation. Existing fixed GUIDs cause a
+ # transactional failure: operator must review/remove the old test filter in maintenance.
+ # Load the exact protected incoming code, not an editable source-tree implementation.
+ . (Join-Path $incoming 'cdx_wfp.ps1')
+ InstallCdxWfp $offlineSid $readerSid
+ $wfpInstalled=$true
+ [void](GetCdxWfpBinding $offlineSid)
  # With the global lock held and legacy starts administratively stopped, swap directories.
  $old=Join-Path $PAW_ROOT ('bin-retired-'+$id)
  if(Test-Path -LiteralPath $Destination){Move-Item -LiteralPath $Destination -Destination $old}
  try{Move-Item -LiteralPath $incoming -Destination $Destination;VerifyStage $Destination;AssertCdxAdminAcl $Destination}
  catch{if(Test-Path -LiteralPath $Destination){Move-Item -LiteralPath $Destination -Destination (Join-Path $PAW_ROOT ('bin-failed-'+$id))};if(Test-Path -LiteralPath $old){Move-Item -LiteralPath $old -Destination $Destination};throw}
+ $swapComplete=$true
  Write-Output ('Installed, NOT certified. Retired bin: '+$old+'; backup: '+$backup+'; runtime: '+$newRuntime)
-} finally {foreach($h in $held){$h.Dispose()};$barrier.Dispose()}
+} finally {
+ try {if($wfpInstalled -and -not $swapComplete){RemoveCdxWfp}} finally {foreach($h in $held){$h.Dispose()};$barrier.Dispose()}
+}
