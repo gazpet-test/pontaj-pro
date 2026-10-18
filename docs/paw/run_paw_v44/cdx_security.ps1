@@ -192,7 +192,7 @@ function ArgCdx([string]$value) {
 }
 function GetCdxEnvironment([string]$target,[string]$runtime,[string]$codexHome) {
  # No inherited secrets, proxies, NODE_OPTIONS, PYTHONPATH, Git config injection or profile.
- return @{PATHEXT='.COM;.EXE;.BAT;.CMD';SystemRoot=$env:SystemRoot;WINDIR=$env:SystemRoot;ComSpec=(Join-Path $env:SystemRoot 'System32\cmd.exe');PATH=($runtime+';'+$env:SystemRoot+'\System32;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0');TEMP=(Join-Path $target '.tmp');TMP=(Join-Path $target '.tmp');CODEX_HOME=$codexHome;GIT_CONFIG_GLOBAL='NUL';GIT_CONFIG_NOSYSTEM='1';GIT_TERMINAL_PROMPT='0';GCM_INTERACTIVE='Never';GIT_OPTIONAL_LOCKS='0'}
+ return @{PATHEXT='.COM;.EXE;.BAT;.CMD';SystemDrive=$env:SystemDrive;SystemRoot=$env:SystemRoot;WINDIR=$env:SystemRoot;ComSpec=(Join-Path $env:SystemRoot 'System32\cmd.exe');PATH=($runtime+';'+$env:SystemRoot+'\System32;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0');TEMP=(Join-Path $target '.tmp');TMP=(Join-Path $target '.tmp');CODEX_HOME=$codexHome;GIT_CONFIG_GLOBAL='NUL';GIT_CONFIG_NOSYSTEM='1';GIT_TERMINAL_PROMPT='0';GCM_INTERACTIVE='Never';GIT_OPTIONAL_LOCKS='0'}
 }
 function AssertCdxGitConfig([string]$path) {
  if(-not(Test-Path -LiteralPath $path)){return}
