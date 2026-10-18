@@ -10,6 +10,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { esteApelIntern } from '../_shared/poartaIntern.ts'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
@@ -58,15 +59,20 @@ async function aiExtract(pdfB64: string, fisierNume: string, supabase: any): Pro
       { type: 'text', text: PROMPT + `\n\nNumele fisierului: "${fisierNume}"` },
     ] }] }),
   })
-  const data = await resp.json()
-  if (!resp.ok) return null
+  const data = await resp.json().catch(() => null)
+  if (!resp.ok || !data) return null
   try {
     const u = data.usage || {}
     await supabase.from('ai_usage_log').insert({ function_name: 'detect-ordine', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT, ref_table: 'documente_proiect', ref_id: null })
   } catch (_) {}
+  if (data.stop_reason === 'max_tokens' || mesajRefuz(data)) return null
+  const txt = textRaspuns(data)
+  if (!txt.trim()) return null
   try {
-    const txt = data.content?.find((c: any) => c.type === 'text')?.text || '{}'
-    return JSON.parse(txt.replace(/```json?|```/g, '').trim())
+    const parsed = JSON.parse(txt.replace(/```json?|```/g, '').trim())
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' ||
+        !['tip', 'numar_ordin', 'data_ordin', 'titlu'].some((k) => typeof parsed[k] === 'string' && parsed[k].trim())) return null
+    return parsed
   } catch (_) { return null }
 }
 
@@ -78,14 +84,20 @@ async function procDocEmail(supabase: any, doc: any): Promise<string> {
   if (exista) return 'skip: deja detectat'
 
   let parsed: any = null
+  let aiEsuat = false
   if ((doc.mime_type || '').includes('pdf') && doc.storage_path) {
     const { data: blob } = await supabase.storage.from(BUCKET_EMAIL).download(doc.storage_path)
-    if (blob) parsed = await aiExtract(b64(new Uint8Array(await blob.arrayBuffer())), doc.nume_fisier || '', supabase)
+    if (blob) {
+      parsed = await aiExtract(b64(new Uint8Array(await blob.arrayBuffer())), doc.nume_fisier || '', supabase)
+      aiEsuat = !parsed
+    }
   }
   // fallback: doar pe nume fisier
   const tip = (parsed && ['incepere', 'reincepere', 'sistare'].includes(parsed.tip)) ? parsed.tip : tipDinNume(doc.nume_fisier || doc.subiect || '')
   if (!tip) return 'skip: tip nedeterminat'
   const dataOrdin = (parsed && isoOk(parsed.data_ordin)) ? parsed.data_ordin : dataDinNume(doc.nume_fisier || '')
+  // Fallback-ul existent extrage doar tip/data, nu numar sau titlu: insuficient dupa esec AI.
+  if (aiEsuat) return 'skip: AI fara rezultat valid; fallback fara numar sau titlu'
   const { error } = await supabase.from('executie_ordine_detectate').insert({
     sursa: 'email', documente_proiect_id: doc.id, proiect_id: doc.proiect_id, tip,
     numar_ordin: parsed?.numar_ordin || null, data_ordin: dataOrdin,

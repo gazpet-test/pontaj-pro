@@ -13,6 +13,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import * as XLSX from 'https://esm.sh/xlsx@0.18.5'
 import { poartaModul } from '../_shared/poartaModul.ts'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODEL = 'claude-opus-5'
@@ -60,7 +61,7 @@ function b64(bytes: Uint8Array): string {
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
+  const fail = (msg: string) => new Response(JSON.stringify({ ok: false, error: msg }), { status: 200, headers: CORS })
 
   // Poarta: înainte de orice citire din BD/storage și înainte de apelul plătit.
   const poarta = await poartaModul(req, supabase, ['financiar', 'ofertare'])
@@ -109,11 +110,24 @@ Deno.serve(async (req: Request) => {
       await supabase.from('ai_usage_log').insert({ function_name: 'financiar-verifica-factura', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT, ref_table: 'executie_situatii_plata', ref_id: slId })
     } catch (_) {}
 
-    const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
+    if (data.stop_reason === 'max_tokens') return fail('Raspuns AI incomplet (max_tokens); reincearca.')
+    const refuz = mesajRefuz(data)
+    if (refuz) return fail(refuz)
+    const txt = textRaspuns(data)
+    if (!txt.trim()) return fail('Raspuns AI fara text.')
     const m = txt.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/)
     if (!m) return fail('AI a răspuns într-un format neașteptat.')
     let verdict: any
     try { verdict = JSON.parse(m[0]) } catch (_) { return fail('JSON invalid de la AI.') }
+    if (!verdict || Array.isArray(verdict) ||
+        !Array.isArray(verdict.linii) || !verdict.linii.length ||
+        !verdict.linii.every((l: any) => l && typeof l.denumire === 'string' && l.denumire.trim() &&
+          typeof l.valoare === 'number' && Number.isFinite(l.valoare) && typeof l.tva_pct === 'number' && Number.isFinite(l.tva_pct)) ||
+        !['total_fara_tva', 'tva', 'total_cu_tva'].every((k) => typeof verdict[k] === 'number' && Number.isFinite(verdict[k])) ||
+        !Array.isArray(verdict.diferente) || !verdict.diferente.every((d: any) => typeof d === 'string') ||
+        !['mare', 'medie', 'mica'].includes(verdict.incredere) || typeof verdict.observatii !== 'string') {
+      return fail('Verdict AI incomplet sau invalid: lipsesc liniile, totalurile ori campurile de verificare asteptate.')
+    }
 
     return new Response(JSON.stringify({ ok: true, sl_id: slId, ...verdict, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens }), { headers: CORS })
   } catch (e: any) {

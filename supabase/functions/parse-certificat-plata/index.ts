@@ -9,6 +9,7 @@
 // intrare explicită 'executie', 'ofertare' sau 'financiar' în user_module_access (butonul e în Execuție → Situații de plată; ofertarea face facturile — Răzvan 12.10).
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { poartaModul } from '../_shared/poartaModul.ts';
+import { mesajRefuz } from '../_shared/haiku55.ts';
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -113,10 +114,12 @@ Deno.serve(async (req: Request) => {
     const rawText = extractText(aiResponse);
     console.log('[parse-cp] rawText (900):', rawText.slice(0, 900));
 
-    if (!rawText && aiResponse?.stop_reason === 'max_tokens') {
-      console.error('[parse-cp] max_tokens atins fara text — document prea complex pt buget curent');
-      return new Response(JSON.stringify({ error: 'Documentul are prea multe rânduri pentru citire într-un singur pas — încearcă din nou sau contactează suportul' }), { status: 422, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
+    if (aiResponse?.stop_reason === 'max_tokens') {
+      console.error('[parse-cp] max_tokens atins — raspuns incomplet');
+      return new Response(JSON.stringify({ success: false, error: 'Răspuns AI incomplet (max_tokens) — încearcă din nou sau contactează suportul' }), { status: 422, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
     }
+    const eroareAI = mesajRefuz(aiResponse) || (!rawText.trim() ? 'Răspuns AI fără text' : null);
+    if (eroareAI) return new Response(JSON.stringify({ success: false, error: eroareAI }), { status: 422, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
 
     let parsed: any;
     try { parsed = parseJSON(rawText); }
@@ -131,12 +134,19 @@ Deno.serve(async (req: Request) => {
     }
 
     const total = Number(parsed.valoare_totala_fara_tva);
+    if (!Array.isArray(parsed.linii) || !parsed.linii.length || !parsed.linii.every((l: any) =>
+      l && typeof l.denumire === 'string' && l.denumire.trim() &&
+      ['valoare_baza', 'ajustare', 'alte_sume'].every((k) => l[k] !== null && l[k] !== undefined &&
+        (typeof l[k] === 'number' || (typeof l[k] === 'string' && l[k].trim() !== '')) && Number.isFinite(Number(l[k]))))) {
+      return new Response(JSON.stringify({ success: false, error: 'Liniile certificatului lipsesc sau sunt incomplete.' }), { status: 422, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
+    }
     const linii = Array.isArray(parsed.linii)
       ? parsed.linii.map((l: any) => ({ denumire: String(l.denumire || '').slice(0, 200).trim(), valoare_baza: Number(l.valoare_baza) || 0, ajustare: Number(l.ajustare) || 0, alte_sume: Number(l.alte_sume) || 0 }))
           .filter((l: any) => l.denumire && (l.valoare_baza !== 0 || l.ajustare !== 0 || l.alte_sume !== 0))
       : [];
     const linii_total = Math.round(linii.reduce((s: number, l: any) => s + l.valoare_baza + l.ajustare + l.alte_sume, 0) * 100) / 100;
     const linii_ok = linii.length > 0 && Math.abs(linii_total - total) < 1;
+    if (!linii_ok) return new Response(JSON.stringify({ success: false, error: 'Liniile certificatului sunt incomplete: suma lor nu corespunde totalului.', linii_total, valoare_totala_fara_tva: total, linii_ok }), { status: 422, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
     const total_ajustare_icc = Math.round(linii.reduce((s: number, l: any) => s + l.ajustare, 0) * 100) / 100;
     const total_alte_sume = Math.round(linii.reduce((s: number, l: any) => s + l.alte_sume, 0) * 100) / 100;
     console.log('[parse-cp] total:', total, '| linii:', linii.length, '| linii_total:', linii_total, '| linii_ok:', linii_ok, '| icc:', total_ajustare_icc, '| alte:', total_alte_sume);
