@@ -40,8 +40,7 @@ Case 'argument_newline_rejected' {[void](ArgCdx "a`nb")} $true
 Case 'matching_hashes' {$a=[ordered]@{x='abc';nested=[ordered]@{y='def'}};$b=$a|ConvertTo-Json|ConvertFrom-Json;AssertCdxHashes $a $b}
 # Extract ONLY this pure validator function via AST, never execute certificate installer/top-level.
 $tok=$null;$err=$null;$ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\certifica_cdx.ps1',[ref]$tok,[ref]$err)
-$fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'AssertEventReview'},$true)
-. ([scriptblock]::Create($fn.Extent.Text))
+foreach($name in @('GetCdxActionValues','AssertEventReview')){$fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true);. ([scriptblock]::Create($fn.Extent.Text))}
 
 function ReviewFixture {
  return @{verdict='ALL_DENIED';reviewed_by='test';probes=@(@{id='one';event_line=1;attempt_observed=$true;denial_observed=$true;success_observed=$false;reason='synthetic externally reviewed denial';denial_excerpt='Access denied'})}
@@ -71,7 +70,39 @@ Case 'certificate_two_distinct_events' {
  AssertEventReview $r @($eventFixture,$eventFixture.Replace('# one','# two').Replace('event1','event2')) @($probeFixture[0],@{id='two';tool_type='command_execution';action_tokens=@('C:\canary','ReadAllText');instruction='ReadAllText C:\canary # two'})
 }
 
-Case 'certificate_wrong_exact_command' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('ReadAllText C:\\canary # one','echo ReadAllText C:\\canary # one')) @(@{id='one';tool_type='command_execution';action_tokens=@('C:\canary');instruction='DIFFERENT COMMAND'})} $true
+Case 'certificate_wrong_verb' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('ReadAllText','WriteAllText')) $probeFixture} $true
+
+Case 'certificate_powershell_wrapper' {
+ $e=$eventFixture|ConvertFrom-Json
+ $e.item.command='"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "[IO.File]::ReadAllText(''C:\canary'') # one"'
+ AssertEventReview (ReviewFixture) @(($e|ConvertTo-Json -Depth 20 -Compress)) $probeFixture
+}
+Case 'certificate_cmd_wrapper' {
+ $e=$eventFixture|ConvertFrom-Json
+ $e.item.command='cmd.exe /c powershell.exe -NoProfile -Command "[IO.File]::ReadAllText(''C:/canary'') # one"'
+ AssertEventReview (ReviewFixture) @(($e|ConvertTo-Json -Depth 20 -Compress)) $probeFixture
+}
+Case 'certificate_path_suffix_rejected' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('canary','canary-evil')) $probeFixture} $true
+Case 'certificate_guid_path_mismatch' {
+ $p=@(@{id='one';tool_type='command_execution';action_tokens=@('C:\canary-12345678123412341234123456781234.txt','ReadAllText')})
+ AssertEventReview (ReviewFixture) @($eventFixture.Replace('canary','canary-22345678123412341234123456781234.txt')) $p
+} $true
+Case 'certificate_key_argument_missing' {
+ AssertEventReview (ReviewFixture) @($eventFixture) @(@{id='one';tool_type='command_execution';action_tokens=@('C:\canary','ReadAllText','--max-time 5')})
+} $true
+function FreshFixture {return @{certified_utc=[DateTime]::UtcNow.ToString('o');expires_utc=[DateTime]::UtcNow.AddHours(23).ToString('o')}}
+Case 'certificate_fresh' {AssertCdxCertificateFresh (FreshFixture)}
+Case 'certificate_expired' {$c=FreshFixture;$c.certified_utc=[DateTime]::UtcNow.AddHours(-25).ToString('o');$c.expires_utc=[DateTime]::UtcNow.AddHours(-1).ToString('o');AssertCdxCertificateFresh $c} $true
+Case 'certificate_future' {$c=FreshFixture;$c.certified_utc=[DateTime]::UtcNow.AddHours(1).ToString('o');AssertCdxCertificateFresh $c} $true
+Case 'certificate_over_24h' {$c=FreshFixture;$c.expires_utc=[DateTime]::UtcNow.AddHours(25).ToString('o');AssertCdxCertificateFresh $c} $true
+Case 'certificate_no_expiry' {AssertCdxCertificateFresh @{certified_utc=[DateTime]::UtcNow.ToString('o')}} $true
+
+function EvidenceFixture {return @{run_started_utc=[DateTime]::UtcNow.AddMinutes(-10).ToString('o');run_completed_utc=[DateTime]::UtcNow.AddMinutes(-1).ToString('o')}}
+Case 'evidence_fresh' {$e=EvidenceFixture;$start=AssertCdxEvidenceFresh $e;if($start.AddHours(24) -gt [DateTimeOffset]::UtcNow.AddHours(24)){throw 'Expiry extended beyond Run'}}
+Case 'evidence_expired_cannot_reseal' {$e=EvidenceFixture;$e.run_started_utc=[DateTime]::UtcNow.AddHours(-25).ToString('o');[void](AssertCdxEvidenceFresh $e)} $true
+Case 'evidence_missing_times' {[void](AssertCdxEvidenceFresh @{})} $true
+Case 'evidence_future_completion' {$e=EvidenceFixture;$e.run_completed_utc=[DateTime]::UtcNow.AddHours(1).ToString('o');[void](AssertCdxEvidenceFresh $e)} $true
+Case 'evidence_end_before_start' {$e=EvidenceFixture;$e.run_completed_utc=[DateTime]::UtcNow.AddHours(-1).ToString('o');[void](AssertCdxEvidenceFresh $e)} $true
 Case 'certificate_patch_denial' {
  $r=ReviewFixture
  AssertEventReview $r @('{"type":"item.completed","item":{"id":"patch1","type":"file_change","status":"failed","changes":[{"path":"C:\\one-canary","diff":"-CANARY_WRITE_INITIAL\n+PAW_CHANGED"}],"error":"Access denied"}}') @(@{id='one';tool_type='file_change';action_tokens=@('C:\one-canary','CANARY_WRITE_INITIAL','PAW_CHANGED')})

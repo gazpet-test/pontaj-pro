@@ -33,7 +33,8 @@ function GetCdxAuthorization($binding) {
  AssertCdxAdminAcl $marker;AssertCdxSingleFile $marker
  $c=Get-Content -LiteralPath $marker -Raw|ConvertFrom-Json
  AssertCdxHashes $binding $c.binding
- if($c.schema -ne 3 -or $c.protocol -ne 'cdx-probes-r3' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
+ if($c.schema -ne 4 -or $c.protocol -ne 'cdx-probes-r4' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
+ AssertCdxCertificateFresh $c
  return $null
 }
 function RuleazaCdx {
@@ -100,6 +101,12 @@ function RuleazaCdx {
   $report.codex_exit=$rez.exit;$report.timeout=$rez.timeout
   if(-not(AsteaptaJobGol $JOB_GOL_ASTEPTARE)){$report.status='failed';$report.phase='job_not_idle';WriteCdxJson $reportPath $report;EroareFaraEliberare (MotivJob 'cdx')}
   $report.phase='post_validation'
+  if($permit){
+   $links=@(ClearCdxCertificationLinks $target $permit.link_probes)
+   $report.reparse_points_blocked=@($links|Where-Object {$_.kind -ne 'HardLink'})
+   $report.hardlinks_blocked=@($links|Where-Object {$_.kind -eq 'HardLink'})
+   WriteCdxJson $reportPath $report
+  }
   AssertCdxOutput $target
   if([IO.File]::ReadAllText($pointerPath) -cne $pointer){throw 'cdx_git_pointer_changed'}
   $after=GetCdxGitSnapshot $common $meta;$report.metadata_after=$after

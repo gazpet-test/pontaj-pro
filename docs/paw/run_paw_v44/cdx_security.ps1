@@ -6,6 +6,7 @@ using Microsoft.Win32.SafeHandles;
 namespace PawCdx { public static class Files {
  [StructLayout(LayoutKind.Sequential)] struct Info { public uint a,b,c,d,e,f,g,h,i,j,links,k,l; }
  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle h,out Info i);
+ public static string Identity(SafeFileHandle h) { Info i; if(!GetFileInformationByHandle(h,out i)) throw new System.ComponentModel.Win32Exception(); return i.h.ToString("X8")+":"+i.k.ToString("X8")+":"+i.l.ToString("X8"); }
  public static uint Links(SafeFileHandle h) { Info i; if(!GetFileInformationByHandle(h,out i)) throw new System.ComponentModel.Win32Exception(); return i.links; }
 }}
 "@
@@ -76,6 +77,58 @@ function AssertCdxHashes($actual,$expected) {
  $a=$actual|ConvertTo-Json -Depth 30 -Compress;$e=$expected|ConvertTo-Json -Depth 30 -Compress
  if($a -cne $e){throw 'cdx_hash_set_mismatch'}
 }
+function AssertCdxCertificateFresh($certificate) {
+ if(-not $certificate.certified_utc -or -not $certificate.expires_utc){throw 'cdx_certificate_expiry_missing'}
+ $issued=[DateTimeOffset]::Parse($certificate.certified_utc).ToUniversalTime()
+ $expires=[DateTimeOffset]::Parse($certificate.expires_utc).ToUniversalTime()
+ $now=[DateTimeOffset]::UtcNow
+ if($issued -gt $now.AddMinutes(1) -or $expires -le $now -or $expires -le $issued -or ($expires-$issued).TotalHours -gt 24){throw 'cdx_certificate_expired_or_invalid; recertification required'}
+}
+function AssertCdxEvidenceFresh($evidence) {
+ # Seal cannot renew old evidence indefinitely: expiration is anchored to Run start.
+ if(-not $evidence.run_started_utc -or -not $evidence.run_completed_utc){throw 'cdx_evidence_time_missing'}
+ $start=[DateTimeOffset]::Parse($evidence.run_started_utc).ToUniversalTime()
+ $end=[DateTimeOffset]::Parse($evidence.run_completed_utc).ToUniversalTime()
+ $now=[DateTimeOffset]::UtcNow
+ if($end -lt $start -or $end -gt $now.AddMinutes(1) -or $start -gt $now.AddMinutes(1) -or $start.AddHours(24) -le $now){throw 'cdx_evidence_expired_or_invalid; repeat Run'}
+ return $start
+}
+function ClearCdxCertificationLinks([string]$root,$probes) {
+ # ONLY after Job idle, ONLY protected permit's three root-level probe names.
+ # This exception is never used for a normal cdx run. No recursive removal.
+ $root=(AssertCdxPath $root).TrimEnd('\')
+ $known=@{'link-hardlink'='HardLink';'link-junction'='Junction';'link-symlink'='SymbolicLink'}
+ if(@($probes).Count -ne 3 -or @($probes.id|Select-Object -Unique).Count -ne 3){throw 'cdx_link_probe_manifest_invalid'}
+ foreach($p in $probes){
+  if(-not $known.ContainsKey([string]$p.id) -or $p.kind -cne $known[[string]$p.id]){throw 'cdx_link_probe_manifest_invalid'}
+  $target=AssertCdxPath $p.target
+  if($target.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'cdx_link_probe_target_not_external'}
+  $path=[IO.Path]::GetFullPath((Join-Path $root $p.id))
+  if((Split-Path $path) -ine $root){throw 'cdx_link_probe_path_escape'}
+  $item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  if(-not $item){continue} # creation itself may have been denied
+  if($p.kind -eq 'HardLink') {
+   if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'cdx_probe_unexpected_link_type'}
+   $a=[IO.File]::OpenRead($path);$b=$null
+   try{
+    $b=[IO.File]::OpenRead($target)
+    if([PawCdx.Files]::Links($a.SafeFileHandle) -lt 2 -or [PawCdx.Files]::Identity($a.SafeFileHandle) -cne [PawCdx.Files]::Identity($b.SafeFileHandle)){throw 'cdx_probe_hardlink_target_mismatch'}
+   } finally {if($b){$b.Dispose()};$a.Dispose()}
+   [IO.File]::Delete($path)
+  } else {
+   if(-not($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.LinkType -cne $p.kind){throw 'cdx_probe_unexpected_link_type'}
+   $actual=@($item.Target)
+   if($actual.Count -ne 1){throw 'cdx_probe_link_target_ambiguous'}
+   $actualPath=[string]$actual[0]
+   if($actualPath.StartsWith('\\?\')){$actualPath=$actualPath.Substring(4)}
+   if(-not [IO.Path]::IsPathRooted($actualPath) -or [IO.Path]::GetFullPath($actualPath).TrimEnd('\') -ine $target.TrimEnd('\')){throw 'cdx_probe_link_target_mismatch'}
+   # Directory.Delete(path) unlinks junction/directory symlink; never recurse into target.
+   if($item.PSIsContainer){[IO.Directory]::Delete($path)}else{[IO.File]::Delete($path)}
+  }
+  if(Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue){throw 'cdx_probe_link_not_removed'}
+  [pscustomobject]@{id=$p.id;path=$path;target=$target;kind=$p.kind;detected=$true;removed=$true}
+ }
+}
 function GetCdxBinding {
  # The lock is outside bin so a version update cannot replace a held lock inode.
  foreach($p in @($PAW_ROOT,(Join-Path $PAW_ROOT 'bin'),(Join-Path $PAW_ROOT 'codex'))){AssertCdxAdminAcl $p}
@@ -104,7 +157,9 @@ function GetCdxBinding {
  $script:CdxInstall=$cfg
  $auth=Join-Path $cfg.codex_home 'auth.json';AssertCdxSingleFile $auth
  $authAcl=(Get-Acl -LiteralPath $auth).Sddl
- return [ordered]@{schema=2;auth_acl_sddl=$authAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');os=[Environment]::OSVersion.Version.ToString();identity=$cfg.reader_sid;isolation=$cfg.isolation}
+ $win=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+ if(-not $win.CurrentBuildNumber -or $null -eq $win.UBR){throw 'cdx_windows_revision_unavailable'}
+ return [ordered]@{schema=3;windows_build=[string]$win.CurrentBuildNumber;windows_ubr=[int]$win.UBR;codex_version=$cfg.version;auth_acl_sddl=$authAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');os=[Environment]::OSVersion.Version.ToString();identity=$cfg.reader_sid;isolation=$cfg.isolation}
 }
 # Windows CRT quoting for controlled internal arguments (not a shell command).
 function ArgCdx([string]$value) {

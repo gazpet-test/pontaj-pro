@@ -7,12 +7,39 @@ param([ValidateSet('Prepare','Install')][string]$Phase='Prepare',
  [string]$NodeExe='C:\Program Files\nodejs\node.exe',
  [string]$Reader='Gazpet-Ai',
  [switch]$UseExistingGitCredentialManager,
- [switch]$LegacyStartsStopped)
+ [switch]$LegacyStartsStopped,
+ [string]$LegacyHelperSha256)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'cdx_security.ps1')
 $PAW_ROOT='C:\ProgramData\Gazpet\Paw';$Destination=Join-Path $PAW_ROOT 'bin'
 $files=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','gemini_pw.py','install.ps1')
 $Stage=AssertCdxPath $Stage
+function GetLegacyHelperPlan([string]$destination,[string]$expectedHash) {
+ # BEFORE changing any ancestor ACL: never turn an untrusted old helper into trusted code.
+ # Only cgpt_pw.py is an unshipped dependency. All other old files stay out of incoming.
+ $destination=AssertCdxPath $destination
+ $helper=Join-Path $destination 'cgpt_pw.py'
+ if(-not(Test-Path -LiteralPath $helper)){
+  if($expectedHash){throw 'Legacy helper hash supplied but cgpt_pw.py missing'}
+  return $null
+ }
+ if($expectedHash -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Review cgpt_pw.py first; explicit -LegacyHelperSha256 required'}
+ foreach($p in @((Split-Path (Split-Path $destination)),(Split-Path $destination),$destination,$helper)){AssertCdxAdminAcl $p}
+ AssertCdxSingleFile $helper
+ if((HashCdx $helper) -ine $expectedHash){throw 'Legacy helper does not match reviewed hash'}
+ return [pscustomobject]@{name='cgpt_pw.py';source=$helper;sha256=$expectedHash.ToUpperInvariant();sddl=(Get-Acl -LiteralPath $helper).Sddl}
+}
+function CopyLegacyHelper($plan,[string]$incoming) {
+ if(-not $plan){return}
+ if($plan.name -cne 'cgpt_pw.py' -or (Split-Path $plan.source -Leaf) -cne 'cgpt_pw.py'){throw 'Legacy helper outside allowlist'}
+ $again=GetLegacyHelperPlan (Split-Path $plan.source) $plan.sha256
+ if(-not $again -or $again.sddl -cne $plan.sddl){throw 'Legacy helper ACL changed after review'}
+ $dest=Join-Path (AssertCdxPath $incoming) 'cgpt_pw.py'
+ if(Test-Path -LiteralPath $dest){throw 'Legacy destination already exists'}
+ Copy-Item -LiteralPath $plan.source -Destination $dest
+ AssertCdxSingleFile $dest
+ if((HashCdx $dest) -cne $plan.sha256 -or (HashCdx $plan.source) -cne $plan.sha256){throw 'Legacy helper changed during copy'}
+}
 function VerifyStage($root) {
  $m=Join-Path $root 'SHA256.json';AssertCdxSingleFile $m
  if((HashCdx $m) -ne $ManifestSha256){throw 'Untrusted or changed manifest'}
@@ -61,6 +88,7 @@ function AssertNoPawProcesses {
  AssertLegacyInventory $processes $tasks $services
 }
 
+$legacyPlan=GetLegacyHelperPlan $Destination $LegacyHelperSha256
 AssertNoPawProcesses
 $gazpet=Split-Path $PAW_ROOT
 foreach($d in @($gazpet,$PAW_ROOT)){
@@ -96,13 +124,14 @@ try {
  if((HashCdx (Join-Path $newRuntime 'node.exe')) -ne $nodeHash){throw 'Node changed during copy'}
  foreach($e in GetCdxTree $newRuntime){SetCdxAdminAcl $e.FullName $readerSid}
  $incoming=Join-Path $PAW_ROOT ('bin-staged-'+$id);[void][IO.Directory]::CreateDirectory($incoming);SetCdxAdminAcl $incoming $readerSid
- # Retain existing channel dependencies (e.g. cgpt_pw.py); review their original trust separately.
+ # Audit backup is NOT trusted runtime. Never carry arbitrary files into incoming.
  if(Test-Path -LiteralPath $Destination){
   [void]@(GetCdxTree $Destination)
   Copy-Item -LiteralPath $Destination -Destination (Join-Path $PAW_ROOT ('backup-'+$id)) -Recurse
   $backup=Join-Path $PAW_ROOT ('backup-'+$id)
-  foreach($e in Get-ChildItem -LiteralPath $Destination -Force){Copy-Item -LiteralPath $e.FullName -Destination $incoming -Recurse}
+
  }
+ CopyLegacyHelper $legacyPlan $incoming
  foreach($n in ($files+@('SHA256.json'))){Copy-Item -LiteralPath (Join-Path $Stage $n) -Destination $incoming -Force}
  foreach($n in @('cdx_sandbox_validat.json','cdx_certification_permit.json')){if(Test-Path -LiteralPath (Join-Path $incoming $n)){Remove-Item -LiteralPath (Join-Path $incoming $n)}}
  $noHooks=Join-Path $incoming 'no-hooks'

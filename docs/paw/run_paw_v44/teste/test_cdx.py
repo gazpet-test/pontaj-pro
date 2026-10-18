@@ -1,7 +1,7 @@
 """Windows orchestration tests, no Codex inference, origin is a local bare repo.
 The trusted stub is NOT an OS sandbox. A skipped containment test is intentional.
 """
-import hashlib,json,os,pathlib,shutil,subprocess,sys,tempfile,unittest
+import datetime,hashlib,json,os,pathlib,shutil,subprocess,sys,tempfile,unittest
 HERE=pathlib.Path(__file__).resolve().parents[1]
 def git(cwd,*args):return subprocess.check_output(['git','-C',str(cwd),*args],stderr=subprocess.STDOUT,text=True).strip()
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest().upper()
@@ -36,7 +36,7 @@ class Cdx(unittest.TestCase):
   (self.bin/'cdx.ps1').write_text(c,encoding='utf-8')
   self.brief=self.data/'brief/test.md';self.brief.write_text('synthetic');self.out=self.data/'out/result.log';self.cert()
  def cert(self):
-  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':3,'protocol':'cdx-probes-r3','result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
+  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':4,'protocol':'cdx-probes-r4','certified_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expires_utc':(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=23)).isoformat(),'result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
  def tearDown(self):
   for k,v in self.env_before.items():
    if v is None:os.environ.pop(k,None)
@@ -51,6 +51,9 @@ class Cdx(unittest.TestCase):
   p=self.root/'outside.md';p.write_text('x');r=self.run_launcher(brief=p);self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists())
  def test_unverified_sandbox_refuses(self):
   (self.bin/'cdx_sandbox_validat.json').unlink();r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists())
+ def test_expired_certificate_refuses_before_worktree(self):
+  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c['certified_utc']=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=25)).isoformat();c['expires_utc']=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=1)).isoformat();p.write_text(json.dumps(c))
+  r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists());self.assertIn('cdx_certificate_expired_or_invalid',r.stdout)
  def test_worktree_commit_diff(self):
   r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
   reports=list((self.data/'out').glob('*.json'));self.assertEqual(len(reports),1);s=json.loads(reports[0].read_text(encoding='utf-8-sig'));w=pathlib.Path(s['worktree'])
