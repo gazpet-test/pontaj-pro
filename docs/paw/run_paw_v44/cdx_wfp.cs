@@ -108,7 +108,8 @@ public static class PawCdxWfp {
     try {
       Guid sk=SubLayer; Check(FwpmSubLayerGetByKey0(engine, ref sk, out ptr), "FwpmSubLayerGetByKey0");
       var sl=(FWPM_SUBLAYER0)Marshal.PtrToStructure(ptr, typeof(FWPM_SUBLAYER0));
-      if(sl.subLayerKey != SubLayer || sl.flags != FLAG_PERSISTENT || sl.weight != 0x7FFF || sl.providerKey != IntPtr.Zero) throw new Exception("WFP sublayer mismatch");
+      // BFE poate raporta alta greutate decat cea ceruta (masurat 18.10: 0x7FFF ceruta -> 0x8003 citita); cerem doar >= 0x7FFF.
+      if(sl.subLayerKey != SubLayer || sl.flags != FLAG_PERSISTENT || sl.weight < 0x7FFF || sl.providerKey != IntPtr.Zero) throw new Exception("WFP sublayer mismatch");
       FwpmFreeMemory0(ref ptr);
       foreach(var id in new[]{FilterV4, FilterV6}) {
         Guid key=id; Check(FwpmFilterGetByKey0(engine, ref key, out ptr), "FwpmFilterGetByKey0");
