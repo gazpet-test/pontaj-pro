@@ -12,6 +12,7 @@
 // marketing_meta_token() (doar service_role). Erorile de business se scriu in postare (status 'eroare'),
 // nu se arunca (regula edge fn: throw in try + update in catch = worker killed).
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 
 const GRAPH = 'https://graph.facebook.com/v22.0';
 const BUCKET = 'rapoarte-zilnice';
@@ -205,9 +206,13 @@ ${lucrari || '(niciun raport selectat — scrie despre progresul general al lucr
         headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({ model: MODEL, max_tokens: 600, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userMsg }] }),
       });
+      if (!r.ok) return json({ error: `Anthropic ${r.status}: ${(await r.text()).slice(0, 300)}` }, 502);
       const j = await r.json();
-      if (!r.ok) return json({ error: j?.error?.message || 'eroare AI' }, 500);
-      const text = (j.content || []).map((c: any) => c.text || '').join('').trim();
+      if (j.stop_reason === 'max_tokens') return json({ error: 'Raspuns AI incomplet (max_tokens); reincearca' }, 422);
+      const refuz = mesajRefuz(j);
+      if (refuz) return json({ error: refuz }, 422);
+      const text = textRaspuns(j).trim();
+      if (!text) return json({ error: 'Raspuns AI fara text' }, 422);
       let textDistribuire = post.text_distribuire || '';
       try {
         const r2 = await fetch('https://api.anthropic.com/v1/messages', {
@@ -216,7 +221,9 @@ ${lucrari || '(niciun raport selectat — scrie despre progresul general al lucr
           body: JSON.stringify({ model: MODEL, max_tokens: 200, system: PROMPT_DISTRIBUIRE, messages: [{ role: 'user', content: `Postarea distribuită:\n${text}` }] }),
         });
         const j2 = await r2.json();
-        if (r2.ok) textDistribuire = (j2.content || []).map((c: any) => c.text || '').join('').trim() || textDistribuire;
+        if (r2.ok && j2.stop_reason !== 'max_tokens' && !mesajRefuz(j2)) {
+          textDistribuire = textRaspuns(j2).trim() || textDistribuire;
+        }
       } catch { /* textul de distribuire e opțional */ }
       // Link-ul paginii noi la finalul textului de distribuire (Răzvan 05.09.2026)
       try { const pg = await pagina(); if (pg.link && textDistribuire && !textDistribuire.includes(pg.link)) textDistribuire = `${textDistribuire}\n${pg.link}`; } catch { /* fără link */ }
