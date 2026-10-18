@@ -10,7 +10,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { esteApelIntern } from '../_shared/poartaIntern.ts';
 import { decideAcces, nivelMaxim, type NivelModul } from '../_shared/poartaRag.ts';
 import { faraGandire } from '../_shared/gandire.ts';
-import { HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
+import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 
 // Globalul runtime-ului Supabase Edge (Supabase.ai.Session) — nu are tipuri publicate pentru deno check.
 // deno-lint-ignore no-explicit-any
@@ -77,7 +77,8 @@ function json(status: number, body: unknown): Response {
 }
 
 // Refuzul sau transcrierea invalidă vin ca { refuz } — eroare de business, o scrie apelantul în coadă (nu se aruncă).
-async function transcribeBatch(pdfB64: string, startPage: number, pageCount: number): Promise<Array<{ pagina: number; text: string }> | { refuz: string }> {
+// deno-lint-ignore no-explicit-any
+async function transcribeBatch(pdfB64: string, startPage: number, pageCount: number, supabase: any, documentId: number): Promise<Array<{ pagina: number; text: string }> | { refuz: string }> {
   const prompt = `Acesta este un fragment dintr-o carte tehnică de utilaj industrial (paginile ${startPage}–${startPage + pageCount - 1} din documentul original, numerotare absolută). Transcrie TOT textul lizibil de pe FIECARE pagină (fă OCR dacă e scanat), păstrând limba originală (germană/engleză/română). Include: valori tehnice, tabele (redate ca text simplu), avertismente, denumiri piese, coduri. Ignoră elementele pur grafice. Răspunde DOAR cu JSON valid, fără alt text: [{\"pagina\": <nr absolut începând de la ${startPage}>, \"text\": \"<textul paginii>\"}]. Pagină goală sau doar imagine → text \"\".`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -92,6 +93,17 @@ async function transcribeBatch(pdfB64: string, startPage: number, pageCount: num
       ] }],
     }),
   });
+  try {
+    const d = await resp.clone().json();
+    if (resp.ok || d?.usage) {
+      const u = d?.usage || {};
+      await supabase.from('ai_usage_log').insert({
+        function_name: 'rag-utilaj', model: HAIKU_55,
+        tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+        cost_usd: costApel(HAIKU_55, u), ref_table: 'logistica_documente', ref_id: documentId,
+      });
+    }
+  } catch (_) { /* nu blocheaza */ }
   if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
   const data = await resp.json();
   const refuz = mesajRefuz(data);
@@ -138,6 +150,17 @@ async function searchAndAnswer(supabase: any, question: string, modelKey: string
         messages: [{ role: 'user', content: `Extrase din cartea tehnică:\n\n${context}\n\nÎntrebare: ${question}` }],
       }),
     });
+    try {
+      const d = await aiRes.clone().json();
+      if (aiRes.ok || d?.usage) {
+        const u = d?.usage || {};
+        await supabase.from('ai_usage_log').insert({
+          function_name: 'rag-utilaj', model: HAIKU_55,
+          tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+          cost_usd: costApel(HAIKU_55, u), ref_table: null, ref_id: null,
+        });
+      }
+    } catch (_) { /* nu blocheaza */ }
     if (!aiRes.ok) return json(502, { error: 'Serviciul AI nu a răspuns; reîncearcă.' });
     const aiData = await aiRes.json();
     answer = mesajRefuz(aiData) ? 'Modelul AI a refuzat întrebarea (filtru de siguranță). Uită-te în pasajele de mai jos sau întreabă biroul.'
@@ -265,7 +288,7 @@ Deno.serve(async (req: Request) => {
           copied.forEach((p) => sub.addPage(p));
           const subB64 = b64(await sub.save());
 
-          const entries = await transcribeBatch(subB64, page, count);
+          const entries = await transcribeBatch(subB64, page, count, supabase, item.document_id);
           if (!Array.isArray(entries)) {
             // refuz sau transcriere invalidă: coada trece direct pe 'error', fără reîncercări plătite
             const msg = `[${step}] ${entries.refuz}`;

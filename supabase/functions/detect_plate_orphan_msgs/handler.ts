@@ -72,7 +72,8 @@ async function downloadPozaAsBase64(
 }
 
 async function callVision(
-  doFetch: typeof fetch, apiKey: string, base64: string, contentType: string
+  doFetch: typeof fetch, apiKey: string, base64: string, contentType: string,
+  supabaseService: Deps['supa'], msgId: number,
 ): Promise<{ text: string; tokensIn: number; tokensOut: number; refuz: string | null; stopReason: string | null }> {
   const resp = await doFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -85,6 +86,18 @@ async function callVision(
       ]}],
     }),
   })
+  // Inclusiv răspunsurile eșuate, refuzate sau trunchiate care raportează consum.
+  try {
+    const d = await resp.clone().json()
+    if (resp.ok || d?.usage) {
+      const u = d?.usage || {}
+      await supabaseService.from('ai_usage_log').insert({
+        function_name: 'detect_plate_orphan_msgs', model: MODEL,
+        tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+        cost_usd: costApel(MODEL, u), ref_table: 'whatsapp_messages_processed', ref_id: msgId,
+      })
+    }
+  } catch (_) { /* nu blocheaza */ }
   if (!resp.ok) throw new Error(`Anthropic ${resp.status}`)
   const data = await resp.json()
   return {
@@ -187,7 +200,7 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
 
       try {
         const { base64, contentType } = await downloadPozaAsBase64(supabaseService, msg.photo_path as string)
-        const visionRes = await callVision(deps.fetch, anthropicKey, base64, contentType)
+        const visionRes = await callVision(deps.fetch, anthropicKey, base64, contentType, supabaseService, msg.id as number)
         totalTokensIn += visionRes.tokensIn
         totalTokensOut += visionRes.tokensOut
         // costul pe APEL: pragul de 100K tokeni al Haiku 5.5 se judecă pe fiecare prompt, nu pe totalul lotului

@@ -17,7 +17,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { poartaTalon } from './acces.ts'
 import { faraGandire } from '../_shared/gandire.ts'
-import { HAIKU_55, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { costApel, HAIKU_55, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const MAX_DOCS = 4        // max scanuri trimise per vehicul
 const MAX_BYTES = 4_500_000
@@ -123,6 +123,18 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
       headers: { 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({ model: HAIKU_55, max_tokens: 2000, thinking: faraGandire(HAIKU_55), messages: [{ role: 'user', content }] }),
     })
+    // Jurnal înaintea oricărei ieșiri; clona păstrează răspunsul original pentru fluxul existent.
+    try {
+      const d = await resp.clone().json()
+      if (resp.ok || d?.usage) {
+        const u = d?.usage || {}
+        await supabase.from('ai_usage_log').insert({
+          function_name: 'extract-talon-ai', model: HAIKU_55,
+          tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+          cost_usd: costApel(HAIKU_55, u), ref_table: 'logistica_active', ref_id: activeId,
+        })
+      }
+    } catch (_) { /* nu blocheaza */ }
     if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
     const data = await resp.json()
     if (data.stop_reason === 'max_tokens') return json(200, { success: false, active_id: activeId, error: 'Raspuns AI incomplet (max_tokens); reincearca' })

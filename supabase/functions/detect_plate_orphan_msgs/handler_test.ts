@@ -30,15 +30,21 @@ function mediu(o: { orfane?: unknown[]; cuPoza?: boolean } = {}) {
   const { supa, n } = fakeSupa({ profiles: PROFILES, user_module_access: UMA, whatsapp_messages_processed: (o.orfane ?? ORFANE) as any[], logistica_active: [] })
   const s = supa as any
   const from0 = s.from
-  s.from = (t: string) => { const b = from0(t); b.is = () => b; return b }
+  const usage: any[] = []
+  s.from = (t: string) => {
+    const b = from0(t), insert0 = b.insert
+    b.is = () => b
+    if (t === 'ai_usage_log') b.insert = (row: unknown) => { usage.push(row); return insert0(row) }
+    return b
+  }
   s.auth = { getUser }
   if (o.cuPoza) s.storage = { from: () => ({ download: () => { n.storage++; return Promise.resolve({ data: new Blob([new Uint8Array([1, 2, 3])]), error: null }) } }) }
-  return { supa: s, n }
+  return { supa: s, n, usage }
 }
 // cheie: null = ANTHROPIC_API_KEY lipsă (un `undefined` explicit ar lua valoarea implicită 'k')
 async function ruleaza(headers: Record<string, string>, m = mediu(), cheie: string | null = 'k') {
   const r = await handler(new Request('http://x/', { method: 'POST', headers }), () => ({ supa: m.supa, API_KEY: cheie ?? undefined, fetch: fakeFetch(m.n) }))
-  return { status: r.status, corp: await r.json(), n: m.n }
+  return { status: r.status, corp: await r.json(), n: m.n, usage: m.usage }
 }
 // fabrică de dependențe care aruncă (ex. env lipsă la pornire) — numără de câte ori a fost chemată
 function fabricaCareArunca() {
@@ -120,11 +126,40 @@ Deno.test('admin_logistica cu modul, un mesaj orfan → 200, poza descărcată, 
   const r = await ruleaza({ Authorization: `Bearer ${ADMINL}` }, mediu({ cuPoza: true }))
   assertEquals(r.status, 200); assertEquals(r.corp.summary.total, 1)
   assertEquals(r.n.storage, 1); assertEquals(r.n.ai, 1)
+  assertEquals(r.usage, [{ function_name: 'detect_plate_orphan_msgs', model: 'claude-haiku-5-5',
+    tokens_in: 100, tokens_out: 20, cost_usd: 100 * (0.10 / 1e6) + 20 * (0.50 / 1e6), ref_table: 'whatsapp_messages_processed', ref_id: 1 }])
 })
 
 Deno.test('owner, cheia Anthropic lipsă → 500 doar DUPĂ poartă', async () => {
   const r = await ruleaza({ Authorization: `Bearer ${OWNER}` }, mediu(), null)
   assertEquals(r.status, 500); assertEquals(r.corp.error, 'ANTHROPIC_API_KEY missing'); zeroCost(r.n)
+})
+
+Deno.test('jurnal: HTTP eșuat cu usage se înregistrează; eroarea jurnalului nu schimbă detecția', async () => {
+  for (const caz of ['http', 'throw', 'reject', 'result']) {
+    const m = mediu({ cuPoza: true }), from0 = m.supa.from
+    if (caz !== 'http') m.supa.from = (t: string) => {
+      if (t !== 'ai_usage_log') return from0(t)
+      return { insert: () => {
+        if (caz === 'throw') throw new Error('jurnal indisponibil')
+        if (caz === 'reject') return Promise.reject(new Error('jurnal indisponibil'))
+        return Promise.resolve({ error: { message: 'jurnal indisponibil' } })
+      } }
+    }
+    const r = await handler(new Request('http://x/', { method: 'POST', headers: { Authorization: `Bearer ${OWNER}` } }),
+      () => ({ supa: m.supa, API_KEY: 'k', fetch: () => Promise.resolve(new Response(JSON.stringify({
+        usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: '{"placuta":"PH 21 LBO","confidence":0.99}' }],
+      }), { status: caz === 'http' ? 400 : 200 })) }))
+    const corp = await r.json()
+    assertEquals(r.status, 200)
+    if (caz === 'http') {
+      assertEquals(corp.results[0].error, 'Anthropic 400')
+      assertEquals(m.usage.length, 1)
+    } else {
+      assertEquals(corp.summary.errors, 0)
+      assertEquals(corp.results[0].placuta, 'PH 21 LBO')
+    }
+  }
 })
 
 // JSON-ul valid dintr-un raspuns max_tokens/refuzat nu devine placuta detectata.
@@ -156,7 +191,8 @@ for (const caz of [
     assertEquals(corp.summary.plates_detected, 0); assertEquals(corp.summary.matched, 0)
     assert(corp.results[0].error.includes(caz.eroare)); assertEquals(corp.results[0].placuta, null)
     assertEquals(scrieri, [{ tabel: 'whatsapp_messages_processed', valori: { status: 'no_match', plate_detected: 'FAILED' }, id: 1 }])
-    assertEquals(m.n.scrieri, 1); assertEquals(m.n.ai, 1); assertEquals(m.n.storage, 1)
+    assertEquals(m.n.scrieri, 2); assertEquals(m.n.ai, 1); assertEquals(m.n.storage, 1)
+    assertEquals(m.usage.length, 1); assertEquals(m.usage[0].tokens_in, 100)
     assert(!m.n.citiri.includes('logistica_alimentari'))
   })
 }

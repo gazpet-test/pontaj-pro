@@ -10,7 +10,7 @@
 // Plus pastreaza tot v17 (fix false positives + vehicul_fara_gps_history)
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { autorizeaza } from "./acces.ts";
-import { HAIKU_55, mesajRefuz } from "../_shared/haiku55.ts";
+import { costApel, HAIKU_55, mesajRefuz } from "../_shared/haiku55.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -110,6 +110,18 @@ async function callAnthropic(body: any, retries = 2): Promise<{ data: any | null
         headers: { "x-api-key": ANTHROPIC_API_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" },
         body: JSON.stringify(body),
       });
+      // Un rând per apel, inclusiv înainte de retry; jurnalul nu poate declanșa un retry.
+      try {
+        const d = await res.clone().json();
+        if (res.ok || d?.usage) {
+          const u = d?.usage || {};
+          await supabase.from('ai_usage_log').insert({
+            function_name: 'nightly_patrol_bot', model: body.model,
+            tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+            cost_usd: costApel(body.model, u), ref_table: null, ref_id: null,
+          });
+        }
+      } catch (_) { /* nu blocheaza */ }
       if (res.status === 429 || res.status >= 500) {
         if (attempt < retries) {
           const backoff = (attempt + 1) * 30000;
