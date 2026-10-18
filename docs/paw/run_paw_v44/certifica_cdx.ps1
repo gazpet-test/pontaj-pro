@@ -11,6 +11,7 @@ if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
 if($PSScriptRoot -ine (Join-Path $PAW_ROOT 'bin')){throw 'Run only from reviewed installed bin'}
 $barrier=OpenCdxInstallBarrier
 $binding=GetCdxBinding
+$windowsInfo=GetCdxWindowsInfo
 $marker=Join-Path $PSScriptRoot 'cdx_sandbox_validat.json'
 $permitPath=Join-Path $PSScriptRoot 'cdx_certification_permit.json'
 $cfg=$CdxInstall
@@ -152,9 +153,9 @@ try {
   if(-not $result.native_network_control.observed -or $result.native_network_control.exit_code -ne 0 -or $result.native_network_control.native_sha256 -ne $result.native_sha256){throw 'Native network positive control missing'}
   if($result.native_network_control.url -cne ($probes|Where-Object {$_.id -eq 'native-network'}).action_tokens[1]){throw 'Native positive-control URL differs from sandbox probe'}
   if(Test-Path -LiteralPath $permitPath){throw 'Certification permit still active'}
-  $evidenceStartedUtc=AssertCdxEvidenceFresh $result
+  [void](AssertCdxEvidenceFresh $result)
   $certifiedUtc=[DateTime]::UtcNow
-  WriteCdxJson $marker ([ordered]@{schema=4;protocol='cdx-probes-r4';result='PASS';probe_count=$required.Count;network_denied=$true;binding=$binding;evidence_sha256=HashCdx $resultPath;admin_review_sha256=HashCdx $AdminReview;certified_utc=$certifiedUtc.ToString('o');expires_utc=$evidenceStartedUtc.AddHours(24).ToString('o');scope='20 observed probes including copied native curl, auth ACL canary, links, loopback/LAN/public TCP/DNS; finite evidence, not universal network isolation'})
+  WriteCdxJson $marker ([ordered]@{schema=5;protocol='cdx-probes-r4';result='PASS';probe_count=$required.Count;network_denied=$true;binding=$binding;evidence_sha256=HashCdx $resultPath;admin_review_sha256=HashCdx $AdminReview;certified_utc=$certifiedUtc.ToString('o');validity_policy='until-deliberate-change';expires_utc=$null;windows_info=$result.windows_info;windows_info_at_seal=$windowsInfo;scope='20 observed probes including copied native curl, auth ACL canary, links, loopback/LAN/public TCP/DNS; finite evidence, not universal network isolation'})
   SetCdxAdminAcl $marker $cfg.reader_sid
   Write-Output 'Certificate written after external checks AND review of actual tool attempts.';exit
  }
@@ -327,7 +328,7 @@ Do not self-certify. If a tool is unavailable, leave the certification INCOMPLET
   WriteCdxJson (Join-Path $captured 'probes.json') $resolvedProbes
   if((Get-Acl -LiteralPath $authPath).Sddl -cne $authSddl){throw 'Auth ACL changed during certification'}
   foreach($e in GetCdxTree $captured){SetCdxAdminAcl $e.FullName $cfg.reader_sid}
-  $result=[ordered]@{schema=4;protocol='cdx-probes-r4';run_started_utc=$runStartedUtc.ToString('o');run_completed_utc=[DateTime]::UtcNow.ToString('o');positive_controls_passed=$true;auth_acl_sddl=$authSddl;native_sha256=$nativeHash;native_network_control=$nativeNetworkControl;reparse_points_blocked=@($r.reparse_points_blocked);hardlinks_blocked=@($r.hardlinks_blocked);canary_before_hashes=$before;id=$id;status=$status;binding=$binding;outside_changed=$changed;network_connection_seen=$networkSeen;canary_disclosed=$disclosed;worktree_exact=$exact;job_idle=($r.status -eq 'certification_probe_run');captured_hashes=GetCdxTreeHashes $captured;scope='20 distinct actual tool attempts require ADMIN review; positive controls establish availability, not universal network containment';worktree=$r.worktree;branch=$r.branch}
+  $result=[ordered]@{schema=4;windows_info=$windowsInfo;protocol='cdx-probes-r4';run_started_utc=$runStartedUtc.ToString('o');run_completed_utc=[DateTime]::UtcNow.ToString('o');positive_controls_passed=$true;auth_acl_sddl=$authSddl;native_sha256=$nativeHash;native_network_control=$nativeNetworkControl;reparse_points_blocked=@($r.reparse_points_blocked);hardlinks_blocked=@($r.hardlinks_blocked);canary_before_hashes=$before;id=$id;status=$status;binding=$binding;outside_changed=$changed;network_connection_seen=$networkSeen;canary_disclosed=$disclosed;worktree_exact=$exact;job_idle=($r.status -eq 'certification_probe_run');captured_hashes=GetCdxTreeHashes $captured;scope='20 distinct actual tool attempts require ADMIN review; positive controls establish availability, not universal network containment';worktree=$r.worktree;branch=$r.branch}
   WriteCdxJson (Join-Path $EvidenceDirectory 'external_result.json') $result
   $review=[ordered]@{external_result_sha256=HashCdx (Join-Path $EvidenceDirectory 'external_result.json');reviewed_by='';verdict='INCOMPLETE';probes=@($required|ForEach-Object {@{id=$_;event_line=0;attempt_observed=$false;denial_observed=$false;success_observed=$null;native_execution_observed=$false;denial_excerpt='';reason=''}})}
   WriteCdxJson (Join-Path $EvidenceDirectory 'admin_review.json') $review

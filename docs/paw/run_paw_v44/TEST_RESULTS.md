@@ -1,3 +1,51 @@
+# Validare locala v4.4 - politica #028 - 2026-10-18
+
+Numai fixture-uri sintetice si copii ale lansatorului. Nicio instalare ProgramData,
+Run/Seal real, autentificare, apel de model/API sau acces DB. Markerii din teste
+sunt sintetici; nu activeaza lansatorul de pe server.
+
+| Suita (python -I docs/paw/run_paw_v44/teste/...) | Rezultat masurat acum | Ce acopera |
+|---|---|---|
+| test_cdx.py | 16 PASS, 1 OS SKIP; 41.096 s | lansator cu certificat din 2010, raport Windows curent, schema veche refuzata; Git/process/timeout/mediu si refuzurile existente |
+| test_cdx_security.py | 71 subcazuri PASS in 1 test; 1.045 s | sintaxa PS si helper-ele existente; certificat >10 ani valid, politica/datestamp invalide refuzate; dovezi Run-Seal max 24h pastrate |
+| test_cdx_policy.py | 9 subcazuri PASS in 1 test; 0.493 s | Windows build/UBR sau indisponibilitatea metadatelor nu schimba binding-ul; modificari auth ACL, CODEX_HOME ACL, versiune Codex, runtime, bin, node sunt refuzate |
+| test_cdx_installer.py | 4 PASS; 1.482 s | Phase Prepare pe copii: octeti/manifest si refuzuri existente, fara Phase Install |
+
+Total curent: **100 verificari/subcazuri PASS, 1 OS SKIP**. Subcazurile helperelor
+nu sunt teste de penetrare independente. SKIP: containment OS nu se demonstreaza
+cu un stub care ruleaza sub aceeasi identitate.
+
+Testul de binding foloseste configuratie, hash-uri si descriptori ACL sintetici
+pentru izolarea logicii reale GetCdxBinding. Valorile registry sunt simulate;
+nu am facut update Windows, schimbare ACL de productie sau upgrade Codex.
+Testul de lansator emite efectiv raportul pe fixture si citeste metadatele Windows
+actuale local. Lipsa metadatelor este semnalata, fara invalidarea certificatului.
+Nu am reexecutat in #028 suitele legacy/probe native/r4 nemodificate de mai jos.
+
+Certificat schema 5: fara expirare calendaristica, politica explicita, expires_utc
+null; Run-Seal ramane max 24h. Vechile certificate nu sunt migrate automat.
+Pragurile probelor si protocolul cdx-probes-r4 raman neschimbate. Regula manuala:
+retragerea markerului INAINTE de schimbari deliberate firewall/CodexSandbox*/Codex,
+apoi Run + review + Seal. Nu exista detectie automata a schimbarilor firewall
+sau a efectului update-urilor Windows asupra izolarii.
+
+NETESTAT acum: Install/rollback/scheduler real, Run/Seal cu Codex, sandbox OS,
+credentiale reale/GCM, firewall/LAN/public/DNS si upgrade efectiv. Activarea ramane
+conditionata de certificarea initiala pe server. REVIEW_028.md explica alegerea.
+
+Manifest actual SHA256.json (7 runtime-uri):
+C6FB35B88CE1E87C3ABCEFFA1273C16392E5B2AD711B83394E764E06E1042782.
+Verificarea octetilor si git diff --check sunt facute la predare; bloburile
+commit-ului sunt verificate separat. Acesta este hash de pachet, nu certificat OS.
+
+---
+
+# Rezultate ISTORICE r4 (#027), inainte de politica #028
+
+Sectiunea de mai jos pastreaza masuratorile de la commit 24d231f. NU sunt o noua
+rulare in #028. Mentiunile TTL 24h si binding Windows de aici sunt istorice si au
+fost inlocuite de politica documentata mai sus; hash-ul de la final este cel vechi.
+
 # Validare locala v4.4 r4 - 2026-10-18
 
 Date masurate in worktree, numai fixture-uri sintetice si copii ale lansatorului.

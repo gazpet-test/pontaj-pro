@@ -77,15 +77,25 @@ function AssertCdxHashes($actual,$expected) {
  $a=$actual|ConvertTo-Json -Depth 30 -Compress;$e=$expected|ConvertTo-Json -Depth 30 -Compress
  if($a -cne $e){throw 'cdx_hash_set_mismatch'}
 }
-function AssertCdxCertificateFresh($certificate) {
- if(-not $certificate.certified_utc -or -not $certificate.expires_utc){throw 'cdx_certificate_expiry_missing'}
+function AssertCdxCertificatePolicy($certificate) {
+ # No calendar expiry by operator decision (#028); binding is still checked every run.
+ if($certificate.validity_policy -cne 'until-deliberate-change' -or $null -ne $certificate.expires_utc -or -not $certificate.certified_utc){throw 'cdx_certificate_policy_invalid'}
  $issued=[DateTimeOffset]::Parse($certificate.certified_utc).ToUniversalTime()
- $expires=[DateTimeOffset]::Parse($certificate.expires_utc).ToUniversalTime()
- $now=[DateTimeOffset]::UtcNow
- if($issued -gt $now.AddMinutes(1) -or $expires -le $now -or $expires -le $issued -or ($expires-$issued).TotalHours -gt 24){throw 'cdx_certificate_expired_or_invalid; recertification required'}
+ if($issued -gt [DateTimeOffset]::UtcNow.AddMinutes(1)){throw 'cdx_certificate_time_invalid'}
+}
+function GetCdxWindowsInfo {
+ # Informational only: Windows servicing must not invalidate a sealed certificate.
+ $info=[ordered]@{observed_utc=[DateTime]::UtcNow.ToString('o');available=$false;windows_build=$null;windows_ubr=$null;os_version=[Environment]::OSVersion.Version.ToString()}
+ try {
+  $win=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+  if(-not $win.CurrentBuildNumber -or $null -eq $win.UBR){throw 'Missing Windows metadata'}
+  $info.windows_build=[string]$win.CurrentBuildNumber;$info.windows_ubr=[int]$win.UBR;$info.available=$true
+ } catch {$info.error='windows_metadata_unavailable'}
+ return $info
 }
 function AssertCdxEvidenceFresh($evidence) {
- # Seal cannot renew old evidence indefinitely: expiration is anchored to Run start.
+ # Only fresh Run evidence may be sealed (within 24h of Run start).
+ # This gate does not impose a lifetime on an already sealed certificate.
  if(-not $evidence.run_started_utc -or -not $evidence.run_completed_utc){throw 'cdx_evidence_time_missing'}
  $start=[DateTimeOffset]::Parse($evidence.run_started_utc).ToUniversalTime()
  $end=[DateTimeOffset]::Parse($evidence.run_completed_utc).ToUniversalTime()
@@ -157,9 +167,9 @@ function GetCdxBinding {
  $script:CdxInstall=$cfg
  $auth=Join-Path $cfg.codex_home 'auth.json';AssertCdxSingleFile $auth
  $authAcl=(Get-Acl -LiteralPath $auth).Sddl
- $win=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
- if(-not $win.CurrentBuildNumber -or $null -eq $win.UBR){throw 'cdx_windows_revision_unavailable'}
- return [ordered]@{schema=3;windows_build=[string]$win.CurrentBuildNumber;windows_ubr=[int]$win.UBR;codex_version=$cfg.version;auth_acl_sddl=$authAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');os=[Environment]::OSVersion.Version.ToString();identity=$cfg.reader_sid;isolation=$cfg.isolation}
+ [void](AssertCdxPath $cfg.codex_home)
+ $homeAcl=(Get-Acl -LiteralPath $cfg.codex_home).Sddl
+ return [ordered]@{schema=4;codex_version=$cfg.version;auth_acl_sddl=$authAcl;codex_home_acl_sddl=$homeAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');identity=$cfg.reader_sid;isolation=$cfg.isolation}
 }
 # Windows CRT quoting for controlled internal arguments (not a shell command).
 function ArgCdx([string]$value) {

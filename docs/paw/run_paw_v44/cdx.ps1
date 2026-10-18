@@ -33,15 +33,15 @@ function GetCdxAuthorization($binding) {
  AssertCdxAdminAcl $marker;AssertCdxSingleFile $marker
  $c=Get-Content -LiteralPath $marker -Raw|ConvertFrom-Json
  AssertCdxHashes $binding $c.binding
- if($c.schema -ne 4 -or $c.protocol -ne 'cdx-probes-r4' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
- AssertCdxCertificateFresh $c
+ if($c.schema -ne 5 -or $c.protocol -ne 'cdx-probes-r4' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
+ AssertCdxCertificatePolicy $c
  return $null
 }
 function RuleazaCdx {
  LeagaCopiiiDeLansator
  LuaLock (Join-Path $DATA 'lock_cdx')
  $reportPath=Join-Path $OUT_ROOT ($RUNID+'.json')
- $report=@{schema=2;run_id=$RUNID;status='started';phase='binding';worktree_preserved=$true;branch_preserved=$true;containment='native-elevated candidate; certificate required; Job is lifetime only'}
+ $report=@{schema=2;windows_info=GetCdxWindowsInfo;run_id=$RUNID;status='started';phase='binding';worktree_preserved=$true;branch_preserved=$true;containment='native-elevated candidate; certificate required; Job is lifetime only'}
  try {
   $binding=GetCdxBinding
   $permit=GetCdxAuthorization $binding

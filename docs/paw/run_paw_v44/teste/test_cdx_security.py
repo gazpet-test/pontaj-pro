@@ -90,12 +90,14 @@ Case 'certificate_guid_path_mismatch' {
 Case 'certificate_key_argument_missing' {
  AssertEventReview (ReviewFixture) @($eventFixture) @(@{id='one';tool_type='command_execution';action_tokens=@('C:\canary','ReadAllText','--max-time 5')})
 } $true
-function FreshFixture {return @{certified_utc=[DateTime]::UtcNow.ToString('o');expires_utc=[DateTime]::UtcNow.AddHours(23).ToString('o')}}
-Case 'certificate_fresh' {AssertCdxCertificateFresh (FreshFixture)}
-Case 'certificate_expired' {$c=FreshFixture;$c.certified_utc=[DateTime]::UtcNow.AddHours(-25).ToString('o');$c.expires_utc=[DateTime]::UtcNow.AddHours(-1).ToString('o');AssertCdxCertificateFresh $c} $true
-Case 'certificate_future' {$c=FreshFixture;$c.certified_utc=[DateTime]::UtcNow.AddHours(1).ToString('o');AssertCdxCertificateFresh $c} $true
-Case 'certificate_over_24h' {$c=FreshFixture;$c.expires_utc=[DateTime]::UtcNow.AddHours(25).ToString('o');AssertCdxCertificateFresh $c} $true
-Case 'certificate_no_expiry' {AssertCdxCertificateFresh @{certified_utc=[DateTime]::UtcNow.ToString('o')}} $true
+function CertificateFixture {return @{certified_utc=[DateTime]::UtcNow.ToString('o');expires_utc=$null;validity_policy='until-deliberate-change'}}
+Case 'certificate_current_policy' {AssertCdxCertificatePolicy (CertificateFixture)}
+Case 'certificate_older_than_ten_years' {$c=CertificateFixture;$c.certified_utc=[DateTime]::UtcNow.AddYears(-11).ToString('o');AssertCdxCertificatePolicy $c}
+Case 'certificate_future' {$c=CertificateFixture;$c.certified_utc=[DateTime]::UtcNow.AddHours(1).ToString('o');AssertCdxCertificatePolicy $c} $true
+Case 'certificate_expiry_field_refused' {$c=CertificateFixture;$c.expires_utc=[DateTime]::UtcNow.AddHours(24).ToString('o');AssertCdxCertificatePolicy $c} $true
+Case 'certificate_missing_policy' {AssertCdxCertificatePolicy @{certified_utc=[DateTime]::UtcNow.ToString('o')}} $true
+Case 'certificate_missing_issue_time' {AssertCdxCertificatePolicy @{validity_policy='until-deliberate-change';expires_utc=$null}} $true
+Case 'certificate_malformed_time' {$c=CertificateFixture;$c.certified_utc='invalid';AssertCdxCertificatePolicy $c} $true
 
 function EvidenceFixture {return @{run_started_utc=[DateTime]::UtcNow.AddMinutes(-10).ToString('o');run_completed_utc=[DateTime]::UtcNow.AddMinutes(-1).ToString('o')}}
 Case 'evidence_fresh' {$e=EvidenceFixture;$start=AssertCdxEvidenceFresh $e;if($start.AddHours(24) -gt [DateTimeOffset]::UtcNow.AddHours(24)){throw 'Expiry extended beyond Run'}}

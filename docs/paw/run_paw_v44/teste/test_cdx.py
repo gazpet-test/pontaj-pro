@@ -36,7 +36,7 @@ class Cdx(unittest.TestCase):
   (self.bin/'cdx.ps1').write_text(c,encoding='utf-8')
   self.brief=self.data/'brief/test.md';self.brief.write_text('synthetic');self.out=self.data/'out/result.log';self.cert()
  def cert(self):
-  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':4,'protocol':'cdx-probes-r4','certified_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expires_utc':(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=23)).isoformat(),'result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
+  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':5,'protocol':'cdx-probes-r4','certified_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expires_utc':None,'validity_policy':'until-deliberate-change','result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
  def tearDown(self):
   for k,v in self.env_before.items():
    if v is None:os.environ.pop(k,None)
@@ -51,9 +51,13 @@ class Cdx(unittest.TestCase):
   p=self.root/'outside.md';p.write_text('x');r=self.run_launcher(brief=p);self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists())
  def test_unverified_sandbox_refuses(self):
   (self.bin/'cdx_sandbox_validat.json').unlink();r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists())
- def test_expired_certificate_refuses_before_worktree(self):
-  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c['certified_utc']=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=25)).isoformat();c['expires_utc']=(datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=1)).isoformat();p.write_text(json.dumps(c))
-  r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists());self.assertIn('cdx_certificate_expired_or_invalid',r.stdout)
+ def test_old_certificate_remains_usable(self):
+  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c['certified_utc']='2010-01-01T00:00:00Z';c['windows_info']={'windows_build':'OLD','windows_ubr':1};p.write_text(json.dumps(c))
+  r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+  report=json.loads(next((self.data/'out').glob('*.json')).read_text(encoding='utf-8-sig'));self.assertIn('windows_info',report);self.assertIn('windows_build',report['windows_info']);self.assertNotEqual(report['windows_info'].get('windows_build'),'OLD')
+ def test_legacy_certificate_refuses_before_worktree(self):
+  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c['schema']=4;c.pop('validity_policy');c['expires_utc']=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=23)).isoformat();p.write_text(json.dumps(c))
+  r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists());self.assertIn('cdx_sandbox_unverified',r.stdout)
  def test_worktree_commit_diff(self):
   r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
   reports=list((self.data/'out').glob('*.json'));self.assertEqual(len(reports),1);s=json.loads(reports[0].read_text(encoding='utf-8-sig'));w=pathlib.Path(s['worktree'])

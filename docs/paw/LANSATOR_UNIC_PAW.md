@@ -207,7 +207,7 @@ Fișierul nou moștenește ACL-ul din `bin` (Users doar citire + execuție) — 
    - e pornit doar de sesiunile Claude, prin lansator;
    - nicio acțiune automată pe baza răspunsului.
 
-## v4.4 - cdx, runda 4 (#027), livrabil pentru review
+## v4.4 - cdx, politica de valabilitate #028, livrabil pentru review
 
 `run_paw.cmd cdx <brief.md> <iesire.log> <slug>` creeaza un worktree din
 `origin/main` proaspat preluat, branch `cdx/<runid>-<slug>`. Commit-ul local,
@@ -256,7 +256,8 @@ nu promite interdictia tuturor citirilor din profil. Un refuz lipsa inseamna NO-
   plus node.exe in ProgramData/Gazpet/Paw/codex/<versiune>-<id>. Nu ruleaza npm
   install, scripturi de pachet sau download. Manifest cu toate fisierele si
   directoarele, verificat cu ACL la fiecare lansare. Certificatul leaga manifestul,
-  node.exe, fisierele runtime, configuratia instalarii, identitatea si versiunea OS.
+  node.exe, fisierele runtime, configuratia instalarii, identitatea si ACL-urile
+  auth.json/CODEX_HOME. Build/UBR/versiunea OS raman numai informatii de audit.
 - Bariera ProgramData/Gazpet/Paw/install.lock: handle read partajat tinut de toate
   canalele, exclusiv de installer. Fara unlink. Installerul revede procesele dupa
   lock-uri; lock_* publice sunt deschise READ ONLY, verificate reparse + hardlink.
@@ -314,9 +315,9 @@ un manifest furnizat de acelasi atacator nu da autenticitate.
 
 ```powershell
 # Pas 1: copie de stage noua si verificare, fara ProgramData.
-.\docs\paw\run_paw_v44\install.ps1 -Phase Prepare -Stage C:\Users\Public\paw-data\stage-v44-r4 -ManifestSha256 <HASH_DIN_REVIEW>
+.\docs\paw\run_paw_v44\install.ps1 -Phase Prepare -Stage C:\Users\Public\paw-data\stage-v44-028 -ManifestSha256 <HASH_DIN_REVIEW>
 # Pas 2, consola admin, dupa oprirea lansarilor legacy si review.
-.\docs\paw\run_paw_v44\install.ps1 -Phase Install -Stage C:\Users\Public\paw-data\stage-v44-r4 -ManifestSha256 <ACELASI_HASH> -LegacyStartsStopped
+.\docs\paw\run_paw_v44\install.ps1 -Phase Install -Stage C:\Users\Public\paw-data\stage-v44-028 -ManifestSha256 <ACELASI_HASH> -LegacyStartsStopped
 # Dupa provisionarea CODEX_HOME/auth si a sandbox-ului, Gazpet-Ai trebuie sa fie logat.
 C:\ProgramData\Gazpet\Paw\bin\certifica_cdx.ps1 -Phase Run -LanAddress <IPV4_LAN_AL_SERVERULUI> -ExternalAddress 1.1.1.1 -ExternalPort 443 -DnsName example.com
 ```
@@ -340,8 +341,10 @@ NICIODATA administrator/SYSTEM. Permisul nu activeaza brief-uri arbitrare;
 rezultatul nu este comis in Git. Launcherul refuza token administrativ.
 
 Cele **20 de probe obligatorii** sunt salvate in captured/probes.json, cu ID,
-cale/argumente si comanda exacta pentru review. Certificatul r4/schema 4
-invalideaza formatele anterioare; validarea foloseste ID + action_tokens. Setul include:
+cale/argumente si comanda exacta pentru review. Certificatul schema 5 pastreaza
+protocolul cdx-probes-r4 si cele 20 de probe; formatele anterioare sunt refuzate,
+nu transformate automat in certificate permanente. Actualizarea deliberata a
+runtime-ului cere Run + review + Seal. Validarea foloseste ID + action_tokens. Setul include:
 
 - 6 scrieri: shell + apply_patch in paw-data, profil si .git, canar separat per proba;
 - 4 citiri: profil si CODEX_HOME, fiecare prin shell si unealta separata de shell;
@@ -356,8 +359,9 @@ invalideaza formatele anterioare; validarea foloseste ID + action_tokens. Setul 
 Canarii de SCRIERE contin exact CANARY_WRITE_INITIAL, cunoscut in brief; se verifica
 hash-urile. Doar canarii de CITIRE au un secret sintetic necunoscut modelului.
 Canarii auth-read-* sunt in acelasi CODEX_HOME, cu SDDL identic cu auth.json.
-Nu se citeste continutul credentialelor reale. SDDL auth este legat de binding si
-reverificat dupa probe, la Seal si la fiecare lansare; o schimbare cere recertificare.
+Nu se citeste continutul credentialelor reale. SDDL auth si SDDL al directorului CODEX_HOME sunt
+legate de binding si reverificate la Seal si la fiecare lansare; SDDL auth este
+verificat si imediat dupa probe. O schimbare invalideaza certificatul.
 Aceasta verifica mostenirea/protectia ACL, nu fiecare regula speciala pe nume de fisier.
 
 Scriptul deschide listener separat pe IP-ul LAN VALIDAT ca interfata locala.
@@ -408,19 +412,38 @@ se transforma relatarea modelului in dovada; se revizuieste adaptorul si se rete
 C:\ProgramData\Gazpet\Paw\bin\certifica_cdx.ps1 -Phase Seal -EvidenceDirectory C:\ProgramData\Gazpet\Paw\certification\<id> -AdminReview C:\ProgramData\Gazpet\Paw\certification\<id>\admin_review.json
 ```
 
-**Valabilitate r4:** maximum 24h de la INCEPUTUL Run care a produs dovezile.
-Seal refuza dovezi expirate/lipsa/in viitor si nu extinde durata prin re-Seal.
-Launcherul refuza certificate expirate sau cu durata >24h. Build + UBR Windows,
-versiunea Codex, runtime-ul si auth ACL sunt legate de certificat; schimbarea
-lor cere automat recertificare. Schimbarile firewall/WFP, grupuri/conturi/ACL
-CodexSandbox* nu sunt fingerprintate automat: INAINTE de asemenea modificari,
-operatorul arhiveaza/retrage markerul din bin in mentenanta; dupa ele face un
-Run nou, review si Seal. Aceeasi regula dupa update Windows/Codex/sandbox.
-Nu reutiliza dovezi de dinaintea modificarii. TTL limiteaza, dar nu elimina,
-fereastra reziduala daca regula operationala este incalcata. Nu exista refresh
-automat al certificatului si nu pretindem detectie completa a starii firewall.
+**Activare #028:** la instalare, dupa calificarea initiala si review-ul probelor,
+operatorul executa Seal o singura data. Certificatul schema 5 are
+`validity_policy=until-deliberate-change` si `expires_utc=null`. Nu exista sarcina
+periodica de recertificare: nici zilnica, nici lunara.
 
-Repetabilitatea trebuie verificata de Razvan prin cel putin doua Run independente
+**Valabilitate #028:** fara expirare calendaristica. Alegerea evita si o noua
+recertificare arbitrara la zece ani. Limita de 24h ramane NUMAI pentru dovezi:
+Seal trebuie executat in maximum 24h de la INCEPUTUL Run care le-a produs;
+refuza dovezi expirate/lipsa/in viitor si intervale inconsistente. Un certificat
+sigilat nu expira dupa 24h. Data emiterii lipsa/invalida/in viitor si politica
+neconforma sunt refuzate. Celelalte verificari raman la fiecare pornire.
+
+Binding schema 4: versiune Codex, hash-uri runtime/bin, manifestul intregii copii
+Codex, node.exe, identitate/configuratie si ACL auth.json/CODEX_HOME. Schimbarea
+acestora invalideaza certificatul. Build/UBR Windows si versiunea OS NU sunt in
+binding: update-urile Windows obisnuite nu cer recertificare lunara. Sunt pastrate
+informativ in certificat (windows_info de la Run si windows_info_at_seal) si in
+raportul fiecarei rulari cdx. Daca metadatele Windows nu pot fi citite, raportul
+marcheaza available=false/error; aceasta informatie nu blocheaza lansarea.
+
+**Regula operationala, fara automatizare:** INAINTE de modificari deliberate la
+firewall/WFP, conturi/grupuri/ACL CodexSandbox* sau upgrade Codex, operatorul
+opreste lansarile si retrage/arhiveaza markerul din bin, in mentenanta. Dupa
+modificare executa Run NOU + review + Seal; nu reutilizeaza dovezi anterioare
+modificarii. Aceeasi regula se aplica la schimbarea deliberata a runtime-ului
+sau a celorlalte elemente legate prin binding. Nu exista refresh automat si nici
+fingerprint automat pentru firewall/conturile sandbox. Politica acceptata de
+Razvan nu detecteaza degradarea izolarii printr-un update Windows sau o schimbare
+neanuntata a firewall-ului; aceste stari pot deriva fara invalidarea markerului.
+Un PASS istoric nu demonstreaza universal izolarea unei versiuni OS ulterioare.
+
+La calificarea INITIALA, repetabilitatea trebuie verificata de Razvan prin cel putin doua Run independente
 (fara Seal intre ele, pastrand separat directoarele si ambele review-uri), inainte
 de activare. Seal valideaza tehnic un singur set de dovezi; NU certifica singur
 repetabilitatea. Testele reale/repetarea nu au fost executate de Codex.
