@@ -30,6 +30,18 @@ function db(rand: any, inainteDeUpdate?: () => void) {
 }
 const CITIRE = { tip: 'raspuns_clarificare', rezumat: 'R', modificari: [], intrebari_raspunse: [] }
 
+Deno.test('P1: citire goală sau trunchiată păstrează integral rândul și întoarce eroarea existentă upErr', async () => {
+  for (const citire of [{}, null, [], { ...CITIRE, rezumat: '   ' }, { ...CITIRE, rezumat: {} },
+    { ...CITIRE, motive_incomplet: ['raspuns_ai_taiat'] }]) {
+    const rand: any = { id: 9, status_procesare: 'neprocesat', text_extras: null, analiza_la: 'vechi',
+      analiza: { citire_noi: { rezumat: 'de păstrat' }, citire_noi_lucru: { rev: 'L' }, plansa: { ok: true } } }
+    const copie = structuredClone(rand)
+    const r = await scrieCitireNoi(db(rand), 9, citire, 'a.pdf', undefined, ['citire_noi_lucru'])
+    assertFalse(r.scris); assert(r.upErr?.message)
+    assertEquals(rand, copie)
+  }
+})
+
 Deno.test('reparația rundei 1: un transfer scris ÎNTRE citire și scriere nu se pierde — CAS pe citire_ai.rev, reconstruit peste starea nouă', async () => {
   const rand: any = { id: 470, status_procesare: 'procesat', text_extras: 'x', analiza: { plansa: { rezultat: 'ok' }, citire_ai: { rev: 'r1', gata: true } } }
   const concurent = () => { rand.analiza = { ...rand.analiza, transfer_cantitati: { id: 'T', stare: 'conflicte', n: 2 }, citire_ai: { ...rand.analiza.citire_ai, rev: 'r2' } } }

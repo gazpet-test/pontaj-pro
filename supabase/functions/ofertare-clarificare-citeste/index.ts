@@ -3,6 +3,7 @@
 // citita_la / citita_rezumat pe ofertare_clarificari, ca să se vadă că platforma „a luat cunoștință”.
 // Auth: JWT de utilizator (functions.invoke). Erori de business → return {error}, nu throw.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 // Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
@@ -66,10 +67,15 @@ Deno.serve(async (req: Request) => {
   })
   const data = await resp.json()
   if (!resp.ok) return json({ error: 'Claude: ' + (data.error?.message || resp.status) })
-  const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+  if (data.stop_reason === 'max_tokens') return json({ error: 'Răspuns AI incomplet (max_tokens); clarificarea rămâne neschimbată.' })
+  const refuz = mesajRefuz(data)
+  if (refuz) return json({ error: refuz })
+  const txt = textRaspuns(data)
+  if (!txt.trim()) return json({ error: 'Răspuns AI fără text; clarificarea rămâne neschimbată.' })
   let j: any = null
   try { const m = txt.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null } catch { /* mai jos */ }
   if (!j) return json({ error: 'răspuns AI neinterpretabil', brut: txt.slice(0, 300) })
+  if (typeof j.rezumat !== 'string' || !j.rezumat.trim()) return json({ error: 'Rezumat AI gol sau invalid; clarificarea rămâne neschimbată.' })
 
   try { await db.from('ai_usage_log').insert({ function_name: 'ofertare-clarificare-citeste', model: MODEL, tokens_in: data.usage?.input_tokens || 0, tokens_out: data.usage?.output_tokens || 0, cost_usd: (data.usage?.input_tokens || 0) * PRICE_IN + (data.usage?.output_tokens || 0) * PRICE_OUT, ref_table: 'ofertare_clarificari', ref_id: id }) } catch { /* ignorăm */ }
 

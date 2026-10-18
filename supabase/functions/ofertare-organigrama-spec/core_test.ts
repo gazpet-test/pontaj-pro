@@ -1,5 +1,5 @@
 import { deepStrictEqual as assertEquals } from 'node:assert/strict'
-import { normalizeazaSpecOrganigrama } from './core.ts'
+import { normalizeazaSpecOrganigrama, specOrganigramaValida } from './core.ts'
 
 const linii = ['asociati', 'subcontractanti', 'beneficiar', 'proiectant', 'diriginte', 'biunivoc_cu_seful_de_santier']
 for (const val of [undefined, null, false, true, 'false', 'true', 0, 1]) {
@@ -38,4 +38,25 @@ Deno.test('R16: normalizarea păstrează textul și filtrele existente, fără m
   assertEquals(spec.roluri_cerute[0].domeniu_isc, '8.4(D)')
   assertEquals(spec.documente_suport, ['CV'])
   assertEquals(input, copie)
+})
+
+Deno.test('P1: spec gol, parțial sau fără faze/roluri utilizabile nu autorizează scrierea', () => {
+  const complet = {
+    obligatorie: true, faze: ['executie'], roluri_cerute: [{ rol: 'RTE' }],
+    linii_cerute: Object.fromEntries(linii.map(k => [k, false])),
+    personal_pe_categorii: [], per_operator: false, tabel_nominal: { cerut: false, coloane: [] },
+    corelare_grafic: false, documente_suport: [], format: { observatii: null },
+    domenii_isc_din_obiect: [], avertismente: [],
+  }
+  assertEquals(specOrganigramaValida(complet), true, 'false și listele opționale goale sunt valide')
+  for (const input of [{}, [], null, { roluri_cerute: [{ rol: 'RTE' }] },
+    { ...complet, faze: ['invalid'] }, { ...complet, roluri_cerute: [] },
+    { ...complet, roluri_cerute: [{ rol: '   ' }] }, { ...complet, roluri_cerute: [{ rol: 123 }] },
+    { ...complet, linii_cerute: {} }, { ...complet, tabel_nominal: {} }, { ...complet, format: {} }]) {
+    assertEquals(specOrganigramaValida(input), false)
+  }
+  for (const key of Object.keys(complet)) {
+    const partial: any = { ...complet }; delete partial[key]
+    assertEquals(specOrganigramaValida(partial), false, `câmp lipsă: ${key}`)
+  }
 })
