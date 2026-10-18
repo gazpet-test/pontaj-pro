@@ -7,5 +7,5 @@ export function inventarValid(j: any): boolean {
     Array.isArray(j.dispozitii) && j.dispozitii.every((x: any) => obiect(x) &&
       textSauNull(x.nr) && ['efect_posibil', 'confirmare', 'efect_cantitati', 'neclar', 'anexa'].includes(x.tip) &&
       typeof x.rezumat === 'string' && !!x.rezumat.trim() && typeof x.citat === 'string' && !!x.citat.trim() &&
-      Array.isArray(x.loturi) && x.loturi.every((l: any) => typeof l === 'string') && textSauNull(x.trimite_la))
+      Object.hasOwn(x, 'loturi') && (x.loturi === null || (Array.isArray(x.loturi) && x.loturi.every((l: any) => typeof l === 'string' || (typeof l === 'number' && Number.isFinite(l))))) && textSauNull(x.trimite_la))
 }

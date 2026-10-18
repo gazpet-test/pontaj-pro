@@ -85,3 +85,10 @@ Deno.test('triere: HTTP, max_tokens, refusal, text gol și JSON parțial se opre
     { from() { return { insert() { scrieri++ } } } }, mesajRefuz, textRaspuns, triereValida, 2e-6, 10e-6, 'model-test', 1)
   assert.equal(r.valid, true); assert.equal(scrieri, 1)
 })
+
+Deno.test('triere: număr în loc de text și null pe detaliile rolului acceptate (fals-negative, review)', () => {
+  assert.ok(triereValida({ ...complet, zile_clarificari: 10, valoare_estimata: 1250000 }))
+  assert.ok(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], natura_ceruta: null, cerinte: null, documente: null, motiv: null }] }))
+  assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol: null }] }), false)
+  assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol: ' ' }] }), false)
+})

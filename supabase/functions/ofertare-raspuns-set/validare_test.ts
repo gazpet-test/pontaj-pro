@@ -53,3 +53,9 @@ Deno.test('inventar: gardurile reale păstrează coada și documentele citite la
     assert.equal(r.valid, true); assert.equal(scrieri, 1)
   }
 })
+
+Deno.test('inventar: loturi null sau numerice acceptate (fals-negative, review)', () => {
+  assert.ok(inventarValid({ ...complet, dispozitii: [{ ...dispozitie, loturi: null }] }))
+  assert.ok(inventarValid({ ...complet, dispozitii: [{ ...dispozitie, loturi: [1, '2'] }] }))
+  assert.equal(inventarValid({ ...complet, dispozitii: [{ ...dispozitie, loturi: [{}] }] }), false)
+})
