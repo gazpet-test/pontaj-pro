@@ -209,6 +209,15 @@ Fișierul nou moștenește ACL-ul din `bin` (Users doar citire + execuție) — 
 
 ## v4.4 - cdx, politica de valabilitate #028, livrabil pentru review
 
+### Utilizare cdx (operare)
+
+- cdx este **CERTIFIED** din 18.10.2026 23:09: certificat schema 7, protocol `cdx-probes-r6`, PASS 20/20. Exceptia DNS este acceptata de owner; `apply_patch` al parintelui este policy-enforced, nu OS-attested, acceptat de owner. Certificatul ramane valabil pana la o schimbare deliberata: orice schimbare Codex/runtime/bin/WFP/ACL auth cere Run nou + review + Seal.
+- Pornire: `C:\ProgramData\Gazpet\Paw\bin\run_paw.cmd cdx <brief.md> <iesire.log> <slug>`. Brief-ul sta in `C:\Users\Public\paw-data\brief`; iesirea in `C:\Users\Public\paw-data\out`, cu raport `<runid>.json` si artefacte `.diff`, `.files.txt`, `.events.jsonl`.
+- Brief-ul **TREBUIE sa fie numai ASCII**. Diacriticele sau ghilimelele/cratimele tipografice fac Codex sa iasa fara evenimente: `PAW_EROARE cdx_failed_or_timeout_preserved`.
+- Worktree: `C:\Users\Public\paw-data\cdx\<runid>-<slug>`; branch `cdx/<runid>-<slug>` in repo-ul operational `C:\Users\Gazpet-Ai\gazpet-erp`. Numai commit local, fara push; Claude face push si deschide PR-ul, cu review Copilot + Gemini (nu Jakarinos, acelasi model ca autorul).
+- Helper-ele auxiliare sunt in `C:\ProgramData\Gazpet\Paw\tools`: `edge_cdp.cmd`, `task_edge.ps1`, `paw_api.py`, `paw_claude.py`. Task-ul programat Edge CDP indica `tools\edge_cdp.cmd`.
+- In timpul instalarii nu rulati nimic care corespunde `run_paw` / `paw-data` / `Gazpet\Paw`: installerul refuza.
+
 `run_paw.cmd cdx <brief.md> <iesire.log> <slug>` creeaza un worktree din
 `origin/main` proaspat preluat, branch `cdx/<runid>-<slug>`. Commit-ul local,
 lista fisierelor si diff-ul binar sunt produse de parinte dupa iesirea copilului.
