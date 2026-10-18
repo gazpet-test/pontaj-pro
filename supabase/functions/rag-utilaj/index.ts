@@ -76,7 +76,7 @@ function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 }
 
-// Refuzul filtrului de siguranță vine ca { refuz } — eroare de business, o scrie apelantul în coadă (nu se aruncă).
+// Refuzul sau transcrierea invalidă vin ca { refuz } — eroare de business, o scrie apelantul în coadă (nu se aruncă).
 async function transcribeBatch(pdfB64: string, startPage: number, pageCount: number): Promise<Array<{ pagina: number; text: string }> | { refuz: string }> {
   const prompt = `Acesta este un fragment dintr-o carte tehnică de utilaj industrial (paginile ${startPage}–${startPage + pageCount - 1} din documentul original, numerotare absolută). Transcrie TOT textul lizibil de pe FIECARE pagină (fă OCR dacă e scanat), păstrând limba originală (germană/engleză/română). Include: valori tehnice, tabele (redate ca text simplu), avertismente, denumiri piese, coduri. Ignoră elementele pur grafice. Răspunde DOAR cu JSON valid, fără alt text: [{\"pagina\": <nr absolut începând de la ${startPage}>, \"text\": \"<textul paginii>\"}]. Pagină goală sau doar imagine → text \"\".`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -96,8 +96,10 @@ async function transcribeBatch(pdfB64: string, startPage: number, pageCount: num
   const data = await resp.json();
   const refuz = mesajRefuz(data);
   if (refuz) return { refuz };
+  if (data.stop_reason === 'max_tokens') return { refuz: 'Transcrierea AI este incompletă (limita de tokeni atinsă). Verifică documentul.' };
   let raw = textRaspuns(data).trim();
-  raw = raw.replace(/^```(json)?\s*/i, '').replace(/\s*```$/, '');
+  raw = raw.replace(/^```(json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (!raw) return { refuz: 'Serviciul AI a returnat o transcriere goală. Verifică documentul.' };
   // v7: fără prefill/temperature 0, modelul poate scrie o frază în jurul JSON-ului → a doua încercare, de la primul `[` la ultimul `]`
   const a = raw.indexOf('['), b = raw.lastIndexOf(']');
   for (const cand of [raw, a >= 0 && b > a ? raw.slice(a, b + 1) : '']) {
@@ -107,7 +109,7 @@ async function transcribeBatch(pdfB64: string, startPage: number, pageCount: num
       if (Array.isArray(arr)) return arr.filter((e) => e && typeof e.pagina === 'number' && typeof e.text === 'string');
     } catch (_e) { /* fallback */ }
   }
-  return raw ? [{ pagina: startPage, text: raw }] : [];
+  return { refuz: 'Serviciul AI a returnat o transcriere JSON invalidă. Verifică documentul.' };
 }
 
 // căutare + (opțional) răspuns AI — comun pt ask și ask_qr
@@ -131,6 +133,7 @@ async function searchAndAnswer(supabase: any, question: string, modelKey: string
         messages: [{ role: 'user', content: `Extrase din cartea tehnică:\n\n${context}\n\nÎntrebare: ${question}` }],
       }),
     });
+    if (!aiRes.ok) return json(502, { error: 'Serviciul AI nu a răspuns; reîncearcă.' });
     const aiData = await aiRes.json();
     answer = mesajRefuz(aiData) ? 'Modelul AI a refuzat întrebarea (filtru de siguranță). Uită-te în pasajele de mai jos sau întreabă biroul.'
       : (textRaspuns(aiData) || null);
@@ -170,6 +173,7 @@ Deno.serve(async (req: Request) => {
 
       const modelKey = slugKey(`${activ.marca || ''} ${activ.model || ''}`) || `ACTIV-${activeId}`;
       const result = await searchAndAnswer(supabase, question, modelKey, true); // AI mereu — răspuns în română
+      if (result instanceof Response) return result;
       await supabase.from('rag_qr_log').update({ answered: result.sources.length > 0 }).eq('id', logId);
       return json(200, { success: true, ...result });
     }
@@ -258,7 +262,7 @@ Deno.serve(async (req: Request) => {
 
           const entries = await transcribeBatch(subB64, page, count);
           if (!Array.isArray(entries)) {
-            // refuz: același lot ar fi refuzat din nou — coada trece direct pe 'error', fără reîncercări plătite
+            // refuz sau transcriere invalidă: coada trece direct pe 'error', fără reîncercări plătite
             const msg = `[${step}] ${entries.refuz}`;
             await supabase.from('rag_ingest_queue').update({ attempts: (item.attempts || 0) + 1, error: msg.slice(0, 500), status: 'error' }).eq('id', item.id);
             return json(200, { success: false, queue_id: item.id, error: msg, chunks_inserted: inserted });
@@ -320,6 +324,7 @@ Deno.serve(async (req: Request) => {
       const { question, model_key, ai } = body;
       if (!question) return json(400, { error: 'question necesară' });
       const result = await searchAndAnswer(supabase, String(question).slice(0, 500), model_key || null, !!ai);
+      if (result instanceof Response) return result;
       return json(200, { success: true, ...result });
     }
 
