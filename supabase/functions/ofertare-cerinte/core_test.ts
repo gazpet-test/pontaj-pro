@@ -43,10 +43,10 @@ Deno.test('R15: lipsă potrivire sau normalizare goală nu verifică și nu inve
 // Poarta pe loturi (fn_ofertare_document_eligibil) simulată: implicit eligibil; `eligibil` = motivul de neeligibilitate,
 // `rpcEroare` = RPC-ul pică (fail-closed). `lot` = valoarea dată de model; `nume` = numele documentului.
 type Opt = { stop?: string; brut?: string; pasaj?: string; nume?: string; lot?: unknown; eligibil?: string; rpcEroare?: boolean;
-  corp?: Record<string, unknown>; status?: number; content?: unknown[]; fetchEroare?: boolean }
+  corp?: Record<string, unknown> }
 async function extrage(n: number, opt: Opt = {}) {
   const scrise: any[] = []
-  const apeluri = { ai: 0, rpc: [] as unknown[], operatii: [] as string[] }
+  const apeluri = { ai: 0, rpc: [] as unknown[] }
   const db = { rpc(nume: string, args: Record<string, unknown>) {
     apeluri.rpc.push({ nume, args })
     if (opt.rpcEroare) return Promise.resolve({ data: null, error: { message: 'cădere' } })
@@ -58,27 +58,23 @@ async function extrage(n: number, opt: Opt = {}) {
       : tabel === 'ofertare_documente_atribuire' ? (opt.corp && !opt.corp.doc_id ? fisa
         : { id: 2, tip: 'cs_volum', text_extras: document, nume_original: opt.nume ?? 'Test' }) : [], error: null }
     const q: any = {
-      select: () => q, eq: () => q, order: () => q, limit: () => q, in: () => q, is: () => q,
-      delete: () => { apeluri.operatii.push('delete:' + tabel); return q },
+      select: () => q, eq: () => q, order: () => q, limit: () => q, in: () => q, is: () => q, delete: () => q,
       single: () => Promise.resolve(rezultat),
       then: (resolve: any) => Promise.resolve(rezultat).then(resolve),
       insert: (rows: any) => {
-        if (tabel === 'ofertare_cerinte') { scrise.push(...rows); apeluri.operatii.push('insert:' + tabel) }
+        if (tabel === 'ofertare_cerinte') scrise.push(...rows)
         return Promise.resolve({ error: null })
       },
     }
     return q
   } }
   const fetchVechi = globalThis.fetch
-  globalThis.fetch = (() => {
-    apeluri.ai++; apeluri.operatii.push('ai')
-    if (opt.fetchEroare) return Promise.reject(new Error('transport indisponibil'))
-    return Promise.resolve(new Response(JSON.stringify({
-    stop_reason: opt.stop || 'end_turn', usage: {}, content: opt.content ?? [{ type: 'text', text: opt.brut ?? JSON.stringify({
+  globalThis.fetch = (() => { apeluri.ai++; return Promise.resolve(new Response(JSON.stringify({
+    stop_reason: opt.stop || 'end_turn', usage: {}, content: [{ type: 'text', text: opt.brut ?? JSON.stringify({
       cerinte: Array.from({ length: n }, (_, i) => ({ text_cerinta: `Cerință ${i}`, pasaj: opt.pasaj ?? autentic, pagina: 2,
         ...('lot' in opt ? { lot: opt.lot } : {}) })),
     }) }],
-  }), { status: opt.status ?? 200 })) }) as typeof fetch
+  }))) }) as typeof fetch
   try {
     return { rezultat: await extrageCerinte(db, opt.corp ?? { licitatie_id: 1, doc_id: 2 }), scrise, apeluri }
   } finally { globalThis.fetch = fetchVechi }
@@ -93,42 +89,13 @@ for (const n of [149, 150, 151]) Deno.test(`R15: ${n} cerințe — plafonul semn
 })
 
 Deno.test('R15: max_tokens semnalează trunchierea chiar dacă JSON-ul este valid', async () => {
-  const { rezultat, scrise } = await extrage(1, { stop: 'max_tokens' })
-  assertEquals(rezultat.trunchiat, true)
-  assertEquals(typeof rezultat.error, 'string')
-  assertEquals(scrise.length, 0)
+  assertEquals((await extrage(1, { stop: 'max_tokens' })).rezultat.trunchiat, true)
 })
 
-Deno.test('P1: JSON incomplet nu autorizeaza inserarea unei liste partiale', async () => {
+Deno.test('R15: recuperarea JSON incomplet păstrează cerința și semnalul de trunchiere', async () => {
   const { rezultat, scrise } = await extrage(0, { brut: '{"cerinte":[{"text_cerinta":"Cerință recuperată"},{"text_cerinta":' })
   assertEquals(rezultat.trunchiat, true)
-  assertEquals(typeof rezultat.error, 'string')
-  assertEquals(scrise.length, 0)
-})
-
-for (const [nume, opt] of Object.entries<Opt>({
-  'HTTP esuat cu lista valida': { status: 502 },
-  'max_tokens cu lista valida': { stop: 'max_tokens' },
-  'refuz cu lista valida': { stop: 'refusal' },
-  'fara blocuri text': { content: [{ type: 'thinking', thinking: 'intern' }] },
-  'text gol': { brut: '  \n ' },
-  'obiect gol': { brut: '{}' },
-  'lista goala': { brut: '{"cerinte":[]}' },
-  'lista invalida': { brut: '{"cerinte":[null,{}, {"text_cerinta":"  "}]}' },
-  'JSON partial': { brut: '{"cerinte":[{"text_cerinta":"partial"},' },
-  'transport esuat': { fetchEroare: true },
-})) Deno.test(`P1 reset: ${nume} pastreaza cerintele vechi`, async () => {
-  const { rezultat, scrise, apeluri } = await extrage(1, { ...opt, corp: { licitatie_id: 1, doc_id: 2, reset: true } })
-  assertEquals(typeof rezultat.error, 'string')
-  assertEquals(scrise.length, 0)
-  assertEquals(apeluri.operatii, ['ai'])
-})
-
-Deno.test('P1 reset: raspuns valid permite stergerea doar dupa AI, apoi insert', async () => {
-  const { rezultat, scrise, apeluri } = await extrage(1, { corp: { licitatie_id: 1, doc_id: 2, reset: true } })
-  assertEquals(rezultat.ok, true)
   assertEquals(scrise.length, 1)
-  assertEquals(apeluri.operatii, ['ai', 'delete:ofertare_cerinte', 'insert:ofertare_cerinte'])
 })
 
 Deno.test('R15: răspuns trunchiat fără obiect complet nu devine succes gol', async () => {

@@ -21,7 +21,6 @@
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'
 import { coloaneLot, lotDinNumeFisier, parseLot, type Lot } from '../_shared/lot.ts'
 import { exempleFeedback } from './exemple.ts'
-import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // v9: modelul se poate cere din body. Implicit Opus (cum a fost dintotdeauna); Sonnet costa
@@ -263,6 +262,12 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
         fb.map((x: any, i: number) => `Exemplul ${i + 1}: AI: ${JSON.stringify(x.output_ai)} → corectat: ${JSON.stringify(x.output_corectat)}`).join('\n') + '\n'
       : ''
 
+    if (reset && nrBucata === 0) {
+      // P0b (23.09.2026): reset-ul extractorului vechi șterge doar cerințele lui (extras_de_ai, neconfirmate) —
+      // cerințele importate din Source Pack (sursa_pack_id IS NOT NULL) au proveniență proprie și NU se ating.
+      await supabase.from('ofertare_cerinte').delete().eq('licitatie_id', licId).eq('extras_de_ai', true).is('confirmata_de', null).is('sursa_pack_id', null)
+    }
+
     const sys = modCorpus ? (tipDoc === 'formular' ? PROMPT_FORM(numeDoc) : PROMPT_CS(numeDoc, fewshot)) : PROMPT(sectiune, fewshot)
     const etichetaPag = pagini.de_la ? ` — paginile ${pagini.de_la}${pagini.pana_la && pagini.pana_la !== pagini.de_la ? `–${pagini.pana_la}` : ''} din document` : ''
     const etichetaBucata = toate.length > 1 ? ` [bucata ${nrBucata + 1}/${toate.length}]` : ''
@@ -281,27 +286,27 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
     })
     const data = await resp.json()
     if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
-    if (data.stop_reason === 'max_tokens') return { ...fail('Raspuns AI incomplet (max_tokens); cerintele existente raman neschimbate.'), trunchiat: true }
-    const refuz = mesajRefuz(data)
-    if (refuz) return fail(refuz)
-    const txt = textRaspuns(data)
-    if (!txt.trim()) return fail('Raspuns AI fara text; cerintele existente raman neschimbate.')
 
     try {
       const u = data.usage || {}
       await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-cerinte', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT, ref_table: 'ofertare_licitatii', ref_id: licId })
     } catch (_) {}
 
+    const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
     const clean = txt.replace(/```json?|```/g, '')
     let lista: any[] = []
-    let trunchiat = false
+    let trunchiat = data.stop_reason === 'max_tokens'
     try {
       const m = clean.match(/\{[\s\S]*\}/)
       if (!m) throw new Error('JSON incomplet')
       const parsed = JSON.parse(m[0])
       lista = Array.isArray(parsed.cerinte) ? parsed.cerinte : []
     } catch (_) {
-      return { ...fail('AI a raspuns intr-un format neasteptat; cerintele existente raman neschimbate.'), trunchiat: true }
+      const dupaCerinte = clean.slice(clean.indexOf('"cerinte"'))
+      const objs = dupaCerinte.match(/\{[^{}]*\}/g) || []
+      for (const o of objs) { try { lista.push(JSON.parse(o)) } catch (_) {} }
+      trunchiat = true
+      if (!lista.length) return { ...fail('AI a răspuns într-un format neașteptat (nici recuperarea nu a găsit cerințe).'), trunchiat: true }
     }
 
     const TIPURI = ['eliminatorie', 'propunere', 'forma', 'contractuala']
@@ -347,12 +352,6 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
           extras_de_ai: true,
         }
       })
-    if (!rows.length) return fail('AI nu a furnizat cerinte valide; cerintele existente raman neschimbate.')
-    if (reset && nrBucata === 0) {
-      // Reset doar dupa validare; cerintele confirmate si cele din Source Pack nu se ating.
-      const { error: eDel } = await supabase.from('ofertare_cerinte').delete().eq('licitatie_id', licId).eq('extras_de_ai', true).is('confirmata_de', null).is('sursa_pack_id', null)
-      if (eDel) return fail('stergere cerinte vechi: ' + eDel.message)
-    }
     if (rows.length) {
       const { error: eIns } = await supabase.from('ofertare_cerinte').insert(rows)
       if (eIns) return fail('insert cerinte: ' + eIns.message)
