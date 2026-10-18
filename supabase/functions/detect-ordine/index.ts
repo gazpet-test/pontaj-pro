@@ -71,7 +71,8 @@ async function aiExtract(pdfB64: string, fisierNume: string, supabase: any): Pro
   try {
     const parsed = JSON.parse(txt.replace(/```json?|```/g, '').trim())
     if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' ||
-        !['tip', 'numar_ordin', 'data_ordin', 'titlu'].some((k) => typeof parsed[k] === 'string' && parsed[k].trim())) return null
+        // rezultat util = are numar_ordin sau titlu (doar tip/data nu identifica ordinul; review Copilot)
+        !['numar_ordin', 'titlu'].some((k) => typeof parsed[k] === 'string' && parsed[k].trim())) return null
     return parsed
   } catch (_) { return null }
 }

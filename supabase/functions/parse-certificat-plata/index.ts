@@ -136,7 +136,8 @@ Deno.serve(async (req: Request) => {
     const total = Number(parsed.valoare_totala_fara_tva);
     if (!Array.isArray(parsed.linii) || !parsed.linii.length || !parsed.linii.every((l: any) =>
       l && typeof l.denumire === 'string' && l.denumire.trim() &&
-      ['valoare_baza', 'ajustare', 'alte_sume'].every((k) => l[k] !== null && l[k] !== undefined &&
+      // valoare_baza obligatorie; ajustare / alte_sume pot lipsi sau fi null (= 0) pe certificatele fara ICC / retineri (review Gemini)
+      ['valoare_baza'].every((k) => l[k] !== null && l[k] !== undefined &&
         (typeof l[k] === 'number' || (typeof l[k] === 'string' && l[k].trim() !== '')) && Number.isFinite(Number(l[k]))))) {
       return new Response(JSON.stringify({ success: false, error: 'Liniile certificatului lipsesc sau sunt incomplete.' }), { status: 422, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
     }
