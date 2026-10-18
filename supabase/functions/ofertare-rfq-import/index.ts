@@ -118,7 +118,8 @@ Deno.serve(async (req: Request) => {
         !(p.pret === null || (Number.isFinite(p.pret) && p.pret >= 0))) return false
       vazute.add(p.material_id)
       return true
-    }) || !parsed.preturi.some((p: any) => Number.isFinite(p.pret) && p.pret >= 0)) // macar un pret real; toate null = suspect (review Gemini)
+    }) || vazute.size !== idsValide.size // cate un rand pentru FIECARE material cerut (pret null = neofertat); lista partiala nu poate inlocui (review Copilot)
+      || !parsed.preturi.some((p: any) => Number.isFinite(p.pret) && p.pret >= 0)) // macar un pret real; toate null = suspect (review Gemini)
       return fail('AI nu a furnizat o lista valida de preturi; preturile si metadatele existente raman neschimbate.')
     const preturi = (Array.isArray(parsed.preturi) ? parsed.preturi : [])
       .filter((p: any) => idsValide.has(p.material_id))
