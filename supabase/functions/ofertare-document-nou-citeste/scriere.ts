@@ -27,6 +27,10 @@ async function motivSchimbare(cur: any, sursa: AmprentaSursa): Promise<string | 
 const SEL = 'analiza, status_procesare, text_extras, procesat_la, fisier_path'
 // fara = chei de scos din `analiza` odată cu scrierea (ex. citire_noi_lucru — starea rezumatului pe felii, 06.10.2026).
 export async function scrieCitireNoi(db: any, id: number, citire: any, numeOriginal: string, sursa?: AmprentaSursa, fara: string[] = []): Promise<{ upErr: any; scris: boolean; stale?: boolean; motiv?: string }> {
+  // Inclusiv felii salvate de versiunea veche: trunchierea nu autorizează înlocuirea citirii existente.
+  if (!citire || Array.isArray(citire) || typeof citire.rezumat !== 'string' || !citire.rezumat.trim() ||
+      citire.motive_incomplet?.includes('raspuns_ai_taiat'))
+    return { upErr: { message: 'Rezultat AI gol, invalid sau incomplet (max_tokens); citirea existentă rămâne neschimbată.' }, scris: false }
   let upErr: any = null, scris = false
   for (let incercare = 0; incercare < 3 && !scris; incercare++) {
     const { data: cur } = await db.from('ofertare_documente_atribuire').select(SEL).eq('id', id).maybeSingle()

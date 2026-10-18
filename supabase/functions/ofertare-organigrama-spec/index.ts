@@ -17,7 +17,8 @@
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { normalizeazaSpecOrganigrama } from './core.ts'
+import { normalizeazaSpecOrganigrama, specOrganigramaValida } from './core.ts'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { termenRO } from '../_shared/oraRO.ts'
 import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
@@ -142,11 +143,15 @@ ${ferestre.map((f, i) => `--- [${i + 1}] ${f.document} @${f.offset} ---\n${f.tex
   })
   const data = await resp.json()
   if (!resp.ok) return json({ error: 'Claude: ' + (data.error?.message || resp.status) })
-  if (data.stop_reason === 'refusal') return json({ error: 'Claude a refuzat citirea documentelor' })
-  const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+  if (data.stop_reason === 'max_tokens') return json({ error: 'Răspuns AI incomplet (max_tokens); spec existent rămâne neschimbat.' })
+  const refuz = mesajRefuz(data)
+  if (refuz) return json({ error: refuz })
+  const txt = textRaspuns(data)
+  if (!txt.trim()) return json({ error: 'Răspuns AI fără text; spec existent rămâne neschimbat.' })
   let j: any = null
   try { const m = txt.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null } catch { /* mai jos */ }
   if (!j || typeof j !== 'object') return json({ error: 'răspuns AI neinterpretabil', brut: txt.slice(0, 300) })
+  if (!specOrganigramaValida(j)) return json({ error: 'Spec AI incomplet (câmpuri lipsă, faze sau roluri goale); spec existent rămâne neschimbat.' })
 
   const tokIn = data.usage?.input_tokens || 0, tokOut = data.usage?.output_tokens || 0
   try { await db.from('ai_usage_log').insert({ function_name: 'ofertare-organigrama-spec', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * PRICE_IN + tokOut * PRICE_OUT, ref_table: 'ofertare_licitatii', ref_id: licId }) } catch { /* ignorăm */ }
