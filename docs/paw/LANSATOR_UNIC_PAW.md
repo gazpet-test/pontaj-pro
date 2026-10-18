@@ -206,3 +206,55 @@ Fișierul nou moștenește ACL-ul din `bin` (Users doar citire + execuție) — 
    - rulează ca utilizatorul serverului, fără service_role;
    - e pornit doar de sesiunile Claude, prin lansator;
    - nicio acțiune automată pe baza răspunsului.
+
+## v4.4 — cdx (livrabil local, neinstalat)
+
+`run_paw.cmd cdx <brief.md> <iesire.log> <slug>` creează un worktree din
+`origin/main` proaspăt preluat, branch `cdx/<runid>-<slug>`. Brief numai în
+`paw-data/brief`, ieșire numai în `paw-data/out`. Slug: 1–40 caractere ASCII
+mici/cifre/cratimă, fără cratimă la capete. Lock exclusiv `lock_cdx`.
+Părintele face commit local, diff binar față de baza salvată, lista fișierelor
+și raport JSON. Nu face push. La timeout nu face commit de succes.
+
+Comenzile Codex folosesc `workspace-write`, fără aprobări, MCP sau configurația
+utilizatorului, cu rețeaua comenzilor dezactivată și directoarele temporare
+excluse. Conexiunea necesară serviciului modelului nu este aceeași cu rețeaua
+comenzilor. Referințe oficiale:
+https://learn.chatgpt.com/docs/windows/windows-sandbox și
+https://learn.chatgpt.com/docs/config-file/config-reference.
+
+**Limită blocantă pentru activare:** stub-ul, executat cu același utilizator,
+nu constituie sandbox Windows. Testul de imposibilitate a scrierii externe este
+SKIPPED, nu trecut. Modul refuză pornirea fără `paw-data/cdx_sandbox_validat.json`
+cu hash-urile launcher_sha256/helper_sha256/codex_sha256 și probele independente
+outside_write_denied/network_denied. Nu crea acest fișier ca simplă aprobare:
+reviewerul trebuie să testeze executabilul real și versiunea sa nativă, configurația
+Windows, scrierea externă, rețeaua și accesul la metadatele Git. Hash-ul wrapperului
+JS singur nu certifică binarul nativ. Artefactul nu este pregătit pentru activare
+până atunci. Job Object verifică terminarea arborelui, nu izolează filesystem-ul.
+Nu sunt certificate filtrele Git globale, hardlink-urile sau un atac concurent al
+altui proces cu aceeași identitate. Codul nu trebuie tratat ca frontieră ostilă.
+
+Teste: `python -I docs/paw/run_paw_v44/teste/test_cdx.py` (stub, origin local).
+Regresii v4.3: `python -I docs/paw/run_paw_v44/teste/test_run_paw.py`.
+
+### Instalare în doi pași — numai ulterior, de operator
+
+Nicio comandă de mai jos nu a fost executată asupra instalării. Înainte de pasul
+2, operatorul suspendă toate lansările (v4.3 nu are barieră globală de instalare).
+Scriptul refuză procese Paw active și lock-uri ocupate; verificarea proceselor
+nu elimină singură cursa cu o lansare v4.3 nouă. Este necesară fereastra de mentenanță.
+SHA256.json conține hash-urile celor patru fișiere runtime; hash-ul manifestului
+se compară cu valoarea primită separat din review, nu cu o valoare autoaprobată.
+
+```powershell
+# 1. Pregătire și verificare; director nou, fără ProgramData:
+.\docs\paw\run_paw_v44\install.ps1 -Phase Prepare -Stage C:\Users\Public\paw-data\stage-v44 -ManifestSha256 <HASH_MANIFEST_DIN_REVIEW>
+# 2. După review și oprirea lansărilor, în consola operatorului:
+.\docs\paw\run_paw_v44\install.ps1 -Phase Install -Stage C:\Users\Public\paw-data\stage-v44 -ManifestSha256 <ACELASI_HASH>
+```
+
+Pasul 2 păstrează backup complet v4.3 și hash-uri, copiază și verifică fiecare
+fișier, restaurează automat fișierele înlocuite dacă verificarea eșuează.
+Installerul este doar furnizat pentru review; rollback-ul pe ProgramData și
+izolarea Windows nu au fost executate/testate în această sarcină.
