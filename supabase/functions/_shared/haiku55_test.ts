@@ -1,7 +1,46 @@
 import { deepStrictEqual as assertEquals, ok } from 'node:assert/strict'
-import { costApel, HAIKU_55, jsonDinText, mesajRefuz, textRaspuns } from './haiku55.ts'
+import { costApel, HAIKU_55, jsonDinText, mesajRefuz, modelParsare, textRaspuns } from './haiku55.ts'
+import { faraGandire } from './gandire.ts'
 
 const aprox = (a: number, b: number) => ok(Math.abs(a - b) < 1e-12, `${a} != ${b}`)
+
+Deno.test('modelParsare: modele permise, gandire si tarife cunoscute, fara avertismente', () => {
+  const warn = console.warn
+  const avertismente: unknown[][] = []
+  console.warn = (...args: unknown[]) => { avertismente.push(args) }
+  try {
+    for (const [model, thinking, pretIn, pretOut] of [
+      [HAIKU_55, 'disabled', 0.10, 0.50],
+      ['claude-haiku-4-5', 'disabled', 1, 5],
+      ['claude-sonnet-5-5', 'between_tools', 2, 10],
+    ] as const) {
+      const ales = modelParsare(model)
+      assertEquals(ales, model)
+      assertEquals(faraGandire(ales), { type: thinking })
+      aprox(costApel(ales, { input_tokens: 1000 }), pretIn / 1000)
+      aprox(costApel(ales, { output_tokens: 1000 }), pretOut / 1000)
+    }
+    assertEquals(modelParsare(undefined), HAIKU_55)
+    assertEquals(avertismente, [])
+  } finally {
+    console.warn = warn
+  }
+})
+
+Deno.test('modelParsare: necunoscut sau gol revine la Haiku 5.5, cu un avertisment per valoare', () => {
+  const warn = console.warn
+  const avertismente: unknown[][] = []
+  console.warn = (...args: unknown[]) => { avertismente.push(args) }
+  try {
+    for (const valoare of ['claude-opus-5-5', 'model-necunoscut', '', ' ', 'claude-haiku-5-5 ', 'CLAUDE-HAIKU-5-5', 'claude-haiku-4-5-20251001']) {
+      avertismente.length = 0
+      assertEquals(modelParsare(valoare), HAIKU_55)
+      assertEquals(avertismente, [['PARSE_CONTRACT_MODEL respins; folosim Haiku 5.5:', valoare]])
+    }
+  } finally {
+    console.warn = warn
+  }
+})
 
 Deno.test('costApel: Haiku 5.5 0,10/0,50 $ pe 1M, peste 100K prompt 0,50/2,50, cache 0,1x / 1,25x', () => {
   assertEquals(HAIKU_55, 'claude-haiku-5-5')

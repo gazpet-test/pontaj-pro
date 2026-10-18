@@ -5,12 +5,22 @@
 // iar pe Haiku NU există fallback pe server. Tokenizerul nou numără ~30% mai mulți tokeni pentru același text.
 export const HAIKU_55 = 'claude-haiku-5-5'
 
+const MODELE_PARSARE = [HAIKU_55, 'claude-haiku-4-5', 'claude-sonnet-5-5']
+
+// Override doar pentru modele cu gandire si pret cunoscute; lipsa variabilei e normala.
+export function modelParsare(envValue: string | undefined): string {
+  if (envValue !== undefined && MODELE_PARSARE.includes(envValue)) return envValue
+  if (envValue !== undefined) console.warn('PARSE_CONTRACT_MODEL respins; folosim Haiku 5.5:', envValue)
+  return HAIKU_55
+}
+
 type Pret = { in: number; out: number; prag?: number; peste?: { in: number; out: number } }
 // $ / token. Haiku 5.5: 0,10 / 0,50 $ pe 1M cu promptul ≤ 100K tokeni, 0,50 / 2,50 peste; citire din cache 0,1x intrarea,
 // scriere în cache (5 min) 1,25x. Haiku 4.5 rămâne în tabel: modelul se poate suprascrie din env (PARSE_CONTRACT_MODEL).
 export const PRETURI_HAIKU: Record<string, Pret> = {
   [HAIKU_55]: { in: 0.10 / 1e6, out: 0.50 / 1e6, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } },
   'claude-haiku-4-5': { in: 1 / 1e6, out: 5 / 1e6 },
+  'claude-sonnet-5-5': { in: 2 / 1e6, out: 10 / 1e6 },
   'claude-haiku-4-5-20251001': { in: 1 / 1e6, out: 5 / 1e6 },
 }
 

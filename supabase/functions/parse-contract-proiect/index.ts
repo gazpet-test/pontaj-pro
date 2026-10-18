@@ -5,7 +5,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { faraGandire } from '../_shared/gandire.ts'
-import { costApel, HAIKU_55, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { costApel, modelParsare, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -15,8 +15,8 @@ const CORS = {
 
 // 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts) — gândire oprită explicit (pe 5.5 e pornită implicit), max_tokens
 // 2000 → 2600 (tokenizer ~30% mai mare), cost pe prețul nou, textul doar din blocurile `text`, refuzul filtrului → 422 cu mesaj.
-// ATENȚIE: dacă secretul PARSE_CONTRACT_MODEL e setat (ex. pe Haiku 4.5), el câștigă — costul se calculează pe modelul real.
-const MODEL = Deno.env.get('PARSE_CONTRACT_MODEL') || HAIKU_55
+// PARSE_CONTRACT_MODEL se accepta doar din lista permisa; costul se calculeaza pe modelul ales.
+const MODEL = modelParsare(Deno.env.get('PARSE_CONTRACT_MODEL'))
 const MAX_PDF_MB = 10
 const BUCKETS_PERMISE = new Set(['executie-contracte'])
 
