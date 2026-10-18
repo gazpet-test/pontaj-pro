@@ -144,6 +144,17 @@ function Get-Acl {param([string]$LiteralPath) return $script:aclFixture}
 Case 'admin_acl_readers_allowed' {$script:aclFixture=AclFixture 'S-1-5-32-544' $false;AssertCdxAdminAcl $root}
 Case 'admin_acl_world_write_rejected' {$script:aclFixture=AclFixture 'S-1-5-32-544' $true;AssertCdxAdminAcl $root} $true
 Case 'non_admin_owner_rejected' {$script:aclFixture=AclFixture 'S-1-1-0' $false;AssertCdxAdminAcl $root} $true
+function AclFixtureRule($sid,$rights,$inherit,$prop) {
+ $a=New-Object Security.AccessControl.DirectorySecurity
+ $a.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+ $a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')),'FullControl','Allow')))
+ $a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)),[Security.AccessControl.FileSystemRights]$rights,[Security.AccessControl.InheritanceFlags]$inherit,[Security.AccessControl.PropagationFlags]$prop,'Allow')))
+ return $a
+}
+Case 'trustedinstaller_writer_allowed' {$script:aclFixture=AclFixtureRule 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464' 'FullControl' 'ContainerInherit,ObjectInherit' 'None';AssertCdxAdminAcl $root}
+Case 'creator_owner_inherit_only_ignored' {$script:aclFixture=AclFixtureRule 'S-1-3-0' 'FullControl' 'ContainerInherit,ObjectInherit' 'InheritOnly';AssertCdxAdminAcl $root}
+Case 'creator_owner_effective_write_rejected' {$script:aclFixture=AclFixtureRule 'S-1-3-0' 'Modify' 'None' 'None';AssertCdxAdminAcl $root} $true
+Case 'users_inherit_only_write_ignored_but_effective_rejected' {$script:aclFixture=AclFixtureRule 'S-1-5-32-545' 'Modify' 'ContainerInherit,ObjectInherit' 'None';AssertCdxAdminAcl $root} $true
 
 Case 'install_barrier_handle_not_inherited' {
  $PAW_ROOT=$root;$script:aclFixture=AclFixture 'S-1-5-32-544' $false

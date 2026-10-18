@@ -48,10 +48,14 @@ function GetCdxTree([string]$root,[bool]$skipRootGit=$false) {
 function AssertCdxAdminAcl([string]$path) {
  [void](AssertCdxPath $path)
  $acl=Get-Acl -LiteralPath $path
- $admins=@('S-1-5-18','S-1-5-32-544')
+ # SYSTEM, Administrators si TrustedInstaller (proprietarul standard din Program Files/Windows) = scriitori admisi.
+ $admins=@('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
  if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $admins){throw 'cdx_acl_owner_not_admin'}
- $write=[int][Security.AccessControl.FileSystemRights]::Write -bor [int][Security.AccessControl.FileSystemRights]::Delete -bor [int][Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [int][Security.AccessControl.FileSystemRights]::ChangePermissions -bor [int][Security.AccessControl.FileSystemRights]::TakeOwnership
+ # Drepturi de scriere, inclusiv GENERIC_ALL (0x10000000) si GENERIC_WRITE (0x40000000).
+ $write=[int][Security.AccessControl.FileSystemRights]::Write -bor [int][Security.AccessControl.FileSystemRights]::Delete -bor [int][Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [int][Security.AccessControl.FileSystemRights]::ChangePermissions -bor [int][Security.AccessControl.FileSystemRights]::TakeOwnership -bor 0x10000000 -bor 0x40000000
  foreach($r in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+  # Un ACE InheritOnly nu se aplica obiectului insusi (ex. CREATOR OWNER din Program Files); copiii se verifica separat.
+  if($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly){continue}
   if($r.AccessControlType -eq 'Allow' -and ([int]$r.FileSystemRights -band $write) -and $r.IdentityReference.Value -notin $admins){throw 'cdx_acl_non_admin_writer'}
  }
 }
