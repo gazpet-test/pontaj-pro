@@ -5,7 +5,7 @@
 **Ce face PR-ul:**
 - `supabase/functions/noutati-mail/index.ts` (funcția intră pentru prima dată în repo): secretul se citește din `NOUTATI_SECRET` (Edge Secrets), comparat prin digesturi de lungime fixă (fără garanție de timp constant la nivel mașină). Dacă secretul lipsește sau are sub 24 de caractere, calea cu secret e închisă (fail-closed) și rămâne doar JWT de owner.
 - `titlu` și `descriere` sunt escapate în HTML-ul mailului (înainte erau interpolate direct).
-- Restul comportamentului e identic cu v8 (Resend, `trimis_la`, un mail per rând).
+- Runda 2 adauga claim atomic si raport pe rand; semantica trimis_la este explicata mai jos.
 
 **Ordinea de livrare (doar cu OK-ul lui Răzvan):**
 1. Răzvan setează în Supabase → Edge Functions → Secrets `NOUTATI_SECRET` = o valoare NOUĂ, aleatoare (min. 24 caractere). Valoarea veche se consideră compromisă.
@@ -47,5 +47,46 @@ Curățarea istoricului și a înregistrării vechi rămâne operațiune separat
 
 Sursa pentru citirea variabilelor: https://supabase.com/docs/guides/functions/secrets.
 Nu s-au făcut deploy, setări de secrete sau operații asupra bazei de date.
-Concurența trimiterilor/idempotency și retry după mail trimis dar marcaj eșuat
-rămân în afara acestui patch de autorizare; nu se promite exactly-once.
+
+## Inainte de deploy (runda 2 #023; NEEXECUTAT aici)
+
+- Verificati RLS/GRANT: utilizatorul NU isi poate seta `profiles.is_owner`;
+  JWT-ul verificat trebuie sa-si poata citi profilul propriu prin clientul anon+JWT.
+  Orice refuz/error/null da 401. Nu mai folosim service_role pentru verificarea
+  owner; exista un singur client privilegiat, numai dupa autorizare.
+- Confirmati Edge Secrets reale si rotatia valorii vechi, fara valori in loguri;
+  Vault al eventualului cron ramane separat. Configuratia noua
+  `supabase/config.toml` fixeaza verify_jwt=false numai pentru aceasta functie;
+  anterior acest fisier nu exista pe branch. Gateway-ul nu inlocuieste autorizarea.
+- Testati in Deno/Supabase toate cazurile de acces cu furnizorul de mail interceptat,
+  apoi claim-ul concurent PostgREST real. Testele locale folosesc mock atomic;
+  nu dovedesc configuratia RLS, granturile sau comportamentul bazei live.
+- Deno nu este disponibil in PATH aici; deno check/test NU au fost rulate.
+  Node 24: 19/19 teste trecute, fara retea sau secrete reale.
+
+### Claim si erori: decizia explicita
+
+UPDATE cu id si trimis_la IS NULL, RETURNING id este claim-ul inainte de HTTP.
+Daca nu revine un id, randul este sarit; la eroare claim nu se trimite.
+Pastrasem riscul de concurenta in prima versiune; acum este adresat in cod.
+
+Pastrez claim-ul la ORICE eroare a furnizorului, inclusiv resp.text si erori
+HTTP certe; nu resetez automat la NULL. Un timeout/reset poate urma unei trimiteri
+reusite si resetarea ar permite dublarea. Rezultatul pe rand este trimis,
+eroare_furnizor_<status> sau eroare_retea_furnizor; bucla continua. Nu introduc
+un tabel/coloana/stare DB noua. `trimis_la` inseamna acum rezervare/incercare,
+NU dovada de livrare. Un crash dupa claim poate lasa un rand netrimis blocat.
+Acesta este compromis at-most-one-attempt pentru apeluri concurente, nu exactly-once.
+Operatorul trebuie sa pastreze raportul si sa reconcilieze cu furnizorul inainte
+oricarei resetari manuale, prin preview/aprobare/apply; aceasta sarcina nu reseteaza.
+
+### Review acceptat/respins
+
+Acceptate: encoding UTF-8 fara BOM + test payload; try/catch HTTP/body; claim;
+subiect fara CR/LF; destinatari goi; CORS methods; config; client privilegiat unic;
+teste refuz/owner/erori/concurenta. Resping resetarea automata sugerata de Gemini,
+din cauza rezultatului incert al trimiterii. Testul sugerat care interzice orice
+UPDATE pe esec este incompatibil cu claim-ul prealabil: verificam in schimb
+retinerea claim-ului si zero retry. Nu preiau afirmatia de constant-time strict:
+ramane limitarea JS documentata. RLS/GRANT, secrete, cron si Deno/live raman
+conditii de livrare, nu rezultate confirmate. Nicio actiune in productie.
