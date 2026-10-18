@@ -106,7 +106,12 @@ async function transcribeBatch(pdfB64: string, startPage: number, pageCount: num
     if (!cand) continue;
     try {
       const arr = JSON.parse(cand);
-      if (Array.isArray(arr)) return arr.filter((e) => e && typeof e.pagina === 'number' && typeof e.text === 'string');
+      if (Array.isArray(arr)) {
+        const pagini = arr.filter((e) => e && typeof e.pagina === 'number' && typeof e.text === 'string');
+        // [] sau numai elemente invalide = lot fără pagini: eroare, nu succes (altfel coada sare peste lot fără indexare)
+        if (!pagini.length) return { refuz: 'Serviciul AI nu a returnat nicio pagină validă pentru acest lot. Verifică documentul.' };
+        return pagini;
+      }
     } catch (_e) { /* fallback */ }
   }
   return { refuz: 'Serviciul AI a returnat o transcriere JSON invalidă. Verifică documentul.' };
