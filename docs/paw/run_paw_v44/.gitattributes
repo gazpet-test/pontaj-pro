@@ -1,2 +1,1 @@
-# fisierele lansatorului se instaleaza octet cu octet (hash-uri verificate la instalare): fara conversie de capat de linie
-* -text
+* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

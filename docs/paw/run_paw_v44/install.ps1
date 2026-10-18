@@ -1,53 +1,110 @@
-# Repository artifact only: never run as part of tests or authoring.
+# Review artifact. Run explicitly as administrator; never from an agent task.
 [CmdletBinding()]
 param([ValidateSet('Prepare','Install')][string]$Phase='Prepare',
  [Parameter(Mandatory=$true)][string]$Stage,
  [Parameter(Mandatory=$true)][string]$ManifestSha256,
- [string]$Destination='C:\ProgramData\Gazpet\Paw\bin')
+ [string]$CodexPackage='C:\Users\Gazpet-Ai\AppData\Roaming\npm\node_modules\@openai\codex',
+ [string]$NodeExe='C:\Program Files\nodejs\node.exe',
+ [string]$Reader='Gazpet-Ai',
+ [switch]$UseExistingGitCredentialManager,
+ [switch]$LegacyStartsStopped)
 $ErrorActionPreference='Stop'
-function HashFile($p) { $s=[IO.File]::OpenRead($p);$h=[Security.Cryptography.SHA256]::Create();try {([BitConverter]::ToString($h.ComputeHash($s))).Replace('-','')}finally{$s.Dispose();$h.Dispose()} }
-function CheckRoot($p) {
- $full=[IO.Path]::GetFullPath($p)
- if ($full.StartsWith('\\') -or $full.Substring(2).Contains(':')) {throw 'UNC/ADS refused'}
- for($x=$full;$x;$x=Split-Path $x -Parent){if((Test-Path -LiteralPath $x) -and ((Get-Item -LiteralPath $x -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Reparse refused'}}
- return $full
-}
-$Stage=CheckRoot $Stage;$Destination=CheckRoot $Destination
-$files=@('run_paw.cmd','run_paw.ps1','cdx.ps1','gemini_pw.py')
-function Verify($root) {
- $manifest=Join-Path $root 'SHA256.json'
- if((HashFile $manifest) -ne $ManifestSha256){throw 'Manifest hash mismatch'}
- $m=Get-Content -LiteralPath $manifest -Raw|ConvertFrom-Json
- foreach($f in $files){if((HashFile (Join-Path $root $f)) -ne $m.$f){throw "Hash mismatch: $f"}}
+. (Join-Path $PSScriptRoot 'cdx_security.ps1')
+$PAW_ROOT='C:\ProgramData\Gazpet\Paw';$Destination=Join-Path $PAW_ROOT 'bin'
+$files=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','gemini_pw.py','install.ps1')
+$Stage=AssertCdxPath $Stage
+function VerifyStage($root) {
+ $m=Join-Path $root 'SHA256.json';AssertCdxSingleFile $m
+ if((HashCdx $m) -ne $ManifestSha256){throw 'Untrusted or changed manifest'}
+ $manifest=Get-Content -LiteralPath $m -Raw|ConvertFrom-Json
+ foreach($n in $files){$f=Join-Path $root $n;AssertCdxSingleFile $f;if((HashCdx $f) -ne $manifest.$n){throw ('Runtime mismatch: '+$n)}}
 }
 if($Phase -eq 'Prepare') {
- Verify $PSScriptRoot
+ VerifyStage $PSScriptRoot
  if(Test-Path -LiteralPath $Stage){throw 'Stage already exists'}
  [void][IO.Directory]::CreateDirectory($Stage)
- foreach($f in ($files+@('SHA256.json'))){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $f) -Destination $Stage}
- Verify $Stage
- Write-Output 'Prepared and verified. No installed files changed.';exit
+ foreach($n in ($files+@('SHA256.json'))){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $n) -Destination $Stage}
+ VerifyStage $Stage
+ Write-Output 'Prepared only. No installation, account, auth or certificate created.';exit
 }
-Verify $Stage
-if(-not(Test-Path -LiteralPath $Destination)){throw 'Existing v4.3 installation required'}
-# Legacy v4.3 has no installation barrier: operator must stop new starts during upgrade.
-$active=@(Get-CimInstance Win32_Process|Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)(run_paw\.(ps1|cmd)|gemini_pw\.py|copilot_pw\.py)' })
-if($active.Count){throw 'Active launcher: refuse installation'}
-$locks=@();$backup=$Destination+'.backup-v43-'+(Get-Date -Format 'yyyyMMdd-HHmmss-ffff')
+$me=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if(-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Administrator required'}
+if(-not $LegacyStartsStopped){throw 'Stop legacy starts in maintenance window; v4.3 has no installation barrier'}
+VerifyStage $Stage
+[void](AssertCdxPath $PAW_ROOT);[void](AssertCdxPath $CodexPackage);AssertCdxSingleFile $NodeExe
+$readerSid=(New-Object Security.Principal.NTAccount($Reader)).Translate([Security.Principal.SecurityIdentifier]).Value
+# Exact source tree before and after copy: no dependencies outside this npm package accepted.
+$source=GetCdxTreeHashes $CodexPackage;$nodeHash=HashCdx $NodeExe
+$pkg=Get-Content -LiteralPath (Join-Path $CodexPackage 'package.json') -Raw|ConvertFrom-Json
+if($pkg.name -ne '@openai/codex' -or $pkg.version -notmatch '^\d+\.\d+\.\d+([-.][A-Za-z0-9.]+)?$'){throw 'Codex package/version invalid'}
+$native=Join-Path $CodexPackage 'node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe'
+if(-not(Test-Path -LiteralPath $native -PathType Leaf)){throw 'Bundled native Codex missing; refusing external module resolution'}
+function AssertNoPawProcesses {
+ $a=@(Get-CimInstance Win32_Process|Where-Object {$_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)(run_paw\.(ps1|cmd)|gemini_pw\.py|copilot_pw\.py|certifica_cdx\.ps1)'})
+ if($a.Count){throw 'Active launcher/certifier; no installation performed'}
+}
+AssertNoPawProcesses
+$gazpet=Split-Path $PAW_ROOT
+foreach($d in @($gazpet,$PAW_ROOT)){
+ if(-not(Test-Path -LiteralPath $d)){[void][IO.Directory]::CreateDirectory($d)}
+ SetCdxAdminAcl $d $readerSid
+}
+$lock=Join-Path $PAW_ROOT 'install.lock'
+if(-not(Test-Path -LiteralPath $lock)){[IO.File]::WriteAllText($lock,'Paw installation barrier')}
+AssertCdxSingleFile $lock;SetCdxAdminAcl $lock $readerSid
+$barrier=OpenCdxInstallBarrier $true
+$held=@();$backup=$null;$newRuntime=$null
 try {
- foreach($f in @('C:\Users\Public\paw-data\lock_cdx','C:\Users\Public\paw-data\lock_gem')+@(Get-ChildItem 'C:\Users\Public\paw-data\lock_cop_*' -ErrorAction SilentlyContinue|ForEach-Object FullName)) {
-  $locks+= [IO.File]::Open($f,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+ # Open existing public locks READ ONLY and never truncate/write them as admin.
+ $data='C:\Users\Public\paw-data';[void](AssertCdxPath $data)
+ foreach($l in Get-ChildItem -LiteralPath $data -Filter 'lock_*' -Force){
+  if($l.PSIsContainer){throw 'Lock directory refused'}
+  AssertCdxSingleFile $l.FullName
+  $h=[IO.File]::Open($l.FullName,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+  if([PawCdx.Files]::Links($h.SafeFileHandle) -ne 1){$h.Dispose();throw 'Lock hardlink refused'}
+  $held+=$h
  }
- Copy-Item -LiteralPath $Destination -Destination $backup -Recurse
- $before=@{};foreach($f in $files){$p=Join-Path $Destination $f;if(Test-Path $p){$before[$f]=HashFile $p}}
- $before|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $backup 'backup-hashes.json') -Encoding UTF8
- try {
-  foreach($f in ($files+@('SHA256.json'))){Copy-Item -LiteralPath (Join-Path $Stage $f) -Destination $Destination -Force}
-  Verify $Destination
- } catch {
-  foreach($f in ($files+@('SHA256.json'))){$old=Join-Path $backup $f;$new=Join-Path $Destination $f;if(Test-Path $old){Copy-Item -LiteralPath $old -Destination $new -Force}else{if(Test-Path $new){Remove-Item -LiteralPath $new}}}
-  foreach($f in $before.Keys){if((HashFile (Join-Path $Destination $f)) -ne $before[$f]){throw 'Rollback hash mismatch; manual intervention required'}}
-  throw
+ AssertNoPawProcesses
+ # Stabilize reviewed artifacts before copying; no staged script is executed as admin.
+ foreach($e in @(GetCdxTree $Stage)){SetCdxAdminAcl $e.FullName $readerSid};SetCdxAdminAcl $Stage $readerSid
+ VerifyStage $Stage
+ $id=Get-Date -Format 'yyyyMMdd-HHmmss-ffff'
+ $codexRoot=Join-Path $PAW_ROOT 'codex';[void][IO.Directory]::CreateDirectory($codexRoot);SetCdxAdminAcl $codexRoot $readerSid
+ $newRuntime=Join-Path $codexRoot ($pkg.version+'-'+$id);[void][IO.Directory]::CreateDirectory($newRuntime);SetCdxAdminAcl $newRuntime $readerSid
+ Copy-Item -LiteralPath $CodexPackage -Destination (Join-Path $newRuntime 'package') -Recurse
+ Copy-Item -LiteralPath $NodeExe -Destination (Join-Path $newRuntime 'node.exe')
+ AssertCdxHashes $source (GetCdxTreeHashes (Join-Path $newRuntime 'package'))
+ AssertCdxHashes $source (GetCdxTreeHashes $CodexPackage)
+ if((HashCdx (Join-Path $newRuntime 'node.exe')) -ne $nodeHash){throw 'Node changed during copy'}
+ foreach($e in GetCdxTree $newRuntime){SetCdxAdminAcl $e.FullName $readerSid}
+ $incoming=Join-Path $PAW_ROOT ('bin-staged-'+$id);[void][IO.Directory]::CreateDirectory($incoming);SetCdxAdminAcl $incoming $readerSid
+ # Retain existing channel dependencies (e.g. cgpt_pw.py); review their original trust separately.
+ if(Test-Path -LiteralPath $Destination){
+  [void]@(GetCdxTree $Destination)
+  Copy-Item -LiteralPath $Destination -Destination (Join-Path $PAW_ROOT ('backup-'+$id)) -Recurse
+  $backup=Join-Path $PAW_ROOT ('backup-'+$id)
+  foreach($e in Get-ChildItem -LiteralPath $Destination -Force){Copy-Item -LiteralPath $e.FullName -Destination $incoming -Recurse}
  }
- Write-Output "Installed; backup: $backup. cdx remains gated until independent sandbox certification."
-} finally {foreach($l in $locks){$l.Dispose()}}
+ foreach($n in ($files+@('SHA256.json'))){Copy-Item -LiteralPath (Join-Path $Stage $n) -Destination $incoming -Force}
+ foreach($n in @('cdx_sandbox_validat.json','cdx_certification_permit.json')){if(Test-Path -LiteralPath (Join-Path $incoming $n)){Remove-Item -LiteralPath (Join-Path $incoming $n)}}
+ $noHooks=Join-Path $incoming 'no-hooks'
+ if(Test-Path -LiteralPath $noHooks){if(@(Get-ChildItem -LiteralPath $noHooks -Force).Count){throw 'Existing hooks directory not empty'}}else{[void][IO.Directory]::CreateDirectory($noHooks)}
+ $cdxHomePath=Join-Path $PAW_ROOT 'state\codex-home'
+ $helper=$null
+ if($UseExistingGitCredentialManager){
+  $helper='C:\Program Files\Git\mingw64\bin\git-credential-manager.exe'
+  AssertCdxAdminAcl $helper;AssertCdxSingleFile $helper
+ }
+ # Auth is NOT copied/generated. Admin/operator provisions login separately before certification.
+ WriteCdxJson (Join-Path $incoming 'cdx_install.json') ([ordered]@{schema=2;isolation='native-elevated-candidate';reader_sid=$readerSid;reader=$Reader;runtime_root=$newRuntime;codex_home=$cdxHomePath;git_credential_helper=$helper;version=$pkg.version})
+ WriteCdxJson (Join-Path $incoming 'cdx_runtime_manifest.json') (GetCdxTreeHashes $newRuntime)
+ VerifyStage $incoming
+ foreach($e in GetCdxTree $incoming){SetCdxAdminAcl $e.FullName $readerSid}
+ AssertNoPawProcesses
+ # With the global lock held and legacy starts administratively stopped, swap directories.
+ $old=Join-Path $PAW_ROOT ('bin-retired-'+$id)
+ if(Test-Path -LiteralPath $Destination){Move-Item -LiteralPath $Destination -Destination $old}
+ try{Move-Item -LiteralPath $incoming -Destination $Destination;VerifyStage $Destination;AssertCdxAdminAcl $Destination}
+ catch{if(Test-Path -LiteralPath $Destination){Move-Item -LiteralPath $Destination -Destination (Join-Path $PAW_ROOT ('bin-failed-'+$id))};if(Test-Path -LiteralPath $old){Move-Item -LiteralPath $old -Destination $Destination};throw}
+ Write-Output ('Installed, NOT certified. Retired bin: '+$old+'; backup: '+$backup+'; runtime: '+$newRuntime)
+} finally {foreach($h in $held){$h.Dispose()};$barrier.Dispose()}

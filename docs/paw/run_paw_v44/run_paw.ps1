@@ -33,6 +33,7 @@
 # ASCII only. Compatibil Windows PowerShell 5.1.
 param([string]$Cine = "", [string]$Brief = "", [string]$Out = "", [string]$Model = "", [string]$Imagini = "")
 $ErrorActionPreference = "Stop"
+$PAW_ROOT = "C:\ProgramData\Gazpet\Paw"
 $DATA = "C:\Users\Public\paw-data"
 $BRIEF_ROOTS = @("$DATA\brief", "C:\Users\Public\erp_review")
 $OUT_ROOT = "$DATA\out"
@@ -112,6 +113,7 @@ function LuaLock([string]$cale) {
   try { $fs = [IO.File]::Open($full, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, $share) }
   catch [System.IO.IOException] { throw ("ocupat de alta rulare (" + (Split-Path -Leaf $full) + " e tinut deschis)") }
   try {
+    if ([PawV4.Fs]::Links($fs.SafeFileHandle) -ne 1) { throw "lock hardlink refuzat" }
     if (-not (SubRadacina ([PawV4.Fs]::FinalPath($fs.SafeFileHandle)) $DATA)) { throw "lock rezolvat in afara radacinii de date" }
     $fs.SetLength(0); $b = [Text.Encoding]::ASCII.GetBytes($RUNID + " pid=" + $PID); $fs.Write($b, 0, $b.Length); $fs.Flush()
   } catch { $fs.Close(); throw }
@@ -210,17 +212,22 @@ function EliberezLock() {
   if ($script:LockFs) { try { $script:LockFs.Close() } catch {}; $script:LockFs = $null }
 }
 function Arg([string]$a) { if ($a -match '["\r\n]') { throw "argument interzis" }; if ($a -match '\s' -or $a -eq "") { return '"' + $a + '"' } else { return $a } }
-function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env) {
+function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env, [bool]$cleanEnvironment = $false, [bool]$trustedArguments = $false) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $exe
-  $psi.Arguments = (($argv | ForEach-Object { Arg $_ }) -join " ")
+  $psi.Arguments = (($argv | ForEach-Object { if ($trustedArguments) { ArgCdx $_ } else { Arg $_ } }) -join " ")
   $psi.UseShellExecute = $false; $psi.CreateNoWindow = $false
   $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.RedirectStandardInput = $true
   $psi.WorkingDirectory = $cwd
   $psi.StandardOutputEncoding = [Text.Encoding]::UTF8; $psi.StandardErrorEncoding = [Text.Encoding]::UTF8
-  if ($env) { foreach ($k in $env.Keys) { $psi.EnvironmentVariables[$k] = [string]$env[$k] } }
-  $psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"; $psi.EnvironmentVariables["PYTHONUTF8"] = "1"
-  [void]$psi.EnvironmentVariables.Remove("PLAYWRIGHT_NODEJS_PATH")   # r4: driverul ramane mereu node.exe-ul din pachet (identificabil)
+  # .NET Framework can throw while importing a Windows block with Path/PATH duplicates.
+  # A clean child discards the entire (possibly partially initialized) dictionary.
+  try { $childEnvironment = $psi.get_EnvironmentVariables() }
+  catch [System.ArgumentException] { if (-not $cleanEnvironment) { throw }; $childEnvironment = $psi.get_EnvironmentVariables() }
+  if ($cleanEnvironment) { $childEnvironment.Clear(); if ($childEnvironment.Count -ne 0) { throw 'environment_not_empty' } }
+  if ($env) { foreach ($k in $env.Keys) { $childEnvironment[$k] = [string]$env[$k] } }
+  if (-not $cleanEnvironment) { $childEnvironment["PYTHONIOENCODING"] = "utf-8"; $childEnvironment["PYTHONUTF8"] = "1" }
+  [void]$childEnvironment.Remove("PLAYWRIGHT_NODEJS_PATH")   # r4: driverul ramane mereu node.exe-ul din pachet (identificabil)
   $p = [System.Diagnostics.Process]::Start($psi)
   if ($stdinText -ne $null) { $p.StandardInput.Write($stdinText) }
   $p.StandardInput.Close()
@@ -443,7 +450,16 @@ function StergeDirImg([string]$d) {
   if ($motiv) { try { Add-Content -LiteralPath $JURNAL -Value ("{0} | tmp_img NESTERS: {1} | {2}" -f $RUNID, $d, $motiv) -Encoding UTF8 } catch {} }
 }
 
-. (Join-Path $PSScriptRoot 'cdx.ps1')
+# Global barrier is held until process exit on ALL channels, before loading helpers.
+# Installer owns the same inode exclusively, and rechecks active launchers after locking.
+try {
+  $installLock = Join-Path $PAW_ROOT 'install.lock'
+  [void](CaleSigura $installLock @($PAW_ROOT) $true)
+  $script:InstallBarrier = [IO.File]::Open($installLock,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::Read -bor [IO.FileShare]::Inheritable))
+  if ([PawV4.Fs]::Links($script:InstallBarrier.SafeFileHandle) -ne 1) { throw 'install_lock_hardlink' }
+  . (Join-Path $PSScriptRoot 'cdx.ps1')
+  AssertCdxAdminAcl $PAW_ROOT; AssertCdxAdminAcl $installLock
+} catch { Eroare ('install_barrier: ' + $_.Exception.Message) }
 
 # --- validari ---
 try {

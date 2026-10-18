@@ -207,54 +207,163 @@ Fișierul nou moștenește ACL-ul din `bin` (Users doar citire + execuție) — 
    - e pornit doar de sesiunile Claude, prin lansator;
    - nicio acțiune automată pe baza răspunsului.
 
-## v4.4 — cdx (livrabil local, neinstalat)
+## v4.4 - cdx, runda 2 (#024), livrabil pentru review
 
-`run_paw.cmd cdx <brief.md> <iesire.log> <slug>` creează un worktree din
-`origin/main` proaspăt preluat, branch `cdx/<runid>-<slug>`. Brief numai în
-`paw-data/brief`, ieșire numai în `paw-data/out`. Slug: 1–40 caractere ASCII
-mici/cifre/cratimă, fără cratimă la capete. Lock exclusiv `lock_cdx`.
-Părintele face commit local, diff binar față de baza salvată, lista fișierelor
-și raport JSON. Nu face push. La timeout nu face commit de succes.
+`run_paw.cmd cdx <brief.md> <iesire.log> <slug>` creeaza un worktree din
+`origin/main` proaspat preluat, branch `cdx/<runid>-<slug>`. Commit-ul local,
+lista fisierelor si diff-ul binar sunt produse de parinte dupa iesirea copilului.
+Fara push. Brief numai in paw-data/brief; rezultate in paw-data/out. Slug ASCII
+mic/cifre/cratima, 1-40 caractere, fara cratima la capete. La orice esec branch-ul
+si worktree-ul se pastreaza, raportul indica status, phase, reason si cai.
 
-Comenzile Codex folosesc `workspace-write`, fără aprobări, MCP sau configurația
-utilizatorului, cu rețeaua comenzilor dezactivată și directoarele temporare
-excluse. Conexiunea necesară serviciului modelului nu este aceeași cu rețeaua
-comenzilor. Referințe oficiale:
-https://learn.chatgpt.com/docs/windows/windows-sandbox și
-https://learn.chatgpt.com/docs/config-file/config-reference.
+### Alegerea izolarii si ce nu este demonstrat
 
-**Limită blocantă pentru activare:** stub-ul, executat cu același utilizator,
-nu constituie sandbox Windows. Testul de imposibilitate a scrierii externe este
-SKIPPED, nu trecut. Modul refuză pornirea fără `paw-data/cdx_sandbox_validat.json`
-cu hash-urile launcher_sha256/helper_sha256/codex_sha256 și probele independente
-outside_write_denied/network_denied. Nu crea acest fișier ca simplă aprobare:
-reviewerul trebuie să testeze executabilul real și versiunea sa nativă, configurația
-Windows, scrierea externă, rețeaua și accesul la metadatele Git. Hash-ul wrapperului
-JS singur nu certifică binarul nativ. Artefactul nu este pregătit pentru activare
-până atunci. Job Object verifică terminarea arborelui, nu izolează filesystem-ul.
-Nu sunt certificate filtrele Git globale, hardlink-urile sau un atac concurent al
-altui proces cu aceeași identitate. Codul nu trebuie tratat ca frontieră ostilă.
+Varianta 1 este **candidat pentru certificare**, nu activata: sandbox Windows
+nativ explicit `windows.sandbox=elevated`, `workspace-write`, approval never,
+fara MCP/config/rules utilizator, copii fara retea. Varianta 2 NU este declarata
+implementata: daca certificarea arata o scriere externa, lectura profilului sau
+un gol de acoperire, cdx ramane inchis si este necesar brokerul PawCdx separat.
+Nu generam acum un cont/parola si nu pretindem ca un cont simplu ar fi sandbox.
 
-Teste: `python -I docs/paw/run_paw_v44/teste/test_cdx.py` (stub, origin local).
-Regresii v4.3: `python -I docs/paw/run_paw_v44/teste/test_run_paw.py`.
+Verificat local: npm @openai/codex 0.162.0; bin/codex.js porneste un binar nativ
+in pachetul OPTIONAL NESTED node_modules/@openai/codex-win32-x64/vendor.
+Sunt prezente conturile CodexSandboxOffline/Online. Prezenta lor NU demonstreaza
+ca o anumita comanda ruleaza sub ele. Nu am executat CLI-ul real pentru certificare.
 
-### Instalare în doi pași — numai ulterior, de operator
+Documentatia oficiala descrie elevated ca utilizatori dedicati + ACL/firewall,
+iar unelevated ca token restrictionat cu garantii de retea mai slabe. Ea descrie
+izolarea comenzilor si copiilor, nu o izolare generala a intregului host Codex.
+Codul public curent apply_patch foloseste FileSystemSandboxContext si filesystem
+adapter; nu deducem din acesta tokenul Windows al fiecarei scrieri din binarul
+instalat. Versiunea sursei main nu este atestarea binarului 0.162.0.
+Prin urmare nu afirmam nici ca apply_patch este numai o rugaminte in prompt,
+nici ca toate scrierile hostului sunt deja blocate de kernel.
 
-Nicio comandă de mai jos nu a fost executată asupra instalării. Înainte de pasul
-2, operatorul suspendă toate lansările (v4.3 nu are barieră globală de instalare).
-Scriptul refuză procese Paw active și lock-uri ocupate; verificarea proceselor
-nu elimină singură cursa cu o lansare v4.3 nouă. Este necesară fereastra de mentenanță.
-SHA256.json conține hash-urile celor patru fișiere runtime; hash-ul manifestului
-se compară cu valoarea primită separat din review, nu cu o valoare autoaprobată.
+Surse: [Windows sandbox](https://learn.chatgpt.com/docs/windows/windows-sandbox),
+[config reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+Investigatia locala si limitarile sunt in run_paw_v44/REVIEW_024.md.
+Job Object asigura durata de viata a arborelui observat, NU izolarea fisierelor.
+Un proces arbitrar ostil cu aceeasi identitate Windows nu este acoperit de aceasta
+certificare. Lectura profilului este o proba obligatorie: workspace-write, singur,
+nu promite interdictia tuturor citirilor din profil. Un refuz lipsa inseamna NO-GO.
+
+### Radacina de incredere si Git
+
+- Certificat numai in ProgramData/Gazpet/Paw/bin/cdx_sandbox_validat.json,
+  proprietar Administrators/SYSTEM, scriere numai lor, Gazpet-Ai ReadAndExecute.
+  Lipsa, ACL nesigur, schimbare de hash/set de fisiere -> refuz.
+- Installerul copiaza INTREG pachetul npm, inclusiv dependentele nested/native,
+  plus node.exe in ProgramData/Gazpet/Paw/codex/<versiune>-<id>. Nu ruleaza npm
+  install, scripturi de pachet sau download. Manifest cu toate fisierele si
+  directoarele, verificat cu ACL la fiecare lansare. Certificatul leaga manifestul,
+  node.exe, fisierele runtime, configuratia instalarii, identitatea si versiunea OS.
+- Bariera ProgramData/Gazpet/Paw/install.lock: handle read partajat tinut de toate
+  canalele, exclusiv de installer. Fara unlink. Installerul revede procesele dupa
+  lock-uri; lock_* publice sunt deschise READ ONLY, verificate reparse + hardlink.
+  Prima trecere de la v4.3 necesita si oprirea administrativa a lansarilor vechi.
+- Git porneste cu mediu curat, GIT_CONFIG_GLOBAL=NUL, GIT_CONFIG_NOSYSTEM=1,
+  hooksPath gol protejat, fsmonitor off, credential.helper gol (exceptia fetch descrisa mai jos), fara SSH/protocol ext,
+  commit --no-verify, diff --no-ext-diff --no-textconv. Originea HTTPS este fixata
+  la gazpet-test/pontaj-pro. Configurile locale folosesc allowlist strict, inclusiv
+  inainte de fetch/checkout. Include/filter/alias/command sunt refuzate.
+- Fotografie a config/config.worktree/info attributes/exclude si INTREG metadir
+  worktree (inclusiv HEAD, commondir, gitdir, index), comparata dupa job idle,
+  inainte de orice Git ulterior. Pointerul .git se compara literal.
+- Radacina si descendentele: fara reparse/hardlink/nume NTFS rezervate, fara
+  .git imbricat, .gitmodules sau atribute filter/diff/merge/textconv. Refuzul este
+  conservator: inclusiv unele atribute legitime cer review, nu sunt executate.
+
+**Fetch privat:** implicit nu se foloseste niciun credential helper. Administratorul
+poate alege la instalare `-UseExistingGitCredentialManager`: numai fetch-ul
+PARINTELUI foloseste executabilul fix din Program Files/Git/mingw64/bin,
+ACL+hash legate de certificat, cu autentificarea Windows Credential Manager deja
+existenta si GCM_INTERACTIVE=Never. Helperul nu este dat copilului Codex, nu se
+copiaza tokenuri in mediu/fisiere si nu se schimba configurarea Git globala.
+Lipsa helperului/credentialelor opreste fetch-ul; nu porneste login automat.
+Aceasta autentificare reala ramane netestata aici.
+
+### Mediul si autentificarea
+
+Procesul Codex primeste numai SystemRoot/WINDIR/ComSpec, PATH minim (copie runtime,
+System32, WindowsPowerShell), TEMP/TMP=<worktree>/.tmp, CODEX_HOME dedicat si
+variabile Git de refuz. Nu primeste USERPROFILE/APPDATA, NODE_OPTIONS, proxy-uri,
+GITHUB_TOKEN, SUPABASE*, PG*, ANTHROPIC*, RESEND* sau OPENAI_API_KEY.
+Codex se autentifica din `ProgramData/Gazpet/Paw/state/codex-home/auth.json`,
+provisionat separat de operator prin mecanismul de login acceptat de versiunea
+instalata. Installerul NU copiaza secrete si NU initializeaza acest director.
+Operatorul trebuie sa creeze state/codex-home cu ACL minim pentru contul lansatorului
+si sa pregateasca sandbox-ul elevated pentru acest CODEX_HOME. Aceste operatii
+raman la administrator; compatibilitatea fara profil se verifica la certificare.
+.tmp se verifica contra linkurilor si se sterge inainte de add; un .tmp preexistent
+in baza este refuzat. Configurile host pot contine date de autentificare necesare
+modelului: izolarea citirilor fata de uneltele copil nu este presupusa.
+
+### Instalare in doi pasi, certificare, activare
+
+Aceste comenzi sunt instructiuni pentru Razvan DUPA review. Nu au fost executate
+pe ProgramData. Verifica separat provenienta commit-ului si hash-ul installerului;
+un manifest furnizat de acelasi atacator nu da autenticitate.
 
 ```powershell
-# 1. Pregătire și verificare; director nou, fără ProgramData:
-.\docs\paw\run_paw_v44\install.ps1 -Phase Prepare -Stage C:\Users\Public\paw-data\stage-v44 -ManifestSha256 <HASH_MANIFEST_DIN_REVIEW>
-# 2. După review și oprirea lansărilor, în consola operatorului:
-.\docs\paw\run_paw_v44\install.ps1 -Phase Install -Stage C:\Users\Public\paw-data\stage-v44 -ManifestSha256 <ACELASI_HASH>
+# Pas 1: copie de stage noua si verificare, fara ProgramData.
+.\docs\paw\run_paw_v44\install.ps1 -Phase Prepare -Stage C:\Users\Public\paw-data\stage-v44-r2 -ManifestSha256 <HASH_DIN_REVIEW>
+# Pas 2, consola admin, dupa oprirea lansarilor legacy si review.
+.\docs\paw\run_paw_v44\install.ps1 -Phase Install -Stage C:\Users\Public\paw-data\stage-v44-r2 -ManifestSha256 <ACELASI_HASH> -LegacyStartsStopped
+# Dupa provisionarea CODEX_HOME/auth si a sandbox-ului, Gazpet-Ai trebuie sa fie logat.
+C:\ProgramData\Gazpet\Paw\bin\certifica_cdx.ps1 -Phase Run
 ```
 
-Pasul 2 păstrează backup complet v4.3 și hash-uri, copiază și verifică fiecare
-fișier, restaurează automat fișierele înlocuite dacă verificarea eșuează.
-Installerul este doar furnizat pentru review; rollback-ul pe ProgramData și
-izolarea Windows nu au fost executate/testate în această sarcină.
+Certificarea creeaza numai canari sintetici, un brief fix si un permis admin
+expirabil, legat de hash-uri si de acel brief. Textul probei folosit de copil este
+in permisul protejat, nu recitit din paw-data dupa verificare. O sarcina programata
+tranzitorie ruleaza lansatorul REAL cu tokenul INTERACTIV LIMITAT Gazpet-Ai,
+NICIODATA administrator/SYSTEM. Permisul nu activeaza brief-uri arbitrare;
+rezultatul nu este comis in Git. Launcherul refuza token administrativ.
+
+Cele 9 probe: scriere shell si apply_patch in paw-data/profil/.git; conectare TCP
+shell la un listener loopback controlat; citire canar profil prin shell si prin
+unealta separata. Verificarile externe compara canarii, observa conexiunea,
+controleaza diff + toate fisierele neversionate (inclusiv ignorate) si PAW_OK exact,
+colecteaza evenimentele intr-un director admin si hash-uieste dovezile.
+
+**Run nu scrie certificatul.** Administratorul verifica in events.jsonl ca fiecare
+incercare chiar s-a facut si a fost refuzata, ca identitatea/sandbox-ul sunt cele
+asteptate si completeaza admin_review.json cu ID, linia evenimentului si motiv.
+Agent_message/self-report nu este acceptat. Incercare lipsa, unealta indisponibila,
+refuz nesigur, succes, timeout sau hash schimbat => fara certificat. Nu bifa automat
+campurile; o eroare de patch/context nu demonstreaza refuz de acces.
+
+```powershell
+# Numai dupa verificarea externa a evenimentelor; folderul real este afisat de Run.
+C:\ProgramData\Gazpet\Paw\bin\certifica_cdx.ps1 -Phase Seal -EvidenceDirectory C:\ProgramData\Gazpet\Paw\certification\<id> -AdminReview C:\ProgramData\Gazpet\Paw\certification\<id>\admin_review.json
+```
+
+Proba de retea observa loopback; nu certifica singura toate protocoalele/adresele
+Internet. Acoperirea firewall/copii sandbox trebuie verificata de administrator.
+Evenimentele CLI pot avea alta schema in alte versiuni; scriptul refuza o schema
+nerecunoscuta. Daca citirea profilului este permisa sau apply_patch nu este izolat,
+NU executa Seal si NU fabrica un marker. Varianta PawCdx este pasul urmator de
+implementare/review: cont non-admin, broker de lansare, parola generata si pastrata
+in Credential Manager/DPAPI, ACL numai pe worktree, revocare dupa idle inainte Git.
+Acest fallback nu este inclus ca o falsa garantie in livrabilul actual.
+
+### Rollback si curatare dupa esec
+
+Installerul pastreaza bin-retired-<id>, backup-<id> si runtime-ul copiat. Schimbarea
+bin se face numai cu bariera exclusiva, dupa oprirea vechilor lansari; eroarea la
+verificarea noului bin restaureaza directorul retras. Nu se sterg arbitrar runtime-uri.
+Rollback ulterior: fereastra de mentenanta, verificare procese/job idle, bariera
+exclusiva pe acelasi install.lock, verificare hash-uri backup si ACL, mutarea
+literal-path a bin curent intr-un nume de audit si a bin-retired verificat in bin.
+Un certificat pentru alte hash-uri NU se reutilizeaza. Daca nu exista copie
+verificata, nu face rollback automat. Installer/rollback reale sunt NETESTATE.
+
+Pentru un esec cdx: citeste raportul, confirma ca PID/job/copiii au iesit, salveaza
+worktree-ul/diff-ul necesar si verifica exact branch-ul si calea din raport.
+Abia apoi, manual, din checkout-ul parinte verificat:
+`git worktree remove -- <CALEA_EXACTA>` (fara --force implicit), apoi
+`git branch -d -- <BRANCH_CDX_EXACT>`. Daca Git refuza din cauza schimbarilor,
+pastreaza-le/arhiveaza-le si cere decizia operatorului. Nu folosi prune/remove
+pe directoare calculate neverificate, nu sterge lock-uri, nu curata alte rulari.
+
+Teste si limite: [TEST_RESULTS.md](run_paw_v44/TEST_RESULTS.md).

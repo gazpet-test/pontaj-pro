@@ -129,6 +129,8 @@ class Lansator(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = os.path.realpath(tempfile.mkdtemp(prefix="paw_v44_test_", dir=os.path.dirname(SURSA)))   # cale lunga (fara 8.3), ca la FinalPath
         cls.bin = os.path.join(cls.tmp, "bin")
+        cls.env_before={k:os.environ.get(k) for k in ("TEMP","TMP")}
+        os.environ.update(TEMP=cls.tmp,TMP=cls.tmp)
         cls.data = os.path.join(cls.tmp, "paw-data")
         cls.afara = os.path.join(cls.tmp, "afara")
         for d in (cls.bin, os.path.join(cls.data, "brief"), os.path.join(cls.data, "out"), cls.afara):
@@ -138,6 +140,12 @@ class Lansator(unittest.TestCase):
         assert src.count(DATA_REAL) == 1, "linia $DATA nu a fost gasita exact o data"
         src = src.replace(DATA_REAL, '$DATA = "' + cls.data + '"')
         shutil.copyfile(os.path.join(os.path.dirname(SURSA), "cdx.ps1"), os.path.join(cls.bin, "cdx.ps1"))
+        shutil.copyfile(os.path.join(os.path.dirname(SURSA), "cdx_security.ps1"), os.path.join(cls.bin, "cdx_security.ps1"))
+        with open(os.path.join(cls.bin, "cdx.ps1"), "a", encoding="ascii") as f:
+            f.write("\nfunction AssertCdxAdminAcl([string]$path) {}\n")
+        with open(os.path.join(cls.bin, "install.lock"), "w") as f: f.write("fixture")
+        src = src.replace('$PAW_ROOT = "C:\\ProgramData\\Gazpet\\Paw"', '$PAW_ROOT = "' + cls.bin + '"')
+
         cls.fake_cli = os.path.join(cls.tmp, "fake_playwright", "driver", "package", "cli.js")
         for a, b in ((DRIVER_EXE_REAL, '"' + os.path.realpath(sys.executable) + '"'),
                      (DRIVER_CLI_REAL, '$PW_DRIVER_CLI = "' + cls.fake_cli + '"'),
@@ -185,6 +193,9 @@ class Lansator(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        for k,v in cls.env_before.items():
+            if v is None: os.environ.pop(k,None)
+            else: os.environ[k]=v
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     @staticmethod
