@@ -127,6 +127,34 @@ Case 'legacy_verification_precedes_any_acl_change' {
  $verification=$s.IndexOf('$legacyPlan=GetLegacyHelperPlan $Destination')
  if($verification -lt 0 -or $verification -gt $s.IndexOf('SetCdxAdminAcl $d $readerSid')){throw 'ACL changes before verification'}
 }
+Case 'legacy_protect_precedes_ancestor_acl_change' {
+ $s=[IO.File]::ReadAllText('__SOURCE__\install.ps1')
+ if($s.IndexOf('$legacyPlan=ProtectLegacyHelperPlan $legacyPlan') -gt $s.IndexOf('SetCdxAdminAcl $d $readerSid')){throw 'Inherited SDDL changed before stabilization'}
+}
+Remove-Item Function:\Get-Acl
+. (ImportFunction '__SOURCE__\install.ps1' 'ProtectLegacyHelperPlan')
+$script:parentDesc=Descriptor $false;$script:helperDesc=$script:parentDesc
+function Get-Acl {param([string]$LiteralPath) if($LiteralPath -eq $helper){return $script:helperDesc};return $script:parentDesc}
+function SetCdxAdminAcl([string]$path,[string]$sid) {
+ if($path -ne $helper){throw 'Unexpected synthetic mutation'}
+ $script:helperDesc=Descriptor $false
+ $script:helperDesc.SetAccessRuleProtection($true,$false)
+}
+[IO.File]::WriteAllText($helper,'# reviewed synthetic helper')
+Case 'legacy_parent_change_does_not_change_protected_snapshot' {
+ $plan=GetLegacyHelperPlan $old $expected
+ $plan=ProtectLegacyHelperPlan $plan 'SYNTHETIC'
+ $script:parentDesc=Descriptor $false
+ $script:parentDesc.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-11')),'ReadAndExecute','Allow')))
+ $incoming2=Join-Path $root 'incoming-after-parent';[void][IO.Directory]::CreateDirectory($incoming2)
+ CopyLegacyHelper $plan $incoming2
+ if((HashCdx (Join-Path $incoming2 'cgpt_pw.py')) -ne $expected){throw 'Wrong helper'}
+}
+Case 'legacy_actual_change_before_protection_still_refused' {
+ $plan=GetLegacyHelperPlan $old $expected
+ $script:helperDesc.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-11')),'ReadAndExecute','Allow')))
+ [void](ProtectLegacyHelperPlan $plan 'SYNTHETIC')
+} $true
 Remove-Item Function:\Get-Acl
 """)
  def test_file_symlink_cleanup(self):

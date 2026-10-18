@@ -36,7 +36,7 @@ class Cdx(unittest.TestCase):
   (self.bin/'cdx.ps1').write_text(c,encoding='utf-8')
   self.brief=self.data/'brief/test.md';self.brief.write_text('synthetic');self.out=self.data/'out/result.log';self.cert()
  def cert(self):
-  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':5,'protocol':'cdx-probes-r4','certified_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expires_utc':None,'validity_policy':'until-deliberate-change','result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
+  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':6,'network_denied':True,'dns_exception_accepted':False,'protocol':'cdx-probes-r5','certified_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expires_utc':None,'validity_policy':'until-deliberate-change','result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
  def tearDown(self):
   for k,v in self.env_before.items():
    if v is None:os.environ.pop(k,None)
@@ -51,6 +51,12 @@ class Cdx(unittest.TestCase):
   p=self.root/'outside.md';p.write_text('x');r=self.run_launcher(brief=p);self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists())
  def test_unverified_sandbox_refuses(self):
   (self.bin/'cdx_sandbox_validat.json').unlink();r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertFalse((self.data/'cdx').exists())
+ def test_dns_exception_certificate_requires_explicit_reason(self):
+  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c.pop('network_denied');c.update(network_denied_except_dns=True,dns_exception_accepted=True,dns_exception_reason='',scope='DNS exception');p.write_text(json.dumps(c))
+  r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertIn('cdx_dns_exception_invalid',r.stdout);self.assertFalse((self.data/'cdx').exists())
+ def test_dns_exception_certificate_works_with_visible_scope(self):
+  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c.pop('network_denied');c.update(network_denied_except_dns=True,dns_exception_accepted=True,dns_exception_reason='Explicit operator decision',scope='DNS exception; synthetic test only');p.write_text(json.dumps(c))
+  r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
  def test_old_certificate_remains_usable(self):
   p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c['certified_utc']='2010-01-01T00:00:00Z';c['windows_info']={'windows_build':'OLD','windows_ubr':1};p.write_text(json.dumps(c))
   r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)

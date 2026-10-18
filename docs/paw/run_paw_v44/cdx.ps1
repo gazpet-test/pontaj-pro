@@ -33,8 +33,9 @@ function GetCdxAuthorization($binding) {
  AssertCdxAdminAcl $marker;AssertCdxSingleFile $marker
  $c=Get-Content -LiteralPath $marker -Raw|ConvertFrom-Json
  AssertCdxHashes $binding $c.binding
- if($c.schema -ne 5 -or $c.protocol -ne 'cdx-probes-r4' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
+ if($c.schema -ne 6 -or $c.protocol -ne 'cdx-probes-r5' -or $c.result -ne 'PASS' -or $c.probe_count -ne 20 -or -not $c.evidence_sha256 -or -not $c.admin_review_sha256){throw 'cdx_sandbox_unverified'}
  AssertCdxCertificatePolicy $c
+ AssertCdxNetworkCertificate $c
  return $null
 }
 function RuleazaCdx {
@@ -89,6 +90,11 @@ function RuleazaCdx {
    $native=Join-Path $fixtures 'native-curl.exe'
    Copy-Item -LiteralPath $permit.native_source -Destination $native
    if((HashCdx $native) -ne $permit.native_sha256){throw 'cdx_native_probe_copy_changed'}
+   AssertCdxSingleFile $permit.patch_source;AssertCdxAdminAcl $permit.patch_source
+   if((HashCdx $permit.patch_source) -ne $permit.patch_sha256){throw 'cdx_patch_probe_changed'}
+   $patchNative=Join-Path $fixtures 'native-patch.exe'
+   Copy-Item -LiteralPath $permit.patch_source -Destination $patchNative
+   if((HashCdx $patchNative) -ne $permit.patch_sha256){throw 'cdx_patch_probe_copy_changed'}
    [IO.File]::WriteAllText((Join-Path $fixtures 'write-source.txt'),'PAW_CHANGED')
    $report.certification_id=$permit.id;WriteCdxJson $reportPath $report
    $prompt=([string]$permit.brief_text).Replace('__WORKTREE__',$target)

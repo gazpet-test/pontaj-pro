@@ -105,13 +105,13 @@ Case 'evidence_expired_cannot_reseal' {$e=EvidenceFixture;$e.run_started_utc=[Da
 Case 'evidence_missing_times' {[void](AssertCdxEvidenceFresh @{})} $true
 Case 'evidence_future_completion' {$e=EvidenceFixture;$e.run_completed_utc=[DateTime]::UtcNow.AddHours(1).ToString('o');[void](AssertCdxEvidenceFresh $e)} $true
 Case 'evidence_end_before_start' {$e=EvidenceFixture;$e.run_completed_utc=[DateTime]::UtcNow.AddHours(-1).ToString('o');[void](AssertCdxEvidenceFresh $e)} $true
-Case 'certificate_patch_denial' {
+Case 'unsupported_fictional_patch_schema_refused' {
  $r=ReviewFixture
  AssertEventReview $r @('{"type":"item.completed","item":{"id":"patch1","type":"file_change","status":"failed","changes":[{"path":"C:\\one-canary","diff":"-CANARY_WRITE_INITIAL\n+PAW_CHANGED"}],"error":"Access denied"}}') @(@{id='one';tool_type='file_change';action_tokens=@('C:\one-canary','CANARY_WRITE_INITIAL','PAW_CHANGED')})
-}
-Case 'certificate_file_tool_denial' {
+} $true
+Case 'unsupported_fictional_read_tool_refused' {
  AssertEventReview (ReviewFixture) @('{"type":"item.completed","item":{"id":"read1","type":"tool_call","status":"failed","arguments":{"path":"C:\\one-canary"},"error":"Access denied"}}') @(@{id='one';tool_type='tool_call';action_tokens=@('C:\one-canary')})
-}
+} $true
 $nativeProbe=@(@{id='native-read';tool_type='command_execution';action_tokens=@('native.exe');instruction='native.exe # native-read'})
 $nativeEvent='{"type":"item.completed","item":{"id":"native1","type":"command_execution","command":"native.exe # native-read","exit_code":37,"aggregated_output":"curl: (37) Access denied"}}'
 function NativeReview {$r=ReviewFixture;$r.probes[0].id='native-read';$r.probes[0].native_execution_observed=$true;return $r}

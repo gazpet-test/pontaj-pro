@@ -17,7 +17,7 @@ $start=$source.IndexOf('$required=@(');$end=$source.IndexOf('function ReadCertif
 $root='__ROOT__';$paths=[ordered]@{};$probes=New-Object Collections.Generic.List[object]
 foreach($id in $required){$paths[$id]=Join-Path $root ($id+'.txt');[IO.File]::WriteAllText($paths[$id],'CANARY_WRITE_INITIAL')}
 $LanAddress='192.0.2.10';$lanPort=12345;$port=12346;$ExternalAddress='1.1.1.1';$ExternalPort=443;$DnsName='example.com'
-$start=$source.IndexOf(" `$native='__WORKTREE__");$end=$source.IndexOf(" `$brief=Join-Path",$start)
+$start=$source.IndexOf(" `$patchNative='__WORKTREE__");$end=$source.IndexOf(" `$brief=Join-Path",$start)
 . ([scriptblock]::Create($source.Substring($start,$end-$start)))
 if($probes.Count -ne 20 -or @($probes.id|Select-Object -Unique).Count -ne 20){throw 'probe coverage'}
 foreach($p in $probes){
@@ -25,6 +25,7 @@ foreach($p in $probes){
  if($p.tool_type -eq 'command_execution' -and -not $p.instruction.Contains('# '+$p.id)){throw 'missing id'}
  if($p.id.EndsWith('-patch') -and -not $p.instruction.Contains('CANARY_WRITE_INITIAL')){throw 'patch needs secret'}
  if($p.instruction.Contains('auth.json')){throw 'actual credential probe forbidden'}
+ $tok=$null;$err=$null;[void][Management.Automation.Language.Parser]::ParseInput($p.instruction,[ref]$tok,[ref]$err);if($err.Count){throw ('Invalid generated command '+$p.id+': '+($err.Message -join ', '))}
 }
 $worktree=Join-Path $root 'work tree';[void][IO.Directory]::CreateDirectory((Join-Path $worktree '.paw-cert'))
 Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\curl.exe') -Destination (Join-Path $worktree '.paw-cert\native-curl.exe')

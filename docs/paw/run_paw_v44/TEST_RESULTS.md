@@ -1,3 +1,42 @@
+# Validare locala v4.4 - #030/#031 - 2026-10-18
+
+Protocol r5, certificat schema6, binding schema5. Copii/fixture-uri sintetice,
+fara Install/Run/Seal real, model/API, auth sau modificari ProgramData/WFP.
+
+| Suita | Rezultat masurat | Ce acopera |
+|---|---|---|
+| test_cdx.py | 18 PASS, 1 OS SKIP; 70.755 s | launcher cu stub, schema6/r5, exceptie DNS valida/refuz fara motiv; Git local, mediu, arbore, timeout, lock |
+| test_cdx_security.py | 75 subcazuri PASS; 1.111 s | sintaxa PS, ACL/TrustedInstaller/InheritOnly, hash/env/quoting, evenimente de comanda distincte; forme patch/read fictive refuzate |
+| test_cdx_policy.py | 10 subcazuri PASS; 0.530 s | binding schema5; WFP schimbat refuzat (wrapper WFP simulat), Windows informational |
+| test_cdx_installer.py | 5 PASS; 1.933 s | Prepare pe copii, 9 fisiere, WFP/helper/manifest alterate si stage existent refuzate; fara Install |
+| test_cdx_cert_probes.py | 1 PASS; 0.872 s | 20 comenzi generate parsate, probe curl FILE si Git sintetic |
+| test_cdx_r4.py | 26 subcazuri PASS, 1 symlink SKIP; 2.495 s | ACL helper protejat inaintea parintelui, schimbare reala refuzata; linkuri si HTTP loopback sintetic |
+| test_cdx_r5.py | 41 subcazuri PASS; 0.563 s | exceptie DNS si certificat, patch observabil, compilare C#, ABI x64, SID/forma WFP pure; fara engine WFP |
+| test_cdx_patch_runtime.py | 3 patch-uri + 2 cmd type PASS | comenzile exacte generate, copia binarului instalat 0.162.0, canare sintetice neconfinate; fara exec/model |
+| test_run_paw.py | 33 PASS; 56.338 s | regresii legacy gem/cop cu stuburi, Job Object/lock/driver, fara browser/model real |
+
+13 blocuri PS din runbook + 6 fisiere PS1 parsate, 1 fragment JSON valid, manifest
+9/9 verificat. Regex Windows/slash si separarea icacls grant/setowner verificate.
+Controalele patch folosesc binarul instalat doar in dispatch local pe canare; nu
+testeaza unealta parent apply_patch sau sandbox-ul. WFP testat prin compilare/ABI
+si validatori puri; Inspect real pe filtrul VECHI a dat ACCESS_DENIED, fara mutatii.
+Noul drept de read pentru operator ramane de validat dupa instalare.
+
+Suita legacy initial in sandbox: 17 esecuri Access denied din 33; aceleasi stuburi
+neconfinate: 33 PASS. HTTP loopback r4 rulat neconfinat. Doua SKIP: OS containment
+cu stub si symlink neprivilegiat. Nicio modificare de privilegii/politici.
+
+Manifest SHA256.json: 47D62085839B691833F892178441ADAC62CDE9B0EFB5E8EBBDA076A0FB1DA386.
+REVIEW_030.md descrie dovezile, exceptia DNS, limitele si pasii operatorului.
+Nu exista certificare reala rezultata din aceste teste.
+
+---
+
+## Arhiva: rezultatele #028 si mai vechi, NU starea pachetului #030
+
+Hash-urile, schemele, numarul de runtime-uri si afirmatiile despre binding din
+sectiunile urmatoare sunt istorice. Rezultatele curente sunt numai cele de mai sus.
+
 # Validare locala v4.4 - politica #028 - 2026-10-18
 
 Numai fixture-uri sintetice si copii ale lansatorului. Nicio instalare ProgramData,

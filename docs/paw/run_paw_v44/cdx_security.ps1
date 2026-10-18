@@ -156,7 +156,7 @@ function GetCdxBinding {
  $manifest=Join-Path $PSScriptRoot 'cdx_runtime_manifest.json';AssertCdxAdminAcl $manifest
  AssertCdxHashes (GetCdxTreeHashes $runtime) (Get-Content -LiteralPath $manifest -Raw|ConvertFrom-Json)
  $bin=[ordered]@{}
- foreach($name in @('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_install.json','cdx_runtime_manifest.json')) {
+ foreach($name in @('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_install.json','cdx_runtime_manifest.json')) {
   $p=Join-Path $PSScriptRoot $name;AssertCdxAdminAcl $p;AssertCdxSingleFile $p;$bin[$name]=HashCdx $p
  }
  $git='C:\Program Files\Git\bin\git.exe'
@@ -168,12 +168,14 @@ function GetCdxBinding {
   AssertCdxAdminAcl (Split-Path (Split-Path $helper));AssertCdxAdminAcl (Split-Path $helper);AssertCdxAdminAcl $helper;AssertCdxSingleFile $helper
   $bin['git-credential-manager.exe']=HashCdx $helper
  }
+ . (Join-Path $PSScriptRoot 'cdx_wfp.ps1')
+ $wfp=GetCdxWfpBinding $cfg.offline_sid
  $script:CdxInstall=$cfg
  $auth=Join-Path $cfg.codex_home 'auth.json';AssertCdxSingleFile $auth
  $authAcl=(Get-Acl -LiteralPath $auth).Sddl
  [void](AssertCdxPath $cfg.codex_home)
  $homeAcl=(Get-Acl -LiteralPath $cfg.codex_home).Sddl
- return [ordered]@{schema=4;codex_version=$cfg.version;auth_acl_sddl=$authAcl;codex_home_acl_sddl=$homeAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');identity=$cfg.reader_sid;isolation=$cfg.isolation}
+ return [ordered]@{schema=5;wfp=$wfp;codex_version=$cfg.version;auth_acl_sddl=$authAcl;codex_home_acl_sddl=$homeAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');identity=$cfg.reader_sid;isolation=$cfg.isolation}
 }
 # Windows CRT quoting for controlled internal arguments (not a shell command).
 function ArgCdx([string]$value) {
@@ -190,7 +192,7 @@ function ArgCdx([string]$value) {
 }
 function GetCdxEnvironment([string]$target,[string]$runtime,[string]$codexHome) {
  # No inherited secrets, proxies, NODE_OPTIONS, PYTHONPATH, Git config injection or profile.
- return @{SystemRoot=$env:SystemRoot;WINDIR=$env:SystemRoot;ComSpec=(Join-Path $env:SystemRoot 'System32\cmd.exe');PATH=($runtime+';'+$env:SystemRoot+'\System32;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0');TEMP=(Join-Path $target '.tmp');TMP=(Join-Path $target '.tmp');CODEX_HOME=$codexHome;GIT_CONFIG_GLOBAL='NUL';GIT_CONFIG_NOSYSTEM='1';GIT_TERMINAL_PROMPT='0';GCM_INTERACTIVE='Never';GIT_OPTIONAL_LOCKS='0'}
+ return @{PATHEXT='.COM;.EXE;.BAT;.CMD';SystemRoot=$env:SystemRoot;WINDIR=$env:SystemRoot;ComSpec=(Join-Path $env:SystemRoot 'System32\cmd.exe');PATH=($runtime+';'+$env:SystemRoot+'\System32;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0');TEMP=(Join-Path $target '.tmp');TMP=(Join-Path $target '.tmp');CODEX_HOME=$codexHome;GIT_CONFIG_GLOBAL='NUL';GIT_CONFIG_NOSYSTEM='1';GIT_TERMINAL_PROMPT='0';GCM_INTERACTIVE='Never';GIT_OPTIONAL_LOCKS='0'}
 }
 function AssertCdxGitConfig([string]$path) {
  if(-not(Test-Path -LiteralPath $path)){return}
@@ -241,4 +243,12 @@ function OpenCdxInstallBarrier([bool]$exclusive=$false) {
  $h=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
  if([PawCdx.Files]::Links($h.SafeFileHandle) -ne 1){$h.Dispose();throw 'cdx_install_lock_hardlink'}
  return $h
+}
+
+function AssertCdxNetworkCertificate($c) {
+ $hasDenied=$null -ne $c.PSObject.Properties['network_denied']
+ $hasException=$null -ne $c.PSObject.Properties['network_denied_except_dns']
+ if($hasException) {
+  if($hasDenied -or $c.network_denied_except_dns -isnot [bool] -or $c.network_denied_except_dns -ne $true -or $c.dns_exception_accepted -isnot [bool] -or $c.dns_exception_accepted -ne $true -or [string]::IsNullOrWhiteSpace($c.dns_exception_reason) -or $c.scope -notmatch 'DNS'){throw 'cdx_dns_exception_invalid'}
+ } elseif(-not $hasDenied -or $c.network_denied -isnot [bool] -or $c.network_denied -ne $true -or $c.dns_exception_accepted -isnot [bool] -or $c.dns_exception_accepted -ne $false) {throw 'cdx_network_claim_invalid'}
 }
