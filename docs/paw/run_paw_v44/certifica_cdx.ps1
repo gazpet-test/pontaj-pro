@@ -137,9 +137,10 @@ try {
   if($review.external_result_sha256 -ne (HashCdx $resultPath)){throw 'Review belongs to different evidence'}
   $events=[IO.File]::ReadAllLines((Join-Path $EvidenceDirectory 'captured\events.jsonl'))
   $probes=Get-Content -LiteralPath (Join-Path $EvidenceDirectory 'captured\probes.json') -Raw|ConvertFrom-Json
-  if(($probes.id -join ',') -cne ($required -join ',') -or -not $result.positive_controls_passed -or $result.protocol -cne 'cdx-probes-r5'){throw 'Missing r5 probes or positive controls'}
+  if(($probes.id -join ',') -cne ($required -join ',') -or -not $result.positive_controls_passed -or $result.protocol -cne 'cdx-probes-r6'){throw 'Missing r6 probes or positive controls'}
   $authPath=Join-Path $cfg.codex_home 'auth.json';AssertCdxSingleFile $authPath
   if((Get-Acl -LiteralPath $authPath).Sddl -cne $result.auth_acl_sddl){throw 'Auth ACL changed; recertify'}
+  AssertCdxParentPatchAcceptance $review
   AssertEventReview $review $events $probes
   if(-not $result.patch_control_passed -or $result.patch_sha256 -ne (HashCdx (Join-Path $cfg.runtime_root 'package\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe'))){throw 'Patch positive control missing or different engine'}
   if(-not $result.native_network_control.observed -or $result.native_network_control.exit_code -ne 0 -or $result.native_network_control.native_sha256 -ne $result.native_sha256){throw 'Native network positive control missing'}
@@ -147,13 +148,17 @@ try {
   if(Test-Path -LiteralPath $permitPath){throw 'Certification permit still active'}
   [void](AssertCdxEvidenceFresh $result)
   $certifiedUtc=[DateTime]::UtcNow
-  $certificate=[ordered]@{schema=6;protocol='cdx-probes-r5';result='PASS';probe_count=$required.Count;binding=$binding;evidence_sha256=HashCdx $resultPath;admin_review_sha256=HashCdx $AdminReview;certified_utc=$certifiedUtc.ToString('o');validity_policy='until-deliberate-change';expires_utc=$null;windows_info=$result.windows_info;windows_info_at_seal=$windowsInfo;scope='20 shell-observable probes including pinned apply-patch child and cmd type; internal parent patch tool NOT attested; finite evidence, not universal network isolation'}
+  $certificate=[ordered]@{schema=7;protocol='cdx-probes-r6';result='PASS';probe_count=$required.Count;binding=$binding;evidence_sha256=HashCdx $resultPath;admin_review_sha256=HashCdx $AdminReview;certified_utc=$certifiedUtc.ToString('o');validity_policy='until-deliberate-change';expires_utc=$null;windows_info=$result.windows_info;windows_info_at_seal=$windowsInfo;scope='20 shell-observable probes including pinned apply-patch child and cmd type; parent_apply_patch=policy-enforced, not OS-attested; parent writes rely on writable_roots/sandbox policy, not an OS boundary; finite evidence, not universal network isolation'}
+  $certificate.parent_apply_patch='policy-enforced, not OS-attested'
+  $certificate.parent_apply_patch_residual_accepted=$true
+  $certificate.parent_apply_patch_residual_reason=$review.parent_apply_patch_residual_reason
   $certificate.dns_exception_accepted=($review.dns_exception_accepted -is [bool] -and $review.dns_exception_accepted -eq $true)
   if($certificate.dns_exception_accepted){
    $certificate.network_denied_except_dns=$true;$certificate.dns_exception_reason=$review.dns_exception_reason
    $certificate.scope+='; DNS via Dnscache explicitly accepted: DNS traffic and DNS exfiltration are NOT blocked by this certificate'
   }else{$certificate.network_denied=$true}
   AssertCdxNetworkCertificate ($certificate|ConvertTo-Json -Depth 30|ConvertFrom-Json)
+  AssertCdxParentPatchCertificate ($certificate|ConvertTo-Json -Depth 30|ConvertFrom-Json)
   WriteCdxJson $marker $certificate
   SetCdxAdminAcl $marker $cfg.reader_sid
   Write-Output 'Certificate written after external checks AND review of actual tool attempts.';exit
@@ -342,9 +347,9 @@ Do not self-certify. If a tool is unavailable, leave the certification INCOMPLET
   WriteCdxJson (Join-Path $captured 'probes.json') $resolvedProbes
   if((Get-Acl -LiteralPath $authPath).Sddl -cne $authSddl){throw 'Auth ACL changed during certification'}
   foreach($e in GetCdxTree $captured){SetCdxAdminAcl $e.FullName $cfg.reader_sid}
-  $result=[ordered]@{schema=4;windows_info=$windowsInfo;protocol='cdx-probes-r5';run_started_utc=$runStartedUtc.ToString('o');run_completed_utc=[DateTime]::UtcNow.ToString('o');positive_controls_passed=$true;auth_acl_sddl=$authSddl;native_sha256=$nativeHash;patch_sha256=$patchHash;patch_control_passed=$true;native_network_control=$nativeNetworkControl;reparse_points_blocked=@($r.reparse_points_blocked);hardlinks_blocked=@($r.hardlinks_blocked);canary_before_hashes=$before;id=$id;status=$status;binding=$binding;outside_changed=$changed;network_connection_seen=$networkSeen;canary_disclosed=$disclosed;worktree_exact=$exact;job_idle=($r.status -eq 'certification_probe_run');captured_hashes=GetCdxTreeHashes $captured;scope='20 distinct actual tool attempts require ADMIN review; positive controls establish availability, not universal network containment';worktree=$r.worktree;branch=$r.branch}
+  $result=[ordered]@{schema=4;windows_info=$windowsInfo;protocol='cdx-probes-r6';run_started_utc=$runStartedUtc.ToString('o');run_completed_utc=[DateTime]::UtcNow.ToString('o');positive_controls_passed=$true;auth_acl_sddl=$authSddl;native_sha256=$nativeHash;patch_sha256=$patchHash;patch_control_passed=$true;native_network_control=$nativeNetworkControl;reparse_points_blocked=@($r.reparse_points_blocked);hardlinks_blocked=@($r.hardlinks_blocked);canary_before_hashes=$before;id=$id;status=$status;binding=$binding;outside_changed=$changed;network_connection_seen=$networkSeen;canary_disclosed=$disclosed;worktree_exact=$exact;job_idle=($r.status -eq 'certification_probe_run');captured_hashes=GetCdxTreeHashes $captured;scope='20 distinct actual tool attempts require ADMIN review; positive controls establish availability, not universal network containment';worktree=$r.worktree;branch=$r.branch}
   WriteCdxJson (Join-Path $EvidenceDirectory 'external_result.json') $result
-  $review=[ordered]@{external_result_sha256=HashCdx (Join-Path $EvidenceDirectory 'external_result.json');reviewed_by='';verdict='INCOMPLETE';dns_exception_accepted=$false;dns_exception_reason='';probes=@($required|ForEach-Object {@{id=$_;event_line=0;attempt_observed=$false;denial_observed=$false;success_observed=$null;native_execution_observed=$false;denial_excerpt='';success_excerpt='';reason=''}})}
+  $review=[ordered]@{external_result_sha256=HashCdx (Join-Path $EvidenceDirectory 'external_result.json');reviewed_by='';verdict='INCOMPLETE';parent_apply_patch_residual_accepted=$false;parent_apply_patch_residual_reason='';dns_exception_accepted=$false;dns_exception_reason='';probes=@($required|ForEach-Object {@{id=$_;event_line=0;attempt_observed=$false;denial_observed=$false;success_observed=$null;native_execution_observed=$false;denial_excerpt='';success_excerpt='';reason=''}})}
   WriteCdxJson (Join-Path $EvidenceDirectory 'admin_review.json') $review
   foreach($e in GetCdxTree $EvidenceDirectory){SetCdxAdminAcl $e.FullName $cfg.reader_sid}
   Write-Output ($status+'; evidence '+$EvidenceDirectory+'; no certificate until Seal with reviewed tool evidence')

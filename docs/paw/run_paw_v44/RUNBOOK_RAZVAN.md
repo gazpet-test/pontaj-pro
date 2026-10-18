@@ -1,18 +1,18 @@
-# Runbook Razvan — actualizare cdx dupa Run#1b (#030/#031)
+# Runbook Razvan — actualizare cdx r6 (#032)
 
 18.10.2026. Procedura pentru operator; **Codex nu a executat Install, Run, Seal,
 login, setup sau modificari WFP**. Pachetul se revizuieste pe branch-ul
-`claude/cdx-acl-trustedinstaller`, peste `2a930bb`. Hash-ul manifestului aprobat
-se ia din `REVIEW_030.md`/raportul final; nu se calculeaza si accepta orbeste din
-orice folder. Noul protocol este r5, certificat schema 6, binding schema 5.
+`claude/cdx-acl-trustedinstaller`, peste `20ef5eb`. Hash-ul manifestului aprobat
+se ia din `REVIEW_032.md`/raportul final; nu se calculeaza si accepta orbeste din
+orice folder. Noul protocol este r6, certificat schema 7, binding schema 5.
 
 Doua ferestre **Windows PowerShell 5.1**: **A** = Gazpet-Ai ca administrator;
 **N** = acelasi utilizator, token Medium. Fiecare eroare inseamna STOP, fara
 retry automat, relaxare ACL sau editare a dovezilor. Tine sesiunea interactiva
 deschisa pentru taskul temporar de certificare.
 
-Run#1b ramane istoric, nesigilabil cu r5. Secventa ramasa este:
-**mentenanta → pachet nou cu WFP persistent → verificare N → Run#2 → review → Seal**.
+Run#1b ramane istoric, nesigilabil cu r6. Secventa ramasa este:
+**mentenanta → pachet nou cu WFP persistent → grant engine read explicit → verificare N → Run#2 → review → Seal**.
 Nu relua login/setup pentru aceasta actualizare: home-ul si conturile exista.
 
 ## 1. Preambul si mentenanta
@@ -26,9 +26,9 @@ $Source = 'C:\Users\Gazpet-Ai\gazpet-erp-chat\docs\paw\run_paw_v44'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
 $CdxHome = Join-Path $PawRoot 'state\codex-home'
-$Stage = 'C:\Users\Public\paw-data\stage-v44-030'
-$Audit = Join-Path $PawRoot 'operator-20261018-030'
-$ManifestHash = '47D62085839B691833F892178441ADAC62CDE9B0EFB5E8EBBDA076A0FB1DA386'
+$Stage = 'C:\Users\Public\paw-data\stage-v44-032'
+$Audit = Join-Path $PawRoot 'operator-20261018-032'
+$ManifestHash = 'D57CD86A163CEBC524FA6B981F31BB6DC4FDB044E11CA8EB7C3E37768DD62FA2'
 $LegacyHash = '8F1FCDF73A23B94C1B7C804D46FF7011291F241A46319C7042FCF624CD6E9F50'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
@@ -101,7 +101,7 @@ try {
 if ($LASTEXITCODE -ne 0) { throw 'Prepare esuat' }
 ```
 
-Prepare copiaza noua lista de **9 fisiere runtime** + manifest; nu instaleaza WFP.
+Prepare copiaza noua lista de **10 fisiere runtime** + manifest; nu instaleaza WFP.
 Run#1b foloseste acelasi set de GUID-uri, dar temporar. Installerul **refuza orice
 GUID deja existent**, chiar daca pare corect; nu inghite ALREADY_EXISTS si nu sterge
 filtre arbitrare. In mentenanta, A elimina explicit numai cele trei GUID-uri Paw
@@ -153,8 +153,45 @@ Test-Path -LiteralPath "$Bin\cdx_sandbox_validat.json"
 Asteptat: `Installed, NOT certified`, versiune 0.162.0, SID local exact
 CodexSandboxOffline, marker False. Persistenta este impusa in cod; nu exista
 switch de instalare temporara. WFP da SYSTEM/Admin drepturi de administrare si
-operatorului numai read; nu modifica ACL-ul engine-ului global. Installerul
+operatorului numai read pe cele trei obiecte Paw. Installerul NU modifica
+ACL-ul engine-ului; pasul separat de mai jos face adaugarea aprobata. Installerul
 retrage filtrul pe care tocmai l-a instalat daca verificarea/swap-ul esueaza.
+
+### 3a. Grant explicit read-only pe engine (numai A)
+
+Markerul trebuie sa ramana retras si sa nu existe Run/permit activ. Helperul este
+cel din bin-ul NOU, verificat prin manifest, si ia singur lock-ul exclusiv; nu il
+invoca din interiorul altui OpenCdxInstallBarrier. Rezolva SID-ul contului local
+Gazpet-Ai si il compara cu reader_sid din instalare. Nu accepta un SID arbitrar.
+
+```powershell
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$Bin\cdx_wfp_engine.ps1" -Action Grant -ReceiptPath "$Audit\wfp-engine-reader.json"
+if ($LASTEXITCODE -ne 0) { throw 'Grant WFP engine esuat; STOP, pastreaza receipt-ul' }
+$engineReceipt = Get-Content -LiteralPath "$Audit\wfp-engine-reader.json" -Raw | ConvertFrom-Json
+$engineReceipt | Select-Object schema,sid,mask,added,state,created_utc
+if ($engineReceipt.state -ne 'granted' -or $engineReceipt.mask -ne 192) { throw 'Grant neverificat' }
+```
+
+Asteptat WFP_ENGINE_READ granted mask=0xC0, schema1, state=granted. Masca exacta
+din SDK este **FWPM_ACTRL_OPEN=0x40 | FWPM_ACTRL_READ=0x80 = 0xC0 (192)**.
+Nu se acorda ADD/DELETE/WRITE/WRITE_DAC/WRITE_OWNER. Valorile 0x2/0x4 si 0x20006
+din review-ul Gemini NU sunt aceste drepturi. OPEN este verificat pe engine;
+GetByKey cere READ pe obiectul sublayer/filter. De aceea sunt necesare si ACL-urile
+read ale obiectelor Paw din noua instalare; grant-ul engine nu le inlocuieste.
+
+Helperul citeste DACL cu FwpmEngineGetSecurityInfo0, pastreaza octetii ACE-urilor
+existente si adauga numai ACE-ul explicit allow 0xC0. Salveaza receipt admin-owned
+cu before/after/added INAINTE de FwpmEngineSetSecurityInfo0 (numai DACL). Nu atinge
+owner/group/SACL si nu foloseste o tranzactie WFP, interzisa pentru acest apel.
+READ_CONTROL/WRITE_DAC sunt necesare ADMINULUI care face operatia, nu reader-ului.
+
+Aceeasi comanda si acelasi receipt sunt idempotente. Un ACE exact preexistent se
+noteaza added=false si nu este revendicat de rollback. La DACL schimbat, ACE-uri
+duplicate ori stare incerta: STOP; nu sterge receipt-ul si nu acorda drepturi mai
+largi. Nu exista compare-and-set atomic WFP: executa in mentenanta fara alt admin
+care editeaza simultan DACL-ul. Verificarile inainte/dupa nu elimina aceasta cursa.
+Canonizarea/imbinarea ACE de catre BFE nu a fost testata live; o nepotrivire exacta
+opreste pasul si pastreaza jurnalul, nu produce un succes presupus.
 
 **In N, intr-un proces PowerShell nou**, verifica binding-ul read-only:
 
@@ -174,7 +211,7 @@ la fiecare lansare si la sfarsitul jobului, nu e monitorizare continua a traficu
 In inspectia Codex a filtrului VECHI, GetByKey a returnat ACCESS_DENIED; de aceea
 acest control N al noului ACL este obligatoriu. Nu relaxa verificarea daca pica.
 
-## 4. Run#2 pe r5
+## 4. Run#2 nou pe r6
 
 Nu sunt necesare noi login/setup/ACL pentru home-ul deja configurat. Inspecteaza
 doar ACL-ul auth.json, fara continut. Run creeaza canare sintetice cu acelasi ACL.
@@ -192,7 +229,7 @@ AWAITING_TOOL_EVIDENCE_REVIEW **nu inseamna PASS**. Verifica `outside_changed`,
 = true. Markerul este inca absent. Daca lipseste un eveniment, ramane INCOMPLETE.
 Run are controale TCP/DNS externe sintetice; nu trimite documente reale.
 
-Probele r5: 3 scrieri .NET; 3 copii ale motorului apply-patch din Codex invocate
+Probele r6 (native-patch neschimbate): 3 scrieri .NET; 3 copii ale motorului apply-patch din Codex invocate
 prin shell; 2 citiri .NET + 2 `cmd /d /c type`; 4 retea; 3 native curl; 3 linkuri.
 Toate cer `item.completed` / `command_execution` distincte. O afirmatie a modelului
 sau un `echo` al comenzii nu este tentativa. `*-read-tool` nu mai exista.
@@ -200,9 +237,11 @@ sau un `echo` al comenzii nu este tentativa. `*-read-tool` nu mai exista.
 **Limita:** cele trei patch-uri probeaza acelasi motor nativ sub tokenul copilului
 shell; nu atesta calea uneltei interne apply_patch din procesul parinte. Nu poti
 forta apelarea unui tool doar prin prompt. Seal refuza probele sarite; nu inventeaza
-evenimente file_change/error/diff. Aceasta limita apare si in certificat.
+evenimente file_change/error/diff. Aceasta limita apare si in certificat ca `parent_apply_patch: "policy-enforced, not OS-attested"`,
+in scope, cu confirmarea si motivul adminului. Restrictia uneltei parinte este
+politica Codex (writable_roots/sandbox policy), nu o atestare OS.
 
-## 5. Review cu exceptia DNS decisa in #031
+## 5. Review: exceptie DNS #031 si risc parent apply_patch #032
 
 In A, deschide `captured\probes.json`, evenimentele numerotate si template-ul
 `admin_review.json`. **Nu edita captured/external_result/hash-urile.**
@@ -230,6 +269,8 @@ Daca DNS reuseste (decizia #031), operatorul completeaza explicit campurile:
   "verdict": "ALL_DENIED_EXCEPT_DNS",
   "dns_exception_accepted": true,
   "dns_exception_reason": "Acceptat explicit de Razvan: rezolutie DNS prin serviciul Dnscache; exceptia nu acopera TCP/HTTP sau celelalte probe.",
+  "parent_apply_patch_residual_accepted": true,
+  "parent_apply_patch_residual_reason": "Decizia Razvan #032: accept limitarea parent apply_patch prin politica Codex, fara atestare OS; verificarea post-run are acoperire limitata.",
   "reviewed_by": "operatorul care verifica dovezile"
 }
 ```
@@ -246,6 +287,25 @@ Certificatul cu exceptie contine **network_denied_except_dns=true** si motivul;
 campul `network_denied` lipseste. DNS/exfiltrarea prin DNS NU sunt blocate de
 aceasta atestare. Aceasta este limita acceptata, nu izolare completa de retea.
 
+Acceptarea parent apply_patch este OBLIGATORIE chiar daca DNS este refuzat si
+exceptia DNS ramane false. Template-ul nou porneste cu acceptarea false si motiv
+gol; operatorul le completeaza dupa review. Lipsa/false/string "true" sau motiv
+nestring/gol refuza Seal. Probele native-patch raman obligatorii, nu sunt exceptate.
+
+La rularile NORMALE, lansatorul compara inainte/dupa 16 cai fixe: cele 10 runtime-uri
+bin (inclusiv cdx_wfp_engine.ps1), cdx_install.json, cdx_runtime_manifest.json,
+cdx_sandbox_validat.json, CODEX_HOME\config.toml, repo operational\.git\config
+si config.worktree. Absenta este o stare, deci creatia/stergerea sunt detectate.
+Raportul contine hash-uri, changed_paths si status unchanged/changed/unreadable,
+fara continut sau hash auth.json. Diferenta ori imposibilitatea recitirii produc
+PAW_EROARE si fara commit; pasul ruleaza si dupa exit nenul/timeout. Inspecteaza
+raportul si retrage markerul inainte de remediere; nu repara automat fisierele.
+
+Acesta este control de stare finala, NU prevenire: editarea urmata de restaurare,
+alte cai, numai schimbari ACL si o modificare dupa verificare nu sunt acoperite
+de hash-uri. Daca jobul nu este idle, proba este marcata ca atare si rularea esueaza.
+Controlul nu se foloseste pentru a pretinde ca parent apply_patch este OS-confined.
+
 ## 6. Seal si smoke
 
 In A, dupa review, in maximum 24h de la INCEPUTUL Run#2:
@@ -254,12 +314,13 @@ In A, dupa review, in maximum 24h de la INCEPUTUL Run#2:
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$Bin\certifica_cdx.ps1" -Phase Seal -EvidenceDirectory $Evidence -AdminReview "$Evidence\admin_review.json"
 if ($LASTEXITCODE -ne 0) { throw 'Seal refuzat; nu fabrica certificatul' }
 $c = Get-Content -LiteralPath "$Bin\cdx_sandbox_validat.json" -Raw | ConvertFrom-Json
-$c | Select-Object schema,protocol,result,probe_count,network_denied_except_dns,network_denied,dns_exception_accepted,dns_exception_reason,scope,validity_policy
+$c | Select-Object schema,protocol,result,probe_count,network_denied_except_dns,network_denied,dns_exception_accepted,dns_exception_reason,parent_apply_patch,parent_apply_patch_residual_accepted,parent_apply_patch_residual_reason,scope,validity_policy
 & icacls.exe "$Bin\cdx_sandbox_validat.json"
 ```
 
-Asteptat schema6/r5/PASS/20, policy until-deliberate-change, fara expirare calendaristica.
-Build/UBR raman informative. Certificatele schema5/r4 vechi nu se convertesc.
+Asteptat schema7/r6/PASS/20, policy until-deliberate-change, fara expirare calendaristica.
+Build/UBR raman informative. Certificatele schema6/r5 si mai vechi nu se convertesc; cer Run nou r6 + review.
+Scope trebuie sa contina literal `parent_apply_patch=policy-enforced, not OS-attested`.
 
 In N, smoke inofensiv, o singura cerere:
 
@@ -275,12 +336,26 @@ Get-Content -LiteralPath $OutputPath -Tail 5
 ```
 
 Verifica PAW_GATA, raport `status=complete`, diff numai paw_smoke.txt, commit LOCAL,
-fara push. Abia apoi reactivezi taskurile legacy necesare, dupa lista initiala.
+fara push si sensitive_files.status=unchanged (16 cai). Abia apoi reactivezi taskurile legacy necesare, dupa lista initiala.
 
 ## 7. Rollback explicit
 
 Mentenanta activa, procese oprite, marker retras ca la pasul 2. Nu restabili un
 marker vechi peste alta stare. Nu exista rollback automat dupa un Run esuat.
+
+Intai retrage doar grant-ul engine pe baza receipt-ului, cat helperul nou este
+inca in bin. Comanda ia propriul lock, deci se executa INAINTE de blocul de swap:
+
+```powershell
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$Bin\cdx_wfp_engine.ps1" -Action Revoke -ReceiptPath "$Audit\wfp-engine-reader.json"
+if ($LASTEXITCODE -ne 0) { throw 'Rollback engine oprit; nu continua swap-ul' }
+```
+
+Asteptat WFP_ENGINE_READ revoked. Se elimina numai ACE-ul adaugat de acest receipt:
+added=false nu scoate un ACE preexistent; a doua revocare este no-op. Daca DACL-ul
+nu mai este exact before sau after (alte schimbari intre timp), refuza, fara sa
+restaureze peste ACE-uri noi. Nu aplica manual un snapshot global vechi. Pastreaza
+receipt-ul pentru audit; o re-acordare dupa revoked cere un receipt nou, revizuit.
 
 ```powershell
 # A, proces nou: helperul din bin-ul curent deja revizuit
@@ -333,4 +408,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Owner home esuat' }
 ```
 
 Conturile CodexSandbox* trebuie deja create de setup-ul oficial inainte de Install
-r5; installerul nu creeaza conturi si nu copiaza autentificarea.
+r6; installerul nu creeaza conturi si nu copiaza autentificarea.

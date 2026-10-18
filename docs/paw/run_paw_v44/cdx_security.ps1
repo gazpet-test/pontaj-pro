@@ -156,7 +156,7 @@ function GetCdxBinding {
  $manifest=Join-Path $PSScriptRoot 'cdx_runtime_manifest.json';AssertCdxAdminAcl $manifest
  AssertCdxHashes (GetCdxTreeHashes $runtime) (Get-Content -LiteralPath $manifest -Raw|ConvertFrom-Json)
  $bin=[ordered]@{}
- foreach($name in @('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_install.json','cdx_runtime_manifest.json')) {
+ foreach($name in @('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','cdx_install.json','cdx_runtime_manifest.json')) {
   $p=Join-Path $PSScriptRoot $name;AssertCdxAdminAcl $p;AssertCdxSingleFile $p;$bin[$name]=HashCdx $p
  }
  $git='C:\Program Files\Git\bin\git.exe'
@@ -251,4 +251,36 @@ function AssertCdxNetworkCertificate($c) {
  if($hasException) {
   if($hasDenied -or $c.network_denied_except_dns -isnot [bool] -or $c.network_denied_except_dns -ne $true -or $c.dns_exception_accepted -isnot [bool] -or $c.dns_exception_accepted -ne $true -or [string]::IsNullOrWhiteSpace($c.dns_exception_reason) -or $c.scope -notmatch 'DNS'){throw 'cdx_dns_exception_invalid'}
  } elseif(-not $hasDenied -or $c.network_denied -isnot [bool] -or $c.network_denied -ne $true -or $c.dns_exception_accepted -isnot [bool] -or $c.dns_exception_accepted -ne $false) {throw 'cdx_network_claim_invalid'}
+}
+
+function AssertCdxParentPatchAcceptance($review) {
+ if($review.parent_apply_patch_residual_accepted -isnot [bool] -or $review.parent_apply_patch_residual_accepted -ne $true -or $review.parent_apply_patch_residual_reason -isnot [string] -or [string]::IsNullOrWhiteSpace($review.parent_apply_patch_residual_reason)){throw 'cdx_parent_patch_residual_not_accepted'}
+}
+function AssertCdxParentPatchCertificate($certificate) {
+ AssertCdxParentPatchAcceptance $certificate
+ if($certificate.parent_apply_patch -cne 'policy-enforced, not OS-attested' -or -not ([string]$certificate.scope).Contains('parent_apply_patch=policy-enforced, not OS-attested')){throw 'cdx_parent_patch_scope_invalid'}
+}
+function GetCdxSensitiveSnapshot([string]$bin,[string]$codexHome,[string]$repo) {
+ # Small fixed set; no auth.json contents or hash, no recursive scan. Absence is a state.
+ $paths=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','install.ps1','gemini_pw.py','cdx_install.json','cdx_runtime_manifest.json','cdx_sandbox_validat.json')|ForEach-Object {Join-Path $bin $_}
+ $paths+=@((Join-Path $codexHome 'config.toml'),(Join-Path $repo '.git\config'),(Join-Path $repo '.git\config.worktree'))
+ $snapshot=[ordered]@{}
+ foreach($path in $paths){
+  $full=AssertCdxPath $path
+  try{$item=Get-Item -LiteralPath $full -Force -ErrorAction Stop}
+  catch [System.Management.Automation.ItemNotFoundException] {$snapshot[$full]='ABSENT';continue}
+  if($item.PSIsContainer){throw 'cdx_sensitive_not_file'}
+  AssertCdxSingleFile $full
+  $snapshot[$full]=HashCdx $full
+ }
+ return $snapshot
+}
+function UpdateCdxSensitiveReport($report,$before,[string]$bin,[string]$codexHome,[string]$repo) {
+ try {
+  $after=GetCdxSensitiveSnapshot $bin $codexHome $repo
+  $changed=@($before.Keys|Where-Object {$before[$_] -cne $after[$_]})
+  $report.sensitive_files.after=$after;$report.sensitive_files.changed_paths=$changed
+  $report.sensitive_files.status=if($changed.Count){'changed'}else{'unchanged'}
+ } catch {$report.sensitive_files.status='unreadable';$report.sensitive_files.error=$_.Exception.Message;throw}
+ if($changed.Count){throw 'cdx_sensitive_files_changed'}
 }

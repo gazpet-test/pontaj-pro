@@ -140,4 +140,82 @@ public static class PawCdxWfp {
       return "Own WFP filters and sublayer removed; COMMIT";
     } finally { if(tx) FwpmTransactionAbort0(engine); FwpmEngineClose0(engine); }
   }
+
+  // Microsoft fwpmu.h: OPEN=0x40, READ=0x80 (NOT the 0x2/0x4 values in the review).
+  // Separate, explicit ADMIN maintenance step. No transaction and no mutation on import.
+  public const int EngineReadMask = 0x000000C0;
+  public sealed class EngineReadPlan {
+    public string Sid, Before, After;
+    public bool Added;
+    public int Mask = EngineReadMask;
+  }
+  [DllImport("fwpuclnt.dll")] static extern uint FwpmEngineGetSecurityInfo0(IntPtr h, uint info, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr sd);
+  [DllImport("fwpuclnt.dll")] static extern uint FwpmEngineSetSecurityInfo0(IntPtr h, uint info, IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+  static System.Security.AccessControl.RawAcl ReadAcl(string b64) {
+    byte[] bytes=Convert.FromBase64String(b64);
+    var acl=new System.Security.AccessControl.RawAcl(bytes,0);
+    if(acl.BinaryLength != bytes.Length) throw new Exception("WFP DACL trailing bytes");
+    return acl;
+  }
+  static string AclBase64(System.Security.AccessControl.RawAcl acl) {
+    byte[] bytes=new byte[acl.BinaryLength]; acl.GetBinaryForm(bytes,0); return Convert.ToBase64String(bytes);
+  }
+  public static EngineReadPlan PlanEngineRead(string before, string sid) {
+    ValidateSid(sid); var acl=ReadAcl(before); int matches=0, insertAt=acl.Count;
+    for(int i=0;i<acl.Count;i++) {
+      if((acl[i].AceFlags & System.Security.AccessControl.AceFlags.Inherited) != 0 && insertAt==acl.Count) insertAt=i;
+      var ace=acl[i] as System.Security.AccessControl.CommonAce;
+      if(ace != null && !ace.IsCallback && ace.AceFlags==0 && ace.AceQualifier==System.Security.AccessControl.AceQualifier.AccessAllowed && ace.AccessMask==EngineReadMask && ace.SecurityIdentifier.Value==sid) matches++;
+    }
+    if(matches>1) throw new Exception("Ambiguous duplicate reader ACEs; manual review required");
+    if(matches==0) acl.InsertAce(insertAt,new System.Security.AccessControl.CommonAce(System.Security.AccessControl.AceFlags.None,System.Security.AccessControl.AceQualifier.AccessAllowed,EngineReadMask,new System.Security.Principal.SecurityIdentifier(sid),false,null));
+    return new EngineReadPlan { Sid=sid, Before=before, After=AclBase64(acl), Added=(matches==0) };
+  }
+  public static string PlanEngineRevoke(string current, string before, string after, string sid, bool added) {
+    ReadAcl(current); var plan=PlanEngineRead(before,sid);
+    if(plan.After!=after || plan.Added!=added) throw new Exception("WFP receipt does not prove one exact added ACE");
+    if(!added) return current; // Preexisting identical ACE was not ours; never remove it.
+    if(current==before) return current; // Already rolled back.
+    if(current!=after) throw new Exception("WFP DACL drift; no rollback over other changes");
+    return before; // Exact after==before+one ACE: removes only our addition.
+  }
+  static string ReadEngineDacl(IntPtr h) {
+    IntPtr owner,group,dacl,sacl,sd=IntPtr.Zero;
+    try {
+      Check(FwpmEngineGetSecurityInfo0(h,4,out owner,out group,out dacl,out sacl,out sd),"FwpmEngineGetSecurityInfo0");
+      if(dacl==IntPtr.Zero) throw new Exception("Null engine DACL; manual review required");
+      int size=(ushort)Marshal.ReadInt16(dacl,2);
+      if(size<8) throw new Exception("Invalid engine DACL length");
+      byte[] bytes=new byte[size];Marshal.Copy(dacl,bytes,0,size);
+      string b64=Convert.ToBase64String(bytes);ReadAcl(b64);return b64;
+    } finally {if(sd!=IntPtr.Zero) FwpmFreeMemory0(ref sd);}
+  }
+  public static string GetEngineDacl() {
+    IntPtr h=Open();try{return ReadEngineDacl(h);}finally{FwpmEngineClose0(h);}
+  }
+  static void RequireEngineAdmin() {
+    var p=new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent());
+    if(!p.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator)) throw new Exception("WFP engine maintenance requires administrator");
+  }
+  static void WriteEngineDacl(IntPtr h, string expected, string desired) {
+    if(ReadEngineDacl(h)!=expected) throw new Exception("WFP DACL changed before write");
+    if(expected==desired) return;
+    byte[] bytes=Convert.FromBase64String(desired);ReadAcl(desired);IntPtr acl=Marshal.AllocHGlobal(bytes.Length);
+    try {
+      Marshal.Copy(bytes,0,acl,bytes.Length);
+      // DACL_SECURITY_INFORMATION ONLY; owner/group/SACL untouched. Never inside a WFP transaction.
+      Check(FwpmEngineSetSecurityInfo0(h,4,IntPtr.Zero,IntPtr.Zero,acl,IntPtr.Zero),"FwpmEngineSetSecurityInfo0");
+    } finally {Marshal.FreeHGlobal(acl);}
+    if(ReadEngineDacl(h)!=desired) throw new Exception("WFP DACL post-write differs; preserve receipt, manual review required");
+  }
+  public static void GrantEngineRead(string before, string after, string sid) {
+    RequireEngineAdmin();var plan=PlanEngineRead(before,sid);
+    if(plan.After!=after) throw new Exception("WFP reader plan changed");
+    IntPtr h=Open();try{WriteEngineDacl(h,before,after);}finally{FwpmEngineClose0(h);}
+  }
+  public static void RevokeEngineRead(string before, string after, string sid, bool added) {
+    RequireEngineAdmin();IntPtr h=Open();
+    try{string current=ReadEngineDacl(h);string desired=PlanEngineRevoke(current,before,after,sid,added);WriteEngineDacl(h,current,desired);}
+    finally{FwpmEngineClose0(h);}
+  }
 }

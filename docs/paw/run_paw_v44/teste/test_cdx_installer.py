@@ -4,7 +4,7 @@ HERE=pathlib.Path(__file__).resolve().parents[1]
 class Prepare(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(prefix='prepare-',dir=HERE);self.root=pathlib.Path(self.tmp.name).resolve();self.src=self.root/'source';self.src.mkdir()
-  for n in ('install.ps1','cdx_security.ps1','cdx_wfp.ps1','cdx_wfp.cs','SHA256.json','run_paw.cmd','run_paw.ps1','cdx.ps1','certifica_cdx.ps1','gemini_pw.py'):shutil.copyfile(HERE/n,self.src/n)
+  for n in ('install.ps1','cdx_security.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','SHA256.json','run_paw.cmd','run_paw.ps1','cdx.ps1','certifica_cdx.ps1','gemini_pw.py'):shutil.copyfile(HERE/n,self.src/n)
   self.hash=hashlib.sha256((self.src/'SHA256.json').read_bytes()).hexdigest().upper();self.stage=self.root/'stage'
  def tearDown(self):self.tmp.cleanup()
  def run_prepare(self,manifest=None):

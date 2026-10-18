@@ -36,7 +36,7 @@ class Cdx(unittest.TestCase):
   (self.bin/'cdx.ps1').write_text(c,encoding='utf-8')
   self.brief=self.data/'brief/test.md';self.brief.write_text('synthetic');self.out=self.data/'out/result.log';self.cert()
  def cert(self):
-  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':6,'network_denied':True,'dns_exception_accepted':False,'protocol':'cdx-probes-r5','certified_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expires_utc':None,'validity_policy':'until-deliberate-change','result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
+  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':7,'parent_apply_patch':'policy-enforced, not OS-attested','parent_apply_patch_residual_accepted':True,'parent_apply_patch_residual_reason':'synthetic operator decision','scope':'parent_apply_patch=policy-enforced, not OS-attested','network_denied':True,'dns_exception_accepted':False,'protocol':'cdx-probes-r6','certified_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'expires_utc':None,'validity_policy':'until-deliberate-change','result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
  def tearDown(self):
   for k,v in self.env_before.items():
    if v is None:os.environ.pop(k,None)
@@ -55,8 +55,24 @@ class Cdx(unittest.TestCase):
   p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c.pop('network_denied');c.update(network_denied_except_dns=True,dns_exception_accepted=True,dns_exception_reason='',scope='DNS exception');p.write_text(json.dumps(c))
   r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertIn('cdx_dns_exception_invalid',r.stdout);self.assertFalse((self.data/'cdx').exists())
  def test_dns_exception_certificate_works_with_visible_scope(self):
-  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c.pop('network_denied');c.update(network_denied_except_dns=True,dns_exception_accepted=True,dns_exception_reason='Explicit operator decision',scope='DNS exception; synthetic test only');p.write_text(json.dumps(c))
+  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c.pop('network_denied');c.update(network_denied_except_dns=True,dns_exception_accepted=True,dns_exception_reason='Explicit operator decision',scope='DNS exception; parent_apply_patch=policy-enforced, not OS-attested');p.write_text(json.dumps(c))
   r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+ def test_parent_residual_missing_refuses(self):
+  p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c.pop('parent_apply_patch_residual_accepted');p.write_text(json.dumps(c))
+  r=self.run_launcher();self.assertNotEqual(r.returncode,0);self.assertIn('cdx_parent_patch_residual_not_accepted',r.stdout);self.assertFalse((self.data/'cdx').exists())
+ def test_sensitive_config_creation_detected(self):
+  home=self.bin/'home';home.mkdir()
+  self.add_payload("pathlib.Path("+repr(str(home/'config.toml'))+").write_text('UNEXPECTED_SYNTHETIC')")
+  r=self.run_launcher();self.failed_report(r,'cdx_sensitive_files_changed')
+  s=json.loads(next((self.data/'out').glob('*.json')).read_text());self.assertEqual(s['sensitive_files']['status'],'changed');self.assertEqual(len(s['sensitive_files']['changed_paths']),1);self.assertNotIn('commit',s)
+ def test_sensitive_git_config_on_nonzero_detected(self):
+  path=self.repo/'.git/config'
+  self.add_payload("p=pathlib.Path("+repr(str(path))+");p.write_text(p.read_text()+'\\n# unexpected synthetic edit');sys.exit(7)")
+  r=self.run_launcher();self.failed_report(r,'cdx_sensitive_files_changed')
+  s=json.loads(next((self.data/'out').glob('*.json')).read_text());self.assertEqual(s['sensitive_files']['status'],'changed');self.assertNotIn('commit',s)
+ def test_sensitive_bin_file_deletion_detected(self):
+  self.add_payload("pathlib.Path("+repr(str(self.bin/'cdx_sandbox_validat.json'))+").unlink()")
+  self.failed_report(self.run_launcher(),'cdx_sensitive_files_changed')
  def test_old_certificate_remains_usable(self):
   p=self.bin/'cdx_sandbox_validat.json';c=json.loads(p.read_text());c['certified_utc']='2010-01-01T00:00:00Z';c['windows_info']={'windows_build':'OLD','windows_ubr':1};p.write_text(json.dumps(c))
   r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
@@ -67,7 +83,7 @@ class Cdx(unittest.TestCase):
  def test_worktree_commit_diff(self):
   r=self.run_launcher();self.assertEqual(r.returncode,0,r.stdout+r.stderr)
   reports=list((self.data/'out').glob('*.json'));self.assertEqual(len(reports),1);s=json.loads(reports[0].read_text(encoding='utf-8-sig'));w=pathlib.Path(s['worktree'])
-  self.assertEqual(s['base'],self.base);self.assertEqual(git(w,'rev-parse','HEAD^'),self.base);self.assertIn('new.txt',pathlib.Path(s['diff']).read_text());self.assertEqual(git(self.repo,'rev-parse','HEAD'),self.base)
+  self.assertEqual(s['sensitive_files']['status'],'unchanged');self.assertEqual(len(s['sensitive_files']['before']),16);self.assertEqual(s['base'],self.base);self.assertEqual(git(w,'rev-parse','HEAD^'),self.base);self.assertIn('new.txt',pathlib.Path(s['diff']).read_text());self.assertEqual(git(self.repo,'rev-parse','HEAD'),self.base)
   argv=json.loads((w/'argv.json').read_text());self.assertIn('workspace-write',argv);self.assertIn('sandbox_workspace_write.network_access=false',argv)
   self.assertFalse(any(x.startswith('--dangerously-') for x in argv));self.assertTrue(self.out.read_text(encoding='utf-8-sig').splitlines()[-1].startswith('PAW_GATA '))
  def test_timeout_tree(self):
