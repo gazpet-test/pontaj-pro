@@ -10,6 +10,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -93,6 +94,11 @@ Deno.serve(async (req: Request) => {
     })
     const data = await resp.json()
     if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
+    if (data.stop_reason === 'max_tokens') return fail('Raspuns AI incomplet (max_tokens); preturile existente raman neschimbate.')
+    const refuz = mesajRefuz(data)
+    if (refuz) return fail(refuz)
+    const txt = textRaspuns(data)
+    if (!txt.trim()) return fail('Raspuns AI fara text; preturile existente raman neschimbate.')
 
     try {
       const u = data.usage || {}
@@ -101,11 +107,18 @@ Deno.serve(async (req: Request) => {
 
     let parsed: any
     try {
-      const txt = data.content?.find((c: any) => c.type === 'text')?.text || '{}'
       parsed = JSON.parse(txt.replace(/```json?|```/g, '').trim())
     } catch (_) { return fail('AI a răspuns într-un format neașteptat.') }
 
     const idsValide = new Set(mats.map((m: any) => m.id))
+    // O lista invalida nu poate autoriza inlocuirea preturilor sau a metadatelor.
+    const vazute = new Set()
+    if (!Array.isArray(parsed?.preturi) || !parsed.preturi.length || !parsed.preturi.every((p: any) => {
+      if (!p || !idsValide.has(p.material_id) || vazute.has(p.material_id) ||
+        !(p.pret === null || (Number.isFinite(p.pret) && p.pret >= 0))) return false
+      vazute.add(p.material_id)
+      return true
+    })) return fail('AI nu a furnizat o lista valida de preturi; preturile si metadatele existente raman neschimbate.')
     const preturi = (Array.isArray(parsed.preturi) ? parsed.preturi : [])
       .filter((p: any) => idsValide.has(p.material_id))
       .map((p: any) => ({
