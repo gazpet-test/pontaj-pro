@@ -8,7 +8,9 @@ const areCamp = (v: unknown, chei: string[]): boolean => obiect(v) && chei.some(
 export function recomandariValide(lista: unknown): boolean {
   // Nu filtrăm și nu trunchiem pachetul: o scrisoare invalidă oprește întreaga înlocuire.
   return Array.isArray(lista) && lista.length > 0 && lista.every(x => obiect(x) &&
-    typeof x.nume_persoana === 'string' && !!x.nume_persoana.trim())
+    typeof x.nume_persoana === 'string' && !!x.nume_persoana.trim() &&
+    // doar numele nu e o recomandare: mai trebuie macar rolul, beneficiarul sau lucrarea (review Copilot/Gemini)
+    areCamp(x, ['rol', 'beneficiar', 'obiect_lucrare']))
 }
 
 export function contractUtil(v: unknown): boolean {
@@ -34,8 +36,9 @@ export function clasificareUtila(v: unknown): boolean {
 
 export function propunereValida(v: unknown): boolean {
   return obiect(v) && typeof v.este_autorizatie === 'boolean' &&
-    'tip_cod' in v && (v.tip_cod === null || textUtil(v.tip_cod)) &&
-    'autorizatie_existenta_id' in v && (v.autorizatie_existenta_id === null ||
+    (v.tip_cod == null || textUtil(v.tip_cod)) &&
+    // cheile omise de model = null (review Gemini)
+    (v.autorizatie_existenta_id == null ||
       (Number.isInteger(v.autorizatie_existenta_id) && v.autorizatie_existenta_id > 0)) &&
     typeof v.incredere === 'number' && Number.isFinite(v.incredere) &&
     areCamp(v, ['citat', 'ce_este'])

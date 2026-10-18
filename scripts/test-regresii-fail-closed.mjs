@@ -26,10 +26,11 @@ await import('../supabase/functions/extract-talon-ai/handler_test.ts')
 await import('../supabase/functions/extract-talon-ai/acces_test.ts')
 
 test('recomandări: null permis, pachet integral sau refuz', () => {
-  const letter = { nume_persoana: 'POPESCU ION', rol: null, beneficiar: null, obiect_lucrare: null }
+  const letter = { nume_persoana: 'POPESCU ION', rol: null, beneficiar: 'Distrigaz', obiect_lucrare: null }
   assert.equal(guards.recomandariValide([letter, { ...letter, rol: 'RTE' }]), true)
   assert.equal(guards.recomandariValide(Array.from({ length: 26 }, () => letter)), true)
-  for (const bad of [null, [], {}, { rol: 'RTE' }, { nume_persoana: '' }]) {
+  for (const bad of [null, [], {}, { rol: 'RTE' }, { nume_persoana: '' }, { nume_persoana: 'X' },
+    { nume_persoana: 'X', rol: null, beneficiar: null, obiect_lucrare: null }]) {
     assert.equal(guards.recomandariValide([letter, bad]), false)
   }
 })
@@ -54,7 +55,9 @@ test('autorizație: descrierea singură nu definește propunerea; null și răsp
   assert.equal(guards.propunereValida({ ce_este: 'autorizatie' }), false)
   assert.equal(guards.propunereValida(valid), true)
   assert.equal(guards.propunereValida({ ...valid, este_autorizatie: false, ce_este: 'CV' }), true)
-  for (const key of ['este_autorizatie', 'tip_cod', 'autorizatie_existenta_id', 'incredere']) {
+  // cheile omise de model = null (review Gemini PR #779)
+  assert.equal(guards.propunereValida({ este_autorizatie: false, incredere: 90, ce_este: 'CV' }), true)
+  for (const key of ['este_autorizatie', 'incredere']) {
     const incomplete = { ...valid }; delete incomplete[key]
     assert.equal(guards.propunereValida(incomplete), false)
   }
@@ -151,7 +154,7 @@ async function runExtraction(path, answer, stop_reason = 'end_turn', httpStatus 
   return { result, body: await result.json(), writes: writes.filter(w => w.table !== 'ai_usage_log') }
 }
 test('handler recomandări: păstrează scrisoarea cu rol null, refuză integral lista parțial invalidă', async () => {
-  const letter = { nume_persoana: 'POPESCU ION', rol: null, beneficiar: null, obiect_lucrare: null }
+  const letter = { nume_persoana: 'POPESCU ION', rol: null, beneficiar: 'Distrigaz', obiect_lucrare: null }
   const valid = await runExtraction('supabase/functions/hr-recomandare-citeste/index.ts', { recomandari: [letter, letter] })
   assert.equal(valid.body.ok, true)
   assert.equal(valid.body.gasite_in_fisier, 2)
@@ -185,6 +188,8 @@ test('handler PCCVI: absența explicită acceptată, max_tokens/refusal/gol refu
   const good = await runExtraction('supabase/functions/parse-pccvi-faze/index.ts', answer)
   assert.equal(good.body.success, true)
   assert.equal(good.body.extrase, 0)
+  // lista goala explicita nu sterge propunerile existente (review Copilot PR #779)
+  assert.equal(good.writes.filter(w => w.method === 'delete').length, 0)
   for (const [stop, value] of [['max_tokens', answer], ['refusal', answer], ['end_turn', ' '], ['end_turn', '{}']]) {
     const bad = await runExtraction('supabase/functions/parse-pccvi-faze/index.ts', value, stop)
     assert.equal(bad.writes.length, 0)

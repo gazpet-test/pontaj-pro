@@ -232,8 +232,8 @@ Deno.serve(async (req: Request) => {
 
   const rezultat: any = await citeste(API_KEY, mime, buf);
   if (rezultat?.eroare) return json({ ok: false, eroare: rezultat.eroare });
-  const lista: any[] = rezultat?.lista;
-  if (!recomandariValide(lista)) return json({ ok: false, eroare: 'AI nu a intors recomandari valide; datele existente raman neschimbate' });
+  if (!recomandariValide(rezultat?.lista)) return json({ ok: false, eroare: 'AI nu a intors recomandari valide; datele existente raman neschimbate' });
+  const lista: any[] = rezultat.lista.slice(0, 25);
   // Primul element intra in randul curent; restul devin frati, legati prin parinte_id.
   const r: any = { ...lista[0], _tin: rezultat?._tin, _tout: rezultat?._tout };
   try {

@@ -138,7 +138,9 @@ Deno.serve(async (req: Request) => {
         }
       })
 
-    await supabaseAdmin.from('executie_faze_determinante')
+    // Lista goala explicita (are_faze_determinante=false) e raspuns legitim, dar nu stergem propunerile existente pe baza ei
+    // (o eroare AI ar sterge date; propunerea veche ramane vizibila pentru om). Review Copilot PR #779.
+    if (faze.length > 0) await supabaseAdmin.from('executie_faze_determinante')
       .delete().eq('proiect_id', proiect_id).eq('sursa', 'ai_pccvi').eq('status', 'neplanificata')
 
     if (faze.length > 0) {
