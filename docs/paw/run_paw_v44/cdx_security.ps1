@@ -102,7 +102,9 @@ function GetCdxBinding {
   $bin['git-credential-manager.exe']=HashCdx $helper
  }
  $script:CdxInstall=$cfg
- return [ordered]@{schema=2;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');os=[Environment]::OSVersion.Version.ToString();identity=$cfg.reader_sid;isolation=$cfg.isolation}
+ $auth=Join-Path $cfg.codex_home 'auth.json';AssertCdxSingleFile $auth
+ $authAcl=(Get-Acl -LiteralPath $auth).Sddl
+ return [ordered]@{schema=2;auth_acl_sddl=$authAcl;bin=$bin;runtime_manifest_sha256=HashCdx $manifest;node_sha256=HashCdx (Join-Path $runtime 'node.exe');os=[Environment]::OSVersion.Version.ToString();identity=$cfg.reader_sid;isolation=$cfg.isolation}
 }
 # Windows CRT quoting for controlled internal arguments (not a shell command).
 function ArgCdx([string]$value) {
@@ -166,7 +168,7 @@ function GetCdxGitSnapshot([string]$common,[string]$meta) {
 }
 function OpenCdxInstallBarrier([bool]$exclusive=$false) {
  $p=Join-Path $PAW_ROOT 'install.lock';AssertCdxAdminAcl $PAW_ROOT;AssertCdxAdminAcl $p;AssertCdxSingleFile $p
- $share=if($exclusive){[IO.FileShare]::None}else{[IO.FileShare]::Read -bor [IO.FileShare]::Inheritable}
+ $share=if($exclusive){[IO.FileShare]::None}else{[IO.FileShare]::Read}
  $h=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
  if([PawCdx.Files]::Links($h.SafeFileHandle) -ne 1){$h.Dispose();throw 'cdx_install_lock_hardlink'}
  return $h

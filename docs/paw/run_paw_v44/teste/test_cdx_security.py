@@ -42,10 +42,62 @@ Case 'matching_hashes' {$a=[ordered]@{x='abc';nested=[ordered]@{y='def'}};$b=$a|
 $tok=$null;$err=$null;$ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\certifica_cdx.ps1',[ref]$tok,[ref]$err)
 $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'AssertEventReview'},$true)
 . ([scriptblock]::Create($fn.Extent.Text))
-Case 'certificate_narrative_rejected' {$r=@{verdict='ALL_DENIED';reviewed_by='test';probes=@(@{id='one';event_line=1;attempt_observed=$true;denial_observed=$true;success_observed=$false;reason='test'})};AssertEventReview $r @('{"type":"item.completed","item":{"type":"agent_message","text":"all denied"}}') @('one')} $true
-Case 'certificate_missing_attempt_rejected' {$r=@{verdict='ALL_DENIED';reviewed_by='test';probes=@(@{id='one';event_line=1;attempt_observed=$false;denial_observed=$true;success_observed=$false;reason='test'})};AssertEventReview $r @('{"type":"item.completed","item":{"type":"command_execution"}}') @('one')} $true
-Case 'certificate_duplicate_rejected' {$r=@{verdict='ALL_DENIED';reviewed_by='test';probes=@(@{id='one'},@{id='one'})};AssertEventReview $r @() @('one','two')} $true
-Case 'certificate_structured_review' {$r=@{verdict='ALL_DENIED';reviewed_by='test';probes=@(@{id='one';event_line=1;attempt_observed=$true;denial_observed=$true;success_observed=$false;reason='externally reviewed denial'})};AssertEventReview $r @('{"type":"item.completed","item":{"type":"command_execution","exit_code":1}}') @('one')}
+
+function ReviewFixture {
+ return @{verdict='ALL_DENIED';reviewed_by='test';probes=@(@{id='one';event_line=1;attempt_observed=$true;denial_observed=$true;success_observed=$false;reason='synthetic externally reviewed denial';denial_excerpt='Access denied'})}
+}
+$probeFixture=@(@{id='one';tool_type='command_execution';action_tokens=@('C:\canary','ReadAllText');instruction='ReadAllText C:\canary # one'})
+$eventFixture='{"type":"item.completed","item":{"id":"event1","type":"command_execution","command":"ReadAllText C:\\canary # one","exit_code":1,"aggregated_output":"Access denied"}}'
+Case 'certificate_narrative_rejected' {AssertEventReview (ReviewFixture) @('{"type":"item.completed","item":{"id":"event1","type":"agent_message","text":"all denied"}}') $probeFixture} $true
+Case 'certificate_missing_attempt_rejected' {$r=ReviewFixture;$r.probes[0].attempt_observed=$false;AssertEventReview $r @($eventFixture) $probeFixture} $true
+Case 'certificate_duplicate_rejected' {$r=ReviewFixture;$r.probes+= $r.probes[0];AssertEventReview $r @($eventFixture) @($probeFixture[0],$probeFixture[0])} $true
+Case 'certificate_structured_review' {AssertEventReview (ReviewFixture) @($eventFixture) $probeFixture}
+Case 'certificate_reused_event_line' {
+ $r=ReviewFixture;$r.probes+=@{id='two';event_line=1;attempt_observed=$true;denial_observed=$true;success_observed=$false;reason='test';denial_excerpt='Access denied'}
+ AssertEventReview $r @($eventFixture.Replace('# one','# one two')) @($probeFixture[0],@{id='two';tool_type='command_execution';action_tokens=@('C:\canary','ReadAllText');instruction='ReadAllText C:\canary # two'})
+} $true
+Case 'certificate_reused_item_id' {
+ $r=ReviewFixture;$r.probes+=@{id='two';event_line=2;attempt_observed=$true;denial_observed=$true;success_observed=$false;reason='test';denial_excerpt='Access denied'}
+ AssertEventReview $r @($eventFixture,$eventFixture.Replace('# one','# two')) @($probeFixture[0],@{id='two';tool_type='command_execution';action_tokens=@('C:\canary','ReadAllText');instruction='ReadAllText C:\canary # two'})
+} $true
+Case 'certificate_wrong_target' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('canary','different')) $probeFixture} $true
+Case 'certificate_id_only_in_output' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('# one','# other').Replace('Access denied','Access denied one')) $probeFixture} $true
+Case 'certificate_action_only_in_output' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('ReadAllText C:\\canary # one','echo one').Replace('Access denied','Access denied ReadAllText C:\\canary one')) $probeFixture} $true
+Case 'certificate_success_rejected' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('"exit_code":1','"exit_code":0')) $probeFixture} $true
+Case 'certificate_unfinished_rejected' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('item.completed','item.updated')) $probeFixture} $true
+Case 'certificate_fabricated_excerpt_rejected' {$r=ReviewFixture;$r.probes[0].denial_excerpt='fake';AssertEventReview $r @($eventFixture) $probeFixture} $true
+Case 'certificate_two_distinct_events' {
+ $r=ReviewFixture;$r.probes+=@{id='two';event_line=2;attempt_observed=$true;denial_observed=$true;success_observed=$false;reason='test';denial_excerpt='Access denied'}
+ AssertEventReview $r @($eventFixture,$eventFixture.Replace('# one','# two').Replace('event1','event2')) @($probeFixture[0],@{id='two';tool_type='command_execution';action_tokens=@('C:\canary','ReadAllText');instruction='ReadAllText C:\canary # two'})
+}
+
+Case 'certificate_wrong_exact_command' {AssertEventReview (ReviewFixture) @($eventFixture.Replace('ReadAllText C:\\canary # one','echo ReadAllText C:\\canary # one')) @(@{id='one';tool_type='command_execution';action_tokens=@('C:\canary');instruction='DIFFERENT COMMAND'})} $true
+Case 'certificate_patch_denial' {
+ $r=ReviewFixture
+ AssertEventReview $r @('{"type":"item.completed","item":{"id":"patch1","type":"file_change","status":"failed","changes":[{"path":"C:\\one-canary","diff":"-CANARY_WRITE_INITIAL\n+PAW_CHANGED"}],"error":"Access denied"}}') @(@{id='one';tool_type='file_change';action_tokens=@('C:\one-canary','CANARY_WRITE_INITIAL','PAW_CHANGED')})
+}
+Case 'certificate_file_tool_denial' {
+ AssertEventReview (ReviewFixture) @('{"type":"item.completed","item":{"id":"read1","type":"tool_call","status":"failed","arguments":{"path":"C:\\one-canary"},"error":"Access denied"}}') @(@{id='one';tool_type='tool_call';action_tokens=@('C:\one-canary')})
+}
+$nativeProbe=@(@{id='native-read';tool_type='command_execution';action_tokens=@('native.exe');instruction='native.exe # native-read'})
+$nativeEvent='{"type":"item.completed","item":{"id":"native1","type":"command_execution","command":"native.exe # native-read","exit_code":37,"aggregated_output":"curl: (37) Access denied"}}'
+function NativeReview {$r=ReviewFixture;$r.probes[0].id='native-read';$r.probes[0].native_execution_observed=$true;return $r}
+Case 'certificate_native_operation_denial' {AssertEventReview (NativeReview) @($nativeEvent) $nativeProbe}
+Case 'certificate_native_not_started_rejected' {AssertEventReview (NativeReview) @($nativeEvent.Replace('curl: (37) ','Executable cannot start; ')) $nativeProbe} $true
+Case 'certificate_native_timeout_rejected' {AssertEventReview (NativeReview) @($nativeEvent.Replace('(37)','(28)')) $nativeProbe} $true
+Case 'certificate_native_unreviewed_rejected' {$r=NativeReview;$r.probes[0].native_execution_observed=$false;AssertEventReview $r @($nativeEvent) $nativeProbe} $true
+# Extract only inventory validator, no Install top-level.
+$ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\install.ps1',[ref]$tok,[ref]$err)
+$fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'AssertLegacyInventory'},$true)
+. ([scriptblock]::Create($fn.Extent.Text))
+Case 'maintenance_empty' {AssertLegacyInventory @() @() @()}
+Case 'maintenance_active_process' {AssertLegacyInventory @(@{ProcessId=999999;CommandLine='powershell run_paw.ps1 gem'}) @() @()} $true
+Case 'maintenance_ready_task' {AssertLegacyInventory @() @(@{TaskName='run_paw';TaskPath='\';State='Ready';Settings=@{Enabled=$true};Actions=@()}) @()} $true
+Case 'maintenance_running_disabled_task' {AssertLegacyInventory @() @(@{TaskName='run_paw';TaskPath='\';State='Running';Settings=@{Enabled=$false};Actions=@()}) @()} $true
+Case 'maintenance_disabled_task' {AssertLegacyInventory @() @(@{TaskName='run_paw';TaskPath='\';State='Disabled';Settings=@{Enabled=$false};Actions=@()}) @()}
+Case 'maintenance_task_action' {AssertLegacyInventory @() @(@{TaskName='unrelated';TaskPath='\';State='Ready';Settings=@{Enabled=$true};Actions=@(@{Execute='cmd.exe';Arguments='/c C:\old\run_paw.cmd gem';WorkingDirectory=''})}) @()} $true
+Case 'maintenance_service_enabled' {AssertLegacyInventory @() @() @(@{Name='run_paw';PathName='wrapper';State='Stopped';StartMode='Auto'})} $true
+Case 'maintenance_service_disabled' {AssertLegacyInventory @() @() @(@{Name='run_paw';PathName='wrapper';State='Stopped';StartMode='Disabled'})}
 # ACL decision tests use in-memory security descriptors, not filesystem ACL changes.
 function AclFixture($owner,$writer) {
  $a=New-Object Security.AccessControl.DirectorySecurity
@@ -59,6 +111,16 @@ function Get-Acl {param([string]$LiteralPath) return $script:aclFixture}
 Case 'admin_acl_readers_allowed' {$script:aclFixture=AclFixture 'S-1-5-32-544' $false;AssertCdxAdminAcl $root}
 Case 'admin_acl_world_write_rejected' {$script:aclFixture=AclFixture 'S-1-5-32-544' $true;AssertCdxAdminAcl $root} $true
 Case 'non_admin_owner_rejected' {$script:aclFixture=AclFixture 'S-1-1-0' $false;AssertCdxAdminAcl $root} $true
+
+Case 'install_barrier_handle_not_inherited' {
+ $PAW_ROOT=$root;$script:aclFixture=AclFixture 'S-1-5-32-544' $false
+ [IO.File]::WriteAllText((Join-Path $root 'install.lock'),'test')
+ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class HandleFlags { [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetHandleInformation(IntPtr h, out uint f); }'
+ foreach($exclusive in @($false,$true)) {
+  $h=OpenCdxInstallBarrier $exclusive
+  try{$flags=0;if(-not [HandleFlags]::GetHandleInformation($h.SafeFileHandle.DangerousGetHandle(),[ref]$flags) -or ($flags -band 1)){throw 'install lock handle is inheritable'}}finally{$h.Dispose()}
+ }
+}
 Remove-Item Function:\Get-Acl
 # Unlink the junction only. Never recursive-delete a tree until reparse paths are removed.
 if(Test-Path -LiteralPath (Join-Path $root 'junction')){[IO.Directory]::Delete((Join-Path $root 'junction'))}

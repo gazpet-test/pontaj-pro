@@ -39,10 +39,28 @@ $pkg=Get-Content -LiteralPath (Join-Path $CodexPackage 'package.json') -Raw|Conv
 if($pkg.name -ne '@openai/codex' -or $pkg.version -notmatch '^\d+\.\d+\.\d+([-.][A-Za-z0-9.]+)?$'){throw 'Codex package/version invalid'}
 $native=Join-Path $CodexPackage 'node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe'
 if(-not(Test-Path -LiteralPath $native -PathType Leaf)){throw 'Bundled native Codex missing; refusing external module resolution'}
-function AssertNoPawProcesses {
- $a=@(Get-CimInstance Win32_Process|Where-Object {$_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)(run_paw\.(ps1|cmd)|gemini_pw\.py|copilot_pw\.py|certifica_cdx\.ps1)'})
- if($a.Count){throw 'Active launcher/certifier; no installation performed'}
+function AssertLegacyInventory($processes,$tasks,$services) {
+ # Direct launchers + named Paw wrappers. Unknown indirect launchers still require maintenance.
+ $pattern='(?i)(run_paw|gemini_pw|copilot_pw|certifica_cdx|paw-data|Gazpet[\\/]Paw)'
+ foreach($p in $processes){if($p.ProcessId -ne $PID -and $p.CommandLine -match $pattern){throw 'Active Paw process; no installation performed'}}
+ foreach($t in $tasks){
+  $actionText=($t.Actions|ForEach-Object { $_.Execute+' '+$_.Arguments+' '+$_.WorkingDirectory }) -join ' '
+  if(($t.TaskPath+' '+$t.TaskName+' '+$actionText) -match $pattern){
+   if($t.State -ne 'Disabled' -or $t.Settings.Enabled -ne $false){throw 'Paw scheduled task must be disabled AND stopped'}
+  }
+ }
+ foreach($s in $services){if(($s.Name+' '+$s.DisplayName+' '+$s.PathName) -match $pattern){
+  if($s.State -ne 'Stopped' -or $s.StartMode -ne 'Disabled'){throw 'Paw service must be disabled AND stopped'}
+ }}
 }
+function AssertNoPawProcesses {
+ # Enumeration failures are fatal; the switch alone is NEVER sufficient.
+ $processes=@(Get-CimInstance Win32_Process -ErrorAction Stop)
+ $tasks=@(Get-ScheduledTask -ErrorAction Stop)
+ $services=@(Get-CimInstance Win32_Service -ErrorAction Stop)
+ AssertLegacyInventory $processes $tasks $services
+}
+
 AssertNoPawProcesses
 $gazpet=Split-Path $PAW_ROOT
 foreach($d in @($gazpet,$PAW_ROOT)){

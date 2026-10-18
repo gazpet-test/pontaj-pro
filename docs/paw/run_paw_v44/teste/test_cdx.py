@@ -36,7 +36,7 @@ class Cdx(unittest.TestCase):
   (self.bin/'cdx.ps1').write_text(c,encoding='utf-8')
   self.brief=self.data/'brief/test.md';self.brief.write_text('synthetic');self.out=self.data/'out/result.log';self.cert()
  def cert(self):
-  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':2,'result':'PASS','probe_count':9,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
+  (self.bin/'cdx_sandbox_validat.json').write_text(json.dumps({'schema':3,'protocol':'cdx-probes-r3','result':'PASS','probe_count':20,'evidence_sha256':'TEST','admin_review_sha256':'TEST','binding':{'fixture':'not-OS-certification'}}))
  def tearDown(self):
   for k,v in self.env_before.items():
    if v is None:os.environ.pop(k,None)

@@ -455,7 +455,8 @@ function StergeDirImg([string]$d) {
 try {
   $installLock = Join-Path $PAW_ROOT 'install.lock'
   [void](CaleSigura $installLock @($PAW_ROOT) $true)
-  $script:InstallBarrier = [IO.File]::Open($installLock,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::Read -bor [IO.FileShare]::Inheritable))
+  # Global installation barrier is NOT inherited. Job owns child lifetime.
+  $script:InstallBarrier = [IO.File]::Open($installLock,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
   if ([PawV4.Fs]::Links($script:InstallBarrier.SafeFileHandle) -ne 1) { throw 'install_lock_hardlink' }
   . (Join-Path $PSScriptRoot 'cdx.ps1')
   AssertCdxAdminAcl $PAW_ROOT; AssertCdxAdminAcl $installLock

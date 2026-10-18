@@ -1,38 +1,46 @@
-# Validare locala v4.4 r2 - 2026-10-18
+# Validare locala v4.4 r3 - 2026-10-18
 
-Rezultate masurate in worktree, cu date sintetice si copii ale lansatorului.
+Rezultate masurate in worktree, numai date sintetice si copii ale lansatorului.
 Nicio rulare Codex reala, instalare, certificat, autentificare sau acces DB.
 
-| Suita | Rezultat | Ce acopera |
+| Suita (python -I docs/paw/run_paw_v44/teste/...) | Rezultat | Ce acopera |
 |---|---|---|
-| python -I docs/paw/run_paw_v44/teste/test_cdx.py | 14 trecute, 1 SKIPPED; ultima 37.418 s | worktree/base/commit/diff, refuz fara certificat, slug/cale, timeout+copil, lock, tinta/fetch esuat, secret env absent, tmp sters, metadate Git schimbate, filter/nested Git/hardlink refuzate, lock hardlink netrunchiat |
-| python -I docs/paw/run_paw_v44/teste/test_cdx_security.py | 29 cazuri trecute (subteste); ultima 0.689 s | sintaxa tuturor PS1, ACL owner/writer (descriptor sintetic), cai rezervate/ADS/UNC/reparse/root/hardlink, allowlist env/config Git, hash set extra/metadata, quoting intern, refuz certificare numai din relatarea modelului/lipsa incercare/dubluri |
-| python -I docs/paw/run_paw_v44/teste/test_cdx_installer.py | 4 trecute; ultima 1.466 s | numai Prepare pe copii: hash manifest gresit, helper modificat, stage existent, bytes copiate identic; fara marker/config instalare |
-| python -I docs/paw/run_paw_v44/teste/test_run_paw.py | 33 trecute; 57.277 s | regresii canale legacy cu stuburi, Job Object, lock, bariera de procese, fara browser/model real |
+| test_cdx.py | 14 trecute, 1 SKIPPED; 37.165 s | worktree/base/commit/diff, certificat lipsa, slug/cale, timeout+copil, lock, tinta/fetch esuat, mediu, tmp, metadata/filter/nested Git/hardlink refuzate |
+| test_cdx_security.py | 54 cazuri trecute in 1 test cu subteste; 0.913 s | PS syntax, NTFS/reparse/ACL, env/Git/hash/quoting, actiune vs stdout/proza, evenimente si item.id distincte, ID/path/comanda exacta, excerpt real, succes/unfinished/schema refuzate, native curl neexecutat/timeout/neconfirmat refuzate; taskuri/servicii/procese fixture; flag real al handle-ului install.lock comun/exclusiv nemostenibil |
+| test_cdx_installer.py | 4 trecute; 1.491 s | Prepare pe copii, hash eronat/helper modificat/stage existent refuzate; octeti copiati identic |
+| test_run_paw.py | 33 trecute; 56.672 s | regresii legacy, Job Object, lock mostenit de canal, moartea lansatorului/copilului, stuburi fara browser/model real |
+| test_cdx_cert_probes.py | 1 trecut; 0.766 s | 20 definitii generate, ID/argumente/write initial fix, curl.exe copiat executat pentru read/write FILE pe canare temporare, argumente cu spatii; helper Git sintetic executat cu Git real fara retea/credentiale reale |
 
-Total: 80 verificari/cazuri trecute, 1 test OS SKIPPED. Cifra nu reprezinta
-80 teste de penetrare independente: include 29 subteste dintr-un singur harness.
-Git diff --check trecut; manifestul se verifica pe octetii exacti, cu .gitattributes -text.
+Total: **106 verificari/cazuri trecute, 1 test OS SKIPPED**. Acest total include
+54 subteste in acelasi harness; nu sunt 106 teste de penetrare independente.
 
-Testele cdx inlocuiesc DOAR in copii temporare ACL/binding/runtime/origin cu
-fixture-uri. Codul livrat NU contine flag sau variabila de mediu pentru bypass.
-Config Git de test permite un origin bare local, fara conexiuni GitHub. Nu s-a
-rulat GCM sau citit vreun secret real. Niciun credential manager nu este certificat
-prin testul sintetic de quoting.
+Probele native locale sunt CONTROALE NECONFINATE: executabilul a putut citi si
+scrie canarul din fixture-ul temporar, inclusiv din afara subdirectorului simulat
+worktree. Demonstreaza ca payload-ul/URI/comanda functioneaza, NU ca sandbox-ul
+Codex il blocheaza. Toate fisierele fixture sunt sub worktree-ul autorizat.
+Niciun listener LAN, TCP public sau DNS nu a fost pornit/cerut de aceste teste.
 
-Primele executii limitate de sandboxul agentului au refuzat TEMP/Add-Type si
-interogarea/oprirea proceselor. TEMP a fost mutat in fixture; testele Job/process
-au fost rerulate cu permisiunea necesara pentru testele locale. Au fost remediate
-si verificate: nume NTFS cu punct final, mediu Path/PATH duplicat in .NET Framework,
-si adaptarea harness-ului la noua bariera. Aceste esecuri intermediare nu sunt
-certificate de izolarea produsului.
+Testul helperului Git a picat initial cu forma quoted-absolute din r2: Git cauta
+un subcommand credential-C:/... . Fixul !"cale absoluta" a trecut; cauza nu este
+ArgCdx care ar transmite gresit ghilimelele. Helperul a returnat numai date fixe
+sintetice; nu s-a rulat GCM real si nu s-au accesat servicii externe.
 
-NETESTAT: Install pe ProgramData, ACL reale de instalare, copierea npm reala,
-swap/rollback, schedulerul de certificare, sandbox elevated real, apply_patch
-real, canarii/reteaua/profilul reale, autentificarea CODEX_HOME si GCM/fetch privat.
-Fara audit sursa exact-tag pentru toate scrierile hostului. Varianta PawCdx nu
-este implementata. Citirea profilului poate bloca poarta native: nu se elimina
-proba pentru a obtine PASS. Nicio afirmatie de GO pentru activare.
+Testele cdx schimba ACL/binding/runtime/origin numai in COPII temporare. Produsul
+nu are flag de bypass. Originul este un repo bare local; niciun push de retea.
+Testele Job/process au rulat cu permisiune pentru interogarea/oprirea propriilor
+procese sintetice. TEMP/TMP pentru Add-Type raman in fixture. Nicio configurare
+globala ori memorie a agentului nu a fost modificata.
 
-SHA256.json: 3098484BD2E01B3C07076131CBA12FFEFC01E89A91924E42C4D5864C8EAA9DA3
-Acesta este hash-ul setului de sapte artefacte de instalare, nu un certificat OS.
+NETESTAT: Install pe ProgramData, inventar scheduler/CIM real pentru instalare,
+swap/rollback, provisionare auth, copie runtime reala, Run/Seal cu modelul real,
+refuzuri native/shell/tool ale sandbox-ului, citirea auth sub token sandbox,
+link escape real, TCP LAN/public/DNS, firewall/WFP, repetabilitatea probelor,
+GCM/fetch privat. Cerinta de activare ramane NO-GO pana la probele reale.
+Unealta de citire separata de shell poate lipsi sau avea alta schema; atunci
+certificarea ramane INCOMPLETE, nu acceptam proza modelului ca substitut.
+PawCdx varianta 2 este doar pasul urmator propus daca varianta 1 nu trece.
+
+Hash-uri runtime verificate pe octetii exacti ai celor sapte fisiere, cu .gitattributes
+-text; si asupra bloburilor din commit la final. Git diff --check trecut.
+SHA256.json: F8A7237631198DC371D1B6FB5193B831C37CB1FD7FE336F5BF8AA933E1916A63
+Acesta este hash-ul manifestului de instalare, nu un certificat OS.
