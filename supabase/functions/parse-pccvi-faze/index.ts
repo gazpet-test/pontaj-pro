@@ -6,6 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { faraGandire } from '../_shared/gandire.ts'
+import { fazeValide } from '../_shared/structuraExtrageri.ts'
 import { costApel, modelParsare, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { userAutorizat } from './acces.ts'
 
@@ -118,7 +119,8 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Parse failed: ' + pe.message, raw_inceput: raw.slice(0, 400) }), { status: 500, headers: CORS })
     }
 
-    const faze = (Array.isArray(parsed?.faze) ? parsed.faze : [])
+    if (!fazeValide(parsed)) return new Response(JSON.stringify({ error: 'AI nu a intors o lista valida de faze; fazele existente raman neschimbate' }), { status: 422, headers: CORS })
+    const faze = parsed.faze
       .filter((f: any) => f && f.denumire && String(f.denumire).trim())
       .map((f: any, i: number) => {
         const rawNr = f.nr_faza
@@ -136,9 +138,9 @@ Deno.serve(async (req: Request) => {
         }
       })
 
-    if (faze.length === 0) return new Response(JSON.stringify({ error: 'AI nu a gasit faze; fazele existente raman neschimbate' }), { status: 422, headers: CORS })
-
-    await supabaseAdmin.from('executie_faze_determinante')
+    // Lista goala explicita (are_faze_determinante=false) e raspuns legitim, dar nu stergem propunerile existente pe baza ei
+    // (o eroare AI ar sterge date; propunerea veche ramane vizibila pentru om). Review Copilot PR #779.
+    if (faze.length > 0) await supabaseAdmin.from('executie_faze_determinante')
       .delete().eq('proiect_id', proiect_id).eq('sursa', 'ai_pccvi').eq('status', 'neplanificata')
 
     if (faze.length > 0) {

@@ -10,6 +10,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { esteApelIntern } from '../_shared/poartaIntern.ts';
 import { decideAcces, nivelMaxim, type NivelModul } from '../_shared/poartaRag.ts';
 import { faraGandire } from '../_shared/gandire.ts';
+import { lotPaginiValid } from '../_shared/structuraExtrageri.ts';
 import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 
 // Globalul runtime-ului Supabase Edge (Supabase.ai.Session) — nu are tipuri publicate pentru deno check.
@@ -119,10 +120,9 @@ async function transcribeBatch(pdfB64: string, startPage: number, pageCount: num
     try {
       const arr = JSON.parse(cand);
       if (Array.isArray(arr)) {
-        const pagini = arr.filter((e) => e && typeof e.pagina === 'number' && typeof e.text === 'string');
-        // [] sau numai elemente invalide = lot fără pagini: eroare, nu succes (altfel coada sare peste lot fără indexare)
-        if (!pagini.length) return { refuz: 'Serviciul AI nu a returnat nicio pagină validă pentru acest lot. Verifică documentul.' };
-        return pagini;
+        // Inclusiv paginile goale trebuie menționate explicit; nu sărim peste pagini lipsă.
+        if (!lotPaginiValid(arr, startPage, pageCount)) return { refuz: 'Serviciul AI nu a acoperit exact toate paginile lotului. Verifică documentul.' };
+        return arr;
       }
     } catch (_e) { /* fallback */ }
   }
@@ -139,6 +139,7 @@ async function searchAndAnswer(supabase: any, question: string, modelKey: string
   if (mErr) throw mErr;
   if (!matches || matches.length === 0) return { answer: null, sources: [] };
   let answer: string | null = null;
+  let incomplet = false;
   if (withAi) {
     const context = matches.map((m: { sursa: string; referinta: string | null; content: string }, i: number) => `[${i + 1}] ${m.sursa} ${m.referinta || ''}:\n${m.content}`).join('\n\n');
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -165,9 +166,14 @@ async function searchAndAnswer(supabase: any, question: string, modelKey: string
     const aiData = await aiRes.json();
     answer = mesajRefuz(aiData) ? 'Modelul AI a refuzat întrebarea (filtru de siguranță). Uită-te în pasajele de mai jos sau întreabă biroul.'
       : (textRaspuns(aiData) || null);
+    if (aiData.stop_reason === 'max_tokens') {
+      incomplet = true;
+      answer = (answer?.trim() || '') + '\n\nRăspuns incomplet: limita de tokeni a fost atinsă.';
+    }
   }
   return {
     answer,
+    incomplet,
     sources: matches.map((m: { sursa: string; referinta: string | null; content: string; document_id: number; similarity: number }) => ({
       sursa: m.sursa, referinta: m.referinta, content: m.content, document_id: m.document_id, similarity: Math.round(m.similarity * 100) / 100,
     })),

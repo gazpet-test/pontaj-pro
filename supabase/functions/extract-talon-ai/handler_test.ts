@@ -4,7 +4,7 @@
 // scanuri, nu cheamă AI, nu scrie în talon_extract_staging și nici măcar nu citește corpul cererii.
 // Dacă cineva reintroduce o cale care sare peste poartaTalon, testele „zero cost” pică.
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { fakeFetch, fakeSupa } from '../_test/fake_supa.ts'
+import { fakeSupa } from '../_test/fake_supa.ts'
 import { handler } from './handler.ts'
 
 const OWNER = 'u-owner', ADMINL = 'u-adminl', ADMINL_FARA = 'u-adminl-fara-modul', SUPER = 'u-super', SANTIER = 'u-santier', CONTAB = 'u-contab'
@@ -24,6 +24,15 @@ const UMA = [
 const DOCS = [{ id: 501, active_id: 7, tip_id: 10, pdf_url: 'flota/7/talon.pdf', observatii: 'talon (NAS)' }]
 const ACTIVE = [{ id: 7, nr_inmatriculare: 'PH 21 LBO', serie_sasiu: null, serie_motor: null, an_fabricatie: null, capacitate_motor: null, putere_kw: null, tip_carburant: null, greutate_kg: null }]
 const ANTET_VECHI = 'x-internal-secret'
+// Fixture utilă de talon; {} nu mai reprezintă o extracție reușită.
+function fakeFetch(n: { ai: number }): typeof fetch {
+  return () => {
+    n.ai++
+    return Promise.resolve(new Response(JSON.stringify({ stop_reason: 'end_turn',
+      content: [{ type: 'text', text: '{"nr_inmatriculare":"PH 21 LBO","serie_sasiu":null}' }],
+      usage: { input_tokens: 100, output_tokens: 20 } })))
+  }
+}
 
 // auth simulat: token „u-…” = utilizator real; orice altceva (cheia anon, JWT fals) = respins de Auth
 const getUser = (jwt: string) => Promise.resolve(jwt.startsWith('u-')
@@ -162,7 +171,7 @@ Deno.test('jurnal: HTTP eșuat cu usage se înregistrează; eroarea jurnalului n
     }
     const r = await handler(cerereCu({ Authorization: `Bearer ${OWNER}` }, { active_id: 7 }),
       () => ({ supa: m.supa, API_KEY: 'k', fetch: () => Promise.resolve(new Response(JSON.stringify({
-        usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: '{}' }],
+        usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: '{"marca":"Dacia"}' }],
       }), { status: caz === 'http' ? 400 : 200 })) }))
     const corp = await r.json()
     assertEquals(r.status, caz === 'http' ? 500 : 200)
@@ -178,6 +187,9 @@ for (const caz of [
   { stop_reason: 'max_tokens', text: '{"nr_inmatriculare":"PH 21 LBO"}', eroare: 'max_tokens' },
   { stop_reason: 'end_turn', text: ' \n ', eroare: 'fara text' },
   { stop_reason: 'refusal', text: '{"nr_inmatriculare":"PH 21 LBO"}', eroare: 'refuzat' },
+  { stop_reason: 'end_turn', text: 'Rezultat: {}', eroare: 'date utile' },
+  { stop_reason: 'end_turn', text: '{"marca":null,"nr_inmatriculare":" "}', eroare: 'date utile' },
+  { stop_reason: 'end_turn', text: '{"confidence":95}', eroare: 'date utile' },
 ]) {
   Deno.test(`AI ${caz.eroare}: eroare de business, zero scrieri in staging`, async () => {
     const m = mediu({ cuScan: true })
