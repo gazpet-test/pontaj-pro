@@ -5,6 +5,8 @@
 // Restul codului e identic cu v24. Revenire: supabase/functions_retrase/revenire_grupc/parse-pccvi-faze.v24.ts.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { faraGandire } from '../_shared/gandire.ts'
+import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { userAutorizat } from './acces.ts'
 
 const CORS = {
@@ -12,9 +14,11 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS'
 }
-const MODEL = Deno.env.get('PARSE_CONTRACT_MODEL') || 'claude-haiku-4-5-20251001'
+// 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts) — gândire oprită explicit (pe 5.5 e pornită implicit), max_tokens
+// 6000 → 7800 (tokenizer ~30% mai mare), cost pe prețul nou, textul doar din blocurile `text`, refuzul filtrului → 422 cu mesaj.
+// ATENȚIE: dacă secretul PARSE_CONTRACT_MODEL e setat (ex. pe Haiku 4.5), el câștigă — costul se calculează pe modelul real.
+const MODEL = Deno.env.get('PARSE_CONTRACT_MODEL') || HAIKU_55
 const MAX_PDF_MB = 10
-const PRICE_IN = 1 / 1e6, PRICE_OUT = 5 / 1e6
 
 const SYSTEM_PROMPT = `Esti expert in documentatie tehnica de constructii din Romania (conducte gaze, Transgaz).
 PDF-ul este un PCCVI / ITP (Plan de Control Calitate, Verificari si Incercari / Plan de Inspectii si Testari).
@@ -78,7 +82,7 @@ Deno.serve(async (req: Request) => {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 6000, system: SYSTEM_PROMPT,
+        model: MODEL, max_tokens: 7800, thinking: faraGandire(MODEL), system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: [
           { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Pdf } },
           { type: 'text', text: 'Extrage fazele determinante ISC si convocarile ISC din acest PCCVI/ITP.' }
@@ -97,12 +101,14 @@ Deno.serve(async (req: Request) => {
       await supabaseAdmin.from('ai_usage_log').insert({
         function_name: 'parse-pccvi-faze', model: MODEL,
         tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
-        cost_usd: (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT,
+        cost_usd: costApel(MODEL, u),
         ref_table: 'executie_proiecte', ref_id: proiect_id,
       })
     } catch (_) { /* nu blocheaza */ }
 
-    const raw = (result.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n') || '{}'
+    const refuz = mesajRefuz(result)
+    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
+    const raw = textRaspuns(result) || '{}'
     let parsed: any
     try { parsed = robustJsonParse(raw) }
     catch (pe: any) {

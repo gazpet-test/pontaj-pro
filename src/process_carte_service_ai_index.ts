@@ -10,7 +10,7 @@
 //      b. nr_inmat exact (normalizat)
 //      c. cod_intern exact
 //      d. normalized_key în service_import_ai_mappings (cache)
-//   2. Dacă deterministic ratează → AI (Haiku 4.5) cu tools
+//   2. Dacă deterministic ratează → AI (Haiku 5.5, înainte Haiku 4.5) cu tools
 //   3. Auto-match cu cel mai mare scor (Razvan decision 22.05.2026):
 //      - confidence >= 0.85 → matched + scrie cache
 //      - confidence 0.5-0.85 → matched (NU scrie cache, nu propagăm greșeli)
@@ -45,9 +45,15 @@ const MAX_VISION_FILES_PER_CALL = 10
 const MAX_VISION_FILE_SIZE_BYTES = 5 * 1024 * 1024  // 5 MB
 const VISION_CONCURRENCY = 3
 
-// Pricing Haiku 4.5 (per 1M tokens): $1 input, $5 output (pentru match)
-const PRICE_HAIKU_INPUT = 1.0
-const PRICE_HAIKU_OUTPUT = 5.0
+// 18.10.2026: match pe Haiku 5.5 (claude-haiku-5-5). Pe 5.5: gândirea e pornită implicit → o oprim explicit (tool loop scurt,
+// max_tokens 512 → 700 pentru tokenizerul ~30% mai mare); refuzul filtrului de siguranță → unmatched cu motiv, nu excepție.
+// tool_choice nu e forțat (auto) — pe 5.5 forțarea e acceptată oricum. Fișierul e copia sursei funcției deployate
+// process_carte_service_ai (nu există supabase/functions/process_carte_service_ai) — schimbarea ajunge live doar la redeploy.
+const MODEL_MATCH = 'claude-haiku-5-5'
+// Pricing Haiku 5.5 (per 1M tokens): $0.10 input, $0.50 output cu promptul ≤ 100K tokeni ($0.50 / $2.50 peste — un apel de
+// match e de câteva mii de tokeni, deci tariful mic; totalurile de mai jos adună multe apeluri și nu se compară cu pragul)
+const PRICE_HAIKU_INPUT = 0.10
+const PRICE_HAIKU_OUTPUT = 0.50
 
 // Pricing Sonnet 4.5 (per 1M tokens): $3 input, $15 output (pentru vision)
 const PRICE_SONNET_INPUT = 3.0
@@ -97,6 +103,7 @@ const SYSTEM_PROMPT = [
   '- LANSATOR: LIEBHERR, CAT',
   '',
   'RĂSPUNSUL FINAL TREBUIE SĂ FIE EXCLUSIV JSON-UL — fără markdown, fără explicații.',
+  'JSON-ul e DOAR pentru răspunsul final: când ai nevoie de un tool, cheamă-l întâi, fără text înainte, și scrie JSON-ul după ce ai rezultatele.',
 ].join('\n')
 
 // ─── TOOLS DEFINITION ───────────────────────────────────────────────────────
@@ -459,6 +466,7 @@ async function tryAiMatch(
   const toolsUsed: string[] = []
   let iterations = 0
   let finalText = ''
+  let refuz: string | null = null
   
   for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
     iterations = iter + 1
@@ -471,8 +479,9 @@ async function tryAiMatch(
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 512,
+        model: MODEL_MATCH,
+        max_tokens: 700,
+        thinking: { type: 'disabled' },
         system: SYSTEM_PROMPT,
         tools: TOOLS,
         messages: messages,
@@ -488,6 +497,11 @@ async function tryAiMatch(
     totalInput += data.usage?.input_tokens || 0
     totalOutput += data.usage?.output_tokens || 0
     
+    if (data.stop_reason === 'refusal') {
+      const cat = data.stop_details?.category
+      refuz = `refuz_ai${cat ? ` (${cat})` : ''}: filtrul de siguranță al modelului a refuzat cererea`
+      break
+    }
     if (data.stop_reason === 'tool_use') {
       messages.push({ role: 'assistant', content: data.content })
       
@@ -508,9 +522,8 @@ async function tryAiMatch(
       continue
     }
     
-    // Final text response
-    const textBlock = data.content?.find((b: { type: string, text?: string }) => b.type === 'text')
-    finalText = textBlock?.text || ''
+    // Final text response — doar blocurile `text` (pe Haiku 5.5 pot veni și blocuri `thinking`)
+    finalText = (data.content || []).filter((b: { type: string, text?: string }) => b.type === 'text').map((b: { text?: string }) => b.text || '').join('\n')
     break
   }
   
@@ -534,6 +547,7 @@ async function tryAiMatch(
       try { parsed = JSON.parse(match[0]) } catch (_e2) { /* keep default */ }
     }
   }
+  if (refuz) parsed = { activ_id: null, confidence: 0, reason: refuz }
   
   const duration = Date.now() - startTime
   

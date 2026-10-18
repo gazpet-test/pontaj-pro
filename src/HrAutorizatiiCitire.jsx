@@ -29,7 +29,7 @@ const th = { padding:'9px 10px', textAlign:'left', fontSize:11, fontWeight:700, 
 const td = { padding:'9px 10px', verticalAlign:'top', fontSize:12.5 }
 const BUCKET = 'documente-personal'
 const fmtZi = (d) => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
-const MODELE = [['claude-opus-5', 'Opus 5 (~0,07 $/doc)'], ['claude-haiku-4-5', 'Haiku 4.5 (~0,014 $/doc)']]
+const MODELE = [['claude-opus-5', 'Opus 5 (~0,07 $/doc)'], ['claude-haiku-5-5', 'Haiku 5.5 (~0,002 $/doc)']]
 
 // Sita STRICTĂ, cea măsurată: descrierea citită la import spune, de regulă, ce e documentul.
 // Astea sunt cele ~181 care chiar arată a autorizație.
@@ -100,9 +100,10 @@ export default function HrAutorizatiiCitire({ profile, canEdit, showToast }) {
   const citeste = async (lista) => {
     if (!lista.length) { showToast?.('Nimic de citit', 'warn'); return }
     // 0,07 $/document e media MĂSURATĂ pe Opus, pe primele 25 de citiri reale ale recomandărilor
-    // (1,74 $ / 25). Haiku 4.5 costă a cincea parte pe token (1/5 $ vs 5/25 $ pe milion), deci
-    // estimarea se scalează la fel — rămâne o estimare până o măsurăm și pe ea.
-    const perDoc = model === 'claude-haiku-4-5' ? 0.014 : 0.07
+    // (1,74 $ / 25). Haiku 5.5 (18.10.2026, înainte Haiku 4.5) costă a 50-a parte pe token (0,10/0,50 $
+    // vs 5/25 $ pe milion), dar numără ~30% mai mulți tokeni: 0,07 / 50 × 1,3 ≈ 0,002 $ — rămâne o
+    // estimare până o măsurăm și pe ea (ai_usage_log).
+    const perDoc = model === 'claude-haiku-5-5' ? 0.002 : 0.07
     const cost = (lista.length * perDoc).toFixed(2)
     if (!window.confirm(
       `Citesc cu AI ${lista.length} documente din dosarele de personal, ca să văd care sunt autorizații.\n\n` +
