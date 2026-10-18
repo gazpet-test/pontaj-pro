@@ -216,7 +216,7 @@ Deno.serve(async (req: Request) => {
       await supa.from('ai_usage_log').insert({ function_name: 'hr-recomandare-citeste', model: MODEL, tokens_in: j2?.usage?.input_tokens || 0, tokens_out: j2?.usage?.output_tokens || 0,
         cost_usd: (j2?.usage?.input_tokens || 0) * PRET_IN + (j2?.usage?.output_tokens || 0) * PRET_OUT, ref_table: 'hr_recomandari', ref_id: id });
     } catch (_) { /* logul nu blochează */ }
-    if (!ob) return json({ ok: false, eroare: 'AI n-a întors obiective: ' + String(j2?.error?.message || t2).slice(0, 160) });
+    if (!ob?.length) return json({ ok: false, eroare: 'AI n-a întors obiective: ' + String(j2?.error?.message || t2).slice(0, 160) });
     const { error: eO } = await supa.from('hr_recomandari').update({ obiective: ob, updated_at: new Date().toISOString() }).eq('id', id);
     if (eO) return json({ ok: false, eroare: 'scriere: ' + eO.message });
     return json({ ok: true, id, obiective: ob.length, natura: ob.reduce((a: any, o: any) => { a[o.natura] = (a[o.natura] || 0) + 1; return a; }, {}) });
