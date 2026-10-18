@@ -73,7 +73,7 @@ async function downloadPozaAsBase64(
 
 async function callVision(
   doFetch: typeof fetch, apiKey: string, base64: string, contentType: string
-): Promise<{ text: string; tokensIn: number; tokensOut: number; refuz: string | null }> {
+): Promise<{ text: string; tokensIn: number; tokensOut: number; refuz: string | null; stopReason: string | null }> {
   const resp = await doFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
@@ -92,6 +92,7 @@ async function callVision(
     tokensIn: data.usage?.input_tokens || 0,
     tokensOut: data.usage?.output_tokens || 0,
     refuz: mesajRefuz(data),
+    stopReason: data.stop_reason || null,
   }
 }
 
@@ -192,9 +193,10 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
         // costul pe APEL: pragul de 100K tokeni al Haiku 5.5 se judecă pe fiecare prompt, nu pe totalul lotului
         costUsd += costApel(MODEL, { input_tokens: visionRes.tokensIn, output_tokens: visionRes.tokensOut })
 
-        const parsed = visionRes.refuz ? null : extractJson(visionRes.text)
+        const incomplet = visionRes.stopReason === 'max_tokens'
+        const parsed = incomplet || visionRes.refuz || !visionRes.text.trim() ? null : extractJson(visionRes.text)
         if (!parsed) {
-          result.error = visionRes.refuz ? `refuz_ai: ${visionRes.refuz}` : 'parse_failed'
+          result.error = incomplet ? 'Raspuns AI incomplet (max_tokens); reincearca' : visionRes.refuz ? `refuz_ai: ${visionRes.refuz}` : 'parse_failed'
           await supabaseService.from('whatsapp_messages_processed')
             .update({ status: 'no_match', plate_detected: 'FAILED' })
             .eq('id', msg.id as number)

@@ -126,3 +126,37 @@ Deno.test('owner, cheia Anthropic lipsă → 500 doar DUPĂ poartă', async () =
   const r = await ruleaza({ Authorization: `Bearer ${OWNER}` }, mediu(), null)
   assertEquals(r.status, 500); assertEquals(r.corp.error, 'ANTHROPIC_API_KEY missing'); zeroCost(r.n)
 })
+
+// JSON-ul valid dintr-un raspuns max_tokens/refuzat nu devine placuta detectata.
+for (const caz of [
+  { stop_reason: 'max_tokens', text: '{"placuta":"PH 21 LBO","confidence":0.99}', eroare: 'max_tokens' },
+  { stop_reason: 'end_turn', text: ' \n ', eroare: 'parse_failed' },
+  { stop_reason: 'refusal', text: '{"placuta":"PH 21 LBO","confidence":0.99}', eroare: 'refuz_ai' },
+]) {
+  Deno.test(`AI ${caz.eroare}: marcheaza FAILED, fara placuta sau alimentare partiala`, async () => {
+    const m = mediu({ cuPoza: true })
+    const scrieri: { tabel: string; valori: unknown; id: unknown }[] = []
+    const from0 = m.supa.from
+    m.supa.from = (t: string) => {
+      const b = from0(t), update0 = b.update, eq0 = b.eq
+      let scriere: typeof scrieri[number] | undefined
+      b.update = (valori: unknown) => { scriere = { tabel: t, valori, id: undefined }; scrieri.push(scriere); return update0(valori) }
+      b.eq = (c: string, v: unknown) => { if (scriere && c === 'id') scriere.id = v; return eq0(c, v) }
+      return b
+    }
+    const doFetch: typeof fetch = () => {
+      m.n.ai++
+      return Promise.resolve(new Response(JSON.stringify({ stop_reason: caz.stop_reason,
+        content: [{ type: 'text', text: caz.text }], usage: { input_tokens: 100, output_tokens: 20 } }), { status: 200 }))
+    }
+    const r = await handler(new Request('http://x/', { method: 'POST', headers: { Authorization: `Bearer ${OWNER}` } }),
+      () => ({ supa: m.supa, API_KEY: 'k', fetch: doFetch }))
+    const corp = await r.json()
+    assertEquals(r.status, 200); assertEquals(corp.summary.errors, 1)
+    assertEquals(corp.summary.plates_detected, 0); assertEquals(corp.summary.matched, 0)
+    assert(corp.results[0].error.includes(caz.eroare)); assertEquals(corp.results[0].placuta, null)
+    assertEquals(scrieri, [{ tabel: 'whatsapp_messages_processed', valori: { status: 'no_match', plate_detected: 'FAILED' }, id: 1 }])
+    assertEquals(m.n.scrieri, 1); assertEquals(m.n.ai, 1); assertEquals(m.n.storage, 1)
+    assert(!m.n.citiri.includes('logistica_alimentari'))
+  })
+}
