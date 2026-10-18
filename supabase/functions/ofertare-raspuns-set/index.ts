@@ -17,6 +17,8 @@
 // partajat intre 14 functii, e exact greseala care s-ar face la prima eroare de cron.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { inventarValid } from './validare.ts'
 // 12.10.2026 (MVP loturi, 20261024b): poarta pe document la creeaza_set (documentele neeligibile ies în `excluse`) și la
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
@@ -344,18 +346,21 @@ Deno.serve(async (req: Request) => {
       + '\nCitatele se copiaza literal, cu greselile de scanare cu tot. Lista goala pe o anexa e corecta.'
 
     const { ok, status, d, taiat } = await cheamaAI(KEY, prompt, 8000)
-    // Costul se scrie INAINTE de parsare: la un JSON trunchiat, functia veche iesea din executie
-    // inainte de log si apelul disparea din evidenta, desi fusese platit.
     const tin = d?.usage?.input_tokens || 0, tout = d?.usage?.output_tokens || 0
     const cost = tin * PRET_IN + tout * PRET_OUT
-    await db.from('ai_usage_log').insert({ function_name: 'ofertare-raspuns-set/inventar', model: MODEL,
-      tokens_in: tin, tokens_out: tout, cost_usd: cost, ref_table: 'ofertare_raspuns_set', ref_id: setId })
     if (!ok) return json({ error: 'AI: ' + (d?.error?.message || status), cost_usd: cost })
-    const txt = (d.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+    if (taiat) return json({ error: 'Raspuns AI incomplet (max_tokens); inventarul existent ramane neschimbat.', taiat, cost_usd: cost })
+    const refuz = mesajRefuz(d)
+    if (refuz) return json({ error: refuz, cost_usd: cost })
+    const txt = textRaspuns(d)
+    if (!txt.trim()) return json({ error: 'Raspuns AI fara text; inventarul existent ramane neschimbat.', cost_usd: cost })
     const j = extrageJson(txt)
     if (!j) return json({ error: taiat
       ? 'raspunsul AI s-a taiat la plafonul de lungime — documentul are prea mult continut pentru o singura rulare'
       : 'raspuns AI neinterpretabil', taiat, brut: txt.slice(0, 600), cost_usd: cost })
+    if (!inventarValid(j)) return json({ error: 'Inventar AI incomplet sau cu structura invalida; inventarul existent ramane neschimbat.', cost_usd: cost })
+    await db.from('ai_usage_log').insert({ function_name: 'ofertare-raspuns-set/inventar', model: MODEL,
+      tokens_in: tin, tokens_out: tout, cost_usd: cost, ref_table: 'ofertare_raspuns_set', ref_id: setId })
 
     const noi: any[] = []
     for (const x of (Array.isArray(j.dispozitii) ? j.dispozitii : [])) {
