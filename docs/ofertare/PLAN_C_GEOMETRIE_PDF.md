@@ -175,3 +175,9 @@ Nu am masurat ponderea scanurilor, acuratetea, recall-ul, viteza sau memoria C.
 Nu am verificat bbox disponibile in versiunile LightOn/MinerU instalate.
 Referintele de cod si istoricul au fost citite; planul nu este implementare.
 Geometria nu interpreteaza scheme de montaj si nu certifica listele de materiale.
+
+## Conditii din review r2 (Copilot + Gemini, 18.10.2026) — obligatorii in C1
+- **Provenienta raster pentru `local_ocr_bbox`**: pe langa `pdf_sha256`, se pastreaza hash-ul imaginii exacte pe care a rulat OCR-ul (pagina/banda/tile) si parametrii de randare (dpi, rotire, deskew, decupaj), ca dovada sa poata fi refacuta pe aceiasi pixeli.
+- **Regula canonica pentru `geometry_sha256`**: serializare stabila (chei sortate, ordine determinista a paginilor/tokenilor, numere cu precizie fixa), fara timestamp-uri, cai sau alte campuri volatile; regula si versiunea ei se scriu in schema inainte de prima implementare.
+- **Imperecherea A <-> C cand acelasi (cod, UM, cantitate) apare legal de doua ori pe aceeasi pagina** (subcapitole/tronsoane): cheia de imperechere include pozitia (rand geometric / Y) si contextul de subcapitol, ca sa nu devina ambiguitate falsa.
+- C1 se implementeaza cu commit-uri si teste separabile pentru parser vs resolver.
