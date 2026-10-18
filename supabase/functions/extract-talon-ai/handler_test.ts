@@ -36,9 +36,16 @@ function mediu(o: { procesate?: number[]; cuScan?: boolean } = {}) {
     talon_extract_staging: (o.procesate ?? []).map((active_id) => ({ active_id })),
   })
   const s = supa as any
+  const usage: any[] = []
+  const from0 = s.from
+  s.from = (t: string) => {
+    const b = from0(t), insert0 = b.insert
+    if (t === 'ai_usage_log') b.insert = (row: unknown) => { usage.push(row); return insert0(row) }
+    return b
+  }
   s.auth = { getUser }
   if (o.cuScan) s.storage = { from: () => ({ download: () => { n.storage++; return Promise.resolve({ data: new Blob([new Uint8Array([37, 80, 68, 70])]), error: null }) } }) }
-  return { supa: s, n }
+  return { supa: s, n, usage }
 }
 const cerereCu = (headers: Record<string, string>, body?: unknown) =>
   new Request('http://x/', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body ?? {}) })
@@ -46,7 +53,7 @@ const cerereCu = (headers: Record<string, string>, body?: unknown) =>
 async function ruleaza(headers: Record<string, string>, m = mediu(), cheie: string | null = 'k', body?: unknown) {
   const req = cerereCu(headers, body)
   const r = await handler(req, () => ({ supa: m.supa, API_KEY: cheie ?? undefined, fetch: fakeFetch(m.n) }))
-  return { status: r.status, corp: await r.json(), n: m.n, corpCitit: req.bodyUsed }
+  return { status: r.status, corp: await r.json(), n: m.n, usage: m.usage, corpCitit: req.bodyUsed }
 }
 // fabrică de dependențe care aruncă (ex. env lipsă la pornire) — numără de câte ori a fost chemată
 function fabricaCareArunca() {
@@ -136,8 +143,34 @@ Deno.test('owner, toate vehiculele procesate → 200 idle, fără AI și fără 
 Deno.test('admin_logistica cu modul, active_id dat → 200, un scan descărcat, un apel AI, un rând în talon_extract_staging', async () => {
   const r = await ruleaza({ Authorization: `Bearer ${ADMINL}` }, mediu({ cuScan: true }), 'k', { active_id: 7 })
   assertEquals(r.status, 200); assertEquals(r.corp.success, true); assertEquals(r.corp.active_id, 7)
-  assertEquals(r.n.storage, 1); assertEquals(r.n.ai, 1); assertEquals(r.n.scrieri, 1)
+  assertEquals(r.n.storage, 1); assertEquals(r.n.ai, 1); assertEquals(r.n.scrieri, 2)
+  assertEquals(r.usage, [{ function_name: 'extract-talon-ai', model: 'claude-haiku-5-5',
+    tokens_in: 100, tokens_out: 20, cost_usd: 100 * (0.10 / 1e6) + 20 * (0.50 / 1e6), ref_table: 'logistica_active', ref_id: 7 }])
   assert(r.n.citiri.includes('talon_extract_staging'))
+})
+
+Deno.test('jurnal: HTTP eșuat cu usage se înregistrează; eroarea jurnalului nu schimbă succesul', async () => {
+  for (const caz of ['http', 'throw', 'reject', 'result']) {
+    const m = mediu({ cuScan: true }), from0 = m.supa.from
+    if (caz !== 'http') m.supa.from = (t: string) => {
+      if (t !== 'ai_usage_log') return from0(t)
+      return { insert: () => {
+        if (caz === 'throw') throw new Error('jurnal indisponibil')
+        if (caz === 'reject') return Promise.reject(new Error('jurnal indisponibil'))
+        return Promise.resolve({ error: { message: 'jurnal indisponibil' } })
+      } }
+    }
+    const r = await handler(cerereCu({ Authorization: `Bearer ${OWNER}` }, { active_id: 7 }),
+      () => ({ supa: m.supa, API_KEY: 'k', fetch: () => Promise.resolve(new Response(JSON.stringify({
+        usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: '{}' }],
+      }), { status: caz === 'http' ? 400 : 200 })) }))
+    const corp = await r.json()
+    assertEquals(r.status, caz === 'http' ? 500 : 200)
+    if (caz === 'http') {
+      assert(corp.error.startsWith('Anthropic 400:'))
+      assertEquals(m.usage.length, 1)
+    } else assertEquals(corp.success, true)
+  }
 })
 
 // Chiar si un JSON valid trebuie respins daca raspunsul e taiat sau refuzat.
@@ -151,14 +184,15 @@ for (const caz of [
     const doFetch: typeof fetch = () => {
       m.n.ai++
       return Promise.resolve(new Response(JSON.stringify({ stop_reason: caz.stop_reason,
-        content: [{ type: 'text', text: caz.text }] }), { status: 200 }))
+        content: [{ type: 'text', text: caz.text }], usage: { input_tokens: 100, output_tokens: 20 } }), { status: 200 }))
     }
     const r = await handler(cerereCu({ Authorization: `Bearer ${OWNER}` }, { active_id: 7 }),
       () => ({ supa: m.supa, API_KEY: 'k', fetch: doFetch }))
     const corp = await r.json()
     assertEquals(r.status, 200); assertEquals(corp.success, false); assertEquals(corp.active_id, 7)
     assert(corp.error.includes(caz.eroare))
-    assertEquals(m.n.ai, 1); assertEquals(m.n.storage, 1); assertEquals(m.n.scrieri, 0)
+    assertEquals(m.n.ai, 1); assertEquals(m.n.storage, 1); assertEquals(m.n.scrieri, 1)
+    assertEquals(m.usage.length, 1); assertEquals(m.usage[0].tokens_in, 100)
     assert(!m.n.citiri.includes('logistica_active'))
   })
 }
