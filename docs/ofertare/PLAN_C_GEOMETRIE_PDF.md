@@ -1,158 +1,177 @@
-# Plan C — geometria PDF pentru dovada rândului
+# Plan C - geometria PDF ca validator independent
 
-**Analiză, 18.10.2026. Bază: origin/main `0203e26`. Nicio implementare,
-migrație, recitire sau modificare în producție în acest branch.**
+Revizia 2, 18.10.2026, dupa review Copilot/Gemini pentru PR761 (#023).
+Doar analiza. Fara implementare, date reale, migrare, recitire sau deploy.
 
-## Problema și punctele reale de integrare
+## Ordine si rol
 
-`worker/ofertare/ingest.ts:textLocal` rulează deja `pdfinfo` și
-`pdftotext -layout -enc UTF-8`, apoi `imparteText`/`compuneText` transformă
-rezultatul în `text_extras` cu marcaje de pagină. Spațiile sunt comprimate.
-Calea pentru PDF-uri mari din `worker/ofertare/citire_mare.ts` trebuie extinsă
-împreună cu cea obișnuită; altfel geometria lipsește tocmai la dosarele mari.
+Extractorul A se livreaza primul, prin propriul review si propria aprobare de
+productie. C nu il blocheaza si nu ii inlocuieste textul: ruleaza in UMBRA,
+independent de candidatii modelului. Ordine: C1 schema/parser, C2 adaptor worker,
+C3 resolver offline, apoi pilot offline; NUMAI daca pilotul aduce valoare se
+propun persistenta/RPC/RLS si integrarea Edge. Geometria este poarta suplimentara,
+nu sursa de adevar si nu autorizeaza automat eliminarea bifei umane.
 
-`_shared/cantNumar.ts:blocRand` folosește linii de text, `Total=`, maximum de
-continuări și certificarea `orientareDedesubt`. `umLanga` caută vecinătatea în
-text/markdown. `_shared/cantNormalizare.ts` verifică astfel codul și Dn-ul.
-Geometria trebuie să rezolve **apartenența la articol și rolul coloanei**, nu
-să schimbe interpretarea numerică.
+Starea verificata in main 0203e26: worker/ofertare/ingest.ts:textLocal ruleaza
+pdfinfo si pdftotext -layout; imparteText/compuneText comprima spatii si adauga
+marcaje. worker/ofertare/citire_mare.ts are calea pentru PDF-uri mari. Ambele
+necesita adaptor, aceleasi limite/lease si identificare prin hash.
+_shared/cantNumar.ts:blocRand/orientareDedesubt/umLanga lucreaza pe text;
+cantNormalizare.ts verifica randul propus. structurat.ts are p3/n4/f1, nu p2/n3
+mentionate in parti istorice ale documentatiei.
 
-[PR749](https://github.com/gazpet-test/pontaj-pro/pull/749), inclusiv decizia
-finală după r1–r6, arată de ce textul singur nu poate certifica poziția descrierii
-față de cantitate. Riscul acceptat este marcat `dn_din_continuare`, cu bifă umană.
-`docs/PIPELINE_CITIRE_DOCUMENTE.md` §1.4 mai descrie ultima celulă markdown fără
-separator final, UM căutat peste linie și ambiguitatea cantitate/preț.
-Documentul descrie istoric `p2/n3`; codul din main are deja `p3/n4/f1` în
-`ofertare-cantitati-extrage/structurat.ts`. Planul se aplică acestui cod actual,
-nu propune revenirea la n3. Numerele din PR sunt rezultate istorice, nerulate aici.
+Context: docs/PIPELINE_CITIRE_DOCUMENTE.md sectiunea 1.4 si
+https://github.com/gazpet-test/pontaj-pro/pull/749 (inclusiv r1-r6 si decizia finala).
+Limite: DN al vecinului, descriere deasupra/dedesubt, cod ca subsir, pret confundat
+cu cantitate, UM peste rand, ultima celula markdown fara separator. Bbox nu
+rezolva automat aceste probleme; le face testabile spatial. Rezultatele istorice
+din PR749 nu au fost reproduse in aceasta sarcina.
 
-## Reprezentare propusă și extracție locală
+## Schema comuna: doua surse, un singur resolver
 
-Pe NAS, din aceiași octeți PDF verificați prin SHA-256, generăm separat
-`pdftotext -bbox-layout -enc UTF-8 <pdf> <xml>`; `-bbox` simplu rămâne variantă
-de diagnostic. Versiunea exactă Poppler, argumentele, limitele de timp/memorie
-și hash-ul XML intră în manifest. Opțiunile și convenția coordonatelor se verifică
-pe versiunea instalată înaintea implementării; nu am rulat aceste comenzi pe NAS.
+pdf-geometry-v1 accepta de la inceput `source=native_pdf|local_ocr_bbox`.
+Adaptor Poppler: pdftotext -bbox-layout -enc UTF-8; -bbox simplu pentru diagnostic.
+Adaptor OCR local: bbox LightOn/MinerU, numai daca versiunea concreta produce
+coordonate verificabile. Suportul efectiv al acestor modele NU a fost verificat
+in aceasta sarcina. Fara bbox, adaptorul raporteaza indisponibil, nu inventeaza.
+Schema comuna nu inseamna incredere comuna: provenienta, model/revizie/prompt,
+scoruri si limite se pastreaza separat pe pagina/regiune. Acelasi resolver primeste
+schema, nu doua implementari paralele pentru randuri.
 
-XML-ul furnizează cuvinte/poziții și grupări de layout, **nu certifică celule sau
-articole**. Parser fără entități externe/DTD, fără rețea, cu plafon de octeți,
-pagini, cuvinte și adâncime. Exit nenul, ieșire trunchiată, coordonate NaN/negative
-sau în afara paginii devin eșec explicit. Nu schimbăm automat calea în AI plătit.
-Pagina doar imagine rămâne `geometrie_nativa_absenta`, nu „zero articole”.
+Identitate: pdf_sha256, document_id, versiuni motor/parser/resolver, argumente,
+geometry_sha256, acoperire per pagina, timp si semnale. Pagina fizica 1-based,
+pagina globala + pagina_offset, MediaBox/CropBox, rotatie si transformare catre
+coordonate canonice (origine stanga sus, unitati pt, domeniul CropBox). Conventia
+Poppler/OCR se verifica pe fixture si nu se presupune. Pentru OCR se pastreaza
+transformarea inversa pixeli/rotire/deskew/tile -> pagina, inclusiv overlap.
 
-Sidecar `pdf-geometry-v1`, cu:
+Text literal + bbox de sursa + ID-uri; apoi celule si randuri derivate, tabel,
+sectiune, rolul coloanei, bbox si motive de ambiguitate. Tokenii derivati pastreaza
+lista fragmentelor sursa; forma normalizata de comparare nu rescrie originalul.
+Bbox de cuvant nu este bbox de celula; celulele goale se disting de zero si de
+absenta dovezii. Nu se fabrica text pentru a umple grila.
 
-- identitate: `pdf_sha256`, `document_id`, `text_sha256`, `geometry_sha256`,
-  versiuni Poppler/parser/algoritm, argumente, timestamp și acoperire per pagină;
-- pagină fizică în PDF (1-based), pagină globală după `pagina_offset`, dimensiuni,
-  CropBox/MediaBox și transformare documentată către coordonate canonice;
-- cuvinte: ID stabil în artefact, text literal, bbox, pagină, bloc/linie Poppler;
-- linii și rânduri **derivate**: ID, bbox, token IDs, secțiune/tabel, roluri de
-  coloană și motivele ambiguității; `sursa=native_pdf` separat de orice OCR;
-- legături în textul exact: intervale `[de_la,pana_la)` în unități UTF-16,
-  ca offseturile JS existente. Fiecare token poate avea zero sau mai multe
-  intervale candidate; numai maparea unică este dovadă. Hash text obligatoriu.
+Parser XML fara DTD/entitati externe/retea, cu limite de octeti/pagini/noduri.
+Validari: coordonate finite, domeniu, pagini lipsa, exit nenul/trunchiere, versiune
+si hash. XML brut pastrat in pilot; in productie se poate aplica retentie limitata
+aprobata, in timp ce sidecar-ul normalizat si provenienta raman imuabile.
 
-Păstrăm textul literal și XML-ul brut. Transformarea paginii include rotația și
-CropBox; o probă 0/90/180/270 verifică raportarea coordonatelor. Nu presupunem
-că ordinea obiectelor PDF ori ordinea XML este ordinea vizuală. Textul rotit în
-interiorul unei pagini sau suprapus rămâne ambiguu dacă bbox nu îl rezolvă.
+## PDF sandwich si geometrie nesigura
 
-## Algoritm de rând și dovadă
+Prezenta textului nu inseamna nativ de incredere. Inventarul foloseste
+pdfimages -list ca indiciu de raster mare, plus inspectia efectiva a plasarii
+imaginii si a text rendering mode (inclusiv mode 3 invizibil), pe pagina.
+pdfimages -list singur NU dovedeste acoperirea paginii sau invizibilitatea textului.
+Raster full-page + text invizibil/strat OCR => `text_layer_origin=embedded_ocr`,
+`trust=unverified`; nu intra in cohorta native_pdf de incredere. Schema pastreaza
+originea extragerii Poppler distincta de originea textului. Detectie neconcludenta
+=> `sandwich_suspect`, fara promovare. Optional OCR local separat, fara amestec
+sau vot automat. Font fara ToUnicode/PUA, text decalibrat sau suprapus => semnal.
+Nici macar textul nativ vizibil nu este declarat adevar fara verificare pe sursa.
 
-1. Separăm regiuni/tabele și secțiuni; nu grupăm global toate cuvintele cu y
-   apropiat (ar reuni coloane/tabele independente). Folosim suprapunerea
-   verticală și dimensiunea mediană a caracterelor; praguri versionate și fixate
-   înainte de evaluarea lotului rezervat pentru test.
-2. Identificăm antetele și intervalele x pentru cod, descriere, UM, cantitate,
-   preț și valoare. Antete pe mai multe linii, celule unite, două tabele vecine
-   sau o coloană fără rol unic => `coloana_necertificata`, fără ghicit după poziția
-   „ultima coloană”. Ancorele sunt locale secțiunii, nu transferate între machete.
-3. Construim articolul din ancorele cod/cantitate și regiunea descrierii. Textul
-   deasupra sau dedesubt se atașează numai cu delimitare geometrică unică față
-   de articolele vecine. „Cel mai apropiat y” singur nu este suficient. Dacă două
-   atribuiri sunt posibile, rândul rămâne nedovedit. Continuitatea peste pagină
-   se tratează separat, fără lipire automată prin similitudine.
-4. Codul întreg, UM și cantitatea trebuie să fie în celulele rolurilor lor,
-   în același articol. Dn-ul se verifică în descrierea acestuia, nu în vecin.
-   Golul rămâne gol; un zero imprimat este distinct. Dublurile/suprapunerile
-   de text ascuns nu se numără de două ori și nu se elimină arbitrar.
-5. `blocRand` nu se șterge din prima: introducem un resolver geometric separat,
-   apelat prin context opțional în `normalizeazaRand`. Dovadă geometrică validă
-   are token/cell IDs și bbox; lipsă/contradicție rămâne explicită. Fallback-ul
-   vechi păstrează eticheta și confirmarea umană `dn_din_continuare`; niciun rând
-   legacy nu este promovat automat ca „geometric”.
+## Dovada: pagina / rand / coloana, nu offset obligatoriu
 
-Citatul și numărul propuse de model se verifică în sidecar, nu invers. Nu
-construim geometria pe baza răspunsului AI. Regulile `valoareInDocument`,
-convenția numerică pe grup, codul întreg și verificarea Dn rămân obligatorii:
-coordonatele nu decid dacă `3.995` înseamnă 3995 sau 3,995.
+Accept propunerea Gemini de a elimina maparea UTF-16 ca PRECONDITIE a dovezii.
+Identitatea dovezii este (pdf_sha, geometry_sha, pagina, tabel_id,
+rand_geometric_id, rol_coloana, token_ids). Nu incercam aliniere fuzzy obligatorie
+intre -layout si -bbox-layout ori intre un rezumat AI si XML.
+Legatura unica exacta in text_extras, daca exista, ramane metadatum OPTIONAL pentru
+UI, cu text_sha si unitati UTF-16 documentate. Lipsa ei nu invalideaza o dovada
+geometrica, dar nici nu produce rand_interval fictiv. O mapare schimbata nu
+reasociaza tacit istoricul. Normalizarea NBSP/ligaturi/diacritice/surrogate se
+testeaza distinct, cu legatura la forma originala, fara a normaliza separatorii
+cantitatilor pe baza presupunerilor.
 
-## Persistență și integrare
+Nu accept in aceasta faza propunerea de a inlocui textul trimis extractorului A
+cu text reconstruit de C: ar altera extractorul si ar pierde independenta
+pilotului. Modelul propune; resolverul identifica independent candidati geometrici.
+Asocierea dintre rezultat A si C trebuie sa fie unica in aceeasi pagina/tabel,
+cu cod/UM/cantitate si dovezi complete; egalitatea unui numar singur nu ajunge.
+Ambiguitate => nedovedit, nu alegerea randului cel mai apropiat.
 
-**Pilot local:** sidecar și manifest în directorul de rulare, fără schimbarea
-`text_extras`. Recitirea din `scripts/recitire_val1/citeste.ts` este un pilot AI
-plătit, nu locul în care introducem apeluri bbox ori ocolim bugetul. Adăugăm
-ulterior un pas CPU explicit, separat, cu identitatea PDF și paginile cerute.
-`asambleaza.ts` produce raport comparativ și verifică identitatea grupului;
-`aplica.sql`/`aplica_rezultat.sql` păstrează CAS și fereastra de mentenanță.
-Aprobarea aplicării textului nu autorizează implicit publicarea geometriei.
+## Resolver si articole intre pagini
 
-**Propunere pentru producție, schemă nouă numai într-un PR ulterior:** artefact
-XML/JSON imutabil într-un storage privat; tabel metadata propus
-`ofertare_doc_geometrii` cu document/licitatie, hash PDF/text/geometrie, versiune,
-acoperire, cale, status și motive. Numele este propunere, nu tabel existent.
-Metadatele și pointerul activ se publică atomic prin RPC cu verificarea
-identității și lease-ului ingest. RLS aceleași limite de licitație/lot ca sursa,
-linkuri temporare, fără bucket public. Rolurile și grants se testează separat.
-Nu îngropăm sidecar-ul în `seap_meta` și nu încărcăm XML-ul întreg în fiecare
-apel Edge. Index per pagină/felie pentru a limita transferul și memoria.
+- Separa regiuni/tabele inainte de gruparea pe y. Antetele multilinii definesc
+  intervale x pentru cod/descriere/UM/cantitate/pret/valoare. Celule unite,
+  antete grafice/verticale sau roluri neclare => coloana_necertificata.
+- Poppler <word> nu este unitate lexicala imuabila: fragmente adiacente doar in
+  ACEEASI celula, apoi tokenizare lexicala versionata. Pastreaza delimitari si
+  bbox sursa. `m1160.000`, `1160.` + `000`, cod cu sufix si spatii de mii au teste;
+  nu lipeste celule vecine si nu transforma DN90 in cantitate.
+- Descrierea deasupra/dedesubt se leaga numai cand delimitarea fata de vecini este
+  unica; cod intreg, UM si cantitate in rolurile lor. DN din descrierea acelui
+  articol, nu din vecin. Geometria nu decide conventia 3.995.
+- Articol rupt la pagina: in prima versiune ramane `cross_page_ambiguous`, inclusiv
+  sub antet repetat. Putem inregistra o legatura candidata daca paginile sunt
+  consecutive, acelasi tabel/CropBox/scara, coloane aliniate, articolul precedent
+  deschis si primul bloc urmator numai in descriere (fara cod/nr/UM/cantitate).
+  Aceste conditii NU promoveaza dovada pana la regula testata pe cazuri negative.
+  Fara lipire prin similitudine sau doar lipsa lui Total=.
+- Fara antet pe pagina urmatoare: mostenirea x de la pagina anterioara ramane
+  candidat necertificat. Toleranta +/-3 pt propusa de Gemini nu este adoptata
+  ca fapt universal; trebuie calibrata si inghetata pe setul de dezvoltare.
+- Fallback blocRand ramane etichetat legacy/dn_din_continuare, cu bifa umana.
+  Nicio ambiguitate geometrica nu este promovata automat de fallback.
 
-`ofertare-cantitati-extrage/handler.ts` transmite disponibilitatea/identitatea;
-`structurat.ts` păstrează poarta `fn_ofertare_cb_text_valid`, selecția loturilor,
-cererea și bugetul. `extractorIdContext` include și hash-ul geometriei, versiunea
-algoritmului și modul dovezii. Orice schimbare invalidează cache-ul; rezultate
-vechi rămân accesibile ca istoric, fără rescriere tăcută. Noul context nu trebuie
-să amestece părți din același PDF cu text/sidecar din versiuni diferite.
+## Integrare numai dupa pilot
 
-Observația stocată primește într-un PR separat dovada geometrică (pagina,
-regiune, rând, celule, bbox și hash artefact); `rand_interval` rămâne pentru
-compatibilitate, dar un bloc geometric neliniar nu se falsifică printr-un singur
-interval textual larg. UI-ul arată extrasul sursă și evidențiază celulele pentru
-verificare. H2 „gata” nu pierde bifele umane până la acceptarea noii porți.
+Pilot local: sidecar/manifest in directorul rularii, fara DB, fara text_extras nou.
+Pas CPU separat de scripts/recitire_val1/citeste.ts (pilot AI cu buget); nu introducem
+apeluri platite si nu ocolim fereastra de mentenanta. asambleaza.ts va putea raporta
+comparativ, iar aplica.sql/aplica_rezultat.sql trebuie sa pastreze CAS pe identitate.
 
-## PR-uri mici și verificări
+Dupa decizie: storage privat cu sidecar imutabil, metadata propusa
+ofertare_doc_geometrii (NU exista prin acest plan), pointer activ publicat atomic
+cu lease/hash PDF. RLS pe aceeasi licitatie/lot, grants minime, fara bucket public.
+Edge citeste subset per pagina/felie, nu XML integral. handler.ts/structurat.ts
+pastreaza poarta fn_ofertare_cb_text_valid, cererea, bugetul, loturile. Resolver
+optional separat de blocRand; dovada noua stocata explicit, fara interval textual
+inventat. extractorIdContext include geometrie/sursa/model/algoritm si manifestul
+partilor; invalidare cache la orice modificare. UI arata pagina/celulele si limitele.
+Stocarea si integrarea nu sunt aprobate implicit prin acest document.
 
-| PR | Livrabil | Poartă înainte de pasul următor |
+## Patru PR-uri, cu pilot INAINTE de DB/Edge
+
+| PR | Continut | Poarta |
 |---|---|---|
-| C1 | Parser XML și schemă sidecar, funcții pure | Fixture sintetice, XXE refuzat, dimensiuni/rotații și UTF-16 corecte |
-| C2 | Extracție CPU în worker, ambele căi PDF; mod umbră | Lease/timeouts, hash PDF, pagini lipsă, sursă schimbată; zero efect asupra textului activ |
-| C3 | Resolver rând/coloane și comparație offline | DN63/DN110 și cele 6 contraexemple PR749; antete multilinii/preț vs cantitate; nicio promovare ambiguă |
-| C4 | Metadata/storage/RPC/RLS/CAS, doar după aprobare | Izolare loturi/roluri, cache incompatibil refuzat, rollback pointer; fără ștergerea istoricului |
-| C5 | Integrare normalizator/Edge și UI sursă | Regresii normalizator/structurat/Răcari, diferențe analizate, mod nou versionat |
-| C6 | Pilot independent pe alte machete, apoi activare explicită | Set înghețat și adjudecat vizual, raport complet și decizie umană |
+| C1 | Schema comuna, parser/adaptoare si resolver pur (C1+C3 logic) | sintetice + contraexemple PR749, doua proveniente, ambiguitate refuzata |
+| C2 | Worker ambele cai, CPU in umbra | limite/lease/hash, zero schimbari text activ, scan/sandwich separate |
+| C3 | Pilot offline independent, artefacte si raport | valoare masurata si decizie umana inainte de integrare |
+| C4 | Propunere storage/RPC/RLS + Edge/UI | review separat schema/securitate, CAS/cache/rollback, activare explicita |
 
-Setul de teste include: descriere deasupra/dedesubt; același cod pe pagini și
-secțiuni diferite; articol fără număr; text în două coloane; celule unite/goale;
-ultimă celulă fără separator markdown; UM pe alt rând; antete repetate și subsol;
-preț/cantitate identice; cantitate zero vs gol; ligaturi/diacritice/exponenți;
-PDF mixt, doar imagine, strat OCR invizibil greșit; crop și rotație; pagină
-împărțită, offset global; XML întrerupt; două artefacte pe același hash text dar
-PDF-uri diferite. Nicio referință generată din predicția modelului.
+Comasez parserul/resolverul si stocarea/integrarea, dar RESPING pilotul pus dupa
+DB/Edge in ordinea Gemini. Componentele C1-C2-C3 din descrierea initiala raman
+pasi logici, chiar daca primesc alt ambalaj de PR. Nu adopt estimari 1-2 zile,
+procente SEAP 60-70% sau costuri din review ca rezultate masurate aici.
 
-Raportăm pe pagini/rânduri: acoperire geometrică, asocieri corecte/greșite,
-omisiuni, duplicate, nedovedite, diferențe față de legacy și erori tăcute,
-separat de succesul tehnic. Pragurile campaniei OCR (≥99,5%, zero erori tăcute,
-goale păstrate) nu constituie dovadă de acceptare a acestui algoritm încă
-neimplementat; orice prag pentru C trebuie înghețat înaintea pilotului. Pentru
-porți de siguranță: zero asocieri greșite promovate în fixture-urile negative.
+## Acceptare separata si teste
 
-## Riscuri și ce NU s-a verificat
+Seturi distincte dezvoltare/test inghetat, alte machete, referinte verificate
+vizual independent de model. Denominatoare per sursa si categorie, fara selectie
+post-hoc a celor reusite. Pilotul raporteaza:
 
-Bbox dovedește poziția unui text extras, nu faptul că stratul PDF este corect
-față de imagine. Scanurile cer OCR cu coordonate și proveniență separată, în
-alt scope. Planșele tehnice nu devin liste de materiale certificate prin bbox.
-Limitele de memorie/timp și performanța NAS/Poppler nu sunt măsurate aici.
-Nu am rulat recitiri, testele Deno istorice, SQL, migrații, inferențe sau deploy.
-Am verificat doar că planul indică fișiere/simboluri existente în main și am
-citit §1.4 și PR749. Implementarea, acuratețea și integrarea rămân de testat.
+1. ZERO asocieri gresite promovate pe setul evaluat si toate contraexemplele.
+2. Recall geometric = randuri eligibile confirmate corect / toate randurile
+   eligibile din referinta independenta; prag numeric stabilit INAINTE de pilot.
+3. % coloana_necertificata = randuri cu rol incert / randuri eligibile, separat
+   de alte ambiguitati; plafon stabilit inainte de pilot.
+4. Diferenta fata de legacy/A: rezolvari noi corecte, regresii, omisiuni, duplicate,
+   erori tacite, timp/memorie si volum sidecar; nu doar o acuratete agregata.
+
+Nu inventam acum praguri de recall fara inventarul setului; fara pragurile
+preinregistrate nu exista GO pentru activare. 99,5% din campania OCR nu certifica C.
+
+Fixture: cele sase contraexemple PR749, DN63/DN110, descriere sus/jos, numere/coduri
+repetate in sectiuni, antete absente/repetate, articol peste pagina, pret=cantitate,
+gol vs zero, celule unite, UM peste rand, text local rotit, 0/90/180/270,
+CropBox != MediaBox, transformare tile/deskew, NBSP, ligaturi, Unicode decomposed,
+surrogate pairs, font ToUnicode lipsa/PUA, sandwich cu text gresit dar bbox plauzibil,
+XML trunchiat/XXE, sursa schimbata, cache vechi, selectie loturi/RLS.
+
+## Ce NU s-a verificat
+
+Nicio executie Poppler/OCR/SQL sau test pe documente reale in acest branch.
+Nu am masurat ponderea scanurilor, acuratetea, recall-ul, viteza sau memoria C.
+Nu am verificat bbox disponibile in versiunile LightOn/MinerU instalate.
+Referintele de cod si istoricul au fost citite; planul nu este implementare.
+Geometria nu interpreteaza scheme de montaj si nu certifica listele de materiale.
