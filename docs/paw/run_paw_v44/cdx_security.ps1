@@ -159,7 +159,7 @@ function GetCdxBinding {
  foreach($name in @('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_install.json','cdx_runtime_manifest.json')) {
   $p=Join-Path $PSScriptRoot $name;AssertCdxAdminAcl $p;AssertCdxSingleFile $p;$bin[$name]=HashCdx $p
  }
- $git='C:\Program Files\Git\cmd\git.exe'
+ $git='C:\Program Files\Git\bin\git.exe'
  AssertCdxAdminAcl (Split-Path (Split-Path $git));AssertCdxAdminAcl (Split-Path $git);AssertCdxAdminAcl $git;AssertCdxSingleFile $git
  $bin['git.exe']=HashCdx $git
  if($cfg.git_credential_helper) {

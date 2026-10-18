@@ -1,6 +1,6 @@
 # v4.4: native Windows sandbox candidate; real certification is mandatory.
 . (Join-Path $PSScriptRoot 'cdx_security.ps1')
-$GIT_EXE = 'C:\Program Files\Git\cmd\git.exe'
+$GIT_EXE = 'C:\Program Files\Git\bin\git.exe'
 function GitCdx([string[]]$a,[string]$cwd,[bool]$fetch=$false) {
  AssertCdxAdminAcl $GIT_EXE
  AssertCdxGitConfig (Join-Path $REPO '.git\config')

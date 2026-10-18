@@ -44,7 +44,7 @@ if([IO.File]::ReadAllText($paths['native-write']) -cne 'PAW_CHANGED'){throw 'nat
 # Actual Git argument parsing with path spaces and literal internal quotes, using a local synthetic helper.
 $helper=Join-Path $root 'helper with spaces.cmd'
 [IO.File]::WriteAllText($helper,"@echo off`r`necho username=synthetic`r`necho password=synthetic`r`n")
-$pi=New-Object Diagnostics.ProcessStartInfo;$pi.FileName='C:\Program Files\Git\cmd\git.exe'
+$pi=New-Object Diagnostics.ProcessStartInfo;$pi.FileName='C:\Program Files\Git\bin\git.exe'
 $pi.WorkingDirectory=$root;$pi.UseShellExecute=$false;$pi.RedirectStandardOutput=$true;$pi.RedirectStandardError=$true;$pi.RedirectStandardInput=$true
 $args=@('-c','credential.helper=','-c',('credential.helper=!"'+$helper.Replace('\','/')+'"'),'credential','fill')
 $pi.Arguments=($args|ForEach-Object {ArgCdx $_}) -join ' '

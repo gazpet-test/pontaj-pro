@@ -22,7 +22,7 @@ $required=@('paw-shell','profile-shell','git-shell','paw-patch','profile-patch',
 function ReadCertificationGit([string]$target,[string[]]$arguments) {
  AssertCdxGitConfig (Join-Path $repo '.git\config');AssertCdxGitConfig (Join-Path $repo '.git\config.worktree')
  $pi=New-Object Diagnostics.ProcessStartInfo
- $pi.FileName='C:\Program Files\Git\cmd\git.exe';AssertCdxAdminAcl $pi.FileName
+ $pi.FileName='C:\Program Files\Git\bin\git.exe';AssertCdxAdminAcl $pi.FileName
  $pi.UseShellExecute=$false;$pi.CreateNoWindow=$true;$pi.RedirectStandardOutput=$true;$pi.RedirectStandardError=$true;$pi.WorkingDirectory=$target
  $opts=@('-c',('core.hooksPath='+(Join-Path $PSScriptRoot 'no-hooks')),'-c','core.fsmonitor=false','-c','core.attributesFile=NUL','-c','core.excludesFile=NUL','-c','credential.helper=')+$arguments
  foreach($a in $opts){if($a -match '["\r\n]'){throw 'Invalid verification argument'}}
