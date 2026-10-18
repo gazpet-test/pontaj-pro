@@ -109,6 +109,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const result = await r.json()
+    if (result.stop_reason === 'max_tokens') return new Response(JSON.stringify({ error: 'Raspuns AI incomplet (max_tokens); reincearca' }), { status: 422, headers: CORS })
+    const refuz = mesajRefuz(result)
+    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
+    const raw = textRaspuns(result)
+    if (!raw.trim()) return new Response(JSON.stringify({ error: 'Raspuns AI fara text' }), { status: 422, headers: CORS })
 
     // CONTORIZARE COST (v7)
     try {
@@ -121,9 +126,6 @@ Deno.serve(async (req: Request) => {
       })
     } catch (_) { /* nu blocheaza */ }
 
-    const refuz = mesajRefuz(result)
-    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
-    const raw = textRaspuns(result) || '{}'
     // deno-lint-ignore no-explicit-any
     const parsed: any = jsonDinText(raw)
     if (!parsed) return new Response(JSON.stringify({ error: 'Parse failed', raw: raw.slice(0,300) }), { status: 500, headers: CORS })
