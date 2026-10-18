@@ -98,6 +98,11 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: `Anthropic ${r.status}: ${err.slice(0, 300)}` }), { status: 502, headers: CORS })
     }
     const result = await r.json()
+    if (result.stop_reason === 'max_tokens') return new Response(JSON.stringify({ error: 'Raspuns AI incomplet (max_tokens); reincearca' }), { status: 422, headers: CORS })
+    const refuz = mesajRefuz(result)
+    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
+    const raw = textRaspuns(result)
+    if (!raw.trim()) return new Response(JSON.stringify({ error: 'Raspuns AI fara text' }), { status: 422, headers: CORS })
 
     try {
       const u = result.usage || {}
@@ -109,9 +114,6 @@ Deno.serve(async (req: Request) => {
       })
     } catch (_) { /* contorizarea nu blocheaza raspunsul */ }
 
-    const refuz = mesajRefuz(result)
-    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
-    const raw = textRaspuns(result) || '{}'
     // deno-lint-ignore no-explicit-any
     const parsed: any = jsonDinText(raw)
     if (!parsed) return new Response(JSON.stringify({ error: 'Parse failed', raw: raw.slice(0, 300) }), { status: 500, headers: CORS })

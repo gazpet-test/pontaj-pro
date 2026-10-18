@@ -95,6 +95,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const result = await r.json()
+    if (result.stop_reason === 'max_tokens') return new Response(JSON.stringify({ error: 'Raspuns AI incomplet (max_tokens); reincearca' }), { status: 422, headers: CORS })
+    const refuz = mesajRefuz(result)
+    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
+    const raw = textRaspuns(result)
+    if (!raw.trim()) return new Response(JSON.stringify({ error: 'Raspuns AI fara text' }), { status: 422, headers: CORS })
 
     try {
       const u = result.usage || {}
@@ -106,9 +111,6 @@ Deno.serve(async (req: Request) => {
       })
     } catch (_) { /* nu blocheaza */ }
 
-    const refuz = mesajRefuz(result)
-    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
-    const raw = textRaspuns(result) || '{}'
     let parsed: any
     try { parsed = robustJsonParse(raw) }
     catch (pe: any) {
@@ -116,7 +118,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Parse failed: ' + pe.message, raw_inceput: raw.slice(0, 400) }), { status: 500, headers: CORS })
     }
 
-    const faze = (Array.isArray(parsed.faze) ? parsed.faze : [])
+    const faze = (Array.isArray(parsed?.faze) ? parsed.faze : [])
       .filter((f: any) => f && f.denumire && String(f.denumire).trim())
       .map((f: any, i: number) => {
         const rawNr = f.nr_faza
@@ -133,6 +135,8 @@ Deno.serve(async (req: Request) => {
           sursa: 'ai_pccvi',
         }
       })
+
+    if (faze.length === 0) return new Response(JSON.stringify({ error: 'AI nu a gasit faze; fazele existente raman neschimbate' }), { status: 422, headers: CORS })
 
     await supabaseAdmin.from('executie_faze_determinante')
       .delete().eq('proiect_id', proiect_id).eq('sursa', 'ai_pccvi').eq('status', 'neplanificata')
