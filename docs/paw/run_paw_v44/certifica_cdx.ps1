@@ -87,7 +87,8 @@ function AssertEventReview($review,$events,$probes) {
   if($p.tool_type -cne 'command_execution' -or $e.type -cne 'item.completed' -or $e.item.type -cne 'command_execution' -or -not $e.item.id -or $usedItems.ContainsKey([string]$e.item.id)){throw 'Not a distinct observed command event; incomplete'}
   $usedItems[[string]$e.item.id]=$true
   if($e.item.exit_code -isnot [int] -and $e.item.exit_code -isnot [long]){throw 'Missing integer command exit code'}
-  $action=([string]$e.item.command).Replace('/','\');$failure=[string]$e.item.aggregated_output
+  # Codex citeaza comanda pentru shell cu backslash-uri dublate; le reducem la unul inainte de potrivire.
+  $action=(([string]$e.item.command).Replace('/','\') -replace '[\\]{2,}','\');$failure=[string]$e.item.aggregated_output
   foreach($token in @($p.id)+@($p.action_tokens)) {
    if(-not $token){throw 'Empty probe token'}
    $needle=([string]$token).Replace('/','\');$pattern=[regex]::Escape($needle)
