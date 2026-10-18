@@ -1,3 +1,7 @@
+// Scorilos v21 - 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts). Gândirea rămâne pe implicit (adaptive, effort medium):
+//   apelul are web_search + JSON cerut în prompt, iar cu gândirea oprită Haiku 5.5 poate sări căutarea (ghidul de migrare).
+//   max_tokens 1500 → 4000 (gândirea intră în max_tokens + tokenizer ~30% mai mare), data de azi în prompt (recomandat la
+//   căutare), refuzul filtrului de siguranță → errMsg REFUZ_AI (intră în erori, ca orice eșec). web_search rămâne _20250305.
 // Scorilos v20 - 13.10.2026: poarta noua (acces.ts) — DOAR cron (x-bot-secret verificat in BD, Vault BOT_SECRET),
 //   fara fallback in cod. Raspunsul nu mai intoarce output_text (sta in claude_bot_runs).
 // v19 - 10.06.2026: KILL SWITCH - verifica settings.scorilos_enabled la inceput
@@ -6,6 +10,7 @@
 // Plus pastreaza tot v17 (fix false positives + vehicul_fara_gps_history)
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { autorizeaza } from "./acces.ts";
+import { HAIKU_55, mesajRefuz } from "../_shared/haiku55.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -14,6 +19,8 @@ const MAX_WEB_SEARCH_ACTIVE = Number(Deno.env.get("MAX_WEB_SEARCH_ACTIVE") || "4
 const MAX_WEB_SEARCH_DIMENSIUNI = Number(Deno.env.get("MAX_WEB_SEARCH_DIMENSIUNI") || "3");
 const DELAY_BETWEEN_CALLS_MS = Number(Deno.env.get("DELAY_BETWEEN_CALLS_MS") || "4000");
 const MAX_WEB_USES_PER_CALL = 2;
+const MAX_TOKENS_CAUTARE = 4000; // v21: încape gândirea adaptivă + căutarea + JSON-ul
+const dataAzi = () => new Date().toISOString().slice(0, 10);
 
 const ALIM_FARA_TELEM_MIN_LITRI = 50;
 const KM_DISCREPANCY_MIN_DIFF = 5000;
@@ -131,9 +138,11 @@ async function webSearchActivSpecs(act: any): Promise<{ data: any | null, errMsg
   if (!ANTHROPIC_API_KEY) return { data: null, errMsg: 'NO_API_KEY' };
   const modelCurat = cleanModelForAI(act.model, act.nr_inmatriculare);
   const descriere = [act.marca && `Marca: ${act.marca}`, modelCurat && `Model: ${modelCurat}`, act.an_fabricatie && `An: ${act.an_fabricatie}`, act.capacitate_motor && `Capacitate motor: ${act.capacitate_motor}`, act.putere_kw && `Putere: ${act.putere_kw} kW`].filter(Boolean).join("\n");
-  const prompt = `Cauta online specs tehnice oficiale pentru:\n${descriere}\n\nReturneaza DOAR JSON la final (fara markdown):\n{\n  "tip_carburant": "motorina"|"benzina"|"electric"|"gpl"|"hibrid"|null,\n  "norma_consum": numar zecimal sau null,\n  "unitate_norma": "l/h"|"l/100km"|"kWh/h"|"kWh/100km"|null,\n  "source_url": URL sau null,\n  "confidence": 0-1,\n  "motivare": text scurt\n}\nUtilaje grele -> l/h. Autoturisme/camioane -> l/100km. Fara date concrete -> null + confidence<0.3.`;
-  const result = await callAnthropic({ model: "claude-haiku-4-5-20251001", max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_USES_PER_CALL }], messages: [{ role: "user", content: prompt }] });
+  const prompt = `Data de azi: ${dataAzi()}.\nCauta online specs tehnice oficiale pentru:\n${descriere}\n\nReturneaza DOAR JSON la final (fara markdown):\n{\n  "tip_carburant": "motorina"|"benzina"|"electric"|"gpl"|"hibrid"|null,\n  "norma_consum": numar zecimal sau null,\n  "unitate_norma": "l/h"|"l/100km"|"kWh/h"|"kWh/100km"|null,\n  "source_url": URL sau null,\n  "confidence": 0-1,\n  "motivare": text scurt\n}\nUtilaje grele -> l/h. Autoturisme/camioane -> l/100km. Fara date concrete -> null + confidence<0.3.`;
+  const result = await callAnthropic({ model: HAIKU_55, max_tokens: MAX_TOKENS_CAUTARE, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_USES_PER_CALL }], messages: [{ role: "user", content: prompt }] });
   if (!result.data) return { data: null, errMsg: result.txt };
+  const refuz = mesajRefuz(result.data);
+  if (refuz) return { data: null, errMsg: 'REFUZ_AI: ' + refuz };
   if (!result.txt.trim()) return { data: null, errMsg: 'EMPTY_TEXT' };
   const p = extractLastJson(result.txt);
   if (!p) return { data: null, errMsg: 'NO_JSON: ' + result.txt.slice(0, 150) };
@@ -144,9 +153,11 @@ async function webSearchActivDimensiuni(act: any): Promise<{ data: any | null, e
   if (!ANTHROPIC_API_KEY) return { data: null, errMsg: 'NO_API_KEY' };
   const modelCurat = cleanModelForAI(act.model, act.nr_inmatriculare);
   const descriere = [act.marca && `Marca: ${act.marca}`, modelCurat && `Model: ${modelCurat}`, act.an_fabricatie && `An: ${act.an_fabricatie}`].filter(Boolean).join("\n");
-  const prompt = `Cauta online dimensiuni de transport pentru:\n${descriere}\n\nPentru utilaje grele dau dimensiuni TRANSPORT (cu brat pliat), nu de lucru.\n\nReturneaza DOAR JSON la final:\n{\n  "lungime_m": numar zecimal sau null,\n  "latime_m": numar zecimal sau null,\n  "inaltime_m": numar zecimal sau null,\n  "greutate_kg": numar intreg sau null,\n  "source_url": URL sau null,\n  "confidence": 0-1,\n  "motivare": text scurt romana\n}\nToate in metri si kg. Fara date concrete -> null + confidence<0.3.`;
-  const result = await callAnthropic({ model: "claude-haiku-4-5-20251001", max_tokens: 1500, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_USES_PER_CALL }], messages: [{ role: "user", content: prompt }] });
+  const prompt = `Data de azi: ${dataAzi()}.\nCauta online dimensiuni de transport pentru:\n${descriere}\n\nPentru utilaje grele dau dimensiuni TRANSPORT (cu brat pliat), nu de lucru.\n\nReturneaza DOAR JSON la final:\n{\n  "lungime_m": numar zecimal sau null,\n  "latime_m": numar zecimal sau null,\n  "inaltime_m": numar zecimal sau null,\n  "greutate_kg": numar intreg sau null,\n  "source_url": URL sau null,\n  "confidence": 0-1,\n  "motivare": text scurt romana\n}\nToate in metri si kg. Fara date concrete -> null + confidence<0.3.`;
+  const result = await callAnthropic({ model: HAIKU_55, max_tokens: MAX_TOKENS_CAUTARE, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_USES_PER_CALL }], messages: [{ role: "user", content: prompt }] });
   if (!result.data) return { data: null, errMsg: result.txt };
+  const refuz = mesajRefuz(result.data);
+  if (refuz) return { data: null, errMsg: 'REFUZ_AI: ' + refuz };
   if (!result.txt.trim()) return { data: null, errMsg: 'EMPTY_TEXT' };
   const p = extractLastJson(result.txt);
   if (!p) return { data: null, errMsg: 'NO_JSON: ' + result.txt.slice(0, 150) };
