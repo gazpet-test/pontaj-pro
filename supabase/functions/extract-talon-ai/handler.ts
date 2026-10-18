@@ -125,9 +125,11 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
     })
     if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
     const data = await resp.json()
+    if (data.stop_reason === 'max_tokens') return json(200, { success: false, active_id: activeId, error: 'Raspuns AI incomplet (max_tokens); reincearca' })
     const refuz = mesajRefuz(data)
     if (refuz) return json(200, { success: false, active_id: activeId, error: refuz })
     const raw = textRaspuns(data).trim()
+    if (!raw) return json(200, { success: false, active_id: activeId, error: 'Raspuns AI fara text' })
     const extras: Record<string, unknown> | null = jsonDinText(raw)
     if (!extras) throw new Error('JSON invalid de la AI: ' + raw.slice(0, 150))
 

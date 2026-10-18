@@ -23,7 +23,7 @@
 //      pe `profiles`, nu doar pe JWT valid — cheia anon e un JWT valid, vezi PR #318). E apel platit;
 //  (e) confirmare umana OBLIGATORIE: nimic nu ajunge in hr_autorizatii fara apasarea unui om.
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { costApel, HAIKU_55, mesajRefuz } from '../_shared/haiku55.ts';
+import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -110,10 +110,12 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array, sys: strin
   });
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
+  if (j?.stop_reason === 'max_tokens') return { eroare: 'Raspuns AI incomplet (max_tokens); reincearca', _tin: tin, _tout: tout, _usage: j?.usage };
   // Refuzul filtrului de siguranta (Haiku 5.5 / Opus 5): eroare de business, se intoarce ca orice „fara text”.
   const refuz = mesajRefuz(j);
   if (refuz) return { eroare: refuz.slice(0, 200), _tin: tin, _tout: tout, _usage: j?.usage };
-  const txt = (Array.isArray(j?.content) ? j.content : []).filter((c: any) => c?.type === 'text').map((c: any) => c.text || '').join('\n');
+  const txt = textRaspuns(j);
+  if (!txt.trim()) return { eroare: (j?.error?.message || 'Raspuns AI fara text').slice(0, 200), _tin: tin, _tout: tout, _usage: j?.usage };
   // Parsare pe ACOLADE ECHILIBRATE, nu lacoma: `/\{[\s\S]*\}/` ia de la prima acolada pana la
   // ULTIMA din tot textul, deci o singura fraza scrisa dupa JSON facea raspunsul neparsabil.
   // Exact asta a facut „necitibila" recomandarea care conta cel mai mult (v3 hr-recomandare-citeste).

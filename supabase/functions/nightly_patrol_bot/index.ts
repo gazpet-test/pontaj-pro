@@ -120,6 +120,7 @@ async function callAnthropic(body: any, retries = 2): Promise<{ data: any | null
       }
       if (!res.ok) return { data: null, status: res.status, txt: `HTTP ${res.status}` };
       const data = await res.json();
+      if (data.stop_reason === 'max_tokens') return { data: null, status: 200, txt: 'MAX_TOKENS' };
       let txt = "";
       for (const b of (data.content || [])) if (b.type === "text") txt += b.text + "\n";
       return { data, status: 200, txt };

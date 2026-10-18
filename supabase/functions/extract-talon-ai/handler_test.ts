@@ -139,3 +139,26 @@ Deno.test('admin_logistica cu modul, active_id dat → 200, un scan descărcat, 
   assertEquals(r.n.storage, 1); assertEquals(r.n.ai, 1); assertEquals(r.n.scrieri, 1)
   assert(r.n.citiri.includes('talon_extract_staging'))
 })
+
+// Chiar si un JSON valid trebuie respins daca raspunsul e taiat sau refuzat.
+for (const caz of [
+  { stop_reason: 'max_tokens', text: '{"nr_inmatriculare":"PH 21 LBO"}', eroare: 'max_tokens' },
+  { stop_reason: 'end_turn', text: ' \n ', eroare: 'fara text' },
+  { stop_reason: 'refusal', text: '{"nr_inmatriculare":"PH 21 LBO"}', eroare: 'refuzat' },
+]) {
+  Deno.test(`AI ${caz.eroare}: eroare de business, zero scrieri in staging`, async () => {
+    const m = mediu({ cuScan: true })
+    const doFetch: typeof fetch = () => {
+      m.n.ai++
+      return Promise.resolve(new Response(JSON.stringify({ stop_reason: caz.stop_reason,
+        content: [{ type: 'text', text: caz.text }] }), { status: 200 }))
+    }
+    const r = await handler(cerereCu({ Authorization: `Bearer ${OWNER}` }, { active_id: 7 }),
+      () => ({ supa: m.supa, API_KEY: 'k', fetch: doFetch }))
+    const corp = await r.json()
+    assertEquals(r.status, 200); assertEquals(corp.success, false); assertEquals(corp.active_id, 7)
+    assert(corp.error.includes(caz.eroare))
+    assertEquals(m.n.ai, 1); assertEquals(m.n.storage, 1); assertEquals(m.n.scrieri, 0)
+    assert(!m.n.citiri.includes('logistica_active'))
+  })
+}
