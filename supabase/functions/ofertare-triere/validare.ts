@@ -22,14 +22,16 @@ export function triereValida(j: any): boolean {
     campuri(j, ['obiect', 'autoritate', 'nr_anunt', 'termen_depunere', 'zile_clarificari', 'termen_raspuns_ac',
       'amplasament', 'descriere', 'valoare_estimata', 'termen_executie', 'criteriu', 'atestari', 'sursa_finantare',
       'garantie_participare', 'garantie_buna_executie', 'organizare_santier', 'liste_cantitati', 'grafic', 'laborator'], scalar) &&
-    (j.tip_lucrare_gaze === null || (campuri(j.tip_lucrare_gaze, ['presiune', 'diametru', 'motiv'], textSauNull) &&
+    (j.tip_lucrare_gaze === null || (campuri(j.tip_lucrare_gaze, ['presiune', 'diametru', 'motiv'], scalar) &&
       ['transport', 'distributie', 'mixt', 'neclar', 'nu_e_gaze'].includes(j.tip_lucrare_gaze.tip))) &&
     (j.experienta_similara === null || campuri(j.experienta_similara, ['cerinta', 'lucrari_acceptate'], textSauNull)) &&
-    typeof j.cumul_functii_interzis === 'boolean' &&
-    lista(j.roluri, r => campuri(r, ['rol', 'rol_canonic'], text) && !!r.rol.trim() && !!r.rol_canonic.trim() &&
+    (j.cumul_functii_interzis === null || typeof j.cumul_functii_interzis === 'boolean') &&
+    lista(j.roluri, r => campuri(r, ['rol'], text) && !!r.rol.trim() &&
+      campuri(r, ['rol_canonic'], v => v === null || (text(v) && !!v.trim())) &&
       campuri(r, ['natura_ceruta', 'cerinte', 'documente', 'motiv'], scalar) &&
-      campuri(r, ['autorizatie_ceruta', 'propunere'], textSauNull) && typeof r.exclude_transport === 'boolean' && baremValid(r.barem)) &&
-    lista(j.matrice_experti, m => campuri(m, ['persoana', 'rol', 'surse'], text) &&
+      campuri(r, ['autorizatie_ceruta', 'propunere'], textSauNull) &&
+      (r.exclude_transport === null || typeof r.exclude_transport === 'boolean') && baremValid(r.barem)) &&
+    lista(j.matrice_experti, m => campuri(m, ['persoana', 'rol'], text) && campuri(m, ['surse'], textSauNull) &&
       campuri(m, ['proiecte', 'verificate', 'proiecte_conditionate', 'verificate_conditionate'], intreg)) &&
     lista(j.atestari_firma, a => obiect(a) && text(a.cerinta) &&
       (a.document_firma_id === null || (intreg(a.document_firma_id) && a.document_firma_id > 0))) &&

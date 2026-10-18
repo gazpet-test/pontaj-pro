@@ -9,6 +9,7 @@
 // cheia publică putea porni citiri plătite și strica prețurile. Aceeași gaură ca în PR #318.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
+import { ofertaValida, pretNormalizat } from './validare.ts'
 import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
@@ -110,16 +111,9 @@ Deno.serve(async (req: Request) => {
       parsed = JSON.parse(txt.replace(/```json?|```/g, '').trim())
     } catch (_) { return fail('AI a răspuns într-un format neașteptat.') }
 
-    const idsValide = new Set(mats.map((m: any) => m.id))
+    const idsValide = new Set<number>(mats.map((m: any) => m.id))
     // O lista invalida nu poate autoriza inlocuirea preturilor sau a metadatelor.
-    const vazute = new Set()
-    if (!Array.isArray(parsed?.preturi) || !parsed.preturi.length || !parsed.preturi.every((p: any) => {
-      if (!p || !idsValide.has(p.material_id) || vazute.has(p.material_id) ||
-        !(p.pret === null || (Number.isFinite(p.pret) && p.pret >= 0))) return false
-      vazute.add(p.material_id)
-      return true
-    }) || vazute.size !== idsValide.size // cate un rand pentru FIECARE material cerut (pret null = neofertat); lista partiala nu poate inlocui (review Copilot)
-      || !parsed.preturi.some((p: any) => Number.isFinite(p.pret) && p.pret >= 0)) // macar un pret real; toate null = suspect (review Gemini)
+    if (!ofertaValida(parsed, idsValide))
       return fail('AI nu a furnizat o lista valida de preturi; preturile si metadatele existente raman neschimbate.')
     const preturi = (Array.isArray(parsed.preturi) ? parsed.preturi : [])
       .filter((p: any) => idsValide.has(p.material_id))
@@ -127,7 +121,7 @@ Deno.serve(async (req: Request) => {
         oferta_id: of.id,
         material_id: p.material_id,
         denumire_furnizor: typeof p.denumire_furnizor === 'string' ? p.denumire_furnizor.slice(0, 300) : null,
-        pret: Number.isFinite(p.pret) && p.pret >= 0 ? p.pret : null,
+        pret: pretNormalizat(p.pret),
         um: typeof p.um === 'string' ? p.um.slice(0, 30) : null,
         note: typeof p.note === 'string' ? p.note.slice(0, 300) : null,
       }))

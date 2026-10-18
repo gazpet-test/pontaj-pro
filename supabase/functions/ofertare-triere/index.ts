@@ -274,14 +274,19 @@ Deno.serve(async (req: Request) => {
       }),
     })
     const data = await resp.json()
+    const u = data.usage || {}
+    const cost = (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT
+    if (data.usage) {
+      try {
+        await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-triere', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: cost, ref_table: 'ofertare_licitatii', ref_id: lid })
+      } catch (_) {}
+    }
     if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
     if (data.stop_reason === 'max_tokens') return fail('Răspuns AI incomplet (max_tokens); trierea existentă rămâne neschimbată.')
     const refuz = mesajRefuz(data)
     if (refuz) return fail(refuz)
     const txt = textRaspuns(data)
     if (!txt.trim()) return fail('Răspuns AI fără text; trierea existentă rămâne neschimbată.')
-    const u = data.usage || {}
-    const cost = (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT
 
     let parsed: any
     try {
@@ -290,9 +295,7 @@ Deno.serve(async (req: Request) => {
       if (!parsed || typeof parsed !== 'object' || !Object.keys(parsed).length) throw new Error('gol')
     } catch (_) { return fail(`AI a răspuns într-un format neașteptat (${(data.content || []).map((c: any) => c.type).join(',') || 'fără conținut'}; stop=${data.stop_reason}): ${txt.slice(0, 200)}`) }
     if (!triereValida(parsed)) return fail('Răspuns AI incomplet sau cu structură invalidă; trierea existentă rămâne neschimbată.')
-    try {
-      await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-triere', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: cost, ref_table: 'ofertare_licitatii', ref_id: lid })
-    } catch (_) {}
+    parsed.cumul_functii_interzis = parsed.cumul_functii_interzis ?? false
     const verdict = ['mergem', 'cu_clarificari', 'nu_se_poate', 'neclar'].includes(parsed.verdict) ? parsed.verdict : 'neclar'
     parsed.verdict = verdict
     parsed.roluri = Array.isArray(parsed.roluri) ? parsed.roluri.slice(0, 40) : []

@@ -62,28 +62,33 @@ Deno.test('triere: barem complet acceptat; câmpuri imbricate parțiale sau de t
 })
 
 // Execută gardurile reale din handler, fără importul serverului / SDK-ului și fără rețea.
-Deno.test('triere: HTTP, max_tokens, refusal, text gol și JSON parțial se opresc înainte de prima scriere', async () => {
+Deno.test('triere: eșecurile opresc scrierile funcționale, dar loghează usage o singură dată', async () => {
   const src = await Deno.readTextFile(new URL('./index.ts', import.meta.url))
-  const bloc = src.slice(src.indexOf('    if (!resp.ok)'), src.indexOf("    const verdict = ['mergem'"))
+  const bloc = src.slice(src.indexOf('    const u = data.usage'), src.indexOf("    const verdict = ['mergem'"))
     .replace(/: any/g, '')
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
   const ruleaza = new AsyncFunction('resp', 'data', 'fail', 'supabase', 'mesajRefuz', 'textRaspuns', 'triereValida',
-    'PRICE_IN', 'PRICE_OUT', 'MODEL', 'lid', bloc + '\nreturn { valid: true }')
+    'PRICE_IN', 'PRICE_OUT', 'MODEL', 'lid', bloc + '\nreturn { valid: true, parsed }')
   const raspuns = (j: unknown, stop_reason = 'end_turn') => ({ stop_reason, content: [{ type: 'thinking', thinking: '...' },
     { type: 'text', text: JSON.stringify(j) }] })
-  for (const [ok, data] of [[false, raspuns(complet)], [true, raspuns(complet, 'max_tokens')],
+  for (const [ok, rasp] of [[false, raspuns(complet)], [true, raspuns(complet, 'max_tokens')],
     [true, raspuns(complet, 'refusal')], [true, { content: [{ type: 'thinking' }] }],
     [true, { content: [{ type: 'text', text: '  ' }] }], [true, raspuns({ verdict: 'mergem' })],
-    [true, raspuns({})]] as const) {
-    let scrieri = 0
-    const r = await ruleaza({ ok }, data, (error: string) => ({ error }), { from() { scrieri++; throw Error('scriere') } },
-      mesajRefuz, textRaspuns, triereValida, 2e-6, 10e-6, 'model-test', 1)
-    assert.ok(r.error); assert.equal(scrieri, 0)
+    [true, raspuns({})], [true, { content: [{ type: 'text', text: '{' }] }]] as const) {
+    for (const usage of [undefined, { input_tokens: 100, output_tokens: 20 }]) {
+      const loguri: any[] = []
+      const r = await ruleaza({ ok }, { ...rasp, usage }, (error: string) => ({ error }),
+        { from(t: string) { assert.equal(t, 'ai_usage_log'); return { insert(v: unknown) { loguri.push(v) } } } },
+        mesajRefuz, textRaspuns, triereValida, 2e-6, 10e-6, 'model-test', 1)
+      assert.ok(r.error); assert.equal(loguri.length, usage ? 1 : 0)
+      if (usage) { assert.equal(loguri[0].tokens_in, 100); assert.equal(loguri[0].cost_usd, 100 * 2e-6 + 20 * 10e-6) }
+    }
   }
   let scrieri = 0
-  const r = await ruleaza({ ok: true }, raspuns(complet), (error: string) => ({ error }),
+  const r = await ruleaza({ ok: true }, { ...raspuns({ ...complet, cumul_functii_interzis: null }), usage: { input_tokens: 1 } }, (error: string) => ({ error }),
     { from() { return { insert() { scrieri++ } } } }, mesajRefuz, textRaspuns, triereValida, 2e-6, 10e-6, 'model-test', 1)
   assert.equal(r.valid, true); assert.equal(scrieri, 1)
+  assert.equal(r.parsed.cumul_functii_interzis, false)
 })
 
 Deno.test('triere: număr în loc de text și null pe detaliile rolului acceptate (fals-negative, review)', () => {
@@ -91,5 +96,27 @@ Deno.test('triere: număr în loc de text și null pe detaliile rolului acceptat
   assert.ok(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], natura_ceruta: null, cerinte: null, documente: null, motiv: null }] }))
   assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol: null }] }), false)
   assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol: ' ' }] }), false)
-  for (const v of ['', ' ', null]) assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol_canonic: v }] }), false)
+  for (const v of ['', ' ']) assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol_canonic: v }] }), false)
+})
+
+Deno.test('triere: null explicit și detalii numerice acceptate; lipsa și tipurile invalide rămân respinse', () => {
+  const j: any = structuredClone(complet)
+  j.cumul_functii_interzis = null
+  j.roluri[0].rol_canonic = null; j.roluri[0].exclude_transport = null
+  j.matrice_experti[0].surse = null
+  j.tip_lucrare_gaze = { tip: 'distributie', presiune: 6, diametru: 160, motiv: 7 }
+  assert.ok(triereValida(j))
+  const cazuri = [[j, 'cumul_functii_interzis'], [j.roluri[0], 'rol_canonic'],
+    [j.roluri[0], 'exclude_transport'], [j.matrice_experti[0], 'surse'],
+    ...['presiune', 'diametru', 'motiv'].map(k => [j.tip_lucrare_gaze, k])]
+  for (const [obj, k] of cazuri) {
+    const v = obj[k]; delete obj[k]; assert.equal(triereValida(j), false, k + ' lipsă')
+    for (const rau of [{}, [], Infinity, NaN]) { obj[k] = rau; assert.equal(triereValida(j), false, k) }
+    obj[k] = v
+  }
+  for (const k of ['cumul_functii_interzis', 'exclude_transport']) {
+    const obj = k === 'exclude_transport' ? j.roluri[0] : j
+    for (const v of ['false', 0]) { obj[k] = v; assert.equal(triereValida(j), false, k) }
+    obj[k] = null
+  }
 })
