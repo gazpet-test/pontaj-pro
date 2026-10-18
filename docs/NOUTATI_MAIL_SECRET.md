@@ -55,9 +55,10 @@ Nu s-au făcut deploy, setări de secrete sau operații asupra bazei de date.
   Orice refuz/error/null da 401. Nu mai folosim service_role pentru verificarea
   owner; exista un singur client privilegiat, numai dupa autorizare.
 - Confirmati Edge Secrets reale si rotatia valorii vechi, fara valori in loguri;
-  Vault al eventualului cron ramane separat. Configuratia noua
-  `supabase/config.toml` fixeaza verify_jwt=false numai pentru aceasta functie;
-  anterior acest fisier nu exista pe branch. Gateway-ul nu inlocuieste autorizarea.
+  Vault al eventualului cron ramane separat. verify_jwt=false se
+  fixeaza prin lista NO_JWT din `.github/workflows/deploy-edge-function.yml`
+  (repo-ul NU are `supabase/config.toml` — interzis de scripts/test_sec_ofertare.sh).
+  Gateway-ul nu inlocuieste autorizarea.
 - Testati in Deno/Supabase toate cazurile de acces cu furnizorul de mail interceptat,
   apoi claim-ul concurent PostgREST real. Testele locale folosesc mock atomic;
   nu dovedesc configuratia RLS, granturile sau comportamentul bazei live.

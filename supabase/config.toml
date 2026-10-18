@@ -1,3 +1,0 @@
-# Function-level JWT validation: authorization is enforced in handler.ts.
-[functions.noutati-mail]
-verify_jwt = false
