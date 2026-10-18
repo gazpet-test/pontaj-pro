@@ -5,7 +5,7 @@ afectată + un rând în „Istoric revizii”); CI-ul `pipeline-citire-doc.yml`
 - **scripturi:** `scripts/ocr_local/**`, `scripts/recitire_val1/**`, `worker/ofertare/**`;
 - **funcții edge:** `supabase/functions/ofertare-ocr-*`, `ofertare-ingest-doc`, `ofertare-cantitati-extrage`, `ofertare-citire-test`, `ofertare-pdf-link`, `ofertare-document-nou-citeste`, `ofertare-plansa-citeste`, `ofertare-word-text`, `ofertare-seap-import`, `ofertare-seap-veghe`;
 - **cod comun:** `_shared/{transcriereTabel, provenientaText, gardaIngest*, cantNumar, cantNormalizare, cantComparator, cantAcoperire, dn}.ts`;
-- **migrări / reveniri:** `*ofertare_ocr*`, `*ofertare_cant*`, `*ofertare_text_scrie*`, `*ofertare_citire_umbra*`, `*ofertare_ingest_garda*`.
+- **migrări / reveniri:** `*ofertare_ocr*`, `*ofertare_cant*`, `*ofertare_text_scrie*`, `*ofertare_citire_umbra*`, `*ofertare_ingest_garda*`, `*ofertare_buget*`.
 
 Autori: partea 1 (ingest Haiku 5.5, proveniență / CAS, recitire, cantități — TKT-0329) = sesiunea Ofertare; partea 2 (OCR local,
 arbitru, cititor_3, umbra) = laboratorul OCR; asamblarea = chatul principal.
@@ -21,7 +21,7 @@ flowchart TD
   E --> F[Citire GPU<br/>LightOn + MinerU<br/>garda v5]
   F --> G[Comparator literal<br/>+ proveniența marcajelor]
   G --> H{Triere}
-  H -->|HIGH_RISK| I[Arbitru plătit<br/>Haiku 5.5 → Sonnet 5<br/>rezervare + plafon BD + prag §8]
+  H -->|HIGH_RISK| I[Arbitru plătit<br/>Haiku 5.5 → Sonnet 5.5<br/>rezervare + plafon BD + prag §8]
   H -->|DEFER fără cifre| J[Restanță<br/>doar_haiku la decizie separată]
   H -->|MARCAJE / OM| K[La om]
   F -->|bandă oprită de gardă| L[cititor_3<br/>Opus, abonament]
@@ -63,8 +63,8 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 
 | Element | Valoare |
 |---|---|
-| Model, pe tipul documentului | Volumele (caiete, liste, `alta`): **`claude-haiku-5-5`** (din 15.10, commit `6f8a22c`; înainte Haiku 4.5), felii de **8** pagini. Documentele critice (`fisa_date`, `clarificare`, `raspuns_clarificare`, `formular`): **`claude-sonnet-5`**, felii de **2**. Un parametru `model` poate forța alegerea. |
-| Setări | `max_tokens` = `maxOut(model)` din `_shared/transcriereTabel.ts`: **12 000** pe Haiku 5.5, 8 000 în rest. `thinking` dezactivat, fără `temperature`. |
+| Model, pe tipul documentului | Volumele (caiete, liste, `alta`): **`claude-haiku-5-5`** (din 15.10, commit `6f8a22c`; înainte Haiku 4.5), felii de **8** pagini. Documentele critice (`fisa_date`, `clarificare`, `raspuns_clarificare`, `formular`): **`claude-sonnet-5-5`** (din 17.10; înainte `claude-sonnet-5`, același preț), felii de **2**. Un parametru `model` poate forța alegerea. |
+| Setări | `max_tokens` = `maxOut(model)` din `_shared/transcriereTabel.ts`: **12 000** pe Haiku 5.5, 8 000 în rest. Gândirea oprită pe model (`_shared/gandire.ts` → `faraGandire`): Haiku 5.5 `thinking: {type: 'disabled'}`, Sonnet 5.5 `{type: 'between_tools'}` (pe 5.5 `disabled` dă 400; `between_tools` = fără gândire extinsă, doar la effort ≤ high — nu trimitem effort, implicit high). Fără `temperature`. |
 | Prompturi | `PROMPT_ANTET` pe prima felie: JSON cu obiectiv, beneficiar, proiectant, revizie, apoi `===TEXT===`. `PROMPT_TEXT` pe celelalte. Amândouă au **regula de tabel** (`REGULA_TABEL`: o linie pe rând, celulele separate prin ` \| `, inclusiv cele goale) și marcajele `⟦PAGINA N⟧`. |
 | Numerotarea paginilor | Absolută: `pagina_offset` + pagina locală. `asiguraMarcaje` renumerotează secvențial când numărul marcajelor = numărul paginilor din felie. |
 | Reluare | Cel mult 2 apeluri pe invocare. Progresul (`pagini_procesate`, `pagini_felie`) e salvat, iar invocarea următoare continuă de unde a rămas. |
@@ -76,7 +76,7 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 | Sărite | `procesat`; `partial` fără `reia: true`; `plansa` (are calea ei); documentele sparte în bucăți (se citesc bucățile); `ignorat`; documentele neeligibile pe loturi (poarta loturi 20261024b, înainte de orice descărcare sau AI) |
 | Scrierea | **Garda de ingest** (20260930k): `ofertare_ingest_garda_incearca` (token, lease de 10 min, max 5 eșecuri, max 80 de descărcări), apoi `ofertare_ingest_garda_rezultat`. Acesta scrie rândul documentului (coloane din whitelist) în aceeași tranzacție cu verificarea tokenului, deci un token vechi e respins. Apoi proveniența (§1.2). |
 | Cine o pornește | Un utilizator cu acces Ofertare care e **owner sau responsabilul licitației** (poarta pe cheltuială). Sau worker-ul NAS, cu `x-ingest-secret` = `OFERTARE_INGEST_SECRET`, pe coada `ofertare_ingest_coada` (butonul „☁ Pe server”). Cheia anon nu trece niciodată. |
-| Cost | Haiku 5.5: 0,10 / 0,50 USD pe milion de tokeni (intrare / ieșire), sub pragul de 100k tokeni pe cerere; peste, 0,50 / 2,50. Sonnet 5: 2 / 10. Fiecare apel ajunge în `ai_usage_log`. Laboratorul a măsurat ~0,005 USD pe 8 pagini cu Haiku 5.5. |
+| Cost | Haiku 5.5: 0,10 / 0,50 USD pe milion de tokeni (intrare / ieșire), sub pragul de 100k tokeni pe cerere; peste, 0,50 / 2,50. Sonnet 5.5: 2 / 10 (ca Sonnet 5). Fiecare apel ajunge în `ai_usage_log`. Laboratorul a măsurat ~0,005 USD pe 8 pagini cu Haiku 5.5. |
 
 **Worker-ul NAS** (`worker/ofertare/ingest.ts`): consumă aceeași coadă.
 - PDF-urile cu strat de text (≥ 85 % pagini cu text) se scot **gratuit**, cu `pdftotext`, cu aceleași marcaje.
@@ -89,7 +89,7 @@ Rândul nou e `status_procesare = 'neprocesat'`. Citirea, adică scrierea în `t
 
 | Funcție | Ce face | Model / cost | Cine o pornește | Proveniența |
 |---|---|---|---|---|
-| `ofertare-document-nou-citeste` | Rezumatul unui document apărut ulterior în SEAP → `analiza.citire_noi`. `text_extras` doar dacă era gol (CAS pe `analiza` și pe sha). | `claude-sonnet-5`; PDF-ul întreg doar pentru owner / responsabil / secretul intern | utilizator Ofertare, sau rutina cu `x-radar-secret` | `sinteza_ai` (nu e transcriere, deci nu e valid pentru cantități) |
+| `ofertare-document-nou-citeste` | Rezumatul unui document apărut ulterior în SEAP → `analiza.citire_noi`. `text_extras` doar dacă era gol (CAS pe `analiza` și pe sha). | `claude-sonnet-5-5` (din 17.10), 2 / 10 USD pe milion (înainte logat greșit la 3 / 15); PDF-ul întreg doar pentru owner / responsabil / secretul intern | utilizator Ofertare, sau rutina cu `x-radar-secret` | `sinteza_ai` (nu e transcriere, deci nu e valid pentru cantități) |
 | `ofertare-plansa-citeste` | Planșele A0, felie cu felie (tăiate de `/api/plansa-felii`): tabelele de dimensionare, cartușul, adnotările → `ofertare_cantitati` + `textPlansa` | `claude-opus-5`, cel mult `FELII_PE_RULARE` pe rulare | owner / responsabil | `sinteza_ai` |
 | `ofertare-word-text` | `.doc` / `.docx` → text, fără AI | 0 | ca ingest-ul | — (scrie prin gardă) |
 
@@ -190,9 +190,11 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 | Intrarea | Doar documentele cu **text valid** (§1.2). Celelalte sunt sărite (`text_nevalid`). |
 | Rolurile | Rolurile pe secțiuni (`f3`, `c6`, `atr`, `cs`, `fisa_date`, `memoriu`, `plansa`…), din antet, marcaje sau titlu. Deciziile omului (`rol_confirmat` / `nu_e_sursa_cantitativa`) le înlocuiesc. |
 | Feliile | Felii cu poziție. Modelul `openai_mini` (cheia `OPENAI_API_KEY`) întoarce rânduri. |
-| Normalizarea în cod (`_shared/cantNumar.ts`, `cantNormalizare.ts`, `dn.ts`) | Cantitatea e **dovedită** doar dacă tokenul întreg e găsit în textul documentului, are UM-ul alăturat sau UM-ul din antetul coloanei, și nu e diametru sau exponent. **Dovada pe rând** (val 2, PR-A, normalizator `n3`): codul de articol dat de model trebuie să fie un identificator ÎNTREG al liniei cantității, iar Dn-urile din denumire + citat în blocul rândului. Blocul = linia cantității; liniile de dedesubt intră doar cu delimitare pozitivă (se închid în linia „… Total=” a articolului, max. 4 linii, fără început de articol / linie care începe cu un cod / cantitate în formatul listei „120.000” / linie cu UM / linie goală / pagină nouă între ele). Un cod declarat într-un format nerecunoscut („SA11H1,”, „670 1153”) → `cod_neverificabil`; „fără cod” = gol / „-” / „null” / „n/a”; la tabelul markdown doar linia. Altfel `cod_alt_rand` / `dn_alt_rand` → nedovedit (riscul DN63/DN110). Un Dn în plus pe rând → `dn_ambiguu`. Listele cu denumirea DEASUPRA cantității rămân nedovedite (fail-closed). **Convenția numerică** (`3.995` = 3995 sau 3,995) se ia doar din dovezi tari, pe GRUPUL de părți ale aceluiași PDF. Un token ambiguu → `valoare_ambigua` → cheia `incomplet`. |
+| Normalizarea în cod (`_shared/cantNumar.ts`, `cantNormalizare.ts`, `dn.ts`) | Cantitatea e **dovedită** doar dacă tokenul întreg e găsit în textul documentului, are UM-ul alăturat sau UM-ul din antetul coloanei, și nu e diametru sau exponent. **Dovada pe rând** (val 2, PR-A, normalizator `n3`): codul de articol dat de model trebuie să fie un identificator ÎNTREG al liniei cantității, iar Dn-urile din denumire + citat în blocul rândului. Blocul = linia cantității; liniile de dedesubt intră doar dacă lista e certificată pe DOCUMENT ca „denumirea dedesubt” (`orientareDedesubt`: primul articol nu e precedat de „Total=” și fiecare articol are „Total=” propriu înaintea următorului — 212: 507/507, 213: 320/320) și cu delimitare pozitivă: prima linie ne-goală de deasupra rândului (marcajele de pagină sunt transparente) e „Total=” al articolului precedent — antetul, începutul textului sau orice altceva = incert (denumirea poate fi deasupra) → doar linia; un „Total=” pe linia cantității = articol întreg pe linie, iar continuarea se închide în linia „… Total=” a articolului (fără alte litere), max. 4 linii, fără început de articol / linie care începe cu un cod / cantitate în formatul listei „120.000” / linie cu UM / linie goală / pagină nouă între ele). Un cod declarat într-un format nerecunoscut („SA11H1,”, „670 1153”) → `cod_neverificabil`; „fără cod” = gol / „-” / „null” / „n/a”; la tabelul markdown doar linia. Altfel `cod_alt_rand` / `dn_alt_rand` → nedovedit (riscul DN63/DN110). Un Dn în plus pe rând → `dn_ambiguu`. Listele cu denumirea DEASUPRA cantității rămân nedovedite (fail-closed). **Risc rezidual acceptat (decizia Răzvan, 16.10.2026, varianta A):** orientarea listei (denumirea sub sau deasupra articolului) NU se poate dovedi din text — un document construit anume (6 contraexemple sintetice Jakarinos, PR #749 r1–r6) poate trece certificarea; o certificare mai strictă respinge textele reale 212 / 213. De aceea un Dn dovedit DOAR din liniile de sub cantitate e o clasă separată: nota `dn_din_continuare` și `rand_interval` = tot blocul (trece de sfârșitul liniei cantității) — B2 / PR4b le arată separat, cu bifă umană înainte de H2 „gata”. **Soluția de fond (C)**, programată de luni 19.10: orientarea din geometria PDF-ului (`pdftotext -bbox` pe NAS). **Convenția numerică** (`3.995` = 3995 sau 3,995) se ia doar din dovezi tari, pe GRUPUL de părți ale aceluiași PDF. Un token ambiguu → `valoare_ambigua` → cheia `incomplet`. |
 | Pornirea | Prin `fn_ofertare_cb_extragere_incepe_grup` (31b), sub mutexul licitației: documentele `FOR SHARE NOWAIT`, verificarea manifestului de grup, verificarea deciziilor de rol, apoi cererea. |
 | Scrierea | Rezultatul intră în tabelele imuabile `ofertare_cant_extrageri` / `_felii` / `_obs`. |
+| Rândurile nenormalizabile (după proba Răcari, 17.10, extractor `p2`, normalizatorul neschimbat `n3`) | Un rând al modelului care nu se poate normaliza pierde felia („esuat”, reluare doar umană cu `fn_ofertare_cb_felie_reia`), oricare ar fi UM-ul declarat — „UM ≠ m” nu dovedește irelevanța (review Jakarinos #754 r1). Raportul HTTP poartă `mostre` (primele 3 rânduri pierdute / începutul unui răspuns neinterpretabil, trunchiate) — conținut extern, doar pentru diagnoză. Promptul `p2`: citat verbatim, continuu, fără „...”; 16 elemente pe rând; fără totaluri valorice; în C6 doar rândurile în m / ml / km. **Limite cunoscute** (#754 r1–r3, de rezolvat cu geometria PDF — C): (1) ultima celulă de tabel fără „|” de închidere („| M.C. | 0.19”, listele C6) rămâne nedovedită — rolul coloanei (cantitate vs. preț) nu se poate dovedi din text (#754 r1–r2: aliniere după „|” inițial, antete pe mai multe linii, „cost pe unitate de cantitate”); (2) UM-ul vecin poate fi căutat peste capătul liniei (comportament existent; restrângerea lui slăbea oprirea continuării din `blocRand` și transforma `token_multiplu` în dovadă — #754 r3). Orice schimbare a promptului / normalizatorului schimbă `extractor_id` → extragere nouă (cache-ul vechi nu se refolosește). |
+| Extractorul `p3` / `n4` (după re-extragerea p2, 17.10) | p2 a reparat CS (318: 13 / 16 rânduri Dn 90 dovedite) dar a stricat F3 (0 dovedite: citate minuscule și reordonate, „130.000 M”, „0.000 0 Total=”). `p3`: citatul unei liste = linia rândului de la nr. / cod până după cantitate, verbatim; în text = propoziția întreagă; peste 300 de caractere = ultimele caractere continue până după cantitate și UM; exemplu de rând de 16 elemente cu codul și denumirea separate; doar rândurile cu cantitate. `n4`: rândul-OBIECT cu cheile exact din `CAMPURI_RAND` e acceptat (modelul l-a întors pe C7); tabloul cu ≠ 16 elemente e respins (înainte: < 16). Secțiunile `lista_alt` RĂMÂN extrase (review #757 r1: eticheta e euristică — o pagină F3 sau un memoriu o pot moșteni — deci excluderea ar tăia lungimi reale). |
 
 **Comparatorul (`_shared/cantComparator.ts`, PR4a #731; funcții pure, încă nelegat de UI)**
 - **Deduplicarea:** pe valori brute, doar la același (document, sha, offset) cu semantică identică. Orice dezacord → `conflict_sursa`.
@@ -206,15 +208,15 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 - **Amprenta:** canonică.
 - **PR4b**, după proba pe lic. 15: edge-ul „Recalculează”, tab-ul Comparație, view-ul H2.
 
-**Completitudinea (val 2, PR-B1: `_shared/cantAcoperire.ts`, funcții pure, încă nelegate de comparator)**
+**Completitudinea (val 2, PR-B1: `_shared/cantAcoperire.ts`, funcții pure, încă nelegate de comparator) — inventarul independent de rânduri, poarta de completitudine a extractorului A (plan aprobat de Răzvan 17.10)**
 - **Ancorele:** rândurile numerotate (listă) sau de tabel markdown cu o cantitate cu UM real; nu sunt ancore proza, rândurile de total („total” ÎNAINTEA cantității), indicele „[ 2]” și codul numeric al materialului. În tabel, cantitatea e tokenul singur în celulă (nu capitolul „82 M CUB”).
-- **Tabelele și golurile:** șirurile de ancore numerotate; nr. repetat = același articol (rândul de material), reluare de la 1 = tabel nou, numerele lipsă = goluri (recall: rânduri pierdute la citire SAU numerotare care sare în PDF — de verificat).
+- **Tabelele și golurile:** șirurile de ancore numerotate; nr. repetat = același articol (rândul de material), reluare de la 1 = tabel nou, numerele lipsă = goluri (recall: rânduri pierdute la citire SAU numerotare care sare în PDF — de verificat; ex. 171 / 212: 18–19 lipsă în mai multe devize).
 - **Metrica de calitate a recitirii:** ancore + perechi cod+cantitate distincte + goluri (`scripts/recitire_val1/masoara_ancore.ts <texte.csv> [doc]`, read-only). Înlocuiește `cantitati_m` ca semnal.
 - **B2** (următorul): rândurile extrase comparate cu ancorele; golul sau acoperirea sub prag → tabelul „incomplet”. Limită cunoscută: listele de utilaje în ore fără coloană UM (ex. 167) nu au ancore.
 
 | | |
 |---|---|
-| Cine o pornește | **Owner sau responsabilul licitației** (poarta pe cheltuială în edge) și DOAR pe o **cerere** activă (`fn_ofertare_cb_cerere`: owner / responsabil / admin Ofertare). Cererea cere un **plafon** setat de owner (`fn_ofertare_cb_buget_seteaza`, scopul `cant_extragere`, ≤ 100 USD). `x-radar-secret` e refuzat în acest mod. |
+| Cine o pornește | **Owner sau responsabilul licitației** (poarta pe cheltuială în edge, `poarta.ts`) și DOAR pe o **cerere** activă (`fn_ofertare_cb_cerere`: owner / responsabil / admin Ofertare). Cererea cere un **plafon** (`fn_ofertare_cb_buget_seteaza`, scopul `cant_extragere`): owner ≤ 100 USD sau admin Ofertare ≤ 5,00 USD (20261031d; adminul nu atinge un plafon > 5 existent), cu rolul în `ofertare_ai_buget_jurnal.rol`. **Admin Ofertare** (17.10.2026, decizia Răzvan „B”, `poarta_admin.ts`): pornește și el modul structurat, dar DOAR dacă simultan (1) `cerere_id` din corp e o cerere `activa`, nexpirată, a acestei licitații, pe `cant_extragere`; (2) plafonul curent din `ofertare_ai_buget` pe (licitație, `cant_extragere`) e ≤ 5,00 USD — un plafon > 5 e pus de owner, deci adminul e refuzat; (3) bugetul nu e `blocat`. Adminul = aceeași interogare ca `fn_ofertare_cb_este_admin` (`user_module_access` module = `ofertare`, access_level = `admin`), făcută în edge cu clientul service_role, ca `profiles` (funcția SQL nu e apelabilă din API). Cererea și bugetul se citesc cu clientul **utilizatorului** (JWT-ul apelantului): 20261031a revocă service_role pe ele, iar SELECT-ul pentru authenticated are policy `fn_are_acces_ofertare()`, pe care un admin Ofertare o îndeplinește. Limita de 5 USD se verifică doar la pornire: dacă owner-ul ridică plafonul între timp, rularea continuă sub plafonul pus de owner (`fn_ofertare_cb_rezerva` nu cunoaște limita adminului). Un editor Ofertare sau un admin pe alt modul primește refuzul vechi, fără citiri în cereri / buget. Orice citire eșuată = refuz (403, cu `motiv`: `cerere` / `buget_lipsa` / `plafon_peste_admin` / `buget_blocat`). Owner și responsabil: neschimbat. `x-radar-secret` e refuzat în acest mod. |
 | Cost | Fiecare felie e plătită printr-o rezervare atomică în BD (`fn_ofertare_cb_rezerva`, apoi `fn_ofertare_cb_deconteaza` / `_necunoscuta` / `_abandon`). Consumul = decontat + deschis + necunoscut + abandonat. Depășirea rezervării → bugetul `blocat` (deblocare doar de owner). |
 | Ce poate merge prost | Text nevalid → documentul e sărit. Grup schimbat sau ocupat → `grup_schimbat` / `grup_ocupat`, se reia. Felie cu rezultat necunoscut → socotită în consum, reluată doar de om (`fn_ofertare_cb_extragere_redeschide`). Cantități ambigue → `incomplet`, nu se adună. |
 | Revenire | Tabelele sunt imuabile: o extragere nouă (alt sha / extractor) nu șterge istoricul. Migrarea are `supabase/revenire/20261031a_ofertare_cantitati_b_ROLLBACK.sql`, armată. |
@@ -229,7 +231,7 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 | `plansa-citeste` | owner / responsabil | `FELII_PE_RULARE` pe rulare |
 | Laboratorul (`ofertare-citire-test`) | **orice utilizator Ofertare (gaură, de închis după valul 1)** | — |
 | Recitirea valului 1 | chat, cu „da”-ul lui Răzvan, prin laborator | 1,00 USD dur pe val, rezervare 0,53 pe apel |
-| Extragerea cantităților | owner / responsabil, pe cererea activă | plafonul `cant_extragere` (owner), rezervare atomică |
+| Extragerea cantităților | owner / responsabil, pe cererea activă; **admin Ofertare** doar pe cererea activă exactă (`cerere_id`), cu plafonul curent ≤ 5 USD și bugetul neblocat (17.10) | plafonul `cant_extragere` (owner ≤ 100 / admin Ofertare ≤ 5; deblocarea doar owner), rezervare atomică |
 | Arbitrul OCR (partea 2) | client, cu „da” pe sumă | plafonul rulării în BD |
 
 ---
@@ -275,14 +277,17 @@ paritate verificată (fail-closed).
 ### 2.5 Trierea (`triere.py`, #737 / #738)
 | Clasă | Regula | Ce se întâmplă |
 |---|---|---|
-| HIGH_RISK | conținut diferit lângă cifre (număr, UM, semn, cod, coloană), proveniență nestabilită | arbitrul plătit (cascadă) |
+| HIGH_RISK | conținut diferit lângă cifre (număr, UM, semn, cod, coloană), proveniență nestabilită; **sau** diferența fără cifre atinge un termen de material / tehnologie (`TERMENI_MATERIAL`: PEHD/PVC, OL/OȚEL, FONTĂ, BETON, FORAJ/ȘANȚ, MANUAL/MECANIZAT, SUDURĂ, MONTAJ …, cu flexiuni prin rădăcini; „PE” simplu exclus; la rânduri pe perechi de celule (rând cu număr diferit de celule și termen de material = HIGH_RISK); plus calificativ „cu/fără/nu” sau valoare SDR citită ca litere lângă un termen) | arbitrul plătit (cascadă) |
 | DEFER | conținut diferit, nicio cifră (Unicode) la niciun cititor | **restanță** (nu în masă la om) — a doua trecere decisă separat |
 | MARCAJE | conținutul identic, diferă doar marcajele pipeline-ului | om |
 | OM | `structura_tabele`, `banda_intreaga` | om, fără AI |
 `erp arbitreaza --triere` e permis doar în probă (`--max-apeluri`) până la decizia pentru DEFER.
 
 ### 2.6 Arbitrul (`ofertare-ocr-arbitreaza`)
-- **Cascadă** (implicit): Haiku 5.5 pe orice dezacord; Sonnet 5 când Haiku e nesigur sau citirile diferă în cifre. Prompt versionat
+- **Cascadă** (implicit): Haiku 5.5 pe orice dezacord; Sonnet 5.5 (din 17.10; înainte Sonnet 5) când Haiku e nesigur sau citirile diferă în cifre.
+  Gândirea oprită pe model în același corp de cerere: Haiku `disabled`, Sonnet 5.5 `between_tools` (`_shared/gandire.ts`). Același preț
+  (2 / 10) și același tokenizer → aceeași limită de sus a rezervării. `protocol.json` → `modele_admise` = `claude-sonnet-5` (istoric,
+  deciziile deja plătite rămân valabile), `claude-sonnet-5-5`, `claude-haiku-5-5`. Prompt versionat
   (`arb-v3`, #742: regula 10 diacritice); `protocol.json` → `prompt_versiuni_admise` (deciziile plătite pe versiuni vechi rămân valabile).
 - **Poarta de diacritice** (#742, determinist, după decizia finală — Haiku sau Sonnet): dacă cele două citiri diferă doar prin semne
   combinante (detectare LARGĂ: NFD fără `\p{M}`), un `text_propus` e acceptat doar dacă are aceeași bază ca UNA dintre citiri, cu lista
@@ -324,6 +329,7 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | r1 (102), arbitraj complet / doar HIGH_RISK (5.926) | ~57 / ~28 USD | `paw-data/ocrlab/masurare_triere.json` |
 | GPU, Răcari 960 de benzi | LightOn 36 min, MinerU 38 min | noaptea 15→16.10 |
 | cititor_3 (Opus, abonament) | 11–32 s / bandă (mediana 19 s) | 42 de benzi Răcari |
+| Prețuri folosite la rezervare / decontare | Haiku 5.5 0,10 / 0,50 (peste 100k: 0,50 / 2,50); Sonnet 5.5 = Sonnet 5 = 2 / 10 USD pe milion | `_shared/ocrLocal.ts` → `PRETURI` (17.10: Sonnet 5.5 adăugat) |
 
 ### 2.11 Ce poate merge prost și cum se revine
 | Situație | Efect | Revenire |
@@ -334,6 +340,16 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | Plafon atins | rezervarea refuzată | plafon nou doar cu „da” |
 | Apel cu rezultat necunoscut | item → needs_human, socotit la prag | automat la reluare |
 | Migrare | — | `supabase/revenire/*_ROLLBACK.sql`, armată pe tranzacție |
+
+### 2.12 Banca fără om (`banca.py`, unealtă de laborator — nu scrie în BD, nu cheltuie)
+Măsoară cititorii și arbitrul pe zone etichetate pe imagine. Zona = textul dintre două ancore unice agreate de ambii cititori;
+eșantion înghețat (`esantion.json`, hash); `pregateste` copiază imaginea (sha verificat) + ținta; harta zonă ↔ lot stă în `priv/`
+(etichetatorul nu vede id-urile). Etichetare: **A = Opus** (`claude -p --restricted --tools Read`, abonament) — singura folosită;
+B = Astra prin `run_paw jak` (pilot 16.10, NU se extinde — decizia Razvan; auditul invalidează lotul la orice exec/mcp/web).
+Compararea: acord doar dacă ambele etichete sunt „sigur”, cu schema completă, pe ținta EXACTĂ (ancorele verificate față de
+ancorele înghețate; țintele ambigue nu se măsoară); `acord_normalizat` = doar diferențe de format. Intrările și rezultatele sunt legate
+de hash-ul eșantionului: un eșantion rescris = refuz (`leaga` verifică zonă cu zonă băncile vechi). Zonele cu ancora pe același rând
+cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\excluse_ancora.json`.
 
 ---
 
@@ -363,5 +379,12 @@ needs_human nu are text propus. Semnalele (`clasificare_incerta`, cusături) aju
 | 16.10.2026 | #742 (r4) | Poarta deterministă pe `text_propus` la perechile doar de diacritice (Jakarinos r1–r4) |
 | 16.10.2026 | #746 | `fereastra.ts`: coada `pg_net` numărată doar pe cererile spre funcțiile Ofertare + `vercel-relay` (coada globală nu se golea din cauza joburilor altor module) |
 | 16.10.2026 | (acest PR) | Pilotul recitirii: costul confirmat din tokeni la precizia fiecărui tabel (staging `numeric(10,4)` față de `ai_usage_log` `numeric(10,6)`) + `--reconciliaza` pentru o oprire pe „cost neconfirmat” |
+| 16.10.2026 | #721 | Banca fără om (`banca.py`): zone, eșantion înghețat, etichetarea Opus (+ pilotul Astra, neextins), compararea pe ținta înghețată, legătura cu hash-ul eșantionului (Jakarinos r1 design, r2 implementare) |
+| 16.10.2026 | #750 | Trierea: diferențele fără cifre care ating un termen de material / tehnologie trec din DEFER în HIGH_RISK (r1 37/5.973, Răcari 43/3.024; decizia Razvan după observația Gemini; Jakarinos r1–r2: celule, calificative, flexiuni, rânduri cu celule diferite) |
+| 16.10.2026 | (acest PR) | 20261031d: plafonul AI setat și de admin Ofertare (≤ 5 USD; owner ≤ 100), jurnalul pe rol, deblocarea rămâne la owner — decizia Răzvan 16.10 |
 | 16.10.2026 | (acest PR) | Val 2, PR-A: dovada pe rând — codul pe linia cantității, Dn-ul în blocul rândului (`blocRand`, `verificaRand`) |
-| 16.10.2026 | (acest PR) | Val 2, PR-B1: completitudinea tabelelor — ancore, secvența nr. crt., goluri (`_shared/cantAcoperire.ts`) + metrica pe texte (`masoara_ancore.ts`) |
+| 17.10.2026 | (acest PR) | `ofertare-cantitati-extrage`, modul structurat: poarta admin Ofertare (`poarta_admin.ts`) — cerere activă exactă + plafon curent ≤ 5 USD + buget neblocat; owner / responsabil neschimbați; fără migrare, fără drepturi noi — decizia Răzvan 17.10 („B”). r2 (Jakarinos r1): cererea și bugetul citite cu clientul utilizatorului (service_role e revocat pe ele în 31a), testele cu ACL separat pe clienți |
+| 17.10.2026 | (acest PR) | Extractorul `p2` (normalizator `n3` neschimbat) după proba Răcari: citat verbatim, mostre în raport; ultima celulă fără „|” și UM-ul de peste capătul liniei rămân limite cunoscute (C) |
+| 17.10.2026 | (acest PR) | Extractorul `p3` / `n4`: citatul = linia rândului (rânduri lungi: ultimele ≤ 300 caractere până după cantitate), rânduri-obiect cu chei exacte |
+| 17.10.2026 | (acest PR) | Trecerea Sonnet 5 → Sonnet 5.5 (`claude-sonnet-5-5`, același preț 2 / 10, același tokenizer): ingest pe documentele critice, arbitrul OCR (cascada Haiku → Sonnet 5.5; `modele_admise` păstrează `claude-sonnet-5` ca istoric), `document-nou-citeste`, `citire-test` (`sonnet`), worker-ul NAS (`WORKER_MODEL_CORPUS` implicit 5.5; `claude-sonnet-5` venit din env / coadă e mapat la 5.5 în `ofertare-cerinte`). `thinking: disabled` → `between_tools` pe Sonnet 5.5 (`_shared/gandire.ts`); prețurile 3 / 15 greșite corectate la 2 / 10 |
+| 18.10.2026 | (acest PR) | Val 2, PR-B1: inventarul independent de rânduri — ancore, secvența nr. crt., goluri (`_shared/cantAcoperire.ts`) + metrica pe texte (`masoara_ancore.ts`) |

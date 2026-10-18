@@ -79,10 +79,12 @@ Deno.test('cascadă: diferență de cifre → Haiku, apoi Sonnet în același ap
   const it = await itemDeTest({ diferenta_numerica: true })
   const { m, apeluri, cereriApi } = mediu(it, { apiSeq: [{ text: JSON.stringify({ decizie: 'ales_lighton', text: '', motiv: 'virgula', e_cantitate: true, anomalie_separator: true }) }] })
   const r = await arbitreaza(cerere(corpDe(it)), m); const j = await r.json()
-  assert.equal(r.status, 200, JSON.stringify(j)); assert.deepEqual(cereriApi.map((c) => c.model), ['claude-haiku-5-5', 'claude-sonnet-5'])
+  assert.equal(r.status, 200, JSON.stringify(j)); assert.deepEqual(cereriApi.map((c) => c.model), ['claude-haiku-5-5', 'claude-sonnet-5-5'])
+  // 17.10.2026: gandirea oprita PE MODEL — 'disabled' pe Sonnet 5.5 = 400, 'between_tools' pe Haiku = 400; fara sampling pe niciunul
+  assert.deepEqual(cereriApi.map((c) => c.thinking), [{ type: 'disabled' }, { type: 'between_tools' }]); assert.ok(cereriApi.every((c) => !('temperature' in c)))
   assert.equal(cereriApi[1].system, PROMPT); assert.deepEqual(cereriApi[1].messages, cereriApi[0].messages)  // aceleasi date, aceeasi imagine
   const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
-  assert.equal(a.decizie, 'ales_mineru'); assert.equal(a.arbitru_model, 'claude-sonnet-5')
+  assert.equal(a.decizie, 'ales_mineru'); assert.equal(a.arbitru_model, 'claude-sonnet-5-5')
   assert.equal(a.motiv, '[Haiku: ales_lighton, 3000/200 tok, 0.0004$] [Sonnet: ales_mineru, 3000/200 tok, 0.0080$] punct in imagine')
   assert.equal(a.cost_usd, '0.0084'); assert.equal(a.tokens_in, 6000); assert.equal(a.tokens_out, 400)  // 0,0004 Haiku + 0,0080 Sonnet
   assert.equal(fnuri(apeluri).filter((f) => f === 'fn_ofertare_ocr_arbitraj_rezerva').length, 1)        // O singura rezervare
@@ -96,7 +98,7 @@ Deno.test('cascadă: Haiku nesigur (needs_human sau ieșire invalidă) → Sonne
     const { m, apeluri, cereriApi } = mediu(it, { apiSeq: [{ text: primul }] })
     assert.equal((await arbitreaza(cerere(corpDe(it)), m)).status, 200); assert.equal(cereriApi.length, 2)
     const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
-    assert.equal(a.decizie, 'ales_mineru'); assert.equal(a.arbitru_model, 'claude-sonnet-5'); assert.match(a.motiv, /^\[Haiku: needs_human, 3000\/200 tok, 0\.0004\$\] \[Sonnet: /)
+    assert.equal(a.decizie, 'ales_mineru'); assert.equal(a.arbitru_model, 'claude-sonnet-5-5'); assert.match(a.motiv, /^\[Haiku: needs_human, 3000\/200 tok, 0\.0004\$\] \[Sonnet: /)
   }
 })
 
@@ -108,7 +110,7 @@ Deno.test('cascadă: eroare API / rețea la Sonnet după Haiku → decontare fai
     assert.equal(r.status, 200, JSON.stringify(j)); assert.equal(cereriApi.length, 2); assert.equal(j.decizie.decizie, 'needs_human')
     const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
     const rez = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_rezerva')!.args.p_suma
-    assert.equal(a.decizie, 'needs_human'); assert.equal(a.text, ''); assert.equal(a.arbitru_model, 'claude-sonnet-5')
+    assert.equal(a.decizie, 'needs_human'); assert.equal(a.text, ''); assert.equal(a.arbitru_model, 'claude-sonnet-5-5')
     assert.match(a.motiv, /^\[Haiku: ales_mineru, 3000\/200 tok, 0\.0004\$\] \[Sonnet: esuat \(.+\), cost estimat 0\.\d{4}\$\] la om$/)
     assert.equal(a.tokens_in, 3000); assert.ok(Number(a.cost_usd) > 0.0004 && Number(a.cost_usd) <= rez, a.cost_usd)  // decontat in rezervare
     assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_arbitraj_depasire'))
@@ -119,8 +121,10 @@ Deno.test('cascadă: diferența de cifre RECALCULATĂ din BD — marcajul fals a
   const it = await itemDeTest({ citire_lighton: 'lungime 10 m', citire_mineru: 'lungime 20 m', diferenta_numerica: false })
   const { m, apeluri, cereriApi } = mediu(it)
   assert.equal((await arbitreaza(cerere(corpDe(it)), m)).status, 200)
-  assert.deepEqual(cereriApi.map((c) => c.model), ['claude-haiku-5-5', 'claude-sonnet-5'])
-  assert.equal(apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj.arbitru_model, 'claude-sonnet-5')
+  assert.deepEqual(cereriApi.map((c) => c.model), ['claude-haiku-5-5', 'claude-sonnet-5-5'])
+  // 17.10.2026: gandirea oprita PE MODEL — 'disabled' pe Sonnet 5.5 = 400, 'between_tools' pe Haiku = 400; fara sampling pe niciunul
+  assert.deepEqual(cereriApi.map((c) => c.thinking), [{ type: 'disabled' }, { type: 'between_tools' }]); assert.ok(cereriApi.every((c) => !('temperature' in c)))
+  assert.equal(apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj.arbitru_model, 'claude-sonnet-5-5')
   // si invers: marcajul clientului „true” pe citiri fara cifre diferite tot escaladeaza (mai strict, niciodata mai putin)
   const it2 = await itemDeTest({ citire_lighton: 'masuri de protecție', citire_mineru: 'masuri de protectie', diferenta_numerica: true })
   const e = mediu(it2); assert.equal((await arbitreaza(cerere(corpDe(it2)), e.m)).status, 200); assert.equal(e.cereriApi.length, 2)
@@ -142,7 +146,7 @@ Deno.test('cascadă: usage lipsă la Haiku → cost estimat marcat in motiv, Son
   const { m, apeluri } = mediu(it, { apiSeq: [{ usage: null }] })
   assert.equal((await arbitreaza(cerere(corpDe(it)), m)).status, 200)
   const a = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_scrie_arbitraj')!.args.p_arbitraj
-  assert.equal(a.arbitru_model, 'claude-sonnet-5'); assert.match(a.motiv, /^\[Haiku: needs_human, usage lipsa, cost estimat 0\.\d{4}\$\] \[Sonnet: ales_mineru, 3000\/200 tok/)
+  assert.equal(a.arbitru_model, 'claude-sonnet-5-5'); assert.match(a.motiv, /^\[Haiku: needs_human, usage lipsa, cost estimat 0\.\d{4}\$\] \[Sonnet: ales_mineru, 3000\/200 tok/)
 })
 
 Deno.test('motivul taiat pe puncte de cod: nicio pereche surogat rupta in parametrul jsonb (Jakarinos cascada r2 P1)', async () => {
@@ -161,7 +165,7 @@ Deno.test('cascadă: depășire produsă doar de Sonnet → RPC de depășire cu
   const r = await arbitreaza(cerere(corpDe(it)), m)
   assert.equal(r.status, 500); assert.equal(cereriApi.length, 2)
   const dp = apeluri.find((x) => x.fn === 'fn_ofertare_ocr_arbitraj_depasire')!.args
-  assert.equal(dp.p_model, 'claude-sonnet-5'); assert.equal(dp.p_tokens_in, 403000); assert.equal(dp.p_tokens_out, 1200)
+  assert.equal(dp.p_model, 'claude-sonnet-5-5'); assert.equal(dp.p_tokens_in, 403000); assert.equal(dp.p_tokens_out, 1200)
   assert.equal(dp.p_cost_real, 0.8104)                                                          // 0,0004 Haiku + 0,8100 Sonnet
   assert.ok(!fnuri(apeluri).includes('fn_ofertare_ocr_scrie_arbitraj'))
 })

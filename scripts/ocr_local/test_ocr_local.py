@@ -592,8 +592,9 @@ class Comparare(unittest.TestCase):
         # versiunea curenta = ultima admisa; cele vechi raman admise doar ca istoric (deciziile deja platite raman valabile):
         # arb-v1 -> arb-v2 (15.10.2026) -> arb-v3 (16.10.2026, regula 10 diacritice)
         self.assertEqual(pol['prompt_versiuni_admise'], ['arb-v1', 'arb-v2', _re.search(r"PROMPT_VERSIUNE = '([^']+)'", ts).group(1)])
-        # cascada (15.10.2026): modelele admise = exact cele doua din edge (filtrul Haiku + arbitrul Sonnet), in aceasta ordine
-        self.assertEqual(pol['modele_admise'], [_re.search(r"MODEL_ARBITRU = '([^']+)'", ts).group(1), _re.search(r"MODEL_FILTRU = '([^']+)'", ts).group(1)])
+        # cascada (15.10.2026): modelele admise = cele doua din edge (arbitrul Sonnet + filtrul Haiku), in aceasta ordine, precedate de
+        # istoric: claude-sonnet-5 (arbitrul pana la 17.10.2026; deciziile deja platite pe el raman valabile, ca arb-v1)
+        self.assertEqual(pol['modele_admise'], ['claude-sonnet-5', _re.search(r"MODEL_ARBITRU = '([^']+)'", ts).group(1), _re.search(r"MODEL_FILTRU = '([^']+)'", ts).group(1)])
     def test_cifre_edge_identice(self):
         # cascada (15.10): edge-ul recalculeaza diferenta de cifre din BD (diferentaNumerica in TS); fisierul de paritate e corect in Python
         from .compare import numeric_diff
@@ -878,6 +879,48 @@ class Triere(unittest.TestCase):
         a2 = self.tab(['<td>1</td>', '<td>Teava</td>', '<td>10</td>', '<td></td>'])
         b2 = self.tab(['<td>1</td>', '<td>Teava</td>', '<td></td>', '<td>10</td>'])
         self.assertEqual(self._cls(a2, b2)[0], ['HIGH_RISK'])
+    def test_material_tehnologie_fara_cifre_high(self):
+        # decizia Razvan 16.10.2026: material / tehnologie diferit fara cifre schimba incadrarea cantitatii -> HIGH_RISK
+        self.assertEqual(self._cls('Conducta din PEHD ingropata.', 'Conducta din PVC ingropata.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Executie prin foraj orizontal dirijat.', 'Executie prin sant deschis.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Săpătură manuală în teren.', 'Săpătură mecanizată în teren.')[0], ['HIGH_RISK'])
+        a = self.tab(['<td>Teava</td>', '<td>OTEL</td>']); b = self.tab(['<td>Teava</td>', '<td>FONTA</td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+    def test_material_cazurile_jakarinos_750_r1(self):
+        # materiale inversate intre celule: nu se anuleaza pe rand
+        a = self.tab(['<td>Conducta principala PEHD</td>', '<td>Conducta secundara PVC</td>'])
+        b = self.tab(['<td>Conducta principala PVC</td>', '<td>Conducta secundara PEHD</td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+        # termen identic, calificativ diferit
+        self.assertEqual(self._cls('Conducta cu sudura in teren.', 'Conducta fara sudura in teren.')[0], ['HIGH_RISK'])
+        # flexiuni
+        self.assertEqual(self._cls('Sapaturi manuale in teren.', 'Sapaturi mecanizate in teren.')[0], ['HIGH_RISK'])
+        self.assertEqual(self._cls('Indepartarea betonului de pe traseu.', 'Indepartarea asfaltului de pe traseu.')[0], ['HIGH_RISK'])
+        from .triere import termeni_material
+        self.assertEqual(termeni_material('verificarea sudurii', 'verificarea'), ['SUDURII'])
+        # SDR cu valoarea citita ca litere
+        self.assertEqual(self._cls('Teava PEHD SDR ll gaze.', 'Teava PEHD SDR lI gaze.')[0], ['HIGH_RISK'])
+        # „santier” nu e „sant”
+        self.assertEqual(termeni_material('organizare de santier', 'organizare de santer'), [])
+    def test_material_cazurile_jakarinos_750_r2(self):
+        # delimitarea celulelor pierduta la un cititor: materialele mutate nu se anuleaza
+        a = self.tab(['<td>Conducta principala PEHD</td>', '<td>Conducta secundara PVC</td>'])
+        b = self.tab(['<td>Conducta principala PVC Conducta secundara PEHD</td>'])
+        self.assertEqual(self._cls(a, b)[0][-1], 'HIGH_RISK')
+        # calificativ in alta celula decat termenul
+        a = self.tab(['<td>Sudura</td>', '<td>cu</td>']); b = self.tab(['<td>Sudura</td>', '<td>fara</td>'])
+        self.assertEqual(self._cls(a, b)[0], ['HIGH_RISK'])
+        from .triere import termeni_material
+        self.assertEqual(termeni_material('montare conducta', 'conducta'), ['MONTARE'])
+        self.assertEqual(termeni_material('sudare cap la cap', 'cap la cap'), ['SUDARE'])
+        self.assertEqual(termeni_material('refacerea santurilor', 'refacerea'), ['SANTURILOR'])
+    def test_material_doar_daca_e_in_diferenta(self):
+        # termenul identic la ambii cititori nu muta itemul; „pe” (prepozitie) nu e termen
+        self.assertEqual(self._cls('Conducta din PEHD este pozata.', 'Conducta din PEHD este pozala.')[0], ['DEFER'])
+        self.assertEqual(self._cls('Se aseaza pe pat de nisip.', 'Se aseaza pa pat de nisip.')[0], ['DEFER'])
+        from .triere import termeni_material
+        self.assertEqual(termeni_material('țeavă oțel', 'teava OTEL'), [])  # diacriticele / majusculele nu fac diferenta
+        self.assertEqual(termeni_material('PEHD', 'PVC'), ['PEHD', 'PVC'])
     def test_text_fara_numere_defer_si_cu_numere_high(self):
         self.assertEqual(self._cls('Lungimea conductei este mare.', 'Lungimea conductel este mare.')[0], ['DEFER'])
         self.assertEqual(self._cls('Lungimea este 10 m.', 'Lungimea este 16 m.')[0], ['HIGH_RISK'])

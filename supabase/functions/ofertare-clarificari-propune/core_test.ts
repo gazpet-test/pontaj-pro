@@ -2,7 +2,7 @@
 // R5 (Copilot 25.09.2026): cantitățile nevalidate nu pleacă spre model ca valori „din listă" / aprobate.
 // Fixture = rândul REAL 1751 al lic. 95 (SELECT pe ofertare_cantitati, 25.09.2026).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
-import { propuneClarificari, randCantitatePentruAI, sectiuneConflictePlanse } from './core.ts'
+import { MODEL_IMPLICIT, MODELE, modelCerut, propuneClarificari, randCantitatePentruAI, sectiuneConflictePlanse } from './core.ts'
 import { cuPoartaLot } from '../_test/poarta_lot.ts'
 
 Deno.test('F02: generatorul persistă propunere, fără aprobare implicită', async () => {
@@ -322,4 +322,9 @@ Deno.test('proveniență r5: propunerea nouă se scrie cu surse_cerinte_ids + su
     await propuneClarificari(supa, { licitatie_id: 95 })
     assertEquals([scrise[0].surse_cerinte_ids, scrise[0].surse_document_ids, scrise[0].surse_cantitati_ids], [[1, 2], [10, 20], [7]])
   } finally { globalThis.fetch = vechi }
+})
+
+Deno.test('model (17.10.2026): implicit Sonnet 5.5 la 2/10 $ (nu 3/15); „claude-sonnet-5” din coadă → 5.5; Opus 5 rămâne', () => {
+  assertEquals(MODEL_IMPLICIT, 'claude-sonnet-5-5'); assertEquals(MODELE['claude-sonnet-5-5'], { in: 2 / 1e6, out: 10 / 1e6 })
+  assertEquals([modelCerut('claude-sonnet-5'), modelCerut('claude-opus-5'), modelCerut(undefined), modelCerut('x')], ['claude-sonnet-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5'])
 })

@@ -2,7 +2,7 @@ import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { aplicaDecizii, type DepsStructurat, EXTRACTOR_ID, extractorCuContext, extrageStructurat, radacinaParte, sumaRezervata } from './structurat.ts'
 import { feliiCuPozitie, FELIE, SUPRAPUNERE } from './sectiuni.ts'
 
-const TEXT_F3 = 'Formularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. Platanului\n003 SA11G1 [ 2] M 1160.000\nTEAVA PVC ... DISTRIBUTIE D= 90 MM\n0.000 0 Total=\n'
+const TEXT_F3 = 'Formularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. Platanului\n= NR. SIMBOL ART. CANTITATE UM =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 1160.000\nTEAVA PVC ... DISTRIBUTIE D= 90 MM\n0.000 0 Total=\n'
 const RAND = [null, null, null, 'SA11G1', 'TEAVA PVC ... DISTRIBUTIE D= 90 MM', 'Str. Platanului', 'PVC', 'D= 90 MM', null, 'M', '1160.000', 0, 0,
   'conducta', 'lungime', '003 SA11G1 [ 2] M 1160.000']
 const ACUM = new Date(Date.now() + 3600e3).toISOString()
@@ -103,9 +103,69 @@ Deno.test('eroare SAU excepție la apel → rezervarea „necunoscuta” + felia
 
 Deno.test('un rând nenormalizabil → felia „esuat”, fără observații (nu „gata” cu un candidat pierdut)', async () => {
   const f = fals({ raspuns: JSON.stringify({ r: [RAND, ['trunchiat']] }) })
-  await RULEAZA(f)
+  const r = await RULEAZA(f)
   assertEquals(f.apeluri, ['extragere_incepe_grup', 'felie_incepe', 'rezerva', 'deconteaza', 'felie_inchide:esuat', 'extragere_inchide:esuat'])
   assertEquals(f.obs(), [])
+  // proba Răcari: raportul poartă mostre din rândurile pierdute (diagnoză)
+  const er = (r.body as any).raport.find((x: any) => x.eroare)
+  assertEquals([er.mostre.length, er.mostre[0]], [1, '["trunchiat"]'])
+})
+Deno.test('proba Răcari r2: orice rând nenormalizabil pierde felia, oricare ar fi UM-ul declarat (fără „irelevant” nedovedit); mostre ≤ 3, ≤ 240', async () => {
+  const fara = (um: string | null) => [null, null, null, '2100402', 'CIMENT METALURGIC ' + 'X'.repeat(300), null, null, null, null, um, '77.50', 0, 0, 'alt', 'material', null]
+  for (const um of ['KG', 'M.C.', 'RON', 'BUC.', 'm.liniar', 'N/A', 'M', null]) {
+    const f = fals({ raspuns: JSON.stringify({ r: [RAND, fara(um), fara(um), fara(um), fara(um)] }) })
+    const r = await RULEAZA(f)
+    assertEquals(f.apeluri.slice(-2), ['felie_inchide:esuat', 'extragere_inchide:esuat'], String(um))
+    const er = (r.body as any).raport.find((x: any) => x.eroare)
+    assertEquals([er.eroare.startsWith('4 rânduri'), er.mostre.length, er.mostre.every((m: string) => m.length <= 240)], [true, 3, true], String(um))
+  }
+})
+Deno.test('review r4 (P2): un rând neserializabil (imbricare adâncă) nu întrerupe închiderea feliei — esuat + mostra de rezervă', async () => {
+  const f = fals({ raspuns: '{"r":[' + '['.repeat(10000) + '0' + ']'.repeat(10000) + ']}' })
+  const r = await RULEAZA(f)
+  assertEquals(f.apeluri.slice(-2), ['felie_inchide:esuat', 'extragere_inchide:esuat'])
+  const er = (r.body as any).raport.find((x: any) => x.eroare)
+  assert(er.mostre.length === 1 && er.mostre[0].length <= 240)
+})
+Deno.test('p3: rândul-OBIECT cu cheile exacte = rândul tablou; obiect cu cheie străină / tablou de 15 sau 17 elemente → pierde felia', async () => {
+  const obiect = Object.fromEntries(['pagina', 'tabel', 'rand', 'cod_articol', 'denumire', 'obiect', 'material', 'dn_text', 'sdr', 'um', 'cantitate',
+    'e_total', 'e_subtotal', 'tip_lucrare', 'masura', 'citat'].map((k, i) => [k, RAND[i]]))
+  const a = fals({ raspuns: JSON.stringify({ r: [obiect] }) })
+  await RULEAZA(a)
+  assertEquals([a.apeluri.slice(-2), a.obs().length, a.obs()[0]?.cantitate], [['felie_inchide:gata', 'extragere_inchide:gata'], 1, 1160])
+  // observația completă (inclusiv pozitie_dovedita, intervale, hash_rand) e identică cu cea din rândul tablou
+  const t = fals({ raspuns: JSON.stringify({ r: [RAND] }) })
+  await RULEAZA(t)
+  assertEquals(a.obs(), t.obs())
+  for (const rau of [{ ...obiect, ore: 3 }, RAND.slice(1), [...RAND, null]]) {
+    const f = fals({ raspuns: JSON.stringify({ r: [RAND, rau] }) })
+    await RULEAZA(f)
+    assertEquals(f.apeluri.slice(-2), ['felie_inchide:esuat', 'extragere_inchide:esuat'], JSON.stringify(rau).slice(0, 40))
+  }
+})
+Deno.test('review #757 r1 (P1): secțiunile lista_alt (C7 …) rămân extrase — eticheta euristică nu dovedește absența lungimilor', async () => {
+  const text = 'Formularul F3\nLista cu cantitatile de lucrari\n= NR =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n003 SA11G1 [ 2] M 1160.000\nTEAVA D= 90 MM\n0.000 0 Total=\n' +
+    '⟦PAGINA 9⟧\nFORMULAR C7\nLista consumurilor cu mana de lucru\n1 | 102 BETONIST | om-ore | 6.740\n'
+  const f = fals({ docs: [{ ...DOC, text_extras: text }] })
+  await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri.filter((x) => x === 'felie_incepe').length], [2, 2])
+})
+Deno.test('review #757 r1 (P2): rând de listă > 300 caractere — citatul = ultimele ≤ 300 caractere continue până după cantitate → dovedit', async () => {
+  const den = 'TEAVA PVC NEPLASTIF.TIP G MONT.LA CONSTR.INDUSTR. IN CONDUCTE DE DISTRIBUTIE '.repeat(4)
+  const linie = `003 SA11G1 ${den}D= 90 MM [ 2] M 1160.000`
+  const text = `Formularul F3\nLista cu cantitatile de lucrari\n= NR =\n002 GD11A1 [ 1] M.C. 174.000\nDRENAJ\n0.000 0 Total=\n${linie}\n0.000 0 Total=\n`
+  assert(linie.length > 300)
+  const citat = linie.slice(linie.length - 300)
+  const rand = [null, null, null, 'SA11G1', 'TEAVA PVC D= 90 MM', 'Str. A', 'PVC', 'D= 90 MM', null, 'M', '1160.000', 0, 0, 'conducta', 'lungime', citat]
+  const f = fals({ docs: [{ ...DOC, text_extras: text }], raspuns: JSON.stringify({ r: [rand] }) })
+  await RULEAZA(f)
+  assertEquals([f.obs()[0]?.pozitie_dovedita, f.obs()[0]?.cantitate], [true, 1160])
+})
+Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n4', async () => {
+  const f = fals({ raspuns: 'nu e JSON' })
+  const r = await RULEAZA(f)
+  assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
+  assert(EXTRACTOR_ID.includes('@p3@n4@f1'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {

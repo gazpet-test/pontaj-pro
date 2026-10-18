@@ -21,7 +21,7 @@ type Model = { id: string; in: number; out: number; prag?: number; peste?: { in:
 const MODELE: Record<string, Model> = {
   haiku: { id: 'claude-haiku-4-5-20251001', in: 1 / 1e6, out: 5 / 1e6 },
   haiku55: { id: 'claude-haiku-5-5', in: 0.10 / 1e6, out: 0.50 / 1e6, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 }, faraGandire: true },
-  sonnet: { id: 'claude-sonnet-5', in: 2 / 1e6, out: 10 / 1e6 },
+  sonnet: { id: 'claude-sonnet-5-5', in: 2 / 1e6, out: 10 / 1e6 },  // Sonnet 5.5 (17.10.2026), același preț ca Sonnet 5
   opus: { id: 'claude-opus-5', in: 5 / 1e6, out: 25 / 1e6 },
 }
 const costApel = (M: Model, tin: number, tout: number) => {

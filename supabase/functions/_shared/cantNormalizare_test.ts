@@ -1,5 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1'
 import { materialNorm, normalizeazaRand, obiectCheie, paginaLa, randDinTablou, tipSiMasura, umNorm } from './cantNormalizare.ts'
+import { orientareDedesubt } from './cantNumar.ts'
 
 Deno.test('UM: ml → m; M.C. → mc; BOC. → buc', () => {
   assertEquals([umNorm('ml'), umNorm('M'), umNorm('M.C.'), umNorm('BOC.'), umNorm('')], ['m', 'm', 'mc', 'buc', null])
@@ -24,8 +25,10 @@ Deno.test('pagina din markerul ⟦PAGINA n⟧ dinaintea offsetului', () => {
   const t = '⟦PAGINA 4⟧\nabc\n⟦PAGINA 5⟧\nxyz'
   assertEquals([paginaLa(t, 13), paginaLa(t, t.indexOf('xyz')), paginaLa('fara', 2)], [4, 5, null])
 })
+// lista F3 certificată (orientareDedesubt): antet + un articol complet înaintea articolului testat
+const PRE = '= NR. SIMBOL ART. =\n000 X0A0 M 1.000\nALT ARTICOL\n0.000 0 Total=\n'
 Deno.test('rândul Răcari F3 → observație dovedită, Dn 90, 570 m (convenția EN a listei)', async () => {
-  const felie = '⟦PAGINA 12⟧\n003 SA11G1 [ 2] M 570.000\nTEAVA PVC NEPLASTIF.TIP G MONT.LA\nCONSTR.INDUSTR. IN CONDUCTE DE\nDISTRIBUTIE D= 90 MM\n0.000 0 Total=\n'
+  const felie = '⟦PAGINA 12⟧\n' + PRE + '003 SA11G1 [ 2] M 570.000\nTEAVA PVC NEPLASTIF.TIP G MONT.LA\nCONSTR.INDUSTR. IN CONDUCTE DE\nDISTRIBUTIE D= 90 MM\n0.000 0 Total=\n'
   const r = randDinTablou([12, 'F3 obiect 4', null, 'SA11G1', 'TEAVA PVC NEPLASTIF.TIP G ... DISTRIBUTIE D= 90 MM', 'Str. Platanului', 'PVC', 'D= 90 MM',
     null, 'M', 570, 0, 0, 'conducta', 'lungime', '003 SA11G1 [ 2] M 570.000'])!
   const n = (await normalizeazaRand(r, { textDoc: felie, felie, felie_de_la: 0, conventie: 'en', lot_domeniu: 'toate', lot_nr: [],
@@ -70,7 +73,7 @@ Deno.test('r1: mai multe Dn propuse de model → dn_ambiguu, dn_model null', asy
 })
 
 // ── val 2, PR-A: dovada pe rând (codul pe linia cantității, Dn-ul în blocul rândului) ──
-const F3 = '⟦PAGINA 3⟧\n001 SA11D1 [ 2] M 300.000\nTEAVA PVC ... DE DISTRIBUTIE D= 63 MM\n0.000 0 Total=\n' +
+const F3 = '⟦PAGINA 3⟧\n' + PRE + '001 SA11D1 [ 2] M 300.000\nTEAVA PVC ... DE DISTRIBUTIE D= 63 MM\n0.000 0 Total=\n' +
   '002 SA11H1 [ 2] M 120.000\nTEAVA PVC ... DE DISTRIBUTIE D= 110 MM\n0.000 0 Total=\n'
 const ctxF3 = { textDoc: F3, felie: F3, felie_de_la: 0, conventie: 'en' as const, lot_domeniu: 'toate' as const, lot_nr: [], rol_sursa: 'f3', rol_decis_de: 'antet' as const }
 const randF3 = (cod: string | null, den: string, cant: number, citat: string) =>
@@ -132,10 +135,10 @@ Deno.test('PR-A r2: continuarea fără linia „Total=” a articolului (sfârș
   }
 })
 Deno.test('PR-A r2: codul ca identificator întreg — SA11G1 ≠ SA11G10; „SA11G1M” nu se fabrică din „SA11G1 M”; cod cu spații → nedovedit', async () => {
-  const t = '001 SA11G10 [ 2] M 300.000\nTEAVA PVC D= 63 MM\n0.000 0 Total=\n'
+  const t = PRE + '001 SA11G10 [ 2] M 300.000\nTEAVA PVC D= 63 MM\n0.000 0 Total=\n'
   const a = (await normalizeazaRand(randF3('SA11G1', 'TEAVA PVC D= 63 MM', 300, '001 SA11G10 [ 2] M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
   assertEquals([a.obs.pozitie_dovedita, a.note.includes('pozitie:cod_alt_rand')], [false, true])
-  const u = '001 SA11G1 M 300.000\nTEAVA PVC D= 63 MM\n0.000 0 Total=\n'
+  const u = PRE + '001 SA11G1 M 300.000\nTEAVA PVC D= 63 MM\n0.000 0 Total=\n'
   const b = (await normalizeazaRand(randF3('SA11G1M', 'TEAVA PVC D= 63 MM', 300, '001 SA11G1 M 300.000'), { ...ctxF3, textDoc: u, felie: u }))!
   assertEquals(b.obs.pozitie_dovedita, false)
   const c = (await normalizeazaRand(randF3('SA11 G1', 'TEAVA PVC D= 63 MM', 300, '001 SA11G1 M 300.000'), { ...ctxF3, textDoc: u, felie: u }))!
@@ -155,7 +158,7 @@ Deno.test('PR-A r3: articolul următor fără nr. și fără UM, cu „Total=”
   assertEquals(m.obs.pozitie_dovedita, false)
 })
 Deno.test('PR-A r3: cod declarat în format nerecunoscut („SA11H1,”, „SA11H1[2]”, „670 1153”) → nedovedit (cod_neverificabil)', async () => {
-  const t = '001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 0 Total=\n'
+  const t = PRE + '001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 0 Total=\n'
   for (const cod of ['SA11H1,', 'SA11H1[2]', '670 1153']) {
     const n = (await normalizeazaRand(randF3(cod, 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
     assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:cod_neverificabil')], [false, true], cod)
@@ -163,11 +166,76 @@ Deno.test('PR-A r3: cod declarat în format nerecunoscut („SA11H1,”, „SA11
   const ok = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
   assertEquals(ok.obs.pozitie_dovedita, true)
 })
+Deno.test('PR-A r4: deasupra cantității e o denumire (nu „Total=” / pagină / antet / început) → continuarea nu se acceptă → nedovedit', async () => {
+  for (const linie of ['TEAVA PVC DN110 120', 'TEAVA PVC DN110 120.00', 'TEAVA PVC DN110 120,000', 'TEAVA PVC DN110\nSA11H1, 120', 'TEAVA PVC DN110\nSA11H1[2] 120']) {
+    const t = `TEAVA PVC DN63\n001 SA11D1 M 300.000\n${linie}\n0.000 0 Total=\n`
+    const n = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN110', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
+    assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true], linie)
+  }
+  // același rând cu „Total=” al articolului precedent deasupra, cu linie goală între: aranjamentul e sigur → dovedit
+  const ok = '000 X1A1 M 5.000\nALT ARTICOL\n0.000 0 Total=\n\n001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 0 Total=\n'
+  const m = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: ok, felie: ok }))!
+  assertEquals(m.obs.pozitie_dovedita, true)
+  // linia de total cu o glifă citită greșit („0.000 ✓ 0 Total=”) rămâne linie de total (deasupra și dedesubt)
+  const gl = '= NR =\n000 X0A0 M 1.000\nALT\n0.000 ✓ 0 Total=\n001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 ✓ 0 Total=\n'
+  const g = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: gl, felie: gl }))!
+  assertEquals(g.obs.pozitie_dovedita, true)
+  // r5: antetul listei sau începutul textului NU certifică orientarea → primul articol rămâne pe linia lui (aici: nedovedit)
+  for (const sus of ['= NR. SIMBOL ART. CANTITATE UM =\n', '']) {
+    const ant = `${sus}001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 0 Total=\n`
+    const a = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: ant, felie: ant }))!
+    assertEquals(a.obs.pozitie_dovedita, false, JSON.stringify(sus))
+  }
+})
+Deno.test('PR-A r5: marcajul de pagină e transparent — denumirea de pe pagina precedentă împiedică continuarea; „Total=” pe linia cantității o oprește', async () => {
+  for (const linie of ['TEAVA PVC DN110 120', 'TEAVA PVC DN110 120.00', 'TEAVA PVC DN110 120,000', 'TEAVA PVC DN110\nSA11H1, 120', 'TEAVA PVC DN110\nSA11H1[2] 120']) {
+    for (const cant of ['001 SA11D1 M 300.000', '001 SA11D1 M 300.000 0.000 0 Total=']) {
+      const t = `TEAVA PVC DN63\n⟦PAGINA 4⟧\n${cant}\n${linie}\n0.000 0 Total=\n`
+      const n = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN110', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
+      assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true], `${cant} / ${linie}`)
+    }
+  }
+  // „Total=” al articolului precedent pe pagina anterioară, marcajul între ele → aranjamentul e sigur → dovedit
+  const ok = PRE + '⟦PAGINA 4⟧\n001 SA11D1 M 300.000\nTEAVA PVC DN63\n0.000 0 Total=\n'
+  const m = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN63', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: ok, felie: ok }))!
+  assertEquals(m.obs.pozitie_dovedita, true)
+})
 Deno.test('PR-A r3: formatele reale din textul 212 rămân dovedite (articol + material, denumire fără prețuri)', async () => {
-  const t = '003 SA11G1 [ 2] M 1160.000\nTEAVA PVC NEPLASTIF.TIP G MONT.LA CONSTR.INDUSTR. IN CONDUCTE DE DISTRIBUTIE D= 90 MM\n0.000 0 Total=\n' +
+  const t = PRE + '003 SA11G1 [ 2] M 1160.000\nTEAVA PVC NEPLASTIF.TIP G MONT.LA CONSTR.INDUSTR. IN CONDUCTE DE DISTRIBUTIE D= 90 MM\n0.000 0 Total=\n' +
     '003 6701152 M 1160.000\n@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.2 COD 64000115\n0.003 3 Total=\n'
   const ctx = { ...ctxF3, textDoc: t, felie: t }
   const a = (await normalizeazaRand(randF3('SA11G1', 'TEAVA PVC D= 90 MM', 1160, '003 SA11G1 [ 2] M 1160.000'), ctx))!
   const b = (await normalizeazaRand(randF3('6701152', 'TV HDPE80 DN 90X8.2', 1160, '003 6701152 M 1160.000'), ctx))!
   assertEquals([a.obs.pozitie_dovedita, a.obs.dn_mm, b.obs.pozitie_dovedita, b.obs.dn_mm], [true, [90], true, [90]])
+})
+
+// ── review Jakarinos r5 (P1): orientarea certificată pe document ──
+Deno.test('PR-A r6: „denumire → Total= → articol” repetat (denumirea DEASUPRA) → lista necertificată → nedovedit', async () => {
+  const t = 'TEAVA PVC DN63\n0.000 0 Total=\n001 SA11D1 M 300.000\nTEAVA PVC DN110\n0.000 0 Total=\n002 SA11H1 M 120.000\n'
+  assertEquals(orientareDedesubt(t), false)
+  const n = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN110', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: t, felie: t }))!
+  assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true])
+  // chiar cu antet înainte (condiția a) trece), ultimul articol n-are „Total=” propriu (condiția b) pică) → necertificat
+  const u = '= NR =\n' + t
+  assertEquals(orientareDedesubt(u), false)
+  const m = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC DN110', 300, '001 SA11D1 M 300.000'), { ...ctxF3, textDoc: u, felie: u }))!
+  assertEquals(m.obs.pozitie_dovedita, false)
+})
+Deno.test('decizia A (Răzvan 16.10): Dn dovedit doar din continuare → nota dn_din_continuare + rand_interval = tot blocul; Dn pe linie → fără notă', async () => {
+  const t = PRE + '001 SA11D1 M 300.000\nTEAVA PVC D= 63 MM\n0.000 0 Total=\n002 SA11H1 M 120.000 TEAVA PVC D= 110 MM\n0.000 0 Total=\n'
+  const ctx = { ...ctxF3, textDoc: t, felie: t }
+  const a = (await normalizeazaRand(randF3('SA11D1', 'TEAVA PVC D= 63 MM', 300, '001 SA11D1 M 300.000'), ctx))!
+  const de = t.indexOf('001 SA11D1'), pana = t.indexOf('\n0.000 0 Total=', de)
+  assertEquals([a.obs.pozitie_dovedita, a.note.includes('dn_din_continuare'), a.obs.rand_interval], [true, true, `[${de},${pana})`])
+  const b = (await normalizeazaRand(randF3('SA11H1', 'TEAVA PVC D= 110 MM', 120, '002 SA11H1 M 120.000'), ctx))!
+  const de2 = t.indexOf('002 SA11H1')
+  assertEquals([b.obs.pozitie_dovedita, b.note.includes('dn_din_continuare'), b.obs.rand_interval],
+    [true, false, `[${de2},${t.indexOf('\n', de2)})`])
+})
+Deno.test('PR-A r6: orientareDedesubt — certificată doar cu primul articol fără total deasupra și cu total propriu pentru fiecare articol', () => {
+  const bun = '= NR =\n001 A1B1 M 1.000\nX\n0.000 0 Total=\n\n⟦PAGINA 2⟧\n002 A1B2 M 2.000 Y 0.000 0 Total=\n003 A1B3 M 3.000\nZ\n0.000 ✓ 0 Total=\n'
+  assertEquals(orientareDedesubt(bun), true)
+  assertEquals(orientareDedesubt(bun.replace('0.000 ✓ 0 Total=\n', '')), false)          // ultimul articol fără total
+  assertEquals(orientareDedesubt('0.000 0 Total=\n⟦PAGINA 1⟧\n' + bun.slice('= NR =\n'.length)), false)   // total (prin pagină) deasupra primului articol
+  assertEquals(orientareDedesubt('fără articole\n'), false)
 })

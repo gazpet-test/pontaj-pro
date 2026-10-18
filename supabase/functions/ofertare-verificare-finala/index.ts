@@ -1,7 +1,7 @@
 // ofertare-verificare-finala - Poarta 4 anti-descalificare (03.09.2026, aprobat Razvan):
 // 3 treceri pe o licitatie inainte de depunere:
 //   A. constructor (determinist, din registru): cerinte neconfirmate/neacoperite, dovezi rosii, formalitati
-//   B. adversarial (claude-sonnet-5): citeste independent registrul si cauta ce lipseste/descalifica
+//   B. adversarial (claude-sonnet-5-5; Sonnet 5 până la 17.10.2026): citeste independent registrul si cauta ce lipseste/descalifica
 //   C. ARBITRU (claude-fable-5-1, cerut explicit de Razvan): primeste A+B si da verdictul final verde/galben/rosu
 // Auth: JWT user SAU x-radar-secret (cron/Claude). Rezultatul se scrie in ofertare_verificari.
 //
@@ -128,8 +128,8 @@ Deno.serve(async (req) => {
   }))
   const meta = `LICITATIE: ${lic.nr_anunt || licId} - ${lic.obiect || ''}\nAutoritate: ${lic.autoritate || '?'} | Valoare estimata: ${lic.valoare_estimata || '?'} ${lic.moneda || 'RON'} | Termen depunere: ${termenRO(lic.termen_depunere) || '?'} (${zileRamase ?? '?'} zile) | Criteriu: ${lic.criteriu || '?'} | Garantie participare: ${lic.garantie_participare || 'NEDEFINITA'} | Loturi: ${lic.loturi || '?'} | Rol Gazpet: ${lic.rol_gazpet || '?'}`
 
-  // --- Trecerea B: adversarial (sonnet-5) ---
-  const b1 = await claude('claude-sonnet-5',
+  // --- Trecerea B: adversarial (sonnet-5-5) ---
+  const b1 = await claude('claude-sonnet-5-5',
     'Esti un evaluator ADVERSARIAL de oferte la licitatii publice romanesti (Legea 98/99/2016). Primesti registrul de cerinte al unei licitatii asa cum l-a construit echipa de ofertare. Misiunea ta: gaseste TOT ce poate duce la DESCALIFICARE - cerinte probabil ratate sau interpretate gresit, categorii de cerinte care lipsesc cu totul din registru (garantie de participare, DUAE, formulare semnate, valabilitate oferta, vizita amplasament, clarificari obligatorii, subcontractanti/terti declarati, cerinte pe loturi), dovezi improbabile, termene nerealiste. Fii dur, concret si CONCIS (detaliu de max 2 fraze). Raspunzi STRICT JSON: {"probleme":[{"gravitate":"descalificare"|"risc"|"minor","titlu":string,"detaliu":string,"cerinta_id":number|null}],"categorii_lipsa":[string],"observatie_generala":string}. Maxim 15 probleme, cele mai grave primele.',
     meta + '\n\nREGISTRUL DE CERINTE (confirmata = validata de om; acoperita = are dovada legata):\n' + JSON.stringify(compact),
     12000)
@@ -162,7 +162,7 @@ Deno.serve(async (req) => {
   }
   const { data: rand, error: eIns } = await sb.from('ofertare_verificari').insert({
     licitatie_id: licId, verdict: ['verde','galben','rosu'].includes(verdict || '') ? verdict : null,
-    raport, modele: 'A:determinist B:claude-sonnet-5 C:claude-fable-5-1', rulat_de: userId,
+    raport, modele: 'A:determinist B:claude-sonnet-5-5 C:claude-fable-5-1', rulat_de: userId,
   }).select('id').single()
   if (eIns) return json({ ok: false, error: eIns.message, raport })
   return json({ ok: true, verificare_id: rand.id, verdict: verdict || null, raport })

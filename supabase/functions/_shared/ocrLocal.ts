@@ -149,7 +149,8 @@ export function dinBase64(s: string): Uint8Array | null {
 // Haiku 5.5 0,10 / 0,50 $ pe 1M pana la 100K tokeni de intrare (0,50 / 2,50 peste). Inainte: 3 / 15 (pretul vechi, cost raportat ~50%
 // peste cel real). Model necunoscut = exceptie (fail closed: nicio rezervare fara pret).
 export const PRETURI: Record<string, { in: number; out: number; prag?: number; peste?: { in: number; out: number } }> = {
-  'claude-sonnet-5': { in: 2 / 1e6, out: 10 / 1e6 },
+  'claude-sonnet-5': { in: 2 / 1e6, out: 10 / 1e6 },     // istoric (arbitrul până la 17.10.2026)
+  'claude-sonnet-5-5': { in: 2 / 1e6, out: 10 / 1e6 },   // Sonnet 5.5 (17.10.2026): același preț și tokenizer ca Sonnet 5
   'claude-haiku-5-5': { in: 0.10 / 1e6, out: 0.50 / 1e6, prag: 100_000, peste: { in: 0.50 / 1e6, out: 2.50 / 1e6 } },
 }
 export const MAX_TOKENI_IESIRE = 1024
