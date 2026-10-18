@@ -27,6 +27,7 @@
 //  (e) confirmare umană: câmpul `verificat` se bifează doar din UI, de om.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
+import { recomandariValide } from '../_shared/structuraExtrageri.ts';
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -231,12 +232,8 @@ Deno.serve(async (req: Request) => {
 
   const rezultat: any = await citeste(API_KEY, mime, buf);
   if (rezultat?.eroare) return json({ ok: false, eroare: rezultat.eroare });
-  // Fara identitatea persoanei, rol, emitent si lucrare nu inlocuim recomandari existente.
-  const lista: any[] = (Array.isArray(rezultat?.lista) ? rezultat.lista : [])
-    .filter((x: any) => x && ['nume_persoana', 'rol', 'beneficiar', 'obiect_lucrare']
-      .every(k => typeof x[k] === 'string' && x[k].trim()))
-    .slice(0, 25);
-  if (!lista.length) return json({ ok: false, eroare: 'AI nu a intors recomandari valide; datele existente raman neschimbate' });
+  const lista: any[] = rezultat?.lista;
+  if (!recomandariValide(lista)) return json({ ok: false, eroare: 'AI nu a intors recomandari valide; datele existente raman neschimbate' });
   // Primul element intra in randul curent; restul devin frati, legati prin parinte_id.
   const r: any = { ...lista[0], _tin: rezultat?._tin, _tout: rezultat?._tout };
   try {

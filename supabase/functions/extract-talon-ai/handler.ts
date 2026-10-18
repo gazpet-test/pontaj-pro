@@ -16,6 +16,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { poartaTalon } from './acces.ts'
+import { talonUtil } from '../_shared/structuraExtrageri.ts'
 import { faraGandire } from '../_shared/gandire.ts'
 import { costApel, HAIKU_55, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
@@ -143,7 +144,7 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
     const raw = textRaspuns(data).trim()
     if (!raw) return json(200, { success: false, active_id: activeId, error: 'Raspuns AI fara text' })
     const extras: Record<string, unknown> | null = jsonDinText(raw)
-    if (!extras) throw new Error('JSON invalid de la AI: ' + raw.slice(0, 150))
+    if (!talonUtil(extras)) return json(200, { success: false, active_id: activeId, error: 'AI nu a extras date utile din talon' })
 
     // compară cu ce e în BD → conflicte
     const { data: activ } = await supabase.from('logistica_active')

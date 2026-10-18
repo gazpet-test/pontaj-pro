@@ -496,6 +496,10 @@ async function tryAiMatch(
     const data = await resp.json()
     totalInput += data.usage?.input_tokens || 0
     totalOutput += data.usage?.output_tokens || 0
+    if (data.stop_reason === 'max_tokens') {
+      refuz = 'raspuns_ai_incomplet (max_tokens)'
+      break
+    }
     
     if (data.stop_reason === 'refusal') {
       const cat = data.stop_details?.category
@@ -547,7 +551,11 @@ async function tryAiMatch(
       try { parsed = JSON.parse(match[0]) } catch (_e2) { /* keep default */ }
     }
   }
-  if (refuz) parsed = { activ_id: null, confidence: 0, reason: refuz }
+  if (refuz || !finalText.trim() || !parsed || typeof parsed !== 'object' ||
+      !Number.isInteger(parsed.activ_id) || Number(parsed.activ_id) <= 0 ||
+      typeof parsed.confidence !== 'number' || !Number.isFinite(parsed.confidence)) {
+    parsed = { activ_id: null, confidence: 0, reason: refuz || 'no_valid_match' }
+  }
   
   const duration = Date.now() - startTime
   

@@ -8,6 +8,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { faraGandire } from '../_shared/gandire.ts'
+import { contractUtil } from '../_shared/structuraExtrageri.ts'
 import { costApel, modelParsare, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const CORS = {
@@ -128,7 +129,7 @@ Deno.serve(async (req: Request) => {
 
     // deno-lint-ignore no-explicit-any
     const parsed: any = jsonDinText(raw)
-    if (!parsed) return new Response(JSON.stringify({ error: 'Parse failed', raw: raw.slice(0,300) }), { status: 500, headers: CORS })
+    if (!contractUtil(parsed)) return new Response(JSON.stringify({ error: 'AI nu a extras date utile din contract; datele existente raman neschimbate' }), { status: 422, headers: CORS })
 
     if (typeof parsed.confidence !== 'number') parsed.confidence = 70
     const toNum = (v: any) => typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.]/g, '')) || null

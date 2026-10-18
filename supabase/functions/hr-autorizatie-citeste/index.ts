@@ -24,6 +24,7 @@
 //  (e) confirmare umana OBLIGATORIE: nimic nu ajunge in hr_autorizatii fara apasarea unui om.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
+import { propunereValida } from '../_shared/structuraExtrageri.ts';
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -108,6 +109,7 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array, sys: strin
     body: JSON.stringify({ model, max_tokens: 8000, ...GANDIRE, system: sys,
       messages: [{ role: 'user', content: [continut, { type: 'text', text: 'Ce este acest document?' }] }] }),
   });
+  if (!r.ok) return { eroare: `Anthropic ${r.status}: ${(await r.text()).slice(0, 300)}` };
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
   if (j?.stop_reason === 'max_tokens') return { eroare: 'Raspuns AI incomplet (max_tokens); reincearca', _tin: tin, _tout: tout, _usage: j?.usage };
@@ -209,7 +211,8 @@ Deno.serve(async (req: Request) => {
   // Eroare de BUSINESS: se intoarce, NU se arunca (anti-bug Edge din CLAUDE.md).
   if (rez?.eroare) return json({ ok: false, document_id: id, eroare: rez.eroare });
 
-  const r = rez.r || {};
+  if (!propunereValida(rez.r)) return json({ ok: false, document_id: id, eroare: 'AI nu a intors o propunere structurata valida; propunerea existenta ramane neschimbata' });
+  const r = rez.r;
   const numePlatforma = (doc as any).emp?.name || '';
   const numeOk = r.nume_persoana ? numeSePotriveste(numePlatforma, String(r.nume_persoana)) : null;
   const incredere = Number(r.incredere) || 0;
