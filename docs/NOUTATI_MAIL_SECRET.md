@@ -29,7 +29,7 @@ GET este refuzat; OPTIONS nu produce efecte. Lipsa configurării Resend și eșe
 citirii cozii sunt 503; erorile furnizorului nu expun corpul răspunsului.
 
 Test local fără rețea/DB/secrete reale:
-`node --test supabase/functions/noutati-mail/auth.test.mjs` (Node 24, TypeScript stripping).
+`node --test supabase/functions/noutati-mail/auth_node_test.mjs` (Node 24, TypeScript stripping).
 Acoperă refuzurile, fallback owner, erorile autentificării/profilului,
 absența efectelor pentru neautorizați, coadă goală și citire eșuată.
 Nu este test Deno/Supabase end-to-end și nu verifică instanța live.
