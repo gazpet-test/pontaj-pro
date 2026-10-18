@@ -91,4 +91,5 @@ Deno.test('triere: număr în loc de text și null pe detaliile rolului acceptat
   assert.ok(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], natura_ceruta: null, cerinte: null, documente: null, motiv: null }] }))
   assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol: null }] }), false)
   assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol: ' ' }] }), false)
+  for (const v of ['', ' ', null]) assert.equal(triereValida({ ...complet, roluri: [{ ...complet.roluri[0], rol_canonic: v }] }), false)
 })

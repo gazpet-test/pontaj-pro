@@ -26,7 +26,7 @@ export function triereValida(j: any): boolean {
       ['transport', 'distributie', 'mixt', 'neclar', 'nu_e_gaze'].includes(j.tip_lucrare_gaze.tip))) &&
     (j.experienta_similara === null || campuri(j.experienta_similara, ['cerinta', 'lucrari_acceptate'], textSauNull)) &&
     typeof j.cumul_functii_interzis === 'boolean' &&
-    lista(j.roluri, r => campuri(r, ['rol', 'rol_canonic'], text) && !!r.rol.trim() &&
+    lista(j.roluri, r => campuri(r, ['rol', 'rol_canonic'], text) && !!r.rol.trim() && !!r.rol_canonic.trim() &&
       campuri(r, ['natura_ceruta', 'cerinte', 'documente', 'motiv'], scalar) &&
       campuri(r, ['autorizatie_ceruta', 'propunere'], textSauNull) && typeof r.exclude_transport === 'boolean' && baremValid(r.barem)) &&
     lista(j.matrice_experti, m => campuri(m, ['persoana', 'rol', 'surse'], text) &&
