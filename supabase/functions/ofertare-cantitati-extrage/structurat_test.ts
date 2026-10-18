@@ -165,7 +165,7 @@ Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelul
   const f = fals({ raspuns: 'nu e JSON' })
   const r = await RULEAZA(f)
   assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
-  assert(EXTRACTOR_ID.includes('@p3@n4@f1'))
+  assert(EXTRACTOR_ID.includes('@p3@n4@f2'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {

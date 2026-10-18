@@ -197,3 +197,10 @@ Deno.test('TKT-0329 B: formele Răcari — „Formularul F3”, „FORMULARUL C9
   const s = sectiuniLista(t).map((x) => [x.tip, t.slice(x.de, x.pana).includes('SA11G1')])
   assertEquals(s, [['lista_alt', false], ['lista_f3', true], ['lista_alt', false], ['lista_f3', true]])
 })
+
+Deno.test('B1 (f2): „Lista consumurilor cu mana de lucru / de ore de functionare / privind transporturile / de resurse materiale” fără „cuprinzand”', () => {
+  const t = ['Lista cu cantitatile de lucrari', '003 SA11G1 [ 2] M 130.000', '', 'Lista consumurilor de resurse materiale', '1 | 6701152 | M | 130.00',
+    '', 'Lista consumurilor cu mana de lucru', '1 | 102 BETONIST | 6.740', '', 'Lista consumurilor de ore de functionare a utilajelor', '1 | 2509 | 3.0',
+    '', 'Lista consumurilor privind transporturile', '1 | TRA01 | 2.0'].join('\n')
+  assertEquals(sectiuniLista(t).map((x) => x.tip), ['lista_f3', 'lista_c6', 'lista_alt'])
+})

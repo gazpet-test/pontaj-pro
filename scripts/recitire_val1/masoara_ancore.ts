@@ -1,22 +1,34 @@
-// Val 2, PR-B1: metrica de completitudine pe textele recitite (read-only, fără rețea, fără BD).
+// Val 2, PR-B1: inventarul de rânduri pe textele recitite (read-only, fără rețea, fără BD).
 // deno run --allow-read scripts/recitire_val1/masoara_ancore.ts <texte.csv> [doc_id]
-// texte.csv = ieșirea asambleaza.ts (document_id,text_b64). Fără doc_id: un rând TSV pe document; cu doc_id: golurile, cu contextul lor.
-import { ancoreRand, masoara, tabele } from '../../supabase/functions/_shared/cantAcoperire.ts'
+// texte.csv = ieșirea asambleaza.ts (document_id,text_b64). Se numără DOAR secțiunile F3 / C6 (sectiuni.ts), ca extractorul pe felii:
+// F1 / F2 / C7 / C8 / C9 (lista_alt) au numerotare de referință, nu de poziții, și nu intră în poarta de completitudine.
+// Fără doc_id: un rând TSV pe document; cu doc_id: golurile și rândurile incerte, cu linia lor în textul original.
+import { inventarRanduri, type RandInventar, tabele, type Tabel } from '../../supabase/functions/_shared/cantAcoperire.ts'
+import { sectiuniLista } from '../../supabase/functions/ofertare-cantitati-extrage/sectiuni.ts'
 
 const [csv, doc] = Deno.args
 if (!csv) { console.error('utilizare: masoara_ancore.ts <texte.csv> [doc_id]'); Deno.exit(2) }
 const dec = (b64: string) => new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
 const randuri = (await Deno.readTextFile(csv)).split('\n').slice(1).filter((l) => l.trim()).map((l) => l.split(','))
-if (!doc) console.log(['doc', 'caractere', 'ancore', 'cu_cod', 'perechi_cod_cant', 'tabele', 'tabele_cu_goluri', 'goluri', 'reluari_atipice'].join('\t'))
+if (!doc) console.log(['doc', 'caractere', 'sectiuni_f3c6', 'randuri', 'ancore', 'incerte', 'perechi_cod_cant', 'tabele', 'tabele_cu_goluri', 'goluri', 'reluari_atipice'].join('\t'))
 for (const [id, b64] of randuri) {
   const t = dec(b64)
   if (doc && id !== doc) continue
+  const sec = sectiuniLista(t).filter((s) => s.tip === 'lista_f3' || s.tip === 'lista_c6')
+  const inv: RandInventar[] = [], tb: Tabel[] = []
+  for (const s of sec) {
+    const r = inventarRanduri(t.slice(s.de, s.pana)).map((x) => ({ ...x, offset: x.offset + s.de }))
+    inv.push(...r)
+    tb.push(...tabele(r))
+  }
+  const linia = (off: number) => t.slice(0, off).split('\n').length
   if (!doc) {
-    const m = masoara(t)
-    console.log([id, t.length, m.ancore, m.ancore_cu_cod, m.perechi_distincte, m.tabele, m.tabele_cu_goluri, m.goluri, m.reluari_atipice].join('\t'))
+    const anc = inv.filter((x) => x.stare === 'ancora')
+    const perechi = new Set(anc.filter((x) => x.cod).map((x) => `${x.cod}|${x.cantitate}|${x.um}`)).size
+    console.log([id, t.length, sec.length, inv.length, anc.length, inv.length - anc.length, perechi, tb.length,
+      tb.filter((x) => x.goluri.length).length, tb.reduce((s, x) => s + x.goluri.length, 0), tb.reduce((s, x) => s + x.reluari_atipice, 0)].join('\t'))
     continue
   }
-  for (const tb of tabele(ancoreRand(t)).tabele.filter((x) => x.goluri.length)) {
-    console.log(`linia ${t.slice(0, tb.de_la).split('\n').length}: nr. ${tb.nr_min}-${tb.nr_max}, lipsă ${tb.goluri.join(', ')}`)
-  }
+  for (const x of tb.filter((x) => x.goluri.length)) console.log(`gol — linia ${linia(x.de_la)}: nr. ${x.nr_min}-${x.nr_max}, lipsă ${x.goluri.join(', ')}`)
+  for (const r of inv.filter((x) => x.stare === 'incert').slice(0, 30)) console.log(`incert — linia ${linia(r.offset)} nr ${r.nr}: ${r.motiv}`)
 }

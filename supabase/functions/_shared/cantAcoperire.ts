@@ -1,110 +1,170 @@
-// Val 2, PR-B1: completitudinea tabelelor de cantități — funcții pure, fără rețea. Azi „dovedit” spune doar că o valoare există în
-// text; B1 numără ce AR TREBUI extras: rândurile-ancoră (rânduri numerotate / de tabel cu o cantitate cu UM real) și secvența nr. crt.
-// pe fiecare tabel. B2 va compara rândurile extrase cu ancorele (acoperirea ancorelor) și va face tabelul „incomplet” la goluri.
-// Aici: doar măsurarea textului (metrica de calitate a recitirii: ancore + perechi cod+cantitate distincte + goluri în nr. crt.).
-import { identificatoriLinie, tokeniNumerici, umLanga } from './cantNumar.ts'
+// Val 2, PR-B1: INVENTARUL INDEPENDENT de rânduri — funcții pure, fără rețea, fără model. Poarta de completitudine a extractorului A
+// (plan aprobat de Răzvan 17.10): rândurile extrase de model se compară (B2) cu rândurile pe care textul spune că le are.
+// Principiul (review Jakarinos #751 r1): un rând NUMEROTAT intră ÎNTOTDEAUNA în inventar — ce nu recunoaștem (UM în afara listei,
+// separator de mii prin spațiu, cantitate pe linia de dedesubt, coloane îndepărtate) rămâne în numitor ca „incert”, nu dispare.
+// O ancoră falsă costă doar o verificare / escaladare; o ancoră pierdută ascunde o omisiune.
+// Offseturile sunt în textul ORIGINAL (primit), nu în vreo formă normalizată.
+import { tokeniNumerici, umLanga } from './cantNumar.ts'
 
-// unitățile reale (aceeași listă ca ancora din blocRand)
-// + formele din devize: „TONA”, „M CUB” (cuvântul de lângă număr e „CUB”), „SUTE MC” (cuvântul e „MC”), „BUCATA”
-export const UM_REALE = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'tona', 'tone', 'cub', 'bucata', 'bucati', 'l', 'set', 'ora', 'ore', 'h'])
-// începutul unui rând numerotat: „003 SA11G1 …”, „12. Conducta …”, „**7** …”; la tabelul markdown nr. e prima celulă
-const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})[.)]?\**\s+\S/
-const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4})[.)]?\**\s*\|/
+// unitățile recunoscute pentru clasificarea „ancoră” (formele din devize: „TONA”, „M CUB” → cuvântul vecin e „CUB”, „SUTE MC” → „MC”,
+// „BUCATA”, „LITRU”, „KWH”); orice altă UM lasă rândul „incert”, NU îl scoate din inventar
+export const UM_REALE = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'tona', 'tone', 'cub', 'bucata', 'bucati', 'l', 'litru',
+  'litri', 'kwh', 'set', 'cpl', 'perechi', 'ora', 'ore', 'h'])
+// începutul unui rând numerotat: „003 SA11G1 …”, „12. Conducta …”, „**7** …”, „**7**. …”, ierarhic DOAR în tabel „5.1 | …” (nr. = prima
+// componentă; în listă „213.76 …” ar fi o linie de prețuri);
+// la tabel (≥ 2 „|”) nr. e prima celulă
+const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
+const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4})(?:\.\d{1,3})*\**[.)]?\**\s*\|/
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
-const RE_TOTAL = /\btotal[ea]?\b/i
+const RE_SEPARATOR = /^\s*\|?\s*:?-{3,}/
+// cantitate cu separator de mii prin spațiu („1 234,50”, „2 450,00”) — tokenizarea o rupe; rândul devine „incert”, nu dispare
+const RE_MII_SPATIU = /(?<![\d.,])\d{1,3}(?:[  ]\d{3})+(?:[.,]\d+)?(?![\d.,])/
 // un cod de deviz / material: litere + cifre (TRA01A50, SA11G1, 3A1iG1) sau ≥ 5 cifre (6701152); nu „DN90”, nu „PE100”, nu „SDR11”
 const RE_COD = /^(?=.*\d)(?:[A-Z][A-Z0-9]{3,}|\d[A-Z0-9]*[A-Z][A-Z0-9]*|\d{5,})$/
 const NU_COD = /^(?:DN|DE|PE|PN|SDR|PEHD|HDPE|OL|PVC|D)\d/
 
-export type Ancora = { offset: number; pagina: number | null; nr: number | null; cod: string | null; cantitate: string; um: string; markdown: boolean }
-export type Tabel = { de_la: number; nr_min: number; nr_max: number; randuri: number; goluri: number[]; markdown: boolean }
-export type Masura = {
-  ancore: number; ancore_cu_cod: number; perechi_distincte: number; tabele: number; tabele_cu_goluri: number; goluri: number
-  reluari_atipice: number; dupa_pagina: Record<string, number>
+export type Stare = 'ancora' | 'incert'
+export type RandInventar = {
+  offset: number            // începutul liniei rândului în textul ORIGINAL
+  linie: number             // numărul liniei (1-based) în textul original
+  pagina: number | null
+  nr: number | null        // nr. crt. (≥ 1); null = rând de tabel fără coloană de numerotare, cu cod (C6) — nu intră în secvență
+  cod: string | null        // codul de după nr. (după POZIȚIE, nu după egalitate textuală)
+  cantitate: string | null
+  um: string | null
+  markdown: boolean
+  stare: Stare
+  motiv: string | null      // de ce e „incert”
 }
+export type Tabel = { de_la: number; nr_min: number; nr_max: number; randuri: number; pozitii: number; goluri: number[]; reluari_atipice: number }
+export type Masura = {
+  randuri: number; ancore: number; incerte: number; ancore_cu_cod: number; perechi_distincte: number
+  tabele: number; tabele_cu_goluri: number; goluri: number; reluari_atipice: number; dupa_pagina: Record<string, number>
+}
+
+// pentru clasificare, rândurile de tabel fără „|” de închidere se închid într-o COPIE (umLanga cere ambele margini ale celulei);
+// offseturile raportate rămân în original (liniile copiei au aceleași indexuri, doar lungimi diferite)
+function inchide(l: string): string { return (l.match(/\|/g) || []).length >= 2 && !/\|\s*$/.test(l) ? l + ' |' : l }
 
 function singurInCelula(linie: string, de: number, pana: number): boolean {
-  // ultima celulă poate să nu aibă „|” de închidere („| 82 M CUB | 27,00000”)
-  const st = linie.lastIndexOf('|', de - 1), dr0 = linie.indexOf('|', pana), dr = dr0 < 0 ? linie.length : dr0
-  return st >= 0 && linie.slice(st + 1, de).trim() === '' && linie.slice(pana, dr).trim() === ''
+  const st = linie.lastIndexOf('|', de - 1), dr = linie.indexOf('|', pana)
+  return st >= 0 && dr >= 0 && linie.slice(st + 1, de).replace(/[\s*]/g, '') === '' && linie.slice(pana, dr).replace(/[\s*]/g, '') === ''
 }
 
-function codDinLinie(linie: string): string | null {
-  for (const id of identificatoriLinie(linie)) if (RE_COD.test(id) && !NU_COD.test(id)) return id
-  return null
+// codul de după nr.: primul identificator de după nr. (pe aceeași linie), dacă are forma unui cod
+function codDupaNr(rest: string): { cod: string | null; de: number; pana: number } {
+  const m = /^[\s|*]*([A-Za-z0-9][A-Za-z0-9.\-\/]*)/.exec(rest)
+  if (!m) return { cod: null, de: -1, pana: -1 }
+  const id = m[1].replace(/[.\-\/]+$/, '').toUpperCase()
+  const de = m.index + m[0].length - m[1].length
+  return RE_COD.test(id) && !NU_COD.test(id) ? { cod: id, de, pana: de + m[1].length } : { cod: null, de: -1, pana: -1 }
 }
 
-// rândurile-ancoră ale textului: un rând numerotat (listă) sau un rând de tabel markdown, cu cel puțin un token numeric cu UM real;
-// rândurile de total / subtotal nu sunt ancore (nu sunt poziții). Cantitatea ancorei = primul token cu UM real de pe linie.
-// rândurile de tabel markdown fără „|” de închidere („| M.C. | 0.19”) se închid pentru măsurare: altfel UM-ul din celula vecină nu
-// trece de separator (umLanga cere ca tokenul să fie singur în celula lui, cu ambele margini). Offseturile ancorelor sunt în textul
-// închis (inchideRanduri(text)) — B2 trebuie să folosească aceeași normalizare (sau umLanga să trateze sfârșitul liniei ca margine).
-export const inchideRanduri = (text: string) =>
-  text.split('\n').map((l) => (l.match(/\|/g) || []).length >= 2 && !/\|\s*$/.test(l) ? l + ' |' : l).join('\n')
+// rândul numerotat al liniei: nr. + poziția de după el, sau null
+function nrRand(l: string): { nr: number; dupa: number; markdown: boolean } | null {
+  if (RE_SEPARATOR.test(l)) return null
+  const markdown = (l.match(/\|/g) || []).length >= 2
+  const m = (markdown ? RE_NR_MARKDOWN : RE_NR_LISTA).exec(l)
+  if (!m) return null
+  const nr = Number(m[1])
+  if (!(nr >= 1)) return null
+  // rândul de numerotare a coloanelor sub antet („0 | 1 | 2 | 3 …”, „1 | 2 | 3 | 4”) nu e un rând
+  if (markdown && /^[\s|]*\d{1,2}(?:\s*\|\s*\d{1,2}){2,}[\s|]*$/.test(l)) return null
+  return { nr, dupa: m.index + m[0].length - (markdown ? 0 : 1), markdown }
+}
 
-export function ancoreRand(textBrut: string): Ancora[] {
-  const text = inchideRanduri(textBrut)
-  const out: Ancora[] = []
-  let pagina: number | null = null, poz = 0
-  for (const linie of text.split('\n')) {
-    const start = poz
-    poz += linie.length + 1
-    const mp = RE_MARCAJ.exec(linie)
+// cantitatea + UM ale unei linii (în copia închisă), excluzând tokenurile nr. și cod după POZIȚIE
+function cantitateSiUm(t: string, ls: number, linie: string, excluse: [number, number][], markdown: boolean): { cantitate: string; um: string } | null {
+  const cuUm = tokeniNumerici(linie, ls).filter((k) => {
+    const de = k.de_la - ls, pana = k.pana_la - ls
+    if (excluse.some(([a, b]) => de < b && pana > a)) return false
+    if (/\[\s*$/.test(linie.slice(0, de))) return false        // „[ 2]” — indicele articolului din F3
+    return [...umLanga(t, k.de_la, k.pana_la)].some((u) => UM_REALE.has(u))
+  })
+  const tok = cuUm.find((k) => markdown && singurInCelula(linie, k.de_la - ls, k.pana_la - ls)) ?? cuUm[0]
+  if (!tok) return null
+  return { cantitate: tok.text, um: [...umLanga(t, tok.de_la, tok.pana_la)].find((u) => UM_REALE.has(u))! }
+}
+
+export function inventarRanduri(text: string): RandInventar[] {
+  const orig = text.split('\n')
+  const inch = orig.map(inchide)
+  const t = inch.join('\n')
+  const out: RandInventar[] = []
+  let pagina: number | null = null, po = 0, pi = 0
+  for (let i = 0; i < orig.length; i++) {
+    const lo = orig[i], li = inch[i]
+    const startO = po, startI = pi
+    po += lo.length + 1; pi += li.length + 1
+    const mp = RE_MARCAJ.exec(lo)
     if (mp) { pagina = Number(mp[1]); continue }
-    const markdown = (linie.match(/\|/g) || []).length >= 2
-    if (!markdown && !RE_NR_LISTA.test(linie)) continue
-    if (/^\s*\|?\s*:?-{3,}/.test(linie)) continue
-    // nu sunt cantități, deși pot fi urmate de UM: „[ 2]” din lista F3 (indicele articolului, „003 SA11G1 [ 2] M 1160.000”) și
-    // codul numeric al materialului („003 6701152 M 1160.000”)
-    const cod = codDinLinie(linie)
-    const cuUm = tokeniNumerici(linie, start).filter((t) => !/\[\s*$/.test(linie.slice(0, t.de_la - start)) && t.text !== cod &&
-      [...umLanga(text, t.de_la, t.pana_la)].some((u) => UM_REALE.has(u)))
-    // în tabel, cantitatea e tokenul SINGUR în celula lui („82 M CUB | 52,93800 |” → 52,938, nu capitolul 82); altfel primul token
-    const tok = cuUm.find((t) => markdown && singurInCelula(linie, t.de_la - start, t.pana_la - start)) ?? cuUm[0]
-    if (!tok) continue
-    // rând de total / subtotal: „total” ÎNAINTEA cantității („Total conducte 120 m”); „… 0.000 0 Total=” după articol nu e total
-    if (RE_TOTAL.test(linie.slice(0, tok.de_la - start))) continue
-    const um = [...umLanga(text, tok.de_la, tok.pana_la)].find((u) => UM_REALE.has(u))!
-    const mn = (markdown ? RE_NR_MARKDOWN : RE_NR_LISTA).exec(linie)
-    // nr. crt. = primul număr al rândului, doar dacă nu e chiar cantitatea
-    const nr = mn && !(mn.index + mn[0].indexOf(mn[1]) + start === tok.de_la) ? Number(mn[1]) : null
-    out.push({ offset: start, pagina, nr, cod, cantitate: tok.text, um, markdown })
+    let r: { nr: number | null; dupa: number; markdown: boolean } | null = nrRand(li)
+    // rând de tabel FĂRĂ nr. (C6 doar cu cod de resursă): intră în inventar dacă prima celulă e un cod — altfel un tabel nenumerotat
+    // ar avea inventar gol și ar ascunde orice omisiune (review r1)
+    if (!r && (li.match(/\|/g) || []).length >= 2 && !RE_SEPARATOR.test(li) && codDupaNr(li).cod) r = { nr: null, dupa: 0, markdown: true }
+    if (!r) continue
+    const rest = li.slice(r.dupa)
+    const c = codDupaNr(rest)
+    const nrSpan: [number, number] = [0, r.dupa]
+    const excluse: [number, number][] = [nrSpan, ...(c.cod ? [[r.dupa + c.de, r.dupa + c.pana] as [number, number]] : [])]
+    let cu = cantitateSiUm(t, startI, li, excluse, r.markdown)
+    let motiv: string | null = null
+    if (!cu && RE_MII_SPATIU.test(rest)) motiv = 'separator_mii_spatiu'
+    // cantitatea / UM pe linia următoare („1 Conducta PEHD” / „m 120,000”), dacă aceea nu e un rând nou
+    if (!cu && !motiv && i + 1 < orig.length && !nrRand(inch[i + 1]) && !RE_MARCAJ.test(orig[i + 1])) {
+      const urm = cantitateSiUm(t, startI + li.length + 1, inch[i + 1], [], (inch[i + 1].match(/\|/g) || []).length >= 2)
+      if (urm) { cu = urm; motiv = null }
+    }
+    // în LISTĂ (fără „|”), o linie care începe cu un număr e un rând doar dacă după nr. vine un cod SAU are o cantitate (pe linie
+    // sau pe linia următoare): altfel continuările de denumire („2 COD 64000115”, „1X 1,5 U NID”) ar umfla inventarul. În TABEL
+    // (≥ 2 „|”) orice rând numerotat intră.
+    if (!r.markdown && !c.cod && !cu && !motiv) continue
+    if (!cu && !motiv) motiv = 'um_sau_cantitate_nerecunoscute'
+    out.push({ offset: startO, linie: i + 1, pagina, nr: r.nr, cod: c.cod, cantitate: cu?.cantitate ?? null, um: cu?.um ?? null,
+      markdown: r.markdown, stare: cu ? 'ancora' : 'incert', motiv: cu ? null : motiv })
   }
   return out
 }
 
-// tabelele = șirurile de ancore numerotate; un tabel nou începe când nr. scade (reluare de la 1 = normal, altfel „atipică”) sau când
-// se schimbă felul rândului (listă ↔ markdown). Nr. repetat (rândul de material „003 6701152” sub „003 SA11G1”) e același articol.
-// Golurile = numerele lipsă între nr. consecutive ale aceluiași tabel. Ancorele fără nr. nu intră în secvență.
-export function tabele(ancore: Ancora[]): { tabele: Tabel[]; reluari_atipice: number } {
+// tabelele = șiruri de rânduri numerotate; un tabel nou începe DOAR la reluarea de la 1 (după un nr. > 1). Formatul (listă / tabel) NU
+// separă tabelele (review r1: altfel o schimbare de format ascundea un gol). Un nr. care scade fără să fie 1 (suprapunere de pagină,
+// rând de material) = „reluare atipică”, în același tabel. Golurile = numerele dintre min și max care nu apar deloc în tabel.
+export function tabele(randuri: RandInventar[]): Tabel[] {
   const t: Tabel[] = []
-  let cur: Tabel | null = null, prev = 0, atipice = 0
-  for (const a of ancore) {
-    if (a.nr === null) continue
-    if (!cur || a.markdown !== cur.markdown || a.nr < prev) {
-      if (cur && a.nr !== 1 && a.markdown === cur.markdown) atipice++
-      cur = { de_la: a.offset, nr_min: a.nr, nr_max: a.nr, randuri: 0, goluri: [], markdown: a.markdown }
-      t.push(cur)
-    } else if (a.nr > prev + 1) {
-      for (let k = prev + 1; k < a.nr && cur.goluri.length < 200; k++) cur.goluri.push(k)
-    }
-    cur.randuri++
-    cur.nr_max = Math.max(cur.nr_max, a.nr)
-    prev = a.nr
+  let cur: (Tabel & { vazute: Set<number>; prev: number }) | null = null
+  const inchideCur = () => {
+    if (!cur) return
+    for (let k = cur.nr_min; k <= cur.nr_max && cur.goluri.length < 200; k++) if (!cur.vazute.has(k)) cur.goluri.push(k)
+    cur.pozitii = cur.vazute.size
+    const { vazute: _v, prev: _p, ...tb } = cur
+    t.push(tb)
   }
-  return { tabele: t, reluari_atipice: atipice }
+  for (const r of randuri) {
+    if (r.nr === null) continue
+    if (!cur || (r.nr === 1 && cur.nr_max > 1 && cur.vazute.has(1))) {
+      inchideCur()
+      cur = { de_la: r.offset, nr_min: r.nr, nr_max: r.nr, randuri: 0, pozitii: 0, goluri: [], reluari_atipice: 0, vazute: new Set(), prev: r.nr }
+    } else if (r.nr < cur.prev && r.nr !== cur.prev) cur.reluari_atipice++
+    cur.randuri++
+    cur.vazute.add(r.nr)
+    cur.nr_min = Math.min(cur.nr_min, r.nr)
+    cur.nr_max = Math.max(cur.nr_max, r.nr)
+    cur.prev = r.nr
+  }
+  inchideCur()
+  return t
 }
 
 export function masoara(text: string): Masura {
-  const a = ancoreRand(text)
-  const { tabele: tb, reluari_atipice } = tabele(a)
-  const perechi = new Set(a.filter((x) => x.cod).map((x) => `${x.cod}|${x.cantitate}|${x.um}`))
+  const r = inventarRanduri(text)
+  const tb = tabele(r)
+  const anc = r.filter((x) => x.stare === 'ancora')
+  const perechi = new Set(anc.filter((x) => x.cod).map((x) => `${x.cod}|${x.cantitate}|${x.um}`))
   const dupa_pagina: Record<string, number> = {}
-  for (const x of a) { const k = String(x.pagina ?? '-'); dupa_pagina[k] = (dupa_pagina[k] ?? 0) + 1 }
+  for (const x of r) { const k = String(x.pagina ?? '-'); dupa_pagina[k] = (dupa_pagina[k] ?? 0) + 1 }
   return {
-    ancore: a.length, ancore_cu_cod: a.filter((x) => x.cod).length, perechi_distincte: perechi.size,
-    tabele: tb.length, tabele_cu_goluri: tb.filter((x) => x.goluri.length).length, goluri: tb.reduce((s, x) => s + x.goluri.length, 0),
-    reluari_atipice, dupa_pagina,
+    randuri: r.length, ancore: anc.length, incerte: r.length - anc.length, ancore_cu_cod: anc.filter((x) => x.cod).length,
+    perechi_distincte: perechi.size, tabele: tb.length, tabele_cu_goluri: tb.filter((x) => x.goluri.length).length,
+    goluri: tb.reduce((s, x) => s + x.goluri.length, 0), reluari_atipice: tb.reduce((s, x) => s + x.reluari_atipice, 0), dupa_pagina,
   }
 }
-
