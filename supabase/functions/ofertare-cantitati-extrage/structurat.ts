@@ -12,7 +12,7 @@ import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_sh
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
 
-export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p4', normalizator: 'n4', feliere: 'f1' }
+export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f1' }
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
 // tariful din cod pentru limita superioară a rezervării (developers.openai.com/api/docs/pricing, 11.09.2026) — o depășire reală
 // (tarif schimbat) blochează bugetul la decontare (§4.3)
@@ -42,7 +42,7 @@ export type DepsStructurat = {
 
 export const PROMPT_STRUCTURAT = (nume: string, rol: string) => `Ești inginer de devize. Din bucata de mai jos a documentului "${nume}" (secțiune cu rolul: ${rol}), extrage FIECARE RÂND cantitativ (lungimi de conductă, branșamente, tuburi de protecție, lucrări cu cantitate).
 
-Răspunde EXCLUSIV cu JSON: {"r":[ {un OBIECT pe rând, cu EXACT cheile: ${CAMPURI_RAND.join(', ')}}, ... ]}
+Răspunde EXCLUSIV cu JSON: {"r":[ [${CAMPURI_RAND.join(', ')}], ... ]}
 - pagina: numărul din cel mai apropiat marcaj ⟦PAGINA n⟧ de dinaintea rândului, sau null;
 - tabel / rand: identificatorul tabelului și al rândului, cum apar (sau null);
 - cod_articol: caracter cu caracter, sau null;
@@ -53,7 +53,7 @@ Răspunde EXCLUSIV cu JSON: {"r":[ {un OBIECT pe rând, cu EXACT cheile: ${CAMPU
 - e_total / e_subtotal: 1 dacă rândul e un total / subtotal declarat, altfel 0;
 - tip_lucrare: conducta | bransament | protectie | alt; masura: lungime | montaj | proba | material | alt;
 - citat: copiat VERBATIM, continuu, din document (max. 300 de caractere), fără „...”, fără prescurtări, fără reordonări: într-o listă / un tabel = linia rândului de la ÎNCEPUTUL ei (nr. crt. și cod) până după cantitate și unitate, exact cum apare (ex. "003 SA11G1 [ 2] M 1160.000"); într-un text (caiet de sarcini, memoriu) = propoziția care conține cantitatea, cu denumirea / Dn-ul ei. Dacă porțiunea asta depășește 300 de caractere: ultimele caractere CONTINUE care se termină imediat după cantitate și unitate (max. 300).
-REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document. FIECARE rând e un OBIECT JSON cu exact cheile de mai sus, fără alte chei (null pentru ce lipsește) — codul articolului și denumirea în chei SEPARATE, nu lipite. Exemplu: {"pagina": 12, "tabel": "F3", "rand": "003", "cod_articol": "SA11G1", "denumire": "TEAVA PVC IN CONDUCTE DE DISTRIBUTIE D= 90 MM", "obiect": "Str. Platanului", "material": "PVC", "dn_text": "D= 90 MM", "sdr": null, "um": "M", "cantitate": "1160.000", "e_total": 0, "e_subtotal": 0, "tip_lucrare": "conducta", "masura": "lungime", "citat": "003 SA11G1 [ 2] M 1160.000"}. Include DOAR rândurile care au o cantitate scrisă. NU include totalurile valorice (RON / lei / valoare) și nici antetele de tabel. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Fără nimic în afara JSON-ului.`
+REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document. FIECARE rând e un TABLOU JSON cu exact ${CAMPURI_RAND.length} elemente, în ordinea de mai sus (null pentru ce lipsește) — codul articolului și denumirea în elemente SEPARATE, nu lipite. Exemplu: [12, "F3", "003", "SA11G1", "TEAVA PVC IN CONDUCTE DE DISTRIBUTIE D= 90 MM", "Str. Platanului", "PVC", "D= 90 MM", null, "M", "1160.000", 0, 0, "conducta", "lungime", "003 SA11G1 [ 2] M 1160.000"]. Include DOAR rândurile care au o cantitate scrisă. NU include totalurile valorice (RON / lei / valoare) și nici antetele de tabel. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Fără nimic în afara JSON-ului.`
 
 // limita superioară demonstrabilă a costului unui apel: octeții UTF-8 ai promptului ≥ tokenii de intrare; ieșirea ≤ MAX_IESIRE
 export function sumaRezervata(prompt: string): number {
