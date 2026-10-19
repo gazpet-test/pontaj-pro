@@ -49,11 +49,23 @@ Deno.serve(async (req) => {
 
   // revalidare chiar înainte de trimitere: rămân doar licitațiile care au ÎNCĂ cel puțin unul dintre documentele revendicate necitit
   const ids = revendicate.flatMap((l) => l.doc_ids || [])
-  const { data: docs, error: eDocs } = await sb.from('ofertare_documente_atribuire').select('id, licitatie_id, status_procesare').in('id', ids)
+  const { data: docs, error: eDocs } = await sb.from('ofertare_documente_atribuire').select('id, licitatie_id, status_procesare, nume_original, created_at').in('id', ids)
   if (eDocs || !Array.isArray(docs)) return await esec('revalidare: ' + (eDocs?.message || 'fără date'), revendicate)
-  const necitit = new Set(docs.filter((d: any) => !['procesat', 'ignorat', 'partial'].includes(d.status_procesare ?? 'neprocesat')).map((d: any) => Number(d.id)))
-  const deTrimis = revendicate.filter((l) => (l.doc_ids || []).some((id) => necitit.has(Number(id))))
-  const procesateIntreTimp = revendicate.filter((l) => !deTrimis.includes(l))
+  const necitite = docs.filter((d: any) => !['procesat', 'ignorat', 'partial'].includes(d.status_procesare ?? 'neprocesat'))
+  // review Copilot r2 (P2): mailul descrie DOAR documentele încă necitite la revalidare (nr / listă / „din” / zile reconstruite), nu
+  // snapshot-ul de la revendicare — un răspuns procesat între timp nu mai apare ca „necitit”
+  const ziRo = (ts: string) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date(ts))
+  const azi: string = rez?.azi ?? ziRo(new Date().toISOString())
+  const zileIntre = (a: string, b: string) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000)
+  const deTrimis: Lic[] = []
+  for (const l of revendicate) {
+    const dl = necitite.filter((d: any) => (l.doc_ids || []).map(Number).includes(Number(d.id)))
+      .sort((a: any, b: any) => String(a.created_at).localeCompare(String(b.created_at)))
+    if (!dl.length) continue
+    const deLa = dl.map((d: any) => ziRo(d.created_at)).sort()[0]
+    deTrimis.push({ ...l, nr: dl.length, lista: dl.map((d: any) => String(d.nume_original || '#' + d.id).slice(0, 60)).join('; '), de_la: deLa, zile_necitit: zileIntre(deLa, azi) })
+  }
+  const procesateIntreTimp = revendicate.filter((l) => !deTrimis.some((x) => x.licitatie_id === l.licitatie_id))
   const neeliberateProcesate = procesateIntreTimp.length ? await elibereaza(procesateIntreTimp) : []
   if (!deTrimis.length) return json({ ok: true, notificari, mail: 0, reason: 'procesate_intre_timp', ...(neeliberateProcesate.length ? { revendicari_neeliberate: neeliberateProcesate } : {}) })
 
@@ -80,15 +92,27 @@ Deno.serve(async (req) => {
     </div>
   </div>`
 
+  // review Copilot r2 (P1): cheie de idempotență la Resend = amprentele revendicate (aceeași zi + aceleași documente ⇒ același mail, oricâte
+  // reîncercări); rezultat AMBIGUU (excepție de transport, 5xx) ⇒ revendicarea NU se eliberează (mailul poate fi plecat) — se raportează;
+  // doar un refuz explicit (4xx, altul decât conflictul de idempotență) eliberează revendicarea, ca rularea următoare să-l trimită
+  const cheie = 'rc-necitit-' + Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
+    new TextEncoder().encode(deTrimis.map((l) => String(l.amprenta_mail)).sort().join('|'))))).map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 48)
   let resp: Response
   try {
     resp = await fetch('https://api.resend.com/emails', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + RESEND, 'Content-Type': 'application/json' },
+      method: 'POST', headers: { Authorization: 'Bearer ' + RESEND, 'Content-Type': 'application/json', 'Idempotency-Key': cheie },
       body: JSON.stringify({ from: FROM, to,
         subject: unRand(`🚨 RC necitit: ${deTrimis.map((l) => unRand(l.nr_anunt || l.licitatie_id)).join(', ')} — ${minZile <= 0 ? 'depunere AZI' : minZile + ' zile până la depunere'}`), html }),
     })
-  } catch (e) { return await esec('Resend: ' + String((e as Error)?.message || e).slice(0, 200), deTrimis) }
+  } catch (e) {
+    return json({ ok: false, notificari, mail: null, rezultat: 'necunoscut', error: 'Resend (transport): ' + String((e as Error)?.message || e).slice(0, 200),
+      nota: 'revendicarea rămâne (mailul poate fi plecat); reîncercarea în aceeași zi e deduplicată de cheia de idempotență' })
+  }
   const txt = await resp.text()
-  if (!resp.ok) return await esec('Resend: ' + txt.slice(0, 200), deTrimis)
+  if (resp.status >= 500) {
+    return json({ ok: false, notificari, mail: null, rezultat: 'necunoscut', error: 'Resend ' + resp.status + ': ' + txt.slice(0, 200),
+      nota: 'revendicarea rămâne (rezultat ambiguu)' })
+  }
+  if (!resp.ok && resp.status !== 409) return await esec('Resend ' + resp.status + ': ' + txt.slice(0, 200), deTrimis)
   return json({ ok: true, notificari, mail: deTrimis.length, catre: to.length, ...(neeliberateProcesate.length ? { revendicari_neeliberate: neeliberateProcesate } : {}) })
 })
