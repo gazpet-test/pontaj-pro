@@ -56,6 +56,14 @@ class ZoneAncore(unittest.TestCase):
             z, = self.zone('sus alfa beta vechi jos gama delta', 'sus alfa beta jos gama delta nou')
         self.assertEqual((z['localizare'], z['motiv_localizare']), ('ambigua', 'ordine_ancore'))
 
+    def test_fragment_mutat_repetat_e_ambiguu(self):
+        # review Copilot #786 P1: fragmentul mutat apare de 2 ori in A -> locul real nu se poate dovedi -> fail-closed
+        item = dict(id='p1_b0_t0', tip='text', e_cantitate=False,
+                    pozitie={'lighton': [3, 3], 'mineru': [3, 5]})
+        with patch.object(B, 'compare_band', return_value=({}, [item])):
+            z, = self.zone('sus alfa beta jos gama delta dn 500 x dn 500', 'sus alfa beta dn 500 jos gama delta x')
+        self.assertEqual((z['localizare'], z['motiv_localizare']), ('ambigua', 'fragment_neunic'))
+
     def test_insertie_stergere_si_margini_ramane_unica(self):
         for a, b in (('sus alfa beta jos gama delta', 'sus alfa beta nou jos gama delta'),
                      ('sus alfa beta vechi jos gama delta', 'sus alfa beta jos gama delta'),

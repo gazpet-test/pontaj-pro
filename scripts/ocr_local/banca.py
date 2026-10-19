@@ -63,6 +63,9 @@ def _motiv_ancore(ka, kb, pozitie, sus, jos):
             p = _pozitii_tokeni(flux, fragment) if fragment else []
             if len(p) == 1 and not low <= p[0] <= p[0] + len(fragment) <= high:
                 return 'ordine_ancore'
+            # fragment repetat: locul real nu se poate dovedi => fail-closed (review Copilot #786 P1)
+            if len(p) > 1:
+                return 'fragment_neunic'
     return None
 
 
@@ -455,8 +458,10 @@ def cmd_compara(a):
 def cmd_raport(a):
     banca = pathlib.Path(a.banca); sha_es = _verifica_legatura(banca, a.trecere)
     harta = json.loads((banca / 'priv' / ('harta_%s.json' % a.trecere)).read_text(encoding='utf-8'))
-    es = {z['zona']: z for z in json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))['zone']}
-    ambigue = sum(es[z].get('localizare') == 'ambigua' for z in harta.values())
+    es_json = json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))
+    es = {z['zona']: z for z in es_json['zone']}
+    # bancile noi exclud ambiguele inca de la esantion (numarul e in esantion.json); cele vechi le au in tinte (review Copilot #786 P2)
+    ambigue = es_json.get('ambigue_ancora', 0) + sum(es[z].get('localizare') == 'ambigua' for z in harta.values())
     c = collections.Counter(); sec = 0; lip = 0; ref = 0; unelte = 0
     # Toate tintele din harta sunt contabilizate: ambiguele separat; pentru restul,
     # loturile fara rezultat / invalidate raman in numitor (Jakarinos #721 r2).
