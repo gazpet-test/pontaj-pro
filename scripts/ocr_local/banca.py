@@ -34,6 +34,38 @@ def _ancora_text(ka, i, sens, limita):
     return None, 'ambigua'
 
 
+def _pozitii_tokeni(flux, fragment):
+    return [i for i in range(len(flux) - len(fragment) + 1) if flux[i:i + len(fragment)] == fragment]
+
+
+def _motiv_ancore(ka, kb, pozitie, sus, jos):
+    """Intervale [start, end): ancorele nu se suprapun cu zona; marginea tine loc de ancora absenta."""
+    limite = []
+    for ancora, margine, deasupra in ((sus, 0, True), (jos, len(kb), False)):
+        if ancora is None:
+            limite.append(margine); continue
+        p = _pozitii_tokeni(kb, ancora)
+        if not p: return 'ancora_lipsa_b'
+        if len(p) != 1: return 'ancora_neunica_b'
+        limite.append(p[0] + len(ancora) if deasupra else p[0])
+    for flux, alt, reader, other, low, high in (
+            (ka, kb, 'lighton', 'mineru', None, None),
+            (kb, ka, 'mineru', 'lighton', limite[0], limite[1])):
+        if low is None:
+            low = _pozitii_tokeni(ka, sus)[0] + len(sus) if sus else 0
+            high = _pozitii_tokeni(ka, jos)[0] if jos else len(ka)
+        start, end = pozitie[reader]
+        if not low <= start <= end <= high: return 'ordine_ancore'
+        # difflib reprezinta o mutare ca insert + delete. Intervalul gol nu dovedeste
+        # pozitia textului: daca fragmentul exista unic aici, verificam locul lui real.
+        if start == end:
+            x, y = pozitie[other]; fragment = alt[x:y]
+            p = _pozitii_tokeni(flux, fragment) if fragment else []
+            if len(p) == 1 and not low <= p[0] <= p[0] + len(fragment) <= high:
+                return 'ordine_ancore'
+    return None
+
+
 def zone_banda(doc, band, ra, sa, rb, sb):
     """Zonele unei benzi: grupurile de dezacord text (ancore = tokeni egali unici) si golurile dintre randuri de tabel egale."""
     _, items = compare_band(band, ra, sa, rb, sb)
@@ -43,15 +75,18 @@ def zone_banda(doc, band, ra, sa, rb, sb):
                      zona='%s_%s_exclusa' % (doc, band['id']), localizare='-')] if motiv else []
     seg_a, seg_b = segments(ra), segments(rb); out = []
     ka = [norm_word(t[0]) for t in tokens(seg_a)]
+    kb = [norm_word(t[0]) for t in tokens(seg_b)]
     txt = sorted((i for i in items if i['tip'] == 'text'), key=lambda i: i['pozitie']['lighton'][0])
     prev_a2 = 0
     for k, it in enumerate(txt):
         a1, a2 = it['pozitie']['lighton']; urm = txt[k + 1]['pozitie']['lighton'][0] if k + 1 < len(txt) else len(ka)
         sus, ss = _ancora_text(ka, a1, -1, prev_a2); jos, sj = _ancora_text(ka, a2, +1, urm); prev_a2 = a2
+        motiv = _motiv_ancore(ka, kb, it['pozitie'], sus, jos)
         out.append(dict(document=doc, band=band['id'], page=band['page'], kind=band['kind'], image=band['image'],
                         image_sha256=band['image_sha256'], tip_zona='text', itemi=[it['id']], tipuri=['text'],
                         e_cantitate=it['e_cantitate'], ancora_sus=' '.join(sus) if sus else None, stare_sus=ss,
-                        ancora_jos=' '.join(jos) if jos else None, stare_jos=sj))
+                        ancora_jos=' '.join(jos) if jos else None, stare_jos=sj,
+                        **({'motiv_localizare': motiv} if motiv else {})))
     rows_a, rows_b = table_rows(seg_a), table_rows(seg_b)
     if rows_a or rows_b:
         by_id = {i['id']: i for i in items}
@@ -80,7 +115,7 @@ def zone_banda(doc, band, ra, sa, rb, sb):
     for z in out:
         z['zona'] = '%s_%s_%s' % (z['document'], z['band'], z['itemi'][0].rsplit('_', 1)[1])
         # o zona fara nicio ancora unica (doar margini / ambigue) nu se poate localiza verificabil -> ambigua la pregatire
-        z['localizare'] = 'ambigua' if 'ambigua' in (z['stare_sus'], z['stare_jos']) or (z['stare_sus'] == z['stare_jos'] == 'margine') else 'unica'
+        z['localizare'] = 'ambigua' if z.get('motiv_localizare') or 'ambigua' in (z['stare_sus'], z['stare_jos']) or (z['stare_sus'] == z['stare_jos'] == 'margine') else 'unica'
     return out
 
 
@@ -109,14 +144,15 @@ def cmd_esantion(a):
     per = collections.defaultdict(list)
     for z in zs:
         s = strat(z)
-        if s: per[s].append(z)  # ambiguele intra in esantion: localizarea lor se masoara, nu se ascunde
+        if s and z.get('localizare') != 'ambigua': per[s].append(z)
     for s, w in STRATURI.items():
         k = max(1, round(a.n * w / tot)); pool = sorted(per[s], key=lambda z: z['zona'])
         ales += [dict(z, strat=s) for z in rng.sample(pool, min(k, len(pool)))]
     ales = ales[:a.n] if len(ales) > a.n else ales
     rng.shuffle(ales)
     chei = sorted(z['zona'] for z in ales)
-    rez = {'n': len(ales), 'samanta': a.samanta, 'zone_sha256': _sha('\n'.join(chei).encode()),
+    rez = {'n': len(ales), 'ambigue_ancora': sum(z.get('localizare') == 'ambigua' for z in zs),
+           'samanta': a.samanta, 'zone_sha256': _sha('\n'.join(chei).encode()),
            'zone_jsonl_sha256': _sha((banca / 'zone.jsonl').read_bytes()), 'per_strat': dict(collections.Counter(z['strat'] for z in ales)),
            'zone': ales}
     if (banca / 'esantion.json').exists() and not a.rescrie: sys.exit('esantion.json exista deja (inghetat); --rescrie doar intentionat')
@@ -397,7 +433,8 @@ def cmd_compara(a):
     ea, _ = _etichete(banca, a.x); eb, _ = _etichete(banca, a.y); rez = {}; c = collections.Counter()
     for zona, z in es.items():
         x, y = ea.get(zona), eb.get(zona)
-        if x is None or y is None: st = 'lipsa_eticheta'
+        if z.get('localizare') == 'ambigua': st = 'ambigue_ancora'
+        elif x is None or y is None: st = 'lipsa_eticheta'
         elif z.get('localizare') != 'unica': st = 'tinta_ambigua'  # ancore neunice in esantion: nu se masoara acordul (P1-6)
         elif cheie(x, z['tip_zona']) is not None and not localizare_ok(x, z): st = 'localizare_gresita_' + a.x
         elif cheie(y, z['tip_zona']) is not None and not localizare_ok(y, z): st = 'localizare_gresita_' + a.y
@@ -419,11 +456,14 @@ def cmd_raport(a):
     banca = pathlib.Path(a.banca); sha_es = _verifica_legatura(banca, a.trecere)
     harta = json.loads((banca / 'priv' / ('harta_%s.json' % a.trecere)).read_text(encoding='utf-8'))
     es = {z['zona']: z for z in json.loads((banca / 'esantion.json').read_text(encoding='utf-8'))['zone']}
+    ambigue = sum(es[z].get('localizare') == 'ambigua' for z in harta.values())
     c = collections.Counter(); sec = 0; lip = 0; ref = 0; unelte = 0
-    # numitorul = TOATE tintele din harta (Jakarinos #721 r2): lot fara rezultat si lot invalidat se raporteaza separat, nu dispar
+    # Toate tintele din harta sunt contabilizate: ambiguele separat; pentru restul,
+    # loturile fara rezultat / invalidate raman in numitor (Jakarinos #721 r2).
     loturi = sorted({k.split('/')[0] for k in harta}); stare_lot = {}
     for lot in loturi:
-        f = banca / 'out' / a.trecere / (lot + '.json'); n = sum(1 for k in harta if k.startswith(lot + '/'))
+        f = banca / 'out' / a.trecere / (lot + '.json')
+        n = sum(1 for k, z in harta.items() if k.startswith(lot + '/') and es[z].get('localizare') != 'ambigua')
         if not f.exists(): stare_lot[lot] = 'lipsa'; c[('*', 'lot_lipsa', None, False)] += n; continue
         d = json.loads(f.read_text(encoding='utf-8')); sec += d['meta']['secunde']; ref += len(d['meta'].get('refuzuri_acces') or [])
         unelte += len(d['meta'].get('unelte_folosite') or [])  # trecerea B: orice unealta invalideaza lotul
@@ -433,10 +473,11 @@ def cmd_raport(a):
         got = {e.get('zona'): e for e in d['etichete']}
         for key, zona in harta.items():
             if not key.startswith(lot + '/'): continue
+            if es[zona].get('localizare') == 'ambigua': continue
             e = got.get(key.split('/')[1])
             if e is None: lip += 1; continue
             s = es[zona]['strat']; c[(s, e.get('tinta'), e.get('incredere'), bool(e.get('ilizibil')))] += 1
-    print(json.dumps({'tinte': len(harta), 'loturi': collections.Counter(stare_lot.values()), 'secunde': sec, 'lipsa_din_raspuns': lip,
+    print(json.dumps({'tinte': len(harta), 'ambigue_ancora': ambigue, 'loturi': collections.Counter(stare_lot.values()), 'secunde': sec, 'lipsa_din_raspuns': lip,
                       'refuzuri_acces': ref, 'unelte_folosite': unelte,
                       'per_strat': {'|'.join(map(str, k)): v for k, v in sorted(c.items(), key=lambda kv: tuple(map(str, kv[0])))}},
                      ensure_ascii=False, indent=1))
