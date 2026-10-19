@@ -6,7 +6,7 @@
 // Scrie doar observații imuabile în tabelele B (ofertare_cant_obs / _extrageri / _felii / ofertare_ai_rezervari) — NU în ofertare_cantitati.
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { consumBuget, cerereActiva, ruleazaPanaLaCapat, totalPasi } from './ofertareProbaExtractor.js'
+import { consumBuget, cerereActiva, cereriPeLot, ruleazaPanaLaCapat, totalPasi } from './ofertareProbaExtractor.js'
 
 const G = { surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   ofertare:'#3FB6E2', green:'#3FB950', orange:'#F0883E', yellow:'#E3B341', red:'#F85149' }
@@ -26,17 +26,27 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
   const [plafon, setPlafon] = useState('')
   const [jurnal, setJurnal] = useState([])
   const opreste = useRef(false)
+  const licCurenta = useRef(l.id)   // review Copilot / Gemini #797 r1 (P2): rezultatul unei încărcări vechi nu suprascrie altă licitație
+
+  // altă licitație (sau închiderea secțiunii): starea veche se golește, iar o rulare în curs se oprește după pasul curent
+  useEffect(() => {
+    licCurenta.current = l.id
+    setSt(null); setJurnal([]); setErr(null)
+    return () => { opreste.current = true }
+  }, [l.id])
 
   const load = async () => {
+    const idCerut = l.id
     setErr(null)
     const [b, r, c] = await Promise.all([
       supabase.from('ofertare_ai_buget').select('plafon_usd, blocat, blocat_motiv').eq('licitatie_id', l.id).eq('scop', SCOP).maybeSingle(),
       supabase.from('ofertare_ai_rezervari').select('stare, cost_real, suma_rezervata').eq('licitatie_id', l.id).eq('scop', SCOP),
-      supabase.from('ofertare_ai_cereri').select('id, scop, stare, valabil_pana').eq('licitatie_id', l.id).eq('scop', SCOP),
+      supabase.from('ofertare_ai_cereri').select('id, scop, stare, valabil_pana, lot_domeniu, lot_nr').eq('licitatie_id', l.id).eq('scop', SCOP),
     ])
+    if (licCurenta.current !== idCerut) return
     const e = b.error || r.error || c.error
     if (e) { setErr(e.message || String(e)); return }
-    setSt({ buget: b.data || null, consum: consumBuget(r.data), cerere: cerereActiva(c.data, SCOP) })
+    setSt({ buget: b.data || null, consum: consumBuget(r.data), cerere: cerereActiva(c.data, SCOP), peLot: cereriPeLot(c.data, SCOP) })
   }
   useEffect(() => { if (deschis) load() }, [deschis, l.id])
 
@@ -63,6 +73,7 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
     if (!window.confirm(`Pornesc extragerea cu extractorul ${extractor} pe ${l.nr_anunt}? E plătită (rămas din plafon: ${st.buget ? (st.buget.plafon_usd - st.consum).toFixed(2) : '—'} USD); se oprește singură la plafon.`)) return
     opreste.current = false; setBusy(true); setErr(null)
     setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x: `▶ extractor ${extractor}` }])
+    try {
     const r = await ruleazaPanaLaCapat(
       (body) => supabase.functions.invoke('ofertare-cantitati-extrage', { body }),
       { mod: 'structurat', licitatie_id: l.id, cerere_id: st.cerere.id, extractor },
@@ -71,7 +82,9 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
         trebuieOprit: () => opreste.current })
     const tot = totalPasi(r.pasi)
     setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x: `■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}` }])
-    setBusy(false); await load()
+    } catch (e) { setErr('Rulare întreruptă: ' + (e?.message || String(e))) }
+    finally { setBusy(false) }
+    await load()
   }
 
   return (
@@ -85,7 +98,8 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
         {st && <div style={{ display:'flex', gap:16, flexWrap:'wrap', marginBottom:10 }}>
           <span>Plafon: <b>{st.buget ? `${Number(st.buget.plafon_usd).toFixed(2)} USD` : 'nesetat'}</b>{st.buget?.blocat ? <b style={{ color:G.red }}> · BLOCAT ({st.buget.blocat_motiv})</b> : null}</span>
           <span>Consumat: <b>{st.consum.toFixed(4)} USD</b></span>
-          <span>Cerere: {st.cerere ? <b style={{ color:G.green }}>#{st.cerere.id} activă până la {new Date(st.cerere.valabil_pana).toLocaleString('ro-RO', { dateStyle:'short', timeStyle:'short' })}</b> : <b style={{ color:G.orange }}>niciuna activă</b>}</span>
+          <span>Cerere: {st.cerere ? <b style={{ color:G.green }}>#{st.cerere.id} activă (toată licitația) până la {new Date(st.cerere.valabil_pana).toLocaleString('ro-RO', { dateStyle:'short', timeStyle:'short' })}</b> : <b style={{ color:G.orange }}>niciuna activă pe toată licitația</b>}</span>
+          {st.peLot?.length > 0 && <span style={{ color:G.muted }}>(cereri active pe lot, nefolosite aici: {st.peLot.map(c => `#${c.id} lot ${(c.lot_nr || []).join(',') || c.lot_domeniu}`).join('; ')})</span>}
         </div>}
         <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
           <input style={S.inp} placeholder="USD" value={plafon} onChange={e => setPlafon(e.target.value)} disabled={busy} />

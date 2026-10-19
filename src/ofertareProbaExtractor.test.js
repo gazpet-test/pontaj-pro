@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { consumBuget, cerereActiva, ruleazaPanaLaCapat, totalPasi } from './ofertareProbaExtractor.js'
+import { consumBuget, cerereActiva, cereriPeLot, ruleazaPanaLaCapat, totalPasi } from './ofertareProbaExtractor.js'
 
 describe('consumBuget', () => {
   it('decontat la cost real; orice altă stare la suma rezervată (ca fn_ofertare_cb_consum)', () => {
@@ -35,6 +35,22 @@ describe('ruleazaPanaLaCapat', () => {
     expect((await ruleazaPanaLaCapat(async () => ({ data: { error: '403' } }), {})).motiv).toBe('eroare')
     expect((await ruleazaPanaLaCapat(async () => ({ data: null, error: { message: 'retea' } }), {})).pasi[0].eroare).toBe('retea')
     expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: 'buget_timp' } }), {}, { trebuieOprit: () => true })).motiv).toBe('oprit_de_om')
-    expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: 'buget_timp' } }), {}, { maxPasi: 3 })).pasi.length).toBe(3)
+    expect((await ruleazaPanaLaCapat(async () => ({ data: { oprit: 'buget_timp', felii_apelate: 1 } }), {}, { maxPasi: 3 })).pasi.length).toBe(3)
+  })
+})
+
+describe('review r1 (#797)', () => {
+  it('cerereActiva ignoră cererile pe un lot anume (doar afișate)', () => {
+    const acum = Date.parse('2026-10-20T06:00:00Z')
+    const c = [{ id: 7, scop: 'cant_extragere', stare: 'activa', valabil_pana: '2026-10-20T18:00:00Z', lot_domeniu: 'lista', lot_nr: [2] }]
+    expect(cerereActiva(c, 'cant_extragere', acum)).toBeNull()
+    expect(cereriPeLot(c, 'cant_extragere', acum).map(x => x.id)).toEqual([7])
+  })
+  it('pas oprit pe timp fără nicio felie = fără progres (nu se repetă în gol); excepția invoke = eroare', async () => {
+    let n = 0
+    const r = await ruleazaPanaLaCapat(async () => { n++; return { data: { oprit: 'buget_timp', felii_apelate: 0 } } }, {})
+    expect([r.motiv, n]).toEqual(['fara_progres', 1])
+    const e = await ruleazaPanaLaCapat(async () => { throw new TypeError('Failed to fetch') }, {})
+    expect([e.motiv, e.pasi[0].eroare]).toEqual(['eroare', 'Failed to fetch'])
   })
 })
