@@ -158,7 +158,7 @@ Deno.test('r8 (Copilot P1): rânduri ierarhice de LISTĂ („5.1 …”, „5.3 
   assertEquals(r.map((x) => [x.nr, x.nr_id, x.stare]), [[5, '5.1', 'ancora'], [5, '5.3', 'ancora']])
   assertEquals(tabele(r).map((x) => x.goluri_ierarhice), [['5.2']])
   assertEquals(inv('5.1 1234567 Teava m 10\n5.2 SA11G1 Teava m 20\n').map((x) => x.nr_id), ['5.1', '5.2'])
-  assertEquals(inv('003 SA11G1 [ 2] M 570.000\nTEAVA PVC 20.80 11856.00\n38.32 21842.40\n0.90 513.00\n1.5 m adancime\n').map((x) => x.nr_id), ['003'])
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\nTEAVA PVC 20.80 11856.00\n38.32 21842.40\n0.90 513.00\n1.5 m adancime\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
 })
 
 // ── review Copilot / Gemini B1 r8 ──
@@ -171,7 +171,22 @@ Deno.test('r9: rânduri ierarhice de LISTĂ — UM + cantitate, cod de 4 cifre, 
   assertEquals(id('5.1 3A1iG1 Conducta m 10\n5.2 TRA01A Conducta m 10\n5.3 sa11g1 Conducta m 10\n'), ['5.1', '5.2', '5.3'])
   assertEquals(id('5.1 A se vedea m 10\n5.2 O conducta PEHD m 10\n5.3 (Conducta) m 10\n5.4 [2] SA11G1 m 10\n'), ['5.1', '5.2', '5.3', '5.4'])
   // rămân excluse: prețuri / zecimale și o măsură în text
-  assertEquals(id('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n0.90 513.00\n1.5 m adancime\n20.80 11856.00\n'), ['003'])
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n0.90 513.00\n1.5 m adancime\n20.80 11856.00\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
   // poziția „dupa” la ierarhic: codul de după nr. e găsit
   assertEquals(inv('5.1 SA11G1 Conducta m 10\n')[0].cod, 'SA11G1')
+})
+
+// ── review Copilot / Gemini B1 r9 ──
+Deno.test('r10: recunoaștere STRUCTURALĂ — „5.1 - …”, „5.1: …”, „5.1 A1 …”, „5.1 m3 10”, „5.1 M 10” în inventar; prețurile excluse; „1.5 m adancime” = incert', () => {
+  const id = (t: string) => inv(t).map((x) => x.nr_id)
+  assertEquals(id('5.1 - Conducta PEHD m 10\n5.3 - Conducta PVC m 20\n'), ['5.1', '5.3'])
+  assertEquals(tabele(inv('5.1 - Conducta PEHD m 10\n5.3 - Conducta PVC m 20\n')).map((x) => x.goluri_ierarhice), [['5.2']])
+  assertEquals(id('5.1: Conducta m 10\n5.2 A1 Conducta m 10\n5.3 m3 10\n5.4 M 10\n'), ['5.1', '5.2', '5.3', '5.4'])
+  // orice altă formă ierarhică cu conținut intră (cel puțin incert), nu dispare
+  const s = inv('5.1 ~ ceva\n')
+  assertEquals(s.map((x) => [x.nr_id, x.stare, x.motiv]), [['5.1', 'incert', 'posibila_continuare']])
+  // liniile de prețuri (id urmat de un număr zecimal) rămân în afară; „1.5 m adancime” = incert în afara secvenței
+  assertEquals(id('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00\n38.32 21842.40\n'), ['003'])
+  const m = inv('003 SA11G1 [ 2] M 570.000\n1.5 m adancime\n')
+  assertEquals(m.map((x) => [x.nr_id, x.motiv]), [['003', null], ['1.5', 'posibila_continuare']])
 })
