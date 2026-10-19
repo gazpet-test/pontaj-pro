@@ -12,10 +12,7 @@ import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_sh
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
 import { MODEL_A, OVERHEAD_A, PROMPT_A, tarifA } from './extractorA.ts'
-<<<<<<< HEAD
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
-=======
->>>>>>> origin/main
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f2' }
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
@@ -289,11 +286,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       raport.push({ document_id: d.id, extragere_id: x, stare: ic.data?.refuz ? 'ramane_in_lucru:' + ic.data.refuz : st })
     }
   }
-<<<<<<< HEAD
   return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate, felii_cu_deficit_b1: feliiCuDeficit,
-=======
-  return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate,
->>>>>>> origin/main
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport } }
 }
 
