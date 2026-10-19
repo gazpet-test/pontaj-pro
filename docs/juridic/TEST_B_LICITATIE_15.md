@@ -2,6 +2,8 @@
 
 > 19.10.2026 · sesiunea de chat, la cererea lui Răzvan („da drumul la treabă”). Doar analiză: **nicio scriere în ERP**. Rândurile din §3 se creează doar după „da”. Spec: `SPEC_B_REDUS_TEMEI_CLARIFICARI.md` (#785).
 
+> ⚠️ **ERATĂ 19.10.2026 (seara):** concluzia „ofertăm 6.400 m din F3” e DEPĂȘITĂ. **Răspunsul consolidat nr. 3** (nr. 10307 / 14.10.2026, SEAP 00031) anexează **Listele de cantități revizuite** (paginile 14–204, scanate). Deja prin RC2 autoritatea precizase „Se vor lua în calcul cantitățile din ATR, total 3.995,00 m”. BO2026_3104 rămâne valabilă (cantitățile publicate sunt obligatorii), dar cantitățile publicate sunt acum **listele revizuite**. Clarificarea nouă pe Dn 90 NU mai e necesară (au pus-o alți ofertanți: RC3, solicitările 4 și 5). Termenul de depunere rămâne **26.10.2026** (prelungirea cu 47 de zile a fost refuzată). În ERP, RC3 (doc 1654) e încă neprocesat.
+
 ## 0. Licitația
 - Orașul Răcari (Dâmbovița): extindere rețea gaze naturale. Status GO, depunere **26.10.2026**.
 - `regim_achizitie` = NULL (de completat: clasic / sectorial schimbă temeiurile legale).
