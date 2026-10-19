@@ -164,6 +164,7 @@ export function inventarRanduri(text: string): RandInventar[] {
     let folosit = rest
     // offsetul cantității în textul ORIGINAL: pe linia rândului, aceeași poziție în linie (copia închisă doar adaugă „ |” la capăt)
     let cantOffset: number | null = cu ? startO + (cu.de_la - startI) : null
+    let umMii: string | null = null
     // cantitatea / UM pe linia următoare („1 Conducta PEHD” / „m 120,000”), dacă aceea nu e începutul altui articol — numerotat SAU
     // rând de tabel cu cod (review r2, P2-5: altfel un rând C6 împrumuta cantitatea articolului următor)
     if (!cu && i + 1 < orig.length && !incepeArticol(inch[i + 1]) && !RE_MARCAJ.test(orig[i + 1])) {
@@ -172,6 +173,7 @@ export function inventarRanduri(text: string): RandInventar[] {
     }
     // separator de mii prin spațiu („1 234,50”): tokenizarea l-ar rupe („1 m”) → incert, chiar dacă s-a „găsit” o cantitate (review r2, P2-4)
     if (RE_MII_SPATIU.test(folosit)) {
+      umMii = cu?.um ?? null   // review Gemini A2 r3 (P2): UM-ul rămâne pe rând (C6: rândul de lungime cu separator de mii e cerut de poartă)
       cu = null; motiv = 'separator_mii_spatiu'
       // începutul numărului cu spații: pe linia rândului (după nr.) sau pe linia următoare împrumutată
       const mL = RE_MII_SPATIU.exec(li.slice(r.dupa))
@@ -198,7 +200,7 @@ export function inventarRanduri(text: string): RandInventar[] {
       if (!r.markdown && r.nr !== null) ultimLista = { nr: r.nr, zero: /^0\d/.test(r.id ?? '') }
       ultimMarkdown = r.markdown
     }
-    out.push({ offset: startO, linie: i + 1, pagina, nr: r.nr, nr_id: r.id, cod: c.cod, cantitate: cu?.cantitate ?? null, um: cu?.um ?? null,
+    out.push({ offset: startO, linie: i + 1, pagina, nr: r.nr, nr_id: r.id, cod: c.cod, cantitate: cu?.cantitate ?? null, um: cu?.um ?? umMii,
       markdown: r.markdown, stare: cu && !posibilaContinuare ? 'ancora' : 'incert', motiv: cu && !posibilaContinuare ? null : motiv,
       cantitate_offset: cantOffset })
   }
