@@ -399,3 +399,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 19.10.2026 | #795 | Proveniența textului: origine nouă `ocr_local_neverificat` (20261101b; NU e sursă de extragere — doar `transcriere` sau confirmarea omului) + afișarea proveniențelor pe rândul documentului |
 | 20.10.2026 | #792 | Extractorul A (opt-in) în modul structurat: Claude Haiku 5.5 cu structured outputs, prompt `p4`, tarif pe trepte, rezervare cu overhead-ul schemei (`OVERHEAD_A`); B (`gpt-5-mini`) rămâne implicit |
 | 20.10.2026 | #798 | Poarta B1 pe felie în extracția structurată (`poartaB1.ts`): acoperire pe tokenul cantității, incertele cu cantitate nerecunoscută cerute, `complet` / `deficit` în raport |
+| 20.10.2026 | #794 | Escaladarea Haiku 5.5 → Sonnet 5.5 o dată pe felie (incert / nenormalizabile / deficit B1), adoptare doar dacă e cel puțin la fel de bun, rezervare unică pentru ambele apeluri |

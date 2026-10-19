@@ -8,6 +8,8 @@ const TEXT_F3 = 'Formularul F3\nLista cu cantitatile de lucrari\nObiect 3 Str. P
 const OBIECT_RAND = { pagina: null, tabel: null, rand: '003', cod_articol: 'SA11G1', denumire: 'TEAVA PVC ... DISTRIBUTIE D= 90 MM', obiect: 'Str. Platanului',
   material: 'PVC', dn_text: 'D= 90 MM', sdr: null, um: 'M', cantitate: '1160.000', e_total: 0, e_subtotal: 0, tip_lucrare: 'conducta', masura: 'lungime',
   citat: '003 SA11G1 [ 2] M 1160.000' }
+const RAND_002 = { ...OBIECT_RAND, rand: '002', cod_articol: 'GD11A1', denumire: 'DRENAJ', material: null, dn_text: null, um: 'M.C.', cantitate: '174.000',
+  tip_lucrare: 'alt', masura: 'alt', citat: '002 GD11A1 [ 1] M.C. 174.000' }
 
 Deno.test('A1: schema = exact câmpurile normalizării, toate obligatorii, fără chei străine; obiectul conform trece prin randDinTablou', () => {
   const it = ((SCHEMA_A as any).properties.r as any).items
@@ -54,7 +56,7 @@ Deno.test('A1: tariful pe trepte — ≤ 100k tokeni intrare $0,10 / $0,50, pest
   const EPS = 1e-9   // rotunjirea în sus la 1e-4 USD
   assert(sumaRezervata(mic, EXTRACTOARE.A) + EPS >= 50_000 * 0.10e-6 + MAX_IESIRE * 0.50e-6)
   assert(sumaRezervata(mare, EXTRACTOARE.A) + EPS >= 120_000 * 0.50e-6 + MAX_IESIRE * 2.50e-6)
-  assert(sumaRezervata(mare, EXTRACTOARE.A) > sumaRezervata(mic, EXTRACTOARE.A) * 4)   // treapta mare chiar se aplică
+  assert(tarifA(120_000).in > tarifA(100_000).in * 4)   // treapta mare chiar se aplică (rezervarea cu Sonnet: extractorA3_test.ts)
   // B rămâne neschimbat (implicit)
   assertEquals(sumaRezervata(mic), sumaRezervata(mic, EXTRACTOARE.B))
 })
@@ -79,7 +81,7 @@ function fals() {
     lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
     extragereInLucru: async () => null,
     ultimaIncercare: async () => null,
-    ai: async (p) => { prompturi.push(p); return { txt: JSON.stringify({ r: [OBIECT_RAND] }), inF: 1000, outF: 200 } },
+    ai: async (p) => { prompturi.push(p); return { txt: JSON.stringify({ r: [RAND_002, OBIECT_RAND] }), inF: 1000, outF: 200 } },
     acum: () => 0,
   }
   return { deps, rpcArgs, extractori, prompturi }
@@ -89,7 +91,7 @@ Deno.test('A1: extractor A în modul structurat — identitate proprie (alt cach
   const f = fals()
   const r = await extrageStructurat(f.deps, { licitatie_id: 15, cerere_id: 5, extractor: 'A' })
   assertEquals(r.status, 200)
-  assertEquals(r.body.extractor, `${MODEL_A}@p4@n4@f2`)
+  assertEquals(r.body.extractor, `${MODEL_A}>claude-sonnet-5-5@p4@n4@f2`)   // A3: identitatea include modelul de escaladare
   assert(f.extractori[0].startsWith(idExtractor(EXTRACTOARE.A) + '@c-'))
   assert(!f.extractori[0].startsWith(EXTRACTOR_ID))
   assert(f.prompturi[0].includes('schema e impusă'))
@@ -98,7 +100,8 @@ Deno.test('A1: extractor A în modul structurat — identitate proprie (alt cach
   assertEquals([dc.p_model, dc.p_cost, dc.p_tokeni_in, dc.p_tokeni_out], [MODEL_A, Math.round((1000 * 0.10e-6 + 200 * 0.50e-6) * 1e4) / 1e4, 1000, 200])
   // rândul-obiect din schema A se normalizează și se dovedește în sursă
   const obs = f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs
-  assertEquals([obs.length, obs[0].cantitate, obs[0].pozitie_dovedita, obs[0].dn_mm], [1, 1160, true, [90]])
+  assertEquals([obs.length, obs[1].cantitate, obs[1].pozitie_dovedita, obs[1].dn_mm], [2, 1160, true, [90]])
+  assertEquals(r.body.felii_escaladate, 0)   // ambele rânduri acoperite → fără escaladare
 })
 
 Deno.test('A1: fără `extractor` (sau orice altă valoare) rămâne B, neschimbat', async () => {
