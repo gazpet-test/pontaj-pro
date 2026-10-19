@@ -29,7 +29,10 @@ const RE_NR_SINGUR = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*$/
 // degradat „5.1 12,50”) intră ca rând „slab” → incert „posibila_continuare” (în inventar, în afara secvenței, tabel nedeterminat).
 // Pe textele valului 1 asemenea linii nu schimbă nimic (singurele sunt „0.00 0.00”, cu nr. 0, care nu e rând).
 const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**(?:[.):]\**(?:\s+|(?=[\p{L}(\[]))|\s+)(?:[-–:]\s*)?(?=[\p{L}@][\p{L}.]+|(?![mMtTlL]\s)\p{L}\s+\p{L}|[(\[]\s*[\p{L}\d]|(?=[\p{L}\d]*\p{L})(?=[\p{L}\d]*\d)[\p{L}\d]{2,}|\d{4,}(?![.,]?\d)|(?:m|ml|km|mc|mp|m2|m3|buc|kg|t|to|l|M|ML|KM|MC|MP|M2|M3|BUC|KG|T|TO|L)\.?\s+\d)/u
-const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.)]?\**\s*\|/
+const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*\|/
+// prima celulă care ÎNCEPE cu un nr. dar nu are forma strictă („| 1 Conducta | …”, „| 5.2 - | …”, „| 1)a | …”, review Copilot r16): rând
+// „slab” — cu cantitate + UM pe rând e rând normal, altfel incert „posibila_continuare” (în inventar, tabel nedeterminat)
+const RE_NR_MARKDOWN_SLAB = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?:[.):\-–]|\s)[^|]*\|/u
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
 const RE_SEPARATOR = /^\s*\|?\s*:?-{3,}/
 // cantitate cu separator de mii prin spațiu („1 234,50”, „2 450,00”) — tokenizarea o rupe; rândul devine „incert”, nu dispare
@@ -82,18 +85,23 @@ function codDupaNr(rest: string): { cod: string | null; de: number; pana: number
 // rândul numerotat al liniei: nr. + poziția de după el, sau null
 function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: boolean; slab?: boolean } | null {
   if (RE_SEPARATOR.test(l)) return null
-  const markdown = (l.match(/\|/g) || []).length >= 2
+  const pipe = (l.match(/\|/g) || []).length >= 2
+  const mdTare = pipe ? RE_NR_MARKDOWN.exec(l) : null
+  // linie cu „|” doar spre coadă (nu începe cu „|”, iar înaintea primului „|” nu e un nr. strict de celulă) = rând de LISTĂ — „008 GD12A1
+  // BUC. 1.000 LEGATURA … | 0.000 | 0 Total=”, „025 4123214 | BUC. | 3.000 | …” (corpus 212 / 213: altfel tratate ca tabel, fără cantitate)
+  const markdown = pipe && (mdTare !== null || /^\s*\|/.test(l))
   const ier = markdown ? null : RE_NR_LISTA_IER.exec(l)
   // ierarhic „slab”: structura e de rând, dar conținutul nu e pe lista albă → rând incert, nu eliminat (fără excluderi, r12)
   const slab = !markdown && !ier ? (RE_NR_LISTA_IER_STRUCT.exec(l) ?? RE_NR_SINGUR.exec(l)) : null
-  const m = markdown ? RE_NR_MARKDOWN.exec(l) : (ier ?? slab ?? RE_NR_LISTA.exec(l))
+  const mdSlab = markdown && !mdTare ? RE_NR_MARKDOWN_SLAB.exec(l) : null
+  const m = markdown ? (mdTare ?? mdSlab) : (ier ?? slab ?? RE_NR_LISTA.exec(l))
   if (!m) return null
   const id = m[1]
   const nr = Number(id.split('.')[0])
   if (!(nr >= 1)) return null
   // rândul de numerotare a coloanelor sub antet („0 | 1 | 2 | 3 …”, „1 | 2 | 3 | 4”) nu e un rând
   if (markdown && /^[\s|]*\d{1,2}(?:\s*\|\s*\d{1,2}){2,}[\s|]*$/.test(l)) return null
-  return { nr, id, dupa: m.index + m[0].length - (markdown || ier || slab ? 0 : 1), markdown, ...(slab && m === slab ? { slab: true } : {}) }
+  return { nr, id, dupa: m.index + m[0].length - (markdown || ier || slab ? 0 : 1), markdown, ...((slab && m === slab) || (mdSlab && m === mdSlab) ? { slab: true } : {}) }
 }
 
 // cantitatea + UM ale unei linii (în copia închisă), excluzând tokenurile nr. și cod după POZIȚIE

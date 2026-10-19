@@ -260,3 +260,20 @@ Deno.test('r16 (Gemini P2): reluarea ierarhică după alt capitol (5.1, 5.3, 6.1
   // capitole succesive normale: un singur tabel
   assertEquals(tabele(inv('5.1 A m 1\n5.2 B m 2\n6.1 C m 3\n6.2 D m 4\n7.1 E m 5\n')).map((x) => [x.randuri, x.reluari_atipice, x.goluri_ierarhice]), [[5, 0, []]])
 })
+
+// ── review Copilot B1 r16 ──
+Deno.test('r17 (Copilot P1): rândul de TABEL cu „1:” / „5.2:” sau cu prima celulă nestandard nu mai dispare', () => {
+  assertEquals(inv('| 1: | Conducta | m | 10 |\n| 2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['1', 'ancora'], ['2', 'ancora']])
+  assertEquals(inv('| 5.1 | Conducta | m | 10 |\n| 5.2: | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.2', 'ancora']])
+  // prima celulă „1 Conducta”: rând slab — cu cantitate e normal, fără e incert posibila_continuare
+  assertEquals(inv('| 1 Conducta | m | 10 |\n| 2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['1', 'ancora'], ['2', 'ancora']])
+  const s = inv('| 1 Conducta | | |\n| 2 | Teava | m | 20 |\n')
+  assertEquals(s.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'incert', 'posibila_continuare'], ['2', 'ancora', null]])
+  assertEquals(tabele(s).some((x) => x.secventa_nedeterminata), true)
+})
+Deno.test('r17: rândul de LISTĂ cu coloane „|” doar la coadă (F3 212 / 213) intră ca rând de listă, cu cantitatea lui', () => {
+  const r = inv('007 GD11A1 BUC. 1.000 LEGATURA | 0.000 | 0 Total=\n008 GD12A1 BUC. 1.000 LEGATURA CONDUCTEI NOI | 0.000 | 0 Total=\n009 RPGD13F1 [ 1] M 570.000 EFECTUAREA | 0.000 | 0 Total=\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.cantitate]), [['007', 'ancora', '1.000'], ['008', 'ancora', '1.000'], ['009', 'ancora', '570.000']])
+  const c = inv('025 4123214 | BUC. | 3.000 | | NIPLU FONTA | 0.000 | 0 | Total=\n026 4117966 | BUC. | 4.000 | COT FONTA | 0.000 | 0 Total=\n')
+  assertEquals(c.map((x) => [x.nr_id, x.stare]), [['025', 'ancora'], ['026', 'ancora']])
+})
