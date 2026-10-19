@@ -62,3 +62,35 @@ Deno.test('B1: masoara — rânduri / ancore / incerte / perechi cod+cantitate d
   assertEquals([m.randuri, m.ancore, m.incerte, m.perechi_distincte, m.tabele], [6, 5, 1, 5, 1])
   assert(m.goluri === 2) // 4, 5
 })
+
+// ── review Jakarinos #751 r2 ──
+Deno.test('r3 (P1-1): rând de listă fără cod, cu UM necunoscută → INCERT (nu dispare); continuarea evidentă „2 COD …” sub „003 …” → ignorată', () => {
+  assertEquals(sumar('1 Conducta m 10\n2 Adeziv GRAME 12\n'), [[1, 'ancora', null, '10', 'm'], [2, 'incert', null, null, null]])
+  assertEquals(inv('1 Conducta m 10\n2 Adeziv GRAME 12\n')[1].motiv, 'lista_fara_cod_sau_cantitate')
+  // nr. care nu continuă secvența (nici ultimul, nici următorul, nici 1) = continuare de denumire
+  assertEquals(inv('003 SA11G1 [ 2] M 10.000\nTEAVA\n2 COD 64000115\n7 FIRE DE 1,5\n').map((x) => x.nr), [3])
+})
+Deno.test('r3 (P1-3): reluarea de la 1 separă tabelul și când fragmentul anterior n-avea poziția 1 („8, 10” apoi „1 … 9” → golul 9 rămâne)', () => {
+  const rd = ['| 8 | A | m | 1 |', '| 10 | B | m | 2 |', ...Array.from({ length: 9 }, (_, k) => `| ${k + 1} | X | m | ${k + 1} |`)].join('\n') + '\n'
+  assertEquals(tabele(inv(rd)).map((x) => [x.nr_min, x.nr_max, x.goluri]), [[8, 10, [9]], [1, 9, []]])
+})
+Deno.test('r3 (P2-4): separatorul de mii prin spațiu în listă (pe linie sau pe linia următoare) → incert, nu „1 m”', () => {
+  assertEquals(inv('1 RPC01 Conducta m 1 234,50\n').map((x) => [x.stare, x.motiv]), [['incert', 'separator_mii_spatiu']])
+  assertEquals(inv('1 RPC01 Conducta\nm 1 234,50\n').map((x) => [x.stare, x.motiv]), [['incert', 'separator_mii_spatiu']])
+})
+Deno.test('r3 (corpus): „HDPE80 312UNI” nu e separator de mii; continuarea de denumire între rânduri de tabel nu e rând (nici reluare de la 1)', () => {
+  assertEquals(inv('003 6701152 M 130.000 @TV HDPE80 312UNI7611.7615 PN10 DN 90X8.2 COD 64000115 0.003 0 Total=\n').map((x) => x.stare), ['ancora'])
+  const t = '| 16 | 00602G04 | 02 BUCATA | 9,00000 | |\nSUDURA CAP LA CAP\n1 IMBIN.(DOP/CAPAT FLANSA) D= 90 MM\n| 17 | ACE01B3 | 82 BUCATA | 3,00000 | |\n'
+  assertEquals(inv(t).map((x) => x.nr), [16, 17])
+  assertEquals(tabele(inv(t)).map((x) => x.goluri), [[]])
+})
+Deno.test('r3 (P2-5): un rând C6 nu împrumută cantitatea articolului următor (rând de tabel cu cod)', () => {
+  assertEquals(sumar('| 2001455 | Adeziv | GRAME | 12 |\n| 2001456 | Conducta | m | 15 |\n'),
+    [[null, 'incert', '2001455', null, null], [null, 'ancora', '2001456', '15', 'm']])
+})
+Deno.test('r3 (P2-6): numerotarea ierarhică păstrează identificatorul; „5.1, 5.3” → golul 5.2', () => {
+  const r = inv('| 5 | Proiectare | | |\n| 5.1 | Tema | m | 1 |\n| 5.3 | Studiu | m | 2 |\n| 6 | Altele | m | 3 |\n')
+  assertEquals(r.map((x) => [x.nr, x.nr_id]), [[5, '5'], [5, '5.1'], [5, '5.3'], [6, '6']])
+  assertEquals(tabele(r).map((x) => [x.goluri, x.goluri_ierarhice]), [[[], ['5.2']]])
+  assertEquals(masoara('| 5.1 | Tema | m | 1 |\n| 5.3 | Studiu | m | 2 |\n').goluri, 1)
+})

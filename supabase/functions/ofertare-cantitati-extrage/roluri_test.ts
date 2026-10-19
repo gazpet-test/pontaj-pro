@@ -54,3 +54,10 @@ Deno.test('r3: memoriu → F3 → pagină ATR explicită: ATR-ul de după antet 
   assertEquals(sectiuniRol(t, 'Memoriu tehnic', 'alta').map((x) => [x.rol, x.decis_de, x.pagini]),
     [['memoriu', 'titlu', [1, 1]], ['f3', 'antet', [2, 2]], ['atr', 'marcaj', [3, 3]], ['f3', 'antet', [4, 4]]])
 })
+
+Deno.test('B1 r3 (review #751 r2, P1-2): sectiuniRol recunoaște „Lista consumurilor …” la fel ca sectiuniLista (C6 / lista_alt, nu F3 din titlu)', () => {
+  const c6 = sectiuniRol('⟦PAGINA 1⟧\nLista consumurilor de resurse materiale\n1 | 6701152 | M | 130.00\n', 'Liste de cantitati.pdf', 'lista_cantitati')
+  assertEquals(c6.map((x) => [x.rol, x.decis_de]), [['c6', 'antet']])
+  const c8 = sectiuniRol('⟦PAGINA 1⟧\nLista consumurilor de ore de functionare a utilajelor\n1 | 2509 | 3.0\n', 'Liste de cantitati.pdf', 'lista_cantitati')
+  assertEquals(c8.map((x) => [x.rol, x.decis_de]), [['lista_alt', 'antet']])
+})
