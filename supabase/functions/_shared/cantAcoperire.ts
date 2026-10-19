@@ -17,12 +17,12 @@ const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
 // numerotarea ierarhică în LISTĂ („5.1 Conducta”, „1000.1 …”, „5.1 m 10”, „5.1 2509 Teava”, „5.1 3A1iG1 …”, „5.1 A se vedea”, „5.1 (Conducta”)
 // — review Copilot r7 / r8, Gemini r8. Ce o urmează: un cuvânt de ≥ 2 litere; un cuvânt de o literă care NU e o UM (m / t / l) urmat de
 // alt cuvânt; o paranteză; un cod alfanumeric (orice majuscule / minuscule, cu literă și cifră); un cod numeric de ≥ 4 cifre FĂRĂ zecimale;
-// sau o UM urmată de un număr („5.1 m 10”). Rămân excluse doar liniile de prețuri / zecimale („213.76 65795.33”, „0.90 513.00”,
-// „TEAVA 20.80 11856.00”) și o măsură în text („1.5 m adancime” — UM urmată de cuvânt, nu de cantitate).
+// sau o UM urmată de un număr („5.1 m 10”). Ce nu e pe lista albă („213.76 65795.33”, „5.1 12,50”,
+// „1.5 m adancime”) intră ca rând slab → incert „posibila_continuare”, nu dispare.
 const RE_NR_LISTA_IER_STRUCT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**[.):]?\**\s+(?=\S)/u
-// linie de prețuri: id ierarhic urmat NUMAI de numere (primul zecimal) până la capăt — „213.76 65795.33”, „20.80 11856.00”; review Copilot
-// r10: „5.1 12,50 m” (număr urmat de UM / text / cod) NU e linie de prețuri
-const RE_LINIE_PRETURI = /^\s*\**\s*\d{1,4}(?:\.\d{1,3})+\**[.):]?\**\s+\d+[.,]\d+(?:\s+\d+(?:[.,]\d+)?)*\s*$/
+// fără excludere de „linii de prețuri” (review Copilot r11): un id ierarhic urmat numai de numere („213.76 65795.33” sau un rând real
+// degradat „5.1 12,50”) intră ca rând „slab” → incert „posibila_continuare” (în inventar, în afara secvenței, tabel nedeterminat).
+// Pe textele valului 1 asemenea linii nu schimbă nimic (singurele sunt „0.00 0.00”, cu nr. 0, care nu e rând).
 const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**[.):]?\**\s+(?:[-–:]\s*)?(?=[\p{L}@][\p{L}.]+|(?![mMtTlL]\s)\p{L}\s+\p{L}|[(\[]\s*[\p{L}\d]|(?=[\p{L}\d]*\p{L})(?=[\p{L}\d]*\d)[\p{L}\d]{2,}|\d{4,}(?![.,]?\d)|(?:m|ml|km|mc|mp|m2|m3|buc|kg|t|to|l|M|ML|KM|MC|MP|M2|M3|BUC|KG|T|TO|L)\.?\s+\d)/u
 const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.)]?\**\s*\|/
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
@@ -79,8 +79,8 @@ function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: bo
   if (RE_SEPARATOR.test(l)) return null
   const markdown = (l.match(/\|/g) || []).length >= 2
   const ier = markdown ? null : RE_NR_LISTA_IER.exec(l)
-  // ierarhic „slab”: structura e de rând, dar conținutul nu e pe lista albă → rând incert, nu eliminat (doar prețurile se exclud)
-  const slab = !markdown && !ier && !RE_LINIE_PRETURI.test(l) ? RE_NR_LISTA_IER_STRUCT.exec(l) : null
+  // ierarhic „slab”: structura e de rând, dar conținutul nu e pe lista albă → rând incert, nu eliminat (fără excluderi, r12)
+  const slab = !markdown && !ier ? RE_NR_LISTA_IER_STRUCT.exec(l) : null
   const m = markdown ? RE_NR_MARKDOWN.exec(l) : (ier ?? slab ?? RE_NR_LISTA.exec(l))
   if (!m) return null
   const id = m[1]

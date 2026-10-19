@@ -186,7 +186,8 @@ Deno.test('r10: recunoaștere STRUCTURALĂ — „5.1 - …”, „5.1: …”, 
   const s = inv('5.1 ~ ceva\n')
   assertEquals(s.map((x) => [x.nr_id, x.stare, x.motiv]), [['5.1', 'incert', 'posibila_continuare']])
   // liniile de prețuri (id urmat de un număr zecimal) rămân în afară; „1.5 m adancime” = incert în afara secvenței
-  assertEquals(id('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00\n38.32 21842.40\n'), ['003'])
+  // r12: liniile numai numerice NU mai sunt excluse — intră ca incerte în afara secvenței
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00\n38.32 21842.40\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
   const m = inv('003 SA11G1 [ 2] M 570.000\n1.5 m adancime\n')
   assertEquals(m.map((x) => [x.nr_id, x.motiv]), [['003', null], ['1.5', 'posibila_continuare']])
 })
@@ -196,6 +197,15 @@ Deno.test('r11 (Copilot P1/P2): „5.1 12,50 m” / „5.1 12.50 buc” rămân 
   const r = inv('1 Conducta fara cantitate\n5.1 12,50 m\n5.3 Conducta m 20\n')
   assertEquals(r.map((x) => [x.nr_id, x.stare, x.cantitate, x.um]), [['1', 'incert', null, null], ['5.1', 'ancora', '12,50', 'm'], ['5.3', 'ancora', '20', 'm']])
   assertEquals(inv('5.1 12.50 buc\n').map((x) => [x.nr_id, x.stare, x.um]), [['5.1', 'ancora', 'buc']])
-  // prețuri: numai numere după id
-  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00 0.00\n38.32 21842.40\n').map((x) => x.nr_id), ['003'])
+  // numai numere după id: în inventar ca incerte, în afara secvenței (r12)
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00 0.00\n38.32 21842.40\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
+})
+
+// ── review Copilot B1 r11 ──
+Deno.test('r12 (Copilot P1/P2): rândul ierarhic numai numeric („5.1 12,50”, „5.1 12,50 3”) NU dispare — incert posibila_continuare, tabel nedeterminat', () => {
+  for (const t of ['5.1 12,50\n', '5.1 12,50 3\n']) {
+    const r = inv(t)
+    assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['5.1', 'incert', 'posibila_continuare']])
+    assertEquals(tabele(r).map((x) => [x.secventa_nedeterminata, x.nr_incerte]), [[true, [5]]])
+  }
 })
