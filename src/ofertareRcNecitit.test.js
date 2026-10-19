@@ -26,7 +26,8 @@ describe('rcNecitite (banner „răspuns necitit”)', () => {
     const r = rcNecitite([{ ...RC3, status_procesare: 'partial', pagini_necitite: [14, 15] }], TERMEN, '2026-10-19T09:00:00Z')
     expect(r.rosu).toBe(false)
     expect(r.partiale.length).toBe(1)
-    expect(rcNecitite([{ ...RC3, status_procesare: 'partial', pagini_necitite: [] }], TERMEN)).toBeNull()
+    // fail-closed (Gemini r1): „partial” fără listă de pagini tot apare portocaliu
+    expect(rcNecitite([{ ...RC3, status_procesare: 'partial', pagini_necitite: null }], TERMEN)?.partiale.length).toBe(1)
   })
   it('fără termen sau cu status lipsă: tot apare (status lipsă = neprocesat), zilele până la depunere = null', () => {
     const r = rcNecitite([{ ...RC3, status_procesare: null }], null, '2026-10-19T09:00:00Z')
@@ -37,5 +38,17 @@ describe('rcNecitite (banner „răspuns necitit”)', () => {
     const r = rcNecitite([{ ...RC3, created_at: '2026-10-14T20:30:00Z' }], TERMEN, '2026-10-15T06:00:00Z')
     expect(r.deLa).toBe('2026-10-14')
     expect(r.zileNecitit).toBe(1)
+  })
+})
+
+describe('review r1 (Copilot / Gemini)', () => {
+  it('stare necunoscută = necitit (fail-closed)', () => {
+    expect(rcNecitite([{ ...RC3, status_procesare: 'stare_noua' }], TERMEN, '2026-10-19T09:00:00Z').rosu).toBe(true)
+  })
+  it('termenTrecut pe ora exactă: în ziua depunerii, după ora-limită → trecut; înainte → nu', () => {
+    expect(rcNecitite([RC3], TERMEN, '2026-10-26T16:00:00Z').termenTrecut).toBe(true)
+    const r = rcNecitite([RC3], TERMEN, '2026-10-26T09:00:00Z')
+    expect(r.termenTrecut).toBe(false)
+    expect(r.zilePanaLaDepunere).toBe(0)
   })
 })
