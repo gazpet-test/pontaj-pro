@@ -103,7 +103,7 @@ Deno.test('A3: extractorul B nu escaladează niciodată (nu are model de escalad
 Deno.test('A3: rezervarea A = limita Haiku + limita Sonnet pe același prompt (plafonul verificat înaintea oricărui apel); costul real ≤ rezervare', () => {
   for (const n of [1_000, 30_000, 99_000, 150_000]) {
     const p = 'ă'.repeat(n / 2) + 'x'.repeat(n / 2)
-    const octeti = new TextEncoder().encode(p).length
+    const octeti = new TextEncoder().encode(p).length + EXTRACTOARE.A.overheadOcteti   // intrarea facturată = prompt + schemă
     const s = sumaRezervata(p, EXTRACTOARE.A)
     const tH = octeti > 100_000 ? TARIF_A.mare : TARIF_A.mic
     assert(s + 1e-9 >= octeti * tH.in + MAX_IESIRE * tH.out + octeti * TARIF_S.in + MAX_IESIRE * TARIF_S.out)

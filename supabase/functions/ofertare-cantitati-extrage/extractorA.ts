@@ -31,7 +31,7 @@ const TIP_CAMP: Record<(typeof CAMPURI_RAND)[number], unknown> = {
   masura: { type: 'string', enum: ['lungime', 'montaj', 'proba', 'material', 'alt'] },
   citat: { type: 'string' },
 }
-export const SCHEMA_A = {
+export const SCHEMA_A: Record<string, unknown> = {
   type: 'object',
   properties: {
     r: {
@@ -48,7 +48,7 @@ export const SCHEMA_A = {
   additionalProperties: false,
 }
 
-export const PROMPT_A = (nume: string, rol: string) => `Ești inginer de devize. Din bucata de mai jos a documentului "${nume}" (secțiune cu rolul: ${rol}), extrage FIECARE RÂND cantitativ (lungimi de conductă, branșamente, tuburi de protecție, lucrări cu cantitate).
+export const PROMPT_A = (nume: string, rol: string) => `Ești inginer de devize. Din bucata de mai jos a documentului "${nume}" (secțiune cu rolul: ${rol}), extrage FIECARE RÂND cantitativ din tabele / liste de cantități și din text (lungimi de conductă, branșamente, tuburi de protecție, lucrări, materiale, echipamente cu cantitate).
 
 Răspunsul are forma {"r":[...]} cu câte un obiect pe rând (schema e impusă):
 - pagina: numărul din cel mai apropiat marcaj ⟦PAGINA n⟧ de dinaintea rândului, sau null;
@@ -60,13 +60,19 @@ Răspunsul are forma {"r":[...]} cu câte un obiect pe rând (schema e impusă):
 - e_total / e_subtotal: 1 dacă rândul e un total / subtotal declarat, altfel 0;
 - tip_lucrare: conducta | bransament | protectie | alt; masura: lungime | montaj | proba | material | alt;
 - citat: copiat VERBATIM, continuu, din document (max. 300 de caractere), fără „...”, fără prescurtări, fără reordonări: într-o listă / un tabel = linia rândului de la ÎNCEPUTUL ei (nr. crt. și cod) până după cantitate și unitate, exact cum apare (ex. "003 SA11G1 [ 2] M 1160.000"); într-un text (caiet de sarcini, memoriu) = propoziția care conține cantitatea, cu denumirea / Dn-ul ei. Dacă porțiunea depășește 300 de caractere: ultimele caractere CONTINUE care se termină imediat după cantitate și unitate.
-REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document; NU sări niciun rând de tabel care are cantitate scrisă, chiar dacă nu e țeavă. Include DOAR rândurile care au o cantitate scrisă. NU include totalurile valorice (RON / lei / valoare), liniile „0.000 0 Total=” și nici antetele de tabel. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Într-un text (caiet de sarcini, memoriu) NU extrage adâncimi de pozare, distanțe de gardă, presiuni, temperaturi, durate sau grosimi — doar cantitățile de lucrări / conducte.`
+REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document; NU sări niciun rând de tabel care are cantitate scrisă, chiar dacă nu e țeavă. Include DOAR rândurile care au o cantitate scrisă. NU include totalurile valorice (RON / lei / valoare), liniile care conțin DOAR „0.000 0 Total=” (fără articol) și nici antetele de tabel — un rând de articol care se termină cu coloane „| 0.000 | 0 Total=” SE EXTRAGE. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Într-un text (caiet de sarcini, memoriu) NU extrage adâncimi de pozare, distanțe de gardă, presiuni, temperaturi, durate sau grosimi — doar cantitățile de lucrări / conducte.`
+
+// review Copilot / Gemini #792 r1 (P1): schema (output_config.format) și încadrarea structured outputs se facturează ca intrare, dar NU sunt
+// în prompt → rezervarea adaugă octeții schemei + o marjă fixă pentru încadrare (system prompt intern, roluri)
+export const OVERHEAD_A = new TextEncoder().encode(JSON.stringify(SCHEMA_A)).length + 4000
 
 export type RezultatA = { txt: string; inF: number; outF: number; eroare?: string; necunoscut?: boolean }
 
 // Un apel; erorile se ÎNTORC. `necunoscut` = rezultat incert (tăiat la max_tokens, refuz, alt stop) — nu se scrie ca extragere completă.
 export async function cheamaA(fetchFn: typeof fetch, cheie: string, prompt: string, maxIesire: number, model: string = MODEL_A): Promise<RezultatA> {
-  const r = await fetchFn('https://api.anthropic.com/v1/messages', {
+  let r: Response
+  // review Gemini r1 (P3): o excepție de rețea se ÎNTOARCE ca eroare, nu se aruncă
+  try { r = await fetchFn('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': cheie, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -75,7 +81,7 @@ export async function cheamaA(fetchFn: typeof fetch, cheie: string, prompt: stri
       output_config: { format: { type: 'json_schema', schema: SCHEMA_A }, ...(model === MODEL_S ? { effort: 'medium' } : {}) },
       messages: [{ role: 'user', content: prompt }],
     }),
-  })
+  }) } catch (e) { return { txt: '', inF: 0, outF: 0, eroare: 'Claude: ' + String((e as Error)?.message || e).slice(0, 200) } }
   let d: any = null
   try { d = await r.json() } catch { /* corp ne-JSON */ }
   if (!r.ok) return { txt: '', inF: 0, outF: 0, eroare: 'Claude: ' + (d?.error?.message || r.status) }
