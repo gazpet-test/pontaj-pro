@@ -1,0 +1,46 @@
+-- REVENIRE 20261101a — scoate escaladarea „RC necitit”: cele cinci funcții (ofertare_rc_doc_necitit, ofertare_alerta_rc_necitit,
+-- ofertare_alerta_rc_necitite_acum, ofertare_alerta_rc_mail_confirma, ofertare_alerta_rc_mail_elibereaza).
+-- Notificările deja trimise și amprentele (fel 'rc_necitit' / 'rc_necitit_mail') rămân neatinse (sunt istoric).
+-- ÎNTÂI se oprește cron-ul ofertare_rc_necitit (refuz dacă e activ). DOAR la cererea lui Răzvan.
+-- Armare per tranzacție:
+--   SELECT set_config('gazpet.revenire_20261101a', 'SCOATE_RC_NECITIT:' || txid_current(), true);
+DO $pre$
+BEGIN
+  IF current_setting('gazpet.revenire_20261101a', true) IS DISTINCT FROM 'SCOATE_RC_NECITIT:' || txid_current() THEN
+    RAISE EXCEPTION '20261101a: garda start invalida';
+  END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261101a: necesita postgres'; END IF;
+  PERFORM set_config('lock_timeout', '5s', true);
+  -- armarea persistentă (ALTER DATABASE / ROLE … SET) e refuzată (review Gemini r4, P3; ca la celelalte reveniri)
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting WHERE array_to_string(setconfig, ',') LIKE '%gazpet.revenire_20261101a%') THEN
+    RAISE EXCEPTION '20261101a: armare persistenta refuzata';
+  END IF;
+  IF to_regprocedure('public.ofertare_rc_doc_necitit(bigint)') IS NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitite_acum(bigint[])') IS NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_mail_confirma(bigint,text)') IS NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_mail_elibereaza(bigint,text)') IS NULL THEN
+    RAISE EXCEPTION '20261101a: preconditie, migrarea nu e aplicata (complet)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname LIKE 'ofertare_rc_necitit%' AND active) THEN
+    RAISE EXCEPTION '20261101a: cron-ul ofertare_rc_necitit e activ - opreste-l intai (cron.unschedule)';
+  END IF;
+END $pre$;
+
+DROP FUNCTION public.ofertare_alerta_rc_mail_elibereaza(bigint, text);
+DROP FUNCTION public.ofertare_alerta_rc_mail_confirma(bigint, text);
+DROP FUNCTION public.ofertare_alerta_rc_necitite_acum(bigint[]);
+DROP FUNCTION public.ofertare_alerta_rc_necitit();
+DROP FUNCTION public.ofertare_rc_doc_necitit(bigint);
+
+DO $post$
+BEGIN
+  IF to_regprocedure('public.ofertare_rc_doc_necitit(bigint)') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitite_acum(bigint[])') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_mail_confirma(bigint,text)') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_mail_elibereaza(bigint,text)') IS NOT NULL THEN
+    RAISE EXCEPTION '20261101a: postconditie, functiile inca exista';
+  END IF;
+  PERFORM set_config('gazpet.revenire_20261101a', '', true);
+END $post$;
