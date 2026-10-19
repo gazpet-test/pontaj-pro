@@ -40,7 +40,8 @@ export function poartaFelie(text: string, deLa: number, rol: string | null, obs:
     const de = r.offset
     const cerutIncert = r.stare === 'incert' && INCERT_CERUT.includes(r.motiv ?? '')
     if (r.stare !== 'ancora' && !cerutIncert) { incerte++; continue }
-    if (rol === 'c6' && !UM_LUNGIME.includes(umNorm(r.um) ?? '')) {
+    // C6: se sare doar un rând cu UM CUNOSCUT care nu e de lungime; UM necunoscut (ex. separator de mii într-o celulă) = cerut (fail-closed, Gemini r3)
+    if (rol === 'c6' && umNorm(r.um) !== null && !UM_LUNGIME.includes(umNorm(r.um) ?? '')) {
       // C6 fără UM de lungime: nu se cere; un incert cu UM nerecunoscută rămâne semnalat
       if (r.stare !== 'ancora') incerte++
       continue

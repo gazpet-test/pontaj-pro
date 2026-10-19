@@ -121,3 +121,10 @@ Deno.test('A2 r3: B1 expune offsetul exact al cantității (linia rândului, lin
   const r = inventarRanduri(t)
   assertEquals(r.map((x) => [x.nr_id, x.cantitate_offset]), [['1', t.indexOf('120,000')], ['2', t.indexOf('30')], ['3', t.indexOf('1 234,50')], ['4', t.indexOf('7 ')]])
 })
+
+// ── review Gemini A2+A3 r3 ──
+Deno.test('A2 r4 (Gemini P2): în C6, rândul de lungime cu separator de mii (UM păstrat) e CERUT — omis → deficit', () => {
+  const c6 = 'C6 Lista consumurilor\n| 1 | 6701152 | m | 1 234,50 |\n| 2 | 6701640 | m | 30.00 |\n'
+  const p = poartaFelie(c6, 0, 'c6', [{ cantitate_offset: c6.indexOf('30.00'), pozitie_dovedita: true }])
+  assertEquals([p.ancore, p.acoperite, p.deficit], [2, 1, true])
+})
