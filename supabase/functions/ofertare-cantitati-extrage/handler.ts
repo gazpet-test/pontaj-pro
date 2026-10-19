@@ -35,7 +35,8 @@ import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
 import { poateCheltui } from './poarta.ts'
 import { MESAJ_ADMIN, motivRefuzAdmin } from './poarta_admin.ts'
 import { feliiDocument, type TipLista } from './sectiuni.ts'
-import { extrageStructurat } from './structurat.ts'
+import { extrageStructurat, MAX_IESIRE } from './structurat.ts'
+import { cheamaA } from './extractorA.ts'
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a)
@@ -522,7 +523,9 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
       cerere: eCer ? null : cer ?? null, buget: eBug ? null : bug ?? null, acum: Date.now() })
     if (motiv) return json({ error: MESAJ_ADMIN[motiv], motiv }, 403)
   }
-  if (!deps.chei.O) return json({ error: 'OPENAI_API_KEY lipsă din secretele funcției' }, 500)
+  // PR A1: extractorul A (Haiku 5.5, structured outputs) DOAR la cerere explicită (`extractor: 'A'`); implicit rămâne B (gpt-5-mini)
+  const extractor: 'A' | 'B' = body.extractor === 'A' ? 'A' : 'B'
+  if (extractor === 'A' ? !deps.chei.A : !deps.chei.O) return json({ error: (extractor === 'A' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY') + ' lipsă din secretele funcției' }, 500)
   if (!deps.dbUtilizator) return json({ error: 'configurare: client utilizator lipsă' }, 500)
   const dbU = deps.dbUtilizator(jwt)
   // poarta pe loturi ÎNAINTE de orice apel (fail-closed); RPC-ul extragerii o reverifică pe lotul cererii
@@ -567,11 +570,12 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
       return data?.[0] ?? null
     },
     ai: async (prompt) => {
+      if (extractor === 'A') return await cheamaA(aiFetch, deps.chei.A, prompt, MAX_IESIRE)
       const x = await cheama('openai_mini', prompt, '', '', deps.chei.O)
       // „incomplete” (tăiat la plafonul de ieșire) e un rezultat incert: nu se scrie ca extragere completă
       return x.eroare ? { txt: '', inF: x.inF, outF: x.outF, eroare: x.eroare } : { txt: x.txt, inF: x.inF, outF: x.outF, necunoscut: x.stop !== 'completed' }
     },
     acum: () => Date.now(),
-  }, { licitatie_id: licId, cerere_id: cerereId, max_felii: Number(body.max_felii) || 0 })
+  }, { licitatie_id: licId, cerere_id: cerereId, max_felii: Number(body.max_felii) || 0, extractor })
   return json(r.body, r.status)
 }
