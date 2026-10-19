@@ -138,3 +138,16 @@ Deno.test('r6 (P1-1 / P2-3): incertitudinea de la graniță trece și la tabelul
   const v = '| 1 | A | m | 1 |\n| 2 | B | m | 2 |\n7 Adeziv GRAME 3\n| 3 | C | m | 3 |\n| 1 | D | m | 4 |\n| 2 | E | m | 5 |\n'
   assertEquals(tabele(inv(v)).map((x) => x.secventa_nedeterminata), [true, false])
 })
+
+// ── review Copilot / Gemini B1 r6 ──
+Deno.test('r7 (Copilot P1): incertitudinea de la FINAL, fără niciun rând numerotat sigur după ea → tabel sintetic nedeterminat (nu [])', () => {
+  const t = '| 2001456 | Teava | m | 10 |\n1 Adeziv GRAME 3\n3 Vopsea GRAME 4\n'
+  assertEquals(tabele(inv(t)).map((x) => [x.randuri, x.secventa_nedeterminata, x.nr_incerte, x.nr_min, x.nr_max]), [[0, true, [1, 3], 1, 3]])
+  assertEquals(masoara(t).tabele_nedeterminate, 1)
+})
+Deno.test('r7 (Gemini P2): după rânduri incerte, o scădere la 3 pornește un tabel NOU (nedeterminat) — golul 4 nu mai e acoperit de tabelul vechi', () => {
+  const t = ['| 1 | A | m | 1 |', '| 4 | X | m | 1 |', '| 8 | B | m | 2 |', '| 9 | C | m | 3 |', '| 10 | D | m | 4 |',
+    '1 Articol nou GRAME 5', '2 Alt articol GRAME 6', '| 3 | E | m | 7 |', '| 5 | F | m | 8 |'].join('\n') + '\n'
+  const tb = tabele(inv(t))
+  assertEquals(tb.map((x) => [x.nr_min, x.nr_max, x.goluri, x.secventa_nedeterminata]), [[1, 10, [2, 3, 5, 6, 7], true], [3, 5, [4], true]])
+})

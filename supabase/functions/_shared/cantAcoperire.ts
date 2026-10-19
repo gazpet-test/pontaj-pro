@@ -38,7 +38,8 @@ export type RandInventar = {
   motiv: string | null      // de ce e „incert”
 }
 // secventa_nedeterminata: în tabel (sau imediat după el) există rânduri „posibila_continuare” — golurile / granițele NU sunt dovedite;
-// B2 trebuie să trateze tabelul ca „incomplet” (review r4: excluderea lor din secvență putea ascunde un gol, ex. „1 / 3 / 4”)
+// B2 trebuie să trateze tabelul ca „incomplet” — la fel orice tabel cu goluri, goluri_ierarhice sau reluari_atipice > 0 (contract B2);
+// un tabel cu randuri = 0 și secventa_nedeterminata = true e SINTETIC (doar rânduri incerte, fără secvență sigură) (review r4: excluderea lor din secvență putea ascunde un gol, ex. „1 / 3 / 4”)
 export type Tabel = { de_la: number; nr_min: number; nr_max: number; randuri: number; pozitii: number; goluri: number[]; goluri_ierarhice: string[]; reluari_atipice: number; secventa_nedeterminata: boolean; nr_incerte: number[] }
 export type Masura = {
   randuri: number; ancore: number; incerte: number; ancore_cu_cod: number; perechi_distincte: number
@@ -160,6 +161,7 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
   // rândurile „posibila_continuare” văzute DUPĂ ultimul rând de secvență: pot ține de tabelul curent SAU de următorul (graniță
   // nedeterminată, review r5) → dacă urmează un tabel nou, și el le primește (secventa_nedeterminata + nr_incerte)
   let pendinte: number[] = []
+  let pendinteDeLa = -1
   const inchideCur = () => {
     if (!cur) return
     for (let k = cur.nr_min; k <= cur.nr_max && cur.goluri.length < 200; k++) if (!cur.vazute.has(k)) cur.goluri.push(k)
@@ -177,18 +179,20 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
     if (r.motiv === 'posibila_continuare') {
       // în afara secvenței, dar tabelul curent își pierde dovada de completitudine (semnal explicit)
       if (cur) { cur.secventa_nedeterminata = true; if (cur.nr_incerte.length < 50) cur.nr_incerte.push(r.nr) }
+      if (pendinteDeLa < 0) pendinteDeLa = r.offset
       if (pendinte.length < 50) pendinte.push(r.nr)
       continue
     }
     // tabel nou: reluarea de la 1 după un nr. > 1, SAU o scădere la ≤ 2 după un nr. > 2 (review r3: poziția 1 poate fi ea însăși
     // incertă / lipsă); orice altă scădere = „reluare atipică” în același tabel (semnal pentru B2)
-    if (!cur || (r.nr === 1 && cur.nr_max > 1) || (r.nr <= 2 && r.nr < cur.prev && cur.nr_max > 2)) {
+    if (!cur || (r.nr === 1 && cur.nr_max > 1) || (r.nr <= 2 && r.nr < cur.prev && cur.nr_max > 2) || (pendinte.length > 0 && r.nr < cur.prev)) {
       inchideCur()
       cur = { de_la: r.offset, nr_min: r.nr, nr_max: r.nr, randuri: 0, pozitii: 0, goluri: [], goluri_ierarhice: [], reluari_atipice: 0,
         secventa_nedeterminata: pendinte.length > 0, nr_incerte: [...pendinte], vazute: new Set(), prev: r.nr, sub: new Map() }
     } else if (r.nr < cur.prev && r.nr !== cur.prev) cur.reluari_atipice++
     cur.randuri++
     pendinte = []
+    pendinteDeLa = -1
     cur.vazute.add(r.nr)
     if (r.nr_id && r.nr_id.includes('.')) {
       const c = r.nr_id.split('.')
@@ -203,6 +207,10 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
     cur.prev = r.nr
   }
   inchideCur()
+  if (pendinte.length && !cur) {
+    t.push({ de_la: pendinteDeLa, nr_min: Math.min(...pendinte), nr_max: Math.max(...pendinte), randuri: 0, pozitii: 0, goluri: [],
+      goluri_ierarhice: [], reluari_atipice: 0, secventa_nedeterminata: true, nr_incerte: [...pendinte] })
+  }
   return t
 }
 
