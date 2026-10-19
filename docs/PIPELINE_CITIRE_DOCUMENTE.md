@@ -397,4 +397,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 19.10.2026 | (acest PR) | B1 r4: niciun rând numerotat eliminat (`posibila_continuare` = incert în afara secvenței), separare la scădere ≤ 2, goluri ierarhice pe toate nivelurile (și în script), „Centralizatorul cheltuielilor” = `lista_alt` |
 | 19.10.2026 | (acest PR) | B1 r5: `secventa_nedeterminata` pe tabelele cu rânduri `posibila_continuare`; titlurile noi recunoscute doar la început de linie |
 | 20.10.2026 | #792 | Extractorul A (opt-in) în modul structurat: Claude Haiku 5.5 cu structured outputs, prompt `p4`, tarif pe trepte, rezervare cu overhead-ul schemei (`OVERHEAD_A`); B (`gpt-5-mini`) rămâne implicit |
-| 20.10.2026 | #793 | Poarta B1 pe felie în extracția structurată (`poartaB1.ts`): acoperire pe tokenul cantității, incertele cu cantitate nerecunoscută cerute, `complet` / `deficit` în raport |
+| 20.10.2026 | (acest PR) | Poarta B1 pe felie în extracția structurată (`poartaB1.ts`): acoperire pe tokenul cantității, incertele cu cantitate nerecunoscută cerute, `complet` / `deficit` în raport |
