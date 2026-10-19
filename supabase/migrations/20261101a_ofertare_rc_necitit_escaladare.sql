@@ -12,11 +12,12 @@
 --   ziua 1: responsabilul; ziua 2+: + owner(ii); owner(ii) și oricând cu ≤ 2 zile până la depunere sau fără responsabil.
 --   Notificare 'critical', o dată pe zi și set de documente; se oprește singură la procesare.
 -- Idempotență (review Copilot r1–r4): REVENDICARE ATOMICĂ a amprentei (INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING), amprenta
---   DIRECȚIONALĂ '<zi>|<id maxim necitit>': alertă nouă în aceeași zi doar la un document NOU, nu la procesarea parțială. Mailul (doar
---   owner, ≤ 5 zile până la depunere): '<zi>|<id maxim>|p|<lease>' (în curs, lease unic per preluare) și '<zi>|<id maxim>|s' (trimis,
---   confirmat după Resend). „În curs” mai vechi de 10 minute se poate RE-revendica (rezultat ambiguu — excepție de transport / 5xx —,
---   reîncercat cu ACEEAȘI cheie de idempotență per licitație 'rc-necitit-<licitație>-<zi>-<id maxim>', deci Resend nu dublează);
---   confirmarea / eliberarea fac CAS pe valoarea exactă cu lease. Refuzul explicit (4xx) / documentele procesate între timp ELIBEREAZĂ.
+--   DIRECȚIONALĂ '<zi>|<id maxim necitit>' pentru CLOPOȚEL: alt clopoțel în aceeași zi doar la un document NOU (nu la procesarea
+--   parțială) — deci cel mult un clopoțel pe zi per document și destinatar. MAILUL (doar owner, ≤ 5 zile până la depunere): CEL MULT
+--   UNUL PE ZI per licitație: '<zi>|p|<lease>' (în curs, lease unic per preluare) / '<zi>|s' (trimis) / '<zi>|r' (eliberat = sigur
+--   netrimis). „În curs” mai vechi de 10 minute se poate RE-revendica (rezultat ambiguu — excepție de transport / 5xx —), cu ACEEAȘI
+--   cheie de idempotență 'rc-necitit-<licitație>-<zi>', deci Resend nu dublează; confirmarea / eliberarea fac CAS pe valoarea exactă cu
+--   lease. Refuzul explicit (4xx) / documentele procesate între timp ELIBEREAZĂ ('r'). Rulările 2 și 3 din zi doar recuperează eșecurile.
 --
 -- Cron (după apply + deploy, cu „da” de la Răzvan) — 3 rulări pe zi, ca o trimitere ambiguă să poată fi reîncercată în aceeași zi
 -- (notificările rămân o dată pe zi, prin amprentă):
@@ -114,7 +115,7 @@ BEGIN
     VALUES (l.id, 'rc_necitit', v_amprenta, now())
     ON CONFLICT (licitatie_id, fel) DO UPDATE SET amprenta = EXCLUDED.amprenta, trimisa_la = now()
       WHERE split_part(a.amprenta, '|', 1) IS DISTINCT FROM v_azi::text
-         OR coalesce(nullif(split_part(a.amprenta, '|', 2), '')::bigint, 0) < v_max
+         OR (CASE WHEN split_part(a.amprenta, '|', 2) ~ '^[0-9]{1,18}$' THEN split_part(a.amprenta, '|', 2)::bigint ELSE 0 END) < v_max
     RETURNING 'x' INTO v_claim;
     IF v_claim IS NOT NULL THEN
       FOR v_pid IN
@@ -135,20 +136,22 @@ BEGIN
       END LOOP;
     END IF;
 
-    -- mailul (doar owner, ≤ 5 zile până la depunere): '<zi>|<id maxim>|p|<lease>' (în curs) / '<zi>|<id maxim>|s' (trimis).
-    -- Revendicare atomică dacă: zi nouă, SAU document nou (id maxim mai mare), SAU „în curs” mai vechi de 10 minute (rezultat ambiguu →
-    -- reîncercare). Fiecare preluare primește un LEASE unic (review Copilot r4, P1: fără el, un worker vechi putea confirma / elibera
-    -- revendicarea preluată de altul) — confirmarea / eliberarea fac CAS pe valoarea exactă, cu lease.
+    -- mailul (doar owner, ≤ 5 zile până la depunere): CEL MULT UN MAIL PE ZI per licitație (decizia coordonării 20.10, review Copilot
+    -- r5 / Gemini r5: varianta „mail nou la document nou” stricase cheia de idempotență la reîncercare și pragul „deja trimis” la
+    -- eliberare); un document nou în aceeași zi aduce doar clopoțelul. Stări: '<zi>|p|<lease>' (în curs, lease unic per preluare),
+    -- '<zi>|s' (trimis), '<zi>|r' (eliberat = sigur netrimis). Revendicare atomică dacă: zi nouă, SAU „eliberat”, SAU „în curs” mai vechi
+    -- de 10 minute (rezultat ambiguu → reîncercare cu ACEEAȘI cheie 'rc-necitit-<licitație>-<zi>', deci Resend nu dublează).
+    -- Confirmarea / eliberarea fac CAS pe valoarea exactă, cu lease (un worker vechi nu atinge preluarea altuia).
     v_mail := false; v_ampr_mail := NULL;
     IF v_zile_dep <= 5 THEN
-      v_ampr_mail := v_azi::text || '|' || v_max::text || '|p|' || gen_random_uuid()::text;
+      v_ampr_mail := v_azi::text || '|p|' || gen_random_uuid()::text;
       v_claim := NULL;
       INSERT INTO ofertare_alerte_amprenta AS a (licitatie_id, fel, amprenta, trimisa_la)
       VALUES (l.id, 'rc_necitit_mail', v_ampr_mail, now())
       ON CONFLICT (licitatie_id, fel) DO UPDATE SET amprenta = EXCLUDED.amprenta, trimisa_la = now()
         WHERE split_part(a.amprenta, '|', 1) IS DISTINCT FROM v_azi::text
-           OR coalesce(nullif(split_part(a.amprenta, '|', 2), '')::bigint, 0) < v_max
-           OR (split_part(a.amprenta, '|', 3) = 'p' AND a.trimisa_la < now() - interval '10 minutes')
+           OR split_part(a.amprenta, '|', 2) = 'r'
+           OR (split_part(a.amprenta, '|', 2) = 'p' AND a.trimisa_la < now() - interval '10 minutes')
       RETURNING 'x' INTO v_claim;
       v_mail := v_claim IS NOT NULL;
     END IF;
@@ -156,8 +159,8 @@ BEGIN
     v_lic := v_lic || jsonb_build_object('licitatie_id', l.id, 'nr_anunt', l.nr_anunt, 'obiect', left(coalesce(l.obiect, ''), 160),
       'zile_necitit', v_zile_necitit, 'zile_depunere', v_zile_dep, 'de_la', l.de_la, 'nr', l.nr, 'lista', l.lista,
       'doc_ids', string_to_array(l.ids, ',')::bigint[], 'mail', v_mail, 'amprenta_mail', CASE WHEN v_mail THEN v_ampr_mail END,
-      -- cheia de idempotență Resend PER LICITAȚIE, stabilă pe (licitație, zi, id maxim) — aceeași la orice reîncercare a aceluiași mail
-      'cheie_mail', CASE WHEN v_mail THEN 'rc-necitit-' || l.id || '-' || v_azi::text || '-' || v_max END);
+      -- cheia de idempotență Resend PER LICITAȚIE și ZI — aceeași la orice reîncercare (indiferent ce s-a procesat între timp)
+      'cheie_mail', CASE WHEN v_mail THEN 'rc-necitit-' || l.id || '-' || v_azi::text END);
   END LOOP;
   RETURN jsonb_build_object('azi', v_azi, 'notificari', v_trimise, 'licitatii', v_lic);
 END
@@ -183,22 +186,22 @@ CREATE OR REPLACE FUNCTION public.ofertare_alerta_rc_mail_confirma(p_licitatie_i
  SECURITY DEFINER
  SET search_path TO 'public', 'pg_temp'
 AS $function$
-  WITH x AS (UPDATE ofertare_alerte_amprenta SET amprenta = split_part(p_amprenta, '|', 1) || '|' || split_part(p_amprenta, '|', 2) || '|s',
-                    trimisa_la = now()
-             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND split_part(p_amprenta, '|', 3) = 'p'
+  WITH x AS (UPDATE ofertare_alerte_amprenta SET amprenta = split_part(p_amprenta, '|', 1) || '|s', trimisa_la = now()
+             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND split_part(p_amprenta, '|', 2) = 'p'
              RETURNING 1)
   SELECT count(*) > 0 FROM x
 $function$;
 
--- eliberarea revendicării de mail (mailul sigur n-a plecat): doar dacă amprenta e încă exact cea revendicată „în curs”
+-- eliberarea revendicării de mail (mailul sigur n-a plecat): starea devine „eliberat” ('<zi>|r') — rândul NU se șterge (review Gemini r5:
+-- ștergerea pierdea istoricul zilei); doar dacă amprenta e încă exact cea revendicată „în curs”, cu lease
 CREATE OR REPLACE FUNCTION public.ofertare_alerta_rc_mail_elibereaza(p_licitatie_id bigint, p_amprenta text)
  RETURNS boolean
  LANGUAGE sql
  SECURITY DEFINER
  SET search_path TO 'public', 'pg_temp'
 AS $function$
-  WITH x AS (DELETE FROM ofertare_alerte_amprenta
-             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND split_part(p_amprenta, '|', 3) = 'p'
+  WITH x AS (UPDATE ofertare_alerte_amprenta SET amprenta = split_part(p_amprenta, '|', 1) || '|r', trimisa_la = now()
+             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND split_part(p_amprenta, '|', 2) = 'p'
              RETURNING 1)
   SELECT count(*) > 0 FROM x
 $function$;
