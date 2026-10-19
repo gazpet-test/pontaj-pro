@@ -315,3 +315,11 @@ Deno.test('r21 (Copilot r20 P1): rândul de LISTĂ ambiguu cu separator de mii p
   assertEquals(r.map((x) => [x.nr_id, x.motiv]), [['1', null], ['2', 'posibila_continuare'], ['3', null]])
   assertEquals(tabele(r).map((x) => [x.goluri, x.secventa_nedeterminata]), [[[2], true]])
 })
+
+// ── review Copilot B1 r21 ──
+Deno.test('r22 (Copilot r21 P1): linia cu „|” doar spre coadă și nr. lipit de text („2Conducta | m | 10 |”) nu mai dispare', () => {
+  const r = inv('1 | A | m | 1 |\n2Conducta | m | 10 |\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare']])
+  assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
+  assertEquals(inv('5.1 | A | m | 1 |\n5.2Conducta | m | 10 |\n').map((x) => [x.nr_id, x.motiv]), [['5.1', null], ['5.2', 'posibila_continuare']])
+})

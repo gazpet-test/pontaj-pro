@@ -94,15 +94,19 @@ function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: bo
   const ier = markdown ? null : RE_NR_LISTA_IER.exec(l)
   // ierarhic „slab”: structura e de rând, dar conținutul nu e pe lista albă → rând incert, nu eliminat (fără excluderi, r12)
   const slab = !markdown && !ier ? (RE_NR_LISTA_IER_STRUCT.exec(l) ?? RE_NR_SINGUR.exec(l)) : null
-  const mdSlab = markdown && !mdTare ? RE_NR_MARKDOWN_SLAB.exec(l) : null
-  const m = markdown ? (mdTare ?? mdSlab) : (ier ?? slab ?? RE_NR_LISTA.exec(l))
+  const lista = markdown ? null : (ier ?? slab ?? RE_NR_LISTA.exec(l))
+  // forma slabă de celulă: și pe linia cu „|” doar spre coadă, când forma de listă nu se potrivește (review Copilot r21: „2Conducta | m |
+  // 10 |”) — tot slabTabel, deci ÎNTOTDEAUNA posibila_continuare (în afara secvenței)
+  const mdSlab = pipe && !mdTare && !lista ? RE_NR_MARKDOWN_SLAB.exec(l) : null
+  const m = mdTare ?? lista ?? mdSlab
   if (!m) return null
+  const md = markdown || m === mdSlab
   const id = m[1]
   const nr = Number(id.split('.')[0])
   if (!(nr >= 1)) return null
   // rândul de numerotare a coloanelor sub antet („0 | 1 | 2 | 3 …”, „1 | 2 | 3 | 4”) nu e un rând
-  if (markdown && /^[\s|]*\d{1,2}(?:\s*\|\s*\d{1,2}){2,}[\s|]*$/.test(l)) return null
-  return { nr, id, dupa: m.index + m[0].length - (markdown || ier || slab ? 0 : 1), markdown, ...(slab && m === slab ? { slab: true } : {}), ...(mdSlab && m === mdSlab ? { slab: true, slabTabel: true } : {}) }
+  if (md && /^[\s|]*\d{1,2}(?:\s*\|\s*\d{1,2}){2,}[\s|]*$/.test(l)) return null
+  return { nr, id, dupa: m.index + m[0].length - (md || m === ier || m === slab ? 0 : 1), markdown: md, ...(slab && m === slab ? { slab: true } : {}), ...(mdSlab && m === mdSlab ? { slab: true, slabTabel: true } : {}) }
 }
 
 // cantitatea + UM ale unei linii (în copia închisă), excluzând tokenurile nr. și cod după POZIȚIE
