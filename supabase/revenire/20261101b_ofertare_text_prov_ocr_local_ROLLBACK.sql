@@ -1,5 +1,5 @@
 -- REVENIRE 20261101b - scoate valoarea 'ocr_local_neverificat' din CHECK-ul ofertare_doc_texte_prov.origine si functia
--- fn_ofertare_doc_prov_curent; reface amprenta TKT-0329 B. Refuza daca exista deja randuri cu aceasta origine (randurile de provenienta
+-- fn_ofertare_cb_doc_prov_curent; reface amprenta TKT-0329 B. Refuza daca exista deja randuri cu aceasta origine (randurile de provenienta
 -- sunt imuabile; revenirea lor se decide separat) sau daca obiectele s-au schimbat dupa aplicare (amprenta). DOAR la cererea lui Razvan,
 -- ca postgres, prin psql. Armare per tranzactie:
 --   SELECT set_config('gazpet.revenire_20261101b', 'PROV_OCR_REVENIRE:' || txid_current(), true);
@@ -13,7 +13,7 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261101b rollback: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
-  IF to_regprocedure('public.fn_ofertare_doc_prov_curent(bigint)') IS NULL THEN RAISE EXCEPTION '20261101b rollback: migrarea nu e aplicata'; END IF;
+  IF to_regprocedure('public.fn_ofertare_cb_doc_prov_curent(bigint)') IS NULL THEN RAISE EXCEPTION '20261101b rollback: migrarea nu e aplicata'; END IF;
   IF coalesce(obj_description('public.ofertare_analiza_versiuni'::regclass, 'pg_class'), '') NOT LIKE '%amprenta=' || public.fn_ofertare_cb_amprenta() THEN
     RAISE EXCEPTION '20261101b rollback: obiectele s-au schimbat dupa aplicare (amprenta difera) - revenire manuala, cu review';
   END IF;
@@ -23,7 +23,7 @@ BEGIN
     RAISE EXCEPTION '20261101b rollback: exista proveniente ocr_local_neverificat - intai se decide soarta lor';
   END IF;
 END $revenire$;
-DROP FUNCTION public.fn_ofertare_doc_prov_curent(bigint);
+DROP FUNCTION public.fn_ofertare_cb_doc_prov_curent(bigint);
 ALTER TABLE public.ofertare_doc_texte_prov DROP CONSTRAINT ofertare_doc_texte_prov_origine_check;
 ALTER TABLE public.ofertare_doc_texte_prov ADD CONSTRAINT ofertare_doc_texte_prov_origine_check CHECK (origine IN ('transcriere', 'sinteza_ai'));
 COMMENT ON COLUMN public.ofertare_doc_texte_prov.origine IS NULL;

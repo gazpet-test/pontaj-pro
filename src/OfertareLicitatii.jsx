@@ -45,7 +45,7 @@ import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   //
 import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
-import { provPeDocument, etichetaProvenienta } from './ofertareProvenienta.js'
+import { provPeDocument, etichetaProvenienta, PROV_INDISPONIBILA } from './ofertareProvenienta.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -768,15 +768,17 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // același nume nu se închide pe evidența celei vechi). evidSeap: cheie → { stare, sha256 }; shaArhive: document_id → Set(sha)
   const [evidSeap, setEvidSeap] = useState(() => new Map())
   const [shaArhive, setShaArhive] = useState(() => new Map())
-  // proveniența textului (20261101b): document_id → ultimul rând din ofertare_doc_texte_prov (cine a produs text_extras)
-  const [provTxt, setProvTxt] = useState(() => new Map())
+  // proveniența textului (20261101b): document_id → ultimul rând din ofertare_doc_texte_prov + curent (sha = textul actual).
+  // null = se încarcă / eroare → eticheta „proveniență indisponibilă”, NICIODATĂ cea veche (review #795 r2 P1, fail-closed)
+  const [provTxt, setProvTxt] = useState(null)
   const load = async () => {
     if (elig.incarcat) elig.reincarca()
     supabase.from('ofertare_seap_fisiere').select('cheie, stare, sha256').eq('licitatie_id', licitatie.id)
       .then(r => setEvidSeap(new Map((r.data || []).map(x => [x.cheie, x]))), () => {})
     // ultimul rând pe document + `curent` (sha = textul actual), calculate în BD (20261101b) — textul nu pleacă spre client
-    supabase.rpc('fn_ofertare_doc_prov_curent', { p_licitatie_id: licitatie.id })
-      .then(r => setProvTxt(provPeDocument(r.data)), () => {})
+    setProvTxt(null)
+    supabase.rpc('fn_ofertare_cb_doc_prov_curent', { p_licitatie_id: licitatie.id })
+      .then(r => setProvTxt(r.error ? null : provPeDocument(r.data)), () => setProvTxt(null))
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
@@ -1549,8 +1551,11 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     title="AI-ul a citit planșa, dar n-a găsit niciun tronson, tabel sau lungime. Încearcă „recitește fin” (zone mai mici) sau verifică manual.">⚠ citită, nimic extras</span>}
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}
-                    {(() => { const pv = etichetaProvenienta(provTxt.get(d.id)); return pv && (
-                      <span title={pv.titlu} style={pv.atentie ? { color:G.orange, fontWeight:700 } : undefined}> · {pv.icon} {pv.text}</span>) })()}
+                    {(() => {
+                      const areText = ['procesat', 'partial'].includes(d.status_procesare)
+                      const pv = provTxt ? etichetaProvenienta(provTxt.get(d.id)) : (areText ? PROV_INDISPONIBILA : null)
+                      return pv && (
+                        <span title={pv.titlu} style={pv.nivel === 'atentie' ? { color:G.orange, fontWeight:700 } : pv.nivel === 'info' ? { color:G.muted } : undefined}> · {pv.icon} {pv.text}</span>) })()}
                     {d.pornit?.name &&<span title={`Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}`}> · 👤 {d.pornit.name.split(' ')[0]}</span>}
                   </span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
