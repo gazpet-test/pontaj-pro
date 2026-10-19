@@ -157,5 +157,6 @@ Deno.test('r8 (Copilot P1): rânduri ierarhice de LISTĂ („5.1 …”, „5.3 
   const r = inv('5.1 Conducta m 10\n5.3 Conducta m 20\n')
   assertEquals(r.map((x) => [x.nr, x.nr_id, x.stare]), [[5, '5.1', 'ancora'], [5, '5.3', 'ancora']])
   assertEquals(tabele(r).map((x) => x.goluri_ierarhice), [['5.2']])
+  assertEquals(inv('5.1 1234567 Teava m 10\n5.2 SA11G1 Teava m 20\n').map((x) => x.nr_id), ['5.1', '5.2'])
   assertEquals(inv('003 SA11G1 [ 2] M 570.000\nTEAVA PVC 20.80 11856.00\n38.32 21842.40\n0.90 513.00\n1.5 m adancime\n').map((x) => x.nr_id), ['003'])
 })

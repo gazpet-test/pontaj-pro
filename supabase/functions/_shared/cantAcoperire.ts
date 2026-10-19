@@ -14,9 +14,10 @@ export const UM_REALE = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 
 // componentă; în listă „213.76 …” ar fi o linie de prețuri);
 // la tabel (≥ 2 „|”) nr. e prima celulă
 const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
-// review Copilot r7 (P1): și numerotarea ierarhică în LISTĂ („5.1 Conducta m 10”) — doar urmată de un CUVÂNT (≥ 2 litere), ca liniile de
+// review Copilot r7 (P1): și numerotarea ierarhică în LISTĂ („5.1 Conducta m 10”, „5.1 1234567 Teava”, „5.1 SA11G1 …”) — doar urmată de un
+// CUVÂNT (≥ 2 litere), un cod numeric de ≥ 5 cifre fără zecimale sau un cod alfanumeric, ca liniile de
 // prețuri / zecimale („213.76 65795.33”, „0.90 513.00”, „1.5 m adâncime”) să nu devină rânduri
-const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,3}(?:\.\d{1,3})+)\**[.)]?\**\s+(?=[\p{L}@][\p{L}.]+)/u
+const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,3}(?:\.\d{1,3})+)\**[.)]?\**\s+(?=[\p{L}@][\p{L}.]+|\d{5,}(?![.,]?\d)|[A-Z0-9]*[A-Z][A-Z0-9]*\d)/u
 const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.)]?\**\s*\|/
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
 const RE_SEPARATOR = /^\s*\|?\s*:?-{3,}/
