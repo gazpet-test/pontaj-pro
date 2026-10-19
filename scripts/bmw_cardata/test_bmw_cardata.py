@@ -380,16 +380,27 @@ class TestValidare(unittest.TestCase):
         r = V.din_raspuns(t, VIN, ACUM)
         self.assertEqual(set(r['raspuns_brut']), set(V.CHEI_METRICI))
 
-    def test_odometru_lipsa_sau_mile(self):
+    def test_odometru_lipsa_sau_fara_unitate(self):
         with self.assertRaises(V.EroareValidare):
             V.din_raspuns(telematic(travelledDistance=None), VIN, ACUM)
         with self.assertRaises(V.EroareValidare):
-            V.din_raspuns(telematic(travelledDistance={'value': '30000', 'unit': 'mi', 'timestamp': TS}), VIN, ACUM)
+            V.din_raspuns(telematic(travelledDistance={'value': '30000', 'unit': None, 'timestamp': TS}), VIN, ACUM)
         with self.assertRaises(V.EroareValidare):
             V.din_raspuns(telematic(travelledDistance={'value': '-5', 'unit': 'km'}), VIN, ACUM)
         with self.assertRaises(V.EroareValidare):
             V.din_raspuns(telematic(travelledDistance={'value': '1e5', 'unit': 'km'}), VIN, ACUM)
 
+
+    def test_mile_convertite_in_km(self):
+        # 19.10.2026, X5 real: CarData trimite 89720.38 miles = 144391 km (cat arata My BMW), autonomia 241.09 miles = 388 km
+        r = V.din_raspuns(telematic(travelledDistance={'value': '89720.38', 'unit': 'miles', 'timestamp': TS},
+                                    lastRemainingRange={'value': '241.09', 'unit': 'miles', 'timestamp': TS},
+                                    kombiRemainingElectricRange={'value': '33', 'unit': None, 'timestamp': TS}), VIN, ACUM)
+        c = r['citire'] if 'citire' in r else r
+        self.assertEqual(str(c['odometru_km']), '144391.0')
+        self.assertEqual(str(c['autonomie_totala_km']), '388.0')
+        # distanta fara unitate nu se ghiceste
+        self.assertIsNone(c['autonomie_electric_km'])
     def test_valori_respinse_devin_null(self):
         r = V.din_raspuns(telematic(**{'fuelSystem.level': {'value': '140', 'unit': '%'},
                                        'fuelSystem.remainingFuel': {'value': '12', 'unit': 'gal'},

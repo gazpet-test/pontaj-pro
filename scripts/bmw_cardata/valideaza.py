@@ -13,6 +13,9 @@ from decimal import Decimal, InvalidOperation
 
 # unitati acceptate (lowercase); None/'' = BMW nu a trimis unitate
 KM = {None, '', 'km'}
+# CarData trimite distantele in MILE pe X5 (19.10.2026: 89.720,38 miles = 144.391 km, cat arata My BMW) => se convertesc.
+MILE = {'mi', 'mile', 'miles'}
+KM_PE_MILA = Decimal('1.609344')
 PCT = {None, '', '%', 'percent'}
 LITRI = {None, '', 'l', 'liter', 'liters', 'litre', 'litres'}
 GRADE = {None, '', 'degrees', 'degree', 'deg', '°'}
@@ -116,7 +119,15 @@ def _verifica(cheie, intrare, spec, acum):
     unit = intrare.get('unit')
     if unit is not None and not isinstance(unit, str):
         raise ValueError('unitate de tip neasteptat')
-    if (unit.strip().lower() if isinstance(unit, str) else None) not in unitati:
+    u = unit.strip().lower() if isinstance(unit, str) else None
+    if unitati is KM and u in MILE:
+        d = (d * KM_PE_MILA).quantize(Decimal('0.1'))
+    elif unitati is KM and not u:
+        # distanta fara unitate: BMW amesteca mile si km, nu ghicim (19.10.2026). Odometrul e obligatoriu => eroare acolo.
+        if spec[0] == OBLIGATORIU:
+            raise ValueError('odometru fara unitate')
+        return None, None
+    elif u not in unitati:
         raise ValueError(f'unitate neacceptata ({str(unit)[:12]!r})')
     if d < mn or d > mx:
         raise ValueError(f'in afara intervalului plauzibil [{mn}, {mx}]')
