@@ -49,8 +49,10 @@ Deno.test('P1: spec gol, parțial sau fără faze/roluri utilizabile nu autorize
     domenii_isc_din_obiect: [], avertismente: [],
   }
   assertEquals(specOrganigramaValida(complet), true, 'false și listele opționale goale sunt valide')
+  assertEquals(specOrganigramaValida({ ...complet, roluri_cerute: [] }), true, 'organigramă generică fără roluri nominale')
   for (const input of [{}, [], null, { roluri_cerute: [{ rol: 'RTE' }] },
-    { ...complet, faze: ['invalid'] }, { ...complet, roluri_cerute: [] },
+    { ...complet, faze: ['invalid'] }, { ...complet, roluri_cerute: null },
+    { ...complet, roluri_cerute: [{ rol: 'RTE' }, { rol: null }] },
     { ...complet, roluri_cerute: [{ rol: '   ' }] }, { ...complet, roluri_cerute: [{ rol: 123 }] },
     { ...complet, linii_cerute: {} }, { ...complet, tabel_nominal: {} }, { ...complet, format: {} }]) {
     assertEquals(specOrganigramaValida(input), false)

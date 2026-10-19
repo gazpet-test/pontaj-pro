@@ -7,7 +7,7 @@
 // Body: { licitatie_id, document_id, ce } sau { licitatie_id, formular_id, ce:'completare' }. UN document / formular per apel.
 //
 // CITATUL E FAPTUL: fiecare clauză propusă trebuie să aibă `citat` care se regăsește LITERAL în text_extras (comparat după
-// normalizarea spațiilor / ghilimelelor / cratimelor / ş-ș). Clauza fără citat regăsit se ARUNCĂ (raportat în `aruncate`).
+// normalizarea spațiilor / ghilimelelor / cratimelor / ş-ș). Orice clauză invalidă respinge întregul răspuns.
 // Evaluarea Gazpet (opinie) stă separat de citat.
 // Re-rulare: pe documentul dat se șterg DOAR clauzele AI neverificate de om; cele bifate rămân. Formularele se adaugă doar
 // dacă nu există deja un rând cu același cod/denumire pe licitație (stările puse de oameni nu se suprascriu niciodată).
@@ -258,6 +258,16 @@ Deno.serve(async (req: Request) => {
   const aruncate: string[] = []
 
   if (ce === 'clauze') {
+    // Validăm TOATE elementele înainte de deduplicare / plafonare și înainte de orice înlocuire.
+    const scalar = (v: any) => v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))
+    if (!Array.isArray(j.clauze) || !j.clauze.length || !j.clauze.every((c: any) =>
+      c !== null && typeof c === 'object' && !Array.isArray(c) &&
+      CATEGORII.includes(c.categorie) && typeof c.citat === 'string' && !!c.citat.trim() &&
+      // doar structura aici; citatul negasit in OCR arunca DOAR clauza respectiva (in `aruncate`, mai jos) — review Gemini #780
+      (c.valoare_structurata === null || (typeof c.valoare_structurata === 'object' && !Array.isArray(c.valoare_structurata))) &&
+      ['locator', 'evaluare_gazpet'].every(k => Object.hasOwn(c, k) && scalar(c[k])) &&
+      (c.impact === null || IMPACT.includes(c.impact))))
+      return json({ error: 'AI a furnizat clauze incomplete sau invalide; clauzele existente raman neschimbate.', aruncate })
     const vazute = new Set<string>()
     const rows = (Array.isArray(j.clauze) ? j.clauze : []).slice(0, 60).flatMap((c: any) => {
       const citat = String(c?.citat || '').trim()

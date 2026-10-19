@@ -12,8 +12,7 @@ export function specOrganigramaValida(input: unknown): boolean {
   if (!obiect(j.tabel_nominal) || !bool(j.tabel_nominal.cerut) || !Array.isArray(j.tabel_nominal.coloane)) return false
   if (!obiect(j.format) || !(j.format.observatii === null || typeof j.format.observatii === 'string')) return false
   const spec = normalizeazaSpecOrganigrama(j)
-  return spec.faze.length > 0 && j.roluri_cerute.some((r: any) => typeof r?.rol === 'string' && r.rol.trim()) &&
-    spec.roluri_cerute.length > 0
+  return spec.faze.length > 0 && j.roluri_cerute.every((r: any) => typeof r?.rol === 'string' && !!r.rol.trim())
 }
 
 export function normalizeazaSpecOrganigrama(input: unknown) {
