@@ -30,9 +30,9 @@ const RE_NR_SINGUR = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*$/
 // Pe textele valului 1 asemenea linii nu schimbă nimic (singurele sunt „0.00 0.00”, cu nr. 0, care nu e rând).
 const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**(?:[.):]\**(?:\s+|(?=[\p{L}(\[]))|\s+)(?:[-–:]\s*)?(?=[\p{L}@][\p{L}.]+|(?![mMtTlL]\s)\p{L}\s+\p{L}|[(\[]\s*[\p{L}\d]|(?=[\p{L}\d]*\p{L})(?=[\p{L}\d]*\d)[\p{L}\d]{2,}|\d{4,}(?![.,]?\d)|(?:m|ml|km|mc|mp|m2|m3|buc|kg|t|to|l|M|ML|KM|MC|MP|M2|M3|BUC|KG|T|TO|L)\.?\s+\d)/u
 const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*\|/
-// prima celulă care ÎNCEPE cu un nr. dar nu are forma strictă („| 1 Conducta | …”, „| 5.2 - | …”, „| 1)a | …”, review Copilot r16): rând
+// prima celulă care ÎNCEPE cu un nr. dar nu are forma strictă („| 1 Conducta | …”, „| 5.2 - | …”, „| 1)a | …”, „| 1Conducta | …”, review Copilot r16 / r17; NU continuarea unui număr — „| 12,50 |”, „| 12345 |”): rând
 // „slab” — cu cantitate + UM pe rând e rând normal, altfel incert „posibila_continuare” (în inventar, tabel nedeterminat)
-const RE_NR_MARKDOWN_SLAB = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?:[.):\-–]|\s)[^|]*\|/u
+const RE_NR_MARKDOWN_SLAB = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?![.,]?\d)[^|]*\|/u
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
 const RE_SEPARATOR = /^\s*\|?\s*:?-{3,}/
 // cantitate cu separator de mii prin spațiu („1 234,50”, „2 450,00”) — tokenizarea o rupe; rândul devine „incert”, nu dispare

@@ -277,3 +277,14 @@ Deno.test('r17: rândul de LISTĂ cu coloane „|” doar la coadă (F3 212 / 21
   const c = inv('025 4123214 | BUC. | 3.000 | | NIPLU FONTA | 0.000 | 0 | Total=\n026 4117966 | BUC. | 4.000 | COT FONTA | 0.000 | 0 Total=\n')
   assertEquals(c.map((x) => [x.nr_id, x.stare]), [['025', 'ancora'], ['026', 'ancora']])
 })
+
+// ── review Copilot B1 r17 ──
+Deno.test('r18 (Copilot P1): prima celulă cu text lipit de nr. („| 1Conducta |”, „| 5.1Conducta |”) nu mai dispare; continuarea unui număr nu e rând', () => {
+  assertEquals(inv('| 1Conducta | m | 10 |\n| 2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['1', 'ancora'], ['2', 'ancora']])
+  assertEquals(inv('| 5.1Conducta | m | 10 |\n| 5.2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.2', 'ancora']])
+  const s = inv('| 1Conducta | | |\n| 2 | Teava | m | 20 |\n')
+  assertEquals(s.map((x) => [x.nr_id, x.motiv]), [['1', 'posibila_continuare'], ['2', null]])
+  assertEquals(inv('| 12,50 | m | 10 |\n').length, 0)
+  // „| 12345 |” rămâne ce era: rând C6 cu cod de resursă, fără nr. crt.
+  assertEquals(inv('| 12345 | m | 10 |\n').map((x) => [x.nr, x.cod]), [[null, '12345']])
+})
