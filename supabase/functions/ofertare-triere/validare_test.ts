@@ -120,3 +120,9 @@ Deno.test('triere: null explicit și detalii numerice acceptate; lipsa și tipur
     obj[k] = null
   }
 })
+
+Deno.test('triere: persoana/rol goale in matrice respinse (review Copilot #780)', () => {
+  for (const patch of [{ persoana: '' }, { rol: ' ' }]) {
+    assert.equal(triereValida({ ...complet, matrice_experti: [{ ...complet.matrice_experti[0], ...patch }] }), false)
+  }
+})

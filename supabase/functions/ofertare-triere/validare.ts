@@ -31,7 +31,7 @@ export function triereValida(j: any): boolean {
       campuri(r, ['natura_ceruta', 'cerinte', 'documente', 'motiv'], scalar) &&
       campuri(r, ['autorizatie_ceruta', 'propunere'], textSauNull) &&
       (r.exclude_transport === null || typeof r.exclude_transport === 'boolean') && baremValid(r.barem)) &&
-    lista(j.matrice_experti, m => campuri(m, ['persoana', 'rol'], text) && campuri(m, ['surse'], textSauNull) &&
+    lista(j.matrice_experti, m => campuri(m, ['persoana', 'rol'], text) && !!m.persoana.trim() && !!m.rol.trim() && campuri(m, ['surse'], textSauNull) &&
       campuri(m, ['proiecte', 'verificate', 'proiecte_conditionate', 'verificate_conditionate'], intreg)) &&
     lista(j.atestari_firma, a => obiect(a) && text(a.cerinta) &&
       (a.document_firma_id === null || (intreg(a.document_firma_id) && a.document_firma_id > 0))) &&

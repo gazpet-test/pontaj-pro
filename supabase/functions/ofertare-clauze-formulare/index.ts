@@ -262,9 +262,9 @@ Deno.serve(async (req: Request) => {
     const scalar = (v: any) => v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))
     if (!Array.isArray(j.clauze) || !j.clauze.length || !j.clauze.every((c: any) =>
       c !== null && typeof c === 'object' && !Array.isArray(c) &&
-      CATEGORII.includes(c.categorie) && typeof c.citat === 'string' &&
-      normCitat(c.citat).length >= 15 && textNorm.includes(normCitat(c.citat)) &&
-      c.valoare_structurata !== null && typeof c.valoare_structurata === 'object' && !Array.isArray(c.valoare_structurata) &&
+      CATEGORII.includes(c.categorie) && typeof c.citat === 'string' && !!c.citat.trim() &&
+      // doar structura aici; citatul negasit in OCR arunca DOAR clauza respectiva (in `aruncate`, mai jos) — review Gemini #780
+      (c.valoare_structurata === null || (typeof c.valoare_structurata === 'object' && !Array.isArray(c.valoare_structurata))) &&
       ['locator', 'evaluare_gazpet'].every(k => Object.hasOwn(c, k) && scalar(c[k])) &&
       (c.impact === null || IMPACT.includes(c.impact))))
       return json({ error: 'AI a furnizat clauze incomplete sau invalide; clauzele existente raman neschimbate.', aruncate })

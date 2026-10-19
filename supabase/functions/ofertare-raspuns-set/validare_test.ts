@@ -81,13 +81,19 @@ Deno.test('compara: structură completă sau liste goale acceptate; fiecare chei
   for (const j of [comparatie, { operatii: [], neclare: [] },
     { operatii: [{ ...operatie, fel: 'anuleaza', text_nou: null }], neclare: [] },
     { operatii: [{ ...operatie, fel: 'noua', cerinta_id: null, text_nou: 30, document_probant: 7 }], neclare: [] },
-    { operatii: [], neclare: [{ disp_nr: 7, de_ce: null }] }]) assert.ok(comparatieValida(j))
+    { operatii: [], neclare: [{ disp_nr: 7, de_ce: 'Neclar' }] },
+    // review #780: loturi null/lipsa, text_nou lipsa la anuleaza
+    { operatii: [{ ...operatie, loturi: null }], neclare: [] },
+    { operatii: [(({ loturi, ...o }) => o)(operatie)], neclare: [] },
+    { operatii: [(({ text_nou, ...o }) => ({ ...o, fel: 'anuleaza' }))(operatie)], neclare: [] }]) assert.ok(comparatieValida(j))
+  // neclare fara explicatie = raspuns partial (review Copilot #780)
+  for (const de_ce of [null, '', ' ', 123]) assert.equal(comparatieValida({ operatii: [], neclare: [{ disp_nr: 7, de_ce }] }), false)
   for (const k of Object.keys(comparatie)) {
     const j: any = structuredClone(comparatie); delete j[k]; assert.equal(comparatieValida(j), false, k)
     assert.equal(comparatieValida({ ...comparatie, [k]: {} }), false, k)
   }
   for (const lista of ['operatii', 'neclare'] as const) {
-    for (const k of Object.keys(comparatie[lista][0])) {
+    for (const k of Object.keys(comparatie[lista][0]).filter(k => k !== 'loturi')) {
       const j: any = structuredClone(comparatie); delete j[lista][0][k]
       assert.equal(comparatieValida(j), false, lista + '.' + k)
     }

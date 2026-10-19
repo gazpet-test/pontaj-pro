@@ -21,13 +21,14 @@ export function comparatieValida(j: any): boolean {
     j.operatii.every((o: any) => obiect(o) && referinta(o.disp_nr) &&
       ['modifica', 'anuleaza', 'noua'].includes(o.fel) &&
       (o.fel === 'noua' ? o.cerinta_id === null : Number.isInteger(o.cerinta_id) && o.cerinta_id > 0) &&
-      campuri(o, ['text_nou'], scalar) && (o.fel === 'anuleaza' ||
-        (o.text_nou !== null && String(o.text_nou).trim().length > 0)) &&
+      // la 'anuleaza' text_nou nu e folosit: poate lipsi (review Copilot #780)
+      (o.fel === 'anuleaza' ? (o.text_nou === undefined || scalar(o.text_nou)) :
+        (campuri(o, ['text_nou'], scalar) && o.text_nou !== null && String(o.text_nou).trim().length > 0)) &&
       ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(o.tip) &&
       campuri(o, ['document_probant', 'motiv'], scalar) &&
       (o.cand_se_prezinta === null || ['duae', 'depunere', 'primul_loc'].includes(o.cand_se_prezinta)) &&
       textPlin(o.citat) && ['ridicata', 'medie', 'scazuta'].includes(o.incredere) &&
-      typeof o.necesita_revizuire === 'boolean' && Array.isArray(o.loturi) &&
-      o.loturi.every((l: any) => typeof l === 'string' || (typeof l === 'number' && Number.isFinite(l)))) &&
-    j.neclare.every((n: any) => obiect(n) && referinta(n.disp_nr) && campuri(n, ['de_ce'], scalar))
+      typeof o.necesita_revizuire === 'boolean' && (o.loturi == null || (Array.isArray(o.loturi) &&
+      o.loturi.every((l: any) => typeof l === 'string' || (typeof l === 'number' && Number.isFinite(l)))))) &&
+    j.neclare.every((n: any) => obiect(n) && referinta(n.disp_nr) && textPlin(n.de_ce))
 }
