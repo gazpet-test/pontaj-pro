@@ -1,5 +1,5 @@
 // ofertare-rc-necitit — (a) escaladarea zilnică „răspuns de la autoritate necitit” (Răzvan 19.10.2026, „da d-a-b”, varianta A).
-// Pornit DOAR de pg_cron (ofertare_rc_necitit_0530) cu x-radar-secret, verificat prin Vault (fn_verifica_radar_secret) — cheia anon
+// Pornit DOAR de pg_cron (ofertare_rc_necitit, 3 rulări / zi) cu x-radar-secret, verificat prin Vault (fn_verifica_radar_secret) — cheia anon
 // NU ajunge (verify_jwt nu e o poartă de rol, vezi PR #318).
 // 1) apelează public.ofertare_alerta_rc_necitit(): notificări 'critical' în platformă (revendicare atomică pe zi + documente) și
 //    REVENDICAREA atomică a mailului zilei pentru licitațiile cu ≤ 5 zile până la depunere (`mail: true`);
@@ -48,10 +48,12 @@ Deno.serve(async (req) => {
   }
 
   // revalidare chiar înainte de trimitere: rămân doar licitațiile care au ÎNCĂ cel puțin unul dintre documentele revendicate necitit
+  // review Copilot r3 (P1): ACEEAȘI definiție a „necitit” ca selecția (status + proveniența 'ocr_local_neverificat' pe sha-ul curent),
+  // prin RPC-ul comun — nu o a doua definiție în edge
   const ids = revendicate.flatMap((l) => l.doc_ids || [])
-  const { data: docs, error: eDocs } = await sb.from('ofertare_documente_atribuire').select('id, licitatie_id, status_procesare, nume_original, created_at').in('id', ids)
+  const { data: docs, error: eDocs } = await sb.rpc('ofertare_alerta_rc_necitite_acum', { p_doc_ids: ids })
   if (eDocs || !Array.isArray(docs)) return await esec('revalidare: ' + (eDocs?.message || 'fără date'), revendicate)
-  const necitite = docs.filter((d: any) => !['procesat', 'ignorat', 'partial'].includes(d.status_procesare ?? 'neprocesat'))
+  const necitite = docs
   // review Copilot r2 (P2): mailul descrie DOAR documentele încă necitite la revalidare (nr / listă / „din” / zile reconstruite), nu
   // snapshot-ul de la revendicare — un răspuns procesat între timp nu mai apare ca „necitit”
   const ziRo = (ts: string) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date(ts))
@@ -95,8 +97,10 @@ Deno.serve(async (req) => {
   // review Copilot r2 (P1): cheie de idempotență la Resend = amprentele revendicate (aceeași zi + aceleași documente ⇒ același mail, oricâte
   // reîncercări); rezultat AMBIGUU (excepție de transport, 5xx) ⇒ revendicarea NU se eliberează (mailul poate fi plecat) — se raportează;
   // doar un refuz explicit (4xx, altul decât conflictul de idempotență) eliberează revendicarea, ca rularea următoare să-l trimită
+  // r4: cheia include și documentele încă necitite trimise (conținutul final) — aceeași revendicare re-revendicată după un rezultat ambiguu
+  // (amprenta „în curs” e aceeași în aceeași zi) cu același conținut ⇒ aceeași cheie ⇒ Resend nu trimite a doua oară
   const cheie = 'rc-necitit-' + Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
-    new TextEncoder().encode(deTrimis.map((l) => String(l.amprenta_mail)).sort().join('|'))))).map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 48)
+    new TextEncoder().encode(deTrimis.map((l) => `${l.amprenta_mail}#${l.nr}#${l.lista}`).sort().join('|'))))).map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 48)
   let resp: Response
   try {
     resp = await fetch('https://api.resend.com/emails', {
@@ -106,7 +110,7 @@ Deno.serve(async (req) => {
     })
   } catch (e) {
     return json({ ok: false, notificari, mail: null, rezultat: 'necunoscut', error: 'Resend (transport): ' + String((e as Error)?.message || e).slice(0, 200),
-      nota: 'revendicarea rămâne (mailul poate fi plecat); reîncercarea în aceeași zi e deduplicată de cheia de idempotență' })
+      nota: 'revendicarea rămâne „în curs”; după 10 minute rularea următoare o re-revendică și reîncearcă cu aceeași cheie de idempotență' })
   }
   const txt = await resp.text()
   if (resp.status >= 500) {
@@ -114,5 +118,13 @@ Deno.serve(async (req) => {
       nota: 'revendicarea rămâne (rezultat ambiguu)' })
   }
   if (!resp.ok && resp.status !== 409) return await esec('Resend ' + resp.status + ': ' + txt.slice(0, 200), deTrimis)
-  return json({ ok: true, notificari, mail: deTrimis.length, catre: to.length, ...(neeliberateProcesate.length ? { revendicari_neeliberate: neeliberateProcesate } : {}) })
+  // trimis (2xx, sau 409 = aceeași cheie deja folosită ⇒ deja trimis): revendicarea „în curs” devine „trimis” — altfel, după 10 minute,
+  // o rulare ar putea-o re-revendica (inofensiv: aceeași cheie de idempotență), dar o raportăm
+  const neconfirmate: number[] = []
+  for (const l of deTrimis) {
+    const { data, error } = await sb.rpc('ofertare_alerta_rc_mail_confirma', { p_licitatie_id: l.licitatie_id, p_amprenta: l.amprenta_mail })
+    if (error || data !== true) neconfirmate.push(l.licitatie_id)
+  }
+  return json({ ok: true, notificari, mail: deTrimis.length, catre: to.length, ...(neeliberateProcesate.length ? { revendicari_neeliberate: neeliberateProcesate } : {}),
+    ...(neconfirmate.length ? { revendicari_neconfirmate: neconfirmate } : {}) })
 })

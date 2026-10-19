@@ -1,7 +1,7 @@
--- REVENIRE 20261101a — scoate escaladarea „RC necitit”: funcțiile ofertare_alerta_rc_necitit() și ofertare_alerta_rc_mail_elibereaza().
+-- REVENIRE 20261101a — scoate escaladarea „RC necitit”: cele cinci funcții (ofertare_rc_doc_necitit, ofertare_alerta_rc_necitit,
+-- ofertare_alerta_rc_necitite_acum, ofertare_alerta_rc_mail_confirma, ofertare_alerta_rc_mail_elibereaza).
 -- Notificările deja trimise și amprentele (fel 'rc_necitit' / 'rc_necitit_mail') rămân neatinse (sunt istoric).
--- ÎNTÂI se oprește cron-ul ofertare_rc_necitit_0530 (altfel edge fn-ul ar apela o funcție inexistentă la următoarea rulare — erorile
--- de business se întorc, nu se aruncă, deci nu strică nimic, dar zgomotul din jurnal e inutil). DOAR la cererea lui Răzvan.
+-- ÎNTÂI se oprește cron-ul ofertare_rc_necitit (refuz dacă e activ). DOAR la cererea lui Răzvan.
 -- Armare per tranzacție:
 --   SELECT set_config('gazpet.revenire_20261101a', 'SCOATE_RC_NECITIT:' || txid_current(), true);
 DO $pre$
@@ -11,21 +11,30 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261101a: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
-  IF to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NULL
+  IF to_regprocedure('public.ofertare_rc_doc_necitit(bigint)') IS NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitite_acum(bigint[])') IS NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_mail_confirma(bigint,text)') IS NULL
      OR to_regprocedure('public.ofertare_alerta_rc_mail_elibereaza(bigint,text)') IS NULL THEN
-    RAISE EXCEPTION '20261101a: preconditie, migrarea nu e aplicata';
+    RAISE EXCEPTION '20261101a: preconditie, migrarea nu e aplicata (complet)';
   END IF;
-  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'ofertare_rc_necitit_0530' AND active) THEN
-    RAISE EXCEPTION '20261101a: cron-ul ofertare_rc_necitit_0530 e activ - opreste-l intai (cron.unschedule)';
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname LIKE 'ofertare_rc_necitit%' AND active) THEN
+    RAISE EXCEPTION '20261101a: cron-ul ofertare_rc_necitit e activ - opreste-l intai (cron.unschedule)';
   END IF;
 END $pre$;
 
 DROP FUNCTION public.ofertare_alerta_rc_mail_elibereaza(bigint, text);
+DROP FUNCTION public.ofertare_alerta_rc_mail_confirma(bigint, text);
+DROP FUNCTION public.ofertare_alerta_rc_necitite_acum(bigint[]);
 DROP FUNCTION public.ofertare_alerta_rc_necitit();
+DROP FUNCTION public.ofertare_rc_doc_necitit(bigint);
 
 DO $post$
 BEGIN
-  IF to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NOT NULL
+  IF to_regprocedure('public.ofertare_rc_doc_necitit(bigint)') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_necitite_acum(bigint[])') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_mail_confirma(bigint,text)') IS NOT NULL
      OR to_regprocedure('public.ofertare_alerta_rc_mail_elibereaza(bigint,text)') IS NOT NULL THEN
     RAISE EXCEPTION '20261101a: postconditie, functiile inca exista';
   END IF;
