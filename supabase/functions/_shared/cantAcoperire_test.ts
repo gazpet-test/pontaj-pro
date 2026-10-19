@@ -288,3 +288,6 @@ Deno.test('r18 (Copilot P1): prima celulă cu text lipit de nr. („| 1Conducta 
   // „| 12345 |” rămâne ce era: rând C6 cu cod de resursă, fără nr. crt.
   assertEquals(inv('| 12345 | m | 10 |\n').map((x) => [x.nr, x.cod]), [[null, '12345']])
 })
+Deno.test('r19 (Gemini r17 P2): forma slabă de celulă nu mai înghite codul din prima celulă', () => {
+  assertEquals(inv('| 1 SA11G1 Conducta | m | 10 |\n| 2 | SA11G2 | m | 20 |\n').map((x) => [x.nr_id, x.cod, x.stare]), [['1', 'SA11G1', 'ancora'], ['2', 'SA11G2', 'ancora']])
+})

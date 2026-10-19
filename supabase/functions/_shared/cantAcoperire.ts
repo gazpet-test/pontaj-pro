@@ -32,7 +32,8 @@ const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**(?:[.):]\**(?:\s+|(
 const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*\|/
 // prima celulă care ÎNCEPE cu un nr. dar nu are forma strictă („| 1 Conducta | …”, „| 5.2 - | …”, „| 1)a | …”, „| 1Conducta | …”, review Copilot r16 / r17; NU continuarea unui număr — „| 12,50 |”, „| 12345 |”): rând
 // „slab” — cu cantitate + UM pe rând e rând normal, altfel incert „posibila_continuare” (în inventar, tabel nedeterminat)
-const RE_NR_MARKDOWN_SLAB = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?![.,]?\d)[^|]*\|/u
+// consumă DOAR nr. + separatorul (review Gemini r17): restul primei celule rămâne pentru cod / cantitate („| 1 SA11G1 Conducta | …”)
+const RE_NR_MARKDOWN_SLAB = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?![.,]?\d)[.):\-–]?\s*(?=[^|]*\|)/u
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
 const RE_SEPARATOR = /^\s*\|?\s*:?-{3,}/
 // cantitate cu separator de mii prin spațiu („1 234,50”, „2 450,00”) — tokenizarea o rupe; rândul devine „incert”, nu dispare
