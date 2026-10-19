@@ -10,7 +10,7 @@ const [csv, doc] = Deno.args
 if (!csv) { console.error('utilizare: masoara_ancore.ts <texte.csv> [doc_id]'); Deno.exit(2) }
 const dec = (b64: string) => new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))
 const randuri = (await Deno.readTextFile(csv)).split('\n').slice(1).filter((l) => l.trim()).map((l) => l.split(','))
-if (!doc) console.log(['doc', 'caractere', 'sectiuni_f3c6', 'randuri', 'ancore', 'incerte', 'perechi_cod_cant', 'tabele', 'tabele_cu_goluri', 'goluri', 'reluari_atipice'].join('\t'))
+if (!doc) console.log(['doc', 'caractere', 'sectiuni_f3c6', 'randuri', 'ancore', 'incerte', 'perechi_cod_cant', 'tabele', 'tabele_cu_goluri', 'goluri', 'reluari_atipice', 'tabele_nedeterminate'].join('\t'))
 for (const [id, b64] of randuri) {
   const t = dec(b64)
   if (doc && id !== doc) continue
@@ -26,9 +26,12 @@ for (const [id, b64] of randuri) {
     const anc = inv.filter((x) => x.stare === 'ancora')
     const perechi = new Set(anc.filter((x) => x.cod).map((x) => `${x.cod}|${x.cantitate}|${x.um}`)).size
     console.log([id, t.length, sec.length, inv.length, anc.length, inv.length - anc.length, perechi, tb.length,
-      tb.filter((x) => x.goluri.length).length, tb.reduce((s, x) => s + x.goluri.length, 0), tb.reduce((s, x) => s + x.reluari_atipice, 0)].join('\t'))
+      tb.filter((x) => x.goluri.length || x.goluri_ierarhice.length).length, tb.reduce((s, x) => s + x.goluri.length + x.goluri_ierarhice.length, 0), tb.reduce((s, x) => s + x.reluari_atipice, 0),
+      tb.filter((x) => x.secventa_nedeterminata).length].join('\t'))
     continue
   }
-  for (const x of tb.filter((x) => x.goluri.length)) console.log(`gol — linia ${linia(x.de_la)}: nr. ${x.nr_min}-${x.nr_max}, lipsă ${x.goluri.join(', ')}`)
+  for (const x of tb.filter((x) => x.goluri.length || x.goluri_ierarhice.length)) {
+    console.log(`gol — linia ${linia(x.de_la)}: nr. ${x.nr_min}-${x.nr_max}, lipsă ${[...x.goluri, ...x.goluri_ierarhice].join(', ')}`)
+  }
   for (const r of inv.filter((x) => x.stare === 'incert').slice(0, 30)) console.log(`incert — linia ${linia(r.offset)} nr ${r.nr}: ${r.motiv}`)
 }

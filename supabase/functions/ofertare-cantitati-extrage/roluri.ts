@@ -63,7 +63,9 @@ export function sectiuniRol(text: string, nume: string, tip: string): SectiuneRo
   // 2. fără antet, pe pagină: marcajul ATR; 3. altfel titlul / tipul (o listă de cantități fără antet = F3 după titlu)
   // review r2: antetul guvernează DOAR de la pagina pe care apare primul antet încolo; paginile dinaintea lui (memoriu, ATR) își păstrează
   // marcajul / titlul
-  const mAntet = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz/i.exec(t)
+  // B1 r3 (review Jakarinos #751 r2): și titlurile „Lista consumurilor …” (C6 / C7 / C8 / C9), la fel ca sectiuniLista — altfel
+  // măsurătoarea și extractorul clasificau diferit aceeași secțiune
+  const mAntet = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz|(?:^|\n)[ \t#*|>\[]*(?:Tabel\s+rotit\s*[–-]\s*(?:\(?\s*continuare\s*\)?\s*)?)?(?:Lista\s+consumurilor|Centralizatorul\s+cheltuielilor)/i.exec(t)
   let k = t.length
   if (mAntet) {
     const pag = t.lastIndexOf('⟦PAGINA', mAntet.index)
@@ -81,7 +83,7 @@ export function sectiuniRol(text: string, nume: string, tip: string): SectiuneRo
     // review r3: în interiorul unei secțiuni de formular, o pagină FĂRĂ antet propriu dar cu marcaj ATR explicit e ATR (ex. memoriu →
     // F3 → anexa ATR). O pagină fără niciun semnal rămâne a formularului (continuarea lui) — o pagină de memoriu reluată fără marcaj nu se
     // poate distinge determinist și se corectează prin decizia omului pe secțiune.
-    const RE_ANTET_PAG = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz/i
+    const RE_ANTET_PAG = /Formular(?:ul)?\s*[FC]\s*\d|Lista\s+cu\s+cantit|Lista\s+cuprinz|(?:^|\n)[ \t#*|>\[]*(?:Tabel\s+rotit\s*[–-]\s*(?:\(?\s*continuare\s*\)?\s*)?)?(?:Lista\s+consumurilor|Centralizatorul\s+cheltuielilor)/i
     for (const s of sectiuniLista(t.slice(k))) {
       const de = k + s.de, pana = k + s.pana
       for (const pg of pagini(t.slice(de, pana))) {

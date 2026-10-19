@@ -26,10 +26,13 @@ export const SUPRAPUNERE = 2000   // ca un tabel rupt între felii să nu dispar
 // centralizatoarele F1 / F2 (valori, fără cantități fizice) sunt 'lista_alt' — înainte cădeau în secțiunea F3 de dinaintea lor.
 const ANTETE: { tip: TipLista; re: RegExp }[] = [
   { tip: 'lista_f3', re: /Formular(?:ul)?\s*F\s*3(?!\d)|Lista\s+cu\s+cantit[aăâ][tțţ]i(?:le)?\s+de\s+lucr[aăâ]ri/gi },
+  // B1 r5 (review r4): titlurile noi („Lista consumurilor …”, „Centralizatorul cheltuielilor …”) DOAR la început de linie — o mențiune
+  // în text („se regăsesc în Centralizatorul cheltuielilor”) nu e antet
+  // B1 r4: și „CENTRALIZATORUL cheltuielilor …” (F1 / F2 fără „Formular”, ex. 434) — tabel de valori, nu de cantități
   // val 2 (B1): și formularea din textele recitite „Lista consumurilor de resurse materiale / cu mana de lucru / de ore de functionare
   // / privind transporturile” (fără „cuprinzand”) — altfel tabelele C7 / C8 rămâneau în secțiunea F3 de dinaintea lor
-  { tip: 'lista_c6', re: /Formular(?:ul)?\s*C\s*6(?!\d)|Lista\s+(?:cuprinz[aâă]nd\s+consumurile|consumurilor)\s+de\s+resurse\s+materiale/gi },
-  { tip: 'lista_alt', re: /Formular(?:ul)?\s*C\s*[789](?!\d)|Lista\s+(?:cuprinz[aâă]nd\s+consumurile|consumurilor)\s+(?:cu\s+m[aâă]n|de\s+ore|privind\s+transport)|Formular(?:ul)?\s*F\s*[12](?!\d)/gi },
+  { tip: 'lista_c6', re: /Formular(?:ul)?\s*C\s*6(?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+de\s+resurse\s+materiale|(?:^|\n)[ \t#*|>\[]*(?:Tabel\s+rotit\s*[–-]\s*(?:\(?\s*continuare\s*\)?\s*)?)?Lista\s+consumurilor\s+de\s+resurse\s+materiale/gi },
+  { tip: 'lista_alt', re: /Formular(?:ul)?\s*C\s*[789](?!\d)|Lista\s+cuprinz[aâă]nd\s+consumurile\s+(?:cu\s+m[aâă]n|de\s+ore|privind\s+transport)|(?:^|\n)[ \t#*|>\[]*(?:Tabel\s+rotit\s*[–-]\s*(?:\(?\s*continuare\s*\)?\s*)?)?Lista\s+consumurilor\s+(?:cu\s+m[aâă]n|de\s+ore|privind\s+transport)|Formular(?:ul)?\s*F\s*[12](?!\d)|(?:^|\n)[ \t#*|>\[]*(?:Tabel\s+rotit\s*[–-]\s*(?:\(?\s*continuare\s*\)?\s*)?)?Centralizatorul\s+cheltuielilor/gi },
 ]
 const PAGINA = '⟦PAGINA'   // marcajul de pagină pus de citirea OCR (ofertare-ingest-doc)
 

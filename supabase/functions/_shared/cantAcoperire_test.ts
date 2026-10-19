@@ -9,8 +9,10 @@ const F3 = '⟦PAGINA 1⟧\n001 RPCXA04 M.C. 626.400\nSAPATURA\n0.000 0 Total=\n
   '003 SA11G1 [ 2] M 1160.000\nTEAVA PVC D= 90 MM\n0.000 0 Total=\n003 6701152 M 1160.000\n@TV HDPE80 DN 90X8.\n2 COD 64000115\n0.003 3 Total=\n' +
   '⟦PAGINA 2⟧\n006 TRA02A40 TONA 0.575 TRANSPORTUL RUTIER 0.000 0 Total=\n'
 
-Deno.test('B1: inventarul listei F3 (nr., cod după poziție, cantitate, UM, pagina); continuarea „2 COD …” nu e rând; offset în original', () => {
-  const r = inv(F3)
+Deno.test('B1: inventarul listei F3 (nr., cod după poziție, cantitate, UM, pagina); „2 COD …” = incert posibila_continuare; offset în original', () => {
+  const toate = inv(F3)
+  assertEquals(toate.filter((x) => x.motiv === 'posibila_continuare').map((x) => [x.nr, x.linie, x.stare]), [[2, 13, 'incert']])
+  const r = toate.filter((x) => x.motiv !== 'posibila_continuare')
   assertEquals(r.map((x) => [x.nr, x.stare, x.cod, x.cantitate, x.um, x.pagina]), [
     [1, 'ancora', 'RPCXA04', '626.400', 'mc', 1], [2, 'ancora', 'GD11A1', '174.000', 'mc', 1], [3, 'ancora', 'SA11G1', '1160.000', 'm', 1],
     [3, 'ancora', '6701152', '1160.000', 'm', 1], [6, 'ancora', 'TRA02A40', '0.575', 'tona', 2]])
@@ -59,6 +61,284 @@ Deno.test('B1: rândurile de pe aceeași poziție (material sub articol) — poz
 })
 Deno.test('B1: masoara — rânduri / ancore / incerte / perechi cod+cantitate distincte', () => {
   const m = masoara(F3 + '| 7 | X1A7 | GRAME | 3 |\n')
-  assertEquals([m.randuri, m.ancore, m.incerte, m.perechi_distincte, m.tabele], [6, 5, 1, 5, 1])
+  assertEquals([m.randuri, m.ancore, m.incerte, m.perechi_distincte, m.tabele], [7, 5, 2, 5, 1])
   assert(m.goluri === 2) // 4, 5
+})
+
+// ── review Jakarinos #751 r2 ──
+Deno.test('r3 (P1-1): rând de listă fără cod, cu UM necunoscută → INCERT (nu dispare); „2 COD …” sub „003 …” → incert posibila_continuare, în afara secvenței', () => {
+  assertEquals(sumar('1 Conducta m 10\n2 Adeziv GRAME 12\n'), [[1, 'ancora', null, '10', 'm'], [2, 'incert', null, null, null]])
+  assertEquals(inv('1 Conducta m 10\n2 Adeziv GRAME 12\n')[1].motiv, 'lista_fara_cod_sau_cantitate')
+  // nr. care nu continuă secvența (nici ultimul, nici următorul, nici 1) = continuare de denumire
+  const c = inv('003 SA11G1 [ 2] M 10.000\nTEAVA\n2 COD 64000115\n7 FIRE DE 1,5\n')
+  assertEquals(c.map((x) => [x.nr, x.motiv]), [[3, null], [2, 'posibila_continuare'], [7, 'posibila_continuare']])
+  assertEquals(tabele(c).map((x) => [x.nr_min, x.nr_max, x.goluri]), [[3, 3, []]])
+})
+Deno.test('r3 (P1-3): reluarea de la 1 separă tabelul și când fragmentul anterior n-avea poziția 1 („8, 10” apoi „1 … 9” → golul 9 rămâne)', () => {
+  const rd = ['| 8 | A | m | 1 |', '| 10 | B | m | 2 |', ...Array.from({ length: 9 }, (_, k) => `| ${k + 1} | X | m | ${k + 1} |`)].join('\n') + '\n'
+  assertEquals(tabele(inv(rd)).map((x) => [x.nr_min, x.nr_max, x.goluri]), [[8, 10, [9]], [1, 9, []]])
+})
+Deno.test('r3 (P2-4): separatorul de mii prin spațiu în listă (pe linie sau pe linia următoare) → incert, nu „1 m”', () => {
+  assertEquals(inv('1 RPC01 Conducta m 1 234,50\n').map((x) => [x.stare, x.motiv]), [['incert', 'separator_mii_spatiu']])
+  assertEquals(inv('1 RPC01 Conducta\nm 1 234,50\n').map((x) => [x.stare, x.motiv]), [['incert', 'separator_mii_spatiu']])
+})
+Deno.test('r3 (corpus): „HDPE80 312UNI” nu e separator de mii; continuarea de denumire între rânduri de tabel nu e rând (nici reluare de la 1)', () => {
+  assertEquals(inv('003 6701152 M 130.000 @TV HDPE80 312UNI7611.7615 PN10 DN 90X8.2 COD 64000115 0.003 0 Total=\n').map((x) => x.stare), ['ancora'])
+  const t = '| 16 | 00602G04 | 02 BUCATA | 9,00000 | |\nSUDURA CAP LA CAP\n1 IMBIN.(DOP/CAPAT FLANSA) D= 90 MM\n| 17 | ACE01B3 | 82 BUCATA | 3,00000 | |\n'
+  assertEquals(inv(t).map((x) => [x.nr, x.motiv]), [[16, null], [1, 'posibila_continuare'], [17, null]])
+  assertEquals(tabele(inv(t)).map((x) => x.goluri), [[]])
+})
+Deno.test('r3 (P2-5): un rând C6 nu împrumută cantitatea articolului următor (rând de tabel cu cod)', () => {
+  assertEquals(sumar('| 2001455 | Adeziv | GRAME | 12 |\n| 2001456 | Conducta | m | 15 |\n'),
+    [[null, 'incert', '2001455', null, null], [null, 'ancora', '2001456', '15', 'm']])
+})
+Deno.test('r3 (P2-6): numerotarea ierarhică păstrează identificatorul; „5.1, 5.3” → golul 5.2', () => {
+  const r = inv('| 5 | Proiectare | | |\n| 5.1 | Tema | m | 1 |\n| 5.3 | Studiu | m | 2 |\n| 6 | Altele | m | 3 |\n')
+  assertEquals(r.map((x) => [x.nr, x.nr_id]), [[5, '5'], [5, '5.1'], [5, '5.3'], [6, '6']])
+  assertEquals(tabele(r).map((x) => [x.goluri, x.goluri_ierarhice]), [[[], ['5.2']]])
+  assertEquals(masoara('| 5.1 | Tema | m | 1 |\n| 5.3 | Studiu | m | 2 |\n').goluri, 1)
+})
+
+// ── review Jakarinos B1 r3 ──
+Deno.test('r4 (P1-1): tabel → listă peste pagină — rândurile de listă rămân în inventar (incerte); „8,10 / 1 incert, 2…9” păstrează golul 9', () => {
+  const t = '| 1 | Conducta | m | 10 |\n⟦PAGINA 2⟧\n2 Adeziv GRAME 12\n3 Vopsea GRAME 20\n'
+  assertEquals(inv(t).map((x) => [x.nr, x.stare]), [[1, 'ancora'], [2, 'incert'], [3, 'incert']])
+  const u = ['| 8 | A | m | 1 |', '| 10 | B | m | 2 |', '1 Adeziv GRAME 3', ...Array.from({ length: 8 }, (_, k) => `| ${k + 2} | X | m | ${k + 2} |`)].join('\n') + '\n'
+  const tb = tabele(inv(u))
+  assertEquals(tb.map((x) => [x.nr_min, x.nr_max, x.goluri]), [[8, 10, [9]], [2, 9, []]])
+})
+Deno.test('r4 (P1-2): secvența sau zerourile nu mai elimină rânduri („1 / 3 / 4”, „001 / 2 / 3”) — toate în inventar', () => {
+  assertEquals(inv('1 Conducta m 10\n3 Adeziv GRAME 12\n4 Vopsea GRAME 20\n').length, 3)
+  assertEquals(inv('001 Conducta m 10\n2 Adeziv GRAME 12\n3 Vopsea GRAME 20\n').length, 3)
+})
+Deno.test('r4 (P2-4): ierarhia pe trei niveluri — „5.1.1, 5.3.1” → golul 5.2', () => {
+  const tb = tabele(inv('| 5.1.1 | A | m | 1 |\n| 5.3.1 | B | m | 2 |\n'))
+  assertEquals(tb.map((x) => x.goluri_ierarhice), [['5.2']])
+})
+
+// ── review Jakarinos B1 r4 ──
+Deno.test('r5 (P1-1): rândurile „posibila_continuare” marchează tabelul ca secvență NEDETERMINATĂ (golul nu mai poate dispărea tăcut)', () => {
+  const a = tabele(inv('1 Conducta m 10\n3 Adeziv GRAME 12\n4 Vopsea GRAME 20\n'))
+  assertEquals(a.map((x) => [x.nr_min, x.nr_max, x.secventa_nedeterminata, x.nr_incerte]), [[1, 1, true, [3, 4]]])
+  const rd = ['| 8 | A | m | 1 |', '| 10 | B | m | 2 |', '1 Adeziv GRAME 3', '2 Vopsea GRAME 4', ...Array.from({ length: 7 }, (_, k) => `| ${k + 3} | X | m | ${k + 3} |`)].join('\n') + '\n'
+  const b = tabele(inv(rd))
+  assert(b[0].secventa_nedeterminata)
+  assertEquals(masoara(rd).tabele_nedeterminate >= 1, true)
+  // fără rânduri ambigue: secvența e determinată
+  assertEquals(tabele(inv('| 1 | A | m | 1 |\n| 2 | B | m | 2 |\n')).map((x) => x.secventa_nedeterminata), [false])
+})
+
+// ── review Jakarinos B1 r5 ──
+Deno.test('r6 (P1-1 / P2-3): incertitudinea de la graniță trece și la tabelul NOU, cu numerele ei; și înaintea primului tabel', () => {
+  const t = '| 8 | A | m | 1 |\n| 9 | B | m | 2 |\n| 10 | C | m | 3 |\n1 Adeziv GRAME 3\n| 2 | D | m | 4 |\n| 3 | E | m | 5 |\n'
+  assertEquals(tabele(inv(t)).map((x) => [x.nr_min, x.nr_max, x.secventa_nedeterminata, x.nr_incerte]), [[8, 10, true, [1]], [2, 3, true, [1]]])
+  const u = '| 2001456 | Teava | m | 10 |\n1 Adeziv GRAME 3\n| 2 | D | m | 4 |\n'
+  assertEquals(tabele(inv(u)).map((x) => [x.secventa_nedeterminata, x.nr_incerte]), [[true, [1]]])
+  // un rând de secvență între ele închide „pendinte”: tabelul următor nu mai e afectat
+  const v = '| 1 | A | m | 1 |\n| 2 | B | m | 2 |\n7 Adeziv GRAME 3\n| 3 | C | m | 3 |\n| 1 | D | m | 4 |\n| 2 | E | m | 5 |\n'
+  assertEquals(tabele(inv(v)).map((x) => x.secventa_nedeterminata), [true, false])
+})
+
+// ── review Copilot / Gemini B1 r6 ──
+Deno.test('r7 (Copilot P1): incertitudinea de la FINAL, fără niciun rând numerotat sigur după ea → tabel sintetic nedeterminat (nu [])', () => {
+  const t = '| 2001456 | Teava | m | 10 |\n1 Adeziv GRAME 3\n3 Vopsea GRAME 4\n'
+  assertEquals(tabele(inv(t)).map((x) => [x.randuri, x.secventa_nedeterminata, x.nr_incerte, x.nr_min, x.nr_max]), [[0, true, [1, 3], 1, 3]])
+  assertEquals(masoara(t).tabele_nedeterminate, 1)
+})
+Deno.test('r7 (Gemini P2): după rânduri incerte, o scădere la 3 pornește un tabel NOU (nedeterminat) — golul 4 nu mai e acoperit de tabelul vechi', () => {
+  const t = ['| 1 | A | m | 1 |', '| 4 | X | m | 1 |', '| 8 | B | m | 2 |', '| 9 | C | m | 3 |', '| 10 | D | m | 4 |',
+    '1 Articol nou GRAME 5', '2 Alt articol GRAME 6', '| 3 | E | m | 7 |', '| 5 | F | m | 8 |'].join('\n') + '\n'
+  const tb = tabele(inv(t))
+  assertEquals(tb.map((x) => [x.nr_min, x.nr_max, x.goluri, x.secventa_nedeterminata]), [[1, 10, [2, 3, 5, 6, 7], true], [3, 5, [4], true]])
+})
+
+// ── review Copilot B1 r7 ──
+Deno.test('r8 (Copilot P1): rânduri ierarhice de LISTĂ („5.1 …”, „5.3 …”) → în inventar, cu golul ierarhic 5.2; liniile de prețuri nu sunt rânduri', () => {
+  const r = inv('5.1 Conducta m 10\n5.3 Conducta m 20\n')
+  assertEquals(r.map((x) => [x.nr, x.nr_id, x.stare]), [[5, '5.1', 'ancora'], [5, '5.3', 'ancora']])
+  assertEquals(tabele(r).map((x) => x.goluri_ierarhice), [['5.2']])
+  assertEquals(inv('5.1 1234567 Teava m 10\n5.2 SA11G1 Teava m 20\n').map((x) => x.nr_id), ['5.1', '5.2'])
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\nTEAVA PVC 20.80 11856.00\n38.32 21842.40\n0.90 513.00\n1.5 m adancime\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
+})
+
+// ── review Copilot / Gemini B1 r8 ──
+Deno.test('r9: rânduri ierarhice de LISTĂ — UM + cantitate, cod de 4 cifre, rădăcină de 4 cifre, cod cu minuscule, cuvânt de o literă, paranteză', () => {
+  const id = (t: string) => inv(t).map((x) => x.nr_id)
+  assertEquals(id('5.1 m 10\n5.3 m 20\n'), ['5.1', '5.3'])
+  assertEquals(tabele(inv('5.1 m 10\n5.3 m 20\n')).map((x) => x.goluri_ierarhice), [['5.2']])
+  assertEquals(id('5.1 2509 Teava m 10\n5.3 2510 Teava m 20\n'), ['5.1', '5.3'])
+  assertEquals(tabele(inv('1000.1 Conducta m 10\n1000.3 Conducta m 20\n')).map((x) => x.goluri_ierarhice), [['1000.2']])
+  assertEquals(id('5.1 3A1iG1 Conducta m 10\n5.2 TRA01A Conducta m 10\n5.3 sa11g1 Conducta m 10\n'), ['5.1', '5.2', '5.3'])
+  assertEquals(id('5.1 A se vedea m 10\n5.2 O conducta PEHD m 10\n5.3 (Conducta) m 10\n5.4 [2] SA11G1 m 10\n'), ['5.1', '5.2', '5.3', '5.4'])
+  // rămân excluse: prețuri / zecimale și o măsură în text
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n0.90 513.00\n1.5 m adancime\n20.80 11856.00\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
+  // poziția „dupa” la ierarhic: codul de după nr. e găsit
+  assertEquals(inv('5.1 SA11G1 Conducta m 10\n')[0].cod, 'SA11G1')
+})
+
+// ── review Copilot / Gemini B1 r9 ──
+Deno.test('r10: recunoaștere STRUCTURALĂ — „5.1 - …”, „5.1: …”, „5.1 A1 …”, „5.1 m3 10”, „5.1 M 10” în inventar; prețurile excluse; „1.5 m adancime” = incert', () => {
+  const id = (t: string) => inv(t).map((x) => x.nr_id)
+  assertEquals(id('5.1 - Conducta PEHD m 10\n5.3 - Conducta PVC m 20\n'), ['5.1', '5.3'])
+  assertEquals(tabele(inv('5.1 - Conducta PEHD m 10\n5.3 - Conducta PVC m 20\n')).map((x) => x.goluri_ierarhice), [['5.2']])
+  assertEquals(id('5.1: Conducta m 10\n5.2 A1 Conducta m 10\n5.3 m3 10\n5.4 M 10\n'), ['5.1', '5.2', '5.3', '5.4'])
+  // orice altă formă ierarhică cu conținut intră (cel puțin incert), nu dispare
+  const s = inv('5.1 ~ ceva\n')
+  assertEquals(s.map((x) => [x.nr_id, x.stare, x.motiv]), [['5.1', 'incert', 'posibila_continuare']])
+  // liniile de prețuri (id urmat de un număr zecimal) rămân în afară; „1.5 m adancime” = incert în afara secvenței
+  // r12: liniile numai numerice NU mai sunt excluse — intră ca incerte în afara secvenței
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00\n38.32 21842.40\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
+  const m = inv('003 SA11G1 [ 2] M 570.000\n1.5 m adancime\n')
+  assertEquals(m.map((x) => [x.nr_id, x.motiv]), [['003', null], ['1.5', 'posibila_continuare']])
+})
+
+// ── review Copilot B1 r10 ──
+Deno.test('r11 (Copilot P1/P2): „5.1 12,50 m” / „5.1 12.50 buc” rămân rânduri; rândul precedent nu le împrumută cantitatea; doar liniile NUMAI numerice sunt prețuri', () => {
+  const r = inv('1 Conducta fara cantitate\n5.1 12,50 m\n5.3 Conducta m 20\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.cantitate, x.um]), [['1', 'incert', null, null], ['5.1', 'ancora', '12,50', 'm'], ['5.3', 'ancora', '20', 'm']])
+  assertEquals(inv('5.1 12.50 buc\n').map((x) => [x.nr_id, x.stare, x.um]), [['5.1', 'ancora', 'buc']])
+  // numai numere după id: în inventar ca incerte, în afara secvenței (r12)
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00 0.00\n38.32 21842.40\n').filter((x) => x.motiv !== 'posibila_continuare').map((x) => x.nr_id), ['003'])
+})
+
+// ── review Copilot B1 r11 ──
+Deno.test('r12 (Copilot P1/P2): rândul ierarhic numai numeric („5.1 12,50”, „5.1 12,50 3”) NU dispare — incert posibila_continuare, tabel nedeterminat', () => {
+  for (const t of ['5.1 12,50\n', '5.1 12,50 3\n']) {
+    const r = inv(t)
+    assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['5.1', 'incert', 'posibila_continuare']])
+    assertEquals(tabele(r).map((x) => [x.secventa_nedeterminata, x.nr_incerte]), [[true, [5]]])
+  }
+})
+
+// ── review Copilot B1 r12 ──
+Deno.test('r13 (Copilot P1/P2): nr. crt. singur pe linie (OCR rupt după nr.) NU dispare — cu cantitatea pe linia următoare e rând normal', () => {
+  const r = inv('1\nConducta m 10\n2 Conducta m 20\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.cantitate, x.um]), [['1', 'ancora', '10', 'm'], ['2', 'ancora', '20', 'm']])
+  assertEquals(tabele(r).map((x) => [x.nr_min, x.nr_max, x.goluri, x.secventa_nedeterminata]), [[1, 2, [], false]])
+  const h = inv('5.1\nConducta m 10\n5.3 Conducta m 20\n')
+  assertEquals(h.map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.3', 'ancora']])
+  assertEquals(tabele(h)[0].goluri_ierarhice.length > 0, true)
+  // fără cantitate recuperabilă: incert posibila_continuare, tabel nedeterminat
+  const s = inv('1\n2 Conducta m 20\n3 Conducta m 30\n')
+  assertEquals(s.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'incert', 'posibila_continuare'], ['2', 'ancora', null], ['3', 'ancora', null]])
+  assertEquals(tabele(s).some((x) => x.secventa_nedeterminata), true)
+  assertEquals(inv('12.\nConducta m 10\n').map((x) => [x.nr_id, x.stare]), [['12', 'ancora']])
+})
+
+// ── review Copilot B1 r13 ──
+Deno.test('r14 (Copilot P1/P2): reluarea ierarhică sub același părinte nu mai ascunde golul primei secvențe', () => {
+  const tb = tabele(inv('5.1 Conducta m 10\n5.3 Teava m 20\n5.1 Beton m 30\n5.2 Nisip m 40\n5.3 Pietris m 50\n'))
+  assertEquals(tb.map((x) => [x.randuri, x.goluri_ierarhice]), [[2, ['5.2']], [3, []]])
+  // scădere sub același părinte fără reluare la 1–2 = reluare atipică
+  const at = tabele(inv('5.1 A m 1\n5.2 B m 2\n5.3 C m 3\n5.4 D m 4\n5.3 E m 5\n5.5 F m 6\n'))
+  assertEquals(at.map((x) => [x.randuri, x.reluari_atipice]), [[6, 1]])
+  // pe niveluri: 5.1.1, 5.1.3, 5.1.1, 5.1.2 → al doilea tabel; golul 5.1.2 rămâne în primul
+  const n = tabele(inv('5.1.1 A m 1\n5.1.3 B m 2\n5.1.1 C m 3\n5.1.2 D m 4\n'))
+  assertEquals(n.map((x) => x.goluri_ierarhice), [['5.1.2'], []])
+  // secvența normală (5.1, 5.2, 6.1, 6.2) rămâne un singur tabel fără semnale
+  assertEquals(tabele(inv('5.1 A m 1\n5.2 B m 2\n6.1 C m 3\n6.2 D m 4\n')).map((x) => [x.randuri, x.reluari_atipice, x.goluri_ierarhice]), [[4, 0, []]])
+})
+
+// ── review Copilot B1 r14 ──
+Deno.test('r15 (Copilot P1): rândul plat cu „:” sau cu separatorul lipit de text nu mai dispare; „1.5 …” / „10:30” nu devin rânduri', () => {
+  for (const t of ['1: Conducta m 10\n2 Conducta m 20\n', '1)Conducta m 10\n2 Conducta m 20\n', '1:Conducta m 10\n2 Conducta m 20\n', '1.Conducta m 10\n2 Conducta m 20\n'])
+    assertEquals(inv(t).map((x) => [x.nr_id, x.stare, x.cantitate]), [['1', 'ancora', '10'], ['2', 'ancora', '20']])
+  // r24: „10:30 …” nu e rând sigur; prin plasa de siguranță intră doar ca incert posibila_continuare (în afara secvenței)
+  assertEquals(inv('10:30 sedinta\n').map((x) => [x.nr_id, x.motiv]), [['10', 'posibila_continuare']])
+  assertEquals(inv('**7**. Conducta m 10\n').map((x) => [x.nr_id, x.stare]), [['7', 'ancora']])
+})
+
+// ── review Copilot B1 r15 + Gemini B1 r14 ──
+Deno.test('r16 (Copilot P1): ierarhicul cu separator lipit de text (5.2:Conducta, 5.2)Conducta, 5.2.Conducta) nu mai dispare', () => {
+  for (const s of [':', ')', '.'])
+    assertEquals(inv(`5.1 Conducta m 10\n5.2${s}Conducta m 20\n`).map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.2', 'ancora']])
+  // „1.5m” / „1.5 12” nu devin rânduri sigure
+  // r23: „1.5m adancime” intră ca rând slab lipit — incert posibila_continuare, în afara secvenței (nu rând sigur)
+  assertEquals(inv('1.5m adancime\n').map((x) => [x.nr_id, x.motiv]), [['1.5', 'posibila_continuare']])
+})
+Deno.test('r16 (Gemini P2): reluarea ierarhică după alt capitol (5.1, 5.3, 6.1, 5.1, 5.2, 5.3) păstrează golul 5.2 al primului tabel', () => {
+  const tb = tabele(inv('5.1 A m 1\n5.3 B m 2\n6.1 C m 3\n5.1 D m 4\n5.2 E m 5\n5.3 F m 6\n'))
+  assertEquals(tb.map((x) => [x.randuri, x.goluri_ierarhice]), [[3, ['5.2']], [3, []]])
+  // capitole succesive normale: un singur tabel
+  assertEquals(tabele(inv('5.1 A m 1\n5.2 B m 2\n6.1 C m 3\n6.2 D m 4\n7.1 E m 5\n')).map((x) => [x.randuri, x.reluari_atipice, x.goluri_ierarhice]), [[5, 0, []]])
+})
+
+// ── review Copilot B1 r16 ──
+Deno.test('r17 (Copilot P1): rândul de TABEL cu „1:” / „5.2:” sau cu prima celulă nestandard nu mai dispare', () => {
+  assertEquals(inv('| 1: | Conducta | m | 10 |\n| 2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['1', 'ancora'], ['2', 'ancora']])
+  assertEquals(inv('| 5.1 | Conducta | m | 10 |\n| 5.2: | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.2', 'ancora']])
+  // prima celulă „1 Conducta”: rând slab — cu cantitate e normal, fără e incert posibila_continuare
+  assertEquals(inv('| 1 Conducta | m | 10 |\n| 2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare, x.motiv, x.cantitate]), [['1', 'incert', 'posibila_continuare', '10'], ['2', 'ancora', null, '20']]) // r19: celula slabă rămâne incertă și cu cantitate
+  const s = inv('| 1 Conducta | | |\n| 2 | Teava | m | 20 |\n')
+  assertEquals(s.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'incert', 'posibila_continuare'], ['2', 'ancora', null]])
+  assertEquals(tabele(s).some((x) => x.secventa_nedeterminata), true)
+})
+Deno.test('r17: rândul de LISTĂ cu coloane „|” doar la coadă (F3 212 / 213) intră ca rând de listă, cu cantitatea lui', () => {
+  const r = inv('007 GD11A1 BUC. 1.000 LEGATURA | 0.000 | 0 Total=\n008 GD12A1 BUC. 1.000 LEGATURA CONDUCTEI NOI | 0.000 | 0 Total=\n009 RPGD13F1 [ 1] M 570.000 EFECTUAREA | 0.000 | 0 Total=\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.cantitate]), [['007', 'ancora', '1.000'], ['008', 'ancora', '1.000'], ['009', 'ancora', '570.000']])
+  const c = inv('025 4123214 | BUC. | 3.000 | | NIPLU FONTA | 0.000 | 0 | Total=\n026 4117966 | BUC. | 4.000 | COT FONTA | 0.000 | 0 Total=\n')
+  assertEquals(c.map((x) => [x.nr_id, x.stare]), [['025', 'ancora'], ['026', 'ancora']])
+})
+
+// ── review Copilot B1 r17 ──
+Deno.test('r18 (Copilot P1): prima celulă cu text lipit de nr. („| 1Conducta |”, „| 5.1Conducta |”) nu mai dispare; continuarea unui număr nu e rând', () => {
+  assertEquals(inv('| 1Conducta | m | 10 |\n| 2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['1', 'incert'], ['2', 'ancora']])
+  assertEquals(inv('| 5.1Conducta | m | 10 |\n| 5.2 | Teava | m | 20 |\n').map((x) => [x.nr_id, x.stare]), [['5.1', 'incert'], ['5.2', 'ancora']])
+  const s = inv('| 1Conducta | | |\n| 2 | Teava | m | 20 |\n')
+  assertEquals(s.map((x) => [x.nr_id, x.motiv]), [['1', 'posibila_continuare'], ['2', null]])
+  assertEquals(inv('| 12,50 | m | 10 |\n').length, 0)
+  // „| 12345 |” rămâne ce era: rând C6 cu cod de resursă, fără nr. crt.
+  assertEquals(inv('| 12345 | m | 10 |\n').map((x) => [x.nr, x.cod]), [[null, '12345']])
+})
+Deno.test('r19 (Gemini r17 P2): forma slabă de celulă nu mai înghite codul din prima celulă', () => {
+  assertEquals(inv('| 1 SA11G1 Conducta | m | 10 |\n| 2 | SA11G2 | m | 20 |\n').map((x) => [x.nr_id, x.cod, x.stare]), [['1', 'SA11G1', 'incert'], ['2', 'SA11G2', 'ancora']])
+})
+
+// ── review Copilot B1 r18 ──
+Deno.test('r19 (Copilot r18 P1): celula slabă cu cantitate („| 2m adancime | m | 10 |”) NU acoperă golul poziției 2', () => {
+  const r = inv('| 1 | A | m | 1 |\n| 2m adancime | m | 10 |\n| 3 | C | m | 1 |\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare'], ['3', 'ancora', null]])
+  assertEquals(tabele(r).map((x) => [x.goluri, x.secventa_nedeterminata]), [[[2], true]])
+})
+
+// ── review Copilot B1 r19 ──
+Deno.test('r20 (Copilot r19 P1): rândul slab cu separator de mii prin spațiu rămâne în afara secvenței (tabel și listă)', () => {
+  const r = inv('| 1 | A | m | 1 |\n| 2m adancime | m | 1 234 |\n| 3 | C | m | 1 |\n')
+  assertEquals(r.map((x) => [x.nr_id, x.motiv]), [['1', null], ['2', 'posibila_continuare'], ['3', null]])
+  assertEquals(tabele(r).map((x) => [x.goluri, x.secventa_nedeterminata]), [[[2], true]])
+  const l = inv('5.1 A m 1\n5.2 12,50 1 234\n5.3 C m 1\n')
+  assertEquals(l.find((x) => x.nr_id === '5.2')?.motiv, 'posibila_continuare')
+  assertEquals(tabele(l).map((x) => [x.goluri_ierarhice, x.secventa_nedeterminata]), [[['5.2'], true]])
+})
+
+// ── review Copilot B1 r20 ──
+Deno.test('r21 (Copilot r20 P1): rândul de LISTĂ ambiguu cu separator de mii prin spațiu rămâne în afara secvenței', () => {
+  const r = inv('| 1 | A | m | 1 |\n2 COD 1 234\n| 3 | C | m | 1 |\n')
+  assertEquals(r.map((x) => [x.nr_id, x.motiv]), [['1', null], ['2', 'posibila_continuare'], ['3', null]])
+  assertEquals(tabele(r).map((x) => [x.goluri, x.secventa_nedeterminata]), [[[2], true]])
+})
+
+// ── review Copilot B1 r21 ──
+Deno.test('r22 (Copilot r21 P1): linia cu „|” doar spre coadă și nr. lipit de text („2Conducta | m | 10 |”) nu mai dispare', () => {
+  const r = inv('1 | A | m | 1 |\n2Conducta | m | 10 |\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare']])
+  assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
+  assertEquals(inv('5.1 | A | m | 1 |\n5.2Conducta | m | 10 |\n').map((x) => [x.nr_id, x.motiv]), [['5.1', null], ['5.2', 'posibila_continuare']])
+})
+
+// ── review Copilot B1 r22 ──
+Deno.test('r23 (Copilot r22 P1): pe LISTĂ pură, nr. lipit de text („2Conducta m 10”) nu dispare — incert posibila_continuare', () => {
+  const r = inv('1 Conducta m 1\n2Conducta m 10\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare']])
+  assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
+  assertEquals(inv('5.1 Conducta m 1\n5.2Conducta m 10\n').map((x) => [x.nr_id, x.motiv]), [['5.1', null], ['5.2', 'posibila_continuare']])
+})
+
+// ── review Copilot B1 r23 ──
+Deno.test('r24 (Copilot r23 P1): plasa de siguranță — nr. lipit de „(”, „[”, separator + cifră nu dispare (posibila_continuare)', () => {
+  for (const [t, id] of [['1 Conducta m 1\n2(Conducta) m 10\n', '2'], ['5.1 Conducta m 1\n5.2[2] SA11G1 m 10\n', '5.2'], ['1 Conducta m 1\n2)12 m\n', '2'], ['1 Conducta m 1\n2@TEAVA m 10\n', '2']]) {
+    const r = inv(t)
+    assertEquals(r.find((x) => x.nr_id === id)?.motiv, 'posibila_continuare')
+    assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
+  }
 })
