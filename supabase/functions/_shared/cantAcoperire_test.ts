@@ -115,3 +115,15 @@ Deno.test('r4 (P2-4): ierarhia pe trei niveluri — „5.1.1, 5.3.1” → golul
   const tb = tabele(inv('| 5.1.1 | A | m | 1 |\n| 5.3.1 | B | m | 2 |\n'))
   assertEquals(tb.map((x) => x.goluri_ierarhice), [['5.2']])
 })
+
+// ── review Jakarinos B1 r4 ──
+Deno.test('r5 (P1-1): rândurile „posibila_continuare” marchează tabelul ca secvență NEDETERMINATĂ (golul nu mai poate dispărea tăcut)', () => {
+  const a = tabele(inv('1 Conducta m 10\n3 Adeziv GRAME 12\n4 Vopsea GRAME 20\n'))
+  assertEquals(a.map((x) => [x.nr_min, x.nr_max, x.secventa_nedeterminata, x.nr_incerte]), [[1, 1, true, [3, 4]]])
+  const rd = ['| 8 | A | m | 1 |', '| 10 | B | m | 2 |', '1 Adeziv GRAME 3', '2 Vopsea GRAME 4', ...Array.from({ length: 7 }, (_, k) => `| ${k + 3} | X | m | ${k + 3} |`)].join('\n') + '\n'
+  const b = tabele(inv(rd))
+  assert(b[0].secventa_nedeterminata)
+  assertEquals(masoara(rd).tabele_nedeterminate >= 1, true)
+  // fără rânduri ambigue: secvența e determinată
+  assertEquals(tabele(inv('| 1 | A | m | 1 |\n| 2 | B | m | 2 |\n')).map((x) => x.secventa_nedeterminata), [false])
+})

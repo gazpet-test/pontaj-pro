@@ -37,10 +37,12 @@ export type RandInventar = {
   stare: Stare
   motiv: string | null      // de ce e „incert”
 }
-export type Tabel = { de_la: number; nr_min: number; nr_max: number; randuri: number; pozitii: number; goluri: number[]; goluri_ierarhice: string[]; reluari_atipice: number }
+// secventa_nedeterminata: în tabel (sau imediat după el) există rânduri „posibila_continuare” — golurile / granițele NU sunt dovedite;
+// B2 trebuie să trateze tabelul ca „incomplet” (review r4: excluderea lor din secvență putea ascunde un gol, ex. „1 / 3 / 4”)
+export type Tabel = { de_la: number; nr_min: number; nr_max: number; randuri: number; pozitii: number; goluri: number[]; goluri_ierarhice: string[]; reluari_atipice: number; secventa_nedeterminata: boolean; nr_incerte: number[] }
 export type Masura = {
   randuri: number; ancore: number; incerte: number; ancore_cu_cod: number; perechi_distincte: number
-  tabele: number; tabele_cu_goluri: number; goluri: number; reluari_atipice: number; dupa_pagina: Record<string, number>
+  tabele: number; tabele_cu_goluri: number; goluri: number; reluari_atipice: number; tabele_nedeterminate: number; dupa_pagina: Record<string, number>
 }
 
 // pentru clasificare, rândurile de tabel fără „|” de închidere se închid într-o COPIE (umLanga cere ambele margini ale celulei);
@@ -155,6 +157,7 @@ export function inventarRanduri(text: string): RandInventar[] {
 export function tabele(randuri: RandInventar[]): Tabel[] {
   const t: Tabel[] = []
   let cur: (Tabel & { vazute: Set<number>; prev: number; sub: Map<string, Set<number>> }) | null = null
+  let nedeterminatInainte = false   // „posibila_continuare” înaintea primului tabel
   const inchideCur = () => {
     if (!cur) return
     for (let k = cur.nr_min; k <= cur.nr_max && cur.goluri.length < 200; k++) if (!cur.vazute.has(k)) cur.goluri.push(k)
@@ -168,13 +171,19 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
     t.push(tb)
   }
   for (const r of randuri) {
-    if (r.nr === null || r.motiv === 'posibila_continuare') continue
+    if (r.nr === null) continue
+    if (r.motiv === 'posibila_continuare') {
+      // în afara secvenței, dar tabelul curent își pierde dovada de completitudine (semnal explicit)
+      if (cur) { cur.secventa_nedeterminata = true; if (cur.nr_incerte.length < 50) cur.nr_incerte.push(r.nr) } else nedeterminatInainte = true
+      continue
+    }
     // tabel nou: reluarea de la 1 după un nr. > 1, SAU o scădere la ≤ 2 după un nr. > 2 (review r3: poziția 1 poate fi ea însăși
     // incertă / lipsă); orice altă scădere = „reluare atipică” în același tabel (semnal pentru B2)
     if (!cur || (r.nr === 1 && cur.nr_max > 1) || (r.nr <= 2 && r.nr < cur.prev && cur.nr_max > 2)) {
       inchideCur()
       cur = { de_la: r.offset, nr_min: r.nr, nr_max: r.nr, randuri: 0, pozitii: 0, goluri: [], goluri_ierarhice: [], reluari_atipice: 0,
-        vazute: new Set(), prev: r.nr, sub: new Map() }
+        secventa_nedeterminata: nedeterminatInainte, nr_incerte: [], vazute: new Set(), prev: r.nr, sub: new Map() }
+      nedeterminatInainte = false
     } else if (r.nr < cur.prev && r.nr !== cur.prev) cur.reluari_atipice++
     cur.randuri++
     cur.vazute.add(r.nr)
@@ -204,6 +213,7 @@ export function masoara(text: string): Masura {
   return {
     randuri: r.length, ancore: anc.length, incerte: r.length - anc.length, ancore_cu_cod: anc.filter((x) => x.cod).length,
     perechi_distincte: perechi.size, tabele: tb.length, tabele_cu_goluri: tb.filter((x) => x.goluri.length || x.goluri_ierarhice.length).length,
-    goluri: tb.reduce((s, x) => s + x.goluri.length + x.goluri_ierarhice.length, 0), reluari_atipice: tb.reduce((s, x) => s + x.reluari_atipice, 0), dupa_pagina,
+    goluri: tb.reduce((s, x) => s + x.goluri.length + x.goluri_ierarhice.length, 0), reluari_atipice: tb.reduce((s, x) => s + x.reluari_atipice, 0),
+    tabele_nedeterminate: tb.filter((x) => x.secventa_nedeterminata).length, dupa_pagina,
   }
 }

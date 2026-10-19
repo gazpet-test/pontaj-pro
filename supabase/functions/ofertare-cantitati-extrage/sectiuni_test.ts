@@ -204,3 +204,11 @@ Deno.test('B1 (f2): „Lista consumurilor cu mana de lucru / de ore de functiona
     '', 'Lista consumurilor privind transporturile', '1 | TRA01 | 2.0'].join('\n')
   assertEquals(sectiuniLista(t).map((x) => x.tip), ['lista_f3', 'lista_c6', 'lista_alt'])
 })
+
+Deno.test('B1 r5 (review r4, P1-2): o MENȚIUNE în text („se regăsesc în Centralizatorul cheltuielilor”) nu e antet; titlul la început de linie (și „[Tabel rotit – …”) da', () => {
+  const t = ['⟦PAGINA 1⟧', 'Formular F3', '001 SA11G1 [ 2] M 10.000', '⟦PAGINA 2⟧', '002 SA11G1 [ 2] M 20.000',
+    'Valorile se regăsesc în Centralizatorul cheltuielilor pe obiect.', '003 SA11G1 [ 2] M 30.000'].join('\n')
+  assertEquals(sectiuniLista(t).map((x) => x.tip), ['lista_f3'])
+  const u = ['⟦PAGINA 1⟧', 'Formular F3', '001 SA11G1 [ 2] M 10.000', '⟦PAGINA 2⟧', '[Tabel rotit – lista consumurilor de resurse materiale, Deviz DRUM8', '1 | 6701152 | M | 10.00'].join('\n')
+  assertEquals(sectiuniLista(u).map((x) => x.tip), ['lista_f3', 'lista_c6'])
+})

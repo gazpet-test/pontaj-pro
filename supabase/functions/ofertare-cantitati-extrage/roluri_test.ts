@@ -61,3 +61,8 @@ Deno.test('B1 r3 (review #751 r2, P1-2): sectiuniRol recunoaște „Lista consum
   const c8 = sectiuniRol('⟦PAGINA 1⟧\nLista consumurilor de ore de functionare a utilajelor\n1 | 2509 | 3.0\n', 'Liste de cantitati.pdf', 'lista_cantitati')
   assertEquals(c8.map((x) => [x.rol, x.decis_de]), [['lista_alt', 'antet']])
 })
+
+Deno.test('B1 r5 (review r4, P1-2): sectiuniRol — mențiunea „Centralizatorul cheltuielilor” în text nu reclasifică pagina F3', () => {
+  const t = '⟦PAGINA 1⟧\nFormular F3\n001 SA11G1 [ 2] M 10.000\n⟦PAGINA 2⟧\n002 SA11G1 [ 2] M 20.000\nValorile se regăsesc în Centralizatorul cheltuielilor pe obiect.\n'
+  assertEquals([...new Set(sectiuniRol(t, 'Liste de cantitati.pdf', 'lista_cantitati').map((x) => x.rol))], ['f3'])
+})
