@@ -24,6 +24,33 @@
 --     headers := jsonb_build_object('Content-Type','application/json',
 --       'x-radar-secret',(SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name='RADAR_SECRET')),
 --     body := '{}'::jsonb)$$);
+--
+-- Obiecte NOI (două funcții); nu schimbă tabele, date existente sau alte funcții. Scrie (la rulare) doar în notifications și
+-- ofertare_alerte_amprenta (fel 'rc_necitit' / 'rc_necitit_mail').
+-- Revenire: supabase/revenire/20261101a_ofertare_rc_necitit_escaladare_ROLLBACK.sql (armată; doar la cererea lui Răzvan).
+-- LIVRARE: doar prin scripts/livrare_migrare.sh; fără BEGIN/COMMIT.
+DO $pre$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261101a_ofertare_rc_necitit_escaladare:' || txid_current() THEN
+    RAISE EXCEPTION '20261101a: garda start invalida';
+  END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261101a: necesita postgres'; END IF;
+  PERFORM set_config('lock_timeout', '5s', true);
+  IF to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NOT NULL
+     OR to_regprocedure('public.ofertare_alerta_rc_mail_elibereaza(bigint,text)') IS NOT NULL THEN
+    RAISE EXCEPTION '20261101a: functiile exista deja';
+  END IF;
+  IF to_regclass('public.ofertare_alerte_amprenta') IS NULL OR to_regclass('public.notifications') IS NULL
+     OR to_regclass('public.ofertare_doc_texte_prov') IS NULL OR to_regclass('public.ofertare_documente_atribuire') IS NULL THEN
+    RAISE EXCEPTION '20261101a: dependinte lipsa';
+  END IF;
+  -- revendicarea atomică cere cheia (licitatie_id, fel) din 20260915
+  IF NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = 'public.ofertare_alerte_amprenta'::regclass AND i.indisunique
+                 AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
+                      WHERE a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)) = ARRAY['fel', 'licitatie_id']) THEN
+    RAISE EXCEPTION '20261101a: ofertare_alerte_amprenta fara cheie unica (licitatie_id, fel)';
+  END IF;
+END $pre$;
 
 CREATE OR REPLACE FUNCTION public.ofertare_alerta_rc_necitit()
  RETURNS jsonb
@@ -124,3 +151,17 @@ REVOKE ALL ON FUNCTION public.ofertare_alerta_rc_necitit() FROM PUBLIC, anon, au
 GRANT EXECUTE ON FUNCTION public.ofertare_alerta_rc_necitit() TO service_role;
 REVOKE ALL ON FUNCTION public.ofertare_alerta_rc_mail_elibereaza(bigint, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.ofertare_alerta_rc_mail_elibereaza(bigint, text) TO service_role;
+
+DO $post$
+DECLARE f text;
+BEGIN
+  FOREACH f IN ARRAY ARRAY['public.ofertare_alerta_rc_necitit()', 'public.ofertare_alerta_rc_mail_elibereaza(bigint,text)'] LOOP
+    IF has_function_privilege('anon', f, 'EXECUTE') OR has_function_privilege('authenticated', f, 'EXECUTE')
+       OR NOT has_function_privilege('service_role', f, 'EXECUTE') THEN
+      RAISE EXCEPTION '20261101a: postconditie drepturi %', f;
+    END IF;
+  END LOOP;
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261101a_ofertare_rc_necitit_escaladare:' || txid_current() THEN
+    RAISE EXCEPTION '20261101a: garda final invalida';
+  END IF;
+END $post$;
