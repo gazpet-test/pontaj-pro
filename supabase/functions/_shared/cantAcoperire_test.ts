@@ -224,3 +224,17 @@ Deno.test('r13 (Copilot P1/P2): nr. crt. singur pe linie (OCR rupt după nr.) NU
   assertEquals(tabele(s).some((x) => x.secventa_nedeterminata), true)
   assertEquals(inv('12.\nConducta m 10\n').map((x) => [x.nr_id, x.stare]), [['12', 'ancora']])
 })
+
+// ── review Copilot B1 r13 ──
+Deno.test('r14 (Copilot P1/P2): reluarea ierarhică sub același părinte nu mai ascunde golul primei secvențe', () => {
+  const tb = tabele(inv('5.1 Conducta m 10\n5.3 Teava m 20\n5.1 Beton m 30\n5.2 Nisip m 40\n5.3 Pietris m 50\n'))
+  assertEquals(tb.map((x) => [x.randuri, x.goluri_ierarhice]), [[2, ['5.2']], [3, []]])
+  // scădere sub același părinte fără reluare la 1–2 = reluare atipică
+  const at = tabele(inv('5.1 A m 1\n5.2 B m 2\n5.3 C m 3\n5.4 D m 4\n5.3 E m 5\n5.5 F m 6\n'))
+  assertEquals(at.map((x) => [x.randuri, x.reluari_atipice]), [[6, 1]])
+  // pe niveluri: 5.1.1, 5.1.3, 5.1.1, 5.1.2 → al doilea tabel; golul 5.1.2 rămâne în primul
+  const n = tabele(inv('5.1.1 A m 1\n5.1.3 B m 2\n5.1.1 C m 3\n5.1.2 D m 4\n'))
+  assertEquals(n.map((x) => x.goluri_ierarhice), [['5.1.2'], []])
+  // secvența normală (5.1, 5.2, 6.1, 6.2) rămâne un singur tabel fără semnale
+  assertEquals(tabele(inv('5.1 A m 1\n5.2 B m 2\n6.1 C m 3\n6.2 D m 4\n')).map((x) => [x.randuri, x.reluari_atipice, x.goluri_ierarhice]), [[4, 0, []]])
+})

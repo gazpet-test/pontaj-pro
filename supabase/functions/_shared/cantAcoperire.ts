@@ -174,7 +174,7 @@ export function inventarRanduri(text: string): RandInventar[] {
 // rând de material) = „reluare atipică”, în același tabel. Golurile = numerele dintre min și max care nu apar deloc în tabel.
 export function tabele(randuri: RandInventar[]): Tabel[] {
   const t: Tabel[] = []
-  let cur: (Tabel & { vazute: Set<number>; prev: number; sub: Map<string, Set<number>> }) | null = null
+  let cur: (Tabel & { vazute: Set<number>; prev: number; sub: Map<string, Set<number>>; ultSub: Map<string, number> }) | null = null
   // rândurile „posibila_continuare” văzute DUPĂ ultimul rând de secvență: pot ține de tabelul curent SAU de următorul (graniță
   // nedeterminată, review r5) → dacă urmează un tabel nou, și el le primește (secventa_nedeterminata + nr_incerte)
   let pendinte: number[] = []
@@ -188,7 +188,7 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
       const max = Math.max(...v)
       for (let k = 1; k <= max && cur.goluri_ierarhice.length < 200; k++) if (!v.has(k)) cur.goluri_ierarhice.push(`${par}.${k}`)
     }
-    const { vazute: _v, prev: _p, sub: _s, ...tb } = cur
+    const { vazute: _v, prev: _p, sub: _s, ultSub: _u, ...tb } = cur
     t.push(tb)
   }
   for (const r of randuri) {
@@ -200,13 +200,28 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
       if (pendinte.length < 50) pendinte.push(r.nr)
       continue
     }
+    // reluare IERARHICĂ sub același părinte (review Copilot r13: „5.1, 5.3, 5.1, 5.2, 5.3” — toate cu nr. 5 — unea cele două secvențe și
+    // ascundea golul 5.2): aceeași regulă ca la rădăcină — reluarea la 1, sau o scădere la ≤ 2 după un max > 2 = tabel nou; altă scădere
+    // sub același părinte = reluare atipică
+    let ierNou = false, ierAtipic = false
+    if (cur && r.nr === cur.prev && r.nr_id && r.nr_id.includes('.')) {
+      const c = r.nr_id.split('.')
+      for (let k = 1; k < c.length; k++) {
+        const par = c.slice(0, k).join('.'), ult = Number(c[k]), ant = cur.ultSub.get(par)
+        if (ant === undefined || ult >= ant) continue
+        const max = Math.max(...(cur.sub.get(par) ?? [ant]))
+        if ((ult === 1 && max > 1) || (ult <= 2 && max > 2)) ierNou = true
+        else ierAtipic = true
+        break
+      }
+    }
     // tabel nou: reluarea de la 1 după un nr. > 1, SAU o scădere la ≤ 2 după un nr. > 2 (review r3: poziția 1 poate fi ea însăși
     // incertă / lipsă); orice altă scădere = „reluare atipică” în același tabel (semnal pentru B2)
-    if (!cur || (r.nr === 1 && cur.nr_max > 1) || (r.nr <= 2 && r.nr < cur.prev && cur.nr_max > 2) || (pendinte.length > 0 && r.nr < cur.prev)) {
+    if (!cur || ierNou || (r.nr === 1 && cur.nr_max > 1) || (r.nr <= 2 && r.nr < cur.prev && cur.nr_max > 2) || (pendinte.length > 0 && r.nr < cur.prev)) {
       inchideCur()
       cur = { de_la: r.offset, nr_min: r.nr, nr_max: r.nr, randuri: 0, pozitii: 0, goluri: [], goluri_ierarhice: [], reluari_atipice: 0,
-        secventa_nedeterminata: pendinte.length > 0, nr_incerte: [...pendinte], vazute: new Set(), prev: r.nr, sub: new Map() }
-    } else if (r.nr < cur.prev && r.nr !== cur.prev) cur.reluari_atipice++
+        secventa_nedeterminata: pendinte.length > 0, nr_incerte: [...pendinte], vazute: new Set(), prev: r.nr, sub: new Map(), ultSub: new Map() }
+    } else if ((r.nr < cur.prev && r.nr !== cur.prev) || ierAtipic) cur.reluari_atipice++
     cur.randuri++
     pendinte = []
     pendinteDeLa = -1
@@ -217,6 +232,7 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
         const par = c.slice(0, k).join('.'), ult = Number(c[k])
         if (!cur.sub.has(par)) cur.sub.set(par, new Set())
         cur.sub.get(par)!.add(ult)
+        cur.ultSub.set(par, ult)
       }
     }
     cur.nr_min = Math.min(cur.nr_min, r.nr)
