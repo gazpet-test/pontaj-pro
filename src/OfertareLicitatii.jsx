@@ -45,7 +45,7 @@ import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   //
 import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
-import { ultimaProvPeDocument, etichetaProvenienta } from './ofertareProvenienta.js'
+import { provPeDocument, etichetaProvenienta } from './ofertareProvenienta.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -774,8 +774,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     if (elig.incarcat) elig.reincarca()
     supabase.from('ofertare_seap_fisiere').select('cheie, stare, sha256').eq('licitatie_id', licitatie.id)
       .then(r => setEvidSeap(new Map((r.data || []).map(x => [x.cheie, x]))), () => {})
-    supabase.from('ofertare_doc_texte_prov').select('id, document_id, sha256, origine, producator, completitudine, constatat_la')
-      .eq('licitatie_id', licitatie.id).then(r => setProvTxt(ultimaProvPeDocument(r.data)), () => {})
+    // ultimul rând pe document + `curent` (sha = textul actual), calculate în BD (20261101b) — textul nu pleacă spre client
+    supabase.rpc('fn_ofertare_doc_prov_curent', { p_licitatie_id: licitatie.id })
+      .then(r => setProvTxt(provPeDocument(r.data)), () => {})
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
