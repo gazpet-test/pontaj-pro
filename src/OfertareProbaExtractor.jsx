@@ -72,19 +72,23 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
     if (!st?.cerere) return setErr('Fără cerere de cheltuială activă — aprob-o întâi.')
     if (!window.confirm(`Pornesc extragerea cu extractorul ${extractor} pe ${l.nr_anunt}? E plătită (rămas din plafon: ${st.buget ? (st.buget.plafon_usd - st.consum).toFixed(2) : '—'} USD); se oprește singură la plafon.`)) return
     opreste.current = false; setBusy(true); setErr(null)
-    setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x: `▶ extractor ${extractor}` }])
+    // review Copilot #797 r2 (P2): callback-urile rulării scriu DOAR dacă panoul arată încă licitația pe care a pornit rularea
+    const idRulare = l.id
+    const aici = () => licCurenta.current === idRulare
+    const jurnalAici = (x) => { if (aici()) setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x }]) }
+    jurnalAici(`▶ extractor ${extractor}`)
     try {
     const r = await ruleazaPanaLaCapat(
       (body) => supabase.functions.invoke('ofertare-cantitati-extrage', { body }),
       { mod: 'structurat', licitatie_id: l.id, cerere_id: st.cerere.id, extractor },
-      { laPas: (i, p) => setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x: p.eroare ? `pas ${i + 1}: eroare — ${p.eroare}`
-          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}` }]),
+      { laPas: (i, p) => jurnalAici(p.eroare ? `pas ${i + 1}: eroare — ${p.eroare}`
+          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`),
         trebuieOprit: () => opreste.current })
     const tot = totalPasi(r.pasi)
-    setJurnal(j => [...j, { t: new Date().toLocaleTimeString('ro-RO'), x: `■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}` }])
-    } catch (e) { setErr('Rulare întreruptă: ' + (e?.message || String(e))) }
+    jurnalAici(`■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}`)
+    } catch (e) { if (aici()) setErr('Rulare întreruptă: ' + (e?.message || String(e))) }
     finally { setBusy(false) }
-    await load()
+    if (aici()) await load()
   }
 
   return (
