@@ -59,6 +59,10 @@ export type RandInventar = {
   markdown: boolean
   stare: Stare
   motiv: string | null      // de ce e „incert”
+  // offsetul (în textul ORIGINAL) al tokenului cantității recunoscute — pe linia rândului sau pe linia următoare împrumutată; la
+  // `separator_mii_spatiu`, începutul numărului cu spații („1 234,50”); null dacă B1 n-a localizat cantitatea (PR A2 r3, review Copilot:
+  // poarta de completitudine leagă acoperirea de ACEST token, nu de orice apariție a aceleiași valori)
+  cantitate_offset: number | null
 }
 // secventa_nedeterminata: în tabel (sau imediat după el) există rânduri „posibila_continuare” — golurile / granițele NU sunt dovedite;
 // B2 trebuie să trateze tabelul ca „incomplet” — la fel orice tabel cu goluri, goluri_ierarhice sau reluari_atipice > 0 (contract B2);
@@ -115,7 +119,7 @@ function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: bo
 }
 
 // cantitatea + UM ale unei linii (în copia închisă), excluzând tokenurile nr. și cod după POZIȚIE
-function cantitateSiUm(t: string, ls: number, linie: string, excluse: [number, number][], markdown: boolean): { cantitate: string; um: string } | null {
+function cantitateSiUm(t: string, ls: number, linie: string, excluse: [number, number][], markdown: boolean): { cantitate: string; um: string; de_la: number } | null {
   const cuUm = tokeniNumerici(linie, ls).filter((k) => {
     const de = k.de_la - ls, pana = k.pana_la - ls
     if (excluse.some(([a, b]) => de < b && pana > a)) return false
@@ -124,7 +128,7 @@ function cantitateSiUm(t: string, ls: number, linie: string, excluse: [number, n
   })
   const tok = cuUm.find((k) => markdown && singurInCelula(linie, k.de_la - ls, k.pana_la - ls)) ?? cuUm[0]
   if (!tok) return null
-  return { cantitate: tok.text, um: [...umLanga(t, tok.de_la, tok.pana_la)].find((u) => UM_REALE.has(u))! }
+  return { cantitate: tok.text, um: [...umLanga(t, tok.de_la, tok.pana_la)].find((u) => UM_REALE.has(u))!, de_la: tok.de_la }
 }
 
 // începutul unui articol: rând numerotat SAU rând de tabel cu cod în prima celulă
@@ -158,14 +162,22 @@ export function inventarRanduri(text: string): RandInventar[] {
     let cu = cantitateSiUm(t, startI, li, excluse, r.markdown)
     let motiv: string | null = null
     let folosit = rest
+    // offsetul cantității în textul ORIGINAL: pe linia rândului, aceeași poziție în linie (copia închisă doar adaugă „ |” la capăt)
+    let cantOffset: number | null = cu ? startO + (cu.de_la - startI) : null
     // cantitatea / UM pe linia următoare („1 Conducta PEHD” / „m 120,000”), dacă aceea nu e începutul altui articol — numerotat SAU
     // rând de tabel cu cod (review r2, P2-5: altfel un rând C6 împrumuta cantitatea articolului următor)
     if (!cu && i + 1 < orig.length && !incepeArticol(inch[i + 1]) && !RE_MARCAJ.test(orig[i + 1])) {
       const urm = cantitateSiUm(t, startI + li.length + 1, inch[i + 1], [], (inch[i + 1].match(/\|/g) || []).length >= 2)
-      if (urm) { cu = urm; folosit = rest + ' ' + inch[i + 1] }
+      if (urm) { cu = urm; folosit = rest + ' ' + inch[i + 1]; cantOffset = startO + lo.length + 1 + (urm.de_la - (startI + li.length + 1)) }
     }
     // separator de mii prin spațiu („1 234,50”): tokenizarea l-ar rupe („1 m”) → incert, chiar dacă s-a „găsit” o cantitate (review r2, P2-4)
-    if (RE_MII_SPATIU.test(folosit)) { cu = null; motiv = 'separator_mii_spatiu' }
+    if (RE_MII_SPATIU.test(folosit)) {
+      cu = null; motiv = 'separator_mii_spatiu'
+      // începutul numărului cu spații: pe linia rândului (după nr.) sau pe linia următoare împrumutată
+      const mL = RE_MII_SPATIU.exec(li.slice(r.dupa))
+      const mU = !mL && i + 1 < orig.length ? RE_MII_SPATIU.exec(inch[i + 1]) : null
+      cantOffset = mL ? startO + r.dupa + mL.index : mU ? startO + lo.length + 1 + mU.index : null
+    }
     // LISTĂ (fără „|”) fără cod și fără cantitate recunoscută: rând INCERT, nu eliminat (review r2, P1-1) — EXCEPȚIE doar continuarea
     // evidentă de denumire: nr. care nu continuă secvența rândurilor de listă (nu e ultimul, următorul sau 1) sau un nr. fără zerouri
     // după rânduri cu zerouri („2 COD 64000115” sub „003 6701152 …”)
@@ -187,7 +199,8 @@ export function inventarRanduri(text: string): RandInventar[] {
       ultimMarkdown = r.markdown
     }
     out.push({ offset: startO, linie: i + 1, pagina, nr: r.nr, nr_id: r.id, cod: c.cod, cantitate: cu?.cantitate ?? null, um: cu?.um ?? null,
-      markdown: r.markdown, stare: cu && !posibilaContinuare ? 'ancora' : 'incert', motiv: cu && !posibilaContinuare ? null : motiv })
+      markdown: r.markdown, stare: cu && !posibilaContinuare ? 'ancora' : 'incert', motiv: cu && !posibilaContinuare ? null : motiv,
+      cantitate_offset: cantOffset })
   }
   return out
 }
