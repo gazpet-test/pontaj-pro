@@ -246,3 +246,17 @@ Deno.test('r15 (Copilot P1): rândul plat cu „:” sau cu separatorul lipit de
   assertEquals(inv('10:30 sedinta\n').length, 0)
   assertEquals(inv('**7**. Conducta m 10\n').map((x) => [x.nr_id, x.stare]), [['7', 'ancora']])
 })
+
+// ── review Copilot B1 r15 + Gemini B1 r14 ──
+Deno.test('r16 (Copilot P1): ierarhicul cu separator lipit de text (5.2:Conducta, 5.2)Conducta, 5.2.Conducta) nu mai dispare', () => {
+  for (const s of [':', ')', '.'])
+    assertEquals(inv(`5.1 Conducta m 10\n5.2${s}Conducta m 20\n`).map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.2', 'ancora']])
+  // „1.5m” / „1.5 12” nu devin rânduri sigure
+  assertEquals(inv('1.5m adancime\n').length, 0)
+})
+Deno.test('r16 (Gemini P2): reluarea ierarhică după alt capitol (5.1, 5.3, 6.1, 5.1, 5.2, 5.3) păstrează golul 5.2 al primului tabel', () => {
+  const tb = tabele(inv('5.1 A m 1\n5.3 B m 2\n6.1 C m 3\n5.1 D m 4\n5.2 E m 5\n5.3 F m 6\n'))
+  assertEquals(tb.map((x) => [x.randuri, x.goluri_ierarhice]), [[3, ['5.2']], [3, []]])
+  // capitole succesive normale: un singur tabel
+  assertEquals(tabele(inv('5.1 A m 1\n5.2 B m 2\n6.1 C m 3\n6.2 D m 4\n7.1 E m 5\n')).map((x) => [x.randuri, x.reluari_atipice, x.goluri_ierarhice]), [[5, 0, []]])
+})
