@@ -55,7 +55,7 @@ Deno.test('A3: deficit B1 (Haiku a omis 002) → escaladare o dată la Sonnet; o
   assertEquals([dc.p_model, dc.p_tokeni_in, dc.p_tokeni_out, dc.p_cost], [`${MODEL_A}+${MODEL_S}`, 2000, 500, r4(costH(1000, 200) + costS(1000, 300))])
   assertEquals(f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs.length, 2)
   const fel = (r.body.raport as any[]).find((x) => x.felie === 0)
-  assertEquals([fel.escaladare, fel.model, fel.poarta_b1.deficit], [['deficit_b1:1/2'], `${MODEL_A}+${MODEL_S}`, false])
+  assertEquals([fel.escaladare, fel.model, fel.poarta_b1.deficit], [['deficit_b1:1/2', 'adoptat:sonnet'], `${MODEL_A}+${MODEL_S}`, false])
 })
 
 Deno.test('A3: maximum o escaladare — dacă și Sonnet are deficit, NU urmează un al treilea apel; felia gata cu deficitul raportat (B2 decide)', async () => {
@@ -71,18 +71,18 @@ Deno.test('A3: Haiku incert (tăiat / refuz) → escaladare; Sonnet bun → feli
   const r = await RULEAZA(f)
   assertEquals([f.apeluriAI, f.inchideri], [['principal', 'escaladare'], ['gata']])
   assertEquals(f.rpcArgs['fn_ofertare_cb_deconteaza'][0].p_cost, r4(costH(1000, 16000) + costS(1000, 200)))
-  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['incert'])
+  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['incert', 'adoptat:sonnet'])
 })
 
 Deno.test('A3: rânduri nenormalizabile la Haiku → escaladare', async () => {
   const f = fals({ principal: ok([R002, R003, { cheie_straina: 1 }]), escaladare: ok([R002, R003]) })
   const r = await RULEAZA(f)
   assertEquals([f.apeluriAI, f.inchideri], [['principal', 'escaladare'], ['gata']])
-  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['nenormalizabile:1'])
+  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['nenormalizabile:1', 'adoptat:sonnet'])
 })
 
-Deno.test('A3: și Sonnet incert → rezervarea „necunoscuta” (rămâne în consum la suma rezervată), felia „necunoscut”, fără decontare', async () => {
-  const f = fals({ principal: ok([R003]), escaladare: { txt: '', inF: 1000, outF: 16000, necunoscut: true } })
+Deno.test('A3: Haiku incert și Sonnet incert → rezervarea „necunoscuta” (rămâne în consum la suma rezervată), felia „necunoscut”, fără decontare', async () => {
+  const f = fals({ principal: { txt: '{"r":[', inF: 1000, outF: 16000, necunoscut: true }, escaladare: { txt: '', inF: 1000, outF: 16000, necunoscut: true } })
   await RULEAZA(f)
   assertEquals([f.apeluriAI, f.inchideri], [['principal', 'escaladare'], ['necunoscut']])
   assertEquals([f.rpcArgs['fn_ofertare_cb_deconteaza'], f.rpcArgs['fn_ofertare_cb_rezervare_necunoscuta']?.length], [undefined, 1])
@@ -120,4 +120,29 @@ Deno.test('A3: apelul Sonnet — gândirea oprită cu between_tools (disabled = 
   assertEquals([corp.model, corp.thinking, corp.output_config.effort, corp.output_config.format.type], [MODEL_S, { type: 'between_tools' }, 'medium', 'json_schema'])
   await cheamaA(f, 'k', 'p', 100)
   assertEquals([corp.model, corp.thinking, corp.output_config.effort], [MODEL_A, { type: 'disabled' }, undefined])
+})
+
+// ── review Gemini A2+A3 r1 (P2): adoptarea rezultatului Sonnet ──
+Deno.test('A3 r2: Sonnet cu rânduri nenormalizabile NU înlocuiește un Haiku valid — felia rămâne gata cu observațiile Haiku, cost = ambele', async () => {
+  const f = fals({ principal: ok([R003]), escaladare: ok([R002, R003, { cheie_straina: 1 }]) })
+  const r = await RULEAZA(f)
+  assertEquals([f.apeluriAI, f.inchideri], [['principal', 'escaladare'], ['gata']])
+  assertEquals(f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs.length, 1)
+  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['deficit_b1:1/2', 'adoptat:haiku'])
+  assertEquals(f.rpcArgs['fn_ofertare_cb_deconteaza'][0].p_cost, r4(costH(1000, 200) + costS(1000, 200)))
+})
+
+Deno.test('A3 r2: Sonnet tăiat (necunoscut) după un Haiku valid → se păstrează Haiku, felia gata, decontare cu ambele costuri', async () => {
+  const f = fals({ principal: ok([R003]), escaladare: { txt: '{"r":[', inF: 1000, outF: 16000, necunoscut: true } })
+  const r = await RULEAZA(f)
+  assertEquals(f.inchideri, ['gata'])
+  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['deficit_b1:1/2', 'adoptat:haiku'])
+  assertEquals(f.rpcArgs['fn_ofertare_cb_deconteaza'][0].p_cost, r4(costH(1000, 200) + costS(1000, 16000)))
+})
+
+Deno.test('A3 r2: Sonnet cu MAI PUȚINE rânduri acoperite decât Haiku → se păstrează Haiku', async () => {
+  const f = fals({ principal: ok([R003]), escaladare: ok([]) })
+  const r = await RULEAZA(f)
+  assertEquals(f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs.length, 1)
+  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['deficit_b1:1/2', 'adoptat:haiku'])
 })

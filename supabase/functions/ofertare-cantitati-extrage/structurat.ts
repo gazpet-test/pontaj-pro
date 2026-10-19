@@ -136,7 +136,8 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   let feliiApelate = 0, cost = 0, oprit: string | null = null
   // PR A2: poarta B1 pe feliile f3 / c6 — doar măsurată și raportată (A3 o folosește pentru escaladare)
   let feliiCuDeficit = 0, feliiEscaladate = 0
-  const rezumatPoarta = (pb: PoartaFelie) => ({ ancore: pb.ancore, acoperite: pb.acoperite, incerte: pb.incerte, deficit: pb.deficit,
+  const rezumatPoarta = (pb: PoartaFelie) => ({ ancore: pb.ancore, acoperite: pb.acoperite, incerte: pb.incerte,
+    tabele_nedeterminate: pb.tabele_nedeterminate, deficit: pb.deficit, complet: pb.complet,
     neacoperite: pb.neacoperite.slice(0, 10).map((x) => x.nr_id ?? `linia ${x.linie}`) })
   for (const d of docs) {
     if (oprit) break
@@ -269,8 +270,16 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
           costReal += r2.inF * t2.in + r2.outF * t2.out
           modelFolosit = `${xt.model}+${xt.escaladare.model}`
           feliiEscaladate++
-          r = r2
-          rez = r2.eroare || r2.necunoscut ? null : await interpreteaza(r2.txt)
+          // review Gemini A2+A3 r1 (P2): Sonnet NU înlocuiește necondiționat un rezultat Haiku valid (fără rânduri pierdute) — doar dacă
+          // e la fel de bun sau mai bun (fără pierdute ȘI cel puțin aceleași rânduri acoperite); un Sonnet tăiat lasă rezultatul Haiku valid.
+          // Eroarea de rețea / HTTP la Sonnet rămâne conservatoare (cost necunoscut): rezervarea „necunoscuta”, felia „necunoscut”.
+          const haikuValid = rez !== null && rez.pierdute === 0
+          const rez2 = r2.eroare || r2.necunoscut ? null : await interpreteaza(r2.txt)
+          if (r2.eroare) { r = r2; rez = null }
+          else if (rez2 && (!haikuValid || (rez2.pierdute === 0 && rez2.pb.acoperite >= (rez as NonNullable<typeof rez>).pb.acoperite))) {
+            r = r2; rez = rez2; escaladare.push('adoptat:sonnet')
+          } else if (haikuValid) escaladare.push('adoptat:haiku')
+          else { r = r2; rez = rez2 }
         }
       } else escaladare = []
       cost += costReal
