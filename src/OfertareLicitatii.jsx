@@ -45,6 +45,7 @@ import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   //
 import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
+import { ultimaProvPeDocument, etichetaProvenienta } from './ofertareProvenienta.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -767,10 +768,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // același nume nu se închide pe evidența celei vechi). evidSeap: cheie → { stare, sha256 }; shaArhive: document_id → Set(sha)
   const [evidSeap, setEvidSeap] = useState(() => new Map())
   const [shaArhive, setShaArhive] = useState(() => new Map())
+  // proveniența textului (20261101b): document_id → ultimul rând din ofertare_doc_texte_prov (cine a produs text_extras)
+  const [provTxt, setProvTxt] = useState(() => new Map())
   const load = async () => {
     if (elig.incarcat) elig.reincarca()
     supabase.from('ofertare_seap_fisiere').select('cheie, stare, sha256').eq('licitatie_id', licitatie.id)
       .then(r => setEvidSeap(new Map((r.data || []).map(x => [x.cheie, x]))), () => {})
+    supabase.from('ofertare_doc_texte_prov').select('id, document_id, sha256, origine, producator, completitudine, constatat_la')
+      .eq('licitatie_id', licitatie.id).then(r => setProvTxt(ultimaProvPeDocument(r.data)), () => {})
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
@@ -1543,7 +1548,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     title="AI-ul a citit planșa, dar n-a găsit niciun tronson, tabel sau lungime. Încearcă „recitește fin” (zone mai mici) sau verifică manual.">⚠ citită, nimic extras</span>}
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}
-                    {d.pornit?.name && <span title={`Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}`}> · 👤 {d.pornit.name.split(' ')[0]}</span>}
+                    {(() => { const pv = etichetaProvenienta(provTxt.get(d.id)); return pv && (
+                      <span title={pv.titlu} style={pv.atentie ? { color:G.orange, fontWeight:700 } : undefined}> · {pv.icon} {pv.text}</span>) })()}
+                    {d.pornit?.name &&<span title={`Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}`}> · 👤 {d.pornit.name.split(' ')[0]}</span>}
                   </span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
