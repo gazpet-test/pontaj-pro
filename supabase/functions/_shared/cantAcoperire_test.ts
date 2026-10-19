@@ -151,3 +151,11 @@ Deno.test('r7 (Gemini P2): după rânduri incerte, o scădere la 3 pornește un 
   const tb = tabele(inv(t))
   assertEquals(tb.map((x) => [x.nr_min, x.nr_max, x.goluri, x.secventa_nedeterminata]), [[1, 10, [2, 3, 5, 6, 7], true], [3, 5, [4], true]])
 })
+
+// ── review Copilot B1 r7 ──
+Deno.test('r8 (Copilot P1): rânduri ierarhice de LISTĂ („5.1 …”, „5.3 …”) → în inventar, cu golul ierarhic 5.2; liniile de prețuri nu sunt rânduri', () => {
+  const r = inv('5.1 Conducta m 10\n5.3 Conducta m 20\n')
+  assertEquals(r.map((x) => [x.nr, x.nr_id, x.stare]), [[5, '5.1', 'ancora'], [5, '5.3', 'ancora']])
+  assertEquals(tabele(r).map((x) => x.goluri_ierarhice), [['5.2']])
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\nTEAVA PVC 20.80 11856.00\n38.32 21842.40\n0.90 513.00\n1.5 m adancime\n').map((x) => x.nr_id), ['003'])
+})

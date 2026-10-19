@@ -14,6 +14,9 @@ export const UM_REALE = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 
 // componentă; în listă „213.76 …” ar fi o linie de prețuri);
 // la tabel (≥ 2 „|”) nr. e prima celulă
 const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
+// review Copilot r7 (P1): și numerotarea ierarhică în LISTĂ („5.1 Conducta m 10”) — doar urmată de un CUVÂNT (≥ 2 litere), ca liniile de
+// prețuri / zecimale („213.76 65795.33”, „0.90 513.00”, „1.5 m adâncime”) să nu devină rânduri
+const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,3}(?:\.\d{1,3})+)\**[.)]?\**\s+(?=[\p{L}@][\p{L}.]+)/u
 const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.)]?\**\s*\|/
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
 const RE_SEPARATOR = /^\s*\|?\s*:?-{3,}/
@@ -68,7 +71,7 @@ function codDupaNr(rest: string): { cod: string | null; de: number; pana: number
 function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: boolean } | null {
   if (RE_SEPARATOR.test(l)) return null
   const markdown = (l.match(/\|/g) || []).length >= 2
-  const m = (markdown ? RE_NR_MARKDOWN : RE_NR_LISTA).exec(l)
+  const m = markdown ? RE_NR_MARKDOWN.exec(l) : (RE_NR_LISTA_IER.exec(l) ?? RE_NR_LISTA.exec(l))
   if (!m) return null
   const id = m[1]
   const nr = Number(id.split('.')[0])
