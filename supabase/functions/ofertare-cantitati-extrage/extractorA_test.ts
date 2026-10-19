@@ -10,7 +10,7 @@ const OBIECT_RAND = { pagina: null, tabel: null, rand: '003', cod_articol: 'SA11
   citat: '003 SA11G1 [ 2] M 1160.000' }
 
 Deno.test('A1: schema = exact câmpurile normalizării, toate obligatorii, fără chei străine; obiectul conform trece prin randDinTablou', () => {
-  const it = (SCHEMA_A.properties.r as any).items
+  const it = ((SCHEMA_A as any).properties.r as any).items
   assertEquals(Object.keys(it.properties), [...CAMPURI_RAND])
   assertEquals(it.required, [...CAMPURI_RAND])
   assertEquals([it.additionalProperties, SCHEMA_A.additionalProperties], [false, false])
@@ -54,7 +54,7 @@ Deno.test('A1: tariful pe trepte — ≤ 100k tokeni intrare $0,10 / $0,50, pest
   const EPS = 1e-9   // rotunjirea în sus la 1e-4 USD
   assert(sumaRezervata(mic, EXTRACTOARE.A) + EPS >= 50_000 * 0.10e-6 + MAX_IESIRE * 0.50e-6)
   assert(sumaRezervata(mare, EXTRACTOARE.A) + EPS >= 120_000 * 0.50e-6 + MAX_IESIRE * 2.50e-6)
-  assert(sumaRezervata(mare, EXTRACTOARE.A) > sumaRezervata(mare.slice(0, 100_000), EXTRACTOARE.A) * 2)   // treapta mare chiar se aplică
+  assert(sumaRezervata(mare, EXTRACTOARE.A) > sumaRezervata(mic, EXTRACTOARE.A) * 4)   // treapta mare chiar se aplică
   // B rămâne neschimbat (implicit)
   assertEquals(sumaRezervata(mic), sumaRezervata(mic, EXTRACTOARE.B))
 })
@@ -109,4 +109,32 @@ Deno.test('A1: fără `extractor` (sau orice altă valoare) rămâne B, neschimb
     assert(f.extractori[0].startsWith(EXTRACTOR_ID + '@c-'))
     assertEquals(f.rpcArgs['fn_ofertare_cb_deconteaza'][0].p_model, 'gpt-5-mini')
   }
+})
+
+// ── review Copilot / Gemini #792 r1 ──
+Deno.test('A1 r2 (P1): rezervarea include overhead-ul schemei (intrare facturată care nu e în prompt) — în sumă și în alegerea treptei', async () => {
+  const { OVERHEAD_A } = await import('./extractorA.ts')
+  assert(OVERHEAD_A >= new TextEncoder().encode(JSON.stringify(SCHEMA_A)).length + 4000)
+  // un prompt de 99.000 octeți + schema trece de 100k → treapta MARE la rezervare (nu poate fi decontat peste)
+  const p = 'x'.repeat(99_000)
+  const s = sumaRezervata(p, EXTRACTOARE.A)
+  assert(s + 1e-9 >= (99_000 + OVERHEAD_A) * TARIF_A.mare.in + MAX_IESIRE * TARIF_A.mare.out)
+  // cel mai rău caz real: intrare = prompt + overhead (tokeni ≤ octeți), ieșire la plafon → cost ≤ rezervare
+  const inF = 99_000 + OVERHEAD_A
+  const t = tarifA(inF)
+  assert(Math.round((inF * t.in + MAX_IESIRE * t.out) * 1e4) / 1e4 <= s)
+  // B neschimbat (overhead 0)
+  assertEquals(EXTRACTOARE.B.overheadOcteti, 0)
+})
+
+Deno.test('A1 r2 (P3): excepția de rețea se întoarce ca eroare, nu se aruncă', async () => {
+  const f = (async () => { throw new TypeError('fetch failed') }) as unknown as typeof fetch
+  const r = await cheamaA(f, 'k', 'p', 100)
+  assertEquals([r.eroare, r.inF, r.outF], ['Claude: fetch failed', 0, 0])
+})
+
+Deno.test('A1 r2 (P2): promptul nu cere omiterea rândurilor de articol care se termină cu „| 0.000 | 0 Total=”', async () => {
+  const { PROMPT_A } = await import('./extractorA.ts')
+  const t = PROMPT_A('x', 'f3')
+  assert(t.includes('DOAR „0.000 0 Total=”') && t.includes('SE EXTRAGE'))
 })
