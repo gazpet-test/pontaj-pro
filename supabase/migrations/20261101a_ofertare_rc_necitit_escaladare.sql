@@ -46,6 +46,11 @@ BEGIN
     JOIN ofertare_documente_atribuire d ON d.licitatie_id = li.id
     WHERE d.tip = 'raspuns_clarificare'
       AND coalesce(d.status_procesare, 'neprocesat') NOT IN ('procesat', 'ignorat', 'partial')
+      -- plasă de siguranță (Răzvan „X”, 19.10; coordonat cu laboratorul OCR, PR #795): textul importat de laborator cu origine
+      -- 'ocr_local_neverificat' pe sha-ul CURENT al textului = citit, chiar dacă statusul nu a fost (încă) trecut pe procesat
+      AND NOT EXISTS (SELECT 1 FROM ofertare_doc_texte_prov p
+                      WHERE p.document_id = d.id AND p.origine = 'ocr_local_neverificat'
+                        AND p.sha256 = encode(sha256(convert_to(coalesce(d.text_extras, ''), 'UTF8')), 'hex'))
       AND li.status IN ('go', 'in_lucru')
       AND li.termen_depunere > now()
     GROUP BY li.id, li.nr_anunt, li.obiect, li.termen_depunere, li.responsabil_id
