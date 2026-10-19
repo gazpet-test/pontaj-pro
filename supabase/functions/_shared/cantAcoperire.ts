@@ -20,6 +20,9 @@ const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
 // sau o UM urmată de un număr („5.1 m 10”). Ce nu e pe lista albă („213.76 65795.33”, „5.1 12,50”,
 // „1.5 m adancime”) intră ca rând slab → incert „posibila_continuare”, nu dispare.
 const RE_NR_LISTA_IER_STRUCT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**[.):]?\**\s+(?=\S)/u
+// nr. crt. SINGUR pe linie („1”, „5.1”, „12.”) — OCR care rupe după nr. (review Copilot r12): rând „slab”; cu cantitate + UM pe linia
+// următoare devine rând normal („1” / „Conducta m 10”), altfel incert „posibila_continuare” (în inventar, tabel nedeterminat)
+const RE_NR_SINGUR = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*$/
 // fără excludere de „linii de prețuri” (review Copilot r11): un id ierarhic urmat numai de numere („213.76 65795.33” sau un rând real
 // degradat „5.1 12,50”) intră ca rând „slab” → incert „posibila_continuare” (în inventar, în afara secvenței, tabel nedeterminat).
 // Pe textele valului 1 asemenea linii nu schimbă nimic (singurele sunt „0.00 0.00”, cu nr. 0, care nu e rând).
@@ -80,7 +83,7 @@ function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: bo
   const markdown = (l.match(/\|/g) || []).length >= 2
   const ier = markdown ? null : RE_NR_LISTA_IER.exec(l)
   // ierarhic „slab”: structura e de rând, dar conținutul nu e pe lista albă → rând incert, nu eliminat (fără excluderi, r12)
-  const slab = !markdown && !ier ? RE_NR_LISTA_IER_STRUCT.exec(l) : null
+  const slab = !markdown && !ier ? (RE_NR_LISTA_IER_STRUCT.exec(l) ?? RE_NR_SINGUR.exec(l)) : null
   const m = markdown ? RE_NR_MARKDOWN.exec(l) : (ier ?? slab ?? RE_NR_LISTA.exec(l))
   if (!m) return null
   const id = m[1]

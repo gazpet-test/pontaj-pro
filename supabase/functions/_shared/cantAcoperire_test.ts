@@ -209,3 +209,18 @@ Deno.test('r12 (Copilot P1/P2): rândul ierarhic numai numeric („5.1 12,50”,
     assertEquals(tabele(r).map((x) => [x.secventa_nedeterminata, x.nr_incerte]), [[true, [5]]])
   }
 })
+
+// ── review Copilot B1 r12 ──
+Deno.test('r13 (Copilot P1/P2): nr. crt. singur pe linie (OCR rupt după nr.) NU dispare — cu cantitatea pe linia următoare e rând normal', () => {
+  const r = inv('1\nConducta m 10\n2 Conducta m 20\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.cantitate, x.um]), [['1', 'ancora', '10', 'm'], ['2', 'ancora', '20', 'm']])
+  assertEquals(tabele(r).map((x) => [x.nr_min, x.nr_max, x.goluri, x.secventa_nedeterminata]), [[1, 2, [], false]])
+  const h = inv('5.1\nConducta m 10\n5.3 Conducta m 20\n')
+  assertEquals(h.map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.3', 'ancora']])
+  assertEquals(tabele(h)[0].goluri_ierarhice.length > 0, true)
+  // fără cantitate recuperabilă: incert posibila_continuare, tabel nedeterminat
+  const s = inv('1\n2 Conducta m 20\n3 Conducta m 30\n')
+  assertEquals(s.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'incert', 'posibila_continuare'], ['2', 'ancora', null], ['3', 'ancora', null]])
+  assertEquals(tabele(s).some((x) => x.secventa_nedeterminata), true)
+  assertEquals(inv('12.\nConducta m 10\n').map((x) => [x.nr_id, x.stare]), [['12', 'ancora']])
+})
