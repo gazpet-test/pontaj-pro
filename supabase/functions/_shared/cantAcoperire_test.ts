@@ -308,3 +308,10 @@ Deno.test('r20 (Copilot r19 P1): rândul slab cu separator de mii prin spațiu r
   assertEquals(l.find((x) => x.nr_id === '5.2')?.motiv, 'posibila_continuare')
   assertEquals(tabele(l).map((x) => [x.goluri_ierarhice, x.secventa_nedeterminata]), [[['5.2'], true]])
 })
+
+// ── review Copilot B1 r20 ──
+Deno.test('r21 (Copilot r20 P1): rândul de LISTĂ ambiguu cu separator de mii prin spațiu rămâne în afara secvenței', () => {
+  const r = inv('| 1 | A | m | 1 |\n2 COD 1 234\n| 3 | C | m | 1 |\n')
+  assertEquals(r.map((x) => [x.nr_id, x.motiv]), [['1', null], ['2', 'posibila_continuare'], ['3', null]])
+  assertEquals(tabele(r).map((x) => [x.goluri, x.secventa_nedeterminata]), [[[2], true]])
+})

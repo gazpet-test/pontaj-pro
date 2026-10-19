@@ -168,8 +168,8 @@ export function inventarRanduri(text: string): RandInventar[] {
     // celula de tabel „slabă” („| 2m adancime | m | 10 |”, review Copilot r18): rămâne posibilă continuare CHIAR CU cantitate — nu e dovadă
     // de nr. crt., deci nu intră în secvență (nu poate acoperi un gol); cantitatea / codul rămân pe rând pentru B2
     // statutul „în afara secvenței” al rândului slab NU depinde de alt motiv de incertitudine (review Copilot r19: „separator_mii_spatiu”
-    // îl readucea în secvență, unde putea acoperi un gol)
-    const posibilaContinuare = r.slabTabel === true || (r.slab === true && !cu) || !r.markdown && !c.cod && !cu && !motiv && r.nr !== null && (ultimMarkdown || (ultimLista !== null &&
+    // îl readucea în secvență, unde putea acoperi un gol); la fel pentru rândul de LISTĂ ambiguu (review Copilot r20)
+    const posibilaContinuare = r.slabTabel === true || (r.slab === true && !cu) || !r.markdown && !c.cod && !cu && r.nr !== null && (ultimMarkdown || (ultimLista !== null &&
         ((ultimLista.zero && !/^0\d/.test(r.id ?? '')) || ![ultimLista.nr, ultimLista.nr + 1, 1].includes(r.nr))))
     if (posibilaContinuare) motiv = 'posibila_continuare'
     if (!cu && !motiv) motiv = r.markdown || c.cod ? 'um_sau_cantitate_nerecunoscute' : 'lista_fara_cod_sau_cantitate'
