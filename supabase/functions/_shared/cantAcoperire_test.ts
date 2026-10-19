@@ -127,3 +127,14 @@ Deno.test('r5 (P1-1): rândurile „posibila_continuare” marchează tabelul ca
   // fără rânduri ambigue: secvența e determinată
   assertEquals(tabele(inv('| 1 | A | m | 1 |\n| 2 | B | m | 2 |\n')).map((x) => x.secventa_nedeterminata), [false])
 })
+
+// ── review Jakarinos B1 r5 ──
+Deno.test('r6 (P1-1 / P2-3): incertitudinea de la graniță trece și la tabelul NOU, cu numerele ei; și înaintea primului tabel', () => {
+  const t = '| 8 | A | m | 1 |\n| 9 | B | m | 2 |\n| 10 | C | m | 3 |\n1 Adeziv GRAME 3\n| 2 | D | m | 4 |\n| 3 | E | m | 5 |\n'
+  assertEquals(tabele(inv(t)).map((x) => [x.nr_min, x.nr_max, x.secventa_nedeterminata, x.nr_incerte]), [[8, 10, true, [1]], [2, 3, true, [1]]])
+  const u = '| 2001456 | Teava | m | 10 |\n1 Adeziv GRAME 3\n| 2 | D | m | 4 |\n'
+  assertEquals(tabele(inv(u)).map((x) => [x.secventa_nedeterminata, x.nr_incerte]), [[true, [1]]])
+  // un rând de secvență între ele închide „pendinte”: tabelul următor nu mai e afectat
+  const v = '| 1 | A | m | 1 |\n| 2 | B | m | 2 |\n7 Adeziv GRAME 3\n| 3 | C | m | 3 |\n| 1 | D | m | 4 |\n| 2 | E | m | 5 |\n'
+  assertEquals(tabele(inv(v)).map((x) => x.secventa_nedeterminata), [true, false])
+})

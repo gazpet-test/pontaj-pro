@@ -66,3 +66,8 @@ Deno.test('B1 r5 (review r4, P1-2): sectiuniRol — mențiunea „Centralizatoru
   const t = '⟦PAGINA 1⟧\nFormular F3\n001 SA11G1 [ 2] M 10.000\n⟦PAGINA 2⟧\n002 SA11G1 [ 2] M 20.000\nValorile se regăsesc în Centralizatorul cheltuielilor pe obiect.\n'
   assertEquals([...new Set(sectiuniRol(t, 'Liste de cantitati.pdf', 'lista_cantitati').map((x) => x.rol))], ['f3'])
 })
+
+Deno.test('B1 r6 (review r5, P2-2): sectiuniRol — „[Tabel rotit - (continuare) Lista consumurilor de ore …” → lista_alt', () => {
+  const t = '⟦PAGINA 1⟧\nFormular F3\n001 SA11G1 [ 2] M 10.000\n⟦PAGINA 2⟧\n[Tabel rotit - (continuare) Lista consumurilor de ore de functionare a utilajelor\n1 | 2509 | 3.0\n'
+  assertEquals(sectiuniRol(t, 'Liste de cantitati.pdf', 'lista_cantitati').map((x) => x.rol), ['f3', 'lista_alt'])
+})

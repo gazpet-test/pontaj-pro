@@ -212,3 +212,8 @@ Deno.test('B1 r5 (review r4, P1-2): o MENȚIUNE în text („se regăsesc în Ce
   const u = ['⟦PAGINA 1⟧', 'Formular F3', '001 SA11G1 [ 2] M 10.000', '⟦PAGINA 2⟧', '[Tabel rotit – lista consumurilor de resurse materiale, Deviz DRUM8', '1 | 6701152 | M | 10.00'].join('\n')
   assertEquals(sectiuniLista(u).map((x) => x.tip), ['lista_f3', 'lista_c6'])
 })
+
+Deno.test('B1 r6 (review r5, P2-2): „[Tabel rotit - (continuare) Lista consumurilor de ore de functionare …” → lista_alt', () => {
+  const t = ['⟦PAGINA 1⟧', 'Formular F3', '001 SA11G1 [ 2] M 10.000', '⟦PAGINA 2⟧', '[Tabel rotit - (continuare) Lista consumurilor de ore de functionare a utilajelor', '1 | 2509 | 3.0'].join('\n')
+  assertEquals(sectiuniLista(t).map((x) => x.tip), ['lista_f3', 'lista_alt'])
+})
