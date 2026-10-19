@@ -131,7 +131,8 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   let feliiApelate = 0, cost = 0, oprit: string | null = null
   // PR A2: poarta B1 pe feliile f3 / c6 — doar măsurată și raportată (A3 o folosește pentru escaladare)
   let feliiCuDeficit = 0
-  const rezumatPoarta = (pb: PoartaFelie) => ({ ancore: pb.ancore, acoperite: pb.acoperite, incerte: pb.incerte, deficit: pb.deficit,
+  const rezumatPoarta = (pb: PoartaFelie) => ({ ancore: pb.ancore, acoperite: pb.acoperite, incerte: pb.incerte,
+    tabele_nedeterminate: pb.tabele_nedeterminate, deficit: pb.deficit, complet: pb.complet,
     neacoperite: pb.neacoperite.slice(0, 10).map((x) => x.nr_id ?? `linia ${x.linie}`) })
   for (const d of docs) {
     if (oprit) break
