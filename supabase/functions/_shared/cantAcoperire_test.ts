@@ -160,3 +160,18 @@ Deno.test('r8 (Copilot P1): rânduri ierarhice de LISTĂ („5.1 …”, „5.3 
   assertEquals(inv('5.1 1234567 Teava m 10\n5.2 SA11G1 Teava m 20\n').map((x) => x.nr_id), ['5.1', '5.2'])
   assertEquals(inv('003 SA11G1 [ 2] M 570.000\nTEAVA PVC 20.80 11856.00\n38.32 21842.40\n0.90 513.00\n1.5 m adancime\n').map((x) => x.nr_id), ['003'])
 })
+
+// ── review Copilot / Gemini B1 r8 ──
+Deno.test('r9: rânduri ierarhice de LISTĂ — UM + cantitate, cod de 4 cifre, rădăcină de 4 cifre, cod cu minuscule, cuvânt de o literă, paranteză', () => {
+  const id = (t: string) => inv(t).map((x) => x.nr_id)
+  assertEquals(id('5.1 m 10\n5.3 m 20\n'), ['5.1', '5.3'])
+  assertEquals(tabele(inv('5.1 m 10\n5.3 m 20\n')).map((x) => x.goluri_ierarhice), [['5.2']])
+  assertEquals(id('5.1 2509 Teava m 10\n5.3 2510 Teava m 20\n'), ['5.1', '5.3'])
+  assertEquals(tabele(inv('1000.1 Conducta m 10\n1000.3 Conducta m 20\n')).map((x) => x.goluri_ierarhice), [['1000.2']])
+  assertEquals(id('5.1 3A1iG1 Conducta m 10\n5.2 TRA01A Conducta m 10\n5.3 sa11g1 Conducta m 10\n'), ['5.1', '5.2', '5.3'])
+  assertEquals(id('5.1 A se vedea m 10\n5.2 O conducta PEHD m 10\n5.3 (Conducta) m 10\n5.4 [2] SA11G1 m 10\n'), ['5.1', '5.2', '5.3', '5.4'])
+  // rămân excluse: prețuri / zecimale și o măsură în text
+  assertEquals(id('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n0.90 513.00\n1.5 m adancime\n20.80 11856.00\n'), ['003'])
+  // poziția „dupa” la ierarhic: codul de după nr. e găsit
+  assertEquals(inv('5.1 SA11G1 Conducta m 10\n')[0].cod, 'SA11G1')
+})

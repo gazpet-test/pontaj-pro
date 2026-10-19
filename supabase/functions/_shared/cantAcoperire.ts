@@ -14,10 +14,12 @@ export const UM_REALE = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 
 // componentă; în listă „213.76 …” ar fi o linie de prețuri);
 // la tabel (≥ 2 „|”) nr. e prima celulă
 const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
-// review Copilot r7 (P1): și numerotarea ierarhică în LISTĂ („5.1 Conducta m 10”, „5.1 1234567 Teava”, „5.1 SA11G1 …”) — doar urmată de un
-// CUVÂNT (≥ 2 litere), un cod numeric de ≥ 5 cifre fără zecimale sau un cod alfanumeric, ca liniile de
-// prețuri / zecimale („213.76 65795.33”, „0.90 513.00”, „1.5 m adâncime”) să nu devină rânduri
-const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,3}(?:\.\d{1,3})+)\**[.)]?\**\s+(?=[\p{L}@][\p{L}.]+|\d{5,}(?![.,]?\d)|[A-Z0-9]*[A-Z][A-Z0-9]*\d)/u
+// numerotarea ierarhică în LISTĂ („5.1 Conducta”, „1000.1 …”, „5.1 m 10”, „5.1 2509 Teava”, „5.1 3A1iG1 …”, „5.1 A se vedea”, „5.1 (Conducta”)
+// — review Copilot r7 / r8, Gemini r8. Ce o urmează: un cuvânt de ≥ 2 litere; un cuvânt de o literă care NU e o UM (m / t / l) urmat de
+// alt cuvânt; o paranteză; un cod alfanumeric (orice majuscule / minuscule, cu literă și cifră); un cod numeric de ≥ 4 cifre FĂRĂ zecimale;
+// sau o UM urmată de un număr („5.1 m 10”). Rămân excluse doar liniile de prețuri / zecimale („213.76 65795.33”, „0.90 513.00”,
+// „TEAVA 20.80 11856.00”) și o măsură în text („1.5 m adancime” — UM urmată de cuvânt, nu de cantitate).
+const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**[.)]?\**\s+(?=[\p{L}@][\p{L}.]+|(?![mMtTlL]\s)\p{L}\s+\p{L}|[(\[]\s*[\p{L}\d]|(?=[\p{L}\d]*\p{L})(?=[\p{L}\d]*\d)[\p{L}\d]{3,}|\d{4,}(?![.,]?\d)|(?:m|ml|km|mc|mp|buc|kg|t|l)\.?\s+\d)/u
 const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.)]?\**\s*\|/
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/
 const RE_SEPARATOR = /^\s*\|?\s*:?-{3,}/
@@ -72,14 +74,15 @@ function codDupaNr(rest: string): { cod: string | null; de: number; pana: number
 function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: boolean } | null {
   if (RE_SEPARATOR.test(l)) return null
   const markdown = (l.match(/\|/g) || []).length >= 2
-  const m = markdown ? RE_NR_MARKDOWN.exec(l) : (RE_NR_LISTA_IER.exec(l) ?? RE_NR_LISTA.exec(l))
+  const ier = markdown ? null : RE_NR_LISTA_IER.exec(l)
+  const m = markdown ? RE_NR_MARKDOWN.exec(l) : (ier ?? RE_NR_LISTA.exec(l))
   if (!m) return null
   const id = m[1]
   const nr = Number(id.split('.')[0])
   if (!(nr >= 1)) return null
   // rândul de numerotare a coloanelor sub antet („0 | 1 | 2 | 3 …”, „1 | 2 | 3 | 4”) nu e un rând
   if (markdown && /^[\s|]*\d{1,2}(?:\s*\|\s*\d{1,2}){2,}[\s|]*$/.test(l)) return null
-  return { nr, id, dupa: m.index + m[0].length - (markdown ? 0 : 1), markdown }
+  return { nr, id, dupa: m.index + m[0].length - (markdown || ier ? 0 : 1), markdown }
 }
 
 // cantitatea + UM ale unei linii (în copia închisă), excluzând tokenurile nr. și cod după POZIȚIE
