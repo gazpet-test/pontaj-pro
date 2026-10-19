@@ -12,6 +12,7 @@ import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_sh
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
 import { MODEL_A, PROMPT_A, tarifA } from './extractorA.ts'
+import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f2' }
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
@@ -123,6 +124,10 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
   }
 
   let feliiApelate = 0, cost = 0, oprit: string | null = null
+  // PR A2: poarta B1 pe feliile f3 / c6 — doar măsurată și raportată (A3 o folosește pentru escaladare)
+  let feliiCuDeficit = 0
+  const rezumatPoarta = (pb: PoartaFelie) => ({ ancore: pb.ancore, acoperite: pb.acoperite, incerte: pb.incerte, deficit: pb.deficit,
+    neacoperite: pb.neacoperite.slice(0, 10).map((x) => x.nr_id ?? `linia ${x.linie}`) })
   for (const d of docs) {
     if (oprit) break
     const text = d.text_extras as string
@@ -247,9 +252,12 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         for (const k of n.note) note[k] = (note[k] || 0) + 1
         obs.push(n.obs)
       }
+      const pb = poartaFelie(f.text, f.de_la, f.s.rol, obs as { cantitate_offset: number | null; pozitie_dovedita: boolean }[])
+      if (pb.aplicabil && pb.deficit) feliiCuDeficit++
+      const poarta = pb.aplicabil ? { poarta_b1: rezumatPoarta(pb) } : {}
       if (pierdute) {
         await deps.rpc('fn_ofertare_cb_felie_inchide', { p_felie_id: felieId, p_stare: 'esuat' })
-        raport.push({ document_id: d.id, felie: f.nr, eroare: randuri ? `${pierdute} rânduri nenormalizabile — felia nu e completă` : 'raspuns neinterpretabil', mostre, note })
+        raport.push({ document_id: d.id, felie: f.nr, eroare: randuri ? `${pierdute} rânduri nenormalizabile — felia nu e completă` : 'raspuns neinterpretabil', mostre, note, ...poarta })
       } else {
         const os = await deps.rpc('fn_ofertare_cb_obs_scrie', { p_felie_id: felieId, p_obs: obs })
         if (os.error) {
@@ -258,7 +266,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         } else {
           await deps.rpc('fn_ofertare_cb_felie_inchide', { p_felie_id: felieId, p_stare: 'gata' })
           gata++
-          raport.push({ document_id: d.id, felie: f.nr, rol: f.s.rol, sectiune: cheieSectiune(f.s, false), observatii: obs.length, note })
+          raport.push({ document_id: d.id, felie: f.nr, rol: f.s.rol, sectiune: cheieSectiune(f.s, false), observatii: obs.length, note, ...poarta })
         }
       }
       if (dc.data?.peste_rezervare) { oprit = 'cost_peste_rezervare (buget blocat)'; break }
@@ -272,7 +280,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       raport.push({ document_id: d.id, extragere_id: x, stare: ic.data?.refuz ? 'ramane_in_lucru:' + ic.data.refuz : st })
     }
   }
-  return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate,
+  return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate, felii_cu_deficit_b1: feliiCuDeficit,
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport } }
 }
 
