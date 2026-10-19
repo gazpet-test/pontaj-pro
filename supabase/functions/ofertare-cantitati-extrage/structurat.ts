@@ -11,7 +11,7 @@ import { conventieDocument, type Conventie } from '../_shared/cantNumar.ts'
 import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_shared/cantNormalizare.ts'
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
-import { MODEL_A, PROMPT_A, tarifA } from './extractorA.ts'
+import { MODEL_A, OVERHEAD_A, PROMPT_A, tarifA } from './extractorA.ts'
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f2' }
@@ -24,10 +24,13 @@ export const MAX_IESIRE = 16000
 // planul din 17.10). Identitatea (model@prompt@normalizator@feliere) intră în cache și în munca pe felie — A nu servește cache-ul lui B.
 // tarif(tokeni) = treapta de preț pentru numărul de tokeni de intrare (la rezervare: octeții, care îi mărginesc superior).
 export type Extractor = { cheie: 'A' | 'B'; model: string; prompt: string; normalizator: string; feliere: string
-  tarif: (tokeniIntrare: number) => { in: number; out: number }; promptFelie: (nume: string, rol: string) => string }
+  tarif: (tokeniIntrare: number) => { in: number; out: number }; promptFelie: (nume: string, rol: string) => string
+  // octeți adăugați la prompt în rezervare pentru intrarea facturată care NU e în prompt (schema structured outputs, încadrarea cererii)
+  overheadOcteti: number }
 export const EXTRACTOARE: Record<'A' | 'B', Extractor> = {
-  B: { cheie: 'B', ...EXTRACTOR, tarif: () => TARIF, promptFelie: (n, r) => PROMPT_STRUCTURAT(n, r) },
-  A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n4', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r) },
+  B: { cheie: 'B', ...EXTRACTOR, tarif: () => TARIF, promptFelie: (n, r) => PROMPT_STRUCTURAT(n, r), overheadOcteti: 0 },
+  A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n4', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r),
+    overheadOcteti: OVERHEAD_A },
 }
 export const idExtractor = (e: Extractor) => `${e.model}@${e.prompt}@${e.normalizator}@${e.feliere}`
 // review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică (o pagină F3 / un memoriu pot moșteni lista_alt), deci
@@ -70,7 +73,9 @@ REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un r
 // limita superioară demonstrabilă a costului unui apel: octeții UTF-8 ai promptului ≥ tokenii de intrare; ieșirea ≤ MAX_IESIRE;
 // treapta de preț se alege pe octeți (≥ tokeni), deci nu poate fi subestimată
 export function sumaRezervata(prompt: string, ex: Extractor = EXTRACTOARE.B): number {
-  const octeti = new TextEncoder().encode(prompt).length
+  // review Copilot / Gemini #792 r1 (P1): intrarea facturată = promptul + schema + încadrarea cererii → overhead-ul extractorului intră
+  // și în sumă, și în alegerea treptei (un prompt de 99,5 kB + schema nu mai poate fi rezervat pe treapta mică și decontat pe cea mare)
+  const octeti = new TextEncoder().encode(prompt).length + ex.overheadOcteti
   const t = ex.tarif(octeti)
   return Math.ceil((octeti * t.in + MAX_IESIRE * t.out) * 1e4) / 1e4
 }
