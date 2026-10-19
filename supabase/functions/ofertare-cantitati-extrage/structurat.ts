@@ -11,6 +11,7 @@ import { conventieDocument, type Conventie } from '../_shared/cantNumar.ts'
 import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_shared/cantNormalizare.ts'
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
+import { MODEL_A, OVERHEAD_A, PROMPT_A, tarifA } from './extractorA.ts'
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f2' }
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
@@ -18,6 +19,19 @@ export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.
 // (tarif schimbat) blochează bugetul la decontare (§4.3)
 export const TARIF = { in: 0.25 / 1e6, out: 2 / 1e6 }
 export const MAX_IESIRE = 16000
+// extractorii (PR A1, 19.10.2026): B = cel de până acum (implicit, neschimbat); A = Claude Haiku 5.5 cu structured outputs (opt-in,
+// planul din 17.10). Identitatea (model@prompt@normalizator@feliere) intră în cache și în munca pe felie — A nu servește cache-ul lui B.
+// tarif(tokeni) = treapta de preț pentru numărul de tokeni de intrare (la rezervare: octeții, care îi mărginesc superior).
+export type Extractor = { cheie: 'A' | 'B'; model: string; prompt: string; normalizator: string; feliere: string
+  tarif: (tokeniIntrare: number) => { in: number; out: number }; promptFelie: (nume: string, rol: string) => string
+  // octeți adăugați la prompt în rezervare pentru intrarea facturată care NU e în prompt (schema structured outputs, încadrarea cererii)
+  overheadOcteti: number }
+export const EXTRACTOARE: Record<'A' | 'B', Extractor> = {
+  B: { cheie: 'B', ...EXTRACTOR, tarif: () => TARIF, promptFelie: (n, r) => PROMPT_STRUCTURAT(n, r), overheadOcteti: 0 },
+  A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n4', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r),
+    overheadOcteti: OVERHEAD_A },
+}
+export const idExtractor = (e: Extractor) => `${e.model}@${e.prompt}@${e.normalizator}@${e.feliere}`
 // review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică (o pagină F3 / un memoriu pot moșteni lista_alt), deci
 // excluderea ei poate tăia lungimi reale; rândurile C7 / C8 întoarse ca obiecte sunt acum normalizabile (n4)
 const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
@@ -55,10 +69,14 @@ Răspunde EXCLUSIV cu JSON: {"r":[ [${CAMPURI_RAND.join(', ')}], ... ]}
 - citat: copiat VERBATIM, continuu, din document (max. 300 de caractere), fără „...”, fără prescurtări, fără reordonări: într-o listă / un tabel = linia rândului de la ÎNCEPUTUL ei (nr. crt. și cod) până după cantitate și unitate, exact cum apare (ex. "003 SA11G1 [ 2] M 1160.000"); într-un text (caiet de sarcini, memoriu) = propoziția care conține cantitatea, cu denumirea / Dn-ul ei. Dacă porțiunea asta depășește 300 de caractere: ultimele caractere CONTINUE care se termină imediat după cantitate și unitate (max. 300).
 REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un rând per poziție din document. FIECARE rând e un TABLOU JSON cu exact ${CAMPURI_RAND.length} elemente, în ordinea de mai sus (null pentru ce lipsește) — codul articolului și denumirea în elemente SEPARATE, nu lipite. Exemplu: [12, "F3", "003", "SA11G1", "TEAVA PVC IN CONDUCTE DE DISTRIBUTIE D= 90 MM", "Str. Platanului", "PVC", "D= 90 MM", null, "M", "1160.000", 0, 0, "conducta", "lungime", "003 SA11G1 [ 2] M 1160.000"]. Include DOAR rândurile care au o cantitate scrisă. NU include totalurile valorice (RON / lei / valoare) și nici antetele de tabel. În listele de resurse / consumuri (C6) extrage DOAR rândurile cu unitate de lungime (m, ml, km). Fără nimic în afara JSON-ului.`
 
-// limita superioară demonstrabilă a costului unui apel: octeții UTF-8 ai promptului ≥ tokenii de intrare; ieșirea ≤ MAX_IESIRE
-export function sumaRezervata(prompt: string): number {
-  const octeti = new TextEncoder().encode(prompt).length
-  return Math.ceil((octeti * TARIF.in + MAX_IESIRE * TARIF.out) * 1e4) / 1e4
+// limita superioară demonstrabilă a costului unui apel: octeții UTF-8 ai promptului ≥ tokenii de intrare; ieșirea ≤ MAX_IESIRE;
+// treapta de preț se alege pe octeți (≥ tokeni), deci nu poate fi subestimată
+export function sumaRezervata(prompt: string, ex: Extractor = EXTRACTOARE.B): number {
+  // review Copilot / Gemini #792 r1 (P1): intrarea facturată = promptul + schema + încadrarea cererii → overhead-ul extractorului intră
+  // și în sumă, și în alegerea treptei (un prompt de 99,5 kB + schema nu mai poate fi rezervat pe treapta mică și decontat pe cea mare)
+  const octeti = new TextEncoder().encode(prompt).length + ex.overheadOcteti
+  const t = ex.tarif(octeti)
+  return Math.ceil((octeti * t.in + MAX_IESIRE * t.out) * 1e4) / 1e4
 }
 
 // familia „parte”: un PDF împărțit în p01 / p02 … e un singur document pentru convenția numerică
@@ -71,16 +89,17 @@ function ultimeleVersiuni(docs: Document[]): Document[] {
 
 // identitatea extractorului = codul + contextul care schimbă rezultatul normalizării: convenția și manifestul (document:sha) al părților
 // VALIDE din grup + deciziile de rol active pe acest document și sha. Alt context = altă muncă, alt cache.
-export async function extractorCuContext(conv: Conventie, manifestGrup: string[], decizii: Decizie[]): Promise<string> {
+export async function extractorCuContext(conv: Conventie, manifestGrup: string[], decizii: Decizie[], ex: Extractor = EXTRACTOARE.B): Promise<string> {
   const g = (await sha256Hex(JSON.stringify([conv, [...manifestGrup].sort()]))).slice(0, 12)
   const d = (await sha256Hex(JSON.stringify(decizii.map((x) => [x.decizie, x.rol, x.sectiune].join('|')).sort()))).slice(0, 12)
-  return `${EXTRACTOR_ID}@c-${conv}-${g}@d-${d}`
+  return `${idExtractor(ex)}@c-${conv}-${g}@d-${d}`
 }
 
 type Felie = { nr: number; de_la: number; pana_la: number; text: string; s: SectiuneRol }
 
-export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id: number; cerere_id: number; max_felii?: number; buget_ms?: number }): Promise<Raspuns> {
+export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id: number; cerere_id: number; max_felii?: number; buget_ms?: number; extractor?: 'A' | 'B' }): Promise<Raspuns> {
   const t0 = deps.acum()
+  const xt = EXTRACTOARE[p.extractor === 'A' ? 'A' : 'B']
   const buget = p.buget_ms ?? 60000
   // 1. cererea: activă, a licitației, pe scopul extragerii — altfel 402 ÎNAINTEA oricărui apel
   const c = await deps.cerere(p.cerere_id)
@@ -125,7 +144,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         felii.push({ nr: felii.length, de_la: s.de + f.de, pana_la: s.de + f.de + f.text.length, text: f.text, s })
       }
     }
-    const extractorId = await extractorCuContext(ctxConv.conventie, ctxConv.manifest, dDoc)
+    const extractorId = await extractorCuContext(ctxConv.conventie, ctxConv.manifest, dDoc, xt)
     // 4. extragerea, prin RPC-ul de GRUP (20261031b, review r3): sub lock-uri pe toate documentele grupului, mulțimea curentă a părților
     // valide trebuie să fie EXACT manifestul convenției (altfel „grup_schimbat”, tot grupul sărit, rularea următoare recalculează);
     // apoi, în aceeași tranzacție, predicatul de text valid + lotul cererii + cache. O extragere „in_lucru” rămasă se preia.
@@ -172,8 +191,8 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       } else if (fi.error || fi.data?.refuz) { raport.push({ document_id: d.id, felie: f.nr, refuz: fi.data?.refuz ?? fi.error?.message }); continue }
       else felieId = fi.data.felie_id as number
 
-      const prompt = `${PROMPT_STRUCTURAT(d.nume_original, f.s.rol)}\n\n--- BUCATA ${f.nr + 1}/${felii.length} ---\n${f.text}`
-      const rz = await deps.rpc('fn_ofertare_cb_rezerva', { p_felie_id: felieId, p_suma: sumaRezervata(prompt) })
+      const prompt = `${xt.promptFelie(d.nume_original, f.s.rol)}\n\n--- BUCATA ${f.nr + 1}/${felii.length} ---\n${f.text}`
+      const rz = await deps.rpc('fn_ofertare_cb_rezerva', { p_felie_id: felieId, p_suma: sumaRezervata(prompt, xt) })
       if (rz.data?.refuz === 'felie' || rz.data?.refuz === 'munca_deja_rezervata') {
         // review r2: felia a fost rezervată între timp de alt worker (preluare concurentă) — NU o închidem; e munca lui
         conflict = true
@@ -197,10 +216,11 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         raport.push({ document_id: d.id, felie: f.nr, eroare: r.eroare ?? 'rezultat necunoscut' })
         continue
       }
-      const costReal = r.inF * TARIF.in + r.outF * TARIF.out
+      const tr = xt.tarif(r.inF)
+      const costReal = r.inF * tr.in + r.outF * tr.out
       cost += costReal
       const dc = await deps.rpc('fn_ofertare_cb_deconteaza', { p_rezervare_id: rezId, p_cost: Math.round(costReal * 1e4) / 1e4,
-        p_tokeni_in: r.inF, p_tokeni_out: r.outF, p_model: EXTRACTOR.model })
+        p_tokeni_in: r.inF, p_tokeni_out: r.outF, p_model: xt.model })
       if (dc.error || dc.data?.refuz) {
         // decontarea n-a mers: costul nu e înregistrat → rezervarea rămâne în consum („necunoscuta”), felia „necunoscut”
         await deps.rpc('fn_ofertare_cb_rezervare_necunoscuta', { p_rezervare_id: rezId })
@@ -257,7 +277,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       raport.push({ document_id: d.id, extragere_id: x, stare: ic.data?.refuz ? 'ramane_in_lucru:' + ic.data.refuz : st })
     }
   }
-  return { status: 200, body: { ok: true, mod: 'structurat', extractor: EXTRACTOR_ID, felii_apelate: feliiApelate,
+  return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate,
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport } }
 }
 
