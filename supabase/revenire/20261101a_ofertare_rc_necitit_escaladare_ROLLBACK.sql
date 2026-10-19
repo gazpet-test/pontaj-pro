@@ -11,6 +11,10 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261101a: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  -- armarea persistentă (ALTER DATABASE / ROLE … SET) e refuzată (review Gemini r4, P3; ca la celelalte reveniri)
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting WHERE array_to_string(setconfig, ',') LIKE '%gazpet.revenire_20261101a%') THEN
+    RAISE EXCEPTION '20261101a: armare persistenta refuzata';
+  END IF;
   IF to_regprocedure('public.ofertare_rc_doc_necitit(bigint)') IS NULL
      OR to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NULL
      OR to_regprocedure('public.ofertare_alerta_rc_necitite_acum(bigint[])') IS NULL

@@ -11,11 +11,12 @@
 -- Cine: ziua 0 (ziua sosirii) doar bannerul — EXCEPȚIE urgența (≤ 1 zi până la depunere: alertă din ziua 0, review Gemini r1, P1);
 --   ziua 1: responsabilul; ziua 2+: + owner(ii); owner(ii) și oricând cu ≤ 2 zile până la depunere sau fără responsabil.
 --   Notificare 'critical', o dată pe zi și set de documente; se oprește singură la procesare.
--- Idempotență (review Copilot r1–r3): REVENDICARE ATOMICĂ a amprentei (INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING; amprenta =
---   ziua + documentele necitite). Mailul (doar owner, ≤ 5 zile până la depunere) are DOUĂ stări: '<amprenta>:p' (în curs) și
---   '<amprenta>:s' (trimis, confirmat după răspunsul Resend). O revendicare „în curs” mai veche de 10 minute se poate RE-revendica
---   (rezultat ambiguu la trimitere — excepție de transport / 5xx — reîncercat la rularea următoare, deduplicat de Resend prin
---   Idempotency-Key); una „trimis” nu. Refuzul explicit (4xx) / documentele procesate între timp ELIBEREAZĂ revendicarea.
+-- Idempotență (review Copilot r1–r4): REVENDICARE ATOMICĂ a amprentei (INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING), amprenta
+--   DIRECȚIONALĂ '<zi>|<id maxim necitit>': alertă nouă în aceeași zi doar la un document NOU, nu la procesarea parțială. Mailul (doar
+--   owner, ≤ 5 zile până la depunere): '<zi>|<id maxim>|p|<lease>' (în curs, lease unic per preluare) și '<zi>|<id maxim>|s' (trimis,
+--   confirmat după Resend). „În curs” mai vechi de 10 minute se poate RE-revendica (rezultat ambiguu — excepție de transport / 5xx —,
+--   reîncercat cu ACEEAȘI cheie de idempotență per licitație 'rc-necitit-<licitație>-<zi>-<id maxim>', deci Resend nu dublează);
+--   confirmarea / eliberarea fac CAS pe valoarea exactă cu lease. Refuzul explicit (4xx) / documentele procesate între timp ELIBEREAZĂ.
 --
 -- Cron (după apply + deploy, cu „da” de la Răzvan) — 3 rulări pe zi, ca o trimitere ambiguă să poată fi reîncercată în aceeași zi
 -- (notificările rămân o dată pe zi, prin amprentă):
@@ -80,7 +81,7 @@ CREATE OR REPLACE FUNCTION public.ofertare_alerta_rc_necitit()
  SET search_path TO 'public', 'pg_temp'
 AS $function$
 DECLARE
-  l record; v_pid uuid; v_amprenta text; v_ampr_mail text; v_claim int; v_mail boolean;
+  l record; v_pid uuid; v_amprenta text; v_ampr_mail text; v_claim text; v_mail boolean; v_max bigint;
   v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date;
   v_zile_necitit int; v_zile_dep int; v_trimise int := 0; v_lic jsonb := '[]'::jsonb;
 BEGIN
@@ -89,6 +90,7 @@ BEGIN
            count(*) AS nr,
            min((d.created_at AT TIME ZONE 'Europe/Bucharest')::date) AS de_la,
            string_agg(d.id::text, ',' ORDER BY d.id) AS ids,
+           max(d.id) AS max_id,
            string_agg(left(coalesce(d.nume_original, '#' || d.id), 60), '; ' ORDER BY d.created_at) AS lista
     FROM ofertare_licitatii li
     JOIN ofertare_documente_atribuire d ON d.licitatie_id = li.id
@@ -103,14 +105,17 @@ BEGIN
     -- ziua sosirii: doar bannerul — dar nu când depunerea e azi / mâine (urgență)
     CONTINUE WHEN v_zile_necitit < 1 AND v_zile_dep > 1;
 
-    -- notificările: revendicare atomică pe (zi, documentele necitite)
-    v_amprenta := md5(l.id::text || '|rc_necitit|' || v_azi::text || '|' || l.ids);
+    -- amprenta DIRECȚIONALĂ (review Copilot r4 P2 / Gemini r4 P2): '<zi>|<id maxim necitit>' — o alertă nouă în aceeași zi DOAR dacă a
+    -- apărut un document NOU (id mai mare; id-urile cresc la inserare); procesarea parțială (dispariția unor id-uri) nu re-alertează
+    v_max := l.max_id;
+    v_amprenta := v_azi::text || '|' || v_max::text;
     v_claim := NULL;
     INSERT INTO ofertare_alerte_amprenta AS a (licitatie_id, fel, amprenta, trimisa_la)
     VALUES (l.id, 'rc_necitit', v_amprenta, now())
     ON CONFLICT (licitatie_id, fel) DO UPDATE SET amprenta = EXCLUDED.amprenta, trimisa_la = now()
-      WHERE a.amprenta IS DISTINCT FROM EXCLUDED.amprenta
-    RETURNING 1 INTO v_claim;
+      WHERE split_part(a.amprenta, '|', 1) IS DISTINCT FROM v_azi::text
+         OR coalesce(nullif(split_part(a.amprenta, '|', 2), '')::bigint, 0) < v_max
+    RETURNING 'x' INTO v_claim;
     IF v_claim IS NOT NULL THEN
       FOR v_pid IN
         SELECT p FROM unnest(ARRAY[l.responsabil_id]) p WHERE p IS NOT NULL
@@ -130,24 +135,29 @@ BEGIN
       END LOOP;
     END IF;
 
-    -- mailul (doar owner, ≤ 5 zile până la depunere): revendicare atomică „în curs” (':p'); se poate RE-revendica doar o revendicare
-    -- „în curs” mai veche de 10 minute (rezultat ambiguu); „trimis” (':s') nu se mai revendică pe aceeași amprentă
+    -- mailul (doar owner, ≤ 5 zile până la depunere): '<zi>|<id maxim>|p|<lease>' (în curs) / '<zi>|<id maxim>|s' (trimis).
+    -- Revendicare atomică dacă: zi nouă, SAU document nou (id maxim mai mare), SAU „în curs” mai vechi de 10 minute (rezultat ambiguu →
+    -- reîncercare). Fiecare preluare primește un LEASE unic (review Copilot r4, P1: fără el, un worker vechi putea confirma / elibera
+    -- revendicarea preluată de altul) — confirmarea / eliberarea fac CAS pe valoarea exactă, cu lease.
     v_mail := false; v_ampr_mail := NULL;
     IF v_zile_dep <= 5 THEN
-      v_ampr_mail := md5(l.id::text || '|rc_necitit_mail|' || v_azi::text || '|' || l.ids);
+      v_ampr_mail := v_azi::text || '|' || v_max::text || '|p|' || gen_random_uuid()::text;
       v_claim := NULL;
       INSERT INTO ofertare_alerte_amprenta AS a (licitatie_id, fel, amprenta, trimisa_la)
-      VALUES (l.id, 'rc_necitit_mail', v_ampr_mail || ':p', now())
+      VALUES (l.id, 'rc_necitit_mail', v_ampr_mail, now())
       ON CONFLICT (licitatie_id, fel) DO UPDATE SET amprenta = EXCLUDED.amprenta, trimisa_la = now()
-        WHERE split_part(a.amprenta, ':', 1) IS DISTINCT FROM v_ampr_mail
-           OR (a.amprenta = v_ampr_mail || ':p' AND a.trimisa_la < now() - interval '10 minutes')
-      RETURNING 1 INTO v_claim;
+        WHERE split_part(a.amprenta, '|', 1) IS DISTINCT FROM v_azi::text
+           OR coalesce(nullif(split_part(a.amprenta, '|', 2), '')::bigint, 0) < v_max
+           OR (split_part(a.amprenta, '|', 3) = 'p' AND a.trimisa_la < now() - interval '10 minutes')
+      RETURNING 'x' INTO v_claim;
       v_mail := v_claim IS NOT NULL;
     END IF;
 
     v_lic := v_lic || jsonb_build_object('licitatie_id', l.id, 'nr_anunt', l.nr_anunt, 'obiect', left(coalesce(l.obiect, ''), 160),
       'zile_necitit', v_zile_necitit, 'zile_depunere', v_zile_dep, 'de_la', l.de_la, 'nr', l.nr, 'lista', l.lista,
-      'doc_ids', string_to_array(l.ids, ',')::bigint[], 'mail', v_mail, 'amprenta_mail', CASE WHEN v_mail THEN v_ampr_mail || ':p' END);
+      'doc_ids', string_to_array(l.ids, ',')::bigint[], 'mail', v_mail, 'amprenta_mail', CASE WHEN v_mail THEN v_ampr_mail END,
+      -- cheia de idempotență Resend PER LICITAȚIE, stabilă pe (licitație, zi, id maxim) — aceeași la orice reîncercare a aceluiași mail
+      'cheie_mail', CASE WHEN v_mail THEN 'rc-necitit-' || l.id || '-' || v_azi::text || '-' || v_max END);
   END LOOP;
   RETURN jsonb_build_object('azi', v_azi, 'notificari', v_trimise, 'licitatii', v_lic);
 END
@@ -173,8 +183,9 @@ CREATE OR REPLACE FUNCTION public.ofertare_alerta_rc_mail_confirma(p_licitatie_i
  SECURITY DEFINER
  SET search_path TO 'public', 'pg_temp'
 AS $function$
-  WITH x AS (UPDATE ofertare_alerte_amprenta SET amprenta = split_part(p_amprenta, ':', 1) || ':s', trimisa_la = now()
-             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND p_amprenta LIKE '%:p'
+  WITH x AS (UPDATE ofertare_alerte_amprenta SET amprenta = split_part(p_amprenta, '|', 1) || '|' || split_part(p_amprenta, '|', 2) || '|s',
+                    trimisa_la = now()
+             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND split_part(p_amprenta, '|', 3) = 'p'
              RETURNING 1)
   SELECT count(*) > 0 FROM x
 $function$;
@@ -187,7 +198,7 @@ CREATE OR REPLACE FUNCTION public.ofertare_alerta_rc_mail_elibereaza(p_licitatie
  SET search_path TO 'public', 'pg_temp'
 AS $function$
   WITH x AS (DELETE FROM ofertare_alerte_amprenta
-             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND p_amprenta LIKE '%:p'
+             WHERE licitatie_id = p_licitatie_id AND fel = 'rc_necitit_mail' AND amprenta = p_amprenta AND split_part(p_amprenta, '|', 3) = 'p'
              RETURNING 1)
   SELECT count(*) > 0 FROM x
 $function$;
