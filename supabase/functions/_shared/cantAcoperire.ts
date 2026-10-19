@@ -20,7 +20,9 @@ const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
 // sau o UM urmată de un număr („5.1 m 10”). Rămân excluse doar liniile de prețuri / zecimale („213.76 65795.33”, „0.90 513.00”,
 // „TEAVA 20.80 11856.00”) și o măsură în text („1.5 m adancime” — UM urmată de cuvânt, nu de cantitate).
 const RE_NR_LISTA_IER_STRUCT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**[.):]?\**\s+(?=\S)/u
-const RE_LINIE_PRETURI = /^\s*\**\s*\d{1,4}(?:\.\d{1,3})+\**[.):]?\**\s+\d+[.,]\d+(?:\s|$)/
+// linie de prețuri: id ierarhic urmat NUMAI de numere (primul zecimal) până la capăt — „213.76 65795.33”, „20.80 11856.00”; review Copilot
+// r10: „5.1 12,50 m” (număr urmat de UM / text / cod) NU e linie de prețuri
+const RE_LINIE_PRETURI = /^\s*\**\s*\d{1,4}(?:\.\d{1,3})+\**[.):]?\**\s+\d+[.,]\d+(?:\s+\d+(?:[.,]\d+)?)*\s*$/
 const RE_NR_LISTA_IER = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**[.):]?\**\s+(?:[-–:]\s*)?(?=[\p{L}@][\p{L}.]+|(?![mMtTlL]\s)\p{L}\s+\p{L}|[(\[]\s*[\p{L}\d]|(?=[\p{L}\d]*\p{L})(?=[\p{L}\d]*\d)[\p{L}\d]{2,}|\d{4,}(?![.,]?\d)|(?:m|ml|km|mc|mp|m2|m3|buc|kg|t|to|l|M|ML|KM|MC|MP|M2|M3|BUC|KG|T|TO|L)\.?\s+\d)/u
 const RE_NR_MARKDOWN = /^\s*\|?\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.)]?\**\s*\|/
 const RE_MARCAJ = /^⟦PAGINA\s*(\d{1,5})⟧/

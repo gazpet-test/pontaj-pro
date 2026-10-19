@@ -190,3 +190,12 @@ Deno.test('r10: recunoaștere STRUCTURALĂ — „5.1 - …”, „5.1: …”, 
   const m = inv('003 SA11G1 [ 2] M 570.000\n1.5 m adancime\n')
   assertEquals(m.map((x) => [x.nr_id, x.motiv]), [['003', null], ['1.5', 'posibila_continuare']])
 })
+
+// ── review Copilot B1 r10 ──
+Deno.test('r11 (Copilot P1/P2): „5.1 12,50 m” / „5.1 12.50 buc” rămân rânduri; rândul precedent nu le împrumută cantitatea; doar liniile NUMAI numerice sunt prețuri', () => {
+  const r = inv('1 Conducta fara cantitate\n5.1 12,50 m\n5.3 Conducta m 20\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.cantitate, x.um]), [['1', 'incert', null, null], ['5.1', 'ancora', '12,50', 'm'], ['5.3', 'ancora', '20', 'm']])
+  assertEquals(inv('5.1 12.50 buc\n').map((x) => [x.nr_id, x.stare, x.um]), [['5.1', 'ancora', 'buc']])
+  // prețuri: numai numere după id
+  assertEquals(inv('003 SA11G1 [ 2] M 570.000\n213.76 65795.33\n20.80 11856.00 0.00\n38.32 21842.40\n').map((x) => x.nr_id), ['003'])
+})
