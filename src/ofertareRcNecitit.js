@@ -23,7 +23,9 @@ export function rcNecitite(docs, termenDepunere, acum = new Date()) {
     zileNecitit: deLa && azi ? zileIntre(deLa, azi) : null,
     zilePanaLaDepunere: termen && azi ? zileIntre(azi, termen) : null,
     // ora exactă (Copilot r1: în ziua depunerii, după ora-limită, zilele calendaristice rămân 0 → „AZI” ar fi fals)
-    termenTrecut: Number.isFinite(tTermen) ? tTermen <= new Date(acum).getTime() : false,
+    // termen doar cu dată („2026-10-26”, review Gemini r2): trecut abia din ziua următoare (pe ora României), nu de la miezul nopții UTC
+    termenTrecut: /^\d{4}-\d{2}-\d{2}$/.test(String(termenDepunere || '')) ? (azi != null && termen != null && azi > termen)
+      : Number.isFinite(tTermen) ? tTermen <= new Date(acum).getTime() : false,
     rosu: necitite.length > 0,
   }
 }

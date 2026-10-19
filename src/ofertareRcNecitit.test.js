@@ -51,4 +51,9 @@ describe('review r1 (Copilot / Gemini)', () => {
     expect(r.termenTrecut).toBe(false)
     expect(r.zilePanaLaDepunere).toBe(0)
   })
+  it('termen doar cu dată: în ziua depunerii NU e trecut (e „AZI”); din ziua următoare e trecut', () => {
+    expect(rcNecitite([RC3], '2026-10-26', '2026-10-26T09:00:00Z').termenTrecut).toBe(false)
+    expect(rcNecitite([RC3], '2026-10-26', '2026-10-26T20:00:00Z').termenTrecut).toBe(false)
+    expect(rcNecitite([RC3], '2026-10-26', '2026-10-27T06:00:00Z').termenTrecut).toBe(true)
+  })
 })
