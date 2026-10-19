@@ -12,7 +12,7 @@ import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_sh
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
 
-export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f1' }
+export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f2' }
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
 // tariful din cod pentru limita superioară a rezervării (developers.openai.com/api/docs/pricing, 11.09.2026) — o depășire reală
 // (tarif schimbat) blochează bugetul la decontare (§4.3)
