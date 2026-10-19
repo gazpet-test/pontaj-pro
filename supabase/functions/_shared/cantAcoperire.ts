@@ -132,11 +132,16 @@ export function inventarRanduri(text: string): RandInventar[] {
     // după rânduri cu zerouri („2 COD 64000115” sub „003 6701152 …”)
     // + în interiorul unui tabel cu „|” (ultimul rând inventariat era de tabel), o linie de listă fără cod și fără cantitate e continuarea
     // denumirii („1 IMBIN.(DOP/CAPAT FLANSA) D= 90 MM” între rândurile „| 16 | 00602G04 | …”)
-    if (!r.markdown && !c.cod && !cu && !motiv && r.nr !== null && (ultimMarkdown || (ultimLista &&
-        ((ultimLista.zero && !/^0\d/.test(r.id ?? '')) || ![ultimLista.nr, ultimLista.nr + 1, 1].includes(r.nr))))) continue
+    // review r3 (P1-1 / P1-2): o linie ambiguă NU se mai elimină — rămâne în inventar ca INCERT „posibila_continuare”, dar NU intră în
+    // secvența nr. crt. (nu acoperă un gol și nu desparte tabele); B2 o tratează ca rând de verificat
+    const posibilaContinuare = !r.markdown && !c.cod && !cu && !motiv && r.nr !== null && (ultimMarkdown || (ultimLista !== null &&
+        ((ultimLista.zero && !/^0\d/.test(r.id ?? '')) || ![ultimLista.nr, ultimLista.nr + 1, 1].includes(r.nr))))
+    if (posibilaContinuare) motiv = 'posibila_continuare'
     if (!cu && !motiv) motiv = r.markdown || c.cod ? 'um_sau_cantitate_nerecunoscute' : 'lista_fara_cod_sau_cantitate'
-    if (!r.markdown && r.nr !== null) ultimLista = { nr: r.nr, zero: /^0\d/.test(r.id ?? '') }
-    ultimMarkdown = r.markdown
+    if (!posibilaContinuare) {
+      if (!r.markdown && r.nr !== null) ultimLista = { nr: r.nr, zero: /^0\d/.test(r.id ?? '') }
+      ultimMarkdown = r.markdown
+    }
     out.push({ offset: startO, linie: i + 1, pagina, nr: r.nr, nr_id: r.id, cod: c.cod, cantitate: cu?.cantitate ?? null, um: cu?.um ?? null,
       markdown: r.markdown, stare: cu ? 'ancora' : 'incert', motiv: cu ? null : motiv })
   }
@@ -163,8 +168,10 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
     t.push(tb)
   }
   for (const r of randuri) {
-    if (r.nr === null) continue
-    if (!cur || (r.nr === 1 && cur.nr_max > 1)) {
+    if (r.nr === null || r.motiv === 'posibila_continuare') continue
+    // tabel nou: reluarea de la 1 după un nr. > 1, SAU o scădere la ≤ 2 după un nr. > 2 (review r3: poziția 1 poate fi ea însăși
+    // incertă / lipsă); orice altă scădere = „reluare atipică” în același tabel (semnal pentru B2)
+    if (!cur || (r.nr === 1 && cur.nr_max > 1) || (r.nr <= 2 && r.nr < cur.prev && cur.nr_max > 2)) {
       inchideCur()
       cur = { de_la: r.offset, nr_min: r.nr, nr_max: r.nr, randuri: 0, pozitii: 0, goluri: [], goluri_ierarhice: [], reluari_atipice: 0,
         vazute: new Set(), prev: r.nr, sub: new Map() }
@@ -172,9 +179,12 @@ export function tabele(randuri: RandInventar[]): Tabel[] {
     cur.randuri++
     cur.vazute.add(r.nr)
     if (r.nr_id && r.nr_id.includes('.')) {
-      const c = r.nr_id.split('.'), par = c.slice(0, -1).join('.'), ult = Number(c[c.length - 1])
-      if (!cur.sub.has(par)) cur.sub.set(par, new Set())
-      cur.sub.get(par)!.add(ult)
+      const c = r.nr_id.split('.')
+      for (let k = 1; k < c.length; k++) {
+        const par = c.slice(0, k).join('.'), ult = Number(c[k])
+        if (!cur.sub.has(par)) cur.sub.set(par, new Set())
+        cur.sub.get(par)!.add(ult)
+      }
     }
     cur.nr_min = Math.min(cur.nr_min, r.nr)
     cur.nr_max = Math.max(cur.nr_max, r.nr)

@@ -26,9 +26,11 @@ for (const [id, b64] of randuri) {
     const anc = inv.filter((x) => x.stare === 'ancora')
     const perechi = new Set(anc.filter((x) => x.cod).map((x) => `${x.cod}|${x.cantitate}|${x.um}`)).size
     console.log([id, t.length, sec.length, inv.length, anc.length, inv.length - anc.length, perechi, tb.length,
-      tb.filter((x) => x.goluri.length).length, tb.reduce((s, x) => s + x.goluri.length, 0), tb.reduce((s, x) => s + x.reluari_atipice, 0)].join('\t'))
+      tb.filter((x) => x.goluri.length || x.goluri_ierarhice.length).length, tb.reduce((s, x) => s + x.goluri.length + x.goluri_ierarhice.length, 0), tb.reduce((s, x) => s + x.reluari_atipice, 0)].join('\t'))
     continue
   }
-  for (const x of tb.filter((x) => x.goluri.length)) console.log(`gol — linia ${linia(x.de_la)}: nr. ${x.nr_min}-${x.nr_max}, lipsă ${x.goluri.join(', ')}`)
+  for (const x of tb.filter((x) => x.goluri.length || x.goluri_ierarhice.length)) {
+    console.log(`gol — linia ${linia(x.de_la)}: nr. ${x.nr_min}-${x.nr_max}, lipsă ${[...x.goluri, ...x.goluri_ierarhice].join(', ')}`)
+  }
   for (const r of inv.filter((x) => x.stare === 'incert').slice(0, 30)) console.log(`incert — linia ${linia(r.offset)} nr ${r.nr}: ${r.motiv}`)
 }

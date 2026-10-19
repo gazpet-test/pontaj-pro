@@ -9,8 +9,10 @@ const F3 = '⟦PAGINA 1⟧\n001 RPCXA04 M.C. 626.400\nSAPATURA\n0.000 0 Total=\n
   '003 SA11G1 [ 2] M 1160.000\nTEAVA PVC D= 90 MM\n0.000 0 Total=\n003 6701152 M 1160.000\n@TV HDPE80 DN 90X8.\n2 COD 64000115\n0.003 3 Total=\n' +
   '⟦PAGINA 2⟧\n006 TRA02A40 TONA 0.575 TRANSPORTUL RUTIER 0.000 0 Total=\n'
 
-Deno.test('B1: inventarul listei F3 (nr., cod după poziție, cantitate, UM, pagina); continuarea „2 COD …” nu e rând; offset în original', () => {
-  const r = inv(F3)
+Deno.test('B1: inventarul listei F3 (nr., cod după poziție, cantitate, UM, pagina); „2 COD …” = incert posibila_continuare; offset în original', () => {
+  const toate = inv(F3)
+  assertEquals(toate.filter((x) => x.motiv === 'posibila_continuare').map((x) => [x.nr, x.linie, x.stare]), [[2, 13, 'incert']])
+  const r = toate.filter((x) => x.motiv !== 'posibila_continuare')
   assertEquals(r.map((x) => [x.nr, x.stare, x.cod, x.cantitate, x.um, x.pagina]), [
     [1, 'ancora', 'RPCXA04', '626.400', 'mc', 1], [2, 'ancora', 'GD11A1', '174.000', 'mc', 1], [3, 'ancora', 'SA11G1', '1160.000', 'm', 1],
     [3, 'ancora', '6701152', '1160.000', 'm', 1], [6, 'ancora', 'TRA02A40', '0.575', 'tona', 2]])
@@ -59,16 +61,18 @@ Deno.test('B1: rândurile de pe aceeași poziție (material sub articol) — poz
 })
 Deno.test('B1: masoara — rânduri / ancore / incerte / perechi cod+cantitate distincte', () => {
   const m = masoara(F3 + '| 7 | X1A7 | GRAME | 3 |\n')
-  assertEquals([m.randuri, m.ancore, m.incerte, m.perechi_distincte, m.tabele], [6, 5, 1, 5, 1])
+  assertEquals([m.randuri, m.ancore, m.incerte, m.perechi_distincte, m.tabele], [7, 5, 2, 5, 1])
   assert(m.goluri === 2) // 4, 5
 })
 
 // ── review Jakarinos #751 r2 ──
-Deno.test('r3 (P1-1): rând de listă fără cod, cu UM necunoscută → INCERT (nu dispare); continuarea evidentă „2 COD …” sub „003 …” → ignorată', () => {
+Deno.test('r3 (P1-1): rând de listă fără cod, cu UM necunoscută → INCERT (nu dispare); „2 COD …” sub „003 …” → incert posibila_continuare, în afara secvenței', () => {
   assertEquals(sumar('1 Conducta m 10\n2 Adeziv GRAME 12\n'), [[1, 'ancora', null, '10', 'm'], [2, 'incert', null, null, null]])
   assertEquals(inv('1 Conducta m 10\n2 Adeziv GRAME 12\n')[1].motiv, 'lista_fara_cod_sau_cantitate')
   // nr. care nu continuă secvența (nici ultimul, nici următorul, nici 1) = continuare de denumire
-  assertEquals(inv('003 SA11G1 [ 2] M 10.000\nTEAVA\n2 COD 64000115\n7 FIRE DE 1,5\n').map((x) => x.nr), [3])
+  const c = inv('003 SA11G1 [ 2] M 10.000\nTEAVA\n2 COD 64000115\n7 FIRE DE 1,5\n')
+  assertEquals(c.map((x) => [x.nr, x.motiv]), [[3, null], [2, 'posibila_continuare'], [7, 'posibila_continuare']])
+  assertEquals(tabele(c).map((x) => [x.nr_min, x.nr_max, x.goluri]), [[3, 3, []]])
 })
 Deno.test('r3 (P1-3): reluarea de la 1 separă tabelul și când fragmentul anterior n-avea poziția 1 („8, 10” apoi „1 … 9” → golul 9 rămâne)', () => {
   const rd = ['| 8 | A | m | 1 |', '| 10 | B | m | 2 |', ...Array.from({ length: 9 }, (_, k) => `| ${k + 1} | X | m | ${k + 1} |`)].join('\n') + '\n'
@@ -81,7 +85,7 @@ Deno.test('r3 (P2-4): separatorul de mii prin spațiu în listă (pe linie sau p
 Deno.test('r3 (corpus): „HDPE80 312UNI” nu e separator de mii; continuarea de denumire între rânduri de tabel nu e rând (nici reluare de la 1)', () => {
   assertEquals(inv('003 6701152 M 130.000 @TV HDPE80 312UNI7611.7615 PN10 DN 90X8.2 COD 64000115 0.003 0 Total=\n').map((x) => x.stare), ['ancora'])
   const t = '| 16 | 00602G04 | 02 BUCATA | 9,00000 | |\nSUDURA CAP LA CAP\n1 IMBIN.(DOP/CAPAT FLANSA) D= 90 MM\n| 17 | ACE01B3 | 82 BUCATA | 3,00000 | |\n'
-  assertEquals(inv(t).map((x) => x.nr), [16, 17])
+  assertEquals(inv(t).map((x) => [x.nr, x.motiv]), [[16, null], [1, 'posibila_continuare'], [17, null]])
   assertEquals(tabele(inv(t)).map((x) => x.goluri), [[]])
 })
 Deno.test('r3 (P2-5): un rând C6 nu împrumută cantitatea articolului următor (rând de tabel cu cod)', () => {
@@ -93,4 +97,21 @@ Deno.test('r3 (P2-6): numerotarea ierarhică păstrează identificatorul; „5.1
   assertEquals(r.map((x) => [x.nr, x.nr_id]), [[5, '5'], [5, '5.1'], [5, '5.3'], [6, '6']])
   assertEquals(tabele(r).map((x) => [x.goluri, x.goluri_ierarhice]), [[[], ['5.2']]])
   assertEquals(masoara('| 5.1 | Tema | m | 1 |\n| 5.3 | Studiu | m | 2 |\n').goluri, 1)
+})
+
+// ── review Jakarinos B1 r3 ──
+Deno.test('r4 (P1-1): tabel → listă peste pagină — rândurile de listă rămân în inventar (incerte); „8,10 / 1 incert, 2…9” păstrează golul 9', () => {
+  const t = '| 1 | Conducta | m | 10 |\n⟦PAGINA 2⟧\n2 Adeziv GRAME 12\n3 Vopsea GRAME 20\n'
+  assertEquals(inv(t).map((x) => [x.nr, x.stare]), [[1, 'ancora'], [2, 'incert'], [3, 'incert']])
+  const u = ['| 8 | A | m | 1 |', '| 10 | B | m | 2 |', '1 Adeziv GRAME 3', ...Array.from({ length: 8 }, (_, k) => `| ${k + 2} | X | m | ${k + 2} |`)].join('\n') + '\n'
+  const tb = tabele(inv(u))
+  assertEquals(tb.map((x) => [x.nr_min, x.nr_max, x.goluri]), [[8, 10, [9]], [2, 9, []]])
+})
+Deno.test('r4 (P1-2): secvența sau zerourile nu mai elimină rânduri („1 / 3 / 4”, „001 / 2 / 3”) — toate în inventar', () => {
+  assertEquals(inv('1 Conducta m 10\n3 Adeziv GRAME 12\n4 Vopsea GRAME 20\n').length, 3)
+  assertEquals(inv('001 Conducta m 10\n2 Adeziv GRAME 12\n3 Vopsea GRAME 20\n').length, 3)
+})
+Deno.test('r4 (P2-4): ierarhia pe trei niveluri — „5.1.1, 5.3.1” → golul 5.2', () => {
+  const tb = tabele(inv('| 5.1.1 | A | m | 1 |\n| 5.3.1 | B | m | 2 |\n'))
+  assertEquals(tb.map((x) => x.goluri_ierarhice), [['5.2']])
 })
