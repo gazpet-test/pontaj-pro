@@ -243,7 +243,8 @@ Deno.test('r14 (Copilot P1/P2): reluarea ierarhică sub același părinte nu mai
 Deno.test('r15 (Copilot P1): rândul plat cu „:” sau cu separatorul lipit de text nu mai dispare; „1.5 …” / „10:30” nu devin rânduri', () => {
   for (const t of ['1: Conducta m 10\n2 Conducta m 20\n', '1)Conducta m 10\n2 Conducta m 20\n', '1:Conducta m 10\n2 Conducta m 20\n', '1.Conducta m 10\n2 Conducta m 20\n'])
     assertEquals(inv(t).map((x) => [x.nr_id, x.stare, x.cantitate]), [['1', 'ancora', '10'], ['2', 'ancora', '20']])
-  assertEquals(inv('10:30 sedinta\n').length, 0)
+  // r24: „10:30 …” nu e rând sigur; prin plasa de siguranță intră doar ca incert posibila_continuare (în afara secvenței)
+  assertEquals(inv('10:30 sedinta\n').map((x) => [x.nr_id, x.motiv]), [['10', 'posibila_continuare']])
   assertEquals(inv('**7**. Conducta m 10\n').map((x) => [x.nr_id, x.stare]), [['7', 'ancora']])
 })
 
@@ -331,4 +332,13 @@ Deno.test('r23 (Copilot r22 P1): pe LISTĂ pură, nr. lipit de text („2Conduct
   assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare']])
   assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
   assertEquals(inv('5.1 Conducta m 1\n5.2Conducta m 10\n').map((x) => [x.nr_id, x.motiv]), [['5.1', null], ['5.2', 'posibila_continuare']])
+})
+
+// ── review Copilot B1 r23 ──
+Deno.test('r24 (Copilot r23 P1): plasa de siguranță — nr. lipit de „(”, „[”, separator + cifră nu dispare (posibila_continuare)', () => {
+  for (const [t, id] of [['1 Conducta m 1\n2(Conducta) m 10\n', '2'], ['5.1 Conducta m 1\n5.2[2] SA11G1 m 10\n', '5.2'], ['1 Conducta m 1\n2)12 m\n', '2'], ['1 Conducta m 1\n2@TEAVA m 10\n', '2']]) {
+    const r = inv(t)
+    assertEquals(r.find((x) => x.nr_id === id)?.motiv, 'posibila_continuare')
+    assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
+  }
 })

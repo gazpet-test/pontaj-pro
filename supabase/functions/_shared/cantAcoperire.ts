@@ -24,9 +24,10 @@ const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**(?:[.):]\**(?:\s+|(?=[\p{L}(\[]))|\s+
 const RE_NR_LISTA_IER_STRUCT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**(?:[.):]\**(?:\s+|(?=[\p{L}(\[]))|\s+)(?=\S)/u
 // nr. crt. SINGUR pe linie („1”, „5.1”, „12.”) — OCR care rupe după nr. (review Copilot r12): rând „slab”; cu cantitate + UM pe linia
 // următoare devine rând normal („1” / „Conducta m 10”), altfel incert „posibila_continuare” (în inventar, tabel nedeterminat)
-// nr. LIPIT direct de o literă la începutul liniei („2Conducta m 10”, „5.2Conducta …”, review Copilot r22): rând „slab lipit” — ÎNTOTDEAUNA
+// plasa de siguranță: ORICE linie care începe cu un nr. (ne-urmat de altă cifră) și nu s-a potrivit altfel — nr. lipit de literă / „(” / „[” /
+// separator + cifră („2Conducta”, „2(Conducta)”, „5.2[2] SA11G1”, „2)12 m”, review Copilot r22 / r23): rând „slab lipit” — ÎNTOTDEAUNA
 // posibila_continuare (în inventar, în afara secvenței, tabel nedeterminat); forma sigură de listă NU se relaxează
-const RE_NR_LISTA_LIPIT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?=\p{L})/u
+const RE_NR_LISTA_LIPIT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?!\d)(?=\S)/u
 const RE_NR_SINGUR = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*$/
 // fără excludere de „linii de prețuri” (review Copilot r11): un id ierarhic urmat numai de numere („213.76 65795.33” sau un rând real
 // degradat „5.1 12,50”) intră ca rând „slab” → incert „posibila_continuare” (în inventar, în afara secvenței, tabel nedeterminat).
