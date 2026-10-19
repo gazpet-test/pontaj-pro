@@ -96,3 +96,28 @@ Deno.test('A2 r2 (Copilot P1): incertele doar semnalate și tabelele nedetermina
   const p = poartaFelie(t, 0, 'f3', [{ cantitate_offset: t.indexOf('| 1 |') + t.slice(t.indexOf('| 1 |')).indexOf(' 1 |', 3) + 1, pozitie_dovedita: true }])
   assertEquals([p.incerte >= 1, p.tabele_nedeterminate >= 1, p.complet], [true, true, false])
 })
+
+// ── review Copilot A2+A3 r2 ──
+Deno.test('A2 r3 (Copilot P1): aceeași valoare într-o notă din bloc NU acoperă rândul omis — doar tokenul exact recunoscut de B1', () => {
+  const t = '1 Conducta m 100\nNota consum m 100\n2 Teava m 30\n'
+  const nota = t.indexOf('100', t.indexOf('Nota'))
+  const p = poartaFelie(t, 0, 'f3', [{ cantitate_offset: nota, pozitie_dovedita: true }, { cantitate_offset: t.indexOf('30'), pozitie_dovedita: true }])
+  assertEquals([p.ancore, p.acoperite, p.deficit, p.neacoperite.map((x) => x.nr_id)], [2, 1, true, ['1']])
+  const q = poartaFelie(t, 0, 'f3', [{ cantitate_offset: t.indexOf('100'), pozitie_dovedita: true }, { cantitate_offset: t.indexOf('30'), pozitie_dovedita: true }])
+  assertEquals([q.acoperite, q.deficit], [2, false])
+})
+
+Deno.test('A2 r3 (Copilot P1): incertul cerut (separator de mii) NU e acoperit de altă cantitate din bloc — doar de tokenul lui', () => {
+  const t = '1 RPC01 Conducta m 1 234,50\nNota consum m 20\n2 SA11G1 Teava m 500.00\n'
+  const p = poartaFelie(t, 0, 'f3', [{ cantitate_offset: t.indexOf('20\n'), pozitie_dovedita: true }, { cantitate_offset: t.indexOf('500.00'), pozitie_dovedita: true }])
+  assertEquals([p.ancore, p.acoperite, p.deficit, p.complet], [2, 1, true, false])
+  const q = poartaFelie(t, 0, 'f3', [{ cantitate_offset: t.indexOf('1 234,50'), pozitie_dovedita: true }, { cantitate_offset: t.indexOf('500.00'), pozitie_dovedita: true }])
+  assertEquals([q.acoperite, q.deficit], [2, false])
+})
+
+Deno.test('A2 r3: B1 expune offsetul exact al cantității (linia rândului, linia următoare împrumutată, separator de mii, tabel neînchis)', async () => {
+  const { inventarRanduri } = await import('../_shared/cantAcoperire.ts')
+  const t = '1 Conducta PEHD\nm 120,000\n2 SA11G1 Teava m 30\n3 RPC01 Conducta m 1 234,50\n| 4 | A | m | 7 \n'
+  const r = inventarRanduri(t)
+  assertEquals(r.map((x) => [x.nr_id, x.cantitate_offset]), [['1', t.indexOf('120,000')], ['2', t.indexOf('30')], ['3', t.indexOf('1 234,50')], ['4', t.indexOf('7 ')]])
+})
