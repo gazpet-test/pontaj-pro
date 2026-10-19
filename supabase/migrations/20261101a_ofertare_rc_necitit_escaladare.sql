@@ -3,7 +3,8 @@
 -- neprocesat; clopoțelul „SEAP: RASPUNS…” s-a pierdut între 102 notificări SEAP în 30 de zile (1 citită).
 --
 -- Regula (aceeași cu bannerul de pe fișă, src/ofertareRcNecitit.js):
---   necitit = document tip 'raspuns_clarificare' cu status_procesare ∈ {neprocesat, in_lucru, eroare} sau NULL ('ignorat' = decizie umană)
+--   necitit = document tip 'raspuns_clarificare' cu status_procesare NU în {procesat, ignorat, partial} — deci neprocesat, in_lucru,
+--   eroare, NULL sau orice stare nouă (fail-closed, review Gemini #790 r1); 'ignorat' = decizie umană; 'partial' = doar banner portocaliu
 --   licitații: status ∈ {go, in_lucru} (cele la care lucrăm efectiv — „identificata” ar aduce zgomot), termen de depunere în viitor
 --   ziua 0 (ziua în care a sosit): doar bannerul; ziua 1: responsabilul; ziua 2+: responsabilul + owner(ii);
 --   fără responsabil: owner(ii) din ziua 1
@@ -36,7 +37,7 @@ BEGIN
     FROM ofertare_licitatii li
     JOIN ofertare_documente_atribuire d ON d.licitatie_id = li.id
     WHERE d.tip = 'raspuns_clarificare'
-      AND coalesce(d.status_procesare, 'neprocesat') IN ('neprocesat', 'in_lucru', 'eroare')
+      AND coalesce(d.status_procesare, 'neprocesat') NOT IN ('procesat', 'ignorat', 'partial')
       AND li.status IN ('go', 'in_lucru')
       AND li.termen_depunere > now()
     GROUP BY li.id, li.nr_anunt, li.obiect, li.termen_depunere, li.responsabil_id
