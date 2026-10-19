@@ -20,6 +20,7 @@ import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareTermene from './OfertareTermene.jsx'
 import { rcNecitite } from './ofertareRcNecitit.js'
+import OfertareProbaExtractor from './OfertareProbaExtractor.jsx'
 import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -3836,6 +3837,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <CerinteSection licitatie={l} profile={profile} sel={selCerinte} setSel={setSelCerinte} reloadKey={packImportKey} />
               <SourcePackSection licitatie={l} profile={profile} onImported={() => { setPackImportKey(k => k + 1); onChanged?.() }} />
               <InventarIndependentSection licitatie={l} profile={profile} />
+              <OfertareProbaExtractor licitatie={l} />
               <J02bComutator licitatie={l} profile={profile} onChanged={onChanged} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
