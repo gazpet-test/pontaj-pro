@@ -11,7 +11,7 @@ import { conventieDocument, type Conventie } from '../_shared/cantNumar.ts'
 import { CAMPURI_RAND, normalizeazaRand, randDinTablou, sha256Hex } from '../_shared/cantNormalizare.ts'
 import { feliiCuPozitie } from './sectiuni.ts'
 import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri.ts'
-import { MODEL_A, PROMPT_A, tarifA } from './extractorA.ts'
+import { MODEL_A, MODEL_S, PROMPT_A, tarifA, tarifS } from './extractorA.ts'
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 
 export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n4', feliere: 'f2' }
@@ -23,13 +23,17 @@ export const MAX_IESIRE = 16000
 // extractorii (PR A1, 19.10.2026): B = cel de până acum (implicit, neschimbat); A = Claude Haiku 5.5 cu structured outputs (opt-in,
 // planul din 17.10). Identitatea (model@prompt@normalizator@feliere) intră în cache și în munca pe felie — A nu servește cache-ul lui B.
 // tarif(tokeni) = treapta de preț pentru numărul de tokeni de intrare (la rezervare: octeții, care îi mărginesc superior).
+export type Tarif = (tokeniIntrare: number) => { in: number; out: number }
+// escaladare (PR A3): al doilea model, apelat cel mult o dată pe felie, pe semnale deterministe
 export type Extractor = { cheie: 'A' | 'B'; model: string; prompt: string; normalizator: string; feliere: string
-  tarif: (tokeniIntrare: number) => { in: number; out: number }; promptFelie: (nume: string, rol: string) => string }
+  tarif: Tarif; promptFelie: (nume: string, rol: string) => string; escaladare?: { model: string; tarif: Tarif } }
 export const EXTRACTOARE: Record<'A' | 'B', Extractor> = {
   B: { cheie: 'B', ...EXTRACTOR, tarif: () => TARIF, promptFelie: (n, r) => PROMPT_STRUCTURAT(n, r) },
-  A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n4', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r) },
+  A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n4', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r),
+    escaladare: { model: MODEL_S, tarif: tarifS } },
 }
-export const idExtractor = (e: Extractor) => `${e.model}@${e.prompt}@${e.normalizator}@${e.feliere}`
+// identitatea include și modelul de escaladare (alt rezultat posibil = alt cache): claude-haiku-5-5>claude-sonnet-5-5@p4@n4@f2
+export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '>' + e.escaladare.model : ''}@${e.prompt}@${e.normalizator}@${e.feliere}`
 // review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică (o pagină F3 / un memoriu pot moșteni lista_alt), deci
 // excluderea ei poate tăia lungimi reale; rândurile C7 / C8 întoarse ca obiecte sunt acum normalizabile (n4)
 const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
@@ -48,7 +52,7 @@ export type DepsStructurat = {
   // extragerea „in_lucru” existentă pe (document, sha, extractor) și ultima încercare a unei munci — citite ca utilizator
   extragereInLucru: (documentId: number, sha: string, extractorId: string) => Promise<{ id: number; cerere_id: number } | null>
   ultimaIncercare: (mucaId: string) => Promise<{ id: number; stare: string; rezervare_id: number | null } | null>
-  ai: (prompt: string) => Promise<RezultatAI>
+  ai: (prompt: string, cine?: 'principal' | 'escaladare') => Promise<RezultatAI>
   acum: () => number
 }
 
@@ -69,10 +73,12 @@ REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un r
 
 // limita superioară demonstrabilă a costului unui apel: octeții UTF-8 ai promptului ≥ tokenii de intrare; ieșirea ≤ MAX_IESIRE;
 // treapta de preț se alege pe octeți (≥ tokeni), deci nu poate fi subestimată
+// cu escaladare: rezervarea acoperă ambele apeluri (principal + cel mult o escaladare pe același prompt) — plafonul e verificat ÎNAINTE
 export function sumaRezervata(prompt: string, ex: Extractor = EXTRACTOARE.B): number {
   const octeti = new TextEncoder().encode(prompt).length
   const t = ex.tarif(octeti)
-  return Math.ceil((octeti * t.in + MAX_IESIRE * t.out) * 1e4) / 1e4
+  const e = ex.escaladare ? ex.escaladare.tarif(octeti) : null
+  return Math.ceil((octeti * t.in + MAX_IESIRE * t.out + (e ? octeti * e.in + MAX_IESIRE * e.out : 0)) * 1e4) / 1e4
 }
 
 // familia „parte”: un PDF împărțit în p01 / p02 … e un singur document pentru convenția numerică
@@ -125,7 +131,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
 
   let feliiApelate = 0, cost = 0, oprit: string | null = null
   // PR A2: poarta B1 pe feliile f3 / c6 — doar măsurată și raportată (A3 o folosește pentru escaladare)
-  let feliiCuDeficit = 0
+  let feliiCuDeficit = 0, feliiEscaladate = 0
   const rezumatPoarta = (pb: PoartaFelie) => ({ ancore: pb.ancore, acoperite: pb.acoperite, incerte: pb.incerte, deficit: pb.deficit,
     neacoperite: pb.neacoperite.slice(0, 10).map((x) => x.nr_id ?? `linia ${x.linie}`) })
   for (const d of docs) {
@@ -208,19 +214,71 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       }
       const rezId = rz.data.rezervare_id as number
       feliiApelate++
-      let r: RezultatAI
-      try { r = await deps.ai(prompt) } catch (e) { r = { txt: '', inF: 0, outF: 0, eroare: 'exceptie: ' + String((e as Error)?.message || e).slice(0, 200) } }
+      const apel = async (cine: 'principal' | 'escaladare'): Promise<RezultatAI> => {
+        try { return await deps.ai(prompt, cine) } catch (e) { return { txt: '', inF: 0, outF: 0, eroare: 'exceptie: ' + String((e as Error)?.message || e).slice(0, 200) } }
+      }
+      // 5. rândurile → observații normalizate. ORICE rând primit și nenormalizabil = felia „esuat”, fără observații (un candidat
+      // pierdut nu poate lăsa în urmă o felie „gata”)
+      const interpreteaza = async (txt: string) => {
+        const randuri = parseRaspuns(txt)
+        const obs: Record<string, unknown>[] = []
+        const note: Record<string, number> = {}
+        let pierdute = randuri ? 0 : 1
+        const mostre: string[] = randuri ? [] : [String(txt || '').slice(0, 240)]
+        for (const a of randuri || []) {
+          const rm = randDinTablou(a)
+          const n = rm ? await normalizeazaRand(rm, { textDoc: text, felie: f.text, felie_de_la: f.de_la, conventie: ctxConv.conventie,
+            lot_domeniu: lot.domeniu, lot_nr: lot.domeniu === 'lista' ? lot.loturi : [], rol_sursa: f.s.rol, rol_decis_de: f.s.decis_de }) : null
+          if (!n) {
+            // orice rând nenormalizabil pierde felia (review Jakarinos r1, P1: „UM diferit de m / km” nu dovedește că rândul e
+            // irelevant — umNorm întoarce și forme necunoscute, iar UM-ul modelului nu e verificat în sursă); promptul p2 cere în C6
+            // doar rândurile de lungime, ca să rămână mai puține rânduri de pierdut
+            pierdute++
+            // mostre în raport (conținut extern = date): primele 3 rânduri pierdute, trunchiate, pentru diagnoză
+            // review Jakarinos r4 (P2): serializarea mostrei nu poate întrerupe închiderea feliei (ex. imbricare adâncă → RangeError)
+            if (mostre.length < 3) { let m: string; try { m = JSON.stringify(a) } catch { m = '[mostră neserializabilă]' } mostre.push(String(m).slice(0, 240)) }
+            continue
+          }
+          for (const k of n.note) note[k] = (note[k] || 0) + 1
+          obs.push(n.obs)
+        }
+        const pb = poartaFelie(f.text, f.de_la, f.s.rol, obs as { cantitate_offset: number | null; pozitie_dovedita: boolean }[])
+        return { randuri, obs, note, pierdute, mostre, pb }
+      }
+      let r = await apel('principal')
+      let tokIn = r.inF, tokOut = r.outF
+      let costReal = (() => { const t = xt.tarif(r.inF); return r.inF * t.in + r.outF * t.out })()
+      let modelFolosit = xt.model
+      let rez = r.eroare || r.necunoscut ? null : await interpreteaza(r.txt)
+      // PR A3: escaladarea — CEL MULT O DATĂ pe felie, pe semnale deterministe (rezultat incert / tăiat, rânduri nenormalizabile, deficit
+      // B1); NU pe eroare de rețea / HTTP (nu e o problemă a datelor). Rezervarea extractorului cu escaladare acoperă de la început ambele
+      // apeluri (limita superioară), deci plafonul e verificat ÎNAINTEA oricărui apel; decontarea e una, cu costul real al ambelor.
+      let escaladare: string[] = []
+      if (xt.escaladare && !r.eroare) {
+        if (r.necunoscut) escaladare.push('incert')
+        else if (rez && rez.pierdute) escaladare.push(`nenormalizabile:${rez.pierdute}`)
+        else if (rez && rez.pb.aplicabil && rez.pb.deficit) escaladare.push(`deficit_b1:${rez.pb.acoperite}/${rez.pb.ancore}`)
+        if (escaladare.length) {
+          const r2 = await apel('escaladare')
+          tokIn += r2.inF; tokOut += r2.outF
+          const t2 = xt.escaladare.tarif(r2.inF)
+          costReal += r2.inF * t2.in + r2.outF * t2.out
+          modelFolosit = `${xt.model}+${xt.escaladare.model}`
+          feliiEscaladate++
+          r = r2
+          rez = r2.eroare || r2.necunoscut ? null : await interpreteaza(r2.txt)
+        }
+      } else escaladare = []
+      cost += costReal
       if (r.eroare || r.necunoscut) {
+        // rezultatul final e incert: rezervarea rămâne în consum la suma rezervată („necunoscuta”, ≥ costul real), felia „necunoscut”
         await deps.rpc('fn_ofertare_cb_rezervare_necunoscuta', { p_rezervare_id: rezId })
         await deps.rpc('fn_ofertare_cb_felie_inchide', { p_felie_id: felieId, p_stare: 'necunoscut' })
-        raport.push({ document_id: d.id, felie: f.nr, eroare: r.eroare ?? 'rezultat necunoscut' })
+        raport.push({ document_id: d.id, felie: f.nr, eroare: r.eroare ?? 'rezultat necunoscut', ...(escaladare.length ? { escaladare } : {}) })
         continue
       }
-      const tr = xt.tarif(r.inF)
-      const costReal = r.inF * tr.in + r.outF * tr.out
-      cost += costReal
       const dc = await deps.rpc('fn_ofertare_cb_deconteaza', { p_rezervare_id: rezId, p_cost: Math.round(costReal * 1e4) / 1e4,
-        p_tokeni_in: r.inF, p_tokeni_out: r.outF, p_model: xt.model })
+        p_tokeni_in: tokIn, p_tokeni_out: tokOut, p_model: modelFolosit })
       if (dc.error || dc.data?.refuz) {
         // decontarea n-a mers: costul nu e înregistrat → rezervarea rămâne în consum („necunoscuta”), felia „necunoscut”
         await deps.rpc('fn_ofertare_cb_rezervare_necunoscuta', { p_rezervare_id: rezId })
@@ -228,33 +286,9 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         raport.push({ document_id: d.id, felie: f.nr, eroare: 'decontare: ' + (dc.data?.refuz ?? dc.error?.message) })
         continue
       }
-      // 5. rândurile → observații normalizate. ORICE rând primit și nenormalizabil = felia „esuat”, fără observații (un candidat
-      // pierdut nu poate lăsa în urmă o felie „gata”)
-      const randuri = parseRaspuns(r.txt)
-      const obs: Record<string, unknown>[] = []
-      const note: Record<string, number> = {}
-      let pierdute = randuri ? 0 : 1
-      const mostre: string[] = randuri ? [] : [String(r.txt || '').slice(0, 240)]
-      for (const a of randuri || []) {
-        const rm = randDinTablou(a)
-        const n = rm ? await normalizeazaRand(rm, { textDoc: text, felie: f.text, felie_de_la: f.de_la, conventie: ctxConv.conventie,
-          lot_domeniu: lot.domeniu, lot_nr: lot.domeniu === 'lista' ? lot.loturi : [], rol_sursa: f.s.rol, rol_decis_de: f.s.decis_de }) : null
-        if (!n) {
-          // orice rând nenormalizabil pierde felia (review Jakarinos r1, P1: „UM diferit de m / km” nu dovedește că rândul e
-          // irelevant — umNorm întoarce și forme necunoscute, iar UM-ul modelului nu e verificat în sursă); promptul p2 cere în C6
-          // doar rândurile de lungime, ca să rămână mai puține rânduri de pierdut
-          pierdute++
-          // mostre în raport (conținut extern = date): primele 3 rânduri pierdute, trunchiate, pentru diagnoză
-          // review Jakarinos r4 (P2): serializarea mostrei nu poate întrerupe închiderea feliei (ex. imbricare adâncă → RangeError)
-          if (mostre.length < 3) { let m: string; try { m = JSON.stringify(a) } catch { m = '[mostră neserializabilă]' } mostre.push(String(m).slice(0, 240)) }
-          continue
-        }
-        for (const k of n.note) note[k] = (note[k] || 0) + 1
-        obs.push(n.obs)
-      }
-      const pb = poartaFelie(f.text, f.de_la, f.s.rol, obs as { cantitate_offset: number | null; pozitie_dovedita: boolean }[])
+      const { randuri, obs, note, pierdute, mostre, pb } = rez as NonNullable<typeof rez>
       if (pb.aplicabil && pb.deficit) feliiCuDeficit++
-      const poarta = pb.aplicabil ? { poarta_b1: rezumatPoarta(pb) } : {}
+      const poarta = { ...(pb.aplicabil ? { poarta_b1: rezumatPoarta(pb) } : {}), ...(escaladare.length ? { escaladare, model: modelFolosit } : {}) }
       if (pierdute) {
         await deps.rpc('fn_ofertare_cb_felie_inchide', { p_felie_id: felieId, p_stare: 'esuat' })
         raport.push({ document_id: d.id, felie: f.nr, eroare: randuri ? `${pierdute} rânduri nenormalizabile — felia nu e completă` : 'raspuns neinterpretabil', mostre, note, ...poarta })
@@ -280,7 +314,7 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       raport.push({ document_id: d.id, extragere_id: x, stare: ic.data?.refuz ? 'ramane_in_lucru:' + ic.data.refuz : st })
     }
   }
-  return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate, felii_cu_deficit_b1: feliiCuDeficit,
+  return { status: 200, body: { ok: true, mod: 'structurat', extractor: idExtractor(xt), felii_apelate: feliiApelate, felii_cu_deficit_b1: feliiCuDeficit, felii_escaladate: feliiEscaladate,
     cost_usd: Math.round(cost * 1e4) / 1e4, oprit, raport } }
 }
 

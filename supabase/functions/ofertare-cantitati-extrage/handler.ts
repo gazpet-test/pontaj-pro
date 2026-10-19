@@ -36,7 +36,7 @@ import { poateCheltui } from './poarta.ts'
 import { MESAJ_ADMIN, motivRefuzAdmin } from './poarta_admin.ts'
 import { feliiDocument, type TipLista } from './sectiuni.ts'
 import { extrageStructurat, MAX_IESIRE } from './structurat.ts'
-import { cheamaA } from './extractorA.ts'
+import { cheamaA, MODEL_A, MODEL_S } from './extractorA.ts'
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a)
@@ -569,8 +569,8 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
         .order('incercare', { ascending: false }).limit(1)
       return data?.[0] ?? null
     },
-    ai: async (prompt) => {
-      if (extractor === 'A') return await cheamaA(aiFetch, deps.chei.A, prompt, MAX_IESIRE)
+    ai: async (prompt, cine) => {
+      if (extractor === 'A') return await cheamaA(aiFetch, deps.chei.A, prompt, MAX_IESIRE, cine === 'escaladare' ? MODEL_S : MODEL_A)
       const x = await cheama('openai_mini', prompt, '', '', deps.chei.O)
       // „incomplete” (tăiat la plafonul de ieșire) e un rezultat incert: nu se scrie ca extragere completă
       return x.eroare ? { txt: '', inF: x.inF, outF: x.outF, eroare: x.eroare } : { txt: x.txt, inF: x.inF, outF: x.outF, necunoscut: x.stop !== 'completed' }

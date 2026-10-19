@@ -11,6 +11,11 @@
 import { CAMPURI_RAND } from '../_shared/cantNormalizare.ts'
 
 export const MODEL_A = 'claude-haiku-5-5'
+// escaladarea (PR A3): Claude Sonnet 5.5, $2 / $10 per MTok (fără treaptă). Gândirea NU se oprește cu {type:'disabled'} (400 pe Sonnet 5.5)
+// ci cu {type:'between_tools'}, acceptat la effort ≤ high → effort 'medium' explicit
+export const MODEL_S = 'claude-sonnet-5-5'
+export const TARIF_S = { in: 2 / 1e6, out: 10 / 1e6 }
+export const tarifS = (_tokeniIntrare: number) => TARIF_S
 export const PRAG_TREAPTA = 100_000
 export const TARIF_A = { mic: { in: 0.10 / 1e6, out: 0.50 / 1e6 }, mare: { in: 0.50 / 1e6, out: 2.50 / 1e6 } }
 // treapta după numărul de tokeni de intrare (la rezervare: octeții, care sunt ≥ tokenii — deci treapta nu poate fi subestimată)
@@ -60,14 +65,14 @@ REGULI: nu calcula, nu aduna, nu converti; nu inventa rânduri; null ≠ 0; un r
 export type RezultatA = { txt: string; inF: number; outF: number; eroare?: string; necunoscut?: boolean }
 
 // Un apel; erorile se ÎNTORC. `necunoscut` = rezultat incert (tăiat la max_tokens, refuz, alt stop) — nu se scrie ca extragere completă.
-export async function cheamaA(fetchFn: typeof fetch, cheie: string, prompt: string, maxIesire: number): Promise<RezultatA> {
+export async function cheamaA(fetchFn: typeof fetch, cheie: string, prompt: string, maxIesire: number, model: string = MODEL_A): Promise<RezultatA> {
   const r = await fetchFn('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': cheie, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: MODEL_A, max_tokens: maxIesire,
-      thinking: { type: 'disabled' },
-      output_config: { format: { type: 'json_schema', schema: SCHEMA_A } },
+      model, max_tokens: maxIesire,
+      ...(model === MODEL_S ? { thinking: { type: 'between_tools' } } : { thinking: { type: 'disabled' } }),
+      output_config: { format: { type: 'json_schema', schema: SCHEMA_A }, ...(model === MODEL_S ? { effort: 'medium' } : {}) },
       messages: [{ role: 'user', content: prompt }],
     }),
   })
