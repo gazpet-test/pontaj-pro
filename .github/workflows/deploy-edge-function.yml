@@ -31,6 +31,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+
+      # esbuild (vine prin vite) e necesar pasului „Rezumat repo vs producție” (scripts/edgeDependente.mjs).
+      # Fără el pasul pica la fiecare deploy (ERR_MODULE_NOT_FOUND, 19.10.2026). --ignore-scripts: jobul are
+      # tokenul de deploy, deci nu rulăm scripturile de instalare ale pachetelor; binarul esbuild vine din pachetul de platformă.
+      - name: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Validează slug-urile
         id: val
