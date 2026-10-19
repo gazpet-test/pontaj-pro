@@ -19,6 +19,7 @@ import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereC
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareTermene from './OfertareTermene.jsx'
+import { rcNecitite } from './ofertareRcNecitit.js'
 import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -3622,6 +3623,41 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   )
 }
 
+// (d) Banner „răspuns de la autoritate necitit” (Răzvan 19.10.2026, după RC3 Racari stat 5 zile neprocesat): roșu cât timp un
+// raspuns_clarificare e neprocesat / în lucru / cu eroare; portocaliu dacă e citit parțial. Butonul duce la Documentație, unde e poarta
+// pe cheltuială existentă — bannerul NU pornește nicio procesare.
+function BannerRcNecitit({ licitatie: l, onProceseaza }) {
+  const [docs, setDocs] = useState(null)
+  useEffect(() => {
+    let activ = true
+    supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini_necitite, created_at')
+      .eq('licitatie_id', l.id).eq('tip', 'raspuns_clarificare').then(({ data }) => { if (activ) setDocs(data || []) })
+    return () => { activ = false }
+  }, [l.id])
+  const r = useMemo(() => rcNecitite(docs, l.termen_depunere), [docs, l.termen_depunere])
+  if (!r) return null
+  const col = r.rosu ? G.red : G.orange
+  const fmt = zi => zi ? zi.split('-').reverse().join('.') : '—'
+  const pana = r.zilePanaLaDepunere == null ? '' : r.zilePanaLaDepunere < 0 ? ' · termenul a trecut' : r.zilePanaLaDepunere === 0 ? ' · depunerea e AZI' : ` · ${r.zilePanaLaDepunere} ${r.zilePanaLaDepunere === 1 ? 'zi' : 'zile'} până la depunere`
+  const lista = (r.rosu ? r.necitite : r.partiale).map(d => d.nume_original || `#${d.id}`)
+  return (
+    <div style={{ background: col + '1f', border: `1.5px solid ${col}`, borderRadius: 12, padding: '12px 16px', margin: '-6px 0 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ flex: 1, minWidth: 260 }}>
+        <div style={{ fontWeight: 800, color: col, fontSize: 14.5 }}>
+          {r.rosu
+            ? `🔴 Răspuns de la autoritate NECITIT${r.necitite.length > 1 ? ` (${r.necitite.length})` : ''} din ${fmt(r.deLa)}${r.zileNecitit ? ` — ${r.zileNecitit} ${r.zileNecitit === 1 ? 'zi' : 'zile'}` : ''}${pana}`
+            : `🟠 Răspuns de la autoritate citit PARȚIAL (${r.partiale.length})${pana}`}
+        </div>
+        <div style={{ fontSize: 12.5, color: G.muted, marginTop: 3, wordBreak: 'break-word' }} title={lista.join('\n')}>
+          {lista.slice(0, 3).join(' · ')}{lista.length > 3 ? ` · +${lista.length - 3}` : ''}
+          {r.rosu && r.partiale.length > 0 ? ` — plus ${r.partiale.length} citit parțial` : ''}
+        </div>
+      </div>
+      <button style={{ ...S.btnP, borderRadius: 10, background: col }} onClick={onProceseaza}>📥 Procesează</button>
+    </div>
+  )
+}
+
 function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati, onGoPropunere, onGoClarificari,
   intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
@@ -3755,6 +3791,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
         </div>
         <div style={{ fontSize:15, color:G.muted, margin:'6px 0 18px', maxWidth:900 }}>{l.obiect}</div>
         <div style={{ margin:'-10px 0 12px' }}><CostAI licitatieId={l.id} /></div>
+        <BannerRcNecitit licitatie={l} onProceseaza={() => setTab('documente')} />
 
         {/* KPI */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(175px, 1fr))', gap:12, marginBottom:18 }}>

@@ -1,0 +1,41 @@
+import { describe, it, expect } from 'vitest'
+import { rcNecitite } from './ofertareRcNecitit.js'
+
+// Cazul real: Racari lic. 15 — RC3 (doc 1654) + doc 1655 aduse pe 14.10.2026 17:42 RO, neprocesate; termen 26.10.2026 16:00 RO
+const TERMEN = '2026-10-26T13:00:00+00:00'
+const RC3 = { id: 1654, tip: 'raspuns_clarificare', status_procesare: 'neprocesat', created_at: '2026-10-14T14:42:00Z' }
+const RC4 = { id: 1655, tip: 'raspuns_clarificare', status_procesare: 'neprocesat', created_at: '2026-10-14T14:43:00Z' }
+
+describe('rcNecitite (banner „răspuns necitit”)', () => {
+  it('Racari 19.10: 2 răspunsuri necitite de 5 zile, 7 zile până la depunere → roșu', () => {
+    const r = rcNecitite([RC3, RC4, { id: 1, tip: 'raspuns_clarificare', status_procesare: 'procesat', created_at: '2026-09-16T08:00:00Z' }], TERMEN, '2026-10-19T09:00:00Z')
+    expect(r.rosu).toBe(true)
+    expect(r.necitite.map(d => d.id)).toEqual([1654, 1655])
+    expect(r.deLa).toBe('2026-10-14')
+    expect(r.zileNecitit).toBe(5)
+    expect(r.zilePanaLaDepunere).toBe(7)
+  })
+  it('în_lucru și eroare = necitit; ignorat și procesat nu; alte tipuri nu contează', () => {
+    const r = rcNecitite([{ ...RC3, status_procesare: 'in_lucru' }, { ...RC4, status_procesare: 'eroare' }, { ...RC3, id: 9, status_procesare: 'ignorat' },
+      { ...RC3, id: 10, tip: 'formular' }], TERMEN, '2026-10-19T09:00:00Z')
+    expect(r.necitite.map(d => d.id)).toEqual([1654, 1655])
+    expect(rcNecitite([{ ...RC3, status_procesare: 'procesat' }, { ...RC3, status_procesare: 'ignorat' }], TERMEN)).toBeNull()
+    expect(rcNecitite([], TERMEN)).toBeNull()
+  })
+  it('citit parțial (pagini necitite) → semnal portocaliu, nu roșu', () => {
+    const r = rcNecitite([{ ...RC3, status_procesare: 'partial', pagini_necitite: [14, 15] }], TERMEN, '2026-10-19T09:00:00Z')
+    expect(r.rosu).toBe(false)
+    expect(r.partiale.length).toBe(1)
+    expect(rcNecitite([{ ...RC3, status_procesare: 'partial', pagini_necitite: [] }], TERMEN)).toBeNull()
+  })
+  it('fără termen sau cu status lipsă: tot apare (status lipsă = neprocesat), zilele până la depunere = null', () => {
+    const r = rcNecitite([{ ...RC3, status_procesare: null }], null, '2026-10-19T09:00:00Z')
+    expect(r.rosu).toBe(true)
+    expect(r.zilePanaLaDepunere).toBeNull()
+  })
+  it('ziua pe ora României: adus la 23:30 RO (20:30 UTC) contează pe ziua aceea', () => {
+    const r = rcNecitite([{ ...RC3, created_at: '2026-10-14T20:30:00Z' }], TERMEN, '2026-10-15T06:00:00Z')
+    expect(r.deLa).toBe('2026-10-14')
+    expect(r.zileNecitit).toBe(1)
+  })
+})
