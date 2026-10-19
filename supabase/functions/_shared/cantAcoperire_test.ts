@@ -238,3 +238,11 @@ Deno.test('r14 (Copilot P1/P2): reluarea ierarhică sub același părinte nu mai
   // secvența normală (5.1, 5.2, 6.1, 6.2) rămâne un singur tabel fără semnale
   assertEquals(tabele(inv('5.1 A m 1\n5.2 B m 2\n6.1 C m 3\n6.2 D m 4\n')).map((x) => [x.randuri, x.reluari_atipice, x.goluri_ierarhice]), [[4, 0, []]])
 })
+
+// ── review Copilot B1 r14 ──
+Deno.test('r15 (Copilot P1): rândul plat cu „:” sau cu separatorul lipit de text nu mai dispare; „1.5 …” / „10:30” nu devin rânduri', () => {
+  for (const t of ['1: Conducta m 10\n2 Conducta m 20\n', '1)Conducta m 10\n2 Conducta m 20\n', '1:Conducta m 10\n2 Conducta m 20\n', '1.Conducta m 10\n2 Conducta m 20\n'])
+    assertEquals(inv(t).map((x) => [x.nr_id, x.stare, x.cantitate]), [['1', 'ancora', '10'], ['2', 'ancora', '20']])
+  assertEquals(inv('10:30 sedinta\n').length, 0)
+  assertEquals(inv('**7**. Conducta m 10\n').map((x) => [x.nr_id, x.stare]), [['7', 'ancora']])
+})

@@ -13,7 +13,9 @@ export const UM_REALE = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 
 // începutul unui rând numerotat: „003 SA11G1 …”, „12. Conducta …”, „**7** …”, „**7**. …”, ierarhic DOAR în tabel „5.1 | …” (nr. = prima
 // componentă; în listă „213.76 …” ar fi o linie de prețuri);
 // la tabel (≥ 2 „|”) nr. e prima celulă
-const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**[.)]?\**\s+\S/
+// review Copilot r14: și „1: Conducta”, „1)Conducta”, „1:Conducta”, „1.Conducta” (separator lipit de text, doar înaintea unei LITERE sau
+// paranteze — „1.5 …”, „10:30” nu devin rânduri plate)
+const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**(?:[.):]\**(?:\s+|(?=[\p{L}(\[]))|\s+)\S/u
 // numerotarea ierarhică în LISTĂ („5.1 Conducta”, „1000.1 …”, „5.1 m 10”, „5.1 2509 Teava”, „5.1 3A1iG1 …”, „5.1 A se vedea”, „5.1 (Conducta”)
 // — review Copilot r7 / r8, Gemini r8. Ce o urmează: un cuvânt de ≥ 2 litere; un cuvânt de o literă care NU e o UM (m / t / l) urmat de
 // alt cuvânt; o paranteză; un cod alfanumeric (orice majuscule / minuscule, cu literă și cifră); un cod numeric de ≥ 4 cifre FĂRĂ zecimale;
