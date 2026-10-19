@@ -771,14 +771,17 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // proveniența textului (20261101b): document_id → ultimul rând din ofertare_doc_texte_prov + curent (sha = textul actual).
   // null = se încarcă / eroare → eticheta „proveniență indisponibilă”, NICIODATĂ cea veche (review #795 r2 P1, fail-closed)
   const [provTxt, setProvTxt] = useState(null)
+  const provCerere = useRef(0)   // review #795 r3 P2: un răspuns RPC mai vechi nu suprascrie unul mai nou
   const load = async () => {
     if (elig.incarcat) elig.reincarca()
     supabase.from('ofertare_seap_fisiere').select('cheie, stare, sha256').eq('licitatie_id', licitatie.id)
       .then(r => setEvidSeap(new Map((r.data || []).map(x => [x.cheie, x]))), () => {})
     // ultimul rând pe document + `curent` (sha = textul actual), calculate în BD (20261101b) — textul nu pleacă spre client
     setProvTxt(null)
+    const nrProv = ++provCerere.current
     supabase.rpc('fn_ofertare_cb_doc_prov_curent', { p_licitatie_id: licitatie.id })
-      .then(r => setProvTxt(r.error ? null : provPeDocument(r.data)), () => setProvTxt(null))
+      .then(r => { if (nrProv === provCerere.current) setProvTxt(r.error ? null : provPeDocument(r.data)) },
+            () => { if (nrProv === provCerere.current) setProvTxt(null) })
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')

@@ -43,6 +43,9 @@ export function etichetaProvenienta(p) {
   }
   const titlu = [`Proveniența textului: ${o.text}`, p.producator ? `producător ${p.producator}` : '',
     p.completitudine ? `text ${p.completitudine}` : '', cand ? `din ${cand}` : '',
-    o.nivel === 'atentie' ? 'NU e verificat de om și NU e sursă pentru extragerea cantităților' : ''].filter(Boolean).join(' · ')
+    p.origine === 'ocr_local_neverificat' ? 'produs de OCR local, NEverificat la producere: devine sursă pentru extragerea cantităților ' +
+      'doar după confirmarea omului pe acest text (decizia „text confirmat”)'
+      : o.nivel === 'atentie' ? 'origine necunoscută pentru această versiune a aplicației: nu presupune că textul e verificat' : '']
+    .filter(Boolean).join(' · ')
   return { ...o, titlu }
 }

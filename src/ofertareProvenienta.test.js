@@ -17,7 +17,7 @@ describe('proveniența textului pe document', () => {
     const e = etichetaProvenienta({ prov_id: 1, origine: 'ocr_local_neverificat', producator: 'laborator-ocr-lighton', completitudine: 'integral', curent: true, are_text: true })
     expect(e.nivel).toBe('atentie')
     expect(e.text).toBe('OCR local neverificat')
-    expect(e.titlu).toMatch(/NU e verificat de om/)
+    expect(e.titlu).toMatch(/NEverificat la producere/); expect(e.titlu).toMatch(/confirmarea omului/)
     expect(e.titlu).toMatch(/laborator-ocr-lighton/)
   })
   it('review #795 r1 P1: transcriere veche pe un text schimbat ulterior = atenție, NU „transcriere AI”', () => {
