@@ -540,6 +540,7 @@ export function NotificationBell({ doarModul = null, excludeModul = null, icon =
   }
   
   const iconForType = (type) => {
+    if (type === 'critical') return '🚨'   // escaladări care nu trebuie să se piardă în zgomot (RC necitit, Ofertare 19.10.2026)
     if (type === 'warning' || type === 'error') return '⚠️'
     if (type === 'success') return '✓'
     if (type === 'info') return 'ℹ'
@@ -547,6 +548,7 @@ export function NotificationBell({ doarModul = null, excludeModul = null, icon =
   }
   
   const colorForType = (type) => {
+    if (type === 'critical') return G.red
     if (type === 'warning') return G.yellow
     if (type === 'error') return G.red
     if (type === 'success') return G.green
