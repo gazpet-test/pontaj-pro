@@ -24,6 +24,7 @@
 // RLS nu acopera un job de sistem). Continut extern: raspunsul modelului + paginile cautate — tratat
 // ca date: doar note text si stare NECONFIRMAT, mail doar catre DESTINATARI ficsi.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 import {
   ultimulScan, inventarLot, extrageJSON, leagaLot, egalConstant, nrLoturi, idsLot, ordoneazaDupaIds,
   faraRand, lotSarit, urmatorulPas, areNotaScan, linieNota, construiesteMail, grupeaza, esteTranzitoriu,
@@ -99,12 +100,18 @@ async function scaneazaLot(lot: any[], k: number, r: any) {
     if (!resp.ok) { out.tranzitoriu = esteTranzitoriu(resp.status); out.erori.push(`${nume}: ` + JSON.stringify(j).slice(0, 200)); out.verdicte = faraRand(leagaLot([], lot, r.ref_scan)); return out; }
     out.tokIn = j.usage?.input_tokens || 0; out.tokOut = j.usage?.output_tokens || 0;
     out.cautari = j.usage?.server_tool_use?.web_search_requests || 0;
-    if (j.stop_reason === 'refusal') { out.erori.push(`${nume}: refusal`); out.verdicte = faraRand(leagaLot([], lot, r.ref_scan)); return out; }
+    const eroareAI = j.stop_reason === 'max_tokens' ? 'răspuns AI incomplet (max_tokens)' : mesajRefuz(j);
+    if (eroareAI) { out.erori.push(`${nume}: ${eroareAI}`); out.verdicte = faraRand(leagaLot([], lot, r.ref_scan)); return out; }
     // textul NU e neaparat content[0] — thinking/cautari stau inainte (anti-bug verificat)
-    const brut = (j.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n');
+    const brut = textRaspuns(j);
     const arr = extrageJSON(brut);
     if (!arr) out.erori.push(`${nume}: fără JSON: ` + brut.slice(0, 150));
     out.verdicte = faraRand(leagaLot(arr || [], lot, r.ref_scan));
+    if (arr) {
+      const idsRaspunse = new Set(arr.map((v: any) => String(v?.id ?? '').replace(/^id\s*=\s*/i, '').trim()));
+      const lipsa = lot.filter((n: any) => !idsRaspunse.has(String(n.id)));
+      if (lipsa.length) out.erori.push(`${nume}: răspuns AI parțial; fără verdict pentru id: ${lipsa.map((n: any) => n.id).join(', ')}`);
+    }
   } catch (e) {
     // timeout (AbortSignal) sau retea
     out.tranzitoriu = true;
@@ -210,6 +217,10 @@ async function avanseaza(supa: Supa, runId: number) {
     return;
   }
   if (rez.tranzitoriu) rez.erori = rez.erori.map((x: string) => `${x} (după ${r.incercari_lot} încercări)`);
+  // Un raspuns lipsa/incomplet nu anuleaza un verdict cunoscut deja in aceasta rulare.
+  const existente = new Map((r.verdicte || []).filter((v: any) => v.verdict && v.verdict !== 'necunoscut')
+    .map((v: any) => [String(v.id), v]));
+  rez.verdicte = rez.verdicte.map((v: any) => v.verdict === 'necunoscut' ? existente.get(String(v.id)) || v : v);
   const s = await rpc(supa, 'fn_norm_scan_salveaza_lot', {
     p_run: runId, p_lot: k, p_token: r.lease_token, p_verdicte: rez.verdicte, p_erori: rez.erori,
     p_cautari: rez.cautari, p_tok_in: rez.tokIn, p_tok_out: rez.tokOut,

@@ -72,6 +72,9 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
     ilizibil: 0, no_poza: 0, errors: 0 
   })
   const [totalCost, setTotalCost] = useState(0)
+  // 18.10.2026: modelul afișat vine din răspunsul funcției (meta.model), nu scris de mână — analyze_bon_rompetrol nu e în repo
+  // și se mută pe Haiku 5.5 separat; până atunci, fără meta.model, eticheta rămâne cea veche.
+  const [modelAI, setModelAI] = useState(null)
   const [shouldStop, setShouldStop] = useState(false)
   // 03.10.2026 (audit V3): bucla din runOCR vedea doar valoarea shouldStop de la pornire (closure), deci „Oprește”
   // nu oprea nimic și toate loturile (apeluri AI plătite) rulau până la capăt. Ref-ul e citit la fiecare lot.
@@ -156,6 +159,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
         agg.errors += s.errors || 0
         
         totalCostUsd += data.meta?.cost_usd || 0
+        if (data.meta?.model) setModelAI(String(data.meta.model))
         
         setAggSummary({ ...agg })
         setAllResults([...allRes])
@@ -486,7 +490,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
                 padding:'10px 16px', marginBottom:14, fontSize:12, color:G.muted
               }}>
                 💰 Cost total: <strong style={{color:G.green}}>${totalCost.toFixed(4)}</strong> · 
-                Model: <code style={{fontSize:11, color:G.blue}}>claude-haiku-4-5</code> · 
+                Model: <code style={{fontSize:11, color:G.blue}}>{modelAI || 'claude-haiku-4-5'}</code> · 
                 {allResults.length} alimentări procesate
               </div>
               

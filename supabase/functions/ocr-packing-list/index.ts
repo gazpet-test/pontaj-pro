@@ -6,16 +6,20 @@
 // can_process_achizitii / admin_logistica). Revenire: supabase/functions_retrase/revenire_grupc/ocr-packing-list.v21.ts.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { faraGandire } from '../_shared/gandire.ts'
+import { costApel, modelParsare, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS'
 }
-const MODEL = Deno.env.get('PARSE_CONTRACT_MODEL') || 'claude-haiku-4-5-20251001'
+// 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts) — gândire oprită explicit (pe 5.5 e pornită implicit), max_tokens
+// 8000 → 10400 (tokenizer ~30% mai mare), cost pe prețul nou, textul doar din blocurile `text`, refuzul filtrului → 422 cu mesaj.
+// PARSE_CONTRACT_MODEL se accepta doar din lista permisa; costul se calculeaza pe modelul ales.
+const MODEL = modelParsare(Deno.env.get('PARSE_CONTRACT_MODEL'))
 const MAX_MB = 15
 const BUCKET = 'packing-lists'
-const PRICE_IN = 1 / 1e6, PRICE_OUT = 5 / 1e6
 
 const TIPURI = ['teava','tub_protectie','curba','teu','weldolet','flansa','flansa_oarba','capac_bombat','prezoane','piulite','robinet','fitinguri','imbinare_electroizolanta','godevil','altele']
 
@@ -111,7 +115,7 @@ Deno.serve(async (req: Request) => {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 8000, system: SYSTEM_PROMPT,
+        model: MODEL, max_tokens: 10400, thinking: faraGandire(MODEL), system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: [ contentBlock, { type: 'text', text: 'Extrage toate liniile din acest document de livrare.' } ] }]
       })
     })
@@ -121,20 +125,24 @@ Deno.serve(async (req: Request) => {
     }
 
     const result = await r.json()
+    if (result.stop_reason === 'max_tokens') return new Response(JSON.stringify({ error: 'Raspuns AI incomplet (max_tokens); reincearca' }), { status: 422, headers: CORS })
+    const refuz = mesajRefuz(result)
+    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
+    const raw = textRaspuns(result)
+    if (!raw.trim()) return new Response(JSON.stringify({ error: 'Raspuns AI fara text' }), { status: 422, headers: CORS })
     try {
       const u = result.usage || {}
       await supabaseAdmin.from('ai_usage_log').insert({
         function_name: 'ocr-packing-list', model: MODEL,
         tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
-        cost_usd: (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT,
+        cost_usd: costApel(MODEL, u),
         ref_table: 'comenzi_furnizor', ref_id: comanda_id,
       })
     } catch (_) { /* nu blocheaza */ }
 
-    const raw = result.content?.[0]?.text || '{}'
-    let parsed: any
-    try { parsed = JSON.parse(raw.replace(/```json?|```/g, '').trim()) }
-    catch { return new Response(JSON.stringify({ error: 'Parse failed', raw: raw.slice(0, 400) }), { status: 500, headers: CORS }) }
+    // deno-lint-ignore no-explicit-any
+    const parsed: any = jsonDinText(raw)
+    if (!parsed) return new Response(JSON.stringify({ error: 'Parse failed', raw: raw.slice(0, 400) }), { status: 500, headers: CORS })
 
     const toNum = (v: any) => {
       if (v === null || v === undefined || v === '') return null

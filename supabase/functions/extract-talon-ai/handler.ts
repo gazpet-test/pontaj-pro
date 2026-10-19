@@ -7,12 +7,18 @@
 //      (după poartă); corp JSON `null` tratat ca {}; un rând de jurnal START cu utilizatorul; un tip explicit pentru
 //      `deno check` (vezi mai jos).
 //      Revenire: supabase/functions_retrase/revenire_grupb/extract-talon-ai.v16.ts
+// v18 — 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts). Scos temperature: 0 (pe 5.5 orice valoare ≠ 1 dă 400; formatul
+//      rămâne ținut de prompt + parsarea JSON), gândire oprită explicit, max_tokens 1500 → 2000 (tokenizer ~30% mai mare), textul
+//      citit doar din blocurile `text`; refuzul filtrului de siguranță → 200 { success:false, error } (ca „fara documente”), nu throw.
 // Citește scanurile de talon/carte auto (documente-flota, tip_id=10) cu Claude vision
 // și scrie datele extrase în talon_extract_staging (preview → confirm → apply, NU scrie direct în logistica_active).
 // body: {active_id?} — procesează un vehicul (sau următorul neprocesat)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { poartaTalon } from './acces.ts'
+import { talonUtil } from '../_shared/structuraExtrageri.ts'
+import { faraGandire } from '../_shared/gandire.ts'
+import { costApel, HAIKU_55, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const MAX_DOCS = 4        // max scanuri trimise per vehicul
 const MAX_BYTES = 4_500_000
@@ -116,14 +122,29 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
     const resp = await deps.fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1500, temperature: 0, messages: [{ role: 'user', content }] }),
+      body: JSON.stringify({ model: HAIKU_55, max_tokens: 2000, thinking: faraGandire(HAIKU_55), messages: [{ role: 'user', content }] }),
     })
+    // Jurnal înaintea oricărei ieșiri; clona păstrează răspunsul original pentru fluxul existent.
+    try {
+      const d = await resp.clone().json()
+      if (resp.ok || d?.usage) {
+        const u = d?.usage || {}
+        await supabase.from('ai_usage_log').insert({
+          function_name: 'extract-talon-ai', model: HAIKU_55,
+          tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+          cost_usd: costApel(HAIKU_55, u), ref_table: 'logistica_active', ref_id: activeId,
+        })
+      }
+    } catch (_) { /* nu blocheaza */ }
     if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
     const data = await resp.json()
-    let raw = (data.content?.find((b: { type: string }) => b.type === 'text')?.text || '').trim()
-    raw = raw.replace(/^```(json)?\s*/i, '').replace(/\s*```$/, '')
-    let extras: Record<string, unknown>
-    try { extras = JSON.parse(raw) } catch { throw new Error('JSON invalid de la AI: ' + raw.slice(0, 150)) }
+    if (data.stop_reason === 'max_tokens') return json(200, { success: false, active_id: activeId, error: 'Raspuns AI incomplet (max_tokens); reincearca' })
+    const refuz = mesajRefuz(data)
+    if (refuz) return json(200, { success: false, active_id: activeId, error: refuz })
+    const raw = textRaspuns(data).trim()
+    if (!raw) return json(200, { success: false, active_id: activeId, error: 'Raspuns AI fara text' })
+    const extras: Record<string, unknown> | null = jsonDinText(raw)
+    if (!talonUtil(extras)) return json(200, { success: false, active_id: activeId, error: 'AI nu a extras date utile din talon' })
 
     // compară cu ce e în BD → conflicte
     const { data: activ } = await supabase.from('logistica_active')

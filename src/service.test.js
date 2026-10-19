@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { calcUrmService, urmServiceLevel, PRAG_ZILE, PRAG_KM } from './lib/service.js'
 
-// Data de azi + n zile, în format ISO (ca urmatoarea_data din fișă)
+// Data de azi + n zile, în format calendaristic (ca urmatoarea_data din fișă).
+// Păstrăm ziua locală: toISOString() ar muta miezul nopții în ziua UTC precedentă.
 const peste = (zile) => {
   const d = new Date()
   d.setHours(0, 0, 0, 0)
   d.setDate(d.getDate() + zile)
-  return d.toISOString().slice(0, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 describe('calcUrmService — TKT-0152: nu mai compară zile cu km', () => {

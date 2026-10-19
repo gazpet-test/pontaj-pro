@@ -15,6 +15,7 @@
 //   3. Sub pragul de incredere nu se propune nimic.
 // Ce pica una din verificari se scrie totusi, cu motivul, ca sa se vada de ce.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -93,16 +94,24 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array) {
       messages: [{ role: 'user', content: [continut, { type: 'text', text: 'Ce scrie pe acest act?' }] }],
     }),
   });
+  if (!r.ok) return { eroare: `Anthropic ${r.status}: ${(await r.text()).slice(0, 200)}` };
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
-  const blocuri = Array.isArray(j?.content) ? j.content : [];
-  const txt = blocuri.filter((c: any) => c?.type === 'text').map((c: any) => c.text || '').join('\n');
+  const eroare = j?.stop_reason === 'max_tokens' ? 'Raspuns AI incomplet (max_tokens); reincearca' : mesajRefuz(j);
+  if (eroare) return { eroare, _tin: tin, _tout: tout };
+  const txt = textRaspuns(j);
+  if (!txt.trim()) return { eroare: 'Raspuns AI fara text', _tin: tin, _tout: tout };
   const m = txt.match(/\{[\s\S]*\}/);
   if (!m) {
     return { eroare: (j?.error?.message || `fara text (http ${r.status}, stop ${j?.stop_reason})`).slice(0, 200), _tin: tin, _tout: tout };
   }
   try {
-    return { ...JSON.parse(m[0]), _tin: tin, _tout: tout };
+    const parsed = JSON.parse(m[0]);
+    const campuriIdentitate = ['nume', 'cnp', 'serie', 'numar', 'eliberat_de', 'eliberat_la', 'domiciliu'];
+    if (!parsed || Array.isArray(parsed) || !campuriIdentitate.some((k) => typeof parsed[k] === 'string' && parsed[k].trim())) {
+      return { eroare: 'Raspuns AI fara date de identitate; nu se salveaza propunerea', _tin: tin, _tout: tout };
+    }
+    return { ...parsed, _tin: tin, _tout: tout };
   } catch (e) {
     return { eroare: 'JSON invalid: ' + String((e as Error)?.message).slice(0, 100), _tin: tin, _tout: tout };
   }

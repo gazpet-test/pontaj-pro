@@ -7,6 +7,9 @@
 // Revenire: supabase/functions_retrase/revenire_grupc/parse-contract-pdf.v28.ts.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { faraGandire } from '../_shared/gandire.ts'
+import { contractUtil } from '../_shared/structuraExtrageri.ts'
+import { costApel, modelParsare, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -14,9 +17,11 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS'
 }
 
-const MODEL = Deno.env.get('PARSE_CONTRACT_MODEL') || 'claude-haiku-4-5-20251001'
+// 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts) — gândire oprită explicit (pe 5.5 e pornită implicit), max_tokens
+// 2000 → 2600 (tokenizer ~30% mai mare), cost pe prețul nou, textul doar din blocurile `text`, refuzul filtrului → 422 cu mesaj.
+// PARSE_CONTRACT_MODEL se accepta doar din lista permisa; costul se calculeaza pe modelul ales.
+const MODEL = modelParsare(Deno.env.get('PARSE_CONTRACT_MODEL'))
 const MAX_PDF_MB = 10
-const PRICE_IN = 1 / 1e6, PRICE_OUT = 5 / 1e6
 
 const SYSTEM_PROMPT = `Esti asistent extragere date din contracte comerciale romanesti pentru Gazpet Instal SRL.
 Extrage din PDF si raspunde DOAR cu JSON valid:
@@ -90,7 +95,7 @@ Deno.serve(async (req: Request) => {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 2000, system: SYSTEM_PROMPT,
+        model: MODEL, max_tokens: 2600, thinking: faraGandire(MODEL), system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: [
           { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Pdf } },
           { type: 'text', text: 'Extrage datele contractului.' }
@@ -105,6 +110,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const result = await r.json()
+    if (result.stop_reason === 'max_tokens') return new Response(JSON.stringify({ error: 'Raspuns AI incomplet (max_tokens); reincearca' }), { status: 422, headers: CORS })
+    const refuz = mesajRefuz(result)
+    if (refuz) return new Response(JSON.stringify({ error: refuz }), { status: 422, headers: CORS })
+    const raw = textRaspuns(result)
+    if (!raw.trim()) return new Response(JSON.stringify({ error: 'Raspuns AI fara text' }), { status: 422, headers: CORS })
 
     // CONTORIZARE COST (v7)
     try {
@@ -112,15 +122,14 @@ Deno.serve(async (req: Request) => {
       await supabaseAdmin.from('ai_usage_log').insert({
         function_name: 'parse-contract-pdf', model: MODEL,
         tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
-        cost_usd: (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT,
+        cost_usd: costApel(MODEL, u),
         ref_table: 'contracte_terti', ref_id: contract_id,
       })
     } catch (_) { /* nu blocheaza */ }
 
-    const raw = result.content?.[0]?.text || '{}'
-    let parsed: any
-    try { parsed = JSON.parse(raw.replace(/```json?|```/g, '').trim()) }
-    catch { return new Response(JSON.stringify({ error: 'Parse failed', raw: raw.slice(0,300) }), { status: 500, headers: CORS }) }
+    // deno-lint-ignore no-explicit-any
+    const parsed: any = jsonDinText(raw)
+    if (!contractUtil(parsed)) return new Response(JSON.stringify({ error: 'AI nu a extras date utile din contract; datele existente raman neschimbate' }), { status: 422, headers: CORS })
 
     if (typeof parsed.confidence !== 'number') parsed.confidence = 70
     const toNum = (v: any) => typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.]/g, '')) || null

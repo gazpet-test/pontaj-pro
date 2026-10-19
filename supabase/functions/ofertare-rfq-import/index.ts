@@ -9,7 +9,9 @@
 // cheia publică putea porni citiri plătite și strica prețurile. Aceeași gaură ca în PR #318.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
+import { ofertaValida, pretNormalizat } from './validare.ts'
 import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -93,6 +95,11 @@ Deno.serve(async (req: Request) => {
     })
     const data = await resp.json()
     if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
+    if (data.stop_reason === 'max_tokens') return fail('Raspuns AI incomplet (max_tokens); preturile existente raman neschimbate.')
+    const refuz = mesajRefuz(data)
+    if (refuz) return fail(refuz)
+    const txt = textRaspuns(data)
+    if (!txt.trim()) return fail('Raspuns AI fara text; preturile existente raman neschimbate.')
 
     try {
       const u = data.usage || {}
@@ -101,18 +108,20 @@ Deno.serve(async (req: Request) => {
 
     let parsed: any
     try {
-      const txt = data.content?.find((c: any) => c.type === 'text')?.text || '{}'
       parsed = JSON.parse(txt.replace(/```json?|```/g, '').trim())
     } catch (_) { return fail('AI a răspuns într-un format neașteptat.') }
 
-    const idsValide = new Set(mats.map((m: any) => m.id))
+    const idsValide = new Set<number>(mats.map((m: any) => m.id))
+    // O lista invalida nu poate autoriza inlocuirea preturilor sau a metadatelor.
+    if (!ofertaValida(parsed, idsValide))
+      return fail('AI nu a furnizat o lista valida de preturi; preturile si metadatele existente raman neschimbate.')
     const preturi = (Array.isArray(parsed.preturi) ? parsed.preturi : [])
       .filter((p: any) => idsValide.has(p.material_id))
       .map((p: any) => ({
         oferta_id: of.id,
         material_id: p.material_id,
         denumire_furnizor: typeof p.denumire_furnizor === 'string' ? p.denumire_furnizor.slice(0, 300) : null,
-        pret: Number.isFinite(p.pret) && p.pret >= 0 ? p.pret : null,
+        pret: pretNormalizat(p.pret),
         um: typeof p.um === 'string' ? p.um.slice(0, 30) : null,
         note: typeof p.note === 'string' ? p.note.slice(0, 300) : null,
       }))

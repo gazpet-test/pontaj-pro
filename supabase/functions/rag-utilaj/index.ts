@@ -1,11 +1,17 @@
 // rag-utilaj v6 — 05.10.2026 (#17 faza 2: adus în repo de pe live v14; poarta din _shared/poartaRag.ts — secretul intern din Vault
 //  prin x-intern-secret, rol pe ramura JWT; r2: cotele QR și AI rezervate atomic în BD — fn_rag_qr_rezerva / fn_rag_ask_rezerva). v5 (19.07.2026): ask_qr — acces public
 //  pagina QR /q/:id, răspuns în ROMÂNĂ, 30/zi/utilaj + 200/zi global via rag_qr_log; v4: pdf-lib lazy.
+// v7 — 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts): scos temperature: 0 (pe 5.5 ≠ 1 dă 400; transcrierea rămâne
+//  ținută de prompt), gândire oprită explicit, max_tokens 8000 → 10400 la transcriere și 700 → 1000 la răspuns (tokenizer ~30% mai
+//  mare), refuzul filtrului de siguranță: la transcriere → coada pe 'error' fără reîncercare (scris în BD, nu throw), la răspuns → text.
 // Actions: process_queue / process_pending (cron sau owner) / ask (owner sau modul logistica; ai=true doar editor/admin, 50/zi) / ask_qr (public, activ valid + cotă atomică)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { esteApelIntern } from '../_shared/poartaIntern.ts';
 import { decideAcces, nivelMaxim, type NivelModul } from '../_shared/poartaRag.ts';
+import { faraGandire } from '../_shared/gandire.ts';
+import { lotPaginiValid } from '../_shared/structuraExtrageri.ts';
+import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 
 // Globalul runtime-ului Supabase Edge (Supabase.ai.Session) — nu are tipuri publicate pentru deno check.
 // deno-lint-ignore no-explicit-any
@@ -71,30 +77,56 @@ function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 }
 
-async function transcribeBatch(pdfB64: string, startPage: number, pageCount: number): Promise<Array<{ pagina: number; text: string }>> {
+// Refuzul sau transcrierea invalidă vin ca { refuz } — eroare de business, o scrie apelantul în coadă (nu se aruncă).
+// deno-lint-ignore no-explicit-any
+async function transcribeBatch(pdfB64: string, startPage: number, pageCount: number, supabase: any, documentId: number): Promise<Array<{ pagina: number; text: string }> | { refuz: string }> {
   const prompt = `Acesta este un fragment dintr-o carte tehnică de utilaj industrial (paginile ${startPage}–${startPage + pageCount - 1} din documentul original, numerotare absolută). Transcrie TOT textul lizibil de pe FIECARE pagină (fă OCR dacă e scanat), păstrând limba originală (germană/engleză/română). Include: valori tehnice, tabele (redate ca text simplu), avertismente, denumiri piese, coduri. Ignoră elementele pur grafice. Răspunde DOAR cu JSON valid, fără alt text: [{\"pagina\": <nr absolut începând de la ${startPage}>, \"text\": \"<textul paginii>\"}]. Pagină goală sau doar imagine → text \"\".`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 8000,
-      temperature: 0,
+      model: HAIKU_55,
+      max_tokens: 10400,
+      thinking: faraGandire(HAIKU_55),
       messages: [{ role: 'user', content: [
         { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfB64 } },
         { type: 'text', text: prompt },
       ] }],
     }),
   });
+  try {
+    const d = await resp.clone().json();
+    if (resp.ok || d?.usage) {
+      const u = d?.usage || {};
+      await supabase.from('ai_usage_log').insert({
+        function_name: 'rag-utilaj', model: HAIKU_55,
+        tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+        cost_usd: costApel(HAIKU_55, u), ref_table: 'logistica_documente', ref_id: documentId,
+      });
+    }
+  } catch (_) { /* nu blocheaza */ }
   if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
   const data = await resp.json();
-  let raw = (data.content?.find((b: { type: string }) => b.type === 'text')?.text || '').trim();
-  raw = raw.replace(/^```(json)?\s*/i, '').replace(/\s*```$/, '');
-  try {
-    const arr = JSON.parse(raw);
-    if (Array.isArray(arr)) return arr.filter((e) => e && typeof e.pagina === 'number' && typeof e.text === 'string');
-  } catch (_e) { /* fallback */ }
-  return raw ? [{ pagina: startPage, text: raw }] : [];
+  const refuz = mesajRefuz(data);
+  if (refuz) return { refuz };
+  if (data.stop_reason === 'max_tokens') return { refuz: 'Transcrierea AI este incompletă (limita de tokeni atinsă). Verifică documentul.' };
+  let raw = textRaspuns(data).trim();
+  raw = raw.replace(/^```(json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (!raw) return { refuz: 'Serviciul AI a returnat o transcriere goală. Verifică documentul.' };
+  // v7: fără prefill/temperature 0, modelul poate scrie o frază în jurul JSON-ului → a doua încercare, de la primul `[` la ultimul `]`
+  const a = raw.indexOf('['), b = raw.lastIndexOf(']');
+  for (const cand of [raw, a >= 0 && b > a ? raw.slice(a, b + 1) : '']) {
+    if (!cand) continue;
+    try {
+      const arr = JSON.parse(cand);
+      if (Array.isArray(arr)) {
+        // Inclusiv paginile goale trebuie menționate explicit; nu sărim peste pagini lipsă.
+        if (!lotPaginiValid(arr, startPage, pageCount)) return { refuz: 'Serviciul AI nu a acoperit exact toate paginile lotului. Verifică documentul.' };
+        return arr;
+      }
+    } catch (_e) { /* fallback */ }
+  }
+  return { refuz: 'Serviciul AI a returnat o transcriere JSON invalidă. Verifică documentul.' };
 }
 
 // căutare + (opțional) răspuns AI — comun pt ask și ask_qr
@@ -107,22 +139,41 @@ async function searchAndAnswer(supabase: any, question: string, modelKey: string
   if (mErr) throw mErr;
   if (!matches || matches.length === 0) return { answer: null, sources: [] };
   let answer: string | null = null;
+  let incomplet = false;
   if (withAi) {
     const context = matches.map((m: { sursa: string; referinta: string | null; content: string }, i: number) => `[${i + 1}] ${m.sursa} ${m.referinta || ''}:\n${m.content}`).join('\n\n');
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 700,
+        model: HAIKU_55, max_tokens: 1000, thinking: faraGandire(HAIKU_55),
         system: 'Ești mecanic-șef expert în utilaje industriale (compresoare, boostere). Răspunzi DOAR pe baza extraselor din cartea tehnică furnizate, cu citarea paginii (ex: conform pag. 12). Extrasele pot fi în germană/engleză — răspunde în ROMÂNĂ, tradu ce citezi. Dacă extrasele nu conțin răspunsul, spui clar. Concis, pe înțelesul unui mecanic pe teren.',
         messages: [{ role: 'user', content: `Extrase din cartea tehnică:\n\n${context}\n\nÎntrebare: ${question}` }],
       }),
     });
+    try {
+      const d = await aiRes.clone().json();
+      if (aiRes.ok || d?.usage) {
+        const u = d?.usage || {};
+        await supabase.from('ai_usage_log').insert({
+          function_name: 'rag-utilaj', model: HAIKU_55,
+          tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+          cost_usd: costApel(HAIKU_55, u), ref_table: null, ref_id: null,
+        });
+      }
+    } catch (_) { /* nu blocheaza */ }
+    if (!aiRes.ok) return json(502, { error: 'Serviciul AI nu a răspuns; reîncearcă.' });
     const aiData = await aiRes.json();
-    answer = aiData.content?.find((b: { type: string }) => b.type === 'text')?.text || null;
+    answer = mesajRefuz(aiData) ? 'Modelul AI a refuzat întrebarea (filtru de siguranță). Uită-te în pasajele de mai jos sau întreabă biroul.'
+      : (textRaspuns(aiData) || null);
+    if (aiData.stop_reason === 'max_tokens') {
+      incomplet = true;
+      answer = (answer?.trim() || '') + '\n\nRăspuns incomplet: limita de tokeni a fost atinsă.';
+    }
   }
   return {
     answer,
+    incomplet,
     sources: matches.map((m: { sursa: string; referinta: string | null; content: string; document_id: number; similarity: number }) => ({
       sursa: m.sursa, referinta: m.referinta, content: m.content, document_id: m.document_id, similarity: Math.round(m.similarity * 100) / 100,
     })),
@@ -156,6 +207,7 @@ Deno.serve(async (req: Request) => {
 
       const modelKey = slugKey(`${activ.marca || ''} ${activ.model || ''}`) || `ACTIV-${activeId}`;
       const result = await searchAndAnswer(supabase, question, modelKey, true); // AI mereu — răspuns în română
+      if (result instanceof Response) return result;
       await supabase.from('rag_qr_log').update({ answered: result.sources.length > 0 }).eq('id', logId);
       return json(200, { success: true, ...result });
     }
@@ -242,7 +294,13 @@ Deno.serve(async (req: Request) => {
           copied.forEach((p) => sub.addPage(p));
           const subB64 = b64(await sub.save());
 
-          const entries = await transcribeBatch(subB64, page, count);
+          const entries = await transcribeBatch(subB64, page, count, supabase, item.document_id);
+          if (!Array.isArray(entries)) {
+            // refuz sau transcriere invalidă: coada trece direct pe 'error', fără reîncercări plătite
+            const msg = `[${step}] ${entries.refuz}`;
+            await supabase.from('rag_ingest_queue').update({ attempts: (item.attempts || 0) + 1, error: msg.slice(0, 500), status: 'error' }).eq('id', item.id);
+            return json(200, { success: false, queue_id: item.id, error: msg, chunks_inserted: inserted });
+          }
           const rows: Array<Record<string, unknown>> = [];
           for (const e of entries) {
             const chunks = chunkText(e.text || '');
@@ -300,6 +358,7 @@ Deno.serve(async (req: Request) => {
       const { question, model_key, ai } = body;
       if (!question) return json(400, { error: 'question necesară' });
       const result = await searchAndAnswer(supabase, String(question).slice(0, 500), model_key || null, !!ai);
+      if (result instanceof Response) return result;
       return json(200, { success: true, ...result });
     }
 

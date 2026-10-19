@@ -7,7 +7,7 @@
 // Body: { licitatie_id, document_id, ce } sau { licitatie_id, formular_id, ce:'completare' }. UN document / formular per apel.
 //
 // CITATUL E FAPTUL: fiecare clauză propusă trebuie să aibă `citat` care se regăsește LITERAL în text_extras (comparat după
-// normalizarea spațiilor / ghilimelelor / cratimelor / ş-ș). Clauza fără citat regăsit se ARUNCĂ (raportat în `aruncate`).
+// normalizarea spațiilor / ghilimelelor / cratimelor / ş-ș). Orice clauză invalidă respinge întregul răspuns.
 // Evaluarea Gazpet (opinie) stă separat de citat.
 // Re-rulare: pe documentul dat se șterg DOAR clauzele AI neverificate de om; cele bifate rămân. Formularele se adaugă doar
 // dacă nu există deja un rând cu același cod/denumire pe licitație (stările puse de oameni nu se suprascriu niciodată).
@@ -30,6 +30,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { documentEligibil, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools (17.10.2026)
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
@@ -194,14 +195,17 @@ async function completare(db: any, licId: number, formId: number, KEY: string): 
   })
   const data = await resp.json()
   if (!resp.ok) return json({ error: 'Claude: ' + (data.error?.message || resp.status) })
-  if (data.stop_reason === 'refusal') return json({ error: 'Claude a refuzat' })
+  if (data.stop_reason === 'max_tokens') return json({ error: 'Raspuns AI incomplet (max_tokens); propunerea existenta ramane neschimbata.' })
+  const refuz = mesajRefuz(data)
+  if (refuz) return json({ error: refuz })
+  const out = textRaspuns(data)
+  if (!out.trim()) return json({ error: 'Raspuns AI fara text' })
   const tokIn = data.usage?.input_tokens || 0, tokOut = data.usage?.output_tokens || 0
   const cost = tokIn * PRICE_IN + tokOut * PRICE_OUT
   try { await db.from('ai_usage_log').insert({ function_name: 'ofertare-clauze-formulare', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: cost, ref_table: 'ofertare_formulare_registru', ref_id: formId }) } catch { /* ignorăm */ }
-  const out = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
   let j: any = null
   try { const m = out.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null } catch { /* mai jos */ }
-  const txt = String(j?.text || '').trim()
+  const txt = typeof j?.text === 'string' ? j.text.trim() : ''
   if (!txt) return json({ error: 'răspuns AI neinterpretabil' + (data.stop_reason === 'max_tokens' ? ' (tăiat la max_tokens)' : ''), brut: out.slice(0, 300) })
   const obs = j?.observatii ? `\n\n---\nObservații AI: ${String(j.observatii).slice(0, 600)}` : ''
   const { error: eU } = await db.from('ofertare_formulare_registru').update({ propunere_text: (txt + obs).slice(0, 30000), propunere_la: new Date().toISOString() }).eq('id', formId)
@@ -238,10 +242,13 @@ Deno.serve(async (req: Request) => {
   })
   const data = await resp.json()
   if (!resp.ok) return json({ error: 'Claude: ' + (data.error?.message || resp.status) })
-  if (data.stop_reason === 'refusal') return json({ error: 'Claude a refuzat citirea documentului' })
+  if (data.stop_reason === 'max_tokens') return json({ error: 'Raspuns AI incomplet (max_tokens); clauzele existente raman neschimbate.' })
+  const refuz = mesajRefuz(data)
+  if (refuz) return json({ error: refuz })
+  const out = textRaspuns(data)
+  if (!out.trim()) return json({ error: 'Raspuns AI fara text' })
   const tokIn = data.usage?.input_tokens || 0, tokOut = data.usage?.output_tokens || 0
   try { await db.from('ai_usage_log').insert({ function_name: 'ofertare-clauze-formulare', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * PRICE_IN + tokOut * PRICE_OUT, ref_table: 'ofertare_licitatii', ref_id: licId }) } catch { /* ignorăm */ }
-  const out = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
   let j: any = null
   try { const m = out.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null } catch { /* mai jos */ }
   if (!j || typeof j !== 'object') return json({ error: 'răspuns AI neinterpretabil' + (data.stop_reason === 'max_tokens' ? ' (tăiat la max_tokens)' : ''), brut: out.slice(0, 300) })
@@ -251,6 +258,16 @@ Deno.serve(async (req: Request) => {
   const aruncate: string[] = []
 
   if (ce === 'clauze') {
+    // Validăm TOATE elementele înainte de deduplicare / plafonare și înainte de orice înlocuire.
+    const scalar = (v: any) => v === null || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))
+    if (!Array.isArray(j.clauze) || !j.clauze.length || !j.clauze.every((c: any) =>
+      c !== null && typeof c === 'object' && !Array.isArray(c) &&
+      CATEGORII.includes(c.categorie) && typeof c.citat === 'string' && !!c.citat.trim() &&
+      // doar structura aici; citatul negasit in OCR arunca DOAR clauza respectiva (in `aruncate`, mai jos) — review Gemini #780
+      (c.valoare_structurata === null || (typeof c.valoare_structurata === 'object' && !Array.isArray(c.valoare_structurata))) &&
+      ['locator', 'evaluare_gazpet'].every(k => Object.hasOwn(c, k) && scalar(c[k])) &&
+      (c.impact === null || IMPACT.includes(c.impact))))
+      return json({ error: 'AI a furnizat clauze incomplete sau invalide; clauzele existente raman neschimbate.', aruncate })
     const vazute = new Set<string>()
     const rows = (Array.isArray(j.clauze) ? j.clauze : []).slice(0, 60).flatMap((c: any) => {
       const citat = String(c?.citat || '').trim()
@@ -267,6 +284,7 @@ Deno.serve(async (req: Request) => {
         evaluare_gazpet: str(c?.evaluare_gazpet, 800),
       }]
     })
+    if (!rows.length) return json({ error: 'AI nu a furnizat clauze cu citate validate; clauzele existente raman neschimbate.', aruncate })
     // re-rulare: se înlocuiesc doar propunerile AI neverificate ale acestui document
     const { data: sterse, error: eDel } = await db.from('ofertare_clauze_contract').delete()
       .eq('licitatie_id', licId).eq('document_id', docId).eq('sursa', 'ai').is('verificat_de', null).select('id')

@@ -20,6 +20,7 @@
 //     textul deja extras — oricine trece poarta de modul.
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { scrieCitireNoi } from './scriere.ts'
 import { combinaFelii, imparteCuGranite, parteDinAi, type Parte, rezultatFelii, type Sinteza } from './felii.ts'
 import { type Lucru, lucruPentru, scrieLucru, urmatoareaFelie } from './lucru.ts'
@@ -92,11 +93,17 @@ async function apelAi(KEY: string, continut: unknown[], maxTokens: number, t0: n
     return { ok: false, resp: json({ error: 'Claude: ' + ((e as Error)?.message || 'eroare de rețea') }) }
   }
   if (!resp.ok) return { ok: false, resp: json({ error: 'Claude: ' + (data.error?.message || resp.status) }) }
-  if (data.stop_reason === 'refusal') return { ok: false, resp: json({ error: 'Claude a refuzat citirea documentului' }) }
-  const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+  if (data.stop_reason === 'max_tokens') return { ok: false, resp: json({ error: 'Răspuns AI incomplet (max_tokens); citirea existentă rămâne neschimbată.' }) }
+  const refuz = mesajRefuz(data)
+  if (refuz) return { ok: false, resp: json({ error: refuz }) }
+  const txt = textRaspuns(data)
+  if (!txt.trim()) return { ok: false, resp: json({ error: 'Răspuns AI fără text; citirea existentă rămâne neschimbată.' }) }
   let j: any = null
   try { const m = txt.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null } catch { /* mai jos */ }
   if (!j || typeof j !== 'object') return { ok: false, resp: json({ error: 'răspuns AI neinterpretabil', brut: txt.slice(0, 300) }) }
+  const rezumat = j.rezumat_fragment ?? j.rezumat
+  if (Array.isArray(j) || typeof rezumat !== 'string' || !rezumat.trim())
+    return { ok: false, resp: json({ error: 'Rezultat AI gol sau invalid; citirea existentă rămâne neschimbată.' }) }
   return { ok: true, j, tokIn: data.usage?.input_tokens || 0, tokOut: data.usage?.output_tokens || 0, stop: data.stop_reason ?? null }
 }
 async function logAi(db: any, id: number, tokIn: number, tokOut: number) {
@@ -203,7 +210,7 @@ Deno.serve(async (req: Request) => {
     const r = await apelAi(KEY, [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } }, { type: 'text', text: PROMPT }], 16000, t0, 'pdf')
     if (!r.ok) return r.resp
     await logAi(db, id, r.tokIn, r.tokOut)
-    // aceeași combinare ca pe text: mai multe termene diferite în PDF → conflict_termen; max_tokens → raspuns_ai_taiat (în parte.motive)
+    // Aceeași combinare ca pe text: mai multe termene diferite în PDF → conflict_termen; max_tokens este respins în apelAi.
     rez = rezultatFelii([parteDinAi(r.j, r.stop, r.tokIn, r.tokOut, null)], [], null)   // PDF: fără text → termenele rămân neverificate
   }
 

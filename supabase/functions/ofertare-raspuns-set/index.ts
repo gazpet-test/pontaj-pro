@@ -17,6 +17,8 @@
 // partajat intre 14 functii, e exact greseala care s-ar face la prima eroare de cron.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { inventarValid, comparatieValida } from './validare.ts'
 // 12.10.2026 (MVP loturi, 20261024b): poarta pe document la creeaza_set (documentele neeligibile ies în `excluse`) și la
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
@@ -344,18 +346,23 @@ Deno.serve(async (req: Request) => {
       + '\nCitatele se copiaza literal, cu greselile de scanare cu tot. Lista goala pe o anexa e corecta.'
 
     const { ok, status, d, taiat } = await cheamaAI(KEY, prompt, 8000)
-    // Costul se scrie INAINTE de parsare: la un JSON trunchiat, functia veche iesea din executie
-    // inainte de log si apelul disparea din evidenta, desi fusese platit.
     const tin = d?.usage?.input_tokens || 0, tout = d?.usage?.output_tokens || 0
     const cost = tin * PRET_IN + tout * PRET_OUT
-    await db.from('ai_usage_log').insert({ function_name: 'ofertare-raspuns-set/inventar', model: MODEL,
-      tokens_in: tin, tokens_out: tout, cost_usd: cost, ref_table: 'ofertare_raspuns_set', ref_id: setId })
+    if (d?.usage) {
+      await db.from('ai_usage_log').insert({ function_name: 'ofertare-raspuns-set/inventar', model: MODEL,
+        tokens_in: tin, tokens_out: tout, cost_usd: cost, ref_table: 'ofertare_raspuns_set', ref_id: setId })
+    }
     if (!ok) return json({ error: 'AI: ' + (d?.error?.message || status), cost_usd: cost })
-    const txt = (d.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+    if (taiat) return json({ error: 'Raspuns AI incomplet (max_tokens); inventarul existent ramane neschimbat.', taiat, cost_usd: cost })
+    const refuz = mesajRefuz(d)
+    if (refuz) return json({ error: refuz, cost_usd: cost })
+    const txt = textRaspuns(d)
+    if (!txt.trim()) return json({ error: 'Raspuns AI fara text; inventarul existent ramane neschimbat.', cost_usd: cost })
     const j = extrageJson(txt)
     if (!j) return json({ error: taiat
       ? 'raspunsul AI s-a taiat la plafonul de lungime — documentul are prea mult continut pentru o singura rulare'
       : 'raspuns AI neinterpretabil', taiat, brut: txt.slice(0, 600), cost_usd: cost })
+    if (!inventarValid(j)) return json({ error: 'Inventar AI incomplet sau cu structura invalida; inventarul existent ramane neschimbat.', cost_usd: cost })
 
     const noi: any[] = []
     for (const x of (Array.isArray(j.dispozitii) ? j.dispozitii : [])) {
@@ -439,9 +446,11 @@ Deno.serve(async (req: Request) => {
       return json({ error: `inventarul nu e complet: ${(prop.documente_citite || []).length} din ${nrDocs} documente citite` })
     }
 
-    // Participarea + NORMALIZAREA operațiilor existente ÎNAINTEA oricărui retur (Jakarinos r10 P2, r11 P1 #2 / P2): fiecare
+    // Participarea + NORMALIZAREA în memorie a operațiilor existente (Jakarinos r10 P2, r11 P1 #2 / P2): fiecare
     // operație deja propusă se reverifică pe contextul de ACUM (motivOperatie — aceeași regulă ca la aplicare), inclusiv
-    // amprenta țintei față de cea cu care a fost generată; cele care nu mai trec se mută la om și se persistă.
+    // amprenta țintei față de cea cu care a fost generată; cele care nu mai trec se mută la om.
+    // Dacă apelăm AI, persistăm numai după validarea integrală a răspunsului, în propNou.
+    let normalizareSchimbata = false
     const part = await participareLicitatie(db, set.licitatie_id)
     if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: part.motiv })
     {
@@ -464,14 +473,18 @@ Deno.serve(async (req: Request) => {
         if (scoase.length) {
           const provV: any[] = prop.operatii_provenienta || [], st = new Set(provV.map((x: any) => x.op_id))
           prop = { ...prop, operatii: valide, operatii_provenienta: [...provV, ...scoase.filter((o: any) => !st.has(o.op_id))] }
-          const { error: eN } = await db.from('ofertare_raspuns_set').update({ propunere: prop, updated_at: new Date().toISOString() }).eq('id', setId)
-          if (eN) return json({ error: 'salvare propunere: ' + eN.message })
+          normalizareSchimbata = true
         }
       }
     }
     const facute = new Set<string>((prop.dispozitii_comparate || []) as string[])
     const deFacutToate = toate.filter(x => x.tip === 'efect_posibil' && !facute.has(x.disp_id))
     if (!deFacutToate.length) {
+      // Fără apel AI: reverificarea existentelor este rezultatul complet al acestei runde.
+      if (normalizareSchimbata) {
+        const { error: eN } = await db.from('ofertare_raspuns_set').update({ propunere: prop, updated_at: new Date().toISOString() }).eq('id', setId)
+        if (eN) return json({ error: 'salvare propunere: ' + eN.message })
+      }
       return json({ ok: true, continua: false, mesaj: 'toate dispozitiile cu efect posibil au fost comparate',
         operatii: (prop.operatii || []).length, operatii_provenienta: (prop.operatii_provenienta || []).length || undefined })
     }
@@ -574,12 +587,17 @@ Deno.serve(async (req: Request) => {
     await db.from('ai_usage_log').insert({ function_name: 'ofertare-raspuns-set/compara', model: MODEL,
       tokens_in: tin, tokens_out: tout, cost_usd: cost, ref_table: 'ofertare_raspuns_set', ref_id: setId })
     if (!ok) return json({ error: 'AI: ' + (d?.error?.message || status), cost_usd: cost })
-    const txt = (d.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+    if (taiat) return json({ error: 'Raspuns AI incomplet (max_tokens); dispozitiile nu au fost marcate comparate.', taiat, cost_usd: cost })
+    const refuz = mesajRefuz(d)
+    if (refuz) return json({ error: refuz, cost_usd: cost })
+    const txt = textRaspuns(d)
+    if (!txt.trim()) return json({ error: 'Raspuns AI fara text; dispozitiile nu au fost marcate comparate.', cost_usd: cost })
     const j = extrageJson(txt)
     if (!j) return json({ error: taiat
       ? 'raspunsul AI s-a taiat la plafonul de lungime — documentul are prea mult continut pentru o singura rulare'
       : 'raspuns AI neinterpretabil', taiat, brut: txt.slice(0, 600), cost_usd: cost })
 
+    if (!comparatieValida(j)) return json({ error: 'Comparatie AI incompleta sau cu structura invalida; dispozitiile nu au fost marcate comparate.', cost_usd: cost })
     const idsEligibile = new Set(eligibile.map((c: any) => c.id))
     const docCerinta = new Map<number, number | null>(eligibile.map((c: any) => [Number(c.id), c.sursa_document_id == null ? null : Number(c.sursa_document_id)]))
     const cerTinta = new Map<number, any>(eligibile.map((c: any) => [Number(c.id), c]))

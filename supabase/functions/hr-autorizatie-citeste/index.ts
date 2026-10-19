@@ -1,5 +1,7 @@
 // hr-autorizatie-citeste v2 (17.09.2026) — citeste un document din hr_documente_personale si
 // spune daca e o AUTORIZATIE profesionala, care anume, cu ce numar si ce valabilitate.
+// v3 (18.10.2026): Haiku 4.5 → Haiku 5.5 (gandire adaptive in loc de budget_tokens, pret nou + pragul de
+// 100K, alias pentru UI-ul vechi, refuzul filtrului de siguranta intors ca eroare de business).
 //
 // De ce exista: 480 de autorizatii in platforma, doar 21 legate de un document; 181 de documente
 // personale arata a autorizatie si nu sunt legate de nimic. Legarea pe metadate NU merge —
@@ -21,6 +23,8 @@
 //      pe `profiles`, nu doar pe JWT valid — cheia anon e un JWT valid, vezi PR #318). E apel platit;
 //  (e) confirmare umana OBLIGATORIE: nimic nu ajunge in hr_autorizatii fara apasarea unui om.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
+import { propunereValida } from '../_shared/structuraExtrageri.ts';
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -28,20 +32,20 @@ const CORS: Record<string, string> = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 // Doua modele, alese din UI. Opus e implicit fiindca el greseste mai rar pe scanuri proaste,
-// iar o data de expirare gresita ajunge in alertele de expirare. Haiku e de 5 ori mai ieftin
-// (1/5 $ vs 5/25 $ pe milionul de tokeni) si merita incercat pe un lot mic, comparat cu Opus
-// pe aceleasi documente, inainte de a-l pune pe tot.
-// ATENTIE la gandire: Haiku 4.5 NU accepta `thinking: {type:'adaptive'}` (aia e pe generatia
-// noua), iar Opus 5 da 400 la `budget_tokens`. Configuratia difera per model — vezi `gandire()`.
+// iar o data de expirare gresita ajunge in alertele de expirare. Haiku 5.5 (18.10.2026, inainte
+// Haiku 4.5) e de ~50 de ori mai ieftin pe token (0,10/0,50 $ vs 5/25 $ pe milion, pana la 100K
+// tokeni de prompt) si merita incercat pe un lot mic, comparat cu Opus pe aceleasi documente.
+// Gandire: ambele modele merg pe `adaptive` (pe Haiku 5.5 `budget_tokens` da 400, ca pe Opus 5);
+// Haiku 4.5 mergea cu buget de 2000 de tokeni — intentia (sa gandeasca pe scanuri) ramane.
 const MODELE: Record<string, { in: number; out: number }> = {
   'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 },
-  'claude-haiku-4-5': { in: 1 / 1e6, out: 5 / 1e6 },
+  [HAIKU_55]: { in: 0.10 / 1e6, out: 0.50 / 1e6 }, // costul real il da costApel (pragul de 100K)
 };
+// UI-ul vechi (din cache-ul browserului) trimite inca 'claude-haiku-4-5' — il mutam pe Haiku 5.5, nu pe Opus (implicit, scump).
+const ALIAS: Record<string, string> = { 'claude-haiku-4-5': HAIKU_55 };
 const MODEL_IMPLICIT = 'claude-opus-5';
 const BUCKET = 'documente-personal';
-const gandire = (model: string) => model.startsWith('claude-haiku')
-  ? { thinking: { type: 'enabled', budget_tokens: 2000 } }
-  : { thinking: { type: 'adaptive' } };
+const GANDIRE = { thinking: { type: 'adaptive' } };
 
 function b64(buf: Uint8Array) {
   let s = '';
@@ -102,12 +106,18 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array, sys: strin
     // Anti-bug CLAUDE.md: pe claude-opus-5 gandirea e PORNITA implicit cand `thinking` lipseste, iar
     // tokenii de gandire se scad din max_tokens — taietura cadea in blocul de gandire si raspunsul
     // parea gol. O declaram explicit. `budget_tokens` ar da 400 pe modelul asta.
-    body: JSON.stringify({ model, max_tokens: 8000, ...gandire(model), system: sys,
+    body: JSON.stringify({ model, max_tokens: 8000, ...GANDIRE, system: sys,
       messages: [{ role: 'user', content: [continut, { type: 'text', text: 'Ce este acest document?' }] }] }),
   });
+  if (!r.ok) return { eroare: `Anthropic ${r.status}: ${(await r.text()).slice(0, 300)}` };
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
-  const txt = (Array.isArray(j?.content) ? j.content : []).filter((c: any) => c?.type === 'text').map((c: any) => c.text || '').join('\n');
+  if (j?.stop_reason === 'max_tokens') return { eroare: 'Raspuns AI incomplet (max_tokens); reincearca', _tin: tin, _tout: tout, _usage: j?.usage };
+  // Refuzul filtrului de siguranta (Haiku 5.5 / Opus 5): eroare de business, se intoarce ca orice „fara text”.
+  const refuz = mesajRefuz(j);
+  if (refuz) return { eroare: refuz.slice(0, 200), _tin: tin, _tout: tout, _usage: j?.usage };
+  const txt = textRaspuns(j);
+  if (!txt.trim()) return { eroare: (j?.error?.message || 'Raspuns AI fara text').slice(0, 200), _tin: tin, _tout: tout, _usage: j?.usage };
   // Parsare pe ACOLADE ECHILIBRATE, nu lacoma: `/\{[\s\S]*\}/` ia de la prima acolada pana la
   // ULTIMA din tot textul, deci o singura fraza scrisa dupa JSON facea raspunsul neparsabil.
   // Exact asta a facut „necitibila" recomandarea care conta cel mai mult (v3 hr-recomandare-citeste).
@@ -126,16 +136,16 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array, sys: strin
     if (c === '}') { adanc--; if (adanc === 0 && start >= 0) { obiecte.push(txt.slice(start, i + 1)); start = -1; } if (adanc < 0) adanc = 0; }
   }
   if (!obiecte.length) {
-    return { eroare: (j?.error?.message || `fara text (http ${r.status}, stop ${j?.stop_reason}${j?.stop_reason === 'max_tokens' ? ' — raspunsul s-a taiat, se poate reincerca' : ''})`).slice(0, 200), _tin: tin, _tout: tout };
+    return { eroare: (j?.error?.message || `fara text (http ${r.status}, stop ${j?.stop_reason}${j?.stop_reason === 'max_tokens' ? ' — raspunsul s-a taiat, se poate reincerca' : ''})`).slice(0, 200), _tin: tin, _tout: tout, _usage: j?.usage };
   }
   let ultima = 'niciun obiect JSON valid in raspuns';
   for (const cand of obiecte) {
     try {
       const p = JSON.parse(cand);
-      if (p && typeof p === 'object' && ('este_autorizatie' in p || 'tip_cod' in p || 'ce_este' in p)) return { r: p, _tin: tin, _tout: tout };
+      if (p && typeof p === 'object' && ('este_autorizatie' in p || 'tip_cod' in p || 'ce_este' in p)) return { r: p, _tin: tin, _tout: tout, _usage: j?.usage };
     } catch (e) { ultima = 'JSON invalid: ' + String((e as Error)?.message).slice(0, 100); }
   }
-  return { eroare: ultima, _tin: tin, _tout: tout };
+  return { eroare: ultima, _tin: tin, _tout: tout, _usage: j?.usage };
 }
 
 Deno.serve(async (req: Request) => {
@@ -165,7 +175,8 @@ Deno.serve(async (req: Request) => {
   const id = Number(body?.document_id);
   if (!id) return json({ error: 'document_id lipsa' }, 400);
   // Lista alba: modelul vine din UI, deci nu se ia ca atare. Un nume necunoscut cade pe implicit.
-  const model = (typeof body?.model === 'string' && MODELE[body.model]) ? body.model : MODEL_IMPLICIT;
+  const cerut = typeof body?.model === 'string' ? (ALIAS[body.model] || body.model) : '';
+  const model = MODELE[cerut] ? cerut : MODEL_IMPLICIT;
   const pret = MODELE[model];
 
   const { data: doc, error: eDoc } = await supa.from('hr_documente_personale')
@@ -194,13 +205,14 @@ Deno.serve(async (req: Request) => {
   try {
     await supa.from('ai_usage_log').insert({ function_name: 'hr-autorizatie-citeste', model,
       tokens_in: rez?._tin || 0, tokens_out: rez?._tout || 0,
-      cost_usd: (rez?._tin || 0) * pret.in + (rez?._tout || 0) * pret.out,
+      cost_usd: costApel(model, rez?._usage || { input_tokens: rez?._tin || 0, output_tokens: rez?._tout || 0 }, pret),
       ref_table: 'hr_documente_personale', ref_id: id });
   } catch (_) { /* logul nu blocheaza */ }
   // Eroare de BUSINESS: se intoarce, NU se arunca (anti-bug Edge din CLAUDE.md).
   if (rez?.eroare) return json({ ok: false, document_id: id, eroare: rez.eroare });
 
-  const r = rez.r || {};
+  if (!propunereValida(rez.r)) return json({ ok: false, document_id: id, eroare: 'AI nu a intors o propunere structurata valida; propunerea existenta ramane neschimbata' });
+  const r = rez.r;
   const numePlatforma = (doc as any).emp?.name || '';
   const numeOk = r.nume_persoana ? numeSePotriveste(numePlatforma, String(r.nume_persoana)) : null;
   const incredere = Number(r.incredere) || 0;

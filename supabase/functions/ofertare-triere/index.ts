@@ -40,6 +40,8 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools (17.10.2026)
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { triereValida } from './validare.ts'
 import { marcheazaRiscTransport, matriceDinBD, repartizeazaDinMatrice } from './repartizare.ts'
 import { adnoteazaBonus, bonusPersoana, coduriPePersoana, LIMITA_CANDIDATI_CRITERII, liniiFirma, MAX_CRITERII_CARACTERE, PREFERINTE_COD, selecteazaCriterii, SQL_CRITERII, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
 
@@ -272,21 +274,28 @@ Deno.serve(async (req: Request) => {
       }),
     })
     const data = await resp.json()
-    if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
     const u = data.usage || {}
     const cost = (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT
-    try {
-      await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-triere', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: cost, ref_table: 'ofertare_licitatii', ref_id: lid })
-    } catch (_) {}
+    if (data.usage) {
+      try {
+        await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-triere', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: cost, ref_table: 'ofertare_licitatii', ref_id: lid })
+      } catch (_) {}
+    }
+    if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
+    if (data.stop_reason === 'max_tokens') return fail('Răspuns AI incomplet (max_tokens); trierea existentă rămâne neschimbată.')
+    const refuz = mesajRefuz(data)
+    if (refuz) return fail(refuz)
+    const txt = textRaspuns(data)
+    if (!txt.trim()) return fail('Răspuns AI fără text; trierea existentă rămâne neschimbată.')
 
-    if (data.stop_reason === 'max_tokens') return fail(`Răspunsul AI a fost tăiat la ${u.output_tokens} tokeni — fișa e neobișnuit de lungă; reia trierea.`)
     let parsed: any
-    const txt = String(data.content?.find((c: any) => c.type === 'text')?.text || '')
     try {
       const i = txt.indexOf('{'), j = txt.lastIndexOf('}')
       parsed = JSON.parse(i >= 0 && j > i ? txt.slice(i, j + 1) : '{}')
       if (!parsed || typeof parsed !== 'object' || !Object.keys(parsed).length) throw new Error('gol')
     } catch (_) { return fail(`AI a răspuns într-un format neașteptat (${(data.content || []).map((c: any) => c.type).join(',') || 'fără conținut'}; stop=${data.stop_reason}): ${txt.slice(0, 200)}`) }
+    if (!triereValida(parsed)) return fail('Răspuns AI incomplet sau cu structură invalidă; trierea existentă rămâne neschimbată.')
+    parsed.cumul_functii_interzis = parsed.cumul_functii_interzis ?? false
     const verdict = ['mergem', 'cu_clarificari', 'nu_se_poate', 'neclar'].includes(parsed.verdict) ? parsed.verdict : 'neclar'
     parsed.verdict = verdict
     parsed.roluri = Array.isArray(parsed.roluri) ? parsed.roluri.slice(0, 40) : []

@@ -6,9 +6,14 @@
 //     un tip `any` (vezi mai jos) și dependențele injectate (Deps: client, cheia Anthropic, fetch), ca handler_test.ts
 //     să poată verifica fără rețea că nimic nu se citește / nu se cheltuie înaintea porții.
 //     Revenire: supabase/functions_retrase/revenire_grupa/detect_plate_orphan_msgs.v24.ts
+// v5 - 18.10.2026: Haiku 4.5 → Haiku 5.5 (_shared/haiku55.ts): gândire oprită explicit (pe 5.5 e pornită implicit), max_tokens
+//     400 → 600 (tokenizer ~30% mai mare), cost pe prețul nou (0,10 / 0,50 $ pe 1M), refuzul filtrului de siguranță tratat ca
+//     parse_failed (același rând în BD), nu ca excepție.
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { poartaPlate } from './acces.ts'
+import { faraGandire } from '../_shared/gandire.ts'
+import { costApel, HAIKU_55, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -16,8 +21,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-const MODEL = 'claude-haiku-4-5-20251001'
-const MODEL_PRICING = { input: 1.0, output: 5.0 }
+const MODEL = HAIKU_55
 const MAX_BATCH = 30
 const WINDOW_HOURS = 96
 
@@ -68,26 +72,40 @@ async function downloadPozaAsBase64(
 }
 
 async function callVision(
-  doFetch: typeof fetch, apiKey: string, base64: string, contentType: string
-): Promise<{ text: string; tokensIn: number; tokensOut: number }> {
+  doFetch: typeof fetch, apiKey: string, base64: string, contentType: string,
+  supabaseService: Deps['supa'], msgId: number,
+): Promise<{ text: string; tokensIn: number; tokensOut: number; refuz: string | null; stopReason: string | null }> {
   const resp = await doFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
-      model: MODEL, max_tokens: 400, system: PLATE_PROMPT,
+      model: MODEL, max_tokens: 600, thinking: faraGandire(MODEL), system: PLATE_PROMPT,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } },
         { type: 'text', text: 'Identifica placuta auto din poza. Returneaza JSON.' }
       ]}],
     }),
   })
+  // Inclusiv răspunsurile eșuate, refuzate sau trunchiate care raportează consum.
+  try {
+    const d = await resp.clone().json()
+    if (resp.ok || d?.usage) {
+      const u = d?.usage || {}
+      await supabaseService.from('ai_usage_log').insert({
+        function_name: 'detect_plate_orphan_msgs', model: MODEL,
+        tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0,
+        cost_usd: costApel(MODEL, u), ref_table: 'whatsapp_messages_processed', ref_id: msgId,
+      })
+    }
+  } catch (_) { /* nu blocheaza */ }
   if (!resp.ok) throw new Error(`Anthropic ${resp.status}`)
   const data = await resp.json()
-  const textBlock = (data.content || []).find((b: { type: string; text?: string }) => b.type === 'text')
   return {
-    text: textBlock?.text || '',
+    text: textRaspuns(data),
     tokensIn: data.usage?.input_tokens || 0,
     tokensOut: data.usage?.output_tokens || 0,
+    refuz: mesajRefuz(data),
+    stopReason: data.stop_reason || null,
   }
 }
 
@@ -173,7 +191,7 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
       notes?: string; error?: string
     }
     const results: ResultItem[] = []
-    let totalTokensIn = 0, totalTokensOut = 0
+    let totalTokensIn = 0, totalTokensOut = 0, costUsd = 0
 
     console.log(`[plate-detect] START user=${acces.userId} | orphans=${orphans.length}`)
 
@@ -182,13 +200,16 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
 
       try {
         const { base64, contentType } = await downloadPozaAsBase64(supabaseService, msg.photo_path as string)
-        const visionRes = await callVision(deps.fetch, anthropicKey, base64, contentType)
+        const visionRes = await callVision(deps.fetch, anthropicKey, base64, contentType, supabaseService, msg.id as number)
         totalTokensIn += visionRes.tokensIn
         totalTokensOut += visionRes.tokensOut
+        // costul pe APEL: pragul de 100K tokeni al Haiku 5.5 se judecă pe fiecare prompt, nu pe totalul lotului
+        costUsd += costApel(MODEL, { input_tokens: visionRes.tokensIn, output_tokens: visionRes.tokensOut })
 
-        const parsed = extractJson(visionRes.text)
+        const incomplet = visionRes.stopReason === 'max_tokens'
+        const parsed = incomplet || visionRes.refuz || !visionRes.text.trim() ? null : extractJson(visionRes.text)
         if (!parsed) {
-          result.error = 'parse_failed'
+          result.error = incomplet ? 'Raspuns AI incomplet (max_tokens); reincearca' : visionRes.refuz ? `refuz_ai: ${visionRes.refuz}` : 'parse_failed'
           await supabaseService.from('whatsapp_messages_processed')
             .update({ status: 'no_match', plate_detected: 'FAILED' })
             .eq('id', msg.id as number)
@@ -281,7 +302,6 @@ export async function handler(req: Request, faDeps: () => Deps): Promise<Respons
       matched: results.filter(r => r.matched_alim_id).length,
       errors: results.filter(r => r.error).length,
     }
-    const costUsd = (totalTokensIn * MODEL_PRICING.input + totalTokensOut * MODEL_PRICING.output) / 1_000_000
     console.log(`[plate-detect] OK user=${acces.userId} | ${JSON.stringify(summary)} | $${costUsd.toFixed(5)}`)
 
     return new Response(JSON.stringify({

@@ -14,6 +14,8 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { esteApelIntern } from '../_shared/poartaIntern.ts'
+import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { clasificareUtila } from '../_shared/structuraExtrageri.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ai-documente-inbox'
@@ -130,8 +132,12 @@ async function callClaude(base64: string, mime: string, fisierNume: string): Pro
     headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({ model: MODEL, max_tokens: 1024, messages: [{ role: 'user', content: [block, { type: 'text', text }] }] }),
   })
+  if (!resp.ok) return { ok: false, err: `Anthropic ${resp.status}: ${(await resp.text()).slice(0, 300)}` }
   const data = await resp.json()
-  if (!resp.ok) return { ok: false, err: `Claude: ${data.error?.message || resp.status}` }
+  if (data.stop_reason === 'max_tokens') return { ok: false, err: 'Raspuns AI incomplet (max_tokens); reincearca' }
+  const refuz = mesajRefuz(data)
+  if (refuz) return { ok: false, err: refuz }
+  if (!textRaspuns(data).trim()) return { ok: false, err: 'Raspuns AI fara text' }
   return { ok: true, data }
 }
 
@@ -176,10 +182,24 @@ Deno.serve(async (req: Request) => {
 
     let parsed: any
     try {
-      const txt = resp.content?.find((c: any) => c.type === 'text')?.text || '{}'
+      const txt = textRaspuns(resp)
       parsed = JSON.parse(txt.replace(/```json?|```/g, '').trim())
     } catch (_) { return await eroare('AI a raspuns intr-un format neasteptat.') }
 
+    if (!clasificareUtila(parsed)) return await eroare('AI nu a extras o clasificare cu date utile; payload-ul existent ramane neschimbat.')
+    // Numerele citite ca text (CNP, număr document etc.) se pot converti fără a pierde câmpul.
+    for (const cheie of ['entitate_hint', 'titlu_scurt']) {
+      if (typeof parsed[cheie] === 'number') parsed[cheie] = String(parsed[cheie])
+    }
+    for (const grup of ['campuri', 'date_document', 'date_proiect']) {
+      if (parsed[grup] && typeof parsed[grup] === 'object') {
+        for (const [k, v] of Object.entries(parsed[grup])) {
+          const esteText = grup === 'campuri' || (grup === 'date_document' && ['numar', 'emitent'].includes(k)) ||
+            (grup === 'date_proiect' && k === 'nr_ordin')
+          if (esteText && typeof v === 'number' && Number.isFinite(v)) parsed[grup][k] = String(v)
+        }
+      }
+    }
     const modulParsed: string | null = ['executie', 'hr', 'logistica', 'financiar'].includes(parsed.modul) ? parsed.modul : null
     // v18: modulul pre-setat la upload (panoul UPA, contextul de proiect din executie)
     // are prioritate — documentul rămâne în coada din care a fost urcat.

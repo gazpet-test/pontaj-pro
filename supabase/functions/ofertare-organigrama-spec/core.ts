@@ -1,6 +1,20 @@
 // R16: absența unei informații nu dovedește că obligația nu există.
 const boolNecunoscut = (v: unknown): boolean | null => typeof v === 'boolean' ? v : null
 
+// Validăm înainte de normalizare: valorile implicite nu dovedesc că AI-ul a citit toate câmpurile.
+export function specOrganigramaValida(input: unknown): boolean {
+  const j: any = input
+  const obiect = (v: any) => v && typeof v === 'object' && !Array.isArray(v)
+  const bool = (v: unknown) => typeof v === 'boolean' || v === null
+  if (!obiect(j) || !['obligatorie', 'per_operator', 'corelare_grafic'].every(k => bool(j[k]))) return false
+  if (!['faze', 'roluri_cerute', 'personal_pe_categorii', 'documente_suport', 'domenii_isc_din_obiect', 'avertismente'].every(k => Array.isArray(j[k]))) return false
+  if (!obiect(j.linii_cerute) || !['asociati', 'subcontractanti', 'beneficiar', 'proiectant', 'diriginte', 'biunivoc_cu_seful_de_santier'].every(k => bool(j.linii_cerute[k]))) return false
+  if (!obiect(j.tabel_nominal) || !bool(j.tabel_nominal.cerut) || !Array.isArray(j.tabel_nominal.coloane)) return false
+  if (!obiect(j.format) || !(j.format.observatii === null || typeof j.format.observatii === 'string')) return false
+  const spec = normalizeazaSpecOrganigrama(j)
+  return spec.faze.length > 0 && j.roluri_cerute.every((r: any) => typeof r?.rol === 'string' && !!r.rol.trim())
+}
+
 export function normalizeazaSpecOrganigrama(input: unknown) {
   const j: any = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
   // Normalizare pe contractul JSON (UI-ul se bazează pe forma exactă)
