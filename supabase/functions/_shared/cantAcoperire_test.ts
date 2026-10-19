@@ -252,7 +252,8 @@ Deno.test('r16 (Copilot P1): ierarhicul cu separator lipit de text (5.2:Conducta
   for (const s of [':', ')', '.'])
     assertEquals(inv(`5.1 Conducta m 10\n5.2${s}Conducta m 20\n`).map((x) => [x.nr_id, x.stare]), [['5.1', 'ancora'], ['5.2', 'ancora']])
   // „1.5m” / „1.5 12” nu devin rânduri sigure
-  assertEquals(inv('1.5m adancime\n').length, 0)
+  // r23: „1.5m adancime” intră ca rând slab lipit — incert posibila_continuare, în afara secvenței (nu rând sigur)
+  assertEquals(inv('1.5m adancime\n').map((x) => [x.nr_id, x.motiv]), [['1.5', 'posibila_continuare']])
 })
 Deno.test('r16 (Gemini P2): reluarea ierarhică după alt capitol (5.1, 5.3, 6.1, 5.1, 5.2, 5.3) păstrează golul 5.2 al primului tabel', () => {
   const tb = tabele(inv('5.1 A m 1\n5.3 B m 2\n6.1 C m 3\n5.1 D m 4\n5.2 E m 5\n5.3 F m 6\n'))
@@ -322,4 +323,12 @@ Deno.test('r22 (Copilot r21 P1): linia cu „|” doar spre coadă și nr. lipit
   assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare']])
   assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
   assertEquals(inv('5.1 | A | m | 1 |\n5.2Conducta | m | 10 |\n').map((x) => [x.nr_id, x.motiv]), [['5.1', null], ['5.2', 'posibila_continuare']])
+})
+
+// ── review Copilot B1 r22 ──
+Deno.test('r23 (Copilot r22 P1): pe LISTĂ pură, nr. lipit de text („2Conducta m 10”) nu dispare — incert posibila_continuare', () => {
+  const r = inv('1 Conducta m 1\n2Conducta m 10\n')
+  assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare']])
+  assertEquals(tabele(r).some((x) => x.secventa_nedeterminata), true)
+  assertEquals(inv('5.1 Conducta m 1\n5.2Conducta m 10\n').map((x) => [x.nr_id, x.motiv]), [['5.1', null], ['5.2', 'posibila_continuare']])
 })

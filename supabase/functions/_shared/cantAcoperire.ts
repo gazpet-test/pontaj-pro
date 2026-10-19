@@ -24,6 +24,9 @@ const RE_NR_LISTA = /^\s*\**\s*(\d{1,4})\**(?:[.):]\**(?:\s+|(?=[\p{L}(\[]))|\s+
 const RE_NR_LISTA_IER_STRUCT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})+)\**(?:[.):]\**(?:\s+|(?=[\p{L}(\[]))|\s+)(?=\S)/u
 // nr. crt. SINGUR pe linie („1”, „5.1”, „12.”) — OCR care rupe după nr. (review Copilot r12): rând „slab”; cu cantitate + UM pe linia
 // următoare devine rând normal („1” / „Conducta m 10”), altfel incert „posibila_continuare” (în inventar, tabel nedeterminat)
+// nr. LIPIT direct de o literă la începutul liniei („2Conducta m 10”, „5.2Conducta …”, review Copilot r22): rând „slab lipit” — ÎNTOTDEAUNA
+// posibila_continuare (în inventar, în afara secvenței, tabel nedeterminat); forma sigură de listă NU se relaxează
+const RE_NR_LISTA_LIPIT = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**(?=\p{L})/u
 const RE_NR_SINGUR = /^\s*\**\s*(\d{1,4}(?:\.\d{1,3})*)\**[.):]?\**\s*$/
 // fără excludere de „linii de prețuri” (review Copilot r11): un id ierarhic urmat numai de numere („213.76 65795.33” sau un rând real
 // degradat „5.1 12,50”) intră ca rând „slab” → incert „posibila_continuare” (în inventar, în afara secvenței, tabel nedeterminat).
@@ -84,7 +87,7 @@ function codDupaNr(rest: string): { cod: string | null; de: number; pana: number
 }
 
 // rândul numerotat al liniei: nr. + poziția de după el, sau null
-function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: boolean; slab?: boolean; slabTabel?: boolean } | null {
+function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: boolean; slab?: boolean; slabTabel?: boolean; slabLipit?: boolean } | null {
   if (RE_SEPARATOR.test(l)) return null
   const pipe = (l.match(/\|/g) || []).length >= 2
   const mdTare = pipe ? RE_NR_MARKDOWN.exec(l) : null
@@ -98,7 +101,8 @@ function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: bo
   // forma slabă de celulă: și pe linia cu „|” doar spre coadă, când forma de listă nu se potrivește (review Copilot r21: „2Conducta | m |
   // 10 |”) — tot slabTabel, deci ÎNTOTDEAUNA posibila_continuare (în afara secvenței)
   const mdSlab = pipe && !mdTare && !lista ? RE_NR_MARKDOWN_SLAB.exec(l) : null
-  const m = mdTare ?? lista ?? mdSlab
+  const lipit = !markdown && !lista && !mdSlab ? RE_NR_LISTA_LIPIT.exec(l) : null
+  const m = mdTare ?? lista ?? mdSlab ?? lipit
   if (!m) return null
   const md = markdown || m === mdSlab
   const id = m[1]
@@ -106,7 +110,7 @@ function nrRand(l: string): { nr: number; id: string; dupa: number; markdown: bo
   if (!(nr >= 1)) return null
   // rândul de numerotare a coloanelor sub antet („0 | 1 | 2 | 3 …”, „1 | 2 | 3 | 4”) nu e un rând
   if (md && /^[\s|]*\d{1,2}(?:\s*\|\s*\d{1,2}){2,}[\s|]*$/.test(l)) return null
-  return { nr, id, dupa: m.index + m[0].length - (md || m === ier || m === slab ? 0 : 1), markdown: md, ...(slab && m === slab ? { slab: true } : {}), ...(mdSlab && m === mdSlab ? { slab: true, slabTabel: true } : {}) }
+  return { nr, id, dupa: m.index + m[0].length - (md || m === ier || m === slab || m === lipit ? 0 : 1), markdown: md, ...(slab && m === slab ? { slab: true } : {}), ...(mdSlab && m === mdSlab ? { slab: true, slabTabel: true } : {}), ...(lipit && m === lipit ? { slab: true, slabLipit: true } : {}) }
 }
 
 // cantitatea + UM ale unei linii (în copia închisă), excluzând tokenurile nr. și cod după POZIȚIE
@@ -141,7 +145,7 @@ export function inventarRanduri(text: string): RandInventar[] {
     po += lo.length + 1; pi += li.length + 1
     const mp = RE_MARCAJ.exec(lo)
     if (mp) { pagina = Number(mp[1]); continue }
-    let r: { nr: number | null; id: string | null; dupa: number; markdown: boolean; slab?: boolean; slabTabel?: boolean } | null = nrRand(li)
+    let r: { nr: number | null; id: string | null; dupa: number; markdown: boolean; slab?: boolean; slabTabel?: boolean; slabLipit?: boolean } | null = nrRand(li)
     // rând de tabel FĂRĂ nr. (C6 doar cu cod de resursă): intră în inventar dacă prima celulă e un cod — altfel un tabel nenumerotat
     // ar avea inventar gol și ar ascunde orice omisiune (review r1)
     if (!r && (li.match(/\|/g) || []).length >= 2 && !RE_SEPARATOR.test(li) && codDupaNr(li).cod) r = { nr: null, id: null, dupa: 0, markdown: true }
@@ -173,7 +177,7 @@ export function inventarRanduri(text: string): RandInventar[] {
     // de nr. crt., deci nu intră în secvență (nu poate acoperi un gol); cantitatea / codul rămân pe rând pentru B2
     // statutul „în afara secvenței” al rândului slab NU depinde de alt motiv de incertitudine (review Copilot r19: „separator_mii_spatiu”
     // îl readucea în secvență, unde putea acoperi un gol); la fel pentru rândul de LISTĂ ambiguu (review Copilot r20)
-    const posibilaContinuare = r.slabTabel === true || (r.slab === true && !cu) || !r.markdown && !c.cod && !cu && r.nr !== null && (ultimMarkdown || (ultimLista !== null &&
+    const posibilaContinuare = r.slabTabel === true || r.slabLipit === true || (r.slab === true && !cu) || !r.markdown && !c.cod && !cu && r.nr !== null && (ultimMarkdown || (ultimLista !== null &&
         ((ultimLista.zero && !/^0\d/.test(r.id ?? '')) || ![ultimLista.nr, ultimLista.nr + 1, 1].includes(r.nr))))
     if (posibilaContinuare) motiv = 'posibila_continuare'
     if (!cu && !motiv) motiv = r.markdown || c.cod ? 'um_sau_cantitate_nerecunoscute' : 'lista_fara_cod_sau_cantitate'
