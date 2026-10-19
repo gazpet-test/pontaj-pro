@@ -298,3 +298,13 @@ Deno.test('r19 (Copilot r18 P1): celula slabă cu cantitate („| 2m adancime | 
   assertEquals(r.map((x) => [x.nr_id, x.stare, x.motiv]), [['1', 'ancora', null], ['2', 'incert', 'posibila_continuare'], ['3', 'ancora', null]])
   assertEquals(tabele(r).map((x) => [x.goluri, x.secventa_nedeterminata]), [[[2], true]])
 })
+
+// ── review Copilot B1 r19 ──
+Deno.test('r20 (Copilot r19 P1): rândul slab cu separator de mii prin spațiu rămâne în afara secvenței (tabel și listă)', () => {
+  const r = inv('| 1 | A | m | 1 |\n| 2m adancime | m | 1 234 |\n| 3 | C | m | 1 |\n')
+  assertEquals(r.map((x) => [x.nr_id, x.motiv]), [['1', null], ['2', 'posibila_continuare'], ['3', null]])
+  assertEquals(tabele(r).map((x) => [x.goluri, x.secventa_nedeterminata]), [[[2], true]])
+  const l = inv('5.1 A m 1\n5.2 12,50 1 234\n5.3 C m 1\n')
+  assertEquals(l.find((x) => x.nr_id === '5.2')?.motiv, 'posibila_continuare')
+  assertEquals(tabele(l).map((x) => [x.goluri_ierarhice, x.secventa_nedeterminata]), [[['5.2'], true]])
+})
