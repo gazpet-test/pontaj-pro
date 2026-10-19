@@ -263,6 +263,8 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
+Banca exclude din esantion si masuratori zonele cu ancore lipsa/neunice in B sau ordine ancora sus → text → ancora jos incalcata in oricare cititor; le numara separat ca `ambigue_ancora`.
+
 `python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 55 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
