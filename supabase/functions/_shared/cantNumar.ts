@@ -304,7 +304,9 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
 // nici nu poate dovedi nimic: verificaRand îl tratează ca „cod declarat, negăsit”.
 export function codComparabil(v: unknown): string | null {
   const t = String(v ?? '').replace(/\*/g, '').trim().toUpperCase()
-  if (t.length < 3 || t.length > 40 || !/^[A-Z0-9][A-Z0-9.\-\/]*$/.test(t)) return null
+  // 20.10.2026 (proba Răcari, A vs B): codurile de normă cu „%” la coadă („GD19A1%”, „GD20A1%”) sunt identificatori reali — înainte
+  // ieșeau „cod_neverificabil” (0 din 32 de rânduri dovedite); „%” e acceptat DOAR ca ultim caracter
+  if (t.length < 3 || t.length > 40 || !/^[A-Z0-9][A-Z0-9.\-\/]*%?$/.test(t)) return null
   return /\d/.test(t) && (/[A-Z]/.test(t) || /\d{5,}/.test(t)) ? t : null
 }
 
