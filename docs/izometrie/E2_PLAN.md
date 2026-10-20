@@ -127,7 +127,21 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 - **Mutate din E2a** (nu sunt folosite de nimic în E2a; intră cu ecranele/fluxurile care le scriu, fiecare cu migrarea și testele ei): `teava_certificate*` → E3 (certificatul 3.1 la recepție); `izo_tronson_config` (executant, sens, perete proiectat) și `izo_surse_proiect` / `izo_ax_ancore` → E2b/E4b; `fn_izo_dezambiguare` → E2b (doar dacă preview-ul arată coliziuni reale; azi importul le refuză).
 - **UI în E2a**: `STARE_META` din Magazie cu stările noi; filtrul din bonuri (bucățile beneficiar ale proiectelor protejate nu apar), tolerant la funcția încă neaplicată. Avertizarea de pe transport (Q-E2-1 = C) intră în E2b.
 - **Preview-ul soldului inițial** (`scripts/izometrie/preview_e2_stoc.mjs`) vine în PR-ul următor (E2a-2), înainte de orice import; importul și activarea rămân pe decizia de dimineață a lui Razvan.
-- **Harness**: `scripts/test_izometrie_e2a.sh` (PG16 local): 82 de verificări SQL + importul concurent + refuzurile/revenirea. **Limită asumată**: în harness `postgres` e superuser, deci primitivele CREATE ROLE / ALTER OWNER / `pg_auth_members` pe Supabase se dovedesc doar pe branch (P1).
+- **Harness**: `scripts/test_izometrie_e2a.sh` (PG16 local): 116 verificări SQL + importul concurent + conexiune proaspătă / REPEATABLE READ + cursele activare↔recepție și dezactivare↔import + refuzurile/revenirea. **Limită asumată**: în harness `postgres` e superuser, deci primitivele CREATE ROLE / ALTER OWNER / `pg_auth_members` pe Supabase se dovedesc doar pe branch (P1).
+
+### 4c. Corecturi după review-ul PR #806 (Codex P1/P2, Copilot + Gemini A–E)
+
+- **Garda strictă** (P1-1): `fn_izo_garda_scriitor` întoarce `false`, nu NULL, când marcajul lipsește (conexiune nouă); toate verificările folosesc `IS NOT TRUE`.
+- **Protecție permanentă** (P1-2): un rând de registru (`tip_cod` setat) e protejat la orice nivel; „off” e refuzat după primul fapt (inclusiv stornat); un rând de registru nu poate sta pe un proiect off.
+- **Lock pe proiect** (P1-3): `pg_advisory_xact_lock(73010, proiect)` — exclusiv în nivel / import / storno, partajat în garda pe bucăți, înainte de citirea nivelului; doar READ COMMITTED (REPEATABLE READ refuzat pe scrierile beneficiar și în funcțiile registrului).
+- **Coloanele noi doar pe registru** (P1-4): CHECK `magazie_bucati_izo_doar_registru_check`; revenirea face preflight pe toate coloanele noi.
+- **Activarea** (A, P2-5): 0 bucăți beneficiar pe proiect, oricare; porțile verificate la apel prin `fn_izo_porti_lipsa()` (19 triggere ENABLE ALWAYS, RLS, RESTRICTIVE, rol, ACL) — aceeași funcție e postcondiția 5.
+- **Importul** (P2-6): payload validat fail-closed (cheie lipsă / null / tip greșit), surse cu fișier unic, fiecare rând trimite la o sursă declarată; `pe_tronson` = doar `tronson_id`, originea în `atribute.depozit_origine_id` (D, CHECK de loc exclusiv).
+- **Citirea** (C, P2-8): `fn_izo_citire` = owner sau atribuire activă și valabilă azi pe ACEL proiect; accesul global prin modulul magazie/executie a fost scos — o lărgire se propune separat lui Razvan.
+- **Reparentarea** (P2-9): țevi între pachete, pachete între proiecte/tronsoane, tronsoane între proiecte, depozit din registru pe alt site — refuzate dinspre/spre un proiect protejat. Atribuirile: fără DELETE/TRUNCATE, scrise doar de `postgres`.
+- **Amprenta** extinsă: `proconfig`, volatilitatea, RLS/FORCE RLS, ACL-ul `magazie_bucati_id_seq`, parametrii secvențelor; secvența `magazie_bucati.id` numită explicit (precondiția 0g).
+- **UI**: `StocTrasabilTab` paginat (registrul trece de 1000 de rânduri).
+- **Rămas pentru E6 (notă P3)**: `server_ver` vine din `nextval`, deci e unic dar nu ordonat la commit — două tranzacții concurente pot comite în ordine inversă numerelor. Delta-sync-ul din E6 nu se poate baza pe „> ultimul văzut” fără o fereastră de siguranță sau un marcaj la commit; se decide acolo.
 
 ## 5. Review-ul planului (Copilot + Gemini, GO cu condiții) → unde e integrat
 

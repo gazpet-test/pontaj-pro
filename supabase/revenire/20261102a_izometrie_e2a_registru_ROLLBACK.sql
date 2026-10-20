@@ -3,7 +3,7 @@
 -- Scoate tot ce a pus 20261102a: rolul izo_registru_writer, tabelele izo (config, atribuiri, importuri, registrul),
 --   secvența izo_server_ver_seq, funcțiile fn_izo_*, triggerele și politicile izo, coloanele/CHECK-urile/indexurile
 --   noi de pe magazie_bucati (CHECK-urile stare/locatie_tip revin la forma live din 20.10.2026), triggerele de pe
---   executie_tevi și executie_bonuri_consum_linii.
+--   executie_tevi / executie_pachete_lansare / executie_tronsoane / logistica_depozite / executie_bonuri_consum_linii.
 -- REFUZĂ dacă există orice dată a modulului: rânduri în izo_proiect_config / izo_atribuiri / izo_importuri /
 --   magazie_bucati_evenimente / magazie_bucati_miscari sau bucăți cu tip_cod setat. Un registru cu date reale nu se
 --   scoate pe tăcute: întâi storno + export + decizia lui Răzvan, într-o operație separată.
@@ -26,7 +26,7 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    '1e5e719a57aa69f286215bdc1a4bd3cb'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    '989261bfe232dd0983bec6fdcaef4c28'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
@@ -47,14 +47,21 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
   LOCK TABLE public.magazie_bucati, public.izo_proiect_config, public.izo_atribuiri, public.izo_importuri,
              public.magazie_bucati_evenimente, public.magazie_bucati_miscari, public.executie_tevi, public.executie_pachete_lansare,
-             public.executie_bonuri_consum_linii IN ACCESS EXCLUSIVE MODE;
+             public.executie_bonuri_consum_linii, public.executie_tronsoane, public.logistica_depozite IN ACCESS EXCLUSIVE MODE;
 
   -- 3. fără date ale modulului
   IF EXISTS (SELECT 1 FROM public.izo_proiect_config) OR EXISTS (SELECT 1 FROM public.izo_atribuiri)
      OR EXISTS (SELECT 1 FROM public.izo_importuri) OR EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente)
      OR EXISTS (SELECT 1 FROM public.magazie_bucati_miscari) OR EXISTS (SELECT 1 FROM public.magazie_bucati WHERE tip_cod IS NOT NULL)
      OR EXISTS (SELECT 1 FROM public.magazie_bucati WHERE stare NOT IN ('sosit','receptionat','rezervata','montata','consumata','retur')
-                   OR locatie_tip NOT IN ('sediu','proiect')) THEN
+                   OR locatie_tip NOT IN ('sediu','proiect'))
+     -- toate coloanele noi (CHECK-ul doar_registru le ține NULL în afara registrului; verificat explicit, review #806 P1-4)
+     OR EXISTS (SELECT 1 FROM public.magazie_bucati WHERE uid IS NOT NULL OR parinte_id IS NOT NULL OR radacina_id IS NOT NULL
+                   OR cod_bucata IS NOT NULL OR capat_stanga IS NOT NULL OR capat_dreapta IS NOT NULL OR dezambiguare IS NOT NULL
+                   OR lungime_aviz_mm IS NOT NULL OR lungime_masurata_mm IS NOT NULL OR lungime_mm IS NOT NULL OR lungime_calculata
+                   OR perete_mm IS NOT NULL OR diametru_mm IS NOT NULL OR lot IS NOT NULL OR aviz_intrare_id IS NOT NULL
+                   OR nr_crt_aviz IS NOT NULL OR bend_no IS NOT NULL OR capat_marcaj IS NOT NULL OR depozit_id IS NOT NULL
+                   OR tronson_id IS NOT NULL OR server_ver IS NOT NULL) THEN
     RAISE EXCEPTION 'Revenire 20261102a: modulul are date reale (config/atribuiri/importuri/registru/bucăți în stări noi) — storno + export + decizie întâi; refuz';
   END IF;
   -- view-uri dependente de tabelele izo
@@ -94,14 +101,18 @@ BEGIN
          FROM pg_class i WHERE i.relkind = 'i' AND i.relnamespace = 'public'::regnamespace
           AND (i.relname LIKE 'ux\_magbuc\_izo\_%' OR i.relname LIKE 'ix\_magbuc\_izo\_%' OR i.relname LIKE 'ux\_izo\_%'
                OR i.relname LIKE 'ix\_magbuc\_ev\_%' OR i.relname LIKE 'ix\_magbuc\_mis\_%')),
-      (SELECT string_agg(format('%s(%s):%s:%s:%s:%s', p.proname, pg_get_function_identity_arguments(p.oid), pg_get_userbyid(p.proowner), p.prosecdef, md5(p.prosrc),
-                                coalesce(p.proacl::text, '')), ',' ORDER BY p.proname, pg_get_function_identity_arguments(p.oid))
+      (SELECT string_agg(format('%s(%s):%s:%s:%s:%s:%s:%s', p.proname, pg_get_function_identity_arguments(p.oid), pg_get_userbyid(p.proowner), p.prosecdef, md5(p.prosrc),
+                                coalesce(p.proacl::text, ''), coalesce(p.proconfig::text, ''), p.provolatile), ',' ORDER BY p.proname, pg_get_function_identity_arguments(p.oid))
          FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
-      (SELECT string_agg(format('%s:%s', c.relname, coalesce(c.relacl::text, '')), ',' ORDER BY c.relname)
+      (SELECT string_agg(format('%s:%s:%s:%s', c.relname, coalesce(c.relacl::text, ''), c.relrowsecurity, c.relforcerowsecurity), ',' ORDER BY c.relname)
          FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
           AND c.relname IN ('izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari',
                             'izo_server_ver_seq','izo_atribuiri_id_seq','izo_importuri_id_seq','magazie_bucati_evenimente_id_seq',
-                            'magazie_bucati_miscari_id_seq','magazie_bucati')),
+                            'magazie_bucati_miscari_id_seq','magazie_bucati','magazie_bucati_id_seq')),
+      (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s', c.relname, format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcycle), ',' ORDER BY c.relname)
+         FROM pg_sequence s JOIN pg_class c ON c.oid = s.seqrelid
+        WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('izo_server_ver_seq','izo_atribuiri_id_seq','izo_importuri_id_seq',
+              'magazie_bucati_evenimente_id_seq','magazie_bucati_miscari_id_seq')),
       (SELECT format('%s:%s:%s:%s:%s', r.rolinherit, r.rolcanlogin, r.rolbypassrls,
                      (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ',' ORDER BY pg_get_userbyid(m.member)::text)
                         FROM pg_auth_members m WHERE m.roleid = r.oid), r.rolsuper)
@@ -115,8 +126,12 @@ BEGIN
 
   -- 5. scoaterea (ordinea inversă a migrării)
   DROP TRIGGER trg_bon_linii_izo_bucata ON public.executie_bonuri_consum_linii;
+  DROP TRIGGER trg_depozite_izo_mutare ON public.logistica_depozite;
+  DROP TRIGGER trg_tronsoane_izo_mutare ON public.executie_tronsoane;
   DROP TRIGGER trg_executie_tevi_izo_delete ON public.executie_tevi;
+  DROP TRIGGER trg_executie_tevi_izo_mutare ON public.executie_tevi;
   DROP TRIGGER trg_pachete_izo_delete ON public.executie_pachete_lansare;
+  DROP TRIGGER trg_pachete_izo_mutare ON public.executie_pachete_lansare;
   DROP TRIGGER trg_magbuc_izo_garda ON public.magazie_bucati;
   DROP TRIGGER trg_magbuc_izo_truncate ON public.magazie_bucati;
   DROP POLICY magbuc_izo_client_ins ON public.magazie_bucati;
@@ -133,6 +148,8 @@ BEGIN
   DROP SEQUENCE public.izo_server_ver_seq;
   DROP FUNCTION public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
     public.fn_izo_import_storno(bigint, text, text), public.fn_izo_refuz_bon_bucata(), public.fn_izo_refuz_delete_tevi(), public.fn_izo_refuz_delete_pachet(),
+    public.fn_izo_refuz_mutare_tevi(), public.fn_izo_refuz_mutare_pachet(), public.fn_izo_refuz_mutare_tronson(), public.fn_izo_refuz_mutare_depozit(),
+    public.fn_izo_garda_atribuiri(), public.fn_izo_porti_lipsa(), public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_depozit_in_registru(integer),
     public.fn_izo_garda_fapte(), public.fn_izo_garda_truncate_bucati(), public.fn_izo_garda_bucati(), public.fn_izo_garda_scriitor(),
     public.fn_izo_proiect_pachet(bigint), public.fn_izo_uid(), public.fn_izo_site_proiect(bigint), public.fn_izo_loc_valid(bigint, integer, bigint),
     public.fn_izo_tip_material(text), public.fn_izo_tip_cod(integer), public.fn_izo_bucata_protejata(bigint),
@@ -140,7 +157,7 @@ BEGIN
     public.fn_izo_nivel(bigint);
   DROP INDEX public.ux_magbuc_izo_radacina, public.ux_magbuc_izo_frunza, public.ux_magbuc_izo_curba, public.ux_magbuc_izo_cod,
     public.ux_magbuc_izo_uid, public.ix_magbuc_izo_depozit, public.ix_magbuc_izo_tronson, public.ix_magbuc_izo_radacina;
-  ALTER TABLE public.magazie_bucati DROP CONSTRAINT magazie_bucati_izo_loc_check, DROP CONSTRAINT magazie_bucati_izo_valori_check,
+  ALTER TABLE public.magazie_bucati DROP CONSTRAINT magazie_bucati_izo_doar_registru_check, DROP CONSTRAINT magazie_bucati_izo_loc_check, DROP CONSTRAINT magazie_bucati_izo_valori_check,
     DROP CONSTRAINT magazie_bucati_izo_radacina_check, DROP CONSTRAINT magazie_bucati_izo_registru_check,
     DROP CONSTRAINT magazie_bucati_izo_tip_cod_check, DROP CONSTRAINT magazie_bucati_stare_check,
     DROP CONSTRAINT magazie_bucati_locatie_tip_check;
@@ -154,7 +171,7 @@ BEGIN
     DROP COLUMN perete_mm, DROP COLUMN diametru_mm, DROP COLUMN lot, DROP COLUMN aviz_intrare_id, DROP COLUMN nr_crt_aviz,
     DROP COLUMN bend_no, DROP COLUMN capat_marcaj, DROP COLUMN depozit_id, DROP COLUMN tronson_id, DROP COLUMN server_ver;
   REVOKE ALL ON TABLE public.magazie_bucati FROM izo_registru_writer;
-  EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM izo_registru_writer', pg_get_serial_sequence('public.magazie_bucati', 'id'));
+  REVOKE ALL ON SEQUENCE public.magazie_bucati_id_seq FROM izo_registru_writer;
   REVOKE ALL ON SCHEMA public FROM izo_registru_writer;
   REVOKE izo_registru_writer FROM postgres;
   DROP ROLE izo_registru_writer;
