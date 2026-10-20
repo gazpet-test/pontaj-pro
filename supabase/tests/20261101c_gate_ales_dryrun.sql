@@ -80,6 +80,15 @@ BEGIN
   r := r || format('ales_neverificat_alt_verificata_neacoperita=%s; ', v_alt);
   ok := ok AND v_alt IS TRUE;
 
+  -- (6) review r2 P1 (J02b oprit): un „nu_se_aplica” NEALES nu acoperă cerința al cărei candidat ales e neverificat
+  UPDATE ofertare_acoperire SET status = 'nu_se_aplica', verificat_pe_scan = false WHERE id = n_alt;
+  v_alt := NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = 1987
+            AND (a.status = 'nu_se_aplica'
+                 OR (a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false)))
+            AND public.ofertare_acoperire_la_poarta(a.id));
+  r := r || format('j02b_oprit_nsa_nealeasa_neacoperita=%s; ', v_alt);
+  ok := ok AND v_alt IS TRUE;
+
   -- drepturi helper
   r := r || format('anon=%s auth=%s; ', has_function_privilege('anon', 'public.ofertare_acoperire_la_poarta(bigint)', 'EXECUTE'),
                    has_function_privilege('authenticated', 'public.ofertare_acoperire_la_poarta(bigint)', 'EXECUTE'));

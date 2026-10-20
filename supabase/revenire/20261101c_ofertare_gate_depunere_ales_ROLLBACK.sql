@@ -12,7 +12,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_db_role_setting WHERE array_to_string(setconfig, ',') LIKE '%gazpet.revenire_20261101c%') THEN
     RAISE EXCEPTION '20261101c: armare persistenta refuzata';
   END IF;
-  IF md5(pg_get_functiondef('public.fn_gate_depunere()'::regprocedure)) IS DISTINCT FROM 'e39db250d39a18cbaf5ebe68482e1c62'
+  IF md5(pg_get_functiondef('public.fn_gate_depunere()'::regprocedure)) IS DISTINCT FROM 'd491e90d5a3e1666dbfecc4b81c4d118'
      OR to_regprocedure('public.ofertare_acoperire_la_poarta(bigint)') IS NULL THEN
     RAISE EXCEPTION '20261101c: preconditie, migrarea nu e aplicata (exact)';
   END IF;
