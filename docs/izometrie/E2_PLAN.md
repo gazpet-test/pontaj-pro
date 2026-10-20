@@ -79,7 +79,7 @@ Registrul: trigger care refuză orice UPDATE/DELETE, trigger contra TRUNCATE, RE
 ### 2.5 Importul soldului inițial (funcție + preview, fără scriere până la „da”)
 - **Preview local** (`scripts/izometrie/preview_e2_stoc.mjs`, `xlsx-js-style` deja instalat): citește cele două Exceluri, câte un mapping pe fiecare foaie (layout-ul diferit al „TEAVA 7.1 TOPLET”), produce JSON + raport.
   - **Reconcilierea obligatorie** (§6.3 E2): Topleț 7.1 = 1420 / 17 371,00 m (828 livrate / 10 120,02 m); 8,8 = 57; 6 m = 390; Jupânești 7.1 = 896 / 10 996,97 m (390 livrate); 8,8 = 184 / 2 288,80 m (168 livrate); curbe LOT 2 = 405. Cifrele nu bat → importul nu se propune.
-  - **Excluderile**: 23 de placeholdere (4+1+6+10+2), rândul SBD, curbele LOT 1/LOT 3 (lista separată, la decizie); 2545CA (23) ca **conflict**, nu serie nouă.
+  - **Excluderile**: 23 de placeholdere (4+1+6+10+2), rândul SBD, curbele altor loturi (Q-E2-3 = A: doar numărate în reconciliere ca „excluse — LOT 1: 3, LOT 3: 22”, fără listă de decizie); 2545CA (23) ca **conflict**, nu serie nouă.
   - **Depozitul** pe rând: Jupânești → JUP (9); Topleț → TOP (11), cu excepția grupurilor „DT/OS = ORSOVA” și a avizelor `CJPT-O` → **ORN (10)**, propuse pe grupuri și confirmate în preview.
   - **Starea**: livrate cu aviz CJPT/CJPJ + TR → `pe_tronson` pe `executie_tronsoane` 16–23 (montajul nu se presupune, E4c); în stoc → `receptionat` dacă există PV/NRCD, altfel `sosit`.
   - **Peretele** obligatoriu: din foaie (7,1 / 8,8) sau din descriere; la curbe din „CMFØ 610/{perete}/…”. Fără perete → rând de decis.
@@ -119,7 +119,7 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
    - **A** (recomand; Copilot și Gemini aleg A): BD refuză liniile `din_stoc` pe transporturile care pleacă din **depozitele 9 / 10 / 11** (JUP / ORN / TOP), după id, nu după text; țeava de acolo iese doar prin `fn_izo_iesire`. Simplu și sigur; blochează și alte materiale cantitative din acele depozite (azi nu există stoc cantitativ acolo).
    - **B**: refuz doar pe liniile a căror denumire seamănă cu țeavă/curbă (listă de tipare). Mai permisiv, dar ghicește după text.
 7. **Q-E2-2** — locul ecranului: tab nou „Țeavă proiecte” (recomand) sau sub-vedere în „Stoc trasabil”.
-8. **Q-E2-3** — curbele LOT 1 (3) și LOT 3 (22) din fișierul LOT 2: **A** excluse și listate separat (recomand), **B** importate pe proiectele lor (LOT 1 rămâne `off`, deci ar intra pe calea veche).
+8. **Q-E2-3 — DECIS (Razvan, 20.10): A.** Curbele LOT 1 (3) și LOT 3 (22) din fișierul LOT 2 nu se importă (LOT 1 e aproape închis și are materialele lui; LOT 3 nu e la Gazpet). În preview apar doar numărate, „excluse (LOT 1: 3, LOT 3: 22)”, pentru reconciliere.
 
 ## 5. Review-ul planului (Copilot + Gemini, GO cu condiții) → unde e integrat
 
