@@ -59,7 +59,7 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
       const toate = []
       for (let de = 0; ; de += PAGINA) {
         const { data, error } = await supabase.from('magazie_bucati')
-          .select('id, proiect_id, tip_cod, serie, serie_canon, sarja, lungime_mm, perete_mm, unghi_curba, stare, depozit_id, tronson_id, nr_document, data_receptie, updated_at')
+          .select('id, proiect_id, tip_cod, serie, serie_canon, sarja, lungime_mm, perete_mm, unghi_curba, stare, depozit_id, tronson_id, atribute, nr_document, data_receptie, updated_at')
           .eq('proiect_id', pid).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null)
           .order('id').range(de, de + PAGINA - 1)
         if (error) {
@@ -186,7 +186,7 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
           <tbody>
             {lista.slice(0, MAX_LISTA).map(b => {
               const c = categorieStare(b.stare)
-              const loc = (c === 'pe_tronson' || c === 'montat') ? (trMap[b.tronson_id] || '—') + (b.depozit_id ? ` (din ${depMap[b.depozit_id]})` : '') : (depNume[b.depozit_id] || '—')
+              const loc = (c === 'pe_tronson' || c === 'montat') ? (trMap[b.tronson_id] || '—') + (b.atribute?.depozit_origine_id ? ` (din ${depMap[b.atribute.depozit_origine_id] || '?'})` : '') : (depNume[b.depozit_id] || '—')
               return (
                 <tr key={b.id}>
                   <td style={{ ...S.td, fontWeight:700, fontFamily:'monospace' }}>{b.serie}</td>
