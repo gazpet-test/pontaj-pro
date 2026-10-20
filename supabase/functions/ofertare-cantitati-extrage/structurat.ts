@@ -185,7 +185,8 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
         const vecheActiva = !cv || (cv.stare === 'activa' && Date.parse(cv.valabil_pana) > Date.now())
         const g = vecheActiva ? null : await deps.feliiGata(preluata.id)
         if (!g) { raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id }); continue }
-        const st = g.gata >= g.total ? 'gata' : g.gata > 0 ? 'partial' : 'esuat'
+        // review Gemini #813 r1 (P2): un total 0 / invalid nu poate da „gata”
+        const st = Number.isFinite(g.total) && g.total > 0 && g.gata >= g.total ? 'gata' : g.gata > 0 ? 'partial' : 'esuat'
         const ic = await deps.rpc('fn_ofertare_cb_extragere_inchide', { p_extragere_id: preluata.id, p_stare: st })
         raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id, extragere_id: preluata.id,
           ...(ic.data?.ok ? { inchisa_cerere_inactiva: st } : { inchidere_refuzata: ic.data?.refuz ?? ic.error?.message ?? 'necunoscut' }) })

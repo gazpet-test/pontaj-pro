@@ -305,3 +305,10 @@ Deno.test('cerere veche încă activă, necitibilă, sau felii necitibile → NU
     assert(JSON.stringify(r.body.raport).includes('in_lucru_pe_alta_cerere'))
   }
 })
+Deno.test('review Gemini #813 r1 (P2): total 0 / invalid nu dă „gata” (esuat fără felii gata)', async () => {
+  for (const total of [0, NaN]) {
+    const f = fals({ inLucru: 157, inLucruCerere: 4, cereri: { 4: CERERE_VECHE('anulata', ACUM) }, feliiGata: { gata: 0, total } })
+    await RULEAZA(f)
+    assertEquals(f.apeluri, ['extragere_incepe_grup', 'extragere_inchide:esuat'], String(total))
+  }
+})
