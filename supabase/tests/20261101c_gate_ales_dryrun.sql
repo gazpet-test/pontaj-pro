@@ -70,6 +70,16 @@ BEGIN
   r := r || format('rev_ales=%s; ', rev_dupa);
   ok := ok AND rev_dupa = 1;
 
+  -- (5) review r1 P1: candidatul ales NEverificat + alternativă nealeasă verificată => cerința rămâne NEacoperită
+  UPDATE ofertare_acoperire SET reverificare_ceruta = false WHERE id IN (1453, n_alt);
+  UPDATE ofertare_acoperire SET verificat_pe_scan = true, fisier_path = coalesce(fisier_path, 'test/20261101c.pdf') WHERE id = n_alt;
+  UPDATE ofertare_acoperire SET verificat_pe_scan = false WHERE id = 1453;
+  v_alt := NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = 1987
+            AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false)
+            AND public.ofertare_acoperire_la_poarta(a.id));
+  r := r || format('ales_neverificat_alt_verificata_neacoperita=%s; ', v_alt);
+  ok := ok AND v_alt IS TRUE;
+
   -- drepturi helper
   r := r || format('anon=%s auth=%s; ', has_function_privilege('anon', 'public.ofertare_acoperire_la_poarta(bigint)', 'EXECUTE'),
                    has_function_privilege('authenticated', 'public.ofertare_acoperire_la_poarta(bigint)', 'EXECUTE'));

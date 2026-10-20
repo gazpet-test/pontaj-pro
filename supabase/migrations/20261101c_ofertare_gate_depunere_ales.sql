@@ -1,13 +1,16 @@
--- 20261101c — poarta de depunere (fn_gate_depunere): dovezile roșii și reverificările se numără DOAR pe candidatul ALES
+-- 20261101c — poarta de depunere (fn_gate_depunere): acoperirea verificată, dovezile roșii și reverificările — DOAR pe candidatul ALES
 -- (Răzvan 20.10.2026: „da” pentru schemă, transmis de chat). De ce: auditul Codex (19.10) a găsit că fn_gate_depunere număra dovezile
 -- roșii / cu reverificare cerută pe TOȚI candidații de acoperire, inclusiv alternativele nealese (ales = false) — o alternativă
 -- expirată pe care nimeni n-o depune bloca depunerea.
 -- Regula nouă (helper ofertare_acoperire_la_poarta): un rând contează dacă ales = true (indiferent cine l-a ales — omul sau propunerea
 -- inițială; un candidat ales roșu se depune, deci blochează), SAU dacă pe cerința / poziția lui nu e ales niciun candidat (atunci
 -- contează toți, ca înainte — fail-closed). Restul porții (cerințe neconfirmate, acoperire verificată, J02b, R5, derogare, J07) NESCHIMBAT.
--- Precondiție: fn_gate_depunere exact cea live (md5 pg_get_functiondef 0fcfd5a7…); postcondiție: md5 nou 3928e3d50432527d00e733f464eb199b.
+-- Același set de candidați și pentru ACOPERIREA verificată (n_neacoperite / n_na_ai, review Copilot / Gemini r1 P1): candidatul
+-- ales trebuie să fie el însuși acoperire verificată; o alternativă nealeasă verificată nu mai acoperă cerința.
+-- Precondiție: fn_gate_depunere exact cea live (md5 pg_get_functiondef 0fcfd5a7…); postcondiție: md5 nou e39db250d39a18cbaf5ebe68482e1c62.
 -- Verificare live (read-only, 20.10): licitația 15 — 4 dovezi roșii înainte, 4 după (toate pe candidatul ales: certificatul
--- constatator doc 59, valabil 02.10.2026, candidat unic), 0 reverificări înainte / după.
+-- constatator doc 59, valabil 02.10.2026, candidat unic), 0 reverificări înainte / după; cerințe neacoperite 747 → 747; pe nicio
+-- licitație deschisă numărătoarea „neacoperite” nu se schimbă azi.
 -- Revenire: supabase/revenire/20261101c_ofertare_gate_depunere_ales_ROLLBACK.sql (armată; doar la cererea lui Răzvan).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh; fără BEGIN/COMMIT.
 DO $pre$
@@ -79,13 +82,15 @@ BEGIN
     SELECT count(*) INTO n_neacoperite FROM ofertare_cerinte c
       WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
-            AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))
+            AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false)
+            AND public.ofertare_acoperire_la_poarta(a.id))
       AND NOT public.fn_ofertare_cerinta_na_confirmata(c.id, 'nu_se_aplica');
     SELECT count(*) INTO n_na_ai FROM ofertare_cerinte c
       WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       AND EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id AND a.status = 'nu_se_aplica')
       AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
-            AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))
+            AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false)
+            AND public.ofertare_acoperire_la_poarta(a.id))
       AND NOT public.fn_ofertare_cerinta_na_confirmata(c.id, 'nu_se_aplica');
     ELSE
       -- J02b oprit pe licitație: exact regula live (nu_se_aplica AI acoperă)
@@ -93,7 +98,8 @@ BEGIN
       WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
             AND (a.status = 'nu_se_aplica'
-                 OR (a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))));
+                 OR (a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false)
+                     AND public.ofertare_acoperire_la_poarta(a.id))));
     END IF;
     SELECT count(*) INTO n_rosii FROM ofertare_acoperire a
       JOIN ofertare_cerinte c ON c.id = a.cerinta_id AND c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
@@ -151,7 +157,7 @@ END $function$
 
 DO $post$
 BEGIN
-  IF md5(pg_get_functiondef('public.fn_gate_depunere()'::regprocedure)) IS DISTINCT FROM '3928e3d50432527d00e733f464eb199b' THEN
+  IF md5(pg_get_functiondef('public.fn_gate_depunere()'::regprocedure)) IS DISTINCT FROM 'e39db250d39a18cbaf5ebe68482e1c62' THEN
     RAISE EXCEPTION '20261101c: postconditie fn_gate_depunere';
   END IF;
   IF has_function_privilege('anon', 'public.ofertare_acoperire_la_poarta(bigint)', 'EXECUTE')

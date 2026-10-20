@@ -1,4 +1,4 @@
--- REVENIRE 20261101c — readuce fn_gate_depunere EXACT la versiunea dinainte (md5 0fcfd5a7…: dovezile roșii / reverificările pe
+-- REVENIRE 20261101c — readuce fn_gate_depunere EXACT la versiunea dinainte (md5 0fcfd5a7…: acoperirea, dovezile roșii / reverificările pe
 -- TOȚI candidații, inclusiv alternativele nealese) și scoate helperul ofertare_acoperire_la_poarta. DOAR la cererea lui Răzvan.
 -- Armare per tranzacție:
 --   SELECT set_config('gazpet.revenire_20261101c', 'POARTA_TOTI_CANDIDATII:' || txid_current(), true);
@@ -12,7 +12,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_db_role_setting WHERE array_to_string(setconfig, ',') LIKE '%gazpet.revenire_20261101c%') THEN
     RAISE EXCEPTION '20261101c: armare persistenta refuzata';
   END IF;
-  IF md5(pg_get_functiondef('public.fn_gate_depunere()'::regprocedure)) IS DISTINCT FROM '3928e3d50432527d00e733f464eb199b'
+  IF md5(pg_get_functiondef('public.fn_gate_depunere()'::regprocedure)) IS DISTINCT FROM 'e39db250d39a18cbaf5ebe68482e1c62'
      OR to_regprocedure('public.ofertare_acoperire_la_poarta(bigint)') IS NULL THEN
     RAISE EXCEPTION '20261101c: preconditie, migrarea nu e aplicata (exact)';
   END IF;
