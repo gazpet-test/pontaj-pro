@@ -80,7 +80,7 @@ function fals() {
     deciziiRol: async () => [],
     lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
     extragereInLucru: async () => null,
-    ultimaIncercare: async () => null,
+    ultimaIncercare: async () => null, feliiGata: async () => null,
     ai: async (p) => { prompturi.push(p); return { txt: JSON.stringify({ r: [RAND_002, OBIECT_RAND] }), inF: 1000, outF: 200 } },
     acum: () => 0,
   }

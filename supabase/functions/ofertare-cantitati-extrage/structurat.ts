@@ -56,6 +56,8 @@ export type DepsStructurat = {
   // extragerea „in_lucru” existentă pe (document, sha, extractor) și ultima încercare a unei munci — citite ca utilizator
   extragereInLucru: (documentId: number, sha: string, extractorId: string) => Promise<{ id: number; cerere_id: number } | null>
   ultimaIncercare: (mucaId: string) => Promise<{ id: number; stare: string; rezervare_id: number | null } | null>
+  // feliile gata (distincte) și totalul unei extrageri — pentru închiderea uneia rămase în lucru pe o cerere expirată
+  feliiGata: (extragereId: number) => Promise<{ gata: number; total: number } | null>
   ai: (prompt: string, cine?: 'principal' | 'escaladare') => Promise<RezultatAI>
   acum: () => number
 }
@@ -174,7 +176,21 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       const preluata = await deps.extragereInLucru(d.id, d.sha, extractorId)
       if (!preluata) { raport.push({ document_id: d.id, refuz: 'extragere_in_lucru' }); continue }
       // review r2: preluarea doar pe ACEEAȘI cerere (rularea → aprobarea ei); pe altă cerere = închidere / redeschidere de om
-      if (preluata.cerere_id !== c.id) { raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id }); continue }
+      if (preluata.cerere_id !== c.id) {
+        // 20.10.2026 (extragerea #157 rămasă în lucru pe cererea expirată #2): dacă cererea veche NU mai e activă (expirată / anulată),
+        // extragerea se ÎNCHIDE cu RPC-ul existent — „partial” cu felii gata, „esuat” fără (RPC-ul refuză singur cu felii în zbor) —, ca
+        // omul s-o poată redeschide pe cererea nouă (redeschide cere partial / esuat, cu motiv). Cerere veche activă sau necitibilă = refuz,
+        // ca înainte (fail-closed). Nicio felie nu se apelează în această rulare pe extragerea respectivă.
+        const cv = await deps.cerere(preluata.cerere_id)
+        const vecheActiva = !cv || (cv.stare === 'activa' && Date.parse(cv.valabil_pana) > Date.now())
+        const g = vecheActiva ? null : await deps.feliiGata(preluata.id)
+        if (!g) { raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id }); continue }
+        const st = g.gata >= g.total ? 'gata' : g.gata > 0 ? 'partial' : 'esuat'
+        const ic = await deps.rpc('fn_ofertare_cb_extragere_inchide', { p_extragere_id: preluata.id, p_stare: st })
+        raport.push({ document_id: d.id, refuz: 'in_lucru_pe_alta_cerere', cerere_id: preluata.cerere_id, extragere_id: preluata.id,
+          ...(ic.data?.ok ? { inchisa_cerere_inactiva: st } : { inchidere_refuzata: ic.data?.refuz ?? ic.error?.message ?? 'necunoscut' }) })
+        continue
+      }
       x = preluata.id
       raport.push({ document_id: d.id, preluata: x })
     } else if (ex.data?.refuz) { raport.push({ document_id: d.id, refuz: ex.data.refuz }); continue }
