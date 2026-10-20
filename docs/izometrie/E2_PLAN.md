@@ -74,7 +74,7 @@ Registrul: trigger care refuză orice UPDATE/DELETE, trigger contra TRUNCATE, RE
 | 3 — import REPLACE / DELETE pe `executie_tevi` | trigger care refuză DELETE din client pe proiectele cu nivel ≥ `stoc` (LOT 2 are azi 0 țevi, deci nu blochează lucru real) |
 | 9 — bonuri | trigger pe `executie_bonuri_consum_linii`: refuză `magazie_bucata_id` beneficiar pe proiect cu nivel ≥ `stoc` (+ filtru în UI) |
 | 10, 11, 12 — recepția directă, producția, mutarea | prin gardă (testele de regresie: recepție `beneficiar` pe LOT 1 și producție `gazpet` pe proiectul 3 trec) |
-| 13 — `din_stoc` pe transport | **de decis (Q-E2-1, mai jos)**: liniile de transport recunosc materialul doar după text |
+| 13 — `din_stoc` pe transport | **Q-E2-1 = C**: fără trigger (calea nu atinge `magazie_bucati`); avertizare în UI-ul transportului pentru site-urile proiectelor cu nivel ≠ `off` |
 
 ### 2.5 Importul soldului inițial (funcție + preview, fără scriere până la „da”)
 - **Preview local** (`scripts/izometrie/preview_e2_stoc.mjs`, `xlsx-js-style` deja instalat): citește cele două Exceluri, câte un mapping pe fiecare foaie (layout-ul diferit al „TEAVA 7.1 TOPLET”), produce JSON + raport.
@@ -115,7 +115,7 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 3. **Soldul inițial** — pe raportul de preview (reconciliere + excluderi + depozite pe grupuri + conflictele 2545CA), aplicat de chat.
 4. **Activarea nivelului `stoc`** pe proiectul 3.
 5. **Drepturile Cioc Janeta** (după primul ei login): `magazie` editor + `izo_atribuiri` gestionar pe depozitele 9, 10, 11. Nimic altceva.
-6. **Q-E2-1 — DECIS (Razvan, 20.10): A**, pe depozitele 9 / 10 / 11, după id. Variantele analizate — interdicția `din_stoc` (calea 13), pentru că liniile de transport n-au proiect sau tip de material:
+6. **Q-E2-1 — DECIS FINAL (Razvan, 20.10): C — fără trigger în BD.** A („pe depozitele 9/10/11, după id”) nu se poate aplica: `logistica_transporturi` n-are depozit de plecare (doar `plecare_tip` + `plecare_site_id`), iar `din_stoc` mută doar stocul **cantitativ** (`stocuri`, după denumire, prin `fn_transfer_executa` din locația `('proiect', id)`) și **nu atinge `magazie_bucati`** — registrul de țeavă nu poate fi stricat pe această cale. Returul legitim de consumabile rămâne posibil; avizul intern de țeavă vine din modul în E7. **În UI**: la crearea unui transport cu plecare de pe site-ul unui proiect cu `fn_izo_nivel ≠ 'off'` (azi LOT 2, site 6) apare avertizarea „Țeava Transgaz iese doar din modulul de țeavă (Magazie → Țeavă proiecte)”. Variantele analizate inițial:
    - **A** (recomand; Copilot și Gemini aleg A): BD refuză liniile `din_stoc` pe transporturile care pleacă din **depozitele 9 / 10 / 11** (JUP / ORN / TOP), după id, nu după text; țeava de acolo iese doar prin `fn_izo_iesire`. Simplu și sigur; blochează și alte materiale cantitative din acele depozite (azi nu există stoc cantitativ acolo).
    - **B**: refuz doar pe liniile a căror denumire seamănă cu țeavă/curbă (listă de tipare). Mai permisiv, dar ghicește după text.
 7. **Q-E2-2 — DECIS (Razvan, 20.10)**: tab nou „🧱 Țeavă proiecte” în Magazie, lângă „🔍 Stoc trasabil”.
