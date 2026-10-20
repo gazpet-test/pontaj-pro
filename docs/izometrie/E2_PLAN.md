@@ -115,10 +115,10 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 3. **Soldul inițial** — pe raportul de preview (reconciliere + excluderi + depozite pe grupuri + conflictele 2545CA), aplicat de chat.
 4. **Activarea nivelului `stoc`** pe proiectul 3.
 5. **Drepturile Cioc Janeta** (după primul ei login): `magazie` editor + `izo_atribuiri` gestionar pe depozitele 9, 10, 11. Nimic altceva.
-6. **Q-E2-1** — interdicția `din_stoc` (calea 13), pentru că liniile de transport n-au proiect sau tip de material:
+6. **Q-E2-1 — DECIS (Razvan, 20.10): A**, pe depozitele 9 / 10 / 11, după id. Variantele analizate — interdicția `din_stoc` (calea 13), pentru că liniile de transport n-au proiect sau tip de material:
    - **A** (recomand; Copilot și Gemini aleg A): BD refuză liniile `din_stoc` pe transporturile care pleacă din **depozitele 9 / 10 / 11** (JUP / ORN / TOP), după id, nu după text; țeava de acolo iese doar prin `fn_izo_iesire`. Simplu și sigur; blochează și alte materiale cantitative din acele depozite (azi nu există stoc cantitativ acolo).
    - **B**: refuz doar pe liniile a căror denumire seamănă cu țeavă/curbă (listă de tipare). Mai permisiv, dar ghicește după text.
-7. **Q-E2-2** — locul ecranului: tab nou „Țeavă proiecte” (recomand) sau sub-vedere în „Stoc trasabil”.
+7. **Q-E2-2 — DECIS (Razvan, 20.10)**: tab nou „🧱 Țeavă proiecte” în Magazie, lângă „🔍 Stoc trasabil”.
 8. **Q-E2-3 — DECIS (Razvan, 20.10): A.** Curbele LOT 1 (3) și LOT 3 (22) din fișierul LOT 2 nu se importă (LOT 1 e aproape închis și are materialele lui; LOT 3 nu e la Gazpet). În preview apar doar numărate, „excluse (LOT 1: 3, LOT 3: 22)”, pentru reconciliere.
 
 ## 5. Review-ul planului (Copilot + Gemini, GO cu condiții) → unde e integrat
