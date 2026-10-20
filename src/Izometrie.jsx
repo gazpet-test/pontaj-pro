@@ -23,6 +23,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
 import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
+import IzoStocTeava from './IzoStocTeava.jsx'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -122,6 +123,8 @@ export default function IzometriePage({ initialProiectId } = {}) {
   const [pachete, setPachete] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNoPachet, setShowNoPachet] = useState(false)
+  // E2b: vederea „Stoc țeavă (registru)” — doar citire, aceeași sursă ca Magazie → Țeavă proiecte
+  const [vedere, setVedere] = useState('pachete')
   const { toast, show } = useToast()
 
   // Stats per tronson
@@ -240,6 +243,30 @@ export default function IzometriePage({ initialProiectId } = {}) {
     )
   }
 
+  // comutatorul Pachete ↔ Stoc țeavă (registrul izometrie, doar citire)
+  const comutator = (
+    <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+      {[['pachete', '📐 Pachete lansare'], ['stoc', '🧱 Stoc țeavă (registru)']].map(([k, l]) => (
+        <button key={k} onClick={() => setVedere(k)} style={{
+          padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer', borderRadius:8, fontFamily:'inherit',
+          background: vedere === k ? '#58A6FF22' : 'transparent', color: vedere === k ? '#58A6FF' : G.muted,
+          border: `1px solid ${vedere === k ? '#58A6FF66' : '#30363D'}`,
+        }}>{l}</button>
+      ))}
+    </div>
+  )
+
+  if (vedere === 'stoc') {
+    return (
+      <div style={S.page}>
+        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing:'-.3px', marginBottom: 4 }}>🧱 Stoc țeavă Transgaz</div>
+        <div style={{ color: G.muted, fontSize: 13, marginBottom: 14 }}>{proiectSelectat?.nume || ''}</div>
+        {comutator}
+        <IzoStocTeava proiectId={proiectId} citire />
+      </div>
+    )
+  }
+
   // === VIEW: Listare pachete (default) ===
   return (
     <div style={S.page}>
@@ -281,6 +308,8 @@ export default function IzometriePage({ initialProiectId } = {}) {
           </select>
         )}
       </div>
+
+      {comutator}
 
       {/* ─────────── LAYOUT 2 COLOANE ─────────── */}
       <div style={{ display:'grid', gridTemplateColumns:'280px 1fr', gap: 16, alignItems:'start' }}>

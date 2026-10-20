@@ -4317,6 +4317,15 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
     })
   }, [plecareTip, plecareSiteId])
 
+  // Izometrie (decizia Q-E2-1 = C, 20.10.2026): site-urile proiectelor cu registru de țeavă activ → avertizare la plecare.
+  // Doar avertizare: calea din_stoc mută stocul cantitativ și nu atinge registrul. Înainte de migrare RPC-ul lipsește → nimic.
+  const [izoSiteuri, setIzoSiteuri] = useState(() => new Set())
+  useEffect(() => {
+    supabase.rpc('fn_izo_proiecte_protejate').then(({ data, error }) => {
+      if (!error) setIzoSiteuri(new Set((data || []).map(r => r.site_id).filter(Boolean)))
+    })
+  }, [])
+
   // La schimbarea locației sursă → încarcă stocul disponibil
   useEffect(() => {
     if (!locatieSursaStoc) { setStocSursa([]); return }
@@ -4970,6 +4979,11 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                 <input type="text" value={plecareLocText} onChange={e => setPlecareLocText(e.target.value)} placeholder="ex: Depozit furnizor SC X SRL, București" style={{...S.input, flex:1}} />
               )}
             </div>
+            {plecareTip === 'site' && izoSiteuri.has(Number(plecareSiteId)) && (
+              <div style={{ fontSize:12, color:G.orange, background:G.orange + '15', border:`1px solid ${G.orange}55`, borderRadius:8, padding:'8px 10px', marginBottom:6 }}>
+                🧱 Țeava Transgaz iese doar din modulul de țeavă (Magazie → Țeavă proiecte). Pe acest transport pune doar alte materiale.
+              </div>
+            )}
             {/* Manager plecare — smart: pentru sediu doar Logistică, pentru site auto-completat */}
             <select 
               value={managerPlecareId} 
