@@ -1,0 +1,71 @@
+{
+  "_descriere": "Intrările preview-ului E1. tronsoane_bd = SELECT din executie_tronsoane (20.10.2026). tronsoane_pt = limitele din schemele de montaj 1413-01-NN-SM (PT 1413/2020, «tronson N km a - km b»). Nu se scrie nimic în BD.",
+  "prag_km_gps_m": 50,
+  "lateral_max_m": 300,
+  "loturi": [
+    {
+      "nume": "LOT 2 — Orșova / Jupa",
+      "proiect_id": 3,
+      "kml": "C:/Users/Public/claude-server/kml_lot2/lot2.kml",
+      "ax_linii": ["kml_1"],
+      "ax_cale": "ax conducta",
+      "liniute_culoare": "ff00ffff",
+      "liniute_lungime_max_m": 500,
+      "culori_de_aratat": [],
+      "tronsoane_bd": [],
+      "tronsoane_pt": [
+        { "cod": "T12", "km_start_m": 49000, "km_end_m": 55000, "sursa": "1413-01-12-SM" },
+        { "cod": "T13", "km_start_m": 55000, "km_end_m": 60000, "sursa": "1413-01-13-SM" },
+        { "cod": "T14", "km_start_m": 60000, "km_end_m": 66000, "sursa": "1413-01-14-SM" },
+        { "cod": "T15", "km_start_m": 66000, "km_end_m": 71000, "sursa": "1413-01-15-SM" },
+        { "cod": "T16", "km_start_m": 71000, "km_end_m": 75000, "sursa": "1413-01-16-SM" },
+        { "cod": "T17", "km_start_m": 75000, "km_end_m": 79000, "sursa": "1413-01-17-SM" },
+        { "cod": "T18", "km_start_m": 79000, "km_end_m": 83000, "sursa": "1413-01-18-SM" },
+        { "cod": "T19", "km_start_m": 83000, "km_end_m": 89000, "sursa": "1413-01-19-SM" }
+      ],
+      "depozite_propuse": [
+        { "name": "DM Jupânești", "cod_3litere": "JUP", "site_id": 6, "kml_nume": "DM Jupanesti S = 2500 mp", "gestionar": "Cioc Janeta (emp 30)" },
+        { "name": "DM Orșova Nord", "cod_3litere": "ORN", "site_id": 6, "kml_nume": "DM ORSOVA Nord S=2500 ,p", "gestionar": "Cioc Janeta (emp 30)" },
+        { "name": "OS Topleț", "cod_3litere": "TOP", "site_id": 6, "kml_nume": "OS TOPLET S= 5000 mp", "gestionar": "Cioc Janeta (emp 30)" }
+      ]
+    },
+    {
+      "nume": "LOT 1 — Prunișor / Orșova",
+      "proiect_id": 1,
+      "kml": "C:/Users/Public/claude-server/kml_lot1/lot1.kml",
+      "ax_linii": ["kml_1841", "kml_1403", "kml_1381"],
+      "ax_asteptat_m": 48874,
+      "liniute_culoare": "ffffffff",
+      "liniute_lungime_max_m": 200,
+      "culori_de_aratat": ["ff0000ff", "ffff00bf"],
+      "necunoscute_min_m": 200,
+      "puncte_asteptate": { "borna": 50, "TD": 17, "TA": 9, "THC": 12, "CF": 1, "robinet": 2, "os": 1, "depozit": 1 },
+      "tronsoane_bd": [
+        { "id": 1, "cod": "T1", "km_start_m": 50, "km_end_m": 2000, "lungime_planificata_km": 1.972 },
+        { "id": 2, "cod": "T2", "km_start_m": 2000, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 3, "cod": "T3", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 4, "cod": "T4", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 5, "cod": "T5", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 6, "cod": "T6", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 7, "cod": "T7", "km_start_m": 24100, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 8, "cod": "T8", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 9, "cod": "T9", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 10, "cod": "T10", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null },
+        { "id": 11, "cod": "T11", "km_start_m": null, "km_end_m": null, "lungime_planificata_km": null }
+      ],
+      "tronsoane_pt": [
+        { "cod": "T1", "km_start_m": 0, "km_end_m": 2000, "sursa": "borne KML + start T2 (1413-01-01-SM scanat)", "nota": "BD 0+050 vine din pachetul _00068 rev.1 (Q18)" },
+        { "cod": "T2", "km_start_m": 2000, "km_end_m": 5000, "sursa": "borne KML (1413-01-02-SM lipsă în arhivă)", "nota": "analiza v2.2 dă 5+039,82, sursă nedocumentată" },
+        { "cod": "T3", "km_start_m": 5000, "km_end_m": 10000, "sursa": "1413-01-03-SM" },
+        { "cod": "T4", "km_start_m": 10000, "km_end_m": 14000, "sursa": "1413-01-04-SM" },
+        { "cod": "T5", "km_start_m": 14000, "km_end_m": 19000, "sursa": "1413-01-05-SM" },
+        { "cod": "T6", "km_start_m": 19000, "km_end_m": 24000, "sursa": "1413-01-06-SM" },
+        { "cod": "T7", "km_start_m": 24000, "km_end_m": 29000, "sursa": "1413-01-07-SM", "nota": "BD 24+100 = prima sudură T7S1, pachetul _00033 (Q18)" },
+        { "cod": "T8", "km_start_m": 29000, "km_end_m": 35000, "sursa": "1413-01-08-SM", "nota": "analiza v2.2 dă 29+003,84 – 35+028,81, sursă nedocumentată" },
+        { "cod": "T9", "km_start_m": 35000, "km_end_m": 40000, "sursa": "1413-01-09-SM" },
+        { "cod": "T10", "km_start_m": 40000, "km_end_m": 45000, "sursa": "1413-01-10-SM" },
+        { "cod": "T11", "km_start_m": 45000, "km_end_m": 49000, "sursa": "1413-01-11-SM" }
+      ]
+    }
+  ]
+}
