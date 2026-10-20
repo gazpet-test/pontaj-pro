@@ -56,7 +56,7 @@ Deno.test('A2: în extragerea structurată, poarta apare în raportul feliei și
     cerere: async () => ({ id: 5, licitatie_id: 15, scop: 'cant_extragere', stare: 'activa', valabil_pana: new Date(Date.now() + 3600e3).toISOString(), lot_domeniu: 'toate', lot_nr: [] }),
     documente: async () => [{ id: 212, nume_original: 'Liste de cantitati.pdf', tip: 'lista_cantitati', text_extras: F3, seap_meta: null, lot_stare: 'comun' }],
     deciziiRol: async () => [], lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
-    extragereInLucru: async () => null, ultimaIncercare: async () => null,
+    extragereInLucru: async () => null, ultimaIncercare: async () => null, feliiGata: async () => null,
     ai: async () => ({ txt: JSON.stringify({ r: [rand003] }), inF: 1000, outF: 200 }), acum: () => 0,
   }
   const r = await extrageStructurat(deps, { licitatie_id: 15, cerere_id: 5, extractor: 'A' })

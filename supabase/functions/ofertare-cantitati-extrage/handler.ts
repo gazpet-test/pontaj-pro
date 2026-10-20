@@ -566,6 +566,15 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
         .eq('extractor_id', extractorId).eq('stare', 'in_lucru').maybeSingle()
       return data ? { id: Number(data.id), cerere_id: Number(data.cerere_id) } : null
     },
+    feliiGata: async (x) => {
+      const [{ data: e, error: ee }, { data: f, error: ef }] = await Promise.all([
+        dbU.from('ofertare_cant_extrageri').select('felii_total').eq('id', x).maybeSingle(),
+        dbU.from('ofertare_cant_felii').select('felie_nr').eq('extragere_id', x).eq('stare', 'gata'),
+      ])
+      // orice eroare de citire = null (nu se închide nimic, fail-closed)
+      if (ee || ef || !e) return null
+      return { gata: new Set((f || []).map((r: any) => r.felie_nr)).size, total: Number(e.felii_total) }
+    },
     ultimaIncercare: async (munca) => {
       const { data } = await dbU.from('ofertare_cant_felii').select('id, stare, rezervare_id').eq('munca_id', munca)
         .order('incercare', { ascending: false }).limit(1)

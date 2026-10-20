@@ -28,7 +28,7 @@ function fals(raspunsuri: Partial<Record<'principal' | 'escaladare', RezultatAI>
     cerere: async () => ({ id: 5, licitatie_id: 15, scop: 'cant_extragere', stare: 'activa', valabil_pana: new Date(Date.now() + 3600e3).toISOString(), lot_domeniu: 'toate', lot_nr: [] }),
     documente: async () => [{ id: 212, nume_original: 'Liste de cantitati.pdf', tip: 'lista_cantitati', text_extras: F3, seap_meta: null, lot_stare: 'comun' }],
     deciziiRol: async () => [], lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
-    extragereInLucru: async () => null, ultimaIncercare: async () => null,
+    extragereInLucru: async () => null, ultimaIncercare: async () => null, feliiGata: async () => null,
     ai: async (_p, cine = 'principal') => { apeluriAI.push(cine); return raspunsuri[cine] ?? { txt: '', inF: 0, outF: 0, eroare: 'neasteptat' } },
     acum: () => 0,
   }
