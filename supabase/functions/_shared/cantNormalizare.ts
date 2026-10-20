@@ -102,7 +102,9 @@ const FARA_COD = /^(?:|-|—|null|n\/a|nu e cazul)$/i
 export function verificaRand(textDoc: string, off: number, codModel: unknown, dnCod: number[]):
   { motiv: 'cod_alt_rand' | 'cod_neverificabil' | 'dn_alt_rand' | null; dnInPlus: boolean; continuare: [number, number] | null } {
   const b = blocRand(textDoc, off)
-  const codBrut = String(codModel ?? '').replace(/\*/g, '').trim()
+  // 20.10.2026: modelul lipește uneori coloana „[ n]” a listei de cod („GD19A1% [ 1]”) — se scoate DOAR forma separată prin spațiu
+  // (coloana listei, pe care identificatoriLinie o desparte oricum); „SA11H1[2]” lipit rămâne neverificabil (PR-A r3)
+  const codBrut = String(codModel ?? '').replace(/\*/g, '').trim().replace(/\s+\[\s*\d{1,3}\s*\]$/, '')
   if (!FARA_COD.test(codBrut)) {
     const cod = codComparabil(codBrut)
     if (cod === null) return { motiv: 'cod_neverificabil', dnInPlus: false, continuare: null }
