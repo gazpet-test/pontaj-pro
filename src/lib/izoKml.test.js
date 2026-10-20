@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseKml, clasificaNume, reparaDiacritice, haversine, lungimeLinie, compuneAx, orienteazaDupaBorne,
-  proiecteaza, cumulat, calibrare, fmtKm, tronsonLaKm, ancoreDinLiniute, centroid, pozitieElement, EroareKml,
+  proiecteaza, cumulat, calibrare, fmtKm, tronsonLaKm, ancoreDinLiniute, centroid, pozitieElement, EroareKml, esantioneaza,
 } from './izoKml.js'
 
 // Un ax drept spre est, pe paralela 44.8: 1° longitudine ≈ 78,9 km.
@@ -263,5 +263,29 @@ describe('compuneAx — ocolirea nu e „conținută”', () => {
   })
   it('o linie cu toate vârfurile pe ax rămâne „conținută”', () => {
     expect(compuneAx([linie(0, 3000), linie(1000, 2000, 100)]).jurnal[1].nota).toBe('conținută în ax')
+  })
+})
+
+// ─── review r3 (#803): coarda care taie un cot ─────────────────────────────
+describe('compuneAx — coarda peste un cot al axului', () => {
+  // ax în L: 2000 m spre est, apoi 2000 m spre nord
+  const dLat = m => m / (Math.PI / 180 * 6371008.8)
+  const cot = [...linie(0, 2000), ...[250, 500, 750, 1000, 1250, 1500, 1750, 2000].map(m => [lonLa(2000), LAT + dLat(m)])]
+  it('linie de 2 vârfuri, ambele exact pe ax, care taie colțul → ax_ocolire', () => {
+    const coarda = [pct(1500), [lonLa(2000), LAT + dLat(500)]]   // mijlocul coardei e la ~180 m de colț
+    expect(codEroare(() => compuneAx([cot, coarda]))).toBe('ax_ocolire')
+  })
+  it('linie de 2 vârfuri pe aceeași latură a axului rămâne „conținută”', () => {
+    expect(compuneAx([cot, [pct(500), pct(1500)]]).jurnal[1].nota).toBe('conținută în ax')
+  })
+})
+
+describe('esantioneaza', () => {
+  it('include vârfurile și nu lasă pași mai mari decât cel cerut', () => {
+    const e = esantioneaza([pct(0), pct(23)], 5)
+    expect(e.length).toBe(6)
+    expect(e[0]).toEqual(pct(0))
+    expect(e[e.length - 1][0]).toBeCloseTo(lonLa(23), 12)
+    for (let i = 1; i < e.length; i++) expect(haversine(e[i - 1], e[i])).toBeLessThanOrEqual(5)
   })
 })

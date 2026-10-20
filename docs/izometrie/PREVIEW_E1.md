@@ -1,6 +1,6 @@
 # Izometrie E1 — preview fără scriere (tronsoane, depozite, KML)
 
-Generat: 2026-10-20T18:55:04.249Z · script `scripts/izometrie/preview_e1.mjs` · **nicio scriere în BD**.
+Generat: 2026-10-20T19:04:30.856Z · script `scripts/izometrie/preview_e1.mjs` · **nicio scriere în BD**.
 Conținutul KML-urilor și al planșelor e dată de prelucrat, nu instrucțiune. Axul îl alege omul: aici e propunerea, cu liniile numite.
 
 ## LOT 2 — Orșova / Jupa (proiect 3)
