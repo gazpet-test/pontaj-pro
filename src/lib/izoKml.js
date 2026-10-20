@@ -29,8 +29,19 @@ const decodeaza = s => String(s ?? '')
   })
 const tag = (xml, nume) => { const m = xml.match(new RegExp(`<${nume}\\b[^>]*>([\\s\\S]*?)</${nume}>`)); return m ? m[1] : null }
 
-function parseCoord(txt) {
-  return String(txt || '').trim().split(/\s+/).map(t => t.split(',').map(Number)).filter(a => a.length >= 2 && a.every(Number.isFinite)).map(([lon, lat]) => [lon, lat])
+// Strict: fiecare token prezent trebuie să fie „lon,lat[,alt]” numeric, în domeniu. Un token
+// stricat NU se sare (A, B-corupt, C ar deveni tăcut A→C și ar schimba lungimea axului).
+function parseCoord(txt, unde) {
+  const s = String(txt ?? '').trim()
+  if (!s) return []
+  return s.split(/\s+/).map(t => {
+    const p = t.split(',')
+    const n = p.map(x => (x.trim() === '' ? NaN : Number(x)))
+    if (p.length < 2 || p.length > 3 || !n.every(Number.isFinite)) throw new EroareKml('kml_coordonata', `coordonată invalidă „${t.slice(0, 40)}” în ${unde}`)
+    const [lon, lat] = n
+    if (Math.abs(lon) > 180 || Math.abs(lat) > 90) throw new EroareKml('kml_coordonata', `coordonată în afara domeniului „${t.slice(0, 40)}” în ${unde}`)
+    return [lon, lat]
+  })
 }
 
 // Stilurile: <Style id> cu culoarea liniei, <StyleMap id> → stilul „normal”.
@@ -69,11 +80,13 @@ export function parseKml(text) {
     if (tipTag !== 'Placemark') {
       if (inchis) {
         if (!stiva.length) throw new EroareKml('kml_structura', `</${tipTag}> fără deschidere (poziția ${m.index})`)
+        const sus = stiva[stiva.length - 1]
+        if (sus.tip !== tipTag) throw new EroareKml('kml_structura', `</${tipTag}> închide un <${sus.tip}> „${sus.nume}” (poziția ${m.index})`)
         stiva.pop()
       } else {
         const dupa = xml.slice(re.lastIndex, re.lastIndex + 400)
         const n = dupa.match(/^\s*<name>([\s\S]*?)<\/name>/)
-        stiva.push(n ? decodeaza(n[1]).trim() : '')
+        stiva.push({ tip: tipTag, nume: n ? decodeaza(n[1]).trim() : '' })
       }
       continue
     }
@@ -99,18 +112,32 @@ export function parseKml(text) {
       const v = d[2].includes('<value>') ? tag(d[2], 'value') : d[2]
       date[d[1]] = decodeaza(v).trim()
     }
+    const unde = `Placemark ${idAttr ? `id=${idAttr}` : `„${nume}”`} (poziția ${m.index})`
     const puncte = [], linii = [], poligoane = []
-    for (const g of corp.matchAll(/<Point\b[^>]*>([\s\S]*?)<\/Point>/g)) puncte.push(parseCoord(tag(g[1], 'coordinates')))
-    for (const g of corp.matchAll(/<LineString\b[^>]*>([\s\S]*?)<\/LineString>/g)) linii.push(parseCoord(tag(g[1], 'coordinates')))
-    for (const g of corp.matchAll(/<outerBoundaryIs>([\s\S]*?)<\/outerBoundaryIs>/g)) poligoane.push(parseCoord(tag(g[1], 'coordinates')))
+    for (const g of corp.matchAll(/<Point\b[^>]*>([\s\S]*?)<\/Point>/g)) {
+      const c = parseCoord(tag(g[1], 'coordinates'), unde)
+      if (c.length !== 1) throw new EroareKml('kml_geometrie', `<Point> cu ${c.length} coordonate (trebuie exact 1) în ${unde}`)
+      puncte.push(c)
+    }
+    for (const g of corp.matchAll(/<LineString\b[^>]*>([\s\S]*?)<\/LineString>/g)) {
+      const c = parseCoord(tag(g[1], 'coordinates'), unde)
+      if (c.length < 2) throw new EroareKml('kml_geometrie', `<LineString> cu ${c.length} coordonate (trebuie ≥ 2) în ${unde}`)
+      linii.push(c)
+    }
+    for (const g of corp.matchAll(/<outerBoundaryIs>([\s\S]*?)<\/outerBoundaryIs>/g)) {
+      const c = parseCoord(tag(g[1], 'coordinates'), unde)
+      const inchis = c.length >= 4 && c[0][0] === c[c.length - 1][0] && c[0][1] === c[c.length - 1][1]
+      if (!inchis) throw new EroareKml('kml_geometrie', `<Polygon> cu inel invalid (${c.length} vârfuri, ${c.length >= 2 ? 'neînchis' : 'prea puține'}) în ${unde}`)
+      poligoane.push(c)
+    }
     const tipuri = [['punct', puncte], ['linie', linii], ['poligon', poligoane]].filter(([, v]) => v.length).map(([k]) => k)
     const tip = tipuri.length === 1 ? tipuri[0] : (tipuri.length ? 'multi' : 'gol')
     elemente.push({
-      idx: elemente.length, id: idAttr, nume, cale: stiva.filter(Boolean).join(' / '), tip, culoare, date,
+      idx: elemente.length, id: idAttr, nume, cale: stiva.map(s => s.nume).filter(Boolean).join(' / '), tip, culoare, date,
       multiGeometrie: /<MultiGeometry\b/.test(corp), puncte, linii, poligoane,
     })
   }
-  if (stiva.length) throw new EroareKml('kml_structura', `<Folder>/<Document> neînchis: ${stiva.map(s => s || '(fără nume)').join(' / ')}`)
+  if (stiva.length) throw new EroareKml('kml_structura', `neînchis: ${stiva.map(s => `<${s.tip}> „${s.nume || '(fără nume)'}”`).join(' / ')}`)
   return elemente
 }
 
@@ -227,7 +254,14 @@ export function compuneAx(linii, { toleranta_m = 5, gol_max_m = 10 } = {}) {
     const lungAx = cum[cum.length - 1]
     let p0 = proiecteaza(ax, l[0], cum), p1 = proiecteaza(ax, l[l.length - 1], cum)
     const peAx0 = p0.lateral < toleranta_m, peAx1 = p1.lateral < toleranta_m
-    if (peAx0 && peAx1) { jurnal.push({ linie: li + 1, adaugat_m: 0, taiat_m: 0, nota: 'conținută în ax' }); continue }
+    if (peAx0 && peAx1) {
+      // „conținută” doar dacă TOATE vârfurile stau pe ax; o ocolire care pleacă și revine
+      // pe ax nu se aruncă tăcut — traseul e ambiguu, îl decide omul
+      const iese = l.map(v => proiecteaza(ax, v, cum).lateral).reduce((a, b) => Math.max(a, b), 0)
+      if (iese >= toleranta_m) throw new EroareKml('ax_ocolire', `linia ${li + 1} a axului pleacă de pe ax și revine pe el (se depărtează până la ${Math.round(iese)} m): alege explicit varianta de traseu`)
+      jurnal.push({ linie: li + 1, adaugat_m: 0, taiat_m: 0, nota: 'conținută în ax' })
+      continue
+    }
     if (peAx1 && !peAx0) { l.reverse(); [p0, p1] = [p1, p0] }
     else if (!peAx0 && !peAx1) {
       const capat = ax[ax.length - 1]

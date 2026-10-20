@@ -13,7 +13,7 @@ Etapa E1 din `IZOMETRIE_DESIGN_v2.md` v2.3: pregătire **fără schemă**. Codul
 | `docs/izometrie/PREVIEW_E1.md` / `.json` | rezultatul preview-ului: ax, borne, puncte, linii necunoscute, tronsoane PT față de BD, depozite |
 | `docs/izometrie/E1_APPLY_PROPUS.sql` | DML-ul propus (preview → „da” → apply cu RETURNING → control), cu rollback; **nerulat** |
 
-Testele: 74 noi (normalizator 40, KML 34); suita completă și `npx vite build` trec (vezi PR).
+Testele: 127 noi (normalizator 55, KML 72, inclusiv cazurile din review-urile r1 și r2); suita completă (2007 teste) și `npx vite build` trec.
 
 ## Criteriile E1 (§6.3)
 

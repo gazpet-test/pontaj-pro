@@ -218,3 +218,50 @@ describe('P3: centroid și tronsonLaKm', () => {
     expect(tronsonLaKm(NaN, tr)).toBe(null)
   })
 })
+
+// ─── review r2 (#803) ───────────────────────────────────────────────────────
+describe('parseKml — coordonate și geometrii stricte', () => {
+  const pm = g => `<kml><Placemark id="x"><name>x</name>${g}</Placemark></kml>`
+  it.each([
+    ['<LineString><coordinates>22,44 22.1,abc 22.2,44</coordinates></LineString>'],
+    ['<LineString><coordinates>22,44 22.1,44,zz 22.2,44</coordinates></LineString>'],
+    ['<LineString><coordinates>22,44 22.1 22.2,44</coordinates></LineString>'],
+    ['<LineString><coordinates>22,44 22.1,44,0,9 22.2,44</coordinates></LineString>'],
+    ['<LineString><coordinates>22,44 22.1,,0 22.2,44</coordinates></LineString>'],
+    ['<Point><coordinates>200,44</coordinates></Point>'],
+    ['<Point><coordinates>22,95</coordinates></Point>'],
+  ])('un token invalid aruncă, nu se sare: %s', g => expect(codEroare(() => parseKml(pm(g)))).toBe('kml_coordonata'))
+  it.each([
+    ['<Point><coordinates></coordinates></Point>'],
+    ['<Point><coordinates>22,44 23,45</coordinates></Point>'],
+    ['<LineString><coordinates>22,44</coordinates></LineString>'],
+    ['<Polygon><outerBoundaryIs><LinearRing><coordinates>22,44 22.1,44 22.1,44.1</coordinates></LinearRing></outerBoundaryIs></Polygon>'],
+    ['<Polygon><outerBoundaryIs><LinearRing><coordinates>22,44 22.1,44 22.1,44.1 22,44.1</coordinates></LinearRing></outerBoundaryIs></Polygon>'],
+  ])('geometrie invalidă aruncă: %s', g => expect(codEroare(() => parseKml(pm(g)))).toBe('kml_geometrie'))
+  it('altitudinea validă (lon,lat,alt) e acceptată', () => {
+    expect(parseKml(pm('<LineString><coordinates>22,44,0 22.1,44,12.5</coordinates></LineString>'))[0].linii[0]).toEqual([[22, 44], [22.1, 44]])
+  })
+  it('mesajul de eroare spune elementul', () => {
+    expect(() => parseKml(pm('<LineString><coordinates>22,44 x,y</coordinates></LineString>'))).toThrow(/id=x/)
+  })
+})
+
+describe('parseKml — închiderea trebuie să fie de același tip', () => {
+  it('</Document> care închide un <Folder> aruncă', () => {
+    expect(codEroare(() => parseKml('<kml><Document><name>D</name><Folder><name>F</name></Document></Folder></kml>'))).toBe('kml_structura')
+  })
+  it('imbricarea corectă trece și dă calea', () => {
+    const el = parseKml('<kml><Document><name>D</name><Folder><name>F</name><Placemark><name>a</name><Point><coordinates>1,2</coordinates></Point></Placemark></Folder></Document></kml>')
+    expect(el[0].cale).toBe('D / F')
+  })
+})
+
+describe('compuneAx — ocolirea nu e „conținută”', () => {
+  it('o linie cu ambele capete pe ax, dar care se depărtează, aruncă', () => {
+    const ocolire = [pct(1000), [lonLa(1500), LAT + 0.002], pct(2000)]   // ~220 m spre nord la mijloc
+    expect(codEroare(() => compuneAx([linie(0, 3000), ocolire]))).toBe('ax_ocolire')
+  })
+  it('o linie cu toate vârfurile pe ax rămâne „conținută”', () => {
+    expect(compuneAx([linie(0, 3000), linie(1000, 2000, 100)]).jurnal[1].nota).toBe('conținută în ax')
+  })
+})
