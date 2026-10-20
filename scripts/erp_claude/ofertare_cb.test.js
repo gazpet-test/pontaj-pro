@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { citesteArgs, plafonDin, textPas, EroareUtilizare } from './ofertare_cb.mjs'
+import { citesteArgs, plafonDin, textPas, motiveRaport, EroareUtilizare } from './ofertare_cb.mjs'
+
+describe('scripts/erp_claude/ofertare_cb — motivele din raport', () => {
+  it('doar eroare / refuz / refuz_rezervare, cu documentul și felia', () => {
+    expect(motiveRaport([{ document_id: 212, felie: 3, eroare: 'raspuns neinterpretabil' }, { document_id: 201, sarit: 'cerere_ocupata' },
+      { document_id: 213, refuz: 'in_lucru_pe_alta_cerere' }, { document_id: 5, felie: 1, refuz_rezervare: { refuz: 'plafon' } }, { document_id: 9, observatii: 4 }]))
+      .toEqual(['doc 212 felia 3: eroare raspuns neinterpretabil', 'doc 213: refuz in_lucru_pe_alta_cerere', 'doc 5 felia 1: refuz_rezervare {"refuz":"plafon"}'])
+    expect(motiveRaport(undefined)).toEqual([])
+  })
+})
 
 describe('scripts/erp_claude/ofertare_cb — argumente', () => {
   it('stare / plafon / aproba / ruleaza cu valorile implicite ale butonului', () => {

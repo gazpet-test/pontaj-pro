@@ -69,6 +69,10 @@ export function citesteArgs(argv) {
 export const textPas = (i, p) => p.eroare ? `pas ${i + 1}: eroare — ${p.eroare}`
   : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`
 
+// rândurile din raport[] pe care ruleazaPanaLaCapat le numără ca erori, ca text scurt: „doc 212 felia 3: refuz munca_existenta”
+export const motiveRaport = (raport) => (raport || []).filter(x => x.eroare || x.refuz || x.refuz_rezervare).map(x =>
+  `doc ${x.document_id ?? '?'}${x.felie != null ? ` felia ${x.felie}` : ''}: ${x.eroare ? `eroare ${x.eroare}` : x.refuz ? `refuz ${x.refuz}` : `refuz_rezervare ${typeof x.refuz_rezervare === 'string' ? x.refuz_rezervare : JSON.stringify(x.refuz_rezervare)}`}`)
+
 const primaLinie = (f, ce) => {
   let t
   try { t = readFileSync(f, 'utf8') } catch { throw new Error(`Lipsește ${ce}: ${f}`) }
@@ -144,6 +148,7 @@ async function main(a) {
       const ce = `pornesc extragerea cu extractorul ${a.extractor} pe ${l.nr_anunt}, cererea #${st.cerere.id} — PLĂTITĂ, se oprește singură la plafon`
       if (!a.da) { console.log(`[fără --da] ${ce} — nimic pornit`); return 0 }
       let oprit = false
+      const probleme = []
       const laSemnal = () => { oprit = true; console.log('… oprire cerută: se oprește după pasul curent') }
       process.once('SIGINT', laSemnal)
       console.log(`▶ extractor ${a.extractor}`)
@@ -154,14 +159,17 @@ async function main(a) {
           await proaspat()
           const x = await sb.functions.invoke('ofertare-cantitati-extrage', { body })
           // ca în ecran, dar cu motivul real din corpul răspunsului (nu „non-2xx” generic)
-          return x.error ? { data: x.data, error: { message: await mesajInvoke(x.error, x.data) } } : x
+          if (x.error) return { data: x.data, error: { message: await mesajInvoke(x.error, x.data) } }
+          // butonul doar le numără; aici se văd și motivele (aceeași definiție de „eroare” ca ruleazaPanaLaCapat)
+          for (const e of motiveRaport(x.data?.raport)) { probleme.push(e); console.log(`    ↳ ${e}`) }
+          return x
         },
         { mod: 'structurat', licitatie_id: l.id, cerere_id: st.cerere.id, extractor: a.extractor },
         { maxPasi: a.maxPasi, laPas: (i, p) => console.log(`  ${new Date().toLocaleTimeString('ro-RO')} ${textPas(i, p)}`), trebuieOprit: () => oprit })
       } finally { process.off('SIGINT', laSemnal) }   // review Copilot #801 (P3)
       const tot = totalPasi(r.pasi)
       const ext = r.pasi.find(p => p.extractor)?.extractor
-      jurnal({ cmd: 'ruleaza', lic: l.id, cerere_id: st.cerere.id, extractor: a.extractor, motiv: r.motiv, ...tot, model: ext ?? null })
+      jurnal({ cmd: 'ruleaza', lic: l.id, cerere_id: st.cerere.id, extractor: a.extractor, motiv: r.motiv, ...tot, model: ext ?? null, probleme: probleme.slice(0, 50) })
       console.log(`■ ${a.extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${ext ? ` (${ext})` : ''}`)
       if (r.motiv === 'eroare') { st = await stare(sb, a.lic); afiseaza(l, st); return 1 }
     }
