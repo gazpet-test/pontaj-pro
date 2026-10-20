@@ -161,11 +161,11 @@ Deno.test('review #757 r1 (P2): rând de listă > 300 caractere — citatul = ul
   await RULEAZA(f)
   assertEquals([f.obs()[0]?.pozitie_dovedita, f.obs()[0]?.cantitate], [true, 1160])
 })
-Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n4', async () => {
+Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n5', async () => {
   const f = fals({ raspuns: 'nu e JSON' })
   const r = await RULEAZA(f)
   assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
-  assert(EXTRACTOR_ID.includes('@p3@n4@f2'))
+  assert(EXTRACTOR_ID.includes('@p3@n5@f2'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {
