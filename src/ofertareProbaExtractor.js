@@ -50,7 +50,9 @@ export function problemeRaport(raport, maxRanduri = 30) {
   for (const x of raport || []) {
     if (!(x && (x.eroare || x.refuz || x.refuz_rezervare || x.asteapta_om))) continue
     const unde = `doc ${x.document_id ?? '?'}${x.felie != null ? ` felia ${x.felie + 1}` : ''}`
-    const ce = x.eroare ? String(x.eroare) : x.refuz ? `refuz: ${x.refuz}` : x.refuz_rezervare ? `refuz rezervare: ${x.refuz_rezervare}` : `așteaptă omul (${x.asteapta_om})`
+    // review Gemini r1 (P3): valorile pot fi și obiecte (ex. { refuz: 'plafon' }) — text, nu „[object Object]”
+    const txt = (v) => typeof v === 'string' ? v : JSON.stringify(v)
+    const ce = x.eroare ? txt(x.eroare) : x.refuz ? `refuz: ${txt(x.refuz)}` : x.refuz_rezervare ? `refuz rezervare: ${txt(x.refuz_rezervare)}` : `așteaptă omul (${txt(x.asteapta_om)})`
     const mostra = Array.isArray(x.mostre) && x.mostre.length ? ` — ex.: ${String(x.mostre[0]).slice(0, 160)}` : ''
     out.push(`${unde}: ${ce.slice(0, 200)}${mostra}`)
     if (out.length >= maxRanduri) { out.push('…'); break }

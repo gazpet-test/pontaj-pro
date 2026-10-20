@@ -69,6 +69,9 @@ describe('problemeRaport (motivul feliilor eșuate, varianta b)', () => {
       'doc 213 felia 6: refuz rezervare: felie',
     ])
   })
+  it('obiectele devin text', () => {
+    expect(problemeRaport([{ document_id: 5, felie: 0, refuz_rezervare: { refuz: 'plafon' } }])).toEqual(['doc 5 felia 1: refuz rezervare: {"refuz":"plafon"}'])
+  })
   it('plafonează numărul de rânduri și tolerează raport lipsă', () => {
     expect(problemeRaport(undefined)).toEqual([])
     const multe = Array.from({ length: 40 }, (_, i) => ({ document_id: 1, felie: i, eroare: 'e' }))
