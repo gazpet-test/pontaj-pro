@@ -288,4 +288,15 @@ describe('esantioneaza', () => {
     expect(e[e.length - 1][0]).toBeCloseTo(lonLa(23), 12)
     for (let i = 1; i < e.length; i++) expect(haversine(e[i - 1], e[i])).toBeLessThanOrEqual(5)
   })
+  it('pasul 0 sau negativ nu blochează: se folosește minimul de 0,5 m', () => {
+    for (const p of [0, -3]) {
+      const e = esantioneaza([pct(0), pct(10)], p)
+      expect(e.length).toBeGreaterThanOrEqual(21)
+      expect(e.length).toBeLessThanOrEqual(22)
+      for (let i = 1; i < e.length; i++) expect(haversine(e[i - 1], e[i])).toBeLessThanOrEqual(0.5 + 1e-9)
+    }
+  })
+  it('o linie care ar cere prea multe puncte → EroareKml, nu blocare', () => {
+    expect(codEroare(() => esantioneaza([pct(0), pct(5000)], 1, { max_puncte: 1000 }))).toBe('esantionare_prea_mare')
+  })
 })

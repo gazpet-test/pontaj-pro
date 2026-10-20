@@ -95,19 +95,22 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
         .order('generat_la', { ascending: false })
       if (isExec && proiectId) qBon = qBon.eq('proiect_id', proiectId)
 
-      const [rBon, rProj, rSL, rBuc, rTip, rProf] = await Promise.all([
+      const [rBon, rProj, rSL, rBuc, rTip, rProf, rProt] = await Promise.all([
         qBon,
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id').order('id'),
         supabase.from('executie_situatii_plata').select('id, proiect_id, nr_situatie, luna, an, status').order('an', { ascending: false }).order('luna', { ascending: false }),
         supabase.from('magazie_bucati').select('id, proiect_id, tip_material_id, serie, sarja, dimensiune, lungime_m, cantitate, um, stare, provenienta').in('stare', ['receptionat','sosit']).order('id', { ascending: false }),
         supabase.from('magazie_tipuri_material').select('id, nume, um_implicit').order('id'),
         supabase.from('profiles').select('id, name, email'),
+        // proiectele cu registru de țeavă (izometrie, nivel ≠ off): țeava lor Transgaz nu intră pe bon (BD refuză oricum)
+        supabase.rpc('fn_izo_proiecte_protejate'),
       ])
       setProfile(prof)
       setBonuri(rBon.data || [])
       setProiecte(rProj.data || [])
       setSluri(rSL.data || [])
-      setBucati(rBuc.data || [])
+      const protejate = new Set((rProt.error ? [] : (rProt.data || [])).map(r => r.proiect_id))
+      setBucati((rBuc.data || []).filter(b => !(b.provenienta === 'beneficiar' && protejate.has(b.proiect_id))))
       setTipuri(rTip.data || [])
       setProfilesMap(Object.fromEntries((rProf.data || []).map(p => [p.id, p.name || p.email || '—'])))
     } catch (e) { console.error(e); flash('err', 'Eroare la încărcare.') } finally { setLoading(false) }

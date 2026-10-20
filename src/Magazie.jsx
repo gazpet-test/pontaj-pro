@@ -936,6 +936,14 @@ const STARE_META = {
   montata:     { label:'Montată',                   emoji:'🏗️', color:G.purple },
   consumata:   { label:'Consumată',                 emoji:'🔥', color:G.dim    },
   retur:       { label:'Retur (rest în stoc)',      emoji:'↩️', color:G.cyan   },
+  // stările registrului de țeavă Transgaz (izometrie, doar provenienta beneficiar — 20261102a)
+  in_tranzit:          { label:'În drum',                     emoji:'🚚', color:G.yellow },
+  pe_tronson:          { label:'Pe tronson (nemontată)',      emoji:'📍', color:G.blue   },
+  rest_nereutilizabil: { label:'Rest nereutilizabil (depozit)', emoji:'✂️', color:G.dim  },
+  taiata:              { label:'Tăiată (consumată în bucăți)', emoji:'🪚', color:G.dim   },
+  deseu:               { label:'Deșeu',                       emoji:'🗑️', color:G.dim   },
+  pierduta:            { label:'Pierdută',                    emoji:'❓', color:G.red    },
+  anulata:             { label:'Anulată (storno)',            emoji:'⛔', color:G.dim    },
 }
 const PROV_META_T = {
   gazpet:     { label:'Gazpet', color:G.green },

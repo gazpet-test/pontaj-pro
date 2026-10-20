@@ -121,6 +121,14 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 7. **Q-E2-2 — DECIS (Razvan, 20.10)**: tab nou „🧱 Țeavă proiecte” în Magazie, lângă „🔍 Stoc trasabil”.
 8. **Q-E2-3 — DECIS (Razvan, 20.10): A.** Curbele LOT 1 (3) și LOT 3 (22) din fișierul LOT 2 nu se importă (LOT 1 e aproape închis și are materialele lui; LOT 3 nu e la Gazpet). În preview apar doar numărate, „excluse (LOT 1: 3, LOT 3: 22)”, pentru reconciliere.
 
+## 4b. Livrarea efectivă a E2a (PR-ul migrării 20261102a)
+
+- **În migrare**: rolul + granița (R7); `izo_proiect_config`, `izo_atribuiri`, `izo_importuri`, registrul (evenimente + mișcări, doar adaug), `izo_server_ver_seq`; extinderea `magazie_bucati` (coloane, CHECK-uri doar pe beneficiar, indexurile R1/R9); garda + RESTRICTIVE + politicile writer-ului; căile 3 (inclusiv **ștergerea pachetului**, găsită de harness: cascada pe țevi rula după dispariția pachetului) și 9; `fn_izo_seteaza_nivel` (activarea `stoc` refuză dacă proiectul are bucăți beneficiar în afara registrului), `fn_izo_import_sold_initial`, `fn_izo_import_storno`; ajutătoarele (inclusiv `fn_izo_uid`, pentru că writer-ul n-are drept pe schema `auth`).
+- **Mutate din E2a** (nu sunt folosite de nimic în E2a; intră cu ecranele/fluxurile care le scriu, fiecare cu migrarea și testele ei): `teava_certificate*` → E3 (certificatul 3.1 la recepție); `izo_tronson_config` (executant, sens, perete proiectat) și `izo_surse_proiect` / `izo_ax_ancore` → E2b/E4b; `fn_izo_dezambiguare` → E2b (doar dacă preview-ul arată coliziuni reale; azi importul le refuză).
+- **UI în E2a**: `STARE_META` din Magazie cu stările noi; filtrul din bonuri (bucățile beneficiar ale proiectelor protejate nu apar), tolerant la funcția încă neaplicată. Avertizarea de pe transport (Q-E2-1 = C) intră în E2b.
+- **Preview-ul soldului inițial** (`scripts/izometrie/preview_e2_stoc.mjs`) vine în PR-ul următor (E2a-2), înainte de orice import; importul și activarea rămân pe decizia de dimineață a lui Razvan.
+- **Harness**: `scripts/test_izometrie_e2a.sh` (PG16 local): 82 de verificări SQL + importul concurent + refuzurile/revenirea. **Limită asumată**: în harness `postgres` e superuser, deci primitivele CREATE ROLE / ALTER OWNER / `pg_auth_members` pe Supabase se dovedesc doar pe branch (P1).
+
 ## 5. Review-ul planului (Copilot + Gemini, GO cu condiții) → unde e integrat
 
 | # | Condiția | Unde |
