@@ -13,7 +13,7 @@ describe('scripts/erp_claude/ofertare_cb — argumente', () => {
   })
   it('refuză intrările greșite cu EroareUtilizare', () => {
     for (const a of [[], ['sterge', '15'], ['stare', 'x'], ['stare', '0'], ['stare', '15', 'extra'], ['plafon', '15'], ['plafon', '15', '0'],
-      ['plafon', '15', 'abc'], ['ruleaza', '15', 'C'], ['aproba', '15', '--ore', '25'], ['aproba', '15', '--ore', '0'],
+      ['plafon', '15', 'abc'], ['plafon', '15', 'Infinity'], ['plafon', '15', '-1'], ['plafon', '15', '5.01'], ['plafon', '15', '1e3'], ['ruleaza', '15', 'C'], ['aproba', '15', '--ore', '25'], ['aproba', '15', '--ore', '0'],
       ['ruleaza', '15', 'A', '--max-pasi', '21'], ['stare', '15', '--force']])
       expect(() => citesteArgs(a), JSON.stringify(a)).toThrow(EroareUtilizare)
   })

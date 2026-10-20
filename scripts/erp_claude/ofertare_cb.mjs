@@ -32,6 +32,7 @@ const F_ANON = `${SECRETE}/supabase_anon_key.txt`
 const F_JURNAL = process.env.ERP_CLAUDE_JURNAL || `${SECRETE}/erp_claude_jurnal.jsonl`
 const COMENZI = ['stare', 'plafon', 'aproba', 'ruleaza']
 const MAX_ORE = 24   // serverul acceptă până la 720 h; scriptul ține cererea scurtă (butonul: 12 h)
+const MAX_PLAFON = 5 // limita adminului Ofertare pe server (20261031d); claude@ e admin, nu owner
 
 export class EroareUtilizare extends Error {}
 const gresit = (m) => { throw new EroareUtilizare(m) }
@@ -56,7 +57,8 @@ export function citesteArgs(argv) {
   const asteptate = { stare: 2, plafon: 3, aproba: 2, ruleaza: 3 }[cmd]
   if (poz.length !== asteptate) gresit(`Număr greșit de argumente pentru „${cmd}”`)
   const r = { cmd, lic, ...o }
-  if (cmd === 'plafon') { r.usd = plafonDin(x); if (!(r.usd > 0)) gresit('Plafon invalid') }
+  // review Copilot #801 (P2): „Infinity” trecea; refuz local înaintea login-ului (serverul refuză oricum peste 5 USD pentru admin)
+  if (cmd === 'plafon') { r.usd = plafonDin(x); if (!Number.isFinite(r.usd) || !(r.usd > 0) || r.usd > MAX_PLAFON) gresit(`Plafon invalid (0 < USD ≤ ${MAX_PLAFON})`) }
   if (cmd === 'ruleaza') { r.extractor = String(x).toUpperCase(); if (!['A', 'B'].includes(r.extractor)) gresit('Extractorul e A sau B') }
   if (!Number.isInteger(r.ore) || r.ore < 1 || r.ore > MAX_ORE) gresit(`--ore între 1 și ${MAX_ORE}`)
   if (!Number.isInteger(r.maxPasi) || r.maxPasi < 1 || r.maxPasi > 20) gresit('--max-pasi între 1 și 20')
@@ -145,7 +147,9 @@ async function main(a) {
       const laSemnal = () => { oprit = true; console.log('… oprire cerută: se oprește după pasul curent') }
       process.once('SIGINT', laSemnal)
       console.log(`▶ extractor ${a.extractor}`)
-      const r = await ruleazaPanaLaCapat(
+      let r
+      try {
+      r = await ruleazaPanaLaCapat(
         async (body) => {
           await proaspat()
           const x = await sb.functions.invoke('ofertare-cantitati-extrage', { body })
@@ -154,7 +158,7 @@ async function main(a) {
         },
         { mod: 'structurat', licitatie_id: l.id, cerere_id: st.cerere.id, extractor: a.extractor },
         { maxPasi: a.maxPasi, laPas: (i, p) => console.log(`  ${new Date().toLocaleTimeString('ro-RO')} ${textPas(i, p)}`), trebuieOprit: () => oprit })
-      process.off('SIGINT', laSemnal)
+      } finally { process.off('SIGINT', laSemnal) }   // review Copilot #801 (P3)
       const tot = totalPasi(r.pasi)
       const ext = r.pasi.find(p => p.extractor)?.extractor
       jurnal({ cmd: 'ruleaza', lic: l.id, cerere_id: st.cerere.id, extractor: a.extractor, motiv: r.motiv, ...tot, model: ext ?? null })
