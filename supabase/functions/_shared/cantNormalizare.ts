@@ -99,12 +99,15 @@ export async function sha256Hex(s: string): Promise<string> {
 // ambiguitate păstrată, nu corecție. Review Jakarinos r2 (P1): un cod declarat într-un format nerecunoscut („SA11H1,”, „SA11H1[2]”,
 // „670 1153”, „a)”) nu se poate verifica → nedovedit; singurele excepții sunt marcajele de „fără cod” (gol, „-”, „null”, „n/a”).
 const FARA_COD = /^(?:|-|—|null|n\/a|nu e cazul)$/i
+// coloana „[ n]” a listei lipită de cod de model, separată prin spațiu („GD19A1% [ 1]” → „GD19A1%”); altceva rămâne neschimbat
+export const codFaraColoana = (v: unknown): unknown => typeof v === 'string' ? v.replace(/\s+\[\s*\d{1,3}\s*\]\s*$/, '') : v
+
 export function verificaRand(textDoc: string, off: number, codModel: unknown, dnCod: number[]):
   { motiv: 'cod_alt_rand' | 'cod_neverificabil' | 'dn_alt_rand' | null; dnInPlus: boolean; continuare: [number, number] | null } {
   const b = blocRand(textDoc, off)
   // 20.10.2026: modelul lipește uneori coloana „[ n]” a listei de cod („GD19A1% [ 1]”) — se scoate DOAR forma separată prin spațiu
   // (coloana listei, pe care identificatoriLinie o desparte oricum); „SA11H1[2]” lipit rămâne neverificabil (PR-A r3)
-  const codBrut = String(codModel ?? '').replace(/\*/g, '').trim().replace(/\s+\[\s*\d{1,3}\s*\]$/, '')
+  const codBrut = String(codFaraColoana(codModel) ?? '').replace(/\*/g, '').trim()
   if (!FARA_COD.test(codBrut)) {
     const cod = codComparabil(codBrut)
     if (cod === null) return { motiv: 'cod_neverificabil', dnInPlus: false, continuare: null }
@@ -153,7 +156,8 @@ export async function normalizeazaRand(r: RandModel, ctx: ContextFelie): Promise
     lot_domeniu: ctx.lot_domeniu, lot_nr: ctx.lot_nr,
     rol_sursa: ctx.rol_sursa, rol_decis_de: ctx.rol_decis_de,
     pagina: offsetPagina !== null ? paginaLa(ctx.textDoc, offsetPagina) : null,
-    cod_articol: text(r.cod_articol, 100), denumire,
+    // review Gemini #812 r1 (P2): codul salvat = același cu cel verificat (fără coloana „ [ n]” lipită de model prin spațiu)
+    cod_articol: text(codFaraColoana(r.cod_articol), 100), denumire,
     rand_interval: poz.rand_interval ? `[${poz.rand_interval[0]},${poz.rand_interval[1]})` : null,
     citat_interval: poz.citat_interval ? `[${poz.citat_interval[0]},${poz.citat_interval[1]})` : null,
     cantitate_offset: poz.cantitate_offset, pozitie_dovedita: poz.pozitie_dovedita, valoare_ambigua: poz.valoare_ambigua || cm === 'ambigua',

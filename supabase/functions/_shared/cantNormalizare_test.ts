@@ -245,6 +245,7 @@ Deno.test('n5 (20.10, proba Răcari): cod de normă cu „%” la coadă — dov
   for (const cod of ['GD19A1%', 'GD19A1% [ 1]', 'gd19a1%']) {
     const n = (await normalizeazaRand({ ...randF3(cod, 'IMBINAREA PRIN SUDURA DE TIP ELECTROFUZIUNE', 6, '007 GD19A1% [ 1] BUC. 6.000'), um: 'BUC.' }, { ...ctxF3, textDoc: t, felie: t }))!
     assertEquals([n.obs.pozitie_dovedita, n.obs.cantitate], [true, 6], cod)
+    assertEquals(n.obs.cod_articol, cod === 'GD19A1% [ 1]' ? 'GD19A1%' : cod, cod)   // review Gemini r1 P2: codul salvat = cel verificat
   }
   // „%” doar la coadă; alt cod (fără „%”, sau alt rând) rămâne nedovedit
   for (const [cod, motiv] of [['GD19%A1', 'cod_neverificabil'], ['GD19A1', 'cod_alt_rand'], ['GD20A1%', 'cod_alt_rand'], ['GD19A1%[ 1]', 'cod_neverificabil']]) {
