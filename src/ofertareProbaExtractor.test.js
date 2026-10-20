@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { consumBuget, cerereActiva, cereriPeLot, ruleazaPanaLaCapat, totalPasi } from './ofertareProbaExtractor.js'
+import { consumBuget, cerereActiva, cereriPeLot, ruleazaPanaLaCapat, totalPasi, problemeRaport } from './ofertareProbaExtractor.js'
 
 describe('consumBuget', () => {
   it('decontat la cost real; orice altă stare la suma rezervată (ca fn_ofertare_cb_consum)', () => {
@@ -52,5 +52,32 @@ describe('review r1 (#797)', () => {
     expect([r.motiv, n]).toEqual(['fara_progres', 1])
     const e = await ruleazaPanaLaCapat(async () => { throw new TypeError('Failed to fetch') }, {})
     expect([e.motiv, e.pasi[0].eroare]).toEqual(['eroare', 'Failed to fetch'])
+  })
+})
+
+describe('problemeRaport (motivul feliilor eșuate, varianta b)', () => {
+  it('scoate doar feliile cu eroare / refuz / așteaptă omul, cu prima mostră trunchiată', () => {
+    const r = problemeRaport([
+      { document_id: 212, felie: 0, eroare: '3 rânduri nenormalizabile — felia nu e completă', mostre: ['{"um":"buc"}', 'x'] },
+      { document_id: 212, felie: 1, observatii: 12 },
+      { document_id: 213, felie: 4, asteapta_om: 'esuat' },
+      { document_id: 213, felie: 5, refuz_rezervare: 'felie' },
+    ])
+    expect(r).toEqual([
+      'doc 212 felia 1: 3 rânduri nenormalizabile — felia nu e completă — ex.: {"um":"buc"}',
+      'doc 213 felia 5: așteaptă omul (esuat)',
+      'doc 213 felia 6: refuz rezervare: felie',
+    ])
+  })
+  it('plafonează numărul de rânduri și tolerează raport lipsă', () => {
+    expect(problemeRaport(undefined)).toEqual([])
+    const multe = Array.from({ length: 40 }, (_, i) => ({ document_id: 1, felie: i, eroare: 'e' }))
+    const r = problemeRaport(multe, 5)
+    expect(r.length).toBe(6); expect(r[5]).toBe('…')
+  })
+  it('ruleazaPanaLaCapat pune problemele pe pas', async () => {
+    const r = await ruleazaPanaLaCapat(async () => ({ data: { oprit: null, felii_apelate: 1, cost_usd: 0.01, raport: [{ document_id: 9, felie: 2, eroare: 'raspuns neinterpretabil' }] } }), {})
+    expect(r.pasi[0].probleme).toEqual(['doc 9 felia 3: raspuns neinterpretabil'])
+    expect(r.pasi[0].erori).toBe(1)
   })
 })

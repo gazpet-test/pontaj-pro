@@ -81,8 +81,8 @@ export default function OfertareProbaExtractor({ licitatie: l }) {
     const r = await ruleazaPanaLaCapat(
       (body) => supabase.functions.invoke('ofertare-cantitati-extrage', { body }),
       { mod: 'structurat', licitatie_id: l.id, cerere_id: st.cerere.id, extractor },
-      { laPas: (i, p) => jurnalAici(p.eroare ? `pas ${i + 1}: eroare — ${p.eroare}`
-          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`),
+      { laPas: (i, p) => { jurnalAici(p.eroare ? `pas ${i + 1}: eroare — ${p.eroare}`
+          : `pas ${i + 1}: ${p.felii_apelate} felii · ${p.cost_usd.toFixed(4)} USD${p.felii_cu_deficit_b1 != null ? ` · deficit B1 ${p.felii_cu_deficit_b1}` : ''}${p.felii_escaladate != null ? ` · escaladate ${p.felii_escaladate}` : ''}${p.erori ? ` · ${p.erori} cu erori` : ''}${p.oprit ? ` · ${p.oprit}` : ''}`); (p.probleme || []).forEach(x => jurnalAici(`   ⚠ ${x}`)) },
         trebuieOprit: () => opreste.current })
     const tot = totalPasi(r.pasi)
     jurnalAici(`■ ${extractor}: ${r.motiv} — ${tot.felii} felii, ${tot.cost.toFixed(4)} USD, deficit B1 ${tot.deficit}, escaladate ${tot.escaladate}, erori ${tot.erori}${r.pasi.find(p => p.extractor)?.extractor ? ` (${r.pasi.find(p => p.extractor).extractor})` : ''}`)
