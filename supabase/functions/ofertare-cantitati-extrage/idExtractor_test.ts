@@ -41,3 +41,12 @@ Deno.test('extractor_id: toate id-urile construite (A cu escaladare, B; orice co
   }
   assertEquals(idExtractor(EXTRACTOARE.A), 'claude-haiku-5-5/claude-sonnet-5-5@p4@n4@f2')
 })
+
+// review Gemini #804 r1 (P2, verificat): modelul decontat la escaladare ('<haiku>+<sonnet>') ajunge în ofertare_ai_rezervari.model, al cărui
+// CHECK (din aceeași migrare) e doar de lungime ≤ 100 — fără clasă de caractere; testul fixează regula, ca o restrângere să pice aici
+Deno.test('modelul decontat (inclusiv escaladarea) respectă CHECK-ul ofertare_ai_rezervari.model din migrare', () => {
+  const sql = Deno.readTextFileSync(new URL('20261031a_ofertare_cantitati_b.sql', MIGRARI))
+  assert(/model\s+text CHECK \(model IS NULL OR length\(model\) <= 100\)/.test(sql), 'CHECK-ul pe model s-a schimbat — actualizează testul')
+  const a = EXTRACTOARE.A
+  for (const m of [a.model, `${a.model}+${a.escaladare!.model}`, EXTRACTOARE.B.model]) assert(m.length <= 100, m)
+})
