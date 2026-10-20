@@ -4,7 +4,7 @@
 --   (tabele: anon/authenticated arwdxt, service_role tot; secvențe: rwU) — exact ca pe live;
 --   magazie_bucati cu coloanele, CHECK-urile și politicile live (SELECT true, I/U/D auth.uid() IS NOT NULL);
 --   executie_proiecte (1 = LOT 1 site 4, 3 = LOT 2 site 6), executie_tronsoane (1–11 LOT 1, 16–23 LOT 2),
---   logistica_depozite (1, 2 site 4; 9, 10, 11 site 6), magazie_tipuri_material, pachete/țevi, bonuri;
+--   logistica_depozite (1, 2 site 4; 4 site 9 = proiectul 2; 9, 10, 11 site 6), magazie_tipuri_material, pachete/țevi, bonuri;
 --   auth.uid() din request.jwt.claims; supabase_migrations.schema_migrations pentru runner; helpers în schema teste.
 -- Diferență față de live, asumată: aici postgres e SUPERUSER (în Supabase nu e) — primitivele CREATE ROLE /
 --   ALTER OWNER / pg_auth_members se dovedesc DOAR pe branch-ul Supabase (§6.1 p10), nu aici.
@@ -65,7 +65,7 @@ ALTER TABLE public.logistica_depozite ENABLE ROW LEVEL SECURITY;
 CREATE POLICY depozite_all ON public.logistica_depozite FOR ALL TO authenticated USING (auth.uid() IS NOT NULL);
 INSERT INTO public.logistica_depozite (id, name, cod_3litere, site_id) VALUES
   (1, 'Balvanești', 'BAL', 4), (2, 'Sisești', 'SIS', 4), (7, 'Sediu Ploiești', 'SED', 1),
-  (9, 'DM Jupânești', 'JUP', 6), (10, 'DM Orșova Nord', 'ORN', 6), (11, 'OS Topleț', 'TOP', 6);
+  (4, 'Căldăraru', 'CAL', 9), (9, 'DM Jupânești', 'JUP', 6), (10, 'DM Orșova Nord', 'ORN', 6), (11, 'OS Topleț', 'TOP', 6);
 CREATE TABLE public.magazie_tipuri_material (id serial PRIMARY KEY, nume text NOT NULL, categorie text, cheie text, activ boolean DEFAULT true);
 ALTER TABLE public.magazie_tipuri_material ENABLE ROW LEVEL SECURITY;
 CREATE POLICY mtm_sel ON public.magazie_tipuri_material FOR SELECT TO authenticated USING (true);

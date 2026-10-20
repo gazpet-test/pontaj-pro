@@ -10,6 +10,8 @@
 #      marcaj), registrul doar-adaug, importul (idempotent, conflict, R1, perete, sursă, depozit, curbe), storno fail-closed,
 #      căile 3 și 9, regresia pozitivă (producție gazpet, recepție LOT 1), citirea pe proiect
 #   4b. import concurent cu același import_id din două sesiuni → un singur efect
+#   4c. conexiune proaspătă: writer fără marcaj → garda · REPEATABLE READ → refuz
+#   4d. curse cu două conexiuni: activare ↔ recepție, dezactivare ↔ import (lock-ul pe proiect)
 #   5. reaplicare → refuz
 #   6. revenire: nearmată → refuz · cu date → refuz · pe o bază curată (migrare fără date): amprentă modificată → refuz;
 #      armată → totul scos, CHECK-urile revin la forma live, rândurile gazpet neatinse, gate 0e = 0
@@ -116,6 +118,40 @@ grep -qx true /tmp/izo_conc_b.out || esec "4b sesiunea B nu a întors duplicat: 
 [ "$(q "SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL")" = "$((INAINTE + 1))" ] || esec "4b efect dublu"
 [ "$(q "SELECT count(*) FROM public.izo_importuri WHERE import_id = 'conc-1'")" = 1 ] || esec "4b două rânduri de import"
 ok "4b import concurent cu același import_id: A aplică, B așteaptă și întoarce duplicat, un singur efect"
+
+# 4c. conexiuni proaspete (GUC-ul marcajului nedefinit) și izolarea: writer fără marcaj → garda; REPEATABLE READ → refuz
+nu_merge() { local out; if out="$("${PSQL[@]}" -d "$BAZA" -Atc "$2" 2>&1)"; then esec "$1 a trecut"; fi
+  grep -q "$3" <<<"$out" || esec "$1 refuzat din alt motiv: $(grep -m1 ERROR <<<"$out")"; }
+nu_merge "4c1 writer fără marcaj, conexiune nouă: UPDATE bucată" \
+  "SET ROLE izo_registru_writer; UPDATE public.magazie_bucati SET observatii = 'x' WHERE serie = '254CA09771'" "doar prin funcțiile registrului"
+nu_merge "4c2 writer fără marcaj, conexiune nouă: INSERT în registru" \
+  "SET ROLE izo_registru_writer; INSERT INTO public.magazie_bucati_evenimente (tip, proiect_id, motiv, server_ver) VALUES ('gasit', 3, 'x', 1)" "doar prin funcțiile registrului"
+nu_merge "4c3 recepție beneficiar în REPEATABLE READ" \
+  "BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000030\"}', true); SET LOCAL ROLE authenticated; INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta) VALUES (1, 1, 'RR1', 'beneficiar'); COMMIT;" "READ COMMITTED"
+nu_merge "4c4 funcție a registrului în REPEATABLE READ" \
+  "BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test'); COMMIT;" "READ COMMITTED"
+ok "4c conexiune proaspătă: writer fără marcaj → garda (UPDATE + INSERT) · REPEATABLE READ → refuz (recepție + funcție registru)"
+
+# 4d. cursa activare ↔ recepție pe proiectul 2: recepția (lock partajat) ține pe loc activarea (lock exclusiv), care
+#     apoi vede bucata comisă și refuză. Fără lock, activarea n-ar vedea bucata necomisă → bucată neurmărită sub stoc.
+( "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000030\"}', true); SET LOCAL ROLE authenticated; INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta) VALUES (2, 1, 'CURSA1', 'beneficiar'); SELECT pg_sleep(2); COMMIT;" >/tmp/izo_cursa_a.out 2>&1 ) &
+PID_A=$!
+sleep 0.7
+nu_merge "4d1 activare în timpul unei recepții beneficiar necomise" "SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'cursa')" "în afara registrului"
+wait "$PID_A" || { cat /tmp/izo_cursa_a.out >&2; esec "4d1 recepția a eșuat"; }
+[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.magazie_bucati WHERE serie = 'CURSA1'")" = "off:1" ] || esec "4d1 stare finală greșită"
+q "DELETE FROM public.magazie_bucati WHERE serie = 'CURSA1'" >/dev/null
+# cursa dezactivare ↔ import: importul (lock exclusiv) ține pe loc „off”, care apoi vede faptele și refuză
+q "SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'cursa b')" >/dev/null
+PAY2='{"surse":[{"fisier":"C.xlsx","sha256":"5555555555555555555555555555555555555555555555555555555555555555"}],"bucati":[{"tip":"teava","serie":"299CC00002","sarja":"SA2","lungime_mm":12000,"perete_mm":7.1,"stare":"sosit","depozit_id":4,"sursa":{"fisier":"C.xlsx","foaie":"F","rand":1}}]}'
+( "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; SELECT public.fn_izo_import_sold_initial(2, 'cursa-b', '$PAY2'::jsonb)->>'duplicat'; SELECT pg_sleep(2); COMMIT;" >/tmp/izo_cursa_b.out 2>&1 ) &
+PID_A=$!
+sleep 0.7
+nu_merge "4d2 dezactivare în timpul unui import necomis" "SELECT public.fn_izo_seteaza_nivel(2, 'off', 'cursa')" "fapte în registru"
+wait "$PID_A" || { cat /tmp/izo_cursa_b.out >&2; esec "4d2 importul a eșuat"; }
+grep -qx false /tmp/izo_cursa_b.out || esec "4d2 importul nu a aplicat: $(cat /tmp/izo_cursa_b.out)"
+[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.magazie_bucati WHERE serie = '299CC00002' AND tip_cod = 'teava'")" = "stoc:1" ] || esec "4d2 stare finală greșită"
+ok "4d curse pe proiectul 2: activare ↔ recepție → activarea așteaptă și refuză · dezactivare ↔ import → „off” așteaptă și refuză"
 
 refuza_cu "5 reaplicare" "Precondiție 0b"
 ok "5 reaplicare → refuz"

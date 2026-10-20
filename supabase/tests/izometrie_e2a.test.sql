@@ -12,10 +12,11 @@ SET client_min_messages = notice;
 CREATE TEMP TABLE payload (nume text PRIMARY KEY, p jsonb);
 GRANT SELECT ON payload TO PUBLIC;
 INSERT INTO payload VALUES
- ('imp1', '{"motiv":"test","surse":[{"fisier":"TOPLET.xlsx","sha256":"1111111111111111111111111111111111111111111111111111111111111111"}],
+ ('imp1', '{"motiv":"test","surse":[{"fisier":"TOPLET.xlsx","sha256":"1111111111111111111111111111111111111111111111111111111111111111"},
+                               {"fisier":"JUP.xlsx","sha256":"2222222222222222222222222222222222222222222222222222222222222222"}],
    "bucati":[
     {"tip":"teava","serie":"254CA09771","sarja":"SA0818","lungime_mm":12280,"perete_mm":7.1,"diametru_mm":610,"stare":"receptionat","depozit_id":11,"izolatie":"PEHD","nr_aviz":"144016","data_aviz":"2026-04-28","sursa":{"fisier":"TOPLET.xlsx","foaie":"TEAVA 7.1 TOPLET","rand":12}},
-    {"tip":"teava","serie":"247EK08603","sarja":"SA07348","lungime_mm":12280,"perete_mm":7.1,"diametru_mm":610,"stare":"pe_tronson","tronson_id":21,"depozit_id":10,"sursa":{"fisier":"TOPLET.xlsx","foaie":"TEAVA 7.1 TOPLET","rand":13}},
+    {"tip":"teava","serie":"247EK08603","sarja":"SA07348","lungime_mm":12280,"perete_mm":7.1,"diametru_mm":610,"stare":"pe_tronson","tronson_id":21,"depozit_origine_id":10,"sursa":{"fisier":"TOPLET.xlsx","foaie":"TEAVA 7.1 TOPLET","rand":13}},
     {"tip":"teava","serie":"264DB00500","sarja":"SA03585","lungime_mm":12190,"perete_mm":8.8,"diametru_mm":610,"stare":"sosit","depozit_id":9,"sursa":{"fisier":"JUP.xlsx","foaie":"TEAVA 8.8 MM","rand":14}},
     {"tip":"curba","serie":"870","sarja":"2520914","unghi_curba":20,"perete_mm":8,"diametru_mm":610,"stare":"sosit","depozit_id":11,"sursa":{"fisier":"TOPLET.xlsx","foaie":"CURBE LOT 2","rand":20}}]}'),
  ('imp2', '{"surse":[{"fisier":"JUP.xlsx","sha256":"2222222222222222222222222222222222222222222222222222222222222222"}],
@@ -30,6 +31,16 @@ INSERT INTO payload VALUES
    "bucati":[{"tip":"teava","serie":"299ZZ00002","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"stare":"sosit","depozit_id":9}]}'),
  ('depozit_strain', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],
    "bucati":[{"tip":"teava","serie":"299ZZ00003","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"stare":"sosit","depozit_id":1,"sursa":{"fisier":"X.xlsx","foaie":"F","rand":1}}]}'),
+ ('nu_obiect', '[]'),
+ ('fara_bucati', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}]}'),
+ ('bucati_null', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],"bucati":null}'),
+ ('surse_obiect', '{"surse":{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"},"bucati":[{"tip":"teava","serie":"299YY00001","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"stare":"sosit","depozit_id":9,"sursa":{"fisier":"X.xlsx","foaie":"F","rand":1}}]}'),
+ ('rand_nu_obiect', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],"bucati":[1]}'),
+ ('tip_lipsa', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],"bucati":[{"serie":"299YY00002","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"stare":"sosit","depozit_id":9,"sursa":{"fisier":"X.xlsx","foaie":"F","rand":1}}]}'),
+ ('stare_lipsa', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],"bucati":[{"tip":"teava","serie":"299YY00003","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"depozit_id":9,"sursa":{"fisier":"X.xlsx","foaie":"F","rand":1}}]}'),
+ ('sursa_necunoscuta', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],"bucati":[{"tip":"teava","serie":"299YY00001","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"stare":"sosit","depozit_id":9,"sursa":{"fisier":"Y.xlsx","foaie":"F","rand":1}}]}'),
+ ('surse_duplicate', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"},{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],"bucati":[{"tip":"teava","serie":"299YY00001","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"stare":"sosit","depozit_id":9,"sursa":{"fisier":"X.xlsx","foaie":"F","rand":1}}]}'),
+ ('tronson_cu_depozit', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],"bucati":[{"tip":"teava","serie":"299YY00004","sarja":"SA9","lungime_mm":11000,"perete_mm":7.1,"stare":"pe_tronson","tronson_id":21,"depozit_id":10,"sursa":{"fisier":"X.xlsx","foaie":"F","rand":1}}]}'),
  ('curba_dubla', '{"surse":[{"fisier":"X.xlsx","sha256":"3333333333333333333333333333333333333333333333333333333333333333"}],
    "bucati":[{"tip":"curba","serie":"870","sarja":"2520914","unghi_curba":20,"perete_mm":8,"stare":"sosit","depozit_id":11,"sursa":{"fisier":"X.xlsx","foaie":"C","rand":2}}]}');
 
@@ -88,7 +99,8 @@ SELECT teste.e('T4b bucățile: rădăcini (radacina_id = id, cod AB), tip_cod, 
           AND bool_and(serie_canon = upper(regexp_replace(serie, '[[:space:]._/-]', '', 'g')))
           AND count(*) FILTER (WHERE tip_cod = 'teava') = 3 AND count(*) FILTER (WHERE tip_cod = 'curba') = 1
           AND bool_and(tip_cod <> 'teava' OR lungime_cm = round(lungime_mm / 10.0))
-          AND count(*) FILTER (WHERE stare = 'pe_tronson' AND locatie_tip = 'tronson' AND tronson_id = 21) = 1
+          AND count(*) FILTER (WHERE stare = 'pe_tronson' AND locatie_tip = 'tronson' AND tronson_id = 21 AND depozit_id IS NULL
+                               AND atribute->>'depozit_origine_id' = '10') = 1
           AND count(*) FILTER (WHERE locatie_tip = 'depozit') = 3
      FROM public.magazie_bucati WHERE tip_cod IS NOT NULL));
 SELECT teste.e('T4c un eveniment sold_initial + 4 mișcări „nascut”',
@@ -107,6 +119,17 @@ SELECT teste.eroare('T4g perete lipsă → refuz', $$SELECT public.fn_izo_import
 SELECT teste.eroare('T4h sursa (fișier/foaie/rând) lipsă → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'src-1', (SELECT p FROM payload WHERE nume = 'fara_sursa'))$$, 'R13');
 SELECT teste.eroare('T4i depozit al altui proiect → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'dep-1', (SELECT p FROM payload WHERE nume = 'depozit_strain'))$$, 'nu țin de proiectul');
 SELECT teste.eroare('T4j curbă cu aceeași serie + șarjă + unghi → coliziune', $$SELECT public.fn_izo_import_sold_initial(3, 'crb-1', (SELECT p FROM payload WHERE nume = 'curba_dubla'))$$, 'coliziune');
+SELECT teste.eroare('T4m payload nu e obiect → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-1', (SELECT p FROM payload WHERE nume = 'nu_obiect'))$$, 'payload invalid');
+SELECT teste.eroare('T4n payload fără cheia bucati → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-2', (SELECT p FROM payload WHERE nume = 'fara_bucati'))$$, 'payload invalid');
+SELECT teste.eroare('T4o bucati null → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-3', (SELECT p FROM payload WHERE nume = 'bucati_null'))$$, 'payload invalid');
+SELECT teste.eroare('T4p surse obiect în loc de listă → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-4', (SELECT p FROM payload WHERE nume = 'surse_obiect'))$$, 'payload invalid');
+SELECT teste.eroare('T4q payload NULL → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-5', NULL)$$, 'payload invalid');
+SELECT teste.eroare('T4r rând care nu e obiect → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-6', (SELECT p FROM payload WHERE nume = 'rand_nu_obiect'))$$, 'nu e obiect');
+SELECT teste.eroare('T4s rând fără tip → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-7', (SELECT p FROM payload WHERE nume = 'tip_lipsa'))$$, 'cere teava/curba');
+SELECT teste.eroare('T4t rând fără stare → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-8', (SELECT p FROM payload WHERE nume = 'stare_lipsa'))$$, 'la sold inițial');
+SELECT teste.eroare('T4u fișierul sursă al rândului nu e în surse[] → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-9', (SELECT p FROM payload WHERE nume = 'sursa_necunoscuta'))$$, 'nu e în surse');
+SELECT teste.eroare('T4v surse[] cu fișier duplicat → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-10', (SELECT p FROM payload WHERE nume = 'surse_duplicate'))$$, 'duplicate');
+SELECT teste.eroare('T4w pe_tronson cu depozit_id (loc dublu) → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-11', (SELECT p FROM payload WHERE nume = 'tronson_cu_depozit'))$$, 'pe_tronson cere');
 SELECT teste.e('T4k importurile refuzate n-au lăsat nimic', (SELECT count(*) FROM public.izo_importuri) = 1 AND (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 4);
 SELECT teste.eroare('T4l indexul de frunză e ultima barieră (aceeași serie+șarjă+lungime la cm, scrisă de writer)',
   $q$DO $d$ BEGIN SET LOCAL ROLE izo_registru_writer; PERFORM set_config('izo.registru_tx', txid_current()::text, true);
@@ -148,6 +171,8 @@ SELECT teste.eroare('T5t registru: DELETE mișcare → refuz', $$DELETE FROM pub
 SELECT teste.eroare('T5u registru: TRUNCATE evenimente → refuz', $$TRUNCATE public.magazie_bucati_evenimente CASCADE$$, 'TRUNCATE');
 SELECT teste.eroare('T5v registru: INSERT direct (postgres) → garda', $$INSERT INTO public.magazie_bucati_evenimente (tip, proiect_id, server_ver) VALUES ('gasit', 3, 1)$$, 'doar prin funcțiile registrului');
 SELECT teste.eroare('T5w izo_importuri: UPDATE direct → garda', $$UPDATE public.izo_importuri SET stare = 'stornat'$$, 'doar prin funcțiile registrului');
+SELECT teste.eroare('T5y coloanele registrului pe un rând gazpet (perete_mm) → CHECK doar_registru', $$UPDATE public.magazie_bucati SET perete_mm = 7.1 WHERE serie = 'GZP1'$$, 'magazie_bucati_izo_doar_registru_check');
+SELECT teste.eroare('T5z locul exclusiv: bucată pe tronson cu depozit_id → CHECK loc', $q$DO $d$ BEGIN SET LOCAL ROLE izo_registru_writer; PERFORM set_config('izo.registru_tx', txid_current()::text, true); UPDATE public.magazie_bucati SET depozit_id = 10 WHERE serie = '247EK08603'; END $d$$q$, 'magazie_bucati_izo_loc_check');
 SELECT teste.e('T5x după toate încercările: registrul neschimbat', (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 4
   AND (SELECT count(*) FROM public.magazie_bucati WHERE observatii = 'x') = 0 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 1);
 
@@ -159,7 +184,9 @@ SELECT teste.e('T6b producția gazpet pe proiectul 3: UPDATE + DELETE', teste.n(
 SELECT teste.e('T6c recepția beneficiar pe LOT 1 (off): INSERT + UPDATE', teste.n($$INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta, stare, locatie_tip) VALUES (1, 1, '254CA00002', 'beneficiar', 'sosit', 'proiect')$$) = 1
   AND teste.n($$UPDATE public.magazie_bucati SET stare = 'receptionat' WHERE serie = '254CA00002'$$) = 1);
 SELECT teste.eroare('T6d stările noi nu sunt permise pe gazpet', $$INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta, stare) VALUES (1, 1, 'G9', 'gazpet', 'pe_tronson')$$, 'magazie_bucati_stare_check');
-SELECT teste.eroare('T6e locația „tronson” nu e permisă pe gazpet', $$INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta, locatie_tip, tronson_id) VALUES (1, 1, 'G10', 'gazpet', 'tronson', 8)$$, 'magazie_bucati_locatie_tip_check');
+SELECT teste.eroare('T6e locația „tronson” nu e permisă pe gazpet', $$INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta, locatie_tip) VALUES (1, 1, 'G10', 'gazpet', 'tronson')$$, 'violates check constraint');
+SELECT teste.e('T6e2 locatie_tip_check: depozit/tronson doar pe beneficiar', (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+  WHERE conname = 'magazie_bucati_locatie_tip_check') ~ 'provenienta = ''beneficiar''.*depozit.*tronson');
 SELECT teste.e('T6f authenticated citește bucățile din registru (SELECT neschimbat)', (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 4);
 RESET ROLE;
 
@@ -168,6 +195,14 @@ SELECT teste.ca(:'TOMA');
 SELECT teste.eroare('T7a DELETE pe executie_tevi a LOT 2 → refuz', $$DELETE FROM public.executie_tevi WHERE pachet_id = 2$$, 'nu se șterg din client');
 SELECT teste.e('T7b DELETE pe executie_tevi a LOT 1 → merge', teste.n($$DELETE FROM public.executie_tevi WHERE serie_unica = 'X2'$$) = 1);
 SELECT teste.eroare('T7c bon cu bucată din registru → refuz', $$INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) SELECT 1, id, 'teava' FROM public.magazie_bucati WHERE serie = '254CA09771'$$, 'nu intră pe bon');
+SELECT teste.eroare('T7f țeavă LOT 2 mutată pe pachet LOT 1 → refuz', $$UPDATE public.executie_tevi SET pachet_id = 1 WHERE serie_unica = 'Y1'$$, 'nu se mută între pachete');
+SELECT teste.eroare('T7g țeavă LOT 1 mutată pe pachet LOT 2 → refuz', $$UPDATE public.executie_tevi SET pachet_id = 2 WHERE serie_unica = 'X1'$$, 'nu se mută între pachete');
+SELECT teste.eroare('T7h pachet LOT 2 mutat pe LOT 1 → refuz', $$UPDATE public.executie_pachete_lansare SET proiect_id = 1, tronson_id = 8 WHERE id = 2$$, 'nu se mută între proiecte');
+SELECT teste.eroare('T7i pachet LOT 1 mutat pe un tronson LOT 2 → refuz', $$UPDATE public.executie_pachete_lansare SET proiect_id = NULL, tronson_id = 18 WHERE id = 1$$, 'nu se mută între proiecte');
+SELECT teste.e('T7j pachet LOT 1 mutat pe alt tronson LOT 1 → merge', teste.n($$UPDATE public.executie_pachete_lansare SET tronson_id = 9 WHERE id = 1$$) = 1);
+SELECT teste.eroare('T7k tronson LOT 2 mutat pe LOT 1 → refuz', $$UPDATE public.executie_tronsoane SET proiect_id = 1 WHERE id = 18$$, 'nu se mută între proiecte');
+SELECT teste.eroare('T7l depozitul 11 (în registru) mutat pe alt site → refuz', $$UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 11$$, 'site-ul lui nu se schimbă');
+SELECT teste.e('T7m depozitul 11: alte coloane se schimbă normal', teste.n($$UPDATE public.logistica_depozite SET adresa = 'Topleț' WHERE id = 11$$) = 1);
 SELECT teste.e('T7d bon cu bucată beneficiar LOT 1 → merge', teste.n($$INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) SELECT 2, id, 'teava' FROM public.magazie_bucati WHERE serie = '254CA00001'$$) = 1);
 RESET ROLE;
 SELECT teste.eroare('T7e ștergerea pachetului LOT 2 (cascadă pe țevi) → refuz', $$DELETE FROM public.executie_pachete_lansare WHERE id = 2$$, 'nu se șterg din client');
@@ -177,7 +212,11 @@ SELECT teste.ca(:'FARA');
 SELECT teste.e('T8a fără acces: nu vede importurile / evenimentele', (SELECT count(*) FROM public.izo_importuri) = 0 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 0);
 RESET ROLE;
 SELECT teste.ca(:'JANETA');
-SELECT teste.e('T8b gestionar cu magazie: vede importul și evenimentul', (SELECT count(*) FROM public.izo_importuri) = 1 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 1);
+SELECT teste.e('T8a2 modulul magazie singur NU dă citire pe registru (review #806 C)', (SELECT count(*) FROM public.izo_importuri) = 0 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 0);
+RESET ROLE;
+INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, depozit_id, acordat_de, motiv) VALUES (3, :'JANETA', 'gestionar', 9, 'test', 'test E2a');
+SELECT teste.ca(:'JANETA');
+SELECT teste.e('T8b gestionar cu atribuire pe proiectul 3: vede importul și evenimentul', (SELECT count(*) FROM public.izo_importuri) = 1 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 1);
 SELECT teste.e('T8c fn_izo_proiecte_protejate: proiectul 3, site 6', (SELECT array_agg(proiect_id) FROM public.fn_izo_proiecte_protejate()) = ARRAY[3::bigint]
   AND (SELECT site_id FROM public.fn_izo_proiecte_protejate()) = 6);
 RESET ROLE;
@@ -194,6 +233,28 @@ SELECT teste.e('T8d fn_izo_acces: owner da; editor executie da; viewer la nivel 
   teste.acces_ca(:'RAZVAN', 'executie', 'admin') AND teste.acces_ca(:'TOMA', 'executie', 'editor')
   AND NOT teste.acces_ca(:'TITI', 'executie', 'editor') AND teste.acces_ca(:'TITI', 'executie', 'viewer')
   AND NOT teste.acces_ca(:'JANETA', 'executie', 'viewer'));
+-- valabilitatea atribuirii la citire: expirată și viitoare nu dau acces; cea curentă da
+INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, valabil_de, valabil_pana, acordat_de, motiv)
+VALUES (3, :'FARA', 'rts_rte', current_date - 30, current_date - 1, 'test', 'expirată'),
+       (3, :'FARA', 'manager_aprobator', current_date + 1, NULL, 'test', 'viitoare');
+SELECT teste.ca(:'FARA');
+SELECT teste.e('T8e atribuire expirată / viitoare → fără citire', (SELECT count(*) FROM public.izo_importuri) = 0 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 0);
+RESET ROLE;
+INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, acordat_de, motiv) VALUES (3, :'FARA', 'inginer_izometrie', 'test', 'curentă');
+SELECT teste.ca(:'FARA');
+SELECT teste.e('T8f atribuire curentă → citire', (SELECT count(*) FROM public.izo_importuri) = 1);
+SELECT teste.e('T8f2 atribuirea pe proiectul 3 nu dă citire pe alt proiect', public.fn_izo_citire(1) = false AND public.fn_izo_citire(3) = true);
+RESET ROLE;
+-- atribuirile: fără DELETE/TRUNCATE (nici postgres), scrise doar de postgres
+SELECT teste.eroare('T8g atribuiri: DELETE → refuz', $$DELETE FROM public.izo_atribuiri WHERE rol = 'rts_rte'$$, 'nu se șterg');
+SELECT teste.eroare('T8h atribuiri: TRUNCATE → refuz', $$TRUNCATE public.izo_atribuiri$$, 'nu se șterg');
+CREATE ROLE izo_test_admin NOLOGIN;
+GRANT USAGE ON SCHEMA public TO izo_test_admin;
+GRANT INSERT, UPDATE ON public.izo_atribuiri TO izo_test_admin;
+SELECT teste.eroare('T8i atribuiri: INSERT de alt rol decât postgres (cu drept de tabelă) → refuz',
+  $q$DO $d$ BEGIN SET LOCAL ROLE izo_test_admin; INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, acordat_de, motiv) VALUES (3, '00000000-0000-0000-0000-000000000117', 'inginer_izometrie', 'x', 'test'); END $d$$q$, 'doar de owner');
+DROP OWNED BY izo_test_admin;
+DROP ROLE izo_test_admin;
 
 -- ═══ T9 storno ═══
 SELECT teste.e('T9a import imp-2 (1 țeavă)', (public.fn_izo_import_sold_initial(3, 'imp-2', (SELECT p FROM payload WHERE nume = 'imp2'))->>'bucati')::int = 1);
@@ -217,6 +278,19 @@ SELECT teste.e('T9g imp-1 neatins după refuz', (SELECT count(*) FROM public.mag
    JOIN public.izo_importuri i ON i.eveniment_id = x.eveniment_id WHERE i.import_id = 'imp-1' AND m.stare <> 'anulata') = 4);
 
 -- ═══ T10 nivelul nu coboară cu registrul plin ═══
-SELECT teste.eroare('T10a stoc → off cu bucăți în registru → refuz', $$SELECT public.fn_izo_seteaza_nivel(3, 'off', 'test')$$, 'nu coboară');
+SELECT teste.eroare('T10a stoc → off cu fapte în registru → refuz', $$SELECT public.fn_izo_seteaza_nivel(3, 'off', 'test')$$, 'fapte în registru');
+
+-- ═══ T11 porțile verificate la activare (proiectul 2, rămâne off) ═══
+SELECT teste.e('T11a porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+ALTER TABLE public.executie_tevi ENABLE TRIGGER trg_executie_tevi_izo_delete;   -- 'O': nu mai trage sub replica
+SELECT teste.eroare('T11b trigger coborât din ALWAYS → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'trg_executie_tevi_izo_delete');
+ALTER TABLE public.executie_tevi ENABLE ALWAYS TRIGGER trg_executie_tevi_izo_delete;
+ALTER TABLE public.izo_importuri DISABLE ROW LEVEL SECURITY;
+SELECT teste.eroare('T11c RLS oprit pe izo_importuri → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'RLS inactiv pe izo_importuri');
+ALTER TABLE public.izo_importuri ENABLE ROW LEVEL SECURITY;
+GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO authenticated;
+SELECT teste.eroare('T11d funcție a registrului executabilă din API → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'EXECUTE din API');
+REVOKE EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) FROM authenticated;
+SELECT teste.e('T11e porțile refăcute; proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
 
 SELECT 'TESTE SQL: TOATE OK';
