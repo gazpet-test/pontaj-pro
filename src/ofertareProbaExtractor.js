@@ -34,13 +34,30 @@ export async function ruleazaPanaLaCapat(invoke, body, { maxPasi = 20, laPas = (
     if (error || data?.error) { const e = { pas: i, eroare: data?.error || error?.message || String(error) }; pasi.push(e); laPas(i, e); return { pasi, motiv: 'eroare' } }
     const p = { pas: i, oprit: data?.oprit ?? null, felii_apelate: data?.felii_apelate ?? 0, cost_usd: Number(data?.cost_usd || 0),
       felii_cu_deficit_b1: data?.felii_cu_deficit_b1 ?? null, felii_escaladate: data?.felii_escaladate ?? null, extractor: data?.extractor ?? null,
-      erori: (data?.raport || []).filter(x => x.eroare || x.refuz || x.refuz_rezervare).length }
+      erori: (data?.raport || []).filter(x => x.eroare || x.refuz || x.refuz_rezervare).length, probleme: problemeRaport(data?.raport) }
     pasi.push(p); laPas(i, p)
     if (p.oprit !== 'buget_timp') return { pasi, motiv: p.oprit ? String(p.oprit) : 'gata' }
     // review Gemini #797 r1 (P2): un pas oprit pe timp FĂRĂ nicio felie apelată nu avansează — nu se repetă în gol
     if (!(p.felii_apelate > 0)) return { pasi, motiv: 'fara_progres' }
   }
   return { pasi, motiv: 'max_pasi' }
+}
+
+// motivul feliilor eșuate / refuzate / care așteaptă omul, din `raport`-ul edge-ului (nu se stochează pe felie — cererea chat-ului 20.10,
+// varianta (b), fără schemă): un rând scurt per felie; mostrele sunt conținut extern (date), afișate doar ca text, trunchiate
+export function problemeRaport(raport, maxRanduri = 30) {
+  const out = []
+  for (const x of raport || []) {
+    if (!(x && (x.eroare || x.refuz || x.refuz_rezervare || x.asteapta_om))) continue
+    const unde = `doc ${x.document_id ?? '?'}${x.felie != null ? ` felia ${x.felie + 1}` : ''}`
+    // review Gemini r1 (P3): valorile pot fi și obiecte (ex. { refuz: 'plafon' }) — text, nu „[object Object]”
+    const txt = (v) => typeof v === 'string' ? v : JSON.stringify(v)
+    const ce = x.eroare ? txt(x.eroare) : x.refuz ? `refuz: ${txt(x.refuz)}` : x.refuz_rezervare ? `refuz rezervare: ${txt(x.refuz_rezervare)}` : `așteaptă omul (${txt(x.asteapta_om)})`
+    const mostra = Array.isArray(x.mostre) && x.mostre.length ? ` — ex.: ${String(x.mostre[0]).slice(0, 160)}` : ''
+    out.push(`${unde}: ${ce.slice(0, 200)}${mostra}`)
+    if (out.length >= maxRanduri) { out.push('…'); break }
+  }
+  return out
 }
 
 export const totalPasi = (pasi) => pasi.reduce((a, p) => ({
