@@ -34,8 +34,10 @@ export const EXTRACTOARE: Record<'A' | 'B', Extractor> = {
   A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n4', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r),
     escaladare: { model: MODEL_S, tarif: tarifS }, overheadOcteti: OVERHEAD_A },
 }
-// identitatea include și modelul de escaladare (alt rezultat posibil = alt cache): claude-haiku-5-5>claude-sonnet-5-5@p4@n4@f2
-export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '>' + e.escaladare.model : ''}@${e.prompt}@${e.normalizator}@${e.feliere}`
+// identitatea include și modelul de escaladare (alt rezultat posibil = alt cache): claude-haiku-5-5/claude-sonnet-5-5@p4@n4@f2.
+// Separatorul e „/” (fix 20.10, bug în producție): „>” nu e permis de CHECK-ul ofertare_cant_extrageri.extractor_id
+// ^[A-Za-z0-9._:@/-]{3,200}$ — orice id nou se verifică în idExtractor_test.ts contra regex-ului citit din migrare
+export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '/' + e.escaladare.model : ''}@${e.prompt}@${e.normalizator}@${e.feliere}`
 // review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică (o pagină F3 / un memoriu pot moșteni lista_alt), deci
 // excluderea ei poate tăia lungimi reale; rândurile C7 / C8 întoarse ca obiecte sunt acum normalizabile (n4)
 const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
