@@ -228,7 +228,10 @@ export function construiestePayload(randuri, surse, motiv) {
     bucati: randuri.map(b => ({
       tip: b.tip, serie: b.serie, sarja: b.sarja, lungime_mm: b.tip === 'teava' ? b.lungime_mm : undefined,
       perete_mm: b.perete_mm, diametru_mm: 610, unghi_curba: b.tip === 'curba' ? b.unghi : undefined,
-      stare: b.stare, depozit_id: b.depozit_id ?? undefined, tronson_id: b.tronson_id ?? undefined,
+      // locul exclusiv (review #806 D): pe tronson doar tronson_id; depozitul din care a plecat merge ca depozit_origine_id
+      stare: b.stare, tronson_id: b.tronson_id ?? undefined,
+      depozit_id: b.stare === 'pe_tronson' ? undefined : (b.depozit_id ?? undefined),
+      depozit_origine_id: b.stare === 'pe_tronson' ? (b.depozit_id ?? undefined) : undefined,
       izolatie: /HDPE|PEHD/i.test(b.descriere) ? 'PEHD' : 'neizolata', izolatie_text: /HDPE B3/i.test(b.descriere) ? 'HDPE B3' : undefined,
       grad_otel: /L360NE/i.test(b.descriere) ? 'L360NE' : undefined, standard: /3183/.test(b.descriere) ? 'SR EN ISO 3183 PSL2' : undefined,
       greutate_kg: b.greutate_kg ?? undefined, nr_aviz: b.nr_aviz ?? undefined,

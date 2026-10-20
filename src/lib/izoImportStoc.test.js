@@ -128,4 +128,10 @@ describe('construiestePayload', () => {
     const rau = evalueaza(foaie('TEAVA 8.8 MM', [rStd({ 1: '2545CA00001' })], 12).randuri, { coduri, tronsoane }).randuri
     expect(() => construiestePayload(rau, [], 'x')).toThrow(/neaplicabil/)
   })
+  it('pe tronson: doar tronson_id, depozitul de plecare ca depozit_origine_id (locul exclusiv)', () => {
+    const { randuri } = evalueaza(foaie('TEAVA 8.8 MM', [rStd({ 1: '264DB00026', 16: 'CJPJ 0038', 17: 12, 18: '264DB00026', 19: 12.41, 20: 12.41, 21: 0 })], 12).randuri, { coduri, tronsoane })
+    const b = construiestePayload(randuri, [{ fisier: 'X.xlsx', sha256: 'a'.repeat(64) }], 'test').bucati[0]
+    expect(b).toMatchObject({ stare: 'pe_tronson', tronson_id: 16, depozit_origine_id: 9 })
+    expect(b.depozit_id).toBeUndefined()
+  })
 })
