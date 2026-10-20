@@ -1,6 +1,6 @@
 # Izometrie E1 — raport (20.10.2026)
 
-Etapa E1 din `IZOMETRIE_DESIGN_v2.md` v2.3: pregătire **fără schemă**. Nu am scris nimic în BD, nu am acordat drepturi și n-am deployat nimic.
+Etapa E1 din `IZOMETRIE_DESIGN_v2.md` v2.3: pregătire **fără schemă**. Codul și scriptul de preview nu scriu nimic în BD; nicio migrare, niciun drept acordat, niciun deploy. Datele reale propuse (tronsoane, depozite, km LOT 1) au fost aplicate separat **de sesiunea de chat, cu „da”-ul lui Razvan** (vezi „Decizii și aplicare” mai jos). Sesiunea Izometrie a încercat și ea 3a, la câteva secunde după chat; încercarea a căzut atomic pe cheia unică, fără niciun efect. De acum datele modulului le aplică doar chat-ul.
 
 ## Livrabile
 

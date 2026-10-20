@@ -40,6 +40,19 @@ describe('perechea din fișa de tăiere', () => {
     expect(parseazaPerecheSuduri('T8S314 - T8S547').map(x => x.nr)).toEqual([314, 547])
   })
   it('gol → listă goală', () => expect(parseazaPerecheSuduri('')).toEqual([]))
+  it.each([
+    ['T8S543-T8S544'], ['T8S543 – T8S544'], ['T8S543—T8S544'], ['T8S543;T8S544'], ['TR8S543 -TR8S544'], ['T8-S543 - T8S544'],
+  ])('separatori fără spații / en-dash / em-dash / cratimă în cod: %s', s => {
+    expect(parseazaPerecheSuduri(s).map(x => x.canon)).toEqual(['TR8S543', 'TR8S544'])
+  })
+  it('perechea NDT lipită cu cratimă', () => {
+    const conv = { mod: 'strict', tronson: 11, conventie: ['/A', '/B'] }
+    expect(parseazaPerecheSuduri('GAZPET TR11 S318/A-GAZPET TR11 S318/B', conv).map(x => x.canon)).toEqual(['TR11S318/A', 'TR11S318/B'])
+  })
+  it('o bucată ilizibilă rămâne ilizibilă, nu dispare', () => {
+    const r = parseazaPerecheSuduri('T8S543 - ???')
+    expect(r.map(x => x.stare)).toEqual(['ok', 'cod_ilizibil'])
+  })
 })
 
 describe('maparea rândurilor vechi din executie_tevi (§1.5)', () => {

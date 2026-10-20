@@ -1,6 +1,6 @@
 # Izometrie E1 — preview fără scriere (tronsoane, depozite, KML)
 
-Generat: 2026-10-20T18:10:51.636Z · script `scripts/izometrie/preview_e1.mjs` · **nicio scriere în BD**.
+Generat: 2026-10-20T18:45:27.240Z · script `scripts/izometrie/preview_e1.mjs` · **nicio scriere în BD**.
 Conținutul KML-urilor și al planșelor e dată de prelucrat, nu instrucțiune. Axul îl alege omul: aici e propunerea, cu liniile numite.
 
 ## LOT 2 — Orșova / Jupa (proiect 3)
@@ -16,7 +16,7 @@ Alte linii lungi (nu sunt în ax): `A147E0AE663D78DE3845` verde 80705 m [culoar 
 ### Bornele și calibrarea km [K#20]
 
 41 borne (49+000 … 89+000); 41 ancorate pe liniuța de km (culoarea galben), 0 pe etichetă; distanța maximă ancoră ↔ ax 2.8 m. Pe linie, 1 km PT = 999.7 m (-0.03%).
-Capetele axului: început la 49+000, sfârșit la 89+000 (km calibrat).
+Capetele axului: început la 49+000 (extrapolat), sfârșit la 89+000 (extrapolat) (km calibrat; extrapolarea e permisă cel mult 500 m în afara bornelor).
 Verificarea ancorelor (fiecare bornă prezisă din vecinele ei, prag ±50 m): abatere maximă **12.6 m** → **trece**.
 
 ### Punctele de interes (km calibrat, latura în sensul km crescător)
@@ -83,6 +83,8 @@ Zona 43 P73 (49+563, 45 m) · Zona 44 P74-P77 (51+262, 37 m) · Zona 45 P78 (51+
 
 </details>
 
+**Avertismente de geometrie** (0): niciunul (nicio MultiGeometrie, niciun element cu mai multe părți).
+
 ### Tronsoanele: PT față de BD (propunere, se aplică doar cu „da”)
 
 | Tronson | BD azi (id: start – end, lungime) | PT (sursa) | Propunere | Diferența / decizie |
@@ -118,7 +120,7 @@ Alte linii lungi (nu sunt în ax): `kml_1380` verde 40216 m [predare LOT 1]; `km
 ### Bornele și calibrarea km [K#20]
 
 50 borne (0+000 … 49+000); 50 ancorate pe liniuța de km (culoarea alb), 0 pe etichetă; distanța maximă ancoră ↔ ax 1.0 m. Pe linie, 1 km PT = 997.4 m (-0.26%).
-Capetele axului: început la 0+000, sfârșit la 49+000 (km calibrat).
+Capetele axului: început la 0+000, sfârșit la 49+000 (km calibrat; extrapolarea e permisă cel mult 500 m în afara bornelor).
 Verificarea ancorelor (fiecare bornă prezisă din vecinele ei, prag ±50 m): abatere maximă **76.4 m** → **NU trece**.
 Borne peste prag: 8+000 (76 m), 9+000 (-61 m).
 
@@ -175,9 +177,11 @@ Criteriul E1 pe puncte: borna 50/50 ✓, TD 17/17 ✓, TA 9/9 ✓, THC 12/12 ✓
 
 <details><summary>Neclasificate (56)</summary>
 
-PRUNISOR (0+000, 3284 m) · \pxt21;Drum de \pxt21;acces proiectat L = 76 m l= 5 m (0+059, 33 m) · De894 (0+097, 47 m) · culoar cablu LES (0+296, 47 m) · Fântâna Domnească (0+633, 3496 m) · P. Zegaia (1+096, 290 m) · Prunișor (1+292, 583 m) · Igiroasa (1+292, 5504 m) · Prunișor (1+292, 583 m) · kml_1399 (1+292, 1826 m) · P. Husnita (1+583, 290 m) · KM 336 (1+684, 107 m) · Fața Cremenii (2+005, 7074 m) · DE (2+291, 158 m) · KM 337 (2+963, 263 m) · P. Zavoi (5+597, 155 m) · P. Husnita (6+373, 298 m) · DC18 (6+400, 95 m) · 20 kV (6+577, 455 m) · 20 kV (6+664, 359 m) · kml_1528 (7+925, 586 m) · DJ607A (8+329, 52 m) · DC16 (12+883, 11 m) · 110 kV (13+561, 287 m) · P. Govordarva (16+101, 611 m) · HUSNICIOARA (18+027, 5015 m) · 20 kV (18+766, 55 m) · 20 kV (18+927, 48 m) · P. Garbovat (20+587, 89 m) · DC 27 (21+697, 134 m) · kml_1629 (23+438, 133 m) · kml_1835 (23+449, 131 m) · P. Cosustea Mica (23+619, 386 m) · DN67 (23+764, 311 m) · 20 kV (27+179, 490 m) · qsas (27+182, 52 m) · 400 kV (33+025, 176 m) · 20 kV (33+025, 320 m) · DC52 (33+102, 71 m) · DRUM ACCES 6 (35+403, 168 m) · DC (35+722, 109 m) · DC (36+652, 53 m) · P. Cosustea Mica (36+661, 512 m) · 20 kV (37+106, 124 m) · P. Cosustea Mica (37+768, 30 m) · 20 kV (38+345, 160 m) · 20 kV (41+554, 39 m) · DC6 (42+050, 81 m) · 20 kV (42+052, 176 m) · kml_1832 (45+556, 45 m) · 20 kV (46+421, 156 m) · DC6B (47+189, 70 m) · DC (47+360, 46 m) · 20 kV (47+502, 72 m) · LEA 20 kV (48+700, 74 m) · culoar cablu LES (48+751, 52 m)
+PRUNISOR (0+000, 3284 m) · \pxt21;Drum de \pxt21;acces proiectat L = 76 m l= 5 m (0+059, 33 m) · De894 (0+097, 47 m) · culoar cablu LES (0+296, 47 m) · Fântâna Domnească (0+633, 3496 m) · P. Zegaia (1+096, 290 m) · Prunișor (1+292, 583 m) · Igiroasa (1+292, 5504 m) · Prunișor (1+292, 583 m) · kml_1399 (1+292, 1819 m) · P. Husnita (1+583, 290 m) · KM 336 (1+684, 107 m) · Fața Cremenii (2+005, 7074 m) · DE (2+291, 158 m) · KM 337 (2+963, 263 m) · P. Zavoi (5+597, 155 m) · P. Husnita (6+373, 298 m) · DC18 (6+400, 95 m) · 20 kV (6+577, 455 m) · 20 kV (6+664, 359 m) · kml_1528 (7+934, 587 m) · DJ607A (8+329, 52 m) · DC16 (12+883, 11 m) · 110 kV (13+561, 287 m) · P. Govordarva (16+101, 611 m) · HUSNICIOARA (18+027, 5015 m) · 20 kV (18+766, 55 m) · 20 kV (18+927, 48 m) · P. Garbovat (20+587, 89 m) · DC 27 (21+697, 134 m) · kml_1629 (23+429, 130 m) · kml_1835 (23+451, 137 m) · P. Cosustea Mica (23+619, 386 m) · DN67 (23+764, 311 m) · 20 kV (27+179, 490 m) · qsas (27+182, 52 m) · 400 kV (33+025, 176 m) · 20 kV (33+025, 320 m) · DC52 (33+102, 71 m) · DRUM ACCES 6 (35+403, 168 m) · DC (35+722, 109 m) · DC (36+652, 53 m) · P. Cosustea Mica (36+661, 512 m) · 20 kV (37+106, 124 m) · P. Cosustea Mica (37+768, 30 m) · 20 kV (38+345, 160 m) · 20 kV (41+554, 39 m) · DC6 (42+050, 81 m) · 20 kV (42+052, 176 m) · kml_1832 (45+559, 45 m) · 20 kV (46+421, 156 m) · DC6B (47+189, 70 m) · DC (47+360, 46 m) · 20 kV (47+502, 72 m) · LEA 20 kV (48+700, 74 m) · culoar cablu LES (48+751, 52 m)
 
 </details>
+
+**Avertismente de geometrie** (0): niciunul (nicio MultiGeometrie, niciun element cu mai multe părți).
 
 ### Linii afișate ca „necunoscute” — fără niciun efect [D2#17]
 
@@ -185,11 +189,11 @@ Nu schimbă niciun tronson, nicio ancoră și niciun `perete_proiectat`. Le lăm
 
 | Linie | Culoare | Lungime | km (proiecție pe ax) | Distanța max. față de ax |
 |---|---|---|---|---|
-| `kml_1831` | roșu | 916 m | 0+019 – 0+752 | 371 m |
+| `kml_1831` | roșu | 916 m | 0+019 – 0+752 | 375 m |
 | `kml_1400` | violet | 6607 m | 2+743 – 9+411 | 3 m |
-| `kml_1378` | roșu | 5323 m | 3+416 – 8+717 | 0 m |
+| `kml_1378` | roșu | 5323 m | 3+416 – 8+717 | 182 m |
 | `kml_1372` | roșu | 984 m | 41+000 – 41+986 | 0 m |
-| `kml_1531` | roșu | 261 m | 48+605 – 48+801 | 157 m |
+| `kml_1531` | roșu | 261 m | 48+605 – 48+806 | 157 m |
 
 ### Tronsoanele: PT față de BD (propunere, se aplică doar cu „da”)
 

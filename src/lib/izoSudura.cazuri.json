@@ -23,6 +23,13 @@
     { "in": "8S543", "opt": { "mod": "legacy" }, "asteptat": { "stare": "cod_ilizibil", "motiv": "format" } },
     { "in": "T8S0", "opt": { "mod": "legacy" }, "asteptat": { "stare": "cod_ilizibil", "motiv": "numar" } },
     { "in": "", "opt": { "mod": "legacy" }, "asteptat": { "stare": "cod_ilizibil", "motiv": "gol" } },
-    { "in": "T8S543 - T8S544", "opt": { "mod": "legacy" }, "asteptat": { "stare": "cod_ilizibil", "motiv": "format" } }
+    { "in": "T8S543 - T8S544", "opt": { "mod": "legacy" }, "asteptat": { "stare": "cod_ilizibil", "motiv": "format" } },
+    { "in": "GAZPET INSTAL TR11 S318/A", "opt": { "mod": "strict", "tronson": 11, "conventie": ["/A", "/B", "/C", "/D", "/E", "/A1", "/B1", "A", "B", "C", "D", "A1", "R"] }, "asteptat": { "stare": "ok", "tronson": 11, "nr": 318, "sufix": "/A", "canon": "TR11S318/A" } },
+    { "in": "T0S1", "opt": { "mod": "legacy" }, "asteptat": { "stare": "cod_ilizibil", "motiv": "tronson" } },
+    { "in": "TR11S318/AR", "opt": { "mod": "strict", "tronson": 11, "conventie": ["/A", "R"] }, "asteptat": { "stare": "cod_de_confirmat", "motiv": "sufix_r_neconfirmat", "refacutaPropusa": true, "sufix": "/AR", "canon": "TR11S318/AR" } },
+    { "in": "TR11S318AR", "opt": { "mod": "strict", "tronson": 11, "conventie": [] }, "asteptat": { "stare": "cod_de_confirmat", "refacutaPropusa": true, "sufix": "AR" } },
+    { "in": "TR11S318AX", "opt": { "mod": "strict", "tronson": 11, "conventie": ["A", "R"] }, "asteptat": { "stare": "cod_ilizibil", "motiv": "sufix_necunoscut", "sufix": "AX" } },
+    { "in": "T8S543AR", "opt": { "mod": "legacy" }, "asteptat": { "stare": "ok", "refacuta": true, "sufix": "A", "canon": "TR8S543A" } },
+    { "in": "T8S543/R", "opt": { "mod": "legacy" }, "asteptat": { "stare": "ok", "refacuta": true, "sufix": "", "canon": "TR8S543" } }
   ]
 }

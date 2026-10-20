@@ -10,9 +10,13 @@
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import {
-  parseKml, clasificaNume, reparaDiacritice, lungimeLinie, centroid, compuneAx, orienteazaDupaBorne,
-  proiecteaza, cumulat, calibrare, fmtKm, tronsonLaKm, ancoreDinLiniute,
+  parseKml, clasificaNume, reparaDiacritice, lungimeLinie, compuneAx, orienteazaDupaBorne,
+  proiecteaza, cumulat, calibrare, fmtKm, tronsonLaKm, ancoreDinLiniute, pozitieElement,
 } from '../../src/lib/izoKml.js'
+
+// fail-closed: orice EroareKml (KML stricat, ax discontinuu, ancore incoerente) oprește
+// preview-ul fără să scrie raportul — un raport parțial n-are voie să arate „trece”
+process.on('uncaughtException', e => { console.error(`EROARE${e.cod ? ` [${e.cod}]` : ''}: ${e.message}`); process.exit(1) })
 
 const [cfgPath, outPath] = process.argv.slice(2)
 if (!cfgPath || !outPath) { console.error('folosire: node preview_e1.mjs <config.json> <iesire.md>'); process.exit(2) }
@@ -45,18 +49,24 @@ for (const lot of cfg.loturi) {
   const alese = lot.ax_linii.map(id => ({ id, e: linieDupaId(id) }))
   const lipsa = alese.filter(a => !a.e).map(a => a.id)
   if (lipsa.length) throw new Error(`${lot.nume}: liniile de ax ${lipsa.join(', ')} nu există în KML`)
-  const comp = compuneAx(alese.map(a => a.e.linii[0]))
-  const puncte = el.filter(e => e.tip === 'punct' || e.tip === 'poligon').map(e => {
-    const coord = e.puncte[0]?.[0] || centroid(e.poligoane[0] || [])
+  // un element de ax cu MultiGeometry intră cu TOATE părțile, în ordinea din fișier;
+  // continuitatea o verifică compuneAx (gol peste prag = eroare, nu segment inventat)
+  const avertismente = []
+  for (const a of alese) if (a.e.linii.length > 1) avertismente.push(`linia de ax \`${a.id}\` are ${a.e.linii.length} părți (MultiGeometry): intră toate, în ordinea din fișier`)
+  const comp = compuneAx(alese.flatMap(a => a.e.linii))
+  const puncte = el.filter(e => e.puncte.length || e.poligoane.length).map(e => {
+    const { coord, avertisment } = pozitieElement(e)
+    if (avertisment) avertismente.push(`\`${e.id || e.nume}\` (${reparaDiacritice(e.nume)}): ${avertisment}`)
     return { e, coord, ...clasificaNume(e.nume) }
   }).filter(p => p.coord)
   const borne = puncte.filter(p => p.clasa === 'borna')
   const ax = orienteazaDupaBorne(comp.ax, borne)
   const cum = cumulat(ax)
-  const sumaBruta = alese.reduce((s, a) => s + lungimeLinie(a.e.linii[0]), 0)
+  const lungAlese = a => a.e.linii.reduce((s, l) => s + lungimeLinie(l), 0)
+  const sumaBruta = alese.reduce((s, a) => s + lungAlese(a), 0)
   out('### Axul (ales de om; aici propunerea)')
   out('')
-  out(`Linii: ${alese.map(a => `\`${a.id}\` (${numeCuloare(a.e.culoare)}, ${Math.round(lungimeLinie(a.e.linii[0]))} m)`).join(' → ')}.`)
+  out(`Linii: ${alese.map(a => `\`${a.id}\` (${numeCuloare(a.e.culoare)}, ${Math.round(lungAlese(a))} m)`).join(' → ')}.`)
   out(`Suma brută ${Math.round(sumaBruta)} m; suprapuneri scoase ${Math.round(comp.jurnal.reduce((s, j) => s + j.taiat_m, 0))} m; **axul compus = ${Math.round(comp.lungime_m)} m**.`)
   if (lot.ax_asteptat_m) {
     const dev = (comp.lungime_m - lot.ax_asteptat_m) / lot.ax_asteptat_m * 100
@@ -70,14 +80,16 @@ for (const lot of cfg.loturi) {
 
   // ── calibrarea pe borne ──
   // ancora = liniuța de km cea mai apropiată de eticheta bornei (eticheta stă lângă ax)
-  const liniute = el.filter(e => e.linii.length && (!lot.liniute_culoare || e.culoare === lot.liniute_culoare)).map(e => e.linii[0])
+  const liniute = el.filter(e => e.linii.length && (!lot.liniute_culoare || e.culoare === lot.liniute_culoare)).flatMap(e => e.linii)
   const borneAnc = lot.liniute_culoare ? ancoreDinLiniute(borne, liniute, ax, { lungime_max_m: lot.liniute_lungime_max_m || 1000 }) : borne.map(b => ({ ...b, sursa_ancora: 'eticheta' }))
   const anc = borneAnc.map(b => ({ b, ...proiecteaza(ax, b.coord, cum) })).map(a => ({ ...a, km_m: a.b.km_m })).sort((x, y) => x.km_m - y.km_m)
   const f = calibrare(anc.map(a => ({ dist: a.dist, km_m: a.km_m })))
   // abaterea „lasă-una-afară”: km-ul bornei prezis de vecinele ei
   const loo = anc.map((a, i) => {
     const fara = anc.filter((_, j) => j !== i).map(x => ({ dist: x.dist, km_m: x.km_m }))
-    return { km: a.km_m, prezis: calibrare(fara)(a.dist), lateral: a.lateral }
+    // la bornele de capăt verificarea extrapolează o distanță între borne (~1 km): limita se
+    // ridică DOAR aici, ca test de calitate; km-ul punctelor rămâne limitat la 500 m
+    return { km: a.km_m, prezis: calibrare(fara, { extrapolare_max_m: 2000 })(a.dist), lateral: a.lateral }
   })
   const maxLoo = Math.max(...loo.map(x => Math.abs(x.prezis - x.km)))
   const maxLat = Math.max(...anc.map(a => a.lateral))
@@ -87,7 +99,8 @@ for (const lot of cfg.loturi) {
   out('')
   const pePliniute = borneAnc.filter(b => b.sursa_ancora === 'liniuta').length
   out(`${borne.length} borne (${fmtKm(kmMin)} … ${fmtKm(kmMax)}); ${pePliniute} ancorate pe liniuța de km${lot.liniute_culoare ? ` (culoarea ${numeCuloare(lot.liniute_culoare)})` : ''}, ${borne.length - pePliniute} pe etichetă; distanța maximă ancoră ↔ ax ${maxLat.toFixed(1)} m. Pe linie, 1 km PT = ${(scara * 1000).toFixed(1)} m (${((scara - 1) * 100).toFixed(2)}%).`)
-  out(`Capetele axului: început la ${fmtKm(f(0))}, sfârșit la ${fmtKm(f(cum[cum.length - 1]))} (km calibrat).`)
+  const capat = d => `${fmtKm(f(d))}${f.stare(d) === 'interpolat' ? '' : ` (${f.stare(d) === 'extrapolat' ? 'extrapolat' : 'în afara zonei calibrate'})`}`
+  out(`Capetele axului: început la ${capat(0)}, sfârșit la ${capat(cum[cum.length - 1])} (km calibrat; extrapolarea e permisă cel mult 500 m în afara bornelor).`)
   out(`Verificarea ancorelor (fiecare bornă prezisă din vecinele ei, prag ±${cfg.prag_km_gps_m} m): abatere maximă **${maxLoo.toFixed(1)} m** → ${maxLoo <= cfg.prag_km_gps_m ? '**trece**' : '**NU trece**'}.`)
   const rele = loo.filter(x => Math.abs(x.prezis - x.km) > cfg.prag_km_gps_m)
   if (rele.length) out(`Borne peste prag: ${rele.map(x => `${fmtKm(x.km)} (${(x.prezis - x.km).toFixed(0)} m)`).join(', ')}.`)
@@ -99,8 +112,9 @@ for (const lot of cfg.loturi) {
   const pctRez = puncte.filter(p => p.clasa !== 'borna').map(p => {
     const pr = proiecteaza(ax, p.coord, cum)
     const km = f(pr.dist)
-    return { nume: p.e.nume, afisat: reparaDiacritice(p.e.nume), clasa: p.clasa, nr: p.nr ?? null, km_m: Math.round(km), lateral_m: Math.round(pr.lateral), latura: pr.latura > 0 ? 'stânga' : 'dreapta', tronson: tronsonLaKm(km, tr), lat: +p.coord[1].toFixed(6), lon: +p.coord[0].toFixed(6), tip: p.e.tip }
-  }).sort((a, b) => a.km_m - b.km_m)
+    return { nume: p.e.nume, afisat: reparaDiacritice(p.e.nume), clasa: p.clasa, nr: p.nr ?? null, km_m: Number.isFinite(km) ? Math.round(km) : null, km_stare: f.stare(pr.dist), lateral_m: Math.round(pr.lateral), latura: pr.latura > 0 ? 'stânga' : 'dreapta', tronson: tronsonLaKm(km, tr), lat: +p.coord[1].toFixed(6), lon: +p.coord[0].toFixed(6), tip: p.e.tip }
+  }).sort((a, b) => (a.km_m ?? Infinity) - (b.km_m ?? Infinity))
+  const kmAfis = p => `${fmtKm(p.km_m)}${p.km_stare === 'extrapolat' ? ' (extrapolat)' : p.km_stare === 'in_afara' ? ' (în afara zonei calibrate)' : ''}`
   const clase = ['depozit', 'os', 'robinet', 'TD', 'TA', 'THC', 'CF', 'TCF', 'SPC']
   out('### Punctele de interes (km calibrat, latura în sensul km crescător)')
   out('')
@@ -108,7 +122,7 @@ for (const lot of cfg.loturi) {
   out('|---|---|---|---|---|---|')
   for (const c of clase) for (const p of pctRez.filter(x => x.clasa === c)) {
     const departe = p.lateral_m > cfg.lateral_max_m ? ' ⚠ departe de ax' : ''
-    out(`| ${c} | ${p.afisat} | ${fmtKm(p.km_m)} | ${p.tronson || '—'} | ${p.lateral_m} m ${p.latura}${departe} | ${p.lat}, ${p.lon} |`)
+    out(`| ${c} | ${p.afisat} | ${kmAfis(p)} | ${p.tronson || '—'} | ${p.lateral_m} m ${p.latura}${departe} | ${p.lat}, ${p.lon} |`)
   }
   out('')
   const numar = c => pctRez.filter(p => p.clasa === c).length
@@ -121,17 +135,21 @@ for (const lot of cfg.loturi) {
   out('')
   out(`<details><summary>Neclasificate (${numar('altul')})</summary>`)
   out('')
-  out(pctRez.filter(p => p.clasa === 'altul').map(p => `${p.afisat} (${fmtKm(p.km_m)}, ${p.lateral_m} m)`).join(' · ') || '—')
+  out(pctRez.filter(p => p.clasa === 'altul').map(p => `${p.afisat} (${kmAfis(p)}, ${p.lateral_m} m)`).join(' · ') || '—')
   out('')
   out('</details>')
   out('')
+  out(`**Avertismente de geometrie** (${avertismente.length}): ${avertismente.length ? avertismente.join('; ') : 'niciunul (nicio MultiGeometrie, niciun element cu mai multe părți)'}.`)
+  out('')
   rez.puncte = pctRez
+  rez.avertismente = avertismente
 
   // ── liniile de semnificație necunoscută (roșii/violet care nu sunt ax) [D2#17] ──
   const necun = el.filter(e => e.linii.length && !alese.some(a => a.e === e) && (lot.culori_de_aratat || []).includes(e.culoare)).map(e => {
-    const l = e.linii[0]
-    const p0 = proiecteaza(ax, l[0], cum), p1 = proiecteaza(ax, l[l.length - 1], cum)
-    return { id: e.id || e.nume, culoare: numeCuloare(e.culoare), lungime_m: Math.round(lungimeLinie(l)), km_de_la: Math.round(f(Math.min(p0.dist, p1.dist))), km_pana_la: Math.round(f(Math.max(p0.dist, p1.dist))), lateral_max_m: Math.round(Math.max(p0.lateral, p1.lateral)) }
+    // toate părțile, toate vârfurile: intervalul de km acoperit și distanța maximă față de ax
+    const pr = e.linii.flat().map(v => proiecteaza(ax, v, cum))
+    const dMin = Math.min(...pr.map(x => x.dist)), dMax = Math.max(...pr.map(x => x.dist))
+    return { id: e.id || e.nume, culoare: numeCuloare(e.culoare), parti: e.linii.length, lungime_m: Math.round(e.linii.reduce((s, l) => s + lungimeLinie(l), 0)), km_de_la: Math.round(f(dMin)), km_pana_la: Math.round(f(dMax)), lateral_max_m: Math.round(Math.max(...pr.map(x => x.lateral))) }
   }).filter(x => x.lungime_m >= (lot.necunoscute_min_m || 0)).sort((a, b) => a.km_de_la - b.km_de_la)
   if (necun.length) {
     out('### Linii afișate ca „necunoscute” — fără niciun efect [D2#17]')

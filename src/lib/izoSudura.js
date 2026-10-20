@@ -20,13 +20,16 @@
 //     R final necunoscut → 'cod_de_confirmat', cu propunerea „refacere”.
 // Un cod ambiguu nu se ghicește niciodată: primește 'cod_ilizibil'.
 
-const RE_PREFIX_FIRMA = /^(GAZPET|GAZPET\s+INSTAL)\s+/i
-// T/TR + tronson, apoi S + număr, apoi sufix opțional (literă/„/literă”, cu cifră opțională)
-const RE_COMPLET = /^T(?:R)?\s*-?\s*(\d{1,3})\s*-?\s*S\s*-?\s*(\d{1,5})\s*((?:\/\s*)?[A-Z]\d?)?$/
+// alternativa lungă înaintea celei scurte, altfel „GAZPET INSTAL TR11…” lasă „INSTAL” în cod
+const RE_PREFIX_FIRMA = /^(?:GAZPET\s+INSTAL|GAZPET)\s+/i
+// sufixul: „/” opțional + 1–2 litere + cifră opțională (A, /A, /A1, AR, /AR)
+const SUFIX = '((?:\\/\\s*)?[A-Z]{1,2}\\d?)?'
+// T/TR + tronson, apoi S + număr, apoi sufixul
+const RE_COMPLET = new RegExp(`^T(?:R)?\\s*-?\\s*(\\d{1,3})\\s*-?\\s*S\\s*-?\\s*(\\d{1,5})\\s*${SUFIX}$`)
 // doar S + număr (+ sufix), tronsonul vine din context
-const RE_FARA_TRONSON = /^S\s*-?\s*(\d{1,5})\s*((?:\/\s*)?[A-Z]\d?)?$/
+const RE_FARA_TRONSON = new RegExp(`^S\\s*-?\\s*(\\d{1,5})\\s*${SUFIX}$`)
 // doar numărul (ex. „204” dintr-o coloană SUDURĂ), tronsonul vine din context
-const RE_DOAR_NR = /^(\d{1,5})\s*((?:\/\s*)?[A-Z]\d?)?$/
+const RE_DOAR_NR = new RegExp(`^(\\d{1,5})\\s*${SUFIX}$`)
 
 export const STARI_SUDURA = ['ok', 'cod_de_confirmat', 'cod_ilizibil']
 
@@ -74,6 +77,7 @@ export function normalizeazaSudura(raw, opt = {}) {
     rez.motiv = 'format'
     return rez
   }
+  if (!Number.isInteger(tronson) || tronson <= 0) { rez.motiv = 'tronson'; return rez }
   if (!Number.isInteger(nr) || nr <= 0) { rez.motiv = 'numar'; return rez }
 
   rez.tronson = tronson
@@ -81,16 +85,19 @@ export function normalizeazaSudura(raw, opt = {}) {
   rez.altTronson = tCtx !== null && tCtx !== tronson
 
   if (mod === 'legacy') {
-    // Regula de azi (src/Izometrie.jsx parseSudura): R final = refacere, scos din cod.
-    if (sufix === 'R') { rez.refacuta = true; sufix = '' }
+    // Regula de azi (src/Izometrie.jsx parseSudura): R final = refacere, scos din cod
+    // (și din sufixele compuse: „AR” → sufix „A” + refacere, „/R” → fără sufix + refacere).
+    if (/R$/.test(sufix)) { rez.refacuta = true; sufix = sufix.slice(0, -1).replace(/\/$/, '') }
     rez.sufix = sufix
     rez.stare = 'ok'
   } else {
     rez.sufix = sufix
     if (!sufix || conventie.includes(sufix)) {
       rez.stare = 'ok'
-      rez.refacuta = sufix === 'R' && conventie.includes('R')
-    } else if (sufix === 'R') {
+      // sensul unui sufix din convenție îl dă convenția; aici doar „R” simplu e refacere
+      rez.refacuta = sufix === 'R'
+    } else if (/R$/.test(sufix)) {
+      // „R”, „AR”, „/AR” necunoscute convenției: probabil refacere, dar nu se decide singur
       rez.stare = 'cod_de_confirmat'
       rez.refacutaPropusa = true
       rez.motiv = 'sufix_r_neconfirmat'
@@ -121,10 +128,26 @@ export function cheieSudura({ tronson, nr, sufix = '' }) {
  * Coloana SUDURI din fișa de tăiere: „T8S543 - T8S544” (cele 2 capete ale bucății).
  * Întoarce lista codurilor normalizate; o singură sudură e permisă (capăt de lanț).
  */
+// Separatorii: en/em-dash sau „;”, cratimă cu spații, sau cratimă lipită urmată de începutul
+// unui cod („T8S543-T8S544”, „…S318/A-GAZPET TR11…”). Cratima din interiorul unui cod
+// („TR-8-S-543”) nu e separator, pentru că după ea nu vine T/TR+cifră, S+cifră sau GAZPET.
+const RE_SEPARATOR_PERECHE = /\s*[–—;]\s*|\s+-\s+|\s*-(?=\s*(?:GAZPET|T(?:R)?\s*\d|S\s*\d))/i
+
 export function parseazaPerecheSuduri(raw, opt = {}) {
   const s = String(raw ?? '').trim()
   if (!s) return []
-  return s.split(/\s+-\s+|\s*;\s*/).filter(Boolean).map(p => normalizeazaSudura(p, opt))
+  const bucati = s.split(RE_SEPARATOR_PERECHE).map(p => p.trim()).filter(Boolean)
+  // „T8-S543” e un singur cod scris cu cratimă: dacă o bucată nu e cod complet, dar lipită
+  // cu cratimă de următoarea dă un cod valid, se lipesc la loc
+  const out = []
+  for (let i = 0; i < bucati.length; i++) {
+    let b = bucati[i]
+    while (i + 1 < bucati.length && normalizeazaSudura(b, opt).stare === 'cod_ilizibil' && normalizeazaSudura(`${b}-${bucati[i + 1]}`, opt).stare !== 'cod_ilizibil') {
+      b = `${b}-${bucati[++i]}`
+    }
+    out.push(normalizeazaSudura(b, opt))
+  }
+  return out
 }
 
 /**
