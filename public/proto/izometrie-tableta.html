@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html lang="ro" data-theme="sun">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FFFFFF">
+<title>Izometrie · Tabletă teren — PontajPRO (PROTOTIP, date fictive)</title>
+<style>
+/* ===== tokeni: mapați 1:1 din G (src/App.jsx); abaterile pentru teren sunt tokeni separați (--fb, --key, --swOff) ===== */
+:root{
+ --bg:#0D1117;--surface:#161B22;--card:#1C2128;--card2:#21262D;--border:#21262D;--border2:#30363D;
+ --fb:#6E7681;--key:#2D333B;--swOff:#6E7681;
+ --text:#E6EDF3;--muted:#8B949E;--dim:#6E7681;
+ --blue:#58A6FF;--primary:#1F6FEB;--primary2:#388BFD;--purple:#BC8CFF;--orange:#F0883E;--orangeBg:#3D2410;
+ --green:#3FB950;--greenS:#238636;--greenBg:#1A3A1A;
+ --red:#F85149;--redS:#DA3633;--redBg:#3A1A1A;
+ --yfill:#D29922;--ybord:#D29922;--ytext:#D29922;--yellowBg:#3A2A0A;
+ --blueBg:#12263F;--demoBg:rgba(188,140,255,.08);
+ --glyph:#0D1117;--bw:1px;--shadow:0 8px 32px rgba(0,0,0,.5);--hdr:64px;--bh:84px;color-scheme:dark}
+[data-theme=sun]{
+ --bg:#EEF1F4;--surface:#FFFFFF;--card:#FFFFFF;--card2:#E6EAEF;--border:#B6BEC7;--border2:#8C959F;
+ --fb:#424A53;--key:#E6EAEF;--swOff:#6E7681;
+ --text:#06090D;--muted:#30363D;--dim:#4A525B;
+ --blue:#0550AE;--primary:#0550AE;--primary2:#0969DA;--purple:#5B2FB0;--orange:#8A3300;--orangeBg:#FFE8D4;
+ --green:#0E5A23;--greenS:#1A7F37;--greenBg:#D5F5DD;
+ --red:#9F0C22;--redS:#C21D2B;--redBg:#FFE3E0;
+ --yfill:#F5C400;--ybord:#B38600;--ytext:#000000;--yellowBg:#FFF2B8;
+ --blueBg:#DCEBFF;--demoBg:rgba(91,47,176,.07);
+ --glyph:#FFFFFF;--bw:2px;--shadow:0 6px 24px rgba(0,0,0,.22);color-scheme:light}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font:18px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-tap-highlight-color:transparent;-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;background:none;border:0;padding:0;color:inherit}
+.mono{font-family:ui-monospace,"Cascadia Mono","Segoe UI Mono",Consolas,"Roboto Mono",Menlo,monospace;letter-spacing:.3px}
+.num{font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}.sm{font-size:16px}.b{font-weight:800}
+.red{color:var(--red)}.grn{color:var(--green)}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sp{flex:1;min-width:0}
+:focus-visible{outline:3px solid var(--primary2);outline-offset:2px}
+.i{width:1.15em;height:1.15em;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:-.2em}
+.lv{width:40px;height:40px;flex:none;display:block}
+
+/* ===== butoane (raze: 10 controale, 14 carduri, 999 cipuri) ===== */
+.btn{min-height:56px;padding:0 18px;border-radius:10px;font-size:18px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;gap:10px;border:2px solid transparent;background:var(--card2);color:var(--text);line-height:1.15;text-align:center;transition:transform .06s,filter .15s}
+.btn:active{transform:scale(.97);filter:brightness(1.15)}
+.btn-p{background:var(--primary);color:#fff}
+.btn-s{background:var(--surface);border-color:var(--fb);color:var(--text)}
+.btn-ok{background:var(--greenS);color:#fff}
+.btn-red{background:var(--redS);color:#fff}
+.btn-ro{background:var(--surface);border-color:var(--red);color:var(--red)}
+.btn-warn{background:var(--yfill);color:#000}
+.btn-xl{min-height:72px;font-size:21px;padding:0 24px}
+.btn[aria-disabled=true]{background:var(--card2);color:var(--muted);border:2px dashed var(--fb);filter:none}
+.btn[aria-disabled=true]:active{transform:none}
+.w100{width:100%}
+.pbtn{min-height:68px;padding:6px 20px;max-width:64%;justify-content:flex-start}
+.pbtn .i{width:30px;height:30px;stroke-width:2.8}
+.pbtn .bl{display:flex;flex-direction:column;align-items:flex-start;text-align:left;line-height:1.12;min-width:0}
+.pbtn .l1{font-size:18px}
+.pbtn .l2{font-size:18px;font-weight:600;white-space:nowrap}
+.pbtn .pnr{font-size:28px;font-weight:800;letter-spacing:-.3px}
+@media (orientation:landscape) and (max-height:820px){.pbtn{min-height:60px}.pbtn .pnr{font-size:26px}}
+
+/* ===== banner prototip (doar demo — nu există în producție) ===== */
+.demo{display:flex;align-items:center;gap:10px;min-height:40px;padding:4px 16px;background:var(--demoBg);border-bottom:1.5px dashed var(--purple);font-size:16px;flex-wrap:wrap}
+.dtag{font-weight:800;color:var(--purple);letter-spacing:.6px;white-space:nowrap}
+.dsub{color:var(--muted);white-space:nowrap}
+.dbtn{min-height:32px;padding:0 12px;border-radius:999px;border:1.5px solid var(--purple);color:var(--purple);font-weight:700;font-size:16px;display:inline-flex;align-items:center;gap:8px;white-space:nowrap;background:var(--surface)}
+.dbtn .sw{width:38px;height:22px;border-radius:11px}
+.dbtn .sw::after{top:3px;left:3px;width:16px;height:16px}
+.dbtn.on{background:var(--orangeBg);border-color:var(--orange);color:var(--orange)}
+.dbtn.on .sw{background:var(--orange)}.dbtn.on .sw::after{left:19px}
+.ds{display:none}
+@media(max-width:1099px){.dsub{display:none}}
+@media(max-width:860px){.dl{display:none}.ds{display:inline}}
+
+/* ===== bara de sus: un singur rând (identitate · tronson · sincronizare · temă) ===== */
+.top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:var(--bw) solid var(--border2)}
+.bar{min-height:64px;display:flex;align-items:center;gap:12px;padding:4px 16px;flex-wrap:wrap}
+.logo{width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#1F6FEB,#388BFD);display:grid;place-items:center;font-size:15px;flex:none;color:#fff}
+.brand{font-weight:800;font-size:16px;letter-spacing:-.3px;white-space:nowrap}
+.crumb{display:flex;align-items:center;gap:8px;font-size:17px;font-weight:600;color:var(--muted);white-space:nowrap}
+.crumb .exe{color:var(--blue)}
+.crumb b{color:var(--text);font-weight:800}
+.trbtn{min-height:56px;padding:4px 14px;border-radius:10px;border:2px solid var(--fb);background:var(--bg);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;line-height:1.1;text-align:left;flex:none}
+.trbtn b{font-size:24px;font-weight:800;letter-spacing:-.3px}
+.trbtn small{font-size:16px;color:var(--muted);font-weight:700;white-space:nowrap}
+.trbtn small.w{color:var(--text);background:var(--yellowBg);border-radius:999px;padding:0 8px;margin-left:-8px}
+.trbtn:active{transform:scale(.98)}
+.syncg{display:flex;align-items:center;gap:10px;min-width:0}
+.pill{display:flex;align-items:center;gap:10px;min-height:56px;padding:4px 14px 4px 8px;border-radius:10px;min-width:0}
+.pill .pic{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--glyph)}
+.pill .pic .i{width:22px;height:22px;stroke-width:2.6}
+.pill .ptx{min-width:0}
+.pill b{display:block;font-size:18px;font-weight:800;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill small{display:block;font-size:16px;font-weight:600;color:var(--text);line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill.off{background:var(--orangeBg)}.pill.off .pic{background:var(--orange)}.pill.off b{color:var(--orange)}
+.pill.ok{background:var(--greenBg)}.pill.ok .pic{background:var(--green)}.pill.ok b{color:var(--green)}
+.pill.sync{background:var(--blueBg)}.pill.sync .pic{background:var(--primary);color:#fff}.pill.sync b{color:var(--blue)}
+.seg{display:inline-flex;border:2px solid var(--fb);border-radius:10px;overflow:hidden;flex:none}
+.seg button{min-height:52px;padding:0 14px;font-size:17px;font-weight:700;color:var(--text);background:var(--surface);display:inline-flex;align-items:center;gap:8px}
+.seg button+button{border-left:2px solid var(--fb)}
+.seg button[aria-pressed=true]{background:var(--primary);color:#fff}
+.lw{display:inline}
+@media(max-width:1359px){.brand,.crumb .exe,.crumb .sep{display:none}}
+@media(max-width:1199px){.lw{display:none}.seg .i{display:none}}
+@media(min-width:1000px) and (max-width:1199px){.crumb{display:none}}
+@media(max-width:999px){.syncg{order:10;flex:1 1 100%}.syncg .pill{flex:1}}
+.band{display:flex;align-items:center;gap:12px;padding:8px 16px;font-size:18px;font-weight:700;border-top:2px solid;flex-wrap:wrap}
+.band .lv{width:32px;height:32px}
+.band--red{background:var(--redBg);border-color:var(--red)}
+.band--yel{background:var(--yellowBg);border-color:var(--ybord)}
+.band--red .lv{color:var(--red)}.band--yel .lv{color:var(--yfill);--glyph:#000}
+
+/* ===== general ===== */
+.wrap{max-width:1280px;margin:0 auto;padding:10px 16px calc(var(--bh) + 24px)}
+.wrap--nobar{padding-bottom:40px}
+.card{background:var(--surface);border:var(--bw) solid var(--border2);border-radius:14px;padding:16px}
+h1{font-size:30px;font-weight:800;margin:0;letter-spacing:-.3px;line-height:1.15}
+h2{font-size:22px;font-weight:800;margin:0;line-height:1.2}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 12px;border-radius:999px;font-size:16px;font-weight:800;white-space:nowrap;background:var(--card2);color:var(--text)}
+.chip.ok{background:var(--greenBg);color:var(--green)}
+.chip.warn{background:var(--yellowBg);color:var(--ytext)}
+.chip.info{background:var(--blueBg);color:var(--blue)}
+.chip.red{background:var(--redBg);color:var(--red)}
+.note{font-size:16px;color:var(--muted);margin-top:8px}
+.hint{font-size:16px;color:var(--muted);margin:4px 0 0}
+.lbl{font-size:16px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.spin{display:inline-block;width:20px;height:20px;border:3px solid var(--border2);border-top-color:var(--primary2);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-4px;flex:none}
+.spin.w{border-color:rgba(255,255,255,.35);border-top-color:#fff}
+.spin.big{width:56px;height:56px;border-width:6px;border-color:rgba(255,255,255,.35);border-top-color:#fff}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blink{50%{border-color:var(--fb)}}
+@keyframes pop{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
+@keyframes skel{0%{opacity:.55}50%{opacity:1}100%{opacity:.55}}
+.skel{height:72px;border-radius:10px;background:var(--card2);animation:skel 1.2s ease-in-out infinite}
+.sw{width:56px;height:32px;border-radius:16px;background:var(--swOff);position:relative;flex:none;transition:background .15s}
+.sw::after{content:"";position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+
+/* ===== ecran start ===== */
+.h1row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:6px 0 14px}
+.proj{display:flex;align-items:center;gap:16px;margin-bottom:12px;flex-wrap:wrap}
+.pic{width:56px;height:56px;border-radius:14px;background:var(--blueBg);display:grid;place-items:center;font-size:28px;flex:none}
+.pname{font-size:24px;font-weight:800;line-height:1.2}
+.gpsc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:22px;align-items:center;border:2px solid var(--primary);margin-bottom:12px}
+@media(max-width:900px){.gpsc{grid-template-columns:1fr}}
+.gbig{font-size:32px;font-weight:800;line-height:1.2;margin:4px 0;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.gbig .blue{color:var(--blue)}
+.gacts{display:flex;flex-direction:column;gap:10px}
+.kmap{position:relative;display:flex;gap:4px;margin-top:10px;padding-top:26px}
+.kseg{flex:1;min-width:0;min-height:56px;border-radius:10px;background:var(--card2);border:2px solid var(--border2);font-weight:800;font-size:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15}
+.kseg small{font-size:16px;font-weight:700;color:var(--muted)}
+.kseg.done{border-color:var(--green)}
+.kseg.act{border-color:var(--ybord)}
+.kseg.here{background:var(--blueBg);border-color:var(--primary);box-shadow:0 0 0 3px #388BFD55}
+.kpin{position:absolute;top:0;transform:translateX(-50%);color:var(--blue);pointer-events:none}
+.kpin .i{width:26px;height:26px;stroke-width:2.6}
+.kticks{display:flex;justify-content:space-between;font-size:16px;color:var(--muted);font-weight:700;margin-top:4px}
+.trgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.trt{min-height:120px;text-align:left;padding:14px 16px;border-radius:14px;background:var(--surface);border:2px solid var(--border2);display:flex;flex-direction:column;gap:4px;transition:transform .06s}
+.trt:active{transform:scale(.98);border-color:var(--primary)}
+.trt.here{border-color:var(--primary)}
+.trc{font-size:30px;font-weight:800;letter-spacing:-.5px}
+.trkm{font-size:17px;color:var(--muted);font-weight:600}
+.trst{font-size:17px;font-weight:700}
+.pband{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:14px;border:2px solid var(--fb);background:var(--surface);margin-bottom:12px;flex-wrap:wrap;font-size:18px}
+.pband.old{border-color:var(--ybord);background:var(--yellowBg)}
+.pband .lv{width:34px;height:34px;color:var(--yfill);--glyph:#000}
+.pband .ic2{color:var(--blue)}
+
+/* ===== ecran lucru ===== */
+.work{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
+@media(min-width:1000px){
+ .work{grid-template-columns:minmax(0,1fr) clamp(400px,38vw,490px)}
+ .listcol{position:sticky;top:calc(var(--hdr) + 10px);max-height:calc(100vh - var(--hdr) - var(--bh) - 22px);overflow:auto;padding-right:4px;overscroll-behavior:contain}
+}
+.form{padding:0;overflow:hidden}
+.edband{display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--yellowBg);border-bottom:3px solid var(--ybord);flex-wrap:wrap}
+.edband b{font-size:21px;color:var(--ytext)}
+.step{padding:10px 16px;border-top:var(--bw) solid var(--border2);scroll-margin-top:calc(var(--hdr) + 10px);scroll-margin-bottom:calc(var(--bh) + 10px)}
+.step:first-child,.edband+.step{border-top:0}
+.slabel{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:20px;font-weight:800;margin-bottom:10px}
+.sn{width:36px;height:36px;border-radius:50%;background:var(--primary);color:#fff;display:grid;place-items:center;font-size:18px;font-weight:800;flex:none}
+.sn.done{background:var(--greenS)}
+.sn.err{background:var(--redS);color:#fff}
+.sn.warn{background:var(--yfill);color:#000}
+.sn.off{background:var(--card2);color:var(--muted);border:2px solid var(--fb)}
+.dimstep .slabel{margin-bottom:0;color:var(--muted)}
+.s1row{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap}
+.nrctl{display:flex;align-items:center;gap:8px}
+.sq{width:60px;min-width:60px;height:64px;font-size:34px;padding:0}
+.nrbox{height:64px;padding:0 12px;border-radius:10px;background:var(--bg);border:2px solid var(--fb);display:inline-flex;align-items:center;gap:2px;line-height:1;transition:transform .06s}
+.nrbox:active{transform:scale(.98)}
+.nrp{color:var(--muted);font-weight:800}
+.nrbox .nrp{font-size:22px}
+.nrd{font-size:34px;font-weight:800}
+.nre{margin-left:6px;color:var(--blue);width:22px;height:22px}
+.nrbox.bad{border-color:var(--red);background:var(--redBg)}
+.s1info{display:flex;flex-direction:column;align-items:flex-start;gap:3px;font-size:16px;color:var(--muted);min-width:0;flex:1 1 150px}
+@media(min-width:1000px){.s1x{display:none}}
+.s1info b{color:var(--text)}
+#lastw{display:block;border-radius:10px;padding:0 4px;margin-left:-4px;line-height:1.3}
+.kp2{display:grid;grid-template-columns:232px minmax(0,1fr);gap:16px;align-items:start}
+.kpr{min-width:0}
+.kpr .slabel{margin-bottom:8px;flex-wrap:nowrap}
+.kalt{margin-top:14px;width:232px}
+.kp{display:grid;grid-template-columns:repeat(3,72px);gap:8px}
+.key{height:64px;border-radius:10px;background:var(--key);border:2px solid var(--fb);font-size:32px;font-weight:800;color:var(--text);display:grid;place-items:center;transition:transform .05s}
+.key .i{width:34px;height:34px;stroke-width:2.2}
+.key.fn{font-size:34px}
+.key.blank{visibility:hidden}
+.key:active{transform:scale(.94);background:var(--primary);border-color:var(--primary);color:#fff}
+.serbox{display:flex;align-items:center;gap:6px;background:var(--bg);border:2px solid var(--primary);box-shadow:0 0 0 3px #1F6FEB33;border-radius:14px;padding:8px 10px;min-height:76px}
+.pref{font-size:25px;font-weight:800;color:var(--muted)}
+.slot{width:44px;height:58px;flex:none;border-radius:10px;border:2px solid var(--fb);display:grid;place-items:center;font-size:36px;font-weight:800;background:var(--surface)}
+.slot.fill{border-color:var(--primary)}
+.slot.cur{border-color:var(--primary2);animation:blink 1.1s steps(2,start) infinite}
+.prefs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.freein{flex:1;min-width:0;height:58px;border:0;background:transparent;font-size:30px;font-weight:800;outline:none;text-transform:uppercase}
+.freein::placeholder{color:var(--dim);font-weight:600}
+.sugg{display:flex;flex-direction:column;gap:14px;margin-top:12px;min-width:0}
+.sghead{font-size:16px;font-weight:800;color:var(--muted)}
+.srow{min-height:64px;padding:6px 14px;border-radius:10px;background:var(--card);border:2px solid var(--fb);text-align:left;display:flex;align-items:center;gap:12px;justify-content:space-between;transition:transform .05s;width:100%}
+.srow:active{transform:scale(.98);border-color:var(--primary)}
+.srow.used{border-style:dashed;border-color:var(--border2);background:transparent;cursor:default}
+.srow.used:active{transform:none}
+.sl{display:flex;flex-direction:column;gap:2px;min-width:0}
+.sser{font-size:24px;font-weight:700;line-height:1.1}
+.sser .pm{color:var(--muted)}
+.sser mark{background:none;color:var(--blue);font-weight:900;text-decoration:underline;text-underline-offset:4px}
+.sr{display:flex;flex-direction:column;align-items:flex-end;font-size:16px;color:var(--muted);white-space:nowrap}
+.sr b{font-size:24px;color:var(--text)}
+.bdg{font-size:16px;font-weight:700;padding:2px 10px;border-radius:999px;min-height:28px;display:inline-flex;align-items:center;align-self:flex-start;white-space:nowrap}
+.bdg.grn{background:var(--greenBg);color:var(--green)}
+.bdg.yel{background:var(--yellowBg);color:var(--ytext)}
+.bdg.red{background:var(--redBg);color:var(--red);font-weight:800}
+.sempty{padding:14px 16px;border-radius:10px;border:2px dashed var(--border2);color:var(--muted);font-size:17px}
+.sempty b{color:var(--text)}
+.sempty.bad{border-color:var(--red);color:var(--text);background:var(--redBg)}
+.stk{margin-top:12px;font-size:16px;font-weight:700;color:var(--muted);display:flex;gap:8px;align-items:flex-start;line-height:1.3}
+.stk .i{margin-top:2px}
+.stk.old{color:var(--text);background:var(--yellowBg);border:2px solid var(--ybord);border-radius:10px;padding:8px 10px}
+.selrow{display:flex;align-items:center;gap:10px 12px;flex-wrap:wrap}
+.selrow>.btn{padding:0 12px}
+.selser{font-size:24px;font-weight:800;line-height:1;white-space:nowrap}
+.selser .pfx{color:var(--muted)}
+.selser b{font-size:48px;letter-spacing:1px}
+.selsar{display:flex;flex-direction:column;line-height:1.15}
+.selsar b{font-size:26px}
+.cmp{font-size:16px;color:var(--muted);font-weight:600}
+.al{display:flex;gap:14px;align-items:flex-start;border-radius:14px;padding:12px 14px;border:2px solid;margin-top:12px;color:var(--text)}
+.alb{flex:1;min-width:0}
+.al .t{font-size:20px;font-weight:800;line-height:1.2}
+.al .m{font-size:18px;margin-top:2px}
+.aact{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.al.compact{padding:8px 12px;align-items:center}
+.al.compact .lv{width:32px;height:32px}
+.al.compact .t{font-size:19px}.al.compact .m{display:inline;margin-left:6px;font-size:17px;color:var(--muted)}
+.al-ok{border-color:var(--green);background:var(--greenBg)}.al-ok .lv{color:var(--green)}.al-ok .t{color:var(--green)}
+.al-info{border-color:var(--ybord);background:var(--yellowBg)}.al-info .lv{color:var(--yfill);--glyph:#000}.al-info .t{color:var(--ytext)}
+.al-block{border-color:var(--red);background:var(--redBg)}.al-block .lv{color:var(--red)}.al-block .t{color:var(--red)}
+.al-neutral{border-color:var(--fb);background:var(--surface)}.al-neutral .lv{color:var(--blue);--glyph:#fff}.al-neutral .t{color:var(--text)}
+[data-theme=sun] .al-info,[data-theme=sun] .cupon{border-width:3px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.lenrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:12px}
+.lenbox{padding:10px 14px;border-radius:14px;background:var(--bg);border:2px solid var(--border2)}
+.lbig{font-size:40px;font-weight:800;line-height:1.1}
+.lbig small{font-size:22px;color:var(--muted)}
+.lenbox.dim .lbig{font-size:28px;color:var(--muted)}
+.lopts{display:flex;flex-direction:column;gap:10px}
+.tog{min-height:64px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 14px;border-radius:10px;border:2px solid var(--fb);background:var(--surface);font-size:19px;font-weight:800;text-align:left;line-height:1.15;transition:transform .06s}
+.tog:active{transform:scale(.98)}
+.tog .tl{display:flex;align-items:center;gap:10px}
+.tog small{display:block;font-size:16px;font-weight:600;color:var(--muted);margin-top:2px}
+.tog.on{border-color:var(--primary);background:var(--blueBg);color:var(--blue)}
+.tog.on .sw{background:var(--primary)}.tog.on .sw::after{left:28px}
+.tog2{min-height:56px;padding:0 16px;border-radius:10px;border:2px solid var(--fb);background:var(--surface);font-size:18px;font-weight:700}
+.tog2.on{border-color:var(--primary);background:var(--primary);color:#fff}
+.sarje,.segc{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 4px}
+.cutgrid{display:grid;grid-template-columns:232px minmax(0,1fr);gap:16px;margin-top:12px;align-items:start}
+.ldrow{display:flex;gap:10px;align-items:center;margin-top:6px}
+.lendisp{flex:1;min-width:0;height:72px;border-radius:14px;border:2px solid var(--primary);background:var(--bg);display:flex;align-items:center;justify-content:flex-end;padding:0 16px;font-size:40px;font-weight:800;gap:8px}
+.lendisp .u{font-size:24px;color:var(--muted)}
+.lendisp .ph{color:var(--dim)}
+.lendisp.bad{border-color:var(--red);background:var(--redBg)}
+.cupon{border-radius:14px;border:2px solid var(--ybord);background:var(--yellowBg);padding:12px 14px;margin-top:12px}
+.cupon.empty{border:2px dashed var(--fb);background:var(--surface)}
+.cupt{font-size:20px;font-weight:800;display:flex;gap:8px;align-items:center}
+.cupbig{font-size:40px;font-weight:800;line-height:1.1}
+.cupbig span{font-size:22px}
+.cupbar{display:flex;height:44px;border-radius:10px;overflow:hidden;margin:10px 0;border:2px solid var(--fb)}
+.cupbar .m{background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;white-space:nowrap;overflow:hidden}
+.cupbar .c{background:var(--yfill);color:#000;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;white-space:nowrap;overflow:hidden}
+.cupm{font-size:18px}
+.cupn{font-size:17px;margin-top:8px;font-weight:700;display:flex;gap:8px;align-items:center}
+/* listă suduri — rând compact */
+.lhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 10px}
+.wcs{display:flex;flex-direction:column;gap:8px}
+.wc{background:var(--surface);border:var(--bw) solid var(--border2);border-left:6px solid var(--green);border-radius:14px;padding:8px 8px 8px 12px;display:flex;gap:10px;align-items:center}
+.wc.l-block{border-left-color:var(--red);background:var(--redBg)}
+.wc.l-info{border-left-color:var(--ybord)}
+.wc.editing{outline:3px solid var(--ybord);outline-offset:1px}
+.wmain{flex:1;min-width:0}
+.wl1{display:flex;align-items:center;gap:8px}
+.wnr{font-size:28px;font-weight:800;letter-spacing:-.3px;line-height:1.1}
+.wnr .nrp{font-size:18px}
+.wcut{color:var(--text);display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--card2)}
+.wcut .i{width:18px;height:18px}
+.wlen{font-size:28px;font-weight:800;line-height:1.1;white-space:nowrap}
+.wlen small{font-size:18px;color:var(--muted)}
+.wlen.dim{color:var(--muted)}
+.wl2{display:flex;gap:4px 10px;flex-wrap:wrap;align-items:center;font-size:16px;margin-top:2px}
+.wl2 .mono{font-size:19px}
+.syi{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-weight:700}
+.syi .i{width:20px;height:20px}
+.syc{font-size:16px;font-weight:800;padding:2px 10px;border-radius:999px;display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
+.syc.sending{background:var(--blueBg);color:var(--blue)}.syc.modif{background:var(--blueBg);color:var(--blue)}
+.syc.conflict{background:var(--red);color:var(--glyph)}
+.syc .spin{width:14px;height:14px;border-width:2px}
+.wal{margin-top:4px;font-size:16px;font-weight:700;line-height:1.3}
+.wal--red{color:var(--red)}
+.wal--yel{color:var(--text)}
+.wal--yel::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--yfill);margin-right:6px;vertical-align:1px}
+.wal--neu{color:var(--muted)}
+.wbtns{display:flex;gap:6px;flex:none}
+.ib{width:68px;height:60px;border-radius:10px;border:2px solid var(--fb);background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:15px;font-weight:700;color:var(--text)}
+.ib .i{width:22px;height:22px}
+.ib:active{transform:scale(.95)}
+.ib.ib-p{background:var(--primary);border-color:var(--primary);color:#fff}
+.histl{margin-top:12px;padding:10px 14px;border-radius:10px;border:2px dashed var(--border2);color:var(--muted);font-size:16px}
+.lot{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 12px;border-radius:14px;background:var(--surface);border:var(--bw) solid var(--border2);margin-top:10px;font-size:17px}
+.lot .lic{color:var(--muted);display:grid}
+.lot .lic .i{width:26px;height:26px}
+.lot--respins{border-color:var(--red);background:var(--redBg)}
+.lot--respins .lv{width:30px;height:30px;color:var(--red)}
+.lot--ok .lic{color:var(--green)}
+/* bară jos */
+.bottom{position:fixed;left:0;right:0;bottom:0;z-index:25;background:var(--surface);border-top:var(--bw) solid var(--border2);box-shadow:0 -6px 24px rgba(0,0,0,.22)}
+.bin{max-width:1280px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:8px 16px calc(8px + env(safe-area-inset-bottom))}
+.bst{flex:1;min-width:0;font-size:18px;line-height:1.3}
+.bst b{font-size:21px}
+.tbar{display:flex;align-items:center;gap:10px;padding:6px 12px;border-radius:10px;border-left:6px solid var(--blue);background:var(--card2);font-weight:700;font-size:18px;line-height:1.25}
+.tbar.ok{border-left-color:var(--green)}.tbar.warn{border-left-color:var(--ybord)}.tbar.off{border-left-color:var(--orange)}.tbar.err{border-left-color:var(--red)}
+.ubtn{flex:none}
+/* rezumat */
+.phead{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:4px 0 14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
+.tile{background:var(--surface);border:var(--bw) solid var(--border2);border-top:5px solid var(--blue);border-radius:14px;padding:12px 14px}
+.tile--red{border-top-color:var(--red)}.tile--yel{border-top-color:var(--ybord)}.tile--grn{border-top-color:var(--green)}
+.tv{font-size:36px;font-weight:800;line-height:1.1;margin:4px 0}
+.ts{font-size:16px;color:var(--muted);font-weight:600}
+.panel{border-radius:14px;border:2px solid var(--border2);padding:12px 16px;margin-bottom:14px;background:var(--surface);color:var(--text)}
+.panel--red{border-color:var(--red);background:var(--redBg)}
+.panel--yel{border-color:var(--ybord);background:var(--yellowBg)}
+.panel--grn{border-color:var(--green);background:var(--greenBg)}
+.panel--org{border-color:var(--orange);background:var(--orangeBg)}
+.pt{font-size:20px;font-weight:800;margin-bottom:4px;display:flex;gap:10px;align-items:center}
+.pt .lv{width:32px;height:32px}
+.panel--red .pt{color:var(--red)}.panel--red .pt .lv{color:var(--red)}
+.panel--yel .pt{color:var(--ytext)}.panel--yel .pt .lv{color:var(--yfill);--glyph:#000}
+.prow{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--border2);flex-wrap:wrap;font-size:18px}
+.pt+.prow{border-top:0}
+.tscroll{overflow-x:auto}
+table.t{width:100%;border-collapse:collapse;font-size:18px}
+.t th{text-align:left;font-size:16px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);padding:8px 10px;border-bottom:var(--bw) solid var(--border2);white-space:nowrap}
+.t td{padding:10px;border-bottom:1px solid var(--border2);vertical-align:top}
+.t tr.tr-block td{background:var(--redBg)}
+/* trimis */
+.donewrap{max-width:800px;margin:20px auto;text-align:center}
+.bigok{width:128px;height:128px;border-radius:50%;background:var(--greenS);color:#fff;display:grid;place-items:center;margin:0 auto 18px;animation:pop .35s ease-out}
+.bigok .i{width:72px;height:72px;stroke-width:3}
+.bigok.q{background:var(--card2);color:var(--text);border:3px solid var(--fb)}
+.bigok.s{background:var(--primary)}
+.bigok.r{background:var(--redS)}
+.lead{font-size:21px;margin:8px 0 16px}
+.nextl{font-size:18px;color:var(--muted);margin:14px 0 20px}
+.dacts{display:flex;flex-direction:column;gap:12px;max-width:600px;margin:0 auto}
+/* toast fix (doar pe ecranele fără bară jos) — nu prinde atingeri */
+#toast{position:fixed;left:50%;top:120px;transform:translateX(-50%);z-index:60;width:min(720px,calc(100% - 32px));pointer-events:none}
+#toast .tbar{box-shadow:var(--shadow);background:var(--surface);border:2px solid var(--border2);border-left-width:6px;padding:12px 16px}
+/* modale */
+.mback{position:fixed;inset:0;background:rgba(1,4,9,.68);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal{background:var(--surface);border:var(--bw) solid var(--border2);border-radius:14px;box-shadow:var(--shadow);width:min(560px,100%);max-height:calc(100vh - 32px);overflow:auto;padding:20px}
+.modal.wide{width:min(900px,100%)}
+.modal p{font-size:18px}
+.mfoot{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.mfoot .btn{flex:1}
+.mic{width:64px;height:64px;margin-bottom:8px}
+.mic .lv{width:64px;height:64px}
+.nrbig{font-size:52px;font-weight:800;text-align:center;padding:10px;border-radius:14px;background:var(--bg);border:2px solid var(--fb);margin:12px 0 4px}
+.nrbig.bad{border-color:var(--red);background:var(--redBg)}
+.mkp{display:flex;justify-content:center;margin-top:12px}
+.scen{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:8px;margin-top:12px}
+.scb{display:flex;align-items:center;gap:12px;min-height:64px;padding:8px 12px;border-radius:10px;background:var(--card);border:2px solid var(--fb);text-align:left;transition:transform .05s}
+.scb:active{transform:scale(.99);border-color:var(--primary)}
+.scb .lv{width:36px;height:36px}
+.scb .st{font-size:18px;font-weight:800;display:block}
+.scb .sd{font-size:16px;color:var(--muted);display:block}
+.lv-c-ok{color:var(--green)}.lv-c-info{color:var(--yfill);--glyph:#000}.lv-c-block{color:var(--red)}.lv-c-neu{color:var(--blue);--glyph:#fff}
+.gsec{margin-top:16px;padding-top:12px;border-top:2px solid var(--border2)}
+.gsec h3{font-size:18px;margin:0 0 8px;font-weight:800}
+.gctl{display:flex;gap:10px;flex-wrap:wrap}
+.gsteps{margin:6px 0 0;padding-left:24px;font-size:17px}
+.gsteps li{margin:3px 0}
+@media(max-width:820px){.wrap{padding-left:12px;padding-right:12px}h1{font-size:26px}.gbig{font-size:27px}.scen{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+ <!-- niveluri: formă + glifă (cerc ✓ = ok · triunghi i = informativ · octogon ✕ = blocant) -->
+ <symbol id="lv-ok" viewBox="0 0 48 48"><circle cx="24" cy="24" r="22" fill="currentColor"/><path d="M13.5 24.5l7 7 14-15" fill="none" style="stroke:var(--glyph)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+ <symbol id="lv-info" viewBox="0 0 48 48"><path d="M24 3.5c1.5 0 2.8.8 3.5 2.1l17.4 30.6c1.5 2.7-.4 6-3.5 6H6.6c-3.1 0-5-3.3-3.5-6L20.5 5.6c.7-1.3 2-2.1 3.5-2.1z" fill="currentColor"/><path d="M24 18.5v11" fill="none" style="stroke:var(--glyph)" stroke-width="5" stroke-linecap="round"/><circle cx="24" cy="36.2" r="3.2" style="fill:var(--glyph)"/></symbol>
+ <symbol id="lv-block" viewBox="0 0 48 48"><path d="M15.6 2.5h16.8l13.1 13.1v16.8L32.4 45.5H15.6L2.5 32.4V15.6z" fill="currentColor"/><path d="M16.5 16.5l15 15M31.5 16.5l-15 15" fill="none" style="stroke:var(--glyph)" stroke-width="5" stroke-linecap="round"/></symbol>
+ <symbol id="lv-q" viewBox="0 0 48 48"><path d="M15.6 2.5h16.8l13.1 13.1v16.8L32.4 45.5H15.6L2.5 32.4V15.6z" fill="currentColor"/><path d="M18 18.5a6 6 0 1 1 8.6 5.4c-1.6.8-2.6 2.2-2.6 4V29" fill="none" style="stroke:var(--glyph)" stroke-width="4.6" stroke-linecap="round"/><circle cx="24" cy="35.8" r="3" style="fill:var(--glyph)"/></symbol>
+ <symbol id="lv-neu" viewBox="0 0 48 48"><circle cx="24" cy="24" r="22" fill="currentColor"/><path d="M24 22v12" fill="none" style="stroke:var(--glyph)" stroke-width="5" stroke-linecap="round"/><circle cx="24" cy="14.5" r="3.2" style="fill:var(--glyph)"/></symbol>
+ <!-- iconițe linie (currentColor) -->
+ <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></symbol>
+ <symbol id="i-box" viewBox="0 0 24 24"><path d="M3 7.5L12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5l9 4.5 9-4.5M12 12v9"/></symbol>
+ <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.6 7.6L20 18M8.6 16.4L20 6"/></symbol>
+ <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M3 16.5L16.5 3 21 7.5 7.5 21z"/><path d="M7 12.5l2 2M10 9.5l2 2M13 6.5l2 2"/></symbol>
+ <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+ <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18.5h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.6 1A3.6 3.6 0 0 0 7 18.5z"/><path d="M9.5 14l2 2 3.5-3.5"/></symbol>
+ <symbol id="i-off" viewBox="0 0 24 24"><path d="M7 18.5h10M20.4 15.6A4 4 0 0 0 17.5 10.5a6 6 0 0 0-8.8-4.6M5.9 11.5A3.6 3.6 0 0 0 7 18.5"/><path d="M3 3l18 18"/></symbol>
+ <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 16V5M7 10l5-5 5 5M5 19.5h14"/></symbol>
+ <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11A8 8 0 0 0 5.7 6.7L4 8.5M4 13a8 8 0 0 0 14.3 4.3L20 15.5"/><path d="M4 4v4.5h4.5M20 20v-4.5h-4.5"/></symbol>
+ <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
+ <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+ <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+ <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+ <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3L3 10.5l7 3 3 7z"/><path d="M10 13.5L21 3"/></symbol>
+ <symbol id="i-bksp" viewBox="0 0 24 24"><path d="M9 5h11a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H9l-6-7z"/><path d="M12 9.5l5 5M17 9.5l-5 5"/></symbol>
+ <symbol id="i-kbd" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/></symbol>
+ <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+ <symbol id="i-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+ <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l5 5L19.5 7"/></symbol>
+ <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+ <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+ <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.5 12h2M19.5 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+ <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+</defs>
+</svg>
+<div id="app"></div>
+<div id="modal"></div>
+<div id="toast" aria-live="polite"></div>
+<script>
+(function(){
+'use strict';
+/* =========================================================================
+   PROTOTIP — Tableta inginerului de izometrie (PontajPRO / Gazpet ERP · Execuție → Izometrie)
+   Date fictive. Stare în memorie + localStorage. Un singur fișier, fără dependințe externe.
+   v2: aplică criticile de teren / vizual / logică (vezi raportul de livrare).
+   ========================================================================= */
+var LS_KEY='gazpet_izometrie_tableta_v2',VER=2;
+var PROIECT={client:'Transgaz',nume:'Conducta Prunișor – Jupa · LOT 2',stoc:'Stoc LOT 2 Jupânești'};
+var TRS=[12,13,14,15,16,17,18,19].map(function(n,i){return {cod:'TR'+n,a:49+i*5,b:54+i*5};});
+var HIST={TR12:{max:52,data:'16.10.2026'},TR13:{max:40,data:'19.10.2026'}};
+var GPS=[{km:58.340},{km:51.120},{km:63.905},{km:77.610},{km:86.020},{km:45.200},{st:'cauta'},{st:'indisp'}];
+var MAXL=12.80,MIN_CUPON=0.50,STOC_VECHI_H=4,GPS_TOL=0.300;
+var SARJE=['TA01575','SA07348','SA08018'];
+/* ce „știe” serverul și tableta nu (montat de altă echipă între timp) */
+var SERVER_MONTAT=[{serie:'254CA10441',sarja:'SA08018',loc:'TR14S012',cine:'altă tabletă',ora:'11:20'}];
+var FMT=/^\d{3}[A-Z]{2}\d{5}$/;
+
+function $(s){return document.querySelector(s);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function pad2(n){return String(n).padStart(2,'0');}
+function pad3(n){return String(n).padStart(3,'0');}
+function round2(v){return Math.round(v*100)/100;}
+function fmtM(v){return (Math.round((+v||0)*100)/100).toFixed(2).replace('.',',');}
+function nrStr(tr,n){return tr+'S'+pad3(n);}
+function trOf(loc){var m=String(loc||'').match(/^TR\d+/);return m?m[0]:'';}
+function iso(d){return (d||new Date()).toISOString();}
+function dKey(d){return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();}
+function hm(d){return pad2(d.getHours())+':'+pad2(d.getMinutes());}
+function fT(s){if(!s)return '—';var d=new Date(s),t=new Date(),y=new Date(t.getTime()-864e5);if(dKey(d)===dKey(t))return hm(d);if(dKey(d)===dKey(y))return 'ieri '+hm(d);return pad2(d.getDate())+'.'+pad2(d.getMonth()+1)+' '+hm(d);}
+function fD(s){var d=new Date(s);return pad2(d.getDate())+'.'+pad2(d.getMonth()+1);}
+function isToday(s){return dKey(new Date(s))===dKey(new Date());}
+function ageH(s){return (Date.now()-new Date(s).getTime())/36e5;}
+var AZI=new Date().toLocaleDateString('ro-RO',{day:'2-digit',month:'2-digit',year:'numeric'});
+function kmFmt(km){var k=Math.floor(km+1e-9);return k+'+'+pad3(Math.round((km-k)*1000));}
+function trFromKm(km){if(km<49||km>89)return null;return TRS[Math.min(TRS.length-1,Math.floor((km-49)/5))].cod;}
+function trObj(c){for(var i=0;i<TRS.length;i++)if(TRS[i].cod===c)return TRS[i];return TRS[1];}
+function distEdge(km){var t=trObj(trFromKm(km));return Math.min(km-t.a,t.b-km);}
+function parseLen(s){if(!s)return NaN;return parseFloat(String(s).replace(',','.'));}
+function pl(n,s,p){if(n===1)return '1 '+s;var r=n%100;return n+((r>=20||(r===0&&n>0))?' de ':' ')+p;}
+function cap(s){s=String(s||'');return s.charAt(0).toUpperCase()+s.slice(1);}
+function normSer(s){return String(s||'').toUpperCase().replace(/[^0-9A-Z]/g,'');}
+function uuid(){try{if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();}catch(e){}return 'u-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);}
+function ic(n,cls){return '<svg class="i'+(cls?' '+cls:'')+'" aria-hidden="true"><use href="#i-'+n+'"/></svg>';}
+function lv(n,cls){return '<svg class="lv'+(cls?' '+cls:'')+'" aria-hidden="true"><use href="#lv-'+n+'"/></svg>';}
+function sarjaTxt(s){return s==='?'?'sarjă nedeclarată':s||'—';}
+
+/* ---------------- date demo ---------------- */
+function newDraft(tr,prefix){return {editId:null,touched:false,tr:tr,nr:1,nrAuto:true,insert:false,prefix:prefix||'254CA10',digits:'',free:false,freeTxt:'',checked:false,sel:null,lmode:'stoc',len:'',restMode:'deseu',verif:false,usarja:'',ulen:''};}
+function seed(){
+  var st=[],seq=0,T=new Date();
+  function at(h,m,off){var d=new Date(T);d.setDate(d.getDate()+(off||0));d.setHours(h,m,0,0);return d.toISOString();}
+  function add(serie,sarja,lung,o){var it={id:'p'+(++seq),serie:serie,sarja:sarja,lung:lung,tip:'teava',stare:'disponibil',loc:null,mont:null,orig:null,origLung:null,origMont:null,local:false,lock:null};if(o)for(var k in o)it[k]=o[k];st.push(it);return it;}
+  // țevi întregi disponibile în stocul LOT 2 Jupânești
+  [['254CA10206','TA01575',12.47],['254CA10229','TA01575',12.33],['254CA10273','TA01575',12.50],['254CA10302','SA07348',12.44],
+   ['254CA10406','SA08018',12.36],['254CA10441','SA08018',12.29],['254CA10503','SA08018',12.47],['254CA10558','SA08018',12.35]]
+   .forEach(function(r){add(r[0],r[1],r[2]);});
+  // TR12 (aprobat): o serie montată integral + două țevi tăiate, cu cupoanele lor în stoc
+  add('254CA10287','TA01575',12.41,{stare:'montat',loc:'TR12S045',mont:12.41});
+  add('254CA10348','SA07348',12.38,{stare:'montat',loc:'TR12S031',mont:9.18});
+  add('254CA10419','SA08018',12.19,{stare:'montat',loc:'TR12S038',mont:7.85});
+  add('254CA10348','SA07348',3.20,{tip:'cupon',orig:'TR12S031',origLung:12.38,origMont:9.18});
+  add('254CA10419','SA08018',4.34,{tip:'cupon',orig:'TR12S038',origLung:12.19,origMont:7.85});
+  // sesiunea de azi pe TR13 (lucrată fără semnal de dimineață) — orele sunt fixe după 11:15, altfel relative
+  var mins=T.getHours()*60+T.getMinutes(),fixed=mins>=11*60+15;
+  var ore=[[8,12],[8,41],[9,5],[9,37],[10,2],[10,29],[10,55]];
+  function tAt(i){if(fixed)return at(ore[i][0],ore[i][1]);return new Date(T.getTime()-(20+27*(6-i))*60000).toISOString();}
+  var lastSync=fixed?at(7,45):new Date(T.getTime()-(20+27*7)*60000).toISOString();
+  var ses=[['254CA10211','TA01575',12.38],['254CA10234','TA01575',12.45],['254CA10258','TA01575',12.09],
+           ['254CA10315','SA07348',12.50,8.00],['254CA10371','SA07348',12.26],['254CA10392','SA07348',12.31],['254CA10437','SA08018',12.42]];
+  var welds=[],outbox=[],oseq=0;
+  ses.forEach(function(r,i){
+    var nr=41+i,loc=nrStr('TR13',nr),mont=r[3]||r[2];
+    var it=add(r[0],r[1],r[2],{stare:'montat',loc:loc,mont:mont}),cuponId=null;
+    if(r[3]){var c=add(r[0],r[1],round2(r[2]-r[3]),{tip:'cupon',orig:loc,origLung:r[2],origMont:r[3],local:true});cuponId=c.id;}
+    var w={id:'w'+(++seq),uuid:uuid(),tr:'TR13',nr:nr,serie:r[0],sarja:r[1],lungStoc:r[2],lungMont:mont,taiata:!!r[3],stockId:it.id,cuponId:cuponId,tipPiesa:'teava',alert:null,corr:null,deseu:null,srv:false,stare:'sesiune',creat:tAt(i),modif:null,lot:null};
+    welds.push(w);outbox.push({seq:++oseq,op:'upsert',id:w.id,uuid:w.uuid,nr:loc});
+  });
+  // sesiune uitată de ieri pe TR14 — sincronizată ca ciornă, dar netrimisă la aprobare
+  [['254CA10520','SA08018',12.38,[15,10]],['254CA10544','SA08018',12.42,[15,42]]].forEach(function(r,i){
+    var nr=1+i,loc=nrStr('TR14',nr),it=add(r[0],r[1],r[2],{stare:'montat',loc:loc,mont:r[2]});
+    welds.push({id:'w'+(++seq),uuid:uuid(),tr:'TR14',nr:nr,serie:r[0],sarja:r[1],lungStoc:r[2],lungMont:r[2],taiata:false,stockId:it.id,cuponId:null,tipPiesa:'teava',alert:null,corr:null,deseu:null,srv:true,stare:'sesiune',creat:at(r[3][0],r[3][1],-1),modif:null,lot:null});
+  });
+  // istoricul proiectului (TR12 S001–S052, TR13 S001–S040) — țevi montate care nu mai sunt în stoc
+  var used={999:1};st.forEach(function(it){used[it.serie.slice(-3)]=1;});
+  var hist=[],k=0,cands=[];
+  for(var j=0;j<361;j++){var n=200+((j*37)%361);if(!used[n])cands.push(n);}
+  function hpush(tr,nr,dt){var n=cands[k++];hist.push({serie:'254CA10'+pad3(n),sarja:n<300?'TA01575':n<400?'SA07348':'SA08018',lung:round2(12.09+((k*13)%42)/100),loc:nrStr(tr,nr),data:dt});}
+  for(var a=1;a<=52;a++)if(a!==31&&a!==38&&a!==45)hpush('TR12',a,HIST.TR12.data);
+  for(var b=1;b<=40;b++)hpush('TR13',b,HIST.TR13.data);
+  return {v:VER,theme:'sun',online:false,lastSync:lastSync,stocCache:lastSync,screen:'start',tr:'TR13',gps:0,gpsAck:null,gpsAsked:{},
+          stock:st,hist:hist,welds:welds,subs:[],outbox:outbox,oseq:oseq,seq:seq,lastLot:null,verifBlocks:false,draft:newDraft('TR13')};
+}
+
+/* ---------------- persistență (cu semnalizare de erori) ---------------- */
+var UI={modal:null,syncing:null,inflight:null,syncT:null,autoT:null,toast:null,toastT:null,undo:null,undoAt:0,fx:[],scrollTo:null,focus:null,
+        persistErr:false,loadMsg:null,boot:true,otherTab:false,simFail:false,tapGuard:0,lp:null,lpFired:false,lastScreen:null};
+function load(){
+  var raw=null;
+  try{raw=localStorage.getItem(LS_KEY);}catch(e){UI.loadMsg='Memoria tabletei nu poate fi citită (mod privat?) — datele nu rămân după închidere.';return null;}
+  if(!raw)return null;
+  try{
+    var o=JSON.parse(raw);
+    if(!o||o.v!==VER||!Array.isArray(o.welds)||!Array.isArray(o.stock)||!Array.isArray(o.outbox)||!o.draft)throw new Error('format');
+    return o;
+  }catch(e){
+    var k=LS_KEY+'_corupt_'+Date.now();
+    try{localStorage.setItem(k,raw);}catch(e2){k=null;}
+    UI.loadMsg='Datele salvate pe tabletă nu au putut fi citite'+(k?' — am păstrat o copie de siguranță ('+k+')':'')+'. Am pornit cu datele demo, fără să suprascriu nimic altceva.';
+    return null;
+  }
+}
+function persist(){
+  try{if(UI.simFail)throw new Error('sim');localStorage.setItem(LS_KEY,JSON.stringify(S));UI.persistErr=false;}
+  catch(e){UI.persistErr=true;}
+}
+var S=load()||seed();
+try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
+function nid(){return 'x'+(++S.seq);}
+
+/* ---------------- logică ---------------- */
+function editW(){return S.draft.editId?findW(S.draft.editId):null;}
+function findW(id){for(var i=0;i<S.welds.length;i++)if(S.welds[i].id===id)return S.welds[i];return null;}
+function findP(id){for(var i=0;i<S.stock.length;i++)if(S.stock[i].id===id)return S.stock[i];return null;}
+function findLot(id){for(var i=0;i<S.subs.length;i++)if(S.subs[i].id===id)return S.subs[i];return null;}
+function findWByLoc(loc){for(var i=0;i<S.welds.length;i++){var w=S.welds[i];if(nrStr(w.tr,w.nr)===loc)return w;}return null;}
+function isAvail(it,ew){if(it.lock)return false;return it.stare==='disponibil'||(!!ew&&ew.stockId===it.id);}
+function hidden(it,ew){return !!ew&&ew.cuponId===it.id;}
+function sesWelds(tr){return S.welds.filter(function(w){return w.tr===tr&&w.stare==='sesiune';});}
+function nextNr(tr,exceptId){var m=(HIST[tr]||{max:0}).max;S.welds.forEach(function(w){if(w.tr===tr&&w.id!==exceptId&&w.nr>m)m=w.nr;});return m+1;}
+function nrTaken(tr,nr,exceptId){
+  var h=HIST[tr];if(h&&nr>=1&&nr<=h.max)return {kind:'hist',txt:'aprobată anterior ('+h.data+')'};
+  for(var i=0;i<S.welds.length;i++){var w=S.welds[i];if(w.tr===tr&&w.nr===nr&&w.id!==exceptId)return {kind:w.stare,w:w,txt:(w.stare==='trimis'?'trimisă la aprobare':'înregistrată în sesiune')+' · '+fT(w.creat)+' · '+w.serie};}
+  return null;
+}
+/* „sudură uitată”: rândul continuu de suduri netrimise care se mută cu +1 */
+function insPlan(tr,nr,exceptId){
+  var h=(HIST[tr]||{max:0}).max;if(nr<=h)return null;
+  var run=[],n=nr;
+  while(true){var t=nrTaken(tr,n,exceptId);if(!t)break;if(!t.w||t.w.stare!=='sesiune')return null;run.push(t.w);n++;}
+  return run.length?run:null;
+}
+function prevWeld(tr,nr,exceptId){var p=null;S.welds.forEach(function(w){if(w.tr===tr&&w.id!==exceptId&&w.nr<nr&&(!p||w.nr>p.nr))p=w;});return p;}
+function cuponUsed(w){if(!w.cuponId)return null;var c=findP(w.cuponId);return c&&c.stare==='montat'?c.loc:null;}
+function dirty(){var d=S.draft;if(d.editId)return !!d.touched;return !!(d.digits||d.sel||(d.free&&normSer(d.freeTxt)));}
+function gpsNow(){var g=GPS[S.gps]||GPS[0];if(g.km==null)return {st:g.st};return {km:g.km,tr:trFromKm(g.km),edge:trFromKm(g.km)?distEdge(g.km):0};}
+function gpsMismatch(){var g=gpsNow();return !!(g.tr&&g.tr!==S.tr&&g.edge>GPS_TOL&&S.gpsAck!==S.tr+'|'+S.gps&&!S.draft.editId);}
+function stockStale(){return ageH(S.stocCache)>STOC_VECHI_H;}
+function prefixes(){var m={};S.stock.forEach(function(it){if(it.stare==='disponibil'&&!it.lock&&it.serie.length===10)m[it.serie.slice(0,7)]=1;});return Object.keys(m).sort();}
+
+function normalize(){
+  var d=S.draft;
+  if(d.editId){var ew=editW();if(!ew||ew.stare!=='sesiune')S.draft=newDraft(S.tr,d.prefix);}
+  if(S.draft.tr!==S.tr&&!S.draft.editId)S.draft=newDraft(S.tr,S.draft.prefix);
+  d=S.draft;
+  if(d.insert&&!insPlan(d.tr,d.nr,d.editId))d.insert=false;
+  if(d.nrAuto&&!d.editId&&!d.insert)d.nr=nextNr(d.tr);
+  if(UI.undo&&Date.now()-UI.undo.t>120000)UI.undo=null;
+}
+
+function evalDraft(){
+  var d=S.draft,ew=editW(),r={};
+  r.nrTxt=nrStr(d.tr,d.nr);r.next=nextNr(d.tr,d.editId);
+  r.taken=nrTaken(d.tr,d.nr,d.editId);
+  r.canIns=(r.taken&&r.taken.w&&r.taken.w.stare==='sesiune'&&!d.editId)?insPlan(d.tr,d.nr,d.editId):null;
+  r.insPlan=null;
+  if(d.insert&&r.canIns){r.insPlan=r.canIns;r.taken=null;}
+  r.gap=(!d.editId&&!r.taken&&!r.insPlan&&d.nr>r.next)?[r.next,d.nr-1]:null;
+  var q=d.free?normSer(d.freeTxt):d.prefix+d.digits;r.q=q;r.fmtOk=FMT.test(q);
+  r.complete=!!d.sel||(d.free?(d.checked&&r.fmtOk):d.digits.length===3);
+  r.status='none';r.ready=false;
+  if(!r.complete)return r;
+  var item=d.sel?findP(d.sel):null;
+  if(item&&!isAvail(item,ew))item=null;
+  var serie=item?item.serie:q;r.serie=serie;
+  var all=S.stock.filter(function(it){return it.serie===serie&&!hidden(it,ew);});
+  if(!item){
+    var av=all.filter(function(it){return isAvail(it,ew);}).sort(function(a,b){return ((a.tip==='teava'?0:1)-(b.tip==='teava'?0:1))||(b.lung-a.lung);});
+    item=av[0]||null;
+  }
+  if(item){
+    r.item=item;r.status=item.tip==='cupon'?'info':'ok';
+    var lm=d.lmode;
+    if(lm==='taiata'||lm==='difera'){
+      var lv=parseLen(d.len);r.lenVal=lv;
+      if(!d.len||isNaN(lv)||lv<=0)r.lenState='empty';
+      else if(lv<0.1)r.lenState='mic';
+      else if(lm==='taiata'&&lv>=item.lung-0.004)r.lenState='mare';
+      else if(lm==='difera'&&lv>MAXL)r.lenState='mare';
+      else if(lm==='difera'&&Math.abs(lv-item.lung)<0.005)r.lenState='egal';
+      else{r.lenState='ok';if(lm==='taiata'){r.rest=round2(item.lung-lv);r.mic=r.rest<MIN_CUPON;r.cupon=!r.mic||d.restMode==='cupon';}}
+    }
+    r.ready=lm==='stoc'||r.lenState==='ok';
+    return r;
+  }
+  // seria nu are nicio bucată disponibilă: e montată (stoc / istoric / altă tabletă) sau nu există
+  var locs=[];
+  all.forEach(function(it){if(!isAvail(it,ew))locs.push({loc:it.lock||it.loc,lung:it.mont||it.lung,sarja:it.sarja,tip:it.tip,src:it.lock?'server':'stoc'});});
+  S.hist.forEach(function(h){if(h.serie===serie)locs.push({loc:h.loc,lung:h.lung,sarja:h.sarja,tip:'teava',src:'istoric',data:h.data});});
+  if(locs.length){
+    r.status='block';r.locs=locs;r.sarja=locs[0].sarja;
+    for(var i=0;i<locs.length;i++){var cw=findWByLoc(locs[i].loc);if(cw&&cw.stare==='sesiune'&&cw.id!==d.editId){r.confW=cw;break;}}
+    return r;
+  }
+  var dup=null;S.welds.forEach(function(w){if(!dup&&w.serie===serie&&w.id!==d.editId)dup=w;});
+  if(dup){r.status='block';r.locs=[{loc:nrStr(dup.tr,dup.nr),src:'verif'}];r.confW=dup.stare==='sesiune'?dup:null;return r;}
+  r.status='unknown';
+  var uv=parseLen(d.ulen);r.ulenVal=uv;
+  r.ulenState=(!d.ulen||isNaN(uv)||uv<=0)?'empty':uv<0.1?'mic':uv>MAXL?'mare':'ok';
+  r.ready=d.verif&&!!d.usarja&&r.ulenState==='ok';
+  return r;
+}
+function locSuffix(c){
+  if(c.src==='server'){var s=SERVER_MONTAT.filter(function(x){return x.loc===c.loc;})[0];return ' ('+(s?s.cine+', '+s.ora:'altă tabletă')+')';}
+  if(c.src==='istoric')return ' (aprobată '+c.data+')';
+  if(c.src==='verif')return ' (în verificare)';
+  var w=findWByLoc(c.loc);
+  if(w)return w.stare==='trimis'?' (trimisă la aprobare)':' (sesiunea '+(isToday(w.creat)?'de azi':'din '+fD(w.creat))+')';
+  var t=trOf(c.loc);if(HIST[t])return ' (aprobată)';
+  return '';
+}
+function blockMsg(locs,serie){
+  if(locs.length===1){var c=locs[0];
+    if(c.src==='verif')return 'Seria <b class="mono">'+esc(serie)+'</b> e deja înregistrată pe <b>'+c.loc+'</b> (în verificare) — nu se poate folosi de două ori.';
+    return 'Aceeași serie + sarjă + lungime există deja pe <b>'+c.loc+'</b>'+locSuffix(c)+' — nu se poate folosi; pachetul de lansare nu se poate genera.';}
+  return 'Seria e deja montată integral: '+locs.map(function(c){return '<b>'+c.loc+'</b> · '+(c.tip==='cupon'?'cupon ':'')+fmtM(c.lung)+' m';}).join('; ')+' — nu se poate folosi; pachetul de lansare nu se poate genera.';
+}
+
+/* ---------------- coadă de sincronizare (outbox ordonat, idempotent prin UUID) ---------------- */
+function enq(op,o){
+  var inf=UI.inflight;
+  if(op==='upsert'||op==='delete')S.outbox=S.outbox.filter(function(e){return !(e.op==='upsert'&&e.id===o.id&&!(inf&&inf.seq===e.seq));});
+  if(op==='upsert')S.outbox.push({seq:++S.oseq,op:'upsert',id:o.id,uuid:o.uuid,nr:nrStr(o.tr,o.nr)});
+  else if(op==='delete'){if(o.srv||(inf&&inf.id===o.id))S.outbox.push({seq:++S.oseq,op:'delete',id:o.id,uuid:o.uuid,nr:nrStr(o.tr,o.nr)});}
+  else if(op==='submit')S.outbox.push({seq:++S.oseq,op:'submit',id:o.id});
+}
+function syncOf(w){
+  if(w.alert&&w.alert.lvl==='conflict')return 'conflict';
+  if(UI.inflight&&UI.inflight.id===w.id)return 'sending';
+  for(var i=0;i<S.outbox.length;i++)if(S.outbox[i].id===w.id)return w.srv?'modif':'pending';
+  return w.srv?'ok':'pending';
+}
+function lotSync(l){
+  if(l.sync==='respins')return 'respins';
+  if(UI.inflight&&UI.inflight.op==='submit'&&UI.inflight.id===l.id)return 'sending';
+  for(var i=0;i<S.outbox.length;i++)if(S.outbox[i].op==='submit'&&S.outbox[i].id===l.id)return 'pending';
+  return 'ok';
+}
+
+function release(w){
+  if(w.stockId){var it=findP(w.stockId);if(it){if(it.lock){it.stare='montat';it.loc=it.lock;it.mont=it.lung;}else{it.stare='disponibil';it.loc=null;it.mont=null;}}}
+  if(w.cuponId){S.stock=S.stock.filter(function(x){return x.id!==w.cuponId;});}
+}
+function relocate(o,n){S.stock.forEach(function(it){if(it.loc===o)it.loc=n;if(it.orig===o)it.orig=n;});}
+function snap(label,short){UI.undo={label:label,short:short,t:Date.now(),data:JSON.stringify({stock:S.stock,welds:S.welds,draft:S.draft})};}
+function sig(w){return [w.nr,w.serie,w.sarja,w.lungMont,w.alert?w.alert.lvl:'',w.stockId,w.cuponId].join('|');}
+
+function saveWeld(kind){
+  var d=S.draft,r=evalDraft(),ew=editW();
+  if(r.taken){buzz('err');fx('#al-nr','shake');say('Numărul '+r.nrTxt+' e ocupat — alege alt număr','err');UI.scrollTo='st1';return;}
+  if(kind==='ok'&&!(r.status==='ok'||r.status==='info'))return;
+  if(kind==='ok'&&!r.ready){buzz('err');fx('#lendisp','shake');return;}
+  if(kind==='block'&&r.status!=='block')return;
+  if(kind==='verif'&&(r.status!=='unknown'||!r.ready)){buzz('err');fx('#ulendisp','shake');return;}
+  var loc=nrStr(d.tr,d.nr),short='S'+pad3(d.nr);
+  snap(ew?'modificarea '+loc:'salvarea '+loc,short);
+  if(r.insPlan){r.insPlan.slice().sort(function(a,b){return b.nr-a.nr;}).forEach(function(x){var o=nrStr(x.tr,x.nr);x.nr++;relocate(o,nrStr(x.tr,x.nr));if(x.stare==='sesiune')enq('upsert',x);});}
+  if(ew)release(ew);
+  var w=ew||{id:nid(),uuid:uuid(),tr:d.tr,creat:iso(),stare:'sesiune',lot:null,srv:false,modif:null};
+  w.nr=d.nr;w.cuponId=null;w.stockId=null;w.taiata=false;w.alert=null;w.corr=null;w.deseu=null;
+  if(kind==='ok'){
+    var it=r.item;it.stare='montat';it.loc=loc;
+    if(d.lmode==='taiata'){
+      it.mont=round2(r.lenVal);w.taiata=true;
+      if(r.cupon){var c={id:nid(),serie:it.serie,sarja:it.sarja,lung:r.rest,tip:'cupon',stare:'disponibil',loc:null,mont:null,orig:loc,origLung:it.lung,origMont:it.mont,local:true,lock:null};S.stock.push(c);w.cuponId=c.id;}
+      else w.deseu=r.rest;
+    } else if(d.lmode==='difera'){it.mont=round2(r.lenVal);w.corr={stoc:it.lung,marcaj:it.mont};}
+    else it.mont=it.lung;
+    w.serie=it.serie;w.sarja=it.sarja;w.lungStoc=it.lung;w.lungMont=it.mont;w.stockId=it.id;w.tipPiesa=it.tip;
+  } else if(kind==='block'){
+    w.serie=r.serie;w.sarja=r.sarja||'—';w.lungStoc=null;w.lungMont=0;w.tipPiesa='blocat';w.alert={lvl:'block',locs:r.locs};
+  } else {
+    w.serie=r.serie;w.sarja=d.usarja==='Nu se vede'?'?':d.usarja;w.lungStoc=null;w.lungMont=round2(r.ulenVal);w.tipPiesa='necunoscut';w.alert={lvl:'verif'};
+  }
+  if(ew)w.modif=iso();
+  if(!ew)S.welds.push(w);
+  enq('upsert',w);
+  S.draft=newDraft(S.tr,d.prefix);
+  fx('#wc-'+w.id,'flash');fx('#lastw','flash');fx('#formcard','okflash');
+  if(S.screen==='lucru')UI.scrollTo='st1';
+  buzz(kind==='ok'?'ok':'warn');
+  var txt=kind==='ok'?(loc+' '+(ew?'modificată':'salvată')+' · '+w.serie+' · '+fmtM(w.lungMont)+' m'+(w.cuponId?' · cupon '+fmtM(w.lungStoc-w.lungMont)+' m → stoc':w.deseu?' · rest deșeu':''))
+         :kind==='block'?(loc+' salvată ca BLOCANT — rezolv-o înainte de trimitere'):(loc+' salvată · seria '+esc(w.serie)+' trimisă la verificare');
+  say((kind==='ok'?'✓ ':'')+txt+(S.online?'':' · în așteptare (offline)'),kind==='ok'?'ok':'err',true);
+  scheduleAuto();
+}
+function delWeld(id){
+  var w=findW(id);if(!w)return;
+  var loc=nrStr(w.tr,w.nr),selCup=S.draft.sel&&S.draft.sel===w.cuponId;
+  snap('ștergerea '+loc,'S'+pad3(w.nr));release(w);
+  S.welds=S.welds.filter(function(x){return x!==w;});
+  enq('delete',w);
+  if(S.draft.editId===id)S.draft=newDraft(S.tr,S.draft.prefix);
+  UI.modal=null;buzz('warn');
+  if(selCup){S.draft=newDraft(S.tr,S.draft.prefix);say(loc+' ștearsă · cuponul selectat în formular a fost scos din stoc — alege din nou seria','warn',true);}
+  else say(loc+' ștearsă'+(w.stockId&&!(w.alert&&w.alert.lvl==='conflict')?' · țeava '+w.serie+' revine în stoc':''),'warn',true);
+  scheduleAuto();
+}
+function startEdit(id){
+  var w=findW(id);if(!w||w.stare!=='sesiune')return;
+  var c=cuponUsed(w);
+  if(c){buzz('err');say('Nu se poate edita: cuponul tăiat din '+nrStr(w.tr,w.nr)+' e montat pe '+c+'. Editează sau șterge întâi '+c+'.','err');return;}
+  S.tr=w.tr;
+  var pf=S.draft.prefix||'254CA10',d=newDraft(w.tr,pf);d.editId=w.id;d.nr=w.nr;d.nrAuto=false;
+  if(w.stockId&&!(w.alert&&w.alert.lvl==='conflict'))d.sel=w.stockId;
+  if(w.serie.indexOf(pf)===0&&w.serie.length===pf.length+3&&/^\d{3}$/.test(w.serie.slice(-3)))d.digits=w.serie.slice(pf.length);
+  else{d.free=true;d.freeTxt=w.serie;d.checked=true;}
+  if(w.taiata){d.lmode='taiata';d.len=fmtM(w.lungMont);if(w.deseu)d.restMode='deseu';else if(w.cuponId&&w.lungStoc-w.lungMont<MIN_CUPON)d.restMode='cupon';}
+  if(w.corr){d.lmode='difera';d.len=fmtM(w.lungMont);}
+  if(w.alert&&w.alert.lvl==='verif'){d.verif=true;d.ulen=fmtM(w.lungMont);d.usarja=w.sarja==='?'?'Nu se vede':w.sarja;}
+  S.draft=d;S.screen='lucru';UI.scrollTo='top';fx('#formcard','okflash');buzz('tap');
+}
+function doUndo(){
+  if(!UI.undo)return;
+  var u=UI.undo;UI.undo=null;
+  var o=JSON.parse(u.data),cur={},rest={};
+  S.welds.forEach(function(w){cur[w.id]=w;});
+  o.welds.forEach(function(w){rest[w.id]=w;var c=cur[w.id];if(c){w.srv=c.srv;w.stare=c.stare;w.lot=c.lot;}});
+  var old=S.welds;
+  S.welds=o.welds;S.stock=o.stock;S.draft=o.draft;S.screen='lucru';
+  old.forEach(function(c){if(!rest[c.id])enq('delete',c);});
+  o.welds.forEach(function(w){var c=cur[w.id];if(!c||sig(c)!==sig(w))enq('upsert',w);});
+  if(new Date(S.stocCache).getTime()>u.t)applyServerLocks();
+  UI.toast=null;buzz('warn');say('↶ Am desfăcut '+u.label,'info');render();scheduleAuto();
+}
+function sumar(list){
+  var r={n:list.length,metri:0,cupF:0,cupoane:[],mCup:0,deseu:[],block:[],verif:[],mVerif:0,info:[],corr:[]};
+  list.forEach(function(w){
+    var lvl=w.alert&&w.alert.lvl;
+    if(lvl==='block'||lvl==='conflict'){r.block.push(w);return;}
+    if(lvl==='verif'){r.verif.push(w);r.mVerif+=w.lungMont||0;return;}
+    r.metri+=w.lungMont||0;
+    if(w.tipPiesa==='cupon'){r.cupF++;r.info.push(w);}
+    if(w.taiata&&w.cuponId){r.cupoane.push(w);r.mCup+=w.lungStoc-w.lungMont;}
+    if(w.deseu)r.deseu.push(w);
+    if(w.corr)r.corr.push(w);
+  });
+  r.metri=round2(r.metri);r.mCup=round2(r.mCup);r.mVerif=round2(r.mVerif);return r;
+}
+function gapsFor(tr){
+  var h=(HIST[tr]||{max:0}).max,nums={},mx=0,g=[];
+  S.welds.forEach(function(w){if(w.tr===tr){nums[w.nr]=1;if(w.nr>mx)mx=w.nr;}});
+  for(var n=h+1;n<mx;n++)if(!nums[n])g.push(n);
+  return g;
+}
+function submitBlock(sm){
+  if(dirty())return {why:'Sudura din formular nu e salvată — salveaz-o sau renunță la ea',focus:'pdirty'};
+  if(sm.block.length)return {why:'Rezolvă '+(sm.block.length===1?'alerta blocantă':'cele '+sm.block.length+' alerte blocante')+' înainte de trimitere',focus:'pblock'};
+  if(S.verifBlocks&&sm.verif.length)return {why:'Seriile în verificare blochează trimiterea (decizia A din ghid)',focus:'pverif'};
+  return null;
+}
+function submit(){
+  var list=sesWelds(S.tr).sort(function(a,b){return a.nr-b.nr;}),r=sumar(list),bl=submitBlock(r);
+  if(!list.length)return;
+  if(bl){buzz('err');fx('#'+bl.focus,'shake');UI.scrollTo=bl.focus;say(bl.why,'err');return;}
+  if(S.draft.editId)S.draft=newDraft(S.tr,S.draft.prefix);
+  var lot={id:nid(),tr:S.tr,ids:list.map(function(w){return w.id;}),n:list.length,metri:r.metri,nCup:r.cupoane.length,mCup:r.mCup,a:list[0].nr,b:list[list.length-1].nr,nVerif:r.verif.length,ts:iso(),sync:'pending'};
+  list.forEach(function(w){w.stare='trimis';w.lot=lot.id;});
+  S.subs=S.subs.filter(function(s){return !(s.tr===S.tr&&s.sync==='respins');}); // trimiterea respinsă e înlocuită de cea nouă
+  S.subs.push(lot);enq('submit',lot);S.lastLot=lot.id;S.screen='trimis';UI.scrollTo='top';UI.undo=null;UI.toast=null;
+  buzz('ok');scheduleAuto(900);
+}
+function retract(id){
+  var lot=findLot(id||S.lastLot);if(!lot)return;
+  var ls=lotSync(lot);
+  if(ls==='sending'){buzz('err');say('Se trimite chiar acum — nu se mai poate retrage','err');return;}
+  if(ls!=='pending'){buzz('err');say('A ajuns deja la managerul de proiect — cere-i să o respingă din ERP','err');return;}
+  S.outbox=S.outbox.filter(function(e){return !(e.op==='submit'&&e.id===lot.id);});
+  S.welds.forEach(function(w){if(w.lot===lot.id){w.stare='sesiune';w.lot=null;}});
+  S.subs=S.subs.filter(function(s){return s!==lot;});
+  S.tr=lot.tr;S.screen='lucru';buzz('warn');UI.scrollTo='top';
+  say('↶ Trimiterea a fost retrasă — sudurile sunt din nou în sesiune și se pot edita','info');
+}
+
+/* ---------------- sincronizare simulată (în ordinea operațiilor) ---------------- */
+function stopSync(){clearTimeout(UI.syncT);UI.syncing=null;UI.inflight=null;}
+function scheduleAuto(delay){
+  clearTimeout(UI.autoT);
+  if(S.online&&!UI.syncing&&S.outbox.length)UI.autoT=setTimeout(function(){startSync(false);},delay||1400);
+}
+function applyServerLocks(){
+  SERVER_MONTAT.forEach(function(s){S.stock.forEach(function(it){if(it.serie===s.serie&&it.tip==='teava'&&it.stare==='disponibil'){it.stare='montat';it.loc=s.loc;it.lock=s.loc;it.mont=it.lung;}});});
+}
+function refreshStock(){S.lastSync=iso();S.stocCache=S.lastSync;S.stock.forEach(function(s){s.local=false;});applyServerLocks();}
+function startSync(manual){
+  if(!S.online){if(manual){buzz('err');fx('#strip','shake');say('Fără semnal — nimic nu se pierde: înregistrările stau pe tabletă și pleacă automat când revine semnalul.','off');render();}return;}
+  if(UI.syncing)return;
+  clearTimeout(UI.autoT);
+  if(!S.outbox.length){refreshStock();if(manual){buzz('ok');say('✓ Totul e deja pe server · stoc actualizat '+hm(new Date()),'ok');}render();return;}
+  UI.syncing={done:0,total:S.outbox.length,conf:0};render();
+  UI.syncT=setTimeout(step,450);
+}
+function step(){
+  if(!S.online||!UI.syncing){UI.inflight=null;return;}
+  var e=S.outbox[0];
+  if(!e){finishSync();return;}
+  UI.inflight=e;render();
+  UI.syncT=setTimeout(function(){
+    if(!S.online||!UI.syncing){UI.inflight=null;render();return;}
+    process(e);
+    S.outbox=S.outbox.filter(function(x){return x.seq!==e.seq;});
+    UI.inflight=null;UI.syncing.done++;UI.syncing.total=Math.max(UI.syncing.total,UI.syncing.done+S.outbox.length);
+    step();
+  },320);
+}
+function process(e){
+  if(e.op==='upsert'){
+    var w=findW(e.id);if(!w)return;
+    var c=null,loc=nrStr(w.tr,w.nr);
+    SERVER_MONTAT.forEach(function(s){if(!c&&s.serie===w.serie&&s.loc!==loc)c=s;});
+    if(c&&w.tipPiesa!=='blocat'){
+      w.alert={lvl:'conflict',loc:c.loc,cine:c.cine,ora:c.ora};
+      var it=findP(w.stockId);if(it)it.lock=c.loc;
+      if(w.cuponId){var cp=findP(w.cuponId);if(cp)cp.lock=c.loc;}
+      UI.syncing.conf++;
+    } else w.srv=true;
+  } else if(e.op==='submit'){
+    var l=findLot(e.id);if(!l)return;
+    var bad=S.welds.filter(function(x){return x.lot===l.id&&x.alert&&x.alert.lvl==='conflict';});
+    if(bad.length){l.sync='respins';l.motiv=bad.map(function(x){return nrStr(x.tr,x.nr);}).join(', ');S.welds.forEach(function(x){if(x.lot===l.id){x.stare='sesiune';x.lot=null;}});}
+    else l.sync='ok';
+  }
+}
+function finishSync(){
+  var conf=UI.syncing?UI.syncing.conf:0,n=UI.syncing?UI.syncing.done:0;
+  UI.syncing=null;UI.inflight=null;refreshStock();
+  if(conf){buzz('err');say(pl(conf,'conflict','conflicte')+' la sincronizare — sudura e marcată cu roșu; alege altă țeavă','err');}
+  else{buzz('ok');if(!UI.undo)say('✓ Sincronizat '+hm(new Date())+' — '+pl(n,'înregistrare trimisă','înregistrări trimise')+' pe server','ok');}
+  render();scheduleAuto();
+}
+
+/* ---------------- feedback ---------------- */
+function buzz(k){try{if(navigator.vibrate)navigator.vibrate(k==='err'?[80,60,80]:k==='ok'?[30,40,30]:k==='warn'?[50]:12);}catch(e){}}
+var FX={
+  flash:{k:[{boxShadow:'0 0 0 6px rgba(46,160,67,.9)'},{boxShadow:'0 0 0 0 rgba(46,160,67,0)'}],d:1500},
+  okflash:{k:[{boxShadow:'inset 0 0 0 4px rgba(46,160,67,.9)'},{boxShadow:'inset 0 0 0 0 rgba(46,160,67,0)'}],d:900},
+  press:{k:[{backgroundColor:'#1F6FEB',color:'#fff',borderColor:'#1F6FEB'},{}],d:300},
+  pop:{k:[{transform:'scale(1.3)',borderColor:'#1F6FEB'},{transform:'scale(1)'}],d:300},
+  shake:{k:[{transform:'translateX(0)'},{transform:'translateX(-10px)'},{transform:'translateX(10px)'},{transform:'translateX(-8px)'},{transform:'translateX(8px)'},{transform:'translateX(-4px)'},{transform:'translateX(0)'}],d:480}
+};
+function fx(sel,kind){UI.fx.push({sel:sel,kind:kind,t:performance.now()});}
+function runFx(){
+  var now=performance.now();
+  UI.fx=UI.fx.filter(function(f){return now-f.t<FX[f.kind].d;});
+  UI.fx.forEach(function(f){var el=null;try{el=document.querySelector(f.sel);}catch(e){}if(el&&el.animate){try{el.animate(FX[f.kind].k,{duration:FX[f.kind].d,delay:-(now-f.t),easing:'ease-out'});}catch(e){}}});
+}
+function say(msg,kind,undo){
+  UI.toast={msg:msg,kind:kind||'ok',undo:!!undo};
+  if(undo)UI.undoAt=performance.now();
+  clearTimeout(UI.toastT);
+  UI.toastT=setTimeout(function(){UI.toast=null;render();},undo?8000:4500);
+}
+function scrollToEl(id){
+  if(id==='top'){window.scrollTo({top:0,behavior:'smooth'});return;}
+  var el=document.getElementById(id);if(!el)return;
+  var top=$('#top'),bt=$('#bottom'),hdr=top?top.getBoundingClientRect().bottom:0,r=el.getBoundingClientRect(),bot=window.innerHeight-(bt?bt.offsetHeight:0)-8;
+  if(r.top<hdr+8||r.bottom>bot){
+    var target=window.scrollY+r.top-(top?top.offsetHeight:0)-12;
+    if(r.height<bot-hdr&&r.top>=hdr+8)target=window.scrollY+(r.bottom-bot)+12;
+    window.scrollTo({top:Math.max(0,target),behavior:'smooth'});
+  }
+}
+
+/* ---------------- randare: componente ---------------- */
+function alertBox(lvl,icn,t,m,act,id,compact){return '<div class="al al-'+lvl+(compact?' compact':'')+'"'+(id?' id="'+id+'"':'')+' role="alert">'+lv(icn)+'<div class="alb"><span class="t">'+t+'</span>'+(m?(compact?'<span class="m">'+m+'</span>':'<div class="m">'+m+'</div>'):'')+(act?'<div class="aact">'+act+'</div>':'')+'</div></div>';}
+function keys(t){
+  var last=(t==='len'||t==='ulen')?',':'';
+  return ['1','2','3','4','5','6','7','8','9',last,'0','⌫'].map(function(k){
+    if(k==='')return '<span class="key blank" aria-hidden="true"></span>';
+    if(k==='⌫')return '<button class="key fn" data-act="key" data-t="'+t+'" data-k="⌫" aria-label="Șterge ultima cifră — ține apăsat ca să golești">'+ic('bksp')+'</button>';
+    return '<button class="key'+(k===','?' fn':'')+'" data-act="key" data-t="'+t+'" data-k="'+k+'" aria-label="'+(k===','?'virgulă':k)+'">'+k+'</button>';
+  }).join('');
+}
+function synChip(w){
+  var s=syncOf(w);
+  if(s==='sending')return '<span class="syc sending"><span class="spin"></span>Se trimite</span>';
+  if(s==='modif')return '<span class="syc modif">Modificată · în așteptare</span>';
+  if(s==='conflict')return '<span class="syc conflict">Respinsă — conflict</span>';
+  if(s==='ok')return '<span class="syi" title="Pe server">'+ic('cloud')+'<span class="lw">pe server</span></span>';
+  return '<span class="syi" title="În așteptare — pleacă la sincronizare">'+ic('clock')+'<span class="lw">în așteptare</span></span>';
+}
+function stockChip(){
+  var nAv=0,nCu=0;S.stock.forEach(function(x){if(x.stare==='disponibil'&&!x.lock){if(x.tip==='teava')nAv++;else nCu++;}});
+  if(stockStale())return '<div class="stk old">'+ic('box')+'<span>Stoc vechi de '+Math.floor(ageH(S.stocCache))+' h — dublurile pot să nu apară</span></div>';
+  return '<div class="stk">'+ic('box')+'<span>'+PROIECT.stoc+' · '+nAv+' țevi + '+nCu+' cupoane · actualizat '+fT(S.stocCache)+'</span></div>';
+}
+
+function vDemo(){
+  return '<div class="demo" id="demo" role="note"><span class="dtag">PROTOTIP — date fictive</span><span class="dsub">nimic nu ajunge în ERP</span><span class="sp"></span>'+
+   '<button class="dbtn'+(S.online?'':' on')+'" data-act="net" aria-pressed="'+(!S.online)+'"><span class="dl">Simulează fără semnal</span><span class="ds">Fără semnal</span><span class="sw"></span></button>'+
+   '<button class="dbtn" data-act="guide">Ghid demo</button><button class="dbtn" data-act="reset-ask">Resetează demo</button></div>';
+}
+function vPill(){
+  var p=S.outbox.length,c,icn,t1,t2;
+  if(UI.syncing){c='sync';icn='<span class="spin w"></span>';t1='Se sincronizează… '+UI.syncing.done+' / '+UI.syncing.total;t2='poți lucra în continuare';}
+  else if(!S.online){c='off';icn=ic('off');t1='Offline — '+(p?p+' <span class="lw">'+(p===1?'înregistrare ':'înregistrări ')+'</span>în așteptare':'nimic în așteptare');t2='ultima sincronizare '+fT(S.lastSync);}
+  else if(p){c='sync';icn=ic('up');t1='Online — '+p+' <span class="lw">'+(p===1?'înregistrare ':'înregistrări ')+'</span>de trimis';t2='pleacă automat';}
+  else{c='ok';icn=ic('cloud');t1='Sincronizat '+fT(S.lastSync);t2='totul e pe server';}
+  return '<div class="pill '+c+'" id="strip" role="status" aria-live="polite"><span class="pic">'+icn+'</span><span class="ptx"><b>'+t1+'</b><small>'+t2+'</small></span></div>';
+}
+function vBands(){
+  var x='';
+  if(UI.persistErr)x+='<div class="band band--red" role="alert">'+lv('block')+'<span class="sp">NU se poate salva pe tabletă — nu închide aplicația. Sincronizează cât mai curând.</span></div>';
+  if(UI.loadMsg)x+='<div class="band band--yel" role="alert">'+lv('info')+'<span class="sp">'+esc(UI.loadMsg)+'</span><button class="btn btn-s" data-act="ack-load">Am înțeles</button></div>';
+  if(UI.otherTab)x+='<div class="band band--yel" role="alert">'+lv('info')+'<span class="sp">Prototipul e deschis și în alt tab — ce faci acolo nu apare aici.</span><button class="btn btn-s" data-act="reload-tab">Preia datele de acolo</button></div>';
+  var cf=S.welds.filter(function(w){return w.alert&&w.alert.lvl==='conflict';});
+  if(cf.length){var w=cf[0];x+='<div class="band band--red" role="alert">'+lv('block')+'<span class="sp"><b>'+pl(cf.length,'conflict','conflicte')+' la sincronizare:</b> '+nrStr(w.tr,w.nr)+' · <span class="mono">'+esc(w.serie)+'</span> e montată și pe '+w.alert.loc+' ('+w.alert.cine+', '+w.alert.ora+')</span><button class="btn btn-s" data-act="resolve" data-id="'+w.id+'">'+ic('edit')+'Rezolvă</button></div>';}
+  return x;
+}
+function vTop(){
+  var onW=S.screen==='lucru'||S.screen==='rezumat',t=trObj(S.tr),g=gpsNow(),trb='';
+  if(onW){
+    var sub=g.tr===S.tr?'<small>'+ic('pin')+' GPS km '+kmFmt(g.km)+' ✓</small>':(g.tr&&g.edge>GPS_TOL)?'<small class="w">'+ic('pin')+' GPS arată '+g.tr+'</small>':'<small>km '+t.a+'–'+t.b+' · schimbă</small>';
+    trb='<button class="trbtn" data-act="go-start" aria-label="Tronsonul '+t.cod+' — atinge ca să schimbi"><b>'+t.cod+'</b>'+sub+'</button>';
+  }
+  var p=S.outbox.length,scls=UI.syncing?'btn-s':(S.online&&p?'btn-p':'btn-s');
+  return '<header class="top" id="top"><div class="bar"><div class="logo" aria-hidden="true">⏱</div><span class="brand">PontajPRO</span>'+
+   '<span class="crumb"><span class="exe">🏗️ Execuție</span><span class="sep">›</span><b>Izometrie</b></span>'+trb+'<span class="sp"></span>'+
+   '<div class="syncg">'+vPill()+'<button class="btn '+scls+'" data-act="sync"'+(UI.syncing?' aria-disabled="true" data-why="Sincronizarea e deja în curs"':'')+'>'+ic('sync')+'<span>Sincronizează acum</span></button></div>'+
+   '<div class="seg" role="group" aria-label="Mod de afișare"><button data-act="theme" data-v="dark" aria-pressed="'+(S.theme==='dark')+'">'+ic('moon')+'Interior</button><button data-act="theme" data-v="sun" aria-pressed="'+(S.theme==='sun')+'">'+ic('sun')+'Soare</button></div>'+
+   '</div>'+vBands()+'</header>';
+}
+function vPendingBands(except){
+  var by={};S.welds.forEach(function(w){if(w.stare==='sesiune'&&w.tr!==except){(by[w.tr]=by[w.tr]||[]).push(w);}});
+  return Object.keys(by).sort(function(a,b){var fa=by[a].reduce(function(m,w){return w.creat<m?w.creat:m;},'9'),fb=by[b].reduce(function(m,w){return w.creat<m?w.creat:m;},'9');return fa<fb?-1:1;}).map(function(tr){
+    var l=by[tr],first=l.reduce(function(m,w){return w.creat<m?w.creat:m;},'9'),old=!isToday(first);
+    return '<div class="pband'+(old?' old':'')+'">'+(old?lv('info'):'<span class="ic2">'+ic('clock')+'</span>')+'<span class="sp"><b>Ai '+pl(l.length,'sudură netrimisă','suduri netrimise')+' pe '+tr+'</b> (din '+(old?fD(first):'azi '+hm(new Date(first)))+')'+(old?' — trimite-le la aprobare sau șterge-le':'')+'</span><button class="btn btn-s" data-act="go-tr" data-tr="'+tr+'">Deschide '+tr+ic('arrow')+'</button></div>';
+  }).join('');
+}
+
+function stat(c){var h=(HIST[c]||{max:0}).max,s=0,t=0;S.welds.forEach(function(w){if(w.tr===c){if(w.stare==='sesiune')s++;else t++;}});return {h:h,s:s,t:t};}
+function vStart(){
+  var g=gpsNow();
+  var x='<main class="wrap wrap--nobar"><div class="h1row"><h1>Unde lucrezi azi?</h1><span class="muted">Alege tronsonul — apoi înregistrezi sudurile</span></div>';
+  x+='<section class="card proj"><div class="pic" aria-hidden="true">🏗️</div><div class="sp"><div class="sm muted">Proiect · '+PROIECT.client+'</div><div class="pname">'+PROIECT.nume+'</div><div class="sm muted">Tronsoane TR12 – TR19 · km 49+000 – 89+000 · țevi din '+PROIECT.stoc+'</div></div><span class="chip ok">'+ic('check')+'Proiectul tău activ</span></section>';
+  x+=vPendingBands(null);
+  var head='<div class="sm muted">'+ic('pin')+' Poziția tabletei din GPS (merge și fără semnal de date)</div>';
+  var segs=function(here){return '<div class="kmap" aria-hidden="true">'+TRS.map(function(t){var s=stat(t.cod),n=s.h+s.s+s.t;return '<div class="kseg'+(t.cod===here?' here':'')+(s.s?' act':n?' done':'')+'"><b>'+t.cod+'</b><small>'+(n?n+' sud.':'—')+'</small></div>';}).join('')+
+      (here?'<div class="kpin" style="left:'+((g.km-49)/40*100)+'%">'+ic('pin')+'</div>':'')+'</div><div class="kticks num">'+[49,54,59,64,69,74,79,84,89].map(function(k){return '<span>'+k+'</span>';}).join('')+'</div>';};
+  var alt='<button class="btn btn-s" data-act="gps-next">'+ic('pin')+'Altă poziție (simulare)</button>';
+  if(g.st==='cauta')x+='<section class="card gpsc"><div>'+head+'<div class="gbig"><span class="spin"></span>Se caută poziția…</div><div class="sm muted">Sub cer liber durează câteva secunde. Între timp poți alege manual tronsonul.</div>'+segs(null)+'</div><div class="gacts">'+alt+'</div></section>';
+  else if(g.st==='indisp')x+='<section class="card gpsc"><div>'+head+'<div class="gbig">GPS indisponibil — alege manual</div><div class="sm muted">Poziția nu se poate citi (GPS oprit sau fără satelit). Alege tronsonul din listă.</div>'+segs(null)+'</div><div class="gacts">'+alt+'</div></section>';
+  else if(!g.tr)x+='<section class="card gpsc"><div>'+head+'<div class="gbig">În afara traseului LOT 2</div><div class="sm muted">Ești la km '+kmFmt(g.km)+' · traseul TR12–TR19 e între km 49 și 89 — alege manual tronsonul.</div>'+segs(null)+'</div><div class="gacts">'+alt+'</div></section>';
+  else{var go=trObj(g.tr);x+='<section class="card gpsc"><div>'+head+'<div class="gbig">Ești la <span class="num">km '+kmFmt(g.km)+'</span> → <span class="blue">'+g.tr+'</span></div><div class="sm muted">'+g.tr+': km '+go.a+'+000 – '+go.b+'+000 · precizie ± 5 m'+(g.edge<=GPS_TOL?' · <b>ești la limita tronsonului</b>':'')+'</div>'+segs(g.tr)+'</div>'+
+     '<div class="gacts"><button class="btn btn-p btn-xl" data-act="go-tr" data-tr="'+g.tr+'">Lucrează pe '+g.tr+ic('arrow')+'</button>'+alt+'</div></section>';}
+  x+='<h2 style="margin:18px 0 10px">Sau alege manual tronsonul</h2><div class="trgrid">'+TRS.map(function(t){
+     var s=stat(t.cod),parts=[];if(s.h)parts.push(s.h+' aprobate');if(s.t)parts.push(s.t+' trimise');if(s.s)parts.push('<b>'+s.s+' în sesiune</b>');
+     return '<button class="trt'+(t.cod===g.tr?' here':'')+'" data-act="go-tr" data-tr="'+t.cod+'"><div class="row" style="gap:8px"><span class="trc">'+t.cod+'</span>'+(t.cod===g.tr?'<span class="chip info">'+ic('pin')+'ești aici</span>':'')+'</div><div class="trkm num">km '+t.a+'+000 – '+t.b+'+000</div><div class="trst">'+(parts.length?parts.join(' · '):'<span class="muted">neînceput</span>')+'</div></button>';
+  }).join('')+'</div></main>';
+  return x;
+}
+
+function vSugg(r){
+  if(UI.boot)return '<div class="sghead">Se încarcă stocul de pe tabletă…</div><div class="skel"></div><div class="skel"></div>';
+  var d=S.draft,ew=editW(),q=r.q,typed=d.free?q.length:d.digits.length;
+  if(!typed||(d.free&&q.length<3))return '<div class="sempty">'+(d.free?'Scrie cel puțin 3 caractere din serie':'Tastează <b>ultimele 3 cifre</b> de pe marcajul țevii — sugestiile din stoc apar după prima cifră.')+'</div>';
+  var list=S.stock.filter(function(it){return !hidden(it,ew)&&(d.free?it.serie.indexOf(q)>=0:it.serie.indexOf(q)===0);});
+  function rank(it){return isAvail(it,ew)?(it.tip==='teava'?0:1):2;}
+  list.sort(function(a,b){return rank(a)-rank(b)||a.serie.localeCompare(b.serie);});
+  if(!list.length)return '<div class="sempty bad">Nicio țeavă din stoc nu începe cu <b class="mono">'+esc(q)+'</b>. Verifică cifrele de pe marcaj.</div>';
+  var tot=list.length;list=list.slice(0,3);
+  return '<div class="sghead">'+(tot===1?'1 potrivire':tot+' potriviri')+' — atinge ca să alegi</div>'+list.map(function(it){
+    var av=isAvail(it,ew),i0=d.free?it.serie.indexOf(q):d.prefix.length,i1=d.free?i0+q.length:d.prefix.length+d.digits.length;
+    var ser='<span class="pm">'+esc(it.serie.slice(0,i0))+'</span><mark>'+esc(it.serie.slice(i0,i1))+'</mark>'+esc(it.serie.slice(i1));
+    var b=!av?'<span class="bdg red">MONTATĂ · '+(it.lock||it.loc)+'</span>':it.tip==='cupon'?'<span class="bdg yel">CUPON din '+it.orig+'</span>':'<span class="bdg grn">ÎN STOC</span>';
+    var inner='<span class="sl"><span class="mono sser">'+ser+'</span>'+b+'</span><span class="sr"><b class="num">'+fmtM(it.lung)+' m</b><span>sarja '+it.sarja+'</span></span>';
+    return av?'<button class="srow" data-act="pick" data-id="'+it.id+'">'+inner+'</button>':'<div class="srow used" aria-disabled="true" title="Informativ — țeava e deja montată">'+inner+'</div>';
+  }).join('')+(tot>3?'<div class="muted sm">+'+(tot-3)+' — tastează încă o cifră</div>':'');
+}
+function fmtMsg(r){var q=r.q;if(!q)return 'Seria are 10 caractere: 3 cifre + 2 litere + 5 cifre (ex. 254CA10206).';if(r.fmtOk)return '<span class="grn b">Format corect</span> — apasă „Verifică seria”.';return 'Ai scris '+q.length+' / 10 caractere · formatul: 3 cifre + 2 litere + 5 cifre (ex. 254CA10206).';}
+function vStep1(r){
+  var d=S.draft,ew=editW(),bad=!!r.taken,h='';
+  var chip=ew?'<span class="chip warn">în editare</span>':d.insert?'<span class="chip info">inserare</span>':d.nrAuto?'<span class="chip ok">propus automat</span>':'<span class="chip warn">modificat manual</span>';
+  var p=prevWeld(d.tr,d.nr,d.editId),hs=HIST[d.tr];
+  var prevH=p?'<span id="lastw">după <b>'+nrStr(p.tr,p.nr)+'</b> · '+fT(p.creat)+'<span class="s1x"> · <b class="mono">'+esc(p.serie)+'</b> · '+(p.tipPiesa==='blocat'?'blocant':fmtM(p.lungMont)+' m')+'</span></span>'
+       :'<span id="lastw">'+(hs?'după <b>'+nrStr(d.tr,hs.max)+'</b> (aprobată)':'prima sudură pe <b>'+d.tr+'</b>')+'</span>';
+  h+='<div class="step" id="st1"><div class="s1row"><span class="sn '+(bad?'err':'done')+'">'+(bad?'✕':'✓')+'</span>'+
+     '<div class="nrctl"><button class="btn btn-s sq" data-act="nr-" aria-label="Numărul anterior">−</button><button class="nrbox'+(bad?' bad':'')+'" data-act="nr-edit" aria-label="Sudura '+r.nrTxt+' — atinge ca să scrii alt număr"><span class="nrp">'+d.tr+'S</span><span class="nrd num">'+pad3(d.nr)+'</span>'+ic('edit','nre')+'</button><button class="btn btn-s sq" data-act="nr+" aria-label="Numărul următor">+</button></div>'+
+     '<div class="s1info">'+chip+prevH+'</div>'+((!ew&&!d.nrAuto&&!d.insert)?'<button class="btn btn-s" data-act="nr-next">↺ '+nrStr(d.tr,r.next)+'</button>':'')+'</div>';
+  if(r.taken){
+    var acts='<button class="btn btn-p" data-act="nr-next">Folosește '+nrStr(d.tr,r.next)+' (următorul liber)</button>';
+    if(r.canIns)acts+='<button class="btn btn-s" data-act="ins-on">'+ic('plus')+'Inserează ca '+r.nrTxt+' · mută '+pl(r.canIns.length,'sudură','suduri')+' cu +1</button>';
+    else if(r.taken.w&&r.taken.w.stare==='sesiune'&&r.taken.w.id!==d.editId&&!ew)acts+='';
+    if(r.taken.w&&r.taken.w.stare==='sesiune')acts+='<button class="btn btn-s" data-act="open-w" data-id="'+r.taken.w.id+'">'+ic('edit')+'Deschide '+r.nrTxt+'</button>';
+    h+=alertBox('block','block','Sudura '+r.nrTxt+' există deja',cap(r.taken.txt)+'. Două suduri nu pot avea același număr.',acts,'al-nr');
+  } else if(r.insPlan){
+    var pl2=r.insPlan.slice().sort(function(a,b){return a.nr-b.nr;});
+    h+=alertBox('neutral','neu','Inserare înainte de '+nrStr(d.tr,pl2[0].nr),'La salvare: '+pl2.map(function(w){return nrStr(w.tr,w.nr)+' → S'+pad3(w.nr+1);}).join(', ')+' (doar sudurile netrimise).','<button class="btn btn-s" data-act="ins-off">Renunță la inserare</button>','al-nr');
+  } else if(r.gap)h+=alertBox('info','info',(r.gap[0]===r.gap[1]?'Sari peste '+nrStr(d.tr,r.gap[0]):'Sari peste '+nrStr(d.tr,r.gap[0])+' – '+nrStr(d.tr,r.gap[1])),'Numerele sărite rămân goale și apar în rezumat.','','al-gap');
+  return h+'</div>';
+}
+function vStep2(r){
+  var d=S.draft,st=r.status,c=!r.complete?'':st==='ok'?'done':st==='info'?'warn':'err';
+  var sn='<span class="sn '+c+'">'+(c==='done'?'✓':c==='err'?'✕':c==='warn'?'!':'2')+'</span>',h;
+  if(!r.complete){
+    if(d.free){
+      return '<div class="step" id="st2"><div class="slabel">'+sn+'Seria țevii <span class="muted sm">— seria completă, cu tastatura tabletei</span></div>'+
+        '<div class="serbox"><input id="freeIn" class="freein mono" value="'+esc(d.freeTxt)+'" placeholder="ex. 254CA10206" inputmode="text" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Seria completă a țevii" maxlength="16"></div>'+
+        '<div class="note" id="freefmt">'+fmtMsg(r)+'</div>'+
+        '<div class="row" style="margin-top:10px"><button class="btn btn-p" id="freechk" data-act="free-check"'+(r.fmtOk?'':' aria-disabled="true" data-why="Seria are 10 caractere: 3 cifre + 2 litere + 5 cifre (ex. 254CA10206)" data-focus="freeIn"')+'>'+ic('search')+'Verifică seria</button><button class="btn btn-s" data-act="free-off">Înapoi la tastatura mare (3 cifre)</button></div>'+
+        '<div class="sugg" id="sugg">'+vSugg(r)+'</div>'+stockChip()+'</div>';
+    }
+    var slots='';for(var i=0;i<3;i++){var ch=d.digits.charAt(i);slots+='<span class="slot mono'+(ch?' fill':(i===d.digits.length?' cur':''))+'" id="slot'+i+'">'+ch+'</span>';}
+    var pfs=prefixes(),prow=pfs.length>1?'<div class="prefs">'+pfs.map(function(p){return '<button class="tog2'+(p===d.prefix?' on':'')+'" data-act="prefix" data-p="'+p+'">'+p+'</button>';}).join('')+'</div>':'';
+    return '<div class="step" id="st2"><div class="kp2"><div><div class="kp" id="kp-ser">'+keys('ser')+'</div><button class="btn btn-s kalt" data-act="free-on">'+ic('kbd')+'Altă serie / prefix</button>'+stockChip()+'</div><div class="kpr">'+
+      '<div class="slabel">'+sn+'<span>Seria țevii</span><span class="muted sm">ultimele 3 cifre</span></div>'+prow+
+      '<div class="serbox" id="serbox" aria-label="Seria țevii: '+esc(d.prefix+d.digits)+'"><span class="pref mono">'+esc(d.prefix)+'</span>'+slots+'</div>'+
+      '<div class="sugg" id="sugg">'+vSugg(r)+'</div></div></div></div>';
+  }
+  var it=r.item,ser=r.serie,l3=ser.slice(-3),pf=ser.slice(0,-3);
+  h='<div class="step" id="st2"><div class="selrow">'+sn+'<div class="selser mono" aria-label="Seria '+esc(ser)+'"><span class="pfx">'+esc(pf)+'</span><b>'+esc(l3)+'</b></div>'+
+    '<div class="selsar"><span class="lbl">Sarja</span><b class="mono">'+esc(it?it.sarja:(r.sarja||'—'))+'</b><span class="cmp">compară cu marcajul</span></div><span class="sp"></span><button class="btn btn-s" data-act="ser-clear">'+ic('edit')+'Schimbă</button></div>';
+  if(st==='ok')h+=alertBox('ok','ok','Țeavă disponibilă în stoc','neutilizată, fără dubluri','','al-ser',true);
+  else if(st==='info')h+=alertBox('info','info','Cupon din stoc — acceptat','Seria se mai regăsește pe '+trOf(it.orig)+' ca cupon de '+fmtM(it.lung)+' m — acceptat.<div class="chips"><span class="chip warn">Cupon '+fmtM(it.lung)+' m</span><span class="chip">din '+it.orig+'</span><span class="chip">sarja '+it.sarja+'</span></div>','','al-ser');
+  else if(st==='block'){
+    var a='';if(r.confW)a+='<button class="btn btn-s" data-act="open-w" data-id="'+r.confW.id+'">'+ic('edit')+'Deschide '+nrStr(r.confW.tr,r.confW.nr)+'</button>';
+    a+='<button class="btn btn-ro" data-act="save-block">Salvează ca blocant</button><button class="btn btn-p" data-act="ser-clear">'+ic('edit')+'Corectează seria</button>';
+    h+=alertBox('block','block','Serie deja montată — nu se poate folosi',blockMsg(r.locs,ser),a,'al-ser')+'<div class="note">„Salvează ca blocant” blochează trimiterea până o corectezi.</div>';
+  }
+  else if(st==='unknown'){
+    var a2=d.verif?'<span class="chip red">'+ic('search')+'se trimite la verificare — completează pasul 3</span>':'<button class="btn btn-ro" data-act="verif-on">'+ic('search')+'Trimite la verificare</button><button class="btn btn-p" data-act="ser-clear">'+ic('edit')+'Corectează seria</button>';
+    h+=alertBox('block','q','Seria nu există în stoc','<b class="mono">'+esc(ser)+'</b> nu apare în '+PROIECT.stoc+' (actualizat '+fT(S.stocCache)+'). Verifică marcajul.',a2,'al-ser');
+  }
+  return h+'</div>';
+}
+function tog(m,icn,t,s){var on=S.draft.lmode===m;return '<button class="tog'+(on?' on':'')+'" data-act="lm" data-m="'+m+'" aria-pressed="'+on+'"><span><span class="tl">'+ic(icn)+t+'</span><small>'+s+'</small></span><span class="sw"></span></button>';}
+function vCupon(r){
+  var it=r.item,d=S.draft;
+  if(r.lenState!=='ok')return '<div class="cupon empty"><div class="cupt">'+ic('cut')+'Cuponul se calculează imediat</div><div class="cupm">Tastează lungimea montată real; restul revine în stoc ca cupon, cu aceeași serie și sarjă.</div></div>';
+  if(r.mic)return '<div class="cupon"><div class="cupt">Rest '+fmtM(r.rest)+' m: cupon sau deșeu?</div><div class="cupm">Sub '+fmtM(MIN_CUPON)+' m restul nu se mai folosește de obicei.</div><div class="segc"><button class="tog2'+(d.restMode==='deseu'?' on':'')+'" data-act="rest" data-m="deseu" aria-pressed="'+(d.restMode==='deseu')+'">Deșeu (implicit)</button><button class="tog2'+(d.restMode==='cupon'?' on':'')+'" data-act="rest" data-m="cupon" aria-pressed="'+(d.restMode==='cupon')+'">Cupon în stoc</button></div></div>';
+  var pm=Math.max(12,Math.min(88,r.lenVal/it.lung*100));
+  return '<div class="cupon"><div class="cupbig num">'+fmtM(r.rest)+' m <span>revin în stoc</span></div><div class="cupbar"><div class="m" style="width:'+pm+'%">'+fmtM(r.lenVal)+' m montat</div><div class="c" style="width:'+(100-pm)+'%">'+fmtM(r.rest)+' m</div></div>'+
+    '<div class="cupm">Din <b>'+fmtM(it.lung)+' m</b> s-au montat <b>'+fmtM(r.lenVal)+' m</b>; <b>'+fmtM(r.rest)+' m</b> revin în stoc ca cupon (aceeași serie + sarjă).</div>'+
+    '<div class="cupn">'+ic('edit')+'Managerul de proiect va genera fișa de tăiere.</div></div>';
+}
+function vLen(r){
+  var d=S.draft,it=r.item,lm=d.lmode;
+  var h='<div class="step" id="st3"><div class="slabel"><span class="sn">3</span>Verifică lungimea</div><div class="lenrow">'+
+   '<div class="lenbox'+(lm!=='stoc'?' dim':'')+'"><div class="lbl">'+(lm==='stoc'?'Lungime din stoc':'Din stoc')+'</div><div class="lbig num">'+fmtM(it.lung)+'<small> m</small></div><div class="cmp">'+(lm==='stoc'?'compară cu marcajul de pe țeavă':(it.tip==='cupon'?'cupon':'țeavă întreagă')+' · sarja '+it.sarja)+'</div></div>'+
+   '<div class="lopts">'+tog('taiata','cut','Țeavă tăiată',lm==='taiata'?'pornit — tastează lungimea montată':'restul revine în stoc ca cupon')+
+     tog('difera','ruler','Pe marcaj scrie altă lungime',lm==='difera'?'pornit — tastează lungimea de pe marcaj':'netăiată · corecție la magazie, fără cupon')+'</div></div>';
+  if(lm!=='stoc'){
+    var ls=r.lenState,err=ls==='mare'?(lm==='taiata'?'Lungimea montată trebuie să fie sub '+fmtM(it.lung)+' m. Dacă țeava nu e tăiată, oprește comutatorul.':'Peste '+fmtM(MAXL)+' m — verifică măsurătoarea.'):ls==='mic'?'Lungime prea mică (minim 0,10 m).':ls==='egal'?'E chiar lungimea din stoc — oprește comutatorul și salvează cu „Lungime corectă”.':'';
+    var side=err?alertBox('block','block','Lungime invalidă',err,'',''):lm==='taiata'?vCupon(r):(ls==='ok'?alertBox('neutral','neu','Corecție de lungime, fără cupon','Se salvează <b>'+fmtM(r.lenVal)+' m</b> (marcaj) în loc de '+fmtM(it.lung)+' m (stoc). Magazia corectează fișa țevii.','',''):'<div class="cupon empty"><div class="cupm">Tastează lungimea scrisă pe marcajul țevii.</div></div>');
+    h+='<div class="cutgrid"><div class="kp">'+keys('len')+'</div><div><div class="lbl">'+(lm==='taiata'?'Lungime montată real':'Lungime de pe marcaj')+'</div><div class="ldrow"><div class="lendisp'+(err?' bad':'')+'" id="lendisp"><span class="num">'+(d.len?esc(d.len):'<span class="ph">0,00</span>')+'</span><span class="u">m</span></div><button class="btn btn-s" data-act="len-clear">Golește</button></div>'+
+       '<div class="hint">virgula se pune singură · ține apăsat ⌫ ca să golești</div>'+side+'</div></div>';
+  }
+  return h+'</div>';
+}
+function vVerif(r){
+  var d=S.draft,ls=r.ulenState,err=ls==='mare'?'Peste '+fmtM(MAXL)+' m — verifică măsurătoarea.':ls==='mic'?'Lungime prea mică (minim 0,10 m).':'';
+  return '<div class="step" id="st3"><div class="slabel"><span class="sn'+(d.usarja?' done':'')+'">3</span>Trimite la verificare</div>'+
+   '<div class="lbl">Sarja de pe marcaj (obligatoriu)</div><div class="sarje">'+SARJE.concat(['Nu se vede']).map(function(s){return '<button class="tog2'+(d.usarja===s?' on':'')+'" data-act="sarja" data-s="'+s+'" aria-pressed="'+(d.usarja===s)+'">'+s+'</button>';}).join('')+'</div>'+
+   '<div class="cutgrid"><div class="kp">'+keys('ulen')+'</div><div><div class="lbl">Lungime măsurată pe țeavă</div><div class="ldrow"><div class="lendisp'+(err?' bad':'')+'" id="ulendisp"><span class="num">'+(d.ulen?esc(d.ulen):'<span class="ph">0,00</span>')+'</span><span class="u">m</span></div><button class="btn btn-s" data-act="ulen-clear">Golește</button></div>'+
+   '<div class="hint">virgula se pune singură · ține apăsat ⌫ ca să golești</div>'+(err?'<div class="note red b">'+err+'</div>':'')+
+   '<div class="note">La salvare îți cer <b>ultimele 3 cifre încă o dată</b>, ca o greșeală de tastare să nu devină sarcină pentru magazie.</div></div></div></div>';
+}
+function vForm(r){
+  var d=S.draft,ew=editW(),h='';
+  if(ew)h+='<div class="edband">'+ic('edit')+'<div class="sp"><b>Editezi sudura '+nrStr(ew.tr,ew.nr)+'</b><div class="sm">După salvare se retrimite la sincronizare.</div></div><button class="btn btn-s" data-act="edit-cancel">Renunță la editare</button></div>';
+  h+=vStep1(r)+vStep2(r);
+  if(r.status==='ok'||r.status==='info')h+=vLen(r);
+  else if(r.status==='unknown'&&d.verif)h+=vVerif(r);
+  else if(!r.complete)h+='<div class="step dimstep"><div class="slabel"><span class="sn off">3</span>Verifică lungimea <span class="sm">— apare după ce alegi seria</span></div></div>';
+  return h;
+}
+function cardNote(w){
+  var a=w.alert,out=[];
+  if(a&&a.lvl==='conflict')out.push({k:'red',t:'Conflict: montată și pe '+a.loc+' ('+a.cine+', '+a.ora+')'});
+  else if(a&&a.lvl==='block')out.push({k:'red',t:'Blocant: serie deja montată pe '+(a.locs||[]).map(function(c){return c.loc;}).join(', ')});
+  else if(a&&a.lvl==='verif')out.push({k:'red',t:'În verificare: serie inexistentă în stoc'});
+  if(w.tipPiesa==='cupon'){var it=findP(w.stockId);out.push({k:'yel',t:'Cupon '+fmtM(w.lungStoc)+' m'+(it&&it.orig?' din '+it.orig:'')+' — acceptat'});}
+  if(w.corr)out.push({k:'yel',t:'Corecție: marcaj '+fmtM(w.corr.marcaj)+' ≠ stoc '+fmtM(w.corr.stoc)+' m'});
+  if(w.taiata)out.push({k:'neu',t:'Tăiată din '+fmtM(w.lungStoc)+' m · '+(w.cuponId?'cupon '+fmtM(w.lungStoc-w.lungMont)+' m → stoc':'rest '+fmtM(w.deseu)+' m → deșeu')});
+  return out;
+}
+function vCard(w){
+  var a=w.alert,lvl=a?a.lvl:null,red=!!lvl,cls=red?'l-block':(w.tipPiesa==='cupon'||w.corr)?'l-info':'l-ok';
+  var len=(lvl==='block')?'<span class="wlen dim">—</span>':'<span class="wlen num">'+fmtM(w.lungMont)+'<small> m</small></span>';
+  var notes=cardNote(w).map(function(n){return '<div class="wal wal--'+n.k+'">'+n.t+'</div>';}).join('');
+  var fix=lvl==='block'||lvl==='conflict';
+  return '<article class="wc '+cls+(S.draft.editId===w.id?' editing':'')+'" id="wc-'+w.id+'"><div class="wmain"><div class="wl1"><span class="wnr num"><span class="nrp">'+w.tr+'S</span>'+pad3(w.nr)+'</span><span class="sp"></span>'+len+'</div>'+
+   '<div class="wl2">'+(w.taiata?'<span class="wcut" title="Țeavă tăiată" aria-label="Țeavă tăiată">'+ic('cut')+'</span>':'')+'<b class="mono">'+esc(w.serie)+'</b><span>'+esc(sarjaTxt(w.sarja))+'</span><span class="muted">'+(w.modif?'modif. '+fT(w.modif):fT(w.creat))+'</span>'+synChip(w)+'</div>'+notes+'</div>'+
+   '<div class="wbtns"><button class="ib'+(fix?' ib-p':'')+'" data-act="edit" data-id="'+w.id+'" aria-label="'+(fix?'Rezolvă':'Editează')+' '+nrStr(w.tr,w.nr)+'">'+ic('edit')+'<span>'+(fix?'Rezolvă':'Editează')+'</span></button><button class="ib" data-act="del" data-id="'+w.id+'" aria-label="Șterge '+nrStr(w.tr,w.nr)+'">'+ic('trash')+'<span>Șterge</span></button></div></article>';
+}
+function vList(list,sm){
+  var t=S.tr,h=HIST[t],sorted=list.slice().sort(function(a,b){return b.nr-a.nr;});
+  var first=list.reduce(function(m,w){return w.creat<m?w.creat:m;},'9');
+  var x='<div class="lhead"><div><h2>Sesiunea '+t+'</h2><div class="muted sm">'+(list.length?'începută '+(isToday(first)?'azi '+hm(new Date(first)):fD(first)+' '+hm(new Date(first))+(fT(first).indexOf('ieri')===0?' (ieri)':''))+' · '+pl(list.length,'sudură','suduri')+' · '+fmtM(sm.metri)+' m':'nicio sudură încă')+'</div></div><span class="sp"></span>'+
+    (UI.undo?'<button class="btn btn-s" data-act="undo">'+ic('undo')+'Desfă ultima ('+UI.undo.short+')</button>':'')+
+    ((list.length&&(dirty()||editW()))?'<button class="btn btn-s" data-act="go-sum">Trimite la aprobare'+ic('arrow')+'</button>':'')+'</div>';
+  if(UI.boot)x+='<div class="wcs"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>';
+  else if(!list.length)x+='<div class="sempty">Nicio sudură în sesiune. Începe cu seria primei țevi.</div>';
+  else x+='<div class="wcs">'+sorted.map(vCard).join('')+'</div>';
+  S.subs.filter(function(s){return s.tr===t;}).slice().reverse().forEach(function(l){var ls=lotSync(l);
+    x+='<div class="lot lot--'+ls+'"><span class="lic">'+(ls==='ok'?ic('send'):ls==='respins'?lv('block'):ls==='sending'?'<span class="spin"></span>':ic('clock'))+'</span><div class="sp"><b>'+(ls==='ok'?'Trimis la aprobare · '+fT(l.ts):ls==='respins'?'Trimitere respinsă la sincronizare':ls==='sending'?'Se trimite la aprobare…':'În coadă pentru aprobare · '+fT(l.ts))+'</b><div class="sm">'+pl(l.n,'sudură','suduri')+' ('+nrStr(t,l.a)+' – '+nrStr(t,l.b)+') · '+fmtM(l.metri)+' m'+(ls==='respins'?' · conflict pe '+l.motiv+' — rezolvă și retrimite':ls==='pending'?' · pleacă când ai semnal':'')+'</div></div>'+(ls==='pending'?'<button class="btn btn-ro" data-act="retract" data-id="'+l.id+'">'+ic('undo')+'Retrage</button>':'')+'</div>';});
+  if(h)x+='<div class="histl">'+t+'S001 – '+t+'S'+pad3(h.max)+' · '+h.max+' suduri aprobate anterior (nu se mai editează de pe tabletă)</div>';
+  return x;
+}
+function primary(r,list,sm){
+  var d=S.draft,ew=editW(),nr=r.nrTxt;
+  if(!dirty()&&!ew){
+    if(!list.length)return {cls:'btn-s',dis:1,icon:'send',l1:'Trimite la aprobare',l2:'nicio sudură în sesiune',why:'Nicio sudură în sesiune încă — începe cu seria primei țevi',focus:'st2'};
+    if(sm.block.length)return {cls:'btn-ro',act:'go-sum',icon:'arrow',l1:pl(sm.block.length,'blocantă','blocante')+' — vezi rezumatul',l2:'trimiterea e blocată'};
+    return {cls:'btn-p',act:'go-sum',icon:'send',l1:'Trimite la aprobare',l2:pl(list.length,'sudură','suduri')+' · '+fmtM(sm.metri)+' m'};
+  }
+  if(!r.complete)return {cls:'btn-s',dis:1,icon:'check',l1:d.free?'Verifică seria':'Tastează seria țevii',l2:'apoi verifici lungimea',why:d.free?'Scrie seria completă și apasă „Verifică seria”':'Tastează ultimele 3 cifre ale seriei',focus:'st2'};
+  if(r.taken)return {cls:'btn-s',dis:1,icon:'x',l1:'Numărul '+nr+' e ocupat',l2:'alege alt număr',why:'Numărul '+nr+' e ocupat — alege alt număr',focus:'st1'};
+  if(r.status==='ok'||r.status==='info'){
+    if(d.lmode==='stoc')return {cls:'btn-ok',act:'save',icon:'check',l1:ew?'Lungime corectă — salvează modificarea':'Lungime corectă — salvează',nr:nr,l2:fmtM(r.item.lung)+' m'};
+    if(r.lenState!=='ok')return {cls:'btn-s',dis:1,icon:'check',l1:d.lmode==='taiata'?'Tastează lungimea montată':'Tastează lungimea de pe marcaj',l2:'pe tastatura din pasul 3',why:r.lenState==='empty'?'Tastează lungimea în pasul 3':'Lungimea tastată nu e validă — corecteaz-o',focus:'lendisp'};
+    if(d.lmode==='taiata')return {cls:'btn-ok',act:'save',icon:'check',l1:ew?'Salvează modificarea':'Salvează',nr:nr,l2:fmtM(r.lenVal)+' m · '+(r.cupon?'cupon '+fmtM(r.rest)+' m':'rest deșeu')};
+    return {cls:'btn-ok',act:'save',icon:'check',l1:'Salvează cu lungimea de pe marcaj',nr:nr,l2:fmtM(r.lenVal)+' m'};
+  }
+  if(r.status==='block')return {cls:'btn-p',act:'ser-clear',icon:'edit',l1:'Corectează seria',l2:'seria e deja montată'};
+  if(!d.verif)return {cls:'btn-p',act:'ser-clear',icon:'edit',l1:'Corectează seria',l2:'sau „Trimite la verificare”'};
+  if(!d.usarja)return {cls:'btn-s',dis:1,icon:'search',l1:'Alege sarja de pe marcaj',l2:'pasul 3',why:'Alege sarja de pe marcaj (sau „Nu se vede”)',focus:'st3'};
+  if(r.ulenState!=='ok')return {cls:'btn-s',dis:1,icon:'search',l1:'Tastează lungimea măsurată',l2:'pasul 3',why:'Tastează lungimea măsurată pe țeavă',focus:'ulendisp'};
+  return {cls:'btn-p',act:'save-verif',icon:'search',l1:'Salvează · în verificare',nr:nr,l2:fmtM(r.ulenVal)+' m'};
+}
+function pbtn(p){
+  return '<button class="btn '+p.cls+' pbtn" id="pbtn" data-act="'+(p.act||'noop')+'"'+(p.dis?' aria-disabled="true" data-why="'+esc(p.why||'')+'" data-focus="'+(p.focus||'')+'"':'')+'>'+ic(p.icon||'check')+'<span class="bl"><span class="l1">'+p.l1+'</span><span class="l2">'+(p.nr?'<b class="pnr">'+p.nr+'</b> · ':'')+(p.l2||'')+'</span></span></button>';
+}
+function vBottom(status,p){
+  var t=UI.toast,inner;
+  if(t)inner=(t.undo&&UI.undo?'<button class="btn btn-s ubtn" data-act="undo">'+ic('undo')+'Desfă</button>':'')+'<div class="bst" id="bst"><div class="tbar '+t.kind+'" role="status">'+t.msg+'</div></div>';
+  else inner='<div class="bst" id="bst">'+status+'</div>';
+  return '<div class="bottom" id="bottom"><div class="bin">'+inner+pbtn(p)+'</div></div>';
+}
+function vGpsWarn(){
+  if(!gpsMismatch())return '';
+  var g=gpsNow();
+  return alertBox('info','info','Ești la km '+kmFmt(g.km)+' ('+g.tr+'), dar înregistrezi pe '+S.tr,'Verifică tronsonul înainte de prima sudură.','<button class="btn btn-s" data-act="gps-stay">Rămân pe '+S.tr+'</button><button class="btn btn-p" data-act="gps-switch" data-tr="'+g.tr+'">Treci pe '+g.tr+'</button>','al-gps');
+}
+function vLucru(){
+  var r=evalDraft(),list=sesWelds(S.tr),sm=sumar(list);
+  var st=list.length?('<b class="num">'+list.length+'</b> '+(list.length===1?'sudură':'suduri')+' · <b class="num">'+fmtM(sm.metri)+' m</b> · '+pl(sm.cupoane.length,'cupon','cupoane')+(sm.block.length?' · <span class="red b">'+pl(sm.block.length,'blocantă','blocante')+'</span>':'')):'<span class="muted">Nicio sudură în sesiune încă</span>';
+  return '<main class="wrap">'+(gpsMismatch()?'<div style="margin-bottom:12px">'+vGpsWarn()+'</div>':'')+'<div class="work"><section class="card form" id="formcard">'+vForm(r)+'</section><section class="listcol" id="listcol">'+vList(list,sm)+'</section></div></main>'+vBottom(st,primary(r,list,sm));
+}
+function tile(l,v,s,c){return '<div class="tile'+(c?' tile--'+c:'')+'"><div class="lbl">'+l+'</div><div class="tv num">'+v+'</div><div class="ts">'+s+'</div></div>';}
+function obs(w){var o=cardNote(w).map(function(n){return n.t;});return o.length?o.join('<br>'):'<span class="muted">—</span>';}
+function vRezumat(){
+  var t=trObj(S.tr),list=sesWelds(S.tr).sort(function(a,b){return a.nr-b.nr;});
+  if(!list.length&&!dirty()){S.screen='lucru';return vLucru();}
+  var r=sumar(list),gaps=gapsFor(S.tr),nStie=r.info.length+r.corr.length+r.deseu.length+gaps.length,bl=submitBlock(r);
+  var x='<main class="wrap"><div class="phead"><button class="btn btn-s" data-act="back-work">'+ic('left')+'Înapoi la lucru</button><div><h1>Rezumat înainte de trimitere</h1><div class="muted">'+PROIECT.client+' · '+PROIECT.nume+' · <b>'+t.cod+'</b> km '+t.a+'+000 – '+t.b+'+000 · '+AZI+' · către managerul de proiect</div></div></div>';
+  if(dirty()){var r0=evalDraft();
+    x+='<section class="panel panel--red" id="pdirty"><div class="pt">'+lv('block')+'Sudura '+r0.nrTxt+(r0.serie?' · '+esc(r0.serie):'')+' nu e salvată</div><div class="prow"><span class="sp">E încă în formular. Salveaz-o sau renunță la ea înainte de trimitere.</span>'+
+       ((r0.ready&&(r0.status==='ok'||r0.status==='info'))?'<button class="btn btn-ok" data-act="dirty-save-here">'+ic('check')+'Salvează acum</button>':'<button class="btn btn-p" data-act="back-work">Completează în formular</button>')+'<button class="btn btn-ro" data-act="dirty-drop-here">Renunț la ea</button></div></section>';}
+  x+=vPendingBands(S.tr);
+  if(list.length){
+  x+='<div class="tiles">'+tile('Suduri',r.n,nrStr(t.cod,list[0].nr)+' – '+nrStr(t.cod,list[list.length-1].nr))+
+     tile('Metri montați',fmtM(r.metri)+' m',pl(r.n-r.cupF-r.block.length-r.verif.length,'țeavă','țevi')+' + '+pl(r.cupF,'cupon','cupoane')+(r.block.length||r.verif.length?' · fără blocante / verificare':''))+
+     tile('Cupoane generate',r.cupoane.length,r.cupoane.length?fmtM(r.mCup)+' m revin în stoc':'nicio țeavă tăiată')+
+     tile('Blocante',r.block.length,r.block.length?'trimiterea e blocată':'niciuna',r.block.length?'red':'grn')+
+     tile('În verificare',r.verif.length,r.verif.length?fmtM(r.mVerif)+' m neconfirmați':'nicio serie',r.verif.length?'red':'grn')+
+     tile('De știut',nStie,nStie?'cupoane, corecții, numere sărite':'nimic deosebit',nStie?'yel':'grn')+'</div>';
+  if(r.block.length)x+='<section class="panel panel--red" id="pblock"><div class="pt">'+lv('block')+(r.block.length===1?'O alertă blocantă':r.block.length+' alerte blocante')+' — sesiunea nu se poate trimite</div>'+r.block.map(function(w){var a=w.alert;return '<div class="prow"><b class="num">'+nrStr(w.tr,w.nr)+'</b><span class="sp">'+(a.lvl==='conflict'?'Conflict la sincronizare: <span class="mono">'+esc(w.serie)+'</span> e montată și pe <b>'+a.loc+'</b> ('+a.cine+', '+a.ora+')':blockMsg(a.locs||[],w.serie))+'</span><button class="btn btn-p" data-act="resolve" data-id="'+w.id+'">Rezolvă'+ic('arrow')+'</button></div>';}).join('')+'</section>';
+  if(r.verif.length)x+='<section class="panel panel--red" id="pverif"><div class="pt">'+lv('q')+'Serii în verificare — blochează pachetul de lansare'+(S.verifBlocks?' și trimiterea':'')+'</div>'+r.verif.map(function(w){return '<div class="prow"><b class="num">'+nrStr(w.tr,w.nr)+'</b><span class="sp"><span class="mono">'+esc(w.serie)+'</span> · '+esc(sarjaTxt(w.sarja))+' · '+fmtM(w.lungMont)+' m măsurați — nu există în '+PROIECT.stoc+'; o confirmă magazia.</span><button class="btn btn-s" data-act="resolve" data-id="'+w.id+'">'+ic('edit')+'Editează</button></div>';}).join('')+
+     (S.verifBlocks?'':'<div class="prow muted sm">Sesiunea pleacă la manager; pachetul de lansare rămâne blocat până confirmă magazia. (Decizie deschisă — vezi Ghid demo.)</div>')+'</section>';
+  if(nStie)x+='<section class="panel panel--yel"><div class="pt">'+lv('info')+'De știut — nu blochează trimiterea</div>'+
+     r.info.map(function(w){var it=findP(w.stockId);return '<div class="prow"><b class="num">'+nrStr(w.tr,w.nr)+'</b><span class="sp">Cupon acceptat: <span class="mono">'+esc(w.serie)+'</span> · '+fmtM(w.lungStoc)+' m'+(it&&it.orig?' din '+it.orig:'')+'</span></div>';}).join('')+
+     r.corr.map(function(w){return '<div class="prow"><b class="num">'+nrStr(w.tr,w.nr)+'</b><span class="sp">Corecție lungime: marcaj '+fmtM(w.corr.marcaj)+' m ≠ stoc '+fmtM(w.corr.stoc)+' m — magazia corectează fișa țevii</span></div>';}).join('')+
+     r.deseu.map(function(w){return '<div class="prow"><b class="num">'+nrStr(w.tr,w.nr)+'</b><span class="sp">Rest '+fmtM(w.deseu)+' m → deșeu (sub '+fmtM(MIN_CUPON)+' m)</span></div>';}).join('')+
+     (gaps.length?'<div class="prow"><b>Numere sărite</b><span class="sp">'+gaps.map(function(n){return nrStr(t.cod,n);}).join(', ')+' — fără sudură înregistrată.</span></div>':'')+'</section>';
+  if(r.cupoane.length)x+='<section class="panel"><div class="pt">'+ic('cut')+'Fișe de tăiere — le generează managerul de proiect</div>'+r.cupoane.map(function(w){return '<div class="prow"><b class="num">'+nrStr(w.tr,w.nr)+'</b><span class="sp"><span class="mono">'+esc(w.serie)+'</span> / '+w.sarja+': din '+fmtM(w.lungStoc)+' m s-au montat '+fmtM(w.lungMont)+' m · cupon <b>'+fmtM(w.lungStoc-w.lungMont)+' m</b> → stoc</span></div>';}).join('')+'</section>';
+  x+='<section class="card"><h2 style="margin-bottom:8px">Sudurile din sesiune</h2><div class="tscroll"><table class="t"><thead><tr><th>Nr. sudură</th><th>Serie țeavă</th><th>Sarjă</th><th style="text-align:right">Lungime</th><th>Observații</th><th>Sincronizare</th></tr></thead><tbody>'+
+     list.map(function(w){var red=!!w.alert;return '<tr class="'+(red?'tr-block':'')+'"><td class="b num">'+nrStr(w.tr,w.nr)+'</td><td class="mono">'+esc(w.serie)+'</td><td>'+esc(sarjaTxt(w.sarja))+'</td><td class="num b" style="text-align:right;white-space:nowrap">'+(w.tipPiesa==='blocat'?'—':fmtM(w.lungMont)+' m')+'</td><td>'+obs(w)+'</td><td>'+synChip(w)+'</td></tr>';}).join('')+'</tbody></table></div></section>';
+  }
+  x+='</main>';
+  var p=S.outbox.length;
+  var msg=bl?'<span class="red b">'+bl.why+'</span>':!S.online?'<b>Offline:</b> trimiterea intră în coadă și pleacă automat când revine semnalul'+(p?' (după '+pl(p,'înregistrare','înregistrări')+')':''):'Trimiți <b>'+pl(r.n,'sudură','suduri')+'</b> · <b>'+fmtM(r.metri)+' m</b> către managerul de proiect';
+  var pr=bl?{cls:'btn-ok',dis:1,icon:'send',l1:'Trimite managerului de proiect',l2:'blocat — vezi mesajul',why:bl.why,focus:bl.focus}:{cls:'btn-ok',act:'submit',icon:'send',l1:'Trimite managerului de proiect',l2:pl(r.n,'sudură','suduri')+' · '+fmtM(r.metri)+' m'};
+  if(!list.length)pr={cls:'btn-s',dis:1,icon:'send',l1:'Trimite managerului de proiect',l2:'nicio sudură',why:'Nicio sudură salvată în sesiune',focus:'pdirty'};
+  return x+vBottom(msg,pr);
+}
+function vTrimis(){
+  var lot=findLot(S.lastLot);
+  if(!lot){S.screen='lucru';return vLucru();}
+  var ls=lotSync(lot),nx=nextNr(lot.tr);
+  var big=ls==='ok'?'<div class="bigok">'+ic('check')+'</div>':ls==='sending'?'<div class="bigok s"><span class="spin big"></span></div>':ls==='respins'?'<div class="bigok r">'+ic('x')+'</div>':'<div class="bigok q">'+ic('clock')+'</div>';
+  var h1=ls==='ok'?'Trimis managerului de proiect':ls==='sending'?'Se trimite…':ls==='respins'?'Trimitere respinsă — conflict la sincronizare':'Gata de trimis — pleacă când revine semnalul';
+  var pnl=ls==='ok'?'<div class="panel panel--grn" style="text-align:left"><b class="grn">A ajuns pe server</b> — trimis la '+fT(lot.ts)+', confirmat la '+fT(S.lastSync)+'. Managerul de proiect îl vede acum în ERP.</div>'
+    :ls==='sending'?'<div class="panel" style="text-align:left"><b>Se trimite…</b> câteva secunde.</div>'
+    :ls==='respins'?'<div class="panel panel--red" style="text-align:left"><b class="red">Conflict pe '+esc(lot.motiv||'')+'</b> — o țeavă a fost montată între timp de pe altă tabletă. Sudurile au revenit în sesiune: rezolvă conflictul și trimite din nou.</div>'
+    :'<div class="panel panel--org" style="text-align:left"><b>În coada offline</b> — salvat pe tabletă la '+fT(lot.ts)+'. Pleacă automat când revine semnalul; nu mai trebuie să faci nimic.</div>';
+  return '<main class="wrap wrap--nobar"><div class="donewrap">'+big+'<h1 style="font-size:36px">'+h1+'</h1>'+
+   '<p class="lead">'+lot.tr+' · '+pl(lot.n,'sudură','suduri')+' ('+nrStr(lot.tr,lot.a)+' – '+nrStr(lot.tr,lot.b)+') · <b>'+fmtM(lot.metri)+' m</b> montați · '+pl(lot.nCup,'cupon','cupoane')+(lot.nCup?' ('+fmtM(lot.mCup)+' m)':'')+'</p>'+pnl+
+   (ls==='respins'?'':'<div class="nextl">Ce urmează: managerul de proiect verifică sesiunea'+(lot.nCup?' și generează '+pl(lot.nCup,'fișă de tăiere','fișe de tăiere'):'')+(lot.nVerif?'; '+pl(lot.nVerif,'serie e','serii sunt')+' în verificare la magazie':'')+'.</div>')+
+   '<div style="text-align:left">'+vPendingBands(lot.tr)+'</div>'+
+   '<div class="dacts">'+(ls==='respins'?'<button class="btn btn-p btn-xl" data-act="back-work">Rezolvă conflictul pe '+lot.tr+'</button>':'<button class="btn btn-p btn-xl" data-act="new-session">Continuă pe '+lot.tr+' — următoarea '+nrStr(lot.tr,nx)+'</button>')+
+   '<button class="btn btn-s btn-xl" data-act="go-start">Alege alt tronson</button>'+
+   (ls==='pending'?'<button class="btn btn-ro" data-act="retract" data-id="'+lot.id+'">'+ic('undo')+'Retrage trimiterea (încă n-a plecat de pe tabletă)</button>':'')+'</div></div></main>';
+}
+
+/* ---------------- ghid demo + scenarii ---------------- */
+function pickAvail(pref){
+  var av=S.stock.filter(function(it){return it.tip==='teava'&&it.stare==='disponibil'&&!it.lock;});
+  for(var i=0;i<pref.length;i++){for(var j=0;j<av.length;j++)if(av[j].serie===pref[i])return av[j];}
+  return av[0]||null;
+}
+function pickCup(){return S.stock.filter(function(it){return it.tip==='cupon'&&it.stare==='disponibil'&&!it.lock&&!it.local;})[0]||S.stock.filter(function(it){return it.tip==='cupon'&&it.stare==='disponibil';})[0]||null;}
+function scenList(){
+  var ok=pickAvail(['254CA10206']),cut=pickAvail(['254CA10273']),cup=pickCup(),dif=pickAvail(['254CA10302']),hs=S.hist[9],ses=sesWelds(S.tr).sort(function(a,b){return a.nr-b.nr;});
+  var mid=ses.length>=3?ses[ses.length-3]:null,last=ses[ses.length-1];
+  var conf=S.stock.filter(function(it){return it.serie===SERVER_MONTAT[0].serie;})[0],confOk=conf&&conf.stare==='disponibil'&&!conf.lock;
+  return [
+   ['ok','Verde — țeavă din stoc',ok?ok.serie+' · lungimea vine din stoc; o confirmi cu butonul verde de jos':'nu mai sunt țevi libere — Resetează demo','scen-ok'],
+   ['neu','Țeavă tăiată → cupon',cut?cut.serie+' ('+fmtM(cut.lung)+' m) · „Țeavă tăiată” pornit; tastează 8 0 0 → 8,00 m → cupon '+fmtM(cut.lung-8)+' m':'—','scen-cut'],
+   ['info','Galben — cupon existent',cup?cup.serie+' · seria se mai regăsește pe '+trOf(cup.orig)+' ca cupon de '+fmtM(cup.lung)+' m — acceptat':'niciun cupon liber','scen-cup'],
+   ['block','Roșu — serie deja montată','254CA10287 · există deja pe TR12S045 — nu se poate folosi','scen-dup'],
+   ['block','Roșu — dublură din istoric',hs.serie+' · montată pe '+hs.loc+' (aprobată), nu mai e în stoc','scen-hist'],
+   ['block','Roșu — sudură dublată',last?'numărul '+nrStr(last.tr,last.nr)+' (deja salvat) → „Sudura … există deja”':'salvează întâi o sudură','scen-nr'],
+   ['q','Serie inexistentă în stoc','254CA10999 · „Trimite la verificare” (sarjă + lungime + reconfirmare)','scen-unk'],
+   ['info','Marcajul arată altă lungime',dif?dif.serie+' · stoc '+fmtM(dif.lung)+' m; pe țeavă scrie 12,40 → corecție, fără cupon':'—','scen-dif'],
+   ['neu','Sudură uitată → inserare',mid?'numărul '+nrStr(mid.tr,mid.nr)+' e ocupat → „Inserează” mută sudurile de după cu +1':'ai nevoie de minim 3 suduri în sesiune','scen-ins'],
+   ['block','Conflict la sincronizare',confOk?'254CA10441 · salvezi offline, apoi „Revino online”: altă tabletă a montat-o pe TR14S012 la 11:20':'deja cunoscut de server — Resetează demo ca să-l repeți','scen-conf'],
+   ['info','Tronson greșit (GPS)','GPS-ul arată alt tronson decât cel pe care lucrezi → avertizare + întrebare la prima salvare','scen-gps']
+  ];
+}
+function vGuide(){
+  var sc=scenList(),c={ok:'ok',info:'info',block:'block',q:'block',neu:'neu'};
+  return '<div class="mback" data-act="modal-close"><div class="modal wide" data-act="noop" role="dialog" aria-label="Ghid demo"><div class="row"><h2>Ghid demo</h2><span class="chip info">PROTOTIP — date fictive</span><span class="sp"></span><button class="btn btn-s" data-act="modal-close">'+ic('x')+'Închide</button></div>'+
+   '<p class="muted" style="margin:8px 0 0">Stoc LOT 2 Jupânești, TR12–TR19, totul fictiv. Nimic nu pleacă în ERP; starea stă în browser (localStorage) și rămâne după refresh. Atinge un scenariu ca să-l încarci în formular:</p>'+
+   '<div class="scen">'+sc.map(function(s){return '<button class="scb" data-act="'+s[3]+'">'+lv(s[0],'lv-c-'+c[s[0]])+'<span class="sp"><span class="st">'+s[1]+'</span><span class="sd">'+s[2]+'</span></span>'+ic('arrow')+'</button>';}).join('')+'</div>'+
+   '<div class="gsec"><h3>Comenzi de demonstrație</h3><div class="gctl"><button class="btn btn-s" data-act="net">'+(S.online?ic('off')+'Simulează fără semnal':ic('cloud')+'Revino online (sincronizează)')+'</button><button class="btn btn-s" data-act="gps-next">'+ic('pin')+'Altă poziție GPS</button><button class="btn btn-s" data-act="stale">'+ic('box')+'Stoc vechi (−6 h)</button><button class="btn btn-s" data-act="simfail" aria-pressed="'+UI.simFail+'">'+(UI.simFail?'Oprește „memorie plină”':'Simulează memorie plină')+'</button><button class="btn btn-ro" data-act="reset-ask">↺ Resetează demo</button></div></div>'+
+   '<div class="gsec"><h3>Decizie deschisă: o serie „în verificare” blochează și trimiterea sesiunii?</h3><div class="gctl"><button class="tog2'+(!S.verifBlocks?' on':'')+'" data-act="vdec" data-v="B" aria-pressed="'+(!S.verifBlocks)+'">B · Nu — sesiunea pleacă, pachetul de lansare rămâne blocat</button><button class="tog2'+(S.verifBlocks?' on':'')+'" data-act="vdec" data-v="A" aria-pressed="'+S.verifBlocks+'">A · Da — blochează și trimiterea</button></div></div>'+
+   '<div class="gsec"><h3>Pe calculator</h3><p class="muted sm" style="margin:0">Cifrele de la tastatură merg în tastatura de pe ecran, Enter = butonul mare de jos, Backspace = șterge, Esc = închide fereastra.</p></div></div></div>';
+}
+function vModal(){
+  var m=UI.modal,d=S.draft;
+  var open='<div class="mback" data-act="modal-close"><div class="modal" data-act="noop" role="dialog"';
+  if(m.t==='guide')return vGuide();
+  if(m.t==='nr'){
+    var n=parseInt(m.buf||'0',10),valid=n>=1&&n<=999,tk=valid?nrTaken(d.tr,n,d.editId):null,ip=(tk&&!d.editId)?insPlan(d.tr,n,d.editId):null;
+    var ok=!valid?'<button class="btn btn-p btn-xl" data-act="nrm-ok" aria-disabled="true" data-why="Tastează un număr între 1 și 999" data-focus="nrbig">Folosește</button>'
+      :tk?'<button class="btn btn-p btn-xl" data-act="nrm-ok" aria-disabled="true" data-why="'+nrStr(d.tr,n)+' e ocupat — alege alt număr" data-focus="nrbig">Ocupat — alege alt număr</button>'
+      :'<button class="btn btn-p btn-xl" data-act="nrm-ok">Folosește '+nrStr(d.tr,n)+'</button>';
+    return open+' aria-label="Număr sudură"><h2>Alt număr de sudură</h2><div class="muted sm">Următorul liber: <b>'+nrStr(d.tr,nextNr(d.tr,d.editId))+'</b></div>'+
+      '<div class="nrbig'+(tk?' bad':'')+'" id="nrbig"><span class="muted">'+d.tr+'S</span><b class="num">'+(m.buf?pad3(n):'···')+'</b></div>'+
+      (tk?'<div class="note red b">'+nrStr(d.tr,n)+' există deja — '+tk.txt+'</div>':'<div class="note">Tastează numărul (ex. 52)</div>')+
+      '<div class="mkp"><div class="kp">'+keys('nrm')+'</div></div><div class="mfoot"><button class="btn btn-s btn-xl" data-act="modal-close">Renunță</button>'+ok+'</div>'+
+      (ip?'<div class="mfoot"><button class="btn btn-s w100" data-act="nrm-ins">'+ic('plus')+'Inserează ca '+nrStr(d.tr,n)+' · mută '+pl(ip.length,'sudură','suduri')+' cu +1</button></div>':'')+'</div></div>';
+  }
+  if(m.t==='del'){
+    var w=findW(m.id);if(!w){UI.modal=null;return '';}
+    var conf=w.alert&&w.alert.lvl==='conflict';
+    return open+' aria-label="Ștergere sudură"><div class="mic lv-c-block">'+lv('block')+'</div><h2>Ștergi sudura '+nrStr(w.tr,w.nr)+'?</h2>'+
+      '<p>'+(w.stockId&&!conf?'Țeava <b class="mono">'+esc(w.serie)+'</b> revine în stoc ca disponibilă. ':'')+(w.cuponId?'Cuponul generat la tăiere se scoate din stoc. ':'')+(w.srv?'Ștergerea ajunge pe server la sincronizare.':'Nu a ajuns încă pe server — dispare doar de pe tabletă.')+'</p>'+
+      '<p class="muted sm">Te poți răzgândi cu „↶ Desfă” imediat după.</p><div class="mfoot"><button class="btn btn-s btn-xl" data-act="modal-close">Nu, păstrează</button><button class="btn btn-red btn-xl" data-act="del-ok" data-id="'+w.id+'">Da, șterge sudura</button></div></div></div>';
+  }
+  if(m.t==='dirty'){
+    var r=evalDraft(),can=r.ready&&(r.status==='ok'||r.status==='info')&&!r.taken;
+    return open+' aria-label="Sudură nesalvată"><div class="mic lv-c-info">'+lv('info')+'</div><h2>Sudura '+r.nrTxt+' nu e salvată</h2>'+
+      '<p>'+(r.serie?'<b class="mono">'+esc(r.serie)+'</b>'+(r.item?' · '+fmtM(r.item.lung)+' m':'')+' — ':'')+'dacă pleci acum, '+(d.editId?'modificarea se pierde (sudura rămâne cum era).':'se pierde ce ai tastat.')+'</p>'+
+      '<div class="mfoot">'+(can?'<button class="btn btn-ok btn-xl" data-act="dirty-save">'+ic('check')+'Salvează acum</button>':'')+'<button class="btn btn-ro btn-xl" data-act="dirty-drop">Renunț la ea</button></div><div class="mfoot"><button class="btn btn-s w100" data-act="modal-close">Înapoi la formular</button></div></div></div>';
+  }
+  if(m.t==='gps'){
+    var g=gpsNow();
+    return open+' aria-label="Tronson diferit de GPS"><div class="mic lv-c-info">'+lv('info')+'</div><h2>Ești la km '+kmFmt(g.km)+' ('+g.tr+'), dar înregistrezi pe '+S.tr+'</h2><p>Te întreb o singură dată pe sesiune. Dacă ai trecut pe alt tronson, seria rămâne în formular.</p>'+
+      '<div class="mfoot"><button class="btn btn-s btn-xl" data-act="gps-cont">Continuă pe '+S.tr+'</button><button class="btn btn-p btn-xl" data-act="gps-switch" data-tr="'+g.tr+'">Treci pe '+g.tr+'</button></div></div></div>';
+  }
+  if(m.t==='cfm'){
+    var rc=evalDraft(),ser=rc.serie||'',pf=ser.slice(0,-3),buf=m.buf||'';
+    return open+' aria-label="Confirmă seria"><h2>Confirmă seria înainte de verificare</h2><p>Tastează din nou <b>ultimele 3 cifre</b> de pe marcajul țevii.</p>'+
+      '<div class="nrbig'+(m.bad?' bad':'')+'" id="cfmbox"><span class="muted mono">'+esc(pf)+'</span><b class="num mono">'+(buf+'···').slice(0,3)+'</b></div>'+
+      (m.bad?'<div class="note red b">Nu se potrivește: ai tastat '+esc(m.bad)+', în formular e '+esc(ser)+'. Verifică marcajul.</div>':'<div class="note">După a treia cifră se salvează singur, dacă se potrivește.</div>')+
+      '<div class="mkp"><div class="kp">'+keys('cfm')+'</div></div><div class="mfoot"><button class="btn btn-s btn-xl" data-act="modal-close">Renunță</button></div></div></div>';
+  }
+  if(m.t==='reset'){
+    return open+' aria-label="Resetează demo"><div class="mic lv-c-info">'+lv('info')+'</div><h2>Resetezi datele demo?</h2><p>Se pierde tot ce ai înregistrat în prototip și revine stocul inițial (8 țevi libere, 2 cupoane, sesiunea de dimineață pe TR13).</p>'+
+      '<div class="mfoot"><button class="btn btn-s btn-xl" data-act="modal-close">Renunță</button><button class="btn btn-red btn-xl" data-act="reset">Da, resetează</button></div></div></div>';
+  }
+  return '';
+}
+
+/* ---------------- randare ---------------- */
+function render(){
+  normalize();persist();
+  document.documentElement.setAttribute('data-theme',S.theme);
+  var mt=document.querySelector('meta[name=theme-color]');if(mt)mt.setAttribute('content',S.theme==='sun'?'#FFFFFF':'#0D1117');
+  var ae=document.activeElement,fid=UI.focus||(ae&&ae.id&&ae.tagName==='INPUT'?ae.id:null),ss=null;
+  if(ae&&ae.id===fid&&typeof ae.selectionStart==='number')ss=ae.selectionStart;
+  var lc=$('#listcol'),lcTop=lc?lc.scrollTop:0;
+  var main=S.screen==='start'?vStart():S.screen==='rezumat'?vRezumat():S.screen==='trimis'?vTrimis():vLucru();
+  $('#app').innerHTML=vDemo()+vTop()+main;
+  $('#modal').innerHTML=UI.modal?vModal():'';
+  var hasBar=!!$('#bottom');
+  var tEl=$('#toast');
+  if(UI.toast&&!hasBar){tEl.innerHTML='<div class="tbar '+UI.toast.kind+'" role="status">'+UI.toast.msg+'</div>';var tb=$('#top');tEl.style.top=((tb?Math.max(0,tb.getBoundingClientRect().bottom):0)+10)+'px';}
+  else tEl.innerHTML='';
+  var top=$('#top');if(top)document.documentElement.style.setProperty('--hdr',top.offsetHeight+'px');
+  var bt=$('#bottom');document.documentElement.style.setProperty('--bh',(bt?bt.offsetHeight:0)+'px');
+  var lc2=$('#listcol');if(lc2&&lcTop)lc2.scrollTop=lcTop;
+  if(fid){var el=document.getElementById(fid);if(el){el.focus({preventScroll:true});var pos=ss!=null?ss:el.value.length;try{el.setSelectionRange(pos,pos);}catch(e){}}}
+  UI.focus=null;
+  runFx();
+  if(UI.scrollTo){var st=UI.scrollTo;UI.scrollTo=null;requestAnimationFrame(function(){scrollToEl(st);});}
+  UI.lastScreen=S.screen;
+}
+
+/* ---------------- acțiuni ---------------- */
+function lenKey(v,k){
+  if(k===','){if(v.indexOf(',')<0)v=(v||'0')+',';return {v:v};}
+  var p=v.split(',');
+  if(p.length>1){if(p[1].length>=2)return {v:v,err:'Maxim 2 zecimale (ex. 12,47)'};return {v:v+k};}
+  var ip=p[0];
+  if(ip==='')ip=k;else if(+(ip+k)<=12)ip=ip+k;else return {v:ip+','+k};
+  if(ip.length>=2||(+ip)*10>12||ip==='0')return {v:ip+','};
+  return {v:ip};
+}
+function cfmCheck(){var m=UI.modal,r=evalDraft(),l3=(r.serie||'').slice(-3);if(m.buf===l3){UI.modal=null;saveWeld('verif');}else{m.bad=m.buf;m.buf='';buzz('err');fx('#cfmbox','shake');}}
+function keyInput(t,k){
+  var d=S.draft;
+  if(t==='nrm'||t==='cfm'){var m=UI.modal;if(!m)return;
+    if(k==='⌫')m.buf=m.buf.slice(0,-1);else if(k==='C')m.buf='';else if(m.buf.length<3)m.buf=t==='nrm'?(m.buf+k).replace(/^0+/,''):m.buf+k;
+    if(t==='cfm'&&m.buf.length>0)m.bad=m.bad&&m.buf.length?null:m.bad;
+    if(t==='cfm'&&m.buf.length===3)cfmCheck();
+    return;}
+  d.touched=true;
+  if(t==='ser'){
+    var added=false;
+    if(k==='⌫')d.digits=d.digits.slice(0,-1);else if(k==='C')d.digits='';else if(d.digits.length<3){d.digits+=k;added=true;fx('#slot'+(d.digits.length-1),'pop');}
+    else return; // a 4-a cifră nu schimbă nimic
+    d.sel=null;d.lmode='stoc';d.len='';d.ulen='';d.verif=false;d.usarja='';
+    if(added&&d.digits.length===3){var r=evalDraft();UI.tapGuard=performance.now()+450;
+      if(r.status==='block'||r.status==='unknown'){buzz('err');fx('#al-ser','shake');UI.scrollTo='st2';}else{buzz('ok');UI.scrollTo='st3';}}
+    return;
+  }
+  var f=t==='len'?'len':'ulen',v=d[f],dispSel=t==='len'?'#lendisp':'#ulendisp';
+  if(k==='⌫')v=v.slice(0,-1);
+  else if(k==='C')v='';
+  else{var res=lenKey(v,k);if(res.err){buzz('err');fx(dispSel,'shake');say(res.err,'err');return;}v=res.v;}
+  d[f]=v;
+  if(t==='len'){var r2=evalDraft();if(r2.lenState==='mare'||r2.lenState==='mic'){buzz('err');fx(dispSel,'shake');}}
+}
+function kpTarget(){
+  if(UI.modal)return null;
+  var d=S.draft,r=evalDraft();
+  if(!r.complete&&!d.free)return 'ser';
+  if((r.status==='ok'||r.status==='info')&&d.lmode!=='stoc')return 'len';
+  if(r.status==='unknown'&&d.verif)return 'ulen';
+  return null;
+}
+function openTr(tr){
+  S.tr=tr;S.screen='lucru';
+  if(S.draft.tr!==tr||S.draft.editId){var pref=S.draft.prefix;S.draft=newDraft(tr,pref);}
+  UI.scrollTo='top';
+}
+function switchTrKeep(tr){
+  var o=S.draft;S.tr=tr;S.screen='lucru';
+  var d=newDraft(tr,o.prefix);
+  ['digits','free','freeTxt','checked','sel','lmode','len','restMode','verif','usarja','ulen'].forEach(function(k){d[k]=o[k];});
+  d.touched=o.touched;S.draft=d;UI.modal=null;
+  if(dirty())say('Ai trecut pe '+tr+' — seria a rămas în formular; verifică numărul și salvează','info');
+  else say('Ai trecut pe '+tr,'info');
+  UI.scrollTo='top';
+}
+function trySave(kind){
+  var d=S.draft,key=S.tr+'|'+S.gps;
+  if(!d.editId&&gpsMismatch()&&!S.gpsAsked[key]){S.gpsAsked[key]=true;UI.modal={t:'gps',kind:kind};buzz('warn');return;}
+  if(kind==='verif'){UI.modal={t:'cfm',buf:''};return;}
+  saveWeld(kind);
+}
+function scen(kind){
+  UI.modal=null;S.screen='lucru';
+  S.draft=newDraft(S.tr,'254CA10');var d=S.draft,l3=function(it){return it?it.serie.slice(-3):'';};
+  var ses=sesWelds(S.tr).sort(function(a,b){return a.nr-b.nr;});
+  if(kind==='scen-ok')d.digits=l3(pickAvail(['254CA10206']));
+  else if(kind==='scen-cut'){d.digits=l3(pickAvail(['254CA10273']));d.lmode='taiata';}
+  else if(kind==='scen-cup'){var c=pickCup();if(c){d.digits=l3(c);d.sel=c.id;}}
+  else if(kind==='scen-dup')d.digits='287';
+  else if(kind==='scen-hist')d.digits=S.hist[9].serie.slice(-3);
+  else if(kind==='scen-unk')d.digits='999';
+  else if(kind==='scen-dif'){d.digits=l3(pickAvail(['254CA10302']));d.lmode='difera';}
+  else if(kind==='scen-nr'){var last=ses[ses.length-1];if(last){d.nr=last.nr;d.nrAuto=false;}}
+  else if(kind==='scen-ins'){var mid=ses.length>=3?ses[ses.length-3]:null;if(mid){d.nr=mid.nr;d.nrAuto=false;}}
+  else if(kind==='scen-conf'){var it=S.stock.filter(function(x){return x.serie===SERVER_MONTAT[0].serie;})[0];
+    if(S.online){S.online=false;stopSync();clearTimeout(UI.autoT);}
+    d.digits='441';
+    if(!(it&&it.stare==='disponibil'&&!it.lock))say('Serverul știe deja de 254CA10441 (stocul s-a actualizat) — „Resetează demo” ca să repeți conflictul','warn');
+    else say('Offline: salvează sudura cu butonul verde, apoi pornește semnalul din bannerul de sus','info');}
+  else if(kind==='scen-gps'){var want=S.tr==='TR17'?0:3;S.gps=want;S.gpsAck=null;S.gpsAsked={};d.digits=l3(pickAvail(['254CA10229']));}
+  if(d.digits||d.sel)d.touched=true;
+  var r=evalDraft();
+  if(r.taken){buzz('err');fx('#al-nr','shake');}else if(r.status==='block'||r.status==='unknown'){buzz('err');fx('#al-ser','shake');}else buzz('ok');
+  UI.scrollTo=(kind==='scen-nr'||kind==='scen-ins')?'st1':(kind==='scen-cut'||kind==='scen-dif')?'st3':'st2';
+}
+var GUARD={'go-sum':1,'go-start':1,'go-tr':1,'edit':1,'resolve':1,'new-session':1,'scen':1};
+function act(a,ds){
+  var d=S.draft;ds=ds||{};
+  var gk=a.indexOf('scen-')===0?'scen':a;
+  if(GUARD[gk]&&!ds._force&&dirty()){
+    var same=(a==='go-tr'&&ds.tr===S.draft.tr&&!S.draft.editId)||((a==='edit'||a==='resolve')&&ds.id===S.draft.editId);
+    if(!same){UI.modal={t:'dirty',next:{a:a,ds:ds}};buzz('warn');render();return;}
+  }
+  switch(a){
+    case 'theme':S.theme=ds.v==='dark'?'dark':'sun';break;
+    case 'guide':UI.modal={t:'guide'};break;
+    case 'modal-close':UI.modal=null;break;
+    case 'reset-ask':UI.modal={t:'reset'};break;
+    case 'reset':stopSync();clearTimeout(UI.autoT);var th=S.theme;try{localStorage.removeItem(LS_KEY);}catch(e){}S=seed();S.theme=th;UI.modal=null;UI.undo=null;UI.fx=[];UI.toast=null;say('↺ Datele demo au fost resetate','info');UI.scrollTo='top';break;
+    case 'net':
+      S.online=!S.online;
+      if(!S.online){stopSync();clearTimeout(UI.autoT);buzz('warn');say('Fără semnal — lucrezi normal, totul se salvează pe tabletă','off');}
+      else{var pc=S.outbox.length;buzz('ok');say(pc?'Semnal revenit — se trimit '+pl(pc,'înregistrare','înregistrări'):'Semnal revenit','info');setTimeout(function(){scheduleAuto(300);},0);}
+      fx('#strip','okflash');break;
+    case 'sync':startSync(true);return;
+    case 'gps-next':S.gps=(S.gps+1)%GPS.length;break;
+    case 'gps-stay':S.gpsAck=S.tr+'|'+S.gps;buzz('tap');break;
+    case 'gps-switch':switchTrKeep(ds.tr);break;
+    case 'gps-cont':var mk=UI.modal&&UI.modal.kind;UI.modal=null;S.gpsAck=S.tr+'|'+S.gps;if(mk)trySave(mk);break;
+    case 'go-tr':buzz('tap');openTr(ds.tr);break;
+    case 'go-start':S.screen='start';UI.scrollTo='top';break;
+    case 'nr-':d.nr=Math.max(1,d.nr-1);d.nrAuto=!d.editId&&d.nr===nextNr(d.tr);d.insert=false;fxNr();break;
+    case 'nr+':d.nr=Math.min(999,d.nr+1);d.nrAuto=!d.editId&&d.nr===nextNr(d.tr);d.insert=false;fxNr();break;
+    case 'nr-next':d.nr=nextNr(d.tr,d.editId);d.nrAuto=!d.editId;d.insert=false;break;
+    case 'nr-edit':UI.modal={t:'nr',buf:''};break;
+    case 'nrm-ok':var nn=parseInt((UI.modal&&UI.modal.buf)||'0',10);if(nn>=1&&nn<=999&&!nrTaken(d.tr,nn,d.editId)){d.nr=nn;d.nrAuto=!d.editId&&nn===nextNr(d.tr);d.insert=false;UI.modal=null;}break;
+    case 'nrm-ins':var ni=parseInt((UI.modal&&UI.modal.buf)||'0',10);if(insPlan(d.tr,ni,d.editId)){d.nr=ni;d.nrAuto=false;d.insert=true;UI.modal=null;buzz('ok');}break;
+    case 'ins-on':d.insert=true;d.nrAuto=false;buzz('ok');break;
+    case 'ins-off':d.insert=false;d.nr=nextNr(d.tr);d.nrAuto=true;break;
+    case 'open-w':var pf0=S.draft.prefix;S.draft=newDraft(S.tr,pf0);startEdit(ds.id);break;
+    case 'key':keyInput(ds.t,ds.k);fx('[data-act="key"][data-t="'+ds.t+'"][data-k="'+ds.k+'"]','press');break;
+    case 'prefix':d.prefix=ds.p;d.digits='';d.sel=null;break;
+    case 'free-on':d.free=true;d.freeTxt=d.prefix+d.digits;d.sel=null;d.checked=false;UI.focus='freeIn';break;
+    case 'free-off':var ft=normSer(d.freeTxt);d.free=false;d.digits=ft.indexOf(d.prefix)===0?ft.slice(d.prefix.length).replace(/\D/g,'').slice(0,3):'';d.sel=null;d.checked=false;break;
+    case 'free-check':var r0=evalDraft();if(r0.fmtOk){d.checked=true;d.touched=true;var rf=evalDraft();if(rf.status==='block'||rf.status==='unknown'){buzz('err');fx('#al-ser','shake');}else buzz('ok');UI.scrollTo='st2';}break;
+    case 'pick':
+      var it=findP(ds.id);if(!it||!isAvail(it,editW()))break;
+      d.sel=it.id;d.lmode='stoc';d.len='';d.ulen='';d.verif=false;d.touched=true;
+      if(!d.free&&it.serie.indexOf(d.prefix)===0&&it.serie.length===d.prefix.length+3)d.digits=it.serie.slice(d.prefix.length);else{d.free=true;d.freeTxt=it.serie;d.checked=true;}
+      UI.tapGuard=performance.now()+450;buzz('ok');UI.scrollTo='st3';break;
+    case 'ser-clear':d.digits='';d.sel=null;d.checked=false;d.freeTxt='';d.lmode='stoc';d.len='';d.ulen='';d.verif=false;d.usarja='';d.touched=true;if(d.free)UI.focus='freeIn';UI.scrollTo='st2';break;
+    case 'lm':d.lmode=d.lmode===ds.m?'stoc':ds.m;d.len='';d.restMode='deseu';d.touched=true;UI.scrollTo=d.lmode==='stoc'?'st3':'st3';break;
+    case 'rest':d.restMode=ds.m;d.touched=true;break;
+    case 'len-clear':d.len='';break;
+    case 'ulen-clear':d.ulen='';break;
+    case 'verif-on':d.verif=true;d.touched=true;UI.scrollTo='st3';break;
+    case 'sarja':d.usarja=ds.s;d.touched=true;break;
+    case 'save':trySave('ok');break;
+    case 'save-block':trySave('block');break;
+    case 'save-verif':trySave('verif');break;
+    case 'edit':startEdit(ds.id);break;
+    case 'edit-cancel':var p2=S.draft.prefix;S.draft=newDraft(S.tr,p2);say('Editare renunțată — sudura a rămas neschimbată','info');break;
+    case 'del':
+      var w=findW(ds.id);if(!w)break;var cu=cuponUsed(w);
+      if(cu){buzz('err');say('Nu se poate șterge: cuponul tăiat din '+nrStr(w.tr,w.nr)+' e montat pe '+cu+'. Șterge întâi '+cu+'.','err');break;}
+      UI.modal={t:'del',id:w.id};break;
+    case 'del-ok':delWeld(ds.id);break;
+    case 'undo':doUndo();return;
+    case 'go-sum':S.screen='rezumat';UI.scrollTo='top';break;
+    case 'back-work':S.screen='lucru';UI.scrollTo='top';break;
+    case 'resolve':var rw=findW(ds.id);if(rw){S.tr=rw.tr;S.screen='lucru';startEdit(ds.id);}break;
+    case 'submit':submit();break;
+    case 'retract':retract(ds.id);break;
+    case 'new-session':S.screen='lucru';var p3=S.draft.prefix;S.draft=newDraft(S.tr,p3);UI.scrollTo='top';break;
+    case 'dirty-save':case 'dirty-drop':
+      var nx=UI.modal&&UI.modal.next;UI.modal=null;
+      if(a==='dirty-save'){var rs=evalDraft();if(!(rs.ready&&(rs.status==='ok'||rs.status==='info')&&!rs.taken)){buzz('err');break;}saveWeld('ok');}
+      else{S.draft=newDraft(S.tr,S.draft.prefix);say('Sudura nesalvată a fost lăsată deoparte','warn');}
+      if(nx){var nds={};for(var kk in nx.ds)nds[kk]=nx.ds[kk];nds._force=1;act(nx.a,nds);return;}
+      break;
+    case 'dirty-save-here':var rh=evalDraft();if(rh.ready&&(rh.status==='ok'||rh.status==='info')&&!rh.taken)saveWeld('ok');break;
+    case 'dirty-drop-here':S.draft=newDraft(S.tr,S.draft.prefix);say('Sudura nesalvată a fost lăsată deoparte','warn');break;
+    case 'stale':S.stocCache=new Date(Date.now()-6*36e5).toISOString();UI.modal=null;S.screen=S.screen==='start'?'lucru':S.screen;say('Stocul de pe tabletă e acum „vechi de 6 h” (simulare)','info');break;
+    case 'simfail':UI.simFail=!UI.simFail;break;
+    case 'vdec':S.verifBlocks=ds.v==='A';break;
+    case 'ack-load':UI.loadMsg=null;break;
+    case 'reload-tab':var o=load();if(o)S=o;UI.otherTab=false;say('Am preluat datele din celălalt tab','info');break;
+    default:if(a.indexOf('scen-')===0)scen(a);
+  }
+  render();
+}
+function fxNr(){var r=evalDraft();if(r.taken){buzz('err');fx('#al-nr','shake');}}
+
+/* ---------------- evenimente ---------------- */
+document.addEventListener('touchstart',function(){}, {passive:true}); // :active pe iOS
+document.addEventListener('click',function(e){
+  var b=e.target.closest('[data-act]');if(!b)return;
+  var a=b.getAttribute('data-act');
+  if(a!=='key'&&a!=='modal-close'&&performance.now()<UI.tapGuard){e.preventDefault();return;}
+  if(b.getAttribute('aria-disabled')==='true'){
+    e.preventDefault();buzz('err');var why=b.getAttribute('data-why'),f=b.getAttribute('data-focus');
+    if(why)say(why,'err');if(f){fx('#'+f,'shake');UI.scrollTo=f;}if(b.id)fx('#'+b.id,'shake');render();return;
+  }
+  if(a==='noop')return;
+  if(a==='key'&&UI.lpFired){UI.lpFired=false;return;}
+  if(a==='undo'&&performance.now()-UI.undoAt<700)return;
+  if(b.tagName==='BUTTON'&&a!=='key')buzz('tap');else if(a==='key')buzz('tap');
+  act(a,b.dataset);
+});
+document.addEventListener('pointerdown',function(e){
+  UI.lpFired=false;clearTimeout(UI.lp);
+  var b=e.target.closest&&e.target.closest('[data-act="key"][data-k="⌫"]');if(!b)return;
+  var t=b.getAttribute('data-t');
+  UI.lp=setTimeout(function(){UI.lpFired=true;keyInput(t,'C');buzz('warn');render();},600);
+});
+['pointerup','pointercancel'].forEach(function(ev){document.addEventListener(ev,function(){clearTimeout(UI.lp);},true);});
+function onFree(e){
+  if(!e.target||e.target.id!=='freeIn'||e.isComposing)return;
+  var d=S.draft;d.freeTxt=e.target.value;d.sel=null;d.checked=false;d.lmode='stoc';d.len='';d.ulen='';d.verif=false;d.touched=true;
+  var r=evalDraft(),sg=$('#sugg'),cb=$('#freechk'),fm=$('#freefmt');
+  if(sg)sg.innerHTML=vSugg(r);
+  if(fm)fm.innerHTML=fmtMsg(r);
+  if(cb){if(r.fmtOk){cb.removeAttribute('aria-disabled');}else{cb.setAttribute('aria-disabled','true');cb.setAttribute('data-why','Seria are 10 caractere: 3 cifre + 2 litere + 5 cifre (ex. 254CA10206)');cb.setAttribute('data-focus','freeIn');}}
+  persist();
+}
+document.addEventListener('input',onFree);
+document.addEventListener('compositionend',onFree);
+document.addEventListener('keydown',function(e){
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  var tg=e.target,inInput=tg&&tg.tagName==='INPUT';
+  if(e.key==='Escape'){if(UI.modal){UI.modal=null;render();}return;}
+  if(inInput){if(tg.id==='freeIn'&&e.key==='Enter'){e.preventDefault();act('free-check',{});}return;}
+  if(UI.modal){var mt=UI.modal.t;if(mt==='nr'||mt==='cfm'){var kt=mt==='nr'?'nrm':'cfm';
+      if(/^\d$/.test(e.key)){e.preventDefault();act('key',{t:kt,k:e.key});}
+      else if(e.key==='Backspace'){e.preventDefault();act('key',{t:kt,k:'⌫'});}
+      else if(e.key==='Enter'&&mt==='nr'){e.preventDefault();var ob=$('#modal [data-act="nrm-ok"]');if(ob)ob.click();}}
+    return;}
+  if(S.screen!=='lucru'&&S.screen!=='rezumat')return;
+  var t=S.screen==='lucru'?kpTarget():null;
+  if(/^\d$/.test(e.key)&&t){e.preventDefault();act('key',{t:t,k:e.key});}
+  else if((e.key===','||e.key==='.')&&(t==='len'||t==='ulen')){e.preventDefault();act('key',{t:t,k:','});}
+  else if(e.key==='Backspace'&&t){e.preventDefault();act('key',{t:t,k:'⌫'});}
+  else if(e.key==='Backspace'&&S.screen==='lucru'&&!S.draft.free&&S.draft.digits.length===3){e.preventDefault();act('key',{t:'ser',k:'⌫'});}
+  else if(e.key==='Enter'){if(document.activeElement&&document.activeElement.tagName==='BUTTON')return;var pb=$('#pbtn');if(pb){e.preventDefault();pb.click();}}
+});
+window.addEventListener('storage',function(e){if(e.key===LS_KEY){UI.otherTab=true;render();}});
+window.addEventListener('resize',function(){var top=$('#top');if(top)document.documentElement.style.setProperty('--hdr',top.offsetHeight+'px');var bt=$('#bottom');document.documentElement.style.setProperty('--bh',(bt?bt.offsetHeight:0)+'px');});
+
+render();
+setTimeout(function(){UI.boot=false;render();},650);
+scheduleAuto(800);
+// acces pentru teste automate
+window.__izo={get S(){return S;},get UI(){return UI;},act:act,evalDraft:evalDraft,render:render};
+})();
+</script>
+</body>
+</html>
