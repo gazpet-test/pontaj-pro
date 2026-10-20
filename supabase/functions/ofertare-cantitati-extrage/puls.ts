@@ -6,6 +6,8 @@
 // în corp ca `status_http` + `error` (clientul tratează `error` ca eroare). Limita de timp a worker-ului (wall clock) rămâne neschimbată.
 export async function raspunsCuPuls(lucru: Promise<{ status: number; body: Record<string, unknown> }>, headers: Record<string, string>,
   { primaMs = 5000, pulsMs = 10000 }: { primaMs?: number; pulsMs?: number } = {}): Promise<Response> {
+  // review Copilot #811 r1: Content-Type JSON impus aici (supabase-js alege parserul după el), indiferent ce headere primește
+  headers = { ...headers, 'Content-Type': 'application/json' }
   const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers })
   const final = lucru.then((r) => ({ r }), (e) => ({ e }))
   let timer: ReturnType<typeof setTimeout> | undefined

@@ -30,3 +30,11 @@ Deno.test('puls: excepție (rapidă sau lentă) → error, nu răspuns rupt', as
   const b = await raspunsCuPuls(dupa(60, null).then(() => { throw new Error('tarziu') }), H, { primaMs: 10, pulsMs: 20 })
   assertEquals(await b.json(), { error: 'exceptie: tarziu', status_http: 500 })
 })
+
+Deno.test('puls: Content-Type application/json impus pe ambele căi, chiar dacă headerele primite nu-l au', async () => {
+  const cors = { 'Access-Control-Allow-Origin': '*' }
+  const a = await raspunsCuPuls(Promise.resolve({ status: 200, body: { ok: true } }), cors, { primaMs: 50 })
+  assertEquals(a.headers.get('content-type'), 'application/json'); assertEquals(a.headers.get('access-control-allow-origin'), '*'); await a.body?.cancel()
+  const b = await raspunsCuPuls(dupa(40, { status: 200, body: { ok: true } }), cors, { primaMs: 5, pulsMs: 10 })
+  assertEquals(b.headers.get('content-type'), 'application/json'); assertEquals(await b.json(), { ok: true })
+})
