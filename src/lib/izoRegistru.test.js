@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { serieCanon, dimensiuneDinRegistru, patchDinRegistru, indexFolosite, sugestiiRegistru, cheieBucata, citesteTot, paznicCereri } from './izoRegistru.js'
+import { serieCanon, dimensiuneDinRegistru, patchDinRegistru, indexFolosite, sugestiiRegistru, cheieBucata, citesteTot, paznicCereri,
+  reimprospateaza, actualizeazaRandInPachet } from './izoRegistru.js'
 
 // un „query builder” fals: .range(de, la) întoarce felia, cel mult maxRows (ca PostgREST cu max-rows), plus count
 const fals = (randuri, { maxRows = 1000, faraCount = false, golLa = null } = {}) => () => ({
@@ -31,6 +32,58 @@ describe('citesteTot — paginare fără trunchiere tăcută (Jak #824 P1)', () 
   })
   it('listă goală (count 0) → [] fără eroare', async () => {
     expect((await citesteTot(fals([]))).data).toEqual([])
+  })
+})
+
+describe('reimprospateaza — continuarea unei salvări vechi după navigare (Jak #824 r3)', () => {
+  it('pick pe T12 → navighez la T13 → continuarea T12 reîmprospătează T13, nu T12', async () => {
+    const paznic = paznicCereri()
+    const idRef = { current: 'T12' }
+    paznic.porneste()                            // loadAll(T12)
+    let afisat = 'T12'
+    const cerute = []
+    // salvarea pornită pe T12 (UPDATE în zbor)…
+    let gata
+    const update = new Promise(r => { gata = r })
+    const continuare = (async () => {
+      await update
+      await reimprospateaza(idRef, paznic, async id => { cerute.push(id); return id }, d => { afisat = d })
+    })()
+    // …între timp utilizatorul trece pe T13 și loadAll(T13) termină
+    idRef.current = 'T13'; paznic.porneste(); afisat = 'T13'
+    gata(); await continuare
+    expect(cerute).toEqual(['T13'])
+    expect(afisat).toBe('T13')
+  })
+  it('navigare ÎN TIMPUL citirii → răspunsul nu se aplică', async () => {
+    const paznic = paznicCereri()
+    const idRef = { current: 'T12' }
+    paznic.porneste()
+    let afisat = 'T12', gata
+    const p = reimprospateaza(idRef, paznic, () => new Promise(r => { gata = r }), d => { afisat = d })
+    idRef.current = 'T13'; paznic.porneste(); afisat = 'T13'
+    gata('T12'); expect(await p).toBe(false)
+    expect(afisat).toBe('T13')
+  })
+})
+
+describe('actualizeazaRandInPachet — CAS pe pachet (Copilot #824 r3)', () => {
+  const client = (randuriAfectate) => {
+    const apel = {}
+    const q = {
+      update(p) { apel.patch = p; return q },
+      eq(k, v) { apel[k] = v; return q },
+      select() { return Promise.resolve({ data: Array.from({ length: randuriAfectate }, () => ({ id: apel.id })), error: null }) },
+    }
+    return { apel, from(t) { apel.tabel = t; return q } }
+  }
+  it('rândul e încă în pachet → un rând, ok; filtrul pe pachet e trimis', async () => {
+    const c = client(1)
+    expect(await actualizeazaRandInPachet(c, 50, 12, { serie_unica: 'X' })).toEqual({ ok: true })
+    expect(c.apel).toMatchObject({ tabel: 'executie_tevi', id: 50, pachet_id: 12 })
+  })
+  it('rândul a fost mutat de alt utilizator în alt pachet → 0 rânduri → „mutat”, nimic raportat ca scris', async () => {
+    expect(await actualizeazaRandInPachet(client(0), 50, 12, { serie_unica: 'X' })).toEqual({ ok: false, mutat: true })
   })
 })
 

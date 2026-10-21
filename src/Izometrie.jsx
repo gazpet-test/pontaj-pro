@@ -24,7 +24,7 @@ import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
 import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
 import IzoStocTeava from './IzoStocTeava.jsx'
-import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri } from './lib/izoRegistru.js'
+import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri, reimprospateaza, actualizeazaRandInPachet } from './lib/izoRegistru.js'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -622,6 +622,9 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   const cerereRegistru = useRef(0) // cheia cererii curente: răspunsurile întârziate (alt pachet) se ignoră
   // generația încărcării pachetului (loadAll / refetch-uri): un răspuns pentru alt pachet, sosit târziu, nu mai e aplicat
   const paznicPachet = useRef(paznicCereri()).current
+  // pachetul CURENT (refetch-urile pornite din closure-ul unei operații vechi reîncarcă acest pachet, nu pe cel vechi)
+  const pachetIdRef = useRef(pachetId)
+  pachetIdRef.current = pachetId
 
   // proiectul PACHETULUI încărcat (nu prop-ul paginii, care în /izometrie?pachet=… poate fi alt proiect)
   const proiectPachet = pachet?.proiect_id ?? tronson?.proiect_id ?? null
@@ -679,17 +682,21 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     }
     const patch = patchDinRegistru(b)   // la curbe, unghi_curba vine direct din registru (22.5° rămâne 22.5°)
     const original = { ...row }
+    const gen = paznicPachet.actuala(), cheieReg = cerereRegistru.current
     setTevi(prev => prev.map(r => r.id === rowId ? { ...r, ...patch } : r))
     cancelEdit()
     setSaving(true)
-    const { error } = await supabase.from('executie_tevi').update(patch).eq('id', rowId)
+    // CAS pe pachet: scrie doar dacă rândul e încă în pachetul afișat (alt utilizator l-ar fi putut muta)
+    const rez = await actualizeazaRandInPachet(supabase, rowId, pachet.id, patch)
     setSaving(false)
-    if (error) {
-      setTevi(prev => prev.map(r => r.id === rowId ? original : r))
-      onError(`Eroare salvare: ${error.message}`)
+    if (!rez.ok) {
+      if (paznicPachet.curenta(gen)) setTevi(prev => prev.map(r => r.id === rowId ? original : r))
+      onError(rez.mutat ? 'Rândul a fost mutat în alt pachet între timp — nu am scris nimic; reîncarc' : `Eroare salvare: ${rez.error.message}`)
+      if (rez.mutat && paznicPachet.curenta(gen)) loadAll()
       return
     }
-    await Promise.all([refetchPachet(), refetchTevi(), loadFolosite()])
+    if (!paznicPachet.curenta(gen)) return   // între timp s-a deschis alt pachet: nu reîmprospătez nimic pe vechiul
+    await Promise.all([refetchPachet(), refetchTevi(), loadFolosite(cheieReg)])
     debouncedValidate(rowId, 'serie_unica', b.serie)
     onSuccess(`Din registru: ${b.serie}`)
   }
@@ -738,18 +745,16 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   // ───────── Refetch pachet (după save țeavă, trigger recalculează totaluri) ─────────
   async function refetchPachet() {
-    const gen = paznicPachet.actuala()
-    const { data } = await supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single()
-    if (!paznicPachet.curenta(gen) || data?.id !== pachetId) return
-    if (data) { setPachet(data); onPachetChanged && onPachetChanged() }
+    await reimprospateaza(pachetIdRef, paznicPachet,
+      async id => (await supabase.from('executie_pachete_lansare').select('*').eq('id', id).single()).data,
+      data => { if (data) { setPachet(data); onPachetChanged && onPachetChanged() } })
   }
 
   // ───────── Refetch toate țevile (după save, pentru poz_km_m corect din BD) ─────────
   async function refetchTevi() {
-    const gen = paznicPachet.actuala()
-    const { data } = await supabase.from('executie_tevi').select('*').eq('pachet_id', pachetId).order('poz_in_pachet')
-    if (!paznicPachet.curenta(gen)) return
-    if (data) setTevi(data)
+    await reimprospateaza(pachetIdRef, paznicPachet,
+      async id => (await supabase.from('executie_tevi').select('*').eq('pachet_id', id).order('poz_in_pachet')).data,
+      data => { if (data) setTevi(data) })
   }
 
   // ───────── Validare debounced ─────────

@@ -47,6 +47,26 @@ export const paznicCereri = () => {
   return { porneste: () => ++g, actuala: () => g, curenta: (t) => t === g }
 }
 
+// Reîmprospătarea pachetului CURENT, nu a celui din closure-ul operației care o cheamă (Jak #824 r3): o continuare de
+// salvare pornită pe T12 și terminată după trecerea pe T13 reîncarcă T13; un răspuns sosit după altă navigare e ignorat.
+export async function reimprospateaza(idRef, paznic, citeste, aplica) {
+  const id = idRef.current
+  const gen = paznic.actuala()
+  const data = await citeste(id)
+  if (!paznic.curenta(gen) || id !== idRef.current) return false
+  aplica(data)
+  return true
+}
+
+// UPDATE cu CAS pe pachet (Copilot #824 r3): scrie doar dacă rândul e ÎNCĂ în pachetul afișat; exact un rând, altfel
+// „mutat între timp” (alt utilizator l-a mutat în alt pachet) și nimic scris
+export async function actualizeazaRandInPachet(client, rowId, pachetId, patch) {
+  const { data, error } = await client.from('executie_tevi').update(patch).eq('id', rowId).eq('pachet_id', pachetId).select('id')
+  if (error) return { ok: false, error }
+  if (!data || data.length !== 1) return { ok: false, mutat: true }
+  return { ok: true }
+}
+
 // Unghiul ca număr, din registru (numeric) sau din rândul de pachet (text „22.5°” / „30˚” / „22,5”)
 const unghiNum = (u) => {
   if (u == null || u === '') return null
