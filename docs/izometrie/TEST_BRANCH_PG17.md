@@ -1,5 +1,7 @@
 # E2a + 20261102b — testul pe branch-ul Supabase (PG17, postgres NON-superuser): rezultatele brute
 
+> 21.10.2026 seara: 20261102b s-a decuplat în #806b. Rulările de mai jos o includ (istoric). Pentru #806 contează blocurile 0–4.
+
 Ținta: branch Supabase creat de chat din dashboard (fără date), project_ref `bcdrieikeztgablqhfnp`, PostgreSQL 17.11, `postgres` fără SUPERUSER (CREATEROLE, BYPASSRLS). Conexiunea trece prin pooler-ul de sesiune. Parola stă în pgpass, copiat temporar (600), deci nu apare în comenzi sau în log-uri.
 
 Pașii fiecărei rulări:
