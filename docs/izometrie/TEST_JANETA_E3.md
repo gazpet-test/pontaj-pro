@@ -151,7 +151,7 @@ Dacă cifrele sunt bune → **OK**.
 | 8 | 999TS00212 | TS00022 | 912 | 12,07 | 1355 | |
 | 9 | 999TS00213 | TS00023 | 912 | 11,50 | 1291 | |
 | 10 | 999TS00215 | TS00023 | 912 | 12,44 | 1397 | |
-| 11 | 999TS00216 | TS00023 | 912 | 12,22 | 1372 | **L măsurat (m): `12,19`** · **Observație: `măsurat la recepție 12,19 m (pe aviz 12,22 m)`** · decizia rămâne **Primit** |
+| 11 | 999TS00216 | TS00023 | 912 | 12,22 | 1372 | **L măsurat (m): `12,19`** · decizia rămâne **Primit** · observația o scrii **abia la controlul de după salvare** (pasul 5) |
 | 12 | 999TS00218 | TS00023 | 912 | 11,78 | 1323 | |
 | 13 | 999TS00219 | TS00024 | 913 | 12,36 | 1388 | |
 | 14 | 999TS00221 | TS00024 | 913 | 12,02 | 1350 | |
@@ -159,22 +159,27 @@ Dacă cifrele sunt bune → **OK**.
 
 **Ce trebuie să vezi la rândul 7:** decizia scrisă cu roșu, „Refuzat”. Dacă alegi „Refuzat” fără motiv, apare sub rând „⛔ refuzul cere motiv”.
 
-**Ce trebuie să vezi la rândul 11** (aici e controlul important):
-- după ce scrii `12,19` la „L măsurat”, dar **înainte de observație**: sub rând, roșu, „⛔ măsurat 12,19 m față de 12,22 m pe aviz (-30 mm, peste ±10 mm) — scrie observația”, deasupra tabelului „⛔ 1 blocante în ecran”, iar butonul de confirmare rămâne gri cu „Confirmarea: 1 probleme blocante în ecran (roșu).”;
-- după ce scrii observația: mesajele devin galbene:
-  - „⚠️ măsurat 12,19 m față de 12,22 m pe aviz (-30 mm, peste ±10 mm)”
-  - „⚠️ diferență peste toleranță: dacă bucata e neconformă, alege „Neconform → carantină””
-
-  Țeava e bună, doar mai scurtă: **lași Primit**.
+La rândul 11, după ce scrii `12,19` la „L măsurat”, sub rând apare cu roșu „⛔ măsurat 12,19 m față de 12,22 m pe aviz (-30 mm, peste ±10 mm) — scrie observația”. E normal: îl lași așa până la controlul de la pasul 5.
 
 **4. Totalurile de pe document:** **Total metri `180.93`**, **Total kg `20318`**.
 
 **Ce trebuie să vezi:**
 - ambele cartonașe **verzi**: „✓ rânduri: 180,93” și „✓ rânduri: 20.318”. Rândul refuzat intră în sumă: 168,98 + 11,95 = 180,93;
 - sub cartonașe: „15 rânduri: **14 primite** · **1 refuzate** · în registru, disponibil: **168,98 m** după aviz (**168,95 m** cu lungimile măsurate — lungimea bucății = măsurat, altfel aviz)”;
-- deasupra tabelului: „✓ fără blocante în ecran · ⚠️ 2 avertismente”.
+- deasupra tabelului: „⛔ 1 blocante în ecran · ⚠️ 1 avertismente” (amândouă de la rândul 11, care încă n-are observație).
 
-**5–6.** **💾 Salvează draft**, apoi **⬆️ Atașează scan** cu `AVIZ_TEST_2_teava_12m.pdf`.
+**5. 💾 Salvează draft** → „Draft salvat (versiunea …).” Draftul se salvează și cu roșu în ecran; doar confirmarea e oprită.
+
+**Controlul de la rândul 11** (aici e controlul important), imediat după salvare:
+- sub rândul 11, roșu: „⛔ măsurat 12,19 m față de 12,22 m pe aviz (-30 mm, peste ±10 mm) — scrie observația”; deasupra tabelului „⛔ 1 blocante în ecran”; butonul de confirmare e gri, cu „Confirmarea: 1 probleme blocante în ecran (roșu).”. (Înainte de salvare, lângă buton scrie „salvează draftul…” sau „ai modificări nesalvate…” — de aceea controlul se face după salvare.)
+- acum scrie la rândul 11 **Observație: `măsurat la recepție 12,19 m (pe aviz 12,22 m)`**. Mesajele devin galbene:
+  - „⚠️ măsurat 12,19 m față de 12,22 m pe aviz (-30 mm, peste ±10 mm)”
+  - „⚠️ diferență peste toleranță: dacă bucata e neconformă, alege „Neconform → carantină””
+
+  iar deasupra tabelului: „✓ fără blocante în ecran · ⚠️ 2 avertismente”. Țeava e bună, doar mai scurtă: **lași Primit**.
+- **💾 Salvează draft** din nou.
+
+**6.** **⬆️ Atașează scan** cu `AVIZ_TEST_2_teava_12m.pdf`.
 
 **7.** **🔎 Verifică** → „Verificat: fără blocante (1 avertismente). Poți confirma recepția.” În cadrul serverului:
 > ⚠️ rândul 11: măsurat 12190 mm față de 12220 mm pe document (peste ±10 mm) (toleranta_lungime)
@@ -267,7 +272,8 @@ Pentru fiecare document din listă (AVIZ 1, AVIZ 2, LISTA):
 1. apasă **„Deschide”** pe rândul documentului;
 2. apasă **„📝 Pune PV”** (butonul albastru, jos);
 3. în fereastră scrie **Nr. PV `PV-TEST-1`** (același număr pe toate trei, sau cel pe care ți-l dă coordonatorul). **Data PV** rămâne data de azi;
-4. apasă **„Pune PV”**.
+4. apasă **„Pune PV”**;
+5. citești mesajul (tabelul de mai jos), apoi **← Lista** (documentul rămâne deschis după PV) și treci la documentul următor.
 
 **Ce trebuie să vezi:**
 
@@ -301,9 +307,9 @@ Dacă ați făcut exercițiul din §2.4, mai e un rând gri, „Anulat”, iar a
 | Carantină (nedisponibil) | TIZ | — | — | — | 1 buc |
 
 - lista, fără filtre: **„41 bucăți · 259,70 m”**;
-- căutare **`00210`** (țeava refuzată): „Nimic pentru filtrele alese.”;
+- căutare **`00210`** (țeava refuzată), în câmpul „🔍 Serie (ultimele cifre) / șarjă”: „Nimic pentru filtrele alese.”;
 - căutare **`00216`**: o țeavă, **L 12,19**, aviz intrare TEST-2610222;
-- filtrul **„Carantină (nedisponibil)”**: 1 bucată, **9006**, tip „curbe 30°”.
+- **golește căutarea** (căutarea și filtrul se adună: cu `00216` rămas în câmp, lista de carantină iese goală), apoi filtrul **„Carantină (nedisponibil)”**: 1 bucată, **9006**, tip „curbe 30°”.
 
 PV-ul nu schimbă nimic în 🧱: „sosit” și „recepționat” intră amândouă la „Disponibil (în depozit)”. Kilogramele nu apar în 🧱 — le verifici doar pe documente și pe hârtie.
 
@@ -327,7 +333,7 @@ Coordonatorul = sesiunea de chat împreună cu Răzvan. Tot ce scrie în baza de
 | 1 | Migrarea **20261103b LIVE** (PR #825 aplicat de chat, cu „da”). Ordinea: întâi migrarea, apoi UI-ul | P1: `rpc_e3` = 5, `bucket` = 1, `porti_lipsa` = 0 |
 | 2 | **PR #826 (UI) merged** și deployat de Vercel (~3 min) | în ERP, Magazie are tab-ul „🧾 Documente de intrare”; Ctrl+Shift+R |
 | 3 | **Proiectul de test creat** cu „da”-ul lui Răzvan: `scripts/izometrie/test_izo_1_creare.sql` (pe `origin/izometrie/e3`), ca postgres, sesiune directă (pooler 5432) | P1: `proiect_id` nenul; depozitul `TIZ` pe site-ul proiectului |
-| 4 | **Activarea pe calea E3**: atribuirea Janetei + nivelul `stoc`, **fără import** (§2.2) | P1: `nivel` = `stoc`, `janeta_gestionar` = 1, `bucati` = 0, `documente` = 0 |
+| 4 | **Activarea pe calea E3**: atribuirea Janetei + nivelul `stoc`, **fără import** (§2.2) | P1: `nivel` = `stoc`, `janeta_gestionar` = 1, `bucati` = 0, `bucati_vii` = 0, `documente` = 0 (varianta A din §2.2: `bucati` = 41, toate `anulata`, `bucati_vii` = 0) |
 | 5 | Janeta are **Magazie la nivel editor sau admin** (verificat 21.10.2026: `editor`) | P1: `janeta_magazie` ∈ {editor, admin} |
 | 6 | Materialele Janetei: cele 3 documente tipărite (A4, „dimensiune reală”; lista e pe orizontală), notele ei de recepție pe hârtie (fișa, pașii a–d), PDF-urile pentru scan (`C:\Users\Public\claude-server\pv_test\*.pdf`, ~67 KB fiecare) | — |
 | 7 | Snapshot-ul „înainte” pentru celelalte proiecte | Q-ALTE (§2.3), rezultatul păstrat pentru comparația de la final |
@@ -350,7 +356,8 @@ SELECT
       AND a.valabil_de <= current_date AND (a.valabil_pana IS NULL OR a.valabil_pana >= current_date)) AS janeta_gestionar, -- 1
   (SELECT u.access_level FROM public.user_module_access u
     WHERE u.profile_id = '70d6bb90-d920-4768-a758-1a0df99853b2' AND u.module = 'magazie')            AS janeta_magazie,  -- editor / admin
-  (SELECT count(*) FROM public.magazie_bucati b WHERE b.proiect_id = p.id)                          AS bucati,          -- 0
+  (SELECT count(*) FROM public.magazie_bucati b WHERE b.proiect_id = p.id)                          AS bucati,          -- 0 (varianta A: 41)
+  (SELECT count(*) FROM public.magazie_bucati b WHERE b.proiect_id = p.id AND b.stare <> 'anulata') AS bucati_vii,      -- 0
   (SELECT count(*) FROM public.izo_documente_intrare d WHERE d.proiect_id = p.id)                   AS documente        -- 0
 FROM public.executie_proiecte p WHERE p.cod_intern = 'TEST-IZO';
 ```
@@ -366,7 +373,7 @@ Pentru testul E3 se rulează **doar** atribuirea + nivelul, fără import. **Pro
 \set ON_ERROR_STOP on
 SELECT 'PREVIEW' AS pas,
        (SELECT cod_intern FROM public.executie_proiecte WHERE id = :proiect_id)                AS proiect,       -- TEST-IZO
-       (SELECT name FROM public.logistica_depozite WHERE id = :depozit_id)                     AS depozit,       -- DM TEST IZO
+       (SELECT cod_3litere || ' — ' || name FROM public.logistica_depozite WHERE id = :depozit_id) AS depozit,   -- TIZ — DM TEST IZO
        (SELECT d.site_id = p.site_id FROM public.logistica_depozite d, public.executie_proiecte p
          WHERE d.id = :depozit_id AND p.id = :proiect_id)                                       AS pe_site,       -- true
        public.fn_izo_nivel(:proiect_id)                                                         AS nivel_inainte, -- off
@@ -374,6 +381,10 @@ SELECT 'PREVIEW' AS pas,
        (SELECT count(*) FROM public.izo_atribuiri WHERE proiect_id = :proiect_id)               AS atribuiri;     -- 0
 BEGIN;
 SELECT 1 / (CASE WHEN (SELECT cod_intern FROM public.executie_proiecte WHERE id = :proiect_id) = 'TEST-IZO' THEN 1 ELSE 0 END) AS e_proiectul_de_test;
+-- garda depozitului, tot în tranzacție (preview-ul doar arată): TIZ și pe site-ul proiectului, altfel 1/0 → ROLLBACK
+SELECT 1 / (CASE WHEN EXISTS (SELECT 1 FROM public.logistica_depozite d JOIN public.executie_proiecte p ON p.id = :proiect_id
+                               WHERE d.id = :depozit_id AND d.cod_3litere = 'TIZ' AND d.site_id = p.site_id)
+            THEN 1 ELSE 0 END) AS e_depozitul_tiz_pe_site;
 INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, depozit_id, acordat_de, motiv)
 VALUES (:proiect_id, '70d6bb90-d920-4768-a758-1a0df99853b2', 'gestionar', :depozit_id, 'Razvan Trusu',
         'Gestionar pe depozitul de TEST (testul de recepție E3, documente fictive)')
@@ -386,9 +397,10 @@ COMMIT;
 ```
 
 Dacă `test_izo_2` a rulat deja (P1 arată `bucati` = 41), testul E3 pe aceleași documente nu merge. Variantele, de decis de Răzvan:
-- **A** — storno pe import: `fn_izo_import_storno(<proiect>, 'test-receptie-1', <motiv>)`, ca postgres, cu „da”. Cele 41 de bucăți devin `anulata` (istoricul rămâne), seriile se eliberează, apoi testul E3. În 🧱, bucățile anulate nu apar la „Disponibil” și nici în listă (fără filtru);
-- **B** — documente de test regenerate, cu alte serii (`gen/gen_pv_test.py`), apoi fișa refăcută;
-- **C** — testul E3 se face pe alt proiect de test.
+- **A** — storno pe import: `fn_izo_import_storno(<proiect>, 'test-receptie-1', <motiv>)`, ca postgres, cu „da”. Cele 41 de bucăți devin `anulata` (bucățile, importul și evenimentul lui `sold_initial` rămân, plus un eveniment `storno` cu 41 de mișcări), seriile se eliberează, apoi testul E3. Activarea de mai sus **nu se mai rulează**: atribuirea Janetei și nivelul `stoc` există deja din `test_izo_2` (un al doilea INSERT ar pica pe indexul atribuirii active). Rezultatele așteptate din §2.3 se citesc cu corecția „Varianta A” de acolo. În 🧱, bucățile anulate nu apar la cartonașe, în tabelul pe loc × tip și nici în listă (fără filtru), deci §1.5 rămâne valabil;
+- **B** — documente de test regenerate, cu alte serii (`gen/gen_pv_test.py`), apoi fișa și acest ghid refăcute (seriile și cifrele; cele 41 de bucăți ale importului rămân vii pe proiect și intră în 🧱 și în Q-REG / Q-EV).
+
+Un alt proiect de test **nu** rezolvă coliziunea: indexurile `ux_magbuc_izo_radacina` / `ux_magbuc_izo_curba` și verificarea E3 (`serie_in_registru` / `curba_in_registru`) nu au proiectul în cheie, deci bucățile vii ale importului de pe TEST-IZO blochează confirmarea acelorași serii pe orice proiect. Doar A sau B merg.
 
 ### 2.3 Verificările SQL după fiecare pas (doar citire)
 
@@ -448,9 +460,16 @@ SELECT (SELECT count(*) FROM public.izo_documente_intrare d WHERE d.proiect_id <
        (SELECT count(*) FROM public.magazie_bucati_evenimente e
          WHERE e.tip IN ('intrare_aviz', 'intrare_lista_ambalare', 'receptie_pv') AND e.proiect_id <> (SELECT id FROM p)) AS ev_e3_alte_proiecte,
        (SELECT count(*) FROM public.magazie_bucati b WHERE b.provenienta = 'beneficiar' AND b.proiect_id <> (SELECT id FROM p)) AS bucati_alte_proiecte,
-       (SELECT count(*) FROM public.magazie_bucati_evenimente e WHERE e.proiect_id <> (SELECT id FROM p))           AS evenimente_alte_proiecte;
+       (SELECT count(*) FROM public.magazie_bucati_evenimente e WHERE e.proiect_id <> (SELECT id FROM p))           AS evenimente_alte_proiecte,
+       -- amprentele: md5 pe conținutul întreg al rândurilor (orice coloană schimbată, inclusiv updated_at, schimbă amprenta)
+       (SELECT md5(coalesce(string_agg(b::text, '|' ORDER BY b.id), '')) FROM public.magazie_bucati b
+         WHERE b.provenienta = 'beneficiar' AND b.proiect_id <> (SELECT id FROM p))                                 AS amprenta_bucati_alte,
+       (SELECT md5(coalesce(string_agg(e::text, '|' ORDER BY e.id), '')) FROM public.magazie_bucati_evenimente e
+         WHERE e.proiect_id <> (SELECT id FROM p))                                                                  AS amprenta_ev_alte,
+       (SELECT md5(coalesce(string_agg(m::text, '|' ORDER BY m.id), '')) FROM public.magazie_bucati_miscari m
+         WHERE m.proiect_id <> (SELECT id FROM p))                                                                  AS amprenta_miscari_alte;
 ```
-Primele două sunt 0 cât timp nu există o recepție E3 reală. Ultimele două trebuie să fie **identice înainte și după** test (dacă în paralel nu lucrează nimeni pe LOT 2 — altfel compari pe proiect).
+Primele două sunt 0 cât timp nu există o recepție E3 reală. Ultimele două numărători și cele trei amprente trebuie să fie **identice înainte și după** test (dacă în paralel nu lucrează nimeni pe LOT 1 / LOT 2 — altfel compari pe proiect). Numărătorile singure arată doar că nu s-au adăugat sau șters rânduri; amprentele arată și că rândurile existente n-au fost modificate.
 
 **Rezultatele așteptate, pe puncte de control** (fără exercițiul din §2.4; efectul lui e trecut acolo):
 
@@ -462,6 +481,12 @@ Primele două sunt 0 cât timp nu există o recepție E3 reală. Ultimele două 
 | C2 | avizul 2 confirmat | + TEST-2610222 `confirmat`: 15 · 14 primit · 1 refuzat · **14** cu_bucata | `sosit` teava **29** · **259,70** · 259,73 | `intrare_aviz` 2 ev · 29 mișcări |
 | C3 | lista confirmată | + lista_ambalare_curbe TRUCK TEST 1 `confirmat`: 12 · 11 primit · 1 neconform · **12** cu_bucata | + `sosit` curba **11** · 0 · 0; `carantina` curba **1** · 0 · 0 | + `intrare_lista_ambalare` 1 ev · 12 mișcări |
 | C4 | PV pe toate 3 | `pv_nr` = PV-TEST-1 pe toate 3 | `receptionat` teava **29** · 259,70 · 259,73; `receptionat` curba **11**; `carantina` curba **1**; **niciun `sosit`** | + `receptie_pv` 3 ev · **40** mișcări (15 + 14 + 11) |
+
+**Varianta A** (§2.2: `test_izo_2` a rulat, apoi storno pe import, înainte de Janeta). Bucățile importului rămân pe proiect ca `anulata`, cu evenimentele lor, deci tabelul de mai sus se citește cu aceste corecții, la **fiecare** punct C0–C4:
+- **Q-REG** are în plus, neschimbate pe tot testul: `anulata` teava **29** · 259,73 · 259,73 (importul păstra lungimea de pe aviz) și `anulata` curba **12** · 0 · 0. La C0 acestea sunt singurele rânduri („niciun rând” din tabel = niciun rând în afara lor);
+- **Q-EV** are în plus: `sold_initial` 1 ev · 41 mișcări și `storno` 1 ev · 41 mișcări;
+- **Q-DOC**, **Q-SPEC**, **Q-ALTE** și ce vede Janeta în 🧱 (§1.5) nu se schimbă. Doar filtrul „Anulat (storno)” din 🧱 arată cele 41 de bucăți anulate;
+- la final, pe TEST-IZO: **82** de bucăți (41 anulate + 41 din E3), **8** evenimente, **163** de mișcări (față de 41 / 6 / 81 fără storno).
 
 **Q-SPEC la C3 / C4** — exact 3 rânduri:
 
@@ -493,22 +518,22 @@ Scopul: Janeta vede că o ciornă greșită se anulează cu motiv, fără urme �
 2. Vede: „Salvare eșuată: există deja un document viu (draft sau confirmat) cu același furnizor, număr și dată — deschide-l din listă; un document anulat se poate reintroduce”.
 3. **← Lista** → „Ai modificări nesalvate. Închizi fără să salvezi?” → **OK**. Verificare: Q-DOC are același număr de rânduri ca înainte.
 
-**Exercițiul C — total greșit** (fără urme; pe avizul 2, înainte de confirmare):
+**Exercițiul C — total greșit** (registrul nu e atins; pe avizul 2, după controlul de la rândul 11, înainte de confirmare):
 1. La „Total metri” scrie `180.39` în loc de `180.93`. Cartonașul devine **roșu**, „✗ rânduri: 180,93”, iar deasupra tabelului „⛔ 1 blocante în ecran”.
-2. **🔎 Verifică** → „Verificarea serverului are blocante — vezi lista de sub tabel.” și „⛔ total m pe document 180.390 ≠ suma rândurilor 180.930 (total_m)”. „✅ Confirmă recepția” rămâne gri.
-3. Corectează în `180.93` → **🔎 Verifică** din nou → verde. Se continuă normal (§1.2, pasul 8).
+2. **🔎 Verifică** → „Verificarea serverului are blocante — vezi lista de sub tabel.” și „⛔ total m pe document 180.390 ≠ suma rândurilor 180.930 (total_m)”. „✅ Confirmă recepția” rămâne gri. Atenție: „Verifică” **salvează întâi** modificările din ecran, deci totalul greșit ajunge în draft (versiunea crește). Nu strică nimic: draftul se rescrie la pasul următor.
+3. Corectează în `180.93` → **🔎 Verifică** din nou (salvează corecția, încă o versiune) → verde. Se continuă normal (§1.2, pasul 8). Urma rămasă: doar numărul de versiune al draftului; în registru, nimic.
 
 **Ce nu se exersează în test:** anularea unui document **confirmat**. Asta e doar administrativă (`fn_izo_doc_anuleaza`, ca postgres, cu „da”): storno pe PV, apoi pe intrare, iar bucățile devin `anulata`. Lasă evenimente permanente, deci se face doar dacă Răzvan vrea explicit să testeze storno-ul.
 
-### 2.5 Curățenia — ce rămâne după test (nimic nu se șterge)
+### 2.5 Curățenia — ce rămâne după test (documentele și istoricul registrului rămân)
 
-- **Documentele:** ciornele anulate rămân `anulat` (gri în listă, cu motivul). Documentele confirmate rămân `confirmat` pentru totdeauna. Niciun DELETE nu e prevăzut: tabelele `izo_documente_*` au FK `ON DELETE RESTRICT`, iar registrul e doar-adaugă.
-- **Registrul:** cele 41 de bucăți, cele 6 evenimente și cele 81 de mișcări rămân pe TEST-IZO. Se pot doar storna administrativ (vezi mai sus). Nivelul proiectului nu mai coboară la `off` după primul eveniment.
-- **Scanurile** rămân în bucket-ul `izo-documente`: un fișier aflat în manifestul unui document nu se poate șterge, iar după confirmare manifestul nu se mai schimbă. Scanurile ciornelor anulate rămân și ele.
+- **Documentele** rămân toate, fiecare cu starea lui: ciornele anulate `anulat` (gri în listă, cu motivul), documentele confirmate `confirmat`. Un document confirmat devine `anulat` doar printr-un storno administrativ (`fn_izo_doc_anuleaza`, cu „da”); rândul documentului rămâne și atunci. Niciun DELETE pe documente nu e prevăzut: tabelele `izo_documente_*` au FK `ON DELETE RESTRICT`, iar evenimentele și mișcările registrului doar se adaugă. **Nu** rămâne fiecare stare intermediară: la fiecare salvare a unei ciorne, rândurile și lista ei de scanuri se rescriu (se păstrează doar ultima versiune salvată).
+- **Registrul:** cele 41 de bucăți, cele 6 evenimente și cele 81 de mișcări rămân pe TEST-IZO (varianta A: 82 / 8 / 163, vezi §2.3). Se pot doar storna administrativ (vezi mai sus). Nivelul proiectului nu mai coboară la `off` după primul eveniment.
+- **Scanurile** din manifestul unui document rămân în bucket-ul `izo-documente`: cât e în manifest, fișierul nu se poate șterge, iar după confirmare sau anulare manifestul nu se mai schimbă (deci rămân scanurile documentelor confirmate și ale ciornelor anulate). Ecranul șterge însă fișierul unui scan scos dintr-o ciornă („Scoți scanul din document?”) și pe cel rămas orfan când salvarea cu scanul eșuează.
 - **Seriile 999TS… și curbele 9001–9012 rămân ocupate în tot registrul** (indexurile de unicitate sunt globale). Un al doilea test cu aceleași documente cere fie storno administrativ pe cele 3 documente (cu „da”), fie documente regenerate cu alte serii.
 - **Proiectul TEST-IZO**, site-ul, depozitul TIZ, rândul din `magazii` și notificarea „Proiect nou fără contract” trimisă owner-ilor (efectele `test_izo_1`) rămân. Rapoartele care adună toate proiectele ar trebui să poată ascunde TEST-IZO (filtru pe `cod_intern`, propus în E3_PLAN §6).
 - **Atribuirea Janetei** pe TEST-IZO rămâne activă până decide Răzvan. Retragerea (`activ = false` sau `valabil_pana`) e tot o schimbare de drept de acces, deci se face cu „da”-ul lui, nu din oficiu.
-- **LOT 1 / LOT 2:** neatinse. Dovada: Q-ALTE are aceleași cifre înainte și după.
+- **LOT 1 / LOT 2:** neatinse. Dovada: Q-ALTE are aceleași numărători **și aceleași trei amprente** (md5 pe conținutul rândurilor) înainte și după. Fără amprente, aceleași numărători dovedesc doar că nu s-au adăugat sau șters rânduri.
 
 ### 2.6 După test
 
