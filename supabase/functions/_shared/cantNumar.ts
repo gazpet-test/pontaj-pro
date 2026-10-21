@@ -248,7 +248,9 @@ function subMarcajPagina(doc: string, a: number): boolean {
 // articol numerotat CU zerouri („003 6701152 M 200.000”), o linie „<n> COD <cod>” cu n FĂRĂ zerouri care NU continuă secvența (n nu e
 // nr. articolului, următorul sau 1) e continuarea denumirii rupte („… DN 90X8.” / „2 COD 64000115”), nu început de articol. Orice altă
 // formă rămâne început de articol (blocul se oprește → incert). Verificările de cod / cantitate / UM de dedesubt se aplică în continuare.
-const RE_CONTINUARE_COD = /^\s*(\d{1,4})\s+COD\s+\S/i
+// review Jakarinos #819 r4 (P1): TOATĂ linia — cifra, „COD”, codul (alfanumeric) și cel mult coloane de preț („0.00 0.00”); orice alt text
+// pe linie („2 COD 64000115 TEAVA PE DN110”) = nu e continuare
+const RE_CONTINUARE_COD = /^\s*(\d{1,4})\s+COD\s+[A-Z0-9]{3,20}(?:\s+\d+[.,]\d{2})*\s*$/i
 const RE_NR_ARTICOL = /^\s*\**\s*(\d{1,4})[.)]?\s/
 // review Copilot #819 r1 (P1): numărul care nu continuă secvența NU ajunge singur (un restart real „003” → „2 COD …” fără cantitate ar
 // înghiți denumirea articolului 2). Se cere și semnalul POZITIV al formei rupte reale: linia de DEASUPRA, din bloc (nu linia articolului),
