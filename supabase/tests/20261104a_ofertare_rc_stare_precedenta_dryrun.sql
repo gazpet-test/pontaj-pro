@@ -30,8 +30,8 @@ DECLARE
     ['procesat_alta_analiza',     'procesat',   '{"rezumat":"x"}',        'TE 20261104a', '-',      'nu', '-',       'perechi_necitite'],
     ['neprocesat',                'neprocesat', NULL,                     'TF 20261104a', '-',      'nu', '-',       'necitit'],
     ['in_lucru',                  'in_lucru',   NULL,                     'TG 20261104a', '-',      'nu', '-',       'necitit'],
-    ['eroare',                    'eroare',     NULL,                     'TH 20261104a', '-',      'nu', '-',       'necitit'],
-    ['status_null',               NULL,         NULL,                     'TI 20261104a', '-',      'nu', '-',       'necitit']];
+    ['eroare',                    'eroare',     NULL,                     'TH 20261104a', '-',      'nu', '-',       'necitit']];
+  -- status_procesare e NOT NULL + CHECK (6 valori, toate acoperite mai sus) — ramura „NULL / necunoscut” e doar fail-closed, nu se poate insera
   v_sha text; v_prov text;
 BEGIN
   PERFORM set_config('gazpet.livrare_migrare', '20261104a_ofertare_rc_stare_precedenta:' || txid_current(), true);
