@@ -256,10 +256,24 @@ const RE_NR_ARTICOL = /^\s*\**\s*(\d{1,4})[.)]?\s/
 // O SINGURĂ cifră — zecimala ei („90X8.” + „2” = „90X8.2”). review Copilot r2 (P1): un simplu „cifră + punct” („TEAVA PE DN63.”) nu ajunge
 const RE_COLOANE_PRET = /(?:\s+\d+[.,]\d{2})+\s*$/
 const RE_DIMENSIUNE_TAIATA = /\d+[xX]\d+\.$/
-function continuareCod(linieArticol: string, l: string, anterioara: string | null): boolean {
+// review Copilot r3 (P1): și „<n> COD <cod>” trebuie să fie ULTIMA linie cu text a blocului — între ea și „Total=” doar linii fără
+// litere (coloane de preț „0.90 513.00”), în cel mult `rest` linii; un restart real are denumirea lui DEDESUBT („TEAVA PE DN110”) → incert
+function ultimaLinieCuText(doc: string, dupa: number, rest: number): boolean {
+  let p = dupa
+  for (let k = 0; k < rest && p < doc.length; k++) {
+    const a = p + 1, b0 = doc.indexOf('\n', a), b = b0 < 0 ? doc.length : b0
+    const l = doc.slice(a, b)
+    if (RE_TOTAL_RAND.test(l)) return true
+    if (!l.trim() || /\p{L}/u.test(l)) return false
+    p = b
+  }
+  return false
+}
+function continuareCod(linieArticol: string, l: string, anterioara: string | null, doc: string, sfarsitL: number, rest: number): boolean {
   const mc = RE_CONTINUARE_COD.exec(l), ma = RE_NR_ARTICOL.exec(linieArticol)
   if (!mc || !ma || !/^0\d/.test(ma[1]) || !/^[1-9]$/.test(mc[1]) || anterioara === null) return false
   if (!RE_DIMENSIUNE_TAIATA.test(anterioara.replace(RE_COLOANE_PRET, '').trimEnd())) return false
+  if (!ultimaLinieCuText(doc, sfarsitL, rest)) return false
   const na = Number(ma[1]), nc = Number(mc[1])
   return ![na, na + 1, 1].includes(nc)
 }
@@ -328,7 +342,7 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
     const b = b0 < 0 ? doc.length : b0
     const l = doc.slice(a, b)
     if (RE_TOTAL_RAND.test(l)) return k === 0 ? doarLinia : { linie, bloc: doc.slice(ls, pana), de_la: ls, pana_la: pana, continuare: true }
-    if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || (RE_INCEPUT_ARTICOL.test(l) && !continuareCod(linie, l, anterioara))) return doarLinia
+    if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || (RE_INCEPUT_ARTICOL.test(l) && !continuareCod(linie, l, anterioara, doc, b, LINII_CONTINUARE - k))) return doarLinia
     // review Jakarinos r2 (P1): un articol fără nr. și fără UM („SA11H1 120.000”) nu e continuare — linia care începe cu un cod sau
     // conține o cantitate în formatul listei (trei zecimale: „120.000”) oprește blocul (incert → doar linia cantității)
     if (codComparabil(l.trim().split(/\s+/)[0]) !== null || /(?<![\d.,])\d+\.\d{3}(?![\d.,])/.test(l)) return doarLinia
