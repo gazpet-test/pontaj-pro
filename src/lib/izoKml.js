@@ -219,12 +219,16 @@ export function cumulat(ax) {
   return c
 }
 
-// Punctele poliliniei la cel mult `pas_m` unul de altul (vârfurile incluse).
-export function esantioneaza(l, pas_m) {
+// Punctele poliliniei la cel mult `pas_m` unul de altul (vârfurile incluse). Pasul are un minim (0,5 m), iar numărul
+// total de puncte o limită: o linie patologic de lungă (sau un pas prea mic) dă EroareKml, nu blochează browserul.
+export function esantioneaza(l, pas_m, { max_puncte = 200000 } = {}) {
   if (!l.length) return []
+  const pas = Math.max(0.5, Number(pas_m) || 0)
+  const total = Math.ceil(lungimeLinie(l) / pas) + l.length
+  if (total > max_puncte) throw new EroareKml('esantionare_prea_mare', `eșantionarea ar cere ${total} puncte (maxim ${max_puncte}); linia e prea lungă pentru verificare`)
   const out = [l[0]]
   for (let i = 1; i < l.length; i++) {
-    const n = Math.max(1, Math.ceil(haversine(l[i - 1], l[i]) / pas_m))
+    const n = Math.max(1, Math.ceil(haversine(l[i - 1], l[i]) / pas))
     for (let k = 1; k <= n; k++) out.push([l[i - 1][0] + (l[i][0] - l[i - 1][0]) * k / n, l[i - 1][1] + (l[i][1] - l[i - 1][1]) * k / n])
   }
   return out
@@ -270,7 +274,7 @@ export function compuneAx(linii, { toleranta_m = 5, gol_max_m = 10 } = {}) {
       // pe ax nu se aruncă tăcut — traseul e ambiguu, îl decide omul
       // se verifică și interiorul segmentelor (pas ≤ toleranța), nu doar vârfurile: o coardă
       // între două vârfuri de pe ax poate tăia un cot al axului la sute de metri de el
-      const iese = esantioneaza(l, Math.min(toleranta_m, 5)).map(v => proiecteaza(ax, v, cum).lateral).reduce((a, b) => Math.max(a, b), 0)
+      const iese = esantioneaza(l, Math.max(0.5, Math.min(toleranta_m, 5))).map(v => proiecteaza(ax, v, cum).lateral).reduce((a, b) => Math.max(a, b), 0)
       if (iese >= toleranta_m) throw new EroareKml('ax_ocolire', `linia ${li + 1} a axului pleacă de pe ax și revine pe el (se depărtează până la ${Math.round(iese)} m): alege explicit varianta de traseu`)
       jurnal.push({ linie: li + 1, adaugat_m: 0, taiat_m: 0, nota: 'conținută în ax' })
       continue

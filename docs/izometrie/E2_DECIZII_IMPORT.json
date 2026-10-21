@@ -1,0 +1,411 @@
+{
+  "_descriere": "Deciziile OAMENILOR pentru importul soldului inițial LOT 2 (preview_e2_stoc.mjs). Gol = nimic decis încă: preview-ul listează ce trebuie decis. Fiecare decizie se scrie cu autorul și data în _jurnal.",
+  "_jurnal": [
+    {
+      "data": "2026-10-21",
+      "autor": "Razvan Trusu (prin sesiunea de chat)",
+      "decizie": "4) corectii_serie: cele 23 de serii 2545CA… → 254CA… (se scoate „5”-ul în plus), cu nota „corectat din 2545CA, confirmat de Razvan 21.10.2026”; revalidate cu RE_SERIE_TEAVA."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Razvan Trusu (prin sesiunea de chat)",
+      "decizie": "5) 254CA09771 („MARCAJ”) și 247EK08658 („LIPSA MARCAJ”) intră, marcate NECONFORME, cu observația păstrată."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "—",
+      "decizie": "DESCHISE (întrebat managerul de proiect): 1) „ORSOVA (TOPLET)”, 2) Topleț fără DT/OS, 3) curbele „16-17”, 6) curba 362. Grup NOU apărut după review r1: Jupânești „DM JUPANESTI/BALVANESTI” (120, originea țevilor de pe T12)."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Razvan Trusu (prin chat)",
+      "decizie": "„ORSOVA (TOPLET)” (206) → TOP / 11, inclusiv neconformele 58 / 596."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Toma Razvan (MP), cu Razvan Trusu (C:\\Users\\Public\\claude-server\\RASPUNSURI_MP_LOT2_2110.md)",
+      "decizie": "385 fără DT/OS → TOP; 120 „DM JUPANESTI/BALVANESTI” → origine JUP, notă „descărcate excepțional la Bâlvănești”, fără mișcări LOT 1; neconforme 58/596 în carantină la TOP, nedisponibile la montaj; curbe CJPT 0001–0003 → TR16, CJPT 0004 → TR17, CJPT 0026 împărțit (362 + cele cu TR16 → TR16; 102/118/131/157/966/1027 → TR17); curba 1198 în stoc la TOP (fără ieșire); corecții de date (8 țevi T2 → 05.09.2026, CJPJ 0041–0046 → 17.10.2026, curba 130 → 16.06.2026); PV L3 86188 / 16.10.2026."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Toma Razvan (MP), confirmat de Razvan Trusu (prin chat)",
+      "decizie": "r618 247EK07330: data ieșirii 12.06.2026; r1277 247EK06377: ieșire integrală (diferența de 1 cm = rotunjire)."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Izometrie (review #807 r3)",
+      "decizie": "neconformele 58/596 intră cu stare „carantina” (server-side, nedisponibile), nu doar cu notă — decizia MP din 21.10."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Izometrie (review #807 r4)",
+      "decizie": "corecțiile pe loturi de rânduri trec pe perechi {rand, serie} (seria de control citită din Excel); r618 păstrează seria de control."
+    }
+  ],
+  "corectii_serie": {
+    "2545CA08776": {
+      "serie": "254CA08776",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA08812": {
+      "serie": "254CA08812",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09079": {
+      "serie": "254CA09079",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09082": {
+      "serie": "254CA09082",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09230": {
+      "serie": "254CA09230",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09241": {
+      "serie": "254CA09241",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09256": {
+      "serie": "254CA09256",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09276": {
+      "serie": "254CA09276",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09658": {
+      "serie": "254CA09658",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09671": {
+      "serie": "254CA09671",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09695": {
+      "serie": "254CA09695",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09702": {
+      "serie": "254CA09702",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09782": {
+      "serie": "254CA09782",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09790": {
+      "serie": "254CA09790",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09791": {
+      "serie": "254CA09791",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09171": {
+      "serie": "254CA09171",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09196": {
+      "serie": "254CA09196",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09215": {
+      "serie": "254CA09215",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09637": {
+      "serie": "254CA09637",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09747": {
+      "serie": "254CA09747",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09748": {
+      "serie": "254CA09748",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09749": {
+      "serie": "254CA09749",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09750": {
+      "serie": "254CA09750",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    }
+  },
+  "excluderi": [],
+  "depozit_grup": {
+    "Topleț · DT/OS „ORSOVA (TOPLET)”": "TOP",
+    "Topleț · DT/OS „—”": "TOP",
+    "Jupânești · DT/OS „DM JUPANESTI/BALVANESTI”": {
+      "cod": "JUP",
+      "nota": "descărcate excepțional la Bâlvănești (origine DM Jupânești, LOT 2)"
+    }
+  },
+  "tronson_grup": {},
+  "accepta_neconformitate": [
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "rand": 58,
+      "serie": "254CA09771",
+      "motiv": "„MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”",
+      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj",
+      "carantina": true
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "rand": 596,
+      "serie": "247EK08658",
+      "motiv": "„LIPSA MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”",
+      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj",
+      "carantina": true
+    }
+  ],
+  "accepta_sarja": [],
+  "tronson_aviz": {
+    "CJPT 0001": 16,
+    "CJPT 0002": 16,
+    "CJPT 0003": 16,
+    "CJPT 0004": 17
+  },
+  "tronson_aviz_serie": {
+    "CJPT 0026|362": 16,
+    "CJPT 0026|102": 17,
+    "CJPT 0026|118": 17,
+    "CJPT 0026|131": 17,
+    "CJPT 0026|157": 17,
+    "CJPT 0026|966": 17,
+    "CJPT 0026|1027": 17
+  },
+  "ignora_iesire": [
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "CURBE LOT 2",
+      "rand": 426,
+      "serie": "1198",
+      "motiv": "curba 1198 e încă în stoc la OS Topleț; TR „16” din Excel nu e o ieșire reală (MP, 21.10)"
+    }
+  ],
+  "corectii_camp": [
+    {
+      "fisier": "JUPANESTI__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 MM",
+      "randuri": [
+        {
+          "rand": 452,
+          "serie": "247EK08578"
+        },
+        {
+          "rand": 453,
+          "serie": "247EK09238"
+        },
+        {
+          "rand": 454,
+          "serie": "247EK08273"
+        },
+        {
+          "rand": 456,
+          "serie": "247EK08720"
+        },
+        {
+          "rand": 457,
+          "serie": "247EK08719"
+        },
+        {
+          "rand": 458,
+          "serie": "247EK07850"
+        },
+        {
+          "rand": 459,
+          "serie": "247EK06347"
+        },
+        {
+          "rand": 460,
+          "serie": "247EK09028"
+        }
+      ],
+      "camp": "data_iesire",
+      "valoare": "2026-09-05",
+      "motiv": "MP 21.10: data ieșirii 05.09.2026, nu 09.05.2026"
+    },
+    {
+      "fisier": "JUPANESTI__LOT_2_TEAVA.xlsx",
+      "aviz_iesire": [
+        "CJPJ 0041",
+        "CJPJ 0042",
+        "CJPJ 0043",
+        "CJPJ 0044",
+        "CJPJ 0045",
+        "CJPJ 0046"
+      ],
+      "camp": "data_iesire",
+      "valoare": "2026-10-17",
+      "motiv": "MP 21.10: avizele CJPJ 0041–0046 din 17.10.2026 (data lipsea)"
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "CURBE LOT 2",
+      "aviz_iesire": [
+        "CJPT 0003"
+      ],
+      "serie": "130",
+      "camp": "data_iesire",
+      "valoare": "2026-06-16",
+      "motiv": "MP 21.10: curba 130 pe CJPT 0003 ieșită la 16.06.2026, nu 11.06"
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "randuri": [
+        {
+          "rand": 1402,
+          "serie": "247EK07226"
+        },
+        {
+          "rand": 1403,
+          "serie": "247EK07557"
+        },
+        {
+          "rand": 1404,
+          "serie": "247EK07248"
+        },
+        {
+          "rand": 1405,
+          "serie": "247EK07352"
+        },
+        {
+          "rand": 1406,
+          "serie": "247EK07325"
+        },
+        {
+          "rand": 1407,
+          "serie": "247EK08643"
+        },
+        {
+          "rand": 1408,
+          "serie": "247EK09231"
+        },
+        {
+          "rand": 1409,
+          "serie": "247EK07131"
+        },
+        {
+          "rand": 1410,
+          "serie": "247EK07216"
+        },
+        {
+          "rand": 1411,
+          "serie": "247EK07122"
+        },
+        {
+          "rand": 1412,
+          "serie": "247EK06586"
+        },
+        {
+          "rand": 1413,
+          "serie": "247EK08707"
+        },
+        {
+          "rand": 1414,
+          "serie": "247EK08113"
+        },
+        {
+          "rand": 1415,
+          "serie": "247EK08386"
+        },
+        {
+          "rand": 1416,
+          "serie": "247EK08777"
+        },
+        {
+          "rand": 1417,
+          "serie": "247EK08931"
+        },
+        {
+          "rand": 1418,
+          "serie": "247EK09184"
+        },
+        {
+          "rand": 1419,
+          "serie": "247EK09006"
+        },
+        {
+          "rand": 1420,
+          "serie": "247EK08968"
+        },
+        {
+          "rand": 1421,
+          "serie": "247EK08007"
+        },
+        {
+          "rand": 1422,
+          "serie": "247EK09185"
+        },
+        {
+          "rand": 1423,
+          "serie": "247EK08963"
+        },
+        {
+          "rand": 1424,
+          "serie": "247EK08017"
+        },
+        {
+          "rand": 1425,
+          "serie": "247EK08656"
+        },
+        {
+          "rand": 1426,
+          "serie": "247EK08008"
+        },
+        {
+          "rand": 1427,
+          "serie": "247EK07938"
+        },
+        {
+          "rand": 1428,
+          "serie": "247EK09085"
+        },
+        {
+          "rand": 1429,
+          "serie": "247EK09155"
+        },
+        {
+          "rand": 1430,
+          "serie": "247EK07949"
+        },
+        {
+          "rand": 1431,
+          "serie": "247EK08619"
+        }
+      ],
+      "camp": "pv_nr",
+      "valoare": "86188",
+      "motiv": "MP 21.10: PV recepție L3 (avize 154/155 din 15.10) nr. 86188 / 16.10.2026"
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "randuri": [
+        618
+      ],
+      "serie": "247EK07330",
+      "camp": "data_iesire",
+      "valoare": "2026-06-12",
+      "motiv": "MP 21.10 (confirmat Razvan): „6/12.2026” = 12.06.2026"
+    }
+  ],
+  "accepta_iesire_integrala": [
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "rand": 1277,
+      "serie": "247EK06377",
+      "motiv": "MP 21.10 (confirmat Razvan): 12,18 din 12,19 m pe CJPT-0011 = rotunjire, țeava întreagă a ieșit, fără rest"
+    }
+  ]
+}

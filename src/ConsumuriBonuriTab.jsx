@@ -18,8 +18,28 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import { liniiPentruRpc, antetPentruRpc, mesajEroareBon } from './lib/bonLinii.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
+
+// stocul care poate intra pe bon: fără bucățile din registrul de țeavă (tip_cod setat — BD le refuză oricum), filtrat pe
+// server și citit pe pagini după cheie (id desc): după importul registrului, limita de 1000 de rânduri a API-ului ar tăia
+// altfel stocul obișnuit (review r7)
+async function stocPentruBon() {
+  const out = []
+  let ultim = null
+  for (;;) {
+    let q = supabase.from('magazie_bucati')
+      .select('id, proiect_id, tip_material_id, serie, sarja, dimensiune, lungime_m, cantitate, um, stare, provenienta')
+      .in('stare', ['receptionat', 'sosit']).is('tip_cod', null).order('id', { ascending: false }).limit(1000)
+    if (ultim != null) q = q.lt('id', ultim)
+    const { data, error } = await q
+    if (error) return { data: null, error }
+    out.push(...data)
+    if (data.length < 1000) return { data: out, error: null }
+    ultim = data[data.length - 1].id
+  }
+}
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -95,19 +115,23 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
         .order('generat_la', { ascending: false })
       if (isExec && proiectId) qBon = qBon.eq('proiect_id', proiectId)
 
-      const [rBon, rProj, rSL, rBuc, rTip, rProf] = await Promise.all([
+      const [rBon, rProj, rSL, rBuc, rTip, rProf, rProt] = await Promise.all([
         qBon,
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id').order('id'),
         supabase.from('executie_situatii_plata').select('id, proiect_id, nr_situatie, luna, an, status').order('an', { ascending: false }).order('luna', { ascending: false }),
-        supabase.from('magazie_bucati').select('id, proiect_id, tip_material_id, serie, sarja, dimensiune, lungime_m, cantitate, um, stare, provenienta').in('stare', ['receptionat','sosit']).order('id', { ascending: false }),
+        stocPentruBon(),
         supabase.from('magazie_tipuri_material').select('id, nume, um_implicit').order('id'),
         supabase.from('profiles').select('id, name, email'),
+        // proiectele cu registru de țeavă (izometrie, nivel ≠ off): țeava lor Transgaz nu intră pe bon (BD refuză oricum)
+        supabase.rpc('fn_izo_proiecte_protejate'),
       ])
       setProfile(prof)
       setBonuri(rBon.data || [])
       setProiecte(rProj.data || [])
       setSluri(rSL.data || [])
-      setBucati(rBuc.data || [])
+      const protejate = new Set((rProt.error ? [] : (rProt.data || [])).map(r => r.proiect_id))
+      setBucati((rBuc.data || []).filter(b => !(b.provenienta === 'beneficiar' && protejate.has(b.proiect_id))))
+      if (rBuc.error) flash('err', 'Stocul pentru bon nu s-a putut citi — reîncarcă.')
       setTipuri(rTip.data || [])
       setProfilesMap(Object.fromEntries((rProf.data || []).map(p => [p.id, p.name || p.email || '—'])))
     } catch (e) { console.error(e); flash('err', 'Eroare la încărcare.') } finally { setLoading(false) }
@@ -140,6 +164,9 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     if (!isExec) return
     setModal({
       isNew: true, id: null,
+      // cheia operației de creare: generată O DATĂ la deschiderea formularului; un retry (ex. răspuns pierdut) găsește bonul,
+      // o altă fereastră are altă cheie → alt bon (numărul îl alocă serverul, atomic)
+      cheie_operatie: crypto.randomUUID(),
       proiect_id: proiectId ? String(proiectId) : '',
       situatie_plata_id: '', provenienta: 'gazpet', data_bon: todayISO(), observatii: '',
       linii: [],
@@ -147,7 +174,7 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
   }
   const deschideEdit = (b) => {
     setModal({
-      isNew: false, id: b.id,
+      isNew: false, id: b.id, updated_at: b.updated_at,   // versiunea antetului, pentru salvarea cu control de concurență
       proiect_id: String(b.proiect_id),
       situatie_plata_id: b.situatie_plata_id ? String(b.situatie_plata_id) : '',
       provenienta: b.provenienta, data_bon: b.data_bon || todayISO(), observatii: b.observatii || '',
@@ -159,17 +186,6 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     })
   }
 
-  // numerotare BC-{an}-{proiect}-{secv}
-  const genNumarBon = async (proiect_id, data_bon) => {
-    const an = new Date(data_bon || todayISO()).getFullYear()
-    const { count } = await supabase.from('executie_bonuri_consum')
-      .select('id', { count: 'exact', head: true })
-      .eq('proiect_id', proiect_id)
-      .gte('data_bon', `${an}-01-01`).lte('data_bon', `${an}-12-31`)
-    const secv = String((count || 0) + 1).padStart(4, '0')
-    return `BC-${an}-${proiect_id}-${secv}`
-  }
-
   const salveazaBon = async (m) => {
     if (!m.proiect_id) { flash('err', 'Alege proiectul.'); return }
     if (!m.linii.length) { flash('err', 'Adaugă cel puțin o linie.'); return }
@@ -179,44 +195,13 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     }
     setBusy(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      const pid = Number(m.proiect_id)
-      let bonId = m.id
-      if (m.isNew) {
-        const numar = await genNumarBon(pid, m.data_bon)
-        const { data, error } = await supabase.from('executie_bonuri_consum').insert({
-          numar_bon: numar, proiect_id: pid,
-          situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
-          provenienta: m.provenienta, data_bon: m.data_bon, sursa: 'manual', stare: 'generat',
-          generat_de: user?.id || null, observatii: m.observatii?.trim() || null,
-        }).select('id').single()
-        if (error) throw error
-        bonId = data.id
-      } else {
-        const { error } = await supabase.from('executie_bonuri_consum').update({
-          situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
-          provenienta: m.provenienta, data_bon: m.data_bon,
-          observatii: m.observatii?.trim() || null, updated_at: new Date().toISOString(),
-        }).eq('id', bonId)
-        if (error) throw error
-        await supabase.from('executie_bonuri_consum_linii').delete().eq('bon_id', bonId)
-      }
-      const rows = m.linii.map(l => {
-        const tip = l.tip_material_id ? tipuriMap[l.tip_material_id] : null
-        const cant = toNum(l.cantitate) ?? 1
-        const cost = m.provenienta === 'gazpet' ? toNum(l.cost_unitar) : null
-        return {
-          bon_id: bonId, magazie_bucata_id: l.magazie_bucata_id || null, tip_material_id: l.tip_material_id || null,
-          denumire: l.denumire?.trim() || tip?.nume || null,
-          serie: l.serie?.trim() || null, sarja: l.sarja?.trim() || null, dimensiune: l.dimensiune?.trim() || null,
-          cantitate: cant, um: l.um || tip?.um_implicit || 'buc',
-          lungime_m: toNum(l.lungime_m), cost_unitar: cost, valoare: cost != null ? cost * cant : null,
-          observatii: null,
-        }
+      // UN apel, o tranzacție: CAS pe versiune + antet + liniile (20261102b); gărzile registrului de țeavă rămân în vigoare
+      const { data, error } = await supabase.rpc('fn_bon_salveaza', {
+        p_bon_id: m.isNew ? null : m.id, p_versiune: m.isNew ? null : (m.updated_at || null),
+        p_antet: antetPentruRpc(m), p_linii: liniiPentruRpc(m.linii, m.provenienta, tipuriMap, toNum),
       })
-      const { error: eL } = await supabase.from('executie_bonuri_consum_linii').insert(rows)
-      if (eL) throw eL
-      flash('ok', `Bon ${m.isNew ? 'creat' : 'actualizat'} (${rows.length} linii).`)
+      if (error) throw new Error(mesajEroareBon(error))
+      flash('ok', `Bon ${data?.numar_bon || ''} ${m.isNew ? 'creat' : 'actualizat'} (${data?.linii ?? m.linii.length} linii)${data?.idempotent ? ' — era deja salvat' : ''}.`)
       setModal(null); await loadAll()
     } catch (e) { console.error(e); flash('err', 'Salvare eșuată: ' + (e?.message || e)) } finally { setBusy(false) }
   }
@@ -236,20 +221,11 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
   const confirmaPreluare = async (v) => {
     setBusy(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      // salvează valorizarea (cost_unitar) pe linii dacă e gazpet
-      if (v.provenienta === 'gazpet') {
-        for (const l of v.linii) {
-          const cost = toNum(l.cost_unitar)
-          const cant = Number(l.cantitate) || 0
-          await supabase.from('executie_bonuri_consum_linii')
-            .update({ cost_unitar: cost, valoare: cost != null ? cost * cant : null }).eq('id', l.id)
-        }
-      }
-      const { error } = await supabase.from('executie_bonuri_consum')
-        .update({ stare: 'preluat', preluat_de: user?.id || null, preluat_la: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq('id', v.id)
-      if (error) throw error
+      // costurile pe linii (doar gazpet) + starea „preluat”, într-o singură tranzacție, cu versiunea bonului (20261102b r11);
+      // liniile nu mai sunt scriptibile direct din API
+      const costuri = v.provenienta === 'gazpet' ? v.linii.map(l => ({ linie_id: l.id, cost_unitar: toNum(l.cost_unitar) })) : []
+      const { error } = await supabase.rpc('fn_bon_preia', { p_bon_id: v.id, p_versiune: v.updated_at, p_costuri: costuri })
+      if (error) throw new Error(mesajEroareBon(error))
       flash('ok', `Bon ${v.numar_bon} preluat în Financiar.`)
       setValorizare(null); await loadAll()
     } catch (e) { console.error(e); flash('err', 'Eroare la preluare: ' + (e?.message || e)) } finally { setBusy(false) }
