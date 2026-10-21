@@ -7,6 +7,8 @@
 | 1 | [Jak] Comparația JSON poate refuza bucata corectă (`radacina_id` rămâne; cheile nu sunt aceeași mulțime) | §3.2, §7.2 | o singură **proiecție explicită** `C` (lista constantă de coloane, cu NULL-urile incluse), aplicată identic pe ambele părți; `radacina_id` exclus din ambele și verificat separat `NEW.radacina_id = NEW.id`; INSERT-ul confirmării scrie TOATE coloanele din `C`, deci nicio valoare implicită nu intră în comparație |
 | 2 | [Jak] Verificarea locației n-are drepturi | §3.5, §4 | `fn_izo_loc_valid` (E2a, DEFINER) pentru depozit ↔ site-ul proiectului; `fn_izo_site_proiect` pentru `locatie_site_id`; `fn_izo_tip_material` pentru `tip_material_id` — toate cu EXECUTE pentru `izo_receptie_writer`, trecute în matrice |
 
+**r5d (21.10.2026)** — protocolul porților (NO-GO Copilot + Jak pe abaterea „poartă completă înainte, amprentă după”) și deciziile Razvan (A): anularea ciornei de către gestionar; înlocuirea pe id + motiv. Detaliile sunt în §13.
+
 **r5c (21.10.2026)** — Jak pe r5: NO-GO, 1 × P1 (cele 2 P1 din r4 închise); Copilot pe r5: GO.
 - P1: **o singură constantă `C`** determină proiecția, lista coloanelor din INSERT-ul confirmării și GRANT INSERT-ul pe coloane (`C` ∪ {`id`, `uid`, `radacina_id`, `server_ver`}) — §3.2, §3.5, §7.2.
 - P2 Jak, trecute în design:
@@ -482,4 +484,82 @@ Două tranziții administrative, fiecare doar sub contextul ei, scris doar de `f
 4. **Preflight live înainte de FK-ul `aviz_intrare_id`:** migrarea verifică explicit, la precondiție, `count(*) FROM magazie_bucati WHERE aviz_intrare_id IS NOT NULL OR nr_crt_aviz IS NOT NULL` = 0. Pe prod sunt 3352 de bucăți LOT 2 din import, toate cu NULL. Altfel refuză, fără să creeze FK-ul.
 5. **P3 — nivelul fail-closed:** peste tot în E3 predicatul e `coalesce(fn_izo_nivel(p), 'off') IN ('stoc', 'montaj')`, deci un NULL eventual = refuz. Politicile RLS noi folosesc aceeași formă.
 6. **P3 — `fn_izo_scan_poate_sterge`:** e expusă (EXECUTE `authenticated`, folosită de politica Storage), deci intră în `c_e3_revizuite` (semnătură → md5 extins) și în amprenta porților E3. O modificare a ei → porți lipsă.
+
+## 13. r5d — protocolul porților și deciziile Razvan (A)
+
+### 13.1 De ce dura poarta 8,5 s și ce se schimbă
+
+- **Cauza** (măsurată read-only pe prod, 21.10): închiderea tranzitivă a citirilor din `fn_izo_porti_lipsa`. La fiecare iterație, fiecare funcție (≈ 670, ≈ 1 MB de corpuri) se compară cu fiecare element al închiderii printr-o expresie regulată construită separat (funcție × țintă). Plus propagarea mutatorilor, la fel.
+- **Varianta rapidă**, cu aceeași semantică:
+  - **semi-naivă:** fiecare element nou se caută o singură dată, în iterația de după adăugarea lui;
+  - **o expresie per iterație:** alternanța numelor din frontieră (calificat; necalificat pentru schemele non-platformă; necalificat pe fiecare schemă de platformă, doar dacă e în calea funcției sau dacă calea e necunoscută / mutator);
+  - corpurile se citesc o dată.
+  - Echivalența: o funcție intră în închidere dacă își numește corpul ORICE element, iar condiția pe pereche (funcție, țintă) nu depinde de restul închiderii. Deci găsirea fiecărui element în iterația de după adăugarea lui dă aceeași mulțime ca reverificarea completă.
+- **Proba pe prod**, read-only (`docs/izometrie/E3_INCHIDERE_RAPIDA_PROBA.sql`, tabele TEMP + ROLLBACK): mulțimile rel / fn / mutatori sunt **identice** cu bucla E2a, în **347 ms față de 8 242 ms**.
+- **Migrarea E3 înlocuiește `fn_izo_porti_lipsa`:**
+  - aceleași verificări E2a, cu închiderea rapidă;
+  - plus `fn_izo_porti_e3_lipsa()`, chemată explicit la final. Astfel și **activarea E2a** (`fn_izo_seteaza_nivel` / importul cheamă `fn_izo_porti_lipsa`) refuză la orice lipsă E3 (Jak a).
+  - Revenirea E3 reface definiția E2a.
+- **Test diferențial** (harness, pasul E3): definiția E2a e păstrată ca funcție de test. Pe fiecare mutație din suita porților E2a (T11–T13: wrapper static / dinamic, overload, view cu / fără security_invoker, DEFINER cititor direct / prin view / tranzitiv, lanț INVOKER, mutator de cale, schemă de platformă, ACL / config schimbate) plus mutațiile E3 (§13.3), lista E2a a variantei vechi = lista E2a a variantei noi. Orice mutație refuzată de una e refuzată și de cealaltă.
+
+### 13.2 Protocolul: lock-ul „schemă” + poarta completă la FIECARE intrare E3
+
+- Cheia: **`pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'))`**, aceeași pe care runner-ul (`scripts/livrare_migrare.sh`, pasul 1_pre) o ia **exclusiv**, într-o instrucțiune separată, pentru toată tranzacția migrării.
+- **Fiecare intrare E3** (`salveaza`, `verifica`, `confirma`, `pv`, `anuleaza_draft` și `anuleaza` administrativ) ia, **prima**, aceeași cheie **partajată** și o ține până la commit. Apoi rulează **poarta completă** (`fn_izo_porti_lipsa()`, care o include și pe cea E3; ≈ 0,4 s), apoi lock-urile de business din §4.
+  - O migrare prin runner nu poate începe cât o operație E3 e în zbor, iar o operație E3 așteaptă migrarea în curs și apoi vede catalogul nou.
+  - Nu mai există „verificare redusă” la salvare / verificare: contractul e unul singur, poarta completă (Jak b).
+- **Ordinea globală devine:** schemă (partajat) → document → profil → acces modul → atribuire → proiect / depozit → tabele → advisory proiect → bucăți. Runner-ul ia schema exclusiv și abia apoi lock-uri DDL, deci nu există ciclu.
+- **Ștampilele** (`porti=…`, `porti_e3=…`) se fixează DOAR în migrare, după validarea completă. Nicio intrare nu le recalculează și nu le rescrie.
+- **Poarta se rulează într-o instrucțiune separată** (READ COMMITTED, snapshot nou), după ce lock-ul schemei e obținut.
+- **Inventarul ștampilei E3** (`fn_izo_porti_e3_definitii`):
+  - indexurile (ale E3 + unicitatea E2a);
+  - owner / ACL / RLS pe tabele și **privilegiile pe coloane**;
+  - constrângerile, toate politicile tabelelor E3 și politicile `izo_doc_scan_*` + **toate politicile generale de pe `storage.objects`** (fără `bucket_id` în expresie: dacă apare una nouă, ștampila se schimbă);
+  - trigger-ele E3 + `tgenabled`;
+  - trigger-ele `profiles` + corpurile lor;
+  - rolurile + membership (direct și invers);
+  - bucket-ul;
+  - mulțimea de coloane.
+  - Funcțiile `fn_izo_*` (owner, proconfig, ACL, corp, overload-uri) sunt deja în ștampila E2a. Funcțiile / view-urile / regulile din AFARA `fn_izo_*` sunt acoperite de închiderea citirilor + verificarea wrapper-elor din poarta E2a, rulată complet la fiecare intrare.
+- **Limitare declarată (runbook):** DDL-ul care NU trece prin runner (dashboard-ul Supabase, `apply_migration` din MCP, `psql` direct) nu ia cheia. Regula: pe proiectul LIVE, orice DDL / GRANT / politică / membership trece DOAR prin `scripts/livrare_migrare.sh`. Ce o încalcă rămâne prins de poartă la intrarea E3 următoare, dar nu e serializat cu una aflată deja în zbor.
+- **Teste cu barieră, în ambele ordini:**
+  - T1 (o intrare E3) ține cheia partajată după poartă; T2 (ca runner: cheia exclusivă, apoi CREATE DEFINER cititor / politică / GRANT / membership) așteaptă, iar T1 comite neafectat;
+  - invers, T2 ține cheia exclusivă și face mutația; T1 așteaptă, apoi poarta o vede și refuză.
+
+### 13.3 Decizia Razvan A-1: gestionarul își anulează singur ciorna
+
+- **Intrare nouă:** `fn_izo_doc_anuleaza_draft(p_doc_id bigint, p_versiune bigint, p_motiv text) → jsonb {document_id, versiune, stare}`.
+  - Owner `izo_doc_editor`, DEFINER, EXECUTE `authenticated`.
+  - Scrie doar antetul, deci nicio scriere în registru și niciun context de recepție.
+- **Protocolul:** schema → documentul `FOR UPDATE` → autorizarea §3.4 (gestionar pe proiectul și depozitul documentului, sau owner) → `stare = 'draft'` (altfel refuz: un document confirmat se anulează doar administrativ) → CAS pe `p_versiune` → motivul (3–1000 de caractere).
+- **Scrierea:** `stare = 'anulat'`, `anulat_de = fn_izo_uid()` (**coloană nouă**, uuid; NULL la anularea administrativă), `anulat_de_rol = session_user` (`authenticator` pe API, `postgres` administrativ), `anulat_la`, `anulat_motiv`, `versiune + 1`.
+- **Efecte:** identitatea se eliberează prin indexul parțial existent. Ciorna anulată rămâne vizibilă (SELECT prin RLS), cu motivul, autorul și data.
+- **Trigger-ul documentelor**, pentru editor: UPDATE `draft → anulat` e permis DOAR în forma de mai sus (doar `stare`, `versiune` +1, `updated_at`, `anulat_*`, `anulat_de = fn_izo_uid()`, `anulat_de_rol = session_user`). Orice altă coloană schimbată → refuz. Editorul primește UPDATE pe coloanele `stare`, `anulat_de`, `anulat_de_rol`, `anulat_la`, `anulat_motiv` (matricea §3.5 + poarta E3, pe coloane).
+- **Anularea administrativă a unei ciorne** (`fn_izo_doc_anuleaza`, postgres) rămâne pe contextul `anulare_draft`, neschimbată.
+- **Teste:**
+  - un ne-atribuit / un gestionar pe alt depozit → refuz;
+  - un document confirmat → refuz pe calea asta;
+  - motiv lipsă / versiune veche → refuz;
+  - după anulare, același furnizor / nr / dată se creează din nou;
+  - editorul nu poate „anula” pe altă cale (UPDATE cu alte coloane schimbate).
+
+### 13.4 Decizia Razvan A-2: înlocuirea pe id + motiv, fără condiția de identitate
+
+- **`inlocuieste_document_id`** (dat doar la creare, imutabil) + **`motiv_inlocuire`** (coloană nouă).
+  - CHECK: `(inlocuieste_document_id IS NULL) = (motiv_inlocuire IS NULL)`, motivul de 3–1000 de caractere.
+  - Furnizorul, numărul, data și proiectul **pot diferi**: tocmai ele pot fi greșeala.
+- **Condițiile, revalidate sub lock** (ținta `FOR SHARE`, după lock-ul documentului curent) la **fiecare** salvare și la confirmare:
+  - ținta există;
+  - ținta e `anulat` (deci finală);
+  - ținta nu e documentul curent;
+  - ținta nu e înlocuită de ALT document (`UNIQUE (inlocuieste_document_id)`). Verificarea exclude documentul curent, deci salvarea repetată a aceluiași draft trece.
+  - Două înlocuiri concurente ale aceleiași ținte → indexul unic e arbitrul: a doua → 23505, mesaj clar.
+- **Scoase din r5b §12.2:** înghețarea identității și condiția „aceeași identitate / același proiect”. Nu mai au obiect.
+- **Teste:**
+  - înlocuire cu identitate diferită → trece;
+  - ținta neanulată → refuz;
+  - motiv lipsă → refuz;
+  - salvare repetată → trece;
+  - două creări concurente pe aceeași țintă → exact una;
+  - ținta e chiar documentul → refuz.
 

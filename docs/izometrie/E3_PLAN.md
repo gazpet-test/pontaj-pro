@@ -149,6 +149,18 @@ E2 e deja izolat pe proiect: registrul, nivelul, atribuirile, depozitul și citi
   - `cod`-ul complet păstrat în `atribute`;
   - pachetul (2 curbe / pachet) doar pe rândul documentului, nu ca entitate.
 
+## 7b. E3b — corecțiile (decizia Razvan A, 21.10.2026): după E3, ÎNAINTE de prima recepție reală pe LOT 2
+
+E3 livrează doar căile „normale” plus două corecții: anularea ciornei de către gestionar și înlocuirea unui document anulat pe id + motiv (design r5d §13.3–13.4). Restul corecțiilor din `C:\Users\Public\livrare\izo_gaps.txt` intră într-o etapă scurtă, E3b, cu propriul design revizuit și propria migrare. Toate au același tipar ca E3: funcție administrativă sau API cu rol verificat, context de operație în gardă, eveniment + mișcări în registru (doar adaug), motiv obligatoriu, responsabilul pe proiect.
+- **corecție de câmp pe o bucată:** eveniment `corectie` + mișcare `corectat`, cu `inainte` / `dupa` (doar câmpurile corectabile, pe o listă revizuită), motiv; doar responsabilul;
+- **pierdut / găsit:** evenimentele `pierdut` / `gasit` (există deja în CHECK-ul E2a), cu motiv și locul găsirii;
+- **carantina:** ieșirea din carantină (decizie, motiv) și intrarea în carantină după recepție;
+- **storno parțial pe import:** pe o listă de bucăți, fail-closed ca storno-ul complet (refuz peste mișcări ulterioare);
+- **corecție doar pe PV:** numărul / data PV-ului, fără să atingă stările bucăților (eveniment de corecție legat de `receptie_pv`);
+- **istoricul ciornei:** versiunile unui draft (cine, când, ce s-a schimbat), fără să intre în hash-ul documentului.
+
+Ordinea: design E3b → review Copilot + Jakarinos → migrare + harness → aplicare (chat-ul, după „da”-ul lui Razvan) → abia apoi prima recepție reală pe LOT 2.
+
 ## 8. Ordinea livrării
 
 1. Acest plan (review + răspunsuri la Q-E3-1…6).
