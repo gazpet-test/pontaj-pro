@@ -180,13 +180,15 @@ function selectorBate(c, b) {
  *            tronson_aviz: {aviz: nr} (TR ambiguu sau lipsă), tronson_aviz_serie: {'aviz|serie': nr} (prioritar),
  *            ignora_iesire: [{fisier, foaie, rand, motiv}] (câmpuri de ieșire care nu sunt o ieșire reală),
  *            corectii_camp: [{fisier?, foaie?, randuri? | aviz_iesire?, serie?, camp, valoare, motiv}],
- *            accepta_neconformitate: [{fisier, foaie, rand, nota?}], accepta_sarja: [serie] }
+ *            accepta_neconformitate: [{fisier, foaie, rand, nota?}], accepta_sarja: [serie],
+ *            accepta_iesire_integrala: [{fisier, foaie, rand, motiv}] (diferență de rotunjire la ieșire, pe rândul numit) }
  */
 export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie = [] }) {
   const cheieSursa = s => `${s.fisier}|${s.foaie}|${s.rand}`
   const exclDec = new Map((decizii.excluderi || []).map(e => [cheieSursa(e), e.motiv]))
   const neconfOk = new Map((decizii.accepta_neconformitate || []).map(e => [cheieSursa(e), e]))
   const ignoraIes = new Map((decizii.ignora_iesire || []).map(e => [cheieSursa(e), e.motiv || 'fără ieșire reală']))
+  const iesireIntegrala = new Map((decizii.accepta_iesire_integrala || []).map(e => [cheieSursa(e), e.motiv || 'ieșire integrală']))
   const out = [], excluse = []
   for (const b0 of randuri) {
     const b = { ...b0, probleme: [], avertismente: [], corectii: [] }
@@ -221,8 +223,12 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
       if (b.perete_desc !== null && b.perete_desc !== b.perete_foaie) b.probleme.push(`perete: foaia spune ${b.perete_foaie}, descrierea ${b.perete_desc}`)
       b.perete_mm = b.perete_foaie ?? b.perete_desc
       // o ieșire PARȚIALĂ ar muta toată bucata pe tronson cu lungimea inițială → blocant, ca debitarea (Copilot r2 P1)
-      if (b.aviz_iesire && b.cant_iesire !== null && b.cantitate !== null && Math.abs(b.cant_iesire - b.cantitate) > 0.005)
-        b.probleme.push(`ieșire parțială: ${b.cant_iesire} din ${b.cantitate} m pe avizul ${b.aviz_iesire} — de decis`)
+      if (b.aviz_iesire && b.cant_iesire !== null && b.cantitate !== null && Math.abs(b.cant_iesire - b.cantitate) > 0.005) {
+        // decizie pe rândul NUMIT: diferența e rotunjire, țeava a ieșit întreagă (fără rest)
+        if (iesireIntegrala.has(cheieSursa(b.sursa)))
+          b.corectii.push({ camp: 'cant_iesire', inainte: b.cant_iesire, dupa: b.cantitate, motiv: iesireIntegrala.get(cheieSursa(b.sursa)) })
+        else b.probleme.push(`ieșire parțială: ${b.cant_iesire} din ${b.cantitate} m pe avizul ${b.aviz_iesire} — de decis`)
+      }
       if (b.debitare !== null && b.cantitate !== null && b.debitare > 0 && Math.abs(b.debitare - b.cantitate) > 0.005)
         b.probleme.push(`debitare parțială (${b.debitare} din ${b.cantitate} m) — rest în DM ${b.cant_in_dm}: de decis`)
     } else {

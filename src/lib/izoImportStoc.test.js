@@ -248,3 +248,14 @@ describe('review #807 r2 + răspunsurile MP', () => {
     expect(construiestePayload([b], [], 'x').bucati[0].observatii).toBe('NECONFORM: MARCAJ — carantină · descărcate excepțional')
   })
 })
+
+describe('accepta_iesire_integrala', () => {
+  it('diferența de rotunjire acceptată doar pe rândul numit, cu urmă', () => {
+    const r = rStd({ 16: 'CJPJ 0038', 17: 12, 18: '264DB00025', 19: 12.40 })
+    const ev = d => evalueaza(foaie('TEAVA 8.8 MM', [r], 12).randuri, { decizii: d, coduri, tronsoane }).randuri[0]
+    expect(ev({}).probleme.join()).toMatch(/ieșire parțială/)
+    const ok = ev({ accepta_iesire_integrala: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13, motiv: 'rotunjire' }] })
+    expect(ok.probleme).toEqual([])
+    expect(ok.corectii[0]).toMatchObject({ camp: 'cant_iesire', inainte: 12.4, dupa: 12.41, motiv: 'rotunjire' })
+  })
+})

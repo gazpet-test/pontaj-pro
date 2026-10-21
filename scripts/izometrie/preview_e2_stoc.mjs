@@ -186,7 +186,7 @@ if (aplicabil) {
   const pj = payloadPath
   const txtPayload = JSON.stringify(payload)
   fs.writeFileSync(pj + '.tmp', txtPayload + '\n', 'utf8'); fs.renameSync(pj + '.tmp', pj)
-  out(`**APLICABIL.** Payload: \`${path.basename(pj)}\` (${payload.bucati.length} bucăți, sha256 fișier \`${crypto.createHash('sha256').update(txtPayload + '\n').digest('hex')}\`). Se aplică doar de sesiunea de chat, după „da”-ul lui Razvan: \`fn_izo_seteaza_nivel(3, 'stoc', …)\` + \`fn_izo_import_sold_initial(3, '<import_id>', <payload>)\` în aceeași tranzacție.`)
+  out(`**APLICABIL.** Payload: \`${path.basename(pj)}\` (${payload.bucati.length} bucăți, sha256 fișier \`${crypto.createHash('sha256').update(txtPayload + '\n').digest('hex')}\`). Se aplică doar de sesiunea de chat, după „da”-ul lui Razvan, într-un SINGUR apel (activare + import, fără blocaj circular): \`fn_izo_activeaza_si_importa(3, '<import_id>', <payload>, '<motiv>')\`.`)
 } else {
   out(`**NEAPLICABIL** (R13): ${reconciliereOk ? '' : 'reconcilierea nu bate; '}${cuProbleme.length} rânduri cu probleme blocante${foiGresite.length + blocante_globale.length ? ` + ${foiGresite.length + blocante_globale.length} în afara rândurilor` : ''}. Payload-ul NU s-a scris (și cel al unei rulări anterioare a fost șters). Deciziile se trec în fișierul de decizii (corecții de serie, excluderi, grupuri de depozit, tronsoane ambigue, neconformități acceptate), apoi preview-ul se rulează din nou.`)
 }

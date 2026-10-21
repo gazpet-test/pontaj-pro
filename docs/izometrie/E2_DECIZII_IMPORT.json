@@ -25,6 +25,11 @@
       "data": "2026-10-21",
       "autor": "Toma Razvan (MP), cu Razvan Trusu (C:\\Users\\Public\\claude-server\\RASPUNSURI_MP_LOT2_2110.md)",
       "decizie": "385 fără DT/OS → TOP; 120 „DM JUPANESTI/BALVANESTI” → origine JUP, notă „descărcate excepțional la Bâlvănești”, fără mișcări LOT 1; neconforme 58/596 în carantină la TOP, nedisponibile la montaj; curbe CJPT 0001–0003 → TR16, CJPT 0004 → TR17, CJPT 0026 împărțit (362 + cele cu TR16 → TR16; 102/118/131/157/966/1027 → TR17); curba 1198 în stoc la TOP (fără ieșire); corecții de date (8 țevi T2 → 05.09.2026, CJPJ 0041–0046 → 17.10.2026, curba 130 → 16.06.2026); PV L3 86188 / 16.10.2026."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Toma Razvan (MP), confirmat de Razvan Trusu (prin chat)",
+      "decizie": "r618 247EK07330: data ieșirii 12.06.2026; r1277 247EK06377: ieșire integrală (diferența de 1 cm = rotunjire)."
     }
   ],
   "corectii_serie": {
@@ -255,6 +260,26 @@
       "camp": "pv_nr",
       "valoare": "86188",
       "motiv": "MP 21.10: PV recepție L3 (avize 154/155 din 15.10) nr. 86188 / 16.10.2026"
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "randuri": [
+        618
+      ],
+      "serie": "247EK07330",
+      "camp": "data_iesire",
+      "valoare": "2026-06-12",
+      "motiv": "MP 21.10 (confirmat Razvan): „6/12.2026” = 12.06.2026"
+    }
+  ],
+  "accepta_iesire_integrala": [
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "rand": 1277,
+      "serie": "247EK06377",
+      "motiv": "MP 21.10 (confirmat Razvan): 12,18 din 12,19 m pe CJPT-0011 = rotunjire, țeava întreagă a ieșit, fără rest"
     }
   ]
 }
