@@ -4,7 +4,7 @@
 
 **Doar pe proiectul de test „TEST IZOMETRIE” (cod TEST-IZO), depozitul „DM TEST IZO” (TIZ).** Documentele sunt false (furnizor „FURNIZOR TEST SRL”, țevi 999TS…, curbe 9001–9012), cu filigranul „DOCUMENT DE TEST — FĂRĂ VALOARE”. LOT 1 și LOT 2 nu se ating.
 
-Surse (21.10.2026): documentele și cifrele din `C:\Users\Public\claude-server\pv_test\` (`README.md`, `gen/totals.json`); contractul RPC `C:\Users\Public\livrare\E3_CONTRACT_RPC.md`; migrarea `20261103b` (PR #825, `izometrie/e3` @198333bf); ecranul `src/IzoDocumenteIntrare.jsx` + `src/izoDocumenteLogica.js` (PR #826, `izometrie/e3-ui` @b33fa064). Mesajele citate mai jos sunt textele exacte din ecran și de pe server la aceste versiuni.
+Surse (21.10.2026): documentele și cifrele din `C:\Users\Public\claude-server\pv_test\` (`README.md`, `gen/totals.json`); contractul RPC `C:\Users\Public\livrare\E3_CONTRACT_RPC.md` (cu diferențele r5f); migrarea `20261103b` r5f și scripturile proiectului de test `scripts/izometrie/test_izo_1_creare.sql` + `test_izo_2b_activare_fara_import.sql` (PR #825, `izometrie/e3` @7d92a384); ecranul `src/IzoDocumenteIntrare.jsx` + `src/izoDocumenteLogica.js` (PR #826, `izometrie/e3-ui` @878883c3; față de @b33fa064 s-au schimbat doar comentarii). Mesajele citate mai jos sunt textele exacte din ecran și de pe server la aceste versiuni.
 
 - **Partea 1 — pentru Janeta:** ce apeși, ce scrii, ce trebuie să vezi.
 - **Partea 2 — pentru coordonator:** precondițiile, verificările SQL (doar citire) după fiecare pas, exercițiul cu greșeală, ce rămâne după test.
@@ -13,7 +13,7 @@ Surse (21.10.2026): documentele și cifrele din `C:\Users\Public\claude-server\p
 > - țeava 999TS00216 intră cu **12,19 m** (măsurat), nu 12,22 m → Țeavă 7,1 disponibil **168,95 m**, total disponibil **259,70 m** (pe aviz: 168,98 m / 259,73 m);
 > - curba 9006 apare în carantină cu **30°** (măsurat), nu 45°.
 >
-> Numărul de bucăți nu se schimbă: **40 disponibile + 1 curbă în carantină**. Metrii „după aviz” (259,73 m) îi vezi în ecranul documentului, pe linia de totaluri. Pe hârtie (tabelul 1 din fișă) nu se schimbă nimic.
+> Numărul de bucăți nu se schimbă: **40 disponibile + 1 curbă în carantină**. Metrii „după aviz” îi vezi pe ecranele documentelor, pe linia de sub cartonașe: 90,75 m (avizul 1) + 168,98 m (avizul 2) = 259,73 m. Pe hârtie (tabelul 1 din fișă) nu se schimbă nimic.
 
 ---
 
@@ -332,8 +332,8 @@ Coordonatorul = sesiunea de chat împreună cu Răzvan. Tot ce scrie în baza de
 |---|---|---|
 | 1 | Migrarea **20261103b LIVE** (PR #825 aplicat de chat, cu „da”). Ordinea: întâi migrarea, apoi UI-ul | P1: `rpc_e3` = 5, `bucket` = 1, `porti_lipsa` = 0 |
 | 2 | **PR #826 (UI) merged** și deployat de Vercel (~3 min) | în ERP, Magazie are tab-ul „🧾 Documente de intrare”; Ctrl+Shift+R |
-| 3 | **Proiectul de test creat** cu „da”-ul lui Răzvan: `scripts/izometrie/test_izo_1_creare.sql` (pe `origin/izometrie/e3`), ca postgres, sesiune directă (pooler 5432) | P1: `proiect_id` nenul; depozitul `TIZ` pe site-ul proiectului |
-| 4 | **Activarea pe calea E3**: atribuirea Janetei + nivelul `stoc`, **fără import** (§2.2) | P1: `nivel` = `stoc`, `janeta_gestionar` = 1, `bucati` = 0, `bucati_vii` = 0, `documente` = 0 (varianta A din §2.2: `bucati` = 41, toate `anulata`, `bucati_vii` = 0) |
+| 3 | **Proiectul de test creat** cu „da”-ul lui Răzvan: `scripts/izometrie/test_izo_1_creare.sql` (pe `origin/izometrie/e3`), ca postgres, sesiune directă (pooler 5432). Comenzile afișate la final (`\echo`: payload + `test_izo_2`, adică importul) **nu se rulează** pentru E3: pasul următor e `test_izo_2b` (§2.2) | P1: `proiect_id` nenul; §2.2 pasul 1: depozitul `TIZ`, singurul de pe site-ul proiectului |
+| 4 | **Activarea pe calea E3**, după 1 și 3: `scripts/izometrie/test_izo_2b_activare_fara_import.sql` (pe `origin/izometrie/e3`) — atribuirea Janetei + nivelul `stoc`, **fără import** (§2.2) | P1: `nivel` = `stoc`, `janeta_gestionar` = 1, `bucati` = 0, `bucati_vii` = 0, `documente` = 0 (varianta A din §2.2: `bucati` = 41, toate `anulata`, `bucati_vii` = 0) |
 | 5 | Janeta are **Magazie la nivel editor sau admin** (verificat 21.10.2026: `editor`) | P1: `janeta_magazie` ∈ {editor, admin} |
 | 6 | Materialele Janetei: cele 3 documente tipărite (A4, „dimensiune reală”; lista e pe orizontală), notele ei de recepție pe hârtie (fișa, pașii a–d), PDF-urile pentru scan (`C:\Users\Public\claude-server\pv_test\*.pdf`, ~67 KB fiecare) | — |
 | 7 | Snapshot-ul „înainte” pentru celelalte proiecte | Q-ALTE (§2.3), rezultatul păstrat pentru comparația de la final |
@@ -362,42 +362,31 @@ SELECT
 FROM public.executie_proiecte p WHERE p.cod_intern = 'TEST-IZO';
 ```
 
-### 2.2 Activarea pentru E3 — de ce NU `test_izo_2`
+### 2.2 Activarea pentru E3 — `test_izo_2b`, NU `test_izo_2`
 
-`scripts/izometrie/test_izo_2_activare_import.sql` activează proiectul **și importă cele 41 de bucăți ale acelorași documente** (payload-ul din `payload_test_avize.mjs`). Dacă rulează înainte de testul E3, fiecare confirmare a Janetei e blocată („seria … există deja ca țeavă în registru” / „curba … există deja în registru”). Iar bucățile importate nu se pot șterge, doar storna. Mai mult, indexurile de unicitate ale registrului (`ux_magbuc_izo_radacina`, `ux_magbuc_izo_curba`) sunt **globale pe serie, nu pe proiect**: cât timp o bucată 999TS… / 9001–9012 nu e `anulata`, seria e ocupată peste tot.
+`scripts/izometrie/test_izo_2_activare_import.sql` activează proiectul **și importă cele 41 de bucăți ale acelorași documente** (payload-ul din `payload_test_avize.mjs`). Dacă rulează înainte de testul E3, fiecare confirmare a Janetei e blocată („seria … există deja ca țeavă în registru” / „curba … există deja în registru”). Iar bucățile importate nu se pot șterge, doar storna. Mai mult, indexurile de unicitate ale registrului sunt **globale, nu pe proiect**: țeava pe serie (`ux_magbuc_izo_radacina`), curba pe serie + șarjă + unghi (`ux_magbuc_izo_curba`). Cât timp o bucată 999TS… / 9001–9012 nu e `anulata`, cheia ei e ocupată peste tot.
 
-Pentru testul E3 se rulează **doar** atribuirea + nivelul, fără import. **Propus, neaplicat** — îl aplică sesiunea de chat, ca postgres, sesiune directă (`session_user = postgres`; pe serverul AI prin psql, CLAUDE.md pct. 3b), după „da”-ul lui Răzvan pe rândurile din preview:
+Pentru testul E3 se rulează **`scripts/izometrie/test_izo_2b_activare_fara_import.sql`** (pe `origin/izometrie/e3`; varianta „fără import” aprobată de Răzvan în chat, 21.10): doar atribuirea Janetei + nivelul `stoc`, într-o tranzacție, cu 0 bucăți. Îl aplică sesiunea de chat, ca postgres, sesiune directă (`session_user = postgres`; pe serverul AI prin psql, CLAUDE.md pct. 3b), **doar după ce `20261103b` e LIVE** (precondiția 1; altfel garda `e3_live` din script oprește tot) și după `test_izo_1` (precondiția 3). Înainte de rulare îi arată lui Răzvan id-urile de la pasul 1 și cere „da”-ul (atribuirea e drept de acces).
 
-```sql
--- psql -X -v ON_ERROR_STOP=1 -v proiect_id=<id TEST-IZO> -v depozit_id=<id TIZ> -f <fișier>.sql
-\set ON_ERROR_STOP on
-SELECT 'PREVIEW' AS pas,
-       (SELECT cod_intern FROM public.executie_proiecte WHERE id = :proiect_id)                AS proiect,       -- TEST-IZO
-       (SELECT cod_3litere || ' — ' || name FROM public.logistica_depozite WHERE id = :depozit_id) AS depozit,   -- TIZ — DM TEST IZO
-       (SELECT d.site_id = p.site_id FROM public.logistica_depozite d, public.executie_proiecte p
-         WHERE d.id = :depozit_id AND p.id = :proiect_id)                                       AS pe_site,       -- true
-       public.fn_izo_nivel(:proiect_id)                                                         AS nivel_inainte, -- off
-       (SELECT count(*) FROM public.magazie_bucati WHERE proiect_id = :proiect_id)              AS bucati,        -- 0
-       (SELECT count(*) FROM public.izo_atribuiri WHERE proiect_id = :proiect_id)               AS atribuiri;     -- 0
-BEGIN;
-SELECT 1 / (CASE WHEN (SELECT cod_intern FROM public.executie_proiecte WHERE id = :proiect_id) = 'TEST-IZO' THEN 1 ELSE 0 END) AS e_proiectul_de_test;
--- garda depozitului, tot în tranzacție (preview-ul doar arată): TIZ și pe site-ul proiectului, altfel 1/0 → ROLLBACK
-SELECT 1 / (CASE WHEN EXISTS (SELECT 1 FROM public.logistica_depozite d JOIN public.executie_proiecte p ON p.id = :proiect_id
-                               WHERE d.id = :depozit_id AND d.cod_3litere = 'TIZ' AND d.site_id = p.site_id)
-            THEN 1 ELSE 0 END) AS e_depozitul_tiz_pe_site;
-INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, depozit_id, acordat_de, motiv)
-VALUES (:proiect_id, '70d6bb90-d920-4768-a758-1a0df99853b2', 'gestionar', :depozit_id, 'Razvan Trusu',
-        'Gestionar pe depozitul de TEST (testul de recepție E3, documente fictive)')
-RETURNING id, proiect_id, profile_id, rol, depozit_id, valabil_de;
-SELECT public.fn_izo_seteaza_nivel(:proiect_id, 'stoc',
-         'TEST IZOMETRIE — testul de recepție E3 cu gestionarul (documente fictive pv_test), fără import') AS nivel;
-SELECT 'VERIFICARE' AS pas, public.fn_izo_nivel(:proiect_id) AS nivel, cardinality(public.fn_izo_porti_lipsa()) AS porti_lipsa,
-       (SELECT count(*) FROM public.magazie_bucati WHERE proiect_id = :proiect_id) AS bucati;   -- stoc · 0 · 0
-COMMIT;
-```
+1. **Id-urile, din coduri (doar citire):**
+   ```sql
+   SELECT p.id AS proiect_id, d.id AS depozit_id, d.name AS depozit,                          -- …, …, DM TEST IZO
+          d.site_id = p.site_id AS pe_site,                                                    -- true
+          (SELECT count(*) FROM public.logistica_depozite x WHERE x.site_id = p.site_id) AS depozite_pe_site  -- 1
+     FROM public.executie_proiecte p JOIN public.logistica_depozite d ON d.cod_3litere = 'TIZ'
+    WHERE p.cod_intern = 'TEST-IZO';
+   ```
+   Exact un rând, `pe_site` = true, `depozite_pe_site` = 1. Garda din script verifică doar că depozitul e pe site-ul proiectului de test; că e TIZ o arată acest pas (site-ul creat de `test_izo_1` are un singur depozit, TIZ). Altfel nu se cere „da”-ul și nu se rulează.
+2. **Rularea**, cu fișierul din checkout-ul lui `origin/izometrie/e3` și conexiunea din CLAUDE.md pct. 3b:
+   `psql -X -w -v ON_ERROR_STOP=1 -v proiect_id=<proiect_id> -v depozit_id=<depozit_id> -f scripts/izometrie/test_izo_2b_activare_fara_import.sql`
+3. **Ce trebuie să întoarcă:**
+   - PREVIEW: `proiect` = TEST-IZO, `depozit` = DM TEST IZO, `depozit_pe_site_proiect` = true, `nivel_inainte` = off, `porti_lipsa` = 0, `e3_live` = true, `bucati_inainte` = 0, `atribuiri_inainte` = 0;
+   - în tranzacție: gărzile `e_proiectul_de_test`, `depozit_pe_site`, `e3_live` = 1 (o gardă căzută = împărțire la zero, ROLLBACK, nimic scris); INSERT-ul atribuirii întoarce 1 rând (Janeta, `gestionar`, depozitul TIZ, `activ` = true); `nivel_setat`; VERIFICARE: `nivel` = stoc, `porti_lipsa` = 0, `bucati` = 0, `evenimente` = 0, `atribuiri_active` = 1; `stare_ok` = 1; COMMIT;
+   - apoi P1 (§2.1): `nivel` = stoc, `janeta_gestionar` = 1, `bucati` = 0, `documente` = 0.
+4. **Reluarea** e sigură: atribuirea nu se dublează (INSERT … WHERE NOT EXISTS), iar pe un proiect deja `stoc` nivelul doar își reverifică porțile. **Revenirea**, doar cât proiectul n-are niciun fapt în registru: `fn_izo_seteaza_nivel(<proiect_id>, 'off', '<motiv>')` + `activ = false` pe atribuirea întoarsă de script, ambele cu „da”. Nimic nu se șterge.
 
 Dacă `test_izo_2` a rulat deja (P1 arată `bucati` = 41), testul E3 pe aceleași documente nu merge. Variantele, de decis de Răzvan:
-- **A** — storno pe import: `fn_izo_import_storno(<proiect>, 'test-receptie-1', <motiv>)`, ca postgres, cu „da”. Cele 41 de bucăți devin `anulata` (bucățile, importul și evenimentul lui `sold_initial` rămân, plus un eveniment `storno` cu 41 de mișcări), seriile se eliberează, apoi testul E3. Activarea de mai sus **nu se mai rulează**: atribuirea Janetei și nivelul `stoc` există deja din `test_izo_2` (un al doilea INSERT ar pica pe indexul atribuirii active). Rezultatele așteptate din §2.3 se citesc cu corecția „Varianta A” de acolo. În 🧱, bucățile anulate nu apar la cartonașe, în tabelul pe loc × tip și nici în listă (fără filtru), deci §1.5 rămâne valabil;
+- **A** — storno pe import: `fn_izo_import_storno(<proiect>, 'test-receptie-1', <motiv>)`, ca postgres, cu „da”. Cele 41 de bucăți devin `anulata` (bucățile, importul și evenimentul lui `sold_initial` rămân, plus un eveniment `storno` cu 41 de mișcări), seriile se eliberează, apoi testul E3. `test_izo_2b` **nu mai e nevoie** să ruleze: atribuirea Janetei și nivelul `stoc` există deja din `test_izo_2` (rulat totuși, nu dublează atribuirea și doar reverifică porțile). Rezultatele așteptate din §2.3 se citesc cu corecția „Varianta A” de acolo. În 🧱, bucățile anulate nu apar la cartonașe, în tabelul pe loc × tip și nici în listă (fără filtru), deci §1.5 rămâne valabil;
 - **B** — documente de test regenerate, cu alte serii (`gen/gen_pv_test.py`), apoi fișa și acest ghid refăcute (seriile și cifrele; cele 41 de bucăți ale importului rămân vii pe proiect și intră în 🧱 și în Q-REG / Q-EV).
 
 Un alt proiect de test **nu** rezolvă coliziunea: indexurile `ux_magbuc_izo_radacina` / `ux_magbuc_izo_curba` și verificarea E3 (`serie_in_registru` / `curba_in_registru`) nu au proiectul în cheie, deci bucățile vii ale importului de pe TEST-IZO blochează confirmarea acelorași serii pe orice proiect. Doar A sau B merg.
@@ -530,7 +519,7 @@ Scopul: Janeta vede că o ciornă greșită se anulează cu motiv, fără urme �
 - **Documentele** rămân toate, fiecare cu starea lui: ciornele anulate `anulat` (gri în listă, cu motivul), documentele confirmate `confirmat`. Un document confirmat devine `anulat` doar printr-un storno administrativ (`fn_izo_doc_anuleaza`, cu „da”); rândul documentului rămâne și atunci. Niciun DELETE pe documente nu e prevăzut: tabelele `izo_documente_*` au FK `ON DELETE RESTRICT`, iar evenimentele și mișcările registrului doar se adaugă. **Nu** rămâne fiecare stare intermediară: la fiecare salvare a unei ciorne, rândurile și lista ei de scanuri se rescriu (se păstrează doar ultima versiune salvată).
 - **Registrul:** cele 41 de bucăți, cele 6 evenimente și cele 81 de mișcări rămân pe TEST-IZO (varianta A: 82 / 8 / 163, vezi §2.3). Se pot doar storna administrativ (vezi mai sus). Nivelul proiectului nu mai coboară la `off` după primul eveniment.
 - **Scanurile** din manifestul unui document rămân în bucket-ul `izo-documente`: cât e în manifest, fișierul nu se poate șterge, iar după confirmare sau anulare manifestul nu se mai schimbă (deci rămân scanurile documentelor confirmate și ale ciornelor anulate). Ecranul șterge însă fișierul unui scan scos dintr-o ciornă („Scoți scanul din document?”) și pe cel rămas orfan când salvarea cu scanul eșuează.
-- **Seriile 999TS… și curbele 9001–9012 rămân ocupate în tot registrul** (indexurile de unicitate sunt globale). Un al doilea test cu aceleași documente cere fie storno administrativ pe cele 3 documente (cu „da”), fie documente regenerate cu alte serii.
+- **Seriile 999TS… și curbele 9001–9012 rămân ocupate în tot registrul** (indexurile de unicitate sunt globale: țeava pe serie, curba pe serie + șarjă + unghi). Un al doilea test cu aceleași documente cere fie storno administrativ pe cele 3 documente (cu „da”), fie documente regenerate cu alte serii.
 - **Proiectul TEST-IZO**, site-ul, depozitul TIZ, rândul din `magazii` și notificarea „Proiect nou fără contract” trimisă owner-ilor (efectele `test_izo_1`) rămân. Rapoartele care adună toate proiectele ar trebui să poată ascunde TEST-IZO (filtru pe `cod_intern`, propus în E3_PLAN §6).
 - **Atribuirea Janetei** pe TEST-IZO rămâne activă până decide Răzvan. Retragerea (`activ = false` sau `valabil_pana`) e tot o schimbare de drept de acces, deci se face cu „da”-ul lui, nu din oficiu.
 - **LOT 1 / LOT 2:** neatinse. Dovada: Q-ALTE are aceleași numărători **și aceleași trei amprente** (md5 pe conținutul rândurilor) înainte și după. Fără amprente, aceleași numărători dovedesc doar că nu s-au adăugat sau șters rânduri.
