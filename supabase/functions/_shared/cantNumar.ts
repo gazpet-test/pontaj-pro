@@ -232,7 +232,7 @@ const RE_TOTAL_RAND = /^[^\p{L}]*\btotal[ea]?\s*=[^\p{L}]*$/iu
 const RE_ANTET_PAGINA = /^\s*(?!DN)[A-Z][A-Z0-9_-]{1,39}\s+pag\.?\s+\d{1,4}\s*$/i
 // marcajul de pagină COMPLET (nu doar prefixul): „⟦PAGINA n⟧”
 // caracterele U+27E6 / U+27E7 scrise ca escape-uri (review r2: transportul ASCII al diff-ului le transforma în „[[” / „]]”)
-const RE_MARCAJ_PAGINA = /^⟦PAGINA \d{1,5}⟧\s*$/
+const RE_MARCAJ_PAGINA = /^\u27E6PAGINA \d{1,5}\u27E7\s*$/
 // prima linie ne-goală DEASUPRA liniei care începe la `a` e un marcaj de pagină
 function subMarcajPagina(doc: string, a: number): boolean {
   let p = a - 1
