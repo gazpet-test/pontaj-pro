@@ -12,10 +12,10 @@
 --     REVOKE INSERT/UPDATE/DELETE/TRUNCATE de la anon/authenticated/service_role; liniile se scriu DOAR prin RPC-urile de
 --     mai jos (postgres direct rămâne doar cale administrativă). Inventar: nicio funcție, cron, edge function sau script nu
 --     scrie pe linii în afara RPC-urilor (postcondiția 4 o verifică pe catalog);
---   • garda preluării (r12, Jakarinos + Copilot r11 P1): trigger-ul trg_bonc_preluare_garda refuză orice trecere în
---     „preluat” sau atingere a preluat_de / preluat_la care nu vine din fn_bon_preia (current_user = postgres, owner-ul
---     RPC-urilor DEFINER) — un tab cu UI-ul vechi nu mai poate marca un bon „preluat” fără costuri; anularea directă
---     (stare → „anulat”) rămâne permisă, dar nu poate atinge câmpurile de preluare.
+--   • garda ANTETULUI (r12 + r13, Jakarinos + Copilot r11–r12): trigger-ul trg_bonc_antet_garda refuză, în afara
+--     RPC-urilor (current_user ≠ postgres, owner-ul RPC-urilor DEFINER): crearea și ștergerea antetului și orice UPDATE în
+--     afară de ANULARE (stare „generat” → „anulat”, plus updated_at, nimic altceva). Un tab cu UI-ul vechi e astfel
+--     fail-closed: nu poate crea un antet orfan, nu poate edita antetul fără linii, nu poate marca „preluat” fără costuri.
 --     Motivul: cu DML direct pe linii, lock-ul liniei vine înaintea oricărui trigger, deci nicio ordine globală de lock-uri
 --     nu se putea garanta (deadlock DELETE antet CASCADE ↔ RPC, DML pe mai multe linii ↔ RPC);
 --   • ordinea UNICĂ a lock-urilor: ANTETUL ÎNTÂI, apoi liniile (RPC-urile, DELETE-ul de antet cu CASCADE, UPDATE-ul direct
@@ -55,9 +55,9 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION 'Precondiție 0a: rulează ca postgres (current_user = %)', current_user;
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_bon_salveaza', 'fn_bon_preia', 'fn_bon_preluare_garda'))
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_bonuri_consum'::regclass AND tgname = 'trg_bonc_preluare_garda') THEN
-    RAISE EXCEPTION 'Precondiție 0b: public.fn_bon_salveaza / fn_bon_preia / garda preluării există deja';
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_bon_salveaza', 'fn_bon_preia', 'fn_bon_antet_garda'))
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_bonuri_consum'::regclass AND tgname = 'trg_bonc_antet_garda') THEN
+    RAISE EXCEPTION 'Precondiție 0b: public.fn_bon_salveaza / fn_bon_preia / garda antetului există deja';
   END IF;
   -- livrare nouă (nimic) sau relivrare după retragere (coloana + exact cele 2 indexuri)
   v_relivrare := EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_bonuri_consum'
@@ -144,22 +144,29 @@ BEGIN
   -- ── liniile: scrierile din API închise (doar prin RPC-uri) ───────────────────────────────────────────
   REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.executie_bonuri_consum_linii FROM anon, authenticated, service_role;
 
-  -- ── garda preluării: doar fn_bon_preia (DEFINER, current_user = postgres) trece un bon în „preluat” ──────
-  CREATE FUNCTION public.fn_bon_preluare_garda() RETURNS trigger
+  -- ── garda antetului: în afara RPC-urilor (DEFINER, current_user = postgres) doar ANULAREA ──────────────
+  -- INVOKER: current_user e al apelantului (anon / authenticated / service_role), postgres doar în RPC-uri / administrare
+  CREATE FUNCTION public.fn_bon_antet_garda() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $g$
   BEGIN
-    IF current_user IS DISTINCT FROM 'postgres' AND (
-         (TG_OP = 'INSERT' AND (NEW.stare = 'preluat' OR NEW.preluat_de IS NOT NULL OR NEW.preluat_la IS NOT NULL))
-      OR (TG_OP = 'UPDATE' AND ((NEW.stare = 'preluat' AND OLD.stare IS DISTINCT FROM 'preluat')
-                                OR NEW.preluat_de IS DISTINCT FROM OLD.preluat_de OR NEW.preluat_la IS DISTINCT FROM OLD.preluat_la))) THEN
-      RAISE EXCEPTION 'bon: preluarea în Financiar se face doar prin fn_bon_preia (reîncarcă pagina)' USING ERRCODE = '42501';
+    IF current_user IS NOT DISTINCT FROM 'postgres' THEN RETURN CASE TG_OP WHEN 'DELETE' THEN OLD ELSE NEW END; END IF;
+    IF TG_OP = 'INSERT' THEN
+      RAISE EXCEPTION 'bon: bonurile se creează doar prin fn_bon_salveaza (reîncarcă pagina)' USING ERRCODE = '42501';
+    ELSIF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'bon: bonurile nu se șterg — se anulează' USING ERRCODE = '42501';
+    END IF;
+    -- UPDATE: doar anularea unui bon generat; restul antetului neschimbat (salvarea → fn_bon_salveaza, preluarea → fn_bon_preia)
+    IF NOT (OLD.stare = 'generat' AND NEW.stare = 'anulat'
+            AND (to_jsonb(NEW) - 'stare' - 'updated_at') = (to_jsonb(OLD) - 'stare' - 'updated_at')) THEN
+      RAISE EXCEPTION 'bon: antetul se modifică doar prin fn_bon_salveaza / fn_bon_preia; direct, doar anularea unui bon generat (reîncarcă pagina)'
+        USING ERRCODE = '42501';
     END IF;
     RETURN NEW;
   END $g$;
-  REVOKE ALL ON FUNCTION public.fn_bon_preluare_garda() FROM PUBLIC, anon, authenticated, service_role;
-  CREATE TRIGGER trg_bonc_preluare_garda BEFORE INSERT OR UPDATE ON public.executie_bonuri_consum
-    FOR EACH ROW EXECUTE FUNCTION public.fn_bon_preluare_garda();
-  ALTER TABLE public.executie_bonuri_consum ENABLE ALWAYS TRIGGER trg_bonc_preluare_garda;
+  REVOKE ALL ON FUNCTION public.fn_bon_antet_garda() FROM PUBLIC, anon, authenticated, service_role;
+  CREATE TRIGGER trg_bonc_antet_garda BEFORE INSERT OR UPDATE OR DELETE ON public.executie_bonuri_consum
+    FOR EACH ROW EXECUTE FUNCTION public.fn_bon_antet_garda();
+  ALTER TABLE public.executie_bonuri_consum ENABLE ALWAYS TRIGGER trg_bonc_antet_garda;
 
   -- ── salvarea ─────────────────────────────────────────────────────────────────────────────────────────
   CREATE FUNCTION public.fn_bon_salveaza(p_bon_id bigint, p_versiune timestamptz, p_antet jsonb, p_linii jsonb) RETURNS jsonb
@@ -295,6 +302,8 @@ BEGIN
     SELECT b.updated_at, b.stare, b.provenienta INTO v_ver, v_stare, v_prov FROM public.executie_bonuri_consum b WHERE b.id = p_bon_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'bon: bonul % nu există', p_bon_id USING ERRCODE = 'P0002'; END IF;
     SELECT count(*) INTO v_linii FROM public.executie_bonuri_consum_linii l WHERE l.bon_id = p_bon_id;
+    -- un bon fără linii nu se preia (Jakarinos r12)
+    IF v_linii = 0 THEN RAISE EXCEPTION 'bon: bonul % nu are linii — nu se preia', p_bon_id USING ERRCODE = '22023'; END IF;
     SELECT count(*), count(DISTINCT (c->>'linie_id')::bigint) FILTER (WHERE EXISTS (SELECT 1 FROM public.executie_bonuri_consum_linii l
              WHERE l.id = (c->>'linie_id')::bigint AND l.bon_id = p_bon_id))
       INTO v_cerute, v_bune FROM jsonb_array_elements(p_costuri) c;
@@ -353,16 +362,41 @@ BEGIN
      OR NOT has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'SELECT') THEN
     RAISE EXCEPTION 'Postcondiție 2: liniile bonului — API (anon / authenticated / service_role) doar citire';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_bonuri_consum'::regclass AND tgname = 'trg_bonc_preluare_garda' AND tgenabled = 'A') THEN
-    RAISE EXCEPTION 'Postcondiție 2b: garda preluării lipsește sau nu e ENABLE ALWAYS';
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_bonuri_consum'::regclass AND tgname = 'trg_bonc_antet_garda' AND tgenabled = 'A') THEN
+    RAISE EXCEPTION 'Postcondiție 2b: garda antetului lipsește sau nu e ENABLE ALWAYS';
   END IF;
-  -- nicio funcție din afara RPC-urilor nu scrie pe linii (inventarul r12: cron / edge / scripturi — 0)
+  -- nicio cale din afara RPC-urilor nu scrie pe linii (inventarul r12: cron / edge / scripturi — 0). Cu REVOKE, doar postgres
+  -- (owner) scrie pe linii, deci contează funcțiile DEFINER, trigger-ele și view-urile actualizabile (Jakarinos r12 P2):
+  --   (a) o funcție DEFINER (în afara RPC-urilor) care numește liniile într-o instrucțiune de scriere — corpul fără comentarii;
+  --   (b) o funcție DEFINER cu SQL dinamic din afara listei revizuite (tabele fixe; amprentă extinsă, ca la E2a);
+  --   (c) un view / o regulă peste linii fără security_invoker (un view actualizabil al ownerului ar ocoli REVOKE-ul).
+  -- Limită asumată: textul. Un nume construit dinamic e prins doar prin (b).
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-              WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
+              WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prosecdef AND p.prolang NOT IN (12, 13)
                 AND p.oid NOT IN ('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure, 'public.fn_bon_preia(bigint, timestamptz, jsonb)'::regprocedure)
-                AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), ''))
-                    ~* '(insert\s+into|update|delete\s+from|truncate(\s+table)?|copy)\s+(only\s+)?("?public"?\s*\.\s*)?"?executie_bonuri_consum_linii\M') THEN
-    RAISE EXCEPTION 'Postcondiție 4: o funcție din afara RPC-urilor bonului scrie pe executie_bonuri_consum_linii';
+                AND regexp_replace(regexp_replace(p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), ''), '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g')
+                    ~* '(insert[[:space:]]+into|update|delete[[:space:]]+from|truncate([[:space:]]+table)?|copy|merge[[:space:]]+into)[[:space:]]+(only[[:space:]]+)?("?public"?[[:space:]]*\.[[:space:]]*)?"?executie_bonuri_consum_linii"?($|[^[:alnum:]_$])') THEN
+    RAISE EXCEPTION 'Postcondiție 4a: o funcție DEFINER din afara RPC-urilor bonului scrie pe executie_bonuri_consum_linii';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prosecdef AND p.prolang NOT IN (12, 13)
+                AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
+                AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* '\mexecute\M'
+                AND format('%s=%s', p.oid::regprocedure::text, md5(p.prosrc || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner)
+                                                                  || '|' || coalesce(p.proacl::text, '') || '|' || p.prosecdef::text))
+                    <> ALL (ARRAY['_completare_goleste_camp(bigint,text,integer)=888fde4d4e7fbea6889835dd96c2225d',
+                                  '_completare_scrie_camp(bigint,text,text)=77d7b091a049ccc86b47d078957db39f',
+                                  'fn_cont_inchide(uuid,text,text,integer)=c4a6ca93a52ca8a97aa90f168debf30e',
+                                  'fn_cont_restaureaza_flaguri(uuid,jsonb)=ecd803a2dda6b734ea92ebaf10564397',
+                                  'fn_conturi_inchideri_sweep()=402874ea5081b41801313e0def9e3226',
+                                  'fn_tichete_notif_on_insert()=1ffa41a8750b6d48d721d9e2a00b3f54'])) THEN
+    RAISE EXCEPTION 'Postcondiție 4b: o funcție DEFINER cu SQL dinamic nerevizuită (ar putea scrie pe linii)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid JOIN pg_class vw ON vw.oid = rw.ev_class
+              WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass
+                AND d.refobjid = 'public.executie_bonuri_consum_linii'::regclass AND rw.ev_class <> d.refobjid
+                AND NOT coalesce(vw.reloptions && ARRAY['security_invoker=true','security_invoker=on','security_invoker=1'], false)) THEN
+    RAISE EXCEPTION 'Postcondiție 4c: un view / o regulă peste liniile bonului fără security_invoker';
   END IF;
   IF NOT v_relivrare AND EXISTS (SELECT 1 FROM public.executie_bonuri_consum WHERE cheie_operatie IS NOT NULL) THEN
     RAISE EXCEPTION 'Postcondiție 3: bonurile existente trebuie să rămână fără cheie de operație';
@@ -375,10 +409,10 @@ BEGIN
                 || '|' || (SELECT pg_get_indexdef('public.ux_bonc_proiect_numar'::regclass))
                 || '|' || (SELECT coalesce(c.relacl::text, '') FROM pg_class c WHERE c.oid = 'public.executie_bonuri_consum_linii'::regclass)
                 || '|' || (SELECT pg_get_triggerdef(g.oid) || ':' || g.tgenabled::text FROM pg_trigger g
-                            WHERE g.tgrelid = 'public.executie_bonuri_consum'::regclass AND g.tgname = 'trg_bonc_preluare_garda'))
+                            WHERE g.tgrelid = 'public.executie_bonuri_consum'::regclass AND g.tgname = 'trg_bonc_antet_garda'))
        FROM pg_proc p WHERE p.oid IN ('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure,
                                       'public.fn_bon_preia(bigint, timestamptz, jsonb)'::regprocedure,
-                                      'public.fn_bon_preluare_garda()'::regprocedure)));
+                                      'public.fn_bon_antet_garda()'::regprocedure)));
 
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261102b_bon_salvare_tranzactionala:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261102b: garda de livrare (final) — tranzacție/runner invalid';

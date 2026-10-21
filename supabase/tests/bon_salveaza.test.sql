@@ -102,21 +102,30 @@ SELECT teste.e('B18c retry al preluării (răspuns pierdut, aceleași costuri) �
   (public.fn_bon_preia(:b18, :'v18v', :'costuri'::jsonb)->>'idempotent')::boolean);
 SELECT teste.eroare('B18d editarea unui bon preluat → refuz', format($f$SELECT public.fn_bon_salveaza(%s, %L,
   '{"provenienta":"gazpet","data_bon":"2026-10-21","observatii":"editat"}', '[{"denumire":"y","cantitate":1}]')$f$, :b18, :'v18'), 'se editează doar');
+RESET ROLE;   -- pregătirea testului din administrare (direct, din API, antetul se schimbă doar prin RPC-uri)
 UPDATE public.executie_bonuri_consum SET provenienta = 'beneficiar' WHERE id = :b17;
+SELECT teste.ca(:'JANETA');
 SELECT updated_at AS v18e FROM public.executie_bonuri_consum WHERE id = :b17 \gset
 SELECT teste.eroare('B18e bon beneficiar cu costuri → refuz (nu se valorizează)', format($f$SELECT public.fn_bon_preia(%s, %L,
   (SELECT jsonb_agg(jsonb_build_object('linie_id', id, 'cost_unitar', 1)) FROM public.executie_bonuri_consum_linii WHERE bon_id = %s))$f$, :b17, :'v18e', :b17), 'nu se valorizează');
 SELECT public.fn_bon_preia(:b17, :'v18e', '[]')->>'idempotent' AS i18f \gset
 SELECT teste.e('B18f bon beneficiar fără costuri → preluat', :'i18f' = 'false' AND (SELECT stare FROM public.executie_bonuri_consum WHERE id = :b17) = 'preluat');
 -- B20 client vechi după REVOKE (Jakarinos + Copilot r11 P1): costurile pe linii refuzate (permission denied), iar trecerea
---     directă a antetului în „preluat” e refuzată de garda trg_bonc_preluare_garda → bonul rămâne „generat”, fără succes fals
+--     directă a antetului în „preluat” e refuzată de garda trg_bonc_antet_garda → bonul rămâne „generat”, fără succes fals;
+--     r13: și salvarea veche (INSERT / UPDATE de antet, DELETE) e refuzată — fără antet orfan, fără antet nou cu liniile vechi
 SELECT r->>'bon_id' AS b20 FROM (SELECT public.fn_bon_salveaza(NULL, NULL,
   '{"proiect_id":1,"cheie_operatie":"aaaaaaaa-0000-0000-0000-000000000006","provenienta":"gazpet","data_bon":"2026-10-21"}',
   '[{"denumire":"q","cantitate":1}]') r) x \gset
 SELECT teste.eroare('B20a client vechi: costul direct pe linie → refuz', format($f$UPDATE public.executie_bonuri_consum_linii SET cost_unitar = 1, valoare = 1 WHERE bon_id = %s$f$, :b20), 'permission denied');
-SELECT teste.eroare('B20b client vechi: antetul direct în „preluat” → refuz de gardă', format($f$UPDATE public.executie_bonuri_consum SET stare = 'preluat', preluat_de = %L, preluat_la = now(), updated_at = now() WHERE id = %s$f$, :'JANETA', :b20), 'doar prin fn_bon_preia');
-SELECT teste.eroare('B20c doar preluat_la, direct → refuz', format($f$UPDATE public.executie_bonuri_consum SET preluat_la = now() WHERE id = %s$f$, :b20), 'doar prin fn_bon_preia');
-SELECT teste.eroare('B20d bon nou direct, deja „preluat” → refuz', $$INSERT INTO public.executie_bonuri_consum (proiect_id, stare) VALUES (1, 'preluat')$$, 'doar prin fn_bon_preia');
+SELECT teste.eroare('B20b client vechi: antetul direct în „preluat” → refuz de gardă', format($f$UPDATE public.executie_bonuri_consum SET stare = 'preluat', preluat_de = %L, preluat_la = now(), updated_at = now() WHERE id = %s$f$, :'JANETA', :b20), 'doar anularea');
+SELECT teste.eroare('B20c doar preluat_la, direct → refuz', format($f$UPDATE public.executie_bonuri_consum SET preluat_la = now() WHERE id = %s$f$, :b20), 'doar anularea');
+SELECT teste.eroare('B20d bon nou direct, deja „preluat” → refuz', $$INSERT INTO public.executie_bonuri_consum (proiect_id, stare) VALUES (1, 'preluat')$$, 'doar prin fn_bon_salveaza');
+SELECT count(*) AS n20 FROM public.executie_bonuri_consum \gset
+SELECT teste.eroare('B20g client vechi: crearea antetului direct → refuz', $$INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id, provenienta, sursa, stare) VALUES ('BC-2026-1-7777', 1, 'gazpet', 'manual', 'generat')$$, 'doar prin fn_bon_salveaza');
+SELECT teste.e('B20g2 niciun antet orfan creat', (SELECT count(*) FROM public.executie_bonuri_consum) = :n20);
+SELECT teste.eroare('B20h client vechi: editarea antetului direct (observații, dată) → refuz', format($f$UPDATE public.executie_bonuri_consum SET observatii = 'vechi', data_bon = '2026-10-20', updated_at = now() WHERE id = %s$f$, :b20), 'doar anularea');
+SELECT teste.eroare('B20i ștergerea antetului direct → refuz', format($f$DELETE FROM public.executie_bonuri_consum WHERE id = %s$f$, :b20), 'nu se șterg');
+SELECT teste.eroare('B20j anularea care atinge și alt câmp → refuz', format($f$UPDATE public.executie_bonuri_consum SET stare = 'anulat', observatii = 'x' WHERE id = %s$f$, :b20), 'doar anularea');
 SELECT teste.e('B20e după încercările clientului vechi bonul e tot „generat”, fără preluare', (SELECT stare = 'generat' AND preluat_de IS NULL AND preluat_la IS NULL FROM public.executie_bonuri_consum WHERE id = :b20));
 UPDATE public.executie_bonuri_consum SET stare = 'anulat', updated_at = now() WHERE id = :b20;
 SELECT teste.e('B20f anularea directă (fără câmpurile de preluare) merge', (SELECT stare FROM public.executie_bonuri_consum WHERE id = :b20) = 'anulat');
@@ -131,6 +140,12 @@ SELECT teste.e('B21 invariant: scrierile pe linii doar în fn_bon_salveaza / fn_
   AND NOT has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'INSERT')
   AND NOT has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'DELETE')
   AND NOT has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'TRUNCATE'));
+RESET ROLE;
+-- B18g un bon fără linii (posibil doar din administrare) nu se preia (Jakarinos r12)
+INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id, provenienta, sursa, stare) VALUES ('BC-2026-1-8888', 1, 'beneficiar', 'manual', 'generat')
+RETURNING id AS b18g, updated_at AS v18g \gset
+SELECT teste.ca(:'JANETA');
+SELECT teste.eroare('B18g preluarea unui bon fără linii → refuz', format($f$SELECT public.fn_bon_preia(%s, %L, '[]')$f$, :b18g, :'v18g'), 'nu are linii');
 RESET ROLE;
 -- B14 numerotarea trece de 9999 fără trunchiere (Jakarinos r7)
 INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id) VALUES ('BC-2026-2-9999', 2);

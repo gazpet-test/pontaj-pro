@@ -273,21 +273,21 @@ cursa "4i retry creare în timpul unei editări" \
   "$CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"C\"}', '[{\"denumire\":\"C1\",\"cantitate\":1}]')" \
   "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000001\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"cot 90\",\"cantitate\":2}]'); COMMIT;" \
   err "alt conținut"
-# r11 (Jakarinos + Copilot r10): ordinea unică „antet întâi” — DELETE de antet (CASCADE pe linii) ↔ RPC, în ambele ordini,
+# r11 (Jakarinos + Copilot r10): ordinea unică „antet întâi” — DELETE de antet (CASCADE pe linii; r13: doar din administrare, ca postgres) ↔ RPC, în ambele ordini,
 #    și preluare ↔ editare; B AȘTEAPTĂ antetul, fără deadlock, apoi decide pe starea comisă
 # ca Janeta, ultimul rezultat (psql ≥ 15 afișează rezultatul fiecărei instrucțiuni din -c)
 qj() { q "$CA_JANETA; $1" | tail -n1; }
 bon_nou() { qj "SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"$1\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"X1\",\"cantitate\":1},{\"denumire\":\"X2\",\"cantitate\":2}]')->>'bon_id'"; }
 BX="$(bon_nou aaaaaaaa-0000-0000-0000-000000000031)"; VERX="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BX")"
 cursa "4i DELETE antet (CASCADE) ținut ↔ RPC de editare" \
-  "$CA_JANETA; DELETE FROM public.executie_bonuri_consum WHERE id = $BX" \
+  "DELETE FROM public.executie_bonuri_consum WHERE id = $BX" \
   "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza($BX, '$VERX', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"Y\",\"cantitate\":1}]'); COMMIT;" \
   err "nu există"
 [ "$(q "SELECT count(*) FROM public.executie_bonuri_consum_linii WHERE bon_id = $BX")" = 0 ] || esec "4i liniile bonului șters au rămas"
 BY="$(bon_nou aaaaaaaa-0000-0000-0000-000000000033)"; VERY="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BY")"
 cursa "4i RPC de editare ținut ↔ DELETE antet (CASCADE)" \
   "$CA_JANETA; SELECT public.fn_bon_salveaza($BY, '$VERY', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"Y1\",\"cantitate\":1},{\"denumire\":\"Y2\",\"cantitate\":1},{\"denumire\":\"Y3\",\"cantitate\":1}]')" \
-  "BEGIN; $CA_JANETA; DELETE FROM public.executie_bonuri_consum WHERE id = $BY RETURNING 'sters:' || id; COMMIT;" \
+  "BEGIN; DELETE FROM public.executie_bonuri_consum WHERE id = $BY RETURNING 'sters:' || id; COMMIT;" \
   ok "sters:$BY"
 [ "$(q "SELECT count(*) FROM public.executie_bonuri_consum_linii WHERE bon_id = $BY")" = 0 ] || esec "4i liniile noi ale bonului șters au rămas"
 BZ="$(bon_nou aaaaaaaa-0000-0000-0000-000000000032)"; VERZ="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BZ")"
