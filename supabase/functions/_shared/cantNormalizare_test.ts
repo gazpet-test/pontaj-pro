@@ -323,6 +323,8 @@ Deno.test('n7 negative: fără zerouri / „2” care continuă secvența / „2
     ['restart_dn63_punct', RACARI_COD.replace('@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n', 'TEAVA PE DN63.\n2 COD 64000115\nTEAVA PE DN110\n'), '003 6701152 M 200.000'],
     // review Copilot r3 (P1): denumirea lui 003 se termină natural în „DN 90X8.”, urmată de un restart real „2 COD …” CU denumirea lui → incert
     ['restart_90x8_cu_denumire', RACARI_COD.replace('2 COD 64000115\n', '2 COD 64000115\nTEAVA PE DN110\n'), '003 6701152 M 200.000'],
+    // review Jakarinos r3 (aceeași clasă, forma lui exactă): „TEAVA PE 63X8.” + restart „2 COD …” + „TEAVA PE DN110” → incert
+    ['restart_63x8_jak', RACARI_COD.replace('@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n', 'TEAVA PE 63X8.\n2 COD 64000115\nTEAVA PE DN110\n'), '003 6701152 M 200.000'],
     // „<n>” de două cifre („12 COD …”) nu poate fi zecimala unei dimensiuni → incert
     ['doua_cifre', RACARI_COD.replace('2 COD 64000115', '12 COD 64000115'), '003 6701152 M 200.000'],
     // „2 COD …” direct sub linia articolului (fără linie de denumire ruptă deasupra) → incert
