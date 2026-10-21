@@ -197,8 +197,10 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'fn\_izo\_%')
      OR EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = 'public'::regnamespace AND (relname LIKE 'izo\_%' OR relname LIKE 'magazie\_bucati\_evenimente%'
                 OR relname LIKE 'magazie\_bucati\_miscari%' OR relname LIKE '%\_izo\_%'))
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE '%izo%')
-     OR EXISTS (SELECT 1 FROM pg_policies WHERE policyname LIKE '%izo%')
+     -- tipare ANCORATE, exact familiile create de migrare (dry-run-ul pe prod 21.10: '%izo%' liber prindea politicile
+     -- existente „…_furnIZOri_…” — 9 politici de furnizori care nu țin de modul)
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND (tgname LIKE 'trg\_izo\_%' OR tgname LIKE '%\_izo\_%'))
+     OR EXISTS (SELECT 1 FROM pg_policies WHERE policyname LIKE 'izo\_%' OR policyname LIKE 'magbuc\_izo\_%')
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'magazie_bucati' AND column_name IN ('tip_cod','serie_canon','depozit_id')) THEN
     RAISE EXCEPTION 'Revenire 20261102a: au rămas obiecte izo';
   END IF;
