@@ -29,7 +29,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import GarantieRegistruLink from './OfertareGarantieRegistru.jsx'
 import { ziDepunere, calculeazaValabilitate, propuneActualizare, textDurata, zileIntre, MESAJ_NECITIT,
-  faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional,
+  faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional, salveazaActSigur, estePdfAct,
   evalueazaGarantie, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE, semnalDinCitire, precompletarePerioada } from './ofertareGarantieValabilitate.js'
 
 // cerințele din registru care pot conține valabilitatea (garanție / ofertă) — aceeași interogare în tab și în KPI
@@ -103,6 +103,9 @@ export default function GarantieSection({ licitatie: l, profile, onChanged }) {
   const [cerinte, setCerinte] = useState([])    // cerințele din registru care pot conține valabilitatea (garanție / ofertă)
   const [actEdit, setActEdit] = useState(null)  // durata editată în bannerul de decalare ({ n, unitate }); null = propunerea
   const [actAd, setActAd] = useState(null)      // „act adițional primit”: { de, pana } editate; null = perioada cerută
+  // TKT-2026-0342: act adițional obținut în afara platformei („fără mail”): { nr, data } + PDF-ul (obligatoriu); null = închis
+  const [actM, setActM] = useState(null); const [fAct, setFAct] = useState(null)
+  const [actePdf, setActePdf] = useState([])    // PDF-urile „_act_aditional_” din ${lic}/garantie/ — afișare ORIENTATIVĂ (numele nu dovedește legătura)
 
   const load = async () => {
     const [{ data: gg }, { data: bb }, { data: dd }, { data: cc }] = await Promise.all([
@@ -111,7 +114,10 @@ export default function GarantieSection({ licitatie: l, profile, onChanged }) {
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, fisier_path, size_bytes').eq('licitatie_id', l.id).in('tip', ['fisa_date', 'raspuns_clarificare', 'model_contract']).order('tip'),
       qCerinteGarantie(l.id),
     ])
-    setG(gg || null); setBrokeri(bb || []); setDocs(dd || []); setCerinte(cc || []); setActEdit(null); setActAd(null)
+    setG(gg || null); setBrokeri(bb || []); setDocs(dd || []); setCerinte(cc || []); setActEdit(null); setActAd(null); setActM(null); setFAct(null)
+    // calea PDF-ului NU intră în marcaj (RE_MARCAJ) — se găsește după nume în folderul garanției; o eroare de listare = listă goală
+    const { data: fl } = await supabase.storage.from('ofertare').list(`${l.id}/garantie`, { limit: 200 })
+    setActePdf((fl || []).map(f => f.name).filter(n => n.includes('_act_aditional_')).sort())
     if (gg) setF2(x => ({ ...x, decont_valoare: gg.decont_valoare ?? '' }))
     // pasul 4: perioada din polița fizică, precompletată cu perioada cerută (omul o confirmă / corectează);
     // ce a trecut omul NU se suprascrie la reîncărcare (ex. după o actualizare trimisă brokerului)
@@ -306,6 +312,43 @@ Vă mulțumim.`
     } catch (e) { setMsg({ tip: 'err', text: e.message }) }
     setBusy(null)
   }
+  // TKT-2026-0342: actul adițional obținut în afara platformei (fără mailul de prelungire) — aceeași salvare (patchActAditional), cu PDF
+  // OBLIGATORIU, confirmarea arată nr. poliței + perioada nouă + cerința; datele sunt cele tastate (declarație umană, nu dovadă).
+  // Ordinea: întâi PDF-ul, apoi fișa; dacă fișa nu se salvează, PDF-ul urcat se șterge (sau se spune explicit că a rămas).
+  const salveazaActManual = async () => {
+    if (!fAct) return setMsg({ tip: 'err', text: 'Atașează PDF-ul actului adițional (obligatoriu când actul e înregistrat fără mailul de prelungire).' })
+    if (!estePdfAct(fAct)) return setMsg({ tip: 'err', text: `Fișierul „${fAct.name}” nu e PDF (tip ${fAct.type || 'necunoscut'}) — atașează actul adițional scanat ca PDF.` })
+    const acum = new Date()
+    const p = patchActAditional({ g, de: actAdDe, pana: actAdPana, termenDepunere: l.termen_depunere, azi: ziDepunere(acum.toISOString()),
+      extra: { nrAct: actM?.nr, dataAct: actM?.data || null, cine: profile?.name || profile?.email || '', ora: acum.toTimeString().slice(0, 5), faraMail: true } })
+    if (!p) return setMsg({ tip: 'err', text: 'Completează perioada din actul adițional (data de sfârșit după data de început).' })
+    const avert = (necesar?.pana && actAdPana < necesar.pana ? `\n⚠ Actul acoperă mai puțin decât cerința (până la ${fmtZi(necesar.pana)}) — semnalul de reverificare rămâne.` : '') +
+      (deAcum && actAdDe > deAcum ? `\n⚠ Actul începe pe ${fmtZi(actAdDe)}, după ziua depunerii (${fmtZi(deAcum)}).` : '')
+    if (!confirm(`Înregistrezi actul adițional la polița nr. ${g.polita_nr || '—'} FĂRĂ mail către broker?\n\n` +
+      `Perioada nouă (din act): ${fmtZi(actAdDe)} – ${fmtZi(actAdPana)}\nCerința pe termenul ${fmtZi(deAcum)}: ${necesar?.pana ? `până la ${fmtZi(necesar.pana)}` : 'necitită — verifică manual'}${avert}\n\n` +
+      `Datele sunt cele tastate — verifică-le pe PDF-ul actului. După salvare actualizează și Registrul garanții și pachetul de depunere, dacă e deja aprobat.`)) return
+    setBusy('Se încarcă actul adițional…'); setMsg(null)
+    let path
+    try { path = await urca(fAct, 'act_aditional') } catch (e) { setBusy(null); return setMsg({ tip: 'err', text: `PDF-ul nu s-a încărcat (${e.message}) — nu s-a salvat nimic.` }) }
+    // review #833 r1–r2 (Copilot + Jakarinos): UPDATE condiționat de status = 'original' (alt tab putea schimba starea) cu rândul înapoi —
+    // 1 rând = salvat; 0 rânduri sau eroare definitivă = SIGUR nesalvat; eroare ambiguă (transport / 5xx) = recitire, care dovedește doar
+    // succesul; altfel „necunoscut” și PDF-ul rămâne (salveazaActSigur, testată)
+    const okMsg = { tip: 'ok', text: `✓ Polița nr. ${g.polita_nr || '—'} e acum valabilă ${fmtZi(actAdDe)} – ${fmtZi(actAdPana)} (act adițional fără mail, PDF atașat). Actualizează și Registrul garanții / pachetul de depunere, dacă e deja aprobat.` }
+    const { rez, motiv } = await salveazaActSigur({ p,
+      update: () => supabase.from('ofertare_garantii').update({ ...p, updated_at: new Date().toISOString() }).eq('id', g.id).eq('status', 'original').select('id'),
+      recitire: () => supabase.from('ofertare_garantii').select('valabil_de, valabil_pana, observatii').eq('id', g.id).maybeSingle() })
+    if (rez === 'salvat') { setMsg(okMsg); setBusy(null); await load(); onChanged?.(); return }
+    if (rez === 'necunoscut') {
+      setBusy(null)
+      return setMsg({ tip: 'err', text: `Rezultatul salvării nu a putut fi confirmat (${motiv}). PDF-ul a rămas la ${path}. Reîncarcă fișa înainte să reîncerci.` })
+    }
+    // 'nesalvat' SIGUR (UPDATE fără rând sau eroare definitivă de la server): abia acum se șterge PDF-ul urcat; ștergerea e dovedită
+    // doar dacă storage întoarce exact obiectul șters (review #833 r1, P2)
+    const { data: sters, error: eRm } = await supabase.storage.from('ofertare').remove([path])
+    setBusy(null)
+    return setMsg({ tip: 'err', text: `Actul adițional NU s-a salvat în fișă (${motiv}). ` + (!eRm && (sters || []).length === 1
+      ? 'PDF-ul urcat a fost șters; nimic nu s-a schimbat.' : `Curățarea PDF-ului urcat nu e confirmată — fișierul poate fi rămas la ${path}.`) })
+  }
   // termen mutat (sau cerere de prelungire rămasă pentru alt termen), dar polița acoperă DOVEDIT termenul curent +
   // valabilitatea cerută ⇒ omul confirmă verificarea; perioada poliței NU se prelungește (termenul de referință + urmă
   // în observații; cererea veche se închide cu marcajul ⟦prelungire-renuntata⟧)
@@ -344,6 +387,37 @@ Vă mulțumim.`
       {necesar?.pana && actAdPana && actAdPana < necesar.pana && <span style={{ color:G.red }}>⚠ Perioada din actul adițional e mai scurtă decât cerința (până la {fmtZi(necesar.pana)}).</span>}
       {deAcum && actAdDe && actAdDe > deAcum && <span style={{ color:G.red }}>⚠ Perioada din actul adițional începe după ziua depunerii ({fmtZi(deAcum)}) — verifică pe act.</span>}
     </>
+  )
+
+  // TKT-2026-0342: butonul pliabil + formularul actului fără mail (doar pentru polița deja în original)
+  const formActManual = () => g?.status !== 'original' ? null : !actM ? (
+    <div><button style={{ ...S.btnS, padding:'6px 12px', fontSize:12 }} disabled={!!busy} onClick={() => { setActM({ nr: '', data: '' }); setActAd({ de: '', pana: '' }); setFAct(null) }}>
+      📎 Am deja actul adițional (fără mail)</button></div>
+  ) : (
+    <div style={{ display:'flex', flexDirection:'column', gap:6, padding:'8px 10px', background:G.card, borderRadius:7, border:`1px solid ${G.border2}` }}>
+      <span style={{ color:G.muted }}>Act adițional obținut în afara platformei — <b>nu pleacă niciun mail</b>. Completează perioada scrisă pe act și atașează PDF-ul (obligatoriu).</span>
+      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+        <span style={{ color:G.muted }}>Act nr.</span>
+        <input style={{ ...S.input, width:130, padding:'5px 8px' }} value={actM.nr} maxLength={40} onChange={e => setActM({ ...actM, nr: e.target.value })} />
+        <span style={{ color:G.muted }}>din</span>
+        <input style={{ ...S.input, width:150, padding:'5px 8px' }} type="date" value={actM.data} onChange={e => setActM({ ...actM, data: e.target.value })} />
+        <span style={{ color:G.muted }}>PDF act</span>
+        <input type="file" accept="application/pdf,.pdf" onChange={e => setFAct(e.target.files?.[0] || null)} />
+      </div>
+      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+        <span style={{ color:G.muted }}>Valabilă de la</span>
+        <input style={{ ...S.input, width:150, padding:'5px 8px' }} type="date" value={actAdDe} onChange={e => setActAd({ de: e.target.value, pana: actAdPana })} />
+        <span style={{ color:G.muted }}>până la</span>
+        <input style={{ ...S.input, width:150, padding:'5px 8px' }} type="date" value={actAdPana} onChange={e => setActAd({ de: actAdDe, pana: e.target.value })} />
+        {zileIntre(actAdDe, actAdPana) > 0 && <span style={{ color:G.dim }}>({zileIntre(actAdDe, actAdPana)} zile)</span>}
+        {necesar?.pana && <span style={{ color:G.dim }}>· cerința: până la {fmtZi(necesar.pana)}</span>}
+        <button style={{ ...S.btnS, marginLeft:'auto', padding:'6px 12px', fontSize:12 }} disabled={!!busy} onClick={() => { setActM(null); setActAd(null); setFAct(null) }}>Renunță</button>
+        <button style={{ ...S.btnP, background:G.green, padding:'6px 12px', fontSize:12 }} disabled={!!busy || !fAct || !(zileIntre(actAdDe, actAdPana) > 0)} onClick={salveazaActManual}>✓ Înregistrează actul (fără mail)</button>
+      </div>
+      {necesar?.pana && actAdPana && actAdPana < necesar.pana && <span style={{ color:G.red }}>⚠ Perioada din act e mai scurtă decât cerința (până la {fmtZi(necesar.pana)}).</span>}
+      {deAcum && actAdDe && actAdDe > deAcum && <span style={{ color:G.red }}>⚠ Perioada din act începe după ziua depunerii ({fmtZi(deAcum)}) — verifică pe act.</span>}
+      <span style={{ color:G.muted }}>După salvare actualizează manual și <b>Registrul garanții</b> și <b>pachetul de depunere</b>, dacă e deja aprobat (nu se sincronizează singure).</span>
+    </div>
   )
 
   const idx = g ? PASI.findIndex(p => p[0] === g.status) : -1
@@ -438,6 +512,9 @@ Vă mulțumim.`
             </Banner>
           )}
 
+          {/* TKT-0342 r2 (review #833, P2): actul adițional fără mail — independent de avertizări (și cu termenul nemutat sau cerința
+              necitită), dar DOAR pentru polița în original */}
+          {g?.status === 'original' && <div style={{ marginBottom:12, fontSize:12.5 }}>{formActManual()}</div>}
           {/* pasul 1 — fără garanție: formular cerere */}
           {!g && !form && (
             <div style={{ fontSize:12.5, color:G.muted }}>
@@ -508,6 +585,7 @@ Vă mulțumim.`
                 <span>📨 cerere: <b style={{ color:G.text }}>{g.cerere_trimisa_la ? new Date(g.cerere_trimisa_la).toLocaleString('ro-RO', { dateStyle:'short', timeStyle:'short' }) : 'nu a plecat'}</b> · {fmtLei(g.valoare, g.moneda)} · {g.valabil_zile ? `${g.valabil_zile} zile` : 'valabilitate —'}</span>
                 {g.actualizare_trimisa_la && <span>🔁 actualizare: {fmtZi(g.actualizare_trimisa_la)}</span>}
                 <Fisier path={g.draft_path} eticheta="draft poliță" /><Fisier path={g.decont_path} eticheta="decont" /><Fisier path={g.op_path} eticheta="OP" /><Fisier path={g.polita_path} eticheta={`poliță nr. ${g.polita_nr || ''}`} />
+                {actePdf.map((n, i) => <Fisier key={n} path={`${l.id}/garantie/${n}`} eticheta={`act adițional${actePdf.length > 1 ? ` ${i + 1}` : ''}`} />)}
                 {g.status !== 'original' && <button style={{ ...S.btnS, padding:'3px 10px', fontSize:11.5, color:G.red, marginLeft:'auto' }} onClick={anuleaza}>✕ anulează</button>}
               </div>
 

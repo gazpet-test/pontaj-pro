@@ -255,8 +255,15 @@ export const liniePrelungireCeruta = ({ azi, termenVechi, termenNou, polita, acD
   `${fmtIso(azi)}: termen decalat ${fmtIso(termenVechi)} → ${fmtIso(termenNou)}; polița nr. ${polita || '—'} (original) acoperă ${fmtIso(acDe)} – ${fmtIso(acPana)}; ` +
   `cerută brokerului perioada nouă ${fmtIso(de)} – ${fmtIso(pana)}${durata ? ` (${textDurata(durata)})` : ''} — neconfirmată până la actul adițional. ⟦prelungire-ceruta ${de} ${pana} acoperea ${acDe} ${acPana}⟧`
 
-export const linieActAditional = ({ azi, polita, de, pana }) =>
-  `${fmtIso(azi)}: act adițional primit la polița nr. ${polita || '—'} — acoperă ${fmtIso(de)} – ${fmtIso(pana)}. ⟦act-aditional ${de} ${pana}⟧`
+// TKT-2026-0342 (21.10): actul obținut în afara platformei („fără mail”) — linia poartă și nr. / data actului, cine și la ce oră l-a
+// înregistrat; textele libere sunt curățate (fără ⟦ ⟧ / rânduri noi), ca marcajul de la capăt să rămână singurul citit de RE_MARCAJ
+const curataLiber = (v, max = 80) => String(v ?? '').replace(/[\u27E6\u27E7\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
+export const linieActAditional = ({ azi, polita, de, pana, nrAct, dataAct, cine, ora, faraMail }) => {
+  const act = curataLiber(nrAct, 40), cineC = curataLiber(cine), oraC = /^\d{2}:\d{2}$/.test(String(ora || '')) ? ora : ''
+  const extra = (act || dataAct ? ` Act nr. ${act || '—'}${dataAct ? ` din ${fmtIso(dataAct)}` : ''}.` : '') +
+    (faraMail || cineC ? ` Înregistrat${faraMail ? ' fără mail (act obținut în afara platformei)' : ''}${cineC ? ` de ${cineC}` : ''}${oraC ? ` la ${oraC}` : ''}.` : '')
+  return `${fmtIso(azi)}: act adițional primit la polița nr. ${polita || '—'} — acoperă ${fmtIso(de)} – ${fmtIso(pana)}.${extra} ⟦act-aditional ${de} ${pana}⟧`
+}
 
 // starea afișată a garanției (antet, avertizări) — o singură sursă pentru UI
 // g = rândul ofertare_garantii; deAcum = ziua termenului curent; necesarPana = data cerută de cerință pe termenul curent
@@ -433,9 +440,41 @@ export async function trimiteActualizareSigur({ g, cerut, original, linieObs, pa
 }
 
 // „Act adițional primit”: perioada confirmată devine perioada poliței, iar termenul de referință — cel curent
-export function patchActAditional({ g, de, pana, termenDepunere, azi }) {
+export function patchActAditional({ g, de, pana, termenDepunere, azi, extra = {} }) {
   const zile = zileIntre(de, pana)
   if (!(zile > 0)) return null
   return { valabil_de: de, valabil_pana: pana, valabil_zile: zile, termen_la_cerere: termenDepunere,
-    observatii: adaugaObservatie(g?.observatii, linieActAditional({ azi, polita: g?.polita_nr, de, pana })) }
+    observatii: adaugaObservatie(g?.observatii, linieActAditional({ ...extra, azi, polita: g?.polita_nr, de, pana })) }
 }
+
+// TKT-0342 r2/r3 (review Copilot / Jakarinos #833): după o eroare AMBIGUĂ la salvare (UPDATE posibil în zbor / comis, răspuns pierdut)
+// recitirea poate dovedi DOAR succesul: 'salvat' = rândul are exact perioada + observațiile scrise; orice altceva = 'necunoscut' — inclusiv
+// starea veche (r3, P1 Jakarinos: UPDATE-ul poate încă să se comită DUPĂ recitire), deci PDF-ul urcat rămâne
+// p = patch-ul trimis; dupa = rândul recitit (null / undefined = recitire eșuată)
+export function rezultatSalvareAct({ p, dupa }) {
+  if (!dupa || !p) return 'necunoscut'
+  const egal = (a, b) => (a ?? null) === (b ?? null)
+  return egal(dupa.valabil_de, p.valabil_de) && egal(dupa.valabil_pana, p.valabil_pana) && egal(dupa.observatii, p.observatii) ? 'salvat' : 'necunoscut'
+}
+// eroare DEFINITIVĂ = serverul a răspuns clar că NU a scris (validare / drepturi / constrângere): SQLSTATE 22 / 23 / 42 / P0 sau HTTP 4xx
+// (fără 408); transportul căzut, 5xx, 408, timeout = AMBIGUU
+export function eroareDefinitiva(error, status) {
+  if (/^(22|23|42|P0)/.test(String(error?.code || ''))) return true
+  return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408
+}
+// salvarea actului fără mail, fără UI (testabilă): update() → { data, error, status } (UPDATE … WHERE id AND status = 'original' RETURNING
+// id) sau aruncă; recitire() → { data, error }. Rezultat: { rez: 'salvat' | 'nesalvat' | 'necunoscut', motiv }. 'nesalvat' DOAR cu
+// răspuns definitiv (0 rânduri întoarse sau eroare definitivă) — singurul caz în care PDF-ul urcat se poate șterge
+export async function salveazaActSigur({ update, recitire, p }) {
+  let rasp
+  try { rasp = await update() } catch (e) { rasp = { error: { message: e?.message || String(e) }, status: 0, transport: true } }
+  const { data, error, status } = rasp || {}
+  if (!error) return (data || []).length === 1 ? { rez: 'salvat', motiv: null }
+    : { rez: 'nesalvat', motiv: 'niciun rând actualizat (polița nu mai e în original, drept de scriere lipsă sau fișa nu mai există)' }
+  if (!rasp.transport && eroareDefinitiva(error, status)) return { rez: 'nesalvat', motiv: error.message }
+  let dupa = null
+  try { const r = await recitire(); dupa = r?.error ? null : r?.data } catch { dupa = null }
+  return { rez: rezultatSalvareAct({ p, dupa }), motiv: error.message || 'eroare de transport' }
+}
+// PDF-ul actului (review #833 r2, P2): tipul și extensia, înainte de încărcare
+export const estePdfAct = (f) => !!f && f.type === 'application/pdf' && /\.pdf$/i.test(String(f.name || ''))
