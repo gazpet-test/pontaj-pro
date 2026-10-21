@@ -33,6 +33,7 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
   const [tronsoane, setTronsoane] = useState([])
   const [proiectId, setProiectId] = useState(proiectFix)
   const [f, setF] = useState({ depozitId: '', tip: '', categorie: '', cauta: '' })
+  const [faraAcces, setFaraAcces] = useState(false)
 
   const incarca = useCallback(async () => {
     setStare({ incarc: true, eroare: null, neinstalat: false })
@@ -53,11 +54,17 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
       const pid = proiectFix || proiectId || lista[0]?.id || null
       if (!proiectFix && pid !== proiectId) setProiectId(pid)
       if (!pid) { setBucati([]); setStare({ incarc: false, eroare: null, neinstalat: false }); return }
+      // decizia Razvan 21.10 (A): stocul de țeavă îl văd doar owner-ul și cei atribuiți proiectului (RLS face filtrarea;
+      // aici doar explicăm de ce lista e goală)
+      const { data: poate, error: eCit } = await supabase.rpc('fn_izo_citire', { p_proiect: pid })
+      const blocat = !eCit && poate === false
+      setFaraAcces(blocat)
+      if (blocat) { setBucati([]); setStare({ incarc: false, eroare: null, neinstalat: false }); return }
       const { data: tr } = await supabase.from('executie_tronsoane').select('id, cod, proiect_id').eq('proiect_id', pid)
       setTronsoane(tr || [])
       // bucățile registrului, pe pagini (limita PostgREST e 1000 de rânduri)
       const toate = []
-      for (let de = 0; ; de += PAGINA) {
+      for (let de = 0; ; ) {
         const { data, error } = await supabase.from('magazie_bucati')
           .select('id, proiect_id, tip_cod, serie, serie_canon, sarja, lungime_mm, perete_mm, unghi_curba, stare, depozit_id, tronson_id, atribute, nr_document, data_receptie, updated_at')
           .eq('proiect_id', pid).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null)
@@ -66,8 +73,9 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
           if (/tip_cod|serie_canon|column/i.test(error.message || '')) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
           throw error
         }
-        toate.push(...(data || []))
-        if (!data || data.length < PAGINA) break
+        // avansăm cu rândurile primite efectiv și ne oprim la pagina goală (merge și dacă max-rows din API e sub PAGINA)
+        if (!data?.length) break
+        toate.push(...data); de += data.length
       }
       setBucati(toate)
       setStare({ incarc: false, eroare: null, neinstalat: false })
@@ -95,6 +103,19 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
   if (stare.eroare) return <div style={{ ...S.card, padding:20, color:G.red }}>Eroare la încărcare: {stare.eroare} <button style={{ ...S.btnS, marginLeft:10 }} onClick={incarca}>Reîncearcă</button></div>
   if (!proiecte.length && !proiectFix) return (
     <div style={{ ...S.card, padding:20, color:G.muted, fontSize:14 }}>Niciun proiect cu registru de țeavă activ. Stocul apare aici după importul soldului inițial.</div>
+  )
+
+  if (faraAcces) return (
+    <div>
+      {!proiectFix && proiecte.length > 1 && (
+        <select style={{ ...S.input, maxWidth:360, marginBottom:14 }} value={proiectId || ''} onChange={e => { setProiectId(Number(e.target.value)); setF({ depozitId:'', tip:'', categorie:'', cauta:'' }) }}>
+          {proiecte.map(p => <option key={p.id} value={p.id}>{p.nume}</option>)}
+        </select>
+      )}
+      <div style={{ ...S.card, padding:20, color:G.muted, fontSize:14 }}>
+        🔒 Nu ai atribuire pe acest proiect. Stocul de țeavă Transgaz îl văd doar cei atribuiți proiectului (inginer, manager de proiect, gestionar) și owner-ul.
+      </div>
+    </div>
   )
 
   const randuriMatrice = Object.keys(tot.matrice)
