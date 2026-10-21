@@ -9,11 +9,17 @@ SET client_min_messages = notice;
 SELECT id AS id_reg FROM public.magazie_bucati WHERE serie = '254CA09771' \gset
 SELECT id AS id_gzp FROM public.magazie_bucati WHERE serie = 'GZP1' \gset
 
-SELECT teste.e('B0 funcția: INVOKER, search_path fix, anon fără EXECUTE, authenticated cu EXECUTE; cheia de operație UNIQUE',
-  (SELECT NOT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'] FROM pg_proc WHERE proname = 'fn_bon_salveaza')
+SELECT teste.e('B0 RPC-urile: DEFINER (owner postgres), search_path fix, anon fără EXECUTE, authenticated cu EXECUTE; cheia UNIQUE; liniile doar citire din API',
+  (SELECT bool_and(prosecdef AND proowner = 'postgres'::regrole AND proconfig @> ARRAY['search_path=public, pg_temp']) FROM pg_proc WHERE proname IN ('fn_bon_salveaza', 'fn_bon_preia'))
   AND NOT has_function_privilege('anon', 'public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)', 'EXECUTE')
   AND has_function_privilege('authenticated', 'public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)', 'EXECUTE')
-  AND (SELECT indisunique FROM pg_index WHERE indexrelid = 'public.ux_bonc_cheie_operatie'::regclass));
+  AND NOT has_function_privilege('anon', 'public.fn_bon_preia(bigint, timestamptz, jsonb)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'public.fn_bon_preia(bigint, timestamptz, jsonb)', 'EXECUTE')
+  AND (SELECT indisunique FROM pg_index WHERE indexrelid = 'public.ux_bonc_cheie_operatie'::regclass)
+  AND NOT has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'DELETE')
+  AND has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'SELECT'));
 
 SELECT teste.ca(:'JANETA');
 -- B1 bon nou: numărul alocat pe server, antet + linie într-o tranzacție
@@ -53,30 +59,23 @@ SELECT r->>'updated_at' AS v9 FROM (SELECT public.fn_bon_salveaza(:b1, :'v4', '{
   format('[{"denumire":"teava gazpet","cantitate":1,"magazie_bucata_id":%s}]', :id_gzp)::jsonb) r) x \gset
 SELECT teste.e('B9 bucată gazpet pe bon → merge', (SELECT count(*) FROM public.executie_bonuri_consum_linii WHERE bon_id = :b1 AND magazie_bucata_id = :id_gzp) = 1);
 -- B10 bucată din registrul de țeavă → refuz de garda E2a, ATOMIC (antetul și liniile rămân cum erau)
-SELECT teste.eroare('B10 bucată din registru → refuz (garda E2a, prin INVOKER)', format($f$SELECT public.fn_bon_salveaza(%s, %L,
+SELECT teste.eroare('B10 bucată din registru → refuz (garda E2a: trigger necondiționat, și sub RPC-ul DEFINER)', format($f$SELECT public.fn_bon_salveaza(%s, %L,
   '{"provenienta":"beneficiar","data_bon":"2026-10-21","observatii":"alt"}', '[{"denumire":"teava","cantitate":1,"magazie_bucata_id":%s}]')$f$, :b1, :'v9', :id_reg), 'nu intră pe bon');
 SELECT teste.e('B10b după refuz: antetul și liniile neschimbate (atomic)', (SELECT provenienta = 'gazpet' AND observatii = 'editat' FROM public.executie_bonuri_consum WHERE id = :b1)
   AND (SELECT count(*) FROM public.executie_bonuri_consum_linii WHERE bon_id = :b1 AND magazie_bucata_id = :id_gzp) = 1);
 SELECT teste.eroare('B10c bon NOU cu bucată din registru → refuz, fără antet orfan', format($f$SELECT public.fn_bon_salveaza(NULL, NULL,
   '{"proiect_id":3,"cheie_operatie":"%s","provenienta":"beneficiar","data_bon":"2026-10-21"}', '[{"denumire":"teava","cantitate":1,"magazie_bucata_id":%s}]')$f$, :'OP3', :id_reg), 'nu intră pe bon');
 SELECT teste.e('B10d nicio urmă a creării refuzate', (SELECT count(*) FROM public.executie_bonuri_consum WHERE cheie_operatie = :'OP3') = 0);
--- B15 scrierile DIRECTE pe linii (în afara RPC-ului) mută versiunea antetului (Copilot r7 P1, trg_bonl_versiune)
-SELECT updated_at AS v15 FROM public.executie_bonuri_consum WHERE id = :b1 \gset
-INSERT INTO public.executie_bonuri_consum_linii (bon_id, denumire, cantitate) VALUES (:b1, 'direct', 1);
-SELECT teste.e('B15 INSERT direct pe linii → versiunea antetului se mută', (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1) > :'v15'::timestamptz);
-SELECT teste.eroare('B15b RPC pe versiunea de dinaintea scrierii directe → refuz', format($f$SELECT public.fn_bon_salveaza(%s, %L,
-  '{"provenienta":"gazpet","data_bon":"2026-10-21","observatii":"editat"}', '[{"denumire":"y","cantitate":1}]')$f$, :b1, :'v15'), 'modificat între timp');
-SELECT updated_at AS v15c FROM public.executie_bonuri_consum WHERE id = :b1 \gset
-UPDATE public.executie_bonuri_consum_linii SET cantitate = 2 WHERE bon_id = :b1 AND denumire = 'direct';
-SELECT teste.e('B15c UPDATE direct pe linii → versiunea se mută', (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1) > :'v15c'::timestamptz);
-SELECT updated_at AS v15d FROM public.executie_bonuri_consum WHERE id = :b1 \gset
-DELETE FROM public.executie_bonuri_consum_linii WHERE bon_id = :b1 AND denumire = 'direct';
-SELECT teste.e('B15d DELETE direct pe linii → versiunea se mută', (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1) > :'v15d'::timestamptz);
+-- B15 scrierile DIRECTE pe linii sunt închise pentru API (r11: REVOKE; doar prin RPC-uri) — INSERT / UPDATE / DELETE refuzate
+SELECT teste.eroare('B15 INSERT direct pe linii din API → refuz', format($f$INSERT INTO public.executie_bonuri_consum_linii (bon_id, denumire, cantitate) VALUES (%s, 'direct', 1)$f$, :b1), 'permission denied');
+SELECT teste.eroare('B15b UPDATE direct pe linii din API → refuz', format($f$UPDATE public.executie_bonuri_consum_linii SET cantitate = 9 WHERE bon_id = %s$f$, :b1), 'permission denied');
+SELECT teste.eroare('B15c DELETE direct pe linii din API → refuz', format($f$DELETE FROM public.executie_bonuri_consum_linii WHERE bon_id = %s$f$, :b1), 'permission denied');
 SELECT updated_at AS v15e0 FROM public.executie_bonuri_consum WHERE id = :b1 \gset
 SELECT r->>'updated_at' AS v15e FROM (SELECT public.fn_bon_salveaza(:b1, :'v15e0', '{"provenienta":"gazpet","data_bon":"2026-10-21","observatii":"editat"}',
-  format('[{"denumire":"teava gazpet","cantitate":1,"magazie_bucata_id":%s}]', :id_gzp)::jsonb) r) x \gset
-SELECT teste.e('B15e versiunea întoarsă de RPC = cea din BD (recitită după liniile scrise)',
-  :'v15e'::timestamptz = (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1));
+  format('[{"denumire":"teava gazpet","cantitate":1,"magazie_bucata_id":%s},{"denumire":"cot","cantitate":2}]', :id_gzp)::jsonb) r) x \gset
+SELECT teste.e('B15e versiunea întoarsă de RPC = cea din BD; liniile scrise de RPC (DEFINER) există',
+  :'v15e'::timestamptz = (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1)
+  AND (SELECT count(*) FROM public.executie_bonuri_consum_linii WHERE bon_id = :b1) = 2);
 -- B16 la editare data rămâne în anul din număr (Copilot r7 P2)
 SELECT teste.eroare('B16 editare cu data în alt an decât numărul → refuz', format($f$SELECT public.fn_bon_salveaza(%s, %L,
   '{"provenienta":"gazpet","data_bon":"2027-01-05","observatii":"editat"}', '[{"denumire":"y","cantitate":1}]')$f$, :b1, :'v15e'), 'iese din anul');
@@ -86,6 +85,29 @@ SELECT r->>'bon_id' AS b17 FROM (SELECT public.fn_bon_salveaza(NULL, NULL,
   '[{"denumire":"zeta","cantitate":1},{"denumire":"alfa","cantitate":1},{"denumire":"mu","cantitate":1}]') r) x \gset
 SELECT teste.e('B17 ordinea liniilor = ordinea trimisă (zeta, alfa, mu)',
   (SELECT string_agg(denumire, ',' ORDER BY id) FROM public.executie_bonuri_consum_linii WHERE bon_id = :b17) = 'zeta,alfa,mu');
+-- B18 preluarea financiară prin RPC (r11): costurile pe linii + starea, într-o tranzacție, cu CAS (pe un bon separat:
+--     bonul OP1 rămâne „generat” pentru cursele din harness)
+SELECT r->>'bon_id' AS b18, r->>'updated_at' AS v18v FROM (SELECT public.fn_bon_salveaza(NULL, NULL,
+  '{"proiect_id":1,"cheie_operatie":"aaaaaaaa-0000-0000-0000-000000000005","provenienta":"gazpet","data_bon":"2026-10-21"}',
+  '[{"denumire":"p1","cantitate":1},{"denumire":"p2","cantitate":3}]') r) x \gset
+SELECT (SELECT jsonb_agg(jsonb_build_object('linie_id', id, 'cost_unitar', 10) ORDER BY id) FROM public.executie_bonuri_consum_linii WHERE bon_id = :b18) AS costuri,
+       (SELECT jsonb_agg(jsonb_build_object('linie_id', id, 'cost_unitar', 10) ORDER BY id) FROM (SELECT id FROM public.executie_bonuri_consum_linii WHERE bon_id = :b18 ORDER BY id LIMIT 1) z) AS costuri1 \gset
+SELECT teste.eroare('B18a gazpet cu o linie fără cost → refuz', format($f$SELECT public.fn_bon_preia(%s, %L, %L)$f$, :b18, :'v18v', :'costuri1'), 'fiecare dintre cele 2 linii');
+SELECT teste.eroare('B18b versiune greșită → refuz', format($f$SELECT public.fn_bon_preia(%s, %L, %L)$f$, :b18, '2020-01-01 00:00:00+00', :'costuri'), 'modificat între timp');
+SELECT r->>'updated_at' AS v18 FROM (SELECT public.fn_bon_preia(:b18, :'v18v', :'costuri'::jsonb) r) x \gset
+SELECT teste.e('B18 preluat: stare, cine, valoare = cost × cantitate pe fiecare linie',
+  (SELECT stare = 'preluat' AND preluat_de = :'JANETA'::uuid AND preluat_la IS NOT NULL AND updated_at = :'v18'::timestamptz FROM public.executie_bonuri_consum WHERE id = :b18)
+  AND (SELECT bool_and(cost_unitar = 10 AND valoare = 10 * cantitate) FROM public.executie_bonuri_consum_linii WHERE bon_id = :b18));
+SELECT teste.e('B18c retry al preluării (răspuns pierdut, aceleași costuri) → idempotent',
+  (public.fn_bon_preia(:b18, :'v18v', :'costuri'::jsonb)->>'idempotent')::boolean);
+SELECT teste.eroare('B18d editarea unui bon preluat → refuz', format($f$SELECT public.fn_bon_salveaza(%s, %L,
+  '{"provenienta":"gazpet","data_bon":"2026-10-21","observatii":"editat"}', '[{"denumire":"y","cantitate":1}]')$f$, :b18, :'v18'), 'se editează doar');
+UPDATE public.executie_bonuri_consum SET provenienta = 'beneficiar' WHERE id = :b17;
+SELECT updated_at AS v18e FROM public.executie_bonuri_consum WHERE id = :b17 \gset
+SELECT teste.eroare('B18e bon beneficiar cu costuri → refuz (nu se valorizează)', format($f$SELECT public.fn_bon_preia(%s, %L,
+  (SELECT jsonb_agg(jsonb_build_object('linie_id', id, 'cost_unitar', 1)) FROM public.executie_bonuri_consum_linii WHERE bon_id = %s))$f$, :b17, :'v18e', :b17), 'nu se valorizează');
+SELECT public.fn_bon_preia(:b17, :'v18e', '[]')->>'idempotent' AS i18f \gset
+SELECT teste.e('B18f bon beneficiar fără costuri → preluat', :'i18f' = 'false' AND (SELECT stare FROM public.executie_bonuri_consum WHERE id = :b17) = 'preluat');
 RESET ROLE;
 -- B14 numerotarea trece de 9999 fără trunchiere (Jakarinos r7)
 INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id) VALUES ('BC-2026-2-9999', 2);

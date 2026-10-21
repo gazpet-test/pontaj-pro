@@ -221,20 +221,11 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
   const confirmaPreluare = async (v) => {
     setBusy(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      // salvează valorizarea (cost_unitar) pe linii dacă e gazpet
-      if (v.provenienta === 'gazpet') {
-        for (const l of v.linii) {
-          const cost = toNum(l.cost_unitar)
-          const cant = Number(l.cantitate) || 0
-          await supabase.from('executie_bonuri_consum_linii')
-            .update({ cost_unitar: cost, valoare: cost != null ? cost * cant : null }).eq('id', l.id)
-        }
-      }
-      const { error } = await supabase.from('executie_bonuri_consum')
-        .update({ stare: 'preluat', preluat_de: user?.id || null, preluat_la: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq('id', v.id)
-      if (error) throw error
+      // costurile pe linii (doar gazpet) + starea „preluat”, într-o singură tranzacție, cu versiunea bonului (20261102b r11);
+      // liniile nu mai sunt scriptibile direct din API
+      const costuri = v.provenienta === 'gazpet' ? v.linii.map(l => ({ linie_id: l.id, cost_unitar: toNum(l.cost_unitar) })) : []
+      const { error } = await supabase.rpc('fn_bon_preia', { p_bon_id: v.id, p_versiune: v.updated_at, p_costuri: costuri })
+      if (error) throw new Error(mesajEroareBon(error))
       flash('ok', `Bon ${v.numar_bon} preluat în Financiar.`)
       setValorizare(null); await loadAll()
     } catch (e) { console.error(e); flash('err', 'Eroare la preluare: ' + (e?.message || e)) } finally { setBusy(false) }

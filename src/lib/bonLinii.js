@@ -29,8 +29,9 @@ export function antetPentruRpc(m) {
 /** Mesajul pentru utilizator, din eroarea RPC-ului. */
 export function mesajEroareBon(error) {
   const m = `${error?.code || ''} ${error?.message || error || ''}`
-  if (/PGRST202|could not find the function/i.test(m)) return 'salvarea bonurilor nu e încă instalată în baza de date (migrarea 20261102b) — anunță-l pe Răzvan'
+  if (/PGRST202|could not find the function/i.test(m)) return 'salvarea / preluarea bonurilor nu e încă instalată în baza de date (migrarea 20261102b) — anunță-l pe Răzvan'
   if (/40001|modificat între timp/i.test(m)) return 'bonul a fost modificat de altcineva între timp — reîncarcă și reia editarea'
+  if (/55000|se editează doar|se preiau doar/i.test(m)) return 'bonul nu mai e „generat” (a fost preluat sau anulat între timp) — reîncarcă'
   if (/nu intră pe bon/i.test(m)) return 'pe bon e o bucată de țeavă Transgaz din registru — nu intră pe bon (montajul se declară din modulul de țeavă)'
   return error?.message || String(error)
 }

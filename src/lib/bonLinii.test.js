@@ -24,3 +24,10 @@ describe('argumentele pentru fn_bon_salveaza', () => {
     expect(mesajEroareBon({ message: 'altceva' })).toBe('altceva')
   })
 })
+
+describe('mesajEroareBon r11', () => {
+  it('bonul preluat / anulat între timp → mesaj clar', () => {
+    expect(mesajEroareBon({ code: '55000', message: 'bon: bonul BC-2026-1-0001 e „preluat” — se editează doar bonurile generate' })).toMatch(/nu mai e „generat”/)
+    expect(mesajEroareBon({ code: 'P0001', message: 'bon: bonul 5 e „anulat” — se preiau doar bonurile generate' })).toMatch(/nu mai e „generat”/)
+  })
+})
