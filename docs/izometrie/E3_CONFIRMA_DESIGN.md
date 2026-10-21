@@ -1,4 +1,17 @@
-# E3 — designul intrărilor API pentru documentele de intrare (r4) — pentru review ÎNAINTE de cod
+# E3 — designul intrărilor API pentru documentele de intrare (r5) — pentru review ÎNAINTE de cod
+
+**r5 (21.10.2026)** răspunde la Jakarinos pe r4 (NO-GO, 0 × P0, 2 × P1 rămase). Închise în r4 de Jak: anularea draftului, evenimentul fără FK circular, reintroducerea după anulare, `nivel <> 'off'`.
+
+| # | P1 din r4 | Unde | Pe scurt |
+|---|---|---|---|
+| 1 | [Jak] Comparația JSON poate refuza bucata corectă (`radacina_id` rămâne; cheile nu sunt aceeași mulțime) | §3.2, §7.2 | o singură **proiecție explicită** `C` (lista constantă de coloane, cu NULL-urile incluse), aplicată identic pe ambele părți; `radacina_id` exclus din ambele și verificat separat `NEW.radacina_id = NEW.id`; INSERT-ul confirmării scrie TOATE coloanele din `C`, deci nicio valoare implicită nu intră în comparație |
+| 2 | [Jak] Verificarea locației n-are drepturi | §3.5, §4 | `fn_izo_loc_valid` (E2a, DEFINER) pentru depozit ↔ site-ul proiectului; `fn_izo_site_proiect` pentru `locatie_site_id`; `fn_izo_tip_material` pentru `tip_material_id` — toate cu EXECUTE pentru `izo_receptie_writer`, trecute în matrice |
+
+P2 (Jak r4), trecute în design: SQL-ul exact al celor două indexuri de eveniment (intrarea și PV-ul separat, §2); testul 14 reconciliat cu egalitatea brută a seriei (§10); explicația pentru `off` corectată: E2a refuză `stoc → off` după orice eveniment, deci cazul nu e accesibil prin API (§9.1). Testele din §10 sunt cerințe; rezultatele vin la cod, rulate cu rolurile reale.
+
+---
+
+Istoricul r4 (păstrat pentru review):
 
 **r4 (21.10.2026)** răspunde la review-ul r3 (Copilot și Jakarinos: NO-GO, 0 × P0). Închise de ambii în r3: revocarea modulului, PV-ul, hash-ul recalculat, unicitatea țevii, scanul șters. Ce se schimbă în r4:
 
@@ -89,7 +102,14 @@ Administrarea `postgres` nu primește o identitate umană fictivă: `aplicat_de`
 Ambele au nume care intră deja în amprenta porților E2a (`magazie_bucati_izo_%`, `ux_magbuc_izo_%`).
 
 **Evenimentele.** CHECK-ul `magazie_bucati_evenimente.tip` primește `intrare_lista_ambalare` și `receptie_pv`; `intrare_aviz` rămâne pentru avizul de țeavă.
-- **UNIQUE parțial:** un singur eveniment de intrare și un singur `receptie_pv` per (`document_tip`, `document_id`) cu `tip` ≠ `storno`.
+- **UNIQUE parțial (r5, SQL exact):** intrarea și PV-ul au indexuri SEPARATE, altfel PV-ul ar fi blocat de evenimentul de intrare al aceluiași document:
+  ```sql
+  CREATE UNIQUE INDEX ux_magbuc_ev_doc_intrare ON public.magazie_bucati_evenimente (document_id)
+    WHERE document_tip = 'doc_intrare' AND tip IN ('intrare_aviz', 'intrare_lista_ambalare');
+  CREATE UNIQUE INDEX ux_magbuc_ev_doc_pv ON public.magazie_bucati_evenimente (document_id)
+    WHERE document_tip = 'doc_intrare' AND tip = 'receptie_pv';
+  ```
+  Storno-urile (`tip = 'storno'`) nu intră în niciunul; unicitatea lor vine din `storno_de_eveniment_id UNIQUE` (E2a).
 - Auditul folosește coloanele E2a reale: `aplicat_de`, `aplicat_rol`, `ora_server`, `document_tip` = `doc_intrare`, `document_id` = `<id>`, `motiv` = `<hash_confirmat>` (pe intrare) / `PV <nr>` (pe PV). Hash-ul complet + manifestul stau pe document.
 
 ## 3. Rolurile, încrederea, privilegiile
@@ -135,16 +155,27 @@ END IF;
 
 **Identificarea evenimentului (r4, punctul 6).** Garda nu folosește FK-urile antetului (`eveniment_intrare_id` / `eveniment_pv_id`), care se scriu abia la final. „Evenimentul de intrare al documentului” = singurul rând din `magazie_bucati_evenimente` cu `document_tip = 'doc_intrare'`, `document_id = <doc>::text`, `proiect_id` = context, `tip` = cel cerut de șablon, `storno_de_eveniment_id IS NULL`. Unicitatea lui e garantată de indexul unic parțial din §2. La fel pentru `receptie_pv`. Mișcarea cere `NEW.eveniment_id` = id-ul acestui rând. Antetul, la final, trebuie să primească **exact** acest id (verificat de gardă la UPDATE antet).
 
-**Bucata așteptată (r4, punctul 3).** `fn_izo_doc_bucata_asteptata(p_doc, p_nr_crt) RETURNS jsonb` (owner `postgres`, INVOKER, STABLE; EXECUTE `izo_receptie_writer`) construiește, din antet + rând, toate valorile pe care confirmarea le pune în bucată (lista din §7.2, fără `id`, `uid`, `server_ver`). E **singura sursă** pentru amândouă:
-- confirmarea inserează bucata din acest jsonb (`jsonb_populate_record`), plus `id` / `radacina_id` / `uid` / `server_ver`;
-- garda compară `to_jsonb(NEW)` (fără `id`, `uid`, `server_ver`, `created_at`, `updated_at` și coloanele generate) cu acest jsonb: egalitate exactă, pe toate câmpurile — serie, șarjă, lungimi (document / măsurat / `lungime_mm` / `lungime_m`), perete, diametru, unghi, greutate, lot, `tip_material_id`, `stare` după decizie, proiect, depozit, `aviz_intrare_id`, `nr_crt_aviz`, `atribute`. Plus `radacina_id = id`.
+**Proiecția comparată (r5, punctul 1).** Lista **`C`** = toate coloanele NEGENERATE ale `magazie_bucati`, mai puțin `id`, `uid`, `radacina_id`, `server_ver`, `created_at`, `updated_at`. E o constantă scrisă în migrare (array de nume). Migrarea verifică la precondiție, iar porțile E3 la fiecare intrare, că mulțimea coloanelor reale ale tabelului = `C` ∪ cele 6 excluse ∪ coloanele generate (`serie_canon`, `lungime_cm`). O coloană adăugată sau scoasă ulterior → porți lipsă → intrările E3 refuză până la o migrare revizuită.
+- `fn_izo_proiectie_bucata(r jsonb) RETURNS jsonb` = `(SELECT jsonb_object_agg(k, r -> k) FROM unnest(C) k)`. Fiecare cheie din `C` apare **exact o dată**, cu `null` JSON când valoarea lipsește sau e NULL. Aceeași funcție se aplică pe ambele părți, deci mulțimile de chei sunt identice prin construcție.
+- **`radacina_id`** e exclus din ambele părți și verificat separat: `NEW.radacina_id = NEW.id` (rădăcină, ca la import).
+- **Câmpurile „interzise”** (`parinte_id`, `dezambiguare`, `tronson_id`, `executie_teava_id`, `bend_no`, `capat_marcaj`, `lungime_calculata` etc. — tot ce E3 nu completează) sunt în `C` cu valoarea **explicită** din bucata așteptată (NULL sau `false`), deci o valoare nenulă pe oricare dintre ele face comparația să pice.
+- **Fără valori implicite în comparație:** INSERT-ul confirmării listează **toate** coloanele din `C` plus `id`, `uid`, `radacina_id`, `server_ver` (lista e generată din aceeași constantă, la migrare). Nicio coloană din `C` nu primește DEFAULT, deci `NEW` (BEFORE INSERT) are exact valorile scrise.
+
+**Bucata așteptată.** `fn_izo_doc_bucata_asteptata(p_doc, p_nr_crt) RETURNS jsonb` (owner `postgres`, INVOKER, STABLE; EXECUTE `izo_receptie_writer`) construiește din antet + rând un obiect cu **toate** cheile din `C` (inclusiv cele NULL). Sursele sunt precizate în r5:
+- `tip_material_id` = `fn_izo_tip_material('teava' | 'curba')` (E2a, DEFINER), după șablon; `tip_cod` = `'teava'` / `'curba'`, care trebuie să bată cu `fn_izo_tip_cod(tip_material_id)`;
+- `locatie_tip` = `'depozit'`; `locatie_site_id` = `fn_izo_site_proiect(proiect_id)` (E2a, DEFINER), deci site-ul proiectului, egal cu al depozitului (verificat la §4 pasul 6);
+- `serie` = textul **brut** din rând (nu forma canonică); restul câmpurilor fizice = rândul, cu regulile din §7.2.
+
+E **singura sursă** pentru amândouă:
+- confirmarea inserează bucata din acest jsonb (`jsonb_populate_record` pe toate coloanele din `C`), plus `id` / `radacina_id` / `uid` / `server_ver`;
+- garda verifică `fn_izo_proiectie_bucata(to_jsonb(NEW)) = fn_izo_proiectie_bucata(fn_izo_doc_bucata_asteptata(doc, NEW.nr_crt_aviz))` (egalitate jsonb exactă, aceleași chei pe ambele părți) și, separat, `NEW.radacina_id = NEW.id`.
 
 Ce acceptă ramura, pe operație (orice altceva → 42501):
 
 | Tabel / operație | `op = confirma` (doc `draft`) | `op = pv` (doc `confirmat`, PV nepus) | `op = anulare` (doc `confirmat`) | `op = anulare_draft` (doc `draft`) |
 |---|---|---|---|---|
 | INSERT eveniment | `tip` = `intrare_aviz` (țeavă) / `intrare_lista_ambalare` (curbe); `document_tip = 'doc_intrare'`, `document_id` = doc, `proiect_id` = context; `storno_de_eveniment_id` NULL; niciun eveniment de intrare pe doc deja | `tip = 'receptie_pv'`, aceleași legături; niciun `receptie_pv` pe doc deja | `tip = 'storno'`, `proiect_id` = context, `document_*` = doc, `storno_de_eveniment_id` = evenimentul `receptie_pv` al doc (întâi, dacă există) apoi cel de intrare | — |
-| INSERT bucată | egalitate exactă cu `fn_izo_doc_bucata_asteptata(doc, NEW.nr_crt_aviz)`; rândul are `decizie` ∈ {primit, primit_neconform} și `bucata_id` NULL; `radacina_id = id`; seria canonică calculată explicit = cea a rândului | — | — | — |
+| INSERT bucată | proiecția `C` a lui `NEW` = proiecția `C` a `fn_izo_doc_bucata_asteptata(doc, NEW.nr_crt_aviz)` (seria brută inclusă); rândul are `decizie` ∈ {primit, primit_neconform} și `bucata_id` NULL; separat `NEW.radacina_id = NEW.id` | — | — | — |
 | UPDATE bucată | — | doar `stare` `sosit` → `receptionat` (+ `server_ver`, `updated_at`; restul identic, fără coloanele generate); `proiect_id` = context; bucata = `rand.bucata_id` al unui rând `primit` al doc | doar `stare` (+ `server_ver`, `updated_at`): `receptionat` → `sosit` (storno PV) sau `sosit` / `carantina` → `anulata` (storno intrare); `proiect_id` = context; bucata = `rand.bucata_id` al doc | — |
 | INSERT mișcare | `proiect_id` = context; `rol = 'nascut'`; `eveniment_id` = evenimentul de intrare al doc (identificat ca mai sus); bucata are `aviz_intrare_id` = doc; `stare_dupa` = starea bucății; `in_loc` = depozitul | `proiect_id` = context; `rol = 'stare'`; `eveniment_id` = `receptie_pv` al doc; `sosit` → `receptionat`; bucata din mulțimea PV | `proiect_id` = context; `rol = 'stare'` (`receptionat` → `sosit`) pe storno-ul PV; `rol = 'anulat'` (→ `anulata`) pe storno-ul intrării; bucata = `rand.bucata_id` al doc | — |
 | UPDATE `randuri` | doar `bucata_id` NULL → id, unde bucata are `aviz_intrare_id` = doc și `nr_crt_aviz` = `nr_crt` | — | — | — |
@@ -215,6 +246,7 @@ Politicile RLS ale rolurilor noi (nume `izo_doc_*`, deci intră în amprentă): 
 | `fn_izo_receptie_marcheaza` | `izo_receptie_writer`, INVOKER (scrie doar `izo.receptie_ctx`) | doar owner-ul |
 | `fn_izo_garda_receptie` | `postgres`, INVOKER | doar `izo_receptie_writer`. Gărzile o cheamă numai într-un `IF current_user = 'izo_receptie_writer'` explicit (§3.2), deci ceilalți nu ajung la ea |
 | `fn_izo_doc_bucata_asteptata` | `postgres`, INVOKER, STABLE | `izo_receptie_writer` |
+| `fn_izo_proiectie_bucata` | `postgres`, INVOKER, IMMUTABLE (doar lista constantă `C`) | `izo_receptie_writer` |
 | `fn_izo_jwt_rol` | `postgres`, DEFINER, STABLE | `izo_doc_editor`, `izo_receptie_writer` |
 | `fn_izo_doc_autorizare_lock` | `postgres`, DEFINER | `izo_doc_editor`, `izo_receptie_writer` |
 | `fn_izo_doc_hash` (calculul canonic, §6) | `postgres`, INVOKER, STABLE | `izo_doc_editor`, `izo_receptie_writer` |
@@ -223,13 +255,14 @@ Politicile RLS ale rolurilor noi (nume `izo_doc_*`, deci intră în amprentă): 
 | E2a: `fn_izo_blocheaza_locuri`, `fn_izo_blocheaza_tabele`, `fn_izo_lock_partajat`, `fn_izo_lock_proiect`, `fn_izo_porti_definitii` | neschimbate | + `izo_receptie_writer` |
 | E2a: `fn_izo_nivel`, `fn_izo_porti_lipsa`, `fn_izo_uid` | neschimbate | + `izo_receptie_writer`, + `izo_doc_editor` |
 | E2a: `fn_izo_garda_scriitor`, `fn_izo_tip_cod` | neschimbate | + `izo_receptie_writer` (azi le au `anon` / `authenticated` / `service_role` / `izo_registru_writer`) |
+| E2a: `fn_izo_loc_valid(bigint, integer, bigint)`, `fn_izo_site_proiect(bigint)`, `fn_izo_tip_material(text)` (r5, punctul 2) | neschimbate (DEFINER, owner `postgres`; azi EXECUTE doar `izo_registru_writer`) | + `izo_receptie_writer`; `fn_izo_loc_valid` și + `izo_doc_editor` (verificarea la creare) |
 
 **Apelurile tranzitive, pe rol (r4, punctul 4).** Ce cheamă efectiv fiecare rol, inclusiv prin gărzi și politici, care rulează ca apelantul (INVOKER). Funcțiile DEFINER își fac apelurile interne ca owner-ul lor, deci nu cer drepturi de la apelant. Fiecare celulă se verifică pe catalog cu `has_function_privilege` / `has_table_privilege` / `has_column_privilege`, plus prin rularea reală a fiecărei operații pe branch (o permisiune lipsă = test roșu, nu descoperire în producție).
 
 | Cine rulează | Ce cheamă (INVOKER, deci are nevoie de drept) |
 |---|---|
 | `izo_doc_editor` în `salveaza` / `verifica` | `fn_izo_uid`, `fn_izo_jwt_rol`, `fn_izo_doc_autorizare_lock`, `fn_izo_nivel`, `fn_izo_porti_lipsa` (r4: și salvarea, și verificarea refuză cu porți lipsă — fail-closed), `fn_izo_doc_hash`, `fn_izo_scan_exista`; trigger-ul de imutabilitate pe tabelele de document (funcția trigger-ului nu cere EXECUTE la declanșare; ce cheamă ea, da: `fn_izo_garda_receptie` doar pentru writer); politicile `izo_doc_*` |
-| `izo_receptie_writer` în `confirma` / `pv` / `anuleaza` | tot ce are editorul + `fn_izo_blocheaza_locuri`, `fn_izo_blocheaza_tabele`, `fn_izo_lock_partajat` / `fn_izo_lock_proiect`, `fn_izo_receptie_marcheaza`, `fn_izo_doc_bucata_asteptata`; prin `fn_izo_garda_bucati` / `fn_izo_garda_fapte`: `fn_izo_garda_scriitor`, `fn_izo_garda_receptie`, `fn_izo_nivel`, `fn_izo_tip_cod`, `pg_advisory_xact_lock_shared` (fără drept); prin politicile `magbuc_izo_receptie_*` / `izo_ev_receptie_*` / `izo_mis_receptie_*`: `fn_izo_nivel`; FK-urile (verificate de sistem ca owner-ul tabelului, fără drept) |
+| `izo_receptie_writer` în `confirma` / `pv` / `anuleaza` | tot ce are editorul + `fn_izo_blocheaza_locuri`, `fn_izo_blocheaza_tabele`, `fn_izo_lock_partajat` / `fn_izo_lock_proiect`, `fn_izo_receptie_marcheaza`, `fn_izo_doc_bucata_asteptata`, `fn_izo_proiectie_bucata`, `fn_izo_loc_valid`, `fn_izo_site_proiect`, `fn_izo_tip_material`; prin `fn_izo_garda_bucati` / `fn_izo_garda_fapte`: `fn_izo_garda_scriitor`, `fn_izo_garda_receptie`, `fn_izo_nivel`, `fn_izo_tip_cod`, `pg_advisory_xact_lock_shared` (fără drept); prin politicile `magbuc_izo_receptie_*` / `izo_ev_receptie_*` / `izo_mis_receptie_*`: `fn_izo_nivel`; FK-urile (verificate de sistem ca owner-ul tabelului, fără drept) |
 | `authenticated` prin Storage | `fn_izo_scan_poate_sterge` (politica DELETE), `fn_izo_citire` (politica SELECT, E2a) |
 | `anon` / `authenticated` / `service_role` / `izo_registru_writer` prin gărzile E2a | neschimbat față de E2a: `fn_izo_garda_scriitor`, `fn_izo_nivel`, `fn_izo_tip_cod`. Nu ajung la `fn_izo_garda_receptie` (IF explicit) |
 
@@ -244,7 +277,7 @@ Politicile RLS ale rolurilor noi (nume `izo_doc_*`, deci intră în amprentă): 
 3. **`fn_izo_blocheaza_locuri(proiect, [depozit], {})`:** proiectul și depozitul `FOR SHARE`.
 4. **`fn_izo_blocheaza_tabele()`** (ACCESS SHARE; TRUNCATE / DDL așteaptă), apoi advisory: **partajat** `(73010, proiect)` la confirmare / PV, **exclusiv** la anulare (ca storno-ul E2a).
 5. **Bucățile documentului** `FOR UPDATE`, ordonate după `id` — doar la PV și anulare (confirmarea le creează).
-6. **Revalidarea, după toate lock-urile, pe starea comisă** (READ COMMITTED, snapshot nou): documentul (stare, versiune, hash recalculat); autorizarea (rezultatul pasului 2); **`fn_izo_nivel(proiect) <> 'off'`** (r4: `stoc` sau `montaj`; același predicat ca politicile RLS și garda E2a, folosit identic peste tot în E3, deci E3 nu se oprește la trecerea pe `montaj`); `depozit.site_id = proiect.site_id`; existența obiectelor din manifest (§6.1); **porțile** `cardinality(fn_izo_porti_lipsa()) = 0`.
+6. **Revalidarea, după toate lock-urile, pe starea comisă** (READ COMMITTED, snapshot nou): documentul (stare, versiune, hash recalculat); autorizarea (rezultatul pasului 2); **`fn_izo_nivel(proiect) <> 'off'`** (r4: `stoc` sau `montaj`; același predicat ca politicile RLS și garda E2a, folosit identic peste tot în E3, deci E3 nu se oprește la trecerea pe `montaj`); **locația (r5):** `fn_izo_loc_valid(proiect, depozit, NULL)` (E2a, DEFINER: depozitul există, e activ și e pe site-ul proiectului — aceeași verificare ca importul), apelată DUPĂ `fn_izo_blocheaza_locuri`, care ține rândurile `FOR SHARE`, deci relația citită nu se poate schimba până la commit. Writer-ul nu primește SELECT pe `logistica_depozite` / `executie_proiecte`; existența obiectelor din manifest (§6.1); **porțile** `cardinality(fn_izo_porti_lipsa()) = 0`.
 7. **Toate verificările de business** (§7 / §8 / §9), fără nicio scriere.
 8. **Abia aici:** `fn_izo_receptie_marcheaza(op, doc, proiect, depozit, versiune)`; urmează doar blocul DML static.
 
@@ -359,7 +392,7 @@ Owner `izo_receptie_writer`, DEFINER, EXECUTE doar `postgres`, cere `session_use
 - **Lock-uri:** §4 pașii 1, 3, 4 (advisory **exclusiv**), 5 (toate bucățile documentului — din `rand.bucata_id`, inclusiv carantina — `FOR UPDATE`, ordonate după `id`).
 - **`draft`** → `anulat` (r4, punctul 5): tranziție administrativă separată, cu contextul **`anulare_draft`**. Se scrie doar antetul: `stare`, `anulat_de_rol = 'postgres'`, `anulat_la`, `anulat_motiv`, `versiune + 1`. Nu se scrie niciun eveniment și nicio mișcare. Nu cere advisory, nici bucăți (n-are), și merge la orice nivel, inclusiv `off`, fiindcă nu atinge registrul. Scanurile rămân (sunt în manifest, deci protejate).
 - **`anulat`** → refuz (deja anulat).
-- **Nivelul (r4, punctul 2):** anularea unui document **confirmat** cere `fn_izo_nivel(proiect) <> 'off'`, ca orice scriere în registru (garda E2a și politicile refuză oricum rândurile de registru pe `off`). În practică nu se blochează: `stoc → off` e permis de E2a doar fără bucăți în registru, iar un document confirmat cu bucăți le ține acolo. Singurul caz rămas: un document confirmat cu **zero** bucăți (toate rândurile refuzate) pe un proiect trecut apoi pe `off`. Decizie: anularea lui cere întâi reactivarea proiectului (`postgres`, cu motiv). Funcția refuză cu mesaj explicit, iar regula e documentată în runbook.
+- **Nivelul (r4, punctul 2; explicația corectată în r5):** anularea unui document **confirmat** cere `fn_izo_nivel(proiect) <> 'off'`, ca orice scriere în registru. Prin API-ul E2a cazul „confirmat pe `off`” **nu e accesibil**: `fn_izo_seteaza_nivel` refuză `stoc → off` după **orice** eveniment în registru, iar confirmarea scrie mereu un eveniment de intrare, chiar cu zero bucăți. Verificarea rămâne doar defensivă (fail-closed, mesaj explicit), nu e un flux normal.
 - **`confirmat`**: refuz dacă vreo bucată a documentului are **vreo mișcare în afară de** `nascut` pe evenimentul de intrare al documentului și `stare` pe `receptie_pv`-ul lui (montaj, tăiere, mutare, bon, corecție, ieșire etc.): „stornează întâi lanțul, explicit”, cu lista. Ca la storno-ul importului: nicio inversare automată a operațiilor ulterioare.
 - **Ordinea inversării** (totul într-o tranzacție, după marcajul `anulare`):
   1. dacă există PV: evenimentul `storno` cu `storno_de_eveniment_id = eveniment_pv_id` → bucățile `receptionat` → `sosit` (UPDATE + mișcările `stare`, `receptionat` → `sosit`); numărul = cel al mișcărilor PV-ului;
@@ -403,7 +436,9 @@ Două tranziții administrative, fiecare doar sub contextul ei, scris doar de `f
 11. **Anularea:** draft → anulat (zero evenimente, zero mișcări; și pe `off`); confirmat fără PV; confirmat cu PV (ordinea: storno PV, apoi intrare; stările finale `anulata`); confirmat pe `off` → refuz explicit; peste o mișcare ulterioară → refuz, zero efecte; dublă anulare → refuz; apelată din `authenticated` → refuz. **Reintroducerea (r4, punctul 1):** după anulare, același furnizor / număr / dată se creează din nou (cu și fără `inlocuieste_document_id`) și se confirmă, iar seria trece; două documente vii cu aceeași identitate → 23505; `inlocuieste_document_id` spre un document neanulat / cu altă identitate / pe alt proiect → refuz.
 12. **Revenirea:** E3 fără date → scoate tot, reface gărzile / porțile E2a, amprenta = cea dinainte; cu orice fapt E3 (draft, confirmat sau anulat) → refuz; revenirea E2a după E3 cere întâi revenirea E3.
 13. **Integrarea gărzii E2a (r4, punctul 3):** suita E2a (`izometrie_e2a.test.sql`, 180 de verificări) rulează **nemodificată** după aplicarea E3 și trece. În plus, pentru `izo_receptie_writer` cu context valid: starea `rezervata` / `consumata`, DELETE, un rând de registru pe un proiect `off`, un `tip_cod` care nu bate cu `tip_material_id` → refuzate de verificările comune (dovada că nu există ocolire prin RETURN timpuriu). `miscare.proiect_id` ≠ context → refuz. Pentru fiecare coloană din `fn_izo_doc_bucata_asteptata` (serie, șarjă, fiecare lungime, perete, diametru, unghi, greutate, lot, `tip_material_id`, `atribute`…), o bucată inserată cu acea singură coloană modificată → refuz.
-14. **Coloanele generate (P2):** o serie cu spații / puncte / cratime în rând și altă formă în `NEW.serie`, cu aceeași formă canonică → trece; cu altă formă canonică → refuz. La UPDATE pe stare, `serie_canon` / `lungime_cm` necalculate în `NEW` nu dau fals „rând modificat”.
+14. **Coloanele generate și seria brută (P2; reconciliat în r5):** `NEW.serie` trebuie să fie **identică** cu textul brut din rând. O altă formă cu aceeași canonizare (de ex. `254-CA 09771` față de `254CA09771`) → **refuz**: egalitatea e pe proiecția `C`, care conține seria brută. Forma canonică se calculează explicit doar pentru pre-verificarea unicității (§7.1), niciodată din `NEW.serie_canon`, care în BEFORE nu e calculată. La UPDATE pe stare, `serie_canon` / `lungime_cm` necalculate în `NEW` nu dau fals „rând modificat”, fiind în afara lui `C`.
+19. **Proiecția (r5, punctul 1):** bucata corectă (exact cea din `fn_izo_doc_bucata_asteptata`) → trece. Pentru FIECARE coloană din `C`, inclusiv cele „interzise” (`tronson_id`, `dezambiguare`, `parinte_id`, `executie_teava_id`…), o inserare cu acea singură coloană schimbată (sau nenulă) → refuz. `radacina_id` ≠ `id` → refuz. Migrarea pe o copie cu o coloană nouă în `magazie_bucati` → porți lipsă.
+20. **Locația (r5, punctul 2):** depozit inactiv / pe alt site decât proiectul / mutat pe alt site concurent (barieră) → refuz, rulat ca `izo_receptie_writer` real, fără `permission denied`.
 15. **Evenimentul exact pe antet (P2):** UPDATE antet cu `eveniment_intrare_id` / `eveniment_pv_id` spre alt eveniment permis (alt document, un storno) → refuz.
 16. **Rolurile (P2):** postcondiția din §3.1 pe `pg_roles` / `pg_auth_members`; un `ALTER ROLE … BYPASSRLS` sau un GRANT de membership neașteptat → porțile lipsă.
 17. **Migrarea peste un proiect activ (P2):** pe branch, cu un proiect E2a deja în `stoc` (și unul trecut pe `montaj` direct în config, pe branch) și porțile complete → apply E3 → porțile rămân complete (amprenta nouă), o operație E2a (import + storno pe proiectul de test) merge, E3 merge pe ambele niveluri. Apoi orice modificare a unei piese E3 (funcție, gardă, politică, ACL, trigger) → `fn_izo_porti_lipsa()` nevid, iar intrările E3 și activarea E2a refuză.
