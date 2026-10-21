@@ -127,7 +127,7 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 - **Mutate din E2a** (nu sunt folosite de nimic în E2a; intră cu ecranele/fluxurile care le scriu, fiecare cu migrarea și testele ei): `teava_certificate*` → E3 (certificatul 3.1 la recepție); `izo_tronson_config` (executant, sens, perete proiectat) și `izo_surse_proiect` / `izo_ax_ancore` → E2b/E4b; `fn_izo_dezambiguare` → E2b (doar dacă preview-ul arată coliziuni reale; azi importul le refuză).
 - **UI în E2a**: `STARE_META` din Magazie cu stările noi; filtrul din bonuri (bucățile beneficiar ale proiectelor protejate nu apar), tolerant la funcția încă neaplicată. Avertizarea de pe transport (Q-E2-1 = C) intră în E2b.
 - **Preview-ul soldului inițial** (`scripts/izometrie/preview_e2_stoc.mjs`) vine în PR-ul următor (E2a-2), înainte de orice import; importul și activarea rămân pe decizia de dimineață a lui Razvan.
-- **Harness**: `scripts/test_izometrie_e2a.sh` (PG16 local): 140 de verificări SQL + importul concurent + conexiune proaspătă / REPEATABLE READ / atribuire prin DEFINER din API + cursele cu barieră (ambele ordini, activare+import combinat, părinți, depozit șters) + refuzurile/revenirea. **Limită asumată**: în harness `postgres` e superuser, deci primitivele CREATE ROLE / ALTER OWNER / `pg_auth_members` pe Supabase se dovedesc doar pe branch (P1).
+- **Harness**: `scripts/test_izometrie_e2a.sh` (PG16 local): 143 de verificări SQL + importul concurent + conexiune proaspătă / REPEATABLE READ / atribuire prin DEFINER din API + cursele cu barieră (ambele ordini, activare+import combinat, părinți, depozit șters) + refuzurile/revenirea. **Limită asumată**: în harness `postgres` e superuser, deci primitivele CREATE ROLE / ALTER OWNER / `pg_auth_members` pe Supabase se dovedesc doar pe branch (P1).
 
 ### 4c. Corecturi după review-ul PR #806 (Codex P1/P2, Copilot + Gemini A–E)
 
@@ -170,6 +170,16 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 - **Porțile** (Codex P3-10): verifică și drepturile writer-ului pe tabele și secvențe; amprenta definițiilor include ACL-ul secvențelor.
 - **Contractul de lock-uri** (Codex P3-9): sortarea e per apel, nu pe toată tranzacția; un blocaj circular rămas e detectat de PostgreSQL și anulează una dintre tranzacții (fail-closed, fără stare parțială) — operațiile se reiau. Nu promitem absența oricărui deadlock în compuneri arbitrare.
 - **Citirea pe `magazie_bucati`** (Codex P1-a): închisă din r2 (`magbuc_izo_client_sel`); testele acoperă modul fără atribuire, atribuire expirată / viitoare și atribuire pe alt proiect.
+
+### 4f. Corecturi după review-ul r4 al PR #806 (Copilot NO-GO 2×P1, Codex NO-GO, Gemini GO)
+
+- **Bon ↔ storno** (Copilot P1-a, Codex 4): bucata deja protejată se refuză pe bon FĂRĂ lock; lock-ul (bucata FOR SHARE + advisory partajat) rămâne doar pentru beneficiarul încă în afara registrului. Harness 4h: storno ținut la barieră, bonul e refuzat imediat (nu așteaptă).
+- **TRUNCATE ↔ activare** (Copilot P1-b): garda TRUNCATE ia lock partajat pe toate proiectele cu pachete, apoi recitește nivelul. Harness 6-pre (baza curată): activarea la barieră, TRUNCATE așteaptă și e refuzat.
+- **Funcția combinată** (Codex 5): refuză dacă tranzacția ține deja lock-ul pe proiect (T12d).
+- **Drepturile writer-ului** (Codex 8): verificate câte un privilegiu (`has_table_privilege(…, 'A,B')` = ORICARE); T12e. Amprenta porților include acum și CHECK-urile / FK-urile, indexurile și ownerii.
+- **Retry-ul bonului** (Codex 2): versiunea nouă a antetului intră în modal după salvarea lui.
+- **Limite documentate** (Codex 3/9/10): (a) salvarea bonului nu e tranzacțională (antet + linii = request-uri separate; două salvări intercalate pot dubla sau pierde linii) — RPC tranzacțional = decizia lui Razvan; (b) paginarea cu offset nu e un instantaneu al stocului (o listă citită cât se fac mișcări poate sări / dubla rânduri; reîncărcarea rezolvă); (c) revenirea scoate DOAR o instalare fără date — după primul fapt, ieșirea e storno + export + decizie, nu revenire; (d) `server_ver` (E6).
+- **Rămâne P1 (Codex 1)**: testul pe branch Supabase PG17 — `create_branch` din sesiune întoarce „cancelled” (confirmarea de cost nu ajunge la Razvan); branch-ul se creează din dashboard.
 
 - **Rămas pentru E6 (notă P3)**: `server_ver` vine din `nextval`, deci e unic dar nu ordonat la commit — două tranzacții concurente pot comite în ordine inversă numerelor. Delta-sync-ul din E6 nu se poate baza pe „> ultimul văzut” fără o fereastră de siguranță sau un marcaj la commit; se decide acolo.
 

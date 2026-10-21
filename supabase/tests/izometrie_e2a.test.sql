@@ -345,6 +345,13 @@ SELECT teste.e('T12a2 proiectul 2 a rămas off', public.fn_izo_nivel(2) = 'off')
 INSERT INTO public.executie_pachete_lansare (proiect_id, tronson_id) VALUES (2, 1);   -- ambele off: permis
 SELECT teste.eroare('T12b activare cu un pachet neconcordant (proiectul 2 pe un tronson al proiectului 1) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'neconcordante');
 DELETE FROM public.executie_pachete_lansare WHERE proiect_id = 2 AND tronson_id = 1;
+SELECT teste.eroare('T12d funcția combinată după o activare în aceeași tranzacție → refuz (lock deja ținut)',
+  $q$DO $d$ BEGIN PERFORM public.fn_izo_seteaza_nivel(2, 'stoc', 'test'); PERFORM public.fn_izo_activeaza_si_importa(2, 'r5-comb', (SELECT p FROM payload WHERE nume = 'imp2'), 'test'); END $d$$q$,
+  'tranzacție curată');
+REVOKE UPDATE ON public.izo_importuri FROM izo_registru_writer;
+SELECT teste.eroare('T12e writer-ului îi lipsește UN drept (UPDATE pe izo_importuri) → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'drepturile writer-ului');
+GRANT UPDATE ON public.izo_importuri TO izo_registru_writer;
+SELECT teste.e('T12f drepturile refăcute: porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
 SELECT 'TESTE SQL: TOATE OK';

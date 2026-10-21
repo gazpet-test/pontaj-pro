@@ -376,7 +376,18 @@ BEGIN
          FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
           AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari',
                             'izo_server_ver_seq','magazie_bucati_id_seq','magazie_bucati_evenimente_id_seq','magazie_bucati_miscari_id_seq',
-                            'izo_importuri_id_seq','izo_atribuiri_id_seq'))))
+                            'izo_importuri_id_seq','izo_atribuiri_id_seq')),
+      (SELECT string_agg(format('%s.%s:%s', c.conrelid::regclass, c.conname, pg_get_constraintdef(c.oid)), ',' ORDER BY c.conrelid::regclass::text, c.conname)
+         FROM pg_constraint c WHERE c.conrelid IN ('public.izo_proiect_config'::regclass, 'public.izo_atribuiri'::regclass, 'public.izo_importuri'::regclass,
+              'public.magazie_bucati_evenimente'::regclass, 'public.magazie_bucati_miscari'::regclass)
+            OR (c.conrelid = 'public.magazie_bucati'::regclass AND (c.conname LIKE 'magazie\_bucati\_izo\_%'
+                OR c.conname IN ('magazie_bucati_stare_check','magazie_bucati_locatie_tip_check')))),
+      (SELECT string_agg(pg_get_indexdef(i.oid), ',' ORDER BY i.relname) FROM pg_class i
+        WHERE i.relkind = 'i' AND i.relnamespace = 'public'::regnamespace
+          AND (i.relname LIKE 'ux\_magbuc\_izo\_%' OR i.relname LIKE 'ux\_izo\_%' OR i.relname LIKE 'izo\_%')),
+      (SELECT string_agg(format('%s:%s', c.relname, pg_get_userbyid(c.relowner)), ',' ORDER BY c.relname)
+         FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari'))))
   $f$;
 
   -- porțile registrului, verificate la migrare (postcondiția 5) ȘI la fiecare activare stoc (review #806 P2-5).
@@ -435,11 +446,15 @@ BEGIN
       v := array_append(v, 'EXECUTE din API pe funcțiile registrului');
     END IF;
     -- writer-ul are exact ce-i trebuie (un GRANT retras ar lăsa activarea admisă și importul nefuncțional)
-    IF NOT (has_table_privilege('izo_registru_writer', 'public.magazie_bucati', 'SELECT,INSERT,UPDATE')
-            AND has_table_privilege('izo_registru_writer', 'public.magazie_bucati_evenimente', 'SELECT,INSERT')
-            AND has_table_privilege('izo_registru_writer', 'public.magazie_bucati_miscari', 'SELECT,INSERT')
-            AND has_table_privilege('izo_registru_writer', 'public.izo_importuri', 'SELECT,INSERT,UPDATE')
-            AND has_table_privilege('izo_registru_writer', 'public.izo_proiect_config', 'SELECT,INSERT,UPDATE')
+    -- câte un privilegiu pe rând: has_table_privilege(…, 'A,B') e adevărat dacă există ORICARE (Codex r4 8)
+    IF EXISTS (SELECT 1 FROM (VALUES ('magazie_bucati','SELECT'), ('magazie_bucati','INSERT'), ('magazie_bucati','UPDATE'),
+                                     ('magazie_bucati_evenimente','SELECT'), ('magazie_bucati_evenimente','INSERT'),
+                                     ('magazie_bucati_miscari','SELECT'), ('magazie_bucati_miscari','INSERT'),
+                                     ('izo_importuri','SELECT'), ('izo_importuri','INSERT'), ('izo_importuri','UPDATE'),
+                                     ('izo_proiect_config','SELECT'), ('izo_proiect_config','INSERT'), ('izo_proiect_config','UPDATE'),
+                                     ('izo_atribuiri','SELECT')) d(t, pr)
+                WHERE NOT has_table_privilege('izo_registru_writer', 'public.' || d.t, d.pr))
+       OR NOT (true
             AND has_sequence_privilege('izo_registru_writer', 'public.izo_server_ver_seq', 'USAGE')
             AND has_sequence_privilege('izo_registru_writer', 'public.magazie_bucati_id_seq', 'USAGE')
             AND has_sequence_privilege('izo_registru_writer', 'public.magazie_bucati_evenimente_id_seq', 'USAGE')
@@ -821,7 +836,15 @@ BEGIN
   -- TRUNCATE pe țevi / pachete (service_role îl are pe live): refuzat cât un pachet ține de un proiect cu registru (r3)
   CREATE FUNCTION public.fn_izo_refuz_truncate_cai_vechi() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v bigint[];
   BEGIN
+    -- toate proiectele care au pachete (direct sau prin tronson): lock partajat în ordine, apoi nivelul recitit — o activare
+    -- în curs e așteptată și văzută (Copilot r4 P1-b). TRUNCATE ține deja ACCESS EXCLUSIVE pe tabel.
+    SELECT coalesce(array_agg(DISTINCT x), '{}') INTO v
+      FROM (SELECT p.proiect_id AS x FROM public.executie_pachete_lansare p
+            UNION SELECT t.proiect_id FROM public.executie_pachete_lansare p JOIN public.executie_tronsoane t ON t.id = p.tronson_id) z
+     WHERE x IS NOT NULL;
+    PERFORM public.fn_izo_lock_partajat(VARIADIC v);
     IF EXISTS (SELECT 1 FROM public.executie_pachete_lansare p LEFT JOIN public.executie_tronsoane t ON t.id = p.tronson_id
                 WHERE public.fn_izo_vreun_protejat(array_remove(ARRAY[p.proiect_id, t.proiect_id], NULL))) THEN
       RAISE EXCEPTION 'izo: TRUNCATE pe % e refuzat cât există pachete ale unui proiect cu registru', TG_TABLE_NAME USING ERRCODE = '42501';
@@ -837,6 +860,14 @@ BEGIN
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   BEGIN
     IF NEW.magazie_bucata_id IS NOT NULL THEN
+      -- (1) protejată deja (registru — permanent — sau beneficiar pe proiect activ): refuz imediat, FĂRĂ lock. Altfel un
+      --     storno (advisory exclusiv, apoi FOR UPDATE pe bucăți) și bonul (FOR SHARE pe bucată, apoi advisory) s-ar
+      --     bloca circular (Copilot r4 P1-a). Un refuz pe o citire „stoc” mai veche e conservator (fail-closed).
+      IF public.fn_izo_bucata_protejata(NEW.magazie_bucata_id) THEN
+        RAISE EXCEPTION 'izo: bucata % e țeavă Transgaz din registru; nu intră pe bon de consum (montajul se declară din modulul de țeavă)', NEW.magazie_bucata_id
+          USING ERRCODE = '42501';
+      END IF;
+      -- (2) beneficiar în afara registrului: bucata FOR SHARE + lock partajat pe proiect, apoi recitire (activare concurentă)
       PERFORM public.fn_izo_lock_partajat(public.fn_izo_bucata_proiect(NEW.magazie_bucata_id));
       IF public.fn_izo_bucata_protejata(NEW.magazie_bucata_id) THEN
         RAISE EXCEPTION 'izo: bucata % e țeavă Transgaz din registru; nu intră pe bon de consum (montajul se declară din modulul de țeavă)', NEW.magazie_bucata_id
@@ -1117,6 +1148,12 @@ BEGIN
       INTO v_depozite, v_tronsoane
       FROM (SELECT (b->>'depozit_id')::integer AS d, (b->>'tronson_id')::bigint AS t FROM jsonb_array_elements(p_payload->'bucati') b
             UNION ALL SELECT (b->>'depozit_origine_id')::integer, NULL FROM jsonb_array_elements(p_payload->'bucati') b) x;
+    -- același contract ca importul: dacă tranzacția ține deja lock-ul pe proiect (ex. seteaza_nivel chemat înainte),
+    -- FOR SHARE-urile ar veni după advisory → refuz (Codex r4 5)
+    IF EXISTS (SELECT 1 FROM pg_locks l WHERE l.locktype = 'advisory' AND l.pid = pg_backend_pid() AND l.granted
+                AND l.classid = 73010 AND l.objid = p_proiect::integer AND l.objsubid = 2) THEN
+      RAISE EXCEPTION 'izo: tranzacția ține deja lock-ul pe proiectul %; fn_izo_activeaza_si_importa se cheamă într-o tranzacție curată', p_proiect;
+    END IF;
     PERFORM public.fn_izo_blocheaza_locuri(p_proiect, v_depozite, v_tronsoane);
     PERFORM public.fn_izo_lock_proiect(p_proiect, true);
     PERFORM set_config('izo.combinat', txid_current()::text, true);

@@ -220,9 +220,11 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
           observatii: m.observatii?.trim() || null, updated_at: new Date().toISOString(),
         }).eq('id', bonId)
         if (m.updated_at) q = q.eq('updated_at', m.updated_at)
-        const { data: upd, error } = await q.select('id')
+        const { data: upd, error } = await q.select('id, updated_at')
         if (error) throw error
         if (!upd?.length) throw new Error('bonul a fost modificat de altcineva între timp — reîncarcă și reia editarea')
+        // versiunea nouă intră în modal: dacă liniile eșuează mai jos, o a doua apăsare nu pică pe propria versiune veche
+        setModal(x => (x && x.id === bonId ? { ...x, updated_at: upd[0].updated_at } : x))
       }
       const rows = linii(bonId)
       // (3) liniile: inserare, apoi ștergerea liniilor existente recitite din BD (fără bon golit, fără duplicate la retry)
