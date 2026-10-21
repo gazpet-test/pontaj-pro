@@ -10,7 +10,7 @@
 #      numește bucket-ul; altă politică PERMISSIVE nelegată de un bucket (OR la nivel superior); bucket public; versionare;
 #      rând deschis cu obiect urcat de alt cont; authenticated fără EXECUTE pe fn_ai_inbox_poate_confirma / fără SELECT pe
 #      uploadat_de; indexul patch-ului există deja; RLS oprit pe storage.objects; rând ÎNCHIS („respins”) cu obiectul altuia;
-#      cale dublă; cale în afara folderului celui care a urcat; storage.objects ținut de altă sesiune → lock_timeout, nimic
+#      cale dublă; cale în afara folderului celui care a urcat; obiect (orfan) în folderul altuia; storage.objects ținut de altă sesiune → lock_timeout, nimic
 #      schimbat; 1p: o politică FOR ALL fără USING / WITH CHECK trece precondiția și NU dă acces (fals pozitiv documentat)
 #   2. aplicare (ca runnerul: marcaj + --single-transaction) → suita; gaura închisă; celelalte politici storage identice
 #   3. reaplicare → refuz PRECONDIȚIE (exactă, nu idempotentă), starea intactă → suita
@@ -136,6 +136,9 @@ garda 1m "aceeași cale în două rânduri" \
 garda 1n "rând fără obiect cu calea în afara folderului propriu" \
   "INSERT INTO public.ai_documente_inbox (fisier_path, fisier_nume, status, uploadat_de) VALUES ('x/nu_exista.pdf', 'n.pdf', 'confirmat', '00000000-0000-0000-0000-0000000000a1')" \
   'au calea în afara folderului celui care a urcat'
+garda 1r "obiect (orfan) urcat de alt cont în folderul altuia" \
+  "INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ('ai-documente-inbox', '00000000-0000-0000-0000-0000000000a1/strecurat.pdf', '00000000-0000-0000-0000-0000000000a4', '00000000-0000-0000-0000-0000000000a4')" \
+  '1 obiect(e) din bucket (și orfani) sunt în afara folderului celui care le-a urcat'
 garda 1q "E3 (20261103b) neaplicată — ordinea convenită: E3 întâi" \
   "DROP POLICY izo_doc_scan_r_toti ON storage.objects" \
   'E3 (20261103b, Izometrie) nu e aplicată'

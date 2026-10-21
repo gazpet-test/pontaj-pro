@@ -26,7 +26,8 @@
 --      obiecte din coadă. Codul nu are nevoie: toate upload-urile în bucket sunt upsert:false, fără move / update (panou, wizard).
 --   4. LEGĂTURA rând ↔ fișier, la INSERT și pe viață (fisier_path îl scrie clientul; ai_inbox_insert cere doar uploadat_de = uid):
 --      4a. trg_ai_inbox_fisier_legat (BEFORE INSERT; funcție DEFINER, search_path fix, fără EXECUTE pentru roluri): un cont logat
---          (uid în JWT) creează rândul DOAR cu uploadat_de = el și DOAR pentru un fișier existent în bucket urcat de el
+--          (uid în JWT) creează rândul DOAR cu uploadat_de = el, DOAR pe o cale din folderul lui (`<uid>/…`, sau `wizard-angajare/…`
+--          — limitarea c; r4, Jakarinos #832 r3 P1: premisa gărzii 4d) și DOAR pentru un fișier existent în bucket urcat de el
 --          (owner_id = uid) — altfel 42501, același mesaj fie că fișierul lipsește, fie că e al altcuiva (fără oracol). Fără ea,
 --          un rând falsificat („nedecis”, cu calea actului HR al altcuiva) ar fi exploatat prin service_role: edge-ul citeste-orice
 --          descarcă row.fisier_path și scrie payload_ai (nume, CNP …) în rândul atacatorului, pe care acesta îl citește
@@ -41,7 +42,8 @@
 --      4c. idx_ai_inbox_fisier_path UNIC: un rând per fișier (azi 0 dubluri în 1330 de rânduri; panoul și wizard-ul generează căi
 --          noi la fiecare upload) — căutarea rândului legat (2b) per obiect și „un fișier = un rând” pentru edge / curățenie.
 --      Precondiția de date verifică TOATE rândurile existente (orice stare, nu doar cele deschise): niciun obiect cu alt owner_id
---      decât uploadat_de, nicio cale dublă, nicio cale în afara folderului celui care a urcat (sau wizard-angajare/). Azi: 0 / 0 / 0.
+--      decât uploadat_de, nicio cale dublă, nicio cale în afara folderului celui care a urcat (sau wizard-angajare/) — și TOATE
+--      obiectele din bucket, inclusiv orfanii (r4): niciunul în afara folderului celui care l-a urcat (owner_id). Azi: 0 / 0 / 0 / 0.
 --      4d. (politica 1) o cale legată o dată de un rând nu se mai reocupă printr-un upload nou: după ștergerea fișierului rândul
 --          rămâne fără obiect, nu cu alt conținut. Legătura e pe cale + cine a urcat, nu pe conținut (fără hash): service_role
 --          (ocolește RLS-ul) ar putea în continuare rescrie un obiect — e de încredere, azi nu o face.
@@ -67,8 +69,11 @@
 --      deja actul (insider, nu escaladare pentru el); politica UPDATE a cozii = migrare separată.
 --   c. căile `wizard-angajare/…` nu poartă uid-ul: le apără owner_id-ul + dreptul HR cerut la INSERT. Garda 4d vede acolo doar rândurile
 --      pe care contul HR le vede în coadă: calea eliberată a unui rând mutat într-un modul pe care HR nu-l vede s-ar putea reocupa de
---      alt cont HR (insider, calea `<ts>_<rand>` trebuie știută; obiectul nou are alt owner_id → nu se leagă de rând, clauza 2b
---      cade, edge-ul nu-l mai citește — rândul nu e în așteptare). Forward-fix recomandat: wizard-ul urcă în
+--      alt cont HR (insider, calea `<ts>_<rand>` trebuie știută). Obiectul nou are alt owner_id → clauza 2b cade (confirmatorii nu-l
+--      văd prin rând), DAR edge-ul citeste-orice descarcă doar după cale, cu service_role, pentru orice rând care nu e confirmat /
+--      respins (citeste-orice/index.ts:162–169): dacă rândul vechi e clasificat din nou, AI-ul ar citi conținutul nou, iar
+--      payload_ai ar ajunge la cine vede rândul — tot din coada HR / modulul în care a fost mutat (r4, Jakarinos #832 r3 P2).
+--      Forward-fix recomandat: wizard-ul urcă în
 --      `${uid}/wizard-angajare/…`, apoi excepția din (1) se scoate printr-o migrare nouă.
 --   d. URL-urile semnate deja emise (panoul: 120 s) rămân valabile până expiră.
 --   e. ștergerea unui rând din coadă de către wizard (scoateDoc / abandon) cere ai_inbox_delete = owner: pentru HR fără owner rândul
@@ -225,6 +230,14 @@ BEGIN
   IF v_n > 0 THEN
     RAISE EXCEPTION 'PRECONDIȚIE 20261103c: % rând(uri) din coadă au calea în afara folderului celui care a urcat (<uid>/… sau wizard-angajare/…); se analizează întâi', v_n;
   END IF;
+  -- (4) obiectele (și orfanii, fără rând) în afara folderului celui care le-a urcat (owner_id; NULL = urcat cu service_role):
+  --     politica veche permitea oricui să urce în folderul altuia. Un astfel de obiect ar ocoli premisa gărzii 4d. Azi: 0.
+  SELECT count(*) INTO v_n FROM storage.objects o
+   WHERE o.bucket_id = 'ai-documente-inbox'
+     AND split_part(o.name, '/', 1) IS DISTINCT FROM o.owner_id AND NOT starts_with(o.name, 'wizard-angajare/');
+  IF v_n > 0 THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: % obiect(e) din bucket (și orfani) sunt în afara folderului celui care le-a urcat (owner_id) — se analizează întâi', v_n;
+  END IF;
 END $pre$;
 
 -- 4c. un rând per fișier + căutarea rândului legat (2b)
@@ -246,7 +259,10 @@ BEGIN
   -- el (owner_id pus de storage-api din JWT). Altfel edge-urile service_role (citeste-orice descarcă, cleanup-recycle-bin șterge)
   -- ar lucra pe fișierul altcuiva în numele unui rând falsificat. Același mesaj pentru „lipsește” și „e al altcuiva” (fără oracol).
   IF v_uid IS NULL THEN RETURN NEW; END IF;
+  -- și calea e în folderul lui (sau wizard-angajare/, limitarea c): un rând pe `<A>/…` e mereu al lui A — premisa gărzii 4d
+  -- (NOT EXISTS sub RLS-ul cozii al lui A); fără ea, un obiect vechi lăsat de B în folderul lui A ar primi un rând al lui B
   IF NEW.uploadat_de IS DISTINCT FROM v_uid
+     OR (split_part(NEW.fisier_path, '/', 1) IS DISTINCT FROM v_uid::text AND NOT starts_with(NEW.fisier_path, 'wizard-angajare/'))
      OR NOT EXISTS (SELECT 1 FROM storage.objects o
                      WHERE o.bucket_id = 'ai-documente-inbox' AND o.name = NEW.fisier_path AND o.owner_id = v_uid::text) THEN
     RAISE EXCEPTION 'ai_documente_inbox: fișierul rândului nu e în coadă sau nu l-ai urcat tu — rândul se leagă doar de un fișier urcat de același cont'

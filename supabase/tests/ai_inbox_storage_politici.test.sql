@@ -246,6 +246,11 @@ BEGIN
     'err:23505', 'T6u al doilea rând pentru același fișier (chiar al lui) → refuz: un fișier = un rând (index unic)');
   PERFORM pg_temp.eq(pg_temp.efect('service_role', NULL, rand || format('(%L, %L, %L, %L)', 'srv/x.pdf', 'x.pdf', 'in_asteptare', a1)),
     'ok:1', 'T6v service_role (fără uid) neatins de legătură — ocolește oricum RLS-ul; azi nu creează rânduri');
+  -- r4 (Jakarinos #832 r3 P1): un obiect VECHI lăsat de a4 în folderul lui a1 (posibil cu politica veche; precondiția 4 îl refuză
+  -- la aplicare, aici e pus după) nu primește rând al lui a4 → un rând pe `<a1>/…` e mereu al lui a1 (premisa gărzii 4d)
+  PERFORM pg_temp.like(pg_temp.cu(ins || format('(%L, %L, %L, %L)', b, a1 || '/strecurat.pdf', a4, a4),
+      'authenticated', a4, rand || format('(%L, %L, %L, %L)', a1 || '/strecurat.pdf', 'x.pdf', 'clasificat', a4), NULL, true),
+    m_leg, 'T6w obiect propriu (owner_id = el) dar în folderul altuia → rândul refuzat (calea trebuie să fie în folderul lui)');
 
   -- T7 fluxurile din cod, cap-coadă (SQL-ul echivalent al apelurilor storage-js + PostgREST)
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1,

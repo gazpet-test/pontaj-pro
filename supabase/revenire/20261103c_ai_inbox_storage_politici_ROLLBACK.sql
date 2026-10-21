@@ -55,7 +55,7 @@ DECLARE
   c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
   -- md5 al corpului (prosrc) cu spațiile albe comprimate la un spațiu și capetele tăiate — independent de CRLF / LF
   c_md5_imut CONSTANT text := '8b8f00a4db9b7cd9ec3d456ad94c9818';
-  c_md5_legat CONSTANT text := 'dc0321296cdba52b813b37ff28f2cf89';
+  c_md5_legat CONSTANT text := '867bd0f16a5d50de0a5aa2c0daa4d230';
   v_fn oid := to_regprocedure('public.ai_inbox_fisier_imutabil()');
   v_fl oid := to_regprocedure('public.ai_inbox_fisier_legat()');
 BEGIN
