@@ -441,8 +441,11 @@ BEGIN
     -- rolul scriitor: fără BYPASSRLS/LOGIN/SUPERUSER/INHERIT; singurul membru = postgres; niciun rol API nu-l poate prelua
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'izo_registru_writer' AND NOT rolbypassrls AND NOT rolcanlogin AND NOT rolsuper AND NOT rolinherit) THEN
       v := array_append(v, 'rolul izo_registru_writer (lipsă sau BYPASSRLS/LOGIN/SUPERUSER/INHERIT)');
-    ELSIF (SELECT array_agg(pg_get_userbyid(m.member)::text) FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole)
-            IS DISTINCT FROM ARRAY['postgres']::text[]
+    -- membri: doar postgres (PG16+: CREATE ROLE de către un non-superuser adaugă automat un rând ADMIN fără SET/INHERIT,
+    -- grantor = superuser-ul de bootstrap — pe Supabase supabase_admin; găsit de testul pe branch PG17); SET da, INHERIT nu
+    ELSIF EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member <> 'postgres'::regrole)
+       OR NOT EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member = 'postgres'::regrole AND m.set_option)
+       OR EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.inherit_option)
        OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','service_role','authenticator']) a(n)
                    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a.n) AND pg_has_role(a.n, 'izo_registru_writer', 'MEMBER')) THEN
       v := array_append(v, 'membrii rolului izo_registru_writer');
@@ -1340,9 +1343,13 @@ BEGIN
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
   -- P1 granița rolului [R7]: doar postgres e membru; nimeni din API nu poate SET/INHERIT
-  IF (SELECT array_agg(pg_get_userbyid(m.member)::text ORDER BY pg_get_userbyid(m.member)::text) FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole)
-       IS DISTINCT FROM ARRAY['postgres']::text[] THEN
+  -- (PG16+: rândul ADMIN automat al creatorului non-superuser, grantor supabase_admin, e acceptat — vezi poarta)
+  IF EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member <> 'postgres'::regrole) THEN
     RAISE EXCEPTION 'Postcondiție 1: alți membri decât postgres în izo_registru_writer';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member = 'postgres'::regrole AND m.set_option)
+     OR EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.inherit_option) THEN
+    RAISE EXCEPTION 'Postcondiție 1: postgres trebuie să aibă SET (fără INHERIT) pe izo_registru_writer';
   END IF;
   IF EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','service_role','authenticator']) r(n)
               WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r.n)
@@ -1454,7 +1461,8 @@ BEGIN
         WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('izo_server_ver_seq','izo_atribuiri_id_seq','izo_importuri_id_seq',
               'magazie_bucati_evenimente_id_seq','magazie_bucati_miscari_id_seq')),
       (SELECT format('%s:%s:%s:%s:%s', r.rolinherit, r.rolcanlogin, r.rolbypassrls,
-                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ',' ORDER BY pg_get_userbyid(m.member)::text)
+                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ','
+                                       ORDER BY pg_get_userbyid(m.member)::text, m.admin_option, m.inherit_option, m.set_option)
                         FROM pg_auth_members m WHERE m.roleid = r.oid), r.rolsuper)
          FROM pg_roles r WHERE r.rolname = 'izo_registru_writer')))
     INTO v_amprenta;

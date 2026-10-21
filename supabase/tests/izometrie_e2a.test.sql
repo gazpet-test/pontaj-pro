@@ -46,8 +46,10 @@ INSERT INTO payload VALUES
 
 -- ═══ T1 catalog ═══
 SELECT teste.e('T1a rolul: NOLOGIN, NOINHERIT, fără BYPASSRLS', (SELECT NOT rolcanlogin AND NOT rolinherit AND NOT rolbypassrls AND NOT rolsuper FROM pg_roles WHERE rolname = 'izo_registru_writer'));
-SELECT teste.e('T1b doar postgres e membru; fără SET/INHERIT din API',
-  (SELECT array_agg(pg_get_userbyid(member)::text) FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole) = ARRAY['postgres']
+SELECT teste.e('T1b doar postgres e membru (SET, fără INHERIT); fără SET/INHERIT din API',
+  NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole AND member <> 'postgres'::regrole)
+  AND EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole AND member = 'postgres'::regrole AND set_option)
+  AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole AND inherit_option)
   AND NOT pg_has_role('authenticated', 'izo_registru_writer', 'MEMBER') AND NOT pg_has_role('anon', 'izo_registru_writer', 'MEMBER')
   AND NOT pg_has_role('service_role', 'izo_registru_writer', 'MEMBER') AND NOT pg_has_role('authenticator', 'izo_registru_writer', 'MEMBER'));
 SELECT teste.e('T1c funcțiile writer-ului = lista albă, DEFINER, neexecutabile din API',

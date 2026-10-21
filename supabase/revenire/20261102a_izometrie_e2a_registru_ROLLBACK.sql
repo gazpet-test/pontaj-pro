@@ -27,7 +27,7 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    '2ea1d3534b6d2f992d94f7f7b5bf50b2'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    '11dcb1984018f4ff83c5fe445a66d025'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
@@ -115,7 +115,8 @@ BEGIN
         WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('izo_server_ver_seq','izo_atribuiri_id_seq','izo_importuri_id_seq',
               'magazie_bucati_evenimente_id_seq','magazie_bucati_miscari_id_seq')),
       (SELECT format('%s:%s:%s:%s:%s', r.rolinherit, r.rolcanlogin, r.rolbypassrls,
-                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ',' ORDER BY pg_get_userbyid(m.member)::text)
+                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ','
+                                       ORDER BY pg_get_userbyid(m.member)::text, m.admin_option, m.inherit_option, m.set_option)
                         FROM pg_auth_members m WHERE m.roleid = r.oid), r.rolsuper)
          FROM pg_roles r WHERE r.rolname = 'izo_registru_writer')))
     INTO v_amprenta;
