@@ -396,3 +396,15 @@ describe('review #807 r6 (Copilot r10)', () => {
     expect(p.probleme.join()).toMatch(/ieșire parțială/)
   })
 })
+
+describe('review #807 r7 (Copilot r12 P3)', () => {
+  it('neconformitate reală + accepta_neconformitate cu seria greșită → rămâne blocantă, carantina NU se aplică', () => {
+    const b = evalueaza(foaie('TEAVA 7.1 TOPLET', [rT71({ 14: 'TOPLET', 15: 'LIPSA MARCAJ' })], 11).randuri, { coduri, tronsoane,
+      decizii: { accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, serie: '247EK99999', carantina: true, nota: 'x' }] } }).randuri[0]
+    expect(b.probleme.join()).toMatch(/neconformitate „LIPSA MARCAJ” — de decis/)
+    expect(b.probleme.join()).toMatch(/neaplicată/)
+    expect(b.carantina).not.toBe(true)
+    expect(b.stare).not.toBe('carantina')
+    expect(b.nota_neconformitate).toBeUndefined()
+  })
+})
