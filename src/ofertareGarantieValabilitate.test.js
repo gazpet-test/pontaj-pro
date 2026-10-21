@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import {
   plusZile, plusLuni, zileIntre, ziDepunere, extrageDurate, clasificaSurse, propuneValabilitate,
   calculeazaValabilitate, propuneActualizare, textDurata, MESAJ_NECITIT, MESAJ_CONFLICT, ETICHETA_REZUMAT,
-  stareGarantie, trimiteActualizareSigur, patchActAditional, ultimaPrelungire, faraMarcaje, liniePrelungireCeruta, fmtIso,
+  stareGarantie, trimiteActualizareSigur, patchActAditional, linieActAditional, ultimaPrelungire, faraMarcaje, liniePrelungireCeruta, fmtIso,
   evalueazaGarantie, semnalReverificare, termenMutat, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE,
   indicatorGarantie, semnalDinCitire, precompletarePerioada,
 } from './ofertareGarantieValabilitate.js'
@@ -385,6 +385,23 @@ describe('garanția #1 (lic. 3): polița în original, termen decalat 24.09 → 
     expect(s.antet).toBe('polița valabilă 14.10.2026 – 14.02.2027')
     expect(ultimaPrelungire(b.row.observatii).tip).toBe('act')
     expect(faraMarcaje(b.row.observatii).split('\n')).toHaveLength(2)
+  })
+  it('TKT-0342: act adițional fără mail — linia poartă nr. / data actului, cine, ora; marcajul rămâne singurul citit', () => {
+    const p = patchActAditional({ g: G1, de: '2026-10-26', pana: '2027-02-26', termenDepunere: TERMEN, azi: '2026-10-21',
+      extra: { nrAct: 'AA 12/2026', dataAct: '2026-10-20', cine: 'Razvan Trusu', ora: '14:05', faraMail: true } })
+    const ultima = p.observatii.split('\n').pop()
+    expect(ultima).toBe('21.10.2026: act adițional primit la polița nr. ' + (G1.polita_nr || '—') + ' — acoperă 26.10.2026 – 26.02.2027. Act nr. AA 12/2026 din 20.10.2026. Înregistrat fără mail (act obținut în afara platformei) de Razvan Trusu la 14:05. ⟦act-aditional 2026-10-26 2027-02-26⟧')
+    expect(ultimaPrelungire(p.observatii)).toMatchObject({ tip: 'act', de: '2026-10-26', pana: '2027-02-26' })
+    expect(stare({ ...G1, ...p })).toMatchObject({ inAsteptare: null })
+    // textele libere nu pot injecta un alt marcaj (paranteze de marcaj și rândurile noi se curăță)
+    const q = patchActAditional({ g: G1, de: '2026-10-26', pana: '2027-02-26', termenDepunere: TERMEN, azi: '2026-10-21',
+      extra: { nrAct: 'X ⟦act-aditional 2020-01-01 2099-01-01⟧\nY', cine: 'a\nb', ora: 'xx' } })
+    expect(ultimaPrelungire(q.observatii)).toMatchObject({ de: '2026-10-26', pana: '2027-02-26' })
+    expect(q.observatii.split('\n')).toHaveLength(G1.observatii ? G1.observatii.split('\n').length + 1 : 1)
+    expect(q.observatii.split('\n').pop()).not.toMatch(/ la xx/)
+    // fără extra: linia veche, neschimbată
+    expect(linieActAditional({ azi: '2026-10-21', polita: 'P1', de: '2026-10-26', pana: '2027-02-26' }))
+      .toBe('21.10.2026: act adițional primit la polița nr. P1 — acoperă 26.10.2026 – 26.02.2027. ⟦act-aditional 2026-10-26 2027-02-26⟧')
   })
   it('act adițional mai scurt decât cerința ⇒ insuficient rămâne; perioadă inversată ⇒ refuzat', () => {
     const p = patchActAditional({ g: G1, de: DE_ACUM, pana: '2027-02-10', termenDepunere: TERMEN, azi: '2026-10-01' })

@@ -255,8 +255,15 @@ export const liniePrelungireCeruta = ({ azi, termenVechi, termenNou, polita, acD
   `${fmtIso(azi)}: termen decalat ${fmtIso(termenVechi)} → ${fmtIso(termenNou)}; polița nr. ${polita || '—'} (original) acoperă ${fmtIso(acDe)} – ${fmtIso(acPana)}; ` +
   `cerută brokerului perioada nouă ${fmtIso(de)} – ${fmtIso(pana)}${durata ? ` (${textDurata(durata)})` : ''} — neconfirmată până la actul adițional. ⟦prelungire-ceruta ${de} ${pana} acoperea ${acDe} ${acPana}⟧`
 
-export const linieActAditional = ({ azi, polita, de, pana }) =>
-  `${fmtIso(azi)}: act adițional primit la polița nr. ${polita || '—'} — acoperă ${fmtIso(de)} – ${fmtIso(pana)}. ⟦act-aditional ${de} ${pana}⟧`
+// TKT-2026-0342 (21.10): actul obținut în afara platformei („fără mail”) — linia poartă și nr. / data actului, cine și la ce oră l-a
+// înregistrat; textele libere sunt curățate (fără ⟦ ⟧ / rânduri noi), ca marcajul de la capăt să rămână singurul citit de RE_MARCAJ
+const curataLiber = (v, max = 80) => String(v ?? '').replace(/[\u27E6\u27E7\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
+export const linieActAditional = ({ azi, polita, de, pana, nrAct, dataAct, cine, ora, faraMail }) => {
+  const act = curataLiber(nrAct, 40), cineC = curataLiber(cine), oraC = /^\d{2}:\d{2}$/.test(String(ora || '')) ? ora : ''
+  const extra = (act || dataAct ? ` Act nr. ${act || '—'}${dataAct ? ` din ${fmtIso(dataAct)}` : ''}.` : '') +
+    (faraMail || cineC ? ` Înregistrat${faraMail ? ' fără mail (act obținut în afara platformei)' : ''}${cineC ? ` de ${cineC}` : ''}${oraC ? ` la ${oraC}` : ''}.` : '')
+  return `${fmtIso(azi)}: act adițional primit la polița nr. ${polita || '—'} — acoperă ${fmtIso(de)} – ${fmtIso(pana)}.${extra} ⟦act-aditional ${de} ${pana}⟧`
+}
 
 // starea afișată a garanției (antet, avertizări) — o singură sursă pentru UI
 // g = rândul ofertare_garantii; deAcum = ziua termenului curent; necesarPana = data cerută de cerință pe termenul curent
@@ -433,9 +440,9 @@ export async function trimiteActualizareSigur({ g, cerut, original, linieObs, pa
 }
 
 // „Act adițional primit”: perioada confirmată devine perioada poliței, iar termenul de referință — cel curent
-export function patchActAditional({ g, de, pana, termenDepunere, azi }) {
+export function patchActAditional({ g, de, pana, termenDepunere, azi, extra = {} }) {
   const zile = zileIntre(de, pana)
   if (!(zile > 0)) return null
   return { valabil_de: de, valabil_pana: pana, valabil_zile: zile, termen_la_cerere: termenDepunere,
-    observatii: adaugaObservatie(g?.observatii, linieActAditional({ azi, polita: g?.polita_nr, de, pana })) }
+    observatii: adaugaObservatie(g?.observatii, linieActAditional({ ...extra, azi, polita: g?.polita_nr, de, pana })) }
 }
