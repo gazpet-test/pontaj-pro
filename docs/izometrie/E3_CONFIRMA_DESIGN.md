@@ -29,7 +29,7 @@ Decizia Razvan (21.10): Q-E3-2 = A — Janeta confirmă din UI, iar designul se 
 
 Administrarea `postgres` e o cale separată. Nu primește o identitate umană fictivă: `aplicat_de` rămâne NULL, iar `aplicat_rol` = `postgres`.
 
-## 2. Schema nouă (migrarea `20261103a_izometrie_e3_documente`; 20261102a aplicată NU se modifică)
+## 2. Schema nouă (migrarea `20261103b_izometrie_e3_documente`; 20261102a aplicată NU se modifică)
 
 **`izo_documente_intrare`** (antet):
 - `id`, `proiect_id`, `depozit_id`, `sablon` ∈ {`aviz_teava`, `lista_ambalare_curbe`};

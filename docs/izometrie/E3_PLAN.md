@@ -27,7 +27,7 @@ Branch `izometrie/e3`, stivuit pe `izometrie/e2` (#806). La merge-ul #806 se fac
 - reconcilierea zilnică ERP ↔ Excel și criteriul de oprire a Excelului (E3b; cere 10 zile lucrătoare cu 0 diferențe);
 - avizul intern (E7).
 
-## 1. Modelul de date (migrarea `20261103a_izometrie_e3_avize`)
+## 1. Modelul de date (migrarea `20261103b_izometrie_e3_documente`)
 
 Tabelele noi au prefixul `izo_`, ca în E2. Design-ul le numește `teava_documente_intrare*` (Q-E3-1).
 
@@ -153,6 +153,6 @@ E2 e deja izolat pe proiect: registrul, nivelul, atribuirile, depozitul și citi
 
 1. Acest plan (review + răspunsuri la Q-E3-1…6).
 2. Scriptul de payload de test (`payload_test_avize.mjs`), util imediat după merge-ul E2.
-3. Migrarea 20261103a (tabele + RPC-uri + porți actualizate + storage), harness-ul, revenirea, testul PG17 pe branch.
+3. Migrarea 20261103b (tabele + RPC-uri + porți actualizate + storage), harness-ul, revenirea, testul PG17 pe branch.
 4. UI-ul.
 5. Testul cu Janeta: aceleași 3 documente, introduse de ea.
