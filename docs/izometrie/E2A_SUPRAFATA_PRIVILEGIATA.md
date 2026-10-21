@@ -29,3 +29,17 @@ SELECT json_build_object(
 
 **De reluat la livrare** (raportul de dry-run): aceeași interogare după migrare — `definer_atinge_tabele_protejate` nu
 trebuie să crească fără o verificare a fiecărei funcții noi față de gărzile izo.
+
+## Evaluare extinsă (r3, 21.10.2026, doar SELECT)
+
+| Ce | Rezultat |
+|---|---|
+| DEFINER expuse API-ului cu SQL dinamic (`EXECUTE` cu format / concatenare) | **0** |
+| Roluri API cu CREATE pe `public` (DDL) | **0** |
+| `pg_parameter_acl` (drepturi SET pe parametri, ex. `session_replication_role`) | **gol** — doar superuser-ul / owner-ul poate schimba parametrii superuser; gărzile izo sunt oricum ENABLE ALWAYS |
+| View-uri / view-uri materializate în `public` | 143; reguli (`pg_rules`) în `public`: **0** — un view nu ocolește triggerele tabelului de bază |
+| TRUNCATE pentru service_role pe căile vechi | `executie_tevi`, `executie_pachete_lansare`, `executie_tronsoane`, `logistica_depozite`, `executie_proiecte`, `executie_bonuri_consum_linii` — țevile și pachetele au gardă BEFORE TRUNCATE (r3); tronsoanele / depozitele / proiectele cer CASCADE prin `magazie_bucati` sau `izo_proiect_config`, ale căror gărzi refuză |
+| FK-uri relevante | proiect → tronsoane CASCADE; tronson → pachete NO ACTION; pachet → țevi CASCADE; bucăți → proiect NO ACTION |
+
+**Limită asumată** (Codex r3 P2-8): filtrul textual găsește referințele directe; un wrapper care cheamă altă funcție sau SQL construit din fragmente nu e prins. Gărzile nu se bazează pe „nu există un DEFINER care să scrie”: ele verifică rolul + marcajul (writer) sau refuză necondiționat, deci un DEFINER cu owner postgres e refuzat (T5m, 4c5). Singurul canal privilegiat rămas e membrul `postgres` al rolului writer, prin design (aplicarea de către chat, cu „da”-ul lui Razvan).
+

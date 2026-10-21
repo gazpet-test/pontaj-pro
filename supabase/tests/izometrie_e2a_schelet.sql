@@ -52,7 +52,7 @@ INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
 CREATE TABLE public.executie_proiecte (id bigserial PRIMARY KEY, nume text, site_id integer, mp_employee_id bigint, coordonator_transgaz text);
 ALTER TABLE public.executie_proiecte ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ep_all ON public.executie_proiecte FOR ALL TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
-INSERT INTO public.executie_proiecte (id, nume, site_id) VALUES (1, 'LOT 1', 4), (2, 'ALT PROIECT', 9), (3, 'LOT 2', 6);
+INSERT INTO public.executie_proiecte (id, nume, site_id) VALUES (1, 'LOT 1', 4), (2, 'ALT PROIECT', 9), (3, 'LOT 2', 6), (4, 'PROIECT TEST R3', 10), (5, 'PROIECT TEST CURSA', 11);
 CREATE TABLE public.executie_tronsoane (id bigserial PRIMARY KEY, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id) ON DELETE CASCADE,
   cod text NOT NULL, km_start_m integer, km_end_m integer, UNIQUE (proiect_id, cod));
 ALTER TABLE public.executie_tronsoane ENABLE ROW LEVEL SECURITY;
@@ -60,12 +60,13 @@ CREATE POLICY et_sel ON public.executie_tronsoane FOR SELECT TO authenticated US
 CREATE POLICY et_mod ON public.executie_tronsoane FOR ALL TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 INSERT INTO public.executie_tronsoane (id, proiect_id, cod) SELECT g, 1, 'T' || g FROM generate_series(1, 11) g;
 INSERT INTO public.executie_tronsoane (id, proiect_id, cod) SELECT g, 3, 'T' || (g - 4) FROM generate_series(16, 23) g;
+INSERT INTO public.executie_tronsoane (id, proiect_id, cod) VALUES (30, 5, 'T30');
 CREATE TABLE public.logistica_depozite (id serial PRIMARY KEY, name text NOT NULL, cod_3litere text UNIQUE, site_id integer, adresa text, activ boolean DEFAULT true);
 ALTER TABLE public.logistica_depozite ENABLE ROW LEVEL SECURITY;
 CREATE POLICY depozite_all ON public.logistica_depozite FOR ALL TO authenticated USING (auth.uid() IS NOT NULL);
 INSERT INTO public.logistica_depozite (id, name, cod_3litere, site_id) VALUES
   (1, 'Balvanești', 'BAL', 4), (2, 'Sisești', 'SIS', 4), (7, 'Sediu Ploiești', 'SED', 1),
-  (4, 'Căldăraru', 'CAL', 9), (9, 'DM Jupânești', 'JUP', 6), (10, 'DM Orșova Nord', 'ORN', 6), (11, 'OS Topleț', 'TOP', 6), (12, 'Rezervă Topleț', 'REZ', 6);
+  (4, 'Căldăraru', 'CAL', 9), (9, 'DM Jupânești', 'JUP', 6), (10, 'DM Orșova Nord', 'ORN', 6), (11, 'OS Topleț', 'TOP', 6), (12, 'Rezervă Topleț', 'REZ', 6), (13, 'Depozit test R3', 'D4T', 10), (14, 'Depozit test 14', 'D14', 6);
 CREATE TABLE public.magazie_tipuri_material (id serial PRIMARY KEY, nume text NOT NULL, categorie text, cheie text, activ boolean DEFAULT true);
 ALTER TABLE public.magazie_tipuri_material ENABLE ROW LEVEL SECURITY;
 CREATE POLICY mtm_sel ON public.magazie_tipuri_material FOR SELECT TO authenticated USING (true);
