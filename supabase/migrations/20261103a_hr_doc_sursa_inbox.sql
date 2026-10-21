@@ -18,7 +18,7 @@
 --   4. (review extern #821, Copilot P1) proveniența nu se poate falsifica la INSERT: trigger BEFORE INSERT
 --      trg_hr_docp_sursa_inbox_verifica (funcție SECURITY INVOKER, search_path fix, fără EXECUTE pentru roluri). Când
 --      NEW.sursa_inbox_id NU e NULL, rândul din ai_documente_inbox trebuie să existe (vizibil apelantului), modul_tinta = 'hr',
---      status IN ('clasificat','eroare') la momentul INSERT-ului și fisier_nume = NEW.fisier_nume — altfel 23514
+--      status IN ('clasificat','eroare') în snapshot-ul INSERT-ului (vezi limitarea c) și fisier_nume = NEW.fisier_nume — altfel 23514
 --      („sursa_inbox_id = N refuzată la INSERT — <motiv>”). NULL rămâne liber (Drive import, încărcări manuale).
 --      INVOKER intenționat: citirea rândului trece prin RLS-ul apelantului (ai_inbox SELECT = uploadat_de / modul NULL /
 --      fn_ai_inbox_poate_confirma), deci un rând pe care nu-l vede = „nu există” — fără oracol (o funcție DEFINER ar spune
@@ -35,12 +35,20 @@
 -- LIMITĂRI ACCEPTATE (P2, review extern #821):
 --   a. ștergerea DEFINITIVĂ (TabCos «❌ Șterge definitiv» = DELETE; cleanup-recycle-bin după retenție) scoate rândul din
 --      dosar, deci și „memoria” indexului unic pentru rândul lui din coadă. Garda de la INSERT (4) refuză oricum un rând din
---      coadă închis ('confirmat' / 'respins') sau șters; golul rămâne doar pentru un rând lăsat DESCHIS (închiderea lui a
+--      coadă închis ('confirmat' / 'respins', comis — vezi c) sau șters; golul rămâne doar pentru un rând lăsat DESCHIS (închiderea lui a
 --      picat) al cărui document a fost apoi șters definitiv — din el se poate salva din nou un document.
 --   b. după prima folosire revenirea BD refuză (există documente cu sursa_inbox_id — vezi supabase/revenire/). Deci o
 --      problemă în UI se repară cu un build NOU, înainte (forward-fix), care păstrează contractul coloanei — NU prin revenirea
 --      la UI-ul de dinainte de #821 (acela nu scrie / nu citește sursa_inbox_id: cursa celor două taburi și dublurile revin,
 --      iar perechea UI + BD nu se mai poate aduce la starea dinainte de #821).
+--   c. (verificare #821, SEC-1) garda de la INSERT (4) citește rândul din coadă FĂRĂ lock: vede ultimul status COMIS în
+--      snapshot-ul INSERT-ului (READ COMMITTED) și nu se serializează cu un UPDATE care închide rândul în aceeași clipă. Un
+--      INSERT și o închidere / respingere comise în paralel (fereastra de câteva ms: Finish-ul wizard-ului cât panoul face
+--      «Închide (e deja în dosar)» sau «✕ Respinge») trec amândouă: documentul are sursa_inbox_id = N, iar rândul N e
+--      'respins' sau 'confirmat' legat de alt document. Nu se pierde nimic tăcut: indexul unic (2) tot lasă cel mult UN
+--      document per rând, iar wizard-ul vede rândul închis de altcineva ('altcineva') și afișează avertismentul. Varianta
+--      strictă (SELECT … FOR SHARE în gardă) cere ca ORICE apelant legitim să aibă UPDATE pe ai_documente_inbox și să treacă
+--      politica UPDATE a RLS-ului pe rând — decizie separată, nu în 20261103a.
 -- Revenire: supabase/revenire/20261103a_hr_doc_sursa_inbox_ROLLBACK.sql (refuză dacă vreun rând are sursa_inbox_id; doar la
 -- cererea lui Răzvan). Test local: scripts/test_hr_doc_sursa_inbox.sh.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh; fără BEGIN/COMMIT.

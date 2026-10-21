@@ -964,10 +964,27 @@ describe('#821 F2 garda de la INSERT (trg_hr_docp_sursa_inbox_verifica) = refuz 
     for (const r of ['dubla', 'refuzata', 'migrare']) expect(copieDeSters(r)).toBe(true)
     for (const r of ['ok', 'eroare', undefined]) expect(copieDeSters(r)).toBe(false)
   })
-  it('panou: refuzată + proveniența găsită → mesajul de proveniență; fără document → „nu mai e deschis”, nimic salvat', () => {
+  it('panou: refuzată + proveniența găsită → rând deja închis (dispare din listă): fără «Închide» / «✕ Respinge»; fără document → „nu mai e deschis”', () => {
     const salvat = docDrive({ id:900, employee_id:50, drive_file_id:null, uploadat_de:'u1', sursa_inbox_id:501 })
-    expect(mesajRefuzSursa([salvat], 7, () => null)).toBe(mesajProvenienta([salvat], 7, () => null))
-    expect(mesajRefuzSursa([salvat], 7, () => null)).toMatch(/alt angajat \(#50\).*document #900/)
+    const nume = id => (id === 50 ? 'POPESCU ION' : null)
+    // R1 (verificare #821): după loadQueue rândul nu mai e în listă → nicio acțiune pe rând, nu mesajul pentru rând deschis
+    for (const docs of [[salvat], [{ ...salvat, employee_id:7 }], [{ ...salvat, deleted_at:'2026-10-21' }]]) {
+      const m = mesajRefuzSursa(docs, 7, nume)
+      expect(m).not.toBe(mesajProvenienta(docs, 7, nume))
+      expect(m).toMatch(/fusese deja închis între timp.*nu am salvat nimic, am reîncărcat lista/)
+      expect(m).not.toMatch(/«Închide|«✕ Respinge»|alege-l din listă/)
+    }
+    // la alt angajat: îl numește (sau #id) și spune că se corectează din dosar, nu din coadă
+    expect(mesajRefuzSursa([salvat], 7, nume)).toMatch(/salvat la «POPESCU ION» \(document #900\).*în dosarul lui, nu în coadă/)
+    expect(mesajRefuzSursa([salvat], 7, () => null)).toMatch(/alt angajat \(#50\) \(document #900\)/)
+    expect(mesajRefuzSursa([salvat], 7)).toMatch(/alt angajat \(#50\)/)
+    // la angajatul ales: e deja la el, nimic de corectat
+    expect(mesajRefuzSursa([{ ...salvat, employee_id:7 }], 7, nume)).toMatch(/deja în dosarul angajatului ales \(#900\)/)
+    // nesters la alt angajat are prioritate față de copia ștearsă logic (ordinea mesajProvenienta)
+    expect(mesajRefuzSursa([{ ...salvat, id:899, deleted_at:'x' }, salvat], 7, nume)).toMatch(/document #900/)
+    // doar șters logic → Coș / fișierul urcat din nou
+    expect(mesajRefuzSursa([{ ...salvat, deleted_at:'x' }], 7, nume)).toMatch(/\(#900, la «POPESCU ION»\) a fost șters din dosar.*🗑 Coș.*urcă fișierul încă o dată/)
+    expect(mesajRefuzSursa([null, undefined], 7)).toBe(MESAJ_SURSA_REFUZATA)
     expect(mesajRefuzSursa([], 7)).toBe(MESAJ_SURSA_REFUZATA)
     expect(mesajRefuzSursa(null, 7)).toBe(MESAJ_SURSA_REFUZATA)
     expect(MESAJ_SURSA_REFUZATA).toMatch(/nu am salvat nimic/)

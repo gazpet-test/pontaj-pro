@@ -151,11 +151,24 @@ export function rezultatInserareHR(res) {
 }
 export const copieDeSters = r => r === 'dubla' || r === 'refuzata' || r === 'migrare'
 
-// Panou (#821 F2): INSERT refuzat de garda de la INSERT → dacă rândul a produs deja un document (alt tab / wizard-ul),
-// mesajul de proveniență; altfel rândul a fost închis / mutat între timp — nimic salvat, lista se reîncarcă.
+// Panou (#821 F2): INSERT refuzat de garda de la INSERT = rândul nu mai e deschis în HR (închis / mutat între timp);
+// lista se reîncarcă, deci rândul DISPARE din ea — mesajul nu mai trimite la «Închide» / «✕ Respinge» pe rând (R1,
+// verificare #821), ci spune unde e documentul salvat deja din el (alt tab / wizard-ul) și că o corecție se face în dosar.
+// Ordinea ca la mesajProvenienta: nesters la angajatul ales → nesters la alt angajat → șters logic → nimic găsit.
 export const MESAJ_SURSA_REFUZATA = 'Rândul din coadă nu mai e deschis în HR (închis din alt tab / de alt utilizator sau mutat în alt modul între timp) — nu am salvat nimic; am reîncărcat lista.'
-export const mesajRefuzSursa = (docs, angajatId, numeAngajat) =>
-  (docs || []).filter(Boolean).length ? mesajProvenienta(docs, angajatId, numeAngajat) : MESAJ_SURSA_REFUZATA
+export function mesajRefuzSursa(docs, angajatId, numeAngajat = () => null) {
+  const l = (docs || []).filter(Boolean)
+  if (!l.length) return MESAJ_SURSA_REFUZATA
+  const inc = 'Rândul din coadă fusese deja închis între timp (din alt tab / de alt utilizator / din wizard-ul „Angajat nou”)'
+  const la = d => { const n = numeAngajat(d.employee_id); return n ? `«${n}»` : `alt angajat (#${d.employee_id})` }
+  const vii = l.filter(d => d.deleted_at == null)
+  const aici = vii.find(d => Number(d.employee_id) === Number(angajatId))
+  if (aici) return `${inc} — documentul din el e deja în dosarul angajatului ales (#${aici.id}); nu am salvat nimic, am reîncărcat lista.`
+  const d = vii[0]
+  if (d) return `${inc} — documentul din el e salvat la ${la(d)} (document #${d.id}); nu am salvat nimic, am reîncărcat lista. Dacă acela nu e angajatul corect, corecția se face în dosarul lui, nu în coadă: șterge documentul de acolo și urcă fișierul încă o dată la angajatul corect.`
+  const s = l[0]
+  return `${inc}, iar documentul salvat din el (#${s.id}, la ${la(s)}) a fost șters din dosar — nu am salvat nimic, am reîncărcat lista. Dacă a fost șters din greșeală, restaurează-l din HR → 🗑 Coș; dacă trebuie salvat din nou, urcă fișierul încă o dată.`
+}
 
 // ─── Wizard „Angajat nou” (review extern #821, F1 — Jakarinos P1) ─────────────────────────────────────────────
 // Wizard-ul salvează în dosar din rânduri ale cozii ai_documente_inbox (urcate de el), deci pune și el proveniența:
