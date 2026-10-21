@@ -8384,7 +8384,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
           )}
         </div>
         <div style={{fontSize: 11, color: G.muted, lineHeight: 1.4, marginTop: -6, marginBottom: 10}}>
-          ℹ️ Citire completă cu verificare: dacă datele se modifică în timpul încărcării, se reîncearcă automat. Nu este un snapshot tranzacțional.
+          ℹ️ Citire completă cu verificare: la modificările detectabile în timpul încărcării se reîncearcă automat. Nu este un snapshot tranzacțional.
         </div>
 
         {/* Filtre tip + sursă + șantier + proprietar comodat + search */}
