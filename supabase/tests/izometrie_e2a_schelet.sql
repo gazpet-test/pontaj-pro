@@ -152,6 +152,14 @@ CREATE SCHEMA supabase_migrations;
 CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, statements text[], name text, created_by text, idempotency_key text, rollback text[]);
 
 -- helpers de test (schema teste; invoker — rulează cu rolul curent)
+-- obiecte EXISTENTE pe live cu „izo” în mijlocul numelui (furnIZOri), care NU țin de modul: revenirea și porțile nu au voie
+-- să le confunde cu obiectele izo (dry-run-ul pe prod din 21.10.2026 a picat pe '%izo%' liber)
+CREATE TABLE public.logistica_furnizori (id bigserial PRIMARY KEY, nume text, updated_at timestamptz DEFAULT now());
+ALTER TABLE public.logistica_furnizori ENABLE ROW LEVEL SECURITY;
+CREATE POLICY logistica_furnizori_select_authenticated ON public.logistica_furnizori FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY locatii_furnizori_all ON public.logistica_furnizori FOR ALL TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE FUNCTION public.fn_furnizori_atinge() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$ BEGIN NEW.updated_at := now(); RETURN NEW; END $$;
+CREATE TRIGGER trg_furnizori_atinge BEFORE UPDATE ON public.logistica_furnizori FOR EACH ROW EXECUTE FUNCTION public.fn_furnizori_atinge();
 CREATE SCHEMA teste;
 GRANT USAGE ON SCHEMA teste TO anon, authenticated, service_role;
 CREATE FUNCTION teste.ca(p_uid uuid) RETURNS void LANGUAGE plpgsql AS $$
