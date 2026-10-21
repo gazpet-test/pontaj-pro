@@ -4,6 +4,7 @@
 
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
+import { citesteArhivaCompleta, proprietarComodatId, esteComodatNeatribuit, COMODAT_NEATRIBUIT } from './lib/arhivaAlimentari.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -7832,6 +7833,10 @@ function ArhivaAvizePage({ canDelete, profile, showToast }) {
 // ============================================================
 function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotorina, showToast }) {
   const [arhiva, setArhiva] = useState([])
+  const [employees, setEmployees] = useState([])
+  const [employeeFilter, setEmployeeFilter] = useState('Toate')
+  const [loadWarning, setLoadWarning] = useState('')
+  const loadRequest = useRef(0)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [perioadaFilter, setPerioadaFilter] = useState('luna')  // azi|ieri|sapt|luna|3luni|an|toate|custom
@@ -7849,7 +7854,10 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
   
   // Load alimentări din DB conform filtru perioadă
   const loadArhiva = async () => {
+    const request = ++loadRequest.current
     setLoading(true)
+    setArhiva([])
+    setLoadWarning('')
     const today = new Date()
     let startDate = null, endDate = null
     
@@ -7881,28 +7889,55 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
       endDate = customEnd
     }
     
-    let q = supabase.from('logistica_alimentari')
-      .select(`*, 
-        logistica_active(id, cod_intern, nr_inmatriculare, marca, model, norma_consum, unitate_norma, prag_alerta_consum, logistica_categorii(tip, subcategorie)),
-        sites:site_id(id, name),
-        profile_creator:created_by(id, name)
-      `)
-      .order('data_alimentare', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(2000)
-    
-    if (startDate) q = q.gte('data_alimentare', startDate)
-    if (endDate) q = q.lte('data_alimentare', endDate)
-    
-    const { data, error } = await q
-    setLoading(false)
-    if (error) { showToast('Eroare încărcare arhivă: ' + error.message, 'error'); return }
-    setArhiva(data || [])
+    try {
+      const [data, employeeRows] = await Promise.all([
+        citesteArhivaCompleta(() => {
+          let q = supabase.from('logistica_alimentari')
+            .select(`*,
+              logistica_active(id, cod_intern, nr_inmatriculare, marca, model, norma_consum, unitate_norma, prag_alerta_consum, tip_proprietate, comodat_employee_id, comodat_data_start, comodat_data_sfarsit, logistica_categorii(tip, subcategorie)),
+              sites:site_id(id, name),
+              profile_creator:created_by(id, name)
+            `, { count: 'exact' })
+            .order('data_alimentare', { ascending: false })
+            .order('id', { ascending: false })
+          if (startDate) q = q.gte('data_alimentare', startDate)
+          if (endDate) q = q.lte('data_alimentare', endDate)
+          return q
+        }),
+        // Arhiva include și proprietarii inactivi; created_by este operatorul.
+        citesteArhivaCompleta(() => supabase.from('employees')
+          .select('id, name', { count: 'exact' }).order('id')),
+      ])
+      if (request !== loadRequest.current) return
+      setEmployees(employeeRows)
+      setArhiva(data)
+    } catch (error) {
+      if (request !== loadRequest.current) return
+      setArhiva([])
+      setLoadWarning('Arhiva nu a putut fi încărcată complet. Totalurile și exportul nu sunt disponibile. ' + (error.message || error))
+    } finally {
+      if (request === loadRequest.current) setLoading(false)
+    }
   }
   
   useEffect(() => {
     if (perioadaFilter !== 'custom' || (customStart && customEnd)) loadArhiva()
+    else {
+      setArhiva([])
+      setLoading(false)
+      setLoadWarning('Selectați ambele date pentru perioada personalizată.')
+    }
+    return () => { ++loadRequest.current }
   }, [perioadaFilter, customStart, customEnd])
+
+  const employeesDisponibili = useMemo(() => {
+    const names = new Map(employees.map(e => [String(e.id), e.name]))
+    const ids = new Set(arhiva.map(proprietarComodatId).filter(id => id !== null))
+    return Array.from(ids).map(id => ({ id, name: names.get(id) || `Angajat #${id}` }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ro') || a.id.localeCompare(b.id))
+  }, [arhiva, employees])
+  // Alimentări pe vehicule în comodat din afara contractului curent (nu se creditează nimănui)
+  const nrComodatNeatribuit = useMemo(() => arhiva.filter(esteComodatNeatribuit).length, [arhiva])
   
   // Liste pentru filtre (calculate din date)
   const tipuriDisponibile = useMemo(() => {
@@ -7923,11 +7958,13 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
     return Array.from(s).sort()
   }, [arhiva])
   
-  // Filtrare finală (search + 3 filtre)
+  // Filtrare finală (search + tip, sursă, șantier și proprietar comodat)
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return arhiva.filter(a => {
       const av = a.logistica_active
+      if (employeeFilter === COMODAT_NEATRIBUIT) { if (!esteComodatNeatribuit(a)) return false }
+      else if (employeeFilter !== 'Toate' && proprietarComodatId(a) !== employeeFilter) return false
       if (tipFilter !== 'Toate' && av?.logistica_categorii?.tip !== tipFilter) return false
       if (sursaFilter !== 'Toate' && a.statie_combustibil !== sursaFilter) return false
       if (siteFilter !== 'Toate' && a.sites?.name !== siteFilter) return false
@@ -7937,7 +7974,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
       }
       return true
     })
-  }, [arhiva, search, tipFilter, sursaFilter, siteFilter])
+  }, [arhiva, search, tipFilter, sursaFilter, siteFilter, employeeFilter])
   
   // KPI
   const kpi = useMemo(() => ({
@@ -8272,6 +8309,12 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
   
   return (
     <div>
+      {loadWarning && (
+        <div role="alert" style={{...S.card, padding: 14, marginBottom: 14, color: G.yellow, borderColor: G.yellow}}>
+          {loadWarning}
+          <button onClick={loadArhiva} disabled={loading || (perioadaFilter === 'custom' && (!customStart || !customEnd))} style={{...S.btnS, marginLeft: 12}}>Reîncarcă</button>
+        </div>
+      )}
       {/* KPI sus */}
       <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14}}>
         <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.purple}`}}>
@@ -8340,7 +8383,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
           )}
         </div>
         
-        {/* Filtre tip + sursă + șantier + search */}
+        {/* Filtre tip + sursă + șantier + proprietar comodat + search */}
         <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr)) auto', gap: 8, alignItems: 'center'}}>
           <select value={tipFilter} onChange={e => setTipFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
             <option value="Toate">Toate tipurile</option>
@@ -8354,6 +8397,16 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
             <option value="Toate">Toate șantierele</option>
             {siteuriDisponibile.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
+          <select aria-label="Proprietar comodat (contract curent)" title="Proprietar comodat (contract curent)" value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
+            <option value="Toate">Proprietar comodat (contract curent): toți</option>
+            {employeeFilter !== 'Toate' && employeeFilter !== COMODAT_NEATRIBUIT && !employeesDisponibili.some(e => e.id === employeeFilter) && (
+              <option value={employeeFilter}>{employees.find(e => String(e.id) === employeeFilter)?.name || `Angajat #${employeeFilter}`} (fără alimentări)</option>
+            )}
+            {employeesDisponibili.map(e => <option key={e.id} value={e.id}>{e.name} (#{e.id})</option>)}
+            {(nrComodatNeatribuit > 0 || employeeFilter === COMODAT_NEATRIBUIT) && (
+              <option value={COMODAT_NEATRIBUIT}>Comodat neatribuit — în afara contractului curent ({nrComodatNeatribuit})</option>
+            )}
+          </select>
           <input type="text" placeholder="🔍 marcă, cod, plăcuță, șantier..." value={search} onChange={e => setSearch(e.target.value)} style={{...S.input, padding: '7px 12px', fontSize: 12, gridColumn: 'span 1'}} />
           <button 
             onClick={handleExportExcel} 
@@ -8363,6 +8416,12 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
             {exportingExcel ? '⏳ Export...' : `📊 Excel (${filtered.length})`}
           </button>
         </div>
+        {employeeFilter !== 'Toate' && (
+          <div style={{marginTop: 8, fontSize: 11, color: G.muted, lineHeight: 1.4}}>
+            ℹ️ Atribuirea pe proprietar folosește <b>contractul de comodat curent</b> din fișa vehiculului (angajat + perioada start–sfârșit).
+            Alimentările din afara acestei perioade nu sunt atribuite nimănui (opțiunea „Comodat neatribuit”). Proprietarii anteriori ai unui vehicul nu sunt păstrați în istoric.
+          </div>
+        )}
       </div>
       
       {/* Tabel — render condițional bazat pe viewMode */}
