@@ -454,6 +454,26 @@ CREATE VIEW teste.v_reg2 WITH (security_invoker = true) AS SELECT b.id FROM publ
 CREATE FUNCTION public.leak2() RETURNS SETOF bigint LANGUAGE sql SECURITY DEFINER SET search_path = teste, public AS $$ SELECT id FROM v_reg2 $$;
 SELECT teste.eroare('T13l DEFINER (search_path = teste, public) care citește necalificat teste.v_reg2 (invoker) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
 DROP FUNCTION public.leak2(); DROP VIEW teste.v_reg2;
+-- r14 (Jakarinos + Copilot r13): calea de căutare NECUNOSCUTĂ (fără search_path fixat, sau schimbată în corp) → potrivire
+-- necalificată conservatoare, inclusiv pentru schemele platformei
+DO $s$ BEGIN IF to_regnamespace('extensions') IS NULL THEN CREATE SCHEMA extensions; CREATE TABLE teste.creat_extensions (x int); END IF; END $s$;
+CREATE VIEW extensions.r13_v WITH (security_invoker = true) AS SELECT b.id FROM public.magazie_bucati b;
+CREATE FUNCTION public.r13_bridge() RETURNS bigint LANGUAGE plpgsql AS $$ BEGIN RETURN (SELECT count(*) FROM r13_v); END $$;
+CREATE FUNCTION public.r13_leak() RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path = extensions, public AS $$ SELECT public.r13_bridge() $$;
+SELECT teste.eroare('T13m exemplul Jak: extensions.r13_v (invoker) + bridge INVOKER fără search_path + leak DEFINER → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION public.r13_leak(); DROP FUNCTION public.r13_bridge();
+CREATE FUNCTION public.r13_mostenit() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN RETURN (SELECT count(*) FROM r13_v); END $$;
+SELECT teste.eroare('T13n exemplul Copilot: DEFINER fără search_path propriu (moștenit de la apelant) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION public.r13_mostenit();
+CREATE FUNCTION public.r13_set_config() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN PERFORM set_config('search_path', 'extensions, public', true); RETURN (SELECT count(*) FROM r13_v); END $$;
+SELECT teste.eroare('T13n2 DEFINER cu search_path fixat, dar schimbat în corp prin set_config → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION public.r13_set_config();
+CREATE FUNCTION public.r13_fix() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN RETURN (SELECT count(*) FROM r13_v); END $$;
+SELECT teste.e('T13n3 DEFINER cu search_path = public fixat, nume din schema platformei necalificat → nu e muchie (nu se rezolvă acolo)',
+  cardinality(public.fn_izo_porti_lipsa()) = 0);
+DROP FUNCTION public.r13_fix(); DROP VIEW extensions.r13_v;
+DO $s$ BEGIN IF to_regclass('teste.creat_extensions') IS NOT NULL THEN DROP SCHEMA extensions; DROP TABLE teste.creat_extensions; END IF; END $s$;
 SELECT teste.e('T13e porțile refăcute după citirile nerevizuite; proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
