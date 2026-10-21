@@ -12,34 +12,53 @@ export const dimensiuneDinRegistru = (b) => {
   return b.tip_cod === 'curba' && b.unghi_curba != null ? `${baza} ${Number(b.unghi_curba)}°` : baza
 }
 
-// Patch-ul pentru rândul de pachet la alegerea unei bucăți: seria, șarja, lungimea (doar țeava) și dimensiunea
+// Patch-ul pentru rândul de pachet la alegerea unei bucăți: seria, șarja, lungimea (doar țeava), dimensiunea și, la
+// curbe, unghiul — luat DIRECT din registru (nu re-parsat din dimensiune: extractUnghi citește doar cifre întregi)
 export const patchDinRegistru = (b) => {
   const patch = { serie_unica: b.serie }
   if (b.sarja) patch.sarja = b.sarja
   if (b.tip_cod === 'teava' && b.lungime_mm != null) patch.lungime_m = Number(b.lungime_mm) / 1000
   const dim = dimensiuneDinRegistru(b)
   if (dim) patch.dimensiune = dim
+  if (b.tip_cod === 'curba' && b.unghi_curba != null) patch.unghi_curba = `${Number(b.unghi_curba)}°`
   return patch
 }
 
-// Seriile deja folosite în rândurile de pachet ale proiectului: serie canonică → [{ id, cod }]
+// Unghiul ca număr, din registru (numeric) sau din rândul de pachet (text „22.5°” / „30˚” / „22,5”)
+const unghiNum = (u) => {
+  if (u == null || u === '') return null
+  const n = parseFloat(String(u).replace(',', '.'))
+  return Number.isFinite(n) ? n : null
+}
+
+// Cheia de identitate pe TIP (Copilot #824 P2): țeava = seria canonică; curba = serie + șarjă + unghi (aceeași serie
+// de curbă se repetă legitim pe șarje / unghiuri diferite — ca ux_magbuc_izo_curba din registru)
+export const cheieTeava = (serie) => `T:${serieCanon(serie)}`
+export const cheieCurba = (serie, sarja, unghi) => `C:${serieCanon(serie)}|${serieCanon(sarja)}|${unghiNum(unghi) ?? ''}`
+export const cheieBucata = (b) => b.tip_cod === 'curba' ? cheieCurba(b.serie, b.sarja, b.unghi_curba) : cheieTeava(b.serie)
+
+// Rândurile de pachet ale proiectului deja completate: cheie pe tip → [{ id, cod }]
 export const indexFolosite = (randuri) => {
   const m = {}
   for (const t of randuri || []) {
-    const k = serieCanon(t.serie_unica)
-    if (!k) continue
+    if (!serieCanon(t.serie_unica)) continue
+    let k
+    if (t.tip_rand === 'teava') k = cheieTeava(t.serie_unica)
+    else if (t.tip_rand === 'curba') k = cheieCurba(t.serie_unica, t.sarja, t.unghi_curba)
+    else continue
     if (!m[k]) m[k] = []
     m[k].push({ id: t.id, cod: t.pachet?.cod_document_full })
   }
   return m
 }
 
-// Lista de sugestii pentru un rând: filtrată după ce s-a tastat (canonic, „conține”), cu bucățile folosite în ALT rând
-// marcate și puse la final; în rest ordonate după serie
+// Lista de sugestii pentru un rând: filtrată după ce s-a tastat (canonic, „conține”); bucățile folosite deja în ALT rând
+// (aceeași cheie pe tip) sunt marcate și puse la final; în rest ordonate după serie.
+// folosite = null → seriile folosite nu s-au putut verifica: nicio marcare (avertismentul îl pune UI-ul)
 export const sugestiiRegistru = (registru, folosite, draft, rowId) => {
   const q = serieCanon(draft)
   return (registru || [])
     .filter(b => !q || serieCanon(b.serie).includes(q))
-    .map(b => ({ b, alte: ((folosite || {})[serieCanon(b.serie)] || []).filter(f => f.id !== rowId) }))
+    .map(b => ({ b, alte: ((folosite || {})[cheieBucata(b)] || []).filter(f => f.id !== rowId) }))
     .sort((x, y) => (x.alte.length > 0) - (y.alte.length > 0) || String(x.b.serie).localeCompare(String(y.b.serie)))
 }

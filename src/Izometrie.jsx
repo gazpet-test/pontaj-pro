@@ -71,6 +71,18 @@ const extractUnghi = (dim) => {
   return m ? `${m[1]}°` : null
 }
 
+// Citește TOATE rândurile unei interogări, pe pagini (PostgREST întoarce cel mult max-rows pe cerere): continuă până la
+// numărul exact raportat de server; o eroare pe oricare pagină = eroare (nu o listă trunchiată tăcut)
+async function citesteTot(construieste, pas = 1000) {
+  const rez = []
+  for (let de = 0; ; de += pas) {
+    const { data, error, count } = await construieste().range(de, de + pas - 1)
+    if (error) return { data: null, error }
+    rez.push(...(data || []))
+    if (!data?.length || (count != null ? rez.length >= count : data.length < pas)) return { data: rez, error: null }
+  }
+}
+
 // Parse SUDURĂ cu sufix R → returnează { cod, refacuta }
 const parseSudura = (raw) => {
   if (!raw) return { cod: null, refacuta: false }
@@ -616,32 +628,44 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   // Registrul de țeavă (doar citire): bucățile transportate pe tronsonul pachetului (stare pe_tronson). RLS-ul registrului
   // le arată doar owner-ului și celor atribuiți proiectului; pentru ceilalți lista e goală și seria rămâne text liber.
   const [registru, setRegistru] = useState([])
-  const [folosite, setFolosite] = useState({}) // serie canonică → [{ id, cod }] rânduri de pachet din proiect
+  // cheie pe tip (țeavă: serie; curbă: serie + șarjă + unghi) → [{ id, cod }] rânduri de pachet din proiect;
+  // null = nu s-a putut verifica (eroare, nu „nimic folosit”)
+  const [folosite, setFolosite] = useState({})
+  const cerereRegistru = useRef(0) // cheia cererii curente: răspunsurile întârziate (alt pachet) se ignoră
+
+  // proiectul PACHETULUI încărcat (nu prop-ul paginii, care în /izometrie?pachet=… poate fi alt proiect)
+  const proiectPachet = pachet?.proiect_id ?? tronson?.proiect_id ?? null
 
   useEffect(() => { loadAll() }, [pachetId]) // eslint-disable-line
-  useEffect(() => { loadRegistru() }, [pachet?.tronson_id, proiectId]) // eslint-disable-line
+  useEffect(() => { loadRegistru() }, [pachet?.id, pachet?.tronson_id, proiectPachet]) // eslint-disable-line
 
   async function loadRegistru() {
-    if (!pachet?.tronson_id) { setRegistru([]); setFolosite({}); return }
-    const { data, error } = await supabase
+    const cheie = ++cerereRegistru.current
+    setRegistru([]); setFolosite({})
+    if (!pachet?.tronson_id || !proiectPachet) return
+    const { data, error } = await citesteTot(() => supabase
       .from('magazie_bucati')
-      .select('id, serie, sarja, lungime_mm, perete_mm, diametru_mm, unghi_curba, tip_cod')
+      .select('id, serie, sarja, lungime_mm, perete_mm, diametru_mm, unghi_curba, tip_cod, tronson_id, stare', { count: 'exact' })
       .eq('tronson_id', pachet.tronson_id)
       .eq('stare', 'pe_tronson')
       .in('tip_cod', ['teava', 'curba'])
-      .order('serie')
-    if (error || !data?.length) { setRegistru([]); setFolosite({}); return }
+      .order('serie').order('id'))
+    if (cheie !== cerereRegistru.current) return
+    if (error) { onWarn && onWarn('Registrul de țeavă nu s-a putut citi: ' + error.message); return }
+    if (!data.length) return   // fără atribuire (RLS) sau fără bucăți pe tronson: seria rămâne text liber
     setRegistru(data)
-    await loadFolosite()
+    await loadFolosite(cheie)
   }
 
-  async function loadFolosite() {
-    const { data } = await supabase
+  async function loadFolosite(cheie = cerereRegistru.current) {
+    const { data, error } = await citesteTot(() => supabase
       .from('executie_tevi')
-      .select('id, serie_unica, pachet:executie_pachete_lansare!inner(cod_document_full, proiect_id)')
-      .eq('pachet.proiect_id', proiectId)
+      .select('id, tip_rand, serie_unica, sarja, unghi_curba, pachet:executie_pachete_lansare!inner(cod_document_full, proiect_id)', { count: 'exact' })
+      .eq('pachet.proiect_id', proiectPachet)
       .not('serie_unica', 'is', null)
-    setFolosite(indexFolosite(data))
+      .order('id'))
+    if (cheie !== cerereRegistru.current) return
+    setFolosite(error ? null : indexFolosite(data))
   }
 
   // Alegerea unei bucăți din registru: completează seria, șarja, lungimea și dimensiunea (perete; la curbe și unghiul).
@@ -649,8 +673,14 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   async function alegeDinRegistru(rowId, b) {
     const row = tevi.find(r => r.id === rowId)
     if (!row) return
-    const patch = patchDinRegistru(b)
-    if (patch.dimensiune && row.tip_rand === 'curba') patch.unghi_curba = extractUnghi(patch.dimensiune)
+    // apărare (Copilot #824 P1): bucata trebuie să fie de pe tronsonul pachetului deschis acum, de tipul rândului
+    if (b.tronson_id !== pachet?.tronson_id || b.stare !== 'pe_tronson' || b.tip_cod !== row.tip_rand) {
+      onError('Bucata aleasă nu e pe tronsonul acestui pachet — lista se reîncarcă')
+      cancelEdit()
+      loadRegistru()
+      return
+    }
+    const patch = patchDinRegistru(b)   // la curbe, unghi_curba vine direct din registru (22.5° rămâne 22.5°)
     const original = { ...row }
     setTevi(prev => prev.map(r => r.id === rowId ? { ...r, ...patch } : r))
     cancelEdit()
@@ -669,6 +699,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   async function loadAll() {
     setLoading(true)
+    cerereRegistru.current++; setRegistru([]); setFolosite({})   // alt pachet: lista veche dispare imediat, răspunsurile ei se ignoră
     // Pachet + țevi în paralel
     const [pRes, tRes] = await Promise.all([
       supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single(),
@@ -2282,6 +2313,9 @@ function RegistruSugestii({ registru, folosite, draft, rowId, tronsonCod, onPick
       <div style={{ padding:'5px 8px', fontSize: 10, color: G.muted, borderBottom:`1px solid ${G.border2}`, position:'sticky', top: 0, background: G.card }}>
         Din registru · pe tronsonul {tronsonCod || '—'} · {lista.length} {lista.length === 1 ? 'bucată' : 'bucăți'}
         {lista.length > vizibile.length ? ` (primele ${vizibile.length} — scrie din serie ca să restrângi)` : ''}
+        {folosite === null && (
+          <div style={{ color: G.orange, marginTop: 2 }}>⚠ Nu am putut verifica seriile folosite deja în alte pachete — verifică manual</div>
+        )}
       </div>
       {vizibile.length === 0 && (
         <div style={{ padding: 8, fontSize: 11, color: G.dim, fontStyle:'italic' }}>Nicio bucată pe tronson cu seria asta</div>
