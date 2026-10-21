@@ -15,7 +15,9 @@
 --     (pentru ramura „executie”) și fn_ai_inbox_poate_confirma(text, bigint) = TEXTUL LIVE (SECURITY DEFINER);
 --   * public.ai_documente_inbox cu coloanele live și cele 4 politici live verbatim (ai_inbox_select / insert / update / delete),
 --     trigger-ul BEFORE UPDATE tg_ai_inbox_touch (live); trg_ai_inbox_dedup (BEFORE INSERT, anti-dublură 10 min) și
---     trg_ai_inbox_clasificare (AFTER INSERT → pg_net → edge) NU sunt reproduse (nu țin de storage; pg_net nu există local).
+--     trg_ai_inbox_clasificare (AFTER INSERT → pg_net → edge) NU sunt reproduse (nu țin de storage; pg_net nu există local);
+--     nici CHECK-ul ai_inbox_modul_chk (live: doar executie / hr / logistica / financiar — rândul fictiv 609 „upa” n-ar trece live;
+--     politicile nu depind de valoare). Rândurile falsificate de testat le refuză trg_ai_inbox_fisier_legat, creat de migrare.
 -- Date FICTIVE. Profiluri: a1 = urcă (fără drepturi), a2 = HR (can_access_personal_data), a3 = owner, a4 = fără drepturi,
 -- a5 = admin_logistica, a6 = MP pe șantierul 3 (proiectul 5), a7 = financiar; a8 = cont fără rând în profiles.
 -- Obiecte în ai-documente-inbox (owner = owner_id = cine a urcat):

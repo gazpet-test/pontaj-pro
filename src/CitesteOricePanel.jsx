@@ -375,6 +375,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         // Facturile urcate din panoul UPA rămân în coada UPA, indiferent ce crede AI-ul
         // despre modul (clasificatorul respectă modul_tinta pre-setat, v18).
         if (modul === 'upa') ins.modul_tinta = 'upa'
+        // Actele urcate din coada HR rămân în coada HR de la upload (același mecanism, v18): fără modul, rândul e „nedecis” cât
+        // îl clasifică AI-ul și, cu fișierul lui, vizibil oricărui cont (fn_ai_inbox_poate_confirma(NULL); docs/HR/INBOX_STORAGE_RLS.md)
+        if (modul === 'hr') ins.modul_tinta = 'hr'
         const { data: row, error: insErr } = await supabase.from('ai_documente_inbox').insert(ins).select('id').single()
         if (insErr) {
           // rândul nu s-a creat (ex. dublură respinsă) — scoatem fișierul din

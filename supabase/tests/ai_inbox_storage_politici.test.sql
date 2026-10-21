@@ -1,5 +1,6 @@
 -- ============================================================================
--- 20261103c — politicile storage ale bucket-ului ai-documente-inbox + fișierul rândului din coadă nemodificabil.
+-- 20261103c — politicile storage ale bucket-ului ai-documente-inbox + rândul din coadă legat la INSERT de fișierul celui care
+-- l-a urcat (trg_ai_inbox_fisier_legat) și nemodificabil după (trg_ai_inbox_fisier_imutabil), un rând per fișier.
 -- Date FICTIVE, PG local *_test. Rulat de scripts/test_ai_inbox_storage_politici.sh DUPĂ aplicarea migrării pe
 -- ai_inbox_storage_politici_schelet.sql (pe schelet fără migrare TREBUIE să cadă — T1).
 -- Fiecare acțiune: subtranzacție anulată (nu rămâne nimic). Aserțiune picată → 'ESEC TEST: …'; la final SUITA_OK.
@@ -67,13 +68,16 @@ DECLARE
   o1 text; o2 text; o4 text; o6 text; o7 text; o10 text;
   ins text := 'INSERT INTO storage.objects (bucket_id, name, owner, owner_id) VALUES ';
   m_imut text := 'err:23514:ai_documente_inbox #%: fișierul rândului %nemodificabile%';
+  m_leg text := 'err:42501:ai_documente_inbox: fișierul rândului nu e în coadă sau nu l-ai urcat tu%';
+  rand text := 'INSERT INTO public.ai_documente_inbox (fisier_path, fisier_nume, status, uploadat_de) VALUES ';
   fn oid := to_regprocedure('public.ai_inbox_fisier_imutabil()');
+  fl oid := to_regprocedure('public.ai_inbox_fisier_legat()');
 BEGIN
   o1 := a1 || '/1_ci.pdf'; o2 := a1 || '/2_nedecis.pdf'; o4 := a1 || '/4_contract.pdf'; o6 := a1 || '/6_orfan.pdf';
   o7 := a2 || '/7_hr.pdf'; o10 := a1 || '/10_exec.pdf';
 
   -- T1 structura: ai_inbox_obj_all scoasă; exact INSERT / SELECT / DELETE pentru authenticated; nicio politică UPDATE / ALL pe bucket;
-  --    trigger BEFORE UPDATE pe rând + funcție INVOKER fără EXECUTE pentru roluri; index pe fisier_path
+  --    trigger BEFORE UPDATE (INVOKER) + BEFORE INSERT (DEFINER) pe rând, funcții fără EXECUTE pentru roluri; index UNIC pe fisier_path
   PERFORM pg_temp.ok(
         NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'ai_inbox_obj_all')
     AND (SELECT string_agg(policyname || ':' || cmd || ':' || permissive || ':' || roles::text, ',' ORDER BY policyname) FROM pg_policies
@@ -86,8 +90,13 @@ BEGIN
     AND NOT (SELECT prosecdef FROM pg_proc WHERE oid = fn)
     AND NOT has_function_privilege('authenticated', fn, 'EXECUTE') AND NOT has_function_privilege('service_role', fn, 'EXECUTE')
     AND NOT has_function_privilege('anon', fn, 'EXECUTE')
-    AND to_regclass('public.idx_ai_inbox_fisier_path') IS NOT NULL,
-    'T1 structura: ai_inbox_obj_all scoasă; insert / select / delete pentru authenticated; fără UPDATE / ALL; trigger + funcție INVOKER fără EXECUTE; index fisier_path');
+    AND EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname = 'trg_ai_inbox_fisier_legat' AND t.tgrelid = 'public.ai_documente_inbox'::regclass
+                 AND t.tgfoid = fl AND t.tgtype = 7 AND t.tgenabled = 'O')
+    AND (SELECT prosecdef FROM pg_proc WHERE oid = fl)
+    AND NOT has_function_privilege('authenticated', fl, 'EXECUTE') AND NOT has_function_privilege('service_role', fl, 'EXECUTE')
+    AND NOT has_function_privilege('anon', fl, 'EXECUTE')
+    AND (SELECT indisunique FROM pg_index WHERE indexrelid = to_regclass('public.idx_ai_inbox_fisier_path')),
+    'T1 structura: ai_inbox_obj_all scoasă; insert / select / delete pentru authenticated; fără UPDATE / ALL; trigger-e imutabil (INVOKER) + legat (DEFINER) fără EXECUTE; index UNIC fisier_path');
 
   -- T2 ce vede fiecare (listare = SELECT pe storage.objects, ca list() / download / createSignedUrl din storage-api)
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, 'SELECT 1', lista),
@@ -130,6 +139,20 @@ BEGIN
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', NULL, ins || format('(%L, %L, NULL, NULL)', b, 'null/x.pdf')), 'err:42501',
     'T3j authenticated fără uid → refuz');
   PERFORM pg_temp.eq(pg_temp.efect('anon', NULL, ins || format('(%L, %L, NULL, NULL)', b, 'anon/x.pdf')), 'err:42501', 'T3k anon → refuz');
+  -- căi-limită (primul segment se compară EXACT, ca text); ce face storage-api cu ele se verifică pe branch (plan, pasul 4)
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, ins || format('(%L, %L, %L, %L)', b, '/' || a1 || '/x.pdf', a1, a1)), 'err:42501',
+    'T3l cale cu „/” la început (primul segment gol) → refuz');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, ins || format('(%L, %L, %L, %L)', b, '../' || a1 || '/x.pdf', a1, a1)), 'err:42501',
+    'T3m „../uid/…” (primul segment „..”) → refuz');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, ins || format('(%L, %L, %L, %L)', b, upper(a1) || '/x.pdf', a1, a1)), 'err:42501',
+    'T3n uid cu MAJUSCULE în cale (≠ auth.uid()::text) → refuz (fail-closed)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, ins || format('(%L, %L, %L, %L)', b, a1 || '//x.pdf', a1, a1)), 'ok:1',
+    'T3o segment gol după uid („uid//x”) → permis: rămâne în folderul propriu');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, ins || format('(%L, %L, %L, %L)', b, a1 || '/../' || a4 || '/z.pdf', a1, a1), lista),
+    'ok:1:10_exec.pdf,1_ci.pdf,2_nedecis.pdf,3_rca.pdf,4_contract.pdf,5_cert.pdf,6_orfan.pdf,9_upa.pdf,z.pdf',
+    'T3p „uid/../altul/z” → permis la nivel SQL (numele e literal, sub folderul propriu; owner_id = cine a urcat; altul nu-l vede)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a4, ins || format('(%L, %L, %L, %L)', b, a1 || '/../' || a4 || '/z.pdf', a4, a4)), 'err:42501',
+    'T3q … dar altcineva nu scrie sub folderul uid-ului (a4 cu „a1/../a4/z”) → refuz');
 
   -- T4 suprascriere / mutare: fără politică UPDATE nimeni (în afară de service_role) nu atinge obiectele existente
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, format('UPDATE storage.objects SET metadata = %L::jsonb WHERE bucket_id = %L AND name = %L', '{"x":1}', b, o1)),
@@ -156,10 +179,9 @@ BEGIN
     'T5h fără drepturi șterge DOAR nedecisul (limitarea a, documentată), nu restul bucket-ului');
   PERFORM pg_temp.eq(pg_temp.efect('service_role', NULL, format('DELETE FROM storage.objects WHERE bucket_id = %L', b)), 'ok:10', 'T5i service_role (cleanup-recycle-bin) neatins');
 
-  -- T6 legătura obiect ↔ rând nu se poate falsifica
-  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a4,
-      format('INSERT INTO public.ai_documente_inbox (fisier_path, fisier_nume, status, uploadat_de) VALUES (%L, %L, %L, %L)', o1, 'x.pdf', 'clasificat', a4), lista),
-    'ok:1:2_nedecis.pdf', 'T6a rând nou „nedecis” cu calea actului HR al altcuiva (permis de ai_inbox_insert) → actul tot invizibil (uploadat_de ≠ owner_id)');
+  -- T6 legătura obiect ↔ rând nu se poate falsifica (nici la INSERT, nici după)
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, rand || format('(%L, %L, %L, %L)', o1, 'x.pdf', 'in_asteptare', a4), NULL, true),
+    m_leg, 'T6a rând nou „nedecis” cu calea actului HR al altcuiva (ai_inbox_insert l-ar permite) → refuz 42501 la INSERT (trg_ai_inbox_fisier_legat)');
   PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, format('UPDATE public.ai_documente_inbox SET fisier_path = %L WHERE id = 602', o1), NULL, true),
     m_imut, 'T6b rândul nedecis (editabil de oricine) nu primește altă cale → 23514');
   PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, format('UPDATE public.ai_documente_inbox SET uploadat_de = %L WHERE id = 602', a4), NULL, true),
@@ -192,6 +214,20 @@ BEGIN
     'ok:1', 'T6n limitarea b: HR poate muta un rând HR în „nedecis” (îl vede și acolo) …');
   PERFORM pg_temp.eq(pg_temp.cu('UPDATE public.ai_documente_inbox SET modul_tinta = NULL WHERE id = 601', 'authenticated', a4, 'SELECT 1', lista),
     'ok:1:1_ci.pdf,2_nedecis.pdf', 'T6o … și atunci actul devine vizibil oricui (insider cu drept HR; decizie separată pe ai_inbox_update)');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, rand || format('(%L, %L, %L, %L)', a4 || '/nu_exista.pdf', 'n.pdf', 'in_asteptare', a4), NULL, true),
+    m_leg, 'T6p rând pentru un fișier care nu există (nici măcar în folderul propriu) → refuz, același mesaj (fără oracol)');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, rand || format('(%L, %L, %L, %L)', o1, 'x.pdf', 'in_asteptare', a1), NULL, true),
+    m_leg, 'T6q rând în numele victimei (uploadat_de = cine a urcat actul, ≠ apelantul) → refuz la trigger (independent de ai_inbox_insert)');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a2, rand || format('(%L, %L, %L, %L)', o1, 'x.pdf', 'in_asteptare', a2), NULL, true),
+    m_leg, 'T6r HR VEDE actul lui a1 (clauza b), dar nu-și leagă un rând nou de el → refuz (contează owner_id, nu vizibilitatea)');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a3, rand || format('(%L, %L, %L, %L)', o6, 'x.pdf', 'in_asteptare', a3), NULL, true),
+    m_leg, 'T6s nici ownerul (vede tot) nu leagă un rând de fișierul altcuiva');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, rand || format('(%L, %L, %L, %L)', o6, 'orfan.pdf', 'in_asteptare', a1)),
+    'ok:1', 'T6t cine a urcat orfanul îi poate crea rândul (fișier propriu, încă fără rând)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, rand || format('(%L, %L, %L, %L)', o1, 'CI.pdf', 'in_asteptare', a1)),
+    'err:23505', 'T6u al doilea rând pentru același fișier (chiar al lui) → refuz: un fișier = un rând (index unic)');
+  PERFORM pg_temp.eq(pg_temp.efect('service_role', NULL, rand || format('(%L, %L, %L, %L)', 'srv/x.pdf', 'x.pdf', 'in_asteptare', a1)),
+    'ok:1', 'T6v service_role (fără uid) neatins de legătură — ocolește oricum RLS-ul; azi nu creează rânduri');
 
   -- T7 fluxurile din cod, cap-coadă (SQL-ul echivalent al apelurilor storage-js + PostgREST)
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1,
@@ -230,6 +266,21 @@ BEGIN
       format('SELECT 1 FROM storage.objects WHERE bucket_id = %L AND name = %L;;', b, o2)
       || format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o2)),
     'ok:2', 'T7i Execuție confirmă un rând nedecis (oricine logat — limitarea a, paritate cu panoul)');
+
+  -- T9 atacurile indirecte prin service_role (edge citeste-orice descarcă row.fisier_path; cleanup-recycle-bin șterge fișierele
+  --    rândurilor „respins”): atacatorul nu mai are un rând care să arate spre fișierul altcuiva, deci edge-urile ating doar ce a urcat el
+  PERFORM pg_temp.eq(pg_temp.cu(
+      format('%s(%L, %L, %L, %L)', ins, b, a4 || '/al_meu.pdf', a4, a4), 'authenticated', a4,
+      rand || format('(%L, %L, %L, %L);;', a4 || '/al_meu.pdf', 'al_meu.pdf', 'in_asteptare', a4)
+      || format('UPDATE public.ai_documente_inbox SET status = %L, respins_motiv = %L WHERE fisier_path = %L', 'respins', 'x', a4 || '/al_meu.pdf'),
+      format('SELECT string_agg(i.fisier_path, %L ORDER BY i.id) FROM public.ai_documente_inbox i WHERE i.status = %L AND i.uploadat_de = %L', ',', 'respins', a4)),
+    'ok:2:' || a4 || '/al_meu.pdf', 'T9a atacatorul își respinge rândul: curățenia vede doar calea fișierului LUI (cel fals fusese refuzat la INSERT)');
+  PERFORM pg_temp.eq(pg_temp.efect('service_role', NULL, 'SELECT 1',
+      $q$SELECT count(*)::text FROM public.ai_documente_inbox i JOIN storage.objects o ON o.bucket_id = 'ai-documente-inbox' AND o.name = i.fisier_path
+          WHERE o.owner_id IS DISTINCT FROM i.uploadat_de::text$q$),
+    'ok:1:0', 'T9b invariantul pe care se bazează edge-urile: niciun rând nu arată spre obiectul altui cont decât uploadat_de');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, rand || format('(%L, %L, %L, %L)', o7, 'cazier.pdf', 'respins', a4), NULL, true),
+    m_leg, 'T9c rând „respins” direct, cu calea cazierului HR → refuz la INSERT (curățenia nu mai are ce șterge din fișierele altora)');
 
   -- T8 celelalte bucket-uri: neatinse (aceleași politici, aceleași drepturi)
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a2, 'SELECT 1 FROM storage.objects WHERE bucket_id = ''documente-personal'''), 'ok:1', 'T8a documente-personal: HR vede ca înainte');
