@@ -78,7 +78,7 @@ describe('citesteFoaie', () => {
     expect(r.fara_serie).toEqual([{ sursa: { fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13 }, campuri: ['desc', 'sarja', 'kg', 'nrAviz', 'cant'] }])
     const { blocante_globale } = evalueaza(r.randuri, { coduri, tronsoane, faraSerie: r.fara_serie })
     expect(blocante_globale.length).toBe(1)
-    const dec = { excluderi: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13, motiv: 'rând de test' }] }
+    const dec = { excluderi: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13, serie: null, motiv: 'rând de test' }] }
     expect(evalueaza(r.randuri, { decizii: dec, coduri, tronsoane, faraSerie: r.fara_serie }).blocante_globale).toEqual([])
   })
   it('foaia trebuie să fie în workbook-ul ei', () => {
@@ -121,7 +121,7 @@ describe('evalueaza', () => {
   it('neconformitatea blochează până la decizie; excluderea o scoate', () => {
     const rows = [rT71({ 14: 'TOPLET', 15: 'LIPSA MARCAJ' })]
     expect(ev(rows, 'TEAVA 7.1 TOPLET', 11).randuri[0].probleme.join()).toMatch(/neconformitate/)
-    const r = ev(rows, 'TEAVA 7.1 TOPLET', 11, { excluderi: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, motiv: 'refuzat la recepție' }] })
+    const r = ev(rows, 'TEAVA 7.1 TOPLET', 11, { excluderi: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, serie: '247EK08603', motiv: 'refuzat la recepție' }] })
     expect(r.randuri.length).toBe(0)
     expect(r.excluse[0].motiv).toMatch(/refuzat/)
   })
@@ -298,7 +298,7 @@ describe('review #807 r4', () => {
     expect(problemeCorectii({ corectii_camp: [{ fisier: 'X.xlsx', foaie: 'F', randuri: [{ rand: 1, serie: 'A' }, { rand: 2, serie: 'B' }], camp: 'pv_nr', valoare: '1' }] }))
       .toEqual([])
     const { blocante_globale } = evalueaza([], { decizii: { corectii_camp: [{ fisier: 'X.xlsx', randuri: [1], serie: 'A', camp: 'pv_nr', valoare: '1' }] }, coduri, tronsoane })
-    expect(blocante_globale.length).toBe(1)
+    expect(blocante_globale.some(g => /fără foaie/.test(g.problema))).toBe(true)
   })
   it('corecția pe un rând cu altă serie de control → blocant, neaplicată', () => {
     const b = evalueaza(foaie('TEAVA 8.8 MM', [rStd({ 9: null })], 12).randuri, { coduri, tronsoane,
@@ -313,5 +313,55 @@ describe('review #807 r4', () => {
     expect(a.corectii).toContainEqual({ camp: 'tronson', inainte: null, dupa: 16, motiv: 'tronson_aviz_serie' })
     const b = evalueaza(foaie('CURBE LOT 2', [curba({ 1: '102', 16: 'CJPT 0004', 20: '16-17' })], 12).randuri, { decizii: { tronson_aviz: { 'CJPT 0004': 17 } }, coduri, tronsoane: tr }).randuri[0]
     expect(b.corectii).toContainEqual({ camp: 'tronson', inainte: '16-17', dupa: 17, motiv: 'tronson_aviz' })
+  })
+})
+
+describe('review #807 r5: fiecare decizie pe rând lovește exact un rând', () => {
+  const T88 = 'TEAVA 8.8 MM'
+  const glob = (rows, decizii, start = 12, foaieN = T88) => evalueaza(foaie(foaieN, rows, start).randuri, { decizii, coduri, tronsoane }).blocante_globale.map(g => g.problema).join(' | ')
+  it('decizie pe un rând inexistent (0 lovituri) → blocant global', () => {
+    expect(glob([rStd()], { ignora_iesire: [{ fisier: 'X.xlsx', foaie: T88, rand: 99, serie: '264DB00025', motiv: 'x' }] })).toMatch(/lovește 0 rânduri/)
+    expect(glob([rStd()], { corectii_camp: [{ fisier: 'X.xlsx', foaie: T88, randuri: [{ rand: 13, serie: '264DB00025' }, { rand: 77, serie: 'Z' }], camp: 'pv_nr', valoare: '1' }] }))
+      .toMatch(/rândul 77\): lovește 0/)
+    expect(glob([rStd()], { tronson_aviz_serie: { 'CJPJ 9|264DB00025': 12 } })).toMatch(/tronson_aviz_serie .*lovește 0/)
+    expect(glob([rStd()], { corectii_camp: [{ fisier: 'X.xlsx', aviz_iesire: ['CJPJ 404'], camp: 'data_iesire', valoare: '2026-01-01' }] })).toMatch(/nu lovește niciun rând/)
+  })
+  it('decizia corectă pe un singur rând trece fără blocante globale', () => {
+    expect(glob([rStd({ 16: 'CJPJ 1', 17: 12.41, 20: 13 })], { ignora_iesire: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, serie: '264DB00025', motiv: 'x' }] })).toBe('')
+  })
+  it('rânduri duplicate în lot și decizii duplicate → blocante globale', () => {
+    const r = foaie(T88, [rStd()], 12).randuri
+    expect(evalueaza([...r, ...r], { coduri, tronsoane }).blocante_globale.map(g => g.problema).join()).toMatch(/rând duplicat în lot \(2×\)/)
+    const e = { fisier: 'X.xlsx', foaie: T88, rand: 13, serie: '264DB00025', motiv: 'x' }
+    expect(glob([rStd()], { ignora_iesire: [e, e] })).toMatch(/decizie duplicată/)
+    expect(glob([rStd()], { corectii_camp: [
+      { fisier: 'X.xlsx', foaie: T88, randuri: [13], serie: '264DB00025', camp: 'pv_nr', valoare: '1' },
+      { fisier: 'X.xlsx', foaie: T88, randuri: [13], serie: '264DB00025', camp: 'pv_nr', valoare: '2' }] })).toMatch(/a doua corecție pv_nr/)
+  })
+  it('excluderile cer seria de control; pe rândul greșit nu exclud', () => {
+    expect(glob([rStd()], { excluderi: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, motiv: 'x' }] })).toMatch(/fără seria de control/)
+    const b = evalueaza(foaie(T88, [rStd()], 12).randuri, { coduri, tronsoane,
+      decizii: { excluderi: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, serie: '264DB99999', motiv: 'x' }] } })
+    expect(b.excluse.length).toBe(0)
+    expect(b.randuri[0].probleme.join()).toMatch(/seria de control/)
+    // rândul fără serie: excluderea cere serie: null
+    const f = foaie(T88, [rStd({ 1: null })], 12)
+    const g = evalueaza(f.randuri, { coduri, tronsoane, faraSerie: f.fara_serie,
+      decizii: { excluderi: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, serie: 'ABC', motiv: 'x' }] } }).blocante_globale.map(x => x.problema).join(' | ')
+    expect(g).toMatch(/trebuie null/)
+    expect(g).toMatch(/rând fără serie/)
+  })
+  it('seria de control bate și cu seria corectată (corectii_serie)', () => {
+    const rows = [rStd({ 1: '2645DB00025' })]
+    const dec = { corectii_serie: { '2645DB00025': '264DB00025' },
+      ignora_iesire: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, serie: '264DB00025', motiv: 'x' }] }
+    const b = evalueaza(foaie(T88, rows, 12).randuri, { decizii: dec, coduri, tronsoane }).randuri[0]
+    expect(b.probleme.join()).not.toMatch(/seria de control/)
+  })
+  it('accepta_neconformitate / carantină pe un rând fără neconformitate → blocant', () => {
+    const b = evalueaza(foaie(T88, [rStd()], 12).randuri, { coduri, tronsoane,
+      decizii: { accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, serie: '264DB00025', carantina: true }] } }).randuri[0]
+    expect(b.probleme.join()).toMatch(/\(carantină\) pe un rând fără neconformitate/)
+    expect(b.stare).not.toBe('carantina')
   })
 })

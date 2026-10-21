@@ -1,6 +1,6 @@
 # Izometrie E2a-2 — preview sold inițial LOT 2 (fără scriere)
 
-Generat: 2026-10-21T10:19:03.158Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 `8635ca6ccf810aa1…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
+Generat: 2026-10-21T10:58:24.134Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 LF `8635ca6ccf810aa1…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
 
 ## Sursele
 

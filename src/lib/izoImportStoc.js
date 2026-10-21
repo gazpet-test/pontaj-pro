@@ -195,7 +195,7 @@ function selectorBate(c, b) {
 
 /**
  * Aplică deciziile și calculează pentru fiecare rând: starea, locul, peretele, problemele blocante.
- * decizii: { corectii_serie: {brut: corect | {serie, nota}}, excluderi: [{fisier, foaie, rand, motiv}],
+ * decizii: { corectii_serie: {brut: corect | {serie, nota}}, excluderi: [{fisier, foaie, rand, serie (null = rând fără serie), motiv}],
  *            depozit_grup: {grup: COD | {cod, nota}}, tronson_grup: {text: nr},
  *            tronson_aviz: {aviz: nr} (TR ambiguu sau lipsă), tronson_aviz_serie: {'aviz|serie': nr} (prioritar),
  *            ignora_iesire: [{fisier, foaie, rand, motiv}] (câmpuri de ieșire care nu sunt o ieșire reală),
@@ -203,37 +203,74 @@ function selectorBate(c, b) {
  *                             camp, valoare, motiv}],
  *            accepta_neconformitate: [{fisier, foaie, rand, serie, nota?, carantina?}], accepta_sarja: [serie],
  *            accepta_iesire_integrala: [{fisier, foaie, rand, serie, motiv}] (diferență de rotunjire, pe rândul numit) }
- * Deciziile pe rânduri (ignora_iesire, accepta_neconformitate, accepta_iesire_integrala) poartă seria de control: dacă
- * rândul are altă serie, decizia e pe rândul greșit → blocant (Gemini r3 P2).
+ * Deciziile pe rânduri (excluderi, ignora_iesire, accepta_neconformitate, accepta_iesire_integrala) poartă seria de control
+ * (brută sau corectată prin corectii_serie): dacă rândul are altă serie, decizia e pe rândul greșit → blocant (Gemini r3 P2,
+ * review #807 r5). Excluderile rândurilor fără serie poartă explicit serie: null.
+ * Fiecare decizie pe rând trebuie să lovească EXACT un rând (perechile din corectii_camp, tronson_aviz_serie la fel); o
+ * decizie pe avize trebuie să lovească cel puțin un rând; rândurile duplicate în lot și deciziile duplicate sunt blocante
+ * globale (review #807 r5 P1/P2) — fail-closed, o decizie moartă sau ambiguă nu trece neobservată.
  */
 export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie = [] }) {
   const cheieSursa = s => `${s.fisier}|${s.foaie}|${s.rand}`
-  const exclDec = new Map((decizii.excluderi || []).map(e => [cheieSursa(e), e.motiv]))
+  // seria de control bate cu seria brută, cu cea curentă sau cu cea corectată (corectii_serie) — review #807 r5 (05)
+  const serieCorectata = b => { const c = decizii.corectii_serie?.[String(b.serie_bruta || '').toUpperCase()]; return c ? (typeof c === 'object' ? c.serie : c) : null }
+  const serieBate = (b, s) => !!s && [b.serie, b.serie_bruta, serieCorectata(b)].some(x => x && serieCanon(x) === serieCanon(s))
+  // contoarele: câte rânduri lovește fiecare decizie (review #807 r5 P1)
+  const contor = new Map(), numara = k => contor.set(k, (contor.get(k) || 0) + 1)
+  const globale = []
+  const globala = problema => globale.push({ sursa: { fisier: '(decizii)', foaie: '', rand: 0 }, problema })
+  // rânduri duplicate în lot (același fișier + foaie + rând) — review #807 r5 P2
+  const vazuteSursa = new Map()
+  for (const r of [...randuri, ...faraSerie]) vazuteSursa.set(cheieSursa(r.sursa), (vazuteSursa.get(cheieSursa(r.sursa)) || 0) + 1)
+  for (const [k, n] of vazuteSursa) if (n > 1) globale.push({ sursa: { fisier: k.split('|')[0], foaie: k.split('|')[1], rand: Number(k.split('|')[2]) }, problema: `rând duplicat în lot (${n}×)` })
+  const LISTE_PE_RAND = ['excluderi', 'ignora_iesire', 'accepta_neconformitate', 'accepta_iesire_integrala']
+  for (const lista of LISTE_PE_RAND) {
+    const v = new Set()
+    for (const [i, e] of (decizii[lista] || []).entries()) {
+      if (!e.fisier || !e.foaie || !Number.isInteger(e.rand)) globala(`${lista}[${i}]: cere fișier, foaie și rând`)
+      if (!('serie' in e)) globala(`${lista}[${i}]: fără seria de control (serie: null doar pentru rândurile fără serie)`)
+      if (v.has(cheieSursa(e))) globala(`${lista}[${i}]: decizie duplicată pe ${cheieSursa(e)}`)
+      v.add(cheieSursa(e))
+    }
+  }
+  const vCorectii = new Set()
+  for (const [i, c] of (decizii.corectii_camp || []).entries()) for (const r of c.randuri ? randuriCorectie(c) : []) {
+    const k = `${c.camp}|${c.fisier}|${c.foaie}|${r.rand}`
+    if (vCorectii.has(k)) globala(`corectii_camp[${i}]: a doua corecție ${c.camp} pe rândul ${r.rand}`)
+    vCorectii.add(k)
+  }
+  const exclDec = new Map((decizii.excluderi || []).map(e => [cheieSursa(e), e]))
   const neconfOk = new Map((decizii.accepta_neconformitate || []).map(e => [cheieSursa(e), e]))
   const ignoraIes = new Map((decizii.ignora_iesire || []).map(e => [cheieSursa(e), e.motiv || 'fără ieșire reală']))
   const iesireIntegrala = new Map((decizii.accepta_iesire_integrala || []).map(e => [cheieSursa(e), e.motiv || 'ieșire integrală']))
   const out = [], excluse = []
-  const deciziiPeRand = [['ignora_iesire', decizii.ignora_iesire], ['accepta_neconformitate', decizii.accepta_neconformitate],
-                         ['accepta_iesire_integrala', decizii.accepta_iesire_integrala]]
   for (const b0 of randuri) {
     const b = { ...b0, probleme: [], avertismente: [], corectii: [] }
-    for (const [cheie, lista] of deciziiPeRand) for (const e of lista || []) {
+    let serieGresitaLaExcludere = false
+    for (const lista of LISTE_PE_RAND) for (const e of decizii[lista] || []) {
       if (cheieSursa(e) !== cheieSursa(b.sursa)) continue
-      const ok = e.serie && [b.serie, b.serie_bruta].some(x => serieCanon(x) === serieCanon(e.serie))
-      if (!ok) b.probleme.push(`decizia ${cheie} pe rândul ${b.sursa.rand} are seria de control „${e.serie || '—'}”, rândul are „${b.serie_bruta}”`)
+      numara(`${lista}|${cheieSursa(e)}`)
+      if (!serieBate(b, e.serie)) {
+        b.probleme.push(`decizia ${lista} pe rândul ${b.sursa.rand} are seria de control „${e.serie || '—'}”, rândul are „${b.serie_bruta}”`)
+        if (lista === 'excluderi') serieGresitaLaExcludere = true
+      }
     }
-    if (exclDec.has(cheieSursa(b.sursa))) { excluse.push({ sursa: b.sursa, serie: b.serie, motiv: `decizie: ${exclDec.get(cheieSursa(b.sursa))}` }); continue }
+    // excluderea pe rândul greșit nu exclude: rândul rămâne în preview, cu problema (review #807 r5)
+    if (exclDec.has(cheieSursa(b.sursa)) && !serieGresitaLaExcludere) {
+      excluse.push({ sursa: b.sursa, serie: b.serie, motiv: `decizie: ${exclDec.get(cheieSursa(b.sursa)).motiv}` }); continue
+    }
     // câmpurile de ieșire care nu sunt o ieșire reală (ex. curba 1198: TR „16” fără aviz — încă în stoc)
     if (ignoraIes.has(cheieSursa(b.sursa))) {
       b.corectii.push({ camp: 'iesire', inainte: { aviz: b.aviz_iesire, tr: b.tronson_iesire, cant: b.cant_iesire }, motiv: ignoraIes.get(cheieSursa(b.sursa)) })
       b.aviz_iesire = null; b.tronson_iesire = null; b.cant_iesire = null; b.ies_serie = null; b.data_iesire = null
     }
     // corecțiile de câmp (răspunsurile MP), înaintea oricărei validări
-    for (const c of decizii.corectii_camp || []) {
+    for (const [ci, c] of (decizii.corectii_camp || []).entries()) {
       if (!selectorBate(c, b)) continue
       // seria de control a rândului: dacă nu bate, corecția e pe rândul greșit → blocant, nu se aplică
       const rc = c.randuri ? randuriCorectie(c).find(r => r.rand === b.sursa.rand) : null
-      if (rc && ![b.serie, b.serie_bruta].some(x => serieCanon(x) === serieCanon(rc.serie))) {
+      numara(rc ? `cc|${ci}|${rc.rand}` : `cc|${ci}|aviz`)
+      if (rc && !serieBate(b, rc.serie)) {
         b.probleme.push(`corecția ${c.camp} pe rândul ${b.sursa.rand} are seria de control „${rc.serie}”, rândul are „${b.serie_bruta}”`); continue
       }
       if (!CAMPURI_CORECTABILE.has(c.camp)) { b.probleme.push(`corecție pe câmp nepermis „${c.camp}”`); continue }
@@ -275,6 +312,9 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     else if (b.tip === 'teava' && !/^[A-Z]{2}\d{5}$/.test(b.sarja) && !(decizii.accepta_sarja || []).includes(b.sarja))
       b.avertismente.push(`șarjă în afara formatului AA99999: ${b.sarja}`)
     if (b.neconformitate && !neconfOk.has(cheieSursa(b.sursa))) b.probleme.push(`neconformitate „${b.neconformitate}” — de decis (intră sau refuzat la recepție)`)
+    // decizia de neconformitate (și carantina) pe un rând fără text de neconformitate = decizie pe rândul greșit (review #807 r5 02)
+    if (!b.neconformitate && neconfOk.has(cheieSursa(b.sursa)))
+      b.probleme.push(`accepta_neconformitate${neconfOk.get(cheieSursa(b.sursa)).carantina ? ' (carantină)' : ''} pe un rând fără neconformitate — de decis`)
     if (b.neconformitate && neconfOk.has(cheieSursa(b.sursa))) {
       const nota = neconfOk.get(cheieSursa(b.sursa)).nota
       b.nota_neconformitate = `NECONFORM: ${b.neconformitate}${nota ? ` — ${nota}` : ''}`
@@ -292,6 +332,8 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     if (b.aviz_iesire) {
       const ovSerie = decizii.tronson_aviz_serie?.[`${b.aviz_iesire}|${b.serie}`]
       const ovAviz = decizii.tronson_aviz?.[b.aviz_iesire]
+      if (ovSerie != null) numara(`tas|${b.aviz_iesire}|${b.serie}`)
+      if (ovAviz != null) numara(`ta|${b.aviz_iesire}`)
       const trExcel = b.tronson_iesire
       const trText = trExcel ? (trExcel.ambiguu ?? trExcel.nr) : null
       if (ovSerie != null) {
@@ -355,11 +397,34 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
       b.probleme.push(m); a.probleme.push(`coliziune ${b.tip === 'teava' ? 'serie' : 'curbă'} cu ${b.sursa.foaie} r${b.sursa.rand}`)
     } else vazute.set(k, b)
   }
+  // rândurile fără serie: excluse DOAR cu decizie explicită cu serie: null (seria de control a unui rând fără serie)
+  const exclFaraSerie = f => { const e = exclDec.get(cheieSursa(f.sursa)); return !!e && 'serie' in e && !e.serie }
+  for (const f of faraSerie) if (exclDec.has(cheieSursa(f.sursa))) {
+    numara(`excluderi|${cheieSursa(f.sursa)}`)
+    if (!exclFaraSerie(f)) globala(`excluderea rândului fără serie ${cheieSursa(f.sursa)} are seria de control „${exclDec.get(cheieSursa(f.sursa)).serie}” (trebuie null)`)
+  }
+  // fiecare decizie pe rând lovește EXACT un rând; deciziile pe avize cel puțin unul (review #807 r5 P1)
+  for (const lista of LISTE_PE_RAND) for (const [i, e] of (decizii[lista] || []).entries()) {
+    const n = contor.get(`${lista}|${cheieSursa(e)}`) || 0
+    if (n !== 1) globala(`${lista}[${i}] (${cheieSursa(e)}): lovește ${n} rânduri, trebuie exact 1`)
+  }
+  for (const [i, c] of (decizii.corectii_camp || []).entries()) {
+    if (c.randuri) for (const r of randuriCorectie(c)) {
+      const n = contor.get(`cc|${i}|${r.rand}`) || 0
+      if (n !== 1) globala(`corectii_camp[${i}] (${c.camp}, rândul ${r.rand}): lovește ${n} rânduri, trebuie exact 1`)
+    } else if (!contor.get(`cc|${i}|aviz`)) globala(`corectii_camp[${i}] (${c.camp}, avize): nu lovește niciun rând`)
+  }
+  for (const k of Object.keys(decizii.tronson_aviz_serie || {})) {
+    const n = contor.get(`tas|${k}`) || 0
+    if (n !== 1) globala(`tronson_aviz_serie „${k}”: lovește ${n} rânduri, trebuie exact 1`)
+  }
+  for (const k of Object.keys(decizii.tronson_aviz || {})) if (!contor.get(`ta|${k}`)) globala(`tronson_aviz „${k}”: nu lovește niciun rând`)
   // rândurile fără serie dar cu material: blocante, cu excepția celor excluse explicit în decizii; plus deciziile malformate
-  const blocante_globale = faraSerie.filter(f => !exclDec.has(cheieSursa(f.sursa)))
+  const blocante_globale = faraSerie.filter(f => !exclFaraSerie(f))
     .map(f => ({ sursa: f.sursa, problema: `rând fără serie, cu ${f.campuri.join(' / ')} completate` }))
     .concat(problemeCorectii(decizii).map(pr => ({ sursa: { fisier: '(decizii)', foaie: 'corectii_camp', rand: 0 }, problema: pr })))
-  for (const f of faraSerie) if (exclDec.has(cheieSursa(f.sursa))) excluse.push({ sursa: f.sursa, serie: '', motiv: `decizie: ${exclDec.get(cheieSursa(f.sursa))}` })
+    .concat(globale)
+  for (const f of faraSerie) if (exclFaraSerie(f)) excluse.push({ sursa: f.sursa, serie: '', motiv: `decizie: ${exclDec.get(cheieSursa(f.sursa)).motiv}` })
   return { randuri: out, excluse, blocante_globale }
 }
 
