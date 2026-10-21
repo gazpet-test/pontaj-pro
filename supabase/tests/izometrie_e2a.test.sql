@@ -279,6 +279,7 @@ RESET ROLE;
 SELECT teste.eroare('T8g atribuiri: DELETE → refuz', $$DELETE FROM public.izo_atribuiri WHERE rol = 'rts_rte'$$, 'nu se șterg');
 SELECT teste.eroare('T8h atribuiri: TRUNCATE → refuz', $$TRUNCATE public.izo_atribuiri$$, 'nu se șterg');
 CREATE ROLE izo_test_admin NOLOGIN;
+GRANT izo_test_admin TO CURRENT_USER WITH SET TRUE;   -- PG16+: creatorul non-superuser primește doar ADMIN (fără SET) — branch PG17
 GRANT USAGE ON SCHEMA public TO izo_test_admin;
 GRANT INSERT, UPDATE ON public.izo_atribuiri TO izo_test_admin;
 SELECT teste.eroare('T8i atribuiri: INSERT de alt rol decât postgres (cu drept de tabelă) → refuz',
