@@ -12,6 +12,11 @@
 //       - hr        → hr_documente_personale        (entitate = angajat)   [Faza 2]
 //       - logistica → logistica_documente           (entitate = vehicul)   [Faza 2 — în curând]
 //       - financiar → contracte_subcontract_facturi (entitate = furnizor)  [Faza 2 — în curând]
+// 21.10.2026 — HR: dublura din dosar (varianta A, TKT-2026-0343). Dacă același fișier
+//   (nume + mărime) e deja la angajat (de regulă adus din Drive), rândul nu mai rămâne
+//   blocat în coadă: „Închide (e deja în dosar)" îl leagă de documentul existent, iar
+//   „Completează și închide" umple doar câmpurile GOALE din dosar cu ce a citit AI-ul.
+//   Logica pură (clasificare, validare, ce se completează) e în citesteOriceDubluri.js.
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -19,6 +24,7 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { analizaDublura, clasificaDublura, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -124,6 +130,28 @@ function resolveTipCod(rawTip, tipuriFK) {
   return fuzzy ? fuzzy.cod : ''
 }
 
+// ─── HR: ce e deja în dosar pentru perechile (angajat, nume fișier) din coadă ───
+// O singură căutare pe încărcare (pe bucăți de câte 25 de perechi, ca URL-ul să rămână
+// scurt), filtrată apoi pe client pe angajat + nume. Întoarce { [cheie]: { docs } | { err:true } }.
+const COLOANE_DOSAR = 'id,employee_id,tip_id,numar_document,emitent,data_emitere,data_expirare,fara_expirare,fisier_path,fisier_nume,fisier_size_bytes,uploadat_de,drive_file_id,observatii'
+async function cautaInDosarHR(perechi) {
+  const rez = {}
+  await Promise.all(bucati(perechi, 25).map(async bucata => {
+    const emps = [...new Set(bucata.map(p => p.emp))]
+    const nume = [...new Set(bucata.map(p => p.nume))]
+    let data = null, error = null
+    try {
+      ({ data, error } = await supabase.from('hr_documente_personale').select(COLOANE_DOSAR)
+        .in('employee_id', emps).in('fisier_nume', nume).is('deleted_at', null).order('id').limit(1000))
+    } catch (e) { error = e }
+    for (const p of bucata) {
+      rez[p.k] = error || !Array.isArray(data) ? { err:true }
+        : { docs: data.filter(d => Number(d.employee_id) === p.emp && d.fisier_nume === p.nume) }
+    }
+  }))
+  return rez
+}
+
 // ─── Conversie imagine → PDF comprimat, în browser (jsPDF) ───────
 // Orice poză (JPG/PNG/WEBP/HEIC-render) e redimensionată la max 1600px pe latura
 // lungă + re-encodată JPEG 82% și pusă într-un PDF cu pagina = dimensiunea imaginii.
@@ -166,8 +194,25 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [toast, setToast] = useState(null)
+  // HR: ce am găsit în dosar per (angajat, nume fișier) — { [cheie]: { docs } | { err:true } }.
+  // Cheie lipsă = încă se verifică. dosarSeq = ultima cerere per cheie (un răspuns vechi
+  // care ajunge după unul nou nu-l mai suprascrie).
+  const [dosar, setDosar] = useState({})
+  const dosarSeq = useRef({ n:0, k:{} })
 
   const flash = (tip, msg) => { setToast({ tip, msg }); setTimeout(() => setToast(null), 3500) }
+
+  // Fără flash în deps (anti-buclă): doar setState + ref-uri stabile.
+  const verificaDosar = useCallback(async (rows) => {
+    const perechi = perechiDeVerificat(rows, entitateAleasa)
+    if (!perechi.length) return
+    const seq = ++dosarSeq.current.n
+    perechi.forEach(p => { dosarSeq.current.k[p.k] = seq })
+    const rez = await cautaInDosarHR(perechi)
+    const proaspete = {}
+    for (const [k, v] of Object.entries(rez)) if (dosarSeq.current.k[k] === seq) proaspete[k] = v
+    if (Object.keys(proaspete).length) setDosar(d => ({ ...d, ...proaspete }))
+  }, [])
 
   // ─── Încărcare coadă (doar documentele modulului curent + nedecis la executie) ──
   const loadQueue = useCallback(async () => {
@@ -178,7 +223,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     const { data } = await q.order('uploadat_la', { ascending: false })
     setQueue(data || [])
     setLoading(false)
-  }, [modul])
+    // HR: dublurile din dosar se caută în fundal — lista apare imediat, panoul de dublură după
+    if (modul === 'hr') verificaDosar(data || [])
+  }, [modul, verificaDosar])
 
   // ─── Încărcare entități + tipuri FK per modul ──────────────────
   const loadEntitati = useCallback(async () => {
@@ -317,7 +364,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   }
 
   // ─── CONFIRMARE — dispecer per modul ──────────────────────────
-  async function handleConfirm(row) {
+  async function handleConfirm(row, opts = {}) {
     // Blindaj dublu-click (cazul Mănăilă 18.08: 2 inserturi la 90ms): ref-ul e
     // sincron, deci al doilea click e refuzat chiar dacă UI-ul n-a apucat să se
     // re-randeze cu butonul dezactivat.
@@ -325,7 +372,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     busyRef.current.add(row.id)
     try {
       if (modul === 'executie') return await confirmExecutie(row)
-      if (modul === 'hr') return await confirmHR(row)
+      if (modul === 'hr') return await confirmHR(row, opts)
       if (modul === 'logistica') return await confirmLogistica(row)
       if (modul === 'financiar') return await confirmFinanciar(row)
       if (modul === 'upa') return await confirmUPA(row)
@@ -393,7 +440,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   }
 
   // ── HR (Faza 2) ───────────────────────────────────────────────
-  async function confirmHR(row) {
+  // opts.faraGardaNume (21.10): „Adaugă ca document nou" — același nume, ALT fișier (altă
+  // mărime), confirmat de om. Sare DOAR garda pe nume; același fișier tot nu trece.
+  async function confirmHR(row, opts = {}) {
     const angajatId = entitateAleasa(row)
     const tipCod = row._editTip ?? row.tip_document
     if (!angajatId) { flash('err', 'Alege angajatul înainte de a confirma.'); return }
@@ -401,12 +450,22 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (!tipRow) { flash('err', 'Alege tipul documentului (autorizațiile ISCIR/sudură se adaugă din secțiunea Autorizații).'); return }
     setBusyId(row.id)
     try {
-      // Al doilea strat anti-duplicat: același fișier la același angajat nu se
-      // inserează de două ori, indiferent de unde vine click-ul.
-      const { data: dublura } = await supabase.from('hr_documente_personale')
-        .select('id').eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume)
-        .is('deleted_at', null).limit(1)
-      if (dublura?.length) { flash('err', `„${row.fisier_nume}" există deja la acest angajat — nu îl dublez.`); return }
+      // Al doilea strat anti-duplicat (ultima apărare — documentul din dosar poate apărea
+      // după verificarea din listă): același fișier la același angajat nu se inserează de
+      // două ori. Dacă verificarea pică, NU inserăm (fail-closed).
+      const { data: dublura, error: dubErr } = await supabase.from('hr_documente_personale')
+        .select('id,employee_id,fisier_nume,fisier_size_bytes').eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume)
+        .is('deleted_at', null).limit(50)
+      if (dubErr) throw new Error('Nu am putut verifica dosarul angajatului — încearcă din nou.')
+      const cls = clasificaDublura(row, dublura, angajatId)
+      if (cls.tip === 'acelasi' || (cls.tip === 'alt_continut' && !opts.faraGardaNume)) {
+        // nu e fundătură: reverific rândul, ca să apară panoul de dublură cu acțiunile lui
+        await verificaDosar([row])
+        flash('err', cls.tip === 'acelasi'
+          ? 'E deja în dosar — folosește «Închide» sau «Completează și închide».'
+          : `Există deja „${row.fisier_nume}" la acest angajat, dar e alt fișier — dacă e un document nou, folosește «Adaugă ca document nou».`)
+        return
+      }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
       const dd = row.payload_ai?.date_document || {}
       const dataExp = dd.data_expirare || null
@@ -424,7 +483,64 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       await finalizeInbox(row, 'hr', tipCod, 'angajat', angajatId, created.id)
       flash('ok', 'Document trimis în dosarul angajatului ✓')
       await loadQueue(); onConfirmed && onConfirmed()
-    } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
+    } catch (e) {
+      flash('err', String(e.message || e))
+      verificaDosar([row])   // dacă documentul a intrat dar rândul n-a putut fi închis → apare „Închide (e deja în dosar)"
+    } finally { setBusyId(null) }
+  }
+
+  // ── HR: dublura din dosar (21.10, varianta A, TKT-2026-0343) ──
+  // Același fișier e deja la angajat → rândul se închide legat de documentul existent
+  // (confirmat_ref_id = id-ul lui; fișierul din staging se șterge — e același fișier).
+  // completeaza=true → întâi UPDATE doar pe câmpurile goale, cu gardă .is(camp, null) pe
+  // fiecare: dacă între timp le-a pus altcineva → 0 rânduri → NU închid, reverific.
+  // Reîncercarea e sigură: câmpurile deja puse nu mai apar goale, deci a doua oară doar închide.
+  async function inchideDublura(row, completeaza) {
+    if (busyRef.current.has(row.id)) return
+    busyRef.current.add(row.id)
+    setBusyId(row.id)
+    try {
+      const angajatId = entitateAleasa(row)
+      const d = stareDublura(row)
+      if (!angajatId || d?.stare !== 'acelasi') {
+        await verificaDosar([row])
+        flash('err', 'Nu mai găsesc documentul în dosar — am reverificat, nu am închis nimic.')
+        return
+      }
+      const doc = d.doc
+      const campuri = completeaza ? d.campuri : []
+      if (campuri.length) {
+        const upd = updateCompletare(campuri, doc.observatii, liniaObservatii(row.id, new Date(), campuri))
+        let q = supabase.from('hr_documente_personale').update(upd).eq('id', doc.id).is('deleted_at', null)
+        for (const c of campuri) q = q.is(c.camp, null)
+        // observațiile se rescriu cu linia nouă la final → gardă și pe ele, ca să nu pierd o notă pusă între timp
+        q = doc.observatii == null ? q.is('observatii', null) : q.eq('observatii', doc.observatii)
+        const { data: upd2, error: updErr } = await q.select('id')
+        if (updErr) throw new Error('Completare dosar: ' + updErr.message)
+        if (!upd2?.length) {
+          await verificaDosar([row])
+          flash('err', 'Documentul din dosar s-a schimbat între timp (sau nu ai drept de modificare) — am reverificat, nu am închis nimic.')
+          return
+        }
+      } else {
+        // doar închidere: documentul de care leg rândul trebuie să mai existe
+        const { data: ex, error: exErr } = await supabase.from('hr_documente_personale')
+          .select('id').eq('id', doc.id).is('deleted_at', null).limit(1)
+        if (exErr) throw new Error('Nu am putut verifica dosarul: ' + exErr.message)
+        if (!ex?.length) {
+          await verificaDosar([row])
+          flash('err', 'Documentul din dosar nu mai există — am reverificat, nu am închis nimic.')
+          return
+        }
+      }
+      const tipCod = (row._editTip ?? row.tip_document) || d.tipDosar?.cod || null
+      await finalizeInbox(row, 'hr', tipCod, 'angajat', angajatId, doc.id)
+      flash('ok', campuri.length ? `Era deja în dosar — am completat: ${campuri.map(c => c.eticheta).join(', ')}.` : 'Era deja în dosar — închis.')
+      await loadQueue(); onConfirmed && onConfirmed()
+    } catch (e) {
+      flash('err', String(e.message || e))
+      verificaDosar([row])   // după o completare reușită lista de câmpuri se golește → reîncercarea doar închide
+    } finally { busyRef.current.delete(row.id); setBusyId(null) }
   }
 
   // ── Logistică (Faza 2) ────────────────────────────────────────
@@ -527,14 +643,20 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
-  // Marchează rândul inbox confirmat + curăță staging
+  // Marchează rândul inbox confirmat + curăță staging.
+  // 21.10: eroarea update-ului nu se mai înghite (documentul intrase, dar rândul rămânea
+  // în coadă fără ca omul să afle). Ordinea veche (update → ștergere staging) rămâne.
   async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
-    await supabase.from('ai_documente_inbox').update({
+    const { data, error } = await supabase.from('ai_documente_inbox').update({
       status:'confirmat', modul_tinta:modulTinta, tip_document:tip,
       entitate_tip:entTip, entitate_id:entId,
       confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
-    }).eq('id', row.id)
+    }).eq('id', row.id).select('id')
     await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
+    if (error || !data?.length) {
+      throw new Error('Documentul e salvat, dar rândul din coadă nu s-a putut închide'
+        + (error ? ': ' + error.message : ' (fără drept de modificare?)') + ' — reîncarcă lista și verifică.')
+    }
   }
 
   async function handleReject(row) {
@@ -550,6 +672,22 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   }
 
   function patch(id, key, val) { setQueue(q => q.map(r => r.id === id ? { ...r, [key]: val } : r)) }
+
+  // HR: starea rândului față de dosarul angajatului ales (null în afara HR / fără angajat)
+  //   'verific' | 'eroare' (căutarea a picat) | 'liber' | 'acelasi' | 'alt_continut'
+  function stareDublura(row) {
+    if (modul !== 'hr') return null
+    const emp = entitateAleasa(row)
+    if (!emp || !row.fisier_nume) return null
+    const st = dosar[cheieDosar(emp, row.fisier_nume)]
+    if (!st) return { stare:'verific' }
+    if (st.err) return { stare:'eroare' }
+    const a = analizaDublura({ row, docs:st.docs, angajatId:emp, tipuriFK, tipAI:row._editTip ?? row.tip_document })
+    return a.tip ? { stare:a.tip, ...a } : { stare:'liber' }
+  }
+
+  const numeTip = cod => (tipuriFK.find(t => t.cod === cod) || {}).denumire || TIP_LABEL[cod] || cod || '—'
+  const fmtValCamp = c => c.camp.startsWith('data_') ? fmtD(c.val + 'T00:00:00') : c.val
 
   if (!open) return null
 
@@ -634,6 +772,15 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                 const potConfirma = cfg.activ && (row.modul_tinta === modul || (modul === 'executie' && row.modul_tinta == null))
                 const entMatch = entitati.find(e => e.id === (entitateAleasa(row)))
                 const dd = row.payload_ai?.date_document
+                const dub = stareDublura(row)   // doar HR; null în rest
+                const ocupat = busyId === row.id
+                const badgeDosar = dub?.stare === 'acelasi' && (
+                  <span style={{ ...chip, background:G.blue + '22', color:G.blue, border:`1px solid ${G.blue}55` }}>📁 deja în dosar{dub.dinDrive ? ' (Drive)' : ''}</span>
+                )
+                const btnInchide = dub?.stare === 'acelasi' && (
+                  <button onClick={() => inchideDublura(row, false)} disabled={ocupat}
+                    style={{ ...btnS, color:G.blue, borderColor:G.blue + '55', opacity: ocupat ? 0.5 : 1 }}>Închide (e deja în dosar)</button>
+                )
                 return (
                   <div key={row.id} style={{ background:G.card, border:`1px solid ${eroare ? G.red + '66' : G.border}`, borderRadius:12, padding:14 }}>
                     <div style={{ display:'flex', alignItems:'flex-start', gap:10, marginBottom:10 }}>
@@ -651,8 +798,16 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                         <div style={{ fontSize:12.5, color:G.red, background:G.red + '11', padding:'8px 12px', borderRadius:8, marginBottom:10 }}>
                           ⚠ AI nu a putut citi documentul: {row.ai_eroare || 'eroare necunoscută'}. Poți încerca din nou sau adaugă-l manual.
                         </div>
-                        <div style={{ display:'flex', justifyContent:'flex-end' }}>
+                        {/* 21.10: AI n-a citit nimic, dar același fișier e deja în dosar → doar închidere */}
+                        {dub?.stare === 'acelasi' && (
+                          <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12, color:G.muted, marginBottom:10 }}>
+                            {badgeDosar}
+                            <span>Același fișier (nume + mărime) e deja la {entMatch?.label || 'acest angajat'} — nu mai trebuie adăugat.</span>
+                          </div>
+                        )}
+                        <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
                           <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Scoate din coadă</button>
+                          {btnInchide}
                         </div>
                       </>
                     ) : (
@@ -697,7 +852,12 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                             <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
                               <label style={{ flex:'1 1 260px', fontSize:12 }}>
                                 <span style={{ color:G.muted, display:'block', marginBottom:4 }}>{cfg.entitateLabel}</span>
-                                <select value={entitateAleasa(row) ?? ''} onChange={e => patch(row.id, '_editEntitate', e.target.value ? Number(e.target.value) : null)} style={sel}>
+                                <select value={entitateAleasa(row) ?? ''} onChange={e => {
+                                  const v = e.target.value ? Number(e.target.value) : null
+                                  patch(row.id, '_editEntitate', v)
+                                  // HR: alt angajat → reverific dosarul LUI (dublura ține de angajat)
+                                  if (modul === 'hr' && v) verificaDosar([{ ...row, _editEntitate: v }])
+                                }} style={sel}>
                                   <option value="">— alege {cfg.entitateLabel.toLowerCase()} —</option>
                                   {entitati.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
                                 </select>
@@ -764,8 +924,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               </div>
                             )}
 
-                            {/* Date extrase — document (hr/logistica) */}
-                            {modul !== 'executie' && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (
+                            {/* Date extrase — document (hr/logistica). La dublura HR „deja în dosar"
+                                nu se mai salvează un document nou → panoul de mai jos spune ce se completează. */}
+                            {modul !== 'executie' && dub?.stare !== 'acelasi' && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (
                               <div style={{ marginBottom:12, padding:'10px 12px', background:accent + '10', border:`1px solid ${accent}33`, borderRadius:8, fontSize:11.5, color:G.text }}>
                                 <div style={{ fontSize:12, fontWeight:700, color:accent, marginBottom:5 }}>📄 Date extrase din document</div>
                                 <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 14px' }}>
@@ -778,12 +939,72 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               </div>
                             )}
 
-                            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                            {/* HR 21.10 (varianta A): starea față de dosarul angajatului */}
+                            {dub?.stare === 'verific' && (
+                              <div style={{ marginBottom:8, fontSize:11, color:G.dim }}>⏳ verific dosarul angajatului…</div>
+                            )}
+                            {dub?.stare === 'eroare' && (
+                              <div style={{ marginBottom:10, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:11.5, color:G.yellow }}>
+                                <span>⚠️ nu am putut verifica dosarul — la confirmare verific din nou.</span>
+                                <button onClick={() => verificaDosar([row])} style={{ ...btnS, padding:'3px 10px', fontSize:11.5, color:G.yellow, borderColor:G.yellow + '55' }}>↻ reverifică</button>
+                              </div>
+                            )}
+                            {dub?.stare === 'acelasi' && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:G.blue + '10', border:`1px solid ${G.blue}44`, borderRadius:8, fontSize:12, color:G.text, lineHeight:1.55 }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6 }}>
+                                  {badgeDosar}
+                                  <span style={{ fontSize:11.5, color:G.muted }}>
+                                    același fișier (nume + mărime) · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
+                                  </span>
+                                </div>
+                                {dub.nrIdentice > 1 && (
+                                  <div style={{ fontSize:11.5, color:G.yellow, marginBottom:4 }}>⚠️ {dub.nrIdentice} copii identice în dosar — leg de cea mai veche (#{dub.doc.id}).</div>
+                                )}
+                                {dub.tipDiferit ? (
+                                  <div style={{ color:G.yellow }}>⚠️ tip diferit (dosar: {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`} · AI: {numeTip(row._editTip ?? row.tip_document)}) — nu completez câmpurile</div>
+                                ) : dub.campuri.length ? (
+                                  <div>
+                                    <span style={{ color:G.muted }}>Completez în dosar doar câmpurile goale: </span>
+                                    {dub.campuri.map(c => <span key={c.camp} style={{ marginRight:12 }}>{c.eticheta}: <b>{fmtValCamp(c)}</b></span>)}
+                                  </div>
+                                ) : (
+                                  <div style={{ color:G.dim }}>Nimic de completat — câmpurile din dosar sunt deja puse sau AI-ul n-a citit valori valide.</div>
+                                )}
+                              </div>
+                            )}
+                            {dub?.stare === 'alt_continut' && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:G.yellow + '12', border:`1px solid ${G.yellow}44`, borderRadius:8, fontSize:12, color:G.yellow, lineHeight:1.5 }}>
+                                ⚠️ există «{row.fisier_nume}» la acest angajat, dar e alt fișier ({dub.marimiNecunoscute ? 'nu pot compara mărimea' : 'altă mărime'}){dub.nrTotal > 1 ? ` — ${dub.nrTotal} documente cu acest nume` : ''}.
+                                <span style={{ color:G.muted }}> Dacă e un document nou, adaugă-l; dacă e același, respinge-l.</span>
+                              </div>
+                            )}
+
+                            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', flexWrap:'wrap' }}>
                               <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Respinge</button>
-                              <button onClick={() => handleConfirm(row)} disabled={busyId === row.id}
-                                style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: busyId === row.id ? 0.5 : 1 }}>
-                                {busyId === row.id ? '⏳…' : `✓ Confirmă → ${meta.label}`}
-                              </button>
+                              {dub?.stare === 'acelasi' ? (
+                                <>
+                                  {btnInchide}
+                                  {!dub.tipDiferit && dub.campuri.length > 0 && (
+                                    <button onClick={() => inchideDublura(row, true)} disabled={ocupat}
+                                      style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
+                                      {ocupat ? '⏳…' : '✓ Completează și închide'}
+                                    </button>
+                                  )}
+                                </>
+                              ) : dub?.stare === 'alt_continut' ? (
+                                <button onClick={() => {
+                                  if (!window.confirm(`Există deja „${row.fisier_nume}" la acest angajat, dar e alt fișier (altă mărime).\n\nÎl adaug ca document NOU în dosar?`)) return
+                                  handleConfirm(row, { faraGardaNume:true })
+                                }} disabled={ocupat}
+                                  style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
+                                  {ocupat ? '⏳…' : 'Adaugă ca document nou'}
+                                </button>
+                              ) : (
+                                <button onClick={() => handleConfirm(row)} disabled={busyId === row.id}
+                                  style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: busyId === row.id ? 0.5 : 1 }}>
+                                  {busyId === row.id ? '⏳…' : `✓ Confirmă → ${meta.label}`}
+                                </button>
+                              )}
                             </div>
                           </>
                         ) : (
