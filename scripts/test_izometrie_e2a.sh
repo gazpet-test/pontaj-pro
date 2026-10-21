@@ -275,11 +275,12 @@ cursa "4i retry creare în timpul unei editări" \
   err "alt conținut"
 OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$REV_BON" 2>&1)" && esec "4i revenire nearmată a trecut"
 grep -q "nearmată" <<<"$OUT" || esec "4i revenire refuzată din alt motiv"
-"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102b', 'BON_RPC_SCOATE:' || txid_current(), true);" -f "$REV_BON" >/dev/null 2>&1 \
-  || esec "4i revenirea armată a eșuat"
-[ "$(q "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'") $(q "SELECT count(*) FROM information_schema.columns WHERE table_name = 'executie_bonuri_consum' AND column_name = 'cheie_operatie'")" = "0 0" ] || esec "4i funcția / coloana au rămas după revenire"
-[ "$(q "SELECT count(*) FROM public.executie_bonuri_consum WHERE numar_bon LIKE 'BC-2026-1-%'")" = 2 ] || esec "4i revenirea a atins datele"
-ok "4i bon RPC: $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · retry creare în timpul unei editări → așteaptă antetul, fără amestec · revenire nearmată → refuz, armată → doar funcția scoasă"
+# după creări prin RPC, revenirea armată REFUZĂ (istoricul de idempotență nu se șterge — Jakarinos r7)
+OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102b', 'BON_RPC_SCOATE:' || txid_current(), true);" -f "$REV_BON" 2>&1)" \
+  && esec "4i revenirea armată cu chei de operație a trecut"
+grep -q "cheie_operatie" <<<"$OUT" || esec "4i revenire refuzată din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+[ "$(q "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'")" = 1 ] || esec "4i refuzul a scos totuși funcția"
+ok "4i bon RPC (revenirea cu chei → refuz): $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · retry creare în timpul unei editări → așteaptă antetul, fără amestec · revenire nearmată → refuz, armată → doar funcția scoasă"
 ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
 ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 
@@ -299,6 +300,13 @@ ok "6a–c revenire: nearmată → refuz · cu date → refuz · psql -f simplu 
 "${PSQL[@]}" -d postgres -c "DROP DATABASE $BAZA" >/dev/null
 "${PSQL[@]}" -d postgres -c "DROP ROLE izo_registru_writer" >/dev/null
 livreaza "$BAZA2" 20261102120000 >/dev/null
+# 20261102b pe baza curată (fără creări): revenirea armată scoate funcția, indexurile și coloana goală
+livreaza "$BAZA2" 20261102130000 "$MIG_BON" >/dev/null
+"${PSQL[@]}" -d "$BAZA2" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102b', 'BON_RPC_SCOATE:' || txid_current(), true);" -f "$REV_BON" >/dev/null 2>&1 \
+  || esec "6-pre0 revenirea 20261102b fără date a eșuat"
+[ "$(q2 "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'") $(q2 "SELECT count(*) FROM information_schema.columns WHERE table_name = 'executie_bonuri_consum' AND column_name = 'cheie_operatie'")" = "0 0" ] \
+  || esec "6-pre0 funcția / coloana au rămas"
+ok "6-pre0 revenirea 20261102b fără creări → funcția, indexurile și coloana scoase"
 # 6-pre. TRUNCATE ↔ activare (Copilot r4 P1-b), pe baza curată (aici nicio țeavă nu e încă protejată): activarea
 #        proiectului 3 ținută la barieră, TRUNCATE pe țevi așteaptă și apoi e refuzat pe nivelul nou
 BAZA_SALVATA="$BAZA"; BAZA="$BAZA2"

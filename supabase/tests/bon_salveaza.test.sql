@@ -61,6 +61,13 @@ SELECT teste.eroare('B10c bon NOU cu bucată din registru → refuz, fără ante
   '{"proiect_id":3,"cheie_operatie":"%s","provenienta":"beneficiar","data_bon":"2026-10-21"}', '[{"denumire":"teava","cantitate":1,"magazie_bucata_id":%s}]')$f$, :'OP3', :id_reg), 'nu intră pe bon');
 SELECT teste.e('B10d nicio urmă a creării refuzate', (SELECT count(*) FROM public.executie_bonuri_consum WHERE cheie_operatie = :'OP3') = 0);
 RESET ROLE;
+-- B14 numerotarea trece de 9999 fără trunchiere (Jakarinos r7)
+INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id) VALUES ('BC-2026-2-9999', 2);
+SELECT teste.ca(:'JANETA');
+SELECT r->>'numar_bon' AS n14 FROM (SELECT public.fn_bon_salveaza(NULL, NULL,
+  '{"proiect_id":2,"cheie_operatie":"aaaaaaaa-0000-0000-0000-000000000014","provenienta":"gazpet","data_bon":"2026-10-21"}', '[{"denumire":"x","cantitate":1}]') r) x \gset
+SELECT teste.e('B14 după BC-2026-2-9999 vine BC-2026-2-10000', :'n14' = 'BC-2026-2-10000');
+RESET ROLE;
 SELECT teste.eroare('B13 număr de bon duplicat pe proiect, din afara RPC-ului → refuz de index (UNIQUE în BD)',
   $$INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id) VALUES ('BC-2026-1-0001', 1)$$, 'ux_bonc_proiect_numar');
 SET ROLE anon;

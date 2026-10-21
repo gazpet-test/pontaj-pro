@@ -316,9 +316,13 @@ ALTER TABLE public.executie_tevi ENABLE ALWAYS TRIGGER trg_executie_tevi_izo_del
 ALTER TABLE public.izo_importuri DISABLE ROW LEVEL SECURITY;
 SELECT teste.eroare('T11c RLS oprit pe izo_importuri → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'RLS inactiv pe izo_importuri');
 ALTER TABLE public.izo_importuri ENABLE ROW LEVEL SECURITY;
+SET ROLE izo_registru_writer;   -- ACL-ul funcțiilor registrului îl schimbă doar owner-ul (postgres nu e superuser pe Supabase)
 GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO authenticated;
+RESET ROLE;
 SELECT teste.eroare('T11d funcție a registrului executabilă din API → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'EXECUTE din API');
+SET ROLE izo_registru_writer;
 REVOKE EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) FROM authenticated;
+RESET ROLE;
 GRANT TRUNCATE ON public.magazie_bucati TO service_role;
 SELECT teste.eroare('T11f TRUNCATE pe magazie_bucati pentru service_role → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'TRUNCATE pe magazie_bucati');
 REVOKE TRUNCATE ON public.magazie_bucati FROM service_role;
@@ -374,9 +378,13 @@ CREATE FUNCTION teste.wrapper_majuscule(p bigint) RETURNS text LANGUAGE sql SECU
 SELECT teste.eroare('T12i2 wrapper cu MAJUSCULE → porțile îl prind (N3)', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
 DROP FUNCTION teste.wrapper_majuscule(bigint);
 CREATE ROLE izo_test_exec NOLOGIN;
+SET ROLE izo_registru_writer;
 GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO izo_test_exec;
+RESET ROLE;
 SELECT teste.eroare('T12k EXECUTE pe o funcție a registrului pentru un rol din afara allowlist-ului → porțile refuză', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'allowlist');
+SET ROLE izo_registru_writer;
 REVOKE EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) FROM izo_test_exec;
+RESET ROLE;
 DROP ROLE izo_test_exec;
 SELECT teste.e('T12j porțile refăcute după FK / CHECK / wrapper / allowlist', cardinality(public.fn_izo_porti_lipsa()) = 0);
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);

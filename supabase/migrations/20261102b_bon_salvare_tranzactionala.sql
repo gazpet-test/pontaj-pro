@@ -150,7 +150,8 @@ BEGIN
       PERFORM pg_advisory_xact_lock(hashtextextended('fn_bon_salveaza:numar:' || v_pid || ':' || v_an, 0));
       SELECT coalesce(max((regexp_match(b.numar_bon, '^BC-[0-9]{4}-[0-9]+-([0-9]+)$'))[1]::int), 0) + 1 INTO v_secv
         FROM public.executie_bonuri_consum b WHERE b.proiect_id = v_pid AND b.numar_bon LIKE 'BC-' || v_an || '-' || v_pid || '-%';
-      v_numar := format('BC-%s-%s-%s', v_an, v_pid, lpad(v_secv::text, 4, '0'));
+      -- lățime minimă 4, fără trunchiere peste 9999 (lpad ar tăia „10000” la „1000”) — Jakarinos r7
+      v_numar := format('BC-%s-%s-%s', v_an, v_pid, CASE WHEN v_secv > 9999 THEN v_secv::text ELSE lpad(v_secv::text, 4, '0') END);
       INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id, situatie_plata_id, provenienta, data_bon, sursa, stare,
                                                  generat_de, observatii, cheie_operatie)
       VALUES (v_numar, v_pid, (v_antet_cerut->>'situatie_plata_id')::bigint, v_antet_cerut->>'provenienta',

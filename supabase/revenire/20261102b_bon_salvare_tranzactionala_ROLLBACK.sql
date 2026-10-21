@@ -1,7 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
--- 20261102b_bon_salvare_tranzactionala_ROLLBACK — NU e migrare. Scoate public.fn_bon_salveaza, indexul și coloana
--- executie_bonuri_consum.cheie_operatie (doar cheile de idempotență ale creărilor; numerele, antetele și liniile bonurilor
--- rămân neatinse). UI-ul care cheamă funcția (ConsumuriBonuriTab) se retrage ÎNAINTE (revert PR) — altfel salvarea
+-- 20261102b_bon_salvare_tranzactionala_ROLLBACK — NU e migrare. Scoate public.fn_bon_salveaza, indexurile și coloana
+-- executie_bonuri_consum.cheie_operatie — DOAR cât nicio creare n-a trecut prin RPC (coloana goală); altfel REFUZĂ, ca
+-- istoricul de idempotență să nu se piardă. UI-ul care cheamă funcția (ConsumuriBonuriTab) se retrage ÎNAINTE (revert PR) — altfel salvarea
 -- bonurilor nu mai merge.
 -- Refuză dacă funcția / indexul au fost modificate după migrare (amprenta din COMMENT) sau dacă alte obiecte depind de ele.
 -- Procedura (un singur string):
@@ -31,6 +31,11 @@ BEGIN
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   LOCK TABLE public.executie_bonuri_consum IN ACCESS EXCLUSIVE MODE;
+  -- istoricul de idempotență nu se șterge (Jakarinos r7): după prima creare prin RPC, coloana are date — revenirea refuză
+  -- (altfel, la o reaplicare, un retry al aceleiași chei ar putea crea un al doilea bon)
+  IF EXISTS (SELECT 1 FROM public.executie_bonuri_consum WHERE cheie_operatie IS NOT NULL) THEN
+    RAISE EXCEPTION 'Revenire 20261102b: există bonuri create prin RPC (cheie_operatie) — coloana nu se scoate; retragere = UI + decizie separată; refuz';
+  END IF;
   DROP FUNCTION public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb);   -- fără CASCADE: o dependență neașteptată anulează tot
   DROP INDEX public.ux_bonc_cheie_operatie;
   DROP INDEX public.ux_bonc_proiect_numar;

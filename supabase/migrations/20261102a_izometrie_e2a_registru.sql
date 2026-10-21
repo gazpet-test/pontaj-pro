@@ -1326,12 +1326,14 @@ BEGIN
   ALTER FUNCTION public.fn_izo_import_storno(bigint, text, text) OWNER TO izo_registru_writer;
   ALTER FUNCTION public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text) OWNER TO izo_registru_writer;
   REVOKE CREATE ON SCHEMA public FROM izo_registru_writer;
-  -- ALTER OWNER păstrează ACL-ul: owner-ul nou are EXECUTE implicit; postgres primește explicit
-  REVOKE ALL ON FUNCTION public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
-    public.fn_izo_import_storno(bigint, text, text), public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text)
-    FROM PUBLIC, anon, authenticated, service_role;
+  -- ALTER OWNER mută ACL-ul pe owner-ul nou (REVOKE-urile din G rămân; intrarea vechiului owner devine a writer-ului).
+  -- Pe Supabase postgres NU e superuser: după ALTER OWNER nu mai poate da GRANT pe funcții care nu-i aparțin — GRANT-ul
+  -- EXECUTE către postgres îl dă owner-ul (writer), prin SET ROLE (postgres are SET pe writer). Găsit de testul pe branch PG17.
+  SET LOCAL ROLE izo_registru_writer;
   GRANT EXECUTE ON FUNCTION public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
     public.fn_izo_import_storno(bigint, text, text), public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text) TO postgres;
+  RESET ROLE;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Livrare 20261102a: rolul nu a revenit la postgres după GRANT'; END IF;
 
   -- amprenta definițiilor porților, fixată acum (după ACL-uri și owneri); fn_izo_porti_lipsa o compară la fiecare activare
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
