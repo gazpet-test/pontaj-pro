@@ -30,7 +30,7 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
-import { analizaDublura, clasificaDublura, blocheazaInserare, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare, eroareInchidereRand } from './citesteOriceDubluri.js'
+import { analizaDublura, clasificaDublura, blocheazaInserare, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare, eroareInchidereRand, inchidereFaraRezultat } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -227,11 +227,12 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     let q = supabase.from('ai_documente_inbox').select('*').in('status', ['clasificat','eroare'])
     if (modul === 'executie') q = q.or('modul_tinta.eq.executie,modul_tinta.is.null')
     else q = q.eq('modul_tinta', modul)
-    const { data } = await q.order('uploadat_la', { ascending: false })
+    const { data, error } = await q.order('uploadat_la', { ascending: false })
     setQueue(data || [])
     setLoading(false)
     // HR: dublurile din dosar se caută în fundal — lista apare imediat, panoul de dublură după
     if (modul === 'hr') verificaDosar(data || [])
+    return error ? null : (data || [])   // null = nu știu ce e în coadă
   }, [modul, verificaDosar])
 
   // ─── Încărcare entități + tipuri FK per modul ──────────────────
@@ -667,16 +668,21 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       }).eq('id', row.id).select('id')
     } catch (e) { res = { error:e } }
     await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
-    return eroareInchidereRand(res)
+    // 0 rânduri fără eroare = UPDATE-ul poate fi trecut, dar rândul nou nu mai e vizibil prin RLS
+    // (ex. MP care confirmă pe un proiect fără site) — decide reîncărcarea cozii, nu acest răspuns.
+    return { err: eroareInchidereRand(res), deVerificat: inchidereFaraRezultat(res) }
   }
 
   // Documentul țintă e salvat → închid rândul din coadă și reîmprospătez ORICUM: și când
   // închiderea pică, ecranul părinte (lista proiectului, plafonul UPA, situația de plată,
   // dosarul angajatului) trebuie să vadă documentul nou. Comportamentul vechi + eroarea vizibilă.
   async function inchideRandSiReimprospateaza(row, msgOk, ...argsFinalize) {
-    const errFin = await finalizeInbox(row, ...argsFinalize)
+    const fin = await finalizeInbox(row, ...argsFinalize)
+    const coada = await loadQueue()
+    // „0 rânduri” e eroare doar dacă rândul a rămas în coadă după reîncărcare
+    const errFin = fin.deVerificat && coada && !coada.some(r => r.id === row.id) ? null : fin.err
     flash(errFin ? 'err' : 'ok', errFin || msgOk)
-    await loadQueue(); onConfirmed && onConfirmed()
+    onConfirmed && onConfirmed()
     return !errFin
   }
 

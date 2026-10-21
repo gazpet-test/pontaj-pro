@@ -203,3 +203,9 @@ export function eroareInchidereRand(res) {
   const det = error ? ': ' + (error.message || String(error)) : ' (fără drept de modificare?)'
   return 'Documentul e salvat, dar rândul din coadă nu s-a putut închide' + det + ' — reîncarcă lista și verifică.'
 }
+
+// UPDATE fără eroare dar fără rând întors: nu știm încă dacă s-a închis (RLS pe SELECT) — se verifică prin reîncărcarea cozii
+export function inchidereFaraRezultat(res) {
+  const { data, error } = res || {}
+  return !!res && !error && Array.isArray(data) && data.length === 0
+}

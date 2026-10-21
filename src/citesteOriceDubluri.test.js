@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   dataAIValida, textAIValid, esteDinDrive, cheieDosar, perechiDeVerificat, bucati,
   clasificaDublura, campuriDeCompletat, updateCompletare, fmtZi, liniaObservatii,
-  observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, eroareInchidereRand,
+  observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, eroareInchidereRand, inchidereFaraRezultat,
   texteAltContinut,
 } from './citesteOriceDubluri.js'
 
@@ -287,5 +287,14 @@ describe('texteAltContinut (r2: „altă mărime" doar când mărimile s-au comp
   it('fără informație → varianta prudentă (necunoscut)', () => {
     expect(texteAltContinut(null, 'x.pdf').necunoscut).toBe(true)
     expect(texteAltContinut({ tip:'alt_continut' }, 'x.pdf').necunoscut).toBe(true)
+  })
+})
+
+describe('inchidereFaraRezultat (0 rânduri fără eroare = de verificat prin reîncărcare)', () => {
+  it('doar 0 rânduri fără eroare', () => {
+    expect(inchidereFaraRezultat({ data:[], error:null })).toBe(true)
+    expect(inchidereFaraRezultat({ data:[{ id:1 }], error:null })).toBe(false)
+    expect(inchidereFaraRezultat({ data:null, error:{ message:'x' } })).toBe(false)
+    expect(inchidereFaraRezultat(undefined)).toBe(false)
   })
 })
