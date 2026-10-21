@@ -12,6 +12,52 @@
 //       - hr        → hr_documente_personale        (entitate = angajat)   [Faza 2]
 //       - logistica → logistica_documente           (entitate = vehicul)   [Faza 2 — în curând]
 //       - financiar → contracte_subcontract_facturi (entitate = furnizor)  [Faza 2 — în curând]
+// 21.10.2026 — HR: dublura din dosar (varianta A, TKT-2026-0343). Dacă același fișier
+//   (nume + mărime) e deja la angajat (de regulă adus din Drive), rândul nu mai rămâne
+//   blocat în coadă: „Închide (e deja în dosar)" îl leagă de documentul existent, iar
+//   „Completează și închide" umple doar câmpurile GOALE din dosar cu ce a citit AI-ul.
+//   Logica pură (clasificare, validare, ce se completează) e în citesteOriceDubluri.js.
+//   Review r1: copia ACTIVĂ din dosar are prioritate; finalizeInbox nu mai aruncă: documentul
+//   țintă e salvat, deci coada + ecranul părinte se reîmprospătează și când închiderea rândului
+//   pică (toate modulele).
+//   Review r2: același fișier doar ca document INACTIV (istoric) → doar „Închide (e deja în dosar)",
+//   fără completare și fără o copie nouă (varianta A nu are inserare la „același fișier").
+//   „Același nume" cu mărime necunoscută nu mai e prezentat ca „alt fișier (altă mărime)".
+//   Review extern (Copilot + Jakarinos): gărzile de identitate pe documentul din dosar (angajat, nume,
+//   mărime, tip, fara_expirare — F1/F6); garda finală din confirmHR nu mai depinde de o listă limitată
+//   (căutare exactă + count — F3); căutarea proactivă e per angajat, iar un răspuns trunchiat e
+//   eroare de căutare, nu „liber" (F4).
+//   Verificare r4: la 0 rânduri, starea rândului o dă citirea lui directă, nu coada modulului (un rând
+//   mutat în alt modul lipsește din coadă, dar e tot deschis — F5).
+//   Simplificare: fără marcaj de reîncercare; fișierul din staging se șterge după închidere ca pe main,
+//   deci de regulă o reîncercare nu mai poate salva documentul a doua oară — un rând rămas deschis se scoate cu ✕.
+//   Fix-uri după simplificare: dacă ștergerea din staging pică, mesajul spune explicit că încă un
+//   «✓ Confirmă» ar salva a doua oară (NH-1); mesajele numesc ambele butoane roșii (HR-2); ✕ Respinge are
+//   text neutru și rezultatul verificat (RB2 / NH-2); un document „fără expirare" (sau tip fără expirare)
+//   nu primește data expirării la „Completează și închide" (HR-1).
+//   Review final: documentul inserat din rândul #N poartă în observații „[Citește orice #N]" — dacă închiderea
+//   rândului și ștergerea din staging pică, o reîncercare îl recunoaște (oricare i-ar fi mărimea) și doar
+//   închide, fără a doua inserare (J1); o eroare de transport la UPDATE-ul rândului se verifică prin citirea
+//   lui, nu se raportează „neînchis" (J2); „trunchiat" după count (C1); reverificarea dosarului nu mai arată
+//   rezultatul vechi al cheii (C2).
+//   Verificare r6: eticheta rândului se caută în TOT dosarul HR (nu doar la angajatul ales) înainte de inserare,
+//   din nou chiar înainte de INSERT și înainte de „Închide" — salvat deja la alt angajat → nu se mai salvează /
+//   leagă la cel ales acum (F1); reîncărcarea cozii păstrează corecțiile de pe card (F1); rândul se închide doar
+//   dacă e încă în coadă — închis între timp de altcineva = avertisment, nu rescriere (F2); fără avertismentul fals
+//   de staging în HR (R1).
+//   Proveniență structurală (decizia owner 21.10.2026, varianta A): eticheta „[Citește orice #N]" din observații
+//   (descrisă mai sus la „Review final” / „Verificare r6”) e înlocuită de coloana hr_documente_personale.sursa_inbox_id
+//   (migrarea 20261103a — pusă doar la INSERT, nemodificabilă, unică și cu deleted_at). confirmHR o pune la INSERT,
+//   observațiile rămân doar titlul AI; proveniența se caută cu .eq('sursa_inbox_id', rând) la orice angajat, inclusiv
+//   copiile șterse logic (fail-closed). Cursa celor două taburi e închisă în BD: al doilea INSERT cade pe indexul unic
+//   (23505) → tratat ca „deja salvat din acest rând” (doar închidere, niciodată a doua inserare). Coloana lipsă
+//   (42703 / PGRST204) → eroare blocantă „migrarea pentru sursa_inbox_id nu e aplicată — anunță administratorul”.
+//   ORDINEA DE LIVRARE: migrarea 20261103a se aplică ÎNAINTEA merge-ului acestui UI.
+//   Review extern #821: garda BD de la INSERT (rândul HR deschis, același fișier) poate refuza INSERT-ul cu 23514 când
+//   rândul a fost închis / mutat între timp (ex. de wizard-ul „Angajat nou”, care pune acum și el sursa_inbox_id) →
+//   'refuzata': copia se șterge, proveniența decide mesajul, coada se reîncarcă — niciodată a doua inserare.
+//   Jakarinos r2 P1: garda cere și mărimea + tipul MIME ale rândului (ne-NULL) → documentul le copiază EXACT din rând
+//   (fisierDinRand, fără fallback 'application/pdf'); rândul fără ele se oprește înainte de copie (faraMetadateSursa).
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -19,6 +65,12 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare,
+  marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
+  citireNecesara, stareInchidere, mesajInchidere, avertizareStaging, textConfirmareRespingere, mesajRespingere,
+  mesajBlocareHR, dosarInVerificare, rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari,
+  STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA, copieDeSters, mesajRefuzSursa,
+  fisierDinRand, faraMetadateSursa, MESAJ_SURSA_FARA_METADATE } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -124,6 +176,42 @@ function resolveTipCod(rawTip, tipuriFK) {
   return fuzzy ? fuzzy.cod : ''
 }
 
+// ─── HR: ce e deja în dosar pentru perechile (angajat, nume fișier) din coadă ───
+// Review extern F4: o căutare per angajat (.eq angajat + .in nume, câte 25 de nume ca URL-ul să
+// rămână scurt), nu produs cartezian angajați × nume tăiat la 1000. Un răspuns care atinge limita
+// (sau count > rânduri primite) → perechile lui sunt „eroare de căutare" (avertisment vizibil;
+// garda din confirmHR protejează oricum), NU „liber". Întoarce { [cheie]: { docs } | { err:true, motiv } }.
+// `activ` (r1): o copie inactivă (istoric) nu trebuie să câștige în fața celei active.
+// sursa_inbox_id (20261103a): documentul salvat din rând se recunoaște ca 'acelasi' oricare i-ar fi mărimea (J1)
+const COLOANE_DOSAR = 'id,employee_id,tip_id,activ,numar_document,emitent,data_emitere,data_expirare,fara_expirare,fisier_path,fisier_nume,fisier_size_bytes,uploadat_de,drive_file_id,observatii,sursa_inbox_id'
+const LIMITA_DOSAR = 500        // rânduri per căutare (sub max-rows al API-ului); atinsă = posibil trunchiat
+const PARALEL_DOSAR = 6         // căutări simultane (o coadă mare = mulți angajați)
+async function interogheaza(q) {
+  try { return await q } catch (e) { return { data:null, error:e } }
+}
+// F1 (r6) + 20261103a: documentul salvat deja din rândul ăsta, la ORICE angajat, după proveniența structurală
+// (sursa_inbox_id = id-ul rândului; unic în BD → cel mult unul). Fără filtru pe deleted_at: o copie ștearsă logic tot
+// oprește o nouă inserare (indexul o numără) → { err:'migrare' | 'eroare' } | { docs }. Orice rând găsit blochează inserarea.
+const cautaProvenienta = async row => rezultatProvenienta(await interogheaza(supabase.from('hr_documente_personale')
+  .select('id,employee_id,activ,deleted_at,sursa_inbox_id').eq('sursa_inbox_id', row.id).order('id').limit(10)))
+// gărzile din gardaDocDosar ([op, coloană, valoare], op 'eq' | 'is') aplicate pe o cerere supabase
+const aplicaGarda = (q, garda) => garda.reduce((acc, [op, col, val]) => acc[op](col, val), q)
+async function cautaInDosarHR(perechi) {
+  const rez = {}
+  for (const val of bucati(grupeDupaAngajat(perechi, 25), PARALEL_DOSAR)) {
+    await Promise.all(val.map(async g => {
+      const r = rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(COLOANE_DOSAR, { count:'exact' })
+        .eq('employee_id', g.emp).in('fisier_nume', g.nume).is('deleted_at', null).order('id').limit(LIMITA_DOSAR)),
+        { limita:LIMITA_DOSAR, cuNumar:true })
+      for (const p of g.perechi) {
+        rez[p.k] = r.err ? { err:true, motiv:r.err }
+          : { docs: r.docs.filter(d => Number(d.employee_id) === p.emp && d.fisier_nume === p.nume) }
+      }
+    }))
+  }
+  return rez
+}
+
 // ─── Conversie imagine → PDF comprimat, în browser (jsPDF) ───────
 // Orice poză (JPG/PNG/WEBP/HEIC-render) e redimensionată la max 1600px pe latura
 // lungă + re-encodată JPEG 82% și pusă într-un PDF cu pagina = dimensiunea imaginii.
@@ -160,25 +248,57 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   const [view, setView] = useState('upload')
   const busyRef = useRef(new Set())   // anti dublu-click, sincron (state-ul busyId nu apucă să se randeze în <100ms)            // 'upload' | 'confirm'
   const [queue, setQueue] = useState([])
+  const queueRef = useRef([])                           // coada curentă, pentru loadQueue (corecțiile de pe card — F1 r6)
+  useEffect(() => { queueRef.current = queue }, [queue])
   const [entitati, setEntitati] = useState([])          // proiecte / angajați / vehicule
   const [tipuriFK, setTipuriFK] = useState([])          // pt hr/logistica: [{id,cod,denumire}]
   const [uploading, setUploading] = useState([])
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [toast, setToast] = useState(null)
+  // HR: ce am găsit în dosar per (angajat, nume fișier) — { [cheie]: { docs } | { err:true } }.
+  // Cheie lipsă = încă se verifică (C2: o reverificare scoate cheia la pornire). dosarSeq = ultima
+  // cerere per cheie (un răspuns vechi care ajunge după unul nou nu-l mai suprascrie).
+  const [dosar, setDosar] = useState({})
+  const dosarSeq = useRef({ n:0, k:{} })
 
-  const flash = (tip, msg) => { setToast({ tip, msg }); setTimeout(() => setToast(null), 3500) }
+  // ms: mesajele de după o închidere eșuată sunt singura indicație de ieșire → stau mai mult (HR-2);
+  // timer-ul vechi se anulează, ca un toast scurt de dinainte să nu-l taie pe cel nou
+  const toastTimer = useRef(null)
+  const flash = (tip, msg, ms = 3500) => {
+    setToast({ tip, msg }); clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), ms)
+  }
+
+  // Fără flash în deps (anti-buclă): doar setState + ref-uri stabile.
+  const verificaDosar = useCallback(async (rows) => {
+    const perechi = perechiDeVerificat(rows, entitateAleasa)
+    if (!perechi.length) return
+    const seq = ++dosarSeq.current.n
+    perechi.forEach(p => { dosarSeq.current.k[p.k] = seq })
+    // C2: cheia trece în „verific" — rezultatul vechi (ex. A→B→A pe angajat) nu se afișează cât timp vine cel nou
+    setDosar(d => dosarInVerificare(d, perechi.map(p => p.k)))
+    let rez
+    try { rez = await cautaInDosarHR(perechi) }
+    catch (_) { rez = Object.fromEntries(perechi.map(p => [p.k, { err:true, motiv:'eroare' }])) }   // altfel cheia ar rămâne „verific"
+    const proaspete = {}
+    for (const [k, v] of Object.entries(rez)) if (dosarSeq.current.k[k] === seq) proaspete[k] = v
+    if (Object.keys(proaspete).length) setDosar(d => ({ ...d, ...proaspete }))
+  }, [])
 
   // ─── Încărcare coadă (doar documentele modulului curent + nedecis la executie) ──
   const loadQueue = useCallback(async () => {
     setLoading(true)
-    let q = supabase.from('ai_documente_inbox').select('*').in('status', ['clasificat','eroare'])
+    let q = supabase.from('ai_documente_inbox').select('*').in('status', STATUS_COADA)
     if (modul === 'executie') q = q.or('modul_tinta.eq.executie,modul_tinta.is.null')
     else q = q.eq('modul_tinta', modul)
     const { data } = await q.order('uploadat_la', { ascending: false })
-    setQueue(data || [])
+    // F1 (r6): rândurile proaspete păstrează corecțiile omului (angajat / tip ales pe card) — altfel reveneau tăcut la AI
+    setQueue(prev => pastreazaEditari(data || [], prev))
     setLoading(false)
-  }, [modul])
+    // HR: dublurile din dosar se caută în fundal — lista apare imediat, panoul de dublură după
+    if (modul === 'hr') verificaDosar(pastreazaEditari(data || [], queueRef.current))
+  }, [modul, verificaDosar])
 
   // ─── Încărcare entități + tipuri FK per modul ──────────────────
   const loadEntitati = useCallback(async () => {
@@ -317,7 +437,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   }
 
   // ─── CONFIRMARE — dispecer per modul ──────────────────────────
-  async function handleConfirm(row) {
+  async function handleConfirm(row, opts = {}) {
     // Blindaj dublu-click (cazul Mănăilă 18.08: 2 inserturi la 90ms): ref-ul e
     // sincron, deci al doilea click e refuzat chiar dacă UI-ul n-a apucat să se
     // re-randeze cu butonul dezactivat.
@@ -325,7 +445,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     busyRef.current.add(row.id)
     try {
       if (modul === 'executie') return await confirmExecutie(row)
-      if (modul === 'hr') return await confirmHR(row)
+      if (modul === 'hr') return await confirmHR(row, opts)
       if (modul === 'logistica') return await confirmLogistica(row)
       if (modul === 'financiar') return await confirmFinanciar(row)
       if (modul === 'upa') return await confirmUPA(row)
@@ -386,14 +506,17 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         } catch (_) { /* nu blochează */ }
       }
 
-      await finalizeInbox(row, 'executie', tip, 'proiect', proiectId, created.id)
-      flash('ok', 'Document trimis în Execuție ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, 'Document trimis în Execuție ✓', 'executie', tip, 'proiect', proiectId, created.id)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
   // ── HR (Faza 2) ───────────────────────────────────────────────
-  async function confirmHR(row) {
+  const numeAngajat = id => (entitati.find(e => Number(e.id) === Number(id)) || {}).label || null   // mesajele F1 (r6)
+  // opts.faraGardaNume (21.10): „Adaugă ca document nou" — același nume, ALT fișier (sau mărime
+  // necunoscută), confirmat de om. Sare DOAR garda pe nume; același fișier (activ sau inactiv)
+  // tot nu trece. opts.marimiComparate (r2): omul a confirmat „altă mărime" — dacă între timp a
+  // apărut o copie fără mărime, nu mai e aceeași situație → blochează și reverifică.
+  async function confirmHR(row, opts = {}) {
     const angajatId = entitateAleasa(row)
     const tipCod = row._editTip ?? row.tip_document
     if (!angajatId) { flash('err', 'Alege angajatul înainte de a confirma.'); return }
@@ -401,30 +524,164 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (!tipRow) { flash('err', 'Alege tipul documentului (autorizațiile ISCIR/sudură se adaugă din secțiunea Autorizații).'); return }
     setBusyId(row.id)
     try {
-      // Al doilea strat anti-duplicat: același fișier la același angajat nu se
-      // inserează de două ori, indiferent de unde vine click-ul.
-      const { data: dublura } = await supabase.from('hr_documente_personale')
-        .select('id').eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume)
-        .is('deleted_at', null).limit(1)
-      if (dublura?.length) { flash('err', `„${row.fisier_nume}" există deja la acest angajat — nu îl dublez.`); return }
+      // F1 (r6): întâi proveniența rândului (sursa_inbox_id) în TOT dosarul (orice angajat, orice nume / mărime, și
+      // copiile șterse logic; fail-closed, migrarea lipsă = blocant) — pe orice drum, inclusiv „Adaugă ca document nou".
+      // Salvat deja din rând (și la alt angajat, ales înainte) → nu inserez.
+      const prov = await cautaProvenienta(row)
+      if (prov.err) throw new Error(mesajEroareCautare(prov.err, row.fisier_nume))
+      if (prov.docs.length) {
+        await verificaDosar([row])
+        flash('err', mesajProvenienta(prov.docs, angajatId, numeAngajat), 12000)
+        return
+      }
+      // Al doilea strat anti-duplicat (ultima apărare — documentul din dosar poate apărea
+      // după verificarea din listă): același fișier la același angajat nu se inserează de
+      // două ori. Dacă verificarea pică, NU inserăm (fail-closed).
+      // Review extern F3: nu depinde de o listă eșantionată. (1) mărime cunoscută → căutare EXACTĂ
+      // angajat + nume + mărime, limit 1 (copia activă întâi): găsită → blochează; (2) altfel căutare
+      // completă pe nume, cu count: mai multe rânduri decât am primit → eroare, nu inserez.
+      // J1: + sursa_inbox_id — documentul salvat din acest rând (închiderea a picat) blochează oricare i-ar fi mărimea,
+      // deci și „Adaugă ca document nou" la mărime necunoscută nu-l mai salvează a doua oară.
+      const col = 'id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at,sursa_inbox_id'
+      const sz = marime(row.fisier_size_bytes)
+      const exact = sz == null ? null : rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(col)
+        .eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume).eq('fisier_size_bytes', sz).is('deleted_at', null)
+        .order('activ', { ascending:false, nullsFirst:true }).order('id').limit(1)))
+      const peNume = exact && (exact.err || exact.docs.length) ? null
+        : rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(col, { count:'exact' })
+          .eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume).is('deleted_at', null).order('id').limit(LIMITA_DOSAR)),
+          { limita:LIMITA_DOSAR, cuNumar:true })
+      const garda = gardaFinalaHR({ row, angajatId, exact, nume:peNume, opts })
+      if (garda.err) throw new Error(mesajEroareCautare(garda.err, row.fisier_nume))
+      const { bloc, cls } = garda
+      if (bloc) {
+        // nu e fundătură: reverific rândul, ca să apară panoul de dublură cu acțiunile lui
+        await verificaDosar([row])
+        flash('err', mesajBlocareHR(bloc, cls, row.fisier_nume))
+        return
+      }
+      // Jakarinos r2 P1: garda BD cere mărimea + tipul rândului (ne-NULL) — fără ele nu se poate lega; mă opresc înainte de copie
+      // (închiderea pe un document deja în dosar — panoul de dublură — nu inserează, deci nu e atinsă)
+      if (faraMetadateSursa(row)) { flash('err', MESAJ_SURSA_FARA_METADATE, 12000); return }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
+      // F2 (r6) + 20261103a: alt tab / alt om poate salva documentul din același rând cât copiez fișierul (1–5 s) —
+      // fără a doua verificare aici: indexul unic pe sursa_inbox_id oprește atomic al doilea INSERT (23505, mai jos).
       const dd = row.payload_ai?.date_document || {}
       const dataExp = dd.data_expirare || null
-      const { data: created, error: insErr } = await supabase.from('hr_documente_personale').insert({
+      const ins = await interogheaza(supabase.from('hr_documente_personale').insert({
         employee_id: angajatId, tip_id: tipRow.id,
         numar_document: dd.numar || null, emitent: dd.emitent || null,
         data_emitere: dd.data_emitere || null, data_expirare: dataExp,
         fara_expirare: !dataExp,
-        fisier_path: destPath, fisier_nume: row.fisier_nume,
-        fisier_size_bytes: row.fisier_size_bytes, fisier_mime: row.fisier_mime || 'application/pdf',
-        activ: true, observatii: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id,
-      }).select('id').single()
-      if (insErr) throw new Error('Insert document HR: ' + insErr.message)
+        // nume + mărime + tip = exact ale rândului (fisierDinRand, fără fallback 'application/pdf'): garda BD le cere egale
+        fisier_path: destPath, ...fisierDinRand(row),
+        // proveniența = coloana (unică, nemodificabilă); observațiile = doar titlul AI, ca pe main
+        activ: true, observatii: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id, sursa_inbox_id: row.id,
+      }).select('id').single())
+      const rIns = rezultatInserareHR(ins)
+      if (copieDeSters(rIns)) {
+        // refuz sigur al serverului → copia urcată acum nu e folosită de nimic
+        await interogheaza(supabase.storage.from(cfg.bucket).remove([destPath]))
+        if (rIns === 'migrare') throw new Error(MESAJ_MIGRARE_SURSA)
+        // 23505 pe sursa_inbox_id: documentul din acest rând e deja salvat (alt tab / o încercare anterioară / wizard-ul) →
+        // NU a doua inserare; îl caut după proveniență și panoul oferă doar închiderea legată de el (ca la garda de sus).
+        // #821 F2 'refuzata': garda BD de la INSERT — rândul a fost închis / mutat între timp (de regulă de wizard-ul
+        // „Angajat nou” sau alt tab): proveniența, dacă există, altfel „nu mai e deschis”; coada se reîncarcă.
+        const p = await cautaProvenienta(row)
+        const docs = p.err ? [] : p.docs
+        if (rIns === 'refuzata') { await loadQueue(); flash('err', mesajRefuzSursa(docs, angajatId, numeAngajat, ins.error), 12000); return }
+        await verificaDosar([row])
+        flash('err', mesajProvenienta(docs, angajatId, numeAngajat), 12000)
+        return
+      }
+      if (rIns !== 'ok') throw new Error('Insert document HR: ' + (ins.error?.message || 'fără răspuns de la server'))
 
-      await finalizeInbox(row, 'hr', tipCod, 'angajat', angajatId, created.id)
-      flash('ok', 'Document trimis în dosarul angajatului ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
-    } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
+      // rând neînchis → o reîncercare se oprește în garda de mai sus, fără altă inserare: după proveniența rândului
+      // (sursa_inbox_id, la orice angajat — J1 + F1 r6) sau după nume + mărime; iar indexul unic oprește oricum a doua
+      await inchideRandSiReimprospateaza(row, 'Document trimis în dosarul angajatului ✓', 'hr', tipCod, 'angajat', angajatId, ins.data.id)
+    } catch (e) {
+      flash('err', String(e.message || e))
+      verificaDosar([row])   // la orice eroare, panoul de dublură arată starea reală a dosarului
+    } finally { setBusyId(null) }
+  }
+
+  // ── HR: dublura din dosar (21.10, varianta A, TKT-2026-0343) ──
+  // Același fișier e deja la angajat → rândul se închide legat de documentul existent
+  // (confirmat_ref_id = id-ul lui; fișierul din staging se șterge la închidere — e același fișier).
+  // completeaza=true → întâi UPDATE doar pe câmpurile goale, cu gardă .is(camp, null) pe
+  // fiecare: dacă între timp le-a pus altcineva → 0 rânduri → NU închid, reverific.
+  // Reîncercarea e sigură: după o completare reușită cu rândul neînchis dosarul se reverifică —
+  // câmpurile puse nu mai apar goale, deci a doua oară doar închide.
+  // asteapta (r1) = starea văzută de om ('acelasi' | 'acelasi_inactiv'); dacă s-a schimbat între
+  // timp (documentul a fost arhivat / reactivat / șters) → NU închid, reverific. Gărzile din UPDATE /
+  // verificare (gardaDocDosar: id, angajat, nume, mărime, activ, + la completare tip și fara_expirare —
+  // review extern F1/F6) leagă exact documentul văzut. Un document INACTIV doar se leagă,
+  // nu se completează niciodată (și nu se adaugă o copie activă — r2: varianta A = doar închidere).
+  async function inchideDublura(row, completeaza, asteapta = 'acelasi') {
+    if (busyRef.current.has(row.id)) return
+    busyRef.current.add(row.id)
+    setBusyId(row.id)
+    try {
+      const angajatId = entitateAleasa(row)
+      const d = stareDublura(row)
+      if (!angajatId || !d?.doc || d.stare !== asteapta) {
+        await verificaDosar([row])
+        flash('err', 'Documentul din dosar s-a schimbat sau nu-l mai găsesc — am reverificat, nu am închis nimic.')
+        return
+      }
+      const doc = d.doc
+      // F1 (r6): documentul a fost salvat deja din acest rând (sursa_inbox_id) la ALT angajat (alegerea de atunci) → nu
+      // leg rândul de copia de aici și nu completez nimic în ea; omul alege angajatul corect sau scoate rândul. Fail-closed
+      // (și la migrarea lipsă). O copie ștearsă logic de la alt angajat nu oprește legarea de documentul de aici.
+      const prov = await cautaProvenienta(row)
+      if (prov.err) throw new Error(mesajEroareCautare(prov.err, row.fisier_nume))
+      const strain = provenientaLaAltAngajat(prov.docs, angajatId)
+      if (strain) {
+        await verificaDosar([row])
+        flash('err', mesajProvenienta([strain], angajatId, numeAngajat), 12000)
+        return
+      }
+      const inactiv = d.stare === 'acelasi_inactiv'
+      const campuri = completeaza && !inactiv ? d.campuri : []
+      if (campuri.length) {
+        const upd = updateCompletare(campuri, doc.observatii, liniaObservatii(row.id, new Date(), campuri))
+        // Gărzi (review extern F1/F6): același document (id, angajat, nume, mărime, tip, activ/istoric, nesters),
+        // câmpurile încă goale, aceleași observații (se rescriu cu linia nouă la final — nu pierd o notă
+        // pusă între timp) și, dacă intră data expirării, aceeași valoare fara_expirare ca la detectare.
+        const q = aplicaGarda(supabase.from('hr_documente_personale').update(upd),
+          gardaDocDosar({ doc, angajatId, row, campuri }))
+        const { data: upd2, error: updErr } = await q.select('id')
+        if (updErr) throw new Error('Completare dosar: ' + updErr.message)
+        if (!upd2?.length) {
+          await verificaDosar([row])
+          flash('err', 'Documentul din dosar s-a schimbat între timp (sau nu ai drept de modificare) — am reverificat, nu am închis nimic.')
+          return
+        }
+      } else {
+        // doar închidere: documentul de care leg rândul trebuie să mai existe, ACELAȘI (id, angajat, nume,
+        // mărime, nesters) și în aceeași stare (activ / istoric) — F1: verificat în cerere și pe rândul întors
+        const garda = gardaDocDosar({ doc, angajatId, row })
+        const { data: ex, error: exErr } = await aplicaGarda(supabase.from('hr_documente_personale')
+          .select('id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at'), garda).limit(1)
+        if (exErr) throw new Error('Nu am putut verifica dosarul: ' + exErr.message)
+        if (!ex?.length || !potrivesteGarda(ex[0], garda)) {
+          await verificaDosar([row])
+          flash('err', 'Documentul din dosar nu mai există sau s-a schimbat (alt angajat / nume / mărime / activ-istoric) — am reverificat, nu am închis nimic.')
+          return
+        }
+      }
+      const tipCod = (row._editTip ?? row.tip_document) || d.tipDosar?.cod || null
+      const ok = await inchideRandSiReimprospateaza(row,
+        inactiv ? `Era deja în dosar (document INACTIV, istoric, #${doc.id}) — închis.`
+          : campuri.length ? `Era deja în dosar — am completat: ${campuri.map(c => c.eticheta).join(', ')}.` : 'Era deja în dosar — închis.',
+        'hr', tipCod, 'angajat', angajatId, doc.id)
+      // r4: rândul n-a fost închis → țin butonul ocupat până dosarul e proaspăt (loadQueue nu așteaptă
+      // reverificarea), ca o completare reușită să nu mai apară „de completat" (garda ar da fals „s-a schimbat")
+      if (!ok) await verificaDosar([row])
+    } catch (e) {
+      flash('err', String(e.message || e))
+      verificaDosar([row])   // după o completare reușită lista de câmpuri se golește → reîncercarea doar închide
+    } finally { busyRef.current.delete(row.id); setBusyId(null) }
   }
 
   // ── Logistică (Faza 2) ────────────────────────────────────────
@@ -452,9 +709,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       }).select('id').single()
       if (insErr) throw new Error('Insert document flotă: ' + insErr.message)
 
-      await finalizeInbox(row, 'logistica', tipCod, 'activ', vehiculId, created.id)
-      flash('ok', 'Document trimis la vehicul ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, 'Document trimis la vehicul ✓', 'logistica', tipCod, 'activ', vehiculId, created.id)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
@@ -492,9 +747,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       const { error: updErr } = await supabase.from('executie_situatii_plata').update(upd).eq('id', slId)
       if (updErr) throw new Error('Update situație: ' + updErr.message)
 
-      await finalizeInbox(row, 'financiar', 'certificat_plata', 'situatie_plata', slId, slId)
-      flash('ok', 'Certificat atașat la situația de plată ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, 'Certificat atașat la situația de plată ✓', 'financiar', 'certificat_plata', 'situatie_plata', slId, slId)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
@@ -521,27 +774,61 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         document_path: destPath, created_by: profile.id,
       }).select('id').single()
       if (insErr) throw new Error('Insert achiziție UPA: ' + insErr.message)
-      await finalizeInbox(row, 'upa', 'factura', 'furnizor', furnizorId, created.id)
-      flash('ok', `Factura ${dd.numar || ''} — ${valoare.toLocaleString('ro-RO')} lei scăzută din plafonul lunii ✓`)
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, `Factura ${dd.numar || ''} — ${valoare.toLocaleString('ro-RO')} lei scăzută din plafonul lunii ✓`, 'upa', 'factura', 'furnizor', furnizorId, created.id)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
-  // Marchează rândul inbox confirmat + curăță staging
+  // UPDATE pe rândul din coadă + starea lui după (stareInchidere, cu statusul pus). NU aruncă.
+  // r4: 0 rânduri fără eroare → citesc rândul DIRECT (după id), nu din coada modulului: un rând mutat
+  // între timp în alt modul lipsește din coadă, dar e tot deschis. J2: la fel după o eroare care NU e un
+  // refuz sigur al serverului (rețea / timeout / 5xx — UPDATE-ul poate fi intrat, doar răspunsul s-a pierdut).
+  // F2 (r6): UPDATE-ul atinge rândul doar cât e încă în coadă (STATUS_COADA) — unul închis între timp din alt tab / de
+  // alt om nu se rescrie (alt angajat / document legat, confirmat → respins); citirea compară și confirmat_ref_id.
+  async function actualizeazaRand(row, upd) {
+    let res, citire = null
+    try { res = await supabase.from('ai_documente_inbox').update(upd).eq('id', row.id).in('status', STATUS_COADA).select('id') }
+    catch (e) { res = { error:e } }
+    if (citireNecesara(res)) citire = await interogheaza(supabase.from('ai_documente_inbox').select('id,status,confirmat_ref_id').eq('id', row.id).maybeSingle())
+    return { stare:stareInchidere(res, citire, upd.status, upd.confirmat_ref_id), eroare:(res && res.error) || null }
+  }
+
+  // Marchează rândul inbox confirmat + curăță staging. Întoarce { stare:'inchis' | 'altcineva' | 'deschis' | 'necunoscut',
+  // stagingRamas }. 21.10: eroarea update-ului nu se mai înghite (documentul intrase, dar rândul rămânea
+  // în coadă fără ca omul să afle). NU aruncă — documentul țintă e deja salvat.
   async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
-    await supabase.from('ai_documente_inbox').update({
+    const { stare } = await actualizeazaRand(row, {
       status:'confirmat', modul_tinta:modulTinta, tip_document:tip,
       entitate_tip:entTip, entitate_id:entId,
       confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
-    }).eq('id', row.id)
-    await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
+    })
+    // staging-ul se șterge ORICUM (ca pe main): fără el, încă un «✓ Confirmă» pică la descărcare, nu salvează a
+    // doua oară. NH-1: storage-js nu aruncă ({ error } / data = []) → dacă nu s-a șters sigur, mesajul o spune —
+    // în afara HR; în HR proveniența rândului (sursa_inbox_id, unică) oprește oricum o nouă confirmare (R1, r6: fără
+    // avertisment fals la „Închide").
+    const rm = await interogheaza(supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]))
+    return { stare, stagingRamas:avertizareStaging(modul, rm) }
   }
 
+  // Documentul țintă e salvat → închid rândul din coadă și reîmprospătez ORICUM: și când
+  // închiderea pică, ecranul părinte (lista proiectului, plafonul UPA, situația de plată,
+  // dosarul angajatului) trebuie să vadă documentul nou. Întoarce true doar pe rând sigur închis.
+  async function inchideRandSiReimprospateaza(row, msgOk, ...argsFinalize) {
+    const { stare, stagingRamas } = await finalizeInbox(row, ...argsFinalize)
+    await loadQueue()
+    const m = mesajInchidere(stare, msgOk, { stagingRamas })
+    flash(m.tip, m.msg, m.tip === 'ok' ? 3500 : 12000)
+    onConfirmed && onConfirmed()
+    return stare === 'inchis'
+  }
+
+  // RB2 / NH-2: e și ieșirea după o închidere eșuată (documentul deja salvat) → text neutru, iar
+  // rezultatul se verifică (o cauză care persistă — ex. UPDATE refuzat — nu mai afișează „Respins.").
   async function handleReject(row) {
-    if (!confirm('Respingi documentul „' + row.fisier_nume + '"? Fișierul rămâne pentru audit, dar nu intră în sistem.')) return
+    if (!confirm(textConfirmareRespingere(row.fisier_nume))) return
     setBusyId(row.id)
-    await supabase.from('ai_documente_inbox').update({ status:'respins', respins_motiv:'respins manual', confirmat_de:profile.id, confirmat_la:new Date().toISOString() }).eq('id', row.id)
-    setBusyId(null); flash('ok', 'Respins.'); loadQueue()
+    const { stare, eroare } = await actualizeazaRand(row, { status:'respins', respins_motiv:'respins manual', confirmat_de:profile.id, confirmat_la:new Date().toISOString() })
+    const m = mesajRespingere(stare, eroare)
+    setBusyId(null); flash(m.tip, m.msg, m.tip === 'ok' ? 3500 : 8000); loadQueue()
   }
 
   async function preview(row) {
@@ -550,6 +837,22 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   }
 
   function patch(id, key, val) { setQueue(q => q.map(r => r.id === id ? { ...r, [key]: val } : r)) }
+
+  // HR: starea rândului față de dosarul angajatului ales (null în afara HR / fără angajat)
+  //   'verific' | 'eroare' (căutarea a picat) | 'liber' | 'acelasi' | 'acelasi_inactiv' | 'alt_continut'
+  function stareDublura(row) {
+    if (modul !== 'hr') return null
+    const emp = entitateAleasa(row)
+    if (!emp || !row.fisier_nume) return null
+    const st = dosar[cheieDosar(emp, row.fisier_nume)]
+    if (!st) return { stare:'verific' }
+    if (st.err) return { stare:'eroare', motiv:st.motiv || 'eroare' }
+    const a = analizaDublura({ row, docs:st.docs, angajatId:emp, tipuriFK, tipAI:row._editTip ?? row.tip_document })
+    return a.tip ? { stare:a.tip, ...a } : { stare:'liber' }
+  }
+
+  const numeTip = cod => (tipuriFK.find(t => t.cod === cod) || {}).denumire || TIP_LABEL[cod] || cod || '—'
+  const fmtValCamp = c => c.camp.startsWith('data_') ? fmtD(c.val + 'T00:00:00') : c.val
 
   if (!open) return null
 
@@ -634,6 +937,40 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                 const potConfirma = cfg.activ && (row.modul_tinta === modul || (modul === 'executie' && row.modul_tinta == null))
                 const entMatch = entitati.find(e => e.id === (entitateAleasa(row)))
                 const dd = row.payload_ai?.date_document
+                const dub = stareDublura(row)   // doar HR; null în rest
+                const ocupat = busyId === row.id
+                // r1/r2: același fișier există doar ca document INACTIV (istoric) → tot „deja în
+                // dosar", dar doar închidere: fără completare și fără o copie nouă (varianta A).
+                const dubAcelasi = dub?.stare === 'acelasi' || dub?.stare === 'acelasi_inactiv'
+                const dubInactiv = dub?.stare === 'acelasi_inactiv'
+                // J1: documentul a fost salvat deja din acest rând (sursa_inbox_id) — închiderea a picat
+                const descDub = dub?.dinRand ? `salvat deja din acest rând (#${dub.doc.id})` : 'același fișier (nume + mărime)'
+                const culDub = dubInactiv ? G.yellow : G.blue
+                const badgeDosar = dubAcelasi && (
+                  <span style={{ ...chip, background:culDub + '22', color:culDub, border:`1px solid ${culDub}55` }}>
+                    {dubInactiv ? `📁 în dosar ca INACTIV${dub.dinDrive ? ' · Drive' : ''}` : `📁 deja în dosar${dub.dinDrive ? ' (Drive)' : ''}`}
+                  </span>
+                )
+                // „Închide" e acțiunea principală când nu am ce completa (inactiv, tip diferit, câmpuri pline, rând eroare)
+                const dubCompletez = dub?.stare === 'acelasi' && !dub.tipDiferit && dub.campuri.length > 0
+                const btnInchide = dubAcelasi && (
+                  <button onClick={() => inchideDublura(row, false, dub.stare)} disabled={ocupat}
+                    style={dubCompletez
+                      ? { ...btnS, color:culDub, borderColor:culDub + '55', opacity: ocupat ? 0.5 : 1 }
+                      : { padding:'8px 18px', background:culDub, color:G.bg, border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
+                    {ocupat && !dubCompletez ? '⏳…' : 'Închide (e deja în dosar)'}
+                  </button>
+                )
+                // starea verificării dosarului — și pe rândurile „eroare" (r2: o căutare picată nu se ascunde)
+                const infoVerificare = dub?.stare === 'verific' ? (
+                  <div style={{ marginBottom:8, fontSize:11, color:G.dim }}>⏳ verific dosarul angajatului…</div>
+                ) : dub?.stare === 'eroare' ? (
+                  <div style={{ marginBottom:10, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:11.5, color:G.yellow }}>
+                    {/* 20261103a: coloana sursa_inbox_id lipsă = blocant, spus ca atare (nu „verific din nou") */}
+                    <span>⚠️ {dub.motiv === 'migrare' ? MESAJ_MIGRARE_SURSA : <>{dub.motiv === 'trunchiat' ? 'dosarul are prea multe documente cu acest nume ca să le verific pe toate' : 'nu am putut verifica dosarul'} — {eroare ? 'nu știu dacă fișierul e deja acolo; reverifică înainte să-l scoți din coadă.' : 'la confirmare verific din nou.'}</>}</span>
+                    <button onClick={() => verificaDosar([row])} style={{ ...btnS, padding:'3px 10px', fontSize:11.5, color:G.yellow, borderColor:G.yellow + '55' }}>↻ reverifică</button>
+                  </div>
+                ) : null
                 return (
                   <div key={row.id} style={{ background:G.card, border:`1px solid ${eroare ? G.red + '66' : G.border}`, borderRadius:12, padding:14 }}>
                     <div style={{ display:'flex', alignItems:'flex-start', gap:10, marginBottom:10 }}>
@@ -651,8 +988,19 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                         <div style={{ fontSize:12.5, color:G.red, background:G.red + '11', padding:'8px 12px', borderRadius:8, marginBottom:10 }}>
                           ⚠ AI nu a putut citi documentul: {row.ai_eroare || 'eroare necunoscută'}. Poți încerca din nou sau adaugă-l manual.
                         </div>
-                        <div style={{ display:'flex', justifyContent:'flex-end' }}>
+                        {/* 21.10: AI n-a citit nimic, dar același fișier e deja în dosar → doar închidere */}
+                        {infoVerificare}
+                        {dubAcelasi && (
+                          <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12, color:G.muted, marginBottom:10 }}>
+                            {badgeDosar}
+                            <span>{dub.dinRand ? `Documentul salvat din acest rând (#${dub.doc.id})` : 'Același fișier (nume + mărime)'} e deja la {entMatch?.label || 'acest angajat'}{dubInactiv
+                              ? <>, ca document <b style={{ color:G.yellow }}>INACTIV (istoric, #{dub.doc.id})</b> — nu mai trebuie adăugat.</>
+                              : ' — nu mai trebuie adăugat.'}</span>
+                          </div>
+                        )}
+                        <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
                           <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Scoate din coadă</button>
+                          {btnInchide}
                         </div>
                       </>
                     ) : (
@@ -697,7 +1045,12 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                             <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
                               <label style={{ flex:'1 1 260px', fontSize:12 }}>
                                 <span style={{ color:G.muted, display:'block', marginBottom:4 }}>{cfg.entitateLabel}</span>
-                                <select value={entitateAleasa(row) ?? ''} onChange={e => patch(row.id, '_editEntitate', e.target.value ? Number(e.target.value) : null)} style={sel}>
+                                <select value={entitateAleasa(row) ?? ''} onChange={e => {
+                                  const v = e.target.value ? Number(e.target.value) : null
+                                  patch(row.id, '_editEntitate', v)
+                                  // HR: alt angajat → reverific dosarul LUI (dublura ține de angajat)
+                                  if (modul === 'hr' && v) verificaDosar([{ ...row, _editEntitate: v }])
+                                }} style={sel}>
                                   <option value="">— alege {cfg.entitateLabel.toLowerCase()} —</option>
                                   {entitati.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
                                 </select>
@@ -764,8 +1117,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               </div>
                             )}
 
-                            {/* Date extrase — document (hr/logistica) */}
-                            {modul !== 'executie' && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (
+                            {/* Date extrase — document (hr/logistica). La dublura HR „deja în dosar" (activ
+                                sau inactiv) nu se mai salvează un document nou → panoul de mai jos spune ce se completează. */}
+                            {modul !== 'executie' && !dubAcelasi && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (
                               <div style={{ marginBottom:12, padding:'10px 12px', background:accent + '10', border:`1px solid ${accent}33`, borderRadius:8, fontSize:11.5, color:G.text }}>
                                 <div style={{ fontSize:12, fontWeight:700, color:accent, marginBottom:5 }}>📄 Date extrase din document</div>
                                 <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 14px' }}>
@@ -778,12 +1132,92 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               </div>
                             )}
 
-                            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                            {/* HR 21.10 (varianta A): starea față de dosarul angajatului */}
+                            {infoVerificare}
+                            {dub?.stare === 'acelasi' && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:G.blue + '10', border:`1px solid ${G.blue}44`, borderRadius:8, fontSize:12, color:G.text, lineHeight:1.55 }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6 }}>
+                                  {badgeDosar}
+                                  <span style={{ fontSize:11.5, color:G.muted }}>
+                                    {descDub} · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
+                                  </span>
+                                </div>
+                                {dub.nrIdentice > 1 && (
+                                  <div style={{ fontSize:11.5, color:G.yellow, marginBottom:4 }}>⚠️ {dub.nrIdentice} copii identice în dosar{dub.nrInactive ? ` (${dub.nrInactive} inactive)` : ''} — leg de {dub.dinRand ? 'cea salvată din acest rând' : 'cea mai veche activă'} (#{dub.doc.id}).</div>
+                                )}
+                                {dub.dinRand ? (
+                                  <div style={{ color:G.muted }}>Documentul a intrat deja în dosar din acest rând, dar rândul nu s-a închis — doar îl închid, legat de el (nu-l mai adaug a doua oară).</div>
+                                ) : dub.tipDiferit ? (
+                                  <div style={{ color:G.yellow }}>⚠️ tip diferit (dosar: {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`} · AI: {numeTip(row._editTip ?? row.tip_document)}) — nu completez câmpurile</div>
+                                ) : dub.campuri.length ? (
+                                  <div>
+                                    <span style={{ color:G.muted }}>Completez în dosar doar câmpurile goale: </span>
+                                    {dub.campuri.map(c => <span key={c.camp} style={{ marginRight:12 }}>{c.eticheta}: <b>{fmtValCamp(c)}</b></span>)}
+                                  </div>
+                                ) : (
+                                  <div style={{ color:G.dim }}>Nimic de completat — câmpurile din dosar sunt deja puse sau AI-ul n-a citit valori valide.</div>
+                                )}
+                                {/* HR-1: alegerea „fără expirare" din dosar (sau tipul fără expirare) nu se calcă */}
+                                {dub.expirareOmisa && (
+                                  <div style={{ color:G.dim, marginTop:4 }}>
+                                    {dub.expirareOmisa.motiv === 'dosar' ? 'În dosar e marcat „fără expirare"' : `Tipul «${dub.tipDosar?.denumire || 'din dosar'}» nu are expirare`}
+                                    {` — nu completez data expirării (AI a citit ${fmtD(dub.expirareOmisa.val + 'T00:00:00')}).`}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {dubInactiv && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:G.yellow + '10', border:`1px solid ${G.yellow}44`, borderRadius:8, fontSize:12, color:G.text, lineHeight:1.55 }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6 }}>
+                                  {badgeDosar}
+                                  <span style={{ fontSize:11.5, color:G.muted }}>
+                                    {descDub} · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
+                                  </span>
+                                </div>
+                                <div style={{ color:G.yellow }}>
+                                  ⚠️ Documentul din dosar (#{dub.doc.id}{dub.nrIdentice > 1 ? `, ${dub.dinRand ? 'cel salvat din acest rând' : 'cel mai vechi'} din ${dub.nrIdentice} copii identice, toate inactive` : ''}) e <b>INACTIV (istoric)</b> — nu apare la documentele active; nu completez nimic în el și nu adaug altă copie.
+                                </div>
+                                <div style={{ color:G.muted, marginTop:4 }}>
+                                  Închide rândul; dacă trebuie să fie din nou activ, îl reactivezi din dosarul angajatului (editează documentul → „Document ACTIV").
+                                  {dub.nrTotal > dub.nrIdentice ? ` (Mai există ${dub.nrTotal - dub.nrIdentice} cu același nume, dar alt fișier.)` : ''}
+                                </div>
+                              </div>
+                            )}
+                            {dub?.stare === 'alt_continut' && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:G.yellow + '12', border:`1px solid ${G.yellow}44`, borderRadius:8, fontSize:12, color:G.yellow, lineHeight:1.5 }}>
+                                {texteAltContinut(dub, row.fisier_nume).panou}
+                                <span style={{ color:G.muted }}> Dacă e un document nou, adaugă-l; dacă e același, respinge-l.</span>
+                              </div>
+                            )}
+
+                            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', flexWrap:'wrap' }}>
                               <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Respinge</button>
-                              <button onClick={() => handleConfirm(row)} disabled={busyId === row.id}
-                                style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: busyId === row.id ? 0.5 : 1 }}>
-                                {busyId === row.id ? '⏳…' : `✓ Confirmă → ${meta.label}`}
-                              </button>
+                              {dubAcelasi ? (
+                                <>
+                                  {btnInchide}
+                                  {dubCompletez && (
+                                    <button onClick={() => inchideDublura(row, true, 'acelasi')} disabled={ocupat}
+                                      style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
+                                      {ocupat ? '⏳…' : '✓ Completează și închide'}
+                                    </button>
+                                  )}
+                                </>
+                              ) : dub?.stare === 'alt_continut' ? (
+                                <button onClick={() => {
+                                  // r2: textul confirmării spune „altă mărime" doar când mărimile s-au comparat
+                                  const t = texteAltContinut(dub, row.fisier_nume)
+                                  if (!window.confirm(t.confirmare)) return
+                                  handleConfirm(row, { faraGardaNume:true, marimiComparate:!t.necunoscut })
+                                }} disabled={ocupat}
+                                  style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
+                                  {ocupat ? '⏳…' : 'Adaugă ca document nou'}
+                                </button>
+                              ) : (
+                                <button onClick={() => handleConfirm(row)} disabled={busyId === row.id}
+                                  style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: busyId === row.id ? 0.5 : 1 }}>
+                                  {busyId === row.id ? '⏳…' : `✓ Confirmă → ${meta.label}`}
+                                </button>
+                              )}
                             </div>
                           </>
                         ) : (
@@ -803,7 +1237,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         </div>
 
         {toast && (
-          <div style={{ padding:'10px 20px', background: toast.tip === 'ok' ? G.green + '18' : G.red + '18', color: toast.tip === 'ok' ? G.green : G.red, fontSize:13, fontWeight:600, borderTop:`1px solid ${G.border}` }}>
+          <div style={{ padding:'10px 20px', background:(toast.tip === 'ok' ? G.green : toast.tip === 'warn' ? G.yellow : G.red) + '18', color: toast.tip === 'ok' ? G.green : toast.tip === 'warn' ? G.yellow : G.red, fontSize:13, fontWeight:600, borderTop:`1px solid ${G.border}` }}>
             {toast.msg}
           </div>
         )}

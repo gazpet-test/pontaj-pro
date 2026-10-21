@@ -24,6 +24,7 @@ import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
 import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
 import IzoStocTeava from './IzoStocTeava.jsx'
+import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri, reimprospateaza, actualizeazaRandInPachet } from './lib/izoRegistru.js'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -612,16 +613,104 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   const [aprobariHistory, setAprobariHistory] = useState([])
 
   const validationAborters = useRef({})
+  // Registrul de țeavă (doar citire): bucățile transportate pe tronsonul pachetului (stare pe_tronson). RLS-ul registrului
+  // le arată doar owner-ului și celor atribuiți proiectului; pentru ceilalți lista e goală și seria rămâne text liber.
+  const [registru, setRegistru] = useState([])
+  // cheie pe tip (țeavă: serie; curbă: serie + șarjă + unghi) → [{ id, cod }] rânduri de pachet din proiect;
+  // null = nu s-a putut verifica (eroare, nu „nimic folosit”)
+  const [folosite, setFolosite] = useState({})
+  const cerereRegistru = useRef(0) // cheia cererii curente: răspunsurile întârziate (alt pachet) se ignoră
+  // generația încărcării pachetului (loadAll / refetch-uri): un răspuns pentru alt pachet, sosit târziu, nu mai e aplicat
+  const paznicPachet = useRef(paznicCereri()).current
+  // pachetul CURENT (refetch-urile pornite din closure-ul unei operații vechi reîncarcă acest pachet, nu pe cel vechi)
+  const pachetIdRef = useRef(pachetId)
+  pachetIdRef.current = pachetId
+
+  // proiectul PACHETULUI încărcat (nu prop-ul paginii, care în /izometrie?pachet=… poate fi alt proiect)
+  const proiectPachet = pachet?.proiect_id ?? tronson?.proiect_id ?? null
 
   useEffect(() => { loadAll() }, [pachetId]) // eslint-disable-line
+  useEffect(() => { loadRegistru() }, [pachet?.id, pachet?.tronson_id, proiectPachet]) // eslint-disable-line
+
+  async function loadRegistru() {
+    const cheie = ++cerereRegistru.current
+    setRegistru([]); setFolosite({})
+    if (!pachet?.tronson_id || !proiectPachet) return
+    const { data, error } = await citesteTot(() => supabase
+      .from('magazie_bucati')
+      .select('id, serie, sarja, lungime_mm, perete_mm, diametru_mm, unghi_curba, tip_cod, tronson_id, stare', { count: 'exact' })
+      .eq('tronson_id', pachet.tronson_id)
+      .eq('stare', 'pe_tronson')
+      .in('tip_cod', ['teava', 'curba'])
+      .order('serie').order('id'))
+    if (cheie !== cerereRegistru.current) return
+    if (error) { onWarn && onWarn('Registrul de țeavă nu s-a putut citi: ' + error.message); return }
+    if (!data.length) return   // fără atribuire (RLS) sau fără bucăți pe tronson: seria rămâne text liber
+    setRegistru(data)
+    await loadFolosite(cheie)
+  }
+
+  async function loadFolosite(cheie = cerereRegistru.current) {
+    const { data, error } = await citesteTot(() => supabase
+      .from('executie_tevi')
+      .select('id, tip_rand, serie_unica, sarja, unghi_curba, pachet:executie_pachete_lansare!inner(cod_document_full, proiect_id)', { count: 'exact' })
+      .eq('pachet.proiect_id', proiectPachet)
+      .not('serie_unica', 'is', null)
+      .order('id'))
+    if (cheie !== cerereRegistru.current) return
+    setFolosite(error ? null : indexFolosite(data))
+  }
+
+  // Alegerea unei bucăți din registru: completează seria, șarja, lungimea și dimensiunea (perete; la curbe și unghiul).
+  // Scrie DOAR în executie_tevi, ca editarea manuală; nu leagă bucata de registru (legătura vine la E4a).
+  async function alegeDinRegistru(rowId, b) {
+    const row = tevi.find(r => r.id === rowId)
+    if (!row) return
+    // apărare (Copilot / Jak #824 P1): pachetul afișat e cel cerut, rândul îi aparține, iar bucata e de pe tronsonul lui,
+    // de tipul rândului; altfel nu scriu nimic și reîncarc
+    if (pachet?.id !== pachetId || row.pachet_id !== pachet.id) {
+      onError('Pachetul s-a schimbat între timp — reîncarc')
+      cancelEdit()
+      loadAll()
+      return
+    }
+    if (b.tronson_id !== pachet?.tronson_id || b.stare !== 'pe_tronson' || b.tip_cod !== row.tip_rand) {
+      onError('Bucata aleasă nu e pe tronsonul acestui pachet — lista se reîncarcă')
+      cancelEdit()
+      loadRegistru()
+      return
+    }
+    const patch = patchDinRegistru(b)   // la curbe, unghi_curba vine direct din registru (22.5° rămâne 22.5°)
+    const original = { ...row }
+    const gen = paznicPachet.actuala(), cheieReg = cerereRegistru.current
+    setTevi(prev => prev.map(r => r.id === rowId ? { ...r, ...patch } : r))
+    cancelEdit()
+    setSaving(true)
+    // CAS pe pachet: scrie doar dacă rândul e încă în pachetul afișat (alt utilizator l-ar fi putut muta)
+    const rez = await actualizeazaRandInPachet(supabase, rowId, pachet.id, patch)
+    setSaving(false)
+    if (!rez.ok) {
+      if (paznicPachet.curenta(gen)) setTevi(prev => prev.map(r => r.id === rowId ? original : r))
+      onError(rez.mutat ? 'Rândul a fost mutat în alt pachet între timp — nu am scris nimic; reîncarc' : `Eroare salvare: ${rez.error.message}`)
+      if (rez.mutat && paznicPachet.curenta(gen)) loadAll()
+      return
+    }
+    if (!paznicPachet.curenta(gen)) return   // între timp s-a deschis alt pachet: nu reîmprospătez nimic pe vechiul
+    await Promise.all([refetchPachet(), refetchTevi(), loadFolosite(cheieReg)])
+    debouncedValidate(rowId, 'serie_unica', b.serie)
+    onSuccess(`Din registru: ${b.serie}`)
+  }
 
   async function loadAll() {
+    const gen = paznicPachet.porneste()
     setLoading(true)
+    cerereRegistru.current++; setRegistru([]); setFolosite({})   // alt pachet: lista veche dispare imediat, răspunsurile ei se ignoră
     // Pachet + țevi în paralel
     const [pRes, tRes] = await Promise.all([
       supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single(),
       supabase.from('executie_tevi').select('*').eq('pachet_id', pachetId).order('poz_in_pachet'),
     ])
+    if (!paznicPachet.curenta(gen)) return   // între timp s-a deschis alt pachet: răspunsul ăsta nu se mai aplică
     if (pRes.error) { onError('Eroare load pachet: ' + pRes.error.message); setLoading(false); return }
     if (tRes.error) { onError('Eroare load țevi: ' + tRes.error.message); setLoading(false); return }
     setPachet(pRes.data)
@@ -656,14 +745,16 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   // ───────── Refetch pachet (după save țeavă, trigger recalculează totaluri) ─────────
   async function refetchPachet() {
-    const { data } = await supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single()
-    if (data) { setPachet(data); onPachetChanged && onPachetChanged() }
+    await reimprospateaza(pachetIdRef, paznicPachet,
+      async id => (await supabase.from('executie_pachete_lansare').select('*').eq('id', id).single()).data,
+      data => { if (data) { setPachet(data); onPachetChanged && onPachetChanged() } })
   }
 
   // ───────── Refetch toate țevile (după save, pentru poz_km_m corect din BD) ─────────
   async function refetchTevi() {
-    const { data } = await supabase.from('executie_tevi').select('*').eq('pachet_id', pachetId).order('poz_in_pachet')
-    if (data) setTevi(data)
+    await reimprospateaza(pachetIdRef, paznicPachet,
+      async id => (await supabase.from('executie_tevi').select('*').eq('pachet_id', id).order('poz_in_pachet')).data,
+      data => { if (data) setTevi(data) })
   }
 
   // ───────── Validare debounced ─────────
@@ -860,6 +951,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     if (field === 'serie_unica' || field === 'sudura_cod') {
       debouncedValidate(rowId, field, newValue)
     }
+    if (field === 'serie_unica' && registru.length) loadFolosite()
 
     // Nav la următoarea celulă dacă cerut
     if (opts.nav === 'tab' || opts.nav === 'enter') {
@@ -1482,6 +1574,10 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
                     isLast={idx === teviWithPozKm.length - 1}
                     swapping={swapping}
                     dirty={dirty.has(row.id)}
+                    registru={registru.length && (row.tip_rand === 'teava' || row.tip_rand === 'curba') ? registru.filter(b => b.tip_cod === row.tip_rand) : null}
+                    folosite={folosite}
+                    tronsonCod={tronson?.cod}
+                    onPick={(b) => alegeDinRegistru(row.id, b)}
                   />
                 ))}
               </tbody>
@@ -1902,7 +1998,7 @@ function UploadAprobatModal({ pachet, tronson, uploading, history, onUpload, onC
 // EDITOR ROW — un rând din tabel cu render condițional per coloană
 // ===========================================================================
 
-function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping, dirty }) {
+function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping, dirty, registru, folosite, tronsonCod, onPick }) {
   const rowBg = row.sudura_sant_pending ? G.yellowDim+'44' :
                 row.pachet_sudura_sant_id ? G.purpleDim+'44' :
                 dirty ? G.yellowDim+'22' : 'transparent'
@@ -1990,6 +2086,10 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
           onPaste={onPaste}
           validation={validation}
           onValidate={(val) => col.validate && onValidate(col.key, val)}
+          registru={col.key === 'serie_unica' ? registru : null}
+          folosite={folosite}
+          tronsonCod={tronsonCod}
+          onPick={onPick}
           selected={selected}
           onToggleSelect={onToggleSelect}
           onDelete={onDelete}
@@ -2009,7 +2109,7 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
 // CELL — celula individuală cu render condițional editare
 // ===========================================================================
 
-function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping }) {
+function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping, registru, folosite, tronsonCod, onPick }) {
   const vKey = `${row.id}:${col.key}`
   const vState = validation[vKey]
   const allowed = EDITABLE_FIELDS[row.tip_rand]
@@ -2160,6 +2260,9 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
             textAlign: col.align || 'left',
           }}
         />
+        {registru && registru.length > 0 && (
+          <RegistruSugestii registru={registru} folosite={folosite} draft={draft} rowId={row.id} tronsonCod={tronsonCod} onPick={onPick} />
+        )}
         {vState && vState.ok === false && (
           <div style={{
             position:'absolute', top:'100%', left:0, marginTop: 2, zIndex: 20,
@@ -2200,6 +2303,59 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
         <span style={{ position:'absolute', top: 2, right: 2, color: G.red, fontSize: 11 }}>⚠</span>
       )}
     </td>
+  )
+}
+
+// ===========================================================================
+// SUGESTII DIN REGISTRU — bucățile pe_tronson ale tronsonului pachetului (doar citire)
+// ===========================================================================
+
+function RegistruSugestii({ registru, folosite, draft, rowId, tronsonCod, onPick }) {
+  const lista = sugestiiRegistru(registru, folosite, draft, rowId)
+  const vizibile = lista.slice(0, 40)
+  return (
+    <div style={{
+      position:'absolute', top:'100%', left:0, marginTop: 2, zIndex: 30, width: 440, maxHeight: 280, overflowY:'auto',
+      background: G.card, border:`1px solid ${G.purple}`, borderRadius: 6, boxShadow:'0 6px 18px rgba(0,0,0,.45)',
+    }}>
+      <div style={{ padding:'5px 8px', fontSize: 10, color: G.muted, borderBottom:`1px solid ${G.border2}`, position:'sticky', top: 0, background: G.card }}>
+        Din registru · pe tronsonul {tronsonCod || '—'} · {lista.length} {lista.length === 1 ? 'bucată' : 'bucăți'}
+        {lista.length > vizibile.length ? ` (primele ${vizibile.length} — scrie din serie ca să restrângi)` : ''}
+        {folosite === null && (
+          <div style={{ color: G.orange, marginTop: 2 }}>⚠ Nu am putut verifica seriile folosite deja în alte pachete — verifică manual</div>
+        )}
+      </div>
+      {vizibile.length === 0 && (
+        <div style={{ padding: 8, fontSize: 11, color: G.dim, fontStyle:'italic' }}>Nicio bucată pe tronson cu seria asta</div>
+      )}
+      {vizibile.map(({ b, alte }) => (
+        <div
+          key={b.id}
+          onMouseDown={e => { e.preventDefault(); onPick(b) }}
+          title={alte.length ? `Deja folosită în: ${alte.map(a => a.cod || '?').join(', ')}` : 'Completează rândul din registru'}
+          style={{
+            padding:'5px 8px', cursor:'pointer', fontSize: 11, display:'flex', gap: 8, alignItems:'baseline',
+            borderBottom:`1px solid ${G.border2}`, opacity: alte.length ? 0.55 : 1,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = G.purple + '22' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+        >
+          <span style={{ fontFamily:'monospace', fontWeight: 600, color: G.text, minWidth: 96 }}>{b.serie}</span>
+          <span style={{ fontFamily:'monospace', color: G.muted }}>{b.sarja || '—'}</span>
+          <span style={{ color: G.muted }}>
+            {b.tip_cod === 'curba'
+              ? (b.unghi_curba != null ? `${Number(b.unghi_curba)}°` : '?°')
+              : (b.lungime_mm != null ? `${(Number(b.lungime_mm) / 1000).toFixed(2)} m` : '? m')}
+            {b.perete_mm != null ? ` · ${Number(b.perete_mm)} mm` : ''}
+          </span>
+          {alte.length > 0 && (
+            <span style={{ marginLeft:'auto', color: G.orange, fontSize: 10, whiteSpace:'nowrap' }}>
+              deja în {alte[0].cod || '?'}{alte.length > 1 ? ` +${alte.length - 1}` : ''}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
   )
 }
 
