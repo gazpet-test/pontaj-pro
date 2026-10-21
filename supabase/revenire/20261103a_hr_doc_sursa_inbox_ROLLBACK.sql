@@ -6,6 +6,12 @@
 -- ⚠ ARTEFACT DE TEST / REVENIRE EXCEPȚIONALĂ, FĂRĂ GO DE EXECUȚIE (supabase/revenire/README.md). Doar la cererea lui Răzvan.
 --   REFUZĂ dacă vreun document are sursa_inbox_id (nu se scoate o coloană cu date: proveniența s-ar pierde, iar un rând din
 --   coadă ar putea salva din nou același document). Datele se tratează întâi, printr-o decizie separată (nu de aici).
+--   ATENȚIE: golirea coloanei NU se poate face cu un simplu UPDATE … SET sursa_inbox_id = NULL — trg_hr_docp_sursa_inbox_imutabil
+--   îl refuză intenționat cu 23514, pentru ORICINE (și postgres / service_role). Singurele căi sunt, ca pas separat și aprobat
+--   de Răzvan (preview → da → apply, cu array_agg(id) pentru refacere): (a) dezactivarea trigger-ului în aceeași tranzacție
+--   cu golirea (ALTER TABLE public.hr_documente_personale DISABLE TRIGGER trg_hr_docp_sursa_inbox_imutabil; UPDATE …;
+--   ENABLE TRIGGER …) sau session_replication_role = replica (oprește TOATE trigger-ele, și trg_hr_docp_modificat_la) — se
+--   pierde doar proveniența; ori (b) ștergerea documentelor respective — se pierd documentele, nu doar proveniența.
 --   ÎNAINTE de revenire se revine și UI-ul: CitesteOricePanel de pe branch-ul hr/citeste-orice-dubluri cere coloana
 --   (fără ea, salvarea din «Citește orice» HR se oprește cu „migrarea pentru sursa_inbox_id nu e aplicată”).
 --

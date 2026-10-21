@@ -106,9 +106,13 @@ BEGIN
     'err:23514', 'T9c postgres → 23514');
 
   -- T10 editările normale pe un document cu proveniență trec: observații, nr., arhivare, ștergere logică, restaurare (Coș),
-  --     clientul care retrimite rândul întreg (sursa_inbox_id = aceeași valoare); trg_hr_docp_modificat_la merge în continuare
+  --     clientul care retrimite rândul întreg (sursa_inbox_id = aceeași valoare); trg_hr_docp_modificat_la merge în continuare.
+  --     INSERT-ul pune modificat_la explicit în trecut (2026-01-01; INSERT-ul nu trece prin trigger-ele BEFORE UPDATE): cu
+  --     default-ul now() verificarea „> 2026-01-02” ar fi adevărată și fără UPDATE-uri (now() e fix în tranzacție), deci nu
+  --     ar prinde un trigger de proveniență care repune OLD.modificat_la; acum doar trg_hr_docp_modificat_la o face adevărată
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr,
-    ins || '(7, 1, ''7/aidoc_a.pdf'', ''CI.pdf'', 1234, true, ''CI'', ''' || hr || ''', 501);;'
+    'INSERT INTO public.hr_documente_personale (employee_id, tip_id, fisier_path, fisier_nume, fisier_size_bytes, activ, observatii, uploadat_de, modificat_la, sursa_inbox_id) VALUES '
+    || '(7, 1, ''7/aidoc_a.pdf'', ''CI.pdf'', 1234, true, ''CI'', ''' || hr || ''', ''2026-01-01 00:00+00'', 501);;'
     || 'UPDATE public.hr_documente_personale SET observatii = ''notă HR'', numar_document = ''RX 1'' WHERE sursa_inbox_id = 501;;'
     || 'UPDATE public.hr_documente_personale SET activ = false WHERE sursa_inbox_id = 501;;'
     || 'UPDATE public.hr_documente_personale SET deleted_at = now(), deleted_by = ''' || hr || ''' WHERE sursa_inbox_id = 501;;'
