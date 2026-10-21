@@ -7,6 +7,14 @@
 | 1 | [Jak] Comparația JSON poate refuza bucata corectă (`radacina_id` rămâne; cheile nu sunt aceeași mulțime) | §3.2, §7.2 | o singură **proiecție explicită** `C` (lista constantă de coloane, cu NULL-urile incluse), aplicată identic pe ambele părți; `radacina_id` exclus din ambele și verificat separat `NEW.radacina_id = NEW.id`; INSERT-ul confirmării scrie TOATE coloanele din `C`, deci nicio valoare implicită nu intră în comparație |
 | 2 | [Jak] Verificarea locației n-are drepturi | §3.5, §4 | `fn_izo_loc_valid` (E2a, DEFINER) pentru depozit ↔ site-ul proiectului; `fn_izo_site_proiect` pentru `locatie_site_id`; `fn_izo_tip_material` pentru `tip_material_id` — toate cu EXECUTE pentru `izo_receptie_writer`, trecute în matrice |
 
+**r5c (21.10.2026)** — Jak pe r5: NO-GO, 1 × P1 (cele 2 P1 din r4 închise); Copilot pe r5: GO.
+- P1: **o singură constantă `C`** determină proiecția, lista coloanelor din INSERT-ul confirmării și GRANT INSERT-ul pe coloane (`C` ∪ {`id`, `uid`, `radacina_id`, `server_ver`}) — §3.2, §3.5, §7.2.
+- P2 Jak, trecute în design:
+  - indexurile `ux_magbuc_ev_doc_*` sunt numite explicit în amprenta E3 (filtrul E2a nu le prinde), cu test de scoatere (§12);
+  - `depozit_id` NOT NULL, verificat explicit (`fn_izo_loc_valid(p, NULL, NULL)` întoarce true; §4);
+  - contradicția despre `off` / reactivare scoasă din §11;
+  - migrarea și revenirea rulate cu `postgres` nesuperuser (branch PG17), cu rândul ADMIN automat al creatorului acceptat, ca la E2a (§3.1).
+
 **r5b (21.10.2026)** — Copilot pe r4: GO, 0 × P1. Cele 4 P2 + 2 P3 devin postcondiții obligatorii pentru cod, în §12.
 
 P2 (Jak r4), trecute în design: SQL-ul exact al celor două indexuri de eveniment (intrarea și PV-ul separat, §2); testul 14 reconciliat cu egalitatea brută a seriei (§10); explicația pentru `off` corectată: E2a refuză `stoc → off` după orice eveniment, deci cazul nu e accesibil prin API (§9.1). Testele din §10 sunt cerințe; rezultatele vin la cod, rulate cu rolurile reale.
@@ -125,7 +133,7 @@ Ambele au nume care intră deja în amprenta porților E2a (`magazie_bucati_izo_
 
 `izo_registru_writer` NU e folosit de E3: fără ALTER pe config / importuri / atribuiri. Drepturile exacte stau în matricea din §3.5.
 
-**Postcondiție pe roluri (r4, P2):** ambele roluri `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`. Membership-urile sunt exact: `postgres` membru în fiecare (SET TRUE, INHERIT FALSE, fără ADMIN), iar rolurile noi nu sunt membre în niciun alt rol. Migrarea verifică în `pg_roles` / `pg_auth_members` și refuză la orice abatere.
+**Postcondiție pe roluri (r4, P2):** ambele roluri `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`. Membership-urile sunt exact: `postgres` membru în fiecare (SET TRUE, INHERIT FALSE, fără ADMIN, dat explicit de migrare), iar rolurile noi nu sunt membre în niciun alt rol. **r5c:** pe Supabase PG16+ `postgres` nu e superuser, deci CREATE ROLE adaugă automat un rând ADMIN al creatorului (ADMIN TRUE, SET / INHERIT FALSE, grantor = superuser-ul de bootstrap, `supabase_admin`). Acel rând e acceptat, exact ca în poarta E2a (`fn_izo_porti_lipsa`, membrii lui `izo_registru_writer`); orice alt rând → refuz. Migrarea verifică în `pg_roles` / `pg_auth_members`. Migrarea și revenirea se rulează pe branch-ul PG17 cu `postgres` nesuperuser înainte de prod.
 
 ### 3.2 Garda: contextul operației, integrată în predicatul de autorizare E2a (r4, punctele 3, 5, 6)
 
@@ -229,7 +237,7 @@ Politicile RLS ale rolurilor noi (nume `izo_doc_*`, deci intră în amprentă): 
 
 | Tabel | GRANT | Politica nouă |
 |---|---|---|
-| `magazie_bucati` | SELECT; INSERT pe coloanele nașterii (lista din §7.2); UPDATE (`stare`, `server_ver`, `updated_at`) — necesar și pentru `FOR UPDATE` la PV / anulare | `magbuc_izo_receptie_sel` (SELECT, `provenienta = 'beneficiar'`), `magbuc_izo_receptie_ins` / `_upd` (`provenienta = 'beneficiar' AND fn_izo_nivel(proiect_id) <> 'off'`) |
+| `magazie_bucati` | SELECT; **INSERT pe `C` ∪ {`id`, `uid`, `radacina_id`, `server_ver`}** (r5c: aceeași constantă ca proiecția și lista din INSERT; și NULL-ul explicit cere drept pe coloană); UPDATE (`stare`, `server_ver`, `updated_at`) — necesar și pentru `FOR UPDATE` la PV / anulare | `magbuc_izo_receptie_sel` (SELECT, `provenienta = 'beneficiar'`), `magbuc_izo_receptie_ins` / `_upd` (`provenienta = 'beneficiar' AND fn_izo_nivel(proiect_id) <> 'off'`) |
 | `magazie_bucati_evenimente` | SELECT, INSERT | `izo_ev_receptie_sel`, `izo_ev_receptie_ins` (`fn_izo_nivel(proiect_id) <> 'off'`) |
 | `magazie_bucati_miscari` | SELECT, INSERT | `izo_mis_receptie_sel`, `izo_mis_receptie_ins` (idem) |
 | `izo_proiect_config`, `izo_importuri`, `izo_atribuiri` | nimic (nivelul se citește prin `fn_izo_nivel`, DEFINER; atribuirea prin helper-ul de lock) | — |
@@ -279,7 +287,7 @@ Politicile RLS ale rolurilor noi (nume `izo_doc_*`, deci intră în amprentă): 
 3. **`fn_izo_blocheaza_locuri(proiect, [depozit], {})`:** proiectul și depozitul `FOR SHARE`.
 4. **`fn_izo_blocheaza_tabele()`** (ACCESS SHARE; TRUNCATE / DDL așteaptă), apoi advisory: **partajat** `(73010, proiect)` la confirmare / PV, **exclusiv** la anulare (ca storno-ul E2a).
 5. **Bucățile documentului** `FOR UPDATE`, ordonate după `id` — doar la PV și anulare (confirmarea le creează).
-6. **Revalidarea, după toate lock-urile, pe starea comisă** (READ COMMITTED, snapshot nou): documentul (stare, versiune, hash recalculat); autorizarea (rezultatul pasului 2); **`fn_izo_nivel(proiect) <> 'off'`** (r4: `stoc` sau `montaj`; același predicat ca politicile RLS și garda E2a, folosit identic peste tot în E3, deci E3 nu se oprește la trecerea pe `montaj`); **locația (r5):** `fn_izo_loc_valid(proiect, depozit, NULL)` (E2a, DEFINER: depozitul există, e activ și e pe site-ul proiectului — aceeași verificare ca importul), apelată DUPĂ `fn_izo_blocheaza_locuri`, care ține rândurile `FOR SHARE`, deci relația citită nu se poate schimba până la commit. Writer-ul nu primește SELECT pe `logistica_depozite` / `executie_proiecte`; existența obiectelor din manifest (§6.1); **porțile** `cardinality(fn_izo_porti_lipsa()) = 0`.
+6. **Revalidarea, după toate lock-urile, pe starea comisă** (READ COMMITTED, snapshot nou): documentul (stare, versiune, hash recalculat); autorizarea (rezultatul pasului 2); **`fn_izo_nivel(proiect) <> 'off'`** (r4: `stoc` sau `montaj`; același predicat ca politicile RLS și garda E2a, folosit identic peste tot în E3, deci E3 nu se oprește la trecerea pe `montaj`); **locația (r5; r5c: `depozit_id IS NOT NULL` verificat explicit înainte, fiindcă `fn_izo_loc_valid(p, NULL, NULL)` întoarce true; coloana e oricum NOT NULL pe antet):** `fn_izo_loc_valid(proiect, depozit, NULL)` (E2a, DEFINER: depozitul există, e activ și e pe site-ul proiectului — aceeași verificare ca importul), apelată DUPĂ `fn_izo_blocheaza_locuri`, care ține rândurile `FOR SHARE`, deci relația citită nu se poate schimba până la commit. Writer-ul nu primește SELECT pe `logistica_depozite` / `executie_proiecte`; existența obiectelor din manifest (§6.1); **porțile** `cardinality(fn_izo_porti_lipsa()) = 0`.
 7. **Toate verificările de business** (§7 / §8 / §9), fără nicio scriere.
 8. **Abia aici:** `fn_izo_receptie_marcheaza(op, doc, proiect, depozit, versiune)`; urmează doar blocul DML static.
 
@@ -357,7 +365,7 @@ ux_magbuc_izo_curba    ON magazie_bucati (serie_canon, sarja, unghi_curba, cod_b
 ### 7.2 Scrierea (după marcaj), totul sau nimic
 
 1. evenimentul (`intrare_aviz` sau `intrare_lista_ambalare`, `aplicat_de = fn_izo_uid()`), `RETURNING id INTO v_ev`. De aici încolo garda îl identifică prin indexul unic parțial (document, tip; §3.2), nu prin antet;
-2. pe fiecare rând `primit` / `primit_neconform`, în ordinea `nr_crt`: `id := nextval('magazie_bucati_id_seq')`; INSERT bucată din `fn_izo_doc_bucata_asteptata(doc, nr_crt)` (aceeași funcție pe care o folosește garda la comparație), cu coloanele nașterii — `id`, `proiect_id`, `tip_material_id`, `tip_cod`, `uid`, `parinte_id`, `radacina_id`, `cod_bucata`, `capat_stanga`, `capat_dreapta`, `serie`, `sarja`, `dimensiune`, `grad_otel`, `standard`, `izolatie`, `producator`, `furnizor`, `lungime_m`, `lungime_originala_m`, `lungime_aviz_mm`, `lungime_masurata_mm`, `lungime_mm`, `perete_mm`, `diametru_mm`, `unghi_curba`, `greutate_kg`, `cantitate`, `um`, `provenienta`, `sursa_receptie`, `nr_document`, `data_receptie`, `stare`, `locatie_tip`, `locatie_site_id`, `depozit_id`, `lot`, `aviz_intrare_id`, `nr_crt_aviz`, `bend_no`, `atribute`, `server_ver`, `observatii` (`lungime_mm` = măsurat ?? document) → mișcarea `nascut` (`in_loc` = depozitul) → `rand.bucata_id`;
+2. pe fiecare rând `primit` / `primit_neconform`, în ordinea `nr_crt`: `id := nextval('magazie_bucati_id_seq')`; INSERT bucată din `fn_izo_doc_bucata_asteptata(doc, nr_crt)` (aceeași funcție pe care o folosește garda la comparație). **r5c:** lista de coloane a INSERT-ului = `C` ∪ {`id`, `uid`, `radacina_id`, `server_ver`}, generată la migrare din ACEEAȘI constantă `C` care dă proiecția (§3.2) și GRANT INSERT-ul (§3.5). Deci nu există coloană scrisă fără drept, nici coloană cu DEFAULT în comparație. `lungime_mm` = măsurat ?? document; câmpurile pe care E3 nu le completează (`dezambiguare`, `tronson_id`, `capat_marcaj`, `lungime_calculata`…) se scriu explicit, cu valoarea din bucata așteptată → mișcarea `nascut` (`in_loc` = depozitul) → `rand.bucata_id`;
 3. documentul: `confirmat`, `hash_confirmat = p_hash`, `eveniment_intrare_id = v_ev` (garda cere egalitatea cu evenimentul identificat la pasul 1), `avertismente`, `versiune + 1`.
 
 Mișcările se scriu înaintea antetului: garda nu depinde de FK-ul antetului, deci nu există dependență circulară. La PV e la fel: `receptie_pv` `RETURNING id`, mișcările, apoi `eveniment_pv_id` = acel id.
@@ -453,12 +461,14 @@ Două tranziții administrative, fiecare doar sub contextul ei, scris doar de `f
 - Porțile pe wrapper-e / citiri sunt analiză textuală: apărare în profunzime. Controlul principal rămâne procesul (nicio funcție DEFINER nouă pe prod fără migrare revizuită).
 - Comportamentul API-ului Storage la DELETE refuzat de RLS e o presupunere verificată prin test pe branch, nu o garanție a schemei.
 - PV-ul cere toate bucățile `primit` încă `sosit`, în depozit; ieșirile anterioare PV-ului vin cu extinderea contractului (E4+). Până atunci E4 refuză bucățile fără PV (§8).
-- Anularea unui document confirmat fără bucăți, pe un proiect trecut pe `off`, cere reactivarea proiectului (§9.1).
 - După primul fapt E3, revenirea migrației e blocată prin design; corecțiile se fac înainte, cu migrare revizuită.
 
 ## 12. r5b — postcondiții obligatorii pentru cod (Copilot r4, P2 / P3)
 
-1. **Indexurile de eveniment** sunt separate pentru intrare și PV (§2, SQL exact); testul: după intrare, PV-ul trece, iar un al doilea PV / o a doua intrare pe același document → 23505.
+1. **Indexurile de eveniment** sunt separate pentru intrare și PV (§2, SQL exact).
+   - Migrarea verifică `pg_get_indexdef` exact pe amândouă.
+   - **r5c:** sunt numite explicit în amprenta porților E3 (filtrul E2a `ux_magbuc_izo_% / ux_izo_% / izo_%` nu le prinde).
+   - Teste: exact o intrare + exact un PV per document (după intrare, PV-ul trece; o a doua intrare / un al doilea PV → 23505); scoaterea fiecăruia → porți lipsă → intrările refuză.
 2. **`inlocuieste_document_id` rămâne adevărat structural.**
    - Când e setat, identitatea documentului (`furnizor_canon`, `nr_document_canon`, `data_document`) și `inlocuieste_document_id` sunt **înghețate**: trigger-ul refuză UPDATE-ul lor. Documentul fără legătură de înlocuire își poate corecta identitatea cât e `draft`.
    - Ținta se revalidează la **fiecare** salvare și la confirmare, sub lock-ul documentului: e `anulat`, are aceeași identitate canonică, e pe același proiect și nu e înlocuită de alt document (`UNIQUE`). Ținta e deja `anulat`, deci finală, deci nu se mai poate schimba.
