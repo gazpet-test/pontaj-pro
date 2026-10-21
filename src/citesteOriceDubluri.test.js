@@ -4,7 +4,7 @@ import {
   clasificaDublura, campuriDeCompletat, updateCompletare, fmtZi, liniaObservatii,
   observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, eroareInchidereRand, inchidereFaraRezultat,
   texteAltContinut, marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare,
-  gardaFinalaHR, randInchisSigur,
+  gardaFinalaHR, randInchisSigur, stareInchidere, mesajInchidere, MESAJ_RAND_NEVERIFICAT, cuNeinchis, parseNeinchise, pendValid,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -427,18 +427,96 @@ describe('F3 gardaFinalaHR — garda din confirmHR, fail-closed', () => {
 
 describe('F5 randInchisSigur — staging-ul se șterge doar pe rând sigur închis', () => {
   it('UPDATE-ul a întors rândul → închis', () => {
-    expect(randInchisSigur({ data:[{ id:5 }], error:null }, null, 5)).toBe(true)
+    expect(randInchisSigur({ data:[{ id:5 }], error:null }, null)).toBe(true)
   })
   it('eroare / rezultat lipsă → nu (staging-ul rămâne pentru reîncercare și 👁 Vezi)', () => {
-    expect(randInchisSigur({ data:null, error:{ message:'x' } }, [], 5)).toBe(false)
-    expect(randInchisSigur({ error:new Error('Failed to fetch') }, [], 5)).toBe(false)
-    expect(randInchisSigur(undefined, [], 5)).toBe(false)
+    expect(randInchisSigur({ data:null, error:{ message:'x' } }, null)).toBe(false)
+    expect(randInchisSigur({ error:new Error('Failed to fetch') }, null)).toBe(false)
+    expect(randInchisSigur(undefined, null)).toBe(false)
   })
-  it('0 rânduri fără eroare → închis doar dacă coada reîncărcată nu-l mai conține', () => {
+  it('0 rânduri fără eroare → decide citirea DIRECTĂ a rândului', () => {
     const zero = { data:[], error:null }
-    expect(randInchisSigur(zero, [{ id:6 }], 5)).toBe(true)
-    expect(randInchisSigur(zero, [], 5)).toBe(true)
-    expect(randInchisSigur(zero, [{ id:5 }], 5)).toBe(false)
-    expect(randInchisSigur(zero, null, 5)).toBe(false)   // reîncărcarea a picat → necunoscut
+    expect(randInchisSigur(zero, { data:{ id:5, status:'confirmat' }, error:null })).toBe(true)
+    expect(randInchisSigur(zero, { data:{ id:5, status:'clasificat' }, error:null })).toBe(false)
+    expect(randInchisSigur(zero, { data:null, error:null })).toBe(false)       // nu se vede → necunoscut
+    expect(randInchisSigur(zero, { data:null, error:{ message:'x' } })).toBe(false)
+    expect(randInchisSigur(zero, null)).toBe(false)
+  })
+})
+
+describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
+  const zero = { data:[], error:null }
+  it('UPDATE cu rând întors → inchis; eroare → deschis', () => {
+    expect(stareInchidere({ data:[{ id:5 }], error:null }, null)).toBe('inchis')
+    expect(stareInchidere({ data:null, error:{ code:'42501', message:'new row violates row-level security policy' } }, null)).toBe('deschis')
+    expect(stareInchidere({ error:new Error('Failed to fetch') }, null)).toBe('deschis')
+    expect(stareInchidere(undefined, null)).toBe('deschis')
+  })
+  it('rând mutat în alt modul, invizibil pentru cel care confirmă → necunoscut (NU închis), fișierul rămâne', () => {
+    // coada HR reîncărcată nu-l mai conține — vechiul criteriu ar fi spus „închis"
+    expect(stareInchidere(zero, { data:null, error:null })).toBe('necunoscut')
+    expect(randInchisSigur(zero, { data:null, error:null })).toBe(false)
+  })
+  it('vizibil și deschis → deschis; vizibil și confirmat → inchis', () => {
+    expect(stareInchidere(zero, { data:{ id:5, status:'clasificat' }, error:null })).toBe('deschis')
+    expect(stareInchidere(zero, { data:{ id:5, status:'eroare' }, error:null })).toBe('deschis')
+    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat' }, error:null })).toBe('inchis')
+  })
+  it('citire picată / lipsă / răspuns ciudat → necunoscut', () => {
+    expect(stareInchidere(zero, { data:null, error:{ message:'timeout' } })).toBe('necunoscut')
+    expect(stareInchidere(zero, null)).toBe('necunoscut')
+    expect(stareInchidere({ data:null, error:null }, { data:{ id:5, status:'confirmat' } })).toBe('necunoscut')
+  })
+})
+
+describe('r4 mesajInchidere', () => {
+  it('închis → ok cu mesajul modulului; necunoscut → warn neutru; deschis → err', () => {
+    expect(mesajInchidere('inchis', null, 'Gata ✓')).toEqual({ tip:'ok', msg:'Gata ✓' })
+    expect(mesajInchidere('necunoscut', null, 'Gata ✓')).toEqual({ tip:'warn', msg:MESAJ_RAND_NEVERIFICAT })
+    expect(MESAJ_RAND_NEVERIFICAT).toMatch(/salvat/)
+    expect(MESAJ_RAND_NEVERIFICAT).not.toMatch(/✓/)
+    expect(mesajInchidere('deschis', 'eroare X', 'Gata ✓')).toEqual({ tip:'err', msg:'eroare X' })
+    expect(mesajInchidere('deschis', null, 'Gata ✓').msg).toMatch(/nu s-a putut închide/)
+  })
+  it('mesajul de eroare trimite la reîncercarea închiderii, nu la o nouă confirmare', () => {
+    expect(eroareInchidereRand({ data:null, error:{ message:'rls' } })).toMatch(/Reîncearcă închiderea/)
+  })
+})
+
+describe('r4 R1 cuNeinchis / parseNeinchise — reîncercarea doar închide', () => {
+  const pend = { msgOk:'Document trimis în Execuție ✓', args:['executie', 'aviz', 'proiect', 12, 345] }
+  it('pune / scoate marcajul fără să modifice obiectul vechi', () => {
+    const a = {}
+    const b = cuNeinchis(a, 501, pend)
+    expect(a).toEqual({})
+    expect(b[501]).toEqual(pend)
+    const c = cuNeinchis(b, 501, null)
+    expect(c).toEqual({})
+    expect(b[501]).toEqual(pend)
+  })
+  it('nimic de schimbat → același obiect (fără re-randare / scriere inutilă)', () => {
+    const a = { 7:pend }
+    expect(cuNeinchis(a, 501, null)).toBe(a)
+    expect(cuNeinchis(a, 501, { msgOk:'x', args:[1] })).toBe(a)   // marcaj invalid → ignorat
+    expect(cuNeinchis(null, 501, null)).toEqual({})
+  })
+  it('cheile din sessionStorage sunt text — scoaterea merge și cu id numeric', () => {
+    const din = parseNeinchise(JSON.stringify({ 501:pend }))
+    expect(din[501]).toEqual(pend)
+    expect(cuNeinchis(din, 501, null)).toEqual({})
+  })
+  it('parseNeinchise ignoră textul stricat și marcajele invalide', () => {
+    expect(parseNeinchise(null)).toEqual({})
+    expect(parseNeinchise('')).toEqual({})
+    expect(parseNeinchise('{nu e json')).toEqual({})
+    expect(parseNeinchise('[1,2]')).toEqual({})
+    expect(parseNeinchise('"x"')).toEqual({})
+    expect(parseNeinchise(JSON.stringify({ 1:pend, 2:{ msgOk:'x' }, 3:{ msgOk:'x', args:[1,2,3,4,null] }, 4:null }))).toEqual({ 1:pend })
+  })
+  it('pendValid: refId obligatoriu (afișat pe buton, trimis la confirmat_ref_id)', () => {
+    expect(pendValid(pend)).toBe(true)
+    expect(pendValid({ ...pend, args:['hr', null, 'angajat', 7, 0] })).toBe(true)
+    expect(pendValid({ ...pend, args:['hr', null, 'angajat', 7, null] })).toBe(false)
+    expect(pendValid(null)).toBe(false)
   })
 })

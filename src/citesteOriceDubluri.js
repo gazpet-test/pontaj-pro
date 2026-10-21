@@ -15,6 +15,11 @@
 //   • rezultatCautareDosar — răspuns trunchiat = eroare de căutare, nu „liber" (F3, F4)
 //   • gardaFinalaHR      — garda finală din confirmHR: căutare exactă + căutare completă pe nume (F3)
 //   • randInchisSigur    — fișierul din staging se șterge DOAR când rândul e sigur închis (F5)
+//   Verificare r4 (21.10):
+//   • stareInchidere     — 0 rânduri la închidere: decide citirea DIRECTĂ a rândului, nu coada modulului (F5)
+//   • mesajInchidere     — ce afișează panoul după închidere (închis / neînchis / necunoscut)
+//   • cuNeinchis / parseNeinchise — rândurile cu ținta SALVATĂ dar neînchise: reîncercarea doar
+//                          închide, fără a doua inserare (R1 — Execuție / Logistică / UPA / HR)
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -209,10 +214,10 @@ export function eroareInchidereRand(res) {
   const { data, error } = res || {}
   if (!error && Array.isArray(data) && data.length) return null
   const det = error ? ': ' + (error.message || String(error)) : ' (fără drept de modificare?)'
-  return 'Documentul e salvat, dar rândul din coadă nu s-a putut închide' + det + ' — reîncarcă lista și verifică.'
+  return 'Documentul e salvat, dar rândul din coadă nu s-a putut închide' + det + ' — folosește «↻ Reîncearcă închiderea» (nu se mai salvează încă o dată).'
 }
 
-// UPDATE fără eroare dar fără rând întors: nu știm încă dacă s-a închis (RLS pe SELECT) — se verifică prin reîncărcarea cozii
+// UPDATE fără eroare dar fără rând întors: nu știm încă dacă s-a închis — se verifică prin citirea directă a rândului (r4)
 export function inchidereFaraRezultat(res) {
   const { data, error } = res || {}
   return !!res && !error && Array.isArray(data) && data.length === 0
@@ -307,12 +312,61 @@ export function gardaFinalaHR({ row, angajatId, exact, nume, opts = {} }) {
   return { bloc:blocheazaInserare(cls, opts), cls }
 }
 
-// F5: rândul din ai_documente_inbox e SIGUR închis? Abia atunci se șterge fișierul din staging —
-// altfel reîncercarea și 👁 Vezi n-ar mai avea fișier. Da: UPDATE-ul a întors rândul, sau 0 rânduri
-// fără eroare ȘI coada reîncărcată (coada ≠ null) nu-l mai conține. Eroare / necunoscut → nu.
-export function randInchisSigur(res, coada, rowId) {
+// F5 (r4): starea rândului din ai_documente_inbox după UPDATE-ul care îl închide.
+//   res    = răspunsul UPDATE-ului (.select('id'))
+//   citire = citirea DIRECTĂ a rândului ({ data:{ id, status } | null, error } — select … .eq('id') .maybeSingle()),
+//            făcută doar la 0 rânduri fără eroare. NU coada modulului: un rând mutat între timp în alt modul
+//            lipsește din coada asta, dar e tot deschis (verificare r4, F5 rezidual).
+// → 'inchis'     UPDATE-ul a întors rândul, sau rândul se vede cu status 'confirmat'
+//   'deschis'    UPDATE-ul a dat eroare, sau rândul se vede și NU e confirmat
+//   'necunoscut' 0 rânduri și rândul nu se vede (mutat / fără drept pe el) sau citirea a picat
+// Doar 'inchis' șterge fișierul din staging; un fișier orfan e varianta sigură.
+export function stareInchidere(res, citire) {
   const { data, error } = res || {}
-  if (!res || error) return false
-  if (Array.isArray(data) && data.length) return true
-  return inchidereFaraRezultat(res) && Array.isArray(coada) && !coada.some(r => r && r.id === rowId)
+  if (!res || error) return 'deschis'
+  if (Array.isArray(data) && data.length) return 'inchis'
+  if (!inchidereFaraRezultat(res)) return 'necunoscut'
+  const { data:r, error:e } = citire || {}
+  if (!citire || e || !r) return 'necunoscut'
+  return r.status === 'confirmat' ? 'inchis' : 'deschis'
+}
+
+// F5: rândul e SIGUR închis? Abia atunci se șterge fișierul din staging — altfel reîncercarea și 👁 Vezi
+// n-ar mai avea fișier. Eroare / necunoscut → nu.
+export const randInchisSigur = (res, citire) => stareInchidere(res, citire) === 'inchis'
+
+export const MESAJ_RAND_NEVERIFICAT = 'Documentul e salvat, dar nu pot verifica rândul din coadă (nu-l mai văd — mutat în alt modul / fără drept pe el — sau verificarea a picat). Nu știu dacă s-a închis, așa că fișierul din coadă rămâne; dacă rândul e încă în listă, folosește «↻ Reîncearcă închiderea».'
+
+// Mesajul de după închidere → { tip:'ok' | 'warn' | 'err', msg }. err = mesajul din eroareInchidereRand.
+export function mesajInchidere(stare, err, msgOk) {
+  if (stare === 'inchis') return { tip:'ok', msg:msgOk }
+  if (stare === 'necunoscut') return { tip:'warn', msg:MESAJ_RAND_NEVERIFICAT }
+  return { tip:'err', msg:err || eroareInchidereRand(null) }
+}
+
+// R1 (r4): rândurile cu ținta deja SALVATĂ (document Execuție / Logistică / UPA / HR, certificat Financiar)
+// dar neînchise în coadă: { [row.id]: { msgOk, args:[modulTinta, tip, entTip, entId, refId] } }.
+// Cât timp rândul are marcaj, „Confirmă" doar reîncearcă închiderea cu aceleași argumente — fără
+// mutaFisier + INSERT (altfel a doua copie a documentului / factura scăzută de două ori din plafonul UPA).
+export const pendValid = v => !!v && typeof v === 'object' && typeof v.msgOk === 'string'
+  && Array.isArray(v.args) && v.args.length === 5 && v.args[4] != null
+
+// marcajul pus (val) sau scos (val null) → obiect NOU; același obiect dacă nu se schimbă nimic
+export function cuNeinchis(map, id, val) {
+  const m = map || {}
+  if (val) return pendValid(val) ? { ...m, [id]:val } : m
+  if (!Object.prototype.hasOwnProperty.call(m, String(id))) return m
+  const out = { ...m }
+  delete out[String(id)]
+  return out
+}
+
+// textul din sessionStorage → marcajele valide (orice altceva se ignoră)
+export function parseNeinchise(text) {
+  let v
+  try { v = JSON.parse(text || '{}') } catch (_) { return {} }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  const out = {}
+  for (const [k, p] of Object.entries(v)) if (pendValid(p)) out[k] = p
+  return out
 }
