@@ -80,7 +80,7 @@ function fals() {
     deciziiRol: async () => [],
     lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
     extragereInLucru: async () => null,
-    ultimaIncercare: async () => null,
+    ultimaIncercare: async () => null, feliiGata: async () => null,
     ai: async (p) => { prompturi.push(p); return { txt: JSON.stringify({ r: [RAND_002, OBIECT_RAND] }), inF: 1000, outF: 200 } },
     acum: () => 0,
   }
@@ -91,7 +91,7 @@ Deno.test('A1: extractor A în modul structurat — identitate proprie (alt cach
   const f = fals()
   const r = await extrageStructurat(f.deps, { licitatie_id: 15, cerere_id: 5, extractor: 'A' })
   assertEquals(r.status, 200)
-  assertEquals(r.body.extractor, `${MODEL_A}>claude-sonnet-5-5@p4@n4@f2`)   // A3: identitatea include modelul de escaladare
+  assertEquals(r.body.extractor, `${MODEL_A}/claude-sonnet-5-5:q1@p4@n7@f2`)   // A3: identitatea include modelul de escaladare
   assert(f.extractori[0].startsWith(idExtractor(EXTRACTOARE.A) + '@c-'))
   assert(!f.extractori[0].startsWith(EXTRACTOR_ID))
   assert(f.prompturi[0].includes('schema e impusă'))

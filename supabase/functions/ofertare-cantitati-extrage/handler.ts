@@ -36,6 +36,7 @@ import { poateCheltui } from './poarta.ts'
 import { MESAJ_ADMIN, motivRefuzAdmin } from './poarta_admin.ts'
 import { feliiDocument, type TipLista } from './sectiuni.ts'
 import { extrageStructurat, MAX_IESIRE } from './structurat.ts'
+import { raspunsCuPuls } from './puls.ts'
 import { cheamaA, MODEL_A, MODEL_S } from './extractorA.ts'
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
@@ -532,7 +533,8 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
   const elig = await eligibilitateLicitatie(db, licId)
   if (!elig.ok) return json({ ok: false, blocat_lot: true, motiv: 'eroare_poarta', error: mesajLot('eroare_poarta') + ' — nu s-a procesat nimic' })
   aiFetch = deps.fetch
-  const r = await extrageStructurat({
+  // bug 20.10 (HTTP 504 la gateway după 150 s fără octeți, la escaladarea A): răspuns cu puls dacă lucrul durează (puls.ts)
+  return await raspunsCuPuls(extrageStructurat({
     rpc: (fn, args) => db.rpc(fn, args),
     cerere: async (id) => {
       const { data } = await dbU.from('ofertare_ai_cereri').select('id, licitatie_id, scop, stare, valabil_pana, lot_domeniu, lot_nr').eq('id', id).maybeSingle()
@@ -564,6 +566,15 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
         .eq('extractor_id', extractorId).eq('stare', 'in_lucru').maybeSingle()
       return data ? { id: Number(data.id), cerere_id: Number(data.cerere_id) } : null
     },
+    feliiGata: async (x) => {
+      const [{ data: e, error: ee }, { data: f, error: ef }] = await Promise.all([
+        dbU.from('ofertare_cant_extrageri').select('felii_total').eq('id', x).maybeSingle(),
+        dbU.from('ofertare_cant_felii').select('felie_nr').eq('extragere_id', x).eq('stare', 'gata'),
+      ])
+      // orice eroare de citire = null (nu se închide nimic, fail-closed)
+      if (ee || ef || !e) return null
+      return { gata: new Set((f || []).map((r: any) => r.felie_nr)).size, total: Number(e.felii_total) }
+    },
     ultimaIncercare: async (munca) => {
       const { data } = await dbU.from('ofertare_cant_felii').select('id, stare, rezervare_id').eq('munca_id', munca)
         .order('incercare', { ascending: false }).limit(1)
@@ -576,6 +587,5 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
       return x.eroare ? { txt: '', inF: x.inF, outF: x.outF, eroare: x.eroare } : { txt: x.txt, inF: x.inF, outF: x.outF, necunoscut: x.stop !== 'completed' }
     },
     acum: () => Date.now(),
-  }, { licitatie_id: licId, cerere_id: cerereId, max_felii: Number(body.max_felii) || 0, extractor })
-  return json(r.body, r.status)
+  }, { licitatie_id: licId, cerere_id: cerereId, max_felii: Number(body.max_felii) || 0, extractor }), CORS)
 }

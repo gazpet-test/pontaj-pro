@@ -9,7 +9,8 @@ const ACUM = new Date(Date.now() + 3600e3).toISOString()
 const DOC = { id: 212, nume_original: 'Liste de cantitati — p01_pag1-104.pdf', tip: 'lista_cantitati', text_extras: TEXT_F3, seap_meta: null, lot_stare: 'comun' }
 
 type Opt = { cerere?: any; refuzRezerva?: string; aiEroare?: boolean; aiAruncă?: boolean; cache?: boolean; pesteRezervare?: boolean
-  inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; grupSchimbat?: boolean; refuzGrup?: string; decizii?: any[]; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[] }
+  inLucru?: number | null; inLucruCerere?: number; docsDupa?: any[]; grupSchimbat?: boolean; refuzGrup?: string; decizii?: any[]; ultima?: any; feliiExistente?: boolean; raspuns?: string; docs?: any[]; nevalide?: number[]
+  cereri?: Record<number, any>; feliiGata?: { gata: number; total: number }; refuzInchide?: string }
 function fals(opt: Opt = {}) {
   const apeluri: string[] = []
   let obsScrise: any[] = []
@@ -36,17 +37,19 @@ function fals(opt: Opt = {}) {
             : { data: { ok: true, felie_id: 70 + Number(args.p_felie_nr) }, error: null }
         case 'fn_ofertare_cb_rezerva': return { data: opt.refuzRezerva ? { refuz: opt.refuzRezerva } : { ok: true, rezervare_id: 900 }, error: null }
         case 'fn_ofertare_cb_deconteaza': return { data: { ok: true, peste_rezervare: !!opt.pesteRezervare }, error: null }
+        case 'fn_ofertare_cb_extragere_inchide': return { data: opt.refuzInchide ? { refuz: opt.refuzInchide } : { ok: true }, error: null }
         case 'fn_ofertare_cb_obs_scrie': obsScrise = args.p_obs as any[]; toateObs.push(obsScrise); return { data: { ok: true }, error: null }
         default: return { data: { ok: true }, error: null }
       }
     },
-    cerere: async () => opt.cerere === undefined
+    cerere: async (id: number) => opt.cereri && id in opt.cereri ? opt.cereri[id] : opt.cerere === undefined
       ? { id: 5, licitatie_id: 15, scop: 'cant_extragere', stare: 'activa', valabil_pana: ACUM, lot_domeniu: 'toate', lot_nr: [] } : opt.cerere,
     documente: async () => { nDoc++; return nDoc > 1 && opt.docsDupa ? opt.docsDupa : (opt.docs ?? [DOC]) },
     deciziiRol: async () => opt.decizii ?? [],
     lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
     extragereInLucru: async () => (opt.inLucru ? { id: opt.inLucru, cerere_id: opt.inLucruCerere ?? 5 } : null),
     ultimaIncercare: async () => opt.ultima ?? null,
+    feliiGata: async () => opt.feliiGata ?? null,
     ai: async () => {
       aiApeluri++
       if (opt.aiAruncă) throw new TypeError('fetch failed')
@@ -161,11 +164,11 @@ Deno.test('review #757 r1 (P2): rând de listă > 300 caractere — citatul = ul
   await RULEAZA(f)
   assertEquals([f.obs()[0]?.pozitie_dovedita, f.obs()[0]?.cantitate], [true, 1160])
 })
-Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n4', async () => {
+Deno.test('proba Răcari: răspuns neinterpretabil → mostra din textul modelului în raport; prompt p3, normalizator n7', async () => {
   const f = fals({ raspuns: 'nu e JSON' })
   const r = await RULEAZA(f)
   assertEquals((r.body as any).raport.find((x: any) => x.eroare)?.mostre, ['nu e JSON'])
-  assert(EXTRACTOR_ID.includes('@p3@n4@f2'))
+  assert(EXTRACTOR_ID.includes('@p3@n7@f2'))
 })
 
 Deno.test('cost peste rezervare → oprire după felie; extragerea închisă controlat', async () => {
@@ -264,5 +267,48 @@ Deno.test('r6: deciziile de rol folosite trec în RPC-ul de grup; context_schimb
     const r = await RULEAZA(g)
     assertEquals([g.ai(), g.apeluri], [0, ['extragere_incepe_grup']])
     assert(JSON.stringify(r.body.raport).includes(refuzGrup))
+  }
+})
+
+// 20.10.2026: extragere rămasă în lucru pe o cerere care nu mai e activă → închisă (partial / esuat) cu RPC-ul existent, ca omul s-o
+// redeschidă pe cererea nouă; cererea veche activă / necitibilă sau felii în zbor → nimic închis
+const CERERE_VECHE = (stare: string, valabil: string) => ({ id: 4, licitatie_id: 15, scop: 'cant_extragere', stare, valabil_pana: valabil, lot_domeniu: 'toate', lot_nr: [] })
+const EXPIRAT = '2026-10-20T20:15:00Z'
+Deno.test('cerere veche expirată + felii gata → extragerea închisă „partial”, fără niciun apel AI', async () => {
+  const f = fals({ inLucru: 157, inLucruCerere: 4, cereri: { 4: CERERE_VECHE('activa', EXPIRAT) }, feliiGata: { gata: 19, total: 21 } })
+  const r = await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup', 'extragere_inchide:partial']])
+  const x = (r.body.raport as any[]).find((y) => y.extragere_id === 157)
+  assertEquals([x.refuz, x.inchisa_cerere_inactiva], ['in_lucru_pe_alta_cerere', 'partial'])
+})
+Deno.test('cerere veche anulată + nicio felie gata → „esuat”; toate gata → „gata”', async () => {
+  const a = fals({ inLucru: 157, inLucruCerere: 4, cereri: { 4: CERERE_VECHE('anulata', ACUM) }, feliiGata: { gata: 0, total: 21 } })
+  await RULEAZA(a)
+  assertEquals(a.apeluri, ['extragere_incepe_grup', 'extragere_inchide:esuat'])
+  const b = fals({ inLucru: 157, inLucruCerere: 4, cereri: { 4: CERERE_VECHE('activa', EXPIRAT) }, feliiGata: { gata: 21, total: 21 } })
+  await RULEAZA(b)
+  assertEquals(b.apeluri, ['extragere_incepe_grup', 'extragere_inchide:gata'])
+})
+Deno.test('felii în zbor → RPC-ul refuză închiderea; raportat, nimic altceva', async () => {
+  const f = fals({ inLucru: 157, inLucruCerere: 4, cereri: { 4: CERERE_VECHE('activa', EXPIRAT) }, feliiGata: { gata: 19, total: 21 }, refuzInchide: 'felii_in_zbor' })
+  const r = await RULEAZA(f)
+  assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup', 'extragere_inchide:partial']])
+  assertEquals((r.body.raport as any[]).find((y) => y.extragere_id === 157).inchidere_refuzata, 'felii_in_zbor')
+})
+Deno.test('cerere veche încă activă, necitibilă, sau felii necitibile → NU se închide (refuzul de până acum)', async () => {
+  for (const opt of [{ cereri: { 4: CERERE_VECHE('activa', ACUM) }, feliiGata: { gata: 1, total: 2 } },
+    { cereri: { 4: null }, feliiGata: { gata: 1, total: 2 } },
+    { cereri: { 4: CERERE_VECHE('activa', EXPIRAT) } }]) {
+    const f = fals({ inLucru: 157, inLucruCerere: 4, ...opt })
+    const r = await RULEAZA(f)
+    assertEquals([f.ai(), f.apeluri], [0, ['extragere_incepe_grup']])
+    assert(JSON.stringify(r.body.raport).includes('in_lucru_pe_alta_cerere'))
+  }
+})
+Deno.test('review Gemini #813 r1 (P2): total 0 / invalid nu dă „gata” (esuat fără felii gata)', async () => {
+  for (const total of [0, NaN]) {
+    const f = fals({ inLucru: 157, inLucruCerere: 4, cereri: { 4: CERERE_VECHE('anulata', ACUM) }, feliiGata: { gata: 0, total } })
+    await RULEAZA(f)
+    assertEquals(f.apeluri, ['extragere_incepe_grup', 'extragere_inchide:esuat'], String(total))
   }
 })

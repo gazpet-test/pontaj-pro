@@ -239,3 +239,101 @@ Deno.test('PR-A r6: orientareDedesubt — certificată doar cu primul articol f�
   assertEquals(orientareDedesubt('0.000 0 Total=\n⟦PAGINA 1⟧\n' + bun.slice('= NR =\n'.length)), false)   // total (prin pagină) deasupra primului articol
   assertEquals(orientareDedesubt('fără articole\n'), false)
 })
+
+Deno.test('n5 (20.10, proba Răcari): cod de normă cu „%” la coadă — dovedit; și cu coloana „[ 1]” lipită de model prin spațiu', async () => {
+  const t = PRE + '007 GD19A1% [ 1] BUC. 6.000 IMBINAREA PRIN SUDURA DE TIP ELECTROFUZIUNE 0.000 0 Total=\n'
+  for (const cod of ['GD19A1%', 'GD19A1% [ 1]', 'gd19a1%']) {
+    const n = (await normalizeazaRand({ ...randF3(cod, 'IMBINAREA PRIN SUDURA DE TIP ELECTROFUZIUNE', 6, '007 GD19A1% [ 1] BUC. 6.000'), um: 'BUC.' }, { ...ctxF3, textDoc: t, felie: t }))!
+    assertEquals([n.obs.pozitie_dovedita, n.obs.cantitate], [true, 6], cod)
+    assertEquals(n.obs.cod_articol, cod === 'GD19A1% [ 1]' ? 'GD19A1%' : cod, cod)   // review Gemini r1 P2: codul salvat = cel verificat
+  }
+  // „%” doar la coadă; alt cod (fără „%”, sau alt rând) rămâne nedovedit
+  for (const [cod, motiv] of [['GD19%A1', 'cod_neverificabil'], ['GD19A1', 'cod_alt_rand'], ['GD20A1%', 'cod_alt_rand'], ['GD19A1%[ 1]', 'cod_neverificabil']]) {
+    const n = (await normalizeazaRand({ ...randF3(cod, 'IMBINAREA PRIN SUDURA DE TIP ELECTROFUZIUNE', 6, '007 GD19A1% [ 1] BUC. 6.000'), um: 'BUC.' }, { ...ctxF3, textDoc: t, felie: t }))!
+    assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:' + motiv)], [false, true], cod)
+  }
+})
+
+Deno.test('n6 (21.10, proba Răcari): antetul „<cod> pag N” imediat sub marcajul de pagină e transparent → denumirea de dedesubt (cu Dn) e acceptată', async () => {
+  const t = PRE + '007 6714585 BUC. 1.000\nREDUCTIE DN110X90\n0.000 0 Total=\n\n⟦PAGINA 15⟧\nIOANA8 pag 2\n007 6715399 BUC. 2.000\n@DOP PEHD PE80 PN 6 DN 90 COD 66500006\n0.000 0 Total=\n'
+  const r = { ...randF3('6715399', 'DOP PEHD PE80 PN 6 DN 90 COD 66500006', 2, '007 6715399 BUC. 2.000'), um: 'BUC.' }
+  const n = (await normalizeazaRand(r, { ...ctxF3, textDoc: t, felie: t }))!
+  assertEquals([n.obs.pozitie_dovedita, n.obs.dn_mm], [true, [90]])
+  // fără marcajul de pagină deasupra, aceeași linie „IOANA8 pag 2” rămâne o linie oarecare → incert (nedovedit, ca înainte)
+  const u = t.replace('⟦PAGINA 15⟧\n', '')
+  const m = (await normalizeazaRand(r, { ...ctxF3, textDoc: u, felie: u }))!
+  assertEquals([m.obs.pozitie_dovedita, m.note.includes('pozitie:dn_alt_rand')], [false, true])
+  // un antet de mai multe cuvinte / cu alt text după număr NU e antet de pagină → nedovedit
+  for (const antet of ['IOANA8 SI ALTII pag 2', 'IOANA8 pag 2 continuare', 'pag 2']) {
+    const v = t.replace('IOANA8 pag 2', antet)
+    const k = (await normalizeazaRand(r, { ...ctxF3, textDoc: v, felie: v }))!
+    assertEquals(k.obs.pozitie_dovedita, false, antet)
+  }
+})
+
+Deno.test('n6 review Gemini r1 (P2): în JOS, un marcaj de pagină (cu sau fără antet) oprește în continuare blocul → denumirea de pe pagina următoare NU se atribuie', async () => {
+  const t = PRE + '007 6715399 BUC. 2.000\n⟦PAGINA 16⟧\nIOANA8 pag 3\n@DOP PEHD PE80 PN 6 DN 90 COD 66500006\n0.000 0 Total=\n'
+  const r = { ...randF3('6715399', 'DOP PEHD PE80 PN 6 DN 90 COD 66500006', 2, '007 6715399 BUC. 2.000'), um: 'BUC.' }
+  const n = (await normalizeazaRand(r, { ...ctxF3, textDoc: t, felie: t }))!
+  assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true])
+})
+
+Deno.test('n6 review Jakarinos r1 (P3): pseudomarcaj, text între marcaj și antet, antet „DN…” / lipit → antetul NU e transparent (nedovedit)', async () => {
+  const baza = PRE + '007 6714585 BUC. 1.000\nREDUCTIE DN110X90\n0.000 0 Total=\n\n⟦PAGINA 15⟧\nIOANA8 pag 2\n007 6715399 BUC. 2.000\n@DOP PEHD PE80 PN 6 DN 90 COD 66500006\n0.000 0 Total=\n'
+  const r = { ...randF3('6715399', 'DOP PEHD PE80 PN 6 DN 90 COD 66500006', 2, '007 6715399 BUC. 2.000'), um: 'BUC.' }
+  const ok = (await normalizeazaRand(r, { ...ctxF3, textDoc: baza, felie: baza }))!
+  assertEquals(ok.obs.pozitie_dovedita, true)
+  for (const [ce, inlocuit] of [['⟦PAGINA 15⟧', '⟦PAGINA invalid'], ['⟦PAGINA 15⟧\n', '⟦PAGINA 15⟧\nALT TEXT\n'], ['IOANA8 pag 2', 'DN110 pag 2'],
+    ['IOANA8 pag 2', 'IOANA8 pag2'], ['0.000 0 Total=\n\n⟦PAGINA 15⟧', 'TEAVA DN110\n\n⟦PAGINA 15⟧']]) {
+    const v = baza.replace(ce, inlocuit)
+    const k = (await normalizeazaRand(r, { ...ctxF3, textDoc: v, felie: v }))!
+    assertEquals(k.obs.pozitie_dovedita, false, inlocuit)
+  }
+})
+
+// n7 (decizia Răzvan 21.10, cazul iii „A”): „<n> COD <cod>” fără zerouri sub un articol numerotat cu zerouri, care nu continuă
+// secvența = continuarea denumirii; textul de mai jos e forma reală din Răcari (doc 212, „003 6701152 M 200.000”)
+const RACARI_COD = PRE + '002 SA11G1 [ 2] M 200.000\nTEAVA PVC D= 90 MM\n0.000 0 Total=\n\n003 6701152 M 200.000\n@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n0.003 1 Total=\n\n004 EC07A1 [ 1] M 200.000\nCABLU\n0.000 0 Total=\n'
+const rTV = (cit = '003 6701152 M 200.000', cod = '6701152') => randF3(cod, 'TV HDPE80 312UNI7611.7615 PN10 DN 90X8.2 COD 64000115', 200, cit)
+Deno.test('n7: Răcari „003 6701152” + „2 COD 64000115” (linie ruptă) → denumirea cu DN 90 acceptată, dovedit', async () => {
+  const n = (await normalizeazaRand(rTV(), { ...ctxF3, textDoc: RACARI_COD, felie: RACARI_COD }))!
+  assertEquals([n.obs.pozitie_dovedita, n.obs.dn_mm], [true, [90]])
+  // și forma cu coloane de preț pe linia ruptă („2 COD 64000115 0.00 0.00”, doc 212 ~77k)
+  const t = RACARI_COD.replace('2 COD 64000115\n', '2 COD 64000115 0.00 0.00\n')
+  const m = (await normalizeazaRand(rTV(), { ...ctxF3, textDoc: t, felie: t }))!
+  assertEquals(m.obs.pozitie_dovedita, true)
+})
+Deno.test('n7 negative: fără zerouri / „2” care continuă secvența / „2 COD” cu cantitate proprie / marcaj de pagină → rămâne nedovedit', async () => {
+  const cazuri: [string, string, string][] = [
+    // documentul numerotat FĂRĂ zerouri: „3 …” + „2 COD …” nu se poate distinge de un articol → incert
+    ['fara_zerouri', RACARI_COD.replace('003 6701152 M 200.000', '3 6701152 M 200.000'), '3 6701152 M 200.000'],
+    // un articol 2 real după 001 (2 = 1 + 1 continuă secvența) → incert
+    ['continua_secventa', RACARI_COD.replace('003 6701152 M 200.000', '001 6701152 M 200.000'), '001 6701152 M 200.000'],
+    // „2 COD …” cu cantitate proprie în formatul listei → e un articol, blocul se oprește
+    ['cantitate_proprie', RACARI_COD.replace('2 COD 64000115\n', '2 COD 64000115 M 10.000\n'), '003 6701152 M 200.000'],
+    // marcaj de pagină între cantitate și linia ruptă → blocul se oprește
+    ['marcaj_pagina', RACARI_COD.replace('@TV HDPE80', '⟦PAGINA 9⟧\n@TV HDPE80'), '003 6701152 M 200.000'],
+    // „2” cu zerouri („02 COD …”) sau alt cuvânt decât COD → nu e forma decisă
+    ['zerouri_la_linie', RACARI_COD.replace('2 COD 64000115', '02 COD 64000115'), '003 6701152 M 200.000'],
+    ['alt_cuvant', RACARI_COD.replace('2 COD 64000115', '2 SA11G1 64000115'), '003 6701152 M 200.000'],
+    // review Copilot r1 (P1): restart real „003” → „2 COD …” fără cantitate, cu DENUMIREA lui sub el (DN110) — linia de deasupra NU e
+    // un număr tăiat → rămâne început de articol → incert (DN110 nu se atribuie cantității lui 003)
+    ['restart_003_2', RACARI_COD.replace('@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n', '@TV HDPE80 312UNI7611.7615 PN10 DN 90X8\n2 COD 64000115\nTEAVA PE DN110\n'), '003 6701152 M 200.000'],
+    // review Copilot r2 (P1): denumirea lui 003 se termină natural în „DN63.” (cifră + punct, nu dimensiune tăiată) → restart real, incert
+    ['restart_dn63_punct', RACARI_COD.replace('@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n', 'TEAVA PE DN63.\n2 COD 64000115\nTEAVA PE DN110\n'), '003 6701152 M 200.000'],
+    // review Copilot r3 (P1): denumirea lui 003 se termină natural în „DN 90X8.”, urmată de un restart real „2 COD …” CU denumirea lui → incert
+    ['restart_90x8_cu_denumire', RACARI_COD.replace('2 COD 64000115\n', '2 COD 64000115\nTEAVA PE DN110\n'), '003 6701152 M 200.000'],
+    // review Jakarinos r3 (aceeași clasă, forma lui exactă): „TEAVA PE 63X8.” + restart „2 COD …” + „TEAVA PE DN110” → incert
+    // review Jakarinos r4 (P1): denumirea restartului pe ACEEAȘI linie cu „2 COD …” → incert
+    ['text_pe_linia_cod', RACARI_COD.replace('@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n', 'TEAVA PE 63X8.\n2 COD 64000115 TEAVA PE DN110\n'), '003 6701152 M 200.000'],
+    ['restart_63x8_jak',RACARI_COD.replace('@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n', 'TEAVA PE 63X8.\n2 COD 64000115\nTEAVA PE DN110\n'), '003 6701152 M 200.000'],
+    // „<n>” de două cifre („12 COD …”) nu poate fi zecimala unei dimensiuni → incert
+    ['doua_cifre', RACARI_COD.replace('2 COD 64000115', '12 COD 64000115'), '003 6701152 M 200.000'],
+    // „2 COD …” direct sub linia articolului (fără linie de denumire ruptă deasupra) → incert
+    ['direct_sub_articol', RACARI_COD.replace('@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n', ''), '003 6701152 M 200.000'],
+  ]
+  for (const [nume, t, cit] of cazuri) {
+    const n = (await normalizeazaRand(rTV(cit), { ...ctxF3, textDoc: t, felie: t }))!
+    assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true], nume)
+  }
+})

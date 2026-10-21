@@ -28,7 +28,7 @@ function fals(raspunsuri: Partial<Record<'principal' | 'escaladare', RezultatAI>
     cerere: async () => ({ id: 5, licitatie_id: 15, scop: 'cant_extragere', stare: 'activa', valabil_pana: new Date(Date.now() + 3600e3).toISOString(), lot_domeniu: 'toate', lot_nr: [] }),
     documente: async () => [{ id: 212, nume_original: 'Liste de cantitati.pdf', tip: 'lista_cantitati', text_extras: F3, seap_meta: null, lot_stare: 'comun' }],
     deciziiRol: async () => [], lotDocument: async (_l, ids) => new Map(ids.map((i) => [i, { domeniu: 'toate' as const, loturi: [] }])),
-    extragereInLucru: async () => null, ultimaIncercare: async () => null,
+    extragereInLucru: async () => null, ultimaIncercare: async () => null, feliiGata: async () => null,
     ai: async (_p, cine = 'principal') => { apeluriAI.push(cine); return raspunsuri[cine] ?? { txt: '', inF: 0, outF: 0, eroare: 'neasteptat' } },
     acum: () => 0,
   }
@@ -47,23 +47,20 @@ Deno.test('A3: fără semnal (toate ancorele B1 acoperite) → un singur apel Ha
   assertEquals([dc.p_model, dc.p_cost], [MODEL_A, r4(costH(1000, 200))])
 })
 
-Deno.test('A3: deficit B1 (Haiku a omis 002) → escaladare o dată la Sonnet; observațiile = rezultatul Sonnet; cost = ambele apeluri', async () => {
+Deno.test('q1 (decizia Răzvan 21.10): deficit B1 (Haiku a omis 002) → FĂRĂ escaladare; felia gata cu observațiile Haiku, deficitul raportat, cost Haiku', async () => {
   const f = fals({ principal: ok([R003]), escaladare: ok([R002, R003], 1000, 300) })
   const r = await RULEAZA(f)
-  assertEquals([f.apeluriAI, r.body.felii_escaladate, r.body.felii_cu_deficit_b1, f.inchideri], [['principal', 'escaladare'], 1, 0, ['gata']])
+  assertEquals([f.apeluriAI, r.body.felii_escaladate, r.body.felii_cu_deficit_b1, f.inchideri], [['principal'], 0, 1, ['gata']])
   const dc = f.rpcArgs['fn_ofertare_cb_deconteaza'][0]
-  assertEquals([dc.p_model, dc.p_tokeni_in, dc.p_tokeni_out, dc.p_cost], [`${MODEL_A}+${MODEL_S}`, 2000, 500, r4(costH(1000, 200) + costS(1000, 300))])
-  assertEquals(f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs.length, 2)
+  assertEquals([dc.p_model, dc.p_cost], [MODEL_A, r4(costH(1000, 200))])
   const fel = (r.body.raport as any[]).find((x) => x.felie === 0)
-  assertEquals([fel.escaladare, fel.model, fel.poarta_b1.deficit], [['deficit_b1:1/2', 'adoptat:sonnet'], `${MODEL_A}+${MODEL_S}`, false])
+  assertEquals([fel.escaladare, fel.poarta_b1.deficit, fel.poarta_b1.neacoperite], [undefined, true, ['002']])
 })
 
-Deno.test('A3: maximum o escaladare — dacă și Sonnet are deficit, NU urmează un al treilea apel; felia gata cu deficitul raportat (B2 decide)', async () => {
-  const f = fals({ principal: ok([R003]), escaladare: ok([R003]) })
+Deno.test('A3: maximum o escaladare — Haiku nenormalizabil, Sonnet tot nenormalizabil → NU urmează un al treilea apel', async () => {
+  const f = fals({ principal: ok([R002, R003, { cheie_straina: 1 }]), escaladare: ok([R002, R003, { cheie_straina: 2 }]) })
   const r = await RULEAZA(f)
-  assertEquals([f.apeluriAI, r.body.felii_escaladate, r.body.felii_cu_deficit_b1, f.inchideri], [['principal', 'escaladare'], 1, 1, ['gata']])
-  const fel = (r.body.raport as any[]).find((x) => x.felie === 0)
-  assertEquals([fel.poarta_b1.deficit, fel.poarta_b1.neacoperite], [true, ['002']])
+  assertEquals([f.apeluriAI, r.body.felii_escaladate, f.inchideri], [['principal', 'escaladare'], 1, ['esuat']])
 })
 
 Deno.test('A3: Haiku incert (tăiat / refuz) → escaladare; Sonnet bun → felia gata, costul Haiku-ului tăiat intră în decontare', async () => {
@@ -122,27 +119,22 @@ Deno.test('A3: apelul Sonnet — gândirea oprită cu between_tools (disabled = 
   assertEquals([corp.model, corp.thinking, corp.output_config.effort], [MODEL_A, { type: 'disabled' }, undefined])
 })
 
-// ── review Gemini A2+A3 r1 (P2): adoptarea rezultatului Sonnet ──
-Deno.test('A3 r2: Sonnet cu rânduri nenormalizabile NU înlocuiește un Haiku valid — felia rămâne gata cu observațiile Haiku, cost = ambele', async () => {
-  const f = fals({ principal: ok([R003]), escaladare: ok([R002, R003, { cheie_straina: 1 }]) })
+// ── adoptarea rezultatului Sonnet (review Gemini A2+A3 r1, P2), sub politica q1: escaladarea vine doar dintr-un Haiku NEvalid ──
+Deno.test('q1: Haiku nenormalizabil, Sonnet valid → adoptat Sonnet, cost = ambele', async () => {
+  const f = fals({ principal: ok([R003, { cheie_straina: 1 }]), escaladare: ok([R002, R003]) })
   const r = await RULEAZA(f)
   assertEquals([f.apeluriAI, f.inchideri], [['principal', 'escaladare'], ['gata']])
-  assertEquals(f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs.length, 1)
-  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['deficit_b1:1/2', 'adoptat:haiku'])
+  assertEquals(f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs.length, 2)
+  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['nenormalizabile:1', 'adoptat:sonnet'])
   assertEquals(f.rpcArgs['fn_ofertare_cb_deconteaza'][0].p_cost, r4(costH(1000, 200) + costS(1000, 200)))
 })
 
-Deno.test('A3 r2: Sonnet tăiat (necunoscut) după un Haiku valid → se păstrează Haiku, felia gata, decontare cu ambele costuri', async () => {
-  const f = fals({ principal: ok([R003]), escaladare: { txt: '{"r":[', inF: 1000, outF: 16000, necunoscut: true } })
-  const r = await RULEAZA(f)
-  assertEquals(f.inchideri, ['gata'])
-  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['deficit_b1:1/2', 'adoptat:haiku'])
-  assertEquals(f.rpcArgs['fn_ofertare_cb_deconteaza'][0].p_cost, r4(costH(1000, 200) + costS(1000, 16000)))
+Deno.test('q1: Haiku nenormalizabil, Sonnet tăiat (necunoscut) → felia „necunoscut”, rezervarea în consum (nimic adoptat dintr-un rezultat incert)', async () => {
+  const f = fals({ principal: ok([R003, { cheie_straina: 1 }]), escaladare: { txt: '{"r":[', inF: 1000, outF: 16000, necunoscut: true } })
+  await RULEAZA(f)
+  assertEquals([f.inchideri, f.rpcArgs['fn_ofertare_cb_deconteaza'], f.rpcArgs['fn_ofertare_cb_rezervare_necunoscuta']?.length], [['necunoscut'], undefined, 1])
 })
 
-Deno.test('A3 r2: Sonnet cu MAI PUȚINE rânduri acoperite decât Haiku → se păstrează Haiku', async () => {
-  const f = fals({ principal: ok([R003]), escaladare: ok([]) })
-  const r = await RULEAZA(f)
-  assertEquals(f.rpcArgs['fn_ofertare_cb_obs_scrie'][0].p_obs.length, 1)
-  assertEquals((r.body.raport as any[]).find((x) => x.felie === 0).escaladare, ['deficit_b1:1/2', 'adoptat:haiku'])
+Deno.test('q1: identitatea A conține politica de escaladare (alt comportament = alt cache)', () => {
+  assertEquals(EXTRACTOARE.A.escaladare?.politica, 'q1')
 })
