@@ -631,3 +631,24 @@ Harness: `scripts/test_izometrie_e3.sh`; din WSL, pe sloturi paralele, cu `harne
 - `CREATE POLICY` pe `storage.buckets` ca postgres;
 - revenirea (DELETE-ul bucket-ului + `IF NOT FOUND`);
 - preflight-ul `0l` pe PG17 (`pg_get_expr` / `pg_get_triggerdef` depind de search_path; postgres pe prod: `public, extensions, pg_catalog`).
+
+## 16. r5g — răspunsul la NO-GO r5f (Copilot P1 literali / comentarii, Jak P1 operatori) + ce a găsit review-ul intern
+
+Toate punctele de mai jos sunt în închiderea citirilor a porții E3 (`RAPID` + `SAMANTA_E3` în `gen_e3.py`). Închiderea E2a de pe prod nu se schimbă.
+
+1. **P1-A (Copilot) — comentarii și literali.** Copia fără comentarii nu înțelege literalii (`x := '--'; PERFORM storage /* … */ . f()`). Regula îngustă (`k_com`), aplicată pe ORIGINAL, deci un literal n-o poate ascunde: când o schemă a platformei e urmată (după ghilimele, spații și un punct opțional) de deschiderea unui comentariu, calea de căutare a corpului devine necunoscută. Potrivirile necalificate se fac atunci ca pentru orice schemă (fail-closed).
+   - Regula largă (orice `/*` sau `--`) ar fi anulat calea la 192 de corpuri de pe prod, dintre care 162 DEFINER. Regula îngustă prinde 0.
+   - **Teste:** E14n (cazul Copilot), E14q (inversul) + A1–A9 în review.
+2. **P1-B (Jak) — invocare implicită prin operatori, cast-uri și agregate.** Un operator, un cast sau un agregat din afara `pg_catalog` a cărui funcție-suport (`oprcode` / `oprrest` / `oprjoin`, `castfunc`, `aggtransfn` … `aggmfinalfn`) e în închidere → refuz explicit „invocare implicită neanalizată”. Agregatele au `prolang` = 12, deci nu sunt prinse prin nume; se citesc din `pg_aggregate`.
+   - Pe prod: doar pgvector / pg_trgm, cu suport în C, deci 0 cazuri.
+   - **Teste:** E14k (contraexemplul Jak, `OPERATOR(audit.#!#)`), E14r (cast), E14s (agregat), E14l / m / o / p (citirea lui Toma prin DEFINER, refuzul intrării API).
+3. **P1-C (review intern) — funcțiile `fn_izo_*` ca ȚINTE.** Până acum, `fn_izo_*` erau doar excluse din închidere. Un DEFINER din afară care chema un cititor INVOKER `fn_izo_*` scăpa. Acum toate `fn_izo_*` intră în sămânța lui `c_fn`, ca ținte. Orice DEFINER, view, lanț sau `BEGIN ATOMIC` din afara `fn_izo_*` care le cheamă intră în închidere; după P1-B, țintele ies din `c_fn`, ca verificarea DEFINER să nu se aplice API-ului revizuit, aflat sub ștampila E2a.
+   - **Component nou în ștampila E3:** invocările implicite din catalog ale `fn_izo_*` (trigger, politică, DEFAULT, CHECK, index, operator, cast). Local sunt 55, pe prod 22 de triggere E2a / 2c, toate legitime.
+   - **Consecință:** orice migrare viitoare care adaugă o invocare implicită a unei `fn_izo_*` (E3b, E4) trebuie să re-ștampileze E3 în aceeași migrare (`COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS 'porti_e3=' || …`, după poarta completă verde).
+4. **P1-D (review intern) — orice altă dependență din catalog spre o funcție din închidere.** Un rând `pg_depend` spre o funcție din `c_fn` (în afara claselor tratate: `pg_rewrite`, `pg_proc`, `pg_operator`, `pg_cast`) → refuz, cu obiectul numit (`pg_describe_object`).
+   - Pe prod sunt exact 3 obiecte ale platformei: `tr_check_filters ON realtime.subscription`, event trigger-ele `issue_pg_net_access` / `issue_pg_graphql_access`. Stau pe o listă albă cu amprentă `md5(tip | identitate | funcție | owner | SECURITY DEFINER | proconfig)`, fără corpul funcției: funcția de platformă e tratată oricum ca cititor oarecare, iar corpul ei se schimbă la upgrade-urile Supabase. Amprentele sunt recalculate pe prod (22.10).
+   - **Risc operațional declarat:** un upgrade Supabase care schimbă owner-ul / config-ul celor 3, sau adaugă un trigger nou peste o funcție de platformă din închidere, înroșește poarta. Asta oprește intrările E3 (fail-closed), până la o revizie.
+5. **Declarat, rămâne deschis (P2):** mutatorii de cale invocați implicit (un trigger / DEFAULT peste o funcție cu `set_config`). Pe prod, cei 35 de mutatori au 12 triggere (profiles ×4, employees ×2, HR, Ofertare, `auth.users`, realtime) și 2 event triggere. Incluși, ar bloca E3, deci rămân în afara P1-D.
+   - Executorul cu SQL dinamic din fixture-ul de test stă în `information_schema` (exclus din închidere, ca `pg_catalog`; pe prod acolo scrie doar superuserul de bootstrap).
+6. **Teste:** harness-ul are 155 de verificări SQL E3 (E14k–s, E15a–r). Diferențialul rămâne: `inchidere_noua` = E2a pe cele 24 de mutații; 12 mutații sunt „mai strictă”, plus mutațiile pe ținte, plus martorul P2. Fiecare fix pică fără el (probat pe copii regenerate).
+7. **Proba PG17 de refăcut** pe noua poartă, pentru lista albă pe obiectele reale ale platformei.

@@ -9,7 +9,11 @@
 #      INVOKER chemat de DEFINER / citat / overload / mutator; r5f: cicluri de funcții, de mutatori și prin view-uri, pragul de
 #      100 de iterații pe ambele bucle — sub, exact la și peste prag, cu refuzul la neconvergență — și frontiere largi); plus
 #      mutațiile pe care poarta nouă e intenționat MAI STRICTĂ decât E2a (r5f, #825 NO-GO: scheme cu caractere de regex — E2a dă
-#      eroare —, ghilimele în nume, SQL fără EXECUTE / U&"…", comentariu între schema platformei și nume — E2a dă verde fals);
+#      eroare —, ghilimele în nume, SQL fără EXECUTE / U&"…", comentariu între schema platformei și nume — E2a dă verde fals;
+#      r5g: literalii „--” / „/*” care taie copia fără comentarii, invocarea implicită prin operator / cast / agregat — refuz;
+#      r5g #825 NO-GO: invocarea implicită prin expresii din catalog — CHECK / DEFAULT / generată / index / trigger / politică — refuz);
+#      r5g #825 NO-GO: țintele fn_izo_* (sămânța E3) — DEFINER / view / operator / DEFAULT peste un cititor fn_izo_* → poarta reală
+#      roșie; martorul P2 (comentariu oarecare + CAST(, cale fixă fără realtime) — nouă = E2a, verde;
 #      r5f (#825): sămânța din migrare = E2a + tabelele documentelor E3 (teste.inchidere_noua_e3) — adaugă exact cele 3 tabele pe
 #      toate mutațiile, iar mutațiile pe documente (DEFINER / view fără security_invoker / lanț) fac poarta reală roșie
 #   3. curse cu barieră: lock-ul „schemă” (operație E3 ↔ runner + DDL), în ambele ordini
@@ -391,6 +395,72 @@ dif_strict "40 000 de comentarii imbricate între schema platformei și nume (pl
   "DROP FUNCTION teste.com_5(); DROP FUNCTION storage.izo_c3()" ok \
   "'teste.com_5()' = ANY ($FN_NOU) AND NOT ('teste.com_5()' = ANY ($FN_VECHI))"
 unset PGOPTIONS
+# ── r5g (#825, Copilot P1): copia fără comentarii nu înțelege literalii ⇒ un corp cu „/*” sau „--” are calea necunoscută ──
+# DEFINER public (cale public, pg_temp) → storage.izo_c4 calificat, rupt de comentarii: (a) cazul Copilot — un literal '--'
+# înaintea apelului pe aceeași linie (originalul n-are forma calificată, copia taie de la „--”-ul din literal); (b) inversul —
+# un literal '/*' și un comentariu „--” care conține „*/” între schemă și punct (copia taie de la literal până la „*/”, cu tot
+# cu schema). E2a și r5f: verde fals; r5g: ambii DEFINER intră în închidere (necalificatul izo_c4 se caută în corpul lor)
+LIT="$(cat <<'SQL'
+CREATE FUNCTION storage.izo_c4() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.magazie_bucati';
+CREATE FUNCTION public.t_r5g_lit_a() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$DECLARE x text; BEGIN x := '--'; PERFORM storage /* ascuns */ . izo_c4(); RETURN 0; END$b$;
+CREATE FUNCTION public.t_r5g_lit_b() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$BEGIN PERFORM '/*'; RETURN storage -- */ ascuns
+  . izo_c4(); END$b$;
+SQL
+)"
+LIT_NUME="ARRAY['t_r5g_lit_a()','t_r5g_lit_b()']"
+dif_strict "literal „--” / „/*” + comentariu în apelul calificat al schemei platformei (cale fixă fără ea: public, pg_temp)" \
+  "$LIT" "DROP FUNCTION public.t_r5g_lit_a(), public.t_r5g_lit_b(); DROP FUNCTION storage.izo_c4()" ok \
+  "$LIT_NUME <@ $FN_NOU AND NOT ($LIT_NUME && $FN_VECHI)"
+# ── r5g (#825, Jak P1): invocarea implicită — operator / cast / agregat cu funcția-suport în închidere (sau mutator) → refuz
+# explicit din mesaj; DEFINER-ul care îi folosește nu-i scrie numele, deci nu e în nicio închidere (E2a: verde fals) ──
+IMP_SUF=" (funcție-suport din închiderea citirilor sau mutator de cale) (citire nerevizuită)"
+imp() { echo "'invocare implicită neanalizată: $1$IMP_SUF' = ANY ((teste.inchidere_noua()).o_mesaje) AND 'invocare implicită neanalizată: $1$IMP_SUF' = ANY (public.fn_izo_porti_lipsa())"; }
+# operatorul: contraexemplul Jak (prefix, OPERATOR(audit.#!#)) + infix peste un mutator de cale (DEFINER cu cale fixă teste care,
+# după operator, cheamă necalificat o funcție de platformă care citește registrul)
+dif_strict "operator prefix peste o funcție din închidere (Jak) + operator infix peste un mutator" \
+  "CREATE SCHEMA audit;
+  CREATE FUNCTION audit.doc_count(bigint) RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.magazie_bucati';
+  CREATE OPERATOR audit.#!# (RIGHTARG = bigint, FUNCTION = audit.doc_count);
+  CREATE FUNCTION teste.imp_op() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT OPERATOR(audit.#!#) 0::bigint';
+  CREATE FUNCTION storage.izo_c5() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.magazie_bucati';
+  CREATE FUNCTION teste.imp_mut(bigint, bigint) RETURNS bigint LANGUAGE plpgsql AS 'BEGIN PERFORM set_config(''search_path'', ''storage'', true); RETURN \$1; END';
+  CREATE OPERATOR teste.<~~> (LEFTARG = bigint, RIGHTARG = bigint, FUNCTION = teste.imp_mut);
+  CREATE FUNCTION teste.imp_infix() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = teste AS 'BEGIN PERFORM 1::bigint <~~> 2::bigint; RETURN izo_c5(); END'" \
+  "SET client_min_messages = warning; DROP FUNCTION teste.imp_infix(), teste.imp_op(), storage.izo_c5(); DROP OPERATOR teste.<~~> (bigint, bigint); DROP FUNCTION teste.imp_mut(bigint, bigint); DROP SCHEMA audit CASCADE" ok \
+  "$(imp 'operator audit.#!#(NONE,bigint) → audit.doc_count(bigint)') AND $(imp 'operator teste.<~~>(bigint,bigint) → teste.imp_mut(bigint,bigint)')
+   AND NOT (ARRAY['teste.imp_op()','teste.imp_infix()'] && coalesce($FN_NOU, '{}') OR ARRAY['teste.imp_op()','teste.imp_infix()'] && coalesce($FN_VECHI, '{}'))"
+dif_strict "cast cu funcția în închidere" \
+  "CREATE TYPE teste.t_imp AS (nr bigint);
+  CREATE FUNCTION teste.imp_cast(integer) RETURNS teste.t_imp LANGUAGE sql AS 'SELECT ROW((SELECT count(*) FROM public.magazie_bucati))::teste.t_imp';
+  CREATE CAST (integer AS teste.t_imp) WITH FUNCTION teste.imp_cast(integer);
+  CREATE FUNCTION teste.imp_cast_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT (1::teste.t_imp).nr'" \
+  "DROP FUNCTION teste.imp_cast_def(); DROP CAST (integer AS teste.t_imp); DROP FUNCTION teste.imp_cast(integer); DROP TYPE teste.t_imp" ok \
+  "$(imp 'cast (integer AS teste.t_imp) → teste.imp_cast(integer)') AND NOT ('teste.imp_cast_def()' = ANY (coalesce($FN_NOU, '{}')))"
+dif_strict "agregate cu funcția de tranziție / finală în închidere" \
+  "CREATE FUNCTION teste.imp_sf(bigint, integer) RETURNS bigint LANGUAGE sql AS 'SELECT \$1 + (SELECT count(*) FROM public.magazie_bucati)';
+  CREATE AGGREGATE teste.imp_agg(integer) (SFUNC = teste.imp_sf, STYPE = bigint, INITCOND = '0');
+  CREATE FUNCTION teste.imp_sf2(bigint, integer) RETURNS bigint LANGUAGE sql AS 'SELECT \$1 + \$2';
+  CREATE FUNCTION teste.imp_ff(bigint) RETURNS bigint LANGUAGE sql AS 'SELECT \$1 + (SELECT count(*) FROM public.izo_atribuiri)';
+  CREATE AGGREGATE teste.imp_agg2(integer) (SFUNC = teste.imp_sf2, STYPE = bigint, FINALFUNC = teste.imp_ff, INITCOND = '0');
+  CREATE FUNCTION teste.imp_agg_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT teste.imp_agg(1) + teste.imp_agg2(1)'" \
+  "DROP FUNCTION teste.imp_agg_def(); DROP AGGREGATE teste.imp_agg(integer), teste.imp_agg2(integer); DROP FUNCTION teste.imp_sf(bigint, integer), teste.imp_sf2(bigint, integer), teste.imp_ff(bigint)" ok \
+  "$(imp 'agregat teste.imp_agg(integer) → teste.imp_sf(bigint,integer)') AND $(imp 'agregat teste.imp_agg2(integer) → teste.imp_ff(bigint)')
+   AND NOT ('teste.imp_agg_def()' = ANY (coalesce($FN_NOU, '{}')))"
+# martorul (nouă = E2a): operator / cast / agregat peste funcții din afara închiderii, folosite de un DEFINER → poarta verde
+dif "martor r5g: operator / cast / agregat nevinovate (funcții din afara închiderii)" \
+  "CREATE FUNCTION teste.nev_f(bigint) RETURNS bigint LANGUAGE sql AS 'SELECT \$1 + 1';
+  CREATE OPERATOR teste.#+# (RIGHTARG = bigint, FUNCTION = teste.nev_f);
+  CREATE TYPE teste.t_nev AS (nr bigint);
+  CREATE FUNCTION teste.nev_cast(integer) RETURNS teste.t_nev LANGUAGE sql AS 'SELECT ROW(\$1::bigint)::teste.t_nev';
+  CREATE CAST (integer AS teste.t_nev) WITH FUNCTION teste.nev_cast(integer);
+  CREATE FUNCTION teste.nev_sf(bigint, bigint) RETURNS bigint LANGUAGE sql AS 'SELECT \$1 + \$2';
+  CREATE AGGREGATE teste.nev_agg(bigint) (SFUNC = teste.nev_sf, STYPE = bigint, INITCOND = '0');
+  CREATE FUNCTION teste.nev_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT (OPERATOR(teste.#+#) 0::bigint) + (1::teste.t_nev).nr + teste.nev_agg(1::bigint)'" \
+  "DROP FUNCTION teste.nev_def(); DROP AGGREGATE teste.nev_agg(bigint); DROP FUNCTION teste.nev_sf(bigint, bigint); DROP CAST (integer AS teste.t_nev);
+  DROP FUNCTION teste.nev_cast(integer); DROP TYPE teste.t_nev; DROP OPERATOR teste.#+# (NONE, bigint); DROP FUNCTION teste.nev_f(bigint)" 0 \
+  "cardinality(public.fn_izo_porti_lipsa()) = 0 AND cardinality((teste.inchidere_noua()).o_mesaje) = 0 AND teste.nev_def() = 3"
 # ── r5f (#825): tabelele documentelor E3 în închiderea citirilor (design §13.2) ──
 # dif_doc <etichetă> <creează> <șterge> <rosu|verde> <verificare SQL> — mutațiile pe documente: pe sămânța E2a închiderile rămân
 # egale (veche = nouă; E2a nu vede documentele), închiderea exactă din migrare (inchidere_noua_e3) le prinde, iar poarta REALĂ e
@@ -426,8 +496,71 @@ dif_doc "documente: DEFINER → INVOKER pe izo_documente_intrare_randuri" \
 dif_doc "documente: DEFINER cu nume citat (\"public\".\"izo_documente_scanuri\")" \
   "CREATE FUNCTION teste.dd_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM \"public\".\"izo_documente_scanuri\"'" \
   "DROP FUNCTION teste.dd_def()" rosu "'teste.dd_def()' = ANY ($FN_E3)"
+# ── r5g (#825) NO-GO P1-C: funcțiile fn_izo_* sunt ȚINTE ale închiderii doar în sămânța E3 (inchidere_noua_e3); pe sămânța E2a
+# închiderile rămân egale (veche = nouă), iar poarta REALĂ e roșie pe ce cheamă din afara fn_izo_* un cititor fn_izo_* (DEFINER,
+# view fără security_invoker, operator) și pe invocările lor implicite din catalog (ștampila E3); verde pe un INVOKER nechemat ──
+MSG_E3_DEF="definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket / storage.objects / storage.buckets / invocările implicite ale fn_izo_*) diferă de amprenta de la migrare"
+dif_doc "fn_izo_*: DEFINER (cale public, pg_temp) peste cititorul INVOKER al bucății așteptate, fără tabel numit" \
+  "CREATE FUNCTION teste.fz_def(bigint) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS 'SELECT fn_izo_doc_bucata_asteptata(\$1, 1)'" \
+  "DROP FUNCTION teste.fz_def(bigint)" rosu "'teste.fz_def(bigint)' = ANY ($FN_E3) AND NOT ('teste.fz_def(bigint)' = ANY (coalesce($FN_NOU, '{}')))"
+dif_doc "fn_izo_*: DEFINER peste DEFINER-ul intern E2a fn_izo_bucata_proiect" \
+  "CREATE FUNCTION teste.fz_bp(bigint) RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT public.fn_izo_bucata_proiect(\$1)'" \
+  "DROP FUNCTION teste.fz_bp(bigint)" rosu "'teste.fz_bp(bigint)' = ANY ($FN_E3) AND NOT ('teste.fz_bp(bigint)' = ANY (coalesce($FN_NOU, '{}')))"
+dif_doc "fn_izo_*: INVOKER peste fn_izo_doc_hash, nechemat de un DEFINER" \
+  "CREATE FUNCTION teste.fz_inv(bigint) RETURNS text LANGUAGE sql AS 'SELECT public.fn_izo_doc_hash(\$1)'" \
+  "DROP FUNCTION teste.fz_inv(bigint)" verde "'teste.fz_inv(bigint)' = ANY ($FN_E3) AND NOT ('teste.fz_inv(bigint)' = ANY (coalesce($FN_NOU, '{}')))"
+dif_doc "fn_izo_*: view fără security_invoker peste fn_izo_doc_hash" \
+  "CREATE VIEW teste.fz_v AS SELECT public.fn_izo_doc_hash(1) AS h" "DROP VIEW teste.fz_v" rosu \
+  "'teste.fz_v'::regclass::oid = ANY ((teste.inchidere_noua_e3()).o_rel) AND NOT ('teste.fz_v'::regclass::oid = ANY ((teste.inchidere_noua()).o_rel))"
+dif_doc "fn_izo_*: operator peste fn_izo_doc_hash" \
+  "CREATE OPERATOR teste.#~# (RIGHTARG = bigint, FUNCTION = public.fn_izo_doc_hash)" "DROP OPERATOR teste.#~# (NONE, bigint)" rosu \
+  "'invocare implicită neanalizată: operator teste.#~#(NONE,bigint) → fn_izo_doc_hash(bigint)$IMP_SUF' = ANY ((teste.inchidere_noua_e3()).o_mesaje)"
+dif_doc "fn_izo_*: DEFAULT al unui tabel oarecare peste fn_izo_doc_hash (ștampila E3)" \
+  "CREATE TABLE teste.fz_t (h text DEFAULT public.fn_izo_doc_hash(1))" "DROP TABLE teste.fz_t" rosu "'$MSG_E3_DEF' = ANY (public.fn_izo_porti_e3_lipsa())"
+# ── r5g (#825) NO-GO P1-D: invocarea implicită prin expresii din catalog peste funcții din închidere (aici: pe registru, deci și
+# în închiderea E2a) — CHECK pe domeniu / tabel, DEFAULT, coloană generată, index pe expresie, trigger, politică; DEFINER-ul doar
+# inserează, nu numește nimic (E2a: verde fals) → câte un refuz explicit, cu obiectul numit ──
+IMP_CAT=" (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)"
+impc() { echo "EXISTS (SELECT 1 FROM unnest((teste.inchidere_noua()).o_mesaje) m WHERE m LIKE 'invocare implicită neanalizată: $1' AND m LIKE '%$IMP_CAT')
+  AND EXISTS (SELECT 1 FROM unnest(public.fn_izo_porti_lipsa()) m WHERE m LIKE 'invocare implicită neanalizată: $1' AND m LIKE '%$IMP_CAT')"; }
+IMPC="$(cat <<'SQL'
+CREATE SCHEMA audit;
+CREATE FUNCTION audit.cit(int) RETURNS boolean LANGUAGE sql AS 'SELECT $1 > -1 - (SELECT count(*) FROM public.magazie_bucati)';
+CREATE FUNCTION audit.cit_ix(int) RETURNS bigint LANGUAGE sql IMMUTABLE AS 'SELECT $1 + 0 * (SELECT count(*) FROM public.izo_atribuiri)';
+CREATE FUNCTION audit.cit_txt() RETURNS text LANGUAGE sql AS 'SELECT count(*)::text FROM public.izo_importuri';
+CREATE FUNCTION audit.cit_trg() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN NEW.x := (SELECT count(*) FROM public.magazie_bucati_miscari); RETURN NEW; END$f$;
+CREATE DOMAIN audit.dom AS int CHECK (audit.cit(VALUE));
+CREATE TABLE audit.t (x bigint CHECK (audit.cit(x::int)), d text DEFAULT audit.cit_txt(), g bigint GENERATED ALWAYS AS (audit.cit_ix(x::int)) STORED);
+CREATE INDEX t_ix ON audit.t (audit.cit_ix(x::int));
+CREATE TRIGGER t_bi BEFORE INSERT ON audit.t FOR EACH ROW EXECUTE FUNCTION audit.cit_trg();
+ALTER TABLE audit.t ENABLE ROW LEVEL SECURITY;
+CREATE POLICY t_p ON audit.t USING (audit.cit(x::int));
+CREATE FUNCTION teste.ic_def() RETURNS text LANGUAGE sql SECURITY DEFINER AS 'INSERT INTO audit.t (x) SELECT (1::audit.dom)::bigint RETURNING d';
+SQL
+)"
+dif_strict "invocare implicită din catalog: CHECK pe domeniu / tabel, DEFAULT, coloană generată, index pe expresie, trigger, politică" \
+  "$IMPC" "SET client_min_messages = warning; DROP FUNCTION teste.ic_def(); DROP SCHEMA audit CASCADE" ok \
+  "$(impc 'constraint dom\_check% → audit.cit(integer)%') AND $(impc 'constraint t\_x\_check on table audit.t → audit.cit(integer)%')
+   AND $(impc 'default value for column d of table audit.t → audit.cit\_txt()%') AND $(impc 'default value for column g of table audit.t → audit.cit\_ix(integer)%')
+   AND $(impc 'index audit.t\_ix → audit.cit\_ix(integer)%') AND $(impc 'trigger t\_bi on table audit.t → audit.cit\_trg()%')
+   AND $(impc 'policy t\_p on table audit.t → audit.cit(integer)%')
+   AND NOT ('teste.ic_def()' = ANY (coalesce($FN_NOU, '{}')) OR 'teste.ic_def()' = ANY (coalesce($FN_VECHI, '{}')))"
+# ── r5g (#825) NO-GO P2: martorul (nouă = E2a, poarta verde) — forma de pe prod (DEFINER cu cale public, pg_temp, CAST() + un
+# comentariu oarecare, cu realtime.cast în închidere ca INVOKER cu SQL dinamic); regula largă (orice „--” / „/*”) îl înroșea ──
+P2W="$(cat <<'SQL'
+CREATE SCHEMA realtime;
+CREATE FUNCTION realtime."cast"(val text, type_ regtype) RETURNS jsonb LANGUAGE plpgsql
+  AS $f$DECLARE r jsonb; BEGIN EXECUTE format('SELECT to_jsonb(%L::%s)', val, type_) INTO r; RETURN r; END$f$;
+CREATE FUNCTION public.t_r5g_tichet() RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$BEGIN -- numărul următor
+  RETURN (SELECT coalesce(max(CAST(substring(x FROM '[0-9]+') AS integer)), 0) + 1 FROM (VALUES ('TKT-0007')) v(x)); END$b$;
+SQL
+)"
+dif "martor r5g P2: DEFINER (cale public, pg_temp) cu un comentariu oarecare și CAST( — realtime.cast în închidere" "$P2W" \
+  "SET client_min_messages = warning; DROP FUNCTION public.t_r5g_tichet(); DROP SCHEMA realtime CASCADE" 0 \
+  "cardinality(public.fn_izo_porti_lipsa()) = 0 AND 'realtime.\"cast\"(text,regtype)' = ANY ($FN_NOU) AND NOT ('t_r5g_tichet()' = ANY ($FN_NOU))"
 [ "$(q "SELECT cardinality(public.fn_izo_porti_lipsa())")" = 0 ] || esec "2 porțile nu au revenit complete"
-ok "2 diferențial: poarta nouă (rapidă) = poarta E2a pe 24 de mutații (DEFINER direct, view, lanț de 3 view-uri, INVOKER prin DEFINER, citat, overload, mutator; r5f: 7 cicluri — DEFINER ↔ INVOKER ×3, mutatori, view ↔ view, view ↔ funcție, view ↔ ATOMIC; pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență; 2 frontiere largi; 2 martori cu cale fixă) + 8 mutații pe care e mai strictă (3 cu schemă construită — E2a: eroare; „|” în schemă; ghilimele în nume; 16 citiri fără nume scris / fără EXECUTE; 4 comentarii în numele calificat; 40 000 de comentarii imbricate); r5f #825: sămânța din migrare = E2a + exact cele 3 tabele ale documentelor (stare curată + toate cele 24) + 6 mutații pe documente (DEFINER, view fără / cu security_invoker, INVOKER singur, DEFINER → INVOKER, citat)"
+ok "2 diferențial: poarta nouă (rapidă) = poarta E2a pe 24 de mutații (DEFINER direct, view, lanț de 3 view-uri, INVOKER prin DEFINER, citat, overload, mutator; r5f: 7 cicluri — DEFINER ↔ INVOKER ×3, mutatori, view ↔ view, view ↔ funcție, view ↔ ATOMIC; pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență; 2 frontiere largi; 2 martori cu cale fixă) + 12 mutații pe care e mai strictă (3 cu schemă construită — E2a: eroare; „|” în schemă; ghilimele în nume; 16 citiri fără nume scris / fără EXECUTE; 4 comentarii în numele calificat; 40 000 de comentarii imbricate; r5g: 2 literali „--” / „/*” care taie copia fără comentarii; operator prefix + infix peste mutator; cast; 2 agregate) + martorul r5g (operator / cast / agregat nevinovate: nouă = E2a, poarta verde); r5f #825: sămânța din migrare = E2a + exact cele 3 tabele ale documentelor (stare curată + toate cele 24) + 6 mutații pe documente (DEFINER, view fără / cu security_invoker, INVOKER singur, DEFINER → INVOKER, citat); r5g #825 NO-GO: 6 mutații pe țintele fn_izo_* (DEFINER peste cititorul INVOKER / peste DEFINER-ul intern E2a, view, operator, DEFAULT → ștampila E3: roșu; INVOKER nechemat: verde) + invocarea implicită din catalog (7 obiecte: CHECK pe domeniu / tabel, 2 DEFAULT / generată, index, trigger, politică — mai strictă) + martorul P2 (comentariu oarecare + CAST(, nouă = E2a, verde)"
 
 # ── 3. curse: lock-ul „schemă” ──
 CA_J="SET SESSION AUTHORIZATION authenticator; SELECT teste.ca('00000000-0000-0000-0000-000000000030')"

@@ -565,6 +565,229 @@ BEGIN;
 CREATE FUNCTION teste.d_reg() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM public.magazie_bucati';
 SELECT teste.e('E14j martorul E2a: DEFINER care citește magazie_bucati → poarta raportează, ca înainte', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
 ROLLBACK;
+-- r5g (#825, Jak P1): contraexemplul exact — operatorul prefix audit.#!# peste audit.doc_count(bigint) (INVOKER, citește
+-- izo_documente_intrare); DEFINER-ul lui postgres, executabil de authenticated, îl cheamă DOAR prin OPERATOR(audit.#!#): nu
+-- numește funcția / tabelul, n-are EXECUTE, corpul ne-ATOMIC n-are dependențe ⇒ în afara închiderii. Fără r5g: poarta verde
+\set MSG_IMP_SUF ' (funcție-suport din închiderea citirilor sau mutator de cale) (citire nerevizuită)'
+BEGIN;
+CREATE SCHEMA audit;
+CREATE FUNCTION audit.doc_count(bigint) RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.izo_documente_intrare';
+CREATE OPERATOR audit.#!# (RIGHTARG = bigint, FUNCTION = audit.doc_count);
+CREATE FUNCTION teste.d_op() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT OPERATOR(audit.#!#) 0::bigint';
+GRANT EXECUTE ON FUNCTION teste.d_op() TO authenticated;
+SELECT teste.e('E14k operator audit.#!# peste o funcție care citește izo_documente_intrare → poarta refuză explicit (invocare implicită; DEFINER-ul nu e în închidere)',
+  ('invocare implicită neanalizată: operator audit.#!#(NONE,bigint) → audit.doc_count(bigint)' || :'MSG_IMP_SUF') = ANY (public.fn_izo_porti_lipsa())
+  AND NOT (:'MSG_DEF' = ANY (public.fn_izo_porti_lipsa())));
+:CA_T
+SELECT teste.e('E14l utilizator fără drept de citire (Toma): direct 0 documente, prin DEFINER-ul cu operator toate — citirea pe care poarta o închide',
+  (SELECT count(*) FROM public.izo_documente_intrare) = 0 AND teste.d_op() > 0);
+:CA_J
+SELECT teste.eroare('E14m același operator → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+-- r5g (#825, Copilot P1): DEFINER public (search_path = public, pg_temp) → helper INVOKER din storage peste izo_documente_intrare,
+-- chemat calificat cu un comentariu între schemă și nume, după un literal '--' pe aceeași linie: originalul n-are forma
+-- calificată, necalificatul cere storage în cale, iar copia fără comentarii taie de la „--”-ul din literal. Fără r5g: verde
+BEGIN;
+CREATE FUNCTION storage.e3_probe() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.izo_documente_intrare';
+CREATE FUNCTION public.t_r5g_probe() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$DECLARE x text; BEGIN x := '--'; RETURN storage /* ascuns */ . e3_probe(); END$b$;
+GRANT EXECUTE ON FUNCTION public.t_r5g_probe() TO authenticated;
+SELECT teste.e('E14n literal ''--'' + comentariu în apelul calificat storage.e3_probe → poarta raportează DEFINER-ul', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+:CA_T
+SELECT teste.e('E14o utilizator fără drept de citire: prin DEFINER-ul public toate documentele (citirea pe care poarta o închide)',
+  (SELECT count(*) FROM public.izo_documente_intrare) = 0 AND public.t_r5g_probe() > 0);
+:CA_J
+SELECT teste.eroare('E14p același DEFINER → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+-- inversul: un literal '/*' și un comentariu „--” (care conține „*/”) între schemă și punct — copia taie de la literal până la
+-- „*/”, cu tot cu schema
+BEGIN;
+CREATE FUNCTION storage.e3_probe() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.izo_documente_intrare';
+CREATE FUNCTION public.t_r5g_probe() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$BEGIN PERFORM '/*'; RETURN storage -- */ ascuns
+  . e3_probe(); END$b$;
+SELECT teste.e('E14q literal ''/*'' + comentariu „--” între storage și punct → poarta raportează DEFINER-ul', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+-- cast-ul și agregatul cu funcția-suport peste documente (cheamă funcția fără să-i scrie numele; agregatul nu e candidat)
+BEGIN;
+CREATE TYPE teste.t_doc AS (nr bigint);
+CREATE FUNCTION teste.d_cast(integer) RETURNS teste.t_doc LANGUAGE sql AS 'SELECT ROW((SELECT count(*) FROM public.izo_documente_scanuri))::teste.t_doc';
+CREATE CAST (integer AS teste.t_doc) WITH FUNCTION teste.d_cast(integer);
+CREATE FUNCTION teste.d_cast_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT (1::teste.t_doc).nr';
+SELECT teste.e('E14r cast (integer AS teste.t_doc) peste o funcție care citește izo_documente_scanuri → poarta refuză explicit',
+  ('invocare implicită neanalizată: cast (integer AS teste.t_doc) → teste.d_cast(integer)' || :'MSG_IMP_SUF') = ANY (public.fn_izo_porti_lipsa())
+  AND NOT (:'MSG_DEF' = ANY (public.fn_izo_porti_lipsa())));
+ROLLBACK;
+BEGIN;
+CREATE FUNCTION teste.d_sf(bigint, integer) RETURNS bigint LANGUAGE sql AS 'SELECT $1 + (SELECT count(*) FROM public.izo_documente_intrare_randuri)';
+CREATE AGGREGATE teste.d_agg(integer) (SFUNC = teste.d_sf, STYPE = bigint, INITCOND = '0');
+CREATE FUNCTION teste.d_agg_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT teste.d_agg(1)';
+SELECT teste.e('E14s agregat teste.d_agg peste o funcție care citește izo_documente_intrare_randuri → poarta refuză explicit',
+  ('invocare implicită neanalizată: agregat teste.d_agg(integer) → teste.d_sf(bigint,integer)' || :'MSG_IMP_SUF') = ANY (public.fn_izo_porti_lipsa())
+  AND NOT (:'MSG_DEF' = ANY (public.fn_izo_porti_lipsa())));
+ROLLBACK;
+-- martorul: operator / cast / agregat peste funcții din afara închiderii, folosite de un DEFINER → porțile complete
+BEGIN;
+CREATE FUNCTION teste.d_nev(bigint) RETURNS bigint LANGUAGE sql AS 'SELECT $1 + 1';
+CREATE OPERATOR teste.#+# (RIGHTARG = bigint, FUNCTION = teste.d_nev);
+CREATE TYPE teste.t_nev AS (nr bigint);
+CREATE FUNCTION teste.d_nev_cast(integer) RETURNS teste.t_nev LANGUAGE sql AS 'SELECT ROW($1::bigint)::teste.t_nev';
+CREATE CAST (integer AS teste.t_nev) WITH FUNCTION teste.d_nev_cast(integer);
+CREATE FUNCTION teste.d_nev_sf(bigint, bigint) RETURNS bigint LANGUAGE sql AS 'SELECT $1 + $2';
+CREATE AGGREGATE teste.d_nev_agg(bigint) (SFUNC = teste.d_nev_sf, STYPE = bigint, INITCOND = '0');
+CREATE FUNCTION teste.d_nev_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER
+  AS 'SELECT (OPERATOR(teste.#+#) 0::bigint) + (1::teste.t_nev).nr + teste.d_nev_agg(1::bigint)';
+SELECT teste.e('E14t operator / cast / agregat nevinovate (funcții din afara închiderii), folosite de un DEFINER → porțile complete',
+  cardinality(public.fn_izo_porti_lipsa()) = 0 AND teste.d_nev_def() = 3);
+ROLLBACK;
+-- ═══ E15 r5g (#825) NO-GO: P1-C — funcțiile fn_izo_* sunt ȚINTE ale închiderii (un DEFINER / view / operator din afara
+-- fn_izo_* care le cheamă e refuzat; invocările lor implicite din catalog sunt în ștampila E3); P1-D — invocarea implicită prin
+-- expresii din catalog (CHECK, DEFAULT, coloană generată, index, trigger, politică) peste funcții din închidere → refuz, în
+-- afara listei revizuite de pe prod; P2 — calea devine necunoscută doar la un comentariu lipit de o schemă a platformei ═══
+\set MSG_IMP_CAT ' (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)'
+\set MSG_E3_DEF 'definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket / storage.objects / storage.buckets / invocările implicite ale fn_izo_*) diferă de amprenta de la migrare'
+SELECT min(document_id) AS doc_r FROM public.izo_documente_intrare_randuri WHERE nr_crt = 1 \gset
+-- P1-C, repro-ul reviewer-ului: DEFINER public (cale public, pg_temp), executabil de authenticated, peste cititorul INVOKER al
+-- bucății așteptate (owner postgres) — nu numește niciun tabel; fără r5g: poarta verde, iar Toma citește rândul complet
+BEGIN;
+CREATE FUNCTION public.raport_receptie(p_doc bigint) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$SELECT public.fn_izo_doc_bucata_asteptata(p_doc, 1)$b$;
+GRANT EXECUTE ON FUNCTION public.raport_receptie(bigint) TO authenticated;
+SELECT teste.e('E15a DEFINER peste cititorul INVOKER fn_izo_doc_bucata_asteptata (fără tabel numit) → poarta raportează DEFINER-ul',
+  :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+:CA_T
+SELECT teste.e('E15b utilizator fără drept de citire (Toma): direct 0 documente, prin wrapper rândul complet (serie, furnizor) — citirea pe care poarta o închide',
+  (SELECT count(*) FROM public.izo_documente_intrare) = 0 AND public.raport_receptie(:doc_r) ->> 'serie' IS NOT NULL
+  AND public.raport_receptie(:doc_r) ->> 'furnizor' IS NOT NULL);
+:CA_J
+SELECT teste.eroare('E15c același wrapper → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+BEGIN;
+CREATE FUNCTION public.raport_b(p_doc bigint) RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$SELECT public.fn_izo_doc_avertismente(p_doc) || public.fn_izo_doc_blocante(p_doc)$b$;
+SELECT teste.e('E15d DEFINER peste fn_izo_doc_avertismente || fn_izo_doc_blocante → poarta raportează DEFINER-ul', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE FUNCTION teste.w_bp(bigint) RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT public.fn_izo_bucata_proiect($1)';
+SELECT teste.e('E15e DEFINER peste fn_izo_bucata_proiect (DEFINER intern E2a, fără EXECUTE din API) → poarta raportează DEFINER-ul', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE FUNCTION teste.w_inv(bigint) RETURNS text LANGUAGE sql AS 'SELECT public.fn_izo_doc_hash($1)';
+SELECT teste.e('E15f INVOKER din afara fn_izo_* peste fn_izo_doc_hash, nechemat de un DEFINER → porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+CREATE FUNCTION teste.w_def(bigint) RETURNS text LANGUAGE sql SECURITY DEFINER AS 'SELECT teste.w_inv($1)';
+SELECT teste.e('E15g DEFINER → INVOKER → fn_izo_doc_hash → poarta raportează DEFINER-ul', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE VIEW teste.v_hash AS SELECT d.id, public.fn_izo_doc_hash(d.id) AS h FROM generate_series(1, 3) d(id);
+SELECT teste.e('E15h view fără security_invoker peste fn_izo_doc_hash → poarta raportează view-ul', :'MSG_VIEW' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE OPERATOR teste.#~# (RIGHTARG = bigint, FUNCTION = public.fn_izo_doc_hash);
+CREATE FUNCTION teste.w_op() RETURNS text LANGUAGE sql SECURITY DEFINER AS 'SELECT OPERATOR(teste.#~#) 1::bigint';
+SELECT teste.e('E15i operator peste fn_izo_doc_hash → poarta refuză explicit (invocare implicită a unei ținte fn_izo_*)',
+  ('invocare implicită neanalizată: operator teste.#~#(NONE,bigint) → fn_izo_doc_hash(bigint)' || :'MSG_IMP_SUF') = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE TABLE teste.t_dflt (id int, h text DEFAULT public.fn_izo_doc_hash(1));
+SELECT teste.e('E15j DEFAULT al unui tabel oarecare peste fn_izo_doc_hash → ștampila E3 (invocările implicite ale fn_izo_*) refuză',
+  :'MSG_E3_DEF' = ANY (public.fn_izo_porti_e3_lipsa()) AND :'MSG_E3_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+-- P1-D, repro-ul reviewer-ului (C2): DEFAULT peste o funcție INVOKER care citește documentele; DEFINER-ul doar inserează
+-- DEFAULT VALUES — nu numește funcția, nici tabelul documentelor. Fără r5g: poarta verde, Toma primește lista documentelor
+BEGIN;
+CREATE SCHEMA audit;
+CREATE FUNCTION audit.dflt() RETURNS text LANGUAGE sql AS 'SELECT string_agg(nr_document, '','' ORDER BY nr_document) FROM public.izo_documente_intrare';
+CREATE TABLE audit.jurnal (id serial, t text DEFAULT audit.dflt());
+CREATE FUNCTION teste.d_dflt() RETURNS text LANGUAGE sql SECURITY DEFINER AS 'INSERT INTO audit.jurnal DEFAULT VALUES RETURNING t';
+GRANT EXECUTE ON FUNCTION teste.d_dflt() TO authenticated;
+SELECT teste.e('E15k DEFAULT peste o funcție care citește izo_documente_intrare, pornit de un DEFINER care n-o numește → poarta refuză explicit',
+  ('invocare implicită neanalizată: default value for column t of table audit.jurnal → audit.dflt()' || :'MSG_IMP_CAT') = ANY (public.fn_izo_porti_lipsa())
+  AND NOT (:'MSG_DEF' = ANY (public.fn_izo_porti_lipsa())));
+:CA_T
+SELECT teste.e('E15l utilizator fără drept de citire (Toma): direct 0 documente, prin DEFINER-ul cu DEFAULT numerele documentelor',
+  (SELECT count(*) FROM public.izo_documente_intrare) = 0 AND teste.d_dflt() LIKE '%AV 100%');
+:CA_J
+SELECT teste.eroare('E15m același DEFAULT → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+-- restul clasei (C1, C3–C6 + politica): câte un refuz explicit, cu obiectul numit
+BEGIN;
+CREATE SCHEMA audit;
+CREATE FUNCTION audit.chk(int) RETURNS boolean LANGUAGE sql AS 'SELECT $1 > -1 - (SELECT count(*) FROM public.izo_documente_scanuri)';
+CREATE DOMAIN audit.dom AS int CHECK (audit.chk(VALUE));
+CREATE TABLE audit.t3 (x int CHECK (audit.chk(x)));
+CREATE FUNCTION audit.trg() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN NEW.x := (SELECT count(*) FROM public.izo_documente_intrare_randuri); RETURN NEW; END$f$;
+CREATE TABLE audit.t4 (x bigint);
+CREATE TRIGGER t4_bi BEFORE INSERT ON audit.t4 FOR EACH ROW EXECUTE FUNCTION audit.trg();
+CREATE FUNCTION audit.ix(int) RETURNS bigint LANGUAGE sql IMMUTABLE AS 'SELECT $1 + 0 * (SELECT count(*) FROM public.izo_documente_intrare)';
+CREATE TABLE audit.t5 (x int);
+CREATE INDEX t5_ix ON audit.t5 (audit.ix(x));
+CREATE TABLE audit.t6 (x int, g bigint GENERATED ALWAYS AS (audit.ix(x)) STORED);
+CREATE TABLE audit.t7 (x int);
+ALTER TABLE audit.t7 ENABLE ROW LEVEL SECURITY;
+CREATE POLICY p7 ON audit.t7 USING (audit.chk(x));
+SELECT teste.e('E15n CHECK pe domeniu / pe tabel, trigger, index pe expresie, coloană generată, politică peste funcții care citesc documentele → 6 refuzuri explicite',
+  (SELECT count(*) FROM unnest(public.fn_izo_porti_lipsa()) m WHERE m LIKE 'invocare implicită neanalizată: %' AND right(m, length(:'MSG_IMP_CAT')) = :'MSG_IMP_CAT'
+     AND (m LIKE '%constraint dom\_check% → audit.chk(integer)%' OR m LIKE '%constraint t3\_x\_check on table audit.t3 → audit.chk(integer)%'
+          OR m LIKE '%trigger t4\_bi on table audit.t4 → audit.trg()%' OR m LIKE '%index audit.t5\_ix → audit.ix(integer)%'
+          OR m LIKE '%default value for column g of table audit.t6 → audit.ix(integer)%' OR m LIKE '%policy p7 on table audit.t7 → audit.chk(integer)%')) = 6);
+ROLLBACK;
+-- lista revizuită (replici ale obiectelor de pe prod, cu owner-ul / config-ul de acolo): verde; alt owner / alt nume → refuz
+BEGIN;
+CREATE ROLE supabase_realtime_admin NOLOGIN;
+CREATE SCHEMA realtime;
+CREATE TABLE realtime.subscription (id bigint, filters text);
+CREATE FUNCTION realtime.subscription_check_filters() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN IF false THEN EXECUTE 'SELECT 1'; END IF; RETURN NEW; END$f$;
+ALTER FUNCTION realtime.subscription_check_filters() OWNER TO supabase_realtime_admin;
+CREATE TRIGGER tr_check_filters BEFORE INSERT OR UPDATE ON realtime.subscription FOR EACH ROW EXECUTE FUNCTION realtime.subscription_check_filters();
+SELECT teste.e('E15o replica prod: tr_check_filters pe realtime.subscription (funcție din închidere: SQL dinamic, INVOKER, supabase_realtime_admin) e pe lista revizuită → porțile complete',
+  cardinality(public.fn_izo_porti_lipsa()) = 0);
+ALTER FUNCTION realtime.subscription_check_filters() OWNER TO postgres;
+SELECT teste.e('E15p aceeași replică, alt owner al funcției → amprenta diferă, poarta refuză explicit',
+  ('invocare implicită neanalizată: trigger tr_check_filters on table realtime.subscription → realtime.subscription_check_filters()' || :'MSG_IMP_CAT') = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE ROLE supabase_admin NOLOGIN;
+CREATE SCHEMA extensions;
+CREATE FUNCTION extensions.grant_pg_net_access() RETURNS event_trigger LANGUAGE plpgsql SET search_path = '' AS $f$BEGIN IF false THEN EXECUTE 'SELECT 1'; END IF; END$f$;
+ALTER FUNCTION extensions.grant_pg_net_access() OWNER TO supabase_admin;
+CREATE EVENT TRIGGER issue_pg_net_access ON ddl_command_end WHEN TAG IN ('CREATE EXTENSION') EXECUTE FUNCTION extensions.grant_pg_net_access();
+SELECT teste.e('E15q replica prod: event trigger-ul issue_pg_net_access (funcție din închidere, supabase_admin, search_path="") e pe lista revizuită → porțile complete',
+  cardinality(public.fn_izo_porti_lipsa()) = 0);
+ALTER EVENT TRIGGER issue_pg_net_access RENAME TO issue_pg_net_access_2;
+SELECT teste.e('E15r același event trigger, alt nume → poarta refuză explicit',
+  ('invocare implicită neanalizată: event trigger issue_pg_net_access_2 → extensions.grant_pg_net_access()' || :'MSG_IMP_CAT') = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+-- martorul P1-D: CHECK / DEFAULT / domeniu / trigger peste funcții din afara închiderii, pornite de un DEFINER → porțile complete
+BEGIN;
+CREATE SCHEMA audit;
+CREATE FUNCTION audit.nev(int) RETURNS boolean LANGUAGE sql AS 'SELECT $1 >= 0';
+CREATE DOMAIN audit.dom_nev AS int CHECK (audit.nev(VALUE));
+CREATE TABLE audit.t_nev (x audit.dom_nev CHECK (audit.nev(x)), y text DEFAULT audit.nev(1)::text);
+CREATE FUNCTION audit.trg_nev() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN RETURN NEW; END$f$;
+CREATE TRIGGER t_nev_bi BEFORE INSERT ON audit.t_nev FOR EACH ROW EXECUTE FUNCTION audit.trg_nev();
+CREATE FUNCTION teste.d_nev_ins() RETURNS integer LANGUAGE sql SECURITY DEFINER AS 'INSERT INTO audit.t_nev (x) VALUES (1) RETURNING x';
+SELECT teste.e('E15s martor: CHECK / DEFAULT / domeniu / trigger peste funcții din afara închiderii, pornite de un DEFINER → porțile complete',
+  cardinality(public.fn_izo_porti_lipsa()) = 0 AND teste.d_nev_ins() = 1);
+ROLLBACK;
+-- P2: forma de pe prod (fn_genereaza_numar_tichet: DEFINER, cale public, pg_temp, CAST()) + un comentariu oarecare, cu
+-- realtime.cast în închidere (INVOKER cu SQL dinamic, ca pe prod) → verde; cu regula largă (orice „--” / „/*”) era roșie
+BEGIN;
+CREATE SCHEMA realtime;
+CREATE FUNCTION realtime."cast"(val text, type_ regtype) RETURNS jsonb LANGUAGE plpgsql
+  AS $f$DECLARE r jsonb; BEGIN EXECUTE format('SELECT to_jsonb(%L::%s)', val, type_) INTO r; RETURN r; END$f$;
+CREATE FUNCTION public.t_r5g_tichet() RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$BEGIN -- numărul următor
+  RETURN (SELECT coalesce(max(CAST(substring(x FROM '[0-9]+') AS integer)), 0) + 1 FROM (VALUES ('TKT-0007')) v(x)); END$b$;
+SELECT teste.e('E15t P2: DEFINER cu cale fixă fără realtime, un comentariu oarecare și CAST( → porțile complete',
+  cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.t_r5g_tichet() = 8);
+CREATE OR REPLACE FUNCTION public.t_r5g_tichet() RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$BEGIN RETURN (realtime /* lipit */ . "cast"('8', 'integer'::regtype) #>> '{}')::integer; END$b$;
+SELECT teste.e('E15u același DEFINER, cu un comentariu lipit de realtime în apel → poarta raportează DEFINER-ul', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
 SELECT teste.e('E12d după mutanți (anulați): porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
 
 DO $$ BEGIN RAISE NOTICE 'TESTE E3: TOATE OK'; END $$;

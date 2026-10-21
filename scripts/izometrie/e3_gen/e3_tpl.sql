@@ -19,7 +19,11 @@
 --     izo-documente nu se modifică (public / limite), nu se șterge și nu se (re)creează decât de rolurile cu BYPASSRLS;
 --   • poarta E3 (fn_izo_porti_e3_lipsa / fn_izo_porti_e3_definitii, ștampilă proprie): indexuri, ACL pe tabele ȘI pe
 --     coloane, roluri, trigger-ele (definiția completă, r5f), bucket, owner / RLS / FORCE / ACL pe storage.objects și
---     storage.buckets (r5f; RLS-ul cerut explicit), mulțimea exactă de coloane (C) a registrului.
+--     storage.buckets (r5f; RLS-ul cerut explicit), mulțimea exactă de coloane (C) a registrului; r5g (#825) NO-GO: invocările
+--     implicite ale fn_izo_* (orice obiect din catalog, în afara view-urilor și a funcțiilor, care cheamă una).
+-- r5g (#825) NO-GO, în poarta E2a înlocuită aici (fn_izo_porti_lipsa): funcțiile fn_izo_* sunt ținte ale închiderii citirilor
+--   (P1-C); invocarea implicită din catalog peste o funcție din închidere → refuz, în afara listei revizuite de pe prod (P1-D);
+--   calea devine necunoscută doar la un comentariu lipit de o schemă a platformei (P2).
 -- r5f (#825 NO-GO, P1-3/P1-4): baseline-ul EXTERN de dinainte de E3 (Storage + trigger-ele profiles) se verifică la apply
 --   (precondiția 0l) față de amprenta pre-E3 REVIZUITĂ (scripts/izometrie/e3_gen/baseline_pre_e3.json), nu se ștampilează cum e găsit.
 -- Poarta E2a completă (fn_izo_porti_lipsa, ~8,5 s pe prod) rulează în confirmare / PV ÎNAINTEA lock-urilor; după lock-uri
@@ -870,7 +874,16 @@ BEGIN
       (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', n.nspname, c.relname, pg_get_userbyid(c.relowner), c.relrowsecurity, c.relforcerowsecurity,
                                 coalesce(c.relacl::text, '')), ',' ORDER BY c.relname)
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE (n.nspname, c.relname) IN (('storage', 'objects'), ('storage', 'buckets')))))
+        WHERE (n.nspname, c.relname) IN (('storage', 'objects'), ('storage', 'buckets'))),
+      -- r5g (#825) NO-GO P1-C / P1-D: invocările IMPLICITE ale funcțiilor fn_izo_* — orice obiect din catalog (trigger, politică,
+      -- DEFAULT, CHECK, index, operator, cast, I/O de tip …) care cheamă una; view-urile / regulile (pg_rewrite) și funcțiile
+      -- (pg_proc) intră în închiderea citirilor, prin țintele fn_izo_*. Mulțimea de la migrare e cea revizuită (trigger-ele și
+      -- politicile E2a / 2c / E3); un obiect nou (ex. DEFAULT-ul unui tabel oarecare peste un cititor al documentelor) o schimbă
+      (SELECT string_agg(x.d, ',' ORDER BY x.d COLLATE "C")
+         FROM (SELECT DISTINCT format('%s → %s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure) d
+                 FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid
+                WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
+                  AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x)))
   $f$;
 
   CREATE FUNCTION public.fn_izo_porti_e3_lipsa() RETURNS text[]
@@ -879,7 +892,7 @@ BEGIN
   BEGIN
     IF public.fn_izo_porti_e3_definitii() IS DISTINCT FROM
        substring(obj_description('public.fn_izo_porti_e3_definitii()'::regprocedure, 'pg_proc') FROM '^porti_e3=([0-9a-f]{32})$') THEN
-      v := array_append(v, 'definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket / storage.objects / storage.buckets) diferă de amprenta de la migrare');
+      v := array_append(v, 'definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket / storage.objects / storage.buckets / invocările implicite ale fn_izo_*) diferă de amprenta de la migrare');
     END IF;
     -- r5f (#825 NO-GO, P1-3): Storage, cerut explicit (nu doar prin ștampilă): RLS activ pe storage.objects, bucket-ul privat,
     -- cele 5 politici RESTRICTIVE ale bucket-ului la locul lor

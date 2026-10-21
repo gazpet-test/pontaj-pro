@@ -131,6 +131,17 @@ BEGIN
       -- căreia i se aplică (NULL = oricărei funcții)
       a_s text[]; a_x text[];
       k_i int; k_n int; k_s text; k_s2 text; k_adanc oid[] := '{}';
+      -- r5g (#825) NO-GO P2: o schemă a platformei urmată (după ghilimele / spații / un punct opțional) de deschiderea unui
+      -- comentariu — singura formă în care un comentariu rupe apelul ei calificat
+      k_com text := c_st || '(' || array_to_string(c_scheme_platforma, '|') || ')"?[[:space:]]*(\.[[:space:]]*)?(/\*|--)';
+      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod (citite 22.10.2026: singurele obiecte din catalog care cheamă
+      -- funcții din închiderea de pe prod). Amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER | proconfig):
+      -- obiectul și ce cheamă, cu drepturile funcției; corpul NU (funcția de platformă e deja tratată ca cititor oarecare —
+      -- e în închidere — iar corpul ei se schimbă la upgrade-urile Supabase). Altă funcție / alt owner / DEFINER → refuz
+      c_implicite_revizuite constant text[] := ARRAY[
+        'event trigger issue_pg_graphql_access=0f4572b9830eb200bffae0e82fecb110',
+        'event trigger issue_pg_net_access=5c1a15eb921274d7f72b9741b7d0fb9f',
+        'trigger tr_check_filters on realtime.subscription=3a762553e7b46dfe8a5525d53ef822f6'];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -158,7 +169,15 @@ BEGIN
       -- (originalul rămâne): un „/*” sau „--” dintr-un șir taie din copie, nu din original. Cel mult 20 de niveluri (fiecare nivel
       -- = o trecere peste tot corpul — fără plafon, mii de comentarii imbricate ar ține poarta minute întregi): mai adânc → corpul
       -- nu se poate citi sigur, intră în sămânță ca SQL-ul dinamic (k_adanc, mai jos)
+      -- r5g (#825, Copilot P1): copia nu înțelege literalii — un „--” / „/*” dintr-un șir taie din copie chiar apelul ascuns
+      -- de comentariu („x := '--'; PERFORM storage /* c */ . f();”), iar originalul nu-l are calificat. Fail-closed, fără
+      -- tokenizer: calea devine NECUNOSCUTĂ (NULL, în ambele bucle) și numele schemei se potrivesc în corp necalificat.
+      -- r5g (#825) NO-GO P2: nu la orice „/*” / „--” (pe prod: 192 de corpuri, 162 DEFINER — un comentariu + „CAST(” /
+      -- „send” / „search” ar fi înroșit poarta), ci doar când o schemă a platformei e urmată de deschiderea unui comentariu
+      -- (k_com), pe ORIGINAL: comentariul care rupe apelul apare textual acolo, deci un literal nu-l poate ascunde; pe prod: 0
+      -- corpuri. La celelalte scheme necalificatul se potrivește oricum, deci forma calificată ruptă nu ascunde nimic
       FOR k_i IN 1 .. cardinality(k_corp) LOOP
+        IF k_corp[k_i] ~* k_com THEN k_cale[k_i] := NULL; END IF;
         k_s := k_corp[k_i]; k_n := 0;
         LOOP
           k_s2 := regexp_replace(k_s, '/\*([^*/]|\*+[^*/]|/+[^*/])*\*+/', ' ', 'g');
@@ -260,6 +279,55 @@ BEGIN
                  WHERE n2.nspname ~ '[.^$*+?()\[\]{}|\\"]' OR o.nume ~ '"') THEN
         v := array_append(v, 'un nume din închiderea citirilor nu se poate căuta sigur în corpuri (schemă cu caractere speciale de regex / nume cu ghilimele) (citire nerevizuită)');
       END IF;
+      -- r5g (#825, Jak P1): invocarea IMPLICITĂ cheamă o funcție fără să-i scrie numele — operatorul (oprcode / oprrest /
+      -- oprjoin: „OPERATOR(s.#!#) x”, infix / prefix), cast-ul (castfunc: „x::tip”), agregatul (aggtransfn / aggfinalfn /
+      -- aggcombinefn / aggserialfn / aggdeserialfn / aggmtransfn / aggminvtransfn / aggmfinalfn; agregatul e prolang
+      -- internal, deci nu e candidat și numele lui nu se caută); corpurile ne-ATOMIC n-au nici dependențe în catalog. Nu se
+      -- propagă (forma infix nu se poate căuta sigur în corpuri): funcția-suport în închidere sau mutator de cale → refuz
+      -- explicit, oricine ar folosi operatorul / cast-ul / agregatul (fals-pozitive acceptate). Pe prod: 0 (suportul din afara
+      -- pg_catalog e doar C, în extensions — niciodată candidat). Celelalte obiecte din catalog: regula P1-D, mai jos
+      FOR k_s IN SELECT x.d FROM (
+          SELECT format('operator %s → %s', o.oid::regoperator, f.f::regprocedure) d
+            FROM pg_operator o CROSS JOIN LATERAL unnest(ARRAY[o.oprcode::oid, o.oprrest::oid, o.oprjoin::oid]) f(f)
+           WHERE f.f = ANY (c_fn || c_mut)
+          UNION
+          SELECT format('cast (%s AS %s) → %s', c.castsource::regtype, c.casttarget::regtype, c.castfunc::regprocedure)
+            FROM pg_cast c WHERE c.castfunc = ANY (c_fn || c_mut)
+          UNION
+          SELECT format('agregat %s → %s', a.aggfnoid::regprocedure, f.f::regprocedure)
+            FROM pg_aggregate a CROSS JOIN LATERAL unnest(ARRAY[a.aggtransfn::oid, a.aggfinalfn::oid, a.aggcombinefn::oid, a.aggserialfn::oid,
+                                                                a.aggdeserialfn::oid, a.aggmtransfn::oid, a.aggminvtransfn::oid, a.aggmfinalfn::oid]) f(f)
+           WHERE f.f = ANY (c_fn || c_mut)) x
+        ORDER BY x.d COLLATE "C"
+      LOOP
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (funcție-suport din închiderea citirilor sau mutator de cale) (citire nerevizuită)');
+      END LOOP;
+      -- r5g (#825) NO-GO P1-C: țintele fn_izo_* ies din c_fn după propagare (API-ul revizuit, sub ștampila E2a; un DEFINER
+      -- fn_izo_* nu e „DEFINER din afara registrului”). Fără sămânța E3 c_fn nu conține fn_izo_* (nici candidați, nici
+      -- SQL dinamic), deci aici nu schimbă nimic
+      c_fn := ARRAY(SELECT x.f FROM unnest(c_fn) x(f) JOIN pg_proc q ON q.oid = x.f
+                     WHERE NOT (q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'));
+      -- r5g (#825) NO-GO P1-D: invocarea implicită prin EXPRESII DIN CATALOG — CHECK pe domeniu / tabel, DEFAULT, coloană
+      -- generată, expresie de index, trigger (și event trigger), politică, statistici, I/O de tip, clasă de operatori …: un
+      -- DEFINER care scrie / convertește / sortează le pornește fără să numească funcția. Orice rând pg_depend spre o funcție
+      -- din închidere al cărui obiect nu e propagat mai sus (view / regulă: pg_rewrite; funcție: pg_proc — candidații prin
+      -- propagare, agregatele prin regula de deasupra; operator / cast: regula de deasupra) → refuz explicit, cu obiectul numit,
+      -- în afara listei revizuite (c_implicite_revizuite). Doar c_fn, nu și mutatorii: pe prod cei 35 (orice set_config /
+      -- search_path în corp) au 12 trigger-e și 2 funcții de event trigger — invocarea lor implicită rămâne întrebare deschisă
+      FOR k_s IN SELECT x.d FROM (
+          SELECT DISTINCT format('%s → %s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure) d
+            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_namespace n2 ON n2.oid = q.pronamespace
+                 CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
+           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)
+             AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass, 'pg_cast'::regclass)
+             AND format('%s %s=%s', o.type, o.identity,
+                        md5(concat_ws('|', o.type, o.identity, format('%I.%I(%s)', n2.nspname, q.proname, pg_get_function_identity_arguments(q.oid)),
+                                      pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''))))
+                 <> ALL (c_implicite_revizuite)) x
+        ORDER BY x.d COLLATE "C"
+      LOOP
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)');
+      END LOOP;
       o_rel := c_rel; o_fn := c_fn; o_mut := c_mut; o_mesaje := v;
     END;
 
@@ -296,15 +364,20 @@ BEGIN
       -- căreia i se aplică (NULL = oricărei funcții)
       a_s text[]; a_x text[];
       k_i int; k_n int; k_s text; k_s2 text; k_adanc oid[] := '{}';
+      -- r5g (#825) NO-GO P2: o schemă a platformei urmată (după ghilimele / spații / un punct opțional) de deschiderea unui
+      -- comentariu — singura formă în care un comentariu rupe apelul ei calificat
+      k_com text := c_st || '(' || array_to_string(c_scheme_platforma, '|') || ')"?[[:space:]]*(\.[[:space:]]*)?(/\*|--)';
+      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod (citite 22.10.2026: singurele obiecte din catalog care cheamă
+      -- funcții din închiderea de pe prod). Amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER | proconfig):
+      -- obiectul și ce cheamă, cu drepturile funcției; corpul NU (funcția de platformă e deja tratată ca cititor oarecare —
+      -- e în închidere — iar corpul ei se schimbă la upgrade-urile Supabase). Altă funcție / alt owner / DEFINER → refuz
+      c_implicite_revizuite constant text[] := ARRAY[
+        'event trigger issue_pg_graphql_access=0f4572b9830eb200bffae0e82fecb110',
+        'event trigger issue_pg_net_access=5c1a15eb921274d7f72b9741b7d0fb9f',
+        'trigger tr_check_filters on realtime.subscription=3a762553e7b46dfe8a5525d53ef822f6'];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
-      -- r5f (#825): + tabelele documentelor E3 — RLS cu citire prin fn_izo_citire, ca registrul (design §13.2): un DEFINER /
-      -- un view fără security_invoker / un lanț din afara fn_izo_* care ajunge la ele e refuzat la fel. Funcțiile E3 legitime
-      -- (fn_izo_doc_* / fn_izo_scan_*, owner izo_doc_editor / izo_receptie_writer / postgres) sunt fn_izo_*: în afara
-      -- închiderii, ca la E2a, și acoperite de ștampila E2a (fn_izo_porti_definitii: owner, corp, config, ACL)
-      c_rel := c_rel || ARRAY(SELECT c.oid FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
-         AND c.relname IN ('izo_documente_intrare','izo_documente_intrare_randuri','izo_documente_scanuri'));
       -- funcțiile cu SQL dinamic (orice EXECUTE), în afara registrului și a listei revizuite: în închidere de la început
       SELECT coalesce(array_agg(p.oid), '{}') INTO c_fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prolang NOT IN (12, 13)
@@ -313,6 +386,18 @@ BEGIN
          AND format('%s=%s', p.oid::regprocedure::text, md5(p.prosrc || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner)
                                                            || '|' || coalesce(p.proacl::text, '') || '|' || p.prosecdef::text))
              <> ALL (c_dinamice_revizuite);
+      -- r5f (#825): + tabelele documentelor E3 — RLS cu citire prin fn_izo_citire, ca registrul (design §13.2): un DEFINER /
+      -- un view fără security_invoker / un lanț din afara fn_izo_* care ajunge la ele e refuzat la fel. Funcțiile E3 legitime
+      -- (fn_izo_doc_* / fn_izo_scan_*, owner izo_doc_editor / izo_receptie_writer / postgres) sunt fn_izo_*: în afara
+      -- închiderii, ca la E2a, și acoperite de ștampila E2a (fn_izo_porti_definitii: owner, corp, config, ACL)
+      c_rel := c_rel || ARRAY(SELECT c.oid FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+         AND c.relname IN ('izo_documente_intrare','izo_documente_intrare_randuri','izo_documente_scanuri'));
+      -- r5g (#825) NO-GO P1-C: + TOATE funcțiile public.fn_izo_* ca ȚINTE (nu candidați): cititorii INVOKER ai documentelor
+      -- (owner postgres) și DEFINER-ele interne citesc ce RLS-ul ascunde; un DEFINER / view / lanț din afara fn_izo_* care le
+      -- cheamă (după nume, BEGIN ATOMIC, view, operator / cast / agregat) intră în închidere, ca un cititor direct. După
+      -- propagare ele ies din c_fn (mai jos): sunt API-ul revizuit, sub ștampila E2a. Invocările lor implicite din catalog
+      -- (trigger / politică / DEFAULT / CHECK …) sunt fixate de ștampila E3 (fn_izo_porti_e3_definitii)
+      c_fn := c_fn || ARRAY(SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_izo\_%');
       -- corpurile candidate (orice schemă non-sistem, în afara public.fn_izo_*), o singură dată; calea fixată în proconfig
       -- (NULL = necunoscută: funcția moștenește calea apelantului)
       SELECT coalesce(array_agg(p.oid ORDER BY p.oid), '{}'),
@@ -329,7 +414,15 @@ BEGIN
       -- (originalul rămâne): un „/*” sau „--” dintr-un șir taie din copie, nu din original. Cel mult 20 de niveluri (fiecare nivel
       -- = o trecere peste tot corpul — fără plafon, mii de comentarii imbricate ar ține poarta minute întregi): mai adânc → corpul
       -- nu se poate citi sigur, intră în sămânță ca SQL-ul dinamic (k_adanc, mai jos)
+      -- r5g (#825, Copilot P1): copia nu înțelege literalii — un „--” / „/*” dintr-un șir taie din copie chiar apelul ascuns
+      -- de comentariu („x := '--'; PERFORM storage /* c */ . f();”), iar originalul nu-l are calificat. Fail-closed, fără
+      -- tokenizer: calea devine NECUNOSCUTĂ (NULL, în ambele bucle) și numele schemei se potrivesc în corp necalificat.
+      -- r5g (#825) NO-GO P2: nu la orice „/*” / „--” (pe prod: 192 de corpuri, 162 DEFINER — un comentariu + „CAST(” /
+      -- „send” / „search” ar fi înroșit poarta), ci doar când o schemă a platformei e urmată de deschiderea unui comentariu
+      -- (k_com), pe ORIGINAL: comentariul care rupe apelul apare textual acolo, deci un literal nu-l poate ascunde; pe prod: 0
+      -- corpuri. La celelalte scheme necalificatul se potrivește oricum, deci forma calificată ruptă nu ascunde nimic
       FOR k_i IN 1 .. cardinality(k_corp) LOOP
+        IF k_corp[k_i] ~* k_com THEN k_cale[k_i] := NULL; END IF;
         k_s := k_corp[k_i]; k_n := 0;
         LOOP
           k_s2 := regexp_replace(k_s, '/\*([^*/]|\*+[^*/]|/+[^*/])*\*+/', ' ', 'g');
@@ -431,6 +524,55 @@ BEGIN
                  WHERE n2.nspname ~ '[.^$*+?()\[\]{}|\\"]' OR o.nume ~ '"') THEN
         v := array_append(v, 'un nume din închiderea citirilor nu se poate căuta sigur în corpuri (schemă cu caractere speciale de regex / nume cu ghilimele) (citire nerevizuită)');
       END IF;
+      -- r5g (#825, Jak P1): invocarea IMPLICITĂ cheamă o funcție fără să-i scrie numele — operatorul (oprcode / oprrest /
+      -- oprjoin: „OPERATOR(s.#!#) x”, infix / prefix), cast-ul (castfunc: „x::tip”), agregatul (aggtransfn / aggfinalfn /
+      -- aggcombinefn / aggserialfn / aggdeserialfn / aggmtransfn / aggminvtransfn / aggmfinalfn; agregatul e prolang
+      -- internal, deci nu e candidat și numele lui nu se caută); corpurile ne-ATOMIC n-au nici dependențe în catalog. Nu se
+      -- propagă (forma infix nu se poate căuta sigur în corpuri): funcția-suport în închidere sau mutator de cale → refuz
+      -- explicit, oricine ar folosi operatorul / cast-ul / agregatul (fals-pozitive acceptate). Pe prod: 0 (suportul din afara
+      -- pg_catalog e doar C, în extensions — niciodată candidat). Celelalte obiecte din catalog: regula P1-D, mai jos
+      FOR k_s IN SELECT x.d FROM (
+          SELECT format('operator %s → %s', o.oid::regoperator, f.f::regprocedure) d
+            FROM pg_operator o CROSS JOIN LATERAL unnest(ARRAY[o.oprcode::oid, o.oprrest::oid, o.oprjoin::oid]) f(f)
+           WHERE f.f = ANY (c_fn || c_mut)
+          UNION
+          SELECT format('cast (%s AS %s) → %s', c.castsource::regtype, c.casttarget::regtype, c.castfunc::regprocedure)
+            FROM pg_cast c WHERE c.castfunc = ANY (c_fn || c_mut)
+          UNION
+          SELECT format('agregat %s → %s', a.aggfnoid::regprocedure, f.f::regprocedure)
+            FROM pg_aggregate a CROSS JOIN LATERAL unnest(ARRAY[a.aggtransfn::oid, a.aggfinalfn::oid, a.aggcombinefn::oid, a.aggserialfn::oid,
+                                                                a.aggdeserialfn::oid, a.aggmtransfn::oid, a.aggminvtransfn::oid, a.aggmfinalfn::oid]) f(f)
+           WHERE f.f = ANY (c_fn || c_mut)) x
+        ORDER BY x.d COLLATE "C"
+      LOOP
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (funcție-suport din închiderea citirilor sau mutator de cale) (citire nerevizuită)');
+      END LOOP;
+      -- r5g (#825) NO-GO P1-C: țintele fn_izo_* ies din c_fn după propagare (API-ul revizuit, sub ștampila E2a; un DEFINER
+      -- fn_izo_* nu e „DEFINER din afara registrului”). Fără sămânța E3 c_fn nu conține fn_izo_* (nici candidați, nici
+      -- SQL dinamic), deci aici nu schimbă nimic
+      c_fn := ARRAY(SELECT x.f FROM unnest(c_fn) x(f) JOIN pg_proc q ON q.oid = x.f
+                     WHERE NOT (q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'));
+      -- r5g (#825) NO-GO P1-D: invocarea implicită prin EXPRESII DIN CATALOG — CHECK pe domeniu / tabel, DEFAULT, coloană
+      -- generată, expresie de index, trigger (și event trigger), politică, statistici, I/O de tip, clasă de operatori …: un
+      -- DEFINER care scrie / convertește / sortează le pornește fără să numească funcția. Orice rând pg_depend spre o funcție
+      -- din închidere al cărui obiect nu e propagat mai sus (view / regulă: pg_rewrite; funcție: pg_proc — candidații prin
+      -- propagare, agregatele prin regula de deasupra; operator / cast: regula de deasupra) → refuz explicit, cu obiectul numit,
+      -- în afara listei revizuite (c_implicite_revizuite). Doar c_fn, nu și mutatorii: pe prod cei 35 (orice set_config /
+      -- search_path în corp) au 12 trigger-e și 2 funcții de event trigger — invocarea lor implicită rămâne întrebare deschisă
+      FOR k_s IN SELECT x.d FROM (
+          SELECT DISTINCT format('%s → %s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure) d
+            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_namespace n2 ON n2.oid = q.pronamespace
+                 CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
+           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)
+             AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass, 'pg_cast'::regclass)
+             AND format('%s %s=%s', o.type, o.identity,
+                        md5(concat_ws('|', o.type, o.identity, format('%I.%I(%s)', n2.nspname, q.proname, pg_get_function_identity_arguments(q.oid)),
+                                      pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''))))
+                 <> ALL (c_implicite_revizuite)) x
+        ORDER BY x.d COLLATE "C"
+      LOOP
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)');
+      END LOOP;
       o_rel := c_rel; o_fn := c_fn; o_mut := c_mut; o_mesaje := v;
     END;
 

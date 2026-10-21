@@ -26,14 +26,16 @@ INSERT INTO storage.buckets (id, name) VALUES ('avize', 'avize');
 -- „în”; închiderea citirilor E2a (regex, colaționare C) potrivește în el numele de o literă al helper-ului teste.n (SQL
 -- dinamic ⇒ în închidere) ⇒ fals-pozitiv „DEFINER care citește registrul”, doar local (pe prod nu există teste.n).
 -- teste.n își păstrează contractul (rulează SQL-ul ca rolul curent, întoarce ROW_COUNT), dar corpul lui nu mai numește
--- funcția cu SQL dinamic: o cheamă printr-un operator.
-CREATE FUNCTION teste.executa_si_numara(p_sql text) RETURNS bigint LANGUAGE plpgsql AS $$
+-- o funcție cu SQL dinamic din închidere.
+-- r5g (#825, Jak P1): r5f o chema printr-un operator — tocmai calea pe care poarta o refuză acum explicit („invocare
+-- implicită neanalizată”: operator peste o funcție din închidere). Executorul stă în information_schema, schemă exclusă
+-- din închidere ca pg_catalog (acolo scrie doar superuserul de bootstrap), deci teste.n îl numește fără să intre în ea.
+CREATE FUNCTION information_schema.izo_test_executa_si_numara(p_sql text) RETURNS bigint LANGUAGE plpgsql AS $$
 DECLARE v bigint;
 BEGIN
   EXECUTE p_sql; GET DIAGNOSTICS v = ROW_COUNT; RETURN v;
 END $$;
-CREATE OPERATOR teste.#!# (RIGHTARG = text, FUNCTION = teste.executa_si_numara);
-CREATE OR REPLACE FUNCTION teste.n(p_sql text) RETURNS bigint LANGUAGE sql AS $$ SELECT OPERATOR(teste.#!#) p_sql $$;
-GRANT EXECUTE ON FUNCTION teste.executa_si_numara(text) TO anon, authenticated, service_role;
+CREATE OR REPLACE FUNCTION teste.n(p_sql text) RETURNS bigint LANGUAGE sql AS $$ SELECT information_schema.izo_test_executa_si_numara(p_sql) $$;
+GRANT EXECUTE ON FUNCTION information_schema.izo_test_executa_si_numara(text) TO anon, authenticated, service_role;
 GRANT USAGE ON SCHEMA teste TO authenticator;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO authenticator;
