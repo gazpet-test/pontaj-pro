@@ -87,7 +87,11 @@ BEGIN
   DROP POLICY izo_doc_scan_ins ON storage.objects;
   DROP POLICY izo_doc_scan_sel ON storage.objects;
   DROP POLICY izo_doc_scan_del ON storage.objects;
+  -- Supabase blochează DELETE direct din storage.* (storage.protect_delete); ocolirea oficială, locală tranzacției, DOAR aici:
+  -- bucket-ul e verificat gol mai sus (nicio obiect în izo-documente), deci nu rămân fișiere orfane (găsit pe branch-ul PG17)
+  PERFORM set_config('storage.allow_delete_query', 'true', true);
   DELETE FROM storage.buckets WHERE id = 'izo-documente';
+  PERFORM set_config('storage.allow_delete_query', 'false', true);
   -- registrul: politicile, drepturile rolurilor E3 (REVOKE pe tabel retrage și drepturile pe coloane)
   DROP POLICY magbuc_izo_doceditor_sel ON public.magazie_bucati;
   DROP POLICY magbuc_izo_receptie_sel ON public.magazie_bucati;
