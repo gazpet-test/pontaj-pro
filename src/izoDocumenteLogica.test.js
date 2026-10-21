@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
-  serieCanon, verificaSerie, confuziiNumerice, parseNumar, mmDinM, mDinMm, randGol, randNormalizat, validareRand, validareDocument,
-  totaluriDocument, eroriSalvare, rezumatRegistru, parseTsv, campDinAntet, randuriDinLipire, argumenteSalveaza, argumenteConfirma,
-  argumentePv, normalizeazaVerificare, lipsaReceptie, mesajEroareDoc, poateScrie, verificaCodCurba, randDinBd, antetDinBd, sha256Hex,
+  serieCanon, verificaSerie, confuziiNumerice, parseNumar, mmDinM, mDinMm, fmtM, randGol, randNormalizat, validareRand, validareDocument,
+  totaluriDocument, eroriSalvare, eroriPv, eroareMotiv, rezumatRegistru, parseTsv, campDinAntet, decizieDinText, izolatieDinText, randuriDinLipire,
+  argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, randPentruRpc, manifestScan, cheieDubluraRand,
+  normalizeazaSalvare, normalizeazaVerificare, normalizeazaConfirmare, normalizeazaPv, normalizeazaAnulare, lipsaReceptie, mesajEroareDoc,
+  poateScrie, verificaCodCurba, randDinBd, antetDinBd, sha256Hex, SABLOANE, COLOANE, CHEI_ANTET, CHEI_RAND, CHEI_SCAN, BUCKET_SCANURI,
+  MAX_SCAN_OCTETI, RE_CALE_SCAN, caleScan, pregatesteScan, urcaScan, stergeScanObiect, linkScan,
 } from './izoDocumenteLogica.js'
 
 // ── documentele de test pv_test (C:\Users\Public\claude-server\pv_test\gen\totals.json, 21.10.2026) ─────────────────
@@ -225,43 +229,226 @@ describe('lipirea din Excel', () => {
   })
 })
 
-describe('argumentele RPC (design r4)', () => {
-  it('salvare document nou: p_doc_id / p_versiune NULL, totaluri numerice, lungimi în mm întregi, fără bucata_id', () => {
+// ── contractul RPC E3 (21.10.2026): fixture-uri de scan cu UUID v4 și hash-uri de 64 hex ─────────────────────────
+const H1 = 'a'.repeat(64), H2 = 'b'.repeat(64)
+const UUID1 = '3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f', UUID2 = '9e8d7c6b-5a49-4382-a716-152433425160'
+const scan = (doc, uuid, extra = {}) => ({ id: 1, document_id: doc, cale: `${doc}/${uuid}.pdf`, sha256_original: H1, sha256_pdf: H2, marime: 2048, mime: 'application/pdf', adaugat_la: '2026-10-21', ...extra })
+const chei = o => Object.keys(o).sort()
+
+describe('argumentele RPC — chei exacte (liste închise)', () => {
+  it('SABLOANE (antet + totaluri) = cheile de șablon ale contractului', () => {
+    for (const s of ['aviz_teava', 'lista_ambalare_curbe']) {
+      expect([...SABLOANE[s].antet, ...SABLOANE[s].totaluri].map(x => x[0]).sort()).toEqual([...CHEI_ANTET[s]].sort())
+    }
+  })
+  it('creare: p_doc_id / p_versiune NULL, cinci argumente, p_antet = creare (fără înlocuire) + comune + șablon, p_scanuri NULL', () => {
+    for (const d of [docAviz2(), docCurbe()]) {
+      const a = argumenteSalveaza(d)
+      expect(chei(a)).toEqual(['p_antet', 'p_doc_id', 'p_randuri', 'p_scanuri', 'p_versiune'])
+      expect([a.p_doc_id, a.p_versiune, a.p_scanuri]).toEqual([null, null, null])
+      expect(chei(a.p_antet)).toEqual(['proiect_id', 'depozit_id', 'sablon', ...CHEI_ANTET.comune, ...CHEI_ANTET[d.sablon]].sort())
+      for (const r of a.p_randuri) expect(chei(r)).toEqual([...CHEI_RAND.comune, ...CHEI_RAND[d.sablon]].sort())
+    }
     const a = argumenteSalveaza(docAviz2())
-    expect(a.p_doc_id).toBe(null)
-    expect(a.p_versiune).toBe(null)
     expect(a.p_antet).toMatchObject({ proiect_id: 77, depozit_id: 5, sablon: 'aviz_teava', furnizor: 'FURNIZOR TEST SRL', nr_document: 'TEST-2610222',
-      data_document: '2026-10-22', total_m: 180.93, total_kg: 20318, scanuri: [] })
-    expect(a.p_randuri[10]).toMatchObject({ nr_crt: 11, serie: '999TS00216', lungime_doc_mm: 12220, lungime_masurata_mm: 12190, greutate_kg: 1372, perete_mm: 7.1, decizie: 'primit' })
+      data_document: '2026-10-22', total_m: 180.93, total_kg: 20318, observatii: null })
+    expect(a.p_randuri[10]).toMatchObject({ nr_crt: 11, serie: '999TS00216', lungime_doc_mm: 12220, lungime_masurata_mm: 12190, greutate_kg: 1372, perete_mm: 7.1,
+      diametru_mm: 610, decizie: 'primit', standard: null, izolatie: null })
     expect(a.p_randuri[6]).toMatchObject({ decizie: 'refuzat_la_receptie', motiv: 'fără marcaj vizibil' })
-    expect(a.p_randuri.some(r => 'bucata_id' in r || 'unghi_doc' in r)).toBe(false)
   })
-  it('editare: CAS pe versiune; curbele fără câmpuri de țeavă; manifestul scanurilor în p_antet', () => {
-    const d = { ...docCurbe(), id: 12, versiune: 4, scanuri: [{ cale: '12/abc.pdf', sha256_original: 'a', sha256_pdf: 'b', marime: 10, mime: 'application/pdf', alt: 1 }] }
-    const a = argumenteSalveaza(d)
-    expect([a.p_doc_id, a.p_versiune]).toEqual([12, 4])
+  it('editare: CAS pe versiune, FĂRĂ cheile de identitate / creare; curbele fără câmpuri de țeavă', () => {
+    const a = argumenteSalveaza({ ...docCurbe(), id: 12, versiune: 4, inlocuieste_document_id: 3, motiv_inlocuire: 'x' })
+    expect([a.p_doc_id, a.p_versiune, a.p_scanuri]).toEqual([12, 4, null])
+    for (const k of CHEI_ANTET.creare) expect(k in a.p_antet).toBe(false)
+    expect(chei(a.p_antet)).toEqual([...CHEI_ANTET.comune, ...CHEI_ANTET.lista_ambalare_curbe].sort())
     expect(a.p_antet).toMatchObject({ total_bucati: 12, total_pachete: 6, total_net_kg: 19305, total_brut_kg: 19545 })
-    expect(a.p_antet.scanuri).toEqual([{ cale: '12/abc.pdf', sha256_original: 'a', sha256_pdf: 'b', marime: 10, mime: 'application/pdf' }])
-    expect(a.p_randuri[5]).toMatchObject({ serie: '9006', sarja: '9990003', unghi_doc: 45, unghi_masurat: 30, decizie: 'primit_neconform', cantitate: 1, net_kg: 1799 })
+    expect(a.p_randuri[5]).toMatchObject({ serie: '9006', sarja: '9990003', unghi_doc: 45, unghi_masurat: 30, decizie: 'primit_neconform', cantitate: 1, net_kg: 1799,
+      standard: 'EN 14870-1', lot: null, greutate_kg: null })
     expect('lungime_doc_mm' in a.p_randuri[0]).toBe(false)
+    expect(a.p_randuri.some(r => 'bucata_id' in r || 'serie_canon' in r)).toBe(false)
   })
-  it('confirmare și PV', () => {
+  it('manifestul scanurilor: null = neschimbat (implicit), listă = manifestul întreg cu EXACT 5 chei, [] = golire', () => {
+    const d = { ...docAviz1(), id: 12, versiune: 4, scanuri: [scan(12, UUID1)] }
+    expect(argumenteSalveaza(d).p_scanuri).toBe(null)
+    const a = argumenteSalveaza(d, { scanuri: [...d.scanuri, { ...scan(12, UUID2), pdf: new Blob(['x']), nume: 'aviz.jpg' }] })
+    expect(a.p_scanuri).toEqual([{ cale: `12/${UUID1}.pdf`, sha256_original: H1, sha256_pdf: H2, marime: 2048, mime: 'application/pdf' },
+      { cale: `12/${UUID2}.pdf`, sha256_original: H1, sha256_pdf: H2, marime: 2048, mime: 'application/pdf' }])
+    for (const x of a.p_scanuri) { expect(chei(x)).toEqual([...CHEI_SCAN].sort()); expect(x.cale).toMatch(RE_CALE_SCAN) }
+    expect('scanuri' in a.p_antet).toBe(false)
+    expect(argumenteSalveaza(d, { scanuri: [] }).p_scanuri).toEqual([])
+    expect(manifestScan({ ...scan(12, UUID1), marime: '2048' }).marime).toBe(2048)
+  })
+  it('motiv_inlocuire: obligatoriu (3–1000) când există inlocuieste_document_id; trimis DOAR la creare, împreună cu ținta', () => {
+    const d = { ...docAviz1(), inlocuieste_document_id: '9', motiv_inlocuire: '  nr. aviz greșit  ' }
+    expect(argumenteSalveaza(d).p_antet).toMatchObject({ inlocuieste_document_id: 9, motiv_inlocuire: 'nr. aviz greșit' })
+    expect(eroriSalvare(d)).toEqual([])
+    expect(eroriSalvare({ ...d, motiv_inlocuire: ' ab ' })).toEqual(['Scrie motivul înlocuirii (cel puțin 3 caractere).'])
+    expect(eroriSalvare({ ...d, motiv_inlocuire: 'x'.repeat(1001) })[0]).toContain('peste 1000')
+    expect(validareDocument({ ...d, motiv_inlocuire: '' }).document.map(x => x.camp)).toContain('motiv_inlocuire')
+    const fara = argumenteSalveaza({ ...docAviz1(), motiv_inlocuire: 'ceva' })
+    expect('inlocuieste_document_id' in fara.p_antet || 'motiv_inlocuire' in fara.p_antet).toBe(false)
+    expect(eroriSalvare({ ...d, id: 4, versiune: 2, motiv_inlocuire: '' })).toEqual([])   // la editare înlocuirea nu se mai trimite
+  })
+  it('câmpurile comune ale rândului se păstrează dus-întors BD → editor → RPC (rândurile se înlocuiesc integral)', () => {
+    const bdT = { nr_crt: 3, serie: '999TS00103', sarja: 'TS00011', lot: '901', specificatie: 'Tevi sudate', dimensiune: '610x7,1', grad_otel: 'L360NE',
+      standard: 'EN 10208-2', izolatie: 'PEHD', diametru_mm: 610, perete_mm: 7.1, greutate_kg: 672.5, lungime_doc_mm: 5980, lungime_masurata_mm: 5975,
+      decizie: 'primit_neconform', motiv: 'izolație lovită', observatie: 'la capătul B', bucata_id: null }
+    const rT = argumenteSalveaza({ sablon: 'aviz_teava', id: 3, versiune: 2, depozit_id: 5, antet: {}, randuri: [randDinBd(bdT)] }).p_randuri[0]
+    expect(rT).toEqual(Object.fromEntries([...CHEI_RAND.comune, ...CHEI_RAND.aviz_teava].map(k => [k, bdT[k]])))
+    const bdC = { nr_crt: 6, serie: '9006', sarja: '9990003', lot: 'L2', specificatie: 'INDUCTION BEND', dimensiune: '610x8,8', grad_otel: 'L360NE', standard: 'EN 14870-1',
+      izolatie: 'GRP', diametru_mm: 610, perete_mm: 8.8, greutate_kg: 1800.5, cod: '9006-610-8,8-45-6100-9990003-3', item: '3', unghi_doc: 45, unghi_masurat: 45.5,
+      cantitate: 1, pachet_nr: '3', dimensiuni_cm: '455X80X150', net_kg: 1799, brut_kg: 1819, decizie: 'primit', motiv: null, observatie: null }
+    const rC = argumenteSalveaza({ sablon: 'lista_ambalare_curbe', id: 4, versiune: 2, depozit_id: 5, antet: {}, randuri: [randDinBd(bdC)] }).p_randuri[0]
+    expect(rC).toEqual(Object.fromEntries([...CHEI_RAND.comune, ...CHEI_RAND.lista_ambalare_curbe].map(k => [k, bdC[k]])))
+  })
+  it('observatii (antet comun): citit din BD, trimis la salvare; antetul fără aliasuri istorice', () => {
+    const a = antetDinBd({ furnizor: 'F', nr_document: 'N', data_document: '2026-10-22T00:00:00', observatii: 'camion sosit cu întârziere', total_m: 90.75, cumparator: 'GAZPET' })
+    expect(a).toMatchObject({ observatii: 'camion sosit cu întârziere', data_document: '2026-10-22', total_m: '90,75', cumparator: 'GAZPET', factura: '' })
+    expect(argumenteSalveaza({ sablon: 'aviz_teava', id: 1, versiune: 1, antet: a, randuri: [] }).p_antet).toMatchObject({ observatii: 'camion sosit cu întârziere', total_m: 90.75 })
+    expect(antetDinBd({ furnizor_canon: 'X' }).furnizor).toBe('')
+  })
+  it('decizia invalidă nu pleacă niciodată spre server (serverul ar pune „primit”)', () => {
+    expect(() => randPentruRpc(randNormalizat({ ...randAviz(AVIZ1[0]), decizie: '' }, 'aviz_teava'), 'aviz_teava')).toThrow(/decizie/)
+    const d = docAviz1(); d.randuri[2].decizie = ''
+    expect(eroriSalvare(d)).toContain('Rândul 3: alege decizia (primit / neconform / refuzat).')
+  })
+  it('confirmare cu versiunea + hash-ul verificării; PV; anularea ciornei', () => {
     expect(argumenteConfirma(12, { versiune: 5, hash: 'e3-doc-v1:ab' })).toEqual({ p_doc_id: 12, p_versiune: 5, p_hash: 'e3-doc-v1:ab' })
     expect(argumentePv({ id: 12, versiune: 6 }, ' PV 14 ', '2026-10-23')).toEqual({ p_doc_id: 12, p_versiune: 6, p_pv_nr: 'PV 14', p_pv_data: '2026-10-23' })
+    expect(argumenteAnuleazaDraft({ id: '12', versiune: '3' }, '  dublură introdusă din greșeală ')).toEqual({ p_doc_id: 12, p_versiune: 3, p_motiv: 'dublură introdusă din greșeală' })
+    expect(eroareMotiv('ab', 'motivul anulării')).toBe('Scrie motivul anulării (cel puțin 3 caractere).')
+    expect(eroareMotiv('abc')).toBe(null)
+    expect(eroriPv(' ', '2026-10-23')).toEqual(['Completează numărul PV-ului.'])
+    expect(eroriPv('PV|1', '')).toEqual(['Numărul PV-ului nu poate conține „|”.', 'Completează data PV-ului.'])
+    expect(eroriPv('PV 14', '2026-10-23')).toEqual([])
   })
-  it('verificarea: „ok” doar cu verdict bun, zero blocante, hash și versiune (fail-closed)', () => {
-    expect(normalizeazaVerificare({ versiune: 5, hash: 'h', verdict: 'ok', avertismente: ['format'] })).toMatchObject({ ok: true, blocante: 0, lista: [{ mesaj: 'format', blocant: false }] })
-    expect(normalizeazaVerificare([{ versiune: 5, hash: 'h', verdict: 'ok', avertismente: [] }]).ok).toBe(true)
-    expect(normalizeazaVerificare({ versiune: 5, hash: 'h', verdict: 'ok', avertismente: [{ nr_crt: 7, mesaj: 'sumă', nivel: 'blocant' }] })).toMatchObject({ ok: false, blocante: 1 })
-    expect(normalizeazaVerificare({ versiune: 5, hash: 'h', verdict: 'ok', blocante: ['totaluri'] }).ok).toBe(false)
-    expect(normalizeazaVerificare({ versiune: 5, hash: 'h', verdict: 'blocat', avertismente: [] }).ok).toBe(false)
-    expect(normalizeazaVerificare({ versiune: 5, hash: null, verdict: 'ok' }).ok).toBe(false)
-    expect(normalizeazaVerificare(null).ok).toBe(false)
+})
+
+describe('răspunsurile RPC (forma din contract + documentul cerut)', () => {
+  const V = { document_id: 12, versiune: 5, hash: 'e3-doc-v1:' + 'c'.repeat(64), ok: true, blocante: [], avertismente: [] }
+  it('verificarea: ok doar cu ok === true, zero blocante, forma completă și același document', () => {
+    expect(normalizeazaVerificare(V, 12)).toMatchObject({ ok: true, document_id: 12, versiune: 5, hash: V.hash, blocante: [], avertismente: [], eroare: null })
+    expect(normalizeazaVerificare([V], 12).ok).toBe(true)
+    const av = normalizeazaVerificare({ ...V, avertismente: [{ nr_crt: 11, cod: 'toleranta_lungime', mesaj: 'măsurat 12190 mm' }, { nr_crt: null, cod: 'fara_scan', mesaj: 'fără scan' }] }, 12)
+    expect(av.ok).toBe(true)
+    expect(av.avertismente).toEqual([{ nr_crt: 11, cod: 'toleranta_lungime', mesaj: 'măsurat 12190 mm' }, { nr_crt: null, cod: 'fara_scan', mesaj: 'fără scan' }])
+    const bl = normalizeazaVerificare({ ...V, ok: false, blocante: [{ nr_crt: null, cod: 'total_m', mesaj: 'total m ≠' }] }, 12)
+    expect(bl).toMatchObject({ ok: false, blocante: [{ nr_crt: null, cod: 'total_m', mesaj: 'total m ≠' }], eroare: null })
+    expect(normalizeazaVerificare({ ...V, blocante: [{ nr_crt: 3, cod: 'x', mesaj: 'y' }] }, 12).ok).toBe(false)   // ok:true dar cu blocante → oprit
+    expect(normalizeazaVerificare({ ...V, ok: 'true' }, 12)).toMatchObject({ ok: false, eroare: expect.stringContaining('ok') })
+    expect(normalizeazaVerificare({ ...V, verdict: 'ok', ok: undefined }, 12).ok).toBe(false)
+    expect(normalizeazaVerificare({ ...V, blocante: undefined }, 12).eroare).toContain('blocante')
+    expect(normalizeazaVerificare({ ...V, hash: null }, 12).eroare).toContain('hash')
+    expect(normalizeazaVerificare({ ...V, document_id: 13 }, 12)).toMatchObject({ ok: false, eroare: expect.stringContaining('alt document') })
+    expect(normalizeazaVerificare({ ...V, document_id: undefined }, 12).eroare).toContain('document_id')
+    expect(normalizeazaVerificare(null, 12).ok).toBe(false)
+  })
+  it('salvare / confirmare / PV / anulare: documentul întors trebuie să fie cel cerut, fără fallback pe id-ul local', () => {
+    expect(normalizeazaSalvare({ document_id: 31, versiune: 1, hash: 'h' })).toEqual({ document_id: 31, versiune: 1, hash: 'h' })
+    expect(() => normalizeazaSalvare({ id: 31, versiune: 1, hash: 'h' })).toThrow(/document_id/)
+    expect(() => normalizeazaSalvare({ document_id: 31, versiune: 2, hash: 'h' }, 30)).toThrow(/alt document/)
+    expect(() => normalizeazaSalvare({ document_id: 31, versiune: null, hash: 'h' }, 31)).toThrow(/versiunea/)
+    const c = normalizeazaConfirmare({ document_id: 12, eveniment_id: 900, bucati: [1, 2], avertismente: [{ nr_crt: null, cod: 'fara_scan', mesaj: 'fără scan' }], versiune: 6, idempotent: false }, 12)
+    expect(c).toMatchObject({ bucati: [1, 2], versiune: 6, idempotent: false, avertismente: [{ cod: 'fara_scan' }] })
+    expect(() => normalizeazaConfirmare({ document_id: 12, versiune: 6 }, 12)).toThrow(/bucăților/)
+    expect(normalizeazaPv({ document_id: 12, eveniment_pv_id: 901, bucati_receptionate: 14, avertismente: [], versiune: 7, idempotent: true }, 12))
+      .toMatchObject({ bucati_receptionate: 14, idempotent: true, avertismente: [] })
+    expect(() => normalizeazaPv({ document_id: 12, versiune: 7 }, 12)).toThrow(/recepționate/)
+    expect(normalizeazaAnulare({ document_id: 12, versiune: 4, stare: 'anulat' }, 12)).toEqual({ document_id: 12, versiune: 4, stare: 'anulat' })
+    expect(() => normalizeazaAnulare({ document_id: 12, versiune: 4, stare: 'draft' }, 12)).toThrow(/starea/)
+  })
+})
+
+describe('regulile serverului oglindite local', () => {
+  const c = (extra, base = CURBE[5]) => randNormalizat({ ...randCurba(base), ...extra }, 'lista_ambalare_curbe')
+  it('curba: cantitatea exact 1 (gol = 1) — blocant la confirmare și la salvare', () => {
+    expect(c({ cantitate: '' }).cantitate).toBe(1)
+    expect(validareRand(c({ cantitate: '2' }), 'lista_ambalare_curbe').map(x => `${x.nivel}:${x.camp}`)).toContain('blocant:cantitate')
+    const d = docCurbe(); d.randuri[0].cantitate = '2'
+    expect(eroriSalvare(d)).toContain('Rândul 1: o curbă pe rând (cantitatea 1).')
+    expect(eroriSalvare(docCurbe())).toEqual([])
+  })
+  it('dublura de curbă în document = serie + șarjă + unghi (aceeași serie + șarjă cu alt unghi e legitimă)', () => {
+    const d = docCurbe()
+    d.randuri[1] = { ...d.randuri[1], serie: '9001', sarja: '9990001', unghi_doc: '12' }   // ca 9001 / 9990001, dar 12° (9001 are 5°)
+    expect(validareDocument(d).randuri[1].filter(x => x.camp === 'serie' && x.nivel === 'blocant')).toEqual([])
+    d.randuri[1].unghi_doc = '5'
+    const v = validareDocument(d).randuri[1].filter(x => x.camp === 'serie' && x.nivel === 'blocant')
+    expect(v).toHaveLength(1)
+    expect(v[0].mesaj).toContain('9001 / șarja 9990001 / 5°')
+    d.randuri[1] = { ...d.randuri[1], unghi_doc: '12', unghi_masurat: '5' }               // unghiul din registru = cel măsurat
+    expect(validareDocument(d).randuri[1].some(x => x.camp === 'serie' && x.nivel === 'blocant')).toBe(true)
+    d.randuri[1] = { ...d.randuri[1], unghi_masurat: '', sarja: '9990009' }             // altă șarjă → legitimă
+    expect(validareDocument(d).randuri[1].some(x => x.camp === 'serie' && x.nivel === 'blocant')).toBe(false)
+    expect(cheieDubluraRand(c({}), 'lista_ambalare_curbe')).toBe(JSON.stringify(['9006', '9990003', 45]))
+    expect(cheieDubluraRand(randNormalizat(randAviz(AVIZ1[0]), 'aviz_teava'), 'aviz_teava')).toBe('999TS00101')
+  })
+  it('țeava: dublura rămâne pe serie (canonică)', () => {
+    const d = docAviz1(); d.randuri[3].serie = '999 TS 00101'
+    expect(validareDocument(d).randuri[3].map(x => `${x.nivel}:${x.camp}`)).toContain('blocant:serie')
+  })
+  it('lungimile pleacă în mm întregi (sub-milimetrul se rotunjește); afișarea în metri cu 3 zecimale când mm contează', () => {
+    expect(mmDinM('6.0004')).toBe(6000)
+    expect(mmDinM('12,2196')).toBe(12220)
+    expect(mmDinM('6,001')).toBe(6001)
+    const r = randPentruRpc(randNormalizat({ ...randAviz(AVIZ1[0]), lungime_doc: '6,0015', lungime_masurata: '6.0004' }, 'aviz_teava'), 'aviz_teava')
+    expect([r.lungime_doc_mm, r.lungime_masurata_mm]).toEqual([6002, 6000])
+    expect(Number.isInteger(r.lungime_doc_mm) && Number.isInteger(r.lungime_masurata_mm)).toBe(true)
+    expect(fmtM(90.75)).toBe('90,75')
+    expect(fmtM(90.755)).toBe('90,755')
+    expect(fmtM(null)).toBe('—')
+  })
+  it('precizia: diametru întreg, perete / unghi cu o zecimală — blocant (nu rotunjit tăcut)', () => {
+    const r = x => randNormalizat({ ...randAviz(AVIZ1[0]), ...x }, 'aviz_teava')
+    expect(validareRand(r({ diametru_mm: '610.5' }), 'aviz_teava').map(x => `${x.nivel}:${x.camp}`)).toContain('blocant:diametru_mm')
+    expect(validareRand(r({ perete_mm: '7.15' }), 'aviz_teava').map(x => `${x.nivel}:${x.camp}`)).toContain('blocant:perete_mm')
+    expect(validareRand(r({ perete_mm: '7,1', diametru_mm: '610' }), 'aviz_teava')).toEqual([])
+    const d = docAviz1(); d.randuri[0].diametru_mm = '610.5'; d.randuri[1].perete_mm = '7.15'
+    expect(eroriSalvare(d)).toEqual(['Rândul 1: diametrul se scrie în mm întregi.', 'Rândul 2: peretele are cel mult o zecimală (ex. 7,1).'])
+    const dc = docCurbe(); dc.randuri[0].unghi_doc = '5,25'
+    expect(eroriSalvare(dc)).toEqual(['Rândul 1: unghiul de pe listă are cel mult o zecimală.'])
+    expect(randPentruRpc(r({ perete_mm: '7,1', diametru_mm: '610' }), 'aviz_teava')).toMatchObject({ perete_mm: 7.1, diametru_mm: 610 })
+  })
+  it('izolația: neizolată / PEHD / GRP (sau gol); altceva blochează salvarea', () => {
+    expect([izolatieDinText('pehd'), izolatieDinText('PE-HD'), izolatieDinText('Neizolată'), izolatieDinText('grp'), izolatieDinText(''), izolatieDinText('izolata')])
+      .toEqual(['PEHD', 'PEHD', 'neizolata', 'GRP', null, 'izolata'])
+    const d = docAviz1(); d.randuri[0].izolatie = 'izolata'
+    expect(eroriSalvare(d)).toEqual(['Rândul 1: izolația „izolata” nu e recunoscută (neizolată / PEHD / GRP).'])
+    d.randuri[0].izolatie = 'PEHD'
+    expect(eroriSalvare(d)).toEqual([])
+  })
+  it('seria e obligatorie și la salvare; totalurile întregi ale listei', () => {
+    const d = docAviz1(); d.randuri[0].serie = ' '
+    expect(eroriSalvare(d)).toEqual(['Rândul 1: lipsește seria țevii.'])
+    const dc = docCurbe(); dc.antet.total_bucati = '12,5'
+    expect(eroriSalvare(dc)).toEqual(['„Total bucăți” trebuie să fie număr întreg.'])
+  })
+  it('„+ Rând” nu preia șarja / lotul (trasabilitate), doar constantele fizice', () => {
+    const r = randGol('aviz_teava', 2, randAviz(AVIZ1[0], { izolatie: 'PEHD' }))
+    expect(r).toMatchObject({ sarja: '', lot: '', perete_mm: '7,1', diametru_mm: '610', izolatie: 'PEHD' })
+  })
+})
+
+describe('lipirea: decizia fail-closed și antetele proprii', () => {
+  it('decizia din Excel: doar textele cunoscute; „NU” / „x” rămân de ales (blocant)', () => {
+    expect(['Respins', 'refuzat', 'NU', 'x', 'Primit', 'primit conform', 'OK', 'Neconform → carantină', 'carantina', 'primit_neconform', ''].map(decizieDinText))
+      .toEqual(['refuzat_la_receptie', 'refuzat_la_receptie', '', '', 'primit', 'primit', 'primit', 'primit_neconform', 'primit_neconform', 'primit_neconform', ''])
+    const r = randuriDinLipire('Nr Teava\tL aviz (m)\tDecizie\n999TS00101\t6,04\tNU\n999TS00102\t6,11\tRespins', 'aviz_teava')
+    expect(r.randuri.map(x => x.decizie)).toEqual(['', 'refuzat_la_receptie'])
+    expect(validareRand(randNormalizat(r.randuri[0], 'aviz_teava'), 'aviz_teava').map(x => `${x.nivel}:${x.camp}`)).toContain('blocant:decizie')
+  })
+  it('fiecare etichetă de coloană a ecranului → câmpul ei (dus-întors cu „Copiază” din tabel)', () => {
+    for (const s of ['aviz_teava', 'lista_ambalare_curbe']) for (const [camp, et] of COLOANE[s]) expect([s, et, campDinAntet(et, s)]).toEqual([s, et, camp])
+    for (const [et, camp] of [['Decizie', 'decizie'], ['Motiv', 'motiv'], ['Observație', 'observatie']]) expect(campDinAntet(et, 'aviz_teava')).toBe(camp)
+  })
+  it('izolația lipită se aduce la cheia contractului', () => {
+    const r = randuriDinLipire('Nr Teava\tL aviz (m)\tIzolatie\n999TS00101\t6,04\tpe-hd', 'aviz_teava')
+    expect(r.randuri[0].izolatie).toBe('PEHD')
   })
 })
 
 describe('erori și drepturi', () => {
-  it('„în pregătire” doar când lipsește un obiect E3 / E2a numit', () => {
+  it('„în pregătire” doar când lipsește un obiect E3 / E2a numit (nu la nepotrivirea de argumente)', () => {
     expect(lipsaReceptie({ code: 'PGRST202', message: 'Could not find the function public.fn_izo_doc_verifica(p_doc_id) in the schema cache' })).toBe(true)
     expect(lipsaReceptie({ code: '42P01', message: 'relation "public.izo_documente_intrare" does not exist' })).toBe(true)
     expect(lipsaReceptie({ code: 'PGRST205', message: "Could not find the table 'public.izo_documente_intrare_randuri' in the schema cache" })).toBe(true)
@@ -269,14 +456,26 @@ describe('erori și drepturi', () => {
     expect(lipsaReceptie({ code: '42501', message: 'permission denied for table izo_documente_intrare' })).toBe(false)
     expect(lipsaReceptie({ code: '42703', message: 'column izo_documente_intrare.pv_nr does not exist' })).toBe(false)
     expect(lipsaReceptie({ code: 'PGRST202', message: 'Could not find the function public.fn_alta' })).toBe(false)
+    const semn = { code: 'PGRST202', message: 'Could not find the function public.fn_izo_doc_salveaza(p_antet, p_doc_id, p_randuri, p_versiune) in the schema cache',
+      hint: 'Perhaps you meant to call the function public.fn_izo_doc_salveaza(p_antet, p_doc_id, p_randuri, p_scanuri, p_versiune)' }
+    expect(lipsaReceptie(semn)).toBe(false)
+    expect(mesajEroareDoc(semn)).toContain('nepotrivire cu serverul')
+    expect(mesajEroareDoc(semn)).toContain('p_scanuri')
     expect(lipsaReceptie(null)).toBe(false)
   })
-  it('mesajele', () => {
-    expect(mesajEroareDoc({ code: '40001', message: 'x' })).toContain('Verifică')
+  it('mesajele păstrează textul serverului', () => {
+    expect(mesajEroareDoc({ code: '40001', message: 'izo E3: documentul s-a schimbat între timp (versiunea 5, trimisă 4) — reîncarcă' })).toContain('„Verifică”')
     expect(mesajEroareDoc({ code: '23505', message: 'duplicate key value violates unique constraint "ux_izo_doc_identitate"' })).toContain('același furnizor')
-    expect(mesajEroareDoc({ code: '23505', message: 'seria 999TS00216 (rândul 11) a fost înregistrată între timp de alt document' })).toContain('999TS00216')
-    expect(mesajEroareDoc({ code: '42501', message: 'nope' })).toContain('gestionar')
+    expect(mesajEroareDoc({ code: '23505', message: 'izo E3: o serie din document a fost înregistrată între timp de alt document: 999TS00216' })).toContain('999TS00216')
+    expect(mesajEroareDoc({ code: '23505', message: 'duplicate key value violates unique constraint "izo_documente_intrare_inlocuieste_document_id_key"' })).toContain('deja înlocuit')
+    expect(mesajEroareDoc({ code: '23505', message: 'izo E3: documentul e deja confirmat cu alt conținut' })).toContain('deja confirmarea')
+    const g = mesajEroareDoc({ code: '42501', message: 'izo E3: nu ești gestionar pe proiectul și depozitul documentului' })
+    expect(g).toContain('gestionar'); expect(g).toContain('nu ești gestionar pe proiectul')
+    expect(mesajEroareDoc({ code: '42501', message: 'izo E3: proiectul nu are registrul de țeavă activ' })).toBe('refuzat de server: izo E3: proiectul nu are registrul de țeavă activ')
+    expect(mesajEroareDoc({ code: '42501', message: 'izo E3: documentul e confirmat; se editează doar ciornele' })).toContain('nu mai e draft')
+    expect(mesajEroareDoc({ code: '22023', message: 'izo E3: cheie necunoscută în antet: scanuri' })).toBe('izo E3: cheie necunoscută în antet: scanuri [22023]')
     expect(mesajEroareDoc({ code: 'P0001', message: 'alt mesaj' })).toBe('alt mesaj')
+    expect(mesajEroareDoc(new Error('rețea'))).toBe('rețea')
   })
   it('dreptul de scriere în UI: owner, sau gestionar pe (proiect, depozit) + Magazie editor', () => {
     const a = [{ proiect_id: 77, depozit_id: 5, rol: 'gestionar', activ: true, valabil_de: '2026-10-01', valabil_pana: null }]
@@ -292,19 +491,83 @@ describe('erori și drepturi', () => {
   })
 })
 
-describe('încărcarea din BD și hash-ul', () => {
-  it('rândul și antetul din BD → editor (dus-întors cu argumentele de salvare)', () => {
+describe('încărcarea din BD', () => {
+  it('rândul din BD → editor (mm întregi → metri), fără aliasurile istorice lungime_*_m', () => {
     const r = randDinBd({ nr_crt: 11, serie: '999TS00216', sarja: 'TS00023', lot: '912', lungime_doc_mm: 12220, lungime_masurata_mm: 12190, greutate_kg: 1372, perete_mm: 7.1,
       diametru_mm: 610, decizie: 'primit', observatie: 'măsurat', bucata_id: 901 })
-    expect(r).toMatchObject({ nr_crt: '11', lungime_doc: '12,22', lungime_masurata: '12,19', greutate_kg: '1372', perete_mm: '7,1', bucata_id: 901 })
-    expect(randDinBd({ nr_crt: 1, serie: 'x', lungime_doc_m: 6.04 }).lungime_doc).toBe('6,04')
-    const a = antetDinBd({ furnizor_canon: 'FURNIZOR TEST SRL', nr_document_canon: 'TEST-2610222', data_document: '2026-10-22T00:00:00', total_m: 180.93, total_kg: 20318 })
+    expect(r).toMatchObject({ nr_crt: '11', lungime_doc: '12,22', lungime_masurata: '12,19', greutate_kg: '1372', perete_mm: '7,1', diametru_mm: '610', bucata_id: 901 })
+    expect(randDinBd({ nr_crt: 1, serie: 'x', lungime_doc_m: 6.04 }).lungime_doc).toBe('')
+    const a = antetDinBd({ furnizor: 'FURNIZOR TEST SRL', nr_document: 'TEST-2610222', data_document: '2026-10-22T00:00:00', total_m: 180.93, total_kg: 20318 })
     expect(a).toMatchObject({ furnizor: 'FURNIZOR TEST SRL', nr_document: 'TEST-2610222', data_document: '2026-10-22', total_m: '180,93', total_kg: '20318' })
     const d = { sablon: 'aviz_teava', proiect_id: 77, depozit_id: 5, id: 3, versiune: 2, antet: a, randuri: [r] }
     expect(argumenteSalveaza(d).p_antet).toMatchObject({ total_m: 180.93, total_kg: 20318 })
     expect(argumenteSalveaza(d).p_randuri[0]).toMatchObject({ lungime_doc_mm: 12220, lungime_masurata_mm: 12190, greutate_kg: 1372 })
   })
+})
+
+describe('scanurile: bucket izo-documente, cale <document>/<uuid v4>.pdf, fără upsert, 10 MB după conversie', () => {
+  const storageFals = (raspuns = {}) => {
+    const apeluri = []
+    return { apeluri, from: bucket => ({
+      upload: async (...a) => { apeluri.push(['upload', bucket, ...a]); return raspuns.upload ?? { data: {}, error: null } },
+      remove: async (...a) => { apeluri.push(['remove', bucket, ...a]); return raspuns.remove ?? { data: [{ name: a[0][0] }], error: null } },
+      createSignedUrl: async (...a) => { apeluri.push(['sign', bucket, ...a]); return { data: { signedUrl: 'https://x/semnat' }, error: null } },
+    }) }
+  }
+  it('calea: document + UUID v4 litere mici; altceva e refuzat', () => {
+    expect(BUCKET_SCANURI).toBe('izo-documente')
+    expect(caleScan(12, UUID1.toUpperCase())).toBe(`12/${UUID1}.pdf`)
+    expect(() => caleScan(12, '3f1c2d4e-5a6b-1c7d-8e9f-0a1b2c3d4e5f')).toThrow(/uuid v4/)   // v1, nu v4
+    expect(() => caleScan(null, UUID1)).toThrow()
+    expect(caleScan(12, globalThis.crypto.randomUUID())).toMatch(RE_CALE_SCAN)
+  })
+  it('PDF: hash-urile (64 hex), mărimea, calea; poza trece prin imageToPdf; peste 10 MB după conversie → refuz', async () => {
+    const pdf = new Blob(['%PDF-1.4 test'], { type: 'application/pdf' })
+    const s = await pregatesteScan(12, pdf, { uuid: () => UUID1 })
+    expect(s).toMatchObject({ cale: `12/${UUID1}.pdf`, marime: pdf.size, mime: 'application/pdf' })
+    expect(s.sha256_original).toMatch(/^[0-9a-f]{64}$/)
+    expect(s.sha256_pdf).toBe(s.sha256_original)
+    const poza = new Blob(['jpeg'], { type: 'image/jpeg' })
+    const p = await pregatesteScan(12, poza, { uuid: () => UUID2, imageToPdf: async () => new Blob(['%PDF din poză'], { type: 'application/pdf' }) })
+    expect(p.sha256_pdf).not.toBe(p.sha256_original)
+    const mare = { size: MAX_SCAN_OCTETI + 1, type: 'application/pdf', arrayBuffer: async () => new ArrayBuffer(1) }
+    await expect(pregatesteScan(12, poza, { uuid: () => UUID2, imageToPdf: async () => mare })).rejects.toThrow(/maxim 10 MB/)
+    await expect(pregatesteScan(12, new Blob(['x'], { type: 'text/plain' }), {})).rejects.toThrow(/doar PDF/)
+  })
+  it('încărcarea: bucket-ul izo-documente, upsert false, application/pdf; ștergerea refuzată (data = []) nu e raportată ca reușită', async () => {
+    const st = storageFals()
+    await urcaScan(st, { cale: `12/${UUID1}.pdf`, pdf: 'blob' })
+    expect(st.apeluri[0]).toEqual(['upload', 'izo-documente', `12/${UUID1}.pdf`, 'blob', { contentType: 'application/pdf', upsert: false }])
+    expect(await stergeScanObiect(st, `12/${UUID1}.pdf`)).toBe(true)
+    expect(st.apeluri[1]).toEqual(['remove', 'izo-documente', [`12/${UUID1}.pdf`]])
+    expect(await stergeScanObiect(storageFals({ remove: { data: [], error: null } }), 'x')).toBe(false)
+    expect(await linkScan(st, `12/${UUID1}.pdf`)).toBe('https://x/semnat')
+    expect(st.apeluri[2]).toEqual(['sign', 'izo-documente', `12/${UUID1}.pdf`, 600])
+    await expect(urcaScan(storageFals({ upload: { error: { message: 'Bucket not found' } } }), { cale: 'c', pdf: 'b' })).rejects.toThrow(/izo-documente/)
+  })
   it('sha256 hex (declarat de client până la E9)', async () => {
     expect(await sha256Hex(new TextEncoder().encode('abc').buffer)).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+  })
+})
+
+describe('componenta IzoDocumenteIntrare.jsx (sursa): doar contractul', () => {
+  const src = readFileSync(new URL('./IzoDocumenteIntrare.jsx', import.meta.url), 'utf8')
+  it('nicio referință la bucket-ul `avize`; Storage doar prin ajutoarele cu BUCKET_SCANURI', () => {
+    expect(src).not.toMatch(/['"`]avize['"`]/)
+    expect(src).not.toMatch(/storage\s*\.\s*from\s*\(/)
+    expect(src).toMatch(/urcaScan\(supabase\.storage/)
+    expect(src).toMatch(/stergeScanObiect\(supabase\.storage/)
+  })
+  it('RPC-urile chemate = cele din contract (fără anularea administrativă), salvarea doar cu argumenteSalveaza', () => {
+    const rpc = [...src.matchAll(/\.rpc\(\s*'([^']+)'/g)].map(m => m[1])
+    expect([...new Set(rpc)].sort()).toEqual(['fn_izo_doc_anuleaza_draft', 'fn_izo_doc_confirma', 'fn_izo_doc_pv', 'fn_izo_doc_salveaza', 'fn_izo_doc_verifica', 'fn_izo_proiecte_protejate'])
+    expect([...src.matchAll(/\.rpc\(\s*'fn_izo_doc_salveaza',\s*(\w+)\(/g)].map(m => m[1])).toEqual(['argumenteSalveaza', 'argumenteSalveaza', 'argumenteSalveaza'])
+    expect(src).toMatch(/\.rpc\('fn_izo_doc_anuleaza_draft', argumenteAnuleazaDraft\(/)
+    expect(src).toMatch(/\.rpc\('fn_izo_doc_confirma', argumenteConfirma\(id, verif\)\)/)
+  })
+  it('nicio scriere directă pe tabelele izo_*; „în pregătire” doar la sonda inițială', () => {
+    expect(src).not.toMatch(/from\('izo_[a-z_]+'\)\s*\.\s*(insert|update|upsert|delete)\(/)
+    expect((src.match(/inPregatire\(\)/g) || []).length).toBe(2)       // incarca + incarcaDocs
+    expect((src.match(/lipsaReceptie\(/g) || []).length).toBe(2)
   })
 })

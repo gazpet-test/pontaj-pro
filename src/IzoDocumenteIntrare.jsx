@@ -3,17 +3,20 @@
 // ════════════════════════════════════════════════════════════════════════
 // Gestionarul (atribuit pe proiect + depozit) introduce documentul, marchează fiecare rând primit / neconform / refuzat,
 // apasă „Verifică”, apoi „Confirmă recepția” → bucățile intră în registru (sosit / carantina) și apar în 🧱 Țeavă proiecte;
-// la final pune PV-ul (sosit → receptionat). Design: docs/izometrie/E3_CONFIRMA_DESIGN.md r4 + E3_PLAN.md §4.
-// SCRIERI DOAR PRIN RPC-urile E3: fn_izo_doc_salveaza / _verifica / _confirma / _pv (+ fișierul scanului în bucket-ul `avize`).
-// Niciun INSERT / UPDATE direct pe tabelele izo_*. Anularea e administrativă (postgres) — fără buton aici.
-// Fără migrarea 20261103b ecranul spune doar „Modulul de recepție e în pregătire” (fără erori, fără scrieri).
+// la final pune PV-ul (sosit → receptionat). Contractul RPC al sesiunii Izometrie (21.10.2026) + design E3_CONFIRMA_DESIGN.md r5.
+// SCRIERI DOAR PRIN RPC-urile E3: fn_izo_doc_salveaza / _verifica / _confirma / _pv / _anuleaza_draft (+ fișierul scanului în
+// bucket-ul DEDICAT `izo-documente`). Niciun INSERT / UPDATE direct pe tabelele izo_*. O ciornă o anulează gestionarul ei, cu
+// motiv („Anulează ciorna”); un document CONFIRMAT se anulează doar administrativ (Răzvan) — fără buton aici.
+// Fără migrarea 20261103b ecranul spune doar „Modulul de recepție e în pregătire” (doar la sonda inițială: lista);
+// erorile acțiunilor se arată brut și draftul din editor rămâne.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import {
-  SABLOANE, DECIZII, COLOANE, esteCurba, parseNumar, fmtNr, randGol, validareDocument, eroriSalvare, randuriDinLipire,
-  randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, normalizeazaVerificare, lipsaReceptie, mesajEroareDoc,
-  poateScrie, sha256Hex,
+  SABLOANE, DECIZII, COLOANE, IZOLATII, esteCurba, parseNumar, fmtNr, fmtM, randGol, validareDocument, eroriSalvare, eroriPv, eroareMotiv,
+  randuriDinLipire, randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, normalizeazaSalvare,
+  normalizeazaVerificare, normalizeazaConfirmare, normalizeazaPv, normalizeazaAnulare, listaServer, lipsaReceptie, mesajEroareDoc, poateScrie,
+  pregatesteScan, urcaScan, stergeScanObiect, linkScan,
 } from './izoDocumenteLogica.js'
 
 const G = {
@@ -31,34 +34,51 @@ const S = {
   th: { textAlign:'left', padding:'7px 6px', fontSize:11.5, color:G.muted, fontWeight:700, borderBottom:`1px solid ${G.border2}`, whiteSpace:'nowrap' },
   td: { padding:'4px 4px', fontSize:12.5, borderBottom:`1px solid ${G.border}`, verticalAlign:'top' },
   lbl: { fontSize:11.5, color:G.muted, marginBottom:3, display:'block' },
+  modal: { position:'fixed', inset:0, background:'#000a', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 },
 }
-const BUCKET = 'avize'
 const STARE_META = { draft:{ label:'Draft', color:G.yellow }, confirmat:{ label:'Confirmat', color:G.green }, anulat:{ label:'Anulat', color:G.dim } }
 const DECIZIE_CULOARE = { primit:G.green, primit_neconform:G.orange, refuzat_la_receptie:G.red }
+const IZOLATIE_LABEL = { neizolata:'neizolată', PEHD:'PEHD', GRP:'GRP' }
 const LATIME = { nr_crt:44, serie:118, sarja:92, lot:58, lungime_doc:74, lungime_masurata:74, greutate_kg:66, perete_mm:56, diametru_mm:56, specificatie:150,
-  cod:190, item:44, unghi_doc:62, unghi_masurat:66, standard:92, cantitate:42, pachet_nr:54, dimensiuni_cm:100, net_kg:64, brut_kg:64 }
+  cod:190, item:44, unghi_doc:62, unghi_masurat:66, standard:92, cantitate:42, pachet_nr:54, dimensiuni_cm:100, net_kg:64, brut_kg:64,
+  dimensiune:100, grad_otel:80, izolatie:104 }
 // câmpul din validare (valori tipizate) → câmpul editorului
 const CAMP_EDITOR = { lungime_doc_mm:'lungime_doc', lungime_masurata_mm:'lungime_masurata' }
 const aziLocal = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) }
 const fmtData = d => { if (!d) return '—'; const x = new Date(d); return isNaN(x) ? '—' : x.toLocaleDateString('ro-RO') }
 const uid8 = () => Math.random().toString(36).slice(2, 10)
-const unu = data => (Array.isArray(data) ? data[0] : data)
 
-// ── scanul documentului (design r4 §6 / §6.1) ───────────────────────────────────────────────────────────────
-// TODO(E3 §6.1): calea obiectului e „dată de server” (<document_id>/<uuid>.pdf), dar designul r4 nu numește apelul care o
-// întoarce. Până atunci UI-ul o compune în exact acea formă, iar politica INSERT a bucket-ului `avize` verifică pe server că
-// documentul din cale e `draft` și că apelantul e autorizat pe el. Când apare RPC-ul care dă calea, se schimbă DOAR aici.
-async function incarcaScanDocument(docId, fisier) {
-  const tip = fisier.type || ''
-  const ePoza = tip.startsWith('image/'), ePdf = tip === 'application/pdf' || /\.pdf$/i.test(fisier.name || '')
-  if (!ePoza && !ePdf) throw new Error('se acceptă doar PDF sau poză')
-  const pdf = ePoza ? await imageToPdf(fisier) : fisier          // „TOTUL PDF”: poza devine PDF în browser
-  const sha256_original = await sha256Hex(fisier)
-  const sha256_pdf = ePoza ? await sha256Hex(pdf) : sha256_original
-  const cale = `${docId}/${crypto.randomUUID()}.pdf`
-  const { error } = await supabase.storage.from(BUCKET).upload(cale, pdf, { contentType:'application/pdf', upsert:false })
-  if (error) throw new Error(/bucket not found/i.test(error.message || '') ? 'stocarea scanurilor (bucket „avize”) nu e încă instalată' : (error.message || String(error)))
-  return { cale, sha256_original, sha256_pdf, marime: pdf.size, mime:'application/pdf', nume: fisier.name }
+// ── citirea paginată pe CHEIE (cheie > ultima), până la o pagină goală: nimic trunchiat de limita max-rows a API-ului
+// (rândurile se retrimit ca înlocuire integrală — un rezultat trunchiat ar șterge date chiar cu CAS valid) ──
+const PAGINA = 1000
+async function citestePaginat(cerere, cheie) {
+  const tot = []
+  for (let ultim = null; ;) {
+    let q = cerere()
+    if (ultim != null) q = q.gt(cheie, ultim)
+    const { data, error } = await q.order(cheie).limit(PAGINA)
+    if (error) throw error
+    if (!data?.length) return tot
+    const nou = data[data.length - 1][cheie]
+    if (nou == null || nou === ultim) throw new Error(`paginarea după ${cheie} nu avansează`)
+    tot.push(...data); ultim = nou
+  }
+}
+// documentul COERENT: antetul (versiunea) → rândurile + scanurile → versiunea din nou; dacă s-a schimbat între timp, se reia
+async function citesteDocument(id) {
+  for (let incercare = 0; incercare < 3; incercare++) {
+    const rd = await supabase.from('izo_documente_intrare').select('*').eq('id', id).maybeSingle()
+    if (rd.error) throw rd.error
+    if (!rd.data) throw new Error('documentul nu e vizibil (drepturi) sau nu există')
+    const [randuri, scanuri] = await Promise.all([
+      citestePaginat(() => supabase.from('izo_documente_intrare_randuri').select('*').eq('document_id', id), 'nr_crt'),
+      citestePaginat(() => supabase.from('izo_documente_scanuri').select('*').eq('document_id', id), 'cale'),
+    ])
+    const rv = await supabase.from('izo_documente_intrare').select('versiune').eq('id', id).maybeSingle()
+    if (rv.error) throw rv.error
+    if (rv.data && Number(rv.data.versiune) === Number(rd.data.versiune)) return { d: rd.data, randuri, scanuri }
+  }
+  throw new Error('documentul se modifică chiar acum (salvează altcineva) — încearcă din nou peste câteva secunde')
 }
 
 export default function IzoDocumenteIntrare() {
@@ -70,18 +90,20 @@ export default function IzoDocumenteIntrare() {
   const [docs, setDocs] = useState([])
   const [statDocs, setStatDocs] = useState({})
   const [incarcDocs, setIncarcDocs] = useState(false)
-  const [ed, setEd] = useState(null)          // documentul deschis în editor (câmpurile = text)
-  const [verif, setVerif] = useState(null)    // ultimul răspuns fn_izo_doc_verifica (normalizat)
+  const [ed, setEd] = useState(null)          // documentul deschis în editor (câmpurile = text); stale = id-ul de reîncărcat
+  const [verif, setVerif] = useState(null)    // ultimul răspuns fn_izo_doc_verifica (normalizat) + docId
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
   const [lipire, setLipire] = useState(null)  // { text, inlocuieste }
   const [pv, setPv] = useState(null)          // { nr, data }
+  const [anulare, setAnulare] = useState(null) // { motiv }
+  const [rezultat, setRezultat] = useState(null) // { titlu, avertismente } — după confirmare / PV
   const ultima = useRef(0)
 
   const flash = useCallback((tip, text) => { setMsg({ tip, text }); if (tip === 'ok') setTimeout(() => setMsg(m => (m?.text === text ? null : m)), 7000) }, [])
   const inPregatire = useCallback(() => setSt({ incarc:false, eroare:null, neinstalat:true }), [])
 
-  // ── încărcarea: proiectele cu registru activ, depozitele, drepturile mele ──
+  // ── încărcarea (SONDA inițială): proiectele cu registru activ, depozitele, drepturile mele ──
   const incarca = useCallback(async () => {
     setSt({ incarc:true, eroare:null, neinstalat:false })
     try {
@@ -111,59 +133,57 @@ export default function IzoDocumenteIntrare() {
       setSt({ incarc:false, eroare:null, neinstalat:false })
     } catch (e) {
       console.error(e)
-      setSt({ incarc:false, eroare: e.message || String(e), neinstalat:false })
+      setSt({ incarc:false, eroare: mesajEroareDoc(e), neinstalat:false })
     }
   }, [inPregatire])
   useEffect(() => { incarca() }, [incarca])
 
-  // ── lista documentelor proiectului (doar ultima cerere se aplică) ──
+  // ── lista documentelor proiectului (tot sonda: aici „în pregătire” e permis); doar ultima cerere se aplică ──
   const incarcaDocs = useCallback(async (pid) => {
     const c = ++ultima.current
     if (!pid) { setDocs([]); setStatDocs({}); return }
     setIncarcDocs(true)
     try {
-      const { data, error } = await supabase.from('izo_documente_intrare').select('*').eq('proiect_id', pid)
-        .order('data_document', { ascending:false }).order('id', { ascending:false })
+      const data = await citestePaginat(() => supabase.from('izo_documente_intrare').select('*').eq('proiect_id', pid), 'id')
       if (c !== ultima.current) return
-      if (error) { if (lipsaReceptie(error)) { inPregatire(); return } throw error }
-      const ids = (data || []).map(d => d.id), stat = {}
-      if (ids.length) {
-        const { data: rr, error: e2 } = await supabase.from('izo_documente_intrare_randuri').select('document_id, decizie').in('document_id', ids)
+      data.sort((a, b) => String(b.data_document || '').localeCompare(String(a.data_document || '')) || b.id - a.id)
+      const ids = data.map(d => d.id), stat = {}
+      for (let i = 0; i < ids.length; i += 100) {     // statisticile pe bucăți de 100 de id-uri (URL scurt), paginate pe cheie
+        const rr = await citestePaginat(() => supabase.from('izo_documente_intrare_randuri').select('id, document_id, decizie').in('document_id', ids.slice(i, i + 100)), 'id')
         if (c !== ultima.current) return
-        if (e2) { if (lipsaReceptie(e2)) { inPregatire(); return } throw e2 }
-        for (const r of rr || []) {
+        for (const r of rr) {
           const s = stat[r.document_id] || (stat[r.document_id] = { n:0, primit:0, primit_neconform:0, refuzat_la_receptie:0 })
           s.n++; s[r.decizie] = (s[r.decizie] || 0) + 1
         }
       }
-      setDocs(data || []); setStatDocs(stat)
+      setDocs(data); setStatDocs(stat)
     } catch (e) {
       console.error(e)
-      if (c === ultima.current) flash('err', 'Eroare la încărcarea documentelor: ' + (e.message || e))
+      if (c !== ultima.current) return
+      if (lipsaReceptie(e)) { inPregatire(); return }
+      flash('err', 'Eroare la încărcarea documentelor: ' + mesajEroareDoc(e))
     } finally { if (c === ultima.current) setIncarcDocs(false) }
   }, [flash, inPregatire])
   useEffect(() => { if (!st.incarc && !st.neinstalat) incarcaDocs(proiectId) }, [proiectId, st.incarc, st.neinstalat, incarcaDocs])
 
-  // ── editorul ──
+  // ── editorul: (re)încărcarea documentului; întoarce editorul nou sau null (atunci editorul curent devine „stale”) ──
   const deschide = useCallback(async (id) => {
     setBusy(true)
     try {
-      const [rd, rr, rs] = await Promise.all([
-        supabase.from('izo_documente_intrare').select('*').eq('id', id).maybeSingle(),
-        supabase.from('izo_documente_intrare_randuri').select('*').eq('document_id', id).order('nr_crt'),
-        supabase.from('izo_documente_scanuri').select('*').eq('document_id', id).order('cale'),
-      ])
-      for (const r of [rd, rr, rs]) if (r.error) { if (lipsaReceptie(r.error)) { inPregatire(); return null } throw r.error }
-      if (!rd.data) throw new Error('documentul nu e vizibil (drepturi)')
-      const d = rd.data
-      setEd({ id:d.id, versiune:d.versiune, stare:d.stare, sablon:d.sablon, proiect_id:d.proiect_id, depozit_id:d.depozit_id, bd:d,
-        antet: antetDinBd(d), randuri: (rr.data || []).map(r => ({ _k:uid8(), ...randDinBd(r) })), scanuri: rs.data || [], dirty:false })
-      setVerif(null)
-      return d.id
+      const { d, randuri, scanuri } = await citesteDocument(id)
+      const nou = { id:d.id, versiune:d.versiune, stare:d.stare, sablon:d.sablon, proiect_id:d.proiect_id, depozit_id:d.depozit_id, bd:d,
+        inlocuieste_document_id: d.inlocuieste_document_id ?? '', motiv_inlocuire: d.motiv_inlocuire ?? '',
+        antet: antetDinBd(d), randuri: randuri.map(r => ({ _k:uid8(), ...randDinBd(r) })), scanuri, dirty:false, stale:null }
+      setEd(nou); setVerif(null)
+      return nou
     } catch (e) {
-      console.error(e); flash('err', 'Documentul nu s-a putut deschide: ' + (e.message || e)); return null
+      console.error(e)
+      setVerif(null)
+      setEd(x => (x && (x.id === id || x.id == null) ? { ...x, stale:id } : x))   // fără confirmare pe o stare care nu s-a putut reciti
+      flash('err', 'Documentul nu s-a putut (re)încărca: ' + mesajEroareDoc(e)); return null
     } finally { setBusy(false) }
-  }, [flash, inPregatire])
+  }, [flash])
+  const deschideDinLista = id => { setRezultat(null); setMsg(null); deschide(id) }
 
   const proiect = proiecte.find(p => p.id === proiectId)
   const depoziteProiect = useMemo(() => depozite.filter(d => proiect && d.site_id === proiect.site_id), [depozite, proiect])
@@ -172,14 +192,18 @@ export default function IzoDocumenteIntrare() {
   const depoziteScriere = useMemo(() => depoziteProiect.filter(d => scrie(proiectId, d.id)), [depoziteProiect, scrie, proiectId])
   const gestionarFaraModul = !eu.owner && !['editor', 'admin'].includes(eu.nivelMagazie) && eu.atribuiri.some(a => a.rol === 'gestionar' && a.proiect_id === proiectId)
   const val = useMemo(() => (ed ? validareDocument(ed) : null), [ed])
-  const anulate = useMemo(() => docs.filter(d => d.stare === 'anulat'), [docs])
+  // documentele anulate care se pot înlocui (încă neînlocuite de alt document; serverul verifică oricum ținta și dreptul pe ea)
+  const anulate = useMemo(() => {
+    const inlocuite = new Set(docs.map(d => d.inlocuieste_document_id).filter(Boolean).map(Number))
+    return docs.filter(d => d.stare === 'anulat' && !inlocuite.has(Number(d.id)))
+  }, [docs])
 
   const nou = sablon => {
-    const s = SABLOANE[sablon], antet = { furnizor:'', furnizor_cif:'', nr_document:'', data_document:aziLocal() }
+    const s = SABLOANE[sablon], antet = { furnizor:'', furnizor_cif:'', nr_document:'', data_document:'', observatii:'' }
     for (const [c] of [...s.antet, ...s.totaluri]) antet[c] = ''
     setEd({ id:null, versiune:null, stare:'draft', sablon, proiect_id:proiectId, depozit_id: depoziteScriere.length === 1 ? depoziteScriere[0].id : '',
-      antet, randuri:[{ _k:uid8(), ...randGol(sablon, 1) }], scanuri:[], dirty:true, inlocuieste_document_id:'' })
-    setVerif(null)
+      antet, randuri:[{ _k:uid8(), ...randGol(sablon, 1) }], scanuri:[], dirty:true, stale:null, inlocuieste_document_id:'', motiv_inlocuire:'' })
+    setVerif(null); setRezultat(null); setMsg(null)
   }
   const modifica = fn => { setEd(e => ({ ...fn(e), dirty:true })); setVerif(null) }
   const setAntet = (k, v) => modifica(e => ({ ...e, antet:{ ...e.antet, [k]:v } }))
@@ -187,121 +211,156 @@ export default function IzoDocumenteIntrare() {
   const nrMax = e => Math.max(0, ...e.randuri.map(r => parseNumar(r.nr_crt) || 0))
   const adaugaRand = () => modifica(e => ({ ...e, randuri:[...e.randuri, { _k:uid8(), ...randGol(e.sablon, nrMax(e) + 1, e.randuri[e.randuri.length - 1]) }] }))
   const stergeRand = i => modifica(e => ({ ...e, randuri:e.randuri.filter((_, j) => j !== i) }))
-  const inchide = () => { if (ed?.dirty && !window.confirm('Ai modificări nesalvate. Închizi fără să salvezi?')) return; setEd(null); setVerif(null); setLipire(null); setPv(null) }
+  const inchide = () => {
+    if (ed?.dirty && !window.confirm('Ai modificări nesalvate. Închizi fără să salvezi?')) return
+    setEd(null); setVerif(null); setLipire(null); setPv(null); setAnulare(null); setRezultat(null)
+  }
+  const e40001 = e => String(e?.code || '') === '40001'
 
-  // ── acțiunile (toate prin RPC) ──
+  // ── acțiunile (toate prin RPC; erorile se arată brut, draftul rămâne) ──
   const salveaza = async (doc = ed) => {
+    if (doc.stale) { flash('err', 'Reîncarcă documentul înainte de salvare.'); return null }
     const err = eroriSalvare(doc)
     if (err.length) { flash('err', err.join(' ')); return null }
-    setBusy(true)
+    setBusy(true); setVerif(null)
     try {
       const { data, error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza(doc))
-      if (error) { if (lipsaReceptie(error)) { inPregatire(); return null } throw new Error(mesajEroareDoc(error)) }
-      const r = unu(data)
-      const id = r?.document_id ?? r?.id ?? doc.id
-      if (!id) throw new Error('salvarea n-a întors id-ul documentului')
-      const ok = await deschide(id)
+      if (error) throw error
+      const r = normalizeazaSalvare(data, doc.id || null)
+      const nouEd = await deschide(r.document_id)
       incarcaDocs(proiectId)
-      if (ok) flash('ok', `Draft salvat${r?.versiune != null ? ` (versiunea ${r.versiune})` : ''}.`)
-      return ok
-    } catch (e) { console.error(e); flash('err', 'Salvare eșuată: ' + (e.message || e)); return null } finally { setBusy(false) }
+      if (nouEd) flash('ok', `Draft salvat (versiunea ${r.versiune}).`)
+      return nouEd
+    } catch (e) { console.error(e); flash('err', 'Salvare eșuată: ' + mesajEroareDoc(e)); return null } finally { setBusy(false) }
   }
 
   const verifica = async () => {
-    let id = ed.id
-    if (!id || ed.dirty) { id = await salveaza(); if (!id) return }
+    let cur = ed
+    if (!cur.id || cur.dirty) { cur = await salveaza(); if (!cur) return }
     setBusy(true)
     try {
-      const { data, error } = await supabase.rpc('fn_izo_doc_verifica', { p_doc_id:id })
-      if (error) { if (lipsaReceptie(error)) { inPregatire(); return } throw new Error(mesajEroareDoc(error)) }
-      const v = normalizeazaVerificare(data)
-      setVerif({ ...v, docId:id })
-      flash(v.ok ? 'ok' : 'err', v.ok ? `Verificat: fără blocante${v.lista.length ? ` (${v.lista.length} avertismente)` : ''}. Poți confirma recepția.` : 'Verificarea serverului are blocante — vezi lista de sub tabel.')
-    } catch (e) { console.error(e); flash('err', 'Verificare eșuată: ' + (e.message || e)) } finally { setBusy(false) }
+      const { data, error } = await supabase.rpc('fn_izo_doc_verifica', { p_doc_id:cur.id })
+      if (error) throw error
+      const v = normalizeazaVerificare(data, cur.id)
+      if (v.eroare) { setVerif(null); flash('err', 'Verificare: ' + v.eroare); return }
+      if (v.versiune !== Number(cur.versiune)) {
+        // altcineva a salvat între timp (ecranul n-are modificări nesalvate aici): reîncarc, nu rămân blocat pe o versiune veche
+        setVerif(null); await deschide(cur.id)
+        flash('err', 'Documentul a fost modificat de altcineva între timp — l-am reîncărcat; revezi rândurile și apasă din nou „Verifică”.'); return
+      }
+      setVerif({ ...v, docId:cur.id })
+      flash(v.ok ? 'ok' : 'err', v.ok ? `Verificat: fără blocante${v.avertismente.length ? ` (${v.avertismente.length} avertismente)` : ''}. Poți confirma recepția.` : 'Verificarea serverului are blocante — vezi lista de sub tabel.')
+    } catch (e) { console.error(e); setVerif(null); flash('err', 'Verificare eșuată: ' + mesajEroareDoc(e)) } finally { setBusy(false) }
   }
 
   const edRol = !!ed && scrie(ed.proiect_id, ed.depozit_id)
-  const edScrie = !!ed && ed.stare === 'draft' && (ed.id ? edRol : depoziteScriere.length > 0)
-  const verifCurenta = !!verif && !!ed && verif.docId === ed.id && verif.versiune === ed.versiune
-  const motivConfirma = !ed ? '' : !ed.id ? 'salvează draftul și apasă „Verifică”' : ed.stare !== 'draft' ? 'documentul nu e draft'
+  const edScrie = !!ed && !ed.stale && ed.stare === 'draft' && (ed.id ? edRol : depoziteScriere.length > 0)
+  const verifCurenta = !!verif && !!ed && !ed.dirty && !ed.stale && verif.docId === ed.id && verif.versiune === Number(ed.versiune)
+  const motivConfirma = !ed ? '' : ed.stale ? 'documentul nu s-a putut reîncărca — apasă „Reîncarcă”' : !ed.id ? 'salvează draftul și apasă „Verifică”'
+    : ed.stare !== 'draft' ? 'documentul nu e draft'
     : !edRol ? 'doar gestionarul depozitului documentului sau owner-ul confirmă' : ed.dirty ? 'ai modificări nesalvate — apasă „Verifică”'
     : val?.blocante ? `${val.blocante} probleme blocante în ecran (roșu)` : !verif ? 'apasă întâi „Verifică”'
     : !verifCurenta ? 'documentul s-a schimbat după verificare — apasă din nou „Verifică”' : !verif.ok ? 'verificarea serverului are blocante' : ''
   const poateConfirma = !!ed && !motivConfirma && !busy
   const arePv = !!(ed?.bd && (ed.bd.pv_data || ed.bd.pv_nr_canon || ed.bd.pv_nr || ed.bd.eveniment_pv_id))
-  const poatePv = !!ed && ed.stare === 'confirmat' && !arePv && edRol && !busy
+  const poatePv = !!ed && !ed.stale && ed.stare === 'confirmat' && !arePv && edRol && !busy
+  const poateAnula = !!ed && !ed.stale && !!ed.id && ed.stare === 'draft' && edRol && !busy
 
   const confirma = async () => {
     if (!poateConfirma) return
-    const t = val.totaluri, curba = esteCurba(ed.sablon)
+    const t = val.totaluri, curba = esteCurba(ed.sablon), id = ed.id
     const linii = [`Confirmi recepția documentului ${ed.antet.nr_document} (${ed.antet.furnizor})?`, '',
-      `Intră în registru, disponibile în depozit: ${t.primit} ${curba ? 'curbe' : `țevi · ${fmtNr(t.m_real_mm / 1000)} m`}`,
+      `Intră în registru, disponibile în depozit: ${t.primit} ${curba ? 'curbe' : `țevi · ${fmtM(t.m_real_mm / 1000)} m`}`,
       t.neconform ? `În carantină (nedisponibile): ${t.neconform}` : null, t.refuzat ? `Refuzate (nu intră în registru): ${t.refuzat}` : null, '',
-      'După confirmare documentul nu se mai poate modifica. Anularea o face doar administratorul.'].filter(x => x !== null)
+      'După confirmare documentul nu se mai poate modifica; anularea lui e doar administrativă (Răzvan).'].filter(x => x !== null)
     if (!window.confirm(linii.join('\n'))) return
     setBusy(true)
     try {
-      const { data, error } = await supabase.rpc('fn_izo_doc_confirma', argumenteConfirma(ed.id, verif))
-      if (error) {
-        if (lipsaReceptie(error)) { inPregatire(); return }
-        if (/40001|s-a schimbat/i.test(`${error.code} ${error.message}`)) setVerif(null)
-        throw new Error(mesajEroareDoc(error))
-      }
-      const r = unu(data)
-      await deschide(ed.id); incarcaDocs(proiectId)
-      flash('ok', `Recepție confirmată: ${r?.bucati?.length ?? '?'} bucăți în registru${r?.idempotent ? ' (era deja confirmată)' : ''}. Le vezi în 🧱 Țeavă proiecte.`)
-    } catch (e) { console.error(e); flash('err', 'Confirmare eșuată: ' + (e.message || e)) } finally { setBusy(false) }
+      const { data, error } = await supabase.rpc('fn_izo_doc_confirma', argumenteConfirma(id, verif))
+      setVerif(null)
+      if (error) { if (e40001(error)) await deschide(id); throw error }
+      const reincarcat = await deschide(id); incarcaDocs(proiectId)
+      const r = normalizeazaConfirmare(data, id)
+      const titlu = `Recepție confirmată: ${r.bucati.length} bucăți în registru${r.idempotent ? ' (era deja confirmată)' : ''}. Le vezi în 🧱 Țeavă proiecte.`
+      setRezultat({ titlu, avertismente:r.avertismente })
+      if (reincarcat) flash('ok', titlu)
+    } catch (e) { console.error(e); flash('err', 'Confirmare eșuată: ' + mesajEroareDoc(e)) } finally { setBusy(false) }
   }
 
   const punePv = async () => {
-    if (!pv?.nr?.trim() || !pv?.data) { flash('err', 'Completează numărul și data PV-ului.'); return }
+    const err = eroriPv(pv?.nr, pv?.data)
+    if (err.length) { flash('err', err.join(' ')); return }
+    const id = ed.id
     setBusy(true)
     try {
       const { data, error } = await supabase.rpc('fn_izo_doc_pv', argumentePv(ed, pv.nr, pv.data))
-      if (error) { if (lipsaReceptie(error)) { inPregatire(); return } throw new Error(mesajEroareDoc(error)) }
-      const r = unu(data), nrPv = pv.nr.trim()
-      setPv(null); await deschide(ed.id); incarcaDocs(proiectId)
-      flash('ok', `PV ${nrPv} pus: ${r?.bucati_receptionate ?? r?.bucati?.length ?? '?'} bucăți trecute în „recepționat”${r?.idempotent ? ' (era deja pus)' : ''}.`)
-    } catch (e) { console.error(e); flash('err', 'PV eșuat: ' + (e.message || e)) } finally { setBusy(false) }
+      if (error) { if (e40001(error)) { setPv(null); await deschide(id) } throw error }
+      const nrPv = pv.nr.trim()
+      setPv(null); const reincarcat = await deschide(id); incarcaDocs(proiectId)
+      const r = normalizeazaPv(data, id)
+      const titlu = `PV ${nrPv} pus: ${r.bucati_receptionate} bucăți trecute în „recepționat”${r.idempotent ? ' (era deja pus)' : ''}.`
+      setRezultat({ titlu, avertismente:r.avertismente })
+      if (reincarcat) flash('ok', titlu)
+    } catch (e) { console.error(e); flash('err', 'PV eșuat: ' + mesajEroareDoc(e)) } finally { setBusy(false) }
   }
 
-  // scanul: fișierul în `avize`, apoi manifestul prin salvare (versiune + 1); la eșecul salvării fișierul orfan se șterge
+  // anularea ciornei (gestionarul / owner-ul, cu motiv): doar antetul; registrul nu e atins
+  const anuleazaCiorna = async () => {
+    const err = eroareMotiv(anulare?.motiv, 'motivul anulării')
+    if (err) { flash('err', err); return }
+    const id = ed.id
+    setBusy(true)
+    try {
+      const { data, error } = await supabase.rpc('fn_izo_doc_anuleaza_draft', argumenteAnuleazaDraft(ed, anulare.motiv))
+      setVerif(null)
+      if (error) { if (e40001(error)) { setAnulare(null); await deschide(id) } throw error }
+      setAnulare(null); const reincarcat = await deschide(id); incarcaDocs(proiectId)
+      const r = normalizeazaAnulare(data, id)
+      if (reincarcat) flash('ok', `Ciorna a fost anulată (versiunea ${r.versiune}). Documentul se poate reintroduce corectat („Corectează documentul anulat”).`)
+    } catch (e) { console.error(e); flash('err', 'Anulare eșuată: ' + mesajEroareDoc(e)) } finally { setBusy(false) }
+  }
+
+  // scanul: fișierul în `izo-documente` (fără upsert), apoi salvarea cu manifestul ÎNTREG; la eșecul salvării fișierul orfan se șterge
   const adaugaScan = async fisier => {
     if (!fisier) return
     if (!ed.id) { flash('err', 'Salvează întâi draftul — scanul se atașează unui document salvat.'); return }
     const err = eroriSalvare(ed); if (err.length) { flash('err', err.join(' ')); return }
-    setBusy(true)
+    const id = ed.id
+    setBusy(true); setVerif(null)
     let orfan = null
     try {
-      const s = await incarcaScanDocument(ed.id, fisier)
+      const s = await pregatesteScan(id, fisier, { imageToPdf })
+      await urcaScan(supabase.storage, s)
       orfan = s.cale
-      const { error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza({ ...ed, scanuri:[...ed.scanuri, s] }))
-      if (error) { if (lipsaReceptie(error)) { inPregatire(); return } throw new Error(mesajEroareDoc(error)) }
+      const { data, error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza(ed, { scanuri:[...ed.scanuri, s] }))
+      if (error) throw error
       orfan = null
-      await deschide(ed.id); incarcaDocs(proiectId)
-      flash('ok', 'Scan atașat (hash-ul e declarat de client până la verificarea pe server).')
-    } catch (e) { console.error(e); flash('err', 'Scanul nu s-a atașat: ' + (e.message || e)) }
+      const reincarcat = await deschide(id); incarcaDocs(proiectId)
+      normalizeazaSalvare(data, id)
+      if (reincarcat) flash('ok', `Scan atașat${ed.dirty ? ' (și modificările din ecran au fost salvate)' : ''}. Hash-ul e declarat de client până la verificarea pe server.`)
+    } catch (e) { console.error(e); flash('err', 'Scanul nu s-a atașat: ' + mesajEroareDoc(e)) }
     finally {
-      if (orfan) await supabase.storage.from(BUCKET).remove([orfan]).catch(() => {})
+      if (orfan && !(await stergeScanObiect(supabase.storage, orfan))) console.warn('izo E3: scan orfan rămas în stocare', orfan)
       setBusy(false)
     }
   }
   const scoateScan = async s => {
     if (!window.confirm('Scoți scanul din document? Fișierul se șterge după ce documentul e salvat fără el.')) return
     const err = eroriSalvare(ed); if (err.length) { flash('err', err.join(' ')); return }
-    setBusy(true)
+    const id = ed.id
+    setBusy(true); setVerif(null)
     try {
-      const { error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza({ ...ed, scanuri:ed.scanuri.filter(x => x.cale !== s.cale) }))
-      if (error) { if (lipsaReceptie(error)) { inPregatire(); return } throw new Error(mesajEroareDoc(error)) }
-      const { error: eDel } = await supabase.storage.from(BUCKET).remove([s.cale])
-      await deschide(ed.id); incarcaDocs(proiectId)
-      flash('ok', eDel ? 'Scos din document; fișierul n-a putut fi șters (rămâne orfan).' : 'Scan scos din document și șters.')
-    } catch (e) { console.error(e); flash('err', 'Eroare: ' + (e.message || e)) } finally { setBusy(false) }
+      const { data, error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza(ed, { scanuri:ed.scanuri.filter(x => x.cale !== s.cale) }))
+      if (error) throw error
+      const sters = await stergeScanObiect(supabase.storage, s.cale)   // abia acum: un obiect din manifest nu se poate șterge
+      const reincarcat = await deschide(id); incarcaDocs(proiectId)
+      normalizeazaSalvare(data, id)
+      if (reincarcat || !sters) flash(sters ? 'ok' : 'err', sters ? 'Scan scos din document și șters.' : 'Scos din document; fișierul n-a putut fi șters (rămâne orfan în stocare).')
+    } catch (e) { console.error(e); flash('err', 'Scanul nu s-a scos: ' + mesajEroareDoc(e)) } finally { setBusy(false) }
   }
   const vedeScan = async s => {
-    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(s.cale, 600)
-    if (error || !data?.signedUrl) { flash('err', 'Scanul nu se poate deschide: ' + (error?.message || 'fără link')); return }
-    window.open(data.signedUrl, '_blank', 'noopener')
+    try { window.open(await linkScan(supabase.storage, s.cale), '_blank', 'noopener') }
+    catch (e) { flash('err', 'Scanul nu se poate deschide: ' + (e.message || e)) }
   }
 
   const aplicaLipire = () => {
@@ -327,8 +386,11 @@ export default function IzoDocumenteIntrare() {
   const mesaj = msg && (
     <div style={{ padding:'9px 12px', marginBottom:12, borderRadius:8, fontSize:13, background:(msg.tip === 'ok' ? G.green : G.red) + '18',
       border:`1px solid ${(msg.tip === 'ok' ? G.green : G.red)}55`, color: msg.tip === 'ok' ? G.green : G.red, display:'flex', gap:10, alignItems:'flex-start' }}>
-      <div style={{ flex:1 }}>{msg.text}</div><button onClick={() => setMsg(null)} style={{ background:'none', border:'none', color:'inherit', cursor:'pointer', fontSize:14 }}>✕</button>
+      <div style={{ flex:1, wordBreak:'break-word' }}>{msg.text}</div><button onClick={() => setMsg(null)} style={{ background:'none', border:'none', color:'inherit', cursor:'pointer', fontSize:14 }}>✕</button>
     </div>
+  )
+  const elemServer = (x, j, culoare, semn) => (
+    <div key={j} style={{ fontSize:12, marginTop:4, color:culoare }}>{semn} {x.nr_crt != null ? `rândul ${x.nr_crt}: ` : ''}{x.mesaj}{x.cod ? <span style={{ color:G.dim }}> ({x.cod})</span> : null}</div>
   )
 
   // ── LISTA ──
@@ -362,26 +424,28 @@ export default function IzoDocumenteIntrare() {
               const s = SABLOANE[d.sablon] || { emoji:'📄', label:d.sablon }, sm = STARE_META[d.stare] || { label:d.stare, color:G.muted }, k = statDocs[d.id]
               const tot = esteCurba(d.sablon)
                 ? `${d.total_bucati ?? '—'} buc · ${d.total_pachete ?? '—'} pachete · net ${fmtNr(d.total_net_kg, 0)} kg`
-                : `${fmtNr(d.total_m)} m · ${fmtNr(d.total_kg, 0)} kg`
+                : `${fmtM(d.total_m)} m · ${fmtNr(d.total_kg, 0)} kg`
               const pvTxt = d.pv_data || d.pv_nr_canon || d.pv_nr ? `${d.pv_nr ?? d.pv_nr_canon ?? ''} · ${fmtData(d.pv_data)}` : '—'
               return (
-                <tr key={d.id} style={{ opacity: d.stare === 'anulat' ? .55 : 1, cursor:'pointer' }} onClick={() => deschide(d.id)}>
-                  <td style={{ ...S.td, padding:'8px 10px', fontWeight:700 }}>{s.emoji} {d.nr_document ?? d.nr_document_canon}<div style={{ fontSize:11, color:G.dim, fontWeight:500 }}>{s.label}</div></td>
-                  <td style={{ ...S.td, padding:'8px 10px' }}>{d.furnizor ?? d.furnizor_canon}</td>
+                <tr key={d.id} style={{ opacity: d.stare === 'anulat' ? .55 : 1, cursor:'pointer' }} onClick={() => deschideDinLista(d.id)}>
+                  <td style={{ ...S.td, padding:'8px 10px', fontWeight:700 }}>{s.emoji} {d.nr_document}<div style={{ fontSize:11, color:G.dim, fontWeight:500 }}>{s.label}{d.inlocuieste_document_id ? ` · înlocuiește #${d.inlocuieste_document_id}` : ''}</div></td>
+                  <td style={{ ...S.td, padding:'8px 10px' }}>{d.furnizor}</td>
                   <td style={{ ...S.td, padding:'8px 10px' }}>{fmtData(d.data_document)}</td>
                   <td style={{ ...S.td, padding:'8px 10px' }}>{depNume[d.depozit_id] || '—'}</td>
                   <td style={{ ...S.td, padding:'8px 10px', whiteSpace:'nowrap' }}>{k ? <>{k.n}<span style={{ color:G.muted }}> · <span style={{ color:G.green }}>{k.primit}</span>{k.primit_neconform ? <> · <span style={{ color:G.orange }}>{k.primit_neconform} carant.</span></> : null}{k.refuzat_la_receptie ? <> · <span style={{ color:G.red }}>{k.refuzat_la_receptie} ref.</span></> : null}</span></> : '—'}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color:G.muted }}>{tot}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color:sm.color, fontWeight:700 }}>{sm.label}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color: pvTxt === '—' ? G.dim : G.green }}>{pvTxt}</td>
-                  <td style={{ ...S.td, padding:'8px 10px' }}><button style={{ ...S.btnS, padding:'5px 10px' }} onClick={ev => { ev.stopPropagation(); deschide(d.id) }}>Deschide</button></td>
+                  <td style={{ ...S.td, padding:'8px 10px' }}><button style={{ ...S.btnS, padding:'5px 10px' }} onClick={ev => { ev.stopPropagation(); deschideDinLista(d.id) }}>Deschide</button></td>
                 </tr>
               )
             })}
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize:11.5, color:G.dim, marginTop:8 }}>Anularea unui document o face administratorul (Răzvan), cu motiv — nu din acest ecran. Un document anulat se poate reintroduce corectat.</div>
+      <div style={{ fontSize:11.5, color:G.dim, marginTop:8 }}>
+        O ciornă o anulează gestionarul ei, cu motiv (în document: „Anulează ciorna”). Un document confirmat se anulează doar administrativ (Răzvan), cu storno în registru. Un document anulat se poate reintroduce corectat.
+      </div>
     </div>
   )
 
@@ -393,16 +457,18 @@ export default function IzoDocumenteIntrare() {
   const cols = COLOANE[ed.sablon]
   const t = val.totaluri
   const optDep = ed.id ? [{ id:ed.depozit_id }] : depoziteScriere
-  const avertBd = Array.isArray(ed.bd?.avertismente) ? ed.bd.avertismente.map(x => (typeof x === 'string' ? x : x?.mesaj || JSON.stringify(x))) : []
+  const avertBd = listaServer(ed.bd?.avertismente)
+  const rosuAntet = k => val.document.some(x => x.camp === k && x.nivel === 'blocant')
   const inp = (k, et, tip = 'text', extra = {}) => (
     <div style={{ minWidth:150, flex:1 }} key={k}>
       <label style={S.lbl}>{et}</label>
-      <input type={tip} style={{ ...S.input, borderColor: val.document.some(x => x.camp === k && x.nivel === 'blocant') ? G.red : G.border2 }} value={ed.antet[k] ?? ''}
+      <input type={tip} style={{ ...S.input, borderColor: rosuAntet(k) ? G.red : G.border2 }} value={ed.antet[k] ?? ''}
         onChange={e => setAntet(k, e.target.value)} disabled={!edScrie || busy} {...extra} />
     </div>
   )
   const campuriRosii = i => new Set(ed.stare !== 'draft' ? [] : val.randuri[i].filter(x => x.nivel === 'blocant').map(x => CAMP_EDITOR[x.camp] || x.camp))
-  const fmtCmp = (c, x) => (x == null ? '—' : c.fmt === 'm' ? fmtNr(x) : c.fmt === 'kg' ? fmtNr(x, Number.isInteger(x) ? 0 : 1) : String(x))
+  const fmtCmp = (c, x) => (x == null ? '—' : c.fmt === 'm' ? fmtM(x) : c.fmt === 'kg' ? fmtNr(x, Number.isInteger(x) ? 0 : 1) : String(x))
+  const docInlocuit = ed.inlocuieste_document_id ? docs.find(d => Number(d.id) === Number(ed.inlocuieste_document_id)) : null
 
   return (
     <div>
@@ -416,15 +482,31 @@ export default function IzoDocumenteIntrare() {
         <span style={{ fontSize:12, color:G.muted }}>{proiect?.cod_intern ? `${proiect.cod_intern} · ` : ''}{proiect?.nume}</span>
       </div>
       {mesaj}
-      {ed.stare !== 'draft' && (
-        <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.muted }}>
-          {ed.stare === 'confirmat' ? `✅ Recepție confirmată${ed.bd?.confirmat_la ? ` la ${fmtData(ed.bd.confirmat_la)}` : ''} — documentul nu se mai modifică.` : '⛔ Document anulat.'}
-          {arePv && <> PV {ed.bd.pv_nr ?? ed.bd.pv_nr_canon} din {fmtData(ed.bd.pv_data)}.</>}
-          {' '}Anularea o face administratorul.
-          {avertBd.map((x, i) => <div key={i} style={{ fontSize:11.5, color:G.yellow, marginTop:3 }}>⚠️ {x}</div>)}
+      {ed.stale && (
+        <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.yellow, borderColor:G.yellow + '66', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+          <div style={{ flex:1 }}>⚠️ Documentul nu s-a putut reîncărca după ultima operație — ce vezi poate fi vechi. Salvarea și confirmarea sunt oprite până la reîncărcare.</div>
+          <button style={S.btnS} onClick={() => deschide(ed.stale)} disabled={busy}>🔄 Reîncarcă</button>
         </div>
       )}
-      {ed.stare === 'draft' && !edScrie && <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.muted }}>👁️ Doar citire — draftul îl editează gestionarul depozitului documentului.</div>}
+      {rezultat && (
+        <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, borderColor:G.green + '66' }}>
+          <div style={{ display:'flex', gap:10, alignItems:'flex-start' }}>
+            <div style={{ flex:1, fontSize:13, fontWeight:700, color:G.green }}>✅ {rezultat.titlu}</div>
+            <button onClick={() => setRezultat(null)} style={{ background:'none', border:'none', color:G.muted, cursor:'pointer', fontSize:14 }}>✕</button>
+          </div>
+          {rezultat.avertismente.length > 0 && <div style={{ fontSize:12, color:G.muted, marginTop:6 }}>Avertismentele serverului ({rezultat.avertismente.length}):</div>}
+          {rezultat.avertismente.map((x, j) => elemServer(x, j, G.yellow, '⚠️'))}
+        </div>
+      )}
+      {ed.stare !== 'draft' && (
+        <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.muted }}>
+          {ed.stare === 'confirmat'
+            ? <>✅ Recepție confirmată{ed.bd?.confirmat_la ? ` la ${fmtData(ed.bd.confirmat_la)}` : ''} — documentul nu se mai modifică.{arePv && <> PV {ed.bd.pv_nr ?? ed.bd.pv_nr_canon} din {fmtData(ed.bd.pv_data)}.</>} Anularea unui document confirmat e doar administrativă (Răzvan).</>
+            : <>⛔ Document anulat{ed.bd?.anulat_la ? ` la ${fmtData(ed.bd.anulat_la)}` : ''}{ed.bd?.anulat_motiv ? ` — motiv: ${ed.bd.anulat_motiv}` : ''}. Se poate reintroduce corectat (document nou → „Corectează documentul anulat”).</>}
+          {avertBd.map((x, j) => elemServer(x, j, G.yellow, '⚠️'))}
+        </div>
+      )}
+      {ed.stare === 'draft' && !edScrie && !ed.stale && <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.muted }}>👁️ Doar citire — draftul îl editează gestionarul depozitului documentului.</div>}
 
       {/* antetul */}
       <div style={{ ...S.card, padding:14, marginBottom:12 }}>
@@ -447,12 +529,26 @@ export default function IzoDocumenteIntrare() {
           {!ed.id && anulate.length > 0 && (
             <div style={{ minWidth:220, flex:1 }}>
               <label style={S.lbl}>Corectează documentul anulat (opțional)</label>
-              <select style={S.input} value={ed.inlocuieste_document_id || ''} onChange={e => modifica(x => ({ ...x, inlocuieste_document_id:e.target.value }))} disabled={busy}>
+              <select style={S.input} value={ed.inlocuieste_document_id || ''} onChange={e => modifica(x => ({ ...x, inlocuieste_document_id:e.target.value }))} disabled={!edScrie || busy}>
                 <option value="">—</option>
-                {anulate.filter(d => d.sablon === ed.sablon).map(d => <option key={d.id} value={d.id}>{d.nr_document ?? d.nr_document_canon} · {fmtData(d.data_document)}</option>)}
+                {anulate.map(d => <option key={d.id} value={d.id}>{(SABLOANE[d.sablon] || {}).emoji || '📄'} {d.nr_document} · {fmtData(d.data_document)} · #{d.id}</option>)}
               </select>
             </div>
           )}
+          {!ed.id && ed.inlocuieste_document_id && (
+            <div style={{ minWidth:260, flex:2 }}>
+              <label style={S.lbl}>Motivul înlocuirii * (ce s-a corectat)</label>
+              <input style={{ ...S.input, borderColor: rosuAntet('motiv_inlocuire') ? G.red : G.border2 }} value={ed.motiv_inlocuire ?? ''} maxLength={1000}
+                onChange={e => modifica(x => ({ ...x, motiv_inlocuire:e.target.value }))} disabled={!edScrie || busy} placeholder="ex. nr. de aviz greșit la prima introducere" />
+            </div>
+          )}
+        </div>
+        {ed.id && ed.inlocuieste_document_id && (
+          <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>↩️ Înlocuiește documentul anulat {docInlocuit ? `${docInlocuit.nr_document} · ${fmtData(docInlocuit.data_document)}` : ''} #{ed.inlocuieste_document_id}{ed.motiv_inlocuire ? ` — motiv: ${ed.motiv_inlocuire}` : ''}</div>
+        )}
+        <div style={{ marginTop:10 }}>
+          <label style={S.lbl}>Observații (document)</label>
+          <textarea style={{ ...S.input, minHeight:38, resize:'vertical' }} value={ed.antet.observatii ?? ''} maxLength={2000} onChange={e => setAntet('observatii', e.target.value)} disabled={!edScrie || busy} />
         </div>
         {val.document.filter(x => !['furnizor', 'nr_document', 'data_document', 'depozit_id'].includes(x.camp) && !sab.totaluri.some(([c]) => c === x.camp)).map((x, i) => (
           <div key={i} style={{ fontSize:12, color: x.nivel === 'blocant' ? G.red : G.yellow, marginTop:8 }}>{x.nivel === 'blocant' ? '⛔' : '⚠️'} {x.mesaj}</div>
@@ -461,7 +557,7 @@ export default function IzoDocumenteIntrare() {
 
       {/* totalurile: de pe document (introduse) lângă cele calculate din rânduri */}
       <div style={{ ...S.card, padding:14, marginBottom:12 }}>
-        <div style={{ fontSize:12.5, fontWeight:700, color:G.muted, marginBottom:8 }}>Totaluri — documentul față de rânduri (rândurile refuzate intră în sumă)</div>
+        <div style={{ fontSize:12.5, fontWeight:700, color:G.muted, marginBottom:8 }}>Totaluri — documentul față de rânduri (rândurile refuzate intră în sumă; verificare locală, serverul le recalculează)</div>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
           {t.comparatii.map(c => {
             const cul = c.bate === true ? G.green : c.bate === false ? G.red : G.dim
@@ -479,7 +575,7 @@ export default function IzoDocumenteIntrare() {
         </div>
         <div style={{ fontSize:12.5, color:G.muted, marginTop:10 }}>
           {t.randuri} rânduri: <b style={{ color:G.green }}>{t.primit} primite</b>{t.neconform ? <> · <b style={{ color:G.orange }}>{t.neconform} neconforme → carantină</b></> : null}{t.refuzat ? <> · <b style={{ color:G.red }}>{t.refuzat} refuzate</b></> : null}
-          {!curba && <> · în registru, disponibil: <b>{fmtNr(t.m_primit_mm / 1000)} m</b> după aviz{t.m_real_mm !== t.m_primit_mm ? <> (<b>{fmtNr(t.m_real_mm / 1000)} m</b> cu lungimile măsurate — lungimea bucății = măsurat, altfel aviz)</> : null}</>}
+          {!curba && <> · în registru, disponibil: <b>{fmtM(t.m_primit_mm / 1000)} m</b> după aviz{t.m_real_mm !== t.m_primit_mm ? <> (<b>{fmtM(t.m_real_mm / 1000)} m</b> cu lungimile măsurate — lungimea bucății = măsurat, altfel aviz)</> : null}</>}
         </div>
       </div>
 
@@ -487,7 +583,7 @@ export default function IzoDocumenteIntrare() {
       <div style={{ ...S.card, padding:0, marginBottom:12 }}>
         <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', padding:'10px 12px', borderBottom:`1px solid ${G.border}` }}>
           <div style={{ fontWeight:700, fontSize:13.5 }}>Rânduri</div>
-          {ed.stare === 'draft' && <div style={{ fontSize:12, color: val.blocante ? G.red : G.muted }}>{val.blocante ? `⛔ ${val.blocante} blocante` : '✓ fără blocante în ecran'}{val.avertismente ? <span style={{ color:G.yellow }}> · ⚠️ {val.avertismente} avertismente</span> : null}</div>}
+          {ed.stare === 'draft' && <div style={{ fontSize:12, color: val.blocante ? G.red : G.muted }}>{val.blocante ? `⛔ ${val.blocante} blocante în ecran` : '✓ fără blocante în ecran'}{val.avertismente ? <span style={{ color:G.yellow }}> · ⚠️ {val.avertismente} avertismente</span> : null}<span style={{ color:G.dim }}> (verificări locale; decide „Verifică” pe server)</span></div>}
           <div style={{ flex:1 }} />
           {edScrie && <>
             <button style={S.btnS} onClick={() => setLipire({ text:'', inlocuieste:false })} disabled={busy}>📋 Lipește din Excel</button>
@@ -505,15 +601,22 @@ export default function IzoDocumenteIntrare() {
                 const rosii = campuriRosii(i), v = ed.stare === 'draft' ? val.randuri[i] : []
                 return [
                   <tr key={r._k}>
-                    {cols.map(([c]) => (
+                    {cols.map(([c, , tip]) => (
                       <td key={c} style={S.td}>
-                        <input style={{ ...S.cel, width:LATIME[c] || 80, borderColor: rosii.has(c) ? G.red : G.border2, fontFamily: c === 'serie' || c === 'sarja' ? 'monospace' : 'inherit' }}
-                          value={r[c] ?? ''} onChange={e => setRand(i, c, e.target.value)} disabled={!edScrie || busy} />
+                        {tip === 'izolatie'
+                          ? <select style={{ ...S.cel, width:LATIME[c], borderColor: rosii.has(c) ? G.red : G.border2 }} value={r[c] ?? ''} onChange={e => setRand(i, c, e.target.value)} disabled={!edScrie || busy}>
+                              <option value="">—</option>
+                              {IZOLATII.map(z => <option key={z} value={z}>{IZOLATIE_LABEL[z]}</option>)}
+                              {r[c] && !IZOLATII.includes(r[c]) && <option value={r[c]}>{r[c]} (necunoscut)</option>}
+                            </select>
+                          : <input style={{ ...S.cel, width:LATIME[c] || 80, borderColor: rosii.has(c) ? G.red : G.border2, fontFamily: c === 'serie' || c === 'sarja' ? 'monospace' : 'inherit' }}
+                              value={r[c] ?? ''} onChange={e => setRand(i, c, e.target.value)} disabled={!edScrie || busy} />}
                       </td>
                     ))}
                     <td style={S.td}>
                       <select style={{ ...S.cel, width:150, color:DECIZIE_CULOARE[r.decizie] || G.text, borderColor: rosii.has('decizie') ? G.red : G.border2 }} value={r.decizie || ''}
                         onChange={e => setRand(i, 'decizie', e.target.value)} disabled={!edScrie || busy}>
+                        {!DECIZII.some(d => d.cheie === r.decizie) && <option value="">— alege —</option>}
                         {DECIZII.map(d => <option key={d.cheie} value={d.cheie}>{d.label}</option>)}
                       </select>
                     </td>
@@ -540,7 +643,7 @@ export default function IzoDocumenteIntrare() {
       <div style={{ ...S.card, padding:14, marginBottom:12 }}>
         <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
           <div style={{ fontWeight:700, fontSize:13.5 }}>📎 Scanul documentului</div>
-          <div style={{ fontSize:11.5, color:G.dim, flex:1 }}>PDF sau poză (poza devine PDF). Hash-ul fișierului e declarat de client până la verificarea pe server.</div>
+          <div style={{ fontSize:11.5, color:G.dim, flex:1 }}>PDF sau poză (poza devine PDF), maxim 10 MB. Hash-ul fișierului e declarat de client până la verificarea pe server.</div>
           {edScrie && (ed.id
             ? <label style={{ ...S.btnS, display:'inline-block', opacity: busy ? .5 : 1 }}>⬆️ Atașează scan<input type="file" accept="application/pdf,image/*" style={{ display:'none' }} disabled={busy}
                 onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; adaugaScan(f) }} /></label>
@@ -551,7 +654,7 @@ export default function IzoDocumenteIntrare() {
             {ed.scanuri.map(s => (
               <div key={s.cale} style={{ display:'flex', gap:10, alignItems:'center', fontSize:12.5 }}>
                 <button style={{ ...S.btnS, padding:'4px 10px' }} onClick={() => vedeScan(s)}>📄 Deschide</button>
-                <span style={{ fontFamily:'monospace', color:G.muted }}>{s.nume || s.cale}</span>
+                <span style={{ fontFamily:'monospace', color:G.muted }}>{s.cale}</span>
                 <span style={{ color:G.dim }}>{s.marime ? `${Math.round(s.marime / 1024)} KB` : ''} · sha256 {String(s.sha256_original || '').slice(0, 12)}… (declarat)</span>
                 {edScrie && <button style={{ background:'none', border:'none', color:G.red, cursor:'pointer', fontSize:12.5 }} onClick={() => scoateScan(s)} disabled={busy}>scoate</button>}
               </div>
@@ -564,12 +667,11 @@ export default function IzoDocumenteIntrare() {
       {verif && (
         <div style={{ ...S.card, padding:14, marginBottom:12, borderColor:(verif.ok && verifCurenta ? G.green : G.red) + '66' }}>
           <div style={{ fontWeight:700, fontSize:13.5, color: verif.ok && verifCurenta ? G.green : G.red }}>
-            {verif.ok ? '✓ Verificarea serverului: fără blocante' : `⛔ Verificarea serverului: ${verif.verdict || 'blocat'}`}{verif.blocante ? ` · ${verif.blocante} blocante` : ''}
+            {verif.ok ? '✓ Verificarea serverului: fără blocante' : `⛔ Verificarea serverului: ${verif.blocante.length} blocante`}{verif.avertismente.length ? ` · ${verif.avertismente.length} avertismente` : ''}
           </div>
-          {!verifCurenta && <div style={{ fontSize:12, color:G.yellow, marginTop:4 }}>Verificarea e pentru versiunea {verif.versiune ?? '?'}; documentul e acum la {ed.versiune ?? '?'} — apasă din nou „Verifică”.</div>}
-          {verif.lista.map((x, j) => (
-            <div key={j} style={{ fontSize:12, marginTop:4, color: x.blocant ? G.red : G.yellow }}>{x.blocant ? '⛔' : '⚠️'} {x.nr_crt != null ? `rândul ${x.nr_crt}: ` : ''}{x.mesaj}</div>
-          ))}
+          {!verifCurenta && <div style={{ fontSize:12, color:G.yellow, marginTop:4 }}>Verificarea e pentru versiunea {verif.versiune ?? '?'}; documentul e acum la {ed.versiune ?? '?'}{ed.dirty ? ' (cu modificări nesalvate)' : ''} — apasă din nou „Verifică”.</div>}
+          {verif.blocante.map((x, j) => elemServer(x, 'b' + j, G.red, '⛔'))}
+          {verif.avertismente.map((x, j) => elemServer(x, 'a' + j, G.yellow, '⚠️'))}
         </div>
       )}
 
@@ -587,20 +689,23 @@ export default function IzoDocumenteIntrare() {
         )}
         {ed.stare === 'draft' && edRol && motivConfirma && <span style={{ fontSize:12, color:G.muted }}>Confirmarea: {motivConfirma}.</span>}
         <div style={{ flex:1 }} />
-        <span style={{ fontSize:11.5, color:G.dim }}>Anularea o face administratorul.</span>
+        {ed.id && ed.stare === 'draft' && edRol && (
+          <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '55', opacity: poateAnula ? 1 : .45 }} onClick={() => setAnulare({ motiv:'' })} disabled={!poateAnula}>🗑️ Anulează ciorna</button>
+        )}
+        {ed.stare === 'confirmat' && <span style={{ fontSize:11.5, color:G.dim }}>Un document confirmat se anulează doar administrativ (Răzvan).</span>}
       </div>
 
       {/* lipirea din Excel */}
       {lipire && (() => {
         const goala = ed.randuri.length === 1 && !String(ed.randuri[0].serie || '').trim()
         const rez = randuriDinLipire(lipire.text, ed.sablon, { nrStart: lipire.inlocuieste || goala ? 1 : nrMax(ed) + 1 })
-        const etCol = Object.fromEntries([...cols, ['decizie', 'Decizie'], ['motiv', 'Motiv'], ['observatie', 'Observație']])
+        const etCol = Object.fromEntries([...cols.map(([c, et]) => [c, et]), ['decizie', 'Decizie'], ['motiv', 'Motiv'], ['observatie', 'Observație']])
         return (
-          <div style={{ position:'fixed', inset:0, background:'#000a', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }} onClick={() => setLipire(null)}>
+          <div style={S.modal} onClick={() => setLipire(null)}>
             <div style={{ ...S.card, width:'min(760px,100%)', padding:18 }} onClick={e => e.stopPropagation()}>
               <div style={{ fontSize:16, fontWeight:800, marginBottom:4 }}>📋 Lipește rândurile din Excel</div>
               <div style={{ fontSize:12, color:G.muted, marginBottom:10 }}>
-                Copiază rândurile (cu rândul de antet, ideal) și lipește-le aici. Fără antet se folosește ordinea de pe {curba ? 'lista de ambalare' : 'aviz'}. Rândurile goale și cele de „TOTAL” se sar{curba ? '; pachetul și dimensiunile se completează în jos (celulele unite)' : ''}.
+                Copiază rândurile (cu rândul de antet, ideal) și lipește-le aici. Fără antet se folosește ordinea de pe {curba ? 'lista de ambalare' : 'aviz'}. Rândurile goale și cele de „TOTAL” se sar{curba ? '; pachetul și dimensiunile se completează în jos (celulele unite)' : ''}. O decizie scrisă altfel decât primit / neconform / refuzat rămâne de ales.
               </div>
               <textarea autoFocus style={{ ...S.input, minHeight:180, fontFamily:'monospace', fontSize:12 }} value={lipire.text} onChange={e => setLipire(x => ({ ...x, text:e.target.value }))} placeholder="Ctrl+V aici" />
               <div style={{ fontSize:12.5, color: rez.randuri.length ? G.green : G.muted, marginTop:8 }}>
@@ -621,17 +726,35 @@ export default function IzoDocumenteIntrare() {
 
       {/* PV-ul */}
       {pv && (
-        <div style={{ position:'fixed', inset:0, background:'#000a', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }} onClick={() => !busy && setPv(null)}>
+        <div style={S.modal} onClick={() => !busy && setPv(null)}>
           <div style={{ ...S.card, width:'min(420px,100%)', padding:18 }} onClick={e => e.stopPropagation()}>
             <div style={{ fontSize:16, fontWeight:800, marginBottom:4 }}>📝 PV de recepție</div>
             <div style={{ fontSize:12, color:G.muted, marginBottom:12 }}>Bucățile primite conform ale documentului trec din „sosit” în „recepționat”. Cele din carantină rămân în carantină.</div>
             <label style={S.lbl}>Nr. PV *</label>
-            <input autoFocus style={{ ...S.input, marginBottom:10 }} value={pv.nr} onChange={e => setPv(x => ({ ...x, nr:e.target.value }))} />
+            <input autoFocus style={{ ...S.input, marginBottom:10 }} value={pv.nr} maxLength={80} onChange={e => setPv(x => ({ ...x, nr:e.target.value }))} />
             <label style={S.lbl}>Data PV *</label>
             <input type="date" style={S.input} value={pv.data} onChange={e => setPv(x => ({ ...x, data:e.target.value }))} />
             <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
-              <button style={S.btnS} onClick={() => setPv(null)} disabled={busy}>Anulează</button>
+              <button style={S.btnS} onClick={() => setPv(null)} disabled={busy}>Renunță</button>
               <button style={{ ...S.btnP, background:G.blue, color:'#041A33', opacity: busy ? .6 : 1 }} onClick={punePv} disabled={busy}>{busy ? '…' : 'Pune PV'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* anularea ciornei */}
+      {anulare && (
+        <div style={S.modal} onClick={() => !busy && setAnulare(null)}>
+          <div style={{ ...S.card, width:'min(460px,100%)', padding:18 }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:16, fontWeight:800, marginBottom:4, color:G.red }}>🗑️ Anulează ciorna</div>
+            <div style={{ fontSize:12, color:G.muted, marginBottom:12 }}>
+              Ciorna {ed.antet.nr_document || `#${ed.id}`} devine „Anulat” (registrul nu e atins). Furnizorul + numărul + data se eliberează: documentul se poate reintroduce corectat.{ed.dirty ? ' Modificările nesalvate din ecran se pierd.' : ''}
+            </div>
+            <label style={S.lbl}>Motivul anulării * (minim 3 caractere)</label>
+            <textarea autoFocus style={{ ...S.input, minHeight:70 }} value={anulare.motiv} maxLength={1000} onChange={e => setAnulare(x => ({ ...x, motiv:e.target.value }))} />
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
+              <button style={S.btnS} onClick={() => setAnulare(null)} disabled={busy}>Renunță</button>
+              <button style={{ ...S.btnP, background:G.red, color:'#2A0705', opacity: busy || eroareMotiv(anulare.motiv) ? .5 : 1 }} onClick={anuleazaCiorna} disabled={busy || !!eroareMotiv(anulare.motiv)}>{busy ? '…' : 'Anulează ciorna'}</button>
             </div>
           </div>
         </div>
