@@ -1041,7 +1041,11 @@ BEGIN
       END IF;
       v_tipmat := public.fn_izo_tip_material(v_tip);
       v_canon := upper(regexp_replace(v_serie, '[[:space:]._/-]', '', 'g'));
-      v_izol := coalesce(v_b->>'izolatie', 'neizolata');
+      -- izolația NU se ghicește (review #807 r2): lipsă = necunoscută (NULL); dată = una dintre valorile permise
+      v_izol := v_b->>'izolatie';
+      IF v_izol IS NOT NULL AND v_izol NOT IN ('neizolata','PEHD','GRP') THEN
+        RAISE EXCEPTION 'izo: rândul % (%): izolație % (cere neizolata / PEHD / GRP sau lipsă = necunoscută)', v_n, v_serie, v_izol;
+      END IF;
       IF v_tip = 'teava' THEN
         v_lmm := (v_b->>'lungime_mm')::integer;
         IF v_lmm IS NULL THEN RAISE EXCEPTION 'izo: rândul % (%): lungime lipsă', v_n, v_serie; END IF;

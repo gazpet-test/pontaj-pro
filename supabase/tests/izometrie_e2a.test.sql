@@ -130,6 +130,8 @@ SELECT teste.eroare('T4t rând fără stare → refuz', $$SELECT public.fn_izo_i
 SELECT teste.eroare('T4u fișierul sursă al rândului nu e în surse[] → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-9', (SELECT p FROM payload WHERE nume = 'sursa_necunoscuta'))$$, 'nu e în surse');
 SELECT teste.eroare('T4v surse[] cu fișier duplicat → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-10', (SELECT p FROM payload WHERE nume = 'surse_duplicate'))$$, 'duplicate');
 SELECT teste.eroare('T4w pe_tronson cu depozit_id (loc dublu) → refuz', $$SELECT public.fn_izo_import_sold_initial(3, 'mal-11', (SELECT p FROM payload WHERE nume = 'tronson_cu_depozit'))$$, 'pe_tronson cere');
+SELECT teste.e('T4x2 izolația lipsă din payload → NULL (necunoscută), nu „neizolata”', (SELECT izolatie IS NULL FROM public.magazie_bucati WHERE serie = '870' AND tip_cod = 'curba')
+  AND (SELECT izolatie FROM public.magazie_bucati WHERE serie = '254CA09771') = 'PEHD');
 SELECT teste.e('T4k importurile refuzate n-au lăsat nimic', (SELECT count(*) FROM public.izo_importuri) = 1 AND (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 4);
 SELECT teste.eroare('T4l indexul de frunză e ultima barieră (aceeași serie+șarjă+lungime la cm, scrisă de writer)',
   $q$DO $d$ BEGIN SET LOCAL ROLE izo_registru_writer; PERFORM set_config('izo.registru_tx', txid_current()::text, true);
