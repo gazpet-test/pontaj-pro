@@ -211,7 +211,10 @@ export const lungimeRegistruMm = rn => (esteNr(rn.lungime_masurata_mm) ? rn.lung
 export const unghiRegistru = rn => (esteNr(rn.unghi_masurat) ? rn.unghi_masurat : esteNr(rn.unghi_doc) ? rn.unghi_doc : null)
 /**
  * Cheia de dublură a unui rând în același document: țeava = seria canonică; curba = serie + șarjă + unghi (o bucată pe rând;
- * aceeași serie + șarjă cu alt unghi e legitimă — regula confirmată pe server, oglinda indexului curbelor din registru).
+ * aceeași serie + șarjă cu alt unghi e legitimă — regula convenită pentru E3, aceeași cheie ca indexul curbelor din registru,
+ * ux_magbuc_izo_curba). ATENȚIE: la capul migrării 20261103b (origin/izometrie/e3 @1d8e46e4) fn_izo_doc_blocante grupează
+ * curbele doar pe serie + șarjă, fără unghi: două curbe cu aceeași serie + șarjă și unghiuri diferite trec aici, dar „Verifică”
+ * le dă serie_dublura (închide, nu deschide). Care cheie rămâne (unghiul pe server sau scos de aici) decide sesiunea Izometrie.
  */
 export function cheieDubluraRand(rn, sablon) {
   if (!rn.serie_canon) return null
@@ -275,7 +278,8 @@ export function validareRand(rn, sablon) {
         v.push(explicat ? avert('unghi_masurat', t) : blocant('observatie', `${t} — scrie observația`))
       }
     }
-    // un rând = o bucată: la curbe cantitatea e exact 1 (serverul refuză altceva)
+    // un rând = o bucată: la curbe cantitatea e exact 1 — regulă LOCALĂ până o impune și serverul (la 20261103b @1d8e46e4 coloana
+    // are doar CHECK cantitate > 0, totalul de bucăți adună cantitatea, dar în registru pleacă o singură bucată pe rând)
     if (esteNr(rn.cantitate) && rn.cantitate !== 1) v.push(blocant('cantitate', 'o curbă pe rând (cantitatea 1); pune fiecare curbă pe rândul ei'))
     if (rn.net_kg == null) v.push(avert('net_kg', 'lipsește greutatea netă (intră în total)'))
     const cod = verificaCodCurba(rn)
@@ -398,7 +402,8 @@ const RE_DATA = /^\d{4}-\d{2}-\d{2}$/
 /**
  * Ce oprește SALVAREA draftului (nu confirmarea): ce ar refuza serverul la fn_izo_doc_salveaza după contract — identitatea și
  * depozitul (coloane obligatorii), motivul înlocuirii, datele YYYY-MM-DD, totalurile numerice, seria, nr. crt. întreg > 0 unic,
- * decizia (fără ea serverul ar pune „primit”), izolația, precizia (diametru întreg, perete / unghi o zecimală), curba = 1 bucată.
+ * decizia (fără ea serverul ar pune „primit”), izolația, precizia (diametru întreg, perete / unghi o zecimală). În plus, o regulă
+ * LOCALĂ pe care serverul încă n-o impune (vezi validareRand): curba = 1 bucată pe rând.
  */
 export function eroriSalvare(doc) {
   const e = []

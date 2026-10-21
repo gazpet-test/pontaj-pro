@@ -359,7 +359,9 @@ describe('răspunsurile RPC (forma din contract + documentul cerut)', () => {
   })
 })
 
-describe('regulile serverului oglindite local', () => {
+// cantitatea 1 și dublura cu unghi sunt regulile convenite pentru E3; la 20261103b @1d8e46e4 serverul încă nu le impune identic
+// (cantitate doar > 0; dublura de curbă fără unghi) — vezi comentariile din izoDocumenteLogica.js
+describe('regulile E3 oglindite local (contractul de rând)', () => {
   const c = (extra, base = CURBE[5]) => randNormalizat({ ...randCurba(base), ...extra }, 'lista_ambalare_curbe')
   it('curba: cantitatea exact 1 (gol = 1) — blocant la confirmare și la salvare', () => {
     expect(c({ cantitate: '' }).cantitate).toBe(1)
