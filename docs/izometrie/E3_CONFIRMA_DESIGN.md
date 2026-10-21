@@ -580,3 +580,50 @@ Două tranziții administrative, fiecare doar sub contextul ei, scris doar de `f
   - lock-ul „schemă” = `pg_advisory_xact_lock(_shared)(hashtext('gazpet.livrare_migrare'))`, aceeași semnătură bigint ca runner-ul. Cursa cu barieră o dovedește prin `pg_locks` (B așteaptă `Lock`);
   - suita E2a completă (180) trece nemodificată peste E3.
 
+## 15. r5f — răspunsul la NO-GO pe #825 (Copilot + Jak), aplicat în cod (20261103b, integrare e986fccd)
+
+Cod: generatorul e acum în repo, `scripts/izometrie/e3_gen/` (`gen_e3.py` + `e3_tpl.sql` + `e3_rev_tpl.sql`). Fișierele din `supabase/` sunt ieșiri și nu se editează de mână.
+Harness: `scripts/test_izometrie_e3.sh`; din WSL, pe sloturi paralele, cu `harness_wsl.sh <slot>`.
+
+1. **P1-1 — un rând = o bucată.** Regula se aplică pe trei straturi:
+   - `CHECK izo_doc_rand_o_bucata (cantitate IS NULL OR cantitate = 1)` pe rânduri;
+   - refuzul explicit din `fn_izo_doc_salveaza` (23514), la țeavă și la curbe;
+   - `total_bucati` se compară cu numărul rândurilor.
+   Reconcilierea din confirmare compară și suma cantităților, ca apărare în plus.
+   **Decizie:** cantitatea goală = 1, ca până acum. Un N > 1 cere un design nou (fiecare bucată cu seria ei).
+2. **P1-2 — dubla curbă:** cheia e serie canonică + șarjă + unghiul efectiv `coalesce(unghi_masurat, unghi_doc)`, aceeași ca `ux_magbuc_izo_curba` și `curba_in_registru`. Țeava rămâne pe serie. 870/2520914 la 22,5° și la 30° → două bucăți.
+   - **Limitare declarată:** același rând pus de două ori, cu o singură copie măsurată în toleranță (30 față de 30,2), dă două unghiuri efective, deci două bucăți.
+   - Rândurile refuzate intră în continuare la numărarea dublurilor (fail-closed).
+3. **P1-3 — Storage.** Se înlocuiește §14.3.
+   - **Strat RESTRICTIV pe `storage.objects`:** `izo_doc_scan_r_toti` (FOR ALL TO public: doar membrii `authenticated` ating bucket-ul), `_r_sel` / `_r_ins` / `_r_del` (TO authenticated, doar prin `fn_izo_scan_poate_*`) și `_r_upd` (UPDATE interzis total, inclusiv mutarea ÎN bucket). Toate au forma `bucket_id IS DISTINCT FROM 'izo-documente' OR …`, deci celelalte bucket-uri trec neatinse.
+   - **Strat RESTRICTIV pe rândul bucket-ului** (`storage.buckets`, `izo_doc_bucket_r_ins` / `_upd` / `_del`): prin RLS nimeni nu face bucket-ul public, nu-l șterge și nu-l recreează. Administrarea lui rămâne la rolurile cu BYPASSRLS.
+   - **Ștampila E3 ia de pe Storage DOAR politicile `izo_doc_*`, exact**, plus owner / RLS / FORCE / ACL pe `storage.objects` și `storage.buckets`. RLS-ul activ și prezența celor 5 + 3 politici restrictive sunt cerute și explicit. Politicile altor module (ex. `20261103c`, ai-documente-inbox) nu înroșesc poarta; stratul restrictiv face ca ele să nu poată deschide `izo-documente`. Coordonat cu sesiunea de chat pe 21.10, fără procedură de re-ștampilare.
+   - **Fără TOFU, preflight `0l`:** la apply, starea Storage (politici, RLS, ACL pe objects / buckets) și cele 2 triggere `profiles` de care depinde autorizarea se compară cu un baseline pre-E3 revizuit, capturat read-only de pe prod (`scripts/izometrie/e3_gen/baseline_pre_e3.json`). La diferență, E3 e refuzată, cu diferența numită. Orice migrare Storage ulterioară vine DUPĂ E3; ordinea de revenire e LIFO.
+   - **Teste:** E11a–q, E11b0, E11f–f4, E13a–… (permisivă generală, anon, alt bucket, DISABLE RLS, ACL, FORCE, owner) + 5a (8 mutații ale baseline-ului).
+4. **P1-4 — triggerele în ștampila E3:** `pg_get_triggerdef(oid, false)` + `tgenabled`; un trigger recreat cu WHEN / UPDATE OF schimbă ștampila.
+   - **Notă E2a (nemodificat):** amprenta E2a ia `tgfoid / tgtype / tgattr / tgenabled / tgqual`, nu `tgargs` / DEFERRABLE / REFERENCING. De făcut la următoarea revizie E2a.
+5. **P1-5 — fără cod.** Pe prod (citit 21.10) corpurile sunt `fn_izo_porti_lipsa` cda86cbe (r15), `fn_izo_garda_bucati` ab63fc07, `fn_izo_garda_fapte` 5d8bc188. Sunt exact ce reface revenirea; diferența de r14 venea din brief-ul review-ului.
+6. **P1-6 — revenirea sub lock.** Lock-ul exclusiv „schemă” (`pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'))`) + `LOCK TABLE … ACCESS EXCLUSIVE` pe documente și registru, ÎNAINTEA preflight-ului „fără fapte E3”. Doar READ COMMITTED; reverificarea obiectelor din bucket se face sub lock-ul `DROP POLICY`.
+   - **Teste (pasul 7):** curse cu barieră în ambele ordini, `lock_timeout`, plus scrieri directe fără lock-ul schemei.
+   - **Operațional:** revenirea ține `magazie_bucati` blocată până la 5 s, deci se rulează într-o fereastră liniștită.
+7. **P2:**
+   - `fn_izo_lock_partajat(VARIADIC ARRAY[…])` + postcondiția P5 (EXECUTE pe lanțul de lock-uri, fără overload-uri);
+   - READ COMMITTED impus în toate intrările E3, inclusiv `verifica` și ambele anulări (25001); default-ul de pe prod e read committed, verificat;
+   - `motiv_inlocuire` în hash-ul `e3-doc-v1`; eticheta rămâne v1, pentru că migrarea n-a fost aplicată nicăieri;
+   - mesaj generic la înlocuirea unui document inexistent, neanulat sau invizibil;
+   - diferențialul în pasul 2 al harness-ului: 24 de mutații echivalente cu E2a (7 cicluri, pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență, frontiere largi) + 8 pe care poarta E3 e intenționat **mai strictă**: schemă cu caractere de regex, ghilimele în nume, SQL fără EXECUTE / `U&"…"` / `*_to_xml` / `ts_stat` etc., comentariu între schema platformei și nume.
+8. **Tabelele documentelor E3 în închiderea citirilor (găsit în review-ul r5f, contrazicea §13.2):** în lucru, se completează aici.
+
+**Decizii / limitări declarate, pentru Razvan:**
+- (a) cantitatea goală = 1;
+- (b) cheia curbei pe unghiul efectiv (limitarea de la 2);
+- (c) celelalte 3 triggere BEFORE UPDATE de pe `profiles` (`trg_enforce_owner_only_salary_flags`, `trg_profiles_protectie_legatura`, `trg_protect_can_access_pontaj_brut`) nu intră în baseline / ștampilă; intrarea lor ar cere o captură nouă;
+- (d) `MAINTAIN` pe tabelele Storage e exclus din baseline (risc DoS, nu de confidențialitate; azi îl au doar postgres / service_role / supabase_storage_admin);
+- (e) un view fără `security_invoker` peste `storage.objects`, creat de un admin, ar putea expune metadatele (căile), nu conținutul;
+- (f) poarta E2a de pe prod are aceleași ocoliri pe care poarta E3 le închide acum (vezi 7); repararea E2a e o temă separată.
+
+**De probat pe branch-ul PG17** (înainte de dry-run):
+- INSERT-ul în `storage.buckets` prin triggerul `protect_bucket_control_insert`;
+- `CREATE POLICY` pe `storage.buckets` ca postgres;
+- revenirea (DELETE-ul bucket-ului + `IF NOT FOUND`);
+- preflight-ul `0l` pe PG17 (`pg_get_expr` / `pg_get_triggerdef` depind de search_path; postgres pe prod: `public, extensions, pg_catalog`).
