@@ -156,7 +156,9 @@ nu_merge "4c3 recepție beneficiar în REPEATABLE READ" \
   "BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000030\"}', true); SET LOCAL ROLE authenticated; INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta) VALUES (1, 1, 'RR1', 'beneficiar'); COMMIT;" "READ COMMITTED"
 nu_merge "4c4 funcție a registrului în REPEATABLE READ" \
   "BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test'); COMMIT;" "READ COMMITTED"
-ok "4c conexiune proaspătă: writer fără marcaj → garda (UPDATE + INSERT) · REPEATABLE READ → refuz (recepție + funcție registru)"
+"${PSQL[@]}" -d "$BAZA" -Atc "BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000030\"}', true); SET LOCAL ROLE authenticated; INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) SELECT 2, id, 'gazpet' FROM public.magazie_bucati WHERE serie = 'GZP1'; COMMIT;" >/dev/null 2>&1 \
+  || esec "4c6 bon cu bucată gazpet în REPEATABLE READ a fost refuzat (regresie pe calea fără proiect protejat)"
+ok "4c conexiune proaspătă: writer fără marcaj → garda (UPDATE + INSERT) · REPEATABLE READ → refuz (recepție + funcție registru), dar bonul cu bucată gazpet trece"
 
 # 4c5. garda atribuirilor: o funcție DEFINER cu owner postgres chemată dintr-o sesiune API (session_user ≠ postgres) → refuz
 q "CREATE ROLE izo_api LOGIN; GRANT authenticated TO izo_api" >/dev/null
@@ -197,7 +199,28 @@ q "UPDATE public.logistica_depozite SET site_id = 6 WHERE id = 12" >/dev/null
 cursa "4d8 import în depozit, apoi mutarea depozitului" "SELECT public.fn_izo_import_sold_initial(3, 'cursa-d', '$PAY_D'::jsonb)" \
   "BEGIN; $CA_TOMA; UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 12; COMMIT;" err "site-ul lui nu se schimbă"
 [ "$(q "SELECT site_id || ':' || (SELECT count(*) FROM public.magazie_bucati WHERE depozit_id = 12) FROM public.logistica_depozite WHERE id = 12")" = "6:1" ] || esec "4d8 stare finală"
+# 4e. funcția combinată activare + import (Copilot r3): rândurile de loc FOR SHARE ÎNAINTEA lock-ului exclusiv
+PAY_E="$(pay 8888888888888888888888888888888888888888888888888888888888888888 299CC00005 13)"
+cursa "4e1 depozit mutat pe alt site, apoi activare + import în el" "$CA_TOMA; UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 13" \
+  "SELECT public.fn_izo_activeaza_si_importa(4, 'comb-1', '$PAY_E'::jsonb, 'test r3')" err "nu țin de proiectul"
+[ "$(q "SELECT public.fn_izo_nivel(4)")" = off ] || esec "4e1 proiectul 4 a rămas activat după importul refuzat"
+q "UPDATE public.logistica_depozite SET site_id = 10 WHERE id = 13" >/dev/null
+cursa "4e2 activare + import, apoi mutarea depozitului" "SELECT public.fn_izo_activeaza_si_importa(4, 'comb-1', '$PAY_E'::jsonb, 'test r3')" \
+  "BEGIN; $CA_TOMA; UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 13; COMMIT;" err "site-ul lui nu se schimbă"
+[ "$(q "SELECT public.fn_izo_nivel(4) || ':' || (SELECT count(*) FROM public.magazie_bucati WHERE depozit_id = 13)")" = "stoc:1" ] || esec "4e2 stare finală"
 ok "4d curse cu barieră, ambele ordini: activare↔recepție · dezactivare↔import · import↔storno · site depozit↔import — a doua așteaptă și decide pe starea comisă"
+# 4f. originea / locul unui depozit șters în timpul unui import (r3): importul vede rândul dispărut și refuză
+PAY_F="$(pay 9999999999999999999999999999999999999999999999999999999999999999 299CC00006 14)"
+cursa "4f1 depozit șters, apoi import în el" "$CA_TOMA; DELETE FROM public.logistica_depozite WHERE id = 14" \
+  "SELECT public.fn_izo_import_sold_initial(3, 'cursa-f', '$PAY_F'::jsonb)" err "nu țin de proiectul"
+# 4g. cursa părinților (Codex r3 P2-6): A mută pachetul 1 de pe proiectul 1 pe proiectul 5 și activează 5, în aceeași
+#     tranzacție; B șterge o țeavă a pachetului — așteaptă rândul pachetului și decide pe relația NOUĂ (proiect protejat)
+cursa "4g mutare pachet + activare, apoi DELETE pe țeava lui" \
+  "UPDATE public.executie_pachete_lansare SET proiect_id = 5, tronson_id = 30 WHERE id = 1; SELECT public.fn_izo_seteaza_nivel(5, 'stoc', 'cursa r3')" \
+  "BEGIN; $CA_TOMA; DELETE FROM public.executie_tevi WHERE serie_unica = 'X1'; COMMIT;" err "nu se șterg din client"
+[ "$(q "SELECT public.fn_izo_nivel(5) || ':' || count(*) FROM public.executie_tevi WHERE serie_unica = 'X1'")" = "stoc:1" ] || esec "4g stare finală"
+ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
+ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 
 refuza_cu "5 reaplicare" "Precondiție 0b"
 ok "5 reaplicare → refuz"

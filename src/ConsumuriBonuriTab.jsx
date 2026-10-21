@@ -18,7 +18,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { salveazaLiniiBon } from './lib/bonLinii.js'
+import { salveazaLiniiBon, bucatiProtejate } from './lib/bonLinii.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
@@ -151,7 +151,7 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
   }
   const deschideEdit = (b) => {
     setModal({
-      isNew: false, id: b.id,
+      isNew: false, id: b.id, updated_at: b.updated_at,   // versiunea antetului, pentru salvarea cu control de concurență
       proiect_id: String(b.proiect_id),
       situatie_plata_id: b.situatie_plata_id ? String(b.situatie_plata_id) : '',
       provenienta: b.provenienta, data_bon: b.data_bon || todayISO(), observatii: b.observatii || '',
@@ -186,6 +186,22 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
       const { data: { user } } = await supabase.auth.getUser()
       const pid = Number(m.proiect_id)
       let bonId = m.id
+      const linii = (id) => m.linii.map(l => {
+        const tip = l.tip_material_id ? tipuriMap[l.tip_material_id] : null
+        const cant = toNum(l.cantitate) ?? 1
+        const cost = m.provenienta === 'gazpet' ? toNum(l.cost_unitar) : null
+        return {
+          bon_id: id, magazie_bucata_id: l.magazie_bucata_id || null, tip_material_id: l.tip_material_id || null,
+          denumire: l.denumire?.trim() || tip?.nume || null,
+          serie: l.serie?.trim() || null, sarja: l.sarja?.trim() || null, dimensiune: l.dimensiune?.trim() || null,
+          cantitate: cant, um: l.um || tip?.um_implicit || 'buc',
+          lungime_m: toNum(l.lungime_m), cost_unitar: cost, valoare: cost != null ? cost * cant : null,
+          observatii: null,
+        }
+      })
+      // (1) bucățile din registrul de țeavă: refuz ÎNAINTE de orice scriere (nici antetul nu se atinge)
+      const protejate = await bucatiProtejate(supabase, linii(bonId))
+      if (protejate.length) throw new Error(`bucățile ${protejate.join(', ')} sunt țeavă Transgaz din registru; nu intră pe bon (montajul se declară din modulul de țeavă)`)
       if (m.isNew) {
         const numar = await genNumarBon(pid, m.data_bon)
         const { data, error } = await supabase.from('executie_bonuri_consum').insert({
@@ -197,29 +213,20 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
         if (error) throw error
         bonId = data.id
       } else {
-        const { error } = await supabase.from('executie_bonuri_consum').update({
+        // (2) antetul cu control de versiune: o editare concurentă (alt updated_at) e refuzată, fără să atingă liniile
+        let q = supabase.from('executie_bonuri_consum').update({
           situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
           provenienta: m.provenienta, data_bon: m.data_bon,
           observatii: m.observatii?.trim() || null, updated_at: new Date().toISOString(),
         }).eq('id', bonId)
+        if (m.updated_at) q = q.eq('updated_at', m.updated_at)
+        const { data: upd, error } = await q.select('id')
         if (error) throw error
+        if (!upd?.length) throw new Error('bonul a fost modificat de altcineva între timp — reîncarcă și reia editarea')
       }
-      const rows = m.linii.map(l => {
-        const tip = l.tip_material_id ? tipuriMap[l.tip_material_id] : null
-        const cant = toNum(l.cantitate) ?? 1
-        const cost = m.provenienta === 'gazpet' ? toNum(l.cost_unitar) : null
-        return {
-          bon_id: bonId, magazie_bucata_id: l.magazie_bucata_id || null, tip_material_id: l.tip_material_id || null,
-          denumire: l.denumire?.trim() || tip?.nume || null,
-          serie: l.serie?.trim() || null, sarja: l.sarja?.trim() || null, dimensiune: l.dimensiune?.trim() || null,
-          cantitate: cant, um: l.um || tip?.um_implicit || 'buc',
-          lungime_m: toNum(l.lungime_m), cost_unitar: cost, valoare: cost != null ? cost * cant : null,
-          observatii: null,
-        }
-      })
-      // liniile: verificare registru → inserare → abia apoi ștergerea celor vechi (fără bon golit la un refuz)
-      const vechiIds = m.isNew ? [] : (bonuri.find(b => b.id === bonId)?.linii || []).map(l => l.id)
-      const rez = await salveazaLiniiBon(supabase, bonId, rows, vechiIds)
+      const rows = linii(bonId)
+      // (3) liniile: inserare, apoi ștergerea liniilor existente recitite din BD (fără bon golit, fără duplicate la retry)
+      const rez = await salveazaLiniiBon(supabase, bonId, rows)
       if (!rez.ok) {
         if (m.isNew) await supabase.from('executie_bonuri_consum').delete().eq('id', bonId)
         throw new Error(rez.motiv === 'registru'

@@ -52,7 +52,7 @@ SELECT teste.e('T1b doar postgres e membru; fără SET/INHERIT din API',
   AND NOT pg_has_role('service_role', 'izo_registru_writer', 'MEMBER') AND NOT pg_has_role('authenticator', 'izo_registru_writer', 'MEMBER'));
 SELECT teste.e('T1c funcțiile writer-ului = lista albă, DEFINER, neexecutabile din API',
   (SELECT array_agg(proname::text ORDER BY proname) FROM pg_proc WHERE proowner = 'izo_registru_writer'::regrole)
-    = ARRAY['fn_izo_import_sold_initial','fn_izo_import_storno','fn_izo_seteaza_nivel']
+    = ARRAY['fn_izo_activeaza_si_importa','fn_izo_import_sold_initial','fn_izo_import_storno','fn_izo_seteaza_nivel']
   AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE proowner = 'izo_registru_writer'::regrole AND (NOT prosecdef
        OR has_function_privilege('authenticated', oid, 'EXECUTE') OR has_function_privilege('anon', oid, 'EXECUTE')
        OR has_function_privilege('service_role', oid, 'EXECUTE'))));
@@ -214,8 +214,16 @@ SELECT teste.eroare('T7q site-ul proiectului 3 (cu registru) → refuz', $$UPDAT
 SELECT teste.e('T7r site-ul proiectului 1 (off) se schimbă normal', teste.n($$UPDATE public.executie_proiecte SET site_id = 5 WHERE id = 1$$) = 1
   AND teste.n($$UPDATE public.executie_proiecte SET site_id = 4 WHERE id = 1$$) = 1);
 SELECT teste.eroare('T7s depozitul 10 (doar origine a unei bucăți pe tronson) mutat pe alt site → refuz', $$UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 10$$, 'site-ul lui nu se schimbă');
+SELECT teste.eroare('T7t depozitul 10 (doar origine) șters → refuz', $$DELETE FROM public.logistica_depozite WHERE id = 10$$, 'nu se șterge');
+SELECT teste.eroare('T7u depozitul 10 renumerotat → refuz', $$UPDATE public.logistica_depozite SET id = 99 WHERE id = 10$$, 'nu se renumerotează');
+SELECT teste.eroare('T7v tronson al proiectului 3 (cu registru) șters → refuz', $$DELETE FROM public.executie_tronsoane WHERE id = 22$$, 'nu se șterg');
+SELECT teste.e('T7w tronson LOT 1 (off, fără pachete) șters → merge', teste.n($$DELETE FROM public.executie_tronsoane WHERE id = 11$$) = 1);
 SELECT teste.e('T7d bon cu bucată beneficiar LOT 1 → merge', teste.n($$INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) SELECT 2, id, 'teava' FROM public.magazie_bucati WHERE serie = '254CA00001'$$) = 1);
 RESET ROLE;
+SELECT teste.eroare('T7x TRUNCATE executie_tevi CASCADE cu pachete pe un proiect cu registru → refuz (gardă, nu doar FK)', $$TRUNCATE public.executie_tevi CASCADE$$, 'e refuzat');
+SELECT teste.eroare('T7y TRUNCATE executie_pachete_lansare CASCADE → refuz', $$TRUNCATE public.executie_pachete_lansare CASCADE$$, 'e refuzat');
+SELECT teste.e('T7z gărzile TRUNCATE ale căilor vechi sunt instalate și ENABLE ALWAYS', (SELECT count(*) FROM pg_trigger
+  WHERE tgname IN ('trg_executie_tevi_izo_truncate','trg_pachete_izo_truncate') AND tgenabled = 'A') = 2);
 SELECT teste.eroare('T7e ștergerea pachetului LOT 2 (cascadă pe țevi) → refuz', $$DELETE FROM public.executie_pachete_lansare WHERE id = 2$$, 'nu se șterg din client');
 
 -- ═══ T8 citire și acces ═══
@@ -250,7 +258,13 @@ INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, valabil_de, valab
 VALUES (3, :'FARA', 'rts_rte', current_date - 30, current_date - 1, 'test', 'expirată'),
        (3, :'FARA', 'manager_aprobator', current_date + 1, NULL, 'test', 'viitoare');
 SELECT teste.ca(:'FARA');
-SELECT teste.e('T8e atribuire expirată / viitoare → fără citire', (SELECT count(*) FROM public.izo_importuri) = 0 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 0);
+SELECT teste.e('T8e atribuire expirată / viitoare → fără citire (importuri, evenimente, bucățile registrului)', (SELECT count(*) FROM public.izo_importuri) = 0
+  AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 0 AND (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 0);
+RESET ROLE;
+INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, acordat_de, motiv) VALUES (1, :'TITI', 'inginer_izometrie', 'test', 'alt proiect');
+SELECT teste.ca(:'TITI');
+SELECT teste.e('T8e2 atribuire pe ALT proiect (1) → 0 bucăți din registrul proiectului 3', (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 0
+  AND (SELECT count(*) FROM public.izo_importuri) = 0);
 RESET ROLE;
 INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, acordat_de, motiv) VALUES (3, :'FARA', 'inginer_izometrie', 'test', 'curentă');
 SELECT teste.ca(:'FARA');
@@ -311,7 +325,26 @@ SELECT teste.eroare('T11g politică slăbită (același nume) → activarea refu
 SELECT teste.eroare('T11h reapelul pe un proiect deja „stoc” verifică și el porțile', $$SELECT public.fn_izo_seteaza_nivel(3, 'stoc', 'test')$$, 'definițiile porților');
 ALTER POLICY magbuc_izo_client_upd ON public.magazie_bucati USING (NOT ((provenienta = 'beneficiar'::text) AND (public.fn_izo_nivel(proiect_id) <> 'off'::text)));
 SELECT teste.e('T11e porțile refăcute (inclusiv definițiile); proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
+SELECT teste.e('T11j lock-ul partajat, lookup-urile gărzilor și funcția combinată nu sunt executabile din API (r3)',
+  NOT EXISTS (SELECT 1 FROM pg_proc p, unnest(ARRAY['anon','authenticated','service_role']) a(n)
+               WHERE p.pronamespace = 'public'::regnamespace
+                 AND p.proname IN ('fn_izo_lock_partajat','fn_izo_proiecte_pachet','fn_izo_proiecte_site','fn_izo_bucata_proiect',
+                                   'fn_izo_proiect_tronson','fn_izo_vreun_protejat','fn_izo_depozit_in_registru',
+                                   'fn_izo_pachete_neconcordante','fn_izo_activeaza_si_importa')
+                 AND has_function_privilege(a.n, p.oid, 'EXECUTE')));
+SELECT teste.e('T11k gărzile căilor vechi sunt DEFINER (owner postgres)', (SELECT bool_and(prosecdef AND pg_get_userbyid(proowner) = 'postgres') FROM pg_proc
+  WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'fn\_izo\_refuz\_%') AND (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'fn\_izo\_refuz\_%') = 9);
 SELECT teste.e('T11i niciun rol API nu are TRUNCATE pe magazie_bucati', NOT has_table_privilege('service_role', 'public.magazie_bucati', 'TRUNCATE')
   AND NOT has_table_privilege('authenticated', 'public.magazie_bucati', 'TRUNCATE') AND NOT has_table_privilege('anon', 'public.magazie_bucati', 'TRUNCATE'));
+
+-- ═══ T12 activare + import (r3) ═══
+SELECT teste.eroare('T12a activare, apoi import în aceeași tranzacție, pe căi separate → refuz (doar prin funcția combinată)',
+  $q$DO $d$ BEGIN PERFORM public.fn_izo_seteaza_nivel(2, 'stoc', 'test'); PERFORM public.fn_izo_import_sold_initial(2, 'r3-sep', (SELECT p FROM payload WHERE nume = 'imp2')); END $d$$q$,
+  'fn_izo_activeaza_si_importa');
+SELECT teste.e('T12a2 proiectul 2 a rămas off', public.fn_izo_nivel(2) = 'off');
+INSERT INTO public.executie_pachete_lansare (proiect_id, tronson_id) VALUES (2, 1);   -- ambele off: permis
+SELECT teste.eroare('T12b activare cu un pachet neconcordant (proiectul 2 pe un tronson al proiectului 1) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'neconcordante');
+DELETE FROM public.executie_pachete_lansare WHERE proiect_id = 2 AND tronson_id = 1;
+SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
 SELECT 'TESTE SQL: TOATE OK';

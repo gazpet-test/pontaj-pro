@@ -27,7 +27,7 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    '32686d39b8807b0d6a34c64f19656b0c'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    '022ef3fc5e94b78bae388a7c6a9c5636'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
@@ -133,6 +133,8 @@ BEGIN
   DROP TRIGGER trg_executie_tevi_izo_delete ON public.executie_tevi;
   DROP TRIGGER trg_executie_tevi_izo_mutare ON public.executie_tevi;
   DROP TRIGGER trg_pachete_izo_delete ON public.executie_pachete_lansare;
+  DROP TRIGGER trg_pachete_izo_truncate ON public.executie_pachete_lansare;
+  DROP TRIGGER trg_executie_tevi_izo_truncate ON public.executie_tevi;
   DROP TRIGGER trg_pachete_izo_mutare ON public.executie_pachete_lansare;
   DROP TRIGGER trg_magbuc_izo_garda ON public.magazie_bucati;
   DROP TRIGGER trg_magbuc_izo_truncate ON public.magazie_bucati;
@@ -149,15 +151,16 @@ BEGIN
   DROP TABLE public.izo_atribuiri;
   DROP TABLE public.izo_proiect_config;
   DROP SEQUENCE public.izo_server_ver_seq;
-  DROP FUNCTION public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
+  DROP FUNCTION public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text), public.fn_izo_pachete_neconcordante(bigint),
+    public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
     public.fn_izo_import_storno(bigint, text, text), public.fn_izo_refuz_bon_bucata(), public.fn_izo_refuz_delete_tevi(), public.fn_izo_refuz_delete_pachet(),
     public.fn_izo_refuz_mutare_tevi(), public.fn_izo_refuz_mutare_pachet(), public.fn_izo_refuz_mutare_tronson(), public.fn_izo_refuz_mutare_depozit(),
     public.fn_izo_garda_atribuiri(), public.fn_izo_porti_lipsa(), public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_depozit_in_registru(integer),
     public.fn_izo_refuz_site_proiect(), public.fn_izo_lock_partajat(bigint[]), public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[]),
     public.fn_izo_porti_definitii(), public.fn_izo_proiecte_site(integer), public.fn_izo_bucata_proiect(bigint),
-    public.fn_izo_proiect_tronson(bigint), public.fn_izo_vreun_protejat(bigint[]),
+    public.fn_izo_proiect_tronson_blocat(bigint), public.fn_izo_vreun_protejat(bigint[]), public.fn_izo_refuz_truncate_cai_vechi(),
     public.fn_izo_garda_fapte(), public.fn_izo_garda_truncate_bucati(), public.fn_izo_garda_bucati(), public.fn_izo_garda_scriitor(),
-    public.fn_izo_proiecte_pachet(bigint), public.fn_izo_uid(), public.fn_izo_site_proiect(bigint), public.fn_izo_loc_valid(bigint, integer, bigint),
+    public.fn_izo_proiecte_pachet_blocat(bigint), public.fn_izo_uid(), public.fn_izo_site_proiect(bigint), public.fn_izo_loc_valid(bigint, integer, bigint),
     public.fn_izo_tip_material(text), public.fn_izo_tip_cod(integer), public.fn_izo_bucata_protejata(bigint),
     public.fn_izo_proiecte_protejate(), public.fn_izo_citire(bigint), public.fn_izo_acces(bigint, text, text, text),
     public.fn_izo_nivel(bigint);
