@@ -39,7 +39,7 @@ Deno.test('extractor_id: toate id-urile construite (A cu escaladare, B; orice co
       assert(re.test(id), `extractorCuContext(${ex.cheie}, ${c}) = ${id} nu respectă ${re}`)
     }
   }
-  assertEquals(idExtractor(EXTRACTOARE.A), 'claude-haiku-5-5/claude-sonnet-5-5:q1@p4@n5@f2')
+  assertEquals(idExtractor(EXTRACTOARE.A), 'claude-haiku-5-5/claude-sonnet-5-5:q1@p4@n6@f2')
 })
 
 // review Gemini #804 r1 (P2, verificat): modelul decontat la escaladare ('<haiku>+<sonnet>') ajunge în ofertare_ai_rezervari.model, al cărui

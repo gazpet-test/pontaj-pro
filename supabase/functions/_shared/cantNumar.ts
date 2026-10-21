@@ -227,6 +227,23 @@ export function pozitieDovedita(p: {
 export const LINII_CONTINUARE = 4
 // linia de total a articolului: fără litere în afară de „Total=” (cifre, punctuație și glife citite greșit, ex. „0.000 ✓ 0 Total=”)
 const RE_TOTAL_RAND = /^[^\p{L}]*\btotal[ea]?\s*=[^\p{L}]*$/iu
+// antetul de pagină din listele exportate („IOANA8 pag 2”, „ISL08 pag 4”): un singur cuvânt + „pag” + număr, toată linia
+// review Jakarinos #815 r1 (P3): forma strictă — un singur cod alfanumeric (nu „DN…”), spațiu, „pag” / „pag.”, spațiu, număr
+const RE_ANTET_PAGINA = /^\s*(?!DN)[A-Z][A-Z0-9_-]{1,39}\s+pag\.?\s+\d{1,4}\s*$/i
+// marcajul de pagină COMPLET (nu doar prefixul): „⟦PAGINA n⟧”
+// caracterele U+27E6 / U+27E7 scrise ca escape-uri (review r2: transportul ASCII al diff-ului le transforma în „[[” / „]]”)
+const RE_MARCAJ_PAGINA = /^\u27E6PAGINA \d{1,5}\u27E7\s*$/
+// prima linie ne-goală DEASUPRA liniei care începe la `a` e un marcaj de pagină
+function subMarcajPagina(doc: string, a: number): boolean {
+  let p = a - 1
+  while (p > 0) {
+    const b = doc.lastIndexOf('\n', p - 1) + 1
+    const l = doc.slice(b, p)
+    if (l.trim()) return RE_MARCAJ_PAGINA.test(l)
+    p = b - 1
+  }
+  return false
+}
 const RE_INCEPUT_ARTICOL = /^\s*\**\s*\d{1,4}[.)]?\s+\**[A-Z0-9][A-Za-z0-9.\-\/]{2,}/
 // doar unitățile reale fac o linie ancoră (umNorm întoarce și cuvinte oarecare: „TEAVA 20.80” nu e un rând nou)
 const UM_ANCORA = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'l', 'set', 'ora', 'h'])
@@ -278,7 +295,9 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
   while (p > 0) {
     const a = doc.lastIndexOf('\n', p - 1) + 1
     const l = doc.slice(a, p)
-    if (l.trim() && !l.startsWith('⟦PAGINA')) { sus = l; break }
+    // decizia Răzvan 21.10.2026 (propunerea 2A-i, proba Răcari): antetul de pagină „<cod> pag N” e transparent ca marcajul — DOAR
+    // dacă e chiar prima linie ne-goală de sub un marcaj ⟦PAGINA n⟧ (altfel rămâne o linie oarecare → incert, ca înainte)
+    if (l.trim() && !l.startsWith('⟦PAGINA') && !(RE_ANTET_PAGINA.test(l) && subMarcajPagina(doc, a))) { sus = l; break }
     p = a - 1
   }
   if (!RE_TOTAL_RAND.test(sus)) return doarLinia
