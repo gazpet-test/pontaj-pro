@@ -27,7 +27,8 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    '2ea1d3534b6d2f992d94f7f7b5bf50b2'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    '491007c5c51dc9b7b2d53661c06b6b9b',  -- branch Supabase PG17.11, postgres non-superuser (retestul r10 din 21.10.2026, head a98b1981)
+    '2867d9b742af9ccf8e6b1dbe25ccf62a'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
@@ -115,7 +116,8 @@ BEGIN
         WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('izo_server_ver_seq','izo_atribuiri_id_seq','izo_importuri_id_seq',
               'magazie_bucati_evenimente_id_seq','magazie_bucati_miscari_id_seq')),
       (SELECT format('%s:%s:%s:%s:%s', r.rolinherit, r.rolcanlogin, r.rolbypassrls,
-                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ',' ORDER BY pg_get_userbyid(m.member)::text)
+                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ','
+                                       ORDER BY pg_get_userbyid(m.member)::text, m.admin_option, m.inherit_option, m.set_option)
                         FROM pg_auth_members m WHERE m.roleid = r.oid), r.rolsuper)
          FROM pg_roles r WHERE r.rolname = 'izo_registru_writer')))
     INTO v_amprenta;
@@ -151,9 +153,13 @@ BEGIN
   DROP TABLE public.izo_atribuiri;
   DROP TABLE public.izo_proiect_config;
   DROP SEQUENCE public.izo_server_ver_seq;
-  DROP FUNCTION public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text), public.fn_izo_pachete_neconcordante(bigint),
-    public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
-    public.fn_izo_import_storno(bigint, text, text), public.fn_izo_refuz_bon_bucata(), public.fn_izo_refuz_delete_tevi(), public.fn_izo_refuz_delete_pachet(),
+  -- funcțiile writer-ului le scoate owner-ul lor (pe Supabase postgres nu e superuser): SET ROLE pe writer
+  SET LOCAL ROLE izo_registru_writer;
+  DROP FUNCTION public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text), public.fn_izo_seteaza_nivel(bigint, text, text),
+    public.fn_izo_import_sold_initial(bigint, text, jsonb), public.fn_izo_import_storno(bigint, text, text);
+  RESET ROLE;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261102a: rolul nu a revenit la postgres'; END IF;
+  DROP FUNCTION public.fn_izo_pachete_neconcordante(bigint), public.fn_izo_refuz_bon_bucata(), public.fn_izo_refuz_delete_tevi(), public.fn_izo_refuz_delete_pachet(),
     public.fn_izo_refuz_mutare_tevi(), public.fn_izo_refuz_mutare_pachet(), public.fn_izo_refuz_mutare_tronson(), public.fn_izo_refuz_mutare_depozit(),
     public.fn_izo_garda_atribuiri(), public.fn_izo_porti_lipsa(), public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_depozit_in_registru(integer),
     public.fn_izo_refuz_site_proiect(), public.fn_izo_lock_partajat(bigint[]), public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[]),

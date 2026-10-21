@@ -441,8 +441,11 @@ BEGIN
     -- rolul scriitor: fără BYPASSRLS/LOGIN/SUPERUSER/INHERIT; singurul membru = postgres; niciun rol API nu-l poate prelua
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'izo_registru_writer' AND NOT rolbypassrls AND NOT rolcanlogin AND NOT rolsuper AND NOT rolinherit) THEN
       v := array_append(v, 'rolul izo_registru_writer (lipsă sau BYPASSRLS/LOGIN/SUPERUSER/INHERIT)');
-    ELSIF (SELECT array_agg(pg_get_userbyid(m.member)::text) FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole)
-            IS DISTINCT FROM ARRAY['postgres']::text[]
+    -- membri: doar postgres (PG16+: CREATE ROLE de către un non-superuser adaugă automat un rând ADMIN fără SET/INHERIT,
+    -- grantor = superuser-ul de bootstrap — pe Supabase supabase_admin; găsit de testul pe branch PG17); SET da, INHERIT nu
+    ELSIF EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member <> 'postgres'::regrole)
+       OR NOT EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member = 'postgres'::regrole AND m.set_option)
+       OR EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.inherit_option)
        OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','service_role','authenticator']) a(n)
                    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a.n) AND pg_has_role(a.n, 'izo_registru_writer', 'MEMBER')) THEN
       v := array_append(v, 'membrii rolului izo_registru_writer');
@@ -469,7 +472,9 @@ BEGIN
     -- deveni o cale nouă spre ele (Codex r5 6) — acceptate doar după review, cu actualizarea acestei porți
     IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.proowner <> 'izo_registru_writer'::regrole
                 AND p.oid <> 'public.fn_izo_porti_lipsa()'::regprocedure   -- poarta însăși le numește în verificarea ACL
-                AND p.prosrc ~* 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)')   -- fără majuscule (N3)
+                -- corpul complet: prosrc (plpgsql / sql clasic) + corpul BEGIN ATOMIC (prosrc gol, corpul în prosqlbody) — review r7
+                AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), ''))
+                    ~* 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)')   -- fără majuscule (N3)
        OR EXISTS (SELECT 1 FROM pg_rewrite rw WHERE pg_get_ruledef(rw.oid) ~* 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)') THEN
       v := array_append(v, 'o funcție / un view din afara writer-ului cheamă funcțiile registrului (wrapper nerevizuit)');
     END IF;
@@ -1326,21 +1331,27 @@ BEGIN
   ALTER FUNCTION public.fn_izo_import_storno(bigint, text, text) OWNER TO izo_registru_writer;
   ALTER FUNCTION public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text) OWNER TO izo_registru_writer;
   REVOKE CREATE ON SCHEMA public FROM izo_registru_writer;
-  -- ALTER OWNER păstrează ACL-ul: owner-ul nou are EXECUTE implicit; postgres primește explicit
-  REVOKE ALL ON FUNCTION public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
-    public.fn_izo_import_storno(bigint, text, text), public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text)
-    FROM PUBLIC, anon, authenticated, service_role;
+  -- ALTER OWNER mută ACL-ul pe owner-ul nou (REVOKE-urile din G rămân; intrarea vechiului owner devine a writer-ului).
+  -- Pe Supabase postgres NU e superuser: după ALTER OWNER nu mai poate da GRANT pe funcții care nu-i aparțin — GRANT-ul
+  -- EXECUTE către postgres îl dă owner-ul (writer), prin SET ROLE (postgres are SET pe writer). Găsit de testul pe branch PG17.
+  SET LOCAL ROLE izo_registru_writer;
   GRANT EXECUTE ON FUNCTION public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
     public.fn_izo_import_storno(bigint, text, text), public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text) TO postgres;
+  RESET ROLE;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Livrare 20261102a: rolul nu a revenit la postgres după GRANT'; END IF;
 
   -- amprenta definițiilor porților, fixată acum (după ACL-uri și owneri); fn_izo_porti_lipsa o compară la fiecare activare
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
   -- P1 granița rolului [R7]: doar postgres e membru; nimeni din API nu poate SET/INHERIT
-  IF (SELECT array_agg(pg_get_userbyid(m.member)::text ORDER BY pg_get_userbyid(m.member)::text) FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole)
-       IS DISTINCT FROM ARRAY['postgres']::text[] THEN
+  -- (PG16+: rândul ADMIN automat al creatorului non-superuser, grantor supabase_admin, e acceptat — vezi poarta)
+  IF EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member <> 'postgres'::regrole) THEN
     RAISE EXCEPTION 'Postcondiție 1: alți membri decât postgres în izo_registru_writer';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.member = 'postgres'::regrole AND m.set_option)
+     OR EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole AND m.inherit_option) THEN
+    RAISE EXCEPTION 'Postcondiție 1: postgres trebuie să aibă SET (fără INHERIT) pe izo_registru_writer';
   END IF;
   IF EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','service_role','authenticator']) r(n)
               WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r.n)
@@ -1452,7 +1463,8 @@ BEGIN
         WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('izo_server_ver_seq','izo_atribuiri_id_seq','izo_importuri_id_seq',
               'magazie_bucati_evenimente_id_seq','magazie_bucati_miscari_id_seq')),
       (SELECT format('%s:%s:%s:%s:%s', r.rolinherit, r.rolcanlogin, r.rolbypassrls,
-                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ',' ORDER BY pg_get_userbyid(m.member)::text)
+                     (SELECT string_agg(format('%s:%s:%s:%s', pg_get_userbyid(m.member), m.admin_option, m.inherit_option, m.set_option), ','
+                                       ORDER BY pg_get_userbyid(m.member)::text, m.admin_option, m.inherit_option, m.set_option)
                         FROM pg_auth_members m WHERE m.roleid = r.oid), r.rolsuper)
          FROM pg_roles r WHERE r.rolname = 'izo_registru_writer')))
     INTO v_amprenta;

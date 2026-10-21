@@ -46,8 +46,10 @@ INSERT INTO payload VALUES
 
 -- ═══ T1 catalog ═══
 SELECT teste.e('T1a rolul: NOLOGIN, NOINHERIT, fără BYPASSRLS', (SELECT NOT rolcanlogin AND NOT rolinherit AND NOT rolbypassrls AND NOT rolsuper FROM pg_roles WHERE rolname = 'izo_registru_writer'));
-SELECT teste.e('T1b doar postgres e membru; fără SET/INHERIT din API',
-  (SELECT array_agg(pg_get_userbyid(member)::text) FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole) = ARRAY['postgres']
+SELECT teste.e('T1b doar postgres e membru (SET, fără INHERIT); fără SET/INHERIT din API',
+  NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole AND member <> 'postgres'::regrole)
+  AND EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole AND member = 'postgres'::regrole AND set_option)
+  AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE roleid = 'izo_registru_writer'::regrole AND inherit_option)
   AND NOT pg_has_role('authenticated', 'izo_registru_writer', 'MEMBER') AND NOT pg_has_role('anon', 'izo_registru_writer', 'MEMBER')
   AND NOT pg_has_role('service_role', 'izo_registru_writer', 'MEMBER') AND NOT pg_has_role('authenticator', 'izo_registru_writer', 'MEMBER'));
 SELECT teste.e('T1c funcțiile writer-ului = lista albă, DEFINER, neexecutabile din API',
@@ -277,6 +279,7 @@ RESET ROLE;
 SELECT teste.eroare('T8g atribuiri: DELETE → refuz', $$DELETE FROM public.izo_atribuiri WHERE rol = 'rts_rte'$$, 'nu se șterg');
 SELECT teste.eroare('T8h atribuiri: TRUNCATE → refuz', $$TRUNCATE public.izo_atribuiri$$, 'nu se șterg');
 CREATE ROLE izo_test_admin NOLOGIN;
+GRANT izo_test_admin TO CURRENT_USER WITH SET TRUE;   -- PG16+: creatorul non-superuser primește doar ADMIN (fără SET) — branch PG17
 GRANT USAGE ON SCHEMA public TO izo_test_admin;
 GRANT INSERT, UPDATE ON public.izo_atribuiri TO izo_test_admin;
 SELECT teste.eroare('T8i atribuiri: INSERT de alt rol decât postgres (cu drept de tabelă) → refuz',
@@ -316,9 +319,13 @@ ALTER TABLE public.executie_tevi ENABLE ALWAYS TRIGGER trg_executie_tevi_izo_del
 ALTER TABLE public.izo_importuri DISABLE ROW LEVEL SECURITY;
 SELECT teste.eroare('T11c RLS oprit pe izo_importuri → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'RLS inactiv pe izo_importuri');
 ALTER TABLE public.izo_importuri ENABLE ROW LEVEL SECURITY;
+SET ROLE izo_registru_writer;   -- ACL-ul funcțiilor registrului îl schimbă doar owner-ul (postgres nu e superuser pe Supabase)
 GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO authenticated;
+RESET ROLE;
 SELECT teste.eroare('T11d funcție a registrului executabilă din API → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'EXECUTE din API');
+SET ROLE izo_registru_writer;
 REVOKE EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) FROM authenticated;
+RESET ROLE;
 GRANT TRUNCATE ON public.magazie_bucati TO service_role;
 SELECT teste.eroare('T11f TRUNCATE pe magazie_bucati pentru service_role → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'TRUNCATE pe magazie_bucati');
 REVOKE TRUNCATE ON public.magazie_bucati FROM service_role;
@@ -373,10 +380,20 @@ DROP FUNCTION teste.wrapper_activare(bigint);
 CREATE FUNCTION teste.wrapper_majuscule(p bigint) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT PUBLIC.FN_IZO_SETEAZA_NIVEL(p, 'stoc', 'wrapper') $$;
 SELECT teste.eroare('T12i2 wrapper cu MAJUSCULE → porțile îl prind (N3)', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
 DROP FUNCTION teste.wrapper_majuscule(bigint);
+CREATE FUNCTION teste.wrapper_atomic(p bigint) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public
+BEGIN ATOMIC
+  SELECT public.fn_izo_seteaza_nivel(p, 'stoc', 'wrapper');
+END;
+SELECT teste.eroare('T12i3 wrapper BEGIN ATOMIC (corpul în prosqlbody, prosrc gol) → porțile îl prind', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
+DROP FUNCTION teste.wrapper_atomic(bigint);
 CREATE ROLE izo_test_exec NOLOGIN;
+SET ROLE izo_registru_writer;
 GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO izo_test_exec;
+RESET ROLE;
 SELECT teste.eroare('T12k EXECUTE pe o funcție a registrului pentru un rol din afara allowlist-ului → porțile refuză', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'allowlist');
+SET ROLE izo_registru_writer;
 REVOKE EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) FROM izo_test_exec;
+RESET ROLE;
 DROP ROLE izo_test_exec;
 SELECT teste.e('T12j porțile refăcute după FK / CHECK / wrapper / allowlist', cardinality(public.fn_izo_porti_lipsa()) = 0);
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
