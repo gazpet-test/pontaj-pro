@@ -28,7 +28,12 @@ DECLARE
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
     '53f214aef5639e6936358e966b6b7928',  -- branch Supabase PG17.11, postgres non-superuser (retestul r15 din 21.10.2026, head 92ef00a1)
-    '0afb9bcabcdf25f43692ce95c8687699'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    '0afb9bcabcdf25f43692ce95c8687699',  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    -- după 20261102c (gărzile căilor vechi înlocuite; revenirea E2a le scoate oricum):
+    'e94fd79561c1630c2ac667054ef789f5',  -- producție PG17, calculată read-only pe 21.10.2026 (md5-urile noi substituite)
+    'ad229ad498e3d350f2a143d3a8b51710'  -- 20261102c, harness PG16
+    -- dacă se revine E2a direct peste 20261102c (posibil doar fără date), se șterge și rândul 20261102c din
+    -- supabase_migrations.schema_migrations, altfel o relivrare îl vede „aplicat” fără funcții
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
