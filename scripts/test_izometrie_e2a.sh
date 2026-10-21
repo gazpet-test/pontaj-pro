@@ -391,5 +391,7 @@ OUT="$(revenire "$BAZA2")" || { echo "$OUT" >&2; esec "6f revenirea armată pe b
 [ "$(q2 "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'magazie_bucati_stare_check'")" = "CHECK ((stare = ANY (ARRAY['sosit'::text, 'receptionat'::text, 'rezervata'::text, 'montata'::text, 'consumata'::text, 'retur'::text])))" ] || esec "6f CHECK stare nerefăcut"
 [ "$(q2 "SELECT has_table_privilege('service_role', 'public.magazie_bucati', 'TRUNCATE')")" = t ] || esec "6f TRUNCATE pentru service_role nerefăcut"
 gate_0e "revenire" "$BAZA2"
-ok "6d–f revenire: amprentă modificată / politică slăbită → refuz · armată pe bază curată → totul scos, CHECK-urile ca pe live, rândurile existente neatinse"
+# obiectele existente cu „izo” în mijlocul numelui (furnIZOri) nu încurcă revenirea și rămân neatinse (dry-run prod 21.10)
+[ "$(q2 "SELECT (SELECT count(*) FROM pg_policies WHERE policyname IN ('logistica_furnizori_select_authenticated', 'locatii_furnizori_all')) || ':' || (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_furnizori_atinge') || ':' || (SELECT count(*) FROM pg_proc WHERE proname = 'fn_furnizori_atinge')")" = "2:1:1" ]   || esec "6d–f obiectele „furnizori” (izo în mijlocul numelui) au fost atinse de revenire"
+ok "6d–f revenire: amprentă modificată / politică slăbită → refuz · armată pe bază curată → totul scos, CHECK-urile ca pe live, rândurile existente și obiectele „furnIZOri” neatinse"
 echo "PASS test_izometrie_e2a"
