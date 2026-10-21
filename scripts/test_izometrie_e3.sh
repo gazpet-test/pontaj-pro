@@ -9,7 +9,9 @@
 #      INVOKER chemat de DEFINER / citat / overload / mutator; r5f: cicluri de funcții, de mutatori și prin view-uri, pragul de
 #      100 de iterații pe ambele bucle — sub, exact la și peste prag, cu refuzul la neconvergență — și frontiere largi); plus
 #      mutațiile pe care poarta nouă e intenționat MAI STRICTĂ decât E2a (r5f, #825 NO-GO: scheme cu caractere de regex — E2a dă
-#      eroare —, ghilimele în nume, SQL fără EXECUTE / U&"…", comentariu între schema platformei și nume — E2a dă verde fals)
+#      eroare —, ghilimele în nume, SQL fără EXECUTE / U&"…", comentariu între schema platformei și nume — E2a dă verde fals);
+#      r5f (#825): sămânța din migrare = E2a + tabelele documentelor E3 (teste.inchidere_noua_e3) — adaugă exact cele 3 tabele pe
+#      toate mutațiile, iar mutațiile pe documente (DEFINER / view fără security_invoker / lanț) fac poarta reală roșie
 #   3. curse cu barieră: lock-ul „schemă” (operație E3 ↔ runner + DDL), în ambele ordini
 #   4. reaplicare → refuz; revenire nearmată → refuz; revenire în REPEATABLE READ → refuz; cu fapte E3 → refuz
 #   5. baza curată: E2a + 2c + (5a, r5f: baseline-ul extern pre-E3 schimbat → E3 refuzată de preflight-ul 0l, pe 8 mutații)
@@ -107,17 +109,30 @@ ok "1 E3 prin runner (fără runner → refuz; fără GRANT pe fn_izo_lock_parta
 "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3_inchidere.sql" >/dev/null
 INCH="SELECT array_to_string(ARRAY(SELECT x::regclass::text FROM unnest(o_rel) x ORDER BY 1), ',') || ' / ' || array_to_string(ARRAY(SELECT x::regprocedure::text FROM unnest(o_fn) x ORDER BY 1), ',')
   || ' / ' || array_to_string(ARRAY(SELECT x::regprocedure::text FROM unnest(o_mut) x ORDER BY 1), ',') || ' / ' || array_to_string(o_mesaje, ',') FROM"
+# r5f (#825): teste.inchidere_noua = textul din migrare FĂRĂ sămânța E3 (aceeași sămânță ca E2a: veche = nouă compară algoritmul);
+# teste.inchidere_noua_e3 = textul EXACT din migrare (sămânța E2a + tabelele documentelor E3). INCH_E3 = INCH fără cele 3 tabele
+# (și marcat dacă lipsesc): pe orice mutație care nu atinge documentele, sămânța E3 trebuie să adauge EXACT cele 3 tabele, nimic
+# altceva (funcțiile E3 legitime sunt fn_izo_*, în afara închiderii)
+DOC="ARRAY['public.izo_documente_intrare'::regclass, 'public.izo_documente_intrare_randuri'::regclass, 'public.izo_documente_scanuri'::regclass]::oid[]"
+INCH_E3="SELECT CASE WHEN $DOC <@ o_rel THEN '' ELSE 'FĂRĂ TABELELE DOCUMENTELOR: ' END
+  || array_to_string(ARRAY(SELECT x::regclass::text FROM unnest(o_rel) x WHERE x <> ALL ($DOC) ORDER BY 1), ',') || ' / ' || array_to_string(ARRAY(SELECT x::regprocedure::text FROM unnest(o_fn) x ORDER BY 1), ',')
+  || ' / ' || array_to_string(ARRAY(SELECT x::regprocedure::text FROM unnest(o_mut) x ORDER BY 1), ',') || ' / ' || array_to_string(o_mesaje, ',') FROM"
+V0="$(q "$INCH teste.inchidere_noua()")" || esec "2 starea curată: închiderea nouă a dat eroare"
+N0="$(q "$INCH_E3 teste.inchidere_noua_e3()")" || esec "2 starea curată: închiderea din migrare (sămânța E3) a dat eroare"
+[ "$V0" = "$N0" ] || esec "2 starea curată: sămânța E3 aduce altceva decât cele 3 tabele ale documentelor [${N0:0:3000}] ≠ [${V0:0:3000}]"
 # dif <etichetă> <creează> <șterge> [1 = mutația trebuie să aducă un DEFINER în închidere | 0] [verificare SQL booleană, rulată cât
 # mutația e în bază — r5f (#825 NO-GO): ce probează mutația (membrii ciclului în închidere, mesajul de neconvergență în poartă…)]
 # r5f: o eroare a uneia dintre închideri (ex. regex prea mare) e eșec explicit, nu ieșire mută din set -e
-dif() { local et="$1" crea="$2" sterge="$3" v n d c=t
+dif() { local et="$1" crea="$2" sterge="$3" v n n3 d c=t
   q "$crea" >/dev/null || esec "2 $et: mutația nu s-a putut crea"
   v="$(q "$INCH teste.inchidere_veche()")" || esec "2 $et: închiderea veche a dat eroare"
   n="$(q "$INCH teste.inchidere_noua()")" || esec "2 $et: închiderea nouă a dat eroare (poarta s-ar bloca în loc să răspundă)"
+  n3="$(q "$INCH_E3 teste.inchidere_noua_e3()")" || esec "2 $et: închiderea din migrare (sămânța E3) a dat eroare"
   d="$(q "SELECT count(*) FROM pg_proc p WHERE p.oid = ANY ((teste.inchidere_noua()).o_fn) AND p.prosecdef")"
   [ -z "${5:-}" ] || c="$(q "SELECT coalesce(($5), false)")" || esec "2 $et: verificarea a dat eroare"
   q "$sterge" >/dev/null || esec "2 $et: mutația nu s-a putut șterge"
   [ "$v" = "$n" ] || esec "2 $et: închiderea veche [${v:0:3000}] ≠ cea nouă [${n:0:3000}]"
+  [ "$n3" = "$n" ] || esec "2 $et: închiderea din migrare fără documente [${n3:0:3000}] ≠ cea pe sămânța E2a [${n:0:3000}]"
   [ "${4:-1}" = 0 ] || [ "$d" -gt 0 ] || esec "2 $et: mutația nu aduce niciun DEFINER în închidere (testul nu probează nimic)"
   [ "$c" = t ] || esec "2 $et: verificarea mutației nu ține: $5"; }
 # r5f (#825 NO-GO, P1): dif_strict <etichetă> <creează> <șterge> <err|ok> <verificare SQL> — mutațiile pe care poarta nouă e
@@ -376,8 +391,43 @@ dif_strict "40 000 de comentarii imbricate între schema platformei și nume (pl
   "DROP FUNCTION teste.com_5(); DROP FUNCTION storage.izo_c3()" ok \
   "'teste.com_5()' = ANY ($FN_NOU) AND NOT ('teste.com_5()' = ANY ($FN_VECHI))"
 unset PGOPTIONS
+# ── r5f (#825): tabelele documentelor E3 în închiderea citirilor (design §13.2) ──
+# dif_doc <etichetă> <creează> <șterge> <rosu|verde> <verificare SQL> — mutațiile pe documente: pe sămânța E2a închiderile rămân
+# egale (veche = nouă; E2a nu vede documentele), închiderea exactă din migrare (inchidere_noua_e3) le prinde, iar poarta REALĂ e
+# roșie (DEFINER / view fără security_invoker / lanț) sau verde (view security_invoker / INVOKER necitite de un DEFINER)
+FN_E3="(SELECT array_agg(x::regprocedure::text) FROM unnest((teste.inchidere_noua_e3()).o_fn) x)::text[]"
+dif_doc() { local et="$1" crea="$2" sterge="$3" v n g c
+  q "$crea" >/dev/null || esec "2 $et: mutația nu s-a putut crea"
+  v="$(q "$INCH teste.inchidere_veche()")" || esec "2 $et: închiderea veche a dat eroare"
+  n="$(q "$INCH teste.inchidere_noua()")" || esec "2 $et: închiderea nouă a dat eroare"
+  g="$(q "SELECT cardinality(public.fn_izo_porti_lipsa())")" || esec "2 $et: poarta reală a dat eroare"
+  c="$(q "SELECT coalesce(($5), false)")" || esec "2 $et: verificarea a dat eroare"
+  q "$sterge" >/dev/null || esec "2 $et: mutația nu s-a putut șterge"
+  [ "$v" = "$n" ] || esec "2 $et: pe aceeași sămânță (E2a), închiderea veche [${v:0:3000}] ≠ cea nouă [${n:0:3000}]"
+  if [ "$4" = rosu ]; then [ "$g" -gt 0 ] || esec "2 $et: poarta e verde pe o citire a documentelor E3 din afara fn_izo_*"
+  else [ "$g" = 0 ] || esec "2 $et: poarta e roșie pe o mutație legitimă ($g lipsuri)"; fi
+  [ "$c" = t ] || esec "2 $et: verificarea mutației nu ține: $5"; }
+dif_doc "documente: DEFINER direct pe izo_documente_intrare" \
+  "CREATE FUNCTION teste.dd_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM public.izo_documente_intrare'" \
+  "DROP FUNCTION teste.dd_def()" rosu "'teste.dd_def()' = ANY ($FN_E3) AND NOT ('teste.dd_def()' = ANY (coalesce($FN_NOU, '{}')))"
+dif_doc "documente: view fără security_invoker pe izo_documente_scanuri" \
+  "CREATE VIEW teste.dd_v AS SELECT * FROM public.izo_documente_scanuri" "DROP VIEW teste.dd_v" rosu \
+  "'teste.dd_v'::regclass::oid = ANY ((teste.inchidere_noua_e3()).o_rel) AND NOT ('teste.dd_v'::regclass::oid = ANY ((teste.inchidere_noua()).o_rel))"
+dif_doc "documente: același view cu security_invoker = on (necitit de un DEFINER)" \
+  "CREATE VIEW teste.dd_v WITH (security_invoker = on) AS SELECT * FROM public.izo_documente_scanuri" "DROP VIEW teste.dd_v" verde \
+  "'teste.dd_v'::regclass::oid = ANY ((teste.inchidere_noua_e3()).o_rel)"
+dif_doc "documente: INVOKER pe izo_documente_intrare_randuri, nechemat de un DEFINER" \
+  "CREATE FUNCTION teste.dd_inv() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.izo_documente_intrare_randuri'" \
+  "DROP FUNCTION teste.dd_inv()" verde "'teste.dd_inv()' = ANY ($FN_E3)"
+dif_doc "documente: DEFINER → INVOKER pe izo_documente_intrare_randuri" \
+  "CREATE FUNCTION teste.dd_inv() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.izo_documente_intrare_randuri';
+  CREATE FUNCTION teste.dd_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT teste.dd_inv()'" \
+  "DROP FUNCTION teste.dd_def(); DROP FUNCTION teste.dd_inv()" rosu "ARRAY['teste.dd_inv()', 'teste.dd_def()'] <@ $FN_E3"
+dif_doc "documente: DEFINER cu nume citat (\"public\".\"izo_documente_scanuri\")" \
+  "CREATE FUNCTION teste.dd_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM \"public\".\"izo_documente_scanuri\"'" \
+  "DROP FUNCTION teste.dd_def()" rosu "'teste.dd_def()' = ANY ($FN_E3)"
 [ "$(q "SELECT cardinality(public.fn_izo_porti_lipsa())")" = 0 ] || esec "2 porțile nu au revenit complete"
-ok "2 diferențial: poarta nouă (rapidă) = poarta E2a pe 24 de mutații (DEFINER direct, view, lanț de 3 view-uri, INVOKER prin DEFINER, citat, overload, mutator; r5f: 7 cicluri — DEFINER ↔ INVOKER ×3, mutatori, view ↔ view, view ↔ funcție, view ↔ ATOMIC; pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență; 2 frontiere largi; 2 martori cu cale fixă) + 8 mutații pe care e mai strictă (3 cu schemă construită — E2a: eroare; „|” în schemă; ghilimele în nume; 16 citiri fără nume scris / fără EXECUTE; 4 comentarii în numele calificat; 40 000 de comentarii imbricate)"
+ok "2 diferențial: poarta nouă (rapidă) = poarta E2a pe 24 de mutații (DEFINER direct, view, lanț de 3 view-uri, INVOKER prin DEFINER, citat, overload, mutator; r5f: 7 cicluri — DEFINER ↔ INVOKER ×3, mutatori, view ↔ view, view ↔ funcție, view ↔ ATOMIC; pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență; 2 frontiere largi; 2 martori cu cale fixă) + 8 mutații pe care e mai strictă (3 cu schemă construită — E2a: eroare; „|” în schemă; ghilimele în nume; 16 citiri fără nume scris / fără EXECUTE; 4 comentarii în numele calificat; 40 000 de comentarii imbricate); r5f #825: sămânța din migrare = E2a + exact cele 3 tabele ale documentelor (stare curată + toate cele 24) + 6 mutații pe documente (DEFINER, view fără / cu security_invoker, INVOKER singur, DEFINER → INVOKER, citat)"
 
 # ── 3. curse: lock-ul „schemă” ──
 CA_J="SET SESSION AUTHORIZATION authenticator; SELECT teste.ca('00000000-0000-0000-0000-000000000030')"

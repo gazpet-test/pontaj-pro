@@ -700,6 +700,16 @@ a = pl.index("    BEGIN\n", a)
 b = pl.index("      IF v_iter >= 100 THEN v := array_append(v, 'închiderea citirilor nu converge (citire nerevizuită)'); END IF;\n")
 b = b + len("      IF v_iter >= 100 THEN v := array_append(v, 'închiderea citirilor nu converge (citire nerevizuită)'); END IF;\n")
 SEED_FN = pl[pl.index("      -- funcțiile cu SQL dinamic (orice EXECUTE)", a):pl.index("      -- r15 (Jakarinos + Copilot r14): funcțiile „mutator”", a)]
+# r5f (#825): sămânța E3 = cele 6 tabele E2a + tabelele documentelor, ca instrucțiune SEPARATĂ (un singur loc): testul
+# diferențial o scoate din copia de test (teste.inchidere_noua = aceeași sămânță ca E2a, deci echivalența rămâne dovedită),
+# iar teste.inchidere_noua_e3 = textul exact din migrare
+SAMANTA_E3 = r"""      -- r5f (#825): + tabelele documentelor E3 — RLS cu citire prin fn_izo_citire, ca registrul (design §13.2): un DEFINER /
+      -- un view fără security_invoker / un lanț din afara fn_izo_* care ajunge la ele e refuzat la fel. Funcțiile E3 legitime
+      -- (fn_izo_doc_* / fn_izo_scan_*, owner izo_doc_editor / izo_receptie_writer / postgres) sunt fn_izo_*: în afara
+      -- închiderii, ca la E2a, și acoperite de ștampila E2a (fn_izo_porti_definitii: owner, corp, config, ACL)
+      c_rel := c_rel || ARRAY(SELECT c.oid FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+         AND c.relname IN ('izo_documente_intrare','izo_documente_intrare_randuri','izo_documente_scanuri'));
+"""
 RAPID = r"""      -- r5d (20261103b): aceeași semantică, evaluare SEMI-NAIVĂ — fiecare element nou al închiderii se caută o singură dată,
       -- cu alternanța numelor din frontieră (r5f: pe bucăți mărginite, nu o singură expresie); corpurile se citesc o dată
       k_oid oid[]; k_corp text[]; k_cale text[]; f_rel oid[]; f_fn oid[]; f_mut oid[]; n_rel oid[]; n_fn oid[]; n_mut oid[];
@@ -710,7 +720,7 @@ RAPID = r"""      -- r5d (20261103b): aceeași semantică, evaluare SEMI-NAIVĂ 
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
-@@SEED_FN@@      -- corpurile candidate (orice schemă non-sistem, în afara public.fn_izo_*), o singură dată; calea fixată în proconfig
+@@SAMANTA_E3@@@@SEED_FN@@      -- corpurile candidate (orice schemă non-sistem, în afara public.fn_izo_*), o singură dată; calea fixată în proconfig
       -- (NULL = necunoscută: funcția moștenește calea apelantului)
       SELECT coalesce(array_agg(p.oid ORDER BY p.oid), '{}'),
              coalesce(array_agg(p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '') ORDER BY p.oid), '{}'),
@@ -828,7 +838,7 @@ RAPID = r"""      -- r5d (20261103b): aceeași semantică, evaluare SEMI-NAIVĂ 
                  WHERE n2.nspname ~ '[.^$*+?()\[\]{}|\\"]' OR o.nume ~ '"') THEN
         v := array_append(v, 'un nume din închiderea citirilor nu se poate căuta sigur în corpuri (schemă cu caractere speciale de regex / nume cu ghilimele) (citire nerevizuită)');
       END IF;
-""".replace('@@SEED_FN@@', SEED_FN)
+""".replace('@@SAMANTA_E3@@', SAMANTA_E3).replace('@@SEED_FN@@', SEED_FN)
 pl = pl[:a] + RAPID + pl[b:]
 fin = "    RETURN v;\n  END $f$;"
 assert pl.count(fin) == 1
@@ -948,8 +958,13 @@ def bloc_inchidere(text):
 def functie_test(nume, text):
     return ("CREATE FUNCTION teste.%s(OUT o_rel oid[], OUT o_fn oid[], OUT o_mut oid[], OUT o_mesaje text[])\n"
             "  LANGUAGE plpgsql STABLE AS $t$\nDECLARE v text[] := '{}';\nBEGIN\n%s\nEND $t$;\n") % (nume, bloc_inchidere(text))
-helper = ("-- Generat de gen_e3.py: închiderea citirilor din poarta E2a (20261102a, exact) și din poarta E3 (20261103b, exact),\n"
-          "-- ca funcții de test INVOKER (doar în baza *_test), pentru testul diferențial din scripts/test_izometrie_e3.sh.\n"
-          + functie_test('inchidere_veche', PL) + "\n" + functie_test('inchidere_noua', pl))
+# r5f (#825): sămânța E3 (SAMANTA_E3) apare o singură dată în poartă și în migrare; inchidere_noua = textul din migrare FĂRĂ
+# ea (aceeași sămânță ca E2a: diferențialul compară algoritmul pe aceeași intrare), inchidere_noua_e3 = textul exact din migrare
+assert pl.count(SAMANTA_E3) == 1 and mig.count(SAMANTA_E3) == 1 and PL.count(SAMANTA_E3) == 0
+helper = ("-- Generat de gen_e3.py: închiderea citirilor din poarta E2a (20261102a, exact) și din poarta E3 (20261103b), ca funcții de\n"
+          "-- test INVOKER (doar în baza *_test), pentru testul diferențial din scripts/test_izometrie_e3.sh. inchidere_noua = textul\n"
+          "-- din migrare fără sămânța E3 (tabelele documentelor — aceeași sămânță ca E2a), inchidere_noua_e3 = textul exact (r5f #825).\n"
+          + functie_test('inchidere_veche', PL) + "\n" + functie_test('inchidere_noua', pl.replace(SAMANTA_E3, ''))
+          + "\n" + functie_test('inchidere_noua_e3', pl))
 open(R + 'supabase/tests/izometrie_e3_inchidere.sql', 'w', encoding='utf-8', newline='\n').write(helper)
 print('ok', len(mig.splitlines()), len(rev.splitlines()))

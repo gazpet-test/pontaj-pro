@@ -612,7 +612,11 @@ Harness: `scripts/test_izometrie_e3.sh`; din WSL, pe sloturi paralele, cu `harne
    - `motiv_inlocuire` în hash-ul `e3-doc-v1`; eticheta rămâne v1, pentru că migrarea n-a fost aplicată nicăieri;
    - mesaj generic la înlocuirea unui document inexistent, neanulat sau invizibil;
    - diferențialul în pasul 2 al harness-ului: 24 de mutații echivalente cu E2a (7 cicluri, pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență, frontiere largi) + 8 pe care poarta E3 e intenționat **mai strictă**: schemă cu caractere de regex, ghilimele în nume, SQL fără EXECUTE / `U&"…"` / `*_to_xml` / `ts_stat` etc., comentariu între schema platformei și nume.
-8. **Tabelele documentelor E3 în închiderea citirilor (găsit în review-ul r5f, contrazicea §13.2):** în lucru, se completează aici.
+8. **Tabelele documentelor E3 în închiderea citirilor** (găsit în review-ul r5f, contrazicea §13.2). Sămânța închiderii din poarta E3 = cele 6 tabele E2a + `izo_documente_intrare` / `_randuri` / `_scanuri`, într-o singură evaluare (`SAMANTA_E3` în `gen_e3.py`).
+   - Un DEFINER, un view fără `security_invoker` sau un lanț din afara `fn_izo_*` care ajunge la documente e refuzat la fel ca pe registru, cu aceleași mesaje.
+   - Funcțiile E3 legitime sunt `fn_izo_*`, deci rămân în afara închiderii, ca la E2a, și sub ștampila E2a.
+   - **Diferențialul:** `inchidere_noua` (fără sămânța E3) e identică octet cu octet cu E2a pe toate cele 24 de mutații. `inchidere_noua_e3` (textul exact din migrare) = aceeași + exact cele 3 tabele.
+   - **Teste:** E14a–j și 6 mutații `dif_doc` (DEFINER, view cu / fără `security_invoker`, INVOKER singur, DEFINER → INVOKER, citat). Fiecare pică fără fix.
 
 **Decizii / limitări declarate, pentru Razvan:**
 - (a) cantitatea goală = 1;

@@ -526,6 +526,45 @@ SELECT teste.e('E13j DISABLE RLS pe storage.buckets → poarta E3 îl raporteaz�
   'Storage: RLS pe storage.buckets / politicile RESTRICTIVE izo_doc_bucket_r_* pe rândul bucket-ului izo-documente' = ANY (public.fn_izo_porti_e3_lipsa())
   AND cardinality(public.fn_izo_porti_e3_lipsa()) = 2 AND cardinality(public.fn_izo_porti_lipsa()) > 0);
 ROLLBACK;
+
+-- ═══ E14 r5f (#825): tabelele documentelor E3 (izo_documente_intrare / _randuri / _scanuri) în închiderea citirilor, ca
+-- registrul (design §13.2): un DEFINER / un view fără security_invoker / un lanț din afara fn_izo_* care ajunge la ele → refuz.
+-- Fără ele în sămânță, toți mutanții de mai jos dădeau poarta verde (martorul pe magazie_bucati era refuzat corect) ═══
+\set MSG_DEF 'o funcție DEFINER din afara registrului poate citi registrul — direct, prin view sau tranzitiv (citire nerevizuită)'
+\set MSG_VIEW 'un view / view materializat citește registrul fără security_invoker (citire nerevizuită)'
+SELECT teste.e('E14a starea curată (funcțiile E3 legitime fn_izo_doc_* / fn_izo_scan_* citesc documentele): porțile complete',
+  cardinality(public.fn_izo_porti_lipsa()) = 0);
+BEGIN;
+CREATE FUNCTION teste.d_doc() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM public.izo_documente_intrare';
+SELECT teste.e('E14b DEFINER care citește izo_documente_intrare → poarta raportează', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+:CA_J
+SELECT teste.eroare('E14c același DEFINER → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+BEGIN;
+CREATE VIEW teste.v_doc AS SELECT * FROM public.izo_documente_scanuri;
+SELECT teste.e('E14d view fără security_invoker peste izo_documente_scanuri → poarta raportează', :'MSG_VIEW' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE VIEW teste.v_doc WITH (security_invoker = on) AS SELECT * FROM public.izo_documente_scanuri;
+SELECT teste.e('E14e același view cu security_invoker = on (necitit de un DEFINER) → porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+CREATE FUNCTION teste.d_v_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM teste.v_doc';
+SELECT teste.e('E14f DEFINER care citește view-ul security_invoker al izo_documente_scanuri → poarta raportează', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE FUNCTION teste.d_rand_inv() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM public.izo_documente_intrare_randuri';
+SELECT teste.e('E14g INVOKER care citește izo_documente_intrare_randuri, nechemat de un DEFINER → porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+CREATE FUNCTION teste.d_rand_def() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT teste.d_rand_inv()';
+SELECT teste.e('E14h DEFINER → INVOKER care citește izo_documente_intrare_randuri → poarta raportează', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE FUNCTION teste.d_atomic() RETURNS bigint LANGUAGE sql SECURITY DEFINER BEGIN ATOMIC SELECT count(*) FROM public.izo_documente_scanuri; END;
+SELECT teste.e('E14i DEFINER BEGIN ATOMIC peste izo_documente_scanuri → poarta raportează', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+BEGIN;
+CREATE FUNCTION teste.d_reg() RETURNS bigint LANGUAGE sql SECURITY DEFINER AS 'SELECT count(*) FROM public.magazie_bucati';
+SELECT teste.e('E14j martorul E2a: DEFINER care citește magazie_bucati → poarta raportează, ca înainte', :'MSG_DEF' = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
 SELECT teste.e('E12d după mutanți (anulați): porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
 
 DO $$ BEGIN RAISE NOTICE 'TESTE E3: TOATE OK'; END $$;
