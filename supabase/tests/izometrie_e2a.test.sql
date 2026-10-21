@@ -447,9 +447,13 @@ CREATE FUNCTION public.f_ns_def2() RETURNS bigint LANGUAGE sql SECURITY DEFINER 
 SELECT teste.eroare('T13j DEFINER care cheamă "teste".f_ns() (identificator citat) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
 DROP FUNCTION public.f_ns_def2();
 CREATE FUNCTION public.f_ns_def3() RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT 1 + 0 /* f_ns */ $$;
-SELECT teste.e('T13k DEFINER cu search_path = public, care doar menționează f_ns (alt schema, necalificat) → nu e muchie',
-  cardinality(public.fn_izo_porti_lipsa()) = 0);
+SELECT teste.eroare('T13k DEFINER (search_path = public) care numește f_ns necalificat, din altă schemă → refuz conservator', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
 DROP FUNCTION public.f_ns_def3(); DROP FUNCTION teste.f_ns();
+-- exemplul Copilot r12: view security_invoker într-o altă schemă + DEFINER cu search_path care îl include, citit necalificat
+CREATE VIEW teste.v_reg2 WITH (security_invoker = true) AS SELECT b.id FROM public.magazie_bucati b;
+CREATE FUNCTION public.leak2() RETURNS SETOF bigint LANGUAGE sql SECURITY DEFINER SET search_path = teste, public AS $$ SELECT id FROM v_reg2 $$;
+SELECT teste.eroare('T13l DEFINER (search_path = teste, public) care citește necalificat teste.v_reg2 (invoker) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION public.leak2(); DROP VIEW teste.v_reg2;
 SELECT teste.e('T13e porțile refăcute după citirile nerevizuite; proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
