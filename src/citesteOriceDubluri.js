@@ -3,8 +3,9 @@
 // ===========================================================================
 // Funcții pure (fără supabase / React), testate în citesteOriceDubluri.test.js.
 //   • clasificaDublura   — același fișier (nume + mărime egală) vs. același nume, alt conținut;
-//                          copia ACTIVĂ are prioritate, doar copii inactive → stare separată (r1)
-//   • blocheazaInserare  — garda din confirmHR (ultima apărare), cu excepțiile confirmate de om
+//                          copia ACTIVĂ are prioritate; doar copii inactive → doar închidere (r1/r2)
+//   • blocheazaInserare  — garda din confirmHR (ultima apărare), cu excepția confirmată de om
+//   • texteAltContinut   — ce spun panoul / confirmarea la „același nume" (mărime cunoscută sau nu)
 //   • campuriDeCompletat — doar câmpurile GOALE din dosar, doar cu valori AI valide
 //   • analizaDublura     — tot ce afișează panoul pentru un rând din coadă
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
@@ -82,8 +83,10 @@ export const esteActiv = d => !!d && d.activ !== false
 //   tip 'acelasi'         → există potrivire ACTIVĂ cu fisier_size_bytes egal (ne-null);
 //                           doc = cea mai veche activă (id minim) — inactivele nu câștigă (review r1)
 //   tip 'acelasi_inactiv' → același fișier există, dar DOAR ca document inactiv (istoric);
-//                           nu se completează nimic, omul alege: închide sau adaugă ca activ
+//                           doar închidere: nu se completează nimic și nu se inserează altă copie (r2)
 //   tip 'alt_continut'    → același nume, dar nicio mărime egală (sau mărimi necunoscute)
+//                           marimiNecunoscute = rândul SAU măcar o copie din dosar n-are mărime (r2):
+//                           atunci nu pot spune „alt fișier" — copia fără mărime poate fi chiar el
 //   tip null              → nimic cu acest nume la acest angajat
 // nrIdentice = toate copiile identice (active + inactive); nrInactive = câte dintre ele sunt inactive.
 export function clasificaDublura(row, docs, angajatId) {
@@ -100,20 +103,41 @@ export function clasificaDublura(row, docs, angajatId) {
     return active.length ? { tip:'acelasi', doc:active[0], ...baza } : { tip:'acelasi_inactiv', doc:identice[0], ...baza }
   }
   return { tip:'alt_continut', doc:null, nrIdentice:0, nrInactive:0, nrTotal:lista.length,
-    marimiNecunoscute: sz == null || lista.every(d => marime(d.fisier_size_bytes) == null) }
+    marimiNecunoscute: sz == null || lista.some(d => marime(d.fisier_size_bytes) == null) }
 }
 
 // Garda din confirmHR (ultima apărare, pe ce e în dosar LA MOMENTUL inserării):
 // null → se poate insera; altfel tipul dublurii care blochează.
-//   'acelasi'         → blochează mereu (același fișier activ e deja în dosar)
-//   'acelasi_inactiv' → trece doar cu opts.faraGardaInactiv (omul a confirmat „Adaugă ca document nou (activ)")
-//   'alt_continut'    → trece doar cu opts.faraGardaNume (omul a confirmat „Adaugă ca document nou")
+//   'acelasi' / 'acelasi_inactiv' → blochează mereu (același fișier e deja în dosar, activ sau
+//                                   istoric — varianta A: se închide, nu se mai inserează o copie; r2)
+//   'alt_continut'    → trece doar cu opts.faraGardaNume (omul a confirmat „Adaugă ca document nou").
+//                       opts.marimiComparate = omul a confirmat „alt fișier (altă mărime)"; dacă între
+//                       timp a apărut o copie fără mărime (poate fi chiar fișierul) → blochează (r2).
 // Dacă starea s-a schimbat între afișare și click, excepția nu se mai potrivește → blochează.
 export function blocheazaInserare(cls, opts = {}) {
   if (!cls || !cls.tip) return null
-  if (cls.tip === 'alt_continut' && opts.faraGardaNume) return null
-  if (cls.tip === 'acelasi_inactiv' && opts.faraGardaInactiv) return null
+  if (cls.tip === 'alt_continut' && opts.faraGardaNume && !(opts.marimiComparate && cls.marimiNecunoscute)) return null
   return cls.tip
+}
+
+// Textele pentru „același nume, alt conținut" (review r2): „alt fișier (altă mărime)" DOAR când
+// mărimile s-au putut compara; altfel spun că nu pot verifica — poate fi chiar același fișier.
+// Fără informație (dub lipsă / câmp lipsă) → varianta prudentă (necunoscut).
+export function texteAltContinut(dub, nume) {
+  const necunoscut = !dub || dub.marimiNecunoscute !== false
+  const nr = dub && dub.nrTotal > 1 ? ` — ${dub.nrTotal} documente cu acest nume` : ''
+  if (necunoscut) return {
+    necunoscut,
+    panou: `⚠️ există «${nume}» la acest angajat, dar nu pot verifica dacă e același fișier (mărime necunoscută)${nr} — deschide-l cu 👁 Vezi și compară-l cu cel din dosar înainte să-l adaugi.`,
+    confirmare: `Există deja „${nume}" la acest angajat și NU pot verifica dacă e același fișier (mărime necunoscută) — poate fi chiar același.\n\nL-ai deschis cu 👁 Vezi și l-ai comparat cu cel din dosar? Îl adaug totuși ca document NOU?`,
+    garda: `Există deja „${nume}" la acest angajat și nu pot verifica dacă e același fișier (mărime necunoscută) — compară-l cu 👁 Vezi; dacă e un document nou, folosește «Adaugă ca document nou».`,
+  }
+  return {
+    necunoscut,
+    panou: `⚠️ există «${nume}» la acest angajat, dar e alt fișier (altă mărime)${nr}.`,
+    confirmare: `Există deja „${nume}" la acest angajat, dar e alt fișier (altă mărime).\n\nÎl adaug ca document NOU în dosar?`,
+    garda: `Există deja „${nume}" la acest angajat, dar e alt fișier (altă mărime) — dacă e un document nou, folosește «Adaugă ca document nou».`,
+  }
 }
 
 // Câmpurile care s-ar completa: GOALE (NULL) în dosar ȘI prezente + valide în date_document
@@ -157,7 +181,7 @@ export function observatiiNoi(existente, linie) {
 // La 'acelasi' / 'acelasi_inactiv' adaugă: dinDrive, tipDosar ({id,cod,denumire} | null), tipDiferit, campuri.
 // Tip diferit (sau necunoscut de o parte) → NU se completează nimic.
 // Rând în status 'eroare' (AI n-a citit nimic) → doar închidere, fără completare.
-// Document inactiv (istoric) → nu se completează nimic în el (r1).
+// Document inactiv (istoric) → doar închidere: nu se completează nimic în el (r1/r2).
 export function analizaDublura({ row, docs, angajatId, tipuriFK, tipAI }) {
   const c = clasificaDublura(row, docs, angajatId)
   if (c.tip !== 'acelasi' && c.tip !== 'acelasi_inactiv') return c

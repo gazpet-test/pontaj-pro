@@ -3,6 +3,7 @@ import {
   dataAIValida, textAIValid, esteDinDrive, cheieDosar, perechiDeVerificat, bucati,
   clasificaDublura, campuriDeCompletat, updateCompletare, fmtZi, liniaObservatii,
   observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, eroareInchidereRand,
+  texteAltContinut,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -97,6 +98,14 @@ describe('clasificaDublura', () => {
   it('mărimi necunoscute → alt_continut, nu închidere automată', () => {
     expect(clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive()], 7)).toMatchObject({ tip:'alt_continut', marimiNecunoscute:true })
     expect(clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:null })], 7)).toMatchObject({ tip:'alt_continut', marimiNecunoscute:true })
+  })
+  it('r2: o copie fără mărime + una cu altă mărime → tot necunoscut (copia fără mărime poate fi chiar fișierul)', () => {
+    const docs = [docDrive({ id:11, fisier_size_bytes:null }), docDrive({ id:12, fisier_size_bytes:4321 })]
+    expect(clasificaDublura(rowAI(), docs, 7)).toMatchObject({ tip:'alt_continut', marimiNecunoscute:true, nrTotal:2 })
+    // mărime '' (string gol) = necunoscută
+    expect(clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:'' })], 7).marimiNecunoscute).toBe(true)
+    // o copie fără mărime nu ascunde una identică: același fișier rămâne „acelasi"
+    expect(clasificaDublura(rowAI(), [docDrive({ id:11, fisier_size_bytes:null }), docDrive({ id:12 })], 7)).toMatchObject({ tip:'acelasi', marimiNecunoscute:false })
   })
   it('r1: copia ACTIVĂ câștigă în fața uneia inactive mai vechi (cazul CI.pdf #12 arhivat + #480 activ)', () => {
     const docs = [docDrive({ id:480 }), docDrive({ id:12, activ:false })]
@@ -215,14 +224,25 @@ describe('blocheazaInserare (garda din confirmHR)', () => {
     expect(blocheazaInserare(cls('alt_continut'), { faraGardaInactiv:true })).toBe('alt_continut')
     expect(blocheazaInserare(cls('alt_continut'), { faraGardaNume:true })).toBeNull()
   })
-  it('doar inactiv → trece doar cu faraGardaInactiv (starea schimbată între afișare și click blochează)', () => {
+  it('r2: doar inactiv (același fișier, istoric) → blochează mereu, nu mai există excepție de inserare', () => {
     expect(blocheazaInserare(cls('acelasi_inactiv'))).toBe('acelasi_inactiv')
     expect(blocheazaInserare(cls('acelasi_inactiv'), { faraGardaNume:true })).toBe('acelasi_inactiv')
-    expect(blocheazaInserare(cls('acelasi_inactiv'), { faraGardaInactiv:true })).toBeNull()
+    expect(blocheazaInserare(cls('acelasi_inactiv'), { faraGardaInactiv:true })).toBe('acelasi_inactiv')   // opțiunea r1 nu mai există
+    const c = clasificaDublura(rowAI(), [docDrive({ id:12, activ:false })], 7)
+    expect(blocheazaInserare(c, { faraGardaNume:true, marimiComparate:true })).toBe('acelasi_inactiv')
   })
-  it('cap-coadă: copia inactivă + una activă identică → blocat chiar cu faraGardaInactiv', () => {
+  it('cap-coadă: copia inactivă + una activă identică → blocat', () => {
     const c = clasificaDublura(rowAI(), [docDrive({ id:12, activ:false }), docDrive({ id:480 })], 7)
-    expect(blocheazaInserare(c, { faraGardaInactiv:true })).toBe('acelasi')
+    expect(blocheazaInserare(c, { faraGardaNume:true })).toBe('acelasi')
+  })
+  it('r2: omul a confirmat „altă mărime", dar între timp a apărut o copie fără mărime → blochează', () => {
+    const cunoscut = clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:4321 })], 7)
+    expect(blocheazaInserare(cunoscut, { faraGardaNume:true, marimiComparate:true })).toBeNull()
+    const acum = clasificaDublura(rowAI(), [docDrive({ id:11, fisier_size_bytes:4321 }), docDrive({ id:12, fisier_size_bytes:null })], 7)
+    expect(blocheazaInserare(acum, { faraGardaNume:true, marimiComparate:true })).toBe('alt_continut')
+    // omul a confirmat deja varianta „nu pot verifica" → trece
+    expect(blocheazaInserare(acum, { faraGardaNume:true, marimiComparate:false })).toBeNull()
+    expect(blocheazaInserare(acum, { faraGardaNume:true })).toBeNull()
   })
 })
 
@@ -235,5 +255,37 @@ describe('eroareInchidereRand (finalizeInbox, toate modulele)', () => {
     expect(eroareInchidereRand({ data:[], error:null })).toMatch(/fără drept de modificare/)
     expect(eroareInchidereRand(undefined)).toMatch(/nu s-a putut închide/)
     expect(eroareInchidereRand({ error:new Error('Failed to fetch') })).toMatch(/Failed to fetch/)
+  })
+})
+
+describe('texteAltContinut (r2: „altă mărime" doar când mărimile s-au comparat)', () => {
+  it('mărimi comparate → „alt fișier (altă mărime)", cu numărul de documente', () => {
+    const dub = clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:4321 }), docDrive({ id:11, fisier_size_bytes:9 })], 7)
+    const t = texteAltContinut(dub, 'CI.pdf')
+    expect(t.necunoscut).toBe(false)
+    expect(t.panou).toBe('⚠️ există «CI.pdf» la acest angajat, dar e alt fișier (altă mărime) — 2 documente cu acest nume.')
+    expect(t.confirmare).toMatch(/alt fișier \(altă mărime\)\.\n\nÎl adaug ca document NOU/)
+    expect(t.garda).toMatch(/alt fișier \(altă mărime\)/)
+  })
+  it('mărime necunoscută (în dosar sau la rând) → NU spune „alt fișier / altă mărime", trimite la 👁 Vezi', () => {
+    for (const dub of [
+      clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:null })], 7),
+      clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive()], 7),
+      clasificaDublura(rowAI(), [docDrive({ id:11, fisier_size_bytes:null }), docDrive({ id:12, fisier_size_bytes:4321 })], 7),
+    ]) {
+      const t = texteAltContinut(dub, 'CI.pdf')
+      expect(t.necunoscut).toBe(true)
+      for (const txt of [t.panou, t.confirmare, t.garda]) {
+        expect(txt).not.toMatch(/altă mărime/)
+        expect(txt).not.toMatch(/e alt fișier/)
+        expect(txt).toMatch(/mărime necunoscută/)
+      }
+      expect(t.panou).toMatch(/👁 Vezi/)
+      expect(t.confirmare).toMatch(/poate fi chiar același/)
+    }
+  })
+  it('fără informație → varianta prudentă (necunoscut)', () => {
+    expect(texteAltContinut(null, 'x.pdf').necunoscut).toBe(true)
+    expect(texteAltContinut({ tip:'alt_continut' }, 'x.pdf').necunoscut).toBe(true)
   })
 })
