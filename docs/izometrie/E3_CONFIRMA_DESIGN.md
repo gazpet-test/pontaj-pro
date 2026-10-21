@@ -1,138 +1,233 @@
-# E3 — designul intrării API de confirmare (`fn_izo_doc_confirma`) — pentru review ÎNAINTE de cod
+# E3 — designul intrărilor API pentru documentele de intrare (r2) — pentru review ÎNAINTE de cod
 
-Decizia Razvan 21.10.2026: Q-E3-2 = A. Janeta confirmă recepția din UI, printr-o intrare API nouă, cu rolul verificat în corp. Designul trece prin review Copilot + Jakarinos înainte de cod. Context: `docs/izometrie/E3_PLAN.md`, registrul E2a (`20261102a`) și suprafața lui privilegiată (`docs/izometrie/E2A_SUPRAFATA_PRIVILEGIATA.md`, `E2A_INVENTAR_CITIRI.md`). Răspunsurile la celelalte întrebări:
-- Q-E3-1: tabelele noi au prefixul `izo_*`.
-- Q-E3-3: neconformitatea dă carantină (bucată nedisponibilă), nu doar refuz.
-- Q-E3-4: toleranțele sunt ±10 mm la lungime și ±0,5° la unghi; peste ele, doar avertisment.
-- Q-E3-5: `lungime_mm` = lungimea măsurată, dacă există, altfel cea de pe document.
-- Q-E3-6: la curbă, serie = bend number, șarjă = heat, codul complet în `atribute`.
+**r2 (21.10.2026)** răspunde la review-ul r1 (Copilot: 5 × P1; Jakarinos: 8 × P1 + 1 × P2; 0 × P0). Se schimbă:
+- protocolul de lock + autorizarea sub lock (§4);
+- rolul separat, cu cel mai mic privilegiu (§3);
+- salvarea draftului ca parte din frontieră (§5);
+- hash-ul canonic versionat, cu manifestul scanurilor (§6);
+- contractul complet al PV-ului (§8);
+- unicitatea în BD (§7);
+- marcajul pus după validări (§4);
+- schema E2a reală: `ora_server`, fără `detalii`, CHECK-ul tipurilor de eveniment (§2);
+- încrederea în gateway declarată ca atare (§3.3).
 
-## 1. Ce se schimbă față de E2a (lărgirea suprafeței)
+Decizia Razvan (21.10): Q-E3-2 = A — Janeta confirmă din UI, iar designul se revizuiește înainte de cod. Celelalte răspunsuri: tabelele `izo_*`; neconformitate → carantină; toleranțe ±10 mm / ±0,5° → avertisment; `lungime_mm` = măsurat ?? document; curba: serie = bend, șarjă = heat.
 
-În E2a, registrul se scrie DOAR din sesiuni `postgres` directe (N3: `session_user = postgres` în cele 4 intrări writer), adică doar din sesiunea de chat.
+## 1. Frontiera, pe scurt
 
-E3 adaugă **două intrări apelabile din API**, ambele SECURITY DEFINER, cu owner-ul `izo_registru_writer`, deci în aceeași frontieră ca restul registrului:
+**Ce vine din API** (authenticated, cu atribuire):
+- `fn_izo_doc_salveaza`: draft, creare / editare;
+- `fn_izo_doc_verifica`: doar citire; întoarce hash-ul + verdictul;
+- `fn_izo_doc_confirma`: draft → confirmat, cu bucățile în registru;
+- `fn_izo_doc_pv`: confirmat → PV, bucățile `sosit` → `receptionat`.
 
-| Funcție | Ce face | Cine |
+**Ce rămâne exclusiv `postgres`** (N3 din E2a, neschimbat):
+- activarea / dezactivarea;
+- importul și storno-ul (inclusiv **anularea unui document confirmat** = storno pe evenimentele lui, prin funcția E2a);
+- atribuirile;
+- corecțiile pe bucăți.
+
+Administrarea `postgres` e o cale separată. Nu primește o identitate umană fictivă: `aplicat_de` rămâne NULL, iar `aplicat_rol` = `postgres`.
+
+## 2. Schema nouă (migrarea `20261103a_izometrie_e3_documente`; 20261102a aplicată NU se modifică)
+
+**`izo_documente_intrare`** (antet):
+- `id`, `proiect_id`, `depozit_id`, `sablon` ∈ {`aviz_teava`, `lista_ambalare_curbe`};
+- identitatea: `furnizor_canon` (NOT NULL, upper + spații normalizate), `nr_document_canon` (NOT NULL, upper, fără spații), `data_document` (NOT NULL); **UNIQUE (`furnizor_canon`, `nr_document_canon`, `data_document`)**, fără NULL-uri care ar ocoli unicitatea;
+- câmpurile de pe document, după șablon (vezi E3_PLAN §1), și totalurile;
+- `stare` ∈ {`draft`, `confirmat`, `anulat`};
+- `versiune` (bigint, +1 la fiecare salvare);
+- `hash_verificat` și `hash_confirmat` (`e3-doc-v1:<sha256>`);
+- confirmarea: `confirmat_de`, `confirmat_la`, `eveniment_intrare_id` (FK, UNIQUE);
+- PV: `pv_nr_canon`, `pv_data`, `pv_pus_de`, `pv_pus_la`, `eveniment_pv_id` (FK, UNIQUE);
+- `creat_de`, `creat_la`.
+
+**`izo_documente_intrare_randuri`:**
+- `document_id`, `nr_crt` (UNIQUE (`document_id`, `nr_crt`), > 0);
+- câmpurile fizice: lungimile în **mm întregi**, kg cu **o zecimală**, unghiul cu **o zecimală**, perete / diametru;
+- `decizie` ∈ {`primit`, `refuzat_la_receptie`, `primit_neconform`}, `motiv`;
+- `bucata_id` (UNIQUE, pus doar de confirmare).
+
+**`izo_documente_scanuri`** (manifestul):
+- `document_id`, `cale` (uuid, dată de server, UNIQUE), `sha256_original`, `sha256_pdf`, `marime`, `mime`, `adaugat_la`;
+- e parte din hash; după confirmare e imutabil.
+
+**Evenimentele.** CHECK-ul `magazie_bucati_evenimente.tip` primește `intrare_lista_ambalare` și `receptie_pv`; `intrare_aviz` rămâne pentru avizul de țeavă (Copilot P3: tipurile se disting).
+- **UNIQUE parțial:** un singur eveniment de intrare și un singur `receptie_pv` per (`document_tip`, `document_id`), fără storno (`storno_de_eveniment_id IS NULL`).
+- Auditul folosește coloanele E2a reale: `aplicat_de`, `aplicat_rol`, `ora_server`, `document_tip` = `doc_intrare`, `document_id` = `<id>`, iar `motiv` = `<hash_confirmat>`. Hash-ul complet + manifestul stau pe document.
+
+**Revenirea E3:** se rulează ÎNAINTEA oricărei reveniri E2a.
+- Reface CHECK-ul tipurilor, `fn_izo_porti_lipsa` (definiția E2a salvată) și scoate rolurile / tabelele / funcțiile E3.
+- Refuză dacă există documente confirmate (storno + decizie).
+- Amprenta E2a din COMMENT se recalculează: după E3, revenirea E2a cere întâi revenirea E3. Asta se documentează și se testează.
+
+## 3. Rolurile și încrederea
+
+### 3.1 Două roluri noi, NOLOGIN NOINHERIT, membru doar `postgres` (SET, fără INHERIT), ca la E2a
+
+| Rol | Deține | Drepturi |
 |---|---|---|
-| `fn_izo_doc_confirma(p_doc_id bigint, p_versiune timestamptz, p_hash_doc text)` | documentul de intrare `draft` → `confirmat`; creează bucățile (`sosit` / `carantina`) și evenimentul `intrare_aviz` | gestionarul proiectului + depozitului documentului, sau owner-ul |
-| `fn_izo_doc_pv(p_doc_id bigint, p_versiune timestamptz, p_pv_nr text, p_pv_data date)` | pune PV-ul pe un document confirmat; bucățile `sosit` ale documentului → `receptionat` | aceiași |
+| `izo_doc_editor` | `fn_izo_doc_salveaza`, `fn_izo_doc_verifica` | DML doar pe cele 3 tabele de document (doar `draft`, impus în funcție + trigger); SELECT pe registru (coliziuni), atribuiri, proiecte, depozite, profiles, user_module_access |
+| `izo_receptie_writer` | `fn_izo_doc_confirma`, `fn_izo_doc_pv` | INSERT `magazie_bucati` (doar coloanele nașterii), UPDATE (`stare`) pe `magazie_bucati`, INSERT evenimente / mișcări, UPDATE pe documente (coloanele de confirmare / PV) |
 
-**Totul în rest rămâne exclusiv `postgres`** (N3, neschimbat):
-- activarea / dezactivarea nivelului (`fn_izo_seteaza_nivel`, `fn_izo_activeaza_si_importa`);
-- importul soldului (`fn_izo_import_sold_initial`) și storno-ul (`fn_izo_import_storno`);
-- atribuirile (`izo_atribuiri`, scrise doar de postgres);
-- anularea unui document confirmat (storno pe evenimentul lui);
-- orice corecție pe o bucată existentă.
+`izo_registru_writer` NU e folosit de E3 (Copilot §9.2: o frontieră API își are propriul rol; fără ALTER pe config / importuri / atribuiri).
 
-**Draftul** (antetul + rândurile documentului) NU e registru. Se scrie prin `fn_izo_doc_salveaza` (DEFINER, owner `postgres`, CAS pe `updated_at`, ca la bonul RPC). Fără DML direct din API pe tabelele draftului: REVOKE pentru anon / authenticated / service_role. Verificarea rolului e aceeași ca la confirmare. Draftul nu atinge `magazie_bucati`.
+### 3.2 Garda E2a primește o ramură explicită pentru `izo_receptie_writer`
 
-## 2. Cine poate apela și cum se verifică (în corp, la fiecare apel)
+Fără ea, rolul nu poate scrie nimic în registru. Marcajul e propriu: `izo.receptie_tx` = txid. Ramura acceptă DOAR:
+- **INSERT pe `magazie_bucati`:** `provenienta = 'beneficiar'`, `tip_cod` ∈ {teava, curba}, `stare` ∈ {sosit, carantina}, `aviz_intrare_id` NOT NULL, `proiect_id` / `depozit_id` = ale documentului din `aviz_intrare_id` (recitite de gardă), `parinte_id` NULL.
+- **UPDATE pe `magazie_bucati`:** doar `stare` sosit → receptionat (+ `server_ver`); `to_jsonb(NEW) - stare - server_ver = to_jsonb(OLD) - …`; bucata să aibă `aviz_intrare_id` = documentul PV-ului.
+- **INSERT pe evenimente:** `tip` ∈ {intrare_aviz, intrare_lista_ambalare, receptie_pv}.
+- **INSERT pe mișcări:** `rol` ∈ {nascut, stare}.
+- **Nimic altceva:** fără DELETE; fără TRUNCATE; fără config, importuri, atribuiri.
 
-1. `auth.uid() IS NOT NULL` → altfel 42501.
-2. Documentul se citește `FOR UPDATE`. De pe document se iau `proiect_id` și `depozit_id`, nu din argumente (nu există argumente de proiect / depozit).
-3. **Rolul:**
-   - `EXISTS izo_atribuiri(proiect_id = doc.proiect_id, profile_id = auth.uid(), rol = 'gestionar', depozit_id = doc.depozit_id, activ)`, SAU `profiles.is_owner` pentru `auth.uid()`;
-   - altfel: 42501 „doar gestionarul depozitului documentului”.
-   - Atribuirea fără depozit (gestionar pe tot proiectul) e acceptată doar dacă design-ul E2a o permite deja pentru gestionar (de confirmat la review). Propunerea mea: o cer explicit pe depozit.
-4. **Proiectul:** `fn_izo_nivel(doc.proiect_id) = 'stoc'` (sau mai sus), altfel refuz. Un proiect `off` nu are registru.
-5. **Depozitul:** `doc.depozit_id` aparține site-ului proiectului (aceeași verificare ca la import).
-6. **Sesiunea:** **nu** se cere `session_user = postgres` (excepția de la N3, motivul acestui review). Se cere în schimb:
-   - `session_user IN ('authenticator', 'postgres')`, adică o cerere PostgREST sau administrarea;
-   - `current_setting('request.jwt.claims', true)` cu `sub = auth.uid()`;
-   - apelul să NU vină dintr-un wrapper. Poarta de wrapper-e din `fn_izo_porti_lipsa` se extinde la `fn_izo_doc_confirma` / `fn_izo_doc_pv`: orice funcție din afara registrului care le numește → activarea e refuzată, iar porțile cad pe proiectele active.
-   - Limită asumată: un DEFINER `postgres` creat prin DDL le-ar putea chema; aceeași limită ca la E2a (controlul e procesul de migrare).
+Ramura e cod în `fn_izo_garda_bucati` / `fn_izo_garda_*`, înlocuite de migrarea E3 (CREATE OR REPLACE, cu definiția E2a salvată pentru revenire). Porțile E3 le includ în amprentă.
 
-## 3. Cum se combină cu garda E2a
+### 3.3 Autentificarea: încredere declarată în gateway, nu o „dovadă”
 
-- **Owner `izo_registru_writer`, prima instrucțiune pune marcajul** `izo.registru_tx`, ca la intrările writer. Garda (`trg_magbuc_izo_garda`, `fn_izo_garda_scriitor`) acceptă scrierea doar cu `current_user = writer` + marcaj, deci nimic nu ocolește garda: ea vede o scriere a registrului ca oricare alta.
-- **Ordinea lock-urilor** e cea din E2a: rândul documentului (FOR UPDATE) → tabelele (`fn_izo_blocheaza_tabele`, ACCESS SHARE) → advisory 73010 pe proiect (`fn_izo_lock_proiect(proiect, false)`, partajat, ca la recepție). Fără blocaj circular cu activarea (care ia exclusiv) sau cu storno-ul. Testele de cursă cu barieră sunt la §8.
-- **Allowlist-ul ACL** (poarta „EXECUTE pe funcțiile registrului doar pentru writer / postgres”) primește o excepție nominală: `authenticated` are EXECUTE DOAR pe `fn_izo_doc_confirma(bigint, timestamptz, text)` și `fn_izo_doc_pv(bigint, timestamptz, text, date)`. Pe semnătura exactă, nu pe nume; `anon` și `service_role` nu au.
-- **Porțile** (amprenta definițiilor, `fn_izo_porti_definitii`) includ cele două funcții noi. Orice modificare de corp, ACL sau config schimbă amprenta, iar activarea e refuzată până la o migrare revizuită.
-- **Închiderea citirilor (r15):** funcțiile sunt `fn_izo_*`, adică registrul revizuit. Nu întorc rânduri din registru (§4), deci nu deschid nicio citire.
+- `session_user = 'authenticator'` (PostgREST);
+- `auth.role() = 'authenticated'`;
+- `auth.uid() IS NOT NULL`.
 
-## 4. Ce scrie exact și ce NU poate scrie
+Se presupune că JWT-ul e validat de gateway-ul Supabase (PostgREST + GoTrue). Funcțiile nu pretind că dovedesc apelul direct.
+- **ACL-urile:** REVOKE de la PUBLIC; EXECUTE doar `authenticated` pe cele 4 intrări, cu semnătura exactă; `anon` / `service_role` nimic.
+- **SQL:** static, cu obiecte calificate, `search_path` fix.
+- **Poarta pe wrapper-e / închiderea citirilor** (E2a r15) le include: e igienă a schemei (apărare în profunzime), nu o garanție la runtime.
 
-**Scrie, într-o singură tranzacție:**
-1. **Pe fiecare rând `decizie = primit`:** un INSERT în `magazie_bucati`:
-   - `tip_cod` (teava / curba), `stare = 'sosit'`, `provenienta = 'beneficiar'`, `proiect_id` / `depozit_id` = ale documentului;
-   - `serie` / `serie_canon`, `sarja`, `lot`, `greutate_kg`;
-   - `lungime_aviz_mm` (document) + `lungime_masurata_mm`; `lungime_mm` = măsurat ?? document (Q-E3-5);
-   - curbă: `unghi_curba` = unghiul de pe document; unghiul măsurat merge în `atribute.unghi_masurat` + observație;
-   - `aviz_intrare_id = doc.id`, `nr_crt_aviz = rand.nr_crt`; `atribute.cod` (curbă), `observatii`.
-2. **`decizie = primit_neconform`:** la fel, cu `stare = 'carantina'` (nedisponibilă la montaj) și motivul în `observatii`.
-3. **`decizie = refuzat_la_receptie`:** NIMIC în registru. Rândul rămâne pe document, cu motivul.
-4. **Un eveniment** `magazie_bucati_evenimente`: `tip = 'intrare_aviz'`, `document_tip = 'aviz'`, `document_id = doc.id`, `aplicat_de = auth.uid()`, cu `hash_doc` și hash-urile scanului în detalii, plus mișcările pe bucăți (ca la import).
-5. **Documentul:** `stare = 'confirmat'`, `confirmat_de`, `confirmat_la`, `hash_confirmat = p_hash_doc`, `rand.bucata_id` pentru rândurile primite.
+### 3.4 Autorizarea: aceeași funcție internă `fn_izo_doc_autorizat(doc)`, chemată sub lock (§4)
 
-**NU poate scrie (verificat prin construcție și prin teste):**
-- bucăți existente: nicio UPDATE / DELETE pe `magazie_bucati`, doar INSERT de bucăți noi ale propriului document;
-- alt proiect / alt depozit decât al documentului;
-- alte stări decât `sosit` / `carantina` (confirmarea) și `sosit` → `receptionat` (PV, doar pe bucățile documentului, doar din `sosit`);
-- `izo_proiect_config`, `izo_atribuiri`, `izo_importuri`, nivelul, alte documente.
+- **owner:** `profiles.is_owner` (rândul profilului FOR SHARE);
+- **SAU:**
+  - dreptul de modul `magazie` ≥ editor (`user_module_access`, regula proiectului „acces dual”);
+  - plus o atribuire `gestionar` **activă și valabilă azi** (`activ`, `valabil_de` ≤ azi ≤ `coalesce(valabil_pana, azi)`) pe **exact** `proiect_id` + `depozit_id` ale documentului (rândul atribuirii FOR SHARE).
+  - Gestionarul fără depozit nu există (CHECK E2a). Răspunsul la §9.1 din r1 e deci NU.
+- **Serializarea cu revocarea:** revocarea unei atribuiri (UPDATE `activ = false`, doar `postgres`) așteaptă confirmarea în curs, apoi intră în vigoare. O confirmare care începe după revocare o vede și refuză.
+- **`is_owner`:** pe live, `profiles_update_own` permite UPDATE pe propriul rând, iar trigger-ele `prevent_role_escalation` / `fn_profiles_campuri_owner_only` blochează auto-promovarea.
+  - Definițiile acestor trigger-e intră în amprenta porților E3: o slăbire a lor dă „porți lipsă”, iar intrările E3 refuză.
+  - Test: auto-promovarea `is_owner` / `role` e refuzată.
 
-`fn_izo_doc_pv`: un UPDATE de stare `sosit` → `receptionat` pe `aviz_intrare_id = doc.id AND stare = 'sosit'` + evenimentul `receptie_pv` + PV-ul pe antet. Nicio altă coloană.
+## 4. Protocolul de lock (ordine UNICĂ, comună tuturor intrărilor E3 și anulării)
 
-## 5. Idempotența și „documentul modificat după hash”
+1. **Documentul** `FOR UPDATE`. Proiectul și depozitul se iau de pe document; nu există argumente de proiect / depozit.
+2. **Autorizarea** (§3.4): rândul atribuirii / profilului `FOR SHARE`.
+3. **`fn_izo_blocheaza_locuri(proiect, [depozit], {})`:** proiectul și depozitul `FOR SHARE`. O mutare de site sau o ștergere de depozit în curs e așteptată, iar una ulterioară așteaptă confirmarea (Jak P1-4).
+4. **`fn_izo_blocheaza_tabele()`** (ACCESS SHARE; TRUNCATE / DDL așteaptă), apoi **advisory partajat** `pg_advisory_xact_lock_shared(73010, proiect)`, ca recepția E2a.
+5. **Revalidarea, după toate lock-urile, pe starea comisă** (READ COMMITTED, snapshot nou):
+   - documentul (stare, versiune, hash);
+   - autorizarea (aceeași funcție);
+   - `fn_izo_nivel(proiect) = 'stoc'`;
+   - `depozit.site_id = proiect.site_id`;
+   - **porțile:** `cardinality(fn_izo_porti_lipsa()) = 0` (E2a + E3). Un proiect deja activ nu scapă de porți (Jak P1-3).
+6. **Toate verificările de business** (§7), fără nicio scriere.
+7. **Abia aici:** `set_config('izo.receptie_tx', txid, true)` (marcajul DUPĂ validări — Copilot P1-5 / Jak P1-3); urmează doar blocul DML static.
 
-- **`hash_doc` = sha256 pe forma canonică a documentului:**
-  - antetul: câmpurile de identitate și totalurile;
-  - rândurile, sortate după `nr_crt`, cu toate câmpurile care ajung în registru și decizia / motivul;
-  - calculată pe SERVER de `fn_izo_doc_verifica` (aceeași funcție o recalculează la confirmare).
-  - Clientul o primește la „Verifică” și o trimite înapoi la „Confirmă”.
-- **La confirmare** (sub FOR UPDATE pe document):
-  - starea `draft`, `updated_at = p_versiune` și hash-ul recalculat = `p_hash_doc` → se confirmă;
-  - hash diferit sau versiune diferită → refuz 40001 „documentul s-a modificat după verificare — verifică din nou”;
-  - starea `confirmat` cu `hash_confirmat = p_hash_doc` → **idempotent**: întoarce rezultatul inițial (bucățile, evenimentul), fără a scrie ceva (retry după răspuns pierdut);
-  - starea `confirmat` cu alt hash → refuz;
-  - starea `anulat` → refuz.
-- **Unicitatea:**
-  - `UNIQUE (furnizor, nr_document, data_document)` pe documente;
-  - un singur eveniment `intrare_aviz` per document (UNIQUE parțial);
-  - seriile: coliziunea canonică cu registrul e blocantă (conflict de decis), ca la import.
+**Anularea** unui document confirmat (`postgres`, storno E2a) urmează aceeași ordine: documentul `FOR UPDATE` → … → advisory **exclusiv** → bucățile. Deci document → advisory peste tot, fără ciclu document ↔ advisory (Jak P1-4).
 
-## 6. Atomicitatea și verificările (recalculate la confirmare, nu luate de la client)
+**Salvarea draftului** (§5) ia doar documentul `FOR UPDATE` + autorizarea; nu atinge advisory-ul și nici registrul.
 
-**Blocante**, care opresc toată confirmarea, nimic scris:
-- Σ m și Σ kg (aviz țeavă) sau Σ bucăți / pachete / net (listă curbe) ≠ totalurile documentului, cu rândurile refuzate incluse;
-- un rând `refuzat_la_receptie` / `primit_neconform` fără motiv;
-- o serie lipsă, o serie dublă în document sau o coliziune canonică cu registrul (țeavă: `serie_canon`; curbă: serie + șarjă + unghi);
-- perete / diametru lipsă (țeavă: din specificație sau câmp; curbă: wall thickness);
-- un document fără niciun rând.
+## 5. Salvarea draftului (`fn_izo_doc_salveaza`) — parte din frontieră (Jak P1-5 / Copilot P1-4)
 
-**Avertismente** (nu blochează, se salvează pe document):
-- formatul `999AA99999`;
-- caracterele ușor de confundat;
-- diferența măsurat ↔ document peste ±10 mm sau ±0,5° (Q-E3-4);
-- un scan dublat.
+- **Crearea** (`p_doc_id NULL`):
+  - autorizarea pe (`proiect_id`, `depozit_id`) din argumente;
+  - `stare = draft`, `versiune = 1`.
+  - **`proiect_id` / `depozit_id` / `sablon` sunt IMUTABILE** după creare. Mutarea nu există: se creează un document nou. Un trigger pe tabel refuză UPDATE-ul lor.
+- **Editarea:**
+  - documentul `FOR UPDATE`;
+  - autorizarea; `stare = 'draft'`, altfel refuz;
+  - CAS pe `versiune`, apoi `versiune + 1`;
+  - rândurile se înlocuiesc integral, sub același lock;
+  - scanurile se adaugă sau se scot doar în draft;
+  - `hash_verificat := NULL` la orice schimbare: trebuie verificat din nou.
+- **După `confirmat` / `anulat`:**
+  - un trigger refuză orice UPDATE / DELETE pe antet, rânduri și scanuri, în afară de coloanele de confirmare / PV;
+  - acestea se scriu doar de `izo_receptie_writer` cu marcaj, o singură dată (NULL → valoare).
 
-## 7. Auditul
+## 6. Hash-ul canonic `e3-doc-v1` (Copilot P1-4 / Jak P1-6)
 
-- **Pe eveniment** (append-only, garda E2a): `aplicat_de = auth.uid()`, `aplicat_la`, `hash_doc`, `sha256_original` / `sha256_pdf` ale scanului (marcate „declarat de client” până la E9), `document_id`.
-- **Pe document:** `confirmat_de` / `confirmat_la` / `hash_confirmat`, `pv_pus_de` / `pv_pus_la`.
-- **Scanul:** bucket-ul `avize`, căi uuid. DELETE-ul e permis doar cât documentul e `draft`; după confirmare, ștergerea e refuzată (politica storage, testată pe branch-ul PG17).
+`hash = 'e3-doc-v1:' || encode(sha256(convert_to(<json canonic>::text, 'UTF8')), 'hex')`. JSON-ul e construit de server cu `jsonb_build_object` (chei sortate de jsonb; NULL explicit ca `null`) și conține:
+- `v` = `e3-doc-v1`, `proiect_id`, `depozit_id`, `sablon`, identitatea canonică, toate câmpurile antetului, totalurile;
+- **rândurile**, ordonate după `nr_crt` (unic): toate câmpurile care ajung în registru + `decizie` / `motiv`;
+- **numericele** canonice: mm întregi; kg / unghi `round(x, 1)::text`;
+- **manifestul scanurilor**, ordonat după `cale`: `cale`, `sha256_original`, `sha256_pdf`, `marime`, `mime`.
 
-## 8. Testele (negative întâi)
+**Limitarea de audit, păstrată:** `sha256_*` ale scanurilor sunt **declarate de client** până la E9 (edge-ul OCR le va calcula pe server). Hash-ul documentului dovedește că s-a confirmat exact manifestul declarat, nu octeții fișierului.
 
-**Harness PG16 + branch PG17 + PostgREST real** (anon / authenticated cu JWT de test):
-1. Alt utilizator: authenticated fără atribuire → 42501; gestionar pe alt depozit al aceluiași proiect → 42501; gestionar pe alt proiect → 42501.
-2. Alt proiect: confirmarea nu poate atinge alt proiect sau depozit (nu există argumente; testul verifică că bucățile sunt doar pe proiectul / depozitul documentului).
-3. Documentul modificat după hash: verifică → UPDATE pe un rând (prin `fn_izo_doc_salveaza`) → confirmare cu hash-ul vechi → 40001, nimic scris.
-4. Dubla confirmare: retry cu același hash → idempotent (aceleași bucăți, un singur eveniment). Două confirmări concurente cu barieră → una scrie, cealaltă așteaptă și întoarce idempotent.
-5. PostgREST:
-   - anon → 401 pe ambele RPC-uri și pe tabelele draftului;
-   - authenticated fără atribuire → 42501;
-   - authenticated nu poate face INSERT / UPDATE direct în `magazie_bucati` / `magazie_bucati_evenimente` / tabelele draftului.
-6. Wrapper-ul: o funcție din afara registrului care cheamă `fn_izo_doc_confirma` → porțile lipsesc (activarea refuzată).
-7. Proiect `off` → refuz; depozitul de pe alt site → refuz.
-8. Atomicitatea: un document cu o coliziune de serie la rândul 14 din 15 → nimic scris; sume care nu bat → nimic scris.
-9. Curse cu barieră: confirmare ↔ activare / dezactivare a proiectului; confirmare ↔ storno pe același proiect; confirmare ↔ editarea draftului (antetul întâi, apoi rândurile).
-10. Revenirea: scoate funcțiile și tabelele doar fără date; cu documente confirmate → refuz (storno + decizie), ca la E2a.
+**Storage, bucket-ul `avize`:**
+- INSERT doar în calea dată de server pentru un document `draft` al cărui editor e autorizat;
+- **fără UPDATE** (deci fără upsert / înlocuire / mutare a obiectului);
+- DELETE doar cât documentul e draft;
+- SELECT pentru cei cu `fn_izo_citire(proiect)`.
 
-Datele de test: cele 3 documente din `pv_test`. Ținta e aceeași ca la importul de test: 40 disponibile / 259,73 m (lungimea de pe document) sau 259,70 m (măsurat), + 1 curbă în carantină.
+**Cursa confirmare ↔ ștergerea scanului:** confirmarea ține documentul `FOR UPDATE`, iar politica de DELETE verifică `stare = 'draft'` printr-o funcție care ia rândul documentului `FOR SHARE`. Deci ștergerea așteaptă confirmarea și apoi e refuzată.
 
-## 9. Întrebări pentru review
+## 7. Confirmarea (`fn_izo_doc_confirma(p_doc_id, p_versiune, p_hash)`)
 
-1. Gestionarul fără depozit pe atribuire (tot proiectul): îl acceptăm la confirmare? Propun NU (atribuirea e pe depozit).
-2. Owner-ul `izo_registru_writer` pentru intrările API (marcajul + garda neschimbată), sau un rol separat `izo_receptie_writer` cu drepturi doar INSERT + UPDATE de stare? Propun același writer: o singură frontieră, o singură gardă, porțile existente.
-3. Excepția de la N3 pe `session_user IN ('authenticator', 'postgres')` + JWT `sub`: e suficientă împreună cu poarta pe wrapper-e?
+- **După §4, pașii 1–5:**
+  - `stare = 'confirmat'` și `hash_confirmat = p_hash` → **idempotent**: întoarce `{document_id, eveniment_id, bucati: [id…] din rânduri}` fără scrieri;
+  - `confirmat` cu alt hash sau `anulat` → refuz;
+  - `draft`: `versiune = p_versiune` ȘI hash-ul recalculat = `p_hash` = `hash_verificat`, altfel 40001 „verifică din nou”.
+- **Verificările blocante,** recalculate, niciodată luate de la client:
+  - totalurile, cu rândurile refuzate incluse, pe **lungimile de document**;
+  - motivul obligatoriu la `refuzat_la_receptie` / `primit_neconform`;
+  - fiecare valoare fizică în interval (lungime 1–30000 mm, perete, diametru, unghi 0 < u ≤ 90);
+  - serie validă, fără dubluri în document;
+  - documentul are ≥ 1 rând.
+- **Avertismentele** se salvează pe document: format, confuzii, măsurat ↔ document peste toleranțe (`abs(măsurat − document) > 10 mm`, respectiv `> 0,5°`; la prag exact nu există avertisment), scan dublat.
+- **Coliziunile = unicitatea în BD** (Copilot P1-3 / Jak P2-9). Bucățile se inserează sub indexurile E2a: `ux_magbuc_izo_radacina` (țeavă: `serie_canon`, `dezambiguare`) și `ux_magbuc_izo_curba` (curbă: `serie_canon`, `sarja`, `unghi_curba`, `cod_bucata` — E3 scrie `cod_bucata = 'AB'`, ca importul; codul complet de pe listă stă în `atribute.cod`).
+  - Un `unique_violation` în blocul DML anulează toată confirmarea și întoarce un refuz clar (seria / rândul).
+  - Două documente cu aceeași bucată fizică, confirmate concurent → exact unul trece.
+- **Scrierea** (după marcaj), totul sau nimic:
+  1. evenimentul (`intrare_aviz` sau `intrare_lista_ambalare`, `aplicat_de = auth.uid()`);
+  2. pe fiecare rând `primit` / `primit_neconform`: INSERT bucată (`sosit` / `carantina`, `lungime_mm` = măsurat ?? document, `lungime_aviz_mm`, `lungime_masurata_mm`, `aviz_intrare_id`, `nr_crt_aviz`, `lot`, `greutate_kg`, unghiul) + mișcarea `nascut` (`in_loc` = depozitul) + `rand.bucata_id`;
+  3. documentul: `confirmat` + `eveniment_intrare_id`.
+- **Reconcilierea în funcție, înainte de RETURN:** `count(mișcări nascut ale evenimentului)` = `count(rânduri cu bucata_id)` = numărul rândurilor primite. Altfel excepție, deci rollback total. Ledger-ul E2a e același pentru fiecare bucată (Copilot P2): nașterea, mișcarea și starea materializată sunt în aceeași tranzacție, legate de eveniment.
+- **Răspunsul (minim, stabil):** `{document_id, eveniment_id, bucati: [id…], avertismente: […], idempotent}`. Nu întoarce date din registru în afara bucăților proprii abia create.
+
+## 8. PV-ul (`fn_izo_doc_pv(p_doc_id, p_versiune, p_pv_nr, p_pv_data)`) — contract complet (Copilot P1-2 / Jak P1-7)
+
+- **După §4, pașii 1–5:**
+  - `stare = 'confirmat'` (draft / anulat → refuz);
+  - PV-ul deja pus: (`pv_nr_canon`, `pv_data`) identice → **idempotent** (întoarce același `eveniment_pv_id`); diferite → refuz; altfel CAS pe `versiune`.
+- **Mulțimea așteptată = cardinalitate exactă:** bucățile legate de rândurile `primit` ale documentului (`rand.bucata_id`), cu `aviz_intrare_id = doc`, pe proiectul / depozitul documentului.
+  - **TOATE** trebuie să fie încă `sosit`; altfel refuz: „bucăți ieșite / modificate înainte de PV — decizie”.
+  - În E3 nu există încă ieșiri din API. Când apar (E4+), contractul PV se extinde explicit; nu se acceptă „UPDATE ce mai găsesc”.
+  - Bucățile `primit_neconform` (carantina) **nu** intră și rămân `carantina`.
+- **Scrierea:** evenimentul `receptie_pv` (UNIQUE pe document) → `UPDATE … SET stare = 'receptionat' WHERE id = ANY(set) AND stare = 'sosit' RETURNING` → numărul întors = cardinalitatea, altfel excepție → mișcările `stare` (sosit → receptionat) din `RETURNING` → documentul (PV, `eveniment_pv_id`).
+
+## 9. Testele (negative întâi; PG16 harness + PG17 branch + PostgREST / Storage reale, cu ACL-ul de producție)
+
+1. **Autentificarea / autorizarea**, pe toate cele 4 intrări, inclusiv retry:
+   - anon, service_role, authenticated fără modul;
+   - atribuire expirată / viitoare / revocată / alt depozit / alt proiect;
+   - auto-promovarea `is_owner` / `role` refuzată; owner-ul real trece.
+2. **Curse cu barieră:**
+   - confirmare ↔ confirmare (același document; două documente cu aceeași serie → exact unul);
+   - confirmare ↔ editarea draftului;
+   - confirmare ↔ mutarea depozitului pe alt site; confirmare ↔ stoc → off; confirmare ↔ revocarea atribuirii;
+   - confirmare ↔ storno pe proiect;
+   - PV ↔ PV; PV ↔ storno;
+   - după așteptare: revalidare și refuz, fără scrieri.
+3. **Integritatea:**
+   - verifică → modifică antet / rând / decizie / scan → confirmă cu hash-ul vechi → 40001, zero efecte;
+   - hash / versiune NULL → refuz;
+   - mutarea proiectului / depozitului unui draft → refuz;
+   - orice UPDATE / DELETE după confirmare → refuz.
+4. **Atomicitatea:** eșec injectat după bucata N / după eveniment / după mișcare → documentul rămâne draft, zero bucăți / evenimente / mișcări.
+5. **Marcajul:** un helper de validare care încearcă să scrie registrul înainte de marcaj → refuzat de gardă; `izo_receptie_writer` nu poate UPDATE / DELETE pe alte coloane sau tabele nici cu marcaj.
+6. **PV:**
+   - pe draft / anulat; PV diferit; retry identic;
+   - bucată ieșită / modificată → refuz;
+   - carantina rămâne carantină;
+   - un singur eveniment `receptie_pv`.
+7. **DML direct:** authenticated / service_role pe draft, registru, evenimente, mișcări, scanuri → refuz.
+8. **Wrapper-e:** un wrapper static / dinamic, un overload, ACL / config modificate pe un proiect deja activ → porțile lipsesc → intrările refuză.
+9. **Storage:** UPDATE / upsert / mutare refuzate; DELETE după confirmare refuzat; cursa DELETE ↔ confirmare.
+10. **Toleranțele** exact la prag (10 mm / 0,5° → fără avertisment) și peste prag (avertisment).
+11. **Revenirea:** E3 fără date → scoate tot și reface gărzile E2a; cu documente confirmate → refuz; revenirea E2a după E3 cere întâi revenirea E3.
+
+## 10. Ce rămâne limitare (declarată)
+
+- Hash-urile scanurilor sunt declarate de client până la E9.
+- Încrederea în validarea JWT de gateway (Supabase).
+- Porțile pe wrapper-e / citiri sunt analiză textuală: apărare în profunzime. Controlul principal rămâne procesul (nicio funcție DEFINER nouă pe prod fără migrare revizuită).
+- PV-ul cere toate bucățile documentului încă `sosit`; ieșirile anterioare PV-ului vin cu extinderea contractului (E4+).
