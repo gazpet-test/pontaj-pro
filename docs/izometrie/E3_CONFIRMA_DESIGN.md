@@ -7,6 +7,8 @@
 | 1 | [Jak] Comparația JSON poate refuza bucata corectă (`radacina_id` rămâne; cheile nu sunt aceeași mulțime) | §3.2, §7.2 | o singură **proiecție explicită** `C` (lista constantă de coloane, cu NULL-urile incluse), aplicată identic pe ambele părți; `radacina_id` exclus din ambele și verificat separat `NEW.radacina_id = NEW.id`; INSERT-ul confirmării scrie TOATE coloanele din `C`, deci nicio valoare implicită nu intră în comparație |
 | 2 | [Jak] Verificarea locației n-are drepturi | §3.5, §4 | `fn_izo_loc_valid` (E2a, DEFINER) pentru depozit ↔ site-ul proiectului; `fn_izo_site_proiect` pentru `locatie_site_id`; `fn_izo_tip_material` pentru `tip_material_id` — toate cu EXECUTE pentru `izo_receptie_writer`, trecute în matrice |
 
+**r5b (21.10.2026)** — Copilot pe r4: GO, 0 × P1. Cele 4 P2 + 2 P3 devin postcondiții obligatorii pentru cod, în §12.
+
 P2 (Jak r4), trecute în design: SQL-ul exact al celor două indexuri de eveniment (intrarea și PV-ul separat, §2); testul 14 reconciliat cu egalitatea brută a seriei (§10); explicația pentru `off` corectată: E2a refuză `stoc → off` după orice eveniment, deci cazul nu e accesibil prin API (§9.1). Testele din §10 sunt cerințe; rezultatele vin la cod, rulate cu rolurile reale.
 
 ---
@@ -453,3 +455,21 @@ Două tranziții administrative, fiecare doar sub contextul ei, scris doar de `f
 - PV-ul cere toate bucățile `primit` încă `sosit`, în depozit; ieșirile anterioare PV-ului vin cu extinderea contractului (E4+). Până atunci E4 refuză bucățile fără PV (§8).
 - Anularea unui document confirmat fără bucăți, pe un proiect trecut pe `off`, cere reactivarea proiectului (§9.1).
 - După primul fapt E3, revenirea migrației e blocată prin design; corecțiile se fac înainte, cu migrare revizuită.
+
+## 12. r5b — postcondiții obligatorii pentru cod (Copilot r4, P2 / P3)
+
+1. **Indexurile de eveniment** sunt separate pentru intrare și PV (§2, SQL exact); testul: după intrare, PV-ul trece, iar un al doilea PV / o a doua intrare pe același document → 23505.
+2. **`inlocuieste_document_id` rămâne adevărat structural.**
+   - Când e setat, identitatea documentului (`furnizor_canon`, `nr_document_canon`, `data_document`) și `inlocuieste_document_id` sunt **înghețate**: trigger-ul refuză UPDATE-ul lor. Documentul fără legătură de înlocuire își poate corecta identitatea cât e `draft`.
+   - Ținta se revalidează la **fiecare** salvare și la confirmare, sub lock-ul documentului: e `anulat`, are aceeași identitate canonică, e pe același proiect și nu e înlocuită de alt document (`UNIQUE`). Ținta e deja `anulat`, deci finală, deci nu se mai poate schimba.
+   - Test: identitatea editată pe un draft cu legătură → refuz; ținta altfel decât descris → refuz la salvare și la confirmare.
+3. **Garda exactă și pe ledger** (evenimente + mișcări), cu aceeași tehnică a proiecției ca la bucată (§3.2):
+   - `fn_izo_eveniment_asteptat(op, doc, …)` și `fn_izo_miscare_asteptata(op, doc, bucata, …)` construiesc rândul complet așteptat. Garda compară proiecțiile pe TOATE coloanele, mai puțin `id`, `server_ver`, `ora_server`.
+   - **Eveniment:** `tip`, `proiect_id`, `document_tip`, `document_id`, `import_id` NULL, `storno_de_eveniment_id`, `motiv` (hash-ul / `PV <nr>` / motivul anulării), `declarat_de` NULL, `aplicat_de` (= `fn_izo_uid()` la confirmare / PV; NULL la anulare), `aplicat_rol` = `session_user`, `ora_tableta` / `dispozitiv_id` NULL.
+   - **Mișcare:** `eveniment_id` (identificat ca în §3.2), `proiect_id`, `bucata_id`, `rol`, `stare_inainte` / `stare_dupa` exacte pe operație, `din_loc` / `in_loc` (depozitul documentului la naștere; NULL la schimbările de stare), `lungime_mm` (= cea a bucății la naștere; NULL în rest) și orice altă coloană a tabelului cu valoarea explicită.
+   - Mulțimea coloanelor celor două tabele e verificată în porți, ca la `magazie_bucati`.
+   - Alternativa (GRANT INSERT pe coloane) **nu** se folosește. Proiecția acoperă și valorile, nu doar coloanele.
+4. **Preflight live înainte de FK-ul `aviz_intrare_id`:** migrarea verifică explicit, la precondiție, `count(*) FROM magazie_bucati WHERE aviz_intrare_id IS NOT NULL OR nr_crt_aviz IS NOT NULL` = 0. Pe prod sunt 3352 de bucăți LOT 2 din import, toate cu NULL. Altfel refuză, fără să creeze FK-ul.
+5. **P3 — nivelul fail-closed:** peste tot în E3 predicatul e `coalesce(fn_izo_nivel(p), 'off') IN ('stoc', 'montaj')`, deci un NULL eventual = refuz. Politicile RLS noi folosesc aceeași formă.
+6. **P3 — `fn_izo_scan_poate_sterge`:** e expusă (EXECUTE `authenticated`, folosită de politica Storage), deci intră în `c_e3_revizuite` (semnătură → md5 extins) și în amprenta porților E3. O modificare a ei → porți lipsă.
+
