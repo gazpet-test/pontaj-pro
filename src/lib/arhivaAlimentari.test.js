@@ -1,51 +1,202 @@
 import { describe, it } from 'vitest'
 import assert from 'node:assert/strict'
-import { citesteArhivaCompleta, proprietarComodatId, esteComodatNeatribuit } from './arhivaAlimentari.js'
+import {
+  citesteArhivaCompleta, citesteOTrecere, filtruDupa, ARHIVA_INSTABILA,
+  incarcaNumeAngajati, proprietariDisponibili, numeAngajat,
+  proprietarComodatId, esteComodatNeatribuit,
+} from './arhivaAlimentari.js'
 
-function server(rows, cap = 1000, transform = x => x) {
-  const ranges = []
-  return {
-    ranges,
-    query: () => ({ range: async (from, to) => {
-      ranges.push([from, to])
-      return transform({ data: rows.slice(from, Math.min(to + 1, from + cap)), count: rows.length, error: null }, from)
-    } }),
+// Server PostgREST simulat: ordonează (data desc, id desc), aplică filtrul keyset `or=(...)`
+// EXACT în sintaxa trimisă de helper, plafonează la `cap` (max-rows) și răspunde la numărarea head.
+// `inainte(nrCerere, stare)` rulează înaintea fiecărei cereri → simulează modificări concurente.
+const KEYSET = /^data_alimentare\.lt\.(\d{4}-\d{2}-\d{2}),and\(data_alimentare\.eq\.(\d{4}-\d{2}-\d{2}),id\.lt\.(\d+)\)$/
+const desc = (a, b) => (a.data_alimentare < b.data_alimentare ? 1 : a.data_alimentare > b.data_alimentare ? -1 : b.id - a.id)
+function server(initial, { cap = 1000, inainte = () => {}, transform = x => x } = {}) {
+  const stare = { rows: [...initial] }, cereri = []
+  const query = optiuni => {
+    const q = { optiuni, or: null, ordine: [], limita: null }
+    q.or = f => { q.or = f; return q }
+    q.order = (col, o) => { q.ordine.push(`${col}.${o.ascending ? 'asc' : 'desc'}`); return q }
+    q.limit = n => { q.limita = n; return q }
+    q.then = (ok, fail) => Promise.resolve().then(() => {
+      const nr = cereri.length
+      inainte(nr, stare)
+      cereri.push({ optiuni, or: typeof q.or === 'string' ? q.or : null, ordine: q.ordine, limita: q.limita })
+      if (optiuni.head) return transform({ data: null, count: stare.rows.length, error: null }, nr)
+      let r = [...stare.rows].sort(desc)
+      if (typeof q.or === 'string') {
+        const m = KEYSET.exec(q.or)
+        if (!m || m[1] !== m[2]) throw new Error('filtru keyset nerecunoscut: ' + q.or)
+        r = r.filter(x => x.data_alimentare < m[1] || (x.data_alimentare === m[1] && x.id < Number(m[3])))
+      }
+      return transform({ data: r.slice(0, Math.min(q.limita, cap)), count: optiuni.count === 'exact' ? stare.rows.length : null, error: null }, nr)
+    }).then(ok, fail)
+    return q
   }
+  return { query, cereri, stare }
 }
-const rows = n => Array.from({ length: n }, (_, i) => ({ id: n - i }))
+// n alimentări cu câte 7 pe zi (egalități pe dată → testează a doua cheie, id)
+const zi = k => new Date(Date.UTC(2026, 0, 1 + k)).toISOString().slice(0, 10)
+const alimentari = n => Array.from({ length: n }, (_, i) => ({ id: i + 1, data_alimentare: zi(Math.floor(i / 7)) })).sort(desc)
+const pagini = mock => mock.cereri.filter(c => !c.optiuni.head)
 
-describe('TKT-2026-0339: arhivă completă', () => {
-  it('citește peste 2000 de alimentări, păstrând ordinea pentru tabel și export', async () => {
-    const data = rows(2347), mock = server(data)
+describe('TKT-2026-0339: arhivă completă (keyset + verificare)', () => {
+  it('citește peste 2000 de alimentări o singură dată fiecare, în ordinea tabelului și exportului', async () => {
+    const data = alimentari(2347), mock = server(data)
     assert.deepEqual(await citesteArhivaCompleta(mock.query), data)
-    assert.equal(mock.ranges.length, 5)
+    const p = pagini(mock)
+    assert.equal(p.length, 5)
+    assert.deepEqual(p[0].optiuni, { count: 'exact' })           // count exact doar pe prima pagină
+    assert.ok(p.slice(1).every(c => c.optiuni.count === undefined))
+    assert.ok(p.every(c => c.limita === 500 && c.ordine.join() === 'data_alimentare.desc,id.desc'))
+    assert.deepEqual(mock.cereri.at(-1).optiuni, { count: 'exact', head: true }) // numărare finală
   })
-  it('continuă când serverul plafonează pagina sub dimensiunea cerută', async () => {
-    const data = rows(1201), mock = server(data, 100)
+  it('continuarea keyset pe aceeași zi folosește și id-ul (egalitate pe dată)', async () => {
+    const data = [5, 4, 3, 2, 1].map(id => ({ id, data_alimentare: '2026-09-03' })).concat([{ id: 9, data_alimentare: '2026-09-02' }])
+    const mock = server(data)
+    assert.deepEqual(await citesteArhivaCompleta(mock.query, { pagina: 2 }), data)
+    assert.deepEqual(pagini(mock).map(c => c.or), [
+      null,
+      'data_alimentare.lt.2026-09-03,and(data_alimentare.eq.2026-09-03,id.lt.4)',
+      'data_alimentare.lt.2026-09-03,and(data_alimentare.eq.2026-09-03,id.lt.2)',
+      'data_alimentare.lt.2026-09-02,and(data_alimentare.eq.2026-09-02,id.lt.9)', // pagina goală = sfârșit
+    ])
+    assert.equal(filtruDupa({ data: '2026-09-03', id: 1 }), 'data_alimentare.lt.2026-09-03,and(data_alimentare.eq.2026-09-03,id.lt.1)')
+  })
+  it('continuă când serverul plafonează pagina sub dimensiunea cerută (max-rows)', async () => {
+    const data = alimentari(1201), mock = server(data, { cap: 100 })
     assert.deepEqual(await citesteArhivaCompleta(mock.query), data)
-    assert.deepEqual(mock.ranges[1], [100, 599])
+    assert.equal(pagini(mock).length, 13) // 12 pagini pline de 100 + 1 scurtă care atinge totalul
   })
   it('acceptă perioada fără alimentări și un multiplu exact de pagină', async () => {
     assert.deepEqual(await citesteArhivaCompleta(server([]).query), [])
-    assert.deepEqual(await citesteArhivaCompleta(server(rows(1000)).query), rows(1000))
+    const mock = server(alimentari(1000))
+    assert.deepEqual(await citesteArhivaCompleta(mock.query), alimentari(1000))
+    assert.equal(pagini(mock).length, 3) // 500 + 500 + pagina goală care confirmă sfârșitul
   })
-  it('refuză un rezultat trunchiat, fără să publice rândurile parțiale', async () => {
-    const mock = server(rows(1200), 500, (res, from) => from >= 1000 ? { ...res, data: [] } : res)
-    await assert.rejects(citesteArhivaCompleta(mock.query), /incompletă: 1000 din 1200/)
+
+  // Scenariul Copilot (review r1 #827): A,B,C,D; după prima pagină se șterge A (deja citit)
+  // și se inserează X între C și D (zonă necitită). Offset-ul sărea C și păstra A cu totalul neschimbat.
+  const ABCD = [
+    { id: 4, data_alimentare: '2026-09-04', n: 'A' }, { id: 3, data_alimentare: '2026-09-03', n: 'B' },
+    { id: 2, data_alimentare: '2026-09-02', n: 'C' }, { id: 1, data_alimentare: '2026-09-01', n: 'D' },
+  ]
+  const X = { id: 5, data_alimentare: '2026-09-01', n: 'X' } // aceeași zi cu D, id mai mare → între C și D
+  const stergeAInsereazaX = (o = { gata: false }) => (nr, stare) => {
+    if (nr === 1 && !o.gata) { o.gata = true; stare.rows = stare.rows.filter(r => r.n !== 'A').concat(X) }
+  }
+  it('Copilot: o trecere keyset NU sare peste C; A apare doar pentru că exista când a fost citit — și e semnalat', async () => {
+    const r = await citesteOTrecere(server(ABCD, { inainte: stergeAInsereazaX() }).query, 2)
+    assert.deepEqual(r.rows.map(x => x.n), ['A', 'B', 'C', 'X', 'D'])
+    assert.match(r.anomalie, /noi în timpul citirii \(5 față de 4\)/)
   })
-  it('propagă eroarea unei pagini ulterioare', async () => {
-    const mock = server(rows(1200), 500, (res, from) => from ? { error: new Error('pagina 2') } : res)
+  it('Copilot: citirea completă reîncearcă și întoarce starea curentă, fără A și fără să sară C', async () => {
+    const mock = server(ABCD, { inainte: stergeAInsereazaX() })
+    const rows = await citesteArhivaCompleta(mock.query, { pagina: 2 })
+    assert.deepEqual(rows.map(x => x.n), ['B', 'C', 'X', 'D'])
+    assert.equal(mock.cereri.filter(c => c.optiuni.count === 'exact' && !c.optiuni.head).length, 2) // 2 treceri
+  })
+  it('ștergere în zona necitită: numărul final diferă → reîncercare', async () => {
+    let gata = false
+    const mock = server(ABCD, { inainte: (nr, s) => { if (nr === 1 && !gata) { gata = true; s.rows = s.rows.filter(r => r.n !== 'D') } } })
+    assert.deepEqual((await citesteArhivaCompleta(mock.query, { pagina: 2 })).map(x => x.n), ['A', 'B', 'C'])
+    assert.equal(mock.cereri.filter(c => c.optiuni.head).length, 2)
+  })
+  it('inserare după ultima pagină, înainte de numărarea finală → reîncercare', async () => {
+    let gata = false
+    const mock = server(ABCD, {
+      inainte: (nr, s) => { if (nr === 3 && !gata) { gata = true; s.rows = s.rows.concat({ id: 6, data_alimentare: '2026-09-05', n: 'Y' }) } },
+    })
+    assert.deepEqual((await citesteArhivaCompleta(mock.query, { pagina: 2 })).map(x => x.n), ['Y', 'A', 'B', 'C', 'D'])
+  })
+  it('alimentare mutată pe altă dată în timpul citirii (ID repetat) → reîncercare', async () => {
+    let gata = false
+    const mock = server(ABCD, {
+      inainte: (nr, s) => { if (nr === 1 && !gata) { gata = true; s.rows = s.rows.map(r => r.n === 'A' ? { ...r, data_alimentare: '2026-08-31' } : r) } },
+    })
+    const r = await citesteOTrecere(server(ABCD, {
+      inainte: (nr, s) => { if (nr === 1) s.rows = s.rows.map(x => x.n === 'A' ? { ...x, data_alimentare: '2026-08-31' } : x) },
+    }).query, 2)
+    assert.match(r.anomalie, /#4 a apărut de două ori/)
+    assert.deepEqual((await citesteArhivaCompleta(mock.query, { pagina: 2 })).map(x => x.n), ['B', 'C', 'D', 'A'])
+  })
+  it('date instabile la fiecare încercare → eroare arhiva_instabila după 3 treceri', async () => {
+    let next = 100
+    const mock = server(ABCD, {
+      inainte: (nr, s) => { if (nr > 0) s.rows = s.rows.concat({ id: next++, data_alimentare: '2026-08-01' }) },
+    })
+    await assert.rejects(citesteArhivaCompleta(mock.query, { pagina: 2 }), e => {
+      assert.equal(e.code, ARHIVA_INSTABILA)
+      assert.match(e.message, /la 3 încercări consecutive/)
+      return true
+    })
+    assert.equal(mock.cereri.filter(c => c.optiuni.count === 'exact' && !c.optiuni.head).length, 3)
+  })
+  it('proprietate keyset sub modificări aleatoare: niciun rând existent pe toată durata nu e sărit sau dublat', async () => {
+    for (let seed = 1; seed <= 40; seed++) {
+      let s = seed, nextId = 10000
+      const rnd = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648
+      const start = alimentari(60), sterse = new Set()
+      const mock = server(start, {
+        inainte: (nr, st) => {
+          if (rnd() < 0.5 && st.rows.length) { const v = st.rows[Math.floor(rnd() * st.rows.length)]; sterse.add(v.id); st.rows = st.rows.filter(x => x !== v) }
+          if (rnd() < 0.5) st.rows = st.rows.concat({ id: nextId++, data_alimentare: zi(Math.floor(rnd() * 9)) })
+        },
+      })
+      const { rows, anomalie } = await citesteOTrecere(mock.query, 7)
+      const ids = rows.map(r => r.id), ultim = rows.at(-1)
+      // trecere completă (fără oprire timpurie) → toate; altfel, cele până la ultima cheie citită
+      const completa = !anomalie || /numărul s-a modificat/.test(anomalie)
+      assert.equal(new Set(ids).size, ids.length, `seed ${seed}: dublură`)
+      for (const r of start) {
+        if (sterse.has(r.id) || (!completa && desc(r, ultim) > 0)) continue
+        assert.ok(ids.includes(r.id), `seed ${seed}: sărit #${r.id}`)
+      }
+      for (let i = 1; i < rows.length; i++) assert.equal(desc(rows[i - 1], rows[i]) < 0, true, `seed ${seed}: ordine`)
+    }
+  })
+
+  it('propagă eroarea unei pagini ulterioare, fără reîncercare', async () => {
+    const mock = server(alimentari(1200), { transform: (res, nr) => nr === 1 ? { error: new Error('pagina 2') } : res })
     await assert.rejects(citesteArhivaCompleta(mock.query), /pagina 2/)
+    assert.equal(mock.cereri.length, 2)
   })
-  it('refuză pagini repetate și modificări ale totalului în timpul citirii', async () => {
-    const mock = server(rows(1200), 500, res => ({ ...res, data: rows(500) }))
-    await assert.rejects(citesteArhivaCompleta(mock.query), /duplicate/)
-    const changed = server(rows(1200), 500, (res, from) => from ? { ...res, count: 1201 } : res)
-    await assert.rejects(citesteArhivaCompleta(changed.query), /s-au schimbat/)
+  it('cere count exact pe prima pagină și la numărarea finală', async () => {
+    await assert.rejects(citesteArhivaCompleta(server(alimentari(10), { transform: res => ({ ...res, count: null }) }).query), /numărul total/)
+    const faraFinal = server(alimentari(10), { transform: (res, nr) => nr === 1 ? { ...res, count: undefined } : res })
+    await assert.rejects(citesteArhivaCompleta(faraFinal.query), /numărul total/)
   })
-  it('cere count exact pentru a putea confirma completitudinea', async () => {
-    const mock = server(rows(10), 500, res => ({ ...res, count: null }))
-    await assert.rejects(citesteArhivaCompleta(mock.query), /numărul total/)
+  it('refuză rânduri fără cheie validă sau în altă ordine decât cea cerută', async () => {
+    const faraId = server([{ id: null, data_alimentare: '2026-09-01' }])
+    await assert.rejects(citesteArhivaCompleta(faraId.query), /fără dată sau ID valid/)
+    const dataRea = server([{ id: 1, data_alimentare: '2026-09-01),or(id.gt.0' }])
+    await assert.rejects(citesteArhivaCompleta(dataRea.query), /fără dată sau ID valid/)
+    const neordonat = server(alimentari(10), { transform: res => res.data ? { ...res, data: [...res.data].reverse() } : res })
+    await assert.rejects(citesteArhivaCompleta(neordonat.query), /altă ordine/)
+  })
+})
+
+describe('TKT-2026-0339: numele angajaților sunt auxiliare', () => {
+  const arhiva = [
+    { id: 1, data_alimentare: '2026-09-02', logistica_active: { tip_proprietate: 'comodat', comodat_employee_id: 7, comodat_data_start: '2026-01-01' } },
+    { id: 2, data_alimentare: '2026-09-03', logistica_active: { tip_proprietate: 'comodat', comodat_employee_id: 8, comodat_data_start: '2026-01-01' } },
+  ]
+  it('eroarea la angajați nu aruncă: avertisment + fallback „Angajat #id”, arhiva rămâne întreagă', async () => {
+    const r = await incarcaNumeAngajati(async () => ({ data: null, error: new Error('permission denied for table employees') }))
+    assert.equal(r.nume.size, 0)
+    assert.match(r.avertisment, /nu s-au putut încărca \(permission denied/)
+    assert.deepEqual(proprietariDisponibili(arhiva, r.nume), [{ id: '7', name: 'Angajat #7' }, { id: '8', name: 'Angajat #8' }])
+    assert.equal(arhiva.filter(a => proprietarComodatId(a) === '7').length, 1)
+    const aruncat = await incarcaNumeAngajati(() => { throw new Error('rețea') })
+    assert.match(aruncat.avertisment, /rețea/)
+  })
+  it('folosește numele încărcate și semnalează o listă parțială', async () => {
+    const r = await incarcaNumeAngajati(async () => ({ data: [{ id: 8, name: 'ANDREI ION' }], count: 2, error: null }))
+    assert.match(r.avertisment, /doar 1 din 2/)
+    assert.deepEqual(proprietariDisponibili(arhiva, r.nume), [{ id: '8', name: 'ANDREI ION' }, { id: '7', name: 'Angajat #7' }])
+    assert.equal(numeAngajat(r.nume, 8), 'ANDREI ION')
+    const complet = await incarcaNumeAngajati(async () => ({ data: [{ id: 7, name: 'B' }, { id: 8, name: 'A' }], count: 2, error: null }))
+    assert.equal(complet.avertisment, '')
   })
 })
 

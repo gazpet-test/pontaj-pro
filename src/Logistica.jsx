@@ -4,7 +4,7 @@
 
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
-import { citesteArhivaCompleta, proprietarComodatId, esteComodatNeatribuit, COMODAT_NEATRIBUIT } from './lib/arhivaAlimentari.js'
+import { citesteArhivaCompleta, ARHIVA_INSTABILA, incarcaNumeAngajati, proprietariDisponibili, numeAngajat, esteComodatNeatribuit, proprietarComodatId, COMODAT_NEATRIBUIT } from './lib/arhivaAlimentari.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -7833,7 +7833,8 @@ function ArhivaAvizePage({ canDelete, profile, showToast }) {
 // ============================================================
 function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotorina, showToast }) {
   const [arhiva, setArhiva] = useState([])
-  const [employees, setEmployees] = useState([])
+  const [numeAngajati, setNumeAngajati] = useState(() => new Map())  // auxiliar: doar afișarea proprietarilor
+  const [numeWarning, setNumeWarning] = useState('')
   const [employeeFilter, setEmployeeFilter] = useState('Toate')
   const [loadWarning, setLoadWarning] = useState('')
   const loadRequest = useRef(0)
@@ -7890,31 +7891,26 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
     }
     
     try {
-      const [data, employeeRows] = await Promise.all([
-        citesteArhivaCompleta(() => {
-          let q = supabase.from('logistica_alimentari')
-            .select(`*,
-              logistica_active(id, cod_intern, nr_inmatriculare, marca, model, norma_consum, unitate_norma, prag_alerta_consum, tip_proprietate, comodat_employee_id, comodat_data_start, comodat_data_sfarsit, logistica_categorii(tip, subcategorie)),
-              sites:site_id(id, name),
-              profile_creator:created_by(id, name)
-            `, { count: 'exact' })
-            .order('data_alimentare', { ascending: false })
-            .order('id', { ascending: false })
-          if (startDate) q = q.gte('data_alimentare', startDate)
-          if (endDate) q = q.lte('data_alimentare', endDate)
-          return q
-        }),
-        // Arhiva include și proprietarii inactivi; created_by este operatorul.
-        citesteArhivaCompleta(() => supabase.from('employees')
-          .select('id, name', { count: 'exact' }).order('id')),
-      ])
+      // Citire keyset (data_alimentare desc, id desc) cu verificare de număr; ordinea și paginarea le pune helperul.
+      // optiuni = { count: 'exact' } pe prima pagină, {} pe următoarele, { count: 'exact', head: true } la numărarea finală.
+      const data = await citesteArhivaCompleta(optiuni => {
+        let q = supabase.from('logistica_alimentari')
+          .select(optiuni.head ? 'id' : `*,
+            logistica_active(id, cod_intern, nr_inmatriculare, marca, model, norma_consum, unitate_norma, prag_alerta_consum, tip_proprietate, comodat_employee_id, comodat_data_start, comodat_data_sfarsit, logistica_categorii(tip, subcategorie)),
+            sites:site_id(id, name),
+            profile_creator:created_by(id, name)
+          `, optiuni)
+        if (startDate) q = q.gte('data_alimentare', startDate)
+        if (endDate) q = q.lte('data_alimentare', endDate)
+        return q
+      })
       if (request !== loadRequest.current) return
-      setEmployees(employeeRows)
       setArhiva(data)
     } catch (error) {
       if (request !== loadRequest.current) return
       setArhiva([])
-      setLoadWarning('Arhiva nu a putut fi încărcată complet. Totalurile și exportul nu sunt disponibile. ' + (error.message || error))
+      setLoadWarning('Arhiva nu a putut fi încărcată complet. Totalurile și exportul nu sunt disponibile. '
+        + (error?.code === ARHIVA_INSTABILA ? '' : 'Eroare: ') + (error?.message || error))
     } finally {
       if (request === loadRequest.current) setLoading(false)
     }
@@ -7930,12 +7926,16 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
     return () => { ++loadRequest.current }
   }, [perioadaFilter, customStart, customEnd])
 
-  const employeesDisponibili = useMemo(() => {
-    const names = new Map(employees.map(e => [String(e.id), e.name]))
-    const ids = new Set(arhiva.map(proprietarComodatId).filter(id => id !== null))
-    return Array.from(ids).map(id => ({ id, name: names.get(id) || `Angajat #${id}` }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ro') || a.id.localeCompare(b.id))
-  }, [arhiva, employees])
+  // Numele angajaților: o singură dată la montare, separat de arhivă — o eroare aici NU golește arhiva
+  // (proprietarii apar ca „Angajat #id”). Include și inactivii; created_by este operatorul, nu proprietarul.
+  useEffect(() => {
+    let activ = true
+    incarcaNumeAngajati(() => supabase.from('employees').select('id, name', { count: 'exact' }).order('id'))
+      .then(r => { if (activ) { setNumeAngajati(r.nume); setNumeWarning(r.avertisment) } })
+    return () => { activ = false }
+  }, [])
+
+  const employeesDisponibili = useMemo(() => proprietariDisponibili(arhiva, numeAngajati), [arhiva, numeAngajati])
   // Alimentări pe vehicule în comodat din afara contractului curent (nu se creditează nimănui)
   const nrComodatNeatribuit = useMemo(() => arhiva.filter(esteComodatNeatribuit).length, [arhiva])
   
@@ -8266,6 +8266,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
   
   // Export Excel
   const handleExportExcel = () => {
+    if (loadWarning) return  // arhivă neconfirmată (incompletă/instabilă): nu export date parțiale
     setExportingExcel(true)
     try {
       const rows = filtered.map(a => {
@@ -8319,19 +8320,19 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
       <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14}}>
         <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.purple}`}}>
           <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>📊 Alimentări</div>
-          <div style={{fontSize: 24, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>{kpi.total}</div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>{loadWarning ? '—' : kpi.total}</div>
         </div>
         <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.orange}`}}>
           <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>⛽ Total litri</div>
-          <div style={{fontSize: 24, fontWeight: 800, color: G.orange, fontVariantNumeric: 'tabular-nums'}}>{kpi.totalLitri.toFixed(1)} <span style={{fontSize: 14, color: G.muted}}>L</span></div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.orange, fontVariantNumeric: 'tabular-nums'}}>{loadWarning ? '—' : kpi.totalLitri.toFixed(1)} <span style={{fontSize: 14, color: G.muted}}>L</span></div>
         </div>
         <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.green}`}}>
           <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>💰 Total cost</div>
-          <div style={{fontSize: 24, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums'}}>{kpi.totalCost.toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} <span style={{fontSize: 14, color: G.muted}}>RON</span></div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums'}}>{loadWarning ? '—' : kpi.totalCost.toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} <span style={{fontSize: 14, color: G.muted}}>RON</span></div>
         </div>
         <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.blue}`}}>
           <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>📈 Medie / alimentare</div>
-          <div style={{fontSize: 24, fontWeight: 800, color: G.blue, fontVariantNumeric: 'tabular-nums'}}>{kpi.medieLitri.toFixed(1)} <span style={{fontSize: 14, color: G.muted}}>L</span></div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.blue, fontVariantNumeric: 'tabular-nums'}}>{loadWarning ? '—' : kpi.medieLitri.toFixed(1)} <span style={{fontSize: 14, color: G.muted}}>L</span></div>
         </div>
       </div>
       
@@ -8382,7 +8383,10 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
             </>
           )}
         </div>
-        
+        <div style={{fontSize: 11, color: G.muted, lineHeight: 1.4, marginTop: -6, marginBottom: 10}}>
+          ℹ️ Citire completă cu verificare: dacă datele se modifică în timpul încărcării, se reîncearcă automat. Nu este un snapshot tranzacțional.
+        </div>
+
         {/* Filtre tip + sursă + șantier + proprietar comodat + search */}
         <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr)) auto', gap: 8, alignItems: 'center'}}>
           <select value={tipFilter} onChange={e => setTipFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
@@ -8400,7 +8404,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
           <select aria-label="Proprietar comodat (contract curent)" title="Proprietar comodat (contract curent)" value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
             <option value="Toate">Proprietar comodat (contract curent): toți</option>
             {employeeFilter !== 'Toate' && employeeFilter !== COMODAT_NEATRIBUIT && !employeesDisponibili.some(e => e.id === employeeFilter) && (
-              <option value={employeeFilter}>{employees.find(e => String(e.id) === employeeFilter)?.name || `Angajat #${employeeFilter}`} (fără alimentări)</option>
+              <option value={employeeFilter}>{numeAngajat(numeAngajati, employeeFilter)} (fără alimentări)</option>
             )}
             {employeesDisponibili.map(e => <option key={e.id} value={e.id}>{e.name} (#{e.id})</option>)}
             {(nrComodatNeatribuit > 0 || employeeFilter === COMODAT_NEATRIBUIT) && (
@@ -8410,12 +8414,15 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
           <input type="text" placeholder="🔍 marcă, cod, plăcuță, șantier..." value={search} onChange={e => setSearch(e.target.value)} style={{...S.input, padding: '7px 12px', fontSize: 12, gridColumn: 'span 1'}} />
           <button 
             onClick={handleExportExcel} 
-            disabled={exportingExcel || filtered.length === 0} 
-            style={{...S.btnP, padding: '7px 16px', fontSize: 12, background: G.green, opacity: (exportingExcel || filtered.length === 0) ? .5 : 1, cursor: (exportingExcel || filtered.length === 0) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap'}}
+            disabled={exportingExcel || filtered.length === 0 || !!loadWarning}
+            style={{...S.btnP, padding: '7px 16px', fontSize: 12, background: G.green, opacity: (exportingExcel || filtered.length === 0 || loadWarning) ? .5 : 1, cursor: (exportingExcel || filtered.length === 0 || loadWarning) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap'}}
           >
             {exportingExcel ? '⏳ Export...' : `📊 Excel (${filtered.length})`}
           </button>
         </div>
+        {numeWarning && (
+          <div style={{marginTop: 8, fontSize: 11, color: G.yellow, lineHeight: 1.4}}>⚠️ {numeWarning}</div>
+        )}
         {employeeFilter !== 'Toate' && (
           <div style={{marginTop: 8, fontSize: 11, color: G.muted, lineHeight: 1.4}}>
             ℹ️ Atribuirea pe proprietar folosește <b>contractul de comodat curent</b> din fișa vehiculului (angajat + perioada start–sfârșit).
