@@ -22,6 +22,8 @@ export function tipStoc(b) {
 export const CATEGORII = [
   { cheie: 'disponibil', label: 'Disponibil (în depozit)', stari: ['sosit', 'receptionat', 'retur'] },
   { cheie: 'in_drum', label: 'În drum spre depozit', stari: ['in_tranzit'] },
+  // carantina (decizia MP 21.10, neconformele 58/596): fizic în depozit, dar NU disponibilă (montaj / ieșire)
+  { cheie: 'carantina', label: 'Carantină (nedisponibil)', stari: ['carantina'] },
   { cheie: 'pe_tronson', label: 'Pe tronson (nemontat)', stari: ['pe_tronson'] },
   { cheie: 'montat', label: 'Montat', stari: ['montata'] },
   { cheie: 'rest', label: 'Rest nereutilizabil', stari: ['rest_nereutilizabil'] },
@@ -79,5 +81,9 @@ export const fmtM = m => (m == null ? '—' : Number(m).toLocaleString('ro-RO', 
 export function lipsaRegistru(error) {
   if (!error) return false
   const m = `${error.code || ''} ${error.message || ''}`
-  return /PGRST202|42883|42703|could not find the function|function .* does not exist|column .* does not exist/i.test(m)
+  // strict (Copilot #809 r2 P2): funcția lipsă DOAR dacă eroarea numește o funcție E2 a registrului; coloana lipsă DOAR
+  // dacă numește o coloană E2 — altfel e o eroare reală și se arată
+  const functieE2 = /fn_izo_(proiecte_protejate|citire)/i.test(m) && /PGRST202|42883|could not find the function|does not exist/i.test(m)
+  const coloanaE2 = /\b(tip_cod|serie_canon|lungime_mm|perete_mm|depozit_id|tronson_id)\b/i.test(m) && /42703|column .* does not exist/i.test(m)
+  return functieE2 || coloanaE2
 }

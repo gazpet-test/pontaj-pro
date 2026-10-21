@@ -21,7 +21,7 @@ const S = {
   th: { textAlign:'left', padding:'8px 10px', fontSize:12, color:G.muted, fontWeight:700, borderBottom:`1px solid ${G.border2}`, whiteSpace:'nowrap' },
   td: { padding:'7px 10px', fontSize:13, borderBottom:`1px solid ${G.border}` },
 }
-const CAT_CULOARE = { disponibil:G.green, in_drum:G.yellow, pe_tronson:G.blue, montat:G.purple, rest:G.dim, iesit:G.dim, anulat:G.dim, alta:G.muted }
+const CAT_CULOARE = { disponibil:G.green, in_drum:G.yellow, carantina:G.red, pe_tronson:G.blue, montat:G.purple, rest:G.dim, iesit:G.dim, anulat:G.dim, alta:G.muted }
 const PAGINA = 1000
 const MAX_LISTA = 400
 
