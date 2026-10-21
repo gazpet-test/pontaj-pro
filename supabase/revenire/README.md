@@ -212,3 +212,13 @@ SELECT set_config('gazpet.revenire_20261103a', 'SCOATE_SURSA_INBOX:' || txid_cur
 COMMIT;
 ```
 Precondiție = exact obiectele patch-ului (coloana bigint, indexul, cele două funcții și cele două trigger-e; niciun view pe coloană); armare persistentă = refuz; `LOCK TABLE public.hr_documente_personale IN ACCESS EXCLUSIVE MODE` (cu `lock_timeout` 5 s) ÎNAINTEA numărării `sursa_inbox_id IS NOT NULL`; DROP fără CASCADE; `NOTIFY pgrst`; postcondiție = niciun obiect al patch-ului; dezarmare la final. Testat în `scripts/test_hr_doc_sursa_inbox.sh` pasul 4 (schelet: `supabase/tests/hr_doc_sursa_inbox_schelet.sql`).
+
+## 20261103c — storage ai-documente-inbox (`20261103c_ai_inbox_storage_politici_ROLLBACK.sql`, NEAPLICAT)
+**Redeschide gaura de confidențialitate**: recreează exact `ai_inbox_obj_all` (FOR ALL TO authenticated, doar `bucket_id`) și scoate `ai_inbox_obj_insert` / `_select` / `_delete`, trigger-ul `trg_ai_inbox_fisier_imutabil`, funcția `ai_inbox_fisier_imutabil()` și indexul `idx_ai_inbox_fisier_path`. Fără GO de execuție; o cale de upload nouă refuzată se repară cu o migrare nouă (forward-fix), nu prin revenire.
+```sql
+BEGIN;
+SELECT set_config('gazpet.revenire_20261103c', 'REDESCHIDE_INBOX_STORAGE:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = exact patch-ul (expresiile comparate cu aceleași constante ca postcondiția migrării); armare persistentă = refuz; DROP fără CASCADE; postcondiție = exact politica veche, niciun obiect al patch-ului; dezarmare. Testat în `scripts/test_ai_inbox_storage_politici.sh` pasul 4. Plan: `docs/HR/INBOX_STORAGE_RLS.md`.

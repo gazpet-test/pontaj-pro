@@ -1,0 +1,270 @@
+-- 20261103c — Storage ai-documente-inbox: închide gaura de confidențialitate a cozii «Citește orice» (PREGĂTIT, NEAPLICAT).
+-- Azi (catalog live citit read-only 21.10.2026): politica ai_inbox_obj_all = FOR ALL TO authenticated cu USING / WITH CHECK
+--   doar bucket_id = 'ai-documente-inbox' → ORICE cont logat poate lista, descărca, suprascrie (upsert / update / move) și șterge
+--   fișierele din coadă ale TUTUROR modulelor, inclusiv actele de identitate urcate în HR prin «Citește orice» sau prin wizard-ul
+--   „Angajat nou” (59 obiecte, 3 fără rând în coadă). Celelalte 109 politici pe storage.objects sunt legate de alte bucket-uri
+--   (verificat aici, în precondiție). Bucket privat, fără versionare.
+-- După:
+--   1. ai_inbox_obj_insert (INSERT): doar în folderul propriu — primul segment al căii = auth.uid() (convenția panoului,
+--      src/CitesteOricePanel.jsx: `${profile.id}/${Date.now()}_${rand}.${ext}`) — sau sub `wizard-angajare/…` (convenția
+--      wizard-ului, src/HrAngajatNouWizard.jsx) DOAR pentru owner / can_access_personal_data (cine vede „➕ Angajat nou”).
+--      Rădăcina bucket-ului și folderele altora: refuz.
+--   2. ai_inbox_obj_select + ai_inbox_obj_delete (aceeași expresie). Vede / șterge un obiect:
+--      (a) cine l-a urcat: owner_id = auth.uid() (îl pune storage-api din JWT; prin API nu se alege). Acoperă și pașii de dinaintea
+--          rândului din coadă (panoul / wizard-ul șterg fișierul când INSERT-ul rândului pică) și căile wizard-ului;
+--      (b) cine poate confirma rândul din coadă LEGAT de obiect: EXISTS rând cu fisier_path = name ȘI uploadat_de = owner_id-ul
+--          obiectului ȘI fn_ai_inbox_poate_confirma(modul_tinta, entitate_id) — aceeași regulă ca vizibilitatea rândului
+--          (ai_inbox_select), deci panoul și wizard-ul descarcă, previzualizează (URL semnat) și curăță exact ce văd în coadă;
+--      (c) ownerul (profiles.is_owner) — inclusiv obiectele orfane, fără rând.
+--      Legătura „uploadat_de = owner_id” e obligatorie: fisier_path îl scrie clientul la INSERT în coadă (ai_inbox_insert cere doar
+--      uploadat_de = auth.uid()), deci fără ea oricine și-ar face un rând „nedecis” cu calea unui act HR străin și l-ar descărca.
+--      Toate trei cer auth.uid() ne-NULL (fn_ai_inbox_poate_confirma întoarce true pentru uid NULL — „service_role / migrări”).
+--   3. FĂRĂ politică UPDATE (și fără ALL): nimeni în afară de service_role nu mai suprascrie, nu mai mută și nu mai redenumește
+--      obiecte din coadă. Codul nu are nevoie: toate upload-urile în bucket sunt upsert:false, fără move / update (panou, wizard).
+--   4. trg_ai_inbox_fisier_imutabil (BEFORE UPDATE pe ai_documente_inbox; funcție INVOKER, search_path fix, fără EXECUTE pentru
+--      roluri): fisier_path, uploadat_de, fisier_nume, fisier_size_bytes, fisier_mime se pun doar la INSERT — orice UPDATE care le
+--      schimbă = 23514, pentru oricine (și service_role / postgres). Fără el, legătura (2b) s-ar falsifica: ai_inbox_update are
+--      WITH CHECK doar auth.uid() IS NOT NULL, deci oricine poate edita un rând „nedecis” (modul_tinta NULL) și i-ar pune calea +
+--      uploadat_de ale unui act HR străin. Niciun drum din cod nu le modifică (verificat: panou, wizard, edge-urile citeste-orice și
+--      cleanup-recycle-bin, funcțiile din BD). Închide și „referința din coadă e modificabilă” din limitarea d a 20261103a.
+--   5. idx_ai_inbox_fisier_path: căutarea rândului legat (2b) rulează per obiect la listare / descărcare (azi 1330 rânduri, fără index).
+-- NEATINSE: service_role (edge citeste-orice descarcă, cleanup-recycle-bin șterge — ocolesc RLS), celelalte bucket-uri și politicile
+-- lor, politicile tabelei ai_documente_inbox, fn_ai_inbox_poate_confirma. Fără date modificate.
+-- Expresiile noi se compară în postcondiție (și în revenire) cu constante EXACTE ale deparse-ului, cu spațiile albe comprimate
+-- (fișierul e CRLF pe Windows — deparse-ul are LF și indentare proprie); search_path e fixat mai jos, deci deparse-ul e determinist.
+-- LIMITĂRI ACCEPTATE (de decis separat, nu aici):
+--   a. fn_ai_inbox_poate_confirma(NULL, …) = true pentru orice cont cu profil: fișierul unui rând „nedecis” (în așteptare / eroare
+--      fără modul — azi 3 rânduri) rămâne vizibil și ștergibil de oricine, ca rândul însuși și payload_ai-ul lui (ai_inbox_select /
+--      ai_inbox_update). Restrângerea cere schimbarea regulii cozii (Execuție confirmă rânduri nedecise).
+--   b. cine poate edita un rând (ai_inbox_update) îi poate schimba modul_tinta, dar doar spre o stare pe care o vede în continuare
+--      (PostgreSQL aplică ai_inbox_select și rândului nou — un cont fără drepturi nu mută „nedecisul” în HR, 42501). Un confirmator
+--      poate însă muta un rând al lui în „nedecis” (ex. HR un act HR) → fișierul devine vizibil oricui. Actorul vedea deja actul
+--      (insider, nu escaladare pentru el); politica UPDATE a cozii rămâne de strâns separat.
+--   c. căile `wizard-angajare/…` nu poartă uid-ul: le apără owner_id-ul + dreptul HR cerut la INSERT. Forward-fix recomandat: wizard-ul
+--      urcă în `${uid}/wizard-angajare/…`, apoi excepția din (1) se scoate printr-o migrare nouă.
+--   d. URL-urile semnate deja emise (panoul: 120 s) rămân valabile până expiră.
+--   e. ștergerea unui rând din coadă de către wizard (scoateDoc / abandon) cere ai_inbox_delete = owner: pentru HR fără owner rândul
+--      rămâne (preexistent, nu din 20261103c); fișierul lui se șterge corect (owner_id = cine l-a urcat).
+-- Revenire: supabase/revenire/20261103c_ai_inbox_storage_politici_ROLLBACK.sql (REDESCHIDE gaura; doar la cererea lui Răzvan).
+-- Test local: scripts/test_ai_inbox_storage_politici.sh. Plan de test cu Storage real (branch Supabase): docs/HR/INBOX_STORAGE_RLS.md.
+-- LIVRARE: doar prin scripts/livrare_migrare.sh; fără BEGIN/COMMIT. Ia ACCESS EXCLUSIVE pe storage.objects (DROP / CREATE POLICY)
+-- câteva ms — lock_timeout 5s: cu interogări lungi pe storage în curs, migrarea cade curat (se reîncearcă).
+
+DO $livrare_start$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261103c_ai_inbox_storage_politici:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261103c: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  END IF;
+END $livrare_start$;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL search_path = public, pg_temp;
+
+DO $pre$
+DECLARE
+  c_vechi CONSTANT text := '(bucket_id = ''ai-documente-inbox''::text)';
+  v_b jsonb; v_n bigint; v_lista text; v_col text; v_def oid;
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'PRECONDIȚIE 20261103c: necesita postgres'; END IF;
+  IF current_setting('search_path') IS DISTINCT FROM 'public, pg_temp' THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: search_path = „%” (aștept „public, pg_temp” — deparse-ul comparat depinde de el)', current_setting('search_path');
+  END IF;
+  -- bucket-ul: privat (un bucket public se citește pe URL public, fără RLS) și fără versionare (ștergerea ar crea marcaje)
+  SELECT to_jsonb(b) INTO v_b FROM storage.buckets b WHERE b.id = 'ai-documente-inbox';
+  IF v_b IS NULL THEN RAISE EXCEPTION 'PRECONDIȚIE 20261103c: bucket-ul ai-documente-inbox lipsește'; END IF;
+  IF (v_b ->> 'public') IS DISTINCT FROM 'false' THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: bucket-ul ai-documente-inbox e public — politicile nu apără URL-urile publice; decizie separată întâi';
+  END IF;
+  IF coalesce(v_b ->> 'versioning_status', 'DISABLED') IS DISTINCT FROM 'DISABLED' THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: bucket-ul ai-documente-inbox are versionare (%) — politicile n-au fost gândite pentru marcaje de ștergere', v_b ->> 'versioning_status';
+  END IF;
+  -- politica veche: EXACT cea citită live; nicio politică ai_inbox_obj_* în plus (reaplicare / altă stare ⇒ refuz, nimic atins)
+  IF (SELECT count(*) FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND starts_with(p.polname::text, 'ai_inbox_obj')) <> 1
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'ai_inbox_obj_all'
+                    AND p.polcmd = '*' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid]
+                    AND pg_get_expr(p.polqual, p.polrelid) = c_vechi AND pg_get_expr(p.polwithcheck, p.polrelid) = c_vechi) THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: ai_inbox_obj_all nu e exact politica citită live (FOR ALL TO authenticated, doar bucket_id) sau există deja alte politici ai_inbox_obj_* — nu se aplică peste altă stare';
+  END IF;
+  -- nicio altă politică nu numește bucket-ul și fiecare altă politică PERMISSIVE e legată, la nivel superior, de ALT bucket:
+  -- „(bucket_id = 'x'::text)” sau „((bucket_id = 'x'::text) AND …)” (forma de deparse: un OR la nivel superior începe cu „(((”).
+  -- Altfel o politică veche ar da acces în continuare la coadă, peste cele noi (politicile PERMISSIVE se adună prin OR).
+  WITH e AS (
+    SELECT p.polname::text AS n, p.polpermissive AS perm, x.expr
+      FROM pg_policy p, LATERAL (VALUES (pg_get_expr(p.polqual, p.polrelid)), (pg_get_expr(p.polwithcheck, p.polrelid))) AS x(expr)
+     WHERE p.polrelid = 'storage.objects'::regclass AND p.polname <> 'ai_inbox_obj_all' AND x.expr IS NOT NULL)
+  SELECT string_agg(DISTINCT n, ', ') INTO v_lista FROM e
+   WHERE position('ai-documente-inbox' IN expr) > 0
+      OR (perm AND NOT (expr ~ '^[(]bucket_id = ''[^'']+''::text[)]$' OR expr ~ '^[(][(]bucket_id = ''[^'']+''::text[)] AND '));
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: alte politici pe storage.objects pot atinge bucket-ul ai-documente-inbox (numesc bucket-ul sau nu sunt legate de alt bucket): % — se analizează întâi', v_lista;
+  END IF;
+  -- dependențele expresiilor noi: funcția de drept (DEFINER, EXECUTE pentru authenticated), storage.foldername, auth.uid()
+  IF to_regprocedure('public.fn_ai_inbox_poate_confirma(text,bigint)') IS NULL
+     OR NOT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_ai_inbox_poate_confirma(text,bigint)'))
+     OR NOT has_function_privilege('authenticated', 'public.fn_ai_inbox_poate_confirma(text,bigint)', 'EXECUTE')
+     OR to_regprocedure('storage.foldername(text)') IS NULL
+     OR NOT has_function_privilege('authenticated', 'storage.foldername(text)', 'EXECUTE')
+     OR to_regprocedure('auth.uid()') IS NULL OR NOT has_function_privilege('authenticated', 'auth.uid()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: lipsește fn_ai_inbox_poate_confirma(text,bigint) (SECURITY DEFINER) / storage.foldername(text) / auth.uid() sau authenticated nu le poate apela';
+  END IF;
+  -- coloanele citite de politici, cu tipurile și colațiile live (comparațiile text = text cer aceeași colație deterministă)
+  SELECT c.oid INTO v_def FROM pg_collation c WHERE c.collname = 'default' AND c.collnamespace = 'pg_catalog'::regnamespace;
+  IF (SELECT count(*) FROM pg_attribute a
+       WHERE NOT a.attisdropped AND a.attnum > 0 AND (
+             (a.attrelid = 'storage.objects'::regclass AND ((a.attname = 'bucket_id' AND a.atttypid = 'text'::regtype)
+                OR (a.attname = 'name' AND a.atttypid = 'text'::regtype AND a.attcollation = v_def)
+                OR (a.attname = 'owner_id' AND a.atttypid = 'text'::regtype AND a.attcollation = v_def)))
+          OR (a.attrelid = 'public.ai_documente_inbox'::regclass AND ((a.attname = 'fisier_path' AND a.atttypid = 'text'::regtype AND a.attnotnull AND a.attcollation = v_def)
+                OR (a.attname = 'uploadat_de' AND a.atttypid = 'uuid'::regtype AND a.attnotnull)
+                OR (a.attname = 'modul_tinta' AND a.atttypid = 'text'::regtype) OR (a.attname = 'entitate_id' AND a.atttypid = 'bigint'::regtype)
+                OR (a.attname = 'fisier_nume' AND a.atttypid = 'text'::regtype) OR (a.attname = 'fisier_size_bytes' AND a.atttypid = 'bigint'::regtype)
+                OR (a.attname = 'fisier_mime' AND a.atttypid = 'text'::regtype)))
+          OR (a.attrelid = 'public.profiles'::regclass AND ((a.attname = 'id' AND a.atttypid = 'uuid'::regtype)
+                OR (a.attname = 'is_owner' AND a.atttypid = 'boolean'::regtype) OR (a.attname = 'can_access_personal_data' AND a.atttypid = 'boolean'::regtype))))) <> 13 THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: coloanele citite de politici (storage.objects bucket_id/name/owner_id, ai_documente_inbox fisier_*/uploadat_de/modul_tinta/entitate_id, profiles id/is_owner/can_access_personal_data) lipsesc sau au alt tip / altă colație';
+  END IF;
+  -- politicile rulează cu drepturile apelantului: fără SELECT pe coloanele citite, ORICE acces din panou ar cădea (42501)
+  FOREACH v_col IN ARRAY ARRAY['fisier_path', 'uploadat_de', 'modul_tinta', 'entitate_id'] LOOP
+    IF NOT has_column_privilege('authenticated', 'public.ai_documente_inbox', v_col, 'SELECT') THEN
+      RAISE EXCEPTION 'PRECONDIȚIE 20261103c: authenticated nu are SELECT pe ai_documente_inbox.%', v_col;
+    END IF;
+  END LOOP;
+  FOREACH v_col IN ARRAY ARRAY['id', 'is_owner', 'can_access_personal_data'] LOOP
+    IF NOT has_column_privilege('authenticated', 'public.profiles', v_col, 'SELECT') THEN
+      RAISE EXCEPTION 'PRECONDIȚIE 20261103c: authenticated nu are SELECT pe profiles.%', v_col;
+    END IF;
+  END LOOP;
+  IF to_regclass('public.idx_ai_inbox_fisier_path') IS NOT NULL OR to_regprocedure('public.ai_inbox_fisier_imutabil()') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ai_inbox_fisier_imutabil') THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: indexul / funcția / trigger-ul patch-ului există deja';
+  END IF;
+  -- date: un rând DESCHIS al cărui obiect are alt owner_id decât uploadat_de ar deveni neconfirmabil (doar ownerul i-ar mai vedea
+  -- fișierul) — azi 0 (toate cele 59 de obiecte au owner_id = primul segment al căii = uploadat_de). Altfel: analiză întâi.
+  SELECT count(*) INTO v_n FROM public.ai_documente_inbox i
+    JOIN storage.objects o ON o.bucket_id = 'ai-documente-inbox' AND o.name = i.fisier_path
+   WHERE i.status IN ('in_asteptare', 'clasificat', 'eroare') AND o.owner_id IS DISTINCT FROM i.uploadat_de::text;
+  IF v_n > 0 THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: % rând(uri) deschise din coadă au obiectul urcat de alt cont decât uploadat_de — ar deveni neconfirmabile; se analizează întâi', v_n;
+  END IF;
+END $pre$;
+
+-- 5. indexul pentru legătura obiect ↔ rând
+CREATE INDEX idx_ai_inbox_fisier_path ON public.ai_documente_inbox USING btree (fisier_path);
+
+COMMENT ON INDEX public.idx_ai_inbox_fisier_path IS
+  '20261103c: politicile storage ai_inbox_obj_select / _delete caută rândul din coadă legat de obiect (fisier_path = name) per obiect.';
+
+-- 4. fișierul rândului (și cine l-a urcat) nu se mai schimbă după INSERT
+CREATE FUNCTION public.ai_inbox_fisier_imutabil()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY INVOKER
+ SET search_path = public, pg_temp
+AS $f$
+BEGIN
+  -- legătura cu obiectul din storage (politicile ai_inbox_obj_select / _delete) se face pe fisier_path + uploadat_de: dacă s-ar
+  -- putea edita, oricine ar lega un rând „nedecis” de actul altcuiva. Numele / mărimea / tipul descriu același fișier (20261103a).
+  IF NEW.fisier_path IS DISTINCT FROM OLD.fisier_path OR NEW.uploadat_de IS DISTINCT FROM OLD.uploadat_de
+     OR NEW.fisier_nume IS DISTINCT FROM OLD.fisier_nume OR NEW.fisier_size_bytes IS DISTINCT FROM OLD.fisier_size_bytes
+     OR NEW.fisier_mime IS DISTINCT FROM OLD.fisier_mime THEN
+    RAISE EXCEPTION 'ai_documente_inbox #%: fișierul rândului (fisier_path / fisier_nume / fisier_size_bytes / fisier_mime) și uploadat_de sunt nemodificabile — se pun doar la INSERT', OLD.id
+      USING ERRCODE = '23514', HINT = 'Alt fișier = alt rând: respinge rândul și urcă fișierul din nou.';
+  END IF;
+  RETURN NEW;
+END $f$;
+
+REVOKE EXECUTE ON FUNCTION public.ai_inbox_fisier_imutabil() FROM PUBLIC, anon, authenticated, service_role;
+
+COMMENT ON FUNCTION public.ai_inbox_fisier_imutabil() IS
+  '20261103c: BEFORE UPDATE pe ai_documente_inbox — refuză (23514) schimbarea fisier_path / uploadat_de / fisier_nume / fisier_size_bytes / fisier_mime (legătura rând ↔ obiect din storage).';
+
+CREATE TRIGGER trg_ai_inbox_fisier_imutabil
+  BEFORE UPDATE ON public.ai_documente_inbox
+  FOR EACH ROW EXECUTE FUNCTION public.ai_inbox_fisier_imutabil();
+
+-- 1–3. politicile bucket-ului: INSERT în folderul propriu, SELECT / DELETE pentru cine a urcat / poate confirma / owner, fără UPDATE
+DROP POLICY ai_inbox_obj_all ON storage.objects;
+
+CREATE POLICY ai_inbox_obj_insert ON storage.objects AS PERMISSIVE FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'ai-documente-inbox'
+    AND (SELECT auth.uid()) IS NOT NULL
+    AND ((storage.foldername(name))[1] = (SELECT auth.uid())::text
+         OR ((storage.foldername(name))[1] = 'wizard-angajare'
+             AND EXISTS (SELECT 1 FROM public.profiles p
+                          WHERE p.id = (SELECT auth.uid()) AND (p.is_owner = true OR p.can_access_personal_data = true)))));
+
+CREATE POLICY ai_inbox_obj_select ON storage.objects AS PERMISSIVE FOR SELECT TO authenticated
+  USING (
+    bucket_id = 'ai-documente-inbox'
+    AND (SELECT auth.uid()) IS NOT NULL
+    AND (owner_id = (SELECT auth.uid())::text
+         OR EXISTS (SELECT 1 FROM public.ai_documente_inbox i
+                     WHERE i.fisier_path = objects.name AND i.uploadat_de::text = objects.owner_id
+                       AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
+         OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner = true)));
+
+CREATE POLICY ai_inbox_obj_delete ON storage.objects AS PERMISSIVE FOR DELETE TO authenticated
+  USING (
+    bucket_id = 'ai-documente-inbox'
+    AND (SELECT auth.uid()) IS NOT NULL
+    AND (owner_id = (SELECT auth.uid())::text
+         OR EXISTS (SELECT 1 FROM public.ai_documente_inbox i
+                     WHERE i.fisier_path = objects.name AND i.uploadat_de::text = objects.owner_id
+                       AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
+         OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner = true)));
+
+DO $post$
+DECLARE
+  -- deparse-ul exact (search_path = public, pg_temp), cu spațiile albe comprimate la un singur spațiu
+  c_ins CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND (((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text) OR (((storage.foldername(name))[1] = ''wizard-angajare''::text) AND (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))))';
+  c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
+  v_fn oid := to_regprocedure('public.ai_inbox_fisier_imutabil()');
+BEGIN
+  IF current_setting('search_path') IS DISTINCT FROM 'public, pg_temp' THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: search_path schimbat în timpul migrării';
+  END IF;
+  -- exact trei politici ale patch-ului, cu comenzile / rolurile / expresiile așteptate; ai_inbox_obj_all nu mai există
+  IF (SELECT count(*) FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND starts_with(p.polname::text, 'ai_inbox_obj')) <> 3
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'ai_inbox_obj_insert'
+                    AND p.polcmd = 'a' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polqual IS NULL
+                    AND regexp_replace(pg_get_expr(p.polwithcheck, p.polrelid), '[[:space:]]+', ' ', 'g') = c_ins)
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'ai_inbox_obj_select'
+                    AND p.polcmd = 'r' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polwithcheck IS NULL
+                    AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_sel)
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'ai_inbox_obj_delete'
+                    AND p.polcmd = 'd' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polwithcheck IS NULL
+                    AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_sel) THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: politicile ai_inbox_obj_insert / _select / _delete lipsesc sau au altă definiție (sau a rămas ai_inbox_obj_all)';
+  END IF;
+  -- nicio politică UPDATE / ALL nu mai atinge bucket-ul
+  IF EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polcmd IN ('w', '*') AND p.polpermissive
+               AND position('ai-documente-inbox' IN coalesce(pg_get_expr(p.polqual, p.polrelid), '') || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')) > 0) THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: a rămas o politică UPDATE / ALL pe bucket-ul ai-documente-inbox';
+  END IF;
+  IF (SELECT pg_get_indexdef(to_regclass('public.idx_ai_inbox_fisier_path'))) IS DISTINCT FROM
+       'CREATE INDEX idx_ai_inbox_fisier_path ON public.ai_documente_inbox USING btree (fisier_path)' THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: indexul idx_ai_inbox_fisier_path lipsește sau are altă definiție';
+  END IF;
+  IF v_fn IS NULL
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = v_fn
+                AND (p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[] OR p.proacl IS NULL))
+     OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = v_fn AND a.grantee <> p.proowner) THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: funcția ai_inbox_fisier_imutabil nu e INVOKER / search_path fix / fără EXECUTE pentru roluri';
+  END IF;
+  -- tgtype 19 = ROW (1) + BEFORE (2) + UPDATE (16); fără UPDATE OF col, fără WHEN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgname = 'trg_ai_inbox_fisier_imutabil'
+                 AND t.tgrelid = 'public.ai_documente_inbox'::regclass AND t.tgfoid = v_fn AND NOT t.tgisinternal
+                 AND t.tgtype = 19 AND t.tgenabled <> 'D' AND t.tgqual IS NULL AND cardinality(t.tgattr::int2[]) = 0) THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: trigger-ul trg_ai_inbox_fisier_imutabil lipsește / dezactivat / altă definiție';
+  END IF;
+  IF (SELECT b.public FROM storage.buckets b WHERE b.id = 'ai-documente-inbox') IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: bucket-ul ai-documente-inbox nu mai e privat';
+  END IF;
+END $post$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261103c_ai_inbox_storage_politici:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261103c: garda de livrare (final) — marcajul s-a pierdut în timpul migrării; se anulează tot';
+  END IF;
+END $livrare_final$;
