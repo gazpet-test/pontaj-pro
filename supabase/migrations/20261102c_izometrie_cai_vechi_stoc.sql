@@ -141,6 +141,11 @@ BEGIN
            || public.fn_izo_proiecte_pachet_blocat(greatest(OLD.pachet_id, NEW.pachet_id));
       PERFORM public.fn_izo_lock_partajat(VARIADIC v);
       IF public.fn_izo_garda_scriitor() IS NOT TRUE THEN
+        -- rândul FOR UPDATE înainte de verificarea legăturii (Copilot #823 P1): UPDATE-ul pe pachet_id ține doar
+        -- NO KEY UPDATE, compatibil cu KEY SHARE-ul luat de FK-ul unei legări concurente (magazie_bucati.executie_teava_id);
+        -- FOR UPDATE conflictează cu el → o legare în curs e așteptată și apoi văzută (snapshot nou), una ulterioară
+        -- așteaptă mutarea. Legarea din registru (E4a) trebuie să blocheze rândul țevii FOR SHARE și să revalideze pachetul.
+        PERFORM 1 FROM public.executie_tevi t WHERE t.id = OLD.id FOR UPDATE;
         -- 20261102c: refuz doar dinspre/spre un proiect la nivelul montaj sau pentru un rând legat de registru
         IF EXISTS (SELECT 1 FROM unnest(v) x WHERE public.fn_izo_nivel(x) = 'montaj') THEN
           RAISE EXCEPTION 'izo: țevile nu se mută între pachete dinspre/spre un proiect la nivelul montaj' USING ERRCODE = '42501';
@@ -172,7 +177,7 @@ BEGIN
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
   -- cele 3 funcții: owner postgres, DEFINER, search_path fix, EXECUTE doar postgres, volatile
-  IF (SELECT count(*) FROM pg_proc p JOIN (VALUES ('fn_izo_refuz_delete_tevi', '6bbf5cbcf144e2e2503f339b2e49f5ca'), ('fn_izo_refuz_mutare_tevi', '52909bb8dfe2cf50083a52a2fd8ede78'), ('fn_izo_refuz_delete_pachet', '9b920ec26be971a54a2cd25dc4736698')) x(nume, md5) ON p.proname = x.nume
+  IF (SELECT count(*) FROM pg_proc p JOIN (VALUES ('fn_izo_refuz_delete_tevi', '6bbf5cbcf144e2e2503f339b2e49f5ca'), ('fn_izo_refuz_mutare_tevi', 'f871d1a04053f78be8b21018d8bb5db7'), ('fn_izo_refuz_delete_pachet', '9b920ec26be971a54a2cd25dc4736698')) x(nume, md5) ON p.proname = x.nume
        WHERE p.pronamespace = 'public'::regnamespace AND pg_get_function_identity_arguments(p.oid) = '' AND md5(p.prosrc) = x.md5
          AND pg_get_userbyid(p.proowner) = 'postgres' AND p.prosecdef AND p.provolatile = 'v'
          AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND p.proacl::text = '{postgres=X/postgres}') <> 3

@@ -6,6 +6,8 @@
 -- Efect pe LOT 2: ștergerea / mutarea rândurilor de pachet din ecranul vechi redevine refuzată.
 -- Pe producție (LOT 2 populat, registrul plin) ACEASTA e calea de revenire pentru 20261102c: revenirea E2a (20261102a)
 -- refuză oricum cu date reale, deci nu e o alternativă — întoarcerea la comportamentul E2a se face DOAR prin acest fișier.
+-- După revenire, rândul 20261102c din supabase_migrations.schema_migrations se șterge (altfel o relivrare îl vede
+-- „aplicat”); la fel dacă vreodată se revine E2a direct peste 20261102c (doar fără date).
 -- Procedura (un singur string):
 --   BEGIN;
 --   SELECT set_config('gazpet.revenire_20261102c', 'IZO_CAI_STOC_SCOATE:' || txid_current(), true);
@@ -21,7 +23,7 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261102c: rulează ca postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   -- cele 3 funcții: owner postgres, DEFINER, search_path fix, EXECUTE doar postgres, volatile
-  IF (SELECT count(*) FROM pg_proc p JOIN (VALUES ('fn_izo_refuz_delete_tevi', '6bbf5cbcf144e2e2503f339b2e49f5ca'), ('fn_izo_refuz_mutare_tevi', '52909bb8dfe2cf50083a52a2fd8ede78'), ('fn_izo_refuz_delete_pachet', '9b920ec26be971a54a2cd25dc4736698')) x(nume, md5) ON p.proname = x.nume
+  IF (SELECT count(*) FROM pg_proc p JOIN (VALUES ('fn_izo_refuz_delete_tevi', '6bbf5cbcf144e2e2503f339b2e49f5ca'), ('fn_izo_refuz_mutare_tevi', 'f871d1a04053f78be8b21018d8bb5db7'), ('fn_izo_refuz_delete_pachet', '9b920ec26be971a54a2cd25dc4736698')) x(nume, md5) ON p.proname = x.nume
        WHERE p.pronamespace = 'public'::regnamespace AND pg_get_function_identity_arguments(p.oid) = '' AND md5(p.prosrc) = x.md5
          AND pg_get_userbyid(p.proowner) = 'postgres' AND p.prosecdef AND p.provolatile = 'v'
          AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND p.proacl::text = '{postgres=X/postgres}') <> 3

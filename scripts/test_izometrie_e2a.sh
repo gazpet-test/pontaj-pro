@@ -402,6 +402,35 @@ cursa "4j2d mutare din client ținută, apoi montaj" "$CA_TOMA; UPDATE public.ex
 la_stoc
 ok "4j2 după 20261102c, curse cu barieră în ambele ordini: montaj ținut → DELETE / mutare din client așteaptă și e refuzată pe nivelul nou · DELETE / mutare ținute la stoc → trecerea pe montaj așteaptă, apoi trece, iar operația clientului rămâne aplicată"
 
+# 4j3. legarea în registru ↔ mutarea / ștergerea rândului din client (Copilot #823 P1), ambele ordini. Legarea o
+#      simulează writer-ul (UPDATE magazie_bucati.executie_teava_id, cu marcaj): FK-ul ei ia KEY SHARE pe rândul țevii;
+#      mutarea ia FOR UPDATE explicit în gardă, deci cele două se serializează
+q "BEGIN; $CA_TOMA; INSERT INTO public.executie_tevi (pachet_id, serie_unica, lungime_m) VALUES (201, 'LG1', 12), (201, 'LG2', 12), (201, 'LG3', 12), (201, 'LG4', 12); COMMIT;" >/dev/null
+id_t() { q "SELECT id FROM public.executie_tevi WHERE serie_unica = '$1'"; }
+REG1="$(q "SELECT id FROM public.magazie_bucati WHERE tip_cod = 'teava' AND executie_teava_id IS NULL AND stare <> 'anulata' ORDER BY id LIMIT 1")"
+REG2="$(q "SELECT id FROM public.magazie_bucati WHERE tip_cod = 'teava' AND executie_teava_id IS NULL AND stare <> 'anulata' ORDER BY id LIMIT 1 OFFSET 1")"
+[ -n "$REG1" ] && [ -n "$REG2" ] || esec "4j3 nu am bucăți de registru pentru legare"
+leaga() { echo "$CA_WRITER; UPDATE public.magazie_bucati SET executie_teava_id = $2 WHERE id = $1"; }
+dezleaga() { q "BEGIN; $CA_WRITER; UPDATE public.magazie_bucati SET executie_teava_id = NULL WHERE id IN ($REG1, $REG2); COMMIT;" >/dev/null; }
+cursa "4j3a mutare din client ținută, apoi legarea" "$CA_TOMA; UPDATE public.executie_tevi SET pachet_id = 202 WHERE serie_unica = 'LG1'" \
+  "BEGIN; $(leaga "$REG1" "$(id_t LG1)"); SELECT 'legat:' || executie_teava_id FROM public.magazie_bucati WHERE id = $REG1; COMMIT;" ok "legat:"
+[ "$(pachet_de LG1)" = 202 ] || esec "4j3a mutarea nu s-a aplicat"
+dezleaga
+cursa "4j3b legarea ținută, apoi mutarea din client" "$(leaga "$REG1" "$(id_t LG2)")" \
+  "BEGIN; $CA_TOMA; UPDATE public.executie_tevi SET pachet_id = 202 WHERE serie_unica = 'LG2'; COMMIT;" err "legat de o bucată din registru"
+[ "$(pachet_de LG2)" = 201 ] || esec "4j3b rândul legat s-a mutat"
+dezleaga
+cursa "4j3c legarea ținută, apoi ștergerea din client" "$(leaga "$REG2" "$(id_t LG3)")" \
+  "BEGIN; $CA_TOMA; DELETE FROM public.executie_tevi WHERE serie_unica = 'LG3'; COMMIT;" err "legat de o bucată din registru"
+[ "$(pachet_de LG3)" = 201 ] || esec "4j3c rândul legat a dispărut"
+dezleaga
+ID_LG4="$(id_t LG4)"
+cursa "4j3d ștergerea din client ținută, apoi legarea" "$CA_TOMA; DELETE FROM public.executie_tevi WHERE serie_unica = 'LG4'" \
+  "BEGIN; $(leaga "$REG2" "$ID_LG4"); COMMIT;" err "foreign key"
+[ "$(pachet_de LG4)" = sters ] && [ "$(q "SELECT count(*) FROM public.magazie_bucati WHERE executie_teava_id = $ID_LG4")" = 0 ] || esec "4j3d stare finală"
+dezleaga
+ok "4j3 legare în registru ↔ mutare / ștergere din client, ambele ordini: mutarea ținută → legarea așteaptă (FOR UPDATE ↔ KEY SHARE) · legarea ținută → mutarea / ștergerea așteaptă și e refuzată · ștergerea ținută → legarea așteaptă și pică pe FK"
+
 refuza_cu "5 reaplicare" "Precondiție 0b"
 ok "5 reaplicare → refuz"
 
