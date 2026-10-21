@@ -6,7 +6,7 @@ import {
   argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, randPentruRpc, manifestScan, cheieDubluraRand,
   normalizeazaSalvare, normalizeazaVerificare, normalizeazaConfirmare, normalizeazaPv, normalizeazaAnulare, lipsaReceptie, mesajEroareDoc,
   poateScrie, verificaCodCurba, randDinBd, antetDinBd, sha256Hex, SABLOANE, COLOANE, CHEI_ANTET, CHEI_RAND, CHEI_SCAN, BUCKET_SCANURI,
-  MAX_SCAN_OCTETI, RE_CALE_SCAN, caleScan, pregatesteScan, urcaScan, stergeScanObiect, linkScan,
+  MAX_SCAN_OCTETI, RE_CALE_SCAN, caleScan, pregatesteScan, urcaScan, stergeScanObiect, linkScan, eroareDefinitivaRpc, ataseazaScanSigur,
 } from './izoDocumenteLogica.js'
 
 // ── documentele de test pv_test (C:\Users\Public\claude-server\pv_test\gen\totals.json, 21.10.2026) ─────────────────
@@ -164,8 +164,9 @@ describe('documentele de test pv_test', () => {
     const d = docAviz2(); d.antet.total_m = '180.94'
     const v = validareDocument(d)
     expect(v.document.map(x => `${x.nivel}:${x.camp}`)).toContain('blocant:total_m')
-    const d2 = docCurbe(); d2.antet.total_net_kg = ''
-    expect(validareDocument(d2).document.map(x => x.camp)).toContain('total_net_kg')
+    const d2 = docCurbe(); d2.antet.total_net_kg = ''      // ca serverul: verificat doar dacă e scris → avertisment, nu blocant
+    expect(validareDocument(d2).document.map(x => `${x.nivel}:${x.camp}`)).toContain('avertisment:total_net_kg')
+    expect(validareDocument(d2).blocante).toBe(0)
     const d3 = docCurbe(); d3.antet.total_brut_kg = ''      // brutul e opțional („dacă e scris”)
     expect(validareDocument(d3).blocante).toBe(0)
   })
@@ -552,13 +553,158 @@ describe('scanurile: bucket izo-documente, cale <document>/<uuid v4>.pdf, fără
   })
 })
 
+describe('contractul RPC — fixture INDEPENDENT (listele copiate din E3_CONTRACT_RPC.md, nu din constantele implementării)', () => {
+  const s = l => [...l].sort()
+  const ANTET_CREARE = ['proiect_id', 'depozit_id', 'sablon'], ANTET_INLOCUIRE = ['inlocuieste_document_id', 'motiv_inlocuire']
+  const ANTET_COMUNE = ['furnizor', 'furnizor_cif', 'nr_document', 'data_document', 'observatii']
+  const ANTET_AVIZ = ['cumparator', 'transport_nr', 'nume_proiect', 'lot', 'loc_livrare', 'data_incarcare', 'data_descarcare', 'nr_camion', 'total_m', 'total_kg']
+  const ANTET_CURBE = ['factura', 'importator', 'destinatar', 'referinta_client', 'referinta_furnizor', 'placa_camion_container', 'total_bucati',
+    'total_pachete', 'total_net_kg', 'total_brut_kg']
+  const RAND_COMUNE = ['nr_crt', 'serie', 'sarja', 'lot', 'specificatie', 'dimensiune', 'grad_otel', 'standard', 'izolatie', 'diametru_mm', 'perete_mm',
+    'greutate_kg', 'decizie', 'motiv', 'observatie']
+  const RAND_TEAVA = ['lungime_doc_mm', 'lungime_masurata_mm']
+  const RAND_CURBE = ['cod', 'item', 'unghi_doc', 'unghi_masurat', 'cantitate', 'pachet_nr', 'dimensiuni_cm', 'net_kg', 'brut_kg']
+  const SCAN = ['cale', 'sha256_original', 'sha256_pdf', 'marime', 'mime']
+  it('fn_izo_doc_salveaza: creare / creare cu înlocuire / editare / rânduri / manifest — exact cheile contractului', () => {
+    expect(chei(argumenteSalveaza(docAviz1()))).toEqual(['p_antet', 'p_doc_id', 'p_randuri', 'p_scanuri', 'p_versiune'])
+    expect(chei(argumenteSalveaza(docAviz1()).p_antet)).toEqual(s([...ANTET_CREARE, ...ANTET_COMUNE, ...ANTET_AVIZ]))
+    expect(chei(argumenteSalveaza({ ...docCurbe(), inlocuieste_document_id: 3, motiv_inlocuire: 'nr. greșit' }).p_antet))
+      .toEqual(s([...ANTET_CREARE, ...ANTET_INLOCUIRE, ...ANTET_COMUNE, ...ANTET_CURBE]))
+    expect(chei(argumenteSalveaza({ ...docAviz1(), id: 3, versiune: 2, inlocuieste_document_id: 1, motiv_inlocuire: 'abc' }).p_antet))
+      .toEqual(s([...ANTET_COMUNE, ...ANTET_AVIZ]))
+    expect(chei(argumenteSalveaza(docAviz1()).p_randuri[0])).toEqual(s([...RAND_COMUNE, ...RAND_TEAVA]))
+    expect(chei(argumenteSalveaza(docCurbe()).p_randuri[0])).toEqual(s([...RAND_COMUNE, ...RAND_CURBE]))
+    const d = { ...docAviz1(), id: 12, versiune: 4, scanuri: [scan(12, UUID1)] }
+    expect(chei(argumenteSalveaza(d, { scanuri: d.scanuri }).p_scanuri[0])).toEqual(s(SCAN))
+  })
+  it('confirma / pv / anuleaza_draft: exact argumentele contractului', () => {
+    expect(chei(argumenteConfirma(1, { versiune: 1, hash: 'h' }))).toEqual(['p_doc_id', 'p_hash', 'p_versiune'])
+    expect(chei(argumentePv({ id: 1, versiune: 1 }, 'PV', '2026-10-23'))).toEqual(['p_doc_id', 'p_pv_data', 'p_pv_nr', 'p_versiune'])
+    expect(chei(argumenteAnuleazaDraft({ id: 1, versiune: 1 }, 'abc'))).toEqual(['p_doc_id', 'p_motiv', 'p_versiune'])
+  })
+})
+
+describe('blocantele serverului (fn_izo_doc_blocante) oglindite local — review #826 r1', () => {
+  const rn = (extra, base = randAviz(AVIZ2[10])) => randNormalizat({ ...base, ...extra }, 'aviz_teava')
+  const niv = v => v.map(x => `${x.nivel}:${x.camp}`)
+  it('motivul refuzului / neconformității: cel puțin 3 caractere după trim (motiv_lipsa)', () => {
+    expect(niv(validareRand(rn({ decizie: 'refuzat_la_receptie', motiv: ' x ' }), 'aviz_teava'))).toContain('blocant:motiv')
+    expect(niv(validareRand(rn({ decizie: 'primit_neconform', motiv: 'ab' }), 'aviz_teava'))).toContain('blocant:motiv')
+    expect(validareRand(rn({ decizie: 'primit_neconform', motiv: 'abc' }), 'aviz_teava')).toEqual([])
+    // un motiv prea scurt nu „explică” nici diferența peste toleranță
+    expect(niv(validareRand(rn({ decizie: 'primit_neconform', motiv: 'ab', lungime_masurata: '12.19' }), 'aviz_teava'))).toContain('blocant:observatie')
+  })
+  it('peretele lipsă: blocant la primit / neconform (perete_lipsa), doar avertisment la refuzat', () => {
+    expect(niv(validareRand(rn({ perete_mm: '' }), 'aviz_teava'))).toContain('blocant:perete_mm')
+    expect(niv(validareRand(rn({ perete_mm: '', decizie: 'primit_neconform', motiv: 'izolație lovită' }), 'aviz_teava'))).toContain('blocant:perete_mm')
+    expect(niv(validareRand(rn({ perete_mm: '', decizie: 'refuzat_la_receptie', motiv: 'fără marcaj' }), 'aviz_teava'))).toEqual(['avertisment:perete_mm'])
+  })
+  it('pachetele: DISTINCT pe valoarea scrisă (ca count(DISTINCT pachet_nr)) — „P-1” și „P1” sunt două', () => {
+    const r = [randNormalizat({ ...randCurba(CURBE[0]), pachet_nr: 'P-1' }, 'lista_ambalare_curbe'), randNormalizat({ ...randCurba(CURBE[1]), pachet_nr: 'P1' }, 'lista_ambalare_curbe'),
+      randNormalizat({ ...randCurba(CURBE[2]), pachet_nr: ' P1 ' }, 'lista_ambalare_curbe')]
+    expect(totaluriDocument('lista_ambalare_curbe', {}, r).pachete).toBe(2)
+  })
+  it('totalurile: total_m / total_bucati obligatorii; kg / pachete / net / brut doar dacă sunt scrise (avertisment când lipsesc)', () => {
+    const a = docAviz1(); a.antet.total_kg = ''
+    expect(validareDocument(a).blocante).toBe(0)
+    expect(niv(validareDocument(a).document)).toContain('avertisment:total_kg')
+    const b = docAviz1(); b.antet.total_m = ''
+    expect(niv(validareDocument(b).document)).toContain('blocant:total_m')
+    const c = docCurbe(); c.antet.total_pachete = ''; c.antet.total_net_kg = ''
+    expect(validareDocument(c).blocante).toBe(0)
+    const e = docCurbe(); e.antet.total_bucati = ''
+    expect(niv(validareDocument(e).document)).toContain('blocant:total_bucati')
+    const f = docAviz1(); f.antet.total_kg = '10,193'   // scris greșit → blocant (ca serverul)
+    expect(niv(validareDocument(f).document)).toContain('blocant:total_kg')
+  })
+  it('kg cu cel mult o zecimală: fără rotunjire tăcută (blocant în ecran și la salvare); totalurile la precizia coloanei', () => {
+    expect(niv(validareRand(rn({ greutate_kg: '672,55' }), 'aviz_teava'))).toContain('blocant:greutate_kg')
+    const d = docAviz1(); d.randuri[0].greutate_kg = '672.55'
+    expect(eroriSalvare(d)).toContain('Rândul 1: greutatea are cel mult o zecimală.')
+    expect(randPentruRpc(rn({ greutate_kg: '672,5' }), 'aviz_teava').greutate_kg).toBe(672.5)
+    const c = docCurbe(); c.randuri[0].net_kg = '1132,25'
+    expect(eroriSalvare(c)).toContain('Rândul 1: greutatea netă are cel mult o zecimală.')
+    const t = docAviz1(); t.antet.total_m = '90,7505'; t.antet.total_kg = '10192,25'
+    expect(eroriSalvare(t)).toEqual(['„Total metri” are prea multe zecimale (3 cel mult).', '„Total kg” are prea multe zecimale (1 cel mult).'])
+  })
+})
+
+describe('atașarea scanului: ștergerea fișierului doar când e sigur în afara manifestului — review #826 r1', () => {
+  const S0 = { cale: `12/${UUID1}.pdf`, pdf: 'blob' }
+  const stor = (upload = { data: {}, error: null }, remove = null) => {
+    const apeluri = []
+    return { apeluri, from: () => ({
+      upload: async () => { apeluri.push('upload'); return upload },
+      remove: async a => { apeluri.push('remove'); return remove ?? { data: [{ name: a[0] }], error: null } },
+    }) }
+  }
+  const sal = (st, rasp) => async () => { st.apeluri.push('salveaza'); if (rasp instanceof Error) throw rasp; return rasp }
+  it('eroareDefinitivaRpc: excepție Postgres / cod PostgREST / 4xx = definitiv; transport / 5xx fără cod / 408 = ambiguu', () => {
+    for (const [e, st] of [[{ code: '40001' }, 500], [{ code: '23514' }, 400], [{ code: '42501' }, 403], [{ code: 'P0001' }, 400], [{ code: '22023' }, 400],
+      [{ code: '25001' }, 500], [{ code: 'PGRST202' }, 404], [{ message: 'x' }, 409]]) expect(eroareDefinitivaRpc(e, st)).toBe(true)
+    for (const [e, st] of [[{ message: 'TypeError: Failed to fetch', code: '' }, 0], [{ message: 'x' }, 500], [{ message: 'x' }, 502], [{ message: 'x' }, 504],
+      [{ message: 'x' }, 408], [{ message: 'x' }, undefined]]) expect(eroareDefinitivaRpc(e, st)).toBe(false)
+  })
+  it('succes: întâi upload, apoi salvarea; nimic șters', async () => {
+    const st = stor()
+    const r = await ataseazaScanSigur({ storage: st, scan: S0, salveaza: sal(st, { data: { document_id: 12 }, error: null, status: 200 }) })
+    expect(r).toMatchObject({ rez: 'atasat', data: { document_id: 12 }, orfan: null })
+    expect(st.apeluri).toEqual(['upload', 'salveaza'])
+  })
+  it('salvare refuzată DEFINITIV (23514 / 40001) → fișierul (în afara manifestului) se șterge', async () => {
+    for (const err of [{ code: '23514', message: 'scan' }, { code: '40001', message: 's-a schimbat' }]) {
+      const st = stor()
+      const r = await ataseazaScanSigur({ storage: st, scan: S0, salveaza: sal(st, { data: null, error: err, status: 400 }) })
+      expect(r).toMatchObject({ rez: 'nesalvat', error: err, orfan: null })
+      expect(st.apeluri).toEqual(['upload', 'salveaza', 'remove'])
+    }
+  })
+  it('salvare AMBIGUĂ (transport căzut / 504 / excepție) → fișierul RĂMÂNE (salvarea poate fi încă în zbor)', async () => {
+    for (const rasp of [{ data: null, error: { message: 'TypeError: Failed to fetch', code: '' }, status: 0 }, { data: null, error: { message: 'Gateway Timeout' }, status: 504 },
+      new Error('rețea')]) {
+      const st = stor()
+      const r = await ataseazaScanSigur({ storage: st, scan: S0, salveaza: sal(st, rasp) })
+      expect(r).toMatchObject({ rez: 'necunoscut', orfan: S0.cale })
+      expect(st.apeluri).toEqual(['upload', 'salveaza'])
+    }
+  })
+  it('upload eșuat: definitiv (4xx) → fără salvare, fără ștergere; ambiguu (fără status / 5xx) → fără salvare, ștergere best-effort', async () => {
+    const st1 = stor({ data: null, error: { message: 'new row violates row-level security policy', status: 403 } })
+    expect(await ataseazaScanSigur({ storage: st1, scan: S0, salveaza: sal(st1, {}) })).toMatchObject({ rez: 'nesalvat', orfan: null })
+    expect(st1.apeluri).toEqual(['upload'])
+    const st2 = stor({ data: null, error: { message: 'Failed to fetch' } }, { data: [], error: null })   // obiectul nu există (încă)
+    expect(await ataseazaScanSigur({ storage: st2, scan: S0, salveaza: sal(st2, {}) })).toMatchObject({ rez: 'nesalvat', orfan: S0.cale })
+    expect(st2.apeluri).toEqual(['upload', 'remove'])
+    const st3 = stor({ data: null, error: { message: 'Internal', status: 500 } })
+    expect(await ataseazaScanSigur({ storage: st3, scan: S0, salveaza: sal(st3, {}) })).toMatchObject({ rez: 'nesalvat', orfan: null })
+    expect(st3.apeluri).toEqual(['upload', 'remove'])
+  })
+})
+
 describe('componenta IzoDocumenteIntrare.jsx (sursa): doar contractul', () => {
   const src = readFileSync(new URL('./IzoDocumenteIntrare.jsx', import.meta.url), 'utf8')
   it('nicio referință la bucket-ul `avize`; Storage doar prin ajutoarele cu BUCKET_SCANURI', () => {
     expect(src).not.toMatch(/['"`]avize['"`]/)
     expect(src).not.toMatch(/storage\s*\.\s*from\s*\(/)
-    expect(src).toMatch(/urcaScan\(supabase\.storage/)
+    expect(src).toMatch(/ataseazaScanSigur\(\{ storage: supabase\.storage/)   // upload + salvare + curățenie: ordinea testată pe ajutor
+    expect(src).not.toMatch(/urcaScan\(/)
     expect(src).toMatch(/stergeScanObiect\(supabase\.storage/)
+  })
+  it('scoaterea scanului: întâi salvarea fără el, abia apoi DELETE pe obiect; la eroare (inclusiv ambiguă) fără DELETE', () => {
+    const corp = src.slice(src.indexOf('const scoateScan'), src.indexOf('const vedeScan'))
+    expect(corp.indexOf(".rpc('fn_izo_doc_salveaza'")).toBeGreaterThan(-1)
+    expect(corp.indexOf('stergeScanObiect(')).toBeGreaterThan(corp.indexOf(".rpc('fn_izo_doc_salveaza'"))
+    expect(corp).toMatch(/if \(error\) \{[^}]*throw error \}/)   // eroarea iese înainte de DELETE
+  })
+  it('review #826 r1: editorul ia doar ultima încărcare; CAS pierdut → conflict; depozite active; „în pregătire” doar până la prima listă', () => {
+    expect(src).toMatch(/const c = \+\+cerereEd\.current/)
+    expect((src.match(/if \(c !== cerereEd\.current\) return null/g) || []).length).toBe(2)
+    expect(src).toMatch(/if \(e40001\(error\) && doc\.id\) marcheazaConflict\(doc\.id\)/)
+    expect(src).toMatch(/if \(doc\.conflict\)/)
+    expect(src).toMatch(/d\.site_id === proiect\.site_id && d\.activ === true/)
+    expect(src).toMatch(/select\('id, name, cod_3litere, site_id, activ'\)/)
+    expect(src).toMatch(/!sondaGata\.current && lipsaReceptie\(e\)/)
+    expect(src).toMatch(/golesteLista\(\)\s*\n\s*if \(!sondaGata/)   // la eșec lista veche (alt proiect) dispare
   })
   it('RPC-urile chemate = cele din contract (fără anularea administrativă), salvarea doar cu argumenteSalveaza', () => {
     const rpc = [...src.matchAll(/\.rpc\(\s*'([^']+)'/g)].map(m => m[1])

@@ -16,7 +16,7 @@ import {
   SABLOANE, DECIZII, COLOANE, IZOLATII, esteCurba, parseNumar, fmtNr, fmtM, randGol, validareDocument, eroriSalvare, eroriPv, eroareMotiv,
   randuriDinLipire, randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, normalizeazaSalvare,
   normalizeazaVerificare, normalizeazaConfirmare, normalizeazaPv, normalizeazaAnulare, listaServer, lipsaReceptie, mesajEroareDoc, poateScrie,
-  pregatesteScan, urcaScan, stergeScanObiect, linkScan,
+  pregatesteScan, ataseazaScanSigur, stergeScanObiect, linkScan,
 } from './izoDocumenteLogica.js'
 
 const G = {
@@ -98,7 +98,10 @@ export default function IzoDocumenteIntrare() {
   const [pv, setPv] = useState(null)          // { nr, data }
   const [anulare, setAnulare] = useState(null) // { motiv }
   const [rezultat, setRezultat] = useState(null) // { titlu, avertismente } — după confirmare / PV
-  const ultima = useRef(0)
+  const ultima = useRef(0)       // ultima cerere de listă (doar ea se aplică)
+  const listaPid = useRef(null)  // proiectul listei afișate (lista altui proiect nu rămâne sub selector)
+  const sondaGata = useRef(false) // după prima listă încărcată, „în pregătire” nu mai e permis: erorile se arată brut (review #826 r1)
+  const cerereEd = useRef(0)     // ultima (re)încărcare a editorului: un răspuns întârziat nu suprascrie alt document / un document nou
 
   const flash = useCallback((tip, text) => { setMsg({ tip, text }); if (tip === 'ok') setTimeout(() => setMsg(m => (m?.text === text ? null : m)), 7000) }, [])
   const inPregatire = useCallback(() => setSt({ incarc:false, eroare:null, neinstalat:true }), [])
@@ -113,7 +116,7 @@ export default function IzoDocumenteIntrare() {
         supabase.from('izo_documente_intrare').select('id').limit(1),     // sonda: tabelele E3 există?
         supabase.rpc('fn_izo_proiecte_protejate'),
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id').order('id'),
-        supabase.from('logistica_depozite').select('id, name, cod_3litere, site_id').order('id'),
+        supabase.from('logistica_depozite').select('id, name, cod_3litere, site_id, activ').order('id'),
         supabase.from('profiles').select('id, is_owner').eq('id', user.id).maybeSingle(),
         supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'magazie').maybeSingle(),
         supabase.from('izo_atribuiri').select('proiect_id, depozit_id, rol, activ, valabil_de, valabil_pana').eq('profile_id', user.id).eq('activ', true),
@@ -138,10 +141,13 @@ export default function IzoDocumenteIntrare() {
   }, [inPregatire])
   useEffect(() => { incarca() }, [incarca])
 
-  // ── lista documentelor proiectului (tot sonda: aici „în pregătire” e permis); doar ultima cerere se aplică ──
+  // ── lista documentelor proiectului: doar ultima cerere se aplică; „în pregătire” doar la PRIMA listă (sonda), apoi erorile se arată
+  // brut; la schimbarea proiectului / la eșec lista veche dispare (nu rămân documentele proiectului A sub selectorul proiectului B) ──
+  const golesteLista = () => { setDocs([]); setStatDocs({}); listaPid.current = null }
   const incarcaDocs = useCallback(async (pid) => {
     const c = ++ultima.current
-    if (!pid) { setDocs([]); setStatDocs({}); return }
+    if (!pid || listaPid.current !== pid) golesteLista()
+    if (!pid) return
     setIncarcDocs(true)
     try {
       const data = await citestePaginat(() => supabase.from('izo_documente_intrare').select('*').eq('proiect_id', pid), 'id')
@@ -156,37 +162,44 @@ export default function IzoDocumenteIntrare() {
           s.n++; s[r.decizie] = (s[r.decizie] || 0) + 1
         }
       }
-      setDocs(data); setStatDocs(stat)
+      setDocs(data); setStatDocs(stat); listaPid.current = pid; sondaGata.current = true
     } catch (e) {
       console.error(e)
       if (c !== ultima.current) return
-      if (lipsaReceptie(e)) { inPregatire(); return }
+      golesteLista()
+      if (!sondaGata.current && lipsaReceptie(e)) { inPregatire(); return }
       flash('err', 'Eroare la încărcarea documentelor: ' + mesajEroareDoc(e))
     } finally { if (c === ultima.current) setIncarcDocs(false) }
   }, [flash, inPregatire])
   useEffect(() => { if (!st.incarc && !st.neinstalat) incarcaDocs(proiectId) }, [proiectId, st.incarc, st.neinstalat, incarcaDocs])
 
-  // ── editorul: (re)încărcarea documentului; întoarce editorul nou sau null (atunci editorul curent devine „stale”) ──
+  // ── editorul: (re)încărcarea documentului; întoarce editorul nou sau null (atunci editorul curent devine „stale”). Doar ultima
+  // cerere se aplică (cerereEd): un răspuns întârziat pentru A nu suprascrie documentul B deschis / editat între timp (review #826 r1) ──
   const deschide = useCallback(async (id) => {
+    const c = ++cerereEd.current
     setBusy(true)
     try {
       const { d, randuri, scanuri } = await citesteDocument(id)
+      if (c !== cerereEd.current) return null
       const nou = { id:d.id, versiune:d.versiune, stare:d.stare, sablon:d.sablon, proiect_id:d.proiect_id, depozit_id:d.depozit_id, bd:d,
         inlocuieste_document_id: d.inlocuieste_document_id ?? '', motiv_inlocuire: d.motiv_inlocuire ?? '',
-        antet: antetDinBd(d), randuri: randuri.map(r => ({ _k:uid8(), ...randDinBd(r) })), scanuri, dirty:false, stale:null }
+        antet: antetDinBd(d), randuri: randuri.map(r => ({ _k:uid8(), ...randDinBd(r) })), scanuri, dirty:false, stale:null, conflict:false }
       setEd(nou); setVerif(null)
       return nou
     } catch (e) {
       console.error(e)
+      if (c !== cerereEd.current) return null
       setVerif(null)
       setEd(x => (x && (x.id === id || x.id == null) ? { ...x, stale:id } : x))   // fără confirmare pe o stare care nu s-a putut reciti
       flash('err', 'Documentul nu s-a putut (re)încărca: ' + mesajEroareDoc(e)); return null
-    } finally { setBusy(false) }
+    } finally { if (c === cerereEd.current) setBusy(false) }
   }, [flash])
-  const deschideDinLista = id => { setRezultat(null); setMsg(null); deschide(id) }
+  const deschideDinLista = id => { if (busy) return; setRezultat(null); setMsg(null); deschide(id) }
 
   const proiect = proiecte.find(p => p.id === proiectId)
-  const depoziteProiect = useMemo(() => depozite.filter(d => proiect && d.site_id === proiect.site_id), [depozite, proiect])
+  // depozitele în care se poate crea un document: pe site-ul proiectului ȘI active (serverul, fn_izo_loc_valid, cere d.activ);
+  // denumirile (depNume) rămân pentru toate, ca documentele existente pe un depozit dezactivat să se vadă corect
+  const depoziteProiect = useMemo(() => depozite.filter(d => proiect && d.site_id === proiect.site_id && d.activ === true), [depozite, proiect])
   const depNume = useMemo(() => Object.fromEntries(depozite.map(d => [d.id, d.cod_3litere ? `${d.cod_3litere} — ${d.name}` : d.name])), [depozite])
   const scrie = useCallback((pid, did) => poateScrie({ owner:eu.owner, nivelMagazie:eu.nivelMagazie, atribuiri:eu.atribuiri, proiectId:pid, depozitId:did, azi:aziLocal() }), [eu])
   const depoziteScriere = useMemo(() => depoziteProiect.filter(d => scrie(proiectId, d.id)), [depoziteProiect, scrie, proiectId])
@@ -199,10 +212,12 @@ export default function IzoDocumenteIntrare() {
   }, [docs])
 
   const nou = sablon => {
+    if (busy) return
+    ++cerereEd.current   // o (re)încărcare întârziată nu mai înlocuiește documentul nou
     const s = SABLOANE[sablon], antet = { furnizor:'', furnizor_cif:'', nr_document:'', data_document:'', observatii:'' }
     for (const [c] of [...s.antet, ...s.totaluri]) antet[c] = ''
     setEd({ id:null, versiune:null, stare:'draft', sablon, proiect_id:proiectId, depozit_id: depoziteScriere.length === 1 ? depoziteScriere[0].id : '',
-      antet, randuri:[{ _k:uid8(), ...randGol(sablon, 1) }], scanuri:[], dirty:true, stale:null, inlocuieste_document_id:'', motiv_inlocuire:'' })
+      antet, randuri:[{ _k:uid8(), ...randGol(sablon, 1) }], scanuri:[], dirty:true, stale:null, conflict:false, inlocuieste_document_id:'', motiv_inlocuire:'' })
     setVerif(null); setRezultat(null); setMsg(null)
   }
   const modifica = fn => { setEd(e => ({ ...fn(e), dirty:true })); setVerif(null) }
@@ -212,20 +227,35 @@ export default function IzoDocumenteIntrare() {
   const adaugaRand = () => modifica(e => ({ ...e, randuri:[...e.randuri, { _k:uid8(), ...randGol(e.sablon, nrMax(e) + 1, e.randuri[e.randuri.length - 1]) }] }))
   const stergeRand = i => modifica(e => ({ ...e, randuri:e.randuri.filter((_, j) => j !== i) }))
   const inchide = () => {
+    if (busy) return
     if (ed?.dirty && !window.confirm('Ai modificări nesalvate. Închizi fără să salvezi?')) return
+    ++cerereEd.current
     setEd(null); setVerif(null); setLipire(null); setPv(null); setAnulare(null); setRezultat(null)
   }
   const e40001 = e => String(e?.code || '') === '40001'
+  // CAS pierdut la salvare (40001): editorul rămâne cu modificările din ecran, dar salvarea / verificarea / scanurile se opresc până la
+  // reîncărcarea versiunii serverului (altfel „Verifică” ar re-salva aceeași versiune veche în buclă — review #826 r1)
+  const marcheazaConflict = id => setEd(x => (x && x.id === id ? { ...x, conflict:true } : x))
+  const reincarcaDupaConflict = () => {
+    if (ed?.dirty && !window.confirm('Reîncarci versiunea de pe server? Modificările tale nesalvate din ecran se pierd (copiază-le înainte, dacă ai nevoie de ele).')) return
+    deschide(ed.id)
+  }
 
   // ── acțiunile (toate prin RPC; erorile se arată brut, draftul rămâne) ──
+  // oprește operațiile de scriere pe un editor care nu mai reflectă serverul (reîncărcare eșuată / CAS pierdut)
+  const opritScriere = doc => {
+    if (doc.stale) { flash('err', 'Reîncarcă documentul înainte de salvare.'); return true }
+    if (doc.conflict) { flash('err', 'Documentul s-a schimbat pe server între timp — apasă „Reîncarcă versiunea serverului”, apoi refă modificările.'); return true }
+    return false
+  }
   const salveaza = async (doc = ed) => {
-    if (doc.stale) { flash('err', 'Reîncarcă documentul înainte de salvare.'); return null }
+    if (opritScriere(doc)) return null
     const err = eroriSalvare(doc)
     if (err.length) { flash('err', err.join(' ')); return null }
     setBusy(true); setVerif(null)
     try {
       const { data, error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza(doc))
-      if (error) throw error
+      if (error) { if (e40001(error) && doc.id) marcheazaConflict(doc.id); throw error }
       const r = normalizeazaSalvare(data, doc.id || null)
       const nouEd = await deschide(r.document_id)
       incarcaDocs(proiectId)
@@ -236,6 +266,7 @@ export default function IzoDocumenteIntrare() {
 
   const verifica = async () => {
     let cur = ed
+    if (opritScriere(cur)) return
     if (!cur.id || cur.dirty) { cur = await salveaza(); if (!cur) return }
     setBusy(true)
     try {
@@ -256,7 +287,8 @@ export default function IzoDocumenteIntrare() {
   const edRol = !!ed && scrie(ed.proiect_id, ed.depozit_id)
   const edScrie = !!ed && !ed.stale && ed.stare === 'draft' && (ed.id ? edRol : depoziteScriere.length > 0)
   const verifCurenta = !!verif && !!ed && !ed.dirty && !ed.stale && verif.docId === ed.id && verif.versiune === Number(ed.versiune)
-  const motivConfirma = !ed ? '' : ed.stale ? 'documentul nu s-a putut reîncărca — apasă „Reîncarcă”' : !ed.id ? 'salvează draftul și apasă „Verifică”'
+  const motivConfirma = !ed ? '' : ed.stale ? 'documentul nu s-a putut reîncărca — apasă „Reîncarcă”'
+    : ed.conflict ? 'documentul s-a schimbat pe server — apasă „Reîncarcă versiunea serverului”' : !ed.id ? 'salvează draftul și apasă „Verifică”'
     : ed.stare !== 'draft' ? 'documentul nu e draft'
     : !edRol ? 'doar gestionarul depozitului documentului sau owner-ul confirmă' : ed.dirty ? 'ai modificări nesalvate — apasă „Verifică”'
     : val?.blocante ? `${val.blocante} probleme blocante în ecran (roșu)` : !verif ? 'apasă întâi „Verifică”'
@@ -320,38 +352,44 @@ export default function IzoDocumenteIntrare() {
     } catch (e) { console.error(e); flash('err', 'Anulare eșuată: ' + mesajEroareDoc(e)) } finally { setBusy(false) }
   }
 
-  // scanul: fișierul în `izo-documente` (fără upsert), apoi salvarea cu manifestul ÎNTREG; la eșecul salvării fișierul orfan se șterge
+  // scanul: fișierul în `izo-documente` (fără upsert), apoi salvarea cu manifestul ÎNTREG (ataseazaScanSigur). Fișierul se șterge
+  // doar când e sigur în afara oricărui manifest (upload ambiguu / salvare refuzată definitiv); la o salvare cu răspuns AMBIGUU
+  // rămâne și documentul se reîncarcă (manifestul reîncărcat arată adevărul) — review #826 r1
   const adaugaScan = async fisier => {
     if (!fisier) return
     if (!ed.id) { flash('err', 'Salvează întâi draftul — scanul se atașează unui document salvat.'); return }
+    if (opritScriere(ed)) return
     const err = eroriSalvare(ed); if (err.length) { flash('err', err.join(' ')); return }
-    const id = ed.id
+    const id = ed.id, doc = ed
     setBusy(true); setVerif(null)
-    let orfan = null
     try {
       const s = await pregatesteScan(id, fisier, { imageToPdf })
-      await urcaScan(supabase.storage, s)
-      orfan = s.cale
-      const { data, error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza(ed, { scanuri:[...ed.scanuri, s] }))
-      if (error) throw error
-      orfan = null
-      const reincarcat = await deschide(id); incarcaDocs(proiectId)
-      normalizeazaSalvare(data, id)
-      if (reincarcat) flash('ok', `Scan atașat${ed.dirty ? ' (și modificările din ecran au fost salvate)' : ''}. Hash-ul e declarat de client până la verificarea pe server.`)
+      const r = await ataseazaScanSigur({ storage: supabase.storage, scan: s,
+        salveaza: () => supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza(doc, { scanuri:[...doc.scanuri, s] })) })
+      if (r.orfan) console.warn('izo E3: scan posibil orfan în stocare', r.orfan)
+      if (r.rez === 'atasat') {
+        const reincarcat = await deschide(id); incarcaDocs(proiectId)
+        normalizeazaSalvare(r.data, id)
+        if (reincarcat) flash('ok', `Scan atașat${doc.dirty ? ' (și modificările din ecran au fost salvate)' : ''}. Hash-ul e declarat de client până la verificarea pe server.`)
+      } else if (r.rez === 'nesalvat') {
+        if (e40001(r.error)) marcheazaConflict(id)
+        flash('err', 'Scanul nu s-a atașat: ' + mesajEroareDoc(r.error))
+      } else {
+        await deschide(id); incarcaDocs(proiectId)
+        flash('err', `Nu știu sigur dacă scanul s-a atașat (răspunsul serverului s-a pierdut: ${mesajEroareDoc(r.error)}). Documentul a fost reîncărcat — dacă scanul nu apare în listă, atașează-l din nou; fișierul ${r.orfan} rămâne în stocare.`)
+      }
     } catch (e) { console.error(e); flash('err', 'Scanul nu s-a atașat: ' + mesajEroareDoc(e)) }
-    finally {
-      if (orfan && !(await stergeScanObiect(supabase.storage, orfan))) console.warn('izo E3: scan orfan rămas în stocare', orfan)
-      setBusy(false)
-    }
+    finally { setBusy(false) }
   }
   const scoateScan = async s => {
+    if (opritScriere(ed)) return
     if (!window.confirm('Scoți scanul din document? Fișierul se șterge după ce documentul e salvat fără el.')) return
     const err = eroriSalvare(ed); if (err.length) { flash('err', err.join(' ')); return }
     const id = ed.id
     setBusy(true); setVerif(null)
     try {
       const { data, error } = await supabase.rpc('fn_izo_doc_salveaza', argumenteSalveaza(ed, { scanuri:ed.scanuri.filter(x => x.cale !== s.cale) }))
-      if (error) throw error
+      if (error) { if (e40001(error)) marcheazaConflict(id); throw error }   // fără DELETE: obiectul poate fi încă în manifest
       const sters = await stergeScanObiect(supabase.storage, s.cale)   // abia acum: un obiect din manifest nu se poate șterge
       const reincarcat = await deschide(id); incarcaDocs(proiectId)
       normalizeazaSalvare(data, id)
@@ -397,14 +435,14 @@ export default function IzoDocumenteIntrare() {
   if (!ed) return (
     <div>
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:12 }}>
-        <select style={{ ...S.input, maxWidth:360 }} value={proiectId || ''} onChange={e => setProiectId(Number(e.target.value))}>
+        <select style={{ ...S.input, maxWidth:360 }} value={proiectId || ''} onChange={e => setProiectId(Number(e.target.value))} disabled={busy}>
           {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? `${p.cod_intern} · ` : ''}{p.nume}</option>)}
         </select>
         <div style={{ flex:1, fontSize:12, color:G.muted, minWidth:220 }}>
           Avizele de țeavă și listele de ambalare ale curbelor. După „Confirmă recepția” bucățile intră în registru și apar în 🧱 Țeavă proiecte.
         </div>
         {depoziteScriere.length > 0 && Object.entries(SABLOANE).map(([k, s]) => (
-          <button key={k} style={{ ...S.btnS, color:G.green, borderColor:G.green + '66' }} onClick={() => nou(k)}>+ {s.emoji} {s.label}</button>
+          <button key={k} style={{ ...S.btnS, color:G.green, borderColor:G.green + '66' }} onClick={() => nou(k)} disabled={busy}>+ {s.emoji} {s.label}</button>
         ))}
         <button style={S.btnS} onClick={() => incarcaDocs(proiectId)} disabled={incarcDocs}>🔄</button>
       </div>
@@ -436,7 +474,7 @@ export default function IzoDocumenteIntrare() {
                   <td style={{ ...S.td, padding:'8px 10px', color:G.muted }}>{tot}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color:sm.color, fontWeight:700 }}>{sm.label}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color: pvTxt === '—' ? G.dim : G.green }}>{pvTxt}</td>
-                  <td style={{ ...S.td, padding:'8px 10px' }}><button style={{ ...S.btnS, padding:'5px 10px' }} onClick={ev => { ev.stopPropagation(); deschideDinLista(d.id) }}>Deschide</button></td>
+                  <td style={{ ...S.td, padding:'8px 10px' }}><button style={{ ...S.btnS, padding:'5px 10px' }} disabled={busy} onClick={ev => { ev.stopPropagation(); deschideDinLista(d.id) }}>{busy ? '…' : 'Deschide'}</button></td>
                 </tr>
               )
             })}
@@ -486,6 +524,12 @@ export default function IzoDocumenteIntrare() {
         <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.yellow, borderColor:G.yellow + '66', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
           <div style={{ flex:1 }}>⚠️ Documentul nu s-a putut reîncărca după ultima operație — ce vezi poate fi vechi. Salvarea și confirmarea sunt oprite până la reîncărcare.</div>
           <button style={S.btnS} onClick={() => deschide(ed.stale)} disabled={busy}>🔄 Reîncarcă</button>
+        </div>
+      )}
+      {ed.conflict && !ed.stale && (
+        <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.yellow, borderColor:G.yellow + '66', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+          <div style={{ flex:1 }}>⚠️ Documentul a fost salvat între timp de altcineva (sau din altă fereastră) — versiunea {ed.versiune} din ecran e veche. Salvarea, verificarea și scanurile sunt oprite până reîncarci versiunea serverului{ed.dirty ? '; modificările tale nesalvate rămân în ecran până atunci (copiază-le dacă ai nevoie de ele)' : ''}.</div>
+          <button style={S.btnS} onClick={reincarcaDupaConflict} disabled={busy}>🔄 Reîncarcă versiunea serverului</button>
         </div>
       )}
       {rezultat && (

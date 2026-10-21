@@ -5,8 +5,10 @@
 // argument (scanurile). Seria canonică, numerele (format furnizor / RO), validarea rândurilor, totalurile, lipirea din Excel și
 // argumentele / răspunsurile RPC-urilor E3 EXACT după contractul RPC al sesiunii Izometrie (21.10.2026): fn_izo_doc_salveaza
 // (5 argumente, liste ÎNCHISE de chei) / _verifica / _confirma / _pv / _anuleaza_draft + bucket-ul dedicat izo-documente.
-// Verificările de aici sunt LOCALE (ajutor pentru gestionar, uneori mai stricte decât serverul: toleranțele, intervalele,
-// totalurile obligatorii). Serverul recalculează tot la verificare / confirmare și decide — nimic de aici nu e o garanție a lui.
+// Verificările de aici sunt LOCALE (ajutor pentru gestionar). Acoperă tot ce blochează serverul în fn_izo_doc_blocante (totalurile
+// cerute — total_m / total_bucati — și cele scrise, motivul de 3+ caractere, peretele, lungimea / unghiul, dublurile) și sunt uneori
+// mai stricte (toleranțele fără explicație, intervalele, precizia). Totalurile pe care serverul le verifică doar dacă sunt scrise
+// (kg, pachete, net, brut) sunt și aici opționale, cu avertisment când lipsesc. Serverul recalculează tot și decide.
 
 export const SABLOANE = {
   aviz_teava: {
@@ -186,8 +188,8 @@ export function randGol(sablon, nrCrt, prev = null) {
 }
 
 /**
- * Rândul editorului → valorile tipizate (lungimi în mm întregi, kg cu o zecimală). Diametrul / peretele / unghiurile rămân cum
- * au fost scrise (precizia lor e verificată, nu rotunjită tăcut). NaN rămâne NaN (îl prinde validarea).
+ * Rândul editorului → valorile tipizate (lungimi în mm întregi). Diametrul / peretele / unghiurile / kilogramele rămân cum au fost
+ * scrise (precizia lor e verificată, nu rotunjită tăcut — review #826 r1). NaN rămâne NaN (îl prinde validarea).
  */
 export function randNormalizat(r, sablon) {
   const curba = esteCurba(sablon)
@@ -196,12 +198,12 @@ export function randNormalizat(r, sablon) {
     nr_crt: n(r.nr_crt), serie: txt(r.serie), serie_canon: serieCanon(r.serie) || null, sarja: txt(r.sarja), lot: txt(r.lot),
     specificatie: txt(r.specificatie), dimensiune: txt(r.dimensiune), grad_otel: txt(r.grad_otel), standard: txt(r.standard),
     izolatie: izolatieDinText(r.izolatie), diametru_mm: n(r.diametru_mm), perete_mm: n(r.perete_mm),
-    greutate_kg: rot(n(r.greutate_kg, { mii: true }), 1),
+    greutate_kg: n(r.greutate_kg, { mii: true }),
     lungime_doc_mm: curba ? null : mmDinM(r.lungime_doc), lungime_masurata_mm: curba ? null : mmDinM(r.lungime_masurata),
     unghi_doc: curba ? n(r.unghi_doc) : null, unghi_masurat: curba ? n(r.unghi_masurat) : null,
     cod: curba ? txt(r.cod) : null, item: curba ? txt(r.item) : null,
     cantitate: curba ? (n(r.cantitate) ?? 1) : null, pachet_nr: curba ? txt(r.pachet_nr) : null, dimensiuni_cm: curba ? txt(r.dimensiuni_cm) : null,
-    net_kg: curba ? rot(n(r.net_kg, { mii: true }), 1) : null, brut_kg: curba ? rot(n(r.brut_kg, { mii: true }), 1) : null,
+    net_kg: curba ? n(r.net_kg, { mii: true }) : null, brut_kg: curba ? n(r.brut_kg, { mii: true }) : null,
     decizie: r.decizie || null, motiv: txt(r.motiv), observatie: txt(r.observatie),
   }
 }
@@ -225,7 +227,12 @@ const CAMPURI_NUMERICE = { nr_crt: 'nr. crt.', lungime_doc_mm: 'lungimea de pe d
   net_kg: 'greutatea netă', brut_kg: 'greutatea brută' }
 // precizia cerută de contract: [câmp, zecimale, mesaj]
 const PRECIZIE = [['diametru_mm', 0, 'diametrul se scrie în mm întregi'], ['perete_mm', 1, 'peretele are cel mult o zecimală (ex. 7,1)'],
-  ['unghi_doc', 1, 'unghiul de pe listă are cel mult o zecimală'], ['unghi_masurat', 1, 'unghiul măsurat are cel mult o zecimală']]
+  ['unghi_doc', 1, 'unghiul de pe listă are cel mult o zecimală'], ['unghi_masurat', 1, 'unghiul măsurat are cel mult o zecimală'],
+  ['greutate_kg', 1, 'greutatea are cel mult o zecimală'], ['net_kg', 1, 'greutatea netă are cel mult o zecimală'],
+  ['brut_kg', 1, 'greutatea brută are cel mult o zecimală']]
+// motivul unui rând refuzat / neconform: serverul (fn_izo_doc_blocante, motiv_lipsa) cere char_length(btrim(motiv)) >= 3
+export const MOTIV_MIN = 3
+const motivOk = m => (txt(m) || '').length >= MOTIV_MIN
 const izolatieRea = rn => rn.izolatie != null && !IZOLATII.includes(rn.izolatie)
 const blocant = (camp, mesaj) => ({ camp, nivel: 'blocant', mesaj })
 const avert = (camp, mesaj) => ({ camp, nivel: 'avertisment', mesaj })
@@ -248,10 +255,12 @@ export function validareRand(rn, sablon) {
   if (curba && rn.sarja) { const p = confuziiNumerice(rn.sarja); if (p) v.push(avert('sarja', `heat cu litere ușor de confundat — poate ${p}?`)) }
   if (izolatieRea(rn)) v.push(blocant('izolatie', `izolația „${rn.izolatie}” nu e recunoscută: neizolată / PEHD / GRP (sau gol)`))
   if (!DECIZII.some(d => d.cheie === rn.decizie)) v.push(blocant('decizie', 'alege decizia (primit / neconform / refuzat)'))
-  if ((rn.decizie === 'refuzat_la_receptie' || rn.decizie === 'primit_neconform') && !rn.motiv) v.push(blocant('motiv', rn.decizie === 'refuzat_la_receptie' ? 'refuzul cere motiv' : 'neconformitatea cere motiv'))
+  const neprimit = rn.decizie === 'refuzat_la_receptie' || rn.decizie === 'primit_neconform'
+  // ca serverul (motiv_lipsa): motivul are cel puțin 3 caractere după trim — altfel ecranul ar spune „fără blocante” degeaba
+  if (neprimit && !motivOk(rn.motiv)) v.push(blocant('motiv', `${rn.decizie === 'refuzat_la_receptie' ? 'refuzul' : 'neconformitatea'} cere motiv (cel puțin ${MOTIV_MIN} caractere)`))
   const inInterval = (x, camp, et) => { if (esteNr(x) && (x < LUNGIME_MIN_MM || x > LUNGIME_MAX_MM)) v.push(blocant(camp, `${et} în afara intervalului 0,001–30 m`)) }
   // diferența peste toleranță cere o explicație (regulă LOCALĂ): observația, sau motivul unui rând neconform / refuzat
-  const explicat = !!rn.observatie || ((rn.decizie === 'primit_neconform' || rn.decizie === 'refuzat_la_receptie') && !!rn.motiv)
+  const explicat = !!rn.observatie || (neprimit && motivOk(rn.motiv))
   let pesteTol = false
   if (!curba) {
     if (rn.lungime_doc_mm == null) v.push(blocant('lungime_doc_mm', 'lipsește lungimea de pe aviz'))
@@ -285,7 +294,9 @@ export function validareRand(rn, sablon) {
     if (cod) v.push(avert('cod', cod))
   }
   for (const [c, et] of [['perete_mm', 'peretele'], ['diametru_mm', 'diametrul']]) if (esteNr(rn[c]) && rn[c] <= 0) v.push(blocant(c, `${et} trebuie > 0`))
-  if (rn.perete_mm == null) v.push(avert('perete_mm', 'lipsește peretele (7,1 / 8,8 — împarte stocul)'))
+  // ca serverul (perete_lipsa): peretele e obligatoriu pe rândurile care intră în registru (primit / neconform); la refuz, doar avertisment
+  if (rn.perete_mm == null) v.push(rn.decizie === 'refuzat_la_receptie' ? avert('perete_mm', 'lipsește peretele (7,1 / 8,8)')
+    : blocant('perete_mm', 'lipsește peretele (7,1 / 8,8 — împarte stocul; bucata intră în registru)'))
   if (rn.decizie === 'primit' && pesteTol)
     v.push(avert('decizie', 'diferență peste toleranță: dacă bucata e neconformă, alege „Neconform → carantină”'))
   return v
@@ -327,7 +338,7 @@ export function totaluriDocument(sablon, antet, randuriNorm) {
       if (r.decizie === 'primit' && esteNr(r.lungime_doc_mm)) { s.m_primit_mm += r.lungime_doc_mm; s.m_real_mm += lungimeRegistruMm(r) }
     } else {
       s.bucati += esteNr(r.cantitate) ? r.cantitate : 0
-      if (r.pachet_nr) pachete.add(serieCanon(r.pachet_nr))
+      if (r.pachet_nr) pachete.add(r.pachet_nr)   // ca serverul: count(DISTINCT pachet_nr) pe valoarea salvată (trim), nu pe seria canonică
       if (esteNr(r.net_kg)) s.net += r.net_kg
       if (esteNr(r.brut_kg)) s.brut += r.brut_kg
     }
@@ -343,13 +354,14 @@ export function totaluriDocument(sablon, antet, randuriNorm) {
       bate: lipsa ? (optional ? null : false) : invalid ? false : egalZ(calculat, document, z),
       mesaj: invalid ? 'nu e un număr' : lipsa ? (optional ? 'nescris pe document' : 'lipsește totalul de pe document') : null })
   }
+  // obligatorii = cele pe care serverul le cere și goale (total_m / total_bucati); restul se compară doar dacă sunt scrise (review #826 r1)
   if (!curba) {
     adauga('total_m', 'Metri', m2(s.m_doc_mm), doc('total_m'), 3, 'm')
-    adauga('total_kg', 'Kg', s.kg, doc('total_kg', { mii: true }), 1, 'kg')
+    adauga('total_kg', 'Kg', s.kg, doc('total_kg', { mii: true }), 1, 'kg', true)
   } else {
     adauga('total_bucati', 'Bucăți', s.bucati, doc('total_bucati'), 0, 'int')
-    adauga('total_pachete', 'Pachete', s.pachete, doc('total_pachete'), 0, 'int')
-    adauga('total_net_kg', 'Net kg', s.net, doc('total_net_kg', { mii: true }), 1, 'kg')
+    adauga('total_pachete', 'Pachete', s.pachete, doc('total_pachete'), 0, 'int', true)
+    adauga('total_net_kg', 'Net kg', s.net, doc('total_net_kg', { mii: true }), 1, 'kg', true)
     adauga('total_brut_kg', 'Brut kg', s.brut, doc('total_brut_kg', { mii: true }), 1, 'kg', true)
   }
   return { ...s, comparatii: cmp }
@@ -386,7 +398,11 @@ export function validareDocument(doc) {
   if (!doc.id && doc.inlocuieste_document_id && eroareMotiv(doc.motiv_inlocuire, 'motivul înlocuirii'))
     document.push(blocant('motiv_inlocuire', eroareMotiv(doc.motiv_inlocuire, 'motivul înlocuirii')))
   const totaluri = totaluriDocument(doc.sablon, doc.antet, norm)
-  for (const c of totaluri.comparatii) if (c.bate === false) document.push(blocant(c.cheie, c.mesaj ? `${c.label}: ${c.mesaj}` : `${c.label}: rândurile dau ${c.calculat}, documentul spune ${c.document}`))
+  for (const c of totaluri.comparatii) {
+    if (c.bate === false) document.push(blocant(c.cheie, c.mesaj ? `${c.label}: ${c.mesaj}` : `${c.label}: rândurile dau ${c.calculat}, documentul spune ${c.document}`))
+    // totalul opțional nescris: nu blochează (nici serverul), dar se vede — de obicei e pe hârtie (brutul lipsește des, fără avertisment)
+    else if (c.bate === null && c.cheie !== 'total_brut_kg') document.push(avert(c.cheie, `${c.label}: totalul nu e scris — dacă e pe document, scrie-l (se compară cu rândurile)`))
+  }
   const toate = [...document, ...randuri.flat()]
   return { norm, randuri, document, totaluri, blocante: toate.filter(x => x.nivel === 'blocant').length, avertismente: toate.filter(x => x.nivel === 'avertisment').length }
 }
@@ -401,8 +417,8 @@ const RE_DATA = /^\d{4}-\d{2}-\d{2}$/
 /**
  * Ce oprește SALVAREA draftului (nu confirmarea): ce ar refuza serverul la fn_izo_doc_salveaza după contract — identitatea și
  * depozitul (coloane obligatorii), motivul înlocuirii, datele YYYY-MM-DD, totalurile numerice, seria, nr. crt. întreg > 0 unic,
- * decizia (fără ea serverul ar pune „primit”), izolația, precizia (diametru întreg, perete / unghi o zecimală). În plus, o regulă
- * LOCALĂ pe care serverul încă n-o impune (vezi validareRand): curba = 1 bucată pe rând.
+ * decizia (fără ea serverul ar pune „primit”), izolația, precizia (diametru întreg, perete / unghi / kg o zecimală, totalurile) și
+ * curba = 1 bucată pe rând (cantitatea 1 sau goală — refuz 23514 pe server din 20261103b r5f).
  */
 export function eroriSalvare(doc) {
   const e = []
@@ -417,6 +433,8 @@ export function eroriSalvare(doc) {
     const x = parseNumar(doc.antet?.[camp], { mii: tip === 'kg' })
     if (Number.isNaN(x)) e.push(`„${et}” nu e un număr.`)
     else if (tip === 'int' && esteNr(x) && !Number.isInteger(x)) e.push(`„${et}” trebuie să fie număr întreg.`)
+    // precizia coloanelor (total_m numeric(12,3), kg numeric(12,1)): fără rotunjire tăcută pe server
+    else if (!areMaxZecimale(x, tip === 'm' ? 3 : tip === 'kg' ? 1 : 0)) e.push(`„${et}” are prea multe zecimale (${tip === 'm' ? '3' : '1'} cel mult).`)
   }
   const curba = esteCurba(doc.sablon), nrs = new Set()
   ;(doc.randuri || []).forEach((r, i) => {
@@ -808,10 +826,52 @@ export async function pregatesteScan(docId, fisier, { imageToPdf, uuid = () => g
   const sha256_pdf = ePoza ? await sha256Hex(pdf) : sha256_original
   return { cale: caleScan(docId, uuid()), sha256_original, sha256_pdf, marime: pdf.size, mime: 'application/pdf', pdf, nume: fisier.name || null }
 }
-/** Încărcarea în izo-documente, FĂRĂ upsert (politica nu are UPDATE). `storage` = supabase.storage. */
+/**
+ * Încărcarea în izo-documente, FĂRĂ upsert (politica nu are UPDATE). `storage` = supabase.storage. Eroarea aruncată poartă `ambiguu`:
+ * false doar când Storage a răspuns clar cu 4xx (fără 408) = obiectul NU s-a scris; transport căzut / 5xx / 408 = poate s-a scris.
+ */
 export async function urcaScan(storage, s) {
-  const { error } = await storage.from(BUCKET_SCANURI).upload(s.cale, s.pdf, { contentType: 'application/pdf', upsert: false })
-  if (error) throw new Error(/bucket not found/i.test(error.message || '') ? `stocarea scanurilor (bucket „${BUCKET_SCANURI}”) nu e încă instalată` : `încărcarea scanului a eșuat: ${error.message || error}`)
+  let error
+  try { ({ error } = await storage.from(BUCKET_SCANURI).upload(s.cale, s.pdf, { contentType: 'application/pdf', upsert: false })) }
+  catch (e) { error = { message: e?.message || String(e) } }
+  if (!error) return
+  const st = Number(error.status ?? error.statusCode)
+  const err = new Error(/bucket not found/i.test(error.message || '') ? `stocarea scanurilor (bucket „${BUCKET_SCANURI}”) nu e încă instalată` : `încărcarea scanului a eșuat: ${error.message || error}`)
+  err.ambiguu = !(Number.isInteger(st) && st >= 400 && st < 500 && st !== 408)
+  throw err
+}
+
+/**
+ * Eroare DEFINITIVĂ a unui RPC = serverul a răspuns clar că tranzacția NU s-a aplicat: excepție Postgres (SQLSTATE 22 / 23 / 25 / 40 /
+ * 42 / P0 — RPC-ul a ridicat, tranzacția s-a anulat), cod PostgREST (PGRSTxxx: cererea respinsă) sau HTTP 4xx fără 408. Transportul
+ * căzut (status 0, fără cod), 5xx fără cod, 408 / timeout = AMBIGUU (salvarea poate fi încă în zbor sau comisă). Aceeași disciplină ca #833 r3.
+ */
+export function eroareDefinitivaRpc(error, status) {
+  const cod = String(error?.code || '')
+  if (/^(22|23|25|40|42|P0)[0-9A-Z]{3}$/.test(cod) || /^PGRST\d{3}$/.test(cod)) return true
+  return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408
+}
+
+/**
+ * Atașarea unui scan (testabilă, fără React): upload FĂRĂ upsert → salvarea cu manifestul ÎNTREG (`salveaza()` = apelul RPC, întoarce
+ * {data, error, status}). Fișierul urcat se șterge DOAR când e sigur că nu e și nu va fi în niciun manifest: upload eșuat AMBIGUU
+ * (încercare best-effort — nicio salvare nu pornește după el) sau salvare refuzată DEFINITIV. La eroare AMBIGUĂ a salvării fișierul
+ * RĂMÂNE (review #826 r1, P1 Copilot: un DELETE ar putea ajunge înaintea unei salvări încă în zbor → manifest spre un obiect șters).
+ * Întoarce { rez: 'atasat' | 'nesalvat' | 'necunoscut', data, error, orfan: calea rămasă posibil fără manifest | null }.
+ */
+export async function ataseazaScanSigur({ storage, scan, salveaza }) {
+  try { await urcaScan(storage, scan) } catch (e) {
+    const sters = e?.ambiguu ? await stergeScanObiect(storage, scan.cale) : true
+    return { rez: 'nesalvat', data: null, error: e, orfan: sters ? null : scan.cale }
+  }
+  let rasp
+  try { rasp = await salveaza() } catch (e) { rasp = { error: { message: e?.message || String(e) }, status: 0, transport: true } }
+  if (!rasp?.error) return { rez: 'atasat', data: rasp?.data ?? null, error: null, orfan: null }
+  if (!rasp.transport && eroareDefinitivaRpc(rasp.error, rasp.status)) {
+    const sters = await stergeScanObiect(storage, scan.cale)
+    return { rez: 'nesalvat', data: null, error: rasp.error, orfan: sters ? null : scan.cale }
+  }
+  return { rez: 'necunoscut', data: null, error: rasp.error, orfan: scan.cale }
 }
 /** DELETE pe obiect; true doar dacă s-a șters exact obiectul (un refuz RLS întoarce error = null și data = []). */
 export async function stergeScanObiect(storage, cale) {
