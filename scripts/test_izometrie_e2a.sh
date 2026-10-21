@@ -54,10 +54,10 @@ gate_0e() { local o; o="$("${PSQL[@]}" -d "${2:-$BAZA}" -At -f "$RADACINA/script
 refuza_cu() { local out; if out="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" 2>&1)"; then esec "$1 a trecut"; fi
   grep -q "$2" <<<"$out" || esec "$1 refuzat din alt motiv: $(grep -m1 ERROR <<<"$out")"; }
 revenire() { "${PSQL[@]}" -d "${1:-$BAZA}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102a', 'IZO_E2A_SCOATE:' || txid_current(), true);" -f "$ROLLBACK" 2>&1; }
-livreaza() { local sha sis rc=0
-  sha="$(sha256sum "$MIGRARE" | cut -d' ' -f1)"
+livreaza() { local sha sis rc=0 mig="${3:-$MIGRARE}"
+  sha="$(sha256sum "$mig" | cut -d' ' -f1)"
   sis="$("${PSQL[@]}" -d "$1" -Atc "SELECT system_identifier FROM pg_control_system()")"
-  PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migrare "$MIGRARE" --sha256 "$sha" --versiune "$2" \
+  PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migrare "$mig" --sha256 "$sha" --versiune "$2" \
     --tinta-db "$1" --tinta-sistem "$sis" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >/tmp/izo_e2a_runner.out 2>&1 || rc=$?
   [ "$rc" = 0 ] || { cat /tmp/izo_e2a_runner.out >&2; esec "runner cod $rc pe $1"; }
   echo "$sha"; }
@@ -243,6 +243,31 @@ cursa_fara_asteptare "4h storno în curs, bon cu bucata lui" "SELECT public.fn_i
   "BEGIN; $CA_TOMA; INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) VALUES (1, $ID_CONC, 'teava'); COMMIT;" "nu intră pe bon"
 [ "$(q "SELECT stare FROM public.magazie_bucati WHERE id = $ID_CONC")" = anulata ] || esec "4h storno-ul nu s-a aplicat"
 ok "4h storno în curs + bon cu bucata lui → bonul e refuzat imediat, storno-ul se aplică (fără blocaj circular)"
+# 4i. 20261102b — salvarea tranzacțională a bonurilor (decizia Razvan 21.10): livrare prin runner, teste SQL, cursa a două
+#     salvări pe aceeași versiune (una câștigă, cealaltă primește „modificat”), revenirea
+MIG_BON="$RADACINA/supabase/migrations/20261102b_bon_salvare_tranzactionala.sql"
+REV_BON="$RADACINA/supabase/revenire/20261102b_bon_salvare_tranzactionala_ROLLBACK.sql"
+"${PSQL[@]}" -d "$BAZA" -f "$MIG_BON" >/dev/null 2>&1 && esec "4i 20261102b fără runner a trecut"
+livreaza "$BAZA" 20261102130000 "$MIG_BON" >/dev/null
+gate_0e "după 20261102b"
+OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/bon_salveaza.test.sql" 2>&1)" || { echo "$OUT" | grep -E 'ERROR|TEST' >&2; esec "4i teste bon"; }
+grep -q 'TESTE BON: TOATE OK' <<<"$OUT" || esec "4i testele bon nu au ajuns la final"
+NB="$(grep -c 'NOTICE:  OK' <<<"$OUT")"
+BON="$(q "SELECT id FROM public.executie_bonuri_consum WHERE numar_bon = 'BC-T-1'")"
+VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
+cursa "4i două salvări pe aceeași versiune" \
+  "$CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"A\"}', '[{\"denumire\":\"A1\",\"cantitate\":1}]')" \
+  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"B\"}', '[{\"denumire\":\"B1\",\"cantitate\":1}]'); COMMIT;" \
+  err "modificat între timp"
+[ "$(q "SELECT observatii || ':' || (SELECT string_agg(denumire, ',') FROM public.executie_bonuri_consum_linii WHERE bon_id = $BON) FROM public.executie_bonuri_consum WHERE id = $BON")" = "A:A1" ] \
+  || esec "4i starea finală nu e a câștigătorului (A)"
+OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$REV_BON" 2>&1)" && esec "4i revenire nearmată a trecut"
+grep -q "nearmată" <<<"$OUT" || esec "4i revenire refuzată din alt motiv"
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102b', 'BON_RPC_SCOATE:' || txid_current(), true);" -f "$REV_BON" >/dev/null 2>&1 \
+  || esec "4i revenirea armată a eșuat"
+[ "$(q "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'")" = 0 ] || esec "4i funcția a rămas după revenire"
+[ "$(q "SELECT count(*) FROM public.executie_bonuri_consum WHERE numar_bon = 'BC-T-1'")" = 1 ] || esec "4i revenirea a atins datele"
+ok "4i bon RPC: $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · revenire nearmată → refuz, armată → doar funcția scoasă"
 ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
 ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 
@@ -268,6 +293,22 @@ BAZA_SALVATA="$BAZA"; BAZA="$BAZA2"
 cursa "6-pre TRUNCATE țevi în timpul activării" "SELECT public.fn_izo_seteaza_nivel(3, 'stoc', 'cursa r5')" \
   "TRUNCATE public.executie_tevi CASCADE" err "e refuzat"
 [ "$(q "SELECT public.fn_izo_nivel(3) || ':' || count(*) FROM public.executie_tevi")" = "stoc:3" ] || esec "6-pre țevile s-au pierdut"
+# 6-pre2. ordinea „tabel → advisory” (Codex r5, TRUNCATE pachete ↔ activare): B ține pachetele ACCESS EXCLUSIVE (ca un
+#         TRUNCATE) la barieră; activarea proiectului 2 trebuie să aștepte TABELUL fără să țină încă advisory-ul pe proiect
+#         (altfel: A ține advisory și așteaptă tabelul, B ține tabelul și așteaptă advisory-ul → blocaj circular)
+PGAPPNAME=izo_ctrl "${PSQL[@]}" -d "$BAZA" -Atc "SELECT pg_advisory_lock(99); SELECT pg_sleep(300);" >/dev/null 2>&1 & PC=$!
+asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_ctrl' AND l.locktype = 'advisory' AND l.objid = 99 AND l.granted" || esec "6-pre2 controlor"
+PGAPPNAME=izo_B "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; LOCK TABLE public.executie_pachete_lansare IN ACCESS EXCLUSIVE MODE; SELECT pg_advisory_xact_lock_shared(99); ROLLBACK;" >/tmp/izo_b2.out 2>&1 & PB=$!
+asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_B' AND l.locktype = 'advisory' AND l.objid = 99 AND NOT l.granted" || esec "6-pre2 B n-a ajuns la barieră"
+PGAPPNAME=izo_A "${PSQL[@]}" -d "$BAZA" -Atc "SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'cursa r6')" >/tmp/izo_a2.out 2>&1 & PA=$!
+asteapta "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'izo_A' AND wait_event_type = 'Lock'" || esec "6-pre2 A n-a așteptat tabelul"
+[ "$(q "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_A' AND l.locktype = 'advisory' AND l.classid = 73010")" = 0 ] \
+  || { q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name IN ('izo_ctrl','izo_A','izo_B')" >/dev/null; esec "6-pre2 A ține advisory-ul pe proiect în timp ce așteaptă tabelul (ordine greșită)"; }
+q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'izo_ctrl'" >/dev/null
+wait "$PC" 2>/dev/null || true; wait "$PB" || { cat /tmp/izo_b2.out >&2; esec "6-pre2 B a eșuat"; }
+wait "$PA" || { cat /tmp/izo_a2.out >&2; esec "6-pre2 activarea a eșuat"; }
+[ "$(q "SELECT public.fn_izo_nivel(2)")" = stoc ] || esec "6-pre2 proiectul 2 nu e activat"
+ok "6-pre2 tabel ținut de un TRUNCATE în curs → activarea așteaptă tabelul fără advisory ținut (ordinea tabel → advisory), apoi trece"
 # curățenie DOAR pe baza de test (superuser): config-ul proiectului 3 scos cu garda oprită și repusă ENABLE ALWAYS, ca
 # revenirea de mai jos să pornească de la „fără date”
 q "ALTER TABLE public.izo_proiect_config DISABLE TRIGGER trg_izo_cfg_garda; DELETE FROM public.izo_proiect_config; ALTER TABLE public.izo_proiect_config ENABLE ALWAYS TRIGGER trg_izo_cfg_garda" >/dev/null

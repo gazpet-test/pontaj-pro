@@ -18,7 +18,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { salveazaLiniiBon, bucatiProtejate } from './lib/bonLinii.js'
+import { liniiPentruRpc, antetPentruRpc, mesajEroareBon } from './lib/bonLinii.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
@@ -183,59 +183,19 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     }
     setBusy(true)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-      const pid = Number(m.proiect_id)
-      let bonId = m.id
-      const linii = (id) => m.linii.map(l => {
-        const tip = l.tip_material_id ? tipuriMap[l.tip_material_id] : null
-        const cant = toNum(l.cantitate) ?? 1
-        const cost = m.provenienta === 'gazpet' ? toNum(l.cost_unitar) : null
-        return {
-          bon_id: id, magazie_bucata_id: l.magazie_bucata_id || null, tip_material_id: l.tip_material_id || null,
-          denumire: l.denumire?.trim() || tip?.nume || null,
-          serie: l.serie?.trim() || null, sarja: l.sarja?.trim() || null, dimensiune: l.dimensiune?.trim() || null,
-          cantitate: cant, um: l.um || tip?.um_implicit || 'buc',
-          lungime_m: toNum(l.lungime_m), cost_unitar: cost, valoare: cost != null ? cost * cant : null,
-          observatii: null,
-        }
+      // bon nou: numărul se rezervă O DATĂ și rămâne în modal — o reîncercare (ex. răspuns pierdut) trimite aceeași cheie
+      let numar = m.numar_rezervat || null
+      if (m.isNew && !numar) {
+        numar = await genNumarBon(Number(m.proiect_id), m.data_bon)
+        setModal(x => (x && x.isNew ? { ...x, numar_rezervat: numar } : x))
+      }
+      // UN apel, o tranzacție: CAS pe versiune + antet + liniile (20261102b); gărzile registrului de țeavă rămân în vigoare
+      const { data, error } = await supabase.rpc('fn_bon_salveaza', {
+        p_bon_id: m.isNew ? null : m.id, p_versiune: m.isNew ? null : (m.updated_at || null),
+        p_antet: antetPentruRpc(m, numar), p_linii: liniiPentruRpc(m.linii, m.provenienta, tipuriMap, toNum),
       })
-      // (1) bucățile din registrul de țeavă: refuz ÎNAINTE de orice scriere (nici antetul nu se atinge)
-      const protejate = await bucatiProtejate(supabase, linii(bonId))
-      if (protejate.length) throw new Error(`bucățile ${protejate.join(', ')} sunt țeavă Transgaz din registru; nu intră pe bon (montajul se declară din modulul de țeavă)`)
-      if (m.isNew) {
-        const numar = await genNumarBon(pid, m.data_bon)
-        const { data, error } = await supabase.from('executie_bonuri_consum').insert({
-          numar_bon: numar, proiect_id: pid,
-          situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
-          provenienta: m.provenienta, data_bon: m.data_bon, sursa: 'manual', stare: 'generat',
-          generat_de: user?.id || null, observatii: m.observatii?.trim() || null,
-        }).select('id').single()
-        if (error) throw error
-        bonId = data.id
-      } else {
-        // (2) antetul cu control de versiune: o editare concurentă (alt updated_at) e refuzată, fără să atingă liniile
-        let q = supabase.from('executie_bonuri_consum').update({
-          situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
-          provenienta: m.provenienta, data_bon: m.data_bon,
-          observatii: m.observatii?.trim() || null, updated_at: new Date().toISOString(),
-        }).eq('id', bonId)
-        if (m.updated_at) q = q.eq('updated_at', m.updated_at)
-        const { data: upd, error } = await q.select('id, updated_at')
-        if (error) throw error
-        if (!upd?.length) throw new Error('bonul a fost modificat de altcineva între timp — reîncarcă și reia editarea')
-        // versiunea nouă intră în modal: dacă liniile eșuează mai jos, o a doua apăsare nu pică pe propria versiune veche
-        setModal(x => (x && x.id === bonId ? { ...x, updated_at: upd[0].updated_at } : x))
-      }
-      const rows = linii(bonId)
-      // (3) liniile: inserare, apoi ștergerea liniilor existente recitite din BD (fără bon golit, fără duplicate la retry)
-      const rez = await salveazaLiniiBon(supabase, bonId, rows)
-      if (!rez.ok) {
-        if (m.isNew) await supabase.from('executie_bonuri_consum').delete().eq('id', bonId)
-        throw new Error(rez.motiv === 'registru'
-          ? `bucățile ${rez.protejate.join(', ')} sunt țeavă Transgaz din registru; nu intră pe bon (montajul se declară din modulul de țeavă)`
-          : rez.motiv)
-      }
-      flash('ok', `Bon ${m.isNew ? 'creat' : 'actualizat'} (${rows.length} linii).`)
+      if (error) throw new Error(mesajEroareBon(error))
+      flash('ok', `Bon ${m.isNew ? 'creat' : 'actualizat'} (${data?.linii ?? m.linii.length} linii)${data?.idempotent ? ' — era deja salvat' : ''}.`)
       setModal(null); await loadAll()
     } catch (e) { console.error(e); flash('err', 'Salvare eșuată: ' + (e?.message || e)) } finally { setBusy(false) }
   }

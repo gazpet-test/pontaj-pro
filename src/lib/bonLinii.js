@@ -1,45 +1,36 @@
-// Salvarea liniilor unui bon de consum fără fereastra „șters, apoi refuzat” (review #806 r2/r3, Codex P2).
-// Protocolul (din client, fără RPC nou — o salvare tranzacțională reală e o decizie separată):
-//   (1) bucatiProtejate: verificarea bucăților din registrul de țeavă ÎNAINTE de orice scriere (nici antetul nu se atinge);
-//   (2) antetul se actualizează cu control de versiune (updated_at citit la deschidere) — o editare concurentă e refuzată;
-//   (3) salveazaLiniiBon: id-urile liniilor existente se RECITESC din BD (un retry după o salvare parțială le include și
-//       pe cele inserate atunci), liniile noi se inserează, apoi se șterg exact liniile citite; dacă ștergerea afectează
-//       alt număr de rânduri (RLS, editare concurentă) se raportează conflict, nu succes.
+// Salvarea unui bon de consum = UN apel: public.fn_bon_salveaza (migrarea 20261102b, decizia Razvan 21.10.2026).
+// În aceeași tranzacție: CAS pe updated_at, antetul, liniile vechi șterse și cele noi inserate; retry-ul după un răspuns
+// pierdut întoarce același rezultat (fără dubluri). Aici doar construcția argumentelor și traducerea erorilor.
 
-/** id-urile unice de bucăți trasabile de pe liniile bonului. */
-export function bucatiPeLinii(rows) {
-  return [...new Set(rows.map(r => r.magazie_bucata_id).filter(Boolean).map(Number))]
+const nn = s => (s == null ? null : (String(s).trim() || null))
+
+/** Liniile pentru RPC (fără bon_id / valoare — le pune serverul). Costul doar pe bonurile gazpet. */
+export function liniiPentruRpc(linii, provenienta, tipuriMap, toNum) {
+  return linii.map(l => {
+    const tip = l.tip_material_id ? tipuriMap[l.tip_material_id] : null
+    return {
+      magazie_bucata_id: l.magazie_bucata_id || null, tip_material_id: l.tip_material_id || null,
+      denumire: nn(l.denumire) || tip?.nume || null, serie: nn(l.serie), sarja: nn(l.sarja), dimensiune: nn(l.dimensiune),
+      cantitate: toNum(l.cantitate) ?? 1, um: l.um || tip?.um_implicit || 'buc', lungime_m: toNum(l.lungime_m),
+      cost_unitar: provenienta === 'gazpet' ? toNum(l.cost_unitar) : null,
+    }
+  })
 }
 
-/** Bucățile din registru de pe linii (funcția lipsește înainte de migrare → nimic protejat). */
-export async function bucatiProtejate(db, rows) {
-  const protejate = []
-  for (const id of bucatiPeLinii(rows)) {
-    const { data, error } = await db.rpc('fn_izo_bucata_protejata', { p_bucata: id })
-    if (!error && data === true) protejate.push(id)
+/** Antetul pentru RPC. La un bon nou numărul vine rezervat în modal (aceeași cheie la reîncercare → fără dubluri). */
+export function antetPentruRpc(m, numar) {
+  return {
+    proiect_id: Number(m.proiect_id), numar_bon: numar || null,
+    situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
+    provenienta: m.provenienta, data_bon: m.data_bon, observatii: nn(m.observatii),
   }
-  return protejate
 }
 
-/**
- * @param {object} db      clientul supabase
- * @param {number} bonId
- * @param {object[]} rows  liniile noi (cu bon_id)
- * @returns {Promise<{ok: boolean, motiv?: string, protejate?: number[]}>}
- */
-export async function salveazaLiniiBon(db, bonId, rows) {
-  const protejate = await bucatiProtejate(db, rows)
-  if (protejate.length) return { ok: false, motiv: 'registru', protejate }
-  const { data: existente, error: eSel } = await db.from('executie_bonuri_consum_linii').select('id').eq('bon_id', bonId)
-  if (eSel) return { ok: false, motiv: eSel.message || String(eSel) }
-  const vechiIds = (existente || []).map(l => l.id)
-  const { error: eIns } = await db.from('executie_bonuri_consum_linii').insert(rows)
-  if (eIns) return { ok: false, motiv: eIns.message || String(eIns) }
-  if (vechiIds.length) {
-    const { data: sterse, error: eDel } = await db.from('executie_bonuri_consum_linii').delete().eq('bon_id', bonId).in('id', vechiIds).select('id')
-    if (eDel) return { ok: false, motiv: 'liniile vechi nu s-au putut șterge (bonul are acum și liniile noi; reîncercarea le curăță): ' + (eDel.message || eDel) }
-    if ((sterse || []).length !== vechiIds.length)
-      return { ok: false, motiv: `conflict: s-au șters ${(sterse || []).length} din ${vechiIds.length} linii vechi (bon modificat între timp?) — reîncarcă bonul` }
-  }
-  return { ok: true }
+/** Mesajul pentru utilizator, din eroarea RPC-ului. */
+export function mesajEroareBon(error) {
+  const m = `${error?.code || ''} ${error?.message || error || ''}`
+  if (/PGRST202|could not find the function/i.test(m)) return 'salvarea bonurilor nu e încă instalată în baza de date (migrarea 20261102b) — anunță-l pe Răzvan'
+  if (/40001|modificat între timp/i.test(m)) return 'bonul a fost modificat de altcineva între timp — reîncarcă și reia editarea'
+  if (/nu intră pe bon/i.test(m)) return 'pe bon e o bucată de țeavă Transgaz din registru — nu intră pe bon (montajul se declară din modulul de țeavă)'
+  return error?.message || String(error)
 }
