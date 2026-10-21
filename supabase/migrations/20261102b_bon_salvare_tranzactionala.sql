@@ -8,8 +8,14 @@
 --   • coloana executie_bonuri_consum.cheie_operatie (uuid, UNIQUE parțial): cheia unei CREĂRI, generată o dată în client
 --     la deschiderea formularului — un retry al aceleiași creări găsește bonul, două creări distincte au chei distincte
 --     (Jakarinos r6 N1); bonurile existente rămân cu NULL;
---   • scrierile pe LINII se închid pentru API (r11, Jakarinos + Copilot r10): REVOKE INSERT/UPDATE/DELETE/TRUNCATE de la
---     anon/authenticated; liniile se scriu DOAR prin RPC-urile de mai jos (service_role / postgres rămân pentru backend).
+--   • scrierile pe LINII se închid pentru API (r11, Jakarinos + Copilot r10) ȘI pentru service_role (r12, Copilot r11):
+--     REVOKE INSERT/UPDATE/DELETE/TRUNCATE de la anon/authenticated/service_role; liniile se scriu DOAR prin RPC-urile de
+--     mai jos (postgres direct rămâne doar cale administrativă). Inventar: nicio funcție, cron, edge function sau script nu
+--     scrie pe linii în afara RPC-urilor (postcondiția 4 o verifică pe catalog);
+--   • garda preluării (r12, Jakarinos + Copilot r11 P1): trigger-ul trg_bonc_preluare_garda refuză orice trecere în
+--     „preluat” sau atingere a preluat_de / preluat_la care nu vine din fn_bon_preia (current_user = postgres, owner-ul
+--     RPC-urilor DEFINER) — un tab cu UI-ul vechi nu mai poate marca un bon „preluat” fără costuri; anularea directă
+--     (stare → „anulat”) rămâne permisă, dar nu poate atinge câmpurile de preluare.
 --     Motivul: cu DML direct pe linii, lock-ul liniei vine înaintea oricărui trigger, deci nicio ordine globală de lock-uri
 --     nu se putea garanta (deadlock DELETE antet CASCADE ↔ RPC, DML pe mai multe linii ↔ RPC);
 --   • ordinea UNICĂ a lock-urilor: ANTETUL ÎNTÂI, apoi liniile (RPC-urile, DELETE-ul de antet cu CASCADE, UPDATE-ul direct
@@ -49,8 +55,9 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION 'Precondiție 0a: rulează ca postgres (current_user = %)', current_user;
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_bon_salveaza', 'fn_bon_preia')) THEN
-    RAISE EXCEPTION 'Precondiție 0b: public.fn_bon_salveaza / fn_bon_preia există deja';
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_bon_salveaza', 'fn_bon_preia', 'fn_bon_preluare_garda'))
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_bonuri_consum'::regclass AND tgname = 'trg_bonc_preluare_garda') THEN
+    RAISE EXCEPTION 'Precondiție 0b: public.fn_bon_salveaza / fn_bon_preia / garda preluării există deja';
   END IF;
   -- livrare nouă (nimic) sau relivrare după retragere (coloana + exact cele 2 indexuri)
   v_relivrare := EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_bonuri_consum'
@@ -112,10 +119,12 @@ BEGIN
   IF NOT (has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'INSERT')
           AND has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'UPDATE')
           AND has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'DELETE')
-          AND has_table_privilege('anon', 'public.executie_bonuri_consum_linii', 'INSERT'))
+          AND has_table_privilege('anon', 'public.executie_bonuri_consum_linii', 'INSERT')
+          AND has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'INSERT')
+          AND has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'TRUNCATE'))
      OR has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'TRUNCATE')
      OR has_table_privilege('anon', 'public.executie_bonuri_consum_linii', 'TRUNCATE') THEN
-    RAISE EXCEPTION 'Precondiție 0g: drepturile API pe executie_bonuri_consum_linii diferă de live (anon/authenticated = arwdxt)';
+    RAISE EXCEPTION 'Precondiție 0g: drepturile API pe executie_bonuri_consum_linii diferă de live (anon/authenticated = arwdxt, service_role = arwdDxt…)';
   END IF;
   IF has_schema_privilege('authenticated', 'public', 'CREATE') OR has_schema_privilege('anon', 'public', 'CREATE') THEN
     RAISE EXCEPTION 'Precondiție 0e: anon/authenticated au CREATE pe schema public';
@@ -133,7 +142,24 @@ BEGIN
   END IF;
 
   -- ── liniile: scrierile din API închise (doar prin RPC-uri) ───────────────────────────────────────────
-  REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.executie_bonuri_consum_linii FROM anon, authenticated;
+  REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.executie_bonuri_consum_linii FROM anon, authenticated, service_role;
+
+  -- ── garda preluării: doar fn_bon_preia (DEFINER, current_user = postgres) trece un bon în „preluat” ──────
+  CREATE FUNCTION public.fn_bon_preluare_garda() RETURNS trigger
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $g$
+  BEGIN
+    IF current_user IS DISTINCT FROM 'postgres' AND (
+         (TG_OP = 'INSERT' AND (NEW.stare = 'preluat' OR NEW.preluat_de IS NOT NULL OR NEW.preluat_la IS NOT NULL))
+      OR (TG_OP = 'UPDATE' AND ((NEW.stare = 'preluat' AND OLD.stare IS DISTINCT FROM 'preluat')
+                                OR NEW.preluat_de IS DISTINCT FROM OLD.preluat_de OR NEW.preluat_la IS DISTINCT FROM OLD.preluat_la))) THEN
+      RAISE EXCEPTION 'bon: preluarea în Financiar se face doar prin fn_bon_preia (reîncarcă pagina)' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END $g$;
+  REVOKE ALL ON FUNCTION public.fn_bon_preluare_garda() FROM PUBLIC, anon, authenticated, service_role;
+  CREATE TRIGGER trg_bonc_preluare_garda BEFORE INSERT OR UPDATE ON public.executie_bonuri_consum
+    FOR EACH ROW EXECUTE FUNCTION public.fn_bon_preluare_garda();
+  ALTER TABLE public.executie_bonuri_consum ENABLE ALWAYS TRIGGER trg_bonc_preluare_garda;
 
   -- ── salvarea ─────────────────────────────────────────────────────────────────────────────────────────
   CREATE FUNCTION public.fn_bon_salveaza(p_bon_id bigint, p_versiune timestamptz, p_antet jsonb, p_linii jsonb) RETURNS jsonb
@@ -320,8 +346,23 @@ BEGIN
      OR has_table_privilege('anon', 'public.executie_bonuri_consum_linii', 'INSERT')
      OR has_table_privilege('anon', 'public.executie_bonuri_consum_linii', 'UPDATE')
      OR has_table_privilege('anon', 'public.executie_bonuri_consum_linii', 'DELETE')
+     OR has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'INSERT')
+     OR has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'UPDATE')
+     OR has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'DELETE')
+     OR has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'TRUNCATE')
      OR NOT has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'SELECT') THEN
-    RAISE EXCEPTION 'Postcondiție 2: liniile bonului — API doar citire';
+    RAISE EXCEPTION 'Postcondiție 2: liniile bonului — API (anon / authenticated / service_role) doar citire';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.executie_bonuri_consum'::regclass AND tgname = 'trg_bonc_preluare_garda' AND tgenabled = 'A') THEN
+    RAISE EXCEPTION 'Postcondiție 2b: garda preluării lipsește sau nu e ENABLE ALWAYS';
+  END IF;
+  -- nicio funcție din afara RPC-urilor nu scrie pe linii (inventarul r12: cron / edge / scripturi — 0)
+  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
+                AND p.oid NOT IN ('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure, 'public.fn_bon_preia(bigint, timestamptz, jsonb)'::regprocedure)
+                AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), ''))
+                    ~* '(insert\s+into|update|delete\s+from|truncate(\s+table)?|copy)\s+(only\s+)?("?public"?\s*\.\s*)?"?executie_bonuri_consum_linii\M') THEN
+    RAISE EXCEPTION 'Postcondiție 4: o funcție din afara RPC-urilor bonului scrie pe executie_bonuri_consum_linii';
   END IF;
   IF NOT v_relivrare AND EXISTS (SELECT 1 FROM public.executie_bonuri_consum WHERE cheie_operatie IS NOT NULL) THEN
     RAISE EXCEPTION 'Postcondiție 3: bonurile existente trebuie să rămână fără cheie de operație';
@@ -332,9 +373,12 @@ BEGIN
                            || '|' || pg_get_userbyid(p.proowner), '#' ORDER BY p.proname)
                 || '|' || (SELECT pg_get_indexdef('public.ux_bonc_cheie_operatie'::regclass))
                 || '|' || (SELECT pg_get_indexdef('public.ux_bonc_proiect_numar'::regclass))
-                || '|' || (SELECT coalesce(c.relacl::text, '') FROM pg_class c WHERE c.oid = 'public.executie_bonuri_consum_linii'::regclass))
+                || '|' || (SELECT coalesce(c.relacl::text, '') FROM pg_class c WHERE c.oid = 'public.executie_bonuri_consum_linii'::regclass)
+                || '|' || (SELECT pg_get_triggerdef(g.oid) || ':' || g.tgenabled::text FROM pg_trigger g
+                            WHERE g.tgrelid = 'public.executie_bonuri_consum'::regclass AND g.tgname = 'trg_bonc_preluare_garda'))
        FROM pg_proc p WHERE p.oid IN ('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure,
-                                      'public.fn_bon_preia(bigint, timestamptz, jsonb)'::regprocedure)));
+                                      'public.fn_bon_preia(bigint, timestamptz, jsonb)'::regprocedure,
+                                      'public.fn_bon_preluare_garda()'::regprocedure)));
 
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261102b_bon_salvare_tranzactionala:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261102b: garda de livrare (final) — tranzacție/runner invalid';

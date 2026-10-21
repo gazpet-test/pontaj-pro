@@ -108,6 +108,29 @@ SELECT teste.eroare('B18e bon beneficiar cu costuri → refuz (nu se valorizeaz�
   (SELECT jsonb_agg(jsonb_build_object('linie_id', id, 'cost_unitar', 1)) FROM public.executie_bonuri_consum_linii WHERE bon_id = %s))$f$, :b17, :'v18e', :b17), 'nu se valorizează');
 SELECT public.fn_bon_preia(:b17, :'v18e', '[]')->>'idempotent' AS i18f \gset
 SELECT teste.e('B18f bon beneficiar fără costuri → preluat', :'i18f' = 'false' AND (SELECT stare FROM public.executie_bonuri_consum WHERE id = :b17) = 'preluat');
+-- B20 client vechi după REVOKE (Jakarinos + Copilot r11 P1): costurile pe linii refuzate (permission denied), iar trecerea
+--     directă a antetului în „preluat” e refuzată de garda trg_bonc_preluare_garda → bonul rămâne „generat”, fără succes fals
+SELECT r->>'bon_id' AS b20 FROM (SELECT public.fn_bon_salveaza(NULL, NULL,
+  '{"proiect_id":1,"cheie_operatie":"aaaaaaaa-0000-0000-0000-000000000006","provenienta":"gazpet","data_bon":"2026-10-21"}',
+  '[{"denumire":"q","cantitate":1}]') r) x \gset
+SELECT teste.eroare('B20a client vechi: costul direct pe linie → refuz', format($f$UPDATE public.executie_bonuri_consum_linii SET cost_unitar = 1, valoare = 1 WHERE bon_id = %s$f$, :b20), 'permission denied');
+SELECT teste.eroare('B20b client vechi: antetul direct în „preluat” → refuz de gardă', format($f$UPDATE public.executie_bonuri_consum SET stare = 'preluat', preluat_de = %L, preluat_la = now(), updated_at = now() WHERE id = %s$f$, :'JANETA', :b20), 'doar prin fn_bon_preia');
+SELECT teste.eroare('B20c doar preluat_la, direct → refuz', format($f$UPDATE public.executie_bonuri_consum SET preluat_la = now() WHERE id = %s$f$, :b20), 'doar prin fn_bon_preia');
+SELECT teste.eroare('B20d bon nou direct, deja „preluat” → refuz', $$INSERT INTO public.executie_bonuri_consum (proiect_id, stare) VALUES (1, 'preluat')$$, 'doar prin fn_bon_preia');
+SELECT teste.e('B20e după încercările clientului vechi bonul e tot „generat”, fără preluare', (SELECT stare = 'generat' AND preluat_de IS NULL AND preluat_la IS NULL FROM public.executie_bonuri_consum WHERE id = :b20));
+UPDATE public.executie_bonuri_consum SET stare = 'anulat', updated_at = now() WHERE id = :b20;
+SELECT teste.e('B20f anularea directă (fără câmpurile de preluare) merge', (SELECT stare FROM public.executie_bonuri_consum WHERE id = :b20) = 'anulat');
+RESET ROLE;
+-- B21 nicio funcție din afara RPC-urilor nu scrie pe linii; service_role fără DML pe linii (Copilot r11)
+SELECT teste.e('B21 invariant: scrierile pe linii doar în fn_bon_salveaza / fn_bon_preia; service_role doar citire',
+  NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
+                 AND p.proname NOT IN ('fn_bon_salveaza', 'fn_bon_preia')
+                 AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), ''))
+                     ~* '(insert\s+into|update|delete\s+from|truncate(\s+table)?|copy)\s+(only\s+)?("?public"?\s*\.\s*)?"?executie_bonuri_consum_linii\M')
+  AND NOT has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'INSERT')
+  AND NOT has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'DELETE')
+  AND NOT has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'TRUNCATE'));
 RESET ROLE;
 -- B14 numerotarea trece de 9999 fără trunchiere (Jakarinos r7)
 INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id) VALUES ('BC-2026-2-9999', 2);

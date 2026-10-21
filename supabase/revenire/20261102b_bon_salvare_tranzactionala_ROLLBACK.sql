@@ -1,7 +1,8 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 -- 20261102b_bon_salvare_tranzactionala_ROLLBACK — NU e migrare. Două moduri, alese de date (r11, Jakarinos + Copilot r10):
---   • nicio creare n-a trecut prin RPC (cheie_operatie goală) → SCOATE TOT: RPC-urile fn_bon_salveaza / fn_bon_preia,
---     reface drepturile API de scriere pe linii (anon/authenticated = arwdxt, ca pe live), indexurile și coloana;
+--   • nicio creare n-a trecut prin RPC (cheie_operatie goală) → SCOATE TOT: RPC-urile fn_bon_salveaza / fn_bon_preia, garda
+--     preluării, reface drepturile de scriere pe linii (anon/authenticated = arwdxt, service_role = arwdDxt, ca pe live),
+--     indexurile și coloana;
 --   • există chei de operație → RETRAGERE: scoate RPC-urile și reface drepturile pe linii, dar PĂSTREAZĂ coloana
 --     cheie_operatie și cele 2 indexuri (istoricul de idempotență nu se pierde: la o relivrare, un retry al aceleiași chei
 --     găsește bonul). Migrarea acceptă relivrarea peste o retragere (precondiția 0b2).
@@ -23,16 +24,20 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261102b: rulează ca postgres'; END IF;
   IF to_regprocedure('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)') IS NULL OR to_regprocedure('public.fn_bon_preia(bigint, timestamptz, jsonb)') IS NULL
-     OR to_regclass('public.ux_bonc_cheie_operatie') IS NULL OR to_regclass('public.ux_bonc_proiect_numar') IS NULL THEN
-    RAISE EXCEPTION 'Revenire 20261102b: fn_bon_salveaza / fn_bon_preia / indexurile nu există — nimic de scos';
+     OR to_regclass('public.ux_bonc_cheie_operatie') IS NULL OR to_regclass('public.ux_bonc_proiect_numar') IS NULL
+     OR to_regprocedure('public.fn_bon_preluare_garda()') IS NULL THEN
+    RAISE EXCEPTION 'Revenire 20261102b: fn_bon_salveaza / fn_bon_preia / garda preluării / indexurile nu există — nimic de scos';
   END IF;
   SELECT md5(string_agg(p.prosrc || '|' || coalesce(p.proacl::text, '') || '|' || coalesce(p.proconfig::text, '') || '|' || p.prosecdef::text
                         || '|' || pg_get_userbyid(p.proowner), '#' ORDER BY p.proname)
              || '|' || (SELECT pg_get_indexdef('public.ux_bonc_cheie_operatie'::regclass))
              || '|' || (SELECT pg_get_indexdef('public.ux_bonc_proiect_numar'::regclass))
-             || '|' || (SELECT coalesce(c.relacl::text, '') FROM pg_class c WHERE c.oid = 'public.executie_bonuri_consum_linii'::regclass))
+             || '|' || (SELECT coalesce(c.relacl::text, '') FROM pg_class c WHERE c.oid = 'public.executie_bonuri_consum_linii'::regclass)
+             || '|' || (SELECT pg_get_triggerdef(g.oid) || ':' || g.tgenabled::text FROM pg_trigger g
+                         WHERE g.tgrelid = 'public.executie_bonuri_consum'::regclass AND g.tgname = 'trg_bonc_preluare_garda'))
     INTO v_acum FROM pg_proc p WHERE p.oid IN ('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure,
-                                               'public.fn_bon_preia(bigint, timestamptz, jsonb)'::regprocedure);
+                                               'public.fn_bon_preia(bigint, timestamptz, jsonb)'::regprocedure,
+                                               'public.fn_bon_preluare_garda()'::regprocedure);
   v_scrisa := substring(obj_description('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure, 'pg_proc') FROM 'amprenta=([0-9a-f]{32})');
   IF v_acum IS DISTINCT FROM v_scrisa THEN
     RAISE EXCEPTION 'Revenire 20261102b: funcțiile / indexurile / drepturile pe linii diferă de cele livrate (acum %, în COMMENT %) — refuz', v_acum, v_scrisa;
@@ -45,8 +50,11 @@ BEGIN
 
   DROP FUNCTION public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb);   -- fără CASCADE: o dependență neașteptată anulează tot
   DROP FUNCTION public.fn_bon_preia(bigint, timestamptz, jsonb);
+  DROP TRIGGER trg_bonc_preluare_garda ON public.executie_bonuri_consum;
+  DROP FUNCTION public.fn_bon_preluare_garda();
   -- drepturile API pe linii, ca înainte de migrare (precondiția 0g)
   GRANT INSERT, UPDATE, DELETE ON public.executie_bonuri_consum_linii TO anon, authenticated;
+  GRANT INSERT, UPDATE, DELETE, TRUNCATE ON public.executie_bonuri_consum_linii TO service_role;
   IF NOT v_retragere THEN
     DROP INDEX public.ux_bonc_cheie_operatie;
     DROP INDEX public.ux_bonc_proiect_numar;
@@ -56,6 +64,8 @@ BEGIN
   END IF;
 
   IF to_regprocedure('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)') IS NOT NULL OR to_regprocedure('public.fn_bon_preia(bigint, timestamptz, jsonb)') IS NOT NULL
+     OR to_regprocedure('public.fn_bon_preluare_garda()') IS NOT NULL
+     OR NOT has_table_privilege('service_role', 'public.executie_bonuri_consum_linii', 'TRUNCATE')
      OR NOT has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'INSERT')
      OR NOT has_table_privilege('authenticated', 'public.executie_bonuri_consum_linii', 'DELETE')
      OR (NOT v_retragere AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_bonuri_consum' AND column_name = 'cheie_operatie'))
