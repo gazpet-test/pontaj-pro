@@ -4,9 +4,9 @@
 // Folosit în:  Magazie → 🧱 Țeavă proiecte (gestionarul)  și  Execuție → Izometrie (doar citire, aceeași sursă).
 // DOAR CITIRE: bucățile registrului se scriu exclusiv prin funcțiile registrului (BD le refuză altfel).
 // Înainte de migrarea 20261102a coloanele nu există → ecranul spune „registrul nu e instalat”, nu dă eroare.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
-import { TIPURI, CATEGORII, tipStoc, categorieStare, totaluri, filtreaza, fmtM, metri } from './lib/izoStoc.js'
+import { TIPURI, CATEGORII, tipStoc, categorieStare, totaluri, filtreaza, fmtM, metri, lipsaRegistru } from './lib/izoStoc.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -34,8 +34,14 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
   const [proiectId, setProiectId] = useState(proiectFix)
   const [f, setF] = useState({ depozitId: '', tip: '', categorie: '', cauta: '' })
   const [faraAcces, setFaraAcces] = useState(false)
+  // proiectul afișat: cel fix (Execuție) sau cel ales (Magazie) — o singură sursă peste tot
+  const pidActiv = proiectFix || proiectId
+  // doar ultima încărcare se aplică (schimbarea rapidă a proiectului nu lasă un răspuns vechi să-l suprascrie pe cel nou)
+  const ultimaCerere = useRef(0)
 
   const incarca = useCallback(async () => {
+    const cerere = ++ultimaCerere.current
+    const curenta = () => cerere === ultimaCerere.current
     setStare({ incarc: true, eroare: null, neinstalat: false })
     try {
       // proiectele cu registru activ (nivel ≠ off) + numele lor
@@ -44,23 +50,28 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
         supabase.from('executie_proiecte').select('id, nume, site_id').order('id'),
         supabase.from('logistica_depozite').select('id, name, cod_3litere, site_id').order('id'),
       ])
-      if (rProt.error && /fn_izo_proiecte_protejate|function/i.test(rProt.error.message || '')) {
-        setStare({ incarc: false, eroare: null, neinstalat: true }); return
-      }
+      if (!curenta()) return
+      if (lipsaRegistru(rProt.error)) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
+      for (const r of [rProt, rProj, rDep]) if (r.error) throw r.error
       const protejate = new Set((rProt.data || []).map(r => r.proiect_id))
       const lista = (rProj.data || []).filter(p => protejate.has(p.id) || p.id === proiectFix)
       setProiecte(lista)
       setDepozite(rDep.data || [])
-      const pid = proiectFix || proiectId || lista[0]?.id || null
-      if (!proiectFix && pid !== proiectId) setProiectId(pid)
+      const pid = pidActiv || lista[0]?.id || null
+      if (!proiectFix && pid !== pidActiv) setProiectId(pid)
       if (!pid) { setBucati([]); setStare({ incarc: false, eroare: null, neinstalat: false }); return }
       // decizia Razvan 21.10 (A): stocul de țeavă îl văd doar owner-ul și cei atribuiți proiectului (RLS face filtrarea;
       // aici doar explicăm de ce lista e goală)
       const { data: poate, error: eCit } = await supabase.rpc('fn_izo_citire', { p_proiect: pid })
-      const blocat = !eCit && poate === false
+      if (!curenta()) return
+      if (eCit) { if (lipsaRegistru(eCit)) { setStare({ incarc: false, eroare: null, neinstalat: true }); return } throw eCit }
+      // doar un „false” explicit înseamnă „fără atribuire”
+      const blocat = poate === false
       setFaraAcces(blocat)
       if (blocat) { setBucati([]); setStare({ incarc: false, eroare: null, neinstalat: false }); return }
-      const { data: tr } = await supabase.from('executie_tronsoane').select('id, cod, proiect_id').eq('proiect_id', pid)
+      const { data: tr, error: eTr } = await supabase.from('executie_tronsoane').select('id, cod, proiect_id').eq('proiect_id', pid)
+      if (eTr) throw eTr
+      if (!curenta()) return
       setTronsoane(tr || [])
       // bucățile registrului, pe pagini (limita PostgREST e 1000 de rânduri)
       const toate = []
@@ -69,27 +80,30 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
           .select('id, proiect_id, tip_cod, serie, serie_canon, sarja, lungime_mm, perete_mm, unghi_curba, stare, depozit_id, tronson_id, atribute, nr_document, data_receptie, updated_at')
           .eq('proiect_id', pid).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null)
           .order('id').range(de, de + PAGINA - 1)
+        if (!curenta()) return
         if (error) {
-          if (/tip_cod|serie_canon|column/i.test(error.message || '')) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
+          if (lipsaRegistru(error)) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
           throw error
         }
         // avansăm cu rândurile primite efectiv și ne oprim la pagina goală (merge și dacă max-rows din API e sub PAGINA)
         if (!data?.length) break
         toate.push(...data); de += data.length
       }
+      if (!curenta()) return
       setBucati(toate)
       setStare({ incarc: false, eroare: null, neinstalat: false })
     } catch (e) {
       console.error(e)
+      if (!curenta()) return
       setStare({ incarc: false, eroare: e.message || String(e), neinstalat: false })
     }
-  }, [proiectFix, proiectId])
+  }, [proiectFix, pidActiv])
   useEffect(() => { incarca() }, [incarca])
 
   const depMap = useMemo(() => Object.fromEntries(depozite.map(d => [d.id, d.cod_3litere || d.name])), [depozite])
   const depNume = useMemo(() => Object.fromEntries(depozite.map(d => [d.id, d.name])), [depozite])
   const trMap = useMemo(() => Object.fromEntries(tronsoane.map(t => [t.id, t.cod])), [tronsoane])
-  const proiect = proiecte.find(p => p.id === proiectId)
+  const proiect = proiecte.find(p => p.id === pidActiv)
   const depoziteProiect = useMemo(() => depozite.filter(d => proiect && d.site_id === proiect.site_id), [depozite, proiect])
   const tot = useMemo(() => totaluri(bucati, { depozite: depMap, tronsoane: trMap }), [bucati, depMap, trMap])
   const lista = useMemo(() => filtreaza(bucati, f), [bucati, f])
@@ -108,12 +122,12 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
   if (faraAcces) return (
     <div>
       {!proiectFix && proiecte.length > 1 && (
-        <select style={{ ...S.input, maxWidth:360, marginBottom:14 }} value={proiectId || ''} onChange={e => { setProiectId(Number(e.target.value)); setF({ depozitId:'', tip:'', categorie:'', cauta:'' }) }}>
+        <select style={{ ...S.input, maxWidth:360, marginBottom:14 }} value={pidActiv || ''} onChange={e => { setProiectId(Number(e.target.value)); setF({ depozitId:'', tip:'', categorie:'', cauta:'' }) }}>
           {proiecte.map(p => <option key={p.id} value={p.id}>{p.nume}</option>)}
         </select>
       )}
       <div style={{ ...S.card, padding:20, color:G.muted, fontSize:14 }}>
-        🔒 Nu ai atribuire pe acest proiect. Stocul de țeavă Transgaz îl văd doar cei atribuiți proiectului (inginer, manager de proiect, gestionar) și owner-ul.
+        🔒 Nu ești atribuit pe acest proiect, așa că nu vezi stocul lui de țeavă Transgaz. Îl văd doar oamenii atribuiți proiectului (inginer, manager de proiect, gestionar) și owner-ul; atribuirea o dă Răzvan.
       </div>
     </div>
   )
@@ -127,7 +141,7 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
     <div>
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:14 }}>
         {!proiectFix && (
-          <select style={{ ...S.input, maxWidth:360 }} value={proiectId || ''} onChange={e => { setProiectId(Number(e.target.value)); setF({ depozitId:'', tip:'', categorie:'', cauta:'' }) }}>
+          <select style={{ ...S.input, maxWidth:360 }} value={pidActiv || ''} onChange={e => { setProiectId(Number(e.target.value)); setF({ depozitId:'', tip:'', categorie:'', cauta:'' }) }}>
             {proiecte.map(p => <option key={p.id} value={p.id}>{p.nume}</option>)}
           </select>
         )}

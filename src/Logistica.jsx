@@ -4320,9 +4320,12 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   // Izometrie (decizia Q-E2-1 = C, 20.10.2026): site-urile proiectelor cu registru de țeavă activ → avertizare la plecare.
   // Doar avertizare: calea din_stoc mută stocul cantitativ și nu atinge registrul. Înainte de migrare RPC-ul lipsește → nimic.
   const [izoSiteuri, setIzoSiteuri] = useState(() => new Set())
+  const [izoNeverificat, setIzoNeverificat] = useState(false)   // eroare la verificare (alta decât „neinstalat”) → avertizare
   useEffect(() => {
     supabase.rpc('fn_izo_proiecte_protejate').then(({ data, error }) => {
-      if (!error) setIzoSiteuri(new Set((data || []).map(r => r.site_id).filter(Boolean)))
+      if (!error) { setIzoSiteuri(new Set((data || []).map(r => r.site_id).filter(Boolean))); setIzoNeverificat(false); return }
+      const m = `${error.code || ''} ${error.message || ''}`
+      setIzoNeverificat(!/PGRST202|42883|could not find the function|does not exist/i.test(m))
     })
   }, [])
 
@@ -4979,6 +4982,11 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                 <input type="text" value={plecareLocText} onChange={e => setPlecareLocText(e.target.value)} placeholder="ex: Depozit furnizor SC X SRL, București" style={{...S.input, flex:1}} />
               )}
             </div>
+            {plecareTip === 'site' && izoNeverificat && (
+              <div style={{ fontSize:12, color:G.orange, background:G.orange + '15', border:`1px solid ${G.orange}55`, borderRadius:8, padding:'8px 10px', marginBottom:6 }}>
+                🧱 Nu am putut verifica dacă site-ul are registru de țeavă Transgaz. Dacă e un proiect cu registru (ex. LOT 2), țeava iese doar din Magazie → Țeavă proiecte.
+              </div>
+            )}
             {plecareTip === 'site' && izoSiteuri.has(Number(plecareSiteId)) && (
               <div style={{ fontSize:12, color:G.orange, background:G.orange + '15', border:`1px solid ${G.orange}55`, borderRadius:8, padding:'8px 10px', marginBottom:6 }}>
                 🧱 Țeava Transgaz iese doar din modulul de țeavă (Magazie → Țeavă proiecte). Pe acest transport pune doar alte materiale.

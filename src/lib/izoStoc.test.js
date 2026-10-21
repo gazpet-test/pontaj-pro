@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tipStoc, categorieStare, metri, totaluri, filtreaza } from './izoStoc.js'
+import { tipStoc, categorieStare, metri, totaluri, filtreaza, lipsaRegistru } from './izoStoc.js'
 
 const t = (o = {}) => ({ tip_cod: 'teava', serie: '247EK08603', serie_canon: '247EK08603', sarja: 'SA07348', lungime_mm: 12280, perete_mm: 7.1, stare: 'receptionat', depozit_id: 11, tronson_id: null, ...o })
 
@@ -46,5 +46,15 @@ describe('filtreaza', () => {
     expect(filtreaza(bucati, { cauta: '8543' }).map(b => b.serie)).toEqual(['254CA08543'])
     expect(filtreaza(bucati, { cauta: '254-ca 0854' }).length).toBe(1)
     expect(filtreaza(bucati, { cauta: 'sa07348' }).length).toBe(2)
+  })
+})
+
+describe('lipsaRegistru (fără fail-open)', () => {
+  it('doar funcția / coloana lipsă înseamnă „neinstalat”', () => {
+    expect(lipsaRegistru({ code: 'PGRST202', message: 'Could not find the function public.fn_izo_citire' })).toBe(true)
+    expect(lipsaRegistru({ code: '42703', message: 'column magazie_bucati.tip_cod does not exist' })).toBe(true)
+    expect(lipsaRegistru({ code: '42501', message: 'permission denied for function fn_izo_citire' })).toBe(false)
+    expect(lipsaRegistru({ message: 'Failed to fetch' })).toBe(false)
+    expect(lipsaRegistru(null)).toBe(false)
   })
 })

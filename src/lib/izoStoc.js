@@ -71,3 +71,13 @@ export function filtreaza(bucati, { depozitId = null, tip = '', categorie = '', 
 }
 
 export const fmtM = m => (m == null ? '—' : Number(m).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+
+/**
+ * Eroarea înseamnă „registrul nu e instalat” (funcția / coloana lipsește) — DOAR atunci. Orice altă eroare (drepturi,
+ * rețea, timeout) se arată ca eroare, nu ca listă goală (review #809: fără fail-open).
+ */
+export function lipsaRegistru(error) {
+  if (!error) return false
+  const m = `${error.code || ''} ${error.message || ''}`
+  return /PGRST202|42883|42703|could not find the function|function .* does not exist|column .* does not exist/i.test(m)
+}
