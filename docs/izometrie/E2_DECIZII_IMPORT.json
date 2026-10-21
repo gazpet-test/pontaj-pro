@@ -15,6 +15,16 @@
       "data": "2026-10-21",
       "autor": "—",
       "decizie": "DESCHISE (întrebat managerul de proiect): 1) „ORSOVA (TOPLET)”, 2) Topleț fără DT/OS, 3) curbele „16-17”, 6) curba 362. Grup NOU apărut după review r1: Jupânești „DM JUPANESTI/BALVANESTI” (120, originea țevilor de pe T12)."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Razvan Trusu (prin chat)",
+      "decizie": "„ORSOVA (TOPLET)” (206) → TOP / 11, inclusiv neconformele 58 / 596."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Toma Razvan (MP), cu Razvan Trusu (C:\\Users\\Public\\claude-server\\RASPUNSURI_MP_LOT2_2110.md)",
+      "decizie": "385 fără DT/OS → TOP; 120 „DM JUPANESTI/BALVANESTI” → origine JUP, notă „descărcate excepțional la Bâlvănești”, fără mișcări LOT 1; neconforme 58/596 în carantină la TOP, nedisponibile la montaj; curbe CJPT 0001–0003 → TR16, CJPT 0004 → TR17, CJPT 0026 împărțit (362 + cele cu TR16 → TR16; 102/118/131/157/966/1027 → TR17); curba 1198 în stoc la TOP (fără ieșire); corecții de date (8 țevi T2 → 05.09.2026, CJPJ 0041–0046 → 17.10.2026, curba 130 → 16.06.2026); PV L3 86188 / 16.10.2026."
     }
   ],
   "corectii_serie": {
@@ -112,7 +122,14 @@
     }
   },
   "excluderi": [],
-  "depozit_grup": {},
+  "depozit_grup": {
+    "Topleț · DT/OS „ORSOVA (TOPLET)”": "TOP",
+    "Topleț · DT/OS „—”": "TOP",
+    "Jupânești · DT/OS „DM JUPANESTI/BALVANESTI”": {
+      "cod": "JUP",
+      "nota": "descărcate excepțional la Bâlvănești (origine DM Jupânești, LOT 2)"
+    }
+  },
   "tronson_grup": {},
   "accepta_neconformitate": [
     {
@@ -120,15 +137,124 @@
       "foaie": "TEAVA 7.1 TOPLET",
       "rand": 58,
       "serie": "254CA09771",
-      "motiv": "„MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”"
+      "motiv": "„MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”",
+      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj"
     },
     {
       "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
       "foaie": "TEAVA 7.1 TOPLET",
       "rand": 596,
       "serie": "247EK08658",
-      "motiv": "„LIPSA MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”"
+      "motiv": "„LIPSA MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”",
+      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj"
     }
   ],
-  "accepta_sarja": []
+  "accepta_sarja": [],
+  "tronson_aviz": {
+    "CJPT 0001": 16,
+    "CJPT 0002": 16,
+    "CJPT 0003": 16,
+    "CJPT 0004": 17
+  },
+  "tronson_aviz_serie": {
+    "CJPT 0026|362": 16,
+    "CJPT 0026|102": 17,
+    "CJPT 0026|118": 17,
+    "CJPT 0026|131": 17,
+    "CJPT 0026|157": 17,
+    "CJPT 0026|966": 17,
+    "CJPT 0026|1027": 17
+  },
+  "ignora_iesire": [
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "CURBE LOT 2",
+      "rand": 426,
+      "serie": "1198",
+      "motiv": "curba 1198 e încă în stoc la OS Topleț; TR „16” din Excel nu e o ieșire reală (MP, 21.10)"
+    }
+  ],
+  "corectii_camp": [
+    {
+      "fisier": "JUPANESTI__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 MM",
+      "randuri": [
+        452,
+        453,
+        454,
+        456,
+        457,
+        458,
+        459,
+        460
+      ],
+      "camp": "data_iesire",
+      "valoare": "2026-09-05",
+      "motiv": "MP 21.10: data ieșirii 05.09.2026, nu 09.05.2026"
+    },
+    {
+      "fisier": "JUPANESTI__LOT_2_TEAVA.xlsx",
+      "aviz_iesire": [
+        "CJPJ 0041",
+        "CJPJ 0042",
+        "CJPJ 0043",
+        "CJPJ 0044",
+        "CJPJ 0045",
+        "CJPJ 0046"
+      ],
+      "camp": "data_iesire",
+      "valoare": "2026-10-17",
+      "motiv": "MP 21.10: avizele CJPJ 0041–0046 din 17.10.2026 (data lipsea)"
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "CURBE LOT 2",
+      "aviz_iesire": [
+        "CJPT 0003"
+      ],
+      "serie": "130",
+      "camp": "data_iesire",
+      "valoare": "2026-06-16",
+      "motiv": "MP 21.10: curba 130 pe CJPT 0003 ieșită la 16.06.2026, nu 11.06"
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "randuri": [
+        1402,
+        1403,
+        1404,
+        1405,
+        1406,
+        1407,
+        1408,
+        1409,
+        1410,
+        1411,
+        1412,
+        1413,
+        1414,
+        1415,
+        1416,
+        1417,
+        1418,
+        1419,
+        1420,
+        1421,
+        1422,
+        1423,
+        1424,
+        1425,
+        1426,
+        1427,
+        1428,
+        1429,
+        1430,
+        1431
+      ],
+      "camp": "pv_nr",
+      "valoare": "86188",
+      "motiv": "MP 21.10: PV recepție L3 (avize 154/155 din 15.10) nr. 86188 / 16.10.2026"
+    }
+  ]
 }

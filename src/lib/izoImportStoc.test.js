@@ -195,3 +195,56 @@ describe('review #807', () => {
     expect(r.probleme.join()).toMatch(/nu respectă formatul/)
   })
 })
+
+describe('review #807 r2 + răspunsurile MP', () => {
+  const ev = (rows, foaieNume, start, decizii = {}) => evalueaza(foaie(foaieNume, rows, start).randuri, { decizii, coduri, tronsoane })
+  const curba = (o = {}) => { const r = Array(25).fill(null); Object.assign(r, { 1: '362', 2: 'Curbe CMFØ 610/8/L360NE/6,1 - 20˚', 3: '2520914', 12: 'LOT 2', 13: 'TOPLET', 16: 'CJPT 0026', 17: 46259 }, o); return r }
+  it('ieșire parțială cu aviz → blocant', () => {
+    expect(ev([rStd({ 16: 'CJPJ 0038', 17: 12, 18: '264DB00025', 19: 6.2 })], 'TEAVA 8.8 MM', 12).randuri[0].probleme.join()).toMatch(/ieșire parțială/)
+  })
+  it('dată completată dar necitită → blocant (aviz, PV chiar cu număr)', () => {
+    expect(ev([rStd({ 6: '31/02/2026' })], 'TEAVA 8.8 MM', 12).randuri[0].probleme.join()).toMatch(/data avizului necitită/)
+    expect(ev([rStd({ 10: '31/02/2026' })], 'TEAVA 8.8 MM', 12).randuri[0].probleme.join()).toMatch(/data PV necitită/)
+  })
+  it('izolația: PEHD din descriere; fără mențiune → necunoscută (nu „neizolata” ghicit)', () => {
+    const t = construiestePayload(ev([rStd()], 'TEAVA 8.8 MM', 12).randuri, [], 'x').bucati[0]
+    expect(t.izolatie).toBe('PEHD')
+    const c = construiestePayload(ev([curba({ 16: null, 17: null })], 'CURBE LOT 2', 12).randuri, [], 'x').bucati[0]
+    expect(c.izolatie).toBeUndefined()
+  })
+  it('tronson din decizie: aviz+serie are prioritate, apoi aviz (TR lipsă / ambiguu)', () => {
+    const dec = { tronson_aviz: { 'CJPT 0026': 17 }, tronson_aviz_serie: { 'CJPT 0026|362': 16 } }
+    const tr = { ...tronsoane, T16: 20, T17: 21 }
+    const a = evalueaza(foaie('CURBE LOT 2', [curba()], 12).randuri, { decizii: dec, coduri, tronsoane: tr }).randuri[0]
+    expect(a).toMatchObject({ stare: 'pe_tronson', tronson_cod: 'T16' })
+    const b = evalueaza(foaie('CURBE LOT 2', [curba({ 1: '102', 20: '16-17' })], 12).randuri, { decizii: dec, coduri, tronsoane: tr }).randuri[0]
+    expect(b).toMatchObject({ stare: 'pe_tronson', tronson_cod: 'T17' })
+  })
+  it('ignora_iesire: câmpurile de ieșire fără aviz nu mai blochează, bucata rămâne în stoc', () => {
+    const r = curba({ 1: '1198', 16: null, 17: null, 20: 16 })
+    expect(ev([r], 'CURBE LOT 2', 12).randuri[0].probleme.join()).toMatch(/fără aviz de ieșire/)
+    const ok = ev([r], 'CURBE LOT 2', 12, { ignora_iesire: [{ fisier: 'X.xlsx', foaie: 'CURBE LOT 2', rand: 13, motiv: 'încă în stoc' }] }).randuri[0]
+    expect(ok.probleme).toEqual([])
+    expect(ok.stare).toBe('sosit')
+    expect(ok.corectii[0]).toMatchObject({ camp: 'iesire', motiv: 'încă în stoc' })
+  })
+  it('corectii_camp: pe rânduri / pe aviz, dată validată, fără wildcard, urmă în sursă', () => {
+    const dec = { corectii_camp: [{ foaie: 'TEAVA 8.8 MM', randuri: [13], camp: 'pv_nr', valoare: '86188', motiv: 'MP' },
+                                  { camp: 'data_aviz', valoare: '2026-01-01' }] }
+    const b = ev([rStd({ 9: null })], 'TEAVA 8.8 MM', 12, dec).randuri[0]
+    expect(b.pv_nr).toBe('86188')
+    expect(b.corectii).toEqual([{ camp: 'pv_nr', inainte: null, dupa: '86188', motiv: 'MP' }])
+    expect(construiestePayload([b], [], 'x').bucati[0].sursa.corectii.length).toBe(1)
+    const rau = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ randuri: [13], camp: 'data_iesire', valoare: '2026-02-31' }] }).randuri[0]
+    expect(rau.probleme.join()).toMatch(/nu e o dată/)
+    const nepermis = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ randuri: [13], camp: 'serie', valoare: 'X' }] }).randuri[0]
+    expect(nepermis.probleme.join()).toMatch(/câmp nepermis/)
+  })
+  it('depozit_grup cu notă și neconformitate acceptată cu notă → observații', () => {
+    const dec = { depozit_grup: { 'Topleț · DT/OS „ALTCEVA”': { cod: 'TOP', nota: 'descărcate excepțional' } },
+                  accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, nota: 'carantină' }] }
+    const b = ev([rT71({ 14: 'ALTCEVA', 15: 'MARCAJ' })], 'TEAVA 7.1 TOPLET', 11, dec).randuri[0]
+    expect(b.probleme).toEqual([])
+    expect(construiestePayload([b], [], 'x').bucati[0].observatii).toBe('NECONFORM: MARCAJ — carantină · descărcate excepțional')
+  })
+})

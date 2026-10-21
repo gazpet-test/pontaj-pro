@@ -159,19 +159,52 @@ export function depozitPropus(b, coduri) {
   return { grup: `Topleț · DT/OS „${b.dt_os || '—'}”` }
 }
 
+// corecțiile de câmp scrise de oameni (răspunsurile MP): selector pe rânduri sau pe avize, câmp permis, valoare validată
+const CAMPURI_CORECTABILE = new Set(['data_iesire', 'pv_nr', 'pv_data', 'data_aviz', 'data_nrcd'])
+const RE_ISO = /^(\d{4})-(\d{2})-(\d{2})$/
+const isoValid = v => { const m = String(v || '').match(RE_ISO); return !!m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toISOString().slice(0, 10) === v }
+function selectorBate(c, b) {
+  if (!c.randuri && !c.aviz_iesire) return false   // fără selector pe rânduri / avize = nu se aplică nicăieri (fără wildcard)
+  if (c.fisier && c.fisier !== b.sursa.fisier) return false
+  if (c.foaie && c.foaie !== b.sursa.foaie) return false
+  if (c.randuri && !c.randuri.includes(b.sursa.rand)) return false
+  if (c.aviz_iesire && !c.aviz_iesire.includes(b.aviz_iesire)) return false
+  if (c.serie && String(c.serie).toUpperCase() !== b.serie) return false
+  return true
+}
+
 /**
  * Aplică deciziile și calculează pentru fiecare rând: starea, locul, peretele, problemele blocante.
- * decizii: { corectii_serie: {brut: corect}, excluderi: [{fisier, foaie, rand, motiv}], depozit_grup: {grup: COD},
- *            tronson_grup: {text: nr}, accepta_neconformitate: [{fisier, foaie, rand}], accepta_sarja: [serie] }
+ * decizii: { corectii_serie: {brut: corect | {serie, nota}}, excluderi: [{fisier, foaie, rand, motiv}],
+ *            depozit_grup: {grup: COD | {cod, nota}}, tronson_grup: {text: nr},
+ *            tronson_aviz: {aviz: nr} (TR ambiguu sau lipsă), tronson_aviz_serie: {'aviz|serie': nr} (prioritar),
+ *            ignora_iesire: [{fisier, foaie, rand, motiv}] (câmpuri de ieșire care nu sunt o ieșire reală),
+ *            corectii_camp: [{fisier?, foaie?, randuri? | aviz_iesire?, serie?, camp, valoare, motiv}],
+ *            accepta_neconformitate: [{fisier, foaie, rand, nota?}], accepta_sarja: [serie] }
  */
 export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie = [] }) {
   const cheieSursa = s => `${s.fisier}|${s.foaie}|${s.rand}`
   const exclDec = new Map((decizii.excluderi || []).map(e => [cheieSursa(e), e.motiv]))
-  const neconfOk = new Set((decizii.accepta_neconformitate || []).map(cheieSursa))
+  const neconfOk = new Map((decizii.accepta_neconformitate || []).map(e => [cheieSursa(e), e]))
+  const ignoraIes = new Map((decizii.ignora_iesire || []).map(e => [cheieSursa(e), e.motiv || 'fără ieșire reală']))
   const out = [], excluse = []
   for (const b0 of randuri) {
-    const b = { ...b0, probleme: [], avertismente: [] }
+    const b = { ...b0, probleme: [], avertismente: [], corectii: [] }
     if (exclDec.has(cheieSursa(b.sursa))) { excluse.push({ sursa: b.sursa, serie: b.serie, motiv: `decizie: ${exclDec.get(cheieSursa(b.sursa))}` }); continue }
+    // câmpurile de ieșire care nu sunt o ieșire reală (ex. curba 1198: TR „16” fără aviz — încă în stoc)
+    if (ignoraIes.has(cheieSursa(b.sursa))) {
+      b.corectii.push({ camp: 'iesire', inainte: { aviz: b.aviz_iesire, tr: b.tronson_iesire, cant: b.cant_iesire }, motiv: ignoraIes.get(cheieSursa(b.sursa)) })
+      b.aviz_iesire = null; b.tronson_iesire = null; b.cant_iesire = null; b.ies_serie = null; b.data_iesire = null
+    }
+    // corecțiile de câmp (răspunsurile MP), înaintea oricărei validări
+    for (const c of decizii.corectii_camp || []) {
+      if (!selectorBate(c, b)) continue
+      if (!CAMPURI_CORECTABILE.has(c.camp)) { b.probleme.push(`corecție pe câmp nepermis „${c.camp}”`); continue }
+      const esteData = c.camp !== 'pv_nr'
+      if (esteData && !isoValid(c.valoare)) { b.probleme.push(`corecția ${c.camp} = „${c.valoare}” nu e o dată AAAA-LL-ZZ validă`); continue }
+      b.corectii.push({ camp: c.camp, inainte: b[c.camp] ?? null, dupa: c.valoare, motiv: c.motiv || null })
+      b[c.camp] = esteData ? c.valoare : String(c.valoare)
+    }
     // seria
     if (b.tip === 'teava') {
       // corecția: text sau { serie, nota }; revalidată cu RE_SERIE_TEAVA (review #807 P2) — o greșeală de tastare în
@@ -187,8 +220,9 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
       // peretele: din foaie, verificat cu descrierea
       if (b.perete_desc !== null && b.perete_desc !== b.perete_foaie) b.probleme.push(`perete: foaia spune ${b.perete_foaie}, descrierea ${b.perete_desc}`)
       b.perete_mm = b.perete_foaie ?? b.perete_desc
-      if (b.cant_iesire !== null && b.cantitate !== null && Math.abs(b.cant_iesire - b.cantitate) > 0.005)
-        b.avertismente.push(`cantitatea la ieșire ${b.cant_iesire} ≠ aviz ${b.cantitate}`)
+      // o ieșire PARȚIALĂ ar muta toată bucata pe tronson cu lungimea inițială → blocant, ca debitarea (Copilot r2 P1)
+      if (b.aviz_iesire && b.cant_iesire !== null && b.cantitate !== null && Math.abs(b.cant_iesire - b.cantitate) > 0.005)
+        b.probleme.push(`ieșire parțială: ${b.cant_iesire} din ${b.cantitate} m pe avizul ${b.aviz_iesire} — de decis`)
       if (b.debitare !== null && b.cantitate !== null && b.debitare > 0 && Math.abs(b.debitare - b.cantitate) > 0.005)
         b.probleme.push(`debitare parțială (${b.debitare} din ${b.cantitate} m) — rest în DM ${b.cant_in_dm}: de decis`)
     } else {
@@ -200,16 +234,24 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     else if (b.tip === 'teava' && !/^[A-Z]{2}\d{5}$/.test(b.sarja) && !(decizii.accepta_sarja || []).includes(b.sarja))
       b.avertismente.push(`șarjă în afara formatului AA99999: ${b.sarja}`)
     if (b.neconformitate && !neconfOk.has(cheieSursa(b.sursa))) b.probleme.push(`neconformitate „${b.neconformitate}” — de decis (intră sau refuzat la recepție)`)
-    if (b.neconformitate && neconfOk.has(cheieSursa(b.sursa))) b.nota_neconformitate = `NECONFORM: ${b.neconformitate}`
-    if (b.data_aviz && typeof b.data_aviz === 'object') b.avertismente.push(`data avizului necitită: ${b.data_aviz.invalid}`)
+    if (b.neconformitate && neconfOk.has(cheieSursa(b.sursa))) {
+      const nota = neconfOk.get(cheieSursa(b.sursa)).nota
+      b.nota_neconformitate = `NECONFORM: ${b.neconformitate}${nota ? ` — ${nota}` : ''}`
+    }
+    // o dată completată dar necitită blochează (sold inițial: nu se ghicește, nu se pierde) — Copilot r2 P2
+    if (b.data_aviz && typeof b.data_aviz === 'object') b.probleme.push(`data avizului necitită: ${b.data_aviz.invalid}`)
     if (b.greutate_kg !== null && b.greutate_kg <= 0) b.avertismente.push(`greutate ${b.greutate_kg} kg`)
     // datele care decid starea: o dată necitită nu se ghicește (review #807 P2)
     const pvValid = typeof b.pv_data === 'string', nrcdValid = typeof b.data_nrcd === 'string'
-    if (b.pv_data && !pvValid && !b.pv_nr) b.probleme.push(`data PV necitită: ${b.pv_data.invalid}`)
+    if (b.pv_data && !pvValid) b.probleme.push(`data PV necitită: ${b.pv_data.invalid}`)
     if (b.data_nrcd && !nrcdValid) b.probleme.push(`data NRCD necitită: ${b.data_nrcd.invalid}`)
-    if (b.data_iesire && typeof b.data_iesire === 'object') b.avertismente.push(`data ieșirii necitită: ${b.data_iesire.invalid}`)
+    if (b.data_iesire && typeof b.data_iesire === 'object') b.probleme.push(`data ieșirii necitită: ${b.data_iesire.invalid}`)
     // starea și locul
     if (b.aviz_iesire) {
+      const ovSerie = decizii.tronson_aviz_serie?.[`${b.aviz_iesire}|${b.serie}`]
+      const ovAviz = decizii.tronson_aviz?.[b.aviz_iesire]
+      if (ovSerie != null) b.tronson_iesire = { nr: Number(ovSerie), din_decizie: true }
+      else if (ovAviz != null && (!b.tronson_iesire || b.tronson_iesire.ambiguu)) b.tronson_iesire = { nr: Number(ovAviz), din_decizie: true }
       // seria scrisă la ieșire trebuie să fie a rândului (brută sau corectată) — un aviz mutat pe alt rând nu trece
       if (b.ies_serie && serieCanon(b.ies_serie) !== serieCanon(b.serie) && serieCanon(b.ies_serie) !== serieCanon(b.serie_bruta))
         b.probleme.push(`seria la ieșire „${b.ies_serie}” ≠ seria rândului „${b.serie}”`)
@@ -238,7 +280,9 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     // depozitul (sau originea, pentru cele de pe tronson) trebuie cunoscut în ORICE stare (review #807 P1)
     const dep = depozitPropus(b, coduri)
     if (dep.grup) {
-      const cod = decizii.depozit_grup?.[dep.grup]
+      const dg = decizii.depozit_grup?.[dep.grup]
+      const cod = dg && typeof dg === 'object' ? dg.cod : dg
+      if (dg && typeof dg === 'object' && dg.nota) b.nota_depozit = dg.nota
       if (cod && coduri[cod]) { b.depozit_cod = cod; b.depozit_id = coduri[cod] }
       else { b.probleme.push(`depozit neclar: ${dep.grup} — de decis pe grup`); b.depozit_grup = dep.grup }
     } else { b.depozit_cod = dep.cod; b.depozit_id = dep.id }
@@ -273,7 +317,9 @@ export function construiestePayload(randuri, surse, motiv, blocanteGlobale = [])
       stare: b.stare, tronson_id: b.tronson_id ?? undefined,
       depozit_id: b.stare === 'pe_tronson' ? undefined : (b.depozit_id ?? undefined),
       depozit_origine_id: b.stare === 'pe_tronson' ? (b.depozit_id ?? undefined) : undefined,
-      izolatie: /HDPE|PEHD/i.test(b.descriere) ? 'PEHD' : 'neizolata', izolatie_text: /HDPE B3/i.test(b.descriere) ? 'HDPE B3' : undefined,
+      // izolația DOAR din descriere (Copilot r2 P2): PEHD / neizolată când e scris; altfel necunoscută (NULL), nu ghicită
+      izolatie: /HDPE|PEHD/i.test(b.descriere) ? 'PEHD' : (/\bneizolat/i.test(b.descriere) ? 'neizolata' : undefined),
+      izolatie_text: /HDPE B3/i.test(b.descriere) ? 'HDPE B3' : undefined,
       grad_otel: /L360NE/i.test(b.descriere) ? 'L360NE' : undefined, standard: /3183/.test(b.descriere) ? 'SR EN ISO 3183 PSL2' : undefined,
       greutate_kg: b.greutate_kg ?? undefined, nr_aviz: b.nr_aviz ?? undefined,
       data_aviz: typeof b.data_aviz === 'string' ? b.data_aviz : undefined, gestiune: b.gestiune || undefined, dt_os: b.dt_os || undefined,
@@ -281,9 +327,10 @@ export function construiestePayload(randuri, surse, motiv, blocanteGlobale = [])
       pv_receptie: b.pv_nr || typeof b.pv_data === 'string' ? { nr: b.pv_nr || null, data: typeof b.pv_data === 'string' ? b.pv_data : null } : undefined,
       nrcd: typeof b.data_nrcd === 'string' ? { data: b.data_nrcd } : undefined,
       descriere: b.descriere,
-      observatii: [b.nota_neconformitate, b.nota_corectie, b.obs].filter(Boolean).join(' · ') || undefined,
+      observatii: [b.nota_neconformitate, b.nota_corectie, b.nota_depozit, b.obs].filter(Boolean).join(' · ') || undefined,
       sursa: { ...b.sursa, serie_bruta: b.serie_bruta !== b.serie ? b.serie_bruta : undefined,
-               sarja_bruta: b.sarja_bruta && b.sarja_bruta !== b.sarja ? b.sarja_bruta : undefined },
+               sarja_bruta: b.sarja_bruta && b.sarja_bruta !== b.sarja ? b.sarja_bruta : undefined,
+               corectii: b.corectii?.length ? b.corectii : undefined },
     })),
   }
 }
