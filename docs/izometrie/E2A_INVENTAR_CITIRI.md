@@ -45,6 +45,12 @@ r11 avea porți pe tipuri: view fără invoker, DEFINER care numește tabelele, 
   - view-urile și view-urile materializate care depind (`pg_depend` → `pg_rewrite`) de ceva din închidere, **inclusiv cele `security_invoker`**;
   - funcțiile din scheme non-sistem, în afara `public.fn_izo_*`, al căror corp **numește** ceva din închidere (`public`: numele simplu; alte scheme: `schema.nume`) sau care depind de el în catalog (corpuri `BEGIN ATOMIC`).
 - **Refuz:** un view fără `security_invoker`, un view materializat sau o funcție `SECURITY DEFINER` în închidere.
+- **r13 (Jakarinos r12):**
+  - un nume necalificat se rezolvă prin `search_path`-ul FUNCȚIEI care îl folosește (`proconfig`; fără SET: `public`);
+  - identificatorii citați (`"teste".f()`) sunt acceptați;
+  - dependențele din `pg_depend` se citesc cu cataloagele explicite (`classid` / `refclassid`);
+  - amprenta excepțiilor dinamice = md5(prosrc | proconfig | owner | proacl | prosecdef), deci o schimbare de `search_path`, owner sau drepturi invalidează excepția;
+  - teste T13i–k.
 
 Pe live (21.10.2026), închiderea are tabelul `magazie_bucati` și 18 funcții INVOKER cu SQL dinamic din schemele Supabase (realtime, storage, extensions). **Nicio funcție DEFINER**, deci activarea nu e blocată.
 
