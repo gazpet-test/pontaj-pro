@@ -51,6 +51,10 @@ r11 avea porți pe tipuri: view fără invoker, DEFINER care numește tabelele, 
   - dependențele din `pg_depend` se citesc cu cataloagele explicite (`classid` / `refclassid`);
   - amprenta excepțiilor dinamice = md5(prosrc | proconfig | owner | proacl | prosecdef), deci o schimbare de `search_path`, owner sau drepturi invalidează excepția;
   - teste T13i–k.
+- **r13b (Copilot r12):** numele necalificate ale obiectelor din schemele NOASTRE se potrivesc mereu (conservator); cele din schemele platformei Supabase, doar prin `search_path`-ul funcției. T13k–l.
+- **r14 (Jakarinos + Copilot r13):** dacă funcția **nu are `search_path` fixat în `proconfig`** (moștenește calea apelantului) sau și-o schimbă în corp (`set_config('search_path', …)` / `SET search_path`), calea e **necunoscută** și potrivirea necalificată e conservatoare pentru TOATE schemele, inclusiv ale platformei.
+  - Alegerea: varianta cu calea necunoscută, nu refuzul oricărui DEFINER fără `search_path`. Pe live, închiderea rămâne fără niciun DEFINER (19 funcții INVOKER, toate din schemele Supabase), deci activarea nu e blocată și nu e nevoie de excepții noi. Refuzul general ar fi prins și DEFINER-i care nu ating registrul.
+  - Teste: T13m (exemplul Jak: `extensions.r13_v` invoker + bridge INVOKER fără `search_path` + leak DEFINER), T13n (DEFINER cu cale moștenită), T13n2 (`set_config` în corp), T13n3 (cale fixată `public`, nume din schema platformei → nu e muchie).
 
 Pe live (21.10.2026), închiderea are tabelul `magazie_bucati` și 18 funcții INVOKER cu SQL dinamic din schemele Supabase (realtime, storage, extensions). **Nicio funcție DEFINER**, deci activarea nu e blocată.
 
