@@ -492,7 +492,7 @@ BEGIN
     -- Refuz dacă în închidere apare: un view fără security_invoker, un view materializat sau o funcție SECURITY DEFINER.
     -- Funcțiile DEFINER cu SQL dinamic din afara listei revizuite sunt refuzate oricum (citesc orice, fără să numească).
     DECLARE
-      c_rel oid[]; c_fn oid[] := '{}'; v_marime int := -1; v_iter int := 0;
+      c_rel oid[]; c_fn oid[] := '{}'; v_marime int := -1; v_iter int := 0; c_mut oid[] := '{}';
       -- funcțiile DEFINER cu SQL dinamic revizuite pe live (docs/izometrie/E2A_INVENTAR_CITIRI.md, 21.10.2026): tabele fixe
       -- (executie_proiecte / profiles), identificatori pe listă albă. Amprenta excepției = md5(prosrc | proconfig | owner |
       -- proacl | prosecdef) (Jakarinos r12): orice schimbare de corp, search_path, owner sau drepturi cere review
@@ -522,6 +522,32 @@ BEGIN
          AND format('%s=%s', p.oid::regprocedure::text, md5(p.prosrc || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner)
                                                            || '|' || coalesce(p.proacl::text, '') || '|' || p.prosecdef::text))
              <> ALL (c_dinamice_revizuite);
+      -- r15 (Jakarinos + Copilot r14): funcțiile „mutator” — pot schimba calea de căutare a tranzacției: corpul conține
+      -- set_config (ORICE argumente, inclusiv variabile) sau textul search_path; până la punct fix, orice funcție care
+      -- numește un mutator (calificat, sau necalificat cu regulile de mai jos) devine și ea mutator. Un mutator are calea
+      -- NECUNOSCUTĂ, chiar dacă are search_path în proconfig (r14 trata doar set_config('search_path', …) literal)
+      SELECT coalesce(array_agg(p.oid), '{}') INTO c_mut FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prolang NOT IN (12, 13)
+         AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
+         AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* '(set_config|search_path)';
+      WHILE cardinality(c_mut) <> v_marime AND v_iter < 100 LOOP
+        v_marime := cardinality(c_mut); v_iter := v_iter + 1;
+        c_mut := c_mut || ARRAY(
+          SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           CROSS JOIN LATERAL (SELECT p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '') AS corp,
+                                      (SELECT string_to_array(lower(regexp_replace(substr(c, 13), '[[:space:]"]', '', 'g')), ',')
+                                         FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%' LIMIT 1) AS cale) x
+           WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prolang NOT IN (12, 13)
+             AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%') AND p.oid <> ALL (c_mut)
+             AND EXISTS (SELECT 1 FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace
+                          CROSS JOIN LATERAL (SELECT regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') AS nume) t
+                          WHERE q.oid = ANY (c_mut)
+                            AND (x.corp ~* (c_st || n2.nspname || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume || c_dr)
+                                 OR ((n2.nspname <> ALL (c_scheme_platforma) OR x.cale IS NULL OR n2.nspname = ANY (x.cale))
+                                     AND x.corp ~* (c_st || t.nume || c_dr)))));
+      END LOOP;
+      IF v_iter >= 100 THEN v := array_append(v, 'propagarea mutatorilor de cale nu converge (citire nerevizuită)'); END IF;
+      v_marime := -1; v_iter := 0;
       WHILE cardinality(c_rel) + cardinality(c_fn) <> v_marime AND v_iter < 100 LOOP
         v_marime := cardinality(c_rel) + cardinality(c_fn); v_iter := v_iter + 1;
         -- view-urile: dependențe din pg_rewrite spre pg_class (relații) / pg_proc (funcții) — cataloagele explicite (Jak r12 P3)
@@ -536,11 +562,9 @@ BEGIN
           SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            CROSS JOIN LATERAL (SELECT p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '') AS corp) x0
            -- calea de căutare a funcției: cea fixată în proconfig; NECUNOSCUTĂ (NULL) dacă nu e fixată — funcția moștenește calea
-           -- apelantului — sau dacă o schimbă în corp (set_config / SET search_path) — r14, Jakarinos + Copilot r13
+           -- apelantului (r14) — sau dacă e mutator, direct sau prin ce cheamă (r15)
            CROSS JOIN LATERAL (SELECT x0.corp,
-                                      CASE WHEN x0.corp ~* 'set_config[[:space:]]*\([[:space:]]*''search_path'''
-                                             OR x0.corp ~* '(^|[^[:alnum:]_])set[[:space:]]+((local|session)[[:space:]]+)?search_path([^[:alnum:]_]|$)'
-                                           THEN NULL
+                                      CASE WHEN p.oid = ANY (c_mut) THEN NULL   -- mutator (r15): calea poate fi schimbată în tranzacție
                                            ELSE (SELECT string_to_array(lower(regexp_replace(substr(c, 13), '[[:space:]"]', '', 'g')), ',')
                                                    FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%' LIMIT 1) END AS cale) x
            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
