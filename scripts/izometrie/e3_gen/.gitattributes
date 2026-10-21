@@ -1,0 +1,2 @@
+# rulate din WSL: fără CRLF
+*.sh text eol=lf
