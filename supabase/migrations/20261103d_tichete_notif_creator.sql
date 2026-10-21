@@ -131,7 +131,10 @@ BEGIN
   IF md5(pg_get_functiondef('public.fn_tichete_notif_on_status_change()'::regprocedure)) IS DISTINCT FROM '4adb48a37ff5834e7b95836daf3483cb' THEN
     RAISE EXCEPTION '20261103d: postconditie md5 esuata';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_tichete_notif_status' AND tgrelid = 'public.tichete'::regclass AND NOT tgisinternal) THEN
-    RAISE EXCEPTION '20261103d: trigger-ul trg_tichete_notif_status lipseste';
+  -- trigger-ul există, e activ și cheamă exact această funcție (review Jakarinos P2; tichete.status e NOT NULL, deci OLD.status nu e NULL)
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_tichete_notif_status' AND tgrelid = 'public.tichete'::regclass
+                 AND NOT tgisinternal AND tgenabled <> 'D'
+                 AND tgfoid = 'public.fn_tichete_notif_on_status_change()'::regprocedure) THEN
+    RAISE EXCEPTION '20261103d: trigger-ul trg_tichete_notif_status lipseste, e dezactivat sau nu cheama functia';
   END IF;
 END $post$;
