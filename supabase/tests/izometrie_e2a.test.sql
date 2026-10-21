@@ -187,14 +187,18 @@ SELECT teste.eroare('T6d stările noi nu sunt permise pe gazpet', $$INSERT INTO 
 SELECT teste.eroare('T6e locația „tronson” nu e permisă pe gazpet', $$INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta, locatie_tip) VALUES (1, 1, 'G10', 'gazpet', 'tronson')$$, 'violates check constraint');
 SELECT teste.e('T6e2 locatie_tip_check: depozit/tronson doar pe beneficiar', (SELECT pg_get_constraintdef(oid) FROM pg_constraint
   WHERE conname = 'magazie_bucati_locatie_tip_check') ~ 'provenienta = ''beneficiar''.*depozit.*tronson');
-SELECT teste.e('T6f authenticated citește bucățile din registru (SELECT neschimbat)', (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 4);
+SELECT teste.e('T6f fără atribuire: 0 rânduri din registru, rândurile gazpet / LOT 1 vizibile ca azi (decizia A)',
+  (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 0 AND (SELECT count(*) FROM public.magazie_bucati WHERE provenienta = 'gazpet') >= 18
+  AND (SELECT count(*) FROM public.magazie_bucati WHERE serie = '254CA00001') = 1);
 RESET ROLE;
 
 -- ═══ T7 căile 3 și 9 ═══
+SELECT id AS id_reg FROM public.magazie_bucati WHERE serie = '254CA09771' \gset
 SELECT teste.ca(:'TOMA');
 SELECT teste.eroare('T7a DELETE pe executie_tevi a LOT 2 → refuz', $$DELETE FROM public.executie_tevi WHERE pachet_id = 2$$, 'nu se șterg din client');
 SELECT teste.e('T7b DELETE pe executie_tevi a LOT 1 → merge', teste.n($$DELETE FROM public.executie_tevi WHERE serie_unica = 'X2'$$) = 1);
-SELECT teste.eroare('T7c bon cu bucată din registru → refuz', $$INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) SELECT 1, id, 'teava' FROM public.magazie_bucati WHERE serie = '254CA09771'$$, 'nu intră pe bon');
+-- id-ul îl dă testul (clientul fără atribuire nu vede rândul, dar îl poate trimite direct)
+SELECT teste.eroare('T7c bon cu bucată din registru (id trimis direct) → refuz', format($f$INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) VALUES (1, %s, 'teava')$f$, :id_reg), 'nu intră pe bon');
 SELECT teste.eroare('T7f țeavă LOT 2 mutată pe pachet LOT 1 → refuz', $$UPDATE public.executie_tevi SET pachet_id = 1 WHERE serie_unica = 'Y1'$$, 'nu se mută între pachete');
 SELECT teste.eroare('T7g țeavă LOT 1 mutată pe pachet LOT 2 → refuz', $$UPDATE public.executie_tevi SET pachet_id = 2 WHERE serie_unica = 'X1'$$, 'nu se mută între pachete');
 SELECT teste.eroare('T7h pachet LOT 2 mutat pe LOT 1 → refuz', $$UPDATE public.executie_pachete_lansare SET proiect_id = 1, tronson_id = 8 WHERE id = 2$$, 'nu se mută între proiecte');
@@ -223,7 +227,8 @@ SELECT teste.e('T8a2 modulul magazie singur NU dă citire pe registru (review #8
 RESET ROLE;
 INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, depozit_id, acordat_de, motiv) VALUES (3, :'JANETA', 'gestionar', 9, 'test', 'test E2a');
 SELECT teste.ca(:'JANETA');
-SELECT teste.e('T8b gestionar cu atribuire pe proiectul 3: vede importul și evenimentul', (SELECT count(*) FROM public.izo_importuri) = 1 AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 1);
+SELECT teste.e('T8b gestionar cu atribuire pe proiectul 3: vede importul, evenimentul și bucățile din registru', (SELECT count(*) FROM public.izo_importuri) = 1
+  AND (SELECT count(*) FROM public.magazie_bucati_evenimente) = 1 AND (SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) = 4);
 SELECT teste.e('T8c fn_izo_proiecte_protejate: proiectul 3, site 6', (SELECT array_agg(proiect_id) FROM public.fn_izo_proiecte_protejate()) = ARRAY[3::bigint]
   AND (SELECT site_id FROM public.fn_izo_proiecte_protejate()) = 6);
 RESET ROLE;

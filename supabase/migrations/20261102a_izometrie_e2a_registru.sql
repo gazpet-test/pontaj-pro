@@ -404,7 +404,7 @@ BEGIN
     END LOOP;
     -- politicile RESTRICTIVE ale clientului pe magazie_bucati
     IF (SELECT count(*) FROM pg_policy p WHERE p.polrelid = 'public.magazie_bucati'::regclass AND NOT p.polpermissive
-          AND p.polname IN ('magbuc_izo_client_ins','magbuc_izo_client_upd','magbuc_izo_client_del')) <> 3 THEN
+          AND p.polname IN ('magbuc_izo_client_sel','magbuc_izo_client_ins','magbuc_izo_client_upd','magbuc_izo_client_del')) <> 4 THEN
       v := array_append(v, 'politicile RESTRICTIVE magbuc_izo_client_*');
     END IF;
     -- rolul scriitor: fără BYPASSRLS/LOGIN/SUPERUSER/INHERIT; singurul membru = postgres; niciun rol API nu-l poate prelua
@@ -1080,6 +1080,10 @@ BEGIN
     WITH CHECK (NOT (provenienta = 'beneficiar' AND public.fn_izo_nivel(proiect_id) <> 'off'));
   CREATE POLICY magbuc_izo_client_del ON public.magazie_bucati AS RESTRICTIVE FOR DELETE TO anon, authenticated
     USING (NOT (provenienta = 'beneficiar' AND public.fn_izo_nivel(proiect_id) <> 'off'));
+  -- citirea rândurilor registrului (decizia Razvan 21.10, A): doar owner-ul și cei atribuiți proiectului — rândurile
+  -- din afara registrului (tip_cod NULL) rămân cum sunt azi. Doar authenticated: anon n-are politică permisivă aici.
+  CREATE POLICY magbuc_izo_client_sel ON public.magazie_bucati AS RESTRICTIVE FOR SELECT TO authenticated
+    USING (tip_cod IS NULL OR public.fn_izo_citire(proiect_id));
   CREATE POLICY magbuc_izo_writer_sel ON public.magazie_bucati FOR SELECT TO izo_registru_writer USING (provenienta = 'beneficiar');
   CREATE POLICY magbuc_izo_writer_ins ON public.magazie_bucati FOR INSERT TO izo_registru_writer
     WITH CHECK (provenienta = 'beneficiar' AND public.fn_izo_nivel(proiect_id) <> 'off');
