@@ -40,6 +40,11 @@
 //   închide, fără a doua inserare (J1); o eroare de transport la UPDATE-ul rândului se verifică prin citirea
 //   lui, nu se raportează „neînchis" (J2); „trunchiat" după count (C1); reverificarea dosarului nu mai arată
 //   rezultatul vechi al cheii (C2).
+//   Verificare r6: eticheta rândului se caută în TOT dosarul HR (nu doar la angajatul ales) înainte de inserare,
+//   din nou chiar înainte de INSERT și înainte de „Închide" — salvat deja la alt angajat → nu se mai salvează /
+//   leagă la cel ales acum (F1); reîncărcarea cozii păstrează corecțiile de pe card (F1); rândul se închide doar
+//   dacă e încă în coadă — închis între timp de altcineva = avertisment, nu rescriere (F2); fără avertismentul fals
+//   de staging în HR (R1).
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -49,8 +54,9 @@ import { jsPDF } from 'jspdf'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
 import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare,
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
-  citireNecesara, stareInchidere, mesajInchidere, stagingSters, textConfirmareRespingere, mesajRespingere,
-  observatiiInserareHR, mesajBlocareHR, dosarInVerificare } from './citesteOriceDubluri.js'
+  citireNecesara, stareInchidere, mesajInchidere, avertizareStaging, textConfirmareRespingere, mesajRespingere,
+  observatiiInserareHR, mesajBlocareHR, dosarInVerificare, tagProvenienta, rezultatProvenienta, provenientaLaAltAngajat,
+  mesajProvenienta, pastreazaEditari, STATUS_COADA } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -168,6 +174,10 @@ const PARALEL_DOSAR = 6         // căutări simultane (o coadă mare = mulți a
 async function interogheaza(q) {
   try { return await q } catch (e) { return { data:null, error:e } }
 }
+// F1 (r6): documentele salvate deja din rândul ăsta, la ORICE angajat (eticheta „[Citește orice #N]" din observații;
+// fără % / _ în ea, iar postgrest-js codează [ # ș în URL) → { err } | { docs }. Orice rând găsit blochează inserarea.
+const cautaProvenienta = async row => rezultatProvenienta(await interogheaza(supabase.from('hr_documente_personale')
+  .select('id,employee_id,activ,deleted_at').like('observatii', `%${tagProvenienta(row.id)}%`).is('deleted_at', null).order('id').limit(10)))
 // gărzile din gardaDocDosar ([op, coloană, valoare], op 'eq' | 'is') aplicate pe o cerere supabase
 const aplicaGarda = (q, garda) => garda.reduce((acc, [op, col, val]) => acc[op](col, val), q)
 async function cautaInDosarHR(perechi) {
@@ -222,6 +232,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   const [view, setView] = useState('upload')
   const busyRef = useRef(new Set())   // anti dublu-click, sincron (state-ul busyId nu apucă să se randeze în <100ms)            // 'upload' | 'confirm'
   const [queue, setQueue] = useState([])
+  const queueRef = useRef([])                           // coada curentă, pentru loadQueue (corecțiile de pe card — F1 r6)
+  useEffect(() => { queueRef.current = queue }, [queue])
   const [entitati, setEntitati] = useState([])          // proiecte / angajați / vehicule
   const [tipuriFK, setTipuriFK] = useState([])          // pt hr/logistica: [{id,cod,denumire}]
   const [uploading, setUploading] = useState([])
@@ -261,14 +273,15 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   // ─── Încărcare coadă (doar documentele modulului curent + nedecis la executie) ──
   const loadQueue = useCallback(async () => {
     setLoading(true)
-    let q = supabase.from('ai_documente_inbox').select('*').in('status', ['clasificat','eroare'])
+    let q = supabase.from('ai_documente_inbox').select('*').in('status', STATUS_COADA)
     if (modul === 'executie') q = q.or('modul_tinta.eq.executie,modul_tinta.is.null')
     else q = q.eq('modul_tinta', modul)
     const { data } = await q.order('uploadat_la', { ascending: false })
-    setQueue(data || [])
+    // F1 (r6): rândurile proaspete păstrează corecțiile omului (angajat / tip ales pe card) — altfel reveneau tăcut la AI
+    setQueue(prev => pastreazaEditari(data || [], prev))
     setLoading(false)
     // HR: dublurile din dosar se caută în fundal — lista apare imediat, panoul de dublură după
-    if (modul === 'hr') verificaDosar(data || [])
+    if (modul === 'hr') verificaDosar(pastreazaEditari(data || [], queueRef.current))
   }, [modul, verificaDosar])
 
   // ─── Încărcare entități + tipuri FK per modul ──────────────────
@@ -482,6 +495,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   }
 
   // ── HR (Faza 2) ───────────────────────────────────────────────
+  const numeAngajat = id => (entitati.find(e => Number(e.id) === Number(id)) || {}).label || null   // mesajele F1 (r6)
   // opts.faraGardaNume (21.10): „Adaugă ca document nou" — același nume, ALT fișier (sau mărime
   // necunoscută), confirmat de om. Sare DOAR garda pe nume; același fișier (activ sau inactiv)
   // tot nu trece. opts.marimiComparate (r2): omul a confirmat „altă mărime" — dacă între timp a
@@ -494,6 +508,15 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (!tipRow) { flash('err', 'Alege tipul documentului (autorizațiile ISCIR/sudură se adaugă din secțiunea Autorizații).'); return }
     setBusyId(row.id)
     try {
+      // F1 (r6): întâi eticheta rândului în TOT dosarul (orice angajat, orice nume / mărime, fail-closed) — pe orice
+      // drum, inclusiv „Adaugă ca document nou". Salvat deja din rând (și la alt angajat, ales înainte) → nu inserez.
+      const prov = await cautaProvenienta(row)
+      if (prov.err) throw new Error(mesajEroareCautare(prov.err, row.fisier_nume))
+      if (prov.docs.length) {
+        await verificaDosar([row])
+        flash('err', mesajProvenienta(prov.docs, angajatId, numeAngajat), 12000)
+        return
+      }
       // Al doilea strat anti-duplicat (ultima apărare — documentul din dosar poate apărea
       // după verificarea din listă): același fișier la același angajat nu se inserează de
       // două ori. Dacă verificarea pică, NU inserăm (fail-closed).
@@ -521,6 +544,16 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         return
       }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
+      // F2 (r6): încă o dată eticheta, chiar înainte de INSERT — alt tab / alt om poate fi salvat documentul din același
+      // rând cât am copiat fișierul (1–5 s). Fereastra rămasă e doar până la INSERT (o gardă pe server ar cere schema).
+      const prov2 = await cautaProvenienta(row)
+      if (prov2.err || prov2.docs.length) {
+        await interogheaza(supabase.storage.from(cfg.bucket).remove([destPath]))   // copia urcată acum nu mai e folosită
+        if (prov2.err) throw new Error(mesajEroareCautare(prov2.err, row.fisier_nume))
+        await verificaDosar([row])
+        flash('err', mesajProvenienta(prov2.docs, angajatId, numeAngajat), 12000)
+        return
+      }
       const dd = row.payload_ai?.date_document || {}
       const dataExp = dd.data_expirare || null
       const { data: created, error: insErr } = await supabase.from('hr_documente_personale').insert({
@@ -535,8 +568,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       }).select('id').single()
       if (insErr) throw new Error('Insert document HR: ' + insErr.message)
 
-      // rând neînchis → o reîncercare se oprește în garda de mai sus („e deja în dosar" → «Închide»), fără altă
-      // inserare: după mărime sau, la mărime necunoscută / diferită, după eticheta rândului din observații (J1)
+      // rând neînchis → o reîncercare se oprește în garda de mai sus, fără altă inserare: după eticheta rândului din
+      // observații, căutată la orice angajat (J1 + F1 r6), sau după nume + mărime
       await inchideRandSiReimprospateaza(row, 'Document trimis în dosarul angajatului ✓', 'hr', tipCod, 'angajat', angajatId, created.id)
     } catch (e) {
       flash('err', String(e.message || e))
@@ -569,6 +602,16 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         return
       }
       const doc = d.doc
+      // F1 (r6): documentul a fost salvat deja din acest rând la ALT angajat (alegerea de atunci) → nu leg rândul de
+      // copia de aici și nu completez nimic în ea; omul alege angajatul corect sau scoate rândul. Fail-closed.
+      const prov = await cautaProvenienta(row)
+      if (prov.err) throw new Error(mesajEroareCautare(prov.err, row.fisier_nume))
+      const strain = provenientaLaAltAngajat(prov.docs, angajatId)
+      if (strain) {
+        await verificaDosar([row])
+        flash('err', mesajProvenienta([strain], angajatId, numeAngajat), 12000)
+        return
+      }
       const inactiv = d.stare === 'acelasi_inactiv'
       const campuri = completeaza && !inactiv ? d.campuri : []
       if (campuri.length) {
@@ -710,15 +753,17 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   // r4: 0 rânduri fără eroare → citesc rândul DIRECT (după id), nu din coada modulului: un rând mutat
   // între timp în alt modul lipsește din coadă, dar e tot deschis. J2: la fel după o eroare care NU e un
   // refuz sigur al serverului (rețea / timeout / 5xx — UPDATE-ul poate fi intrat, doar răspunsul s-a pierdut).
+  // F2 (r6): UPDATE-ul atinge rândul doar cât e încă în coadă (STATUS_COADA) — unul închis între timp din alt tab / de
+  // alt om nu se rescrie (alt angajat / document legat, confirmat → respins); citirea compară și confirmat_ref_id.
   async function actualizeazaRand(row, upd) {
     let res, citire = null
-    try { res = await supabase.from('ai_documente_inbox').update(upd).eq('id', row.id).select('id') }
+    try { res = await supabase.from('ai_documente_inbox').update(upd).eq('id', row.id).in('status', STATUS_COADA).select('id') }
     catch (e) { res = { error:e } }
-    if (citireNecesara(res)) citire = await interogheaza(supabase.from('ai_documente_inbox').select('id,status').eq('id', row.id).maybeSingle())
-    return { stare:stareInchidere(res, citire, upd.status), eroare:(res && res.error) || null }
+    if (citireNecesara(res)) citire = await interogheaza(supabase.from('ai_documente_inbox').select('id,status,confirmat_ref_id').eq('id', row.id).maybeSingle())
+    return { stare:stareInchidere(res, citire, upd.status, upd.confirmat_ref_id), eroare:(res && res.error) || null }
   }
 
-  // Marchează rândul inbox confirmat + curăță staging. Întoarce { stare:'inchis' | 'deschis' | 'necunoscut',
+  // Marchează rândul inbox confirmat + curăță staging. Întoarce { stare:'inchis' | 'altcineva' | 'deschis' | 'necunoscut',
   // stagingRamas }. 21.10: eroarea update-ului nu se mai înghite (documentul intrase, dar rândul rămânea
   // în coadă fără ca omul să afle). NU aruncă — documentul țintă e deja salvat.
   async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
@@ -728,9 +773,10 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
     })
     // staging-ul se șterge ORICUM (ca pe main): fără el, încă un «✓ Confirmă» pică la descărcare, nu salvează a
-    // doua oară. NH-1: storage-js nu aruncă ({ error } / data = []) → dacă nu s-a șters sigur, mesajul o spune.
+    // doua oară. NH-1: storage-js nu aruncă ({ error } / data = []) → dacă nu s-a șters sigur, mesajul o spune —
+    // în afara HR; în HR eticheta rândului oprește oricum o nouă confirmare (R1, r6: fără avertisment fals la „Închide").
     const rm = await interogheaza(supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]))
-    return { stare, stagingRamas:!stagingSters(rm) }
+    return { stare, stagingRamas:avertizareStaging(modul, rm) }
   }
 
   // Documentul țintă e salvat → închid rândul din coadă și reîmprospătez ORICUM: și când

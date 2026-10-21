@@ -27,6 +27,13 @@
 //   • respingereServer / citireNecesara — o eroare de transport la UPDATE nu e „deschis": se citește rândul (J2)
 //   • rezultatCautareDosar — trunchiat după count când există; limita doar fără count (C1)
 //   • dosarInVerificare  — reverificarea golește cheia: fără rezultat vechi la A→B→A (C2)
+//   Verificare r6 (21.10):
+//   • rezultatProvenienta / provenientaLaAltAngajat / mesajProvenienta — eticheta rândului căutată în TOT dosarul
+//                          HR (fără filtru pe angajat / nume): salvat deja din rând la alt angajat → blochează (F1)
+//   • pastreazaEditari   — reîncărcarea cozii păstrează corecțiile de pe card (angajatul ales manual — F1)
+//   • STATUS_COADA / stareInchidere 'altcineva' — rândul se închide doar dacă e încă deschis; închis între timp
+//                          de alt tab / alt om (alt status sau alt confirmat_ref_id) = 'altcineva', nu „închis" (F2)
+//   • avertizareStaging  — avertismentul „l-ar salva a doua oară" doar în afara HR (R1)
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -108,6 +115,42 @@ export function areTagProvenienta(observatii, inboxId) {
 }
 // observațiile documentului inserat de confirmHR: titlul AI (dacă e) + eticheta pe ultima linie
 export const observatiiInserareHR = row => observatiiNoi(row?.payload_ai?.titlu_scurt || null, tagProvenienta(row?.id))
+
+// F1 (r6): eticheta rândului se caută în TOT dosarul HR — fără filtru pe angajat, nume sau mărime
+// (.like('observatii', %tag%), nesters). Altfel, dacă angajatul ales s-a schimbat după prima salvare (corecție
+// pierdută la o reîncărcare a paginii, alt om, alt tab), garda pe angajat nu vedea copia și salva o a doua la
+// angajatul greșit. res = răspunsul căutării → { err:'eroare' } (fail-closed: NU se inserează) | { docs }.
+export function rezultatProvenienta(res) {
+  const { data, error } = res || {}
+  if (!res || error || !Array.isArray(data)) return { err:'eroare' }
+  return { docs: data.filter(d => d && d.id != null && d.deleted_at == null) }
+}
+// documentul salvat din rând la ALT angajat decât cel ales acum (sau null)
+export const provenientaLaAltAngajat = (docs, angajatId) =>
+  (docs || []).find(d => d && Number(d.employee_id) !== Number(angajatId)) || null
+// mesajul când eticheta rândului există deja în dosar. numeAngajat(id) → numele din listă (sau null).
+export function mesajProvenienta(docs, angajatId, numeAngajat = () => null) {
+  const l = (docs || []).filter(Boolean)
+  const aici = l.find(d => Number(d.employee_id) === Number(angajatId))
+  if (aici) return `Documentul a fost deja salvat în dosar din acest rând (#${aici.id}) — nu-l mai adaug; folosește «Închide (e deja în dosar)» sau scoate rândul cu «✕ Respinge».`
+  const d = l[0]
+  if (!d) return 'Documentul a fost deja salvat din acest rând — nu-l mai adaug.'
+  const nume = numeAngajat(d.employee_id)
+  return `Documentul a fost deja salvat din acest rând la ${nume ? `«${nume}»` : `alt angajat (#${d.employee_id})`} (document #${d.id}) — nu fac nimic la angajatul ales acum. Dacă acela e angajatul corect, alege-l din listă și închide rândul cu «Închide (e deja în dosar)»; altfel scoate rândul cu «✕ Respinge».`
+}
+
+// F1 (r6): coada reîncărcată din BD păstrează corecțiile omului de pe card, pe id (cheile „_": _editEntitate,
+// _editTip, _scrieDate, _editValoare, _editLuna — nu vin din BD). Altfel o reîncărcare (alt rând confirmat,
+// polling-ul clasificării, redeschiderea panoului) readucea tăcut angajatul propus de AI în locul celui ales.
+export function pastreazaEditari(noi, vechi) {
+  const dupaId = new Map((vechi || []).filter(Boolean).map(r => [r.id, r]))
+  return (noi || []).map(r => {
+    const v = r && dupaId.get(r.id)
+    if (!v) return r
+    const ed = Object.entries(v).filter(([k]) => k.startsWith('_'))
+    return ed.length ? { ...r, ...Object.fromEntries(ed) } : r
+  })
+}
 
 // docs = rânduri hr_documente_personale (pot fi și ale altor angajați / alte nume — se filtrează aici)
 //   tip 'acelasi'         → există potrivire ACTIVĂ: fisier_size_bytes egal (ne-null) SAU eticheta de
@@ -384,23 +427,32 @@ export function citireNecesara(res) {
   return !respingereServer(res)
 }
 
-// F5 (r4) + J2: starea rândului din ai_documente_inbox după UPDATE-ul care îl închide.
+// F2 (r6): statusurile rândurilor din coadă (loadQueue) = singurele pe care UPDATE-ul de închidere le mai atinge
+// (.in('status', STATUS_COADA)): un rând închis între timp din alt tab / de alt om nu se rescrie (alt angajat /
+// alt document legat, confirmat → respins). STATUS_INCHIS = închis de cineva.
+export const STATUS_COADA = ['clasificat', 'eroare']
+const STATUS_INCHIS = ['confirmat', 'respins']
+
+// F5 (r4) + J2 + F2 (r6): starea rândului din ai_documente_inbox după UPDATE-ul care îl închide.
 //   statusTinta = statusul pus de UPDATE: 'confirmat' (finalizeInbox) | 'respins' (✕ Respinge — NH-2)
-//   res    = răspunsul UPDATE-ului (.select('id'))
-//   citire = citirea DIRECTĂ a rândului ({ data:{ id, status } | null, error } — select … .eq('id') .maybeSingle()),
+//   refTinta    = confirmat_ref_id pus de UPDATE (finalizeInbox); lipsă la ✕ Respinge → nu se compară
+//   res    = răspunsul UPDATE-ului (.select('id'), filtrat pe STATUS_COADA)
+//   citire = citirea DIRECTĂ a rândului ({ data:{ id, status, confirmat_ref_id } | null, error } — .eq('id') .maybeSingle()),
 //            făcută când citireNecesara(res): 0 rânduri fără eroare, eroare de transport / 5xx (J2), răspuns ciudat.
 //            NU coada modulului: un rând mutat între timp în alt modul lipsește din coada asta, dar e tot
 //            deschis (verificare r4, F5 rezidual).
-// → 'inchis'     UPDATE-ul a întors rândul, sau rândul se vede cu statusTinta (și după un răspuns pierdut)
-//   'deschis'    UPDATE-ul a fost refuzat sigur (4xx), sau rândul se vede și NU are statusTinta
+// → 'inchis'     UPDATE-ul a întors rândul, sau rândul se vede cu statusTinta (+ refTinta) — și după un răspuns pierdut
+//   'altcineva'  rândul se vede ÎNCHIS, dar nu de acțiunea asta: alt status final sau alt document legat (F2)
+//   'deschis'    UPDATE-ul a fost refuzat sigur (4xx), sau rândul se vede încă deschis
 //   'necunoscut' rezultat nesigur și rândul nu se vede (mutat / fără drept pe el) sau citirea a picat / lipsește
-export function stareInchidere(res, citire, statusTinta = 'confirmat') {
+export function stareInchidere(res, citire, statusTinta = 'confirmat', refTinta = null) {
   const { data, error } = res || {}
   if (res && !error && Array.isArray(data) && data.length) return 'inchis'
   if (respingereServer(res)) return 'deschis'
   const { data:r, error:e } = citire || {}
   if (!citire || e || !r) return 'necunoscut'
-  return r.status === statusTinta ? 'inchis' : 'deschis'
+  if (r.status === statusTinta && (refTinta == null || String(r.confirmat_ref_id ?? '') === String(refTinta))) return 'inchis'
+  return STATUS_INCHIS.includes(r.status) ? 'altcineva' : 'deschis'
 }
 
 // NH-1: răspunsul lui storage.remove([cale]) → fișierul din staging s-a șters SIGUR? storage-js nu aruncă:
@@ -410,18 +462,29 @@ export function stagingSters(res) {
   return !!res && !error && Array.isArray(data) && data.length > 0
 }
 
+// NH-1 + R1 (r6): avertismentul „încă un «✓ Confirmă» l-ar salva a doua oară" doar unde e adevărat — fișierul
+// nu s-a șters sigur ȘI modulul n-are altă gardă. În HR nu: documentul salvat din rândul #N poartă eticheta lui,
+// iar confirmHR o caută în tot dosarul, fail-closed (F1) → o nouă confirmare e oprită oricum; iar „Închide
+// (e deja în dosar)" nu folosește fișierul — remove() pe fișierul șters deja la o închidere anterioară întoarce
+// data = [] fără eroare și dădea avertismentul fals (R1).
+export const avertizareStaging = (modul, rm) => modul !== 'hr' && !stagingSters(rm)
+
 // Documentul țintă e deja salvat când se afișează mesajele astea. Rândul rămas deschis se scoate cu butonul
 // roșu al cardului — «✕ Respinge» sau, pe cardurile „eroare", «✕ Scoate din coadă» (HR-2 / RB1).
-// Un nou „✓ Confirmă" NU e oprit oricând: doar dacă fișierul din staging s-a șters (mutaFisier nu-l mai
-// găsește); altfel l-ar salva a doua oară — mesajul o spune explicit (MESAJ_STAGING_RAMAS, NH-1).
+// În afara HR, un nou „✓ Confirmă" NU e oprit oricând: doar dacă fișierul din staging s-a șters (mutaFisier nu-l
+// mai găsește); altfel l-ar salva a doua oară — mesajul o spune explicit (MESAJ_STAGING_RAMAS, NH-1). În HR îl
+// oprește eticheta rândului (F1, r6) — fără avertisment (avertizareStaging).
 const SCOATE_RAND = 'scoate-l cu «✕ Respinge» / «✕ Scoate din coadă» (rândul apare ca respins, documentul rămâne salvat)'
 export const MESAJ_RAND_NEINCHIS = `Documentul e salvat, dar rândul din coadă nu s-a putut închide — nu-l confirma din nou; ${SCOATE_RAND}.`
 export const MESAJ_RAND_NEVERIFICAT = `Documentul e salvat, dar nu pot verifica rândul din coadă (nu-l mai văd — mutat în alt modul / fără drept pe el — sau verificarea a picat). Dacă rândul e încă în listă, nu-l confirma din nou; ${SCOATE_RAND}.`
 export const MESAJ_STAGING_RAMAS = ' ATENȚIE: fișierul din coadă nu s-a putut șterge — încă un «✓ Confirmă» l-ar salva a doua oară.'
+// F2 (r6): rândul fusese închis între timp de altcineva — UPDATE-ul (filtrat pe STATUS_COADA) nu l-a mai rescris
+export const MESAJ_RAND_ALTCINEVA = 'Rândul din coadă fusese deja închis între timp (din alt tab sau de alt utilizator) — nu l-am mai modificat. Dacă tocmai s-a salvat un document nou, poate fi o copie în plus — verifică la destinație.'
 
-// Mesajul de după închidere → { tip:'ok' | 'warn' | 'err', msg }; stagingRamas = !stagingSters(...) (NH-1)
+// Mesajul de după închidere → { tip:'ok' | 'warn' | 'err', msg }; stagingRamas = avertizareStaging(...) (NH-1 / R1)
 export function mesajInchidere(stare, msgOk, { stagingRamas = false } = {}) {
   if (stare === 'inchis') return { tip:'ok', msg:msgOk }
+  if (stare === 'altcineva') return { tip:'warn', msg:MESAJ_RAND_ALTCINEVA }   // rândul nu mai e în coadă
   const extra = stagingRamas ? MESAJ_STAGING_RAMAS : ''
   if (stare === 'necunoscut') return { tip:'warn', msg:MESAJ_RAND_NEVERIFICAT + extra }
   return { tip:'err', msg:MESAJ_RAND_NEINCHIS + extra }
@@ -436,6 +499,7 @@ export function textConfirmareRespingere(nume) {
 // NH-2: rezultatul lui ✕ Respinge, verificat ca la închidere (stareInchidere cu 'respins'), nu „Respins." orbește
 export function mesajRespingere(stare, eroare) {
   if (stare === 'inchis') return { tip:'ok', msg:'Respins.' }
+  if (stare === 'altcineva') return { tip:'warn', msg:'Rândul fusese deja închis între timp (confirmat sau respins din alt tab / de alt utilizator) — nu l-am mai modificat.' }
   if (stare === 'necunoscut') return { tip:'warn', msg:'Nu pot verifica dacă rândul a ieșit din coadă (nu-l mai văd sau verificarea a picat) — uită-te în listă.' }
   const m = eroare && (eroare.message || String(eroare))
   return { tip:'err', msg:`Rândul NU a ieșit din coadă${m ? ': ' + m : ''} — încearcă din nou.` }

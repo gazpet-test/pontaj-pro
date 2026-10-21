@@ -8,6 +8,8 @@ import {
   motivFaraExpirare, stagingSters, MESAJ_STAGING_RAMAS, textConfirmareRespingere, mesajRespingere,
   tagProvenienta, areTagProvenienta, observatiiInserareHR, mesajBlocareHR, dosarInVerificare,
   respingereServer, citireNecesara,
+  rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari, STATUS_COADA,
+  MESAJ_RAND_ALTCINEVA, avertizareStaging,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -512,7 +514,8 @@ describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
   it('NH-2: statusTinta „respins" (✕ Respinge) — aceeași logică', () => {
     expect(stareInchidere({ data:[{ id:5 }], error:null }, null, 'respins')).toBe('inchis')
     expect(stareInchidere(zero, { data:{ id:5, status:'respins' }, error:null }, 'respins')).toBe('inchis')
-    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat' }, error:null }, 'respins')).toBe('deschis')
+    // F2 (r6): confirmat între timp de altcineva = închis, dar nu de ✕ Respinge → 'altcineva' (nu „încearcă din nou")
+    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat' }, error:null }, 'respins')).toBe('altcineva')
     expect(stareInchidere({ data:null, error:{ code:'42501', message:'rls' }, status:403 }, null, 'respins')).toBe('deschis')
   })
   it('J2 + NH-2: ✕ Respinge cu răspuns pierdut — citirea decide (respins → inchis; alt status → deschis; invizibil → necunoscut)', () => {
@@ -727,5 +730,136 @@ describe('C2 dosarInVerificare — reverificarea nu mai arată rezultatul vechi'
     expect(dosarInVerificare(d, [cheieDosar(9, 'x.pdf')])).toBe(d)
     expect(dosarInVerificare(d, [])).toBe(d)
     expect(dosarInVerificare(null, [kA])).toEqual({})
+  })
+})
+
+// ─── Verificare r6 (21.10) ───────────────────────────────────────────────────
+describe('F1 (r6) eticheta rândului căutată în tot dosarul HR', () => {
+  const nume = id => ({ 7:'POPESCU ION', 8:'IONESCU ANA' })[id] || null
+  it('rezultatProvenienta: căutare picată / răspuns ciudat → eroare (fail-closed); altfel documentele nesterse', () => {
+    expect(rezultatProvenienta({ data:null, error:{ message:'Failed to fetch' } })).toEqual({ err:'eroare' })
+    expect(rezultatProvenienta({ data:null, error:null })).toEqual({ err:'eroare' })
+    expect(rezultatProvenienta(undefined)).toEqual({ err:'eroare' })
+    expect(rezultatProvenienta({ data:[], error:null })).toEqual({ docs:[] })
+    expect(rezultatProvenienta({ data:[{ id:900, employee_id:8 }, null, { id:901, employee_id:7, deleted_at:'2026-10-21' }], error:null }))
+      .toEqual({ docs:[{ id:900, employee_id:8 }] })
+  })
+  it('provenientaLaAltAngajat: doar documentul de la alt angajat decât cel ales', () => {
+    const docs = [{ id:900, employee_id:7 }, { id:901, employee_id:'8' }]
+    expect(provenientaLaAltAngajat(docs, 7)).toEqual({ id:901, employee_id:'8' })
+    expect(provenientaLaAltAngajat(docs.slice(0, 1), '7')).toBeNull()
+    expect(provenientaLaAltAngajat([], 7)).toBeNull()
+    expect(provenientaLaAltAngajat(null, 7)).toBeNull()
+  })
+  it('mesajProvenienta: la angajatul ales → «Închide»; la altul → îl numește (sau #id) și nu face nimic aici', () => {
+    expect(mesajProvenienta([{ id:900, employee_id:7 }], 7, nume)).toMatch(/deja salvat în dosar din acest rând \(#900\).*«Închide \(e deja în dosar\)».*«✕ Respinge»/)
+    // un document și aici, și la alt angajat → mesajul pentru cel de aici (are «Închide» pe card)
+    expect(mesajProvenienta([{ id:901, employee_id:8 }, { id:900, employee_id:7 }], 7, nume)).toMatch(/#900/)
+    const m = mesajProvenienta([{ id:901, employee_id:8 }], 7, nume)
+    expect(m).toMatch(/la «IONESCU ANA» \(document #901\)/)
+    expect(m).toMatch(/nu fac nimic la angajatul ales acum/)
+    expect(m).toMatch(/«✕ Respinge»/)
+    expect(mesajProvenienta([{ id:901, employee_id:99 }], 7, nume)).toMatch(/alt angajat \(#99\) \(document #901\)/)
+    expect(mesajProvenienta([{ id:901, employee_id:99 }], 7)).toMatch(/alt angajat \(#99\)/)
+  })
+  it('REPRO: AI → A, omul corectează pe B, documentul intră la B, rândul rămâne deschis; reîncărcarea readuce A', () => {
+    const A = 7, B = 8
+    const row = rowAI({ id:77, entitate_id:A, entitate_match_confidence:90 })
+    const D1 = docDrive({ id:900, employee_id:B, fisier_path:`${B}/aidoc_1.pdf`, drive_file_id:null, uploadat_de:'u1', observatii:observatiiInserareHR(row) })
+    // garda veche (pe angajat) pentru A: nimic → s-ar insera a doua copie la A (bug-ul)
+    expect(gardaFinalaHR({ row, angajatId:A, exact:{ docs:[] }, nume:{ docs:[] } }).bloc).toBeNull()
+    expect(gardaFinalaHR({ row, angajatId:B, exact:{ docs:[D1] }, nume:null }).bloc).toBe('acelasi')
+    // garda nouă: eticheta rândului, fără filtru pe angajat → găsește D1 la B → nu se inserează la A
+    const prov = rezultatProvenienta({ data:[{ id:D1.id, employee_id:D1.employee_id, activ:true, deleted_at:null }], error:null })
+    expect(prov.docs.length).toBe(1)
+    expect(provenientaLaAltAngajat(prov.docs, A)).toMatchObject({ id:900 })   // și «Închide» la A e oprit
+    expect(provenientaLaAltAngajat(prov.docs, B)).toBeNull()                 // la B: închiderea legată de D1 merge
+    expect(mesajProvenienta(prov.docs, A, nume)).toMatch(/IONESCU ANA.*#900/)
+    // reîncărcarea cozii nu mai pierde corecția: alegerea rămâne B
+    const peCard = { ...row, _editEntitate:B }
+    const [proaspat] = pastreazaEditari([{ ...row }], [peCard])
+    expect(proaspat._editEntitate).toBe(B)
+    expect(cheieDosar(proaspat._editEntitate, proaspat.fisier_nume)).toBe(cheieDosar(B, 'CI.pdf'))
+  })
+})
+
+describe('F1 (r6) pastreazaEditari — coada reîncărcată păstrează corecțiile de pe card', () => {
+  it('cheile „_" trec pe rândul proaspăt (inclusiv alegerea goală), câmpurile din BD vin proaspete', () => {
+    const vechi = [
+      { id:1, status:'clasificat', entitate_id:7, _editEntitate:8, _editTip:'cazier_judiciar' },
+      { id:2, status:'clasificat', entitate_id:7, _editEntitate:null },
+      { id:3, status:'clasificat', _scrieDate:false, _editValoare:'12.5', _editLuna:'2026-09' },
+      { id:4, status:'clasificat' },
+      { id:9, status:'clasificat', _editEntitate:5 },   // ieșit din coadă → nu reapare
+    ]
+    const noi = [
+      { id:1, status:'clasificat', entitate_id:7, payload_ai:{ titlu_scurt:'nou' } },
+      { id:2, status:'eroare', entitate_id:7 },
+      { id:3, status:'clasificat' },
+      { id:4, status:'clasificat' },
+      { id:5, status:'clasificat' },
+    ]
+    const r = pastreazaEditari(noi, vechi)
+    expect(r.map(x => x.id)).toEqual([1, 2, 3, 4, 5])
+    expect(r[0]).toEqual({ id:1, status:'clasificat', entitate_id:7, payload_ai:{ titlu_scurt:'nou' }, _editEntitate:8, _editTip:'cazier_judiciar' })
+    expect(r[1]).toEqual({ id:2, status:'eroare', entitate_id:7, _editEntitate:null })
+    expect('_editEntitate' in r[1]).toBe(true)
+    expect(r[2]).toMatchObject({ _scrieDate:false, _editValoare:'12.5', _editLuna:'2026-09' })
+    expect(r[3]).toBe(noi[3])   // fără corecții → același obiect
+    expect(r[4]).toBe(noi[4])
+    expect(pastreazaEditari(null, vechi)).toEqual([])
+    expect(pastreazaEditari(noi, null)).toEqual(noi)
+  })
+})
+
+describe('F2 (r6) rândul închis între timp de altcineva', () => {
+  const zero = { data:[], error:null }
+  it('UPDATE-ul atinge doar rândurile din coadă (aceleași statusuri ca loadQueue)', () => {
+    expect(STATUS_COADA).toEqual(['clasificat', 'eroare'])
+  })
+  it('citirea compară și documentul legat: același → inchis; altul → altcineva; încă deschis → deschis', () => {
+    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat', confirmat_ref_id:900 }, error:null }, 'confirmat', 900)).toBe('inchis')
+    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat', confirmat_ref_id:'900' }, error:null }, 'confirmat', 900)).toBe('inchis')
+    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat', confirmat_ref_id:901 }, error:null }, 'confirmat', 900)).toBe('altcineva')
+    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat', confirmat_ref_id:null }, error:null }, 'confirmat', 900)).toBe('altcineva')
+    expect(stareInchidere(zero, { data:{ id:5, status:'respins', confirmat_ref_id:null }, error:null }, 'confirmat', 900)).toBe('altcineva')
+    expect(stareInchidere(zero, { data:{ id:5, status:'clasificat', confirmat_ref_id:null }, error:null }, 'confirmat', 900)).toBe('deschis')
+    expect(stareInchidere(zero, { data:{ id:5, status:'eroare' }, error:null }, 'confirmat', 900)).toBe('deschis')
+    // răspuns pierdut, dar UPDATE-ul NOSTRU a intrat → citirea arată documentul nostru → inchis (J2 neschimbat)
+    const pierdut = { data:null, error:{ message:'TypeError: Failed to fetch', code:'' }, status:0 }
+    expect(stareInchidere(pierdut, { data:{ id:5, status:'confirmat', confirmat_ref_id:900 }, error:null }, 'confirmat', 900)).toBe('inchis')
+    expect(stareInchidere(pierdut, { data:{ id:5, status:'confirmat', confirmat_ref_id:901 }, error:null }, 'confirmat', 900)).toBe('altcineva')
+    // UPDATE cu rând întors / refuz sigur: neschimbat
+    expect(stareInchidere({ data:[{ id:5 }], error:null }, null, 'confirmat', 900)).toBe('inchis')
+    expect(stareInchidere({ data:null, error:{ code:'42501' }, status:403 }, null, 'confirmat', 900)).toBe('deschis')
+  })
+  it('mesajele: altcineva = avertisment, fără „scoate-l" / staging (rândul nu mai e în coadă)', () => {
+    expect(mesajInchidere('altcineva', 'Gata ✓', { stagingRamas:true })).toEqual({ tip:'warn', msg:MESAJ_RAND_ALTCINEVA })
+    expect(MESAJ_RAND_ALTCINEVA).toMatch(/fusese deja închis/)
+    expect(MESAJ_RAND_ALTCINEVA).toMatch(/copie în plus/)
+    expect(MESAJ_RAND_ALTCINEVA).not.toMatch(/✓/)
+    const r = mesajRespingere('altcineva', null)
+    expect(r.tip).toBe('warn')
+    expect(r.msg).toMatch(/fusese deja închis/)
+  })
+})
+
+describe('R1 (r6) avertismentul de staging doar unde e adevărat', () => {
+  const sters = { data:[{ name:'x.pdf' }], error:null }
+  const lipsa = { data:[], error:null }   // remove() pe un fișier deja șters (sau fără drept de ștergere)
+  const picat = { data:null, error:{ message:'Failed to fetch' } }
+  it('HR: niciodată — eticheta rândului oprește o nouă confirmare; „Închide" repetat nu mai minte', () => {
+    for (const rm of [sters, lipsa, picat, undefined]) expect(avertizareStaging('hr', rm)).toBe(false)
+    // „Închide (e deja în dosar)" după o închidere care a șters deja fișierul: UPDATE refuzat din nou, remove → []
+    const stare = stareInchidere({ data:null, error:{ code:'42501', message:'rls' }, status:403 }, null)
+    expect(mesajInchidere(stare, 'Era deja în dosar — închis.', { stagingRamas:avertizareStaging('hr', lipsa) }))
+      .toEqual({ tip:'err', msg:MESAJ_RAND_NEINCHIS })
+  })
+  it('celelalte module: ca înainte (nesters sigur → avertisment)', () => {
+    for (const m of ['executie', 'logistica', 'financiar', 'upa']) {
+      expect(avertizareStaging(m, sters)).toBe(false)
+      expect(avertizareStaging(m, lipsa)).toBe(true)
+      expect(avertizareStaging(m, picat)).toBe(true)
+    }
   })
 })
