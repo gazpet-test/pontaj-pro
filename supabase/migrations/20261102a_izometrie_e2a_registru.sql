@@ -492,16 +492,25 @@ BEGIN
     -- Refuz dacă în închidere apare: un view fără security_invoker, un view materializat sau o funcție SECURITY DEFINER.
     -- Funcțiile DEFINER cu SQL dinamic din afara listei revizuite sunt refuzate oricum (citesc orice, fără să numească).
     DECLARE
-      c_rel oid[]; c_fn oid[] := '{}'; v_tipar text; v_marime int := -1; v_iter int := 0;
+      c_rel oid[]; c_fn oid[] := '{}'; v_marime int := -1; v_iter int := 0;
       -- funcțiile DEFINER cu SQL dinamic revizuite pe live (docs/izometrie/E2A_INVENTAR_CITIRI.md, 21.10.2026): tabele fixe
-      -- (executie_proiecte / profiles), identificatori pe listă albă; semnătură + md5(prosrc) — orice modificare cere review
+      -- (executie_proiecte / profiles), identificatori pe listă albă. Amprenta excepției = md5(prosrc | proconfig | owner |
+      -- proacl | prosecdef) (Jakarinos r12): orice schimbare de corp, search_path, owner sau drepturi cere review
       c_dinamice_revizuite text[] := ARRAY[
-        'public._completare_goleste_camp(bigint,text,integer)=62a817c812d0c932aa1d629aba13b541',
-        'public._completare_scrie_camp(bigint,text,text)=cc54cb28a6ee513323e22df607c51724',
-        'public.fn_cont_inchide(uuid,text,text,integer)=e25de5f5a6d419648eb02d4f71bc2601',
-        'public.fn_cont_restaureaza_flaguri(uuid,jsonb)=71545de9629f5eb2925c4a259477cf42',
-        'public.fn_conturi_inchideri_sweep()=facbcd2b4059a16b24f95674b0986ad2',
-        'public.fn_tichete_notif_on_insert()=a75db46d8321732eeb904e2d9bd5adf2'];
+        '_completare_goleste_camp(bigint,text,integer)=888fde4d4e7fbea6889835dd96c2225d',
+        '_completare_scrie_camp(bigint,text,text)=77d7b091a049ccc86b47d078957db39f',
+        'fn_cont_inchide(uuid,text,text,integer)=c4a6ca93a52ca8a97aa90f168debf30e',
+        'fn_cont_restaureaza_flaguri(uuid,jsonb)=ecd803a2dda6b734ea92ebaf10564397',
+        'fn_conturi_inchideri_sweep()=402874ea5081b41801313e0def9e3226',
+        'fn_tichete_notif_on_insert()=1ffa41a8750b6d48d721d9e2a00b3f54'];
+      -- limitele unui identificator, inclusiv citat („"teste".f()”), fără \m / \M (ghilimelele nu sunt caractere de cuvânt)
+      c_st constant text := '(^|[^[:alnum:]_$"])"?';
+      c_dr constant text := '"?($|[^[:alnum:]_$])';
+      -- schemele platformei Supabase: obiectele lor din închidere (funcții INVOKER cu SQL dinamic: realtime.cast, storage.search…)
+      -- se potrivesc necalificat DOAR când schema e în search_path-ul funcției; ale noastre (orice altă schemă) se potrivesc
+      -- necalificat ÎNTOTDEAUNA — conservator, fals-pozitivele sunt acceptate (Copilot r12 P1)
+      c_scheme_platforma constant text[] := ARRAY['auth','storage','realtime','extensions','graphql','graphql_public','vault','net',
+                                                  'supabase_functions','supabase_migrations','pgbouncer','pgsodium','pgsodium_masks','cron'];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -510,27 +519,36 @@ BEGIN
        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prolang NOT IN (12, 13)
          AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
          AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* '\mexecute\M'
-         AND (n.nspname || '.' || p.oid::regprocedure::text) IS NOT NULL
-         AND format('%s=%s', p.oid::regprocedure::text, md5(p.prosrc)) <> ALL (
-               SELECT CASE WHEN x LIKE 'public.%' THEN substr(x, 8) ELSE x END FROM unnest(c_dinamice_revizuite) x);
+         AND format('%s=%s', p.oid::regprocedure::text, md5(p.prosrc || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner)
+                                                           || '|' || coalesce(p.proacl::text, '') || '|' || p.prosecdef::text))
+             <> ALL (c_dinamice_revizuite);
       WHILE cardinality(c_rel) + cardinality(c_fn) <> v_marime AND v_iter < 100 LOOP
         v_marime := cardinality(c_rel) + cardinality(c_fn); v_iter := v_iter + 1;
+        -- view-urile: dependențe din pg_rewrite spre pg_class (relații) / pg_proc (funcții) — cataloagele explicite (Jak r12 P3)
         c_rel := c_rel || ARRAY(SELECT DISTINCT rw.ev_class FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid
-                                 WHERE (d.refobjid = ANY (c_rel) OR d.refobjid = ANY (c_fn)) AND rw.ev_class <> ALL (c_rel));
-        SELECT string_agg(CASE WHEN nsp = 'public' THEN '\m' || nume || '\M' ELSE '\m' || nsp || '\s*\.\s*"?' || nume || '\M' END, '|')
-          INTO v_tipar
-          FROM (SELECT n.nspname::text nsp, regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
-                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = ANY (c_rel)
-                UNION
-                SELECT n.nspname::text, regexp_replace(p.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
-                  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.oid = ANY (c_fn)) t;
-        c_fn := c_fn || ARRAY(SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                               WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
-                                 AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%') AND p.oid <> ALL (c_fn)
-                                 AND p.prolang NOT IN (12, 13)
-                                 AND ((p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* ('(' || v_tipar || ')')
-                                      OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
-                                                    AND (d.refobjid = ANY (c_rel) OR d.refobjid = ANY (c_fn)))));
+                                 WHERE d.classid = 'pg_rewrite'::regclass
+                                   AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (c_rel))
+                                        OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)))
+                                   AND rw.ev_class <> ALL (c_rel));
+        -- funcțiile: corpul numește ceva din închidere — calificat (schema.nume, și citat) sau necalificat (pentru schemele
+        -- platformei: doar dacă schema e în search_path-ul FUNCȚIEI) — Jak + Copilot r12; sau depind de el în catalog (BEGIN ATOMIC)
+        c_fn := c_fn || ARRAY(
+          SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           CROSS JOIN LATERAL (SELECT p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '') AS corp,
+                                      coalesce((SELECT string_to_array(lower(regexp_replace(substr(c, 13), '[[:space:]"]', '', 'g')), ',')
+                                                  FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%' LIMIT 1), ARRAY['public']) AS cale) x
+           WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
+             AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%') AND p.oid <> ALL (c_fn) AND p.prolang NOT IN (12, 13)
+             AND (EXISTS (SELECT 1 FROM (SELECT n2.nspname::text nsp, regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
+                                           FROM pg_class c JOIN pg_namespace n2 ON n2.oid = c.relnamespace WHERE c.oid = ANY (c_rel)
+                                         UNION
+                                         SELECT n2.nspname::text, regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
+                                           FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (c_fn)) t
+                           WHERE x.corp ~* (c_st || t.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume || c_dr)
+                              OR ((t.nsp <> ALL (c_scheme_platforma) OR t.nsp = ANY (x.cale)) AND x.corp ~* (c_st || t.nume || c_dr)))
+                  OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                                AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (c_rel))
+                                     OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn))))));
       END LOOP;
       IF v_iter >= 100 THEN v := array_append(v, 'închiderea citirilor nu converge (citire nerevizuită)'); END IF;
       IF EXISTS (SELECT 1 FROM pg_class vw WHERE vw.oid = ANY (c_rel)   -- alias ≠ variabila v
