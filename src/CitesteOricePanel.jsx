@@ -35,6 +35,11 @@
 //   «✓ Confirmă» ar salva a doua oară (NH-1); mesajele numesc ambele butoane roșii (HR-2); ✕ Respinge are
 //   text neutru și rezultatul verificat (RB2 / NH-2); un document „fără expirare" (sau tip fără expirare)
 //   nu primește data expirării la „Completează și închide" (HR-1).
+//   Review final: documentul inserat din rândul #N poartă în observații „[Citește orice #N]" — dacă închiderea
+//   rândului și ștergerea din staging pică, o reîncercare îl recunoaște (oricare i-ar fi mărimea) și doar
+//   închide, fără a doua inserare (J1); o eroare de transport la UPDATE-ul rândului se verifică prin citirea
+//   lui, nu se raportează „neînchis" (J2); „trunchiat" după count (C1); reverificarea dosarului nu mai arată
+//   rezultatul vechi al cheii (C2).
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -44,7 +49,8 @@ import { jsPDF } from 'jspdf'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
 import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare,
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
-  inchidereFaraRezultat, stareInchidere, mesajInchidere, stagingSters, textConfirmareRespingere, mesajRespingere } from './citesteOriceDubluri.js'
+  citireNecesara, stareInchidere, mesajInchidere, stagingSters, textConfirmareRespingere, mesajRespingere,
+  observatiiInserareHR, mesajBlocareHR, dosarInVerificare } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -223,8 +229,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   const [busyId, setBusyId] = useState(null)
   const [toast, setToast] = useState(null)
   // HR: ce am găsit în dosar per (angajat, nume fișier) — { [cheie]: { docs } | { err:true } }.
-  // Cheie lipsă = încă se verifică. dosarSeq = ultima cerere per cheie (un răspuns vechi
-  // care ajunge după unul nou nu-l mai suprascrie).
+  // Cheie lipsă = încă se verifică (C2: o reverificare scoate cheia la pornire). dosarSeq = ultima
+  // cerere per cheie (un răspuns vechi care ajunge după unul nou nu-l mai suprascrie).
   const [dosar, setDosar] = useState({})
   const dosarSeq = useRef({ n:0, k:{} })
 
@@ -242,7 +248,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (!perechi.length) return
     const seq = ++dosarSeq.current.n
     perechi.forEach(p => { dosarSeq.current.k[p.k] = seq })
-    const rez = await cautaInDosarHR(perechi)
+    // C2: cheia trece în „verific" — rezultatul vechi (ex. A→B→A pe angajat) nu se afișează cât timp vine cel nou
+    setDosar(d => dosarInVerificare(d, perechi.map(p => p.k)))
+    let rez
+    try { rez = await cautaInDosarHR(perechi) }
+    catch (_) { rez = Object.fromEntries(perechi.map(p => [p.k, { err:true, motiv:'eroare' }])) }   // altfel cheia ar rămâne „verific"
     const proaspete = {}
     for (const [k, v] of Object.entries(rez)) if (dosarSeq.current.k[k] === seq) proaspete[k] = v
     if (Object.keys(proaspete).length) setDosar(d => ({ ...d, ...proaspete }))
@@ -490,7 +500,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       // Review extern F3: nu depinde de o listă eșantionată. (1) mărime cunoscută → căutare EXACTĂ
       // angajat + nume + mărime, limit 1 (copia activă întâi): găsită → blochează; (2) altfel căutare
       // completă pe nume, cu count: mai multe rânduri decât am primit → eroare, nu inserez.
-      const col = 'id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at'
+      // J1: + observatii — documentul etichetat cu acest rând (salvat deja din el, închiderea a picat) blochează
+      // oricare i-ar fi mărimea, deci și „Adaugă ca document nou" la mărime necunoscută nu-l mai salvează a doua oară.
+      const col = 'id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at,observatii'
       const sz = marime(row.fisier_size_bytes)
       const exact = sz == null ? null : rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(col)
         .eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume).eq('fisier_size_bytes', sz).is('deleted_at', null)
@@ -505,11 +517,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       if (bloc) {
         // nu e fundătură: reverific rândul, ca să apară panoul de dublură cu acțiunile lui
         await verificaDosar([row])
-        flash('err', bloc === 'acelasi'
-          ? 'E deja în dosar — folosește «Închide» sau «Completează și închide».'
-          : bloc === 'acelasi_inactiv'
-            ? 'E deja în dosar (ca document INACTIV, istoric) — folosește «Închide (e deja în dosar)».'
-            : texteAltContinut(cls, row.fisier_nume).garda)
+        flash('err', mesajBlocareHR(bloc, cls, row.fisier_nume))
         return
       }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
@@ -522,11 +530,13 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         fara_expirare: !dataExp,
         fisier_path: destPath, fisier_nume: row.fisier_nume,
         fisier_size_bytes: row.fisier_size_bytes, fisier_mime: row.fisier_mime || 'application/pdf',
-        activ: true, observatii: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id,
+        // J1: titlul AI + „[Citește orice #<rând>]" pe ultima linie — proveniența, pentru garda de mai sus
+        activ: true, observatii: observatiiInserareHR(row), uploadat_de: profile.id,
       }).select('id').single()
       if (insErr) throw new Error('Insert document HR: ' + insErr.message)
 
-      // rând neînchis → o reîncercare se oprește în garda de mai sus („e deja în dosar" → «Închide»), fără altă inserare
+      // rând neînchis → o reîncercare se oprește în garda de mai sus („e deja în dosar" → «Închide»), fără altă
+      // inserare: după mărime sau, la mărime necunoscută / diferită, după eticheta rândului din observații (J1)
       await inchideRandSiReimprospateaza(row, 'Document trimis în dosarul angajatului ✓', 'hr', tipCod, 'angajat', angajatId, created.id)
     } catch (e) {
       flash('err', String(e.message || e))
@@ -698,12 +708,13 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // UPDATE pe rândul din coadă + starea lui după (stareInchidere, cu statusul pus). NU aruncă.
   // r4: 0 rânduri fără eroare → citesc rândul DIRECT (după id), nu din coada modulului: un rând mutat
-  // între timp în alt modul lipsește din coadă, dar e tot deschis.
+  // între timp în alt modul lipsește din coadă, dar e tot deschis. J2: la fel după o eroare care NU e un
+  // refuz sigur al serverului (rețea / timeout / 5xx — UPDATE-ul poate fi intrat, doar răspunsul s-a pierdut).
   async function actualizeazaRand(row, upd) {
     let res, citire = null
     try { res = await supabase.from('ai_documente_inbox').update(upd).eq('id', row.id).select('id') }
     catch (e) { res = { error:e } }
-    if (inchidereFaraRezultat(res)) citire = await interogheaza(supabase.from('ai_documente_inbox').select('id,status').eq('id', row.id).maybeSingle())
+    if (citireNecesara(res)) citire = await interogheaza(supabase.from('ai_documente_inbox').select('id,status').eq('id', row.id).maybeSingle())
     return { stare:stareInchidere(res, citire, upd.status), eroare:(res && res.error) || null }
   }
 
@@ -856,6 +867,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                 // dosar", dar doar închidere: fără completare și fără o copie nouă (varianta A).
                 const dubAcelasi = dub?.stare === 'acelasi' || dub?.stare === 'acelasi_inactiv'
                 const dubInactiv = dub?.stare === 'acelasi_inactiv'
+                // J1: documentul a fost salvat deja din acest rând (eticheta din observații) — închiderea a picat
+                const descDub = dub?.dinRand ? `salvat deja din acest rând (#${dub.doc.id})` : 'același fișier (nume + mărime)'
                 const culDub = dubInactiv ? G.yellow : G.blue
                 const badgeDosar = dubAcelasi && (
                   <span style={{ ...chip, background:culDub + '22', color:culDub, border:`1px solid ${culDub}55` }}>
@@ -903,9 +916,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                         {dubAcelasi && (
                           <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12, color:G.muted, marginBottom:10 }}>
                             {badgeDosar}
-                            <span>{dubInactiv
-                              ? <>Același fișier (nume + mărime) e deja la {entMatch?.label || 'acest angajat'}, ca document <b style={{ color:G.yellow }}>INACTIV (istoric, #{dub.doc.id})</b> — nu mai trebuie adăugat.</>
-                              : <>Același fișier (nume + mărime) e deja la {entMatch?.label || 'acest angajat'} — nu mai trebuie adăugat.</>}</span>
+                            <span>{dub.dinRand ? `Documentul salvat din acest rând (#${dub.doc.id})` : 'Același fișier (nume + mărime)'} e deja la {entMatch?.label || 'acest angajat'}{dubInactiv
+                              ? <>, ca document <b style={{ color:G.yellow }}>INACTIV (istoric, #{dub.doc.id})</b> — nu mai trebuie adăugat.</>
+                              : ' — nu mai trebuie adăugat.'}</span>
                           </div>
                         )}
                         <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
@@ -1049,13 +1062,15 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                 <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6 }}>
                                   {badgeDosar}
                                   <span style={{ fontSize:11.5, color:G.muted }}>
-                                    același fișier (nume + mărime) · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
+                                    {descDub} · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
                                   </span>
                                 </div>
                                 {dub.nrIdentice > 1 && (
-                                  <div style={{ fontSize:11.5, color:G.yellow, marginBottom:4 }}>⚠️ {dub.nrIdentice} copii identice în dosar{dub.nrInactive ? ` (${dub.nrInactive} inactive)` : ''} — leg de cea mai veche activă (#{dub.doc.id}).</div>
+                                  <div style={{ fontSize:11.5, color:G.yellow, marginBottom:4 }}>⚠️ {dub.nrIdentice} copii identice în dosar{dub.nrInactive ? ` (${dub.nrInactive} inactive)` : ''} — leg de {dub.dinRand ? 'cea salvată din acest rând' : 'cea mai veche activă'} (#{dub.doc.id}).</div>
                                 )}
-                                {dub.tipDiferit ? (
+                                {dub.dinRand ? (
+                                  <div style={{ color:G.muted }}>Documentul a intrat deja în dosar din acest rând, dar rândul nu s-a închis — doar îl închid, legat de el (nu-l mai adaug a doua oară).</div>
+                                ) : dub.tipDiferit ? (
                                   <div style={{ color:G.yellow }}>⚠️ tip diferit (dosar: {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`} · AI: {numeTip(row._editTip ?? row.tip_document)}) — nu completez câmpurile</div>
                                 ) : dub.campuri.length ? (
                                   <div>
@@ -1079,11 +1094,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                 <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6 }}>
                                   {badgeDosar}
                                   <span style={{ fontSize:11.5, color:G.muted }}>
-                                    același fișier (nume + mărime) · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
+                                    {descDub} · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
                                   </span>
                                 </div>
                                 <div style={{ color:G.yellow }}>
-                                  ⚠️ Documentul din dosar (#{dub.doc.id}{dub.nrIdentice > 1 ? `, cel mai vechi din ${dub.nrIdentice} copii identice, toate inactive` : ''}) e <b>INACTIV (istoric)</b> — nu apare la documentele active; nu completez nimic în el și nu adaug altă copie.
+                                  ⚠️ Documentul din dosar (#{dub.doc.id}{dub.nrIdentice > 1 ? `, ${dub.dinRand ? 'cel salvat din acest rând' : 'cel mai vechi'} din ${dub.nrIdentice} copii identice, toate inactive` : ''}) e <b>INACTIV (istoric)</b> — nu apare la documentele active; nu completez nimic în el și nu adaug altă copie.
                                 </div>
                                 <div style={{ color:G.muted, marginTop:4 }}>
                                   Închide rândul; dacă trebuie să fie din nou activ, îl reactivezi din dosarul angajatului (editează documentul → „Document ACTIV").

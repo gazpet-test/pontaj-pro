@@ -6,6 +6,8 @@ import {
   texteAltContinut, marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare,
   gardaFinalaHR, stareInchidere, mesajInchidere, MESAJ_RAND_NEVERIFICAT, MESAJ_RAND_NEINCHIS,
   motivFaraExpirare, stagingSters, MESAJ_STAGING_RAMAS, textConfirmareRespingere, mesajRespingere,
+  tagProvenienta, areTagProvenienta, observatiiInserareHR, mesajBlocareHR, dosarInVerificare,
+  respingereServer, citireNecesara,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -422,6 +424,17 @@ describe('F3/F4 rezultatCautareDosar — trunchiat = eroare, nu „liber"', () =
     expect(rezultatCautareDosar({ data:[1, 2], error:null, count:2 }, { limita:500, cuNumar:true })).toEqual({ docs:[1, 2] })
     expect(rezultatCautareDosar({ data:[], error:null, count:0 }, { limita:500, cuNumar:true })).toEqual({ docs:[] })
   })
+  it('C1: cu count, decide count > rânduri primite — exact 500 din 500 NU e trunchiat', () => {
+    const r500 = Array.from({ length:500 }, (_, i) => ({ id:i + 1 }))
+    expect(rezultatCautareDosar({ data:r500, error:null, count:500 }, { limita:500, cuNumar:true })).toEqual({ docs:r500 })
+    expect(rezultatCautareDosar({ data:r500, error:null, count:501 }, { limita:500, cuNumar:true })).toEqual({ err:'trunchiat' })
+    // max-rows al serverului sub limita cerută: mai puține rânduri, count mai mare → trunchiat
+    expect(rezultatCautareDosar({ data:[1, 2], error:null, count:3 }, { limita:500, cuNumar:true })).toEqual({ err:'trunchiat' })
+    // fără count → abia atunci contează limita atinsă
+    expect(rezultatCautareDosar({ data:r500, error:null, count:null }, { limita:500, cuNumar:true })).toEqual({ err:'trunchiat' })
+    expect(rezultatCautareDosar({ data:r500, error:null }, { limita:500 })).toEqual({ err:'trunchiat' })
+    expect(rezultatCautareDosar({ data:r500.slice(0, 499), error:null }, { limita:500 })).toEqual({ docs:r500.slice(0, 499) })
+  })
   it('căutarea exactă (limit 1, fără limita) — un rând găsit nu e „trunchiat"', () => {
     expect(rezultatCautareDosar({ data:[{ id:1 }], error:null })).toEqual({ docs:[{ id:1 }] })
   })
@@ -463,11 +476,29 @@ describe('F3 gardaFinalaHR — garda din confirmHR, fail-closed', () => {
 
 describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
   const zero = { data:[], error:null }
-  it('UPDATE cu rând întors → inchis; eroare → deschis', () => {
-    expect(stareInchidere({ data:[{ id:5 }], error:null }, null)).toBe('inchis')
-    expect(stareInchidere({ data:null, error:{ code:'42501', message:'new row violates row-level security policy' } }, null)).toBe('deschis')
-    expect(stareInchidere({ error:new Error('Failed to fetch') }, null)).toBe('deschis')
-    expect(stareInchidere(undefined, null)).toBe('deschis')
+  it('UPDATE cu rând întors → inchis; refuz sigur al serverului (4xx) → deschis, fără citire', () => {
+    expect(stareInchidere({ data:[{ id:5 }], error:null, status:200 }, null)).toBe('inchis')
+    expect(stareInchidere({ data:null, error:{ code:'42501', message:'new row violates row-level security policy' }, status:403 }, null)).toBe('deschis')
+    expect(stareInchidere({ data:null, error:{ code:'23514', message:'check' }, status:400 }, null)).toBe('deschis')
+    // refuz sigur: chiar dacă o citire ar arăta altceva, nu contează (UPDATE-ul nu s-a aplicat)
+    expect(stareInchidere({ data:null, error:{ code:'42501' }, status:403 }, { data:{ id:5, status:'confirmat' }, error:null })).toBe('deschis')
+  })
+  it('J2: eroare fără răspuns HTTP / 5xx / fără răspuns → NU „deschis" orbește: fără citire = necunoscut', () => {
+    expect(stareInchidere({ error:new Error('Failed to fetch') }, null)).toBe('necunoscut')
+    expect(stareInchidere({ data:null, error:{ message:'TypeError: Failed to fetch', code:'' }, status:0 }, null)).toBe('necunoscut')
+    expect(stareInchidere({ data:null, error:{ message:'gateway' }, status:504 }, null)).toBe('necunoscut')
+    expect(stareInchidere({ data:null, error:{ code:'42501', message:'rls' } }, null)).toBe('necunoscut')   // fără status = nu e refuz sigur
+    expect(stareInchidere(undefined, null)).toBe('necunoscut')
+  })
+  it('J2: UPDATE intrat + răspuns pierdut („Failed to fetch") + citirea arată statusul țintă → inchis', () => {
+    const pierdut = { data:null, error:{ message:'TypeError: Failed to fetch', details:'', hint:'', code:'' }, count:null, status:0, statusText:'' }
+    expect(citireNecesara(pierdut)).toBe(true)
+    expect(stareInchidere(pierdut, { data:{ id:5, status:'confirmat' }, error:null })).toBe('inchis')
+    expect(stareInchidere(pierdut, { data:{ id:5, status:'clasificat' }, error:null })).toBe('deschis')   // vizibil, alt status
+    expect(stareInchidere(pierdut, { data:null, error:null })).toBe('necunoscut')                          // invizibil
+    expect(stareInchidere(pierdut, { data:null, error:{ message:'Failed to fetch' } })).toBe('necunoscut')  // citirea a picat
+    expect(stareInchidere({ error:new Error('timeout') }, { data:{ id:5, status:'confirmat' }, error:null })).toBe('inchis')   // excepție prinsă
+    expect(stareInchidere({ data:null, error:{ message:'bad gateway' }, status:502 }, { data:{ id:5, status:'confirmat' }, error:null })).toBe('inchis')
   })
   it('rând mutat în alt modul, invizibil pentru cel care confirmă → necunoscut (NU închis)', () => {
     // coada HR reîncărcată nu-l mai conține — vechiul criteriu ar fi spus „închis"
@@ -482,12 +513,43 @@ describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
     expect(stareInchidere({ data:[{ id:5 }], error:null }, null, 'respins')).toBe('inchis')
     expect(stareInchidere(zero, { data:{ id:5, status:'respins' }, error:null }, 'respins')).toBe('inchis')
     expect(stareInchidere(zero, { data:{ id:5, status:'confirmat' }, error:null }, 'respins')).toBe('deschis')
-    expect(stareInchidere({ data:null, error:{ code:'42501', message:'rls' } }, null, 'respins')).toBe('deschis')
+    expect(stareInchidere({ data:null, error:{ code:'42501', message:'rls' }, status:403 }, null, 'respins')).toBe('deschis')
   })
-  it('citire picată / lipsă / răspuns ciudat → necunoscut', () => {
+  it('J2 + NH-2: ✕ Respinge cu răspuns pierdut — citirea decide (respins → inchis; alt status → deschis; invizibil → necunoscut)', () => {
+    const pierdut = { data:null, error:{ message:'TypeError: Failed to fetch', code:'' }, status:0 }
+    expect(stareInchidere(pierdut, { data:{ id:5, status:'respins' }, error:null }, 'respins')).toBe('inchis')
+    expect(stareInchidere(pierdut, { data:{ id:5, status:'clasificat' }, error:null }, 'respins')).toBe('deschis')
+    expect(stareInchidere(pierdut, { data:null, error:null }, 'respins')).toBe('necunoscut')
+    expect(mesajRespingere(stareInchidere(pierdut, { data:{ id:5, status:'respins' }, error:null }, 'respins'), pierdut.error)).toEqual({ tip:'ok', msg:'Respins.' })
+  })
+  it('citire picată / lipsă → necunoscut; răspuns ciudat (fără rânduri, fără eroare) → decide citirea', () => {
     expect(stareInchidere(zero, { data:null, error:{ message:'timeout' } })).toBe('necunoscut')
     expect(stareInchidere(zero, null)).toBe('necunoscut')
-    expect(stareInchidere({ data:null, error:null }, { data:{ id:5, status:'confirmat' } })).toBe('necunoscut')
+    expect(stareInchidere({ data:null, error:null }, null)).toBe('necunoscut')
+    expect(stareInchidere({ data:null, error:null }, { data:{ id:5, status:'confirmat' } })).toBe('inchis')
+  })
+})
+
+describe('J2 respingereServer / citireNecesara', () => {
+  it('refuz sigur doar cu eroare + status HTTP 4xx', () => {
+    expect(respingereServer({ error:{ code:'42501' }, status:403 })).toBe(true)
+    expect(respingereServer({ error:{ code:'PGRST204' }, status:400 })).toBe(true)
+    expect(respingereServer({ error:{ message:'conflict' }, status:409 })).toBe(true)
+    expect(respingereServer({ error:{ message:'Failed to fetch' }, status:0 })).toBe(false)
+    expect(respingereServer({ error:{ message:'x' }, status:500 })).toBe(false)
+    expect(respingereServer({ error:{ message:'x' }, status:503 })).toBe(false)
+    expect(respingereServer({ error:new Error('x') })).toBe(false)
+    expect(respingereServer({ data:[], error:null, status:404 })).toBe(false)   // fără eroare
+    expect(respingereServer(undefined)).toBe(false)
+  })
+  it('citire după UPDATE: da la 0 rânduri / transport / 5xx / fără răspuns; nu la rând întors sau refuz sigur', () => {
+    expect(citireNecesara({ data:[{ id:1 }], error:null, status:200 })).toBe(false)
+    expect(citireNecesara({ data:null, error:{ code:'42501' }, status:403 })).toBe(false)
+    expect(citireNecesara({ data:[], error:null, status:200 })).toBe(true)
+    expect(citireNecesara({ data:null, error:{ message:'Failed to fetch' }, status:0 })).toBe(true)
+    expect(citireNecesara({ data:null, error:{ message:'x' }, status:504 })).toBe(true)
+    expect(citireNecesara({ error:new Error('x') })).toBe(true)
+    expect(citireNecesara(undefined)).toBe(true)
   })
 })
 
@@ -545,5 +607,125 @@ describe('RB2 / NH-2 ✕ Respinge', () => {
     expect(mesajRespingere('deschis', null).msg).toBe('Rândul NU a ieșit din coadă — încearcă din nou.')
     expect(mesajRespingere('necunoscut', null).tip).toBe('warn')
     expect(mesajRespingere(undefined, null).tip).toBe('err')
+  })
+})
+
+// ─── Review final (Jakarinos P1, 21.10) ──────────────────────────────────────
+describe('J1 eticheta de proveniență [Citește orice #N]', () => {
+  it('determinista, pe ultima linie a observațiilor, cu titlul AI păstrat', () => {
+    expect(tagProvenienta(501)).toBe('[Citește orice #501]')
+    expect(tagProvenienta('501')).toBe(tagProvenienta(501))
+    expect(observatiiInserareHR(rowAI())).toBe('[Citește orice #501]')
+    expect(observatiiInserareHR(rowAI({ payload_ai:{ titlu_scurt:'CI Popescu' } }))).toBe('CI Popescu\n[Citește orice #501]')
+    expect(observatiiInserareHR(rowAI({ payload_ai:{ titlu_scurt:'   ' } }))).toBe('[Citește orice #501]')
+    expect(areTagProvenienta(observatiiInserareHR(rowAI({ payload_ai:{ titlu_scurt:'CI' } })), 501)).toBe(true)
+  })
+  it('nu se confundă între rânduri: #12 ≠ #123 ≠ #112 ≠ #1', () => {
+    expect(areTagProvenienta('[Citește orice #123]', 12)).toBe(false)
+    expect(areTagProvenienta('[Citește orice #112]', 12)).toBe(false)
+    expect(areTagProvenienta('[Citește orice #12]', 123)).toBe(false)
+    expect(areTagProvenienta('[Citește orice #12]', 1)).toBe(false)
+    expect(areTagProvenienta('[Citește orice #12]', 2)).toBe(false)
+    expect(areTagProvenienta('x\n[Citește orice #12]', 12)).toBe(true)
+    expect(areTagProvenienta('[Citește orice #12]\nnotă HR adăugată după', '12')).toBe(true)
+    // linia de completare (inbox #12, …) nu e eticheta de inserare
+    expect(areTagProvenienta('Completat din «Citește orice» (inbox #12, 21.10.2026): emitent', 12)).toBe(false)
+    expect(areTagProvenienta(null, 12)).toBe(false)
+    expect(areTagProvenienta('[Citește orice #12]', null)).toBe(false)
+    expect(areTagProvenienta('[Citește orice #]', '')).toBe(false)
+  })
+  it('clasificare: documentul etichetat cu ACEST rând = acelasi oricare i-ar fi mărimea (necunoscută / diferită)', () => {
+    const tag = { observatii:'CI\n[Citește orice #501]' }
+    // mărime necunoscută la rând și în dosar
+    expect(clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive({ id:900, fisier_size_bytes:null, ...tag })], 7))
+      .toMatchObject({ tip:'acelasi', dinRand:true, nrIdentice:1, marimiNecunoscute:false })
+    // mărime diferită
+    const c = clasificaDublura(rowAI(), [docDrive({ id:900, fisier_size_bytes:999, ...tag })], 7)
+    expect(c).toMatchObject({ tip:'acelasi', dinRand:true })
+    expect(c.doc.id).toBe(900)
+    // eticheta altui rând → ca înainte (alt conținut, mărime necunoscută)
+    expect(clasificaDublura(rowAI({ id:50, fisier_size_bytes:null }), [docDrive({ id:900, fisier_size_bytes:null, ...tag })], 7))
+      .toMatchObject({ tip:'alt_continut', dinRand:false, marimiNecunoscute:true })
+    expect(clasificaDublura(rowAI({ id:5012, fisier_size_bytes:null }), [docDrive({ id:900, fisier_size_bytes:null, ...tag })], 7).tip).toBe('alt_continut')
+    // alt angajat / șters → nu contează
+    expect(clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive({ employee_id:8, ...tag }), docDrive({ deleted_at:'2026-10-21', ...tag })], 7).tip).toBeNull()
+  })
+  it('clasificare: etichetatul activ câștigă în fața unei copii identice mai vechi; activ înaintea etichetatului inactiv', () => {
+    const tag = { observatii:'[Citește orice #501]' }
+    const a = clasificaDublura(rowAI(), [docDrive({ id:12 }), docDrive({ id:900, ...tag })], 7)
+    expect(a).toMatchObject({ tip:'acelasi', dinRand:true, nrIdentice:2 })
+    expect(a.doc.id).toBe(900)
+    const b = clasificaDublura(rowAI(), [docDrive({ id:12 }), docDrive({ id:900, activ:false, ...tag })], 7)
+    expect(b).toMatchObject({ tip:'acelasi', dinRand:false, nrIdentice:2, nrInactive:1 })
+    expect(b.doc.id).toBe(12)
+    const c = clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive({ id:900, activ:false, ...tag })], 7)
+    expect(c).toMatchObject({ tip:'acelasi_inactiv', dinRand:true })
+  })
+  it('analiza: salvat deja din rând → doar închidere (nimic de completat, fără „tip diferit")', () => {
+    const doc = docDrive({ id:900, fisier_size_bytes:null, numar_document:null, emitent:null, observatii:'[Citește orice #501]' })
+    const a = analizaDublura({ row:rowAI({ fisier_size_bytes:null }), docs:[doc], angajatId:7, tipuriFK:TIPURI, tipAI:'cazier_judiciar' })
+    expect(a).toMatchObject({ tip:'acelasi', dinRand:true, tipDiferit:false, campuri:[], expirareOmisa:null })
+    expect(a.doc.id).toBe(900)
+  })
+  it('REPRO: mărime necunoscută + închiderea a picat + staging păstrat → reîncercarea NU mai poate insera', () => {
+    const row = rowAI({ id:501, fisier_size_bytes:null, payload_ai:{ titlu_scurt:'CI Popescu', date_document:{} } })
+    const exact = null   // mărime necunoscută → fără căutarea exactă
+    const opts = { faraGardaNume:true, marimiComparate:false }   // „Adaugă ca document nou" după „nu pot verifica"
+    // 1. prima apăsare: în dosar e doar o copie mai veche fără mărime → omul confirmă documentul nou → se inserează
+    const vechi = docDrive({ id:12, fisier_size_bytes:null })
+    expect(gardaFinalaHR({ row, angajatId:7, exact, nume:{ docs:[vechi] }, opts }).bloc).toBeNull()
+    const salvat = { id:900, employee_id:7, fisier_nume:row.fisier_nume, fisier_size_bytes:row.fisier_size_bytes,
+      activ:true, deleted_at:null, observatii:observatiiInserareHR(row) }
+    // 2. închiderea rândului pică (rețea) și ștergerea din staging pică → rândul rămâne în coadă, fișierul în staging
+    const stare = stareInchidere({ data:null, error:{ message:'TypeError: Failed to fetch' }, status:0 }, { data:null, error:{ message:'Failed to fetch' } })
+    expect(stare).toBe('necunoscut')
+    expect(stagingSters({ data:null, error:{ message:'Failed to fetch' } })).toBe(false)
+    // 3. reîncercare cu aceeași excepție: fără etichetă (vechiul comportament) trecea → a doua copie (exact bug-ul)
+    const fara = gardaFinalaHR({ row, angajatId:7, exact, nume:{ docs:[vechi, { ...salvat, observatii:'CI Popescu' }] }, opts })
+    expect(fara.bloc).toBeNull()
+    const g = gardaFinalaHR({ row, angajatId:7, exact, nume:{ docs:[vechi, salvat] }, opts })
+    expect(g.bloc).toBe('acelasi')
+    expect(g.cls).toMatchObject({ dinRand:true })
+    expect(g.cls.doc.id).toBe(900)
+    expect(mesajBlocareHR(g.bloc, g.cls, row.fisier_nume)).toMatch(/deja salvat în dosar din acest rând \(#900\)/)
+    // 4. panoul oferă doar închiderea legată de documentul salvat
+    const a = analizaDublura({ row, docs:[vechi, salvat], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' })
+    expect(a).toMatchObject({ tip:'acelasi', dinRand:true, campuri:[] })
+    expect(a.doc.id).toBe(900)
+    // garda „doar închidere" se potrivește pe documentul salvat (mărime null → is null)
+    const garda = gardaDocDosar({ doc:a.doc, angajatId:7, row })
+    expect(garda).toContainEqual(['is', 'fisier_size_bytes', null])
+    expect(potrivesteGarda(salvat, garda)).toBe(true)
+  })
+  it('REPRO (mărime cunoscută, dar diferită în dosar): căutarea exactă goală, cea pe nume prinde eticheta', () => {
+    const row = rowAI({ id:501 })
+    const salvat = docDrive({ id:900, fisier_size_bytes:4321, observatii:observatiiInserareHR(row) })
+    const g = gardaFinalaHR({ row, angajatId:7, exact:{ docs:[] }, nume:{ docs:[salvat] }, opts:{ faraGardaNume:true, marimiComparate:true } })
+    expect(g.bloc).toBe('acelasi')
+    expect(g.cls.dinRand).toBe(true)
+  })
+})
+
+describe('mesajBlocareHR', () => {
+  it('mesaje pe tipul blocării', () => {
+    expect(mesajBlocareHR('acelasi', { tip:'acelasi', dinRand:false, doc:{ id:3 } }, 'CI.pdf')).toBe('E deja în dosar — folosește «Închide» sau «Completează și închide».')
+    expect(mesajBlocareHR('acelasi_inactiv', { tip:'acelasi_inactiv', dinRand:true, doc:{ id:3 } }, 'CI.pdf')).toMatch(/INACTIV/)
+    const alt = clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:4321 })], 7)
+    expect(mesajBlocareHR('alt_continut', alt, 'CI.pdf')).toBe(texteAltContinut(alt, 'CI.pdf').garda)
+  })
+})
+
+// ─── Review final (Copilot P2, 21.10) ────────────────────────────────────────
+describe('C2 dosarInVerificare — reverificarea nu mai arată rezultatul vechi', () => {
+  it('scoate cheile reverificate, le păstrează pe celelalte; fără chei de scos → același obiect', () => {
+    const kA = cheieDosar(7, 'CI.pdf'), kB = cheieDosar(8, 'CI.pdf')
+    const d = { [kA]:{ docs:[] }, [kB]:{ docs:[docDrive()] } }
+    // A→B→A: la revenirea pe A, cheia A trece în „verific" (lipsă) până vine răspunsul nou
+    const n = dosarInVerificare(d, [kA])
+    expect(n).toEqual({ [kB]:{ docs:[docDrive()] } })
+    expect(d[kA]).toEqual({ docs:[] })   // obiectul vechi nu se modifică
+    expect(dosarInVerificare(d, [cheieDosar(9, 'x.pdf')])).toBe(d)
+    expect(dosarInVerificare(d, [])).toBe(d)
+    expect(dosarInVerificare(null, [kA])).toEqual({})
   })
 })

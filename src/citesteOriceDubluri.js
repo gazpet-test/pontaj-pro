@@ -21,6 +21,12 @@
 //   • motivFaraExpirare  — „fără expirare" în dosar / tip fără expirare: data expirării nu se propune (HR-1)
 //   • stagingSters       — fișierul din staging s-a șters sigur? (altfel o nouă confirmare l-ar salva din nou — NH-1)
 //   • textConfirmareRespingere / mesajRespingere — ✕ Respinge neutru + rezultatul verificat (RB2 / NH-2)
+//   Review final (Jakarinos P1/P2, Copilot P2/P3, 21.10):
+//   • tagProvenienta / areTagProvenienta / observatiiInserareHR — documentul inserat din rândul #N poartă
+//                          „[Citește orice #N]" în observații → la reîncercare e 'acelasi', oricare i-ar fi mărimea (J1)
+//   • respingereServer / citireNecesara — o eroare de transport la UPDATE nu e „deschis": se citește rândul (J2)
+//   • rezultatCautareDosar — trunchiat după count când există; limita doar fără count (C1)
+//   • dosarInVerificare  — reverificarea golește cheia: fără rezultat vechi la A→B→A (C2)
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -92,32 +98,51 @@ export function bucati(arr, n) {
 // Activ = convenția din TabDocumentePersonale: doar activ === false e istoric / arhivat.
 export const esteActiv = d => !!d && d.activ !== false
 
+// J1 (review final): eticheta de proveniență pe care confirmHR o pune la finalul observațiilor documentului
+// inserat din rândul #N al cozii. Determinista (doar id-ul rândului) și închisă cu „]": „[Citește orice #12]"
+// nu apare în „[Citește orice #123]" / „#112]", deci rândurile nu se confundă între ele.
+export const tagProvenienta = inboxId => `[Citește orice #${String(inboxId).trim()}]`
+export function areTagProvenienta(observatii, inboxId) {
+  if (observatii == null || inboxId == null || String(inboxId).trim() === '') return false
+  return String(observatii).includes(tagProvenienta(inboxId))
+}
+// observațiile documentului inserat de confirmHR: titlul AI (dacă e) + eticheta pe ultima linie
+export const observatiiInserareHR = row => observatiiNoi(row?.payload_ai?.titlu_scurt || null, tagProvenienta(row?.id))
+
 // docs = rânduri hr_documente_personale (pot fi și ale altor angajați / alte nume — se filtrează aici)
-//   tip 'acelasi'         → există potrivire ACTIVĂ cu fisier_size_bytes egal (ne-null);
-//                           doc = cea mai veche activă (id minim) — inactivele nu câștigă (review r1)
-//   tip 'acelasi_inactiv' → același fișier există, dar DOAR ca document inactiv (istoric);
+//   tip 'acelasi'         → există potrivire ACTIVĂ: fisier_size_bytes egal (ne-null) SAU eticheta de
+//                           proveniență a ACESTUI rând în observații (J1 — salvat deja din el, oricare i-ar fi mărimea);
+//                           doc = cea salvată din rând dacă e activă, altfel cea mai veche activă (id minim)
+//                           — inactivele nu câștigă (review r1)
+//   tip 'acelasi_inactiv' → același fișier (sau cel salvat din rând) există, dar DOAR ca document inactiv (istoric);
 //                           doar închidere: nu se completează nimic și nu se inserează altă copie (r2)
-//   tip 'alt_continut'    → același nume, dar nicio mărime egală (sau mărimi necunoscute)
+//   tip 'alt_continut'    → același nume, dar nicio mărime egală (sau mărimi necunoscute) și fără eticheta rândului
 //                           marimiNecunoscute = rândul SAU măcar o copie din dosar n-are mărime (r2):
 //                           atunci nu pot spune „alt fișier" — copia fără mărime poate fi chiar el
 //   tip null              → nimic cu acest nume la acest angajat
-// nrIdentice = toate copiile identice (active + inactive); nrInactive = câte dintre ele sunt inactive.
+// nrIdentice = toate copiile potrivite (identice ca mărime sau etichetate; active + inactive); nrInactive = câte sunt inactive.
+// dinRand = documentul ales poartă eticheta rândului (J1): închiderea rândului a picat după inserare → doar închidere.
 // Regula (F2, rafinare deliberată a regulii „cea mai veche copie identică"): cea mai veche copie identică ACTIVĂ; dacă nu e niciuna activă, cea mai veche identică — o copie inactivă e istoric, nu ținta completării.
+// Căutările din dosar sunt pe nume, deci și documentul etichetat se caută aici cu același nume ca rândul.
 export function clasificaDublura(row, docs, angajatId) {
-  const gol = { tip:null, doc:null, nrIdentice:0, nrInactive:0, nrTotal:0, marimiNecunoscute:false }
+  const gol = { tip:null, doc:null, nrIdentice:0, nrInactive:0, nrTotal:0, marimiNecunoscute:false, dinRand:false }
   if (!row || !row.fisier_nume || angajatId == null) return gol
   const lista = (docs || []).filter(d => d && d.deleted_at == null
     && Number(d.employee_id) === Number(angajatId) && d.fisier_nume === row.fisier_nume)
   if (!lista.length) return gol
   const sz = marime(row.fisier_size_bytes)
-  const identice = sz == null ? [] : lista.filter(d => marime(d.fisier_size_bytes) === sz).sort((a, b) => a.id - b.id)
-  if (identice.length) {
-    const active = identice.filter(esteActiv)
-    const baza = { nrIdentice:identice.length, nrInactive:identice.length - active.length, nrTotal:lista.length, marimiNecunoscute:false }
-    return active.length ? { tip:'acelasi', doc:active[0], ...baza } : { tip:'acelasi_inactiv', doc:identice[0], ...baza }
+  const marcate = new Set(lista.filter(d => areTagProvenienta(d.observatii, row.id)).map(d => d.id))
+  const potrivite = lista.filter(d => marcate.has(d.id) || (sz != null && marime(d.fisier_size_bytes) === sz)).sort((a, b) => a.id - b.id)
+  if (potrivite.length) {
+    const active = potrivite.filter(esteActiv)
+    const alege = l => l.find(d => marcate.has(d.id)) || l[0]
+    const doc = alege(active.length ? active : potrivite)
+    const baza = { doc, nrIdentice:potrivite.length, nrInactive:potrivite.length - active.length, nrTotal:lista.length,
+      marimiNecunoscute:false, dinRand:marcate.has(doc.id) }
+    return { tip: active.length ? 'acelasi' : 'acelasi_inactiv', ...baza }
   }
   return { tip:'alt_continut', doc:null, nrIdentice:0, nrInactive:0, nrTotal:lista.length,
-    marimiNecunoscute: sz == null || lista.some(d => marime(d.fisier_size_bytes) == null) }
+    marimiNecunoscute: sz == null || lista.some(d => marime(d.fisier_size_bytes) == null), dinRand:false }
 }
 
 // Garda din confirmHR (ultima apărare, pe ce e în dosar LA MOMENTUL inserării):
@@ -208,12 +233,13 @@ export function observatiiNoi(existente, linie) {
 // Document inactiv (istoric) → doar închidere: nu se completează nimic în el (r1/r2).
 // expirareOmisa (HR-1) = { motiv:'dosar' | 'tip', val } când AI a citit o dată de expirare validă, dar ea
 // nu se completează (dosar „fără expirare" / tip fără expirare) — panoul spune de ce; altfel null.
+// Document salvat deja din acest rând (dinRand, J1) → doar închidere, legat de el: nu se completează nimic.
 export function analizaDublura({ row, docs, angajatId, tipuriFK, tipAI }) {
   const c = clasificaDublura(row, docs, angajatId)
   if (c.tip !== 'acelasi' && c.tip !== 'acelasi_inactiv') return c
   const tipDosar = (tipuriFK || []).find(t => Number(t.id) === Number(c.doc.tip_id)) || null
   const dinDrive = esteDinDrive(c.doc)
-  if (row.status === 'eroare' || c.tip === 'acelasi_inactiv') return { ...c, dinDrive, tipDosar, tipDiferit:false, campuri:[], expirareOmisa:null }
+  if (row.status === 'eroare' || c.tip === 'acelasi_inactiv' || c.dinRand) return { ...c, dinDrive, tipDosar, tipDiferit:false, campuri:[], expirareOmisa:null }
   const tipDiferit = !tipAI || !tipDosar || tipDosar.cod !== tipAI
   const dd = row.payload_ai?.date_document
   const motiv = motivFaraExpirare(c.doc, tipDosar)
@@ -284,15 +310,17 @@ export function grupeDupaAngajat(perechi, n) {
 }
 
 // F3 / F4: răspunsul unei căutări în dosar ({ data, error, count }) → { docs } | { err:'eroare' | 'trunchiat' }.
-//   limita  = limita de rânduri cerută: un răspuns care o atinge poate fi tăiat → 'trunchiat'
-//   cuNumar = s-a cerut count:'exact' → count lipsă = 'eroare', count > rânduri primite = 'trunchiat'
+//   count prezent → decide DOAR el: count > rânduri primite = 'trunchiat'; exact la limită (ex. 500 din 500)
+//                   = complet, fără avertisment fals (C1)
+//   count lipsă   → limita = limita de rânduri cerută: un răspuns care o atinge poate fi tăiat → 'trunchiat';
+//                   altfel, dacă s-a cerut count:'exact' (cuNumar) → 'eroare'
 // Trunchiat = nu știu dacă copia identică e printre rândurile lipsă → eroare de căutare, nu „liber".
 export function rezultatCautareDosar(res, { limita = null, cuNumar = false } = {}) {
   const { data, error, count } = res || {}
   if (!res || error || !Array.isArray(data)) return { err:'eroare' }
+  if (typeof count === 'number' && Number.isFinite(count)) return count > data.length ? { err:'trunchiat' } : { docs:data }
   if (limita != null && data.length >= limita) return { err:'trunchiat' }
-  if (cuNumar && !(typeof count === 'number' && Number.isFinite(count))) return { err:'eroare' }
-  if (typeof count === 'number' && count > data.length) return { err:'trunchiat' }
+  if (cuNumar) return { err:'eroare' }
   return { docs:data }
 }
 
@@ -306,6 +334,7 @@ export function mesajEroareCautare(err, nume) {
 //   exact = rezultatCautareDosar pe angajat + nume + mărime (limit 1, copia activă întâi);
 //           null când mărimea rândului e necunoscută
 //   nume  = rezultatCautareDosar pe angajat + nume, complet (count) — poate lipsi dacă exact a blocat deja
+//   (ambele cu coloana observatii: documentul etichetat cu acest rând = 'acelasi' oricare i-ar fi mărimea — J1)
 // → { err } (căutare picată / incompletă: NU se inserează) | { bloc, cls } (bloc null = se poate insera)
 export function gardaFinalaHR({ row, angajatId, exact, nume, opts = {} }) {
   if (exact) {
@@ -320,20 +349,55 @@ export function gardaFinalaHR({ row, angajatId, exact, nume, opts = {} }) {
   return { bloc:blocheazaInserare(cls, opts), cls }
 }
 
-// F5 (r4): starea rândului din ai_documente_inbox după UPDATE-ul care îl închide.
+// Mesajul din confirmHR când garda finală blochează inserarea (bloc ≠ null)
+export function mesajBlocareHR(bloc, cls, nume) {
+  if (bloc === 'acelasi') return cls && cls.dinRand && cls.doc
+    ? `Documentul a fost deja salvat în dosar din acest rând (#${cls.doc.id}) — nu-l mai adaug; folosește «Închide (e deja în dosar)».`
+    : 'E deja în dosar — folosește «Închide» sau «Completează și închide».'
+  if (bloc === 'acelasi_inactiv') return 'E deja în dosar (ca document INACTIV, istoric) — folosește «Închide (e deja în dosar)».'
+  return texteAltContinut(cls, nume).garda
+}
+
+// C2: la începutul unei reverificări cheile ei trec în „se verifică" (scoase din dosar) — un rezultat vechi
+// (alt angajat ales între timp: A→B→A) nu se mai afișează până nu vine răspunsul nou. Fără chei de scos → același obiect.
+export function dosarInVerificare(dosar, chei) {
+  const d = dosar || {}
+  const k = (chei || []).filter(x => x in d)
+  if (!k.length) return d
+  const n = { ...d }
+  for (const x of k) delete n[x]
+  return n
+}
+
+// J2: UPDATE refuzat SIGUR de server = răspuns HTTP 4xx (PostgREST: RLS, constrângere, cerere invalidă) →
+// nu s-a aplicat. O eroare FĂRĂ răspuns HTTP (postgrest-js: status 0 — „Failed to fetch", rețea, timeout)
+// sau un 5xx (ex. gateway) nu spune nimic despre rezultat: UPDATE-ul poate fi intrat, doar răspunsul s-a pierdut.
+export function respingereServer(res) {
+  const st = res && res.status
+  return !!(res && res.error) && typeof st === 'number' && st >= 400 && st < 500
+}
+
+// După UPDATE: rezultatul trebuie aflat prin citirea DIRECTĂ a rândului? (tot ce nu e rând întors / refuz sigur)
+export function citireNecesara(res) {
+  const { data, error } = res || {}
+  if (res && !error && Array.isArray(data) && data.length) return false
+  return !respingereServer(res)
+}
+
+// F5 (r4) + J2: starea rândului din ai_documente_inbox după UPDATE-ul care îl închide.
 //   statusTinta = statusul pus de UPDATE: 'confirmat' (finalizeInbox) | 'respins' (✕ Respinge — NH-2)
 //   res    = răspunsul UPDATE-ului (.select('id'))
 //   citire = citirea DIRECTĂ a rândului ({ data:{ id, status } | null, error } — select … .eq('id') .maybeSingle()),
-//            făcută doar la 0 rânduri fără eroare. NU coada modulului: un rând mutat între timp în alt modul
-//            lipsește din coada asta, dar e tot deschis (verificare r4, F5 rezidual).
-// → 'inchis'     UPDATE-ul a întors rândul, sau rândul se vede cu statusTinta
-//   'deschis'    UPDATE-ul a dat eroare, sau rândul se vede și NU are statusTinta
-//   'necunoscut' 0 rânduri și rândul nu se vede (mutat / fără drept pe el) sau citirea a picat
+//            făcută când citireNecesara(res): 0 rânduri fără eroare, eroare de transport / 5xx (J2), răspuns ciudat.
+//            NU coada modulului: un rând mutat între timp în alt modul lipsește din coada asta, dar e tot
+//            deschis (verificare r4, F5 rezidual).
+// → 'inchis'     UPDATE-ul a întors rândul, sau rândul se vede cu statusTinta (și după un răspuns pierdut)
+//   'deschis'    UPDATE-ul a fost refuzat sigur (4xx), sau rândul se vede și NU are statusTinta
+//   'necunoscut' rezultat nesigur și rândul nu se vede (mutat / fără drept pe el) sau citirea a picat / lipsește
 export function stareInchidere(res, citire, statusTinta = 'confirmat') {
   const { data, error } = res || {}
-  if (!res || error) return 'deschis'
-  if (Array.isArray(data) && data.length) return 'inchis'
-  if (!inchidereFaraRezultat(res)) return 'necunoscut'
+  if (res && !error && Array.isArray(data) && data.length) return 'inchis'
+  if (respingereServer(res)) return 'deschis'
   const { data:r, error:e } = citire || {}
   if (!citire || e || !r) return 'necunoscut'
   return r.status === statusTinta ? 'inchis' : 'deschis'
