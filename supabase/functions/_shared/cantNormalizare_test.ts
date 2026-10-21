@@ -270,3 +270,10 @@ Deno.test('n6 (21.10, proba Răcari): antetul „<cod> pag N” imediat sub marc
     assertEquals(k.obs.pozitie_dovedita, false, antet)
   }
 })
+
+Deno.test('n6 review Gemini r1 (P2): în JOS, un marcaj de pagină (cu sau fără antet) oprește în continuare blocul → denumirea de pe pagina următoare NU se atribuie', async () => {
+  const t = PRE + '007 6715399 BUC. 2.000\n⟦PAGINA 16⟧\nIOANA8 pag 3\n@DOP PEHD PE80 PN 6 DN 90 COD 66500006\n0.000 0 Total=\n'
+  const r = { ...randF3('6715399', 'DOP PEHD PE80 PN 6 DN 90 COD 66500006', 2, '007 6715399 BUC. 2.000'), um: 'BUC.' }
+  const n = (await normalizeazaRand(r, { ...ctxF3, textDoc: t, felie: t }))!
+  assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true])
+})
