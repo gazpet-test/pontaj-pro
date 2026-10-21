@@ -71,7 +71,7 @@ Registrul: trigger care refuză orice UPDATE/DELETE, trigger contra TRUNCATE, RE
 ### 2.4 Căile vechi închise la nivelul `stoc` (§5.4)
 | Cale | Mecanism |
 |---|---|
-| 3 — import REPLACE / DELETE pe `executie_tevi` | trigger care refuză DELETE din client pe proiectele cu nivel ≥ `stoc` (LOT 2 are azi 0 țevi, deci nu blochează lucru real) |
+| 3 — import REPLACE / DELETE pe `executie_tevi` | trigger care refuză DELETE din client pe proiectele cu nivel ≥ `stoc` (LOT 2 are azi 0 țevi, deci nu blochează lucru real). **Corectat de `20261102c` (21.10.2026, decizia Razvan, varianta A):** LOT 2 avea deja un pachet cu rânduri, iar ecranul vechi nu mai putea corecta un rând. La `stoc` se refuză doar rândurile / pachetele **legate de registru** (`magazie_bucati.executie_teava_id`); la `montaj` (E4a) se refuză tot. Importul REPLACE redevine neatomic, ca înainte de E2 (varianta atomică: E4a) |
 | 9 — bonuri | trigger pe `executie_bonuri_consum_linii`: refuză `magazie_bucata_id` beneficiar pe proiect cu nivel ≥ `stoc` (+ filtru în UI) |
 | 10, 11, 12 — recepția directă, producția, mutarea | prin gardă (testele de regresie: recepție `beneficiar` pe LOT 1 și producție `gazpet` pe proiectul 3 trec) |
 | 13 — `din_stoc` pe transport | **Q-E2-1 = C**: fără trigger (calea nu atinge `magazie_bucati`); avertizare în UI-ul transportului pentru site-urile proiectelor cu nivel ≠ `off` |
