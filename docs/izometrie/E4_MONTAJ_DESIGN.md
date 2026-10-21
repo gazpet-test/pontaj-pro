@@ -1,6 +1,6 @@
-# E4 — Montajul: tableta inginerului de izometrie, cu salvare (design r5, pentru review ÎNAINTE de cod)
+# E4 — Montajul: tableta inginerului de izometrie, cu salvare (design r6, pentru review ÎNAINTE de cod)
 
-**Stare**: r5 (review Jakarinos pe r4: NO-GO, 0 P0, 3 P1, 1 P2; pe r3: NO-GO, 7 P1; pe r2: NO-GO, 11 P1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
+**Stare**: r6 (review Jakarinos pe r5: NO-GO, 0 P0, 1 P1 nou, 1 P2; r4 închis integral; pe r4: NO-GO, 3 P1, 1 P2; pe r3: NO-GO, 7 P1; pe r2: NO-GO, 11 P1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
 
 **r2 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r1 (2 P0, 8 P1, 3 P2):
 - **P0** corecția de lungime e permisă doar pe o rădăcină fără descendenți; în arbore e refuzată explicit (§8.6). Tăierea unei bucăți montate are trei ramuri separate, cu ambele capete reconciliate, iar o bucată legată de pachet se dezleagă întâi (§8.5);
@@ -8,6 +8,10 @@
 - **P1** jurnalul rămâne doar-adaug: un singur INSERT, la final, iar erorile se scriu după rollback-ul savepoint-ului (§5.4). Hash-ul cererii e separat de amprenta preview-ului (§5.6). Identitatea e fixată pe lot și pe angajat (§5.7, §6.3);
 - **P1** lock-urile se iau o dată pe lot, în ordinea globală, iar picker-ul nu mai urcă de la FOR SHARE la UPDATE (§5.4, §7.3, §10.5). Matricea de securitate e completă, cu GPS-ul scos din JSON (§9.4, §9.5). Activarea pe tronson verifică OLD și NEW (§7.4);
 - **P2** CAS-ul din `actualizeazaRandInPachet` e descris corect (§7.3); Q-E4-13 B / C cer fișa de automatizare (§12); testele noi (§11, 13–16).
+
+**r6 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r5 (închise de Jak: toate cele 3 P1 + P2 din r4; 1 P1 nou, 1 P2):
+- **pachetul aprobat nu se mai schimbă**: scriitorii structurali (`completeaza`, `leaga`, `dezleaga`) cer pachetul editabil (`status` inițial, fără aprobare), revalidat sub lock-ul pachetului; aprobarea Transgaz are CAS pe `updated_at`, iar orice scriere structurală mută `updated_at` pe antet. Cursa `completeaza` ↔ `aprobare_transgaz` e serializată pe pachet, în ambele ordini (§4.2, §5.6, §7.2, §7.3, §7.4, testul 21);
+- **P2**: motivele stării `conflict` sunt o listă închisă (`r1d`, `corectie_in_arbore`), folosită de CHECK, de trigger-ul de stări și de toate rândurile tabelului din §6.4 (§3.2, §6.4, testul 21).
 
 **r5 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r4 (închise de Jak: r3 #2 PV-ul, #3 contorul, #6 ACK-ul, #7 activarea; 3 P1, 1 P2):
 - **reconcilierea** acceptă lanțul complet: R (pe `bucata_decl_uid`) → `transferata` → R′ (pe `bucata_id`, `transfer_din_id` = R) → `consumata` de consumatorul din același lot, cu evenimentul lui. R nu e niciodată „consumată de consumator” (§3.2, §6.3 pașii 8–10, testul 13);
@@ -219,7 +223,7 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
   - `tip` ∈ {`montaj`, `taiere`, `cuplare`};
   - `versiune` (≥ 1), `declarat_de` (profilul = `auth.uid()` al lotului), `declarat_de_angajat` (`profiles.employee_id`, NOT NULL, copiat la acceptare), `dispozitiv_id`, `ultimul_op_id`.
 - **Starea**: `stare` ∈ {`ciorna` (sesiune deschisă), `trimisa`, `in_verificare`, `conflict`, `blocata`, `revizie_ceruta`, `aprobata`, `respinsa`, `stearsa`}. Tranzițiile permise sunt doar cele din §6.4 (trigger pe rol + stare).
-  - `conflict_cod` (de exemplu `r1d`, `corectie_in_arbore`); pierderea rezervării nu e o stare, ci o condiție derivată (§5.4);
+  - `conflict_cod` ∈ {`r1d`, `corectie_in_arbore`} (r6: lista închisă din §6.4); pierderea rezervării nu e o stare, ci o condiție derivată (§5.4);
   - `stare_inainte_blocare` + `blocata_motiv` (r3): starea în care revine rândul la deblocare (§6.4). NULL când rândul nu e `blocata` (CHECK).
 - **Montaj**:
   - piesa: `bucata_id` | `bucata_decl_uid` (copilul unei tăieri) | niciuna (`identificare = 'nerezolvata'`, seria în verificare);
@@ -251,7 +255,7 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
   - `data_montaj`: cel mult azi și cel puțin data ieșirii pe tronson.
 - **Decizia**: `aprobare_id`, `aprobat_de`, `aprobat_la`, `motiv_decizie`, `eveniment_ids` bigint[].
 - **Identificarea piesei, separată de stare** (r4): `identificare` ∈ {`bucata`, `bucata_decl`, `nerezolvata`}, doar la `tip = montaj` (la tăiere și cuplare piesele sunt mereu identificate).
-- **CHECK-uri**: coerența pe `tip` (câmpurile celorlalte tipuri sunt NULL); `identificare = 'nerezolvata'` ⇔ fără `bucata_id` și fără `bucata_decl_uid`; `stare = 'in_verificare'` ⇒ `nerezolvata`; `stare IN ('trimisa', 'aprobata')` ⇒ identificată. O ciornă (sau un `conflict` / `blocata`) poate fi nerezolvată: abia `sesiune_trimite` o duce în `in_verificare` (§6.4).
+- **CHECK-uri**: coerența pe `tip` (câmpurile celorlalte tipuri sunt NULL); `identificare = 'nerezolvata'` ⇔ fără `bucata_id` și fără `bucata_decl_uid`; `stare = 'in_verificare'` ⇒ `nerezolvata`; `stare IN ('trimisa', 'aprobata')` ⇒ identificată; `stare = 'conflict'` ⇒ `conflict_cod` ∈ {`r1d`, `corectie_in_arbore`} (r6: lista închisă a motivelor, §6.4); `conflict_cod` e NULL pe `ciorna`, `trimisa`, `in_verificare`, `revizie_ceruta` și `aprobata`; pe `blocata`, doar cu `stare_inainte_blocare = 'conflict'` (motivul se păstrează la blocare, r5); pe `respinsa` / `stearsa` poate rămâne, ca istoric. O ciornă (sau un `conflict` / `blocata`) poate fi nerezolvată: abia `sesiune_trimite` o duce în `in_verificare` (§6.4).
 - **Istoricul**, `izo_declaratii_versiuni` (doar adaug):
   - coloane: `declaratie_id`, `versiune`, `payload` (fără GPS), `hash_cerere`, `op_id`, `la`;
   - o versiune nouă e permisă doar în stările din §6.4 (`ciorna`, `conflict`, `blocata`, `in_verificare`, `revizie_ceruta`); niciodată pe `aprobata`, `respinsa`, `stearsa`.
@@ -403,7 +407,7 @@ Toate funcțiile sunt SECURITY DEFINER, cu `SET search_path = public, pg_temp` �
 | `fn_izo_primire_depozit(p_cheie, p_depozit, p_bucati)` | `izo_montaj_writer` | `authenticated` | primirea resturilor în depozit (gestionar) |
 | `fn_izo_pachet_completeaza(p_cheie, p_pachet, p_updated_at, p_sudura_de, p_sudura_pana)` | `izo_montaj_writer` | `authenticated` | adaugă în pachet rândurile din montajele aprobate (§7.2) |
 | `fn_izo_pachet_leaga(p_teava, p_bucata, p_updated_at)` / `fn_izo_pachet_dezleaga(p_teava, p_motiv)` | `izo_montaj_writer` | `authenticated` | picker-ul ca legătură reală (§7.3) |
-| `fn_izo_pachet_aprobare_transgaz(p_pachet, p_cale, p_sha256)` | `izo_montaj_writer` | `authenticated` | varianta minimă (E4a), doar pe tronsoanele în flux: fișierul + documentul + statusul, într-o tranzacție |
+| `fn_izo_pachet_aprobare_transgaz(p_pachet, p_updated_at, p_cale, p_sha256)` | `izo_montaj_writer` | `authenticated` | varianta minimă (E4a), doar pe tronsoanele în flux: fișierul + documentul + statusul, într-o tranzacție; r6: CAS pe `p_updated_at` (§7.4) |
 | `fn_izo_seteaza_flux(p_tronson, p_activ, p_motiv)` | `izo_montaj_writer` | `postgres` | §3.1 |
 
 **Ajutătoarele interne**: owner `postgres`, EXECUTE doar pentru rolurile E4; REVOKE de la PUBLIC, `anon`, `authenticated`, `service_role`.
@@ -603,6 +607,7 @@ Pe canale:
 - **Notele pe rând** (`fn_izo_pachet_rand_note`): naturale + CAS pe `executie_tevi.updated_at`.
 - **Gestionarul** (ieșire, primire) și **pachetul** (`completeaza`): `cheie_operatie` în `izo_operatii`, pe canalele `depozit` / `pachet`. `hash_cerere` acoperă toți parametrii (`p_bucati` sortate, `p_nr_aviz`, `p_data`, `p_updated_at`, intervalul de suduri).
 - **Legarea unui rând**: naturală (aceeași pereche nu mai are efect) + CAS pe `executie_tevi.updated_at`.
+- **Aprobarea Transgaz** (r6): naturală (pachetul deja aprobat cu același `p_sha256` = niciun efect; cu alt fișier → `pachet_needitabil`) + CAS pe `executie_pachete_lansare.updated_at` (`p_updated_at`).
 
 Pe canalele de birou, rândul din `izo_operatii` (și `izo_aprobari`) se scrie în aceeași tranzacție cu faptele, ca ultimă scriere. Orice refuz e o excepție, deci rollback total: nimic jurnalizat, iar o reîncercare cu aceeași cheie e evaluată din nou. Două cereri concurente cu aceeași cheie:
 - la aprobare, sunt serializate de lock-ul pe sesiune, luat **înaintea** citirii jurnalului (§6.3);
@@ -702,17 +707,19 @@ Ordinea, ca în E3 §4:
 
 ### 6.4 Mașina de stări, revizia, respingerea, seria lămurită
 
-**Tranzițiile declarației** (r2). Orice altă tranziție e refuzată de trigger, pe rol și pe stare:
+**Tranzițiile declarației** (r2). Orice altă tranziție e refuzată de trigger, pe rol și pe stare.
+
+**Motivele stării `conflict`** (r6): o listă închisă, `conflict_cod` ∈ {`r1d` (tripleta dublată, §8.3), `corectie_in_arbore` (diferența de lungime peste ±20 mm pe o bucată din arbore, §8.6)}. Ambele intră la fel: serverul acceptă operația (rezultatul `acceptat`) și scrie starea `conflict` cu motivul găsit. Oriunde tabelul de mai jos scrie „`conflict` (motiv)”, intrarea e permisă pe **oricare** motiv din listă; trigger-ul verifică `conflict_cod` în listă, nu doar `r1d`. Ieșirile din `conflict` nu depind de motiv.
 
 | Din | În | Cine, prin ce |
 |---|---|---|
-| — | `ciorna` / `conflict` | inginerul, `decl_salveaza` (`conflict` = R1 d găsit pe server) |
-| `ciorna`, `conflict`, `blocata` | `ciorna` / `conflict` (versiune nouă; `conflict` = R1 d găsit la revalidarea pe server, r4) | inginerul, `decl_salveaza` cu CAS, cât sesiunea e `deschisa` |
+| — | `ciorna` / `conflict` (motiv) | inginerul, `decl_salveaza` (`conflict` = un motiv din listă, găsit pe server) |
+| `ciorna`, `conflict`, `blocata` | `ciorna` / `conflict` (motiv) (versiune nouă; `conflict` = un motiv din listă, găsit la revalidarea pe server, r4 / r6) | inginerul, `decl_salveaza` cu CAS, cât sesiunea e `deschisa` |
 | `ciorna`, `conflict`, `blocata` | `stearsa` | inginerul, `decl_sterge`, cât sesiunea e `deschisa` |
 | `ciorna` | `trimisa` (piesa identificată) / `in_verificare` (`identificare = 'nerezolvata'`, r4) | inginerul, `sesiune_trimite` |
 | `trimisa`, `in_verificare` | `revizie_ceruta` / `respinsa` | MP-ul (`fn_izo_revizie_cere` / `fn_izo_respinge`) |
-| `in_verificare` | `trimisa` / `conflict` (versiune nouă, pe bucată; `conflict` = R1 d) | inginerul (a) sau MP-ul (b), mai jos |
-| `revizie_ceruta`, `conflict`, `blocata` (sesiune trimisă) | `trimisa` / `conflict` / `in_verificare` (versiune nouă: `conflict` la R1 d, `in_verificare` dacă piesa rămâne nerezolvată) | inginerul, `decl_salveaza` cu CAS |
+| `in_verificare` | `trimisa` / `conflict` (motiv) (versiune nouă, pe bucată; `conflict` = un motiv din listă) | inginerul (a) sau MP-ul (b), mai jos |
+| `revizie_ceruta`, `conflict`, `blocata` (sesiune trimisă) | `trimisa` / `conflict` (motiv) / `in_verificare` (versiune nouă: `conflict` la un motiv din listă, `in_verificare` dacă piesa rămâne nerezolvată) | inginerul, `decl_salveaza` cu CAS |
 | `revizie_ceruta`, `blocata`, `conflict` (sesiune trimisă; `conflict` adăugat în r5) | `respinsa` | MP-ul, `fn_izo_respinge`, cu motiv, oricând (ca la `trimisa`): un rând revenit `conflict` după revizie nu mai ține sesiunea deschisă dacă autorul e plecat sau revocat |
 | `trimisa` | `aprobata` | MP-ul, `fn_izo_aproba` |
 | `ciorna`, `conflict` (r5), `trimisa`, `in_verificare`, `revizie_ceruta` | `blocata` | serverul, când o dependență e revizuită, respinsă sau ștearsă (mai jos), în ambele tipuri de sesiune; starea veche se păstrează în `stare_inainte_blocare` (la `conflict`, și `conflict_cod` rămâne) |
@@ -751,7 +758,7 @@ Ordinea, ca în E3 §4:
   - (b) de MP, prin legarea rândului de bucata reală (`fn_izo_serie_lamureste`, cu motiv); rezervarea se creează atunci. **Contractul** (r5):
     - sub lock-urile din §10.5 (sesiunea, declarația, rădăcina bucății), CAS pe `p_versiune`, rândul `in_verificare` și `identificare = 'nerezolvata'`;
     - bucata e a proiectului, disponibilă (regulile din §6.3 pasul 8 pentru montaj) și fără rezervare activă a altei declarații; altfel refuz (`bucata_rezervata` / `stare`), iar rândul rămâne `in_verificare`;
-    - **un singur UPDATE** pe declarație: `bucata_id` = `p_bucata`, `identificare` = `bucata`, `stare` = `trimisa` (sau `conflict`, `conflict_cod = r1d`, dacă R1 d se încalcă pe bucata aleasă), `versiune` + 1. CHECK-urile din §3.2 se evaluează pe rândul final, deci sunt adevărate după instrucțiune; `bucata_decl_uid` rămâne NULL;
+    - **un singur UPDATE** pe declarație: `bucata_id` = `p_bucata`, `identificare` = `bucata`, `stare` = `trimisa` (sau `conflict`, cu motivul din listă găsit pe bucata aleasă, de exemplu `r1d`), `versiune` + 1. CHECK-urile din §3.2 se evaluează pe rândul final, deci sunt adevărate după instrucțiune; `bucata_decl_uid` rămâne NULL;
     - plus versiunea în `izo_declaratii_versiuni`, rezervarea nouă pe `bucata_id` și jurnalul (`izo_operatii`, canalul `aprobare`, cheia `p_cheie`);
     - **trigger-ul de stări** îi permite lui `izo_montaj_writer` să schimbe `bucata_id` / `identificare` **doar** în această tranziție (`in_verificare` → `trimisa` / `conflict`, `nerezolvata` → `bucata`), sub contextul `fn_izo_serie_lamureste`; orice altă schimbare a lor de către writer (pe alt rând, spre `bucata_decl`, fără context) → refuz. Drepturile pe coloane sunt în §9.4;
   - (c) o bucată chiar necunoscută intră prin inventar / `gasit` (E3b), în afara E4.
@@ -832,7 +839,15 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - **Refuză**:
   - golurile din lanț (un capăt fără sudură în interiorul intervalului);
   - pozițiile încă „în verificare”;
-  - un interval care se suprapune cu alt pachet activ.
+  - un interval care se suprapune cu alt pachet activ;
+  - un pachet ne-editabil (`pachet_needitabil`, r6, mai jos).
+- **Pachetul editabil** (r6). Toți scriitorii **structurali** ai pachetului (`completeaza`, `leaga`, `dezleaga`) cer, la revalidarea din §7.3 pasul 6, deci **sub lock-ul pachetului** luat la pasul 3, ca antetul să fie încă editabil:
+  - `status` = starea inițială (`draft`), iar `aprobat_*` și `pdf_aprobare_*` sunt NULL;
+  - valorile `status` din UI-ul de azi (`src/Izometrie.jsx`): `draft`, `trimis_aprobare`, `aprobat`, `lansat`, `finalizat`. Lista exactă se ia din CHECK-ul BD la implementare; orice valoare în afară de `draft` e ne-editabilă (fail-closed);
+  - altfel → refuz `pachet_needitabil`, zero efecte (rollback total, nimic jurnalizat). Singura excepție: `leaga` pe un rând deja legat de aceeași bucată rămâne fără efect (idempotența naturală), fără refuz;
+  - fiecare scriere structurală mută explicit `updated_at` pe antet, în aceeași tranzacție (nu doar prin cascada totalurilor), ca CAS-ul aprobării Transgaz să vadă orice schimbare (§7.4);
+  - `fn_izo_pachet_rand_note` nu e structurală (scrie doar cele patru note, nu lista de țevi, lungimile, sudurile sau ordinea): merge și pe un pachet aprobat, jurnalizată în `izo_operatii` (canalul `pachet`).
+  - pe pilot, o schimbare după aprobare se face printr-un pachet nou (montajele încă nelegate); anularea unei aprobări (revenirea la `draft`, cu documentul păstrat ca istoric) e un design separat, în E8. Pe tronsoanele fără flux (T12), editorul vechi rămâne neschimbat.
 - `poz_in_pachet` și `poz_km_m` le recalculează trigger-ele existente (DEFINER, owner `postgres`, ✓BD 21.10).
 
 ### 7.3 `fn_izo_pachet_leaga(p_teava, p_bucata, p_updated_at)` / `fn_izo_pachet_dezleaga(p_teava, p_motiv)` — contractul E4a din #823
@@ -847,6 +862,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
    - fluxul, citit acum (după advisory): pachetul e pe un tronson în flux;
    - rândul e încă în pachetul din cerere: CAS pe `pachet_id`, plus `updated_at`, verificat aici pe server. `actualizeazaRandInPachet` din #824 face CAS doar pe `id` + `pachet_id` (`src/lib/izoRegistru.js`); `updated_at` e în plus, în E4;
    - proiectul pachetului = proiectul tronsonului = proiectul bucății;
+   - r6: la scriitorii structurali (`completeaza`, `leaga`, `dezleaga`), pachetul e încă editabil (§7.2); la `transgaz`, CAS pe `updated_at`-ul antetului (§7.4);
 7. bucata FOR UPDATE.
 
 **De ce FOR NO KEY UPDATE (nu FOR SHARE) pe rândul țevii și pe pachet** (r2):
@@ -863,7 +879,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - `executie_teava_id` pe bucată;
 - câmpurile de identitate ale rândului, din registru (forma `patchDinRegistru`, calculată pe server).
 
-**`dezleaga`**: doar cu motiv; refuzat pe un pachet aprobat de Transgaz (sau emis, în E8). Rândul rămâne în pachet, nelegat; `fn_izo_pachet_aprobare_transgaz` refuză un pachet cu rânduri nelegate.
+**`dezleaga`**: doar cu motiv; refuzat pe un pachet ne-editabil (§7.2, r6: aprobat de Transgaz, emis în E8 sau orice `status` ≠ `draft`). Rândul rămâne în pachet, nelegat; `fn_izo_pachet_aprobare_transgaz` refuză un pachet cu rânduri nelegate.
 
 **Interblocajul** (r3, pe cascadele reale, ✓BD 21.10):
 - cascadele pe `executie_tevi` (toate DEFINER, owner `postgres`): `tg_tevi_update_totaluri` (AFTER ROW, la **orice** INSERT / UPDATE / DELETE) face UPDATE pe pachet; `trg_executie_tevi_update_recalc` / `_insert_recalc` / `_delete_recalc` (AFTER STATEMENT) recalculează km-ul pe rândurile pachetului; `tg_tevi_renumber` (BEFORE INSERT) renumerotează. Pe pachet: `trg_executie_pachete_recalc_poz_km` (AFTER UPDATE, doar la `km_start_m`) ia rândurile;
@@ -894,7 +910,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - **Antetul pachetului** (`executie_pachete_lansare`) pe un tronson în flux:
   - se creează din client;
   - `km_start_m`, `status`, `aprobat_*`, `pdf_aprobare_*` și DELETE sunt refuzate din client;
-  - starea „aprobat” se pune doar prin `fn_izo_pachet_aprobare_transgaz` (fișierul la o cale dată de server; documentul și starea într-o tranzacție).
+  - starea „aprobat” se pune doar prin `fn_izo_pachet_aprobare_transgaz` (fișierul la o cale dată de server; documentul și starea într-o tranzacție). r6: cu **CAS pe `p_updated_at`** = `updated_at`-ul antetului afișat pe ecranul de încărcare, lângă conținutul pachetului pe care MP-ul îl confirmă ca fiind cel din PDF-ul semnat. Ordinea de lock e a scriitorilor de pachet (§7.3), deci cu `completeaza` se serializează pe pachet: completarea comisă întâi mută `updated_at` → aprobarea e refuzată (`pachet_schimbat`) și ecranul reîncarcă; aprobarea comisă întâi → completarea vede pachetul ne-editabil (`pachet_needitabil`).
 - **`executie_pachete_documente`** e doar-adaug pe pachetele tronsoanelor în flux: politicile 20261029a permit UPDATE / DELETE celor cu acces de scriere, deci un trigger E4 (`a0_izo_flux_documente`) le refuză acolo. În Storage (`executie-pachete-pdf`) nu există UPDATE / DELETE pe pachetele tronsoanelor în flux.
 - **`executie_tronsoane`**: km-ul unui tronson în flux nu se schimbă din client.
 - **RLS-ul** (r3, corectat): pe pachete, documente și Storage rămâne cel din 20261029a (`fn_executie_pachete_acces`). Pe `executie_tevi` RLS-ul existent e larg (`executie_tevi_modify`, ALL, `auth.uid() IS NOT NULL`; ✓BD 21.10, §1.1 #15), deci pe tronsoanele în flux bariera e doar trigger-ul E4 de mai sus, care intră în poartă (numele, corpul, `tgenabled = 'A'`). Scrierile pe tronsoanele în flux trec prin RPC.
@@ -1317,6 +1333,11 @@ Negative întâi. Harness PG16 (`scripts/test_izometrie_e4.sh`) + branch PG17 + 
     - **matricea cascadei**: pentru fiecare stare deschisă a descendentului × tipul sesiunii (deschisă / abandonată / trimisă) × operația (ștergere, revizie, respingere cu `respinge` / `blocheaza`) → exact rezultatul din §6.4; nicio cascadă legitimă nu primește „tranziție refuzată”; `respinge` pe o ciornă a unui autor cu front valid → `decizie_nepermisa`, zero efecte;
     - **revocarea pe o sesiune trimisă**: un rând revenit `conflict` după revizie, autorul revocat → MP-ul îl respinge (și rândurile `blocata` / `revizie_ceruta` rămase) → sesiunea `inchisa`, rezervările eliberate, iar `fn_izo_seteaza_flux(…, false)` trece (fără fapte);
     - **rezultat vs. stare**: R1 d găsit pe server → `izo_operatii.rezultat = acceptat`, `izo_declaratii.stare = conflict`, `conflict_cod = r1d`; retrimiterea → `duplicat` cu `acceptat`; zero scrieri în registru.
+21. **r6** (review Jakarinos pe r5):
+    - **pachetul ne-editabil, secvențial**: pe un pachet `aprobat` (și pe fiecare `status` ≠ `draft`), `completeaza` cu `p_updated_at` curent și un interval valid, `leaga` pe un rând nelegat, `dezleaga` → `pachet_needitabil`, zero efecte (rânduri, legături, `updated_at`, `izo_operatii`); `leaga` repetat pe aceeași pereche → fără efect, fără refuz; `fn_izo_pachet_rand_note` → trece;
+    - **cursa `completeaza` ↔ `aprobare_transgaz`**, cu barieră, în ambele ordini, `pg_locks` arătând așteptarea pe pachet: completarea întâi → aprobarea refuzată `pachet_schimbat` (CAS), pachetul rămâne `draft`; aprobarea întâi → completarea refuzată `pachet_needitabil`; fără deadlock. La fel `leaga` / `dezleaga` ↔ `aprobare_transgaz`;
+    - **aprobarea Transgaz retrimisă**: același fișier → fără efect; alt fișier pe pachetul aprobat → `pachet_needitabil`;
+    - **`conflict` pe `corectie_in_arbore`**: tăierea unui copil cu diferența de lungime peste ±20 mm → rezultatul `acceptat`, starea `conflict`, `conflict_cod = corectie_in_arbore`; din această stare: versiunea nouă, ștergerea, `blocata` la invalidarea dependenței și `respinsa` de MP (sesiune trimisă) trec ca la `r1d`; un `conflict_cod` în afara listei → refuz (CHECK).
 
 ## 12. Întrebări deschise (A / B / C)
 
