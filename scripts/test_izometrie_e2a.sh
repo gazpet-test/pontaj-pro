@@ -132,6 +132,23 @@ cursa() { # $1 eticheta · $2 SQL-ul lui A (fără BEGIN/COMMIT) · $3 SQL-ul lu
   else [ "$rc_b" != 0 ] || { echo "$ob" >&2; esec "$et: B a trecut, așteptam refuz"; }; fi
   grep -q -- "$5" <<<"$ob" || { echo "$ob" >&2; esec "$et: ieșirea lui B nu conține „$5”"; }
 }
+cursa_fara_asteptare() { # $1 eticheta · $2 SQL-ul lui A (ținut la barieră) · $3 SQL-ul lui B · $4 tiparul refuzului
+  local et="$1" pa pc ob rc_b=0
+  PGAPPNAME=izo_ctrl "${PSQL[@]}" -d "$BAZA" -Atc "SELECT pg_advisory_lock(99); SELECT pg_sleep(300);" >/dev/null 2>&1 & pc=$!
+  asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_ctrl'
+            AND l.locktype = 'advisory' AND l.classid = 0 AND l.objid = 99 AND l.objsubid = 1 AND l.granted" || esec "$et: controlorul n-a luat bariera"
+  PGAPPNAME=izo_A "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; $2; SELECT pg_advisory_xact_lock_shared(99); COMMIT;" >/tmp/izo_cursa_a.out 2>&1 & pa=$!
+  asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_A'
+            AND l.locktype = 'advisory' AND l.classid = 0 AND l.objid = 99 AND NOT l.granted" \
+    || { kill "$pc" 2>/dev/null; cat /tmp/izo_cursa_a.out >&2; esec "$et: A n-a ajuns la barieră"; }
+  ob="$(PGAPPNAME=izo_B "${PSQL[@]}" -d "$BAZA" -Atc "SET statement_timeout = '5s'; $3" 2>&1)" || rc_b=$?
+  q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'izo_ctrl'" >/dev/null
+  wait "$pc" 2>/dev/null || true
+  wait "$pa" || { cat /tmp/izo_cursa_a.out >&2; esec "$et: A a eșuat"; }
+  [ "$rc_b" != 0 ] || { echo "$ob" >&2; esec "$et: B a trecut, așteptam refuz"; }
+  grep -q "statement timeout" <<<"$ob" && { echo "$ob" >&2; esec "$et: B a AȘTEPTAT lock-ul lui A (blocaj circular posibil)"; }
+  grep -q -- "$4" <<<"$ob" || { echo "$ob" >&2; esec "$et: refuzul lui B nu conține „$4”"; }
+}
 CA_JANETA="SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000030\"}', true); SET LOCAL ROLE authenticated"
 CA_TOMA="SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000117\"}', true); SET LOCAL ROLE authenticated"
 pay() { echo "{\"surse\":[{\"fisier\":\"C.xlsx\",\"sha256\":\"$1\"}],\"bucati\":[{\"tip\":\"teava\",\"serie\":\"$2\",\"sarja\":\"SA1\",\"lungime_mm\":12000,\"perete_mm\":7.1,\"stare\":\"sosit\",\"depozit_id\":$3,\"sursa\":{\"fisier\":\"C.xlsx\",\"foaie\":\"F\",\"rand\":1}}]}"; }
@@ -219,6 +236,13 @@ cursa "4g mutare pachet + activare, apoi DELETE pe țeava lui" \
   "UPDATE public.executie_pachete_lansare SET proiect_id = 5, tronson_id = 30 WHERE id = 1; SELECT public.fn_izo_seteaza_nivel(5, 'stoc', 'cursa r3')" \
   "BEGIN; $CA_TOMA; DELETE FROM public.executie_tevi WHERE serie_unica = 'X1'; COMMIT;" err "nu se șterg din client"
 [ "$(q "SELECT public.fn_izo_nivel(5) || ':' || count(*) FROM public.executie_tevi WHERE serie_unica = 'X1'")" = "stoc:1" ] || esec "4g stare finală"
+# 4h. storno ↔ bon (Copilot r4 P1-a): storno-ul ține lock-ul exclusiv + FOR UPDATE pe bucăți; un bon cu bucata lui e
+#     refuzat IMEDIAT (fără să aștepte bucata) — fără blocaj circular
+ID_CONC="$(q "SELECT id FROM public.magazie_bucati WHERE serie = '299CC00001'")"
+cursa_fara_asteptare "4h storno în curs, bon cu bucata lui" "SELECT public.fn_izo_import_storno(3, 'conc-1', 'cursa r5')" \
+  "BEGIN; $CA_TOMA; INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) VALUES (1, $ID_CONC, 'teava'); COMMIT;" "nu intră pe bon"
+[ "$(q "SELECT stare FROM public.magazie_bucati WHERE id = $ID_CONC")" = anulata ] || esec "4h storno-ul nu s-a aplicat"
+ok "4h storno în curs + bon cu bucata lui → bonul e refuzat imediat, storno-ul se aplică (fără blocaj circular)"
 ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
 ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 
@@ -238,6 +262,17 @@ ok "6a–c revenire: nearmată → refuz · cu date → refuz · psql -f simplu 
 "${PSQL[@]}" -d postgres -c "DROP DATABASE $BAZA" >/dev/null
 "${PSQL[@]}" -d postgres -c "DROP ROLE izo_registru_writer" >/dev/null
 livreaza "$BAZA2" 20261102120000 >/dev/null
+# 6-pre. TRUNCATE ↔ activare (Copilot r4 P1-b), pe baza curată (aici nicio țeavă nu e încă protejată): activarea
+#        proiectului 3 ținută la barieră, TRUNCATE pe țevi așteaptă și apoi e refuzat pe nivelul nou
+BAZA_SALVATA="$BAZA"; BAZA="$BAZA2"
+cursa "6-pre TRUNCATE țevi în timpul activării" "SELECT public.fn_izo_seteaza_nivel(3, 'stoc', 'cursa r5')" \
+  "TRUNCATE public.executie_tevi CASCADE" err "e refuzat"
+[ "$(q "SELECT public.fn_izo_nivel(3) || ':' || count(*) FROM public.executie_tevi")" = "stoc:3" ] || esec "6-pre țevile s-au pierdut"
+# curățenie DOAR pe baza de test (superuser): config-ul proiectului 3 scos cu garda oprită și repusă ENABLE ALWAYS, ca
+# revenirea de mai jos să pornească de la „fără date”
+q "ALTER TABLE public.izo_proiect_config DISABLE TRIGGER trg_izo_cfg_garda; DELETE FROM public.izo_proiect_config; ALTER TABLE public.izo_proiect_config ENABLE ALWAYS TRIGGER trg_izo_cfg_garda" >/dev/null
+BAZA="$BAZA_SALVATA"
+ok "6-pre TRUNCATE pe țevi în timpul unei activări → așteaptă și e refuzat pe nivelul nou (baza curată readusă la „fără date”)"
 q2 "ALTER TABLE public.izo_atribuiri ADD COLUMN extra text" >/dev/null
 OUT="$(revenire "$BAZA2")" && esec "6d revenire pe obiecte modificate a trecut"
 grep -q "amprenta obiectelor izo diferă" <<<"$OUT" || esec "6d refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
