@@ -478,6 +478,51 @@ BEGIN
        OR EXISTS (SELECT 1 FROM pg_rewrite rw WHERE pg_get_ruledef(rw.oid) ~* 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)') THEN
       v := array_append(v, 'o funcție / un view din afara writer-ului cheamă funcțiile registrului (wrapper nerevizuit)');
     END IF;
+    -- CITIRILE (acțiunea 6, Codex r4 / Jakarinos r6–r10): filtrarea citirii (RLS restrictiv + fn_izo_citire) se poate ocoli
+    -- fără niciun trigger de scriere printr-un view cu drepturile ownerului sau printr-o funcție DEFINER care întoarce rânduri.
+    -- Inventarul de pe live (docs/izometrie/E2A_INVENTAR_CITIRI.md, 21.10.2026): 0 view-uri, 0 funcții care ating
+    -- magazie_bucati, 5 DEFINER cu SQL dinamic pe tabele fixe (profiles / executie_proiecte), neexpuse. Porțile de mai jos
+    -- refuză activarea dacă apare ceva nou, nerevizuit:
+    --   (a) un view / view materializat care depinde (tranzitiv) de tabelele registrului fără security_invoker;
+    IF EXISTS (WITH RECURSIVE dep(oid) AS (
+                 SELECT c.oid FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+                    AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari')
+                 UNION
+                 SELECT rw.ev_class FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid JOIN dep ON d.refobjid = dep.oid WHERE rw.ev_class <> dep.oid)
+               SELECT 1 FROM dep JOIN pg_class vw ON vw.oid = dep.oid   -- alias ≠ variabila v
+                WHERE vw.relkind = 'm' OR (vw.relkind = 'v' AND NOT coalesce(vw.reloptions && ARRAY['security_invoker=true','security_invoker=on','security_invoker=1'], false))) THEN
+      v := array_append(v, 'un view / view materializat citește registrul fără security_invoker (citire nerevizuită)');
+    END IF;
+    --   (b) o funcție DEFINER din afara registrului (fn_izo_* din public, cu amprenta din COMMENT) care atinge tabelele lui;
+    --   (c) o funcție INVOKER care le atinge, chemată de o funcție DEFINER din afara registrului (ar rula cu drepturile ownerului);
+    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
+                  AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
+                  AND p.prosecdef
+                  AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), ''))
+                      ~* '(magazie_bucati|izo_proiect_config|izo_atribuiri|izo_importuri)') THEN
+      v := array_append(v, 'o funcție DEFINER din afara registrului atinge tabelele registrului (citire nerevizuită)');
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_proc i JOIN pg_namespace ni ON ni.oid = i.pronamespace
+                WHERE ni.nspname NOT IN ('pg_catalog', 'information_schema') AND ni.nspname !~ '^pg_'
+                  AND NOT (ni.nspname = 'public' AND i.proname LIKE 'fn\_izo\_%') AND NOT i.prosecdef
+                  AND (i.prosrc || ' ' || coalesce(pg_get_function_sqlbody(i.oid), ''))
+                      ~* '(magazie_bucati|izo_proiect_config|izo_atribuiri|izo_importuri)'
+                  AND EXISTS (SELECT 1 FROM pg_proc d JOIN pg_namespace nd ON nd.oid = d.pronamespace
+                               WHERE d.prosecdef AND nd.nspname NOT IN ('pg_catalog', 'information_schema') AND nd.nspname !~ '^pg_'
+                                 AND NOT (nd.nspname = 'public' AND d.proname LIKE 'fn\_izo\_%')
+                                 AND (d.prosrc || ' ' || coalesce(pg_get_function_sqlbody(d.oid), '')) ~* ('\m' || i.proname || '\M'))) THEN
+      v := array_append(v, 'o funcție DEFINER cheamă o funcție care citește registrul (citire nerevizuită, tranzitiv)');
+    END IF;
+    --   (d) o funcție DEFINER cu SQL dinamic executabilă din API — schemele expuse de PostgREST (public, graphql_public), ca
+    --       poarta 0e a runner-ului — poate citi orice tabel, inclusiv registrul.
+    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname IN ('public', 'graphql_public') AND p.prosecdef
+                  AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
+                  AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* '\mexecute\M\s+[^;]*(format|\|\|)'
+                  AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))) THEN
+      v := array_append(v, 'o funcție DEFINER cu SQL dinamic e executabilă din API (citire nerevizuită)');
+    END IF;
     -- writer-ul are exact ce-i trebuie (un GRANT retras ar lăsa activarea admisă și importul nefuncțional)
     -- câte un privilegiu pe rând: has_table_privilege(…, 'A,B') e adevărat dacă există ORICARE (Codex r4 8)
     IF EXISTS (SELECT 1 FROM (VALUES ('magazie_bucati','SELECT'), ('magazie_bucati','INSERT'), ('magazie_bucati','UPDATE'),
