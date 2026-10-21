@@ -175,3 +175,35 @@ retry creare veche după relivrare (idempotent): true
 ```
 
 PostgREST (cheia anon), r12: identic cu r11. Cele 8 RPC-uri dau 401 / 42501. GET și PATCH pe `magazie_bucati` dau 200 [] (0 rânduri scrise). POST pe `izo_atribuiri`, `izo_importuri`, `izo_proiect_config`, `magazie_bucati_evenimente` și `executie_bonuri_consum_linii` dă 401 / 42501. Roluri izo rămase: doar `izo_registru_writer`.
+
+## r13 — #806 head 6ab64702 + #806b (#820) head a2874540 (21.10.2026), branch nou `tcljfmlwusljffjbckou`
+
+E2a: închiderea citirilor cu nume necalificate (conservator; schemele platformei doar prin search_path), identificatori citați, pg_depend cu cataloagele explicite, excepțiile dinamice cu amprentă extinsă. 20261102b: garda pe tot antetul, preluarea refuză bonul fără linii, postcondiția 4 întărită. Totul a trecut din prima rulare.
+
+```
+e0b403b09b6f13c2f75942e3a9f2655d6b193b1ebdac70b51f769d7b3796dfbe  supabase/migrations/20261102a_izometrie_e2a_registru.sql
+428eab8b09eed8323e53710220fd40ae311bf7f8c002ae038d4c4f968759a11b  supabase/migrations/20261102b_bon_salvare_tranzactionala.sql
+OK   0 țintă: branch tcljfmlwusljffjbckou, PG17, postgres non-superuser, schelet aplicat
+     MEMBRI|postgres|t|f|f
+     MEMBRI|postgres|f|f|t
+     OWNERI|fn_izo_activeaza_si_importa,fn_izo_import_sold_initial,fn_izo_import_storno,fn_izo_seteaza_nivel
+OK   1 livrare prin runner pe PG17 (rol, membru WITH SET, ALTER OWNER), porți complete · amprenta PG17 = 8560c049ea55c99b6429548a970a8818
+OK   2 revenire armată pe PG17 (DROP ROLE ca non-superuser) → totul scos, TRUNCATE refăcut · relivrare → aceeași amprentă
+OK   3 teste SQL pe PG17: 172 verificări
+OK   4 conexiune proaspătă: writer fără marcaj → garda · REPEATABLE READ → refuz · utilizator API real prin pooler + DEFINER postgres → atribuirea refuzată
+OK   5 20261102b pe PG17: 47 verificări SQL · amprenta funcției 91565a020ef22fc591d9acf9de7c6ae3
+PASS test_branch tcljfmlwusljffjbckou — amprenta E2a PG17 8560c049ea55c99b6429548a970a8818 · fn_bon_salveaza 91565a020ef22fc591d9acf9de7c6ae3
+```
+
+Retragerea și relivrarea 20261102b pe PG17:
+
+```
+chei înainte: 6
+revenire: rc=0 RETRAGERE — RPC-urile scoase, drepturile pe linii refăcute
+după retragere (funcții:chei:INSERT authenticated:index): 0:6:true:true
+relivrare: rc=0 ✓ APLICAT + ÎNREGISTRAT confirmat: 20261102b_bon_salvare_tranzactionala v20261102130001 (sha256 428eab8b09eed8323e53710220fd40ae311bf7f8c002ae038d4c4f968759a11b)
+după relivrare (funcții:INSERT authenticated): 2:false
+retry creare veche după relivrare (idempotent): true
+```
+
+PostgREST (cheia anon), r13: identic cu r12 (8 RPC-uri → 401 / 42501; POST pe tabelele registrului și pe `executie_bonuri_consum_linii` → 401; GET / PATCH `magazie_bucati` → 200 [], 0 rânduri scrise; doar `izo_registru_writer` rămas).
