@@ -65,6 +65,14 @@ Teste în `supabase/tests/izometrie_e2a.test.sql`:
 
 ## Limitele (asumate, documentate)
 
+- **Poarta e o analiză TEXTUALĂ.** E apărare în profunzime, nu o garanție completă. Orice ocolire cere crearea de funcții DEFINER (sau view-uri) de către un rol cu drepturi de DDL, care poate oricum citi registrul sau dezactiva protecția. **Controlul principal e procesul:** nicio funcție DEFINER nouă pe producție fără o migrare revizuită (runner-ul cu sha aprobat, gate 0e, review).
+- **r15 (Jakarinos + Copilot r14), mutatorii de cale:**
+  - orice funcție al cărei corp conține `set_config` (oricare argumente, inclusiv variabile) sau textul `search_path` e „mutator”;
+  - până la punct fix, orice funcție care numește un mutator devine și ea mutator;
+  - un mutator are calea NECUNOSCUTĂ, chiar cu `search_path` fixat în `proconfig`, deci potrivirea necalificată devine conservatoare.
+  - Pe live (21.10.2026): 35 de mutatori, închiderea tot fără niciun DEFINER, deci activarea nu e blocată.
+  - Teste: T13o (argument variabil), T13p (helper mutator), T13q (tranzitiv pe 2 niveluri).
+
 - Închiderea citește **textul** corpurilor și dependențele din catalog. Un nume construit din bucăți (`'magazie_' || 'bucati'`) poate apărea doar într-o funcție cu `EXECUTE`, iar aceea e în sămânță: orice DEFINER care o numește e refuzat. Dacă se modifică o funcție dinamică revizuită, md5-ul se schimbă și activarea e refuzată până la un nou review.
 - Funcțiile Supabase (realtime / storage / extensions) cu SQL dinamic sunt INVOKER și intră în sămânță. Dacă o actualizare a platformei adaugă un DEFINER care le numește, activarea e refuzată (fail-closed) până la review.
 - `fn_izo_*` din `public` sunt exceptate de la (b)–(d): sunt registrul însuși, revizuit, cu amprenta în COMMENT (revenirea o verifică). O funcție nouă cu prefixul `fn_izo_` intră doar prin review.
