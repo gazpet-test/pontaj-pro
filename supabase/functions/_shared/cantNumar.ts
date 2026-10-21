@@ -252,12 +252,14 @@ const RE_CONTINUARE_COD = /^\s*(\d{1,4})\s+COD\s+\S/i
 const RE_NR_ARTICOL = /^\s*\**\s*(\d{1,4})[.)]?\s/
 // review Copilot #819 r1 (P1): numărul care nu continuă secvența NU ajunge singur (un restart real „003” → „2 COD …” fără cantitate ar
 // înghiți denumirea articolului 2). Se cere și semnalul POZITIV al formei rupte reale: linia de DEASUPRA, din bloc (nu linia articolului),
-// se termină cu un număr tăiat după punctul zecimal („… DN 90X8.”, eventual urmat de coloane de preț „0.00 0.00”), pe care „<n>” îl continuă
+// se termină cu o DIMENSIUNE tăiată după punctul zecimal („… DN 90X8.”, eventual urmată de coloane de preț „0.00 0.00”), iar „<n>” e
+// O SINGURĂ cifră — zecimala ei („90X8.” + „2” = „90X8.2”). review Copilot r2 (P1): un simplu „cifră + punct” („TEAVA PE DN63.”) nu ajunge
 const RE_COLOANE_PRET = /(?:\s+\d+[.,]\d{2})+\s*$/
+const RE_DIMENSIUNE_TAIATA = /\d+[xX]\d+\.$/
 function continuareCod(linieArticol: string, l: string, anterioara: string | null): boolean {
   const mc = RE_CONTINUARE_COD.exec(l), ma = RE_NR_ARTICOL.exec(linieArticol)
-  if (!mc || !ma || !/^0\d/.test(ma[1]) || /^0/.test(mc[1]) || anterioara === null) return false
-  if (!/\d\.$/.test(anterioara.replace(RE_COLOANE_PRET, '').trimEnd())) return false
+  if (!mc || !ma || !/^0\d/.test(ma[1]) || !/^[1-9]$/.test(mc[1]) || anterioara === null) return false
+  if (!RE_DIMENSIUNE_TAIATA.test(anterioara.replace(RE_COLOANE_PRET, '').trimEnd())) return false
   const na = Number(ma[1]), nc = Number(mc[1])
   return ![na, na + 1, 1].includes(nc)
 }
