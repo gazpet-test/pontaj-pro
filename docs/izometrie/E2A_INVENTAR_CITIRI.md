@@ -21,13 +21,14 @@ Generat 21.10.2026 de sesiunea „Izometrie — programare”, pe producție (`d
 | Trigger-e pe `magazie_bucati` | 0 | (E2a adaugă doar trigger-ele `fn_izo_*` revizuite) |
 | Politici RLS pe alte tabele care citesc `magazie_bucati` | 0 | — |
 | Funcții DEFINER expuse (anon / authenticated) în `public` | 148 | niciuna nu atinge registrul (rândul de mai sus) |
-| Funcții DEFINER cu SQL dinamic (`EXECUTE format/||`), orice schemă | 5, toate **neexpuse** (fără EXECUTE pentru anon / authenticated) | vezi mai jos |
+| Funcții DEFINER cu SQL dinamic (orice `EXECUTE`, r12), orice schemă | 6, toate în `public`, toate **neexpuse** (fără EXECUTE pentru anon / authenticated) | vezi mai jos (r11 vedea 5: `EXECUTE v_sql` scăpa filtrului `format/||`) |
 
-### Cele 5 funcții DEFINER cu SQL dinamic (neexpuse)
+### Cele 6 funcții DEFINER cu SQL dinamic (neexpuse; lista revizuită din poartă, cu md5(prosrc))
 
 | Funcție | Ce face dinamic | Poate citi registrul? |
 |---|---|---|
 | `_completare_goleste_camp(bigint,text,integer)` | `UPDATE public.executie_proiecte SET %I = NULL …`; câmpul e validat pe o listă fixă (`rte_employee_id`, `rts_employee_id`, `mp_employee_id`) | nu (tabel fix, identificator pe listă albă) |
+| `_completare_scrie_camp(bigint,text,text)` | `EXECUTE v_sql` = `UPDATE public.executie_proiecte SET %I = $1::<tip>`; câmpul validat pe o listă fixă de 15 coloane | nu (tabel fix, identificator pe listă albă) |
 | `fn_cont_inchide(uuid,text,text,integer)` | `UPDATE public.profiles SET <flaguri> = false`; flagurile vin din `fn_cont_flaguri()`, cu `%I` | nu (tabel fix) |
 | `fn_cont_restaureaza_flaguri(uuid,jsonb)` | `UPDATE public.profiles SET …`; cheile sunt filtrate pe `fn_cont_flaguri()`, cu `%I` | nu (tabel fix) |
 | `fn_conturi_inchideri_sweep()` | `UPDATE public.profiles SET <flaguri>`; rulează doar din pg_cron / identitate privilegiată | nu (tabel fix) |
@@ -35,28 +36,27 @@ Generat 21.10.2026 de sesiunea „Izometrie — programare”, pe producție (`d
 
 Concluzie live: **nu există azi nicio cale de citire a registrului care să ocolească filtrarea.** Registrul e nou (20261102a), iar singurele funcții care îl ating sunt `fn_izo_*` din aceeași migrare, cu amprenta în COMMENT și porțile de mai jos.
 
-## Porțile permanente (fn_izo_porti_lipsa, r11)
+## Porțile permanente (fn_izo_porti_lipsa, r12 — închiderea tranzitivă)
 
-Activarea unui proiect (`fn_izo_seteaza_nivel` / `fn_izo_activeaza_si_importa`) e refuzată dacă apare ceva nou, nerevizuit:
+r11 avea porți pe tipuri: view fără invoker, DEFINER care numește tabelele, un singur pas INVOKER, `EXECUTE format/||`. Jakarinos și Copilot (r11) au arătat ocoliri: lanțul DEFINER → INVOKER → INVOKER, un DEFINER care citește un view `security_invoker` al registrului, `EXECUTE p_sql` fără format. r12 le înlocuiește cu o **închidere până la punct fix**:
 
-- **(a)** un view / view materializat care depinde tranzitiv de `magazie_bucati`, `izo_proiect_config`, `izo_atribuiri`, `izo_importuri`, `magazie_bucati_evenimente` sau `magazie_bucati_miscari`, fără `security_invoker` (un view materializat e refuzat întotdeauna);
-- **(b)** o funcție DEFINER din afara registrului (adică nu `public.fn_izo_*`), din orice schemă non-sistem, al cărei corp atinge tabelele registrului;
-- **(c)** o funcție INVOKER care atinge tabelele registrului și e numită în corpul unei funcții DEFINER din afara registrului (citire tranzitivă);
-- **(d)** o funcție DEFINER cu SQL dinamic executabilă din API (`public`, `graphql_public`, ca poarta 0e a runner-ului).
+- **Sămânța:** cele 6 tabele ale registrului + orice funcție cu SQL dinamic (orice `EXECUTE`) din afara registrului și a listei revizuite. Lista revizuită conține cele 6 funcții de mai sus, cu semnătură și md5(prosrc).
+- **Se adaugă repetat:**
+  - view-urile și view-urile materializate care depind (`pg_depend` → `pg_rewrite`) de ceva din închidere, **inclusiv cele `security_invoker`**;
+  - funcțiile din scheme non-sistem, în afara `public.fn_izo_*`, al căror corp **numește** ceva din închidere (`public`: numele simplu; alte scheme: `schema.nume`) sau care depind de el în catalog (corpuri `BEGIN ATOMIC`).
+- **Refuz:** un view fără `security_invoker`, un view materializat sau o funcție `SECURITY DEFINER` în închidere.
 
-Teste: T13a–e în `supabase/tests/izometrie_e2a.test.sql`:
-- view fără invoker, direct și tranzitiv;
-- view cu invoker, acceptat;
-- DEFINER care citește;
-- INVOKER singur, acceptat;
-- DEFINER care cheamă INVOKER-ul;
-- DEFINER dinamic expus.
+Pe live (21.10.2026), închiderea are tabelul `magazie_bucati` și 18 funcții INVOKER cu SQL dinamic din schemele Supabase (realtime, storage, extensions). **Nicio funcție DEFINER**, deci activarea nu e blocată.
 
-Toate sunt refuzate, cu excepția celor două cazuri acceptate. Porțile au fost verificate pe live: 0 obiecte prinse, deci activarea nu e blocată de starea existentă.
+Teste în `supabase/tests/izometrie_e2a.test.sql`:
+- **T13a–e** (r11): view fără invoker, direct și tranzitiv; DEFINER care citește; DEFINER → INVOKER; DEFINER dinamic.
+- **T13f–h** (r12): lanțul DEFINER → INVOKER → INVOKER; DEFINER peste un view `security_invoker`; `EXECUTE p_sql` fără format; DEFINER → INVOKER dinamic.
+- **Cazuri acceptate:** INVOKER singur, lanț INVOKER fără DEFINER, view invoker singur.
 
 ## Limitele (asumate, documentate)
 
-- Porțile (b)–(d) citesc **textul** corpurilor. Un apel construit dinamic dintr-o funcție neexpusă, chemată de una expusă, nu e urmărit. Pe live, toate funcțiile dinamice lucrează pe tabele fixe (tabelul de mai sus). La orice funcție DEFINER nouă cu SQL dinamic, inventarul se refă.
+- Închiderea citește **textul** corpurilor și dependențele din catalog. Un nume construit din bucăți (`'magazie_' || 'bucati'`) poate apărea doar într-o funcție cu `EXECUTE`, iar aceea e în sămânță: orice DEFINER care o numește e refuzat. Dacă se modifică o funcție dinamică revizuită, md5-ul se schimbă și activarea e refuzată până la un nou review.
+- Funcțiile Supabase (realtime / storage / extensions) cu SQL dinamic sunt INVOKER și intră în sămânță. Dacă o actualizare a platformei adaugă un DEFINER care le numește, activarea e refuzată (fail-closed) până la review.
 - `fn_izo_*` din `public` sunt exceptate de la (b)–(d): sunt registrul însuși, revizuit, cu amprenta în COMMENT (revenirea o verifică). O funcție nouă cu prefixul `fn_izo_` intră doar prin review.
 - Rolurile care pot face DDL (`postgres`, `supabase_admin`) pot oricând crea astfel de obiecte. Porțile sunt o frână la activare, nu o garanție (aceeași limită ca la PowPatroll, ctx P4). Detecția vine din amprentă și din reluarea inventarului.
 

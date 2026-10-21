@@ -27,8 +27,7 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    '72d13314cc3796a2cb4c5d8d01e3da78',  -- branch Supabase PG17.11, postgres non-superuser (retestul r11 din 21.10.2026, head 3ee72437)
-    'f50785886f016209f1a387c967321713'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    'c5c8051a123b126084f569c7dbc14af0'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres

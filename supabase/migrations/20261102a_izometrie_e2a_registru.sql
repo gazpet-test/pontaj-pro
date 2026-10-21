@@ -482,47 +482,65 @@ BEGIN
     -- fără niciun trigger de scriere printr-un view cu drepturile ownerului sau printr-o funcție DEFINER care întoarce rânduri.
     -- Inventarul de pe live (docs/izometrie/E2A_INVENTAR_CITIRI.md, 21.10.2026): 0 view-uri, 0 funcții care ating
     -- magazie_bucati, 5 DEFINER cu SQL dinamic pe tabele fixe (profiles / executie_proiecte), neexpuse. Porțile de mai jos
-    -- refuză activarea dacă apare ceva nou, nerevizuit:
-    --   (a) un view / view materializat care depinde (tranzitiv) de tabelele registrului fără security_invoker;
-    IF EXISTS (WITH RECURSIVE dep(oid) AS (
-                 SELECT c.oid FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
-                    AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari')
-                 UNION
-                 SELECT rw.ev_class FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid JOIN dep ON d.refobjid = dep.oid WHERE rw.ev_class <> dep.oid)
-               SELECT 1 FROM dep JOIN pg_class vw ON vw.oid = dep.oid   -- alias ≠ variabila v
-                WHERE vw.relkind = 'm' OR (vw.relkind = 'v' AND NOT coalesce(vw.reloptions && ARRAY['security_invoker=true','security_invoker=on','security_invoker=1'], false))) THEN
-      v := array_append(v, 'un view / view materializat citește registrul fără security_invoker (citire nerevizuită)');
-    END IF;
-    --   (b) o funcție DEFINER din afara registrului (fn_izo_* din public, cu amprenta din COMMENT) care atinge tabelele lui;
-    --   (c) o funcție INVOKER care le atinge, chemată de o funcție DEFINER din afara registrului (ar rula cu drepturile ownerului);
-    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
-                  AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
-                  AND p.prosecdef
-                  AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), ''))
-                      ~* '(magazie_bucati|izo_proiect_config|izo_atribuiri|izo_importuri)') THEN
-      v := array_append(v, 'o funcție DEFINER din afara registrului atinge tabelele registrului (citire nerevizuită)');
-    END IF;
-    IF EXISTS (SELECT 1 FROM pg_proc i JOIN pg_namespace ni ON ni.oid = i.pronamespace
-                WHERE ni.nspname NOT IN ('pg_catalog', 'information_schema') AND ni.nspname !~ '^pg_'
-                  AND NOT (ni.nspname = 'public' AND i.proname LIKE 'fn\_izo\_%') AND NOT i.prosecdef
-                  AND (i.prosrc || ' ' || coalesce(pg_get_function_sqlbody(i.oid), ''))
-                      ~* '(magazie_bucati|izo_proiect_config|izo_atribuiri|izo_importuri)'
-                  AND EXISTS (SELECT 1 FROM pg_proc d JOIN pg_namespace nd ON nd.oid = d.pronamespace
-                               WHERE d.prosecdef AND nd.nspname NOT IN ('pg_catalog', 'information_schema') AND nd.nspname !~ '^pg_'
-                                 AND NOT (nd.nspname = 'public' AND d.proname LIKE 'fn\_izo\_%')
-                                 AND (d.prosrc || ' ' || coalesce(pg_get_function_sqlbody(d.oid), '')) ~* ('\m' || i.proname || '\M'))) THEN
-      v := array_append(v, 'o funcție DEFINER cheamă o funcție care citește registrul (citire nerevizuită, tranzitiv)');
-    END IF;
-    --   (d) o funcție DEFINER cu SQL dinamic executabilă din API — schemele expuse de PostgREST (public, graphql_public), ca
-    --       poarta 0e a runner-ului — poate citi orice tabel, inclusiv registrul.
-    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                WHERE n.nspname IN ('public', 'graphql_public') AND p.prosecdef
-                  AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
-                  AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* '\mexecute\M\s+[^;]*(format|\|\|)'
-                  AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))) THEN
-      v := array_append(v, 'o funcție DEFINER cu SQL dinamic e executabilă din API (citire nerevizuită)');
-    END IF;
+    -- refuză activarea dacă apare ceva nou, nerevizuit (r11: porți pe tipuri; r12: închiderea tranzitivă de mai jos):
+    -- r12 (Jakarinos + Copilot r11): ÎNCHIDEREA TRANZITIVĂ a tot ce poate citi registrul, până la punct fix:
+    --   sămânța = tabelele registrului + funcțiile cu SQL dinamic (pot citi orice tabel) din afara listei revizuite;
+    --   se adaugă repetat: view-urile / view-urile materializate care depind (pg_depend → pg_rewrite) de ceva din închidere
+    --   (inclusiv cele security_invoker — un DEFINER care le citește le ocolește RLS-ul), și funcțiile (orice schemă
+    --   non-sistem, în afara public.fn_izo_*) al căror corp NUMEȘTE ceva din închidere (în public: numele simplu; în alte
+    --   scheme: schema.nume) sau depind de el în catalog (corpuri BEGIN ATOMIC).
+    -- Refuz dacă în închidere apare: un view fără security_invoker, un view materializat sau o funcție SECURITY DEFINER.
+    -- Funcțiile DEFINER cu SQL dinamic din afara listei revizuite sunt refuzate oricum (citesc orice, fără să numească).
+    DECLARE
+      c_rel oid[]; c_fn oid[] := '{}'; v_tipar text; v_marime int := -1; v_iter int := 0;
+      -- funcțiile DEFINER cu SQL dinamic revizuite pe live (docs/izometrie/E2A_INVENTAR_CITIRI.md, 21.10.2026): tabele fixe
+      -- (executie_proiecte / profiles), identificatori pe listă albă; semnătură + md5(prosrc) — orice modificare cere review
+      c_dinamice_revizuite text[] := ARRAY[
+        'public._completare_goleste_camp(bigint,text,integer)=62a817c812d0c932aa1d629aba13b541',
+        'public._completare_scrie_camp(bigint,text,text)=cc54cb28a6ee513323e22df607c51724',
+        'public.fn_cont_inchide(uuid,text,text,integer)=e25de5f5a6d419648eb02d4f71bc2601',
+        'public.fn_cont_restaureaza_flaguri(uuid,jsonb)=71545de9629f5eb2925c4a259477cf42',
+        'public.fn_conturi_inchideri_sweep()=facbcd2b4059a16b24f95674b0986ad2',
+        'public.fn_tichete_notif_on_insert()=a75db46d8321732eeb904e2d9bd5adf2'];
+    BEGIN
+      SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+         AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
+      -- funcțiile cu SQL dinamic (orice EXECUTE), în afara registrului și a listei revizuite: în închidere de la început
+      SELECT coalesce(array_agg(p.oid), '{}') INTO c_fn FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prolang NOT IN (12, 13)
+         AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%')
+         AND (p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* '\mexecute\M'
+         AND (n.nspname || '.' || p.oid::regprocedure::text) IS NOT NULL
+         AND format('%s=%s', p.oid::regprocedure::text, md5(p.prosrc)) <> ALL (
+               SELECT CASE WHEN x LIKE 'public.%' THEN substr(x, 8) ELSE x END FROM unnest(c_dinamice_revizuite) x);
+      WHILE cardinality(c_rel) + cardinality(c_fn) <> v_marime AND v_iter < 100 LOOP
+        v_marime := cardinality(c_rel) + cardinality(c_fn); v_iter := v_iter + 1;
+        c_rel := c_rel || ARRAY(SELECT DISTINCT rw.ev_class FROM pg_depend d JOIN pg_rewrite rw ON rw.oid = d.objid
+                                 WHERE (d.refobjid = ANY (c_rel) OR d.refobjid = ANY (c_fn)) AND rw.ev_class <> ALL (c_rel));
+        SELECT string_agg(CASE WHEN nsp = 'public' THEN '\m' || nume || '\M' ELSE '\m' || nsp || '\s*\.\s*"?' || nume || '\M' END, '|')
+          INTO v_tipar
+          FROM (SELECT n.nspname::text nsp, regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
+                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = ANY (c_rel)
+                UNION
+                SELECT n.nspname::text, regexp_replace(p.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
+                  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.oid = ANY (c_fn)) t;
+        c_fn := c_fn || ARRAY(SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                               WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
+                                 AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%') AND p.oid <> ALL (c_fn)
+                                 AND p.prolang NOT IN (12, 13)
+                                 AND ((p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '')) ~* ('(' || v_tipar || ')')
+                                      OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                                                    AND (d.refobjid = ANY (c_rel) OR d.refobjid = ANY (c_fn)))));
+      END LOOP;
+      IF v_iter >= 100 THEN v := array_append(v, 'închiderea citirilor nu converge (citire nerevizuită)'); END IF;
+      IF EXISTS (SELECT 1 FROM pg_class vw WHERE vw.oid = ANY (c_rel)   -- alias ≠ variabila v
+                  AND (vw.relkind = 'm' OR (vw.relkind = 'v' AND NOT coalesce(vw.reloptions && ARRAY['security_invoker=true','security_invoker=on','security_invoker=1'], false)))) THEN
+        v := array_append(v, 'un view / view materializat citește registrul fără security_invoker (citire nerevizuită)');
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = ANY (c_fn) AND p.prosecdef) THEN
+        v := array_append(v, 'o funcție DEFINER din afara registrului poate citi registrul — direct, prin view sau tranzitiv (citire nerevizuită)');
+      END IF;
+    END;
     -- writer-ul are exact ce-i trebuie (un GRANT retras ar lăsa activarea admisă și importul nefuncțional)
     -- câte un privilegiu pe rând: has_table_privilege(…, 'A,B') e adevărat dacă există ORICARE (Codex r4 8)
     IF EXISTS (SELECT 1 FROM (VALUES ('magazie_bucati','SELECT'), ('magazie_bucati','INSERT'), ('magazie_bucati','UPDATE'),

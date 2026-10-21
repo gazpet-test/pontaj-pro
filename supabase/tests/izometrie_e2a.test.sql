@@ -417,8 +417,27 @@ DROP FUNCTION teste.f_citire_def2(); DROP FUNCTION teste.f_citire_inv();
 CREATE FUNCTION public.f_citire_dinamica(p_t text) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE n bigint; BEGIN EXECUTE format('SELECT count(*) FROM %I', p_t) INTO n; RETURN n; END $$;
 GRANT EXECUTE ON FUNCTION public.f_citire_dinamica(text) TO authenticated;
-SELECT teste.eroare('T13d DEFINER cu SQL dinamic executabilă din API → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'SQL dinamic');
+SELECT teste.eroare('T13d DEFINER cu SQL dinamic (format) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
 DROP FUNCTION public.f_citire_dinamica(text);
+-- r12: lanț DEFINER → INVOKER → INVOKER; DEFINER peste un view security_invoker; EXECUTE fără format / ||
+CREATE FUNCTION teste.f_lant2() RETURNS bigint LANGUAGE sql SET search_path = public AS $$ SELECT count(*) FROM public.magazie_bucati $$;
+CREATE FUNCTION teste.f_lant1() RETURNS bigint LANGUAGE sql SET search_path = public AS $$ SELECT teste.f_lant2() $$;
+SELECT teste.e('T13f0 lanț INVOKER → INVOKER fără DEFINER → porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+CREATE FUNCTION teste.f_lant0() RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT teste.f_lant1() $$;
+SELECT teste.eroare('T13f lanț DEFINER → INVOKER → INVOKER → registru → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION teste.f_lant0(); DROP FUNCTION teste.f_lant1(); DROP FUNCTION teste.f_lant2();
+CREATE VIEW teste.v_reg WITH (security_invoker = true) AS SELECT b.id FROM public.magazie_bucati b;
+SELECT teste.e('T13g0 view security_invoker singur → porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+CREATE FUNCTION teste.leak() RETURNS SETOF bigint LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT id FROM teste.v_reg $$;
+SELECT teste.eroare('T13g DEFINER care citește un view security_invoker al registrului → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION teste.leak(); DROP VIEW teste.v_reg;
+CREATE FUNCTION teste.f_exec(p_sql text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN EXECUTE p_sql; END $$;
+SELECT teste.eroare('T13h DEFINER cu EXECUTE p_sql (fără format / ||), neexpus → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION teste.f_exec(text);
+CREATE FUNCTION teste.f_exec_inv(p_sql text) RETURNS void LANGUAGE plpgsql SET search_path = public AS $$ BEGIN EXECUTE p_sql; END $$;
+CREATE FUNCTION teste.f_exec_def() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT teste.f_exec_inv('SELECT 1') $$;
+SELECT teste.eroare('T13h2 DEFINER → INVOKER cu SQL dinamic → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION teste.f_exec_def(); DROP FUNCTION teste.f_exec_inv(text);
 SELECT teste.e('T13e porțile refăcute după citirile nerevizuite; proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
