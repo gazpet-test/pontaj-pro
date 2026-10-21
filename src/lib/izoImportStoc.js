@@ -198,7 +198,7 @@ function selectorBate(c, b) {
  * decizii: { corectii_serie: {brut: corect | {serie, nota}}, excluderi: [{fisier, foaie, rand, serie (null = rând fără serie), motiv}],
  *            depozit_grup: {grup: COD | {cod, nota}}, tronson_grup: {text: nr},
  *            tronson_aviz: {aviz: nr} (TR ambiguu sau lipsă), tronson_aviz_serie: {'aviz|serie': nr} (prioritar),
- *            ignora_iesire: [{fisier, foaie, rand, motiv}] (câmpuri de ieșire care nu sunt o ieșire reală),
+ *            ignora_iesire: [{fisier, foaie, rand, serie, motiv}] (câmpuri de ieșire care nu sunt o ieșire reală),
  *            corectii_camp: [{fisier, foaie (obligatorie cu randuri), randuri: [{rand, serie}] | [rand] + serie, | aviz_iesire,
  *                             camp, valoare, motiv}],
  *            accepta_neconformitate: [{fisier, foaie, rand, serie, nota?, carantina?}], accepta_sarja: [serie],
@@ -246,25 +246,28 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
   const out = [], excluse = []
   for (const b0 of randuri) {
     const b = { ...b0, probleme: [], avertismente: [], corectii: [] }
-    let serieGresitaLaExcludere = false
+    // deciziile pe rând se APLICĂ doar dacă seria de control bate (Copilot #807 r10 P2); altfel rămân doar ca problemă
+    const decOk = new Set()
     for (const lista of LISTE_PE_RAND) for (const e of decizii[lista] || []) {
       if (cheieSursa(e) !== cheieSursa(b.sursa)) continue
       numara(`${lista}|${cheieSursa(e)}`)
-      if (!serieBate(b, e.serie)) {
-        b.probleme.push(`decizia ${lista} pe rândul ${b.sursa.rand} are seria de control „${e.serie || '—'}”, rândul are „${b.serie_bruta}”`)
-        if (lista === 'excluderi') serieGresitaLaExcludere = true
-      }
+      if (serieBate(b, e.serie)) decOk.add(lista)
+      else b.probleme.push(`decizia ${lista} pe rândul ${b.sursa.rand} are seria de control „${e.serie || '—'}”, rândul are „${b.serie_bruta}” — neaplicată`)
     }
     // excluderea pe rândul greșit nu exclude: rândul rămâne în preview, cu problema (review #807 r5)
-    if (exclDec.has(cheieSursa(b.sursa)) && !serieGresitaLaExcludere) {
+    if (exclDec.has(cheieSursa(b.sursa)) && decOk.has('excluderi')) {
       excluse.push({ sursa: b.sursa, serie: b.serie, motiv: `decizie: ${exclDec.get(cheieSursa(b.sursa)).motiv}` }); continue
     }
     // câmpurile de ieșire care nu sunt o ieșire reală (ex. curba 1198: TR „16” fără aviz — încă în stoc)
-    if (ignoraIes.has(cheieSursa(b.sursa))) {
+    if (ignoraIes.has(cheieSursa(b.sursa)) && decOk.has('ignora_iesire')) {
       b.corectii.push({ camp: 'iesire', inainte: { aviz: b.aviz_iesire, tr: b.tronson_iesire, cant: b.cant_iesire }, motiv: ignoraIes.get(cheieSursa(b.sursa)) })
       b.aviz_iesire = null; b.tronson_iesire = null; b.cant_iesire = null; b.ies_serie = null; b.data_iesire = null
     }
     // corecțiile de câmp (răspunsurile MP), înaintea oricărei validări
+    // (1) se strâng corecțiile care lovesc rândul EFECTIV (selector pe rânduri SAU pe avize), validate; (2) pe un câmp
+    // cel mult O corecție — două (rânduri + aviz, aviz + aviz) = conflict: problemă și niciuna aplicată, independent de
+    // ordinea din JSON (Copilot #807 r10 P1)
+    const peCamp = new Map()
     for (const [ci, c] of (decizii.corectii_camp || []).entries()) {
       if (!selectorBate(c, b)) continue
       // seria de control a rândului: dacă nu bate, corecția e pe rândul greșit → blocant, nu se aplică
@@ -274,10 +277,17 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
         b.probleme.push(`corecția ${c.camp} pe rândul ${b.sursa.rand} are seria de control „${rc.serie}”, rândul are „${b.serie_bruta}”`); continue
       }
       if (!CAMPURI_CORECTABILE.has(c.camp)) { b.probleme.push(`corecție pe câmp nepermis „${c.camp}”`); continue }
-      const esteData = c.camp !== 'pv_nr'
-      if (esteData && !isoValid(c.valoare)) { b.probleme.push(`corecția ${c.camp} = „${c.valoare}” nu e o dată AAAA-LL-ZZ validă`); continue }
-      b.corectii.push({ camp: c.camp, inainte: b[c.camp] ?? null, dupa: c.valoare, motiv: c.motiv || null })
-      b[c.camp] = esteData ? c.valoare : String(c.valoare)
+      if (c.camp !== 'pv_nr' && !isoValid(c.valoare)) { b.probleme.push(`corecția ${c.camp} = „${c.valoare}” nu e o dată AAAA-LL-ZZ validă`); continue }
+      peCamp.set(c.camp, [...(peCamp.get(c.camp) || []), { ci, c }])
+    }
+    for (const [camp, lista] of peCamp) {
+      if (lista.length > 1) {
+        b.probleme.push(`${lista.length} corecții pe câmpul ${camp} al rândului ${b.sursa.rand} (corectii_camp[${lista.map(x => x.ci).join(', ')}]) — conflict, niciuna aplicată`)
+        continue
+      }
+      const { c } = lista[0]
+      b.corectii.push({ camp, inainte: b[camp] ?? null, dupa: c.valoare, motiv: c.motiv || null })
+      b[camp] = camp !== 'pv_nr' ? c.valoare : String(c.valoare)
     }
     // seria
     if (b.tip === 'teava') {
@@ -297,7 +307,7 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
       // o ieșire PARȚIALĂ ar muta toată bucata pe tronson cu lungimea inițială → blocant, ca debitarea (Copilot r2 P1)
       if (b.aviz_iesire && b.cant_iesire !== null && b.cantitate !== null && Math.abs(b.cant_iesire - b.cantitate) > 0.005) {
         // decizie pe rândul NUMIT: diferența e rotunjire, țeava a ieșit întreagă (fără rest)
-        if (iesireIntegrala.has(cheieSursa(b.sursa)))
+        if (iesireIntegrala.has(cheieSursa(b.sursa)) && decOk.has('accepta_iesire_integrala'))
           b.corectii.push({ camp: 'cant_iesire', inainte: b.cant_iesire, dupa: b.cantitate, motiv: iesireIntegrala.get(cheieSursa(b.sursa)) })
         else b.probleme.push(`ieșire parțială: ${b.cant_iesire} din ${b.cantitate} m pe avizul ${b.aviz_iesire} — de decis`)
       }
@@ -311,11 +321,12 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     if (!b.sarja) b.probleme.push('șarjă lipsă')
     else if (b.tip === 'teava' && !/^[A-Z]{2}\d{5}$/.test(b.sarja) && !(decizii.accepta_sarja || []).includes(b.sarja))
       b.avertismente.push(`șarjă în afara formatului AA99999: ${b.sarja}`)
-    if (b.neconformitate && !neconfOk.has(cheieSursa(b.sursa))) b.probleme.push(`neconformitate „${b.neconformitate}” — de decis (intră sau refuzat la recepție)`)
+    const neconfAplicata = neconfOk.has(cheieSursa(b.sursa)) && decOk.has('accepta_neconformitate')
+    if (b.neconformitate && !neconfAplicata) b.probleme.push(`neconformitate „${b.neconformitate}” — de decis (intră sau refuzat la recepție)`)
     // decizia de neconformitate (și carantina) pe un rând fără text de neconformitate = decizie pe rândul greșit (review #807 r5 02)
     if (!b.neconformitate && neconfOk.has(cheieSursa(b.sursa)))
       b.probleme.push(`accepta_neconformitate${neconfOk.get(cheieSursa(b.sursa)).carantina ? ' (carantină)' : ''} pe un rând fără neconformitate — de decis`)
-    if (b.neconformitate && neconfOk.has(cheieSursa(b.sursa))) {
+    if (b.neconformitate && neconfAplicata) {
       const nota = neconfOk.get(cheieSursa(b.sursa)).nota
       b.nota_neconformitate = `NECONFORM: ${b.neconformitate}${nota ? ` — ${nota}` : ''}`
       b.carantina = neconfOk.get(cheieSursa(b.sursa)).carantina === true

@@ -365,3 +365,34 @@ describe('review #807 r5: fiecare decizie pe rând lovește exact un rând', () 
     expect(b.stare).not.toBe('carantina')
   })
 })
+
+describe('review #807 r6 (Copilot r10)', () => {
+  const T88 = 'TEAVA 8.8 MM'
+  const rIes = () => rStd({ 16: 'CJPJ 1', 17: 12.41, 20: 13 })
+  const ev1 = decizii => evalueaza(foaie(T88, [rIes()], 12).randuri, { decizii, coduri, tronsoane }).randuri[0]
+  const peRand = { fisier: 'X.xlsx', foaie: T88, randuri: [13], serie: '264DB00025', camp: 'data_iesire', valoare: '2026-01-01' }
+  const peAviz = (v) => ({ fisier: 'X.xlsx', aviz_iesire: ['CJPJ 1'], camp: 'data_iesire', valoare: v })
+  it('rânduri + aviz pe același câmp al aceluiași rând → conflict, niciuna aplicată, indiferent de ordine', () => {
+    for (const cc of [[peRand, peAviz('2026-01-02')], [peAviz('2026-01-02'), peRand]]) {
+      const b = ev1({ corectii_camp: cc })
+      expect(b.probleme.join()).toMatch(/2 corecții pe câmpul data_iesire .*conflict, niciuna aplicată/)
+      expect(b.corectii.some(c => c.camp === 'data_iesire')).toBe(false)
+    }
+  })
+  it('aviz + aviz suprapuse pe același câmp → conflict', () => {
+    const b = ev1({ corectii_camp: [peAviz('2026-01-02'), peAviz('2026-01-03')] })
+    expect(b.probleme.join()).toMatch(/conflict/)
+  })
+  it('o singură corecție pe câmp se aplică', () => {
+    const b = ev1({ corectii_camp: [peAviz('2026-01-02')] })
+    expect(b.data_iesire).toBe('2026-01-02')
+  })
+  it('decizia pe rând cu seria de control greșită NU se aplică (ignora_iesire, accepta_iesire_integrala)', () => {
+    const b = ev1({ ignora_iesire: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, serie: '264DB99999', motiv: 'x' }] })
+    expect(b.aviz_iesire).toBe('CJPJ 1')
+    expect(b.probleme.join()).toMatch(/neaplicată/)
+    const p = evalueaza(foaie(T88, [rStd({ 16: 'CJPJ 0038', 17: 12, 18: '264DB00025', 19: 12.40 })], 12).randuri, { coduri, tronsoane,
+      decizii: { accepta_iesire_integrala: [{ fisier: 'X.xlsx', foaie: T88, rand: 13, serie: '264DB99999', motiv: 'x' }] } }).randuri[0]
+    expect(p.probleme.join()).toMatch(/ieșire parțială/)
+  })
+})
