@@ -18,6 +18,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import { salveazaLiniiBon } from './lib/bonLinii.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
@@ -202,7 +203,6 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
           observatii: m.observatii?.trim() || null, updated_at: new Date().toISOString(),
         }).eq('id', bonId)
         if (error) throw error
-        await supabase.from('executie_bonuri_consum_linii').delete().eq('bon_id', bonId)
       }
       const rows = m.linii.map(l => {
         const tip = l.tip_material_id ? tipuriMap[l.tip_material_id] : null
@@ -217,8 +217,15 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
           observatii: null,
         }
       })
-      const { error: eL } = await supabase.from('executie_bonuri_consum_linii').insert(rows)
-      if (eL) throw eL
+      // liniile: verificare registru → inserare → abia apoi ștergerea celor vechi (fără bon golit la un refuz)
+      const vechiIds = m.isNew ? [] : (bonuri.find(b => b.id === bonId)?.linii || []).map(l => l.id)
+      const rez = await salveazaLiniiBon(supabase, bonId, rows, vechiIds)
+      if (!rez.ok) {
+        if (m.isNew) await supabase.from('executie_bonuri_consum').delete().eq('id', bonId)
+        throw new Error(rez.motiv === 'registru'
+          ? `bucățile ${rez.protejate.join(', ')} sunt țeavă Transgaz din registru; nu intră pe bon (montajul se declară din modulul de țeavă)`
+          : rez.motiv)
+      }
       flash('ok', `Bon ${m.isNew ? 'creat' : 'actualizat'} (${rows.length} linii).`)
       setModal(null); await loadAll()
     } catch (e) { console.error(e); flash('err', 'Salvare eșuată: ' + (e?.message || e)) } finally { setBusy(false) }

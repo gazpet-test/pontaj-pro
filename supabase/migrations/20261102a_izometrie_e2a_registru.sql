@@ -80,6 +80,11 @@ BEGIN
   IF pg_get_serial_sequence('public.magazie_bucati', 'id') IS DISTINCT FROM 'public.magazie_bucati_id_seq' THEN
     RAISE EXCEPTION 'Precondiție 0g: secvența magazie_bucati.id nu e public.magazie_bucati_id_seq (%)', pg_get_serial_sequence('public.magazie_bucati', 'id');
   END IF;
+  -- TRUNCATE pe magazie_bucati ca pe live (20.10.2026): service_role da, anon/authenticated nu — revenirea redă exact asta
+  IF NOT has_table_privilege('service_role', 'public.magazie_bucati', 'TRUNCATE')
+     OR has_table_privilege('anon', 'public.magazie_bucati', 'TRUNCATE') OR has_table_privilege('authenticated', 'public.magazie_bucati', 'TRUNCATE') THEN
+    RAISE EXCEPTION 'Precondiție 0h: drepturile TRUNCATE pe magazie_bucati diferă de live (service_role da, anon/authenticated nu)';
+  END IF;
 
   -- ── A. rolul scriitor ─────────────────────────────────────────────────────────────────────────────────
   CREATE ROLE izo_registru_writer NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
@@ -317,6 +322,57 @@ BEGIN
     ELSE PERFORM pg_advisory_xact_lock_shared(73010, p_proiect::integer); END IF;
   END $f$;
 
+  -- lock PARTAJAT pe mai multe proiecte, în ordine crescătoare (review #806 r2: fără blocaj circular între două mutări).
+  -- Chemat din gărzile INVOKER (căile vechi, reparentări, recepții beneficiar), înainte de recitirea nivelului.
+  -- Protocolul complet (r2): (1) lock-urile pe RÂNDURI (UPDATE-ul clientului, FOR SHARE în import) vin ÎNAINTEA lock-ului
+  -- advisory; (2) rândurile registrului se refuză fără lock (protecție permanentă), ca storno-ul (exclusiv, apoi FOR UPDATE
+  -- pe bucăți) să nu se blocheze circular cu un UPDATE al clientului. Proiecte > 2^31 → eroare la cast (fail-closed).
+  CREATE FUNCTION public.fn_izo_lock_partajat(VARIADIC p_proiecte bigint[]) RETURNS void
+    LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v bigint;
+  BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'izo: scrierile care ating registrul cer READ COMMITTED (acum %)', current_setting('transaction_isolation')
+        USING ERRCODE = '25001';
+    END IF;
+    FOR v IN SELECT DISTINCT x FROM unnest(p_proiecte) x WHERE x IS NOT NULL ORDER BY 1 LOOP
+      PERFORM pg_advisory_xact_lock_shared(73010, v::integer);
+    END LOOP;
+  END $f$;
+
+  -- rândurile de loc ale unui import (proiect, depozite, tronsoane) blocate FOR SHARE, ÎNAINTE de lock-ul advisory exclusiv:
+  -- o schimbare de site / proiect în curs pe ele e așteptată și apoi văzută (FOR SHARE întoarce versiunea comisă cea mai
+  -- nouă), iar una ulterioară așteaptă importul. DEFINER: writer-ul n-are drepturi pe tabelele astea. Doar writer-ul.
+  CREATE FUNCTION public.fn_izo_blocheaza_locuri(p_proiect bigint, p_depozite integer[], p_tronsoane bigint[]) RETURNS void
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    PERFORM 1 FROM public.executie_proiecte WHERE id = p_proiect FOR SHARE;
+    PERFORM 1 FROM public.logistica_depozite WHERE id = ANY (coalesce(p_depozite, '{}')) ORDER BY id FOR SHARE;
+    PERFORM 1 FROM public.executie_tronsoane WHERE id = ANY (coalesce(p_tronsoane, '{}')) ORDER BY id FOR SHARE;
+  END $f$;
+
+  -- amprenta DEFINIȚIILOR porților (review #806 r2): triggerele (funcție, evenimente, coloane, stare), politicile izo
+  -- (comandă, tip, roluri, condiții), funcțiile fn_izo_* (owner, DEFINER, search_path, volatilitate, corp, ACL), RLS și
+  -- ACL-ul tabelelor protejate. Valoarea de la migrare stă în COMMENT-ul acestei funcții; fn_izo_porti_lipsa o compară.
+  CREATE FUNCTION public.fn_izo_porti_definitii() RETURNS text
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT md5(concat_ws(' | ',
+      (SELECT string_agg(format('%s.%s:%s:%s:%s:%s:%s', g.tgrelid::regclass, g.tgname, g.tgfoid::regprocedure, g.tgtype, g.tgattr::text,
+                                g.tgenabled, coalesce(pg_get_expr(g.tgqual, g.tgrelid), '')), ',' ORDER BY g.tgname)
+         FROM pg_trigger g WHERE NOT g.tgisinternal AND g.tgname LIKE '%\_izo\_%'),
+      (SELECT string_agg(format('%s.%s:%s:%s:%s:%s:%s', p.polrelid::regclass, p.polname, p.polcmd, p.polpermissive,
+                                (SELECT string_agg(pg_get_userbyid(r), ',' ORDER BY pg_get_userbyid(r)) FROM unnest(p.polroles) r),
+                                coalesce(pg_get_expr(p.polqual, p.polrelid), ''), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')), ',' ORDER BY p.polname)
+         FROM pg_policy p WHERE p.polname LIKE 'izo\_%' OR p.polname LIKE 'magbuc\_izo\_%'),
+      (SELECT string_agg(format('%s(%s):%s:%s:%s:%s:%s:%s', p.proname, pg_get_function_identity_arguments(p.oid), pg_get_userbyid(p.proowner),
+                                p.prosecdef, coalesce(p.proconfig::text, ''), p.provolatile, md5(p.prosrc), coalesce(p.proacl::text, '')),
+                         ',' ORDER BY p.proname, pg_get_function_identity_arguments(p.oid))
+         FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
+      (SELECT string_agg(format('%s:%s:%s:%s', c.relname, c.relrowsecurity, c.relforcerowsecurity, coalesce(c.relacl::text, '')), ',' ORDER BY c.relname)
+         FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
+          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari'))))
+  $f$;
+
   -- porțile registrului, verificate la migrare (postcondiția 5) ȘI la fiecare activare stoc (review #806 P2-5).
   -- Întoarce lista porților lipsă / modificate; goală = totul la locul lui.
   CREATE FUNCTION public.fn_izo_porti_lipsa() RETURNS text[]
@@ -334,49 +390,76 @@ BEGIN
                             ('executie_tevi','trg_executie_tevi_izo_delete'), ('executie_tevi','trg_executie_tevi_izo_mutare'),
                             ('executie_pachete_lansare','trg_pachete_izo_delete'), ('executie_pachete_lansare','trg_pachete_izo_mutare'),
                             ('executie_tronsoane','trg_tronsoane_izo_mutare'), ('logistica_depozite','trg_depozite_izo_mutare'),
+                            ('executie_proiecte','trg_proiecte_izo_site'),
                             ('executie_bonuri_consum_linii','trg_bon_linii_izo_bucata')) x(tabel, trg)
                LEFT JOIN pg_trigger g ON g.tgname = x.trg AND g.tgrelid = to_regclass('public.' || x.tabel) AND NOT g.tgisinternal
     LOOP
-      IF r.tgenabled IS DISTINCT FROM 'A' THEN v := v || format('trigger %s.%s (%s)', r.tabel, r.trg, coalesce(r.tgenabled::text, 'lipsă')); END IF;
+      IF r.tgenabled IS DISTINCT FROM 'A' THEN v := array_append(v, format('trigger %s.%s (%s)', r.tabel, r.trg, coalesce(r.tgenabled::text, 'lipsă'))); END IF;
     END LOOP;
     -- RLS activ pe tabelele registrului și pe magazie_bucati
     FOR r IN SELECT t.n, c.relrowsecurity FROM unnest(ARRAY['magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri',
                       'magazie_bucati_evenimente','magazie_bucati_miscari']) t(n) LEFT JOIN pg_class c ON c.oid = to_regclass('public.' || t.n)
     LOOP
-      IF r.relrowsecurity IS NOT TRUE THEN v := v || format('RLS inactiv pe %s', r.n); END IF;
+      IF r.relrowsecurity IS NOT TRUE THEN v := array_append(v, format('RLS inactiv pe %s', r.n)); END IF;
     END LOOP;
     -- politicile RESTRICTIVE ale clientului pe magazie_bucati
     IF (SELECT count(*) FROM pg_policy p WHERE p.polrelid = 'public.magazie_bucati'::regclass AND NOT p.polpermissive
           AND p.polname IN ('magbuc_izo_client_ins','magbuc_izo_client_upd','magbuc_izo_client_del')) <> 3 THEN
-      v := v || 'politicile RESTRICTIVE magbuc_izo_client_*';
+      v := array_append(v, 'politicile RESTRICTIVE magbuc_izo_client_*');
     END IF;
     -- rolul scriitor: fără BYPASSRLS/LOGIN/SUPERUSER/INHERIT; singurul membru = postgres; niciun rol API nu-l poate prelua
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'izo_registru_writer' AND NOT rolbypassrls AND NOT rolcanlogin AND NOT rolsuper AND NOT rolinherit) THEN
-      v := v || 'rolul izo_registru_writer (lipsă sau BYPASSRLS/LOGIN/SUPERUSER/INHERIT)';
+      v := array_append(v, 'rolul izo_registru_writer (lipsă sau BYPASSRLS/LOGIN/SUPERUSER/INHERIT)');
     ELSIF (SELECT array_agg(pg_get_userbyid(m.member)::text) FROM pg_auth_members m WHERE m.roleid = 'izo_registru_writer'::regrole)
             IS DISTINCT FROM ARRAY['postgres']::text[]
        OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','service_role','authenticator']) a(n)
                    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = a.n) AND pg_has_role(a.n, 'izo_registru_writer', 'MEMBER')) THEN
-      v := v || 'membrii rolului izo_registru_writer';
+      v := array_append(v, 'membrii rolului izo_registru_writer');
     END IF;
     -- ACL: clientul nu scrie tabelele registrului și nu execută funcțiile writer-ului
     IF EXISTS (SELECT 1 FROM unnest(ARRAY['izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari']) t(n),
                              unnest(ARRAY['anon','authenticated','service_role']) a(n), unnest(ARRAY['INSERT','UPDATE','DELETE','TRUNCATE']) p(n)
                 WHERE to_regclass('public.' || t.n) IS NULL OR has_table_privilege(a.n, 'public.' || t.n, p.n)) THEN
-      v := v || 'ACL de scriere pe tabelele registrului';
+      v := array_append(v, 'ACL de scriere pe tabelele registrului');
     END IF;
     IF EXISTS (SELECT 1 FROM pg_proc p, unnest(ARRAY['anon','authenticated','service_role']) a(n)
                 WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_izo_seteaza_nivel','fn_izo_import_sold_initial','fn_izo_import_storno')
                   AND has_function_privilege(a.n, p.oid, 'EXECUTE')) THEN
-      v := v || 'EXECUTE din API pe funcțiile registrului';
+      v := array_append(v, 'EXECUTE din API pe funcțiile registrului');
+    END IF;
+    IF EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','service_role']) a(n) WHERE has_table_privilege(a.n, 'public.magazie_bucati', 'TRUNCATE')) THEN
+      v := array_append(v, 'TRUNCATE pe magazie_bucati pentru un rol API');
+    END IF;
+    -- definițiile (nu doar numele): amprenta curentă = cea fixată la migrare (review #806 r2)
+    IF public.fn_izo_porti_definitii() IS DISTINCT FROM
+       substring(obj_description('public.fn_izo_porti_definitii()'::regprocedure, 'pg_proc') FROM '^porti=([0-9a-f]{32})$') THEN
+      v := array_append(v, 'definițiile porților diferă de amprenta de la migrare (trigger / politică / funcție / ACL modificat)');
     END IF;
     RETURN v;
   END $f$;
 
-  -- depozit folosit de registru? (pentru garda pe logistica_depozite.site_id; citește ca postgres)
+  -- depozit folosit de registru? (pentru garda pe logistica_depozite.site_id; citește ca postgres). Contează și ca depozit
+  -- de ORIGINE al unei bucăți ieșite pe tronson (atribute.depozit_origine_id) — review #806 r2: originea e o referință
+  -- protejată, nu un instantaneu (nume/site); decizia e documentată în E2_PLAN §4d.
   CREATE FUNCTION public.fn_izo_depozit_in_registru(p_depozit integer) RETURNS boolean
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-    SELECT EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.depozit_id = p_depozit AND b.tip_cod IS NOT NULL)
+    SELECT EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.tip_cod IS NOT NULL
+                    AND (b.depozit_id = p_depozit OR b.atribute->>'depozit_origine_id' = p_depozit::text))
+  $f$;
+  -- proiectele de pe un site (lock-ul la mutarea unui depozit între site-uri)
+  CREATE FUNCTION public.fn_izo_proiecte_site(p_site integer) RETURNS bigint[]
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT coalesce(array_agg(p.id ORDER BY p.id), '{}') FROM public.executie_proiecte p WHERE p.site_id = p_site
+  $f$;
+  -- proiectul unei bucăți beneficiar (lock-ul din garda bonurilor); NULL pentru gazpet / inexistentă
+  CREATE FUNCTION public.fn_izo_bucata_proiect(p_bucata bigint) RETURNS bigint
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT b.proiect_id FROM public.magazie_bucati b WHERE b.id = p_bucata AND b.provenienta = 'beneficiar'
+  $f$;
+  -- proiectul unui tronson (concordanța pachet ↔ tronson)
+  CREATE FUNCTION public.fn_izo_proiect_tronson(p_tronson bigint) RETURNS bigint
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT t.proiect_id FROM public.executie_tronsoane t WHERE t.id = p_tronson
   $f$;
 
   -- proiectele cu nivel ≠ off (pentru avertizările din UI: bonuri, transporturi); nu expune altceva
@@ -413,10 +496,16 @@ BEGIN
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     SELECT p.site_id FROM public.executie_proiecte p WHERE p.id = p_proiect
   $f$;
-  CREATE FUNCTION public.fn_izo_proiect_pachet(p_pachet bigint) RETURNS bigint
+  -- AMBELE proiecte ale unui pachet (al lui și al tronsonului) — protecția se decide pe amândouă (review #806 r2)
+  CREATE FUNCTION public.fn_izo_proiecte_pachet(p_pachet bigint) RETURNS bigint[]
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-    SELECT coalesce(p.proiect_id, t.proiect_id) FROM public.executie_pachete_lansare p
-      LEFT JOIN public.executie_tronsoane t ON t.id = p.tronson_id WHERE p.id = p_pachet
+    SELECT coalesce((SELECT array_remove(ARRAY[p.proiect_id, t.proiect_id], NULL) FROM public.executie_pachete_lansare p
+                      LEFT JOIN public.executie_tronsoane t ON t.id = p.tronson_id WHERE p.id = p_pachet), '{}')
+  $f$;
+  -- vreunul dintre proiecte are registru (nivel ≠ off)?
+  CREATE FUNCTION public.fn_izo_vreun_protejat(p_proiecte bigint[]) RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT EXISTS (SELECT 1 FROM unnest(p_proiecte) x WHERE x IS NOT NULL AND public.fn_izo_nivel(x) <> 'off')
   $f$;
 
   -- ── D2. garda (INVOKER: verifică rolul curent și marcajul tranzacției) ───────────────────────────────
@@ -434,21 +523,24 @@ BEGIN
     v_old boolean := false;
     v_new boolean := false;
   BEGIN
-    -- lock PARTAJAT pe proiect (aceeași cheie ca fn_izo_lock_proiect), apoi nivelul — citit cu snapshot nou (READ COMMITTED)
+    -- (1) rândurile registrului sunt protejate PERMANENT: refuz imediat, fără lock (altfel un UPDATE al clientului, care
+    --     ține deja rândul, ar aștepta lock-ul advisory al unui storno care așteaptă rândul → blocaj circular)
+    IF ((TG_OP <> 'INSERT' AND OLD.tip_cod IS NOT NULL) OR (TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL))
+       AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
+      RAISE EXCEPTION 'izo: bucățile beneficiar ale unui proiect cu registru (nivel ≠ off) se scriu doar prin funcțiile registrului'
+        USING ERRCODE = '42501';
+    END IF;
+    -- (2) beneficiar în afara registrului: lock PARTAJAT pe proiectele OLD/NEW (crescător; cere READ COMMITTED — sub
+    --     REPEATABLE READ o activare comisă între timp n-ar fi văzută), apoi nivelul, citit cu snapshot nou
+    IF (TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar') OR (TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar') THEN
+      PERFORM public.fn_izo_lock_partajat(CASE WHEN TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar' THEN OLD.proiect_id END,
+                                          CASE WHEN TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar' THEN NEW.proiect_id END);
+    END IF;
     IF TG_OP <> 'INSERT' AND (OLD.tip_cod IS NOT NULL OR OLD.provenienta = 'beneficiar') THEN
-      IF OLD.proiect_id IS NOT NULL THEN PERFORM pg_advisory_xact_lock_shared(73010, OLD.proiect_id::integer); END IF;
       v_old := OLD.tip_cod IS NOT NULL OR public.fn_izo_nivel(OLD.proiect_id) <> 'off';
     END IF;
     IF TG_OP <> 'DELETE' AND (NEW.tip_cod IS NOT NULL OR NEW.provenienta = 'beneficiar') THEN
-      IF NEW.proiect_id IS NOT NULL THEN PERFORM pg_advisory_xact_lock_shared(73010, NEW.proiect_id::integer); END IF;
       v_new := NEW.tip_cod IS NOT NULL OR public.fn_izo_nivel(NEW.proiect_id) <> 'off';
-    END IF;
-    -- sub REPEATABLE READ / SERIALIZABLE snapshot-ul e cel de la începutul tranzacției: o activare comisă între timp n-ar
-    -- fi văzută. Scrierile beneficiar din afara writer-ului cer READ COMMITTED (PostgREST rulează așa).
-    IF ((TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar') OR (TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar'))
-       AND current_setting('transaction_isolation') <> 'read committed' AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
-      RAISE EXCEPTION 'izo: bucățile beneficiar se scriu doar în READ COMMITTED (acum %)', current_setting('transaction_isolation')
-        USING ERRCODE = '25001';
     END IF;
     IF v_old OR v_new THEN
       IF public.fn_izo_garda_scriitor() IS NOT TRUE THEN
@@ -523,16 +615,18 @@ BEGIN
     FOR EACH ROW EXECUTE FUNCTION public.fn_izo_garda_fapte();
   CREATE TRIGGER trg_izo_cfg_truncate BEFORE TRUNCATE ON public.izo_proiect_config
     FOR EACH STATEMENT EXECUTE FUNCTION public.fn_izo_garda_fapte();
-  -- atribuirile (drepturi pe proiect): se scriu doar ca postgres (operație cu „da”-ul lui Razvan) — o funcție de owner
-  -- vine cu ecranul; fără DELETE (dezactivare = activ false) și fără TRUNCATE (review #806 P2)
+  -- atribuirile (drepturi pe proiect): se scriu doar de o sesiune postgres directă (operație cu „da”-ul lui Razvan) — o
+  -- funcție de owner vine cu ecranul; fără DELETE (dezactivare = activ false) și fără TRUNCATE (review #806 P2).
+  -- session_user ȘI current_user (review #806 r2, Gemini): current_user = postgres e adevărat și într-o funcție DEFINER
+  -- cu owner postgres chemată din API; session_user rămâne atunci authenticator.
   CREATE FUNCTION public.fn_izo_garda_atribuiri() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   BEGIN
     IF TG_OP IN ('DELETE','TRUNCATE') THEN
       RAISE EXCEPTION 'izo: atribuirile nu se șterg (dezactivare = activ false)' USING ERRCODE = '42501';
     END IF;
-    IF current_user IS DISTINCT FROM 'postgres' THEN
-      RAISE EXCEPTION 'izo: atribuirile se scriu doar de owner (postgres, cu acordul lui Razvan)' USING ERRCODE = '42501';
+    IF session_user IS DISTINCT FROM 'postgres' OR current_user IS DISTINCT FROM 'postgres' THEN
+      RAISE EXCEPTION 'izo: atribuirile se scriu doar de owner (sesiune postgres directă, cu acordul lui Razvan)' USING ERRCODE = '42501';
     END IF;
     RETURN NEW;
   END $f$;
@@ -542,11 +636,15 @@ BEGIN
     FOR EACH STATEMENT EXECUTE FUNCTION public.fn_izo_garda_atribuiri();
 
   -- ── E. căile vechi închise la nivelul stoc ────────────────────────────────────────────────────────────
+  -- Toate: lock PARTAJAT pe proiectele implicate (crescător), apoi recitirea nivelului (review #806 r2). Un pachet ține de
+  -- AMBELE proiecte — al lui și al tronsonului.
   -- calea 3: DELETE din client pe executie_tevi a unui proiect cu nivel ≠ off (import REPLACE, ștergeri din editor)
   CREATE FUNCTION public.fn_izo_refuz_delete_tevi() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v bigint[] := public.fn_izo_proiecte_pachet(OLD.pachet_id);
   BEGIN
-    IF public.fn_izo_nivel(public.fn_izo_proiect_pachet(OLD.pachet_id)) <> 'off' AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
+    PERFORM public.fn_izo_lock_partajat(VARIADIC v);
+    IF public.fn_izo_vreun_protejat(v) AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
       RAISE EXCEPTION 'izo: rândurile de pachet ale unui proiect cu registru (nivel ≠ off) nu se șterg din client' USING ERRCODE = '42501';
     END IF;
     RETURN OLD;
@@ -554,74 +652,114 @@ BEGIN
   CREATE TRIGGER trg_executie_tevi_izo_delete BEFORE DELETE ON public.executie_tevi
     FOR EACH ROW EXECUTE FUNCTION public.fn_izo_refuz_delete_tevi();
   -- reparentarea (review #806 P2-9): mutarea unei țevi pe alt pachet / a unui pachet pe alt proiect sau tronson / a unui
-  -- tronson pe alt proiect, dinspre sau spre un proiect protejat, ar ocoli garda de DELETE (muți, apoi ștergi)
+  -- tronson pe alt proiect / a unui depozit sau proiect pe alt site, dinspre sau spre un proiect protejat
   CREATE FUNCTION public.fn_izo_refuz_mutare_tevi() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v bigint[];
   BEGIN
-    IF NEW.pachet_id IS DISTINCT FROM OLD.pachet_id
-       AND (public.fn_izo_nivel(public.fn_izo_proiect_pachet(OLD.pachet_id)) <> 'off' OR public.fn_izo_nivel(public.fn_izo_proiect_pachet(NEW.pachet_id)) <> 'off')
-       AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
-      RAISE EXCEPTION 'izo: țevile nu se mută între pachete dinspre/spre un proiect cu registru (nivel ≠ off)' USING ERRCODE = '42501';
+    IF NEW.pachet_id IS DISTINCT FROM OLD.pachet_id THEN
+      v := public.fn_izo_proiecte_pachet(OLD.pachet_id) || public.fn_izo_proiecte_pachet(NEW.pachet_id);
+      PERFORM public.fn_izo_lock_partajat(VARIADIC v);
+      IF public.fn_izo_vreun_protejat(v) AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
+        RAISE EXCEPTION 'izo: țevile nu se mută între pachete dinspre/spre un proiect cu registru (nivel ≠ off)' USING ERRCODE = '42501';
+      END IF;
     END IF;
     RETURN NEW;
   END $f$;
   CREATE TRIGGER trg_executie_tevi_izo_mutare BEFORE UPDATE OF pachet_id ON public.executie_tevi
     FOR EACH ROW EXECUTE FUNCTION public.fn_izo_refuz_mutare_tevi();
+  -- pachetul: la INSERT și la mutare. Concordanța proiect_id ↔ proiectul tronsonului e obligatorie când vreunul dintre
+  -- proiecte are registru (review #806 r2; pe live 0 neconcordanțe la 20.10.2026).
   CREATE FUNCTION public.fn_izo_refuz_mutare_pachet() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
-  DECLARE v_nou bigint;
+  DECLARE v_tr bigint; v bigint[];
   BEGIN
-    IF (NEW.proiect_id IS DISTINCT FROM OLD.proiect_id OR NEW.tronson_id IS DISTINCT FROM OLD.tronson_id) THEN
-      v_nou := coalesce(NEW.proiect_id, (SELECT t.proiect_id FROM public.executie_tronsoane t WHERE t.id = NEW.tronson_id));
-      IF (public.fn_izo_nivel(public.fn_izo_proiect_pachet(OLD.id)) <> 'off' OR public.fn_izo_nivel(v_nou) <> 'off')
-         AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
+    IF TG_OP = 'UPDATE' AND NEW.proiect_id IS NOT DISTINCT FROM OLD.proiect_id AND NEW.tronson_id IS NOT DISTINCT FROM OLD.tronson_id THEN
+      RETURN NEW;
+    END IF;
+    v_tr := public.fn_izo_proiect_tronson(NEW.tronson_id);
+    v := array_remove(ARRAY[NEW.proiect_id, v_tr], NULL);
+    IF TG_OP = 'UPDATE' THEN v := v || public.fn_izo_proiecte_pachet(OLD.id); END IF;
+    PERFORM public.fn_izo_lock_partajat(VARIADIC v);
+    IF public.fn_izo_vreun_protejat(v) AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
+      IF NEW.proiect_id IS NOT NULL AND v_tr IS NOT NULL AND NEW.proiect_id <> v_tr THEN
+        RAISE EXCEPTION 'izo: neconcordanță pachet — proiectul % ≠ proiectul tronsonului % (registru activ)', NEW.proiect_id, v_tr USING ERRCODE = '23514';
+      END IF;
+      IF TG_OP = 'UPDATE' THEN
         RAISE EXCEPTION 'izo: pachetele nu se mută între proiecte/tronsoane dinspre/spre un proiect cu registru' USING ERRCODE = '42501';
       END IF;
     END IF;
     RETURN NEW;
   END $f$;
-  CREATE TRIGGER trg_pachete_izo_mutare BEFORE UPDATE OF proiect_id, tronson_id ON public.executie_pachete_lansare
+  CREATE TRIGGER trg_pachete_izo_mutare BEFORE INSERT OR UPDATE OF proiect_id, tronson_id ON public.executie_pachete_lansare
     FOR EACH ROW EXECUTE FUNCTION public.fn_izo_refuz_mutare_pachet();
+  -- tronson / depozit / site-ul proiectului: UPDATE-ul ține deja rândul; importul îl blochează FOR SHARE ÎNAINTE de lock-ul
+  -- lui exclusiv, deci ordinea e aceeași peste tot (rând → advisory) și cele două se așteaptă, nu se blochează circular
   CREATE FUNCTION public.fn_izo_refuz_mutare_tronson() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   BEGIN
-    IF NEW.proiect_id IS DISTINCT FROM OLD.proiect_id
-       AND (public.fn_izo_nivel(OLD.proiect_id) <> 'off' OR public.fn_izo_nivel(NEW.proiect_id) <> 'off') THEN
-      RAISE EXCEPTION 'izo: tronsoanele nu se mută între proiecte dinspre/spre un proiect cu registru' USING ERRCODE = '42501';
+    IF NEW.proiect_id IS DISTINCT FROM OLD.proiect_id THEN
+      PERFORM public.fn_izo_lock_partajat(OLD.proiect_id, NEW.proiect_id);
+      IF public.fn_izo_vreun_protejat(ARRAY[OLD.proiect_id, NEW.proiect_id]) THEN
+        RAISE EXCEPTION 'izo: tronsoanele nu se mută între proiecte dinspre/spre un proiect cu registru' USING ERRCODE = '42501';
+      END IF;
     END IF;
     RETURN NEW;
   END $f$;
   CREATE TRIGGER trg_tronsoane_izo_mutare BEFORE UPDATE OF proiect_id ON public.executie_tronsoane
     FOR EACH ROW EXECUTE FUNCTION public.fn_izo_refuz_mutare_tronson();
-  -- un depozit folosit de registru nu-și schimbă site-ul (asocierea depozit ↔ proiect e validată la import)
+  -- un depozit folosit de registru (loc sau origine) nu-și schimbă site-ul (asocierea depozit ↔ proiect e validată la import)
   CREATE FUNCTION public.fn_izo_refuz_mutare_depozit() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   BEGIN
-    IF NEW.site_id IS DISTINCT FROM OLD.site_id AND public.fn_izo_depozit_in_registru(OLD.id) THEN
-      RAISE EXCEPTION 'izo: depozitul % are bucăți în registru; site-ul lui nu se schimbă', OLD.id USING ERRCODE = '42501';
+    IF NEW.site_id IS DISTINCT FROM OLD.site_id THEN
+      PERFORM public.fn_izo_lock_partajat(VARIADIC public.fn_izo_proiecte_site(OLD.site_id) || public.fn_izo_proiecte_site(NEW.site_id));
+      IF public.fn_izo_depozit_in_registru(OLD.id) THEN
+        RAISE EXCEPTION 'izo: depozitul % are bucăți în registru; site-ul lui nu se schimbă', OLD.id USING ERRCODE = '42501';
+      END IF;
     END IF;
     RETURN NEW;
   END $f$;
   CREATE TRIGGER trg_depozite_izo_mutare BEFORE UPDATE OF site_id ON public.logistica_depozite
     FOR EACH ROW EXECUTE FUNCTION public.fn_izo_refuz_mutare_depozit();
+  -- site-ul unui proiect cu registru nu se schimbă (depozitele lui sunt validate pe site; editorul din Execuție îl poate
+  -- schimba — review #806 r2 Codex)
+  CREATE FUNCTION public.fn_izo_refuz_site_proiect() RETURNS trigger
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    IF NEW.site_id IS DISTINCT FROM OLD.site_id THEN
+      PERFORM public.fn_izo_lock_partajat(OLD.id);
+      IF public.fn_izo_vreun_protejat(ARRAY[OLD.id]) THEN
+        RAISE EXCEPTION 'izo: proiectul % are registru de țeavă; site-ul proiectului nu se schimbă', OLD.id USING ERRCODE = '42501';
+      END IF;
+    END IF;
+    RETURN NEW;
+  END $f$;
+  CREATE TRIGGER trg_proiecte_izo_site BEFORE UPDATE OF site_id ON public.executie_proiecte
+    FOR EACH ROW EXECUTE FUNCTION public.fn_izo_refuz_site_proiect();
   -- la ștergerea pachetului, cascada pe țevi rulează după ce pachetul a dispărut: garda se pune și pe pachet
   CREATE FUNCTION public.fn_izo_refuz_delete_pachet() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v bigint[] := public.fn_izo_proiecte_pachet(OLD.id);
   BEGIN
-    IF public.fn_izo_nivel(public.fn_izo_proiect_pachet(OLD.id)) <> 'off' AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
+    PERFORM public.fn_izo_lock_partajat(VARIADIC v);
+    IF public.fn_izo_vreun_protejat(v) AND public.fn_izo_garda_scriitor() IS NOT TRUE THEN
       RAISE EXCEPTION 'izo: pachetele unui proiect cu registru (nivel ≠ off) nu se șterg din client' USING ERRCODE = '42501';
     END IF;
     RETURN OLD;
   END $f$;
   CREATE TRIGGER trg_pachete_izo_delete BEFORE DELETE ON public.executie_pachete_lansare
     FOR EACH ROW EXECUTE FUNCTION public.fn_izo_refuz_delete_pachet();
-  -- calea 9: bucată beneficiar a unui proiect protejat pe un bon de consum
+  -- calea 9: bucată beneficiar a unui proiect protejat pe un bon de consum (lock pe proiectul bucății, apoi recitire)
   CREATE FUNCTION public.fn_izo_refuz_bon_bucata() RETURNS trigger
     LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   BEGIN
-    IF NEW.magazie_bucata_id IS NOT NULL AND public.fn_izo_bucata_protejata(NEW.magazie_bucata_id) THEN
-      RAISE EXCEPTION 'izo: bucata % e țeavă Transgaz din registru; nu intră pe bon de consum (montajul se declară din modulul de țeavă)', NEW.magazie_bucata_id
-        USING ERRCODE = '42501';
+    IF NEW.magazie_bucata_id IS NOT NULL THEN
+      PERFORM public.fn_izo_lock_partajat(public.fn_izo_bucata_proiect(NEW.magazie_bucata_id));
+      IF public.fn_izo_bucata_protejata(NEW.magazie_bucata_id) THEN
+        RAISE EXCEPTION 'izo: bucata % e țeavă Transgaz din registru; nu intră pe bon de consum (montajul se declară din modulul de țeavă)', NEW.magazie_bucata_id
+          USING ERRCODE = '42501';
+      END IF;
     END IF;
     RETURN NEW;
   END $f$;
@@ -644,17 +782,20 @@ BEGIN
     -- proiectul inexistent îl refuză FK-ul izo_proiect_config → executie_proiecte (writer-ul n-are SELECT pe proiecte)
     SELECT nivel_izo INTO v_vechi FROM public.izo_proiect_config WHERE proiect_id = p_proiect FOR UPDATE;
     v_vechi := coalesce(v_vechi, 'off');
+    -- porțile verificate LA APEL, nu doar la migrare (review #806 P2-5), și la reapelul pe un proiect deja „stoc” (r2):
+    -- triggere ENABLE ALWAYS, definițiile lor, politici, RLS, ACL, rol
+    IF p_nivel = 'stoc' THEN
+      v_lipsa := public.fn_izo_porti_lipsa();
+      IF cardinality(v_lipsa) > 0 THEN
+        RAISE EXCEPTION 'izo: activarea stoc refuzată — porți lipsă sau modificate: %', array_to_string(v_lipsa, '; ');
+      END IF;
+    END IF;
     IF v_vechi = p_nivel THEN RETURN v_vechi; END IF;
     -- „off” e interzis după primul fapt (review #806 P1-2): istoricul, inclusiv cel stornat, rămâne sub gardă
     IF p_nivel = 'off' AND EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente WHERE proiect_id = p_proiect) THEN
       RAISE EXCEPTION 'izo: proiectul % are fapte în registru; nivelul nu mai coboară la off', p_proiect;
     END IF;
     IF p_nivel = 'stoc' THEN
-      -- porțile verificate LA APEL, nu doar la migrare (review #806 P2-5): triggere ENABLE ALWAYS, politici, ACL, rol
-      v_lipsa := public.fn_izo_porti_lipsa();
-      IF cardinality(v_lipsa) > 0 THEN
-        RAISE EXCEPTION 'izo: activarea stoc refuzată — porți lipsă sau modificate: %', array_to_string(v_lipsa, '; ');
-      END IF;
       -- activarea pornește cu 0 bucăți beneficiar pe proiect (review #806 A): orice bucată existentă ar rămâne neurmărită
       IF EXISTS (SELECT 1 FROM public.magazie_bucati WHERE proiect_id = p_proiect AND provenienta = 'beneficiar') THEN
         RAISE EXCEPTION 'izo: proiectul % are bucăți beneficiar în afara registrului; activarea stoc cere 0 (se importă sau se mută întâi)', p_proiect;
@@ -675,14 +816,10 @@ BEGIN
     v_stare text; v_loctip text; v_dep integer; v_tr bigint; v_lmm integer; v_n int := 0; v_nt int := 0; v_nc int := 0;
     v_metri numeric := 0; v_site integer; v_serie text; v_canon text; v_sarja text; v_cm integer; v_unghi numeric;
     v_pe_dep jsonb := '{}'::jsonb; v_pe_tr int := 0; v_rez jsonb; v_izol text; v_fisiere text[]; v_orig integer;
+    v_depozite integer[]; v_tronsoane bigint[];
   BEGIN
     PERFORM set_config('izo.registru_tx', txid_current()::text, true);
     IF p_proiect IS NULL THEN RAISE EXCEPTION 'izo: proiectul e obligatoriu'; END IF;
-    -- lock EXCLUSIV pe proiect înaintea oricărei citiri (review #806 P1-3): serializează cu nivelul, storno-ul și recepțiile
-    PERFORM public.fn_izo_lock_proiect(p_proiect, true);
-    IF public.fn_izo_nivel(p_proiect) IS DISTINCT FROM 'stoc' THEN
-      RAISE EXCEPTION 'izo: importul cere proiectul % la nivelul stoc (activat înainte, în aceeași tranzacție)', p_proiect;
-    END IF;
     IF p_import_id IS NULL OR p_import_id !~ '^[A-Za-z0-9_.:-]{3,80}$' THEN RAISE EXCEPTION 'izo: import_id invalid'; END IF;
     -- forma payload-ului, fail-closed (review #806 P2-6): cheie lipsă, null sau tip greșit → eroare, 0 efecte
     IF jsonb_typeof(p_payload) IS DISTINCT FROM 'object' OR jsonb_typeof(p_payload->'surse') IS DISTINCT FROM 'array'
@@ -702,6 +839,19 @@ BEGIN
       RAISE EXCEPTION 'izo: surse[] are fișiere duplicate';
     END IF;
     v_sha := encode(sha256(convert_to(p_payload::text, 'UTF8')), 'hex');
+
+    -- ordinea lock-urilor (review #806 r2): (1) rândurile de loc (proiect, depozite, tronsoane) FOR SHARE — o mutare de site /
+    -- proiect în curs e așteptată și apoi văzută, una ulterioară așteaptă importul; (2) lock-ul EXCLUSIV pe proiect, înaintea
+    -- oricărei citiri a nivelului / registrului (P1-3). Peste tot ordinea e rând → advisory, deci fără blocaj circular.
+    SELECT array_agg(DISTINCT x.d) FILTER (WHERE x.d IS NOT NULL), array_agg(DISTINCT x.t) FILTER (WHERE x.t IS NOT NULL)
+      INTO v_depozite, v_tronsoane
+      FROM (SELECT (b->>'depozit_id')::integer AS d, (b->>'tronson_id')::bigint AS t FROM jsonb_array_elements(p_payload->'bucati') b
+            UNION ALL SELECT (b->>'depozit_origine_id')::integer, NULL FROM jsonb_array_elements(p_payload->'bucati') b) x;
+    PERFORM public.fn_izo_blocheaza_locuri(p_proiect, v_depozite, v_tronsoane);
+    PERFORM public.fn_izo_lock_proiect(p_proiect, true);
+    IF public.fn_izo_nivel(p_proiect) IS DISTINCT FROM 'stoc' THEN
+      RAISE EXCEPTION 'izo: importul cere proiectul % la nivelul stoc (activat înainte, în aceeași tranzacție)', p_proiect;
+    END IF;
 
     -- idempotența în BD [R3]: același (proiect, import_id) + același hash → rezultatul anterior; alt hash → conflict
     INSERT INTO public.izo_importuri (proiect_id, import_id, payload_sha256, surse)
@@ -861,7 +1011,10 @@ BEGIN
   REVOKE ALL ON FUNCTION public.fn_izo_nivel(bigint), public.fn_izo_acces(bigint, text, text, text), public.fn_izo_citire(bigint),
     public.fn_izo_proiecte_protejate(), public.fn_izo_bucata_protejata(bigint), public.fn_izo_tip_cod(integer),
     public.fn_izo_tip_material(text), public.fn_izo_loc_valid(bigint, integer, bigint), public.fn_izo_site_proiect(bigint),
-    public.fn_izo_proiect_pachet(bigint), public.fn_izo_uid(), public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_porti_lipsa(),
+    public.fn_izo_proiecte_pachet(bigint), public.fn_izo_uid(), public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_porti_lipsa(),
+    public.fn_izo_lock_partajat(bigint[]), public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[]), public.fn_izo_porti_definitii(),
+    public.fn_izo_proiecte_site(integer), public.fn_izo_bucata_proiect(bigint), public.fn_izo_proiect_tronson(bigint),
+    public.fn_izo_vreun_protejat(bigint[]), public.fn_izo_refuz_site_proiect(),
     public.fn_izo_depozit_in_registru(integer), public.fn_izo_garda_scriitor(), public.fn_izo_garda_bucati(),
     public.fn_izo_garda_truncate_bucati(), public.fn_izo_garda_fapte(), public.fn_izo_garda_atribuiri(),
     public.fn_izo_refuz_delete_tevi(), public.fn_izo_refuz_delete_pachet(), public.fn_izo_refuz_mutare_tevi(),
@@ -871,12 +1024,17 @@ BEGIN
     FROM PUBLIC, anon, authenticated, service_role;
   -- ajutătoarele chemate din gărzile INVOKER (rulează ca apelantul) — doar citiri, fără efecte
   GRANT EXECUTE ON FUNCTION public.fn_izo_nivel(bigint), public.fn_izo_garda_scriitor(), public.fn_izo_bucata_protejata(bigint),
-    public.fn_izo_proiect_pachet(bigint), public.fn_izo_tip_cod(integer), public.fn_izo_depozit_in_registru(integer)
+    public.fn_izo_proiecte_pachet(bigint), public.fn_izo_tip_cod(integer), public.fn_izo_depozit_in_registru(integer),
+    public.fn_izo_proiecte_site(integer), public.fn_izo_bucata_proiect(bigint), public.fn_izo_proiect_tronson(bigint),
+    public.fn_izo_vreun_protejat(bigint[]), public.fn_izo_lock_partajat(bigint[])
     TO anon, authenticated, service_role, izo_registru_writer;
   GRANT EXECUTE ON FUNCTION public.fn_izo_citire(bigint), public.fn_izo_proiecte_protejate() TO authenticated;
   GRANT EXECUTE ON FUNCTION public.fn_izo_acces(bigint, text, text, text), public.fn_izo_tip_material(text),
     public.fn_izo_loc_valid(bigint, integer, bigint), public.fn_izo_site_proiect(bigint), public.fn_izo_uid(),
-    public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_porti_lipsa() TO izo_registru_writer;
+    public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_porti_lipsa(), public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[]),
+    public.fn_izo_porti_definitii() TO izo_registru_writer;
+  -- TRUNCATE pe magazie_bucati: niciun rol API (live: service_role îl avea — review #806 r2); revenirea îl redă
+  REVOKE TRUNCATE ON TABLE public.magazie_bucati FROM PUBLIC, anon, authenticated, service_role;
 
   -- tabelele noi: anon nimic; authenticated doar SELECT (filtrat de RLS); service_role doar SELECT; writer ce scrie
   REVOKE ALL ON TABLE public.izo_proiect_config, public.izo_atribuiri, public.izo_importuri,
@@ -949,6 +1107,7 @@ BEGIN
   ALTER TABLE public.executie_tronsoane ENABLE ALWAYS TRIGGER trg_tronsoane_izo_mutare;
   ALTER TABLE public.logistica_depozite ENABLE ALWAYS TRIGGER trg_depozite_izo_mutare;
   ALTER TABLE public.executie_bonuri_consum_linii ENABLE ALWAYS TRIGGER trg_bon_linii_izo_bucata;
+  ALTER TABLE public.executie_proiecte ENABLE ALWAYS TRIGGER trg_proiecte_izo_site;
 
   -- ── I. ownerul funcțiilor registrului (lista albă) — CREATE pe public doar pe durata ALTER OWNER ─────
   GRANT CREATE ON SCHEMA public TO izo_registru_writer;
@@ -961,6 +1120,9 @@ BEGIN
     public.fn_izo_import_storno(bigint, text, text) FROM PUBLIC, anon, authenticated, service_role;
   GRANT EXECUTE ON FUNCTION public.fn_izo_seteaza_nivel(bigint, text, text), public.fn_izo_import_sold_initial(bigint, text, jsonb),
     public.fn_izo_import_storno(bigint, text, text) TO postgres;
+
+  -- amprenta definițiilor porților, fixată acum (după ACL-uri și owneri); fn_izo_porti_lipsa o compară la fiecare activare
+  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
   -- P1 granița rolului [R7]: doar postgres e membru; nimeni din API nu poate SET/INHERIT
@@ -1004,7 +1166,9 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%'
                 AND p.proname NOT IN ('fn_izo_nivel','fn_izo_garda_scriitor','fn_izo_citire','fn_izo_proiecte_protejate',
-                                      'fn_izo_bucata_protejata','fn_izo_proiect_pachet','fn_izo_tip_cod','fn_izo_depozit_in_registru')
+                                      'fn_izo_bucata_protejata','fn_izo_proiecte_pachet','fn_izo_tip_cod','fn_izo_depozit_in_registru',
+                                      'fn_izo_proiecte_site','fn_izo_bucata_proiect','fn_izo_proiect_tronson','fn_izo_vreun_protejat',
+                                      'fn_izo_lock_partajat')
                 AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))) THEN
     RAISE EXCEPTION 'Postcondiție 3c: o funcție izo internă e executabilă de anon/authenticated';
   END IF;
@@ -1022,13 +1186,14 @@ BEGIN
               WHERE has_sequence_privilege(r.n, 'public.' || s.n, p.n)) THEN
     RAISE EXCEPTION 'Postcondiție 4b: anon/authenticated/service_role au drepturi pe secvențele izo';
   END IF;
-  -- P5 porțile (aceeași verificare ca la activare: 19 triggere ENABLE ALWAYS, RLS, RESTRICTIVE, rol, ACL) + toate
+  -- P5 porțile (aceeași verificare ca la activare: 20 de triggere ENABLE ALWAYS + definițiile lor, RLS, RESTRICTIVE, rol,
+  --    ACL, TRUNCATE pe magazie_bucati) + toate
   --    proiectele off + registrul gol
   IF cardinality(public.fn_izo_porti_lipsa()) > 0 THEN
     RAISE EXCEPTION 'Postcondiție 5: porți lipsă — %', array_to_string(public.fn_izo_porti_lipsa(), '; ');
   END IF;
-  IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE '%\_izo\_%') <> 19 THEN
-    RAISE EXCEPTION 'Postcondiție 5b: numărul triggerelor izo ≠ 19';
+  IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE '%\_izo\_%') <> 20 THEN
+    RAISE EXCEPTION 'Postcondiție 5b: numărul triggerelor izo ≠ 20';
   END IF;
   IF EXISTS (SELECT 1 FROM public.izo_proiect_config) OR EXISTS (SELECT 1 FROM public.magazie_bucati WHERE tip_cod IS NOT NULL) THEN
     RAISE EXCEPTION 'Postcondiție 5c: migrarea trebuie să lase toate proiectele off și registrul gol';

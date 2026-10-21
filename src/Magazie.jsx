@@ -973,15 +973,16 @@ function StocTrasabilTab() {
           .select('id, role, is_owner, can_process_achizitii, can_manage_stoc').eq('id', user.id).maybeSingle()
         prof = data || null
       }
-      // paginat: PostgREST taie la 1000 de rânduri, iar registrul de țeavă (izometrie) aduce mii de bucăți
+      // paginat: PostgREST taie la max-rows (azi 1000), iar registrul de țeavă (izometrie) aduce mii de bucăți. Avansăm cu
+      // câte rânduri au venit efectiv și ne oprim abia la o pagină goală — merge și dacă limita API e mai mică decât pasul.
       const toateBucatile = async () => {
         const pas = 1000, tot = []
-        for (let de = 0; ; de += pas) {
+        for (let de = 0; ; ) {
           const r = await supabase.from('magazie_bucati').select('*')
             .order('created_at', { ascending: false }).order('id', { ascending: false }).range(de, de + pas - 1)
           if (r.error) return r
-          tot.push(...(r.data || []))
-          if (!r.data || r.data.length < pas) return { data: tot }
+          if (!r.data?.length) return { data: tot }
+          tot.push(...r.data); de += r.data.length
         }
       }
       const [rBuc, rTip, rProj] = await Promise.all([

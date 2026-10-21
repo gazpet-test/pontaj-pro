@@ -3,7 +3,8 @@
 -- Scoate tot ce a pus 20261102a: rolul izo_registru_writer, tabelele izo (config, atribuiri, importuri, registrul),
 --   secvența izo_server_ver_seq, funcțiile fn_izo_*, triggerele și politicile izo, coloanele/CHECK-urile/indexurile
 --   noi de pe magazie_bucati (CHECK-urile stare/locatie_tip revin la forma live din 20.10.2026), triggerele de pe
---   executie_tevi / executie_pachete_lansare / executie_tronsoane / logistica_depozite / executie_bonuri_consum_linii.
+--   executie_tevi / executie_pachete_lansare / executie_tronsoane / logistica_depozite / executie_proiecte /
+--   executie_bonuri_consum_linii; TRUNCATE pe magazie_bucati revine la service_role.
 -- REFUZĂ dacă există orice dată a modulului: rânduri în izo_proiect_config / izo_atribuiri / izo_importuri /
 --   magazie_bucati_evenimente / magazie_bucati_miscari sau bucăți cu tip_cod setat. Un registru cu date reale nu se
 --   scoate pe tăcute: întâi storno + export + decizia lui Răzvan, într-o operație separată.
@@ -26,7 +27,7 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    '989261bfe232dd0983bec6fdcaef4c28'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    'fa7c55062c3eb70990d2cc1d216ac97d'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
@@ -47,7 +48,7 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
   LOCK TABLE public.magazie_bucati, public.izo_proiect_config, public.izo_atribuiri, public.izo_importuri,
              public.magazie_bucati_evenimente, public.magazie_bucati_miscari, public.executie_tevi, public.executie_pachete_lansare,
-             public.executie_bonuri_consum_linii, public.executie_tronsoane, public.logistica_depozite IN ACCESS EXCLUSIVE MODE;
+             public.executie_bonuri_consum_linii, public.executie_tronsoane, public.logistica_depozite, public.executie_proiecte IN ACCESS EXCLUSIVE MODE;
 
   -- 3. fără date ale modulului
   IF EXISTS (SELECT 1 FROM public.izo_proiect_config) OR EXISTS (SELECT 1 FROM public.izo_atribuiri)
@@ -127,6 +128,7 @@ BEGIN
   -- 5. scoaterea (ordinea inversă a migrării)
   DROP TRIGGER trg_bon_linii_izo_bucata ON public.executie_bonuri_consum_linii;
   DROP TRIGGER trg_depozite_izo_mutare ON public.logistica_depozite;
+  DROP TRIGGER trg_proiecte_izo_site ON public.executie_proiecte;
   DROP TRIGGER trg_tronsoane_izo_mutare ON public.executie_tronsoane;
   DROP TRIGGER trg_executie_tevi_izo_delete ON public.executie_tevi;
   DROP TRIGGER trg_executie_tevi_izo_mutare ON public.executie_tevi;
@@ -150,8 +152,11 @@ BEGIN
     public.fn_izo_import_storno(bigint, text, text), public.fn_izo_refuz_bon_bucata(), public.fn_izo_refuz_delete_tevi(), public.fn_izo_refuz_delete_pachet(),
     public.fn_izo_refuz_mutare_tevi(), public.fn_izo_refuz_mutare_pachet(), public.fn_izo_refuz_mutare_tronson(), public.fn_izo_refuz_mutare_depozit(),
     public.fn_izo_garda_atribuiri(), public.fn_izo_porti_lipsa(), public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_depozit_in_registru(integer),
+    public.fn_izo_refuz_site_proiect(), public.fn_izo_lock_partajat(bigint[]), public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[]),
+    public.fn_izo_porti_definitii(), public.fn_izo_proiecte_site(integer), public.fn_izo_bucata_proiect(bigint),
+    public.fn_izo_proiect_tronson(bigint), public.fn_izo_vreun_protejat(bigint[]),
     public.fn_izo_garda_fapte(), public.fn_izo_garda_truncate_bucati(), public.fn_izo_garda_bucati(), public.fn_izo_garda_scriitor(),
-    public.fn_izo_proiect_pachet(bigint), public.fn_izo_uid(), public.fn_izo_site_proiect(bigint), public.fn_izo_loc_valid(bigint, integer, bigint),
+    public.fn_izo_proiecte_pachet(bigint), public.fn_izo_uid(), public.fn_izo_site_proiect(bigint), public.fn_izo_loc_valid(bigint, integer, bigint),
     public.fn_izo_tip_material(text), public.fn_izo_tip_cod(integer), public.fn_izo_bucata_protejata(bigint),
     public.fn_izo_proiecte_protejate(), public.fn_izo_citire(bigint), public.fn_izo_acces(bigint, text, text, text),
     public.fn_izo_nivel(bigint);
@@ -171,6 +176,7 @@ BEGIN
     DROP COLUMN perete_mm, DROP COLUMN diametru_mm, DROP COLUMN lot, DROP COLUMN aviz_intrare_id, DROP COLUMN nr_crt_aviz,
     DROP COLUMN bend_no, DROP COLUMN capat_marcaj, DROP COLUMN depozit_id, DROP COLUMN tronson_id, DROP COLUMN server_ver;
   REVOKE ALL ON TABLE public.magazie_bucati FROM izo_registru_writer;
+  GRANT TRUNCATE ON TABLE public.magazie_bucati TO service_role;   -- starea de dinainte (precondiția 0h a migrării)
   REVOKE ALL ON SEQUENCE public.magazie_bucati_id_seq FROM izo_registru_writer;
   REVOKE ALL ON SCHEMA public FROM izo_registru_writer;
   REVOKE izo_registru_writer FROM postgres;

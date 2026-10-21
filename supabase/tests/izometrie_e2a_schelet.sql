@@ -65,7 +65,7 @@ ALTER TABLE public.logistica_depozite ENABLE ROW LEVEL SECURITY;
 CREATE POLICY depozite_all ON public.logistica_depozite FOR ALL TO authenticated USING (auth.uid() IS NOT NULL);
 INSERT INTO public.logistica_depozite (id, name, cod_3litere, site_id) VALUES
   (1, 'Balvanești', 'BAL', 4), (2, 'Sisești', 'SIS', 4), (7, 'Sediu Ploiești', 'SED', 1),
-  (4, 'Căldăraru', 'CAL', 9), (9, 'DM Jupânești', 'JUP', 6), (10, 'DM Orșova Nord', 'ORN', 6), (11, 'OS Topleț', 'TOP', 6);
+  (4, 'Căldăraru', 'CAL', 9), (9, 'DM Jupânești', 'JUP', 6), (10, 'DM Orșova Nord', 'ORN', 6), (11, 'OS Topleț', 'TOP', 6), (12, 'Rezervă Topleț', 'REZ', 6);
 CREATE TABLE public.magazie_tipuri_material (id serial PRIMARY KEY, nume text NOT NULL, categorie text, cheie text, activ boolean DEFAULT true);
 ALTER TABLE public.magazie_tipuri_material ENABLE ROW LEVEL SECURITY;
 CREATE POLICY mtm_sel ON public.magazie_tipuri_material FOR SELECT TO authenticated USING (true);
@@ -112,6 +112,7 @@ INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, sarja, lu
 VALUES (1, 1, '254CA00001', 'SA00001', 12.4, 'beneficiar', 'sosit', 'proiect');
 
 INSERT INTO public.executie_pachete_lansare (id, proiect_id, tronson_id) VALUES (1, 1, 8), (2, 3, 18);
+SELECT setval('public.executie_pachete_lansare_id_seq', 100);
 INSERT INTO public.executie_tevi (pachet_id, serie_unica, lungime_m) VALUES (1, 'X1', 12), (1, 'X2', 12), (2, 'Y1', 12);
 ALTER TABLE public.executie_tevi ENABLE ROW LEVEL SECURITY;
 CREATE POLICY executie_tevi_select ON public.executie_tevi FOR SELECT TO authenticated USING (true);
