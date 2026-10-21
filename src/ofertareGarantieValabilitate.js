@@ -447,16 +447,34 @@ export function patchActAditional({ g, de, pana, termenDepunere, azi, extra = {}
     observatii: adaugaObservatie(g?.observatii, linieActAditional({ ...extra, azi, polita: g?.polita_nr, de, pana })) }
 }
 
-// TKT-0342 r2 (review Copilot / Jakarinos #833, P1): după o eroare la salvare (UPDATE posibil comis, răspuns pierdut) starea se citește din
-// nou și se decide fără ghicit: 'salvat' = rândul are exact perioada + observațiile scrise; 'nesalvat' = rândul are SIGUR starea de
-// dinainte (singurul caz în care PDF-ul urcat se poate șterge); 'necunoscut' = recitirea a eșuat sau rândul arată altceva (PDF-ul rămâne)
-// inainte = rândul din UI înainte de salvare; p = patch-ul trimis; dupa = rândul recitit (null / undefined = recitire eșuată)
-export function rezultatSalvareAct({ inainte, p, dupa }) {
+// TKT-0342 r2/r3 (review Copilot / Jakarinos #833): după o eroare AMBIGUĂ la salvare (UPDATE posibil în zbor / comis, răspuns pierdut)
+// recitirea poate dovedi DOAR succesul: 'salvat' = rândul are exact perioada + observațiile scrise; orice altceva = 'necunoscut' — inclusiv
+// starea veche (r3, P1 Jakarinos: UPDATE-ul poate încă să se comită DUPĂ recitire), deci PDF-ul urcat rămâne
+// p = patch-ul trimis; dupa = rândul recitit (null / undefined = recitire eșuată)
+export function rezultatSalvareAct({ p, dupa }) {
   if (!dupa || !p) return 'necunoscut'
   const egal = (a, b) => (a ?? null) === (b ?? null)
-  if (egal(dupa.valabil_de, p.valabil_de) && egal(dupa.valabil_pana, p.valabil_pana) && egal(dupa.observatii, p.observatii)) return 'salvat'
-  if (inainte && egal(dupa.valabil_de, inainte.valabil_de) && egal(dupa.valabil_pana, inainte.valabil_pana) && egal(dupa.observatii, inainte.observatii)) return 'nesalvat'
-  return 'necunoscut'
+  return egal(dupa.valabil_de, p.valabil_de) && egal(dupa.valabil_pana, p.valabil_pana) && egal(dupa.observatii, p.observatii) ? 'salvat' : 'necunoscut'
+}
+// eroare DEFINITIVĂ = serverul a răspuns clar că NU a scris (validare / drepturi / constrângere): SQLSTATE 22 / 23 / 42 / P0 sau HTTP 4xx
+// (fără 408); transportul căzut, 5xx, 408, timeout = AMBIGUU
+export function eroareDefinitiva(error, status) {
+  if (/^(22|23|42|P0)/.test(String(error?.code || ''))) return true
+  return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408
+}
+// salvarea actului fără mail, fără UI (testabilă): update() → { data, error, status } (UPDATE … WHERE id AND status = 'original' RETURNING
+// id) sau aruncă; recitire() → { data, error }. Rezultat: { rez: 'salvat' | 'nesalvat' | 'necunoscut', motiv }. 'nesalvat' DOAR cu
+// răspuns definitiv (0 rânduri întoarse sau eroare definitivă) — singurul caz în care PDF-ul urcat se poate șterge
+export async function salveazaActSigur({ update, recitire, p }) {
+  let rasp
+  try { rasp = await update() } catch (e) { rasp = { error: { message: e?.message || String(e) }, status: 0, transport: true } }
+  const { data, error, status } = rasp || {}
+  if (!error) return (data || []).length === 1 ? { rez: 'salvat', motiv: null }
+    : { rez: 'nesalvat', motiv: 'niciun rând actualizat (polița nu mai e în original, drept de scriere lipsă sau fișa nu mai există)' }
+  if (!rasp.transport && eroareDefinitiva(error, status)) return { rez: 'nesalvat', motiv: error.message }
+  let dupa = null
+  try { const r = await recitire(); dupa = r?.error ? null : r?.data } catch { dupa = null }
+  return { rez: rezultatSalvareAct({ p, dupa }), motiv: error.message || 'eroare de transport' }
 }
 // PDF-ul actului (review #833 r2, P2): tipul și extensia, înainte de încărcare
 export const estePdfAct = (f) => !!f && f.type === 'application/pdf' && /\.pdf$/i.test(String(f.name || ''))

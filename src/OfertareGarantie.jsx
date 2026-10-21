@@ -29,7 +29,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import GarantieRegistruLink from './OfertareGarantieRegistru.jsx'
 import { ziDepunere, calculeazaValabilitate, propuneActualizare, textDurata, zileIntre, MESAJ_NECITIT,
-  faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional, rezultatSalvareAct, estePdfAct,
+  faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional, salveazaActSigur, estePdfAct,
   evalueazaGarantie, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE, semnalDinCitire, precompletarePerioada } from './ofertareGarantieValabilitate.js'
 
 // cerințele din registru care pot conține valabilitatea (garanție / ofertă) — aceeași interogare în tab și în KPI
@@ -330,26 +330,19 @@ Vă mulțumim.`
     setBusy('Se încarcă actul adițional…'); setMsg(null)
     let path
     try { path = await urca(fAct, 'act_aditional') } catch (e) { setBusy(null); return setMsg({ tip: 'err', text: `PDF-ul nu s-a încărcat (${e.message}) — nu s-a salvat nimic.` }) }
-    // review #833 r1 (P1, Jakarinos): UPDATE-ul cere rândul înapoi — 0 rânduri (RLS / rând dispărut) = SIGUR nesalvat, nu „succes”
+    // review #833 r1–r2 (Copilot + Jakarinos): UPDATE condiționat de status = 'original' (alt tab putea schimba starea) cu rândul înapoi —
+    // 1 rând = salvat; 0 rânduri sau eroare definitivă = SIGUR nesalvat; eroare ambiguă (transport / 5xx) = recitire, care dovedește doar
+    // succesul; altfel „necunoscut” și PDF-ul rămâne (salveazaActSigur, testată)
     const okMsg = { tip: 'ok', text: `✓ Polița nr. ${g.polita_nr || '—'} e acum valabilă ${fmtZi(actAdDe)} – ${fmtZi(actAdPana)} (act adițional fără mail, PDF atașat). Actualizează și Registrul garanții / pachetul de depunere, dacă e deja aprobat.` }
-    let rez, motiv = null
-    try {
-      const { data, error } = await supabase.from('ofertare_garantii').update({ ...p, updated_at: new Date().toISOString() }).eq('id', g.id).select('id')
-      if (error) { motiv = error.message; rez = null }
-      else rez = (data || []).length === 1 ? 'salvat' : 'nesalvat'
-      if (!error && rez === 'nesalvat') motiv = 'niciun rând actualizat (drept de scriere sau fișa nu mai există)'
-    } catch (e) { motiv = e?.message || String(e); rez = null }
-    // review #833 r1 (P1, Copilot + Jakarinos): o eroare NU dovedește „nesalvat” (UPDATE comis, răspuns pierdut) → recitire și decizie
-    if (rez === null) {
-      const { data: dupa, error: eR } = await supabase.from('ofertare_garantii').select('valabil_de, valabil_pana, observatii').eq('id', g.id).maybeSingle()
-      rez = eR ? 'necunoscut' : rezultatSalvareAct({ inainte: g, p, dupa })
-    }
+    const { rez, motiv } = await salveazaActSigur({ p,
+      update: () => supabase.from('ofertare_garantii').update({ ...p, updated_at: new Date().toISOString() }).eq('id', g.id).eq('status', 'original').select('id'),
+      recitire: () => supabase.from('ofertare_garantii').select('valabil_de, valabil_pana, observatii').eq('id', g.id).maybeSingle() })
     if (rez === 'salvat') { setMsg(okMsg); setBusy(null); await load(); onChanged?.(); return }
     if (rez === 'necunoscut') {
       setBusy(null)
       return setMsg({ tip: 'err', text: `Rezultatul salvării nu a putut fi confirmat (${motiv}). PDF-ul a rămas la ${path}. Reîncarcă fișa înainte să reîncerci.` })
     }
-    // 'nesalvat' SIGUR (UPDATE fără rând sau recitirea arată starea de dinainte): abia acum se șterge PDF-ul urcat; ștergerea e dovedită
+    // 'nesalvat' SIGUR (UPDATE fără rând sau eroare definitivă de la server): abia acum se șterge PDF-ul urcat; ștergerea e dovedită
     // doar dacă storage întoarce exact obiectul șters (review #833 r1, P2)
     const { data: sters, error: eRm } = await supabase.storage.from('ofertare').remove([path])
     setBusy(null)
