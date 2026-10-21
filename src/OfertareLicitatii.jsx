@@ -19,7 +19,7 @@ import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereC
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareTermene from './OfertareTermene.jsx'
-import { rcNecitite } from './ofertareRcNecitit.js'
+import { rcNecitite, etichetaRc } from './ofertareRcNecitit.js'
 import OfertareProbaExtractor from './OfertareProbaExtractor.jsx'
 import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
@@ -3652,8 +3652,8 @@ function BannerRcNecitit({ licitatie: l, onProceseaza, reloadKey = null }) {
   useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 60000); return () => clearInterval(t) }, [])
   useEffect(() => {
     let activ = true
-    supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini_necitite, created_at')
-      .eq('licitatie_id', l.id).eq('tip', 'raspuns_clarificare')
+    // 20261104a: starea per document vine din ACEEAȘI funcție SQL ca alerta zilnică (ofertare_rc_doc_stare) — o singură regulă
+    supabase.rpc('ofertare_rc_stari', { p_licitatie_id: l.id })
       .then(({ data, error }) => { if (activ) setSt({ licId: l.id, docs: error ? null : (data || []), eroare: error ? (error.message || 'eroare') : null }) },
         (e) => { if (activ) setSt({ licId: l.id, docs: null, eroare: e?.message || 'eroare de rețea' }) })
     return () => { activ = false }
@@ -3669,7 +3669,7 @@ function BannerRcNecitit({ licitatie: l, onProceseaza, reloadKey = null }) {
   const col = r.rosu ? G.red : G.orange
   const fmt = zi => zi ? zi.split('-').reverse().join('.') : '—'
   const pana = r.termenTrecut ? ' · termenul de depunere a trecut' : r.zilePanaLaDepunere == null ? '' : r.zilePanaLaDepunere === 0 ? ' · depunerea e AZI' : ` · ${r.zilePanaLaDepunere} ${r.zilePanaLaDepunere === 1 ? 'zi' : 'zile'} până la depunere`
-  const lista = (r.rosu ? r.necitite : r.partiale).map(d => d.nume_original || `#${d.id}`)
+  const lista = (r.rosu ? r.necitite : r.partiale).map(etichetaRc)
   return (
     <div style={{ background: col + '1f', border: `1.5px solid ${col}`, borderRadius: 12, padding: '12px 16px', margin: '-6px 0 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
       <div style={{ flex: 1, minWidth: 260 }}>

@@ -1,17 +1,26 @@
 // Alerta „răspuns de la autoritate necitit” (d, Răzvan 19.10.2026 — după RC3 Racari, 14.10, stat 5 zile neprocesat).
-// Funcție pură: din documentele licitației → ce arată bannerul de pe fișă. Aceeași regulă o va folosi escaladarea zilnică (a).
+// Funcție pură: din stările documentelor licitației → ce arată bannerul de pe fișă.
+// 20261104a (Răzvan 21.10.2026, „hai să reparăm alerta”): starea per document NU se mai calculează aici — vine din RPC-ul ofertare_rc_stari,
+// care folosește ACEEAȘI funcție SQL (ofertare_rc_doc_stare) ca alerta zilnică (cron + mail): o singură regulă pentru banner și alertă.
 import { ziRo, zileIntre } from './ofertareTermene.js'
 
 export const TIP_RC = 'raspuns_clarificare'
-// fail-closed (review Gemini r1): orice stare care NU e citită integral / ignorată de un om contează ca necitită (neprocesat, in_lucru,
-// eroare, lipsă, sau o stare nouă necunoscută); „partial” = citit cu pagini lipsă → semnal separat (portocaliu), chiar fără listă de pagini
-export const ST_CITIT = ['procesat', 'ignorat']
+// stările întoarse de ofertare_rc_doc_stare (precedența e în SQL): citit / text_neverificat / partial / perechi_necitite / necitit
+// în roșu (și în alerta zilnică): necitit, perechi_necitite, text_neverificat; „partial” = semnal separat (portocaliu)
+export const STARI_ROSU = ['necitit', 'perechi_necitite', 'text_neverificat']
+// review #834 r1 (P2 Copilot): „roșu” = EXACT in_alerta întors de RPC (ofertare_rc_doc_necitit, aceeași funcție ca alerta zilnică) —
+// bannerul nu mai decide singur; fail-closed: in_alerta lipsă (alt răspuns decât cel așteptat) = necitit
+const esteRosu = (d) => d.in_alerta !== false
+export const ETICHETA_STARE = {
+  perechi_necitite: 'perechile întrebare – răspuns necitite',
+  text_neverificat: 'text OCR local neverificat',
+}
 
-// docs: [{ id, nume_original, tip, status_procesare, pagini_necitite, created_at }]; acum: ISO / Date (testabil)
+// docs: [{ id, nume_original, created_at, stare, in_alerta }] (rândurile RPC-ului ofertare_rc_stari); acum: ISO / Date (testabil)
 export function rcNecitite(docs, termenDepunere, acum = new Date()) {
-  const rc = (docs || []).filter(d => d.tip === TIP_RC)
-  const necitite = rc.filter(d => !ST_CITIT.includes(d.status_procesare) && d.status_procesare !== 'partial')
-  const partiale = rc.filter(d => d.status_procesare === 'partial')
+  const rc = docs || []
+  const necitite = rc.filter(esteRosu)
+  const partiale = rc.filter(d => !esteRosu(d) && d.stare === 'partial')
   if (!necitite.length && !partiale.length) return null
   const azi = ziRo(acum)
   const deLa = necitite.map(d => ziRo(d.created_at)).filter(Boolean).sort()[0] || null
@@ -29,3 +38,6 @@ export function rcNecitite(docs, termenDepunere, acum = new Date()) {
     rosu: necitite.length > 0,
   }
 }
+
+// eticheta unui document în banner: numele + motivul, când nu e „necitit” simplu
+export const etichetaRc = (d) => `${d.nume_original || `#${d.id}`}${ETICHETA_STARE[d.stare] ? ` (${ETICHETA_STARE[d.stare]})` : ''}`
