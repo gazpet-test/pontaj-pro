@@ -228,14 +228,17 @@ export const LINII_CONTINUARE = 4
 // linia de total a articolului: fără litere în afară de „Total=” (cifre, punctuație și glife citite greșit, ex. „0.000 ✓ 0 Total=”)
 const RE_TOTAL_RAND = /^[^\p{L}]*\btotal[ea]?\s*=[^\p{L}]*$/iu
 // antetul de pagină din listele exportate („IOANA8 pag 2”, „ISL08 pag 4”): un singur cuvânt + „pag” + număr, toată linia
-const RE_ANTET_PAGINA = /^\s*\S{1,40}\s+pag\.?\s*\d{1,4}\s*$/i
+// review Jakarinos #815 r1 (P3): forma strictă — un singur cod alfanumeric (nu „DN…”), spațiu, „pag” / „pag.”, spațiu, număr
+const RE_ANTET_PAGINA = /^\s*(?!DN)[A-Z][A-Z0-9_-]{1,39}\s+pag\.?\s+\d{1,4}\s*$/i
+// marcajul de pagină COMPLET (nu doar prefixul): „⟦PAGINA n⟧”
+const RE_MARCAJ_PAGINA = /^⟦PAGINA \d{1,5}⟧\s*$/
 // prima linie ne-goală DEASUPRA liniei care începe la `a` e un marcaj de pagină
 function subMarcajPagina(doc: string, a: number): boolean {
   let p = a - 1
   while (p > 0) {
     const b = doc.lastIndexOf('\n', p - 1) + 1
     const l = doc.slice(b, p)
-    if (l.trim()) return l.startsWith('⟦PAGINA')
+    if (l.trim()) return RE_MARCAJ_PAGINA.test(l)
     p = b - 1
   }
   return false

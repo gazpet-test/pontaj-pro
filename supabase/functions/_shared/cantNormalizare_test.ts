@@ -277,3 +277,16 @@ Deno.test('n6 review Gemini r1 (P2): în JOS, un marcaj de pagină (cu sau făr�
   const n = (await normalizeazaRand(r, { ...ctxF3, textDoc: t, felie: t }))!
   assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true])
 })
+
+Deno.test('n6 review Jakarinos r1 (P3): pseudomarcaj, text între marcaj și antet, antet „DN…” / lipit → antetul NU e transparent (nedovedit)', async () => {
+  const baza = PRE + '007 6714585 BUC. 1.000\nREDUCTIE DN110X90\n0.000 0 Total=\n\n⟦PAGINA 15⟧\nIOANA8 pag 2\n007 6715399 BUC. 2.000\n@DOP PEHD PE80 PN 6 DN 90 COD 66500006\n0.000 0 Total=\n'
+  const r = { ...randF3('6715399', 'DOP PEHD PE80 PN 6 DN 90 COD 66500006', 2, '007 6715399 BUC. 2.000'), um: 'BUC.' }
+  const ok = (await normalizeazaRand(r, { ...ctxF3, textDoc: baza, felie: baza }))!
+  assertEquals(ok.obs.pozitie_dovedita, true)
+  for (const [ce, inlocuit] of [['⟦PAGINA 15⟧', '⟦PAGINA invalid'], ['⟦PAGINA 15⟧\n', '⟦PAGINA 15⟧\nALT TEXT\n'], ['IOANA8 pag 2', 'DN110 pag 2'],
+    ['IOANA8 pag 2', 'IOANA8 pag2'], ['0.000 0 Total=\n\n⟦PAGINA 15⟧', 'TEAVA DN110\n\n⟦PAGINA 15⟧']]) {
+    const v = baza.replace(ce, inlocuit)
+    const k = (await normalizeazaRand(r, { ...ctxF3, textDoc: v, felie: v }))!
+    assertEquals(k.obs.pozitie_dovedita, false, inlocuit)
+  }
+})
