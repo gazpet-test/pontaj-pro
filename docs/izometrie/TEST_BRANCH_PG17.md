@@ -141,3 +141,35 @@ POST executie_bonuri_consum_linii anon → HTTP 401 {"code":"42501",…,"hint":"
 observatii=anon scrise: 0
 roluri izo: izo_registru_writer
 ```
+
+## r12 — #806 head 4de1ba37 + #806b (#820) head ab17e683 (21.10.2026), branch nou `hhnysgaqpmrxipxuubsj`
+
+E2a (porțile de citire tranzitive) + 20261102b (garda preluării, liniile închise și pentru service_role). Scheletul branch-ului are ACL-ul bonurilor ca pe live de la început. Totul a trecut din prima rulare.
+
+```
+16ae26c81c488ec4c9fb50617f445a18e8bcbbb50a5ea6efb21923e7374ca470  supabase/migrations/20261102a_izometrie_e2a_registru.sql
+ac888fb69747f10d106448dc4e81e2f32accb74187dafc2302f70b757a6b5bae  supabase/migrations/20261102b_bon_salvare_tranzactionala.sql
+OK   0 țintă: branch hhnysgaqpmrxipxuubsj, PG17, postgres non-superuser, schelet aplicat
+     MEMBRI|postgres|t|f|f
+     MEMBRI|postgres|f|f|t
+     OWNERI|fn_izo_activeaza_si_importa,fn_izo_import_sold_initial,fn_izo_import_storno,fn_izo_seteaza_nivel
+OK   1 livrare prin runner pe PG17 (rol, membru WITH SET, ALTER OWNER), porți complete · amprenta PG17 = 40deaae2f788d08ca9ca1f2490a395e7
+OK   2 revenire armată pe PG17 (DROP ROLE ca non-superuser) → totul scos, TRUNCATE refăcut · relivrare → aceeași amprentă
+OK   3 teste SQL pe PG17: 168 verificări
+OK   4 conexiune proaspătă: writer fără marcaj → garda · REPEATABLE READ → refuz · utilizator API real prin pooler + DEFINER postgres → atribuirea refuzată
+OK   5 20261102b pe PG17: 41 verificări SQL · amprenta funcției a4e09d0d72d283739dbc7732bee37281
+PASS test_branch hhnysgaqpmrxipxuubsj — amprenta E2a PG17 40deaae2f788d08ca9ca1f2490a395e7 · fn_bon_salveaza a4e09d0d72d283739dbc7732bee37281
+```
+
+Retragerea și relivrarea 20261102b pe PG17:
+
+```
+chei înainte: 6
+revenire: rc=0 RETRAGERE — RPC-urile scoase, drepturile pe linii refăcute
+după retragere (funcții:chei:INSERT authenticated:index): 0:6:true:true
+relivrare: rc=0 ✓ APLICAT + ÎNREGISTRAT confirmat: 20261102b_bon_salvare_tranzactionala v20261102130001 (sha256 ac888fb69747f10d106448dc4e81e2f32accb74187dafc2302f70b757a6b5bae)
+după relivrare (funcții:INSERT authenticated): 2:false
+retry creare veche după relivrare (idempotent): true
+```
+
+PostgREST (cheia anon), r12: identic cu r11. Cele 8 RPC-uri dau 401 / 42501. GET și PATCH pe `magazie_bucati` dau 200 [] (0 rânduri scrise). POST pe `izo_atribuiri`, `izo_importuri`, `izo_proiect_config`, `magazie_bucati_evenimente` și `executie_bonuri_consum_linii` dă 401 / 42501. Roluri izo rămase: doar `izo_registru_writer`.
