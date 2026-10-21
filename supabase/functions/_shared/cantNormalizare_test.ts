@@ -253,3 +253,20 @@ Deno.test('n5 (20.10, proba Răcari): cod de normă cu „%” la coadă — dov
     assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:' + motiv)], [false, true], cod)
   }
 })
+
+Deno.test('n6 (21.10, proba Răcari): antetul „<cod> pag N” imediat sub marcajul de pagină e transparent → denumirea de dedesubt (cu Dn) e acceptată', async () => {
+  const t = PRE + '007 6714585 BUC. 1.000\nREDUCTIE DN110X90\n0.000 0 Total=\n\n⟦PAGINA 15⟧\nIOANA8 pag 2\n007 6715399 BUC. 2.000\n@DOP PEHD PE80 PN 6 DN 90 COD 66500006\n0.000 0 Total=\n'
+  const r = { ...randF3('6715399', 'DOP PEHD PE80 PN 6 DN 90 COD 66500006', 2, '007 6715399 BUC. 2.000'), um: 'BUC.' }
+  const n = (await normalizeazaRand(r, { ...ctxF3, textDoc: t, felie: t }))!
+  assertEquals([n.obs.pozitie_dovedita, n.obs.dn_mm], [true, [90]])
+  // fără marcajul de pagină deasupra, aceeași linie „IOANA8 pag 2” rămâne o linie oarecare → incert (nedovedit, ca înainte)
+  const u = t.replace('⟦PAGINA 15⟧\n', '')
+  const m = (await normalizeazaRand(r, { ...ctxF3, textDoc: u, felie: u }))!
+  assertEquals([m.obs.pozitie_dovedita, m.note.includes('pozitie:dn_alt_rand')], [false, true])
+  // un antet de mai multe cuvinte / cu alt text după număr NU e antet de pagină → nedovedit
+  for (const antet of ['IOANA8 SI ALTII pag 2', 'IOANA8 pag 2 continuare', 'pag 2']) {
+    const v = t.replace('IOANA8 pag 2', antet)
+    const k = (await normalizeazaRand(r, { ...ctxF3, textDoc: v, felie: v }))!
+    assertEquals(k.obs.pozitie_dovedita, false, antet)
+  }
+})

@@ -14,7 +14,7 @@ import { type Rol, type SectiuneRol, cheieSectiune, sectiuniRol } from './roluri
 import { MODEL_A, MODEL_S, OVERHEAD_A, PROMPT_A, tarifA, tarifS } from './extractorA.ts'
 import { type PoartaFelie, poartaFelie } from './poartaB1.ts'
 
-export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n5', feliere: 'f2' }   // n5 (20.10): coduri cu „%” + coloana „[ n]” separată
+export const EXTRACTOR = { model: 'gpt-5-mini', prompt: 'p3', normalizator: 'n6', feliere: 'f2' }   // n5 (20.10): coduri cu „%” + coloana „[ n]”; n6 (21.10): antetul „<cod> pag N” sub marcaj
 export const EXTRACTOR_ID = `${EXTRACTOR.model}@${EXTRACTOR.prompt}@${EXTRACTOR.normalizator}@${EXTRACTOR.feliere}`
 // tariful din cod pentru limita superioară a rezervării (developers.openai.com/api/docs/pricing, 11.09.2026) — o depășire reală
 // (tarif schimbat) blochează bugetul la decontare (§4.3)
@@ -31,10 +31,10 @@ export type Extractor = { cheie: 'A' | 'B'; model: string; prompt: string; norma
   overheadOcteti: number }
 export const EXTRACTOARE: Record<'A' | 'B', Extractor> = {
   B: { cheie: 'B', ...EXTRACTOR, tarif: () => TARIF, promptFelie: (n, r) => PROMPT_STRUCTURAT(n, r), overheadOcteti: 0 },
-  A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n5', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r),
+  A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n6', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r),
     escaladare: { model: MODEL_S, tarif: tarifS }, overheadOcteti: OVERHEAD_A },
 }
-// identitatea include și modelul de escaladare (alt rezultat posibil = alt cache): claude-haiku-5-5/claude-sonnet-5-5@p4@n5@f2.
+// identitatea include și modelul de escaladare (alt rezultat posibil = alt cache): claude-haiku-5-5/claude-sonnet-5-5@p4@n6@f2.
 // Separatorul e „/” (fix 20.10, bug în producție): „>” nu e permis de CHECK-ul ofertare_cant_extrageri.extractor_id
 // ^[A-Za-z0-9._:@/-]{3,200}$ — orice id nou se verifică în idExtractor_test.ts contra regex-ului citit din migrare
 export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '/' + e.escaladare.model : ''}@${e.prompt}@${e.normalizator}@${e.feliere}`
