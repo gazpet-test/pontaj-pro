@@ -15,8 +15,8 @@
 set -Eeuo pipefail
 RADACINA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_BIN="${PG_BIN:-/usr/lib/postgresql/16/bin}"
-DATE_DIR=/tmp/pg_izo_e2a_e3
-PORT=5983
+DATE_DIR="${IZO_E3_DATE_DIR:-/tmp/pg_izo_e2a_e3}"
+PORT="${IZO_E3_PORT:-5983}"
 BAZA=izo_e3_test; BAZA2=izo_e3_curata_test; BAZA3=izo_e3_regresie_test
 MIG_A="$RADACINA/supabase/migrations/20261102a_izometrie_e2a_registru.sql"
 MIG_C="$RADACINA/supabase/migrations/20261102c_izometrie_cai_vechi_stoc.sql"
