@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  problemeCorectii,
   dataExcel, pereteDinDescriere, unghiDinDescriere, clasificaSerieTeava, tronsonIesire, citesteFoaie, evalueaza,
   depozitPropus, construiestePayload, serieCanon,
 } from './izoImportStoc.js'
@@ -229,15 +230,15 @@ describe('review #807 r2 + răspunsurile MP', () => {
     expect(ok.corectii[0]).toMatchObject({ camp: 'iesire', motiv: 'încă în stoc' })
   })
   it('corectii_camp: pe rânduri / pe aviz, dată validată, fără wildcard, urmă în sursă', () => {
-    const dec = { corectii_camp: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', randuri: [13], camp: 'pv_nr', valoare: '86188', motiv: 'MP' },
+    const dec = { corectii_camp: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', randuri: [13], serie: '264DB00025', camp: 'pv_nr', valoare: '86188', motiv: 'MP' },
                                   { camp: 'data_aviz', valoare: '2026-01-01' }] }
     const b = ev([rStd({ 9: null })], 'TEAVA 8.8 MM', 12, dec).randuri[0]
     expect(b.pv_nr).toBe('86188')
     expect(b.corectii).toEqual([{ camp: 'pv_nr', inainte: null, dupa: '86188', motiv: 'MP' }])
     expect(construiestePayload([b], [], 'x').bucati[0].sursa.corectii.length).toBe(1)
-    const rau = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ fisier: 'X.xlsx', randuri: [13], camp: 'data_iesire', valoare: '2026-02-31' }] }).randuri[0]
+    const rau = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', randuri: [{ rand: 13, serie: '264DB00025' }], camp: 'data_iesire', valoare: '2026-02-31' }] }).randuri[0]
     expect(rau.probleme.join()).toMatch(/nu e o dată/)
-    const nepermis = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ fisier: 'X.xlsx', randuri: [13], camp: 'serie', valoare: 'X' }] }).randuri[0]
+    const nepermis = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', randuri: [13], serie: '264DB00025', camp: 'serie', valoare: 'X' }] }).randuri[0]
     expect(nepermis.probleme.join()).toMatch(/câmp nepermis/)
   })
   it('depozit_grup cu notă și neconformitate acceptată cu notă → observații', () => {
@@ -283,5 +284,34 @@ describe('review #807 r3', () => {
   it('corecție fără fișier nu se aplică nicăieri', () => {
     const b = ev([rStd({ 9: null })], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ foaie: 'TEAVA 8.8 MM', randuri: [13], camp: 'pv_nr', valoare: '1' }] })
     expect(b.pv_nr).toBe(null)
+  })
+})
+
+describe('review #807 r4', () => {
+  it('selectorul pe rânduri cere fișier + foaie + seria de control; lipsa = problemă globală', () => {
+    expect(problemeCorectii({ corectii_camp: [{ fisier: 'X.xlsx', randuri: [618], serie: 'S', camp: 'data_iesire', valoare: '2026-06-12' }] }).join())
+      .toMatch(/fără foaie/)
+    expect(problemeCorectii({ corectii_camp: [{ fisier: 'X.xlsx', foaie: 'F', randuri: [1, 2], camp: 'pv_nr', valoare: '1' }] }).join())
+      .toMatch(/perechi \{rand, serie\}/)
+    expect(problemeCorectii({ corectii_camp: [{ fisier: 'X.xlsx', foaie: 'F', randuri: [1], camp: 'pv_nr', valoare: '1' }] }).join())
+      .toMatch(/seria de control/)
+    expect(problemeCorectii({ corectii_camp: [{ fisier: 'X.xlsx', foaie: 'F', randuri: [{ rand: 1, serie: 'A' }, { rand: 2, serie: 'B' }], camp: 'pv_nr', valoare: '1' }] }))
+      .toEqual([])
+    const { blocante_globale } = evalueaza([], { decizii: { corectii_camp: [{ fisier: 'X.xlsx', randuri: [1], serie: 'A', camp: 'pv_nr', valoare: '1' }] }, coduri, tronsoane })
+    expect(blocante_globale.length).toBe(1)
+  })
+  it('corecția pe un rând cu altă serie de control → blocant, neaplicată', () => {
+    const b = evalueaza(foaie('TEAVA 8.8 MM', [rStd({ 9: null })], 12).randuri, { coduri, tronsoane,
+      decizii: { corectii_camp: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', randuri: [{ rand: 13, serie: '264DB99999' }], camp: 'pv_nr', valoare: '1' }] } }).randuri[0]
+    expect(b.pv_nr).toBe(null)
+    expect(b.probleme.join()).toMatch(/seria de control/)
+  })
+  it('tronsonul din decizie lasă urmă la ORICE aplicare (TR lipsă / ambiguu)', () => {
+    const curba = (o = {}) => { const r = Array(25).fill(null); Object.assign(r, { 1: '362', 2: 'Curbe CMFØ 610/8/L360NE/6,1 - 20˚', 3: '2520914', 12: 'LOT 2', 13: 'TOPLET', 16: 'CJPT 0026', 17: 46259 }, o); return r }
+    const tr = { ...tronsoane, T16: 20, T17: 21 }
+    const a = evalueaza(foaie('CURBE LOT 2', [curba()], 12).randuri, { decizii: { tronson_aviz_serie: { 'CJPT 0026|362': 16 } }, coduri, tronsoane: tr }).randuri[0]
+    expect(a.corectii).toContainEqual({ camp: 'tronson', inainte: null, dupa: 16, motiv: 'tronson_aviz_serie' })
+    const b = evalueaza(foaie('CURBE LOT 2', [curba({ 1: '102', 16: 'CJPT 0004', 20: '16-17' })], 12).randuri, { decizii: { tronson_aviz: { 'CJPT 0004': 17 } }, coduri, tronsoane: tr }).randuri[0]
+    expect(b.corectii).toContainEqual({ camp: 'tronson', inainte: '16-17', dupa: 17, motiv: 'tronson_aviz' })
   })
 })

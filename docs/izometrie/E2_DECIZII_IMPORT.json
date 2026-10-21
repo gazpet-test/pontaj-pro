@@ -35,6 +35,11 @@
       "data": "2026-10-21",
       "autor": "Izometrie (review #807 r3)",
       "decizie": "neconformele 58/596 intră cu stare „carantina” (server-side, nedisponibile), nu doar cu notă — decizia MP din 21.10."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Izometrie (review #807 r4)",
+      "decizie": "corecțiile pe loturi de rânduri trec pe perechi {rand, serie} (seria de control citită din Excel); r618 păstrează seria de control."
     }
   ],
   "corectii_serie": {
@@ -191,14 +196,38 @@
       "fisier": "JUPANESTI__LOT_2_TEAVA.xlsx",
       "foaie": "TEAVA 7.1 MM",
       "randuri": [
-        452,
-        453,
-        454,
-        456,
-        457,
-        458,
-        459,
-        460
+        {
+          "rand": 452,
+          "serie": "247EK08578"
+        },
+        {
+          "rand": 453,
+          "serie": "247EK09238"
+        },
+        {
+          "rand": 454,
+          "serie": "247EK08273"
+        },
+        {
+          "rand": 456,
+          "serie": "247EK08720"
+        },
+        {
+          "rand": 457,
+          "serie": "247EK08719"
+        },
+        {
+          "rand": 458,
+          "serie": "247EK07850"
+        },
+        {
+          "rand": 459,
+          "serie": "247EK06347"
+        },
+        {
+          "rand": 460,
+          "serie": "247EK09028"
+        }
       ],
       "camp": "data_iesire",
       "valoare": "2026-09-05",
@@ -233,36 +262,126 @@
       "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
       "foaie": "TEAVA 7.1 TOPLET",
       "randuri": [
-        1402,
-        1403,
-        1404,
-        1405,
-        1406,
-        1407,
-        1408,
-        1409,
-        1410,
-        1411,
-        1412,
-        1413,
-        1414,
-        1415,
-        1416,
-        1417,
-        1418,
-        1419,
-        1420,
-        1421,
-        1422,
-        1423,
-        1424,
-        1425,
-        1426,
-        1427,
-        1428,
-        1429,
-        1430,
-        1431
+        {
+          "rand": 1402,
+          "serie": "247EK07226"
+        },
+        {
+          "rand": 1403,
+          "serie": "247EK07557"
+        },
+        {
+          "rand": 1404,
+          "serie": "247EK07248"
+        },
+        {
+          "rand": 1405,
+          "serie": "247EK07352"
+        },
+        {
+          "rand": 1406,
+          "serie": "247EK07325"
+        },
+        {
+          "rand": 1407,
+          "serie": "247EK08643"
+        },
+        {
+          "rand": 1408,
+          "serie": "247EK09231"
+        },
+        {
+          "rand": 1409,
+          "serie": "247EK07131"
+        },
+        {
+          "rand": 1410,
+          "serie": "247EK07216"
+        },
+        {
+          "rand": 1411,
+          "serie": "247EK07122"
+        },
+        {
+          "rand": 1412,
+          "serie": "247EK06586"
+        },
+        {
+          "rand": 1413,
+          "serie": "247EK08707"
+        },
+        {
+          "rand": 1414,
+          "serie": "247EK08113"
+        },
+        {
+          "rand": 1415,
+          "serie": "247EK08386"
+        },
+        {
+          "rand": 1416,
+          "serie": "247EK08777"
+        },
+        {
+          "rand": 1417,
+          "serie": "247EK08931"
+        },
+        {
+          "rand": 1418,
+          "serie": "247EK09184"
+        },
+        {
+          "rand": 1419,
+          "serie": "247EK09006"
+        },
+        {
+          "rand": 1420,
+          "serie": "247EK08968"
+        },
+        {
+          "rand": 1421,
+          "serie": "247EK08007"
+        },
+        {
+          "rand": 1422,
+          "serie": "247EK09185"
+        },
+        {
+          "rand": 1423,
+          "serie": "247EK08963"
+        },
+        {
+          "rand": 1424,
+          "serie": "247EK08017"
+        },
+        {
+          "rand": 1425,
+          "serie": "247EK08656"
+        },
+        {
+          "rand": 1426,
+          "serie": "247EK08008"
+        },
+        {
+          "rand": 1427,
+          "serie": "247EK07938"
+        },
+        {
+          "rand": 1428,
+          "serie": "247EK09085"
+        },
+        {
+          "rand": 1429,
+          "serie": "247EK09155"
+        },
+        {
+          "rand": 1430,
+          "serie": "247EK07949"
+        },
+        {
+          "rand": 1431,
+          "serie": "247EK08619"
+        }
       ],
       "camp": "pv_nr",
       "valoare": "86188",

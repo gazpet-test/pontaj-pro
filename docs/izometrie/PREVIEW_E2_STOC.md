@@ -1,6 +1,6 @@
 # Izometrie E2a-2 — preview sold inițial LOT 2 (fără scriere)
 
-Generat: 2026-10-21T10:06:33.463Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 `64de0011e81e04e6…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
+Generat: 2026-10-21T10:19:03.158Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 `8635ca6ccf810aa1…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
 
 ## Sursele
 
@@ -88,5 +88,5 @@ Niciuna.
 
 ## Verdict
 
-**APLICABIL.** Payload: `PREVIEW_E2_STOC.payload.json` (3352 bucăți, sha256 fișier `e00bfa7c937e075c002c39c16db585534249e8471740b88b3ef77f111a1bda96`). Se aplică doar de sesiunea de chat, după „da”-ul lui Razvan, într-un SINGUR apel (activare + import, fără blocaj circular): `fn_izo_activeaza_si_importa(3, '<import_id>', <payload>, '<motiv>')`.
+**APLICABIL.** Payload: `PREVIEW_E2_STOC.payload.json` (3352 bucăți, sha256 fișier `47edcaf0a67d16a8d4878b8487ebb610e3753976ef17d5cc397a4b10fc240ebe`). Se aplică doar de sesiunea de chat, după „da”-ul lui Razvan, într-un SINGUR apel (activare + import, fără blocaj circular): `fn_izo_activeaza_si_importa(3, '<import_id>', <payload>, '<motiv>')`.
 

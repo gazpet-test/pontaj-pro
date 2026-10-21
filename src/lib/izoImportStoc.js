@@ -163,13 +163,33 @@ export function depozitPropus(b, coduri) {
 const CAMPURI_CORECTABILE = new Set(['data_iesire', 'pv_nr', 'pv_data', 'data_aviz', 'data_nrcd'])
 const RE_ISO = /^(\d{4})-(\d{2})-(\d{2})$/
 const isoValid = v => { const m = String(v || '').match(RE_ISO); return !!m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toISOString().slice(0, 10) === v }
+// rândurile unei corecții: [{rand, serie}] (lot) sau [rand] + serie (un singur rând) — seria de control e obligatorie
+const randuriCorectie = c => (c.randuri || []).map(r => (typeof r === 'object' ? { rand: r.rand, serie: r.serie } : { rand: r, serie: c.serie }))
+/** Validarea corecțiilor de câmp, ÎNAINTEA aplicării (Copilot #807 r4 P1): un selector pe rânduri cere fișier + foaie
+ *  (numărul de rând e unic doar în foaie) și seria de control pentru fiecare rând; lipsa = problemă globală (fail-closed). */
+export function problemeCorectii(decizii) {
+  const out = []
+  for (const [i, c] of (decizii.corectii_camp || []).entries()) {
+    const et = `corectii_camp[${i}] (${c.camp})`
+    if (!c.fisier) out.push(`${et}: fără fișier`)
+    if (!c.randuri && !c.aviz_iesire) out.push(`${et}: fără selector (rânduri sau avize)`)
+    if (c.randuri) {
+      if (!c.foaie) out.push(`${et}: selector pe rânduri fără foaie (rândul e unic doar în foaie)`)
+      if (!Array.isArray(c.randuri) || !c.randuri.length) out.push(`${et}: randuri gol`)
+      else if (c.randuri.length > 1 && c.randuri.some(r => typeof r !== 'object')) out.push(`${et}: un lot de rânduri cere perechi {rand, serie}`)
+      else if (randuriCorectie(c).some(r => !Number.isInteger(r.rand) || !r.serie)) out.push(`${et}: fiecare rând cere numărul și seria de control`)
+    }
+  }
+  return out
+}
 function selectorBate(c, b) {
   if (!c.randuri && !c.aviz_iesire) return false   // fără selector pe rânduri / avize = nu se aplică nicăieri (fără wildcard)
   if (!c.fisier || c.fisier !== b.sursa.fisier) return false   // fișierul e obligatoriu (fără potriviri între workbook-uri)
+  if (c.randuri && !c.foaie) return false                     // rândul fără foaie nu identifică unic (problemă globală)
   if (c.foaie && c.foaie !== b.sursa.foaie) return false
-  if (c.randuri && !c.randuri.includes(b.sursa.rand)) return false
+  if (c.randuri && !randuriCorectie(c).some(r => r.rand === b.sursa.rand)) return false
   if (c.aviz_iesire && !c.aviz_iesire.includes(b.aviz_iesire)) return false
-  if (c.serie && String(c.serie).toUpperCase() !== b.serie) return false
+  if (!c.randuri && c.serie && String(c.serie).toUpperCase() !== b.serie) return false
   return true
 }
 
@@ -179,7 +199,8 @@ function selectorBate(c, b) {
  *            depozit_grup: {grup: COD | {cod, nota}}, tronson_grup: {text: nr},
  *            tronson_aviz: {aviz: nr} (TR ambiguu sau lipsă), tronson_aviz_serie: {'aviz|serie': nr} (prioritar),
  *            ignora_iesire: [{fisier, foaie, rand, motiv}] (câmpuri de ieșire care nu sunt o ieșire reală),
- *            corectii_camp: [{fisier, foaie?, randuri? | aviz_iesire?, serie?, camp, valoare, motiv}],
+ *            corectii_camp: [{fisier, foaie (obligatorie cu randuri), randuri: [{rand, serie}] | [rand] + serie, | aviz_iesire,
+ *                             camp, valoare, motiv}],
  *            accepta_neconformitate: [{fisier, foaie, rand, serie, nota?, carantina?}], accepta_sarja: [serie],
  *            accepta_iesire_integrala: [{fisier, foaie, rand, serie, motiv}] (diferență de rotunjire, pe rândul numit) }
  * Deciziile pe rânduri (ignora_iesire, accepta_neconformitate, accepta_iesire_integrala) poartă seria de control: dacă
@@ -210,6 +231,11 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     // corecțiile de câmp (răspunsurile MP), înaintea oricărei validări
     for (const c of decizii.corectii_camp || []) {
       if (!selectorBate(c, b)) continue
+      // seria de control a rândului: dacă nu bate, corecția e pe rândul greșit → blocant, nu se aplică
+      const rc = c.randuri ? randuriCorectie(c).find(r => r.rand === b.sursa.rand) : null
+      if (rc && ![b.serie, b.serie_bruta].some(x => serieCanon(x) === serieCanon(rc.serie))) {
+        b.probleme.push(`corecția ${c.camp} pe rândul ${b.sursa.rand} are seria de control „${rc.serie}”, rândul are „${b.serie_bruta}”`); continue
+      }
       if (!CAMPURI_CORECTABILE.has(c.camp)) { b.probleme.push(`corecție pe câmp nepermis „${c.camp}”`); continue }
       const esteData = c.camp !== 'pv_nr'
       if (esteData && !isoValid(c.valoare)) { b.probleme.push(`corecția ${c.camp} = „${c.valoare}” nu e o dată AAAA-LL-ZZ validă`); continue }
@@ -267,12 +293,16 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
       const ovSerie = decizii.tronson_aviz_serie?.[`${b.aviz_iesire}|${b.serie}`]
       const ovAviz = decizii.tronson_aviz?.[b.aviz_iesire]
       const trExcel = b.tronson_iesire
+      const trText = trExcel ? (trExcel.ambiguu ?? trExcel.nr) : null
       if (ovSerie != null) {
-        // decizia pe bucată (aviz + serie) câștigă, cu urmă dacă Excel-ul spunea altceva
-        if (trExcel?.nr != null && trExcel.nr !== Number(ovSerie)) b.corectii.push({ camp: 'tronson', inainte: trExcel.nr, dupa: Number(ovSerie), motiv: 'tronson_aviz_serie' })
+        // decizia pe bucată (aviz + serie) câștigă — cu urmă la ORICE aplicare (Copilot #807 r4 P2)
+        b.corectii.push({ camp: 'tronson', inainte: trText, dupa: Number(ovSerie), motiv: 'tronson_aviz_serie' })
         b.tronson_iesire = { nr: Number(ovSerie), din_decizie: true }
       } else if (ovAviz != null) {
-        if (!trExcel || trExcel.ambiguu) b.tronson_iesire = { nr: Number(ovAviz), din_decizie: true }
+        if (!trExcel || trExcel.ambiguu) {
+          b.corectii.push({ camp: 'tronson', inainte: trText, dupa: Number(ovAviz), motiv: 'tronson_aviz' })
+          b.tronson_iesire = { nr: Number(ovAviz), din_decizie: true }
+        }
         else if (trExcel.nr !== Number(ovAviz))
           b.probleme.push(`conflict tronson: Excel T${trExcel.nr}, decizia pe avizul ${b.aviz_iesire} T${ovAviz} — de decis pe bucată (tronson_aviz_serie)`)
       }
@@ -325,9 +355,10 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
       b.probleme.push(m); a.probleme.push(`coliziune ${b.tip === 'teava' ? 'serie' : 'curbă'} cu ${b.sursa.foaie} r${b.sursa.rand}`)
     } else vazute.set(k, b)
   }
-  // rândurile fără serie dar cu material: blocante, cu excepția celor excluse explicit în decizii
+  // rândurile fără serie dar cu material: blocante, cu excepția celor excluse explicit în decizii; plus deciziile malformate
   const blocante_globale = faraSerie.filter(f => !exclDec.has(cheieSursa(f.sursa)))
     .map(f => ({ sursa: f.sursa, problema: `rând fără serie, cu ${f.campuri.join(' / ')} completate` }))
+    .concat(problemeCorectii(decizii).map(pr => ({ sursa: { fisier: '(decizii)', foaie: 'corectii_camp', rand: 0 }, problema: pr })))
   for (const f of faraSerie) if (exclDec.has(cheieSursa(f.sursa))) excluse.push({ sursa: f.sursa, serie: '', motiv: `decizie: ${exclDec.get(cheieSursa(f.sursa))}` })
   return { randuri: out, excluse, blocante_globale }
 }
