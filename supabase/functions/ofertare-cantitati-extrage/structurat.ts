@@ -26,18 +26,20 @@ export const MAX_IESIRE = 16000
 export type Tarif = (tokeniIntrare: number) => { in: number; out: number }
 // escaladare (PR A3): al doilea model, apelat cel mult o dată pe felie, pe semnale deterministe
 export type Extractor = { cheie: 'A' | 'B'; model: string; prompt: string; normalizator: string; feliere: string
-  tarif: Tarif; promptFelie: (nume: string, rol: string) => string; escaladare?: { model: string; tarif: Tarif }
+  tarif: Tarif; promptFelie: (nume: string, rol: string) => string
+  // politica: semnalele care declanșează escaladarea ('q1' = doar calitatea răspunsului: incert / nenormalizabile; 21.10.2026)
+  escaladare?: { model: string; tarif: Tarif; politica?: string }
   // octeți adăugați la prompt în rezervare pentru intrarea facturată care NU e în prompt (schema structured outputs, încadrarea cererii)
   overheadOcteti: number }
 export const EXTRACTOARE: Record<'A' | 'B', Extractor> = {
   B: { cheie: 'B', ...EXTRACTOR, tarif: () => TARIF, promptFelie: (n, r) => PROMPT_STRUCTURAT(n, r), overheadOcteti: 0 },
   A: { cheie: 'A', model: MODEL_A, prompt: 'p4', normalizator: 'n5', feliere: 'f2', tarif: tarifA, promptFelie: (n, r) => PROMPT_A(n, r),
-    escaladare: { model: MODEL_S, tarif: tarifS }, overheadOcteti: OVERHEAD_A },
+    escaladare: { model: MODEL_S, tarif: tarifS, politica: 'q1' }, overheadOcteti: OVERHEAD_A },
 }
-// identitatea include și modelul de escaladare (alt rezultat posibil = alt cache): claude-haiku-5-5/claude-sonnet-5-5@p4@n5@f2.
+// identitatea include și modelul de escaladare (alt rezultat posibil = alt cache): claude-haiku-5-5/claude-sonnet-5-5:q1@p4@n5@f2.
 // Separatorul e „/” (fix 20.10, bug în producție): „>” nu e permis de CHECK-ul ofertare_cant_extrageri.extractor_id
 // ^[A-Za-z0-9._:@/-]{3,200}$ — orice id nou se verifică în idExtractor_test.ts contra regex-ului citit din migrare
-export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '/' + e.escaladare.model : ''}@${e.prompt}@${e.normalizator}@${e.feliere}`
+export const idExtractor = (e: Extractor) => `${e.model}${e.escaladare ? '/' + e.escaladare.model + (e.escaladare.politica ? ':' + e.escaladare.politica : '') : ''}@${e.prompt}@${e.normalizator}@${e.feliere}`
 // review Jakarinos #757 r1 (P1): 'lista_alt' rămâne extrasă — eticheta e euristică (o pagină F3 / un memoriu pot moșteni lista_alt), deci
 // excluderea ei poate tăia lungimi reale; rândurile C7 / C8 întoarse ca obiecte sunt acum normalizabile (n4)
 const ROLURI_EXTRASE: Rol[] = ['f3', 'c6', 'lista_alt', 'atr', 'cs', 'fisa_date', 'memoriu', 'plansa', 'raspuns']
@@ -281,7 +283,9 @@ export async function extrageStructurat(deps: DepsStructurat, p: { licitatie_id:
       if (xt.escaladare && !r.eroare) {
         if (r.necunoscut) escaladare.push('incert')
         else if (rez && rez.pierdute) escaladare.push(`nenormalizabile:${rez.pierdute}`)
-        else if (rez && rez.pb.aplicabil && rez.pb.deficit) escaladare.push(`deficit_b1:${rez.pb.acoperite}/${rez.pb.ancore}`)
+        // decizia Răzvan 21.10.2026 (propunerea 1A, după proba Răcari): deficitul B1 NU mai declanșează escaladarea — 21 de felii
+        // escaladate pe deficit au costat 2,42 din 2,52 USD fără să închidă vreun deficit (cauza era dovada, reparată în n5). Deficitul
+        // rămâne raportat (poarta_b1) pentru B2 / om; Sonnet doar pe semnal de calitate a răspunsului Haiku (tăiat / refuz / nenormalizabile)
         if (escaladare.length) {
           const r2 = await apel('escaladare')
           tokIn += r2.inF; tokOut += r2.outF
