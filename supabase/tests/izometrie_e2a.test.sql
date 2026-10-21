@@ -472,6 +472,22 @@ DROP FUNCTION public.r13_set_config();
 CREATE FUNCTION public.r13_fix() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN RETURN (SELECT count(*) FROM r13_v); END $$;
 SELECT teste.e('T13n3 DEFINER cu search_path = public fixat, nume din schema platformei necalificat → nu e muchie (nu se rezolvă acolo)',
   cardinality(public.fn_izo_porti_lipsa()) = 0);
+-- r15 (Jakarinos + Copilot r14): mutatorii de cale — set_config cu argument variabil, helper mutator, mutator tranzitiv
+CREATE FUNCTION public.r15_jak() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE k text := 'search' || '_path'; BEGIN PERFORM set_config(k, 'extensions, public', true); RETURN (SELECT count(*) FROM r13_v); END $$;
+SELECT teste.eroare('T13o exemplul Jak: set_config(k, …) cu argument variabil → mutator → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION public.r15_jak();
+CREATE FUNCTION public.schimba_calea() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM set_config('search_path', 'extensions, public', true); END $$;
+CREATE FUNCTION public.r15_cop() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN PERFORM schimba_calea(); RETURN (SELECT count(*) FROM r13_v); END $$;
+SELECT teste.eroare('T13p exemplul Copilot: DEFINER cu cale fixată care cheamă un helper mutator → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION public.r15_cop();
+CREATE FUNCTION public.r15_nivel1() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM schimba_calea(); END $$;
+CREATE FUNCTION public.r15_tranz() RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN PERFORM r15_nivel1(); RETURN (SELECT count(*) FROM r13_v); END $$;
+SELECT teste.eroare('T13q mutator tranzitiv pe 2 niveluri (DEFINER → nivel1 → schimba_calea) → refuz', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'DEFINER din afara registrului');
+DROP FUNCTION public.r15_tranz(); DROP FUNCTION public.r15_nivel1(); DROP FUNCTION public.schimba_calea();
+SELECT teste.e('T13q2 după curățare: porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
 DROP FUNCTION public.r13_fix(); DROP VIEW extensions.r13_v;
 DO $s$ BEGIN IF to_regclass('teste.creat_extensions') IS NOT NULL THEN DROP SCHEMA extensions; DROP TABLE teste.creat_extensions; END IF; END $s$;
 SELECT teste.e('T13e porțile refăcute după citirile nerevizuite; proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
