@@ -326,6 +326,56 @@ ok "4i bon RPC (revenirea cu chei → retragere, apoi relivrare): $NB verificăr
 ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
 ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 
+# 4j. 20261102c — căile vechi la nivelul stoc (decizia Razvan 21.10, varianta A): livrare prin runner peste E2a + bon,
+#     expresia <amprenta> copiată textual, teste SQL, reaplicare → refuz, revenire (nearmată → refuz; armată → corpurile
+#     și amprentele E2a), relivrare
+MIG_CAI="$RADACINA/supabase/migrations/20261102c_izometrie_cai_vechi_stoc.sql"
+REV_CAI="$RADACINA/supabase/revenire/20261102c_izometrie_cai_vechi_stoc_ROLLBACK.sql"
+[ "$(bloc_amprenta "$MIG_CAI")" = "$(bloc_amprenta "$MIGRARE"; bloc_amprenta "$MIGRARE")" ] || esec "4j <amprenta> din 20261102c diferă de 20261102a"
+[ "$(bloc_amprenta "$REV_CAI")" = "$(bloc_amprenta "$MIGRARE"; bloc_amprenta "$MIGRARE")" ] || esec "4j <amprenta> din revenirea 20261102c diferă de 20261102a"
+"${PSQL[@]}" -d "$BAZA" -f "$MIG_CAI" >/dev/null 2>&1 && esec "4j 20261102c fără runner a trecut"
+# Doar în harness: helperele de test teste.eroare / teste.n au SQL dinamic (EXECUTE), deci intră în închiderea porții de
+# citiri, iar fn_bon_* (DEFINER, 20261102b) le „numesc” textual (cuvintele „eroare” / „n” din corp) → fals-pozitiv
+# „DEFINER din afara registrului poate citi registrul”. Pe producție schema teste nu există (porțile = {} verificat 21.10).
+# Le redenumim cât rulează livrarea / revenirea / verificarea porților, apoi le punem la loc pentru testele SQL.
+teste_ascunse() { q "ALTER FUNCTION teste.eroare(text,text,text) RENAME TO zz_eroare_4j; ALTER FUNCTION teste.n(text) RENAME TO zz_n_4j" >/dev/null; }
+teste_inapoi()  { q "ALTER FUNCTION teste.zz_eroare_4j(text,text,text) RENAME TO eroare; ALTER FUNCTION teste.zz_n_4j(text) RENAME TO n" >/dev/null; }
+porti() { q "SELECT cardinality(public.fn_izo_porti_lipsa())"; }
+teste_ascunse
+[ "$(porti)" = 0 ] || esec "4j porțile nu sunt complete înainte de 20261102c (cu helperele ascunse)"
+AMPR_E2A_ACUM="$(q "SELECT substring(obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})')")"
+livreaza "$BAZA" 20261102140000 "$MIG_CAI" >/dev/null
+gate_0e "după 20261102c"
+[ "$(porti)" = 0 ] || esec "4j porțile nu sunt complete după 20261102c"
+teste_inapoi
+AMPR_CAI="$(q "SELECT substring(obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})')")"
+grep -q "'$AMPR_CAI'" "$ROLLBACK" || esec "4j amprenta după 20261102c ($AMPR_CAI) nu e în c_amprente din revenirea E2a"
+[ "$(q "SELECT substring(obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') FROM 'inainte_20261102c=([0-9a-f]{32})')")" = "$AMPR_E2A_ACUM" ] || esec "4j valoarea de dinainte nu e păstrată în COMMENT"
+OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_cai_vechi.test.sql" 2>&1)" || { echo "$OUT" | grep -E 'ERROR|TEST' >&2; esec "4j teste căi vechi"; }
+grep -q 'TESTE CAI VECHI: TOATE OK' <<<"$OUT" || esec "4j testele nu au ajuns la final"
+NC="$(grep -c 'NOTICE:  OK' <<<"$OUT")"
+teste_ascunse
+[ "$(porti)" = 0 ] || esec "4j porțile nu sunt complete după testele 20261102c"
+OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '20261102c_izometrie_cai_vechi_stoc:' || txid_current(), true);" -f "$MIG_CAI" 2>&1)" && esec "4j reaplicare a trecut"
+grep -q "Precondiție 0c" <<<"$OUT" || esec "4j reaplicare refuzată din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$REV_CAI" 2>&1)" && esec "4j revenire nearmată a trecut"
+grep -q "nearmată" <<<"$OUT" || esec "4j revenire refuzată din alt motiv"
+OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102c', 'IZO_CAI_STOC_SCOATE:' || txid_current(), true);" -f "$REV_CAI" 2>&1)" \
+  || { echo "$OUT" >&2; esec "4j revenirea armată a eșuat"; }
+[ "$(q "SELECT string_agg(md5(prosrc), ',' ORDER BY proname) FROM pg_proc WHERE proname IN ('fn_izo_refuz_delete_tevi','fn_izo_refuz_mutare_tevi','fn_izo_refuz_delete_pachet')")" \
+  = "e9729f3e1f3609262db5600cbfe76388,b9903281aa585f48f0768b514713a0c3,898a6ace8fb4faa955e577632645ae50" ] || esec "4j revenirea nu a refăcut corpurile E2a"
+[ "$(q "SELECT substring(obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})') || ':' || cardinality(public.fn_izo_porti_lipsa())")" = "$AMPR_E2A_ACUM:0" ] \
+  || esec "4j după revenire: amprenta / porțile nu sunt cele de dinainte"
+q "SELECT set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-0000-0000-000000000117', 'role', 'authenticated')::text, false); SET ROLE authenticated; INSERT INTO public.executie_tevi (pachet_id, serie_unica, lungime_m) VALUES (201, 'REV1', 12)" >/dev/null
+OUT="$(q "SELECT set_config('request.jwt.claims', json_build_object('sub', '00000000-0000-0000-0000-000000000117', 'role', 'authenticated')::text, false); SET ROLE authenticated; DELETE FROM public.executie_tevi WHERE serie_unica = 'REV1'" 2>&1)" && esec "4j după revenire, ștergerea pe LOT 2 a trecut"
+grep -q "nu se șterg din client" <<<"$OUT" || esec "4j după revenire refuz din alt motiv"
+q "DELETE FROM supabase_migrations.schema_migrations WHERE name = '20261102c_izometrie_cai_vechi_stoc'" >/dev/null
+livreaza "$BAZA" 20261102140001 "$MIG_CAI" >/dev/null
+[ "$(porti)" = 0 ] || esec "4j porțile nu sunt complete după relivrare"
+teste_inapoi
+[ "$(q "SELECT substring(obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})')")" = "$AMPR_CAI" ] || esec "4j relivrarea dă altă amprentă"
+ok "4j 20261102c (căile vechi la stoc): $NC verificări SQL (stoc: rânduri nelegate șterse / mutate / REPLACE / pachet; legat → refuz; montaj → refuz; restul blocat ca înainte) · reaplicare → refuz · revenire nearmată → refuz, armată → corpurile + amprentele E2a, ștergerea LOT 2 iar refuzată · relivrare → aceeași amprentă ($AMPR_CAI)"
+
 refuza_cu "5 reaplicare" "Precondiție 0b"
 ok "5 reaplicare → refuz"
 
@@ -376,6 +426,9 @@ ok "6-pre2 tabel ținut de un TRUNCATE în curs → activarea așteaptă tabelul
 q "ALTER TABLE public.izo_proiect_config DISABLE TRIGGER trg_izo_cfg_garda; DELETE FROM public.izo_proiect_config; ALTER TABLE public.izo_proiect_config ENABLE ALWAYS TRIGGER trg_izo_cfg_garda" >/dev/null
 BAZA="$BAZA_SALVATA"
 ok "6-pre TRUNCATE pe țevi în timpul unei activări → așteaptă și e refuzat pe nivelul nou (baza curată readusă la „fără date”)"
+# 20261102c pe baza curată: revenirea E2a trebuie să accepte amprenta de după 20261102c (c_amprente) și să scoată tot
+livreaza "$BAZA2" 20261102140000 "$MIG_CAI" >/dev/null
+[ "$(q2 "SELECT substring(obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})')")" = "$AMPR_CAI" ] || esec "6-pre3 amprenta după 20261102c diferă între baze"
 q2 "ALTER TABLE public.izo_atribuiri ADD COLUMN extra text" >/dev/null
 OUT="$(revenire "$BAZA2")" && esec "6d revenire pe obiecte modificate a trecut"
 grep -q "amprenta obiectelor izo diferă" <<<"$OUT" || esec "6d refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
