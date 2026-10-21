@@ -376,6 +376,32 @@ teste_inapoi
 [ "$(q "SELECT substring(obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})')")" = "$AMPR_CAI" ] || esec "4j relivrarea dă altă amprentă"
 ok "4j 20261102c (căile vechi la stoc): $NC verificări SQL (stoc: rânduri nelegate șterse / mutate / REPLACE / pachet; legat → refuz; montaj → refuz; restul blocat ca înainte) · reaplicare → refuz · revenire nearmată → refuz, armată → corpurile + amprentele E2a, ștergerea LOT 2 iar refuzată · relivrare → aceeași amprentă ($AMPR_CAI)"
 
+# 4j2. curse cu barieră DUPĂ 20261102c (Jak #823 P2): trecerea pe montaj (writer, lock exclusiv pe proiect, ca
+#      fn_izo_seteaza_nivel) ↔ DELETE / mutare din client a unui rând nelegat de pe LOT 2 (stoc), în ambele ordini
+CA_WRITER="SET LOCAL ROLE izo_registru_writer; SELECT set_config('izo.registru_tx', txid_current()::text, true)"
+LA_MONTAJ="$CA_WRITER; SELECT public.fn_izo_lock_proiect(3, true); UPDATE public.izo_proiect_config SET nivel_izo = 'montaj' WHERE proiect_id = 3"
+la_stoc() { q "BEGIN; $CA_WRITER; SELECT public.fn_izo_lock_proiect(3, true); UPDATE public.izo_proiect_config SET nivel_izo = 'stoc' WHERE proiect_id = 3; COMMIT;" >/dev/null
+  [ "$(q "SELECT public.fn_izo_nivel(3)")" = stoc ] || esec "4j2 proiectul 3 nu a revenit la stoc"; }
+pachet_de() { q "SELECT coalesce((SELECT pachet_id::text FROM public.executie_tevi WHERE serie_unica = '$1'), 'sters')"; }
+q "BEGIN; $CA_TOMA; INSERT INTO public.executie_tevi (pachet_id, serie_unica, lungime_m) VALUES (201, 'CR1', 12), (201, 'CR2', 12), (201, 'CR3', 12), (201, 'CR4', 12); COMMIT;" >/dev/null
+cursa "4j2a montaj ținut, apoi DELETE din client" "$LA_MONTAJ" \
+  "BEGIN; $CA_TOMA; DELETE FROM public.executie_tevi WHERE serie_unica = 'CR1'; COMMIT;" err "nivelul montaj"
+[ "$(pachet_de CR1)" = 201 ] || esec "4j2a rândul a dispărut"
+la_stoc
+cursa "4j2b montaj ținut, apoi mutare din client" "$LA_MONTAJ" \
+  "BEGIN; $CA_TOMA; UPDATE public.executie_tevi SET pachet_id = 202 WHERE serie_unica = 'CR2'; COMMIT;" err "nivelul montaj"
+[ "$(pachet_de CR2)" = 201 ] || esec "4j2b rândul s-a mutat"
+la_stoc
+cursa "4j2c DELETE din client ținut, apoi montaj" "$CA_TOMA; DELETE FROM public.executie_tevi WHERE serie_unica = 'CR3'" \
+  "BEGIN; $LA_MONTAJ; SELECT 'nivel:' || public.fn_izo_nivel(3); COMMIT;" ok "nivel:montaj"
+[ "$(pachet_de CR3)" = sters ] || esec "4j2c ștergerea începută la stoc nu s-a aplicat"
+la_stoc
+cursa "4j2d mutare din client ținută, apoi montaj" "$CA_TOMA; UPDATE public.executie_tevi SET pachet_id = 202 WHERE serie_unica = 'CR4'" \
+  "BEGIN; $LA_MONTAJ; SELECT 'nivel:' || public.fn_izo_nivel(3); COMMIT;" ok "nivel:montaj"
+[ "$(pachet_de CR4)" = 202 ] || esec "4j2d mutarea începută la stoc nu s-a aplicat"
+la_stoc
+ok "4j2 după 20261102c, curse cu barieră în ambele ordini: montaj ținut → DELETE / mutare din client așteaptă și e refuzată pe nivelul nou · DELETE / mutare ținute la stoc → trecerea pe montaj așteaptă, apoi trece, iar operația clientului rămâne aplicată"
+
 refuza_cu "5 reaplicare" "Precondiție 0b"
 ok "5 reaplicare → refuz"
 

@@ -4,6 +4,8 @@
 -- fn_izo_porti_definitii) și revenirea E2a (COMMENT pe magazie_bucati_evenimente, la valoarea de dinainte de 20261102c).
 -- Refuză dacă gărzile nu au definiția 20261102c sau dacă amprenta de revenire diferă de COMMENT (ceva s-a schimbat după).
 -- Efect pe LOT 2: ștergerea / mutarea rândurilor de pachet din ecranul vechi redevine refuzată.
+-- Pe producție (LOT 2 populat, registrul plin) ACEASTA e calea de revenire pentru 20261102c: revenirea E2a (20261102a)
+-- refuză oricum cu date reale, deci nu e o alternativă — întoarcerea la comportamentul E2a se face DOAR prin acest fișier.
 -- Procedura (un singur string):
 --   BEGIN;
 --   SELECT set_config('gazpet.revenire_20261102c', 'IZO_CAI_STOC_SCOATE:' || txid_current(), true);
