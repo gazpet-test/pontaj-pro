@@ -506,6 +506,11 @@ BEGIN
       -- limitele unui identificator, inclusiv citat („"teste".f()”), fără \m / \M (ghilimelele nu sunt caractere de cuvânt)
       c_st constant text := '(^|[^[:alnum:]_$"])"?';
       c_dr constant text := '"?($|[^[:alnum:]_$])';
+      -- schemele platformei Supabase: obiectele lor din închidere (funcții INVOKER cu SQL dinamic: realtime.cast, storage.search…)
+      -- se potrivesc necalificat DOAR când schema e în search_path-ul funcției; ale noastre (orice altă schemă) se potrivesc
+      -- necalificat ÎNTOTDEAUNA — conservator, fals-pozitivele sunt acceptate (Copilot r12 P1)
+      c_scheme_platforma constant text[] := ARRAY['auth','storage','realtime','extensions','graphql','graphql_public','vault','net',
+                                                  'supabase_functions','supabase_migrations','pgbouncer','pgsodium','pgsodium_masks','cron'];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -525,8 +530,8 @@ BEGIN
                                    AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (c_rel))
                                         OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)))
                                    AND rw.ev_class <> ALL (c_rel));
-        -- funcțiile: corpul numește ceva din închidere — calificat (schema.nume, și citat) sau necalificat, dacă schema e în
-        -- search_path-ul FUNCȚIEI (proconfig; fără SET: public) — Jak r12 P2; sau depind de el în catalog (BEGIN ATOMIC)
+        -- funcțiile: corpul numește ceva din închidere — calificat (schema.nume, și citat) sau necalificat (pentru schemele
+        -- platformei: doar dacă schema e în search_path-ul FUNCȚIEI) — Jak + Copilot r12; sau depind de el în catalog (BEGIN ATOMIC)
         c_fn := c_fn || ARRAY(
           SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            CROSS JOIN LATERAL (SELECT p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '') AS corp,
@@ -540,7 +545,7 @@ BEGIN
                                          SELECT n2.nspname::text, regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
                                            FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (c_fn)) t
                            WHERE x.corp ~* (c_st || t.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume || c_dr)
-                              OR (t.nsp = ANY (x.cale) AND x.corp ~* (c_st || t.nume || c_dr)))
+                              OR ((t.nsp <> ALL (c_scheme_platforma) OR t.nsp = ANY (x.cale)) AND x.corp ~* (c_st || t.nume || c_dr)))
                   OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
                                 AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (c_rel))
                                      OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn))))));
