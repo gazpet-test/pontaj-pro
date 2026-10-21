@@ -38,6 +38,10 @@ if [ "$(q "SELECT to_regclass('public.magazie_bucati') IS NULL")" = t ]; then
   "${PSQL[@]}" -c "REVOKE TRUNCATE, MAINTAIN ON public.magazie_bucati, public.executie_bonuri_consum, public.executie_bonuri_consum_linii FROM anon, authenticated" >/dev/null
   q "CREATE UNIQUE INDEX IF NOT EXISTS user_module_access_profile_id_module_key ON public.user_module_access (profile_id, module)" >/dev/null
 fi
+# helper-ele de test ale scheletului (teste.n / teste.eroare au EXECUTE) nu există pe prod și nu sunt folosite aici; cu corpurile
+# EXACTE ale trigger-elor profiles (text românesc: „în” → identificatorul „n” la limita de cuvânt, colaționarea C) închiderea
+# E2a le-ar lega fals-pozitiv de un DEFINER (fail-closed, Postcondiția 5) — se scot, ca ținta să semene cu prod
+q "DROP SCHEMA IF EXISTS teste CASCADE" >/dev/null 2>&1 || true
 if [ "$(q "SELECT to_regclass('public.izo_documente_intrare') IS NULL")" = t ]; then
   python3 "$SRC/scripts/izometrie/e3_gen/proba_pg17/baseline_branch.py" "$SRC/supabase/tests/izometrie_e3_schelet_baseline.sql" /tmp/br_baseline.sql
   "${PSQL[@]}" --single-transaction -f /tmp/br_baseline.sql >/tmp/br_baseline.out 2>&1 || { tail -8 /tmp/br_baseline.out; esec "0 baseline-ul de prod pe branch"; }
