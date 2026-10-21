@@ -212,9 +212,8 @@ export const unghiRegistru = rn => (esteNr(rn.unghi_masurat) ? rn.unghi_masurat 
 /**
  * Cheia de dublură a unui rând în același document: țeava = seria canonică; curba = serie + șarjă + unghi (o bucată pe rând;
  * aceeași serie + șarjă cu alt unghi e legitimă — regula convenită pentru E3, aceeași cheie ca indexul curbelor din registru,
- * ux_magbuc_izo_curba). ATENȚIE: la capul migrării 20261103b (origin/izometrie/e3 @1d8e46e4) fn_izo_doc_blocante grupează
- * curbele doar pe serie + șarjă, fără unghi: două curbe cu aceeași serie + șarjă și unghiuri diferite trec aici, dar „Verifică”
- * le dă serie_dublura (închide, nu deschide). Care cheie rămâne (unghiul pe server sau scos de aici) decide sesiunea Izometrie.
+ * ux_magbuc_izo_curba). Din 20261103b r5f serverul folosește aceeași cheie (serie canonică + șarjă + coalesce(unghi_masurat,
+ * unghi_doc)), cu blocantul serie_dublura și mesajul „curba X / șarjă la U° apare de mai multe ori”.
  */
 export function cheieDubluraRand(rn, sablon) {
   if (!rn.serie_canon) return null
@@ -278,8 +277,8 @@ export function validareRand(rn, sablon) {
         v.push(explicat ? avert('unghi_masurat', t) : blocant('observatie', `${t} — scrie observația`))
       }
     }
-    // un rând = o bucată: la curbe cantitatea e exact 1 — regulă LOCALĂ până o impune și serverul (la 20261103b @1d8e46e4 coloana
-    // are doar CHECK cantitate > 0, totalul de bucăți adună cantitatea, dar în registru pleacă o singură bucată pe rând)
+    // un rând = o bucată: cantitatea e 1 sau goală — aceeași regulă ca serverul din 20261103b r5f (refuz 23514 „un rând = o bucată”),
+    // iar blocantul total_bucati de pe server compară cu numărul de rânduri
     if (esteNr(rn.cantitate) && rn.cantitate !== 1) v.push(blocant('cantitate', 'o curbă pe rând (cantitatea 1); pune fiecare curbă pe rândul ei'))
     if (rn.net_kg == null) v.push(avert('net_kg', 'lipsește greutatea netă (intră în total)'))
     const cod = verificaCodCurba(rn)
