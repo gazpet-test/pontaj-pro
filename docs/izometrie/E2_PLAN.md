@@ -127,7 +127,7 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 - **Mutate din E2a** (nu sunt folosite de nimic în E2a; intră cu ecranele/fluxurile care le scriu, fiecare cu migrarea și testele ei): `teava_certificate*` → E3 (certificatul 3.1 la recepție); `izo_tronson_config` (executant, sens, perete proiectat) și `izo_surse_proiect` / `izo_ax_ancore` → E2b/E4b; `fn_izo_dezambiguare` → E2b (doar dacă preview-ul arată coliziuni reale; azi importul le refuză).
 - **UI în E2a**: `STARE_META` din Magazie cu stările noi; filtrul din bonuri (bucățile beneficiar ale proiectelor protejate nu apar), tolerant la funcția încă neaplicată. Avertizarea de pe transport (Q-E2-1 = C) intră în E2b.
 - **Preview-ul soldului inițial** (`scripts/izometrie/preview_e2_stoc.mjs`) vine în PR-ul următor (E2a-2), înainte de orice import; importul și activarea rămân pe decizia de dimineață a lui Razvan.
-- **Harness**: `scripts/test_izometrie_e2a.sh` (PG16 local): 148 de verificări SQL (+ 15 pentru bonuri) + importul concurent + conexiune proaspătă / REPEATABLE READ / atribuire prin DEFINER din API + cursele cu barieră (ambele ordini, activare+import combinat, părinți, depozit șters) + refuzurile/revenirea. **Limită asumată**: în harness `postgres` e superuser, deci primitivele CREATE ROLE / ALTER OWNER / `pg_auth_members` pe Supabase se dovedesc doar pe branch (P1).
+- **Harness**: `scripts/test_izometrie_e2a.sh` (PG16 local): 153 de verificări SQL (+ 20 pentru bonuri) + importul concurent + conexiune proaspătă / REPEATABLE READ / atribuire prin DEFINER din API + cursele cu barieră (ambele ordini, activare+import combinat, părinți, depozit șters) + refuzurile/revenirea. **Limită asumată**: în harness `postgres` e superuser, deci primitivele CREATE ROLE / ALTER OWNER / `pg_auth_members` pe Supabase se dovedesc doar pe branch (P1).
 
 ### 4c. Corecturi după review-ul PR #806 (Codex P1/P2, Copilot + Gemini A–E)
 
@@ -188,6 +188,14 @@ Din §6.3 E2 + **testele negative cerute de review** (fiecare cu rezultatul așt
 - **Amprenta porților** (Codex r5 8): + FK-urile noi ale `magazie_bucati` (parinte, rădăcină, depozit, tronson); T12g (FK slăbit) / T12h (CHECK scos) → activarea refuzată.
 - **Wrapper-e** (Codex r5 6): porțile refuză dacă o funcție din afara writer-ului sau un view / o regulă cheamă funcțiile registrului (T12i). Entrypoint-urile rămân acordate doar lui postgres (aplicarea de chat).
 - **Paginarea** (Codex r5 9): pe cheie (id), nu pe offset — orice rând existent pe toată durata încărcării apare exact o dată.
+
+### 4h. r7 (Jakarinos r6 N1–N3, Copilot r6 a–c, review #807 r3 → carantina)
+
+- **Carantina**: stare beneficiar nouă `carantina` (CHECK + import în depozit) — neconformele 58/596 nu mai sunt stoc disponibil (decizia MP 21.10).
+- **Bonuri — creare idempotentă pe operație** (N1): coloana `cheie_operatie` (uuid, UNIQUE parțial), generată o dată în client la deschiderea formularului; numărul se ALOCĂ pe server, atomic (max+1 pe proiect și an, sub lock); `UNIQUE (proiect_id, numar_bon)` în BD (Copilot b) — o creare din afara RPC-ului nu poate dubla numărul. Două ferestre identice → două bonuri; retry-ul aceleiași operații → același bon.
+- **Bonuri — comparația de idempotență** (N2): antetul se blochează FOR SHARE înaintea citirilor de comparație (retry creare și retry editare). Harness 4i: editare ținută la barieră, retry-ul creării așteaptă antetul și refuză („alt conținut”), fără amestec.
+- **Bonuri — politicile** (Copilot a): precondiția 0d2 cere politicile exacte de pe live (SELECT USING true ⇒ nicio linie ascunsă la numărarea celor șterse).
+- **Registru — sesiune postgres directă** (N3): toate intrările writer-ului refuză `session_user ≠ postgres` (un wrapper DEFINER chemat din API nu trece — harness 4c5). Poarta wrapper-elor e insensibilă la majuscule (T12i2) și e doar plasă de siguranță peste **allowlist-ul ACL** (Copilot c): EXECUTE pe intrările writer-ului doar pentru owner și postgres (T12k).
 
 - **Rămas pentru E6 (notă P3)**: `server_ver` vine din `nextval`, deci e unic dar nu ordonat la commit — două tranzacții concurente pot comite în ordine inversă numerelor. Delta-sync-ul din E6 nu se poate baza pe „> ultimul văzut” fără o fereastră de siguranță sau un marcaj la commit; se decide acolo.
 

@@ -13,9 +13,9 @@ describe('argumentele pentru fn_bon_salveaza', () => {
       sarja: null, dimensiune: null, cantitate: 2, um: 'buc', lungime_m: null, cost_unitar: 10 })
     expect(liniiPentruRpc(l, 'beneficiar', tipuri, toNum)[0].cost_unitar).toBe(null)
   })
-  it('antetul: numărul rezervat, observații goale → null', () => {
-    expect(antetPentruRpc({ proiect_id: '3', situatie_plata_id: '', provenienta: 'gazpet', data_bon: '2026-10-21', observatii: '  ' }, 'BC-2026-3-0001'))
-      .toEqual({ proiect_id: 3, numar_bon: 'BC-2026-3-0001', situatie_plata_id: null, provenienta: 'gazpet', data_bon: '2026-10-21', observatii: null })
+  it('antetul: cheia operației (fără număr — îl alocă serverul), observații goale → null', () => {
+    expect(antetPentruRpc({ proiect_id: '3', cheie_operatie: 'k-1', situatie_plata_id: '', provenienta: 'gazpet', data_bon: '2026-10-21', observatii: '  ' }))
+      .toEqual({ proiect_id: 3, cheie_operatie: 'k-1', situatie_plata_id: null, provenienta: 'gazpet', data_bon: '2026-10-21', observatii: null })
   })
   it('mesajele de eroare', () => {
     expect(mesajEroareBon({ code: 'PGRST202', message: 'Could not find the function' })).toMatch(/nu e încă instalată/)

@@ -144,6 +144,9 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     if (!isExec) return
     setModal({
       isNew: true, id: null,
+      // cheia operației de creare: generată O DATĂ la deschiderea formularului; un retry (ex. răspuns pierdut) găsește bonul,
+      // o altă fereastră are altă cheie → alt bon (numărul îl alocă serverul, atomic)
+      cheie_operatie: crypto.randomUUID(),
       proiect_id: proiectId ? String(proiectId) : '',
       situatie_plata_id: '', provenienta: 'gazpet', data_bon: todayISO(), observatii: '',
       linii: [],
@@ -163,17 +166,6 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     })
   }
 
-  // numerotare BC-{an}-{proiect}-{secv}
-  const genNumarBon = async (proiect_id, data_bon) => {
-    const an = new Date(data_bon || todayISO()).getFullYear()
-    const { count } = await supabase.from('executie_bonuri_consum')
-      .select('id', { count: 'exact', head: true })
-      .eq('proiect_id', proiect_id)
-      .gte('data_bon', `${an}-01-01`).lte('data_bon', `${an}-12-31`)
-    const secv = String((count || 0) + 1).padStart(4, '0')
-    return `BC-${an}-${proiect_id}-${secv}`
-  }
-
   const salveazaBon = async (m) => {
     if (!m.proiect_id) { flash('err', 'Alege proiectul.'); return }
     if (!m.linii.length) { flash('err', 'Adaugă cel puțin o linie.'); return }
@@ -183,19 +175,13 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     }
     setBusy(true)
     try {
-      // bon nou: numărul se rezervă O DATĂ și rămâne în modal — o reîncercare (ex. răspuns pierdut) trimite aceeași cheie
-      let numar = m.numar_rezervat || null
-      if (m.isNew && !numar) {
-        numar = await genNumarBon(Number(m.proiect_id), m.data_bon)
-        setModal(x => (x && x.isNew ? { ...x, numar_rezervat: numar } : x))
-      }
       // UN apel, o tranzacție: CAS pe versiune + antet + liniile (20261102b); gărzile registrului de țeavă rămân în vigoare
       const { data, error } = await supabase.rpc('fn_bon_salveaza', {
         p_bon_id: m.isNew ? null : m.id, p_versiune: m.isNew ? null : (m.updated_at || null),
-        p_antet: antetPentruRpc(m, numar), p_linii: liniiPentruRpc(m.linii, m.provenienta, tipuriMap, toNum),
+        p_antet: antetPentruRpc(m), p_linii: liniiPentruRpc(m.linii, m.provenienta, tipuriMap, toNum),
       })
       if (error) throw new Error(mesajEroareBon(error))
-      flash('ok', `Bon ${m.isNew ? 'creat' : 'actualizat'} (${data?.linii ?? m.linii.length} linii)${data?.idempotent ? ' — era deja salvat' : ''}.`)
+      flash('ok', `Bon ${data?.numar_bon || ''} ${m.isNew ? 'creat' : 'actualizat'} (${data?.linii ?? m.linii.length} linii)${data?.idempotent ? ' — era deja salvat' : ''}.`)
       setModal(null); await loadAll()
     } catch (e) { console.error(e); flash('err', 'Salvare eșuată: ' + (e?.message || e)) } finally { setBusy(false) }
   }

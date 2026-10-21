@@ -182,8 +182,13 @@ q "CREATE ROLE izo_api LOGIN; GRANT authenticated TO izo_api" >/dev/null
 q "CREATE FUNCTION teste.atr_definer() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS \$\$ INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, acordat_de, motiv) VALUES (3, '00000000-0000-0000-0000-000000000117', 'inginer_izometrie', 'x', 'test') \$\$; GRANT EXECUTE ON FUNCTION teste.atr_definer() TO authenticated" >/dev/null
 if OUT="$("$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U izo_api -d "$BAZA" -Atc "SET ROLE authenticated; SELECT teste.atr_definer()" 2>&1)"; then esec "4c5 atribuire prin DEFINER din API a trecut"; fi
 grep -q "doar de owner" <<<"$OUT" || esec "4c5 refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+# N3: același utilizator API, printr-un wrapper DEFINER (owner postgres) care cheamă o funcție a registrului → refuz
+q "CREATE FUNCTION teste.nivel_definer() RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS \$\$ SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'wrapper API') \$\$; GRANT EXECUTE ON FUNCTION teste.nivel_definer() TO authenticated" >/dev/null
+if OUT="$("$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U izo_api -d "$BAZA" -Atc "SET ROLE authenticated; SELECT teste.nivel_definer()" 2>&1)"; then esec "4c5b wrapper DEFINER din API spre registru a trecut"; fi
+grep -q "sesiune postgres directă" <<<"$OUT" || esec "4c5b refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+q "DROP FUNCTION teste.nivel_definer()" >/dev/null
 q "DROP FUNCTION teste.atr_definer(); REVOKE authenticated FROM izo_api; DROP ROLE izo_api" >/dev/null
-ok "4c5 atribuiri: funcție DEFINER (owner postgres) chemată dintr-o sesiune API → refuz (session_user ≠ postgres)"
+ok "4c5 funcție DEFINER (owner postgres) chemată dintr-o sesiune API → atribuirea refuzată · funcția registrului refuzată (session_user ≠ postgres)"
 
 # 4d. curse pe proiectele 2 și 3, ambele ordini (review #806 r2): activare ↔ recepție, dezactivare ↔ import,
 #     import ↔ storno, schimbarea site-ului unui depozit ↔ import
@@ -253,7 +258,7 @@ gate_0e "după 20261102b"
 OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/bon_salveaza.test.sql" 2>&1)" || { echo "$OUT" | grep -E 'ERROR|TEST' >&2; esec "4i teste bon"; }
 grep -q 'TESTE BON: TOATE OK' <<<"$OUT" || esec "4i testele bon nu au ajuns la final"
 NB="$(grep -c 'NOTICE:  OK' <<<"$OUT")"
-BON="$(q "SELECT id FROM public.executie_bonuri_consum WHERE numar_bon = 'BC-T-1'")"
+BON="$(q "SELECT id FROM public.executie_bonuri_consum WHERE cheie_operatie = 'aaaaaaaa-0000-0000-0000-000000000001'")"
 VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
 cursa "4i două salvări pe aceeași versiune" \
   "$CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"A\"}', '[{\"denumire\":\"A1\",\"cantitate\":1}]')" \
@@ -261,13 +266,20 @@ cursa "4i două salvări pe aceeași versiune" \
   err "modificat între timp"
 [ "$(q "SELECT observatii || ':' || (SELECT string_agg(denumire, ',') FROM public.executie_bonuri_consum_linii WHERE bon_id = $BON) FROM public.executie_bonuri_consum WHERE id = $BON")" = "A:A1" ] \
   || esec "4i starea finală nu e a câștigătorului (A)"
+# N2 (Jakarinos r6): o editare ținută la barieră (antet blocat); retry-ul CREĂRII aceluiași bon trebuie să AȘTEPTE antetul
+#    și apoi să compare pe starea comisă (refuz „alt conținut”), nu să amestece două versiuni
+VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
+cursa "4i retry creare în timpul unei editări" \
+  "$CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"C\"}', '[{\"denumire\":\"C1\",\"cantitate\":1}]')" \
+  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000001\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"cot 90\",\"cantitate\":2}]'); COMMIT;" \
+  err "alt conținut"
 OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$REV_BON" 2>&1)" && esec "4i revenire nearmată a trecut"
 grep -q "nearmată" <<<"$OUT" || esec "4i revenire refuzată din alt motiv"
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102b', 'BON_RPC_SCOATE:' || txid_current(), true);" -f "$REV_BON" >/dev/null 2>&1 \
   || esec "4i revenirea armată a eșuat"
-[ "$(q "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'")" = 0 ] || esec "4i funcția a rămas după revenire"
-[ "$(q "SELECT count(*) FROM public.executie_bonuri_consum WHERE numar_bon = 'BC-T-1'")" = 1 ] || esec "4i revenirea a atins datele"
-ok "4i bon RPC: $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · revenire nearmată → refuz, armată → doar funcția scoasă"
+[ "$(q "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'") $(q "SELECT count(*) FROM information_schema.columns WHERE table_name = 'executie_bonuri_consum' AND column_name = 'cheie_operatie'")" = "0 0" ] || esec "4i funcția / coloana au rămas după revenire"
+[ "$(q "SELECT count(*) FROM public.executie_bonuri_consum WHERE numar_bon LIKE 'BC-2026-1-%'")" = 2 ] || esec "4i revenirea a atins datele"
+ok "4i bon RPC: $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · retry creare în timpul unei editări → așteaptă antetul, fără amestec · revenire nearmată → refuz, armată → doar funcția scoasă"
 ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
 ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 

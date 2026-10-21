@@ -458,12 +458,19 @@ BEGIN
                   AND has_function_privilege(a.n, p.oid, 'EXECUTE')) THEN
       v := array_append(v, 'EXECUTE din API pe funcțiile registrului');
     END IF;
-    -- wrapper-e: o funcție cu alt owner decât writer-ul sau un view / o regulă care cheamă funcțiile registrului ar
+    -- allowlist pe ACL (invariantul principal, Copilot r6 c): intrările writer-ului se execută DOAR de owner și postgres
+    IF EXISTS (SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                WHERE p.pronamespace = 'public'::regnamespace
+                  AND p.proname IN ('fn_izo_seteaza_nivel','fn_izo_import_sold_initial','fn_izo_import_storno','fn_izo_activeaza_si_importa')
+                  AND a.privilege_type = 'EXECUTE' AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) NOT IN ('izo_registru_writer','postgres'))) THEN
+      v := array_append(v, 'EXECUTE pe funcțiile registrului pentru alt rol decât writer / postgres (allowlist)');
+    END IF;
+    -- wrapper-e (plasă de siguranță peste allowlist): o funcție cu alt owner decât writer-ul sau un view / o regulă care cheamă funcțiile registrului ar
     -- deveni o cale nouă spre ele (Codex r5 6) — acceptate doar după review, cu actualizarea acestei porți
     IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.proowner <> 'izo_registru_writer'::regrole
                 AND p.oid <> 'public.fn_izo_porti_lipsa()'::regprocedure   -- poarta însăși le numește în verificarea ACL
-                AND p.prosrc ~ 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)')
-       OR EXISTS (SELECT 1 FROM pg_rewrite rw WHERE pg_get_ruledef(rw.oid) ~ 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)') THEN
+                AND p.prosrc ~* 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)')   -- fără majuscule (N3)
+       OR EXISTS (SELECT 1 FROM pg_rewrite rw WHERE pg_get_ruledef(rw.oid) ~* 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)') THEN
       v := array_append(v, 'o funcție / un view din afara writer-ului cheamă funcțiile registrului (wrapper nerevizuit)');
     END IF;
     -- writer-ul are exact ce-i trebuie (un GRANT retras ar lăsa activarea admisă și importul nefuncțional)
@@ -906,6 +913,9 @@ BEGIN
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   DECLARE v_vechi text; v_lipsa text[];
   BEGIN
+    IF session_user IS DISTINCT FROM 'postgres' THEN
+      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
+    END IF;
     PERFORM set_config('izo.registru_tx', txid_current()::text, true);
     IF p_nivel IS NULL OR p_nivel NOT IN ('off','stoc','montaj') THEN RAISE EXCEPTION 'izo: nivel necunoscut %', p_nivel; END IF;
     IF p_motiv IS NULL OR char_length(btrim(p_motiv)) < 3 THEN RAISE EXCEPTION 'izo: motivul e obligatoriu'; END IF;
@@ -957,6 +967,9 @@ BEGIN
     v_pe_dep jsonb := '{}'::jsonb; v_pe_tr int := 0; v_rez jsonb; v_izol text; v_fisiere text[]; v_orig integer;
     v_depozite integer[]; v_tronsoane bigint[];
   BEGIN
+    IF session_user IS DISTINCT FROM 'postgres' THEN
+      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
+    END IF;
     PERFORM set_config('izo.registru_tx', txid_current()::text, true);
     IF p_proiect IS NULL THEN RAISE EXCEPTION 'izo: proiectul e obligatoriu'; END IF;
     -- dacă tranzacția ține deja lock-ul exclusiv pe proiect (ex. fn_izo_seteaza_nivel chemat înainte), FOR SHARE-ul de mai
@@ -1130,6 +1143,9 @@ BEGIN
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   DECLARE v_imp record; v_ev bigint; v_n int; v_alt int;
   BEGIN
+    IF session_user IS DISTINCT FROM 'postgres' THEN
+      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
+    END IF;
     PERFORM set_config('izo.registru_tx', txid_current()::text, true);
     IF p_motiv IS NULL OR char_length(btrim(p_motiv)) < 3 THEN RAISE EXCEPTION 'izo: motivul e obligatoriu'; END IF;
     IF p_proiect IS NULL THEN RAISE EXCEPTION 'izo: proiectul e obligatoriu'; END IF;
@@ -1165,6 +1181,9 @@ BEGIN
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   DECLARE v_depozite integer[]; v_tronsoane bigint[]; v_rez jsonb;
   BEGIN
+    IF session_user IS DISTINCT FROM 'postgres' THEN
+      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
+    END IF;
     PERFORM set_config('izo.registru_tx', txid_current()::text, true);
     IF p_proiect IS NULL THEN RAISE EXCEPTION 'izo: proiectul e obligatoriu'; END IF;
     IF jsonb_typeof(p_payload) IS DISTINCT FROM 'object' OR jsonb_typeof(p_payload->'bucati') IS DISTINCT FROM 'array' THEN

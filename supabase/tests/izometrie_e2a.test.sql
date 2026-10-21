@@ -370,7 +370,15 @@ ALTER TABLE public.magazie_bucati ADD CONSTRAINT magazie_bucati_izo_doar_registr
 CREATE FUNCTION teste.wrapper_activare(p bigint) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT public.fn_izo_seteaza_nivel(p, 'stoc', 'wrapper') $$;
 SELECT teste.eroare('T12i o funcție nerevizuită care cheamă funcțiile registrului → porțile refuză', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
 DROP FUNCTION teste.wrapper_activare(bigint);
-SELECT teste.e('T12j porțile refăcute după FK / CHECK / wrapper', cardinality(public.fn_izo_porti_lipsa()) = 0);
+CREATE FUNCTION teste.wrapper_majuscule(p bigint) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT PUBLIC.FN_IZO_SETEAZA_NIVEL(p, 'stoc', 'wrapper') $$;
+SELECT teste.eroare('T12i2 wrapper cu MAJUSCULE → porțile îl prind (N3)', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
+DROP FUNCTION teste.wrapper_majuscule(bigint);
+CREATE ROLE izo_test_exec NOLOGIN;
+GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO izo_test_exec;
+SELECT teste.eroare('T12k EXECUTE pe o funcție a registrului pentru un rol din afara allowlist-ului → porțile refuză', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'allowlist');
+REVOKE EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) FROM izo_test_exec;
+DROP ROLE izo_test_exec;
+SELECT teste.e('T12j porțile refăcute după FK / CHECK / wrapper / allowlist', cardinality(public.fn_izo_porti_lipsa()) = 0);
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
 -- ═══ T13 carantina (review #807 r3) ═══
