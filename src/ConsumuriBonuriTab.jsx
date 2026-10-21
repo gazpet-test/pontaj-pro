@@ -18,7 +18,6 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { liniiPentruRpc, antetPentruRpc, mesajEroareBon } from './lib/bonLinii.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
@@ -164,9 +163,6 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     if (!isExec) return
     setModal({
       isNew: true, id: null,
-      // cheia operației de creare: generată O DATĂ la deschiderea formularului; un retry (ex. răspuns pierdut) găsește bonul,
-      // o altă fereastră are altă cheie → alt bon (numărul îl alocă serverul, atomic)
-      cheie_operatie: crypto.randomUUID(),
       proiect_id: proiectId ? String(proiectId) : '',
       situatie_plata_id: '', provenienta: 'gazpet', data_bon: todayISO(), observatii: '',
       linii: [],
@@ -174,7 +170,7 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
   }
   const deschideEdit = (b) => {
     setModal({
-      isNew: false, id: b.id, updated_at: b.updated_at,   // versiunea antetului, pentru salvarea cu control de concurență
+      isNew: false, id: b.id,
       proiect_id: String(b.proiect_id),
       situatie_plata_id: b.situatie_plata_id ? String(b.situatie_plata_id) : '',
       provenienta: b.provenienta, data_bon: b.data_bon || todayISO(), observatii: b.observatii || '',
@@ -186,6 +182,17 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     })
   }
 
+  // numerotare BC-{an}-{proiect}-{secv}
+  const genNumarBon = async (proiect_id, data_bon) => {
+    const an = new Date(data_bon || todayISO()).getFullYear()
+    const { count } = await supabase.from('executie_bonuri_consum')
+      .select('id', { count: 'exact', head: true })
+      .eq('proiect_id', proiect_id)
+      .gte('data_bon', `${an}-01-01`).lte('data_bon', `${an}-12-31`)
+    const secv = String((count || 0) + 1).padStart(4, '0')
+    return `BC-${an}-${proiect_id}-${secv}`
+  }
+
   const salveazaBon = async (m) => {
     if (!m.proiect_id) { flash('err', 'Alege proiectul.'); return }
     if (!m.linii.length) { flash('err', 'Adaugă cel puțin o linie.'); return }
@@ -195,13 +202,44 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
     }
     setBusy(true)
     try {
-      // UN apel, o tranzacție: CAS pe versiune + antet + liniile (20261102b); gărzile registrului de țeavă rămân în vigoare
-      const { data, error } = await supabase.rpc('fn_bon_salveaza', {
-        p_bon_id: m.isNew ? null : m.id, p_versiune: m.isNew ? null : (m.updated_at || null),
-        p_antet: antetPentruRpc(m), p_linii: liniiPentruRpc(m.linii, m.provenienta, tipuriMap, toNum),
+      const { data: { user } } = await supabase.auth.getUser()
+      const pid = Number(m.proiect_id)
+      let bonId = m.id
+      if (m.isNew) {
+        const numar = await genNumarBon(pid, m.data_bon)
+        const { data, error } = await supabase.from('executie_bonuri_consum').insert({
+          numar_bon: numar, proiect_id: pid,
+          situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
+          provenienta: m.provenienta, data_bon: m.data_bon, sursa: 'manual', stare: 'generat',
+          generat_de: user?.id || null, observatii: m.observatii?.trim() || null,
+        }).select('id').single()
+        if (error) throw error
+        bonId = data.id
+      } else {
+        const { error } = await supabase.from('executie_bonuri_consum').update({
+          situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
+          provenienta: m.provenienta, data_bon: m.data_bon,
+          observatii: m.observatii?.trim() || null, updated_at: new Date().toISOString(),
+        }).eq('id', bonId)
+        if (error) throw error
+        await supabase.from('executie_bonuri_consum_linii').delete().eq('bon_id', bonId)
+      }
+      const rows = m.linii.map(l => {
+        const tip = l.tip_material_id ? tipuriMap[l.tip_material_id] : null
+        const cant = toNum(l.cantitate) ?? 1
+        const cost = m.provenienta === 'gazpet' ? toNum(l.cost_unitar) : null
+        return {
+          bon_id: bonId, magazie_bucata_id: l.magazie_bucata_id || null, tip_material_id: l.tip_material_id || null,
+          denumire: l.denumire?.trim() || tip?.nume || null,
+          serie: l.serie?.trim() || null, sarja: l.sarja?.trim() || null, dimensiune: l.dimensiune?.trim() || null,
+          cantitate: cant, um: l.um || tip?.um_implicit || 'buc',
+          lungime_m: toNum(l.lungime_m), cost_unitar: cost, valoare: cost != null ? cost * cant : null,
+          observatii: null,
+        }
       })
-      if (error) throw new Error(mesajEroareBon(error))
-      flash('ok', `Bon ${data?.numar_bon || ''} ${m.isNew ? 'creat' : 'actualizat'} (${data?.linii ?? m.linii.length} linii)${data?.idempotent ? ' — era deja salvat' : ''}.`)
+      const { error: eL } = await supabase.from('executie_bonuri_consum_linii').insert(rows)
+      if (eL) throw eL
+      flash('ok', `Bon ${m.isNew ? 'creat' : 'actualizat'} (${rows.length} linii).`)
       setModal(null); await loadAll()
     } catch (e) { console.error(e); flash('err', 'Salvare eșuată: ' + (e?.message || e)) } finally { setBusy(false) }
   }

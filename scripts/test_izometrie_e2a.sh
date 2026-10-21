@@ -248,60 +248,6 @@ cursa_fara_asteptare "4h storno în curs, bon cu bucata lui" "SELECT public.fn_i
   "BEGIN; $CA_TOMA; INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) VALUES (1, $ID_CONC, 'teava'); COMMIT;" "nu intră pe bon"
 [ "$(q "SELECT stare FROM public.magazie_bucati WHERE id = $ID_CONC")" = anulata ] || esec "4h storno-ul nu s-a aplicat"
 ok "4h storno în curs + bon cu bucata lui → bonul e refuzat imediat, storno-ul se aplică (fără blocaj circular)"
-# 4i. 20261102b — salvarea tranzacțională a bonurilor (decizia Razvan 21.10): livrare prin runner, teste SQL, cursa a două
-#     salvări pe aceeași versiune (una câștigă, cealaltă primește „modificat”), revenirea
-MIG_BON="$RADACINA/supabase/migrations/20261102b_bon_salvare_tranzactionala.sql"
-REV_BON="$RADACINA/supabase/revenire/20261102b_bon_salvare_tranzactionala_ROLLBACK.sql"
-"${PSQL[@]}" -d "$BAZA" -f "$MIG_BON" >/dev/null 2>&1 && esec "4i 20261102b fără runner a trecut"
-livreaza "$BAZA" 20261102130000 "$MIG_BON" >/dev/null
-gate_0e "după 20261102b"
-OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/bon_salveaza.test.sql" 2>&1)" || { echo "$OUT" | grep -E 'ERROR|TEST' >&2; esec "4i teste bon"; }
-grep -q 'TESTE BON: TOATE OK' <<<"$OUT" || esec "4i testele bon nu au ajuns la final"
-NB="$(grep -c 'NOTICE:  OK' <<<"$OUT")"
-BON="$(q "SELECT id FROM public.executie_bonuri_consum WHERE cheie_operatie = 'aaaaaaaa-0000-0000-0000-000000000001'")"
-VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
-cursa "4i două salvări pe aceeași versiune" \
-  "$CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"A\"}', '[{\"denumire\":\"A1\",\"cantitate\":1}]')" \
-  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"B\"}', '[{\"denumire\":\"B1\",\"cantitate\":1}]'); COMMIT;" \
-  err "modificat între timp"
-[ "$(q "SELECT observatii || ':' || (SELECT string_agg(denumire, ',') FROM public.executie_bonuri_consum_linii WHERE bon_id = $BON) FROM public.executie_bonuri_consum WHERE id = $BON")" = "A:A1" ] \
-  || esec "4i starea finală nu e a câștigătorului (A)"
-# N2 (Jakarinos r6): o editare ținută la barieră (antet blocat); retry-ul CREĂRII aceluiași bon trebuie să AȘTEPTE antetul
-#    și apoi să compare pe starea comisă (refuz „alt conținut”), nu să amestece două versiuni
-VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
-cursa "4i retry creare în timpul unei editări" \
-  "$CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"C\"}', '[{\"denumire\":\"C1\",\"cantitate\":1}]')" \
-  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000001\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"cot 90\",\"cantitate\":2}]'); COMMIT;" \
-  err "alt conținut"
-# Copilot r7 P1: o scriere DIRECTĂ pe linii, ținută necomisă (INSERT, apoi DELETE), și un RPC pe versiunea de dinainte →
-#    RPC-ul AȘTEAPTĂ antetul (trigger-ul trg_bonl_versiune îl ține), apoi vede versiunea mutată și refuză „modificat”
-VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
-cursa "4i INSERT direct pe linii ținut necomis ↔ RPC pe versiunea veche" \
-  "$CA_JANETA; INSERT INTO public.executie_bonuri_consum_linii (bon_id, denumire, cantitate) VALUES ($BON, 'direct', 1)" \
-  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"D\"}', '[{\"denumire\":\"D1\",\"cantitate\":1}]'); COMMIT;" \
-  err "modificat între timp"
-[ "$(q "SELECT count(*) FROM public.executie_bonuri_consum_linii WHERE bon_id = $BON AND denumire = 'direct'")" = 1 ] || esec "4i linia directă s-a pierdut"
-VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
-cursa "4i DELETE direct pe linii ținut necomis ↔ RPC pe versiunea veche" \
-  "$CA_JANETA; DELETE FROM public.executie_bonuri_consum_linii WHERE bon_id = $BON AND denumire = 'direct'" \
-  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"E\"}', '[{\"denumire\":\"E1\",\"cantitate\":1}]'); COMMIT;" \
-  err "modificat între timp"
-[ "$(q "SELECT observatii FROM public.executie_bonuri_consum WHERE id = $BON")" = C ] || esec "4i RPC-ul refuzat a schimbat totuși antetul"
-# Copilot r7 P3: două creări DISTINCTE pe același proiect și an, concurente → B așteaptă numărul, apoi primește următorul
-cursa "4i două creări distincte concurente" \
-  "$CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000021\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"F1\",\"cantitate\":1}]')" \
-  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000022\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"G1\",\"cantitate\":1}]')->>'numar_bon'; COMMIT;" \
-  ok "BC-2026-1-"
-[ "$(q "SELECT count(DISTINCT numar_bon) || ':' || count(*) FROM public.executie_bonuri_consum WHERE cheie_operatie IN ('aaaaaaaa-0000-0000-0000-000000000021', 'aaaaaaaa-0000-0000-0000-000000000022')")" = "2:2" ] \
-  || esec "4i creările concurente nu au două bonuri cu numere distincte"
-OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$REV_BON" 2>&1)" && esec "4i revenire nearmată a trecut"
-grep -q "nearmată" <<<"$OUT" || esec "4i revenire refuzată din alt motiv"
-# după creări prin RPC, revenirea armată REFUZĂ (istoricul de idempotență nu se șterge — Jakarinos r7)
-OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102b', 'BON_RPC_SCOATE:' || txid_current(), true);" -f "$REV_BON" 2>&1)" \
-  && esec "4i revenirea armată cu chei de operație a trecut"
-grep -q "cheie_operatie" <<<"$OUT" || esec "4i revenire refuzată din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
-[ "$(q "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'")" = 1 ] || esec "4i refuzul a scos totuși funcția"
-ok "4i bon RPC (revenirea cu chei → refuz): $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · retry creare în timpul unei editări → așteaptă antetul, fără amestec · scriere directă pe linii (INSERT / DELETE) ținută ↔ RPC → așteaptă, „modificat” · două creări distincte concurente → numere distincte · revenire nearmată → refuz, armată → doar funcția scoasă"
 ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
 ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 
@@ -321,13 +267,6 @@ ok "6a–c revenire: nearmată → refuz · cu date → refuz · psql -f simplu 
 "${PSQL[@]}" -d postgres -c "DROP DATABASE $BAZA" >/dev/null
 "${PSQL[@]}" -d postgres -c "DROP ROLE izo_registru_writer" >/dev/null
 livreaza "$BAZA2" 20261102120000 >/dev/null
-# 20261102b pe baza curată (fără creări): revenirea armată scoate funcția, indexurile și coloana goală
-livreaza "$BAZA2" 20261102130000 "$MIG_BON" >/dev/null
-"${PSQL[@]}" -d "$BAZA2" --single-transaction -c "SELECT set_config('gazpet.revenire_20261102b', 'BON_RPC_SCOATE:' || txid_current(), true);" -f "$REV_BON" >/dev/null 2>&1 \
-  || esec "6-pre0 revenirea 20261102b fără date a eșuat"
-[ "$(q2 "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'") $(q2 "SELECT count(*) FROM information_schema.columns WHERE table_name = 'executie_bonuri_consum' AND column_name = 'cheie_operatie'")" = "0 0" ] \
-  || esec "6-pre0 funcția / coloana au rămas"
-ok "6-pre0 revenirea 20261102b fără creări → funcția, indexurile și coloana scoase"
 # 6-pre. TRUNCATE ↔ activare (Copilot r4 P1-b), pe baza curată (aici nicio țeavă nu e încă protejată): activarea
 #        proiectului 3 ținută la barieră, TRUNCATE pe țevi așteaptă și apoi e refuzat pe nivelul nou
 BAZA_SALVATA="$BAZA"; BAZA="$BAZA2"
