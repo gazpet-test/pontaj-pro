@@ -73,21 +73,21 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
       if (eTr) throw eTr
       if (!curenta()) return
       setTronsoane(tr || [])
-      // bucățile registrului, pe pagini (limita PostgREST e 1000 de rânduri)
+      // bucățile registrului, paginate pe CHEIE (id > ultimul), nu pe offset: orice bucată care există pe toată durata
+      // încărcării apare exact o dată (mișcările concurente nu mută paginile); merge și sub limita max-rows a API-ului
       const toate = []
-      for (let de = 0; ; ) {
+      for (let ultim = 0; ; ) {
         const { data, error } = await supabase.from('magazie_bucati')
           .select('id, proiect_id, tip_cod, serie, serie_canon, sarja, lungime_mm, perete_mm, unghi_curba, stare, depozit_id, tronson_id, atribute, nr_document, data_receptie, updated_at')
           .eq('proiect_id', pid).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null)
-          .order('id').range(de, de + PAGINA - 1)
+          .gt('id', ultim).order('id').limit(PAGINA)
         if (!curenta()) return
         if (error) {
           if (lipsaRegistru(error)) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
           throw error
         }
-        // avansăm cu rândurile primite efectiv și ne oprim la pagina goală (merge și dacă max-rows din API e sub PAGINA)
         if (!data?.length) break
-        toate.push(...data); de += data.length
+        toate.push(...data); ultim = data[data.length - 1].id
       }
       if (!curenta()) return
       setBucati(toate)
