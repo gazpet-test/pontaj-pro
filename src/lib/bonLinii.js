@@ -17,10 +17,10 @@ export function liniiPentruRpc(linii, provenienta, tipuriMap, toNum) {
   })
 }
 
-/** Antetul pentru RPC. La un bon nou numărul vine rezervat în modal (aceeași cheie la reîncercare → fără dubluri). */
-export function antetPentruRpc(m, numar) {
+/** Antetul pentru RPC. Bon nou: cheia operației (generată o dată la deschiderea formularului); numărul îl alocă serverul. */
+export function antetPentruRpc(m) {
   return {
-    proiect_id: Number(m.proiect_id), numar_bon: numar || null,
+    proiect_id: Number(m.proiect_id), cheie_operatie: m.cheie_operatie || null,
     situatie_plata_id: m.situatie_plata_id ? Number(m.situatie_plata_id) : null,
     provenienta: m.provenienta, data_bon: m.data_bon, observatii: nn(m.observatii),
   }
