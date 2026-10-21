@@ -165,7 +165,7 @@ const RE_ISO = /^(\d{4})-(\d{2})-(\d{2})$/
 const isoValid = v => { const m = String(v || '').match(RE_ISO); return !!m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toISOString().slice(0, 10) === v }
 function selectorBate(c, b) {
   if (!c.randuri && !c.aviz_iesire) return false   // fără selector pe rânduri / avize = nu se aplică nicăieri (fără wildcard)
-  if (c.fisier && c.fisier !== b.sursa.fisier) return false
+  if (!c.fisier || c.fisier !== b.sursa.fisier) return false   // fișierul e obligatoriu (fără potriviri între workbook-uri)
   if (c.foaie && c.foaie !== b.sursa.foaie) return false
   if (c.randuri && !c.randuri.includes(b.sursa.rand)) return false
   if (c.aviz_iesire && !c.aviz_iesire.includes(b.aviz_iesire)) return false
@@ -179,9 +179,11 @@ function selectorBate(c, b) {
  *            depozit_grup: {grup: COD | {cod, nota}}, tronson_grup: {text: nr},
  *            tronson_aviz: {aviz: nr} (TR ambiguu sau lipsă), tronson_aviz_serie: {'aviz|serie': nr} (prioritar),
  *            ignora_iesire: [{fisier, foaie, rand, motiv}] (câmpuri de ieșire care nu sunt o ieșire reală),
- *            corectii_camp: [{fisier?, foaie?, randuri? | aviz_iesire?, serie?, camp, valoare, motiv}],
- *            accepta_neconformitate: [{fisier, foaie, rand, nota?}], accepta_sarja: [serie],
- *            accepta_iesire_integrala: [{fisier, foaie, rand, motiv}] (diferență de rotunjire la ieșire, pe rândul numit) }
+ *            corectii_camp: [{fisier, foaie?, randuri? | aviz_iesire?, serie?, camp, valoare, motiv}],
+ *            accepta_neconformitate: [{fisier, foaie, rand, serie, nota?, carantina?}], accepta_sarja: [serie],
+ *            accepta_iesire_integrala: [{fisier, foaie, rand, serie, motiv}] (diferență de rotunjire, pe rândul numit) }
+ * Deciziile pe rânduri (ignora_iesire, accepta_neconformitate, accepta_iesire_integrala) poartă seria de control: dacă
+ * rândul are altă serie, decizia e pe rândul greșit → blocant (Gemini r3 P2).
  */
 export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie = [] }) {
   const cheieSursa = s => `${s.fisier}|${s.foaie}|${s.rand}`
@@ -190,8 +192,15 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
   const ignoraIes = new Map((decizii.ignora_iesire || []).map(e => [cheieSursa(e), e.motiv || 'fără ieșire reală']))
   const iesireIntegrala = new Map((decizii.accepta_iesire_integrala || []).map(e => [cheieSursa(e), e.motiv || 'ieșire integrală']))
   const out = [], excluse = []
+  const deciziiPeRand = [['ignora_iesire', decizii.ignora_iesire], ['accepta_neconformitate', decizii.accepta_neconformitate],
+                         ['accepta_iesire_integrala', decizii.accepta_iesire_integrala]]
   for (const b0 of randuri) {
     const b = { ...b0, probleme: [], avertismente: [], corectii: [] }
+    for (const [cheie, lista] of deciziiPeRand) for (const e of lista || []) {
+      if (cheieSursa(e) !== cheieSursa(b.sursa)) continue
+      const ok = e.serie && [b.serie, b.serie_bruta].some(x => serieCanon(x) === serieCanon(e.serie))
+      if (!ok) b.probleme.push(`decizia ${cheie} pe rândul ${b.sursa.rand} are seria de control „${e.serie || '—'}”, rândul are „${b.serie_bruta}”`)
+    }
     if (exclDec.has(cheieSursa(b.sursa))) { excluse.push({ sursa: b.sursa, serie: b.serie, motiv: `decizie: ${exclDec.get(cheieSursa(b.sursa))}` }); continue }
     // câmpurile de ieșire care nu sunt o ieșire reală (ex. curba 1198: TR „16” fără aviz — încă în stoc)
     if (ignoraIes.has(cheieSursa(b.sursa))) {
@@ -243,6 +252,7 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     if (b.neconformitate && neconfOk.has(cheieSursa(b.sursa))) {
       const nota = neconfOk.get(cheieSursa(b.sursa)).nota
       b.nota_neconformitate = `NECONFORM: ${b.neconformitate}${nota ? ` — ${nota}` : ''}`
+      b.carantina = neconfOk.get(cheieSursa(b.sursa)).carantina === true
     }
     // o dată completată dar necitită blochează (sold inițial: nu se ghicește, nu se pierde) — Copilot r2 P2
     if (b.data_aviz && typeof b.data_aviz === 'object') b.probleme.push(`data avizului necitită: ${b.data_aviz.invalid}`)
@@ -256,8 +266,16 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
     if (b.aviz_iesire) {
       const ovSerie = decizii.tronson_aviz_serie?.[`${b.aviz_iesire}|${b.serie}`]
       const ovAviz = decizii.tronson_aviz?.[b.aviz_iesire]
-      if (ovSerie != null) b.tronson_iesire = { nr: Number(ovSerie), din_decizie: true }
-      else if (ovAviz != null && (!b.tronson_iesire || b.tronson_iesire.ambiguu)) b.tronson_iesire = { nr: Number(ovAviz), din_decizie: true }
+      const trExcel = b.tronson_iesire
+      if (ovSerie != null) {
+        // decizia pe bucată (aviz + serie) câștigă, cu urmă dacă Excel-ul spunea altceva
+        if (trExcel?.nr != null && trExcel.nr !== Number(ovSerie)) b.corectii.push({ camp: 'tronson', inainte: trExcel.nr, dupa: Number(ovSerie), motiv: 'tronson_aviz_serie' })
+        b.tronson_iesire = { nr: Number(ovSerie), din_decizie: true }
+      } else if (ovAviz != null) {
+        if (!trExcel || trExcel.ambiguu) b.tronson_iesire = { nr: Number(ovAviz), din_decizie: true }
+        else if (trExcel.nr !== Number(ovAviz))
+          b.probleme.push(`conflict tronson: Excel T${trExcel.nr}, decizia pe avizul ${b.aviz_iesire} T${ovAviz} — de decis pe bucată (tronson_aviz_serie)`)
+      }
       // seria scrisă la ieșire trebuie să fie a rândului (brută sau corectată) — un aviz mutat pe alt rând nu trece
       if (b.ies_serie && serieCanon(b.ies_serie) !== serieCanon(b.serie) && serieCanon(b.ies_serie) !== serieCanon(b.serie_bruta))
         b.probleme.push(`seria la ieșire „${b.ies_serie}” ≠ seria rândului „${b.serie}”`)
@@ -282,7 +300,10 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie 
         b.probleme.push('câmpuri de ieșire completate (tronson / dată / altă serie / altă cantitate) fără aviz de ieșire')
       // recepționat = PV (număr sau dată validă) SAU NRCD cu dată validă (review #807 P1)
       b.stare = b.pv_nr || pvValid || nrcdValid ? 'receptionat' : 'sosit'
+      // carantina = stare pe server (registrul o tratează ca nedisponibilă), nu doar text
+      if (b.carantina) b.stare = 'carantina'
     }
+    if (b.carantina && b.aviz_iesire) b.probleme.push('bucată în carantină cu aviz de ieșire — de decis')
     // depozitul (sau originea, pentru cele de pe tronson) trebuie cunoscut în ORICE stare (review #807 P1)
     const dep = depozitPropus(b, coduri)
     if (dep.grup) {

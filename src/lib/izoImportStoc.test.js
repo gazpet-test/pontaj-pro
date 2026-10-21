@@ -148,7 +148,7 @@ describe('construiestePayload', () => {
   })
   it('corecția (obiect cu notă) + neconformitatea acceptată ajung în observații; NRCD și ieșirea în atribute', () => {
     const dec = { corectii_serie: { '2545CA09771': { serie: '254CA09771', nota: 'corectat din 2545CA' } },
-                  accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12 }] }
+                  accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, serie: '2545CA09771' }] }
     const { randuri } = evalueaza(foaie('TEAVA 7.1 TOPLET', [rT71({ 1: '2545CA09771', 15: 'MARCAJ', 22: null, 23: null })], 11).randuri, { decizii: dec, coduri, tronsoane })
     expect(randuri[0].probleme).toEqual([])
     const b = construiestePayload(randuri, [], 't').bucati[0]
@@ -223,26 +223,26 @@ describe('review #807 r2 + răspunsurile MP', () => {
   it('ignora_iesire: câmpurile de ieșire fără aviz nu mai blochează, bucata rămâne în stoc', () => {
     const r = curba({ 1: '1198', 16: null, 17: null, 20: 16 })
     expect(ev([r], 'CURBE LOT 2', 12).randuri[0].probleme.join()).toMatch(/fără aviz de ieșire/)
-    const ok = ev([r], 'CURBE LOT 2', 12, { ignora_iesire: [{ fisier: 'X.xlsx', foaie: 'CURBE LOT 2', rand: 13, motiv: 'încă în stoc' }] }).randuri[0]
+    const ok = ev([r], 'CURBE LOT 2', 12, { ignora_iesire: [{ fisier: 'X.xlsx', foaie: 'CURBE LOT 2', rand: 13, serie: '1198', motiv: 'încă în stoc' }] }).randuri[0]
     expect(ok.probleme).toEqual([])
     expect(ok.stare).toBe('sosit')
     expect(ok.corectii[0]).toMatchObject({ camp: 'iesire', motiv: 'încă în stoc' })
   })
   it('corectii_camp: pe rânduri / pe aviz, dată validată, fără wildcard, urmă în sursă', () => {
-    const dec = { corectii_camp: [{ foaie: 'TEAVA 8.8 MM', randuri: [13], camp: 'pv_nr', valoare: '86188', motiv: 'MP' },
+    const dec = { corectii_camp: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', randuri: [13], camp: 'pv_nr', valoare: '86188', motiv: 'MP' },
                                   { camp: 'data_aviz', valoare: '2026-01-01' }] }
     const b = ev([rStd({ 9: null })], 'TEAVA 8.8 MM', 12, dec).randuri[0]
     expect(b.pv_nr).toBe('86188')
     expect(b.corectii).toEqual([{ camp: 'pv_nr', inainte: null, dupa: '86188', motiv: 'MP' }])
     expect(construiestePayload([b], [], 'x').bucati[0].sursa.corectii.length).toBe(1)
-    const rau = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ randuri: [13], camp: 'data_iesire', valoare: '2026-02-31' }] }).randuri[0]
+    const rau = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ fisier: 'X.xlsx', randuri: [13], camp: 'data_iesire', valoare: '2026-02-31' }] }).randuri[0]
     expect(rau.probleme.join()).toMatch(/nu e o dată/)
-    const nepermis = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ randuri: [13], camp: 'serie', valoare: 'X' }] }).randuri[0]
+    const nepermis = ev([rStd()], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ fisier: 'X.xlsx', randuri: [13], camp: 'serie', valoare: 'X' }] }).randuri[0]
     expect(nepermis.probleme.join()).toMatch(/câmp nepermis/)
   })
   it('depozit_grup cu notă și neconformitate acceptată cu notă → observații', () => {
     const dec = { depozit_grup: { 'Topleț · DT/OS „ALTCEVA”': { cod: 'TOP', nota: 'descărcate excepțional' } },
-                  accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, nota: 'carantină' }] }
+                  accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, serie: '247EK08603', nota: 'carantină' }] }
     const b = ev([rT71({ 14: 'ALTCEVA', 15: 'MARCAJ' })], 'TEAVA 7.1 TOPLET', 11, dec).randuri[0]
     expect(b.probleme).toEqual([])
     expect(construiestePayload([b], [], 'x').bucati[0].observatii).toBe('NECONFORM: MARCAJ — carantină · descărcate excepțional')
@@ -254,8 +254,34 @@ describe('accepta_iesire_integrala', () => {
     const r = rStd({ 16: 'CJPJ 0038', 17: 12, 18: '264DB00025', 19: 12.40 })
     const ev = d => evalueaza(foaie('TEAVA 8.8 MM', [r], 12).randuri, { decizii: d, coduri, tronsoane }).randuri[0]
     expect(ev({}).probleme.join()).toMatch(/ieșire parțială/)
-    const ok = ev({ accepta_iesire_integrala: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13, motiv: 'rotunjire' }] })
+    const ok = ev({ accepta_iesire_integrala: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13, serie: '264DB00025', motiv: 'rotunjire' }] })
     expect(ok.probleme).toEqual([])
     expect(ok.corectii[0]).toMatchObject({ camp: 'cant_iesire', inainte: 12.4, dupa: 12.41, motiv: 'rotunjire' })
+  })
+})
+
+describe('review #807 r3', () => {
+  const ev = (rows, foaieNume, start, decizii = {}, tr = tronsoane) => evalueaza(foaie(foaieNume, rows, start).randuri, { decizii, coduri, tronsoane: tr }).randuri[0]
+  const curba = (o = {}) => { const r = Array(25).fill(null); Object.assign(r, { 1: '373', 2: 'Curbe CMFØ 610/8/L360NE/6,1 - 20˚', 3: '2520914', 12: 'LOT 2', 13: 'TOPLET', 16: 'CJPT 0026', 17: 46259, 20: 17 }, o); return r }
+  const tr = { ...tronsoane, T16: 20, T17: 21 }
+  it('carantina: neconforma acceptată cu carantina intră pe stare „carantina” (în depozit), nu disponibilă', () => {
+    const dec = { accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12, serie: '247EK08603', carantina: true }] }
+    const b = ev([rT71({ 15: 'MARCAJ' })], 'TEAVA 7.1 TOPLET', 11, dec)
+    expect(b).toMatchObject({ stare: 'carantina', depozit_cod: 'ORN', probleme: [] })
+    expect(construiestePayload([b], [], 'x').bucati[0]).toMatchObject({ stare: 'carantina', depozit_id: 10 })
+  })
+  it('tronson: decizia pe aviz în conflict cu un TR explicit din Excel → blocant; decizia pe aviz+serie câștigă, cu urmă', () => {
+    expect(ev([curba()], 'CURBE LOT 2', 12, { tronson_aviz: { 'CJPT 0026': 16 } }, tr).probleme.join()).toMatch(/conflict tronson/)
+    const b = ev([curba()], 'CURBE LOT 2', 12, { tronson_aviz_serie: { 'CJPT 0026|373': 16 } }, tr)
+    expect(b).toMatchObject({ stare: 'pe_tronson', tronson_cod: 'T16' })
+    expect(b.corectii).toContainEqual({ camp: 'tronson', inainte: 17, dupa: 16, motiv: 'tronson_aviz_serie' })
+  })
+  it('decizie pe rând cu altă serie de control (rândul greșit) → blocant', () => {
+    const dec = { accepta_iesire_integrala: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13, serie: '264DB99999', motiv: 'x' }] }
+    expect(ev([rStd()], 'TEAVA 8.8 MM', 12, dec).probleme.join()).toMatch(/seria de control/)
+  })
+  it('corecție fără fișier nu se aplică nicăieri', () => {
+    const b = ev([rStd({ 9: null })], 'TEAVA 8.8 MM', 12, { corectii_camp: [{ foaie: 'TEAVA 8.8 MM', randuri: [13], camp: 'pv_nr', valoare: '1' }] })
+    expect(b.pv_nr).toBe(null)
   })
 })

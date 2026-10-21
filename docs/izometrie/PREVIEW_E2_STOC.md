@@ -1,6 +1,6 @@
 # Izometrie E2a-2 — preview sold inițial LOT 2 (fără scriere)
 
-Generat: 2026-10-21T09:09:04.933Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 `6ef175007c5d711a…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
+Generat: 2026-10-21T10:06:33.463Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 `64de0011e81e04e6…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
 
 ## Sursele
 
@@ -24,6 +24,7 @@ După decizii: **3352 bucăți** (2947 țevi / 33731.95 m, 405 curbe); excluse t
 
 | Stare | Loc | Bucăți |
 |---|---|---|
+| carantina | TOP | 2 |
 | pe_tronson | T12 (din JUP) | 348 |
 | pe_tronson | T12 (din TOP) | 21 |
 | pe_tronson | T13 (din JUP) | 210 |
@@ -34,8 +35,7 @@ După decizii: **3352 bucăți** (2947 țevi / 33731.95 m, 405 curbe); excluse t
 | pe_tronson | T18 (din TOP) | 106 |
 | pe_tronson | T19 (din TOP) | 74 |
 | receptionat | JUP | 522 |
-| receptionat | TOP | 1363 |
-| sosit | TOP | 1 |
+| receptionat | TOP | 1362 |
 
 Regula de depozit: Jupânești → **JUP (9)**; Topleț → **ORN (10)** pentru DT/OS „ORSOVA” sau avize `CJPT-O`, **TOP (11)** pentru DT/OS „TOPLET”. Orice alt grup se decide în fișierul de decizii (`depozit_grup`).
 
@@ -88,5 +88,5 @@ Niciuna.
 
 ## Verdict
 
-**APLICABIL.** Payload: `PREVIEW_E2_STOC.payload.json` (3352 bucăți, sha256 fișier `ab77cc32a9f10fe51cc4bdc6df3b8d856000f9645f92f7b3300e1d2aa435ad62`). Se aplică doar de sesiunea de chat, după „da”-ul lui Razvan, într-un SINGUR apel (activare + import, fără blocaj circular): `fn_izo_activeaza_si_importa(3, '<import_id>', <payload>, '<motiv>')`.
+**APLICABIL.** Payload: `PREVIEW_E2_STOC.payload.json` (3352 bucăți, sha256 fișier `e00bfa7c937e075c002c39c16db585534249e8471740b88b3ef77f111a1bda96`). Se aplică doar de sesiunea de chat, după „da”-ul lui Razvan, într-un SINGUR apel (activare + import, fără blocaj circular): `fn_izo_activeaza_si_importa(3, '<import_id>', <payload>, '<motiv>')`.
 

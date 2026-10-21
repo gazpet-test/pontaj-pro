@@ -30,6 +30,11 @@
       "data": "2026-10-21",
       "autor": "Toma Razvan (MP), confirmat de Razvan Trusu (prin chat)",
       "decizie": "r618 247EK07330: data ieșirii 12.06.2026; r1277 247EK06377: ieșire integrală (diferența de 1 cm = rotunjire)."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Izometrie (review #807 r3)",
+      "decizie": "neconformele 58/596 intră cu stare „carantina” (server-side, nedisponibile), nu doar cu notă — decizia MP din 21.10."
     }
   ],
   "corectii_serie": {
@@ -143,7 +148,8 @@
       "rand": 58,
       "serie": "254CA09771",
       "motiv": "„MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”",
-      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj"
+      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj",
+      "carantina": true
     },
     {
       "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
@@ -151,7 +157,8 @@
       "rand": 596,
       "serie": "247EK08658",
       "motiv": "„LIPSA MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”",
-      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj"
+      "nota": "CARANTINĂ în OS Topleț (marcaj neclar), așteaptă decizie; nedisponibilă pentru montaj",
+      "carantina": true
     }
   ],
   "accepta_sarja": [],
