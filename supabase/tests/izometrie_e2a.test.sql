@@ -380,6 +380,12 @@ DROP FUNCTION teste.wrapper_activare(bigint);
 CREATE FUNCTION teste.wrapper_majuscule(p bigint) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT PUBLIC.FN_IZO_SETEAZA_NIVEL(p, 'stoc', 'wrapper') $$;
 SELECT teste.eroare('T12i2 wrapper cu MAJUSCULE → porțile îl prind (N3)', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
 DROP FUNCTION teste.wrapper_majuscule(bigint);
+CREATE FUNCTION teste.wrapper_atomic(p bigint) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public
+BEGIN ATOMIC
+  SELECT public.fn_izo_seteaza_nivel(p, 'stoc', 'wrapper');
+END;
+SELECT teste.eroare('T12i3 wrapper BEGIN ATOMIC (corpul în prosqlbody, prosrc gol) → porțile îl prind', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
+DROP FUNCTION teste.wrapper_atomic(bigint);
 CREATE ROLE izo_test_exec NOLOGIN;
 SET ROLE izo_registru_writer;
 GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO izo_test_exec;

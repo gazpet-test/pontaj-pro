@@ -273,6 +273,27 @@ cursa "4i retry creare în timpul unei editări" \
   "$CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"C\"}', '[{\"denumire\":\"C1\",\"cantitate\":1}]')" \
   "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000001\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"cot 90\",\"cantitate\":2}]'); COMMIT;" \
   err "alt conținut"
+# Copilot r7 P1: o scriere DIRECTĂ pe linii, ținută necomisă (INSERT, apoi DELETE), și un RPC pe versiunea de dinainte →
+#    RPC-ul AȘTEAPTĂ antetul (trigger-ul trg_bonl_versiune îl ține), apoi vede versiunea mutată și refuză „modificat”
+VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
+cursa "4i INSERT direct pe linii ținut necomis ↔ RPC pe versiunea veche" \
+  "$CA_JANETA; INSERT INTO public.executie_bonuri_consum_linii (bon_id, denumire, cantitate) VALUES ($BON, 'direct', 1)" \
+  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"D\"}', '[{\"denumire\":\"D1\",\"cantitate\":1}]'); COMMIT;" \
+  err "modificat între timp"
+[ "$(q "SELECT count(*) FROM public.executie_bonuri_consum_linii WHERE bon_id = $BON AND denumire = 'direct'")" = 1 ] || esec "4i linia directă s-a pierdut"
+VER="$(q "SELECT updated_at FROM public.executie_bonuri_consum WHERE id = $BON")"
+cursa "4i DELETE direct pe linii ținut necomis ↔ RPC pe versiunea veche" \
+  "$CA_JANETA; DELETE FROM public.executie_bonuri_consum_linii WHERE bon_id = $BON AND denumire = 'direct'" \
+  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza($BON, '$VER', '{\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\",\"observatii\":\"E\"}', '[{\"denumire\":\"E1\",\"cantitate\":1}]'); COMMIT;" \
+  err "modificat între timp"
+[ "$(q "SELECT observatii FROM public.executie_bonuri_consum WHERE id = $BON")" = C ] || esec "4i RPC-ul refuzat a schimbat totuși antetul"
+# Copilot r7 P3: două creări DISTINCTE pe același proiect și an, concurente → B așteaptă numărul, apoi primește următorul
+cursa "4i două creări distincte concurente" \
+  "$CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000021\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"F1\",\"cantitate\":1}]')" \
+  "BEGIN; $CA_JANETA; SELECT public.fn_bon_salveaza(NULL, NULL, '{\"proiect_id\":1,\"cheie_operatie\":\"aaaaaaaa-0000-0000-0000-000000000022\",\"provenienta\":\"gazpet\",\"data_bon\":\"2026-10-21\"}', '[{\"denumire\":\"G1\",\"cantitate\":1}]')->>'numar_bon'; COMMIT;" \
+  ok "BC-2026-1-"
+[ "$(q "SELECT count(DISTINCT numar_bon) || ':' || count(*) FROM public.executie_bonuri_consum WHERE cheie_operatie IN ('aaaaaaaa-0000-0000-0000-000000000021', 'aaaaaaaa-0000-0000-0000-000000000022')")" = "2:2" ] \
+  || esec "4i creările concurente nu au două bonuri cu numere distincte"
 OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$REV_BON" 2>&1)" && esec "4i revenire nearmată a trecut"
 grep -q "nearmată" <<<"$OUT" || esec "4i revenire refuzată din alt motiv"
 # după creări prin RPC, revenirea armată REFUZĂ (istoricul de idempotență nu se șterge — Jakarinos r7)
@@ -280,7 +301,7 @@ OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpe
   && esec "4i revenirea armată cu chei de operație a trecut"
 grep -q "cheie_operatie" <<<"$OUT" || esec "4i revenire refuzată din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
 [ "$(q "SELECT count(*) FROM pg_proc WHERE proname = 'fn_bon_salveaza'")" = 1 ] || esec "4i refuzul a scos totuși funcția"
-ok "4i bon RPC (revenirea cu chei → refuz): $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · retry creare în timpul unei editări → așteaptă antetul, fără amestec · revenire nearmată → refuz, armată → doar funcția scoasă"
+ok "4i bon RPC (revenirea cu chei → refuz): $NB verificări SQL (creare + retry idempotent, CAS, retry după răspuns pierdut, linii goale, gazpet, registru atomic, anon) · două salvări concurente → una câștigă, cealaltă „modificat” · retry creare în timpul unei editări → așteaptă antetul, fără amestec · scriere directă pe linii (INSERT / DELETE) ținută ↔ RPC → așteaptă, „modificat” · două creări distincte concurente → numere distincte · revenire nearmată → refuz, armată → doar funcția scoasă"
 ok "4f/4g depozit șters în timpul importului → import refuzat · pachet mutat pe un proiect activat în timpul unui DELETE → DELETE refuzat"
 ok "4e activare + import combinat (barieră, ambele ordini): fără blocaj circular; mutarea depozitului așteaptă și e refuzată / importul vede site-ul nou și refuză"
 

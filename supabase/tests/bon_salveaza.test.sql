@@ -60,6 +60,32 @@ SELECT teste.e('B10b după refuz: antetul și liniile neschimbate (atomic)', (SE
 SELECT teste.eroare('B10c bon NOU cu bucată din registru → refuz, fără antet orfan', format($f$SELECT public.fn_bon_salveaza(NULL, NULL,
   '{"proiect_id":3,"cheie_operatie":"%s","provenienta":"beneficiar","data_bon":"2026-10-21"}', '[{"denumire":"teava","cantitate":1,"magazie_bucata_id":%s}]')$f$, :'OP3', :id_reg), 'nu intră pe bon');
 SELECT teste.e('B10d nicio urmă a creării refuzate', (SELECT count(*) FROM public.executie_bonuri_consum WHERE cheie_operatie = :'OP3') = 0);
+-- B15 scrierile DIRECTE pe linii (în afara RPC-ului) mută versiunea antetului (Copilot r7 P1, trg_bonl_versiune)
+SELECT updated_at AS v15 FROM public.executie_bonuri_consum WHERE id = :b1 \gset
+INSERT INTO public.executie_bonuri_consum_linii (bon_id, denumire, cantitate) VALUES (:b1, 'direct', 1);
+SELECT teste.e('B15 INSERT direct pe linii → versiunea antetului se mută', (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1) > :'v15'::timestamptz);
+SELECT teste.eroare('B15b RPC pe versiunea de dinaintea scrierii directe → refuz', format($f$SELECT public.fn_bon_salveaza(%s, %L,
+  '{"provenienta":"gazpet","data_bon":"2026-10-21","observatii":"editat"}', '[{"denumire":"y","cantitate":1}]')$f$, :b1, :'v15'), 'modificat între timp');
+SELECT updated_at AS v15c FROM public.executie_bonuri_consum WHERE id = :b1 \gset
+UPDATE public.executie_bonuri_consum_linii SET cantitate = 2 WHERE bon_id = :b1 AND denumire = 'direct';
+SELECT teste.e('B15c UPDATE direct pe linii → versiunea se mută', (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1) > :'v15c'::timestamptz);
+SELECT updated_at AS v15d FROM public.executie_bonuri_consum WHERE id = :b1 \gset
+DELETE FROM public.executie_bonuri_consum_linii WHERE bon_id = :b1 AND denumire = 'direct';
+SELECT teste.e('B15d DELETE direct pe linii → versiunea se mută', (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1) > :'v15d'::timestamptz);
+SELECT updated_at AS v15e0 FROM public.executie_bonuri_consum WHERE id = :b1 \gset
+SELECT r->>'updated_at' AS v15e FROM (SELECT public.fn_bon_salveaza(:b1, :'v15e0', '{"provenienta":"gazpet","data_bon":"2026-10-21","observatii":"editat"}',
+  format('[{"denumire":"teava gazpet","cantitate":1,"magazie_bucata_id":%s}]', :id_gzp)::jsonb) r) x \gset
+SELECT teste.e('B15e versiunea întoarsă de RPC = cea din BD (recitită după liniile scrise)',
+  :'v15e'::timestamptz = (SELECT updated_at FROM public.executie_bonuri_consum WHERE id = :b1));
+-- B16 la editare data rămâne în anul din număr (Copilot r7 P2)
+SELECT teste.eroare('B16 editare cu data în alt an decât numărul → refuz', format($f$SELECT public.fn_bon_salveaza(%s, %L,
+  '{"provenienta":"gazpet","data_bon":"2027-01-05","observatii":"editat"}', '[{"denumire":"y","cantitate":1}]')$f$, :b1, :'v15e'), 'iese din anul');
+-- B17 liniile se scriu în ordinea trimisă (sortarea e doar pentru comparația de idempotență)
+SELECT r->>'bon_id' AS b17 FROM (SELECT public.fn_bon_salveaza(NULL, NULL,
+  '{"proiect_id":1,"cheie_operatie":"aaaaaaaa-0000-0000-0000-000000000004","provenienta":"gazpet","data_bon":"2026-10-21"}',
+  '[{"denumire":"zeta","cantitate":1},{"denumire":"alfa","cantitate":1},{"denumire":"mu","cantitate":1}]') r) x \gset
+SELECT teste.e('B17 ordinea liniilor = ordinea trimisă (zeta, alfa, mu)',
+  (SELECT string_agg(denumire, ',' ORDER BY id) FROM public.executie_bonuri_consum_linii WHERE bon_id = :b17) = 'zeta,alfa,mu');
 RESET ROLE;
 -- B14 numerotarea trece de 9999 fără trunchiere (Jakarinos r7)
 INSERT INTO public.executie_bonuri_consum (numar_bon, proiect_id) VALUES ('BC-2026-2-9999', 2);

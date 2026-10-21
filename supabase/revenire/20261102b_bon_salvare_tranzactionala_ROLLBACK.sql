@@ -1,5 +1,6 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
--- 20261102b_bon_salvare_tranzactionala_ROLLBACK — NU e migrare. Scoate public.fn_bon_salveaza, indexurile și coloana
+-- 20261102b_bon_salvare_tranzactionala_ROLLBACK — NU e migrare. Scoate public.fn_bon_salveaza, trigger-ul trg_bonl_versiune
+-- (cu funcția lui), indexurile și coloana
 -- executie_bonuri_consum.cheie_operatie — DOAR cât nicio creare n-a trecut prin RPC (coloana goală); altfel REFUZĂ, ca
 -- istoricul de idempotență să nu se piardă. UI-ul care cheamă funcția (ConsumuriBonuriTab) se retrage ÎNAINTE (revert PR) — altfel salvarea
 -- bonurilor nu mai merge.
@@ -18,12 +19,16 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261102b: rulează ca postgres'; END IF;
   IF to_regprocedure('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)') IS NULL OR to_regclass('public.ux_bonc_cheie_operatie') IS NULL
-     OR to_regclass('public.ux_bonc_proiect_numar') IS NULL THEN
+     OR to_regclass('public.ux_bonc_proiect_numar') IS NULL OR to_regprocedure('public.fn_bon_linii_versiune()') IS NULL THEN
     RAISE EXCEPTION 'Revenire 20261102b: fn_bon_salveaza / ux_bonc_cheie_operatie nu există — nimic de scos';
   END IF;
   SELECT md5(p.prosrc || '|' || coalesce(p.proacl::text, '') || '|' || coalesce(p.proconfig::text, '') || '|' || p.prosecdef::text
              || '|' || (SELECT pg_get_indexdef('public.ux_bonc_cheie_operatie'::regclass))
-             || '|' || (SELECT pg_get_indexdef('public.ux_bonc_proiect_numar'::regclass)))
+             || '|' || (SELECT pg_get_indexdef('public.ux_bonc_proiect_numar'::regclass))
+             || '|' || (SELECT t.prosrc || ':' || coalesce(t.proacl::text, '') || ':' || coalesce(t.proconfig::text, '') || ':' || t.prosecdef::text
+                          FROM pg_proc t WHERE t.oid = 'public.fn_bon_linii_versiune()'::regprocedure)
+             || '|' || (SELECT pg_get_triggerdef(g.oid) || ':' || g.tgenabled::text FROM pg_trigger g
+                         WHERE g.tgrelid = 'public.executie_bonuri_consum_linii'::regclass AND g.tgname = 'trg_bonl_versiune'))
     INTO v_acum FROM pg_proc p WHERE p.oid = 'public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure;
   v_scrisa := substring(obj_description('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)'::regprocedure, 'pg_proc') FROM 'amprenta=([0-9a-f]{32})');
   IF v_acum IS DISTINCT FROM v_scrisa THEN
@@ -36,11 +41,13 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.executie_bonuri_consum WHERE cheie_operatie IS NOT NULL) THEN
     RAISE EXCEPTION 'Revenire 20261102b: există bonuri create prin RPC (cheie_operatie) — coloana nu se scoate; retragere = UI + decizie separată; refuz';
   END IF;
+  DROP TRIGGER trg_bonl_versiune ON public.executie_bonuri_consum_linii;
+  DROP FUNCTION public.fn_bon_linii_versiune();
   DROP FUNCTION public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb);   -- fără CASCADE: o dependență neașteptată anulează tot
   DROP INDEX public.ux_bonc_cheie_operatie;
   DROP INDEX public.ux_bonc_proiect_numar;
   ALTER TABLE public.executie_bonuri_consum DROP COLUMN cheie_operatie;
-  IF to_regprocedure('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)') IS NOT NULL
+  IF to_regprocedure('public.fn_bon_salveaza(bigint, timestamptz, jsonb, jsonb)') IS NOT NULL OR to_regprocedure('public.fn_bon_linii_versiune()') IS NOT NULL
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'executie_bonuri_consum' AND column_name = 'cheie_operatie') THEN
     RAISE EXCEPTION 'Revenire 20261102b: au rămas obiecte';
   END IF;
