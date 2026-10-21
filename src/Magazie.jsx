@@ -13,6 +13,7 @@ import { supabase } from './lib/supabase.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
 import IzoStocTeava from './IzoStocTeava.jsx'
+import IzoDocumenteIntrare from './IzoDocumenteIntrare.jsx'
 import jsPDF from 'jspdf'
 
 const G = {
@@ -2275,7 +2276,7 @@ export default function MagaziePage() {
   if (extern === null) return <div style={{ ...S.page, padding:40, textAlign:'center', color:G.dim }}>Se încarcă…</div>
   const tabsVizibile = extern
     ? [['productie', '🏭 Producție']]
-    : [['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['teava_proiecte', '🧱 Țeavă proiecte'], ['productie', '🏭 Producție']]
+    : [['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['teava_proiecte', '🧱 Țeavă proiecte'], ['documente_intrare', '🧾 Documente de intrare'], ['productie', '🏭 Producție']]
   return (
     <div style={{ ...S.page, padding:'24px 0' }}>
       <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:18, flexWrap:'wrap' }}>
@@ -2305,6 +2306,7 @@ export default function MagaziePage() {
       {tab === 'echipamente' && <EchipamenteTab />}
       {tab === 'stoc_trasabil' && <StocTrasabilTab />}
       {tab === 'teava_proiecte' && <IzoStocTeava />}
+      {tab === 'documente_intrare' && <IzoDocumenteIntrare />}
       {tab === 'productie' && <ProductieTab />}
     </div>
   )
