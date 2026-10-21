@@ -446,3 +446,17 @@ export function patchActAditional({ g, de, pana, termenDepunere, azi, extra = {}
   return { valabil_de: de, valabil_pana: pana, valabil_zile: zile, termen_la_cerere: termenDepunere,
     observatii: adaugaObservatie(g?.observatii, linieActAditional({ ...extra, azi, polita: g?.polita_nr, de, pana })) }
 }
+
+// TKT-0342 r2 (review Copilot / Jakarinos #833, P1): după o eroare la salvare (UPDATE posibil comis, răspuns pierdut) starea se citește din
+// nou și se decide fără ghicit: 'salvat' = rândul are exact perioada + observațiile scrise; 'nesalvat' = rândul are SIGUR starea de
+// dinainte (singurul caz în care PDF-ul urcat se poate șterge); 'necunoscut' = recitirea a eșuat sau rândul arată altceva (PDF-ul rămâne)
+// inainte = rândul din UI înainte de salvare; p = patch-ul trimis; dupa = rândul recitit (null / undefined = recitire eșuată)
+export function rezultatSalvareAct({ inainte, p, dupa }) {
+  if (!dupa || !p) return 'necunoscut'
+  const egal = (a, b) => (a ?? null) === (b ?? null)
+  if (egal(dupa.valabil_de, p.valabil_de) && egal(dupa.valabil_pana, p.valabil_pana) && egal(dupa.observatii, p.observatii)) return 'salvat'
+  if (inainte && egal(dupa.valabil_de, inainte.valabil_de) && egal(dupa.valabil_pana, inainte.valabil_pana) && egal(dupa.observatii, inainte.observatii)) return 'nesalvat'
+  return 'necunoscut'
+}
+// PDF-ul actului (review #833 r2, P2): tipul și extensia, înainte de încărcare
+export const estePdfAct = (f) => !!f && f.type === 'application/pdf' && /\.pdf$/i.test(String(f.name || ''))

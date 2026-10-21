@@ -29,7 +29,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import GarantieRegistruLink from './OfertareGarantieRegistru.jsx'
 import { ziDepunere, calculeazaValabilitate, propuneActualizare, textDurata, zileIntre, MESAJ_NECITIT,
-  faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional,
+  faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional, rezultatSalvareAct, estePdfAct,
   evalueazaGarantie, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE, semnalDinCitire, precompletarePerioada } from './ofertareGarantieValabilitate.js'
 
 // cerințele din registru care pot conține valabilitatea (garanție / ofertă) — aceeași interogare în tab și în KPI
@@ -317,6 +317,7 @@ Vă mulțumim.`
   // Ordinea: întâi PDF-ul, apoi fișa; dacă fișa nu se salvează, PDF-ul urcat se șterge (sau se spune explicit că a rămas).
   const salveazaActManual = async () => {
     if (!fAct) return setMsg({ tip: 'err', text: 'Atașează PDF-ul actului adițional (obligatoriu când actul e înregistrat fără mailul de prelungire).' })
+    if (!estePdfAct(fAct)) return setMsg({ tip: 'err', text: `Fișierul „${fAct.name}” nu e PDF (tip ${fAct.type || 'necunoscut'}) — atașează actul adițional scanat ca PDF.` })
     const acum = new Date()
     const p = patchActAditional({ g, de: actAdDe, pana: actAdPana, termenDepunere: l.termen_depunere, azi: ziDepunere(acum.toISOString()),
       extra: { nrAct: actM?.nr, dataAct: actM?.data || null, cine: profile?.name || profile?.email || '', ora: acum.toTimeString().slice(0, 5), faraMail: true } })
@@ -329,14 +330,31 @@ Vă mulțumim.`
     setBusy('Se încarcă actul adițional…'); setMsg(null)
     let path
     try { path = await urca(fAct, 'act_aditional') } catch (e) { setBusy(null); return setMsg({ tip: 'err', text: `PDF-ul nu s-a încărcat (${e.message}) — nu s-a salvat nimic.` }) }
-    try { await patch(p) } catch (e) {
-      const { error: eRm } = await supabase.storage.from('ofertare').remove([path])
-      setBusy(null)
-      return setMsg({ tip: 'err', text: `Actul adițional NU s-a salvat în fișă (${e.message}). ` + (eRm
-        ? `PDF-ul urcat a RĂMAS în storage, neînregistrat (${path}) — reîncearcă sau cere ștergerea lui.` : 'PDF-ul urcat a fost șters; nimic nu s-a schimbat.') })
+    // review #833 r1 (P1, Jakarinos): UPDATE-ul cere rândul înapoi — 0 rânduri (RLS / rând dispărut) = SIGUR nesalvat, nu „succes”
+    const okMsg = { tip: 'ok', text: `✓ Polița nr. ${g.polita_nr || '—'} e acum valabilă ${fmtZi(actAdDe)} – ${fmtZi(actAdPana)} (act adițional fără mail, PDF atașat). Actualizează și Registrul garanții / pachetul de depunere, dacă e deja aprobat.` }
+    let rez, motiv = null
+    try {
+      const { data, error } = await supabase.from('ofertare_garantii').update({ ...p, updated_at: new Date().toISOString() }).eq('id', g.id).select('id')
+      if (error) { motiv = error.message; rez = null }
+      else rez = (data || []).length === 1 ? 'salvat' : 'nesalvat'
+      if (!error && rez === 'nesalvat') motiv = 'niciun rând actualizat (drept de scriere sau fișa nu mai există)'
+    } catch (e) { motiv = e?.message || String(e); rez = null }
+    // review #833 r1 (P1, Copilot + Jakarinos): o eroare NU dovedește „nesalvat” (UPDATE comis, răspuns pierdut) → recitire și decizie
+    if (rez === null) {
+      const { data: dupa, error: eR } = await supabase.from('ofertare_garantii').select('valabil_de, valabil_pana, observatii').eq('id', g.id).maybeSingle()
+      rez = eR ? 'necunoscut' : rezultatSalvareAct({ inainte: g, p, dupa })
     }
-    setMsg({ tip: 'ok', text: `✓ Polița nr. ${g.polita_nr || '—'} e acum valabilă ${fmtZi(actAdDe)} – ${fmtZi(actAdPana)} (act adițional fără mail, PDF atașat). Actualizează și Registrul garanții / pachetul de depunere, dacă e deja aprobat.` })
-    setBusy(null); await load(); onChanged?.()
+    if (rez === 'salvat') { setMsg(okMsg); setBusy(null); await load(); onChanged?.(); return }
+    if (rez === 'necunoscut') {
+      setBusy(null)
+      return setMsg({ tip: 'err', text: `Rezultatul salvării nu a putut fi confirmat (${motiv}). PDF-ul a rămas la ${path}. Reîncarcă fișa înainte să reîncerci.` })
+    }
+    // 'nesalvat' SIGUR (UPDATE fără rând sau recitirea arată starea de dinainte): abia acum se șterge PDF-ul urcat; ștergerea e dovedită
+    // doar dacă storage întoarce exact obiectul șters (review #833 r1, P2)
+    const { data: sters, error: eRm } = await supabase.storage.from('ofertare').remove([path])
+    setBusy(null)
+    return setMsg({ tip: 'err', text: `Actul adițional NU s-a salvat în fișă (${motiv}). ` + (!eRm && (sters || []).length === 1
+      ? 'PDF-ul urcat a fost șters; nimic nu s-a schimbat.' : `Curățarea PDF-ului urcat nu e confirmată — fișierul poate fi rămas la ${path}.`) })
   }
   // termen mutat (sau cerere de prelungire rămasă pentru alt termen), dar polița acoperă DOVEDIT termenul curent +
   // valabilitatea cerută ⇒ omul confirmă verificarea; perioada poliței NU se prelungește (termenul de referință + urmă
@@ -487,7 +505,6 @@ Vă mulțumim.`
               </div>
               {!actEdit && propAct && !propAct.rezerva && g.valabil_zile ? <span style={{ color:G.dim }}>Cererea anterioară: {g.valabil_zile} zile de la {fmtZi(g.termen_la_cerere)} — nu se copiază; durata se recalculează din cerință pe termenul nou.</span> : null}
               {g.status === 'original' && <span style={{ color:G.muted }}>Mailul automat transmite doar perioada nouă (nu menționează nr. poliței și nici „act adițional”); polița rămâne afișată cu perioada ei reală până marchezi „act adițional primit”.</span>}
-              {formActManual()}
               {necesar?.pana && actCalc?.pana && actCalc.pana < necesar.pana && (
                 <span style={{ color:G.red }}>⚠ Mai scurtă decât cerința ({textDurata(propunere.durata)} de la {fmtZi(deAcum)} → {fmtZi(necesar.pana)}).</span>
               )}
@@ -499,10 +516,12 @@ Vă mulțumim.`
                 ? <>⚠️ Polița {g.status === 'original' ? `nr. ${g.polita_nr || '—'} ` : ''}e valabilă doar până la <b>{fmtZi(st.acoperaPana)}</b>, dar cerința ({textDurata(propunere.durata)} de la {fmtZi(deAcum)}) cere până la <b>{fmtZi(necesar.pana)}</b>.</>
                 : <>⚠️ Polița {g.status === 'original' ? `nr. ${g.polita_nr || '—'} ` : ''}începe abia pe <b>{fmtZi(st.acoperaDe)}</b>, după ziua depunerii (<b>{fmtZi(deAcum)}</b>).</>}
               <span style={{ color:G.muted }}>{propunere.sursa ? ` Sursa: ${propunere.sursa.eticheta} — „${propunere.sursa.fragment}” ·` : ''} verifică polița și cere brokerului corectarea perioadei.</span>
-              {formActManual()}
             </Banner>
           )}
 
+          {/* TKT-0342 r2 (review #833, P2): actul adițional fără mail — independent de avertizări (și cu termenul nemutat sau cerința
+              necitită), dar DOAR pentru polița în original */}
+          {g?.status === 'original' && <div style={{ marginBottom:12, fontSize:12.5 }}>{formActManual()}</div>}
           {/* pasul 1 — fără garanție: formular cerere */}
           {!g && !form && (
             <div style={{ fontSize:12.5, color:G.muted }}>

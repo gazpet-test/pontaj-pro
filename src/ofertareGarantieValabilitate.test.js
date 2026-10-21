@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import {
   plusZile, plusLuni, zileIntre, ziDepunere, extrageDurate, clasificaSurse, propuneValabilitate,
   calculeazaValabilitate, propuneActualizare, textDurata, MESAJ_NECITIT, MESAJ_CONFLICT, ETICHETA_REZUMAT,
-  stareGarantie, trimiteActualizareSigur, patchActAditional, linieActAditional, ultimaPrelungire, faraMarcaje, liniePrelungireCeruta, fmtIso,
+  stareGarantie, trimiteActualizareSigur, patchActAditional, linieActAditional, rezultatSalvareAct, estePdfAct, ultimaPrelungire, faraMarcaje, liniePrelungireCeruta, fmtIso,
   evalueazaGarantie, semnalReverificare, termenMutat, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE,
   indicatorGarantie, semnalDinCitire, precompletarePerioada,
 } from './ofertareGarantieValabilitate.js'
@@ -399,9 +399,33 @@ describe('garanția #1 (lic. 3): polița în original, termen decalat 24.09 → 
     expect(ultimaPrelungire(q.observatii)).toMatchObject({ de: '2026-10-26', pana: '2027-02-26' })
     expect(q.observatii.split('\n')).toHaveLength(G1.observatii ? G1.observatii.split('\n').length + 1 : 1)
     expect(q.observatii.split('\n').pop()).not.toMatch(/ la xx/)
+    // review #833 r1 (P3): pe linia nouă există UN SINGUR marcaj, iar textele curățate nu mai conțin delimitatori de marcaj
+    const ln = q.observatii.split('\n').pop()
+    expect((ln.match(/⟦/g) || []).length).toBe(1)
+    expect((ln.match(/⟧/g) || []).length).toBe(1)
+    expect(ln.indexOf('⟦')).toBe(ln.lastIndexOf('⟦act-aditional 2026-10-26 2027-02-26⟧'))
     // fără extra: linia veche, neschimbată
     expect(linieActAditional({ azi: '2026-10-21', polita: 'P1', de: '2026-10-26', pana: '2027-02-26' }))
       .toBe('21.10.2026: act adițional primit la polița nr. P1 — acoperă 26.10.2026 – 26.02.2027. ⟦act-aditional 2026-10-26 2027-02-26⟧')
+  })
+  it('TKT-0342 r2: decizia după o eroare la salvare — salvat / nesalvat doar dovedit, altfel necunoscut (PDF-ul rămâne)', () => {
+    const inainte = { valabil_de: '2026-10-12', valabil_pana: '2027-02-12', observatii: 'vechi' }
+    const p = { valabil_de: '2026-10-26', valabil_pana: '2027-02-26', observatii: 'vechi\nnou' }
+    expect(rezultatSalvareAct({ inainte, p, dupa: { ...p } })).toBe('salvat')
+    expect(rezultatSalvareAct({ inainte, p, dupa: { ...inainte } })).toBe('nesalvat')
+    expect(rezultatSalvareAct({ inainte, p, dupa: null })).toBe('necunoscut')
+    expect(rezultatSalvareAct({ inainte, p, dupa: undefined })).toBe('necunoscut')
+    // altcineva a schimbat fișa între timp (nici starea veche, nici cea scrisă) → necunoscut, nu „nesalvat”
+    expect(rezultatSalvareAct({ inainte, p, dupa: { ...inainte, observatii: 'vechi\naltceva' } })).toBe('necunoscut')
+    expect(rezultatSalvareAct({ inainte, p, dupa: { ...p, valabil_pana: '2027-03-01' } })).toBe('necunoscut')
+  })
+  it('TKT-0342 r2: PDF-ul actului — tipul ȘI extensia', () => {
+    expect(estePdfAct({ name: 'act.pdf', type: 'application/pdf' })).toBe(true)
+    expect(estePdfAct({ name: 'ACT.PDF', type: 'application/pdf' })).toBe(true)
+    expect(estePdfAct({ name: 'act.jpg', type: 'image/jpeg' })).toBe(false)
+    expect(estePdfAct({ name: 'act.pdf', type: '' })).toBe(false)
+    expect(estePdfAct({ name: 'act.docx', type: 'application/pdf' })).toBe(false)
+    expect(estePdfAct(null)).toBe(false)
   })
   it('act adițional mai scurt decât cerința ⇒ insuficient rămâne; perioadă inversată ⇒ refuzat', () => {
     const p = patchActAditional({ g: G1, de: DE_ACUM, pana: '2027-02-10', termenDepunere: TERMEN, azi: '2026-10-01' })
