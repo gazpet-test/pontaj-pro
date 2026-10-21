@@ -13,6 +13,7 @@ import { supabase } from './lib/supabase.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
 import IzoStocTeava from './IzoStocTeava.jsx'
+import IzoDocumenteIntrare from './IzoDocumenteIntrare.jsx'
 import jsPDF from 'jspdf'
 
 const G = {
@@ -2265,17 +2266,31 @@ export default function MagaziePage() {
   // Externii (email non-@gazpet.ro, ex. partenerul de agrement Adrom Evolution)
   // văd DOAR tab-ul Producție — restul magaziei e intern.
   const [extern, setExtern] = useState(null)
+  // E3 (🧾 Documente de intrare): vizibilitatea urmează autorizarea, nu domeniul mailului — un owner sau un cont cu atribuire
+  // activă în registrul de țeavă vede tab-ul și ca extern (datele le filtrează oricum RLS-ul)
+  const [externE3, setExternE3] = useState(false)
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
       const e = !(user?.email || '').toLowerCase().endsWith('@gazpet.ro')
+      let e3 = false
+      if (e && user) {
+        try {
+          const [rp, ra] = await Promise.all([
+            supabase.from('profiles').select('is_owner').eq('id', user.id).maybeSingle(),
+            supabase.from('izo_atribuiri').select('proiect_id').eq('profile_id', user.id).eq('activ', true).limit(1),
+          ])
+          e3 = !!rp.data?.is_owner || !!ra.data?.length
+        } catch { e3 = false }
+      }
+      setExternE3(e3)
       setExtern(e)
       if (e) setTab('productie')
     })
   }, [])
   if (extern === null) return <div style={{ ...S.page, padding:40, textAlign:'center', color:G.dim }}>Se încarcă…</div>
   const tabsVizibile = extern
-    ? [['productie', '🏭 Producție']]
-    : [['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['teava_proiecte', '🧱 Țeavă proiecte'], ['productie', '🏭 Producție']]
+    ? [...(externE3 ? [['documente_intrare', '🧾 Documente de intrare']] : []), ['productie', '🏭 Producție']]
+    : [['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['teava_proiecte', '🧱 Țeavă proiecte'], ['documente_intrare', '🧾 Documente de intrare'], ['productie', '🏭 Producție']]
   return (
     <div style={{ ...S.page, padding:'24px 0' }}>
       <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:18, flexWrap:'wrap' }}>
@@ -2305,6 +2320,7 @@ export default function MagaziePage() {
       {tab === 'echipamente' && <EchipamenteTab />}
       {tab === 'stoc_trasabil' && <StocTrasabilTab />}
       {tab === 'teava_proiecte' && <IzoStocTeava />}
+      {tab === 'documente_intrare' && <IzoDocumenteIntrare />}
       {tab === 'productie' && <ProductieTab />}
     </div>
   )
