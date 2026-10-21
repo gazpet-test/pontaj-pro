@@ -27,13 +27,17 @@
 // la INSERT) = „deja salvat / închis din alt loc”: se caută după proveniență,
 // fără a doua inserare; închiderea rândului atinge doar rânduri încă în coadă
 // (nu rescrie legătura pusă de panou). Logica pură: citesteOriceDubluri.js.
+// Jakarinos r2 P1: garda BD cere și mărimea + tipul MIME ale rândului (ne-NULL)
+// → INSERT-ul în coadă întoarce fisier_size_bytes / fisier_mime (înainte nu le
+// întorcea: documentul pleca cu NULL), iar docWizardHR le copiază exact.
 // ════════════════════════════════════════════════════════════════
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
 import { STATUS_COADA, rezultatInserareHR, copieDeSters, rezultatProvenienta, docWizardHR, inchidereWizardHR,
-  decizieWizardHR, citireNecesara, stareInchidere, mesajWizardInchidere, stergeStagingWizard } from './citesteOriceDubluri.js'
+  decizieWizardHR, citireNecesara, stareInchidere, mesajWizardInchidere, stergeStagingWizard,
+  faraMetadateSursa, MESAJ_WIZ_FARA_METADATE } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -241,7 +245,8 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
           fisier_path: path, fisier_nume: file.name, fisier_size_bytes: file.size,
           fisier_mime: file.type || 'application/pdf', status: 'in_asteptare',
           uploadat_de: profile?.id || null,
-        }).select('id,status,modul_tinta,fisier_nume,fisier_path').single()
+        // fisier_size_bytes / fisier_mime: valorile din BD ale rândului — docWizardHR le copiază exact (garda BD, Jakarinos r2 P1)
+        }).select('id,status,modul_tinta,fisier_nume,fisier_path,fisier_size_bytes,fisier_mime').single()
         if (insErr) {
           // fișierul e deja în storage — dacă rândul nu s-a creat (ex. dublură
           // respinsă de trigger), îl scoatem, altfel rămâne orfan în bucket
@@ -299,6 +304,8 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
       let ok = 0, esuate = [], avert = []
       for (const d of docs.filter(x => x.status === 'clasificat' && x.tip_id)) {
         try {
+          // rândul fără mărime / tip nu se poate lega (garda BD) → nimic copiat, nimic inserat
+          if (faraMetadateSursa(d)) { esuate.push(`${d.fisier_nume}: ${MESAJ_WIZ_FARA_METADATE}`); continue }
           const tip = tipuri.find(t => t.id === d.tip_id)
           const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET_INBOX).download(d.fisier_path)
           if (dlErr) throw dlErr

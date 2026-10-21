@@ -56,6 +56,8 @@
 //   Review extern #821: garda BD de la INSERT (rândul HR deschis, același fișier) poate refuza INSERT-ul cu 23514 când
 //   rândul a fost închis / mutat între timp (ex. de wizard-ul „Angajat nou”, care pune acum și el sursa_inbox_id) →
 //   'refuzata': copia se șterge, proveniența decide mesajul, coada se reîncarcă — niciodată a doua inserare.
+//   Jakarinos r2 P1: garda cere și mărimea + tipul MIME ale rândului (ne-NULL) → documentul le copiază EXACT din rând
+//   (fisierDinRand, fără fallback 'application/pdf'); rândul fără ele se oprește înainte de copie (faraMetadateSursa).
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -67,7 +69,8 @@ import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucat
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
   citireNecesara, stareInchidere, mesajInchidere, avertizareStaging, textConfirmareRespingere, mesajRespingere,
   mesajBlocareHR, dosarInVerificare, rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari,
-  STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA, copieDeSters, mesajRefuzSursa } from './citesteOriceDubluri.js'
+  STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA, copieDeSters, mesajRefuzSursa,
+  fisierDinRand, faraMetadateSursa, MESAJ_SURSA_FARA_METADATE } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -557,6 +560,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         flash('err', mesajBlocareHR(bloc, cls, row.fisier_nume))
         return
       }
+      // Jakarinos r2 P1: garda BD cere mărimea + tipul rândului (ne-NULL) — fără ele nu se poate lega; mă opresc înainte de copie
+      // (închiderea pe un document deja în dosar — panoul de dublură — nu inserează, deci nu e atinsă)
+      if (faraMetadateSursa(row)) { flash('err', MESAJ_SURSA_FARA_METADATE, 12000); return }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
       // F2 (r6) + 20261103a: alt tab / alt om poate salva documentul din același rând cât copiez fișierul (1–5 s) —
       // fără a doua verificare aici: indexul unic pe sursa_inbox_id oprește atomic al doilea INSERT (23505, mai jos).
@@ -567,8 +573,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         numar_document: dd.numar || null, emitent: dd.emitent || null,
         data_emitere: dd.data_emitere || null, data_expirare: dataExp,
         fara_expirare: !dataExp,
-        fisier_path: destPath, fisier_nume: row.fisier_nume,
-        fisier_size_bytes: row.fisier_size_bytes, fisier_mime: row.fisier_mime || 'application/pdf',
+        // nume + mărime + tip = exact ale rândului (fisierDinRand, fără fallback 'application/pdf'): garda BD le cere egale
+        fisier_path: destPath, ...fisierDinRand(row),
         // proveniența = coloana (unică, nemodificabilă); observațiile = doar titlul AI, ca pe main
         activ: true, observatii: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id, sursa_inbox_id: row.id,
       }).select('id').single())
@@ -583,7 +589,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         // „Angajat nou” sau alt tab): proveniența, dacă există, altfel „nu mai e deschis”; coada se reîncarcă.
         const p = await cautaProvenienta(row)
         const docs = p.err ? [] : p.docs
-        if (rIns === 'refuzata') { await loadQueue(); flash('err', mesajRefuzSursa(docs, angajatId, numeAngajat), 12000); return }
+        if (rIns === 'refuzata') { await loadQueue(); flash('err', mesajRefuzSursa(docs, angajatId, numeAngajat, ins.error), 12000); return }
         await verificaDosar([row])
         flash('err', mesajProvenienta(docs, angajatId, numeAngajat), 12000)
         return

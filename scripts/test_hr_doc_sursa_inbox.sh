@@ -5,7 +5,8 @@
 #   0. schelet (= structura din producție 21.10, fără coloană) → baza; suita pe baza fără migrare TREBUIE să cadă (discriminare)
 #   1. gărzi: fără marcajul de livrare → refuz; coloana deja există → refuz PRECONDIȚIE (nimic adăugat); eticheta veche
 #      „[Citește orice #N]” (r7) în observații — și cu „ş” cu sedilă — → refuz PRECONDIȚIE (nimic adăugat), linia de completare
-#      „«Citește orice» (inbox #N…)” nu e etichetă → trece; authenticated fără SELECT pe coada → refuz PRECONDIȚIE (review #821)
+#      „«Citește orice» (inbox #N…)” nu e etichetă → trece; authenticated fără SELECT pe coada → refuz PRECONDIȚIE (review #821);
+#      fără SELECT pe fisier_mime / fisier_size_bytes de alt tip → refuz PRECONDIȚIE (Jakarinos r2 P1: garda compară mărime + tip)
 #   2. aplicare (ca runnerul: marcaj + --single-transaction) → suita
 #   3. reaplicare → refuz PRECONDIȚIE (migrarea nu e idempotentă, e exactă), starea intactă → suita
 #   4. revenire: nearmată → refuz; REPEATABLE READ → refuz; armare persistentă → refuz; document cu sursa_inbox_id → refuz
@@ -99,7 +100,17 @@ coloana_exista hr_sursa_leg_test || esec "1e coloana lipsește după aplicare"
 q hr_sursa_priv_test "REVOKE SELECT ON public.ai_documente_inbox FROM authenticated" >/dev/null
 refuza "1f authenticated fără SELECT pe coadă" 'authenticated nu are SELECT pe ai_documente_inbox.id' "${PSQL[@]}" -d hr_sursa_priv_test --single-transaction -f "$MIGRARE"
 coloana_exista hr_sursa_priv_test && esec "1f coloana a apărut deși precondiția de drepturi a refuzat"
-ok "1c–1f eticheta veche r7 (ș / ş) → refuz PRECONDIȚIE, nimic adăugat; linia «Citește orice» (inbox #N…) → trece; authenticated fără SELECT pe coadă → refuz"
+# 1g garda citește și fisier_size_bytes / fisier_mime (Jakarinos r2 P1): SELECT pe coloane fără fisier_mime → refuz PRECONDIȚIE
+"${PSQL[@]}" -d postgres -c "CREATE DATABASE hr_sursa_col_test TEMPLATE $BAZA"
+q hr_sursa_col_test "REVOKE SELECT ON public.ai_documente_inbox FROM authenticated; GRANT SELECT (id, modul_tinta, status, fisier_nume, fisier_size_bytes, entitate_id, uploadat_de) ON public.ai_documente_inbox TO authenticated" >/dev/null
+refuza "1g authenticated fără SELECT pe fisier_mime" 'authenticated nu are SELECT pe ai_documente_inbox.fisier_mime' "${PSQL[@]}" -d hr_sursa_col_test --single-transaction -f "$MIGRARE"
+coloana_exista hr_sursa_col_test && esec "1g coloana a apărut deși precondiția de drepturi a refuzat"
+# 1h comparația e exactă: fisier_size_bytes cu alt tip (integer) în dosar → refuz PRECONDIȚIE
+"${PSQL[@]}" -d postgres -c "CREATE DATABASE hr_sursa_tip_test TEMPLATE $BAZA"
+q hr_sursa_tip_test "ALTER TABLE public.hr_documente_personale ALTER COLUMN fisier_size_bytes TYPE integer" >/dev/null
+refuza "1h fisier_size_bytes integer" 'fisier_size_bytes (bigint) / fisier_mime (text) lipsesc sau au alt tip' "${PSQL[@]}" -d hr_sursa_tip_test --single-transaction -f "$MIGRARE"
+coloana_exista hr_sursa_tip_test && esec "1h coloana a apărut deși precondiția de tip a refuzat"
+ok "1c–1h eticheta veche r7 (ș / ş) → refuz PRECONDIȚIE, nimic adăugat; linia «Citește orice» (inbox #N…) → trece; authenticated fără SELECT pe coadă / pe fisier_mime → refuz; fisier_size_bytes de alt tip → refuz"
 
 # 2. aplicare
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE" >"$OUT" 2>&1 || { cat "$OUT"; esec "2 aplicare"; }
@@ -119,7 +130,7 @@ refuza "4b REPEATABLE READ" 'DOAR la READ COMMITTED' revenire "REPEATABLE READ" 
 q postgres "ALTER DATABASE $BAZA SET $GUC = 'x'" >/dev/null
 refuza "4c armare persistentă" 'armat PERSISTENT' revenire "READ COMMITTED" da "$BAZA"
 q postgres "ALTER DATABASE $BAZA RESET $GUC" >/dev/null
-q "$BAZA" "INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, 'CI.pdf', 501)" >/dev/null
+q "$BAZA" "INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, fisier_size_bytes, fisier_mime, sursa_inbox_id) VALUES (7, 'CI.pdf', 1234, 'application/pdf', 501)" >/dev/null
 refuza "4d document cu proveniență" '1 document(e) din dosarul HR au sursa_inbox_id' revenire "READ COMMITTED" da "$BAZA"
 coloana_exista "$BAZA" || esec "4d coloana a dispărut deși revenirea a refuzat"
 [ "$(obiecte "$BAZA")" = 5 ] || esec "4d obiectele au dispărut deși revenirea a refuzat"

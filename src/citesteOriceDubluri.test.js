@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   dataAIValida, textAIValid, esteDinDrive, cheieDosar, perechiDeVerificat, bucati,
   clasificaDublura, campuriDeCompletat, updateCompletare, fmtZi, liniaObservatii,
@@ -13,6 +14,8 @@ import {
   dinRandul, lipsaMigrareSursa, dublaSursaInbox, rezultatInserareHR, MESAJ_MIGRARE_SURSA,
   refuzSursaInbox, copieDeSters, MESAJ_SURSA_REFUZATA, mesajRefuzSursa, docWizardHR, inchidereWizardHR, decizieWizardHR,
   MESAJ_WIZ_DUBLA, MESAJ_WIZ_REFUZ, MESAJ_WIZ_NEVERIFICAT, mesajWizardInchidere, stergeStagingWizard,
+  fisierDinRand, faraMetadateSursa, MESAJ_SURSA_FARA_METADATE, MESAJ_WIZ_FARA_METADATE, refuzFisierSursa,
+  MESAJ_SURSA_FISIER, MESAJ_WIZ_FISIER,
 } from './citesteOriceDubluri.js'
 import * as dubluri from './citesteOriceDubluri.js'
 
@@ -992,18 +995,25 @@ describe('#821 F2 garda de la INSERT (trg_hr_docp_sursa_inbox_verifica) = refuz 
 })
 
 describe('#821 F1 wizard „Angajat nou”: proveniența rândului din coadă', () => {
+  // = rândul întors de INSERT-ul wizard-ului în coadă (select … fisier_size_bytes, fisier_mime — Jakarinos r2 P1) + metadatele locale
   const d = (o = {}) => ({ id:701, status:'clasificat', modul_tinta:'hr', fisier_nume:'POPESCU ION - CI.pdf', fisier_path:'wizard-angajare/1_a/CI.pdf',
+    fisier_size_bytes:2048, fisier_mime:'application/pdf',
     tip_id:1, tip_document:'buletin', payload_ai:{ date_document:{ numar:'RX 1', data_emitere:'2021-01-02', data_expirare:'2031-01-02' } }, ...o })
   const dubla = { code:'23505', message:'duplicate key value violates unique constraint "hr_documente_personale_sursa_inbox_unic"', details:'Key (sursa_inbox_id)=(701) already exists.' }
   const garda = { code:'23514', message:'hr_documente_personale: sursa_inbox_id = 701 refuzată la INSERT — rândul nu mai e deschis în coadă (status confirmat)' }
   const lipsa = { code:'PGRST204', message:"Could not find the 'sursa_inbox_id' column of 'hr_documente_personale' in the schema cache" }
-  it('docWizardHR: sursa_inbox_id = rândul, fisier_nume = al rândului (garda BD); restul câmpurilor ca înainte', () => {
+  it('docWizardHR: sursa_inbox_id = rândul, nume / mărime / tip = ale rândului, exact (garda BD); restul câmpurilor ca înainte', () => {
     const tip = { id:1, cod:'buletin', are_expirare:true }
     expect(docWizardHR({ d:d(), empId:50, tip, destPath:'50/x.pdf', uploadatDe:'u1' })).toEqual({
       employee_id:50, tip_id:1, numar_document:'RX 1', data_emitere:'2021-01-02', data_expirare:'2031-01-02', fara_expirare:false,
-      fisier_path:'50/x.pdf', fisier_nume:'POPESCU ION - CI.pdf', fisier_size_bytes:null, fisier_mime:null,
+      fisier_path:'50/x.pdf', fisier_nume:'POPESCU ION - CI.pdf', fisier_size_bytes:2048, fisier_mime:'application/pdf',
       activ:true, uploadat_de:'u1', sursa_inbox_id:701,
     })
+    // copie exactă: 0 rămâne 0 (nu NULL, ca la vechiul `|| null`), tipul nu se ghicește; lipsa rămâne NULL (garda o refuză)
+    expect(docWizardHR({ d:d({ fisier_size_bytes:0, fisier_mime:'image/png' }), empId:50, tip, destPath:'p' }))
+      .toMatchObject({ fisier_size_bytes:0, fisier_mime:'image/png' })
+    expect(docWizardHR({ d:d({ fisier_size_bytes:undefined, fisier_mime:undefined }), empId:50, tip, destPath:'p' }))
+      .toMatchObject({ fisier_size_bytes:null, fisier_mime:null })
     // corecțiile de pe card câștigă; tip fără expirare + fără dată → fara_expirare
     const r = docWizardHR({ d:d({ _numar:'AB 2', _expira:'2030-05-05' }), empId:50, tip, destPath:'p' })
     expect(r).toMatchObject({ numar_document:'AB 2', data_expirare:'2030-05-05', uploadat_de:null })
@@ -1079,5 +1089,83 @@ describe('#821 F1 wizard „Angajat nou”: proveniența rândului din coadă', 
     // invers: wizard-ul salvează primul → panoul găsește proveniența (la angajatul nou) și nu mai inserează
     const dinWizard = docDrive({ id:900, employee_id:50, fisier_nume:'POPESCU ION - CI.pdf', drive_file_id:null, uploadat_de:'u1', sursa_inbox_id:701 })
     expect(mesajProvenienta([dinWizard], 7, id => (id === 50 ? 'POPESCU ION' : null))).toMatch(/la «POPESCU ION» \(document #900\)/)
+  })
+})
+
+// ─── Jakarinos r2 P1: garda BD de la INSERT cere și mărimea + tipul MIME ale rândului (ne-NULL) ───────────────────────────
+describe('Jakarinos r2 P1: documentul copiază exact nume / mărime / tip din rândul din coadă', () => {
+  const MIGRARE = readFileSync(new URL('../supabase/migrations/20261103a_hr_doc_sursa_inbox.sql', import.meta.url), 'utf8')
+  const PANOU = readFileSync(new URL('./CitesteOricePanel.jsx', import.meta.url), 'utf8')
+  const WIZARD = readFileSync(new URL('./HrAngajatNouWizard.jsx', import.meta.url), 'utf8')
+  const refuz = motiv => ({ code:'23514', message:`hr_documente_personale: sursa_inbox_id = 501 refuzată la INSERT — ${motiv}`, details:null,
+    hint:'sursa_inbox_id = rândul HR deschis (clasificat / eroare) din «Citește orice», cu același fisier_nume, fisier_size_bytes și fisier_mime (ne-NULL); NULL pentru Drive / încărcări manuale.' })
+  // motivele EXACTE din funcția gărzii (migrarea), ca mesajele UI să nu se desincronizeze de BD
+  const motive = [...MIGRARE.matchAll(/v_motiv := '([^']+)'/g)].map(m => m[1])
+  const deFisier = motive.filter(m => m.startsWith('fișierul documentului nu e cel din rândul din coadă'))
+
+  it('fisierDinRand: copie exactă (fără fallback application/pdf, 0 rămâne 0, lipsa = NULL)', () => {
+    expect(fisierDinRand(rowAI({ fisier_mime:'application/pdf' }))).toEqual({ fisier_nume:'CI.pdf', fisier_size_bytes:1234, fisier_mime:'application/pdf' })
+    expect(fisierDinRand(rowAI({ fisier_mime:null }))).toEqual({ fisier_nume:'CI.pdf', fisier_size_bytes:1234, fisier_mime:null })
+    expect(fisierDinRand(rowAI({ fisier_size_bytes:0, fisier_mime:'image/jpeg' }))).toMatchObject({ fisier_size_bytes:0, fisier_mime:'image/jpeg' })
+    expect(fisierDinRand(rowAI({ fisier_size_bytes:undefined }))).toMatchObject({ fisier_size_bytes:null })
+    expect(fisierDinRand(null)).toEqual({ fisier_nume:null, fisier_size_bytes:null, fisier_mime:null })
+  })
+  it('faraMetadateSursa: aceeași regulă ca garda (NULL pe mărime sau tip → nu se poate lega)', () => {
+    expect(faraMetadateSursa(rowAI({ fisier_mime:'application/pdf' }))).toBe(false)
+    expect(faraMetadateSursa(rowAI({ fisier_size_bytes:0, fisier_mime:'application/pdf' }))).toBe(false)
+    expect(faraMetadateSursa(rowAI({ fisier_mime:null }))).toBe(true)
+    expect(faraMetadateSursa(rowAI())).toBe(true)                        // rowAI fără fisier_mime
+    expect(faraMetadateSursa(rowAI({ fisier_size_bytes:null, fisier_mime:'application/pdf' }))).toBe(true)
+    expect(faraMetadateSursa(null)).toBe(true)
+    expect(MESAJ_SURSA_FARA_METADATE).toMatch(/nu am salvat nimic.*urcă fișierul încă o dată/)
+    expect(MESAJ_WIZ_FARA_METADATE).toMatch(/nu l-am salvat.*urcă fișierul încă o dată/)
+  })
+  it('motivele gărzii din migrare: 4 de fișier (nume / lipsă în document / lipsă în rând / diferite) + 3 de rând', () => {
+    expect(MIGRARE).toContain("RAISE EXCEPTION 'hr_documente_personale: sursa_inbox_id = % refuzată la INSERT — %'")
+    expect(deFisier).toEqual([
+      'fișierul documentului nu e cel din rândul din coadă',
+      'fișierul documentului nu e cel din rândul din coadă (mărimea / tipul lipsesc din document)',
+      'fișierul documentului nu e cel din rândul din coadă (rândul din coadă nu are mărimea / tipul)',
+      'fișierul documentului nu e cel din rândul din coadă (mărime / tip diferite)',
+    ])
+    expect(motive.length - deFisier.length).toBe(3)
+    for (const m of motive) {
+      expect(refuzSursaInbox(refuz(m))).toBe(true)                      // toate = 'refuzata' (copia se șterge, fără a doua inserare)
+      expect(rezultatInserareHR({ data:null, error:refuz(m) })).toBe('refuzata')
+      expect(refuzFisierSursa(refuz(m))).toBe(deFisier.includes(m))     // doar cele de fișier au mesajul propriu
+    }
+    expect(refuzFisierSursa(refuz('rândul nu mai e deschis în coadă (status confirmat)'))).toBe(false)
+    expect(refuzFisierSursa({ ...refuz(deFisier[3]), code:'23505' })).toBe(false)
+    expect(refuzFisierSursa(null)).toBe(false)
+  })
+  it('panou: refuz pe fișier fără document găsit → MESAJ_SURSA_FISIER, nu „rândul nu mai e deschis”; documentul găsit decide ca înainte', () => {
+    expect(mesajRefuzSursa([], 7, () => null, refuz(deFisier[3]))).toBe(MESAJ_SURSA_FISIER)
+    expect(mesajRefuzSursa([], 7, () => null, refuz('rândul nu e în coada HR'))).toBe(MESAJ_SURSA_REFUZATA)
+    expect(mesajRefuzSursa([], 7)).toBe(MESAJ_SURSA_REFUZATA)            // apelurile vechi (fără eroare) — neschimbat
+    const salvat = docDrive({ id:900, employee_id:7, drive_file_id:null, uploadat_de:'u1', sursa_inbox_id:501 })
+    expect(mesajRefuzSursa([salvat], 7, () => null, refuz(deFisier[3]))).toMatch(/deja în dosarul angajatului ales \(#900\)/)
+    expect(MESAJ_SURSA_FISIER).toMatch(/nu am salvat nimic/)
+  })
+  it('wizard: refuz pe fișier → MESAJ_WIZ_FISIER (nu „închis între timp”); salvat deja la angajatul nou → doar închidere', () => {
+    expect(decizieWizardHR({ data:null, error:refuz(deFisier[1]) }, { docs:[] }, 50)).toEqual({ pas:'esec', msg:MESAJ_WIZ_FISIER })
+    expect(decizieWizardHR({ data:null, error:refuz('rândul nu mai e deschis în coadă (status confirmat)') }, { docs:[] }, 50))
+      .toEqual({ pas:'esec', msg:MESAJ_WIZ_REFUZ })
+    expect(decizieWizardHR({ data:null, error:refuz(deFisier[3]) }, { docs:[{ id:901, employee_id:50, deleted_at:null, sursa_inbox_id:501 }] }, 50))
+      .toEqual({ pas:'inchide', docId:901, nou:false })
+  })
+  it('sursele: panoul și wizard-ul trimit metadatele rândului și se opresc înainte de copie când lipsesc', () => {
+    // panou (confirmHR): INSERT-ul HR = fisierDinRand(row), fără fallback-ul vechi; oprirea e înainte de mutaFisier
+    const insHR = PANOU.slice(PANOU.indexOf("supabase.from('hr_documente_personale').insert({"), PANOU.indexOf('sursa_inbox_id: row.id,'))
+    expect(insHR).toContain('...fisierDinRand(row)')
+    expect(insHR).not.toMatch(/fisier_mime:|fisier_size_bytes:|fisier_nume:/)
+    const confirmHR = PANOU.slice(PANOU.indexOf('async function confirmHR('), PANOU.indexOf('async function inchideDublura('))
+    expect(confirmHR.indexOf('faraMetadateSursa(row)')).toBeGreaterThan(0)
+    expect(confirmHR.indexOf('faraMetadateSursa(row)')).toBeLessThan(confirmHR.indexOf('await mutaFisier(row, cfg.bucket'))
+    expect(confirmHR).toContain('mesajRefuzSursa(docs, angajatId, numeAngajat, ins.error)')
+    // wizard: INSERT-ul în coadă întoarce mărimea / tipul (altfel docWizardHR trimitea NULL) și oprirea e înainte de download
+    expect(WIZARD).toMatch(/\.select\('id,status,modul_tinta,fisier_nume,fisier_path,fisier_size_bytes,fisier_mime'\)/)
+    const fin = WIZARD.slice(WIZARD.indexOf('async function finish('))
+    expect(fin.indexOf('faraMetadateSursa(d)')).toBeGreaterThan(0)
+    expect(fin.indexOf('faraMetadateSursa(d)')).toBeLessThan(fin.indexOf('.download(d.fisier_path)'))
   })
 })

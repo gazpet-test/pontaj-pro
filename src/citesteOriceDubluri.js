@@ -45,6 +45,10 @@
 //   • docWizardHR / inchidereWizardHR / decizieWizardHR / mesajWizardInchidere — wizard-ul „Angajat nou” pune și el
 //     sursa_inbox_id, tratează 23505 / garda ca „deja salvat din rând” (fără a doua inserare) și închide rândul doar cât e
 //     încă în coadă (nu rescrie legătura pusă de panou) — F1
+//   Jakarinos r2 P1 (garda BD cere și mărimea + tipul MIME ale rândului, ne-NULL):
+//   • fisierDinRand — fisier_nume / fisier_size_bytes / fisier_mime copiate EXACT din rândul din coadă (panou + wizard;
+//     fără fallback 'application/pdf'); faraMetadateSursa — rândul fără mărime / tip nu se poate lega → oprire înainte de copie
+//   • refuzFisierSursa — garda a refuzat FIȘIERUL (nume / mărime / tip), nu un rând închis între timp → mesaj propriu
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -135,6 +139,23 @@ export const dinRandul = (d, row) => !!d && !!row && marime(d.sursa_inbox_id) !=
 // HR deschis al aceluiași fișier (confirmat / respins între timp, mutat în alt modul, șters, nevăzut). Doar mesajul gărzii de
 // INSERT („sursa_inbox_id = N refuzată la INSERT”), nu și al celei de UPDATE („nemodificabilă”) sau alt 23514.
 export const refuzSursaInbox = e => !!e && e.code === '23514' && /sursa_inbox_id = \S+ refuzată la INSERT/.test(textEroare(e))
+// Jakarinos r2 P1: garda cere ACELAȘI fișier — nume + mărime + tip MIME ale rândului, ne-NULL. Documentul copiază exact ce scrie
+// în rândul din coadă (citit de panou cu select('*'), întors wizard-ului de INSERT-ul în coadă): fără fallback 'application/pdf',
+// fără || null (0 rămâne 0). Același helper în panou (confirmHR) și în wizard (docWizardHR).
+export const fisierDinRand = row => ({
+  fisier_nume: row ? row.fisier_nume : null,
+  fisier_size_bytes: row && row.fisier_size_bytes != null ? row.fisier_size_bytes : null,
+  fisier_mime: row && row.fisier_mime != null ? row.fisier_mime : null,
+})
+// rândul din coadă fără mărime sau fără tip (panoul scrie fisier_mime NULL când browserul nu știe tipul) → garda BD îl refuză
+// oricum (limitarea e din 20261103a): oprire ÎNAINTE de copia fișierului, cu mesaj clar. Aceeași regulă ca garda (NULL).
+export const faraMetadateSursa = row => !row || row.fisier_size_bytes == null || row.fisier_mime == null
+export const MESAJ_SURSA_FARA_METADATE = 'Rândul din coadă nu are mărimea sau tipul fișierului înregistrate, deci documentul nu se poate lega de el (garda din BD) — nu am salvat nimic. Respinge rândul și urcă fișierul încă o dată (ca PDF).'
+export const MESAJ_WIZ_FARA_METADATE = 'rândul din coadă nu are mărimea sau tipul fișierului înregistrate — nu l-am salvat; scoate-l din listă și urcă fișierul încă o dată (ca PDF).'
+// garda a refuzat FIȘIERUL (nume / mărime / tip diferite sau lipsă — toate motivele încep la fel), nu un rând închis / mutat
+export const refuzFisierSursa = e => refuzSursaInbox(e) && /fișierul documentului nu e cel din rândul din coadă/.test(textEroare(e))
+export const MESAJ_SURSA_FISIER = 'Fișierul nu se potrivește cu rândul din coadă (nume / mărime / tip) — BD a refuzat legătura, nu am salvat nimic; am reîncărcat lista. Dacă rândul s-a modificat între timp, încearcă din nou; altfel respinge-l și urcă fișierul încă o dată.'
+export const MESAJ_WIZ_FISIER = 'fișierul nu se potrivește cu rândul din coadă (nume / mărime / tip) — BD a refuzat legătura, nu l-am salvat; scoate-l din listă și urcă-l încă o dată.'
 
 // Rezultatul INSERT-ului din confirmHR / wizard ({ data, error } de la .insert().select('id').single()):
 //   'ok' (rând întors) | 'dubla' (23505 pe sursa_inbox_id → doar închidere, NICIODATĂ a doua inserare) |
@@ -156,9 +177,10 @@ export const copieDeSters = r => r === 'dubla' || r === 'refuzata' || r === 'mig
 // verificare #821), ci spune unde e documentul salvat deja din el (alt tab / wizard-ul) și că o corecție se face în dosar.
 // Ordinea ca la mesajProvenienta: nesters la angajatul ales → nesters la alt angajat → șters logic → nimic găsit.
 export const MESAJ_SURSA_REFUZATA = 'Rândul din coadă nu mai e deschis în HR (închis din alt tab / de alt utilizator sau mutat în alt modul între timp) — nu am salvat nimic; am reîncărcat lista.'
-export function mesajRefuzSursa(docs, angajatId, numeAngajat = () => null) {
+// eroare = eroarea INSERT-ului: fără document găsit și refuz pe FIȘIER (Jakarinos r2 P1) → MESAJ_SURSA_FISIER, nu „rând închis”
+export function mesajRefuzSursa(docs, angajatId, numeAngajat = () => null, eroare = null) {
   const l = (docs || []).filter(Boolean)
-  if (!l.length) return MESAJ_SURSA_REFUZATA
+  if (!l.length) return refuzFisierSursa(eroare) ? MESAJ_SURSA_FISIER : MESAJ_SURSA_REFUZATA
   const inc = 'Rândul din coadă fusese deja închis între timp (din alt tab / de alt utilizator / din wizard-ul „Angajat nou”)'
   const la = d => { const n = numeAngajat(d.employee_id); return n ? `«${n}»` : `alt angajat (#${d.employee_id})` }
   const vii = l.filter(d => d.deleted_at == null)
@@ -174,7 +196,8 @@ export function mesajRefuzSursa(docs, angajatId, numeAngajat = () => null) {
 // Wizard-ul salvează în dosar din rânduri ale cozii ai_documente_inbox (urcate de el), deci pune și el proveniența:
 // fără ea, wizard-ul și panoul «Citește orice» puteau crea câte un document din ACELAȘI rând. Indexul unic + garda de la
 // INSERT decid atomic; wizard-ul nu inserează niciodată a doua oară și nu rescrie o închidere făcută de panou.
-// Rândul documentului (aceleași câmpuri ca înainte) + sursa_inbox_id = rândul din coadă; fisier_nume = al rândului (garda BD).
+// Rândul documentului (aceleași câmpuri ca înainte) + sursa_inbox_id = rândul din coadă; fisier_nume / fisier_size_bytes /
+// fisier_mime = exact ale rândului (fisierDinRand — garda BD le cere egale, ne-NULL; wizard-ul le are din INSERT-ul în coadă).
 export function docWizardHR({ d, empId, tip, destPath, uploadatDe = null }) {
   const dd = (d && d.payload_ai && d.payload_ai.date_document) || {}
   const exp = d._expira ?? dd.data_expirare ?? null
@@ -184,8 +207,7 @@ export function docWizardHR({ d, empId, tip, destPath, uploadatDe = null }) {
     data_emitere: dd.data_emitere || null,
     data_expirare: exp,
     fara_expirare: tip?.are_expirare ? false : !exp,
-    fisier_path: destPath, fisier_nume: d.fisier_nume,
-    fisier_size_bytes: d.fisier_size_bytes || null, fisier_mime: d.fisier_mime || null,
+    fisier_path: destPath, ...fisierDinRand(d),
     activ: true, uploadat_de: uploadatDe,
     sursa_inbox_id: d.id,
   }
@@ -218,7 +240,7 @@ export function decizieWizardHR(ins, prov, empId) {
   const viu = docs.find(x => x.deleted_at == null)
   if (viu) return { pas:'esec', msg: `deja salvat din acest rând prin «Citește orice» la alt angajat (#${viu.employee_id}, document #${viu.id}) — nu l-am mai adăugat aici; verifică în HR care e angajatul corect.` }
   if (docs[0]) return { pas:'esec', msg: `documentul salvat din acest rând (#${docs[0].id}) a fost șters din dosar — din același rând nu se mai salvează altul; restaurează-l din HR → 🗑 Coș sau urcă fișierul încă o dată.` }
-  return { pas:'esec', msg: r === 'dubla' ? MESAJ_WIZ_DUBLA : MESAJ_WIZ_REFUZ }
+  return { pas:'esec', msg: r === 'dubla' ? MESAJ_WIZ_DUBLA : refuzFisierSursa(ins && ins.error) ? MESAJ_WIZ_FISIER : MESAJ_WIZ_REFUZ }
 }
 // Starea închiderii (stareInchidere, cu statusul 'confirmat' și documentul legat) → avertismentul wizard-ului (null = închis).
 // 'altcineva' = panoul a închis rândul între timp: nu-l rescriu și nu-i șterg fișierul din staging (stergeStagingWizard).
