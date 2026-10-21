@@ -534,9 +534,15 @@ BEGIN
         -- platformei: doar dacă schema e în search_path-ul FUNCȚIEI) — Jak + Copilot r12; sau depind de el în catalog (BEGIN ATOMIC)
         c_fn := c_fn || ARRAY(
           SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-           CROSS JOIN LATERAL (SELECT p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '') AS corp,
-                                      coalesce((SELECT string_to_array(lower(regexp_replace(substr(c, 13), '[[:space:]"]', '', 'g')), ',')
-                                                  FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%' LIMIT 1), ARRAY['public']) AS cale) x
+           CROSS JOIN LATERAL (SELECT p.prosrc || ' ' || coalesce(pg_get_function_sqlbody(p.oid), '') AS corp) x0
+           -- calea de căutare a funcției: cea fixată în proconfig; NECUNOSCUTĂ (NULL) dacă nu e fixată — funcția moștenește calea
+           -- apelantului — sau dacă o schimbă în corp (set_config / SET search_path) — r14, Jakarinos + Copilot r13
+           CROSS JOIN LATERAL (SELECT x0.corp,
+                                      CASE WHEN x0.corp ~* 'set_config[[:space:]]*\([[:space:]]*''search_path'''
+                                             OR x0.corp ~* '(^|[^[:alnum:]_])set[[:space:]]+((local|session)[[:space:]]+)?search_path([^[:alnum:]_]|$)'
+                                           THEN NULL
+                                           ELSE (SELECT string_to_array(lower(regexp_replace(substr(c, 13), '[[:space:]"]', '', 'g')), ',')
+                                                   FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%' LIMIT 1) END AS cale) x
            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_'
              AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%') AND p.oid <> ALL (c_fn) AND p.prolang NOT IN (12, 13)
              AND (EXISTS (SELECT 1 FROM (SELECT n2.nspname::text nsp, regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
@@ -545,7 +551,7 @@ BEGIN
                                          SELECT n2.nspname::text, regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
                                            FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (c_fn)) t
                            WHERE x.corp ~* (c_st || t.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume || c_dr)
-                              OR ((t.nsp <> ALL (c_scheme_platforma) OR t.nsp = ANY (x.cale)) AND x.corp ~* (c_st || t.nume || c_dr)))
+                              OR ((t.nsp <> ALL (c_scheme_platforma) OR x.cale IS NULL OR t.nsp = ANY (x.cale)) AND x.corp ~* (c_st || t.nume || c_dr)))
                   OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
                                 AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (c_rel))
                                      OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn))))));
