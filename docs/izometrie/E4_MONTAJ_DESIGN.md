@@ -1,6 +1,6 @@
-# E4 — Montajul: tableta inginerului de izometrie, cu salvare (design r6, pentru review ÎNAINTE de cod)
+# E4 — Montajul: tableta inginerului de izometrie, cu salvare (design r7, pentru review ÎNAINTE de cod)
 
-**Stare**: r6 (review Jakarinos pe r5: NO-GO, 0 P0, 1 P1 nou, 1 P2; r4 închis integral; pe r4: NO-GO, 3 P1, 1 P2; pe r3: NO-GO, 7 P1; pe r2: NO-GO, 11 P1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
+**Stare**: r7 (review Jakarinos pe r6: NO-GO, 0 P0, 1 P1 nou — rândurile `legare` la aprobarea Transgaz; P1 + P2 din r5 închise; pe r5: NO-GO, 1 P1, 1 P2; r4 închis integral; pe r4: NO-GO, 3 P1, 1 P2; pe r3: NO-GO, 7 P1; pe r2: NO-GO, 11 P1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
 
 **r2 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r1 (2 P0, 8 P1, 3 P2):
 - **P0** corecția de lungime e permisă doar pe o rădăcină fără descendenți; în arbore e refuzată explicit (§8.6). Tăierea unei bucăți montate are trei ramuri separate, cu ambele capete reconciliate, iar o bucată legată de pachet se dezleagă întâi (§8.5);
@@ -8,6 +8,9 @@
 - **P1** jurnalul rămâne doar-adaug: un singur INSERT, la final, iar erorile se scriu după rollback-ul savepoint-ului (§5.4). Hash-ul cererii e separat de amprenta preview-ului (§5.6). Identitatea e fixată pe lot și pe angajat (§5.7, §6.3);
 - **P1** lock-urile se iau o dată pe lot, în ordinea globală, iar picker-ul nu mai urcă de la FOR SHARE la UPDATE (§5.4, §7.3, §10.5). Matricea de securitate e completă, cu GPS-ul scos din JSON (§9.4, §9.5). Activarea pe tronson verifică OLD și NEW (§7.4);
 - **P2** CAS-ul din `actualizeazaRandInPachet` e descris corect (§7.3); Q-E4-13 B / C cer fișa de automatizare (§12); testele noi (§11, 13–16).
+
+**r7 (22.10.2026)** — răspunsul la review-ul Jakarinos pe r6 (închise de Jak: P1 + P2 din r5; 1 P1 nou):
+- **cuplarea nu mai blochează aprobarea Transgaz**: „rând legat” e definit pe tipul rândului. `teava` / `curba` = legat de o bucată (`executie_teava_id`), ca până acum; `legare` = legat de sudura lui de cuplare, identificată din `sudura_cod`, fără coloană nouă. Verificarea `legare` (sudura găsită pe tronsonul pachetului, `cuplare` + `aprobata`, cele două capete active pe bucăți `montata` ale tronsonului, unicitatea, proiecția) rulează la `completeaza` și la aprobarea Transgaz; verificarea pe bucată se aplică doar rândurilor `teava` / `curba`. Lock-ul pe sudura de cuplare e după bucăți, în ordinea globală (§3.4, §4.2, §7.1, §7.2, §7.3, §7.4, §7.5, §10.4, §10.5, testul 22).
 
 **r6 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r5 (închise de Jak: toate cele 3 P1 + P2 din r4; 1 P1 nou, 1 P2):
 - **pachetul aprobat nu se mai schimbă**: scriitorii structurali (`completeaza`, `leaga`, `dezleaga`) cer pachetul editabil (`status` inițial, fără aprobare), revalidat sub lock-ul pachetului; aprobarea Transgaz are CAS pe `updated_at`, iar orice scriere structurală mută `updated_at` pe antet. Cursa `completeaza` ↔ `aprobare_transgaz` e serializată pe pachet, în ambele ordini (§4.2, §5.6, §7.2, §7.3, §7.4, testul 21);
@@ -166,7 +169,7 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
   - **rândul `izo_tronson_config` existent** (r3): îl creează întâi `postgres`, cu „da” (sensul, zonele, executantul, §13 pasul 4). Funcția nu face INSERT; un rând lipsă → refuz `config_lipsa`. Deci `izo_montaj_writer` n-are nevoie de INSERT pe tabel (§9.4);
   - nivelul proiectului ≠ `off`;
   - porțile complete (E2a + E3 + E4);
-  - tronsonul fără rânduri de pachet nelegate și fără anteturi aprobate de Transgaz (r3, §7.4). T14 / T15 n-au pachete.
+  - tronsonul fără rânduri de pachet nelegate (r7: „legat” după tipul rândului, §7.1) și fără anteturi aprobate de Transgaz (r3, §7.4). T14 / T15 n-au pachete.
 - **Oprirea** e refuzată (r2):
   - după primul fapt de montaj pe tronson, ca `stoc → off` în E2a;
   - și înainte de fapte, cât există pe tronson rezervări active, declarații deschise (stare ∉ {`aprobata`, `respinsa`, `stearsa`}) sau un front activ. Întâi se predă frontul și se închid declarațiile. Dacă autorul nu mai e disponibil (revocat, plecat), drumul e: MP-ul eliberează frontul, respinge rândurile sesiunii abandonate, iar sesiunea se închide (§6.4, §6.7). Deci oprirea nu rămâne blocată de un autor absent.
@@ -355,8 +358,8 @@ Proiecția pachetului (§7) din registru:
 - `serie_unica`, `sarja`, `lot`;
 - `lungime_m` = lungimea montată; `lungime_originala_m` = lungimea rădăcinii;
 - `dimensiune` (`610X7.1`), `tip` (`L360` / `CIC`);
-- `tip_rand`: `teava` / `curba`, iar `legare` pentru o cuplare;
-- `sudura_cod`: sudura aval, după convenția IZO (rândul i = țeava i + sudura dintre i și i+1).
+- `tip_rand`: `teava` / `curba` (din bucata legată), iar `legare` pentru o cuplare (r7: din sudura de cuplare, fără bucată, §7.1);
+- `sudura_cod`: sudura aval, după convenția IZO (rândul i = țeava i + sudura dintre i și i+1). Pe un rând `legare` e codul afișat al sudurii de cuplare (§3.5), singura lui identitate; serie, șarjă, tip și lungime rămân goale, ca la rândul `legare` de azi (`ImportExcelIzometrie.jsx`: „doar sudura = legare cap-la-cap”).
 
 `pm_cod`, `pa_ut_cod`, `ut_cod` și `observatii` rămân editabile până la E10: pe tronsoanele în flux doar prin `fn_izo_pachet_rand_note` (r3, §7.4), pe celelalte din client, ca azi.
 
@@ -406,8 +409,8 @@ Toate funcțiile sunt SECURITY DEFINER, cu `SET search_path = public, pg_temp` �
 | `fn_izo_iesire_tronson(p_cheie, p_depozit, p_tronson, p_bucati, p_nr_aviz, p_data)` | `izo_montaj_writer` | `authenticated` | ieșirea pe tronson (gestionar) |
 | `fn_izo_primire_depozit(p_cheie, p_depozit, p_bucati)` | `izo_montaj_writer` | `authenticated` | primirea resturilor în depozit (gestionar) |
 | `fn_izo_pachet_completeaza(p_cheie, p_pachet, p_updated_at, p_sudura_de, p_sudura_pana)` | `izo_montaj_writer` | `authenticated` | adaugă în pachet rândurile din montajele aprobate (§7.2) |
-| `fn_izo_pachet_leaga(p_teava, p_bucata, p_updated_at)` / `fn_izo_pachet_dezleaga(p_teava, p_motiv)` | `izo_montaj_writer` | `authenticated` | picker-ul ca legătură reală (§7.3) |
-| `fn_izo_pachet_aprobare_transgaz(p_pachet, p_updated_at, p_cale, p_sha256)` | `izo_montaj_writer` | `authenticated` | varianta minimă (E4a), doar pe tronsoanele în flux: fișierul + documentul + statusul, într-o tranzacție; r6: CAS pe `p_updated_at` (§7.4) |
+| `fn_izo_pachet_leaga(p_teava, p_bucata, p_updated_at)` / `fn_izo_pachet_dezleaga(p_teava, p_motiv)` | `izo_montaj_writer` | `authenticated` | picker-ul ca legătură reală (§7.3); r7: doar pe rândurile `teava` / `curba` |
+| `fn_izo_pachet_aprobare_transgaz(p_pachet, p_updated_at, p_cale, p_sha256)` | `izo_montaj_writer` | `authenticated` | varianta minimă (E4a), doar pe tronsoanele în flux: fișierul + documentul + statusul, într-o tranzacție; r6: CAS pe `p_updated_at` (§7.4); r7: fiecare rând legat după tipul lui (§7.1), rândurile `legare` prin verificarea `legare` (§7.3) |
 | `fn_izo_seteaza_flux(p_tronson, p_activ, p_motiv)` | `izo_montaj_writer` | `postgres` | §3.1 |
 
 **Ajutătoarele interne**: owner `postgres`, EXECUTE doar pentru rolurile E4; REVOKE de la PUBLIC, `anon`, `authenticated`, `service_role`.
@@ -828,6 +831,10 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - Pe tronsoanele în flux:
   - rândurile `teava` / `curba` / `legare` le scrie doar `izo_montaj_writer` (§7.4);
   - câmpurile de identitate ale unui rând legat se iau din registru, nu se tastează.
+- **Rândul legat** (r7), după `tip_rand`. Definiția o folosesc aprobarea Transgaz (§7.3, §7.4) și activarea fluxului (§3.1, §7.4):
+  - `teava` / `curba`: legat = exact o bucată cu `executie_teava_id` = rândul (indexul `ux_magbuc_izo_teava`), `montata` pe tronsonul pachetului, de același tip;
+  - `legare` (cuplarea): nu are bucată, deci nu trece prin `executie_teava_id`. E legat de sudura lui de cuplare, găsită din `sudura_cod` (fără coloană nouă, §3.4), dacă trece **verificarea `legare`** (§7.3);
+  - orice alt `tip_rand` (de exemplu `separator`) pe un pachet în flux = nelegat (fail-closed). Pe tronsoanele în flux nu-l scrie nimeni: clientul e refuzat (§7.4), iar `completeaza` nu-l produce.
 
 ### 7.2 `fn_izo_pachet_completeaza(p_cheie, p_pachet, p_updated_at, p_sudura_de, p_sudura_pana)`
 
@@ -835,9 +842,11 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - **Rândurile noi**:
   - serverul adaugă rândurile bucăților `montata` nelegate din interval;
   - ordinea vine din lanț (după capete), nu după numerele sudurilor;
-  - rândul i = bucata i + sudura ei aval (convenția IZO); cuplările dau rânduri `legare`.
+  - rândul i = bucata i + sudura ei aval (convenția IZO); cuplările dau rânduri `legare`;
+  - r7: o cuplare dă un rând `legare` doar cu sudura `aprobata`, iar rândul trece verificarea `legare` (§7.3). Verificarea rulează după scrierea tuturor rândurilor apelului (ca rândurile pieselor vecine să existe deja), înaintea jurnalului; un refuz anulează tot apelul.
 - **Refuză**:
-  - golurile din lanț (un capăt fără sudură în interiorul intervalului);
+  - golurile din lanț (un capăt fără sudură în interiorul intervalului). r7: o cuplare din interval încă `declarata` e tot un gol;
+  - r7: un rând `legare` care nu trece verificarea `legare` (§7.3), cu codul ei;
   - pozițiile încă „în verificare”;
   - un interval care se suprapune cu alt pachet activ;
   - un pachet ne-editabil (`pachet_needitabil`, r6, mai jos).
@@ -863,7 +872,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
    - rândul e încă în pachetul din cerere: CAS pe `pachet_id`, plus `updated_at`, verificat aici pe server. `actualizeazaRandInPachet` din #824 face CAS doar pe `id` + `pachet_id` (`src/lib/izoRegistru.js`); `updated_at` e în plus, în E4;
    - proiectul pachetului = proiectul tronsonului = proiectul bucății;
    - r6: la scriitorii structurali (`completeaza`, `leaga`, `dezleaga`), pachetul e încă editabil (§7.2); la `transgaz`, CAS pe `updated_at`-ul antetului (§7.4);
-7. bucata FOR UPDATE.
+7. bucata FOR UPDATE. r7: apoi sudurile de cuplare ale rândurilor `legare`, după id (sudurile vin după bucăți, ca în §10.5 pasul 9): FOR UPDATE la `completeaza` (arbitrul „o sudură ↔ un rând `legare`”, ca bucata la `leaga`), FOR SHARE la `transgaz` (doar citire). `izo_montaj_writer` are UPDATE pe `izo_suduri` (§9.4), deci lock-ul nu cere helper.
 
 **De ce FOR NO KEY UPDATE (nu FOR SHARE) pe rândul țevii și pe pachet** (r2):
 - contractul 2c (`fn_izo_refuz_mutare_tevi`) cere un lock care intră în conflict cu FOR UPDATE-ul gărzii mutării, ca legarea să fie văzută. FOR NO KEY UPDATE intră și el în conflict, deci contractul rămâne respectat. Dar contractul 2c acoperă doar legătura (`executie_teava_id`), iar E4 mai scrie câmpurile de identitate ale rândului și, prin cascadele DEFINER, totalurile pachetului;
@@ -873,13 +882,24 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 
 **Verificările**:
 - bucata e `montata` pe tronsonul pachetului, de tipul rândului (`teava` ↔ `teava`, `curba` ↔ `curba`), și nu e legată de alt rând;
-- rândul e nelegat. Dacă e deja legat de aceeași bucată, apelul nu mai are efect.
+- rândul e nelegat. Dacă e deja legat de aceeași bucată, apelul nu mai are efect;
+- r7: `leaga` / `dezleaga` pe un rând `legare` (sau pe orice `tip_rand` în afară de `teava` / `curba`) → refuz `rand_fara_bucata`, zero efecte. Rândul `legare` nu se leagă de o bucată, ci se verifică prin sudura lui (mai jos).
+
+**Verificarea `legare`** (r7). Rulează la `completeaza` (pe rândurile `legare` scrise de apel, §7.2) și la `transgaz` (pe fiecare rând `legare` al pachetului), pe starea comisă, după lock-urile de mai sus (pasul 7: sudura). Un refuz e o excepție: zero efecte.
+1. **Sudura**: `fn_izo_sudura_normalizeaza(sudura_cod, tronsonul pachetului)` dă (`nr`, `sufix`); în `izo_suduri` există exact o sudură cu `proiect_id` / `tronson_id` = ale pachetului, același (`nr`, `sufix`) și `stare <> 'anulata'` (UNIQUE-ul din §3.2 o face cel mult una). Cod nenormalizabil sau nicio sudură → `legare_fara_sudura`. Căutarea e doar pe tronsonul pachetului, deci o sudură de pe alt tronson nu se găsește.
+2. **Tipul și starea**: `tip_sudura = 'cuplare'` și `stare = 'aprobata'`. Altfel → `legare_sudura_neaprobata`: o cuplare încă `declarata` sau o sudură `linie` / `reparatie` pe un rând `legare`. O sudură anulată după completare (din E10) nu mai e găsită la pasul 1 → `legare_fara_sudura`.
+3. **Tronsonul**: proiectul și tronsonul sudurii = ale antetului pachetului = ale tronsonului lui (verificate explicit, nu doar prin căutare).
+4. **Capetele** (R4): exact două capete active (`amonte`, `aval`). Fiecare stă pe o bucată din registru (`bucata_id`, nu `bucata_decl_uid`: la aprobarea sudurii, capetele trec pe `bucata_id`, §6.3 pasul 9), `montata` pe tronsonul pachetului. Cel puțin una dintre bucăți e legată de un rând `teava` / `curba` al aceluiași pachet: cuplarea face parte din lanțul pachetului, nu e o sudură străină. Altfel → `legare_capete`.
+5. **Unicitatea**: niciun alt rând `legare` de pe tronson (din orice pachet, oricare `status`) nu duce aceeași sudură. Altfel → `legare_dubla`. La `completeaza`, lock-ul FOR UPDATE pe sudură (pasul 7) serializează două completări cu aceeași cuplare, pe pachete diferite: a doua așteaptă, recitește după commit-ul primei (READ COMMITTED) și e refuzată.
+6. **Proiecția**: rândul = `fn_izo_pachet_rand_asteptat` pe sudură: `tip_rand = 'legare'`, `sudura_cod` = codul afișat (§3.5), fără serie / șarjă / tip / lungime (§3.4). Altfel → `legare_proiectie`.
+
+Verificarea pe bucată (`executie_teava_id`) se aplică **doar** rândurilor `teava` / `curba`. Pe un rând `legare`, verificarea de mai sus o înlocuiește.
 
 **Scrierile**, sub același context (`leaga`):
 - `executie_teava_id` pe bucată;
 - câmpurile de identitate ale rândului, din registru (forma `patchDinRegistru`, calculată pe server).
 
-**`dezleaga`**: doar cu motiv; refuzat pe un pachet ne-editabil (§7.2, r6: aprobat de Transgaz, emis în E8 sau orice `status` ≠ `draft`). Rândul rămâne în pachet, nelegat; `fn_izo_pachet_aprobare_transgaz` refuză un pachet cu rânduri nelegate.
+**`dezleaga`**: doar cu motiv; refuzat pe un pachet ne-editabil (§7.2, r6: aprobat de Transgaz, emis în E8 sau orice `status` ≠ `draft`). Rândul rămâne în pachet, nelegat; `fn_izo_pachet_aprobare_transgaz` refuză un pachet cu rânduri nelegate, în sensul din §7.1 (r7): un rând `teava` / `curba` fără bucata lui → `rand_nelegat`; un rând `legare` care nu trece verificarea `legare` → codul verificării; orice alt `tip_rand` → `rand_nelegat`. Un pachet valid cu o cuplare (rândurile pieselor legate + rândul `legare` verificat) trece.
 
 **Interblocajul** (r3, pe cascadele reale, ✓BD 21.10):
 - cascadele pe `executie_tevi` (toate DEFINER, owner `postgres`): `tg_tevi_update_totaluri` (AFTER ROW, la **orice** INSERT / UPDATE / DELETE) face UPDATE pe pachet; `trg_executie_tevi_update_recalc` / `_insert_recalc` / `_delete_recalc` (AFTER STATEMENT) recalculează km-ul pe rândurile pachetului; `tg_tevi_renumber` (BEFORE INSERT) renumerotează. Pe pachet: `trg_executie_pachete_recalc_poz_km` (AFTER UPDATE, doar la `km_start_m`) ia rândurile;
@@ -898,7 +918,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - **Cum se citește fluxul în gardă, fără ciclu cu activarea**:
   1. pachetul → tronsonul, citite fără lock: pe un tronson în flux, `tronson_id` / `proiect_id` ale antetului nu se pot schimba, iar mutarea spre un tronson în flux e refuzată;
   2. citirea fluxului pentru OLD și NEW, fără lock: dacă oricare e în flux → refuz imediat, fără alte lock-uri (refuzul e fail-closed, deci nu cere stabilitate);
-  3. altfel: advisory partajat pe proiectele OLD / NEW (`fn_izo_lock_partajat`, crescător) și recitirea fluxului. O activare concurentă (advisory exclusiv, §3.1) e fie așteptată și văzută (refuz), fie ajunge după commit-ul mutării. Activarea cere apoi 0 rânduri de pachet nelegate pe tronson, deci o mutare comisă chiar înainte o oprește.
+  3. altfel: advisory partajat pe proiectele OLD / NEW (`fn_izo_lock_partajat`, crescător) și recitirea fluxului. O activare concurentă (advisory exclusiv, §3.1) e fie așteptată și văzută (refuz), fie ajunge după commit-ul mutării. Activarea cere apoi 0 rânduri de pachet nelegate pe tronson (§7.1, r7: și rândurile `legare` fără sudura de cuplare verificată), deci o mutare comisă chiar înainte o oprește.
 - **Numele trigger-elor** (r3) sortează **primele** dintre trigger-ele BEFORE ale tabelului, nu doar înaintea celor E2a / 2c: `a0_izo_flux_tevi`, `a0_izo_flux_pachete`, `a0_izo_flux_documente` < `tg_…` (cele vechi, ✓BD 21.10) < `trg_…`. Motivul: `tg_tevi_renumber` (BEFORE INSERT, DEFINER) face UPDATE pe alte rânduri ale pachetului, iar `tg_pachete_lansare_assign_numar` (BEFORE INSERT) ia proiectul FOR UPDATE; cu numele vechi, ar rula înaintea refuzului. Așa, refuzul vine înaintea oricărei cascade și înainte ca garda 2c să ia pachetul FOR SHARE. Poarta verifică ordinea: niciun trigger BEFORE pe cele trei tabele nu sortează înaintea celui E4 (§10.7).
 - **Crearea unui antet din client** (permisă și pe un tronson în flux): la INSERT, `a0_izo_flux_pachete` nu ia niciun lock (crearea e permisă în ambele stări). Ordinea rămâne cea veche: proiectul FOR UPDATE (`tg_pachete_lansare_assign_numar`), apoi advisory-ul partajat (garda 2c), adică aceeași direcție ca scriitorii E4 (proiectul înaintea advisory-ului), deci fără ciclu. Câmpurile interzise din client pe un tronson în flux (`status` ≠ inițial, `aprobat_*`, `pdf_aprobare_*`) le verifică un trigger AFTER ROW (`a0_izo_flux_pachete_dupa`), care recitește fluxul **după** advisory-ul luat de garda 2c. O activare concurentă e deci fie așteptată și văzută (refuz), fie comisă după antet; iar activarea cere tronsonul fără rânduri nelegate și fără anteturi aprobate.
 - **`a0_izo_flux_tevi`** (BEFORE INSERT / UPDATE / DELETE), pe pachetele unui tronson în flux:
@@ -911,6 +931,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
   - se creează din client;
   - `km_start_m`, `status`, `aprobat_*`, `pdf_aprobare_*` și DELETE sunt refuzate din client;
   - starea „aprobat” se pune doar prin `fn_izo_pachet_aprobare_transgaz` (fișierul la o cale dată de server; documentul și starea într-o tranzacție). r6: cu **CAS pe `p_updated_at`** = `updated_at`-ul antetului afișat pe ecranul de încărcare, lângă conținutul pachetului pe care MP-ul îl confirmă ca fiind cel din PDF-ul semnat. Ordinea de lock e a scriitorilor de pachet (§7.3), deci cu `completeaza` se serializează pe pachet: completarea comisă întâi mută `updated_at` → aprobarea e refuzată (`pachet_schimbat`) și ecranul reîncarcă; aprobarea comisă întâi → completarea vede pachetul ne-editabil (`pachet_needitabil`).
+  - r7: înaintea scrierii, după CAS, aprobarea verifică fiecare rând după tipul lui (§7.1): `teava` / `curba` legate de bucată; `legare` prin verificarea `legare` (§7.3), cu sudurile de cuplare FOR SHARE la pasul 7. O aprobare a unei tăieri care mută capătul unei cuplări (pe o bucată din afara pachetului, deci nelegată) ia sudura FOR UPDATE (§6.3, §10.5 pasul 9), deci cele două se serializează pe sudură și verificarea vede starea comisă. Un rând nevalid → refuzul lui, zero efecte (statusul rămâne `draft`, niciun document).
 - **`executie_pachete_documente`** e doar-adaug pe pachetele tronsoanelor în flux: politicile 20261029a permit UPDATE / DELETE celor cu acces de scriere, deci un trigger E4 (`a0_izo_flux_documente`) le refuză acolo. În Storage (`executie-pachete-pdf`) nu există UPDATE / DELETE pe pachetele tronsoanelor în flux.
 - **`executie_tronsoane`**: km-ul unui tronson în flux nu se schimbă din client.
 - **RLS-ul** (r3, corectat): pe pachete, documente și Storage rămâne cel din 20261029a (`fn_executie_pachete_acces`). Pe `executie_tevi` RLS-ul existent e larg (`executie_tevi_modify`, ALL, `auth.uid() IS NOT NULL`; ✓BD 21.10, §1.1 #15), deci pe tronsoanele în flux bariera e doar trigger-ul E4 de mai sus, care intră în poartă (numele, corpul, `tgenabled = 'A'`). Scrierile pe tronsoanele în flux trec prin RPC.
@@ -920,6 +941,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - **Pe un tronson în flux**:
   - lista = bucățile `montata` nelegate ale tronsonului (nu `pe_tronson`);
   - alegerea cheamă `fn_izo_pachet_leaga`: o singură scriere, pe server;
+  - r7: pe un rând `legare`, picker-ul nu se deschide; rândul arată sudura de cuplare și rezultatul verificării `legare` (§7.3);
   - butonul „Adaugă din montajele aprobate” → `fn_izo_pachet_completeaza`.
 - **Pe celelalte tronsoane** (T12 etc.): `patchDinRegistru` + `actualizeazaRandInPachet` rămân ca azi (text). Legarea istorică vine cu E4c (Q-E4-5).
 
@@ -1140,7 +1162,7 @@ IF v_aut IS NOT TRUE AND current_user = 'izo_montaj_writer' THEN v_aut := public
   - la tăierea unei bucăți montate, și capetele de sudură mutate (§8.5): exact capetele active ale părintelui, pe copiii cu literele lor;
   - la copii, `radacina_id` = rădăcina părintelui, verificat separat; `aviz_intrare_id` / `nr_crt_aviz` sunt NULL.
 - **Evenimentul și mișcarea**: `fn_izo_coloane_ev()` / `fn_izo_coloane_mis()` (E3), cu valorile așteptate pe operație: `document_tip` = `izo_declaratie`, `aplicat_de` = uid-ul aprobatorului, `declarat_de` = autorul declarației, `ora_tableta`, `dispozitiv_id`.
-- **Rândul de pachet**: proiecția nouă `fn_izo_coloane_tevi()` + `fn_izo_pachet_rand_asteptat`.
+- **Rândul de pachet**: proiecția nouă `fn_izo_coloane_tevi()` + `fn_izo_pachet_rand_asteptat`: pe `teava` / `curba` din bucata legată, pe `legare` din sudura de cuplare (r7, §3.4, §7.3).
 - **Coloanele**: mulțimea coloanelor fiecărui tabel e verificată în poartă. O coloană nouă → porți lipsă → intrările refuză.
 
 ### 10.5 Ordinea globală a lock-urilor
@@ -1154,7 +1176,7 @@ O singură ordine, compatibilă cu E2a / E3 / 2c (r2: pe **lot / apel**, nu pe o
 6. rândurile `executie_tevi` (FOR NO KEY UPDATE, după id), doar la scriitorii pachetului;
 7. tabelele (ACCESS SHARE);
 8. advisory (73010, proiect): partajat; exclusiv doar la activarea fluxului, la import și la storno (E2a). Fluxul și nivelul se citesc **după** el, la toți cei care îl iau;
-9. rădăcinile → bucățile → sudurile (FOR UPDATE, după id).
+9. rădăcinile → bucățile → sudurile (FOR UPDATE, după id). r7: la scriitorii pachetului, sudurile de cuplare ale rândurilor `legare` intră tot aici, după bucăți: FOR UPDATE la `completeaza`, FOR SHARE la `transgaz` (§7.3 pasul 7).
 
 **Excepțiile, toate sufixe ale aceleiași ordini**:
 - activarea / oprirea fluxului (ca `fn_izo_seteaza_nivel`): 7 → 8 (exclusiv) → rândul de config FOR UPDATE;
@@ -1338,6 +1360,14 @@ Negative întâi. Harness PG16 (`scripts/test_izometrie_e4.sh`) + branch PG17 + 
     - **cursa `completeaza` ↔ `aprobare_transgaz`**, cu barieră, în ambele ordini, `pg_locks` arătând așteptarea pe pachet: completarea întâi → aprobarea refuzată `pachet_schimbat` (CAS), pachetul rămâne `draft`; aprobarea întâi → completarea refuzată `pachet_needitabil`; fără deadlock. La fel `leaga` / `dezleaga` ↔ `aprobare_transgaz`;
     - **aprobarea Transgaz retrimisă**: același fișier → fără efect; alt fișier pe pachetul aprobat → `pachet_needitabil`;
     - **`conflict` pe `corectie_in_arbore`**: tăierea unui copil cu diferența de lungime peste ±20 mm → rezultatul `acceptat`, starea `conflict`, `conflict_cod = corectie_in_arbore`; din această stare: versiunea nouă, ștergerea, `blocata` la invalidarea dependenței și `respinsa` de MP (sesiune trimisă) trec ca la `r1d`; un `conflict_cod` în afara listei → refuz (CHECK).
+22. **r7** (review Jakarinos pe r6), rândurile `legare`:
+    - **cuplarea cap-coadă, pozitiv**: tăierea țevii cu capătul liber (ramura 1) + cuplarea, aprobate → `completeaza` pe intervalul care conține cuplarea → pachetul are rândurile pieselor, legate, și rândul `legare` (proiecția din sudură, în ordinea lanțului, `updated_at` mutat) → `aprobare_transgaz` cu `p_updated_at` curent → trece: `status` aprobat, documentul scris, într-o tranzacție; retrimiterea cu același fișier → fără efect. La fel o cuplare între două capete de lanț fără tăiere;
+    - **cuplarea neaprobată la completare**: cuplarea încă `declarata` în interval → `completeaza` refuzată (gol în lanț), zero efecte; după aprobarea ei, aceeași cerere (cheie nouă) → trece;
+    - **refuzul la aprobarea Transgaz**, pe rânduri `legare` forțate în harness (scrise ca `postgres`, cu garda ocolită, ca abaterile din testul 13), fiecare pe un pachet altfel valid: `sudura_cod` fără sudură sau nenormalizabil → `legare_fara_sudura`; sudura `declarata` → `legare_sudura_neaprobata`; sudura `anulata` (forțată, ca în E10) → `legare_fara_sudura`; o sudură `linie` → `legare_sudura_neaprobata`; codul unei suduri de pe alt tronson → `legare_fara_sudura`; un singur capăt activ, un capăt pe `bucata_decl_uid` sau pe o bucată ne-`montata`, ori niciun capăt pe o bucată legată de pachet → `legare_capete`; aceeași sudură în rândurile `legare` a două pachete → `legare_dubla`; o proiecție schimbată (de exemplu o lungime pe rândul `legare`) → `legare_proiectie`. În fiecare caz: zero efecte (`status` `draft`, niciun document, `updated_at` neschimbat), iar după repararea forțată aprobarea trece;
+    - **verificarea pe bucată doar pe `teava` / `curba`**: un pachet cu o cuplare nu primește `rand_nelegat` pe rândul `legare`; un rând `teava` dezlegat în același pachet → `rand_nelegat`; un rând `separator` forțat pe un pachet în flux → `rand_nelegat` (fail-closed);
+    - **`leaga` / `dezleaga` pe un rând `legare`** → `rand_fara_bucata`, zero efecte;
+    - **curse**, cu barieră, în ambele ordini, `pg_locks` arătând așteptarea: `completeaza` ↔ `completeaza` pe două pachete cu aceeași cuplare → a doua așteaptă pe sudură, apoi `legare_dubla` (sau intervalul suprapus), fără deadlock; `aprobare_transgaz` ↔ aprobarea unei tăieri care mută capătul unei cuplări din pachet (bucata din afara pachetului) → serializate pe sudură, fără deadlock, iar aprobarea Transgaz trece în ambele ordini (capătul rămâne pe o bucată `montata` a tronsonului);
+    - **activarea fluxului** pe un tronson cu un rând `legare` fără sudura de cuplare verificată (de exemplu un pachet vechi, scris din client înainte de flux) → refuzată (rânduri nelegate, §7.1).
 
 ## 12. Întrebări deschise (A / B / C)
 
