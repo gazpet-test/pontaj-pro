@@ -9,7 +9,8 @@
 --   * politicile live relevante pe storage.objects: ai_inbox_obj_all (FOR ALL TO authenticated, doar bucket_id — gaura),
 --     tts_audio_inchis (RESTRICTIVE, ca live) și două politici ale altor bucket-uri în formele live („(bucket_id = 'x'::text)”
 --     și „((bucket_id = 'x'::text) AND (EXISTS …))”), ca precondiția „celelalte politici sunt legate de alt bucket” să fie
---     verificată pe forme reale; trigger-ul storage protect_objects_delete NU e reprodus (îl ocolește storage-api cu
+--     verificată pe forme reale; plus politicile storage ale E3 (20261103b, aplicată ÎNAINTE — ordinea convenită; permisive +
+--     RESTRICTIVE pe izo-documente, verbatim) și bucket-ul izo-documente; trigger-ul storage protect_objects_delete NU e reprodus (îl ocolește storage-api cu
 --     storage.allow_delete_query; nu ține de RLS);
 --   * public.profiles (id, role, is_owner, can_access_personal_data, can_access_financiar), executie_proiecte / profile_sites
 --     (pentru ramura „executie”) și fn_ai_inbox_poate_confirma(text, bigint) = TEXTUL LIVE (SECURITY DEFINER);
@@ -149,11 +150,43 @@ CREATE POLICY documente_personal_select ON storage.objects FOR SELECT TO authent
      WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true)))))));
 CREATE POLICY templates_select ON storage.objects FOR SELECT TO authenticated USING ((bucket_id = 'templates'::text));
 
+-- ── E3 (20261103b, Izometrie) aplicată ÎNAINTE — ordinea convenită: politicile storage ale E3 verbatim (branch izometrie/e3,
+--    secțiunea K), cu funcțiile fn_izo_scan_poate_* ca stub (false; pe bucket-ul cozii nu se ajunge la ele: OR-ul se oprește la
+--    bucket_id IS DISTINCT FROM 'izo-documente'). Așa precondiția 20261103c și toată suita rulează pe un catalog post-E3.
+CREATE FUNCTION public.fn_izo_scan_poate_incarca(p_name text) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
+CREATE FUNCTION public.fn_izo_scan_poate_citi(p_name text) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
+CREATE FUNCTION public.fn_izo_scan_poate_sterge(p_name text) RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$;
+REVOKE EXECUTE ON FUNCTION public.fn_izo_scan_poate_incarca(text), public.fn_izo_scan_poate_citi(text), public.fn_izo_scan_poate_sterge(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.fn_izo_scan_poate_incarca(text), public.fn_izo_scan_poate_citi(text), public.fn_izo_scan_poate_sterge(text) TO authenticated;
+CREATE POLICY izo_doc_scan_ins ON storage.objects FOR INSERT TO authenticated
+  WITH CHECK (bucket_id = 'izo-documente' AND public.fn_izo_scan_poate_incarca(name));
+CREATE POLICY izo_doc_scan_sel ON storage.objects FOR SELECT TO authenticated
+  USING (bucket_id = 'izo-documente' AND public.fn_izo_scan_poate_citi(name));
+CREATE POLICY izo_doc_scan_del ON storage.objects FOR DELETE TO authenticated
+  USING (bucket_id = 'izo-documente' AND public.fn_izo_scan_poate_sterge(name));
+CREATE POLICY izo_doc_scan_r_toti ON storage.objects AS RESTRICTIVE FOR ALL TO public
+  USING (bucket_id IS DISTINCT FROM 'izo-documente' OR pg_has_role(current_user, 'authenticated', 'USAGE'))
+  WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente' OR pg_has_role(current_user, 'authenticated', 'USAGE'));
+CREATE POLICY izo_doc_scan_r_sel ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated
+  USING (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_citi(name));
+CREATE POLICY izo_doc_scan_r_ins ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated
+  WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_incarca(name));
+CREATE POLICY izo_doc_scan_r_del ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated
+  USING (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_sterge(name));
+CREATE POLICY izo_doc_scan_r_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO public
+  USING (bucket_id IS DISTINCT FROM 'izo-documente') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente');
+CREATE POLICY izo_doc_bucket_r_ins ON storage.buckets AS RESTRICTIVE FOR INSERT TO public
+  WITH CHECK (id IS DISTINCT FROM 'izo-documente');
+CREATE POLICY izo_doc_bucket_r_upd ON storage.buckets AS RESTRICTIVE FOR UPDATE TO public
+  USING (id IS DISTINCT FROM 'izo-documente') WITH CHECK (id IS DISTINCT FROM 'izo-documente');
+CREATE POLICY izo_doc_bucket_r_del ON storage.buckets AS RESTRICTIVE FOR DELETE TO public
+  USING (id IS DISTINCT FROM 'izo-documente');
+
 -- ── date fictive ────────────────────────────────────────────────────────────────────────────────────────────────
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types) VALUES
   ('ai-documente-inbox', 'ai-documente-inbox', false, 20971520, ARRAY['application/pdf','image/jpeg','image/png','image/webp','image/heic']),
   ('documente-personal', 'documente-personal', false, NULL, NULL), ('templates', 'templates', false, NULL, NULL),
-  ('tts-audio', 'tts-audio', false, NULL, NULL);
+  ('tts-audio', 'tts-audio', false, NULL, NULL), ('izo-documente', 'izo-documente', false, 10485760, ARRAY['application/pdf']);
 INSERT INTO public.profiles (id, name, role, is_owner, can_access_personal_data, can_access_financiar) VALUES
   ('00000000-0000-0000-0000-0000000000a1', 'Urcă (fictiv)', 'user', false, false, false),
   ('00000000-0000-0000-0000-0000000000a2', 'HR (fictiv)', 'user', false, true, false),

@@ -6,7 +6,7 @@
 # DOAR PG17 local dedicat (implicit /tmp/pg_ai_inbox_storage, 127.0.0.1:5976). Nu atinge producția și nici un branch Supabase.
 #   0. schelet (= structura din producție 21.10, cu gaura) → baza; gaura e reprodusă (contul fără drepturi vede toate cele 10
 #      obiecte); suita pe baza fără migrare TREBUIE să cadă (discriminare); V. validatorul runnerului acceptă migrarea
-#   1. gărzi (fiecare pe o copie; după refuz: nimic schimbat): fără marcaj; ai_inbox_obj_all altfel decât live; altă politică ce
+#   1. gărzi (fiecare pe o copie; după refuz: nimic schimbat): fără marcaj; E3 neaplicată (ordinea convenită); ai_inbox_obj_all altfel decât live; altă politică ce
 #      numește bucket-ul; altă politică PERMISSIVE nelegată de un bucket (OR la nivel superior); bucket public; versionare;
 #      rând deschis cu obiect urcat de alt cont; authenticated fără EXECUTE pe fn_ai_inbox_poate_confirma / fără SELECT pe
 #      uploadat_de; indexul patch-ului există deja; RLS oprit pe storage.objects; rând ÎNCHIS („respins”) cu obiectul altuia;
@@ -136,6 +136,9 @@ garda 1m "aceeași cale în două rânduri" \
 garda 1n "rând fără obiect cu calea în afara folderului propriu" \
   "INSERT INTO public.ai_documente_inbox (fisier_path, fisier_nume, status, uploadat_de) VALUES ('x/nu_exista.pdf', 'n.pdf', 'confirmat', '00000000-0000-0000-0000-0000000000a1')" \
   'au calea în afara folderului celui care a urcat'
+garda 1q "E3 (20261103b) neaplicată — ordinea convenită: E3 întâi" \
+  "DROP POLICY izo_doc_scan_r_toti ON storage.objects" \
+  'E3 (20261103b, Izometrie) nu e aplicată'
 # 1o. altă sesiune ține storage.objects (ex. o listare lungă): migrarea cade curat pe lock_timeout (5 s), nimic schimbat
 copie ai_inbox_g1o_test "$BAZA"
 "${PSQL[@]}" -d ai_inbox_g1o_test -c "BEGIN; LOCK TABLE storage.objects IN ACCESS SHARE MODE; SELECT pg_sleep(9); COMMIT;" >/dev/null 2>&1 &

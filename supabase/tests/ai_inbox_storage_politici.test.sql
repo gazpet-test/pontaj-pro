@@ -153,6 +153,24 @@ BEGIN
     'T3p „uid/../altul/z” → permis la nivel SQL (numele e literal, sub folderul propriu; owner_id = cine a urcat; altul nu-l vede)');
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a4, ins || format('(%L, %L, %L, %L)', b, a1 || '/../' || a4 || '/z.pdf', a4, a4)), 'err:42501',
     'T3q … dar altcineva nu scrie sub folderul uid-ului (a4 cu „a1/../a4/z”) → refuz');
+  -- 4d (r3, Copilot #832 r2 P1): o cale legată de un rând nu se reocupă — altfel cine a urcat își șterge fișierul și urcă alt act
+  --    sub rândul deja clasificat (payload_ai / previzualizare / confirmare pe alt conținut)
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1,
+      format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o1) || ';;' || ins || format('(%L, %L, %L, %L)', b, o1, a1, a1)),
+    'err:42501', 'T3r cine a urcat își șterge actul clasificat și urcă alt conținut pe aceeași cale → refuz (rândul 601 rămâne fără obiect, nu cu alt act)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1,
+      format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o10) || ';;' || ins || format('(%L, %L, %L, %L)', b, o10, a1, a1)),
+    'err:42501', 'T3s … la fel pentru un rând al lui în „eroare” (orice stare)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o1)), 'ok:1',
+    'T3t … dar ștergerea fișierului propriu rămâne permisă (curățenia panoului)');
+  PERFORM pg_temp.eq(pg_temp.cu(format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, 'wizard-angajare/1_abc/CI.pdf'),
+      'authenticated', a3, ins || format('(%L, %L, %L, %L)', b, 'wizard-angajare/1_abc/CI.pdf', a3, a3)),
+    'err:42501', 'T3u cale wizard-angajare/ eliberată (rândul 608 al lui HR) → nici ownerul nu o reocupă');
+  PERFORM pg_temp.eq(pg_temp.cu(format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, 'wizard-angajare/1_abc/CI.pdf'),
+      'authenticated', a2, ins || format('(%L, %L, %L, %L)', b, 'wizard-angajare/1_abc/CI.pdf', a2, a2)),
+    'err:42501', 'T3v … nici HR-ul care a urcat-o');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, ins || format('(%L, %L, %L, %L)', b, o6 || '.v2', a1, a1)), 'ok:1',
+    'T3w o cale nouă lângă un orfan / un rând existent → permis (panoul urcă mereu pe căi noi)');
 
   -- T4 suprascriere / mutare: fără politică UPDATE nimeni (în afară de service_role) nu atinge obiectele existente
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a1, format('UPDATE storage.objects SET metadata = %L::jsonb WHERE bucket_id = %L AND name = %L', '{"x":1}', b, o1)),

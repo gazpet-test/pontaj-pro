@@ -8,7 +8,12 @@
 --   1. ai_inbox_obj_insert (INSERT): doar în folderul propriu — primul segment al căii = auth.uid() (convenția panoului,
 --      src/CitesteOricePanel.jsx: `${profile.id}/${Date.now()}_${rand}.${ext}`) — sau sub `wizard-angajare/…` (convenția
 --      wizard-ului, src/HrAngajatNouWizard.jsx) DOAR pentru owner / can_access_personal_data (cine vede „➕ Angajat nou”).
---      Rădăcina bucket-ului și folderele altora: refuz.
+--      Rădăcina bucket-ului și folderele altora: refuz. ȘI calea nu e deja a unui rând din coadă (r3, Copilot #832 r2 P1): fără
+--      asta, cine a urcat își șterge fișierul (clauza 2a) și urcă ALT conținut pe aceeași cale, sub rândul deja clasificat
+--      (payload_ai / previzualizarea / confirmarea ar lucra pe alt act decât cel citit). Panoul și wizard-ul urcă mereu pe căi
+--      noi (`<ts>_<rand>`), deci niciun drum legitim nu reocupă o cale. NOT EXISTS rulează cu RLS-ul cozii al apelantului: pe
+--      `<uid>/…` rândurile sunt ale lui (uploadat_de = el, legate la INSERT — 4a), deci le vede mereu; vezi limitarea c pentru
+--      `wizard-angajare/…`.
 --   2. ai_inbox_obj_select + ai_inbox_obj_delete (aceeași expresie). Vede / șterge un obiect:
 --      (a) cine l-a urcat: owner_id = auth.uid() (îl pune storage-api din JWT; prin API nu se alege). Acoperă și pașii de dinaintea
 --          rândului din coadă (panoul / wizard-ul șterg fișierul când INSERT-ul rândului pică) și căile wizard-ului;
@@ -37,6 +42,9 @@
 --          noi la fiecare upload) — căutarea rândului legat (2b) per obiect și „un fișier = un rând” pentru edge / curățenie.
 --      Precondiția de date verifică TOATE rândurile existente (orice stare, nu doar cele deschise): niciun obiect cu alt owner_id
 --      decât uploadat_de, nicio cale dublă, nicio cale în afara folderului celui care a urcat (sau wizard-angajare/). Azi: 0 / 0 / 0.
+--      4d. (politica 1) o cale legată o dată de un rând nu se mai reocupă printr-un upload nou: după ștergerea fișierului rândul
+--          rămâne fără obiect, nu cu alt conținut. Legătura e pe cale + cine a urcat, nu pe conținut (fără hash): service_role
+--          (ocolește RLS-ul) ar putea în continuare rescrie un obiect — e de încredere, azi nu o face.
 --      Împreună: orice rând din coadă (vechi sau nou) arată doar spre un fișier al celui care l-a creat → edge-urile service_role
 --      descarcă / șterg doar fișierul acelui cont. Codul edge-urilor rămâne neschimbat (fără deploy).
 -- NEATINSE: service_role (edge citeste-orice descarcă, cleanup-recycle-bin șterge — ocolesc RLS), celelalte bucket-uri și politicile
@@ -57,18 +65,29 @@
 --      (PostgreSQL aplică ai_inbox_select și rândului nou — un cont fără drepturi nu mută „nedecisul” în HR, 42501). Un confirmator
 --      poate însă muta un rând al lui în „nedecis” (ex. HR un act HR) → fișierul devine vizibil oricui (T6n–T6o). Actorul vedea
 --      deja actul (insider, nu escaladare pentru el); politica UPDATE a cozii = migrare separată.
---   c. căile `wizard-angajare/…` nu poartă uid-ul: le apără owner_id-ul + dreptul HR cerut la INSERT. Forward-fix recomandat: wizard-ul
---      urcă în `${uid}/wizard-angajare/…`, apoi excepția din (1) se scoate printr-o migrare nouă.
+--   c. căile `wizard-angajare/…` nu poartă uid-ul: le apără owner_id-ul + dreptul HR cerut la INSERT. Garda 4d vede acolo doar rândurile
+--      pe care contul HR le vede în coadă: calea eliberată a unui rând mutat într-un modul pe care HR nu-l vede s-ar putea reocupa de
+--      alt cont HR (insider, calea `<ts>_<rand>` trebuie știută; obiectul nou are alt owner_id → nu se leagă de rând, clauza 2b
+--      cade, edge-ul nu-l mai citește — rândul nu e în așteptare). Forward-fix recomandat: wizard-ul urcă în
+--      `${uid}/wizard-angajare/…`, apoi excepția din (1) se scoate printr-o migrare nouă.
 --   d. URL-urile semnate deja emise (panoul: 120 s) rămân valabile până expiră.
 --   e. ștergerea unui rând din coadă de către wizard (scoateDoc / abandon) cere ai_inbox_delete = owner: pentru HR fără owner rândul
 --      rămâne (preexistent, nu din 20261103c); fișierul lui se șterge corect (owner_id = cine l-a urcat).
 -- Revenire: supabase/revenire/20261103c_ai_inbox_storage_politici_ROLLBACK.sql (REDESCHIDE gaura; doar la cererea lui Răzvan).
 -- Test local: scripts/test_ai_inbox_storage_politici.sh. Plan de test cu Storage real (branch Supabase): docs/HR/INBOX_STORAGE_RLS.md.
+-- ORDINE: DOAR DUPĂ E3 (20261103b, Izometrie — convenit cu sesiunea Izometrie): E3 are un baseline fix al politicilor storage
+-- (inclusiv ai_inbox_obj_all) și ar refuza după 20261103c; precondiția de mai jos cere E3 aplicată (bucket-ul izo-documente +
+-- stratul RESTRICTIV izo_doc_scan_r_toti) și nu atinge nimic din ce acoperă ștampila E3 (politicile izo_doc_*, RLS / FORCE /
+-- owner / ACL pe storage.objects, storage.buckets). Politicile RESTRICTIVE ale E3 lasă bucket-ul cozii neatins
+-- (bucket_id IS DISTINCT FROM 'izo-documente'); harness-ul local rulează pe un catalog cu ele.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh; fără BEGIN/COMMIT. LOCK-urile de mai jos se iau ÎNAINTEA precondițiilor și se țin
--- PÂNĂ LA COMMIT (toată migrarea, zeci de ms): storage.objects în ACCESS EXCLUSIVE — în acest timp TOATE operațiile storage, pe
--- toate bucket-urile, așteaptă; ai_documente_inbox în SHARE ROW EXCLUSIVE — citirile merg, scrierile așteaptă. Așa nicio politică
--- și niciun rând nu se schimbă între verificare și DDL. lock_timeout 5s: cu interogări lungi în curs, migrarea cade curat (se
--- reîncearcă), nimic schimbat.
+-- PÂNĂ LA COMMIT (toată migrarea, zeci de ms), în ordinea coadă → storage (r3, Copilot #832 r2 P2 — aceeași ordine ca drumul
+-- INSERT rând → trigger 4a care citește storage, deci fără ciclu de deadlock cu el): ai_documente_inbox în SHARE ROW EXCLUSIVE —
+-- citirile merg, scrierile așteaptă; storage.objects în ACCESS EXCLUSIVE — în acest timp TOATE operațiile storage, pe toate
+-- bucket-urile, așteaptă. Așa nicio politică și niciun rând nu se schimbă între verificare și DDL. lock_timeout 5s: cu interogări
+-- lungi în curs, migrarea cade curat (se reîncearcă), nimic schimbat. Nu cunoaștem alt drum care ține storage și cere coada; dacă
+-- PostgreSQL ar detecta totuși un deadlock, anulează o tranzacție întreagă (migrarea sau operația concurentă — ex. un upload, pe
+-- care panoul îl arată ca eroare), fără efect parțial.
 
 DO $livrare_start$
 BEGIN
@@ -78,8 +97,8 @@ BEGIN
 END $livrare_start$;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL search_path = public, pg_temp;
-LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.ai_documente_inbox IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
 
 DO $pre$
 DECLARE
@@ -89,6 +108,11 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'PRECONDIȚIE 20261103c: necesita postgres'; END IF;
   IF current_setting('search_path') IS DISTINCT FROM 'public, pg_temp' THEN
     RAISE EXCEPTION 'PRECONDIȚIE 20261103c: search_path = „%” (aștept „public, pg_temp” — deparse-ul comparat depinde de el)', current_setting('search_path');
+  END IF;
+  -- ordinea convenită cu Izometrie: E3 (20261103b) întâi — E3 e atomică, deci bucket-ul ei + stratul RESTRICTIV = E3 aplicată
+  IF NOT EXISTS (SELECT 1 FROM storage.buckets b WHERE b.id = 'izo-documente')
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'izo_doc_scan_r_toti' AND NOT p.polpermissive) THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: E3 (20261103b, Izometrie) nu e aplicată — ordinea convenită e E3 întâi, apoi 20261103c (E3 are un baseline cu ai_inbox_obj_all)';
   END IF;
   -- RLS activ pe ambele tabele (politicile nu înseamnă nimic altfel)
   IF (SELECT c.relrowsecurity FROM pg_class c WHERE c.oid = 'storage.objects'::regclass) IS NOT TRUE
@@ -268,7 +292,8 @@ CREATE TRIGGER trg_ai_inbox_fisier_imutabil
   BEFORE UPDATE ON public.ai_documente_inbox
   FOR EACH ROW EXECUTE FUNCTION public.ai_inbox_fisier_imutabil();
 
--- 1–3. politicile bucket-ului: INSERT în folderul propriu, SELECT / DELETE pentru cine a urcat / poate confirma / owner, fără UPDATE
+-- 1–3. politicile bucket-ului: INSERT în folderul propriu (pe o cale nelegată încă de un rând), SELECT / DELETE pentru cine a urcat /
+-- poate confirma / owner, fără UPDATE
 DROP POLICY ai_inbox_obj_all ON storage.objects;
 
 CREATE POLICY ai_inbox_obj_insert ON storage.objects AS PERMISSIVE FOR INSERT TO authenticated
@@ -278,7 +303,9 @@ CREATE POLICY ai_inbox_obj_insert ON storage.objects AS PERMISSIVE FOR INSERT TO
     AND ((storage.foldername(name))[1] = (SELECT auth.uid())::text
          OR ((storage.foldername(name))[1] = 'wizard-angajare'
              AND EXISTS (SELECT 1 FROM public.profiles p
-                          WHERE p.id = (SELECT auth.uid()) AND (p.is_owner = true OR p.can_access_personal_data = true)))));
+                          WHERE p.id = (SELECT auth.uid()) AND (p.is_owner = true OR p.can_access_personal_data = true))))
+    -- 4d: o cale deja legată de un rând din coadă nu se reocupă (alt conținut sub un rând clasificat)
+    AND NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i WHERE i.fisier_path = objects.name));
 
 CREATE POLICY ai_inbox_obj_select ON storage.objects AS PERMISSIVE FOR SELECT TO authenticated
   USING (
@@ -303,7 +330,7 @@ CREATE POLICY ai_inbox_obj_delete ON storage.objects AS PERMISSIVE FOR DELETE TO
 DO $post$
 DECLARE
   -- deparse-ul exact (search_path = public, pg_temp), cu spațiile albe comprimate la un singur spațiu
-  c_ins CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND (((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text) OR (((storage.foldername(name))[1] = ''wizard-angajare''::text) AND (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))))';
+  c_ins CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND (((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text) OR (((storage.foldername(name))[1] = ''wizard-angajare''::text) AND (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))) AND (NOT (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE (i.fisier_path = objects.name)))))';
   c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
   v_fn oid := to_regprocedure('public.ai_inbox_fisier_imutabil()');
   v_fl oid := to_regprocedure('public.ai_inbox_fisier_legat()');

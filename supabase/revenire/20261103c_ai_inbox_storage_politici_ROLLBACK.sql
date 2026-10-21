@@ -19,7 +19,10 @@
 --     COMMIT;
 -- harness-armare: gazpet.revenire_20261103c REDESCHIDE_INBOX_STORAGE
 -- Siguranțe: armare legată de txid, verificată ÎNAINTEA lock-urilor; armare persistentă (ALTER DATABASE/ROLE … SET) = refuz;
---   LOCK storage.objects (ACCESS EXCLUSIVE) + ai_documente_inbox (SHARE ROW EXCLUSIVE) până la COMMIT, înaintea verificării stării;
+--   LOCK ai_documente_inbox (SHARE ROW EXCLUSIVE) apoi storage.objects (ACCESS EXCLUSIVE) până la COMMIT, înaintea verificării
+--   stării — ordinea coadă → storage e cea a unui INSERT în coadă (trigger-ul trg_ai_inbox_fisier_legat citește storage): invers,
+--   revenirea ar ține storage și ar aștepta coada, iar INSERT-ul ar ține coada și ar aștepta storage → deadlock (Jakarinos /
+--   Copilot #832 r2 P2); E3 nu e atinsă (doar ai_inbox_obj_* + obiectele patch-ului);
 --   precondiție = EXACT obiectele patch-ului: expresiile politicilor (aceleași constante ca postcondiția migrării), definiția
 --   indexului, atributele + ACL-ul + corpul (md5 cu spațiile albe comprimate) ale celor două funcții, tipul / funcția / starea
 --   celor două trigger-e; DROP fără CASCADE; postcondiție = exact politica veche și niciun obiect al patch-ului rămas; dezarmare
@@ -43,12 +46,12 @@ BEGIN
     RAISE EXCEPTION 'Precondiție revenire 20261103c: search_path = „%” (aștept „public, pg_temp”)', current_setting('search_path') USING ERRCODE = '55000';
   END IF;
 END $rb_arm$;
-LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.ai_documente_inbox IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
 
 DO $rb_pre$
 DECLARE
-  c_ins CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND (((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text) OR (((storage.foldername(name))[1] = ''wizard-angajare''::text) AND (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))))';
+  c_ins CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND (((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text) OR (((storage.foldername(name))[1] = ''wizard-angajare''::text) AND (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))) AND (NOT (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE (i.fisier_path = objects.name)))))';
   c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
   -- md5 al corpului (prosrc) cu spațiile albe comprimate la un spațiu și capetele tăiate — independent de CRLF / LF
   c_md5_imut CONSTANT text := '8b8f00a4db9b7cd9ec3d456ad94c9818';
