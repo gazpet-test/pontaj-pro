@@ -373,4 +373,9 @@ DROP FUNCTION teste.wrapper_activare(bigint);
 SELECT teste.e('T12j porțile refăcute după FK / CHECK / wrapper', cardinality(public.fn_izo_porti_lipsa()) = 0);
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
+-- ═══ T13 carantina (review #807 r3) ═══
+SELECT teste.e('T4y carantina: import în depozit, stare carantina (nu disponibilă)',
+  (public.fn_izo_import_sold_initial(3, 'car-1', '{"surse":[{"fisier":"Q.xlsx","sha256":"5555555555555555555555555555555555555555555555555555555555555555"}],"bucati":[{"tip":"teava","serie":"299QQ00001","sarja":"SA1","lungime_mm":12000,"perete_mm":7.1,"stare":"carantina","depozit_id":11,"sursa":{"fisier":"Q.xlsx","foaie":"F","rand":1}}]}'::jsonb)->>'bucati')::int = 1);
+SELECT teste.e('T4y1 bucata în carantină stă în depozitul 11', (SELECT stare || ':' || locatie_tip || ':' || depozit_id FROM public.magazie_bucati WHERE serie = '299QQ00001') = 'carantina:depozit:11');
+SELECT teste.eroare('T4y2 carantina doar pe beneficiar (gazpet → CHECK)', $$UPDATE public.magazie_bucati SET stare = 'carantina' WHERE serie = 'GZP1'$$, 'magazie_bucati_stare_check');
 SELECT 'TESTE SQL: TOATE OK';

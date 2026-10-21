@@ -938,6 +938,7 @@ const STARE_META = {
   retur:       { label:'Retur (rest în stoc)',      emoji:'↩️', color:G.cyan   },
   // stările registrului de țeavă Transgaz (izometrie, doar provenienta beneficiar — 20261102a)
   in_tranzit:          { label:'În drum',                     emoji:'🚚', color:G.yellow },
+  carantina:           { label:'Carantină (nedisponibilă)',   emoji:'⛔', color:G.red },
   pe_tronson:          { label:'Pe tronson (nemontată)',      emoji:'📍', color:G.blue   },
   rest_nereutilizabil: { label:'Rest nereutilizabil (depozit)', emoji:'✂️', color:G.dim  },
   taiata:              { label:'Tăiată (consumată în bucăți)', emoji:'🪚', color:G.dim   },

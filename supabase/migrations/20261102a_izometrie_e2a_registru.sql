@@ -218,7 +218,7 @@ BEGIN
   ALTER TABLE public.magazie_bucati DROP CONSTRAINT magazie_bucati_stare_check;
   ALTER TABLE public.magazie_bucati ADD CONSTRAINT magazie_bucati_stare_check CHECK (
     stare = ANY (ARRAY['sosit','receptionat','rezervata','montata','consumata','retur'])
-    OR (provenienta = 'beneficiar' AND stare = ANY (ARRAY['in_tranzit','pe_tronson','rest_nereutilizabil','taiata','deseu','pierduta','anulata'])));
+    OR (provenienta = 'beneficiar' AND stare = ANY (ARRAY['in_tranzit','pe_tronson','rest_nereutilizabil','taiata','deseu','pierduta','anulata','carantina'])));
   ALTER TABLE public.magazie_bucati DROP CONSTRAINT magazie_bucati_locatie_tip_check;
   ALTER TABLE public.magazie_bucati ADD CONSTRAINT magazie_bucati_locatie_tip_check CHECK (
     locatie_tip = ANY (ARRAY['sediu','proiect'])
@@ -1038,7 +1038,8 @@ BEGIN
       IF v_serie IS NULL OR v_serie = '' OR v_sarja IS NULL THEN RAISE EXCEPTION 'izo: rândul % (%): serie și șarjă obligatorii', v_n, v_b->'sursa'; END IF;
       IF (v_b->>'perete_mm') IS NULL THEN RAISE EXCEPTION 'izo: rândul % (%): perete lipsă (D2#3)', v_n, v_serie; END IF;
       v_stare := v_b->>'stare';
-      IF v_stare IS NULL OR v_stare NOT IN ('sosit','receptionat','pe_tronson') THEN
+      -- carantina (review #807 r3): bucata e fizic în depozit, dar NU e disponibilă (montaj / ieșire) până la o decizie
+      IF v_stare IS NULL OR v_stare NOT IN ('sosit','receptionat','pe_tronson','carantina') THEN
         RAISE EXCEPTION 'izo: rândul % (%): stare % la sold inițial', v_n, v_serie, v_stare;
       END IF;
       v_dep := (v_b->>'depozit_id')::integer;
