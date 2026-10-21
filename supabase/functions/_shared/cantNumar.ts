@@ -244,6 +244,18 @@ function subMarcajPagina(doc: string, a: number): boolean {
   }
   return false
 }
+// decizia Răzvan 21.10.2026 (cazul iii, varianta A — aceeași regulă ca inventarul B1, cantAcoperire „posibila_continuare”): sub un
+// articol numerotat CU zerouri („003 6701152 M 200.000”), o linie „<n> COD <cod>” cu n FĂRĂ zerouri care NU continuă secvența (n nu e
+// nr. articolului, următorul sau 1) e continuarea denumirii rupte („… DN 90X8.” / „2 COD 64000115”), nu început de articol. Orice altă
+// formă rămâne început de articol (blocul se oprește → incert). Verificările de cod / cantitate / UM de dedesubt se aplică în continuare.
+const RE_CONTINUARE_COD = /^\s*(\d{1,4})\s+COD\s+\S/i
+const RE_NR_ARTICOL = /^\s*\**\s*(\d{1,4})[.)]?\s/
+function continuareCod(linieArticol: string, l: string): boolean {
+  const mc = RE_CONTINUARE_COD.exec(l), ma = RE_NR_ARTICOL.exec(linieArticol)
+  if (!mc || !ma || !/^0\d/.test(ma[1]) || /^0/.test(mc[1])) return false
+  const na = Number(ma[1]), nc = Number(mc[1])
+  return ![na, na + 1, 1].includes(nc)
+}
 const RE_INCEPUT_ARTICOL = /^\s*\**\s*\d{1,4}[.)]?\s+\**[A-Z0-9][A-Za-z0-9.\-\/]{2,}/
 // doar unitățile reale fac o linie ancoră (umNorm întoarce și cuvinte oarecare: „TEAVA 20.80” nu e un rând nou)
 const UM_ANCORA = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'l', 'set', 'ora', 'h'])
@@ -308,7 +320,7 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
     const b = b0 < 0 ? doc.length : b0
     const l = doc.slice(a, b)
     if (RE_TOTAL_RAND.test(l)) return k === 0 ? doarLinia : { linie, bloc: doc.slice(ls, pana), de_la: ls, pana_la: pana, continuare: true }
-    if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || RE_INCEPUT_ARTICOL.test(l)) return doarLinia
+    if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || (RE_INCEPUT_ARTICOL.test(l) && !continuareCod(linie, l))) return doarLinia
     // review Jakarinos r2 (P1): un articol fără nr. și fără UM („SA11H1 120.000”) nu e continuare — linia care începe cu un cod sau
     // conține o cantitate în formatul listei (trei zecimale: „120.000”) oprește blocul (incert → doar linia cantității)
     if (codComparabil(l.trim().split(/\s+/)[0]) !== null || /(?<![\d.,])\d+\.\d{3}(?![\d.,])/.test(l)) return doarLinia

@@ -290,3 +290,35 @@ Deno.test('n6 review Jakarinos r1 (P3): pseudomarcaj, text între marcaj și ant
     assertEquals(k.obs.pozitie_dovedita, false, inlocuit)
   }
 })
+
+// n7 (decizia Răzvan 21.10, cazul iii „A”): „<n> COD <cod>” fără zerouri sub un articol numerotat cu zerouri, care nu continuă
+// secvența = continuarea denumirii; textul de mai jos e forma reală din Răcari (doc 212, „003 6701152 M 200.000”)
+const RACARI_COD = PRE + '002 SA11G1 [ 2] M 200.000\nTEAVA PVC D= 90 MM\n0.000 0 Total=\n\n003 6701152 M 200.000\n@TV HDPE80 312UNI7611.7615 PN10 DN 90X8.\n2 COD 64000115\n0.003 1 Total=\n\n004 EC07A1 [ 1] M 200.000\nCABLU\n0.000 0 Total=\n'
+const rTV = (cit = '003 6701152 M 200.000', cod = '6701152') => randF3(cod, 'TV HDPE80 312UNI7611.7615 PN10 DN 90X8.2 COD 64000115', 200, cit)
+Deno.test('n7: Răcari „003 6701152” + „2 COD 64000115” (linie ruptă) → denumirea cu DN 90 acceptată, dovedit', async () => {
+  const n = (await normalizeazaRand(rTV(), { ...ctxF3, textDoc: RACARI_COD, felie: RACARI_COD }))!
+  assertEquals([n.obs.pozitie_dovedita, n.obs.dn_mm], [true, [90]])
+  // și forma cu coloane de preț pe linia ruptă („2 COD 64000115 0.00 0.00”, doc 212 ~77k)
+  const t = RACARI_COD.replace('2 COD 64000115\n', '2 COD 64000115 0.00 0.00\n')
+  const m = (await normalizeazaRand(rTV(), { ...ctxF3, textDoc: t, felie: t }))!
+  assertEquals(m.obs.pozitie_dovedita, true)
+})
+Deno.test('n7 negative: fără zerouri / „2” care continuă secvența / „2 COD” cu cantitate proprie / marcaj de pagină → rămâne nedovedit', async () => {
+  const cazuri: [string, string, string][] = [
+    // documentul numerotat FĂRĂ zerouri: „3 …” + „2 COD …” nu se poate distinge de un articol → incert
+    ['fara_zerouri', RACARI_COD.replace('003 6701152 M 200.000', '3 6701152 M 200.000'), '3 6701152 M 200.000'],
+    // un articol 2 real după 001 (2 = 1 + 1 continuă secvența) → incert
+    ['continua_secventa', RACARI_COD.replace('003 6701152 M 200.000', '001 6701152 M 200.000'), '001 6701152 M 200.000'],
+    // „2 COD …” cu cantitate proprie în formatul listei → e un articol, blocul se oprește
+    ['cantitate_proprie', RACARI_COD.replace('2 COD 64000115\n', '2 COD 64000115 M 10.000\n'), '003 6701152 M 200.000'],
+    // marcaj de pagină între cantitate și linia ruptă → blocul se oprește
+    ['marcaj_pagina', RACARI_COD.replace('@TV HDPE80', '⟦PAGINA 9⟧\n@TV HDPE80'), '003 6701152 M 200.000'],
+    // „2” cu zerouri („02 COD …”) sau alt cuvânt decât COD → nu e forma decisă
+    ['zerouri_la_linie', RACARI_COD.replace('2 COD 64000115', '02 COD 64000115'), '003 6701152 M 200.000'],
+    ['alt_cuvant', RACARI_COD.replace('2 COD 64000115', '2 SA11G1 64000115'), '003 6701152 M 200.000'],
+  ]
+  for (const [nume, t, cit] of cazuri) {
+    const n = (await normalizeazaRand(rTV(cit), { ...ctxF3, textDoc: t, felie: t }))!
+    assertEquals([n.obs.pozitie_dovedita, n.note.includes('pozitie:dn_alt_rand')], [false, true], nume)
+  }
+})
