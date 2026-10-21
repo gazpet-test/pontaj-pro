@@ -1,7 +1,10 @@
 -- ============================================================================
--- REVENIRE 20261103a — scoate proveniența structurală din dosarul HR: trigger-ul trg_hr_docp_sursa_inbox_imutabil, funcția
+-- REVENIRE 20261103a — scoate proveniența structurală din dosarul HR: trigger-ele trg_hr_docp_sursa_inbox_verifica (BEFORE
+-- INSERT) și trg_hr_docp_sursa_inbox_imutabil (BEFORE UPDATE), funcțiile hr_docp_sursa_inbox_verifica() și
 -- hr_docp_sursa_inbox_imutabil(), indexul unic hr_documente_personale_sursa_inbox_unic și coloana
 -- hr_documente_personale.sursa_inbox_id. Nu atinge alte obiecte / alte date.
+--   După prima folosire (orice document cu sursa_inbox_id) revenirea refuză — o problemă în UI se repară cu un build nou
+--   (forward-fix), nu cu UI-ul de dinainte de #821 (limitarea b din antetul migrării).
 --
 -- ⚠ ARTEFACT DE TEST / REVENIRE EXCEPȚIONALĂ, FĂRĂ GO DE EXECUȚIE (supabase/revenire/README.md). Doar la cererea lui Răzvan.
 --   REFUZĂ dacă vreun document are sursa_inbox_id (nu se scoate o coloană cu date: proveniența s-ar pierde, iar un rând din
@@ -12,8 +15,8 @@
 --   cu golirea (ALTER TABLE public.hr_documente_personale DISABLE TRIGGER trg_hr_docp_sursa_inbox_imutabil; UPDATE …;
 --   ENABLE TRIGGER …) sau session_replication_role = replica (oprește TOATE trigger-ele, și trg_hr_docp_modificat_la) — se
 --   pierde doar proveniența; ori (b) ștergerea documentelor respective — se pierd documentele, nu doar proveniența.
---   ÎNAINTE de revenire se revine și UI-ul: CitesteOricePanel de pe branch-ul hr/citeste-orice-dubluri cere coloana
---   (fără ea, salvarea din «Citește orice» HR se oprește cu „migrarea pentru sursa_inbox_id nu e aplicată”).
+--   ÎNAINTE de revenire se revine și UI-ul: CitesteOricePanel și HrAngajatNouWizard de pe branch-ul hr/citeste-orice-dubluri
+--   cer coloana (fără ea, salvarea din «Citește orice» HR / wizard se oprește cu „migrarea pentru sursa_inbox_id nu e aplicată”).
 --
 -- Execuția documentată = UN SINGUR string (fișierul NU conține BEGIN/COMMIT):
 --     BEGIN ISOLATION LEVEL READ COMMITTED;
@@ -56,7 +59,10 @@ BEGIN
   IF v_att IS NULL
      OR to_regclass('public.hr_documente_personale_sursa_inbox_unic') IS NULL
      OR to_regprocedure('public.hr_docp_sursa_inbox_imutabil()') IS NULL
+     OR to_regprocedure('public.hr_docp_sursa_inbox_verifica()') IS NULL
      OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_hr_docp_sursa_inbox_imutabil'
+                    AND tgrelid = 'public.hr_documente_personale'::regclass)
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_hr_docp_sursa_inbox_verifica'
                     AND tgrelid = 'public.hr_documente_personale'::regclass) THEN
     RAISE EXCEPTION 'Precondiție revenire 20261103a: starea curentă nu e patch-ul 20261103a (exact) — nu se revine tacit' USING ERRCODE = '55000';
   END IF;
@@ -75,7 +81,9 @@ BEGIN
   END IF;
 END $rb_pre$;
 
+DROP TRIGGER trg_hr_docp_sursa_inbox_verifica ON public.hr_documente_personale;
 DROP TRIGGER trg_hr_docp_sursa_inbox_imutabil ON public.hr_documente_personale;
+DROP FUNCTION public.hr_docp_sursa_inbox_verifica();
 DROP FUNCTION public.hr_docp_sursa_inbox_imutabil();
 DROP INDEX public.hr_documente_personale_sursa_inbox_unic;
 ALTER TABLE public.hr_documente_personale DROP COLUMN sursa_inbox_id;
@@ -88,7 +96,8 @@ BEGIN
              AND column_name = 'sursa_inbox_id')
      OR to_regclass('public.hr_documente_personale_sursa_inbox_unic') IS NOT NULL
      OR to_regprocedure('public.hr_docp_sursa_inbox_imutabil()') IS NOT NULL
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_hr_docp_sursa_inbox_imutabil') THEN
+     OR to_regprocedure('public.hr_docp_sursa_inbox_verifica()') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_hr_docp_sursa_inbox_imutabil', 'trg_hr_docp_sursa_inbox_verifica')) THEN
     RAISE EXCEPTION 'POSTCONDIȚIE revenire 20261103a: au rămas obiecte ale patch-ului';
   END IF;
   PERFORM set_config('gazpet.revenire_20261103a', '', true);   -- dezarmare

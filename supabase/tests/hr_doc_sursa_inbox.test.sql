@@ -1,5 +1,5 @@
 -- ============================================================================
--- 20261103a — proveniența structurală sursa_inbox_id (unică, nemodificabilă). Date FICTIVE, PG local *_test.
+-- 20261103a — proveniența structurală sursa_inbox_id (verificată la INSERT, unică, nemodificabilă). Date FICTIVE, PG local *_test.
 -- Rulat de scripts/test_hr_doc_sursa_inbox.sh DUPĂ aplicarea migrării pe hr_doc_sursa_inbox_schelet.sql.
 -- Fiecare acțiune: subtranzacție anulată (nu rămâne nimic). Aserțiune picată → 'ESEC TEST: …'; la final SUITA_OK.
 -- ============================================================================
@@ -8,8 +8,9 @@ SET client_min_messages = notice;
 BEGIN;
 
 -- rulează p_sql (instrucțiuni separate prin ';;') ca (rol, uid), apoi p_verif (SELECT → text, opțional);
--- întoarce 'ok:<rânduri>[:<verificare>]' sau 'err:<SQLSTATE>'; mereu anulat
-CREATE FUNCTION pg_temp.efect(p_rol text, p_uid text, p_sql text, p_verif text DEFAULT NULL) RETURNS text LANGUAGE plpgsql AS $$
+-- întoarce 'ok:<rânduri>[:<verificare>]' sau 'err:<SQLSTATE>' (cu p_msg: 'err:<SQLSTATE>:<mesaj>'); mereu anulat
+CREATE FUNCTION pg_temp.efect(p_rol text, p_uid text, p_sql text, p_verif text DEFAULT NULL, p_msg boolean DEFAULT false)
+RETURNS text LANGUAGE plpgsql AS $$
 DECLARE n bigint; s text; m bigint; v text; BEGIN
   BEGIN
     PERFORM set_config('request.jwt.claims', CASE WHEN p_uid IS NULL THEN '' ELSE json_build_object('sub', p_uid, 'role', p_rol)::text END, true);
@@ -23,13 +24,16 @@ DECLARE n bigint; s text; m bigint; v text; BEGIN
     RAISE EXCEPTION USING ERRCODE = 'P0099', MESSAGE = 'ok:' || n || CASE WHEN p_verif IS NULL THEN '' ELSE ':' || coalesce(v, 'NULL') END;
   EXCEPTION
     WHEN SQLSTATE 'P0099' THEN RETURN SQLERRM;
-    WHEN OTHERS THEN RETURN 'err:' || SQLSTATE;
+    WHEN OTHERS THEN RETURN 'err:' || SQLSTATE || CASE WHEN p_msg THEN ':' || SQLERRM ELSE '' END;
   END;
 END $$;
 CREATE FUNCTION pg_temp.ok(p_cond boolean, p_nume text) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN IF p_cond IS NOT TRUE THEN RAISE EXCEPTION 'ESEC TEST: %', p_nume; END IF; RAISE NOTICE 'OK %', p_nume; END $$;
 CREATE FUNCTION pg_temp.eq(p_real text, p_astept text, p_nume text) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN PERFORM pg_temp.ok(p_real IS NOT DISTINCT FROM p_astept, p_nume || ' [' || coalesce(p_real, 'NULL') || ' vs ' || p_astept || ']'); END $$;
+-- ca eq, dar p_real LIKE p_tipar (mesajul spune CARE gardă a refuzat — 23514 vine din două trigger-e)
+CREATE FUNCTION pg_temp.like(p_real text, p_tipar text, p_nume text) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN PERFORM pg_temp.ok(p_real LIKE p_tipar, p_nume || ' [' || coalesce(p_real, 'NULL') || ' ~ ' || p_tipar || ']'); END $$;
 
 DO $t$
 DECLARE
@@ -38,20 +42,28 @@ DECLARE
   nu  text := '00000000-0000-0000-0000-0000000000e3';
   ins text := 'INSERT INTO public.hr_documente_personale (employee_id, tip_id, fisier_path, fisier_nume, fisier_size_bytes, activ, observatii, uploadat_de, sursa_inbox_id) VALUES ';
   fn oid := to_regprocedure('public.hr_docp_sursa_inbox_imutabil()');
-  amprenta0 text;
+  fv oid := to_regprocedure('public.hr_docp_sursa_inbox_verifica()');
+  -- mesajele celor două gărzi (ambele 23514)
+  m_imut text := 'err:23514:%sursa_inbox_id e nemodificabilă%';
+  m_ins  text := 'err:23514:hr_documente_personale: sursa_inbox_id = % refuzată la INSERT — ';
+  amprenta0 text; a text; b text;
 BEGIN
-  -- T1 structura: coloana bigint NULL, index unic parțial, trigger BEFORE UPDATE pe rând, funcție INVOKER fără EXECUTE pentru roluri
+  -- T1 structura: coloana bigint NULL, index unic parțial, trigger BEFORE UPDATE + BEFORE INSERT pe rând, funcții INVOKER fără
+  --    EXECUTE pentru roluri
   PERFORM pg_temp.ok(EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'hr_documente_personale'
       AND column_name = 'sursa_inbox_id' AND data_type = 'bigint' AND is_nullable = 'YES')
     AND EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE c.relname = 'hr_documente_personale_sursa_inbox_unic' AND i.indisunique AND i.indisvalid
         AND pg_get_indexdef(i.indexrelid) LIKE '%USING btree (sursa_inbox_id) WHERE (sursa_inbox_id IS NOT NULL)')
     AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_hr_docp_sursa_inbox_imutabil' AND tgtype = 19 AND tgfoid = fn)
-    AND NOT (SELECT prosecdef FROM pg_proc WHERE oid = fn)
+    AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_hr_docp_sursa_inbox_verifica' AND tgtype = 7 AND tgfoid = fv)
+    AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid IN (fn, fv) AND (prosecdef OR proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']))
     AND NOT has_function_privilege('anon', fn, 'EXECUTE') AND NOT has_function_privilege('authenticated', fn, 'EXECUTE')
     AND NOT has_function_privilege('service_role', fn, 'EXECUTE')
-    AND NOT EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = fn AND a.grantee = 0),
-    'T1 coloană bigint NULL + index unic parțial + trigger BEFORE UPDATE + funcție INVOKER fără EXECUTE (PUBLIC/anon/authenticated/service_role)');
+    AND NOT has_function_privilege('anon', fv, 'EXECUTE') AND NOT has_function_privilege('authenticated', fv, 'EXECUTE')
+    AND NOT has_function_privilege('service_role', fv, 'EXECUTE')
+    AND NOT EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid IN (fn, fv) AND a.grantee = 0),
+    'T1 coloană bigint NULL + index unic parțial + trigger BEFORE UPDATE (19) + BEFORE INSERT (7) + funcții INVOKER, search_path fix, fără EXECUTE (PUBLIC/anon/authenticated/service_role)');
   SELECT string_agg(id || ':' || coalesce(sursa_inbox_id::text, '-') || ':' || coalesce(observatii, '') || ':' || modificat_la, ',' ORDER BY id)
     INTO amprenta0 FROM public.hr_documente_personale;
 
@@ -74,36 +86,36 @@ BEGIN
 
   -- T5 copia ștearsă logic (deleted_at) contează: rândul ei nu mai produce alt document (se restaurează din Coș)
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr,
-    ins || '(7, 1, ''7/aidoc_a.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 503);;'
+    ins || '(7, 1, ''7/aidoc_a.pdf'', ''cazier.pdf'', 99, true, NULL, ''' || hr || ''', 503);;'
     || 'UPDATE public.hr_documente_personale SET deleted_at = now(), deleted_by = ''' || hr || ''' WHERE sursa_inbox_id = 503;;'
-    || ins || '(7, 1, ''7/aidoc_d.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 503)'),
+    || ins || '(7, 1, ''7/aidoc_d.pdf'', ''cazier.pdf'', 99, true, NULL, ''' || hr || ''', 503)'),
     'err:23505', 'T5 rândul 503 cu documentul șters logic → al doilea INSERT tot 23505');
 
-  -- T6–T8 nemodificabilă: schimbare / golire / punere ulterioară → 23514
-  PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr,
-    ins || '(7, 1, ''7/aidoc_a.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 504);;'
-    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = 505 WHERE sursa_inbox_id = 504'),
-    'err:23514', 'T6 UPDATE care schimbă sursa_inbox_id (504 → 505) → 23514');
-  PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr,
-    ins || '(7, 1, ''7/aidoc_a.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 504);;'
-    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = NULL WHERE sursa_inbox_id = 504'),
-    'err:23514', 'T7 UPDATE care golește sursa_inbox_id → 23514');
-  PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr,
-    'UPDATE public.hr_documente_personale SET sursa_inbox_id = 505 WHERE id = 10'),
-    'err:23514', 'T8 UPDATE care pune sursa_inbox_id pe un document vechi (Drive, NULL) → 23514');
+  -- T6–T8 nemodificabilă: schimbare / golire / punere ulterioară → 23514 (mesajul gărzii de UPDATE, nu al celei de INSERT)
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr,
+    ins || '(7, 1, ''7/aidoc_a.pdf'', ''x.pdf'', 1, true, NULL, ''' || hr || ''', 504);;'
+    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = 505 WHERE sursa_inbox_id = 504', NULL, true),
+    m_imut, 'T6 UPDATE care schimbă sursa_inbox_id (504 → 505) → 23514 nemodificabilă');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr,
+    ins || '(7, 1, ''7/aidoc_a.pdf'', ''x.pdf'', 1, true, NULL, ''' || hr || ''', 504);;'
+    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = NULL WHERE sursa_inbox_id = 504', NULL, true),
+    m_imut, 'T7 UPDATE care golește sursa_inbox_id → 23514 nemodificabilă');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr,
+    'UPDATE public.hr_documente_personale SET sursa_inbox_id = 505 WHERE id = 10', NULL, true),
+    m_imut, 'T8 UPDATE care pune sursa_inbox_id pe un document vechi (Drive, NULL) → 23514 nemodificabilă');
 
   -- T9 nici service_role (cron-ul Drive, sare RLS), nici ownerul, nici postgres nu o schimbă
-  PERFORM pg_temp.eq(pg_temp.efect('service_role', NULL,
-    'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''s.pdf'', 506);;'
-    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = NULL WHERE sursa_inbox_id = 506'),
-    'err:23514', 'T9a service_role → 23514');
-  PERFORM pg_temp.eq(pg_temp.efect('authenticated', own,
-    'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''o.pdf'', 506);;'
-    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = 999 WHERE sursa_inbox_id = 506'),
-    'err:23514', 'T9b owner → 23514');
-  PERFORM pg_temp.eq(pg_temp.efect('postgres', NULL,
-    'UPDATE public.hr_documente_personale SET sursa_inbox_id = 999 WHERE id = 11'),
-    'err:23514', 'T9c postgres → 23514');
+  PERFORM pg_temp.like(pg_temp.efect('service_role', NULL,
+    'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''z.pdf'', 506);;'
+    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = NULL WHERE sursa_inbox_id = 506', NULL, true),
+    m_imut, 'T9a service_role → 23514 nemodificabilă');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', own,
+    'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''z.pdf'', 506);;'
+    || 'UPDATE public.hr_documente_personale SET sursa_inbox_id = 999 WHERE sursa_inbox_id = 506', NULL, true),
+    m_imut, 'T9b owner → 23514 nemodificabilă');
+  PERFORM pg_temp.like(pg_temp.efect('postgres', NULL,
+    'UPDATE public.hr_documente_personale SET sursa_inbox_id = 999 WHERE id = 11', NULL, true),
+    m_imut, 'T9c postgres → 23514 nemodificabilă');
 
   -- T10 editările normale pe un document cu proveniență trec: observații, nr., arhivare, ștergere logică, restaurare (Coș),
   --     clientul care retrimite rândul întreg (sursa_inbox_id = aceeași valoare); trg_hr_docp_modificat_la merge în continuare.
@@ -134,10 +146,79 @@ BEGIN
     'INSERT INTO public.hr_documente_personale (employee_id, fisier_path, fisier_nume, drive_file_id) VALUES (7, ''7/drive/q.pdf'', ''q.pdf'', ''q'')'),
     'ok:1', 'T12 cron-ul Drive (service_role) inserează fără sursa_inbox_id');
 
-  -- T13 RLS neschimbat: fără can_access_personal_data / is_owner → INSERT refuzat
+  -- T13 RLS neschimbat: fără can_access_personal_data / is_owner → INSERT refuzat (fără proveniență, și cu proveniența unui rând
+  --     pe care îl vede — 513, urcat de el: garda de la INSERT trece, RLS-ul tabelei refuză ca înainte)
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', nu,
-    ins || '(7, 1, ''7/x.pdf'', ''x.pdf'', 1, true, NULL, ''' || nu || ''', 504)'),
-    'err:42501', 'T13 profil fără drept → RLS 42501 (neschimbat)');
+    ins || '(7, 1, ''7/x.pdf'', ''x.pdf'', 1, true, NULL, ''' || nu || ''', NULL)'),
+    'err:42501', 'T13a profil fără drept, fără proveniență → RLS 42501 (neschimbat)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', nu,
+    ins || '(7, 1, ''7/x.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || nu || ''', 513)'),
+    'err:42501', 'T13b profil fără drept, rândul lui (513, HR deschis, același fișier) → garda trece, RLS 42501');
+
+  -- T15 (review extern #821, F2) proveniență FALSIFICATĂ la INSERT → 23514 cu motivul gărzii de INSERT, pentru oricine
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 503)', NULL, true),
+    m_ins || 'fișierul documentului nu e cel din rândul din coadă', 'T15a alt rând din coadă (503 = cazier.pdf) pentru CI.pdf → refuz');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''alt.pdf'', 1234, true, NULL, ''' || hr || ''', 501)', NULL, true),
+    m_ins || 'fișierul documentului nu e cel din rândul din coadă', 'T15b alt nume de fișier decât rândul 501 → refuz');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', NULL, 1234, true, NULL, ''' || hr || ''', 501)', NULL, true),
+    m_ins || 'fișierul documentului nu e cel din rândul din coadă', 'T15c fisier_nume NULL cu proveniență → refuz');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 507)', NULL, true),
+    m_ins || 'rândul nu există în coadă (sau nu îl vezi)', 'T15d rând din coada Logistică (507), pe care HR nu-l vede → refuz „nu există”');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', own, 'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''CI.pdf'', 507)', NULL, true),
+    m_ins || 'rândul nu e în coada HR', 'T15d2 ownerul vede rândul din Logistică (507) → refuz „nu e în coada HR”');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 509)', NULL, true),
+    m_ins || 'rândul nu e în coada HR', 'T15e rând nedecis (509, modul NULL) → refuz');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 508)', NULL, true),
+    m_ins || 'rândul nu mai e deschis în coadă (status confirmat)', 'T15f rând deja confirmat (508) → refuz, deși niciun document nu-l poartă');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 512)', NULL, true),
+    m_ins || 'rândul nu mai e deschis în coadă (status respins)', 'T15g rând respins (512) → refuz');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 511)', NULL, true),
+    m_ins || 'rândul nu mai e deschis în coadă (status in_asteptare)', 'T15h rând încă necitit (511, in_asteptare) → refuz');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/f.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 99999)', NULL, true),
+    m_ins || 'rândul nu există în coadă (sau nu îl vezi)', 'T15i rând inexistent (99999) → refuz');
+  PERFORM pg_temp.like(pg_temp.efect('service_role', NULL, 'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''CI.pdf'', 507)', NULL, true),
+    m_ins || 'rândul nu e în coada HR', 'T15j service_role (sare RLS) tot refuzat pe rândul din Logistică');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', own, 'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''CI.pdf'', 508)', NULL, true),
+    m_ins || 'rândul nu mai e deschis%', 'T15k ownerul tot refuzat pe rândul confirmat');
+  PERFORM pg_temp.like(pg_temp.efect('postgres', NULL, 'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''CI.pdf'', 512)', NULL, true),
+    m_ins || 'rândul nu mai e deschis%', 'T15l postgres tot refuzat pe rândul respins');
+
+  -- T16 legitim: HR pe rândul în status eroare (510), service_role pe un rând deschis (502); fără proveniență (manual / Drive)
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr, ins || '(7, 1, ''7/l.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || hr || ''', 510)'),
+    'ok:1', 'T16a HR din rândul 510 (status eroare, același fișier) → 1 rând');
+  PERFORM pg_temp.eq(pg_temp.efect('service_role', NULL, 'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''CI.pdf'', 502)'),
+    'ok:1', 'T16b service_role din rândul deschis 502 → 1 rând');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr,
+    ins || '(7, 1, ''7/d1.pdf'', ''d.pdf'', 5, true, NULL, ''' || hr || ''', NULL);;'
+    || 'INSERT INTO public.hr_documente_personale (employee_id, fisier_path, fisier_nume, drive_file_id) VALUES (7, ''7/drive/d2.pdf'', ''d.pdf'', ''d2'')'),
+    'ok:2', 'T16c fără proveniență (manual / Drive), ca HR → trec, garda nu citește coada');
+  PERFORM pg_temp.eq(pg_temp.efect('service_role', NULL,
+    'INSERT INTO public.hr_documente_personale (employee_id, fisier_path, fisier_nume, drive_file_id) VALUES (8, ''8/drive/e.pdf'', ''e.pdf'', ''e'')'),
+    'ok:1', 'T16d cron-ul Drive (service_role, NULL) → trece');
+
+  -- T17 garda e la momentul INSERT-ului: documentul salvat rămâne când rândul se închide; o nouă inserare din rândul închis cade
+  --     pe gardă (înaintea indexului unic)
+  PERFORM pg_temp.eq(pg_temp.efect('postgres', NULL,
+    'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''x.pdf'', 504);;'
+    || 'UPDATE public.ai_documente_inbox SET status = ''confirmat'', confirmat_ref_id = 1 WHERE id = 504',
+    'SELECT count(*)::text FROM public.hr_documente_personale WHERE sursa_inbox_id = 504'),
+    'ok:2:1', 'T17a INSERT pe rândul deschis 504, apoi închiderea rândului → documentul rămâne');
+  PERFORM pg_temp.like(pg_temp.efect('postgres', NULL,
+    'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, ''x.pdf'', 504);;'
+    || 'UPDATE public.ai_documente_inbox SET status = ''confirmat'' WHERE id = 504;;'
+    || 'INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (8, ''x.pdf'', 504)', NULL, true),
+    m_ins || 'rândul nu mai e deschis în coadă (status confirmat)', 'T17b al doilea INSERT din rândul închis → garda (23514), nu doar indexul');
+
+  -- T18 fără oracol (INVOKER): profilul fără drept nu vede rândul HR 501 → același motiv ca pentru un rând inexistent, deși
+  --     numele fișierului e cel corect (o gardă DEFINER i-ar fi spus, înaintea RLS-ului, că 501 e HR, deschis, „CI.pdf”)
+  a := replace(pg_temp.efect('authenticated', nu, ins || '(7, 1, ''7/o.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || nu || ''', 501)', NULL, true), '501', 'N');
+  b := replace(pg_temp.efect('authenticated', nu, ins || '(7, 1, ''7/o.pdf'', ''CI.pdf'', 1234, true, NULL, ''' || nu || ''', 99999)', NULL, true), '99999', 'N');
+  PERFORM pg_temp.like(a, m_ins || 'rândul nu există în coadă (sau nu îl vezi)', 'T18a fără drept, rândul HR 501 (nume corect) → „nu există”');
+  PERFORM pg_temp.eq(a, b, 'T18b … același răspuns ca pentru rândul inexistent 99999');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', nu, 'SELECT 1 FROM public.ai_documente_inbox WHERE id = 501'),
+    'ok:0', 'T18c (reperul) profilul fără drept chiar nu vede rândul 501 prin RLS');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', hr, 'SELECT 1 FROM public.ai_documente_inbox WHERE id IN (501, 513)'),
+    'ok:2', 'T18d HR vede rândurile HR (și pe 513, urcat de altul) — garda îi citește rândul');
 
   -- T14 nimic nu a rămas modificat
   PERFORM pg_temp.eq((SELECT string_agg(id || ':' || coalesce(sursa_inbox_id::text, '-') || ':' || coalesce(observatii, '') || ':' || modificat_la, ',' ORDER BY id)

@@ -40,6 +40,11 @@
 //     se editează liber, eticheta se putea pierde) și închide atomic cursa celor două taburi (al doilea INSERT = 23505)
 //   • dinRandul / rezultatProvenienta (și copiile șterse logic) / rezultatInserareHR ('dubla' = 23505 pe index → doar
 //     închidere, niciodată a doua inserare) / lipsaMigrareSursa (coloana lipsă → eroare blocantă, fără inserare fără proveniență)
+//   Review extern #821 (Jakarinos P1 + Copilot P1):
+//   • refuzSursaInbox / 'refuzata' / mesajRefuzSursa — garda BD de la INSERT (rândul nu mai e HR deschis al aceluiași fișier)
+//   • docWizardHR / inchidereWizardHR / decizieWizardHR / mesajWizardInchidere — wizard-ul „Angajat nou” pune și el
+//     sursa_inbox_id, tratează 23505 / garda ca „deja salvat din rând” (fără a doua inserare) și închide rândul doar cât e
+//     încă în coadă (nu rescrie legătura pusă de panou) — F1
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -126,18 +131,91 @@ export const lipsaMigrareSursa = e => !!e && (e.code === '42703' || e.code === '
 export const dublaSursaInbox = e => !!e && e.code === '23505' && /sursa_inbox/.test(textEroare(e))
 // documentul d a fost salvat din rândul row? (bigint poate veni ca număr sau text)
 export const dinRandul = (d, row) => !!d && !!row && marime(d.sursa_inbox_id) != null && marime(d.sursa_inbox_id) === marime(row.id)
+// Review extern #821 (F2): INSERT refuzat de garda BD trg_hr_docp_sursa_inbox_verifica — rândul din coadă nu (mai) e un rând
+// HR deschis al aceluiași fișier (confirmat / respins între timp, mutat în alt modul, șters, nevăzut). Doar mesajul gărzii de
+// INSERT („sursa_inbox_id = N refuzată la INSERT”), nu și al celei de UPDATE („nemodificabilă”) sau alt 23514.
+export const refuzSursaInbox = e => !!e && e.code === '23514' && /sursa_inbox_id = \S+ refuzată la INSERT/.test(textEroare(e))
 
-// Rezultatul INSERT-ului din confirmHR ({ data, error } de la .insert().select('id').single()):
+// Rezultatul INSERT-ului din confirmHR / wizard ({ data, error } de la .insert().select('id').single()):
 //   'ok' (rând întors) | 'dubla' (23505 pe sursa_inbox_id → doar închidere, NICIODATĂ a doua inserare) |
-//   'migrare' (coloana lipsă) | 'eroare' (altceva — la o eroare de transport INSERT-ul poate fi intrat: o reîncercare
-//   îl găsește după sursa_inbox_id). 'dubla' / 'migrare' = refuz sigur al serverului → copia urcată acum se poate șterge.
+//   'refuzata' (garda de la INSERT: rândul nu mai e HR deschis — #821 F2) | 'migrare' (coloana lipsă) |
+//   'eroare' (altceva — la o eroare de transport INSERT-ul poate fi intrat: o reîncercare îl găsește după sursa_inbox_id).
+//   'dubla' / 'refuzata' / 'migrare' = refuz sigur al serverului → copia urcată acum se poate șterge (copieDeSters).
 export function rezultatInserareHR(res) {
   const { data, error } = res || {}
   if (res && !error && data && data.id != null) return 'ok'
   if (dublaSursaInbox(error)) return 'dubla'
+  if (refuzSursaInbox(error)) return 'refuzata'
   if (lipsaMigrareSursa(error)) return 'migrare'
   return 'eroare'
 }
+export const copieDeSters = r => r === 'dubla' || r === 'refuzata' || r === 'migrare'
+
+// Panou (#821 F2): INSERT refuzat de garda de la INSERT → dacă rândul a produs deja un document (alt tab / wizard-ul),
+// mesajul de proveniență; altfel rândul a fost închis / mutat între timp — nimic salvat, lista se reîncarcă.
+export const MESAJ_SURSA_REFUZATA = 'Rândul din coadă nu mai e deschis în HR (închis din alt tab / de alt utilizator sau mutat în alt modul între timp) — nu am salvat nimic; am reîncărcat lista.'
+export const mesajRefuzSursa = (docs, angajatId, numeAngajat) =>
+  (docs || []).filter(Boolean).length ? mesajProvenienta(docs, angajatId, numeAngajat) : MESAJ_SURSA_REFUZATA
+
+// ─── Wizard „Angajat nou” (review extern #821, F1 — Jakarinos P1) ─────────────────────────────────────────────
+// Wizard-ul salvează în dosar din rânduri ale cozii ai_documente_inbox (urcate de el), deci pune și el proveniența:
+// fără ea, wizard-ul și panoul «Citește orice» puteau crea câte un document din ACELAȘI rând. Indexul unic + garda de la
+// INSERT decid atomic; wizard-ul nu inserează niciodată a doua oară și nu rescrie o închidere făcută de panou.
+// Rândul documentului (aceleași câmpuri ca înainte) + sursa_inbox_id = rândul din coadă; fisier_nume = al rândului (garda BD).
+export function docWizardHR({ d, empId, tip, destPath, uploadatDe = null }) {
+  const dd = (d && d.payload_ai && d.payload_ai.date_document) || {}
+  const exp = d._expira ?? dd.data_expirare ?? null
+  return {
+    employee_id: empId, tip_id: d.tip_id,
+    numar_document: d._numar ?? dd.numar ?? null,
+    data_emitere: dd.data_emitere || null,
+    data_expirare: exp,
+    fara_expirare: tip?.are_expirare ? false : !exp,
+    fisier_path: destPath, fisier_nume: d.fisier_nume,
+    fisier_size_bytes: d.fisier_size_bytes || null, fisier_mime: d.fisier_mime || null,
+    activ: true, uploadat_de: uploadatDe,
+    sursa_inbox_id: d.id,
+  }
+}
+// UPDATE-ul care închide rândul din coadă (ca înainte); se trimite cu .in('status', STATUS_COADA).select('id')
+export function inchidereWizardHR({ d, tip, empId, docId, profilId = null, acum = new Date() }) {
+  return {
+    status: 'confirmat', modul_tinta: 'hr', tip_document: tip?.cod || d.tip_document,
+    entitate_tip: 'angajat', entitate_id: empId, destinatie_tabel: 'hr_documente_personale',
+    confirmat_de: profilId, confirmat_la: acum.toISOString(), confirmat_ref_id: docId,
+  }
+}
+export const MESAJ_WIZ_DUBLA = 'deja salvat din acest rând prin «Citește orice» (dosarul îl are, chiar dacă nu-l văd acum) — nu l-am adăugat a doua oară; verifică în HR.'
+export const MESAJ_WIZ_REFUZ = 'rândul din coadă a fost închis (confirmat / respins) sau mutat între timp în «Citește orice» — nu l-am salvat; dacă trebuie, adaugă-l din HR → «Citește orice».'
+export const MESAJ_WIZ_NEVERIFICAT = 'BD a refuzat proveniența rândului și nu am putut verifica dacă documentul e deja în dosar — nu l-am adăugat; verifică în HR.'
+// Ce face wizard-ul după INSERT. ins = răspunsul INSERT-ului; prov = rezultatProvenienta(căutarea .eq('sursa_inbox_id', rând))
+// — doar la 'dubla' / 'refuzata'; empId = angajatul creat acum.
+//   { pas:'inchide', docId, nou } — documentul e în dosarul angajatului: inserat acum (nou) sau salvat deja din acest rând,
+//                                   tot la el (nou:false — 23505 / garda: doar închiderea rândului, fără a doua inserare)
+//   { pas:'esec', msg }           — nimic de închis: salvat din rând la ALT angajat / în Coș, rând închis sau mutat, eroare
+export function decizieWizardHR(ins, prov, empId) {
+  const r = rezultatInserareHR(ins)
+  if (r === 'ok') return { pas:'inchide', docId: ins.data.id, nou:true }
+  if (r === 'migrare') return { pas:'esec', msg: MESAJ_MIGRARE_SURSA }
+  if (r === 'eroare') return { pas:'esec', msg: 'Insert document HR: ' + (textEroare(ins && ins.error) || 'fără răspuns de la server') }
+  if (!prov || prov.err) return { pas:'esec', msg: prov && prov.err === 'migrare' ? MESAJ_MIGRARE_SURSA : r === 'dubla' ? MESAJ_WIZ_DUBLA : MESAJ_WIZ_NEVERIFICAT }
+  const docs = (prov.docs || []).filter(Boolean)
+  const aici = docs.find(x => x.deleted_at == null && Number(x.employee_id) === Number(empId))
+  if (aici) return { pas:'inchide', docId: aici.id, nou:false }
+  const viu = docs.find(x => x.deleted_at == null)
+  if (viu) return { pas:'esec', msg: `deja salvat din acest rând prin «Citește orice» la alt angajat (#${viu.employee_id}, document #${viu.id}) — nu l-am mai adăugat aici; verifică în HR care e angajatul corect.` }
+  if (docs[0]) return { pas:'esec', msg: `documentul salvat din acest rând (#${docs[0].id}) a fost șters din dosar — din același rând nu se mai salvează altul; restaurează-l din HR → 🗑 Coș sau urcă fișierul încă o dată.` }
+  return { pas:'esec', msg: r === 'dubla' ? MESAJ_WIZ_DUBLA : MESAJ_WIZ_REFUZ }
+}
+// Starea închiderii (stareInchidere, cu statusul 'confirmat' și documentul legat) → avertismentul wizard-ului (null = închis).
+// 'altcineva' = panoul a închis rândul între timp: nu-l rescriu și nu-i șterg fișierul din staging (stergeStagingWizard).
+export function mesajWizardInchidere(stare) {
+  if (stare === 'inchis') return null
+  if (stare === 'altcineva') return 'salvat în dosar; rândul din coadă fusese deja închis între timp în «Citește orice» — nu l-am modificat.'
+  if (stare === 'necunoscut') return 'salvat în dosar, dar nu pot verifica rândul din coadă — uită-te în HR → «Citește orice».'
+  return 'salvat în dosar, dar rândul din coadă nu s-a putut închide — închide-l din HR → «Citește orice» («Închide (e deja în dosar)»).'
+}
+export const stergeStagingWizard = stare => stare !== 'altcineva'
 
 // F1 (r6): proveniența rândului se caută în TOT dosarul HR — fără filtru pe angajat, nume sau mărime
 // (.eq('sursa_inbox_id', rând)). Altfel, dacă angajatul ales s-a schimbat după prima salvare (corecție pierdută la o

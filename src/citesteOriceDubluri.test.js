@@ -11,6 +11,8 @@ import {
   rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari, STATUS_COADA,
   MESAJ_RAND_ALTCINEVA, avertizareStaging,
   dinRandul, lipsaMigrareSursa, dublaSursaInbox, rezultatInserareHR, MESAJ_MIGRARE_SURSA,
+  refuzSursaInbox, copieDeSters, MESAJ_SURSA_REFUZATA, mesajRefuzSursa, docWizardHR, inchidereWizardHR, decizieWizardHR,
+  MESAJ_WIZ_DUBLA, MESAJ_WIZ_REFUZ, MESAJ_WIZ_NEVERIFICAT, mesajWizardInchidere, stergeStagingWizard,
 } from './citesteOriceDubluri.js'
 import * as dubluri from './citesteOriceDubluri.js'
 
@@ -938,5 +940,127 @@ describe('20261103a sursa_inbox_id: 23505 pe index = „deja salvat"; coloana li
     const a = analizaDublura({ row, docs:[salvat], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' })
     expect(a).toMatchObject({ tip:'acelasi', dinRand:true, campuri:[] })
     expect(a.doc.id).toBe(900)
+  })
+})
+
+// ─── Review extern #821: garda BD de la INSERT (F2) + wizard-ul „Angajat nou” cu proveniență (F1) ───────────
+describe('#821 F2 garda de la INSERT (trg_hr_docp_sursa_inbox_verifica) = refuz sigur, nu „eroare”', () => {
+  // forma reală PostgREST a RAISE-ului din migrare (23514 + mesaj + hint)
+  const refuz = motiv => ({ code:'23514', message:`hr_documente_personale: sursa_inbox_id = 501 refuzată la INSERT — ${motiv}`, details:null,
+    hint:'sursa_inbox_id = rândul HR deschis (clasificat / eroare) din «Citește orice», cu același fisier_nume; NULL pentru Drive / încărcări manuale.' })
+  const imutabil = { code:'23514', message:'hr_documente_personale #9: sursa_inbox_id e nemodificabilă (501 → 502) — se pune doar la INSERT', details:null, hint:null }
+  it('refuzSursaInbox: doar mesajul gărzii de INSERT (toate motivele); nu nemodificabila, nu alt 23514 / 23505', () => {
+    for (const m of ['rândul nu există în coadă (sau nu îl vezi)', 'rândul nu e în coada HR', 'rândul nu mai e deschis în coadă (status confirmat)',
+      'fișierul documentului nu e cel din rândul din coadă']) expect(refuzSursaInbox(refuz(m))).toBe(true)
+    expect(refuzSursaInbox(imutabil)).toBe(false)
+    expect(refuzSursaInbox({ code:'23514', message:'new row violates check constraint "x_chk"' })).toBe(false)
+    expect(refuzSursaInbox({ ...refuz('x'), code:'23505' })).toBe(false)
+    expect(refuzSursaInbox(null)).toBe(false)
+    expect(refuzSursaInbox(new Error('Failed to fetch'))).toBe(false)
+  })
+  it("rezultatInserareHR: 'refuzata' pentru gardă; copia urcată se șterge la dubla / refuzata / migrare, nu la eroare / ok", () => {
+    expect(rezultatInserareHR({ data:null, error:refuz('rândul nu e în coada HR'), status:400 })).toBe('refuzata')
+    expect(rezultatInserareHR({ data:null, error:imutabil, status:400 })).toBe('eroare')
+    for (const r of ['dubla', 'refuzata', 'migrare']) expect(copieDeSters(r)).toBe(true)
+    for (const r of ['ok', 'eroare', undefined]) expect(copieDeSters(r)).toBe(false)
+  })
+  it('panou: refuzată + proveniența găsită → mesajul de proveniență; fără document → „nu mai e deschis”, nimic salvat', () => {
+    const salvat = docDrive({ id:900, employee_id:50, drive_file_id:null, uploadat_de:'u1', sursa_inbox_id:501 })
+    expect(mesajRefuzSursa([salvat], 7, () => null)).toBe(mesajProvenienta([salvat], 7, () => null))
+    expect(mesajRefuzSursa([salvat], 7, () => null)).toMatch(/alt angajat \(#50\).*document #900/)
+    expect(mesajRefuzSursa([], 7)).toBe(MESAJ_SURSA_REFUZATA)
+    expect(mesajRefuzSursa(null, 7)).toBe(MESAJ_SURSA_REFUZATA)
+    expect(MESAJ_SURSA_REFUZATA).toMatch(/nu am salvat nimic/)
+  })
+})
+
+describe('#821 F1 wizard „Angajat nou”: proveniența rândului din coadă', () => {
+  const d = (o = {}) => ({ id:701, status:'clasificat', modul_tinta:'hr', fisier_nume:'POPESCU ION - CI.pdf', fisier_path:'wizard-angajare/1_a/CI.pdf',
+    tip_id:1, tip_document:'buletin', payload_ai:{ date_document:{ numar:'RX 1', data_emitere:'2021-01-02', data_expirare:'2031-01-02' } }, ...o })
+  const dubla = { code:'23505', message:'duplicate key value violates unique constraint "hr_documente_personale_sursa_inbox_unic"', details:'Key (sursa_inbox_id)=(701) already exists.' }
+  const garda = { code:'23514', message:'hr_documente_personale: sursa_inbox_id = 701 refuzată la INSERT — rândul nu mai e deschis în coadă (status confirmat)' }
+  const lipsa = { code:'PGRST204', message:"Could not find the 'sursa_inbox_id' column of 'hr_documente_personale' in the schema cache" }
+  it('docWizardHR: sursa_inbox_id = rândul, fisier_nume = al rândului (garda BD); restul câmpurilor ca înainte', () => {
+    const tip = { id:1, cod:'buletin', are_expirare:true }
+    expect(docWizardHR({ d:d(), empId:50, tip, destPath:'50/x.pdf', uploadatDe:'u1' })).toEqual({
+      employee_id:50, tip_id:1, numar_document:'RX 1', data_emitere:'2021-01-02', data_expirare:'2031-01-02', fara_expirare:false,
+      fisier_path:'50/x.pdf', fisier_nume:'POPESCU ION - CI.pdf', fisier_size_bytes:null, fisier_mime:null,
+      activ:true, uploadat_de:'u1', sursa_inbox_id:701,
+    })
+    // corecțiile de pe card câștigă; tip fără expirare + fără dată → fara_expirare
+    const r = docWizardHR({ d:d({ _numar:'AB 2', _expira:'2030-05-05' }), empId:50, tip, destPath:'p' })
+    expect(r).toMatchObject({ numar_document:'AB 2', data_expirare:'2030-05-05', uploadat_de:null })
+    const fara = docWizardHR({ d:d({ payload_ai:null }), empId:50, tip:{ are_expirare:false }, destPath:'p' })
+    expect(fara).toMatchObject({ numar_document:null, data_emitere:null, data_expirare:null, fara_expirare:true, sursa_inbox_id:701 })
+  })
+  it('inchidereWizardHR: aceeași închidere ca înainte, legată de documentul ales', () => {
+    expect(inchidereWizardHR({ d:d(), tip:{ cod:'buletin' }, empId:50, docId:900, profilId:'u1', acum:new Date('2026-10-21T10:00:00Z') })).toEqual({
+      status:'confirmat', modul_tinta:'hr', tip_document:'buletin', entitate_tip:'angajat', entitate_id:50,
+      destinatie_tabel:'hr_documente_personale', confirmat_de:'u1', confirmat_la:'2026-10-21T10:00:00.000Z', confirmat_ref_id:900,
+    })
+    expect(inchidereWizardHR({ d:d({ tip_document:'altul' }), tip:null, empId:50, docId:1 }).tip_document).toBe('altul')
+    expect(STATUS_COADA).toEqual(['clasificat', 'eroare'])   // filtrul UPDATE-ului de închidere (.in('status', STATUS_COADA))
+  })
+  it('decizieWizardHR: inserat → închide; 23505 / garda → caută proveniența, NICIODATĂ a doua inserare', () => {
+    expect(decizieWizardHR({ data:{ id:900 }, error:null }, null, 50)).toEqual({ pas:'inchide', docId:900, nou:true })
+    // salvat deja din rând tot la angajatul nou (alt tab / răspuns pierdut) → doar închiderea, legată de el
+    const aici = { id:901, employee_id:50, deleted_at:null, sursa_inbox_id:701 }
+    expect(decizieWizardHR({ data:null, error:dubla }, { docs:[aici] }, 50)).toEqual({ pas:'inchide', docId:901, nou:false })
+    expect(decizieWizardHR({ data:null, error:garda }, { docs:[aici] }, '50')).toEqual({ pas:'inchide', docId:901, nou:false })
+    // panoul l-a salvat la ALT angajat → nimic aici, mesaj cu documentul
+    const strain = { id:902, employee_id:7, deleted_at:null, sursa_inbox_id:701 }
+    expect(decizieWizardHR({ data:null, error:garda }, { docs:[strain] }, 50)).toMatchObject({ pas:'esec' })
+    expect(decizieWizardHR({ data:null, error:garda }, { docs:[strain] }, 50).msg).toMatch(/alt angajat \(#7, document #902\)/)
+    // copia salvată din rând e în Coș → nu se salvează alta
+    const sters = { id:903, employee_id:50, deleted_at:'2026-10-20', sursa_inbox_id:701 }
+    expect(decizieWizardHR({ data:null, error:dubla }, { docs:[sters] }, 50).msg).toMatch(/#903.*șters din dosar.*Coș/)
+    // nimic vizibil: 23505 = „deja salvat”; garda = rând închis / mutat
+    expect(decizieWizardHR({ data:null, error:dubla }, { docs:[] }, 50)).toEqual({ pas:'esec', msg:MESAJ_WIZ_DUBLA })
+    expect(decizieWizardHR({ data:null, error:garda }, { docs:[] }, 50)).toEqual({ pas:'esec', msg:MESAJ_WIZ_REFUZ })
+    // căutarea de proveniență picată / lipsă → fail-closed, fără închidere
+    expect(decizieWizardHR({ data:null, error:dubla }, { err:'eroare' }, 50)).toEqual({ pas:'esec', msg:MESAJ_WIZ_DUBLA })
+    expect(decizieWizardHR({ data:null, error:garda }, { err:'eroare' }, 50)).toEqual({ pas:'esec', msg:MESAJ_WIZ_NEVERIFICAT })
+    expect(decizieWizardHR({ data:null, error:garda }, null, 50)).toEqual({ pas:'esec', msg:MESAJ_WIZ_NEVERIFICAT })
+    expect(decizieWizardHR({ data:null, error:garda }, { err:'migrare' }, 50)).toEqual({ pas:'esec', msg:MESAJ_MIGRARE_SURSA })
+  })
+  it('decizieWizardHR: migrarea lipsă = blocant (fără inserare fără proveniență); altă eroare = mesajul ei', () => {
+    expect(decizieWizardHR({ data:null, error:lipsa }, null, 50)).toEqual({ pas:'esec', msg:MESAJ_MIGRARE_SURSA })
+    expect(decizieWizardHR({ data:null, error:{ code:'42501', message:'new row violates row-level security policy' } }, null, 50))
+      .toEqual({ pas:'esec', msg:'Insert document HR: new row violates row-level security policy' })
+    expect(decizieWizardHR({ data:null, error:null }, null, 50).msg).toMatch(/fără răspuns de la server/)
+    expect(decizieWizardHR(undefined, null, 50).pas).toBe('esec')
+  })
+  it('închiderea: rândul închis de panou între timp nu se rescrie și nu i se șterge fișierul; restul → avertisment', () => {
+    // UPDATE-ul (filtrat pe STATUS_COADA) a întors rândul → închis
+    expect(stareInchidere({ data:[{ id:701 }], error:null }, null, 'confirmat', 900)).toBe('inchis')
+    expect(mesajWizardInchidere('inchis')).toBeNull()
+    // 0 rânduri: citirea arată rândul confirmat de panou cu ALT document → altcineva (nu rescris, staging păstrat)
+    const alt = stareInchidere({ data:[], error:null }, { data:{ id:701, status:'confirmat', confirmat_ref_id:902 }, error:null }, 'confirmat', 900)
+    expect(alt).toBe('altcineva')
+    expect(mesajWizardInchidere(alt)).toMatch(/fusese deja închis.*nu l-am modificat/)
+    expect(stergeStagingWizard(alt)).toBe(false)
+    // 0 rânduri, dar legat deja de ACELAȘI document (panoul a închis rândul pe documentul găsit după proveniență) → închis
+    expect(stareInchidere({ data:[], error:null }, { data:{ id:701, status:'confirmat', confirmat_ref_id:901 }, error:null }, 'confirmat', 901)).toBe('inchis')
+    // respins între timp → altcineva
+    expect(stareInchidere({ data:[], error:null }, { data:{ id:701, status:'respins', confirmat_ref_id:null }, error:null }, 'confirmat', 900)).toBe('altcineva')
+    for (const s of ['deschis', 'necunoscut']) {
+      expect(mesajWizardInchidere(s)).toMatch(/salvat în dosar/)
+      expect(stergeStagingWizard(s)).toBe(true)   // ca înainte: documentul are copia lui; panoul închide rândul fără fișier
+    }
+    expect(stergeStagingWizard('inchis')).toBe(true)
+  })
+  it('REPRO (Jakarinos P1): panoul salvează din rândul wizard-ului, apoi Finish → fără al doilea document', () => {
+    // rândul 701 urcat de wizard apare și în coada HR; panoul îl salvează la angajatul 7 (potrivit de AI) și îl închide.
+    // Wizard-ul (starea lui locală: tot 'clasificat') inserează cu sursa_inbox_id = 701 → garda BD: rândul e confirmat
+    const ins = { data:null, error:garda, status:400 }
+    expect(rezultatInserareHR(ins)).toBe('refuzata')
+    expect(copieDeSters('refuzata')).toBe(true)   // copia urcată de wizard se șterge
+    const prov = rezultatProvenienta({ data:[{ id:902, employee_id:7, deleted_at:null, sursa_inbox_id:701 }], error:null })
+    const dec = decizieWizardHR(ins, prov, 50)
+    expect(dec.pas).toBe('esec')                   // nimic de închis, nicio a doua inserare
+    expect(dec.msg).toMatch(/alt angajat \(#7, document #902\)/)
+    // invers: wizard-ul salvează primul → panoul găsește proveniența (la angajatul nou) și nu mai inserează
+    const dinWizard = docDrive({ id:900, employee_id:50, fisier_nume:'POPESCU ION - CI.pdf', drive_file_id:null, uploadat_de:'u1', sursa_inbox_id:701 })
+    expect(mesajProvenienta([dinWizard], 7, id => (id === 50 ? 'POPESCU ION' : null))).toMatch(/la «POPESCU ION» \(document #900\)/)
   })
 })

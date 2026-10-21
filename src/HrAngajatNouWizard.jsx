@@ -19,16 +19,30 @@
 // CNP / adresă / data nașterii NU au coloane în employees — se văd în
 // wizard (informativ) și rămân în documentele atașate. Coloane noi = decizie
 // separată cu Razvan (nu modificăm schema din proprie inițiativă).
+//
+// 21.10.2026 — review extern #821 (F1): documentele vin din rânduri ale cozii
+// ai_documente_inbox, deci wizard-ul pune și el proveniența (sursa_inbox_id,
+// migrarea 20261103a). Altfel wizard-ul și panoul «Citește orice» puteau crea
+// câte un document din ACELAȘI rând. 23505 (index unic) / 23514 (garda BD de
+// la INSERT) = „deja salvat / închis din alt loc”: se caută după proveniență,
+// fără a doua inserare; închiderea rândului atinge doar rânduri încă în coadă
+// (nu rescrie legătura pusă de panou). Logica pură: citesteOriceDubluri.js.
 // ════════════════════════════════════════════════════════════════
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
+import { STATUS_COADA, rezultatInserareHR, copieDeSters, rezultatProvenienta, docWizardHR, inchidereWizardHR,
+  decizieWizardHR, citireNecesara, stareInchidere, mesajWizardInchidere, stergeStagingWizard } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
 ))
+// supabase-js întoarce { data, error }; o excepție (rețea) devine tot { error }
+async function interogheaza(q) {
+  try { return await q } catch (e) { return { data:null, error:e } }
+}
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D', text:'#E6EDF3',
@@ -121,7 +135,7 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
       const pending = docs.filter(d => d.status === 'in_asteptare' || d.status === 'procesare')
       if (!pending.length) return
       const { data } = await supabase.from('ai_documente_inbox')
-        .select('id,status,tip_document,payload_ai,clasificare_confidence,ai_eroare')
+        .select('id,status,modul_tinta,tip_document,payload_ai,clasificare_confidence,ai_eroare')
         .in('id', pending.map(d => d.id))
       if (!data) return
       setDocs(list => list.map(d => {
@@ -227,7 +241,7 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
           fisier_path: path, fisier_nume: file.name, fisier_size_bytes: file.size,
           fisier_mime: file.type || 'application/pdf', status: 'in_asteptare',
           uploadat_de: profile?.id || null,
-        }).select('id,status,fisier_nume,fisier_path').single()
+        }).select('id,status,modul_tinta,fisier_nume,fisier_path').single()
         if (insErr) {
           // fișierul e deja în storage — dacă rândul nu s-a creat (ex. dublură
           // respinsă de trigger), îl scoatem, altfel rămâne orfan în bucket
@@ -281,35 +295,44 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
       }).select('id,name').single()
       if (empErr) throw empErr
 
-      // 2. Documentele: inbox → documente-personal + hr_documente_personale
-      let ok = 0, esuate = []
+      // 2. Documentele: inbox → documente-personal + hr_documente_personale (proveniența = rândul din coadă, #821 F1)
+      let ok = 0, esuate = [], avert = []
       for (const d of docs.filter(x => x.status === 'clasificat' && x.tip_id)) {
         try {
           const tip = tipuri.find(t => t.id === d.tip_id)
-          const dd = d.payload_ai?.date_document || {}
           const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET_INBOX).download(d.fisier_path)
           if (dlErr) throw dlErr
           const destPath = `${emp.id}/${Date.now()}_${randId()}_${d.fisier_nume.replace(/[^\w.\-() ]+/g, '_')}`
           const { error: upErr } = await supabase.storage.from(BUCKET_PERSONAL)
             .upload(destPath, blob, { upsert: false, contentType: d.fisier_mime || undefined })
           if (upErr) throw upErr
-          const { data: created, error: insErr } = await supabase.from('hr_documente_personale').insert({
-            employee_id: emp.id, tip_id: d.tip_id,
-            numar_document: d._numar ?? dd.numar ?? null,
-            data_emitere: dd.data_emitere || null,
-            data_expirare: d._expira ?? dd.data_expirare ?? null,
-            fara_expirare: tip?.are_expirare ? false : !(d._expira ?? dd.data_expirare),
-            fisier_path: destPath, fisier_nume: d.fisier_nume,
-            fisier_size_bytes: d.fisier_size_bytes || null, fisier_mime: d.fisier_mime || null,
-            activ: true, uploadat_de: profile?.id || null,
-          }).select('id').single()
-          if (insErr) throw insErr
-          await supabase.from('ai_documente_inbox').update({
-            status: 'confirmat', modul_tinta: 'hr', tip_document: tip?.cod || d.tip_document,
-            entitate_tip: 'angajat', entitate_id: emp.id, destinatie_tabel: 'hr_documente_personale',
-            confirmat_de: profile?.id || null, confirmat_la: new Date().toISOString(), confirmat_ref_id: created.id,
-          }).eq('id', d.id)
-          await supabase.storage.from(BUCKET_INBOX).remove([d.fisier_path])
+          // garda BD de la INSERT cere rândul în coada HR: AI-ul l-a putut clasa în alt modul → îl trec pe HR (închiderea de
+          // mai jos o făcea oricum), doar cât e încă în coadă
+          if (d.modul_tinta !== 'hr') {
+            await interogheaza(supabase.from('ai_documente_inbox').update({ modul_tinta: 'hr' }).eq('id', d.id).in('status', STATUS_COADA))
+          }
+          const ins = await interogheaza(supabase.from('hr_documente_personale')
+            .insert(docWizardHR({ d, empId: emp.id, tip, destPath, uploadatDe: profile?.id || null })).select('id').single())
+          const rIns = rezultatInserareHR(ins)
+          // refuz sigur (23505 / garda / migrare) → copia urcată acum nu e folosită de nimic
+          if (copieDeSters(rIns)) await interogheaza(supabase.storage.from(BUCKET_PERSONAL).remove([destPath]))
+          // salvat deja din acest rând (panoul / alt tab) sau rând închis între timp → decide proveniența, NU a doua inserare
+          const prov = rIns === 'dubla' || rIns === 'refuzata'
+            ? rezultatProvenienta(await interogheaza(supabase.from('hr_documente_personale')
+              .select('id,employee_id,deleted_at,sursa_inbox_id').eq('sursa_inbox_id', d.id).order('id').limit(10)))
+            : null
+          const dec = decizieWizardHR(ins, prov, emp.id)
+          if (dec.pas !== 'inchide') { esuate.push(`${d.fisier_nume}: ${dec.msg}`); continue }
+          // închid rândul doar cât e încă în coadă: unul închis între timp de panou nu se rescrie (alt document legat)
+          const upd = inchidereWizardHR({ d, tip, empId: emp.id, docId: dec.docId, profilId: profile?.id || null })
+          const res = await interogheaza(supabase.from('ai_documente_inbox').update(upd).eq('id', d.id).in('status', STATUS_COADA).select('id'))
+          const citire = citireNecesara(res)
+            ? await interogheaza(supabase.from('ai_documente_inbox').select('id,status,confirmat_ref_id').eq('id', d.id).maybeSingle())
+            : null
+          const stare = stareInchidere(res, citire, 'confirmat', dec.docId)
+          const m = mesajWizardInchidere(stare)
+          if (m) avert.push(`${d.fisier_nume}: ${m}`)
+          if (stergeStagingWizard(stare)) await interogheaza(supabase.storage.from(BUCKET_INBOX).remove([d.fisier_path]))
           ok++
         } catch (e) {
           esuate.push(`${d.fisier_nume}: ${e.message}`)
@@ -351,6 +374,7 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
       const msgLipsa = lipsa.length ? ` · lipsesc din dosar: ${lipsa.map(t => t.denumire).join(', ')}` : ''
       const msgEip = tichetEip ? ` · EIP → tichet ${tichetEip.numar_tichet} la Cristiana` : ''
       if (esuate.length) showToast?.(`Angajat creat, dar ${esuate.length} documente au eșuat: ${esuate[0]}`, 'warning')
+      else if (avert.length) showToast?.(`✔ ${emp.name} creat cu ${ok} documente${msgEip} — atenție: ${avert[0]}`, 'warning')
       else showToast?.(`✔ ${emp.name} creat cu ${ok} documente${msgEip}${msgLipsa}`, 'success')
 
       onCreated?.(emp.id)

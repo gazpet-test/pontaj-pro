@@ -3,7 +3,9 @@
 # Harness SQL local — 20261103a_hr_doc_sursa_inbox (HR «Citește orice»: proveniența structurală sursa_inbox_id).
 # DOAR PG17 local dedicat (implicit /tmp/pg_hr_sursa_inbox, 127.0.0.1:5975). Nu atinge producția.
 #   0. schelet (= structura din producție 21.10, fără coloană) → baza; suita pe baza fără migrare TREBUIE să cadă (discriminare)
-#   1. gărzi: fără marcajul de livrare → refuz; coloana deja există → refuz PRECONDIȚIE (nimic adăugat)
+#   1. gărzi: fără marcajul de livrare → refuz; coloana deja există → refuz PRECONDIȚIE (nimic adăugat); eticheta veche
+#      „[Citește orice #N]” (r7) în observații — și cu „ş” cu sedilă — → refuz PRECONDIȚIE (nimic adăugat), linia de completare
+#      „«Citește orice» (inbox #N…)” nu e etichetă → trece; authenticated fără SELECT pe coada → refuz PRECONDIȚIE (review #821)
 #   2. aplicare (ca runnerul: marcaj + --single-transaction) → suita
 #   3. reaplicare → refuz PRECONDIȚIE (migrarea nu e idempotentă, e exactă), starea intactă → suita
 #   4. revenire: nearmată → refuz; REPEATABLE READ → refuz; armare persistentă → refuz; document cu sursa_inbox_id → refuz
@@ -51,8 +53,11 @@ ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -l "$DATE_DIR.log" -w -t 30 star
   -o "-p $PORT -c listen_addresses=127.0.0.1 ${SOCKET[*]}" >/dev/null || mediu "pg_ctl start"
 trap 'ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -m fast -w stop >/dev/null 2>&1; rm -rf "$TMP"; true' EXIT
 q() { "${PSQL[@]}" -d "$1" -Atc "$2"; }
+# ca q, dar prin fișier UTF-8 (argumentele din linia de comandă nu păstrează diacriticele pe Windows)
+qf() { printf '%s
+' "$2" > "$TMP/qf.sql"; "${PSQL[@]}" -d "$1" -At -f "$TMP/qf.sql"; }
 coloana_exista() { [ "$(q "$1" "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='hr_documente_personale' AND column_name='sursa_inbox_id'")" = 1 ]; }
-obiecte() { q "$1" "SELECT (to_regclass('public.hr_documente_personale_sursa_inbox_unic') IS NOT NULL)::int + (to_regprocedure('public.hr_docp_sursa_inbox_imutabil()') IS NOT NULL)::int + (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_hr_docp_sursa_inbox_imutabil')"; }
+obiecte() { q "$1" "SELECT (to_regclass('public.hr_documente_personale_sursa_inbox_unic') IS NOT NULL)::int + (to_regprocedure('public.hr_docp_sursa_inbox_imutabil()') IS NOT NULL)::int + (to_regprocedure('public.hr_docp_sursa_inbox_verifica()') IS NOT NULL)::int + (SELECT count(*) FROM pg_trigger WHERE tgname IN ('trg_hr_docp_sursa_inbox_imutabil', 'trg_hr_docp_sursa_inbox_verifica'))"; }
 OUT="$TMP/out.txt"
 suita() { "${PSQL[@]}" -d "$BAZA" -f "$TESTE" >"$OUT" 2>&1 && grep -q SUITA_OK "$OUT" || { cat "$OUT"; esec "suita ($1)"; }; grep -E 'OK T[0-9]' "$OUT" | sed "s/^.*NOTICE: *//; s/^/     [$1] /"; ok "suita ($1)"; }
 refuza() {   # $1 = descriere, $2 = text așteptat în eroare, restul = comanda
@@ -77,11 +82,29 @@ q hr_sursa_neg_test "ALTER TABLE public.hr_documente_personale ADD COLUMN sursa_
 refuza "1b coloana există" 'PRECONDIȚIE 20261103a: coloana' "${PSQL[@]}" -d hr_sursa_neg_test --single-transaction -f "$MIGRARE"
 [ "$(obiecte hr_sursa_neg_test)" = 0 ] || esec "1b au apărut obiecte deși precondiția a refuzat"
 ok "1 fără marcaj → refuz (garda de livrare); coloana deja prezentă → refuz PRECONDIȚIE, fără index/trigger"
+# 1c–1e precondiția legacy (review #821, F3): eticheta r7 „[Citește orice #N]” în observații → refuz, nimic adăugat
+"${PSQL[@]}" -d postgres -c "CREATE DATABASE hr_sursa_leg_test TEMPLATE $BAZA"
+qf hr_sursa_leg_test "UPDATE public.hr_documente_personale SET observatii = 'CI Popescu' || chr(10) || '[Citește orice #501]' WHERE id = 11" >/dev/null
+refuza "1c eticheta veche r7" '1 document(e) au în observații eticheta veche' "${PSQL[@]}" -d hr_sursa_leg_test --single-transaction -f "$MIGRARE"
+coloana_exista hr_sursa_leg_test && esec "1c coloana a apărut deși precondiția legacy a refuzat"
+[ "$(obiecte hr_sursa_leg_test)" = 0 ] || esec "1c au apărut obiecte deși precondiția legacy a refuzat"
+qf hr_sursa_leg_test "UPDATE public.hr_documente_personale SET observatii = CASE id WHEN 10 THEN 'Adus din Drive. [Citeşte orice #12]' ELSE NULL END" >/dev/null
+refuza "1d eticheta veche cu ş (sedilă)" '1 document(e) au în observații eticheta veche' "${PSQL[@]}" -d hr_sursa_leg_test --single-transaction -f "$MIGRARE"
+coloana_exista hr_sursa_leg_test && esec "1d coloana a apărut deși precondiția legacy a refuzat"
+qf hr_sursa_leg_test "UPDATE public.hr_documente_personale SET observatii = CASE id WHEN 10 THEN 'Completat din «Citește orice» (inbox #501, 21.10.2026): nr. document' ELSE NULL END" >/dev/null
+"${PSQL[@]}" -d hr_sursa_leg_test --single-transaction -f "$MIGRARE" >"$OUT" 2>&1 || { cat "$OUT"; esec "1e linia de completare a fost luată drept etichetă veche"; }
+coloana_exista hr_sursa_leg_test || esec "1e coloana lipsește după aplicare"
+# 1f garda de la INSERT e INVOKER: authenticated fără SELECT pe coadă → refuz PRECONDIȚIE (nu INSERT-uri căzute în producție)
+"${PSQL[@]}" -d postgres -c "CREATE DATABASE hr_sursa_priv_test TEMPLATE $BAZA"
+q hr_sursa_priv_test "REVOKE SELECT ON public.ai_documente_inbox FROM authenticated" >/dev/null
+refuza "1f authenticated fără SELECT pe coadă" 'authenticated nu are SELECT pe ai_documente_inbox.id' "${PSQL[@]}" -d hr_sursa_priv_test --single-transaction -f "$MIGRARE"
+coloana_exista hr_sursa_priv_test && esec "1f coloana a apărut deși precondiția de drepturi a refuzat"
+ok "1c–1f eticheta veche r7 (ș / ş) → refuz PRECONDIȚIE, nimic adăugat; linia «Citește orice» (inbox #N…) → trece; authenticated fără SELECT pe coadă → refuz"
 
 # 2. aplicare
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE" >"$OUT" 2>&1 || { cat "$OUT"; esec "2 aplicare"; }
 coloana_exista "$BAZA" || esec "2 coloana lipsește după aplicare"
-[ "$(obiecte "$BAZA")" = 3 ] || esec "2 index / funcție / trigger lipsă"
+[ "$(obiecte "$BAZA")" = 5 ] || esec "2 index / funcții / trigger-e lipsă"
 ok "2 aplicare (pre + post trecute)"
 suita "după 20261103a"
 
@@ -96,19 +119,19 @@ refuza "4b REPEATABLE READ" 'DOAR la READ COMMITTED' revenire "REPEATABLE READ" 
 q postgres "ALTER DATABASE $BAZA SET $GUC = 'x'" >/dev/null
 refuza "4c armare persistentă" 'armat PERSISTENT' revenire "READ COMMITTED" da "$BAZA"
 q postgres "ALTER DATABASE $BAZA RESET $GUC" >/dev/null
-q "$BAZA" "INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, 'CI.pdf', 777)" >/dev/null
+q "$BAZA" "INSERT INTO public.hr_documente_personale (employee_id, fisier_nume, sursa_inbox_id) VALUES (7, 'CI.pdf', 501)" >/dev/null
 refuza "4d document cu proveniență" '1 document(e) din dosarul HR au sursa_inbox_id' revenire "READ COMMITTED" da "$BAZA"
 coloana_exista "$BAZA" || esec "4d coloana a dispărut deși revenirea a refuzat"
-[ "$(obiecte "$BAZA")" = 3 ] || esec "4d obiectele au dispărut deși revenirea a refuzat"
-q "$BAZA" "DELETE FROM public.hr_documente_personale WHERE sursa_inbox_id = 777" >/dev/null
+[ "$(obiecte "$BAZA")" = 5 ] || esec "4d obiectele au dispărut deși revenirea a refuzat"
+q "$BAZA" "DELETE FROM public.hr_documente_personale WHERE sursa_inbox_id = 501" >/dev/null
 ok "4 revenire: nearmată / REPEATABLE READ / armare persistentă / document cu sursa_inbox_id → refuz, nimic scos"
 N0="$(q "$BAZA" "SELECT count(*) || ':' || string_agg(id::text, ',' ORDER BY id) FROM public.hr_documente_personale")"
 revenire "READ COMMITTED" da "$BAZA" >"$OUT" 2>&1 || { cat "$OUT"; esec "4e revenire armată"; }
 coloana_exista "$BAZA" && esec "4e coloana există după revenire"
-[ "$(obiecte "$BAZA")" = 0 ] || esec "4e au rămas index / funcție / trigger"
+[ "$(obiecte "$BAZA")" = 0 ] || esec "4e au rămas index / funcții / trigger-e"
 [ "$(q "$BAZA" "SELECT count(*) || ':' || string_agg(id::text, ',' ORDER BY id) FROM public.hr_documente_personale")" = "$N0" ] || esec "4e documentele s-au schimbat"
 [ "$(q "$BAZA" "SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_hr_docp_modificat_la'")" = 1 ] || esec "4e trg_hr_docp_modificat_la atins"
-ok "4e revenire armată pe date curate: coloană / index / funcție / trigger scoase, documentele și trg_hr_docp_modificat_la neatinse"
+ok "4e revenire armată pe date curate: coloană / index / funcții / trigger-e scoase, documentele și trg_hr_docp_modificat_la neatinse"
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE" >"$OUT" 2>&1 || { cat "$OUT"; esec "4 reaplicare după revenire"; }
 suita "reaplicare după revenire"
 

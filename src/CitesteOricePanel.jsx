@@ -53,6 +53,9 @@
 //   (23505) → tratat ca „deja salvat din acest rând” (doar închidere, niciodată a doua inserare). Coloana lipsă
 //   (42703 / PGRST204) → eroare blocantă „migrarea pentru sursa_inbox_id nu e aplicată — anunță administratorul”.
 //   ORDINEA DE LIVRARE: migrarea 20261103a se aplică ÎNAINTEA merge-ului acestui UI.
+//   Review extern #821: garda BD de la INSERT (rândul HR deschis, același fișier) poate refuza INSERT-ul cu 23514 când
+//   rândul a fost închis / mutat între timp (ex. de wizard-ul „Angajat nou”, care pune acum și el sursa_inbox_id) →
+//   'refuzata': copia se șterge, proveniența decide mesajul, coada se reîncarcă — niciodată a doua inserare.
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -64,7 +67,7 @@ import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucat
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
   citireNecesara, stareInchidere, mesajInchidere, avertizareStaging, textConfirmareRespingere, mesajRespingere,
   mesajBlocareHR, dosarInVerificare, rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari,
-  STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA } from './citesteOriceDubluri.js'
+  STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA, copieDeSters, mesajRefuzSursa } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -570,15 +573,19 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         activ: true, observatii: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id, sursa_inbox_id: row.id,
       }).select('id').single())
       const rIns = rezultatInserareHR(ins)
-      if (rIns === 'dubla' || rIns === 'migrare') {
+      if (copieDeSters(rIns)) {
         // refuz sigur al serverului → copia urcată acum nu e folosită de nimic
         await interogheaza(supabase.storage.from(cfg.bucket).remove([destPath]))
         if (rIns === 'migrare') throw new Error(MESAJ_MIGRARE_SURSA)
-        // 23505 pe sursa_inbox_id: documentul din acest rând e deja salvat (alt tab / o încercare anterioară) → NU a doua
-        // inserare; îl caut după proveniență și panoul oferă doar închiderea legată de el (ca la garda de sus)
+        // 23505 pe sursa_inbox_id: documentul din acest rând e deja salvat (alt tab / o încercare anterioară / wizard-ul) →
+        // NU a doua inserare; îl caut după proveniență și panoul oferă doar închiderea legată de el (ca la garda de sus).
+        // #821 F2 'refuzata': garda BD de la INSERT — rândul a fost închis / mutat între timp (de regulă de wizard-ul
+        // „Angajat nou” sau alt tab): proveniența, dacă există, altfel „nu mai e deschis”; coada se reîncarcă.
         const p = await cautaProvenienta(row)
+        const docs = p.err ? [] : p.docs
+        if (rIns === 'refuzata') { await loadQueue(); flash('err', mesajRefuzSursa(docs, angajatId, numeAngajat), 12000); return }
         await verificaDosar([row])
-        flash('err', mesajProvenienta(p.err ? [] : p.docs, angajatId, numeAngajat), 12000)
+        flash('err', mesajProvenienta(docs, angajatId, numeAngajat), 12000)
         return
       }
       if (rIns !== 'ok') throw new Error('Insert document HR: ' + (ins.error?.message || 'fără răspuns de la server'))
