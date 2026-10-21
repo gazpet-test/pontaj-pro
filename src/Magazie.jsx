@@ -936,6 +936,15 @@ const STARE_META = {
   montata:     { label:'Montată',                   emoji:'🏗️', color:G.purple },
   consumata:   { label:'Consumată',                 emoji:'🔥', color:G.dim    },
   retur:       { label:'Retur (rest în stoc)',      emoji:'↩️', color:G.cyan   },
+  // stările registrului de țeavă Transgaz (izometrie, doar provenienta beneficiar — 20261102a)
+  in_tranzit:          { label:'În drum',                     emoji:'🚚', color:G.yellow },
+  carantina:           { label:'Carantină (nedisponibilă)',   emoji:'⛔', color:G.red },
+  pe_tronson:          { label:'Pe tronson (nemontată)',      emoji:'📍', color:G.blue   },
+  rest_nereutilizabil: { label:'Rest nereutilizabil (depozit)', emoji:'✂️', color:G.dim  },
+  taiata:              { label:'Tăiată (consumată în bucăți)', emoji:'🪚', color:G.dim   },
+  deseu:               { label:'Deșeu',                       emoji:'🗑️', color:G.dim   },
+  pierduta:            { label:'Pierdută',                    emoji:'❓', color:G.red    },
+  anulata:             { label:'Anulată (storno)',            emoji:'⛔', color:G.dim    },
 }
 const PROV_META_T = {
   gazpet:     { label:'Gazpet', color:G.green },
@@ -964,8 +973,25 @@ function StocTrasabilTab() {
           .select('id, role, is_owner, can_process_achizitii, can_manage_stoc').eq('id', user.id).maybeSingle()
         prof = data || null
       }
+      // paginat pe CHEIE (id descrescător, „id < ultimul”), nu pe offset: PostgREST taie la max-rows, iar registrul de țeavă
+      // aduce mii de bucăți. Regula verificabilă: orice rând care există pe toată durata încărcării apare EXACT o dată
+      // (o inserare / ștergere concurentă nu mai mută paginile); merge și dacă limita API e sub pas. Ordinea de afișare
+      // (created_at desc) se reface în memorie.
+      const toateBucatile = async () => {
+        const pas = 1000, tot = []
+        for (let ultim = null; ; ) {
+          let q = supabase.from('magazie_bucati').select('*').order('id', { ascending: false }).limit(pas)
+          if (ultim !== null) q = q.lt('id', ultim)
+          const r = await q
+          if (r.error) return r
+          if (!r.data?.length) break
+          tot.push(...r.data); ultim = r.data[r.data.length - 1].id
+        }
+        tot.sort((x, y) => (y.created_at || '').localeCompare(x.created_at || '') || y.id - x.id)
+        return { data: tot }
+      }
       const [rBuc, rTip, rProj] = await Promise.all([
-        supabase.from('magazie_bucati').select('*').order('created_at', { ascending: false }),
+        toateBucatile(),
         supabase.from('magazie_tipuri_material').select('id, nume, categorie, um_implicit').order('id'),
         supabase.from('executie_proiecte').select('id, nume, cod_intern'),
       ])

@@ -21,6 +21,25 @@ import { supabase } from './lib/supabase.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
+// stocul care poate intra pe bon: fără bucățile din registrul de țeavă (tip_cod setat — BD le refuză oricum), filtrat pe
+// server și citit pe pagini după cheie (id desc): după importul registrului, limita de 1000 de rânduri a API-ului ar tăia
+// altfel stocul obișnuit (review r7)
+async function stocPentruBon() {
+  const out = []
+  let ultim = null
+  for (;;) {
+    let q = supabase.from('magazie_bucati')
+      .select('id, proiect_id, tip_material_id, serie, sarja, dimensiune, lungime_m, cantitate, um, stare, provenienta')
+      .in('stare', ['receptionat', 'sosit']).is('tip_cod', null).order('id', { ascending: false }).limit(1000)
+    if (ultim != null) q = q.lt('id', ultim)
+    const { data, error } = await q
+    if (error) return { data: null, error }
+    out.push(...data)
+    if (data.length < 1000) return { data: out, error: null }
+    ultim = data[data.length - 1].id
+  }
+}
+
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -95,19 +114,23 @@ export default function ConsumuriBonuriTab({ proiectId = null, mode = 'executie'
         .order('generat_la', { ascending: false })
       if (isExec && proiectId) qBon = qBon.eq('proiect_id', proiectId)
 
-      const [rBon, rProj, rSL, rBuc, rTip, rProf] = await Promise.all([
+      const [rBon, rProj, rSL, rBuc, rTip, rProf, rProt] = await Promise.all([
         qBon,
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id').order('id'),
         supabase.from('executie_situatii_plata').select('id, proiect_id, nr_situatie, luna, an, status').order('an', { ascending: false }).order('luna', { ascending: false }),
-        supabase.from('magazie_bucati').select('id, proiect_id, tip_material_id, serie, sarja, dimensiune, lungime_m, cantitate, um, stare, provenienta').in('stare', ['receptionat','sosit']).order('id', { ascending: false }),
+        stocPentruBon(),
         supabase.from('magazie_tipuri_material').select('id, nume, um_implicit').order('id'),
         supabase.from('profiles').select('id, name, email'),
+        // proiectele cu registru de țeavă (izometrie, nivel ≠ off): țeava lor Transgaz nu intră pe bon (BD refuză oricum)
+        supabase.rpc('fn_izo_proiecte_protejate'),
       ])
       setProfile(prof)
       setBonuri(rBon.data || [])
       setProiecte(rProj.data || [])
       setSluri(rSL.data || [])
-      setBucati(rBuc.data || [])
+      const protejate = new Set((rProt.error ? [] : (rProt.data || [])).map(r => r.proiect_id))
+      setBucati((rBuc.data || []).filter(b => !(b.provenienta === 'beneficiar' && protejate.has(b.proiect_id))))
+      if (rBuc.error) flash('err', 'Stocul pentru bon nu s-a putut citi — reîncarcă.')
       setTipuri(rTip.data || [])
       setProfilesMap(Object.fromEntries((rProf.data || []).map(p => [p.id, p.name || p.email || '—'])))
     } catch (e) { console.error(e); flash('err', 'Eroare la încărcare.') } finally { setLoading(false) }
