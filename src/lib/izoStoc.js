@@ -80,7 +80,7 @@ export const fmtM = m => (m == null ? '—' : Number(m).toLocaleString('ro-RO', 
  */
 export function lipsaRegistru(error) {
   if (!error) return false
-  const m = `${error.code || ''} ${error.message || ''}`
+  const m = `${error.code || ''} ${error.message || ''} ${error.details || ''} ${error.hint || ''}`   // și în details / hint (P3)
   // strict (Copilot #809 r2 P2): funcția lipsă DOAR dacă eroarea numește o funcție E2 a registrului; coloana lipsă DOAR
   // dacă numește o coloană E2 — altfel e o eroare reală și se arată
   const functieE2 = /fn_izo_(proiecte_protejate|citire)/i.test(m) && /PGRST202|42883|could not find the function|does not exist/i.test(m)
