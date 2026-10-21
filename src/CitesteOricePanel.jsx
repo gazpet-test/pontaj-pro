@@ -17,6 +17,10 @@
 //   blocat în coadă: „Închide (e deja în dosar)" îl leagă de documentul existent, iar
 //   „Completează și închide" umple doar câmpurile GOALE din dosar cu ce a citit AI-ul.
 //   Logica pură (clasificare, validare, ce se completează) e în citesteOriceDubluri.js.
+//   Review r1: copia ACTIVĂ din dosar are prioritate; dacă același fișier e doar ca document
+//   INACTIV (istoric) → nu se completează, omul alege „Închide" sau „Adaugă ca document nou (activ)".
+//   finalizeInbox nu mai aruncă: documentul țintă e salvat, deci coada + ecranul părinte se
+//   reîmprospătează și când închiderea rândului pică (toate modulele).
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -24,7 +28,7 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
-import { analizaDublura, clasificaDublura, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare } from './citesteOriceDubluri.js'
+import { analizaDublura, clasificaDublura, blocheazaInserare, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare, eroareInchidereRand } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -133,7 +137,8 @@ function resolveTipCod(rawTip, tipuriFK) {
 // ─── HR: ce e deja în dosar pentru perechile (angajat, nume fișier) din coadă ───
 // O singură căutare pe încărcare (pe bucăți de câte 25 de perechi, ca URL-ul să rămână
 // scurt), filtrată apoi pe client pe angajat + nume. Întoarce { [cheie]: { docs } | { err:true } }.
-const COLOANE_DOSAR = 'id,employee_id,tip_id,numar_document,emitent,data_emitere,data_expirare,fara_expirare,fisier_path,fisier_nume,fisier_size_bytes,uploadat_de,drive_file_id,observatii'
+// `activ` (r1): o copie inactivă (istoric) nu trebuie să câștige în fața celei active.
+const COLOANE_DOSAR = 'id,employee_id,tip_id,activ,numar_document,emitent,data_emitere,data_expirare,fara_expirare,fisier_path,fisier_nume,fisier_size_bytes,uploadat_de,drive_file_id,observatii'
 async function cautaInDosarHR(perechi) {
   const rez = {}
   await Promise.all(bucati(perechi, 25).map(async bucata => {
@@ -433,15 +438,15 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         } catch (_) { /* nu blochează */ }
       }
 
-      await finalizeInbox(row, 'executie', tip, 'proiect', proiectId, created.id)
-      flash('ok', 'Document trimis în Execuție ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, 'Document trimis în Execuție ✓', 'executie', tip, 'proiect', proiectId, created.id)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
   // ── HR (Faza 2) ───────────────────────────────────────────────
   // opts.faraGardaNume (21.10): „Adaugă ca document nou" — același nume, ALT fișier (altă
   // mărime), confirmat de om. Sare DOAR garda pe nume; același fișier tot nu trece.
+  // opts.faraGardaInactiv (r1): „Adaugă ca document nou (activ)" — același fișier există doar
+  // ca document INACTIV (istoric), iar omul vrea o copie activă. O copie activă tot nu trece.
   async function confirmHR(row, opts = {}) {
     const angajatId = entitateAleasa(row)
     const tipCod = row._editTip ?? row.tip_document
@@ -454,16 +459,18 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       // după verificarea din listă): același fișier la același angajat nu se inserează de
       // două ori. Dacă verificarea pică, NU inserăm (fail-closed).
       const { data: dublura, error: dubErr } = await supabase.from('hr_documente_personale')
-        .select('id,employee_id,fisier_nume,fisier_size_bytes').eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume)
+        .select('id,employee_id,fisier_nume,fisier_size_bytes,activ').eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume)
         .is('deleted_at', null).limit(50)
       if (dubErr) throw new Error('Nu am putut verifica dosarul angajatului — încearcă din nou.')
-      const cls = clasificaDublura(row, dublura, angajatId)
-      if (cls.tip === 'acelasi' || (cls.tip === 'alt_continut' && !opts.faraGardaNume)) {
+      const bloc = blocheazaInserare(clasificaDublura(row, dublura, angajatId), opts)
+      if (bloc) {
         // nu e fundătură: reverific rândul, ca să apară panoul de dublură cu acțiunile lui
         await verificaDosar([row])
-        flash('err', cls.tip === 'acelasi'
+        flash('err', bloc === 'acelasi'
           ? 'E deja în dosar — folosește «Închide» sau «Completează și închide».'
-          : `Există deja „${row.fisier_nume}" la acest angajat, dar e alt fișier — dacă e un document nou, folosește «Adaugă ca document nou».`)
+          : bloc === 'acelasi_inactiv'
+            ? 'E deja în dosar, dar ca document INACTIV (istoric) — folosește «Închide (e în dosar ca INACTIV)» sau «Adaugă ca document nou (activ)».'
+            : `Există deja „${row.fisier_nume}" la acest angajat, dar e alt fișier — dacă e un document nou, folosește «Adaugă ca document nou».`)
         return
       }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
@@ -480,12 +487,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       }).select('id').single()
       if (insErr) throw new Error('Insert document HR: ' + insErr.message)
 
-      await finalizeInbox(row, 'hr', tipCod, 'angajat', angajatId, created.id)
-      flash('ok', 'Document trimis în dosarul angajatului ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
+      // dacă rândul nu se poate închide, loadQueue reverifică dosarul → apare „Închide (e deja în dosar)"
+      await inchideRandSiReimprospateaza(row, 'Document trimis în dosarul angajatului ✓', 'hr', tipCod, 'angajat', angajatId, created.id)
     } catch (e) {
       flash('err', String(e.message || e))
-      verificaDosar([row])   // dacă documentul a intrat dar rândul n-a putut fi închis → apare „Închide (e deja în dosar)"
+      verificaDosar([row])   // la orice eroare, panoul de dublură arată starea reală a dosarului
     } finally { setBusyId(null) }
   }
 
@@ -495,23 +501,29 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   // completeaza=true → întâi UPDATE doar pe câmpurile goale, cu gardă .is(camp, null) pe
   // fiecare: dacă între timp le-a pus altcineva → 0 rânduri → NU închid, reverific.
   // Reîncercarea e sigură: câmpurile deja puse nu mai apar goale, deci a doua oară doar închide.
-  async function inchideDublura(row, completeaza) {
+  // asteapta (r1) = starea văzută de om ('acelasi' | 'acelasi_inactiv'); dacă s-a schimbat între
+  // timp (documentul a fost arhivat / reactivat / șters) → NU închid, reverific. Garda pe `activ`
+  // din UPDATE / verificare leagă exact documentul văzut. Un document INACTIV doar se leagă,
+  // nu se completează niciodată.
+  async function inchideDublura(row, completeaza, asteapta = 'acelasi') {
     if (busyRef.current.has(row.id)) return
     busyRef.current.add(row.id)
     setBusyId(row.id)
     try {
       const angajatId = entitateAleasa(row)
       const d = stareDublura(row)
-      if (!angajatId || d?.stare !== 'acelasi') {
+      if (!angajatId || !d?.doc || d.stare !== asteapta) {
         await verificaDosar([row])
-        flash('err', 'Nu mai găsesc documentul în dosar — am reverificat, nu am închis nimic.')
+        flash('err', 'Documentul din dosar s-a schimbat sau nu-l mai găsesc — am reverificat, nu am închis nimic.')
         return
       }
       const doc = d.doc
-      const campuri = completeaza ? d.campuri : []
+      const inactiv = d.stare === 'acelasi_inactiv'
+      const campuri = completeaza && !inactiv ? d.campuri : []
+      const activVazut = doc.activ ?? null
       if (campuri.length) {
         const upd = updateCompletare(campuri, doc.observatii, liniaObservatii(row.id, new Date(), campuri))
-        let q = supabase.from('hr_documente_personale').update(upd).eq('id', doc.id).is('deleted_at', null)
+        let q = supabase.from('hr_documente_personale').update(upd).eq('id', doc.id).is('deleted_at', null).is('activ', activVazut)
         for (const c of campuri) q = q.is(c.camp, null)
         // observațiile se rescriu cu linia nouă la final → gardă și pe ele, ca să nu pierd o notă pusă între timp
         q = doc.observatii == null ? q.is('observatii', null) : q.eq('observatii', doc.observatii)
@@ -523,20 +535,21 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
           return
         }
       } else {
-        // doar închidere: documentul de care leg rândul trebuie să mai existe
+        // doar închidere: documentul de care leg rândul trebuie să mai existe, în aceeași stare (activ / istoric)
         const { data: ex, error: exErr } = await supabase.from('hr_documente_personale')
-          .select('id').eq('id', doc.id).is('deleted_at', null).limit(1)
+          .select('id').eq('id', doc.id).is('deleted_at', null).is('activ', activVazut).limit(1)
         if (exErr) throw new Error('Nu am putut verifica dosarul: ' + exErr.message)
         if (!ex?.length) {
           await verificaDosar([row])
-          flash('err', 'Documentul din dosar nu mai există — am reverificat, nu am închis nimic.')
+          flash('err', 'Documentul din dosar nu mai există sau s-a schimbat (activ / istoric) — am reverificat, nu am închis nimic.')
           return
         }
       }
       const tipCod = (row._editTip ?? row.tip_document) || d.tipDosar?.cod || null
-      await finalizeInbox(row, 'hr', tipCod, 'angajat', angajatId, doc.id)
-      flash('ok', campuri.length ? `Era deja în dosar — am completat: ${campuri.map(c => c.eticheta).join(', ')}.` : 'Era deja în dosar — închis.')
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row,
+        inactiv ? `Era deja în dosar ca document INACTIV (istoric, #${doc.id}) — închis.`
+          : campuri.length ? `Era deja în dosar — am completat: ${campuri.map(c => c.eticheta).join(', ')}.` : 'Era deja în dosar — închis.',
+        'hr', tipCod, 'angajat', angajatId, doc.id)
     } catch (e) {
       flash('err', String(e.message || e))
       verificaDosar([row])   // după o completare reușită lista de câmpuri se golește → reîncercarea doar închide
@@ -568,9 +581,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       }).select('id').single()
       if (insErr) throw new Error('Insert document flotă: ' + insErr.message)
 
-      await finalizeInbox(row, 'logistica', tipCod, 'activ', vehiculId, created.id)
-      flash('ok', 'Document trimis la vehicul ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, 'Document trimis la vehicul ✓', 'logistica', tipCod, 'activ', vehiculId, created.id)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
@@ -608,9 +619,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       const { error: updErr } = await supabase.from('executie_situatii_plata').update(upd).eq('id', slId)
       if (updErr) throw new Error('Update situație: ' + updErr.message)
 
-      await finalizeInbox(row, 'financiar', 'certificat_plata', 'situatie_plata', slId, slId)
-      flash('ok', 'Certificat atașat la situația de plată ✓')
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, 'Certificat atașat la situația de plată ✓', 'financiar', 'certificat_plata', 'situatie_plata', slId, slId)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
@@ -637,26 +646,35 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         document_path: destPath, created_by: profile.id,
       }).select('id').single()
       if (insErr) throw new Error('Insert achiziție UPA: ' + insErr.message)
-      await finalizeInbox(row, 'upa', 'factura', 'furnizor', furnizorId, created.id)
-      flash('ok', `Factura ${dd.numar || ''} — ${valoare.toLocaleString('ro-RO')} lei scăzută din plafonul lunii ✓`)
-      await loadQueue(); onConfirmed && onConfirmed()
+      await inchideRandSiReimprospateaza(row, `Factura ${dd.numar || ''} — ${valoare.toLocaleString('ro-RO')} lei scăzută din plafonul lunii ✓`, 'upa', 'factura', 'furnizor', furnizorId, created.id)
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
-  // Marchează rândul inbox confirmat + curăță staging.
+  // Marchează rândul inbox confirmat + curăță staging. Întoarce null (închis) sau mesajul de eroare.
   // 21.10: eroarea update-ului nu se mai înghite (documentul intrase, dar rândul rămânea
   // în coadă fără ca omul să afle). Ordinea veche (update → ștergere staging) rămâne.
+  // Review r1: NU aruncă — documentul țintă e deja salvat, apelantul reîmprospătează oricum.
   async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
-    const { data, error } = await supabase.from('ai_documente_inbox').update({
-      status:'confirmat', modul_tinta:modulTinta, tip_document:tip,
-      entitate_tip:entTip, entitate_id:entId,
-      confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
-    }).eq('id', row.id).select('id')
+    let res
+    try {
+      res = await supabase.from('ai_documente_inbox').update({
+        status:'confirmat', modul_tinta:modulTinta, tip_document:tip,
+        entitate_tip:entTip, entitate_id:entId,
+        confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
+      }).eq('id', row.id).select('id')
+    } catch (e) { res = { error:e } }
     await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
-    if (error || !data?.length) {
-      throw new Error('Documentul e salvat, dar rândul din coadă nu s-a putut închide'
-        + (error ? ': ' + error.message : ' (fără drept de modificare?)') + ' — reîncarcă lista și verifică.')
-    }
+    return eroareInchidereRand(res)
+  }
+
+  // Documentul țintă e salvat → închid rândul din coadă și reîmprospătez ORICUM: și când
+  // închiderea pică, ecranul părinte (lista proiectului, plafonul UPA, situația de plată,
+  // dosarul angajatului) trebuie să vadă documentul nou. Comportamentul vechi + eroarea vizibilă.
+  async function inchideRandSiReimprospateaza(row, msgOk, ...argsFinalize) {
+    const errFin = await finalizeInbox(row, ...argsFinalize)
+    flash(errFin ? 'err' : 'ok', errFin || msgOk)
+    await loadQueue(); onConfirmed && onConfirmed()
+    return !errFin
   }
 
   async function handleReject(row) {
@@ -674,7 +692,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   function patch(id, key, val) { setQueue(q => q.map(r => r.id === id ? { ...r, [key]: val } : r)) }
 
   // HR: starea rândului față de dosarul angajatului ales (null în afara HR / fără angajat)
-  //   'verific' | 'eroare' (căutarea a picat) | 'liber' | 'acelasi' | 'alt_continut'
+  //   'verific' | 'eroare' (căutarea a picat) | 'liber' | 'acelasi' | 'acelasi_inactiv' | 'alt_continut'
   function stareDublura(row) {
     if (modul !== 'hr') return null
     const emp = entitateAleasa(row)
@@ -774,12 +792,20 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                 const dd = row.payload_ai?.date_document
                 const dub = stareDublura(row)   // doar HR; null în rest
                 const ocupat = busyId === row.id
-                const badgeDosar = dub?.stare === 'acelasi' && (
-                  <span style={{ ...chip, background:G.blue + '22', color:G.blue, border:`1px solid ${G.blue}55` }}>📁 deja în dosar{dub.dinDrive ? ' (Drive)' : ''}</span>
+                // r1: același fișier există doar ca document INACTIV (istoric) → stare separată,
+                // fără completare; omul alege explicit: închide (rămâne în istoric) sau adaugă ca activ.
+                const dubAcelasi = dub?.stare === 'acelasi' || dub?.stare === 'acelasi_inactiv'
+                const dubInactiv = dub?.stare === 'acelasi_inactiv'
+                const culDub = dubInactiv ? G.yellow : G.blue
+                const badgeDosar = dubAcelasi && (
+                  <span style={{ ...chip, background:culDub + '22', color:culDub, border:`1px solid ${culDub}55` }}>📁 {dubInactiv ? 'e în dosar, dar INACTIV (istoric)' : 'deja în dosar'}{dub.dinDrive ? ' (Drive)' : ''}</span>
                 )
-                const btnInchide = dub?.stare === 'acelasi' && (
-                  <button onClick={() => inchideDublura(row, false)} disabled={ocupat}
-                    style={{ ...btnS, color:G.blue, borderColor:G.blue + '55', opacity: ocupat ? 0.5 : 1 }}>Închide (e deja în dosar)</button>
+                const btnInchide = dubAcelasi && (
+                  <button onClick={() => {
+                    if (dubInactiv && !window.confirm(`„${row.fisier_nume}" e deja în dosar, dar ca document INACTIV (istoric, #${dub.doc.id}) — nu apare la documentele active ale angajatului.\n\nÎnchid rândul și îl leg de documentul inactiv, fără să schimb nimic în dosar?`)) return
+                    inchideDublura(row, false, dub.stare)
+                  }} disabled={ocupat}
+                    style={{ ...btnS, color:culDub, borderColor:culDub + '55', opacity: ocupat ? 0.5 : 1 }}>{dubInactiv ? 'Închide (e în dosar ca INACTIV)' : 'Închide (e deja în dosar)'}</button>
                 )
                 return (
                   <div key={row.id} style={{ background:G.card, border:`1px solid ${eroare ? G.red + '66' : G.border}`, borderRadius:12, padding:14 }}>
@@ -799,10 +825,12 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                           ⚠ AI nu a putut citi documentul: {row.ai_eroare || 'eroare necunoscută'}. Poți încerca din nou sau adaugă-l manual.
                         </div>
                         {/* 21.10: AI n-a citit nimic, dar același fișier e deja în dosar → doar închidere */}
-                        {dub?.stare === 'acelasi' && (
+                        {dubAcelasi && (
                           <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:12, color:G.muted, marginBottom:10 }}>
                             {badgeDosar}
-                            <span>Același fișier (nume + mărime) e deja la {entMatch?.label || 'acest angajat'} — nu mai trebuie adăugat.</span>
+                            <span>{dubInactiv
+                              ? <>Același fișier (nume + mărime) e la {entMatch?.label || 'acest angajat'}, dar ca document <b style={{ color:G.yellow }}>INACTIV (istoric, #{dub.doc.id})</b>.</>
+                              : <>Același fișier (nume + mărime) e deja la {entMatch?.label || 'acest angajat'} — nu mai trebuie adăugat.</>}</span>
                           </div>
                         )}
                         <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
@@ -958,7 +986,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                   </span>
                                 </div>
                                 {dub.nrIdentice > 1 && (
-                                  <div style={{ fontSize:11.5, color:G.yellow, marginBottom:4 }}>⚠️ {dub.nrIdentice} copii identice în dosar — leg de cea mai veche (#{dub.doc.id}).</div>
+                                  <div style={{ fontSize:11.5, color:G.yellow, marginBottom:4 }}>⚠️ {dub.nrIdentice} copii identice în dosar{dub.nrInactive ? ` (${dub.nrInactive} inactive)` : ''} — leg de cea mai veche activă (#{dub.doc.id}).</div>
                                 )}
                                 {dub.tipDiferit ? (
                                   <div style={{ color:G.yellow }}>⚠️ tip diferit (dosar: {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`} · AI: {numeTip(row._editTip ?? row.tip_document)}) — nu completez câmpurile</div>
@@ -970,6 +998,23 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                 ) : (
                                   <div style={{ color:G.dim }}>Nimic de completat — câmpurile din dosar sunt deja puse sau AI-ul n-a citit valori valide.</div>
                                 )}
+                              </div>
+                            )}
+                            {dubInactiv && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:G.yellow + '10', border:`1px solid ${G.yellow}44`, borderRadius:8, fontSize:12, color:G.text, lineHeight:1.55 }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6 }}>
+                                  {badgeDosar}
+                                  <span style={{ fontSize:11.5, color:G.muted }}>
+                                    același fișier (nume + mărime) · {dub.tipDosar?.denumire || `tip #${dub.doc.tip_id}`}{dub.doc.data_emitere ? ` · emis ${fmtD(dub.doc.data_emitere + 'T00:00:00')}` : ''}
+                                  </span>
+                                </div>
+                                <div style={{ color:G.yellow }}>
+                                  ⚠️ Documentul din dosar (#{dub.doc.id}{dub.nrIdentice > 1 ? `, cel mai vechi din ${dub.nrIdentice} copii identice, toate inactive` : ''}) e <b>INACTIV (istoric)</b> — nu apare la documentele active și nu completez nimic în el.
+                                </div>
+                                <div style={{ color:G.muted, marginTop:4 }}>
+                                  Dacă trebuie să fie din nou activ, adaugă-l ca document nou; dacă rămâne doar în istoric, închide rândul.
+                                  {dub.nrTotal > dub.nrIdentice ? ` (Mai există ${dub.nrTotal - dub.nrIdentice} cu același nume, dar alt fișier.)` : ''}
+                                </div>
                               </div>
                             )}
                             {dub?.stare === 'alt_continut' && (
@@ -985,11 +1030,22 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                 <>
                                   {btnInchide}
                                   {!dub.tipDiferit && dub.campuri.length > 0 && (
-                                    <button onClick={() => inchideDublura(row, true)} disabled={ocupat}
+                                    <button onClick={() => inchideDublura(row, true, 'acelasi')} disabled={ocupat}
                                       style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
                                       {ocupat ? '⏳…' : '✓ Completează și închide'}
                                     </button>
                                   )}
+                                </>
+                              ) : dubInactiv ? (
+                                <>
+                                  {btnInchide}
+                                  <button onClick={() => {
+                                    if (!window.confirm(`„${row.fisier_nume}" e în dosar doar ca document INACTIV (istoric, #${dub.doc.id}).\n\nÎl adaug ca document NOU, ACTIV, în dosar? Cel inactiv rămâne neschimbat, în istoric.`)) return
+                                    handleConfirm(row, { faraGardaInactiv:true })
+                                  }} disabled={ocupat}
+                                    style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
+                                    {ocupat ? '⏳…' : 'Adaugă ca document nou (activ)'}
+                                  </button>
                                 </>
                               ) : dub?.stare === 'alt_continut' ? (
                                 <button onClick={() => {

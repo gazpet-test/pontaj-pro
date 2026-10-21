@@ -2,7 +2,9 @@
 // CITEȘTE ORICE — dublura din dosarul HR (varianta A, Răzvan 21.10.2026, TKT-2026-0343)
 // ===========================================================================
 // Funcții pure (fără supabase / React), testate în citesteOriceDubluri.test.js.
-//   • clasificaDublura   — același fișier (nume + mărime egală) vs. același nume, alt conținut
+//   • clasificaDublura   — același fișier (nume + mărime egală) vs. același nume, alt conținut;
+//                          copia ACTIVĂ are prioritate, doar copii inactive → stare separată (r1)
+//   • blocheazaInserare  — garda din confirmHR (ultima apărare), cu excepțiile confirmate de om
 //   • campuriDeCompletat — doar câmpurile GOALE din dosar, doar cu valori AI valide
 //   • analizaDublura     — tot ce afișează panoul pentru un rând din coadă
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
@@ -73,21 +75,45 @@ export function bucati(arr, n) {
   return out
 }
 
+// Activ = convenția din TabDocumentePersonale: doar activ === false e istoric / arhivat.
+export const esteActiv = d => !!d && d.activ !== false
+
 // docs = rânduri hr_documente_personale (pot fi și ale altor angajați / alte nume — se filtrează aici)
-//   tip 'acelasi'      → există potrivire cu fisier_size_bytes egal (ne-null); doc = cel mai vechi (id minim)
-//   tip 'alt_continut' → același nume, dar nicio mărime egală (sau mărimi necunoscute)
-//   tip null           → nimic cu acest nume la acest angajat
+//   tip 'acelasi'         → există potrivire ACTIVĂ cu fisier_size_bytes egal (ne-null);
+//                           doc = cea mai veche activă (id minim) — inactivele nu câștigă (review r1)
+//   tip 'acelasi_inactiv' → același fișier există, dar DOAR ca document inactiv (istoric);
+//                           nu se completează nimic, omul alege: închide sau adaugă ca activ
+//   tip 'alt_continut'    → același nume, dar nicio mărime egală (sau mărimi necunoscute)
+//   tip null              → nimic cu acest nume la acest angajat
+// nrIdentice = toate copiile identice (active + inactive); nrInactive = câte dintre ele sunt inactive.
 export function clasificaDublura(row, docs, angajatId) {
-  const gol = { tip:null, doc:null, nrIdentice:0, nrTotal:0, marimiNecunoscute:false }
+  const gol = { tip:null, doc:null, nrIdentice:0, nrInactive:0, nrTotal:0, marimiNecunoscute:false }
   if (!row || !row.fisier_nume || angajatId == null) return gol
   const lista = (docs || []).filter(d => d && d.deleted_at == null
     && Number(d.employee_id) === Number(angajatId) && d.fisier_nume === row.fisier_nume)
   if (!lista.length) return gol
   const sz = marime(row.fisier_size_bytes)
   const identice = sz == null ? [] : lista.filter(d => marime(d.fisier_size_bytes) === sz).sort((a, b) => a.id - b.id)
-  if (identice.length) return { tip:'acelasi', doc:identice[0], nrIdentice:identice.length, nrTotal:lista.length, marimiNecunoscute:false }
-  return { tip:'alt_continut', doc:null, nrIdentice:0, nrTotal:lista.length,
+  if (identice.length) {
+    const active = identice.filter(esteActiv)
+    const baza = { nrIdentice:identice.length, nrInactive:identice.length - active.length, nrTotal:lista.length, marimiNecunoscute:false }
+    return active.length ? { tip:'acelasi', doc:active[0], ...baza } : { tip:'acelasi_inactiv', doc:identice[0], ...baza }
+  }
+  return { tip:'alt_continut', doc:null, nrIdentice:0, nrInactive:0, nrTotal:lista.length,
     marimiNecunoscute: sz == null || lista.every(d => marime(d.fisier_size_bytes) == null) }
+}
+
+// Garda din confirmHR (ultima apărare, pe ce e în dosar LA MOMENTUL inserării):
+// null → se poate insera; altfel tipul dublurii care blochează.
+//   'acelasi'         → blochează mereu (același fișier activ e deja în dosar)
+//   'acelasi_inactiv' → trece doar cu opts.faraGardaInactiv (omul a confirmat „Adaugă ca document nou (activ)")
+//   'alt_continut'    → trece doar cu opts.faraGardaNume (omul a confirmat „Adaugă ca document nou")
+// Dacă starea s-a schimbat între afișare și click, excepția nu se mai potrivește → blochează.
+export function blocheazaInserare(cls, opts = {}) {
+  if (!cls || !cls.tip) return null
+  if (cls.tip === 'alt_continut' && opts.faraGardaNume) return null
+  if (cls.tip === 'acelasi_inactiv' && opts.faraGardaInactiv) return null
+  return cls.tip
 }
 
 // Câmpurile care s-ar completa: GOALE (NULL) în dosar ȘI prezente + valide în date_document
@@ -128,16 +154,28 @@ export function observatiiNoi(existente, linie) {
 
 // Tot ce afișează panoul pentru un rând HR din coadă, dat fiind ce s-a găsit în dosar.
 //   tipAI = row._editTip ?? row.tip_document (codul ales pe card)
-// La 'acelasi' adaugă: dinDrive, tipDosar ({id,cod,denumire} | null), tipDiferit, campuri.
+// La 'acelasi' / 'acelasi_inactiv' adaugă: dinDrive, tipDosar ({id,cod,denumire} | null), tipDiferit, campuri.
 // Tip diferit (sau necunoscut de o parte) → NU se completează nimic.
 // Rând în status 'eroare' (AI n-a citit nimic) → doar închidere, fără completare.
+// Document inactiv (istoric) → nu se completează nimic în el (r1).
 export function analizaDublura({ row, docs, angajatId, tipuriFK, tipAI }) {
   const c = clasificaDublura(row, docs, angajatId)
-  if (c.tip !== 'acelasi') return c
+  if (c.tip !== 'acelasi' && c.tip !== 'acelasi_inactiv') return c
   const tipDosar = (tipuriFK || []).find(t => Number(t.id) === Number(c.doc.tip_id)) || null
   const dinDrive = esteDinDrive(c.doc)
-  if (row.status === 'eroare') return { ...c, dinDrive, tipDosar, tipDiferit:false, campuri:[] }
+  if (row.status === 'eroare' || c.tip === 'acelasi_inactiv') return { ...c, dinDrive, tipDosar, tipDiferit:false, campuri:[] }
   const tipDiferit = !tipAI || !tipDosar || tipDosar.cod !== tipAI
   const campuri = tipDiferit ? [] : campuriDeCompletat(c.doc, row.payload_ai?.date_document)
   return { ...c, dinDrive, tipDosar, tipDiferit, campuri }
+}
+
+// ─── Comun tuturor modulelor (review r1, 21.10) ──────────────────────────────
+// Rezultatul UPDATE-ului care închide rândul din ai_documente_inbox → null (închis) sau
+// mesajul de afișat. Documentul țintă e deja salvat în acest punct, deci apelantul
+// afișează mesajul și reîmprospătează ORICUM (coada + ecranul părinte).
+export function eroareInchidereRand(res) {
+  const { data, error } = res || {}
+  if (!error && Array.isArray(data) && data.length) return null
+  const det = error ? ': ' + (error.message || String(error)) : ' (fără drept de modificare?)'
+  return 'Documentul e salvat, dar rândul din coadă nu s-a putut închide' + det + ' — reîncarcă lista și verifică.'
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   dataAIValida, textAIValid, esteDinDrive, cheieDosar, perechiDeVerificat, bucati,
   clasificaDublura, campuriDeCompletat, updateCompletare, fmtZi, liniaObservatii,
-  observatiiNoi, analizaDublura, TEXT_AI_MAX,
+  observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, eroareInchidereRand,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -10,7 +10,7 @@ const TIPURI = [
   { id:2, cod:'cazier_judiciar', denumire:'Cazier judiciar' },
 ]
 const docDrive = (o = {}) => ({
-  id:10, employee_id:7, tip_id:1, fisier_nume:'CI.pdf', fisier_size_bytes:1234,
+  id:10, employee_id:7, tip_id:1, activ:true, fisier_nume:'CI.pdf', fisier_size_bytes:1234,
   fisier_path:'7/drive/abc.pdf', drive_file_id:'abc', uploadat_de:null,
   numar_document:null, emitent:null, data_emitere:'2020-05-01', data_expirare:null,
   observatii:'Adus din Drive.', ...o,
@@ -98,6 +98,28 @@ describe('clasificaDublura', () => {
     expect(clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive()], 7)).toMatchObject({ tip:'alt_continut', marimiNecunoscute:true })
     expect(clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:null })], 7)).toMatchObject({ tip:'alt_continut', marimiNecunoscute:true })
   })
+  it('r1: copia ACTIVĂ câștigă în fața uneia inactive mai vechi (cazul CI.pdf #12 arhivat + #480 activ)', () => {
+    const docs = [docDrive({ id:480 }), docDrive({ id:12, activ:false })]
+    const c = clasificaDublura(rowAI(), docs, 7)
+    expect(c).toMatchObject({ tip:'acelasi', nrIdentice:2, nrInactive:1, nrTotal:2 })
+    expect(c.doc.id).toBe(480)
+  })
+  it('r1: doar copii inactive → acelasi_inactiv, cea mai veche inactivă', () => {
+    const docs = [docDrive({ id:40, activ:false }), docDrive({ id:12, activ:false }), docDrive({ id:5, fisier_size_bytes:1 })]
+    const c = clasificaDublura(rowAI(), docs, 7)
+    expect(c).toMatchObject({ tip:'acelasi_inactiv', nrIdentice:2, nrInactive:2, nrTotal:3 })
+    expect(c.doc.id).toBe(12)
+  })
+  it('r1: activ null / lipsă = activ (convenția din TabDocumentePersonale)', () => {
+    expect(esteActiv({ activ:null })).toBe(true)
+    expect(esteActiv({})).toBe(true)
+    expect(esteActiv({ activ:false })).toBe(false)
+    expect(esteActiv(null)).toBe(false)
+    expect(clasificaDublura(rowAI(), [docDrive({ activ:null })], 7).tip).toBe('acelasi')
+  })
+  it('r1: inactiv cu altă mărime rămâne alt_continut', () => {
+    expect(clasificaDublura(rowAI(), [docDrive({ activ:false, fisier_size_bytes:9 })], 7).tip).toBe('alt_continut')
+  })
   it('ignoră alți angajați, alte nume, documente șterse', () => {
     const docs = [docDrive({ employee_id:8 }), docDrive({ fisier_nume:'ci.pdf' }), docDrive({ deleted_at:'2026-10-01' })]
     expect(clasificaDublura(rowAI(), docs, 7).tip).toBeNull()
@@ -165,8 +187,53 @@ describe('analizaDublura', () => {
     const a = analizaDublura({ row:rowAI(), docs:[plin], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' })
     expect(a.campuri).toEqual([])
   })
+  it('r1: doar copie inactivă → nu completez nimic, dar arăt tipul și sursa', () => {
+    const a = analizaDublura({ row:rowAI(), docs:[docDrive({ activ:false })], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' })
+    expect(a).toMatchObject({ tip:'acelasi_inactiv', dinDrive:true, tipDiferit:false, campuri:[] })
+    expect(a.tipDosar.cod).toBe('buletin')
+    const er = analizaDublura({ row:rowAI({ status:'eroare', payload_ai:null }), docs:[docDrive({ activ:false })], angajatId:7, tipuriFK:TIPURI, tipAI:null })
+    expect(er).toMatchObject({ tip:'acelasi_inactiv', campuri:[] })
+  })
   it('alt conținut / fără dublură trec mai departe neschimbate', () => {
     expect(analizaDublura({ row:rowAI(), docs:[docDrive({ fisier_size_bytes:1 })], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' }).tip).toBe('alt_continut')
     expect(analizaDublura({ row:rowAI(), docs:[], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' }).tip).toBeNull()
+  })
+})
+
+describe('blocheazaInserare (garda din confirmHR)', () => {
+  const cls = tip => ({ tip })
+  it('nimic în dosar → se poate insera', () => {
+    expect(blocheazaInserare(cls(null))).toBeNull()
+    expect(blocheazaInserare(null)).toBeNull()
+  })
+  it('același fișier activ → blochează mereu, indiferent de excepții', () => {
+    expect(blocheazaInserare(cls('acelasi'))).toBe('acelasi')
+    expect(blocheazaInserare(cls('acelasi'), { faraGardaNume:true, faraGardaInactiv:true })).toBe('acelasi')
+  })
+  it('alt conținut → trece doar cu faraGardaNume', () => {
+    expect(blocheazaInserare(cls('alt_continut'))).toBe('alt_continut')
+    expect(blocheazaInserare(cls('alt_continut'), { faraGardaInactiv:true })).toBe('alt_continut')
+    expect(blocheazaInserare(cls('alt_continut'), { faraGardaNume:true })).toBeNull()
+  })
+  it('doar inactiv → trece doar cu faraGardaInactiv (starea schimbată între afișare și click blochează)', () => {
+    expect(blocheazaInserare(cls('acelasi_inactiv'))).toBe('acelasi_inactiv')
+    expect(blocheazaInserare(cls('acelasi_inactiv'), { faraGardaNume:true })).toBe('acelasi_inactiv')
+    expect(blocheazaInserare(cls('acelasi_inactiv'), { faraGardaInactiv:true })).toBeNull()
+  })
+  it('cap-coadă: copia inactivă + una activă identică → blocat chiar cu faraGardaInactiv', () => {
+    const c = clasificaDublura(rowAI(), [docDrive({ id:12, activ:false }), docDrive({ id:480 })], 7)
+    expect(blocheazaInserare(c, { faraGardaInactiv:true })).toBe('acelasi')
+  })
+})
+
+describe('eroareInchidereRand (finalizeInbox, toate modulele)', () => {
+  it('un rând actualizat → null (închis)', () => {
+    expect(eroareInchidereRand({ data:[{ id:1 }], error:null })).toBeNull()
+  })
+  it('eroare / 0 rânduri / lipsă rezultat → mesaj, fără excepție', () => {
+    expect(eroareInchidereRand({ data:null, error:{ message:'rls' } })).toMatch(/salvat, dar rândul din coadă nu s-a putut închide: rls/)
+    expect(eroareInchidereRand({ data:[], error:null })).toMatch(/fără drept de modificare/)
+    expect(eroareInchidereRand(undefined)).toMatch(/nu s-a putut închide/)
+    expect(eroareInchidereRand({ error:new Error('Failed to fetch') })).toMatch(/Failed to fetch/)
   })
 })
