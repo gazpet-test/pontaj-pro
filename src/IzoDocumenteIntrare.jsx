@@ -233,9 +233,11 @@ export default function IzoDocumenteIntrare() {
     setEd(null); setVerif(null); setLipire(null); setPv(null); setAnulare(null); setRezultat(null)
   }
   const e40001 = e => String(e?.code || '') === '40001'
-  // CAS pierdut la salvare (40001): editorul rămâne cu modificările din ecran, dar salvarea / verificarea / scanurile se opresc până la
-  // reîncărcarea versiunii serverului (altfel „Verifică” ar re-salva aceeași versiune veche în buclă — review #826 r1)
-  const marcheazaConflict = id => setEd(x => (x && x.id === id ? { ...x, conflict:true } : x))
+  // editorul nu mai reflectă sigur serverul: CAS pierdut la salvare ('40001') sau o salvare cu răspuns pierdut peste modificări nesalvate
+  // ('incert'). Modificările rămân în ecran, dar salvarea / verificarea / scanurile / anularea se opresc până la reîncărcarea versiunii
+  // serverului, cerută explicit (altfel „Verifică” ar re-salva versiunea veche în buclă — review #826 r1; fără reîncărcare automată peste
+  // modificări nesalvate — review #826 r2)
+  const marcheazaConflict = (id, motiv = '40001') => setEd(x => (x && x.id === id ? { ...x, conflict:motiv } : x))
   const reincarcaDupaConflict = () => {
     if (ed?.dirty && !window.confirm('Reîncarci versiunea de pe server? Modificările tale nesalvate din ecran se pierd (copiază-le înainte, dacă ai nevoie de ele).')) return
     deschide(ed.id)
@@ -245,7 +247,7 @@ export default function IzoDocumenteIntrare() {
   // oprește operațiile de scriere pe un editor care nu mai reflectă serverul (reîncărcare eșuată / CAS pierdut)
   const opritScriere = doc => {
     if (doc.stale) { flash('err', 'Reîncarcă documentul înainte de salvare.'); return true }
-    if (doc.conflict) { flash('err', 'Documentul s-a schimbat pe server între timp — apasă „Reîncarcă versiunea serverului”, apoi refă modificările.'); return true }
+    if (doc.conflict) { flash('err', `${doc.conflict === 'incert' ? 'Nu se știe dacă ultima salvare s-a aplicat' : 'Documentul s-a schimbat pe server între timp'} — apasă „Reîncarcă versiunea serverului”, apoi refă ce lipsește.`); return true }
     return false
   }
   const salveaza = async (doc = ed) => {
@@ -288,7 +290,7 @@ export default function IzoDocumenteIntrare() {
   const edScrie = !!ed && !ed.stale && ed.stare === 'draft' && (ed.id ? edRol : depoziteScriere.length > 0)
   const verifCurenta = !!verif && !!ed && !ed.dirty && !ed.stale && verif.docId === ed.id && verif.versiune === Number(ed.versiune)
   const motivConfirma = !ed ? '' : ed.stale ? 'documentul nu s-a putut reîncărca — apasă „Reîncarcă”'
-    : ed.conflict ? 'documentul s-a schimbat pe server — apasă „Reîncarcă versiunea serverului”' : !ed.id ? 'salvează draftul și apasă „Verifică”'
+    : ed.conflict ? 'editorul nu mai reflectă sigur serverul — apasă „Reîncarcă versiunea serverului”' : !ed.id ? 'salvează draftul și apasă „Verifică”'
     : ed.stare !== 'draft' ? 'documentul nu e draft'
     : !edRol ? 'doar gestionarul depozitului documentului sau owner-ul confirmă' : ed.dirty ? 'ai modificări nesalvate — apasă „Verifică”'
     : val?.blocante ? `${val.blocante} probleme blocante în ecran (roșu)` : !verif ? 'apasă întâi „Verifică”'
@@ -296,7 +298,7 @@ export default function IzoDocumenteIntrare() {
   const poateConfirma = !!ed && !motivConfirma && !busy
   const arePv = !!(ed?.bd && (ed.bd.pv_data || ed.bd.pv_nr_canon || ed.bd.pv_nr || ed.bd.eveniment_pv_id))
   const poatePv = !!ed && !ed.stale && ed.stare === 'confirmat' && !arePv && edRol && !busy
-  const poateAnula = !!ed && !ed.stale && !!ed.id && ed.stare === 'draft' && edRol && !busy
+  const poateAnula = !!ed && !ed.stale && !ed.conflict && !!ed.id && ed.stare === 'draft' && edRol && !busy
 
   const confirma = async () => {
     if (!poateConfirma) return
@@ -338,6 +340,7 @@ export default function IzoDocumenteIntrare() {
 
   // anularea ciornei (gestionarul / owner-ul, cu motiv): doar antetul; registrul nu e atins
   const anuleazaCiorna = async () => {
+    if (opritScriere(ed)) return
     const err = eroareMotiv(anulare?.motiv, 'motivul anulării')
     if (err) { flash('err', err); return }
     const id = ed.id
@@ -374,9 +377,14 @@ export default function IzoDocumenteIntrare() {
       } else if (r.rez === 'nesalvat') {
         if (e40001(r.error)) marcheazaConflict(id)
         flash('err', 'Scanul nu s-a atașat: ' + mesajEroareDoc(r.error))
-      } else {
+      } else if (!doc.dirty) {
+        // fără modificări nesalvate reîncărcarea nu pierde nimic: manifestul reîncărcat arată dacă salvarea s-a comis
         await deschide(id); incarcaDocs(proiectId)
         flash('err', `Nu știu sigur dacă scanul s-a atașat (răspunsul serverului s-a pierdut: ${mesajEroareDoc(r.error)}). Documentul a fost reîncărcat — dacă scanul nu apare în listă, atașează-l din nou; fișierul ${r.orfan} rămâne în stocare.`)
+      } else {
+        // cu modificări nesalvate: NU reîncarc automat (le-aș înlocui cu versiunea serverului); scrierile se opresc până la reîncărcarea cerută
+        marcheazaConflict(id, 'incert')
+        flash('err', `Nu știu sigur dacă scanul și modificările din ecran s-au salvat (răspunsul serverului s-a pierdut: ${mesajEroareDoc(r.error)}). Modificările rămân în ecran; apasă „Reîncarcă versiunea serverului” ca să vezi ce s-a salvat (fișierul ${r.orfan} rămâne în stocare).`)
       }
     } catch (e) { console.error(e); flash('err', 'Scanul nu s-a atașat: ' + mesajEroareDoc(e)) }
     finally { setBusy(false) }
@@ -435,7 +443,7 @@ export default function IzoDocumenteIntrare() {
   if (!ed) return (
     <div>
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:12 }}>
-        <select style={{ ...S.input, maxWidth:360 }} value={proiectId || ''} onChange={e => setProiectId(Number(e.target.value))} disabled={busy}>
+        <select style={{ ...S.input, maxWidth:360 }} value={proiectId || ''} onChange={e => { golesteLista(); setProiectId(Number(e.target.value)) }} disabled={busy}>
           {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? `${p.cod_intern} · ` : ''}{p.nume}</option>)}
         </select>
         <div style={{ flex:1, fontSize:12, color:G.muted, minWidth:220 }}>
@@ -528,7 +536,9 @@ export default function IzoDocumenteIntrare() {
       )}
       {ed.conflict && !ed.stale && (
         <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.yellow, borderColor:G.yellow + '66', display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
-          <div style={{ flex:1 }}>⚠️ Documentul a fost salvat între timp de altcineva (sau din altă fereastră) — versiunea {ed.versiune} din ecran e veche. Salvarea, verificarea și scanurile sunt oprite până reîncarci versiunea serverului{ed.dirty ? '; modificările tale nesalvate rămân în ecran până atunci (copiază-le dacă ai nevoie de ele)' : ''}.</div>
+          <div style={{ flex:1 }}>⚠️ {ed.conflict === 'incert'
+            ? 'Ultima salvare a pierdut răspunsul serverului — nu se știe dacă s-a aplicat.'
+            : `Documentul a fost salvat între timp de altcineva (sau din altă fereastră) — versiunea ${ed.versiune} din ecran e veche.`} Salvarea, verificarea, scanurile și anularea sunt oprite până reîncarci versiunea serverului{ed.dirty ? '; modificările tale nesalvate rămân în ecran până atunci (copiază-le dacă ai nevoie de ele)' : ''}.</div>
           <button style={S.btnS} onClick={reincarcaDupaConflict} disabled={busy}>🔄 Reîncarcă versiunea serverului</button>
         </div>
       )}

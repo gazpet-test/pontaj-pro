@@ -641,9 +641,13 @@ describe('atașarea scanului: ștergerea fișierului doar când e sigur în afar
   const sal = (st, rasp) => async () => { st.apeluri.push('salveaza'); if (rasp instanceof Error) throw rasp; return rasp }
   it('eroareDefinitivaRpc: excepție Postgres / cod PostgREST / 4xx = definitiv; transport / 5xx fără cod / 408 = ambiguu', () => {
     for (const [e, st] of [[{ code: '40001' }, 500], [{ code: '23514' }, 400], [{ code: '42501' }, 403], [{ code: 'P0001' }, 400], [{ code: '22023' }, 400],
-      [{ code: '25001' }, 500], [{ code: 'PGRST202' }, 404], [{ message: 'x' }, 409]]) expect(eroareDefinitivaRpc(e, st)).toBe(true)
+      [{ code: '25001' }, 500], [{ code: 'PGRST202' }, 404], [{ code: 'PGRST100' }, 400], [{ code: 'PGRST301' }, 401], [{ message: 'x' }, 409]])
+      expect(eroareDefinitivaRpc(e, st)).toBe(true)
     for (const [e, st] of [[{ message: 'TypeError: Failed to fetch', code: '' }, 0], [{ message: 'x' }, 500], [{ message: 'x' }, 502], [{ message: 'x' }, 504],
-      [{ message: 'x' }, 408], [{ message: 'x' }, undefined]]) expect(eroareDefinitivaRpc(e, st)).toBe(false)
+      [{ message: 'x' }, 408], [{ message: 'x' }, undefined],
+      // review #826 r2: conexiunea la BD (PGRST0xx) nu dovedește rollback-ul — „Database client error” în timpul comenzii, COMMIT cu răspuns pierdut
+      [{ code: 'PGRST000' }, 503], [{ code: 'PGRST001', message: 'Database client error. Retrying the connection.' }, 503], [{ code: 'PGRST003' }, 504],
+      [{ code: 'PGRSTX00' }, 500]]) expect(eroareDefinitivaRpc(e, st)).toBe(false)
   })
   it('succes: întâi upload, apoi salvarea; nimic șters', async () => {
     const st = stor()
@@ -659,9 +663,9 @@ describe('atașarea scanului: ștergerea fișierului doar când e sigur în afar
       expect(st.apeluri).toEqual(['upload', 'salveaza', 'remove'])
     }
   })
-  it('salvare AMBIGUĂ (transport căzut / 504 / excepție) → fișierul RĂMÂNE (salvarea poate fi încă în zbor)', async () => {
+  it('salvare AMBIGUĂ (transport căzut / 504 / PGRST001 / excepție) → fișierul RĂMÂNE (salvarea poate fi încă în zbor)', async () => {
     for (const rasp of [{ data: null, error: { message: 'TypeError: Failed to fetch', code: '' }, status: 0 }, { data: null, error: { message: 'Gateway Timeout' }, status: 504 },
-      new Error('rețea')]) {
+      { data: null, error: { code: 'PGRST001', message: 'Database client error' }, status: 503 }, new Error('rețea')]) {
       const st = stor()
       const r = await ataseazaScanSigur({ storage: st, scan: S0, salveaza: sal(st, rasp) })
       expect(r).toMatchObject({ rez: 'necunoscut', orfan: S0.cale })
@@ -675,8 +679,8 @@ describe('atașarea scanului: ștergerea fișierului doar când e sigur în afar
     const st2 = stor({ data: null, error: { message: 'Failed to fetch' } }, { data: [], error: null })   // obiectul nu există (încă)
     expect(await ataseazaScanSigur({ storage: st2, scan: S0, salveaza: sal(st2, {}) })).toMatchObject({ rez: 'nesalvat', orfan: S0.cale })
     expect(st2.apeluri).toEqual(['upload', 'remove'])
-    const st3 = stor({ data: null, error: { message: 'Internal', status: 500 } })
-    expect(await ataseazaScanSigur({ storage: st3, scan: S0, salveaza: sal(st3, {}) })).toMatchObject({ rez: 'nesalvat', orfan: null })
+    const st3 = stor({ data: null, error: { message: 'Internal', status: 500 } })   // DELETE „reușit” nu dovedește nimic: un upload în zbor apare după
+    expect(await ataseazaScanSigur({ storage: st3, scan: S0, salveaza: sal(st3, {}) })).toMatchObject({ rez: 'nesalvat', orfan: S0.cale })
     expect(st3.apeluri).toEqual(['upload', 'remove'])
   })
 })
@@ -705,6 +709,16 @@ describe('componenta IzoDocumenteIntrare.jsx (sursa): doar contractul', () => {
     expect(src).toMatch(/select\('id, name, cod_3litere, site_id, activ'\)/)
     expect(src).toMatch(/!sondaGata\.current && lipsaReceptie\(e\)/)
     expect(src).toMatch(/golesteLista\(\)\s*\n\s*if \(!sondaGata/)   // la eșec lista veche (alt proiect) dispare
+  })
+  it('review #826 r2: răspuns pierdut la atașare peste modificări nesalvate → fără reîncărcare automată; conflictul oprește și anularea; lista golită la schimbarea proiectului', () => {
+    const corp = src.slice(src.indexOf('const adaugaScan'), src.indexOf('const scoateScan'))
+    const ramura = corp.slice(corp.indexOf('// cu modificări nesalvate: NU reîncarc automat'))
+    expect(ramura).toMatch(/marcheazaConflict\(id, 'incert'\)/)
+    expect(ramura.slice(0, ramura.indexOf('} catch'))).not.toMatch(/deschide\(/)
+    expect(corp).toMatch(/\} else if \(!doc\.dirty\) \{/)
+    expect(src).toMatch(/const poateAnula = [^\n]*!ed\.conflict/)
+    expect(src.slice(src.indexOf('const anuleazaCiorna'), src.indexOf('const adaugaScan'))).toMatch(/if \(opritScriere\(ed\)\) return/)
+    expect(src).toMatch(/onChange=\{e => \{ golesteLista\(\); setProiectId\(/)
   })
   it('RPC-urile chemate = cele din contract (fără anularea administrativă), salvarea doar cu argumenteSalveaza', () => {
     const rpc = [...src.matchAll(/\.rpc\(\s*'([^']+)'/g)].map(m => m[1])

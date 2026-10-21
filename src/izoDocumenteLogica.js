@@ -843,12 +843,16 @@ export async function urcaScan(storage, s) {
 
 /**
  * Eroare DEFINITIVĂ a unui RPC = serverul a răspuns clar că tranzacția NU s-a aplicat: excepție Postgres (SQLSTATE 22 / 23 / 25 / 40 /
- * 42 / P0 — RPC-ul a ridicat, tranzacția s-a anulat), cod PostgREST (PGRSTxxx: cererea respinsă) sau HTTP 4xx fără 408. Transportul
- * căzut (status 0, fără cod), 5xx fără cod, 408 / timeout = AMBIGUU (salvarea poate fi încă în zbor sau comisă). Aceeași disciplină ca #833 r3.
+ * 42 / P0 — RPC-ul a ridicat, tranzacția s-a anulat); cod PostgREST din grupele care resping cererea ÎNAINTE de execuție sau o anulează:
+ * PGRST1xx (cererea: parsare / negociere / limite), PGRST2xx (schema cache: funcție / tabel negăsit), PGRST3xx (JWT); sau HTTP 4xx fără
+ * 408. NU sunt definitive (review #826 r2): PGRST0xx (conexiunea la BD / pool / „Database client error” în timpul comenzii — nu dovedește
+ * rollback-ul, răspunsul la COMMIT se poate pierde), PGRSTX00 (internă), transportul căzut (status 0, fără cod), 5xx fără cod, 408 /
+ * timeout = AMBIGUU (salvarea poate fi încă în zbor sau comisă). Aceeași disciplină ca #833 r3.
  */
 export function eroareDefinitivaRpc(error, status) {
   const cod = String(error?.code || '')
-  if (/^(22|23|25|40|42|P0)[0-9A-Z]{3}$/.test(cod) || /^PGRST\d{3}$/.test(cod)) return true
+  if (/^(22|23|25|40|42|P0)[0-9A-Z]{3}$/.test(cod) || /^PGRST[123]\d\d$/.test(cod)) return true
+  if (/^PGRST/.test(cod)) return false
   return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408
 }
 
@@ -861,8 +865,11 @@ export function eroareDefinitivaRpc(error, status) {
  */
 export async function ataseazaScanSigur({ storage, scan, salveaza }) {
   try { await urcaScan(storage, scan) } catch (e) {
-    const sters = e?.ambiguu ? await stergeScanObiect(storage, scan.cale) : true
-    return { rez: 'nesalvat', data: null, error: e, orfan: sters ? null : scan.cale }
+    if (!e?.ambiguu) return { rez: 'nesalvat', data: null, error: e, orfan: null }
+    // upload ambiguu: ștergerea e best-effort — un upload încă în zbor se poate materializa DUPĂ ea (chiar după un DELETE reușit), deci
+    // calea rămâne raportată ca posibil orfan oricum (review #826 r2); niciun manifest nu ajunge la ea (salvarea nu pornește)
+    await stergeScanObiect(storage, scan.cale)
+    return { rez: 'nesalvat', data: null, error: e, orfan: scan.cale }
   }
   let rasp
   try { rasp = await salveaza() } catch (e) { rasp = { error: { message: e?.message || String(e) }, status: 0, transport: true } }
