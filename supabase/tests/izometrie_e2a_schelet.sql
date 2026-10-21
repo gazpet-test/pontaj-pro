@@ -121,14 +121,32 @@ CREATE POLICY executie_tevi_modify ON public.executie_tevi FOR ALL TO authentica
 ALTER TABLE public.executie_pachete_lansare ENABLE ROW LEVEL SECURITY;
 CREATE POLICY epl_all ON public.executie_pachete_lansare FOR ALL TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 
-CREATE TABLE public.executie_bonuri_consum (id bigserial PRIMARY KEY, proiect_id bigint, provenienta text);
-CREATE TABLE public.executie_bonuri_consum_linii (id bigserial PRIMARY KEY, bon_id bigint REFERENCES public.executie_bonuri_consum(id) ON DELETE CASCADE,
-  magazie_bucata_id bigint REFERENCES public.magazie_bucati(id), denumire text, cantitate numeric);
+-- bonurile de consum exact ca pe live (21.10.2026: coloane, default-uri, CHECK-uri, politici bonc_* / boncl_*)
+CREATE TABLE public.executie_bonuri_consum (
+  id bigserial PRIMARY KEY, numar_bon text, proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id), situatie_plata_id bigint,
+  provenienta text NOT NULL DEFAULT 'gazpet' CHECK (provenienta = ANY (ARRAY['beneficiar'::text, 'gazpet'::text])),
+  data_bon date NOT NULL DEFAULT CURRENT_DATE,
+  sursa text NOT NULL DEFAULT 'auto_sl' CHECK (sursa = ANY (ARRAY['auto_sl'::text, 'auto_montaj'::text, 'manual'::text])),
+  stare text NOT NULL DEFAULT 'generat' CHECK (stare = ANY (ARRAY['generat'::text, 'preluat'::text, 'anulat'::text])),
+  generat_de uuid, generat_la timestamptz NOT NULL DEFAULT now(), preluat_de uuid, preluat_la timestamptz, pdf_path text, observatii text,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE public.executie_bonuri_consum_linii (
+  id bigserial PRIMARY KEY, bon_id bigint NOT NULL REFERENCES public.executie_bonuri_consum(id) ON DELETE CASCADE,
+  magazie_bucata_id bigint REFERENCES public.magazie_bucati(id), tip_material_id integer REFERENCES public.magazie_tipuri_material(id),
+  denumire text, serie text, sarja text, dimensiune text, cantitate numeric NOT NULL DEFAULT 1, um text NOT NULL DEFAULT 'buc',
+  lungime_m numeric, cost_unitar numeric, valoare numeric, observatii text, created_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE public.executie_bonuri_consum ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.executie_bonuri_consum_linii ENABLE ROW LEVEL SECURITY;
-CREATE POLICY ebc_all ON public.executie_bonuri_consum FOR ALL TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
-CREATE POLICY ebcl_all ON public.executie_bonuri_consum_linii FOR ALL TO authenticated USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY bonc_sel ON public.executie_bonuri_consum FOR SELECT TO authenticated USING (true);
+CREATE POLICY bonc_ins ON public.executie_bonuri_consum FOR INSERT TO authenticated WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY bonc_upd ON public.executie_bonuri_consum FOR UPDATE TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY bonc_del ON public.executie_bonuri_consum FOR DELETE TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY boncl_sel ON public.executie_bonuri_consum_linii FOR SELECT TO authenticated USING (true);
+CREATE POLICY boncl_ins ON public.executie_bonuri_consum_linii FOR INSERT TO authenticated WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY boncl_upd ON public.executie_bonuri_consum_linii FOR UPDATE TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY boncl_del ON public.executie_bonuri_consum_linii FOR DELETE TO authenticated USING (auth.uid() IS NOT NULL);
 INSERT INTO public.executie_bonuri_consum (id, proiect_id, provenienta) VALUES (1, 3, 'beneficiar'), (2, 1, 'beneficiar');
+SELECT setval('public.executie_bonuri_consum_id_seq', 100);
 
 CREATE SCHEMA supabase_migrations;
 CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, statements text[], name text, created_by text, idempotency_key text, rollback text[]);

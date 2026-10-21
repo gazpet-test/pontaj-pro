@@ -27,7 +27,7 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    '20582ef89929cf5308ab17c0db6a46a3'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    'fce559aedfedc63091ae4ce40dc3fbf7'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
@@ -158,7 +158,7 @@ BEGIN
     public.fn_izo_garda_atribuiri(), public.fn_izo_porti_lipsa(), public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_depozit_in_registru(integer),
     public.fn_izo_refuz_site_proiect(), public.fn_izo_lock_partajat(bigint[]), public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[]),
     public.fn_izo_porti_definitii(), public.fn_izo_proiecte_site(integer), public.fn_izo_bucata_proiect(bigint),
-    public.fn_izo_proiect_tronson_blocat(bigint), public.fn_izo_vreun_protejat(bigint[]), public.fn_izo_refuz_truncate_cai_vechi(),
+    public.fn_izo_proiect_tronson_blocat(bigint), public.fn_izo_vreun_protejat(bigint[]), public.fn_izo_refuz_truncate_cai_vechi(), public.fn_izo_blocheaza_tabele(),
     public.fn_izo_garda_fapte(), public.fn_izo_garda_truncate_bucati(), public.fn_izo_garda_bucati(), public.fn_izo_garda_scriitor(),
     public.fn_izo_proiecte_pachet_blocat(bigint), public.fn_izo_uid(), public.fn_izo_site_proiect(bigint), public.fn_izo_loc_valid(bigint, integer, bigint),
     public.fn_izo_tip_material(text), public.fn_izo_tip_cod(integer), public.fn_izo_bucata_protejata(bigint),

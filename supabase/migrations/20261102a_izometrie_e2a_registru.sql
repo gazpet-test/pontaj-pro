@@ -318,8 +318,20 @@ BEGIN
     IF current_setting('transaction_isolation') <> 'read committed' THEN
       RAISE EXCEPTION 'izo: funcțiile registrului cer READ COMMITTED (acum %)', current_setting('transaction_isolation');
     END IF;
-    IF p_exclusiv THEN PERFORM pg_advisory_xact_lock(73010, p_proiect::integer);
+    IF p_exclusiv THEN
+      -- ordinea comună „tabel → advisory” (Codex r5): un TRUNCATE (ACCESS EXCLUSIVE) în curs e așteptat AICI, înainte de
+      -- advisory; altfel activarea ar ține advisory-ul și ar aștepta tabelul ținut de TRUNCATE-ul care așteaptă advisory-ul
+      PERFORM public.fn_izo_blocheaza_tabele();
+      PERFORM pg_advisory_xact_lock(73010, p_proiect::integer);
     ELSE PERFORM pg_advisory_xact_lock_shared(73010, p_proiect::integer); END IF;
+  END $f$;
+
+  -- ACCESS SHARE pe tabelele căilor vechi și ale registrului (doar TRUNCATE / DDL le așteaptă). DEFINER: writer-ul n-are
+  -- drepturi pe pachete / țevi / tronsoane. Intern (doar writer-ul, prin fn_izo_lock_proiect).
+  CREATE FUNCTION public.fn_izo_blocheaza_tabele() RETURNS void
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    LOCK TABLE public.executie_pachete_lansare, public.executie_tevi, public.executie_tronsoane, public.magazie_bucati IN ACCESS SHARE MODE;
   END $f$;
 
   -- lock PARTAJAT pe mai multe proiecte, în ordine crescătoare (review #806 r2: fără blocaj circular între două mutări).
@@ -381,7 +393,8 @@ BEGIN
          FROM pg_constraint c WHERE c.conrelid IN ('public.izo_proiect_config'::regclass, 'public.izo_atribuiri'::regclass, 'public.izo_importuri'::regclass,
               'public.magazie_bucati_evenimente'::regclass, 'public.magazie_bucati_miscari'::regclass)
             OR (c.conrelid = 'public.magazie_bucati'::regclass AND (c.conname LIKE 'magazie\_bucati\_izo\_%'
-                OR c.conname IN ('magazie_bucati_stare_check','magazie_bucati_locatie_tip_check')))),
+                OR c.conname IN ('magazie_bucati_stare_check','magazie_bucati_locatie_tip_check','magazie_bucati_parinte_id_fkey',
+                                 'magazie_bucati_radacina_id_fkey','magazie_bucati_depozit_id_fkey','magazie_bucati_tronson_id_fkey')))),
       (SELECT string_agg(pg_get_indexdef(i.oid), ',' ORDER BY i.relname) FROM pg_class i
         WHERE i.relkind = 'i' AND i.relnamespace = 'public'::regnamespace
           AND (i.relname LIKE 'ux\_magbuc\_izo\_%' OR i.relname LIKE 'ux\_izo\_%' OR i.relname LIKE 'izo\_%')),
@@ -444,6 +457,14 @@ BEGIN
                 WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('fn_izo_seteaza_nivel','fn_izo_import_sold_initial','fn_izo_import_storno','fn_izo_activeaza_si_importa')
                   AND has_function_privilege(a.n, p.oid, 'EXECUTE')) THEN
       v := array_append(v, 'EXECUTE din API pe funcțiile registrului');
+    END IF;
+    -- wrapper-e: o funcție cu alt owner decât writer-ul sau un view / o regulă care cheamă funcțiile registrului ar
+    -- deveni o cale nouă spre ele (Codex r5 6) — acceptate doar după review, cu actualizarea acestei porți
+    IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.proowner <> 'izo_registru_writer'::regrole
+                AND p.oid <> 'public.fn_izo_porti_lipsa()'::regprocedure   -- poarta însăși le numește în verificarea ACL
+                AND p.prosrc ~ 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)')
+       OR EXISTS (SELECT 1 FROM pg_rewrite rw WHERE pg_get_ruledef(rw.oid) ~ 'fn_izo_(seteaza_nivel|import_sold_initial|import_storno|activeaza_si_importa)') THEN
+      v := array_append(v, 'o funcție / un view din afara writer-ului cheamă funcțiile registrului (wrapper nerevizuit)');
     END IF;
     -- writer-ul are exact ce-i trebuie (un GRANT retras ar lăsa activarea admisă și importul nefuncțional)
     -- câte un privilegiu pe rând: has_table_privilege(…, 'A,B') e adevărat dacă există ORICARE (Codex r4 8)
@@ -1177,6 +1198,7 @@ BEGIN
     public.fn_izo_proiecte_site(integer), public.fn_izo_bucata_proiect(bigint),
     public.fn_izo_vreun_protejat(bigint[]), public.fn_izo_refuz_site_proiect(), public.fn_izo_pachete_neconcordante(bigint),
     public.fn_izo_proiect_tronson_blocat(bigint), public.fn_izo_proiecte_pachet_blocat(bigint), public.fn_izo_refuz_truncate_cai_vechi(),
+    public.fn_izo_blocheaza_tabele(),
     public.fn_izo_activeaza_si_importa(bigint, text, jsonb, text),
     public.fn_izo_depozit_in_registru(integer), public.fn_izo_garda_scriitor(), public.fn_izo_garda_bucati(),
     public.fn_izo_garda_truncate_bucati(), public.fn_izo_garda_fapte(), public.fn_izo_garda_atribuiri(),
@@ -1194,7 +1216,7 @@ BEGIN
   GRANT EXECUTE ON FUNCTION public.fn_izo_acces(bigint, text, text, text), public.fn_izo_tip_material(text),
     public.fn_izo_loc_valid(bigint, integer, bigint), public.fn_izo_site_proiect(bigint), public.fn_izo_uid(),
     public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_porti_lipsa(), public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[]),
-    public.fn_izo_porti_definitii(), public.fn_izo_pachete_neconcordante(bigint) TO izo_registru_writer;
+    public.fn_izo_porti_definitii(), public.fn_izo_pachete_neconcordante(bigint), public.fn_izo_blocheaza_tabele() TO izo_registru_writer;
   -- TRUNCATE pe magazie_bucati: niciun rol API (live: service_role îl avea — review #806 r2); revenirea îl redă
   REVOKE TRUNCATE ON TABLE public.magazie_bucati FROM PUBLIC, anon, authenticated, service_role;
 

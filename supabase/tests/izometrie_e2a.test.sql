@@ -354,6 +354,23 @@ REVOKE UPDATE ON public.izo_importuri FROM izo_registru_writer;
 SELECT teste.eroare('T12e writer-ului îi lipsește UN drept (UPDATE pe izo_importuri) → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'drepturile writer-ului');
 GRANT UPDATE ON public.izo_importuri TO izo_registru_writer;
 SELECT teste.e('T12f drepturile refăcute: porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+ALTER TABLE public.magazie_bucati DROP CONSTRAINT magazie_bucati_depozit_id_fkey,
+  ADD CONSTRAINT magazie_bucati_depozit_id_fkey FOREIGN KEY (depozit_id) REFERENCES public.logistica_depozite(id) ON DELETE CASCADE;
+SELECT teste.eroare('T12g FK-ul depozitului slăbit (ON DELETE CASCADE) → activarea refuzată pe definiții', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'definițiile porților');
+ALTER TABLE public.magazie_bucati DROP CONSTRAINT magazie_bucati_depozit_id_fkey,
+  ADD CONSTRAINT magazie_bucati_depozit_id_fkey FOREIGN KEY (depozit_id) REFERENCES public.logistica_depozite(id) ON DELETE RESTRICT;
+ALTER TABLE public.magazie_bucati DROP CONSTRAINT magazie_bucati_izo_doar_registru_check;
+SELECT teste.eroare('T12h CHECK-ul doar_registru scos → activarea refuzată pe definiții', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'definițiile porților');
+ALTER TABLE public.magazie_bucati ADD CONSTRAINT magazie_bucati_izo_doar_registru_check CHECK (
+    tip_cod IS NOT NULL OR (uid IS NULL AND parinte_id IS NULL AND radacina_id IS NULL AND cod_bucata IS NULL
+      AND capat_stanga IS NULL AND capat_dreapta IS NULL AND dezambiguare IS NULL AND lungime_aviz_mm IS NULL
+      AND lungime_masurata_mm IS NULL AND lungime_mm IS NULL AND lungime_calculata = false AND perete_mm IS NULL
+      AND diametru_mm IS NULL AND lot IS NULL AND aviz_intrare_id IS NULL AND nr_crt_aviz IS NULL AND bend_no IS NULL
+      AND capat_marcaj IS NULL AND depozit_id IS NULL AND tronson_id IS NULL AND server_ver IS NULL));
+CREATE FUNCTION teste.wrapper_activare(p bigint) RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$ SELECT public.fn_izo_seteaza_nivel(p, 'stoc', 'wrapper') $$;
+SELECT teste.eroare('T12i o funcție nerevizuită care cheamă funcțiile registrului → porțile refuză', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'wrapper nerevizuit');
+DROP FUNCTION teste.wrapper_activare(bigint);
+SELECT teste.e('T12j porțile refăcute după FK / CHECK / wrapper', cardinality(public.fn_izo_porti_lipsa()) = 0);
 SELECT teste.e('T12c după corectare: proiectul 2 off, fără pachete neconcordante', public.fn_izo_nivel(2) = 'off' AND public.fn_izo_pachete_neconcordante(2) = 0);
 
 SELECT 'TESTE SQL: TOATE OK';
