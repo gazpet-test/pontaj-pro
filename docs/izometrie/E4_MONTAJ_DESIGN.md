@@ -1,6 +1,6 @@
-# E4 — Montajul: tableta inginerului de izometrie, cu salvare (design r2, pentru review ÎNAINTE de cod)
+# E4 — Montajul: tableta inginerului de izometrie, cu salvare (design r5, pentru review ÎNAINTE de cod)
 
-**Stare**: r4 (review Jakarinos pe r3: NO-GO, 0 P0, 7 P1; pe r2: NO-GO, 11 P1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
+**Stare**: r5 (review Jakarinos pe r4: NO-GO, 0 P0, 3 P1, 1 P2; pe r3: NO-GO, 7 P1; pe r2: NO-GO, 11 P1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
 
 **r2 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r1 (2 P0, 8 P1, 3 P2):
 - **P0** corecția de lungime e permisă doar pe o rădăcină fără descendenți; în arbore e refuzată explicit (§8.6). Tăierea unei bucăți montate are trei ramuri separate, cu ambele capete reconciliate, iar o bucată legată de pachet se dezleagă întâi (§8.5);
@@ -8,6 +8,12 @@
 - **P1** jurnalul rămâne doar-adaug: un singur INSERT, la final, iar erorile se scriu după rollback-ul savepoint-ului (§5.4). Hash-ul cererii e separat de amprenta preview-ului (§5.6). Identitatea e fixată pe lot și pe angajat (§5.7, §6.3);
 - **P1** lock-urile se iau o dată pe lot, în ordinea globală, iar picker-ul nu mai urcă de la FOR SHARE la UPDATE (§5.4, §7.3, §10.5). Matricea de securitate e completă, cu GPS-ul scos din JSON (§9.4, §9.5). Activarea pe tronson verifică OLD și NEW (§7.4);
 - **P2** CAS-ul din `actualizeazaRandInPachet` e descris corect (§7.3); Q-E4-13 B / C cer fișa de automatizare (§12); testele noi (§11, 13–16).
+
+**r5 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r4 (închise de Jak: r3 #2 PV-ul, #3 contorul, #6 ACK-ul, #7 activarea; 3 P1, 1 P2):
+- **reconcilierea** acceptă lanțul complet: R (pe `bucata_decl_uid`) → `transferata` → R′ (pe `bucata_id`, `transfer_din_id` = R) → `consumata` de consumatorul din același lot, cu evenimentul lui. R nu e niciodată „consumată de consumator” (§3.2, §6.3 pașii 8–10, testul 13);
+- **seria lămurită de MP**: `izo_montaj_writer` primește UPDATE și pe `identificare`; trigger-ul de stări îi permite `bucata_id` / `identificare` doar în tranziția `in_verificare` → `trimisa` / `conflict`, `nerezolvata` → `bucata`, sub contextul `fn_izo_serie_lamureste` (§6.4, §9.4, testul 20);
+- **`conflict` are toate tranzițiile**: `conflict` → `blocata` la invalidarea dependenței (ștergere, revizie, respingere), `conflict` → `respinsa` de MP într-o sesiune trimisă; decizia de cascadă e definită pe fiecare stare deschisă; o sesiune rămasă fără rânduri deschise după o decizie a MP-ului se închide, oricare ar fi starea ei (§6.4, testul 20);
+- **P2**: R1 (d) găsit pe server = **rezultatul** `acceptat` + **starea** `conflict` (`conflict_cod = r1d`), nu rezultatul `conflict` (§5.4, §5.5, §5.8, §8.3, §8.6).
 
 **r4 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r3 (închise de Jak: r2 #2, #3, #4, #6, #8, #9, #10; 7 P1):
 - **transferul** acoperă **orice** consumator al copilului (și o tăiere ulterioară care îl are ca sursă); invariantul „nicio rezervare activă pe uid-ul unui copil născut” e verificat la reconciliere (§3.2, §6.3);
@@ -278,9 +284,9 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
 - **Transferul la nașterea copilului** (r3; r4: pentru **orice** consumator). Aprobarea tăierii naște copilul (`magazie_bucati.uid` = uid-ul declarat). În același eveniment, **fiecare** rezervare activă pe `bucata_decl_uid` = acel uid, oricine o ține:
   - a copilului `ramane_montat`, ținută chiar de tăierea aprobată → `consumata` (copilul se naște `montata`);
   - a oricărei alte declarații (un montaj pe copil sau **o tăiere ulterioară** T2 care are copilul ca sursă) → `transferata`. În aceeași tranzacție se creează rezervarea pe `bucata_id` = copilul născut, pentru aceeași declarație (`declaratie_id`, `declaratie_versiune`, autor, `expira_dupa`), cu `transfer_din_id`. Consumatorul rămâne neaprobat, iar copilul nu devine liber nicio clipă: indexul UNIQUE pe `bucata_id` WHERE `activa` îl apără din commit-ul tăierii;
-  - dacă consumatorul e în același lot, el consumă apoi rezervarea transferată, în ordinea simulării (§6.3).
+  - dacă consumatorul e în același lot, el consumă apoi, în ordinea simulării, rezervarea **transferată** R′ (pe `bucata_id`), nu pe cea originală R: R rămâne `transferata`, iar R′ devine `consumata`, cu `eveniment_id` = evenimentul consumatorului (`montaj`, sau `taiere` la T2). Lanțul R → R′ e exact ce verifică reconcilierea (§6.3 pasul 10, r5).
 
-  După eveniment nu mai rămâne nicio rezervare activă pe `bucata_decl_uid` al unui copil născut (invariant, verificat la reconciliere și de un CHECK prin trigger). Deci orice consumator al unui copil are tot timpul exact o rezervare activă: pe `bucata_decl_uid` înainte de naștere, pe `bucata_id` după. Instantaneul arată copilul născut ca „rezervat”. O versiune nouă a consumatorului, salvată după naștere, care numește copilul prin `decl_uid`, rezervă `bucata_id`-ul lui: serverul rezolvă uid-ul prin `magazie_bucati.uid`, sub lock-ul rădăcinii.
+  După eveniment nu mai rămâne nicio rezervare activă pe `bucata_decl_uid` al unui copil născut (invariant, verificat la reconciliere și de un CHECK prin trigger). Deci orice consumator **neaprobat** al unui copil are tot timpul exact o rezervare activă: pe `bucata_decl_uid` înainte de naștere, pe `bucata_id` după. Instantaneul arată copilul născut ca „rezervat”. O versiune nouă a consumatorului, salvată după naștere, care numește copilul prin `decl_uid`, rezervă `bucata_id`-ul lui: serverul rezolvă uid-ul prin `magazie_bucati.uid`, sub lock-ul rădăcinii.
 
 **`izo_suduri` + `izo_suduri_capete`** (v2.3 §1.5; prefixul `izo_`, ca în Q-E3-1 A):
 - **sudura**:
@@ -390,7 +396,7 @@ Toate funcțiile sunt SECURITY DEFINER, cu `SET search_path = public, pg_temp` �
 | `fn_izo_gps_citeste(p_decl)` | `postgres` | `authenticated` | doar citire: coordonatele unei declarații, doar MP-ului proiectului și owner-ului (Q-E4-15, §9.5) |
 | `fn_izo_revizie_cere(p_cheie, p_decl, p_versiune, p_motiv)` | `izo_montaj_writer` | `authenticated` | „revizie cerută” pe un rând |
 | `fn_izo_respinge(p_cheie, p_decl, p_versiune, p_motiv, p_dependente)` | `izo_montaj_writer` | `authenticated` | respingerea, cu decizia pe fiecare dependență; și rândurile unei sesiuni abandonate (§6.4) |
-| `fn_izo_serie_lamureste(p_cheie, p_decl, p_versiune, p_bucata, p_motiv)` | `izo_montaj_writer` | `authenticated` | rândul „în verificare” trece pe bucata reală (rămâne de aprobat) |
+| `fn_izo_serie_lamureste(p_cheie, p_decl, p_versiune, p_bucata, p_motiv)` | `izo_montaj_writer` | `authenticated` | rândul „în verificare” trece pe bucata reală: `identificare` `nerezolvata` → `bucata`, starea `trimisa` (rămâne de aprobat); contractul în §6.4 (r5) |
 | `fn_izo_tranzitie_confirma(p_sudura, p_motiv)` | `izo_montaj_writer` | `authenticated` | „tranziție executată conform proiect / WPS” (idempotentă natural: o sudură deja confirmată nu se mai scrie) |
 | `fn_izo_pachet_rand_note(p_teava, p_updated_at, p_observatii, p_pm_cod, p_pa_ut_cod, p_ut_cod)` | `izo_montaj_writer` | `authenticated` | r3: pe tronsoanele în flux, singura cale pentru observații și codurile NDT, cu ordinea scriitorilor de pachet (§7.3, §7.4) |
 | `fn_izo_iesire_tronson(p_cheie, p_depozit, p_tronson, p_bucati, p_nr_aviz, p_data)` | `izo_montaj_writer` | `authenticated` | ieșirea pe tronson (gestionar) |
@@ -552,16 +558,18 @@ Pașii (v2.3 §4.4b, adaptat; r2: lock-urile o dată pe lot, jurnalul scris o si
 - nejurnalizate, dar **terminale pentru coadă** (r4): `duplicat` (repetă răspunsul final salvat, deci tableta îl ia drept ACK), `conflict_op` (operația trece în lista locală „de verificat”);
 - nejurnalizate și nefinale (operația rămâne în coadă, cu același `op_id`): `blocat_de_conflict`, `reincearca`, `fara_drept`, `front_expirat`, `limita`, `alt_dispozitiv` (cu prima încercare în `izo_sync_incercari`).
 
-Tripleta dublată (R1 d) găsită pe server nu oprește operația, pentru că tăierea fizică s-a întâmplat deja. Declarația e acceptată (`acceptat`) cu `stare = conflict` (R1 d deschis, „revizie cerută”), iar nimic nu intră în registru până la lungimea reală.
+Tripleta dublată (R1 d) găsită pe server nu oprește operația, pentru că tăierea fizică s-a întâmplat deja. **Două lucruri separate** (r5): rezultatul operației (`izo_operatii.rezultat`) e `acceptat` (efectele se scriu, iar o retrimitere primește `duplicat` cu același `acceptat`); **starea** declarației e `conflict`, cu `conflict_cod = r1d`. Nu e rezultatul `conflict` (acela e un refuz, fără efecte) și nici starea `revizie_ceruta` (pe aceea o cere doar MP-ul). Inginerul îl repară cu o versiune nouă, pe lungimea reală; nimic nu intră în registru până atunci.
 
 ### 5.5 Conflictele
+
+Coloana „Serverul” dă **rezultatul operației** (`izo_operatii.rezultat`, §5.4); unde se schimbă și starea declarației, e scrisă separat, ca „starea …” (r5).
 
 | Situația | Serverul | Ce arată tableta |
 |---|---|---|
 | două tablete, pe tronsoane diferite, aleg aceeași țeavă | a doua rezervare dă 23505 → `conflict` | cardul roșu „montată și pe TR15S3 (Viciu, 11:20)”; alege altă țeavă (prototip `SERVER_MONTAT`) |
 | bucata e montată, tăiată sau mutată între instantaneu și sincronizare | `conflict` (starea bucății) | la fel |
 | aceeași sudură (nr + sufix), declarată cu alte capete | `conflict` (R4) | „sudura există cu altă țeavă — verifică numărul” |
-| copil cu tripletă dublată (R1 d), aflată pe server | `conflict`, „revizie cerută” | „măsoară din nou lungimea reală” |
+| copil cu tripletă dublată (R1 d), aflată pe server | rezultatul `acceptat`; **starea** declarației `conflict` (`conflict_cod = r1d`), nimic în registru (r5) | „măsoară din nou lungimea reală” |
 | tăiere sau montaj pe o bucată fără PV / în carantină | `eroare` (`fara_pv` / `carantina`) | mesaj clar; alege altă țeavă |
 | alt dispozitiv pe front | `alt_dispozitiv`, nefinal (prima încercare în `izo_sync_incercari`, `op_id` liber) | „tronsonul e luat de altă tabletă — decide MP-ul”; operațiile rămân în coadă și pleacă după ce frontul revine |
 | rezervarea unei ciorne, expirată și preluată de altă declarație | nimic pe declarația veche; ea apare `rezervare_pierduta` în instantaneu, iar `sesiune_trimite` e refuzată până la o versiune nouă sau ștergere | „țeava a fost luată între timp — alege alta” |
@@ -621,7 +629,7 @@ Pe canalele de birou, rândul din `izo_operatii` (și `izo_aprobari`) se scrie �
 |---|---|---|---|
 | formatul seriei `999AA99999`; prefixul; aceleași 3 cifre pe 2 prefixe (alegere explicită) | da | — | — |
 | bucata disponibilă / rezervată | da (instantaneul) | da (arbitru: rezervarea) | da |
-| R1 (d), tripleta serie + șarjă + lungime la cm | da, blochează salvarea normală | da (`conflict`, revizie) | refuz |
+| R1 (d), tripleta serie + șarjă + lungime la cm | da, blochează salvarea normală | da: rezultatul `acceptat`, starea `conflict` (`r1d`) | refuz |
 | R3, conservarea la tăiere | da | da | da (exact) |
 | R4, sudura cu 2 capete; capătul liber | da | da | da |
 | R5, lungimea ≤ disponibil + 20 mm, ≤ `lungime_max_mm` | da | da | da |
@@ -665,21 +673,29 @@ Ordinea, ca în E3 §4:
      - e `trimisa`, fără conflict deschis, cu R1 (d) închis;
      - R3 exact, R4 cu 2 capete, lungimea confirmată;
      - **montajul pe o bucată din registru**: rezervarea activă pe `bucata_id` e a rândului (versiunea lui); bucata e `pe_tronson` pe tronsonul sesiunii;
-     - **montajul pe un copil declarat**: tăierea lui e aprobată deja sau e în lot, mai devreme în ordinea simulării, la versiunea din `depinde_de_versiune`. Rezervarea rândului (versiunea lui) e: pe `bucata_decl_uid`, dacă tăierea e în lot; pe `bucata_id` = copilul născut, cu `transfer_din_id`, dacă tăierea a fost aprobată într-un lot anterior (r3, §3.2). În starea simulată, copilul e `pe_tronson` pe tronsonul sesiunii (îl moștenește de la părinte, care trebuie să fie acolo: ieșirea e făcută, Q-E4-2 A);
-     - **tăierea**: rezervarea pe sursă e a ei: pe `bucata_id` (sursă din registru, inclusiv un copil născut dintr-o tăiere aprobată anterior, cu rezervarea transferată, r4) sau pe `bucata_decl_uid` (sursa e copilul unei tăieri din același lot); în starea simulată, sursa e `pe_tronson` sau `montata` (§8.5);
+     - **montajul pe un copil declarat**: tăierea lui e aprobată deja sau e în lot, mai devreme în ordinea simulării, la versiunea din `depinde_de_versiune`. Rezervarea rândului (versiunea lui) e: pe `bucata_decl_uid`, dacă tăierea e în lot; pe `bucata_id` = copilul născut, cu `transfer_din_id`, dacă tăierea a fost aprobată într-un lot anterior (r3, §3.2). r5: când tăierea e în lot, starea simulată de după pasul ei are deja transferul (R `transferata`, R′ activă pe `bucata_id`), deci montajul se validează și se marchează pe R′. În starea simulată, copilul e `pe_tronson` pe tronsonul sesiunii (îl moștenește de la părinte, care trebuie să fie acolo: ieșirea e făcută, Q-E4-2 A);
+     - **tăierea**: rezervarea pe sursă e a ei: pe `bucata_id` (sursă din registru, inclusiv un copil născut dintr-o tăiere aprobată anterior, cu rezervarea transferată, r4) sau pe `bucata_decl_uid` (sursa e copilul unei tăieri din același lot; ca la montaj, după pasul tăierii-părinte se validează pe R′, transferată); în starea simulată, sursa e `pe_tronson` sau `montata` (§8.5);
      - PV-ul se verifică pe **rădăcină** (copiii n-au aviz, §3.3), după regula E3 §8;
    - o dependență care lipsește (nici aprobată, nici în lot) → refuz pe tot apelul, cu lista. MP-ul adaugă tăierea în lot sau scoate montajul;
    - corecțiile de lungime au motivul în `p_decizii` și respectă §8.6 (doar rădăcina fără descendenți).
 9. **Marcajul**: `fn_izo_montaj_marcheaza('aproba', aprobare, proiect, tronson, …)`. De aici urmează doar DML static, **în ordinea simulării**:
    - pe fiecare rând:
      - `corectie`, dacă e cazul;
-     - `taiere`: părintele trece `taiata`; copiii se nasc cu uid-ul și literele rezervate (copilul calculat cu `lungime_calculata`); mișcările `consumat` / `nascut`; capetele sudate ale părintelui trec pe copii, după ramura din §8.5; rezervările pe copii (`bucata_decl_uid`): a copilului `ramane_montat` (ținută de tăierea însăși) → `consumata`; **toate celelalte** (montaje, tăieri ulterioare) → `transferata` + rezervarea nouă pe `bucata_id`, pentru aceeași declarație (§3.2, r4). Consumatorul din același lot o consumă la pasul lui;
+     - `taiere`: părintele trece `taiata`; copiii se nasc cu uid-ul și literele rezervate (copilul calculat cu `lungime_calculata`); mișcările `consumat` / `nascut`; capetele sudate ale părintelui trec pe copii, după ramura din §8.5; rezervările pe copii (`bucata_decl_uid`): a copilului `ramane_montat` (ținută de tăierea însăși) → `consumata`; **toate celelalte** (montaje, tăieri ulterioare) → `transferata` + rezervarea nouă pe `bucata_id`, pentru aceeași declarație (§3.2, r4). Consumatorul din același lot consumă R′ la pasul lui; R rămâne `transferata` (r5);
      - `montaj`: piesa trece `montata`; mișcarea `montat`;
    - sudurile: `declarata` → `aprobata`; capetele trec de pe `bucata_decl_uid` pe `bucata_id`; se calculează `tranzitie_perete`;
-   - rezervările: `consumata`, cu `eveniment_id`;
+   - rezervările: pe fiecare rând `montaj` / `taiere` aprobat, rezervarea lui activă pe piesă / sursă (la consumatorul unui copil născut în lot: R′, cea transferată) → `consumata`, cu `eveniment_id` = evenimentul `montaj` / `taiere` al rândului;
    - declarațiile: `aprobata`, cu `aprobat_de` și `eveniment_ids`;
    - sesiunea: `inchisa` când nu mai are rânduri deschise; cât are rânduri `in_verificare`, rămâne `trimisa`.
-10. **Reconcilierea**: mișcările, bucățile, capetele, sudurile și rezervările scrise = efectele simulate de la pasul 8. R3 se reverifică pe fiecare rădăcină atinsă. Pentru fiecare copil născut din lot (r4): nicio rezervare activă nu mai rămâne pe `bucata_decl_uid`-ul lui; fiecare rezervare care era activă pe el înainte e fie `consumata` (de tăierea însăși sau de un consumator din lot), fie `transferata`, cu exact o rezervare nouă activă pe `bucata_id`, a aceleiași declarații. Un copil fără nicio rezervare înainte rămâne liber (n-avea consumator declarat). Altfel excepție, deci rollback total.
+10. **Reconcilierea**: mișcările, bucățile, capetele, sudurile și rezervările scrise = efectele simulate de la pasul 8. R3 se reverifică pe fiecare rădăcină atinsă. **Rezervările copiilor născuți** (r5: lanțul complet). Pentru fiecare copil născut din lot și fiecare rezervare R activă pe `bucata_decl_uid`-ul lui înainte de marcaj:
+    - pe `bucata_decl_uid` nu mai rămâne nicio rezervare activă;
+    - R a copilului `ramane_montat`, ținută de tăierea însăși → `consumata`, cu `eveniment_id` = evenimentul `taiere`;
+    - orice altă R → `transferata`, cu **exact o** rezervare R′ pe `bucata_id` = copilul, cu `transfer_din_id` = R.id și aceeași `declaratie_id` + `declaratie_versiune` + autor. Apoi:
+      - declarația lui R′ e în lot → R′ e `consumata`, cu `eveniment_id` = evenimentul acelei declarații (`montaj`, sau `taiere` la o tăiere ulterioară T2), iar declarația e `aprobata` în acest apel;
+      - declarația lui R′ nu e în lot → R′ rămâne activă (o consumă un lot ulterior, testul 17);
+    - un copil fără nicio R înainte rămâne liber (n-avea consumator declarat).
+
+    Pe rândurile aprobate în apel: nicio rezervare activă nu le mai rămâne; fiecare `montaj` / `taiere` are exact o rezervare `consumata` pe piesă / sursă, cu evenimentul lui (plus, la tăiere, rezervarea copilului `ramane_montat`). R `consumata` direct de un consumator, R′ lipsă sau dublă, R′ activă după aprobarea declarației ei → excepție, deci rollback total.
 11. **Jurnalul**, ultima scriere: `izo_aprobari` + `izo_operatii` (cheia, `hash_cerere`, `amprenta`, deciziile, răspunsul). O excepție oriunde înainte anulează tot, inclusiv jurnalul.
 
 **Răspunsul**: evenimentele, bucățile noi (uid → id), sudurile aprobate și lista „fișe de tăiere de generat” (rădăcinile tăiate în lot).
@@ -697,22 +713,27 @@ Ordinea, ca în E3 §4:
 | `trimisa`, `in_verificare` | `revizie_ceruta` / `respinsa` | MP-ul (`fn_izo_revizie_cere` / `fn_izo_respinge`) |
 | `in_verificare` | `trimisa` / `conflict` (versiune nouă, pe bucată; `conflict` = R1 d) | inginerul (a) sau MP-ul (b), mai jos |
 | `revizie_ceruta`, `conflict`, `blocata` (sesiune trimisă) | `trimisa` / `conflict` / `in_verificare` (versiune nouă: `conflict` la R1 d, `in_verificare` dacă piesa rămâne nerezolvată) | inginerul, `decl_salveaza` cu CAS |
-| `revizie_ceruta`, `blocata` | `respinsa` | MP-ul |
+| `revizie_ceruta`, `blocata`, `conflict` (sesiune trimisă; `conflict` adăugat în r5) | `respinsa` | MP-ul, `fn_izo_respinge`, cu motiv, oricând (ca la `trimisa`): un rând revenit `conflict` după revizie nu mai ține sesiunea deschisă dacă autorul e plecat sau revocat |
 | `trimisa` | `aprobata` | MP-ul, `fn_izo_aproba` |
-| `ciorna`, `trimisa`, `in_verificare`, `revizie_ceruta` | `blocata` | serverul, când o dependență e revizuită, respinsă sau ștearsă (mai jos); starea veche se păstrează în `stare_inainte_blocare` |
-| `blocata` (`dependenta_in_revizie`) | `stare_inainte_blocare` | serverul, în lotul inginerului care salvează versiunea nouă a dependenței, când aceasta revine `trimisa` cu copilul folosit neschimbat (mai jos) |
+| `ciorna`, `conflict` (r5), `trimisa`, `in_verificare`, `revizie_ceruta` | `blocata` | serverul, când o dependență e revizuită, respinsă sau ștearsă (mai jos), în ambele tipuri de sesiune; starea veche se păstrează în `stare_inainte_blocare` (la `conflict`, și `conflict_cod` rămâne) |
+| `blocata` (`dependenta_in_revizie`) | `stare_inainte_blocare` (inclusiv `conflict`, r5) | serverul, în lotul inginerului care salvează versiunea nouă a dependenței, când aceasta revine `trimisa` cu copilul folosit neschimbat (mai jos) și nicio altă dependență din lanțul rândului nu mai e în revizie sau anulată |
 | `ciorna`, `conflict`, `blocata`, într-o sesiune `deschisa` **abandonată** (r3) | `respinsa` | MP-ul, `fn_izo_respinge`, cu motiv. „Abandonată” = frontul autorului pe tronson e inactiv sau expirat (eliberat de MP, §6.7) **sau** autorul nu mai are dreptul (modul / atribuire). Cât autorul are front valid, MP-ul nu-i respinge ciornele |
 
 - **`aprobata` e finală**: nu se revizuiește, nu se respinge și nu primește versiuni noi (refuz `rand_aprobat`, pe orice canal). O greșeală descoperită după aprobare se repară în registru, prin storno / corecție (E2a), în afara E4; un design separat după pilot.
 - **`respinsa`** și **`stearsa`** sunt finale.
 - **Pierderea rezervării** (o ciornă a cărei rezervare a expirat și a fost preluată, §5.4) **nu e o tranziție**: rândul rămâne în starea lui, iar condiția derivată `rezervare_pierduta` oprește `sesiune_trimite` și aprobarea până la o versiune nouă sau ștergere. Deci nicio scriere pe rândul altui autor.
+- **Un rând deja `blocata`** rămâne `blocata` la o nouă invalidare (r5): `stare_inainte_blocare` nu se suprascrie, iar `blocata_motiv` trece pe cel mai sever (`dependenta_anulata` înaintea `dependenta_in_revizie`). Nu e o tranziție nouă, ci aceeași stare cu motivul actualizat (permisă de trigger doar serverului, în operațiile care invalidează).
 - **Sesiunea abandonată** (r3): după ce MP-ul a respins ultimul rând deschis, sesiunea trece `inchisa` în aceeași tranzacție (§3.2). Rezervările rândurilor respinse se eliberează (`respinsa`). Cu asta, oprirea fluxului (§3.1) nu poate rămâne blocată de un autor plecat sau revocat.
+- **Închiderea sesiunii, în general** (r5): după orice decizie a MP-ului (aprobare, respingere, cascadă), o sesiune `trimisa` sau `deschisa` abandonată fără niciun rând deschis (`ciorna`, `trimisa`, `in_verificare`, `conflict`, `blocata`, `revizie_ceruta`) trece `inchisa` în aceeași tranzacție. Cu autorul revocat, drumul pe o sesiune trimisă e: MP-ul respinge rândurile rămase (inclusiv cele `conflict` / `blocata`) → sesiunea `inchisa` → oprirea fluxului poate trece.
 
 **Invalidarea descendenților** (r2). Închiderea unei tăieri T = montajele și tăierile pe copiii ei declarați, sudurile cu capete pe acești copii și cuplările care depind de T, calculată tranzitiv:
 - **T → `revizie_ceruta`**: descendenții neaprobați trec `blocata` (`dependenta_in_revizie`). Rezervările și literele lor rămân. Când T revine `trimisa`, la o versiune nouă:
   - copiii cu același uid și aceeași lungime rămân, iar dependenții lor revin la `stare_inainte_blocare` (cu `depinde_de_versiune` actualizat de server, în același lot, sub lock-urile din §5.4 pasul 1–2). La aprobare se revalidează oricum, iar amprenta se schimbă;
   - copiii schimbați sau dispăruți devin `anulata`: literele se eliberează, rezervările pe ei se eliberează (`parinte_anulat`), iar dependenții lor rămân `blocata` până la o versiune nouă a lor.
-- **T → `respinsa` / `stearsa`**: toți copiii declarați devin `anulata`, iar rezervările pe ei se eliberează. Pentru fiecare descendent, MP-ul (`p_dependente`) alege `respinge` (în cascadă) sau `blocheaza` (inginerul îl salvează din nou, pe altă piesă). La `stearsa` (inginerul, în sesiune deschisă), descendenții trec `blocata`.
+- **T → `respinsa` / `stearsa`**: toți copiii declarați devin `anulata`, iar rezervările pe ei se eliberează. Pentru fiecare descendent, MP-ul (`p_dependente`) alege `respinge` (în cascadă) sau `blocheaza` (inginerul îl salvează din nou, pe altă piesă). La `stearsa` (inginerul, în sesiune deschisă), descendenții trec `blocata`. **Decizia permisă, pe starea descendentului** (r5), ca nicio cascadă să nu ceară o tranziție lipsă din tabel:
+  - într-o sesiune `trimisa` (`trimisa`, `in_verificare`, `revizie_ceruta`, `conflict`, `blocata`): `respinge` → `respinsa`, `blocheaza` → `blocata` (un `blocata` rămâne `blocata`, cu motivul `dependenta_anulata`);
+  - într-o sesiune `deschisa` (`ciorna`, `conflict`, `blocata`): doar `blocheaza`, pentru că MP-ul nu respinge ciornele unui autor cu front valid; `respinge` e permis doar dacă sesiunea e abandonată (rândul de mai sus din tabel). Altă decizie → refuz `decizie_nepermisa`, pe tot apelul;
+  - `p_dependente` are exact câte o decizie pe fiecare descendent din închiderea recalculată sub lock (§5.6, ca `p_decizii`).
 - **T `aprobata`** nu se mai schimbă, deci nu invalidează nimic.
 
 **Lock-urile invalidării pe birou** (r4): `fn_izo_revizie_cere` și `fn_izo_respinge` iau, ca aprobarea (§6.3 pasul 2), sesiunile și declarațiile rândului **și ale închiderii lui tranzitive** (descendenții neaprobați, în orice stare deschisă, plus sudurile lor), FOR UPDATE, după id, apoi rădăcinile (9). Închiderea se calculează înaintea lock-urilor și se recalculează după ele; dacă diferă → refuz `preview_vechi`, rollback total.
@@ -727,7 +748,12 @@ Ordinea, ca în E3 §4:
   - eliberează rezervările și literele; copiii declarați devin `anulata`.
 - **Seria „în verificare”** (D2#2) se lămurește:
   - (a) de inginer, prin corectarea transcrierii: o versiune nouă, pe bucata găsită;
-  - (b) de MP, prin legarea rândului de bucata reală (`fn_izo_serie_lamureste`, cu motiv); rezervarea se creează atunci;
+  - (b) de MP, prin legarea rândului de bucata reală (`fn_izo_serie_lamureste`, cu motiv); rezervarea se creează atunci. **Contractul** (r5):
+    - sub lock-urile din §10.5 (sesiunea, declarația, rădăcina bucății), CAS pe `p_versiune`, rândul `in_verificare` și `identificare = 'nerezolvata'`;
+    - bucata e a proiectului, disponibilă (regulile din §6.3 pasul 8 pentru montaj) și fără rezervare activă a altei declarații; altfel refuz (`bucata_rezervata` / `stare`), iar rândul rămâne `in_verificare`;
+    - **un singur UPDATE** pe declarație: `bucata_id` = `p_bucata`, `identificare` = `bucata`, `stare` = `trimisa` (sau `conflict`, `conflict_cod = r1d`, dacă R1 d se încalcă pe bucata aleasă), `versiune` + 1. CHECK-urile din §3.2 se evaluează pe rândul final, deci sunt adevărate după instrucțiune; `bucata_decl_uid` rămâne NULL;
+    - plus versiunea în `izo_declaratii_versiuni`, rezervarea nouă pe `bucata_id` și jurnalul (`izo_operatii`, canalul `aprobare`, cheia `p_cheie`);
+    - **trigger-ul de stări** îi permite lui `izo_montaj_writer` să schimbe `bucata_id` / `identificare` **doar** în această tranziție (`in_verificare` → `trimisa` / `conflict`, `nerezolvata` → `bucata`), sub contextul `fn_izo_serie_lamureste`; orice altă schimbare a lor de către writer (pe alt rând, spre `bucata_decl`, fără context) → refuz. Drepturile pe coloane sunt în §9.4;
   - (c) o bucată chiar necunoscută intră prin inventar / `gasit` (E3b), în afara E4.
 
   Cât seria e deschisă, rândul nu se aprobă, iar sudurile lui (amonte și aval) așteaptă. Restul lotului se aprobă.
@@ -776,7 +802,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
   - ciornele lui nu se mai pot trimite; rezervările lor expiră leneș (24 h). MP-ul le respinge explicit, cu motiv, ca rânduri ale unei sesiuni abandonate (§6.4): `fn_izo_respinge` ia întâi frontul tronsonului FOR SHARE (ordinea §10.5: frontul înaintea sesiunii), apoi sesiunea și declarațiile, și verifică sub lock că frontul autorului e inactiv / expirat sau că autorul n-are drept (prin `fn_izo_montaj_autorizare_lock` pe autor). Rezervările se eliberează, iar sesiunea fără rânduri deschise se închide;
   - rândurile deja `trimisa` rămân aprobabile: declarația era autorizată la acceptare, iar dovada e în `izo_operatii`. Lotul arată alerta `izo_autor_fara_drept`;
   - aprobatorul revocat e refuzat la pasul 4 din §6.3 (testul de cursă revocare ↔ aprobare, §11.5).
-- **Oprirea fluxului** pe tronson: §3.1. E refuzată cât există rezervări active, declarații deschise sau un front activ. Cu un autor absent, drumul e: eliberarea frontului → respingerea rândurilor sesiunii abandonate → sesiunea închisă → oprirea (testul 17).
+- **Oprirea fluxului** pe tronson: §3.1. E refuzată cât există rezervări active, declarații deschise sau un front activ. Cu un autor absent, drumul e: eliberarea frontului → respingerea rândurilor sesiunii abandonate → sesiunea închisă → oprirea (testul 17). Pe o sesiune deja trimisă (r5): MP-ul respinge rândurile rămase, inclusiv cele `conflict`, `blocata` sau `revizie_ceruta` → sesiunea `inchisa` → oprirea (testul 20).
 - **Limitele** (disponibilul nu poate fi blocat abuziv):
   - pe autor: cel mult 60 de rezervări active, din care cel mult 10 pe bucăți din depozit („cere ieșirea”); valorile se confirmă la pilot;
   - cel mult 200 de declarații pe sesiune și 50 de operații pe lot;
@@ -903,7 +929,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - **Regula**: două frunze active (sau declarate) cu aceeași serie + șarjă + lungime la cm se blochează, inclusiv surorile din aceeași țeavă. O tăiere 12 → 4 + 4 + 4 trece doar cu lungimile reale (4,00 / 3,99 / 4,01).
 - **Cine o aplică**:
   - tableta blochează salvarea normală și deschide remăsurarea (prototip `eqPiece`);
-  - serverul, dacă rândul ajunge totuși, îl acceptă cu `conflict` R1 (d) + „revizie cerută”;
+  - serverul, dacă rândul ajunge totuși, îl acceptă (rezultatul `acceptat`) cu **starea** `conflict`, `conflict_cod = r1d` (§5.4, r5); inginerul îl repară cu o versiune nouă, pe lungimea reală;
   - aprobarea refuză;
   - indexul `ux_magbuc_izo_frunza` e ultima barieră: părintele trece `taiata` înainte să se nască copiii.
 - **Rotunjirea la cm** = `round(mm / 10)`, aceeași pe tabletă și în coloana generată `lungime_cm`.
@@ -952,7 +978,7 @@ Geometria ramurii 2:
 - **Unde e permisă**: doar pe o bucată care e propria rădăcină (`parinte_id IS NULL`), fără niciun copil în registru și fără copii declarați (neanulați) de **altă** declarație. Copiii declarați de aceeași declarație care poartă corecția (tăierea cu `marcaj_diferit`, §8.1) nu contează (r3): sunt efectul ei, nu descendenți preexistenți. Rădăcina e atunci singura frunză în momentul corecției, deci R3 (Σ frunze = rădăcina) rămâne adevărat după ea.
 - **Corecția urmată de tăiere** (marcajul ≠ stoc, §8.1) e **o singură declarație** `taiere`, cu `confirmare.mod = marcaj_diferit`. La aprobare dă două evenimente, în ordine: `corectie`, apoi `taiere` (§6.3). Tăierea pornește de la lungimea corectată (`baza_mm`), iar Σ copiilor = baza, exact. Verificarea „fără descendenți” se face pe starea dintre cele două evenimente: rădăcina fără copii în registru și fără copii declarați de alte declarații.
 - **În arbore** (bucata are părinte sau copii): `corectie` e **refuzată explicit** (`corectie_in_arbore`), la sincronizare (rând blocant) și la aprobare. Exemplul: rădăcina 12 m, copiii 8 + 4; corectarea unui copil la 4,1 ar da 12,1 m. Ce se face:
-  - la tăierea unui copil, `baza_mm` = lungimea lui din registru, exact (altfel R3 s-ar rupe); măsurătoarea tabletei rămâne doar pe declarație. O diferență peste ±20 mm e `conflict` (`corectie_in_arbore`), iar MP-ul decide în afara E4;
+  - la tăierea unui copil, `baza_mm` = lungimea lui din registru, exact (altfel R3 s-ar rupe); măsurătoarea tabletei rămâne doar pe declarație. O diferență peste ±20 mm dă rezultatul `acceptat` cu **starea** `conflict` (`conflict_cod = corectie_in_arbore`, r5), iar MP-ul decide în afara E4;
   - corecția unui arbore întreg (rădăcina + frunzele, cu R3 refăcut) e un design separat, după pilot.
 - **Cazurile**:
   - **`marcaj_diferit`** (pe marcaj scrie altă lungime) și **`masurat` peste ±20 mm**, pe o rădăcină fără descendenți:
@@ -1025,7 +1051,7 @@ Helper-ul `fn_izo_montaj_autorizare_lock(p_proiect, p_rol, p_depozit)` (owner `p
 | `izo_sync_incercari` (r3) | `fn_izo_citire(proiect_id)`, prin `v_izo_carantina_sync`; payload-ul n-are GPS | SELECT, INSERT (toate, fără `id`) | SELECT |
 | `izo_rata_apeluri` (r3) | nimic | nimic (doar prin `fn_izo_rata_consuma`) | nimic (la fel) |
 | `izo_preverificari` | `fn_izo_citire(proiect_id)` | SELECT, INSERT (toate, fără `id`), UPDATE (`stare`, `trimisa_la`, `trimisa_op_id`, `versiune`) | SELECT, UPDATE (`stare`, `versiune`) |
-| `izo_declaratii` | `fn_izo_citire(proiect_id)` (fără coloane GPS: nu există) | SELECT, INSERT (toate, fără `id` și coloanele de decizie), UPDATE (lista explicită, r3: coloanele de conținut din §3.2, `stare`, `conflict_cod`, `stare_inainte_blocare`, `blocata_motiv`, `depinde_de_versiune`, `versiune`, `ultimul_op_id`, `gps_prezent`) | SELECT, UPDATE (`stare`, `conflict_cod`, `stare_inainte_blocare`, `blocata_motiv`, `versiune`, `bucata_id` la seria lămurită, coloanele de decizie) |
+| `izo_declaratii` | `fn_izo_citire(proiect_id)` (fără coloane GPS: nu există) | SELECT, INSERT (toate, fără `id` și coloanele de decizie), UPDATE (lista explicită, r3: coloanele de conținut din §3.2, inclusiv piesa `bucata_id` / `bucata_decl_uid` și `identificare` (r5), `stare`, `conflict_cod`, `stare_inainte_blocare`, `blocata_motiv`, `depinde_de_versiune`, `versiune`, `ultimul_op_id`, `gps_prezent`) | SELECT, UPDATE (`stare`, `conflict_cod`, `stare_inainte_blocare`, `blocata_motiv`, `versiune`, coloanele de decizie; r5: `bucata_id` **și `identificare`**, folosite doar de seria lămurită, restrânse de trigger-ul de stări la tranziția din §6.4) |
 | `izo_declaratii_versiuni` | prin `izo_declaratii`; toate coloanele în afară de `hash_cerere` (r3) | SELECT, INSERT | SELECT, INSERT (versiunea creată de seria lămurită) |
 | `izo_declaratii_gps` (§9.5) | **nimic** | **doar INSERT** (fără SELECT, deci și fără `RETURNING`) | **nimic** |
 | `izo_bucati_declarate` | prin `izo_declaratii` | SELECT, INSERT (toate), UPDATE (`stare`, `lungime_mm`, `lungime_calculata`, `destinatie`, `depozit_destinatie_id`) | SELECT, UPDATE (`stare`, `bucata_id`, `depozit_destinatie_id`) |
@@ -1245,7 +1271,8 @@ Negative întâi. Harness PG16 (`scripts/test_izometrie_e4.sh`) + branch PG17 + 
     - **tableta repornită** (tab închis / browser oprit) cu operații în coadă → la redeschidere, cu semnal, aceleași operații pleacă o singură dată (IndexedDB real);
     - a doua tabletă pe același tronson → `alt_dispozitiv`.
 13. **Tăierea + montajul în același lot** (r2):
-    - „Țeavă tăiată” 8,00 din 11,98 + montajul pe copil, aprobate împreună: copilul se naște, rezervarea pe `bucata_decl_uid` se consumă, montajul trece;
+    - „Țeavă tăiată” 8,00 din 11,98 + montajul pe copil, aprobate împreună (r5): copilul se naște; rezervarea montajului pe `bucata_decl_uid` (R) devine `transferata`; R′ pe `bucata_id` (`transfer_din_id` = R) e `consumata`, cu `eveniment_id` = evenimentul `montaj`; reconcilierea trece, iar pe copil nu rămâne nicio rezervare activă. La fel T1 + T2 (tăierea copilului) în același lot: R′ e consumată de evenimentul `taiere` al lui T2;
+    - **reconcilierea, negativ** (r5): o abatere forțată (R `consumata` direct de montaj, fără R′; R′ încă activă după aprobarea montajului; două R′ pe același R) → excepție la pasul 10, rollback total;
     - montajul pe copil fără tăiere (nici aprobată, nici în lot) → refuz pe tot apelul, cu lista;
     - ordinea din `p_randuri` inversată (montajul înaintea tăierii) → același rezultat (ordinea topologică);
     - **rollback-ul total**: o eroare forțată la reconciliere (pasul 10) → zero evenimente, bucăți, capete, rezervări consumate, `izo_aprobari` și `izo_operatii`; reîncercarea cu aceeași cheie e evaluată din nou și reușește.
@@ -1280,13 +1307,20 @@ Negative întâi. Harness PG16 (`scripts/test_izometrie_e4.sh`) + branch PG17 + 
     - **PV-ul**: `izo_teren_editor` / `izo_montaj_writer` fără SELECT pe `izo_documente_intrare` (`has_table_privilege` = false); `fn_izo_pv_lipsa` → aceleași rezultate ca regula E3 §8; EXECUTE refuzat pentru `authenticated`;
     - **contorul după schemă**: o migrare care ține lock-ul schemei exclusiv + un apel de sincronizare concurent → apelul așteaptă la schemă, fără să fi scris contorul (`pg_locks`), fără deadlock;
     - **seria necunoscută**: ciornă `nerezolvata` → salvată; `sesiune_trimite` → `in_verificare`; un CHECK încălcat (`in_verificare` cu bucată, `trimisa` nerezolvată) → refuz;
-    - **invalidarea**: `decl_sterge` pe o tăiere cu descendenți `ciorna` (montaj pe copil, sudura lui) → descendenții `blocata` în același lot, sub lock-uri luate la pasul 2, fără `resursa_neanuntata`; o versiune nouă a unui rând care revalidează R1 d → `conflict` (tranziția din tabel);
+    - **invalidarea**: `decl_sterge` pe o tăiere cu descendenți `ciorna` (montaj pe copil, sudura lui) → descendenții `blocata` în același lot, sub lock-uri luate la pasul 2, fără `resursa_neanuntata`; o versiune nouă a unui rând care revalidează R1 d → rezultatul `acceptat`, starea `conflict` (tranziția din tabel);
     - **ACK pierdut**: operația aplicată, răspunsul pierdut, retrimiterea → `duplicat` cu rezultatul salvat, iar tableta scoate operația; `conflict_op` → operația în lista „de verificat”, coada continuă;
     - **ramura administrativă**: `fn_izo_seteaza_flux` din API (`authenticator`) → refuz; ca `postgres`, sub REPEATABLE READ → `25001`; ca `postgres`, READ COMMITTED → trece prin poartă.
+20. **r5** (review Jakarinos pe r4):
+    - **lanțul rezervărilor** (pasul 10): tăiere + montaj pe copil în același lot și T1 + T2 în același lot → R `transferata`, R′ `consumata` cu evenimentul consumatorului, nicio rezervare activă pe copil; abaterile forțate din testul 13 → rollback total;
+    - **seria lămurită, ca rolul real** `izo_montaj_writer` (nu `postgres`): `has_column_privilege(izo_montaj_writer, izo_declaratii, identificare / bucata_id, UPDATE)` = true; `fn_izo_serie_lamureste` pe un rând `in_verificare` → `trimisa`, `identificare = bucata`, rezervarea creată, fără `permission denied` și fără CHECK încălcat; pe o bucată rezervată de alt rând → `bucata_rezervata`, rândul rămâne `in_verificare`; writer-ul care schimbă `bucata_id` / `identificare` pe un rând `trimisa`, spre `bucata_decl` sau fără contextul funcției → refuzat de trigger;
+    - **`conflict` în cascadă**: `decl_sterge` pe o tăiere cu un descendent `conflict` → descendentul `blocata`, cu `stare_inainte_blocare = conflict` și `conflict_cod` păstrat; revizia aceleiași tăieri → la fel; versiunea nouă a tăierii, cu copilul neschimbat → descendentul revine `conflict`;
+    - **matricea cascadei**: pentru fiecare stare deschisă a descendentului × tipul sesiunii (deschisă / abandonată / trimisă) × operația (ștergere, revizie, respingere cu `respinge` / `blocheaza`) → exact rezultatul din §6.4; nicio cascadă legitimă nu primește „tranziție refuzată”; `respinge` pe o ciornă a unui autor cu front valid → `decizie_nepermisa`, zero efecte;
+    - **revocarea pe o sesiune trimisă**: un rând revenit `conflict` după revizie, autorul revocat → MP-ul îl respinge (și rândurile `blocata` / `revizie_ceruta` rămase) → sesiunea `inchisa`, rezervările eliberate, iar `fn_izo_seteaza_flux(…, false)` trece (fără fapte);
+    - **rezultat vs. stare**: R1 d găsit pe server → `izo_operatii.rezultat = acceptat`, `izo_declaratii.stare = conflict`, `conflict_cod = r1d`; retrimiterea → `duplicat` cu `acceptat`; zero scrieri în registru.
 
 ## 12. Întrebări deschise (A / B / C)
 
-Recomandarea e prima variantă, dacă nu scrie altfel. Blochează codul: Q-E4-1, Q-E4-2, Q-E4-4, Q-E4-5, Q-E4-12, Q-E4-15 (r3); r4: și Q-E4-6, Q-E4-9, Q-E4-10, Q-E4-14, care schimbă contractele (PV-ul, cheia de modul, GPS-ul, frontul). Corpul documentului e scris pe recomandări, dar ele devin decizii doar cu răspunsul lui Razvan.
+Recomandarea e prima variantă, dacă nu scrie altfel. Blochează codul: Q-E4-1, Q-E4-2, Q-E4-4, Q-E4-5, Q-E4-12, Q-E4-15 (r3); r4: și Q-E4-6, Q-E4-9, Q-E4-10, Q-E4-14, care schimbă contractele (PV-ul, cheia de modul, GPS-ul, frontul). r5: Q-E4-12 A cere și verificarea pe PT a robinetelor de pe T14 / T15; Q-E4-15 A cere acceptarea explicită a păstrării permanente a coordonatelor. Celelalte (Q-E4-3 C, Q-E4-7 / 8 / 11 / 13 / 16 A) nu blochează arhitectura, dar se confirmă înaintea funcției pe care o ating. Corpul documentului e scris pe recomandări, dar ele devin decizii doar cu răspunsul lui Razvan.
 
 1. **Q-E4-1 — Unde se activează montajul.**
    - **A** pe tronson (`izo_tronson_config.flux_montaj`), cu proiectul rămas la `stoc`. Pachetul T12 și editorul vechi merg mai departe; pilotul e pe T14 / T15.
