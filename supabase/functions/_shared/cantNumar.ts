@@ -244,6 +244,41 @@ function subMarcajPagina(doc: string, a: number): boolean {
   }
   return false
 }
+// decizia Răzvan 21.10.2026 (cazul iii, varianta A — aceeași regulă ca inventarul B1, cantAcoperire „posibila_continuare”): sub un
+// articol numerotat CU zerouri („003 6701152 M 200.000”), o linie „<n> COD <cod>” cu n FĂRĂ zerouri care NU continuă secvența (n nu e
+// nr. articolului, următorul sau 1) e continuarea denumirii rupte („… DN 90X8.” / „2 COD 64000115”), nu început de articol. Orice altă
+// formă rămâne început de articol (blocul se oprește → incert). Verificările de cod / cantitate / UM de dedesubt se aplică în continuare.
+// review Jakarinos #819 r4 (P1): TOATĂ linia — cifra, „COD”, codul (alfanumeric) și cel mult coloane de preț („0.00 0.00”); orice alt text
+// pe linie („2 COD 64000115 TEAVA PE DN110”) = nu e continuare
+const RE_CONTINUARE_COD = /^\s*(\d{1,4})\s+COD\s+[A-Z0-9]{3,20}(?:\s+\d+[.,]\d{2})*\s*$/i
+const RE_NR_ARTICOL = /^\s*\**\s*(\d{1,4})[.)]?\s/
+// review Copilot #819 r1 (P1): numărul care nu continuă secvența NU ajunge singur (un restart real „003” → „2 COD …” fără cantitate ar
+// înghiți denumirea articolului 2). Se cere și semnalul POZITIV al formei rupte reale: linia de DEASUPRA, din bloc (nu linia articolului),
+// se termină cu o DIMENSIUNE tăiată după punctul zecimal („… DN 90X8.”, eventual urmată de coloane de preț „0.00 0.00”), iar „<n>” e
+// O SINGURĂ cifră — zecimala ei („90X8.” + „2” = „90X8.2”). review Copilot r2 (P1): un simplu „cifră + punct” („TEAVA PE DN63.”) nu ajunge
+const RE_COLOANE_PRET = /(?:\s+\d+[.,]\d{2})+\s*$/
+const RE_DIMENSIUNE_TAIATA = /\d+[xX]\d+\.$/
+// review Copilot r3 (P1): și „<n> COD <cod>” trebuie să fie ULTIMA linie cu text a blocului — între ea și „Total=” doar linii fără
+// litere (coloane de preț „0.90 513.00”), în cel mult `rest` linii; un restart real are denumirea lui DEDESUBT („TEAVA PE DN110”) → incert
+function ultimaLinieCuText(doc: string, dupa: number, rest: number): boolean {
+  let p = dupa
+  for (let k = 0; k < rest && p < doc.length; k++) {
+    const a = p + 1, b0 = doc.indexOf('\n', a), b = b0 < 0 ? doc.length : b0
+    const l = doc.slice(a, b)
+    if (RE_TOTAL_RAND.test(l)) return true
+    if (!l.trim() || /\p{L}/u.test(l)) return false
+    p = b
+  }
+  return false
+}
+function continuareCod(linieArticol: string, l: string, anterioara: string | null, doc: string, sfarsitL: number, rest: number): boolean {
+  const mc = RE_CONTINUARE_COD.exec(l), ma = RE_NR_ARTICOL.exec(linieArticol)
+  if (!mc || !ma || !/^0\d/.test(ma[1]) || !/^[1-9]$/.test(mc[1]) || anterioara === null) return false
+  if (!RE_DIMENSIUNE_TAIATA.test(anterioara.replace(RE_COLOANE_PRET, '').trimEnd())) return false
+  if (!ultimaLinieCuText(doc, sfarsitL, rest)) return false
+  const na = Number(ma[1]), nc = Number(mc[1])
+  return ![na, na + 1, 1].includes(nc)
+}
 const RE_INCEPUT_ARTICOL = /^\s*\**\s*\d{1,4}[.)]?\s+\**[A-Z0-9][A-Za-z0-9.\-\/]{2,}/
 // doar unitățile reale fac o linie ancoră (umNorm întoarce și cuvinte oarecare: „TEAVA 20.80” nu e un rând nou)
 const UM_ANCORA = new Set(['m', 'mc', 'mp', 'km', 'buc', 'kg', 't', 'to', 'l', 'set', 'ora', 'h'])
@@ -302,17 +337,19 @@ export function blocRand(doc: string, off: number): { linie: string; bloc: strin
   }
   if (!RE_TOTAL_RAND.test(sus)) return doarLinia
   let pana = le
+  let anterioara: string | null = null   // linia de deasupra din bloc (null = linia articolului)
   for (let k = 0; k <= LINII_CONTINUARE && pana < doc.length; k++) {
     const a = pana + 1
     const b0 = doc.indexOf('\n', a)
     const b = b0 < 0 ? doc.length : b0
     const l = doc.slice(a, b)
     if (RE_TOTAL_RAND.test(l)) return k === 0 ? doarLinia : { linie, bloc: doc.slice(ls, pana), de_la: ls, pana_la: pana, continuare: true }
-    if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || RE_INCEPUT_ARTICOL.test(l)) return doarLinia
+    if (k === LINII_CONTINUARE || !l.trim() || l.startsWith('⟦PAGINA') || (RE_INCEPUT_ARTICOL.test(l) && !continuareCod(linie, l, anterioara, doc, b, LINII_CONTINUARE - k))) return doarLinia
     // review Jakarinos r2 (P1): un articol fără nr. și fără UM („SA11H1 120.000”) nu e continuare — linia care începe cu un cod sau
     // conține o cantitate în formatul listei (trei zecimale: „120.000”) oprește blocul (incert → doar linia cantității)
     if (codComparabil(l.trim().split(/\s+/)[0]) !== null || /(?<![\d.,])\d+\.\d{3}(?![\d.,])/.test(l)) return doarLinia
     if (tokeniNumerici(l, a).some((t) => [...umLanga(doc, t.de_la, t.pana_la)].some((u) => UM_ANCORA.has(u)))) return doarLinia
+    anterioara = l
     pana = b
   }
   return doarLinia
