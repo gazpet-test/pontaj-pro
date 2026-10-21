@@ -24,7 +24,7 @@ import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
 import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
 import IzoStocTeava from './IzoStocTeava.jsx'
-import { patchDinRegistru, indexFolosite, sugestiiRegistru } from './lib/izoRegistru.js'
+import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri } from './lib/izoRegistru.js'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -69,18 +69,6 @@ const extractUnghi = (dim) => {
   if (!dim) return null
   const m = String(dim).match(/(\d+)\s*[°˚]/)
   return m ? `${m[1]}°` : null
-}
-
-// Citește TOATE rândurile unei interogări, pe pagini (PostgREST întoarce cel mult max-rows pe cerere): continuă până la
-// numărul exact raportat de server; o eroare pe oricare pagină = eroare (nu o listă trunchiată tăcut)
-async function citesteTot(construieste, pas = 1000) {
-  const rez = []
-  for (let de = 0; ; de += pas) {
-    const { data, error, count } = await construieste().range(de, de + pas - 1)
-    if (error) return { data: null, error }
-    rez.push(...(data || []))
-    if (!data?.length || (count != null ? rez.length >= count : data.length < pas)) return { data: rez, error: null }
-  }
 }
 
 // Parse SUDURĂ cu sufix R → returnează { cod, refacuta }
@@ -632,6 +620,8 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   // null = nu s-a putut verifica (eroare, nu „nimic folosit”)
   const [folosite, setFolosite] = useState({})
   const cerereRegistru = useRef(0) // cheia cererii curente: răspunsurile întârziate (alt pachet) se ignoră
+  // generația încărcării pachetului (loadAll / refetch-uri): un răspuns pentru alt pachet, sosit târziu, nu mai e aplicat
+  const paznicPachet = useRef(paznicCereri()).current
 
   // proiectul PACHETULUI încărcat (nu prop-ul paginii, care în /izometrie?pachet=… poate fi alt proiect)
   const proiectPachet = pachet?.proiect_id ?? tronson?.proiect_id ?? null
@@ -673,7 +663,14 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   async function alegeDinRegistru(rowId, b) {
     const row = tevi.find(r => r.id === rowId)
     if (!row) return
-    // apărare (Copilot #824 P1): bucata trebuie să fie de pe tronsonul pachetului deschis acum, de tipul rândului
+    // apărare (Copilot / Jak #824 P1): pachetul afișat e cel cerut, rândul îi aparține, iar bucata e de pe tronsonul lui,
+    // de tipul rândului; altfel nu scriu nimic și reîncarc
+    if (pachet?.id !== pachetId || row.pachet_id !== pachet.id) {
+      onError('Pachetul s-a schimbat între timp — reîncarc')
+      cancelEdit()
+      loadAll()
+      return
+    }
     if (b.tronson_id !== pachet?.tronson_id || b.stare !== 'pe_tronson' || b.tip_cod !== row.tip_rand) {
       onError('Bucata aleasă nu e pe tronsonul acestui pachet — lista se reîncarcă')
       cancelEdit()
@@ -698,6 +695,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   }
 
   async function loadAll() {
+    const gen = paznicPachet.porneste()
     setLoading(true)
     cerereRegistru.current++; setRegistru([]); setFolosite({})   // alt pachet: lista veche dispare imediat, răspunsurile ei se ignoră
     // Pachet + țevi în paralel
@@ -705,6 +703,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
       supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single(),
       supabase.from('executie_tevi').select('*').eq('pachet_id', pachetId).order('poz_in_pachet'),
     ])
+    if (!paznicPachet.curenta(gen)) return   // între timp s-a deschis alt pachet: răspunsul ăsta nu se mai aplică
     if (pRes.error) { onError('Eroare load pachet: ' + pRes.error.message); setLoading(false); return }
     if (tRes.error) { onError('Eroare load țevi: ' + tRes.error.message); setLoading(false); return }
     setPachet(pRes.data)
@@ -739,13 +738,17 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   // ───────── Refetch pachet (după save țeavă, trigger recalculează totaluri) ─────────
   async function refetchPachet() {
+    const gen = paznicPachet.actuala()
     const { data } = await supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single()
+    if (!paznicPachet.curenta(gen) || data?.id !== pachetId) return
     if (data) { setPachet(data); onPachetChanged && onPachetChanged() }
   }
 
   // ───────── Refetch toate țevile (după save, pentru poz_km_m corect din BD) ─────────
   async function refetchTevi() {
+    const gen = paznicPachet.actuala()
     const { data } = await supabase.from('executie_tevi').select('*').eq('pachet_id', pachetId).order('poz_in_pachet')
+    if (!paznicPachet.curenta(gen)) return
     if (data) setTevi(data)
   }
 

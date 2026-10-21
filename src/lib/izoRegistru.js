@@ -24,6 +24,29 @@ export const patchDinRegistru = (b) => {
   return patch
 }
 
+// Citește TOATE rândurile unei interogări, pe pagini, avansând cu numărul de rânduri PRIMITE (PostgREST poate întoarce mai
+// puțin decât pagina cerută, după max-rows). Cere numărul exact (`count: 'exact'` în select): fără el, sau dacă o pagină
+// vine goală înainte de total, întoarce eroare de incompletitudine — niciodată o listă trunchiată tăcut.
+export async function citesteTot(construieste, pas = 1000) {
+  const rez = []
+  for (;;) {
+    const { data, error, count } = await construieste().range(rez.length, rez.length + pas - 1)
+    if (error) return { data: null, error }
+    if (count == null) return { data: null, error: { message: 'serverul nu a raportat numărul de rânduri (count)' } }
+    const n = data?.length || 0
+    rez.push(...(data || []))
+    if (rez.length >= count) return { data: rez, error: null }
+    if (n === 0) return { data: null, error: { message: `listă incompletă: ${rez.length} din ${count} rânduri` } }
+  }
+}
+
+// Paznicul cererilor asincrone: fiecare încărcare nouă primește o generație; un răspuns sosit după ce a pornit alta (alt
+// pachet) e ignorat. Reîmprospătările iau generația curentă fără s-o schimbe, deci sunt anulate de o încărcare nouă.
+export const paznicCereri = () => {
+  let g = 0
+  return { porneste: () => ++g, actuala: () => g, curenta: (t) => t === g }
+}
+
 // Unghiul ca număr, din registru (numeric) sau din rândul de pachet (text „22.5°” / „30˚” / „22,5”)
 const unghiNum = (u) => {
   if (u == null || u === '') return null

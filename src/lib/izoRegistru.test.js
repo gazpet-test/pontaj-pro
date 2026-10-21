@@ -1,5 +1,64 @@
 import { describe, it, expect } from 'vitest'
-import { serieCanon, dimensiuneDinRegistru, patchDinRegistru, indexFolosite, sugestiiRegistru, cheieBucata } from './izoRegistru.js'
+import { serieCanon, dimensiuneDinRegistru, patchDinRegistru, indexFolosite, sugestiiRegistru, cheieBucata, citesteTot, paznicCereri } from './izoRegistru.js'
+
+// un „query builder” fals: .range(de, la) întoarce felia, cel mult maxRows (ca PostgREST cu max-rows), plus count
+const fals = (randuri, { maxRows = 1000, faraCount = false, golLa = null } = {}) => () => ({
+  range: async (de, la) => {
+    const felie = golLa != null && de >= golLa ? [] : randuri.slice(de, Math.min(la + 1, de + maxRows))
+    return { data: felie, error: null, count: faraCount ? null : randuri.length }
+  },
+})
+
+describe('citesteTot — paginare fără trunchiere tăcută (Jak #824 P1)', () => {
+  const r = Array.from({ length: 2345 }, (_, i) => ({ id: i }))
+  it('max-rows 1000 (implicit): toate rândurile', async () => {
+    const { data } = await citesteTot(fals(r))
+    expect(data).toHaveLength(2345)
+  })
+  it('max-rows SUB pagină (300): avansează cu cât a primit, nu sare intervale', async () => {
+    const { data } = await citesteTot(fals(r, { maxRows: 300 }))
+    expect(data.map(x => x.id)).toEqual(r.map(x => x.id))
+  })
+  it('pagină goală înainte de total → eroare de incompletitudine', async () => {
+    const { data, error } = await citesteTot(fals(r, { golLa: 1000 }))
+    expect(data).toBeNull()
+    expect(error.message).toMatch(/incompletă/)
+  })
+  it('fără count → eroare, nu listă', async () => {
+    const { data, error } = await citesteTot(fals(r, { faraCount: true }))
+    expect(data).toBeNull()
+    expect(error.message).toMatch(/count/)
+  })
+  it('listă goală (count 0) → [] fără eroare', async () => {
+    expect((await citesteTot(fals([]))).data).toEqual([])
+  })
+})
+
+describe('paznicCereri — răspunsurile întârziate nu suprascriu pachetul nou (Jak + Copilot #824 P1)', () => {
+  const amana = () => { let rez; const p = new Promise(r => { rez = r }); return { p, rez } }
+  it('loadAll(T12) întârziat, T13 termină primul, T12 ultimul → starea finală rămâne T13', async () => {
+    const paznic = paznicCereri()
+    let stare = null
+    const incarca = async (id, asteapta) => { const t = paznic.porneste(); await asteapta; if (paznic.curenta(t)) stare = id }
+    const a = amana(), b = amana()
+    const pa = incarca('T12', a.p)
+    const pb = incarca('T13', b.p)
+    b.rez(); await pb
+    expect(stare).toBe('T13')
+    a.rez(); await pa
+    expect(stare).toBe('T13')
+  })
+  it('o reîmprospătare pornită pe T12 e ignorată după trecerea pe T13', async () => {
+    const paznic = paznicCereri()
+    let stare = null
+    paznic.porneste(); stare = 'T12'
+    const a = amana()
+    const refetch = (async () => { const t = paznic.actuala(); await a.p; if (paznic.curenta(t)) stare = 'T12 reîmprospătat' })()
+    paznic.porneste(); stare = 'T13'
+    a.rez(); await refetch
+    expect(stare).toBe('T13')
+  })
+})
 
 describe('serieCanon — aceeași regulă ca serie_canon din registru', () => {
   it('scoate spații / . _ / - și face majuscule', () => {
