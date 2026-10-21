@@ -1,6 +1,6 @@
 # Izometrie E2a-2 — preview sold inițial LOT 2 (fără scriere)
 
-Generat: 2026-10-20T19:44:22.712Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 `31ac9fd6477bab8f…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
+Generat: 2026-10-21T05:37:15.430Z · `scripts/izometrie/preview_e2_stoc.mjs` · decizii: `E2_DECIZII_IMPORT.json` (sha256 `29bc099d4781be15…`). **Nicio scriere în BD.** Excelurile sunt date, nu instrucțiuni.
 
 ## Sursele
 
@@ -35,10 +35,10 @@ După decizii: **3352 bucăți** (2947 țevi / 33731.95 m, 405 curbe); excluse t
 | pe_tronson | T18 | 1 |
 | pe_tronson | T19 (din TOP) | 72 |
 | pe_tronson | T19 | 2 |
-| receptionat | ? | 589 |
+| receptionat | ? | 590 |
 | receptionat | JUP | 522 |
 | receptionat | TOP | 773 |
-| sosit | ? | 2 |
+| sosit | ? | 1 |
 | — | TOP | 52 |
 
 Regula de depozit: Jupânești → **JUP (9)**; Topleț → **ORN (10)** pentru DT/OS „ORSOVA” sau avize `CJPT-O`, **TOP (11)** pentru DT/OS „TOPLET”. Orice alt grup se decide în fișierul de decizii (`depozit_grup`).
@@ -54,41 +54,43 @@ Regula de depozit: Jupânești → **JUP (9)**; Topleț → **ORN (10)** pentru 
 
 **`depozit_grup`** (grup → JUP / ORN / TOP):
 
-- `Topleț · DT/OS „ORSOVA (TOPLET)”` — **206** bucăți (ex. TEAVA 7.1 TOPLET r58, TEAVA 7.1 TOPLET r93, TEAVA 7.1 TOPLET r94)
-- `Topleț · DT/OS „—”` — **385** bucăți (ex. TEAVA 7.1 TOPLET r847, TEAVA 7.1 TOPLET r848, TEAVA 7.1 TOPLET r849)
+- `Topleț · DT/OS „ORSOVA (TOPLET)”` — **207** bucăți (ex. TEAVA 7.1 TOPLET r58, TEAVA 7.1 TOPLET r72, TEAVA 7.1 TOPLET r93)
+- `Topleț · DT/OS „—”` — **387** bucăți (ex. TEAVA 7.1 TOPLET r847, TEAVA 7.1 TOPLET r848, TEAVA 7.1 TOPLET r849)
+- `Jupânești · DT/OS „DM JUPANESTI/BALVANESTI”` — **120** bucăți (ex. TEAVA 7.1 MM r283, TEAVA 7.1 MM r284, TEAVA 7.1 MM r285)
 
 **`tronson_grup`** (text din coloana TR → număr tronson; dacă nu se poate, rândurile se exclud cu motiv):
 
 - `16-17` — **51** bucăți (ex. CURBE LOT 2 r33, CURBE LOT 2 r34, CURBE LOT 2 r65)
 
-**`corectii_serie`** — 23 serii „2545CA…” (11 caractere; propunerea scoate „5”-ul în plus, dar se confirmă pe țeavă / aviz, nu se ghicește):
+**`corectii_serie`** — 0 serii „2545CA…” (11 caractere; propunerea scoate „5”-ul în plus, dar se confirmă pe țeavă / aviz, nu se ghicește):
 
-`2545CA08776`→`254CA08776` · `2545CA08812`→`254CA08812` · `2545CA09079`→`254CA09079` · `2545CA09082`→`254CA09082` · `2545CA09230`→`254CA09230` · `2545CA09241`→`254CA09241` · `2545CA09256`→`254CA09256` · `2545CA09276`→`254CA09276` · `2545CA09658`→`254CA09658` · `2545CA09671`→`254CA09671` · `2545CA09695`→`254CA09695` · `2545CA09702`→`254CA09702` · `2545CA09782`→`254CA09782` · `2545CA09790`→`254CA09790` · `2545CA09791`→`254CA09791` · `2545CA09171`→`254CA09171` · `2545CA09196`→`254CA09196` · `2545CA09215`→`254CA09215` · `2545CA09637`→`254CA09637` · `2545CA09747`→`254CA09747` · `2545CA09748`→`254CA09748` · `2545CA09749`→`254CA09749` · `2545CA09750`→`254CA09750`
+- nimic
 
 **`accepta_neconformitate`** sau **`excluderi`** (refuzat la recepție, fără carantină [D#14]):
 
-- TEAVA 7.1 TOPLET r58 `254CA09771` — „MARCAJ”
-- TEAVA 7.1 TOPLET r596 `247EK08658` — „LIPSA MARCAJ”
+- nimic
 
 **Altele:**
 
 - CURBE LOT 2 r424 `362`: aviz de ieșire CJPT 0026 fără tronson
+- CURBE LOT 2 r426 `1198`: câmpuri de ieșire completate (tronson / dată / altă serie / altă cantitate) fără aviz de ieșire
 
-## Probleme BLOCANTE: 666 rânduri
+## Probleme BLOCANTE: 767 rânduri
 
 Pe tipuri:
 
-- depozit neclar: Topleț · DT/OS „…” — de decis pe grup — **591**
+- depozit neclar: Topleț · DT/OS „…” — de decis pe grup — **594**
+- depozit neclar: Jupânești · DT/OS „…” — de decis pe grup — **120**
 - tronson de ieșire ambiguu „…” — de decis — **51**
-- serie „…” (NCA, propunere NCAN) — de decis — **23**
-- neconformitate „…” — de decis (intră sau refuzat la recepție) — **2**
 - aviz de ieșire CJPT N fără tronson — **1**
+- câmpuri de ieșire completate (tronson / dată / altă serie / altă cantitate) fără aviz de i — **1**
 
-<details><summary>Lista completă (666)</summary>
+<details><summary>Lista completă (767)</summary>
 
 | Foaie | Rând | Serie | Șarjă | L | Probleme |
 |---|---|---|---|---|---|
-| TEAVA 7.1 TOPLET | 58 | 254CA09771 | SA04735 | 12.5 | neconformitate „MARCAJ” — de decis (intră sau refuzat la recepție); depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
+| TEAVA 7.1 TOPLET | 58 | 254CA09771 | SA04735 | 12.5 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
+| TEAVA 7.1 TOPLET | 72 | 254CA09979 | SA04735 | 12.43 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 93 | 247EK05947 | SA00334 | 12.14 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 94 | 247EK07846 | SA07342 | 12.22 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 95 | 247EK06451 | RA08355 | 12.15 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
@@ -293,7 +295,7 @@ Pe tipuri:
 | TEAVA 7.1 TOPLET | 302 | 247EK09430 | SA07347 | 12.48 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 312 | 247EK07683 | SA07344 | 11.99 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 314 | 247EK08766 | SA07352 | 12.24 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
-| TEAVA 7.1 TOPLET | 596 | 247EK08658 | SA07352 | 12.26 | neconformitate „LIPSA MARCAJ” — de decis (intră sau refuzat la recepție); depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
+| TEAVA 7.1 TOPLET | 596 | 247EK08658 | SA07352 | 12.26 | depozit neclar: Topleț · DT/OS „ORSOVA (TOPLET)” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 847 | 247EK09267 | SA07353 | 12.28 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 848 | 247EK09723 | SA07354 | 12.28 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 849 | 247EK09742 | SA07354 | 12.28 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
@@ -530,6 +532,8 @@ Pe tipuri:
 | TEAVA 7.1 TOPLET | 1144 | 247EK05568 | SA01427 | 12.18 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 1145 | 247EK08581 | SA07348 | 12.05 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 1146 | 247EK08569 | SA07348 | 12.2 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
+| TEAVA 7.1 TOPLET | 1195 | 247EK07558 | SA07343 | 12.06 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
+| TEAVA 7.1 TOPLET | 1196 | 247EK08953 | SA07350 | 12.26 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 1283 | 254CA10094 | TA01575 | 12.4 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 1284 | 254CA10095 | TA01575 | 12.39 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
 | TEAVA 7.1 TOPLET | 1285 | 254CA10096 | TA01575 | 12.4 | depozit neclar: Topleț · DT/OS „—” — de decis pe grup |
@@ -731,33 +735,131 @@ Pe tipuri:
 | CURBE LOT 2 | 358 | 131 | 2513615 | 1 | tronson de ieșire ambiguu „16-17” — de decis |
 | CURBE LOT 2 | 359 | 157 | 2520915 | 1 | tronson de ieșire ambiguu „16-17” — de decis |
 | CURBE LOT 2 | 424 | 362 | 2520915 | 1 | aviz de ieșire CJPT 0026 fără tronson |
-| TEAVA 7.1 MM | 88 | 2545CA08776 | SA04752 | 12.46 | serie „2545CA08776” (2545CA, propunere 254CA08776) — de decis |
-| TEAVA 7.1 MM | 89 | 2545CA08812 | SA04754 | 12.45 | serie „2545CA08812” (2545CA, propunere 254CA08812) — de decis |
-| TEAVA 7.1 MM | 90 | 2545CA09079 | SA04756 | 12.49 | serie „2545CA09079” (2545CA, propunere 254CA09079) — de decis |
-| TEAVA 7.1 MM | 91 | 2545CA09082 | SA04756 | 12.49 | serie „2545CA09082” (2545CA, propunere 254CA09082) — de decis |
-| TEAVA 7.1 MM | 92 | 2545CA09230 | SA04754 | 12.45 | serie „2545CA09230” (2545CA, propunere 254CA09230) — de decis |
-| TEAVA 7.1 MM | 93 | 2545CA09241 | SA04754 | 12.18 | serie „2545CA09241” (2545CA, propunere 254CA09241) — de decis |
-| TEAVA 7.1 MM | 94 | 2545CA09256 | SA04752 | 12.39 | serie „2545CA09256” (2545CA, propunere 254CA09256) — de decis |
-| TEAVA 7.1 MM | 95 | 2545CA09276 | SA04755 | 12.46 | serie „2545CA09276” (2545CA, propunere 254CA09276) — de decis |
-| TEAVA 7.1 MM | 96 | 2545CA09658 | SA04750 | 12.4 | serie „2545CA09658” (2545CA, propunere 254CA09658) — de decis |
-| TEAVA 7.1 MM | 97 | 2545CA09671 | SA04755 | 12.35 | serie „2545CA09671” (2545CA, propunere 254CA09671) — de decis |
-| TEAVA 7.1 MM | 98 | 2545CA09695 | SA04750 | 12.5 | serie „2545CA09695” (2545CA, propunere 254CA09695) — de decis |
-| TEAVA 7.1 MM | 99 | 2545CA09702 | SA04750 | 11.5 | serie „2545CA09702” (2545CA, propunere 254CA09702) — de decis |
-| TEAVA 7.1 MM | 100 | 2545CA09782 | SA04735 | 12.5 | serie „2545CA09782” (2545CA, propunere 254CA09782) — de decis |
-| TEAVA 7.1 MM | 101 | 2545CA09790 | SA04735 | 12.5 | serie „2545CA09790” (2545CA, propunere 254CA09790) — de decis |
-| TEAVA 7.1 MM | 102 | 2545CA09791 | SA04735 | 12.49 | serie „2545CA09791” (2545CA, propunere 254CA09791) — de decis |
-| TEAVA 7.1 MM | 103 | 2545CA09171 | SA04757 | 12.37 | serie „2545CA09171” (2545CA, propunere 254CA09171) — de decis |
-| TEAVA 7.1 MM | 104 | 2545CA09196 | SA04753 | 12.11 | serie „2545CA09196” (2545CA, propunere 254CA09196) — de decis |
-| TEAVA 7.1 MM | 105 | 2545CA09215 | SA04735 | 12.47 | serie „2545CA09215” (2545CA, propunere 254CA09215) — de decis |
-| TEAVA 7.1 MM | 106 | 2545CA09637 | SA04755 | 12.41 | serie „2545CA09637” (2545CA, propunere 254CA09637) — de decis |
-| TEAVA 7.1 MM | 107 | 2545CA09747 | SA04754 | 12.45 | serie „2545CA09747” (2545CA, propunere 254CA09747) — de decis |
-| TEAVA 7.1 MM | 108 | 2545CA09748 | SA04754 | 12.44 | serie „2545CA09748” (2545CA, propunere 254CA09748) — de decis |
-| TEAVA 7.1 MM | 109 | 2545CA09749 | SA04754 | 12.34 | serie „2545CA09749” (2545CA, propunere 254CA09749) — de decis |
-| TEAVA 7.1 MM | 110 | 2545CA09750 | SA04754 | 12.44 | serie „2545CA09750” (2545CA, propunere 254CA09750) — de decis |
+| CURBE LOT 2 | 426 | 1198 | 2520914 | 1 | câmpuri de ieșire completate (tronson / dată / altă serie / altă cantitate) fără aviz de ieșire |
+| TEAVA 7.1 MM | 283 | 254CA08784 | SA04754 | 12.47 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 284 | 254CA09336 | SA04752 | 12.23 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 285 | 254CA09511 | SA04735 | 12.39 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 286 | 254CA09513 | SA04735 | 12.39 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 287 | 254CA09516 | SA04735 | 12.39 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 288 | 254CA09521 | SA04735 | 12.4 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 289 | 254CA09724 | SA04749 | 12.34 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 290 | 254CA09757 | SA04754 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 291 | 254CA09822 | SA04736 | 12.46 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 292 | 254CA09824 | SA04749 | 12.43 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 293 | 254CA09825 | SA04749 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 294 | 254CA09826 | SA04749 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 295 | 254CA09827 | SA04749 | 12.43 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 296 | 254CA09830 | SA04749 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 297 | 254CA09832 | SA04749 | 12.43 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 298 | 254CA09021 | SA04751 | 12.39 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 299 | 254CA09058 | SA04751 | 12.48 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 300 | 254CA09064 | SA04756 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 301 | 254CA09165 | SA04757 | 12.37 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 302 | 254CA09216 | SA04735 | 12.47 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 303 | 254CA09295 | SA04751 | 12.38 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 304 | 254CA09300 | SA04751 | 12.38 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 305 | 254CA09343 | SA04755 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 306 | 254CA09453 | SA04751 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 307 | 254CA09456 | SA04751 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 308 | 254CA09480 | SA04754 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 309 | 254CA09506 | SA04735 | 12.39 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 310 | 254CA09507 | SA04735 | 12.4 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 311 | 254CA09555 | SA04752 | 12.41 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 312 | 254CA09557 | SA04752 | 12.41 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 313 | 254CA09029 | SA04751 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 314 | 254CA09048 | SA04751 | 12.5 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 315 | 254CA09509 | SA04735 | 12.4 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 316 | 254CA09510 | SA04735 | 12.41 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 317 | 254CA09518 | SA04735 | 12.4 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 318 | 254CA09519 | SA04735 | 12.4 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 319 | 254CA09527 | SA04752 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 320 | 254CA09812 | SA04736 | 12.33 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 321 | 254CA09817 | SA04736 | 12.45 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 322 | 254CA09833 | SA04749 | 12.43 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 323 | 254CA09834 | SA04749 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 324 | 254CA09835 | SA04749 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 325 | 254CA09836 | SA04749 | 12.43 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 326 | 254CA09837 | SA04749 | 12.43 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 327 | 254CA09839 | SA04749 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 328 | 254CA07905 | SA04734 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 329 | 254CA07925 | SA04734 | 12.38 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 330 | 254CA08557 | SA04756 | 12.43 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 331 | 254CA09229 | SA04754 | 12.46 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 332 | 254CA09293 | SA04751 | 12.38 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 333 | 254CA09325 | SA04752 | 12.42 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 334 | 254CA09330 | SA04752 | 12.42 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 335 | 254CA09512 | SA04735 | 12.4 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 336 | 254CA09515 | SA04735 | 12.39 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 337 | 254CA09525 | SA04752 | 12.48 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 338 | 254CA09739 | SA04749 | 12.34 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 339 | 254CA09755 | SA04754 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 340 | 254CA09959 | SA04736 | 12.44 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 341 | 254CA09991 | SA02268 | 11.79 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 342 | 254CA10049 | SA04752 | 11.62 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 414 | 247EK09074 | SA07346 | 12.18 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 415 | 247EK08420 | SA07344 | 12.13 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 416 | 247EK07851 | SA07342 | 12.3 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 417 | 247EK09181 | SA07346 | 12.15 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 418 | 247EK08948 | SA07350 | 12.13 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 419 | 247EK08974 | SA07350 | 12.23 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 420 | 247EK09023 | SA07347 | 12.22 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 421 | 247EK09183 | SA07346 | 12.19 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 422 | 247EK08602 | SA07348 | 12.29 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 423 | 247EK09179 | SA07346 | 12.19 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 424 | 247EK09191 | SA07346 | 12.15 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 425 | 247EK08627 | SA07348 | 12.28 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 426 | 247EK07959 | SA07349 | 12.24 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 427 | 247EK08510 | SA07339 | 11.99 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 428 | 247EK09304 | SA07353 | 12.27 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 429 | 247EK09291 | SA07353 | 12.31 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 430 | 247EK09290 | SA07353 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 431 | 247EK09095 | SA07346 | 12.18 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 432 | 247EK07964 | SA07349 | 12.24 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 433 | 247EK07773 | SA07342 | 12.29 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 434 | 247EK08854 | SA07339 | 12.19 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 435 | 247EK08932 | SA07350 | 12.13 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 436 | 247EK09773 | SA07351 | 12.35 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 437 | 247EK06375 | RA09294 | 12.2 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 438 | 247EK06454 | RA08355 | 11.6 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 439 | 247EK08034 | SA07349 | 12.21 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 440 | 247EK08831 | SA07339 | 12.19 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 441 | 247EK07873 | SA07342 | 12.25 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 442 | 247EK07865 | SA07342 | 12.27 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 443 | 247EK09292 | SA07353 | 12.24 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 444 | 247EK08039 | SA07349 | 12.2 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 445 | 247EK08267 | SA07345 | 12.19 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 446 | 247EK08576 | SA07348 | 12.04 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 447 | 247EK08680 | SA07352 | 12.28 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 448 | 247EK09233 | SA07353 | 12.2 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 449 | 247EK08236 | SA07345 | 12.21 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 450 | 247EK08377 | SA07344 | 12.13 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 451 | 247EK08016 | SA07349 | 12.16 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 452 | 247EK08578 | SA07348 | 12.05 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 453 | 247EK09238 | SA07353 | 12.2 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 454 | 247EK08273 | SA07345 | 12.19 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 455 | 247EK07771 | SA07342 | 12.29 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 456 | 247EK08720 | SA07352 | 12.27 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 457 | 247EK08719 | SA07352 | 12.27 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 458 | 247EK07850 | SA07342 | 12.49 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 459 | 247EK06347 | RA09294 | 12.14 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 460 | 247EK09028 | SA07347 | 12.24 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 461 | 247EK09055 | SA07347 | 12.16 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 462 | 247EK09289 | SA07353 | 12.5 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 463 | 247EK09154 | SA07346 | 12.22 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 464 | 247EK09194 | SA07346 | 12.15 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 465 | 247EK09235 | SA07353 | 12.21 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 466 | 247EK08579 | SA07348 | 12.06 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 467 | 247EK08675 | SA07352 | 12.27 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 468 | 247EK08026 | SA07349 | 12.27 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 469 | 247EK09057 | SA07346 | 12.2 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 470 | 247EK07146 | RA09291 | 12.18 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 471 | 247EK08736 | SA07352 | 12.16 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 472 | 247EK09058 | SA07346 | 12.22 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
+| TEAVA 7.1 MM | 473 | 247EK08686 | SA07352 | 12.28 | depozit neclar: Jupânești · DT/OS „DM JUPANESTI/BALVANESTI” — de decis pe grup |
 
 </details>
 
-## Avertismente (nu blochează): 16 rânduri
+## Avertismente (nu blochează): 17 rânduri
 
 - TEAVA 7.1 TOPLET r81 247EK05228: șarjă în afara formatului AA99999: B0408381
 - TEAVA 7.1 TOPLET r89 247EK06342: șarjă în afara formatului AA99999: SA000333
@@ -766,6 +868,7 @@ Pe tipuri:
 - TEAVA 7.1 TOPLET r343 247EK05331: șarjă în afara formatului AA99999: B2407893
 - TEAVA 7.1 TOPLET r532 247EK05154: șarjă în afara formatului AA99999: B0408383
 - TEAVA 7.1 TOPLET r574 247EK06122: șarjă în afara formatului AA99999: SA0336
+- TEAVA 7.1 TOPLET r618 247EK07330: data ieșirii necitită: 6/12.2026
 - TEAVA 7.1 TOPLET r627 247EK05330: șarjă în afara formatului AA99999: B2407893
 - TEAVA 7.1 TOPLET r634 247EK05217: șarjă în afara formatului AA99999: B0408381
 - TEAVA 7.1 TOPLET r635 247EK05226: șarjă în afara formatului AA99999: B0408381
@@ -778,5 +881,5 @@ Pe tipuri:
 
 ## Verdict
 
-**NEAPLICABIL** (R13): 666 rânduri cu probleme blocante. Payload-ul NU s-a scris. Deciziile se trec în fișierul de decizii (corecții de serie, excluderi, grupuri de depozit, tronsoane ambigue, neconformități acceptate), apoi preview-ul se rulează din nou.
+**NEAPLICABIL** (R13): 767 rânduri cu probleme blocante. Payload-ul NU s-a scris (și cel al unei rulări anterioare a fost șters). Deciziile se trec în fișierul de decizii (corecții de serie, excluderi, grupuri de depozit, tronsoane ambigue, neconformități acceptate), apoi preview-ul se rulează din nou.
 

@@ -45,7 +45,9 @@ export function dataExcel(v) {
   const m = String(v).trim().match(/^(\d{1,2})([./])(\d{1,2})\2(\d{4})$/)
   if (m) {
     const [z, l, a] = [Number(m[1]), Number(m[3]), Number(m[4])]
-    if (l >= 1 && l <= 12 && z >= 1 && z <= 31) return `${a}-${String(l).padStart(2, '0')}-${String(z).padStart(2, '0')}`
+    const iso = `${a}-${String(l).padStart(2, '0')}-${String(z).padStart(2, '0')}`
+    // calendarul real (31/02, 29/02 în an nebisect → invalid), fără fus orar
+    if (l >= 1 && l <= 12 && z >= 1 && z <= 31 && new Date(Date.UTC(a, l - 1, z)).toISOString().slice(0, 10) === iso) return iso
   }
   return { invalid: String(v) }
 }
@@ -86,20 +88,28 @@ export function tronsonIesire(v) {
 }
 
 /**
- * Citește o foaie. Întoarce rânduri normalizate (fără decizii aplicate) + excluderile numărate.
- * opt: { fisier (numele), foaie, rows, sha256 }
+ * Citește o foaie. Întoarce rânduri normalizate (fără decizii aplicate) + excluderile numărate + rândurile fără serie
+ * dar cu alte celule de material completate (fara_serie — blocante, review #807).
+ * opt: { fisier (numele), foaie, rows, tipFisier ('toplet' | 'jupanesti' — workbook-ul real; foaia trebuie să-i aparțină) }
  */
-export function citesteFoaie({ fisier, foaie, rows }) {
+export function citesteFoaie({ fisier, foaie, rows, tipFisier = null }) {
   const def = FOI[foaie]
-  if (!def) return { necunoscuta: true, randuri: [], excluse: [] }
+  if (!def) return { necunoscuta: true, randuri: [], excluse: [], fara_serie: [] }
+  // foaia legată de workbook-ul real (review #807 P1): o foaie mutată în alt fișier ar primi depozitul greșit
+  if (tipFisier && def.fisier !== tipFisier) return { foaie_gresita: true, randuri: [], excluse: [], fara_serie: [] }
   const L = LAYOUT[def.layout]
-  const randuri = [], excluse = []
+  const randuri = [], excluse = [], fara_serie = []
   for (let i = L.start; i < rows.length; i++) {
     const r = rows[i] || []
     const rand = i + 1
     const serieBruta = txt(r[L.serie])
-    if (!serieBruta) continue
     const sursa = { fisier, foaie, rand }
+    if (!serieBruta) {
+      // doar rândul cu adevărat gol se ignoră; descriere / șarjă / greutate / aviz / cantitate fără serie = blocant
+      const pline = ['desc', 'sarja', 'kg', 'nrAviz', 'cant'].filter(k => txt(r[L[k]]) !== '')
+      if (pline.length) fara_serie.push({ sursa, campuri: pline })
+      continue
+    }
     const descriere = txt(r[L.desc])
     const gestiune = txt(r[L.gestiune]).toUpperCase()
     const dtos = txt(r[L.dtos]).toUpperCase()
@@ -109,11 +119,15 @@ export function citesteFoaie({ fisier, foaie, rows }) {
     const pvNr = txt(r[L.pvNr])
     const pvData = dataExcel(r[L.pvData] ?? (L.dataRec !== undefined ? r[L.dataRec] : null))
     const b = {
-      sursa, tip: def.tip, serie_bruta: serieBruta, sarja: txt(r[L.sarja]).toUpperCase() || null, descriere,
+      // șarja normalizată ca la import (fără spații, majuscule) — aceeași cheie de coliziune în preview și în BD
+      sursa, tip: def.tip, serie_bruta: serieBruta, sarja: txt(r[L.sarja]).toUpperCase().replace(/\s+/g, '') || null,
+      sarja_bruta: txt(r[L.sarja]) || null, descriere,
       greutate_kg: num(r[L.kg]), nr_aviz: txt(r[L.nrAviz]) || null, data_aviz: dataExcel(r[L.dataAviz]),
       cantitate: num(r[L.cant]), gestiune, dt_os: dtos, neconformitate: neconf || null, aviz_iesire: iesAviz || null,
       tronson_iesire: tr, cant_iesire: num(r[L.iesCant]), debitare: L.debitare !== undefined ? num(r[L.debitare]) : null,
       cant_in_dm: L.inDm !== undefined ? num(r[L.inDm]) : null, pv_nr: pvNr || null, pv_data: pvData,
+      data_nrcd: L.dataNrcd !== undefined ? dataExcel(r[L.dataNrcd]) : null,
+      ies_serie: txt(r[L.iesSerie]).toUpperCase() || null, data_iesire: dataExcel(r[L.iesData]),
       obs: txt(r[L.obs]) || null,
     }
     if (def.tip === 'teava') {
@@ -133,7 +147,7 @@ export function citesteFoaie({ fisier, foaie, rows }) {
     }
     randuri.push(b)
   }
-  return { randuri, excluse }
+  return { randuri, excluse, fara_serie }
 }
 
 // depozitul propus: Jupânești → JUP; Topleț → ORN pentru DT/OS „ORSOVA” sau avize CJPT-O, TOP pentru „TOPLET”
@@ -150,7 +164,7 @@ export function depozitPropus(b, coduri) {
  * decizii: { corectii_serie: {brut: corect}, excluderi: [{fisier, foaie, rand, motiv}], depozit_grup: {grup: COD},
  *            tronson_grup: {text: nr}, accepta_neconformitate: [{fisier, foaie, rand}], accepta_sarja: [serie] }
  */
-export function evalueaza(randuri, { decizii = {}, coduri, tronsoane }) {
+export function evalueaza(randuri, { decizii = {}, coduri, tronsoane, faraSerie = [] }) {
   const cheieSursa = s => `${s.fisier}|${s.foaie}|${s.rand}`
   const exclDec = new Map((decizii.excluderi || []).map(e => [cheieSursa(e), e.motiv]))
   const neconfOk = new Set((decizii.accepta_neconformitate || []).map(cheieSursa))
@@ -160,9 +174,14 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane }) {
     if (exclDec.has(cheieSursa(b.sursa))) { excluse.push({ sursa: b.sursa, serie: b.serie, motiv: `decizie: ${exclDec.get(cheieSursa(b.sursa))}` }); continue }
     // seria
     if (b.tip === 'teava') {
+      // corecția: text sau { serie, nota }; revalidată cu RE_SERIE_TEAVA (review #807 P2) — o greșeală de tastare în
+      // fișierul de decizii nu trece
       const corect = decizii.corectii_serie?.[b.serie_bruta.toUpperCase()]
-      if (corect) { b.serie = corect.toUpperCase(); b.serie_corectata_din = b.serie_bruta }
-      else if (b.clasa_serie === 'conflict_2545CA') b.probleme.push(`serie „${b.serie_bruta}” (2545CA, propunere ${b.propunere_serie}) — de decis`)
+      if (corect) {
+        b.serie = String(typeof corect === 'object' ? corect.serie : corect).toUpperCase().trim(); b.serie_corectata_din = b.serie_bruta
+        if (typeof corect === 'object' && corect.nota) b.nota_corectie = corect.nota
+        if (!RE_SERIE_TEAVA.test(b.serie)) b.probleme.push(`corecția de serie „${b.serie}” (din ${b.serie_bruta}) nu respectă formatul 999AA99999`)
+      } else if (b.clasa_serie === 'conflict_2545CA') b.probleme.push(`serie „${b.serie_bruta}” (2545CA, propunere ${b.propunere_serie}) — de decis`)
       else if (b.clasa_serie === 'format') b.probleme.push(`serie „${b.serie_bruta}” în afara formatului 999AA99999`)
       if (b.lungime_mm === null || b.lungime_mm <= 0 || b.lungime_mm > 13000) b.probleme.push(`lungime invalidă (${b.cantitate})`)
       // peretele: din foaie, verificat cu descrierea
@@ -181,9 +200,19 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane }) {
     else if (b.tip === 'teava' && !/^[A-Z]{2}\d{5}$/.test(b.sarja) && !(decizii.accepta_sarja || []).includes(b.sarja))
       b.avertismente.push(`șarjă în afara formatului AA99999: ${b.sarja}`)
     if (b.neconformitate && !neconfOk.has(cheieSursa(b.sursa))) b.probleme.push(`neconformitate „${b.neconformitate}” — de decis (intră sau refuzat la recepție)`)
+    if (b.neconformitate && neconfOk.has(cheieSursa(b.sursa))) b.nota_neconformitate = `NECONFORM: ${b.neconformitate}`
     if (b.data_aviz && typeof b.data_aviz === 'object') b.avertismente.push(`data avizului necitită: ${b.data_aviz.invalid}`)
+    if (b.greutate_kg !== null && b.greutate_kg <= 0) b.avertismente.push(`greutate ${b.greutate_kg} kg`)
+    // datele care decid starea: o dată necitită nu se ghicește (review #807 P2)
+    const pvValid = typeof b.pv_data === 'string', nrcdValid = typeof b.data_nrcd === 'string'
+    if (b.pv_data && !pvValid && !b.pv_nr) b.probleme.push(`data PV necitită: ${b.pv_data.invalid}`)
+    if (b.data_nrcd && !nrcdValid) b.probleme.push(`data NRCD necitită: ${b.data_nrcd.invalid}`)
+    if (b.data_iesire && typeof b.data_iesire === 'object') b.avertismente.push(`data ieșirii necitită: ${b.data_iesire.invalid}`)
     // starea și locul
     if (b.aviz_iesire) {
+      // seria scrisă la ieșire trebuie să fie a rândului (brută sau corectată) — un aviz mutat pe alt rând nu trece
+      if (b.ies_serie && serieCanon(b.ies_serie) !== serieCanon(b.serie) && serieCanon(b.ies_serie) !== serieCanon(b.serie_bruta))
+        b.probleme.push(`seria la ieșire „${b.ies_serie}” ≠ seria rândului „${b.serie}”`)
       let nr = b.tronson_iesire?.nr ?? null
       if (b.tronson_iesire?.ambiguu) {
         const d = decizii.tronson_grup?.[b.tronson_iesire.ambiguu]
@@ -196,14 +225,22 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane }) {
         else { b.stare = 'pe_tronson'; b.tronson_id = t; b.tronson_cod = `T${nr}` }
       } else if (!b.tronson_iesire) b.probleme.push(`aviz de ieșire ${b.aviz_iesire} fără tronson`)
     } else {
-      b.stare = b.pv_nr || (b.pv_data && typeof b.pv_data === 'string') ? 'receptionat' : 'sosit'
+      // câmpuri de ieșire completate fără aviz de ieșire = rând inconsistent (review #807 P1 / Gemini). În foi, seria și
+      // cantitatea de la ieșire sunt precompletate cu ale rândului (verificat pe Excelurile din 20.10): contează doar
+      // tronsonul, data sau o serie / cantitate DIFERITĂ de a rândului.
+      const serieAlta = b.ies_serie && serieCanon(b.ies_serie) !== serieCanon(b.serie) && serieCanon(b.ies_serie) !== serieCanon(b.serie_bruta)
+      const cantAlta = b.cant_iesire !== null && (b.cantitate === null || Math.abs(b.cant_iesire - b.cantitate) > 0.005)
+      if (b.tronson_iesire || b.data_iesire || serieAlta || cantAlta)
+        b.probleme.push('câmpuri de ieșire completate (tronson / dată / altă serie / altă cantitate) fără aviz de ieșire')
+      // recepționat = PV (număr sau dată validă) SAU NRCD cu dată validă (review #807 P1)
+      b.stare = b.pv_nr || pvValid || nrcdValid ? 'receptionat' : 'sosit'
     }
+    // depozitul (sau originea, pentru cele de pe tronson) trebuie cunoscut în ORICE stare (review #807 P1)
     const dep = depozitPropus(b, coduri)
     if (dep.grup) {
       const cod = decizii.depozit_grup?.[dep.grup]
       if (cod && coduri[cod]) { b.depozit_cod = cod; b.depozit_id = coduri[cod] }
-      else if (b.stare !== 'pe_tronson') b.probleme.push(`depozit neclar: ${dep.grup} — de decis pe grup`)
-      else b.depozit_grup = dep.grup
+      else { b.probleme.push(`depozit neclar: ${dep.grup} — de decis pe grup`); b.depozit_grup = dep.grup }
     } else { b.depozit_cod = dep.cod; b.depozit_id = dep.id }
     out.push(b)
   }
@@ -217,12 +254,16 @@ export function evalueaza(randuri, { decizii = {}, coduri, tronsoane }) {
       b.probleme.push(m); a.probleme.push(`coliziune ${b.tip === 'teava' ? 'serie' : 'curbă'} cu ${b.sursa.foaie} r${b.sursa.rand}`)
     } else vazute.set(k, b)
   }
-  return { randuri: out, excluse }
+  // rândurile fără serie dar cu material: blocante, cu excepția celor excluse explicit în decizii
+  const blocante_globale = faraSerie.filter(f => !exclDec.has(cheieSursa(f.sursa)))
+    .map(f => ({ sursa: f.sursa, problema: `rând fără serie, cu ${f.campuri.join(' / ')} completate` }))
+  for (const f of faraSerie) if (exclDec.has(cheieSursa(f.sursa))) excluse.push({ sursa: f.sursa, serie: '', motiv: `decizie: ${exclDec.get(cheieSursa(f.sursa))}` })
+  return { randuri: out, excluse, blocante_globale }
 }
 
 /** Payload-ul pentru fn_izo_import_sold_initial — doar când nu există nicio problemă blocantă. */
-export function construiestePayload(randuri, surse, motiv) {
-  if (randuri.some(b => b.probleme.length)) throw new Error('preview neaplicabil: există rânduri cu probleme blocante')
+export function construiestePayload(randuri, surse, motiv, blocanteGlobale = []) {
+  if (randuri.some(b => b.probleme.length) || blocanteGlobale.length) throw new Error('preview neaplicabil: există rânduri cu probleme blocante')
   return {
     motiv, surse,
     bucati: randuri.map(b => ({
@@ -236,9 +277,13 @@ export function construiestePayload(randuri, surse, motiv) {
       grad_otel: /L360NE/i.test(b.descriere) ? 'L360NE' : undefined, standard: /3183/.test(b.descriere) ? 'SR EN ISO 3183 PSL2' : undefined,
       greutate_kg: b.greutate_kg ?? undefined, nr_aviz: b.nr_aviz ?? undefined,
       data_aviz: typeof b.data_aviz === 'string' ? b.data_aviz : undefined, gestiune: b.gestiune || undefined, dt_os: b.dt_os || undefined,
-      aviz_iesire: b.aviz_iesire ?? undefined, pv_receptie: b.pv_nr ? { nr: b.pv_nr, data: typeof b.pv_data === 'string' ? b.pv_data : null } : undefined,
-      descriere: b.descriere, observatii: b.obs ?? undefined,
-      sursa: { ...b.sursa, serie_bruta: b.serie_bruta !== b.serie ? b.serie_bruta : undefined },
+      aviz_iesire: b.aviz_iesire ? { nr: b.aviz_iesire, data: typeof b.data_iesire === 'string' ? b.data_iesire : null, serie: b.ies_serie || null } : undefined,
+      pv_receptie: b.pv_nr || typeof b.pv_data === 'string' ? { nr: b.pv_nr || null, data: typeof b.pv_data === 'string' ? b.pv_data : null } : undefined,
+      nrcd: typeof b.data_nrcd === 'string' ? { data: b.data_nrcd } : undefined,
+      descriere: b.descriere,
+      observatii: [b.nota_neconformitate, b.nota_corectie, b.obs].filter(Boolean).join(' · ') || undefined,
+      sursa: { ...b.sursa, serie_bruta: b.serie_bruta !== b.serie ? b.serie_bruta : undefined,
+               sarja_bruta: b.sarja_bruta && b.sarja_bruta !== b.sarja ? b.sarja_bruta : undefined },
     })),
   }
 }

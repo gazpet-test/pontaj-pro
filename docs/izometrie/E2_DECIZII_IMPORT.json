@@ -1,10 +1,134 @@
 {
   "_descriere": "Deciziile OAMENILOR pentru importul soldului inițial LOT 2 (preview_e2_stoc.mjs). Gol = nimic decis încă: preview-ul listează ce trebuie decis. Fiecare decizie se scrie cu autorul și data în _jurnal.",
-  "_jurnal": [],
-  "corectii_serie": {},
+  "_jurnal": [
+    {
+      "data": "2026-10-21",
+      "autor": "Razvan Trusu (prin sesiunea de chat)",
+      "decizie": "4) corectii_serie: cele 23 de serii 2545CA… → 254CA… (se scoate „5”-ul în plus), cu nota „corectat din 2545CA, confirmat de Razvan 21.10.2026”; revalidate cu RE_SERIE_TEAVA."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "Razvan Trusu (prin sesiunea de chat)",
+      "decizie": "5) 254CA09771 („MARCAJ”) și 247EK08658 („LIPSA MARCAJ”) intră, marcate NECONFORME, cu observația păstrată."
+    },
+    {
+      "data": "2026-10-21",
+      "autor": "—",
+      "decizie": "DESCHISE (întrebat managerul de proiect): 1) „ORSOVA (TOPLET)”, 2) Topleț fără DT/OS, 3) curbele „16-17”, 6) curba 362. Grup NOU apărut după review r1: Jupânești „DM JUPANESTI/BALVANESTI” (120, originea țevilor de pe T12)."
+    }
+  ],
+  "corectii_serie": {
+    "2545CA08776": {
+      "serie": "254CA08776",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA08812": {
+      "serie": "254CA08812",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09079": {
+      "serie": "254CA09079",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09082": {
+      "serie": "254CA09082",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09230": {
+      "serie": "254CA09230",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09241": {
+      "serie": "254CA09241",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09256": {
+      "serie": "254CA09256",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09276": {
+      "serie": "254CA09276",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09658": {
+      "serie": "254CA09658",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09671": {
+      "serie": "254CA09671",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09695": {
+      "serie": "254CA09695",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09702": {
+      "serie": "254CA09702",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09782": {
+      "serie": "254CA09782",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09790": {
+      "serie": "254CA09790",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09791": {
+      "serie": "254CA09791",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09171": {
+      "serie": "254CA09171",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09196": {
+      "serie": "254CA09196",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09215": {
+      "serie": "254CA09215",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09637": {
+      "serie": "254CA09637",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09747": {
+      "serie": "254CA09747",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09748": {
+      "serie": "254CA09748",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09749": {
+      "serie": "254CA09749",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    },
+    "2545CA09750": {
+      "serie": "254CA09750",
+      "nota": "corectat din 2545CA, confirmat de Razvan 21.10.2026"
+    }
+  },
   "excluderi": [],
   "depozit_grup": {},
   "tronson_grup": {},
-  "accepta_neconformitate": [],
+  "accepta_neconformitate": [
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "rand": 58,
+      "serie": "254CA09771",
+      "motiv": "„MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”"
+    },
+    {
+      "fisier": "TOPLET__LOT_2_TEAVA.xlsx",
+      "foaie": "TEAVA 7.1 TOPLET",
+      "rand": 596,
+      "serie": "247EK08658",
+      "motiv": "„LIPSA MARCAJ” — intră NECONFORMĂ, observația păstrată; „vedem ce este cu ea”"
+    }
+  ],
   "accepta_sarja": []
 }

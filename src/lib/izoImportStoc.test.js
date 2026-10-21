@@ -70,8 +70,22 @@ describe('citesteFoaie', () => {
     const r = Array(25).fill(null); Object.assign(r, { 1: 870, 2: 'Curbe CMFØ 610/8/L360NE/6,1 - 20˚', 3: 2520914, 12: 'LOT 3' })
     expect(foaie('CURBE LOT 2', [r], 12).excluse[0].motiv).toBe('curbă LOT 3')
   })
-  it('rândurile fără serie se ignoră (POZ precompletat)', () => {
-    expect(foaie('TEAVA 8.8 MM', [rStd({ 1: null }), rStd()], 12).randuri.length).toBe(1)
+  it('rândul doar cu POZ se ignoră; fără serie dar cu material → fara_serie (blocant)', () => {
+    const goal = Array(24).fill(null); goal[0] = 7
+    const r = foaie('TEAVA 8.8 MM', [rStd({ 1: null }), rStd(), goal], 12)
+    expect(r.randuri.length).toBe(1)
+    expect(r.fara_serie).toEqual([{ sursa: { fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13 }, campuri: ['desc', 'sarja', 'kg', 'nrAviz', 'cant'] }])
+    const { blocante_globale } = evalueaza(r.randuri, { coduri, tronsoane, faraSerie: r.fara_serie })
+    expect(blocante_globale.length).toBe(1)
+    const dec = { excluderi: [{ fisier: 'X.xlsx', foaie: 'TEAVA 8.8 MM', rand: 13, motiv: 'rând de test' }] }
+    expect(evalueaza(r.randuri, { decizii: dec, coduri, tronsoane, faraSerie: r.fara_serie }).blocante_globale).toEqual([])
+  })
+  it('foaia trebuie să fie în workbook-ul ei', () => {
+    expect(citesteFoaie({ fisier: 'J.xlsx', foaie: 'TEAVA 7.1 TOPLET', rows: [], tipFisier: 'jupanesti' }).foaie_gresita).toBe(true)
+    expect(citesteFoaie({ fisier: 'T.xlsx', foaie: 'TEAVA 7.1 TOPLET', rows: [], tipFisier: 'toplet' }).foaie_gresita).toBeUndefined()
+  })
+  it('șarja normalizată fără spații (aceeași cheie ca la import)', () => {
+    expect(foaie('TEAVA 8.8 MM', [rStd({ 3: ' sa 03585 ' })], 12).randuri[0]).toMatchObject({ sarja: 'SA03585', sarja_bruta: 'sa 03585' })
   })
 })
 
@@ -128,10 +142,56 @@ describe('construiestePayload', () => {
     const rau = evalueaza(foaie('TEAVA 8.8 MM', [rStd({ 1: '2545CA00001' })], 12).randuri, { coduri, tronsoane }).randuri
     expect(() => construiestePayload(rau, [], 'x')).toThrow(/neaplicabil/)
   })
+  it('blocantele globale opresc payload-ul', () => {
+    const { randuri } = evalueaza(foaie('TEAVA 8.8 MM', [rStd()], 12).randuri, { coduri, tronsoane })
+    expect(() => construiestePayload(randuri, [], 'x', [{ sursa: {}, problema: 'rând fără serie' }])).toThrow(/neaplicabil/)
+  })
+  it('corecția (obiect cu notă) + neconformitatea acceptată ajung în observații; NRCD și ieșirea în atribute', () => {
+    const dec = { corectii_serie: { '2545CA09771': { serie: '254CA09771', nota: 'corectat din 2545CA' } },
+                  accepta_neconformitate: [{ fisier: 'X.xlsx', foaie: 'TEAVA 7.1 TOPLET', rand: 12 }] }
+    const { randuri } = evalueaza(foaie('TEAVA 7.1 TOPLET', [rT71({ 1: '2545CA09771', 15: 'MARCAJ', 22: null, 23: null })], 11).randuri, { decizii: dec, coduri, tronsoane })
+    expect(randuri[0].probleme).toEqual([])
+    const b = construiestePayload(randuri, [], 't').bucati[0]
+    expect(b).toMatchObject({ serie: '254CA09771', stare: 'receptionat', nrcd: { data: '2026-04-29' }, observatii: 'NECONFORM: MARCAJ · corectat din 2545CA',
+      sursa: { serie_bruta: '2545CA09771' } })
+    expect(b.pv_receptie).toBeUndefined()
+  })
   it('pe tronson: doar tronson_id, depozitul de plecare ca depozit_origine_id (locul exclusiv)', () => {
     const { randuri } = evalueaza(foaie('TEAVA 8.8 MM', [rStd({ 1: '264DB00026', 16: 'CJPJ 0038', 17: 12, 18: '264DB00026', 19: 12.41, 20: 12.41, 21: 0 })], 12).randuri, { coduri, tronsoane })
     const b = construiestePayload(randuri, [{ fisier: 'X.xlsx', sha256: 'a'.repeat(64) }], 'test').bucati[0]
     expect(b).toMatchObject({ stare: 'pe_tronson', tronson_id: 16, depozit_origine_id: 9 })
     expect(b.depozit_id).toBeUndefined()
+  })
+})
+
+describe('review #807', () => {
+  const ev = (rows, foaieNume, start, decizii = {}) => evalueaza(foaie(foaieNume, rows, start).randuri, { decizii, coduri, tronsoane })
+  it('date calendaristic imposibile → invalide', () => {
+    expect(dataExcel('31/02/2026')).toEqual({ invalid: '31/02/2026' })
+    expect(dataExcel('29.02.2025')).toEqual({ invalid: '29.02.2025' })
+    expect(dataExcel('29.02.2024')).toBe('2024-02-29')
+  })
+  it('NRCD fără PV → receptionat; fără NRCD și fără PV → sosit; NRCD necitit → blocant', () => {
+    expect(ev([rT71({ 22: null, 23: null })], 'TEAVA 7.1 TOPLET', 11).randuri[0].stare).toBe('receptionat')
+    expect(ev([rT71({ 9: null, 22: null, 23: null })], 'TEAVA 7.1 TOPLET', 11).randuri[0].stare).toBe('sosit')
+    expect(ev([rT71({ 9: '31/02/2026', 22: null, 23: null })], 'TEAVA 7.1 TOPLET', 11).randuri[0].probleme.join()).toMatch(/NRCD necitită/)
+  })
+  it('seria la ieșire diferită de a rândului → blocant', () => {
+    const r = ev([rT71({ 17: 'CJPT-O 0033', 18: '247EK09999', 21: 17 })], 'TEAVA 7.1 TOPLET', 11).randuri[0]
+    expect(r.probleme.join()).toMatch(/seria la ieșire/)
+  })
+  it('ieșire fără aviz: tronson sau altă cantitate → blocant; seria/cantitatea precompletate cu ale rândului → nu', () => {
+    expect(ev([rT71({ 21: 17 })], 'TEAVA 7.1 TOPLET', 11).randuri[0].probleme.join()).toMatch(/fără aviz de ieșire/)
+    expect(ev([rStd({ 18: '264DB00025', 19: 12.41 })], 'TEAVA 8.8 MM', 12).randuri[0].probleme).toEqual([])
+    expect(ev([rStd({ 18: '264DB00025', 19: 6.2 })], 'TEAVA 8.8 MM', 12).randuri[0].probleme.join()).toMatch(/fără aviz de ieșire/)
+  })
+  it('pe tronson cu depozit de origine neclar → blocant (originea nu se pierde)', () => {
+    const r = ev([rT71({ 14: 'ALTCEVA', 17: 'CJPT 0033', 18: '247EK08603', 21: 17 })], 'TEAVA 7.1 TOPLET', 11).randuri[0]
+    expect(r.stare).toBe('pe_tronson')
+    expect(r.probleme.join()).toMatch(/depozit neclar/)
+  })
+  it('corecția de serie greșit tastată → blocant', () => {
+    const r = ev([rT71({ 1: '2545CA09771' })], 'TEAVA 7.1 TOPLET', 11, { corectii_serie: { '2545CA09771': '254CA0977' } }).randuri[0]
+    expect(r.probleme.join()).toMatch(/nu respectă formatul/)
   })
 })

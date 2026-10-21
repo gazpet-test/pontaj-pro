@@ -18,6 +18,10 @@ import { citesteFoaie, evalueaza, construiestePayload, FOI } from '../../src/lib
 const XLSX = createRequire(import.meta.url)('xlsx-js-style')
 const [decPath, topletPath, jupPath, outPath] = process.argv.slice(2)
 if (!outPath) { console.error('folosire: node preview_e2_stoc.mjs <decizii.json> <toplet.xlsx> <jupanesti.xlsx> <iesire.md>'); process.exit(2) }
+// payload-ul unei rulări anterioare se șterge ÎNAINTE de orice (review #807 P1): un run NEAPLICABIL nu lasă pe disc un
+// payload vechi care ar părea aplicabil. Noul payload se scrie atomic (tmp + rename) doar la verdictul APLICABIL.
+const payloadPath = outPath.replace(/\.md$/, '') + '.payload.json'
+fs.rmSync(payloadPath, { force: true }); fs.rmSync(payloadPath + '.tmp', { force: true })
 const decizii = JSON.parse(fs.readFileSync(decPath, 'utf8'))
 // id-urile reale din BD (citite pe 20.10.2026; tronsoanele 16–23 și depozitele 9/10/11 aplicate de chat în E1)
 const coduri = { JUP: 9, ORN: 10, TOP: 11 }
@@ -32,8 +36,8 @@ const ASTEPTAT = {
   'TEAVA 8.8 MM': { bucati: 184, metri: 2288.80, livrate: 168, metri_livrate: 2089.30 },
 }
 
-const surse = [], toate = [], excluseCitire = []
-for (const [p, eticheta] of [[topletPath, 'TOPLET__LOT_2_TEAVA.xlsx'], [jupPath, 'JUPANESTI__LOT_2_TEAVA.xlsx']]) {
+const surse = [], toate = [], excluseCitire = [], faraSerie = [], foiGresite = []
+for (const [p, eticheta, tipFisier] of [[topletPath, 'TOPLET__LOT_2_TEAVA.xlsx', 'toplet'], [jupPath, 'JUPANESTI__LOT_2_TEAVA.xlsx', 'jupanesti']]) {
   const buf = fs.readFileSync(p)
   const sha = crypto.createHash('sha256').update(buf).digest('hex')
   surse.push({ fisier: eticheta, sha256: sha, octeti: buf.length })
@@ -41,11 +45,13 @@ for (const [p, eticheta] of [[topletPath, 'TOPLET__LOT_2_TEAVA.xlsx'], [jupPath,
   for (const foaie of wb.SheetNames) {
     if (!FOI[foaie]) continue
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[foaie], { header: 1, raw: true, defval: null })
-    const r = citesteFoaie({ fisier: eticheta, foaie, rows })
-    toate.push(...r.randuri); excluseCitire.push(...r.excluse)
+    // foaia trebuie să aparțină workbook-ului real (review #807 P1)
+    const r = citesteFoaie({ fisier: eticheta, foaie, rows, tipFisier })
+    if (r.foaie_gresita) { foiGresite.push(`${foaie} găsită în ${eticheta} (așteptată în fișierul ${FOI[foaie].fisier})`); continue }
+    toate.push(...r.randuri); excluseCitire.push(...r.excluse); faraSerie.push(...r.fara_serie)
   }
 }
-const { randuri, excluse: excluseDec } = evalueaza(toate, { decizii, coduri, tronsoane })
+const { randuri, excluse: excluseDec, blocante_globale } = evalueaza(toate, { decizii, coduri, tronsoane, faraSerie })
 const excluse = [...excluseCitire, ...excluseDec]
 
 const L = []
@@ -136,6 +142,15 @@ if (altele.length) {
   out('')
 }
 
+// ── probleme globale (foi în workbook-ul greșit, rânduri fără serie dar cu material) ──
+if (foiGresite.length || blocante_globale.length) {
+  out(`## Probleme BLOCANTE în afara rândurilor: ${foiGresite.length + blocante_globale.length}`)
+  out('')
+  for (const f of foiGresite) out(`- foaie în workbook-ul greșit: ${f}`)
+  for (const g of blocante_globale) out(`- ${g.sursa.foaie} r${g.sursa.rand}: ${g.problema} (se exclude explicit în \`excluderi\` sau se completează seria în Excel)`)
+  out('')
+}
+
 // ── probleme blocante ──
 const tipuri = new Map(); for (const b of cuProbleme) for (const p of b.probleme) { const k = p.replace(/„[^”]*”/g, '„…”').replace(/\d+(\.\d+)?/g, 'N').slice(0, 90); tipuri.set(k, (tipuri.get(k) || 0) + 1) }
 out(`## Probleme BLOCANTE: ${cuProbleme.length} rânduri`)
@@ -163,17 +178,17 @@ if (cuAv.length > 60) out(`- … încă ${cuAv.length - 60}`)
 out('')
 
 // ── verdict + payload ──
-const aplicabil = reconciliereOk && !cuProbleme.length
+const aplicabil = reconciliereOk && !cuProbleme.length && !foiGresite.length && !blocante_globale.length
 out('## Verdict')
 out('')
 if (aplicabil) {
-  const payload = construiestePayload(randuri, surse.map(({ fisier, sha256 }) => ({ fisier, sha256 })), `Sold inițial LOT 2 din Exceluri (${new Date().toISOString().slice(0, 10)})`)
-  const pj = outPath.replace(/\.md$/, '') + '.payload.json'
+  const payload = construiestePayload(randuri, surse.map(({ fisier, sha256 }) => ({ fisier, sha256 })), `Sold inițial LOT 2 din Exceluri (${new Date().toISOString().slice(0, 10)})`, blocante_globale)
+  const pj = payloadPath
   const txtPayload = JSON.stringify(payload)
-  fs.writeFileSync(pj, txtPayload + '\n', 'utf8')
+  fs.writeFileSync(pj + '.tmp', txtPayload + '\n', 'utf8'); fs.renameSync(pj + '.tmp', pj)
   out(`**APLICABIL.** Payload: \`${path.basename(pj)}\` (${payload.bucati.length} bucăți, sha256 fișier \`${crypto.createHash('sha256').update(txtPayload + '\n').digest('hex')}\`). Se aplică doar de sesiunea de chat, după „da”-ul lui Razvan: \`fn_izo_seteaza_nivel(3, 'stoc', …)\` + \`fn_izo_import_sold_initial(3, '<import_id>', <payload>)\` în aceeași tranzacție.`)
 } else {
-  out(`**NEAPLICABIL** (R13): ${reconciliereOk ? '' : 'reconcilierea nu bate; '}${cuProbleme.length} rânduri cu probleme blocante. Payload-ul NU s-a scris. Deciziile se trec în fișierul de decizii (corecții de serie, excluderi, grupuri de depozit, tronsoane ambigue, neconformități acceptate), apoi preview-ul se rulează din nou.`)
+  out(`**NEAPLICABIL** (R13): ${reconciliereOk ? '' : 'reconcilierea nu bate; '}${cuProbleme.length} rânduri cu probleme blocante${foiGresite.length + blocante_globale.length ? ` + ${foiGresite.length + blocante_globale.length} în afara rândurilor` : ''}. Payload-ul NU s-a scris (și cel al unei rulări anterioare a fost șters). Deciziile se trec în fișierul de decizii (corecții de serie, excluderi, grupuri de depozit, tronsoane ambigue, neconformități acceptate), apoi preview-ul se rulează din nou.`)
 }
 out('')
 fs.writeFileSync(outPath, L.join('\n') + '\n', 'utf8')
