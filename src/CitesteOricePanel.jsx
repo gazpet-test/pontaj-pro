@@ -30,7 +30,11 @@
 //   Verificare r4: la 0 rânduri, starea rândului o dă citirea lui directă, nu coada modulului (un rând
 //   mutat în alt modul lipsește din coadă, dar e tot deschis — F5).
 //   Simplificare: fără marcaj de reîncercare; fișierul din staging se șterge după închidere ca pe main,
-//   deci o reîncercare nu mai poate salva documentul a doua oară — un rând rămas deschis se scoate cu ✕.
+//   deci de regulă o reîncercare nu mai poate salva documentul a doua oară — un rând rămas deschis se scoate cu ✕.
+//   Fix-uri după simplificare: dacă ștergerea din staging pică, mesajul spune explicit că încă un
+//   «✓ Confirmă» ar salva a doua oară (NH-1); mesajele numesc ambele butoane roșii (HR-2); ✕ Respinge are
+//   text neutru și rezultatul verificat (RB2 / NH-2); un document „fără expirare" (sau tip fără expirare)
+//   nu primește data expirării la „Completează și închide" (HR-1).
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -40,7 +44,7 @@ import { jsPDF } from 'jspdf'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
 import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare,
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
-  inchidereFaraRezultat, stareInchidere, mesajInchidere } from './citesteOriceDubluri.js'
+  inchidereFaraRezultat, stareInchidere, mesajInchidere, stagingSters, textConfirmareRespingere, mesajRespingere } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -224,7 +228,13 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   const [dosar, setDosar] = useState({})
   const dosarSeq = useRef({ n:0, k:{} })
 
-  const flash = (tip, msg) => { setToast({ tip, msg }); setTimeout(() => setToast(null), 3500) }
+  // ms: mesajele de după o închidere eșuată sunt singura indicație de ieșire → stau mai mult (HR-2);
+  // timer-ul vechi se anulează, ca un toast scurt de dinainte să nu-l taie pe cel nou
+  const toastTimer = useRef(null)
+  const flash = (tip, msg, ms = 3500) => {
+    setToast({ tip, msg }); clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), ms)
+  }
 
   // Fără flash în deps (anti-buclă): doar setState + ref-uri stabile.
   const verificaDosar = useCallback(async (rows) => {
@@ -686,43 +696,52 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
-  // Marchează rândul inbox confirmat + curăță staging. Întoarce starea rândului: 'inchis' | 'deschis' |
-  // 'necunoscut' (stareInchidere). 21.10: eroarea update-ului nu se mai înghite (documentul intrase,
-  // dar rândul rămânea în coadă fără ca omul să afle). NU aruncă — documentul țintă e deja salvat.
+  // UPDATE pe rândul din coadă + starea lui după (stareInchidere, cu statusul pus). NU aruncă.
   // r4: 0 rânduri fără eroare → citesc rândul DIRECT (după id), nu din coada modulului: un rând mutat
   // între timp în alt modul lipsește din coadă, dar e tot deschis.
-  async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
+  async function actualizeazaRand(row, upd) {
     let res, citire = null
-    try {
-      res = await supabase.from('ai_documente_inbox').update({
-        status:'confirmat', modul_tinta:modulTinta, tip_document:tip,
-        entitate_tip:entTip, entitate_id:entId,
-        confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
-      }).eq('id', row.id).select('id')
-    } catch (e) { res = { error:e } }
-    // staging-ul se șterge ORICUM (ca pe main): o reîncercare nu mai poate salva documentul a doua oară; un rând rămas deschis se scoate cu ✕ Respinge / Scoate din coadă
-    await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
+    try { res = await supabase.from('ai_documente_inbox').update(upd).eq('id', row.id).select('id') }
+    catch (e) { res = { error:e } }
     if (inchidereFaraRezultat(res)) citire = await interogheaza(supabase.from('ai_documente_inbox').select('id,status').eq('id', row.id).maybeSingle())
-    return stareInchidere(res, citire)
+    return { stare:stareInchidere(res, citire, upd.status), eroare:(res && res.error) || null }
+  }
+
+  // Marchează rândul inbox confirmat + curăță staging. Întoarce { stare:'inchis' | 'deschis' | 'necunoscut',
+  // stagingRamas }. 21.10: eroarea update-ului nu se mai înghite (documentul intrase, dar rândul rămânea
+  // în coadă fără ca omul să afle). NU aruncă — documentul țintă e deja salvat.
+  async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
+    const { stare } = await actualizeazaRand(row, {
+      status:'confirmat', modul_tinta:modulTinta, tip_document:tip,
+      entitate_tip:entTip, entitate_id:entId,
+      confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
+    })
+    // staging-ul se șterge ORICUM (ca pe main): fără el, încă un «✓ Confirmă» pică la descărcare, nu salvează a
+    // doua oară. NH-1: storage-js nu aruncă ({ error } / data = []) → dacă nu s-a șters sigur, mesajul o spune.
+    const rm = await interogheaza(supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]))
+    return { stare, stagingRamas:!stagingSters(rm) }
   }
 
   // Documentul țintă e salvat → închid rândul din coadă și reîmprospătez ORICUM: și când
   // închiderea pică, ecranul părinte (lista proiectului, plafonul UPA, situația de plată,
   // dosarul angajatului) trebuie să vadă documentul nou. Întoarce true doar pe rând sigur închis.
   async function inchideRandSiReimprospateaza(row, msgOk, ...argsFinalize) {
-    const stare = await finalizeInbox(row, ...argsFinalize)
+    const { stare, stagingRamas } = await finalizeInbox(row, ...argsFinalize)
     await loadQueue()
-    const m = mesajInchidere(stare, msgOk)
-    flash(m.tip, m.msg)
+    const m = mesajInchidere(stare, msgOk, { stagingRamas })
+    flash(m.tip, m.msg, m.tip === 'ok' ? 3500 : 12000)
     onConfirmed && onConfirmed()
     return stare === 'inchis'
   }
 
+  // RB2 / NH-2: e și ieșirea după o închidere eșuată (documentul deja salvat) → text neutru, iar
+  // rezultatul se verifică (o cauză care persistă — ex. UPDATE refuzat — nu mai afișează „Respins.").
   async function handleReject(row) {
-    if (!confirm('Respingi documentul „' + row.fisier_nume + '"? Fișierul rămâne pentru audit, dar nu intră în sistem.')) return
+    if (!confirm(textConfirmareRespingere(row.fisier_nume))) return
     setBusyId(row.id)
-    await supabase.from('ai_documente_inbox').update({ status:'respins', respins_motiv:'respins manual', confirmat_de:profile.id, confirmat_la:new Date().toISOString() }).eq('id', row.id)
-    setBusyId(null); flash('ok', 'Respins.'); loadQueue()
+    const { stare, eroare } = await actualizeazaRand(row, { status:'respins', respins_motiv:'respins manual', confirmat_de:profile.id, confirmat_la:new Date().toISOString() })
+    const m = mesajRespingere(stare, eroare)
+    setBusyId(null); flash(m.tip, m.msg, m.tip === 'ok' ? 3500 : 8000); loadQueue()
   }
 
   async function preview(row) {
@@ -1045,6 +1064,13 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                   </div>
                                 ) : (
                                   <div style={{ color:G.dim }}>Nimic de completat — câmpurile din dosar sunt deja puse sau AI-ul n-a citit valori valide.</div>
+                                )}
+                                {/* HR-1: alegerea „fără expirare" din dosar (sau tipul fără expirare) nu se calcă */}
+                                {dub.expirareOmisa && (
+                                  <div style={{ color:G.dim, marginTop:4 }}>
+                                    {dub.expirareOmisa.motiv === 'dosar' ? 'În dosar e marcat „fără expirare"' : `Tipul «${dub.tipDosar?.denumire || 'din dosar'}» nu are expirare`}
+                                    {` — nu completez data expirării (AI a citit ${fmtD(dub.expirareOmisa.val + 'T00:00:00')}).`}
+                                  </div>
                                 )}
                               </div>
                             )}

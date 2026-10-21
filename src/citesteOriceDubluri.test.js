@@ -5,6 +5,7 @@ import {
   observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, inchidereFaraRezultat,
   texteAltContinut, marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare,
   gardaFinalaHR, stareInchidere, mesajInchidere, MESAJ_RAND_NEVERIFICAT, MESAJ_RAND_NEINCHIS,
+  motivFaraExpirare, stagingSters, MESAJ_STAGING_RAMAS, textConfirmareRespingere, mesajRespingere,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -152,6 +153,27 @@ describe('campuriDeCompletat', () => {
     expect(campuriDeCompletat(docDrive(), 'text')).toEqual([])
     expect(campuriDeCompletat(null, {})).toEqual([])
   })
+  it('HR-1: document marcat „fără expirare" → data expirării nu se propune (restul da)', () => {
+    const c = campuriDeCompletat(docDrive({ fara_expirare:true }), rowAI().payload_ai.date_document)
+    expect(c.map(x => x.camp)).toEqual(['numar_document', 'emitent'])
+    // fara_expirare false / null → se propune ca înainte
+    expect(campuriDeCompletat(docDrive({ fara_expirare:false }), rowAI().payload_ai.date_document).map(x => x.camp)).toContain('data_expirare')
+    expect(campuriDeCompletat(docDrive({ fara_expirare:null }), rowAI().payload_ai.date_document).map(x => x.camp)).toContain('data_expirare')
+  })
+  it('HR-1: opts.faraExpirare (tip fără expirare) → data expirării nu se propune', () => {
+    const c = campuriDeCompletat(docDrive(), rowAI().payload_ai.date_document, { faraExpirare:true })
+    expect(c.map(x => x.camp)).toEqual(['numar_document', 'emitent'])
+  })
+})
+
+describe('HR-1 motivFaraExpirare', () => {
+  it('dosar „fără expirare" are prioritate; apoi tipul fără expirare; altfel null', () => {
+    expect(motivFaraExpirare({ fara_expirare:true }, { are_expirare:true })).toBe('dosar')
+    expect(motivFaraExpirare({ fara_expirare:false }, { are_expirare:false })).toBe('tip')
+    expect(motivFaraExpirare({ fara_expirare:null }, { are_expirare:true })).toBeNull()
+    expect(motivFaraExpirare({}, null)).toBeNull()
+    expect(motivFaraExpirare(null, { are_expirare:null })).toBeNull()   // are_expirare necunoscut ≠ fără expirare
+  })
 })
 
 describe('observații + update', () => {
@@ -203,6 +225,26 @@ describe('analizaDublura', () => {
     expect(a.tipDosar.cod).toBe('buletin')
     const er = analizaDublura({ row:rowAI({ status:'eroare', payload_ai:null }), docs:[docDrive({ activ:false })], angajatId:7, tipuriFK:TIPURI, tipAI:null })
     expect(er).toMatchObject({ tip:'acelasi_inactiv', campuri:[] })
+  })
+  it('HR-1: dosar „fără expirare" → nu completez data expirării și spun de ce', () => {
+    const a = analizaDublura({ row:rowAI(), docs:[docDrive({ fara_expirare:true })], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' })
+    expect(a.campuri.map(x => x.camp)).toEqual(['numar_document', 'emitent'])
+    expect(a.expirareOmisa).toEqual({ motiv:'dosar', val:'2031-01-02' })
+  })
+  it('HR-1: tipul din dosar n-are expirare → nu completez data expirării', () => {
+    const tipuri = [{ id:1, cod:'buletin', denumire:'Buletin / CI', are_expirare:false }]
+    const a = analizaDublura({ row:rowAI(), docs:[docDrive()], angajatId:7, tipuriFK:tipuri, tipAI:'buletin' })
+    expect(a.campuri.map(x => x.camp)).toEqual(['numar_document', 'emitent'])
+    expect(a.expirareOmisa).toEqual({ motiv:'tip', val:'2031-01-02' })
+  })
+  it('HR-1: fără notă când nu e cazul (expirare normală, dată deja pusă, AI fără dată validă, tip diferit, rând eroare)', () => {
+    const an = o => analizaDublura({ row:rowAI(), docs:[docDrive()], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin', ...o })
+    expect(an().expirareOmisa).toBeNull()
+    expect(an({ docs:[docDrive({ fara_expirare:true, data_expirare:'2030-01-01' })] }).expirareOmisa).toBeNull()
+    expect(an({ row:rowAI({ payload_ai:{ date_document:{ data_expirare:'2026-02-30' } } }), docs:[docDrive({ fara_expirare:true })] }).expirareOmisa).toBeNull()
+    expect(an({ docs:[docDrive({ fara_expirare:true })], tipAI:'cazier_judiciar' }).expirareOmisa).toBeNull()
+    const er = analizaDublura({ row:rowAI({ status:'eroare' }), docs:[docDrive({ fara_expirare:true })], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' })
+    expect(er.expirareOmisa).toBeNull()
   })
   it('alt conținut / fără dublură trec mai departe neschimbate', () => {
     expect(analizaDublura({ row:rowAI(), docs:[docDrive({ fisier_size_bytes:1 })], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' }).tip).toBe('alt_continut')
@@ -299,10 +341,10 @@ describe('F1/F6 gardaDocDosar — identitatea documentului din dosar', () => {
   })
   it('completare: + tip, câmpurile goale, fara_expirare (doar cu data expirării), observații', () => {
     const campuri = [{ camp:'numar_document', val:'X' }, { camp:'data_expirare', val:'2031-01-02' }]
-    const g = gardaDocDosar({ doc, angajatId:7, row:rowAI(), campuri })
+    const g = gardaDocDosar({ doc:docDrive({ id:12, fara_expirare:false }), angajatId:7, row:rowAI(), campuri })
     expect(g.slice(6)).toEqual([
       ['eq', 'tip_id', 1], ['is', 'numar_document', null], ['is', 'data_expirare', null],
-      ['eq', 'fara_expirare', true], ['eq', 'observatii', 'Adus din Drive.'],
+      ['eq', 'fara_expirare', false], ['eq', 'observatii', 'Adus din Drive.'],
     ])
     // fără data expirării → nicio gardă pe fara_expirare
     const g2 = gardaDocDosar({ doc, angajatId:7, row:rowAI(), campuri:[{ camp:'emitent', val:'X' }] })
@@ -313,6 +355,12 @@ describe('F1/F6 gardaDocDosar — identitatea documentului din dosar', () => {
     expect(gardaDocDosar({ doc:docDrive({ fara_expirare:false }), angajatId:7, row:rowAI(), campuri:c })).toContainEqual(['eq', 'fara_expirare', false])
     expect(gardaDocDosar({ doc:docDrive({ fara_expirare:null }), angajatId:7, row:rowAI(), campuri:c })).toContainEqual(['is', 'fara_expirare', null])
     expect(gardaDocDosar({ doc:docDrive(), angajatId:7, row:rowAI(), campuri:c })).toContainEqual(['is', 'fara_expirare', null])
+  })
+  it('HR-1: garda nu acceptă niciodată fara_expirare = true (o alegere „fără expirare" nu se calcă)', () => {
+    const g = gardaDocDosar({ doc, angajatId:7, row:rowAI(), campuri:[{ camp:'data_expirare', val:'2031-01-02' }] })
+    expect(g).toContainEqual(['is', 'fara_expirare', null])
+    expect(g).not.toContainEqual(['eq', 'fara_expirare', true])
+    expect(potrivesteGarda({ ...doc, numar_document:null }, g)).toBe(false)   // rândul cu fara_expirare true nu trece
   })
   it('valori null → is; mărime string (bigint) → număr; activ null rămâne null', () => {
     const g = gardaDocDosar({ doc:docDrive({ activ:null, fisier_size_bytes:'1234', observatii:null, tip_id:null }), angajatId:7, row:rowAI(), campuri:[] })
@@ -430,6 +478,12 @@ describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
     expect(stareInchidere(zero, { data:{ id:5, status:'eroare' }, error:null })).toBe('deschis')
     expect(stareInchidere(zero, { data:{ id:5, status:'confirmat' }, error:null })).toBe('inchis')
   })
+  it('NH-2: statusTinta „respins" (✕ Respinge) — aceeași logică', () => {
+    expect(stareInchidere({ data:[{ id:5 }], error:null }, null, 'respins')).toBe('inchis')
+    expect(stareInchidere(zero, { data:{ id:5, status:'respins' }, error:null }, 'respins')).toBe('inchis')
+    expect(stareInchidere(zero, { data:{ id:5, status:'confirmat' }, error:null }, 'respins')).toBe('deschis')
+    expect(stareInchidere({ data:null, error:{ code:'42501', message:'rls' } }, null, 'respins')).toBe('deschis')
+  })
   it('citire picată / lipsă / răspuns ciudat → necunoscut', () => {
     expect(stareInchidere(zero, { data:null, error:{ message:'timeout' } })).toBe('necunoscut')
     expect(stareInchidere(zero, null)).toBe('necunoscut')
@@ -446,11 +500,50 @@ describe('r4 mesajInchidere', () => {
     expect(mesajInchidere('deschis', 'Gata ✓')).toEqual({ tip:'err', msg:MESAJ_RAND_NEINCHIS })
     expect(mesajInchidere(undefined, 'Gata ✓').tip).toBe('err')
   })
-  it('rândul neînchis se scoate cu ✕ Respinge — fără reîncercare (staging-ul e șters, ca pe main)', () => {
-    expect(MESAJ_RAND_NEINCHIS).toBe('Documentul e salvat, dar rândul din coadă nu s-a putut închide — scoate-l cu «✕ Respinge» (documentul rămâne salvat).')
+  it('HR-2: rândul neînchis se scoate cu butonul roșu al cardului — «✕ Respinge» sau «✕ Scoate din coadă» (card „eroare")', () => {
+    expect(MESAJ_RAND_NEINCHIS).toBe('Documentul e salvat, dar rândul din coadă nu s-a putut închide — nu-l confirma din nou; scoate-l cu «✕ Respinge» / «✕ Scoate din coadă» (rândul apare ca respins, documentul rămâne salvat).')
     for (const m of [MESAJ_RAND_NEINCHIS, MESAJ_RAND_NEVERIFICAT]) {
-      expect(m).toMatch(/✕ Respinge/)
+      expect(m).toMatch(/«✕ Respinge»/)
+      expect(m).toMatch(/«✕ Scoate din coadă»/)
+      expect(m).toMatch(/apare ca respins/)   // NH-2: omul află că rândul va figura ca respins
+      expect(m).toMatch(/nu-l confirma din nou/)
       expect(m).not.toMatch(/Reîncearcă/)
     }
+  })
+  it('NH-1: fișierul din staging nerămas șters → avertisment explicit că încă un Confirmă ar salva a doua oară', () => {
+    expect(mesajInchidere('deschis', 'Gata ✓', { stagingRamas:true })).toEqual({ tip:'err', msg:MESAJ_RAND_NEINCHIS + MESAJ_STAGING_RAMAS })
+    expect(mesajInchidere('necunoscut', 'Gata ✓', { stagingRamas:true })).toEqual({ tip:'warn', msg:MESAJ_RAND_NEVERIFICAT + MESAJ_STAGING_RAMAS })
+    expect(mesajInchidere('inchis', 'Gata ✓', { stagingRamas:true })).toEqual({ tip:'ok', msg:'Gata ✓' })   // rând închis → nu se mai confirmă
+    expect(MESAJ_STAGING_RAMAS).toMatch(/a doua oară/)
+    expect(mesajInchidere('deschis', 'Gata ✓', { stagingRamas:false }).msg).toBe(MESAJ_RAND_NEINCHIS)
+  })
+})
+
+describe('NH-1 stagingSters (storage-js nu aruncă la remove)', () => {
+  it('sigur șters doar fără eroare și cu fișierul întors', () => {
+    expect(stagingSters({ data:[{ name:'x.pdf' }], error:null })).toBe(true)
+    expect(stagingSters({ data:null, error:{ message:'Failed to fetch' } })).toBe(false)   // rețea / server
+    expect(stagingSters({ data:[], error:null })).toBe(false)   // nimic șters (fără drept / cale lipsă)
+    expect(stagingSters({ data:null, error:new Error('x') })).toBe(false)   // interogheaza după o excepție
+    expect(stagingSters(undefined)).toBe(false)
+  })
+})
+
+describe('RB2 / NH-2 ✕ Respinge', () => {
+  it('confirmarea e neutră: nu afirmă ca sigur „nu intră în sistem" — documentul deja salvat rămâne salvat', () => {
+    const t = textConfirmareRespingere('CI.pdf')
+    expect(t).toMatch(/„CI\.pdf"/)
+    expect(t).toMatch(/rămâne salvat/)
+    expect(t).toMatch(/apare ca respins/)
+    expect(t).toMatch(/Altfel nu intră în sistem/)
+  })
+  it('rezultatul verificat: închis → Respins.; deschis → eroare cu motivul; necunoscut → avertisment', () => {
+    expect(mesajRespingere('inchis', null)).toEqual({ tip:'ok', msg:'Respins.' })
+    const err = mesajRespingere('deschis', { message:'new row violates row-level security policy' })
+    expect(err.tip).toBe('err')
+    expect(err.msg).toMatch(/NU a ieșit din coadă: new row violates/)
+    expect(mesajRespingere('deschis', null).msg).toBe('Rândul NU a ieșit din coadă — încearcă din nou.')
+    expect(mesajRespingere('necunoscut', null).tip).toBe('warn')
+    expect(mesajRespingere(undefined, null).tip).toBe('err')
   })
 })

@@ -17,6 +17,10 @@
 //   Verificare r4 (21.10):
 //   • stareInchidere     — 0 rânduri la închidere: decide citirea DIRECTĂ a rândului, nu coada modulului (F5)
 //   • mesajInchidere     — ce afișează panoul după închidere (închis / neînchis / necunoscut)
+//   Fix-uri după simplificare (21.10):
+//   • motivFaraExpirare  — „fără expirare" în dosar / tip fără expirare: data expirării nu se propune (HR-1)
+//   • stagingSters       — fișierul din staging s-a șters sigur? (altfel o nouă confirmare l-ar salva din nou — NH-1)
+//   • textConfirmareRespingere / mesajRespingere — ✕ Respinge neutru + rezultatul verificat (RB2 / NH-2)
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -150,12 +154,22 @@ export function texteAltContinut(dub, nume) {
   }
 }
 
-// Câmpurile care s-ar completa: GOALE (NULL) în dosar ȘI prezente + valide în date_document
-export function campuriDeCompletat(doc, dateDocument) {
+// HR-1: de ce NU se propune data expirării — 'dosar' (documentul e marcat „fără expirare", alegerea
+// omului din TabDocumentePersonale / confirmHR) | 'tip' (tipul din dosar n-are expirare) | null
+export function motivFaraExpirare(doc, tipDosar) {
+  if (doc && doc.fara_expirare === true) return 'dosar'
+  if (tipDosar && tipDosar.are_expirare === false) return 'tip'
+  return null
+}
+
+// Câmpurile care s-ar completa: GOALE (NULL) în dosar ȘI prezente + valide în date_document.
+// Data expirării nu intră la un document marcat „fără expirare" sau cu opts.faraExpirare (tip fără expirare) — HR-1.
+export function campuriDeCompletat(doc, dateDocument, { faraExpirare = false } = {}) {
   if (!doc || !dateDocument || typeof dateDocument !== 'object') return []
   const out = []
   for (const c of CAMPURI_DOSAR) {
     if (doc[c.camp] != null) continue
+    if (c.camp === 'data_expirare' && (faraExpirare || doc.fara_expirare === true)) continue
     const val = c.tip === 'data' ? dataAIValida(dateDocument[c.sursa]) : textAIValid(dateDocument[c.sursa])
     if (val != null) out.push({ camp:c.camp, val, eticheta:c.eticheta })
   }
@@ -192,15 +206,21 @@ export function observatiiNoi(existente, linie) {
 // Tip diferit (sau necunoscut de o parte) → NU se completează nimic.
 // Rând în status 'eroare' (AI n-a citit nimic) → doar închidere, fără completare.
 // Document inactiv (istoric) → doar închidere: nu se completează nimic în el (r1/r2).
+// expirareOmisa (HR-1) = { motiv:'dosar' | 'tip', val } când AI a citit o dată de expirare validă, dar ea
+// nu se completează (dosar „fără expirare" / tip fără expirare) — panoul spune de ce; altfel null.
 export function analizaDublura({ row, docs, angajatId, tipuriFK, tipAI }) {
   const c = clasificaDublura(row, docs, angajatId)
   if (c.tip !== 'acelasi' && c.tip !== 'acelasi_inactiv') return c
   const tipDosar = (tipuriFK || []).find(t => Number(t.id) === Number(c.doc.tip_id)) || null
   const dinDrive = esteDinDrive(c.doc)
-  if (row.status === 'eroare' || c.tip === 'acelasi_inactiv') return { ...c, dinDrive, tipDosar, tipDiferit:false, campuri:[] }
+  if (row.status === 'eroare' || c.tip === 'acelasi_inactiv') return { ...c, dinDrive, tipDosar, tipDiferit:false, campuri:[], expirareOmisa:null }
   const tipDiferit = !tipAI || !tipDosar || tipDosar.cod !== tipAI
-  const campuri = tipDiferit ? [] : campuriDeCompletat(c.doc, row.payload_ai?.date_document)
-  return { ...c, dinDrive, tipDosar, tipDiferit, campuri }
+  const dd = row.payload_ai?.date_document
+  const motiv = motivFaraExpirare(c.doc, tipDosar)
+  const campuri = tipDiferit ? [] : campuriDeCompletat(c.doc, dd, { faraExpirare:!!motiv })
+  const valExp = dd && typeof dd === 'object' ? dataAIValida(dd.data_expirare) : null
+  const expirareOmisa = !tipDiferit && motiv && c.doc.data_expirare == null && valExp ? { motiv, val:valExp } : null
+  return { ...c, dinDrive, tipDosar, tipDiferit, campuri, expirareOmisa }
 }
 
 // ─── Comun tuturor modulelor (review r1, 21.10) ──────────────────────────────
@@ -215,7 +235,8 @@ export function inchidereFaraRezultat(res) {
 // verificarea dinainte de „doar închidere" (campuri = null) de EXACT documentul văzut de om:
 // id + nesters + aceeași stare activ/istoric + același angajat + același nume + aceeași mărime;
 // la completare și același tip, câmpurile încă goale, aceleași observații și — dacă intră data
-// expirării — aceeași valoare fara_expirare (o alegere „fără expirare" pusă între timp nu se calcă).
+// expirării — fara_expirare tot false / NULL (HR-1: data expirării se propune doar atunci; un document
+// marcat „fără expirare" — dinainte SAU între timp — nu se calcă: garda pică, fără eq true).
 // Listă de [op, coloană, valoare], op 'eq' | 'is' (valoare null → 'is'); componenta face q[op](col, val).
 export function gardaDocDosar({ doc, angajatId, row, campuri = null }) {
   const f = (col, v) => v == null ? ['is', col, null] : ['eq', col, v]
@@ -230,7 +251,7 @@ export function gardaDocDosar({ doc, angajatId, row, campuri = null }) {
   if (campuri) {
     g.push(f('tip_id', doc.tip_id))
     for (const c of campuri) g.push(['is', c.camp, null])
-    if (campuri.some(c => c.camp === 'data_expirare')) g.push(f('fara_expirare', doc.fara_expirare))
+    if (campuri.some(c => c.camp === 'data_expirare')) g.push(doc.fara_expirare === false ? ['eq', 'fara_expirare', false] : ['is', 'fara_expirare', null])
     g.push(f('observatii', doc.observatii))
   }
   return g
@@ -300,31 +321,58 @@ export function gardaFinalaHR({ row, angajatId, exact, nume, opts = {} }) {
 }
 
 // F5 (r4): starea rândului din ai_documente_inbox după UPDATE-ul care îl închide.
+//   statusTinta = statusul pus de UPDATE: 'confirmat' (finalizeInbox) | 'respins' (✕ Respinge — NH-2)
 //   res    = răspunsul UPDATE-ului (.select('id'))
 //   citire = citirea DIRECTĂ a rândului ({ data:{ id, status } | null, error } — select … .eq('id') .maybeSingle()),
 //            făcută doar la 0 rânduri fără eroare. NU coada modulului: un rând mutat între timp în alt modul
 //            lipsește din coada asta, dar e tot deschis (verificare r4, F5 rezidual).
-// → 'inchis'     UPDATE-ul a întors rândul, sau rândul se vede cu status 'confirmat'
-//   'deschis'    UPDATE-ul a dat eroare, sau rândul se vede și NU e confirmat
+// → 'inchis'     UPDATE-ul a întors rândul, sau rândul se vede cu statusTinta
+//   'deschis'    UPDATE-ul a dat eroare, sau rândul se vede și NU are statusTinta
 //   'necunoscut' 0 rânduri și rândul nu se vede (mutat / fără drept pe el) sau citirea a picat
-export function stareInchidere(res, citire) {
+export function stareInchidere(res, citire, statusTinta = 'confirmat') {
   const { data, error } = res || {}
   if (!res || error) return 'deschis'
   if (Array.isArray(data) && data.length) return 'inchis'
   if (!inchidereFaraRezultat(res)) return 'necunoscut'
   const { data:r, error:e } = citire || {}
   if (!citire || e || !r) return 'necunoscut'
-  return r.status === 'confirmat' ? 'inchis' : 'deschis'
+  return r.status === statusTinta ? 'inchis' : 'deschis'
 }
 
-// Documentul țintă e deja salvat când se afișează mesajele astea; fișierul din staging e șters (ca pe main),
-// deci o reîncercare nu-l mai salvează a doua oară — rândul rămas deschis se scoate din coadă.
-export const MESAJ_RAND_NEINCHIS = 'Documentul e salvat, dar rândul din coadă nu s-a putut închide — scoate-l cu «✕ Respinge» (documentul rămâne salvat).'
-export const MESAJ_RAND_NEVERIFICAT = 'Documentul e salvat, dar nu pot verifica rândul din coadă (nu-l mai văd — mutat în alt modul / fără drept pe el — sau verificarea a picat). Dacă rândul e încă în listă, scoate-l cu «✕ Respinge» (documentul rămâne salvat).'
+// NH-1: răspunsul lui storage.remove([cale]) → fișierul din staging s-a șters SIGUR? storage-js nu aruncă:
+// întoarce { error } (rețea / server) sau data = [] (nimic șters — fără drept de ștergere, cale lipsă).
+export function stagingSters(res) {
+  const { data, error } = res || {}
+  return !!res && !error && Array.isArray(data) && data.length > 0
+}
 
-// Mesajul de după închidere → { tip:'ok' | 'warn' | 'err', msg }
-export function mesajInchidere(stare, msgOk) {
+// Documentul țintă e deja salvat când se afișează mesajele astea. Rândul rămas deschis se scoate cu butonul
+// roșu al cardului — «✕ Respinge» sau, pe cardurile „eroare", «✕ Scoate din coadă» (HR-2 / RB1).
+// Un nou „✓ Confirmă" NU e oprit oricând: doar dacă fișierul din staging s-a șters (mutaFisier nu-l mai
+// găsește); altfel l-ar salva a doua oară — mesajul o spune explicit (MESAJ_STAGING_RAMAS, NH-1).
+const SCOATE_RAND = 'scoate-l cu «✕ Respinge» / «✕ Scoate din coadă» (rândul apare ca respins, documentul rămâne salvat)'
+export const MESAJ_RAND_NEINCHIS = `Documentul e salvat, dar rândul din coadă nu s-a putut închide — nu-l confirma din nou; ${SCOATE_RAND}.`
+export const MESAJ_RAND_NEVERIFICAT = `Documentul e salvat, dar nu pot verifica rândul din coadă (nu-l mai văd — mutat în alt modul / fără drept pe el — sau verificarea a picat). Dacă rândul e încă în listă, nu-l confirma din nou; ${SCOATE_RAND}.`
+export const MESAJ_STAGING_RAMAS = ' ATENȚIE: fișierul din coadă nu s-a putut șterge — încă un «✓ Confirmă» l-ar salva a doua oară.'
+
+// Mesajul de după închidere → { tip:'ok' | 'warn' | 'err', msg }; stagingRamas = !stagingSters(...) (NH-1)
+export function mesajInchidere(stare, msgOk, { stagingRamas = false } = {}) {
   if (stare === 'inchis') return { tip:'ok', msg:msgOk }
-  if (stare === 'necunoscut') return { tip:'warn', msg:MESAJ_RAND_NEVERIFICAT }
-  return { tip:'err', msg:MESAJ_RAND_NEINCHIS }
+  const extra = stagingRamas ? MESAJ_STAGING_RAMAS : ''
+  if (stare === 'necunoscut') return { tip:'warn', msg:MESAJ_RAND_NEVERIFICAT + extra }
+  return { tip:'err', msg:MESAJ_RAND_NEINCHIS + extra }
+}
+
+// RB2 / NH-2: ✕ Respinge e și ieșirea după o închidere eșuată (documentul deja salvat, fișierul din staging
+// de regulă șters) → textul nu mai afirmă ca sigur „nu intră în sistem / fișierul rămâne pentru audit".
+export function textConfirmareRespingere(nume) {
+  return `Scoți „${nume}" din coadă (rândul apare ca respins)?\n\nDacă documentul a fost deja salvat (ți-am spus la confirmare), rămâne salvat. Altfel nu intră în sistem, iar fișierul rămâne pentru audit.`
+}
+
+// NH-2: rezultatul lui ✕ Respinge, verificat ca la închidere (stareInchidere cu 'respins'), nu „Respins." orbește
+export function mesajRespingere(stare, eroare) {
+  if (stare === 'inchis') return { tip:'ok', msg:'Respins.' }
+  if (stare === 'necunoscut') return { tip:'warn', msg:'Nu pot verifica dacă rândul a ieșit din coadă (nu-l mai văd sau verificarea a picat) — uită-te în listă.' }
+  const m = eroare && (eroare.message || String(eroare))
+  return { tip:'err', msg:`Rândul NU a ieșit din coadă${m ? ': ' + m : ''} — încearcă din nou.` }
 }
