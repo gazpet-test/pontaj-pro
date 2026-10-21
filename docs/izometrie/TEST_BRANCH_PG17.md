@@ -84,6 +84,60 @@ RPC fn_bon_linii_versiune anon → HTTP 404 {"code":"PGRST202",…}   (funcție 
 roluri izo: izo_registru_writer   (niciun rol de test rămas)
 ```
 
-## r11 — de completat după retest
+## r11 — head 3ee72437 (21.10.2026), branch nou `owwswqujusadoqbusqvp`
 
-(r11: porțile de citire în 20261102a + bonurile pe RPC-uri DEFINER cu liniile închise pentru API. Amprenta E2a se schimbă; cea PG17 se fixează în `c_amprente` după retest.)
+Blocurile 0–4 au trecut din prima rulare. La blocul 5, precondiția 0g a refuzat corect: pe branch, anon/authenticated aveau pe tabelele bonului și TRUNCATE/MAINTAIN (privilegiile implicite ale branch-ului). Pe live (sec_f1b) au doar arwdxt. Scheletul branch-ului a fost adus la forma de pe live, apoi blocurile 4–5 s-au reluat.
+
+```
+f3860693b6d01148738fe7d521d9202244b6e9e566fe04853c117563939532e6  supabase/migrations/20261102a_izometrie_e2a_registru.sql
+63a4f1d22a0e087fc9eef5eca332f63e923382c16c8cf7e434444523321d6123  supabase/migrations/20261102b_bon_salvare_tranzactionala.sql
+     MEMBRI|postgres|t|f|f
+     MEMBRI|postgres|f|f|t
+     OWNERI|fn_izo_activeaza_si_importa,fn_izo_import_sold_initial,fn_izo_import_storno,fn_izo_seteaza_nivel
+OK   1 livrare prin runner pe PG17 (rol, membru WITH SET, ALTER OWNER), porți complete · amprenta PG17 = 72d13314cc3796a2cb4c5d8d01e3da78
+OK   2 revenire armată pe PG17 (DROP ROLE ca non-superuser) → totul scos, TRUNCATE refăcut · relivrare → aceeași amprentă
+OK   3 teste SQL pe PG17: 162 verificări
+OK   4 conexiune proaspătă: writer fără marcaj → garda · REPEATABLE READ → refuz · utilizator API real prin pooler + DEFINER postgres → atribuirea refuzată
+psql:…/20261102b_bon_salvare_tranzactionala.sql:343: ERROR:  Precondiție 0g: drepturile API pe executie_bonuri_consum_linii diferă de live (anon/authenticated = arwdxt)
+✗ NEAPLICAT confirmat: 20261102b_bon_salvare_tranzactionala v20261102130000 (psql 3; 0 rânduri relevante pe ținta confirmată ⇒ nimic comis)
+-- ACL-ul bonurilor pe branch adus la live: REVOKE TRUNCATE, MAINTAIN … FROM anon, authenticated
+executie_bonuri_consum|{postgres=arwdDxtm/postgres,anon=arwdxt/postgres,authenticated=arwdxt/postgres,service_role=arwdDxtm/postgres}
+executie_bonuri_consum_linii|{postgres=arwdDxtm/postgres,anon=arwdxt/postgres,authenticated=arwdxt/postgres,service_role=arwdDxtm/postgres}
+OK   0 țintă: branch owwswqujusadoqbusqvp, PG17, postgres non-superuser, schelet aplicat
+OK   4 conexiune proaspătă: writer fără marcaj → garda · REPEATABLE READ → refuz · utilizator API real prin pooler + DEFINER postgres → atribuirea refuzată
+OK   5 20261102b pe PG17: 34 verificări SQL · amprenta funcției f2159853ca4b87a9ebb32ff3abde4073
+PASS test_branch owwswqujusadoqbusqvp — amprenta E2a PG17 72d13314cc3796a2cb4c5d8d01e3da78 · fn_bon_salveaza f2159853ca4b87a9ebb32ff3abde4073
+```
+
+Retragerea și relivrarea 20261102b pe PG17 (cu cheile de operație create de testele bonului):
+
+```
+chei înainte: 5
+revenire: rc=0 RETRAGERE — RPC-urile scoase, drepturile pe linii refăcute
+după retragere (funcții:chei:INSERT authenticated:index): 0:5:true:true
+relivrare: rc=0 ✓ APLICAT + ÎNREGISTRAT confirmat: 20261102b_bon_salvare_tranzactionala v20261102130001 (sha256 63a4f1d22a0e087fc9eef5eca332f63e923382c16c8cf7e434444523321d6123)
+după relivrare (funcții:INSERT authenticated): 2:false
+retry creare veche după relivrare (idempotent): true
+```
+
+PostgREST (cheia anon), r11:
+
+```
+RPC fn_izo_seteaza_nivel anon → HTTP 401 {"code":"42501",…,"message":"permission denied for function fn_izo_seteaza_nivel"}
+RPC fn_izo_import_sold_initial anon → HTTP 401 {"code":"42501",…}
+RPC fn_izo_import_storno anon → HTTP 401 {"code":"42501",…}
+RPC fn_izo_activeaza_si_importa anon → HTTP 401 {"code":"42501",…}
+RPC fn_izo_porti_lipsa anon → HTTP 401 {"code":"42501",…}
+RPC fn_izo_lock_partajat anon → HTTP 401 {"code":"42501",…}
+RPC fn_bon_salveaza anon → HTTP 401 {"code":"42501",…,"message":"permission denied for function fn_bon_salveaza"}
+RPC fn_bon_preia anon → HTTP 401 {"code":"42501",…,"message":"permission denied for function fn_bon_preia"}
+GET magazie_bucati anon → HTTP 200 []
+PATCH magazie_bucati anon → HTTP 200 []
+POST izo_atribuiri anon → HTTP 401 {"code":"42501",…
+POST izo_importuri anon → HTTP 401 {"code":"42501",…
+POST izo_proiect_config anon → HTTP 401 {"code":"42501",…
+POST magazie_bucati_evenimente anon → HTTP 401 {"code":"42501",…
+POST executie_bonuri_consum_linii anon → HTTP 401 {"code":"42501",…,"hint":"Grant the required privileges to the current role with: GRANT INSERT ON public.ex…
+observatii=anon scrise: 0
+roluri izo: izo_registru_writer
+```
