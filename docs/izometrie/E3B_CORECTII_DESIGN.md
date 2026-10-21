@@ -1,4 +1,9 @@
-# E3b — corecțiile registrului de țeavă (design r3) — pentru review ÎNAINTE de cod
+# E3b — corecțiile registrului de țeavă (design r4) — pentru review ÎNAINTE de cod
+
+**r4 (21.10.2026, review Jakarinos r3: toate P1 r2 rezolvate, 2 P1 + 2 P2 noi).**
+- **P1 propunerile deschise la storno:** `izo_registru_writer` / `izo_receptie_writer` n-au SELECT pe `izo_corectii`, iar funcțiile DEFINER rulează cu drepturile owner-ului. Citirea trece prin helper-ul intern `fn_izo_cor_deschise` (DEFINER `postgres`, fără lock), cu EXECUTE doar pentru writerii care îl cheamă (§3.5, §6).
+- **P1 varianta C și revenirea:** matrice explicită Q-E3b-1 × Q-E3b-17 cu funcțiile înlocuite, helper-ele create / ACL-ul lor și ce restaurează revenirea, independent pe fiecare axă; test apply → revenire pe fiecare combinație (§6, §7, §9).
+- **P2:** fără garanția „câteva milisecunde” (limita reală e `lock_timeout` / `statement_timeout` = 8 s, citite live); egalitatea textuală „corp fără prolog = 20261102a” doar unde se pune doar prologul; riscul variantei B corectat sub Q-E3b-17 = A; „nu există ciclu” limitat la operații, cu excepția declarată a revocărilor multi-rând; reîncercarea după 40P01 e un apel nou, care reautorizează.
 
 **r3 (21.10.2026, review Jakarinos r2: P1-1 / P1-3 / P2-2 rezolvate, restul parțial + 4 P1 noi).**
 - **P1 `FOR SHARE` pe document la propunere:** `izo_cor_editor` are doar SELECT pe documente, iar `FOR SHARE` cere și UPDATE pe o coloană. Documentul de referință al lui `gasit_nou` se blochează prin helper-ul intern `fn_izo_cor_doc_lock(p_doc, p_proiect)`. Helper-ul bucății primește și el proiectul (§3.5, §4).
@@ -196,7 +201,7 @@ Fiecare operație E3b (și cele directe) scrie exact un rând. El e legătura di
 | `izo_cor_editor` | `fn_izo_cor_propune`, `_retrage`, `_respinge`, `_verifica` | doar `izo_corectii` (propunere / decizie negativă); nimic în registru |
 | `izo_corectie_writer` | `fn_izo_cor_aproba`, `_camp`, `_pv`, `_storno_import`, `fn_izo_cor_marcheaza` | registrul (doar în contextul operației), `izo_corectii` (aplicarea), `izo_corectii_bucati`, coloanele PV ale documentului |
 
-`izo_doc_editor` (E3) primește în plus doar INSERT pe `izo_documente_istoric`. `izo_registru_writer` și `izo_receptie_writer` nu primesc nimic nou. Excepție condiționată, doar sub Q-E3b-1 = A: EXECUTE pe helper-ul `fn_izo_lant_blocant` (§6).
+`izo_doc_editor` (E3) primește în plus doar INSERT pe `izo_documente_istoric`. `izo_registru_writer` și `izo_receptie_writer` nu primesc nimic nou, cu excepțiile condiționate din matricea §6 (r4): EXECUTE pe `fn_izo_lant_blocant` și `fn_izo_cor_deschise`, doar pentru writerul care deține o funcție înlocuită care le cheamă (`izo_registru_writer` sub Q-E3b-1 = A / C, `izo_receptie_writer` sub A).
 
 **Postcondiția pe roluri** = cea din E3 §3.1, pe ambele roluri:
 - `NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`;
@@ -291,7 +296,7 @@ Owner `postgres`, DEFINER, neexpusă (EXECUTE doar `izo_cor_editor`, `izo_corect
    - `p_rol = 'responsabil'` → `rol IN ('manager_aprobator', 'inlocuitor_aprobator')` pe proiect, `depozit_id` NULL (Q-E3b-2). Toate rândurile potrivite se blochează, **`ORDER BY id`** (r3): revocarea unuia, cât altul rămâne activ, nu schimbă dreptul;
    - `p_rol = 'gestionar'` → rândul exact (`proiect`, `profil`, `gestionar`, `p_depozit`), ca în E3.
 
-**Ordinea pe atribuiri (r3).** `FOR SHARE` e compatibil cu `FOR SHARE`, deci două operații E3b nu se blochează între ele pe atribuiri. Conflictul e doar cu o revocare (UPDATE). O revocare pe un singur rând atinge un singur nivel și nu poate face ciclu. O revocare pe mai multe rânduri, într-o singură tranzacție, într-o ordine diferită de `id`, poate da `deadlock_detected` cu o aprobare care ține deja unul dintre rânduri. Consecința e doar disponibilitatea: PG anulează una dintre tranzacții, fără efecte parțiale, iar reîncercarea trece. Regula de lucru: revocările multiple se fac pe rânduri, în ordinea `id` (UI-ul de atribuiri trimite câte un UPDATE). Testul 2 acoperă cazul.
+**Ordinea pe atribuiri (r3).** `FOR SHARE` e compatibil cu `FOR SHARE`, deci două operații E3b nu se blochează între ele pe atribuiri. Conflictul e doar cu o revocare (UPDATE). O revocare pe un singur rând atinge un singur nivel și nu poate face ciclu. O revocare pe mai multe rânduri, într-o singură tranzacție, într-o ordine diferită de `id`, poate da `deadlock_detected` cu o aprobare care ține deja unul dintre rânduri. Consecința e doar disponibilitatea: PG anulează una dintre tranzacții, fără efecte parțiale. Reîncercarea e un apel nou, care reautorizează de la zero, deci poate fi refuzată dacă revocarea a trecut între timp. Regula de lucru: revocările multiple se fac pe rânduri, în ordinea `id` (UI-ul de atribuiri trimite câte un UPDATE). Testul 2 acoperă cazul.
 
 **Patru ochi (Q-E3b-3):** la `aproba` / `respinge`, `fn_izo_uid() IS DISTINCT FROM corectie.propus_de`, inclusiv pentru owner. Regula e verificată de două ori: în RPC (mesaj clar) și în `fn_izo_cor_garda` la UPDATE (pe `cale = 'propunere'`, §3.3), deci nu depinde de corpul RPC-ului. La `retrage`: `fn_izo_uid() = propus_de` sau owner (doar în RPC).
 
@@ -348,12 +353,13 @@ Revocările (modul, atribuire, `is_owner`) se comportă exact ca în E3 §3.4: a
 | `fn_izo_cor_autorizare_lock` | `postgres`, DEFINER | `izo_cor_editor`, `izo_corectie_writer` |
 | `fn_izo_cor_cerut_de_valid` | `postgres`, DEFINER | `izo_corectie_writer` |
 | `fn_izo_cor_bucata_lock(p_bucata bigint, p_proiect bigint) → jsonb` (r2; r3: cu proiectul): `SELECT … WHERE id = p_bucata AND proiect_id = p_proiect AND provenienta = 'beneficiar' AND tip_cod IS NOT NULL FOR SHARE`, întoarce rândul comis cel mai nou sau NULL. O bucată din alt proiect nu se blochează și nu se întoarce. DEFINER, pentru că `FOR SHARE` cere UPDATE pe o coloană, iar `izo_cor_editor` n-are nicio scriere în registru. Chemat doar după autorizarea pe `p_proiect` (§4 pasul 3) | `postgres`, DEFINER | `izo_cor_editor` |
-| `fn_izo_cor_doc_lock(p_doc bigint, p_proiect bigint) → boolean` (r3): `SELECT 1 … WHERE id = p_doc AND proiect_id = p_proiect AND stare = 'confirmat' FOR SHARE`; `false` pentru orice altceva (inexistent, alt proiect, neconfirmat), iar RPC-ul dă refuzul generic. Îl cheamă doar `fn_izo_cor_propune` (`verifica` nu blochează), la pasul 1 din §4, înaintea autorizării, ca în ordinea globală. Autorizarea pe același `p_proiect` vine la pasul 3; până la ea, un apelant neautorizat poate ține documentul `FOR SHARE` doar câteva milisecunde, până la refuz. E același tipar ca E3 (20261103b: documentul blocat, apoi `fn_izo_doc_autorizare_lock`, în `fn_izo_doc_confirma` liniile 1445–1448, `fn_izo_doc_pv` 1538–1540 și helper-ul de scanuri 342–346). Inversarea (autorizarea întâi) ar deschide un ciclu cu PV-ul E3 + o revocare | `postgres`, DEFINER | `izo_cor_editor` |
+| `fn_izo_cor_doc_lock(p_doc bigint, p_proiect bigint) → boolean` (r3): `SELECT 1 … WHERE id = p_doc AND proiect_id = p_proiect AND stare = 'confirmat' FOR SHARE`; `false` pentru orice altceva (inexistent, alt proiect, neconfirmat), iar RPC-ul dă refuzul generic. Îl cheamă doar `fn_izo_cor_propune` (`verifica` nu blochează), la pasul 1 din §4, înaintea autorizării, ca în ordinea globală. Autorizarea pe același `p_proiect` vine la pasul 3; până la ea, un apelant neautorizat poate ține documentul `FOR SHARE` până la refuz. Durata nu e garantat scurtă: dacă autorizarea așteaptă un profil / modul / atribuire blocate de altă tranzacție, așteptarea e mărginită doar de `lock_timeout = 8s` (rolul `authenticator`) și `statement_timeout = 8s` (`authenticated`), valori citite live pe 21.10 și reverificate la precondiție. Efectul e doar de disponibilitate (un PV / o anulare pe acel document așteaptă cel mult atât), nu de siguranță: nimic nu se scrie înaintea autorizării. E același tipar ca E3 (20261103b: documentul blocat, apoi `fn_izo_doc_autorizare_lock`, în `fn_izo_doc_confirma` liniile 1445–1448, `fn_izo_doc_pv` 1538–1540 și helper-ul de scanuri 342–346). Inversarea (autorizarea întâi) ar deschide un ciclu cu PV-ul E3 + o revocare | `postgres`, DEFINER | `izo_cor_editor` |
 | `fn_izo_cor_api_verifica` (lock schemă + identitate API + contexte goale + poarta completă) | `postgres`, INVOKER | `izo_cor_editor`, `izo_corectie_writer` |
 | `fn_izo_cor_adm_verifica` (r2; varianta pentru `fn_izo_cor_storno_import`: lock schemă + `session_user = 'postgres'` + contexte goale + poarta completă) | `postgres`, INVOKER | `izo_corectie_writer` |
 | `fn_izo_cor_inainte`, `fn_izo_cor_tinta_iesire`, `fn_izo_cor_valideaza` (blocantele), `fn_izo_coloane_corectabile` | `postgres`, INVOKER, STABLE / IMMUTABLE | `izo_cor_editor`, `izo_corectie_writer` |
 | `fn_izo_doc_instantaneu`, `fn_izo_doc_diff` | `postgres`, INVOKER, STABLE / IMMUTABLE | `izo_doc_editor` |
-| `fn_izo_lant_blocant` (doar Q-E3b-1 = A, §6) | `postgres`, DEFINER, STABLE | `izo_registru_writer`, `izo_receptie_writer`, `izo_corectie_writer` |
+| `fn_izo_lant_blocant` (r4: creat în toate variantele, îl folosește storno-ul parțial; §6) | `postgres`, DEFINER, STABLE | `izo_corectie_writer` mereu; `izo_registru_writer` sub Q-E3b-1 = A / C; `izo_receptie_writer` sub A (matricea §6) |
+| `fn_izo_cor_deschise(p_bucati bigint[]) RETURNS TABLE (bucata_id, corectie_id, tip)` (r4): propunerile `propusa` pe bucățile date, citire simplă, **fără lock** pe corecții (§4). Există doar sub Q-E3b-1 = A / C | `postgres`, DEFINER, STABLE | `izo_registru_writer` sub A / C; `izo_receptie_writer` sub A |
 | E3: `fn_izo_doc_api_verifica`, `fn_izo_proiectie`, `fn_izo_coloane_c/_ev/_mis`, `fn_izo_canon_serie`, `fn_izo_doc_hash` | neschimbate | + rolurile E3b care le cheamă |
 | E2a: `fn_izo_nivel`, `fn_izo_uid`, `fn_izo_porti_lipsa`, `fn_izo_loc_valid`, `fn_izo_citire`, `fn_izo_site_proiect`, `fn_izo_tip_material`, `fn_izo_tip_cod`, `fn_izo_garda_scriitor`, `fn_izo_blocheaza_locuri`, `fn_izo_blocheaza_tabele`, `fn_izo_lock_partajat`, `fn_izo_lock_proiect` | neschimbate | + `izo_corectie_writer` (cele de citire și + `izo_cor_editor`) |
 
@@ -391,7 +397,7 @@ Revocările (modul, atribuire, `is_owner`) se comportă exact ca în E3 §3.4: a
 - **Prologul (r3, Q-E3b-17 = A)**, inserat imediat după verificarea `session_user = 'postgres'`, înaintea `fn_izo_lock_proiect` și a oricărei scrieri:
   - lock-ul schemei **fără așteptare**: `IF NOT pg_try_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare')) THEN RAISE … 55P03 'o migrare rulează; reîncearcă după ea'`. Nu `pg_advisory_xact_lock_shared` ca în `fn_izo_doc_anuleaza` (20261103b, linia 1614): `fn_izo_activeaza_si_importa` cheamă importul **după** `fn_izo_seteaza_nivel`, care ține deja advisory-ul exclusiv al proiectului și lock-urile pe tabele. O așteptare a lock-ului schemei în acel punct ar inversa ordinea globală față de runner-ul de migrări (schemă exclusiv → DDL pe tabele) și ar da `deadlock_detected`. Varianta „try” nu așteaptă niciodată, deci nu poate face ciclu; dacă lock-ul e deja ținut de aceeași tranzacție, PG îl acordă imediat;
   - apoi `fn_izo_porti_lipsa()` gol, altfel 42501.
-  Restul corpului rămâne byte cu byte: postcondiția compară textual corpul nou fără liniile prologului cu forma 20261102a. Owner, semnătură și ACL neschimbate, deci regex-ul „wrapper” nu se aplică (owner `izo_registru_writer`). `fn_izo_activeaza_si_importa` (neînlocuită) cheamă poarta de două ori (~0,4 s fiecare): o dată prin `fn_izo_seteaza_nivel`, o dată prin import. Sub Q-E3b-1 = A / C, storno-ul înlocuit folosește același prolog.
+  Unde funcția primește **doar** prologul (importul sub Q-E3b-17 = A; storno-ul sub Q-E3b-1 = B și Q-E3b-17 = A), restul corpului rămâne byte cu byte: postcondiția compară textual corpul nou fără liniile prologului cu forma 20261102a. Sub Q-E3b-1 = A / C, storno-ul e rescris (§6): acolo se verifică doar md5-ul formei vechi la precondiție, iar corpul nou trece prin review, ca celelalte funcții înlocuite. Owner, semnătură și ACL neschimbate, deci regex-ul „wrapper” nu se aplică (owner `izo_registru_writer`). `fn_izo_activeaza_si_importa` (neînlocuită) cheamă poarta de două ori (~0,4 s fiecare): o dată prin `fn_izo_seteaza_nivel`, o dată prin import. Sub Q-E3b-1 = A / C, storno-ul înlocuit folosește același prolog.
 - **Golul rămas, doar sub Q-E3b-17 = B** (importul E2a și, sub Q-E3b-1 = B, storno-ul complet): ambele sunt N3, doar `postgres`, doar cu „da”. Se acoperă prin **procedura de rulare**: chat-ul rulează, în aceeași tranzacție, `pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'))`, apoi un `DO` care ridică excepție dacă `fn_izo_porti_lipsa()` nu e gol, abia apoi apelul. E limitare declarată (§10), doar sub Q-E3b-17 = B.
 - **Amprenta nu validează semantica tranzitivă.** Helperele noi `fn_izo_*` intră în amprenta E2a prin filtrul pe nume (20261102a liniile 383–386: corp, owner, ACL, config), deci orice modificare a lor e prinsă. Amprenta nu verifică însă ce cheamă ele. Lanțul de apeluri se validează prin review și prin testul 15, nu prin poartă. Expresia „wrapper nerevizuit” (20261102a liniile 473–478) e descrisă corect în §1.
 - **Recalculate la finalul migrării, după validare:**
@@ -402,7 +408,7 @@ Revocările (modul, atribuire, `is_owner`) se comportă exact ca în E3 §3.4: a
 - **Închiderea citirilor:** toate funcțiile E3b sunt `fn_izo_*`, deci în afara corpurilor scanate și în amprenta E2a (corp, owner, ACL, config). Nu apar view-uri. **DEFINER-ele care citesc registrul / documentele, complet (r3; r2 spunea, greșit, „doar `fn_izo_lant_blocant`”):**
   - intrările din §1 (owner `izo_cor_editor` / `izo_corectie_writer`, NOLOGIN): citesc doar după autorizarea pe proiect, iar ce întorc e filtrat pe proiectul autorizat (coliziunile, §5.6);
   - `fn_izo_cor_bucata_lock`, `fn_izo_cor_doc_lock` (owner `postgres`, EXECUTE doar `izo_cor_editor`): filtrate pe `p_proiect`, chemate doar din `fn_izo_cor_propune`;
-  - `fn_izo_lant_blocant` (sub A; EXECUTE doar cei trei writeri);
+  - `fn_izo_lant_blocant` și `fn_izo_cor_deschise` (EXECUTE doar writerii din celula aleasă a matricei §6);
   - `fn_izo_cor_autorizare_lock`, `fn_izo_cor_cerut_de_valid` citesc doar profilul / modulul / atribuirile, nu registrul.
   Niciuna nu e executabilă de `anon` / `authenticated` / `service_role`, cu excepția intrărilor din §1 (verificat de `porti_e3b`).
 
@@ -410,7 +416,7 @@ Revocările (modul, atribuire, `is_owner`) se comportă exact ca în E3 §3.4: a
 
 **Ordinea globală:** schemă (partajat) → **document de intrare** → **corecția existentă** → profil → acces modul → atribuire → proiect / depozit → tabele → advisory proiect → **import** → bucăți (după `id`) → **rândurile noi cu FK spre bucăți** → registru.
 
-E3 folosește aceeași ordine fără pașii „corecție” și „import”. E2a (storno-ul complet) folosește sufixul tabele → advisory exclusiv → import → bucăți. Revocările ating un singur nivel. Deci nu există ciclu.
+E3 folosește aceeași ordine fără pașii „corecție” și „import”. E2a (storno-ul complet) folosește sufixul tabele → advisory exclusiv → import → bucăți. O revocare pe un singur rând atinge un singur nivel. Deci nu există ciclu între operațiile E2a / E3 / E3b. Excepția declarată (r4): o revocare pe mai multe atribuiri, într-o tranzacție, în altă ordine decât `id` (§3.4) — doar disponibilitate (40P01, fără efecte parțiale).
 
 **Regula FK (r2, Jakarinos r1 P1).** Un INSERT pe un rând cu FK ia implicit `FOR KEY SHARE` pe rândul referit (trigger-ul RI, după inserarea rândului), iar `KEY SHARE` intră în conflict cu `FOR UPDATE`. În r1, corecțiile directe și lista storno-ului parțial se scriau la pasul 2, înaintea advisory-ului:
 - T1 (corecție directă / storno parțial) inserează rândul cu `bucata_id = B` → ține `KEY SHARE` pe B → așteaptă advisory-ul;
@@ -567,7 +573,7 @@ Pe LOT 2 asta înseamnă: gestionarul propune, managerul aprobă. Dacă propune 
 - `p_bucati`: 1–10000 de elemente, fără dubluri, fără NULL;
 - importul există pe proiect, cu `stare = 'aplicat'`;
 - **fiecare** bucată s-a născut din evenimentul importului (mișcarea `nascut` pe `izo_importuri.eveniment_id`), nu e `anulata` și n-are propunere E3b deschisă („decide / retrage întâi”);
-- lanțul: nicio mișcare blocantă (§6; sub A, faptele E3b aplicate nu blochează);
+- lanțul: nicio mișcare blocantă după `fn_izo_lant_blocant` (§6): în toate variantele, faptele E3b aplicate nu blochează storno-ul parțial;
 - `p_cerut_de`: profil existent, owner sau responsabil pe proiect la momentul apelului (dovedește doar eligibilitatea, nu acordul omului, §1); motivul are 3–1000 de caractere.
 
 **Scrierea** (abia după lock-ul listei, §4 pasul 10):
@@ -644,12 +650,12 @@ Pe LOT 2 asta înseamnă: gestionarul propune, managerul aprobă. Dacă propune 
      - întâi prologul din §3.6 (lock-ul schemei partajat, fără așteptare, și poarta completă), înaintea oricărui alt lock și a oricărei scrieri;
      - mulțimea `M` = bucățile născute din import cu `stare <> 'anulata'` (cele stornate parțial sunt deja închise), calculată **o singură dată, după** `FOR UPDATE` pe toate bucățile importului, ca array;
      - blocantele = `fn_izo_lant_blocant(M, {eveniment import})`;
-     - **propunerile deschise (r3):** `SELECT … FROM izo_corectii WHERE stare = 'propusa' AND bucata_id = ANY(M)`, în instrucțiune separată, după `FOR UPDATE` pe bucăți; orice rând → refuz cu lista („decide / retrage întâi propunerile: …”). Fără lock pe corecții (§4);
+     - **propunerile deschise (r3; r4: prin helper):** `fn_izo_cor_deschise(M)`, în instrucțiune separată, după `FOR UPDATE` pe bucăți (`izo_registru_writer` n-are SELECT pe `izo_corectii`, iar funcția rulează ca owner-ul ei); orice rând → refuz cu lista („decide / retrage întâi propunerile: …”). Fără lock pe corecții (§4);
      - **filtrul pe starea curentă e explicit pe ambele scrieri** (azi, 20261102a liniile 1283–1287, ambele iau toate bucățile importului, inclusiv cele deja `anulata`): mișcările `anulat` doar `WHERE b.id = ANY(M)`, cu `stare_inainte = b.stare`; UPDATE-ul doar `WHERE id = ANY(M) AND stare <> 'anulata'`. `ROW_COUNT` = `cardinality(M)`, altfel excepție;
      - `izo_importuri` → `stornat` ca azi, chiar și cu `M` gol (închide formal importul);
   2. `fn_izo_doc_anuleaza` (E3):
      - blocantele prin același predicat (`{intrare, PV}`);
-     - propunerile deschise pe `v_toate` → refuz cu lista, exact ca la import (r3);
+     - propunerile deschise pe `v_toate` (prin `fn_izo_cor_deschise`, ca `izo_receptie_writer`) → refuz cu lista, exact ca la import (r3);
      - **reconcilierea storno-ului PV filtrată pe starea curentă** (azi, 20261103b liniile 1654–1660, mișcările `receptionat → sosit` se scriu pe toate bucățile PV-ului, iar `ROW_COUNT` trebuie să fie egal cu toate; sub A, o bucată PV trecută între timp în `carantina` / `pierduta` ar rupe reconcilierea sau ar scrie o mișcare falsă): `v_pv` = bucățile evenimentului PV cu `stare = 'receptionat'`, calculat după lock-ul lor; mișcările doar pe `v_pv`; UPDATE-ul `WHERE id = ANY(v_pv) AND stare = 'receptionat'`, cu `ROW_COUNT = cardinality(v_pv)`;
      - storno-ul intrării anulează toate bucățile rămase (`stare <> 'anulata'`), din starea lor curentă, cu același tipar (array calculat o dată, mișcări + UPDATE pe el, verificarea numărului);
   3. `fn_izo_garda_receptie` (E3), ramurile anulării, pe ambele tabele (r3; r2 pretindea, greșit, că ramura INSERT a mișcării de storno PV verifică deja starea: 20261103b, liniile 676–677, construiește literal `receptionat → sosit`, fără să citească `v_b.stare`):
@@ -664,13 +670,23 @@ Pe LOT 2 asta înseamnă: gestionarul propune, managerul aprobă. Dacă propune 
 
 **Varianta B (conservatoare): nimic din E2a / E3 nu se schimbă (doar gărzile și porțile).**
 - După primul fapt E3b pe o bucată, storno-ul complet al importului ei și anularea documentului ei se refuză, ca azi.
-- Storno-ul parțial acceptă faptele E3b (folosește predicatul local). „Tot importul” = storno parțial pe toate bucățile rămase; `izo_importuri` rămâne `aplicat`, ca diferență doar cosmetică.
+- Storno-ul parțial acceptă faptele E3b (folosește același predicat, `fn_izo_lant_blocant`, cu EXECUTE doar pentru `izo_corectie_writer`). „Tot importul” = storno parțial pe toate bucățile rămase; `izo_importuri` rămâne `aplicat`, ca diferență doar cosmetică.
 - Un document E3 cu o bucată corectată / carantinată nu se mai poate anula deloc. Rămân doar corecțiile pe bucată.
 - **Propunerile deschise (r3):** storno-ul complet / anularea neînlocuite nu le văd (o propunere nu scrie mișcări). Dacă bucata devine `anulata`, propunerea rămâne `propusa`; aprobarea ei refuză la pasul 9 (40001 „bucata nu mai e în starea propunerii”), iar responsabilul o respinge. UI-ul arată propunerile pe bucăți `anulata` ca „de închis”. Indexul `ux_izo_cor_deschisa` le ține până la respingere, fără efect pe registru. Același comportament sub C, pe documente.
 
-**Varianta C:** A pentru import (E2a înlocuită), B pentru documentele E3 (fără a atinge `fn_izo_doc_anuleaza` / garda E3).
+**Varianta C:** A pentru import (E2a înlocuită, cu `fn_izo_lant_blocant` și `fn_izo_cor_deschise` pentru `izo_registru_writer`), B pentru documentele E3 (fără a atinge `fn_izo_doc_anuleaza` / garda E3).
 
-**Riscul, pe variante (r2):** **B e cea mai conservatoare** (zero funcții E2a / E3 înlocuite), **C e la mijloc** (o funcție E2a LIVE înlocuită), **A are cea mai mare suprafață** (trei funcții înlocuite, două dintre ele E3, plus un helper DEFINER nou care citește registrul). Recomandarea A rămâne pe utilitate: fără ea, prima corecție pe o bucată blochează pentru totdeauna anularea întregului document / import. Dacă Razvan cântărește riscul mai sus decât utilitatea, alegerea corectă e B; C are sens dacă anularea documentelor E3 e considerată rară.
+**Matricea Q-E3b-1 × Q-E3b-17 (r4).** Peste setul comun (`fn_izo_garda_bucati`, `fn_izo_garda_fapte`, `fn_izo_doc_garda`, `fn_izo_porti_lipsa`, `fn_izo_doc_salveaza`), fiecare cu md5 la precondiție și definiția veche salvată:
+
+| Q-E3b-1 | Q-E3b-17 = A (recomandat) | Q-E3b-17 = B |
+|---|---|---|
+| **A** | `fn_izo_import_storno` rescris (prolog + §6); `fn_izo_doc_anuleaza`, `fn_izo_garda_receptie` rescrise; `fn_izo_import_sold_initial` doar prolog. Helper-e: `fn_izo_lant_blocant` (EXECUTE `izo_registru_writer`, `izo_receptie_writer`, `izo_corectie_writer`), `fn_izo_cor_deschise` (`izo_registru_writer`, `izo_receptie_writer`) | ca la stânga, fără `fn_izo_import_sold_initial` |
+| **B** | `fn_izo_import_storno` și `fn_izo_import_sold_initial` doar prolog. Helper-e: `fn_izo_lant_blocant` (doar `izo_corectie_writer`); fără `fn_izo_cor_deschise` | nicio funcție E2a / E3 în afara setului comun. `fn_izo_lant_blocant` (doar `izo_corectie_writer`) |
+| **C** | `fn_izo_import_storno` rescris (prolog + §6); `fn_izo_import_sold_initial` doar prolog. Helper-e: `fn_izo_lant_blocant` (`izo_registru_writer`, `izo_corectie_writer`), `fn_izo_cor_deschise` (`izo_registru_writer`) | `fn_izo_import_storno` rescris; helper-ele ca la stânga |
+
+Generatorul migrării primește cele două decizii ca parametri și produce exact celula aleasă. Revenirea (§7) restaurează **fiecare** funcție din celulă, pe fiecare axă independent, și scoate helper-ele create. Testul 18 rulează apply → revenire pe toate cele șase celule.
+
+**Riscul, pe variante (r2; r4: pe axa Q-E3b-1, la Q-E3b-17 fixat):** **B e cea mai conservatoare** (nicio funcție E2a / E3 rescrisă pentru storno; sub Q-E3b-17 = A, importul și storno-ul primesc totuși prologul), **C e la mijloc** (storno-ul E2a LIVE rescris), **A are cea mai mare suprafață** (trei funcții rescrise, două dintre ele E3, plus două helper-e DEFINER care citesc registrul / corecțiile). Recomandarea A rămâne pe utilitate: fără ea, prima corecție pe o bucată blochează pentru totdeauna anularea întregului document / import. Dacă Razvan cântărește riscul mai sus decât utilitatea, alegerea corectă e B; C are sens dacă anularea documentelor E3 e considerată rară.
 
 Testele 9–10 și regresia (testul 14) sunt scrise pe ambele ramuri. Sub A, testele E2a / E3 care cer refuzul la „orice mișcare” se adaptează explicit, cu lista lor în PR (nu se șterg).
 
@@ -684,7 +700,7 @@ Testele 9–10 și regresia (testul 14) sunt scrise pe ambele ramuri. Sub A, tes
   Istoricul ciornei intră în listă (audit). Practic, revenirea e posibilă doar până la prima salvare de ciornă după E3b. După primul fapt, drumul e **înainte**, cu migrare revizuită.
 - **Fără fapte:**
   - scoate trigger-ele / politicile / funcțiile / tabelele / rolurile E3b, indexul `ux_magbuc_ev_corectie` și `magbuc_ev_e3b_motiv`;
-  - reface CHECK-ul tipurilor (forma E3) și funcțiile înlocuite, din definițiile salvate: gărzile E3, `fn_izo_doc_garda`, `fn_izo_porti_lipsa`, `fn_izo_doc_salveaza` și, sub A, `fn_izo_import_storno` / `fn_izo_doc_anuleaza` / `fn_izo_garda_receptie`; sub Q-E3b-17 = A, `fn_izo_import_sold_initial` (și `fn_izo_import_storno`, dacă nu e deja în listă);
+  - reface CHECK-ul tipurilor (forma E3) și funcțiile înlocuite, din definițiile salvate, exact celula din matricea §6 (r4): setul comun (gărzile E3, `fn_izo_doc_garda`, `fn_izo_porti_lipsa`, `fn_izo_doc_salveaza`) + `fn_izo_import_storno` dacă Q-E3b-1 ∈ {A, C} **sau** Q-E3b-17 = A + `fn_izo_doc_anuleaza` / `fn_izo_garda_receptie` dacă Q-E3b-1 = A + `fn_izo_import_sold_initial` dacă Q-E3b-17 = A; scoate `fn_izo_lant_blocant` și, dacă există, `fn_izo_cor_deschise` (după ce funcțiile care le cheamă au fost restaurate);
   - reface ștampilele `porti=` / `porti_e3=` și COMMENT-ul amprentei de revenire, cu valoarea păstrată după `inainte_20261104a=`;
   - verifică egalitatea cu starea dinainte de E3b.
 - Testat pe baza curată: E3b → revenire E3b → revenire E3 → revenire 2c → revenire E2a, toate trec.
@@ -750,7 +766,7 @@ Butoanele de stare sunt dezactivate, cu explicație, pe bucățile unui document
    - `gasit_recuperare` ↔ mutarea depozitului-destinație pe alt site;
    - schemă ↔ runner-ul de migrări (cheia exclusivă);
    - **(r3)** `fn_izo_activeaza_si_importa` (Q-E3b-17 = A) oprit după `fn_izo_seteaza_nivel`, ↔ runner-ul care ține schema exclusiv: importul refuză imediat cu 55P03, fără `deadlock_detected` și fără efecte; același test cu prologul scris cu `pg_advisory_xact_lock_shared` (funcție de test, doar pe branch) → 40P01, ca martor;
-   - **(r3)** o revocare pe două atribuiri de responsabil, în ordinea inversă `id`-ului, ↔ o aprobare care ține una dintre ele → una dintre tranzacții primește 40P01, zero efecte parțiale, reîncercarea trece; revocarea pe rânduri, în ordinea `id`, nu produce așteptare circulară;
+   - **(r3)** o revocare pe două atribuiri de responsabil, în ordinea inversă `id`-ului, ↔ o aprobare care ține una dintre ele → una dintre tranzacții primește 40P01, zero efecte parțiale; reîncercarea reautorizează (refuzată dacă revocarea a trecut); revocarea pe rânduri, în ordinea `id`, nu produce așteptare circulară;
    - **(r3)** propunere `gasit_nou` cu document de referință ↔ anularea / PV-ul acelui document: așteptarea e pe document (`fn_izo_cor_doc_lock`), în ambele ordini.
 3. **Garda pe context:** `izo_corectie_writer`, cu marcaj valid pentru corecția A, încearcă (toate refuzate):
    - un eveniment cu alt `document_id` / alt tip / al doilea eveniment;
@@ -802,6 +818,7 @@ Butoanele de stare sunt dezactivate, cu explicație, pe bucățile unui document
     - matricea din §3.5, pe catalog, pe fiecare celulă (`has_column_privilege` pe fiecare coloană a `magazie_bucati` pentru ambii writeri);
     - DML direct al `authenticated` / `service_role` pe tabelele noi → refuz;
     - `izo_cor_editor` nu scrie registrul; `izo_corectie_writer` nu scrie config / importuri / atribuiri și nici coloane din afara listei;
+    - **(r4)** EXECUTE pe `fn_izo_lant_blocant` / `fn_izo_cor_deschise` = exact celula aleasă din matricea §6 (`has_function_privilege` pe fiecare writer; `fn_izo_cor_deschise` absentă sub Q-E3b-1 = B);
     - **(r3)** USAGE pe secvențe, exact: `izo_corectie_writer` = {`magazie_bucati_id_seq`, `izo_server_ver_seq`, `magazie_bucati_evenimente_id_seq`, `magazie_bucati_miscari_id_seq`}, `izo_cor_editor` = ∅; `izo_cor_editor` fără UPDATE pe vreo coloană a `magazie_bucati` / `izo_documente_intrare`.
 13. **Porțile**, fiecare mutație → porți lipsă. Refuză exact intrările din tabelul §3.6: E3b (API + storno parțial), E3, `fn_izo_seteaza_nivel('stoc')` / `fn_izo_activeaza_si_importa`, storno-ul complet înlocuit (sub Q-E3b-1 = A / C) și, sub Q-E3b-17 = A, `fn_izo_import_sold_initial` chemată singură și storno-ul cu prolog (sub Q-E3b-1 = B). Sub Q-E3b-17 = B, testul arată explicit golul declarat: importul chemat singur și (sub Q-E3b-1 = B) storno-ul **nu** refuză, iar procedura de rulare (§3.6) refuză. Sub Q-E3b-17 = A, postcondiția textuală „corpul fără prolog = forma 20261102a” e și ea testată (o modificare în afara prologului → migrarea refuză). Mutațiile:
     - o politică `*_corectie_*` slăbită; un GRANT de coloană în plus; un trigger `DISABLE` / `ENABLE` (în loc de `ALWAYS`);
@@ -818,7 +835,8 @@ Butoanele de stare sunt dezactivate, cu explicație, pe bucățile unui document
     - porțile rămân complete după apply;
     - un import + storno E2a pe proiectul de test merge (sub A, și peste o corecție);
     - E3 (confirmare / PV / anulare) merge;
-    - ieșirea din carantină a celor 2 țevi LOT 2 (cazul real cel mai apropiat) trece cap-coadă.
+    - ieșirea din carantină a celor 2 țevi LOT 2 (cazul real cel mai apropiat) trece cap-coadă;
+    - **(r4) toate cele șase celule ale matricei Q-E3b-1 × Q-E3b-17** (§6): apply → porți complete → storno complet / anulare ca rolurile reale (`izo_registru_writer` / `izo_receptie_writer`, inclusiv `fn_izo_cor_deschise` fără `permission denied`) → revenire → amprenta și corpurile funcțiilor egale cu starea dinainte de E3b.
 
 ## 10. Ce rămâne limitare (declarată)
 
@@ -832,7 +850,7 @@ Butoanele de stare sunt dezactivate, cu explicație, pe bucățile unui document
 - Istoricul există doar pentru documentele create după E3b. Precondiția „zero `draft`” exclude ciornele vechi; documentele confirmate / anulate înainte (doar pe branch) rămân fără istoric.
 - **Doar sub Q-E3b-17 = B:** importul E2a (`fn_izo_import_sold_initial`, chemat singur) și, sub Q-E3b-1 = B, storno-ul complet E2a nu cheamă poarta completă și nu iau lock-ul schemei (§3.6). Le acoperă doar procedura de rulare (poarta în aceeași tranzacție, sub lock-ul schemei). Sub Q-E3b-17 = A (recomandat r3), golul e închis în funcție.
 - **Oracolul unicității globale (r3, Q-E3b-18):** indexurile de serie sunt globale, deci cine poate scrie pe un proiect (responsabil / gestionar) poate afla, prin încercare, că o combinație serie / șarjă / lungime există pe alt proiect. Nu află bucata, proiectul sau starea (mesaj generic, §5.1). `verifica` nu certifică disponibilitatea globală (§5.6).
-- Revocarea mai multor atribuiri într-o singură tranzacție, în altă ordine decât `id`, poate da `deadlock_detected` cu o aprobare în zbor: fără efecte parțiale, doar reîncercare (§3.4).
+- Revocarea mai multor atribuiri într-o singură tranzacție, în altă ordine decât `id`, poate da `deadlock_detected` cu o aprobare în zbor: fără efecte parțiale; reîncercarea e un apel nou, cu autorizarea reluată (§3.4).
 - `p_cerut_de` (storno-ul parțial) dovedește doar că profilul e eligibil, nu că omul a cerut sau a fost de acord (§1).
 - Amprenta porților nu validează semantica apelurilor tranzitive ale helperelor noi (review + testul 15, §3.6).
 - Încrederea în validarea JWT de gateway, ca în E3.
