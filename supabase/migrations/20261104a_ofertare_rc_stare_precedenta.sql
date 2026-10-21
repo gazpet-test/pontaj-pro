@@ -21,7 +21,7 @@ BEGIN
     RAISE EXCEPTION '20261104a: functiile noi exista deja';
   END IF;
   IF to_regprocedure('public.ofertare_alerta_rc_necitit()') IS NULL OR to_regprocedure('public.ofertare_alerta_rc_necitite_acum(bigint[])') IS NULL
-     OR to_regprocedure('public.fn_are_acces_ofertare()') IS NULL
+     OR to_regprocedure('public.fn_are_acces_ofertare()') IS NULL OR to_regclass('public.ofertare_cant_doc_decizii') IS NULL
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ofertare_documente_atribuire'
                     AND column_name = 'analiza' AND data_type = 'jsonb') THEN
     RAISE EXCEPTION '20261104a: dependinte lipsa';
@@ -35,14 +35,22 @@ CREATE FUNCTION public.ofertare_rc_doc_stare(p_document_id bigint)
  SET search_path TO 'public', 'pg_temp'
 AS $function$
   -- precedența (decizia Răzvan 21.10.2026, „repară alerta”; analiza §3 A(2)):
-  --   1 ignorat (decizie umană) → citit; 2 textul CURENT e OCR local neverificat → text_neverificat (vizibil + în alertă, nu tăcere);
+  --   1 ignorat (decizie umană) → citit; 2 textul CURENT e OCR local neverificat (ultima proveniență pe sha-ul curent, fără confirmare
+  --   umană activă) → text_neverificat (vizibil + în alertă, nu tăcere);
   --   3 partial → partial (semnal separat, portocaliu; nu intră în alertă / mail); 4 procesat fără analiza.citire_noi → perechi_necitite;
   --   procesat cu citire_noi → citit; 5 orice altă stare (neprocesat, in_lucru, eroare, NULL, necunoscută) → necitit (fail-closed)
   SELECT CASE
     WHEN d.status_procesare = 'ignorat' THEN 'citit'
-    WHEN EXISTS (SELECT 1 FROM ofertare_doc_texte_prov p
-                 WHERE p.document_id = d.id AND p.origine = 'ocr_local_neverificat'
-                   AND p.sha256 = encode(sha256(convert_to(coalesce(d.text_extras, ''), 'UTF8')), 'hex')) THEN 'text_neverificat'
+    -- review #834 r1 (P2 Jakarinos): neverificat = ULTIMA proveniență pe sha-ul curent e OCR local neverificat ȘI nu există o confirmare
+    -- umană activă (text_confirmat nerevocată) pe același sha — aceeași idee ca fn_ofertare_cb_text_valid_asof (o recitire ulterioară /
+    -- confirmarea omului închide starea)
+    WHEN (SELECT p.origine FROM ofertare_doc_texte_prov p
+           WHERE p.document_id = d.id AND p.sha256 = encode(sha256(convert_to(coalesce(d.text_extras, ''), 'UTF8')), 'hex')
+           ORDER BY p.constatat_la DESC, p.id DESC LIMIT 1) = 'ocr_local_neverificat'
+     AND NOT EXISTS (SELECT 1 FROM ofertare_cant_doc_decizii x
+                     WHERE x.document_id = d.id AND x.decizie = 'text_confirmat'
+                       AND x.doc_sha256 = encode(sha256(convert_to(coalesce(d.text_extras, ''), 'UTF8')), 'hex')
+                       AND NOT EXISTS (SELECT 1 FROM ofertare_cant_doc_decizii r WHERE r.revoca_id = x.id)) THEN 'text_neverificat'
     WHEN d.status_procesare = 'partial' THEN 'partial'
     WHEN d.status_procesare = 'procesat' AND coalesce(jsonb_typeof(d.analiza -> 'citire_noi'), 'null') <> 'null' THEN 'citit'
     WHEN d.status_procesare = 'procesat' THEN 'perechi_necitite'
@@ -65,18 +73,21 @@ AS $function$
 $function$;
 
 CREATE FUNCTION public.ofertare_rc_stari(p_licitatie_id bigint)
- RETURNS TABLE(id bigint, nume_original text, created_at timestamp with time zone, stare text)
+ RETURNS TABLE(id bigint, nume_original text, created_at timestamp with time zone, stare text, in_alerta boolean)
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
  SET search_path TO 'public', 'pg_temp'
 AS $function$
 BEGIN
   -- citirea din banner (UI): ACEEAȘI funcție de stare ca alerta zilnică — o singură regulă
+  -- review #834 r1 (P1 Copilot): RLS-ul SELECT al ofertare_documente_atribuire e „auth.uid() IS NOT NULL” (verificat în catalogul live,
+  -- 21.10) — poarta de aici (acces la modulul Ofertare) e MAI STRICTĂ, deci RPC-ul nu ocolește nicio restricție pe licitație
   IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(), false) THEN
     RAISE EXCEPTION 'Fără acces la Ofertare' USING ERRCODE = '42501';
   END IF;
   RETURN QUERY
-    SELECT d.id, d.nume_original, d.created_at, public.ofertare_rc_doc_stare(d.id)
+    -- review #834 r1 (P2 Copilot): in_alerta vine din EXACT funcția alertei zilnice (bannerul nu mai mapează stările singur)
+    SELECT d.id, d.nume_original, d.created_at, public.ofertare_rc_doc_stare(d.id), public.ofertare_rc_doc_necitit(d.id)
     FROM ofertare_documente_atribuire d
     WHERE d.licitatie_id = p_licitatie_id AND d.tip = 'raspuns_clarificare'
     ORDER BY d.id;
@@ -87,9 +98,9 @@ GRANT EXECUTE ON FUNCTION public.ofertare_rc_stari(bigint) TO authenticated, ser
 
 DO $post$
 BEGIN
-  IF md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.ofertare_rc_doc_stare(bigint)'::regprocedure)) IS DISTINCT FROM '55429f195ce43e3e79c895456ce04ab0'
+  IF md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.ofertare_rc_doc_stare(bigint)'::regprocedure)) IS DISTINCT FROM 'f83f4f0d2f9614597a2fad814416c314'
      OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.ofertare_rc_doc_necitit(bigint)'::regprocedure)) IS DISTINCT FROM '6f9ca62f961e856404523108d7bcae43'
-     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.ofertare_rc_stari(bigint)'::regprocedure)) IS DISTINCT FROM 'ba81cb8e5d11123de4af34d8c5fb1f0f' THEN
+     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.ofertare_rc_stari(bigint)'::regprocedure)) IS DISTINCT FROM '55dc579dad2f32e25fd4b4d9e9c28c8f' THEN
     RAISE EXCEPTION '20261104a: postconditie corpuri';
   END IF;
   IF has_function_privilege('anon', 'public.ofertare_rc_doc_stare(bigint)', 'EXECUTE') OR has_function_privilege('authenticated', 'public.ofertare_rc_doc_stare(bigint)', 'EXECUTE')
