@@ -45,6 +45,14 @@
 //   leagă la cel ales acum (F1); reîncărcarea cozii păstrează corecțiile de pe card (F1); rândul se închide doar
 //   dacă e încă în coadă — închis între timp de altcineva = avertisment, nu rescriere (F2); fără avertismentul fals
 //   de staging în HR (R1).
+//   Proveniență structurală (decizia owner 21.10.2026, varianta A): eticheta „[Citește orice #N]" din observații
+//   (descrisă mai sus la „Review final” / „Verificare r6”) e înlocuită de coloana hr_documente_personale.sursa_inbox_id
+//   (migrarea 20261103a — pusă doar la INSERT, nemodificabilă, unică și cu deleted_at). confirmHR o pune la INSERT,
+//   observațiile rămân doar titlul AI; proveniența se caută cu .eq('sursa_inbox_id', rând) la orice angajat, inclusiv
+//   copiile șterse logic (fail-closed). Cursa celor două taburi e închisă în BD: al doilea INSERT cade pe indexul unic
+//   (23505) → tratat ca „deja salvat din acest rând” (doar închidere, niciodată a doua inserare). Coloana lipsă
+//   (42703 / PGRST204) → eroare blocantă „migrarea pentru sursa_inbox_id nu e aplicată — anunță administratorul”.
+//   ORDINEA DE LIVRARE: migrarea 20261103a se aplică ÎNAINTEA merge-ului acestui UI.
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -55,8 +63,8 @@ import { instrumenteazaStorageRls } from './lib/storageRls.js'
 import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare,
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
   citireNecesara, stareInchidere, mesajInchidere, avertizareStaging, textConfirmareRespingere, mesajRespingere,
-  observatiiInserareHR, mesajBlocareHR, dosarInVerificare, tagProvenienta, rezultatProvenienta, provenientaLaAltAngajat,
-  mesajProvenienta, pastreazaEditari, STATUS_COADA } from './citesteOriceDubluri.js'
+  mesajBlocareHR, dosarInVerificare, rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari,
+  STATUS_COADA, rezultatInserareHR, MESAJ_MIGRARE_SURSA } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -168,16 +176,18 @@ function resolveTipCod(rawTip, tipuriFK) {
 // (sau count > rânduri primite) → perechile lui sunt „eroare de căutare" (avertisment vizibil;
 // garda din confirmHR protejează oricum), NU „liber". Întoarce { [cheie]: { docs } | { err:true, motiv } }.
 // `activ` (r1): o copie inactivă (istoric) nu trebuie să câștige în fața celei active.
-const COLOANE_DOSAR = 'id,employee_id,tip_id,activ,numar_document,emitent,data_emitere,data_expirare,fara_expirare,fisier_path,fisier_nume,fisier_size_bytes,uploadat_de,drive_file_id,observatii'
+// sursa_inbox_id (20261103a): documentul salvat din rând se recunoaște ca 'acelasi' oricare i-ar fi mărimea (J1)
+const COLOANE_DOSAR = 'id,employee_id,tip_id,activ,numar_document,emitent,data_emitere,data_expirare,fara_expirare,fisier_path,fisier_nume,fisier_size_bytes,uploadat_de,drive_file_id,observatii,sursa_inbox_id'
 const LIMITA_DOSAR = 500        // rânduri per căutare (sub max-rows al API-ului); atinsă = posibil trunchiat
 const PARALEL_DOSAR = 6         // căutări simultane (o coadă mare = mulți angajați)
 async function interogheaza(q) {
   try { return await q } catch (e) { return { data:null, error:e } }
 }
-// F1 (r6): documentele salvate deja din rândul ăsta, la ORICE angajat (eticheta „[Citește orice #N]" din observații;
-// fără % / _ în ea, iar postgrest-js codează [ # ș în URL) → { err } | { docs }. Orice rând găsit blochează inserarea.
+// F1 (r6) + 20261103a: documentul salvat deja din rândul ăsta, la ORICE angajat, după proveniența structurală
+// (sursa_inbox_id = id-ul rândului; unic în BD → cel mult unul). Fără filtru pe deleted_at: o copie ștearsă logic tot
+// oprește o nouă inserare (indexul o numără) → { err:'migrare' | 'eroare' } | { docs }. Orice rând găsit blochează inserarea.
 const cautaProvenienta = async row => rezultatProvenienta(await interogheaza(supabase.from('hr_documente_personale')
-  .select('id,employee_id,activ,deleted_at').like('observatii', `%${tagProvenienta(row.id)}%`).is('deleted_at', null).order('id').limit(10)))
+  .select('id,employee_id,activ,deleted_at,sursa_inbox_id').eq('sursa_inbox_id', row.id).order('id').limit(10)))
 // gărzile din gardaDocDosar ([op, coloană, valoare], op 'eq' | 'is') aplicate pe o cerere supabase
 const aplicaGarda = (q, garda) => garda.reduce((acc, [op, col, val]) => acc[op](col, val), q)
 async function cautaInDosarHR(perechi) {
@@ -508,8 +518,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (!tipRow) { flash('err', 'Alege tipul documentului (autorizațiile ISCIR/sudură se adaugă din secțiunea Autorizații).'); return }
     setBusyId(row.id)
     try {
-      // F1 (r6): întâi eticheta rândului în TOT dosarul (orice angajat, orice nume / mărime, fail-closed) — pe orice
-      // drum, inclusiv „Adaugă ca document nou". Salvat deja din rând (și la alt angajat, ales înainte) → nu inserez.
+      // F1 (r6): întâi proveniența rândului (sursa_inbox_id) în TOT dosarul (orice angajat, orice nume / mărime, și
+      // copiile șterse logic; fail-closed, migrarea lipsă = blocant) — pe orice drum, inclusiv „Adaugă ca document nou".
+      // Salvat deja din rând (și la alt angajat, ales înainte) → nu inserez.
       const prov = await cautaProvenienta(row)
       if (prov.err) throw new Error(mesajEroareCautare(prov.err, row.fisier_nume))
       if (prov.docs.length) {
@@ -523,9 +534,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       // Review extern F3: nu depinde de o listă eșantionată. (1) mărime cunoscută → căutare EXACTĂ
       // angajat + nume + mărime, limit 1 (copia activă întâi): găsită → blochează; (2) altfel căutare
       // completă pe nume, cu count: mai multe rânduri decât am primit → eroare, nu inserez.
-      // J1: + observatii — documentul etichetat cu acest rând (salvat deja din el, închiderea a picat) blochează
-      // oricare i-ar fi mărimea, deci și „Adaugă ca document nou" la mărime necunoscută nu-l mai salvează a doua oară.
-      const col = 'id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at,observatii'
+      // J1: + sursa_inbox_id — documentul salvat din acest rând (închiderea a picat) blochează oricare i-ar fi mărimea,
+      // deci și „Adaugă ca document nou" la mărime necunoscută nu-l mai salvează a doua oară.
+      const col = 'id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at,sursa_inbox_id'
       const sz = marime(row.fisier_size_bytes)
       const exact = sz == null ? null : rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(col)
         .eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume).eq('fisier_size_bytes', sz).is('deleted_at', null)
@@ -544,33 +555,37 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         return
       }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
-      // F2 (r6): încă o dată eticheta, chiar înainte de INSERT — alt tab / alt om poate fi salvat documentul din același
-      // rând cât am copiat fișierul (1–5 s). Fereastra rămasă e doar până la INSERT (o gardă pe server ar cere schema).
-      const prov2 = await cautaProvenienta(row)
-      if (prov2.err || prov2.docs.length) {
-        await interogheaza(supabase.storage.from(cfg.bucket).remove([destPath]))   // copia urcată acum nu mai e folosită
-        if (prov2.err) throw new Error(mesajEroareCautare(prov2.err, row.fisier_nume))
-        await verificaDosar([row])
-        flash('err', mesajProvenienta(prov2.docs, angajatId, numeAngajat), 12000)
-        return
-      }
+      // F2 (r6) + 20261103a: alt tab / alt om poate salva documentul din același rând cât copiez fișierul (1–5 s) —
+      // fără a doua verificare aici: indexul unic pe sursa_inbox_id oprește atomic al doilea INSERT (23505, mai jos).
       const dd = row.payload_ai?.date_document || {}
       const dataExp = dd.data_expirare || null
-      const { data: created, error: insErr } = await supabase.from('hr_documente_personale').insert({
+      const ins = await interogheaza(supabase.from('hr_documente_personale').insert({
         employee_id: angajatId, tip_id: tipRow.id,
         numar_document: dd.numar || null, emitent: dd.emitent || null,
         data_emitere: dd.data_emitere || null, data_expirare: dataExp,
         fara_expirare: !dataExp,
         fisier_path: destPath, fisier_nume: row.fisier_nume,
         fisier_size_bytes: row.fisier_size_bytes, fisier_mime: row.fisier_mime || 'application/pdf',
-        // J1: titlul AI + „[Citește orice #<rând>]" pe ultima linie — proveniența, pentru garda de mai sus
-        activ: true, observatii: observatiiInserareHR(row), uploadat_de: profile.id,
-      }).select('id').single()
-      if (insErr) throw new Error('Insert document HR: ' + insErr.message)
+        // proveniența = coloana (unică, nemodificabilă); observațiile = doar titlul AI, ca pe main
+        activ: true, observatii: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id, sursa_inbox_id: row.id,
+      }).select('id').single())
+      const rIns = rezultatInserareHR(ins)
+      if (rIns === 'dubla' || rIns === 'migrare') {
+        // refuz sigur al serverului → copia urcată acum nu e folosită de nimic
+        await interogheaza(supabase.storage.from(cfg.bucket).remove([destPath]))
+        if (rIns === 'migrare') throw new Error(MESAJ_MIGRARE_SURSA)
+        // 23505 pe sursa_inbox_id: documentul din acest rând e deja salvat (alt tab / o încercare anterioară) → NU a doua
+        // inserare; îl caut după proveniență și panoul oferă doar închiderea legată de el (ca la garda de sus)
+        const p = await cautaProvenienta(row)
+        await verificaDosar([row])
+        flash('err', mesajProvenienta(p.err ? [] : p.docs, angajatId, numeAngajat), 12000)
+        return
+      }
+      if (rIns !== 'ok') throw new Error('Insert document HR: ' + (ins.error?.message || 'fără răspuns de la server'))
 
-      // rând neînchis → o reîncercare se oprește în garda de mai sus, fără altă inserare: după eticheta rândului din
-      // observații, căutată la orice angajat (J1 + F1 r6), sau după nume + mărime
-      await inchideRandSiReimprospateaza(row, 'Document trimis în dosarul angajatului ✓', 'hr', tipCod, 'angajat', angajatId, created.id)
+      // rând neînchis → o reîncercare se oprește în garda de mai sus, fără altă inserare: după proveniența rândului
+      // (sursa_inbox_id, la orice angajat — J1 + F1 r6) sau după nume + mărime; iar indexul unic oprește oricum a doua
+      await inchideRandSiReimprospateaza(row, 'Document trimis în dosarul angajatului ✓', 'hr', tipCod, 'angajat', angajatId, ins.data.id)
     } catch (e) {
       flash('err', String(e.message || e))
       verificaDosar([row])   // la orice eroare, panoul de dublură arată starea reală a dosarului
@@ -602,8 +617,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         return
       }
       const doc = d.doc
-      // F1 (r6): documentul a fost salvat deja din acest rând la ALT angajat (alegerea de atunci) → nu leg rândul de
-      // copia de aici și nu completez nimic în ea; omul alege angajatul corect sau scoate rândul. Fail-closed.
+      // F1 (r6): documentul a fost salvat deja din acest rând (sursa_inbox_id) la ALT angajat (alegerea de atunci) → nu
+      // leg rândul de copia de aici și nu completez nimic în ea; omul alege angajatul corect sau scoate rândul. Fail-closed
+      // (și la migrarea lipsă). O copie ștearsă logic de la alt angajat nu oprește legarea de documentul de aici.
       const prov = await cautaProvenienta(row)
       if (prov.err) throw new Error(mesajEroareCautare(prov.err, row.fisier_nume))
       const strain = provenientaLaAltAngajat(prov.docs, angajatId)
@@ -774,7 +790,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     })
     // staging-ul se șterge ORICUM (ca pe main): fără el, încă un «✓ Confirmă» pică la descărcare, nu salvează a
     // doua oară. NH-1: storage-js nu aruncă ({ error } / data = []) → dacă nu s-a șters sigur, mesajul o spune —
-    // în afara HR; în HR eticheta rândului oprește oricum o nouă confirmare (R1, r6: fără avertisment fals la „Închide").
+    // în afara HR; în HR proveniența rândului (sursa_inbox_id, unică) oprește oricum o nouă confirmare (R1, r6: fără
+    // avertisment fals la „Închide").
     const rm = await interogheaza(supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]))
     return { stare, stagingRamas:avertizareStaging(modul, rm) }
   }
@@ -913,7 +930,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                 // dosar", dar doar închidere: fără completare și fără o copie nouă (varianta A).
                 const dubAcelasi = dub?.stare === 'acelasi' || dub?.stare === 'acelasi_inactiv'
                 const dubInactiv = dub?.stare === 'acelasi_inactiv'
-                // J1: documentul a fost salvat deja din acest rând (eticheta din observații) — închiderea a picat
+                // J1: documentul a fost salvat deja din acest rând (sursa_inbox_id) — închiderea a picat
                 const descDub = dub?.dinRand ? `salvat deja din acest rând (#${dub.doc.id})` : 'același fișier (nume + mărime)'
                 const culDub = dubInactiv ? G.yellow : G.blue
                 const badgeDosar = dubAcelasi && (
@@ -936,7 +953,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                   <div style={{ marginBottom:8, fontSize:11, color:G.dim }}>⏳ verific dosarul angajatului…</div>
                 ) : dub?.stare === 'eroare' ? (
                   <div style={{ marginBottom:10, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:11.5, color:G.yellow }}>
-                    <span>⚠️ {dub.motiv === 'trunchiat' ? 'dosarul are prea multe documente cu acest nume ca să le verific pe toate' : 'nu am putut verifica dosarul'} — {eroare ? 'nu știu dacă fișierul e deja acolo; reverifică înainte să-l scoți din coadă.' : 'la confirmare verific din nou.'}</span>
+                    {/* 20261103a: coloana sursa_inbox_id lipsă = blocant, spus ca atare (nu „verific din nou") */}
+                    <span>⚠️ {dub.motiv === 'migrare' ? MESAJ_MIGRARE_SURSA : <>{dub.motiv === 'trunchiat' ? 'dosarul are prea multe documente cu acest nume ca să le verific pe toate' : 'nu am putut verifica dosarul'} — {eroare ? 'nu știu dacă fișierul e deja acolo; reverifică înainte să-l scoți din coadă.' : 'la confirmare verific din nou.'}</>}</span>
                     <button onClick={() => verificaDosar([row])} style={{ ...btnS, padding:'3px 10px', fontSize:11.5, color:G.yellow, borderColor:G.yellow + '55' }}>↻ reverifică</button>
                   </div>
                 ) : null

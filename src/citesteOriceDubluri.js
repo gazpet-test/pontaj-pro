@@ -22,18 +22,24 @@
 //   • stagingSters       — fișierul din staging s-a șters sigur? (altfel o nouă confirmare l-ar salva din nou — NH-1)
 //   • textConfirmareRespingere / mesajRespingere — ✕ Respinge neutru + rezultatul verificat (RB2 / NH-2)
 //   Review final (Jakarinos P1/P2, Copilot P2/P3, 21.10):
-//   • tagProvenienta / areTagProvenienta / observatiiInserareHR — documentul inserat din rândul #N poartă
-//                          „[Citește orice #N]" în observații → la reîncercare e 'acelasi', oricare i-ar fi mărimea (J1)
+//   • (J1) documentul inserat din rândul #N e recunoscut la reîncercare ca 'acelasi', oricare i-ar fi mărimea — azi prin
+//                          proveniența structurală sursa_inbox_id (vezi mai jos), nu prin eticheta din observații
 //   • respingereServer / citireNecesara — o eroare de transport la UPDATE nu e „deschis": se citește rândul (J2)
 //   • rezultatCautareDosar — trunchiat după count când există; limita doar fără count (C1)
 //   • dosarInVerificare  — reverificarea golește cheia: fără rezultat vechi la A→B→A (C2)
 //   Verificare r6 (21.10):
-//   • rezultatProvenienta / provenientaLaAltAngajat / mesajProvenienta — eticheta rândului căutată în TOT dosarul
+//   • rezultatProvenienta / provenientaLaAltAngajat / mesajProvenienta — proveniența rândului căutată în TOT dosarul
 //                          HR (fără filtru pe angajat / nume): salvat deja din rând la alt angajat → blochează (F1)
 //   • pastreazaEditari   — reîncărcarea cozii păstrează corecțiile de pe card (angajatul ales manual — F1)
 //   • STATUS_COADA / stareInchidere 'altcineva' — rândul se închide doar dacă e încă deschis; închis între timp
 //                          de alt tab / alt om (alt status sau alt confirmat_ref_id) = 'altcineva', nu „închis" (F2)
 //   • avertizareStaging  — avertismentul „l-ar salva a doua oară" doar în afara HR (R1)
+//   Proveniență structurală (decizia owner 21.10.2026, varianta A — migrarea 20261103a, aplicată ÎNAINTEA acestui UI):
+//   • hr_documente_personale.sursa_inbox_id = id-ul rândului din coadă; pus doar la INSERT, nemodificabil (trigger),
+//     unic (index parțial, și cu deleted_at) → înlocuiește eticheta „[Citește orice #N]" din observații (observațiile
+//     se editează liber, eticheta se putea pierde) și închide atomic cursa celor două taburi (al doilea INSERT = 23505)
+//   • dinRandul / rezultatProvenienta (și copiile șterse logic) / rezultatInserareHR ('dubla' = 23505 pe index → doar
+//     închidere, niciodată a doua inserare) / lipsaMigrareSursa (coloana lipsă → eroare blocantă, fără inserare fără proveniență)
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -105,38 +111,62 @@ export function bucati(arr, n) {
 // Activ = convenția din TabDocumentePersonale: doar activ === false e istoric / arhivat.
 export const esteActiv = d => !!d && d.activ !== false
 
-// J1 (review final): eticheta de proveniență pe care confirmHR o pune la finalul observațiilor documentului
-// inserat din rândul #N al cozii. Determinista (doar id-ul rândului) și închisă cu „]": „[Citește orice #12]"
-// nu apare în „[Citește orice #123]" / „#112]", deci rândurile nu se confundă între ele.
-export const tagProvenienta = inboxId => `[Citește orice #${String(inboxId).trim()}]`
-export function areTagProvenienta(observatii, inboxId) {
-  if (observatii == null || inboxId == null || String(inboxId).trim() === '') return false
-  return String(observatii).includes(tagProvenienta(inboxId))
-}
-// observațiile documentului inserat de confirmHR: titlul AI (dacă e) + eticheta pe ultima linie
-export const observatiiInserareHR = row => observatiiNoi(row?.payload_ai?.titlu_scurt || null, tagProvenienta(row?.id))
+// ─── Proveniență structurală (decizia owner 21.10.2026, varianta A — migrarea 20261103a) ─────────────
+// hr_documente_personale.sursa_inbox_id = id-ul rândului din ai_documente_inbox din care confirmHR a salvat documentul.
+// Pus doar la INSERT, nemodificabil (trigger BEFORE UPDATE), unic (index parțial — un rând → cel mult un document, și
+// cu cele șterse logic). Observațiile rămân doar titlul AI; nimic din ele nu mai contează pentru proveniență.
+// ORDINEA DE LIVRARE: migrarea întâi, apoi UI-ul. Fără coloană → MESAJ_MIGRARE_SURSA (blocant, fără inserare fără proveniență).
+export const MESAJ_MIGRARE_SURSA = 'Nu pot lucra cu dosarul HR din «Citește orice»: migrarea pentru sursa_inbox_id nu e aplicată — anunță administratorul.'
+const textEroare = e => (e ? [e.message, e.details, e.hint].filter(Boolean).join(' ') : '')
+// coloana lipsește (migrarea neaplicată): 42703 la SELECT / filtru, PGRST204 la INSERT (cache-ul de schemă PostgREST) —
+// doar când eroarea numește coloana (altă coloană lipsă = altă problemă)
+export const lipsaMigrareSursa = e => !!e && (e.code === '42703' || e.code === 'PGRST204') && /sursa_inbox_id/.test(textEroare(e))
+// INSERT refuzat de indexul unic hr_documente_personale_sursa_inbox_unic: documentul din acest rând a fost deja salvat
+// (alt tab / o încercare anterioară al cărei răspuns s-a pierdut) — altă cheie unică = altă eroare
+export const dublaSursaInbox = e => !!e && e.code === '23505' && /sursa_inbox/.test(textEroare(e))
+// documentul d a fost salvat din rândul row? (bigint poate veni ca număr sau text)
+export const dinRandul = (d, row) => !!d && !!row && marime(d.sursa_inbox_id) != null && marime(d.sursa_inbox_id) === marime(row.id)
 
-// F1 (r6): eticheta rândului se caută în TOT dosarul HR — fără filtru pe angajat, nume sau mărime
-// (.like('observatii', %tag%), nesters). Altfel, dacă angajatul ales s-a schimbat după prima salvare (corecție
-// pierdută la o reîncărcare a paginii, alt om, alt tab), garda pe angajat nu vedea copia și salva o a doua la
-// angajatul greșit. res = răspunsul căutării → { err:'eroare' } (fail-closed: NU se inserează) | { docs }.
+// Rezultatul INSERT-ului din confirmHR ({ data, error } de la .insert().select('id').single()):
+//   'ok' (rând întors) | 'dubla' (23505 pe sursa_inbox_id → doar închidere, NICIODATĂ a doua inserare) |
+//   'migrare' (coloana lipsă) | 'eroare' (altceva — la o eroare de transport INSERT-ul poate fi intrat: o reîncercare
+//   îl găsește după sursa_inbox_id). 'dubla' / 'migrare' = refuz sigur al serverului → copia urcată acum se poate șterge.
+export function rezultatInserareHR(res) {
+  const { data, error } = res || {}
+  if (res && !error && data && data.id != null) return 'ok'
+  if (dublaSursaInbox(error)) return 'dubla'
+  if (lipsaMigrareSursa(error)) return 'migrare'
+  return 'eroare'
+}
+
+// F1 (r6): proveniența rândului se caută în TOT dosarul HR — fără filtru pe angajat, nume sau mărime
+// (.eq('sursa_inbox_id', rând)). Altfel, dacă angajatul ales s-a schimbat după prima salvare (corecție pierdută la o
+// reîncărcare a paginii, alt om, alt tab), garda pe angajat nu vedea copia și salva o a doua la angajatul greșit.
+// Copiile ȘTERSE LOGIC (deleted_at) rămân în rezultat (decizie 21.10): indexul unic le numără, deci din rândul lor nu se
+// mai poate salva alt document — mesajul spune asta (restaurare din Coș / fișierul urcat din nou), nu un 23505 orb.
+// res = răspunsul căutării → { err:'migrare' | 'eroare' } (fail-closed: NU se inserează) | { docs }.
 export function rezultatProvenienta(res) {
   const { data, error } = res || {}
+  if (error && lipsaMigrareSursa(error)) return { err:'migrare' }
   if (!res || error || !Array.isArray(data)) return { err:'eroare' }
-  return { docs: data.filter(d => d && d.id != null && d.deleted_at == null) }
+  return { docs: data.filter(d => d && d.id != null) }
 }
-// documentul salvat din rând la ALT angajat decât cel ales acum (sau null)
+// documentul salvat din rând la ALT angajat decât cel ales acum (sau null); o copie ștearsă logic nu mai e „la” nimeni
 export const provenientaLaAltAngajat = (docs, angajatId) =>
-  (docs || []).find(d => d && Number(d.employee_id) !== Number(angajatId)) || null
-// mesajul când eticheta rândului există deja în dosar. numeAngajat(id) → numele din listă (sau null).
+  (docs || []).find(d => d && d.deleted_at == null && Number(d.employee_id) !== Number(angajatId)) || null
+// mesajul când rândul a produs deja un document în dosar. numeAngajat(id) → numele din listă (sau null).
+// Ordinea: nesters la angajatul ales → nesters la alt angajat → șters logic → (nimic vizibil: 23505 pe un rând pe care nu-l văd)
 export function mesajProvenienta(docs, angajatId, numeAngajat = () => null) {
   const l = (docs || []).filter(Boolean)
-  const aici = l.find(d => Number(d.employee_id) === Number(angajatId))
+  const vii = l.filter(d => d.deleted_at == null)
+  const la = d => { const n = numeAngajat(d.employee_id); return n ? `«${n}»` : `alt angajat (#${d.employee_id})` }
+  const aici = vii.find(d => Number(d.employee_id) === Number(angajatId))
   if (aici) return `Documentul a fost deja salvat în dosar din acest rând (#${aici.id}) — nu-l mai adaug; folosește «Închide (e deja în dosar)» sau scoate rândul cu «✕ Respinge».`
-  const d = l[0]
-  if (!d) return 'Documentul a fost deja salvat din acest rând — nu-l mai adaug.'
-  const nume = numeAngajat(d.employee_id)
-  return `Documentul a fost deja salvat din acest rând la ${nume ? `«${nume}»` : `alt angajat (#${d.employee_id})`} (document #${d.id}) — nu fac nimic la angajatul ales acum. Dacă acela e angajatul corect, alege-l din listă și închide rândul cu «Închide (e deja în dosar)»; altfel scoate rândul cu «✕ Respinge».`
+  const d = vii[0]
+  if (d) return `Documentul a fost deja salvat din acest rând la ${la(d)} (document #${d.id}) — nu fac nimic la angajatul ales acum. Dacă acela e angajatul corect, alege-l din listă și închide rândul cu «Închide (e deja în dosar)»; altfel scoate rândul cu «✕ Respinge».`
+  const s = l[0]
+  if (s) return `Documentul salvat din acest rând (#${s.id}, la ${la(s)}) a fost șters din dosar — din același rând nu se mai salvează altul. Dacă a fost șters din greșeală, restaurează-l din HR → 🗑 Coș; dacă trebuie salvat din nou (ex. la alt angajat), urcă fișierul încă o dată; altfel scoate rândul cu «✕ Respinge».`
+  return 'Documentul a fost deja salvat din acest rând (dosarul îl are, chiar dacă nu-l văd acum) — nu-l mai adaug; reîncarcă lista și închide rândul cu «Închide (e deja în dosar)» sau scoate-l cu «✕ Respinge».'
 }
 
 // F1 (r6): coada reîncărcată din BD păstrează corecțiile omului de pe card, pe id (cheile „_": _editEntitate,
@@ -153,20 +183,21 @@ export function pastreazaEditari(noi, vechi) {
 }
 
 // docs = rânduri hr_documente_personale (pot fi și ale altor angajați / alte nume — se filtrează aici)
-//   tip 'acelasi'         → există potrivire ACTIVĂ: fisier_size_bytes egal (ne-null) SAU eticheta de
-//                           proveniență a ACESTUI rând în observații (J1 — salvat deja din el, oricare i-ar fi mărimea);
+//   tip 'acelasi'         → există potrivire ACTIVĂ: fisier_size_bytes egal (ne-null) SAU proveniența ACESTUI rând
+//                           (sursa_inbox_id = row.id — J1, salvat deja din el, oricare i-ar fi mărimea);
 //                           doc = cea salvată din rând dacă e activă, altfel cea mai veche activă (id minim)
 //                           — inactivele nu câștigă (review r1)
 //   tip 'acelasi_inactiv' → același fișier (sau cel salvat din rând) există, dar DOAR ca document inactiv (istoric);
 //                           doar închidere: nu se completează nimic și nu se inserează altă copie (r2)
-//   tip 'alt_continut'    → același nume, dar nicio mărime egală (sau mărimi necunoscute) și fără eticheta rândului
+//   tip 'alt_continut'    → același nume, dar nicio mărime egală (sau mărimi necunoscute) și nesalvat din acest rând
 //                           marimiNecunoscute = rândul SAU măcar o copie din dosar n-are mărime (r2):
 //                           atunci nu pot spune „alt fișier" — copia fără mărime poate fi chiar el
 //   tip null              → nimic cu acest nume la acest angajat
-// nrIdentice = toate copiile potrivite (identice ca mărime sau etichetate; active + inactive); nrInactive = câte sunt inactive.
-// dinRand = documentul ales poartă eticheta rândului (J1): închiderea rândului a picat după inserare → doar închidere.
+// nrIdentice = toate copiile potrivite (identice ca mărime sau salvate din rând; active + inactive); nrInactive = câte sunt inactive.
+// dinRand = documentul ales e cel salvat din acest rând (sursa_inbox_id, J1): închiderea rândului a picat după inserare → doar închidere.
 // Regula (F2, rafinare deliberată a regulii „cea mai veche copie identică"): cea mai veche copie identică ACTIVĂ; dacă nu e niciuna activă, cea mai veche identică — o copie inactivă e istoric, nu ținta completării.
-// Căutările din dosar sunt pe nume, deci și documentul etichetat se caută aici cu același nume ca rândul.
+// Căutările din dosar sunt pe nume, deci și documentul salvat din rând se caută aici cu același nume ca rândul
+// (confirmHR îl inserează cu fisier_nume = row.fisier_nume); la alt angajat îl găsește căutarea de proveniență (F1).
 export function clasificaDublura(row, docs, angajatId) {
   const gol = { tip:null, doc:null, nrIdentice:0, nrInactive:0, nrTotal:0, marimiNecunoscute:false, dinRand:false }
   if (!row || !row.fisier_nume || angajatId == null) return gol
@@ -174,7 +205,7 @@ export function clasificaDublura(row, docs, angajatId) {
     && Number(d.employee_id) === Number(angajatId) && d.fisier_nume === row.fisier_nume)
   if (!lista.length) return gol
   const sz = marime(row.fisier_size_bytes)
-  const marcate = new Set(lista.filter(d => areTagProvenienta(d.observatii, row.id)).map(d => d.id))
+  const marcate = new Set(lista.filter(d => dinRandul(d, row)).map(d => d.id))
   const potrivite = lista.filter(d => marcate.has(d.id) || (sz != null && marime(d.fisier_size_bytes) === sz)).sort((a, b) => a.id - b.id)
   if (potrivite.length) {
     const active = potrivite.filter(esteActiv)
@@ -276,7 +307,7 @@ export function observatiiNoi(existente, linie) {
 // Document inactiv (istoric) → doar închidere: nu se completează nimic în el (r1/r2).
 // expirareOmisa (HR-1) = { motiv:'dosar' | 'tip', val } când AI a citit o dată de expirare validă, dar ea
 // nu se completează (dosar „fără expirare" / tip fără expirare) — panoul spune de ce; altfel null.
-// Document salvat deja din acest rând (dinRand, J1) → doar închidere, legat de el: nu se completează nimic.
+// Document salvat deja din acest rând (dinRand, J1 — sursa_inbox_id) → doar închidere, legat de el: nu se completează nimic.
 export function analizaDublura({ row, docs, angajatId, tipuriFK, tipAI }) {
   const c = clasificaDublura(row, docs, angajatId)
   if (c.tip !== 'acelasi' && c.tip !== 'acelasi_inactiv') return c
@@ -358,8 +389,10 @@ export function grupeDupaAngajat(perechi, n) {
 //   count lipsă   → limita = limita de rânduri cerută: un răspuns care o atinge poate fi tăiat → 'trunchiat';
 //                   altfel, dacă s-a cerut count:'exact' (cuNumar) → 'eroare'
 // Trunchiat = nu știu dacă copia identică e printre rândurile lipsă → eroare de căutare, nu „liber".
+// Coloana sursa_inbox_id lipsă (migrarea neaplicată — căutările o cer) → 'migrare': eroare blocantă, nu „liber".
 export function rezultatCautareDosar(res, { limita = null, cuNumar = false } = {}) {
   const { data, error, count } = res || {}
+  if (error && lipsaMigrareSursa(error)) return { err:'migrare' }
   if (!res || error || !Array.isArray(data)) return { err:'eroare' }
   if (typeof count === 'number' && Number.isFinite(count)) return count > data.length ? { err:'trunchiat' } : { docs:data }
   if (limita != null && data.length >= limita) return { err:'trunchiat' }
@@ -368,6 +401,7 @@ export function rezultatCautareDosar(res, { limita = null, cuNumar = false } = {
 }
 
 export function mesajEroareCautare(err, nume) {
+  if (err === 'migrare') return MESAJ_MIGRARE_SURSA
   return err === 'trunchiat'
     ? `Sunt prea multe documente „${nume}" la acest angajat ca să le verific pe toate — nu adaug nimic; verifică dosarul manual.`
     : 'Nu am putut verifica dosarul angajatului — încearcă din nou.'
@@ -377,8 +411,8 @@ export function mesajEroareCautare(err, nume) {
 //   exact = rezultatCautareDosar pe angajat + nume + mărime (limit 1, copia activă întâi);
 //           null când mărimea rândului e necunoscută
 //   nume  = rezultatCautareDosar pe angajat + nume, complet (count) — poate lipsi dacă exact a blocat deja
-//   (ambele cu coloana observatii: documentul etichetat cu acest rând = 'acelasi' oricare i-ar fi mărimea — J1)
-// → { err } (căutare picată / incompletă: NU se inserează) | { bloc, cls } (bloc null = se poate insera)
+//   (ambele cu coloana sursa_inbox_id: documentul salvat din acest rând = 'acelasi' oricare i-ar fi mărimea — J1)
+// → { err } (căutare picată / incompletă / migrare lipsă: NU se inserează) | { bloc, cls } (bloc null = se poate insera)
 export function gardaFinalaHR({ row, angajatId, exact, nume, opts = {} }) {
   if (exact) {
     if (exact.err) return { err:exact.err }
@@ -463,8 +497,8 @@ export function stagingSters(res) {
 }
 
 // NH-1 + R1 (r6): avertismentul „încă un «✓ Confirmă» l-ar salva a doua oară" doar unde e adevărat — fișierul
-// nu s-a șters sigur ȘI modulul n-are altă gardă. În HR nu: documentul salvat din rândul #N poartă eticheta lui,
-// iar confirmHR o caută în tot dosarul, fail-closed (F1) → o nouă confirmare e oprită oricum; iar „Închide
+// nu s-a șters sigur ȘI modulul n-are altă gardă. În HR nu: documentul salvat din rândul #N are sursa_inbox_id = N,
+// confirmHR o caută în tot dosarul, fail-closed (F1), iar indexul unic oprește oricum a doua inserare; iar „Închide
 // (e deja în dosar)" nu folosește fișierul — remove() pe fișierul șters deja la o închidere anterioară întoarce
 // data = [] fără eroare și dădea avertismentul fals (R1).
 export const avertizareStaging = (modul, rm) => modul !== 'hr' && !stagingSters(rm)
@@ -473,7 +507,7 @@ export const avertizareStaging = (modul, rm) => modul !== 'hr' && !stagingSters(
 // roșu al cardului — «✕ Respinge» sau, pe cardurile „eroare", «✕ Scoate din coadă» (HR-2 / RB1).
 // În afara HR, un nou „✓ Confirmă" NU e oprit oricând: doar dacă fișierul din staging s-a șters (mutaFisier nu-l
 // mai găsește); altfel l-ar salva a doua oară — mesajul o spune explicit (MESAJ_STAGING_RAMAS, NH-1). În HR îl
-// oprește eticheta rândului (F1, r6) — fără avertisment (avertizareStaging).
+// oprește proveniența rândului (sursa_inbox_id, unică — F1 r6 + 20261103a) — fără avertisment (avertizareStaging).
 const SCOATE_RAND = 'scoate-l cu «✕ Respinge» / «✕ Scoate din coadă» (rândul apare ca respins, documentul rămâne salvat)'
 export const MESAJ_RAND_NEINCHIS = `Documentul e salvat, dar rândul din coadă nu s-a putut închide — nu-l confirma din nou; ${SCOATE_RAND}.`
 export const MESAJ_RAND_NEVERIFICAT = `Documentul e salvat, dar nu pot verifica rândul din coadă (nu-l mai văd — mutat în alt modul / fără drept pe el — sau verificarea a picat). Dacă rândul e încă în listă, nu-l confirma din nou; ${SCOATE_RAND}.`

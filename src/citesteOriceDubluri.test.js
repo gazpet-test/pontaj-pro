@@ -6,11 +6,13 @@ import {
   texteAltContinut, marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare,
   gardaFinalaHR, stareInchidere, mesajInchidere, MESAJ_RAND_NEVERIFICAT, MESAJ_RAND_NEINCHIS,
   motivFaraExpirare, stagingSters, MESAJ_STAGING_RAMAS, textConfirmareRespingere, mesajRespingere,
-  tagProvenienta, areTagProvenienta, observatiiInserareHR, mesajBlocareHR, dosarInVerificare,
+  mesajBlocareHR, dosarInVerificare,
   respingereServer, citireNecesara,
   rezultatProvenienta, provenientaLaAltAngajat, mesajProvenienta, pastreazaEditari, STATUS_COADA,
   MESAJ_RAND_ALTCINEVA, avertizareStaging,
+  dinRandul, lipsaMigrareSursa, dublaSursaInbox, rezultatInserareHR, MESAJ_MIGRARE_SURSA,
 } from './citesteOriceDubluri.js'
+import * as dubluri from './citesteOriceDubluri.js'
 
 const TIPURI = [
   { id:1, cod:'buletin', denumire:'Buletin / CI' },
@@ -613,32 +615,33 @@ describe('RB2 / NH-2 ✕ Respinge', () => {
   })
 })
 
-// ─── Review final (Jakarinos P1, 21.10) ──────────────────────────────────────
-describe('J1 eticheta de proveniență [Citește orice #N]', () => {
-  it('determinista, pe ultima linie a observațiilor, cu titlul AI păstrat', () => {
-    expect(tagProvenienta(501)).toBe('[Citește orice #501]')
-    expect(tagProvenienta('501')).toBe(tagProvenienta(501))
-    expect(observatiiInserareHR(rowAI())).toBe('[Citește orice #501]')
-    expect(observatiiInserareHR(rowAI({ payload_ai:{ titlu_scurt:'CI Popescu' } }))).toBe('CI Popescu\n[Citește orice #501]')
-    expect(observatiiInserareHR(rowAI({ payload_ai:{ titlu_scurt:'   ' } }))).toBe('[Citește orice #501]')
-    expect(areTagProvenienta(observatiiInserareHR(rowAI({ payload_ai:{ titlu_scurt:'CI' } })), 501)).toBe(true)
+// ─── Review final (Jakarinos P1, 21.10) → proveniență structurală (decizia owner 21.10, varianta A, 20261103a) ──
+describe('J1 proveniența structurală sursa_inbox_id', () => {
+  it('eticheta din observații a dispărut: nimic nu mai scrie / citește „[Citește orice #N]"', () => {
+    for (const n of ['tagProvenienta', 'areTagProvenienta', 'observatiiInserareHR']) expect(dubluri[n]).toBeUndefined()
+    // un text de etichetă rămas în observațiile unui document vechi nu mai face nimic
+    expect(clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive({ id:900, fisier_size_bytes:null, observatii:'[Citește orice #501]' })], 7))
+      .toMatchObject({ tip:'alt_continut', dinRand:false })
   })
-  it('nu se confundă între rânduri: #12 ≠ #123 ≠ #112 ≠ #1', () => {
-    expect(areTagProvenienta('[Citește orice #123]', 12)).toBe(false)
-    expect(areTagProvenienta('[Citește orice #112]', 12)).toBe(false)
-    expect(areTagProvenienta('[Citește orice #12]', 123)).toBe(false)
-    expect(areTagProvenienta('[Citește orice #12]', 1)).toBe(false)
-    expect(areTagProvenienta('[Citește orice #12]', 2)).toBe(false)
-    expect(areTagProvenienta('x\n[Citește orice #12]', 12)).toBe(true)
-    expect(areTagProvenienta('[Citește orice #12]\nnotă HR adăugată după', '12')).toBe(true)
-    // linia de completare (inbox #12, …) nu e eticheta de inserare
-    expect(areTagProvenienta('Completat din «Citește orice» (inbox #12, 21.10.2026): emitent', 12)).toBe(false)
-    expect(areTagProvenienta(null, 12)).toBe(false)
-    expect(areTagProvenienta('[Citește orice #12]', null)).toBe(false)
-    expect(areTagProvenienta('[Citește orice #]', '')).toBe(false)
+  it('dinRandul: același id (număr sau text), nimic la NULL / lipsă; #12 ≠ #123 ≠ #1', () => {
+    expect(dinRandul({ sursa_inbox_id:501 }, { id:501 })).toBe(true)
+    expect(dinRandul({ sursa_inbox_id:'501' }, { id:501 })).toBe(true)   // bigint ca text
+    expect(dinRandul({ sursa_inbox_id:12 }, { id:123 })).toBe(false)
+    expect(dinRandul({ sursa_inbox_id:123 }, { id:12 })).toBe(false)
+    expect(dinRandul({ sursa_inbox_id:12 }, { id:1 })).toBe(false)
+    expect(dinRandul({ sursa_inbox_id:null }, { id:501 })).toBe(false)
+    expect(dinRandul({}, { id:501 })).toBe(false)
+    expect(dinRandul({ sursa_inbox_id:501 }, { id:null })).toBe(false)
+    expect(dinRandul(null, { id:501 })).toBe(false)
+    expect(dinRandul({ sursa_inbox_id:501 }, null)).toBe(false)
   })
-  it('clasificare: documentul etichetat cu ACEST rând = acelasi oricare i-ar fi mărimea (necunoscută / diferită)', () => {
-    const tag = { observatii:'CI\n[Citește orice #501]' }
+  it('observațiile editate liber din dosar nu mai pierd proveniența (motivul variantei A)', () => {
+    const editat = docDrive({ id:900, fisier_size_bytes:999, observatii:'notă HR, eticheta ștearsă', sursa_inbox_id:501 })
+    expect(clasificaDublura(rowAI(), [editat], 7)).toMatchObject({ tip:'acelasi', dinRand:true })
+    expect(clasificaDublura(rowAI(), [{ ...editat, observatii:null }], 7)).toMatchObject({ tip:'acelasi', dinRand:true })
+  })
+  it('clasificare: documentul salvat din ACEST rând = acelasi oricare i-ar fi mărimea (necunoscută / diferită)', () => {
+    const tag = { sursa_inbox_id:501 }
     // mărime necunoscută la rând și în dosar
     expect(clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive({ id:900, fisier_size_bytes:null, ...tag })], 7))
       .toMatchObject({ tip:'acelasi', dinRand:true, nrIdentice:1, marimiNecunoscute:false })
@@ -646,15 +649,15 @@ describe('J1 eticheta de proveniență [Citește orice #N]', () => {
     const c = clasificaDublura(rowAI(), [docDrive({ id:900, fisier_size_bytes:999, ...tag })], 7)
     expect(c).toMatchObject({ tip:'acelasi', dinRand:true })
     expect(c.doc.id).toBe(900)
-    // eticheta altui rând → ca înainte (alt conținut, mărime necunoscută)
+    // salvat din ALT rând → ca înainte (alt conținut, mărime necunoscută)
     expect(clasificaDublura(rowAI({ id:50, fisier_size_bytes:null }), [docDrive({ id:900, fisier_size_bytes:null, ...tag })], 7))
       .toMatchObject({ tip:'alt_continut', dinRand:false, marimiNecunoscute:true })
     expect(clasificaDublura(rowAI({ id:5012, fisier_size_bytes:null }), [docDrive({ id:900, fisier_size_bytes:null, ...tag })], 7).tip).toBe('alt_continut')
     // alt angajat / șters → nu contează
     expect(clasificaDublura(rowAI({ fisier_size_bytes:null }), [docDrive({ employee_id:8, ...tag }), docDrive({ deleted_at:'2026-10-21', ...tag })], 7).tip).toBeNull()
   })
-  it('clasificare: etichetatul activ câștigă în fața unei copii identice mai vechi; activ înaintea etichetatului inactiv', () => {
-    const tag = { observatii:'[Citește orice #501]' }
+  it('clasificare: cel salvat din rând (activ) câștigă în fața unei copii identice mai vechi; activ înaintea celui salvat din rând inactiv', () => {
+    const tag = { sursa_inbox_id:501 }
     const a = clasificaDublura(rowAI(), [docDrive({ id:12 }), docDrive({ id:900, ...tag })], 7)
     expect(a).toMatchObject({ tip:'acelasi', dinRand:true, nrIdentice:2 })
     expect(a.doc.id).toBe(900)
@@ -665,7 +668,7 @@ describe('J1 eticheta de proveniență [Citește orice #N]', () => {
     expect(c).toMatchObject({ tip:'acelasi_inactiv', dinRand:true })
   })
   it('analiza: salvat deja din rând → doar închidere (nimic de completat, fără „tip diferit")', () => {
-    const doc = docDrive({ id:900, fisier_size_bytes:null, numar_document:null, emitent:null, observatii:'[Citește orice #501]' })
+    const doc = docDrive({ id:900, fisier_size_bytes:null, numar_document:null, emitent:null, sursa_inbox_id:501 })
     const a = analizaDublura({ row:rowAI({ fisier_size_bytes:null }), docs:[doc], angajatId:7, tipuriFK:TIPURI, tipAI:'cazier_judiciar' })
     expect(a).toMatchObject({ tip:'acelasi', dinRand:true, tipDiferit:false, campuri:[], expirareOmisa:null })
     expect(a.doc.id).toBe(900)
@@ -678,13 +681,13 @@ describe('J1 eticheta de proveniență [Citește orice #N]', () => {
     const vechi = docDrive({ id:12, fisier_size_bytes:null })
     expect(gardaFinalaHR({ row, angajatId:7, exact, nume:{ docs:[vechi] }, opts }).bloc).toBeNull()
     const salvat = { id:900, employee_id:7, fisier_nume:row.fisier_nume, fisier_size_bytes:row.fisier_size_bytes,
-      activ:true, deleted_at:null, observatii:observatiiInserareHR(row) }
+      activ:true, deleted_at:null, observatii:'CI Popescu', sursa_inbox_id:row.id }
     // 2. închiderea rândului pică (rețea) și ștergerea din staging pică → rândul rămâne în coadă, fișierul în staging
     const stare = stareInchidere({ data:null, error:{ message:'TypeError: Failed to fetch' }, status:0 }, { data:null, error:{ message:'Failed to fetch' } })
     expect(stare).toBe('necunoscut')
     expect(stagingSters({ data:null, error:{ message:'Failed to fetch' } })).toBe(false)
-    // 3. reîncercare cu aceeași excepție: fără etichetă (vechiul comportament) trecea → a doua copie (exact bug-ul)
-    const fara = gardaFinalaHR({ row, angajatId:7, exact, nume:{ docs:[vechi, { ...salvat, observatii:'CI Popescu' }] }, opts })
+    // 3. reîncercare cu aceeași excepție: fără proveniență (vechiul comportament) trecea → a doua copie (exact bug-ul)
+    const fara = gardaFinalaHR({ row, angajatId:7, exact, nume:{ docs:[vechi, { ...salvat, sursa_inbox_id:null }] }, opts })
     expect(fara.bloc).toBeNull()
     const g = gardaFinalaHR({ row, angajatId:7, exact, nume:{ docs:[vechi, salvat] }, opts })
     expect(g.bloc).toBe('acelasi')
@@ -700,9 +703,9 @@ describe('J1 eticheta de proveniență [Citește orice #N]', () => {
     expect(garda).toContainEqual(['is', 'fisier_size_bytes', null])
     expect(potrivesteGarda(salvat, garda)).toBe(true)
   })
-  it('REPRO (mărime cunoscută, dar diferită în dosar): căutarea exactă goală, cea pe nume prinde eticheta', () => {
+  it('REPRO (mărime cunoscută, dar diferită în dosar): căutarea exactă goală, cea pe nume prinde proveniența', () => {
     const row = rowAI({ id:501 })
-    const salvat = docDrive({ id:900, fisier_size_bytes:4321, observatii:observatiiInserareHR(row) })
+    const salvat = docDrive({ id:900, fisier_size_bytes:4321, sursa_inbox_id:row.id })
     const g = gardaFinalaHR({ row, angajatId:7, exact:{ docs:[] }, nume:{ docs:[salvat] }, opts:{ faraGardaNume:true, marimiComparate:true } })
     expect(g.bloc).toBe('acelasi')
     expect(g.cls.dinRand).toBe(true)
@@ -734,22 +737,38 @@ describe('C2 dosarInVerificare — reverificarea nu mai arată rezultatul vechi'
 })
 
 // ─── Verificare r6 (21.10) ───────────────────────────────────────────────────
-describe('F1 (r6) eticheta rândului căutată în tot dosarul HR', () => {
+describe('F1 (r6) proveniența rândului căutată în tot dosarul HR', () => {
   const nume = id => ({ 7:'POPESCU ION', 8:'IONESCU ANA' })[id] || null
-  it('rezultatProvenienta: căutare picată / răspuns ciudat → eroare (fail-closed); altfel documentele nesterse', () => {
+  it('rezultatProvenienta: căutare picată / răspuns ciudat → eroare (fail-closed); altfel toate, INCLUSIV cele șterse logic', () => {
     expect(rezultatProvenienta({ data:null, error:{ message:'Failed to fetch' } })).toEqual({ err:'eroare' })
     expect(rezultatProvenienta({ data:null, error:null })).toEqual({ err:'eroare' })
     expect(rezultatProvenienta(undefined)).toEqual({ err:'eroare' })
     expect(rezultatProvenienta({ data:[], error:null })).toEqual({ docs:[] })
+    // 20261103a: copia ștearsă logic rămâne (indexul unic o numără — din rândul ei nu se mai salvează alt document)
     expect(rezultatProvenienta({ data:[{ id:900, employee_id:8 }, null, { id:901, employee_id:7, deleted_at:'2026-10-21' }], error:null }))
-      .toEqual({ docs:[{ id:900, employee_id:8 }] })
+      .toEqual({ docs:[{ id:900, employee_id:8 }, { id:901, employee_id:7, deleted_at:'2026-10-21' }] })
   })
-  it('provenientaLaAltAngajat: doar documentul de la alt angajat decât cel ales', () => {
+  it('provenientaLaAltAngajat: doar documentul NESTERS de la alt angajat decât cel ales', () => {
     const docs = [{ id:900, employee_id:7 }, { id:901, employee_id:'8' }]
     expect(provenientaLaAltAngajat(docs, 7)).toEqual({ id:901, employee_id:'8' })
     expect(provenientaLaAltAngajat(docs.slice(0, 1), '7')).toBeNull()
     expect(provenientaLaAltAngajat([], 7)).toBeNull()
     expect(provenientaLaAltAngajat(null, 7)).toBeNull()
+    // salvat greșit la 8, șters de acolo → nu mai oprește «Închide» la 7 (documentul identic de aici)
+    expect(provenientaLaAltAngajat([{ id:901, employee_id:8, deleted_at:'2026-10-21' }], 7)).toBeNull()
+  })
+  it('mesajProvenienta: copia ștearsă logic → nu se salvează altul din rând; Coș / fișier urcat din nou / ✕ Respinge', () => {
+    const m = mesajProvenienta([{ id:901, employee_id:8, deleted_at:'2026-10-21' }], 7, nume)
+    expect(m).toMatch(/#901, la «IONESCU ANA»\) a fost șters din dosar/)
+    expect(m).toMatch(/din același rând nu se mai salvează altul/)
+    expect(m).toMatch(/🗑 Coș/)
+    expect(m).toMatch(/urcă fișierul încă o dată/)
+    expect(m).toMatch(/«✕ Respinge»/)
+    expect(mesajProvenienta([{ id:901, employee_id:99, deleted_at:'x' }], 7)).toMatch(/la alt angajat \(#99\)\) a fost șters/)
+    // unul șters + unul viu → contează cel viu
+    expect(mesajProvenienta([{ id:901, employee_id:8, deleted_at:'x' }, { id:902, employee_id:7 }], 7, nume)).toMatch(/deja salvat în dosar din acest rând \(#902\)/)
+    // 23505 pe un rând pe care nu-l văd (căutarea goală / picată) → tot „salvat deja", fără a doua inserare
+    expect(mesajProvenienta([], 7, nume)).toMatch(/deja salvat din acest rând.*nu-l mai adaug/)
   })
   it('mesajProvenienta: la angajatul ales → «Închide»; la altul → îl numește (sau #id) și nu face nimic aici', () => {
     expect(mesajProvenienta([{ id:900, employee_id:7 }], 7, nume)).toMatch(/deja salvat în dosar din acest rând \(#900\).*«Închide \(e deja în dosar\)».*«✕ Respinge»/)
@@ -765,12 +784,12 @@ describe('F1 (r6) eticheta rândului căutată în tot dosarul HR', () => {
   it('REPRO: AI → A, omul corectează pe B, documentul intră la B, rândul rămâne deschis; reîncărcarea readuce A', () => {
     const A = 7, B = 8
     const row = rowAI({ id:77, entitate_id:A, entitate_match_confidence:90 })
-    const D1 = docDrive({ id:900, employee_id:B, fisier_path:`${B}/aidoc_1.pdf`, drive_file_id:null, uploadat_de:'u1', observatii:observatiiInserareHR(row) })
+    const D1 = docDrive({ id:900, employee_id:B, fisier_path:`${B}/aidoc_1.pdf`, drive_file_id:null, uploadat_de:'u1', sursa_inbox_id:row.id })
     // garda veche (pe angajat) pentru A: nimic → s-ar insera a doua copie la A (bug-ul)
     expect(gardaFinalaHR({ row, angajatId:A, exact:{ docs:[] }, nume:{ docs:[] } }).bloc).toBeNull()
     expect(gardaFinalaHR({ row, angajatId:B, exact:{ docs:[D1] }, nume:null }).bloc).toBe('acelasi')
-    // garda nouă: eticheta rândului, fără filtru pe angajat → găsește D1 la B → nu se inserează la A
-    const prov = rezultatProvenienta({ data:[{ id:D1.id, employee_id:D1.employee_id, activ:true, deleted_at:null }], error:null })
+    // garda nouă: proveniența rândului (sursa_inbox_id), fără filtru pe angajat → găsește D1 la B → nu se inserează la A
+    const prov = rezultatProvenienta({ data:[{ id:D1.id, employee_id:D1.employee_id, activ:true, deleted_at:null, sursa_inbox_id:row.id }], error:null })
     expect(prov.docs.length).toBe(1)
     expect(provenientaLaAltAngajat(prov.docs, A)).toMatchObject({ id:900 })   // și «Închide» la A e oprit
     expect(provenientaLaAltAngajat(prov.docs, B)).toBeNull()                 // la B: închiderea legată de D1 merge
@@ -848,7 +867,7 @@ describe('R1 (r6) avertismentul de staging doar unde e adevărat', () => {
   const sters = { data:[{ name:'x.pdf' }], error:null }
   const lipsa = { data:[], error:null }   // remove() pe un fișier deja șters (sau fără drept de ștergere)
   const picat = { data:null, error:{ message:'Failed to fetch' } }
-  it('HR: niciodată — eticheta rândului oprește o nouă confirmare; „Închide" repetat nu mai minte', () => {
+  it('HR: niciodată — proveniența rândului (sursa_inbox_id, unică) oprește o nouă confirmare; „Închide" repetat nu mai minte', () => {
     for (const rm of [sters, lipsa, picat, undefined]) expect(avertizareStaging('hr', rm)).toBe(false)
     // „Închide (e deja în dosar)" după o închidere care a șters deja fișierul: UPDATE refuzat din nou, remove → []
     const stare = stareInchidere({ data:null, error:{ code:'42501', message:'rls' }, status:403 }, null)
@@ -861,5 +880,63 @@ describe('R1 (r6) avertismentul de staging doar unde e adevărat', () => {
       expect(avertizareStaging(m, lipsa)).toBe(true)
       expect(avertizareStaging(m, picat)).toBe(true)
     }
+  })
+})
+
+// ─── Proveniență structurală (decizia owner 21.10, varianta A, migrarea 20261103a) ───────────
+describe('20261103a sursa_inbox_id: 23505 pe index = „deja salvat"; coloana lipsă = blocant', () => {
+  // formele reale PostgREST / postgrest-js
+  const lipsaSelect = { code:'42703', message:'column hr_documente_personale.sursa_inbox_id does not exist', details:null, hint:null }
+  const lipsaInsert = { code:'PGRST204', message:"Could not find the 'sursa_inbox_id' column of 'hr_documente_personale' in the schema cache", details:null, hint:null }
+  const dubla = { code:'23505', message:'duplicate key value violates unique constraint "hr_documente_personale_sursa_inbox_unic"', details:'Key (sursa_inbox_id)=(501) already exists.', hint:null }
+  it('lipsaMigrareSursa: doar 42703 / PGRST204 care numesc coloana', () => {
+    expect(lipsaMigrareSursa(lipsaSelect)).toBe(true)
+    expect(lipsaMigrareSursa(lipsaInsert)).toBe(true)
+    expect(lipsaMigrareSursa({ code:'42703', message:'column hr_documente_personale.alta does not exist' })).toBe(false)
+    expect(lipsaMigrareSursa({ code:'PGRST204', message:"Could not find the 'alta' column" })).toBe(false)
+    expect(lipsaMigrareSursa({ code:'42501', message:'sursa_inbox_id rls' })).toBe(false)
+    expect(lipsaMigrareSursa(null)).toBe(false)
+    expect(lipsaMigrareSursa(new Error('Failed to fetch'))).toBe(false)
+  })
+  it('dublaSursaInbox: doar 23505 pe indexul / cheia sursa_inbox_id', () => {
+    expect(dublaSursaInbox(dubla)).toBe(true)
+    expect(dublaSursaInbox({ code:'23505', message:'duplicate key', details:'Key (sursa_inbox_id)=(7) already exists.' })).toBe(true)
+    expect(dublaSursaInbox({ code:'23505', message:'duplicate key value violates unique constraint "alt_index"', details:'Key (x)=(1) already exists.' })).toBe(false)
+    expect(dublaSursaInbox({ code:'23514', message:'sursa_inbox_id e nemodificabilă' })).toBe(false)
+    expect(dublaSursaInbox(undefined)).toBe(false)
+  })
+  it('rezultatInserareHR: ok / dubla (doar închidere, NICIODATĂ a doua inserare) / migrare / eroare', () => {
+    expect(rezultatInserareHR({ data:{ id:900 }, error:null, status:201 })).toBe('ok')
+    expect(rezultatInserareHR({ data:null, error:dubla, status:409 })).toBe('dubla')
+    expect(rezultatInserareHR({ data:null, error:lipsaInsert, status:400 })).toBe('migrare')
+    expect(rezultatInserareHR({ data:null, error:{ code:'42501', message:'rls' }, status:403 })).toBe('eroare')
+    expect(rezultatInserareHR({ data:null, error:new Error('Failed to fetch') })).toBe('eroare')   // poate fi intrat: reîncercarea îl găsește
+    expect(rezultatInserareHR({ data:null, error:null })).toBe('eroare')
+    expect(rezultatInserareHR(undefined)).toBe('eroare')
+  })
+  it('căutările cu sursa_inbox_id pe o bază fără migrare → err:migrare → mesajul blocant (fără inserare fără proveniență)', () => {
+    expect(rezultatProvenienta({ data:null, error:lipsaSelect, status:400 })).toEqual({ err:'migrare' })
+    expect(rezultatCautareDosar({ data:null, error:lipsaSelect, status:400 }, { limita:500, cuNumar:true })).toEqual({ err:'migrare' })
+    expect(rezultatCautareDosar({ data:null, error:{ code:'42703', message:'column x.alta does not exist' } })).toEqual({ err:'eroare' })
+    expect(mesajEroareCautare('migrare', 'CI.pdf')).toBe(MESAJ_MIGRARE_SURSA)
+    expect(MESAJ_MIGRARE_SURSA).toMatch(/migrarea pentru sursa_inbox_id nu e aplicată — anunță administratorul/)
+    // garda finală din confirmHR: migrarea lipsă = err, nu „liber"
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:{ err:'migrare' }, nume:null })).toEqual({ err:'migrare' })
+    expect(gardaFinalaHR({ row:rowAI({ fisier_size_bytes:null }), angajatId:7, exact:null, nume:{ err:'migrare' } })).toEqual({ err:'migrare' })
+  })
+  it('REPRO două taburi: ambele trec garda (nimic salvat încă), primul INSERT intră, al doilea = 23505 → doar închidere', () => {
+    const row = rowAI({ id:501 })
+    // ambele taburi: proveniența goală, garda pe nume + mărime goală → amândouă copiază fișierul și inserează
+    expect(rezultatProvenienta({ data:[], error:null })).toEqual({ docs:[] })
+    expect(gardaFinalaHR({ row, angajatId:7, exact:{ docs:[] }, nume:{ docs:[] } }).bloc).toBeNull()
+    // tabul 2: indexul unic refuză → 'dubla' (copia lui se șterge, NU se reîncearcă inserarea)
+    expect(rezultatInserareHR({ data:null, error:dubla, status:409 })).toBe('dubla')
+    // căutarea după proveniență găsește documentul tabului 1 la același angajat → mesajul + panoul cu «Închide»
+    const salvat = docDrive({ id:900, fisier_path:'7/aidoc_1.pdf', drive_file_id:null, uploadat_de:'u1', observatii:null, sursa_inbox_id:501 })
+    const prov = rezultatProvenienta({ data:[salvat], error:null })
+    expect(mesajProvenienta(prov.docs, 7)).toMatch(/deja salvat în dosar din acest rând \(#900\).*«Închide \(e deja în dosar\)»/)
+    const a = analizaDublura({ row, docs:[salvat], angajatId:7, tipuriFK:TIPURI, tipAI:'buletin' })
+    expect(a).toMatchObject({ tip:'acelasi', dinRand:true, campuri:[] })
+    expect(a.doc.id).toBe(900)
   })
 })

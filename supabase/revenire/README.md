@@ -202,3 +202,13 @@ SELECT set_config('gazpet.rollback_tehnic_20261030c', 'SCOATE_BMW_CARDATA:' || t
 COMMIT;
 ```
 Precondiție = exact obiectele patch-ului (4 relații + 6 funcții, niciun alt view dependent); armare persistentă = refuz; `LOCK TABLE … IN ACCESS EXCLUSIVE MODE` pe toate trei tabelele (cu `lock_timeout` 5 s) ÎNAINTEA verificării „goale”, ca un INSERT concurent să nu fie numărat 0 și apoi șters de DROP (Jakarinos r1 P1-2); DROP fără CASCADE; postcondiție = niciun obiect `bmw_cardata_*`; dezarmare la final. Testat în `scripts/test_bmw_cardata.sh` pasul 5 (nearmat → refuz; armat simplu peste date → refuz; CU_DATE → scos; reaplicare → suita; cursă cu două sesiuni → revenirea așteaptă și refuză, mutantul fără LOCK pierde rândul; aceeași cursă la REPEATABLE READ și SERIALIZABLE → refuz explicit de izolare, mutantul fără garda de izolare pierde rândul la RR; armat simplu pe tabele goale → scos).
+
+## 20261103a — HR «Citește orice»: proveniența structurală `sursa_inbox_id` (`20261103a_hr_doc_sursa_inbox_ROLLBACK.sql`, NEAPLICAT)
+Scoate trigger-ul `trg_hr_docp_sursa_inbox_imutabil`, funcția `hr_docp_sursa_inbox_imutabil()`, indexul unic `hr_documente_personale_sursa_inbox_unic` și coloana `hr_documente_personale.sursa_inbox_id`. Nu redeschide o gaură de securitate, dar redeschide cursa „două taburi pe același rând din coadă → două documente” și **refuză dacă vreun document are `sursa_inbox_id`** (nu se scoate o coloană cu date — decizie separată întâi). Înainte se revine și UI-ul (`CitesteOricePanel` cere coloana; fără ea salvarea HR se oprește cu „migrarea pentru sursa_inbox_id nu e aplicată”). Fără GO de execuție.
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu: la REPEATABLE READ / SERIALIZABLE fișierul refuză
+SELECT set_config('gazpet.revenire_20261103a', 'SCOATE_SURSA_INBOX:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = exact obiectele patch-ului (coloana bigint, indexul, funcția, trigger-ul; niciun view pe coloană); armare persistentă = refuz; `LOCK TABLE public.hr_documente_personale IN ACCESS EXCLUSIVE MODE` (cu `lock_timeout` 5 s) ÎNAINTEA numărării `sursa_inbox_id IS NOT NULL`; DROP fără CASCADE; `NOTIFY pgrst`; postcondiție = niciun obiect al patch-ului; dezarmare la final. Testat în `scripts/test_hr_doc_sursa_inbox.sh` pasul 4 (schelet: `supabase/tests/hr_doc_sursa_inbox_schelet.sql`).
