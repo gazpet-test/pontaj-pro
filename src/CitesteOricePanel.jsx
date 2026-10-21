@@ -26,11 +26,11 @@
 //   Review extern (Copilot + Jakarinos): gărzile de identitate pe documentul din dosar (angajat, nume,
 //   mărime, tip, fara_expirare — F1/F6); garda finală din confirmHR nu mai depinde de o listă limitată
 //   (căutare exactă + count — F3); căutarea proactivă e per angajat, iar un răspuns trunchiat e
-//   eroare de căutare, nu „liber" (F4); fișierul din staging se șterge doar pe rând sigur închis (F5).
+//   eroare de căutare, nu „liber" (F4).
 //   Verificare r4: la 0 rânduri, starea rândului o dă citirea lui directă, nu coada modulului (un rând
-//   mutat în alt modul lipsește din coadă, dar e tot deschis — F5). Ținta salvată + rând neînchis →
-//   rândul e marcat (sessionStorage) și „Confirmă" devine „↻ Reîncearcă închiderea": doar închide,
-//   fără a doua inserare (R1 — Execuție / Logistică / UPA; la HR și după o completare reușită).
+//   mutat în alt modul lipsește din coadă, dar e tot deschis — F5).
+//   Simplificare: fără marcaj de reîncercare; fișierul din staging se șterge după închidere ca pe main,
+//   deci o reîncercare nu mai poate salva documentul a doua oară — un rând rămas deschis se scoate cu ✕.
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -38,9 +38,9 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
-import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare, eroareInchidereRand,
+import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare,
   marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR,
-  inchidereFaraRezultat, stareInchidere, mesajInchidere, cuNeinchis, parseNeinchise } from './citesteOriceDubluri.js'
+  inchidereFaraRezultat, stareInchidere, mesajInchidere } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -223,18 +223,6 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   // care ajunge după unul nou nu-l mai suprascrie).
   const [dosar, setDosar] = useState({})
   const dosarSeq = useRef({ n:0, k:{} })
-  // R1 (r4): ținta SALVATĂ, rândul din coadă neînchis → { [row.id]: { msgOk, args } }. Reîncercarea doar
-  // închide (fără a doua inserare). În sessionStorage (per tab + utilizator): rezistă la închiderea
-  // panoului (Logistică / Financiar îl demontează) și la reîncărcarea paginii. Ref = adevărul sincron.
-  const cheieNeinchise = `citesteOrice.salvatNeinchis.${profile?.id || ''}`
-  const [neinchise, setNeinchise] = useState(() => { try { return parseNeinchise(sessionStorage.getItem(cheieNeinchise)) } catch (_) { return {} } })
-  const neinchiseRef = useRef(neinchise)
-  const marcheazaNeinchis = (id, val) => {
-    const nou = cuNeinchis(neinchiseRef.current, id, val)
-    if (nou === neinchiseRef.current) return
-    neinchiseRef.current = nou; setNeinchise(nou)
-    try { sessionStorage.setItem(cheieNeinchise, JSON.stringify(nou)) } catch (_) { /* doar în memorie */ }
-  }
 
   const flash = (tip, msg) => { setToast({ tip, msg }); setTimeout(() => setToast(null), 3500) }
 
@@ -256,12 +244,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     let q = supabase.from('ai_documente_inbox').select('*').in('status', ['clasificat','eroare'])
     if (modul === 'executie') q = q.or('modul_tinta.eq.executie,modul_tinta.is.null')
     else q = q.eq('modul_tinta', modul)
-    const { data, error } = await q.order('uploadat_la', { ascending: false })
+    const { data } = await q.order('uploadat_la', { ascending: false })
     setQueue(data || [])
     setLoading(false)
     // HR: dublurile din dosar se caută în fundal — lista apare imediat, panoul de dublură după
     if (modul === 'hr') verificaDosar(data || [])
-    return error ? null : (data || [])   // null = nu știu ce e în coadă
   }, [modul, verificaDosar])
 
   // ─── Încărcare entități + tipuri FK per modul ──────────────────
@@ -408,10 +395,6 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (busyRef.current.has(row.id)) return
     busyRef.current.add(row.id)
     try {
-      // R1 (r4): ținta e deja salvată, doar rândul nu s-a închis → reîncerc DOAR închiderea (orice modul):
-      // fără mutaFisier + INSERT, altfel a doua copie a documentului (UPA: factura scăzută de două ori)
-      const pend = neinchiseRef.current[row.id]
-      if (pend) return await reincearcaInchiderea(row, pend)
       if (modul === 'executie') return await confirmExecutie(row)
       if (modul === 'hr') return await confirmHR(row, opts)
       if (modul === 'logistica') return await confirmLogistica(row)
@@ -533,7 +516,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       }).select('id').single()
       if (insErr) throw new Error('Insert document HR: ' + insErr.message)
 
-      // dacă rândul nu se poate închide, e marcat (r4) → „↻ Reîncearcă închiderea" îl leagă de documentul ăsta, fără altă inserare
+      // rând neînchis → o reîncercare se oprește în garda de mai sus („e deja în dosar" → «Închide»), fără altă inserare
       await inchideRandSiReimprospateaza(row, 'Document trimis în dosarul angajatului ✓', 'hr', tipCod, 'angajat', angajatId, created.id)
     } catch (e) {
       flash('err', String(e.message || e))
@@ -543,11 +526,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // ── HR: dublura din dosar (21.10, varianta A, TKT-2026-0343) ──
   // Același fișier e deja la angajat → rândul se închide legat de documentul existent
-  // (confirmat_ref_id = id-ul lui; fișierul din staging se șterge — e același fișier — doar după ce rândul e sigur închis, F5).
+  // (confirmat_ref_id = id-ul lui; fișierul din staging se șterge la închidere — e același fișier).
   // completeaza=true → întâi UPDATE doar pe câmpurile goale, cu gardă .is(camp, null) pe
   // fiecare: dacă între timp le-a pus altcineva → 0 rânduri → NU închid, reverific.
-  // Reîncercarea e sigură: după o completare reușită cu rândul neînchis, rândul e marcat (r4) și a doua
-  // oară doar închide; în rest, câmpurile deja puse nu mai apar goale.
+  // Reîncercarea e sigură: după o completare reușită cu rândul neînchis dosarul se reverifică —
+  // câmpurile puse nu mai apar goale, deci a doua oară doar închide.
   // asteapta (r1) = starea văzută de om ('acelasi' | 'acelasi_inactiv'); dacă s-a schimbat între
   // timp (documentul a fost arhivat / reactivat / șters) → NU închid, reverific. Gărzile din UPDATE /
   // verificare (gardaDocDosar: id, angajat, nume, mărime, activ, + la completare tip și fara_expirare —
@@ -558,9 +541,6 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     busyRef.current.add(row.id)
     setBusyId(row.id)
     try {
-      // r4: completarea / legarea s-a făcut deja, doar rândul nu s-a închis → doar închiderea
-      const pend = neinchiseRef.current[row.id]
-      if (pend) return await reincearcaInchiderea(row, pend)
       const angajatId = entitateAleasa(row)
       const d = stareDublura(row)
       if (!angajatId || !d?.doc || d.stare !== asteapta) {
@@ -706,16 +686,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
-  // Marchează rândul inbox confirmat. Întoarce { res, stare, err } — stare 'inchis' | 'deschis' | 'necunoscut'
-  // (stareInchidere), err = mesajul de eroare la 'deschis'.
-  // 21.10: eroarea update-ului nu se mai înghite (documentul intrase, dar rândul rămânea
-  // în coadă fără ca omul să afle).
-  // Review r1: NU aruncă — documentul țintă e deja salvat, apelantul reîmprospătează oricum.
-  // Review extern F5: fișierul din staging NU se mai șterge aici — doar după ce rândul e SIGUR
-  // închis (inchideRandSiReimprospateaza), ca reîncercarea și 👁 Vezi să meargă în rest.
+  // Marchează rândul inbox confirmat + curăță staging. Întoarce starea rândului: 'inchis' | 'deschis' |
+  // 'necunoscut' (stareInchidere). 21.10: eroarea update-ului nu se mai înghite (documentul intrase,
+  // dar rândul rămânea în coadă fără ca omul să afle). NU aruncă — documentul țintă e deja salvat.
   // r4: 0 rânduri fără eroare → citesc rândul DIRECT (după id), nu din coada modulului: un rând mutat
-  // între timp în alt modul lipsește din coadă, dar e tot deschis. (Un rând nou care nu trece politica
-  // SELECT ar trebui să dea eroare 42501, nu 0 rânduri — deci 0 rânduri = de regulă UPDATE-ul nu l-a văzut.)
+  // între timp în alt modul lipsește din coadă, dar e tot deschis.
   async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
     let res, citire = null
     try {
@@ -725,36 +700,22 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
       }).eq('id', row.id).select('id')
     } catch (e) { res = { error:e } }
+    // staging-ul se șterge ORICUM (ca pe main): o reîncercare nu mai poate salva documentul a doua oară; un rând rămas deschis se scoate cu ✕ Respinge / Scoate din coadă
+    await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
     if (inchidereFaraRezultat(res)) citire = await interogheaza(supabase.from('ai_documente_inbox').select('id,status').eq('id', row.id).maybeSingle())
-    const stare = stareInchidere(res, citire)
-    return { res, stare, err: stare === 'deschis' ? eroareInchidereRand(res) : null }
+    return stareInchidere(res, citire)
   }
 
   // Documentul țintă e salvat → închid rândul din coadă și reîmprospătez ORICUM: și când
   // închiderea pică, ecranul părinte (lista proiectului, plafonul UPA, situația de plată,
-  // dosarul angajatului) trebuie să vadă documentul nou. Comportamentul vechi + eroarea vizibilă.
-  // Întoarce true doar pe rând sigur închis.
+  // dosarul angajatului) trebuie să vadă documentul nou. Întoarce true doar pe rând sigur închis.
   async function inchideRandSiReimprospateaza(row, msgOk, ...argsFinalize) {
-    const fin = await finalizeInbox(row, ...argsFinalize)
-    const inchis = fin.stare === 'inchis'
-    // R1 (r4): ținta e salvată → până la o închidere sigură, „Confirmă" pe rândul ăsta doar reîncearcă
-    // închiderea (pus ÎNAINTE de reîncărcarea cozii, cât butonul e încă ocupat)
-    marcheazaNeinchis(row.id, inchis ? null : { msgOk, args:argsFinalize })
-    // F5: staging-ul se șterge DOAR pe rând sigur închis (fire-and-forget: nu țin butonul ocupat)
-    if (inchis) Promise.resolve().then(() => supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path])).catch(() => {})
+    const stare = await finalizeInbox(row, ...argsFinalize)
     await loadQueue()
-    const m = mesajInchidere(fin.stare, fin.err, msgOk)
+    const m = mesajInchidere(stare, msgOk)
     flash(m.tip, m.msg)
     onConfirmed && onConfirmed()
-    return inchis
-  }
-
-  // R1 (r4): rândul are ținta deja salvată → DOAR închiderea, cu argumentele de atunci (refId = documentul salvat)
-  async function reincearcaInchiderea(row, pend) {
-    setBusyId(row.id)
-    try { await inchideRandSiReimprospateaza(row, pend.msgOk, ...pend.args) }
-    catch (e) { flash('err', String(e.message || e)) }
-    finally { setBusyId(null) }
+    return stare === 'inchis'
   }
 
   async function handleReject(row) {
@@ -870,21 +831,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                 const potConfirma = cfg.activ && (row.modul_tinta === modul || (modul === 'executie' && row.modul_tinta == null))
                 const entMatch = entitati.find(e => e.id === (entitateAleasa(row)))
                 const dd = row.payload_ai?.date_document
-                // R1 (r4): ținta e deja salvată, rândul nu s-a închis → doar „↻ Reîncearcă închiderea"
-                const pend = neinchise[row.id]
-                const dub = pend ? null : stareDublura(row)   // doar HR; null în rest
+                const dub = stareDublura(row)   // doar HR; null în rest
                 const ocupat = busyId === row.id
-                const infoNeinchis = pend && (
-                  <div style={{ marginBottom:10, padding:'8px 12px', borderRadius:8, background:G.yellow + '12', border:`1px solid ${G.yellow}44`, color:G.yellow, fontSize:12, lineHeight:1.5 }}>
-                    ⚠️ Documentul e deja salvat (#{pend.args[4]}), dar rândul din coadă nu s-a închis. Reîncercarea doar închide rândul — nu se mai salvează încă o dată.
-                  </div>
-                )
-                const btnReincearca = pend && (
-                  <button onClick={() => handleConfirm(row)} disabled={ocupat}
-                    style={{ padding:'8px 18px', background:G.yellow, color:G.bg, border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: ocupat ? 0.5 : 1 }}>
-                    {ocupat ? '⏳…' : `↻ Reîncearcă închiderea (document deja salvat #${pend.args[4]})`}
-                  </button>
-                )
                 // r1/r2: același fișier există doar ca document INACTIV (istoric) → tot „deja în
                 // dosar", dar doar închidere: fără completare și fără o copie nouă (varianta A).
                 const dubAcelasi = dub?.stare === 'acelasi' || dub?.stare === 'acelasi_inactiv'
@@ -941,17 +889,16 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               : <>Același fișier (nume + mărime) e deja la {entMatch?.label || 'acest angajat'} — nu mai trebuie adăugat.</>}</span>
                           </div>
                         )}
-                        {infoNeinchis}
                         <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
                           <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Scoate din coadă</button>
-                          {pend ? btnReincearca : btnInchide}
+                          {btnInchide}
                         </div>
                       </>
                     ) : (
                       <>
                         {/* Ce a detectat AI */}
                         <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:12, alignItems:'center' }}>
-                          <select value={row.modul_tinta || 'executie'} onChange={e => mutaModul(e.target.value)} disabled={!!pend}
+                          <select value={row.modul_tinta || 'executie'} onChange={e => mutaModul(e.target.value)}
                                   title="Modulul țintă — schimbă-l dacă AI-ul a greșit (documentul se mută în coada modulului ales)"
                                   style={{ ...chip, background:mm.color + '22', color:mm.color, border:`1px solid ${mm.color}55`, cursor:'pointer', appearance:'auto' }}>
                             {Object.entries(MODUL_META).map(([k, v]) => (
@@ -994,7 +941,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                   patch(row.id, '_editEntitate', v)
                                   // HR: alt angajat → reverific dosarul LUI (dublura ține de angajat)
                                   if (modul === 'hr' && v) verificaDosar([{ ...row, _editEntitate: v }])
-                                }} disabled={!!pend} style={sel}>
+                                }} style={sel}>
                                   <option value="">— alege {cfg.entitateLabel.toLowerCase()} —</option>
                                   {entitati.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
                                 </select>
@@ -1002,11 +949,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               <label style={{ flex:'1 1 180px', fontSize:12 }}>
                                 <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Tip document</span>
                                 {cfg.tipuriText ? (
-                                  <select value={row._editTip ?? row.tip_document ?? 'altul'} onChange={e => patch(row.id, '_editTip', e.target.value)} disabled={!!pend} style={sel}>
+                                  <select value={row._editTip ?? row.tip_document ?? 'altul'} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
                                     {cfg.tipuriText.map(t => <option key={t} value={t}>{TIP_LABEL[t] || t}</option>)}
                                   </select>
                                 ) : (
-                                  <select value={row._editTip ?? resolveTipCod(row.tip_document, tipuriFK)} onChange={e => patch(row.id, '_editTip', e.target.value)} disabled={!!pend} style={sel}>
+                                  <select value={row._editTip ?? resolveTipCod(row.tip_document, tipuriFK)} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
                                     <option value="">— alege tipul —</option>
                                     {tipuriFK.map(t => <option key={t.id} value={t.cod}>{t.denumire}</option>)}
                                   </select>
@@ -1021,7 +968,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               return (
                                 <div style={{ marginBottom:12, padding:'10px 12px', background:G.teal + '12', border:`1px solid ${G.teal}44`, borderRadius:8 }}>
                                   <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', marginBottom:6 }}>
-                                    <input type="checkbox" checked={row._scrieDate !== false} onChange={e => patch(row.id, '_scrieDate', e.target.checked)} disabled={!!pend} />
+                                    <input type="checkbox" checked={row._scrieDate !== false} onChange={e => patch(row.id, '_scrieDate', e.target.checked)} />
                                     <span style={{ fontSize:12.5, fontWeight:700, color:G.teal }}>📋 Completează datele proiectului</span>
                                   </label>
                                   <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 14px', fontSize:11.5, color:G.text, paddingLeft:24 }}>
@@ -1042,12 +989,12 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                   <label style={{ flex:'1 1 160px', fontSize:12 }}>
                                     <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Valoare factură (lei, cu TVA)</span>
                                     <input type="number" step="0.01" value={row._editValoare ?? dd.valoare_totala ?? ''}
-                                      onChange={e => patch(row.id, '_editValoare', e.target.value)} disabled={!!pend} style={sel} placeholder="0.00" />
+                                      onChange={e => patch(row.id, '_editValoare', e.target.value)} style={sel} placeholder="0.00" />
                                   </label>
                                   <label style={{ flex:'1 1 150px', fontSize:12 }}>
                                     <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Luna din care se scade</span>
                                     <input type="month" value={row._editLuna ?? (dd.data_emitere ? dd.data_emitere.slice(0,7) : new Date().toISOString().slice(0,7))}
-                                      onChange={e => patch(row.id, '_editLuna', e.target.value)} disabled={!!pend} style={sel} />
+                                      onChange={e => patch(row.id, '_editLuna', e.target.value)} style={sel} />
                                   </label>
                                   {dd.numar && <div style={{ alignSelf:'flex-end', fontSize:11, color:G.dim, paddingBottom:9 }}>Factura nr. <b style={{color:G.text}}>{dd.numar}</b>{dd.data_emitere ? ` din ${fmtD(dd.data_emitere)}` : ''}</div>}
                                 </div>
@@ -1063,7 +1010,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
                             {/* Date extrase — document (hr/logistica). La dublura HR „deja în dosar" (activ
                                 sau inactiv) nu se mai salvează un document nou → panoul de mai jos spune ce se completează. */}
-                            {modul !== 'executie' && !pend && !dubAcelasi && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (
+                            {modul !== 'executie' && !dubAcelasi && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (
                               <div style={{ marginBottom:12, padding:'10px 12px', background:accent + '10', border:`1px solid ${accent}33`, borderRadius:8, fontSize:11.5, color:G.text }}>
                                 <div style={{ fontSize:12, fontWeight:700, color:accent, marginBottom:5 }}>📄 Date extrase din document</div>
                                 <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 14px' }}>
@@ -1125,10 +1072,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               </div>
                             )}
 
-                            {infoNeinchis}
                             <div style={{ display:'flex', gap:8, justifyContent:'flex-end', flexWrap:'wrap' }}>
                               <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Respinge</button>
-                              {pend ? btnReincearca : dubAcelasi ? (
+                              {dubAcelasi ? (
                                 <>
                                   {btnInchide}
                                   {dubCompletez && (

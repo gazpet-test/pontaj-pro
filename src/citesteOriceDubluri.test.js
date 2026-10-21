@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   dataAIValida, textAIValid, esteDinDrive, cheieDosar, perechiDeVerificat, bucati,
   clasificaDublura, campuriDeCompletat, updateCompletare, fmtZi, liniaObservatii,
-  observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, eroareInchidereRand, inchidereFaraRezultat,
+  observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, inchidereFaraRezultat,
   texteAltContinut, marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare,
-  gardaFinalaHR, randInchisSigur, stareInchidere, mesajInchidere, MESAJ_RAND_NEVERIFICAT, cuNeinchis, parseNeinchise, pendValid,
+  gardaFinalaHR, stareInchidere, mesajInchidere, MESAJ_RAND_NEVERIFICAT, MESAJ_RAND_NEINCHIS,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -247,18 +247,6 @@ describe('blocheazaInserare (garda din confirmHR)', () => {
   })
 })
 
-describe('eroareInchidereRand (finalizeInbox, toate modulele)', () => {
-  it('un rând actualizat → null (închis)', () => {
-    expect(eroareInchidereRand({ data:[{ id:1 }], error:null })).toBeNull()
-  })
-  it('eroare / 0 rânduri / lipsă rezultat → mesaj, fără excepție', () => {
-    expect(eroareInchidereRand({ data:null, error:{ message:'rls' } })).toMatch(/salvat, dar rândul din coadă nu s-a putut închide: rls/)
-    expect(eroareInchidereRand({ data:[], error:null })).toMatch(/fără drept de modificare/)
-    expect(eroareInchidereRand(undefined)).toMatch(/nu s-a putut închide/)
-    expect(eroareInchidereRand({ error:new Error('Failed to fetch') })).toMatch(/Failed to fetch/)
-  })
-})
-
 describe('texteAltContinut (r2: „altă mărime" doar când mărimile s-au comparat)', () => {
   it('mărimi comparate → „alt fișier (altă mărime)", cu numărul de documente', () => {
     const dub = clasificaDublura(rowAI(), [docDrive({ fisier_size_bytes:4321 }), docDrive({ id:11, fisier_size_bytes:9 })], 7)
@@ -291,7 +279,7 @@ describe('texteAltContinut (r2: „altă mărime" doar când mărimile s-au comp
   })
 })
 
-describe('inchidereFaraRezultat (0 rânduri fără eroare = de verificat prin reîncărcare)', () => {
+describe('inchidereFaraRezultat (0 rânduri fără eroare = de verificat prin citirea directă a rândului)', () => {
   it('doar 0 rânduri fără eroare', () => {
     expect(inchidereFaraRezultat({ data:[], error:null })).toBe(true)
     expect(inchidereFaraRezultat({ data:[{ id:1 }], error:null })).toBe(false)
@@ -425,25 +413,6 @@ describe('F3 gardaFinalaHR — garda din confirmHR, fail-closed', () => {
   })
 })
 
-describe('F5 randInchisSigur — staging-ul se șterge doar pe rând sigur închis', () => {
-  it('UPDATE-ul a întors rândul → închis', () => {
-    expect(randInchisSigur({ data:[{ id:5 }], error:null }, null)).toBe(true)
-  })
-  it('eroare / rezultat lipsă → nu (staging-ul rămâne pentru reîncercare și 👁 Vezi)', () => {
-    expect(randInchisSigur({ data:null, error:{ message:'x' } }, null)).toBe(false)
-    expect(randInchisSigur({ error:new Error('Failed to fetch') }, null)).toBe(false)
-    expect(randInchisSigur(undefined, null)).toBe(false)
-  })
-  it('0 rânduri fără eroare → decide citirea DIRECTĂ a rândului', () => {
-    const zero = { data:[], error:null }
-    expect(randInchisSigur(zero, { data:{ id:5, status:'confirmat' }, error:null })).toBe(true)
-    expect(randInchisSigur(zero, { data:{ id:5, status:'clasificat' }, error:null })).toBe(false)
-    expect(randInchisSigur(zero, { data:null, error:null })).toBe(false)       // nu se vede → necunoscut
-    expect(randInchisSigur(zero, { data:null, error:{ message:'x' } })).toBe(false)
-    expect(randInchisSigur(zero, null)).toBe(false)
-  })
-})
-
 describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
   const zero = { data:[], error:null }
   it('UPDATE cu rând întors → inchis; eroare → deschis', () => {
@@ -452,10 +421,9 @@ describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
     expect(stareInchidere({ error:new Error('Failed to fetch') }, null)).toBe('deschis')
     expect(stareInchidere(undefined, null)).toBe('deschis')
   })
-  it('rând mutat în alt modul, invizibil pentru cel care confirmă → necunoscut (NU închis), fișierul rămâne', () => {
+  it('rând mutat în alt modul, invizibil pentru cel care confirmă → necunoscut (NU închis)', () => {
     // coada HR reîncărcată nu-l mai conține — vechiul criteriu ar fi spus „închis"
     expect(stareInchidere(zero, { data:null, error:null })).toBe('necunoscut')
-    expect(randInchisSigur(zero, { data:null, error:null })).toBe(false)
   })
   it('vizibil și deschis → deschis; vizibil și confirmat → inchis', () => {
     expect(stareInchidere(zero, { data:{ id:5, status:'clasificat' }, error:null })).toBe('deschis')
@@ -471,52 +439,18 @@ describe('r4 stareInchidere — nu din coada modulului (F5 rezidual)', () => {
 
 describe('r4 mesajInchidere', () => {
   it('închis → ok cu mesajul modulului; necunoscut → warn neutru; deschis → err', () => {
-    expect(mesajInchidere('inchis', null, 'Gata ✓')).toEqual({ tip:'ok', msg:'Gata ✓' })
-    expect(mesajInchidere('necunoscut', null, 'Gata ✓')).toEqual({ tip:'warn', msg:MESAJ_RAND_NEVERIFICAT })
+    expect(mesajInchidere('inchis', 'Gata ✓')).toEqual({ tip:'ok', msg:'Gata ✓' })
+    expect(mesajInchidere('necunoscut', 'Gata ✓')).toEqual({ tip:'warn', msg:MESAJ_RAND_NEVERIFICAT })
     expect(MESAJ_RAND_NEVERIFICAT).toMatch(/salvat/)
     expect(MESAJ_RAND_NEVERIFICAT).not.toMatch(/✓/)
-    expect(mesajInchidere('deschis', 'eroare X', 'Gata ✓')).toEqual({ tip:'err', msg:'eroare X' })
-    expect(mesajInchidere('deschis', null, 'Gata ✓').msg).toMatch(/nu s-a putut închide/)
+    expect(mesajInchidere('deschis', 'Gata ✓')).toEqual({ tip:'err', msg:MESAJ_RAND_NEINCHIS })
+    expect(mesajInchidere(undefined, 'Gata ✓').tip).toBe('err')
   })
-  it('mesajul de eroare trimite la reîncercarea închiderii, nu la o nouă confirmare', () => {
-    expect(eroareInchidereRand({ data:null, error:{ message:'rls' } })).toMatch(/Reîncearcă închiderea/)
-  })
-})
-
-describe('r4 R1 cuNeinchis / parseNeinchise — reîncercarea doar închide', () => {
-  const pend = { msgOk:'Document trimis în Execuție ✓', args:['executie', 'aviz', 'proiect', 12, 345] }
-  it('pune / scoate marcajul fără să modifice obiectul vechi', () => {
-    const a = {}
-    const b = cuNeinchis(a, 501, pend)
-    expect(a).toEqual({})
-    expect(b[501]).toEqual(pend)
-    const c = cuNeinchis(b, 501, null)
-    expect(c).toEqual({})
-    expect(b[501]).toEqual(pend)
-  })
-  it('nimic de schimbat → același obiect (fără re-randare / scriere inutilă)', () => {
-    const a = { 7:pend }
-    expect(cuNeinchis(a, 501, null)).toBe(a)
-    expect(cuNeinchis(a, 501, { msgOk:'x', args:[1] })).toBe(a)   // marcaj invalid → ignorat
-    expect(cuNeinchis(null, 501, null)).toEqual({})
-  })
-  it('cheile din sessionStorage sunt text — scoaterea merge și cu id numeric', () => {
-    const din = parseNeinchise(JSON.stringify({ 501:pend }))
-    expect(din[501]).toEqual(pend)
-    expect(cuNeinchis(din, 501, null)).toEqual({})
-  })
-  it('parseNeinchise ignoră textul stricat și marcajele invalide', () => {
-    expect(parseNeinchise(null)).toEqual({})
-    expect(parseNeinchise('')).toEqual({})
-    expect(parseNeinchise('{nu e json')).toEqual({})
-    expect(parseNeinchise('[1,2]')).toEqual({})
-    expect(parseNeinchise('"x"')).toEqual({})
-    expect(parseNeinchise(JSON.stringify({ 1:pend, 2:{ msgOk:'x' }, 3:{ msgOk:'x', args:[1,2,3,4,null] }, 4:null }))).toEqual({ 1:pend })
-  })
-  it('pendValid: refId obligatoriu (afișat pe buton, trimis la confirmat_ref_id)', () => {
-    expect(pendValid(pend)).toBe(true)
-    expect(pendValid({ ...pend, args:['hr', null, 'angajat', 7, 0] })).toBe(true)
-    expect(pendValid({ ...pend, args:['hr', null, 'angajat', 7, null] })).toBe(false)
-    expect(pendValid(null)).toBe(false)
+  it('rândul neînchis se scoate cu ✕ Respinge — fără reîncercare (staging-ul e șters, ca pe main)', () => {
+    expect(MESAJ_RAND_NEINCHIS).toBe('Documentul e salvat, dar rândul din coadă nu s-a putut închide — scoate-l cu «✕ Respinge» (documentul rămâne salvat).')
+    for (const m of [MESAJ_RAND_NEINCHIS, MESAJ_RAND_NEVERIFICAT]) {
+      expect(m).toMatch(/✕ Respinge/)
+      expect(m).not.toMatch(/Reîncearcă/)
+    }
   })
 })
