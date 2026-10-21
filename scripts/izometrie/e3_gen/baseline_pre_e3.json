@@ -1,0 +1,1832 @@
+{
+ "_despre": [
+  "Baseline-ul EXTERN pre-E3 (Storage + trigger-ele profiles), capturat READ-ONLY de pe prod (dxczwkbciseqniprspcu) cu",
+  "python scripts/izometrie/e3_gen/gen_e3.py --captura, extras cu --din-captura <fișier>. REVIZUIT: orice schimbare pe prod =>",
+  "captură nouă, diff revizuit în git, apoi gen_e3.py (constanta preflight-ului 0l + scheletul izometrie_e3_schelet_baseline.sql).",
+  "r5f (#825 NO-GO, P1-3/P1-4)."
+ ],
+ "capturat_la": "2026-10-21T16:08:49.119846+00:00",
+ "server_version": "17.6",
+ "md5_prod": {
+  "functii": {
+   "public.prevent_role_escalation()": "6cc283295b6cf8ab80d6fcd468922137",
+   "public.fn_profiles_campuri_owner_only()": "62a2d9ea92c104946d0008b25a369dd6"
+  },
+  "relatii": {
+   "storage.buckets": "6e2ace025a5c2acef6f1e4c1f4d7e9de",
+   "storage.objects": "6e2ace025a5c2acef6f1e4c1f4d7e9de"
+  },
+  "politici": {
+   "storage.objects.pl_packing_del": "45942bf822bb02aaba56f0e83a5208aa",
+   "storage.objects.pl_packing_ins": "61ea4c79cf4a86d522b8a636695d19a9",
+   "storage.objects.pl_packing_sel": "4998e54b20eea1c85880ab7cb35d5ef2",
+   "storage.objects.pl_packing_upd": "d9997b6f6dab73cf01e8ce13af4ebc9d",
+   "storage.objects.ai_inbox_obj_all": "a9574d5dac3b0b33bcb36182703aa8d0",
+   "storage.objects.autorizatii_read": "3b164f3bd8028356eafdc2d8e665829a",
+   "storage.objects.rapoarte_obj_all": "62bd86c6c25f4900c0cc634be168c4a6",
+   "storage.objects.templates_delete": "c2177d3e36091cd59d5659552b999569",
+   "storage.objects.templates_insert": "21f2ecfd93c0a3a51da84b920b3e27c2",
+   "storage.objects.templates_select": "b402036773324d2c777eda07501a0a56",
+   "storage.objects.templates_update": "7518c54632862144b956bc575ae83fe1",
+   "storage.objects.tts_audio_inchis": "08a994c4a7d396a2d95e17ef265f70b4",
+   "storage.objects.autorizatii_write": "3f6831267eb966292336e7df810dd306",
+   "storage.objects.cf_storage_delete": "9b7817911ef56799514d80042ae92e95",
+   "storage.objects.cf_storage_insert": "4278d9c807474fd2b0dcb08df1603621",
+   "storage.objects.cf_storage_select": "81e1b7bf36fc1a99c089d9dafe3d3d0b",
+   "storage.objects.chat_imagini_read": "672f8008070f86c16185858d6c865713",
+   "storage.objects.autorizatii_delete": "8373e7dbea5230e3ba0b865cdba55f66",
+   "storage.objects.ctc_storage_delete": "db4b71adc3e214f49e4ad9b00d13bccd",
+   "storage.objects.ctc_storage_insert": "88a074bfc242f0238719692ac3184c58",
+   "storage.objects.ctc_storage_select": "1dfa4fbcf6bcd547d87b257f6e5f4415",
+   "storage.objects.ctc_storage_update": "f55b14f6376f46533082f5ca7568d723",
+   "storage.objects.edc_storage_delete": "9091b4991d963f57076ace9a218a5b64",
+   "storage.objects.edc_storage_insert": "3af6ee07e25b8fa43a880a03619525fe",
+   "storage.objects.edc_storage_select": "f51907d68adfae5aedcbfba361d53ccc",
+   "storage.objects.edc_storage_update": "26419d886b0ed9d7047fb648656621e0",
+   "storage.objects.sedinte_pdf_insert": "85d9ef466b6b52e15d25c5672979f576",
+   "storage.objects.sedinte_pdf_select": "4779537c5f62676f987df37ed117e541",
+   "storage.objects.sedinte_pdf_update": "befc0ad1ccced466ad091f5f5203468f",
+   "storage.objects.chat_imagini_upload": "3788ba9c46d155771369818ebc72d21b",
+   "storage.objects.hr_semnaturi_delete": "44b88c693a730ac594b516820ed0384e",
+   "storage.objects.hr_semnaturi_insert": "289e1a171db219d2e36e02bd32ed4cc3",
+   "storage.objects.hr_semnaturi_select": "e33b7f5eb41eb7b8b3212c0921424eaa",
+   "storage.objects.hr_semnaturi_update": "3ecdb91ee0a2c277588a63bf0e6ea6cb",
+   "storage.objects.probe_citiri_delete": "e739bbb6fe6b6309f75a376a0e013c07",
+   "storage.objects.probe_citiri_insert": "02954b04ded38c8490497cac6ae5c985",
+   "storage.objects.probe_citiri_select": "4f1e0304d7a5c4d36e455f2a2a7958f0",
+   "storage.objects.ofertare_storage_del": "628d7e7210b2e4526a4d1979783f92f9",
+   "storage.objects.ofertare_storage_ins": "f616de6a0aba7da36f5ca05079b1c8c2",
+   "storage.objects.ofertare_storage_sel": "06db92ceef336b1b3d9051b74d41a818",
+   "storage.objects.ofertare_storage_upd": "4cb32c03ead06d6e7e186b97e3fb2051",
+   "storage.objects.productie_storage_rw": "1be29896c86a6067675f6da59c7210a5",
+   "storage.objects.qr_bonuri_insert_auth": "e509e95f76e5d92593b38f596814fd57",
+   "storage.objects.qr_bonuri_select_auth": "eea3b5519d3c4083e43b5829592b804e",
+   "storage.objects.facturi_storage_delete": "689a3ce408a407fe143c4530bb90c2f6",
+   "storage.objects.facturi_storage_insert": "cc3f01faaeb97f19a0941e4ae250a482",
+   "storage.objects.facturi_storage_select": "0b81cfbb9fb10081c97ec6c11918b14f",
+   "storage.objects.facturi_storage_update": "db4c0f5506c25f00766f21672b3b068c",
+   "storage.objects.qr_bonuri_delete_owner": "784c03a727165d48cdf3661d6561d385",
+   "storage.objects.recrutare_cv_select_hr": "b6f445862a8f1f12e20f0bf04fef919b",
+   "storage.objects.tichete_storage_insert": "d40e5f14f909107e4e93d8e9d02688d4",
+   "storage.objects.tichete_storage_select": "1a6c8c0c6089b50bbf5ad6cf072d3899",
+   "storage.objects.Pontaj net delete owner": "67f1c7aa8452a828e79aa7f6b4149c35",
+   "storage.objects.ordine_deplasare_delete": "1a718ab2417437d9e8684ad4a4c4dd7f",
+   "storage.objects.ordine_deplasare_insert": "0414f0c8a072a2ce572546b66dfa6683",
+   "storage.objects.ordine_deplasare_select": "337901cd700108cb690493041a27aa2b",
+   "storage.objects.ordine_deplasare_update": "923c2b96bfecd7c7d4d23dc31563a55b",
+   "storage.objects.service_fise_doc_delete": "153d56a69df3015e289b10e342078e55",
+   "storage.objects.service_fise_doc_insert": "498ebe3d33e8ca0f3835e286e1124e63",
+   "storage.objects.service_fise_doc_select": "215c1fc5f9a2ae499d3c3b6754f21eee",
+   "storage.objects.service_fise_doc_update": "91356edbbcb368f696ee5f6f829ad769",
+   "storage.objects.Pontaj brut delete owner": "37577ce853870a5cce29dd48dbe676b4",
+   "storage.objects.avize_authenticated_read": "a46edbf45465e1ab84bfbb8d03f6f339",
+   "storage.objects.contracte_comodat_delete": "e91090c8ca3ecc83b760dbfc35f067ad",
+   "storage.objects.contracte_comodat_insert": "eaf9755d31d4e7d0ddb459f94f9ea4a2",
+   "storage.objects.contracte_comodat_select": "eee304a60d84f6c4da7fb5adab5ad217",
+   "storage.objects.contracte_comodat_update": "04f2bbedee03f9c80b5540de23b6493d",
+   "storage.objects.hr_semnaturi_self_insert": "43e28952b73f515a751fb222bb02e9a0",
+   "storage.objects.hr_semnaturi_self_select": "45f07e72655a65d5147dd882db48a86b",
+   "storage.objects.documente_personal_delete": "58418bea0c6a556ee3fb2d8516b0d806",
+   "storage.objects.documente_personal_insert": "f1f9ed8bacf1a20022b57d7826df9dfb",
+   "storage.objects.documente_personal_select": "06a25984522e71b620d981af55b7531d",
+   "storage.objects.documente_personal_update": "9bc598af29056edd4192c54b1c5d48ec",
+   "storage.objects.hr_decizii_storage_insert": "50652fe76f28402e4f86a4d594f0beee",
+   "storage.objects.hr_decizii_storage_select": "ee02dc9986cdfb8723d84a1a1cecef4f",
+   "storage.objects.avize_authenticated_insert": "5bcbf1c6da49f81eb6fdd1d53b11dcc6",
+   "storage.objects.executie_borderouri_delete": "0d10d7901ea2b5adda6f50e6323194f0",
+   "storage.objects.executie_borderouri_insert": "b6bb00e6d8c7d8055026e01d60ad89f1",
+   "storage.objects.executie_borderouri_select": "a7a4cc303cf82f1314608c21e296b0a8",
+   "storage.objects.executie_borderouri_update": "95fec62464867485661f2dfb5940a219",
+   "storage.objects.tichete_storage_delete_own": "e9338ba592143158313cea0322021914",
+   "storage.objects.upa docs authenticated all": "6c01841a6c4ee32bc00013b19d4bed53",
+   "storage.objects.executie_pachete_pdf_delete": "3aa4ea03a7c05b220c1e64f7b6367f77",
+   "storage.objects.executie_pachete_pdf_insert": "3a74dd917cc1cfd5b7ae1606fdc8f0db",
+   "storage.objects.executie_pachete_pdf_select": "c5bf595022753fa684f2395d695d3ece",
+   "storage.objects.executie_pachete_pdf_update": "42e276ff3a0fdd7a39552d0b8c0f0758",
+   "storage.objects.Pontaj net insert authorized": "288824684f3a8fe279c6e43343cd5c41",
+   "storage.objects.Pontaj net select authorized": "0b5733e6cdc3860690872df655936dd9",
+   "storage.objects.Supliment hrana delete owner": "e001b1aa169f6409b2d1312360a0fe62",
+   "storage.objects.Pontaj brut insert authorized": "dd86ba37b01110315fce80449a5ae55c",
+   "storage.objects.Pontaj brut select authorized": "689051a6c8d9f0647356fbb52c1775c7",
+   "storage.objects.contracte_terti_storage_delete": "1d2ea1ee68e40d959d26081616825e66",
+   "storage.objects.contracte_terti_storage_insert": "c8cfde174404c6937865e9e702d9539f",
+   "storage.objects.contracte_terti_storage_select": "28eb2477865f3dbe9e59c863d0ae078a",
+   "storage.objects.contracte_terti_storage_update": "1c403b429f0f66bd77e958fea7e733b9",
+   "storage.objects.documente_firma_storage_delete": "977d7918e86aec27ed895339afa902f7",
+   "storage.objects.documente_firma_storage_insert": "f67001f218467559016ab90865812e91",
+   "storage.objects.documente_firma_storage_select": "e542ec7b3a27e9ec9c3c4e036b4587ca",
+   "storage.objects.documente_firma_storage_update": "ec5fc6d3e404b72dc695de33599502c3",
+   "storage.objects.documente_proiect_storage_read": "f3f6f1db042a2d5a0d948aa0bbdb5bc9",
+   "storage.objects.Supliment hrana insert authorized": "1c6362c49451cda18205205e0e0119bc",
+   "storage.objects.Supliment hrana select authorized": "acef98ecce0e7dcddd0e20489a54f14a",
+   "storage.objects.whatsapp_bonuri_delete_owner_only": "89597ea8d4e2155fc6dc9cd873ed5cae",
+   "storage.objects.Authenticated can read documente-flota": "39047ab0bf0ea334aaf99661b25317c9",
+   "storage.objects.Authenticated can delete documente-flota": "5f9297cc6274dcc7277c55fe1b6e42e2",
+   "storage.objects.Authenticated can update documente-flota": "f06faa0729e08714ad7c7fee2709fd1e",
+   "storage.objects.Authenticated can upload documente-flota": "3974712202f7df33f19b6a8ab1cbd2b1",
+   "storage.objects.whatsapp_bonuri_insert_owner_or_admin_logistica": "8fac387cb6b8957f722fb61bfb67429a",
+   "storage.objects.whatsapp_bonuri_select_owner_or_admin_logistica": "a975ce8e7ded29d03b0166f1af977325",
+   "storage.objects.whatsapp_bonuri_update_owner_or_admin_logistica": "52f4fc58ef0dfec338ec2f75a08d52e1"
+  },
+  "triggere": {
+   "public.profiles.prevent_role_escalation_trigger": "fdf263e29e9c3ec0bf0a00fb53a410b6",
+   "public.profiles.trg_profiles_campuri_owner_only": "0926bbf3c21b67a0eee65dea64992a08"
+  }
+ },
+ "relatii": [
+  {
+   "acl": [
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "INSERT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "SELECT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "UPDATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "DELETE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "TRUNCATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "REFERENCES",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "TRIGGER",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "INSERT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "SELECT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "UPDATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "DELETE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "TRUNCATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "REFERENCES",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "TRIGGER",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "INSERT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "SELECT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "UPDATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "DELETE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "INSERT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "SELECT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "UPDATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "DELETE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "INSERT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "SELECT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "UPDATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "DELETE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "TRUNCATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "REFERENCES",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "TRIGGER",
+     true
+    ]
+   ],
+   "rel": "storage.buckets",
+   "rls": true,
+   "force": false,
+   "owner": "supabase_storage_admin"
+  },
+  {
+   "acl": [
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "INSERT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "SELECT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "UPDATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "DELETE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "TRUNCATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "REFERENCES",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "supabase_storage_admin",
+     "TRIGGER",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "INSERT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "SELECT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "UPDATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "DELETE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "TRUNCATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "REFERENCES",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "service_role",
+     "TRIGGER",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "INSERT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "SELECT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "UPDATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "authenticated",
+     "DELETE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "INSERT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "SELECT",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "UPDATE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "anon",
+     "DELETE",
+     false
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "INSERT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "SELECT",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "UPDATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "DELETE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "TRUNCATE",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "REFERENCES",
+     true
+    ],
+    [
+     "supabase_storage_admin",
+     "postgres",
+     "TRIGGER",
+     true
+    ]
+   ],
+   "rel": "storage.objects",
+   "rls": true,
+   "force": false,
+   "owner": "supabase_storage_admin"
+  }
+ ],
+ "triggere": [
+  {
+   "def": "CREATE TRIGGER prevent_role_escalation_trigger BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION prevent_role_escalation()",
+   "rel": "public.profiles",
+   "nume": "prevent_role_escalation_trigger",
+   "enabled": "O"
+  },
+  {
+   "def": "CREATE TRIGGER trg_profiles_campuri_owner_only BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION fn_profiles_campuri_owner_only()",
+   "rel": "public.profiles",
+   "nume": "trg_profiles_campuri_owner_only",
+   "enabled": "O"
+  }
+ ],
+ "functii": [
+  {
+   "acl": [
+    [
+     "postgres",
+     "postgres",
+     "EXECUTE",
+     false
+    ]
+   ],
+   "args": "",
+   "nume": "fn_profiles_campuri_owner_only",
+   "owner": "postgres",
+   "config": "{\"search_path=public, pg_temp\"}",
+   "limbaj": "plpgsql",
+   "prosrc": "\nDECLARE\n  v_camp   text;\n  v_claims jsonb;\n  v_rol    text;\n  v_sub    text;\n  v_rol_claim  text;\n  v_rol_claims text;\nBEGIN\n  v_camp := CASE\n    WHEN NEW.department               IS DISTINCT FROM OLD.department               THEN 'department'\n    WHEN NEW.employee_id              IS DISTINCT FROM OLD.employee_id              THEN 'employee_id'\n    WHEN NEW.email                    IS DISTINCT FROM OLD.email                    THEN 'email'\n    WHEN NEW.can_use_document_scanner IS DISTINCT FROM OLD.can_use_document_scanner THEN 'can_use_document_scanner'\n    WHEN NEW.can_manage_stoc          IS DISTINCT FROM OLD.can_manage_stoc          THEN 'can_manage_stoc'\n    WHEN NEW.can_create_comenzi       IS DISTINCT FROM OLD.can_create_comenzi       THEN 'can_create_comenzi'\n    WHEN NEW.can_process_achizitii    IS DISTINCT FROM OLD.can_process_achizitii    THEN 'can_process_achizitii'\n    WHEN NEW.can_access_ctc           IS DISTINCT FROM OLD.can_access_ctc           THEN 'can_access_ctc'\n    WHEN NEW.receive_tichete_logistica     IS DISTINCT FROM OLD.receive_tichete_logistica     THEN 'receive_tichete_logistica'\n    WHEN NEW.receive_tichete_hr            IS DISTINCT FROM OLD.receive_tichete_hr            THEN 'receive_tichete_hr'\n    WHEN NEW.receive_tichete_administrativ IS DISTINCT FROM OLD.receive_tichete_administrativ THEN 'receive_tichete_administrativ'\n    WHEN NEW.receive_tichete_it            IS DISTINCT FROM OLD.receive_tichete_it            THEN 'receive_tichete_it'\n    WHEN NEW.receive_tichete_comercial     IS DISTINCT FROM OLD.receive_tichete_comercial     THEN 'receive_tichete_comercial'\n    WHEN NEW.receive_tichete_financiar     IS DISTINCT FROM OLD.receive_tichete_financiar     THEN 'receive_tichete_financiar'\n    WHEN NEW.receive_bonuri_consum    IS DISTINCT FROM OLD.receive_bonuri_consum    THEN 'receive_bonuri_consum'\n    WHEN NEW.whatsapp_tier            IS DISTINCT FROM OLD.whatsapp_tier            THEN 'whatsapp_tier'\n  END;\n  IF v_camp IS NULL THEN\n    RETURN NEW;                                   -- nicio coloană protejată schimbată\n  END IF;\n\n  v_claims := coalesce(nullif(current_setting('request.jwt.claims', true), ''),\n                       nullif(current_setting('request.jwt.claim', true), ''))::jsonb;\n  v_rol := coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), v_claims ->> 'role');\n  v_sub := coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), v_claims ->> 'sub');\n\n  -- SEC F2 r4 (30.09.2026): cele două surse ale rolului JWT (request.jwt.claim.role și rolul din claims) nu au voie să se\n  -- contrazică: ambele nevide și diferite => refuz (fail-closed), aliniat cu celelalte 3 triggere de pe profiles.\n  v_rol_claim  := nullif(current_setting('request.jwt.claim.role', true), '');\n  v_rol_claims := nullif(v_claims ->> 'role', '');\n  IF v_rol_claim IS NOT NULL AND v_rol_claims IS NOT NULL AND v_rol_claim IS DISTINCT FROM v_rol_claims THEN\n    RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil (rol JWT contradictoriu: claim.role %, claims.role %)', v_camp, v_rol_claim, v_rol_claims\n      USING ERRCODE = '42501';\n  END IF;\n\n  IF v_rol IS NULL AND v_sub IS NULL THEN\n    -- fără context de cerere: conexiune directă la BD\n    IF session_user IN ('postgres', 'supabase_admin') THEN\n      RETURN NEW;\n    END IF;\n    RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil (conexiune fără identitate autorizată: %)', v_camp, session_user\n      USING ERRCODE = '42501';\n  END IF;\n\n  -- SEC F2 r4: ramura service_role legată de rolul SQL efectiv, identic cu celelalte 3: conexiunea PostgREST (session_user =\n  -- 'authenticator') ȘI rolul efectiv al cererii current_setting('role') = 'service_role' (SET LOCAL ROLE din JWT, nealterat de\n  -- SECURITY DEFINER). Un RPC rulat ca authenticated care își pune singur claim-urile service_role (set_config) are\n  -- role = 'authenticated' => cade mai jos pe 42501.\n  IF v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role' THEN\n    RETURN NEW;\n  END IF;\n  IF v_rol = 'authenticated' AND v_sub IS NOT NULL\n     AND EXISTS (SELECT 1 FROM public.profiles WHERE id::text = v_sub AND is_owner IS TRUE) THEN\n    RETURN NEW;\n  END IF;\n  RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil', v_camp USING ERRCODE = '42501';\nEND ",
+   "schema": "public",
+   "secdef": true,
+   "volatil": "v",
+   "rezultat": "trigger"
+  },
+  {
+   "acl": [
+    [
+     "postgres",
+     "postgres",
+     "EXECUTE",
+     false
+    ],
+    [
+     "postgres",
+     "service_role",
+     "EXECUTE",
+     false
+    ]
+   ],
+   "args": "",
+   "nume": "prevent_role_escalation",
+   "owner": "postgres",
+   "config": "{\"search_path=public, pg_temp\"}",
+   "limbaj": "plpgsql",
+   "prosrc": "\nDECLARE\n  v_rol_claim  text;\n  v_rol_claims text;\n  v_rol        text;\nBEGIN\n  IF auth.uid() IS NULL THEN\n    -- SEC F2 r3 (30.09.2026): fără identitate de utilizator (sub în JWT), trecerea e permisă DOAR contextului de sistem EXPLICIT:\n    --   (a) PostgREST cu cheia service_role: rolul JWT = 'service_role' ȘI session_user = 'authenticator' (conexiunea PostgREST);\n    --   (b) conexiune directă la BD: niciun rol JWT (nici claim.role, nici claims.role) ȘI session_user postgres / supabase_admin\n    --       (migrări, SQL admin, pg_cron).\n    --   Cele două surse ale rolului (request.jwt.claim.role și request.jwt.claims->>'role') nu au voie să se contrazică: ambele\n    --   nevide și diferite => refuz (fail-closed). JSON invalid în claims => auth.uid() (evaluat primul) cade cu 22P02,\n    --   fail-closed; handlerul de mai jos e doar apărare suplimentară.\n    --   Orice altceva — cheia anon, un JWT authenticated fără sub, claim service_role pus prin set_config dintr-o altă sesiune,\n    --   authenticator fără claims, alt rol de conexiune — e REFUZAT (42501). current_user NU e folosit: funcția e SECURITY\n    --   DEFINER, deci current_user e mereu proprietarul (postgres). r3: ramura (a) cere și rolul SQL EFECTIV al cererii,\n    --   current_setting('role') = 'service_role' — PostgREST îl setează din JWT (SET LOCAL ROLE) și SECURITY DEFINER nu-l\n    --   schimbă (verificat cu PostgREST 13.0.4 real); un RPC rulat ca authenticated care își pune singur claim-urile\n    --   service_role are role = 'authenticated' => refuz.\n    v_rol_claim := nullif(current_setting('request.jwt.claim.role', true), '');\n    BEGIN\n      v_rol_claims := nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');\n    EXCEPTION WHEN invalid_text_representation THEN\n      v_rol_claims := NULL;\n    END;\n    IF v_rol_claim IS NOT NULL AND v_rol_claims IS NOT NULL AND v_rol_claim IS DISTINCT FROM v_rol_claims THEN\n      RAISE EXCEPTION '%: rol JWT contradictoriu (claim.role: %, claims.role: %) — refuzat', 'prevent_role_escalation', v_rol_claim, v_rol_claims\n        USING ERRCODE = '42501';\n    END IF;\n    v_rol := coalesce(v_rol_claim, v_rol_claims);\n    IF v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role' THEN\n      RETURN NEW;\n    END IF;\n    IF v_rol IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN\n      RETURN NEW;\n    END IF;\n    RAISE EXCEPTION '%: modificare pe profiles fără identitate de utilizator și în afara contextului de sistem (rol JWT: %, session_user: %)',\n      'prevent_role_escalation', coalesce(v_rol, '<niciunul>'), session_user USING ERRCODE = '42501';\n  END IF;\n\n  -- Verifică modificare role\n  IF OLD.role IS DISTINCT FROM NEW.role THEN\n    IF NOT EXISTS (\n      SELECT 1 FROM public.profiles\n      WHERE id = auth.uid() AND is_owner = true\n    ) THEN\n      RAISE EXCEPTION 'Doar owners pot schimba rolul (incercat: % → %)', OLD.role, NEW.role;\n    END IF;\n  END IF;\n\n  -- Verifică modificare is_owner\n  IF OLD.is_owner IS DISTINCT FROM NEW.is_owner THEN\n    IF NOT EXISTS (\n      SELECT 1 FROM public.profiles\n      WHERE id = auth.uid() AND is_owner = true\n    ) THEN\n      RAISE EXCEPTION 'Doar owners pot schimba flag-ul is_owner';\n    END IF;\n  END IF;\n\n  RETURN NEW;\nEND;\n",
+   "schema": "public",
+   "secdef": true,
+   "volatil": "v",
+   "rezultat": "trigger"
+  }
+ ],
+ "referinte": [
+  {
+   "args": "",
+   "nume": "fn_are_acces_ofertare",
+   "schema": "public",
+   "rezultat": "boolean"
+  },
+  {
+   "args": "p_scriere boolean",
+   "nume": "fn_executie_pachete_acces",
+   "schema": "public",
+   "rezultat": "boolean"
+  },
+  {
+   "args": "",
+   "nume": "fn_facturi_pdf_acces",
+   "schema": "public",
+   "rezultat": "boolean"
+  },
+  {
+   "args": "p_name text, p_op text",
+   "nume": "fn_hr_decizii_storage_poate",
+   "schema": "public",
+   "rezultat": "boolean"
+  },
+  {
+   "args": "p_user_id uuid",
+   "nume": "fn_is_app_owner",
+   "schema": "public",
+   "rezultat": "boolean"
+  },
+  {
+   "args": "p_name text",
+   "nume": "fn_ofertare_obiect_in_pachet_inghetat",
+   "schema": "public",
+   "rezultat": "boolean"
+  },
+  {
+   "args": "",
+   "nume": "my_employee_id",
+   "schema": "public",
+   "rezultat": "bigint"
+  },
+  {
+   "args": "",
+   "nume": "poate_edita_documente_firma",
+   "schema": "public",
+   "rezultat": "boolean"
+  },
+  {
+   "args": "name text",
+   "nume": "foldername",
+   "schema": "storage",
+   "rezultat": "text[]"
+  }
+ ],
+ "politici": [
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "Authenticated can delete documente-flota",
+   "qual": "(bucket_id = 'documente-flota'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "Authenticated can read documente-flota",
+   "qual": "(bucket_id = 'documente-flota'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "Authenticated can update documente-flota",
+   "qual": "(bucket_id = 'documente-flota'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'documente-flota'::text)",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "Authenticated can upload documente-flota",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "Pontaj brut delete owner",
+   "qual": "((bucket_id = 'pontaj-brut-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'pontaj-brut-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.can_access_pontaj_brut = true) OR (profiles.is_owner = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "Pontaj brut insert authorized",
+   "qual": null,
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "Pontaj brut select authorized",
+   "qual": "((bucket_id = 'pontaj-brut-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.can_access_pontaj_brut = true) OR (profiles.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "Pontaj net delete owner",
+   "qual": "((bucket_id = 'pontaj-net-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'pontaj-net-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.can_access_pontaj_brut = true) OR (profiles.is_owner = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "Pontaj net insert authorized",
+   "qual": null,
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "Pontaj net select authorized",
+   "qual": "((bucket_id = 'pontaj-net-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.can_access_pontaj_brut = true) OR (profiles.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "Supliment hrana delete owner",
+   "qual": "((bucket_id = 'supliment-hrana-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'supliment-hrana-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.can_access_pontaj_brut = true) OR (profiles.is_owner = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "Supliment hrana insert authorized",
+   "qual": null,
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "Supliment hrana select authorized",
+   "qual": "((bucket_id = 'supliment-hrana-istoric'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.can_access_pontaj_brut = true) OR (profiles.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'ai-documente-inbox'::text)",
+   "cmd": "*",
+   "rel": "storage.objects",
+   "nume": "ai_inbox_obj_all",
+   "qual": "(bucket_id = 'ai-documente-inbox'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "autorizatii_delete",
+   "qual": "(bucket_id = 'autorizatii'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "autorizatii_read",
+   "qual": "(bucket_id = 'autorizatii'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'autorizatii'::text)",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "autorizatii_write",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'avize'::text) AND (auth.role() = 'authenticated'::text))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "avize_authenticated_insert",
+   "qual": null,
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "avize_authenticated_read",
+   "qual": "((bucket_id = 'avize'::text) AND (auth.role() = 'authenticated'::text))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "cf_storage_delete",
+   "qual": "((bucket_id = 'comenzi-furnizor'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'comenzi-furnizor'::text)",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "cf_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "cf_storage_select",
+   "qual": "(bucket_id = 'comenzi-furnizor'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "chat_imagini_read",
+   "qual": "((bucket_id = 'chat-imagini'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'chat-imagini'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "chat_imagini_upload",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "contracte_comodat_delete",
+   "qual": "((bucket_id = 'contracte-comodat'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'contracte-comodat'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_access_personal_data = true) OR (profiles.role = 'admin_logistica'::text))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "contracte_comodat_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "contracte_comodat_select",
+   "qual": "((bucket_id = 'contracte-comodat'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_access_personal_data = true) OR (profiles.role = 'admin_logistica'::text))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "contracte_comodat_update",
+   "qual": "((bucket_id = 'contracte-comodat'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_access_personal_data = true) OR (profiles.role = 'admin_logistica'::text))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "contracte_terti_storage_delete",
+   "qual": "((bucket_id = 'contracte-terti'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'contracte-terti'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_manage_contracts = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "contracte_terti_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "contracte_terti_storage_select",
+   "qual": "((bucket_id = 'contracte-terti'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_manage_contracts = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "contracte_terti_storage_update",
+   "qual": "((bucket_id = 'contracte-terti'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_manage_contracts = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "ctc_storage_delete",
+   "qual": "((bucket_id = 'ctc-documente'::text) AND (auth.uid() IS NOT NULL) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_access_ctc)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'ctc-documente'::text) AND (auth.uid() IS NOT NULL) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_access_ctc)))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "ctc_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "ctc_storage_select",
+   "qual": "((bucket_id = 'ctc-documente'::text) AND (auth.uid() IS NOT NULL) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_access_ctc)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "ctc_storage_update",
+   "qual": "((bucket_id = 'ctc-documente'::text) AND (auth.uid() IS NOT NULL) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_access_ctc)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "documente_firma_storage_delete",
+   "qual": "((bucket_id = 'documente-firma'::text) AND poate_edita_documente_firma())",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'documente-firma'::text) AND poate_edita_documente_firma())",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "documente_firma_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "documente_firma_storage_select",
+   "qual": "(bucket_id = 'documente-firma'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'documente-firma'::text) AND poate_edita_documente_firma())",
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "documente_firma_storage_update",
+   "qual": "((bucket_id = 'documente-firma'::text) AND poate_edita_documente_firma())",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "documente_personal_delete",
+   "qual": "((bucket_id = 'documente-personal'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'documente-personal'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "documente_personal_insert",
+   "qual": null,
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "documente_personal_select",
+   "qual": "((bucket_id = 'documente-personal'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "documente_personal_update",
+   "qual": "((bucket_id = 'documente-personal'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "documente_proiect_storage_read",
+   "qual": "((bucket_id = 'documente-proiect'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "edc_storage_delete",
+   "qual": "((bucket_id = 'executie-contracte'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'executie-contracte'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "edc_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "edc_storage_select",
+   "qual": "((bucket_id = 'executie-contracte'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "edc_storage_update",
+   "qual": "((bucket_id = 'executie-contracte'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "executie_borderouri_delete",
+   "qual": "((bucket_id = 'executie-borderouri'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'executie-borderouri'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "executie_borderouri_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "executie_borderouri_select",
+   "qual": "((bucket_id = 'executie-borderouri'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'executie-borderouri'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "executie_borderouri_update",
+   "qual": "((bucket_id = 'executie-borderouri'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "executie_pachete_pdf_delete",
+   "qual": "((bucket_id = 'executie-pachete-pdf'::text) AND ( SELECT fn_executie_pachete_acces(true) AS fn_executie_pachete_acces))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'executie-pachete-pdf'::text) AND ( SELECT fn_executie_pachete_acces(true) AS fn_executie_pachete_acces))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "executie_pachete_pdf_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "executie_pachete_pdf_select",
+   "qual": "((bucket_id = 'executie-pachete-pdf'::text) AND ( SELECT fn_executie_pachete_acces(false) AS fn_executie_pachete_acces))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'executie-pachete-pdf'::text) AND ( SELECT fn_executie_pachete_acces(true) AS fn_executie_pachete_acces))",
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "executie_pachete_pdf_update",
+   "qual": "((bucket_id = 'executie-pachete-pdf'::text) AND ( SELECT fn_executie_pachete_acces(true) AS fn_executie_pachete_acces))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "facturi_storage_delete",
+   "qual": "((bucket_id = 'facturi-emise'::text) AND fn_is_app_owner(auth.uid()))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'facturi-emise'::text) AND fn_facturi_pdf_acces())",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "facturi_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "facturi_storage_select",
+   "qual": "((bucket_id = 'facturi-emise'::text) AND fn_facturi_pdf_acces())",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'facturi-emise'::text) AND fn_facturi_pdf_acces())",
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "facturi_storage_update",
+   "qual": "((bucket_id = 'facturi-emise'::text) AND fn_facturi_pdf_acces())",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'hr-decizii'::text) AND fn_hr_decizii_storage_poate(name, 'insert'::text))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "hr_decizii_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "hr_decizii_storage_select",
+   "qual": "((bucket_id = 'hr-decizii'::text) AND fn_hr_decizii_storage_poate(name, 'select'::text))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "hr_semnaturi_delete",
+   "qual": "((bucket_id = 'hr-semnaturi'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'hr-semnaturi'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "hr_semnaturi_insert",
+   "qual": null,
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "hr_semnaturi_select",
+   "qual": "((bucket_id = 'hr-semnaturi'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'hr-semnaturi'::text) AND ((storage.foldername(name))[1] = (my_employee_id())::text))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "hr_semnaturi_self_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "hr_semnaturi_self_select",
+   "qual": "((bucket_id = 'hr-semnaturi'::text) AND ((storage.foldername(name))[1] = (my_employee_id())::text))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "hr_semnaturi_update",
+   "qual": "((bucket_id = 'hr-semnaturi'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "ofertare_storage_del",
+   "qual": "((bucket_id = 'ofertare'::text) AND fn_are_acces_ofertare() AND (NOT fn_ofertare_obiect_in_pachet_inghetat(name)))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'ofertare'::text) AND fn_are_acces_ofertare())",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "ofertare_storage_ins",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "ofertare_storage_sel",
+   "qual": "((bucket_id = 'ofertare'::text) AND fn_are_acces_ofertare())",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'ofertare'::text) AND fn_are_acces_ofertare() AND (NOT fn_ofertare_obiect_in_pachet_inghetat(name)))",
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "ofertare_storage_upd",
+   "qual": "((bucket_id = 'ofertare'::text) AND fn_are_acces_ofertare() AND (NOT fn_ofertare_obiect_in_pachet_inghetat(name)))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "ordine_deplasare_delete",
+   "qual": "((bucket_id = 'ordine-deplasare-pdf'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'ordine-deplasare-pdf'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "ordine_deplasare_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "ordine_deplasare_select",
+   "qual": "((bucket_id = 'ordine-deplasare-pdf'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "ordine_deplasare_update",
+   "qual": "((bucket_id = 'ordine-deplasare-pdf'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.can_access_personal_data = true) OR (p.is_owner = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "pl_packing_del",
+   "qual": "((bucket_id = 'packing-lists'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'packing-lists'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "pl_packing_ins",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "pl_packing_sel",
+   "qual": "(bucket_id = 'packing-lists'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "pl_packing_upd",
+   "qual": "((bucket_id = 'packing-lists'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "probe_citiri_delete",
+   "qual": "((bucket_id = 'probe-citiri'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'probe-citiri'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "probe_citiri_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "probe_citiri_select",
+   "qual": "(bucket_id = 'probe-citiri'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'productie'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "*",
+   "rel": "storage.objects",
+   "nume": "productie_storage_rw",
+   "qual": "((bucket_id = 'productie'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "qr_bonuri_delete_owner",
+   "qual": "((bucket_id = 'qr-bonuri'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.role = 'admin_logistica'::text))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'qr-bonuri'::text)",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "qr_bonuri_insert_auth",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "qr_bonuri_select_auth",
+   "qual": "(bucket_id = 'qr-bonuri'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'rapoarte-zilnice'::text)",
+   "cmd": "*",
+   "rel": "storage.objects",
+   "nume": "rapoarte_obj_all",
+   "qual": "(bucket_id = 'rapoarte-zilnice'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "recrutare_cv_select_hr",
+   "qual": "((bucket_id = 'recrutare-cv'::text) AND (EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'sedinte-pdf'::text)",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "sedinte_pdf_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "sedinte_pdf_select",
+   "qual": "(bucket_id = 'sedinte-pdf'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id = 'sedinte-pdf'::text)",
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "sedinte_pdf_update",
+   "qual": "(bucket_id = 'sedinte-pdf'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "service_fise_doc_delete",
+   "qual": "((bucket_id = 'service-fise-documente'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'service-fise-documente'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "service_fise_doc_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "service_fise_doc_select",
+   "qual": "(bucket_id = 'service-fise-documente'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "service_fise_doc_update",
+   "qual": "((bucket_id = 'service-fise-documente'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "templates_delete",
+   "qual": "((bucket_id = 'templates'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.role = 'superadmin'::text) OR (profiles.is_owner = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'templates'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.role = 'superadmin'::text) OR (profiles.is_owner = true))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "templates_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "templates_select",
+   "qual": "(bucket_id = 'templates'::text)",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "templates_update",
+   "qual": "((bucket_id = 'templates'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.role = 'superadmin'::text) OR (profiles.is_owner = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "tichete_storage_delete_own",
+   "qual": "((bucket_id = 'tichete-atasamente'::text) AND ((owner = auth.uid()) OR (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'tichete-atasamente'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "tichete_storage_insert",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "tichete_storage_select",
+   "qual": "((bucket_id = 'tichete-atasamente'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "(bucket_id IS DISTINCT FROM 'tts-audio'::text)",
+   "cmd": "*",
+   "rel": "storage.objects",
+   "nume": "tts_audio_inchis",
+   "qual": "(bucket_id IS DISTINCT FROM 'tts-audio'::text)",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": false
+  },
+  {
+   "wc": "((bucket_id = 'documente-upa'::text) AND (auth.uid() IS NOT NULL))",
+   "cmd": "*",
+   "rel": "storage.objects",
+   "nume": "upa docs authenticated all",
+   "qual": "((bucket_id = 'documente-upa'::text) AND (auth.uid() IS NOT NULL))",
+   "roluri": [
+    "public"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "d",
+   "rel": "storage.objects",
+   "nume": "whatsapp_bonuri_delete_owner_only",
+   "qual": "((bucket_id = 'whatsapp-motorina-bonuri'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": "((bucket_id = 'whatsapp-motorina-bonuri'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.role = 'admin_logistica'::text))))))",
+   "cmd": "a",
+   "rel": "storage.objects",
+   "nume": "whatsapp_bonuri_insert_owner_or_admin_logistica",
+   "qual": null,
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "r",
+   "rel": "storage.objects",
+   "nume": "whatsapp_bonuri_select_owner_or_admin_logistica",
+   "qual": "((bucket_id = 'whatsapp-motorina-bonuri'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.role = 'admin_logistica'::text))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  },
+  {
+   "wc": null,
+   "cmd": "w",
+   "rel": "storage.objects",
+   "nume": "whatsapp_bonuri_update_owner_or_admin_logistica",
+   "qual": "((bucket_id = 'whatsapp-motorina-bonuri'::text) AND (EXISTS ( SELECT 1\n   FROM profiles\n  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.role = 'admin_logistica'::text))))))",
+   "roluri": [
+    "authenticated"
+   ],
+   "permisiva": true
+  }
+ ]
+}

@@ -12,9 +12,16 @@
 --     izo_receptie_writer); administrativ: fn_izo_doc_anuleaza (doar postgres);
 --   • garda E3 (fn_izo_garda_receptie) integrată în predicatul de autorizare al gărzilor E2a (v_aut, fără RETURN timpuriu)
 --     și în trigger-ul de imutabilitate al documentelor; contextul operației în izo.receptie_ctx;
---   • bucket-ul izo-documente (privat, PDF) cu politicile izo_doc_scan_ins / _sel / _del (fără UPDATE);
+--   • bucket-ul izo-documente (privat, PDF) cu politicile izo_doc_scan_ins / _sel / _del (fără UPDATE) și, r5f (#825 NO-GO,
+--     P1-3), politicile RESTRICTIVE izo_doc_scan_r_* pe storage.objects: rândurile din izo-documente trec DOAR prin predicatele
+--     E3 (fn_izo_scan_poate_*), UPDATE / mutarea în bucket interzise; celelalte bucket-uri (și bucket_id NULL) neatinse;
+--     r5f (#825 NO-GO, a doua ușă): politicile RESTRICTIVE izo_doc_bucket_r_* pe storage.buckets — rândul bucket-ului
+--     izo-documente nu se modifică (public / limite), nu se șterge și nu se (re)creează decât de rolurile cu BYPASSRLS;
 --   • poarta E3 (fn_izo_porti_e3_lipsa / fn_izo_porti_e3_definitii, ștampilă proprie): indexuri, ACL pe tabele ȘI pe
---     coloane, roluri, trigger-ele profiles, bucket, mulțimea exactă de coloane (C) a registrului.
+--     coloane, roluri, trigger-ele (definiția completă, r5f), bucket, owner / RLS / FORCE / ACL pe storage.objects și
+--     storage.buckets (r5f; RLS-ul cerut explicit), mulțimea exactă de coloane (C) a registrului.
+-- r5f (#825 NO-GO, P1-3/P1-4): baseline-ul EXTERN de dinainte de E3 (Storage + trigger-ele profiles) se verifică la apply
+--   (precondiția 0l) față de amprenta pre-E3 REVIZUITĂ (scripts/izometrie/e3_gen/baseline_pre_e3.json), nu se ștampilează cum e găsit.
 -- Poarta E2a completă (fn_izo_porti_lipsa, ~8,5 s pe prod) rulează în confirmare / PV ÎNAINTEA lock-urilor; după lock-uri
 --   și în salvare / verificare: amprenta E2a (fn_izo_porti_definitii = COMMENT, ~11 ms) + poarta E3.
 -- Amprentele E2a (porți + revenire) se refac aici (gărzile E2a și funcțiile fn_izo_* noi intră în ele); valoarea de
@@ -25,7 +32,7 @@
 --   (refuză dacă există ORICE fapt E3; după primul document, drumul e înainte, cu migrare revizuită).
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $migrare$
-DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_lipsa text[]; v_x text; v_comentariu text;
+DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_lipsa text[]; v_x text; v_comentariu text; v_baza jsonb; v_baza_rev jsonb;
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261103b_izometrie_e3_documente:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261103b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
@@ -90,6 +97,23 @@ BEGIN
      OR to_regprocedure('auth.role()') IS NULL OR to_regclass('storage.objects') IS NULL OR to_regclass('storage.buckets') IS NULL
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'logistica_depozite' AND column_name = 'activ') THEN
     RAISE EXCEPTION 'Precondiție 0i: lipsește o dependență E3 (user_module_access unic / trigger-ele profiles / auth.role / storage / depozite.activ)';
+  END IF;
+  -- r5f (#825 NO-GO, P1-3/P1-4): baseline-ul EXTERN pre-E3 = amprenta REVIZUITĂ (capturată read-only de pe prod, în
+  -- scripts/izometrie/e3_gen/baseline_pre_e3.json), nu starea găsită aici (fără TOFU): storage.objects / storage.buckets
+  -- (owner, RLS, FORCE, ACL fără MAINTAIN, TOATE politicile) + trigger-ele profiles (definiția completă, starea) și funcțiile
+  -- lor (owner, DEFINER, config, volatilitate, corp). Orice diferență → refuz, cu lista; baseline nou = captură nouă revizuită.
+  v_baza := @@BAZA_EXPR@@;
+  v_baza_rev := '
+@@BAZA_REV@@
+  '::jsonb;
+  IF v_baza IS DISTINCT FROM v_baza_rev THEN
+    SELECT string_agg(format('%s/%s: %s', d.k, d.cheie, d.stare), '; ' ORDER BY d.k, d.cheie) INTO v_x
+      FROM (SELECT c.k, e.cheie, CASE WHEN NOT coalesce(v_baza -> c.k, '{}') ? e.cheie THEN 'lipsește'
+                                      WHEN NOT coalesce(v_baza_rev -> c.k, '{}') ? e.cheie THEN 'în plus' ELSE 'diferă' END AS stare
+              FROM unnest(ARRAY['relatii', 'politici', 'triggere', 'functii']) c(k),
+                   LATERAL (SELECT jsonb_object_keys(coalesce(v_baza -> c.k, '{}')) UNION SELECT jsonb_object_keys(coalesce(v_baza_rev -> c.k, '{}'))) e(cheie)
+             WHERE (v_baza -> c.k -> e.cheie) IS DISTINCT FROM (v_baza_rev -> c.k -> e.cheie)) d;
+    RAISE EXCEPTION 'Precondiție 0l: baseline-ul Storage / profiles diferă de amprenta pre-E3 revizuită (captură nouă + review): %', coalesce(v_x, '?');
   END IF;
   -- porțile E2a complete și amprenta de revenire consistentă înainte (o rulăm o dată, aici: ~8,5 s pe prod)
   v_lipsa := public.fn_izo_porti_lipsa();
@@ -190,7 +214,8 @@ BEGIN
     item          text CHECK (item IS NULL OR char_length(item) <= 60),
     unghi_doc     numeric(4,1) CHECK (unghi_doc IS NULL OR (unghi_doc > 0 AND unghi_doc <= 90)),
     unghi_masurat numeric(4,1) CHECK (unghi_masurat IS NULL OR (unghi_masurat > 0 AND unghi_masurat <= 90)),
-    cantitate     integer CHECK (cantitate IS NULL OR cantitate > 0),
+    -- r5f (#825 NO-GO): 1 rând = 1 bucată (confirmarea naște exact una pe rând) → cantitatea e goală (= 1) sau 1
+    cantitate     integer CONSTRAINT izo_doc_rand_o_bucata CHECK (cantitate IS NULL OR cantitate = 1),
     pachet_nr     text CHECK (pachet_nr IS NULL OR char_length(pachet_nr) <= 40),
     dimensiuni_cm text CHECK (dimensiuni_cm IS NULL OR char_length(dimensiuni_cm) <= 60),
     net_kg        numeric(10,1) CHECK (net_kg IS NULL OR net_kg >= 0),
@@ -300,7 +325,9 @@ BEGIN
     RETURN public.fn_izo_doc_autorizare_lock(d.proiect_id, d.depozit_id);
   END $f$;
 
-  -- hash-ul canonic e3-doc-v1 (§6): conținutul complet (antet, rânduri după nr_crt, manifestul după cale), fără versiune
+  -- hash-ul canonic e3-doc-v1 (§6): conținutul complet (antet, rânduri după nr_crt, manifestul după cale), fără versiune.
+  -- r5f (#825 NO-GO): motiv_inlocuire intră în antet (câmp auditabil al înlocuirii); eticheta rămâne v1 — niciun hash v1
+  -- nu a fost emis / persistat înainte (20261103b neaplicată nicăieri cu documente)
   CREATE FUNCTION public.fn_izo_doc_hash(p_doc bigint) RETURNS text
     LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
     SELECT 'e3-doc-v1:' || encode(sha256(convert_to(jsonb_build_object(
@@ -308,7 +335,7 @@ BEGIN
       'antet', jsonb_build_object('proiect_id', d.proiect_id, 'depozit_id', d.depozit_id, 'sablon', d.sablon,
         'furnizor', d.furnizor, 'furnizor_canon', d.furnizor_canon, 'furnizor_cif', d.furnizor_cif, 'nr_document', d.nr_document,
         'nr_document_canon', d.nr_document_canon, 'data_document', d.data_document, 'inlocuieste_document_id', d.inlocuieste_document_id,
-        'observatii', d.observatii),
+        'motiv_inlocuire', d.motiv_inlocuire, 'observatii', d.observatii),
       'aviz', jsonb_build_object('cumparator', d.cumparator, 'transport_nr', d.transport_nr, 'nume_proiect', d.nume_proiect, 'lot', d.lot,
         'loc_livrare', d.loc_livrare, 'data_incarcare', d.data_incarcare, 'data_descarcare', d.data_descarcare, 'nr_camion', d.nr_camion),
       'lista', jsonb_build_object('factura', d.factura, 'importator', d.importator, 'destinatar', d.destinatar,
@@ -342,9 +369,10 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.izo_documente_intrare_randuri WHERE document_id = p_doc) THEN
       b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'fara_randuri', 'mesaj', 'documentul nu are rânduri');
     END IF;
-    -- totalurile, cu rândurile refuzate incluse, pe valorile de DOCUMENT
+    -- totalurile, cu rândurile refuzate incluse, pe valorile de DOCUMENT; r5f (#825 NO-GO): bucățile = numărul rândurilor
+    -- (1 rând = 1 bucată, izo_doc_rand_o_bucata), același invariant ca nașterea din confirmare
     SELECT round(coalesce(sum(lungime_doc_mm), 0) / 1000.0, 3) AS m, round(coalesce(sum(greutate_kg), 0), 1) AS kg,
-           coalesce(sum(coalesce(cantitate, 1)), 0) AS buc, count(DISTINCT pachet_nr) AS pach,
+           count(*) AS buc, count(DISTINCT pachet_nr) AS pach,
            round(coalesce(sum(net_kg), 0), 1) AS net, round(coalesce(sum(brut_kg), 0), 1) AS brut
       INTO v_t FROM public.izo_documente_intrare_randuri WHERE document_id = p_doc;
     IF v_teava THEN
@@ -356,7 +384,7 @@ BEGIN
       END IF;
     ELSE
       IF d.total_bucati IS NULL OR d.total_bucati <> v_t.buc THEN
-        b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_bucati', 'mesaj', format('total bucăți pe listă %s ≠ suma rândurilor %s', d.total_bucati, v_t.buc));
+        b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_bucati', 'mesaj', format('total bucăți pe listă %s ≠ numărul rândurilor %s', d.total_bucati, v_t.buc));
       END IF;
       IF d.total_pachete IS NOT NULL AND d.total_pachete <> v_t.pach THEN
         b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_pachete', 'mesaj', format('total pachete pe listă %s ≠ pachetele rândurilor %s', d.total_pachete, v_t.pach));
@@ -368,14 +396,19 @@ BEGIN
         b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_brut_kg', 'mesaj', format('total brut pe listă %s ≠ suma rândurilor %s', d.total_brut_kg, v_t.brut));
       END IF;
     END IF;
+    -- r5f (#825 NO-GO): dublura = cheia indexului din registru — țeava pe serie (ux_magbuc_izo_radacina), curba pe serie + șarjă +
+    -- unghiul efectiv (măsurat ?? document, cel scris în unghi_curba; ux_magbuc_izo_curba); cod_bucata e mereu 'AB' în E3
     FOR r IN SELECT x.*, public.fn_izo_canon_serie(x.serie) AS canon,
-                    count(*) OVER (PARTITION BY public.fn_izo_canon_serie(x.serie), CASE WHEN v_teava THEN NULL ELSE x.sarja END) AS dubluri
+                    count(*) OVER (PARTITION BY public.fn_izo_canon_serie(x.serie), CASE WHEN v_teava THEN NULL ELSE x.sarja END,
+                                                CASE WHEN v_teava THEN NULL ELSE coalesce(x.unghi_masurat, x.unghi_doc) END) AS dubluri
                FROM public.izo_documente_intrare_randuri x WHERE x.document_id = p_doc ORDER BY x.nr_crt LOOP
       IF r.canon IS NULL OR r.canon = '' THEN
         b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'serie_invalida', 'mesaj', 'seria e goală după canonizare');
       END IF;
       IF r.dubluri > 1 THEN
-        b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'serie_dublura', 'mesaj', format('seria %s apare de mai multe ori în document', r.serie));
+        b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'serie_dublura', 'mesaj', CASE WHEN v_teava
+               THEN format('seria %s apare de mai multe ori în document', r.serie)
+               ELSE format('curba %s / %s la %s° apare de mai multe ori în document', r.serie, r.sarja, coalesce(r.unghi_masurat, r.unghi_doc)) END);
       END IF;
       IF r.decizie <> 'primit' AND (r.motiv IS NULL OR char_length(btrim(r.motiv)) < 3) THEN
         b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'motiv_lipsa', 'mesaj', 'motivul e obligatoriu la refuz / neconformitate');
@@ -809,11 +842,16 @@ BEGIN
                                 coalesce(pg_get_expr(p.polqual, p.polrelid), ''), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')),
                          ',' ORDER BY p.polrelid::regclass::text, p.polname)
          FROM pg_policy p WHERE p.polrelid IN ('public.izo_documente_intrare'::regclass, 'public.izo_documente_intrare_randuri'::regclass,
-              'public.izo_documente_scanuri'::regclass, 'storage.objects'::regclass)
-           -- pe storage.objects: TOATE politicile, fără filtru textual (r5e, Jak 3) — orice politică nouă / schimbată pe Storage
-           -- schimbă ștampila, deci o politică permisivă cu alt nume pe bucket-ul izo-documente nu poate scăpa
-           ),
-      (SELECT string_agg(format('%s.%s:%s:%s:%s', g.tgrelid::regclass, g.tgname, g.tgfoid::regprocedure, g.tgtype, g.tgenabled), ',' ORDER BY g.tgname)
+              'public.izo_documente_scanuri'::regclass)
+            -- r5f (#825 NO-GO, P1-3; coordonat cu chat 21.10): pe storage.objects / storage.buckets doar politicile E3 (izo_doc_*),
+            -- exact. Stratul RESTRICTIV face ca nicio politică a altui modul (permisivă sau restrictivă, cu orice nume) să nu poată
+            -- deschide izo-documente, deci politicile Storage ale altor module (ex. 20261103c, ai-documente-inbox) NU intră în
+            -- ștampilă și nu o înroșesc. Ce poate slăbi stratul — RLS / FORCE / owner / ACL pe cele două tabele — e mai jos.
+            OR (p.polrelid IN ('storage.objects'::regclass, 'storage.buckets'::regclass) AND p.polname LIKE 'izo\_doc\_%')),
+      -- r5f (#825 NO-GO, P1-4): definiția COMPLETĂ (pg_get_triggerdef: momentul, evenimentele, UPDATE OF, WHEN, argumentele,
+      -- funcția) + starea; un trigger recreat cu WHEN / UPDATE OF schimbă ștampila
+      (SELECT string_agg(format('%s.%s:%s:%s', g.tgrelid::regclass, g.tgname, pg_get_triggerdef(g.oid, false), g.tgenabled), ','
+                         ORDER BY g.tgrelid::regclass::text, g.tgname)
          FROM pg_trigger g WHERE NOT g.tgisinternal AND g.tgrelid IN ('public.izo_documente_intrare'::regclass,
               'public.izo_documente_intrare_randuri'::regclass, 'public.izo_documente_scanuri'::regclass, 'public.profiles'::regclass)
               AND (g.tgrelid <> 'public.profiles'::regclass OR g.tgname IN ('prevent_role_escalation_trigger', 'trg_profiles_campuri_owner_only'))),
@@ -827,7 +865,12 @@ BEGIN
                                    FROM pg_auth_members m WHERE m.roleid = r.oid)), ',' ORDER BY r.rolname)
          FROM pg_roles r WHERE r.rolname IN ('izo_doc_editor', 'izo_receptie_writer')),
       (SELECT string_agg(format('%s:%s:%s:%s', b.id, b.public, b.file_size_limit, coalesce(b.allowed_mime_types::text, '')), ',')
-         FROM storage.buckets b WHERE b.id = 'izo-documente')))
+         FROM storage.buckets b WHERE b.id = 'izo-documente'),
+      -- r5f (#825 NO-GO, P1-3): storage.objects / storage.buckets — owner, RLS, FORCE, ACL (un DISABLE RLS / GRANT nou schimbă ștampila)
+      (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', n.nspname, c.relname, pg_get_userbyid(c.relowner), c.relrowsecurity, c.relforcerowsecurity,
+                                coalesce(c.relacl::text, '')), ',' ORDER BY c.relname)
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE (n.nspname, c.relname) IN (('storage', 'objects'), ('storage', 'buckets')))))
   $f$;
 
   CREATE FUNCTION public.fn_izo_porti_e3_lipsa() RETURNS text[]
@@ -836,7 +879,24 @@ BEGIN
   BEGIN
     IF public.fn_izo_porti_e3_definitii() IS DISTINCT FROM
        substring(obj_description('public.fn_izo_porti_e3_definitii()'::regprocedure, 'pg_proc') FROM '^porti_e3=([0-9a-f]{32})$') THEN
-      v := array_append(v, 'definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket) diferă de amprenta de la migrare');
+      v := array_append(v, 'definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket / storage.objects / storage.buckets) diferă de amprenta de la migrare');
+    END IF;
+    -- r5f (#825 NO-GO, P1-3): Storage, cerut explicit (nu doar prin ștampilă): RLS activ pe storage.objects, bucket-ul privat,
+    -- cele 5 politici RESTRICTIVE ale bucket-ului la locul lor
+    IF (SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'storage' AND c.relname = 'objects') IS NOT TRUE
+       OR NOT EXISTS (SELECT 1 FROM storage.buckets b WHERE b.id = 'izo-documente' AND b.public IS FALSE)
+       OR (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'storage' AND c.relname = 'objects' AND NOT p.polpermissive
+              AND p.polname IN ('izo_doc_scan_r_toti', 'izo_doc_scan_r_sel', 'izo_doc_scan_r_ins', 'izo_doc_scan_r_del', 'izo_doc_scan_r_upd')) <> 5 THEN
+      v := array_append(v, 'Storage: RLS pe storage.objects / bucket-ul izo-documente privat / politicile RESTRICTIVE izo_doc_scan_r_*');
+    END IF;
+    -- r5f (#825 NO-GO, a doua ușă): rândul bucket-ului, cerut explicit — RLS activ pe storage.buckets și cele 3 politici
+    -- RESTRICTIVE izo_doc_bucket_r_* (fără INSERT / UPDATE / DELETE pe rândul izo-documente) la locul lor
+    IF (SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'storage' AND c.relname = 'buckets') IS NOT TRUE
+       OR (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'storage' AND c.relname = 'buckets' AND NOT p.polpermissive
+              AND p.polname IN ('izo_doc_bucket_r_ins', 'izo_doc_bucket_r_upd', 'izo_doc_bucket_r_del')) <> 3 THEN
+      v := array_append(v, 'Storage: RLS pe storage.buckets / politicile RESTRICTIVE izo_doc_bucket_r_* pe rândul bucket-ului izo-documente');
     END IF;
     -- rolurile: fără LOGIN / SUPERUSER / BYPASSRLS / INHERIT / CREATEROLE / CREATEDB; membru doar postgres (SET, fără INHERIT);
     -- (PG16+: rândul ADMIN automat al creatorului nesuperuser e acceptat, ca la E2a); rolurile nu sunt membre în alt rol
@@ -900,6 +960,12 @@ BEGIN
     LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   DECLARE v_uid uuid; v_lipsa text[];
   BEGIN
+    -- r5f (#825 NO-GO): READ COMMITTED impus, nu presupus — mecanismul E2a (fn_izo_lock_partajat / garda pe bucăți), aici,
+    -- înaintea oricărui lock: sub REPEATABLE READ / SERIALIZABLE poarta de după lock-ul „schemă” ar citi cataloagele pe
+    -- snapshot-ul de dinainte de lock. Acoperă salveaza / verifica / anuleaza_draft / confirma / pv (anuleaza o are separat)
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'izo E3: intrările E3 cer READ COMMITTED (acum %)', current_setting('transaction_isolation') USING ERRCODE = '25001';
+    END IF;
     PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
     IF session_user IS DISTINCT FROM 'authenticator' OR public.fn_izo_jwt_rol() IS DISTINCT FROM 'authenticated' THEN
       RAISE EXCEPTION 'izo E3: intrările se cheamă doar din API, ca utilizator autentificat' USING ERRCODE = '42501';
@@ -922,7 +988,7 @@ BEGIN
   -- ── J. drepturi, RLS, politici ────────────────────────────────────────────────────────────────────────
 @@DREPTURI@@
 
-  -- ── K. Storage: bucket-ul izo-documente + politicile (fără UPDATE) ────────────────────────────────────
+  -- ── K. Storage: bucket-ul izo-documente, politicile permisive (fără UPDATE) + stratul RESTRICTIV (r5f) ─────────
   INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
   VALUES ('izo-documente', 'izo-documente', false, 10485760, ARRAY['application/pdf']);
   CREATE POLICY izo_doc_scan_ins ON storage.objects FOR INSERT TO authenticated
@@ -931,6 +997,33 @@ BEGIN
     USING (bucket_id = 'izo-documente' AND public.fn_izo_scan_poate_citi(name));
   CREATE POLICY izo_doc_scan_del ON storage.objects FOR DELETE TO authenticated
     USING (bucket_id = 'izo-documente' AND public.fn_izo_scan_poate_sterge(name));
+  -- r5f (#825 NO-GO, P1-3): stratul RESTRICTIV — o politică permisivă generală (existentă sau adăugată) nu mai deschide
+  -- bucket-ul. Rândurile cu bucket_id ≠ 'izo-documente' (inclusiv NULL: IS DISTINCT FROM) trec neatinse prin toate cinci.
+  -- (1) oricine nu are drepturile lui authenticated: nimic din bucket (fără funcții E3 în predicat: anon nu are EXECUTE pe
+  --     fn_izo_scan_poate_*, iar EXECUTE se verifică la inițializarea planului — altfel ar cădea și pe alte bucket-uri);
+  CREATE POLICY izo_doc_scan_r_toti ON storage.objects AS RESTRICTIVE FOR ALL TO public
+    USING (bucket_id IS DISTINCT FROM 'izo-documente' OR pg_has_role(current_user, 'authenticated', 'USAGE'))
+    WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente' OR pg_has_role(current_user, 'authenticated', 'USAGE'));
+  -- (2) authenticated: SELECT / INSERT / DELETE doar prin predicatele E3;
+  CREATE POLICY izo_doc_scan_r_sel ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated
+    USING (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_citi(name));
+  CREATE POLICY izo_doc_scan_r_ins ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated
+    WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_incarca(name));
+  CREATE POLICY izo_doc_scan_r_del ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated
+    USING (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_sterge(name));
+  -- (3) UPDATE interzis total pe bucket, pentru toți: USING (rândul vechi) și WITH CHECK (rândul nou — și mutarea ÎN bucket)
+  CREATE POLICY izo_doc_scan_r_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO public
+    USING (bucket_id IS DISTINCT FROM 'izo-documente') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente');
+  -- r5f (#825 NO-GO, a doua ușă): rândul bucket-ului din storage.buckets. O permisivă (existentă sau adăugată) pe buckets nu
+  -- face bucket-ul public (endpoint-ul public Storage nu consultă RLS), nu-l șterge și nu-l recreează: INSERT / UPDATE /
+  -- DELETE pe rândul izo-documente interzise pentru toți (administrarea rămâne la rolurile cu BYPASSRLS); WITH CHECK oprește
+  -- și mutarea altui bucket PE id-ul izo-documente. Celelalte bucket-uri trec neatinse. Fără SELECT: rândul nu e secret.
+  CREATE POLICY izo_doc_bucket_r_ins ON storage.buckets AS RESTRICTIVE FOR INSERT TO public
+    WITH CHECK (id IS DISTINCT FROM 'izo-documente');
+  CREATE POLICY izo_doc_bucket_r_upd ON storage.buckets AS RESTRICTIVE FOR UPDATE TO public
+    USING (id IS DISTINCT FROM 'izo-documente') WITH CHECK (id IS DISTINCT FROM 'izo-documente');
+  CREATE POLICY izo_doc_bucket_r_del ON storage.buckets AS RESTRICTIVE FOR DELETE TO public
+    USING (id IS DISTINCT FROM 'izo-documente');
 
   -- ── L. owner-ii intrărilor + EXECUTE (dat de owner, prin SET ROLE: postgres nu e superuser pe Supabase) ─
 @@OWNERI@@
@@ -940,6 +1033,20 @@ BEGIN
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS %L', 'porti_e3=' || public.fn_izo_porti_e3_definitii());
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
+  -- P5 (r5f, #825 NO-GO): owner-ii intrărilor au EXECUTE pe EXACT semnăturile lanțului de lock-uri pe care îl cheamă (ACL-ul
+  -- ștampilat mai sus e cel găsit — un GRANT lipsă n-ar fi văzut de poartă, doar de prima confirmare); fn_izo_lock_partajat
+  -- are o singură semnătură (VARIADIC bigint[]), deci apelul explicit nu poate fi umbrit de un overload
+  SELECT string_agg(format('%s → %s', r.rol, r.fn), '; ' ORDER BY r.rol, r.fn) INTO v_x
+    FROM (VALUES ('izo_receptie_writer', 'public.fn_izo_lock_partajat(bigint[])'), ('izo_receptie_writer', 'public.fn_izo_lock_proiect(bigint, boolean)'),
+                 ('izo_receptie_writer', 'public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[])'), ('izo_receptie_writer', 'public.fn_izo_blocheaza_tabele()'),
+                 ('izo_receptie_writer', 'pg_catalog.pg_advisory_xact_lock_shared(integer, integer)'),
+                 ('izo_receptie_writer', 'pg_catalog.pg_advisory_xact_lock(integer, integer)'),
+                 ('izo_receptie_writer', 'pg_catalog.pg_advisory_xact_lock_shared(bigint)'),
+                 ('izo_doc_editor', 'pg_catalog.pg_advisory_xact_lock_shared(bigint)')) r(rol, fn)
+   WHERE NOT has_function_privilege(r.rol, r.fn, 'EXECUTE');
+  IF v_x IS NOT NULL OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'fn_izo_lock_partajat') <> 1 THEN
+    RAISE EXCEPTION 'Postcondiție P5: EXECUTE lipsă pe lanțul de lock-uri al intrărilor E3 (%) sau fn_izo_lock_partajat are overload-uri', coalesce(v_x, '-');
+  END IF;
   v_lipsa := public.fn_izo_porti_lipsa();   -- include poarta E3
   IF cardinality(v_lipsa) <> 0 THEN
     RAISE EXCEPTION 'Postcondiție P1: porțile nu sunt complete după E3: %', v_lipsa;

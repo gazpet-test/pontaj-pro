@@ -124,9 +124,12 @@ BEGIN
       c_scheme_platforma constant text[] := ARRAY['auth','storage','realtime','extensions','graphql','graphql_public','vault','net',
                                                   'supabase_functions','supabase_migrations','pgbouncer','pgsodium','pgsodium_masks','cron'];
       -- r5d (20261103b): aceeași semantică, evaluare SEMI-NAIVĂ — fiecare element nou al închiderii se caută o singură dată,
-      -- cu o singură expresie per iterație (alternanța numelor din frontieră); corpurile se citesc o dată
+      -- cu alternanța numelor din frontieră (r5f: pe bucăți mărginite, nu o singură expresie); corpurile se citesc o dată
       k_oid oid[]; k_corp text[]; k_cale text[]; f_rel oid[]; f_fn oid[]; f_mut oid[]; n_rel oid[]; n_fn oid[]; n_mut oid[];
-      p_cal text; p_neq text; p_plat jsonb;
+      -- r5f (#825 NO-GO): tiparele frontierei, pe bucăți: a_x = alternanța (≤ ~4000 de caractere), a_s = schema de platformă
+      -- căreia i se aplică (NULL = oricărei funcții)
+      a_s text[]; a_x text[];
+      k_i int; k_n int; k_s text; k_s2 text; k_adanc oid[] := '{}';
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -148,23 +151,60 @@ BEGIN
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prolang NOT IN (12, 13)
          AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%');
+      -- r5f (#825 NO-GO): un comentariu între schemă și nume („storage/**/.f()”, „storage -- x⏎.f()”) ascunde forma calificată —
+      -- contează la schemele platformei, unde necalificatul cere calea. Corpului i se adaugă o copie fără comentarii (blocurile
+      -- imbricate din interior spre exterior, până la punct fix; apoi „--” până la capăt de rând). Copia doar ADAUGĂ potriviri
+      -- (originalul rămâne): un „/*” sau „--” dintr-un șir taie din copie, nu din original. Cel mult 20 de niveluri (fiecare nivel
+      -- = o trecere peste tot corpul — fără plafon, mii de comentarii imbricate ar ține poarta minute întregi): mai adânc → corpul
+      -- nu se poate citi sigur, intră în sămânță ca SQL-ul dinamic (k_adanc, mai jos)
+      FOR k_i IN 1 .. cardinality(k_corp) LOOP
+        k_s := k_corp[k_i]; k_n := 0;
+        LOOP
+          k_s2 := regexp_replace(k_s, '/\*([^*/]|\*+[^*/]|/+[^*/])*\*+/', ' ', 'g');
+          EXIT WHEN k_s2 = k_s;
+          k_s := k_s2; k_n := k_n + 1;
+          IF k_n >= 20 THEN k_adanc := k_adanc || k_oid[k_i]; EXIT; END IF;
+        END LOOP;
+        k_s := regexp_replace(k_s, '--[^\n]*', ' ', 'g');
+        IF k_s <> k_corp[k_i] THEN k_corp[k_i] := k_corp[k_i] || ' ' || k_s; END IF;
+      END LOOP;
+      -- r5f (#825 NO-GO): în sămânță și funcțiile care pot citi un tabel FĂRĂ să-i scrie numele și fără EXECUTE — identificatori
+      -- U&"…" (escape-uri Unicode), SQL dat ca text (query/table/schema/database_to_xml, ts_stat / ts_rewrite, crosstab /
+      -- connectby, dblink), fișierele / paginile tabelelor (pg_read_[binary_]file, lo_import, get_raw_page); ca SQL-ul
+      -- dinamic: un DEFINER care le conține (sau le cheamă) e refuzat. Mai strict decât E2a, care le lasă verzi. Tot aici:
+      -- corpurile cu comentarii imbricate peste plafon (k_adanc)
+      c_fn := c_fn || ARRAY(SELECT k.oid FROM unnest(k_oid, k_corp) k(oid, corp) WHERE k.oid <> ALL (c_fn)
+                              AND (k.oid = ANY (k_adanc)
+                                   OR k.corp ~* ('u&"|\m(query|table|schema|database)_to_xml|\mts_(stat|rewrite)\M|\m(crosstab|connectby|dblink)'
+                                                 || '|\mpg_read_(binary_)?file\M|\mlo_import\M|\mget_raw_page\M')));
       -- mutatorii de cale (r15): sămânța = corp cu set_config / search_path; propagați până la punct fix
       SELECT coalesce(array_agg(k.oid), '{}') INTO c_mut FROM unnest(k_oid, k_corp) k(oid, corp) WHERE k.corp ~* '(set_config|search_path)';
       f_mut := c_mut; v_iter := 0;
       WHILE cardinality(f_mut) > 0 AND v_iter < 100 LOOP
         v_iter := v_iter + 1;
-        SELECT c_st || '(' || string_agg(n2.nspname || '"?[[:space:]]*\.[[:space:]]*"?' || regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'), '|') || ')' || c_dr,
-               c_st || '(' || string_agg(regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'), '|') FILTER (WHERE n2.nspname <> ALL (c_scheme_platforma)) || ')' || c_dr
-          INTO p_cal, p_neq
-          FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_mut);
-        SELECT coalesce(jsonb_object_agg(z.s, c_st || '(' || z.nume || ')' || c_dr), '{}') INTO p_plat
-          FROM (SELECT n2.nspname::text s, string_agg(regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'), '|') nume
-                  FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace
-                 WHERE q.oid = ANY (f_mut) AND n2.nspname = ANY (c_scheme_platforma) GROUP BY 1) z;
-        n_mut := ARRAY(SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale) WHERE k.oid <> ALL (c_mut)
-                         AND (k.corp ~* p_cal OR (p_neq IS NOT NULL AND k.corp ~* p_neq)
-                              OR EXISTS (SELECT 1 FROM jsonb_each_text(p_plat) e
-                                          WHERE (k.cale IS NULL OR e.key = ANY (string_to_array(k.cale, ','))) AND k.corp ~* e.value)));
+        -- r5f (#825 NO-GO): tiparele pe BUCĂȚI de ~4000 de caractere, nu o singură alternanță: cu ~1000 de nume lungi în
+        -- frontieră, motorul de regex refuză („invalid memory alloc request size” / „regular expression is too complex”) —
+        -- poarta ar da eroare unde E2a răspunde (testul „frontieră largă”), iar compilarea crește pătratic. Fiecare nume dă două
+        -- alternative: calificat (s = NULL, oricui) și necalificat (s = NULL în afara platformei; s = schema platformei: doar
+        -- dacă e în calea fixată a funcției sau calea e nefixată).
+        -- r5f (#825 NO-GO, P1): și SCHEMA se escapează (nsx), ca numele: o schemă construită („x)(?=x)y(x”) ar închide grupul
+        -- comun și ar face bucata (deci toate numele ei) imposibil de potrivit — verde fals; nsp (brut) rămâne doar pentru s
+        WITH t AS (SELECT n2.nspname::text nsp, regexp_replace(n2.nspname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nsx,
+                          regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
+                     FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_mut)),
+             y AS (SELECT NULL::text s, t.nsx || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume f FROM t
+                   UNION ALL SELECT CASE WHEN t.nsp = ANY (c_scheme_platforma) THEN t.nsp END, t.nume FROM t)
+        SELECT coalesce(array_agg(z.s), '{}'), coalesce(array_agg(c_st || '(' || z.alt || ')' || c_dr), '{}') INTO a_s, a_x
+          FROM (SELECT y2.s, string_agg(y2.f, '|') alt
+                  FROM (SELECT y.s, y.f, (sum(length(y.f) + 1) OVER (PARTITION BY y.s ORDER BY y.f ROWS UNBOUNDED PRECEDING) - 1) / 4000 b FROM y) y2
+                 GROUP BY y2.s, y2.b) z;
+        -- bucata în exterior (LATERAL … OFFSET 0: nu se aplatizează), corpurile în interior — fiecare tipar se compilează o dată;
+        -- CASE fixează ordinea: întâi filtrele ieftine, regex-ul ultimul (planificatorul l-ar evalua primul)
+        n_mut := ARRAY(SELECT DISTINCT m.oid FROM unnest(a_s, a_x) p(s, x)
+                         CROSS JOIN LATERAL (SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale)
+                                              WHERE CASE WHEN k.oid = ANY (c_mut) THEN false
+                                                         WHEN p.s IS NULL OR k.cale IS NULL OR p.s = ANY (string_to_array(k.cale, ',')) THEN k.corp ~* p.x
+                                                         ELSE false END OFFSET 0) m);
         c_mut := c_mut || n_mut; f_mut := n_mut;
       END LOOP;
       IF v_iter >= 100 THEN v := array_append(v, 'propagarea mutatorilor de cale nu converge (citire nerevizuită)'); END IF;
@@ -179,30 +219,46 @@ BEGIN
                                OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (f_fn)))
                           AND rw.ev_class <> ALL (c_rel));
         c_rel := c_rel || n_rel; f_rel := f_rel || n_rel;
-        p_cal := NULL; p_neq := NULL; p_plat := '{}';
-        WITH t AS (SELECT n2.nspname::text nsp, regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
+        -- r5f (#825 NO-GO): aceleași bucăți de tipare ca la mutatori, cu schema escapată (P1; vezi mai sus)
+        WITH t AS (SELECT n2.nspname::text nsp, regexp_replace(n2.nspname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nsx,
+                          regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
                      FROM pg_class c JOIN pg_namespace n2 ON n2.oid = c.relnamespace WHERE c.oid = ANY (f_rel)
                    UNION
-                   SELECT n2.nspname::text, regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
-                     FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_fn))
-        SELECT c_st || '(' || string_agg(t.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume, '|') || ')' || c_dr,
-               c_st || '(' || string_agg(t.nume, '|') FILTER (WHERE t.nsp <> ALL (c_scheme_platforma)) || ')' || c_dr,
-               (SELECT coalesce(jsonb_object_agg(z.s, c_st || '(' || z.nn || ')' || c_dr), '{}')
-                  FROM (SELECT t2.nsp s, string_agg(t2.nume, '|') nn FROM t t2 WHERE t2.nsp = ANY (c_scheme_platforma) GROUP BY 1) z)
-          INTO p_cal, p_neq, p_plat FROM t;
-        n_fn := ARRAY(SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale) WHERE k.oid <> ALL (c_fn)
-                        AND ((p_cal IS NOT NULL AND k.corp ~* p_cal) OR (p_neq IS NOT NULL AND k.corp ~* p_neq)
-                             -- schemele platformei: necalificat doar dacă schema e în calea funcției; calea e necunoscută dacă nu e
-                             -- fixată SAU dacă funcția e mutator (r15)
-                             OR EXISTS (SELECT 1 FROM jsonb_each_text(coalesce(p_plat, '{}')) e
-                                         WHERE (k.oid = ANY (c_mut) OR k.cale IS NULL OR e.key = ANY (string_to_array(k.cale, ','))) AND k.corp ~* e.value)
-                             OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = k.oid
-                                           AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (f_rel))
-                                                OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (f_fn))))));
+                   SELECT n2.nspname::text, regexp_replace(n2.nspname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'),
+                          regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
+                     FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_fn)),
+             y AS (SELECT NULL::text s, t.nsx || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume f FROM t
+                   UNION ALL SELECT CASE WHEN t.nsp = ANY (c_scheme_platforma) THEN t.nsp END, t.nume FROM t)
+        SELECT coalesce(array_agg(z.s), '{}'), coalesce(array_agg(c_st || '(' || z.alt || ')' || c_dr), '{}') INTO a_s, a_x
+          FROM (SELECT y2.s, string_agg(y2.f, '|') alt
+                  FROM (SELECT y.s, y.f, (sum(length(y.f) + 1) OVER (PARTITION BY y.s ORDER BY y.f ROWS UNBOUNDED PRECEDING) - 1) / 4000 b FROM y) y2
+                 GROUP BY y2.s, y2.b) z;
+        -- schemele platformei: necalificat doar dacă schema e în calea funcției; calea e necunoscută dacă nu e fixată SAU dacă
+        -- funcția e mutator (r15)
+        n_fn := ARRAY(SELECT DISTINCT m.oid FROM unnest(a_s, a_x) p(s, x)
+                        CROSS JOIN LATERAL (SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale)
+                                             WHERE CASE WHEN k.oid = ANY (c_fn) THEN false
+                                                        WHEN p.s IS NULL OR k.oid = ANY (c_mut) OR k.cale IS NULL OR p.s = ANY (string_to_array(k.cale, ','))
+                                                          THEN k.corp ~* p.x
+                                                        ELSE false END OFFSET 0) m);
+        -- sau depind de ceva din frontieră în catalog (BEGIN ATOMIC)
+        n_fn := n_fn || ARRAY(SELECT k.oid FROM unnest(k_oid) k(oid) WHERE k.oid <> ALL (c_fn) AND k.oid <> ALL (n_fn)
+                                AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = k.oid
+                                               AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (f_rel))
+                                                    OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (f_fn)))));
         c_fn := c_fn || n_fn;
         f_rel := n_rel; f_fn := n_fn;
       END LOOP;
       IF v_iter >= 100 THEN v := array_append(v, 'închiderea citirilor nu converge (citire nerevizuită)'); END IF;
+      -- r5f (#825 NO-GO, P1): un element al închiderii (sau mutator) al cărui nume nu se poate căuta sigur în corpuri → refuz:
+      -- schemă cu caractere speciale de regex (E2a dă eroare pe ea, deci rămâne închisă — poarta nouă refuză la fel, nu dă
+      -- verde) sau ghilimele în schemă / nume (în corp apar dublate, „"x""y"” — nicio expresie nu le găsește; în E2a: verde fals)
+      IF EXISTS (SELECT 1 FROM (SELECT c.relname::text nume, c.relnamespace ns FROM pg_class c WHERE c.oid = ANY (c_rel)
+                                UNION ALL SELECT q.proname::text, q.pronamespace FROM pg_proc q WHERE q.oid = ANY (c_fn || c_mut)) o
+                  JOIN pg_namespace n2 ON n2.oid = o.ns
+                 WHERE n2.nspname ~ '[.^$*+?()\[\]{}|\\"]' OR o.nume ~ '"') THEN
+        v := array_append(v, 'un nume din închiderea citirilor nu se poate căuta sigur în corpuri (schemă cu caractere speciale de regex / nume cu ghilimele) (citire nerevizuită)');
+      END IF;
       o_rel := c_rel; o_fn := c_fn; o_mut := c_mut; o_mesaje := v;
     END;
 

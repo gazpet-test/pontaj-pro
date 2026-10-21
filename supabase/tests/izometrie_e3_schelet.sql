@@ -1,7 +1,8 @@
 -- Extensia scheletului E2a pentru E3 (20261103b) — DOAR într-o bază locală *_test, după izometrie_e2a_schelet.sql.
--- Reproduce ce citește E3 de pe live (21.10.2026): auth.role(); storage.buckets / storage.objects (RLS, owner separat);
--- indexul unic user_module_access (profile_id, module); trigger-ele profiles prevent_role_escalation_trigger /
--- trg_profiles_campuri_owner_only (aici: stub-uri care refuză auto-promovarea is_owner).
+-- Reproduce ce citește E3 de pe live (21.10.2026): auth.role(); storage.buckets / storage.objects; indexul unic
+-- user_module_access (profile_id, module). r5f (#825 NO-GO, P1-3/P1-4): baseline-ul extern pre-E3 (owner / RLS / FORCE / ACL
+-- pe storage.*, toate politicile Storage, trigger-ele profiles cu corpurile exacte) vine din izometrie_e3_schelet_baseline.sql,
+-- GENERAT din captura revizuită de pe prod — preflight-ul 0l al migrării cere exact acel baseline.
 SET client_min_messages = warning;
 DO $garda$ BEGIN IF current_database() !~ '^[a-z0-9_]+_test$' THEN RAISE EXCEPTION 'doar *_test'; END IF; END $garda$;
 CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$
@@ -10,16 +11,6 @@ CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$
 GRANT EXECUTE ON FUNCTION auth.role() TO anon, authenticated, service_role;
 CREATE UNIQUE INDEX user_module_access_profile_id_module_key ON public.user_module_access (profile_id, module);
 
-CREATE FUNCTION public.prevent_role_escalation() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-  IF NEW.is_owner IS DISTINCT FROM OLD.is_owner AND current_user <> 'postgres' THEN
-    RAISE EXCEPTION 'escaladare refuzată' USING ERRCODE = '42501';
-  END IF;
-  RETURN NEW;
-END $$;
-CREATE TRIGGER prevent_role_escalation_trigger BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.prevent_role_escalation();
-CREATE FUNCTION public.fn_profiles_campuri_owner_only() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
-CREATE TRIGGER trg_profiles_campuri_owner_only BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.fn_profiles_campuri_owner_only();
 CREATE POLICY profiles_upd_own ON public.profiles FOR UPDATE TO authenticated USING (id = auth.uid()) WITH CHECK (id = auth.uid());
 GRANT UPDATE ON public.profiles TO authenticated;
 
@@ -28,11 +19,21 @@ GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
 CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false, file_size_limit bigint, allowed_mime_types text[]);
 CREATE TABLE storage.objects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text REFERENCES storage.buckets(id), name text,
   owner uuid, created_at timestamptz DEFAULT now(), UNIQUE (bucket_id, name));
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
-GRANT SELECT, INSERT, UPDATE, DELETE ON storage.objects TO authenticated;
-GRANT SELECT ON storage.buckets TO authenticated;
--- un bucket și o politică existente, ca pe live (Logistica): nu trebuie atinse de E3
+-- un bucket existent, ca pe live (Logistica): nu trebuie atins de E3 (politicile lui vin din baseline)
 INSERT INTO storage.buckets (id, name) VALUES ('avize', 'avize');
-CREATE POLICY avize_authenticated_read ON storage.objects FOR SELECT TO public USING (bucket_id = 'avize' AND auth.role() = 'authenticated');
+\ir izometrie_e3_schelet_baseline.sql
+-- r5f (#825 NO-GO, P1-3): corpul REAL al prevent_role_escalation (DEFINER, „mutator” prin comentariul cu set_config) conține
+-- „în”; închiderea citirilor E2a (regex, colaționare C) potrivește în el numele de o literă al helper-ului teste.n (SQL
+-- dinamic ⇒ în închidere) ⇒ fals-pozitiv „DEFINER care citește registrul”, doar local (pe prod nu există teste.n).
+-- teste.n își păstrează contractul (rulează SQL-ul ca rolul curent, întoarce ROW_COUNT), dar corpul lui nu mai numește
+-- funcția cu SQL dinamic: o cheamă printr-un operator.
+CREATE FUNCTION teste.executa_si_numara(p_sql text) RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE v bigint;
+BEGIN
+  EXECUTE p_sql; GET DIAGNOSTICS v = ROW_COUNT; RETURN v;
+END $$;
+CREATE OPERATOR teste.#!# (RIGHTARG = text, FUNCTION = teste.executa_si_numara);
+CREATE OR REPLACE FUNCTION teste.n(p_sql text) RETURNS bigint LANGUAGE sql AS $$ SELECT OPERATOR(teste.#!#) p_sql $$;
+GRANT EXECUTE ON FUNCTION teste.executa_si_numara(text) TO anon, authenticated, service_role;
 GRANT USAGE ON SCHEMA teste TO authenticator;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO authenticator;

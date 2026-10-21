@@ -133,6 +133,46 @@ SELECT teste.e('E7c curba: carantină, unghiul real (30), eveniment intrare_list
   (SELECT stare || ':' || unghi_curba FROM public.magazie_bucati WHERE aviz_intrare_id = :doc3) = 'carantina:30.0'
   AND EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente WHERE document_id = :doc3::text AND tip = 'intrare_lista_ambalare'));
 
+-- ═══ E11 (r5f, #825 NO-GO): 1 rând = 1 bucată; dublura curbei pe cheia registrului (serie + șarjă + unghiul efectiv) ═══
+:CA_J
+SELECT teste.eroare('E11a curbe: cantitate 2 pe un rând (total_bucati 2) → refuz la salvare', format('SELECT public.fn_izo_doc_salveaza(NULL, NULL, %L, %L, NULL)',
+  '{"proiect_id":3,"depozit_id":11,"sablon":"lista_ambalare_curbe","furnizor":"Gurgenler","nr_document":"PL 869","data_document":"2026-10-19","total_bucati":2}',
+  '[{"nr_crt":1,"serie":"869","sarja":"2520914","perete_mm":8,"unghi_doc":22.5,"cantitate":2}]'), 'un rând = o bucată');
+SELECT teste.eroare('E11b țeavă: cantitate 2 pe un rând → refuz la salvare', format('SELECT public.fn_izo_doc_salveaza(NULL, NULL, %L, %L, NULL)',
+  (:'ANTET1')::jsonb || '{"nr_document":"AV 869","total_m":12.1,"total_kg":null}',
+  '[{"nr_crt":1,"serie":"301AA00869","lungime_doc_mm":12100,"perete_mm":7.1,"cantitate":2}]'), 'un rând = o bucată');
+-- aceeași serie + șarjă la 22,5° și la 30° (cantitate 1 / goală) = două curbe distincte, ca în registru
+SELECT (r ->> 'document_id')::bigint AS doc11 FROM public.fn_izo_doc_salveaza(NULL, NULL,
+  '{"proiect_id":3,"depozit_id":11,"sablon":"lista_ambalare_curbe","furnizor":"Gurgenler","nr_document":"PL 870","data_document":"2026-10-19","total_bucati":2}',
+  '[{"nr_crt":1,"serie":"870","sarja":"2520914","perete_mm":8,"unghi_doc":22.5,"cantitate":1},{"nr_crt":2,"serie":"870","sarja":"2520914","perete_mm":8,"unghi_doc":30}]', NULL) r \gset
+:CA_PG
+SELECT teste.eroare('E11c CHECK pe tabel: cantitate 2 inserată direct de editor pe o ciornă → refuz', format($q$SET LOCAL ROLE izo_doc_editor;
+  INSERT INTO public.izo_documente_intrare_randuri (document_id, nr_crt, serie, cantitate) VALUES (%s, 99, 'X99', 2)$q$, :doc11), 'izo_doc_rand_o_bucata');
+:CA_J
+SELECT v ->> 'hash' AS hash11, (v ->> 'ok')::boolean AS ok11, v -> 'blocante' AS bloc11 FROM public.fn_izo_doc_verifica(:doc11) v \gset
+SELECT teste.e('E11d 870 / 2520914 la 22,5° și la 30° → fără blocante (nu e dublură), totalul = numărul rândurilor', :'ok11'::boolean);
+SELECT teste.e('E11e confirmarea: două bucăți distincte, fără coliziune pe ux_magbuc_izo_curba',
+  jsonb_array_length(public.fn_izo_doc_confirma(:doc11, 1, :'hash11') -> 'bucati') = 2);
+:CA_PG
+SELECT teste.e('E11f registrul: 870 / 2520914 la 22.5 și la 30.0, câte o bucată de cantitate 1, sosit',
+  (SELECT string_agg(serie || '/' || sarja || '/' || unghi_curba || '/' || cantitate || '/' || stare, ',' ORDER BY nr_crt_aviz) FROM public.magazie_bucati
+    WHERE aviz_intrare_id = :doc11) = '870/2520914/22.5/1/sosit,870/2520914/30.0/1/sosit');
+:CA_J
+-- același unghi EFECTIV (45 pe listă; 30 pe listă, dar 45 măsurat) → dublură pe ambele rânduri
+SELECT (r ->> 'document_id')::bigint AS doc12 FROM public.fn_izo_doc_salveaza(NULL, NULL,
+  '{"proiect_id":3,"depozit_id":11,"sablon":"lista_ambalare_curbe","furnizor":"Gurgenler","nr_document":"PL 871","data_document":"2026-10-19","total_bucati":2}',
+  '[{"nr_crt":1,"serie":"870","sarja":"2520914","perete_mm":8,"unghi_doc":45},{"nr_crt":2,"serie":"8-70","sarja":"2520914","perete_mm":8,"unghi_doc":30,"unghi_masurat":45}]', NULL) r \gset
+SELECT teste.e('E11g aceeași serie + șarjă + unghi efectiv → serie_dublura pe ambele rânduri, singurul blocant',
+  (SELECT string_agg(a ->> 'cod' || ':' || (a ->> 'nr_crt'), ',' ORDER BY a ->> 'nr_crt') FROM jsonb_array_elements(public.fn_izo_doc_verifica(:doc12) -> 'blocante') a)
+  = 'serie_dublura:1,serie_dublura:2');
+-- față de registru: 22,5° există deja (curba_in_registru), 60° e nouă; în document nu sunt dubluri
+SELECT (r ->> 'document_id')::bigint AS doc13 FROM public.fn_izo_doc_salveaza(NULL, NULL,
+  '{"proiect_id":3,"depozit_id":11,"sablon":"lista_ambalare_curbe","furnizor":"Gurgenler","nr_document":"PL 872","data_document":"2026-10-19","total_bucati":2}',
+  '[{"nr_crt":1,"serie":"870","sarja":"2520914","perete_mm":8,"unghi_doc":22.5},{"nr_crt":2,"serie":"870","sarja":"2520914","perete_mm":8,"unghi_doc":60}]', NULL) r \gset
+SELECT teste.e('E11h aceeași cheie ca registrul: doar rândul de 22,5° e blocat (curba_in_registru), fără serie_dublura',
+  (SELECT string_agg(a ->> 'cod' || ':' || (a ->> 'nr_crt'), ',' ORDER BY a ->> 'nr_crt') FROM jsonb_array_elements(public.fn_izo_doc_verifica(:doc13) -> 'blocante') a)
+  = 'curba_in_registru:1');
+
 -- ═══ E8 anularea: ciorna (gestionarul) și confirmatul (administrativ, PV întâi) ═══
 :CA_T
 SELECT teste.eroare('E8a anularea ciornei de un ne-atribuit → refuz', format('SELECT public.fn_izo_doc_anuleaza_draft(%s, 1, %L)', :doc2, 'greșit'), 'nu ești gestionar');
@@ -183,7 +223,309 @@ SELECT teste.e('E10d ștergerea unui obiect din manifest → 0 rânduri (politic
 SELECT teste.e('E10e UPDATE / mutare pe un obiect → 0 rânduri (fără politică UPDATE)', teste.n(format($q$UPDATE storage.objects SET name = name || 'x' WHERE bucket_id = 'izo-documente'$q$)) = 0);
 SELECT teste.eroare('E10f manifest cu un obiect inexistent → refuz', format('SELECT public.fn_izo_doc_salveaza(%s, 2, %L, %L, %L)', :doc6, (:'ANTET1')::jsonb || '{"nr_document":"AV 600"}', '[]',
   jsonb_build_array(jsonb_build_object('cale', :doc6 || '/0b1c2d3e-0000-4000-8000-000000000009.pdf', 'sha256_original', repeat('a', 64), 'sha256_pdf', repeat('b', 64), 'marime', 1, 'mime', 'application/pdf'))), 'nu există în Storage');
+
+-- ═══ E11 r5f (#825 NO-GO): lock-ul partajat pe proiect, READ COMMITTED, motivul înlocuirii în hash, fără oracle la înlocuire ═══
+-- P2-a: lock-ul PARTAJAT (73010, proiect) e ținut până la commit de confirmare și de PV. Documentele n-au rânduri primite, deci
+-- garda pe bucăți (care ia și ea lock-ul) nu trage: lock-ul vine DOAR din apelul fn_izo_lock_partajat al intrării
+:CA_J
+SELECT (r ->> 'document_id')::bigint AS doc7 FROM public.fn_izo_doc_salveaza(NULL, NULL,
+  '{"proiect_id":3,"depozit_id":11,"sablon":"lista_ambalare_curbe","furnizor":"Gurgenler","nr_document":"PL 8","data_document":"2026-10-19","total_bucati":1}',
+  '[{"nr_crt":1,"serie":"9007","sarja":"H1","perete_mm":8,"unghi_doc":45,"cantitate":1,"decizie":"refuzat_la_receptie","motiv":"lovită la descărcare"}]', NULL) r \gset
+SELECT v ->> 'hash' AS hash7 FROM public.fn_izo_doc_verifica(:doc7) v \gset
+SELECT (r ->> 'document_id')::bigint AS doc8 FROM public.fn_izo_doc_salveaza(NULL, NULL,
+  '{"proiect_id":3,"depozit_id":11,"sablon":"lista_ambalare_curbe","furnizor":"Gurgenler","nr_document":"PL 9","data_document":"2026-10-19","total_bucati":1}',
+  '[{"nr_crt":1,"serie":"9008","sarja":"H1","perete_mm":8,"unghi_doc":45,"cantitate":1,"decizie":"refuzat_la_receptie","motiv":"lovită la descărcare"}]', NULL) r \gset
+SELECT v ->> 'hash' AS hash8 FROM public.fn_izo_doc_verifica(:doc8) v \gset
+BEGIN;
+SELECT teste.e('E11a confirmarea unui document fără rânduri primite → 0 bucăți', jsonb_array_length(public.fn_izo_doc_confirma(:doc7, 1, :'hash7') -> 'bucati') = 0);
+SELECT teste.e('E11b confirmarea ține lock-ul PARTAJAT (73010, 3) până la commit (fără bucăți: doar din fn_izo_lock_partajat)',
+  EXISTS (SELECT 1 FROM pg_locks l WHERE l.locktype = 'advisory' AND l.pid = pg_backend_pid() AND l.classid = 73010 AND l.objid = 3
+            AND l.objsubid = 2 AND l.mode = 'ShareLock' AND l.granted));
+COMMIT;
+-- P2-a: un overload scalar fn_izo_lock_partajat(bigint) care NU ia lock-ul nu poate umbri apelul (semnătura VARIADIC bigint[]
+-- explicită, cea din GRANT). Fiecare încercare într-o tranzacție anulată (o singură operație E3 per tranzacție), cu ștampila E2a
+-- refăcută doar acolo, ca poarta să lase apelul să ajungă la lock
 :CA_PG
+BEGIN;
+CREATE FUNCTION public.fn_izo_lock_partajat(p_proiect bigint) RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
+  AS $t$ BEGIN RAISE EXCEPTION 'test: overload-ul scalar fn_izo_lock_partajat(bigint) a fost chemat (fără lock)'; END $t$;
+DO $t$ BEGIN EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii()); END $t$;
+SELECT teste.e('E11c (pregătire) poarta completă cu overload-ul, în tranzacția de test', cardinality(public.fn_izo_porti_lipsa()) = 0);
+DISCARD PLANS;   -- planurile sesiunii au rezolvat apelul înaintea overload-ului; fără asta testul n-ar proba nimic
+:CA_J
+SELECT teste.e('E11d confirmarea cheamă fn_izo_lock_partajat(VARIADIC bigint[]), nu overload-ul scalar',
+  (public.fn_izo_doc_confirma(:doc8, 1, :'hash8') ->> 'idempotent')::boolean = false);
+ROLLBACK;
+:CA_PG
+BEGIN;
+CREATE FUNCTION public.fn_izo_lock_partajat(p_proiect bigint) RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
+  AS $t$ BEGIN RAISE EXCEPTION 'test: overload-ul scalar fn_izo_lock_partajat(bigint) a fost chemat (fără lock)'; END $t$;
+DO $t$ BEGIN EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii()); END $t$;
+DISCARD PLANS;
+:CA_J
+SELECT teste.e('E11e PV-ul la fel', (public.fn_izo_doc_pv(:doc7, 2, 'PV 16', '2026-10-21') ->> 'idempotent')::boolean = false);
+ROLLBACK;
+:CA_PG
+SELECT teste.e('E11f overload-ul și ștampila de test au dispărut (ROLLBACK); doc8 a rămas ciornă, doc7 fără PV',
+  (SELECT count(*) FROM pg_proc WHERE proname = 'fn_izo_lock_partajat') = 1 AND cardinality(public.fn_izo_porti_lipsa()) = 0
+  AND (SELECT stare FROM public.izo_documente_intrare WHERE id = :doc8) = 'draft'
+  AND (SELECT eveniment_pv_id IS NULL FROM public.izo_documente_intrare WHERE id = :doc7));
+:CA_J
+BEGIN;
+SELECT teste.e('E11g PV-ul unui document fără rânduri primite → 0 bucăți', (public.fn_izo_doc_pv(:doc7, 2, 'PV 15', '2026-10-21') ->> 'bucati_receptionate')::int = 0);
+SELECT teste.e('E11h PV-ul ține lock-ul PARTAJAT (73010, 3) până la commit',
+  EXISTS (SELECT 1 FROM pg_locks l WHERE l.locktype = 'advisory' AND l.pid = pg_backend_pid() AND l.classid = 73010 AND l.objid = 3
+            AND l.objsubid = 2 AND l.mode = 'ShareLock' AND l.granted));
+COMMIT;
+
+-- P2-b: READ COMMITTED impus (nu presupus) în toate intrările care scriu — și în verificare, care rulează aceeași poartă —
+-- înaintea oricărui lock; mesajul E3 (nu cel al lock-ului E2a, la care ajungeau confirmarea / PV-ul înainte)
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+:CA_J
+SELECT teste.eroare('E11i salvarea sub REPEATABLE READ → refuz', format('SELECT public.fn_izo_doc_salveaza(NULL, NULL, %L, %L, NULL)',
+  (:'ANTET1')::jsonb || '{"nr_document":"AV 700"}', '[]'), 'intrările E3 cer READ COMMITTED (acum repeatable read)');
+ROLLBACK;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+:CA_J
+SELECT teste.eroare('E11j anularea ciornei sub REPEATABLE READ → refuz', format('SELECT public.fn_izo_doc_anuleaza_draft(%s, 2, %L)', :doc6, 'motiv de test'),
+  'intrările E3 cer READ COMMITTED');
+ROLLBACK;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+:CA_J
+SELECT teste.eroare('E11k confirmarea sub REPEATABLE READ → refuz', format('SELECT public.fn_izo_doc_confirma(%s, 1, %L)', :doc8, :'hash8'),
+  'intrările E3 cer READ COMMITTED');
+ROLLBACK;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+:CA_J
+SELECT teste.eroare('E11l PV-ul sub REPEATABLE READ → refuz', format('SELECT public.fn_izo_doc_pv(%s, 3, %L, %L)', :doc4, 'PV 17', '2026-10-21'),
+  'intrările E3 cer READ COMMITTED');
+ROLLBACK;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+:CA_J
+SELECT teste.eroare('E11m verificarea sub REPEATABLE READ → refuz', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'intrările E3 cer READ COMMITTED');
+ROLLBACK;
+BEGIN ISOLATION LEVEL SERIALIZABLE;
+:CA_J
+SELECT teste.eroare('E11n salvarea sub SERIALIZABLE → refuz', format('SELECT public.fn_izo_doc_salveaza(NULL, NULL, %L, %L, NULL)',
+  (:'ANTET1')::jsonb || '{"nr_document":"AV 701"}', '[]'), 'intrările E3 cer READ COMMITTED (acum serializable)');
+ROLLBACK;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+:CA_PG
+SELECT teste.eroare('E11o anularea administrativă a unei ciorne sub REPEATABLE READ → refuz (ramura fără fn_izo_lock_proiect)',
+  format('SELECT public.fn_izo_doc_anuleaza(%s, %L)', :doc6, 'motiv de test'), 'intrările E3 cer READ COMMITTED');
+ROLLBACK;
+:CA_PG
+SELECT teste.e('E11p ciornele doc6 / doc8 neatinse de încercările sub REPEATABLE READ', (SELECT stare || ':' || versiune FROM public.izo_documente_intrare WHERE id = :doc6) = 'draft:2'
+  AND (SELECT stare || ':' || versiune FROM public.izo_documente_intrare WHERE id = :doc8) = 'draft:1');
+
+-- P2-c: motiv_inlocuire intră în hash: același document cu alt motiv → alt hash; cu același motiv → același hash (tranzacții anulate,
+-- ca ținta să rămână liberă; hash-ul nu conține id-ul documentului)
+BEGIN;
+:CA_J
+SELECT r ->> 'hash' AS hm1 FROM public.fn_izo_doc_salveaza(NULL, NULL, (:'ANTET1')::jsonb
+  || jsonb_build_object('inlocuieste_document_id', :doc2, 'motiv_inlocuire', 'motivul unu', 'nr_document', 'AV 800'), :'RANDURI1', NULL) r \gset
+ROLLBACK;
+BEGIN;
+:CA_J
+SELECT r ->> 'hash' AS hm2 FROM public.fn_izo_doc_salveaza(NULL, NULL, (:'ANTET1')::jsonb
+  || jsonb_build_object('inlocuieste_document_id', :doc2, 'motiv_inlocuire', 'motivul doi', 'nr_document', 'AV 800'), :'RANDURI1', NULL) r \gset
+ROLLBACK;
+BEGIN;
+:CA_J
+SELECT r ->> 'hash' AS hm3 FROM public.fn_izo_doc_salveaza(NULL, NULL, (:'ANTET1')::jsonb
+  || jsonb_build_object('inlocuieste_document_id', :doc2, 'motiv_inlocuire', 'motivul unu', 'nr_document', 'AV 800'), :'RANDURI1', NULL) r \gset
+ROLLBACK;
+SELECT teste.e('E11q același document cu alt motiv_inlocuire → alt hash; cu același motiv → același hash', :'hm1' <> :'hm2' AND :'hm1' = :'hm3');
+
+-- P2-d: înlocuirea unei ținte inaccesibile — „nu există”, „există, dar nu e a ta” și „e a altuia și deja înlocuită” dau EXACT
+-- același SQLSTATE + mesaj (înainte: 23503 de la FK, 23514, 23505 de la UNIQUE)
+:CA_PG
+CREATE FUNCTION teste.eroare_exacta(p_sql text) RETURNS text LANGUAGE plpgsql AS $t$
+BEGIN
+  EXECUTE p_sql; RETURN 'fără eroare';
+EXCEPTION WHEN OTHERS THEN RETURN SQLSTATE || ' ' || SQLERRM;
+END $t$;
+GRANT EXECUTE ON FUNCTION teste.eroare_exacta(text) TO authenticated;
+:CA_J
+SELECT teste.eroare_exacta(format('SELECT public.fn_izo_doc_salveaza(NULL, NULL, %L, %L, NULL)', (:'ANTET1')::jsonb
+  || jsonb_build_object('inlocuieste_document_id', 9000000000, 'motiv_inlocuire', 'revendic', 'nr_document', 'AV 910'), '[]')) AS m_nu_exista \gset
+SELECT teste.eroare_exacta(format('SELECT public.fn_izo_doc_salveaza(NULL, NULL, %L, %L, NULL)', (:'ANTET1')::jsonb
+  || jsonb_build_object('inlocuieste_document_id', :doc5, 'motiv_inlocuire', 'revendic', 'nr_document', 'AV 911'), '[]')) AS m_inaccesibil \gset
+:CA_R
+SELECT (r ->> 'document_id')::bigint AS doc9 FROM public.fn_izo_doc_salveaza(NULL, NULL, (:'ANTET1')::jsonb
+  || jsonb_build_object('depozit_id', 9, 'nr_document', 'AV 902', 'inlocuieste_document_id', :doc5, 'motiv_inlocuire', 'înlocuită de owner'), '[]', NULL) r \gset
+:CA_J
+SELECT teste.eroare_exacta(format('SELECT public.fn_izo_doc_salveaza(NULL, NULL, %L, %L, NULL)', (:'ANTET1')::jsonb
+  || jsonb_build_object('inlocuieste_document_id', :doc5, 'motiv_inlocuire', 'revendic', 'nr_document', 'AV 912'), '[]')) AS m_inlocuit \gset
+SELECT teste.e('E11r ținta inexistentă / inaccesibilă / inaccesibilă și deja înlocuită → același SQLSTATE și mesaj, generic',
+  :'m_nu_exista' = :'m_inaccesibil' AND :'m_inaccesibil' = :'m_inlocuit'
+  AND :'m_nu_exista' = '23514 izo E3: documentul înlocuit nu există, nu e anulat sau nu ai acces la el');
+:CA_PG
+SELECT teste.e('E11s nicio încercare n-a lăsat document (refuzul e înaintea INSERT-ului)',
+  (SELECT count(*) FROM public.izo_documente_intrare WHERE nr_document IN ('AV 910', 'AV 911', 'AV 912')) = 0);
+DROP FUNCTION teste.eroare_exacta(text);
 SELECT teste.e('E10g porțile complete la final', cardinality(public.fn_izo_porti_lipsa()) = 0);
+
+-- ═══ E11 r5f (#825 NO-GO, P1-3): Storage — stratul RESTRICTIV; RLS / FORCE / owner / ACL pe storage.objects în poarta E3 ═══
+-- mutanții rulează în tranzacții anulate la final (ROLLBACK): baza rămâne cum era
+\set CA_F 'RESET ROLE; RESET SESSION AUTHORIZATION; SET SESSION AUTHORIZATION authenticator; SELECT teste.ca(\'00000000-0000-0000-0000-0000000000f0\');'
+\set CA_ANON 'RESET ROLE; RESET SESSION AUTHORIZATION; SET SESSION AUTHORIZATION authenticator; SELECT set_config(\'request.jwt.claims\', \'{"role":"anon"}\', false); SET ROLE anon;'
+SELECT teste.e('E11a stratul RESTRICTIV: 5 politici izo_doc_scan_r_* pe storage.objects, RLS activ, poarta E3 completă',
+  (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND NOT polpermissive AND polname LIKE 'izo\_doc\_scan\_r\_%') = 5
+  AND (SELECT relrowsecurity FROM pg_class WHERE oid = 'storage.objects'::regclass) AND cardinality(public.fn_izo_porti_e3_lipsa()) = 0);
+-- mutant: o politică PERMISIVĂ generală nouă (FOR ALL TO public, USING / WITH CHECK true) — izo-documente rămâne închis
+BEGIN;
+CREATE POLICY mutant_general_r5f ON storage.objects FOR ALL TO public USING (true) WITH CHECK (true);
+INSERT INTO storage.objects (bucket_id, name) VALUES (NULL, 'fara-bucket/r5f.pdf');
+-- r5f (coordonat cu chat 21.10): politicile altor module pe Storage (ex. 20261103c, ai-documente-inbox) NU înroșesc poarta —
+-- protecția izo-documente e stratul RESTRICTIV, nu ștampila politicilor străine
+CREATE POLICY mutant_alt_bucket_r5f ON storage.objects FOR SELECT TO authenticated USING (bucket_id = 'ai-documente-inbox');
+SELECT teste.e('E11b0 permisivă generală + politică pe alt bucket: porțile (E2a + E3) rămân complete',
+  cardinality(public.fn_izo_porti_e3_lipsa()) = 0 AND cardinality(public.fn_izo_porti_lipsa()) = 0);
+:CA_F
+SELECT teste.e('E11b permisivă generală: un utilizator fără acces nu vede obiectul din izo-documente; rândul cu bucket_id NULL trece',
+  (SELECT count(*) FROM storage.objects WHERE bucket_id = 'izo-documente') = 0 AND (SELECT count(*) FROM storage.objects WHERE bucket_id IS NULL) = 1);
+SELECT teste.eroare('E11c permisivă generală: un utilizator fără acces nu încarcă în izo-documente', format($q$INSERT INTO storage.objects (bucket_id, name)
+  VALUES ('izo-documente', '%s/0b1c2d3e-0000-4000-8000-000000000003.pdf')$q$, :doc6), 'row-level security');
+-- r5f (#825 NO-GO, runda de corecție): E11h ÎNAINTEA oricărei ștergeri din bloc (altfel, pe o migrare fără strat, DELETE-ul
+-- reușit al lui E11e golea bucket-ul și E11h trecea trivial)
+:CA_ANON
+SELECT teste.e('E11h anon: nimic din izo-documente, iar celelalte rânduri se citesc fără eroare de drept (predicatul lui e fără funcții E3)',
+  (SELECT count(*) FROM storage.objects WHERE bucket_id = 'izo-documente') = 0
+  AND (SELECT count(*) FROM storage.objects WHERE bucket_id IS DISTINCT FROM 'izo-documente') >= 1);
+:CA_J
+SELECT teste.e('E11d permisivă generală: UPDATE pe un obiect din izo-documente → 0 rânduri (și pentru gestionarul ciornei)',
+  teste.n($q$UPDATE storage.objects SET name = name || 'x' WHERE bucket_id = 'izo-documente'$q$) = 0);
+:CA_F
+SELECT teste.e('E11e permisivă generală: un utilizator fără acces nu șterge din izo-documente',
+  teste.n($q$DELETE FROM storage.objects WHERE bucket_id = 'izo-documente'$q$) = 0);
+:CA_J
+SELECT teste.e('E11f alt bucket (avize): încărcarea merge ca înainte',
+  teste.n($q$INSERT INTO storage.objects (bucket_id, name) VALUES ('avize', 'r5f/aviz.pdf')$q$) = 1);
+SELECT teste.e('E11f2 alt bucket (avize): citirea merge ca înainte',
+  (SELECT count(*) FROM storage.objects WHERE bucket_id = 'avize' AND name = 'r5f/aviz.pdf') = 1);
+SELECT teste.eroare('E11g mutarea unui obiect din alt bucket ÎN izo-documente → refuz (WITH CHECK restrictiv)', format($q$UPDATE storage.objects
+  SET bucket_id = 'izo-documente', name = '%s/0b1c2d3e-0000-4000-8000-000000000004.pdf' WHERE bucket_id = 'avize' AND name = 'r5f/aviz.pdf'$q$, :doc6),
+  'row-level security');
+SELECT teste.e('E11f3 alt bucket (avize): UPDATE-ul unui obiect merge ca înainte (r_upd / r_toti nu ating alte bucket-uri)',
+  teste.n($q$UPDATE storage.objects SET name = 'r5f/aviz-2.pdf' WHERE bucket_id = 'avize' AND name = 'r5f/aviz.pdf'$q$) = 1);
+SELECT teste.e('E11f4 alt bucket (avize): DELETE-ul unui obiect merge ca înainte (r_del / r_toti nu ating alte bucket-uri)',
+  teste.n($q$DELETE FROM storage.objects WHERE bucket_id = 'avize' AND name = 'r5f/aviz-2.pdf'$q$) = 1);
+:CA_PG
+ROLLBACK;
+-- r5f (#825 NO-GO, runda de corecție): DELETE și scrierile lui anon sub permisiva generală — fiecare componentă a stratului
+-- RESTRICTIV are testul ei: r_del (E11n gestionarul pe manifest, E11q fără WHERE), r_toti pe INSERT (E11o) și pe DELETE (E11p)
+BEGIN;
+CREATE POLICY mutant_general_r5f ON storage.objects FOR ALL TO public USING (true) WITH CHECK (true);
+INSERT INTO storage.objects (bucket_id, name) VALUES ('avize', 'r5f/aviz-anon.pdf');
+:CA_J
+SELECT teste.e('E11n permisivă generală: gestionarul ciornei (cititor) nu șterge obiectul din MANIFEST → 0 rânduri (r_del)',
+  teste.n(format($q$DELETE FROM storage.objects WHERE bucket_id = 'izo-documente' AND name = '%s/0b1c2d3e-0000-4000-8000-000000000001.pdf'$q$, :doc6)) = 0);
+:CA_ANON
+SELECT teste.eroare('E11o permisivă generală: anon nu încarcă în izo-documente → refuz RLS (r_toti, WITH CHECK)', format($q$INSERT INTO storage.objects (bucket_id, name)
+  VALUES ('izo-documente', '%s/0b1c2d3e-0000-4000-8000-000000000005.pdf')$q$, :doc6), 'row-level security');
+SELECT teste.n($q$DELETE FROM storage.objects$q$) AS sters_anon \gset
+:CA_PG
+SELECT teste.e('E11p permisivă generală: anon, DELETE fără WHERE → obiectul din izo-documente rămâne (r_toti, USING); cel din avize e șters, ca înainte',
+  (SELECT count(*) FROM storage.objects WHERE bucket_id = 'izo-documente') = 1
+  AND NOT EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'avize' AND name = 'r5f/aviz-anon.pdf'));
+:CA_F
+SELECT teste.n($q$DELETE FROM storage.objects$q$) AS sters_f \gset
+:CA_PG
+SELECT teste.e('E11q permisivă generală: un utilizator fără acces, DELETE fără WHERE → obiectul din izo-documente rămâne (r_del)',
+  (SELECT count(*) FROM storage.objects WHERE bucket_id = 'izo-documente') = 1);
+ROLLBACK;
+-- mutant: DISABLE ROW LEVEL SECURITY pe storage.objects → poarta E3 (explicit + ștampila) îl raportează, intrările refuză
+BEGIN;
+ALTER TABLE storage.objects DISABLE ROW LEVEL SECURITY;
+SELECT teste.e('E11i DISABLE RLS pe storage.objects → poarta E3 îl raportează (explicit și prin ștampilă), poarta completă e incompletă',
+  'Storage: RLS pe storage.objects / bucket-ul izo-documente privat / politicile RESTRICTIVE izo_doc_scan_r_*' = ANY (public.fn_izo_porti_e3_lipsa())
+  AND cardinality(public.fn_izo_porti_e3_lipsa()) = 2 AND cardinality(public.fn_izo_porti_lipsa()) > 0);
+:CA_J
+SELECT teste.eroare('E11j DISABLE RLS pe storage.objects → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+BEGIN;
+GRANT TRUNCATE ON storage.objects TO anon;
+SELECT teste.e('E11k ACL nou pe storage.objects (TRUNCATE la anon) → poarta E3 îl raportează', cardinality(public.fn_izo_porti_e3_lipsa()) > 0);
+ROLLBACK;
+BEGIN;
+ALTER TABLE storage.objects FORCE ROW LEVEL SECURITY;
+SELECT teste.e('E11l FORCE RLS schimbat pe storage.objects → poarta E3 îl raportează', cardinality(public.fn_izo_porti_e3_lipsa()) > 0);
+ROLLBACK;
+BEGIN;
+ALTER TABLE storage.objects OWNER TO postgres;
+SELECT teste.e('E11m owner schimbat pe storage.objects → poarta E3 îl raportează', cardinality(public.fn_izo_porti_e3_lipsa()) > 0);
+ROLLBACK;
+
+-- ═══ E12 r5f (#825 NO-GO, P1-4): trigger-ele în poarta E3 cu definiția completă (WHEN / UPDATE OF), nu doar funcție + tgtype ═══
+BEGIN;
+DROP TRIGGER trg_izo_doc_garda ON public.izo_documente_intrare;
+CREATE TRIGGER trg_izo_doc_garda BEFORE INSERT OR UPDATE OR DELETE ON public.izo_documente_intrare
+  FOR EACH ROW WHEN (false) EXECUTE FUNCTION public.fn_izo_doc_garda();
+ALTER TABLE public.izo_documente_intrare ENABLE ALWAYS TRIGGER trg_izo_doc_garda;
+SELECT teste.e('E12a trg_izo_doc_garda recreat cu WHEN (false) — aceeași funcție, aceleași evenimente, ENABLE ALWAYS → poarta E3 îl raportează',
+  (SELECT tgenabled FROM pg_trigger WHERE tgname = 'trg_izo_doc_garda') = 'A' AND cardinality(public.fn_izo_porti_e3_lipsa()) > 0);
+ROLLBACK;
+BEGIN;
+DROP TRIGGER prevent_role_escalation_trigger ON public.profiles;
+CREATE TRIGGER prevent_role_escalation_trigger BEFORE UPDATE ON public.profiles
+  FOR EACH ROW WHEN (OLD.is_owner IS NOT DISTINCT FROM NEW.is_owner) EXECUTE FUNCTION public.prevent_role_escalation();
+SELECT teste.e('E12b prevent_role_escalation_trigger recreat cu WHEN care sare exact schimbarea is_owner → poarta E3 și cea completă îl raportează',
+  cardinality(public.fn_izo_porti_e3_lipsa()) > 0 AND cardinality(public.fn_izo_porti_lipsa()) > 0);
+ROLLBACK;
+BEGIN;
+DROP TRIGGER trg_profiles_campuri_owner_only ON public.profiles;
+CREATE TRIGGER trg_profiles_campuri_owner_only BEFORE UPDATE OF name ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public.fn_profiles_campuri_owner_only();
+SELECT teste.e('E12c trg_profiles_campuri_owner_only recreat cu UPDATE OF name → poarta E3 îl raportează', cardinality(public.fn_izo_porti_e3_lipsa()) > 0);
+ROLLBACK;
+
+-- ═══ E13 r5f (#825 NO-GO, a doua ușă): rândul bucket-ului din storage.buckets — politicile lui în ștampila E3, stratul
+-- RESTRICTIV izo_doc_bucket_r_* (fără INSERT / UPDATE / DELETE pe izo-documente), verificarea explicită ═══
+BEGIN;
+CREATE POLICY mutant_buckets_r5f ON storage.buckets FOR ALL TO public USING (true) WITH CHECK (true);
+SELECT teste.e('E13a politică permisivă generală nouă pe storage.buckets → poarta E3 rămâne verde (stratul RESTRICTIV protejează rândul)',
+  cardinality(public.fn_izo_porti_e3_lipsa()) = 0);
+:CA_F
+SELECT teste.e('E13b permisivă pe buckets: un utilizator fără acces nu face izo-documente public → 0 rânduri',
+  teste.n($q$UPDATE storage.buckets SET public = true WHERE id = 'izo-documente'$q$) = 0);
+SELECT teste.e('E13c permisivă pe buckets: UPDATE fără WHERE atinge doar celelalte bucket-uri (avize: 1 rând, ca înainte)',
+  teste.n($q$UPDATE storage.buckets SET public = true$q$) = 1);
+:CA_ANON
+SELECT teste.e('E13d permisivă pe buckets: anon nu face izo-documente public / fără limite → 0 rânduri',
+  teste.n($q$UPDATE storage.buckets SET public = true, file_size_limit = NULL WHERE id = 'izo-documente'$q$) = 0);
+:CA_PG
+SELECT teste.e('E13e izo-documente a rămas privat, cu limita lui; avize s-a schimbat (neatins de E3)',
+  (SELECT string_agg(format('%s:%s:%s', id, public::text, coalesce(file_size_limit::text, '-')), ',' ORDER BY id) FROM storage.buckets)
+  = 'avize:true:-,izo-documente:false:10485760');
+DELETE FROM storage.objects WHERE bucket_id = 'izo-documente';   -- bucket gol (ca postgres): DELETE-ul de mai jos îl decide doar RLS, nu FK-ul
+:CA_F
+SELECT teste.e('E13f permisivă pe buckets: un utilizator fără acces nu șterge bucket-ul (gol) izo-documente → 0 rânduri',
+  teste.n($q$DELETE FROM storage.buckets WHERE id = 'izo-documente'$q$) = 0);
+SELECT teste.e('E13f2 permisivă pe buckets: nici nu-l redenumește (scos de sub nume, apoi recreat public) → 0 rânduri (USING)',
+  teste.n($q$UPDATE storage.buckets SET id = 'izo-redenumit', public = true WHERE id = 'izo-documente'$q$) = 0);
+:CA_PG
+DELETE FROM storage.buckets WHERE id = 'izo-documente';   -- dispărut (șters de un rol cu BYPASSRLS): nu-l recreează altcineva
+:CA_F
+SELECT teste.eroare('E13g permisivă pe buckets: un utilizator fără acces nu recreează izo-documente (public) → refuz RLS',
+  $q$INSERT INTO storage.buckets (id, name, public) VALUES ('izo-documente', 'izo-documente', true)$q$, 'row-level security');
+SELECT teste.eroare('E13h permisivă pe buckets: nici prin mutarea altui bucket pe id-ul izo-documente → refuz RLS',
+  $q$UPDATE storage.buckets SET id = 'izo-documente' WHERE id = 'avize'$q$, 'row-level security');
+:CA_PG
+ROLLBACK;
+BEGIN;
+DROP POLICY izo_doc_bucket_r_upd ON storage.buckets;
+SELECT teste.e('E13i politica RESTRICTIVĂ izo_doc_bucket_r_upd lipsă → poarta E3 o raportează explicit (și prin ștampilă)',
+  'Storage: RLS pe storage.buckets / politicile RESTRICTIVE izo_doc_bucket_r_* pe rândul bucket-ului izo-documente' = ANY (public.fn_izo_porti_e3_lipsa())
+  AND cardinality(public.fn_izo_porti_e3_lipsa()) = 2);
+ROLLBACK;
+BEGIN;
+ALTER TABLE storage.buckets DISABLE ROW LEVEL SECURITY;
+SELECT teste.e('E13j DISABLE RLS pe storage.buckets → poarta E3 îl raportează explicit (și prin ștampilă), poarta completă e incompletă',
+  'Storage: RLS pe storage.buckets / politicile RESTRICTIVE izo_doc_bucket_r_* pe rândul bucket-ului izo-documente' = ANY (public.fn_izo_porti_e3_lipsa())
+  AND cardinality(public.fn_izo_porti_e3_lipsa()) = 2 AND cardinality(public.fn_izo_porti_lipsa()) > 0);
+ROLLBACK;
+SELECT teste.e('E12d după mutanți (anulați): porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
 
 DO $$ BEGIN RAISE NOTICE 'TESTE E3: TOATE OK'; END $$;

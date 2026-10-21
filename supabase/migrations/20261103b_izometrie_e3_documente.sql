@@ -12,9 +12,16 @@
 --     izo_receptie_writer); administrativ: fn_izo_doc_anuleaza (doar postgres);
 --   • garda E3 (fn_izo_garda_receptie) integrată în predicatul de autorizare al gărzilor E2a (v_aut, fără RETURN timpuriu)
 --     și în trigger-ul de imutabilitate al documentelor; contextul operației în izo.receptie_ctx;
---   • bucket-ul izo-documente (privat, PDF) cu politicile izo_doc_scan_ins / _sel / _del (fără UPDATE);
+--   • bucket-ul izo-documente (privat, PDF) cu politicile izo_doc_scan_ins / _sel / _del (fără UPDATE) și, r5f (#825 NO-GO,
+--     P1-3), politicile RESTRICTIVE izo_doc_scan_r_* pe storage.objects: rândurile din izo-documente trec DOAR prin predicatele
+--     E3 (fn_izo_scan_poate_*), UPDATE / mutarea în bucket interzise; celelalte bucket-uri (și bucket_id NULL) neatinse;
+--     r5f (#825 NO-GO, a doua ușă): politicile RESTRICTIVE izo_doc_bucket_r_* pe storage.buckets — rândul bucket-ului
+--     izo-documente nu se modifică (public / limite), nu se șterge și nu se (re)creează decât de rolurile cu BYPASSRLS;
 --   • poarta E3 (fn_izo_porti_e3_lipsa / fn_izo_porti_e3_definitii, ștampilă proprie): indexuri, ACL pe tabele ȘI pe
---     coloane, roluri, trigger-ele profiles, bucket, mulțimea exactă de coloane (C) a registrului.
+--     coloane, roluri, trigger-ele (definiția completă, r5f), bucket, owner / RLS / FORCE / ACL pe storage.objects și
+--     storage.buckets (r5f; RLS-ul cerut explicit), mulțimea exactă de coloane (C) a registrului.
+-- r5f (#825 NO-GO, P1-3/P1-4): baseline-ul EXTERN de dinainte de E3 (Storage + trigger-ele profiles) se verifică la apply
+--   (precondiția 0l) față de amprenta pre-E3 REVIZUITĂ (scripts/izometrie/e3_gen/baseline_pre_e3.json), nu se ștampilează cum e găsit.
 -- Poarta E2a completă (fn_izo_porti_lipsa, ~8,5 s pe prod) rulează în confirmare / PV ÎNAINTEA lock-urilor; după lock-uri
 --   și în salvare / verificare: amprenta E2a (fn_izo_porti_definitii = COMMENT, ~11 ms) + poarta E3.
 -- Amprentele E2a (porți + revenire) se refac aici (gărzile E2a și funcțiile fn_izo_* noi intră în ele); valoarea de
@@ -25,7 +32,7 @@
 --   (refuză dacă există ORICE fapt E3; după primul document, drumul e înainte, cu migrare revizuită).
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $migrare$
-DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_lipsa text[]; v_x text; v_comentariu text;
+DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_lipsa text[]; v_x text; v_comentariu text; v_baza jsonb; v_baza_rev jsonb;
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261103b_izometrie_e3_documente:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261103b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
@@ -90,6 +97,167 @@ BEGIN
      OR to_regprocedure('auth.role()') IS NULL OR to_regclass('storage.objects') IS NULL OR to_regclass('storage.buckets') IS NULL
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'logistica_depozite' AND column_name = 'activ') THEN
     RAISE EXCEPTION 'Precondiție 0i: lipsește o dependență E3 (user_module_access unic / trigger-ele profiles / auth.role / storage / depozite.activ)';
+  END IF;
+  -- r5f (#825 NO-GO, P1-3/P1-4): baseline-ul EXTERN pre-E3 = amprenta REVIZUITĂ (capturată read-only de pe prod, în
+  -- scripts/izometrie/e3_gen/baseline_pre_e3.json), nu starea găsită aici (fără TOFU): storage.objects / storage.buckets
+  -- (owner, RLS, FORCE, ACL fără MAINTAIN, TOATE politicile) + trigger-ele profiles (definiția completă, starea) și funcțiile
+  -- lor (owner, DEFINER, config, volatilitate, corp). Orice diferență → refuz, cu lista; baseline nou = captură nouă revizuită.
+  v_baza := jsonb_build_object(
+      'relatii', (SELECT coalesce(jsonb_object_agg(n.nspname || '.' || c.relname, md5(concat_ws(':', pg_get_userbyid(c.relowner), c.relrowsecurity,
+                    c.relforcerowsecurity, (SELECT coalesce(string_agg(q.x, ',' ORDER BY q.x COLLATE "C"), '')
+                      FROM (SELECT format('%s>%s:%s:%s', CASE WHEN a.grantor = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                                          CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END, a.privilege_type, a.is_grantable) AS x
+                              FROM aclexplode(c.relacl) a WHERE a.privilege_type <> 'MAINTAIN') q)))), '{}')
+                    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (('storage', 'objects'), ('storage', 'buckets'))),
+      'politici', (SELECT coalesce(jsonb_object_agg(n.nspname || '.' || c.relname || '.' || p.polname, md5(concat_ws(':', p.polcmd, p.polpermissive,
+                     (SELECT string_agg(r.x, ',' ORDER BY r.x COLLATE "C")
+                        FROM (SELECT CASE WHEN o = 0 THEN 'public' ELSE pg_get_userbyid(o) END AS x FROM unnest(p.polroles) o) r),
+                     coalesce(pg_get_expr(p.polqual, p.polrelid), ''), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')))), '{}')
+                     FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (('storage', 'objects'), ('storage', 'buckets'))),
+      'triggere', (SELECT coalesce(jsonb_object_agg(n2.nspname || '.' || c2.relname || '.' || g.tgname,
+                     md5(concat_ws(':', pg_get_triggerdef(g.oid, false), g.tgenabled))), '{}')
+                     FROM pg_trigger g JOIN pg_class c2 ON c2.oid = g.tgrelid JOIN pg_namespace n2 ON n2.oid = c2.relnamespace WHERE n2.nspname = 'public' AND c2.relname = 'profiles' AND g.tgname IN ('prevent_role_escalation_trigger', 'trg_profiles_campuri_owner_only')),
+      'functii', (SELECT coalesce(jsonb_object_agg(n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
+                    md5(concat_ws(':', pg_get_userbyid(p.proowner), p.prosecdef, coalesce(p.proconfig::text, ''), p.provolatile, md5(p.prosrc)))), '{}')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE p.oid IN (SELECT g.tgfoid FROM pg_trigger g JOIN pg_class c2 ON c2.oid = g.tgrelid JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
+                                    WHERE n2.nspname = 'public' AND c2.relname = 'profiles' AND g.tgname IN ('prevent_role_escalation_trigger', 'trg_profiles_campuri_owner_only'))));
+  v_baza_rev := '
+    {
+      "functii": {
+        "public.fn_profiles_campuri_owner_only()": "62a2d9ea92c104946d0008b25a369dd6",
+        "public.prevent_role_escalation()": "6cc283295b6cf8ab80d6fcd468922137"
+      },
+      "politici": {
+        "storage.objects.Authenticated can delete documente-flota": "5f9297cc6274dcc7277c55fe1b6e42e2",
+        "storage.objects.Authenticated can read documente-flota": "39047ab0bf0ea334aaf99661b25317c9",
+        "storage.objects.Authenticated can update documente-flota": "f06faa0729e08714ad7c7fee2709fd1e",
+        "storage.objects.Authenticated can upload documente-flota": "3974712202f7df33f19b6a8ab1cbd2b1",
+        "storage.objects.Pontaj brut delete owner": "37577ce853870a5cce29dd48dbe676b4",
+        "storage.objects.Pontaj brut insert authorized": "dd86ba37b01110315fce80449a5ae55c",
+        "storage.objects.Pontaj brut select authorized": "689051a6c8d9f0647356fbb52c1775c7",
+        "storage.objects.Pontaj net delete owner": "67f1c7aa8452a828e79aa7f6b4149c35",
+        "storage.objects.Pontaj net insert authorized": "288824684f3a8fe279c6e43343cd5c41",
+        "storage.objects.Pontaj net select authorized": "0b5733e6cdc3860690872df655936dd9",
+        "storage.objects.Supliment hrana delete owner": "e001b1aa169f6409b2d1312360a0fe62",
+        "storage.objects.Supliment hrana insert authorized": "1c6362c49451cda18205205e0e0119bc",
+        "storage.objects.Supliment hrana select authorized": "acef98ecce0e7dcddd0e20489a54f14a",
+        "storage.objects.ai_inbox_obj_all": "a9574d5dac3b0b33bcb36182703aa8d0",
+        "storage.objects.autorizatii_delete": "8373e7dbea5230e3ba0b865cdba55f66",
+        "storage.objects.autorizatii_read": "3b164f3bd8028356eafdc2d8e665829a",
+        "storage.objects.autorizatii_write": "3f6831267eb966292336e7df810dd306",
+        "storage.objects.avize_authenticated_insert": "5bcbf1c6da49f81eb6fdd1d53b11dcc6",
+        "storage.objects.avize_authenticated_read": "a46edbf45465e1ab84bfbb8d03f6f339",
+        "storage.objects.cf_storage_delete": "9b7817911ef56799514d80042ae92e95",
+        "storage.objects.cf_storage_insert": "4278d9c807474fd2b0dcb08df1603621",
+        "storage.objects.cf_storage_select": "81e1b7bf36fc1a99c089d9dafe3d3d0b",
+        "storage.objects.chat_imagini_read": "672f8008070f86c16185858d6c865713",
+        "storage.objects.chat_imagini_upload": "3788ba9c46d155771369818ebc72d21b",
+        "storage.objects.contracte_comodat_delete": "e91090c8ca3ecc83b760dbfc35f067ad",
+        "storage.objects.contracte_comodat_insert": "eaf9755d31d4e7d0ddb459f94f9ea4a2",
+        "storage.objects.contracte_comodat_select": "eee304a60d84f6c4da7fb5adab5ad217",
+        "storage.objects.contracte_comodat_update": "04f2bbedee03f9c80b5540de23b6493d",
+        "storage.objects.contracte_terti_storage_delete": "1d2ea1ee68e40d959d26081616825e66",
+        "storage.objects.contracte_terti_storage_insert": "c8cfde174404c6937865e9e702d9539f",
+        "storage.objects.contracte_terti_storage_select": "28eb2477865f3dbe9e59c863d0ae078a",
+        "storage.objects.contracte_terti_storage_update": "1c403b429f0f66bd77e958fea7e733b9",
+        "storage.objects.ctc_storage_delete": "db4b71adc3e214f49e4ad9b00d13bccd",
+        "storage.objects.ctc_storage_insert": "88a074bfc242f0238719692ac3184c58",
+        "storage.objects.ctc_storage_select": "1dfa4fbcf6bcd547d87b257f6e5f4415",
+        "storage.objects.ctc_storage_update": "f55b14f6376f46533082f5ca7568d723",
+        "storage.objects.documente_firma_storage_delete": "977d7918e86aec27ed895339afa902f7",
+        "storage.objects.documente_firma_storage_insert": "f67001f218467559016ab90865812e91",
+        "storage.objects.documente_firma_storage_select": "e542ec7b3a27e9ec9c3c4e036b4587ca",
+        "storage.objects.documente_firma_storage_update": "ec5fc6d3e404b72dc695de33599502c3",
+        "storage.objects.documente_personal_delete": "58418bea0c6a556ee3fb2d8516b0d806",
+        "storage.objects.documente_personal_insert": "f1f9ed8bacf1a20022b57d7826df9dfb",
+        "storage.objects.documente_personal_select": "06a25984522e71b620d981af55b7531d",
+        "storage.objects.documente_personal_update": "9bc598af29056edd4192c54b1c5d48ec",
+        "storage.objects.documente_proiect_storage_read": "f3f6f1db042a2d5a0d948aa0bbdb5bc9",
+        "storage.objects.edc_storage_delete": "9091b4991d963f57076ace9a218a5b64",
+        "storage.objects.edc_storage_insert": "3af6ee07e25b8fa43a880a03619525fe",
+        "storage.objects.edc_storage_select": "f51907d68adfae5aedcbfba361d53ccc",
+        "storage.objects.edc_storage_update": "26419d886b0ed9d7047fb648656621e0",
+        "storage.objects.executie_borderouri_delete": "0d10d7901ea2b5adda6f50e6323194f0",
+        "storage.objects.executie_borderouri_insert": "b6bb00e6d8c7d8055026e01d60ad89f1",
+        "storage.objects.executie_borderouri_select": "a7a4cc303cf82f1314608c21e296b0a8",
+        "storage.objects.executie_borderouri_update": "95fec62464867485661f2dfb5940a219",
+        "storage.objects.executie_pachete_pdf_delete": "3aa4ea03a7c05b220c1e64f7b6367f77",
+        "storage.objects.executie_pachete_pdf_insert": "3a74dd917cc1cfd5b7ae1606fdc8f0db",
+        "storage.objects.executie_pachete_pdf_select": "c5bf595022753fa684f2395d695d3ece",
+        "storage.objects.executie_pachete_pdf_update": "42e276ff3a0fdd7a39552d0b8c0f0758",
+        "storage.objects.facturi_storage_delete": "689a3ce408a407fe143c4530bb90c2f6",
+        "storage.objects.facturi_storage_insert": "cc3f01faaeb97f19a0941e4ae250a482",
+        "storage.objects.facturi_storage_select": "0b81cfbb9fb10081c97ec6c11918b14f",
+        "storage.objects.facturi_storage_update": "db4c0f5506c25f00766f21672b3b068c",
+        "storage.objects.hr_decizii_storage_insert": "50652fe76f28402e4f86a4d594f0beee",
+        "storage.objects.hr_decizii_storage_select": "ee02dc9986cdfb8723d84a1a1cecef4f",
+        "storage.objects.hr_semnaturi_delete": "44b88c693a730ac594b516820ed0384e",
+        "storage.objects.hr_semnaturi_insert": "289e1a171db219d2e36e02bd32ed4cc3",
+        "storage.objects.hr_semnaturi_select": "e33b7f5eb41eb7b8b3212c0921424eaa",
+        "storage.objects.hr_semnaturi_self_insert": "43e28952b73f515a751fb222bb02e9a0",
+        "storage.objects.hr_semnaturi_self_select": "45f07e72655a65d5147dd882db48a86b",
+        "storage.objects.hr_semnaturi_update": "3ecdb91ee0a2c277588a63bf0e6ea6cb",
+        "storage.objects.ofertare_storage_del": "628d7e7210b2e4526a4d1979783f92f9",
+        "storage.objects.ofertare_storage_ins": "f616de6a0aba7da36f5ca05079b1c8c2",
+        "storage.objects.ofertare_storage_sel": "06db92ceef336b1b3d9051b74d41a818",
+        "storage.objects.ofertare_storage_upd": "4cb32c03ead06d6e7e186b97e3fb2051",
+        "storage.objects.ordine_deplasare_delete": "1a718ab2417437d9e8684ad4a4c4dd7f",
+        "storage.objects.ordine_deplasare_insert": "0414f0c8a072a2ce572546b66dfa6683",
+        "storage.objects.ordine_deplasare_select": "337901cd700108cb690493041a27aa2b",
+        "storage.objects.ordine_deplasare_update": "923c2b96bfecd7c7d4d23dc31563a55b",
+        "storage.objects.pl_packing_del": "45942bf822bb02aaba56f0e83a5208aa",
+        "storage.objects.pl_packing_ins": "61ea4c79cf4a86d522b8a636695d19a9",
+        "storage.objects.pl_packing_sel": "4998e54b20eea1c85880ab7cb35d5ef2",
+        "storage.objects.pl_packing_upd": "d9997b6f6dab73cf01e8ce13af4ebc9d",
+        "storage.objects.probe_citiri_delete": "e739bbb6fe6b6309f75a376a0e013c07",
+        "storage.objects.probe_citiri_insert": "02954b04ded38c8490497cac6ae5c985",
+        "storage.objects.probe_citiri_select": "4f1e0304d7a5c4d36e455f2a2a7958f0",
+        "storage.objects.productie_storage_rw": "1be29896c86a6067675f6da59c7210a5",
+        "storage.objects.qr_bonuri_delete_owner": "784c03a727165d48cdf3661d6561d385",
+        "storage.objects.qr_bonuri_insert_auth": "e509e95f76e5d92593b38f596814fd57",
+        "storage.objects.qr_bonuri_select_auth": "eea3b5519d3c4083e43b5829592b804e",
+        "storage.objects.rapoarte_obj_all": "62bd86c6c25f4900c0cc634be168c4a6",
+        "storage.objects.recrutare_cv_select_hr": "b6f445862a8f1f12e20f0bf04fef919b",
+        "storage.objects.sedinte_pdf_insert": "85d9ef466b6b52e15d25c5672979f576",
+        "storage.objects.sedinte_pdf_select": "4779537c5f62676f987df37ed117e541",
+        "storage.objects.sedinte_pdf_update": "befc0ad1ccced466ad091f5f5203468f",
+        "storage.objects.service_fise_doc_delete": "153d56a69df3015e289b10e342078e55",
+        "storage.objects.service_fise_doc_insert": "498ebe3d33e8ca0f3835e286e1124e63",
+        "storage.objects.service_fise_doc_select": "215c1fc5f9a2ae499d3c3b6754f21eee",
+        "storage.objects.service_fise_doc_update": "91356edbbcb368f696ee5f6f829ad769",
+        "storage.objects.templates_delete": "c2177d3e36091cd59d5659552b999569",
+        "storage.objects.templates_insert": "21f2ecfd93c0a3a51da84b920b3e27c2",
+        "storage.objects.templates_select": "b402036773324d2c777eda07501a0a56",
+        "storage.objects.templates_update": "7518c54632862144b956bc575ae83fe1",
+        "storage.objects.tichete_storage_delete_own": "e9338ba592143158313cea0322021914",
+        "storage.objects.tichete_storage_insert": "d40e5f14f909107e4e93d8e9d02688d4",
+        "storage.objects.tichete_storage_select": "1a6c8c0c6089b50bbf5ad6cf072d3899",
+        "storage.objects.tts_audio_inchis": "08a994c4a7d396a2d95e17ef265f70b4",
+        "storage.objects.upa docs authenticated all": "6c01841a6c4ee32bc00013b19d4bed53",
+        "storage.objects.whatsapp_bonuri_delete_owner_only": "89597ea8d4e2155fc6dc9cd873ed5cae",
+        "storage.objects.whatsapp_bonuri_insert_owner_or_admin_logistica": "8fac387cb6b8957f722fb61bfb67429a",
+        "storage.objects.whatsapp_bonuri_select_owner_or_admin_logistica": "a975ce8e7ded29d03b0166f1af977325",
+        "storage.objects.whatsapp_bonuri_update_owner_or_admin_logistica": "52f4fc58ef0dfec338ec2f75a08d52e1"
+      },
+      "relatii": {
+        "storage.buckets": "6e2ace025a5c2acef6f1e4c1f4d7e9de",
+        "storage.objects": "6e2ace025a5c2acef6f1e4c1f4d7e9de"
+      },
+      "triggere": {
+        "public.profiles.prevent_role_escalation_trigger": "fdf263e29e9c3ec0bf0a00fb53a410b6",
+        "public.profiles.trg_profiles_campuri_owner_only": "0926bbf3c21b67a0eee65dea64992a08"
+      }
+    }
+  '::jsonb;
+  IF v_baza IS DISTINCT FROM v_baza_rev THEN
+    SELECT string_agg(format('%s/%s: %s', d.k, d.cheie, d.stare), '; ' ORDER BY d.k, d.cheie) INTO v_x
+      FROM (SELECT c.k, e.cheie, CASE WHEN NOT coalesce(v_baza -> c.k, '{}') ? e.cheie THEN 'lipsește'
+                                      WHEN NOT coalesce(v_baza_rev -> c.k, '{}') ? e.cheie THEN 'în plus' ELSE 'diferă' END AS stare
+              FROM unnest(ARRAY['relatii', 'politici', 'triggere', 'functii']) c(k),
+                   LATERAL (SELECT jsonb_object_keys(coalesce(v_baza -> c.k, '{}')) UNION SELECT jsonb_object_keys(coalesce(v_baza_rev -> c.k, '{}'))) e(cheie)
+             WHERE (v_baza -> c.k -> e.cheie) IS DISTINCT FROM (v_baza_rev -> c.k -> e.cheie)) d;
+    RAISE EXCEPTION 'Precondiție 0l: baseline-ul Storage / profiles diferă de amprenta pre-E3 revizuită (captură nouă + review): %', coalesce(v_x, '?');
   END IF;
   -- porțile E2a complete și amprenta de revenire consistentă înainte (o rulăm o dată, aici: ~8,5 s pe prod)
   v_lipsa := public.fn_izo_porti_lipsa();
@@ -236,7 +404,8 @@ BEGIN
     item          text CHECK (item IS NULL OR char_length(item) <= 60),
     unghi_doc     numeric(4,1) CHECK (unghi_doc IS NULL OR (unghi_doc > 0 AND unghi_doc <= 90)),
     unghi_masurat numeric(4,1) CHECK (unghi_masurat IS NULL OR (unghi_masurat > 0 AND unghi_masurat <= 90)),
-    cantitate     integer CHECK (cantitate IS NULL OR cantitate > 0),
+    -- r5f (#825 NO-GO): 1 rând = 1 bucată (confirmarea naște exact una pe rând) → cantitatea e goală (= 1) sau 1
+    cantitate     integer CONSTRAINT izo_doc_rand_o_bucata CHECK (cantitate IS NULL OR cantitate = 1),
     pachet_nr     text CHECK (pachet_nr IS NULL OR char_length(pachet_nr) <= 40),
     dimensiuni_cm text CHECK (dimensiuni_cm IS NULL OR char_length(dimensiuni_cm) <= 60),
     net_kg        numeric(10,1) CHECK (net_kg IS NULL OR net_kg >= 0),
@@ -346,7 +515,9 @@ BEGIN
     RETURN public.fn_izo_doc_autorizare_lock(d.proiect_id, d.depozit_id);
   END $f$;
 
-  -- hash-ul canonic e3-doc-v1 (§6): conținutul complet (antet, rânduri după nr_crt, manifestul după cale), fără versiune
+  -- hash-ul canonic e3-doc-v1 (§6): conținutul complet (antet, rânduri după nr_crt, manifestul după cale), fără versiune.
+  -- r5f (#825 NO-GO): motiv_inlocuire intră în antet (câmp auditabil al înlocuirii); eticheta rămâne v1 — niciun hash v1
+  -- nu a fost emis / persistat înainte (20261103b neaplicată nicăieri cu documente)
   CREATE FUNCTION public.fn_izo_doc_hash(p_doc bigint) RETURNS text
     LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
     SELECT 'e3-doc-v1:' || encode(sha256(convert_to(jsonb_build_object(
@@ -354,7 +525,7 @@ BEGIN
       'antet', jsonb_build_object('proiect_id', d.proiect_id, 'depozit_id', d.depozit_id, 'sablon', d.sablon,
         'furnizor', d.furnizor, 'furnizor_canon', d.furnizor_canon, 'furnizor_cif', d.furnizor_cif, 'nr_document', d.nr_document,
         'nr_document_canon', d.nr_document_canon, 'data_document', d.data_document, 'inlocuieste_document_id', d.inlocuieste_document_id,
-        'observatii', d.observatii),
+        'motiv_inlocuire', d.motiv_inlocuire, 'observatii', d.observatii),
       'aviz', jsonb_build_object('cumparator', d.cumparator, 'transport_nr', d.transport_nr, 'nume_proiect', d.nume_proiect, 'lot', d.lot,
         'loc_livrare', d.loc_livrare, 'data_incarcare', d.data_incarcare, 'data_descarcare', d.data_descarcare, 'nr_camion', d.nr_camion),
       'lista', jsonb_build_object('factura', d.factura, 'importator', d.importator, 'destinatar', d.destinatar,
@@ -388,9 +559,10 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.izo_documente_intrare_randuri WHERE document_id = p_doc) THEN
       b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'fara_randuri', 'mesaj', 'documentul nu are rânduri');
     END IF;
-    -- totalurile, cu rândurile refuzate incluse, pe valorile de DOCUMENT
+    -- totalurile, cu rândurile refuzate incluse, pe valorile de DOCUMENT; r5f (#825 NO-GO): bucățile = numărul rândurilor
+    -- (1 rând = 1 bucată, izo_doc_rand_o_bucata), același invariant ca nașterea din confirmare
     SELECT round(coalesce(sum(lungime_doc_mm), 0) / 1000.0, 3) AS m, round(coalesce(sum(greutate_kg), 0), 1) AS kg,
-           coalesce(sum(coalesce(cantitate, 1)), 0) AS buc, count(DISTINCT pachet_nr) AS pach,
+           count(*) AS buc, count(DISTINCT pachet_nr) AS pach,
            round(coalesce(sum(net_kg), 0), 1) AS net, round(coalesce(sum(brut_kg), 0), 1) AS brut
       INTO v_t FROM public.izo_documente_intrare_randuri WHERE document_id = p_doc;
     IF v_teava THEN
@@ -402,7 +574,7 @@ BEGIN
       END IF;
     ELSE
       IF d.total_bucati IS NULL OR d.total_bucati <> v_t.buc THEN
-        b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_bucati', 'mesaj', format('total bucăți pe listă %s ≠ suma rândurilor %s', d.total_bucati, v_t.buc));
+        b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_bucati', 'mesaj', format('total bucăți pe listă %s ≠ numărul rândurilor %s', d.total_bucati, v_t.buc));
       END IF;
       IF d.total_pachete IS NOT NULL AND d.total_pachete <> v_t.pach THEN
         b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_pachete', 'mesaj', format('total pachete pe listă %s ≠ pachetele rândurilor %s', d.total_pachete, v_t.pach));
@@ -414,14 +586,19 @@ BEGIN
         b := b || jsonb_build_object('nr_crt', NULL, 'cod', 'total_brut_kg', 'mesaj', format('total brut pe listă %s ≠ suma rândurilor %s', d.total_brut_kg, v_t.brut));
       END IF;
     END IF;
+    -- r5f (#825 NO-GO): dublura = cheia indexului din registru — țeava pe serie (ux_magbuc_izo_radacina), curba pe serie + șarjă +
+    -- unghiul efectiv (măsurat ?? document, cel scris în unghi_curba; ux_magbuc_izo_curba); cod_bucata e mereu 'AB' în E3
     FOR r IN SELECT x.*, public.fn_izo_canon_serie(x.serie) AS canon,
-                    count(*) OVER (PARTITION BY public.fn_izo_canon_serie(x.serie), CASE WHEN v_teava THEN NULL ELSE x.sarja END) AS dubluri
+                    count(*) OVER (PARTITION BY public.fn_izo_canon_serie(x.serie), CASE WHEN v_teava THEN NULL ELSE x.sarja END,
+                                                CASE WHEN v_teava THEN NULL ELSE coalesce(x.unghi_masurat, x.unghi_doc) END) AS dubluri
                FROM public.izo_documente_intrare_randuri x WHERE x.document_id = p_doc ORDER BY x.nr_crt LOOP
       IF r.canon IS NULL OR r.canon = '' THEN
         b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'serie_invalida', 'mesaj', 'seria e goală după canonizare');
       END IF;
       IF r.dubluri > 1 THEN
-        b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'serie_dublura', 'mesaj', format('seria %s apare de mai multe ori în document', r.serie));
+        b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'serie_dublura', 'mesaj', CASE WHEN v_teava
+               THEN format('seria %s apare de mai multe ori în document', r.serie)
+               ELSE format('curba %s / %s la %s° apare de mai multe ori în document', r.serie, r.sarja, coalesce(r.unghi_masurat, r.unghi_doc)) END);
       END IF;
       IF r.decizie <> 'primit' AND (r.motiv IS NULL OR char_length(btrim(r.motiv)) < 3) THEN
         b := b || jsonb_build_object('nr_crt', r.nr_crt, 'cod', 'motiv_lipsa', 'mesaj', 'motivul e obligatoriu la refuz / neconformitate');
@@ -943,9 +1120,12 @@ BEGIN
       c_scheme_platforma constant text[] := ARRAY['auth','storage','realtime','extensions','graphql','graphql_public','vault','net',
                                                   'supabase_functions','supabase_migrations','pgbouncer','pgsodium','pgsodium_masks','cron'];
       -- r5d (20261103b): aceeași semantică, evaluare SEMI-NAIVĂ — fiecare element nou al închiderii se caută o singură dată,
-      -- cu o singură expresie per iterație (alternanța numelor din frontieră); corpurile se citesc o dată
+      -- cu alternanța numelor din frontieră (r5f: pe bucăți mărginite, nu o singură expresie); corpurile se citesc o dată
       k_oid oid[]; k_corp text[]; k_cale text[]; f_rel oid[]; f_fn oid[]; f_mut oid[]; n_rel oid[]; n_fn oid[]; n_mut oid[];
-      p_cal text; p_neq text; p_plat jsonb;
+      -- r5f (#825 NO-GO): tiparele frontierei, pe bucăți: a_x = alternanța (≤ ~4000 de caractere), a_s = schema de platformă
+      -- căreia i se aplică (NULL = oricărei funcții)
+      a_s text[]; a_x text[];
+      k_i int; k_n int; k_s text; k_s2 text; k_adanc oid[] := '{}';
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -967,23 +1147,60 @@ BEGIN
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND p.prolang NOT IN (12, 13)
          AND NOT (n.nspname = 'public' AND p.proname LIKE 'fn\_izo\_%');
+      -- r5f (#825 NO-GO): un comentariu între schemă și nume („storage/**/.f()”, „storage -- x⏎.f()”) ascunde forma calificată —
+      -- contează la schemele platformei, unde necalificatul cere calea. Corpului i se adaugă o copie fără comentarii (blocurile
+      -- imbricate din interior spre exterior, până la punct fix; apoi „--” până la capăt de rând). Copia doar ADAUGĂ potriviri
+      -- (originalul rămâne): un „/*” sau „--” dintr-un șir taie din copie, nu din original. Cel mult 20 de niveluri (fiecare nivel
+      -- = o trecere peste tot corpul — fără plafon, mii de comentarii imbricate ar ține poarta minute întregi): mai adânc → corpul
+      -- nu se poate citi sigur, intră în sămânță ca SQL-ul dinamic (k_adanc, mai jos)
+      FOR k_i IN 1 .. cardinality(k_corp) LOOP
+        k_s := k_corp[k_i]; k_n := 0;
+        LOOP
+          k_s2 := regexp_replace(k_s, '/\*([^*/]|\*+[^*/]|/+[^*/])*\*+/', ' ', 'g');
+          EXIT WHEN k_s2 = k_s;
+          k_s := k_s2; k_n := k_n + 1;
+          IF k_n >= 20 THEN k_adanc := k_adanc || k_oid[k_i]; EXIT; END IF;
+        END LOOP;
+        k_s := regexp_replace(k_s, '--[^\n]*', ' ', 'g');
+        IF k_s <> k_corp[k_i] THEN k_corp[k_i] := k_corp[k_i] || ' ' || k_s; END IF;
+      END LOOP;
+      -- r5f (#825 NO-GO): în sămânță și funcțiile care pot citi un tabel FĂRĂ să-i scrie numele și fără EXECUTE — identificatori
+      -- U&"…" (escape-uri Unicode), SQL dat ca text (query/table/schema/database_to_xml, ts_stat / ts_rewrite, crosstab /
+      -- connectby, dblink), fișierele / paginile tabelelor (pg_read_[binary_]file, lo_import, get_raw_page); ca SQL-ul
+      -- dinamic: un DEFINER care le conține (sau le cheamă) e refuzat. Mai strict decât E2a, care le lasă verzi. Tot aici:
+      -- corpurile cu comentarii imbricate peste plafon (k_adanc)
+      c_fn := c_fn || ARRAY(SELECT k.oid FROM unnest(k_oid, k_corp) k(oid, corp) WHERE k.oid <> ALL (c_fn)
+                              AND (k.oid = ANY (k_adanc)
+                                   OR k.corp ~* ('u&"|\m(query|table|schema|database)_to_xml|\mts_(stat|rewrite)\M|\m(crosstab|connectby|dblink)'
+                                                 || '|\mpg_read_(binary_)?file\M|\mlo_import\M|\mget_raw_page\M')));
       -- mutatorii de cale (r15): sămânța = corp cu set_config / search_path; propagați până la punct fix
       SELECT coalesce(array_agg(k.oid), '{}') INTO c_mut FROM unnest(k_oid, k_corp) k(oid, corp) WHERE k.corp ~* '(set_config|search_path)';
       f_mut := c_mut; v_iter := 0;
       WHILE cardinality(f_mut) > 0 AND v_iter < 100 LOOP
         v_iter := v_iter + 1;
-        SELECT c_st || '(' || string_agg(n2.nspname || '"?[[:space:]]*\.[[:space:]]*"?' || regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'), '|') || ')' || c_dr,
-               c_st || '(' || string_agg(regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'), '|') FILTER (WHERE n2.nspname <> ALL (c_scheme_platforma)) || ')' || c_dr
-          INTO p_cal, p_neq
-          FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_mut);
-        SELECT coalesce(jsonb_object_agg(z.s, c_st || '(' || z.nume || ')' || c_dr), '{}') INTO p_plat
-          FROM (SELECT n2.nspname::text s, string_agg(regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'), '|') nume
-                  FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace
-                 WHERE q.oid = ANY (f_mut) AND n2.nspname = ANY (c_scheme_platforma) GROUP BY 1) z;
-        n_mut := ARRAY(SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale) WHERE k.oid <> ALL (c_mut)
-                         AND (k.corp ~* p_cal OR (p_neq IS NOT NULL AND k.corp ~* p_neq)
-                              OR EXISTS (SELECT 1 FROM jsonb_each_text(p_plat) e
-                                          WHERE (k.cale IS NULL OR e.key = ANY (string_to_array(k.cale, ','))) AND k.corp ~* e.value)));
+        -- r5f (#825 NO-GO): tiparele pe BUCĂȚI de ~4000 de caractere, nu o singură alternanță: cu ~1000 de nume lungi în
+        -- frontieră, motorul de regex refuză („invalid memory alloc request size” / „regular expression is too complex”) —
+        -- poarta ar da eroare unde E2a răspunde (testul „frontieră largă”), iar compilarea crește pătratic. Fiecare nume dă două
+        -- alternative: calificat (s = NULL, oricui) și necalificat (s = NULL în afara platformei; s = schema platformei: doar
+        -- dacă e în calea fixată a funcției sau calea e nefixată).
+        -- r5f (#825 NO-GO, P1): și SCHEMA se escapează (nsx), ca numele: o schemă construită („x)(?=x)y(x”) ar închide grupul
+        -- comun și ar face bucata (deci toate numele ei) imposibil de potrivit — verde fals; nsp (brut) rămâne doar pentru s
+        WITH t AS (SELECT n2.nspname::text nsp, regexp_replace(n2.nspname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nsx,
+                          regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
+                     FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_mut)),
+             y AS (SELECT NULL::text s, t.nsx || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume f FROM t
+                   UNION ALL SELECT CASE WHEN t.nsp = ANY (c_scheme_platforma) THEN t.nsp END, t.nume FROM t)
+        SELECT coalesce(array_agg(z.s), '{}'), coalesce(array_agg(c_st || '(' || z.alt || ')' || c_dr), '{}') INTO a_s, a_x
+          FROM (SELECT y2.s, string_agg(y2.f, '|') alt
+                  FROM (SELECT y.s, y.f, (sum(length(y.f) + 1) OVER (PARTITION BY y.s ORDER BY y.f ROWS UNBOUNDED PRECEDING) - 1) / 4000 b FROM y) y2
+                 GROUP BY y2.s, y2.b) z;
+        -- bucata în exterior (LATERAL … OFFSET 0: nu se aplatizează), corpurile în interior — fiecare tipar se compilează o dată;
+        -- CASE fixează ordinea: întâi filtrele ieftine, regex-ul ultimul (planificatorul l-ar evalua primul)
+        n_mut := ARRAY(SELECT DISTINCT m.oid FROM unnest(a_s, a_x) p(s, x)
+                         CROSS JOIN LATERAL (SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale)
+                                              WHERE CASE WHEN k.oid = ANY (c_mut) THEN false
+                                                         WHEN p.s IS NULL OR k.cale IS NULL OR p.s = ANY (string_to_array(k.cale, ',')) THEN k.corp ~* p.x
+                                                         ELSE false END OFFSET 0) m);
         c_mut := c_mut || n_mut; f_mut := n_mut;
       END LOOP;
       IF v_iter >= 100 THEN v := array_append(v, 'propagarea mutatorilor de cale nu converge (citire nerevizuită)'); END IF;
@@ -998,30 +1215,46 @@ BEGIN
                                OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (f_fn)))
                           AND rw.ev_class <> ALL (c_rel));
         c_rel := c_rel || n_rel; f_rel := f_rel || n_rel;
-        p_cal := NULL; p_neq := NULL; p_plat := '{}';
-        WITH t AS (SELECT n2.nspname::text nsp, regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
+        -- r5f (#825 NO-GO): aceleași bucăți de tipare ca la mutatori, cu schema escapată (P1; vezi mai sus)
+        WITH t AS (SELECT n2.nspname::text nsp, regexp_replace(n2.nspname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nsx,
+                          regexp_replace(c.relname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') nume
                      FROM pg_class c JOIN pg_namespace n2 ON n2.oid = c.relnamespace WHERE c.oid = ANY (f_rel)
                    UNION
-                   SELECT n2.nspname::text, regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
-                     FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_fn))
-        SELECT c_st || '(' || string_agg(t.nsp || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume, '|') || ')' || c_dr,
-               c_st || '(' || string_agg(t.nume, '|') FILTER (WHERE t.nsp <> ALL (c_scheme_platforma)) || ')' || c_dr,
-               (SELECT coalesce(jsonb_object_agg(z.s, c_st || '(' || z.nn || ')' || c_dr), '{}')
-                  FROM (SELECT t2.nsp s, string_agg(t2.nume, '|') nn FROM t t2 WHERE t2.nsp = ANY (c_scheme_platforma) GROUP BY 1) z)
-          INTO p_cal, p_neq, p_plat FROM t;
-        n_fn := ARRAY(SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale) WHERE k.oid <> ALL (c_fn)
-                        AND ((p_cal IS NOT NULL AND k.corp ~* p_cal) OR (p_neq IS NOT NULL AND k.corp ~* p_neq)
-                             -- schemele platformei: necalificat doar dacă schema e în calea funcției; calea e necunoscută dacă nu e
-                             -- fixată SAU dacă funcția e mutator (r15)
-                             OR EXISTS (SELECT 1 FROM jsonb_each_text(coalesce(p_plat, '{}')) e
-                                         WHERE (k.oid = ANY (c_mut) OR k.cale IS NULL OR e.key = ANY (string_to_array(k.cale, ','))) AND k.corp ~* e.value)
-                             OR EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = k.oid
-                                           AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (f_rel))
-                                                OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (f_fn))))));
+                   SELECT n2.nspname::text, regexp_replace(n2.nspname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g'),
+                          regexp_replace(q.proname, '([.^$*+?()\[\]{}|\\])', '\\\1', 'g')
+                     FROM pg_proc q JOIN pg_namespace n2 ON n2.oid = q.pronamespace WHERE q.oid = ANY (f_fn)),
+             y AS (SELECT NULL::text s, t.nsx || '"?[[:space:]]*\.[[:space:]]*"?' || t.nume f FROM t
+                   UNION ALL SELECT CASE WHEN t.nsp = ANY (c_scheme_platforma) THEN t.nsp END, t.nume FROM t)
+        SELECT coalesce(array_agg(z.s), '{}'), coalesce(array_agg(c_st || '(' || z.alt || ')' || c_dr), '{}') INTO a_s, a_x
+          FROM (SELECT y2.s, string_agg(y2.f, '|') alt
+                  FROM (SELECT y.s, y.f, (sum(length(y.f) + 1) OVER (PARTITION BY y.s ORDER BY y.f ROWS UNBOUNDED PRECEDING) - 1) / 4000 b FROM y) y2
+                 GROUP BY y2.s, y2.b) z;
+        -- schemele platformei: necalificat doar dacă schema e în calea funcției; calea e necunoscută dacă nu e fixată SAU dacă
+        -- funcția e mutator (r15)
+        n_fn := ARRAY(SELECT DISTINCT m.oid FROM unnest(a_s, a_x) p(s, x)
+                        CROSS JOIN LATERAL (SELECT k.oid FROM unnest(k_oid, k_corp, k_cale) k(oid, corp, cale)
+                                             WHERE CASE WHEN k.oid = ANY (c_fn) THEN false
+                                                        WHEN p.s IS NULL OR k.oid = ANY (c_mut) OR k.cale IS NULL OR p.s = ANY (string_to_array(k.cale, ','))
+                                                          THEN k.corp ~* p.x
+                                                        ELSE false END OFFSET 0) m);
+        -- sau depind de ceva din frontieră în catalog (BEGIN ATOMIC)
+        n_fn := n_fn || ARRAY(SELECT k.oid FROM unnest(k_oid) k(oid) WHERE k.oid <> ALL (c_fn) AND k.oid <> ALL (n_fn)
+                                AND EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = k.oid
+                                               AND ((d.refclassid = 'pg_class'::regclass AND d.refobjid = ANY (f_rel))
+                                                    OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (f_fn)))));
         c_fn := c_fn || n_fn;
         f_rel := n_rel; f_fn := n_fn;
       END LOOP;
       IF v_iter >= 100 THEN v := array_append(v, 'închiderea citirilor nu converge (citire nerevizuită)'); END IF;
+      -- r5f (#825 NO-GO, P1): un element al închiderii (sau mutator) al cărui nume nu se poate căuta sigur în corpuri → refuz:
+      -- schemă cu caractere speciale de regex (E2a dă eroare pe ea, deci rămâne închisă — poarta nouă refuză la fel, nu dă
+      -- verde) sau ghilimele în schemă / nume (în corp apar dublate, „"x""y"” — nicio expresie nu le găsește; în E2a: verde fals)
+      IF EXISTS (SELECT 1 FROM (SELECT c.relname::text nume, c.relnamespace ns FROM pg_class c WHERE c.oid = ANY (c_rel)
+                                UNION ALL SELECT q.proname::text, q.pronamespace FROM pg_proc q WHERE q.oid = ANY (c_fn || c_mut)) o
+                  JOIN pg_namespace n2 ON n2.oid = o.ns
+                 WHERE n2.nspname ~ '[.^$*+?()\[\]{}|\\"]' OR o.nume ~ '"') THEN
+        v := array_append(v, 'un nume din închiderea citirilor nu se poate căuta sigur în corpuri (schemă cu caractere speciale de regex / nume cu ghilimele) (citire nerevizuită)');
+      END IF;
       IF EXISTS (SELECT 1 FROM pg_class vw WHERE vw.oid = ANY (c_rel)   -- alias ≠ variabila v
                   AND (vw.relkind = 'm' OR (vw.relkind = 'v' AND NOT coalesce(vw.reloptions && ARRAY['security_invoker=true','security_invoker=on','security_invoker=1'], false)))) THEN
         v := array_append(v, 'un view / view materializat citește registrul fără security_invoker (citire nerevizuită)');
@@ -1165,11 +1398,16 @@ BEGIN
                                 coalesce(pg_get_expr(p.polqual, p.polrelid), ''), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')),
                          ',' ORDER BY p.polrelid::regclass::text, p.polname)
          FROM pg_policy p WHERE p.polrelid IN ('public.izo_documente_intrare'::regclass, 'public.izo_documente_intrare_randuri'::regclass,
-              'public.izo_documente_scanuri'::regclass, 'storage.objects'::regclass)
-           -- pe storage.objects: TOATE politicile, fără filtru textual (r5e, Jak 3) — orice politică nouă / schimbată pe Storage
-           -- schimbă ștampila, deci o politică permisivă cu alt nume pe bucket-ul izo-documente nu poate scăpa
-           ),
-      (SELECT string_agg(format('%s.%s:%s:%s:%s', g.tgrelid::regclass, g.tgname, g.tgfoid::regprocedure, g.tgtype, g.tgenabled), ',' ORDER BY g.tgname)
+              'public.izo_documente_scanuri'::regclass)
+            -- r5f (#825 NO-GO, P1-3; coordonat cu chat 21.10): pe storage.objects / storage.buckets doar politicile E3 (izo_doc_*),
+            -- exact. Stratul RESTRICTIV face ca nicio politică a altui modul (permisivă sau restrictivă, cu orice nume) să nu poată
+            -- deschide izo-documente, deci politicile Storage ale altor module (ex. 20261103c, ai-documente-inbox) NU intră în
+            -- ștampilă și nu o înroșesc. Ce poate slăbi stratul — RLS / FORCE / owner / ACL pe cele două tabele — e mai jos.
+            OR (p.polrelid IN ('storage.objects'::regclass, 'storage.buckets'::regclass) AND p.polname LIKE 'izo\_doc\_%')),
+      -- r5f (#825 NO-GO, P1-4): definiția COMPLETĂ (pg_get_triggerdef: momentul, evenimentele, UPDATE OF, WHEN, argumentele,
+      -- funcția) + starea; un trigger recreat cu WHEN / UPDATE OF schimbă ștampila
+      (SELECT string_agg(format('%s.%s:%s:%s', g.tgrelid::regclass, g.tgname, pg_get_triggerdef(g.oid, false), g.tgenabled), ','
+                         ORDER BY g.tgrelid::regclass::text, g.tgname)
          FROM pg_trigger g WHERE NOT g.tgisinternal AND g.tgrelid IN ('public.izo_documente_intrare'::regclass,
               'public.izo_documente_intrare_randuri'::regclass, 'public.izo_documente_scanuri'::regclass, 'public.profiles'::regclass)
               AND (g.tgrelid <> 'public.profiles'::regclass OR g.tgname IN ('prevent_role_escalation_trigger', 'trg_profiles_campuri_owner_only'))),
@@ -1183,7 +1421,12 @@ BEGIN
                                    FROM pg_auth_members m WHERE m.roleid = r.oid)), ',' ORDER BY r.rolname)
          FROM pg_roles r WHERE r.rolname IN ('izo_doc_editor', 'izo_receptie_writer')),
       (SELECT string_agg(format('%s:%s:%s:%s', b.id, b.public, b.file_size_limit, coalesce(b.allowed_mime_types::text, '')), ',')
-         FROM storage.buckets b WHERE b.id = 'izo-documente')))
+         FROM storage.buckets b WHERE b.id = 'izo-documente'),
+      -- r5f (#825 NO-GO, P1-3): storage.objects / storage.buckets — owner, RLS, FORCE, ACL (un DISABLE RLS / GRANT nou schimbă ștampila)
+      (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', n.nspname, c.relname, pg_get_userbyid(c.relowner), c.relrowsecurity, c.relforcerowsecurity,
+                                coalesce(c.relacl::text, '')), ',' ORDER BY c.relname)
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE (n.nspname, c.relname) IN (('storage', 'objects'), ('storage', 'buckets')))))
   $f$;
 
   CREATE FUNCTION public.fn_izo_porti_e3_lipsa() RETURNS text[]
@@ -1192,7 +1435,24 @@ BEGIN
   BEGIN
     IF public.fn_izo_porti_e3_definitii() IS DISTINCT FROM
        substring(obj_description('public.fn_izo_porti_e3_definitii()'::regprocedure, 'pg_proc') FROM '^porti_e3=([0-9a-f]{32})$') THEN
-      v := array_append(v, 'definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket) diferă de amprenta de la migrare');
+      v := array_append(v, 'definițiile E3 (indexuri / ACL pe tabele și coloane / politici / trigger-e / roluri / bucket / storage.objects / storage.buckets) diferă de amprenta de la migrare');
+    END IF;
+    -- r5f (#825 NO-GO, P1-3): Storage, cerut explicit (nu doar prin ștampilă): RLS activ pe storage.objects, bucket-ul privat,
+    -- cele 5 politici RESTRICTIVE ale bucket-ului la locul lor
+    IF (SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'storage' AND c.relname = 'objects') IS NOT TRUE
+       OR NOT EXISTS (SELECT 1 FROM storage.buckets b WHERE b.id = 'izo-documente' AND b.public IS FALSE)
+       OR (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'storage' AND c.relname = 'objects' AND NOT p.polpermissive
+              AND p.polname IN ('izo_doc_scan_r_toti', 'izo_doc_scan_r_sel', 'izo_doc_scan_r_ins', 'izo_doc_scan_r_del', 'izo_doc_scan_r_upd')) <> 5 THEN
+      v := array_append(v, 'Storage: RLS pe storage.objects / bucket-ul izo-documente privat / politicile RESTRICTIVE izo_doc_scan_r_*');
+    END IF;
+    -- r5f (#825 NO-GO, a doua ușă): rândul bucket-ului, cerut explicit — RLS activ pe storage.buckets și cele 3 politici
+    -- RESTRICTIVE izo_doc_bucket_r_* (fără INSERT / UPDATE / DELETE pe rândul izo-documente) la locul lor
+    IF (SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'storage' AND c.relname = 'buckets') IS NOT TRUE
+       OR (SELECT count(*) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'storage' AND c.relname = 'buckets' AND NOT p.polpermissive
+              AND p.polname IN ('izo_doc_bucket_r_ins', 'izo_doc_bucket_r_upd', 'izo_doc_bucket_r_del')) <> 3 THEN
+      v := array_append(v, 'Storage: RLS pe storage.buckets / politicile RESTRICTIVE izo_doc_bucket_r_* pe rândul bucket-ului izo-documente');
     END IF;
     -- rolurile: fără LOGIN / SUPERUSER / BYPASSRLS / INHERIT / CREATEROLE / CREATEDB; membru doar postgres (SET, fără INHERIT);
     -- (PG16+: rândul ADMIN automat al creatorului nesuperuser e acceptat, ca la E2a); rolurile nu sunt membre în alt rol
@@ -1256,6 +1516,12 @@ BEGIN
     LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   DECLARE v_uid uuid; v_lipsa text[];
   BEGIN
+    -- r5f (#825 NO-GO): READ COMMITTED impus, nu presupus — mecanismul E2a (fn_izo_lock_partajat / garda pe bucăți), aici,
+    -- înaintea oricărui lock: sub REPEATABLE READ / SERIALIZABLE poarta de după lock-ul „schemă” ar citi cataloagele pe
+    -- snapshot-ul de dinainte de lock. Acoperă salveaza / verifica / anuleaza_draft / confirma / pv (anuleaza o are separat)
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'izo E3: intrările E3 cer READ COMMITTED (acum %)', current_setting('transaction_isolation') USING ERRCODE = '25001';
+    END IF;
     PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
     IF session_user IS DISTINCT FROM 'authenticator' OR public.fn_izo_jwt_rol() IS DISTINCT FROM 'authenticated' THEN
       RAISE EXCEPTION 'izo E3: intrările se cheamă doar din API, ca utilizator autentificat' USING ERRCODE = '42501';
@@ -1294,6 +1560,11 @@ BEGIN
       IF jsonb_typeof(v_x) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'izo E3: un rând nu e obiect' USING ERRCODE = '22023'; END IF;
       SELECT k INTO v_k FROM jsonb_object_keys(v_x) k WHERE k <> ALL (c_rand) LIMIT 1;
       IF v_k IS NOT NULL THEN RAISE EXCEPTION 'izo E3: cheie necunoscută în rând: %', v_k USING ERRCODE = '22023'; END IF;
+      -- r5f (#825 NO-GO): 1 rând = 1 bucată — confirmarea naște exact una pe rând; cantitatea e goală (= 1) sau 1 (și CHECK pe tabel)
+      IF v_x ->> 'cantitate' IS NOT NULL AND (v_x ->> 'cantitate')::numeric IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'izo E3: rândul %: cantitatea e %; un rând = o bucată (cantitate 1 sau goală) — fiecare bucată pe rândul ei, cu seria ei',
+          v_x ->> 'nr_crt', v_x ->> 'cantitate' USING ERRCODE = '23514';
+      END IF;
     END LOOP;
     IF p_scanuri IS NOT NULL THEN
       FOR v_x IN SELECT x FROM jsonb_array_elements(p_scanuri) x LOOP
@@ -1313,6 +1584,16 @@ BEGIN
       END IF;
       IF NOT public.fn_izo_loc_valid((p_antet ->> 'proiect_id')::bigint, (p_antet ->> 'depozit_id')::integer, NULL) THEN
         RAISE EXCEPTION 'izo E3: depozitul nu e activ sau nu e pe site-ul proiectului' USING ERRCODE = '23514';
+      END IF;
+      -- r5f (#825 NO-GO): ținta înlocuirii se verifică și se autorizează ÎNAINTEA INSERT-ului — altfel FK-ul (23503) / UNIQUE-ul
+      -- (23505) de pe inlocuieste_document_id ar spune dacă un document inaccesibil există sau e deja înlocuit (oracle între
+      -- proiecte). „Nu există” și „există, dar nu e al tău” dau același mesaj; UNIQUE-ul rămâne arbitrul, după autorizare
+      IF p_antet ->> 'inlocuieste_document_id' IS NOT NULL THEN
+        SELECT t.proiect_id, t.depozit_id INTO v_tp, v_td FROM public.izo_documente_intrare t
+         WHERE t.id = (p_antet ->> 'inlocuieste_document_id')::bigint AND t.stare = 'anulat' FOR SHARE;
+        IF NOT FOUND OR NOT public.fn_izo_doc_autorizare_lock(v_tp, v_td) THEN
+          RAISE EXCEPTION 'izo E3: documentul înlocuit nu există, nu e anulat sau nu ai acces la el' USING ERRCODE = '23514';
+        END IF;
       END IF;
       INSERT INTO public.izo_documente_intrare (proiect_id, depozit_id, sablon, inlocuieste_document_id, motiv_inlocuire, creat_de, furnizor, furnizor_cif, nr_document, data_document, cumparator, transport_nr, nume_proiect, lot, loc_livrare, data_incarcare, data_descarcare, nr_camion, factura, importator, destinatar, referinta_client, referinta_furnizor, placa_camion_container, total_m, total_kg, total_bucati, total_pachete, total_net_kg, total_brut_kg, observatii)
       VALUES ((p_antet ->> 'proiect_id')::bigint, (p_antet ->> 'depozit_id')::integer, p_antet ->> 'sablon',
@@ -1458,10 +1739,11 @@ BEGIN
       RAISE EXCEPTION 'izo E3: documentul e deja confirmat cu alt conținut' USING ERRCODE = '23505';
     END IF;
     IF d.stare <> 'draft' THEN RAISE EXCEPTION 'izo E3: documentul e %', d.stare USING ERRCODE = '42501'; END IF;
-    -- 3–4. locurile, tabelele, advisory-ul partajat pe proiect
+    -- 3–4. locurile, tabelele, advisory-ul partajat pe proiect (r5f, #825 NO-GO: semnătura explicită VARIADIC bigint[] = cea din
+    -- GRANT; un overload scalar fn_izo_lock_partajat(bigint) nu mai poate umbri apelul)
     PERFORM public.fn_izo_blocheaza_locuri(d.proiect_id, ARRAY[d.depozit_id], '{}'::bigint[]);
     PERFORM public.fn_izo_blocheaza_tabele();
-    PERFORM public.fn_izo_lock_partajat(d.proiect_id);
+    PERFORM public.fn_izo_lock_partajat(VARIADIC ARRAY[d.proiect_id]);
     -- 6. revalidarea pe starea comisă
     IF d.versiune <> p_versiune OR public.fn_izo_doc_hash(d.id) IS DISTINCT FROM p_hash THEN
       RAISE EXCEPTION 'izo E3: documentul s-a schimbat de la verificare (versiunea %, trimisă %) — verifică din nou', d.versiune, p_versiune
@@ -1513,7 +1795,10 @@ BEGIN
     -- reconcilierea, înainte de RETURN
     SELECT count(*) INTO v_n FROM public.magazie_bucati_miscari WHERE eveniment_id = v_ev AND rol = 'nascut';
     SELECT count(*) INTO v_m FROM public.izo_documente_intrare_randuri WHERE document_id = d.id AND decizie IN ('primit', 'primit_neconform');
+    -- r5f (#825 NO-GO): și pe cantități — suma cantităților primite (goală = 1) = bucățile născute
     IF v_n <> v_m OR cardinality(v_bucati) <> v_m
+       OR (SELECT coalesce(sum(coalesce(cantitate, 1)), 0) FROM public.izo_documente_intrare_randuri
+            WHERE document_id = d.id AND decizie IN ('primit', 'primit_neconform')) <> v_m
        OR (SELECT count(*) FROM public.izo_documente_intrare_randuri WHERE document_id = d.id AND bucata_id IS NOT NULL) <> v_m THEN
       RAISE EXCEPTION 'izo E3: reconcilierea confirmării a eșuat (mișcări %, rânduri primite %)', v_n, v_m;
     END IF;
@@ -1554,7 +1839,7 @@ BEGIN
     END IF;
     PERFORM public.fn_izo_blocheaza_locuri(d.proiect_id, ARRAY[d.depozit_id], '{}'::bigint[]);
     PERFORM public.fn_izo_blocheaza_tabele();
-    PERFORM public.fn_izo_lock_partajat(d.proiect_id);
+    PERFORM public.fn_izo_lock_partajat(VARIADIC ARRAY[d.proiect_id]);   -- r5f (#825 NO-GO): semnătura din GRANT, explicit
     PERFORM 1 FROM public.magazie_bucati b
       WHERE b.id IN (SELECT x.bucata_id FROM public.izo_documente_intrare_randuri x WHERE x.document_id = d.id AND x.bucata_id IS NOT NULL)
       ORDER BY b.id FOR UPDATE;
@@ -1610,6 +1895,11 @@ BEGIN
     IF session_user IS DISTINCT FROM 'postgres' THEN
       RAISE EXCEPTION 'izo E3: anularea administrativă se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user
         USING ERRCODE = '42501';
+    END IF;
+    -- r5f (#825 NO-GO): READ COMMITTED impus, ca în E2a (fn_izo_lock_partajat / garda pe bucăți), înaintea oricărui lock — și pe
+    -- ramura ciornei, care nu trece prin fn_izo_lock_proiect; poarta de după lock-ul „schemă” cere snapshot nou
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+      RAISE EXCEPTION 'izo E3: intrările E3 cer READ COMMITTED (acum %)', current_setting('transaction_isolation') USING ERRCODE = '25001';
     END IF;
     PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
     IF coalesce(current_setting('izo.receptie_ctx', true), '') <> '' THEN
@@ -1751,7 +2041,7 @@ BEGIN
     public.fn_izo_lock_proiect(bigint, boolean), public.fn_izo_porti_definitii(), public.fn_izo_garda_scriitor(), public.fn_izo_tip_cod(integer),
     public.fn_izo_site_proiect(bigint), public.fn_izo_tip_material(text) TO izo_receptie_writer;
 
-  -- ── K. Storage: bucket-ul izo-documente + politicile (fără UPDATE) ────────────────────────────────────
+  -- ── K. Storage: bucket-ul izo-documente, politicile permisive (fără UPDATE) + stratul RESTRICTIV (r5f) ─────────
   INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
   VALUES ('izo-documente', 'izo-documente', false, 10485760, ARRAY['application/pdf']);
   CREATE POLICY izo_doc_scan_ins ON storage.objects FOR INSERT TO authenticated
@@ -1760,6 +2050,33 @@ BEGIN
     USING (bucket_id = 'izo-documente' AND public.fn_izo_scan_poate_citi(name));
   CREATE POLICY izo_doc_scan_del ON storage.objects FOR DELETE TO authenticated
     USING (bucket_id = 'izo-documente' AND public.fn_izo_scan_poate_sterge(name));
+  -- r5f (#825 NO-GO, P1-3): stratul RESTRICTIV — o politică permisivă generală (existentă sau adăugată) nu mai deschide
+  -- bucket-ul. Rândurile cu bucket_id ≠ 'izo-documente' (inclusiv NULL: IS DISTINCT FROM) trec neatinse prin toate cinci.
+  -- (1) oricine nu are drepturile lui authenticated: nimic din bucket (fără funcții E3 în predicat: anon nu are EXECUTE pe
+  --     fn_izo_scan_poate_*, iar EXECUTE se verifică la inițializarea planului — altfel ar cădea și pe alte bucket-uri);
+  CREATE POLICY izo_doc_scan_r_toti ON storage.objects AS RESTRICTIVE FOR ALL TO public
+    USING (bucket_id IS DISTINCT FROM 'izo-documente' OR pg_has_role(current_user, 'authenticated', 'USAGE'))
+    WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente' OR pg_has_role(current_user, 'authenticated', 'USAGE'));
+  -- (2) authenticated: SELECT / INSERT / DELETE doar prin predicatele E3;
+  CREATE POLICY izo_doc_scan_r_sel ON storage.objects AS RESTRICTIVE FOR SELECT TO authenticated
+    USING (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_citi(name));
+  CREATE POLICY izo_doc_scan_r_ins ON storage.objects AS RESTRICTIVE FOR INSERT TO authenticated
+    WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_incarca(name));
+  CREATE POLICY izo_doc_scan_r_del ON storage.objects AS RESTRICTIVE FOR DELETE TO authenticated
+    USING (bucket_id IS DISTINCT FROM 'izo-documente' OR public.fn_izo_scan_poate_sterge(name));
+  -- (3) UPDATE interzis total pe bucket, pentru toți: USING (rândul vechi) și WITH CHECK (rândul nou — și mutarea ÎN bucket)
+  CREATE POLICY izo_doc_scan_r_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO public
+    USING (bucket_id IS DISTINCT FROM 'izo-documente') WITH CHECK (bucket_id IS DISTINCT FROM 'izo-documente');
+  -- r5f (#825 NO-GO, a doua ușă): rândul bucket-ului din storage.buckets. O permisivă (existentă sau adăugată) pe buckets nu
+  -- face bucket-ul public (endpoint-ul public Storage nu consultă RLS), nu-l șterge și nu-l recreează: INSERT / UPDATE /
+  -- DELETE pe rândul izo-documente interzise pentru toți (administrarea rămâne la rolurile cu BYPASSRLS); WITH CHECK oprește
+  -- și mutarea altui bucket PE id-ul izo-documente. Celelalte bucket-uri trec neatinse. Fără SELECT: rândul nu e secret.
+  CREATE POLICY izo_doc_bucket_r_ins ON storage.buckets AS RESTRICTIVE FOR INSERT TO public
+    WITH CHECK (id IS DISTINCT FROM 'izo-documente');
+  CREATE POLICY izo_doc_bucket_r_upd ON storage.buckets AS RESTRICTIVE FOR UPDATE TO public
+    USING (id IS DISTINCT FROM 'izo-documente') WITH CHECK (id IS DISTINCT FROM 'izo-documente');
+  CREATE POLICY izo_doc_bucket_r_del ON storage.buckets AS RESTRICTIVE FOR DELETE TO public
+    USING (id IS DISTINCT FROM 'izo-documente');
 
   -- ── L. owner-ii intrărilor + EXECUTE (dat de owner, prin SET ROLE: postgres nu e superuser pe Supabase) ─
   ALTER FUNCTION public.fn_izo_receptie_marcheaza(text, bigint, bigint, integer, bigint, text) OWNER TO izo_receptie_writer;
@@ -1790,6 +2107,20 @@ BEGIN
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS %L', 'porti_e3=' || public.fn_izo_porti_e3_definitii());
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
+  -- P5 (r5f, #825 NO-GO): owner-ii intrărilor au EXECUTE pe EXACT semnăturile lanțului de lock-uri pe care îl cheamă (ACL-ul
+  -- ștampilat mai sus e cel găsit — un GRANT lipsă n-ar fi văzut de poartă, doar de prima confirmare); fn_izo_lock_partajat
+  -- are o singură semnătură (VARIADIC bigint[]), deci apelul explicit nu poate fi umbrit de un overload
+  SELECT string_agg(format('%s → %s', r.rol, r.fn), '; ' ORDER BY r.rol, r.fn) INTO v_x
+    FROM (VALUES ('izo_receptie_writer', 'public.fn_izo_lock_partajat(bigint[])'), ('izo_receptie_writer', 'public.fn_izo_lock_proiect(bigint, boolean)'),
+                 ('izo_receptie_writer', 'public.fn_izo_blocheaza_locuri(bigint, integer[], bigint[])'), ('izo_receptie_writer', 'public.fn_izo_blocheaza_tabele()'),
+                 ('izo_receptie_writer', 'pg_catalog.pg_advisory_xact_lock_shared(integer, integer)'),
+                 ('izo_receptie_writer', 'pg_catalog.pg_advisory_xact_lock(integer, integer)'),
+                 ('izo_receptie_writer', 'pg_catalog.pg_advisory_xact_lock_shared(bigint)'),
+                 ('izo_doc_editor', 'pg_catalog.pg_advisory_xact_lock_shared(bigint)')) r(rol, fn)
+   WHERE NOT has_function_privilege(r.rol, r.fn, 'EXECUTE');
+  IF v_x IS NOT NULL OR (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'fn_izo_lock_partajat') <> 1 THEN
+    RAISE EXCEPTION 'Postcondiție P5: EXECUTE lipsă pe lanțul de lock-uri al intrărilor E3 (%) sau fn_izo_lock_partajat are overload-uri', coalesce(v_x, '-');
+  END IF;
   v_lipsa := public.fn_izo_porti_lipsa();   -- include poarta E3
   IF cardinality(v_lipsa) <> 0 THEN
     RAISE EXCEPTION 'Postcondiție P1: porțile nu sunt complete după E3: %', v_lipsa;

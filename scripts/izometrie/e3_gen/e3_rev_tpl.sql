@@ -4,7 +4,9 @@
 -- Refuză dacă există ORICE fapt E3 (document, eveniment doc_intrare / intrare_lista_ambalare / receptie_pv, bucată cu
 -- aviz_intrare_id, obiect în bucket-ul izo-documente): registrul e doar-adaug, deci după primul fapt drumul e ÎNAINTE, cu
 -- migrare corectivă revizuită. Rulează ÎNAINTEA oricărei reveniri E2a / 20261102c.
--- Procedura (un singur string):
+-- Concurență (r5f, #825 NO-GO): ia lock-ul „schemă” EXCLUSIV (cheia runner-ului; operațiile E3 îl iau partajat) și tabelele
+-- registrului / documentelor în ACCESS EXCLUSIVE ÎNAINTEA verificării „fără fapte E3”; doar în READ COMMITTED (refuză altfel).
+-- Procedura (un singur string, READ COMMITTED — implicit):
 --   BEGIN;
 --   SELECT set_config('gazpet.revenire_20261103b', 'IZO_E3_SCOATE:' || txid_current(), true);
 --   -- <conținutul exact al fișierului>
@@ -18,9 +20,23 @@ BEGIN
     RAISE EXCEPTION 'Revenire 20261103b: nearmată (gazpet.revenire_20261103b legat de txid_current) — refuz';
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261103b: rulează ca postgres'; END IF;
+  -- r5f (#825 NO-GO): verificarea de mai jos e exactă doar dacă vede tot ce s-a comis până la lock-uri — READ COMMITTED (snapshot
+  -- nou la fiecare instrucțiune); în REPEATABLE READ / SERIALIZABLE snapshot-ul e cel de la armare, dinaintea lock-urilor
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION 'Revenire 20261103b: izolarea tranzacției e % — rulează în READ COMMITTED (altfel verificarea nu vede ce s-a comis înaintea lock-ului); refuz',
+      current_setting('transaction_isolation');
+  END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  -- r5f (#825 NO-GO): lock-ul „schemă” EXCLUSIV, aceeași cheie bigint ca runner-ul (operațiile E3 o iau PARTAJAT, primul lock),
+  -- ÎNAINTEA verificării: o operație E3 în curs e așteptată (sau lock_timeout), una nouă așteaptă revenirea și pică apoi pe
+  -- obiectele scoase — niciun draft nu se mai comite între verificare și DROP
+  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
   IF to_regclass('public.izo_documente_intrare') IS NULL THEN RAISE EXCEPTION 'Revenire 20261103b: E3 nu e aplicată'; END IF;
-  -- fapte E3 → refuz
+  -- r5f (#825 NO-GO): și tabelele verificate / modificate mai jos, ACCESS EXCLUSIVE (ca revenirea E2a): o scriere directă, fără
+  -- lock-ul „schemă”, e așteptată și apoi văzută de verificare; DROP-urile de mai jos nu mai urcă lock-uri pe ele
+  LOCK TABLE public.izo_documente_intrare, public.izo_documente_intrare_randuri, public.izo_documente_scanuri, public.magazie_bucati,
+             public.magazie_bucati_evenimente, public.magazie_bucati_miscari IN ACCESS EXCLUSIVE MODE;
+  -- fapte E3 → refuz (instrucțiune nouă ⇒ snapshot de după lock-uri)
   IF EXISTS (SELECT 1 FROM public.izo_documente_intrare) OR EXISTS (SELECT 1 FROM public.izo_documente_intrare_randuri)
      OR EXISTS (SELECT 1 FROM public.izo_documente_scanuri)
      OR EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente WHERE document_tip = 'doc_intrare' OR tip IN ('intrare_lista_ambalare', 'receptie_pv'))
@@ -41,10 +57,30 @@ BEGIN
   DROP POLICY izo_doc_scan_ins ON storage.objects;
   DROP POLICY izo_doc_scan_sel ON storage.objects;
   DROP POLICY izo_doc_scan_del ON storage.objects;
+  -- r5f (#825 NO-GO, P1-3): stratul RESTRICTIV al bucket-ului
+  DROP POLICY izo_doc_scan_r_toti ON storage.objects;
+  DROP POLICY izo_doc_scan_r_sel ON storage.objects;
+  DROP POLICY izo_doc_scan_r_ins ON storage.objects;
+  DROP POLICY izo_doc_scan_r_del ON storage.objects;
+  DROP POLICY izo_doc_scan_r_upd ON storage.objects;
+  -- r5f (#825 NO-GO, a doua ușă): politicile rândului bucket-ului, ÎNAINTEA DELETE-ului de mai jos (izo_doc_bucket_r_del l-ar
+  -- opri pentru un rol fără BYPASSRLS: 0 rânduri, nu eroare)
+  DROP POLICY izo_doc_bucket_r_ins ON storage.buckets;
+  DROP POLICY izo_doc_bucket_r_upd ON storage.buckets;
+  DROP POLICY izo_doc_bucket_r_del ON storage.buckets;
+  -- r5f (#825 NO-GO): storage.objects nu intră în LOCK TABLE (tabel al Storage pe Supabase, fără drepturi noi); DROP POLICY ține ACCESS
+  -- EXCLUSIVE pe el ⇒ reverificare exactă: un obiect comis după verificarea de sus (scriere fără lock-urile E3) → refuz
+  IF EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'izo-documente') THEN
+    RAISE EXCEPTION 'Revenire 20261103b: există date reale E3 (obiecte în izo-documente, apărute în timpul revenirii) — refuz';
+  END IF;
   -- Supabase blochează DELETE direct din storage.* (storage.protect_delete); ocolirea oficială, locală tranzacției, DOAR aici:
   -- bucket-ul e verificat gol mai sus (nicio obiect în izo-documente), deci nu rămân fișiere orfane (găsit pe branch-ul PG17)
   PERFORM set_config('storage.allow_delete_query', 'true', true);
   DELETE FROM storage.buckets WHERE id = 'izo-documente';
+  -- r5f: 0 rânduri șterse (RLS fără BYPASSRLS, un trigger care sare rândul) = bucket rămas → refuz, nu revenire pe jumătate
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Revenire 20261103b: bucket-ul izo-documente nu s-a șters (0 rânduri: RLS / trigger pe storage.buckets?) — refuz';
+  END IF;
   PERFORM set_config('storage.allow_delete_query', 'false', true);
   -- registrul: politicile, drepturile rolurilor E3 (REVOKE pe tabel retrage și drepturile pe coloane)
   DROP POLICY magbuc_izo_doceditor_sel ON public.magazie_bucati;
