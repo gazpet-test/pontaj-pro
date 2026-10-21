@@ -1,6 +1,6 @@
 # E4 — Montajul: tableta inginerului de izometrie, cu salvare (design r2, pentru review ÎNAINTE de cod)
 
-**Stare**: r2 (review Jakarinos pe r1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
+**Stare**: r3 (review Jakarinos pe r2: NO-GO, 0 P0, 11 P1). Fără cod, fără nicio scriere în BD (doar SELECT-uri de catalog și numărători, 21.10.2026). Branch `izometrie/e4-design`, din `origin/izometrie/e3` (#825, încă deschis; `20261103b` neaplicată). La merge-ul #825 se face retarget pe `main` înainte de ștergerea branch-ului de bază (anti-bug #1785).
 
 **r2 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r1 (2 P0, 8 P1, 3 P2):
 - **P0** corecția de lungime e permisă doar pe o rădăcină fără descendenți; în arbore e refuzată explicit (§8.6). Tăierea unei bucăți montate are trei ramuri separate, cu ambele capete reconciliate, iar o bucată legată de pachet se dezleagă întâi (§8.5);
@@ -8,6 +8,20 @@
 - **P1** jurnalul rămâne doar-adaug: un singur INSERT, la final, iar erorile se scriu după rollback-ul savepoint-ului (§5.4). Hash-ul cererii e separat de amprenta preview-ului (§5.6). Identitatea e fixată pe lot și pe angajat (§5.7, §6.3);
 - **P1** lock-urile se iau o dată pe lot, în ordinea globală, iar picker-ul nu mai urcă de la FOR SHARE la UPDATE (§5.4, §7.3, §10.5). Matricea de securitate e completă, cu GPS-ul scos din JSON (§9.4, §9.5). Activarea pe tronson verifică OLD și NEW (§7.4);
 - **P2** CAS-ul din `actualizeazaRandInPachet` e descris corect (§7.3); Q-E4-13 B / C cer fișa de automatizare (§12); testele noi (§11, 13–16).
+
+**r3 (21.10.2026)** — răspunsul la review-ul Jakarinos pe r2 (închise de Jak: P0-1, P0-2, P1-3, P1-4, P1-5, P1-8; 11 P1 noi sau rămase):
+- **rezervarea copilului** nu mai dispare între aprobări: la aprobarea tăierii se **transferă** pe `bucata_id`, în același eveniment (§3.2, §6.3);
+- **expirarea leneșă** nu mai scrie declarația altui autor: rezervarea veche devine `expirata` sub lock-ul rădăcinii, iar declarația veche rămâne neatinsă. Pierderea rezervării e o condiție derivată (`rezervare_pierduta`), nu o tranziție: oprește trimiterea și aprobarea (§5.4, §6.1, §6.4, §6.7);
+- **revocarea și abandonul**: MP-ul respinge, cu motiv, rândurile unei sesiuni abandonate (frontul inactiv sau autorul fără drept), apoi sesiunea se închide. Oprirea fluxului nu mai poate rămâne blocată (§6.4, §6.7);
+- **corecția + tăierea**: copiii declarați de aceeași declarație nu contează ca descendenți (§8.6);
+- **ACL / API**: activarea cere rândul de config existent; lock-urile pe tabele fără UPDATE trec prin helpere `postgres`; drepturile pe coloanele deblocării; `p_cheie` pe revizie și pe seria lămurită (§3.1, §4.2, §9.4);
+- **GPS-ul**: `hash_cerere` nu se poate citi din API (privilegii pe coloane), deci nu există verificator de coordonate (§9.4, §9.5);
+- **costul**: o pre-verificare ieftină și un contor de apeluri, **înaintea** porții (§5.4 pasul −1);
+- **`alt_dispozitiv`** devine nefinal: operația rămâne în coadă, iar încercarea se vede la MP (`izo_sync_incercari`). După ce frontul revine, se aplică normal (§5.4, §6.7);
+- **laptopul** = un dispozitiv al inginerului, cu frontul predat de tabletă; MP-ul nu declară (§8.5);
+- **pachetul**: pe tronsoanele în flux, clientul nu mai scrie deloc `executie_tevi`. Cascada `tg_tevi_update_totaluri` (rând → pachet, ✓BD 21.10) ar inversa ordinea, așa că observațiile și codurile NDT trec printr-un RPC (§7.3, §7.4);
+- **READ COMMITTED** impus la fiecare intrare, ca în E3 r5f (§10.1);
+- **P2**: `expira_dupa` în schemă; numerotarea descrescătoare; RLS-ul real pe `executie_tevi` (§1.1 #15); Q-E4-10 fără comparație GPS–km; Q-E4-12 și Q-E4-15 blochează codul; testele 17–18 (§11).
 
 **Surse**:
 - deciziile owner-ului din `claude_context`: #1788 (Q1–Q10), #1789 (tableta, oamenii), #1811 (conturile Titi / Viciu), #1817 (fără versiune „doar citire”: se așteaptă tableta completă, cu salvare, după E3 și E4);
@@ -49,7 +63,7 @@ Nimic din document nu se aplică fără „da”.
 6. **Fișa de tăiere.** Pentru fiecare țeavă tăiată, fișa se printează din platformă, o semnează MP-ul și dirigintele Transgaz, iar scanul încărcat o face „aprobată” (E5). Până atunci pachetul nu pleacă la Transgaz. E4 dă datele și lista „fișe de generat”.
 7. **Pachetul de lansare.** Pe tronsoanele în flux, rândurile `executie_tevi` le scrie doar serverul, din montajele aprobate. Picker-ul din #824 devine legătura reală (`magazie_bucati.executie_teava_id`), printr-o funcție de server, cu contractul de lock din #823.
 8. **Securitatea** copiază E3: doi scriitori noi (tableta / registrul), contextul operației, poarta completă sub lock-ul schemei, proiecții exacte și o singură ordine de lock-uri.
-9. **De decis**: 16 întrebări (§12). Țin codul Q-E4-1 (fluxul pe tronson), Q-E4-2 (ieșirea din depozit), Q-E4-4 (offline) și Q-E4-5 (pachetul).
+9. **De decis**: 16 întrebări (§12). Țin codul Q-E4-1 (fluxul pe tronson), Q-E4-2 (ieșirea din depozit), Q-E4-4 (offline), Q-E4-5 (pachetul), Q-E4-12 (ramurile tăierii) și Q-E4-15 (coordonatele GPS). Corpul documentului e scris pe recomandări; ele **nu** sunt decizii aprobate până nu răspunde Razvan.
 
 ## 1. Ce face E4 și ce nu
 
@@ -94,6 +108,8 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
 | 12 | 2c | la `montaj` pe proiect se refuză tot pe `executie_tevi`; pachetul de pe T12 e în lucru (regresia din 21.10) | fluxul pe tronson (Q-E4-1) |
 | 13 | v2.3 | GPS pe axul KML calibrat. Axul și ancorele nu sunt în BD (`izo_surse_proiect` / `izo_ax_ancore` neconstruite) | Q-E4-10 |
 | 14 | E3 | indexul `ux_magbuc_izo_aviz_rand` (o bucată vie per rând de aviz) | copiii unei tăieri NU copiază `aviz_intrare_id` / `nr_crt_aviz`; legătura cu avizul trece prin `radacina_id` |
+| 15 | BD față de r2 | RLS-ul pe `executie_tevi` e larg: `executie_tevi_modify` (ALL, `auth.uid() IS NOT NULL`) și `executie_tevi_select` (`true`), ✓BD 21.10. 20261029a strânge doar pachetele, documentele și Storage-ul (`fn_executie_pachete_acces`) | pe tronsoanele în flux, bariera pe rânduri e trigger-ul E4 (§7.4), nu RLS-ul |
+| 16 | BD | `tg_tevi_update_totaluri` (AFTER ROW, la orice UPDATE pe `executie_tevi`) face UPDATE pe pachet, ✓BD 21.10: o scriere din client pe un rând ia rândul, apoi pachetul | pe tronsoanele în flux, clientul nu mai scrie rânduri deloc (§7.4) |
 
 ## 2. Principiile (moștenite, aplicate la montaj)
 
@@ -119,7 +135,7 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
 **`izo_tronson_config`**: scrie doar `postgres`, prin funcție. RLS activ; citirea prin `fn_izo_citire(proiect_id)`.
 - `tronson_id` (PK → `executie_tronsoane`) și `proiect_id` (copie, verificată = proiectul tronsonului);
 - `flux_montaj` bool (implicit false), `flux_de_la`, `flux_motiv`, `flux_schimbat_de`;
-- `sens_numerotare` ∈ {`crescator`, `descrescator`} (pe IZO TR9 numerele scad);
+- `sens_numerotare` ∈ {`crescator`, `descrescator`} (pe IZO TR9 numerele scad); `nr_sudura_start` int: numărul primei suduri din IZO, obligatoriu la `descrescator` (CHECK), §3.5;
 - `perete_proiectat` jsonb: zonele cu peretele cerut de proiect (pe interval de suduri sau de km), cu textul (de exemplu „subtraversare DN1A”). Alimentează avertizarea informativă din prototip (`ZONE_PERETE`); gol = fără avertizare;
 - `executant_implicit` text (Gazpet; Petroconst pe T16 / T17, D#18): doar propunere pe sudură;
 - `server_ver`.
@@ -127,15 +143,16 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
 **`fn_izo_seteaza_flux(p_tronson, p_activ, p_motiv)`**
 - Owner `izo_montaj_writer`; EXECUTE doar `postgres`; cere `session_user = postgres`. O rulează sesiunea de chat, cu „da”.
 - Pornirea cere:
+  - **rândul `izo_tronson_config` existent** (r3): îl creează întâi `postgres`, cu „da” (sensul, zonele, executantul, §13 pasul 4). Funcția nu face INSERT; un rând lipsă → refuz `config_lipsa`. Deci `izo_montaj_writer` n-are nevoie de INSERT pe tabel (§9.4);
   - nivelul proiectului ≠ `off`;
   - porțile complete (E2a + E3 + E4);
-  - tronsonul fără rânduri de pachet nelegate. T14 / T15 n-au pachete.
+  - tronsonul fără rânduri de pachet nelegate și fără anteturi aprobate de Transgaz (r3, §7.4). T14 / T15 n-au pachete.
 - **Oprirea** e refuzată (r2):
   - după primul fapt de montaj pe tronson, ca `stoc → off` în E2a;
-  - și înainte de fapte, cât există pe tronson rezervări active, declarații deschise (stare ∉ {`respinsa`, `stearsa`}) sau un front activ. Întâi se predă frontul și se închid declarațiile.
-- **Concurența** (r2, §7.4, §10.5), în ordinea din `fn_izo_seteaza_nivel` (E2a): tabelele → advisory **exclusiv** (73010, proiect) → rândul `izo_tronson_config` FOR UPDATE (îl creează, dacă lipsește) → precondițiile, citite pe starea comisă.
+  - și înainte de fapte, cât există pe tronson rezervări active, declarații deschise (stare ∉ {`aprobata`, `respinsa`, `stearsa`}) sau un front activ. Întâi se predă frontul și se închid declarațiile. Dacă autorul nu mai e disponibil (revocat, plecat), drumul e: MP-ul eliberează frontul, respinge rândurile sesiunii abandonate, iar sesiunea se închide (§6.4, §6.7). Deci oprirea nu rămâne blocată de un autor absent.
+- **Concurența** (r2, §7.4, §10.5), în ordinea din `fn_izo_seteaza_nivel` (E2a): tabelele → advisory **exclusiv** (73010, proiect) → rândul `izo_tronson_config` FOR UPDATE (existent; lipsa lui = refuz) → precondițiile, citite pe starea comisă.
   - scriitorii registrului și ai pachetului citesc fluxul **după** advisory-ul partajat, fără lock pe rândul de config;
-  - sincronizarea (fără advisory) ține config-ul FOR SHARE;
+  - sincronizarea (fără advisory) ține config-ul FOR SHARE, prin helper-ul `fn_izo_config_blocheaza(p_tronson)` (owner `postgres`, EXECUTE doar `izo_teren_editor`): FOR SHARE cere UPDATE pe tabel, iar editorul n-are (§9.4);
   - o mutare din client îl citește după advisory-ul partajat (§7.4).
 
   Deci activarea așteaptă tot ce e în curs, iar ce vine după ea așteaptă commit-ul și vede fluxul nou (READ COMMITTED, ca în E2a).
@@ -156,16 +173,27 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
 - `canal` ∈ {`teren`, `aprobare`, `depozit`, `pachet`}, `tip_op`;
 - `dispozitiv_id`, `seq` (doar pe `teren`), `versiune_format`;
 - `payload` jsonb canonic, **fără GPS** (coordonatele stau doar în `izo_declaratii_gps`, §9.5);
-- `hash_cerere`: sha256, **calculat de server** pe forma canonică a cererii întregi (`versiune_format`, `tip_op`, `dispozitiv_id`, `proiect_id`, payload-ul cu tot cu GPS-ul), §5.6;
-- `rezultat` (doar cele finale, §5.4) ∈ {`acceptat`, `conflict`, `eroare`, `eroare_interna`, `alt_dispozitiv`}, `cod`, `mesaj`;
+- `hash_cerere`: sha256, **calculat de server** pe forma canonică a cererii întregi (`versiune_format`, `tip_op`, `dispozitiv_id`, `proiect_id`, payload-ul cu tot cu GPS-ul), §5.6. **Nu se poate citi din API** (r3): `authenticated` are SELECT doar pe celelalte coloane, iar hash-ul nu apare în niciun răspuns sau vedere. Altfel, cererea cunoscută + hash-ul public ar fi un verificator offline pentru coordonatele GPS (§9.5);
+- `rezultat` (doar cele finale, §5.4) ∈ {`acceptat`, `conflict`, `eroare`, `eroare_interna`}, `cod`, `mesaj`;
 - `raspuns` jsonb: exact ce se întoarce la o retrimitere (fără GPS);
 - `ora_tableta`, `ora_server`, `offset_ceas_s`;
 - **doar adaug**: rândul se scrie o singură dată, cu rezultatul final (§5.4). UPDATE / DELETE / TRUNCATE sunt refuzate pentru toți, inclusiv `postgres` (trigger, ca în E2a);
-- operațiile `alt_dispozitiv` rămân aici, cu payload-ul lor. Ele sunt „carantina de sincronizare” din v2.3, ca vedere (`v_izo_carantina_sync`), nu ca tabel separat. Aplicarea lor, de către MP, cu motiv, vine în E6.
+- operațiile refuzate cu `alt_dispozitiv` **nu** se scriu aici (r3): rezultatul e nefinal, deci `op_id`-ul rămâne liber, iar operația rămâne în coada tabletei (§5.4, §6.7).
+
+**`izo_sync_incercari`** (r3: „carantina de sincronizare” din v2.3, doar ca vedere a încercărilor):
+- `id`, `proiect_id`, `tronson_id`, `autor_profile_id`, `op_id`, `dispozitiv_id`, `tip_op`, `payload` (fără GPS), `prima_la`;
+- UNIQUE (`autor_profile_id`, `op_id`), scris cu `INSERT … ON CONFLICT DO NOTHING`: doar prima încercare, fără UPDATE. Doar adaug (trigger, ca la `izo_operatii`);
+- `v_izo_carantina_sync` = încercările fără rând în `izo_operatii` cu același (autor, `op_id`): ce așteaptă frontul. MP-ul le vede și decide cui dă frontul (§6.7);
+- volumul e mărginit de contorul de apeluri (§5.4 pasul −1) și de limita de operații pe lot.
+
+**`izo_rata_apeluri`** (r3, contorul de apeluri, §5.4 pasul −1):
+- PK (`profile_id`, `functie`), `fereastra_de_la`, `n`;
+- îl scrie doar helper-ul `fn_izo_rata_consuma(p_functie)` (owner `postgres`, EXECUTE doar rolurile E4), cu `INSERT … ON CONFLICT DO UPDATE`; nimeni altcineva n-are drepturi pe el. Nu e jurnal de audit, deci UPDATE-ul e permis aici.
 
 **`izo_preverificari`** (sesiunea: proiect, tronson, zi, autor):
 - `id`, `uid` (generat de tabletă, UNIQUE), `proiect_id`, `tronson_id`, `zi` (Europe/Bucharest), `autor_profile_id`, `dispozitiv_id`;
 - `stare` ∈ {`deschisa`, `trimisa`, `inchisa`}, `trimisa_la`, `trimisa_op_id`;
+- `inchisa` vine fie după ultima aprobare / respingere, fie (r3) când MP-ul a respins toate rândurile rămase ale unei sesiuni `deschisa` abandonate (§6.4): o sesiune fără niciun rând deschis se închide în aceeași tranzacție;
 - `versiune`: +1 la fiecare scriere;
 - o singură sesiune `deschisa` per (tronson, autor): UNIQUE parțial.
 
@@ -175,6 +203,8 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
   - `tip` ∈ {`montaj`, `taiere`, `cuplare`};
   - `versiune` (≥ 1), `declarat_de` (profilul = `auth.uid()` al lotului), `declarat_de_angajat` (`profiles.employee_id`, NOT NULL, copiat la acceptare), `dispozitiv_id`, `ultimul_op_id`.
 - **Starea**: `stare` ∈ {`ciorna` (sesiune deschisă), `trimisa`, `in_verificare`, `conflict`, `blocata`, `revizie_ceruta`, `aprobata`, `respinsa`, `stearsa`}. Tranzițiile permise sunt doar cele din §6.4 (trigger pe rol + stare).
+  - `conflict_cod` (de exemplu `r1d`, `corectie_in_arbore`); pierderea rezervării nu e o stare, ci o condiție derivată (§5.4);
+  - `stare_inainte_blocare` + `blocata_motiv` (r3): starea în care revine rândul la deblocare (§6.4). NULL când rândul nu e `blocata` (CHECK).
 - **Montaj**:
   - piesa: `bucata_id` | `bucata_decl_uid` (copilul unei tăieri) | niciuna (rândul `in_verificare`);
   - `capat_amonte`: litera capătului care se sudează amonte (implicit prima);
@@ -225,14 +255,21 @@ E4 = E4a + E4b din v2.3, adaptate la ce s-a construit efectiv în E2a, 2c și E3
 - `din_depozit` bool (bucata era în depozit la rezervare, pentru limita din §6.7);
 - `tip` = `fizic` (în E4; `planificat` vine după pilot);
 - `activa`, `creata_la`, `eliberata_la`;
-- `motiv_eliberare` ∈ {`versiune_noua`, `stearsa`, `respinsa`, `consumata`, `expirata`, `parinte_anulat`}, `eveniment_id`;
+- `expira_dupa` (r3): NULL la rândurile trimise; la rândurile `ciorna` = `expira_la` al frontului + 24 h, mutat la fiecare reînnoire a frontului (§6.7);
+- `motiv_eliberare` ∈ {`versiune_noua`, `stearsa`, `respinsa`, `consumata`, `expirata`, `parinte_anulat`, `transferata`}, `eveniment_id`;
+- `transfer_din_id` (r3): rezervarea pe `bucata_decl_uid` din care s-a născut această rezervare pe `bucata_id` (mai jos);
 - UNIQUE (`bucata_id`) WHERE `activa` și UNIQUE (`bucata_decl_uid`) WHERE `activa`: arbitrul când două tablete (sau două rânduri) aleg aceeași țeavă.
 - **Cine ține ce**:
   - tăierea ține sursa: bucata din registru sau copilul declarat al unei tăieri anterioare;
   - montajul ține piesa: bucata întreagă sau copilul declarat cu destinația `montaj`;
   - copilul `ramane_montat` (§8.5) e ținut de tăiere, pe `bucata_decl_uid`;
   - resturile (`depozit`) nu se rezervă: nu sunt disponibile până la primire (§3.3).
-- La aprobare, rezervarea pe `bucata_decl_uid` se consumă în evenimentul în care se naște copilul (`magazie_bucati.uid` = uid-ul declarat), deci un montaj pe copil are tot timpul o rezervare validă, înainte și după nașterea lui.
+- **Transferul la nașterea copilului** (r3). Aprobarea tăierii naște copilul (`magazie_bucati.uid` = uid-ul declarat). În același eveniment, fiecare rezervare activă pe `bucata_decl_uid` = acel uid:
+  - a copilului `ramane_montat`, ținută de tăiere → `consumata` (copilul se naște `montata`);
+  - a unui montaj (copilul de montat) → `transferata`. În aceeași tranzacție se creează rezervarea pe `bucata_id` = copilul născut, pentru același montaj (`declaratie_id`, `declaratie_versiune`, autor), cu `transfer_din_id`. Montajul rămâne neaprobat, iar copilul nu devine liber nicio clipă: indexul UNIQUE pe `bucata_id` WHERE `activa` îl apără din commit-ul tăierii;
+  - dacă montajul e în același lot, el consumă apoi rezervarea transferată, în ordinea simulării (§6.3).
+
+  Deci un montaj pe copil are tot timpul exact o rezervare activă: pe `bucata_decl_uid` înainte de naștere, pe `bucata_id` după. Instantaneul arată copilul născut ca „rezervat”. O versiune nouă a montajului, salvată după naștere, care numește copilul prin `decl_uid`, rezervă `bucata_id`-ul lui: serverul rezolvă uid-ul prin `magazie_bucati.uid`, sub lock-ul rădăcinii.
 
 **`izo_suduri` + `izo_suduri_capete`** (v2.3 §1.5; prefixul `izo_`, ca în Q-E3-1 A):
 - **sudura**:
@@ -300,7 +337,7 @@ Proiecția pachetului (§7) din registru:
 - `tip_rand`: `teava` / `curba`, iar `legare` pentru o cuplare;
 - `sudura_cod`: sudura aval, după convenția IZO (rândul i = țeava i + sudura dintre i și i+1).
 
-`pm_cod`, `pa_ut_cod`, `ut_cod` și `observatii` rămân editabile din client până la E10.
+`pm_cod`, `pa_ut_cod`, `ut_cod` și `observatii` rămân editabile până la E10: pe tronsoanele în flux doar prin `fn_izo_pachet_rand_note` (r3, §7.4), pe celelalte din client, ca azi.
 
 ### 3.5 Codul sudurii
 
@@ -309,7 +346,7 @@ Proiecția pachetului (§7) din registru:
 - **Normalizatorul SQL** `fn_izo_sudura_normalizeaza(text, tronson)` = `normalizeazaSudura` din `src/lib/izoSudura.js`, testate pe același `izoSudura.cazuri.json`.
 - **Sufixele**: doar cele din `conventie_sufixe`. Cât convenția e goală, tableta dă numai coduri fără sufix; un R final rămâne „cod de confirmat”.
 - **Numerotarea**:
-  - numărul următor = max(aprobate, declarate) + 1, în sensul `sens_numerotare`;
+  - numărul următor, pe direcția de lucru: la `crescator` = max(aprobate, declarate) + 1 (primul = 1); la `descrescator` = min(aprobate, declarate) − 1 (primul = `nr_sudura_start`, §3.1). Sub 1 → nicio propunere, „cod de confirmat”;
   - „sudura uitată” (prototip `insPlan`) decalează doar sudurile încă `declarata` ale aceleiași sesiuni deschise, ca versiuni noi;
   - o sudură aprobată nu se renumerotează niciodată: numărul e scris pe țeavă;
   - numerele sărite dau o alertă LOW (`izo_salt_numerotare`) și apar în rezumat.
@@ -338,12 +375,13 @@ Toate funcțiile sunt SECURITY DEFINER, cu `SET search_path = public, pg_temp` �
 | `fn_izo_sync_push(p_dispozitiv, p_ops)` | `izo_teren_editor` | `authenticated` | lotul de operații (cel mult 50), cu rezultatul pe fiecare operație (§5.4) |
 | `fn_izo_aprobare_lot(p_preverificare)` | `izo_montaj_writer` | `authenticated` | doar citire: rândurile, versiunile, efectele simulate, deciziile cerute, alertele, `amprenta` preview-ului (§5.6) |
 | `fn_izo_aproba(p_cheie, p_preverificare, p_randuri, p_amprenta, p_decizii)` | `izo_montaj_writer` | `authenticated` | faptele (§6.3) |
-| `fn_izo_front_elibereaza(p_tronson, p_motiv)` | `izo_montaj_writer` | `authenticated` | MP-ul eliberează frontul altui dispozitiv (§6.7) |
+| `fn_izo_front_elibereaza(p_tronson, p_motiv)` | `izo_montaj_writer` | `authenticated` | MP-ul eliberează frontul altui dispozitiv (§6.7); idempotentă natural (un front deja inactiv nu se mai scrie) |
 | `fn_izo_gps_citeste(p_decl)` | `postgres` | `authenticated` | doar citire: coordonatele unei declarații, doar MP-ului proiectului și owner-ului (Q-E4-15, §9.5) |
-| `fn_izo_revizie_cere(p_decl, p_versiune, p_motiv)` | `izo_montaj_writer` | `authenticated` | „revizie cerută” pe un rând |
-| `fn_izo_respinge(p_cheie, p_decl, p_versiune, p_motiv, p_dependente)` | `izo_montaj_writer` | `authenticated` | respingerea, cu decizia pe fiecare dependență |
-| `fn_izo_serie_lamureste(p_decl, p_versiune, p_bucata, p_motiv)` | `izo_montaj_writer` | `authenticated` | rândul „în verificare” trece pe bucata reală (rămâne de aprobat) |
-| `fn_izo_tranzitie_confirma(p_sudura, p_motiv)` | `izo_montaj_writer` | `authenticated` | „tranziție executată conform proiect / WPS” |
+| `fn_izo_revizie_cere(p_cheie, p_decl, p_versiune, p_motiv)` | `izo_montaj_writer` | `authenticated` | „revizie cerută” pe un rând |
+| `fn_izo_respinge(p_cheie, p_decl, p_versiune, p_motiv, p_dependente)` | `izo_montaj_writer` | `authenticated` | respingerea, cu decizia pe fiecare dependență; și rândurile unei sesiuni abandonate (§6.4) |
+| `fn_izo_serie_lamureste(p_cheie, p_decl, p_versiune, p_bucata, p_motiv)` | `izo_montaj_writer` | `authenticated` | rândul „în verificare” trece pe bucata reală (rămâne de aprobat) |
+| `fn_izo_tranzitie_confirma(p_sudura, p_motiv)` | `izo_montaj_writer` | `authenticated` | „tranziție executată conform proiect / WPS” (idempotentă natural: o sudură deja confirmată nu se mai scrie) |
+| `fn_izo_pachet_rand_note(p_teava, p_updated_at, p_observatii, p_pm_cod, p_pa_ut_cod, p_ut_cod)` | `izo_montaj_writer` | `authenticated` | r3: pe tronsoanele în flux, singura cale pentru observații și codurile NDT, cu ordinea scriitorilor de pachet (§7.3, §7.4) |
 | `fn_izo_iesire_tronson(p_cheie, p_depozit, p_tronson, p_bucati, p_nr_aviz, p_data)` | `izo_montaj_writer` | `authenticated` | ieșirea pe tronson (gestionar) |
 | `fn_izo_primire_depozit(p_cheie, p_depozit, p_bucati)` | `izo_montaj_writer` | `authenticated` | primirea resturilor în depozit (gestionar) |
 | `fn_izo_pachet_completeaza(p_cheie, p_pachet, p_updated_at, p_sudura_de, p_sudura_pana)` | `izo_montaj_writer` | `authenticated` | adaugă în pachet rândurile din montajele aprobate (§7.2) |
@@ -352,7 +390,8 @@ Toate funcțiile sunt SECURITY DEFINER, cu `SET search_path = public, pg_temp` �
 | `fn_izo_seteaza_flux(p_tronson, p_activ, p_motiv)` | `izo_montaj_writer` | `postgres` | §3.1 |
 
 **Ajutătoarele interne**: owner `postgres`, EXECUTE doar pentru rolurile E4; REVOKE de la PUBLIC, `anon`, `authenticated`, `service_role`.
-- intrarea și autorizarea: `fn_izo_montaj_api_verifica`, `fn_izo_montaj_autorizare_lock`;
+- intrarea și autorizarea: `fn_izo_montaj_api_verifica`, `fn_izo_teren_api_verifica`, `fn_izo_montaj_autorizare_lock`; înaintea porții (r3, §5.4 pasul −1): `fn_izo_montaj_preverifica(p_rol, p_proiect)` (citire fără lock) și `fn_izo_rata_consuma(p_functie)`;
+- lock-urile pe tabelele pe care rolul apelant n-are UPDATE (FOR SHARE / FOR UPDATE cer UPDATE pe cel puțin o coloană): `fn_izo_montaj_autorizare_lock` (profilul, accesul, atribuirea), `fn_izo_blocheaza_locuri` (proiectul, tronsonul, depozitele), `fn_izo_config_blocheaza` (config-ul, la sincronizare), `fn_izo_radacini_blocheaza` (rădăcinile și bucățile). Fiecare ia lock-urile în ordinea din §10.5 și nu întoarce date;
 - contextul și garda: `fn_izo_montaj_marcheaza` (owner `izo_montaj_writer`), `fn_izo_garda_montaj`, `fn_izo_garda_teren`;
 - efectele așteptate: `fn_izo_decl_efecte(decl, versiune, stare_simulata)`, `fn_izo_lot_efecte(randuri)` (simularea lotului în ordine topologică, §6.3), `fn_izo_aprobare_amprenta`, `fn_izo_pachet_rand_asteptat`, `fn_izo_coloane_tevi`;
 - lock-uri și utilitare: `fn_izo_radacini_blocheaza(ids)`, `fn_izo_sudura_normalizeaza`, `fn_izo_flux_tronson`;
@@ -414,7 +453,7 @@ Tableta înlocuiește datele locale atomic, într-o tranzacție IndexedDB; coada
 
 - **Stocarea**: IndexedDB, o bază pe (profil, proiect), accesată printr-un adaptor. Testele folosesc un adaptor în memorie, fără librării noi.
 - **Operația**: `op_id` uuid, `seq` crescător pe dispozitiv, `versiune_format`, payload. Stările: `pe_tableta` → `trimisa` → `confirmata`; ultima vine doar după ACK-ul serverului, salvat durabil.
-- **Rezultatele nefinale** (§5.4: `reincearca`, `blocat_de_conflict`, `fara_drept`, `front_expirat`, `limita`) lasă operația în coadă, cu același `op_id`; doar cele finale o scot. O operație finală greșită (`eroare`, `conflict`) se repară cu o operație nouă (alt `op_id`).
+- **Rezultatele nefinale** (§5.4: `reincearca`, `blocat_de_conflict`, `fara_drept`, `front_expirat`, `limita`, `alt_dispozitiv`) lasă operația în coadă, cu același `op_id`; doar cele finale o scot. La `alt_dispozitiv`, tableta arată „tronsonul e luat de altă tabletă — decide MP-ul”, oprește trimiterea automată și o reia după un „Pregătește” reușit (r3, §6.7). O operație finală greșită (`eroare`, `conflict`) se repară cu o operație nouă (alt `op_id`).
 - **Repornirea**: coada, `seq`-ul curent și `dispozitiv_id` se citesc din IndexedDB la deschidere; o operație `trimisa` fără ACK se retrimite cu același `op_id` (serverul răspunde `duplicat` dacă o avea deja).
 - **„Desfă”** (prototip: 8 s / 2 min) e local:
   - operația n-a plecat → se scoate din coadă;
@@ -430,7 +469,13 @@ Tableta înlocuiește datele locale atomic, într-o tranzacție IndexedDB; coada
 
 Pașii (v2.3 §4.4b, adaptat; r2: lock-urile o dată pe lot, jurnalul scris o singură dată):
 
+−1. **Înaintea porții, ieftin** (r3: poarta costă ≈ 0,4 s, iar refuzurile nejurnalizate nu intră în limita din §6.7):
+   - JWT `authenticated`, uid prezent;
+   - `fn_izo_montaj_preverifica('inginer_izometrie', proiect)`: o citire fără lock, pe index, a atribuirii active și a cheii de modul (sau owner). Lipsa → `fara_drept`, întors imediat, fără poartă, fără lock-uri și fără scrieri. E doar un filtru de cost: autorizarea reală rămâne cea de la pasul 3, sub lock;
+   - `fn_izo_rata_consuma('sync')`: contorul pe (profil, funcție), cel mult 30 de apeluri pe minut (de confirmat la pilot). Peste → `limita`, fără poartă. Același filtru + contor stă la intrarea `fn_izo_teren_pregateste` și `fn_izo_teren_instantaneu` (instantaneul e cel mai scump răspuns);
+   - pe canalele de birou (aprobare, depozit, pachet), refuzurile sunt excepții, deci un contor s-ar anula odată cu ele. Acolo rămâne filtrul de rol (fără poartă pentru cine nu e MP / gestionar pe proiect); apelanții care trec de el sunt persoane numite (≤ 4 pe proiect).
 0. **`fn_izo_teren_api_verifica()`**:
+   - **READ COMMITTED impus**, înaintea oricărui lock (ca E3 r5f, `fn_izo_doc_api_verifica`): altfel → refuz `25001`;
    - lock-ul schemei, partajat;
    - `session_user = authenticator`, JWT `authenticated`, uid prezent;
    - contextele goale;
@@ -439,13 +484,16 @@ Pașii (v2.3 §4.4b, adaptat; r2: lock-urile o dată pe lot, jurnalul scris o si
 1. **Pre-analiza lotului**, fără lock-uri pe date și fără efecte:
    - fiecare operație se parsează, iar `hash_cerere` se calculează pe forma canonică (§3.2);
    - se adună mulțimea resurselor atinse de **tot** lotul: sesiunile și declarațiile (după uid), copiii declarați, bucățile (sursă, piesă, amonte, plus rădăcinile lor și ale părinților declarați), sudurile (după identitate);
+   - r3: la o versiune nouă a unei tăieri, mulțimea cuprinde și **descendenții ei `blocata`** (închiderea din §6.4, calculată tranzitiv), ca deblocarea lor să fie sub lock-ul luat aici. Sunt mereu ai aceluiași autor (§5.7: nimeni nu leagă de copilul declarat al altuia);
    - o operație care ar atinge o resursă din afara acestei mulțimi e imposibilă prin construcție: payload-ul își numește toate referințele. Dacă apare totuși una la pasul 4, operația primește `eroare_interna` (`resursa_neanuntata`), fail-closed.
 2. **Lock-urile, o singură dată pe lot, în ordinea globală (§10.5)**:
    - frontul tronsonului FOR UPDATE (serializează loturile pe același tronson, inclusiv o cerere expirată la client care încă rulează pe server, plus retrimiterea ei);
    - sesiunile, apoi declarațiile (FOR UPDATE, după id);
-   - `profiles` → `user_module_access` → `izo_atribuiri` (FOR SHARE);
-   - `izo_tronson_config`, proiectul, tronsonul și depozitele implicate (FOR SHARE);
+   - `profiles` → `user_module_access` → `izo_atribuiri` (FOR SHARE, prin `fn_izo_montaj_autorizare_lock`);
+   - `izo_tronson_config` (`fn_izo_config_blocheaza`), proiectul, tronsonul și depozitele implicate (`fn_izo_blocheaza_locuri`), FOR SHARE;
    - rădăcinile, apoi bucățile (FOR UPDATE, după id, `fn_izo_radacini_blocheaza`), apoi sudurile existente (FOR UPDATE, după id).
+
+   Lock-urile pe tabelele pe care `izo_teren_editor` n-are UPDATE trec prin helperele `postgres` din §4.2; pe tabelele E4 ale tabletei (front, sesiuni, declarații, suduri) rolul are UPDATE pe coloane (§9.4), deci le blochează direct.
 
    Două loturi care ating X și Y, în orice ordine din payload, le blochează amândouă X → Y, deci nu se pot închide într-un ciclu. Sudurile noi sunt pe tronsonul frontului, deci un `INSERT … ON CONFLICT` nu așteaptă niciodată după alt lot de sincronizare.
 3. **Autorizarea și identitatea, o dată pe lot** (§5.7):
@@ -456,9 +504,10 @@ Pașii (v2.3 §4.4b, adaptat; r2: lock-urile o dată pe lot, jurnalul scris o si
    Rezultatele, pe tot lotul, fără efecte și **fără jurnal** (nu există efect de reluat):
    - drepturile lipsă → `fara_drept`;
    - frontul expirat → `front_expirat` (tableta cere „Pregătește”);
-   - limitele din §6.7 depășite → `limita`.
+   - limitele din §6.7 depășite → `limita`;
+   - alt dispozitiv activ pe tronson → fiecare operație primește `alt_dispozitiv`, **nefinal și nejurnalizat în `izo_operatii`** (r3), fără efecte. Se scrie doar prima încercare în `izo_sync_incercari` (payload-ul fără GPS), ca MP-ul să vadă ce așteaptă (carantina din v2.3). `op_id`-ul rămâne liber: după ce dispozitivul reia frontul (predarea celuilalt sau eliberarea de către MP, §6.7), aceeași operație se aplică normal, cu validarea completă pe starea de atunci.
 
-   Excepția: alt dispozitiv activ pe tronson → fiecare operație primește `alt_dispozitiv`, jurnalizată (payload-ul fără GPS), fără efecte (carantina din v2.3). O referință la obiectul altui autor dă `eroare` `ref_alt_autor` pe operația ei.
+   O referință la obiectul altui autor dă `eroare` `ref_alt_autor` pe operația ei.
 4. **Fiecare operație**, în ordinea `seq`, în savepoint propriu (`BEGIN … EXCEPTION`):
    1. **Jurnalul existent**: SELECT pe (autor, `op_id`). Lotul e deja serializat de lock-ul frontului (canalul `teren`):
       - există, cu același `hash_cerere` → `duplicat`, plus `raspuns`-ul salvat; nicio scriere;
@@ -471,7 +520,8 @@ Pașii (v2.3 §4.4b, adaptat; r2: lock-urile o dată pe lot, jurnalul scris o si
       - CAS pe `versiune_baza`; tranziția de stare permisă (§6.4).
    3. **Efectele**:
       - versiunea declarației (+ istoricul, payload-ul fără GPS) și rândul `izo_declaratii_gps`;
-      - rezervarea: cea veche se eliberează (`versiune_noua`), se creează cea nouă. La 23505: dacă rezervarea care ține resursa a expirat (§6.7), se eliberează (`expirata`) și se reîncearcă o dată; altfel → `conflict`. Rezervările unei resurse (bucată sau copil declarat) se scriu, de oricine, doar sub lock-ul rădăcinii ei (pasul 2), deci preluarea unei rezervări expirate a altui autor nu cere niciun lock în afara ordinii;
+      - rezervarea: cea veche se eliberează (`versiune_noua`), se creează cea nouă. La 23505: dacă rezervarea care ține resursa a expirat (`expira_dupa` < `now()`, §6.7), se eliberează (`expirata`) și se reîncearcă o dată; altfel → `conflict`. Rezervările unei resurse (bucată sau copil declarat) se scriu, de oricine, doar sub lock-ul rădăcinii ei (pasul 2);
+      - **preluarea nu atinge declarația celuilalt autor** (r3): se scrie doar rândul `izo_rezervari` (sub lock-ul rădăcinii, deja ținut). Declarația veche nu se scrie deloc: pierderea rezervării e o **condiție derivată** („fără rezervare activă”, `rezervare_pierduta` în instantaneu), nu o stare nouă (§6.4). Autorul o vede la următorul instantaneu; o versiune nouă care cere aceeași resursă primește `conflict`; `sesiune_trimite` refuză (`eroare` `rezervare_pierduta`, cu lista rândurilor) cât există o ciornă fără rezervare activă; aprobarea refuză oricum un rând fără rezervare activă (§6.3). Deci niciun lot nu blochează rândul altui autor după rădăcini;
       - bucățile declarate, cu literele rezervate;
       - sudura declarată: `INSERT … ON CONFLICT (identitate) DO NOTHING`, apoi recitire FOR UPDATE; alte capete → `conflict` (R4).
    4. **Jurnalul**: un singur INSERT în `izo_operatii`, cu rezultatul final (`acceptat`) și `raspuns`-ul. E ultima scriere din savepoint, deci efectele și jurnalul se comit sau se anulează împreună.
@@ -487,8 +537,8 @@ Pașii (v2.3 §4.4b, adaptat; r2: lock-urile o dată pe lot, jurnalul scris o si
 6. **Răspunsul**: rezultatul pe operație + starea curentă a declarațiilor atinse + `server_ver_max`. Dacă `server_ver_max` s-a mișcat, tableta reîmprospătează instantaneul.
 
 **Rezultatele, pe scurt**:
-- finale, jurnalizate: `acceptat`, `conflict`, `eroare`, `eroare_interna`, `alt_dispozitiv`;
-- nefinale, doar întoarse: `duplicat` (răspunsul vechi), `conflict_op`, `blocat_de_conflict`, `reincearca`, `fara_drept`, `front_expirat`, `limita`.
+- finale, jurnalizate: `acceptat`, `conflict`, `eroare`, `eroare_interna`;
+- nefinale, doar întoarse: `duplicat` (răspunsul vechi), `conflict_op`, `blocat_de_conflict`, `reincearca`, `fara_drept`, `front_expirat`, `limita`, `alt_dispozitiv` (cu prima încercare în `izo_sync_incercari`).
 
 Tripleta dublată (R1 d) găsită pe server nu oprește operația, pentru că tăierea fizică s-a întâmplat deja. Declarația e acceptată (`acceptat`) cu `stare = conflict` (R1 d deschis, „revizie cerută”), iar nimic nu intră în registru până la lungimea reală.
 
@@ -501,7 +551,8 @@ Tripleta dublată (R1 d) găsită pe server nu oprește operația, pentru că t�
 | aceeași sudură (nr + sufix), declarată cu alte capete | `conflict` (R4) | „sudura există cu altă țeavă — verifică numărul” |
 | copil cu tripletă dublată (R1 d), aflată pe server | `conflict`, „revizie cerută” | „măsoară din nou lungimea reală” |
 | tăiere sau montaj pe o bucată fără PV / în carantină | `eroare` (`fara_pv` / `carantina`) | mesaj clar; alege altă țeavă |
-| alt dispozitiv pe front | `alt_dispozitiv` (operațiile rămân în `izo_operatii`) | „tronsonul e luat de altă tabletă”; decide MP-ul |
+| alt dispozitiv pe front | `alt_dispozitiv`, nefinal (prima încercare în `izo_sync_incercari`, `op_id` liber) | „tronsonul e luat de altă tabletă — decide MP-ul”; operațiile rămân în coadă și pleacă după ce frontul revine |
+| rezervarea unei ciorne, expirată și preluată de altă declarație | nimic pe declarația veche; ea apare `rezervare_pierduta` în instantaneu, iar `sesiune_trimite` e refuzată până la o versiune nouă sau ștergere | „țeava a fost luată între timp — alege alta” |
 | retrimitere identică / același `op_id` cu alt conținut | `duplicat` / `conflict_op` | nimic / roșu |
 | declarația a fost schimbată pe server între timp (revizie cerută, respinsă, blocată) | `conflict` (CAS pe `versiune_baza`) | reîncarcă declarația |
 | retrimiterea unei operații vechi după respingere / revocare | `duplicat`, cu răspunsul vechi; nicio scriere nouă | nimic |
@@ -516,7 +567,7 @@ Două lucruri separate (r2), ca nicio diferență relevantă să nu primească r
 - **`amprenta`** = sha256 pe ce a văzut MP-ul în preview (doar la aprobare). Recalculată sub lock-uri pe starea comisă, trebuie să bată cu `p_amprenta`; altfel refuz (`preview_vechi`), iar ecranul reîncarcă lotul.
 
 Pe canale:
-- **Tableta**: (autor, `op_id`) + `hash_cerere` (versiunea formatului, tipul, dispozitivul, proiectul, payload-ul cu GPS).
+- **Tableta**: (autor, `op_id`) + `hash_cerere` (versiunea formatului, tipul, dispozitivul, proiectul, payload-ul cu GPS). Hash-ul îl compară doar serverul; nu e citibil din API (§3.2, §9.4).
 - **Aprobarea**: `cheie_operatie` (uuid generat la deschiderea lotului).
   - `hash_cerere` pe (`p_preverificare`, `p_randuri` sortate, `p_amprenta`, `p_decizii` canonic);
   - `amprenta` pe:
@@ -526,7 +577,9 @@ Pe canale:
     - `izo_tronson_config.server_ver`, nivelul proiectului, depozitele de destinație (id, site);
     - **cheile deciziilor cerute** (de exemplu `motiv_corectie` pe declarația X, `depozit_rest` pe copilul Y fără origine) și alertele deschise (coduri).
   - `p_decizii` trebuie să aibă **exact** cheile cerute de preview: nicio cheie lipsă, nicio cheie în plus. Valorile se validează (lungimea motivului, depozitul valid pe proiect).
-- **Respingerea, revizia, seria lămurită**: `cheie_operatie` + `hash_cerere` pe toți parametrii (inclusiv `p_dependente`) + versiunea rândului (CAS).
+- **Respingerea, revizia, seria lămurită**: `cheie_operatie` (`p_cheie`, în semnăturile din §4.2) + `hash_cerere` pe toți parametrii (inclusiv `p_dependente`) + versiunea rândului (CAS).
+- **Tranziția confirmată, eliberarea frontului**: naturale (starea țintă deja atinsă = niciun efect), fără cheie.
+- **Notele pe rând** (`fn_izo_pachet_rand_note`): naturale + CAS pe `executie_tevi.updated_at`.
 - **Gestionarul** (ieșire, primire) și **pachetul** (`completeaza`): `cheie_operatie` în `izo_operatii`, pe canalele `depozit` / `pachet`. `hash_cerere` acoperă toți parametrii (`p_bucati` sortate, `p_nr_aviz`, `p_data`, `p_updated_at`, intervalul de suduri).
 - **Legarea unui rând**: naturală (aceeași pereche nu mai are efect) + CAS pe `executie_tevi.updated_at`.
 
@@ -539,7 +592,7 @@ Pe canalele de birou, rândul din `izo_operatii` (și `izo_aprobari`) se scrie �
 - **Ceasul**: ora oficială = `now()` pe server. `offset_ceas_s` se calculează la fiecare lot; peste 5 minute dă LOW `izo_ceas_tableta`. Data montajului e declarată, cu limitele de la §3.2.
 - **GPS-ul**:
   - se citește **doar la salvarea declarației** (lat / lon / precizie / oră); nu se înregistrează niciun traseu între declarații (D2#15);
-  - propunerea tronsonului din GPS: Q-E4-10;
+  - propunerea tronsonului din GPS și orice comparație GPS ↔ tronson: Q-E4-10 (la A, niciuna în E4: comparația cere axul calibrat, care nu e în BD);
   - vizibilitatea coordonatelor (dată personală): Q-E4-15.
 - **Dispozitivul**: un uuid generat la primul „Pregătește” și păstrat în IndexedDB; fără amprentarea dispozitivului.
 - **Două taburi**: Web Locks; al doilea e „doar citire” (prototip `otherTab`).
@@ -563,14 +616,14 @@ Pe canalele de birou, rândul din `izo_operatii` (și `izo_aprobari`) se scrie �
 | tranziția de perete 7,1 ↔ 8,8 | informativă | calculată | calculată; o confirmă MP-ul înainte de emitere (E8) |
 | peretele cerut de proiect (zonele) | informativ | — | afișat |
 | seria „în verificare” | nu blochează trimiterea | acceptată | nu se aprobă |
-| GPS-ul arată alt tronson | întrebare, o dată pe sesiune | — | LOW |
+| GPS-ul arată alt tronson | — (Q-E4-10 A: fără ax în BD, nu se compară în E4) | — | — |
 
 ## 6. Fluxul de aprobare
 
 ### 6.1 Trimiterea sesiunii (operația `sesiune_trimite`)
 
 - Conține lista (uid, versiune) a declarațiilor sesiunii. Serverul cere ca lista să fie exact mulțimea declarațiilor `ciorna`; altfel `conflict`, „sesiunea s-a schimbat”.
-- E refuzată cât există rânduri blocante (`conflict`, `blocata`, R1 d, R4, lungime neconfirmată, `corectie_in_arbore`). Răspunsul le listează, iar sesiunea rămâne deschisă (prototip: „respins”).
+- E refuzată cât există rânduri blocante (`conflict`, `blocata`, R1 d, R4, lungime neconfirmată, `corectie_in_arbore`, `rezervare_pierduta`: o ciornă cu piesă fără rezervare activă). Răspunsul le listează, iar sesiunea rămâne deschisă (prototip: „respins”).
 - Rândurile „în verificare” nu o opresc (D2#2): trec în `in_verificare`.
 - După trimitere, declarațiile sunt `trimisa` și imutabile, iar sesiunea e `trimisa`. Cum află MP-ul: Q-E4-13.
 
@@ -584,7 +637,7 @@ Pe canalele de birou, rândul din `izo_operatii` (și `izo_aprobari`) se scrie �
 
 Ordinea, ca în E3 §4:
 
-1. `fn_izo_montaj_api_verifica()`: schema, API, poarta. `hash_cerere` se calculează pe parametri (§5.6).
+1. Filtrul de rol, fără lock (`fn_izo_montaj_preverifica`, §5.4 pasul −1), apoi `fn_izo_montaj_api_verifica()`: READ COMMITTED impus, schema, API, poarta. `hash_cerere` se calculează pe parametri (§5.6).
 2. Sesiunile (a lotului și ale dependențelor, după id), apoi declarațiile din listă **și dependențele lor neaprobate** (închiderea pe `depinde_de_uid` / `bucata_decl_uid` / capete), toate FOR UPDATE, după id. Ca la sincronizare, o declarație se blochează doar după sesiunea ei. Închiderea se calculează înainte de lock și se recalculează după; dacă diferă, refuz `preview_vechi`. Lock-ul pe sesiune serializează două aprobări cu aceeași cheie.
 3. `izo_operatii` / `izo_aprobari` (canalul `aprobare`, cheia), citite **după** lock: aceeași cheie + același `hash_cerere` → răspunsul salvat, fără scrieri; alt hash → refuz `cheie_refolosita`.
 4. **Autorizarea**, sub lock, toate FOR SHARE: `profiles` → `user_module_access` (cheia exactă, editor) → `izo_atribuiri` (`manager_aprobator` sau `inlocuitor_aprobator`, activă, valabilă azi). Aprobatorul are `employee_id` (§5.7).
@@ -599,7 +652,7 @@ Ordinea, ca în E3 §4:
      - e `trimisa`, fără conflict deschis, cu R1 (d) închis;
      - R3 exact, R4 cu 2 capete, lungimea confirmată;
      - **montajul pe o bucată din registru**: rezervarea activă pe `bucata_id` e a rândului (versiunea lui); bucata e `pe_tronson` pe tronsonul sesiunii;
-     - **montajul pe un copil declarat**: tăierea lui e aprobată deja sau e în lot, mai devreme în ordinea simulării, la versiunea din `depinde_de_versiune`; rezervarea pe `bucata_decl_uid` e a rândului; în starea simulată, copilul e `pe_tronson` pe tronsonul sesiunii (îl moștenește de la părinte, care trebuie să fie acolo: ieșirea e făcută, Q-E4-2 A);
+     - **montajul pe un copil declarat**: tăierea lui e aprobată deja sau e în lot, mai devreme în ordinea simulării, la versiunea din `depinde_de_versiune`. Rezervarea rândului (versiunea lui) e: pe `bucata_decl_uid`, dacă tăierea e în lot; pe `bucata_id` = copilul născut, cu `transfer_din_id`, dacă tăierea a fost aprobată într-un lot anterior (r3, §3.2). În starea simulată, copilul e `pe_tronson` pe tronsonul sesiunii (îl moștenește de la părinte, care trebuie să fie acolo: ieșirea e făcută, Q-E4-2 A);
      - **tăierea**: rezervarea pe sursă e a ei; în starea simulată, sursa e `pe_tronson` sau `montata` (§8.5);
      - PV-ul se verifică pe **rădăcină** (copiii n-au aviz, §3.3), după regula E3 §8;
    - o dependență care lipsește (nici aprobată, nici în lot) → refuz pe tot apelul, cu lista. MP-ul adaugă tăierea în lot sau scoate montajul;
@@ -607,13 +660,13 @@ Ordinea, ca în E3 §4:
 9. **Marcajul**: `fn_izo_montaj_marcheaza('aproba', aprobare, proiect, tronson, …)`. De aici urmează doar DML static, **în ordinea simulării**:
    - pe fiecare rând:
      - `corectie`, dacă e cazul;
-     - `taiere`: părintele trece `taiata`; copiii se nasc cu uid-ul și literele rezervate (copilul calculat cu `lungime_calculata`); mișcările `consumat` / `nascut`; capetele sudate ale părintelui trec pe copii, după ramura din §8.5; rezervările pe copii (`bucata_decl_uid`) se consumă aici;
+     - `taiere`: părintele trece `taiata`; copiii se nasc cu uid-ul și literele rezervate (copilul calculat cu `lungime_calculata`); mișcările `consumat` / `nascut`; capetele sudate ale părintelui trec pe copii, după ramura din §8.5; rezervările pe copii (`bucata_decl_uid`): a copilului `ramane_montat` → `consumata`, a montajului → `transferata` + rezervarea nouă pe `bucata_id`, pentru același montaj (§3.2). Montajul din același lot o consumă la pasul lui;
      - `montaj`: piesa trece `montata`; mișcarea `montat`;
    - sudurile: `declarata` → `aprobata`; capetele trec de pe `bucata_decl_uid` pe `bucata_id`; se calculează `tranzitie_perete`;
    - rezervările: `consumata`, cu `eveniment_id`;
    - declarațiile: `aprobata`, cu `aprobat_de` și `eveniment_ids`;
    - sesiunea: `inchisa` când nu mai are rânduri deschise; cât are rânduri `in_verificare`, rămâne `trimisa`.
-10. **Reconcilierea**: mișcările, bucățile, capetele și sudurile scrise = efectele simulate de la pasul 8. R3 se reverifică pe fiecare rădăcină atinsă. Altfel excepție, deci rollback total.
+10. **Reconcilierea**: mișcările, bucățile, capetele, sudurile și rezervările scrise = efectele simulate de la pasul 8. R3 se reverifică pe fiecare rădăcină atinsă; fiecare copil născut din lot fie e consumat de un montaj din lot, fie are exact o rezervare activă pe `bucata_id` (transferată), fie n-avea niciun montaj declarat. Altfel excepție, deci rollback total.
 11. **Jurnalul**, ultima scriere: `izo_aprobari` + `izo_operatii` (cheia, `hash_cerere`, `amprenta`, deciziile, răspunsul). O excepție oriunde înainte anulează tot, inclusiv jurnalul.
 
 **Răspunsul**: evenimentele, bucățile noi (uid → id), sudurile aprobate și lista „fișe de tăiere de generat” (rădăcinile tăiate în lot).
@@ -633,15 +686,18 @@ Ordinea, ca în E3 §4:
 | `revizie_ceruta`, `conflict`, `blocata` (sesiune trimisă) | `trimisa` (versiune nouă) | inginerul, `decl_salveaza` cu CAS |
 | `revizie_ceruta`, `blocata` | `respinsa` | MP-ul |
 | `trimisa` | `aprobata` | MP-ul, `fn_izo_aproba` |
-| `ciorna`, `trimisa`, `in_verificare`, `revizie_ceruta` | `blocata` | serverul, când o dependență e revizuită, respinsă sau ștearsă (mai jos) |
-| `blocata` (`dependenta_in_revizie`) | starea dinainte de blocare | serverul, când dependența revine `trimisa` cu copilul folosit neschimbat (mai jos) |
+| `ciorna`, `trimisa`, `in_verificare`, `revizie_ceruta` | `blocata` | serverul, când o dependență e revizuită, respinsă sau ștearsă (mai jos); starea veche se păstrează în `stare_inainte_blocare` |
+| `blocata` (`dependenta_in_revizie`) | `stare_inainte_blocare` | serverul, în lotul inginerului care salvează versiunea nouă a dependenței, când aceasta revine `trimisa` cu copilul folosit neschimbat (mai jos) |
+| `ciorna`, `conflict`, `blocata`, într-o sesiune `deschisa` **abandonată** (r3) | `respinsa` | MP-ul, `fn_izo_respinge`, cu motiv. „Abandonată” = frontul autorului pe tronson e inactiv sau expirat (eliberat de MP, §6.7) **sau** autorul nu mai are dreptul (modul / atribuire). Cât autorul are front valid, MP-ul nu-i respinge ciornele |
 
 - **`aprobata` e finală**: nu se revizuiește, nu se respinge și nu primește versiuni noi (refuz `rand_aprobat`, pe orice canal). O greșeală descoperită după aprobare se repară în registru, prin storno / corecție (E2a), în afara E4; un design separat după pilot.
 - **`respinsa`** și **`stearsa`** sunt finale.
+- **Pierderea rezervării** (o ciornă a cărei rezervare a expirat și a fost preluată, §5.4) **nu e o tranziție**: rândul rămâne în starea lui, iar condiția derivată `rezervare_pierduta` oprește `sesiune_trimite` și aprobarea până la o versiune nouă sau ștergere. Deci nicio scriere pe rândul altui autor.
+- **Sesiunea abandonată** (r3): după ce MP-ul a respins ultimul rând deschis, sesiunea trece `inchisa` în aceeași tranzacție (§3.2). Rezervările rândurilor respinse se eliberează (`respinsa`). Cu asta, oprirea fluxului (§3.1) nu poate rămâne blocată de un autor plecat sau revocat.
 
 **Invalidarea descendenților** (r2). Închiderea unei tăieri T = montajele și tăierile pe copiii ei declarați, sudurile cu capete pe acești copii și cuplările care depind de T, calculată tranzitiv:
 - **T → `revizie_ceruta`**: descendenții neaprobați trec `blocata` (`dependenta_in_revizie`). Rezervările și literele lor rămân. Când T revine `trimisa`, la o versiune nouă:
-  - copiii cu același uid și aceeași lungime rămân, iar dependenții lor revin la starea dinainte (cu `depinde_de_versiune` actualizat de server). La aprobare se revalidează oricum, iar amprenta se schimbă;
+  - copiii cu același uid și aceeași lungime rămân, iar dependenții lor revin la `stare_inainte_blocare` (cu `depinde_de_versiune` actualizat de server, în același lot, sub lock-urile din §5.4 pasul 1–2). La aprobare se revalidează oricum, iar amprenta se schimbă;
   - copiii schimbați sau dispăruți devin `anulata`: literele se eliberează, rezervările pe ei se eliberează (`parinte_anulat`), iar dependenții lor rămân `blocata` până la o versiune nouă a lor.
 - **T → `respinsa` / `stearsa`**: toți copiii declarați devin `anulata`, iar rezervările pe ei se eliberează. Pentru fiecare descendent, MP-ul (`p_dependente`) alege `respinge` (în cascadă) sau `blocheaza` (inginerul îl salvează din nou, pe altă piesă). La `stearsa` (inginerul, în sesiune deschisă), descendenții trec `blocata`.
 - **T `aprobata`** nu se mai schimbă, deci nu invalidează nimic.
@@ -697,21 +753,23 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 - **Expirarea frontului** (`expira_la`):
   - operațiile dispozitivului primesc `front_expirat`, nejurnalizat; coada rămâne;
   - „Pregătește” (cu semnal) reînnoiește frontul, dacă nu l-a luat alt dispozitiv;
-  - declarațiile rămân. Rezervările declarațiilor încă `ciorna` primesc `expira_dupa` = `expira_la` + 24 h și expiră **leneș**, fără cron: o altă declarație care cere aceeași resursă o preia (rezervarea veche devine `expirata`, iar declarația veche `conflict`). Rezervările rândurilor `trimisa` nu expiră: așteaptă MP-ul.
+  - declarațiile rămân. Rezervările declarațiilor încă `ciorna` primesc `expira_dupa` = `expira_la` + 24 h și expiră **leneș**, fără cron: o altă declarație care cere aceeași resursă o preia (rezervarea veche devine `expirata`, sub lock-ul rădăcinii). Declarația veche **nu se scrie** (r3): rămâne cu `rezervare_pierduta` derivat, care îi oprește trimiterea (§5.4, §6.4). Rezervările rândurilor `trimisa` nu expiră: așteaptă MP-ul.
 - **Eliberarea frontului de MP** (`fn_izo_front_elibereaza`, cu motiv): frontul devine inactiv, iar dispozitivul vechi primește `front_expirat`, apoi `alt_dispozitiv` dacă a luat altul frontul. Declarațiile lui rămân, cu regula de expirare de mai sus.
+- **Recuperarea după `alt_dispozitiv`** (r3, utilizabilă în pilot): MP-ul vede în `v_izo_carantina_sync` ce așteaptă fiecare dispozitiv (autor, număr de operații, de când). Decide: cere predarea pe tableta care ține frontul, sau eliberează frontul ei (cu motiv). Dispozitivul care aștepta face „Pregătește”, iar coada lui pleacă cu aceleași `op_id`-uri, validată pe starea de atunci: ce s-a suprapus între timp (aceeași țeavă, aceeași sudură) iese `conflict` pe rândul lui, ca orice conflict. Nimic nu se pierde și nimic nu se aplică fără validare.
 - **Revocarea accesului** (cheia de modul, atribuirea, `activ = false`, `valabil_pana` trecut):
   - loturile autorului sunt refuzate întregi (`fara_drept`), nejurnalizate, fără efecte;
-  - ciornele lui nu se mai pot trimite; rezervările lor expiră leneș (24 h); MP-ul le poate respinge;
+  - ciornele lui nu se mai pot trimite; rezervările lor expiră leneș (24 h). MP-ul le respinge explicit, cu motiv, ca rânduri ale unei sesiuni abandonate (§6.4): `fn_izo_respinge` ia întâi frontul tronsonului FOR SHARE (ordinea §10.5: frontul înaintea sesiunii), apoi sesiunea și declarațiile, și verifică sub lock că frontul autorului e inactiv / expirat sau că autorul n-are drept (prin `fn_izo_montaj_autorizare_lock` pe autor). Rezervările se eliberează, iar sesiunea fără rânduri deschise se închide;
   - rândurile deja `trimisa` rămân aprobabile: declarația era autorizată la acceptare, iar dovada e în `izo_operatii`. Lotul arată alerta `izo_autor_fara_drept`;
   - aprobatorul revocat e refuzat la pasul 4 din §6.3 (testul de cursă revocare ↔ aprobare, §11.5).
-- **Oprirea fluxului** pe tronson: §3.1. E refuzată cât există rezervări active, declarații deschise sau un front activ.
+- **Oprirea fluxului** pe tronson: §3.1. E refuzată cât există rezervări active, declarații deschise sau un front activ. Cu un autor absent, drumul e: eliberarea frontului → respingerea rândurilor sesiunii abandonate → sesiunea închisă → oprirea (testul 17).
 - **Limitele** (disponibilul nu poate fi blocat abuziv):
   - pe autor: cel mult 60 de rezervări active, din care cel mult 10 pe bucăți din depozit („cere ieșirea”); valorile se confirmă la pilot;
   - cel mult 200 de declarații pe sesiune și 50 de operații pe lot;
   - cel mult 600 de operații pe oră pe autor, numărate în `izo_operatii` (index pe `autor_profile_id`, `ora_server`);
+  - r3: cel mult 30 de apeluri pe minut pe (profil, funcție), numărate **înaintea porții** în `izo_rata_apeluri` (§5.4 pasul −1), deci și refuzurile, duplicatele și instantaneele repetate costă din limită;
   - peste limită → `limita`, nejurnalizat;
   - doar bucăți ale proiectului: de pe tronsonul sesiunii sau din depozitele proiectului;
-  - MP-ul vede rezervările active (cine, de când, ce sesiune) pe ecranul de aprobare și le poate elibera prin respingere.
+  - MP-ul vede rezervările active (cine, de când, ce sesiune) pe ecranul de aprobare și le poate elibera prin respingere: rândurile trimise oricând, ciornele doar într-o sesiune abandonată (§6.4).
 
 ## 7. Legătura bucată ↔ `executie_tevi`: picker-ul devine legătura reală
 
@@ -738,7 +796,7 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 
 ### 7.3 `fn_izo_pachet_leaga(p_teava, p_bucata, p_updated_at)` / `fn_izo_pachet_dezleaga(p_teava, p_motiv)` — contractul E4a din #823
 
-**Ordinea de lock**, în trepte (r2: aceeași pentru toți scriitorii pachetului: `leaga`, `dezleaga`, `completeaza`, `transgaz`):
+**Ordinea de lock**, în trepte (r2: aceeași pentru toți scriitorii pachetului: `leaga`, `dezleaga`, `completeaza`, `transgaz`; r3: și `fn_izo_pachet_rand_note`, fără pasul 7, bucata):
 1. schema → autorizarea (MP);
 2. **proiectul și locațiile** FOR SHARE (`fn_izo_blocheaza_locuri`); o pre-verificare a fluxului, fără lock, refuză devreme un pachet care nu e pe un tronson în flux;
 3. **pachetul** FOR NO KEY UPDATE, direct (apoi `fn_izo_proiecte_pachet_blocat` nu mai așteaptă nimic) și tronsonul lui FOR SHARE;
@@ -766,11 +824,13 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
 
 **`dezleaga`**: doar cu motiv; refuzat pe un pachet aprobat de Transgaz (sau emis, în E8). Rândul rămâne în pachet, nelegat; `fn_izo_pachet_aprobare_transgaz` refuză un pachet cu rânduri nelegate.
 
-**Interblocajul**:
-- pe tronsoanele în flux, UPDATE-ul km-ului pachetului din client e refuzat (calea 21);
-- deci recalculul km-ului, care ar lua rândurile după pachet, nu poate rula în paralel cu legarea;
-- o scriere din client pe un rând al unui tronson în flux e refuzată de `trg_executie_tevi_izo_a_flux` **înainte** de orice alt lock (§7.4), deci nu ține pachetul cât un scriitor E4 așteaptă rândul;
-- în rest, PostgreSQL detectează ciclul și anulează una dintre tranzacții: fail-closed, fără stare parțială.
+**Interblocajul** (r3, pe cascadele reale, ✓BD 21.10):
+- cascadele pe `executie_tevi` (toate DEFINER, owner `postgres`): `tg_tevi_update_totaluri` (AFTER ROW, la **orice** INSERT / UPDATE / DELETE) face UPDATE pe pachet; `trg_executie_tevi_update_recalc` / `_insert_recalc` / `_delete_recalc` (AFTER STATEMENT) recalculează km-ul pe rândurile pachetului; `tg_tevi_renumber` (BEFORE INSERT) renumerotează. Pe pachet: `trg_executie_pachete_recalc_poz_km` (AFTER UPDATE, doar la `km_start_m`) ia rândurile;
+- deci o scriere din client pe un rând, **chiar și doar pe `observatii`**, ia rândul, apoi pachetul (prin totaluri) — ordinea inversă scriitorilor E4 (pachetul, apoi rândurile). De aceea, pe tronsoanele în flux, `a0_izo_flux_tevi` refuză **orice** INSERT / UPDATE / DELETE din client pe rânduri (§7.4). Refuzul vine în trigger-ul BEFORE: clientul ține doar lock-ul implicit al rândului, fără să fi atins pachetul, iar AFTER-urile nu mai rulează. Notele (observații, coduri NDT) trec prin `fn_izo_pachet_rand_note`, cu ordinea scriitorilor de pachet;
+- pe tronsoanele în flux, UPDATE-ul km-ului pachetului din client e refuzat (calea 21), deci recalculul km-ului (pachet → rânduri) nu rulează din client;
+- o scriere din client pe antetul unui pachet în flux (coloanele permise, §7.4) ia doar pachetul și nu pornește nicio cascadă spre rânduri, deci nu poate face ciclu cu un scriitor E4 (care ia tot pachetul întâi);
+- cascadele pornite de scriitorii E4 (totalurile, km-ul, renumerotarea) rulează sub lock-ul pachetului deja ținut de ei; rândurile în plus pe care le ating sunt ale aceluiași pachet, deci două scriitoare E4 se serializează pe pachet;
+- în rest (tronsoanele fără flux, unde E4 nu scrie), ordinea 2c rămâne neschimbată; dacă PostgreSQL găsește totuși un ciclu, anulează una dintre tranzacții: fail-closed, fără stare parțială.
 
 ### 7.4 Garda pe tronsoanele în flux (E4a: căile 1, 4, 5, 7, 8, 18, 21)
 
@@ -782,10 +842,11 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
   1. pachetul → tronsonul, citite fără lock: pe un tronson în flux, `tronson_id` / `proiect_id` ale antetului nu se pot schimba, iar mutarea spre un tronson în flux e refuzată;
   2. citirea fluxului pentru OLD și NEW, fără lock: dacă oricare e în flux → refuz imediat, fără alte lock-uri (refuzul e fail-closed, deci nu cere stabilitate);
   3. altfel: advisory partajat pe proiectele OLD / NEW (`fn_izo_lock_partajat`, crescător) și recitirea fluxului. O activare concurentă (advisory exclusiv, §3.1) e fie așteptată și văzută (refuz), fie ajunge după commit-ul mutării. Activarea cere apoi 0 rânduri de pachet nelegate pe tronson, deci o mutare comisă chiar înainte o oprește.
-- **Numele trigger-elor** sortează **înaintea** celor E2a / 2c (`trg_executie_tevi_izo_a_flux` < `…_izo_delete` < `…_izo_mutare`; la fel `trg_pachete_izo_a_flux`). Refuzul vine deci înainte ca garda 2c să ia pachetul FOR SHARE.
-- **`trg_executie_tevi_izo_a_flux`** (BEFORE INSERT / UPDATE / DELETE), pe pachetele unui tronson în flux:
-  - din client se pot schimba doar `observatii`, `pm_cod`, `pa_ut_cod`, `ut_cod`, pe rânduri existente care rămân în același pachet; orice altceva → 42501;
-  - scriitorul trece doar sub context (`completeaza` / `leaga` / `dezleaga`) și doar cu rândul așteptat (proiecția exactă, `fn_izo_pachet_rand_asteptat`);
+- **Numele trigger-elor** (r3) sortează **primele** dintre trigger-ele BEFORE ale tabelului, nu doar înaintea celor E2a / 2c: `a0_izo_flux_tevi`, `a0_izo_flux_pachete`, `a0_izo_flux_documente` < `tg_…` (cele vechi, ✓BD 21.10) < `trg_…`. Motivul: `tg_tevi_renumber` (BEFORE INSERT, DEFINER) face UPDATE pe alte rânduri ale pachetului, iar `tg_pachete_lansare_assign_numar` (BEFORE INSERT) ia proiectul FOR UPDATE; cu numele vechi, ar rula înaintea refuzului. Așa, refuzul vine înaintea oricărei cascade și înainte ca garda 2c să ia pachetul FOR SHARE. Poarta verifică ordinea: niciun trigger BEFORE pe cele trei tabele nu sortează înaintea celui E4 (§10.7).
+- **Crearea unui antet din client** (permisă și pe un tronson în flux): la INSERT, `a0_izo_flux_pachete` nu ia niciun lock (crearea e permisă în ambele stări). Ordinea rămâne cea veche: proiectul FOR UPDATE (`tg_pachete_lansare_assign_numar`), apoi advisory-ul partajat (garda 2c), adică aceeași direcție ca scriitorii E4 (proiectul înaintea advisory-ului), deci fără ciclu. Câmpurile interzise din client pe un tronson în flux (`status` ≠ inițial, `aprobat_*`, `pdf_aprobare_*`) le verifică un trigger AFTER ROW (`a0_izo_flux_pachete_dupa`), care recitește fluxul **după** advisory-ul luat de garda 2c. O activare concurentă e deci fie așteptată și văzută (refuz), fie comisă după antet; iar activarea cere tronsonul fără rânduri nelegate și fără anteturi aprobate.
+- **`a0_izo_flux_tevi`** (BEFORE INSERT / UPDATE / DELETE), pe pachetele unui tronson în flux:
+  - din client: **nimic** (r3) → 42501, inclusiv `observatii`, `pm_cod`, `pa_ut_cod`, `ut_cod` (motivul: cascada totalurilor, §7.3). Acestea patru se scriu prin `fn_izo_pachet_rand_note` (CAS pe `updated_at`, autorizare: `inginer_izometrie`, `manager_aprobator` / `inlocuitor_aprobator` pe proiect sau owner). UI-ul editorului folosește RPC-ul pe tronsoanele în flux și UPDATE-ul direct pe celelalte;
+  - scriitorul trece doar sub context (`completeaza` / `leaga` / `dezleaga` / `nota`) și doar cu rândul așteptat (proiecția exactă, `fn_izo_pachet_rand_asteptat`; la `nota`, doar cele patru coloane + `updated_at` diferă);
   - cascadele DEFINER existente (renumerotarea, recalculul km, totalurile) rulează ca `postgres`. Sunt acceptate doar când contextul E4 al tranzacției e valid ȘI se schimbă doar coloanele derivate:
     - pe rânduri: `poz_in_pachet`, `poz_km_m`, `updated_at`;
     - pe pachet: `nr_tevi`, `total_lungime_m`, `nr_pending_sant`, `updated_at`.
@@ -793,9 +854,9 @@ Circuitul fișei (`izo_fise_taiere*`, contorul FT, scanul) rămâne în E5.
   - se creează din client;
   - `km_start_m`, `status`, `aprobat_*`, `pdf_aprobare_*` și DELETE sunt refuzate din client;
   - starea „aprobat” se pune doar prin `fn_izo_pachet_aprobare_transgaz` (fișierul la o cale dată de server; documentul și starea într-o tranzacție).
-- **`executie_pachete_documente`** e doar-adaug, iar în Storage (`executie-pachete-pdf`) nu există UPDATE / DELETE pe pachetele tronsoanelor în flux.
+- **`executie_pachete_documente`** e doar-adaug pe pachetele tronsoanelor în flux: politicile 20261029a permit UPDATE / DELETE celor cu acces de scriere, deci un trigger E4 (`a0_izo_flux_documente`) le refuză acolo. În Storage (`executie-pachete-pdf`) nu există UPDATE / DELETE pe pachetele tronsoanelor în flux.
 - **`executie_tronsoane`**: km-ul unui tronson în flux nu se schimbă din client.
-- RLS-ul din 20261029a rămâne. Scrierile pe tronsoanele în flux trec prin RPC.
+- **RLS-ul** (r3, corectat): pe pachete, documente și Storage rămâne cel din 20261029a (`fn_executie_pachete_acces`). Pe `executie_tevi` RLS-ul existent e larg (`executie_tevi_modify`, ALL, `auth.uid() IS NOT NULL`; ✓BD 21.10, §1.1 #15), deci pe tronsoanele în flux bariera e doar trigger-ul E4 de mai sus, care intră în poartă (numele, corpul, `tgenabled = 'A'`). Scrierile pe tronsoanele în flux trec prin RPC.
 
 ### 7.5 Picker-ul (UI, `src/Izometrie.jsx`)
 
@@ -853,7 +914,12 @@ Ramura se stabilește pe server, după capetele **active** ale părintelui `mont
 - apoi declarația `cuplare` leagă noul capăt liber al copilului de celălalt capăt de lanț, cu sudura ei. Nu există sudură cu un singur capăt;
 - un părinte cu **ambele** capete sudate nu intră pe ramura 1: refuz `ramura_gresita`.
 
-**Ramura 2 — tăiere în mijloc, pe o bucată sudată la ambele capete** (cut-out pe o țeavă, D2#11; în E4 doar de pe laptop, Q-E4-12 A):
+**Ramura 2 — tăiere în mijloc, pe o bucată sudată la ambele capete** (cut-out pe o țeavă, D2#11; în E4 doar de pe laptop, Q-E4-12 A). **Contractul laptopului** (r3):
+- laptopul e un dispozitiv al **inginerului** (`inginer_izometrie`), cu aceeași rută `/izometrie/teren`, același `fn_izo_sync_push` și aceeași coadă; ecranul ramurii 2 e vizibil doar pe ecrane late;
+- frontul e unul singur pe tronson: tableta îl predă („Predă”: coada goală, sesiunea trimisă), laptopul face „Pregătește” și ia frontul; apoi invers. Un laptop fără front primește `alt_dispozitiv`, ca orice dispozitiv;
+- autorul declarației e inginerul logat; MP-ul **nu declară** (n-are `inginer_izometrie`), deci regula „nimeni nu-și aprobă rândurile” rămâne neatinsă.
+
+Geometria ramurii 2:
 - două puncte de tăiere → 3 copii: stânga (cu capătul amonte, preia sudura amonte), mijlocul (rest → depozit), dreapta (cu capătul aval, preia sudura aval). **Ambele** suduri se mută, fiecare pe copilul ei;
 - golul rămas se închide cu un montaj (piesa de inserție) și două suduri noi, în același lot sau mai târziu. Până atunci, lanțul are două capete libere, nu suduri cu un capăt (R4 rămâne adevărat);
 - o tăiere cu un singur punct pe o bucată sudată la ambele capete ar lăsa o sudură pe un copil care nu conține litera ei: refuz `ramura_gresita`.
@@ -868,8 +934,8 @@ Ramura se stabilește pe server, după capetele **active** ale părintelui `mont
 
 ### 8.6 Corecția de lungime (r2: doar pe o rădăcină fără descendenți)
 
-- **Unde e permisă**: doar pe o bucată care e propria rădăcină (`parinte_id IS NULL`), fără niciun copil (nici în registru, nici declarat și neanulat). Rădăcina e atunci singura frunză, deci R3 (Σ frunze = rădăcina) rămâne adevărat după corecție.
-- **Corecția urmată de tăiere**, în același lot (marcajul ≠ stoc, §8.1): ordinea simulării pune `corectie` înaintea `taiere` (§6.3), deci tăierea pornește de la lungimea corectată (`baza_mm`), iar Σ copiilor = baza, exact.
+- **Unde e permisă**: doar pe o bucată care e propria rădăcină (`parinte_id IS NULL`), fără niciun copil în registru și fără copii declarați (neanulați) de **altă** declarație. Copiii declarați de aceeași declarație care poartă corecția (tăierea cu `marcaj_diferit`, §8.1) nu contează (r3): sunt efectul ei, nu descendenți preexistenți. Rădăcina e atunci singura frunză în momentul corecției, deci R3 (Σ frunze = rădăcina) rămâne adevărat după ea.
+- **Corecția urmată de tăiere** (marcajul ≠ stoc, §8.1) e **o singură declarație** `taiere`, cu `confirmare.mod = marcaj_diferit`. La aprobare dă două evenimente, în ordine: `corectie`, apoi `taiere` (§6.3). Tăierea pornește de la lungimea corectată (`baza_mm`), iar Σ copiilor = baza, exact. Verificarea „fără descendenți” se face pe starea dintre cele două evenimente: rădăcina fără copii în registru și fără copii declarați de alte declarații.
 - **În arbore** (bucata are părinte sau copii): `corectie` e **refuzată explicit** (`corectie_in_arbore`), la sincronizare (rând blocant) și la aprobare. Exemplul: rădăcina 12 m, copiii 8 + 4; corectarea unui copil la 4,1 ar da 12,1 m. Ce se face:
   - la tăierea unui copil, `baza_mm` = lungimea lui din registru, exact (altfel R3 s-ar rupe); măsurătoarea tabletei rămâne doar pe declarație. O diferență peste ±20 mm e `conflict` (`corectie_in_arbore`), iar MP-ul decide în afara E4;
   - corecția unui arbore întreg (rădăcina + frunzele, cu R3 refăcut) e un design separat, după pilot.
@@ -885,8 +951,10 @@ Ramura se stabilește pe server, după capetele **active** ale părintelui `mont
 
 | Rol | Deține | Ce scrie |
 |---|---|---|
-| `izo_teren_editor` | `fn_izo_teren_*`, `fn_izo_sync_push` | `izo_fronturi`, `izo_operatii` (canalul `teren`), `izo_preverificari`, `izo_declaratii` (+ versiuni, + `izo_declaratii_gps`), `izo_bucati_declarate`, `izo_rezervari`, `izo_suduri` / `_capete` doar în `declarata`. **Nimic în registru** |
-| `izo_montaj_writer` | `fn_izo_aproba`, `fn_izo_revizie_cere`, `fn_izo_respinge`, `fn_izo_serie_lamureste`, `fn_izo_tranzitie_confirma`, `fn_izo_front_elibereaza`, `fn_izo_iesire_tronson`, `fn_izo_primire_depozit`, `fn_izo_pachet_*`, `fn_izo_seteaza_flux`, `fn_izo_montaj_marcheaza` | registrul (doar sub context); stările tabelelor de mai sus; sudurile aprobate; `izo_aprobari`; `izo_operatii` (canalele `aprobare` / `depozit` / `pachet`); `izo_tronson_config` (doar coloanele fluxului); pe tronsoanele în flux, sub context: `executie_tevi`, pachetele, documentele |
+| `izo_teren_editor` | `fn_izo_teren_*`, `fn_izo_sync_push` | `izo_fronturi`, `izo_operatii` (canalul `teren`), `izo_sync_incercari`, `izo_preverificari`, `izo_declaratii` (+ versiuni, + `izo_declaratii_gps`), `izo_bucati_declarate`, `izo_rezervari`, `izo_suduri` / `_capete` doar în `declarata`. **Nimic în registru** |
+| `izo_montaj_writer` | `fn_izo_aproba`, `fn_izo_revizie_cere`, `fn_izo_respinge`, `fn_izo_serie_lamureste`, `fn_izo_tranzitie_confirma`, `fn_izo_front_elibereaza`, `fn_izo_iesire_tronson`, `fn_izo_primire_depozit`, `fn_izo_pachet_*` (inclusiv `fn_izo_pachet_rand_note`), `fn_izo_seteaza_flux`, `fn_izo_montaj_marcheaza` | registrul (doar sub context); stările tabelelor de mai sus; sudurile aprobate; `izo_aprobari`; `izo_operatii` (canalele `aprobare` / `depozit` / `pachet`); `izo_tronson_config` (doar UPDATE pe coloanele fluxului, fără INSERT); pe tronsoanele în flux, sub context: `executie_tevi`, pachetele, documentele |
+
+Helperele `postgres` (DEFINER, EXECUTE doar rolurile E4 care le folosesc): `fn_izo_montaj_autorizare_lock`, `fn_izo_blocheaza_locuri`, `fn_izo_config_blocheaza`, `fn_izo_radacini_blocheaza`, `fn_izo_montaj_preverifica`, `fn_izo_rata_consuma`, `fn_izo_gps_citeste` (aceasta și pentru `authenticated`, §9.5). Ele iau lock-urile pe tabelele pe care rolurile E4 n-au UPDATE: FOR SHARE / FOR UPDATE cer UPDATE pe cel puțin o coloană, deci un rol cu doar SELECT n-ar putea bloca direct.
 
 **Postcondițiile pe roluri**:
 - ambele: NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
@@ -916,6 +984,7 @@ Helper-ul `fn_izo_montaj_autorizare_lock(p_proiect, p_rol, p_depozit)` (owner `p
 |---|---|
 | sincronizarea, instantaneul, frontul | `inginer_izometrie` (sau owner) |
 | aprobarea, revizia, respingerea, seria lămurită, tranziția, eliberarea frontului, pachetul | `manager_aprobator` sau `inlocuitor_aprobator` (sau owner); niciodată pe propriile rânduri |
+| notele pe rândul de pachet (`fn_izo_pachet_rand_note`, r3) | `inginer_izometrie`, `manager_aprobator` sau `inlocuitor_aprobator` (sau owner) |
 | ieșirea, primirea | `gestionar` pe proiect + depozit (sau owner) |
 | fluxul pe tronson | `postgres` (chat, cu „da”) |
 
@@ -925,7 +994,8 @@ Helper-ul `fn_izo_montaj_autorizare_lock(p_proiect, p_rol, p_depozit)` (owner `p
 
 **Regulile comune**, pe toate tabelele E4:
 - owner `postgres`; RLS activ; REVOKE ALL de la PUBLIC, `anon`, `authenticated`, `service_role`, apoi GRANT doar ce scrie mai jos;
-- nimeni nu are DELETE / TRUNCATE. Trigger-ul doar-adaug (ca în E2a) refuză UPDATE / DELETE / TRUNCATE pe tabelele-jurnal, chiar și pentru `postgres`: `izo_operatii`, `izo_declaratii_versiuni`, `izo_aprobari`;
+- nimeni nu are DELETE / TRUNCATE. Trigger-ul doar-adaug (ca în E2a) refuză UPDATE / DELETE / TRUNCATE pe tabelele-jurnal, chiar și pentru `postgres`: `izo_operatii`, `izo_declaratii_versiuni`, `izo_aprobari`, `izo_sync_incercari`;
+- **lock-urile pe rânduri** (r3): un rol blochează direct (FOR SHARE / FOR UPDATE) doar tabelele pe care are UPDATE pe cel puțin o coloană; pentru restul (profilul, accesul, atribuirea, proiectul, tronsonul, depozitele, config-ul la sincronizare, registrul la tabletă) folosește helperele `postgres` din §9.1. Testul 16 o verifică pe fiecare lock, ca rolul real;
 - **citirea API** (`authenticated`, doar SELECT): direct prin `fn_izo_citire(proiect_id)` pe tabelele cu `proiect_id`; prin părinte (`EXISTS` pe părintele filtrat de RLS), ca în E3, pe cele fără `proiect_id`;
 - **rolurile E4**: politici pe rând largi (`USING / WITH CHECK (proiect_id IS NOT NULL)` sau prin părinte), ca în E3 §3.5. Restricția reală e în trigger-ul de stări (§6.4), în gardă și în privilegiile pe coloane;
 - **numele politicilor**, câte una pe (tabel, rol, comandă) din matrice: `<tabel>_api_sel` (`authenticated`, de exemplu `izo_fronturi_api_sel`), `izo_teren_<tabel fără izo_>_sel / _ins / _upd`, `izo_montaj_<tabel fără izo_>_sel / _ins / _upd`. Toate intră în amprentă prin prefixele din §10.7; o politică în plus sau în minus → porți lipsă;
@@ -934,38 +1004,41 @@ Helper-ul `fn_izo_montaj_autorizare_lock(p_proiect, p_rol, p_depozit)` (owner `p
 
 | Tabel | `authenticated` (SELECT) | `izo_teren_editor` | `izo_montaj_writer` |
 |---|---|---|---|
-| `izo_tronson_config` | `fn_izo_citire(proiect_id)` | SELECT | SELECT, UPDATE (`flux_montaj`, `flux_de_la`, `flux_motiv`, `flux_schimbat_de`, `server_ver`). Sensul, zonele și executantul le scrie `postgres` direct, cu „da” |
+| `izo_tronson_config` | `fn_izo_citire(proiect_id)` | SELECT (FOR SHARE doar prin `fn_izo_config_blocheaza`) | SELECT, UPDATE (`flux_montaj`, `flux_de_la`, `flux_motiv`, `flux_schimbat_de`, `server_ver`), **fără INSERT** (r3). Rândul, sensul, `nr_sudura_start`, zonele și executantul le scrie `postgres` direct, cu „da” |
 | `izo_fronturi` | `fn_izo_citire(proiect_id)` | SELECT, INSERT (toate, fără `id`), UPDATE (`expira_la`, `predat_la`, `activ`) | SELECT, UPDATE (`activ`, `predat_la`, `eliberat_de`, `eliberat_motiv`) |
-| `izo_operatii` | `fn_izo_citire(proiect_id)`; payload-ul n-are GPS | SELECT, INSERT (toate, fără `id`); politica `WITH CHECK (canal = 'teren' AND autor_profile_id IS NOT NULL)` | SELECT, INSERT; `WITH CHECK (canal IN ('aprobare','depozit','pachet'))` |
+| `izo_operatii` | `fn_izo_citire(proiect_id)`; payload-ul n-are GPS; SELECT pe **toate coloanele în afară de `hash_cerere`** (r3, grant pe coloane) | SELECT, INSERT (toate, fără `id`); politica `WITH CHECK (canal = 'teren' AND autor_profile_id IS NOT NULL)` | SELECT, INSERT; `WITH CHECK (canal IN ('aprobare','depozit','pachet'))` |
+| `izo_sync_incercari` (r3) | `fn_izo_citire(proiect_id)`, prin `v_izo_carantina_sync`; payload-ul n-are GPS | SELECT, INSERT (toate, fără `id`) | SELECT |
+| `izo_rata_apeluri` (r3) | nimic | nimic (doar prin `fn_izo_rata_consuma`) | nimic (la fel) |
 | `izo_preverificari` | `fn_izo_citire(proiect_id)` | SELECT, INSERT (toate, fără `id`), UPDATE (`stare`, `trimisa_la`, `trimisa_op_id`, `versiune`) | SELECT, UPDATE (`stare`, `versiune`) |
-| `izo_declaratii` | `fn_izo_citire(proiect_id)` (fără coloane GPS: nu există) | SELECT, INSERT (toate, fără `id` și coloanele de decizie), UPDATE (conținutul, `stare`, `versiune`, `ultimul_op_id`) | SELECT, UPDATE (`stare`, `versiune`, `bucata_id` la seria lămurită, coloanele de decizie) |
-| `izo_declaratii_versiuni` | prin `izo_declaratii` | SELECT, INSERT | SELECT, INSERT (versiunea creată de seria lămurită) |
+| `izo_declaratii` | `fn_izo_citire(proiect_id)` (fără coloane GPS: nu există) | SELECT, INSERT (toate, fără `id` și coloanele de decizie), UPDATE (lista explicită, r3: coloanele de conținut din §3.2, `stare`, `conflict_cod`, `stare_inainte_blocare`, `blocata_motiv`, `depinde_de_versiune`, `versiune`, `ultimul_op_id`, `gps_prezent`) | SELECT, UPDATE (`stare`, `conflict_cod`, `stare_inainte_blocare`, `blocata_motiv`, `versiune`, `bucata_id` la seria lămurită, coloanele de decizie) |
+| `izo_declaratii_versiuni` | prin `izo_declaratii`; toate coloanele în afară de `hash_cerere` (r3) | SELECT, INSERT | SELECT, INSERT (versiunea creată de seria lămurită) |
 | `izo_declaratii_gps` (§9.5) | **nimic** | **doar INSERT** (fără SELECT, deci și fără `RETURNING`) | **nimic** |
 | `izo_bucati_declarate` | prin `izo_declaratii` | SELECT, INSERT (toate), UPDATE (`stare`, `lungime_mm`, `lungime_calculata`, `destinatie`, `depozit_destinatie_id`) | SELECT, UPDATE (`stare`, `bucata_id`, `depozit_destinatie_id`) |
-| `izo_rezervari` | `fn_izo_citire(proiect_id)` | SELECT, INSERT (toate, fără `id`), UPDATE (`activa`, `eliberata_la`, `motiv_eliberare`, `expira_dupa`) | SELECT, INSERT (seria lămurită), UPDATE (`activa`, `eliberata_la`, `motiv_eliberare`, `eveniment_id`) |
+| `izo_rezervari` | `fn_izo_citire(proiect_id)` | SELECT, INSERT (toate, fără `id`), UPDATE (`activa`, `eliberata_la`, `motiv_eliberare`, `expira_dupa`) | SELECT, INSERT (seria lămurită; transferul pe `bucata_id`, cu `transfer_din_id`, §3.2), UPDATE (`activa`, `eliberata_la`, `motiv_eliberare`, `eveniment_id`) |
 | `izo_suduri` | `fn_izo_citire(proiect_id)` | SELECT, INSERT, UPDATE (`nr`, `sufix`, `executant`, `poanson`, `data_sudura`, `stare` → `anulata`, `server_ver`), doar pe `declarata` | SELECT, UPDATE (`stare`, `tranzitie_*`, `server_ver`) |
 | `izo_suduri_capete` | prin `izo_suduri` | SELECT, INSERT, UPDATE (`activ`), doar pe suduri `declarata` | SELECT, INSERT, UPDATE (`activ`, `de_la_eveniment_id`) |
 | `izo_aprobari` | `fn_izo_citire(proiect_id)` | — | SELECT, INSERT |
 | `magazie_bucati` | neschimbat (E2a) | SELECT (politica `magbuc_izo_teren_sel`) | SELECT; INSERT pe `C` ∪ {`id`, `uid`, `radacina_id`, `server_ver`}; UPDATE pe stare, loc, `tronson_id`, `depozit_id`, `atribute`, lungimi, `executie_teava_id`, `server_ver`, `updated_at` (politici `magbuc_izo_montaj_*`) |
 | evenimente / mișcări | neschimbat | SELECT | SELECT, INSERT (politici `izo_ev_montaj_*`, `izo_mis_montaj_*`) |
-| `executie_tevi`, pachete, documente | neschimbat (RLS 20261029a) | SELECT (pentru instantaneu) | SELECT, INSERT, UPDATE pe coloanele proiecției (politici `executie_*_izo_montaj`) |
+| `executie_tevi`, pachete, documente | neschimbat: pe pachete / documente RLS-ul 20261029a; pe `executie_tevi` RLS-ul larg existent (§1.1 #15). Pe tronsoanele în flux, trigger-ele `a0_izo_flux_*` refuză orice scriere a rândurilor din client (§7.4) | SELECT (pentru instantaneu) | SELECT, INSERT, UPDATE pe coloanele proiecției și pe cele patru note (politici `executie_*_izo_montaj`) |
 | config proiect, atribuiri, importuri | — | — | — (doar prin helpere) |
 
 **Vederile**, toate `WITH (security_invoker = on)`, SELECT doar pentru `authenticated`, deci filtrate de RLS-ul tabelelor de dedesubt:
 - `v_izo_alerte` (extinsă cu alertele E4);
-- `v_izo_carantina_sync` (operațiile `alt_dispozitiv`);
+- `v_izo_carantina_sync` (încercările `alt_dispozitiv` din `izo_sync_incercari`, încă fără rând în `izo_operatii`);
 - `v_izo_rezervari_active` (ecranul MP-ului, §6.7).
 
-Niciuna nu expune GPS-ul.
+Niciuna nu expune GPS-ul sau `hash_cerere`.
 
 **Funcțiile**: EXECUTE doar pe semnătura exactă, ca în §4.2. Ajutătoarele: REVOKE de la PUBLIC, `anon`, `authenticated`, `service_role`.
 
 ### 9.5 GPS-ul și păstrarea datelor (r2)
 
 - **Coordonatele stau într-un singur loc**: `izo_declaratii_gps` (`declaratie_id`, `versiune`, `lat`, `lon`, `precizie_m`, `la`), PK (`declaratie_id`, `versiune`), FK → declarație. Nimeni nu are SELECT; citirea trece doar prin `fn_izo_gps_citeste(p_decl)` (DEFINER, owner `postgres`), care cere MP-ul proiectului (atribuire activă) sau owner-ul (Q-E4-15 A).
-- **Nicăieri altundeva**: serverul scoate `gps` din payload înainte de `izo_operatii.payload`, `izo_declaratii_versiuni.payload`, `raspuns`, instantaneu și vederi. `hash_cerere` se calculează însă pe payload-ul întreg, deci idempotența rămâne exactă. Testul caută coordonatele în toate coloanele jsonb și text ale tabelelor E4 (§11.14).
+- **Nicăieri altundeva**: serverul scoate `gps` din payload înainte de `izo_operatii.payload`, `izo_declaratii_versiuni.payload`, `izo_sync_incercari.payload`, `raspuns`, instantaneu și vederi. `hash_cerere` se calculează însă pe payload-ul întreg, deci idempotența rămâne exactă. Testul caută coordonatele în toate coloanele jsonb și text ale tabelelor E4 (§11.14).
+- **Hash-ul nu e un verificator** (r3): cine știe restul cererii (o citește din `payload`) ar putea verifica offline coordonate candidate pe un sha256 public. De aceea `hash_cerere` (în `izo_operatii` și `izo_declaratii_versiuni`) nu e în niciun grant pe coloane al `authenticated`, nu apare în `raspuns`, în instantaneu sau în vederi; îl citesc doar rolurile E4, în funcții. Testul 14 verifică `has_column_privilege` = false pentru `authenticated`.
 - **Păstrarea**:
-  - `izo_operatii`, `izo_declaratii_versiuni`, `izo_aprobari`, `izo_rezervari`, `izo_fronturi`: permanent, ca jurnal de audit, fără DELETE (fără date personale în afară de profil și oră);
+  - `izo_operatii`, `izo_declaratii_versiuni`, `izo_aprobari`, `izo_sync_incercari`, `izo_rezervari`, `izo_fronturi`: permanent, ca jurnal de audit, fără DELETE (fără date personale în afară de profil și oră);
   - `izo_declaratii_gps`: după Q-E4-15. La A, permanent; la B, ștergerea după aprobarea Transgaz a pachetului e singura excepție de la „fără DELETE”, printr-o funcție a `izo_montaj_writer`, sub context, pe acel tabel;
   - `dispozitiv_id` nu identifică persoana (uuid local, fără amprentare).
 
@@ -973,8 +1046,9 @@ Niciuna nu expune GPS-ul.
 
 ### 10.1 Intrarea
 
-`fn_izo_montaj_api_verifica()`, copiată după `fn_izo_doc_api_verifica`:
-- lock-ul schemei, partajat, primul;
+`fn_izo_montaj_api_verifica()` și `fn_izo_teren_api_verifica()`, copiate după `fn_izo_doc_api_verifica` din E3 r5f (`origin/izometrie/e3`):
+- **READ COMMITTED impus**, primul, înaintea oricărui lock (r3): `current_setting('transaction_isolation') <> 'read committed'` → refuz `25001`. Sub REPEATABLE READ / SERIALIZABLE, poarta și revalidările de după lock-uri ar citi pe snapshot-ul de dinainte. Se aplică tuturor intrărilor E4, inclusiv sincronizării, instantaneului și `fn_izo_seteaza_flux`;
+- lock-ul schemei, partajat, primul dintre lock-uri;
 - `session_user = authenticator`, JWT `authenticated`, uid prezent;
 - contextele E3 și E4 goale;
 - poarta completă `fn_izo_porti_lipsa()` (E2a + E3 + E4; ≈ 0,4 s, de măsurat la cod pe un lot de 50).
@@ -982,7 +1056,7 @@ Niciuna nu expune GPS-ul.
 ### 10.2 Contextul
 
 - Forma: `izo.montaj_ctx` = `<txid>|<op>|<ref>|<proiect>|<tronson>|<versiune>|<arg>`.
-- `op` ∈ {`aproba`, `revizie`, `respinge`, `serie`, `tranzitie`, `iesire`, `primire`, `completeaza`, `leaga`, `dezleaga`, `transgaz`, `flux`}.
+- `op` ∈ {`aproba`, `revizie`, `respinge`, `serie`, `tranzitie`, `iesire`, `primire`, `completeaza`, `leaga`, `dezleaga`, `nota`, `transgaz`, `flux`}.
 - Îl scrie doar `fn_izo_montaj_marcheaza` (EXECUTE doar owner-ul), după toate validările.
 - Tableta n-are context în registru: `izo_teren_editor` nu trece niciodată de garda registrului.
 
@@ -1024,14 +1098,18 @@ O singură ordine, compatibilă cu E2a / E3 / 2c (r2: pe **lot / apel**, nu pe o
 
 **Excepțiile, toate sufixe ale aceleiași ordini**:
 - activarea / oprirea fluxului (ca `fn_izo_seteaza_nivel`): 7 → 8 (exclusiv) → rândul de config FOR UPDATE;
-- căile din client (2c), pe un tronson în flux: rândul (implicit, prin UPDATE / DELETE) → refuz, fără alt lock (§7.4). Pe un tronson fără flux: rândul → advisory partajat → (2c) pachetul FOR SHARE → … Lock-urile pe rânduri vin înaintea advisory-ului, ca în protocolul E2a.
+- căile din client (2c), pe un tronson în flux: rândul (implicit, prin UPDATE / DELETE) → refuz în `a0_izo_flux_tevi`, primul trigger BEFORE, fără alt lock și fără cascade (§7.3, §7.4). Asta acoperă și notele (observații / NDT), care pe flux trec prin RPC, cu ordinea scriitorilor de pachet (5 → 6 → 7 → 8). Pe un tronson fără flux: rândul → advisory partajat → (2c) pachetul FOR SHARE → … Lock-urile pe rânduri vin înaintea advisory-ului, ca în protocolul E2a; E4 nu scrie acolo;
+- antetul creat din client: proiectul (FOR UPDATE, `tg_pachete_lansare_assign_numar`) → advisory partajat (2c), adică 4 → 8, un sufix al ordinii (§7.4);
+- respingerea rândurilor unei sesiuni abandonate: frontul (FOR SHARE) → sesiunea → declarațiile → profilul / accesul / atribuirea autorului (§6.7) → rădăcinile pieselor rezervate, adică 2 → 3 → 9;
+- **orice scriere în `izo_rezervari`** (sincronizarea, aprobarea cu transferul, respingerea, revizia, seria lămurită) se face după lock-ul rădăcinii resursei (9), luat în ordinea de mai sus; fără advisory, dacă funcția nu scrie registrul (ca sincronizarea).
 
 **Fără cicluri**:
 - **lot față de lot**: fiecare lot își adună toate resursele înainte (§5.4 pas 1) și le blochează o singură dată, sortate. Loturile X → Y și Y → X iau amândouă X, apoi Y. Pe același tronson, loturile sunt serializate de front;
 - **sincronizare față de aprobare**: aprobarea ia advisory-ul înaintea rădăcinilor, iar sincronizarea nu ține advisory. O aprobare care așteaptă advisory-ul nu ține încă rădăcini;
 - **sincronizare față de activare**: sincronizarea ține config-ul FOR SHARE și nu așteaptă niciodată advisory-ul, iar activarea, cu advisory-ul exclusiv, așteaptă config-ul. Ciclul ar cere ca sincronizarea să aștepte ceva ținut de activare, iar activarea nu ține rânduri;
 - **aprobare / scriitor de pachet față de activare**: ambele iau advisory-ul (8) înaintea citirii fluxului și nu blochează rândul de config, deci nu se pot încrucișa cu „advisory → config” al activării;
-- **scriitor de pachet față de clientul 2c**: pe un tronson în flux clientul e refuzat fără să țină pachetul; pe unul fără flux, scriitorul E4 nu blochează pachetul (pre-verificarea, §7.3);
+- **scriitor de pachet față de clientul 2c**: pe un tronson în flux clientul e refuzat de primul trigger BEFORE, deci nu ajunge să țină pachetul (nici prin cascada totalurilor, r3); pe unul fără flux, scriitorul E4 nu blochează pachetul (pre-verificarea, §7.3);
+- **preluarea unei rezervări expirate** (r3): scrie doar `izo_rezervari`, sub lock-ul rădăcinii deja ținut, nu declarația celuilalt autor (§5.4), deci nu ia niciun lock de declarație după rădăcini;
 - **două legări / completări**: pachetul înaintea rândurilor, toate FOR NO KEY UPDATE de la început, deci fără urcare de lock (§7.3);
 - storno-ul și importul E2a (advisory exclusiv → bucăți) rămân sufixe ale aceleiași ordini.
 
@@ -1053,10 +1131,12 @@ Testele de cursă (§11.5) acoperă fiecare pereche de mai sus, în ambele ordin
   - indexurile `ux_izo_*` ale E4, `ux_magbuc_ev_decl`, `ux_magbuc_izo_teava`;
   - rolurile + membership;
   - **trigger-ele DEFINER existente pe `executie_tevi` / pachete**, cu corpul (md5), pentru că garda acceptă cascadele lor;
+  - **ordinea trigger-elor** (r3): pe `executie_tevi`, `executie_pachete_lansare` și `executie_pachete_documente`, trigger-ul `a0_izo_flux_*` e primul BEFORE (niciun nume mai mic), `tgenabled = 'A'`;
+  - grant-urile pe coloane ale `authenticated` pe `izo_operatii` / `izo_declaratii_versiuni` (fără `hash_cerere`, r3);
   - **indexul unic pe `profiles.employee_id`** (r2): regula „nimeni nu-și aprobă rândurile” se sprijină pe el (§9.3);
   - vederile E4 (`security_invoker`) și ACL-ul pe `izo_declaratii_gps` (nimeni cu SELECT).
 - **`fn_izo_porti_e4_lipsa()`** se cheamă la finalul `fn_izo_porti_lipsa`. Migrarea o înlocuiește din nou, păstrând închiderea rapidă din E3.
-- **`c_e4_revizuite`** = semnătura → md5, pentru intrările E4 acceptate ca scriitori (ca `c_e3_revizuite`).
+- **`c_e4_revizuite`** = semnătura → md5, pentru intrările E4 acceptate ca scriitori (lista din designul E3, §3.2; în migrarea E3 ea apare ca amprenta pe `prosrc | proconfig | owner | proacl | prosecdef`, lângă `c_dinamice_revizuite`). Numele constantei se aliniază la cod.
 - **Amprenta E2a se schimbă și ea**: `ux_magbuc_izo_teava` intră prin filtrul `ux_magbuc_izo_%`, iar `fn_izo_garda_bucati` / `fn_izo_garda_fapte` / `fn_izo_depozit_in_registru` primesc corpuri noi. Migrarea o re-fixează deliberat (ca 2c), cu valoarea de dinainte păstrată pentru revenire.
 - Ștampila se fixează doar în migrare.
 
@@ -1153,7 +1233,7 @@ Negative întâi. Harness PG16 (`scripts/test_izometrie_e4.sh`) + branch PG17 + 
 14. **Mașina de stări și GPS-ul** (r2):
     - fiecare tranziție din afara tabelului §6.4 → refuz (în special: revizie / respingere / versiune nouă pe `aprobata`);
     - revizia unei tăieri → descendenții `blocata`; versiunea nouă cu aceiași copii → descendenții revin; cu un copil schimbat → copilul `anulata`, literele și rezervările eliberate, dependenții rămân `blocata`;
-    - frontul expirat → `front_expirat`; rezervarea expirată preluată de altă declarație (cea veche → `conflict`); eliberarea frontului de MP;
+    - frontul expirat → `front_expirat`; rezervarea expirată preluată de altă declarație (cea veche rămâne nescrisă, cu `rezervare_pierduta`, iar trimiterea ei e refuzată); eliberarea frontului de MP;
     - limitele: a 61-a rezervare activă, a 11-a din depozit → `limita`;
     - **GPS-ul**: după un lot cu coordonate, valorile lat / lon nu apar în nicio coloană jsonb sau text a tabelelor E4 (`izo_operatii`, versiuni, `raspuns`, instantaneu, vederi), ci doar în `izo_declaratii_gps`; SELECT direct pe ea → `permission denied` pentru toți; `fn_izo_gps_citeste` → MP-ul și owner-ul da, inginerul și gestionarul nu.
 15. **Identitatea** (r2):
@@ -1161,11 +1241,25 @@ Negative întâi. Harness PG16 (`scripts/test_izometrie_e4.sh`) + branch PG17 + 
     - un al doilea profil cu același `employee_id` → refuzat de indexul unic (care e în poartă, §10.7: scoaterea lui → porți lipsă); un profil fără `employee_id` → `identitate_neclara`;
     - înlocuitorul și owner-ul pe propriile rânduri sau pe o dependență neaprobată a lor → refuz;
     - GPS-ul, ora tabletei sau `dispozitiv_id` falsificate nu schimbă nicio autorizare (doar alertele).
-16. **Matricea pe catalog** (r2): fiecare celulă din §9.4, inclusiv INSERT-ul pe `izo_aprobari` / `izo_operatii` al `izo_montaj_writer`, USAGE pe secvențele identity, politicile prin părinte pe tabelele fără `proiect_id` și `security_invoker` pe vederi.
+16. **Matricea pe catalog** (r2): fiecare celulă din §9.4, inclusiv INSERT-ul pe `izo_aprobari` / `izo_operatii` al `izo_montaj_writer`, USAGE pe secvențele identity, politicile prin părinte pe tabelele fără `proiect_id` și `security_invoker` pe vederi. r3: **fiecare lock** din §5.4 / §6.3 / §7.3, rulat ca rolul real (nu ca `postgres`), fără `permission denied` (FOR SHARE / FOR UPDATE cer UPDATE: direct sau prin helper); `has_column_privilege(authenticated, hash_cerere)` = false pe ambele tabele; `izo_montaj_writer` fără INSERT pe `izo_tronson_config`; `fn_izo_seteaza_flux` pe un tronson fără config → `config_lipsa`.
+17. **Aprobările separate, expirarea, revocarea** (r3, cu barieră și `pg_locks`):
+    - tăierea aprobată singură, montajul pe copil rămas pentru un lot ulterior: copilul se naște cu rezervarea transferată pe `bucata_id`; o a doua tabletă care cere copilul primește `conflict`; montajul trece în lotul următor și consumă rezervarea transferată; reconcilierea (pasul 10) prinde un copil fără rezervare;
+    - **expirarea între autori**: lotul lui B preia rezervarea expirată a lui A cât A rulează un lot care ține declarația lui A (barieră în ambele ordini): fără deadlock, declarația lui A nescrisă de B, `rezervare_pierduta` la A, `sesiune_trimite` a lui A refuzată;
+    - **revocare → închidere → oprire**: autorul revocat cu ciorne și rezervări; MP-ul eliberează frontul, respinge rândurile (cu front valid al autorului → refuz; după eliberare → trece), sesiunea se închide, rezervările se eliberează, iar `fn_izo_seteaza_flux(…, false)` trece (fără fapte);
+    - **corecția + tăierea** pe o rădăcină cu copiii declarați de aceeași declarație → trece (evenimentele `corectie`, apoi `taiere`); cu un copil declarat de altă declarație (neanulat) → `corectie_in_arbore`;
+    - **recuperarea `alt_dispozitiv`**: operațiile dispozitivului fără front rămân în coadă, cu prima încercare în `v_izo_carantina_sync`; după eliberarea frontului de MP și „Pregătește”, aceleași `op_id`-uri se aplică o singură dată; una suprapusă între timp (aceeași țeavă) iese `conflict`;
+    - **laptopul**: fără front → `alt_dispozitiv`; după predarea frontului de pe tabletă → declarația de ramura 2 trece; MP-ul (fără `inginer_izometrie`) nu poate sincroniza (`fara_drept`).
+18. **Costul, izolarea, notele pe pachet** (r3):
+    - apeluri repetate fără drept → `fara_drept` fără poartă (măsurat: fără `fn_izo_porti_lipsa` în plan / timp); peste 30 de apeluri pe minut, inclusiv duplicate și instantanee → `limita`, fără poartă;
+    - fiecare intrare E4 sub `REPEATABLE READ` și `SERIALIZABLE` → `25001`, zero efecte;
+    - pe un tronson în flux, din client: UPDATE doar pe `observatii` / `pm_cod` → 42501 (fără să fi luat pachetul: `pg_locks` arată doar rândul); INSERT (cu `tg_tevi_renumber`) → 42501 înainte de renumerotare; `fn_izo_pachet_rand_note` trece, cu CAS pe `updated_at`;
+    - **client NDT ↔ legare**: `fn_izo_pachet_rand_note` ↔ `leaga` / `completeaza` pe același pachet, în ambele ordini: serializate pe pachet, fără deadlock;
+    - un antet creat din client cu `status` aprobat pe un tronson în flux, concurent cu activarea → refuzat de `a0_izo_flux_pachete_dupa` sau activarea refuzată;
+    - poarta: un trigger BEFORE nou, cu nume mai mic decât `a0_izo_flux_*`, pe oricare din cele trei tabele → porți lipsă.
 
 ## 12. Întrebări deschise (A / B / C)
 
-Recomandarea e prima variantă, dacă nu scrie altfel.
+Recomandarea e prima variantă, dacă nu scrie altfel. Blochează codul: Q-E4-1, Q-E4-2, Q-E4-4, Q-E4-5, Q-E4-12, Q-E4-15 (r3). Corpul documentului e scris pe recomandări, dar ele devin decizii doar cu răspunsul lui Razvan.
 
 1. **Q-E4-1 — Unde se activează montajul.**
    - **A** pe tronson (`izo_tronson_config.flux_montaj`), cu proiectul rămas la `stoc`. Pachetul T12 și editorul vechi merg mai departe; pilotul e pe T14 / T15.
@@ -1206,14 +1300,14 @@ Recomandarea e prima variantă, dacă nu scrie altfel.
    - B `executie` editor, cum există, + atribuirea: fără cheie nouă, dar `executie` deschide mult în UI.
    - C o cheie separată, `izometrie_teren`.
 10. **Q-E4-10 — GPS-ul și tronsonul.**
-    - **A** în pilot tronsonul se alege manual. GPS-ul doar se salvează la declarație și dă LOW la o nepotrivire mare (pe km-ul tronsoanelor).
+    - **A** în pilot tronsonul se alege manual. GPS-ul doar se salvează la declarație; nicio comparație GPS ↔ tronson în E4 (r3: comparația cere axul calibrat, care nu e în BD; vine cu B, în E6).
     - B tronsonul propus din GPS, pe axul KML calibrat: cere `izo_surse_proiect` + `izo_ax_ancore` în BD, încărcate cu „da”.
     - C fără GPS în E4.
 11. **Q-E4-11 — Importul REPLACE atomic** (promis de 2c pentru E4a).
     - **A** un PR separat, după pilot.
     - B în E4a.
 12. **Q-E4-12 — Cut-out-ul și robinetele** (ramurile din §8.5).
-    - **A** ramura 1 (capătul liber, cuplarea) intră în E4, pe tabletă și pe laptop; ramura 2 (tăierea în mijloc pe o țeavă sudată la ambele capete) în E4 doar de pe laptop (MP / inginer); ramura 3 (scoaterea unei suduri) în E10. Robinetele (`izo_elemente_fara_stoc`) doar dacă pe T14 / T15 există un robinet din proiect (de verificat pe PT).
+    - **A** ramura 1 (capătul liber, cuplarea) intră în E4, pe tabletă și pe laptop; ramura 2 (tăierea în mijloc pe o țeavă sudată la ambele capete) în E4 doar de pe laptopul inginerului, cu frontul predat de tabletă (§8.5; MP-ul nu declară); ramura 3 (scoaterea unei suduri) în E10. Robinetele (`izo_elemente_fara_stoc`) doar dacă pe T14 / T15 există un robinet din proiect (de verificat pe PT).
     - B ramura 2 și pe tabletă, în E4.
     - C ramura 2 după pilot.
 13. **Q-E4-13 — Cum află MP-ul.**
