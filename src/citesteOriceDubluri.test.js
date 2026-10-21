@@ -3,7 +3,8 @@ import {
   dataAIValida, textAIValid, esteDinDrive, cheieDosar, perechiDeVerificat, bucati,
   clasificaDublura, campuriDeCompletat, updateCompletare, fmtZi, liniaObservatii,
   observatiiNoi, analizaDublura, TEXT_AI_MAX, esteActiv, blocheazaInserare, eroareInchidereRand, inchidereFaraRezultat,
-  texteAltContinut,
+  texteAltContinut, marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare,
+  gardaFinalaHR, randInchisSigur,
 } from './citesteOriceDubluri.js'
 
 const TIPURI = [
@@ -296,5 +297,148 @@ describe('inchidereFaraRezultat (0 rânduri fără eroare = de verificat prin re
     expect(inchidereFaraRezultat({ data:[{ id:1 }], error:null })).toBe(false)
     expect(inchidereFaraRezultat({ data:null, error:{ message:'x' } })).toBe(false)
     expect(inchidereFaraRezultat(undefined)).toBe(false)
+  })
+})
+
+// ─── Review extern (Copilot + Jakarinos, 21.10) ──────────────────────────────
+describe('F1/F6 gardaDocDosar — identitatea documentului din dosar', () => {
+  const doc = docDrive({ id:12, fara_expirare:true })
+  it('doar închidere: id + nesters + activ + angajat + nume + mărime (fără tip / câmpuri)', () => {
+    expect(gardaDocDosar({ doc, angajatId:'7', row:rowAI() })).toEqual([
+      ['eq', 'id', 12], ['is', 'deleted_at', null], ['is', 'activ', true],
+      ['eq', 'employee_id', 7], ['eq', 'fisier_nume', 'CI.pdf'], ['eq', 'fisier_size_bytes', 1234],
+    ])
+  })
+  it('completare: + tip, câmpurile goale, fara_expirare (doar cu data expirării), observații', () => {
+    const campuri = [{ camp:'numar_document', val:'X' }, { camp:'data_expirare', val:'2031-01-02' }]
+    const g = gardaDocDosar({ doc, angajatId:7, row:rowAI(), campuri })
+    expect(g.slice(6)).toEqual([
+      ['eq', 'tip_id', 1], ['is', 'numar_document', null], ['is', 'data_expirare', null],
+      ['eq', 'fara_expirare', true], ['eq', 'observatii', 'Adus din Drive.'],
+    ])
+    // fără data expirării → nicio gardă pe fara_expirare
+    const g2 = gardaDocDosar({ doc, angajatId:7, row:rowAI(), campuri:[{ camp:'emitent', val:'X' }] })
+    expect(g2.some(([, col]) => col === 'fara_expirare')).toBe(false)
+  })
+  it('F6: fara_expirare false → eq false; null / lipsă → is null', () => {
+    const c = [{ camp:'data_expirare', val:'2031-01-02' }]
+    expect(gardaDocDosar({ doc:docDrive({ fara_expirare:false }), angajatId:7, row:rowAI(), campuri:c })).toContainEqual(['eq', 'fara_expirare', false])
+    expect(gardaDocDosar({ doc:docDrive({ fara_expirare:null }), angajatId:7, row:rowAI(), campuri:c })).toContainEqual(['is', 'fara_expirare', null])
+    expect(gardaDocDosar({ doc:docDrive(), angajatId:7, row:rowAI(), campuri:c })).toContainEqual(['is', 'fara_expirare', null])
+  })
+  it('valori null → is; mărime string (bigint) → număr; activ null rămâne null', () => {
+    const g = gardaDocDosar({ doc:docDrive({ activ:null, fisier_size_bytes:'1234', observatii:null, tip_id:null }), angajatId:7, row:rowAI(), campuri:[] })
+    expect(g).toContainEqual(['is', 'activ', null])
+    expect(g).toContainEqual(['eq', 'fisier_size_bytes', 1234])
+    expect(g).toContainEqual(['is', 'tip_id', null])
+    expect(g).toContainEqual(['is', 'observatii', null])
+  })
+  it('potrivesteGarda: același document trece; alt angajat / nume / mărime / șters / alt activ → nu', () => {
+    const garda = gardaDocDosar({ doc, angajatId:7, row:rowAI() })
+    const citit = { id:12, employee_id:7, fisier_nume:'CI.pdf', fisier_size_bytes:'1234', activ:true, deleted_at:null }
+    expect(potrivesteGarda(citit, garda)).toBe(true)
+    for (const o of [{ employee_id:8 }, { fisier_nume:'ci.pdf' }, { fisier_size_bytes:999 }, { fisier_size_bytes:null },
+      { deleted_at:'2026-10-21' }, { activ:false }, { id:13 }]) {
+      expect(potrivesteGarda({ ...citit, ...o }, garda)).toBe(false)
+    }
+    expect(potrivesteGarda(null, garda)).toBe(false)
+    // activ văzut null (= activ) → rândul citit trebuie să aibă tot null
+    const gNull = gardaDocDosar({ doc:docDrive({ id:12, activ:null }), angajatId:7, row:rowAI() })
+    expect(potrivesteGarda({ ...citit, activ:null }, gNull)).toBe(true)
+    expect(potrivesteGarda({ ...citit, activ:true }, gNull)).toBe(false)
+  })
+  it('marime: număr / string numeric → număr; gol / invalid → null', () => {
+    expect(marime('12')).toBe(12)
+    expect(marime(0)).toBe(0)
+    expect(marime('')).toBeNull()
+    expect(marime(null)).toBeNull()
+    expect(marime('x')).toBeNull()
+  })
+})
+
+describe('F4 grupeDupaAngajat — per angajat, nu produs cartezian', () => {
+  it('un grup = un angajat + cel mult n nume ale lui', () => {
+    const perechi = perechiDeVerificat([
+      { fisier_nume:'a.pdf', e:7 }, { fisier_nume:'b.pdf', e:8 }, { fisier_nume:'c.pdf', e:7 }, { fisier_nume:'d.pdf', e:7 },
+    ], r => r.e)
+    const g = grupeDupaAngajat(perechi, 2)
+    expect(g.map(x => [x.emp, x.nume])).toEqual([[7, ['a.pdf', 'c.pdf']], [7, ['d.pdf']], [8, ['b.pdf']]])
+    expect(g[0].perechi.map(p => p.k)).toEqual([cheieDosar(7, 'a.pdf'), cheieDosar(7, 'c.pdf')])
+    expect(grupeDupaAngajat([], 25)).toEqual([])
+    expect(grupeDupaAngajat(null, 25)).toEqual([])
+  })
+})
+
+describe('F3/F4 rezultatCautareDosar — trunchiat = eroare, nu „liber"', () => {
+  it('eroare / fără date → eroare', () => {
+    expect(rezultatCautareDosar({ data:null, error:{ message:'x' } })).toEqual({ err:'eroare' })
+    expect(rezultatCautareDosar({ data:null, error:null })).toEqual({ err:'eroare' })
+    expect(rezultatCautareDosar(undefined)).toEqual({ err:'eroare' })
+  })
+  it('limita atinsă → trunchiat (F4)', () => {
+    expect(rezultatCautareDosar({ data:[1, 2, 3], error:null }, { limita:3 })).toEqual({ err:'trunchiat' })
+    expect(rezultatCautareDosar({ data:[1, 2], error:null }, { limita:3 })).toEqual({ docs:[1, 2] })
+  })
+  it('count > rânduri primite → trunchiat; count cerut dar lipsă → eroare (F3)', () => {
+    expect(rezultatCautareDosar({ data:[1, 2], error:null, count:5 }, { limita:500, cuNumar:true })).toEqual({ err:'trunchiat' })
+    expect(rezultatCautareDosar({ data:[1, 2], error:null, count:null }, { limita:500, cuNumar:true })).toEqual({ err:'eroare' })
+    expect(rezultatCautareDosar({ data:[1, 2], error:null }, { cuNumar:true })).toEqual({ err:'eroare' })
+    expect(rezultatCautareDosar({ data:[1, 2], error:null, count:2 }, { limita:500, cuNumar:true })).toEqual({ docs:[1, 2] })
+    expect(rezultatCautareDosar({ data:[], error:null, count:0 }, { limita:500, cuNumar:true })).toEqual({ docs:[] })
+  })
+  it('căutarea exactă (limit 1, fără limita) — un rând găsit nu e „trunchiat"', () => {
+    expect(rezultatCautareDosar({ data:[{ id:1 }], error:null })).toEqual({ docs:[{ id:1 }] })
+  })
+  it('mesajEroareCautare', () => {
+    expect(mesajEroareCautare('trunchiat', 'CI.pdf')).toMatch(/prea multe documente „CI\.pdf"/)
+    expect(mesajEroareCautare('eroare', 'CI.pdf')).toMatch(/Nu am putut verifica dosarul/)
+  })
+})
+
+describe('F3 gardaFinalaHR — garda din confirmHR, fail-closed', () => {
+  const ok = docs => ({ docs })
+  it('căutarea exactă găsește copia → blochează (activ / istoric), fără să mai conteze căutarea pe nume', () => {
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([docDrive()]), nume:null }).bloc).toBe('acelasi')
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([docDrive({ activ:false })]), nume:null }).bloc).toBe('acelasi_inactiv')
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([docDrive()]), nume:null, opts:{ faraGardaNume:true } }).bloc).toBe('acelasi')
+  })
+  it('căutare picată / trunchiată → err (nu se inserează)', () => {
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:{ err:'eroare' }, nume:ok([]) })).toEqual({ err:'eroare' })
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([]), nume:{ err:'trunchiat' } })).toEqual({ err:'trunchiat' })
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([]), nume:null })).toEqual({ err:'eroare' })
+    expect(gardaFinalaHR({ row:rowAI({ fisier_size_bytes:null }), angajatId:7, exact:null, nume:{ err:'eroare' } })).toEqual({ err:'eroare' })
+  })
+  it('exactă goală → decide căutarea completă pe nume (liber / alt conținut / excepția omului)', () => {
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([]), nume:ok([]) }).bloc).toBeNull()
+    const alt = gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([]), nume:ok([docDrive({ fisier_size_bytes:4321 })]) })
+    expect(alt.bloc).toBe('alt_continut')
+    expect(alt.cls.marimiNecunoscute).toBe(false)
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([]), nume:ok([docDrive({ fisier_size_bytes:4321 })]),
+      opts:{ faraGardaNume:true, marimiComparate:true } }).bloc).toBeNull()
+    // cursă: copia identică apare între cele două căutări → căutarea pe nume o prinde
+    expect(gardaFinalaHR({ row:rowAI(), angajatId:7, exact:ok([]), nume:ok([docDrive()]), opts:{ faraGardaNume:true } }).bloc).toBe('acelasi')
+  })
+  it('mărime necunoscută (exact = null) → doar căutarea pe nume', () => {
+    const r = gardaFinalaHR({ row:rowAI({ fisier_size_bytes:null }), angajatId:7, exact:null, nume:ok([docDrive()]) })
+    expect(r.bloc).toBe('alt_continut')
+    expect(r.cls.marimiNecunoscute).toBe(true)
+  })
+})
+
+describe('F5 randInchisSigur — staging-ul se șterge doar pe rând sigur închis', () => {
+  it('UPDATE-ul a întors rândul → închis', () => {
+    expect(randInchisSigur({ data:[{ id:5 }], error:null }, null, 5)).toBe(true)
+  })
+  it('eroare / rezultat lipsă → nu (staging-ul rămâne pentru reîncercare și 👁 Vezi)', () => {
+    expect(randInchisSigur({ data:null, error:{ message:'x' } }, [], 5)).toBe(false)
+    expect(randInchisSigur({ error:new Error('Failed to fetch') }, [], 5)).toBe(false)
+    expect(randInchisSigur(undefined, [], 5)).toBe(false)
+  })
+  it('0 rânduri fără eroare → închis doar dacă coada reîncărcată nu-l mai conține', () => {
+    const zero = { data:[], error:null }
+    expect(randInchisSigur(zero, [{ id:6 }], 5)).toBe(true)
+    expect(randInchisSigur(zero, [], 5)).toBe(true)
+    expect(randInchisSigur(zero, [{ id:5 }], 5)).toBe(false)
+    expect(randInchisSigur(zero, null, 5)).toBe(false)   // reîncărcarea a picat → necunoscut
   })
 })

@@ -23,6 +23,10 @@
 //   Review r2: același fișier doar ca document INACTIV (istoric) → doar „Închide (e deja în dosar)",
 //   fără completare și fără o copie nouă (varianta A nu are inserare la „același fișier").
 //   „Același nume" cu mărime necunoscută nu mai e prezentat ca „alt fișier (altă mărime)".
+//   Review extern (Copilot + Jakarinos): gărzile de identitate pe documentul din dosar (angajat, nume,
+//   mărime, tip, fara_expirare — F1/F6); garda finală din confirmHR nu mai depinde de o listă limitată
+//   (căutare exactă + count — F3); căutarea proactivă e per angajat, iar un răspuns trunchiat e
+//   eroare de căutare, nu „liber" (F4); fișierul din staging se șterge doar pe rând sigur închis (F5).
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useRef } from 'react'
@@ -30,7 +34,8 @@ import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
-import { analizaDublura, clasificaDublura, blocheazaInserare, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare, eroareInchidereRand, inchidereFaraRezultat } from './citesteOriceDubluri.js'
+import { analizaDublura, texteAltContinut, cheieDosar, perechiDeVerificat, bucati, liniaObservatii, updateCompletare, eroareInchidereRand,
+  marime, gardaDocDosar, potrivesteGarda, grupeDupaAngajat, rezultatCautareDosar, mesajEroareCautare, gardaFinalaHR, randInchisSigur } from './citesteOriceDubluri.js'
 
 const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -137,25 +142,32 @@ function resolveTipCod(rawTip, tipuriFK) {
 }
 
 // ─── HR: ce e deja în dosar pentru perechile (angajat, nume fișier) din coadă ───
-// O singură căutare pe încărcare (pe bucăți de câte 25 de perechi, ca URL-ul să rămână
-// scurt), filtrată apoi pe client pe angajat + nume. Întoarce { [cheie]: { docs } | { err:true } }.
+// Review extern F4: o căutare per angajat (.eq angajat + .in nume, câte 25 de nume ca URL-ul să
+// rămână scurt), nu produs cartezian angajați × nume tăiat la 1000. Un răspuns care atinge limita
+// (sau count > rânduri primite) → perechile lui sunt „eroare de căutare" (avertisment vizibil;
+// garda din confirmHR protejează oricum), NU „liber". Întoarce { [cheie]: { docs } | { err:true, motiv } }.
 // `activ` (r1): o copie inactivă (istoric) nu trebuie să câștige în fața celei active.
 const COLOANE_DOSAR = 'id,employee_id,tip_id,activ,numar_document,emitent,data_emitere,data_expirare,fara_expirare,fisier_path,fisier_nume,fisier_size_bytes,uploadat_de,drive_file_id,observatii'
+const LIMITA_DOSAR = 500        // rânduri per căutare (sub max-rows al API-ului); atinsă = posibil trunchiat
+const PARALEL_DOSAR = 6         // căutări simultane (o coadă mare = mulți angajați)
+async function interogheaza(q) {
+  try { return await q } catch (e) { return { data:null, error:e } }
+}
+// gărzile din gardaDocDosar ([op, coloană, valoare], op 'eq' | 'is') aplicate pe o cerere supabase
+const aplicaGarda = (q, garda) => garda.reduce((acc, [op, col, val]) => acc[op](col, val), q)
 async function cautaInDosarHR(perechi) {
   const rez = {}
-  await Promise.all(bucati(perechi, 25).map(async bucata => {
-    const emps = [...new Set(bucata.map(p => p.emp))]
-    const nume = [...new Set(bucata.map(p => p.nume))]
-    let data = null, error = null
-    try {
-      ({ data, error } = await supabase.from('hr_documente_personale').select(COLOANE_DOSAR)
-        .in('employee_id', emps).in('fisier_nume', nume).is('deleted_at', null).order('id').limit(1000))
-    } catch (e) { error = e }
-    for (const p of bucata) {
-      rez[p.k] = error || !Array.isArray(data) ? { err:true }
-        : { docs: data.filter(d => Number(d.employee_id) === p.emp && d.fisier_nume === p.nume) }
-    }
-  }))
+  for (const val of bucati(grupeDupaAngajat(perechi, 25), PARALEL_DOSAR)) {
+    await Promise.all(val.map(async g => {
+      const r = rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(COLOANE_DOSAR, { count:'exact' })
+        .eq('employee_id', g.emp).in('fisier_nume', g.nume).is('deleted_at', null).order('id').limit(LIMITA_DOSAR)),
+        { limita:LIMITA_DOSAR, cuNumar:true })
+      for (const p of g.perechi) {
+        rez[p.k] = r.err ? { err:true, motiv:r.err }
+          : { docs: r.docs.filter(d => Number(d.employee_id) === p.emp && d.fisier_nume === p.nume) }
+      }
+    }))
+  }
   return rez
 }
 
@@ -461,12 +473,21 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       // Al doilea strat anti-duplicat (ultima apărare — documentul din dosar poate apărea
       // după verificarea din listă): același fișier la același angajat nu se inserează de
       // două ori. Dacă verificarea pică, NU inserăm (fail-closed).
-      const { data: dublura, error: dubErr } = await supabase.from('hr_documente_personale')
-        .select('id,employee_id,fisier_nume,fisier_size_bytes,activ').eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume)
-        .is('deleted_at', null).limit(50)
-      if (dubErr) throw new Error('Nu am putut verifica dosarul angajatului — încearcă din nou.')
-      const cls = clasificaDublura(row, dublura, angajatId)
-      const bloc = blocheazaInserare(cls, opts)
+      // Review extern F3: nu depinde de o listă eșantionată. (1) mărime cunoscută → căutare EXACTĂ
+      // angajat + nume + mărime, limit 1 (copia activă întâi): găsită → blochează; (2) altfel căutare
+      // completă pe nume, cu count: mai multe rânduri decât am primit → eroare, nu inserez.
+      const col = 'id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at'
+      const sz = marime(row.fisier_size_bytes)
+      const exact = sz == null ? null : rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(col)
+        .eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume).eq('fisier_size_bytes', sz).is('deleted_at', null)
+        .order('activ', { ascending:false, nullsFirst:true }).order('id').limit(1)))
+      const peNume = exact && (exact.err || exact.docs.length) ? null
+        : rezultatCautareDosar(await interogheaza(supabase.from('hr_documente_personale').select(col, { count:'exact' })
+          .eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume).is('deleted_at', null).order('id').limit(LIMITA_DOSAR)),
+          { limita:LIMITA_DOSAR, cuNumar:true })
+      const garda = gardaFinalaHR({ row, angajatId, exact, nume:peNume, opts })
+      if (garda.err) throw new Error(mesajEroareCautare(garda.err, row.fisier_nume))
+      const { bloc, cls } = garda
       if (bloc) {
         // nu e fundătură: reverific rândul, ca să apară panoul de dublură cu acțiunile lui
         await verificaDosar([row])
@@ -501,13 +522,14 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // ── HR: dublura din dosar (21.10, varianta A, TKT-2026-0343) ──
   // Același fișier e deja la angajat → rândul se închide legat de documentul existent
-  // (confirmat_ref_id = id-ul lui; fișierul din staging se șterge — e același fișier).
+  // (confirmat_ref_id = id-ul lui; fișierul din staging se șterge — e același fișier — doar după ce rândul e sigur închis, F5).
   // completeaza=true → întâi UPDATE doar pe câmpurile goale, cu gardă .is(camp, null) pe
   // fiecare: dacă între timp le-a pus altcineva → 0 rânduri → NU închid, reverific.
   // Reîncercarea e sigură: câmpurile deja puse nu mai apar goale, deci a doua oară doar închide.
   // asteapta (r1) = starea văzută de om ('acelasi' | 'acelasi_inactiv'); dacă s-a schimbat între
-  // timp (documentul a fost arhivat / reactivat / șters) → NU închid, reverific. Garda pe `activ`
-  // din UPDATE / verificare leagă exact documentul văzut. Un document INACTIV doar se leagă,
+  // timp (documentul a fost arhivat / reactivat / șters) → NU închid, reverific. Gărzile din UPDATE /
+  // verificare (gardaDocDosar: id, angajat, nume, mărime, activ, + la completare tip și fara_expirare —
+  // review extern F1/F6) leagă exact documentul văzut. Un document INACTIV doar se leagă,
   // nu se completează niciodată (și nu se adaugă o copie activă — r2: varianta A = doar închidere).
   async function inchideDublura(row, completeaza, asteapta = 'acelasi') {
     if (busyRef.current.has(row.id)) return
@@ -524,13 +546,13 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       const doc = d.doc
       const inactiv = d.stare === 'acelasi_inactiv'
       const campuri = completeaza && !inactiv ? d.campuri : []
-      const activVazut = doc.activ ?? null
       if (campuri.length) {
         const upd = updateCompletare(campuri, doc.observatii, liniaObservatii(row.id, new Date(), campuri))
-        let q = supabase.from('hr_documente_personale').update(upd).eq('id', doc.id).is('deleted_at', null).is('activ', activVazut)
-        for (const c of campuri) q = q.is(c.camp, null)
-        // observațiile se rescriu cu linia nouă la final → gardă și pe ele, ca să nu pierd o notă pusă între timp
-        q = doc.observatii == null ? q.is('observatii', null) : q.eq('observatii', doc.observatii)
+        // Gărzi (review extern F1/F6): același document (id, angajat, nume, mărime, tip, activ/istoric, nesters),
+        // câmpurile încă goale, aceleași observații (se rescriu cu linia nouă la final — nu pierd o notă
+        // pusă între timp) și, dacă intră data expirării, aceeași valoare fara_expirare ca la detectare.
+        const q = aplicaGarda(supabase.from('hr_documente_personale').update(upd),
+          gardaDocDosar({ doc, angajatId, row, campuri }))
         const { data: upd2, error: updErr } = await q.select('id')
         if (updErr) throw new Error('Completare dosar: ' + updErr.message)
         if (!upd2?.length) {
@@ -539,13 +561,15 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
           return
         }
       } else {
-        // doar închidere: documentul de care leg rândul trebuie să mai existe, în aceeași stare (activ / istoric)
-        const { data: ex, error: exErr } = await supabase.from('hr_documente_personale')
-          .select('id').eq('id', doc.id).is('deleted_at', null).is('activ', activVazut).limit(1)
+        // doar închidere: documentul de care leg rândul trebuie să mai existe, ACELAȘI (id, angajat, nume,
+        // mărime, nesters) și în aceeași stare (activ / istoric) — F1: verificat în cerere și pe rândul întors
+        const garda = gardaDocDosar({ doc, angajatId, row })
+        const { data: ex, error: exErr } = await aplicaGarda(supabase.from('hr_documente_personale')
+          .select('id,employee_id,fisier_nume,fisier_size_bytes,activ,deleted_at'), garda).limit(1)
         if (exErr) throw new Error('Nu am putut verifica dosarul: ' + exErr.message)
-        if (!ex?.length) {
+        if (!ex?.length || !potrivesteGarda(ex[0], garda)) {
           await verificaDosar([row])
-          flash('err', 'Documentul din dosar nu mai există sau s-a schimbat (activ / istoric) — am reverificat, nu am închis nimic.')
+          flash('err', 'Documentul din dosar nu mai există sau s-a schimbat (alt angajat / nume / mărime / activ-istoric) — am reverificat, nu am închis nimic.')
           return
         }
       }
@@ -654,10 +678,12 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
-  // Marchează rândul inbox confirmat + curăță staging. Întoarce null (închis) sau mesajul de eroare.
+  // Marchează rândul inbox confirmat. Întoarce { res, err } (err null = UPDATE-ul a întors rândul).
   // 21.10: eroarea update-ului nu se mai înghite (documentul intrase, dar rândul rămânea
-  // în coadă fără ca omul să afle). Ordinea veche (update → ștergere staging) rămâne.
+  // în coadă fără ca omul să afle).
   // Review r1: NU aruncă — documentul țintă e deja salvat, apelantul reîmprospătează oricum.
+  // Review extern F5: fișierul din staging NU se mai șterge aici — doar după ce rândul e SIGUR
+  // închis (inchideRandSiReimprospateaza), ca reîncercarea și 👁 Vezi să meargă în rest.
   async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
     let res
     try {
@@ -667,10 +693,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
       }).eq('id', row.id).select('id')
     } catch (e) { res = { error:e } }
-    await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
-    // 0 rânduri fără eroare = UPDATE-ul poate fi trecut, dar rândul nou nu mai e vizibil prin RLS
-    // (ex. MP care confirmă pe un proiect fără site) — decide reîncărcarea cozii, nu acest răspuns.
-    return { err: eroareInchidereRand(res), deVerificat: inchidereFaraRezultat(res) }
+    return { res, err: eroareInchidereRand(res) }
   }
 
   // Documentul țintă e salvat → închid rândul din coadă și reîmprospătez ORICUM: și când
@@ -678,9 +701,13 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   // dosarul angajatului) trebuie să vadă documentul nou. Comportamentul vechi + eroarea vizibilă.
   async function inchideRandSiReimprospateaza(row, msgOk, ...argsFinalize) {
     const fin = await finalizeInbox(row, ...argsFinalize)
-    const coada = await loadQueue()
-    // „0 rânduri” e eroare doar dacă rândul a rămas în coadă după reîncărcare
-    const errFin = fin.deVerificat && coada && !coada.some(r => r.id === row.id) ? null : fin.err
+    const coada = await loadQueue()   // null = reîncărcarea a picat (nu știu ce e în coadă)
+    // 0 rânduri fără eroare = UPDATE-ul poate fi trecut, dar rândul nu mai e vizibil prin RLS
+    // (ex. MP care confirmă pe un proiect fără site) → închis doar dacă nu mai e în coada reîncărcată
+    const inchis = randInchisSigur(fin.res, coada, row.id)
+    // F5: staging-ul se șterge DOAR pe rând sigur închis (fire-and-forget: nu țin butonul ocupat)
+    if (inchis) Promise.resolve().then(() => supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path])).catch(() => {})
+    const errFin = inchis ? null : (fin.err || eroareInchidereRand(null))
     flash(errFin ? 'err' : 'ok', errFin || msgOk)
     onConfirmed && onConfirmed()
     return !errFin
@@ -708,7 +735,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (!emp || !row.fisier_nume) return null
     const st = dosar[cheieDosar(emp, row.fisier_nume)]
     if (!st) return { stare:'verific' }
-    if (st.err) return { stare:'eroare' }
+    if (st.err) return { stare:'eroare', motiv:st.motiv || 'eroare' }
     const a = analizaDublura({ row, docs:st.docs, angajatId:emp, tipuriFK, tipAI:row._editTip ?? row.tip_document })
     return a.tip ? { stare:a.tip, ...a } : { stare:'liber' }
   }
@@ -826,7 +853,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                   <div style={{ marginBottom:8, fontSize:11, color:G.dim }}>⏳ verific dosarul angajatului…</div>
                 ) : dub?.stare === 'eroare' ? (
                   <div style={{ marginBottom:10, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', fontSize:11.5, color:G.yellow }}>
-                    <span>⚠️ nu am putut verifica dosarul — {eroare ? 'nu știu dacă fișierul e deja acolo; reverifică înainte să-l scoți din coadă.' : 'la confirmare verific din nou.'}</span>
+                    <span>⚠️ {dub.motiv === 'trunchiat' ? 'dosarul are prea multe documente cu acest nume ca să le verific pe toate' : 'nu am putut verifica dosarul'} — {eroare ? 'nu știu dacă fișierul e deja acolo; reverifică înainte să-l scoți din coadă.' : 'la confirmare verific din nou.'}</span>
                     <button onClick={() => verificaDosar([row])} style={{ ...btnS, padding:'3px 10px', fontSize:11.5, color:G.yellow, borderColor:G.yellow + '55' }}>↻ reverifică</button>
                   </div>
                 ) : null

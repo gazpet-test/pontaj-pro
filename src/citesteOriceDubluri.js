@@ -8,6 +8,13 @@
 //   • texteAltContinut   — ce spun panoul / confirmarea la „același nume" (mărime cunoscută sau nu)
 //   • campuriDeCompletat — doar câmpurile GOALE din dosar, doar cu valori AI valide
 //   • analizaDublura     — tot ce afișează panoul pentru un rând din coadă
+//   Review extern (Copilot + Jakarinos, 21.10):
+//   • gardaDocDosar / potrivesteGarda — identitatea documentului din dosar pe care lucrează
+//                          UPDATE-ul de completare / verificarea dinainte de închidere (F1, F6)
+//   • grupeDupaAngajat   — căutarea proactivă pe angajat, nu produs cartezian (F4)
+//   • rezultatCautareDosar — răspuns trunchiat = eroare de căutare, nu „liber" (F3, F4)
+//   • gardaFinalaHR      — garda finală din confirmHR: căutare exactă + căutare completă pe nume (F3)
+//   • randInchisSigur    — fișierul din staging se șterge DOAR când rândul e sigur închis (F5)
 // „Gol" = NULL (exact ce verifică UPDATE-ul cu .is(camp, null)); un text gol ''
 // nu se consideră gol, ca garda din UPDATE să nu dea fals „s-a schimbat între timp".
 // ===========================================================================
@@ -48,7 +55,7 @@ export function esteDinDrive(doc) {
   return String(doc.fisier_path || '').includes('/drive/') || !!doc.drive_file_id || doc.uploadat_de == null
 }
 
-const marime = v => {
+export const marime = v => {
   if (v == null || v === '') return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
@@ -89,6 +96,7 @@ export const esteActiv = d => !!d && d.activ !== false
 //                           atunci nu pot spune „alt fișier" — copia fără mărime poate fi chiar el
 //   tip null              → nimic cu acest nume la acest angajat
 // nrIdentice = toate copiile identice (active + inactive); nrInactive = câte dintre ele sunt inactive.
+// Regula (F2, rafinare deliberată a regulii „cea mai veche copie identică"): cea mai veche copie identică ACTIVĂ; dacă nu e niciuna activă, cea mai veche identică — o copie inactivă e istoric, nu ținta completării.
 export function clasificaDublura(row, docs, angajatId) {
   const gol = { tip:null, doc:null, nrIdentice:0, nrInactive:0, nrTotal:0, marimiNecunoscute:false }
   if (!row || !row.fisier_nume || angajatId == null) return gol
@@ -208,4 +216,103 @@ export function eroareInchidereRand(res) {
 export function inchidereFaraRezultat(res) {
   const { data, error } = res || {}
   return !!res && !error && Array.isArray(data) && data.length === 0
+}
+
+// ─── Review extern (Copilot + Jakarinos, 21.10) ──────────────────────────────
+// F1 + F6: filtrele care leagă UPDATE-ul de completare (campuri = lista de completat) sau
+// verificarea dinainte de „doar închidere" (campuri = null) de EXACT documentul văzut de om:
+// id + nesters + aceeași stare activ/istoric + același angajat + același nume + aceeași mărime;
+// la completare și același tip, câmpurile încă goale, aceleași observații și — dacă intră data
+// expirării — aceeași valoare fara_expirare (o alegere „fără expirare" pusă între timp nu se calcă).
+// Listă de [op, coloană, valoare], op 'eq' | 'is' (valoare null → 'is'); componenta face q[op](col, val).
+export function gardaDocDosar({ doc, angajatId, row, campuri = null }) {
+  const f = (col, v) => v == null ? ['is', col, null] : ['eq', col, v]
+  const g = [
+    ['eq', 'id', doc.id],
+    ['is', 'deleted_at', null],
+    ['is', 'activ', doc.activ ?? null],
+    ['eq', 'employee_id', Number(angajatId)],
+    f('fisier_nume', row && row.fisier_nume),
+    f('fisier_size_bytes', marime(doc.fisier_size_bytes)),
+  ]
+  if (campuri) {
+    g.push(f('tip_id', doc.tip_id))
+    for (const c of campuri) g.push(['is', c.camp, null])
+    if (campuri.some(c => c.camp === 'data_expirare')) g.push(f('fara_expirare', doc.fara_expirare))
+    g.push(f('observatii', doc.observatii))
+  }
+  return g
+}
+
+// Rândul citit din dosar respectă garda? (verificare și pe client, după filtrele din cerere)
+const COL_NUMERICE = new Set(['id', 'employee_id', 'tip_id', 'fisier_size_bytes'])
+export function potrivesteGarda(d, garda) {
+  if (!d) return false
+  return (garda || []).every(([, col, val]) => {
+    const v = d[col]
+    if (val == null) return v == null
+    if (COL_NUMERICE.has(col)) return marime(v) != null && marime(v) === marime(val)
+    return v === val
+  })
+}
+
+// F4: căutarea proactivă pe angajat (nu produs cartezian angajați × nume tăiat la o limită):
+// un grup = UN angajat + cel mult n nume de fișier ale lui.
+export function grupeDupaAngajat(perechi, n) {
+  const pe = new Map()
+  for (const p of perechi || []) {
+    if (!p) continue
+    if (!pe.has(p.emp)) pe.set(p.emp, [])
+    pe.get(p.emp).push(p)
+  }
+  const out = []
+  for (const [emp, lista] of pe) for (const b of bucati(lista, n)) out.push({ emp, perechi:b, nume:b.map(p => p.nume) })
+  return out
+}
+
+// F3 / F4: răspunsul unei căutări în dosar ({ data, error, count }) → { docs } | { err:'eroare' | 'trunchiat' }.
+//   limita  = limita de rânduri cerută: un răspuns care o atinge poate fi tăiat → 'trunchiat'
+//   cuNumar = s-a cerut count:'exact' → count lipsă = 'eroare', count > rânduri primite = 'trunchiat'
+// Trunchiat = nu știu dacă copia identică e printre rândurile lipsă → eroare de căutare, nu „liber".
+export function rezultatCautareDosar(res, { limita = null, cuNumar = false } = {}) {
+  const { data, error, count } = res || {}
+  if (!res || error || !Array.isArray(data)) return { err:'eroare' }
+  if (limita != null && data.length >= limita) return { err:'trunchiat' }
+  if (cuNumar && !(typeof count === 'number' && Number.isFinite(count))) return { err:'eroare' }
+  if (typeof count === 'number' && count > data.length) return { err:'trunchiat' }
+  return { docs:data }
+}
+
+export function mesajEroareCautare(err, nume) {
+  return err === 'trunchiat'
+    ? `Sunt prea multe documente „${nume}" la acest angajat ca să le verific pe toate — nu adaug nimic; verifică dosarul manual.`
+    : 'Nu am putut verifica dosarul angajatului — încearcă din nou.'
+}
+
+// F3: garda finală din confirmHR (ultima apărare, fail-closed).
+//   exact = rezultatCautareDosar pe angajat + nume + mărime (limit 1, copia activă întâi);
+//           null când mărimea rândului e necunoscută
+//   nume  = rezultatCautareDosar pe angajat + nume, complet (count) — poate lipsi dacă exact a blocat deja
+// → { err } (căutare picată / incompletă: NU se inserează) | { bloc, cls } (bloc null = se poate insera)
+export function gardaFinalaHR({ row, angajatId, exact, nume, opts = {} }) {
+  if (exact) {
+    if (exact.err) return { err:exact.err }
+    if (exact.docs.length) {
+      const cls = clasificaDublura(row, exact.docs, angajatId)
+      return { bloc: cls.tip === 'acelasi_inactiv' ? 'acelasi_inactiv' : 'acelasi', cls }
+    }
+  }
+  if (!nume || nume.err) return { err:(nume && nume.err) || 'eroare' }
+  const cls = clasificaDublura(row, nume.docs, angajatId)
+  return { bloc:blocheazaInserare(cls, opts), cls }
+}
+
+// F5: rândul din ai_documente_inbox e SIGUR închis? Abia atunci se șterge fișierul din staging —
+// altfel reîncercarea și 👁 Vezi n-ar mai avea fișier. Da: UPDATE-ul a întors rândul, sau 0 rânduri
+// fără eroare ȘI coada reîncărcată (coada ≠ null) nu-l mai conține. Eroare / necunoscut → nu.
+export function randInchisSigur(res, coada, rowId) {
+  const { data, error } = res || {}
+  if (!res || error) return false
+  if (Array.isArray(data) && data.length) return true
+  return inchidereFaraRezultat(res) && Array.isArray(coada) && !coada.some(r => r && r.id === rowId)
 }
