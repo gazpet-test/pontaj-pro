@@ -27,7 +27,7 @@ DECLARE
   -- confirmă printr-un dry-run (migrarea în tranzacție anulată, amprenta citită din COMMENT); dacă diferă (PG17 vs PG16,
   -- ACL-uri live), se adaugă aici și perechea se re-revizuiește ÎNAINTE de apply.
   c_amprente text[] := ARRAY[
-    'fa7c55062c3eb70990d2cc1d216ac97d'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
+    '32686d39b8807b0d6a34c64f19656b0c'  -- harness local PG16 (scripts/test_izometrie_e2a.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
@@ -139,6 +139,7 @@ BEGIN
   DROP POLICY magbuc_izo_client_ins ON public.magazie_bucati;
   DROP POLICY magbuc_izo_client_upd ON public.magazie_bucati;
   DROP POLICY magbuc_izo_client_del ON public.magazie_bucati;
+  DROP POLICY magbuc_izo_client_sel ON public.magazie_bucati;
   DROP POLICY magbuc_izo_writer_sel ON public.magazie_bucati;
   DROP POLICY magbuc_izo_writer_ins ON public.magazie_bucati;
   DROP POLICY magbuc_izo_writer_upd ON public.magazie_bucati;
