@@ -203,6 +203,13 @@ SELECT teste.e('T7j pachet LOT 1 mutat pe alt tronson LOT 1 → merge', teste.n(
 SELECT teste.eroare('T7k tronson LOT 2 mutat pe LOT 1 → refuz', $$UPDATE public.executie_tronsoane SET proiect_id = 1 WHERE id = 18$$, 'nu se mută între proiecte');
 SELECT teste.eroare('T7l depozitul 11 (în registru) mutat pe alt site → refuz', $$UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 11$$, 'site-ul lui nu se schimbă');
 SELECT teste.e('T7m depozitul 11: alte coloane se schimbă normal', teste.n($$UPDATE public.logistica_depozite SET adresa = 'Topleț' WHERE id = 11$$) = 1);
+SELECT teste.eroare('T7n pachet nou cu proiectul 1 + tronson al proiectului 3 → neconcordanță', $$INSERT INTO public.executie_pachete_lansare (proiect_id, tronson_id) VALUES (1, 18)$$, 'neconcordanță');
+SELECT teste.eroare('T7o pachet LOT 1 legat de un tronson LOT 2 (proiectul rămâne 1) → refuz', $$UPDATE public.executie_pachete_lansare SET tronson_id = 18 WHERE id = 1$$, 'neconcordanță');
+SELECT teste.e('T7p pachet nou concordant pe LOT 2 → merge', teste.n($$INSERT INTO public.executie_pachete_lansare (proiect_id, tronson_id) VALUES (3, 19)$$) = 1);
+SELECT teste.eroare('T7q site-ul proiectului 3 (cu registru) → refuz', $$UPDATE public.executie_proiecte SET site_id = 4 WHERE id = 3$$, 'site-ul proiectului nu se schimbă');
+SELECT teste.e('T7r site-ul proiectului 1 (off) se schimbă normal', teste.n($$UPDATE public.executie_proiecte SET site_id = 5 WHERE id = 1$$) = 1
+  AND teste.n($$UPDATE public.executie_proiecte SET site_id = 4 WHERE id = 1$$) = 1);
+SELECT teste.eroare('T7s depozitul 10 (doar origine a unei bucăți pe tronson) mutat pe alt site → refuz', $$UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 10$$, 'site-ul lui nu se schimbă');
 SELECT teste.e('T7d bon cu bucată beneficiar LOT 1 → merge', teste.n($$INSERT INTO public.executie_bonuri_consum_linii (bon_id, magazie_bucata_id, denumire) SELECT 2, id, 'teava' FROM public.magazie_bucati WHERE serie = '254CA00001'$$) = 1);
 RESET ROLE;
 SELECT teste.eroare('T7e ștergerea pachetului LOT 2 (cascadă pe țevi) → refuz', $$DELETE FROM public.executie_pachete_lansare WHERE id = 2$$, 'nu se șterg din client');
@@ -291,6 +298,15 @@ ALTER TABLE public.izo_importuri ENABLE ROW LEVEL SECURITY;
 GRANT EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) TO authenticated;
 SELECT teste.eroare('T11d funcție a registrului executabilă din API → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'EXECUTE din API');
 REVOKE EXECUTE ON FUNCTION public.fn_izo_import_storno(bigint, text, text) FROM authenticated;
-SELECT teste.e('T11e porțile refăcute; proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
+GRANT TRUNCATE ON public.magazie_bucati TO service_role;
+SELECT teste.eroare('T11f TRUNCATE pe magazie_bucati pentru service_role → activarea refuzată', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'TRUNCATE pe magazie_bucati');
+REVOKE TRUNCATE ON public.magazie_bucati FROM service_role;
+ALTER POLICY magbuc_izo_client_upd ON public.magazie_bucati USING (true);
+SELECT teste.eroare('T11g politică slăbită (același nume) → activarea refuzată pe definiții', $$SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test')$$, 'definițiile porților');
+SELECT teste.eroare('T11h reapelul pe un proiect deja „stoc” verifică și el porțile', $$SELECT public.fn_izo_seteaza_nivel(3, 'stoc', 'test')$$, 'definițiile porților');
+ALTER POLICY magbuc_izo_client_upd ON public.magazie_bucati USING (NOT ((provenienta = 'beneficiar'::text) AND (public.fn_izo_nivel(proiect_id) <> 'off'::text)));
+SELECT teste.e('T11e porțile refăcute (inclusiv definițiile); proiectul 2 a rămas off', cardinality(public.fn_izo_porti_lipsa()) = 0 AND public.fn_izo_nivel(2) = 'off');
+SELECT teste.e('T11i niciun rol API nu are TRUNCATE pe magazie_bucati', NOT has_table_privilege('service_role', 'public.magazie_bucati', 'TRUNCATE')
+  AND NOT has_table_privilege('authenticated', 'public.magazie_bucati', 'TRUNCATE') AND NOT has_table_privilege('anon', 'public.magazie_bucati', 'TRUNCATE'));
 
 SELECT 'TESTE SQL: TOATE OK';

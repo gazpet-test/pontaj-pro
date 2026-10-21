@@ -9,9 +9,9 @@
 #   4. teste SQL (supabase/tests/izometrie_e2a.test.sql): garda (authenticated / service_role / DEFINER postgres / writer fără
 #      marcaj), registrul doar-adaug, importul (idempotent, conflict, R1, perete, sursă, depozit, curbe), storno fail-closed,
 #      căile 3 și 9, regresia pozitivă (producție gazpet, recepție LOT 1), citirea pe proiect
-#   4b. import concurent cu același import_id din două sesiuni → un singur efect
-#   4c. conexiune proaspătă: writer fără marcaj → garda · REPEATABLE READ → refuz
-#   4d. curse cu două conexiuni: activare ↔ recepție, dezactivare ↔ import (lock-ul pe proiect)
+#   4b. import concurent cu același import_id din două sesiuni (barieră reală) → un singur efect
+#   4c. conexiune proaspătă: writer fără marcaj → garda · REPEATABLE READ → refuz · atribuire prin DEFINER din API → refuz
+#   4d. curse cu barieră, ambele ordini: activare↔recepție, dezactivare↔import, import↔storno, site depozit↔import
 #   5. reaplicare → refuz
 #   6. revenire: nearmată → refuz · cu date → refuz · pe o bază curată (migrare fără date): amprentă modificată → refuz;
 #      armată → totul scos, CHECK-urile revin la forma live, rândurile gazpet neatinse, gate 0e = 0
@@ -105,19 +105,45 @@ N="$(grep -c 'NOTICE:  OK' <<<"$OUT")"
 grep -q 'TESTE SQL: TOATE OK' <<<"$OUT" || esec "4 testele nu au ajuns la final"
 ok "4 teste SQL: $N verificări OK"
 
-# 4b. import concurent: două sesiuni, același import_id, același payload → un singur efect, a doua întoarce „duplicat”
-PAY='{"surse":[{"fisier":"C.xlsx","sha256":"4444444444444444444444444444444444444444444444444444444444444444"}],"bucati":[{"tip":"teava","serie":"299CC00001","sarja":"SA1","lungime_mm":12000,"perete_mm":7.1,"stare":"sosit","depozit_id":9,"sursa":{"fisier":"C.xlsx","foaie":"F","rand":1}}]}'
+# 4b/4d. curse cu BARIERĂ reală (review #806 r2 P3, fără sleep ca sincronizare): un controlor ține lock-ul advisory 99;
+#   A își face lucrul în tranzacție și se oprește pe barieră (lock partajat 99) cu lock-urile lui încă ținute; B pornește
+#   doar după ce A e văzut în pg_locks așteptând bariera, iar bariera se ridică doar după ce B e văzut așteptând un lock
+#   (pg_stat_activity.wait_event_type = Lock). Controlorul se închide (pg_terminate_backend) → A comite → B continuă.
+asteapta() { local i; for i in $(seq 1 150); do [ "$(q "$1")" = "${2:-1}" ] && return 0; sleep 0.1; done; return 1; }
+cursa() { # $1 eticheta · $2 SQL-ul lui A (fără BEGIN/COMMIT) · $3 SQL-ul lui B · $4 ok|err · $5 tiparul așteptat în ieșirea lui B
+  local et="$1" pa pb pc oa ob rc_b=0
+  PGAPPNAME=izo_ctrl "${PSQL[@]}" -d "$BAZA" -Atc "SELECT pg_advisory_lock(99); SELECT pg_sleep(300);" >/dev/null 2>&1 & pc=$!
+  asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_ctrl'
+            AND l.locktype = 'advisory' AND l.classid = 0 AND l.objid = 99 AND l.objsubid = 1 AND l.granted" || esec "$et: controlorul n-a luat bariera"
+  PGAPPNAME=izo_A "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; $2; SELECT pg_advisory_xact_lock_shared(99); COMMIT;" >/tmp/izo_cursa_a.out 2>&1 & pa=$!
+  asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_A'
+            AND l.locktype = 'advisory' AND l.classid = 0 AND l.objid = 99 AND NOT l.granted" \
+    || { kill "$pc" 2>/dev/null; cat /tmp/izo_cursa_a.out >&2; esec "$et: A n-a ajuns la barieră"; }
+  PGAPPNAME=izo_B "${PSQL[@]}" -d "$BAZA" -Atc "$3" >/tmp/izo_cursa_b.out 2>&1 & pb=$!
+  asteapta "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'izo_B' AND wait_event_type = 'Lock'" \
+    || { q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'izo_ctrl'" >/dev/null; wait "$pa" "$pb" 2>/dev/null
+         cat /tmp/izo_cursa_b.out >&2; esec "$et: B nu a așteptat un lock (nu există serializare)"; }
+  q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'izo_ctrl'" >/dev/null
+  wait "$pc" 2>/dev/null || true
+  wait "$pa" || { cat /tmp/izo_cursa_a.out >&2; esec "$et: A a eșuat"; }
+  wait "$pb" || rc_b=$?
+  ob="$(cat /tmp/izo_cursa_b.out)"
+  if [ "$4" = ok ]; then [ "$rc_b" = 0 ] || { echo "$ob" >&2; esec "$et: B a eșuat"; }
+  else [ "$rc_b" != 0 ] || { echo "$ob" >&2; esec "$et: B a trecut, așteptam refuz"; }; fi
+  grep -q -- "$5" <<<"$ob" || { echo "$ob" >&2; esec "$et: ieșirea lui B nu conține „$5”"; }
+}
+CA_JANETA="SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000030\"}', true); SET LOCAL ROLE authenticated"
+CA_TOMA="SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000117\"}', true); SET LOCAL ROLE authenticated"
+pay() { echo "{\"surse\":[{\"fisier\":\"C.xlsx\",\"sha256\":\"$1\"}],\"bucati\":[{\"tip\":\"teava\",\"serie\":\"$2\",\"sarja\":\"SA1\",\"lungime_mm\":12000,\"perete_mm\":7.1,\"stare\":\"sosit\",\"depozit_id\":$3,\"sursa\":{\"fisier\":\"C.xlsx\",\"foaie\":\"F\",\"rand\":1}}]}"; }
+
+# 4b. același import_id din două sesiuni → B așteaptă și întoarce „duplicat”, un singur efect
+PAY="$(pay 4444444444444444444444444444444444444444444444444444444444444444 299CC00001 9)"
 INAINTE="$(q "SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL")"
-( "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; SELECT public.fn_izo_import_sold_initial(3, 'conc-1', '$PAY'::jsonb)->>'duplicat'; SELECT pg_sleep(2); COMMIT;" >/tmp/izo_conc_a.out 2>&1 ) &
-PID_A=$!
-sleep 0.7
-"${PSQL[@]}" -d "$BAZA" -Atc "SELECT public.fn_izo_import_sold_initial(3, 'conc-1', '$PAY'::jsonb)->>'duplicat'" >/tmp/izo_conc_b.out 2>&1 || { cat /tmp/izo_conc_b.out >&2; esec "4b sesiunea B a eșuat"; }
-wait "$PID_A" || { cat /tmp/izo_conc_a.out >&2; esec "4b sesiunea A a eșuat"; }
-grep -qx false /tmp/izo_conc_a.out || esec "4b sesiunea A nu a aplicat: $(cat /tmp/izo_conc_a.out)"
-grep -qx true /tmp/izo_conc_b.out || esec "4b sesiunea B nu a întors duplicat: $(cat /tmp/izo_conc_b.out)"
+cursa "4b import concurent" "SELECT public.fn_izo_import_sold_initial(3, 'conc-1', '$PAY'::jsonb)" \
+  "SELECT public.fn_izo_import_sold_initial(3, 'conc-1', '$PAY'::jsonb)->>'duplicat'" ok '^true$'
 [ "$(q "SELECT count(*) FROM public.magazie_bucati WHERE tip_cod IS NOT NULL")" = "$((INAINTE + 1))" ] || esec "4b efect dublu"
 [ "$(q "SELECT count(*) FROM public.izo_importuri WHERE import_id = 'conc-1'")" = 1 ] || esec "4b două rânduri de import"
-ok "4b import concurent cu același import_id: A aplică, B așteaptă și întoarce duplicat, un singur efect"
+ok "4b import concurent cu același import_id (barieră): B așteaptă și întoarce duplicat, un singur efect"
 
 # 4c. conexiuni proaspete (GUC-ul marcajului nedefinit) și izolarea: writer fără marcaj → garda; REPEATABLE READ → refuz
 nu_merge() { local out; if out="$("${PSQL[@]}" -d "$BAZA" -Atc "$2" 2>&1)"; then esec "$1 a trecut"; fi
@@ -132,26 +158,46 @@ nu_merge "4c4 funcție a registrului în REPEATABLE READ" \
   "BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'test'); COMMIT;" "READ COMMITTED"
 ok "4c conexiune proaspătă: writer fără marcaj → garda (UPDATE + INSERT) · REPEATABLE READ → refuz (recepție + funcție registru)"
 
-# 4d. cursa activare ↔ recepție pe proiectul 2: recepția (lock partajat) ține pe loc activarea (lock exclusiv), care
-#     apoi vede bucata comisă și refuză. Fără lock, activarea n-ar vedea bucata necomisă → bucată neurmărită sub stoc.
-( "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; SELECT set_config('request.jwt.claims', '{\"sub\":\"00000000-0000-0000-0000-000000000030\"}', true); SET LOCAL ROLE authenticated; INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta) VALUES (2, 1, 'CURSA1', 'beneficiar'); SELECT pg_sleep(2); COMMIT;" >/tmp/izo_cursa_a.out 2>&1 ) &
-PID_A=$!
-sleep 0.7
-nu_merge "4d1 activare în timpul unei recepții beneficiar necomise" "SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'cursa')" "în afara registrului"
-wait "$PID_A" || { cat /tmp/izo_cursa_a.out >&2; esec "4d1 recepția a eșuat"; }
-[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.magazie_bucati WHERE serie = 'CURSA1'")" = "off:1" ] || esec "4d1 stare finală greșită"
+# 4c5. garda atribuirilor: o funcție DEFINER cu owner postgres chemată dintr-o sesiune API (session_user ≠ postgres) → refuz
+q "CREATE ROLE izo_api LOGIN; GRANT authenticated TO izo_api" >/dev/null
+q "CREATE FUNCTION teste.atr_definer() RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS \$\$ INSERT INTO public.izo_atribuiri (proiect_id, profile_id, rol, acordat_de, motiv) VALUES (3, '00000000-0000-0000-0000-000000000117', 'inginer_izometrie', 'x', 'test') \$\$; GRANT EXECUTE ON FUNCTION teste.atr_definer() TO authenticated" >/dev/null
+if OUT="$("$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U izo_api -d "$BAZA" -Atc "SET ROLE authenticated; SELECT teste.atr_definer()" 2>&1)"; then esec "4c5 atribuire prin DEFINER din API a trecut"; fi
+grep -q "doar de owner" <<<"$OUT" || esec "4c5 refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+q "DROP FUNCTION teste.atr_definer(); REVOKE authenticated FROM izo_api; DROP ROLE izo_api" >/dev/null
+ok "4c5 atribuiri: funcție DEFINER (owner postgres) chemată dintr-o sesiune API → refuz (session_user ≠ postgres)"
+
+# 4d. curse pe proiectele 2 și 3, ambele ordini (review #806 r2): activare ↔ recepție, dezactivare ↔ import,
+#     import ↔ storno, schimbarea site-ului unui depozit ↔ import
+PAY_B="$(pay 5555555555555555555555555555555555555555555555555555555555555555 299CC00002 4)"
+PAY_C="$(pay 6666666666666666666666666666666666666666666666666666666666666666 299CC00003 4)"
+PAY_D="$(pay 7777777777777777777777777777777777777777777777777777777777777777 299CC00004 12)"
+cursa "4d1 recepție, apoi activare" "$CA_JANETA; INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta) VALUES (2, 1, 'CURSA1', 'beneficiar')" \
+  "SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'cursa')" err "în afara registrului"
+[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.magazie_bucati WHERE serie = 'CURSA1'")" = "off:1" ] || esec "4d1 stare finală"
 q "DELETE FROM public.magazie_bucati WHERE serie = 'CURSA1'" >/dev/null
-# cursa dezactivare ↔ import: importul (lock exclusiv) ține pe loc „off”, care apoi vede faptele și refuză
+cursa "4d2 activare, apoi recepție" "SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'cursa a')" \
+  "BEGIN; $CA_JANETA; INSERT INTO public.magazie_bucati (proiect_id, tip_material_id, serie, provenienta) VALUES (2, 1, 'CURSA2', 'beneficiar'); COMMIT;" \
+  err "doar prin funcțiile registrului"
+[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.magazie_bucati WHERE serie = 'CURSA2'")" = "stoc:0" ] || esec "4d2 stare finală"
+cursa "4d3 dezactivare, apoi import" "SELECT public.fn_izo_seteaza_nivel(2, 'off', 'cursa')" \
+  "SELECT public.fn_izo_import_sold_initial(2, 'cursa-b', '$PAY_B'::jsonb)" err "nivelul stoc"
+[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.izo_importuri WHERE proiect_id = 2")" = "off:0" ] || esec "4d3 stare finală"
 q "SELECT public.fn_izo_seteaza_nivel(2, 'stoc', 'cursa b')" >/dev/null
-PAY2='{"surse":[{"fisier":"C.xlsx","sha256":"5555555555555555555555555555555555555555555555555555555555555555"}],"bucati":[{"tip":"teava","serie":"299CC00002","sarja":"SA2","lungime_mm":12000,"perete_mm":7.1,"stare":"sosit","depozit_id":4,"sursa":{"fisier":"C.xlsx","foaie":"F","rand":1}}]}'
-( "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; SELECT public.fn_izo_import_sold_initial(2, 'cursa-b', '$PAY2'::jsonb)->>'duplicat'; SELECT pg_sleep(2); COMMIT;" >/tmp/izo_cursa_b.out 2>&1 ) &
-PID_A=$!
-sleep 0.7
-nu_merge "4d2 dezactivare în timpul unui import necomis" "SELECT public.fn_izo_seteaza_nivel(2, 'off', 'cursa')" "fapte în registru"
-wait "$PID_A" || { cat /tmp/izo_cursa_b.out >&2; esec "4d2 importul a eșuat"; }
-grep -qx false /tmp/izo_cursa_b.out || esec "4d2 importul nu a aplicat: $(cat /tmp/izo_cursa_b.out)"
-[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.magazie_bucati WHERE serie = '299CC00002' AND tip_cod = 'teava'")" = "stoc:1" ] || esec "4d2 stare finală greșită"
-ok "4d curse pe proiectul 2: activare ↔ recepție → activarea așteaptă și refuză · dezactivare ↔ import → „off” așteaptă și refuză"
+cursa "4d4 import, apoi dezactivare" "SELECT public.fn_izo_import_sold_initial(2, 'cursa-b', '$PAY_B'::jsonb)" \
+  "SELECT public.fn_izo_seteaza_nivel(2, 'off', 'cursa')" err "fapte în registru"
+[ "$(q "SELECT public.fn_izo_nivel(2) || ':' || count(*) FROM public.magazie_bucati WHERE serie = '299CC00002' AND tip_cod = 'teava'")" = "stoc:1" ] || esec "4d4 stare finală"
+cursa "4d5 import, apoi storno" "SELECT public.fn_izo_import_sold_initial(2, 'cursa-c', '$PAY_C'::jsonb)" \
+  "SELECT public.fn_izo_import_storno(2, 'cursa-c', 'cursa')->>'bucati_anulate'" ok '^1$'
+cursa "4d6 storno, apoi același import" "SELECT public.fn_izo_import_storno(2, 'cursa-b', 'cursa')" \
+  "SELECT public.fn_izo_import_sold_initial(2, 'cursa-b', '$PAY_B'::jsonb)->>'stare'" ok '^stornat$'
+[ "$(q "SELECT string_agg(stare, ',' ORDER BY serie) FROM public.magazie_bucati WHERE serie IN ('299CC00002','299CC00003')")" = "anulata,anulata" ] || esec "4d5/6 stare finală"
+cursa "4d7 depozit mutat pe alt site, apoi import în el" "$CA_TOMA; UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 12" \
+  "SELECT public.fn_izo_import_sold_initial(3, 'cursa-d', '$PAY_D'::jsonb)" err "nu țin de proiectul"
+q "UPDATE public.logistica_depozite SET site_id = 6 WHERE id = 12" >/dev/null
+cursa "4d8 import în depozit, apoi mutarea depozitului" "SELECT public.fn_izo_import_sold_initial(3, 'cursa-d', '$PAY_D'::jsonb)" \
+  "BEGIN; $CA_TOMA; UPDATE public.logistica_depozite SET site_id = 4 WHERE id = 12; COMMIT;" err "site-ul lui nu se schimbă"
+[ "$(q "SELECT site_id || ':' || (SELECT count(*) FROM public.magazie_bucati WHERE depozit_id = 12) FROM public.logistica_depozite WHERE id = 12")" = "6:1" ] || esec "4d8 stare finală"
+ok "4d curse cu barieră, ambele ordini: activare↔recepție · dezactivare↔import · import↔storno · site depozit↔import — a doua așteaptă și decide pe starea comisă"
 
 refuza_cu "5 reaplicare" "Precondiție 0b"
 ok "5 reaplicare → refuz"
@@ -182,6 +228,7 @@ OUT="$(revenire "$BAZA2")" || { echo "$OUT" >&2; esec "6f revenirea armată pe b
 [ "$(obiecte_izo "$BAZA2")" = 0 ] || esec "6f obiecte izo rămase"
 [ "$(q2 "SELECT md5(string_agg(id || serie || stare || coalesce(proiect_id::text,''), ',' ORDER BY id)) FROM public.magazie_bucati")" = "$GAZ_INAINTE" ] || esec "6f rândurile existente s-au schimbat"
 [ "$(q2 "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'magazie_bucati_stare_check'")" = "CHECK ((stare = ANY (ARRAY['sosit'::text, 'receptionat'::text, 'rezervata'::text, 'montata'::text, 'consumata'::text, 'retur'::text])))" ] || esec "6f CHECK stare nerefăcut"
+[ "$(q2 "SELECT has_table_privilege('service_role', 'public.magazie_bucati', 'TRUNCATE')")" = t ] || esec "6f TRUNCATE pentru service_role nerefăcut"
 gate_0e "revenire" "$BAZA2"
 ok "6d–f revenire: amprentă modificată / politică slăbită → refuz · armată pe bază curată → totul scos, CHECK-urile ca pe live, rândurile existente neatinse"
 echo "PASS test_izometrie_e2a"
