@@ -563,3 +563,20 @@ Două tranziții administrative, fiecare doar sub contextul ei, scris doar de `f
   - două creări concurente pe aceeași țintă → exact una;
   - ținta e chiar documentul → refuz.
 
+## 14. r5e — răspunsul la NO-GO r5d (Copilot + Jak), aplicat direct în cod (20261103b)
+
+1. **Închiderea semi-naivă:** frontiera următoare = elementele adăugate în iterația curentă (`f_rel := n_rel`, `f_fn := n_fn`). View-urile noi intră în frontiera aceleiași iterații pentru funcții ȘI în frontiera următoarei pentru view-uri peste view-uri. Limita de 100 de iterații și mesajele de neconvergență sunt exact cele E2a.
+   - **Dovezi:**
+     - test diferențial în harness (`supabase/tests/izometrie_e3_inchidere.sql`, generat din textul EXACT al închiderii E2a r15 și al celei din migrare): rel / fn / mutatori / mesaje identice pe 7 mutații, inclusiv lanțul magazie_bucati → v1 → v2 → v3 → DEFINER (security_invoker), overload, citat, mutator;
+     - reproba pe prod (funcții `pg_temp`, ROLLBACK): identice, **356 ms față de 8 240 ms**.
+2. **Înlocuirea:** utilizatorul trebuie să fie autorizat (§3.4, sub `FOR SHARE`) și pe proiectul / depozitul **țintei**, nu doar pe documentul nou. Altfel apare un mesaj generic („nu există, nu e anulat sau nu ai acces”), care nu dezvăluie dacă ținta există. Revalidarea se face la fiecare salvare și la confirmare.
+   - **Decizie:** un înlocuitor anulat ulterior **consumă în continuare** `UNIQUE (inlocuieste_document_id)` al țintei. Corectura următoare înlocuiește înlocuitorul anulat (lanț), deci auditul rămâne liniar.
+   - **Test:** țintă pe un depozit fără acces → refuz generic.
+3. **Storage:** ștampila E3 inventariază **toate** politicile de pe `storage.objects`, fără filtru textual.
+4. **RLS-ul editorului:** USING `proiect_id IS NOT NULL` (rândul vechi), WITH CHECK `stare IN ('draft', 'anulat')` (rezultatul). Restricția reală (draft → draft cu versiune +1 sau draft → anulat doar pe coloanele anulării) e în trigger-ul documentelor.
+   - **Test pozitiv:** gestionarul își anulează ciorna cu rolul API real (E8b–c).
+- **P2:**
+  - revenirea E3 reface exact COMMENT-ul de revenire (păstrat integral după `‖ anterior:`) și ștampila porților; apoi revenirile 2c și E2a trec. Testat pe baza curată; amprenta E3 NU intră în `c_amprente` E2a;
+  - lock-ul „schemă” = `pg_advisory_xact_lock(_shared)(hashtext('gazpet.livrare_migrare'))`, aceeași semnătură bigint ca runner-ul. Cursa cu barieră o dovedește prin `pg_locks` (B așteaptă `Lock`);
+  - suita E2a completă (180) trece nemodificată peste E3.
+
