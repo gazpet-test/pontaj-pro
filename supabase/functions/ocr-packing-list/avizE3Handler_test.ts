@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert'
 import { citesteAvizE3 } from './avizE3Handler.ts'
 import { MAX_INPUT_E3, REZERVA_E3 } from './avizE3.ts'
 
-type Opt = { owner?: boolean; user?: boolean; modul?: boolean; atribuire?: boolean; queryError?: boolean; refuzPlafon?: boolean; count?: number; timeout?: boolean; invalid?: boolean; usage?: boolean; refuzAI?: boolean; truncat?: boolean; settleError?: boolean; countEsuat?: boolean }
+type Opt = { owner?: boolean; user?: boolean; modul?: boolean; atribuire?: boolean; queryError?: boolean; refuzPlafon?: boolean; count?: number; timeout?: boolean; invalid?: boolean; usage?: boolean; refuzAI?: boolean; truncat?: boolean; settleError?: boolean; countEsuat?: boolean; countAruncat?: boolean }
 async function scenariu(o: Opt = {}) {
   const evenimente: string[] = []
   const decontari: unknown[] = []
@@ -45,7 +45,7 @@ async function scenariu(o: Opt = {}) {
     const payload = JSON.parse(String(init?.body))
     assert.equal(payload.model, 'claude-haiku-5-5')
     assert.equal(payload.messages[0].content[0].source.data, corp.pdf_base64)
-    if (String(url).endsWith('count_tokens')) return Promise.resolve(o.countEsuat ? new Response('x', { status: 503 }) : Response.json({ input_tokens: o.count ?? 1000 }))
+    if (String(url).endsWith('count_tokens')) return o.countAruncat ? Promise.reject(new DOMException('timeout', 'TimeoutError')) : Promise.resolve(o.countEsuat ? new Response('x', { status: 503 }) : Response.json({ input_tokens: o.count ?? 1000 }))
     assert.equal(payload.max_tokens, 10400)
     if (o.timeout) return Promise.reject(new DOMException('timeout', 'TimeoutError'))
     return Promise.resolve(Response.json({
@@ -123,6 +123,11 @@ Deno.test('E3 handler: numărarea gratuită pică => fără generare, cost 0, pl
   const r = await scenariu({ countEsuat: true })
   assert.equal(r.status, 502)
   assert.equal(r.body.eroare, 'numarare_indisponibila')
+  assert.equal(r.evenimente.filter(e => e.endsWith('/messages')).length, 0)
+  assert.deepEqual(r.decontari, [0])
+})
+Deno.test('E3 handler: timeout / retea la numarare => cost 0 (Jak E9 r2 P2)', async () => {
+  const r = await scenariu({ countAruncat: true })
   assert.equal(r.evenimente.filter(e => e.endsWith('/messages')).length, 0)
   assert.deepEqual(r.decontari, [0])
 })

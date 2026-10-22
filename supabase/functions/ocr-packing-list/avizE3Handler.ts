@@ -6,7 +6,8 @@ import { atribuireValidaE3, EroareE3, MAX_INPUT_E3, MAX_TOKENS_E3, MODEL_E3, nor
 export async function citesteAvizE3(req: Request, body: Record<string, unknown>, caller: SupabaseClient, ledger: SupabaseClient, apiKey: string | undefined, cors: Record<string, string>) {
   const raspuns = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
   let rezervare: number | null = null
-  let cost: number | null = null
+  // 0 până imediat înaintea apelului plătit (numărarea e gratuită); null = cost necunoscut după pornirea generării (Jak E9 r2 P2)
+  let cost: number | null = 0
   let decontareIncercata = false
   const deconteaza = async () => {
     if (rezervare === null || decontareIncercata) return
@@ -66,6 +67,7 @@ export async function citesteAvizE3(req: Request, body: Record<string, unknown>,
     const tokens = await count.json().then(j => j.input_tokens).catch(() => null)
     if (!Number.isSafeInteger(tokens) || tokens <= 0) { cost = 0; throw new EroareE3('numarare_indisponibila', 502) }
     if (tokens > MAX_INPUT_E3) { cost = 0; throw new EroareE3('pdf_prea_multi_tokeni') }
+    cost = null
     const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_E3, thinking: faraGandire(MODEL_E3) }), signal: AbortSignal.timeout(90000) })
     if (!r.ok) throw new EroareE3('apel_ai_esuat', 502)
     const result = await r.json()

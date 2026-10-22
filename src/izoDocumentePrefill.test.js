@@ -60,4 +60,9 @@ describe('prefill OCR E3', () => {
     expect(d.antet.total_kg).toBe('11594,5')
     expect(d.ocrAvertismente.some(a => a.includes('123.456'))).toBe(true)
   })
+  it('totaluri net/brut pe lista de curbe nu se multiplică (Jak E9 r2 P1)', () => {
+    const d = aplicaPropunereOCR({ ...doc(), sablon:'lista_ambalare_curbe' }, { antet:{ total_net_kg:123.456, total_brut_kg:'234.567' }, randuri:[],
+      totaluri_tiparite:{ total_kg:1500 } }, { mod:'inlocuieste' })
+    expect(d.antet.total_net_kg).toBe(''); expect(d.antet.total_brut_kg).toBe('')
+  })
 })

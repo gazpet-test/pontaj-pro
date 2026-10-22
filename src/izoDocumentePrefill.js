@@ -4,7 +4,8 @@ const text = v => typeof v === 'string' || typeof v === 'number' ? String(v) : '
 const gol = v => v == null || String(v).trim() === ''
 // Câmpurile de kg se citesc cu „mii: true” (123.456 = 123456), deci numărul AI nu se scrie cu punct: întreg → cifre,
 // 1–2 zecimale → virgulă; 3+ zecimale = ambiguu → câmp gol + avertisment, fără rotunjire tacită (Jak E9 r1 P1).
-export const CHEI_KG = new Set(['greutate_kg', 'net_kg', 'brut_kg', 'total_kg'])
+// orice câmp *_kg (rânduri + totaluri: total_kg, total_net_kg, total_brut_kg …) — Jak E9 r2 P1
+export const esteKg = k => /_kg$/.test(k)
 export function textKg(v) {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? parseNumar(v) : null
   if (n == null || !Number.isFinite(n)) return { val:'', ok:v == null || String(v).trim() === '' }
@@ -29,7 +30,7 @@ export function aplicaPropunereOCR(editorDoc, raspuns, { mod = 'completeaza' } =
   if (totaluri.total_kg != null) propus.total_kg = totaluri.total_kg
   const avKg = []
   const valoare = (k, v, unde) => {
-    if (!CHEI_KG.has(k)) return text(v)
+    if (!esteKg(k)) return text(v)
     const { val, ok } = textKg(v)
     if (!ok) avKg.push(`${unde}: valoarea de kg „${text(v)}” e ambiguă (3+ zecimale) — introdu-o manual de pe document.`)
     return val
