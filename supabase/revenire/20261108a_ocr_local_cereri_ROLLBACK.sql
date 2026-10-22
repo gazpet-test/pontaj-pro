@@ -9,10 +9,11 @@ BEGIN
   PERFORM set_config('lock_timeout','5s',true);
   -- Împiedică admiterea/rezultatul/rezervarea între verificare și DROP.
   PERFORM pg_advisory_xact_lock(hashtext('ocr_local_cota'));
-  LOCK TABLE public.ocr_local_cereri IN ACCESS EXCLUSIVE MODE;
-  IF EXISTS (SELECT 1 FROM public.ocr_local_cereri WHERE stare NOT IN ('expirata','gata','esuata')
-      OR apel_faza IN ('acordat','rezervat','trimis','raspuns')) THEN
-    RAISE EXCEPTION '20261108a: exista cereri sau apeluri active';
+  LOCK TABLE public.ocr_local_cereri, public.ocr_local_incercari IN ACCESS EXCLUSIVE MODE;
+  -- Orice istoric, inclusiv finalizat/curatat/refuzat, impune decizie explicita de export.
+  IF EXISTS (SELECT 1 FROM public.ocr_local_cereri)
+     OR EXISTS (SELECT 1 FROM public.ocr_local_incercari) THEN
+    RAISE EXCEPTION '20261108a: exista istoric B1; necesita decizie explicita de export';
   END IF;
   -- B1 nu creează bucket/cron. Dacă B2 le-a instalat, se revine întâi B2:
   -- nu ștergem metadate Storage, obiecte ori joburi create de altă livrare.

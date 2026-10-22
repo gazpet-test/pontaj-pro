@@ -102,7 +102,7 @@ ALTER TABLE public.ocr_local_incercari ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ocr_local_cereri ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.ocr_local_config, public.ocr_local_worker, public.ocr_local_incercari, public.ocr_local_cereri FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON SEQUENCE public.ocr_local_incercari_id_seq FROM PUBLIC, anon, authenticated, service_role;
-GRANT SELECT ON public.ocr_local_cereri TO authenticated;
+-- UI exclusiv prin B2 → fn_ocr_local_stare; fără SELECT direct pe tabel.
 CREATE POLICY ocr_local_creator ON public.ocr_local_cereri FOR SELECT TO authenticated
   USING (auth.uid() IS NOT NULL AND creat_de = auth.uid());
 
@@ -189,7 +189,9 @@ BEGIN
   IF (SELECT count(*) FROM public.ocr_local_incercari WHERE "user" = p_user AND la > t - interval '1 hour') > 60 THEN v_motiv := 'limita_incercari';
   ELSIF p_proiect IS NULL OR p_proiect <= 0 OR p_depozit IS NULL OR p_depozit <= 0
      OR p_sablon IS NULL OR p_sablon NOT IN ('aviz_teava','lista_curbe')
-     OR p_bytes IS NULL OR p_bytes NOT BETWEEN 1 AND 8388608 THEN v_motiv := 'parametri_invalizi';
+     OR p_bytes IS NULL OR p_bytes NOT BETWEEN 1 AND 8388608
+     OR NOT EXISTS (SELECT 1 FROM public.executie_proiecte WHERE id = p_proiect)
+     OR NOT EXISTS (SELECT 1 FROM public.logistica_depozite WHERE id = p_depozit) THEN v_motiv := 'parametri_invalizi';
   ELSE
     FOR x IN SELECT q.id FROM public.ocr_local_cereri q WHERE q.creat_de = p_user AND q.stare IN ('admisa','ceruta','preluata','fallback') ORDER BY q.id LOOP
       PERFORM public.fn_ocr_local_expira_una(x);
@@ -372,14 +374,14 @@ END $f$;
 
 CREATE FUNCTION public.fn_ocr_local_stare(p_id uuid, p_user uuid)
 RETURNS TABLE(stare text, ramura text, rezultat jsonb, eroare text, termen_local timestamptz,
-  drept_platit_de text, apel_faza text, apel_raspuns jsonb, termen_fallback timestamptz)
+  termen_fallback timestamptz)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 BEGIN
   PERFORM 1 FROM public.ocr_local_cereri WHERE id=p_id AND creat_de=p_user FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'nu_exista' USING ERRCODE='P0001'; END IF;
   PERFORM public.fn_ocr_local_expira_una(p_id);
-  RETURN QUERY SELECT q.stare, q.ramura, q.rezultat, q.eroare, q.termen_local, q.drept_platit_de,
-    q.apel_faza, q.apel_raspuns, q.termen_fallback FROM public.ocr_local_cereri q WHERE q.id=p_id;
+  RETURN QUERY SELECT q.stare, q.ramura, CASE WHEN q.stare = 'gata' THEN q.rezultat END,
+    q.eroare, q.termen_local, q.termen_fallback FROM public.ocr_local_cereri q WHERE q.id=p_id;
 END $f$;
 
 CREATE FUNCTION public.fn_ocr_local_expira() RETURNS int
@@ -444,6 +446,8 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 $f$;
 
 -- Listă explicită: nu se modifică ACL-ul niciunei funcții existente.
+-- RPC-uri JWT-side: numai B2 cu service_role, dupa verificarea identitatii/accesului
+-- cu JWT-ul real. Niciun EXECUTE pentru authenticated/anon/PUBLIC.
 DO $acl$
 DECLARE s text;
 BEGIN

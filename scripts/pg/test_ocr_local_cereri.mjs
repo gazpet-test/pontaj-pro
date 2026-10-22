@@ -66,7 +66,7 @@ class Session {
 const o = await new Session('observer').init()
 const a = await new Session('worker_a').init('service_role')
 const b = await new Session('worker_b').init('service_role')
-let user, other, project, baseline, installed = false, passed = 0
+let user, other, project, depot, baseline, installed = false, passed = 0
 const tests = []
 const test = (name, body) => tests.push([name, body])
 const one = (s, call) => s.value(`(SELECT to_jsonb(x) FROM ${call} x)`)
@@ -119,7 +119,7 @@ async function reset() {
     DELETE FROM public.ai_plafon_lunar WHERE cheie='izo_e3_ocr:${project}';`)
   await a.command(`SELECT public.fn_ocr_local_heartbeat('w','disponibil',clock_timestamp(),'{}','test');`)
 }
-const admit = (s = a, u = user) => one(s, `public.fn_ocr_local_admite(${quote(u)},${project},1,'aviz_teava',100)`)
+const admit = (s = a, u = user) => one(s, `public.fn_ocr_local_admite(${quote(u)},${project},${depot},'aviz_teava',100)`)
 async function requested() {
   const r = await admit()
   assert.equal(r.status, 'admisa', `admitere: ${r.motiv}`)
@@ -171,16 +171,21 @@ test('gardă livrare, re-aplicare refuzată; gate E3 și ACL existente identice'
   await o.command(`BEGIN; SELECT set_config('gazpet.livrare_migrare','20261108a_ocr_local_cereri:'||txid_current(),true); ${migration} COMMIT;`)
 })
 
-test('roluri reale: SELECT doar creator; niciun DML/RPC pentru authenticated/anon; worker doar RPC', async () => {
+test('roluri reale: niciun SELECT direct; niciun DML/RPC pentru authenticated/anon; worker doar RPC', async () => {
   await reset()
   const id = await requested(), u = await new Session('ui').init('authenticated'), n = await new Session('anon').init('anon')
   try {
     await u.command(`SET request.jwt.claims=${quote(JSON.stringify({ sub: user, role: 'authenticated' }))};`)
-    assert.equal(await u.value('(SELECT to_jsonb(count(*)) FROM public.ocr_local_cereri)'), 1)
-    await u.command(`SET request.jwt.claims=${quote(JSON.stringify({ sub: other, role: 'authenticated' }))};`)
-    assert.equal(await u.value('(SELECT to_jsonb(count(*)) FROM public.ocr_local_cereri)'), 0)
-    await u.command(`SET request.jwt.claims='{}';`)
-    assert.equal(await u.value('(SELECT to_jsonb(count(*)) FROM public.ocr_local_cereri)'), 0)
+    for (const claims of [{ sub: user, role: 'authenticated' }, { sub: other, role: 'authenticated' }, {}]) {
+      await u.command(`SET request.jwt.claims=${quote(JSON.stringify(claims))};`)
+      await denies(u, 'SELECT * FROM public.ocr_local_cereri', 'permission denied')
+      for (const column of ['token_executie','worker_id','rezervare_id','apel_faza','apel_raspuns']) {
+        await denies(u, `SELECT ${column} FROM public.ocr_local_cereri`, 'permission denied')
+      }
+    }
+    const safe = await state(id)
+    assert.deepEqual(Object.keys(safe).sort(), ['stare','ramura','rezultat','eroare','termen_local','termen_fallback'].sort())
+    assert.equal(safe.rezultat, null)
     for (const s of [u, n, a]) {
       for (const sql of [
         `UPDATE public.ocr_local_cereri SET stare='gata' WHERE id=${quote(id)}`,
@@ -194,8 +199,22 @@ test('roluri reale: SELECT doar creator; niciun DML/RPC pentru authenticated/ano
       WHERE p.pronamespace='public'::regnamespace AND p.proname LIKE 'fn_ocr_local_%')`)
     for (const sig of signatures) {
       for (const role of ['authenticated', 'anon']) assert.equal(await o.value(`to_jsonb(has_function_privilege(${quote(role)},${quote(sig)},'EXECUTE'))`), false)
+      assert.equal(await o.value(`to_jsonb(EXISTS(SELECT 1 FROM pg_proc p,
+        LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+        WHERE p.oid=${quote(sig)}::regprocedure AND acl.grantee=0 AND acl.privilege_type='EXECUTE'))`), false)
+      const helper = /fn_ocr_local_(expira_una|disponibilitate)\(/.test(sig)
+      assert.equal(await o.value(`to_jsonb(has_function_privilege('service_role',${quote(sig)},'EXECUTE'))`), !helper)
     }
-    await denies(u, `SELECT * FROM public.fn_ocr_local_preia('ui')`, 'permission denied')
+    // EXECUTE effectiv, nu doar inspectarea ACL-ului, pe fiecare RPC JWT-side.
+    for (const caller of [u, n]) {
+      for (const call of [
+        `public.fn_ocr_local_admite(${quote(user)},${project},${depot},'aviz_teava',100)`,
+        `public.fn_ocr_local_confirma_upload(${quote(id)},${quote(user)},repeat('a',64),100)`,
+        `public.fn_ocr_local_drept_platit(${quote(id)},'fallback',NULL,${quote(user)})`,
+        `public.fn_ocr_local_stare(${quote(id)},${quote(user)})`,
+        "public.fn_ocr_local_preia('ui')",
+      ]) await denies(caller, `SELECT * FROM ${call}`, 'permission denied')
+    }
     await denies(a, `SELECT public.fn_ocr_local_expira_una(${quote(id)})`, 'permission denied')
     await denies(a, `SELECT * FROM public.fn_ocr_local_stare(${quote(id)},${quote(other)})`, 'nu_exista')
     await denies(a, `SELECT * FROM public.fn_ocr_local_drept_platit(${quote(id)},'fallback',NULL,${quote(other)})`, 'nu_e_creatorul')
@@ -340,7 +359,7 @@ test('recuperare acordat/rezervat/trimis/raspuns pe ambele ramuri: sume conserva
 test('HTTP pierdut: răspuns persistat, cost real; fallback 119/121; eșecuri înainte/după și răspuns invalid', async () => {
   await reset(); let id = await fallback()
   await reserve(id); await phase(id, 'trimis'); await phase(id, 'raspuns', { propunere: 'x' })
-  assert.deepEqual((await state(id)).apel_raspuns, { propunere: 'x' })
+  assert.deepEqual((await row(id)).apel_raspuns, { propunere: 'x' })
   assert.equal((await right(a, id, 'fallback')).acordat, false)
   await phase(id, 'decontat', null, '0.012345')
   assert.deepEqual(await ledger(), [0, 0.012345])
@@ -359,6 +378,39 @@ test('HTTP pierdut: răspuns persistat, cost real; fallback 119/121; eșecuri î
     assert.equal((await state(id)).stare, fail === 'decontat_cazut' ? 'gata' : 'esuata')
     assert.deepEqual(await ledger(), [0, fail === 'esuat_inainte' ? 0 : fail === 'decontat_cazut' ? 0.01 : 0.05])
   }
+})
+
+test('recovery decontat: cost_real si totalurile lunare raman identice', async () => {
+  for (const initial of ['preluata','expirata']) {
+    await reset()
+    const { id, token } = await claimed()
+    await right(a, id, 'arbitraj', token); const reservation = await reserve(id)
+    await phase(id, 'trimis'); await phase(id, 'raspuns', { ok: true })
+    await phase(id, 'decontat', null, '0.012345')
+    const readReservation = () => o.value(`(SELECT to_jsonb(r) FROM public.ai_plafon_rezervari r WHERE id=${reservation.rezervare_id})`)
+    const before = await readReservation(), totals = await ledger()
+    assert.equal(before.stare, 'decontat'); assert.equal(before.cost_real, 0.012345)
+    await agePaid(id, 121)
+    if (initial === 'expirata') await o.command(`UPDATE public.ocr_local_cereri SET stare='expirata',token_executie=NULL,preluata_la=NULL WHERE id=${quote(id)};`)
+    assert.equal((await state(id)).stare, 'esuata')
+    assert.deepEqual(await readReservation(), before)
+    assert.deepEqual(await ledger(), totals)
+    await a.command('SELECT public.fn_ocr_local_expira();')
+    assert.deepEqual(await readReservation(), before)
+    assert.deepEqual(await ledger(), totals)
+  }
+})
+
+test('admitere: proiect/depozit inexistente refuzate si jurnalizate', async () => {
+  await reset()
+  const missingProject = await o.value('(SELECT to_jsonb((coalesce(max(id),0)::bigint+1)::text) FROM public.executie_proiecte)')
+  const missingDepot = await o.value('(SELECT to_jsonb((coalesce(max(id),0)::bigint+1)::text) FROM public.logistica_depozite)')
+  for (const [pr, dep] of [[missingProject, depot], [project, missingDepot]]) {
+    const r = await one(a, `public.fn_ocr_local_admite(${quote(user)},${pr},${dep},'aviz_teava',100)`)
+    assert.equal(r.status, 'refuzata'); assert.equal(r.motiv, 'parametri_invalizi'); assert.equal(r.id, null)
+  }
+  assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM public.ocr_local_cereri)'), 0)
+  assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM public.ocr_local_incercari)'), 2)
 })
 
 test('plafon epuizat: drept consumat fără rezervare; count_tokens eșuat eliberează exact rezerva', async () => {
@@ -391,7 +443,7 @@ test('3 admiteri concurente: barieră advisory, cel mult 2; refuzul rămâne jur
 // Fixture de cotă: doar rânduri NOI, valide, în tabelele B1. Nu folosim date de domeniu.
 async function fill(count, uid = user) {
   await o.command(`INSERT INTO public.ocr_local_cereri(proiect_id,depozit_id,sablon,creat_de,pdf_bytes,stare,termen_upload,sterge_dupa)
-    SELECT ${project},1,'aviz_teava',${quote(uid)},100,'expirata',clock_timestamp()-interval '1 minute',clock_timestamp()+interval '7 days'
+    SELECT ${project},${depot},'aviz_teava',${quote(uid)},100,'expirata',clock_timestamp()-interval '1 minute',clock_timestamp()+interval '7 days'
     FROM generate_series(1,${count});`)
 }
 test('limita orară exactă și zi globală, inclusiv admise fără upload; refuzuri persistente până peste 60', async () => {
@@ -487,17 +539,36 @@ test('retenție 7 zile: pdf/hash/rezultat/apel_raspuns șterse, nicio rescriere 
   assert.equal((await all(a, 'public.fn_ocr_local_curatenie_lista(-1)')).length, 0)
 })
 
-test('rollback: gardă, cereri/apeluri active refuzate; catalog și gate E3 revin exact', async () => {
+test('rollback: orice cerere/incercare refuzata; catalog și gate E3 revin exact', async () => {
   await reset(); const id = await fallback()
   await denies(o, rollback, 'necesita postgres si armare')
   const armed = `PERFORM set_config('gazpet.revenire_20261108a','OCR_LOCAL_REVENIRE:'||txid_current(),true); ${rollback}`
-  await denies(o, armed, 'exista cereri sau apeluri active')
+  await denies(o, armed, 'exista istoric B1')
   await agePaid(id, 121); await a.command('SELECT public.fn_ocr_local_expira();')
   // Testează și apel rămas activ pe cerere deja expirată.
   await reset(); const r = await claimed(); await right(a, r.id, 'arbitraj', r.token)
   await o.command(`UPDATE public.ocr_local_cereri SET termen_local=clock_timestamp()-interval '1 second' WHERE id=${quote(r.id)};`)
   await a.command('SELECT public.fn_ocr_local_expira();')
-  await denies(o, armed, 'exista cereri sau apeluri active')
+  await denies(o, armed, 'exista istoric B1')
+  // Contraexemplul din review: gata + decontat pastreaza legatura financiara.
+  await reset(); const done = await fallback()
+  await reserve(done); await phase(done, 'trimis'); await phase(done, 'raspuns', { ok: true })
+  await phase(done, 'decontat', null, '0.01')
+  await a.command(`SELECT public.fn_ocr_local_inchide_fallback(${quote(done)},'{"ok":true}',NULL,0.01);`)
+  assert.equal((await row(done)).stare, 'gata')
+  await denies(o, armed, 'exista istoric B1')
+  // Cereri terminale, inclusiv payload deja curatat, blocheaza rollback-ul.
+  for (const terminal of ['gata','esuata','expirata']) {
+    await reset(); await fill(1)
+    await o.command(`UPDATE public.ocr_local_cereri SET stare=${quote(terminal)}, sters_la=clock_timestamp() WHERE id IS NOT NULL;`)
+    await denies(o, armed, 'exista istoric B1')
+  }
+  // Refuz fara nicio cerere admisa: incercarea singura trebuie pastrata.
+  await reset()
+  await a.command(`SELECT * FROM public.fn_ocr_local_admite(${quote(user)},NULL,${depot},'aviz_teava',100);`)
+  assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM public.ocr_local_cereri)'), 0)
+  assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM public.ocr_local_incercari)'), 1)
+  await denies(o, armed, 'exista istoric B1')
   await reset()
   await o.command(`BEGIN; SELECT set_config('gazpet.revenire_20261108a','OCR_LOCAL_REVENIRE:'||txid_current(),true); ${rollback} COMMIT;`)
   installed = false
@@ -514,7 +585,14 @@ try {
   const users = await o.value('(SELECT jsonb_agg(id) FROM (SELECT id FROM public.profiles ORDER BY id LIMIT 2) p)')
   assert.equal(users?.length, 2, 'Clona trebuie să conțină doi profiles existenți')
   ;[user, other] = users
-  project = String(8_000_000_000_000 + Date.now())
+  // ID-uri existente, fara scrieri in domeniu. Cheia financiara trebuie sa fie complet nefolosita.
+  project = await o.value(`(SELECT to_jsonb(p.id::text) FROM public.executie_proiecte p
+    WHERE NOT EXISTS (SELECT 1 FROM public.ai_plafon_lunar l WHERE l.cheie='izo_e3_ocr:'||p.id)
+      AND NOT EXISTS (SELECT 1 FROM public.ai_plafon_rezervari r WHERE r.cheie='izo_e3_ocr:'||p.id)
+    ORDER BY p.id LIMIT 1)`)
+  assert.ok(project, 'Clona necesita un proiect existent fara istoric AI pe cheia E3')
+  depot = await o.value('(SELECT to_jsonb(id::text) FROM public.logistica_depozite ORDER BY id LIMIT 1)')
+  assert.ok(depot, 'Clona necesita un depozit existent')
   assert.equal(await o.value(`to_jsonb(EXISTS(SELECT 1 FROM public.ai_plafon_lunar WHERE cheie='izo_e3_ocr:${project}'))`), false)
   // Admission folosește ceasul real. Nu alterăm funcțiile pentru a falsifica ora.
   assert.equal(await o.value(`to_jsonb((clock_timestamp() AT TIME ZONE 'Europe/Bucharest')::time >= time '06:00'
