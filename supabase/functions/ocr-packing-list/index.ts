@@ -8,6 +8,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { faraGandire } from '../_shared/gandire.ts'
 import { costApel, modelParsare, jsonDinText, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { citesteAvizE3 } from './avizE3Handler.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -71,6 +72,16 @@ function mediaType(path: string): string {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  // Ramură izolată înaintea fluxului istoric: fără bucket și fără drepturi achiziții.
+  // clone() păstrează corpul original și toate răspunsurile vechi pentru apelantul existent.
+  const e3Body = await req.clone().json().catch(() => null)
+  if (e3Body?.tip === 'aviz_e3') {
+    const url = Deno.env.get('SUPABASE_URL')!
+    const caller = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: req.headers.get('Authorization') || '' } } })
+    // Service role necesar DOAR registrului generic de cost; niciodată pentru citirile izo/drepturi.
+    const ledger = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    return await citesteAvizE3(req, e3Body, caller, ledger, Deno.env.get('ANTHROPIC_API_KEY'), CORS)
+  }
   try {
     const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
     if (!ANTHROPIC_API_KEY) return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), { status: 500, headers: CORS })
