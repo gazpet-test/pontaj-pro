@@ -467,8 +467,13 @@ export default function IzoDocumenteIntrare() {
         reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(pdfAI)
       })
       if (!actual()) { flash('err', 'Editorul s-a schimbat. Citirea AI a fost abandonată.'); return }
-      const { data, error } = await supabase.functions.invoke('ocr-packing-list', { body:{ tip:'aviz_e3', proiect_id:ed.proiect_id,
-        depozit_id:ed.depozit_id, sablon:esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava', pdf_base64, nume_fisier:pdfAI.name } })
+      // id-urile vin ca text din <select> → număr (serverul cere întregi, altfel 400 „cerere_invalida”)
+      const proiectId = Number(ed.proiect_id), depozitId = Number(ed.depozit_id)
+      if (!Number.isSafeInteger(proiectId) || proiectId <= 0 || !Number.isSafeInteger(depozitId) || depozitId <= 0) {
+        flash('err', 'Alege proiectul și depozitul înainte de citirea AI.'); return
+      }
+      const { data, error } = await supabase.functions.invoke('ocr-packing-list', { body:{ tip:'aviz_e3', proiect_id:proiectId,
+        depozit_id:depozitId, sablon:esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava', pdf_base64, nume_fisier:pdfAI.name } })
       let raspuns = data
       if (error?.context?.json) { try { raspuns = await error.context.json() } catch { /* răspuns fără JSON */ } }
       if (!actual()) { flash('err', 'Răspuns AI ignorat: documentul, proiectul, depozitul, șablonul sau formularul s-a schimbat.'); return }
@@ -477,6 +482,7 @@ export default function IzoDocumenteIntrare() {
         const status = error?.context?.status, cod = raspuns?.eroare
         throw new Error(cod === 'fara_drept' || status === 403 ? 'Nu ai dreptul să citești cu AI pentru acest proiect și depozit.'
           : cod === 'plafon_depasit' || status === 429 ? 'Plafonul AI a fost depășit. Citirea nu a fost efectuată.'
+          : status === 400 ? 'Cerere incompletă: verifică proiectul, depozitul și tipul documentului.'
           : status === 413 ? 'PDF prea mare. Limita AI este 8 MB.'
           : status === 422 ? 'PDF invalid sau citire refuzată de AI. Alege alt scan ori completează manual.'
           : 'Citirea AI a eșuat. Încearcă din nou sau completează manual.')
