@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import { aplicaPropunereOCR, avertismenteOCR, cantitateMultiplaOCR } from './izoDocumentePrefill.js'
+import IzoDocumentIstoric from './IzoDocumentIstoric.jsx'
 import {
   SABLOANE, DECIZII, COLOANE, IZOLATII, esteCurba, parseNumar, fmtNr, fmtM, randGol, validareDocument, eroriSalvare, eroriPv, eroareMotiv,
   randuriDinLipire, randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, normalizeazaSalvare,
@@ -765,6 +766,7 @@ export default function IzoDocumenteIntrare() {
       {ed.stare === 'draft' && !edScrie && !ed.stale && <div style={{ ...S.card, padding:'10px 14px', marginBottom:12, fontSize:12.5, color:G.muted }}>👁️ Doar citire — draftul îl editează gestionarul depozitului documentului.</div>}
 
       {/* antetul */}
+      <IzoDocumentIstoric key={ed.id || 'nou'} document={ed.bd} eu={eu} blocat={busy || aiBusy || !!ed.stale || !!ed.conflict || ed.dirty} reincarca={deschide} />
       <div style={{ ...S.card, padding:14, marginBottom:12 }}>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:10 }}>
           {inp('furnizor', 'Furnizor *')}
