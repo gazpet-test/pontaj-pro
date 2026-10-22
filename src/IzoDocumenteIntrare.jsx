@@ -447,7 +447,7 @@ export default function IzoDocumenteIntrare() {
     setPropunere(null); setPdfAI(null); setAiMeta(null); setAiAplicat(false); setMobilSalvat(null)
     try {
       if (fisier.size > 8 * 1024 * 1024) throw new Error('Fișier prea mare. Limita AI este 8 MB.')
-      const pdf = fisier.type.startsWith('image/') ? await imageToPdf(fisier) : fisier
+      const pdf = fisier.type.startsWith('image/') ? await imageToPdf(fisier, { maxDim:2600, calitate:0.9 }) : fisier // rezoluție mai mare: cifrele mici din tabel (seria) se pierdeau la 1600 px
       if (pdf.size > 8 * 1024 * 1024) throw new Error('PDF-ul pregătit depășește limita de 8 MB.')
       const semn = new TextDecoder().decode(await pdf.slice(0, 5).arrayBuffer())
       if (semn !== '%PDF-') throw new Error('Fișierul nu este PDF. Alege un PDF valid sau o fotografie.')
@@ -977,7 +977,8 @@ function PropunereOCR({ raspuns, ed, mobil }) {
       {c.bate === false ? ' — diferență, verifică documentul' : ''}
     </div>)}
     {avertismenteOCR(raspuns).map((x, i) => <div key={i} style={{ color:G.yellow, marginTop:8 }}>⚠ {x}</div>)}
-    {mobil ? raspuns.randuri.map((r, i) => <div key={i} style={{ ...S.card, padding:12, marginTop:10, borderColor:cantitateMultiplaOCR(r) ? G.yellow : G.border2 }}>
+    {/* pe ecran îngust tabelul derulat tăia începutul coloanelor (seria / șarja) → carduri (test Razvan 22.10) */}
+    {(mobil || (typeof window !== 'undefined' && window.innerWidth < 900)) ? raspuns.randuri.map((r, i) => <div key={i} style={{ ...S.card, padding:12, marginTop:10, borderColor:cantitateMultiplaOCR(r) ? G.yellow : G.border2 }}>
       <b>Rândul {i + 1}{cantitateMultiplaOCR(r) ? ' — nu se aplică' : ''}</b>
       {coloane.filter(([k]) => r[k] != null && r[k] !== '').map(([k, et]) => <div key={k}>{et}: {String(r[k])}</div>)}
       {cantitateMultiplaOCR(r) && <div style={{ color:G.yellow }}>Rând cu cantitate {String(r.cantitate)} fără serii individuale — introdu manual bucățile.</div>}

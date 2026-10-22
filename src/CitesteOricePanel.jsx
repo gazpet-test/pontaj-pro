@@ -218,7 +218,7 @@ async function cautaInDosarHR(perechi) {
 // Rezultat: din 5-8MB (poze telefon) → ~200-400KB. Edge-ul primește mereu PDF,
 // deci scapă de limita de 5MB/imagine a AI-ului și de orice transform pe server.
 const IMG_MAX_DIM = 1600
-export async function imageToPdf(file) {
+export async function imageToPdf(file, { maxDim = IMG_MAX_DIM, calitate = 0.82 } = {}) {
   const dataUrl = await new Promise((res, rej) => {
     const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('citire fișier')); r.readAsDataURL(file)
   })
@@ -227,12 +227,12 @@ export async function imageToPdf(file) {
   })
   let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height
   if (!w || !h) throw new Error('dimensiuni imagine necunoscute')
-  if (w > IMG_MAX_DIM || h > IMG_MAX_DIM) { const s = IMG_MAX_DIM / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s) }
+  if (w > maxDim || h > maxDim) { const s = maxDim / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s) }
   const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h)   // fundal alb (PNG transparent → alb, nu negru)
   ctx.drawImage(img, 0, 0, w, h)
-  const jpeg = canvas.toDataURL('image/jpeg', 0.82)
+  const jpeg = canvas.toDataURL('image/jpeg', calitate)
   const pdf = new jsPDF({ orientation: w >= h ? 'landscape' : 'portrait', unit: 'px', format: [w, h], compress: true })
   pdf.addImage(jpeg, 'JPEG', 0, 0, w, h, undefined, 'FAST')
   const blob = pdf.output('blob')
