@@ -242,3 +242,12 @@ console.log('ok');
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_aviz_fara_niciun_total_este_refuzat():
+    import pytest
+    from ocr_local.e3_contract import reconciliaza_aviz, E3Error
+    obj = {'antet': {'total_m': None, 'total_kg': None}, 'totaluri_tiparite': {'total_metri': None, 'total_kg': None},
+           'randuri': [{'lungime_doc': '12.5', 'greutate_kg': '1404'}]}
+    with pytest.raises(E3Error):
+        reconciliaza_aviz(obj)

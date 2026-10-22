@@ -108,6 +108,11 @@ def reconciliaza_aviz(obj, *, dupa_arbitraj=False):
     este verificată prin 1..N și sumele tipărite. Fără total, un ultim rând lipsă
     nu poate fi dedus. Valorile lăsate NULL după arbitraj rămân pentru om.
     """
+    # Fail-closed (Copilot B3 r2): fara niciun total tiparit, un ultim rand omis de ambii cititori nu se poate detecta,
+    # deci citirea locala nu se accepta -> fallback (Haiku / om).
+    if all(obj['totaluri_tiparite'].get(t) is None and obj['antet'].get(a) is None
+           for t, a in [('total_metri', 'total_m'), ('total_kg', 'total_kg')]):
+        raise E3Error('structura_incerta')
     for total, alias, field, conv in [('total_metri', 'total_m', 'lungime_doc', numarE3),
                                       ('total_kg', 'total_kg', 'greutate_kg', numarKgE3)]:
         values = [conv(r[field]) for r in obj['randuri']]
