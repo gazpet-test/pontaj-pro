@@ -296,7 +296,7 @@ class E1Test(unittest.TestCase):
         self.assertEqual(len(re.findall(r'SELECT teste\.(?:e|eroare)\(', e2)),
                          len(re.findall(r'SELECT teste\.(?:e|eroare)\(', old2)))
         for line in old2.splitlines():
-            if any("('" + key + ' ' in line for key in ['T7a','T7f','T7g','T7e','T9f']):
+            if any("('" + key + ' ' in line for key in ['T7a','T7f','T7g','T7e','T9f','T1g']):
                 continue
             self.assertIn(line, e2)
         expected3 = old3.replace('fn_izo_doc_anuleaza(bigint, text)', 'fn_izo_doc_anuleaza(bigint, text, uuid)')

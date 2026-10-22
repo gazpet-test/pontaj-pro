@@ -788,7 +788,7 @@ BEGIN
   -- C2: corectii directe; ordinea lock-urilor din §4, normalizare in garda B.
   CREATE FUNCTION public.fn_izo_cor_camp(p_bucata_id bigint, p_server_ver bigint, p_dupa jsonb, p_motiv text) RETURNS jsonb
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  DECLARE v_uid uuid; v_b public.magazie_bucati; v_after public.magazie_bucati; v_cor public.izo_corectii;
+  DECLARE v_uid uuid; v_col record; v_cn text; v_b public.magazie_bucati; v_after public.magazie_bucati; v_cor public.izo_corectii;
     v_proiect bigint; v_ev bigint; v_event public.magazie_bucati_evenimente; v_move public.magazie_bucati_miscari;
   BEGIN
     v_uid := public.fn_izo_cor_api_verifica();
@@ -812,14 +812,20 @@ BEGIN
     INSERT INTO public.izo_corectii(proiect_id,tip,bucata_id,inainte,dupa,motiv,stare,versiune,cale,propus_de,propus_rol,propus_la)
       VALUES(v_proiect,'camp',v_b.id,NULL,p_dupa,btrim(p_motiv),'propusa',1,'direct',v_uid,session_user,now()) RETURNING * INTO v_cor;
     v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_dupa(v_cor,v_b));
-    IF EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.id<>v_b.id AND b.provenienta='beneficiar' AND b.tip_cod=v_after.tip_cod AND b.stare<>'anulata'
+    SELECT b.id, b.proiect_id, b.stare INTO v_col FROM public.magazie_bucati b WHERE b.id<>v_b.id AND b.provenienta='beneficiar' AND b.tip_cod=v_after.tip_cod AND b.stare<>'anulata'
           AND b.serie_canon=public.fn_izo_canon_serie(v_after.serie)
           AND ((b.tip_cod='teava' AND b.dezambiguare IS NOT DISTINCT FROM v_after.dezambiguare
             AND (b.parinte_id IS NULL OR (b.stare<>'taiata' AND b.sarja IS NOT DISTINCT FROM v_after.sarja
               AND b.lungime_cm IS NOT DISTINCT FROM round(v_after.lungime_mm/10.0)::integer)))
           OR (b.tip_cod='curba' AND b.sarja IS NOT DISTINCT FROM v_after.sarja AND b.unghi_curba IS NOT DISTINCT FROM v_after.unghi_curba
-            AND b.cod_bucata IS NOT DISTINCT FROM v_after.cod_bucata))) THEN
-      RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505'; END IF;
+            AND b.cod_bucata IS NOT DISTINCT FROM v_after.cod_bucata)) LIMIT 1;
+    IF FOUND THEN
+      -- Q-E3b-18 = A (§5.1): detalii doar dacă apelantul citește proiectul coliziunii; altfel generic, fără id / proiect / stare
+      IF public.fn_izo_citire(v_col.proiect_id) THEN
+        RAISE EXCEPTION 'E3b: conflict de unicitate în registru: bucata % (proiectul %, stare %)', v_col.id, v_col.proiect_id, v_col.stare USING ERRCODE='23505';
+      END IF;
+      RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
+    END IF;
     PERFORM public.fn_izo_cor_marcheaza(v_cor.id);
     v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
     INSERT INTO public.magazie_bucati_evenimente(tip, proiect_id, document_tip, document_id, import_id, storno_de_eveniment_id, motiv, declarat_de, aplicat_de, aplicat_rol, ora_tableta, dispozitiv_id, server_ver) SELECT v_event.tip, v_event.proiect_id, v_event.document_tip, v_event.document_id, v_event.import_id, v_event.storno_de_eveniment_id, v_event.motiv, v_event.declarat_de, v_event.aplicat_de, v_event.aplicat_rol, v_event.ora_tableta, v_event.dispozitiv_id, nextval('public.izo_server_ver_seq') RETURNING id INTO v_ev;
@@ -831,7 +837,9 @@ BEGIN
       WHERE id=v_cor.id;
     RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'inainte',v_cor.inainte,'dupa',v_cor.dupa,'server_ver',v_b.server_ver);
   EXCEPTION WHEN unique_violation THEN
-    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+    GET STACKED DIAGNOSTICS v_cn = CONSTRAINT_NAME;
+    IF v_cn IS NULL OR v_cn = '' THEN RAISE; END IF;  -- mesajul nostru (cu sau fără detalii), nu un index
+    RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
     END;
   EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
     RAISE EXCEPTION 'E3b: valoare invalida' USING ERRCODE='22023';
@@ -866,7 +874,7 @@ BEGIN
       WHERE id=v_cor.id;
     RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'document_id',v_doc.id,'versiune',v_doc.versiune);
   EXCEPTION WHEN unique_violation THEN
-    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+    RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
   END $f$;
 
   -- C1: frontiera de propuneri (§1, §4, §5.6).
@@ -1022,7 +1030,7 @@ BEGIN
 
   CREATE FUNCTION public.fn_izo_cor_aproba(p_corectie_id bigint, p_versiune bigint) RETURNS jsonb
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  DECLARE v_uid uuid; v_cor public.izo_corectii; v_b public.magazie_bucati; v_after public.magazie_bucati;
+  DECLARE v_uid uuid; v_col record; v_cn text; v_cor public.izo_corectii; v_b public.magazie_bucati; v_after public.magazie_bucati;
     v_doc bigint; v_doc_ok boolean; v_new bigint; v_ev bigint; v_raw jsonb; v_norm jsonb; v_event public.magazie_bucati_evenimente;
     v_move public.magazie_bucati_miscari;
   BEGIN
@@ -1072,14 +1080,20 @@ BEGIN
     IF v_cor.tip IN ('camp','gasit_nou') THEN
       IF v_cor.tip='gasit_nou' THEN v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_noua(v_cor));
       ELSE v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_dupa(v_cor,v_b)); END IF;
-      IF EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.id IS DISTINCT FROM v_b.id AND b.provenienta='beneficiar' AND b.tip_cod=v_after.tip_cod AND b.stare<>'anulata'
+      SELECT b.id, b.proiect_id, b.stare INTO v_col FROM public.magazie_bucati b WHERE b.id IS DISTINCT FROM v_b.id AND b.provenienta='beneficiar' AND b.tip_cod=v_after.tip_cod AND b.stare<>'anulata'
           AND b.serie_canon=public.fn_izo_canon_serie(v_after.serie)
           AND ((b.tip_cod='teava' AND b.dezambiguare IS NOT DISTINCT FROM v_after.dezambiguare
             AND (b.parinte_id IS NULL OR (b.stare<>'taiata' AND b.sarja IS NOT DISTINCT FROM v_after.sarja
               AND b.lungime_cm IS NOT DISTINCT FROM round(v_after.lungime_mm/10.0)::integer)))
           OR (b.tip_cod='curba' AND b.sarja IS NOT DISTINCT FROM v_after.sarja AND b.unghi_curba IS NOT DISTINCT FROM v_after.unghi_curba
-            AND b.cod_bucata IS NOT DISTINCT FROM v_after.cod_bucata))) THEN
-        RAISE EXCEPTION 'E3b: conflict de unicitate în registru' USING ERRCODE='23505'; END IF;
+            AND b.cod_bucata IS NOT DISTINCT FROM v_after.cod_bucata)) LIMIT 1;
+      IF FOUND THEN
+        -- Q-E3b-18 = A (§5.1): detalii doar dacă apelantul citește proiectul coliziunii; altfel generic, fără id / proiect / stare
+        IF public.fn_izo_citire(v_col.proiect_id) THEN
+          RAISE EXCEPTION 'E3b: conflict de unicitate în registru: bucata % (proiectul %, stare %)', v_col.id, v_col.proiect_id, v_col.stare USING ERRCODE='23505';
+        END IF;
+        RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
+      END IF;
     END IF;
     v_new:=public.fn_izo_cor_marcheaza(v_cor.id);
     v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
@@ -1101,7 +1115,9 @@ BEGIN
     RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'bucata_id',v_b.id,'stare_dupa',v_after.stare,
       'versiune',v_cor.versiune,'idempotent',false);
   EXCEPTION WHEN unique_violation THEN
-    RAISE EXCEPTION 'E3b: conflict de unicitate în registru' USING ERRCODE='23505';
+    GET STACKED DIAGNOSTICS v_cn = CONSTRAINT_NAME;
+    IF v_cn IS NULL OR v_cn = '' THEN RAISE; END IF;  -- mesajul nostru (cu sau fără detalii), nu un index
+    RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
   END $f$;
 
   -- D1: operatia administrativa; lista se stabilizeaza inaintea oricarui FK.

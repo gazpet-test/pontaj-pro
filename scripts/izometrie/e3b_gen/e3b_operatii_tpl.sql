@@ -1,7 +1,7 @@
   -- C2: corectii directe; ordinea lock-urilor din §4, normalizare in garda B.
   CREATE FUNCTION public.fn_izo_cor_camp(p_bucata_id bigint, p_server_ver bigint, p_dupa jsonb, p_motiv text) RETURNS jsonb
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  DECLARE v_uid uuid; v_b public.magazie_bucati; v_after public.magazie_bucati; v_cor public.izo_corectii;
+  DECLARE v_uid uuid; v_col record; v_cn text; v_b public.magazie_bucati; v_after public.magazie_bucati; v_cor public.izo_corectii;
     v_proiect bigint; v_ev bigint; v_event public.magazie_bucati_evenimente; v_move public.magazie_bucati_miscari;
   BEGIN
     v_uid := public.fn_izo_cor_api_verifica();
@@ -25,8 +25,14 @@
     INSERT INTO public.izo_corectii(proiect_id,tip,bucata_id,inainte,dupa,motiv,stare,versiune,cale,propus_de,propus_rol,propus_la)
       VALUES(v_proiect,'camp',v_b.id,NULL,p_dupa,btrim(p_motiv),'propusa',1,'direct',v_uid,session_user,now()) RETURNING * INTO v_cor;
     v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_dupa(v_cor,v_b));
-    IF EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.id<>v_b.id @@COLLISION_PRED@@) THEN
-      RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505'; END IF;
+    SELECT b.id, b.proiect_id, b.stare INTO v_col FROM public.magazie_bucati b WHERE b.id<>v_b.id @@COLLISION_PRED@@ LIMIT 1;
+    IF FOUND THEN
+      -- Q-E3b-18 = A (§5.1): detalii doar dacă apelantul citește proiectul coliziunii; altfel generic, fără id / proiect / stare
+      IF public.fn_izo_citire(v_col.proiect_id) THEN
+        RAISE EXCEPTION 'E3b: conflict de unicitate în registru: bucata % (proiectul %, stare %)', v_col.id, v_col.proiect_id, v_col.stare USING ERRCODE='23505';
+      END IF;
+      RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
+    END IF;
     PERFORM public.fn_izo_cor_marcheaza(v_cor.id);
     v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
     INSERT INTO public.magazie_bucati_evenimente(@@EV_COLS@@) SELECT @@EV_VALUES@@ RETURNING id INTO v_ev;
@@ -38,7 +44,9 @@
       WHERE id=v_cor.id;
     RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'inainte',v_cor.inainte,'dupa',v_cor.dupa,'server_ver',v_b.server_ver);
   EXCEPTION WHEN unique_violation THEN
-    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+    GET STACKED DIAGNOSTICS v_cn = CONSTRAINT_NAME;
+    IF v_cn IS NULL OR v_cn = '' THEN RAISE; END IF;  -- mesajul nostru (cu sau fără detalii), nu un index
+    RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
     END;
   EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
     RAISE EXCEPTION 'E3b: valoare invalida' USING ERRCODE='22023';
@@ -73,7 +81,7 @@
       WHERE id=v_cor.id;
     RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'document_id',v_doc.id,'versiune',v_doc.versiune);
   EXCEPTION WHEN unique_violation THEN
-    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+    RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
   END $f$;
 
   -- C1: frontiera de propuneri (§1, §4, §5.6).
@@ -223,7 +231,7 @@
 
   CREATE FUNCTION public.fn_izo_cor_aproba(p_corectie_id bigint, p_versiune bigint) RETURNS jsonb
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  DECLARE v_uid uuid; v_cor public.izo_corectii; v_b public.magazie_bucati; v_after public.magazie_bucati;
+  DECLARE v_uid uuid; v_col record; v_cn text; v_cor public.izo_corectii; v_b public.magazie_bucati; v_after public.magazie_bucati;
     v_doc bigint; v_doc_ok boolean; v_new bigint; v_ev bigint; v_raw jsonb; v_norm jsonb; v_event public.magazie_bucati_evenimente;
     v_move public.magazie_bucati_miscari;
   BEGIN
@@ -273,8 +281,14 @@
     IF v_cor.tip IN ('camp','gasit_nou') THEN
       IF v_cor.tip='gasit_nou' THEN v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_noua(v_cor));
       ELSE v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_dupa(v_cor,v_b)); END IF;
-      IF EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.id IS DISTINCT FROM v_b.id @@COLLISION_PRED@@) THEN
-        RAISE EXCEPTION 'E3b: conflict de unicitate în registru' USING ERRCODE='23505'; END IF;
+      SELECT b.id, b.proiect_id, b.stare INTO v_col FROM public.magazie_bucati b WHERE b.id IS DISTINCT FROM v_b.id @@COLLISION_PRED@@ LIMIT 1;
+      IF FOUND THEN
+        -- Q-E3b-18 = A (§5.1): detalii doar dacă apelantul citește proiectul coliziunii; altfel generic, fără id / proiect / stare
+        IF public.fn_izo_citire(v_col.proiect_id) THEN
+          RAISE EXCEPTION 'E3b: conflict de unicitate în registru: bucata % (proiectul %, stare %)', v_col.id, v_col.proiect_id, v_col.stare USING ERRCODE='23505';
+        END IF;
+        RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
+      END IF;
     END IF;
     v_new:=public.fn_izo_cor_marcheaza(v_cor.id);
     v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
@@ -296,5 +310,7 @@
     RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'bucata_id',v_b.id,'stare_dupa',v_after.stare,
       'versiune',v_cor.versiune,'idempotent',false);
   EXCEPTION WHEN unique_violation THEN
-    RAISE EXCEPTION 'E3b: conflict de unicitate în registru' USING ERRCODE='23505';
+    GET STACKED DIAGNOSTICS v_cn = CONSTRAINT_NAME;
+    IF v_cn IS NULL OR v_cn = '' THEN RAISE; END IF;  -- mesajul nostru (cu sau fără detalii), nu un index
+    RAISE EXCEPTION 'E3b: seria / combinația există deja în registru, pe un proiect la care nu ai acces' USING ERRCODE='23505';
   END $f$;
