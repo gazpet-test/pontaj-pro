@@ -568,6 +568,8 @@ RESET ROLE;
 RESET SESSION AUTHORIZATION;
 ROLLBACK;
 
+DO $end$ BEGIN RAISE NOTICE 'TESTE E3b-C1: TOATE OK'; END $end$;
+
 -- C2: fluxul real E3 pregateste documentele; toate fixture-urile dispar la ROLLBACK.
 BEGIN;
 SET LOCAL ROLE izo_registru_writer;
@@ -1035,6 +1037,8 @@ DO $d1_hash_e3$ DECLARE v_hash_e3 text; BEGIN
 END $d1_hash_e3$;
 ROLLBACK;
 
+DO $end$ BEGIN RAISE NOTICE 'TESTE E3b-D1: TOATE OK'; END $end$;
+
 -- D2 / Q1=A, Q17=A, Q14=A. Negative inaintea fluxurilor pozitive.
 BEGIN;
 SAVEPOINT d2_poarta;
@@ -1230,3 +1234,5 @@ DO $d2_pozitive$ DECLARE v_r jsonb; v_doc bigint:=current_setting('test.d2_doc')
       WHERE m.eveniment_id=v_pv AND b.serie='D2-DOC-1') THEN RAISE EXCEPTION 'D2 document nereconciliat: %',v_r; END IF;
 END $d2_pozitive$;
 ROLLBACK;
+
+DO $end$ BEGIN RAISE NOTICE 'TESTE E3b-D2: TOATE OK'; END $end$;

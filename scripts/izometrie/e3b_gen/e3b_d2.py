@@ -20,7 +20,8 @@ def build_d2(e2, e3, bloc, prosrc, q, md5):
         new[n] = new[n].replace(a, b, 1)
 
     for n in ('fn_izo_import_sold_initial', 'fn_izo_import_storno'):
-        change(n, '  BEGIN\n', '  BEGIN\n' + PROLOG)
+        anchor = "    END IF;\n    PERFORM set_config('izo.registru_tx'"
+        change(n, anchor, "    END IF;\n" + PROLOG + "    PERFORM set_config('izo.registru_tx'")
     assert prosrc(new['fn_izo_import_sold_initial']).replace(PROLOG, '', 1) == prosrc(old['fn_izo_import_sold_initial'])
     n = 'fn_izo_import_storno'
     change(n, 'v_alt int;', 'v_alt int; v_m bigint[]; v_deschise bigint[];')
@@ -115,5 +116,7 @@ def build_d2(e2, e3, bloc, prosrc, q, md5):
         else:
             forward.append(owned(b, owner))
             reverse.append(owned(old[name].replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1), owner))
+        if name == 'fn_izo_import_sold_initial':
+            forward.append("  IF (SELECT md5(replace(prosrc, %s, '')) FROM pg_proc WHERE oid='public.%s(%s)'::regprocedure) IS DISTINCT FROM %s THEN RAISE EXCEPTION 'Postconditie E3b: corp in afara prologului modificat'; END IF;" % (q(PROLOG),name,sig,q(md5(prosrc(old[name])))))
         reverse.append("  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.%s(%s)'::regprocedure) IS DISTINCT FROM %s THEN RAISE EXCEPTION 'E3b: restaurare D2 diferita'; END IF;" % (name,sig,q(md5(prosrc(old[name])))))
     return old, new, '\n'.join(forward), '\n'.join(reverse)

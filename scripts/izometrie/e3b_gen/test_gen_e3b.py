@@ -18,7 +18,8 @@ spec.loader.exec_module(g)
 class GeneratorTest(unittest.TestCase):
     def test_generare_idempotenta_si_live_neatins(self):
         live = [g.E2, g.E3, R / 'supabase/migrations/20261102c_izometrie_cai_vechi_stoc.sql']
-        outputs = [R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql',
+        outputs = [R / 'supabase/tests/izometrie_e3b_regresie.sql',
+                   R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql',
                    R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql']
         digest = lambda ps: [hashlib.sha256(p.read_bytes()).hexdigest() for p in ps]
         before = digest(live)
@@ -31,6 +32,8 @@ class GeneratorTest(unittest.TestCase):
             self.assertNotIn(b'\r', p.read_bytes())
             text = p.read_text(encoding='utf-8')
             self.assertNotIn('@@', text)
+            if p.name == 'izometrie_e3b_regresie.sql':
+                continue  # LIVE suites contain nested dollar literals; exact preservation is tested below.
             for tag in set(re.findall(r'\$[a-zA-Z_]*\$', text)):
                 self.assertEqual(text.count(tag) % 2, 0, tag)
 
@@ -245,6 +248,10 @@ class D2Test(unittest.TestCase):
         for name in ('fn_izo_import_sold_initial','fn_izo_import_storno'):
             body = g.prosrc(g.bloc_functie(mig,name))
             self.assertLess(body.index(g.PROLOG),body.index('fn_izo_lock_proiect'))
+            check_end = body.index('    END IF;', body.index("IF session_user IS DISTINCT FROM 'postgres'")) + len('    END IF;\n')
+            self.assertEqual(body[check_end:check_end+len(g.PROLOG)], g.PROLOG)
+        self.assertIn("md5(replace(prosrc, " + g.q(g.PROLOG) + ", ''))", mig)
+        self.assertIn("Postconditie E3b: corp in afara prologului modificat", mig)
         self.assertIn('DROP FUNCTION public.fn_izo_doc_anuleaza(bigint, text);',mig)
         self.assertIn('DROP FUNCTION public.fn_izo_doc_anuleaza(bigint, text, uuid);',rev)
         self.assertIn('GRANT EXECUTE ON FUNCTION public.fn_izo_doc_anuleaza(bigint, text) TO postgres;',rev)
@@ -264,6 +271,38 @@ class D2Test(unittest.TestCase):
             self.assertIn('m.eveniment_id='+event,guard)
         self.assertIn("AND b.stare='receptionat'",doc)
         self.assertIn('v_motiv, p_cerut_de, public.fn_izo_uid()',doc)
+
+
+class E1Test(unittest.TestCase):
+    def test_harness_reuses_the_complete_e3_closure_differential(self):
+        source = (R / 'scripts/test_izometrie_e3.sh').read_text(encoding='utf8')
+        start = source.index('"${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3_inchidere.sql"')
+        end = source.index('# \u2500\u2500 3.', start)
+        expected = source[start:end].replace('/tmp/izo_e3_${PORT}_dif.err', '/tmp/izo_e3b_${PORT}_dif.err')
+        self.assertIn(expected, (R / 'scripts/test_izometrie_e3b.sh').read_text(encoding='utf8'))
+
+    def test_all_six_sections_have_exactly_one_completion_marker(self):
+        sql = (R / 'supabase/tests/izometrie_e3b.test.sql').read_text(encoding='utf8')
+        self.assertEqual(re.findall(r"RAISE NOTICE 'TESTE E3b-([A-Z0-9]+): TOATE OK'", sql),
+                         ['A', 'B', 'C1', 'C2', 'D1', 'D2'])
+
+    def test_regression_preserves_every_test_and_changes_only_documented_cases(self):
+        sql = (R / 'supabase/tests/izometrie_e3b_regresie.sql').read_text(encoding='utf8')
+        e2, e3 = sql.split('\\if :e2a\n', 1)[1].split('\n\\else\n', 1)
+        e3 = e3.removesuffix('\n\\endif\n')
+        old2 = (R / 'supabase/tests/izometrie_e2a.test.sql').read_text(encoding='utf8')
+        old3 = (R / 'supabase/tests/izometrie_e3.test.sql').read_text(encoding='utf8')
+        # Every old assertion remains represented; only the five named E2a cases differ.
+        self.assertEqual(len(re.findall(r'SELECT teste\.(?:e|eroare)\(', e2)),
+                         len(re.findall(r'SELECT teste\.(?:e|eroare)\(', old2)))
+        for line in old2.splitlines():
+            if any("('" + key + ' ' in line for key in ['T7a','T7f','T7g','T7e','T9f']):
+                continue
+            self.assertIn(line, e2)
+        expected3 = old3.replace('fn_izo_doc_anuleaza(bigint, text)', 'fn_izo_doc_anuleaza(bigint, text, uuid)')
+        expected3 = expected3.replace("fn_izo_doc_anuleaza(:doc1, 'aviz gre\u0219it, reintrodus')",
+                                      "fn_izo_doc_anuleaza(:doc1, 'aviz gre\u0219it, reintrodus', '00000000-0000-0000-0000-000000000121')")
+        self.assertEqual(e3, expected3)
 
 
 if __name__ == '__main__':

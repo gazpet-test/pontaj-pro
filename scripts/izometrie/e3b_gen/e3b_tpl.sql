@@ -50,6 +50,8 @@ BEGIN
     RAISE EXCEPTION 'E3b: CHECK sursa_receptie diferă de forma LIVE';
   END IF;
   -- Recitire catalog, nu confundăm setările rolurilor cu timeout-urile efective PostgREST (§3.5).
+  -- r5 sectiunea 3.5, linia 362: disponibilitate, nu siguranta.
+  -- Catalogul se reciteste; valorile efective se probeaza prin PostgREST (9.2).
   FOR rr IN SELECT rolname, rolconfig FROM pg_roles WHERE rolname IN ('authenticator','authenticated') LOOP
     RAISE NOTICE 'E3b timeout-uri de rol (nu efective): % %', rr.rolname, rr.rolconfig;
   END LOOP;

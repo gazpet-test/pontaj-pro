@@ -424,3 +424,6 @@ if __name__ == '__main__':
     mig = genereaza('e3b_tpl.sql', 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql')
     rev = genereaza('e3b_rev_tpl.sql', 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql')
     print('ok E3b-A+B+C1+C2+D1+D2 (Q1=A, Q17=A, Q14=A)', len(mig.splitlines()), len(rev.splitlines()), 'implicit additions', len(IMPL_E3B))
+
+from e3b_regresie import generate as generate_regression
+generate_regression(R)

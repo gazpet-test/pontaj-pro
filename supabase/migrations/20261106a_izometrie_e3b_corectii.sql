@@ -115,6 +115,8 @@ BEGIN
     RAISE EXCEPTION 'E3b: CHECK sursa_receptie diferă de forma LIVE';
   END IF;
   -- Recitire catalog, nu confundăm setările rolurilor cu timeout-urile efective PostgREST (§3.5).
+  -- r5 sectiunea 3.5, linia 362: disponibilitate, nu siguranta.
+  -- Catalogul se reciteste; valorile efective se probeaza prin PostgREST (9.2).
   FOR rr IN SELECT rolname, rolconfig FROM pg_roles WHERE rolname IN ('authenticator','authenticated') LOOP
     RAISE NOTICE 'E3b timeout-uri de rol (nu efective): % %', rr.rolname, rr.rolconfig;
   END LOOP;
@@ -1288,15 +1290,15 @@ BEGIN
     v_pe_dep jsonb := '{}'::jsonb; v_pe_tr int := 0; v_rez jsonb; v_izol text; v_fisiere text[]; v_orig integer;
     v_depozite integer[]; v_tronsoane bigint[];
   BEGIN
+    IF session_user IS DISTINCT FROM 'postgres' THEN
+      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
+    END IF;
     IF current_setting('transaction_isolation') <> 'read committed' THEN
       RAISE EXCEPTION 'E3b cere READ COMMITTED' USING ERRCODE='25001'; END IF;
     IF NOT pg_try_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare')) THEN
       RAISE EXCEPTION 'E3b: schema ocupata' USING ERRCODE='55P03'; END IF;
     IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN
       RAISE EXCEPTION 'E3b: porti incomplete' USING ERRCODE='42501'; END IF;
-    IF session_user IS DISTINCT FROM 'postgres' THEN
-      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
-    END IF;
     PERFORM set_config('izo.registru_tx', txid_current()::text, true);
     IF p_proiect IS NULL THEN RAISE EXCEPTION 'izo: proiectul e obligatoriu'; END IF;
     -- dacă tranzacția ține deja lock-ul exclusiv pe proiect (ex. fn_izo_seteaza_nivel chemat înainte), FOR SHARE-ul de mai
@@ -1466,21 +1468,28 @@ BEGIN
   END $f$;
   RESET ROLE;
   REVOKE CREATE ON SCHEMA public FROM izo_registru_writer;
+  IF (SELECT md5(replace(prosrc, '    IF current_setting(''transaction_isolation'') <> ''read committed'' THEN
+      RAISE EXCEPTION ''E3b cere READ COMMITTED'' USING ERRCODE=''25001''; END IF;
+    IF NOT pg_try_advisory_xact_lock_shared(hashtext(''gazpet.livrare_migrare'')) THEN
+      RAISE EXCEPTION ''E3b: schema ocupata'' USING ERRCODE=''55P03''; END IF;
+    IF public.fn_izo_porti_lipsa() IS DISTINCT FROM ''{}''::text[] THEN
+      RAISE EXCEPTION ''E3b: porti incomplete'' USING ERRCODE=''42501''; END IF;
+', '')) FROM pg_proc WHERE oid='public.fn_izo_import_sold_initial(bigint, text, jsonb)'::regprocedure) IS DISTINCT FROM 'e3f65df3705f40e8b5a907b66496acd9' THEN RAISE EXCEPTION 'Postconditie E3b: corp in afara prologului modificat'; END IF;
   GRANT CREATE ON SCHEMA public TO izo_registru_writer;
   SET LOCAL ROLE izo_registru_writer;
   CREATE OR REPLACE FUNCTION public.fn_izo_import_storno(p_proiect bigint, p_import_id text, p_motiv text) RETURNS jsonb
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   DECLARE v_imp record; v_ev bigint; v_n int; v_alt int; v_m bigint[]; v_deschise bigint[];
   BEGIN
+    IF session_user IS DISTINCT FROM 'postgres' THEN
+      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
+    END IF;
     IF current_setting('transaction_isolation') <> 'read committed' THEN
       RAISE EXCEPTION 'E3b cere READ COMMITTED' USING ERRCODE='25001'; END IF;
     IF NOT pg_try_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare')) THEN
       RAISE EXCEPTION 'E3b: schema ocupata' USING ERRCODE='55P03'; END IF;
     IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN
       RAISE EXCEPTION 'E3b: porti incomplete' USING ERRCODE='42501'; END IF;
-    IF session_user IS DISTINCT FROM 'postgres' THEN
-      RAISE EXCEPTION 'izo: funcțiile registrului se cheamă doar dintr-o sesiune postgres directă (session_user = %)', session_user USING ERRCODE = '42501';
-    END IF;
     PERFORM set_config('izo.registru_tx', txid_current()::text, true);
     IF p_motiv IS NULL OR char_length(btrim(p_motiv)) < 3 THEN RAISE EXCEPTION 'izo: motivul e obligatoriu'; END IF;
     IF p_proiect IS NULL THEN RAISE EXCEPTION 'izo: proiectul e obligatoriu'; END IF;
