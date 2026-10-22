@@ -142,6 +142,15 @@ FN_B = {
     'fn_izo_garda_corectie(text, text, jsonb, jsonb)': ['izo_corectie_writer'],
     'fn_izo_cor_garda()': [],  # declanșare implicită, fără EXECUTE pentru API / writeri
 }
+FN_C1 = {
+    'fn_izo_cor_propune(text, bigint, bigint, jsonb, text)': 'izo_cor_editor',
+    'fn_izo_cor_retrage(bigint, bigint, text)': 'izo_cor_editor',
+    'fn_izo_cor_respinge(bigint, bigint, text)': 'izo_cor_editor',
+    'fn_izo_cor_verifica(bigint, text, bigint, bigint, jsonb)': 'izo_cor_editor',
+    'fn_izo_cor_aproba(bigint, bigint)': 'izo_corectie_writer',
+}
+for fn in FN_C1:
+    executa(fn, ['authenticated'])
 for fn, roluri in FN_B.items():
     executa(fn, roluri)
 for tabel in ['izo_corectii', 'izo_corectii_bucati']:
@@ -240,7 +249,7 @@ for (rol, t, p), cols in MATRICE.items():
     politica(nume, t, rol, p, expr)
 
 for fn, rs in FUNCTII.items():
-    if rs and fn != 'public.fn_izo_cor_marcheaza(bigint)':  # EXECUTE implicit al owner-ului, fără GRANT ca postgres
+    if rs and fn != 'public.fn_izo_cor_marcheaza(bigint)' and fn[7:] not in FN_C1:  # EXECUTE implicit al owner-ului, fără GRANT ca postgres
         granturi.append('  GRANT EXECUTE ON FUNCTION %s TO %s;' % (fn, ', '.join(rs)))
 granturi.append('  GRANT USAGE ON SEQUENCE ' + ', '.join('public.' + s for s in SECV) + ' TO izo_corectie_writer;')
 
@@ -263,9 +272,9 @@ for rol in ROLURI:
     checks.append("    IF EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind = 'S' AND has_sequence_privilege(%s, c.oid, 'USAGE') IS DISTINCT FROM (c.oid = ANY (%s::regclass[]))) THEN v := array_append(v, %s); END IF;" %
                   (q(rol), arr(['public.' + s for s in SECV] if rol == 'izo_corectie_writer' else []), q('USAGE secvențe ' + rol)))
 for fn, rs in FUNCTII.items():
-    for rol in (['anon', 'authenticated', 'service_role', 'izo_registru_writer', 'izo_receptie_writer'] + ROLURI if fn[7:] in FN_B else ROLURI):
+    for rol in (['anon', 'authenticated', 'service_role', 'izo_registru_writer', 'izo_receptie_writer'] + ROLURI if fn[7:] in FN_B or fn[7:] in FN_C1 else ROLURI):
         checks.append("    IF has_function_privilege(%s, %s, 'EXECUTE') IS DISTINCT FROM %s THEN v := array_append(v, %s); END IF;" %
-                      (q(rol), q(fn), 'true' if rol in rs else 'false', q('EXECUTE ' + rol + ' ' + fn)))
+                      (q(rol), q(fn), 'true' if rol in rs or (fn[7:] in FN_C1 and rol == FN_C1[fn[7:]]) else 'false', q('EXECUTE ' + rol + ' ' + fn)))
 
 for signature in FN_B:
     name = signature.split('(')[0]
@@ -277,6 +286,33 @@ for signature in FN_B:
                   " AND prosecdef=%s AND proconfig=ARRAY['search_path=public, pg_temp'])"
                   " THEN v := array_append(v,%s); END IF;" %
                   (q(name), q('public.' + signature), q(owner), str(definer).lower(), q('définition ' + name)))
+
+# C1: ștampilă + celulele owner/DEFINER, fără invocări implicite noi.
+for signature, owner in FN_C1.items():
+    checks.append("    IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid=%s::regprocedure AND proowner=%s::regrole AND prosecdef AND proconfig=ARRAY['search_path=public, pg_temp']) THEN v := array_append(v,%s); END IF;" % (q('public.'+signature), q(owner), q('définition '+signature)))
+
+OWNERI = []
+for signature, owner in FN_C1.items():
+    OWNERI.extend([
+        '  GRANT CREATE ON SCHEMA public TO %s;' % owner,
+        '  ALTER FUNCTION public.%s OWNER TO %s;' % (signature, owner),
+        '  REVOKE CREATE ON SCHEMA public FROM %s;' % owner,
+        '  SET LOCAL ROLE %s;' % owner,
+        '  REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon, authenticated, service_role;' % signature,
+        '  GRANT EXECUTE ON FUNCTION public.%s TO authenticated;' % signature,
+        '  RESET ROLE;',
+    ])
+operatii = (SP / 'e3b_operatii_tpl.sql').read_text(encoding='utf-8-sig')
+for key, value in {
+    'COLLISION_PRED': "AND b.provenienta='beneficiar' AND b.tip_cod=v_after.tip_cod AND b.stare<>'anulata'\n          AND b.serie_canon=public.fn_izo_canon_serie(v_after.serie)\n          AND ((b.tip_cod='teava' AND b.dezambiguare IS NOT DISTINCT FROM v_after.dezambiguare\n            AND (b.parinte_id IS NULL OR (b.stare<>'taiata' AND b.sarja IS NOT DISTINCT FROM v_after.sarja\n              AND b.lungime_cm IS NOT DISTINCT FROM round(v_after.lungime_mm/10.0)::integer)))\n          OR (b.tip_cod='curba' AND b.sarja IS NOT DISTINCT FROM v_after.sarja AND b.unghi_curba IS NOT DISTINCT FROM v_after.unghi_curba\n            AND b.cod_bucata IS NOT DISTINCT FROM v_after.cod_bucata))",
+    # server_ver NOT NULL pe evenimente / mișcări: explicit, ca în E3 (20261103b)
+    'EV_COLS': ', '.join(EV + ['server_ver']), 'EV_VALUES': ', '.join(['v_event.'+c for c in EV] + ["nextval('public.izo_server_ver_seq')"]),
+    'MIS_COLS': ', '.join(MIS + ['server_ver']), 'MIS_VALUES': ', '.join(['v_move.'+c for c in MIS] + ["nextval('public.izo_server_ver_seq')"]),
+    'INS_COLS': ', '.join(INS), 'INS_VALUES': ', '.join('v_after.'+c for c in INS),
+    'UPDATE_VALUES': ', '.join(c+'=v_after.'+c for c in UPD if c not in ['server_ver','updated_at']),
+}.items():
+    operatii = operatii.replace('@@'+key+'@@', value)
+operatii += '\n' + '\n'.join(OWNERI)
 
 assert len(set(IMPL_E3B)) == len(IMPL_E3B)
 IMPL_POST = sorted(IMPL_PRE + IMPL_E3B)
@@ -306,9 +342,9 @@ replacements = {
     'DROP_POLITICI': '\n'.join(retrageri),
     'REVOKE_COLOANE': '\n'.join(revoke_coloane),
     'REVOKE_FUNCTII': '\n'.join('  REVOKE ALL ON FUNCTION %s FROM %s;' % (fn, ', '.join(rs)) for fn, rs in FUNCTII.items()
-                              if rs and fn != 'public.fn_izo_cor_marcheaza(bigint)'),
+                              if rs and fn != 'public.fn_izo_cor_marcheaza(bigint)' and fn[7:] not in FN_C1),
     'GARZI_NOI': '\n'.join(garzi_noi), 'GARZI_VECHI': '\n'.join(garzi_vechi),
-    'NUME_FN_B': arr([fn.split('(')[0] for fn in FN_B]),
+    'NUME_FN_B': arr([fn.split('(')[0] for fn in list(FN_B) + list(FN_C1)]),
     'ACL_GARDA': '\n'.join('  REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon, authenticated, service_role;\n%s'
                           % (fn, ("  GRANT CREATE ON SCHEMA public TO izo_corectie_writer;\n"
                                   "  ALTER FUNCTION public.%s OWNER TO izo_corectie_writer;\n"
@@ -317,7 +353,8 @@ replacements = {
                           for fn in FN_B),
     'DROP_GARDA': '\n'.join(('  SET LOCAL ROLE izo_corectie_writer;\n  DROP FUNCTION public.%s;\n  RESET ROLE;' % fn)
                            if fn.startswith('fn_izo_cor_marcheaza(') else '  DROP FUNCTION public.%s;' % fn for fn in reversed(FN_B)),
-    'GARDA': '', 'OPERATII': '', 'STORNO': '', 'ISTORIC': '',
+    'DROP_OPERATII': '\n'.join('  SET LOCAL ROLE %s;\n  DROP FUNCTION public.%s;\n  RESET ROLE;' % (owner, fn) for fn, owner in reversed(list(FN_C1.items()))),
+    'GARDA': '', 'OPERATII': operatii, 'STORNO': '', 'ISTORIC': '',
 }
 
 def genereaza(tpl, destinatie):
@@ -335,4 +372,4 @@ def genereaza(tpl, destinatie):
 if __name__ == '__main__':
     mig = genereaza('e3b_tpl.sql', 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql')
     rev = genereaza('e3b_rev_tpl.sql', 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql')
-    print('ok E3b-A+B', len(mig.splitlines()), len(rev.splitlines()), 'implicit additions', len(IMPL_E3B))
+    print('ok E3b-A+B+C1', len(mig.splitlines()), len(rev.splitlines()), 'implicit additions', len(IMPL_E3B))

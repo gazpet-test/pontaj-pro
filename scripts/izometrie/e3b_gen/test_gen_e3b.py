@@ -101,8 +101,31 @@ class GeneratorTest(unittest.TestCase):
         self.assertIn('NEW.inainte := public.fn_izo_cor_inainte(NEW)', body)
         self.assertIn('NEW.decis_de IS NOT DISTINCT FROM OLD.propus_de', body)
         self.assertNotIn('fn_izo_cor_autorizare_lock', body)
-        for name in ('OPERATII', 'STORNO', 'ISTORIC'):
+        for name in ('STORNO', 'ISTORIC'):
             self.assertEqual(g.replacements[name], '')
+
+    def test_c1_frontiera_acl_revenire_si_insert_c(self):
+        mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
+        rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
+        self.assertEqual(len(g.FN_C1), 5)
+        for signature, owner in g.FN_C1.items():
+            name = signature.split('(')[0]
+            block = g.bloc_functie(mig, name)
+            self.assertIn('SECURITY DEFINER SET search_path = public, pg_temp', block)
+            body = g.prosrc(block)
+            self.assertRegex(body, r'BEGIN\s+v_uid := public.fn_izo_cor_api_verifica\(\);')
+            self.assertNotRegex(body, r'\bEXECUTE\s')
+            self.assertIn('ALTER FUNCTION public.%s OWNER TO %s;' % (signature, owner), mig)
+            self.assertIn('SET LOCAL ROLE %s;\n  DROP FUNCTION public.%s;\n  RESET ROLE;' % (owner, signature), rev)
+            self.assertEqual(g.FUNCTII['public.' + signature], ['authenticated'])
+            self.assertFalse(any(name in item for item in g.IMPL_E3B))
+        body = g.prosrc(g.bloc_functie(mig, 'fn_izo_cor_aproba'))
+        cols = re.search(r'INSERT INTO public.magazie_bucati\(/\*C\*/ (.*?)\)', body).group(1).split(', ')
+        self.assertEqual(cols, g.INS)
+        self.assertIn('fn_izo_lock_partajat(VARIADIC ARRAY[v_cor.proiect_id])', body)
+        self.assertLess(body.index('FOR SHARE'), body.index('FOR UPDATE'))
+        self.assertLess(body.index('fn_izo_blocheaza_tabele'), body.index('fn_izo_cor_marcheaza'))
+        self.assertNotIn('set_config', g.prosrc(g.bloc_functie(mig, 'fn_izo_cor_verifica')))
 
     def test_transfer_owner_nesuperuser(self):
         mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')

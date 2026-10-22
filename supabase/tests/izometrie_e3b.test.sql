@@ -123,7 +123,8 @@ DO $b_catalog$
 DECLARE v_fn record; v_g record;
 BEGIN
   FOR v_fn IN SELECT pr.*,pg_get_userbyid(pr.proowner) AS owner_name FROM pg_proc pr
-    WHERE pr.pronamespace='public'::regnamespace AND (pr.proname LIKE 'fn\_izo\_cor\_%' OR pr.proname='fn_izo_garda_corectie') LOOP
+    WHERE pr.pronamespace='public'::regnamespace AND (pr.proname LIKE 'fn\_izo\_cor\_%' OR pr.proname='fn_izo_garda_corectie')
+      AND pr.proname NOT IN ('fn_izo_cor_propune','fn_izo_cor_retrage','fn_izo_cor_respinge','fn_izo_cor_verifica','fn_izo_cor_aproba') LOOP
     IF v_fn.owner_name IS DISTINCT FROM (CASE WHEN v_fn.proname='fn_izo_cor_marcheaza' THEN 'izo_corectie_writer' ELSE 'postgres' END)
       OR v_fn.prosecdef IS DISTINCT FROM (v_fn.proname IN ('fn_izo_cor_autorizare_lock','fn_izo_cor_cerut_de_valid',
         'fn_izo_cor_bucata_lock','fn_izo_cor_doc_lock','fn_izo_cor_deschise'))
@@ -290,3 +291,279 @@ ROLLBACK;
 DO $b_final$ BEGIN
   IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'B a lăsat poarta roșie'; END IF;
 END $b_final$;
+
+-- C1: API reală (session_user=authenticator), negative înaintea fluxurilor pozitive.
+BEGIN;
+SET LOCAL ROLE izo_registru_writer;
+SELECT set_config('izo.registru_tx',txid_current()::text,true);
+INSERT INTO public.izo_proiect_config(proiect_id,nivel_izo,server_ver) VALUES(3,'stoc',nextval('public.izo_server_ver_seq'));
+DO $fixture$
+DECLARE v_id bigint := nextval('public.magazie_bucati_id_seq');
+BEGIN
+  INSERT INTO public.magazie_bucati(id,uid,radacina_id,server_ver,proiect_id,tip_material_id,tip_cod,serie,sarja,perete_mm,
+    lungime_aviz_mm,lungime_mm,lungime_m,lungime_originala_m,cod_bucata,capat_stanga,capat_dreapta,provenienta,stare,
+    locatie_tip,locatie_site_id,depozit_id,sursa_receptie)
+  VALUES(v_id,gen_random_uuid(),v_id,nextval('public.izo_server_ver_seq'),3,1,'teava','E3B-C1-FIXTURE','SARJA-C1',8,
+    12000,12000,12,12,'AB','A','B','beneficiar','receptionat','depozit',6,11,'manual');
+  PERFORM set_config('test.c1_bucata',v_id::text,true);
+  v_id:=nextval('public.magazie_bucati_id_seq');
+  INSERT INTO public.magazie_bucati(id,uid,radacina_id,server_ver,proiect_id,tip_material_id,tip_cod,serie,sarja,perete_mm,
+    lungime_aviz_mm,lungime_mm,lungime_m,lungime_originala_m,cod_bucata,capat_stanga,capat_dreapta,provenienta,stare,
+    locatie_tip,locatie_site_id,tronson_id,sursa_receptie,atribute)
+  VALUES(v_id,gen_random_uuid(),v_id,nextval('public.izo_server_ver_seq'),3,1,'teava','C1-TRONSON','C1-S',8,
+    12000,12000,12,12,'AB','A','B','beneficiar','pe_tronson','tronson',6,16,'manual','{"depozit_origine_id":11}');
+  PERFORM set_config('test.c1_tronson',v_id::text,true);
+END $fixture$;
+RESET ROLE;
+SELECT set_config('izo.registru_tx','',true);
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de,motiv)
+VALUES(3,'00000000-0000-0000-0000-000000000030','gestionar',11,'test','fixture C1');
+
+SET SESSION AUTHORIZATION authenticator;
+SELECT set_config('request.jwt.claims','{"role":"anon"}',true);
+SET LOCAL ROLE anon;
+DO $neg$ BEGIN
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_propune('pierdut',3,current_setting('test.c1_bucata')::bigint,'{"cauza":"disparuta"}','test anon');
+    RAISE EXCEPTION 'C1 anon a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL; END;
+END $neg$;
+RESET ROLE;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+SET LOCAL ROLE authenticated;
+DO $neg$ BEGIN
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_propune('pierdut',3,current_setting('test.c1_bucata')::bigint,'{"cauza":"disparuta"}','test fără atribuire');
+    RAISE EXCEPTION 'C1 fără atribuire a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN
+    IF SQLERRM <> 'E3b: bucata nu există sau nu ai acces' THEN RAISE; END IF;
+  END;
+END $neg$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $neg$
+DECLARE v_id bigint:=current_setting('test.c1_bucata')::bigint; v_r jsonb;
+BEGIN
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_propune('carantina_intrare',3,v_id,'{"ncr_ref":"NCR1","stare":"carantina"}','test listă albă');
+    RAISE EXCEPTION 'C1 cheie străină a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_propune('camp',3,v_id,'{"serie":"NOUA","perete_mm":9}','test mixt');
+    RAISE EXCEPTION 'C1 camp mixt a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('carantina_intrare',3,v_id,'{"ncr_ref":"C1-NCR"}','test carantină C1');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+  IF v_r->>'stare'<>'propusa' OR v_r->>'versiune'<>'1' THEN RAISE EXCEPTION 'C1 propunere invalidă'; END IF;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_aproba((v_r->>'corectie_id')::bigint,1);
+    RAISE EXCEPTION 'C1 aprobare proprie a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_respinge((v_r->>'corectie_id')::bigint,1,'respingere proprie');
+    RAISE EXCEPTION 'C1 respingere proprie a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_retrage((v_r->>'corectie_id')::bigint,99,'versiune veche');
+    RAISE EXCEPTION 'C1 retragere CAS a trecut';
+  EXCEPTION WHEN SQLSTATE '40001' THEN NULL; END;
+END $neg$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $neg$ BEGIN
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,99);
+    RAISE EXCEPTION 'C1 aprobare CAS a trecut';
+  EXCEPTION WHEN SQLSTATE '40001' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_respinge(current_setting('test.c1_cor')::bigint,99,'versiune veche');
+    RAISE EXCEPTION 'C1 respingere CAS a trecut';
+  EXCEPTION WHEN SQLSTATE '40001' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_verifica(current_setting('test.c1_cor')::bigint,'camp',3,NULL,'{}');
+    RAISE EXCEPTION 'C1 verificare mixtă a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+END $neg$;
+
+-- Patru ochi se aplică inclusiv owner-ului, independent de autorizarea gestionarului.
+DO $owner_neg$
+DECLARE v_r jsonb; v_id bigint;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('gasit_nou',3,NULL,'{"tip_cod":"curba","depozit_id":11,"serie":"C1-OWNER","sarja":"C1-S","perete_mm":8,"unghi_curba":45}','test patru ochi owner');
+  v_id:=(v_r->>'corectie_id')::bigint;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_aproba(v_id,1);
+    RAISE EXCEPTION 'C1 owner aprobare proprie a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+    PERFORM public.fn_izo_cor_respinge(v_id,1,'test patru ochi');
+    RAISE EXCEPTION 'C1 owner respingere proprie a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL; END;
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  PERFORM public.fn_izo_cor_retrage(v_id,1,'închidere test owner');
+END $owner_neg$;
+
+DO $poz$
+DECLARE v_id bigint:=current_setting('test.c1_bucata')::bigint; v_cor bigint:=current_setting('test.c1_cor')::bigint;
+  v_r jsonb; v_retry jsonb; v_ev bigint;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_verifica(v_cor,NULL,NULL,NULL,NULL);
+  IF v_r->>'ok'<>'true' OR v_r->>'versiune'<>'1' OR v_r->'dupa_efectiv'<> '{"stare":"carantina"}'::jsonb THEN
+    RAISE EXCEPTION 'C1 verificare propunere: %',v_r; END IF;
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(v_cor,1); v_ev:=(v_r->>'eveniment_id')::bigint;
+  IF (SELECT b.stare FROM public.magazie_bucati b WHERE b.id=v_id)<>'carantina'
+    OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente ev WHERE ev.id=v_ev AND ev.tip='carantina_intrare' AND ev.document_id=v_cor::text)
+    OR (SELECT count(*) FROM public.magazie_bucati_miscari mis WHERE mis.eveniment_id=v_ev AND mis.bucata_id=v_id AND mis.rol='stare'
+      AND mis.stare_inainte='receptionat' AND mis.stare_dupa='carantina')<>1 THEN RAISE EXCEPTION 'C1 carantină incompletă'; END IF;
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_retry:=public.fn_izo_cor_aproba(v_cor,1);
+  IF v_retry->>'idempotent'<>'true' OR v_retry->>'eveniment_id' IS DISTINCT FROM v_r->>'eveniment_id'
+    OR (SELECT count(*) FROM public.magazie_bucati_miscari mis WHERE mis.eveniment_id=v_ev)<>1 THEN RAISE EXCEPTION 'C1 retry duplică'; END IF;
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $poz$
+DECLARE v_r jsonb;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('carantina_iesire',3,current_setting('test.c1_bucata')::bigint,'{"ncr_ref":"C1-INCHIS"}','închidere NCR');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $poz$
+DECLARE v_r jsonb;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  IF v_r->>'stare_dupa'<>'receptionat' OR (SELECT stare FROM public.magazie_bucati WHERE id=current_setting('test.c1_bucata')::bigint)<>'receptionat' THEN
+    RAISE EXCEPTION 'C1 ieșire nu restaurează episodul'; END IF;
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $poz$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('pierdut',3,current_setting('test.c1_bucata')::bigint,'{"cauza":"disparuta"}','lipsă fizică');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $poz$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  IF v_r->>'stare_dupa'<>'pierduta' THEN RAISE EXCEPTION 'C1 pierdut'; END IF;
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $poz$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('gasit_recuperare',3,current_setting('test.c1_bucata')::bigint,'{}','găsită în depozit');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $poz$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  IF v_r->>'stare_dupa'<>'receptionat' OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente WHERE id=(v_r->>'eveniment_id')::bigint AND tip='gasit') THEN
+    RAISE EXCEPTION 'C1 recuperare'; END IF;
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_verifica(NULL,'camp',3,current_setting('test.c1_bucata')::bigint,'{"lungime_masurata_mm":11900}');
+  IF v_r->>'ok'<>'true' OR (v_r->'dupa_efectiv'->>'lungime_mm')::integer<>11900 THEN RAISE EXCEPTION 'C1 verifica nesalvat: %',v_r; END IF;
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $poz$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('gasit_nou',3,NULL,'{"tip_cod":"teava","depozit_id":11,"serie":"C1-GASIT","sarja":"C1-S","perete_mm":8,"lungime_aviz_mm":12000}','găsit la inventar');
+  IF v_r->'inainte'<>'{}'::jsonb THEN RAISE EXCEPTION 'C1 gasit inainte'; END IF;
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $poz$
+DECLARE v_r jsonb; v_b public.magazie_bucati;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  SELECT * INTO v_b FROM public.magazie_bucati WHERE id=(v_r->>'bucata_id')::bigint;
+  IF v_b.stare<>'carantina' OR v_b.sursa_receptie<>'manual' OR v_b.atribute->>'sursa'<>'e3b'
+    OR v_b.atribute->>'corectie_id'<>current_setting('test.c1_cor') OR v_b.aviz_intrare_id IS NOT NULL OR v_b.server_ver IS NULL
+    OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_miscari WHERE eveniment_id=(v_r->>'eveniment_id')::bigint AND bucata_id=v_b.id AND rol='nascut') THEN
+    RAISE EXCEPTION 'C1 naștere invalidă'; END IF;
+END $poz$;
+-- Decizii fără registru: retragere proprie și respingere de alt responsabil.
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $poz$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('camp',3,current_setting('test.c1_bucata')::bigint,'{"lot":"C1-LOT"}','corecție lot');
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_retrage((v_r->>'corectie_id')::bigint,1,'document clarificat');
+  IF v_r->>'stare'<>'retrasa' OR v_r->>'versiune'<>'2' THEN RAISE EXCEPTION 'C1 retragere'; END IF;
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('camp',3,current_setting('test.c1_bucata')::bigint,'{"lot":"C1-LOT"}','corecție lot');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $poz$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $poz$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_respinge(current_setting('test.c1_cor')::bigint,1,'dovadă insuficientă');
+  IF v_r->>'stare'<>'respinsa' OR v_r->>'versiune'<>'2' OR EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente WHERE document_tip='izo_corectie' AND document_id=current_setting('test.c1_cor')) THEN
+    RAISE EXCEPTION 'C1 respingere a scris registrul'; END IF;
+END $poz$;
+-- Q9=A: gestionar de origine, recuperare pe același tronson.
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $tronson$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('pierdut',3,current_setting('test.c1_tronson')::bigint,'{"cauza":"disparuta"}','lipsă pe tronson');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $tronson$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+SELECT set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+SELECT public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $tronson$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('gasit_recuperare',3,current_setting('test.c1_tronson')::bigint,'{}','găsită pe tronson');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $tronson$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $tronson$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  IF v_r->>'stare_dupa'<>'pe_tronson' OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati WHERE id=current_setting('test.c1_tronson')::bigint AND tronson_id=16 AND depozit_id IS NULL) THEN
+    RAISE EXCEPTION 'C1 recuperarea a mutat tronsonul'; END IF;
+END $tronson$;
+-- Aprobare camp: derivatele se aplică împreună, cu o singură mișcare corectat.
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $camp$
+DECLARE v_r jsonb;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_propune('camp',3,current_setting('test.c1_bucata')::bigint,'{"serie":"C1-SERIE-NOUA","lungime_masurata_mm":11900}','serie și măsurătoare corectate');
+  PERFORM set_config('test.c1_cor',v_r->>'corectie_id',true);
+END $camp$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $camp$
+DECLARE v_r jsonb; v_b public.magazie_bucati;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  SELECT * INTO v_b FROM public.magazie_bucati WHERE id=current_setting('test.c1_bucata')::bigint;
+  IF v_b.serie<>'C1-SERIE-NOUA' OR v_b.lungime_mm<>11900 OR v_b.lungime_m<>11.9 OR v_b.lungime_originala_m<>11.9
+    OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_miscari WHERE eveniment_id=(v_r->>'eveniment_id')::bigint AND rol='corectat'
+      AND dupa->>'lungime_mm'='11900') THEN RAISE EXCEPTION 'C1 camp nu a aplicat delta și derivatele'; END IF;
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  IF v_r->>'idempotent'<>'true' THEN RAISE EXCEPTION 'C1 camp retry'; END IF;
+END $camp$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK;

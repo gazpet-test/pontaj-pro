@@ -42,6 +42,7 @@ BEGIN
   DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii;
   DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii_bucati;
   DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii_bucati;
+@@DROP_OPERATII@@
 @@DROP_GARDA@@
 @@PORTI_VECHE@@
   DROP FUNCTION public.fn_izo_porti_e3b_lipsa(),public.fn_izo_porti_e3b_definitii();
