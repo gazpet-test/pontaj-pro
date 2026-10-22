@@ -51,22 +51,48 @@ revenire() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config(
 asteapta() { local i; for i in $(seq 1 150); do [ "$(q "$1")" = "${2:-1}" ] && return 0; sleep 0.1; done; return 1; }
 # cursa cu barieră (advisory 99 ținut de un controlor): A rulează $2 și se oprește la barieră ținând ce a luat; B rulează $3 și
 # trebuie să AȘTEPTE un lock; controlorul eliberează bariera; $4 ok|err, $5 tiparul în ieșirea lui B;
-# $6 (opțional, r5f) felul lock-ului pe care trebuie să aștepte B (wait_event: advisory / relation)
-cursa() { local et="$1" pa pb pc rc_b=0 ob
+# $6 = locktype pg_locks (advisory/relation/tuple/transactionid), ori none.
+# $7 = COMMIT/ROLLBACK A; $8 = SQL A dupa bariera (oprire inainte de INSERT/FK).
+cursa() { local et="$1" pa pb pc rc_b=0 ob i terminat=0
   PGAPPNAME=izo_ctrl "${PSQL[@]}" -d "$BAZA" -Atc "SELECT pg_advisory_lock(99); SELECT pg_sleep(300);" >/dev/null 2>&1 & pc=$!
   asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_ctrl' AND l.locktype = 'advisory' AND l.objid = 99 AND l.granted" || esec "$et: controlor"
-  PGAPPNAME=izo_A "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; $2; SELECT pg_advisory_xact_lock_shared(99); COMMIT;" >/tmp/izo_e3b_${PORT}_a.out 2>&1 & pa=$!
+  PGAPPNAME=izo_A "${PSQL[@]}" -d "$BAZA" -v VERBOSITY=verbose -Atc "BEGIN; $2; SELECT pg_advisory_xact_lock_shared(99); ${8:-}; ${7:-COMMIT};" >/tmp/izo_e3b_${PORT}_a.out 2>&1 & pa=$!
   asteapta "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid WHERE a.application_name = 'izo_A' AND l.locktype = 'advisory' AND l.objid = 99 AND NOT l.granted" \
     || { kill "$pc" 2>/dev/null; cat /tmp/izo_e3b_${PORT}_a.out >&2; esec "$et: A n-a ajuns la barieră"; }
-  PGAPPNAME=izo_B "${PSQL[@]}" -d "$BAZA" -Atc "$3" >/tmp/izo_e3b_${PORT}_b.out 2>&1 & pb=$!
-  asteapta "SELECT count(DISTINCT a.pid) FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid AND NOT l.granted WHERE application_name = 'izo_B' AND wait_event_type = 'Lock'${6:+ AND wait_event = '$6'}" \
+  PGAPPNAME=izo_B "${PSQL[@]}" -d "$BAZA" -v VERBOSITY=verbose -Atc "$3" >/tmp/izo_e3b_${PORT}_b.out 2>&1 & pb=$!
+  if [ "${6:-}" = none ]; then
+    # Cazurile 1/3 din §4 refuza INAINTE de eliberarea barierei, fara lock asteptat.
+    for i in $(seq 1 150); do
+      if ! kill -0 "$pb" 2>/dev/null; then terminat=1; break; fi
+      sleep 0.1
+    done
+    [ "$terminat" = 1 ] || {
+      q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name IN ('izo_ctrl','izo_A','izo_B')" >/dev/null
+      wait "$pc" "$pa" "$pb" 2>/dev/null || true
+      esec "$et: B trebuia sa refuze fara asteptare"
+    }
+    [ "$(q "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.application_name='izo_A' AND l.locktype='advisory' AND l.objid=99 AND NOT l.granted")" = 1 ] \
+      || esec "$et: A a parasit bariera inaintea refuzului B"
+    wait "$pb" || rc_b=$?
+    [ "$rc_b" != 0 ] && grep -q -- "$5" /tmp/izo_e3b_${PORT}_b.out \
+      || esec "$et: B nu a refuzat inaintea eliberarii barierei"
+    ok "$et: B refuzat cu A inca la bariera, fara asteptare"
+  else
+  asteapta "SELECT count(DISTINCT a.pid) FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid AND NOT l.granted WHERE application_name = 'izo_B' AND wait_event_type = 'Lock'${6:+ AND l.locktype = '$6'}" \
     || { q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'izo_ctrl'" >/dev/null; wait "$pa" "$pb" 2>/dev/null || true; cat /tmp/izo_e3b_${PORT}_b.out >&2; esec "$et: B nu a așteptat${6:+ un lock $6}"; }
+  ok "$et: pg_locks confirma B in asteptare${6:+ pe $6}"
+  fi
   q "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'izo_ctrl'" >/dev/null
   wait "$pc" 2>/dev/null || true
   wait "$pa" || { cat /tmp/izo_e3b_${PORT}_a.out >&2; esec "$et: A a eșuat"; }
-  wait "$pb" || rc_b=$?
+  if [ "${6:-}" != none ]; then wait "$pb" || rc_b=$?; fi
   ob="$(cat /tmp/izo_e3b_${PORT}_b.out)"
-  if [ "$4" = ok ]; then [ "$rc_b" = 0 ] || { echo "$ob" >&2; esec "$et: B a eșuat"; }; else [ "$rc_b" != 0 ] || { echo "$ob" >&2; esec "$et: B a trecut"; }; fi
+  if [ "$4" = ok ]; then [ "$rc_b" = 0 ] || { echo "$ob" >&2; esec "$et: B a eșuat"; }; else
+    [ "$rc_b" != 0 ] || { echo "$ob" >&2; esec "$et: B a trecut"; }
+    if [[ "$5" =~ ^[0-9A-Z]{5}$ ]]; then
+      grep -Eq "ERROR: +$5:" <<<"$ob" || { echo "$ob" >&2; esec "$et: SQLSTATE diferit de $5"; }
+    fi
+  fi
   grep -q -- "$5" <<<"$ob" || { echo "$ob" >&2; esec "$et: ieșirea lui B nu conține „$5”"; }; }
 baseline() { q "SELECT jsonb_build_array(obj_description('public.magazie_bucati_evenimente'::regclass,'pg_class'),
   obj_description('public.fn_izo_porti_definitii()'::regprocedure,'pg_proc'),
@@ -86,7 +112,7 @@ CONTROL_0E="$("${PSQL[@]}" -d "$BAZA" -At -f "$RADACINA/scripts/control_0e.sql")
 [ -z "$CONTROL_0E" ] || esec "control 0e: $CONTROL_0E"
 ok '20261102a -> 2c -> E3 -> E3b prin runner; gate = {}; control 0e = 0'
 OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3b.test.sql" 2>&1)" || { echo "$OUT" >&2; esec 'catalog E3b'; }
-for sectiune in A B C1 C2 D1 D2; do
+for sectiune in A B C1 C2 D1 D2 E2-AUTH; do
   grep -qF "TESTE E3b-$sectiune: TOATE OK" <<<"$OUT" || esec "sec?iunea $sectiune nu a ajuns la final"
 done
 ok 'catalog, matrice, roluri, RLS, PUBLIC EXECUTE și mutații'
@@ -699,7 +725,10 @@ baza_scoate
 BAZA=izo_e3b_cursa_test
 baza_noua
 lant_apply
-"${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3b_cursa.sql" >/dev/null
+OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3b_cursa.sql" 2>&1)" || { echo "$OUT" >&2; esec 'fixture curse E2'; }
+for sectiune in FIXTURE IMPORTURI; do
+  grep -qF "TESTE E3b-E2-$sectiune: TOATE OK" <<<"$OUT" || esec "fixture E2-$sectiune incompleta"
+done
 COR="$(q "SELECT id FROM public.izo_corectii WHERE motiv='fixture cursa E1' AND stare='propusa'")"
 [[ "$COR" =~ ^[0-9]+$ ]] || esec 'fixture cursa fara propunere'
 CA_R="$(cat <<'SQL'
@@ -711,9 +740,10 @@ cursa 'aproba x aproba aceeasi propunere'   "$CA_R; SELECT public.fn_izo_cor_apr
        IF v_r->>'idempotent' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'retry ne-idempotent'; END IF;
        RAISE NOTICE '%',v_r;
      EXCEPTION WHEN SQLSTATE '40001' THEN RAISE NOTICE '40001'; END;
-   END \$race\$; COMMIT;" ok 'idempotent.*true\|40001'
+   END \$race\$; COMMIT;" ok 'idempotent.*true\|40001' transactionid
 [ "$(q "SELECT count(*) FROM public.magazie_bucati_evenimente WHERE document_tip='izo_corectie' AND document_id='$COR'")" = 1 ] || esec 'cursa: eveniment duplicat'
 [ "$(q "SELECT count(*) FROM public.magazie_bucati_miscari WHERE eveniment_id=(SELECT eveniment_id FROM public.izo_corectii WHERE id=$COR)")" = 1 ] || esec 'cursa: miscare duplicata'
 ok 'bariera: A tine aprobarea; pg_locks confirma B in asteptare; retry idempotent/40001; un eveniment si o miscare'
+source "$RADACINA/scripts/izometrie/test_e3b_e2_curse.sh"
 baza_scoate
-echo 'PASS E3b E1: M1-M4, regresii, rollback curat si cursa cu bariera'
+echo 'PASS E3b E1+E2: M1-M4, regresii, rollback, autorizare si curse cu bariera'

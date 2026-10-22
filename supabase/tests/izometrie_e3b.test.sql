@@ -1236,3 +1236,257 @@ END $d2_pozitive$;
 ROLLBACK;
 
 DO $end$ BEGIN RAISE NOTICE 'TESTE E3b-D2: TOATE OK'; END $end$;
+
+-- E2: autorizare pe sesiuni si roluri reale, BEGIN/ROLLBACK.
+-- Fixture separata E1/E2. Importul precede toate scrierile de registru.
+BEGIN;
+SELECT public.fn_izo_activeaza_si_importa(3,'E2-auth-import',
+  '{"motiv":"fixture curse E2","surse":[{"fisier":"E2.xlsx","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}],"bucati":[{"tip":"teava","serie":"E3B-C1-FIXTURE","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":1}},{"tip":"teava","serie":"E2-01","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":2}},{"tip":"teava","serie":"E2-02","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":3}},{"tip":"teava","serie":"E2-03","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":4}},{"tip":"teava","serie":"E2-04","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":5}},{"tip":"teava","serie":"E2-05","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":6}},{"tip":"teava","serie":"E2-06","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":7}},{"tip":"teava","serie":"E2-07","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":8}},{"tip":"teava","serie":"E2-08","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":9}},{"tip":"teava","serie":"E2-09","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":10}},{"tip":"teava","serie":"E2-10","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":11}},{"tip":"teava","serie":"E2-11","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":12}},{"tip":"teava","serie":"E2-12","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":13}},{"tip":"teava","serie":"E2-13","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":14}},{"tip":"teava","serie":"E2-20","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":15}},{"tip":"teava","serie":"E2-21","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":16}},{"tip":"teava","serie":"E2-22","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":17}},{"tip":"teava","serie":"E2-23","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":18}},{"tip":"teava","serie":"E2-24","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":19}},{"tip":"teava","serie":"E2-25","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":20}},{"tip":"teava","serie":"E2-26","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":21}},{"tip":"teava","serie":"E2-27","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":22}},{"tip":"teava","serie":"E2-28","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":23}},{"tip":"teava","serie":"E2-29","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":24}},{"tip":"teava","serie":"E2-30","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":25}},{"tip":"teava","serie":"E2-31","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":26}},{"tip":"teava","serie":"E2-32","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":27}},{"tip":"teava","serie":"E2-33","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":28}},{"tip":"teava","serie":"E2-34","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":29}},{"tip":"teava","serie":"E2-35","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":30}},{"tip":"teava","serie":"E2-36","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":31}},{"tip":"teava","serie":"E2-37","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":32}},{"tip":"teava","serie":"E2-38","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":33}},{"tip":"teava","serie":"E2-39","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":34}},{"tip":"teava","serie":"E2-40","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":35}},{"tip":"teava","serie":"E2-41","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":36}},{"tip":"teava","serie":"E2-42","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":37}},{"tip":"teava","serie":"E2-43","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":38}},{"tip":"teava","serie":"E2-44","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":39}},{"tip":"teava","serie":"E2-45","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":40}},{"tip":"teava","serie":"E2-46","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":41}},{"tip":"teava","serie":"E2-47","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":42}},{"tip":"teava","serie":"E2-48","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":43}},{"tip":"teava","serie":"E2-49","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":44}},{"tip":"teava","serie":"E2-50","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":45}},{"tip":"teava","serie":"E2-51","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":46}},{"tip":"teava","serie":"E2-52","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":47}},{"tip":"teava","serie":"E2-53","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":48}},{"tip":"teava","serie":"E2-54","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":49}},{"tip":"teava","serie":"E2-55","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":50}},{"tip":"teava","serie":"E2-56","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":51}},{"tip":"teava","serie":"E2-57","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":52}},{"tip":"teava","serie":"E2-58","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":53}},{"tip":"teava","serie":"E2-59","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":54}},{"tip":"teava","serie":"E2-60","sarja":"E2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E2.xlsx","foaie":"F","rand":55}}]}'::jsonb,'fixture E2 activare si import');
+SELECT set_config('izo.registru_tx','',true);
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de,motiv) VALUES
+ (3,'00000000-0000-0000-0000-000000000030','gestionar',11,'test','fixture E2'),
+ (3,'00000000-0000-0000-0000-000000000117','manager_aprobator',NULL,'test','fixture E2');
+INSERT INTO public.user_module_access(profile_id,module,access_level)
+ VALUES('00000000-0000-0000-0000-000000000117','magazie','editor');
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+SELECT public.fn_izo_cor_propune('pierdut',3,
+ (SELECT id FROM public.magazie_bucati WHERE serie='E3B-C1-FIXTURE'),
+ '{"cauza":"disparuta"}','fixture auth E2');
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+-- All objects exist: authorization failures must not be missing-object accidents.
+SELECT set_config('test.e2_b', (SELECT id::text FROM public.magazie_bucati WHERE serie='E3B-C1-FIXTURE'),true);
+SELECT set_config('test.e2_v', (SELECT server_ver::text FROM public.magazie_bucati WHERE serie='E3B-C1-FIXTURE'),true);
+SELECT set_config('test.e2_c', (SELECT id::text FROM public.izo_corectii WHERE motiv='fixture auth E2'),true);
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $doc$ DECLARE v_r jsonb; v_d bigint; v_check jsonb; BEGIN
+  v_r:=public.fn_izo_doc_salveaza(NULL,NULL,
+    '{"proiect_id":3,"depozit_id":11,"sablon":"aviz_teava","furnizor":"E2 auth","nr_document":"E2-AUTH","data_document":"2026-10-22","total_m":12}',
+    '[{"nr_crt":1,"serie":"E2-AUTH-DOC","sarja":"E2-S","perete_mm":8,"lungime_doc_mm":12000}]',NULL);
+  v_d:=(v_r->>'document_id')::bigint;
+  PERFORM set_config('test.e2_d',v_d::text,true);
+  v_check:=public.fn_izo_doc_verifica(v_d);
+  PERFORM public.fn_izo_doc_confirma(v_d,(v_check->>'versiune')::bigint,v_check->>'hash');
+  PERFORM set_config('izo.receptie_ctx','',true);
+  PERFORM public.fn_izo_doc_pv(v_d,2,'E2-AUTH-PV','2026-10-22');
+  PERFORM set_config('izo.receptie_ctx','',true);
+END $doc$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SELECT set_config('test.e2_dv',(SELECT versiune::text FROM public.izo_documente_intrare WHERE id=current_setting('test.e2_d')::bigint),true);
+
+-- INVOKER: the caller's real SQL role/session/JWT is preserved; a successful
+-- mutation is rolled back by the exception subtransaction before failing the test.
+CREATE FUNCTION teste.e2_refuz(p_sql text, p_mesaj text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);
+  PERFORM set_config('izo.receptie_ctx','',true);
+  BEGIN
+    EXECUTE p_sql;
+    RAISE EXCEPTION 'E2 autorizare: apel acceptat: %',p_sql;
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF p_mesaj IS NOT NULL AND SQLERRM NOT LIKE p_mesaj THEN
+      RAISE EXCEPTION 'E2 autorizare: refuz mascat [%]: %',SQLERRM,p_sql;
+    END IF;
+  END;
+END $f$;
+REVOKE ALL ON FUNCTION teste.e2_refuz(text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION teste.e2_refuz(text,text) TO anon,service_role,authenticated;
+CREATE FUNCTION teste.e2_toate(p_mesaj text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_b bigint:=current_setting('test.e2_b')::bigint;
+  v_c bigint:=current_setting('test.e2_c')::bigint;
+  v_v bigint:=current_setting('test.e2_v')::bigint;
+  v_d bigint:=current_setting('test.e2_d')::bigint;
+  v_dv bigint:=current_setting('test.e2_dv')::bigint;
+  v_sql text;
+BEGIN
+  FOREACH v_sql IN ARRAY ARRAY[
+    format('SELECT public.fn_izo_cor_propune(''carantina_intrare'',3,%s,''{"ncr_ref":"AUTH"}'',''auth E2'')',v_b),
+    format('SELECT public.fn_izo_cor_retrage(%s,1,''auth E2'')',v_c),
+    format('SELECT public.fn_izo_cor_respinge(%s,1,''auth E2'')',v_c),
+    format('SELECT public.fn_izo_cor_verifica(%s,NULL,NULL,NULL,NULL)',v_c),
+    format('SELECT public.fn_izo_cor_aproba(%s,1)',v_c),
+    format('SELECT public.fn_izo_cor_camp(%s,%s,''{"perete_mm":9}'',''auth E2'')',v_b,v_v),
+    format('SELECT public.fn_izo_cor_pv(%s,%s,''PV-AUTH-2'',''2026-10-22'',''auth E2'')',v_d,v_dv)
+  ] LOOP
+    PERFORM teste.e2_refuz(v_sql,p_mesaj);
+  END LOOP;
+END $f$;
+REVOKE ALL ON FUNCTION teste.e2_toate(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION teste.e2_toate(text) TO anon,service_role,authenticated;
+
+-- Each of the seven API entries reaches fn_izo_cor_api_verifica from a plain
+-- postgres session, without a JWT. Require its exact message, not any 42501.
+SELECT set_config('request.jwt.claims','{}',true);
+SELECT teste.e2_toate('E3b: doar API authenticated');
+
+-- service_role and anon: real role switch; owner UID cannot bypass EXECUTE ACL.
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE service_role;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"service_role"}',true);
+SELECT teste.e2_toate();
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_storno_import(3,''E2-auth-import'',ARRAY[%s]::bigint[],''auth E2'',''00000000-0000-0000-0000-000000000121'')',current_setting('test.e2_b')));
+RESET ROLE;
+SET LOCAL ROLE anon;
+SELECT set_config('request.jwt.claims','{"role":"anon"}',true);
+SELECT teste.e2_toate();
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+-- Viewer without project assignment, and editor without an assignment.
+INSERT INTO public.user_module_access(profile_id,module,access_level)
+ VALUES('00000000-0000-0000-0000-0000000000f0','magazie','viewer');
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+SELECT teste.e2_toate();
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_storno_import(3,''E2-auth-import'',ARRAY[%s]::bigint[],''auth E2'',''00000000-0000-0000-0000-000000000121'')',current_setting('test.e2_b')));
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+UPDATE public.user_module_access SET access_level='editor'
+ WHERE profile_id='00000000-0000-0000-0000-0000000000f0' AND module='magazie';
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT teste.e2_toate();
+-- Responsible 117, with a valid module+assignment, is still not the proposer.
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_retrage(%s,1,''alt autor E2'')',current_setting('test.e2_c')),
+  'E3b: corecția nu există sau nu ai acces');
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+-- Isolate each invalid assignment. No other assignment can authorize UID f0.
+-- Each case has its own savepoint; no modifications escape this transaction.
+
+SAVEPOINT e2_expirata;
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','gestionar',11,current_date-10,current_date-1,true,'test','auth expirata');
+
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','manager_aprobator',NULL,current_date-10,current_date-1,true,'test','auth responsabil expirata');
+
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+SELECT teste.e2_toate();
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_propune(''carantina_intrare'',3,%s,''{"ncr_ref":"AUTH"}'',''auth expirata'')',current_setting('test.e2_b')),
+ 'E3b: bucata nu există sau nu ai acces');
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_camp(%s,%s,''{"perete_mm":9}'',''auth expirata'')',current_setting('test.e2_b'),current_setting('test.e2_v')));
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO e2_expirata;
+
+SAVEPOINT e2_viitoare;
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','gestionar',11,current_date+1,NULL,true,'test','auth viitoare');
+
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','manager_aprobator',NULL,current_date+1,NULL,true,'test','auth responsabil viitoare');
+
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+SELECT teste.e2_toate();
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_propune(''carantina_intrare'',3,%s,''{"ncr_ref":"AUTH"}'',''auth viitoare'')',current_setting('test.e2_b')),
+ 'E3b: bucata nu există sau nu ai acces');
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_camp(%s,%s,''{"perete_mm":9}'',''auth viitoare'')',current_setting('test.e2_b'),current_setting('test.e2_v')));
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO e2_viitoare;
+
+SAVEPOINT e2_revocata;
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','gestionar',11,current_date,NULL,false,'test','auth revocata');
+
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','manager_aprobator',NULL,current_date,NULL,false,'test','auth responsabil revocata');
+
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+SELECT teste.e2_toate();
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_propune(''carantina_intrare'',3,%s,''{"ncr_ref":"AUTH"}'',''auth revocata'')',current_setting('test.e2_b')),
+ 'E3b: bucata nu există sau nu ai acces');
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_camp(%s,%s,''{"perete_mm":9}'',''auth revocata'')',current_setting('test.e2_b'),current_setting('test.e2_v')));
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO e2_revocata;
+
+SAVEPOINT e2_alt_proiect;
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(2,'00000000-0000-0000-0000-0000000000f0','gestionar',4,current_date,NULL,true,'test','auth alt_proiect');
+
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(2,'00000000-0000-0000-0000-0000000000f0','manager_aprobator',NULL,current_date,NULL,true,'test','auth responsabil alt_proiect');
+
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+SELECT teste.e2_toate();
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_propune(''carantina_intrare'',3,%s,''{"ncr_ref":"AUTH"}'',''auth alt_proiect'')',current_setting('test.e2_b')),
+ 'E3b: bucata nu există sau nu ai acces');
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_camp(%s,%s,''{"perete_mm":9}'',''auth alt_proiect'')',current_setting('test.e2_b'),current_setting('test.e2_v')));
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO e2_alt_proiect;
+
+SAVEPOINT e2_alt_depozit;
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,valabil_de,valabil_pana,activ,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','gestionar',12,current_date,NULL,true,'test','auth alt_depozit');
+
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_propune(''carantina_intrare'',3,%s,''{"ncr_ref":"AUTH"}'',''auth alt_depozit'')',current_setting('test.e2_b')),
+ 'E3b: bucata nu există sau nu ai acces');
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_camp(%s,%s,''{"perete_mm":9}'',''auth alt_depozit'')',current_setting('test.e2_b'),current_setting('test.e2_v')));
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO e2_alt_depozit;
+
+-- Design §1: viewer-ul cu atribuire e refuzat pe toate RPC-urile de SCRIERE; fn_izo_cor_verifica e doar citire și e
+-- permisă oricui citește proiectul (fn_izo_citire), deci aici TREBUIE să treacă.
+SAVEPOINT e2_viewer_atribuit;
+UPDATE public.user_module_access SET access_level='viewer'
+ WHERE profile_id='00000000-0000-0000-0000-0000000000f0' AND module='magazie';
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-0000000000f0','manager_aprobator',NULL,'test','viewer atribuit E2');
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-0000000000f0","role":"authenticated"}',true);
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_propune(''carantina_intrare'',3,%s,''{"ncr_ref":"AUTH"}'',''auth viewer'')',current_setting('test.e2_b')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_retrage(%s,1,''auth viewer'')',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_respinge(%s,1,''auth viewer'')',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e2_c')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_camp(%s,%s,''{"perete_mm":9}'',''auth viewer'')',current_setting('test.e2_b'),current_setting('test.e2_v')));
+SELECT teste.e2_refuz(format('SELECT public.fn_izo_cor_pv(%s,%s,''PV-AUTH-V'',''2026-10-22'',''auth viewer'')',current_setting('test.e2_d'),current_setting('test.e2_dv')));
+DO $e2_v$ BEGIN
+  IF (public.fn_izo_cor_verifica(current_setting('test.e2_c')::bigint,NULL,NULL,NULL,NULL)) IS NULL THEN
+    RAISE EXCEPTION 'E2 viewer: verifica trebuia să treacă (doar citire, design §1)'; END IF;
+END $e2_v$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO e2_viewer_atribuit;
+
+DO $auth_end$ BEGIN
+  IF (SELECT stare FROM public.izo_corectii WHERE id=current_setting('test.e2_c')::bigint)<>'propusa'
+    OR (SELECT server_ver FROM public.magazie_bucati WHERE id=current_setting('test.e2_b')::bigint)
+       IS DISTINCT FROM current_setting('test.e2_v')::bigint THEN
+    RAISE EXCEPTION 'E2 auth: efecte dupa refuz';
+  END IF;
+  RAISE NOTICE 'TESTE E3b-E2-AUTH: TOATE OK';
+END $auth_end$;
+ROLLBACK;
