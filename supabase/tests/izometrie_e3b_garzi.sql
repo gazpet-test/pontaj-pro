@@ -644,7 +644,7 @@ SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-00000000
 
 DO $free$ DECLARE v_r jsonb; BEGIN
  v_r:=teste.e3_rpc(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e3_c')));
- IF (SELECT serie FROM public.magazie_bucati WHERE id=current_setting('test.e3_b')::bigint)<>'E3-2' OR v_r->>'stare_dupa' IS NULL THEN
+ IF (SELECT serie FROM public.magazie_bucati WHERE id=current_setting('test.e3_b')::bigint)<>'E3-2' OR v_r->>'eveniment_id' IS NULL THEN
    RAISE EXCEPTION 'E3 seria anulata nu a fost eliberata'; END IF;
 END $free$;
 RESET ROLE;

@@ -13,7 +13,8 @@ pas0_replici() {
     cur="$(q "SELECT md5(prosrc || '|' || coalesce(prosqlbody::text, '')) || ' ' || pg_get_userbyid(proowner) || ' ' || prosecdef::text || ' ' || coalesce(proconfig::text, '-')
               FROM pg_proc WHERE oid = to_regprocedure('$fn')")"
     if [ -z "$cur" ]; then
-      echo "     replica $fn: ABSENTĂ pe țintă (obiectul de platformă lipsește — nimic de amprentat, nu se creează)"; n_abs=$((n_abs + 1)); continue
+      # review Copilot #850 delta P1: o funcție din manifest (existentă pe prod) care lipsește pe țintă = catalog ≠ prod → fatal
+      esec "0b replica $fn: ABSENTĂ pe țintă, dar există pe prod (manifest) — catalogul branch-ului nu corespunde prod; proba se oprește"
     fi
     if [ "$cur" = "$md5p $ownp $secp $cfgp" ]; then
       echo "     replica $fn: deja exactă (md5_corp $md5p, owner $ownp)"; n_ok=$((n_ok + 1)); continue

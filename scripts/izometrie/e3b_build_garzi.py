@@ -328,7 +328,7 @@ SELECT set_config('izo.registru_tx','',true);
 """ + api + jwt('121') + r"""
 DO $free$ DECLARE v_r jsonb; BEGIN
  v_r:=teste.e3_rpc(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e3_c')));
- IF (SELECT serie FROM public.magazie_bucati WHERE id=current_setting('test.e3_b')::bigint)<>'E3-2' OR v_r->>'stare_dupa' IS NULL THEN
+ IF (SELECT serie FROM public.magazie_bucati WHERE id=current_setting('test.e3_b')::bigint)<>'E3-2' OR v_r->>'eveniment_id' IS NULL THEN
    RAISE EXCEPTION 'E3 seria anulata nu a fost eliberata'; END IF;
 END $free$;
 """ + reset + r"""

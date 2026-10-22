@@ -255,7 +255,12 @@
       IF v_cor.decis_de IS DISTINCT FROM v_uid THEN
         RAISE EXCEPTION 'E3b: retry permis numai decidentului' USING ERRCODE='42501'; END IF;
       RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_cor.eveniment_id,'bucata_id',v_cor.bucata_id,
-        'stare_dupa',CASE WHEN v_cor.tip='gasit_nou' THEN 'carantina' WHEN v_cor.tip='camp' THEN (SELECT b.stare FROM public.magazie_bucati b WHERE b.id=v_cor.bucata_id) ELSE v_cor.dupa->>'stare' END,'versiune',v_cor.versiune,'idempotent',true); END IF;
+        -- r: răspunsul idempotent vine DOAR din date imutabile (mișcarea evenimentului aplicat), nu din starea live a bucății
+        -- (review Copilot #850 delta P1: altfel răspunsul se schimbă în timp și scapă starea unui proiect necitibil)
+        'stare_dupa',CASE WHEN v_cor.tip='gasit_nou' THEN 'carantina' WHEN v_cor.tip='camp' THEN NULL ELSE coalesce(
+          (SELECT coalesce(mis.stare_dupa,mis.stare_inainte) FROM public.magazie_bucati_miscari mis
+            WHERE mis.eveniment_id=v_cor.eveniment_id AND mis.bucata_id=v_cor.bucata_id ORDER BY mis.id LIMIT 1),
+          v_cor.dupa->>'stare') END,'versiune',v_cor.versiune,'idempotent',true); END IF;
     IF NOT public.fn_izo_cor_autorizare_lock(v_cor.proiect_id,'responsabil',NULL) THEN
       RAISE EXCEPTION 'E3b: acces refuzat; patru ochi obligatoriu' USING ERRCODE='42501'; END IF;
     IF v_cor.stare<>'propusa' OR p_versiune IS DISTINCT FROM v_cor.versiune THEN
@@ -314,7 +319,8 @@
     UPDATE public.izo_corectii SET stare='aplicata',versiune=versiune+1,decis_de=v_uid,decis_rol=session_user,decis_la=now(),
       eveniment_id=v_ev,bucata_id=v_b.id WHERE id=v_cor.id RETURNING * INTO v_cor;
     -- contextul rămâne până la sfârșitul tranzacției (legat de txid, ca la E3); fără scriere de GUC în intrarea expusă (gate 0e)
-    RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'bucata_id',v_b.id,'stare_dupa',v_after.stare,
+    -- o corecție de câmp nu schimbă starea: stare_dupa NULL (la fel la retry, unde nu există o stare imutabilă de întors)
+    RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'bucata_id',v_b.id,'stare_dupa',CASE WHEN v_cor.tip='camp' THEN NULL ELSE v_after.stare END,
       'versiune',v_cor.versiune,'idempotent',false);
   EXCEPTION WHEN unique_violation THEN
     GET STACKED DIAGNOSTICS v_cn = CONSTRAINT_NAME;

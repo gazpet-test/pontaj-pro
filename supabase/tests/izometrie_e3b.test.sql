@@ -556,6 +556,7 @@ DECLARE v_r jsonb; v_b public.magazie_bucati;
 BEGIN
   PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată (PostgREST: un RPC = o tranzacție)
   v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  PERFORM set_config('test.c1_camp_stare',coalesce(v_r->>'stare_dupa','<null>'),true);
   SELECT * INTO v_b FROM public.magazie_bucati WHERE id=current_setting('test.c1_bucata')::bigint;
   IF v_b.serie<>'C1-SERIE-NOUA' OR v_b.lungime_mm<>11900 OR v_b.lungime_m<>11.9 OR v_b.lungime_originala_m<>11.9
     OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_miscari WHERE eveniment_id=(v_r->>'eveniment_id')::bigint AND rol='corectat'
@@ -564,6 +565,28 @@ BEGIN
   v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
   IF v_r->>'idempotent'<>'true' THEN RAISE EXCEPTION 'C1 camp retry'; END IF;
 END $camp$;
+-- review Copilot #850 delta P1: după aplicare, starea live a bucății se schimbă (aici direct, ca scriitor al registrului);
+-- retry-ul idempotent trebuie să întoarcă tot starea din momentul aplicării, nu pe cea live
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SET LOCAL ROLE izo_registru_writer;
+SELECT set_config('izo.registru_tx',txid_current()::text,true);
+UPDATE public.magazie_bucati SET stare=CASE WHEN stare='carantina' THEN 'pierduta' ELSE 'carantina' END,
+  server_ver=nextval('public.izo_server_ver_seq') WHERE id=current_setting('test.c1_bucata')::bigint;
+RESET ROLE;
+SELECT set_config('izo.registru_tx','',true);
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $camp_imutabil$
+DECLARE v_r jsonb;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);  -- tranzacție nouă simulată
+  v_r:=public.fn_izo_cor_aproba(current_setting('test.c1_cor')::bigint,1);
+  IF v_r->>'idempotent'<>'true' OR coalesce(v_r->>'stare_dupa','<null>') IS DISTINCT FROM current_setting('test.c1_camp_stare') OR current_setting('test.c1_camp_stare')<>'<null>' THEN
+    RAISE EXCEPTION 'C1 retry camp întoarce starea live (%), nu pe cea de la aplicare (%)',v_r->>'stare_dupa',current_setting('test.c1_camp_stare');
+  END IF;
+END $camp_imutabil$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 ROLLBACK;

@@ -100,3 +100,8 @@ Diferente design / cod gasite static (nu bug-uri demonstrate prin executie; nici
 - **Regenerat:** migrarea E3b, rollback-ul, regresia, suitele garzi/rest numai prin generatoare. Rollback-ul si regresia au ramas identice cu baza; migrarile LIVE nu au fost editate.
 - **Executat:** `gen_e3b.py`; `test_gen_e3b.py` **19/19 PASS**; `e3b_build_garzi.py`; `e3b_build_rest.py`; `test_e3b_garzi_static.py` **5/5 PASS**; `test_e3b_rest_static.py` **6/6 PASS**; `bash -n` pe harness si curse **PASS**. Testele statice nu valideaza semantica SQL/PLpgSQL sau concurenta reala.
 - **Nefacut:** executia SQL, curselor si harness-ului pe PG16/PostgREST, conform restrictiei explicite „no database”. Niciun PASS runtime revendicat. Fara Git, retea, credențiale sau deploy; scrieri numai in worktree.
+
+## Notă de integrare (Claude, după review-ul Copilot pe delta)
+- F1 / P2-3: `furnizor_canon` / `nr_document_canon` RĂMÂN excluse din imutabilitatea PV (coloane GENERATED ALWAYS STORED, NULL în NEW la BEFORE, nescriibile direct); testul verifică sursele `furnizor` / `nr_document`. Copilot a închis punctul.
+- P1 delta (retry idempotent cu stare live): răspunsul de retry vine din mișcarea imutabilă a evenimentului; pentru `camp`, `stare_dupa` = NULL atât la aplicare, cât și la retry. Test: schimbare de stare după aplicare → retry identic.
+- P1 delta (probă): o replică din manifest absentă pe branch e fatală în pasul 0b.
