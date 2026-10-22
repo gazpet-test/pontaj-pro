@@ -87,14 +87,18 @@ function reconciliazaAvizE3(p: ReturnType<typeof normalizeazaE3>, refuza: () => 
   const surse: [unknown, string][] = [[t.total_metri, 'lungime_doc'], [a.total_m, 'lungime_doc'], [t.total_kg, 'greutate_kg'], [a.total_kg, 'greutate_kg']]
   const prezente = surse.filter(([v]) => v !== null && v !== undefined)
   if (!prezente.length) refuza()
+  let reconciliate = 0
   for (const [v, camp] of prezente) {
     const tip = Number(v)
     if (!Number.isFinite(tip) || tip <= 0) refuza()
     const vals = p.randuri.map(r => (r as Record<string, unknown>)[camp])
-    if (vals.some(x => x === null || x === undefined)) continue   // lipsă justificată: verifică omul
+    if (vals.some(x => x === null || x === undefined)) continue   // totalul ăsta nu poate dovedi cardinalitatea
     const suma = vals.reduce((s: number, x) => s + Number(x), 0)
     if (Math.abs(suma - tip) > 0.010000001) refuza()
+    reconciliate++
   }
+  // Fail-closed (Copilot B2 r2): cel puțin un total tipărit trebuie reconciliat COMPLET cu toate rândurile.
+  if (!reconciliate) refuza()
 }
 export function promptE3(sablon: SablonE3): string {
   return `Extragi date din avize românești de țeavă de oțel sudată/izolată și liste de ambalare curbe pentru conducte de gaze.

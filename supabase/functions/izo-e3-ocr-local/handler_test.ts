@@ -339,8 +339,9 @@ Deno.test('fixture-uri brute B3 reale: schema → normalizare → prefill → ra
   }
 })
 Deno.test('aviz: fără niciun total tipărit sau cu total care nu bate -> structură incertă (Copilot B2 r1)', async () => {
-  for (const t of [{ total_metri: null, total_kg: null }, { total_metri: '99.99', total_kg: null }]) {
-    const f = fixture(), o = brut(); o.totaluri_tiparite = t as typeof o.totaluri_tiparite
+  for (const t of [{ total_metri: null, total_kg: null }, { total_metri: '99.99', total_kg: null }, { total_metri: null, total_kg: '20000', nul: 'greutate_kg' }]) {
+    const f = fixture(), o = brut(); o.totaluri_tiparite = { total_metri: t.total_metri, total_kg: t.total_kg } as typeof o.totaluri_tiparite
+    if ((t as { nul?: string }).nul) (o.randuri[0] as Record<string, unknown>).greutate_kg = null
     assert.equal((await f.call(rezultat(o), true)).status, 200)
     const call = f.calls.find(c => c.fn === 'fn_ocr_local_rezultat')!
     assert.equal(call.args.p_rezultat, null)            // nicio propunere locală acceptată
