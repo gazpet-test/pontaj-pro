@@ -1,0 +1,25 @@
+{
+  "aviz_teava": {
+    "nr_crt": ["NR CRT"], "serie": ["NR TEAVA"], "sarja": ["NR SARJA"],
+    "specificatie": ["SPECIFICATIA", "SPECIFICATIE"], "lot": ["NR LOT"],
+    "lungime_doc": ["CANTITATE LIVRATA M", "CANTITATE M"], "greutate_kg": ["GREUTATE KG"]
+  },
+  "lista_curbe": {
+    "serie": ["BEND NUMBER"], "cod": ["CODE"], "sarja": ["PIPE HEAT NUMBER"],
+    "item": ["ITEM"], "diametru_mm": ["SIZE"], "perete_mm": ["WALL THICKNESS"],
+    "specificatie": ["DESCRIPTION"], "unghi_doc": ["DEGREE"], "standard": ["SIZE MATERIAL STD"],
+    "cantitate": ["QUANTITY PCS", "QUANTITY"], "pachet_nr": ["PACKING NO"],
+    "dimensiuni_cm": ["DIMENSIONS CM WXLXH", "DIMENSIONS CM"], "net_kg": ["NET KG"], "brut_kg": ["GROSS KG"]
+  },
+  "antet": {
+    "furnizor": ["FURNIZOR", "PRODUCATOR FURNIZOR"], "furnizor_cif": ["CIF CUI"],
+    "nr_document": ["NR"], "data_document": ["DATA ZIUA LUNA ANUL", "DATA"],
+    "cumparator": ["CUMPARATOR", "CUMPATOR"], "transport_nr": ["TRANSPORT"],
+    "nume_proiect": ["PROJECT NAME"], "lot": ["LOT"], "loc_livrare": ["DELIVERY LOCATION"],
+    "data_incarcare": ["DATA INCARCARE"], "data_descarcare": ["DATA DESCARCARE"], "nr_camion": ["NUMAR CAMION"],
+    "factura": ["FACTURA NU"], "importator": ["IMPORTATOR CLIENT"], "destinatar": ["DESTINATAR CLIENT"],
+    "referinta_client": ["REFERINTA CLIENT"], "referinta_furnizor": ["REFERINTA GURGENLER"],
+    "placa_camion_container": ["PLACA CAMION NR CONTAINER NR"],
+    "total_net_kg": ["GREUTATE NETA TOTALA KG"], "total_brut_kg": ["GREUTATEA BRUTA TOTALA KG"]
+  }
+}

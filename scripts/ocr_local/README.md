@@ -279,3 +279,127 @@ a_098 din benchmark, sărit dacă lipsește).
 - `m³` vs `m3`, `Ø` vs `∅` ajung la arbitru (nu normalizăm nimic pe UM / cantități) — ieftin, dar zgomot.
 - Cusătura benzilor e euristică (suprapunere de tokeni); lipsa avertismentului nu dovedește completitudinea.
 - Clasificatorul de pixeli dă candidați; un tabel dens poate ieși `grid_form` (exclus) — se vede în `plan.json` → `summary.routes`.
+# E9 / E3 — worker separat (B3, design r3)
+
+Codul E3 este în `e3_*.py`; nu modifică fluxul Ofertare sau `protocol.json`.
+Intrarea din CLI delegă numai subcomanda nouă `e3`. Serviciul folosește exclusiv
+edge-ul `izo-e3-ocr-local` și contractele B2; nu accesează SQL sau tabelele ERP.
+Nu există scripturi noi PowerShell / CMD / shell.
+
+Cu `PYTHONPATH` setat la directorul absolut `scripts`, intrările sunt:
+
+```text
+python -B -m ocr_local e3 serveste --config C:/ProgramData/Gazpet/e3_ocr/config.json
+python -B -m ocr_local e3 stare
+python -B -m ocr_local e3 opreste
+```
+
+Alternativ: `python -B -m ocr_local.e3_serviciu ...`. `--root` permite un director
+local diferit pentru stare / work; toate cele trei comenzi trebuie să primească
+același root. `opreste` solicită oprirea, iar `stare` citește ultimul heartbeat local
+(verificați și ora lui, nu este o interogare a procesului). Task Scheduler trebuie
+să aibă „Do not start a new instance”, restart la cădere și fără limită de durată.
+Action = calea absolută a `python.exe` din mediul Windows cu dependențele OCR;
+Arguments = `-B -m ocr_local e3 serveste --config ...`; Start in = directorul
+`scripts`. Se rulează sub contul care are acces la distribuția WSL și la GPU.
+Nu se pune secretul în configurație, variabilele task-ului sau argumente.
+
+Secretul este citit numai din
+`C:/Users/Gazpet-Ai/.secrete/izo_ocr_local_secret.txt`, 64 hex, antet
+`x-izo-ocr-local-secret`. Nici `OCR_LOCAL_SECRET`, nici variabilele de mediu nu
+sunt fallback. Descărcarea Storage nu primește acest antet, nu urmează redirecturi
+și este limitată la bucket-ul E3 de pe aceeași origine. Excepțiile transportului
+nu includ URL-ul semnat, corpul OCR sau secretul. Jurnalul reține numai id, cod,
+stare și durate; tokenul exclusiv nu este persistat local.
+
+Dependențe: `e3_requirements.txt` fixează inclusiv OpenCV headless. Pe Windows,
+`tzdata` este necesar pentru `ZoneInfo('Europe/Bucharest')`; lipsa lui oprește
+serviciul înainte de accesarea GPU. Interpretoarele WSL pentru vLLM rămân cele din
+laborator. Modelul se verifică folosind numele, rădăcina și SHA-ul din protocol.
+
+Configurația locală, fără secrete, are forma de mai jos. Fracțiile **sunt doar
+exemplu de configurație, nu măsurători sau o recomandare validată**:
+
+```json
+{
+  "distributie": "Ubuntu",
+  "python_control": "/usr/bin/python3",
+  "vram_baza_mb": 500,
+  "modele": {
+    "lighton": {"python": "/cale/env_lighton/bin/python", "gpu_memory_utilization": 0.30},
+    "mineru": {"python": "/cale/env_mineru/bin/python", "gpu_memory_utilization": 0.40}
+  }
+}
+```
+
+Operatorul măsoară baza VRAM și memoria simultană înainte de pornire; serviciul
+refuză să folosească implicit cele două fracții 0.85 ale laboratorului. Suma
+fracțiilor din config trebuie să fie ≤ 0.85. Această livrare nu dovedește că ambele
+modele încap sau ating ținta de 30 s. Dacă nu încap, varianta MinerU pornit la
+cerere necesită măsurare și ajustare înainte de B4; nu este selectată prin ghicire.
+
+Heartbeat-ul rulează separat, la 15 s, inclusiv în timpul hash-urilor / pornirii.
+Preluarea se încearcă la 1 s numai în `disponibil`. Reconcilierea este la pornire,
+la 60 s și la schimbarea ferestrei 06–22, Europe/Bucharest. `servicii.json`
+conține PID WSL, ora pornirii și SHA; adoptarea cere și `/health` / `/v1/models`.
+Un lock E3 mort sau anterior boot-ului poate fi reluat; un lock viu sau al
+laboratorului nu se modifică (reluare după 5 minute). Lacătul OS `instanta.lock`
+exclude două servicii E3 simultane. La 22:00 / restart la 22:05 se opresc modelele,
+se verifică absența proceselor și VRAM < bază + 1024 MB, apoi se eliberează GPU.
+Un refuz / control WSL neconfirmat păstrează lacătul și starea `eroare`.
+
+Ambele cititoare primesc cadrul întreg, în paralel. Adaptorul apelează
+`read.run_reader(..., lock=False)` în procese separate, cu garda v5 și termen
+absolut; terminarea procesului oprește și firul intern MinerU. La gardă / timeout,
+modelele sunt invalidate pentru reconciliere înaintea unei alte preluări.
+Rotația este în sens orar; după găsirea antetului de LightOn, MinerU recitește
+aceeași imagine. Nu se păstrează sau refolosește o citire incompletă.
+
+PDF-ul este clasificat cu PyMuPDF într-un proces cu timeout 3 s: `mono`, `multi`,
+`invalid`, `neverificabil`. Criptarea inclusiv cu parolă goală, repararea structurii,
+trunchierea și lipsa antetului sunt refuzate. Numărul de pagini vine din bibliotecă.
+`multi` devine `multipagina`; `invalid` devine `pdf_invalid`. Pentru
+`neverificabil`, workerul trimite `intern`, deoarece lista B2 de erori `rezultat`
+nu include `verificare_indisponibila` (acel cod există numai la `cere`).
+Randarea este la 150 dpi, plafon 25 MP. La perspectivă nesigură se păstrează
+originalul. Corecția cere dovada de luminanță / gradient a foii și transformă
+toate colțurile cadrului, cu plafon 25 MP; nu decupează tabelul.
+
+Workerul validează ambii cititori înainte de comparare, cu regulile R3-2. Avizul
+are lungime în metri și `cantitate=null`; o coloană BUC / PCS / QTY îl exclude.
+La curbe, cantitatea trebuie să fie exact 1, iar codul începe cu seria. Originea
+celulelor decide propagarea pachetului și greutatea numai pe primul rând. Un
+pachet repetat cu origini distincte este ambiguu și se refuză. Un singur rând
+lipsă, duplicat sau structural diferit refuză documentul complet. Numerele din
+payload rămân text, inclusiv „1,343” și „12.50”; conversia Python este numai
+pentru comparație. După arbitraj se revalidează schema brută și structura.
+
+Arbitrajul nu se reîncearcă și pornește numai strict înainte de termen_local −
+40 s. Răspunsul trebuie să acopere exact celulele cerute. Orice răspuns invalid,
+incomplet, refuzat sau pierdut lasă câmpurile nestructurale `null`, cu avertisment.
+Totalurile avizului se arbitrează prin `rand=0`, `total_m` / `total_kg`, singura
+adresare permisă de B2, apoi se sincronizează cu `totaluri_tiparite`.
+
+Work-ul se șterge în `finally`, inclusiv dacă edge-ul refuză tokenul. La restart
+se șterg directoarele UUID rămase (nu se reia tokenul); orar, cele mai vechi de
+1 h, exceptând cererea activă. Nu se urmează symlink-uri / junction-uri.
+Expirarea și refuzul autoritativ al tokenului vechi rămân responsabilitatea B1/B2.
+
+Teste complet offline, din rădăcina repo-ului, cu `PYTHONPATH=scripts`:
+
+```text
+python -B -m pytest scripts/ocr_local/tests/e3 -q -p no:cacheprovider
+python -B -m unittest discover -s scripts/ocr_local/tests/e3 -p "test_e3_*.py" -v
+```
+
+Suita folosește `unittest.TestCase`, deci este descoperită și de pytest; temporarele
+sunt sub `.e3-test-work` din worktree. Apelurile modelelor și edge-ului sunt fake.
+Node 24 execută funcțiile reale TS și prefill-ul JS pentru paritate și verifică
+kg, mm și conversia 12.50 m → 12500 mm. Exporturile reale E9 sunt păstrate ca
+fixture-uri; tabelul așteptat este transcris explicit în `asteptat_tabele.json`,
+iar cele două payload-uri brute sunt salvate separat. Adjudecarea umană pe poze
+rămâne acceptarea, nu un rezultat pe care testul îl poate certifica singur.
+Testele OpenCV / fus orar se omit explicit dacă dependențele lipsesc.
+
+---
+
