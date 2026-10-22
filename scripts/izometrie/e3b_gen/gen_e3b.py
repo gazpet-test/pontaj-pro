@@ -1,4 +1,4 @@
-# Generator E3b, piesele A+B+C1+C2. Ieșirile supabase/ nu se editează manual.
+# Generator E3b, piesele A+B+C1+C2+D1. Ieșirile supabase/ nu se editează manual.
 # Fără importarea gen_e3.py: importul lui ar rescrie ieșirile LIVE.
 import ast
 import hashlib
@@ -153,14 +153,24 @@ FN_C2 = {
     'fn_izo_cor_camp(bigint, bigint, jsonb, text)': 'izo_corectie_writer',
     'fn_izo_cor_pv(bigint, bigint, text, date, text)': 'izo_corectie_writer',
 }
-FN_OPERATII = FN_C1 | FN_C2
+FN_D1 = {'fn_izo_cor_storno_import(bigint, text, bigint[], text, uuid)': 'izo_corectie_writer'}
+FN_B.update({
+    'fn_izo_lant_blocant(bigint[], bigint[])': ['izo_corectie_writer'],
+    'fn_izo_doc_instantaneu(bigint)': ['izo_doc_editor'],
+    'fn_izo_doc_diff(jsonb, jsonb)': ['izo_doc_editor'],
+    'fn_izo_doc_ist_garda()': [],
+})
+FN_OPERATII = FN_C1 | FN_C2 | FN_D1
 for fn in FN_OPERATII:
-    executa(fn, ['authenticated'])
+    executa(fn, ['postgres'] if fn in FN_D1 else ['authenticated'])
 for fn, roluri in FN_B.items():
     executa(fn, roluri)
 for tabel in ['izo_corectii', 'izo_corectii_bucati']:
     for trigger in ['trg_izo_cor_garda', 'trg_izo_cor_truncate']:
         IMPL_E3B.append('trigger|%s on public.%s|public.fn_izo_cor_garda()' % (trigger, tabel))
+
+for trigger in ['trg_izo_doc_ist_garda', 'trg_izo_doc_ist_truncate']:
+    IMPL_E3B.append('trigger|%s on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()' % trigger)
 
 # Blocurile LIVE exacte + md5(prosrc). B înlocuiește cele trei gărzi și poarta.
 # Celelalte corpuri E3 sunt doar verificate; rescrierile de operații rămân pentru D.
@@ -277,7 +287,7 @@ for rol in ROLURI:
     checks.append("    IF EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind = 'S' AND has_sequence_privilege(%s, c.oid, 'USAGE') IS DISTINCT FROM (c.oid = ANY (%s::regclass[]))) THEN v := array_append(v, %s); END IF;" %
                   (q(rol), arr(['public.' + s for s in SECV] if rol == 'izo_corectie_writer' else []), q('USAGE secvențe ' + rol)))
 for fn, rs in FUNCTII.items():
-    for rol in (['anon', 'authenticated', 'service_role', 'izo_registru_writer', 'izo_receptie_writer'] + ROLURI if fn[7:] in FN_B or fn[7:] in FN_OPERATII else ROLURI):
+    for rol in (['anon', 'authenticated', 'service_role', 'izo_registru_writer', 'izo_receptie_writer', 'izo_doc_editor'] + ROLURI if fn[7:] in FN_B or fn[7:] in FN_OPERATII else ROLURI):
         checks.append("    IF has_function_privilege(%s, %s, 'EXECUTE') IS DISTINCT FROM %s THEN v := array_append(v, %s); END IF;" %
                       (q(rol), q(fn), 'true' if rol in rs or (fn[7:] in FN_OPERATII and rol == FN_OPERATII[fn[7:]]) else 'false', q('EXECUTE ' + rol + ' ' + fn)))
 
@@ -285,7 +295,7 @@ for signature in FN_B:
     name = signature.split('(')[0]
     owner = 'izo_corectie_writer' if name == 'fn_izo_cor_marcheaza' else 'postgres'
     definer = name in {'fn_izo_cor_autorizare_lock', 'fn_izo_cor_cerut_de_valid', 'fn_izo_cor_bucata_lock',
-                      'fn_izo_cor_doc_lock', 'fn_izo_cor_deschise'}
+                      'fn_izo_cor_doc_lock', 'fn_izo_cor_deschise', 'fn_izo_lant_blocant'}
     checks.append("    IF (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname=%s) <> 1"
                   " OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid=%s::regprocedure AND proowner=%s::regrole"
                   " AND prosecdef=%s AND proconfig=ARRAY['search_path=public, pg_temp'])"
@@ -304,10 +314,11 @@ for signature, owner in FN_OPERATII.items():
         '  REVOKE CREATE ON SCHEMA public FROM %s;' % owner,
         '  SET LOCAL ROLE %s;' % owner,
         '  REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon, authenticated, service_role;' % signature,
-        '  GRANT EXECUTE ON FUNCTION public.%s TO authenticated;' % signature,
+        '  GRANT EXECUTE ON FUNCTION public.%s TO %s;' % (signature, 'postgres' if signature in FN_D1 else 'authenticated'),
         '  RESET ROLE;',
     ])
 operatii = (SP / 'e3b_operatii_tpl.sql').read_text(encoding='utf-8-sig')
+operatii += '\n' + (SP / 'e3b_d1_tpl.sql').read_text(encoding='utf-8')
 for key, value in {
     'COLLISION_PRED': "AND b.provenienta='beneficiar' AND b.tip_cod=v_after.tip_cod AND b.stare<>'anulata'\n          AND b.serie_canon=public.fn_izo_canon_serie(v_after.serie)\n          AND ((b.tip_cod='teava' AND b.dezambiguare IS NOT DISTINCT FROM v_after.dezambiguare\n            AND (b.parinte_id IS NULL OR (b.stare<>'taiata' AND b.sarja IS NOT DISTINCT FROM v_after.sarja\n              AND b.lungime_cm IS NOT DISTINCT FROM round(v_after.lungime_mm/10.0)::integer)))\n          OR (b.tip_cod='curba' AND b.sarja IS NOT DISTINCT FROM v_after.sarja AND b.unghi_curba IS NOT DISTINCT FROM v_after.unghi_curba\n            AND b.cod_bucata IS NOT DISTINCT FROM v_after.cod_bucata))",
     # server_ver NOT NULL pe evenimente / mișcări: explicit, ca în E3 (20261103b)
@@ -318,6 +329,27 @@ for key, value in {
 }.items():
     operatii = operatii.replace('@@'+key+'@@', value)
 operatii += '\n' + '\n'.join(OWNERI)
+
+# D1: canonical object extracted verbatim from the LIVE hash, never reformat it.
+hash_bloc = bloc_functie(e3, 'fn_izo_doc_hash')
+hash_src = prosrc(hash_bloc)
+obj = hash_src.split("convert_to(", 1)[1].split(")::text, 'UTF8'", 1)[0] + ')'
+instantaneu = "  CREATE FUNCTION public.fn_izo_doc_instantaneu(p_doc bigint) RETURNS jsonb\n    LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$\n    SELECT " + obj + "\n    FROM public.izo_documente_intrare d WHERE d.id = p_doc\n  $f$;"
+assert obj + "::text, 'UTF8'" in hash_src
+canonical_check = "  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_doc_hash(bigint)'::regprocedure) IS DISTINCT FROM " + q(md5(hash_src)) + " OR position(" + q(obj) + " IN (SELECT prosrc FROM pg_proc WHERE oid='public.fn_izo_doc_instantaneu(bigint)'::regprocedure))=0 THEN RAISE EXCEPTION 'E3b: hash LIVE / instantaneu canonic diferit'; END IF;"
+salveaza_veche = BLOCURI_VECHI['fn_izo_doc_salveaza']
+istoric_insert = """    INSERT INTO public.izo_documente_istoric(document_id,versiune,salvat_de,salvat_rol,continut,hash,diff,baza)
+    SELECT d.id,d.versiune,v_uid,session_user,public.fn_izo_doc_instantaneu(d.id),public.fn_izo_doc_hash(d.id),
+      public.fn_izo_doc_diff((SELECT ist.continut FROM public.izo_documente_istoric ist WHERE ist.document_id=d.id ORDER BY ist.versiune DESC LIMIT 1),public.fn_izo_doc_instantaneu(d.id)),
+      NOT EXISTS(SELECT 1 FROM public.izo_documente_istoric ist WHERE ist.document_id=d.id);
+"""
+salveaza_noua = salveaza_veche.replace('  CREATE FUNCTION','  CREATE OR REPLACE FUNCTION',1)
+salveaza_noua = salveaza_noua.replace("    RETURN jsonb_build_object('document_id', d.id", istoric_insert + "    RETURN jsonb_build_object('istoric_versiune', d.versiune, 'document_id', d.id",1)
+def ca_editor(bloc):
+    return ('  GRANT CREATE ON SCHEMA public TO izo_doc_editor;\n  SET LOCAL ROLE izo_doc_editor;\n' + bloc +
+            '\n  RESET ROLE;\n  REVOKE CREATE ON SCHEMA public FROM izo_doc_editor;')
+garzi_vechi.append(ca_editor(salveaza_veche.replace('  CREATE FUNCTION','  CREATE OR REPLACE FUNCTION',1)))
+garzi_vechi.append("  IF (SELECT md5(prosrc) FROM pg_proc WHERE proname='fn_izo_doc_salveaza' AND pronamespace='public'::regnamespace) IS DISTINCT FROM " + q(MD5_VECHI['fn_izo_doc_salveaza']) + " THEN RAISE EXCEPTION 'E3b: restaurare salvare diferita'; END IF;")
 
 assert len(set(IMPL_E3B)) == len(IMPL_E3B)
 IMPL_POST = sorted(IMPL_PRE + IMPL_E3B)
@@ -349,7 +381,7 @@ replacements = {
     'REVOKE_FUNCTII': '\n'.join('  REVOKE ALL ON FUNCTION %s FROM %s;' % (fn, ', '.join(rs)) for fn, rs in FUNCTII.items()
                               if rs and fn != 'public.fn_izo_cor_marcheaza(bigint)' and fn[7:] not in FN_OPERATII),
     'GARZI_NOI': '\n'.join(garzi_noi), 'GARZI_VECHI': '\n'.join(garzi_vechi),
-    'NUME_FN_B': arr([fn.split('(')[0] for fn in list(FN_B) + list(FN_OPERATII)]),
+    'NUME_FN_B': arr([fn.split('(')[0] for fn in list(FN_B) + list(FN_OPERATII) + ['fn_izo_doc_salveaza']]),
     'ACL_GARDA': '\n'.join('  REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon, authenticated, service_role;\n%s'
                           % (fn, ("  GRANT CREATE ON SCHEMA public TO izo_corectie_writer;\n"
                                   "  ALTER FUNCTION public.%s OWNER TO izo_corectie_writer;\n"
@@ -359,7 +391,7 @@ replacements = {
     'DROP_GARDA': '\n'.join(('  SET LOCAL ROLE izo_corectie_writer;\n  DROP FUNCTION public.%s;\n  RESET ROLE;' % fn)
                            if fn.startswith('fn_izo_cor_marcheaza(') else '  DROP FUNCTION public.%s;' % fn for fn in reversed(FN_B)),
     'DROP_OPERATII': '\n'.join('  SET LOCAL ROLE %s;\n  DROP FUNCTION public.%s;\n  RESET ROLE;' % (owner, fn) for fn, owner in reversed(list(FN_OPERATII.items()))),
-    'GARDA': '', 'OPERATII': operatii, 'STORNO': '', 'ISTORIC': '',
+    'GARDA': '', 'OPERATII': operatii, 'STORNO': '', 'ISTORIC': instantaneu + '\n' + ca_editor(salveaza_noua) + '\n' + canonical_check,
 }
 
 def genereaza(tpl, destinatie):
@@ -377,4 +409,4 @@ def genereaza(tpl, destinatie):
 if __name__ == '__main__':
     mig = genereaza('e3b_tpl.sql', 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql')
     rev = genereaza('e3b_rev_tpl.sql', 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql')
-    print('ok E3b-A+B+C1+C2', len(mig.splitlines()), len(rev.splitlines()), 'implicit additions', len(IMPL_E3B))
+    print('ok E3b-A+B+C1+C2+D1', len(mig.splitlines()), len(rev.splitlines()), 'implicit additions', len(IMPL_E3B))

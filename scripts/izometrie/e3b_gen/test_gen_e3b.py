@@ -58,7 +58,7 @@ class GeneratorTest(unittest.TestCase):
                 self.assertEqual(added, old_body)
                 self.assertIn(g.MD5_VECHI[n], mig)
                 self.assertIn(g.MD5_VECHI[n], rev)
-            elif n != 'fn_izo_porti_lipsa':
+            elif n not in ('fn_izo_porti_lipsa', 'fn_izo_doc_salveaza'):
                 self.assertIsNone(re.search(r'CREATE (?:OR REPLACE )?FUNCTION public\.' + n + r'\(', mig), n)
 
     def test_contract_lista_si_invocari(self):
@@ -68,7 +68,7 @@ class GeneratorTest(unittest.TestCase):
         self.assertFalse(set(g.L_TEAVA + g.L_CURBA) & set(g.D))
         self.assertEqual(len(g.IMPL_POST), len(set(g.IMPL_POST)))
         self.assertEqual(set(g.IMPL_POST) - set(g.IMPL_PRE), set(g.IMPL_E3B))
-        self.assertEqual(len(g.IMPL_E3B), 11)  # șapte politici A + patru trigger-e B
+        self.assertEqual(len(g.IMPL_E3B), 13)  # șapte politici A + patru trigger-e B
         self.assertNotIn('public.fn_izo_doc_api_verifica()', g.FUNCTII)
         for fn in ['fn_izo_jwt_rol()', 'fn_izo_uid()', 'fn_izo_porti_lipsa()']:
             self.assertEqual(set(g.FUNCTII['public.' + fn]), set(g.ROLURI))
@@ -101,14 +101,13 @@ class GeneratorTest(unittest.TestCase):
         self.assertIn('NEW.inainte := public.fn_izo_cor_inainte(NEW)', body)
         self.assertIn('NEW.decis_de IS NOT DISTINCT FROM OLD.propus_de', body)
         self.assertNotIn('fn_izo_cor_autorizare_lock', body)
-        for name in ('STORNO', 'ISTORIC'):
-            self.assertEqual(g.replacements[name], '')
+        self.assertIn('INSERT INTO public.izo_documente_istoric', g.replacements['ISTORIC'])
 
     def test_c1_frontiera_acl_revenire_si_insert_c(self):
         mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
         rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
         self.assertEqual(len(g.FN_C1), 5)
-        for signature, owner in g.FN_OPERATII.items():
+        for signature, owner in (g.FN_C1 | g.FN_C2).items():
             name = signature.split('(')[0]
             block = g.bloc_functie(mig, name)
             self.assertIn('SECURITY DEFINER SET search_path = public, pg_temp', block)
@@ -134,7 +133,7 @@ class GeneratorTest(unittest.TestCase):
             'fn_izo_cor_camp(bigint, bigint, jsonb, text)': 'izo_corectie_writer',
             'fn_izo_cor_pv(bigint, bigint, text, date, text)': 'izo_corectie_writer',
         })
-        self.assertEqual(g.FN_OPERATII, g.FN_C1 | g.FN_C2)
+        self.assertEqual(g.FN_OPERATII, g.FN_C1 | g.FN_C2 | g.FN_D1)
         stamp = g.prosrc(g.bloc_functie(mig, 'fn_izo_porti_e3b_definitii'))
         for signature, owner in g.FN_C2.items():
             name = signature.split('(')[0]
@@ -174,9 +173,54 @@ class GeneratorTest(unittest.TestCase):
         owner = 'ALTER FUNCTION public.fn_izo_cor_marcheaza(bigint) OWNER TO izo_corectie_writer;'
         self.assertLess(mig.index(revoke), mig.index(owner))
         self.assertLess(mig.index(grant), mig.index(owner))
-        self.assertGreater(mig.index('REVOKE CREATE ON SCHEMA public FROM izo_corectie_writer;'), mig.index(owner))
+        self.assertGreater(mig.index('REVOKE CREATE ON SCHEMA public FROM izo_corectie_writer;', mig.index(owner)), mig.index(owner))
         self.assertIn('SET LOCAL ROLE izo_corectie_writer;\n  DROP FUNCTION public.fn_izo_cor_marcheaza(bigint);\n  RESET ROLE;', rev)
         self.assertNotIn('GRANT EXECUTE ON FUNCTION public.fn_izo_cor_marcheaza(bigint)', mig)
+
+
+class D1Test(unittest.TestCase):
+    def test_salveaza_delta_exact_rollback_si_hash_live(self):
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf8')
+        old = g.prosrc(g.salveaza_veche)
+        new = g.prosrc(g.bloc_functie(mig, 'fn_izo_doc_salveaza'))
+        self.assertEqual(new.replace(g.istoric_insert, '', 1).replace("'istoric_versiune', d.versiune, ", '', 1), old)
+        self.assertEqual(g.prosrc(g.bloc_functie(rev, 'fn_izo_doc_salveaza')), old)
+        self.assertIn(g.MD5_VECHI['fn_izo_doc_salveaza'], mig)
+        self.assertIn(g.MD5_VECHI['fn_izo_doc_salveaza'], rev)
+        self.assertNotRegex(mig, r'CREATE (?:OR REPLACE )?FUNCTION public\.fn_izo_doc_hash\(')
+        canonical = g.prosrc(g.bloc_functie(mig, 'fn_izo_doc_instantaneu')).split('    SELECT ', 1)[1].split('\n    FROM public.izo_documente_intrare d', 1)[0]
+        self.assertIn(canonical + "::text, 'UTF8'", g.hash_src)
+        self.assertIn("'fn_izo_doc_salveaza'", g.prosrc(g.bloc_functie(mig, 'fn_izo_porti_e3b_definitii')))
+
+    def test_d1_fixture_hash_matches_exact_live_expression_and_exposed_frontier(self):
+        sql = (R / 'supabase/tests/izometrie_e3b.test.sql').read_text(encoding='utf8')
+        ref = g.hash_src.replace('    FROM public.izo_documente_intrare d WHERE d.id = p_doc', "    INTO v_hash_e3 FROM public.izo_documente_intrare d WHERE d.id = current_setting('test.d1_doc')::bigint")
+        self.assertIn(ref, sql)
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf8')
+        body = g.prosrc(g.bloc_functie(mig, 'fn_izo_doc_salveaza'))
+        self.assertNotRegex(body.lower(), r'set_config|request\s*\.\s*jwt|session[_\s]+authorization|\b(?:set|reset)\s+(?:local\s+)?role\b|\bexecute\b|\bu&')
+        for text in (mig, (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf8')):
+            self.assertIn('SET LOCAL ROLE izo_doc_editor;\n  CREATE OR REPLACE FUNCTION public.fn_izo_doc_salveaza', text)
+            self.assertIn('RESET ROLE;\n  REVOKE CREATE ON SCHEMA public FROM izo_doc_editor;', text)
+
+    def test_admin_acl_lock_order_guard_and_rollback(self):
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf8')
+        sig = next(iter(g.FN_D1))
+        self.assertEqual(g.FUNCTII['public.'+sig], ['postgres'])
+        self.assertIn('GRANT EXECUTE ON FUNCTION public.'+sig+' TO postgres;', mig)
+        self.assertNotIn('GRANT EXECUTE ON FUNCTION public.'+sig+' TO authenticated;', mig)
+        body = g.prosrc(g.bloc_functie(mig, sig.split('(')[0]))
+        chain = ['fn_izo_cor_adm_verifica', 'fn_izo_cor_cerut_de_valid', 'fn_izo_lock_proiect', 'SELECT imp.*', 'FOR UPDATE', 'fn_izo_lant_blocant', 'INSERT INTO public.izo_corectii(', 'INSERT INTO public.izo_corectii_bucati', 'fn_izo_cor_marcheaza', 'INSERT INTO public.magazie_bucati_evenimente', 'INSERT INTO public.magazie_bucati_miscari', 'UPDATE public.magazie_bucati SET', 'UPDATE public.izo_corectii SET']
+        self.assertEqual([body.index(x) for x in chain], sorted(body.index(x) for x in chain))
+        for trigger in ['trg_izo_doc_ist_garda', 'trg_izo_doc_ist_truncate']:
+            self.assertIn('ENABLE ALWAYS TRIGGER '+trigger, mig)
+            self.assertIn('DROP TRIGGER '+trigger, rev)
+        self.assertIn('DROP FUNCTION public.'+sig, rev)
+        guard = g.prosrc(g.bloc_functie(mig, 'fn_izo_doc_ist_garda'))
+        for check in ['NEW.continut IS DISTINCT FROM', 'NEW.hash IS DISTINCT FROM', 'NEW.diff IS DISTINCT FROM', 'NEW.baza IS DISTINCT FROM']:
+            self.assertIn(check, guard)
 
 
 if __name__ == '__main__':

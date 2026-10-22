@@ -42,6 +42,8 @@ BEGIN
   DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii;
   DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii_bucati;
   DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii_bucati;
+  DROP TRIGGER trg_izo_doc_ist_garda ON public.izo_documente_istoric;
+  DROP TRIGGER trg_izo_doc_ist_truncate ON public.izo_documente_istoric;
 @@DROP_OPERATII@@
 @@DROP_GARDA@@
 @@PORTI_VECHE@@

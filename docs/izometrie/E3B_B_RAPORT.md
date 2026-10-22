@@ -13,3 +13,10 @@
 - Teste SQL adăugate în `supabase/tests/izometrie_e3b.test.sql`, cu fixture E3 prin RPC și responsabil non-owner: refuz gestionar, identitate/listă/derivate/valori, CAS, draft/fără PV, propunere deschisă; succes camp/PV și verificarea auditului/invariantelor. Retry cu versiunea veche → 40001, fără duplicate, conform designului §9.17; retry-ul idempotent C1 rămâne neschimbat. `observatii` este exclus din L (§2.5); pozitivul folosește `perete_mm`.
 - Verificare executată: generator + 7 teste Python PASS, inclusiv repetabilitate, LIVE nemodificat, ACL/owner/ștampile/rollback și frontiera 0e a noilor RPC-uri.
 - Nu am rulat PostgreSQL 16, SQL, PostgREST sau harness-ul: brief-ul interzice accesul la baze de date. Execuția PL/pgSQL și concurența rămân de verificat de Claude. Fără modificări în `src/`, Git, secrete, rețea sau deploy.
+
+## D1
+
+- SQL în `scripts/izometrie/e3b_gen/e3b_d1_tpl.sql`: storno parțial administrativ, eligibilitate declarant, lock-uri §4, lista completă a refuzurilor, audit și `UPDATE RETURNING`; helper de lanț, istoric imutabil și diff inclusiv scan modificat pe aceeași cale. Migrarea `20261106a` și rollback-ul sunt regenerate.
+- Salvarea E3 primește doar INSERT-ul istoricului și `istoric_versiune`; precondiție md5, înlocuire ca owner existent, restaurare exactă. Instantaneul extrage textual obiectul canonic din hash-ul LIVE; postcondiția verifică hash-ul neatins și expresia comună. Ștampile/ACL/lista fixă de trigger-e extinse.
+- Executat: generator + 10 teste Python PASS. Adăugate teste SQL în tranzacție anulată: negative, două bucăți anulate inclusiv după corecție aplicată, două salvări cu diff, CAS, garda istoricului și comparație cu formula LIVE E3 a hash-ului.
+- Nu am rulat SQL/PostgreSQL/PostgREST/harness (restricția „no database”); validarea pe PG16 rămâne la Claude. Storno-ul complet și prologurile E2a rămân D2. Fără modificări în `src/`, migrări LIVE, Git, rețea sau deploy.

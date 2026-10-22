@@ -156,6 +156,9 @@ BEGIN
   REVOKE ALL ON FUNCTION public.fn_izo_cor_bucata_noua(public.izo_corectii) FROM izo_corectie_writer;
   REVOKE ALL ON FUNCTION public.fn_izo_cor_miscare_asteptata(public.izo_corectii, public.magazie_bucati) FROM izo_corectie_writer;
   REVOKE ALL ON FUNCTION public.fn_izo_garda_corectie(text, text, jsonb, jsonb) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_lant_blocant(bigint[], bigint[]) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_doc_instantaneu(bigint) FROM izo_doc_editor;
+  REVOKE ALL ON FUNCTION public.fn_izo_doc_diff(jsonb, jsonb) FROM izo_doc_editor;
   CREATE OR REPLACE FUNCTION public.fn_izo_garda_bucati() RETURNS trigger
     LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   DECLARE
@@ -309,10 +312,147 @@ BEGIN
   END $f$;
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_doc_garda()'::regprocedure) IS DISTINCT FROM '0815d20cd4462b2ce5f3d17123043c3c' THEN
     RAISE EXCEPTION 'E3b: restaurarea exactă fn_izo_doc_garda a eșuat'; END IF;
+  GRANT CREATE ON SCHEMA public TO izo_doc_editor;
+  SET LOCAL ROLE izo_doc_editor;
+  CREATE OR REPLACE FUNCTION public.fn_izo_doc_salveaza(p_doc_id bigint, p_versiune bigint, p_antet jsonb, p_randuri jsonb, p_scanuri jsonb) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_uid uuid; d public.izo_documente_intrare; v_k text; v_x jsonb; v_tp bigint; v_td integer;
+    c_antet constant text[] := ARRAY['furnizor', 'furnizor_cif', 'nr_document', 'data_document', 'cumparator', 'transport_nr', 'nume_proiect', 'lot', 'loc_livrare', 'data_incarcare', 'data_descarcare', 'nr_camion', 'factura', 'importator', 'destinatar', 'referinta_client', 'referinta_furnizor', 'placa_camion_container', 'total_m', 'total_kg', 'total_bucati', 'total_pachete', 'total_net_kg', 'total_brut_kg', 'observatii'];
+    c_creare constant text[] := ARRAY['proiect_id', 'depozit_id', 'sablon', 'inlocuieste_document_id', 'motiv_inlocuire'];
+    c_rand constant text[] := ARRAY['nr_crt', 'serie', 'sarja', 'lot', 'specificatie', 'dimensiune', 'grad_otel', 'standard', 'izolatie', 'diametru_mm', 'perete_mm', 'greutate_kg', 'lungime_doc_mm', 'lungime_masurata_mm', 'cod', 'item', 'unghi_doc', 'unghi_masurat', 'cantitate', 'pachet_nr', 'dimensiuni_cm', 'net_kg', 'brut_kg', 'decizie', 'motiv', 'observatie'];
+    c_scan constant text[] := ARRAY['cale', 'sha256_original', 'sha256_pdf', 'marime', 'mime'];
+  BEGIN
+    v_uid := public.fn_izo_doc_api_verifica();
+    IF jsonb_typeof(p_antet) IS DISTINCT FROM 'object' OR jsonb_typeof(p_randuri) IS DISTINCT FROM 'array'
+       OR (p_scanuri IS NOT NULL AND jsonb_typeof(p_scanuri) IS DISTINCT FROM 'array') THEN
+      RAISE EXCEPTION 'izo E3: p_antet trebuie să fie obiect, p_randuri listă, p_scanuri listă sau null' USING ERRCODE = '22023';
+    END IF;
+    SELECT k INTO v_k FROM jsonb_object_keys(p_antet) k WHERE k <> ALL (c_antet || c_creare) LIMIT 1;
+    IF v_k IS NOT NULL THEN RAISE EXCEPTION 'izo E3: cheie necunoscută în antet: %', v_k USING ERRCODE = '22023'; END IF;
+    FOR v_x IN SELECT x FROM jsonb_array_elements(p_randuri) x LOOP
+      IF jsonb_typeof(v_x) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'izo E3: un rând nu e obiect' USING ERRCODE = '22023'; END IF;
+      SELECT k INTO v_k FROM jsonb_object_keys(v_x) k WHERE k <> ALL (c_rand) LIMIT 1;
+      IF v_k IS NOT NULL THEN RAISE EXCEPTION 'izo E3: cheie necunoscută în rând: %', v_k USING ERRCODE = '22023'; END IF;
+      -- r5f (#825 NO-GO): 1 rând = 1 bucată — confirmarea naște exact una pe rând; cantitatea e goală (= 1) sau 1 (și CHECK pe tabel)
+      IF v_x ->> 'cantitate' IS NOT NULL AND (v_x ->> 'cantitate')::numeric IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'izo E3: rândul %: cantitatea e %; un rând = o bucată (cantitate 1 sau goală) — fiecare bucată pe rândul ei, cu seria ei',
+          v_x ->> 'nr_crt', v_x ->> 'cantitate' USING ERRCODE = '23514';
+      END IF;
+    END LOOP;
+    IF p_scanuri IS NOT NULL THEN
+      FOR v_x IN SELECT x FROM jsonb_array_elements(p_scanuri) x LOOP
+        IF jsonb_typeof(v_x) IS DISTINCT FROM 'object'
+           OR (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(v_x) k) IS DISTINCT FROM (SELECT array_agg(k ORDER BY k) FROM unnest(c_scan) k) THEN
+          RAISE EXCEPTION 'izo E3: un scan din manifest are exact cheile cale, sha256_original, sha256_pdf, marime, mime' USING ERRCODE = '22023';
+        END IF;
+      END LOOP;
+    END IF;
+    IF p_doc_id IS NULL THEN
+      IF p_versiune IS NOT NULL THEN RAISE EXCEPTION 'izo E3: la creare p_versiune e NULL' USING ERRCODE = '22023'; END IF;
+      IF NOT public.fn_izo_doc_autorizare_lock((p_antet ->> 'proiect_id')::bigint, (p_antet ->> 'depozit_id')::integer) THEN
+        RAISE EXCEPTION 'izo E3: nu ești gestionar pe acest proiect și depozit' USING ERRCODE = '42501';
+      END IF;
+      IF coalesce(public.fn_izo_nivel((p_antet ->> 'proiect_id')::bigint), 'off') NOT IN ('stoc', 'montaj') THEN
+        RAISE EXCEPTION 'izo E3: proiectul nu are registrul de țeavă activ' USING ERRCODE = '42501';
+      END IF;
+      IF NOT public.fn_izo_loc_valid((p_antet ->> 'proiect_id')::bigint, (p_antet ->> 'depozit_id')::integer, NULL) THEN
+        RAISE EXCEPTION 'izo E3: depozitul nu e activ sau nu e pe site-ul proiectului' USING ERRCODE = '23514';
+      END IF;
+      -- r5f (#825 NO-GO): ținta înlocuirii se verifică și se autorizează ÎNAINTEA INSERT-ului — altfel FK-ul (23503) / UNIQUE-ul
+      -- (23505) de pe inlocuieste_document_id ar spune dacă un document inaccesibil există sau e deja înlocuit (oracle între
+      -- proiecte). „Nu există” și „există, dar nu e al tău” dau același mesaj; UNIQUE-ul rămâne arbitrul, după autorizare
+      IF p_antet ->> 'inlocuieste_document_id' IS NOT NULL THEN
+        SELECT t.proiect_id, t.depozit_id INTO v_tp, v_td FROM public.izo_documente_intrare t
+         WHERE t.id = (p_antet ->> 'inlocuieste_document_id')::bigint AND t.stare = 'anulat' FOR SHARE;
+        IF NOT FOUND OR NOT public.fn_izo_doc_autorizare_lock(v_tp, v_td) THEN
+          RAISE EXCEPTION 'izo E3: documentul înlocuit nu există, nu e anulat sau nu ai acces la el' USING ERRCODE = '23514';
+        END IF;
+      END IF;
+      INSERT INTO public.izo_documente_intrare (proiect_id, depozit_id, sablon, inlocuieste_document_id, motiv_inlocuire, creat_de, furnizor, furnizor_cif, nr_document, data_document, cumparator, transport_nr, nume_proiect, lot, loc_livrare, data_incarcare, data_descarcare, nr_camion, factura, importator, destinatar, referinta_client, referinta_furnizor, placa_camion_container, total_m, total_kg, total_bucati, total_pachete, total_net_kg, total_brut_kg, observatii)
+      VALUES ((p_antet ->> 'proiect_id')::bigint, (p_antet ->> 'depozit_id')::integer, p_antet ->> 'sablon',
+              (p_antet ->> 'inlocuieste_document_id')::bigint, p_antet ->> 'motiv_inlocuire', v_uid, p_antet ->> 'furnizor', p_antet ->> 'furnizor_cif', p_antet ->> 'nr_document', (p_antet ->> 'data_document')::date, p_antet ->> 'cumparator', p_antet ->> 'transport_nr', p_antet ->> 'nume_proiect', p_antet ->> 'lot', p_antet ->> 'loc_livrare', (p_antet ->> 'data_incarcare')::date, (p_antet ->> 'data_descarcare')::date, p_antet ->> 'nr_camion', p_antet ->> 'factura', p_antet ->> 'importator', p_antet ->> 'destinatar', p_antet ->> 'referinta_client', p_antet ->> 'referinta_furnizor', p_antet ->> 'placa_camion_container', (p_antet ->> 'total_m')::numeric, (p_antet ->> 'total_kg')::numeric, (p_antet ->> 'total_bucati')::integer, (p_antet ->> 'total_pachete')::integer, (p_antet ->> 'total_net_kg')::numeric, (p_antet ->> 'total_brut_kg')::numeric, p_antet ->> 'observatii')
+      RETURNING * INTO d;
+    ELSE
+      SELECT * INTO d FROM public.izo_documente_intrare WHERE id = p_doc_id FOR UPDATE;
+      IF NOT FOUND THEN RAISE EXCEPTION 'izo E3: documentul % nu există', p_doc_id USING ERRCODE = '22023'; END IF;
+      IF NOT public.fn_izo_doc_autorizare_lock(d.proiect_id, d.depozit_id) THEN
+        RAISE EXCEPTION 'izo E3: nu ești gestionar pe proiectul și depozitul documentului' USING ERRCODE = '42501';
+      END IF;
+      IF d.stare <> 'draft' THEN RAISE EXCEPTION 'izo E3: documentul e %; se editează doar ciornele', d.stare USING ERRCODE = '42501'; END IF;
+      IF p_versiune IS DISTINCT FROM d.versiune THEN
+        RAISE EXCEPTION 'izo E3: documentul s-a schimbat între timp (versiunea %, trimisă %) — reîncarcă', d.versiune, p_versiune USING ERRCODE = '40001';
+      END IF;
+      IF (p_antet ? 'proiect_id' AND (p_antet ->> 'proiect_id')::bigint IS DISTINCT FROM d.proiect_id)
+         OR (p_antet ? 'depozit_id' AND (p_antet ->> 'depozit_id')::integer IS DISTINCT FROM d.depozit_id)
+         OR (p_antet ? 'sablon' AND p_antet ->> 'sablon' IS DISTINCT FROM d.sablon)
+         OR (p_antet ? 'inlocuieste_document_id' AND (p_antet ->> 'inlocuieste_document_id')::bigint IS DISTINCT FROM d.inlocuieste_document_id)
+         OR (p_antet ? 'motiv_inlocuire' AND p_antet ->> 'motiv_inlocuire' IS DISTINCT FROM d.motiv_inlocuire) THEN
+        RAISE EXCEPTION 'izo E3: proiectul / depozitul / șablonul / înlocuirea nu se schimbă după creare (document nou)' USING ERRCODE = '22023';
+      END IF;
+      UPDATE public.izo_documente_intrare SET
+        furnizor = p_antet ->> 'furnizor',
+        furnizor_cif = p_antet ->> 'furnizor_cif',
+        nr_document = p_antet ->> 'nr_document',
+        data_document = (p_antet ->> 'data_document')::date,
+        cumparator = p_antet ->> 'cumparator',
+        transport_nr = p_antet ->> 'transport_nr',
+        nume_proiect = p_antet ->> 'nume_proiect',
+        lot = p_antet ->> 'lot',
+        loc_livrare = p_antet ->> 'loc_livrare',
+        data_incarcare = (p_antet ->> 'data_incarcare')::date,
+        data_descarcare = (p_antet ->> 'data_descarcare')::date,
+        nr_camion = p_antet ->> 'nr_camion',
+        factura = p_antet ->> 'factura',
+        importator = p_antet ->> 'importator',
+        destinatar = p_antet ->> 'destinatar',
+        referinta_client = p_antet ->> 'referinta_client',
+        referinta_furnizor = p_antet ->> 'referinta_furnizor',
+        placa_camion_container = p_antet ->> 'placa_camion_container',
+        total_m = (p_antet ->> 'total_m')::numeric,
+        total_kg = (p_antet ->> 'total_kg')::numeric,
+        total_bucati = (p_antet ->> 'total_bucati')::integer,
+        total_pachete = (p_antet ->> 'total_pachete')::integer,
+        total_net_kg = (p_antet ->> 'total_net_kg')::numeric,
+        total_brut_kg = (p_antet ->> 'total_brut_kg')::numeric,
+        observatii = p_antet ->> 'observatii',
+        versiune = versiune + 1, updated_at = now()
+       WHERE id = d.id RETURNING * INTO d;
+    END IF;
+    -- înlocuirea (r5d §13.4 + r5e): ținta există, e anulată (finală), nu e documentul curent, iar utilizatorul e autorizat și pe
+    -- proiectul / depozitul ȚINTEI (gestionar acolo sau owner); revalidată sub lock la fiecare salvare. Mesaj generic: nu
+    -- dezvăluie dacă ținta există pe un proiect inaccesibil
+    IF d.inlocuieste_document_id IS NOT NULL THEN
+      SELECT t.proiect_id, t.depozit_id INTO v_tp, v_td FROM public.izo_documente_intrare t
+       WHERE t.id = d.inlocuieste_document_id AND t.stare = 'anulat' AND t.id <> d.id FOR SHARE;
+      IF NOT FOUND OR NOT public.fn_izo_doc_autorizare_lock(v_tp, v_td) THEN
+        RAISE EXCEPTION 'izo E3: documentul înlocuit nu există, nu e anulat sau nu ai acces la el' USING ERRCODE = '23514';
+      END IF;
+    END IF;
+    DELETE FROM public.izo_documente_intrare_randuri WHERE document_id = d.id;
+    INSERT INTO public.izo_documente_intrare_randuri (document_id, nr_crt, serie, sarja, lot, specificatie, dimensiune, grad_otel, standard, izolatie, diametru_mm, perete_mm, greutate_kg, lungime_doc_mm, lungime_masurata_mm, cod, item, unghi_doc, unghi_masurat, cantitate, pachet_nr, dimensiuni_cm, net_kg, brut_kg, decizie, motiv, observatie)
+    SELECT d.id, (x ->> 'nr_crt')::integer, x ->> 'serie', x ->> 'sarja', x ->> 'lot', x ->> 'specificatie', x ->> 'dimensiune', x ->> 'grad_otel', x ->> 'standard', x ->> 'izolatie', (x ->> 'diametru_mm')::integer, (x ->> 'perete_mm')::numeric, (x ->> 'greutate_kg')::numeric, (x ->> 'lungime_doc_mm')::integer, (x ->> 'lungime_masurata_mm')::integer, x ->> 'cod', x ->> 'item', (x ->> 'unghi_doc')::numeric, (x ->> 'unghi_masurat')::numeric, (x ->> 'cantitate')::integer, x ->> 'pachet_nr', x ->> 'dimensiuni_cm', (x ->> 'net_kg')::numeric, (x ->> 'brut_kg')::numeric, coalesce(x ->> 'decizie', 'primit'), x ->> 'motiv', x ->> 'observatie' FROM jsonb_array_elements(p_randuri) x;
+    IF p_scanuri IS NOT NULL THEN
+      DELETE FROM public.izo_documente_scanuri WHERE document_id = d.id;
+      INSERT INTO public.izo_documente_scanuri (document_id, cale, sha256_original, sha256_pdf, marime, mime)
+      SELECT d.id, x ->> 'cale', x ->> 'sha256_original', x ->> 'sha256_pdf', (x ->> 'marime')::bigint, x ->> 'mime' FROM jsonb_array_elements(p_scanuri) x;
+      IF EXISTS (SELECT 1 FROM public.izo_documente_scanuri s WHERE s.document_id = d.id AND NOT public.fn_izo_scan_exista(s.cale)) THEN
+        RAISE EXCEPTION 'izo E3: un scan din manifest nu există în Storage (încarcă-l întâi)' USING ERRCODE = '23514';
+      END IF;
+    END IF;
+    RETURN jsonb_build_object('document_id', d.id, 'versiune', d.versiune, 'hash', public.fn_izo_doc_hash(d.id));
+  END $f$;
+  RESET ROLE;
+  REVOKE CREATE ON SCHEMA public FROM izo_doc_editor;
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE proname='fn_izo_doc_salveaza' AND pronamespace='public'::regnamespace) IS DISTINCT FROM '7877254e7dc9ec8ebbc16b3ee06e11cf' THEN RAISE EXCEPTION 'E3b: restaurare salvare diferita'; END IF;
   DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii;
   DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii;
   DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii_bucati;
   DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii_bucati;
+  DROP TRIGGER trg_izo_doc_ist_garda ON public.izo_documente_istoric;
+  DROP TRIGGER trg_izo_doc_ist_truncate ON public.izo_documente_istoric;
+  SET LOCAL ROLE izo_corectie_writer;
+  DROP FUNCTION public.fn_izo_cor_storno_import(bigint, text, bigint[], text, uuid);
+  RESET ROLE;
   SET LOCAL ROLE izo_corectie_writer;
   DROP FUNCTION public.fn_izo_cor_pv(bigint, bigint, text, date, text);
   RESET ROLE;
@@ -334,6 +474,10 @@ BEGIN
   SET LOCAL ROLE izo_cor_editor;
   DROP FUNCTION public.fn_izo_cor_propune(text, bigint, bigint, jsonb, text);
   RESET ROLE;
+  DROP FUNCTION public.fn_izo_doc_ist_garda();
+  DROP FUNCTION public.fn_izo_doc_diff(jsonb, jsonb);
+  DROP FUNCTION public.fn_izo_doc_instantaneu(bigint);
+  DROP FUNCTION public.fn_izo_lant_blocant(bigint[], bigint[]);
   DROP FUNCTION public.fn_izo_cor_garda();
   DROP FUNCTION public.fn_izo_garda_corectie(text, text, jsonb, jsonb);
   DROP FUNCTION public.fn_izo_cor_miscare_asteptata(public.izo_corectii, public.magazie_bucati);

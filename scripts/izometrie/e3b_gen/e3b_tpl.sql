@@ -635,6 +635,9 @@ BEGIN
     END IF;
     RETURN NEW;
   END $f$;
+@@OPERATII@@
+@@STORNO@@
+@@ISTORIC@@
 @@GARZI_NOI@@
 @@ACL_GARDA@@
 @@GRANTURI@@
@@ -650,9 +653,6 @@ BEGIN
   ALTER TABLE public.izo_corectii ENABLE ALWAYS TRIGGER trg_izo_cor_truncate;
   ALTER TABLE public.izo_corectii_bucati ENABLE ALWAYS TRIGGER trg_izo_cor_garda;
   ALTER TABLE public.izo_corectii_bucati ENABLE ALWAYS TRIGGER trg_izo_cor_truncate;
-@@OPERATII@@
-@@STORNO@@
-@@ISTORIC@@
 
   -- Inventarul catalogului. Corpuri/config/ACL fn_izo_* sunt și în porti=.
   CREATE FUNCTION public.fn_izo_porti_e3b_definitii() RETURNS text
@@ -718,8 +718,8 @@ BEGIN
       v := array_append(v,'RLS E3b lipsă');
     END IF;
     IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('public.izo_corectii'::regclass,
-        'public.izo_corectii_bucati'::regclass,'public.izo_documente_istoric'::regclass)) <> 4 THEN
-      v := array_append(v,'număr trigger-e E3b diferit de patru (A+B)');
+        'public.izo_corectii_bucati'::regclass,'public.izo_documente_istoric'::regclass)) <> 6 THEN
+      v := array_append(v,'număr trigger-e E3b diferit de sase (A+B+D1)');
     END IF;
     IF EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('public.izo_corectii'::regclass,
         'public.izo_corectii_bucati'::regclass,'public.izo_documente_istoric'::regclass) AND tgenabled <> 'A') THEN

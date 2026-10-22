@@ -124,7 +124,7 @@ DECLARE v_fn record; v_g record;
 BEGIN
   FOR v_fn IN SELECT pr.*,pg_get_userbyid(pr.proowner) AS owner_name FROM pg_proc pr
     WHERE pr.pronamespace='public'::regnamespace AND (pr.proname LIKE 'fn\_izo\_cor\_%' OR pr.proname='fn_izo_garda_corectie')
-      AND pr.proname NOT IN ('fn_izo_cor_propune','fn_izo_cor_retrage','fn_izo_cor_respinge','fn_izo_cor_verifica','fn_izo_cor_aproba','fn_izo_cor_camp','fn_izo_cor_pv') LOOP
+      AND pr.proname NOT IN ('fn_izo_cor_propune','fn_izo_cor_retrage','fn_izo_cor_respinge','fn_izo_cor_verifica','fn_izo_cor_aproba','fn_izo_cor_camp','fn_izo_cor_pv','fn_izo_cor_storno_import') LOOP
     IF v_fn.owner_name IS DISTINCT FROM (CASE WHEN v_fn.proname='fn_izo_cor_marcheaza' THEN 'izo_corectie_writer' ELSE 'postgres' END)
       OR v_fn.prosecdef IS DISTINCT FROM (v_fn.proname IN ('fn_izo_cor_autorizare_lock','fn_izo_cor_cerut_de_valid',
         'fn_izo_cor_bucata_lock','fn_izo_cor_doc_lock','fn_izo_cor_deschise'))
@@ -787,3 +787,250 @@ DO $c2_final$ BEGIN
   IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'C2 poarta dupa rollback'; END IF;
   RAISE NOTICE 'TESTE E3b-C2: TOATE OK';
 END $c2_final$;
+
+-- D1: negative intai; toate fixture-urile si ACL-ul temporar dispar la rollback.
+BEGIN;
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+DO $d1_acl$ BEGIN
+  BEGIN
+    PERFORM public.fn_izo_cor_storno_import(3,'D1-import',ARRAY[1::bigint],'test ACL','00000000-0000-0000-0000-000000000121');
+    RAISE EXCEPTION 'D1 authenticated a trecut';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM NOT LIKE '%permission denied for function%' THEN RAISE; END IF;
+  END;
+END $d1_acl$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+-- Exercitam si verificarea session_user, independent de ACL: grant strict temporar.
+SAVEPOINT d1_sesiune;
+SET LOCAL ROLE izo_corectie_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_cor_storno_import(bigint,text,bigint[],text,uuid) TO authenticator;
+RESET ROLE;
+SET SESSION AUTHORIZATION authenticator;
+DO $d1_sesiune$ BEGIN
+  BEGIN
+    PERFORM public.fn_izo_cor_storno_import(3,'D1-import',ARRAY[1::bigint],'test sesiune','00000000-0000-0000-0000-000000000121');
+    RAISE EXCEPTION 'D1 sesiune non-postgres a trecut';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b administrativ' THEN RAISE; END IF;
+  END;
+END $d1_sesiune$;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO SAVEPOINT d1_sesiune;
+
+-- activarea + importul întâi (o singură tranzacție nu poate importa după ce a luat deja lock-ul proiectului)
+SELECT set_config('izo.registru_tx','',true);
+SELECT set_config('request.jwt.claims','{}',true);
+SELECT public.fn_izo_activeaza_si_importa(3,'D1-import',
+  '{"motiv":"fixture D1","surse":[{"fisier":"D1.xlsx","sha256":"1111111111111111111111111111111111111111111111111111111111111111"}],"bucati":[
+    {"tip":"teava","serie":"D1-1","sarja":"D1-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"D1.xlsx","foaie":"F","rand":1}},
+    {"tip":"teava","serie":"D1-2","sarja":"D1-S","lungime_mm":12000,"perete_mm":8,"stare":"sosit","depozit_id":11,"sursa":{"fisier":"D1.xlsx","foaie":"F","rand":2}},
+    {"tip":"teava","serie":"D1-3","sarja":"D1-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"D1.xlsx","foaie":"F","rand":3}}]}','fixture D1: activare + import');
+SET LOCAL ROLE izo_registru_writer;
+SELECT set_config('izo.registru_tx',txid_current()::text,true);
+DO $d1_straina$ DECLARE v_id bigint:=nextval('public.magazie_bucati_id_seq'); BEGIN
+  INSERT INTO public.magazie_bucati(id,uid,radacina_id,server_ver,proiect_id,tip_material_id,tip_cod,
+    serie,sarja,perete_mm,lungime_aviz_mm,lungime_mm,lungime_m,lungime_originala_m,cod_bucata,capat_stanga,capat_dreapta,
+    provenienta,stare,locatie_tip,locatie_site_id,depozit_id,sursa_receptie)
+  VALUES(v_id,gen_random_uuid(),v_id,nextval('public.izo_server_ver_seq'),3,1,'teava','D1-STRAINA','D1-S',8,
+    12000,12000,12,12,'AB','A','B','beneficiar','receptionat','depozit',6,11,'manual');
+  PERFORM set_config('test.d1_straina',v_id::text,true);
+END $d1_straina$;
+RESET ROLE;
+SELECT set_config('izo.registru_tx','',true);
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de,motiv) VALUES
+  (3,'00000000-0000-0000-0000-000000000030','gestionar',11,'test','fixture D1'),
+  (3,'00000000-0000-0000-0000-000000000117','manager_aprobator',NULL,'test','fixture D1');
+INSERT INTO public.user_module_access(profile_id,module,access_level)
+  VALUES('00000000-0000-0000-0000-000000000117','magazie','editor');
+SET SESSION AUTHORIZATION authenticator;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+SET LOCAL ROLE authenticated;
+DO $d1_propune$ BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+  PERFORM public.fn_izo_cor_propune('camp',3,(SELECT id FROM public.magazie_bucati WHERE serie='D1-3'),'{"lot":"D1 NOU"}','propunere deschisa D1');
+END $d1_propune$;
+-- Corectia deja aplicata nu blocheaza storno-ul (Q1=A).
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $d1_camp$ DECLARE v_b public.magazie_bucati; BEGIN
+  SELECT * INTO v_b FROM public.magazie_bucati WHERE serie='D1-1';
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+  PERFORM public.fn_izo_cor_camp(v_b.id,v_b.server_ver,'{"perete_mm":9}','corectie inainte de storno D1');
+END $d1_camp$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SELECT set_config('request.jwt.claims','{}',true);
+DO $d1_negative$
+DECLARE v_id bigint; v_uid uuid; v_ids bigint[]; v_lista bigint[];
+BEGIN
+  SELECT array_agg(id ORDER BY serie) INTO v_ids FROM public.magazie_bucati WHERE serie IN ('D1-1','D1-2');
+  FOREACH v_uid IN ARRAY ARRAY[NULL::uuid,'00000000-0000-0000-0000-000000000030'::uuid,'00000000-0000-0000-0000-0000000000f0'::uuid] LOOP
+    BEGIN
+      PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+      PERFORM public.fn_izo_cor_storno_import(3,'D1-import',v_ids,'test neeligibil',v_uid);
+      RAISE EXCEPTION 'D1 cerut_de neeligibil a trecut';
+    EXCEPTION WHEN insufficient_privilege THEN
+      IF SQLERRM <> 'E3b: cerut_de neeligibil' THEN RAISE; END IF;
+    END;
+  END LOOP;
+  FOR v_lista IN SELECT x FROM (VALUES(NULL::bigint[]),('{}'::bigint[]),
+    (ARRAY[v_ids[1],v_ids[1]]),(ARRAY[v_ids[1],NULL::bigint]),(array_fill(v_ids[1],ARRAY[10001]))) forme(x) LOOP
+    BEGIN
+      PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+      PERFORM public.fn_izo_cor_storno_import(3,'D1-import',v_lista,'test forma listei','00000000-0000-0000-0000-000000000117');
+      RAISE EXCEPTION 'D1 lista invalida a trecut';
+    EXCEPTION WHEN invalid_parameter_value THEN
+      IF SQLERRM <> 'E3b: lista / motiv invalid' THEN RAISE; END IF;
+    END;
+  END LOOP;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+    PERFORM public.fn_izo_cor_storno_import(3,'D1-import',
+      ARRAY[current_setting('test.d1_straina')::bigint,(SELECT id FROM public.magazie_bucati WHERE serie='D1-3')],
+      'test lista completa','00000000-0000-0000-0000-000000000117');
+    RAISE EXCEPTION 'D1 lista completa ignorata';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    IF position(current_setting('test.d1_straina') IN SQLERRM)=0
+      OR position((SELECT id::text FROM public.magazie_bucati WHERE serie='D1-3') IN SQLERRM)=0 THEN RAISE; END IF;
+  END;
+  FOR v_id IN SELECT current_setting('test.d1_straina')::bigint UNION ALL SELECT id FROM public.magazie_bucati WHERE serie='D1-3' LOOP
+    BEGIN
+      PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+      PERFORM public.fn_izo_cor_storno_import(3,'D1-import',ARRAY[v_ids[1],v_id],'test origine / propunere','00000000-0000-0000-0000-000000000117');
+      RAISE EXCEPTION 'D1 origine / propunere ignorata';
+    EXCEPTION WHEN invalid_parameter_value THEN
+      IF SQLERRM NOT LIKE '%bucati neeligibile%' OR position(v_id::text IN SQLERRM)=0 THEN RAISE; END IF;
+    END;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM public.izo_corectii WHERE tip='storno_import')
+    OR EXISTS (SELECT 1 FROM public.magazie_bucati WHERE id=ANY(v_ids) AND stare='anulata') THEN
+    RAISE EXCEPTION 'D1 negative au lasat efecte'; END IF;
+END $d1_negative$;
+
+DO $d1_storno$
+DECLARE v_ids bigint[]; v_r jsonb; v_cor bigint; v_ev bigint;
+BEGIN
+  SELECT array_agg(id ORDER BY serie) INTO v_ids FROM public.magazie_bucati WHERE serie IN ('D1-1','D1-2');
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+  v_r:=public.fn_izo_cor_storno_import(3,'D1-import',v_ids,'storno partial D1','00000000-0000-0000-0000-000000000117');
+  v_cor:=(v_r->>'corectie_id')::bigint; v_ev:=(v_r->>'eveniment_id')::bigint;
+  IF v_r->>'bucati_anulate'<>'2'
+    OR (SELECT count(*) FROM public.magazie_bucati WHERE id=ANY(v_ids) AND stare='anulata')<>2
+    OR (SELECT count(*) FROM public.izo_corectii_bucati WHERE corectie_id=v_cor AND bucata_id=ANY(v_ids))<>2
+    OR NOT EXISTS(SELECT 1 FROM public.magazie_bucati_evenimente WHERE id=v_ev AND tip='storno_partial'
+      AND declarat_de='00000000-0000-0000-0000-000000000117' AND aplicat_de IS NULL AND aplicat_rol='postgres' AND import_id='D1-import')
+    OR (SELECT count(*) FROM public.magazie_bucati_miscari WHERE eveniment_id=v_ev AND bucata_id=ANY(v_ids)
+      AND rol='anulat' AND stare_inainte IN ('sosit','receptionat') AND stare_dupa='anulata' AND server_ver IS NOT NULL)<>2
+    OR NOT EXISTS(SELECT 1 FROM public.izo_corectii WHERE id=v_cor AND stare='aplicata' AND eveniment_id=v_ev)
+    OR (SELECT stare FROM public.izo_importuri WHERE proiect_id=3 AND import_id='D1-import')<>'aplicat'
+    OR (SELECT stare FROM public.magazie_bucati WHERE serie='D1-3')<>'receptionat' THEN
+    RAISE EXCEPTION 'D1 storno incomplet: %',v_r; END IF;
+END $d1_storno$;
+SELECT set_config('izo.corectie_ctx','',true);
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $d1_salveaza$
+DECLARE v_r jsonb; v_doc bigint;
+BEGIN
+  v_r:=public.fn_izo_doc_salveaza(NULL,NULL,
+    '{"proiect_id":3,"depozit_id":11,"sablon":"aviz_teava","furnizor":"D1 Furnizor","nr_document":"D1 DRAFT","data_document":"2026-10-22","total_m":12.3456}',
+    '[{"nr_crt":1,"serie":"D1-DOC","sarja":"D1-S","perete_mm":7.25,"lungime_doc_mm":12000}]',NULL);
+  v_doc:=(v_r->>'document_id')::bigint;
+  IF v_r->>'istoric_versiune'<>'1' THEN RAISE EXCEPTION 'D1 versiune istoric creare'; END IF;
+  PERFORM set_config('test.d1_doc',v_doc::text,true);
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+  v_r:=public.fn_izo_doc_salveaza(v_doc,1,
+    '{"furnizor":"D1 Furnizor","nr_document":"D1 DRAFT","data_document":"2026-10-22","total_m":12.3456,"observatii":"revizie"}',
+    '[{"nr_crt":1,"serie":"D1-DOC","sarja":"D1-S","perete_mm":7.35,"lungime_doc_mm":12000},{"nr_crt":2,"serie":"D1-DOC-2","sarja":"D1-S","perete_mm":8,"lungime_doc_mm":12000}]',NULL);
+  IF v_r->>'istoric_versiune'<>'2' THEN RAISE EXCEPTION 'D1 versiune istoric salvare'; END IF;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata
+    PERFORM public.fn_izo_doc_salveaza(v_doc,1,'{}','[]',NULL);
+    RAISE EXCEPTION 'D1 CAS vechi a trecut';
+  EXCEPTION WHEN serialization_failure THEN NULL; END;
+END $d1_salveaza$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+DO $d1_istoric$
+DECLARE v_doc bigint:=current_setting('test.d1_doc')::bigint; v_a public.izo_documente_istoric; v_b public.izo_documente_istoric;
+BEGIN
+  SELECT * INTO STRICT v_a FROM public.izo_documente_istoric WHERE document_id=v_doc AND versiune=1;
+  SELECT * INTO STRICT v_b FROM public.izo_documente_istoric WHERE document_id=v_doc AND versiune=2;
+  IF (SELECT count(*) FROM public.izo_documente_istoric WHERE document_id=v_doc)<>2
+    OR NOT v_a.baza OR v_b.baza OR v_a.diff IS DISTINCT FROM v_a.continut
+    OR v_b.salvat_de<>'00000000-0000-0000-0000-000000000030' OR v_b.salvat_rol<>'authenticator'
+    OR v_b.diff#>'{antet,observatii}' IS DISTINCT FROM '[null,"revizie"]'::jsonb
+    OR v_b.diff#>'{randuri,modificate,1,perete_mm}' IS DISTINCT FROM '["7.3","7.4"]'::jsonb
+    OR jsonb_array_length(v_b.diff#>'{randuri,adaugate}')<>1
+    OR v_b.continut#>>'{totaluri,total_m}'<>'12.346'
+    OR v_b.hash IS DISTINCT FROM public.fn_izo_doc_hash(v_doc)
+    OR v_b.hash IS DISTINCT FROM 'e3-doc-v1:'||encode(sha256(convert_to(v_b.continut::text,'UTF8')),'hex')
+    OR v_a.hash IS DISTINCT FROM 'e3-doc-v1:'||encode(sha256(convert_to(v_a.continut::text,'UTF8')),'hex') THEN
+    RAISE EXCEPTION 'D1 istoric / diff / hash incorect'; END IF;
+  BEGIN
+    UPDATE public.izo_documente_istoric SET diff='{}' WHERE document_id=v_doc;
+    RAISE EXCEPTION 'D1 istoric modificabil';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: istoric imutabil' THEN RAISE; END IF;
+  END;
+END $d1_istoric$;
+-- Metadate schimbate pe aceeasi cale: nu sunt un scan nou / scos.
+DO $d1_diff_scan$ DECLARE v_d jsonb; BEGIN
+  v_d:=public.fn_izo_doc_diff(
+    '{"antet":{},"aviz":{},"lista":{},"totaluri":{},"randuri":[{"nr_crt":1,"serie":"A"}],"scanuri":[{"cale":"a.pdf","sha256_pdf":"vechi","marime":10,"mime":"application/pdf"}]}',
+    '{"antet":{},"aviz":{},"lista":{},"totaluri":{},"randuri":[],"scanuri":[{"cale":"a.pdf","sha256_pdf":"nou","marime":20,"mime":"application/pdf"}]}');
+  IF v_d#>'{scanuri,modificate,a.pdf}' IS DISTINCT FROM '{"sha256_pdf":["vechi","nou"],"marime":[10,20]}'::jsonb
+    OR v_d#>'{scanuri,adaugate}' IS DISTINCT FROM '[]'::jsonb
+    OR v_d#>'{scanuri,scoase}' IS DISTINCT FROM '[]'::jsonb
+    OR v_d#>'{randuri,sterse}' IS DISTINCT FROM '[{"nr_crt":1,"serie":"A"}]'::jsonb THEN
+    RAISE EXCEPTION 'D1 diff scan / rand sters incorect: %',v_d; END IF;
+END $d1_diff_scan$;
+SET LOCAL ROLE izo_doc_editor;
+DO $d1_istoric_fals$ BEGIN
+  BEGIN
+    INSERT INTO public.izo_documente_istoric(document_id,versiune,salvat_de,salvat_rol,continut,hash,diff,baza)
+    SELECT document_id,versiune,salvat_de,session_user,continut,hash,'{}',baza
+      FROM public.izo_documente_istoric WHERE document_id=current_setting('test.d1_doc')::bigint AND versiune=2;
+    RAISE EXCEPTION 'D1 diff fals acceptat';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: continut istoric diferit' THEN RAISE; END IF;
+  END;
+END $d1_istoric_fals$;
+RESET ROLE;
+-- Referinta pre-E3b: corpul hash LIVE E3, copiat exact pe acelasi continut.
+DO $d1_hash_e3$ DECLARE v_hash_e3 text; BEGIN
+
+    SELECT 'e3-doc-v1:' || encode(sha256(convert_to(jsonb_build_object(
+      'v', 'e3-doc-v1',
+      'antet', jsonb_build_object('proiect_id', d.proiect_id, 'depozit_id', d.depozit_id, 'sablon', d.sablon,
+        'furnizor', d.furnizor, 'furnizor_canon', d.furnizor_canon, 'furnizor_cif', d.furnizor_cif, 'nr_document', d.nr_document,
+        'nr_document_canon', d.nr_document_canon, 'data_document', d.data_document, 'inlocuieste_document_id', d.inlocuieste_document_id,
+        'motiv_inlocuire', d.motiv_inlocuire, 'observatii', d.observatii),
+      'aviz', jsonb_build_object('cumparator', d.cumparator, 'transport_nr', d.transport_nr, 'nume_proiect', d.nume_proiect, 'lot', d.lot,
+        'loc_livrare', d.loc_livrare, 'data_incarcare', d.data_incarcare, 'data_descarcare', d.data_descarcare, 'nr_camion', d.nr_camion),
+      'lista', jsonb_build_object('factura', d.factura, 'importator', d.importator, 'destinatar', d.destinatar,
+        'referinta_client', d.referinta_client, 'referinta_furnizor', d.referinta_furnizor, 'placa_camion_container', d.placa_camion_container),
+      'totaluri', jsonb_build_object('total_m', round(d.total_m, 3)::text, 'total_kg', round(d.total_kg, 1)::text, 'total_bucati', d.total_bucati,
+        'total_pachete', d.total_pachete, 'total_net_kg', round(d.total_net_kg, 1)::text, 'total_brut_kg', round(d.total_brut_kg, 1)::text),
+      'randuri', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+          'nr_crt', r.nr_crt, 'serie', r.serie, 'sarja', r.sarja, 'lot', r.lot, 'specificatie', r.specificatie, 'dimensiune', r.dimensiune,
+          'grad_otel', r.grad_otel, 'standard', r.standard, 'izolatie', r.izolatie, 'diametru_mm', r.diametru_mm,
+          'perete_mm', round(r.perete_mm, 1)::text, 'greutate_kg', round(r.greutate_kg, 1)::text,
+          'lungime_doc_mm', r.lungime_doc_mm, 'lungime_masurata_mm', r.lungime_masurata_mm, 'cod', r.cod, 'item', r.item,
+          'unghi_doc', round(r.unghi_doc, 1)::text, 'unghi_masurat', round(r.unghi_masurat, 1)::text, 'cantitate', r.cantitate,
+          'pachet_nr', r.pachet_nr, 'dimensiuni_cm', r.dimensiuni_cm, 'net_kg', round(r.net_kg, 1)::text, 'brut_kg', round(r.brut_kg, 1)::text,
+          'decizie', r.decizie, 'motiv', r.motiv, 'observatie', r.observatie) ORDER BY r.nr_crt), '[]'::jsonb)
+        FROM public.izo_documente_intrare_randuri r WHERE r.document_id = d.id),
+      'scanuri', (SELECT coalesce(jsonb_agg(jsonb_build_object('cale', s.cale, 'sha256_original', s.sha256_original,
+          'sha256_pdf', s.sha256_pdf, 'marime', s.marime, 'mime', s.mime) ORDER BY s.cale), '[]'::jsonb)
+        FROM public.izo_documente_scanuri s WHERE s.document_id = d.id)
+    )::text, 'UTF8')), 'hex')
+    INTO v_hash_e3 FROM public.izo_documente_intrare d WHERE d.id = current_setting('test.d1_doc')::bigint
+  ;
+  IF v_hash_e3 IS DISTINCT FROM public.fn_izo_doc_hash(current_setting('test.d1_doc')::bigint)
+    OR v_hash_e3 IS DISTINCT FROM (SELECT hash FROM public.izo_documente_istoric WHERE document_id=current_setting('test.d1_doc')::bigint AND versiune=2) THEN
+    RAISE EXCEPTION 'D1 hash diferit de implementarea pre-E3b'; END IF;
+END $d1_hash_e3$;
+ROLLBACK;
