@@ -36,3 +36,6 @@ await import('./supabase/functions/ocr-packing-list/avizE3Handler_test.ts');
 ```
 
 Deno nu este disponibil în PATH; nu s-a executat Deno/typecheck. Pentru reviewer: `deno test -A --node-modules-dir=none supabase/functions/ocr-packing-list`. Testul SQL este scris, NEEXECUTAT: necesită PostgreSQL 16 local după migrare, include ACL, prag exact, refuz, cost necunoscut, idempotență, NaN și ID inexistent; scenariul de concurență în două conexiuni este descris la final. Nu s-au rulat migrarea, revenirea, API real, build/deploy sau Git.
+
+## Revenire (observația Jak r1)
+`supabase/revenire/20261105a_ai_plafon_lunar_ROLLBACK.sql` e o retragere conservatoare: oprește rezervările noi, dar păstrează tabelele, politicile și decontarea (audit + apeluri în zbor). Reactivarea NU se face reaplicând 20261105a (tabelele există deja), ci cu o migrare nouă care reface doar GRANT-urile / funcția de rezervare.

@@ -61,9 +61,10 @@ export async function citesteAvizE3(req: Request, body: Record<string, unknown>,
     const headers = { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }
     // 8 MB nu limitează tokenii unui PDF. Endpoint gratuit, fără generare; lipsa numărării => fail closed.
     const count = await fetch('https://api.anthropic.com/v1/messages/count_tokens', { method: 'POST', headers, body: JSON.stringify({ ...payload, thinking: faraGandire(MODEL_E3) }), signal: AbortSignal.timeout(30000) })
-    if (!count.ok) throw new EroareE3('numarare_indisponibila', 502)
-    const tokens = (await count.json()).input_tokens
-    if (!Number.isSafeInteger(tokens) || tokens <= 0) throw new EroareE3('numarare_indisponibila', 502)
+    // Numărarea e gratuită: dacă pică, nu s-a cheltuit nimic → cost 0, rezerva se eliberează (Jak E9 r1 P2).
+    if (!count.ok) { cost = 0; throw new EroareE3('numarare_indisponibila', 502) }
+    const tokens = await count.json().then(j => j.input_tokens).catch(() => null)
+    if (!Number.isSafeInteger(tokens) || tokens <= 0) { cost = 0; throw new EroareE3('numarare_indisponibila', 502) }
     if (tokens > MAX_INPUT_E3) { cost = 0; throw new EroareE3('pdf_prea_multi_tokeni') }
     const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_E3, thinking: faraGandire(MODEL_E3) }), signal: AbortSignal.timeout(90000) })
     if (!r.ok) throw new EroareE3('apel_ai_esuat', 502)

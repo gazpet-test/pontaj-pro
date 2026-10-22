@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { aplicaPropunereOCR, avertismenteOCR } from './izoDocumentePrefill.js'
-import { randGol, eroriSalvare } from './izoDocumenteLogica.js'
+import { randGol, eroriSalvare, randNormalizat } from './izoDocumenteLogica.js'
+import { textKg } from './izoDocumentePrefill.js'
 
 const doc = () => ({ proiect_id:7, depozit_id:3, sablon:'aviz_teava', antet:{ furnizor:'Manual', nr_document:'' }, randuri:[] })
 const raspuns = { antet:{ furnizor:'OCR', nr_document:'001', proiect_id:99, depozit_id:99, sablon:'lista_curbe', necunoscut:'x' },
@@ -46,5 +47,17 @@ describe('prefill OCR E3', () => {
     const r = aplicaPropunereOCR(d, { antet:{ total_bucati:1 }, randuri:[{ serie:'00012', sarja:'00034', unghi_doc:45,
       unghi_masurat:46, cantitate:1, lungime_doc:12, decizie:'primit' }] }).randuri[0]
     expect(r).toMatchObject({ serie:'00012', sarja:'00034', unghi_doc:'45', unghi_masurat:'', cantitate:'1', lungime_doc:'', decizie:'' })
+  })
+  it('kg: AI -> prefill -> normalizare nu multiplică cu 1000 (Jak E9 r1 P1)', () => {
+    expect(textKg(1402)).toEqual({ val:'1402', ok:true })
+    expect(textKg(1402.5)).toEqual({ val:'1402,5', ok:true })
+    expect(textKg(123.456).ok).toBe(false)
+    expect(textKg('123.456').ok).toBe(false)
+    const r = { antet:{}, randuri:[{ serie:'1', greutate_kg:1402.5 }, { serie:'2', greutate_kg:123.456 }, { serie:'3', greutate_kg:10192 }],
+      totaluri_tiparite:{ total_kg:11594.5 } }
+    const d = aplicaPropunereOCR(doc(), r, { mod:'inlocuieste' })
+    expect(d.randuri.map(x => randNormalizat(x, 'aviz_teava').greutate_kg)).toEqual([1402.5, null, 10192])
+    expect(d.antet.total_kg).toBe('11594,5')
+    expect(d.ocrAvertismente.some(a => a.includes('123.456'))).toBe(true)
   })
 })
