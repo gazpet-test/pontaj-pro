@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert'
 import { CHEI_ANTET, randGol } from '../../../src/izoDocumenteLogica.js'
-import { ANTET_COMUN, ANTET_SPECIFIC, atribuireValidaE3, EroareE3, MAX_PDF_E3, normalizeazaE3, numarE3, numarKgE3, RAND_NUMAR, RAND_TEXT, REZERVA_E3, schemaE3, valideazaCerereE3 } from './avizE3.ts'
+import { ANTET_COMUN, ANTET_SPECIFIC, atribuireValidaE3, EroareE3, MAX_PDF_E3, normalizeazaE3, numarE3, numarKgE3, RAND_NUMAR, RAND_TEXT, REZERVA_E3, rezervaE3, schemaE3, valideazaCerereE3 } from './avizE3.ts'
 
-const ai = (r: Record<string, unknown> = {}) => JSON.stringify({ antet: { furnizor: '  Furnizor  ', nr_document: '00019', total_m: '99,15', decizie: 'primit' }, randuri: [{ serie: '  000123  ', sarja: '00009', lungime_doc: '12,345', pagina: 2, ...r }], totaluri_tiparite: { total_metri: '99,15', total_kg: '1.234,56' }, avertismente: ['  ilizibil  ', 7] })
+const ai = (r: Record<string, unknown> = {}) => JSON.stringify({ rotatie_grade:0, antet: { furnizor: '  Furnizor  ', nr_document: '00019', total_m: '99,15', decizie: 'primit' }, randuri: [{ serie: '  000123  ', sarja: '00009', lungime_doc: '12,345', pagina: 2, ...r }], totaluri_tiparite: { total_metri: '99,15', total_kg: '1.234,56' }, avertismente: ['  ilizibil  ', 7] })
 const cerere = () => ({ tip: 'aviz_e3', proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', pdf_base64: btoa('%PDF-1.7\n') })
 
 Deno.test('paritate cu editorul real: antet și randGol, exclusiv câmpuri permise', () => {
@@ -76,4 +76,25 @@ Deno.test('kg: separator de mii din document (aviz Comtech, lista Gurgenler)', (
   assert.equal(numarKgE3(1402), 1402)
   assert.equal(numarKgE3('1402,5'), 1402.5)
   assert.equal(numarE3('12.50'), 12.5)
+})
+Deno.test('model per cerere: implicit haiku, sonnet și rezervă superioară', () => {
+  assert.equal(valideazaCerereE3(cerere()).model, 'claude-haiku-5-5')
+  assert.equal(valideazaCerereE3({ ...cerere(), model:'sonnet' }).model, 'claude-sonnet-5-5')
+  assert.equal(rezervaE3('claude-sonnet-5-5'), 0.2)
+  assert.ok(rezervaE3('claude-sonnet-5-5') > REZERVA_E3)
+  for (const model of ['opus', '', null, 1, 'claude-sonnet-5-5']) assert.throws(() => valideazaCerereE3({ ...cerere(), model }), { status:400, cod:'cerere_invalida' })
+})
+Deno.test('rotatie: enum întreg strict; invalide => 0 și avertisment', () => {
+  const baza = JSON.parse(ai())
+  for (const rotatie_grade of [0, 90, 180, 270]) {
+    const p = normalizeazaE3(JSON.stringify({ ...baza, rotatie_grade }), 'aviz_teava')
+    assert.equal(p.rotatie_grade, rotatie_grade)
+    assert.deepEqual(p.avertismente, ['ilizibil'])
+  }
+  for (const rotatie_grade of [null, '90', -90, 360, 45, 90.5]) {
+    const p = normalizeazaE3(JSON.stringify({ ...baza, rotatie_grade }), 'aviz_teava')
+    assert.equal(p.rotatie_grade, 0)
+    assert.match(p.avertismente.join(' '), /Rotație invalidă/)
+  }
+  assert.deepEqual(schemaE3('aviz_teava').properties.rotatie_grade, { type:'integer', enum:[0, 90, 180, 270] })
 })

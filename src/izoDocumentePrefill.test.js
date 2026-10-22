@@ -70,3 +70,18 @@ describe('prefill OCR E3', () => {
     expect(d.randuri.map(r => r.izolatie)).toEqual(['PEHD', 'neizolata'])
   })
 })
+import { randPoatePrimiBulk, validareDocument } from './izoDocumenteLogica.js'
+it('regresie 12 curbe: 11 primite, rândul 8 cu CODE/heat rămâne gol', () => {
+  const raspuns = { antet:{ total_bucati:12 }, randuri:Array.from({ length:12 }, (_, i) => ({
+    serie:String(1001 + i), sarja:'2513619', item:'9', diametru_mm:610, perete_mm:8.8, unghi_doc:25,
+    cod:`${1001 + i}-610-8,8-25-6100-${i === 7 ? '2513614' : '2513619'}-9`, cantitate:1,
+    pachet_nr:String(Math.floor(i / 2) + 1), net_kg:i % 2 ? null : 1500, brut_kg:i % 2 ? null : 1550,
+  })) }
+  const d = aplicaPropunereOCR({ ...doc(), sablon:'lista_ambalare_curbe' }, raspuns, { mod:'inlocuieste' })
+  expect(d.randuri.every(r => r.decizie === '')).toBe(true)
+  const v = validareDocument(d)
+  const primite = d.randuri.map((r, i) => randPoatePrimiBulk(v.norm[i], d.sablon, d, v.randuri[i]))
+  expect(primite.filter(Boolean).length).toBe(11)
+  expect(primite[7]).toBe(false)
+  expect(d.randuri[7].decizie).toBe('')
+})

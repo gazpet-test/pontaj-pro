@@ -247,7 +247,7 @@ export function validareRand(rn, sablon) {
   if (!rn.serie) v.push(blocant('serie', curba ? 'lipsește bend number' : 'lipsește nr. țevii'))
   else if (!curba) {
     const s = verificaSerie(rn.serie)
-    if (s.sugestie) v.push(avert('serie', `seria pare citită greșit: ${s.confuzii.map(c => `poz. ${c.poz} „${c.gasit}” → „${c.propus}”`).join(', ')} (propus ${s.sugestie})`))
+    if (s.sugestie) v.push({ ...avert('serie', `seria pare citită greșit: ${s.confuzii.map(c => `poz. ${c.poz} „${c.gasit}” → „${c.propus}”`).join(', ')} (propus ${s.sugestie})`), sugestie:s.sugestie })
     else if (!s.formatOk) v.push(avert('serie', `seria ${s.canon} nu are formatul 999AA99999`))
   } else {
     const p = confuziiNumerice(rn.serie)
@@ -292,7 +292,7 @@ export function validareRand(rn, sablon) {
     if (esteNr(rn.cantitate) && rn.cantitate !== 1) v.push(blocant('cantitate', 'o curbă pe rând (cantitatea 1); pune fiecare curbă pe rândul ei'))
     if (rn.net_kg == null) v.push(avert('net_kg', 'lipsește greutatea netă (intră în total)'))
     const cod = verificaCodCurba(rn)
-    if (cod) v.push(avert('cod', cod))
+    if (cod) v.push({ ...avert('cod', cod), diferente: diferenteCodCurba(rn), campuri:['cod', ...diferenteCodCurba(rn).map(x => x.camp)] })
   }
   for (const [c, et] of [['perete_mm', 'peretele'], ['diametru_mm', 'diametrul']]) if (esteNr(rn[c]) && rn[c] <= 0) v.push(blocant(c, `${et} trebuie > 0`))
   // ca serverul (perete_lipsa): peretele e obligatoriu pe rândurile care intră în registru (primit / neconform); la refuz, doar avertisment
@@ -317,6 +317,67 @@ export function verificaCodCurba(rn) {
   if (rn.sarja && serieCanon(p[5]) !== serieCanon(rn.sarja)) dif.push(`heat ${p[5]}`)
   if (rn.item && serieCanon(p[6]) !== serieCanon(rn.item)) dif.push(`item ${p[6]}`)
   return dif.length ? `codul spune ${dif.join(', ')} — nu bate cu rândul` : null
+}
+
+const PARTI_COD = [['serie', 'bend', 0], ['diametru_mm', 'diametru', 1], ['perete_mm', 'perete', 2], ['unghi_doc', 'unghi', 3], ['sarja', 'heat', 5], ['item', 'item', 6]]
+export function valoareDinCod(cod, camp) {
+  const p = String(cod || '').split('-'), parte = PARTI_COD.find(x => x[0] === camp)
+  return p.length === 7 && parte ? p[parte[2]] : null
+}
+export function codCuValoare(cod, camp, valoare) {
+  const p = String(cod || '').split('-'), parte = PARTI_COD.find(x => x[0] === camp)
+  if (p.length !== 7 || !parte || valoare == null || !String(valoare).trim() || String(valoare).includes('-')) return null
+  p[parte[2]] = String(valoare).trim()
+  return p.join('-')
+}
+export function diferenteCodCurba(rn) {
+  return PARTI_COD.flatMap(([camp, label]) => {
+    const valoare = valoareDinCod(rn.cod, camp), actual = rn[camp]
+    if (valoare == null || actual == null || actual === '') return []
+    const numeric = ['diametru_mm', 'perete_mm', 'unghi_doc'].includes(camp)
+    const diferit = numeric ? esteNr(parseNumar(valoare)) && esteNr(actual) && Math.abs(parseNumar(valoare) - actual) > 1e-9
+      : serieCanon(valoare) !== serieCanon(actual)
+    return diferit ? [{ camp, label, valoare }] : []
+  })
+}
+export const avertismentVerificare = x => x.nivel === 'avertisment' && (
+  ['cod', 'serie', 'sarja'].includes(x.camp) || /toleran|peste ±/.test(x.mesaj))
+export const problemeDeVerificat = lista => lista.filter(x => (x.nivel === 'blocant' && x.camp !== 'decizie') || avertismentVerificare(x))
+export function randPoatePrimiBulk(rn, sablon, doc, probleme = validareRand(rn, sablon)) {
+  if (rn.decizie || problemeDeVerificat(probleme).length) return false
+  return probleme.every(x => {
+    if (x.camp === 'decizie') return true
+    if (!esteCurba(sablon) && x.camp === 'greutate_kg') return true
+    if (['net_kg', 'brut_kg'].includes(x.camp) && rn[x.camp] == null && rn.pachet_nr)
+      return (doc.randuri || []).some(r => { const n = randNormalizat(r, sablon); return n.pachet_nr === rn.pachet_nr && esteNr(n[x.camp]) && n[x.camp] > 0 })
+    return false
+  })
+}
+export const descriereProbleme = lista => [...new Set(problemeDeVerificat(lista).flatMap(x => x.diferente ? ['cod vs ' + x.diferente.map(d => d.label).join(', ')] : [x.camp]))].join(' / ')
+
+// Coordonate în imaginea rotită, înainte de redimensionarea pentru PDF.
+export function geometrieRotatie(width, height, rotatie = 0) {
+  const r = [0, 90, 180, 270].includes(rotatie) ? rotatie : 0
+  return { width:r % 180 ? height : width, height:r % 180 ? width : height, rotatie:r,
+    x:r === 90 || r === 180 ? (r === 90 ? height : width) : 0,
+    y:r === 180 || r === 270 ? (r === 270 ? width : height) : 0 }
+}
+export function limiteCrop(rect, width, height) {
+  const w = Math.min(width, Math.max(Math.min(50, width), Number(rect?.width) || width))
+  const h = Math.min(height, Math.max(Math.min(50, height), Number(rect?.height) || height))
+  return { x:Math.max(0, Math.min(width - w, Number(rect?.x) || 0)), y:Math.max(0, Math.min(height - h, Number(rect?.y) || 0)), width:w, height:h }
+}
+export function cropDinPreview(rect, previewWidth, previewHeight, width, height) {
+  return limiteCrop({ x:rect.x * width / previewWidth, y:rect.y * height / previewHeight,
+    width:rect.width * width / previewWidth, height:rect.height * height / previewHeight }, width, height)
+}
+export function rotesteCrop(rect, width, height, rotatie) {
+  if (!rect || !width || !height) return null
+  const r = limiteCrop(rect, width, height)
+  if (rotatie === 90) return { x:height - r.y - r.height, y:r.x, width:r.height, height:r.width }
+  if (rotatie === 180) return { ...r, x:width - r.x - r.width, y:height - r.y - r.height }
+  if (rotatie === 270) return { x:r.y, y:width - r.x - r.width, width:r.height, height:r.width }
+  return r
 }
 
 // ── documentul ────────────────────────────────────────────────────────────────────────────────────────────

@@ -1,12 +1,12 @@
 import { strict as assert } from 'node:assert'
 import { citesteAvizE3 } from './avizE3Handler.ts'
-import { MAX_INPUT_E3, REZERVA_E3 } from './avizE3.ts'
+import { MAX_INPUT_E3, REZERVA_E3, rezervaE3 } from './avizE3.ts'
 
-type Opt = { owner?: boolean; user?: boolean; modul?: boolean; atribuire?: boolean; queryError?: boolean; refuzPlafon?: boolean; count?: number; timeout?: boolean; invalid?: boolean; usage?: boolean; refuzAI?: boolean; truncat?: boolean; settleError?: boolean; countEsuat?: boolean; countAruncat?: boolean }
+type Opt = { model?: string; owner?: boolean; user?: boolean; modul?: boolean; atribuire?: boolean; queryError?: boolean; refuzPlafon?: boolean; count?: number; timeout?: boolean; invalid?: boolean; usage?: boolean; refuzAI?: boolean; truncat?: boolean; settleError?: boolean; countEsuat?: boolean; countAruncat?: boolean }
 async function scenariu(o: Opt = {}) {
   const evenimente: string[] = []
   const decontari: unknown[] = []
-  const corp = { tip: 'aviz_e3', proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', pdf_base64: btoa('%PDF-test') }
+  const corp = { model:o.model, tip: 'aviz_e3', proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', pdf_base64: btoa('%PDF-test') }
   const plafon = { cheie: 'izo_e3_ocr:1', luna: '2026-10-01', plafon_usd: 10, consumat_usd: 0, rezervat_usd: 0 }
   const client = (admin: boolean) => ({
     auth: { getUser: () => Promise.resolve({ data: { user: o.user === false ? null : { id: 'u' } }, error: null }) },
@@ -31,7 +31,7 @@ async function scenariu(o: Opt = {}) {
       assert.equal(admin, true)
       evenimente.push(fn)
       if (fn === 'fn_ai_plafon_rezerva') {
-        assert.deepEqual(args, { p_cheie: 'izo_e3_ocr:1', p_suma: REZERVA_E3, p_plafon_implicit: 10, p_user: 'u' })
+        assert.deepEqual(args, { p_cheie: 'izo_e3_ocr:1', p_suma: rezervaE3(o.model === 'sonnet' ? 'claude-sonnet-5-5' : 'claude-haiku-5-5'), p_plafon_implicit: 10, p_user: 'u' })
         return Promise.resolve(o.refuzPlafon ? { data: null, error: { code: 'P0001', message: 'plafon_depasit' } } : { data: 7, error: null })
       }
       decontari.push(args.p_cost_real)
@@ -43,7 +43,7 @@ async function scenariu(o: Opt = {}) {
     evenimente.push(String(url))
     assert.ok(evenimente.indexOf('fn_ai_plafon_rezerva') < evenimente.length - 1)
     const payload = JSON.parse(String(init?.body))
-    assert.equal(payload.model, 'claude-haiku-5-5')
+    assert.equal(payload.model, o.model === 'sonnet' ? 'claude-sonnet-5-5' : 'claude-haiku-5-5')
     assert.equal(payload.messages[0].content[0].source.data, corp.pdf_base64)
     if (String(url).endsWith('count_tokens')) return o.countAruncat ? Promise.reject(new DOMException('timeout', 'TimeoutError')) : Promise.resolve(o.countEsuat ? new Response('x', { status: 503 }) : Response.json({ input_tokens: o.count ?? 1000 }))
     assert.equal(payload.max_tokens, 10400)
@@ -51,7 +51,7 @@ async function scenariu(o: Opt = {}) {
     return Promise.resolve(Response.json({
       stop_reason: o.refuzAI ? 'refusal' : o.truncat ? 'max_tokens' : 'end_turn',
       usage: o.usage === false ? undefined : { input_tokens: 1000, output_tokens: 100 },
-      content: [{ type: 'thinking', thinking: 'ignorat' }, { type: 'text', text: o.invalid ? '{}' : JSON.stringify({ antet: {}, randuri: [{ serie: '001', pagina: 1 }] }) }],
+      content: [{ type: 'thinking', thinking: 'ignorat' }, { type: 'text', text: o.invalid ? '{}' : JSON.stringify({ rotatie_grade:0, antet: {}, randuri: [{ serie: '001', pagina: 1 }] }) }],
     }))
   }
   try {
@@ -65,7 +65,7 @@ Deno.test('E3 handler: owner și gestionar+editor; numai caller JWT citește izo
   for (const owner of [true, false]) {
     const r = await scenariu({ owner })
     assert.equal(r.status, 200)
-    assert.deepEqual(Object.keys(r.body), ['success', 'tip', 'sablon', 'antet', 'randuri', 'totaluri_tiparite', 'avertismente', 'model', 'cost_usd', 'plafon'])
+    assert.deepEqual(Object.keys(r.body), ['success', 'tip', 'sablon', 'antet', 'randuri', 'rotatie_grade', 'totaluri_tiparite', 'avertismente', 'model', 'cost_usd', 'plafon'])
     assert.equal(r.body.randuri[0].serie, '001')
     assert.ok(Math.abs(r.body.cost_usd - 0.00015) < 1e-12)
     assert.equal(r.decontari.length, 1)
@@ -130,4 +130,19 @@ Deno.test('E3 handler: timeout / retea la numarare => cost 0 (Jak E9 r2 P2)', as
   const r = await scenariu({ countAruncat: true })
   assert.equal(r.evenimente.filter(e => e.endsWith('/messages')).length, 0)
   assert.deepEqual(r.decontari, [0])
+})
+Deno.test('model invalid => 400 înainte de rezervare; sonnet rezervat și decontat la prețul lui', async () => {
+  const invalid = await scenariu({ model:'opus' })
+  assert.equal(invalid.status, 400)
+  assert.equal(invalid.body.eroare, 'cerere_invalida')
+  assert.deepEqual(invalid.evenimente, [])
+  const sonnet = await scenariu({ model:'sonnet' })
+  assert.equal(sonnet.status, 200)
+  assert.equal(sonnet.body.model, 'claude-sonnet-5-5')
+  assert.equal(sonnet.body.rotatie_grade, 0)
+  assert.ok(Math.abs(sonnet.body.cost_usd - 0.003) < 1e-12)
+  assert.deepEqual(sonnet.decontari, [sonnet.body.cost_usd])
+  const faraUsage = await scenariu({ model:'sonnet', usage:false })
+  assert.equal(faraUsage.body.cost_usd, 0.2)
+  assert.deepEqual(faraUsage.decontari, [null])
 })
