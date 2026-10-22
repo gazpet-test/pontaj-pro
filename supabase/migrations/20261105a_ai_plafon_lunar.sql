@@ -1,6 +1,17 @@
 -- Registru generic de cost AI. Luna contabilă = UTC; rezervarea se face înaintea apelului plătit.
 -- Fără modificări ale datelor existente. Funcțiile sunt exclusiv pentru edge/service_role.
-BEGIN;
+-- Fără BEGIN/COMMIT: rulează doar prin scripts/livrare_migrare.sh (--single-transaction, validatorul refuză controlul tranzacției).
+DO $pre$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261105a_ai_plafon_lunar:' || txid_current() THEN
+    RAISE EXCEPTION '20261105a: garda start invalida';
+  END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261105a: necesita postgres'; END IF;
+  PERFORM set_config('lock_timeout', '5s', true);
+  IF to_regclass('public.ai_plafon_lunar') IS NOT NULL OR to_regclass('public.ai_plafon_rezervari') IS NOT NULL THEN
+    RAISE EXCEPTION '20261105a: tabelele exista deja';
+  END IF;
+END $pre$;
 CREATE TABLE public.ai_plafon_lunar (
   cheie text NOT NULL CHECK (length(btrim(cheie)) BETWEEN 1 AND 200),
   luna date NOT NULL CHECK (extract(day FROM luna) = 1),
@@ -88,4 +99,3 @@ BEGIN
 END $f$;
 REVOKE EXECUTE ON FUNCTION public.fn_ai_plafon_rezerva(text,numeric,numeric,uuid), public.fn_ai_plafon_deconteaza(bigint,numeric) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_ai_plafon_rezerva(text,numeric,numeric,uuid), public.fn_ai_plafon_deconteaza(bigint,numeric) TO service_role;
-COMMIT;
