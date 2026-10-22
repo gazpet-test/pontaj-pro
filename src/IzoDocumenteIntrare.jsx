@@ -41,7 +41,7 @@ const STARE_META = { draft:{ label:'Draft', color:G.yellow }, confirmat:{ label:
 const DECIZIE_CULOARE = { primit:G.green, primit_neconform:G.orange, refuzat_la_receptie:G.red }
 const IZOLATIE_LABEL = { neizolata:'neizolată', PEHD:'PEHD', GRP:'GRP' }
 const LATIME = { nr_crt:44, serie:118, sarja:92, lot:58, lungime_doc:74, lungime_masurata:74, greutate_kg:66, perete_mm:56, diametru_mm:56, specificatie:150,
-  cod:190, item:44, unghi_doc:62, unghi_masurat:66, standard:92, cantitate:42, pachet_nr:54, dimensiuni_cm:100, net_kg:64, brut_kg:64,
+  cod:250, item:56, unghi_doc:62, unghi_masurat:66, standard:92, cantitate:42, pachet_nr:54, dimensiuni_cm:100, net_kg:64, brut_kg:64,
   dimensiune:100, grad_otel:80, izolatie:104 }
 // câmpul din validare (valori tipizate) → câmpul editorului
 const CAMP_EDITOR = { lungime_doc_mm:'lungime_doc', lungime_masurata_mm:'lungime_masurata' }
@@ -985,7 +985,7 @@ function PropunereOCR({ raspuns, ed, mobil }) {
     </div>) : <div style={{ overflowX:'auto', marginTop:10 }}><table style={{ borderCollapse:'collapse', width:'100%' }}>
       <thead><tr>{coloane.map(([k, et]) => <th style={S.th} key={k}>{et}</th>)}<th style={S.th}>Cantitate / avertisment</th></tr></thead>
       <tbody>{raspuns.randuri.map((r, i) => <tr key={i} style={{ background:cantitateMultiplaOCR(r) ? G.yellow + '22' : undefined }}>
-        {coloane.map(([k]) => <td style={S.td} key={k}>{r[k] == null ? '—' : String(r[k])}</td>)}
+        {coloane.map(([k]) => <td style={{ ...S.td, whiteSpace:k === 'cod' || k === 'serie' || k === 'sarja' ? 'nowrap' : undefined }} key={k}>{r[k] == null ? '—' : String(r[k])}</td>)}
         <td style={{ ...S.td, color:G.yellow }}>{cantitateMultiplaOCR(r) ? `Rând cu cantitate ${String(r.cantitate)} fără serii individuale — introdu manual bucățile.` : String(r.cantitate ?? '1')}</td>
       </tr>)}</tbody>
     </table></div>}
