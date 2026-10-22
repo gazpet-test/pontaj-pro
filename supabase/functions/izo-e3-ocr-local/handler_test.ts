@@ -36,6 +36,11 @@ function fixture() {
       const ok = (data: unknown) => ({ data, error: null })
       const fail = (message: string) => ({ data: null, error: { code: 'P0001', message } })
       if (fn === 'fn_verifica_secret') { assert.equal(args.p_nume, SECRET_IZO_OCR); return ok(goodSecret && args.p_secret === secret) }
+      if (fn === 'fn_ocr_local_context') {
+        const creator = args.p_user === c.creat_de && args.p_token === null
+        const worker = args.p_user === null && tokenGood && args.p_token === TOKEN
+        return ok(args.p_id === ID && (creator || worker) ? [{ ...c }] : [])
+      }
       if (fn === 'fn_ocr_local_admite') { assert.equal(args.p_user, USER); assert.ok(events.includes('caller:profiles')); return ok([{ id: ID, cale: 'ocr-local-cereri/' + ID + '.pdf', status: admitted, motiv: admissionError }]) }
       if (fn === 'fn_ocr_local_confirma_upload') return ok([{ termen_local: '2099-01-01T00:00:00Z' }])
       if (fn === 'fn_ocr_local_verifica_token') return tokenGood && args.p_token === TOKEN ? ok([{ cale: `ocr-local-cereri/${ID}.pdf`, sablon: c.sablon, termen_local: '2099-01-01T00:00:00Z' }]) : fail('token_invalid')
@@ -74,8 +79,7 @@ function fixture() {
       }
     } },
   } as unknown as Client
-  const context = async (id: string, user: string | null) => { events.push('context'); return id === ID && (user === null || user === c.creat_de) ? c : null }
-  const d = { caller, ledger, context, apiKey: 'fake', pdf: async () => 'mono' as const }
+  const d = { caller, ledger, apiKey: 'fake', pdf: async () => 'mono' as const }
   const call = (body: Record<string, unknown>, worker = false, headers: Record<string, string> = {}) => handle(new Request('https://test.invalid', { method: 'POST', headers: { ...(worker ? { [ANTET_IZO_OCR]: secret } : { Authorization: 'Bearer fake' }), ...headers }, body: JSON.stringify(body) }), d)
   return { c, d, events, calls, call, set: (v: Record<string, unknown>) => {
     admitted = String(v.admitted ?? admitted); admissionError = String(v.admissionError ?? admissionError)
@@ -98,15 +102,16 @@ Deno.test('canale închise: secret lipsă/greșit, JWT la worker, secret la UI; 
   assert.equal((await f.call({ op: 'curata' }, true)).status, 400)
   assert.equal((await f.call({ op: 'toString' }, true)).status, 400)
 })
-Deno.test('creator și drepturi expirate: refuz înainte de orice RPC B1', async () => {
+Deno.test('creator și drepturi expirate: numai lookup context înainte de poartă, fără RPC de coadă', async () => {
   for (const op of ['stare', 'fallback']) {
     const f = fixture(); f.c.creat_de = 'altul'
     assert.equal((await f.call({ op, cerere_id: ID })).status, 404)
-    assert.equal(f.calls.length, 0)
+    assert.deepEqual(f.calls.map(c => c.fn), ['fn_ocr_local_context'])
+    assert.equal(f.events.includes('caller:profiles'), false)
   }
   const f = fixture(); f.set({ owner: false, expired: true })
   assert.equal((await f.call({ op: 'fallback', cerere_id: ID })).status, 403)
-  assert.equal(f.calls.length, 0)
+  assert.deepEqual(f.calls.map(c => c.fn), ['fn_ocr_local_context'])
   const g = fixture(); g.set({ owner: false, access: false })
   assert.equal((await g.call(cere())).status, 403); assert.equal(g.calls.length, 0)
 })
@@ -115,12 +120,27 @@ Deno.test('stare: context din server, p_user din getUser, proiecție fără toke
   assert.equal(r.status, 200)
   assert.deepEqual(Object.keys(await r.json()).sort(), ['success', 'stare', 'ramura', 'rezultat', 'eroare', 'termen_local', 'termen_fallback'].sort())
   assert.equal(f.calls[0].args.p_user, USER)
+  assert.deepEqual(f.calls[0], { fn: 'fn_ocr_local_context', args: { p_id: ID, p_user: USER, p_token: null } })
+  assert.ok(f.events.indexOf('jwt') < f.events.indexOf('fn_ocr_local_context'))
+  assert.ok(f.events.indexOf('fn_ocr_local_context') < f.events.indexOf('caller:profiles'))
   assert.ok(f.events.indexOf('caller:profiles') < f.events.indexOf('fn_ocr_local_stare'))
   assert.equal((await f.call({ op: 'stare', cerere_id: ID, user: USER })).status, 400)
 })
-Deno.test('ACL B1 real: fără adaptor de context nu se încearcă SELECT interzis sau RPC plătit', async () => {
-  const f = fixture(), r = await handle(new Request('https://test.invalid', { method: 'POST', headers: { Authorization: 'Bearer fake' }, body: JSON.stringify({ op: 'fallback', cerere_id: ID }) }), { ...f.d, context: undefined })
-  assert.equal(r.status, 503); assert.equal((await r.json()).eroare, 'contract_context_lipsa'); assert.equal(f.calls.length, 0)
+Deno.test('JWT invalid: niciun context/RPC; context din body refuzat; lookup eșuat închide accesul', async () => {
+  for (const op of ['cere', 'stare', 'fallback']) {
+    const f = fixture(); f.set({ jwt: false })
+    const r = await f.call(op === 'cere' ? cere() : { op, cerere_id: ID })
+    assert.equal(r.status, 403); assert.equal(f.calls.length, 0)
+  }
+  for (const op of ['stare', 'fallback']) {
+    const f = fixture()
+    assert.equal((await f.call({ op, cerere_id: ID, proiect_id: 1, depozit_id: 2, token: TOKEN })).status, 400)
+    assert.equal(f.calls.length, 0)
+    f.d.ledger.rpc = (() => Promise.resolve({ data: null, error: { message: 'permission denied' } })) as typeof f.d.ledger.rpc
+    const r = await f.call({ op, cerere_id: ID })
+    assert.equal(r.status, 503); assert.equal((await r.json()).eroare, 'coada_indisponibila')
+    assert.equal(f.events.includes('caller:profiles'), false)
+  }
 })
 Deno.test('admiterea/cota preced Storage; multipagină, invalid, neverificabil nu urcă nimic', async () => {
   for (const motiv of ['limita_active', 'limita_ora', 'limita_zi', 'limita_incercari', 'local_indisponibil', 'noapte']) {
@@ -158,7 +178,7 @@ Deno.test('rezultat: validare strictă brută, structură finală, ramură eroar
     assert.equal(g.calls.at(-1)!.args.p_eroare, 'raspuns_local_invalid')
   }
   const g = fixture(); assert.equal((await g.call(rezultat(null, 'garda'), true)).status, 200)
-  assert.equal(g.events.includes('context'), false)
+  assert.equal(g.events.includes('fn_ocr_local_context'), false)
   const h = fixture(); h.set({ tokenGood: false })
   assert.equal((await h.call(rezultat(), true)).status, 409)
   assert.equal(h.events.includes('fn_ocr_local_rezultat'), false)
@@ -210,12 +230,33 @@ Deno.test('arbitraj repetat / fallback după arbitraj / concurență: maximum un
   f.d = Object.assign(f.d, { transport: transport({}, sent) })
   assert.equal((await f.call(arb(), true)).status, 200)
   const replay = await f.call(arb(), true); assert.equal((await replay.json()).arbitraj, 'ok')
+  assert.deepEqual(f.calls.find(c => c.fn === 'fn_ocr_local_context')!.args, { p_id: ID, p_user: null, p_token: TOKEN })
+  assert.equal(f.events.includes('jwt'), false)
+  assert.equal(f.events.includes('caller:profiles'), false)
   await f.call({ op: 'fallback', cerere_id: ID })
   assert.equal(sent.filter(s => s === 'send').length, 1)
   const g = fixture(), concurrent: string[] = []
   Object.assign(g.d, { transport: transport({}, concurrent) })
   await Promise.all([g.call(arb(), true), g.call({ op: 'fallback', cerere_id: ID })])
   assert.ok(concurrent.filter(s => s === 'send').length <= 1)
+})
+Deno.test('context worker dispărut între verificarea tokenului și recuperare: fără răspuns arbitrat sau rezultat salvat', async () => {
+  for (const op of ['arbitreaza', 'rezultat']) {
+    const f = fixture(), sent: string[] = []
+    Object.assign(f.d, { transport: transport({}, sent) })
+    if (op === 'arbitreaza') await f.call(arb(), true)
+    const original = f.d.ledger.rpc.bind(f.d.ledger)
+    f.d.ledger.rpc = ((fn: string, args: Record<string, unknown>) => fn === 'fn_ocr_local_context'
+      ? Promise.resolve({ data: [], error: null }) : original(fn, args)) as typeof f.d.ledger.rpc
+    const r = await f.call(op === 'arbitreaza' ? arb() : rezultat(), true)
+    if (op === 'arbitreaza') {
+      assert.deepEqual(await r.json(), { arbitraj: 'deja_consumat' })
+      assert.equal(sent.filter(s => s === 'send').length, 1)
+    } else {
+      assert.equal(r.status, 409)
+      assert.equal(f.events.includes('fn_ocr_local_rezultat'), false)
+    }
+  }
 })
 Deno.test('fallback integral: format aviz_e3 persistat, creator din JWT, repetare fără alt apel', async () => {
   const f = fixture(), sent: string[] = []

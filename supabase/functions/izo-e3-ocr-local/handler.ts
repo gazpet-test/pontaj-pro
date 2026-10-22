@@ -3,7 +3,7 @@ import { ANTET_IZO_OCR, esteApelIzoOcrLocal } from '../_shared/izoOcrLocal.ts'
 import { citesteCorp, sha256Hex } from '../_shared/ocrLocal.ts'
 import { EroareE3, MAX_TOKENS_E3, MODEL_E3, normalizeazaE3, promptE3, validaStructuraE3, valideazaBrutLocalE3, valideazaCerereE3 } from '../ocr-packing-list/avizE3.ts'
 import { ERORI_LOCALE, JWT_OPS, WORKER_OPS, exact, obiect, rotatie, textScurt, uuid, valideazaCelule, valideazaDecizii, valideazaSursa } from './contract.ts'
-import { contextIndisponibil, type CitesteContext, type ContextCerere } from './context.ts'
+import { citesteContext, type CitesteContext, type ContextCerere } from './context.ts'
 import { apelPlatitE3 } from './haiku.ts'
 import { verificaPdf, type VerdictPdf } from './pdf.ts'
 import { primul, rpc, stare, type Client } from './rpc.ts'
@@ -33,7 +33,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     if (!citit.ok) return response(citit.status, { success: false, eroare: 'cerere_invalida' })
     const b = citit.corp
     if (!obiect(b) || typeof b.op !== 'string' || ![...JWT_OPS, ...WORKER_OPS].includes(b.op)) throw new EroareE3('operatie_invalida', 400)
-    const l = deps.ledger, context = deps.context ?? contextIndisponibil
+    const l = deps.ledger, context = deps.context ?? citesteContext(l)
     let user: string | null = null
     if (JWT_OPS.includes(b.op)) {
       if (req.headers.has(ANTET_IZO_OCR)) throw new EroareE3('neautorizat', 401)
@@ -44,9 +44,6 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
       exact(b, ['op', 'pdf_base64', 'proiect_id', 'depozit_id', 'sablon'])
       const v = valideazaCerereE3({ ...b, tip: 'aviz_e3' })
       await verificaPoartaE3(deps.caller, user!, v.proiect_id, v.depozit_id)
-      // Nu admitem cereri care nu ar putea fi închise ulterior. Contractul de
-      // citire trebuie rezolvat înainte de activarea edge-ului, nu după upload.
-      if (!deps.context) throw new EroareE3('contract_context_lipsa', 503)
       const bytes = Uint8Array.from(atob(v.pdf_base64), c => c.charCodeAt(0))
       // Inclusiv PDF-urile respinse consumă încercarea; toate limitele preced Storage.
       const admis = primul<{ id: string; cale: string; status: string; motiv: string }>(await rpc(l, 'admite', { p_user: user, p_proiect: v.proiect_id, p_depozit: v.depozit_id, p_sablon: v.sablon, p_bytes: bytes.length }))
@@ -61,6 +58,8 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
     }
     if (b.op === 'stare' || b.op === 'fallback') {
       exact(b, ['op', 'cerere_id']); uuid(b.cerere_id)
+      // Singura excepție la „poarta înainte de orice RPC”: lookup filtrat
+      // după creatorul verificat JWT, apoi poarta caller, apoi RPC-urile cozii.
       const c = await context(b.cerere_id, user, null)
       if (!c || c.id !== b.cerere_id || c.creat_de !== user) throw new EroareE3('nu_exista', 404)
       await verificaPoartaE3(deps.caller, user!, c.proiect_id, c.depozit_id)
@@ -141,7 +140,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
         throw new EroareE3('obiect_invalid', 400)
       }
       const c = await context(args.p_id, null, args.p_token)
-      if (!c || c.id !== args.p_id || c.sablon !== r.sablon) throw new EroareE3('contract_context_lipsa', 503)
+      if (!c || c.id !== args.p_id || c.sablon !== r.sablon) throw new EroareE3('token_invalid', 409)
       try { rezultat = await propunere(JSON.stringify(b.obiect), r, `ocr_local:lighton+mineru${c.drept_platit_de === 'arbitraj' ? '+' + MODEL_E3 : ''}`, Number(c.cost_usd ?? 0), sursa, await plafon(l, c.proiect_id, c.rezervare_id)) }
       catch (e) { if (!(e instanceof EroareE3) || e.status === 503) throw e; eroare = e.cod === 'structura_incerta' ? e.cod : 'raspuns_local_invalid' }
     }
@@ -151,7 +150,7 @@ export async function handle(req: Request, deps: Deps): Promise<Response> {
 }
 
 async function plafonCurent(d: Deps, id: string, user: string | null, token: string | null) {
-  const c: ContextCerere | null = await (d.context ?? contextIndisponibil)(id, user, token)
-  if (!c) throw new EroareE3('contract_context_lipsa', 503)
+  const c: ContextCerere | null = await (d.context ?? citesteContext(d.ledger))(id, user, token)
+  if (!c) throw new EroareE3('nu_exista', 404)
   return plafon(d.ledger, c.proiect_id, c.rezervare_id)
 }
