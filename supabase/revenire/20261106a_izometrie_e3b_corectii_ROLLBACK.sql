@@ -1,11 +1,11 @@
 -- GENERAT de gen_e3b.py. Revenire piesa A, înainte de revenirea E3.
--- BEGIN; SELECT set_config('gazpet.revenire_20261105a','IZO_E3B_SCOATE:' || txid_current(),true);
+-- BEGIN; SELECT set_config('gazpet.revenire_20261106a','IZO_E3B_SCOATE:' || txid_current(),true);
 -- <fișierul>; COMMIT; metadata runner-ului se gestionează separat.
 DO $revenire$
 DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_comentariu text; v_lipsa text[];
   v_impl text[]; v_impl_rev text[]; v_porti text; v_porti_e3 text;
 BEGIN
-  IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261105a',true)
+  IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261106a',true)
       IS DISTINCT FROM 'IZO_E3B_SCOATE:' || txid_current() THEN RAISE EXCEPTION 'Revenire E3b: nearmată sau rol incorect'; END IF;
   IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN RAISE EXCEPTION 'Revenire E3b: READ COMMITTED'; END IF;
   PERFORM set_config('lock_timeout','5s',true);
@@ -70,7 +70,7 @@ BEGIN
   -- </amprenta>
   v_comentariu := obj_description('public.magazie_bucati_evenimente'::regclass,'pg_class');
   v_scrisa := substring(v_comentariu FROM '^E3b amprenta=([0-9a-f]{32})');
-  v_inainte := substring(v_comentariu FROM 'inainte_20261105a=([0-9a-f]{32})');
+  v_inainte := substring(v_comentariu FROM 'inainte_20261106a=([0-9a-f]{32})');
   v_porti := substring(v_comentariu FROM 'porti_anterioare=(porti=[0-9a-f]{32})');
   v_porti_e3 := substring(v_comentariu FROM 'porti_e3_anterioare=(porti_e3=[0-9a-f]{32})');
   IF v_amprenta IS DISTINCT FROM v_scrisa OR v_inainte IS NULL OR v_porti IS NULL OR v_porti_e3 IS NULL

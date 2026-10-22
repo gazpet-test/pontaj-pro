@@ -18,8 +18,8 @@ spec.loader.exec_module(g)
 class GeneratorTest(unittest.TestCase):
     def test_generare_idempotenta_si_live_neatins(self):
         live = [g.E2, g.E3, R / 'supabase/migrations/20261102c_izometrie_cai_vechi_stoc.sql']
-        outputs = [R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql',
-                   R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql']
+        outputs = [R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql',
+                   R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql']
         digest = lambda ps: [hashlib.sha256(p.read_bytes()).hexdigest() for p in ps]
         before = digest(live)
         subprocess.run([sys.executable, str(SP / 'gen_e3b.py')], check=True)
@@ -38,8 +38,8 @@ class GeneratorTest(unittest.TestCase):
         old = g.BLOCURI_VECHI['fn_izo_porti_lipsa']
         self.assertIn(old, g.e3)
         self.assertEqual(g.md5(g.prosrc(old)), g.MD5_VECHI['fn_izo_porti_lipsa'])
-        mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
-        rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
         new = g.pl_noua
         self.assertIn(g.ddl_exact(new), mig)
         self.assertEqual(g.prosrc(new).replace('    v := v || public.fn_izo_porti_e3b_lipsa();\n', ''), g.prosrc(old))
@@ -74,8 +74,8 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual(set(g.FUNCTII['public.' + fn]), set(g.ROLURI))
 
     def test_b_contract_static(self):
-        mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
-        rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
         # Testul 13: inclusiv comentariile din corpurile E3b; numele se construiesc numai aici.
         forbidden = ['fn_izo_' + x for x in ('seteaza_nivel', 'import_sold_initial', 'import_storno', 'activeaza_si_importa')]
         # excepție: copiile EXACTE ale porții LIVE (fn_izo_porti_lipsa, E2a / E3) — conțin numele în detectorul de wrapper-e;
@@ -105,8 +105,8 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual(g.replacements[name], '')
 
     def test_c1_frontiera_acl_revenire_si_insert_c(self):
-        mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
-        rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
         self.assertEqual(len(g.FN_C1), 5)
         for signature, owner in g.FN_OPERATII.items():
             name = signature.split('(')[0]
@@ -128,8 +128,8 @@ class GeneratorTest(unittest.TestCase):
         self.assertNotIn('set_config', g.prosrc(g.bloc_functie(mig, 'fn_izo_cor_verifica')))
 
     def test_c2_acl_stampile_rollback_si_frontiera_fara_guc(self):
-        mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
-        rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
         self.assertEqual(g.FN_C2, {
             'fn_izo_cor_camp(bigint, bigint, jsonb, text)': 'izo_corectie_writer',
             'fn_izo_cor_pv(bigint, bigint, text, date, text)': 'izo_corectie_writer',
@@ -167,8 +167,8 @@ class GeneratorTest(unittest.TestCase):
         self.assertNotIn("'storno_pv'", pv)
 
     def test_transfer_owner_nesuperuser(self):
-        mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
-        rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
         revoke = 'REVOKE ALL ON FUNCTION public.fn_izo_cor_marcheaza(bigint) FROM PUBLIC, anon, authenticated, service_role;'
         grant = 'GRANT CREATE ON SCHEMA public TO izo_corectie_writer;'
         owner = 'ALTER FUNCTION public.fn_izo_cor_marcheaza(bigint) OWNER TO izo_corectie_writer;'

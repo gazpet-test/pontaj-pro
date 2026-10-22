@@ -10,11 +10,11 @@ BAZA=izo_e3b_test
 MIG_A="$RADACINA/supabase/migrations/20261102a_izometrie_e2a_registru.sql"
 MIG_C="$RADACINA/supabase/migrations/20261102c_izometrie_cai_vechi_stoc.sql"
 MIG_E3="$RADACINA/supabase/migrations/20261103b_izometrie_e3_documente.sql"
-MIG_E3B="$RADACINA/supabase/migrations/20261105a_izometrie_e3b_corectii.sql"
+MIG_E3B="$RADACINA/supabase/migrations/20261106a_izometrie_e3b_corectii.sql"
 REV_A="$RADACINA/supabase/revenire/20261102a_izometrie_e2a_registru_ROLLBACK.sql"
 REV_C="$RADACINA/supabase/revenire/20261102c_izometrie_cai_vechi_stoc_ROLLBACK.sql"
 REV_E3="$RADACINA/supabase/revenire/20261103b_izometrie_e3_documente_ROLLBACK.sql"
-REV_E3B="$RADACINA/supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql"
+REV_E3B="$RADACINA/supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql"
 OPRESTE=0; [ "${1:-}" = --opreste ] && OPRESTE=1
 esec() { echo "ESEC: $*" >&2; exit 1; }
 mediu() { echo "MEDIU: $*" >&2; exit 2; }
@@ -60,7 +60,7 @@ livreaza 20261102140000 "$MIG_C"
 livreaza 20261103120000 "$MIG_E3"
 INAINTE="$(baseline)"
 refuza 'numai postgres' "${PSQL[@]}" -d "$BAZA" -f "$MIG_E3B"
-livreaza 20261105120000 "$MIG_E3B"
+livreaza 20261106120000 "$MIG_E3B"
 [ "$(q 'SELECT public.fn_izo_porti_lipsa()')" = '{}' ] || esec 'poarta după E3b'
 ok '20261102a -> 2c -> E3 -> E3b prin runner; gate = {}'
 OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3b.test.sql" 2>&1)" || { echo "$OUT" >&2; esec 'catalog E3b'; }
@@ -69,24 +69,24 @@ grep -q 'TESTE E3b-B: TOATE OK' <<<"$OUT" || esec 'testele B nu au ajuns la fina
 ok 'catalog, matrice, roluri, RLS, PUBLIC EXECUTE și mutații'
 # Reaplicare direct sub gardă, ca să dovedim refuzul migrării, nu numai al metadata runner-ului.
 refuza 'există deja' "${PSQL[@]}" -d "$BAZA" --single-transaction \
-  -c "SELECT set_config('gazpet.livrare_migrare','20261105a_izometrie_e3b_corectii:' || txid_current(),true)" -f "$MIG_E3B"
+  -c "SELECT set_config('gazpet.livrare_migrare','20261106a_izometrie_e3b_corectii:' || txid_current(),true)" -f "$MIG_E3B"
 refuza 'nearmată' "${PSQL[@]}" -d "$BAZA" -f "$REV_E3B"
 refuza 'READ COMMITTED' "${PSQL[@]}" -d "$BAZA" --single-transaction -c 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ' \
-  -c "SELECT set_config('gazpet.revenire_20261105a','IZO_E3B_SCOATE:' || txid_current(),true)" -f "$REV_E3B"
+  -c "SELECT set_config('gazpet.revenire_20261106a','IZO_E3B_SCOATE:' || txid_current(),true)" -f "$REV_E3B"
 # Fapt necomis numai în fixture: eroarea revenirii anulează și INSERT-ul.
 refuza 'există fapte E3b' "${PSQL[@]}" -d "$BAZA" --single-transaction \
   -c "ALTER TABLE public.izo_corectii DISABLE TRIGGER trg_izo_cor_garda;
       INSERT INTO public.izo_corectii(proiect_id,tip,import_id,inainte,motiv,cale,propus_de)
       VALUES(3,'storno_import','fixture-e3b','{}','fixture revenire','direct','00000000-0000-0000-0000-000000000121');
       ALTER TABLE public.izo_corectii ENABLE ALWAYS TRIGGER trg_izo_cor_garda" \
-  -c "SELECT set_config('gazpet.revenire_20261105a','IZO_E3B_SCOATE:' || txid_current(),true)" -f "$REV_E3B"
-revenire 20261105a IZO_E3B_SCOATE "$REV_E3B"
+  -c "SELECT set_config('gazpet.revenire_20261106a','IZO_E3B_SCOATE:' || txid_current(),true)" -f "$REV_E3B"
+revenire 20261106a IZO_E3B_SCOATE "$REV_E3B"
 [ "$(baseline)" = "$INAINTE" ] || esec 'amprenta sau ștampilele diferă după revenire E3b'
 [ "$(q 'SELECT public.fn_izo_porti_lipsa()')" = '{}' ] || esec 'porți E3 după revenire E3b'
 ok 'reaplicare refuzată; revenire E3b: COMMENT/amprenta/ștampile EXACT egale cu baseline'
 revenire 20261103b IZO_E3_SCOATE "$REV_E3"
 ok 'revenirea E3 trece după revenirea E3b'
-q "DELETE FROM supabase_migrations.schema_migrations WHERE name IN ('20261105a_izometrie_e3b_corectii','20261103b_izometrie_e3_documente')" >/dev/null
+q "DELETE FROM supabase_migrations.schema_migrations WHERE name IN ('20261106a_izometrie_e3b_corectii','20261103b_izometrie_e3_documente')" >/dev/null
 revenire 20261102c IZO_CAI_STOC_SCOATE "$REV_C"
 revenire 20261102a IZO_E2A_SCOATE "$REV_A"
 echo 'PASS E3b-A: schelet -> apply -> catalog -> refuz reaplicare -> revenire E3b -> E3 -> 2c -> E2a'

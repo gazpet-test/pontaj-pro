@@ -1,5 +1,5 @@
 -- GENERAT de scripts/izometrie/e3b_gen/gen_e3b.py. NU se editează manual.
-  -- 20261105a: E3b piesele A+B+C1+C2, infrastructură, gărzi, propuneri și corecții directe.
+  -- 20261106a: E3b piesele A+B+C1+C2, infrastructură, gărzi, propuneri și corecții directe.
   -- Design r5: toate Q-E3b-1..18 = A. Storno și istoricul vin în D.
 -- Numai runner; nicio modificare de date. Implementare parțială E3b: fluxul propunerilor C1.
 DO $migrare$
@@ -8,7 +8,7 @@ DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_comentariu text;
   v_porti text; v_porti_e3 text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true)
-       IS DISTINCT FROM '20261105a_izometrie_e3b_corectii:' || txid_current() THEN
+       IS DISTINCT FROM '20261106a_izometrie_e3b_corectii:' || txid_current() THEN
     RAISE EXCEPTION 'E3b: numai postgres, prin scripts/livrare_migrare.sh';
   END IF;
   IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
@@ -753,9 +753,9 @@ BEGIN
 @@AMPRENTA@@
   IF v_amprenta IS NULL OR v_amprenta = v_inainte THEN RAISE EXCEPTION 'E3b: amprenta nouă invalidă'; END IF;
   EXECUTE format('COMMENT ON TABLE public.magazie_bucati_evenimente IS %L',
-    'E3b amprenta=' || v_amprenta || ' inainte_20261105a=' || v_inainte
+    'E3b amprenta=' || v_amprenta || ' inainte_20261106a=' || v_inainte
     || ' porti_anterioare=' || v_porti || ' porti_e3_anterioare=' || v_porti_e3 || ' ‖ anterior: ' || v_comentariu);
-  IF current_setting('gazpet.livrare_migrare',true) IS DISTINCT FROM '20261105a_izometrie_e3b_corectii:' || txid_current() THEN
+  IF current_setting('gazpet.livrare_migrare',true) IS DISTINCT FROM '20261106a_izometrie_e3b_corectii:' || txid_current() THEN
     RAISE EXCEPTION 'E3b: garda finală de livrare';
   END IF;
 END
