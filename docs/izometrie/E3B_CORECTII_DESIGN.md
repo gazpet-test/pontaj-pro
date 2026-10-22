@@ -36,6 +36,8 @@
 - cele 3352 de bucăți: 1884 `receptionat`, 1466 `pe_tronson`, 2 `carantina`, 0 `sosit`;
 - atribuirile active: 3 `gestionar`, 2 `inginer_izometrie`, 1 `manager_aprobator`.
 
+**Notă de implementare (22.10.2026):** migrarea se numește `20261106a_izometrie_e3b_corectii` (numele `20261104a` / `20261105a` au fost luate pe main de Ofertare / E9). Matricea Q-E3b-1 × Q-E3b-17 se implementează doar pe celula aleasă (Q1 = A, Q17 = A, Q14 = A, Q16 = A, #1823); celelalte celule din §6 / §7 / §9.18 nu se construiesc.
+
 ## 0. Ce face E3b (și ce nu)
 
 **Face (cele șase corecții din #1819):**
@@ -102,7 +104,7 @@ Cheia `tip` din exemplul r1 devine `tip_cod`, ca să nu se confunde cu `p_tip`. 
 - **Regula de cod:** niciun corp E3b nu numește cele patru funcții E2a, nici măcar în comentarii (`prosrc` include comentariile).
 - Testul 13 o dovedește.
 
-## 2. Schema nouă (migrarea `20261104a_izometrie_e3b_corectii`; 20261102a / 20261103b NU se modifică ca fișiere)
+## 2. Schema nouă (migrarea `20261106a_izometrie_e3b_corectii`; 20261102a / 20261103b NU se modifică ca fișiere)
 
 ### 2.1 `izo_corectii` — „documentul” fiecărei corecții
 
@@ -699,7 +701,7 @@ Generatorul migrării primește cele două decizii ca parametri și produce exac
 
 Testele 9–10 și regresia (testul 14) sunt scrise pe ambele ramuri. Sub A, testele E2a / E3 care cer refuzul la „orice mișcare” se adaptează explicit, cu lista lor în PR (nu se șterg).
 
-## 7. Revenirea (`supabase/revenire/20261104a_izometrie_e3b_corectii_ROLLBACK.sql`; rulează ÎNAINTEA revenirii E3)
+## 7. Revenirea (`supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql`; rulează ÎNAINTEA revenirii E3)
 
 - **Refuză dacă există ORICE fapt E3b:**
   - vreun rând în `izo_corectii` / `izo_corectii_bucati` / `izo_documente_istoric`;
