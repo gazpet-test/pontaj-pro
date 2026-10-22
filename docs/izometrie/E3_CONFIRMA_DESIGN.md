@@ -681,3 +681,23 @@ Propunere pregătită pe branch separat (`izometrie/e3-r5h-chat`), peste r5g (`4
    - O excepție nouă pe lista albă (alt obiect de platformă, alt corp după un upgrade) = captură nouă `--captura-implicite` + review al diff-ului din `baseline_pre_e3.json` + migrare care înlocuiește `fn_izo_porti_lipsa`, cu aceeași procedură.
 5. **Pe prod (citit read-only 22.10.2026, închiderea r5h rulată într-un DO read-only):** 0 refuzuri noi (`mesaje = []`; c_fn 19 după scoaterea țintelor `fn_izo_*`, c_mut 35); 0m: 35 = 35, diferență nulă; captura reprodusă de `--captura-implicite` dă exact amprentele și corpurile din `baseline_pre_e3.json`.
 6. **Harness:** PASS, 165 de verificări SQL E3 (+10: E16a–j), suita E2a 180. Fiecare test nou pică pe r5g: E16a / c / d / e / g / h / j sunt false pe migrarea r5g, iar E16b / f probează că citirea are loc. 0m / P6 nu există în r5g.
+
+## 18. Limitări declarate după r5h (E3 LIVE 22.10.2026, regula de oprire #1814 extinsă la E3 — `claude_context` #1822)
+
+20261103b (r5h, sha 17915a5d…) e aplicată pe prod, cu „da”-ul lui Razvan. Review-ul r5h (Copilot + Jak: `out/cop_pr825h.log`, `out/jak_pr825h.log`) a găsit doar variante din aceeași clasă: completitudinea analizei textuale / de catalog a închiderii citirilor. Pe decizia A (#1822), ele NU se mai repară prin runde de review. Rămân limitări declarate, cu pragul de mai jos.
+
+1. **Helperii tranzitivi ai excepțiilor de pe lista albă (Copilot P1 / Jak P1-A, r5h).** Amprenta unei invocări implicite revizuite fixează doar funcția chemată direct de trigger / event trigger, inclusiv corpul ei (§17.2), nu și funcțiile pe care aceasta le cheamă.
+   - **Contraexemplu:** `tr_check_filters` și `realtime.subscription_check_filters()` rămân identice, dar un helper chemat de ele (de ex. `realtime.cast(text, regtype)`) e modificat să citească `izo_documente_*`. Un wrapper DEFINER poate atunci provoca citirea fără refuz.
+   - **Ce rămâne protejat:** un helper devenit cititor sub un trigger DEFINER (profiles) propagă citirea până la trigger, iar acesta e refuzat independent de lista albă.
+   - **Condiția de exploatare:** schimbarea corpului unei funcții de platformă (upgrade Supabase) sau DDL privilegiat (postgres / supabase_admin) în afara runner-ului. Amândouă sunt deja în afara contractului operațional (DDL-ul trece doar prin runner, sub lock-ul global).
+2. **Mutatorii de cale executați prin view-uri / reguli (Jak P1-B, r5h).** `pg_rewrite` e exceptat la P1-D, iar propagarea prin view-uri pornește doar din `f_rel` / `f_fn`, nu din `c_mut`.
+   - **Contraexemplu:** un view care cheamă o funcție mutator (`set_config('search_path', 'storage, public', true)`), apoi un wrapper DEFINER cu cale `public, pg_temp` care citește view-ul și cheamă necalificat un cititor. Acesta se rezolvă la `storage.<cititor>()` (INVOKER, citește documentele).
+   - **Condiția:** DDL (view + funcții în `storage` / schemă de platformă) făcut de un rol privilegiat, deci tot în afara contractului runner-ului.
+3. **Fereastra după P6 și înainte de COMMIT:** DDL-ul care ignoră runner-ul (advisory lock-ul e cooperativ) nu intră retroactiv în ștampilă; îl respinge verificarea următoare, la prima intrare E3.
+4. **Dependența de versiunea platformei (operațional).** Lista albă amprentează corpurile `realtime.subscription_check_filters`, `extensions.grant_pg_net_access` și `extensions.grant_pg_graphql_access` (+ excepțiile mutatorilor de la §17.3).
+   - Proba pe un branch PG17 NOU nu mai trece pe r5h: branch-ul are pg_net 0.20.4, prod are 0.20.0, deci corpul lui `grant_pg_net_access` diferă (fail-closed, corect). Proba completă r5f trecuse (§15).
+   - **Pe prod:** un upgrade Supabase / pg_net / pg_graphql / realtime care schimbă unul dintre corpuri înroșește poarta și oprește intrările E3, până la o captură nouă (`gen_e3.py --captura-implicite`) + review + migrare cu procedura de re-ștampilare (§17.4).
+   - **Pentru E3b / E4:** probele pe branch cer întâi o captură a corpurilor de platformă ale branch-ului (sau replicile exacte de prod încărcate pe branch, ca la baseline-ul Storage în `proba_pg17/`).
+5. **Pragul pentru redeschidere (regula de oprire):**
+   - o variantă nouă din clasa 1–3 NU redeschide E3 prin review;
+   - se repară doar dacă: (a) apare pe prod un obiect real care o exploatează, (b) contractul operațional se schimbă (DDL în afara runner-ului devine permis), sau (c) o etapă nouă (E3b / E4) atinge oricum codul închiderii — atunci se adaugă, în aceeași migrare, fixarea tranzitivă a helperilor de pe lista albă și propagarea mutatorilor prin `pg_rewrite`, cu re-ștampilare (§17.4).
