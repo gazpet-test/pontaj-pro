@@ -65,4 +65,8 @@ describe('prefill OCR E3', () => {
       totaluri_tiparite:{ total_kg:1500 } }, { mod:'inlocuieste' })
     expect(d.antet.total_net_kg).toBe(''); expect(d.antet.total_brut_kg).toBe('')
   })
+  it('izolația „izolate” de pe aviz devine PEHD (regulă Razvan 22.10)', () => {
+    const d = aplicaPropunereOCR(doc(), { antet:{}, randuri:[{ serie:'1', izolatie:'izolata' }, { serie:'2', izolatie:'Neizolata' }] }, { mod:'inlocuieste' })
+    expect(d.randuri.map(r => r.izolatie)).toEqual(['PEHD', 'neizolata'])
+  })
 })
