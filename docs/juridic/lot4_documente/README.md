@@ -14,4 +14,4 @@ Dosarul documentelor citite pentru analiza `../LOT4_TRANSGAZ_SCHIMBARE_LIDER_ASO
 
 Clauze-cheie din contractul Transgaz: 6 Cesiune (p. 9), 12.8 asociere/lider, 37.12 schimbarea contului, 44–46 plăți și certificate, 52 plăți directe subcontractanți, 64.1 reziliere de către Beneficiar, 66.7 denunțare, 67.1/67.2 insolvență și faliment, 70.6 litigii. Paginile exacte: caută `--- pagina N ---` în fișier.
 
-Documente încă nevăzute (22.10.2026): versoul biletului la ordin, acordurile de cesiune per factură pe 888 (nu există încă, nu s-a facturat), situațiile de lucrări pe 888/957, facturile Comesad → Moldocor, Fișa de date a licitației (clauza privind structura asocierii), contractele CEC Bank / RNPM.
+Documente încă nevăzute (22.10.2026): acordurile de cesiune per factură pe 888 (nu există încă, nu s-a facturat), situațiile de lucrări pe 888/957, facturile Comesad → Moldocor, Fișa de date a licitației (clauza privind structura asocierii), contractele CEC Bank / RNPM.

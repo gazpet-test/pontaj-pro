@@ -14,5 +14,5 @@ Data emiterii: 25.09.2026 | Locul emiterii: PIATRA NEAMȚ | Scadența: 05.11.202
 Semnătura emitentului: prezentă (semnătură olografă)
 VĂZUT la data / de emitent: (necompletat)
 AVALIZAT de: BĂTRÂNU MIHAI   pentru: MOLDOCOR SA   Semnătura avalist: prezentă (semnătură olografă, fără ștampilă în caseta de aval)
-Girări (1, 2, 3): necompletate pe față. Versoul: nevăzut (de verificat că e curat).
+Girări (1, 2, 3): necompletate pe față. Versoul: nu există girări (confirmat Răzvan 22.10.2026: biletul nu are verso completat).
 ```
