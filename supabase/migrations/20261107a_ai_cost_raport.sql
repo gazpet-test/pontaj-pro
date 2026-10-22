@@ -2,6 +2,8 @@
 -- ai_usage_log: politica SELECT nu este definită în istoricul disponibil.
 -- ai_plafon_rezervari: SELECT owner condiționat de egress_este_owner (20261105a).
 -- Calea UI este exclusiv RPC-ul owner; view-urile invoker rămân private.
+-- E9 (ocr-packing-list tip aviz_e3) NU scrie în ai_usage_log: costul lui e doar în ai_plafon_rezervari, deci UNION-ul nu dublează (Copilot r1 P1-1).
+-- ai_usage_log are azi politica SELECT authenticated USING(true) — expunere PREEXISTENTĂ, separată de raport, de decis de Razvan.
 DO $pre$
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261107a_ai_cost_raport:' || txid_current() THEN
@@ -26,6 +28,7 @@ WITH legaturi AS (
       WHEN 'ofertare_clarificari' THEN cl.licitatie_id
       WHEN 'ofertare_formulare_registru' THEN fr.licitatie_id
       WHEN 'ofertare_ocr_rezervari' THEN rul.licitatie_id
+      WHEN 'ofertare_rfq_oferte' THEN rfq.licitatie_id
     END AS licitatie_id,
     CASE u.ref_table
       WHEN 'executie_proiecte' THEN u.ref_id
@@ -42,6 +45,8 @@ WITH legaturi AS (
   -- 20261029b: rezervare -> rulare -> licitație; nu se adună costul rulării încă o dată.
   LEFT JOIN public.ofertare_ocr_rezervari oz ON u.ref_table = 'ofertare_ocr_rezervari' AND oz.id = u.ref_id
   LEFT JOIN public.ofertare_ocr_rulari rul ON rul.id = oz.rulare_id
+  LEFT JOIN public.ofertare_rfq_oferte ro ON u.ref_table = 'ofertare_rfq_oferte' AND ro.id = u.ref_id
+  LEFT JOIN public.ofertare_rfq rfq ON rfq.id = ro.rfq_id
   LEFT JOIN public.documente_proiect dp ON u.ref_table = 'documente_proiect' AND dp.id = u.ref_id
   LEFT JOIN public.executie_situatii_plata sp ON u.ref_table = 'executie_situatii_plata' AND sp.id = u.ref_id
   LEFT JOIN public.comenzi_furnizor cf ON u.ref_table = 'comenzi_furnizor' AND cf.id = u.ref_id
@@ -76,7 +81,7 @@ FROM legaturi u
 LEFT JOIN public.ofertare_licitatii l ON l.id = u.licitatie_id
 LEFT JOIN public.executie_proiecte p ON p.id = u.proiect_id
 UNION ALL
-SELECT date_trunc('month', r.creat_la AT TIME ZONE 'Europe/Bucharest')::date,
+SELECT date_trunc('month', coalesce(r.decontat_la, r.creat_la) AT TIME ZONE 'Europe/Bucharest')::date,   -- costul final în luna decontării (Copilot r1 P2)
   'Izometrie (citire avize)'::text, 'izo-e9'::text, NULL::text,
   CASE r.stare WHEN 'decontat' THEN r.cost_real WHEN 'pastrat' THEN r.suma_rezervata ELSE 0 END::numeric,
   'proiect'::text, substring(r.cheie FROM '^izo_e3_ocr:([0-9]+)$')::bigint,
@@ -96,7 +101,7 @@ SELECT luna, modul, tip_tinta, tinta_id, tinta_nume, model,
 FROM public.v_ai_cost_detaliu
 GROUP BY luna, modul, tip_tinta, tinta_id, tinta_nume, model;
 
-REVOKE ALL ON public.v_ai_cost_detaliu, public.v_ai_cost_lunar FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.v_ai_cost_detaliu, public.v_ai_cost_lunar FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.fn_ai_cost_lunar(p_de date, p_pana date)
 RETURNS TABLE (luna date, modul text, tip_tinta text, tinta_id bigint, tinta_nume text, model text,
@@ -117,5 +122,5 @@ BEGIN
     WHERE v.luna >= p_de AND v.luna <= p_pana
     ORDER BY v.luna, v.modul, v.tip_tinta NULLS FIRST, v.tinta_id NULLS FIRST, v.tinta_nume NULLS FIRST, v.model NULLS FIRST;
 END $f$;
-REVOKE EXECUTE ON FUNCTION public.fn_ai_cost_lunar(date,date) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.fn_ai_cost_lunar(date,date) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_ai_cost_lunar(date,date) TO authenticated;
