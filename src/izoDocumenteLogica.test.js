@@ -733,3 +733,63 @@ describe('componenta IzoDocumenteIntrare.jsx (sursa): doar contractul', () => {
     expect((src.match(/lipsaReceptie\(/g) || []).length).toBe(2)
   })
 })
+import { randPoatePrimiBulk, problemeDeVerificat, diferenteCodCurba, valoareDinCod, codCuValoare, geometrieRotatie, limiteCrop, cropDinPreview, rotesteCrop } from './izoDocumenteLogica.js'
+
+describe('E3/E9 bulk și corecții explicite', () => {
+  const sablon = 'lista_ambalare_curbe'
+  const baza = { ...randGol(sablon, 8), serie:'1029', sarja:'2513619', item:'9', cod:'1029-610-8,8-25-6100-2513614-9', diametru_mm:'610', perete_mm:'8,8', unghi_doc:'25', pachet_nr:'4', decizie:'', net_kg:'' }
+  const bulk = (r, randuri = [r]) => { const doc = { sablon, antet:{}, randuri:[r, ...randuri.slice(1)] }; const v = validareDocument(doc); return randPoatePrimiBulk(v.norm[0], sablon, doc, v.randuri[0]) }
+  it('heat greșit: textul vechi rămâne, cod și heat sunt structurate', () => {
+    const n = randNormalizat(baza, sablon), v = validareRand(n, sablon), cod = v.find(x => x.camp === 'cod')
+    expect(verificaCodCurba(n)).toBe('codul spune heat 2513614 — nu bate cu rândul')
+    expect(cod.campuri).toEqual(['cod', 'sarja'])
+    expect(cod.diferente).toEqual([{ camp:'sarja', label:'heat', valoare:'2513614' }])
+    expect(problemeDeVerificat(v).map(x => x.camp)).toEqual(['cod'])
+    expect(bulk(baza)).toBe(false)
+  })
+  it('kg pe alt rând al aceluiași pachet permit bulk; deciziile existente rămân', () => {
+    const r = { ...baza, cod:'', serie:'1028' }, alt = { ...baza, nr_crt:'9', net_kg:'1500', brut_kg:'1550' }
+    expect(bulk(r, [r, alt])).toBe(true)
+    expect(bulk(r, [r, { ...alt, pachet_nr:'5' }])).toBe(false)
+    expect(bulk(r, [r, { ...alt, net_kg:'abc' }])).toBe(false)
+    expect(bulk({ ...r, decizie:'refuzat_la_receptie', motiv:'rupt' })).toBe(false)
+    expect(bulk({ ...r, perete_mm:'' }, [r, alt])).toBe(false)
+  })
+  it('aviz fără greutate trece; seria suspectă și toleranța explicată nu trec', () => {
+    const r = { ...randGol('aviz_teava', 1), serie:'247EK08603', lungime_doc:'12', perete_mm:'8', decizie:'' }
+    const ok = r => randPoatePrimiBulk(randNormalizat(r, 'aviz_teava'), 'aviz_teava', { randuri:[r] })
+    expect(ok(r)).toBe(true)
+    expect(ok({ ...r, serie:'247EK086O3' })).toBe(false)
+    expect(ok({ ...r, lungime_masurata:'12,02', observatie:'verificat' })).toBe(false)
+  })
+  it('corecțiile păstrează celelalte părți, virgula și zerourile', () => {
+    expect(valoareDinCod(baza.cod, 'perete_mm')).toBe('8,8')
+    expect(codCuValoare(baza.cod, 'sarja', baza.sarja)).toBe('1029-610-8,8-25-6100-2513619-9')
+    expect(diferenteCodCurba(randNormalizat({ ...baza, sarja:'2513614' }, sablon))).toEqual([])
+    expect(codCuValoare('invalid', 'sarja', '1')).toBe(null)
+    expect(codCuValoare(baza.cod, 'sarja', '1-2')).toBe(null)
+    expect(diferenteCodCurba(randNormalizat({ ...baza, serie:'1030', item:'8', perete_mm:'10', diametru_mm:'600', unghi_doc:'30' }, sablon)).map(d => d.camp)).toEqual(['serie', 'diametru_mm', 'perete_mm', 'unghi_doc', 'sarja', 'item'])
+  })
+})
+describe('imagine: rotire apoi decupare', () => {
+  it('rotațiile au dimensiuni și translație corecte', () => {
+    expect(geometrieRotatie(400, 600, 90)).toEqual({ width:600, height:400, rotatie:90, x:600, y:0 })
+    expect(geometrieRotatie(400, 600, 180)).toEqual({ width:400, height:600, rotatie:180, x:400, y:600 })
+    expect(geometrieRotatie(400, 600, 270)).toEqual({ width:600, height:400, rotatie:270, x:0, y:400 })
+    expect(geometrieRotatie(400, 600, 45)).toEqual(geometrieRotatie(400, 600))
+  })
+  it('limite, minim 50px și conversie din preview', () => {
+    expect(limiteCrop({ x:-10, y:999, width:2, height:900 }, 400, 600)).toEqual({ x:0, y:0, width:50, height:600 })
+    expect(cropDinPreview({ x:10, y:20, width:100, height:150 }, 200, 300, 400, 600)).toEqual({ x:20, y:40, width:200, height:300 })
+    expect(limiteCrop(null, 20, 30)).toEqual({ x:0, y:0, width:20, height:30 })
+  })
+  it('rotația automată păstrează regiunea decupată', () => {
+    const rect = { x:20, y:40, width:100, height:200 }, r90 = rotesteCrop(rect, 400, 600, 90)
+    expect(r90).toEqual({ x:360, y:20, width:200, height:100 })
+    expect(rotesteCrop(r90, 600, 400, 270)).toEqual(rect)
+    expect(rotesteCrop(null, 400, 600, 90)).toBe(null)
+  })
+  it('codCuValoare scrie peretele cu virgulă (Jak ux2 P2)', () => {
+    expect(codCuValoare('1029-610-8-25-6100-2513619-9', 'perete_mm', '7.1')).toBe('1029-610-7,1-25-6100-2513619-9')
+  })
+})
