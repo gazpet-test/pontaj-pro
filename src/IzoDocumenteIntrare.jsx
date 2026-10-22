@@ -588,16 +588,18 @@ export default function IzoDocumenteIntrare() {
   if (!ed) return (
     <div>
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:12 }}>
-        <select style={{ ...S.input, maxWidth:360 }} value={proiectId || ''} onChange={e => { golesteLista(); setProiectId(Number(e.target.value)) }} disabled={busy}>
+        <select style={{ ...S.input, maxWidth:420, fontSize:16, fontWeight:800, color:G.blue, border:`2px solid ${G.blue}`, background:G.blue + '18' }} value={proiectId || ''} onChange={e => { golesteLista(); setProiectId(Number(e.target.value)) }} disabled={busy}>
           {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? `${p.cod_intern} · ` : ''}{p.nume}</option>)}
         </select>
-        <div style={{ flex:1, fontSize:12, color:G.muted, minWidth:220 }}>
+        <div style={{ display:'flex', gap:8, flexWrap:'nowrap' }}>
+          {depoziteScriere.length > 0 && Object.entries(SABLOANE).map(([k, s]) => (
+            <button key={k} style={{ ...S.btnS, color:G.green, borderColor:G.green + '66', whiteSpace:'nowrap' }} onClick={() => nou(k)} disabled={busy}>+ {s.emoji} {s.label}</button>
+          ))}
+          <button style={S.btnS} onClick={() => incarcaDocs(proiectId)} disabled={incarcDocs}>🔄</button>
+        </div>
+        <div style={{ flexBasis:'100%', fontSize:12, color:G.muted }}>
           Avizele de țeavă și listele de ambalare ale curbelor. După „Confirmă recepția” bucățile intră în registru și apar în 🧱 Țeavă proiecte.
         </div>
-        {depoziteScriere.length > 0 && Object.entries(SABLOANE).map(([k, s]) => (
-          <button key={k} style={{ ...S.btnS, color:G.green, borderColor:G.green + '66' }} onClick={() => nou(k)} disabled={busy}>+ {s.emoji} {s.label}</button>
-        ))}
-        <button style={S.btnS} onClick={() => incarcaDocs(proiectId)} disabled={incarcDocs}>🔄</button>
       </div>
       {mesaj}
       {!depoziteScriere.length && (
@@ -625,7 +627,7 @@ export default function IzoDocumenteIntrare() {
                   <td style={{ ...S.td, padding:'8px 10px' }}>{depNume[d.depozit_id] || '—'}</td>
                   <td style={{ ...S.td, padding:'8px 10px', whiteSpace:'nowrap' }}>{k ? <>{k.n}<span style={{ color:G.muted }}> · <span style={{ color:G.green }}>{k.primit}</span>{k.primit_neconform ? <> · <span style={{ color:G.orange }}>{k.primit_neconform} carant.</span></> : null}{k.refuzat_la_receptie ? <> · <span style={{ color:G.red }}>{k.refuzat_la_receptie} ref.</span></> : null}</span></> : '—'}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color:G.muted }}>{tot}</td>
-                  <td style={{ ...S.td, padding:'8px 10px', color:sm.color, fontWeight:700 }}>{sm.label}</td>
+                  <td style={{ ...S.td, padding:'8px 10px', color:sm.color, fontWeight:700 }}>{sm.label}{d.stare === 'anulat' && d.anulat_motiv ? <div style={{ fontSize:11, fontWeight:500, color:G.muted, maxWidth:220, whiteSpace:'normal' }}>motiv: {d.anulat_motiv}</div> : null}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color: pvTxt === '—' ? G.dim : G.green }}>{pvTxt}</td>
                   <td style={{ ...S.td, padding:'8px 10px' }}><button style={{ ...S.btnS, padding:'5px 10px' }} disabled={busy} onClick={ev => { ev.stopPropagation(); deschideDinLista(d.id) }}>{busy ? '…' : 'Deschide'}</button></td>
                 </tr>
@@ -726,7 +728,7 @@ export default function IzoDocumenteIntrare() {
         {ed.versiune != null && <span style={{ fontSize:11.5, color:G.dim }}>versiunea {ed.versiune}</span>}
         {ed.dirty && <span style={{ fontSize:11.5, color:G.yellow }}>● nesalvat</span>}
         <div style={{ flex:1 }} />
-        <span style={{ fontSize:12, color:G.muted }}>{proiect?.cod_intern ? `${proiect.cod_intern} · ` : ''}{proiect?.nume}</span>
+        <span style={{ fontSize:16, fontWeight:800, color:G.blue, padding:'4px 10px', border:`2px solid ${G.blue}`, borderRadius:8, background:G.blue + '18' }}>📁 {proiect?.cod_intern ? `${proiect.cod_intern} · ` : ''}{proiect?.nume}</span>
       </div>
       {mesaj}
       {panouAI}
