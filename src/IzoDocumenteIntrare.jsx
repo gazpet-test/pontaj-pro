@@ -674,7 +674,12 @@ export default function IzoDocumenteIntrare() {
         <button style={{ ...S.btnP, minHeight:44 }} onClick={() => citesteAI()} disabled={!pdfAI || busy || aiBusy || !edRol}>{aiBusy ? 'Se procesează…' : 'Citește cu AI'}</button>
       </div>
       <p style={{ fontSize:12, color:G.muted }}>O fotografie per document; pentru mai multe pagini alege un PDF. Maxim 8 MB. AI propune; tu verifici și salvezi.</p>
-      {pdfAI && <div style={{ fontSize:13 }}>{pdfAI.name} · {Math.ceil(pdfAI.size / 1024)} KB</div>}
+      {/* confirmare vizibilă (Razvan 22.10: „să știu sigur că s-a încărcat”) */}
+      {aiBusy && !pdfAI && <div style={{ margin:'8px 0', padding:'10px 12px', borderRadius:8, background:G.yellow + '22', border:`1px solid ${G.yellow}`, color:G.yellow, fontWeight:700 }}>⏳ Se pregătește poza…</div>}
+      {pdfAI && <div style={{ margin:'8px 0', padding:'10px 12px', borderRadius:8, background:G.green + '22', border:`1px solid ${G.green}`, color:G.green, fontWeight:700 }}>
+        ✓ {imagineAI ? 'Poză încărcată' : 'PDF încărcat'} — {Math.ceil(pdfAI.size / 1024)} KB{imagineAI && (imagineAI.rotatie || imagineAI.crop) ? ` (${[imagineAI.rotatie ? `rotită ${imagineAI.rotatie}°` : '', imagineAI.crop ? 'decupată' : ''].filter(Boolean).join(', ')})` : ''}, gata de citit
+        <div style={{ fontSize:11, fontWeight:400, color:G.muted, marginTop:2, overflowWrap:'anywhere' }}>{pdfAI.name}</div>
+      </div>}
       {pdfAI && imagineAI && <PregatireImagine imagine={imagineAI} busy={busy || aiBusy} aplica={refaceImagine}
         dimensiuni={(width, height) => setImagineAI(x => x ? { ...x, width, height } : x)} />}
       {rotatieMesaj && <div style={{ color:G.yellow }}>{rotatieMesaj}</div>}
