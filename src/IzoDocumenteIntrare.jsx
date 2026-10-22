@@ -532,15 +532,17 @@ export default function IzoDocumenteIntrare() {
     } catch (e) { flash('err', actual() ? e.message || 'Citirea AI a eșuat.' : 'Răspuns AI ignorat: editorul s-a schimbat.') }
     finally { aiLock.current = false; setAiBusy(false) }
   }
+  // PDF-ul din care s-a aplicat propunerea: doar el poate fi atașat ca „scan citit” (Jak ux2 r2 P1)
+  const pdfAplicat = useRef(null)
   const aplicaAI = mod => {
     if (!propunere || busy || aiLock.current || !edScrie || opritScriere(ed)) return
     if (propunere.context !== contextAI()) { setPropunere(null); flash('err', 'Propunerea a expirat: formularul s-a schimbat. Citește din nou documentul.'); return }
     modifica(e => aplicaPropunereOCR(e, propunere.raspuns, { mod }))
-    setPropunere(null); setAiAplicat(true)
+    setPropunere(null); setAiAplicat(true); pdfAplicat.current = pdfAI
     flash('ok', 'Propunere aplicată. Verifică datele și alege decizia pentru fiecare bucată înainte de salvare.')
   }
   const ataseazaCitit = async () => {
-    if (!pdfAI || busy || aiLock.current || !edScrie || opritScriere(ed)) return
+    if (!pdfAI || pdfAI !== pdfAplicat.current || busy || aiLock.current || !edScrie || opritScriere(ed)) return
     aiLock.current = true; setAiBusy(true)
     try {
       // La salvare se schimbă versiunea: atașăm exclusiv documentului întors de calea E3.
@@ -556,7 +558,7 @@ export default function IzoDocumenteIntrare() {
     try {
       const document = await salveaza(ed)
       if (!document) return
-      const atasat = pdfAI ? await adaugaScan(pdfAI, document) : false
+      const atasat = pdfAI && pdfAI === pdfAplicat.current ? await adaugaScan(pdfAI, document) : false
       if (atasat) setPdfAI(null)
       setMobilSalvat({ nr:document.antet.nr_document, n:document.randuri.length, atasat })
     } finally { aiLock.current = false; setAiBusy(false) }
@@ -704,7 +706,7 @@ export default function IzoDocumenteIntrare() {
         </div>
       </>}
       {!propunere && ed.ocrAvertismente?.map((x, i) => <div key={i} style={{ color:G.yellow, marginTop:8 }}>{x}</div>)}
-      {pdfAI && ed.id && !mobil && <button style={{ ...S.btnS, minHeight:44, marginTop:10 }} disabled={busy || aiBusy} onClick={ataseazaCitit}>Atașează scanul citit</button>}
+      {pdfAI && pdfAI === pdfAplicat.current && ed.id && !mobil && <button style={{ ...S.btnS, minHeight:44, marginTop:10 }} disabled={busy || aiBusy} onClick={ataseazaCitit}>Atașează scanul citit</button>}
     </div>
   )
 
