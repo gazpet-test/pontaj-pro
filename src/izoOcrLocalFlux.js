@@ -73,7 +73,10 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
     // 5xx CU răspuns JSON de la edge (fără cerere_id): cererea nu a fost confirmată pentru worker (confirma_upload e
     // ultimul pas înainte de 200), deci Haiku direct nu poate dubla un apel plătit (Copilot B4 P1). O eroare de
     // transport FĂRĂ status rămâne ambiguă (cererea poate exista) -> nu trecem automat pe Haiku.
-    if (r.status >= 500 && r.raspuns && r.raspuns.success === false && !r.raspuns.cerere_id) {
+    // Numai codurile emise de edge ÎNAINTE de confirma_upload dovedesc că cererea nu e vizibilă workerului
+    // (Copilot B4 r2): un 5xx generic poate veni și după confirmare.
+    const PRE_CONFIRMARE = ['storage_indisponibil']
+    if (r.status >= 500 && r.raspuns && r.raspuns.success === false && !r.raspuns.cerere_id && PRE_CONFIRMARE.includes(r.raspuns.eroare)) {
       anunta('Serverul local nu răspunde corect — citesc cu Haiku')
       return { haiku:true, motiv:r.raspuns.eroare || 'serviciu_indisponibil' }
     }
