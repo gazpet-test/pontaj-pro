@@ -28,6 +28,7 @@ BEGIN
     END IF;
   END IF;
 END $pre$;
+DROP FUNCTION public.fn_ocr_local_context(uuid,uuid,uuid);
 DROP FUNCTION public.fn_ocr_local_probleme();
 DROP FUNCTION public.fn_ocr_local_curatenie_confirma(uuid,boolean,text);
 DROP FUNCTION public.fn_ocr_local_curatenie_lista(integer);

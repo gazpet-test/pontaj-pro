@@ -16,7 +16,7 @@ const celule = [{ rand: 1, camp: 'lungime_doc', lighton: '12.50', mineru: '12.51
 const brut = (sablon: SablonE3 = 'aviz_teava') => ({
   antet: Object.fromEntries([...ANTET_COMUN, ...ANTET_SPECIFIC[sablon]].map(k => [k, null])),
   randuri: [{ ...Object.fromEntries([...RAND_TEXT, ...RAND_NUMAR].map(k => [k, null])), nr_crt: '1', serie: '001', lungime_doc: sablon === 'aviz_teava' ? '12.50' : null, pagina: '1', cantitate: sablon === 'lista_curbe' ? '1' : null, cod: sablon === 'lista_curbe' ? '001-610-0009-1' : null, pachet_nr: sablon === 'lista_curbe' ? 'P1' : null, greutate_kg: '1,343', perete_mm: '8,8' }],
-  totaluri_tiparite: { total_metri: null, total_kg: null }, avertismente: [], rotatie_grade: 0,
+  totaluri_tiparite: { total_metri: sablon === 'aviz_teava' ? '12.50' : null, total_kg: sablon === 'aviz_teava' ? '1,343' : null }, avertismente: [], rotatie_grade: 0,
 })
 function fixture() {
   const events: string[] = [], calls: { fn: string; args: Record<string, unknown> }[] = []
@@ -336,5 +336,14 @@ Deno.test('fixture-uri brute B3 reale: schema → normalizare → prefill → ra
     }
     if (s === 'aviz_teava') assert.ok(mapped.some((r: Record<string, unknown>) => r.greutate_kg === 1343))
     else assert.equal(Number(ed.antet.total_net_kg), 9920)
+  }
+})
+Deno.test('aviz: fără niciun total tipărit sau cu total care nu bate -> structură incertă (Copilot B2 r1)', async () => {
+  for (const t of [{ total_metri: null, total_kg: null }, { total_metri: '99.99', total_kg: null }]) {
+    const f = fixture(), o = brut(); o.totaluri_tiparite = t as typeof o.totaluri_tiparite
+    assert.equal((await f.call(rezultat(o), true)).status, 200)
+    const call = f.calls.find(c => c.fn === 'fn_ocr_local_rezultat')!
+    assert.equal(call.args.p_rezultat, null)            // nicio propunere locală acceptată
+    assert.equal(call.args.p_eroare, 'structura_incerta') // -> fallback
   }
 })

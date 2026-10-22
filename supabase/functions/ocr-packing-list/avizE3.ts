@@ -78,6 +78,23 @@ export function validaStructuraE3(p: ReturnType<typeof normalizeazaE3>, sablon: 
       if (r.lungime_doc === null && !p.avertismente.some(a => a.includes('lungime_doc') && (a.includes(`Rând ${i + 1}:`) || a.includes(`Rândul ${i + 1}`)))) refuza()
     }
   }
+  if (sablon === 'aviz_teava') reconciliazaAvizE3(p, refuza)
+}
+// Aceeași invariantă ca workerul Python (e3_contract.reconciliaza_aviz, Copilot B2 r1): cel puțin un total tipărit,
+// iar fiecare total prezent bate cu suma rândurilor (toleranță 0,01); altfel un ultim rând omis ar trece neobservat.
+function reconciliazaAvizE3(p: ReturnType<typeof normalizeazaE3>, refuza: () => never) {
+  const t = p.totaluri_tiparite || {}, a = p.antet as Record<string, unknown>
+  const surse: [unknown, string][] = [[t.total_metri, 'lungime_doc'], [a.total_m, 'lungime_doc'], [t.total_kg, 'greutate_kg'], [a.total_kg, 'greutate_kg']]
+  const prezente = surse.filter(([v]) => v !== null && v !== undefined)
+  if (!prezente.length) refuza()
+  for (const [v, camp] of prezente) {
+    const tip = Number(v)
+    if (!Number.isFinite(tip) || tip <= 0) refuza()
+    const vals = p.randuri.map(r => (r as Record<string, unknown>)[camp])
+    if (vals.some(x => x === null || x === undefined)) continue   // lipsă justificată: verifică omul
+    const suma = vals.reduce((s: number, x) => s + Number(x), 0)
+    if (Math.abs(suma - tip) > 0.010000001) refuza()
+  }
 }
 export function promptE3(sablon: SablonE3): string {
   return `Extragi date din avize românești de țeavă de oțel sudată/izolată și liste de ambalare curbe pentru conducte de gaze.
