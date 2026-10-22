@@ -60,7 +60,7 @@ ${sablon === 'lista_curbe' ? `LISTA DE CURBE — maparea coloanelor tabelului (s
 BEND NUMBER → serie · CODE → cod (copiat întreg, ex. 1029-610-8-25-6100-2513614-9) · PIPE HEAT NUMBER → sarja · ITEM → item ·
 SIZE → diametru_mm · WALL THICKNESS → perete_mm (8,8 = 8.8) · DESCRIPTION → specificatie · DEGREE → unghi_doc · SIZE-MATERIAL STD → standard ·
 QUANTITY (PCS) → cantitate (de regulă 1; NU confunda cu PACKING NO) · PACKING NO → pachet_nr · DIMENSIONS CM → dimensiuni_cm ·
-NET KG → net_kg · GROSS KG → brut_kg. nr_crt = numărul rândului în tabel (1, 2, 3…), NU bend number.
+NET KG → net_kg · GROSS KG → brut_kg. Curbele NU au lungime: lungime_doc și total_metri rămân null FĂRĂ avertisment; lotul pe rând la fel. nr_crt = numărul rândului în tabel (1, 2, 3…), NU bend number.
 PACKING NO, DIMENSIONS, NET KG și GROSS KG sunt celule UNITE pe mai multe rânduri (un pachet = mai multe curbe):
 pachet_nr și dimensiuni_cm le pui pe TOATE rândurile pachetului; net_kg și brut_kg DOAR pe primul rând al pachetului, null pe celelalte
 (altfel greutatea pachetului se numără de mai multe ori). Fiecare valoare rămâne pe rândul ei: nu muta grosimea sau unghiul de pe un rând pe altul.
