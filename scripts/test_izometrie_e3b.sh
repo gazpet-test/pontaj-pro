@@ -65,6 +65,7 @@ livreaza 20261105120000 "$MIG_E3B"
 ok '20261102a -> 2c -> E3 -> E3b prin runner; gate = {}'
 OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3b.test.sql" 2>&1)" || { echo "$OUT" >&2; esec 'catalog E3b'; }
 grep -q 'TESTE E3b-A: TOATE OK' <<<"$OUT" || esec 'testele nu au ajuns la final'
+grep -q 'TESTE E3b-B: TOATE OK' <<<"$OUT" || esec 'testele B nu au ajuns la final'
 ok 'catalog, matrice, roluri, RLS, PUBLIC EXECUTE și mutații'
 # Reaplicare direct sub gardă, ca să dovedim refuzul migrării, nu numai al metadata runner-ului.
 refuza 'există deja' "${PSQL[@]}" -d "$BAZA" --single-transaction \
@@ -74,8 +75,10 @@ refuza 'READ COMMITTED' "${PSQL[@]}" -d "$BAZA" --single-transaction -c 'SET TRA
   -c "SELECT set_config('gazpet.revenire_20261105a','IZO_E3B_SCOATE:' || txid_current(),true)" -f "$REV_E3B"
 # Fapt necomis numai în fixture: eroarea revenirii anulează și INSERT-ul.
 refuza 'există fapte E3b' "${PSQL[@]}" -d "$BAZA" --single-transaction \
-  -c "INSERT INTO public.izo_corectii(proiect_id,tip,import_id,inainte,motiv,cale,propus_de)
-      VALUES(3,'storno_import','fixture-e3b','{}','fixture revenire','direct','00000000-0000-0000-0000-000000000121')" \
+  -c "ALTER TABLE public.izo_corectii DISABLE TRIGGER trg_izo_cor_garda;
+      INSERT INTO public.izo_corectii(proiect_id,tip,import_id,inainte,motiv,cale,propus_de)
+      VALUES(3,'storno_import','fixture-e3b','{}','fixture revenire','direct','00000000-0000-0000-0000-000000000121');
+      ALTER TABLE public.izo_corectii ENABLE ALWAYS TRIGGER trg_izo_cor_garda" \
   -c "SELECT set_config('gazpet.revenire_20261105a','IZO_E3B_SCOATE:' || txid_current(),true)" -f "$REV_E3B"
 revenire 20261105a IZO_E3B_SCOATE "$REV_E3B"
 [ "$(baseline)" = "$INAINTE" ] || esec 'amprenta sau ștampilele diferă după revenire E3b'

@@ -138,6 +138,203 @@ BEGIN
   REVOKE ALL ON FUNCTION public.fn_izo_blocheaza_tabele() FROM izo_corectie_writer;
   REVOKE ALL ON FUNCTION public.fn_izo_lock_partajat(bigint[]) FROM izo_corectie_writer;
   REVOKE ALL ON FUNCTION public.fn_izo_lock_proiect(bigint, boolean) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_chei(text, text, text) FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_autorizare_lock(bigint, text, integer) FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_cerut_de_valid(bigint, uuid) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_bucata_lock(bigint, bigint) FROM izo_cor_editor;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_doc_lock(bigint, bigint) FROM izo_cor_editor;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_deschise(bigint[]) FROM izo_registru_writer, izo_receptie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_api_verifica() FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_adm_verifica() FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_loc(public.magazie_bucati) FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_tinta_iesire(public.magazie_bucati) FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_valori(public.magazie_bucati) FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_valideaza(public.izo_corectii) FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_inainte(public.izo_corectii) FROM izo_cor_editor, izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_eveniment_asteptat(public.izo_corectii) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_bucata_dupa(public.izo_corectii, public.magazie_bucati) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_bucata_noua(public.izo_corectii) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_miscare_asteptata(public.izo_corectii, public.magazie_bucati) FROM izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_garda_corectie(text, text, jsonb, jsonb) FROM izo_corectie_writer;
+  CREATE OR REPLACE FUNCTION public.fn_izo_garda_bucati() RETURNS trigger
+    LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE
+    v_old boolean := false;
+    v_new boolean := false;
+    v_p bigint;
+    v_aut boolean;
+  BEGIN
+    -- E3 (20261103b): predicatul de autorizare, calculat o singură dată — scriitorul E2a cu marcaj SAU scriitorul E3 în
+    -- contextul operației (true sau excepție); fără RETURN timpuriu: verificările E2a de mai jos se aplică tuturor
+    v_aut := public.fn_izo_garda_scriitor();
+    IF v_aut IS NOT TRUE AND current_user = 'izo_receptie_writer' THEN
+      v_aut := public.fn_izo_garda_receptie(TG_TABLE_NAME, TG_OP, CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+                                            CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    -- (1) rândurile registrului sunt protejate PERMANENT: refuz imediat, fără lock (altfel un UPDATE al clientului, care
+    --     ține deja rândul, ar aștepta lock-ul advisory al unui storno care așteaptă rândul → blocaj circular)
+    IF ((TG_OP <> 'INSERT' AND OLD.tip_cod IS NOT NULL) OR (TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL))
+       AND v_aut IS NOT TRUE THEN
+      RAISE EXCEPTION 'izo: bucățile beneficiar ale unui proiect cu registru (nivel ≠ off) se scriu doar prin funcțiile registrului'
+        USING ERRCODE = '42501';
+    END IF;
+    -- (2) beneficiar în afara registrului: lock PARTAJAT pe proiectele OLD/NEW (crescător; cere READ COMMITTED — sub
+    --     REPEATABLE READ o activare comisă între timp n-ar fi văzută), apoi nivelul, citit cu snapshot nou
+    IF (TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar') OR (TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar') THEN
+      IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'izo: scrierile care ating registrul cer READ COMMITTED (acum %)', current_setting('transaction_isolation')
+          USING ERRCODE = '25001';
+      END IF;
+      FOR v_p IN SELECT DISTINCT x FROM unnest(ARRAY[CASE WHEN TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar' THEN OLD.proiect_id END,
+                                                       CASE WHEN TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar' THEN NEW.proiect_id END]) x
+                  WHERE x IS NOT NULL ORDER BY 1 LOOP
+        PERFORM pg_advisory_xact_lock_shared(73010, v_p::integer);
+      END LOOP;
+    END IF;
+    IF TG_OP <> 'INSERT' AND (OLD.tip_cod IS NOT NULL OR OLD.provenienta = 'beneficiar') THEN
+      v_old := OLD.tip_cod IS NOT NULL OR public.fn_izo_nivel(OLD.proiect_id) <> 'off';
+    END IF;
+    IF TG_OP <> 'DELETE' AND (NEW.tip_cod IS NOT NULL OR NEW.provenienta = 'beneficiar') THEN
+      v_new := NEW.tip_cod IS NOT NULL OR public.fn_izo_nivel(NEW.proiect_id) <> 'off';
+    END IF;
+    IF v_old OR v_new THEN
+      IF v_aut IS NOT TRUE THEN
+        RAISE EXCEPTION 'izo: bucățile beneficiar ale unui proiect cu registru (nivel ≠ off) se scriu doar prin funcțiile registrului'
+          USING ERRCODE = '42501';
+      END IF;
+      IF TG_OP <> 'DELETE' AND NEW.stare IN ('rezervata','consumata') THEN
+        RAISE EXCEPTION 'izo: starea % e interzisă pe bucățile registrului (rezervările stau în izo_rezervari; consumul = montata/taiata)', NEW.stare
+          USING ERRCODE = '23514';
+      END IF;
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'izo: bucățile registrului nu se șterg (anulare = storno)' USING ERRCODE = '42501';
+      END IF;
+      -- un rând de registru nu stă niciodată pe un proiect off (nici scris de writer) — review #806 A
+      IF TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL AND public.fn_izo_nivel(NEW.proiect_id) = 'off' THEN
+        RAISE EXCEPTION 'izo: rândurile registrului cer proiect cu nivel ≠ off (proiectul %)', NEW.proiect_id USING ERRCODE = '42501';
+      END IF;
+    END IF;
+    -- tip_cod e copie controlată de server: trebuie să bată cu tip_material_id
+    IF TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL AND NEW.tip_cod IS DISTINCT FROM public.fn_izo_tip_cod(NEW.tip_material_id) THEN
+      RAISE EXCEPTION 'izo: tip_cod % nu bate cu tip_material_id %', NEW.tip_cod, NEW.tip_material_id USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+  END $f$;
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_bucati()'::regprocedure) IS DISTINCT FROM 'b2e1f127c6dd2657ce9f96651642a80e' THEN
+    RAISE EXCEPTION 'E3b: restaurarea exactă fn_izo_garda_bucati a eșuat'; END IF;
+  CREATE OR REPLACE FUNCTION public.fn_izo_garda_fapte() RETURNS trigger
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_aut boolean;
+  BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+      RAISE EXCEPTION 'izo: TRUNCATE pe % e refuzat (registru doar-adaug)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'izo: DELETE pe % e refuzat (registru doar-adaug; anulare = storno)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'UPDATE' AND TG_TABLE_NAME IN ('magazie_bucati_evenimente','magazie_bucati_miscari') THEN
+      RAISE EXCEPTION 'izo: UPDATE pe % e refuzat (registru doar-adaug)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    -- E3 (20261103b): predicatul de autorizare, calculat o singură dată — scriitorul E2a cu marcaj SAU scriitorul E3 în
+    -- contextul operației (true sau excepție); fără RETURN timpuriu: verificările E2a de mai jos se aplică tuturor
+    v_aut := public.fn_izo_garda_scriitor();
+    IF v_aut IS NOT TRUE AND current_user = 'izo_receptie_writer' THEN
+      v_aut := public.fn_izo_garda_receptie(TG_TABLE_NAME, TG_OP, CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+                                            to_jsonb(NEW));
+    END IF;
+    IF v_aut IS NOT TRUE THEN
+      RAISE EXCEPTION 'izo: % se scrie doar prin funcțiile registrului', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END $f$;
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_fapte()'::regprocedure) IS DISTINCT FROM '6b1a0093ce9f1fcd812da7c2b3baa1d4' THEN
+    RAISE EXCEPTION 'E3b: restaurarea exactă fn_izo_garda_fapte a eșuat'; END IF;
+  CREATE OR REPLACE FUNCTION public.fn_izo_doc_garda() RETURNS trigger
+    LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_doc public.izo_documente_intrare; v_doc_id bigint;
+    c_neschimbate constant text[] := ARRAY['id', 'proiect_id', 'depozit_id', 'sablon', 'inlocuieste_document_id', 'motiv_inlocuire', 'creat_de', 'creat_la'];
+    c_confirmare constant text[] := ARRAY['stare', 'hash_confirmat', 'avertismente', 'confirmat_de', 'confirmat_la', 'eveniment_intrare_id',
+      'pv_nr', 'pv_nr_canon', 'pv_data', 'pv_pus_de', 'pv_pus_la', 'eveniment_pv_id', 'anulat_de', 'anulat_de_rol', 'anulat_la', 'anulat_motiv',
+      'eveniment_storno_intrare_id', 'eveniment_storno_pv_id'];
+    c_anulare constant text[] := ARRAY['stare', 'versiune', 'updated_at', 'anulat_de', 'anulat_de_rol', 'anulat_la', 'anulat_motiv'];
+    c_gen_doc constant text[] := ARRAY['furnizor_canon', 'nr_document_canon'];
+  BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+      RAISE EXCEPTION 'izo E3: TRUNCATE pe % e refuzat' , TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    v_doc_id := CASE WHEN TG_TABLE_NAME = 'izo_documente_intrare' THEN coalesce(NEW.id, OLD.id)
+                     ELSE coalesce((to_jsonb(NEW) ->> 'document_id')::bigint, (to_jsonb(OLD) ->> 'document_id')::bigint) END;
+    -- scriitorul registrului: doar ce acceptă garda E3, în contextul operației
+    IF current_user = 'izo_receptie_writer' THEN
+      PERFORM public.fn_izo_garda_receptie(TG_TABLE_NAME, TG_OP, to_jsonb(OLD), to_jsonb(NEW));
+      IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+      RETURN NEW;
+    END IF;
+    -- editorul draftului: doar pe documente draft, versiunea +1, coloanele confirmării / PV / anulării neatinse
+    IF current_user = 'izo_doc_editor' THEN
+      IF TG_TABLE_NAME = 'izo_documente_intrare' THEN
+        IF TG_OP = 'DELETE' THEN
+          RAISE EXCEPTION 'izo E3: antetul unui document nu se șterge (un draft abandonat se anulează)' USING ERRCODE = '42501';
+        ELSIF TG_OP = 'INSERT' THEN
+          IF NEW.stare <> 'draft' OR NEW.versiune <> 1 OR NEW.creat_de IS DISTINCT FROM public.fn_izo_uid()
+             OR (public.fn_izo_proiectie(to_jsonb(NEW), array_remove(c_confirmare, 'stare')) <> public.fn_izo_proiectie('{}'::jsonb, array_remove(c_confirmare, 'stare'))) THEN
+            RAISE EXCEPTION 'izo E3: un document nou e draft, versiunea 1, fără confirmare / PV / anulare' USING ERRCODE = '42501';
+          END IF;
+        ELSIF OLD.stare = 'draft' AND NEW.stare = 'anulat' THEN
+          -- r5d §13.3: gestionarul își anulează ciorna — DOAR antetul, DOAR coloanele anulării, autorul = utilizatorul curent
+          IF NEW.versiune <> OLD.versiune + 1 OR NEW.anulat_de IS DISTINCT FROM public.fn_izo_uid() OR NEW.anulat_de IS NULL
+             OR NEW.anulat_de_rol IS DISTINCT FROM session_user::text OR NEW.anulat_la IS NULL OR NEW.anulat_motiv IS NULL
+             OR (to_jsonb(NEW) - c_anulare - c_gen_doc) IS DISTINCT FROM (to_jsonb(OLD) - c_anulare - c_gen_doc) THEN
+            RAISE EXCEPTION 'izo E3: anularea ciornei schimbă doar starea, versiunea (+1) și coloanele anulării, cu autorul curent' USING ERRCODE = '42501';
+          END IF;
+        ELSE
+          IF OLD.stare <> 'draft' OR NEW.stare <> 'draft' OR NEW.versiune <> OLD.versiune + 1
+             OR public.fn_izo_proiectie(to_jsonb(NEW), c_neschimbate || c_confirmare) IS DISTINCT FROM public.fn_izo_proiectie(to_jsonb(OLD), c_neschimbate || c_confirmare) THEN
+            RAISE EXCEPTION 'izo E3: draftul se editează doar cu versiunea +1, fără a schimba proiectul / depozitul / șablonul / înlocuirea / confirmarea'
+              USING ERRCODE = '42501';
+          END IF;
+        END IF;
+      ELSE
+        SELECT * INTO v_doc FROM public.izo_documente_intrare WHERE id = v_doc_id;
+        IF NOT FOUND OR v_doc.stare <> 'draft' OR TG_OP = 'UPDATE'
+           OR (TG_TABLE_NAME = 'izo_documente_intrare_randuri' AND TG_OP = 'INSERT' AND (to_jsonb(NEW) ->> 'bucata_id') IS NOT NULL) THEN
+          RAISE EXCEPTION 'izo E3: rândurile / scanurile se schimbă doar pe un draft (înlocuire, fără UPDATE)' USING ERRCODE = '42501';
+        END IF;
+      END IF;
+      IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'izo E3: documentele de intrare se scriu doar prin funcțiile E3 (rolul curent %)', current_user USING ERRCODE = '42501';
+  END $f$;
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_doc_garda()'::regprocedure) IS DISTINCT FROM '0815d20cd4462b2ce5f3d17123043c3c' THEN
+    RAISE EXCEPTION 'E3b: restaurarea exactă fn_izo_doc_garda a eșuat'; END IF;
+  DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii;
+  DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii;
+  DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii_bucati;
+  DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii_bucati;
+  DROP FUNCTION public.fn_izo_cor_garda();
+  DROP FUNCTION public.fn_izo_garda_corectie(text, text, jsonb, jsonb);
+  DROP FUNCTION public.fn_izo_cor_miscare_asteptata(public.izo_corectii, public.magazie_bucati);
+  DROP FUNCTION public.fn_izo_cor_bucata_noua(public.izo_corectii);
+  DROP FUNCTION public.fn_izo_cor_bucata_dupa(public.izo_corectii, public.magazie_bucati);
+  DROP FUNCTION public.fn_izo_cor_eveniment_asteptat(public.izo_corectii);
+  DROP FUNCTION public.fn_izo_cor_inainte(public.izo_corectii);
+  DROP FUNCTION public.fn_izo_cor_valideaza(public.izo_corectii);
+  DROP FUNCTION public.fn_izo_cor_valori(public.magazie_bucati);
+  DROP FUNCTION public.fn_izo_cor_tinta_iesire(public.magazie_bucati);
+  DROP FUNCTION public.fn_izo_cor_loc(public.magazie_bucati);
+  SET LOCAL ROLE izo_corectie_writer;
+  DROP FUNCTION public.fn_izo_cor_marcheaza(bigint);
+  RESET ROLE;
+  DROP FUNCTION public.fn_izo_cor_adm_verifica();
+  DROP FUNCTION public.fn_izo_cor_api_verifica();
+  DROP FUNCTION public.fn_izo_cor_deschise(bigint[]);
+  DROP FUNCTION public.fn_izo_cor_doc_lock(bigint, bigint);
+  DROP FUNCTION public.fn_izo_cor_bucata_lock(bigint, bigint);
+  DROP FUNCTION public.fn_izo_cor_cerut_de_valid(bigint, uuid);
+  DROP FUNCTION public.fn_izo_cor_autorizare_lock(bigint, text, integer);
+  DROP FUNCTION public.fn_izo_cor_chei(text, text, text);
   CREATE OR REPLACE FUNCTION public.fn_izo_porti_lipsa() RETURNS text[]
     LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   DECLARE v text[] := '{}'; r record;
@@ -516,6 +713,7 @@ BEGIN
     v := v || public.fn_izo_porti_e3_lipsa();
     RETURN v;
   END $f$;
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_lipsa()'::regprocedure) IS DISTINCT FROM 'dde0509cb317c6ad51ff33f74ce4a13b' THEN RAISE EXCEPTION 'E3b: restaurarea porții diferă'; END IF;
   DROP FUNCTION public.fn_izo_porti_e3b_lipsa(),public.fn_izo_porti_e3b_definitii();
   DROP FUNCTION public.fn_izo_coloane_corectabile(text),public.fn_izo_coloane_identitate();
   DROP TABLE public.izo_corectii_bucati;

@@ -37,6 +37,12 @@ BEGIN
   REVOKE ALL ON SEQUENCE public.magazie_bucati_id_seq,public.izo_server_ver_seq,
     public.magazie_bucati_evenimente_id_seq,public.magazie_bucati_miscari_id_seq FROM izo_corectie_writer;
 @@REVOKE_FUNCTII@@
+@@GARZI_VECHI@@
+  DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii;
+  DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii;
+  DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii_bucati;
+  DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii_bucati;
+@@DROP_GARDA@@
 @@PORTI_VECHE@@
   DROP FUNCTION public.fn_izo_porti_e3b_lipsa(),public.fn_izo_porti_e3b_definitii();
   DROP FUNCTION public.fn_izo_coloane_corectabile(text),public.fn_izo_coloane_identitate();
