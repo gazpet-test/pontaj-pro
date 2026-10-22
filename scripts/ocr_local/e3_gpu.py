@@ -3,6 +3,7 @@ import contextlib
 import datetime as dt
 import http.client
 import json
+import math
 import os
 import pathlib
 import socket
@@ -75,9 +76,40 @@ def boot_time():
     return time.time() - float(pathlib.Path('/proc/uptime').read_text().split()[0])
 
 
+def process_start(pid):
+    """Identitatea procesului: PID-ul singur poate fi reutilizat după crash."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    if os.name == 'nt':
+        import ctypes as c
+        from ctypes import wintypes as w
+        kernel = c.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+        kernel.OpenProcess.restype = w.HANDLE
+        kernel.CloseHandle.argtypes = [w.HANDLE]
+        kernel.GetProcessTimes.argtypes = [w.HANDLE] + [c.POINTER(w.FILETIME)] * 4
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            times = [w.FILETIME() for _ in range(4)]
+            if not kernel.GetProcessTimes(handle, *(c.byref(t) for t in times)):
+                return None
+            return ((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime) / 10000000 - 11644473600
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        ticks = int(pathlib.Path('/proc/%s/stat' % pid).read_text().rsplit(')', 1)[1].split()[19])
+        boot = next(line.split()[1] for line in pathlib.Path('/proc/stat').read_text().splitlines() if line.startswith('btime '))
+        return int(boot) + ticks / os.sysconf('SC_CLK_TCK')
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
 class GpuLock:
-    def __init__(self, path, *, alive=pid_alive, boot=boot_time, clock=time.time):
+    def __init__(self, path, *, alive=pid_alive, boot=boot_time, clock=time.time, start=process_start):
         self.path, self.alive, self.boot, self.clock = pathlib.Path(path), alive, boot, clock
+        self.start = start
         self.token = uuid.uuid4().hex
 
     def claim(self):
@@ -85,22 +117,39 @@ class GpuLock:
             if self.path.exists():
                 try:
                     old = json.loads(self.path.read_text(encoding='utf-8'))
-                except (OSError, ValueError):
+                except ValueError:
+                    # Sub .coord nu există un writer E3 viu; JSON-ul rupt este un crash vechi.
+                    old = None
+                except OSError:
                     return False
-                if old.get('detinator') != 'e3_serviciu' or old.get('gazda') != socket.gethostname():
-                    return False
-                if old.get('token') == self.token:
-                    return True
-                stale = not self.alive(old.get('pid')) or old.get('pornit_la', float('inf')) < self.boot()
-                if not stale:
-                    return False
+                if isinstance(old, dict):
+                    if old.get('detinator') != 'e3_serviciu' or old.get('gazda') != socket.gethostname():
+                        return False
+                    pid = old.get('pid')
+                    actual_start = self.start(pid)
+                    recorded_start = old.get('proces_pornit_la')
+                    since = old.get('pornit_la')
+                    stale = (not self.alive(pid) or not isinstance(since, (int, float)) or not math.isfinite(since)
+                             or since < self.boot()
+                             or (actual_start is not None and
+                                 (actual_start != recorded_start if recorded_start is not None else actual_start > since)))
+                    if not stale:
+                        return old.get('token') == self.token
                 self.path.unlink()
+            # save = temp + flush/fsync + os.replace; fără fereastră cu lock JSON parțial.
+            pending = self.path.with_name(self.path.name + '.pending')
+            save(pending, {'detinator': 'e3_serviciu', 'pid': os.getpid(), 'pornit_la': self.clock(),
+                           'proces_pornit_la': self.start(os.getpid()),
+                           'gazda': socket.gethostname(), 'token': self.token})
             try:
-                with self.path.open('x', encoding='utf-8') as f:
-                    json.dump({'detinator': 'e3_serviciu', 'pid': os.getpid(), 'pornit_la': self.clock(),
-                               'gazda': socket.gethostname(), 'token': self.token}, f)
+                if os.name == 'nt':
+                    os.rename(pending, self.path)  # Windows: atomic, refuză destinația existentă.
+                else:
+                    os.link(pending, self.path)  # POSIX rename ar suprascrie lacătul laboratorului.
             except FileExistsError:
                 return False
+            finally:
+                pending.unlink(missing_ok=True)
             return True
 
     def release(self):

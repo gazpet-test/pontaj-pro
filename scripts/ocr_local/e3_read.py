@@ -95,17 +95,11 @@ def citeste_orientat(image, sablon, root, reader, deadline, clock=time.monotonic
             if e.cod == 'tabel_negasit':
                 return None
             raise
-    l, m = pair(image, 0)
-    lp, mp = parse(l), parse(m)
-    angle = 0
-    if lp is None and mp is None:
-        for angle in (90, 180, 270):
-            rotated = image.rotate(-angle, expand=True)
-            lp = parse(call('lighton', rotated, angle))
-            if lp is not None:
-                mp = parse(call('mineru', rotated, angle))
-                break
-    if lp is None or mp is None:
-        raise E3Error('tabel_negasit')
-    lp['rotatie_grade'] = mp['rotatie_grade'] = angle
-    return lp, mp
+    for angle in (0, 90, 180, 270):
+        rotated = image if angle == 0 else image.rotate(-angle, expand=True)
+        l, m = pair(rotated, angle)
+        lp, mp = parse(l), parse(m)
+        if lp is not None and mp is not None:
+            lp['rotatie_grade'] = mp['rotatie_grade'] = angle
+            return lp, mp
+    raise E3Error('tabel_negasit')

@@ -27,12 +27,14 @@ def noapte(now):
     return hour >= 22 or hour < 6
 
 
-def curata(work, *, now=None, toate=False, active=None):
+def curata(work, *, now=None, toate=False, active=None, resturi=None):
     """Șterge numai directoare UUID directe; nu urmează symlink/junction/reparse points."""
     work = pathlib.Path(work).resolve()
     if not work.exists():
         return
     now = time.time() if now is None else now
+    if resturi is not None:
+        resturi.difference_update(name for name in tuple(resturi) if not (work / name).exists())
     for p in work.iterdir():
         try:
             if str(uuid.UUID(p.name)) != p.name or p.is_symlink() or (hasattr(p, 'is_junction') and p.is_junction()):
@@ -40,8 +42,10 @@ def curata(work, *, now=None, toate=False, active=None):
             resolved = p.resolve()
             if resolved.parent != work or not p.is_dir() or p.name == active:
                 continue
-            if toate or now - p.stat().st_mtime > 3600:
+            if toate or (resturi is not None and p.name in resturi) or now - p.stat().st_mtime > 3600:
                 shutil.rmtree(resolved)
+                if resturi is not None:
+                    resturi.discard(p.name)
         except (OSError, ValueError):
             continue
 
@@ -56,6 +60,7 @@ class Worker:
         self.state, self.active, self.gpu_state = 'pornire', None, 'pornire'
         self.stop_event = threading.Event()
         self.mu = threading.RLock()
+        self.resturi = set()
 
     def journal(self, id, state, code=None, elapsed=None):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -129,11 +134,13 @@ class Worker:
             self.edge.call('rezultat', cerere_id=id, token=token, obiect=obj, eroare=error, sursa=source)
             self.journal(id, 'esuata' if error else 'gata', error, source['secunde'])
         finally:
-            if work.exists() and work.resolve().parent == (self.root / 'work').resolve():
-                shutil.rmtree(work)
             with self.mu:
                 self.active = None
                 self.state = self.gpu_state
+                self.resturi.add(id)
+                curata(self.root / 'work', active=self.active, resturi=self.resturi)
+            if id in self.resturi:
+                self.journal(id, 'cleanup_amanat')
 
     def maintenance(self):
         last_reconcile = last_cleanup = float('-inf')
@@ -156,7 +163,7 @@ class Worker:
                     last_reconcile, last_night = t, night
                 if t - last_cleanup >= 3600:
                     with self.mu:
-                        curata(self.root / 'work', active=self.active)
+                        curata(self.root / 'work', active=self.active, resturi=self.resturi)
                     last_cleanup = t
             except Exception:
                 with self.mu:

@@ -1,4 +1,8 @@
-"""Canal E3 independent. Secretul este citit exclusiv din fișier, fără fallback."""
+"""Secret exclusiv din fișier, fără fallback; niciodată argv, loguri sau URL-uri.
+
+Singura destinație a secretului este antetul POST către edge-ul fix. Transportul
+nu urmează redirecturi/proxy; erorile publice sunt coduri fără corpuri sau URL-uri.
+"""
 import json
 import pathlib
 import re
@@ -12,6 +16,7 @@ SECRET_FILE = pathlib.Path('C:/Users/Gazpet-Ai/.secrete/izo_ocr_local_secret.txt
 
 
 def citeste_secret(path=SECRET_FILE):
+    """Citește fișierul local; nu consultă mediul sau argumentele procesului."""
     secret = pathlib.Path(path).read_text(encoding='utf-8').strip()
     if not re.fullmatch(r'[0-9a-f]{64}', secret):
         raise E3Error('secret_invalid')
@@ -27,6 +32,7 @@ class Edge:
         self.transport = transport or opener()
 
     def call(self, op, **body):
+        """Un singur POST; secret numai în antet, fără retry sau logging."""
         if op not in ('preia', 'link', 'arbitreaza', 'rezultat', 'heartbeat', 'curata'):
             raise E3Error('operatie_invalida')
         req = urllib.request.Request(self.base + '/functions/v1/izo-e3-ocr-local',
@@ -44,6 +50,7 @@ class Edge:
             raise E3Error('edge_transport') from None
 
     def download(self, url):
+        """GET fără secret, strict în bucketul E3 al aceleiași gazde."""
         p = urllib.parse.urlsplit(url)
         expected = urllib.parse.urlsplit(self.base)
         path = urllib.parse.unquote(p.path)

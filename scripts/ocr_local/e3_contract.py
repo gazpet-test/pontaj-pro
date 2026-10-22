@@ -93,7 +93,33 @@ def validaStructuraE3(obj, sablon, *, dupa_arbitraj=False):
                 raise E3Error('structura_incerta')
         elif sablon == 'aviz_teava':
             lungime = numarE3(r.get('lungime_doc'))
-            if r.get('cantitate') is not None or (not (dupa_arbitraj and r.get('lungime_doc') is None) and (lungime is None or lungime <= 0)):
+            if nr != i or r.get('cantitate') is not None or (not (dupa_arbitraj and r.get('lungime_doc') is None) and (lungime is None or lungime <= 0)):
                 raise E3Error('structura_incerta')
         else:
             raise E3Error('structura_incerta')
+    if sablon == 'aviz_teava':
+        reconciliaza_aviz(obj, dupa_arbitraj=dupa_arbitraj)
+
+
+def reconciliaza_aviz(obj, *, dupa_arbitraj=False):
+    """Orice total prezent este dovadă structurală, nu un simplu avertisment.
+
+    Contractul brut nu are un câmp pentru număr tipărit de poziții; cardinalitatea
+    este verificată prin 1..N și sumele tipărite. Fără total, un ultim rând lipsă
+    nu poate fi dedus. Valorile lăsate NULL după arbitraj rămân pentru om.
+    """
+    for total, alias, field, conv in [('total_metri', 'total_m', 'lungime_doc', numarE3),
+                                      ('total_kg', 'total_kg', 'greutate_kg', numarKgE3)]:
+        values = [conv(r[field]) for r in obj['randuri']]
+        for raw in (obj['totaluri_tiparite'][total], obj['antet'][alias]):
+            if raw is None:
+                continue
+            printed = conv(raw)
+            if printed is None or printed <= 0:
+                raise E3Error('structura_incerta')
+            if any(v is None for v in values):
+                if dupa_arbitraj:
+                    continue
+                raise E3Error('structura_incerta')
+            if not math.isclose(sum(values), printed, rel_tol=0, abs_tol=.010000001):
+                raise E3Error('structura_incerta')

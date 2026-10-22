@@ -187,7 +187,7 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(l['rotatie_grade'], 90)
             self.assertEqual(m['rotatie_grade'], 90)
             self.assertEqual(set(calls[:2]), {('lighton',0), ('mineru',0)})
-            self.assertEqual(calls[2:], [('lighton',90), ('mineru',90)])
+            self.assertEqual(set(calls[2:]), {('lighton',90), ('mineru',90)})
 
     def test_real_adapter_calls_existing_reader_without_gpu_lock(self):
         class Conn:
@@ -262,7 +262,7 @@ class WorkerTests(unittest.TestCase):
                 req = request(now - dt.timedelta(seconds=elapsed))
                 def different(name, *a):
                     raw = self.reader(name, *a)
-                    return raw.replace('11.96', '12.50') if name == 'mineru' else raw
+                    return raw.replace('11.96', '12.50').replace('182.79', '183.33') if name == 'mineru' else raw
                 w.reader = different
                 w.process(req)
                 self.assertEqual(sum(op=='arbitreaza' for op,_ in edge.calls), int(elapsed == 49))

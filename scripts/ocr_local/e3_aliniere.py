@@ -1,10 +1,24 @@
 """Aliniere pe identitate; nicio reparare implicită a seriilor/cantităților."""
 import copy
 from .e3_contract import (E3Error, ARBITRABILE, comparable, validaStructuraE3,
-                          valida_brut, numarE3, numarKgE3)
+                          valida_brut)
+
+
+def dezacord(rand, field, left, right, obj, sablon):
+    l, m = comparable(field, left), comparable(field, right)
+    if l == m and (left is None) == (right is None) and (l is not None or left == right):
+        return None
+    suggestion = None
+    if sablon == 'lista_curbe' and field == 'sarja':
+        heat = obj['randuri'][rand - 1]['cod'].split('-')[-2]
+        candidates = [v for v in (left, right) if v and v == heat]
+        if len(candidates) == 1:
+            suggestion = candidates[0]
+    return {'rand': rand, 'camp': field, 'lighton': left, 'mineru': right, 'sugestie': suggestion}
 
 
 def compara(lighton, mineru, sablon):
+    """Întoarce obiectul și setul de dezacorduri. Numai aceste celule se trimit la arbitraj."""
     for obj in (lighton, mineru):
         valida_brut(obj, sablon)
         validaStructuraE3(obj, sablon)
@@ -18,15 +32,9 @@ def compara(lighton, mineru, sablon):
     obj, cells = copy.deepcopy(lighton), []
     structural = ['nr_crt', 'serie', 'cantitate'] + (['cod', 'pachet_nr'] if sablon == 'lista_curbe' else [])
     def diff(rand, field, l, m):
-        if (comparable(field, l) != comparable(field, m) or ((l is None) != (m is None))
-                or (comparable(field, l) is None and l != m)):
-            suggestion = None
-            if sablon == 'lista_curbe' and field == 'sarja':
-                parts = obj['randuri'][rand - 1]['cod'].split('-')
-                candidates = [v for v in (l, m) if v and v == parts[-2]]
-                if len(candidates) == 1:
-                    suggestion = candidates[0]
-            cells.append({'rand': rand, 'camp': field, 'lighton': l, 'mineru': m, 'sugestie': suggestion})
+        cell = dezacord(rand, field, l, m, obj, sablon)
+        if cell is not None:
+            cells.append(cell)
     for i, r in enumerate(obj['randuri'], 1):
         other = right[key(r)]
         if any(comparable(k, r[k]) != comparable(k, other[k]) for k in structural):
@@ -54,7 +62,8 @@ def compara(lighton, mineru, sablon):
     return obj, cells
 
 
-def aplica_arbitraj(obj, cells, response, sablon):
+def raspunsuri_arbitraj(cells, response):
+    """Acceptă exact setul trimis: fără celule suplimentare, lipsă sau duplicate."""
     if not isinstance(response, dict):
         response = {'arbitraj': 'invalid'}
     values = response.get('celule', []) if isinstance(response, dict) else []
@@ -65,7 +74,12 @@ def aplica_arbitraj(obj, cells, response, sablon):
              and (v['valoare'] is None or isinstance(v['valoare'], str)) for v in values))
     if valid:
         valid = {(v['rand'], v['camp']) for v in values} == expected
-    answers = {(v['rand'], v['camp']): v for v in values} if valid else {}
+    return {(v['rand'], v['camp']): v for v in values} if valid else {}
+
+
+def aplica_arbitraj(obj, cells, response, sablon):
+    """Aplică exclusiv dezacordurile produse de compara; celulele agreate sunt intangibile."""
+    answers = raspunsuri_arbitraj(cells, response)
     for c in cells:
         target = obj['antet'] if c['rand'] == 0 else obj['randuri'][c['rand'] - 1]
         answer = answers.get((c['rand'], c['camp']))
@@ -75,11 +89,6 @@ def aplica_arbitraj(obj, cells, response, sablon):
                                          (c['rand'], c['camp'], c['lighton'], c['mineru'], target[c['camp']]))
     if sablon == 'aviz_teava':
         obj['totaluri_tiparite'].update(total_metri=obj['antet']['total_m'], total_kg=obj['antet']['total_kg'])
-    for total, field, conv in [('total_metri', 'lungime_doc', numarE3), ('total_kg', 'greutate_kg', numarKgE3)]:
-        values = [conv(r[field]) for r in obj['randuri']]
-        printed = conv(obj['totaluri_tiparite'][total])
-        if printed is not None and all(v is not None for v in values) and abs(sum(values) - printed) > .01:
-            obj['avertismente'].append('Totalul tipărit %s diferă de suma rândurilor.' % total)
     valida_brut(obj, sablon)
     validaStructuraE3(obj, sablon, dupa_arbitraj=True)
     return obj

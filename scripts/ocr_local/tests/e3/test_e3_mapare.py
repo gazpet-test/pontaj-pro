@@ -92,7 +92,7 @@ class MappingTests(unittest.TestCase):
             self.refuses(lambda: compara(l, m, 'aviz_teava'))
         m = copy.deepcopy(l)
         m['randuri'].reverse()
-        self.assertFalse(compara(l, m, 'aviz_teava')[1])
+        self.refuses(lambda: compara(l, m, 'aviz_teava'))
 
     def test_equal_invalid_quantities_and_series(self):
         for quantity in (None, '0', '1.5', '2', '4', '?'):
@@ -140,15 +140,16 @@ class MappingTests(unittest.TestCase):
     def test_arbitration_invalid_incomplete_duplicate_uncertain(self):
         l, m = real(), real()
         m['randuri'][0]['lungime_doc'] = '12.50'
+        m['totaluri_tiparite']['total_metri'] = '183.33'
         obj, cells = compara(l, m, 'aviz_teava')
-        self.assertEqual([(c['rand'], c['camp']) for c in cells], [(1, 'lungime_doc')])
+        self.assertEqual([(c['rand'], c['camp']) for c in cells], [(1, 'lungime_doc'), (0, 'total_m')])
         for response in [{'arbitraj': v} for v in ['invalid', 'plafon_depasit', 'deja_consumat', 'in_curs']] + [{'arbitraj':'ok','celule':[]}]:
             result = aplica_arbitraj(copy.deepcopy(obj), cells, response, 'aviz_teava')
             self.assertIsNone(result['randuri'][0]['lungime_doc'])
             self.assertTrue(result['avertismente'])
-        ans = {'rand':1,'camp':'lungime_doc','valoare':'12.50','sigur':False}
-        result = aplica_arbitraj(obj, cells, {'arbitraj':'ok','celule':[ans]}, 'aviz_teava')
-        self.assertEqual(result['randuri'][0]['lungime_doc'], '12.50')
+        ans = {'rand':1,'camp':'lungime_doc','valoare':'11.96','sigur':False}
+        result = aplica_arbitraj(obj, cells, {'arbitraj':'ok','celule':[ans, {'rand':0,'camp':'total_m','valoare':'182.79','sigur':True}]}, 'aviz_teava')
+        self.assertEqual(result['randuri'][0]['lungime_doc'], '11.96')
         self.assertTrue(result['avertismente'])
 
     def test_heat_suggestion_is_not_applied(self):
@@ -159,18 +160,19 @@ class MappingTests(unittest.TestCase):
         result = aplica_arbitraj(obj, cells, {'arbitraj':'invalid'}, 'lista_curbe')
         self.assertIsNone(result['randuri'][0]['sarja'])
 
-    def test_limits_and_totals_warning(self):
+    def test_limits_and_totals_structural_failure(self):
         obj = real()
         obj['randuri'] = obj['randuri'] * 14
         self.refuses(lambda: validaStructuraE3(obj, 'aviz_teava'), 'limita_randuri')
         l, m = real(), real()
         l['totaluri_tiparite']['total_metri'] = m['totaluri_tiparite']['total_metri'] = '1'
-        obj, cells = compara(l, m, 'aviz_teava')
-        self.assertTrue(aplica_arbitraj(obj, cells, {}, 'aviz_teava')['avertismente'])
+        self.refuses(lambda: compara(l, m, 'aviz_teava'))
 
     def test_exact_120_cells_then_121_refused(self):
         from ocr_local.e3_contract import ARBITRABILE
         l, m = real(), real()
+        for obj in (l, m):
+            obj['totaluri_tiparite'] = dict.fromkeys(obj['totaluri_tiparite'])
         for r in m['randuri']:
             for field in ARBITRABILE['aviz_teava']:
                 r[field] = '999'
@@ -181,9 +183,11 @@ class MappingTests(unittest.TestCase):
     def test_post_arbitration_nonpositive_length_still_refused(self):
         l, m = real(), real()
         m['randuri'][0]['lungime_doc'] = '12.50'
+        m['totaluri_tiparite']['total_metri'] = '183.33'
         obj, cells = compara(l, m, 'aviz_teava')
         self.refuses(lambda: aplica_arbitraj(obj, cells, {'arbitraj':'ok', 'celule':[
-            {'rand':1,'camp':'lungime_doc','valoare':'0','sigur':True}]}, 'aviz_teava'))
+            {'rand':1,'camp':'lungime_doc','valoare':'0','sigur':True},
+            {'rand':0,'camp':'total_m','valoare':'182.79','sigur':True}]}, 'aviz_teava'))
 
 
 class NumbersTests(unittest.TestCase):

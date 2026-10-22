@@ -6,6 +6,25 @@ from .e3_contract import E3Error, TEXT, NUM, obiect_gol, valida_brut, validaStru
 from .e3_grila import grile
 
 
+SPAN_EXPORT = re.compile(r'⟦(rowspan|colspan)=([1-9][0-9]*)⟧')
+
+
+def celula_text(text):
+    """Consumă numai markerii de span ai exportului; punctuația valorilor rămâne intactă."""
+    spans = {}
+    def marker(match):
+        key, value = match.groups()
+        if key in spans:
+            raise E3Error('structura_incerta')
+        spans[key] = value
+        return ''
+    value = SPAN_EXPORT.sub(marker, text)
+    if re.search(r'⟦(?:rowspan|colspan)\b', value):
+        raise E3Error('structura_incerta')
+    attrs = ''.join(' %s="%s"' % pair for pair in spans.items())
+    return '<td%s>%s</td>' % (attrs, html.escape(value.strip()))
+
+
 def tabele_text(raw):
     """Doar exportul laboratorului; refacem explicit rowspan-urile păstrate de export."""
     blocks, current = [], []
@@ -13,10 +32,7 @@ def tabele_text(raw):
         if line.strip().startswith('|'):
             cells = []
             for text in line.strip().strip('|').split('|'):
-                spans = re.findall(r'⟦(rowspan|colspan)=(\d+)⟧', text)
-                text = re.sub(r'⟦.*?⟧', '', text).strip()
-                attrs = ''.join(' %s="%s"' % a for a in spans)
-                cells.append('<td%s>%s</td>' % (attrs, html.escape(text)))
+                cells.append(celula_text(text))
             current.append('<tr>' + ''.join(cells) + '</tr>')
         elif current:
             blocks.append('<table>' + ''.join(current) + '</table>')
@@ -121,7 +137,27 @@ def mapare(raw, sablon, *, valideaza=True):
             if r[field] is not None and comparable(field, r[field]) is None:
                 obj['avertismente'].append('Rând %s: verifică %s ilizibil.' % (len(obj['randuri']) + 1, field))
         obj['randuri'].append(r)
+    if sablon == 'aviz_teava':
+        verifica_numar_tiparit(raw, grids, len(obj['randuri']))
     valida_brut(obj, sablon)
     if valideaza:
         validaStructuraE3(obj, sablon)
     return obj
+
+
+def verifica_numar_tiparit(raw, grids, count):
+    """Număr de poziții tipărit explicit, separat de nr. crt. și de greutăți."""
+    labels = {'TOTAL POZITII', 'TOTAL RANDURI', 'TOTAL TEVI', 'NUMAR TOTAL POZITII',
+              'NUMAR TOTAL RANDURI', 'NUMAR TOTAL TEVI'}
+    printed = []
+    for line in raw.split('## CSV')[0].splitlines():
+        label, sep, value = line.partition(':')
+        if sep and norm(label) in labels:
+            printed.append(value.strip())
+    for grid in grids:
+        for row in grid:
+            for i, cell in enumerate(row[:-1]):
+                if norm(cell['text']) in labels:
+                    printed.append(row[i + 1]['text'].strip())
+    if any(not re.fullmatch(r'[0-9]+', value) or int(value) != count for value in printed):
+        raise E3Error('structura_incerta')
