@@ -49,6 +49,9 @@ Un rând per piesă fizică cu serie proprie. Dacă o linie are cantitate > 1 f�
 și avertisment; nu inventa serii și nu multiplica rândurile. pagina este numărul paginii (începe de la 1).
 Extrage totalurile TIPĂRITE total_metri și total_kg independent de rânduri, fără însumare; necunoscute=null.
 Antetul total_m/total_kg și totalurile listelor se completează tot numai din valorile tipărite, fără deducții.
+Greutățile (greutate_kg, net_kg, brut_kg, total_kg, total_net_kg, total_brut_kg) le întorci ca NUMĂR JSON de kilograme, nu ca text:
+interpretează separatorul de mii al documentului (ex. „1,343” sau „9.920” la greutatea unei țevi / a unui pachet = 1343 / 9920;
+o țeavă sau un pachet nu cântărește 1,3 kg). Dacă separatorul nu poate fi deosebit de zecimale, întorci null și avertisment.
 Orice îndoială, unitate ambiguă, câmp ilizibil sau serie incertă intră în avertismente.
 Răspunde exclusiv JSON conform schemei următoare (câmp absent/ilizibil=null): ${JSON.stringify(schemaE3(sablon))}`
 }
@@ -69,14 +72,20 @@ export function numarE3(v: unknown): number | null {
   } else s = s.replace(',', '.')
   return /^-?\d+(\.\d+)?$/.test(s) && Number.isFinite(Number(s)) ? Number(s) : null
 }
+// Greutăți (chei *_kg): text de forma „1,343” / „9.920” / „20,529” = grupe de mii (o țeavă sau un pachet nu are 1,3 kg).
+export function numarKgE3(v: unknown): number | null {
+  if (typeof v === 'string' && /^\d{1,3}([.,]\d{3})+$/.test(v.trim().replace(/[\s  ]/g, ''))) return Number(v.replace(/[^\d]/g, ''))
+  return numarE3(v)
+}
+const numarCheie = (k: string, v: unknown) => /_kg$/.test(k) ? numarKgE3(v) : numarE3(v)
 export function normalizeazaE3(raw: string, sablon: SablonE3) {
   const p: unknown = jsonDinText(raw)
   if (!obiect(p) || !obiect(p.antet) || !Array.isArray(p.randuri) || !p.randuri.length || !p.randuri.every(obiect)) throw new EroareE3('raspuns_ai_invalid')
   const a = p.antet
   const avertismente = Array.isArray(p.avertismente) ? p.avertismente.map(text).filter((v): v is string => !!v) : []
-  const antet = Object.fromEntries([...ANTET_COMUN, ...ANTET_SPECIFIC[sablon]].map(k => [k, k.startsWith('total_') ? numarE3(a[k]) : text(a[k])]))
+  const antet = Object.fromEntries([...ANTET_COMUN, ...ANTET_SPECIFIC[sablon]].map(k => [k, k.startsWith('total_') ? numarCheie(k, a[k]) : text(a[k])]))
   const randuri = p.randuri.map((r, i) => {
-    const n = Object.fromEntries([...RAND_TEXT.map(k => [k, text(r[k])]), ...RAND_NUMAR.map(k => [k, numarE3(r[k])])])
+    const n = Object.fromEntries([...RAND_TEXT.map(k => [k, text(r[k])]), ...RAND_NUMAR.map(k => [k, numarCheie(k, r[k])])])
     for (const k of ['cantitate', 'pagina']) if (n[k] !== null && (!Number.isInteger(n[k]) || Number(n[k]) < 1)) {
       n[k] = null; avertismente.push(`Rând ${i + 1}: ${k} invalidă.`)
     }
@@ -86,7 +95,7 @@ export function normalizeazaE3(raw: string, sablon: SablonE3) {
   })
   if (!randuri.some(r => [...RAND_TEXT, ...RAND_NUMAR.filter(k => !['pagina', 'cantitate', 'nr_crt'].includes(k))].some(k => r[k] !== null))) throw new EroareE3('raspuns_ai_invalid')
   const t = obiect(p.totaluri_tiparite) ? p.totaluri_tiparite : {}
-  return { antet, randuri, totaluri_tiparite: { total_metri: numarE3(t.total_metri), total_kg: numarE3(t.total_kg) }, avertismente }
+  return { antet, randuri, totaluri_tiparite: { total_metri: numarE3(t.total_metri), total_kg: numarKgE3(t.total_kg) }, avertismente }
 }
 export function valideazaCerereE3(b: Record<string, unknown>) {
   if (b.tip !== 'aviz_e3' || !Number.isSafeInteger(b.proiect_id) || Number(b.proiect_id) <= 0 || !Number.isSafeInteger(b.depozit_id) || Number(b.depozit_id) <= 0 || !['aviz_teava', 'lista_curbe'].includes(String(b.sablon))) throw new EroareE3('cerere_invalida', 400)

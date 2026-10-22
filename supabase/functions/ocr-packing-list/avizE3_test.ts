@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { CHEI_ANTET, randGol } from '../../../src/izoDocumenteLogica.js'
-import { ANTET_COMUN, ANTET_SPECIFIC, atribuireValidaE3, EroareE3, MAX_PDF_E3, normalizeazaE3, numarE3, RAND_NUMAR, RAND_TEXT, REZERVA_E3, schemaE3, valideazaCerereE3 } from './avizE3.ts'
+import { ANTET_COMUN, ANTET_SPECIFIC, atribuireValidaE3, EroareE3, MAX_PDF_E3, normalizeazaE3, numarE3, numarKgE3, RAND_NUMAR, RAND_TEXT, REZERVA_E3, schemaE3, valideazaCerereE3 } from './avizE3.ts'
 
 const ai = (r: Record<string, unknown> = {}) => JSON.stringify({ antet: { furnizor: '  Furnizor  ', nr_document: '00019', total_m: '99,15', decizie: 'primit' }, randuri: [{ serie: '  000123  ', sarja: '00009', lungime_doc: '12,345', pagina: 2, ...r }], totaluri_tiparite: { total_metri: '99,15', total_kg: '1.234,56' }, avertismente: ['  ilizibil  ', 7] })
 const cerere = () => ({ tip: 'aviz_e3', proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', pdf_base64: btoa('%PDF-1.7\n') })
@@ -68,4 +68,12 @@ Deno.test('atribuire: proiect/depozit exacte, rol gestionar, activă, limite inc
   assert.equal(atribuireValidaE3(a, 1, 2, '2026-10-22'), true)
   for (const patch of [{ proiect_id: 3 }, { depozit_id: 3 }, { depozit_id: null }, { activ: false }, { rol: 'rts_rte' }, { valabil_de: '2026-10-23' }, { valabil_pana: '2026-10-21' }]) assert.equal(atribuireValidaE3({ ...a, ...patch }, 1, 2, '2026-10-22'), false)
   assert.equal(atribuireValidaE3({ ...a, valabil_de: null, valabil_pana: null }, 1, 2, '2026-10-22'), true)
+})
+Deno.test('kg: separator de mii din document (aviz Comtech, lista Gurgenler)', () => {
+  assert.equal(numarKgE3('1,343'), 1343)
+  assert.equal(numarKgE3('9.920'), 9920)
+  assert.equal(numarKgE3('20,529'), 20529)
+  assert.equal(numarKgE3(1402), 1402)
+  assert.equal(numarKgE3('1402,5'), 1402.5)
+  assert.equal(numarE3('12.50'), 12.5)
 })
