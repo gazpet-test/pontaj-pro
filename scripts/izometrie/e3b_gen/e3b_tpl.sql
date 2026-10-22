@@ -4,7 +4,7 @@
 -- Numai runner; nicio modificare de date. Nu este încă implementarea operațională E3b.
 DO $migrare$
 DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_comentariu text;
-  v_lipsa text[]; v_impl text[]; v_impl_rev text[]; v_x text; r record;
+  v_lipsa text[]; v_impl text[]; v_impl_rev text[]; v_x text; rr record;
   v_porti text; v_porti_e3 text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true)
@@ -50,8 +50,8 @@ BEGIN
     RAISE EXCEPTION 'E3b: CHECK sursa_receptie diferă de forma LIVE';
   END IF;
   -- Recitire catalog, nu confundăm setările rolurilor cu timeout-urile efective PostgREST (§3.5).
-  FOR r IN SELECT rolname, rolconfig FROM pg_roles WHERE rolname IN ('authenticator','authenticated') LOOP
-    RAISE NOTICE 'E3b timeout-uri de rol (nu efective): % %', r.rolname, r.rolconfig;
+  FOR rr IN SELECT rolname, rolconfig FROM pg_roles WHERE rolname IN ('authenticator','authenticated') LOOP
+    RAISE NOTICE 'E3b timeout-uri de rol (nu efective): % %', rr.rolname, rr.rolconfig;
   END LOOP;
   -- §17.4 pasul 2: verde ÎNAINTE de DDL + mulțime fixă, nu TOFU.
   v_lipsa := public.fn_izo_porti_lipsa() || public.fn_izo_porti_e3_lipsa();
