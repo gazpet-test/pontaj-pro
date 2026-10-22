@@ -789,4 +789,7 @@ describe('imagine: rotire apoi decupare', () => {
     expect(rotesteCrop(r90, 600, 400, 270)).toEqual(rect)
     expect(rotesteCrop(null, 400, 600, 90)).toBe(null)
   })
+  it('codCuValoare scrie peretele cu virgulă (Jak ux2 P2)', () => {
+    expect(codCuValoare('1029-610-8-25-6100-2513619-9', 'perete_mm', '7.1')).toBe('1029-610-7,1-25-6100-2513619-9')
+  })
 })

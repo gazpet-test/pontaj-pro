@@ -469,7 +469,7 @@ export default function IzoDocumenteIntrare() {
     finally { aiLock.current = false; setAiBusy(false) }
   }
   const refaceImagine = async opt => {
-    if (!imagineAI || busy || aiLock.current) return
+    if (!imagineAI || busy || aiLock.current || aiAplicat) return   // scanul citit rămâne cel aplicat (Jak ux2 P1)
     aiLock.current = true; setAiBusy(true)
     const context = contextAI(), seq = ++fisierSeq.current
     try {
@@ -680,7 +680,9 @@ export default function IzoDocumenteIntrare() {
         ✓ {imagineAI ? 'Poză încărcată' : 'PDF încărcat'} — {Math.ceil(pdfAI.size / 1024)} KB{imagineAI && (imagineAI.rotatie || imagineAI.crop) ? ` (${[imagineAI.rotatie ? `rotită ${imagineAI.rotatie}°` : '', imagineAI.crop ? 'decupată' : ''].filter(Boolean).join(', ')})` : ''}, gata de citit
         <div style={{ fontSize:11, fontWeight:400, color:G.muted, marginTop:2, overflowWrap:'anywhere' }}>{pdfAI.name}</div>
       </div>}
-      {pdfAI && imagineAI && <PregatireImagine imagine={imagineAI} busy={busy || aiBusy} aplica={refaceImagine}
+      {/* după „Aplică în formular” poza se blochează: altfel s-ar putea atașa un scan schimbat la rândurile citite din altul (Jak ux2 P1) */}
+      {pdfAI && imagineAI && aiAplicat && <div style={{ color:G.muted, fontSize:12, margin:'6px 0' }}>🔒 Poza e blocată după aplicarea propunerii. Pentru altă poză sau alt decupaj: alege din nou fotografia / PDF-ul și citește din nou.</div>}
+      {pdfAI && imagineAI && !aiAplicat && <PregatireImagine imagine={imagineAI} busy={busy || aiBusy} aplica={refaceImagine}
         dimensiuni={(width, height) => setImagineAI(x => x ? { ...x, width, height } : x)} />}
       {rotatieMesaj && <div style={{ color:G.yellow }}>{rotatieMesaj}</div>}
       {aiMeta && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>

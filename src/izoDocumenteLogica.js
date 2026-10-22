@@ -327,7 +327,7 @@ export function valoareDinCod(cod, camp) {
 export function codCuValoare(cod, camp, valoare) {
   const p = String(cod || '').split('-'), parte = PARTI_COD.find(x => x[0] === camp)
   if (p.length !== 7 || !parte || valoare == null || !String(valoare).trim() || String(valoare).includes('-')) return null
-  p[parte[2]] = String(valoare).trim()
+  p[parte[2]] = camp === 'perete_mm' ? String(valoare).trim().replace('.', ',') : String(valoare).trim()   // perete cu virgulă, ca pe listă (Jak ux2 P2)
   return p.join('-')
 }
 export function diferenteCodCurba(rn) {
