@@ -301,3 +301,30 @@ Cum se citește:
 ### 10.5 Cum facturăm noiembrie (lucrări după 21.10)
 - Varianta de lucru până la actul adițional: factură per situație de lucrări pe contractul 888 + acord de cesiune per factură **semnat de Moldocor cu avizul Prime Insolv Practice** + notificare Transgaz cu dovadă; cerem Transgaz confirmarea că plătește direct (și verificăm cl. 6.1–6.2 înainte).
 - Varianta țintă după actul adițional (Comesad lider): probele de presiune devin **lucrare a asociatului Gazpet** în repartizarea 5.1/7.1 din acord, facturate per asociat sau prin Comesad către Transgaz, fără să mai treacă prin Moldocor. Atunci contractul 888 se închide sau se reduce la ce s-a executat până la actul adițional.
+
+
+---
+
+## 11. Punctul de vedere Habau (av. Robert Cruceru, 10.09.2026) și ce s-a schimbat de atunci
+
+> Sursa: mail Robert Cruceru → Karl Leidenfrost (Habau), 10.09.2026, redirecționat lui Răzvan pe 14.09.2026 și mai departe lui C. Pantea și V. Dumitru (Comesad). Scris **înainte** de deschiderea insolvenței, când Moldocor era în concordat preventiv. Context din fir: Habau are 3 % pe Lot 4 (și Gazpet 1 % pe Lot 1); în august Habau se întreba dacă Moldocor „încasează ca lider dar nu mai virează membrilor pentru că are **contul de asociere blocat**” și dacă e în default față de Transgaz (Karl, 31.08: „încă sunt în termen, dar dacă nu mai plătesc asociații și subcontractorii… devine un risc”).
+
+### 11.1 Ce susține Cruceru (rezumat fidel)
+1. **Concordatul nu e insolvență**: Moldocor își păstra capacitatea juridică deplină și administrarea → greu de susținut schimbarea liderului pe motive de capacitate.
+2. **Habau nu poate schimba unilateral nimic**: acordul nu are mecanism de înlocuire a liderului (cere acordul tuturor, inclusiv al liderului, „pe care nu e dispus să-l dea”); contractul cere aprobarea prealabilă a Transgaz pentru modificarea statutului asocierii (12.8). La fel pentru schimbarea mecanismului de plată.
+3. **Pârghia 1 — clauza 67.2**: concordatul ca „eveniment cu efect similar” insolvenței → Moldocor obligată la analiză de impact + plan de măsuri, care „în mod prudențial” trebuie să includă **schimbarea mecanismului de încasare**, ca riscul să rămână izolat la Moldocor. Plus: nu cere aprobarea prealabilă a Transgaz. Riscuri: contestarea calificării concordatului ca „efect similar”, unanimitatea în asociere, „alertarea” Moldocor/Transgaz.
+4. **Pârghia 2 — revocarea mandatului de încasare**: mandatul dat liderului (acord 2.3–2.5) e un mandat în cadrul asocierii, **revocabil ad nutum** după dreptul comun; membrii îl revocă și cer Transgaz plata distribuită pe cote. Riscuri: Moldocor susține că mandatul e parte integrantă a asocierii; cere acordul unanim al celorlalți membri; Transgaz poate considera revocarea inopozabilă fără acordul ei prealabil.
+5. **Rezervă**: așteptarea unui incident de plată al Moldocor sub acord, apoi reziliere parțială a acordului și excluderea ei.
+6. Recomandare de proces: dacă toți membrii (fără Moldocor) sunt de acord, demersul se duce direct la Moldocor; altfel, întâi consens informal cu ceilalți membri.
+
+### 11.2 Ce s-a schimbat la 21.10.2026 și unde opinia Habau trebuie actualizată
+- **Nu mai e nevoie de argumentul „efect similar”**: s-a deschis procedura generală, deci **67.1 se aplică direct**, iar textul lui spune expres că planul de măsuri poate include **schimbarea liderului „fără ca acordul prealabil al Beneficiarului să fie necesar”** și fără a fi Modificare în sensul cl. 37 — derogare expresă de la 12.8. Punctul 2 din opinia Cruceru („contractul cere aprobarea Transgaz”) **nu mai ține** pentru schimbarea liderului; el a citit 12.8 fără derogarea din 67.1/67.2.
+- **Punctul 1 cade**: Moldocor nu mai e în concordat; e în observație, sub supravegherea Prime Insolv Practice. Semnătura ei pe actul adițional cere avizul administratorului (art. 87 alin. 2, 123 alin. 5), dar refuzul ei nu mai e un simplu „nu e dispusă”: administratorul răspunde pentru masa credală, iar blocarea predării conducerii expune Moldocor la GBE + daune (vezi §9.4).
+- **Pârghia 2 (revocarea mandatului) rămâne valabilă și devine complementară** planului nostru: revocarea mandatului de încasare e un act al **mandanților** (Gazpet, Comesad, Habau), nu al debitorului, deci **nu cere avizul administratorului judiciar**; art. 123 alin. 1 nu o blochează (nu e o clauză de desființare „pentru deschiderea procedurii”, ci dreptul de revocare ad nutum, art. 2030 C.civ.). Limita e aceeași pe care o semnalează Cruceru: **opozabilitatea față de Transgaz** → se rezolvă prin notificarea pe 12.8 + 37.12/44.2 și, ideal, prin actul adițional cu Comesad lider. Deci: **revocarea mandatului se poate face înaintea actului adițional**, ca măsură de urgență pe bani, dacă Moldocor tergiversează.
+- **„Contul de asociere blocat”** (august): de verificat ce era — poprire ANAF/executare pe contul CEC? Dacă da, explică de ce Moldocor nu vira cotele și întărește cererea de schimbare a contului. Întrebare pentru Habau/Comesad: au încasat ceva de la Moldocor după august?
+- **Aliniere**: Habau și Comesad au fost deja expuse la ideea schimbării mecanismului de plată din septembrie (Comesad a primit firul pe 14.09). Terenul pentru acordul de principiu „Comesad lider + plată per asociat / prin noul lider” e pregătit; Habau are avocat deja implicat (Cruceru) — merită invitat în grupul de lucru, cu documentul nostru ca bază actualizată.
+
+### 11.3 Ce adaugă asta în planul din §9.4
+- Ziua 1–2: pe lângă acordul de principiu, trimitem lui Habau (Leidenfrost + Cruceru) și Comesad **versiunea actualizată**: 67.1 direct aplicabil, fără aprobare prealabilă Transgaz, cu avizul administratorului judiciar pe semnătura Moldocor.
+- Dacă Moldocor/administratorul tergiversează actul adițional: **revocarea mandatului de încasare** de către cei trei mandanți + notificare Transgaz (12.8, 37.12) ca pas intermediar, cu avocatul.
+- Întrebare la Habau: ce s-a întâmplat cu „contul blocat” și dacă Transgaz a mai plătit ceva în contul Moldocor după 31.08.
