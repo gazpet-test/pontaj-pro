@@ -942,3 +942,12 @@ Butoanele de stare sunt dezactivate, cu explicație, pe bucățile unui document
   - **A** detalii doar din proiectele citite de apelant; în rest, 23505 generic, fără bucată / proiect / stare; `verifica` nu certifică disponibilitatea globală; oracolul „există undeva” rămâne, declarat (§10);
   - **B** detalii complete pentru orice coliziune, oricui poate scrie pe proiect (mai util la recepție, dar dezvăluie bucăți și proiecte inaccesibile);
   - **C** ca A, plus o verificare globală cu detalii doar pentru owner, într-un ecran separat.
+
+## 12. Diferențe de implementare acceptate (cod 22.10.2026, `izometrie/e3b`)
+
+Găsite de testele E4. Codul rămâne cum e; textul de mai sus se citește cu aceste precizări:
+- **§3.5 (IDENTITY):** `izo_corectii_bucati` nu are coloană `id`. Cheia ei e compusă (`corectie_id`, `bucata_id`), ca în §2.2; fraza despre IDENTITY nu se aplică acestui tabel.
+- **§3.4 / §3.5 (`fn_izo_cor_cerut_de_valid`):** primește EXECUTE și `izo_receptie_writer`, pe lângă `izo_corectie_writer`. Motivul: anularea administrativă E3 înlocuită (`fn_izo_doc_anuleaza`, Q-E3b-14 = A, owner `izo_receptie_writer`) validează `p_cerut_de` prin același helper.
+- **§3.5 (volatilitate):** `fn_izo_garda_corectie` e VOLATILE, nu STABLE. Funcțiile de trigger care validează scrieri rămân VOLATILE; restul helper-elor sunt STABLE, cum spune rândul comun.
+- **§5.1 / Q-E3b-18 = A:** la coliziunile de serie, mesajul cu detalii are forma „E3b: conflict de unicitate în registru: bucata N (proiectul P, stare S)”. Mesajul generic e cel din §5.1 („… pe un proiect la care nu ai acces”) și se folosește atât la pre-verificare, cât și la `unique_violation`.
+- **Testele (§9):** sunt în `supabase/tests/izometrie_e3b*.sql` și `scripts/test_izometrie_e3b.sh`: catalog, gărzi executate, proiecție, unicitate, stări, 32 + 1 curse cu barieră, autorizare, porți, drepturi, istoric, atomicitate, revenire pe fiecare fel de fapt, lanțul pe bază curată, regresiile E2a + E3 și diferențialul E3 peste E3b. Pe branch-ul PG17 rămân: timeout-urile efective, PostgREST real și copia LOT 2 (§9.2 r5, §9.15, §9.18).

@@ -118,6 +118,9 @@ done
 OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3b_garzi.sql" 2>&1)" || { echo "$OUT" >&2; esec 'garzi E3b-E3'; }
 grep -qF 'TESTE E3b-E3: TOATE OK' <<<"$OUT" || esec 'sectiunea E3 nu a ajuns la final'
 ok 'E3: garzi executate, unicitate, stari, gasit_nou si proiectii'
+OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3b_rest.sql" 2>&1)" || { echo "$OUT" >&2; esec 'teste E3b-E4'; }
+grep -qF 'TESTE E3b-E4: TOATE OK' <<<"$OUT" || esec 'sectiunea E4 nu a ajuns la final'
+ok 'E4: porti, privilegii, istoric, atomicitate, reaprobare, PV si storno'
 ok 'catalog, matrice, roluri, RLS, PUBLIC EXECUTE și mutații'
 # Reaplicare direct sub gardă, ca să dovedim refuzul migrării, nu numai al metadata runner-ului.
 refuza 'există deja' "${PSQL[@]}" -d "$BAZA" --single-transaction \
@@ -749,4 +752,4 @@ cursa 'aproba x aproba aceeasi propunere'   "$CA_R; SELECT public.fn_izo_cor_apr
 ok 'bariera: A tine aprobarea; pg_locks confirma B in asteptare; retry idempotent/40001; un eveniment si o miscare'
 source "$RADACINA/scripts/izometrie/test_e3b_e2_curse.sh"
 baza_scoate
-echo 'PASS E3b E1+E2+E3: M1-M4, regresii, rollback, autorizare, curse si garzi/proiectii'
+echo 'PASS E3b E1+E2+E3+E4: M1-M4, regresii, rollback, autorizare, curse, garzi si teste ramase'
