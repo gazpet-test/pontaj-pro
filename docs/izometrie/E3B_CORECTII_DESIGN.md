@@ -414,7 +414,7 @@ Revocările (modul, atribuire, `is_owner`) se comportă exact ca în E3 §3.4: a
   - `porti=` (E2a; acoperă automat toate funcțiile `fn_izo_*`, deci și pe cele E3b și cele înlocuite);
   - `porti_e3=` (se schimbă: privilegii pe coloane și politici noi pe tabelele pe care le inventariază);
   - `porti_e3b=`;
-  - amprenta de revenire E2a, cu valoarea de dinainte păstrată în comentariu (`inainte_20261104a=…`), ca la E3.
+  - amprenta de revenire E2a, cu valoarea de dinainte păstrată în comentariu (`inainte_20261106a=…`), ca la E3.
 - **Închiderea citirilor:** toate funcțiile E3b sunt `fn_izo_*`, deci în afara corpurilor scanate și în amprenta E2a (corp, owner, ACL, config). Nu apar view-uri. **DEFINER-ele care citesc registrul / documentele, complet (r3; r2 spunea, greșit, „doar `fn_izo_lant_blocant`”):**
   - intrările din §1 (owner `izo_cor_editor` / `izo_corectie_writer`, NOLOGIN): citesc doar după autorizarea pe proiect, iar ce întorc e filtrat pe proiectul autorizat (coliziunile, §5.6);
   - `fn_izo_cor_bucata_lock`, `fn_izo_cor_doc_lock` (owner `postgres`, EXECUTE doar `izo_cor_editor`): filtrate pe `p_proiect`, chemate doar din `fn_izo_cor_propune`;
@@ -712,7 +712,7 @@ Testele 9–10 și regresia (testul 14) sunt scrise pe ambele ramuri. Sub A, tes
 - **Fără fapte:**
   - scoate trigger-ele / politicile / funcțiile / tabelele / rolurile E3b, indexul `ux_magbuc_ev_corectie` și `magbuc_ev_e3b_motiv`;
   - reface CHECK-ul tipurilor (forma E3) și funcțiile înlocuite, din definițiile salvate, exact celula din matricea §6 (r4): setul comun (gărzile E3, `fn_izo_doc_garda`, `fn_izo_porti_lipsa`, `fn_izo_doc_salveaza`) + `fn_izo_import_storno` dacă Q-E3b-1 ∈ {A, C} **sau** Q-E3b-17 = A + `fn_izo_doc_anuleaza` / `fn_izo_garda_receptie` dacă Q-E3b-1 = A + `fn_izo_import_sold_initial` dacă Q-E3b-17 = A; scoate `fn_izo_lant_blocant` și, dacă există, `fn_izo_cor_deschise` (după ce funcțiile care le cheamă au fost restaurate);
-  - reface ștampilele `porti=` / `porti_e3=` și COMMENT-ul amprentei de revenire, cu valoarea păstrată după `inainte_20261104a=`;
+  - reface ștampilele `porti=` / `porti_e3=` și COMMENT-ul amprentei de revenire, cu valoarea păstrată după `inainte_20261106a=`;
   - verifică egalitatea cu starea dinainte de E3b.
 - **Criteriu obligatoriu de acceptare (r5; rezultatele vin la cod, §9 testul 18):** pe baza curată, lanțul E3b → revenire E3b → revenire E3 → revenire 2c → revenire E2a trebuie să treacă integral, pe fiecare celulă a matricei §6. Fără rezultatul lui atașat, PR-ul de cod nu intră la review și migrarea nu se aplică.
 
