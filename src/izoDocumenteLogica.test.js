@@ -413,10 +413,10 @@ describe('regulile E3 oglindite local (contractul de rând)', () => {
     expect(randPentruRpc(r({ perete_mm: '7,1', diametru_mm: '610' }), 'aviz_teava')).toMatchObject({ perete_mm: 7.1, diametru_mm: 610 })
   })
   it('izolația: neizolată / PEHD / GRP (sau gol); altceva blochează salvarea', () => {
-    expect([izolatieDinText('pehd'), izolatieDinText('PE-HD'), izolatieDinText('Neizolată'), izolatieDinText('grp'), izolatieDinText(''), izolatieDinText('izolata')])
-      .toEqual(['PEHD', 'PEHD', 'neizolata', 'GRP', null, 'izolata'])
-    const d = docAviz1(); d.randuri[0].izolatie = 'izolata'
-    expect(eroriSalvare(d)).toEqual(['Rândul 1: izolația „izolata” nu e recunoscută (neizolată / PEHD / GRP).'])
+    expect([izolatieDinText('pehd'), izolatieDinText('PE-HD'), izolatieDinText('Neizolată'), izolatieDinText('grp'), izolatieDinText(''), izolatieDinText('izolata'), izolatieDinText('bitum')])
+      .toEqual(['PEHD', 'PEHD', 'neizolata', 'GRP', null, 'PEHD', 'bitum'])
+    const d = docAviz1(); d.randuri[0].izolatie = 'bitum'
+    expect(eroriSalvare(d)).toEqual(['Rândul 1: izolația „bitum” nu e recunoscută (neizolată / PEHD / GRP).'])
     d.randuri[0].izolatie = 'PEHD'
     expect(eroriSalvare(d)).toEqual([])
   })

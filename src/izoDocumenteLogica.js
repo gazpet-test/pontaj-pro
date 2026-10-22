@@ -169,7 +169,8 @@ export function izolatieDinText(v) {
   if (!s) return null
   const n = normAntet(s).replace(/[\s._-]+/g, '')
   if (/^neizol/.test(n)) return 'neizolata'
-  if (n === 'pehd') return 'PEHD'
+  // „izolată / izolate” pe avizele de țeavă = izolație PEHD (regulă Razvan 22.10.2026: ori PEHD, ori neizolată)
+  if (n === 'pehd' || n === '3lpe' || /^izolat/.test(n) || /^polietilen/.test(n)) return 'PEHD'
   if (n === 'grp') return 'GRP'
   return s
 }
