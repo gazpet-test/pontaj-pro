@@ -245,6 +245,9 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
           fisier_path: path, fisier_nume: file.name, fisier_size_bytes: file.size,
           fisier_mime: file.type || 'application/pdf', status: 'in_asteptare',
           uploadat_de: profile?.id || null,
+          // wizard-ul urcă doar acte HR: coada HR de la upload (clasificatorul păstrează modulul pre-setat, v18) — altfel rândul e
+          // „nedecis” cât îl citește AI-ul și actul e vizibil oricărui cont (docs/HR/INBOX_STORAGE_RLS.md, limitarea a)
+          modul_tinta: 'hr',
         // fisier_size_bytes / fisier_mime: valorile din BD ale rândului — docWizardHR le copiază exact (garda BD, Jakarinos r2 P1)
         }).select('id,status,modul_tinta,fisier_nume,fisier_path,fisier_size_bytes,fisier_mime').single()
         if (insErr) {
