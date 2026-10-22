@@ -134,14 +134,28 @@ BEGIN
       -- r5g (#825) NO-GO P2: o schemă a platformei urmată (după ghilimele / spații / un punct opțional) de deschiderea unui
       -- comentariu — singura formă în care un comentariu rupe apelul ei calificat
       k_com text := c_st || '(' || array_to_string(c_scheme_platforma, '|') || ')"?[[:space:]]*(\.[[:space:]]*)?(/\*|--)';
-      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod (citite 22.10.2026: singurele obiecte din catalog care cheamă
-      -- funcții din închiderea de pe prod). Amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER | proconfig):
-      -- obiectul și ce cheamă, cu drepturile funcției; corpul NU (funcția de platformă e deja tratată ca cititor oarecare —
-      -- e în închidere — iar corpul ei se schimbă la upgrade-urile Supabase). Altă funcție / alt owner / DEFINER → refuz
+      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod — singurele obiecte din catalog care cheamă implicit o
+      -- funcție din închiderea de pe prod sau (r5h) un mutator de cale; citite read-only 22.10.2026 (baseline_pre_e3.json, cheia
+      -- „implicite”). r5h (#825 r5g NO-GO, Jak P1): amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER |
+      -- proconfig | limbaj | md5(corp)) — CU corpul: un corp schimbat (același owner / config) nu mai păstrează excepția. Un
+      -- upgrade Supabase care schimbă corpul uneia dintre funcțiile de platformă înroșește poarta (fail-closed): captură nouă
+      -- + review + migrare (design §17)
       c_implicite_revizuite constant text[] := ARRAY[
-        'event trigger issue_pg_graphql_access=0f4572b9830eb200bffae0e82fecb110',
-        'event trigger issue_pg_net_access=5c1a15eb921274d7f72b9741b7d0fb9f',
-        'trigger tr_check_filters on realtime.subscription=3a762553e7b46dfe8a5525d53ef822f6'];
+        'event trigger issue_graphql_placeholder=2aa685a004bc87f7a10ef72d134a88bb',
+        'event trigger issue_pg_graphql_access=7ed4741489f49636791f930411cfb345',
+        'event trigger issue_pg_net_access=d62f8ab601b809080c679266fbdb8a06',
+        'trigger a01_ofertare_cantitati_lot_canonic on public.ofertare_cantitati=62d07782ee60e73b327be8c82d4dd34b',
+        'trigger a01_ofertare_cerinte_lot_canonic on public.ofertare_cerinte=b2b9b1f753fae9e4f8a7a10ee6c6b351',
+        'trigger on_auth_user_created on auth.users=5f3f59717d56d1148ac3f4b7d3a2b199',
+        'trigger prevent_role_escalation_trigger on public.profiles=06b7e4fcaab58c9a3faecb7ff4856b45',
+        'trigger tr_check_filters on realtime.subscription=ed76f4ff4e3c6abd998eded3d159d3c3',
+        'trigger trg_employees_persoana_lock on public.employees=9dcecd0c70efdf1bf5e24e9c1157bc11',
+        'trigger trg_employees_zz_ciclu_cont on public.employees=8b5dbbd69476106544cff2b5393c116a',
+        'trigger trg_enforce_owner_only_salary_flags on public.profiles=46f1b6af2f30d56993ca988b267e76d8',
+        'trigger trg_hr_autorizatii_rsvti_doar_rpc on public.hr_autorizatii=9a7f49627ab4e62e14aa43252a2ab56e',
+        'trigger trg_hr_employees_private_persoana_lock on public.hr_employees_private=32261dc19c5d0da91f0487ab2f33bb08',
+        'trigger trg_profiles_campuri_owner_only on public.profiles=e80a3aed6ff3f2055785bdc974702cd5',
+        'trigger trg_protect_can_access_pontaj_brut on public.profiles=3a58112eec4c06bef2d66159ad6f82a5'];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -312,21 +326,26 @@ BEGIN
       -- DEFINER care scrie / convertește / sortează le pornește fără să numească funcția. Orice rând pg_depend spre o funcție
       -- din închidere al cărui obiect nu e propagat mai sus (view / regulă: pg_rewrite; funcție: pg_proc — candidații prin
       -- propagare, agregatele prin regula de deasupra; operator / cast: regula de deasupra) → refuz explicit, cu obiectul numit,
-      -- în afara listei revizuite (c_implicite_revizuite). Doar c_fn, nu și mutatorii: pe prod cei 35 (orice set_config /
-      -- search_path în corp) au 12 trigger-e și 2 funcții de event trigger — invocarea lor implicită rămâne întrebare deschisă
+      -- în afara listei revizuite (c_implicite_revizuite).
+      -- r5h (#825 r5g NO-GO, Jak P1): și spre MUTATORII de cale (c_mut), ca spre închidere: un trigger INVOKER care face
+      -- set_config('search_path', 'storage, public', true) pe un tabel auxiliar, pornit de un DEFINER cu cale fixă care inserează
+      -- acolo și apoi cheamă necalificat un cititor de platformă, schimbă calea efectivă FĂRĂ ca DEFINER-ul să numească mutatorul
+      -- (deci el nu devine mutator, iar apelul necalificat se judecă pe calea declarată). Refuz explicit, cu obiectul numit; pe
+      -- prod: 12 obiecte peste mutatori (11 trigger-e + issue_graphql_placeholder; tr_check_filters / issue_pg_net_access și în
+      -- închidere), toate pe lista revizuită, cu corpul în amprentă
       FOR k_s IN SELECT x.d FROM (
-          SELECT DISTINCT format('%s → %s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure) d
-            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_namespace n2 ON n2.oid = q.pronamespace
+          SELECT DISTINCT format('%s → %s%s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure,
+                                 CASE WHEN d.refobjid = ANY (c_fn) THEN ' (obiect din catalog care cheamă o funcție din închiderea citirilor)'
+                                      ELSE ' (obiect din catalog care cheamă un mutator de cale)' END) d
+            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_language l ON l.oid = q.prolang
                  CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
-           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)
+                 CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn || c_mut)
              AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass, 'pg_cast'::regclass)
-             AND format('%s %s=%s', o.type, o.identity,
-                        md5(concat_ws('|', o.type, o.identity, format('%I.%I(%s)', n2.nspname, q.proname, pg_get_function_identity_arguments(q.oid)),
-                                      pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''))))
-                 <> ALL (c_implicite_revizuite)) x
+             AND format('%s %s=%s', o.type, o.identity, md5(concat_ws('|', o.type, o.identity, f.identity, pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''), l.lanname, md5(q.prosrc || '|' || coalesce(q.prosqlbody::text, ''))))) <> ALL (c_implicite_revizuite)) x
         ORDER BY x.d COLLATE "C"
       LOOP
-        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)');
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (citire nerevizuită)');
       END LOOP;
       o_rel := c_rel; o_fn := c_fn; o_mut := c_mut; o_mesaje := v;
     END;
@@ -367,14 +386,28 @@ BEGIN
       -- r5g (#825) NO-GO P2: o schemă a platformei urmată (după ghilimele / spații / un punct opțional) de deschiderea unui
       -- comentariu — singura formă în care un comentariu rupe apelul ei calificat
       k_com text := c_st || '(' || array_to_string(c_scheme_platforma, '|') || ')"?[[:space:]]*(\.[[:space:]]*)?(/\*|--)';
-      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod (citite 22.10.2026: singurele obiecte din catalog care cheamă
-      -- funcții din închiderea de pe prod). Amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER | proconfig):
-      -- obiectul și ce cheamă, cu drepturile funcției; corpul NU (funcția de platformă e deja tratată ca cititor oarecare —
-      -- e în închidere — iar corpul ei se schimbă la upgrade-urile Supabase). Altă funcție / alt owner / DEFINER → refuz
+      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod — singurele obiecte din catalog care cheamă implicit o
+      -- funcție din închiderea de pe prod sau (r5h) un mutator de cale; citite read-only 22.10.2026 (baseline_pre_e3.json, cheia
+      -- „implicite”). r5h (#825 r5g NO-GO, Jak P1): amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER |
+      -- proconfig | limbaj | md5(corp)) — CU corpul: un corp schimbat (același owner / config) nu mai păstrează excepția. Un
+      -- upgrade Supabase care schimbă corpul uneia dintre funcțiile de platformă înroșește poarta (fail-closed): captură nouă
+      -- + review + migrare (design §17)
       c_implicite_revizuite constant text[] := ARRAY[
-        'event trigger issue_pg_graphql_access=0f4572b9830eb200bffae0e82fecb110',
-        'event trigger issue_pg_net_access=5c1a15eb921274d7f72b9741b7d0fb9f',
-        'trigger tr_check_filters on realtime.subscription=3a762553e7b46dfe8a5525d53ef822f6'];
+        'event trigger issue_graphql_placeholder=2aa685a004bc87f7a10ef72d134a88bb',
+        'event trigger issue_pg_graphql_access=7ed4741489f49636791f930411cfb345',
+        'event trigger issue_pg_net_access=d62f8ab601b809080c679266fbdb8a06',
+        'trigger a01_ofertare_cantitati_lot_canonic on public.ofertare_cantitati=62d07782ee60e73b327be8c82d4dd34b',
+        'trigger a01_ofertare_cerinte_lot_canonic on public.ofertare_cerinte=b2b9b1f753fae9e4f8a7a10ee6c6b351',
+        'trigger on_auth_user_created on auth.users=5f3f59717d56d1148ac3f4b7d3a2b199',
+        'trigger prevent_role_escalation_trigger on public.profiles=06b7e4fcaab58c9a3faecb7ff4856b45',
+        'trigger tr_check_filters on realtime.subscription=ed76f4ff4e3c6abd998eded3d159d3c3',
+        'trigger trg_employees_persoana_lock on public.employees=9dcecd0c70efdf1bf5e24e9c1157bc11',
+        'trigger trg_employees_zz_ciclu_cont on public.employees=8b5dbbd69476106544cff2b5393c116a',
+        'trigger trg_enforce_owner_only_salary_flags on public.profiles=46f1b6af2f30d56993ca988b267e76d8',
+        'trigger trg_hr_autorizatii_rsvti_doar_rpc on public.hr_autorizatii=9a7f49627ab4e62e14aa43252a2ab56e',
+        'trigger trg_hr_employees_private_persoana_lock on public.hr_employees_private=32261dc19c5d0da91f0487ab2f33bb08',
+        'trigger trg_profiles_campuri_owner_only on public.profiles=e80a3aed6ff3f2055785bdc974702cd5',
+        'trigger trg_protect_can_access_pontaj_brut on public.profiles=3a58112eec4c06bef2d66159ad6f82a5'];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -557,21 +590,26 @@ BEGIN
       -- DEFINER care scrie / convertește / sortează le pornește fără să numească funcția. Orice rând pg_depend spre o funcție
       -- din închidere al cărui obiect nu e propagat mai sus (view / regulă: pg_rewrite; funcție: pg_proc — candidații prin
       -- propagare, agregatele prin regula de deasupra; operator / cast: regula de deasupra) → refuz explicit, cu obiectul numit,
-      -- în afara listei revizuite (c_implicite_revizuite). Doar c_fn, nu și mutatorii: pe prod cei 35 (orice set_config /
-      -- search_path în corp) au 12 trigger-e și 2 funcții de event trigger — invocarea lor implicită rămâne întrebare deschisă
+      -- în afara listei revizuite (c_implicite_revizuite).
+      -- r5h (#825 r5g NO-GO, Jak P1): și spre MUTATORII de cale (c_mut), ca spre închidere: un trigger INVOKER care face
+      -- set_config('search_path', 'storage, public', true) pe un tabel auxiliar, pornit de un DEFINER cu cale fixă care inserează
+      -- acolo și apoi cheamă necalificat un cititor de platformă, schimbă calea efectivă FĂRĂ ca DEFINER-ul să numească mutatorul
+      -- (deci el nu devine mutator, iar apelul necalificat se judecă pe calea declarată). Refuz explicit, cu obiectul numit; pe
+      -- prod: 12 obiecte peste mutatori (11 trigger-e + issue_graphql_placeholder; tr_check_filters / issue_pg_net_access și în
+      -- închidere), toate pe lista revizuită, cu corpul în amprentă
       FOR k_s IN SELECT x.d FROM (
-          SELECT DISTINCT format('%s → %s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure) d
-            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_namespace n2 ON n2.oid = q.pronamespace
+          SELECT DISTINCT format('%s → %s%s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure,
+                                 CASE WHEN d.refobjid = ANY (c_fn) THEN ' (obiect din catalog care cheamă o funcție din închiderea citirilor)'
+                                      ELSE ' (obiect din catalog care cheamă un mutator de cale)' END) d
+            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_language l ON l.oid = q.prolang
                  CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
-           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)
+                 CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn || c_mut)
              AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass, 'pg_cast'::regclass)
-             AND format('%s %s=%s', o.type, o.identity,
-                        md5(concat_ws('|', o.type, o.identity, format('%I.%I(%s)', n2.nspname, q.proname, pg_get_function_identity_arguments(q.oid)),
-                                      pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''))))
-                 <> ALL (c_implicite_revizuite)) x
+             AND format('%s %s=%s', o.type, o.identity, md5(concat_ws('|', o.type, o.identity, f.identity, pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''), l.lanname, md5(q.prosrc || '|' || coalesce(q.prosqlbody::text, ''))))) <> ALL (c_implicite_revizuite)) x
         ORDER BY x.d COLLATE "C"
       LOOP
-        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)');
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (citire nerevizuită)');
       END LOOP;
       o_rel := c_rel; o_fn := c_fn; o_mut := c_mut; o_mesaje := v;
     END;

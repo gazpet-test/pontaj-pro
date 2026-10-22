@@ -735,31 +735,98 @@ SELECT teste.e('E15n CHECK pe domeniu / pe tabel, trigger, index pe expresie, co
           OR m LIKE '%trigger t4\_bi on table audit.t4 → audit.trg()%' OR m LIKE '%index audit.t5\_ix → audit.ix(integer)%'
           OR m LIKE '%default value for column g of table audit.t6 → audit.ix(integer)%' OR m LIKE '%policy p7 on table audit.t7 → audit.chk(integer)%')) = 6);
 ROLLBACK;
--- lista revizuită (replici ale obiectelor de pe prod, cu owner-ul / config-ul de acolo): verde; alt owner / alt nume → refuz
+-- lista revizuită (replicile EXACTE ale obiectelor de platformă de pe prod — corp, owner, config, limbaj —, generate de gen_e3.py
+-- din captură în izometrie_e3_replici_platforma.sql): verde; alt owner / alt nume / doar alt corp (r5h) → refuz
+\set MSG_IMP_MUT ' (obiect din catalog care cheamă un mutator de cale) (citire nerevizuită)'
 BEGIN;
-CREATE ROLE supabase_realtime_admin NOLOGIN;
-CREATE SCHEMA realtime;
-CREATE TABLE realtime.subscription (id bigint, filters text);
-CREATE FUNCTION realtime.subscription_check_filters() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN IF false THEN EXECUTE 'SELECT 1'; END IF; RETURN NEW; END$f$;
-ALTER FUNCTION realtime.subscription_check_filters() OWNER TO supabase_realtime_admin;
-CREATE TRIGGER tr_check_filters BEFORE INSERT OR UPDATE ON realtime.subscription FOR EACH ROW EXECUTE FUNCTION realtime.subscription_check_filters();
-SELECT teste.e('E15o replica prod: tr_check_filters pe realtime.subscription (funcție din închidere: SQL dinamic, INVOKER, supabase_realtime_admin) e pe lista revizuită → porțile complete',
+\ir izometrie_e3_replici_platforma.sql
+SELECT teste.e('E15o replicile exacte de pe prod: tr_check_filters (funcție din închidere: cheamă realtime.cast cu SQL dinamic; INVOKER, supabase_realtime_admin), issue_pg_net_access / issue_pg_graphql_access (supabase_admin, search_path="") sunt pe lista revizuită → porțile complete',
   cardinality(public.fn_izo_porti_lipsa()) = 0);
 ALTER FUNCTION realtime.subscription_check_filters() OWNER TO postgres;
 SELECT teste.e('E15p aceeași replică, alt owner al funcției → amprenta diferă, poarta refuză explicit',
   ('invocare implicită neanalizată: trigger tr_check_filters on table realtime.subscription → realtime.subscription_check_filters()' || :'MSG_IMP_CAT') = ANY (public.fn_izo_porti_lipsa()));
 ROLLBACK;
 BEGIN;
-CREATE ROLE supabase_admin NOLOGIN;
-CREATE SCHEMA extensions;
-CREATE FUNCTION extensions.grant_pg_net_access() RETURNS event_trigger LANGUAGE plpgsql SET search_path = '' AS $f$BEGIN IF false THEN EXECUTE 'SELECT 1'; END IF; END$f$;
-ALTER FUNCTION extensions.grant_pg_net_access() OWNER TO supabase_admin;
-CREATE EVENT TRIGGER issue_pg_net_access ON ddl_command_end WHEN TAG IN ('CREATE EXTENSION') EXECUTE FUNCTION extensions.grant_pg_net_access();
-SELECT teste.e('E15q replica prod: event trigger-ul issue_pg_net_access (funcție din închidere, supabase_admin, search_path="") e pe lista revizuită → porțile complete',
+\ir izometrie_e3_replici_platforma.sql
+SELECT teste.e('E15q replica exactă de pe prod a event trigger-ului issue_pg_net_access (funcție din închidere ȘI mutator: GRANT EXECUTE / SET search_path în corp) → porțile complete',
   cardinality(public.fn_izo_porti_lipsa()) = 0);
 ALTER EVENT TRIGGER issue_pg_net_access RENAME TO issue_pg_net_access_2;
 SELECT teste.e('E15r același event trigger, alt nume → poarta refuză explicit',
   ('invocare implicită neanalizată: event trigger issue_pg_net_access_2 → extensions.grant_pg_net_access()' || :'MSG_IMP_CAT') = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+-- ═══ E16 r5h (#825 r5g NO-GO, Jak P1): lista albă cu CORPUL în amprentă — contraexemplul Jak: aceeași identitate, același owner,
+-- același SECURITY INVOKER și config, DOAR corpul schimbat (copiază numerele documentelor în NEW.filters); un wrapper DEFINER doar
+-- inserează în realtime.subscription … RETURNING filters (nu numește cititorul, nici documentele). Fără r5h: poarta verde ═══
+BEGIN;
+\ir izometrie_e3_replici_platforma.sql
+CREATE OR REPLACE FUNCTION realtime.subscription_check_filters() RETURNS trigger LANGUAGE plpgsql
+  AS $f$BEGIN NEW.filters := (SELECT string_agg(nr_document, ',' ORDER BY nr_document) FROM public.izo_documente_intrare); RETURN NEW; END$f$;
+CREATE FUNCTION public.t_r5h_rt() RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$INSERT INTO realtime.subscription (id) VALUES (1) RETURNING filters$b$;
+GRANT EXECUTE ON FUNCTION public.t_r5h_rt() TO authenticated;
+SELECT teste.e('E16a tr_check_filters: doar corpul funcției schimbat (owner / INVOKER / config ca pe prod) → amprenta diferă, poarta refuză explicit (wrapper-ul nu e în închidere)',
+  (SELECT owner = 'supabase_realtime_admin' FROM (SELECT pg_get_userbyid(proowner) owner FROM pg_proc WHERE oid = 'realtime.subscription_check_filters()'::regprocedure) o)
+  AND ('invocare implicită neanalizată: trigger tr_check_filters on table realtime.subscription → realtime.subscription_check_filters()' || :'MSG_IMP_CAT') = ANY (public.fn_izo_porti_lipsa())
+  AND NOT (:'MSG_DEF' = ANY (public.fn_izo_porti_lipsa())));
+:CA_T
+SELECT teste.e('E16b utilizator fără drept de citire (Toma): direct 0 documente, prin wrapper-ul DEFINER numerele documentelor — citirea pe care poarta o închide',
+  (SELECT count(*) FROM public.izo_documente_intrare) = 0 AND public.t_r5h_rt() LIKE '%AV 100%');
+:CA_J
+SELECT teste.eroare('E16c același corp schimbat → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+BEGIN;
+\ir izometrie_e3_replici_platforma.sql
+CREATE OR REPLACE FUNCTION extensions.grant_pg_net_access() RETURNS event_trigger LANGUAGE plpgsql SET search_path = ''
+  AS $f$BEGIN IF false THEN EXECUTE 'SELECT 1'; END IF; END$f$;
+SELECT teste.e('E16d issue_pg_net_access: doar corpul schimbat (tot în închidere: EXECUTE; owner / config ca pe prod) → poarta refuză explicit',
+  (SELECT pg_get_userbyid(proowner) = 'supabase_admin' AND proconfig::text = '{"search_path=\"\""}' FROM pg_proc WHERE oid = 'extensions.grant_pg_net_access()'::regprocedure)
+  AND ('invocare implicită neanalizată: event trigger issue_pg_net_access → extensions.grant_pg_net_access()' || :'MSG_IMP_CAT') = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+-- r5h (#825 r5g NO-GO, Jak P1): invocarea implicită a unui MUTATOR de cale — contraexemplul Jak: trigger INVOKER (fără SET
+-- search_path propriu) care face set_config('search_path', 'storage, public', true) pe un tabel auxiliar; wrapper PL/pgSQL DEFINER
+-- cu calea declarată public, pg_temp inserează acolo, apoi cheamă NECALIFICAT e3_cit() — storage.e3_cit, INVOKER, citește
+-- documentele. Triggerul e doar în c_mut, wrapper-ul nu numește mutatorul și apelul necalificat se judecă pe calea declarată ⇒
+-- fără r5h: poarta verde
+BEGIN;
+CREATE SCHEMA audit;
+CREATE TABLE audit.aux (x int);
+CREATE FUNCTION audit.cale_trg() RETURNS trigger LANGUAGE plpgsql
+  AS $f$BEGIN PERFORM set_config('search_path', 'storage, public', true); RETURN NEW; END$f$;
+CREATE TRIGGER aux_bi BEFORE INSERT ON audit.aux FOR EACH ROW EXECUTE FUNCTION audit.cale_trg();
+CREATE FUNCTION storage.e3_cit() RETURNS text LANGUAGE sql AS 'SELECT string_agg(nr_document, '','' ORDER BY nr_document) FROM public.izo_documente_intrare';
+CREATE FUNCTION public.t_r5h_cale() RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$BEGIN INSERT INTO audit.aux VALUES (1); RETURN e3_cit(); END$b$;
+GRANT EXECUTE ON FUNCTION public.t_r5h_cale() TO authenticated;
+SELECT teste.e('E16e trigger INVOKER mutator de cale (set_config storage, public) pornit de un DEFINER care apoi cheamă necalificat cititorul din storage → poarta refuză explicit (DEFINER-ul nu e în închidere)',
+  ('invocare implicită neanalizată: trigger aux_bi on table audit.aux → audit.cale_trg()' || :'MSG_IMP_MUT') = ANY (public.fn_izo_porti_lipsa())
+  AND NOT (:'MSG_DEF' = ANY (public.fn_izo_porti_lipsa())));
+:CA_T
+SELECT teste.e('E16f utilizator fără drept de citire (Toma): direct 0 documente, prin DEFINER-ul cu triggerul mutator numerele documentelor',
+  (SELECT count(*) FROM public.izo_documente_intrare) = 0 AND public.t_r5h_cale() LIKE '%AV 100%');
+:CA_J
+SELECT teste.eroare('E16g același mutator invocat implicit → o intrare API refuză', format('SELECT public.fn_izo_doc_verifica(%s)', :doc6), 'porțile registrului nu sunt complete');
+:CA_PG
+ROLLBACK;
+-- excepțiile precise peste mutatori: trigger-ele profiles de pe prod (corpurile exacte în schelet) sunt verzi; doar corpul schimbat → refuz
+BEGIN;
+CREATE OR REPLACE FUNCTION public.prevent_role_escalation() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $f$BEGIN PERFORM set_config('search_path', 'storage, public', false); RETURN NEW; END$f$;
+SELECT teste.e('E16h prevent_role_escalation (mutator, pe lista revizuită): doar corpul schimbat (owner / DEFINER / config ca pe prod) → poarta refuză explicit',
+  (SELECT pg_get_userbyid(proowner) = 'postgres' AND prosecdef AND proconfig::text = '{"search_path=public, pg_temp"}' FROM pg_proc WHERE oid = 'public.prevent_role_escalation()'::regprocedure)
+  AND ('invocare implicită neanalizată: trigger prevent_role_escalation_trigger on table profiles → prevent_role_escalation()' || :'MSG_IMP_MUT') = ANY (public.fn_izo_porti_lipsa()));
+ROLLBACK;
+-- martorul r5h: trigger peste un mutator care NU e pe listă, pe un tabel fără scrieri din DEFINER-i — tot refuz (regula e pe obiect,
+-- nu pe apelant); același trigger peste o funcție fără set_config / search_path → verde
+BEGIN;
+CREATE SCHEMA audit;
+CREATE TABLE audit.aux2 (x int);
+CREATE FUNCTION audit.nev_trg() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN NEW.x := NEW.x + 1; RETURN NEW; END$f$;
+CREATE TRIGGER aux2_bi BEFORE INSERT ON audit.aux2 FOR EACH ROW EXECUTE FUNCTION audit.nev_trg();
+SELECT teste.e('E16i martor: trigger peste o funcție fără set_config / search_path → porțile complete', cardinality(public.fn_izo_porti_lipsa()) = 0);
+CREATE OR REPLACE FUNCTION audit.nev_trg() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN PERFORM set_config('search_path', 'public', true); RETURN NEW; END$f$;
+SELECT teste.e('E16j același trigger, funcția devine mutator (set_config) → poarta refuză explicit',
+  ('invocare implicită neanalizată: trigger aux2_bi on table audit.aux2 → audit.nev_trg()' || :'MSG_IMP_MUT') = ANY (public.fn_izo_porti_lipsa()));
 ROLLBACK;
 -- martorul P1-D: CHECK / DEFAULT / domeniu / trigger peste funcții din afara închiderii, pornite de un DEFINER → porțile complete
 BEGIN;

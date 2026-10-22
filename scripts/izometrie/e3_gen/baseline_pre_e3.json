@@ -1828,5 +1828,233 @@
    ],
    "permisiva": true
   }
- ]
+ ],
+ "implicite": {
+  "_despre": [
+   "r5h (#825 r5g NO-GO): invocările implicite din catalog, capturate READ-ONLY de pe prod cu",
+   "python scripts/izometrie/e3_gen/gen_e3.py --captura-implicite, extrase cu --din-captura-implicite <fișier>.",
+   "fn_izo_pre_e3 = mulțimea pre-E3 fixă (precondiția 0m); revizuite = amprentele excepțiilor (lista din",
+   "IMPLICITE_REVIZUITE, cu corpul); corpuri = funcțiile de platformă replicate exact în teste. REVIZUIT."
+  ],
+  "capturat_la": "2026-10-22 04:09:19.130919+00",
+  "server_version": "17.6",
+  "fn_izo_pre_e3": [
+   "policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)",
+   "policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)",
+   "policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)",
+   "policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)",
+   "policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)",
+   "policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)",
+   "policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)",
+   "policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)",
+   "policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)",
+   "policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)",
+   "policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)",
+   "policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)",
+   "policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)",
+   "trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()",
+   "trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()",
+   "trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()",
+   "trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()",
+   "trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()",
+   "trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()",
+   "trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()",
+   "trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()",
+   "trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()",
+   "trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()",
+   "trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()",
+   "trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()",
+   "trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()",
+   "trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()",
+   "trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()",
+   "trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()",
+   "trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()",
+   "trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()",
+   "trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()",
+   "trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()",
+   "trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()",
+   "trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()"
+  ],
+  "revizuite": [
+   {
+    "tip": "event trigger",
+    "owner": "supabase_admin",
+    "config": "{\"search_path=\\\"\\\"\"}",
+    "limbaj": "plpgsql",
+    "secdef": false,
+    "functia": "extensions.set_graphql_placeholder()",
+    "amprenta": "2aa685a004bc87f7a10ef72d134a88bb",
+    "md5_corp": "3202c2c84a89286a443b8ed94a273329",
+    "identitate": "issue_graphql_placeholder"
+   },
+   {
+    "tip": "event trigger",
+    "owner": "supabase_admin",
+    "config": "{\"search_path=\\\"\\\"\"}",
+    "limbaj": "plpgsql",
+    "secdef": false,
+    "functia": "extensions.grant_pg_graphql_access()",
+    "amprenta": "7ed4741489f49636791f930411cfb345",
+    "md5_corp": "be5bc7f515db271892497c5b17aa8659",
+    "identitate": "issue_pg_graphql_access"
+   },
+   {
+    "tip": "event trigger",
+    "owner": "supabase_admin",
+    "config": "{\"search_path=\\\"\\\"\"}",
+    "limbaj": "plpgsql",
+    "secdef": false,
+    "functia": "extensions.grant_pg_net_access()",
+    "amprenta": "d62f8ab601b809080c679266fbdb8a06",
+    "md5_corp": "edf73b0d77ee6bee3f1368990b20679d",
+    "identitate": "issue_pg_net_access"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.fn_trg_ofertare_lot_canonic()",
+    "amprenta": "62d07782ee60e73b327be8c82d4dd34b",
+    "md5_corp": "eff9cd9d9299aa49e963544d0d358681",
+    "identitate": "a01_ofertare_cantitati_lot_canonic on public.ofertare_cantitati"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.fn_trg_ofertare_lot_canonic()",
+    "amprenta": "b2b9b1f753fae9e4f8a7a10ee6c6b351",
+    "md5_corp": "eff9cd9d9299aa49e963544d0d358681",
+    "identitate": "a01_ofertare_cerinte_lot_canonic on public.ofertare_cerinte"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.handle_new_user()",
+    "amprenta": "5f3f59717d56d1148ac3f4b7d3a2b199",
+    "md5_corp": "de288c34e7f20b0b113aa50b278c7de5",
+    "identitate": "on_auth_user_created on auth.users"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.prevent_role_escalation()",
+    "amprenta": "06b7e4fcaab58c9a3faecb7ff4856b45",
+    "md5_corp": "d53b99bf1914b0f807102b8352d26ff2",
+    "identitate": "prevent_role_escalation_trigger on public.profiles"
+   },
+   {
+    "tip": "trigger",
+    "owner": "supabase_realtime_admin",
+    "config": "",
+    "limbaj": "plpgsql",
+    "secdef": false,
+    "functia": "realtime.subscription_check_filters()",
+    "amprenta": "ed76f4ff4e3c6abd998eded3d159d3c3",
+    "md5_corp": "7e93c4439d622d61048436e7cc2e7a2a",
+    "identitate": "tr_check_filters on realtime.subscription"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.fn_employees_persoana_lock()",
+    "amprenta": "9dcecd0c70efdf1bf5e24e9c1157bc11",
+    "md5_corp": "164f6cb7d82bf33af89b29b1041eee90",
+    "identitate": "trg_employees_persoana_lock on public.employees"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.fn_employees_ciclu_cont()",
+    "amprenta": "8b5dbbd69476106544cff2b5393c116a",
+    "md5_corp": "13ad202543e4cb3d833cb773f3faa965",
+    "identitate": "trg_employees_zz_ciclu_cont on public.employees"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.enforce_owner_only_salary_flags()",
+    "amprenta": "46f1b6af2f30d56993ca988b267e76d8",
+    "md5_corp": "b199596ebd418506f15c2ddd8d1522b0",
+    "identitate": "trg_enforce_owner_only_salary_flags on public.profiles"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": false,
+    "functia": "public.fn_trg_hr_autorizatii_rsvti_doar_rpc()",
+    "amprenta": "9a7f49627ab4e62e14aa43252a2ab56e",
+    "md5_corp": "c2c46bd6fd0e9ebad74066283decdfd9",
+    "identitate": "trg_hr_autorizatii_rsvti_doar_rpc on public.hr_autorizatii"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.fn_hr_employees_private_persoana_lock()",
+    "amprenta": "32261dc19c5d0da91f0487ab2f33bb08",
+    "md5_corp": "c9e10dc33d28722da5cb07ae33434ba4",
+    "identitate": "trg_hr_employees_private_persoana_lock on public.hr_employees_private"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.fn_profiles_campuri_owner_only()",
+    "amprenta": "e80a3aed6ff3f2055785bdc974702cd5",
+    "md5_corp": "079f1d5d67a9489df52f55abcfde543e",
+    "identitate": "trg_profiles_campuri_owner_only on public.profiles"
+   },
+   {
+    "tip": "trigger",
+    "owner": "postgres",
+    "config": "{\"search_path=public, pg_temp\"}",
+    "limbaj": "plpgsql",
+    "secdef": true,
+    "functia": "public.protect_can_access_pontaj_brut()",
+    "amprenta": "3a58112eec4c06bef2d66159ad6f82a5",
+    "md5_corp": "f727c147119737c1c9f31179fea1996f",
+    "identitate": "trg_protect_can_access_pontaj_brut on public.profiles"
+   }
+  ],
+  "corpuri": [
+   {
+    "functia": "extensions.grant_pg_graphql_access()",
+    "prosrc": "\nbegin\n    if not exists (\n        select 1\n        from pg_catalog.pg_event_trigger_ddl_commands() ev\n        join pg_catalog.pg_extension e on ev.objid = e.oid\n        where e.extname = 'pg_graphql'\n    ) then\n        return;\n    end if;\n\n    drop function if exists graphql_public.graphql;\n    create or replace function graphql_public.graphql(\n        \"operationName\" text default null,\n        query text default null,\n        variables jsonb default null,\n        extensions jsonb default null\n    )\n        returns jsonb\n        language sql\n    as $$\n        select graphql.resolve(\n            query := query,\n            variables := coalesce(variables, '{}'),\n            \"operationName\" := \"operationName\",\n            extensions := extensions\n        );\n    $$;\n\n    -- Attach the wrapper to the extension so DROP EXTENSION cascades to it,\n    -- which in turn triggers set_graphql_placeholder to reinstall the \"not enabled\" stub.\n    alter extension pg_graphql add function graphql_public.graphql(text, text, jsonb, jsonb);\n\n    grant usage on schema graphql to postgres, anon, authenticated, service_role;\n    grant execute on function graphql.resolve to postgres, anon, authenticated, service_role;\n    grant usage on schema graphql to postgres with grant option;\n    grant usage on schema graphql_public to postgres with grant option;\nend;\n"
+   },
+   {
+    "functia": "extensions.grant_pg_net_access()",
+    "prosrc": "\nBEGIN\n  IF EXISTS (\n    SELECT 1\n    FROM pg_event_trigger_ddl_commands() AS ev\n    JOIN pg_extension AS ext\n    ON ev.objid = ext.oid\n    WHERE ext.extname = 'pg_net'\n  )\n  THEN\n    IF NOT EXISTS (\n      SELECT 1\n      FROM pg_roles\n      WHERE rolname = 'supabase_functions_admin'\n    )\n    THEN\n      CREATE USER supabase_functions_admin NOINHERIT CREATEROLE LOGIN NOREPLICATION;\n    END IF;\n\n    GRANT USAGE ON SCHEMA net TO supabase_functions_admin, postgres, anon, authenticated, service_role;\n\n    IF EXISTS (\n      SELECT FROM pg_extension\n      WHERE extname = 'pg_net'\n      -- all versions in use on existing projects as of 2025-02-20\n      -- version 0.12.0 onwards don't need these applied\n      AND extversion IN ('0.2', '0.6', '0.7', '0.7.1', '0.8.0', '0.10.0', '0.11.0')\n    ) THEN\n      ALTER function net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) SECURITY DEFINER;\n      ALTER function net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) SECURITY DEFINER;\n\n      ALTER function net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) SET search_path = net;\n      ALTER function net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) SET search_path = net;\n\n      REVOKE ALL ON FUNCTION net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) FROM PUBLIC;\n      REVOKE ALL ON FUNCTION net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) FROM PUBLIC;\n\n      GRANT EXECUTE ON FUNCTION net.http_get(url text, params jsonb, headers jsonb, timeout_milliseconds integer) TO supabase_functions_admin, postgres, anon, authenticated, service_role;\n      GRANT EXECUTE ON FUNCTION net.http_post(url text, body jsonb, params jsonb, headers jsonb, timeout_milliseconds integer) TO supabase_functions_admin, postgres, anon, authenticated, service_role;\n    END IF;\n  END IF;\nEND;\n"
+   },
+   {
+    "functia": "realtime.subscription_check_filters()",
+    "prosrc": "\ndeclare\n    col_names text[] = coalesce(\n            array_agg(a.attname order by a.attnum),\n            '{}'::text[]\n        )\n        from\n            pg_catalog.pg_attribute a\n        where\n            a.attrelid = new.entity\n            and a.attnum > 0\n            and not a.attisdropped\n            and pg_catalog.has_column_privilege(\n                (new.claims ->> 'role'),\n                a.attrelid,\n                a.attnum,\n                'SELECT'\n            );\n    filter realtime.user_defined_filter;\n    col_type regtype;\n    in_val jsonb;\n    selected_col text;\nbegin\n    for filter in select * from unnest(new.filters) loop\n        if not filter.column_name = any(col_names) then\n            raise exception 'invalid column for filter %', filter.column_name;\n        end if;\n\n        col_type = (\n            select atttypid::regtype\n            from pg_catalog.pg_attribute\n            where attrelid = new.entity\n                  and attname = filter.column_name\n        );\n        if col_type is null then\n            raise exception 'failed to lookup type for column %', filter.column_name;\n        end if;\n\n        if filter.op = 'in'::realtime.equality_op then\n            in_val = realtime.cast(filter.value, (col_type::text || '[]')::regtype);\n            if coalesce(jsonb_array_length(in_val), 0) > 100 then\n                raise exception 'too many values for `in` filter. Maximum 100';\n            end if;\n        elsif filter.op = 'is'::realtime.equality_op then\n            -- `is` requires a keyword RHS rather than a typed literal\n            if filter.value not in ('null', 'true', 'false', 'unknown') then\n                raise exception 'invalid value for is filter: must be null, true, false, or unknown';\n            end if;\n            -- IS NULL works for any type, but IS TRUE/FALSE/UNKNOWN require a boolean\n            -- operand. Reject the non-null keywords on non-boolean columns here so they\n            -- don't abort apply_rls at WAL time.\n            if filter.value <> 'null' and col_type <> 'boolean'::regtype then\n                raise exception 'is % filter requires a boolean column, got %', filter.value, col_type::text;\n            end if;\n        elsif filter.op in ('like'::realtime.equality_op, 'ilike'::realtime.equality_op) then\n            -- like/ilike apply the text pattern operator (~~); reject column types that\n            -- have no such operator instead of failing at WAL time\n            if not exists (\n                select 1 from pg_catalog.pg_operator\n                where oprname = '~~' and oprleft = col_type\n            ) then\n                raise exception 'operator % requires a text-compatible column type, got %', filter.op::text, col_type::text;\n            end if;\n        elsif filter.op in ('match'::realtime.equality_op, 'imatch'::realtime.equality_op) then\n            -- match/imatch apply the regex operators ~ / ~*; reject column types that have\n            -- no such operator (e.g. integer) instead of failing at WAL time, mirroring the\n            -- like/ilike guard above.\n            if not exists (\n                select 1 from pg_catalog.pg_operator\n                where oprname = case when filter.op = 'imatch'::realtime.equality_op then '~*' else '~' end\n                  and oprleft = col_type\n                  and oprright = col_type\n                  and oprresult = 'boolean'::regtype\n            ) then\n                raise exception 'operator % requires a text-compatible column type, got %', filter.op::text, col_type::text;\n            end if;\n            -- validate the regex eagerly so a bad pattern is rejected here, not inside\n            -- apply_rls where it would abort the WAL stream for the entity\n            begin\n                perform '' ~ filter.value;\n            exception when others then\n                raise exception 'invalid regular expression for % filter: %', filter.op::text, sqlerrm;\n            end;\n        else\n            -- eq/neq/lt/lte/gt/gte: value must be coercable to the type\n            perform realtime.cast(filter.value, col_type);\n        end if;\n    end loop;\n\n    if new.selected_columns is not null then\n        for selected_col in select * from unnest(new.selected_columns) loop\n            if not selected_col = any(col_names) then\n                raise exception 'invalid column for select %', selected_col;\n            end if;\n        end loop;\n    end if;\n\n    -- Apply consistent order to filters so the unique constraint can't be tricked by a\n    -- different filter order. negate is part of the sort key.\n    new.filters = coalesce(\n        array_agg(f order by f.column_name, f.op, f.value, f.negate),\n        '{}'\n    ) from unnest(new.filters) f;\n\n    -- Normalize selected_columns order so ARRAY['a','b'] and ARRAY['b','a'] are treated\n    -- as the same subscription group in apply_rls. Preserve an empty array as '{}'\n    -- (\"primary keys only\") so it stays distinct from NULL (\"all columns\"); array_agg\n    -- over an empty set would otherwise collapse '{}' back to NULL.\n    if new.selected_columns is not null then\n        new.selected_columns = coalesce(\n            (\n                select array_agg(c order by c)\n                from unnest(new.selected_columns) c\n            ),\n            '{}'::text[]\n        );\n    end if;\n\n    return new;\nend;\n"
+   }
+  ]
+ }
 }

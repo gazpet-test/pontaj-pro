@@ -24,6 +24,11 @@
 -- r5g (#825) NO-GO, în poarta E2a înlocuită aici (fn_izo_porti_lipsa): funcțiile fn_izo_* sunt ținte ale închiderii citirilor
 --   (P1-C); invocarea implicită din catalog peste o funcție din închidere → refuz, în afara listei revizuite de pe prod (P1-D);
 --   calea devine necunoscută doar la un comentariu lipit de o schemă a platformei (P2).
+-- r5h (#825 r5g NO-GO): invocările implicite ale fn_izo_* FIXATE, nu ștampilate cum sunt găsite — precondiția 0m (lista pre-E3
+--   revizuită, capturată de pe prod) și postcondiția P6 (lista post-E3 fixă, înainte și după ștampila E3) (Copilot P1); lista
+--   albă a invocărilor implicite cu CORPUL funcției în amprentă (Jak P1); invocarea implicită a unui MUTATOR de cale (trigger /
+--   DEFAULT … peste o funcție cu set_config / search_path) → refuz ca peste închidere, cu excepții precise (Jak P1). Orice
+--   migrare ulterioară care schimbă aceste mulțimi (E3b, E4) re-ștampilează după procedura din design §17.
 -- r5f (#825 NO-GO, P1-3/P1-4): baseline-ul EXTERN de dinainte de E3 (Storage + trigger-ele profiles) se verifică la apply
 --   (precondiția 0l) față de amprenta pre-E3 REVIZUITĂ (scripts/izometrie/e3_gen/baseline_pre_e3.json), nu se ștampilează cum e găsit.
 -- Poarta E2a completă (fn_izo_porti_lipsa, ~8,5 s pe prod) rulează în confirmare / PV ÎNAINTEA lock-urilor; după lock-uri
@@ -37,6 +42,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $migrare$
 DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_lipsa text[]; v_x text; v_comentariu text; v_baza jsonb; v_baza_rev jsonb;
+  v_impl text[]; v_impl_rev text[];
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261103b_izometrie_e3_documente:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261103b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
@@ -262,6 +268,59 @@ BEGIN
                    LATERAL (SELECT jsonb_object_keys(coalesce(v_baza -> c.k, '{}')) UNION SELECT jsonb_object_keys(coalesce(v_baza_rev -> c.k, '{}'))) e(cheie)
              WHERE (v_baza -> c.k -> e.cheie) IS DISTINCT FROM (v_baza_rev -> c.k -> e.cheie)) d;
     RAISE EXCEPTION 'Precondiție 0l: baseline-ul Storage / profiles diferă de amprenta pre-E3 revizuită (captură nouă + review): %', coalesce(v_x, '?');
+  END IF;
+  -- r5h (#825 r5g NO-GO, Copilot P1): invocările IMPLICITE ale fn_izo_* (trigger / politică / DEFAULT / CHECK / index / operator /
+  -- cast …: orice obiect din catalog în afara view-urilor și a funcțiilor) = lista pre-E3 FIXĂ, capturată read-only de pe prod și
+  -- revizuită (baseline_pre_e3.json, cheia „implicite”: 13 politici + 22 trigger-e E2a / 2c), sub lock-ul runner-ului, înainte de
+  -- orice DDL: altfel un obiect nou apărut între review și apply (ex. un DEFAULT peste fn_izo_citire) ar intra în ștampila E3
+  -- „cum e găsit” (TOFU) și ar fi binecuvântat de ea. Orice diferență → refuz, cu lista; baseline nou = captură nouă revizuită.
+  v_impl := (SELECT coalesce(array_agg(x.d ORDER BY x.d COLLATE "C"), '{}'::text[])
+       FROM (SELECT DISTINCT format('%s|%s|%s', o.type, o.identity, f.identity) d
+               FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid
+                    CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
+                    CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+              WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x);
+  v_impl_rev := ARRAY[
+    'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)',
+    'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)',
+    'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)',
+    'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)',
+    'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)',
+    'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)',
+    'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)',
+    'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()',
+    'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()',
+    'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()',
+    'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()',
+    'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()',
+    'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()',
+    'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()',
+    'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()',
+    'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()',
+    'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()',
+    'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()',
+    'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()',
+    'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()',
+    'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()',
+    'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[];
+  SELECT string_agg(format('%s: %s', y.x, CASE WHEN y.x = ANY (v_impl) THEN 'în plus' ELSE 'lipsește' END), '; ' ORDER BY y.x COLLATE "C") INTO v_x
+    FROM ((SELECT unnest(v_impl) EXCEPT SELECT unnest(v_impl_rev)) UNION (SELECT unnest(v_impl_rev) EXCEPT SELECT unnest(v_impl))) y(x);
+  IF v_x IS NOT NULL THEN
+    RAISE EXCEPTION 'Precondiție 0m: invocările implicite ale fn_izo_* diferă de lista pre-E3 revizuită (captură nouă + review): %', v_x;
   END IF;
   -- porțile E2a complete și amprenta de revenire consistentă înainte (o rulăm o dată, aici: ~8,5 s pe prod)
   v_lipsa := public.fn_izo_porti_lipsa();
@@ -1133,14 +1192,28 @@ BEGIN
       -- r5g (#825) NO-GO P2: o schemă a platformei urmată (după ghilimele / spații / un punct opțional) de deschiderea unui
       -- comentariu — singura formă în care un comentariu rupe apelul ei calificat
       k_com text := c_st || '(' || array_to_string(c_scheme_platforma, '|') || ')"?[[:space:]]*(\.[[:space:]]*)?(/\*|--)';
-      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod (citite 22.10.2026: singurele obiecte din catalog care cheamă
-      -- funcții din închiderea de pe prod). Amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER | proconfig):
-      -- obiectul și ce cheamă, cu drepturile funcției; corpul NU (funcția de platformă e deja tratată ca cititor oarecare —
-      -- e în închidere — iar corpul ei se schimbă la upgrade-urile Supabase). Altă funcție / alt owner / DEFINER → refuz
+      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod — singurele obiecte din catalog care cheamă implicit o
+      -- funcție din închiderea de pe prod sau (r5h) un mutator de cale; citite read-only 22.10.2026 (baseline_pre_e3.json, cheia
+      -- „implicite”). r5h (#825 r5g NO-GO, Jak P1): amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER |
+      -- proconfig | limbaj | md5(corp)) — CU corpul: un corp schimbat (același owner / config) nu mai păstrează excepția. Un
+      -- upgrade Supabase care schimbă corpul uneia dintre funcțiile de platformă înroșește poarta (fail-closed): captură nouă
+      -- + review + migrare (design §17)
       c_implicite_revizuite constant text[] := ARRAY[
-        'event trigger issue_pg_graphql_access=0f4572b9830eb200bffae0e82fecb110',
-        'event trigger issue_pg_net_access=5c1a15eb921274d7f72b9741b7d0fb9f',
-        'trigger tr_check_filters on realtime.subscription=3a762553e7b46dfe8a5525d53ef822f6'];
+        'event trigger issue_graphql_placeholder=2aa685a004bc87f7a10ef72d134a88bb',
+        'event trigger issue_pg_graphql_access=7ed4741489f49636791f930411cfb345',
+        'event trigger issue_pg_net_access=d62f8ab601b809080c679266fbdb8a06',
+        'trigger a01_ofertare_cantitati_lot_canonic on public.ofertare_cantitati=62d07782ee60e73b327be8c82d4dd34b',
+        'trigger a01_ofertare_cerinte_lot_canonic on public.ofertare_cerinte=b2b9b1f753fae9e4f8a7a10ee6c6b351',
+        'trigger on_auth_user_created on auth.users=5f3f59717d56d1148ac3f4b7d3a2b199',
+        'trigger prevent_role_escalation_trigger on public.profiles=06b7e4fcaab58c9a3faecb7ff4856b45',
+        'trigger tr_check_filters on realtime.subscription=ed76f4ff4e3c6abd998eded3d159d3c3',
+        'trigger trg_employees_persoana_lock on public.employees=9dcecd0c70efdf1bf5e24e9c1157bc11',
+        'trigger trg_employees_zz_ciclu_cont on public.employees=8b5dbbd69476106544cff2b5393c116a',
+        'trigger trg_enforce_owner_only_salary_flags on public.profiles=46f1b6af2f30d56993ca988b267e76d8',
+        'trigger trg_hr_autorizatii_rsvti_doar_rpc on public.hr_autorizatii=9a7f49627ab4e62e14aa43252a2ab56e',
+        'trigger trg_hr_employees_private_persoana_lock on public.hr_employees_private=32261dc19c5d0da91f0487ab2f33bb08',
+        'trigger trg_profiles_campuri_owner_only on public.profiles=e80a3aed6ff3f2055785bdc974702cd5',
+        'trigger trg_protect_can_access_pontaj_brut on public.profiles=3a58112eec4c06bef2d66159ad6f82a5'];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -1323,21 +1396,26 @@ BEGIN
       -- DEFINER care scrie / convertește / sortează le pornește fără să numească funcția. Orice rând pg_depend spre o funcție
       -- din închidere al cărui obiect nu e propagat mai sus (view / regulă: pg_rewrite; funcție: pg_proc — candidații prin
       -- propagare, agregatele prin regula de deasupra; operator / cast: regula de deasupra) → refuz explicit, cu obiectul numit,
-      -- în afara listei revizuite (c_implicite_revizuite). Doar c_fn, nu și mutatorii: pe prod cei 35 (orice set_config /
-      -- search_path în corp) au 12 trigger-e și 2 funcții de event trigger — invocarea lor implicită rămâne întrebare deschisă
+      -- în afara listei revizuite (c_implicite_revizuite).
+      -- r5h (#825 r5g NO-GO, Jak P1): și spre MUTATORII de cale (c_mut), ca spre închidere: un trigger INVOKER care face
+      -- set_config('search_path', 'storage, public', true) pe un tabel auxiliar, pornit de un DEFINER cu cale fixă care inserează
+      -- acolo și apoi cheamă necalificat un cititor de platformă, schimbă calea efectivă FĂRĂ ca DEFINER-ul să numească mutatorul
+      -- (deci el nu devine mutator, iar apelul necalificat se judecă pe calea declarată). Refuz explicit, cu obiectul numit; pe
+      -- prod: 12 obiecte peste mutatori (11 trigger-e + issue_graphql_placeholder; tr_check_filters / issue_pg_net_access și în
+      -- închidere), toate pe lista revizuită, cu corpul în amprentă
       FOR k_s IN SELECT x.d FROM (
-          SELECT DISTINCT format('%s → %s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure) d
-            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_namespace n2 ON n2.oid = q.pronamespace
+          SELECT DISTINCT format('%s → %s%s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure,
+                                 CASE WHEN d.refobjid = ANY (c_fn) THEN ' (obiect din catalog care cheamă o funcție din închiderea citirilor)'
+                                      ELSE ' (obiect din catalog care cheamă un mutator de cale)' END) d
+            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_language l ON l.oid = q.prolang
                  CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
-           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)
+                 CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn || c_mut)
              AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass, 'pg_cast'::regclass)
-             AND format('%s %s=%s', o.type, o.identity,
-                        md5(concat_ws('|', o.type, o.identity, format('%I.%I(%s)', n2.nspname, q.proname, pg_get_function_identity_arguments(q.oid)),
-                                      pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''))))
-                 <> ALL (c_implicite_revizuite)) x
+             AND format('%s %s=%s', o.type, o.identity, md5(concat_ws('|', o.type, o.identity, f.identity, pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''), l.lanname, md5(q.prosrc || '|' || coalesce(q.prosqlbody::text, ''))))) <> ALL (c_implicite_revizuite)) x
         ORDER BY x.d COLLATE "C"
       LOOP
-        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)');
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (citire nerevizuită)');
       END LOOP;
       IF EXISTS (SELECT 1 FROM pg_class vw WHERE vw.oid = ANY (c_rel)   -- alias ≠ variabila v
                   AND (vw.relkind = 'm' OR (vw.relkind = 'v' AND NOT coalesce(vw.reloptions && ARRAY['security_invoker=true','security_invoker=on','security_invoker=1'], false)))) THEN
@@ -2196,8 +2274,142 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Livrare 20261103b: rolul nu a revenit la postgres după GRANT'; END IF;
 
   -- ── M. ștampilele: porțile E2a, porțile E3, amprenta de revenire E2a ──────────────────────────────────
+  -- r5h (#825 r5g NO-GO, Copilot P1): ÎNAINTE de ștampila E3, mulțimea finală a invocărilor implicite ale fn_izo_* = lista
+  -- post-E3 FIXĂ (pre-E3 revizuită ∪ cele 17 create chiar aici, IMPL_E3 în gen_e3.py) — ștampila descrie ce s-a revizuit, nu ce
+  -- s-a găsit. Verificarea se repetă DUPĂ ștampilă (un obiect comis de altă sesiune între verificare și ștampilă ar intra în
+  -- ștampilă; al doilea tur îl vede), iar postcondiția P1 (poarta completă) confirmă că ștampila scrisă = starea finală
+  v_impl := (SELECT coalesce(array_agg(x.d ORDER BY x.d COLLATE "C"), '{}'::text[])
+       FROM (SELECT DISTINCT format('%s|%s|%s', o.type, o.identity, f.identity) d
+               FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid
+                    CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
+                    CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+              WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x);
+  v_impl_rev := ARRAY[
+    'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)',
+    'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)',
+    'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)',
+    'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)',
+    'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)',
+    'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)',
+    'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)',
+    'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)',
+    'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)',
+    'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)',
+    'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)',
+    'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)',
+    'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)',
+    'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)',
+    'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)',
+    'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)',
+    'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()',
+    'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()',
+    'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()',
+    'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()',
+    'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()',
+    'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()',
+    'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()',
+    'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()',
+    'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()',
+    'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()',
+    'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()',
+    'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()',
+    'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()',
+    'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()',
+    'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[];
+  SELECT string_agg(format('%s: %s', y.x, CASE WHEN y.x = ANY (v_impl) THEN 'în plus' ELSE 'lipsește' END), '; ' ORDER BY y.x COLLATE "C") INTO v_x
+    FROM ((SELECT unnest(v_impl) EXCEPT SELECT unnest(v_impl_rev)) UNION (SELECT unnest(v_impl_rev) EXCEPT SELECT unnest(v_impl))) y(x);
+  IF v_x IS NOT NULL THEN
+    RAISE EXCEPTION 'Postcondiție P6 (înainte de ștampila E3): invocările implicite ale fn_izo_* diferă de lista post-E3 revizuită: %', v_x;
+  END IF;
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS %L', 'porti_e3=' || public.fn_izo_porti_e3_definitii());
+  v_impl := (SELECT coalesce(array_agg(x.d ORDER BY x.d COLLATE "C"), '{}'::text[])
+       FROM (SELECT DISTINCT format('%s|%s|%s', o.type, o.identity, f.identity) d
+               FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid
+                    CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
+                    CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+              WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x);
+  v_impl_rev := ARRAY[
+    'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)',
+    'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)',
+    'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)',
+    'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)',
+    'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)',
+    'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)',
+    'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)',
+    'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)',
+    'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)',
+    'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)',
+    'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)',
+    'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)',
+    'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)',
+    'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)',
+    'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)',
+    'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)',
+    'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()',
+    'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()',
+    'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()',
+    'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()',
+    'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()',
+    'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()',
+    'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()',
+    'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()',
+    'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()',
+    'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()',
+    'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()',
+    'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()',
+    'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()',
+    'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()',
+    'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()',
+    'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[];
+  SELECT string_agg(format('%s: %s', y.x, CASE WHEN y.x = ANY (v_impl) THEN 'în plus' ELSE 'lipsește' END), '; ' ORDER BY y.x COLLATE "C") INTO v_x
+    FROM ((SELECT unnest(v_impl) EXCEPT SELECT unnest(v_impl_rev)) UNION (SELECT unnest(v_impl_rev) EXCEPT SELECT unnest(v_impl))) y(x);
+  IF v_x IS NOT NULL THEN
+    RAISE EXCEPTION 'Postcondiție P6 (după ștampila E3): invocările implicite ale fn_izo_* diferă de lista post-E3 revizuită: %', v_x;
+  END IF;
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
   -- P5 (r5f, #825 NO-GO): owner-ii intrărilor au EXECUTE pe EXACT semnăturile lanțului de lock-uri pe care îl cheamă (ACL-ul

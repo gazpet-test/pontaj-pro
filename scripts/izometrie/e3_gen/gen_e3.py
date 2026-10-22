@@ -4,6 +4,11 @@
 # r5f (#825 NO-GO, P1-3/P1-4): baseline-ul extern pre-E3 (baseline_pre_e3.json) se reîmprospătează DOAR cu review:
 #   python gen_e3.py --captura                    → SQL-ul capturii (doar SELECT pe cataloage), rulat read-only pe prod;
 #   python gen_e3.py --din-captura <rezultat>     → baseline_pre_e3.json (diff-ul se revizuiește), apoi gen_e3.py normal.
+# r5h (#825 r5g NO-GO): invocările implicite din catalog (lista pre-E3 a precondiției 0m, amprentele listei albe cu corpul,
+#   corpurile replicilor de platformă) au captura lor, tot read-only, tot cu review (cheia „implicite” din baseline_pre_e3.json):
+#   python gen_e3.py --captura-implicite          → SQL-ul capturii (doar SELECT pe cataloage), rulat read-only pe prod;
+#   python gen_e3.py --din-captura-implicite <r>  → cheia „implicite” (restul fișierului neatins), apoi gen_e3.py normal.
+# Generarea scrie și supabase/tests/izometrie_e3_replici_platforma.sql (replicile exacte ale obiectelor de platformă).
 # Generarea scrie și supabase/tests/izometrie_e3_schelet_baseline.sql (scheletul local care reproduce exact baseline-ul).
 import hashlib, json, os, re, sys
 SP = os.path.dirname(os.path.abspath(__file__)).replace(os.sep, '/') + '/'
@@ -88,26 +93,121 @@ SELECT jsonb_build_object(
   'umplutura', repeat('.', 150000)) AS captura;
 """.replace('@@BAZA_EXPR@@', BAZA_EXPR).replace('@@REL_EXT@@', REL_EXT).replace('@@TRG_PROFILES@@', TRG_PROFILES).replace(
     '@@REFERINTE@@', ", ".join("('%s', '%s')" % x for x in REFERINTE))
+# ── r5h (#825 r5g NO-GO: Copilot P1, Jak P1 ×2): invocările IMPLICITE din catalog, fixate din captură revizuită (fără TOFU) ──
+# (1) IMPL_EXPR: mulțimea invocărilor implicite ale public.fn_izo_* (orice obiect din catalog în afara view-urilor / regulilor și a
+#     funcțiilor — trigger, politică, DEFAULT, CHECK, index, operator, cast …), ca „tip|identitate|funcția”, independentă de
+#     search_path (pg_identify_object califică tot). Aceeași expresie: în migrare (precondiția 0m, postcondiția P6) și în captură.
+IMPL_EXPR = r"""(SELECT coalesce(array_agg(x.d ORDER BY x.d COLLATE "C"), '{}'::text[])
+       FROM (SELECT DISTINCT format('%s|%s|%s', o.type, o.identity, f.identity) d
+               FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid
+                    CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
+                    CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+              WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x)"""
+# (2) AMPR_IMPL_SQL: amprenta unei invocări implicite revizuite (obiect o, funcția q / f, limbajul l) — tip | identitate | funcția |
+#     owner | SECURITY DEFINER | proconfig | limbaj | md5(corp: prosrc + BEGIN ATOMIC). r5h (Jak P1): CU corpul — altfel un corp
+#     schimbat (același owner / config) păstrează excepția și citește prin ea. Aceeași formulă în poartă și în captură.
+AMPR_IMPL_SQL = ("md5(concat_ws('|', o.type, o.identity, f.identity, pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''), "
+                 "l.lanname, md5(q.prosrc || '|' || coalesce(q.prosqlbody::text, ''))))")
+def ampr_impl(r):
+    return md5('|'.join([r['tip'], r['identitate'], r['functia'], r['owner'], 'true' if r['secdef'] else 'false', r['config'], r['limbaj'],
+                         r['md5_corp']]))
+# (3) lista REVIZUITĂ a excepțiilor (decizie de review, nu captură): obiectele de pe prod care cheamă implicit o funcție din
+#     închiderea citirilor (c_fn) sau un mutator de cale (c_mut), citite 22.10.2026 cu închiderea rulată read-only pe prod:
+#     3 de platformă (r5g) + 12 peste mutatori (r5h: 11 trigger-e + issue_graphql_placeholder; tr_check_filters și
+#     issue_pg_net_access sunt în ambele). Amprentele lor (cu corpul) vin din captură (baseline_pre_e3.json, cheia „implicite”).
+IMPLICITE_REVIZUITE = [
+    ('event trigger', 'issue_graphql_placeholder'), ('event trigger', 'issue_pg_graphql_access'), ('event trigger', 'issue_pg_net_access'),
+    ('trigger', 'a01_ofertare_cantitati_lot_canonic on public.ofertare_cantitati'), ('trigger', 'a01_ofertare_cerinte_lot_canonic on public.ofertare_cerinte'),
+    ('trigger', 'on_auth_user_created on auth.users'), ('trigger', 'prevent_role_escalation_trigger on public.profiles'),
+    ('trigger', 'tr_check_filters on realtime.subscription'), ('trigger', 'trg_employees_persoana_lock on public.employees'),
+    ('trigger', 'trg_employees_zz_ciclu_cont on public.employees'), ('trigger', 'trg_enforce_owner_only_salary_flags on public.profiles'),
+    ('trigger', 'trg_hr_autorizatii_rsvti_doar_rpc on public.hr_autorizatii'),
+    ('trigger', 'trg_hr_employees_private_persoana_lock on public.hr_employees_private'),
+    ('trigger', 'trg_profiles_campuri_owner_only on public.profiles'), ('trigger', 'trg_protect_can_access_pontaj_brut on public.profiles')]
+# funcțiile de platformă replicate EXACT în testele locale (corpul din captură): lista albă verde pe replica exactă, roșie la orice
+# schimbare de corp (supabase/tests/izometrie_e3_replici_platforma.sql, generat mai jos)
+REPLICI = ['extensions.grant_pg_graphql_access()', 'extensions.grant_pg_net_access()', 'realtime.subscription_check_filters()']
+# (4) invocările implicite ale fn_izo_* create de 20261103b ÎNSĂȘI (revizuite: politicile și trigger-ele din secțiunile G / J / K):
+#     mulțimea post-E3 = pre-E3 (captură) ∪ aceasta, verificată înainte și după ștampilă (postcondiția P6)
+IMPL_E3 = [
+    'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)',
+    'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)',
+    'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)',
+    'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)',
+    'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)',
+    'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)',
+    'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)',
+    'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)',
+    'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)',
+    'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()',
+    'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()']
+q_ = lambda s: "'%s'" % s.replace("'", "''")
+CAPTURA_IMPL_SQL = r"""-- r5h: captura invocărilor implicite (READ-ONLY, doar cataloage) — rezultatul intră în baseline_pre_e3.json (cheia „implicite”)
+SELECT jsonb_build_object(
+  'capturat_la', now(), 'server_version', current_setting('server_version'),
+  'fn_izo_pre_e3', to_jsonb(@@IMPL_EXPR@@),
+  'revizuite', (SELECT jsonb_agg(y.j ORDER BY y.j ->> 'tip', y.j ->> 'identitate' COLLATE "C")
+     FROM (SELECT DISTINCT jsonb_build_object('tip', o.type, 'identitate', o.identity, 'functia', f.identity, 'owner', pg_get_userbyid(q.proowner),
+                    'secdef', q.prosecdef, 'config', coalesce(q.proconfig::text, ''), 'limbaj', l.lanname,
+                    'md5_corp', md5(q.prosrc || '|' || coalesce(q.prosqlbody::text, '')), 'amprenta', @@AMPR@@) j
+             FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_language l ON l.oid = q.prolang
+                  CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
+                  CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+            WHERE d.refclassid = 'pg_proc'::regclass
+              AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass, 'pg_cast'::regclass)
+              AND format('%s %s', o.type, o.identity) IN (@@IDENT@@)) y),
+  'corpuri', (SELECT jsonb_agg(jsonb_build_object('functia', f.identity, 'prosrc', p.prosrc) ORDER BY f.identity COLLATE "C")
+     FROM pg_proc p CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, p.oid, 0) f WHERE f.identity IN (@@REPLICI@@))) AS captura;
+""".replace('@@IMPL_EXPR@@', IMPL_EXPR).replace('@@AMPR@@', AMPR_IMPL_SQL).replace(
+    '@@IDENT@@', ", ".join(q_('%s %s' % x) for x in IMPLICITE_REVIZUITE)).replace('@@REPLICI@@', ", ".join(q_(x) for x in REPLICI))
+if '--captura-implicite' in sys.argv:
+    sys.stdout.reconfigure(encoding='utf-8'); print(CAPTURA_IMPL_SQL); sys.exit(0)
 if '--captura' in sys.argv:
     sys.stdout.reconfigure(encoding='utf-8'); print(CAPTURA_SQL); sys.exit(0)
+# rezultatul unei capturi (ieșirea MCP execute_sql salvată, rândul [{"captura": …}] sau obiectul direct, ex. psql -At)
+def extrage_captura(t, cheie):
+    try: o = json.loads(t)
+    except ValueError: o = None
+    if isinstance(o, dict) and 'result' in o: return extrage_captura(o['result'], cheie)
+    if isinstance(o, dict) and cheie in o: return o
+    if isinstance(o, list) and len(o) == 1 and 'captura' in o[0]:
+        c = o[0]['captura']; return json.loads(c) if isinstance(c, str) else c
+    if isinstance(o, list) and len(o) == 1 and cheie in o[0]: return o[0]
+    return extrage_captura(t[t.index('[{'):t.rindex('}]') + 2], cheie)
+if '--din-captura-implicite' in sys.argv:
+    # r5h: captura invocărilor implicite → baseline_pre_e3.json, cheia „implicite” (restul fișierului neatins); amprentele și
+    # corpurile se reverifică la generare (assert-urile de mai jos), apoi diff-ul JSON se revizuiește în git
+    cap = extrage_captura(open(sys.argv[sys.argv.index('--din-captura-implicite') + 1], encoding='utf-8').read(), 'fn_izo_pre_e3')
+    baza = json.load(open(SP + 'baseline_pre_e3.json', encoding='utf-8'))
+    baza['implicite'] = {'_despre': ['r5h (#825 r5g NO-GO): invocările implicite din catalog, capturate READ-ONLY de pe prod cu',
+                                     'python scripts/izometrie/e3_gen/gen_e3.py --captura-implicite, extrase cu --din-captura-implicite <fișier>.',
+                                     'fn_izo_pre_e3 = mulțimea pre-E3 fixă (precondiția 0m); revizuite = amprentele excepțiilor (lista din',
+                                     'IMPLICITE_REVIZUITE, cu corpul); corpuri = funcțiile de platformă replicate exact în teste. REVIZUIT.'],
+                         **{k: cap[k] for k in ['capturat_la', 'server_version', 'fn_izo_pre_e3', 'revizuite', 'corpuri']}}
+    open(SP + 'baseline_pre_e3.json', 'w', encoding='utf-8', newline='\n').write(json.dumps(baza, ensure_ascii=False, indent=1) + '\n')
+    print('baseline_pre_e3.json / implicite:', len(cap['fn_izo_pre_e3']), 'pre-E3,', len(cap['revizuite']), 'revizuite, capturat', cap['capturat_la'])
+    sys.exit(0)
 if '--din-captura' in sys.argv:
     # rezultatul capturii (ieșirea MCP execute_sql salvată, rândul [{"captura": …}] sau obiectul direct, ex. psql -At) →
     # baseline_pre_e3.json; md5-urile se reverifică la generare (assert-ul de mai jos), apoi diff-ul JSON se revizuiește în git
-    def extrage(t):
-        try: o = json.loads(t)
-        except ValueError: o = None
-        if isinstance(o, dict) and 'result' in o: return extrage(o['result'])
-        if isinstance(o, dict) and 'md5_prod' in o: return o
-        if isinstance(o, list) and len(o) == 1 and 'captura' in o[0]:
-            c = o[0]['captura']; return json.loads(c) if isinstance(c, str) else c
-        return extrage(t[t.index('[{'):t.rindex('}]') + 2])
-    cap = extrage(open(sys.argv[sys.argv.index('--din-captura') + 1], encoding='utf-8').read())
+    cap = extrage_captura(open(sys.argv[sys.argv.index('--din-captura') + 1], encoding='utf-8').read(), 'md5_prod')
     assert set(cap.pop('umplutura', '.')) == {'.'}
     cap = {'_despre': ['Baseline-ul EXTERN pre-E3 (Storage + trigger-ele profiles), capturat READ-ONLY de pe prod (dxczwkbciseqniprspcu) cu',
                        'python scripts/izometrie/e3_gen/gen_e3.py --captura, extras cu --din-captura <fișier>. REVIZUIT: orice schimbare pe prod =>',
                        'captură nouă, diff revizuit în git, apoi gen_e3.py (constanta preflight-ului 0l + scheletul izometrie_e3_schelet_baseline.sql).',
                        'r5f (#825 NO-GO, P1-3/P1-4).'],
            **{k: cap[k] for k in ['capturat_la', 'server_version', 'md5_prod', 'relatii', 'triggere', 'functii', 'referinte', 'politici']}}
+    # r5h: captura invocărilor implicite (cheia „implicite”) are procedura ei (--captura-implicite) — rămâne neatinsă aici
+    if os.path.exists(SP + 'baseline_pre_e3.json'):
+        vechi = json.load(open(SP + 'baseline_pre_e3.json', encoding='utf-8'))
+        if 'implicite' in vechi: cap['implicite'] = vechi['implicite']
     open(SP + 'baseline_pre_e3.json', 'w', encoding='utf-8', newline='\n').write(json.dumps(cap, ensure_ascii=False, indent=1) + '\n')
     print('baseline_pre_e3.json:', len(cap['politici']), 'politici, capturat', cap['capturat_la']); sys.exit(0)
 
@@ -726,14 +826,14 @@ RAPID = r"""      -- r5d (20261103b): aceeași semantică, evaluare SEMI-NAIVĂ 
       -- r5g (#825) NO-GO P2: o schemă a platformei urmată (după ghilimele / spații / un punct opțional) de deschiderea unui
       -- comentariu — singura formă în care un comentariu rupe apelul ei calificat
       k_com text := c_st || '(' || array_to_string(c_scheme_platforma, '|') || ')"?[[:space:]]*(\.[[:space:]]*)?(/\*|--)';
-      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod (citite 22.10.2026: singurele obiecte din catalog care cheamă
-      -- funcții din închiderea de pe prod). Amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER | proconfig):
-      -- obiectul și ce cheamă, cu drepturile funcției; corpul NU (funcția de platformă e deja tratată ca cititor oarecare —
-      -- e în închidere — iar corpul ei se schimbă la upgrade-urile Supabase). Altă funcție / alt owner / DEFINER → refuz
+      -- r5g (#825) NO-GO P1-D: invocările implicite revizuite, de pe prod — singurele obiecte din catalog care cheamă implicit o
+      -- funcție din închiderea de pe prod sau (r5h) un mutator de cale; citite read-only 22.10.2026 (baseline_pre_e3.json, cheia
+      -- „implicite”). r5h (#825 r5g NO-GO, Jak P1): amprenta = md5(tip | identitate | funcția | owner | SECURITY DEFINER |
+      -- proconfig | limbaj | md5(corp)) — CU corpul: un corp schimbat (același owner / config) nu mai păstrează excepția. Un
+      -- upgrade Supabase care schimbă corpul uneia dintre funcțiile de platformă înroșește poarta (fail-closed): captură nouă
+      -- + review + migrare (design §17)
       c_implicite_revizuite constant text[] := ARRAY[
-        'event trigger issue_pg_graphql_access=@@AMPR_GRAPHQL@@',
-        'event trigger issue_pg_net_access=@@AMPR_NET@@',
-        'trigger tr_check_filters on realtime.subscription=@@AMPR_REALTIME@@'];
+@@IMPLICITE_REVIZUITE@@];
     BEGIN
       SELECT array_agg(c.oid) INTO c_rel FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
          AND c.relname IN ('magazie_bucati','izo_proiect_config','izo_atribuiri','izo_importuri','magazie_bucati_evenimente','magazie_bucati_miscari');
@@ -896,34 +996,50 @@ RAPID = r"""      -- r5d (20261103b): aceeași semantică, evaluare SEMI-NAIVĂ 
       -- DEFINER care scrie / convertește / sortează le pornește fără să numească funcția. Orice rând pg_depend spre o funcție
       -- din închidere al cărui obiect nu e propagat mai sus (view / regulă: pg_rewrite; funcție: pg_proc — candidații prin
       -- propagare, agregatele prin regula de deasupra; operator / cast: regula de deasupra) → refuz explicit, cu obiectul numit,
-      -- în afara listei revizuite (c_implicite_revizuite). Doar c_fn, nu și mutatorii: pe prod cei 35 (orice set_config /
-      -- search_path în corp) au 12 trigger-e și 2 funcții de event trigger — invocarea lor implicită rămâne întrebare deschisă
+      -- în afara listei revizuite (c_implicite_revizuite).
+      -- r5h (#825 r5g NO-GO, Jak P1): și spre MUTATORII de cale (c_mut), ca spre închidere: un trigger INVOKER care face
+      -- set_config('search_path', 'storage, public', true) pe un tabel auxiliar, pornit de un DEFINER cu cale fixă care inserează
+      -- acolo și apoi cheamă necalificat un cititor de platformă, schimbă calea efectivă FĂRĂ ca DEFINER-ul să numească mutatorul
+      -- (deci el nu devine mutator, iar apelul necalificat se judecă pe calea declarată). Refuz explicit, cu obiectul numit; pe
+      -- prod: 12 obiecte peste mutatori (11 trigger-e + issue_graphql_placeholder; tr_check_filters / issue_pg_net_access și în
+      -- închidere), toate pe lista revizuită, cu corpul în amprentă
       FOR k_s IN SELECT x.d FROM (
-          SELECT DISTINCT format('%s → %s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure) d
-            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_namespace n2 ON n2.oid = q.pronamespace
+          SELECT DISTINCT format('%s → %s%s', pg_describe_object(d.classid, d.objid, d.objsubid), d.refobjid::regprocedure,
+                                 CASE WHEN d.refobjid = ANY (c_fn) THEN ' (obiect din catalog care cheamă o funcție din închiderea citirilor)'
+                                      ELSE ' (obiect din catalog care cheamă un mutator de cale)' END) d
+            FROM pg_depend d JOIN pg_proc q ON q.oid = d.refobjid JOIN pg_language l ON l.oid = q.prolang
                  CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
-           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn)
+                 CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
+           WHERE d.refclassid = 'pg_proc'::regclass AND d.refobjid = ANY (c_fn || c_mut)
              AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass, 'pg_operator'::regclass, 'pg_cast'::regclass)
-             AND format('%s %s=%s', o.type, o.identity,
-                        md5(concat_ws('|', o.type, o.identity, format('%I.%I(%s)', n2.nspname, q.proname, pg_get_function_identity_arguments(q.oid)),
-                                      pg_get_userbyid(q.proowner), q.prosecdef::text, coalesce(q.proconfig::text, ''))))
-                 <> ALL (c_implicite_revizuite)) x
+             AND format('%s %s=%s', o.type, o.identity, @@AMPR_IMPL_SQL@@) <> ALL (c_implicite_revizuite)) x
         ORDER BY x.d COLLATE "C"
       LOOP
-        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (obiect din catalog care cheamă o funcție din închiderea citirilor) (citire nerevizuită)');
+        v := array_append(v, 'invocare implicită neanalizată: ' || k_s || ' (citire nerevizuită)');
       END LOOP;
 """.replace('@@SAMANTA_E3@@', SAMANTA_E3).replace('@@SEED_FN@@', SEED_FN)
-# r5g (#825) NO-GO P1-D: amprentele invocărilor implicite revizuite de pe prod (citite read-only 22.10.2026 din pg_trigger /
-# pg_proc): aceeași formulă ca în poartă — md5(tip | identitate | funcția | owner | SECURITY DEFINER | proconfig)
-def ampr_impl(tip, identitate, functia, owner, secdef, config):
-    return md5('|'.join([tip, identitate, functia, owner, secdef, config]))
-AMPR_IMPL = {
-    '@@AMPR_GRAPHQL@@': ampr_impl('event trigger', 'issue_pg_graphql_access', 'extensions.grant_pg_graphql_access()', 'supabase_admin', 'false', '{"search_path=\\"\\""}'),
-    '@@AMPR_NET@@': ampr_impl('event trigger', 'issue_pg_net_access', 'extensions.grant_pg_net_access()', 'supabase_admin', 'false', '{"search_path=\\"\\""}'),
-    '@@AMPR_REALTIME@@': ampr_impl('trigger', 'tr_check_filters on realtime.subscription', 'realtime.subscription_check_filters()', 'supabase_realtime_admin', 'false', '')}
-for k_, v_ in AMPR_IMPL.items():
-    assert RAPID.count(k_) == 1
-    RAPID = RAPID.replace(k_, v_)
+# r5h (#825 r5g NO-GO): invocările implicite din captura revizuită (baseline_pre_e3.json, cheia „implicite”), reverificate aici:
+# lista excepțiilor = exact IMPLICITE_REVIZUITE; fiecare amprentă = formula din poartă (recalculată din componente); corpurile
+# replicilor de platformă = md5-ul corpului din amprentă; corpurile funcțiilor profiles din baseline-ul 0l = cele din amprentă
+# (scheletul local le reproduce exact, deci excepțiile lor țin și local); mulțimea pre-E3 și adaosul E3 disjuncte, fără dubluri
+IMPL = json.load(open(SP + 'baseline_pre_e3.json', encoding='utf-8'))['implicite']
+assert sorted((r['tip'], r['identitate']) for r in IMPL['revizuite']) == sorted(IMPLICITE_REVIZUITE), 'captura implicite ≠ lista revizuită'
+for r in IMPL['revizuite']:
+    assert ampr_impl(r) == r['amprenta'], r['identitate']
+md5_corp = {r['functia']: r['md5_corp'] for r in IMPL['revizuite']}
+CORPURI = {c['functia']: c['prosrc'] for c in IMPL['corpuri']}
+assert sorted(CORPURI) == sorted(REPLICI) and all(md5(CORPURI[f] + '|') == md5_corp[f] for f in REPLICI)
+for f in json.load(open(SP + 'baseline_pre_e3.json', encoding='utf-8'))['functii']:
+    k_ = '%s.%s(%s)' % (f['schema'], f['nume'], f['args'])
+    assert md5(f['prosrc'] + '|') == md5_corp[k_], k_
+IMPL_PRE = IMPL['fn_izo_pre_e3']
+assert len(set(IMPL_PRE)) == len(IMPL_PRE) and len(set(IMPL_E3)) == len(IMPL_E3) and not set(IMPL_PRE) & set(IMPL_E3)
+IMPL_POST = sorted(IMPL_PRE + IMPL_E3)
+lit_arr = lambda xs, ind: "ARRAY[\n" + ",\n".join(ind + q_(x) for x in xs) + "]::text[]"
+assert RAPID.count('@@IMPLICITE_REVIZUITE@@') == 1 and RAPID.count('@@AMPR_IMPL_SQL@@') == 1
+RAPID = (RAPID.replace('@@IMPLICITE_REVIZUITE@@', ",\n".join("        " + q_('%s %s=%s' % (r['tip'], r['identitate'], r['amprenta']))
+                                                            for r in sorted(IMPL['revizuite'], key=lambda r: (r['tip'], r['identitate']))))
+              .replace('@@AMPR_IMPL_SQL@@', AMPR_IMPL_SQL))
 pl = pl[:a] + RAPID + pl[b:]
 fin = "    RETURN v;\n  END $f$;"
 assert pl.count(fin) == 1
@@ -1013,12 +1129,64 @@ for p in BAZA['politici']:
         (" USING (%s)" % p['qual']) if p['qual'] is not None else '', (" WITH CHECK (%s)" % p['wc']) if p['wc'] is not None else ''))
 open(R + 'supabase/tests/izometrie_e3_schelet_baseline.sql', 'w', encoding='utf-8', newline='\n').write("\n".join(sch) + "\n")
 
+# ── r5h (#825 r5g NO-GO, Jak P1): replicile EXACTE ale obiectelor de platformă de pe lista albă (corp, owner, config, limbaj ca pe
+# prod, din captură) — testele locale le încarcă în tranzacția lor (BEGIN … \ir … ROLLBACK): replica exactă e verde (amprenta =
+# cea de pe prod), orice schimbare (doar corpul, owner-ul, numele) e roșie ──
+rev_ = {r['functia']: r for r in IMPL['revizuite']}
+DEF_REPL = {'realtime.subscription_check_filters()': ('trigger', 'tr_check_filters', "CREATE TRIGGER tr_check_filters BEFORE INSERT OR UPDATE ON realtime.subscription FOR EACH ROW EXECUTE FUNCTION realtime.subscription_check_filters();"),
+            'extensions.grant_pg_net_access()': ('event_trigger', 'issue_pg_net_access', "CREATE EVENT TRIGGER issue_pg_net_access ON ddl_command_end WHEN TAG IN ('CREATE EXTENSION') EXECUTE FUNCTION extensions.grant_pg_net_access();"),
+            'extensions.grant_pg_graphql_access()': ('event_trigger', 'issue_pg_graphql_access', "CREATE EVENT TRIGGER issue_pg_graphql_access ON ddl_command_end WHEN TAG IN ('CREATE EXTENSION') EXECUTE FUNCTION extensions.grant_pg_graphql_access();")}
+assert sorted(DEF_REPL) == sorted(REPLICI)
+rpl = ["-- GENERAT de scripts/izometrie/e3_gen/gen_e3.py din baseline_pre_e3.json (cheia „implicite”, capturat de pe prod %s) — NU se editează"
+       % IMPL['capturat_la'][:10],
+       "-- de mână. r5h (#825 r5g NO-GO, Jak P1): replicile EXACTE ale obiectelor de platformă de pe lista albă a invocărilor implicite",
+       "-- (corpul, owner-ul, SECURITY DEFINER, config-ul și limbajul de pe prod), încărcate în tranzacția unui test (\\ir, apoi ROLLBACK).",
+       "-- Corpurile nu se validează la creare (check_function_bodies off: tipurile realtime nu există local); nu se execută.",
+       "-- Event trigger-ele ascultă doar CREATE EXTENSION (niciun test nu-l rulează): identitatea lor e numele, nu evenimentul.",
+       "DO $r$ BEGIN",
+       "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_realtime_admin') THEN CREATE ROLE supabase_realtime_admin NOLOGIN; END IF;",
+       "  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin') THEN CREATE ROLE supabase_admin NOLOGIN; END IF;",
+       "END $r$;",
+       "CREATE SCHEMA IF NOT EXISTS realtime;",
+       "CREATE SCHEMA IF NOT EXISTS extensions;",
+       "SET LOCAL check_function_bodies = off;",
+       "-- realtime.cast ca pe prod: INVOKER cu SQL dinamic (în închidere) — subscription_check_filters îl cheamă calificat, deci e și ea în",
+       "-- închidere, ca pe prod (lista albă e cea care o ține verde)",
+       "CREATE FUNCTION realtime.\"cast\"(val text, type_ regtype) RETURNS jsonb LANGUAGE plpgsql",
+       "  AS $f$DECLARE r jsonb; BEGIN EXECUTE format('SELECT to_jsonb(%L::%s)', val, type_) INTO r; RETURN r; END$f$;",
+       "CREATE TABLE realtime.subscription (id bigint, filters text);"]
+for f in REPLICI:
+    r = rev_[f]; tip, _, trg = DEF_REPL[f]
+    assert '$corp$' not in CORPURI[f] and r['limbaj'] == 'plpgsql'
+    m = re.fullmatch(r'(\{"search_path=\\"\\""\})?', r['config'])
+    assert m, r['config']
+    rpl.append("CREATE FUNCTION %s RETURNS %s LANGUAGE plpgsql%s%s AS $corp$%s$corp$;"
+               % (f, tip, ' SECURITY DEFINER' if r['secdef'] else '', " SET search_path = ''" if r['config'] else '', CORPURI[f]))
+    rpl.append("ALTER FUNCTION %s OWNER TO %s;" % (f, r['owner']))
+    rpl.append(trg)
+rpl.append("SET LOCAL check_function_bodies = on;")
+open(R + 'supabase/tests/izometrie_e3_replici_platforma.sql', 'w', encoding='utf-8', newline='\n').write("\n".join(rpl) + "\n")
+
 mig = (tpl.replace('@@C_ARRAY@@', arr(C)).replace('@@EV_ARRAY@@', arr(EV)).replace('@@MIS_ARRAY@@', arr(MIS))
           .replace('@@MD5_GB_E2A@@', md5(prosrc(GB))).replace('@@MD5_GF_E2A@@', md5(prosrc(GF)))
           .replace('@@TIP_CHECK_E2A@@', TIP_CHECK_E2A.replace("'", "''")).replace('@@TIPURI_E3@@', ", ".join("'%s'" % t for t in TIPURI_E3))
           .replace('@@AMPRENTA@@', AMPRENTA).replace('@@GARDA_BUCATI_E3@@', gb).replace('@@GARDA_FAPTE_E3@@', gf)
           .replace('@@PORTI_LIPSA_E3@@', pl).replace('@@INTRARI@@', INTRARI).replace('@@DREPTURI@@', DREPTURI).replace('@@OWNERI@@', OWNERI)
           .replace('@@BAZA_EXPR@@', BAZA_EXPR).replace('@@BAZA_REV@@', BAZA_REV))
+# r5h (#825 r5g NO-GO, Copilot P1): postcondiția P6 — mulțimea finală a invocărilor implicite ale fn_izo_* = lista post-E3 fixă,
+# înainte și după ștampila E3 (același bloc, de două ori)
+VERIF_POST = r"""  v_impl := @@IMPL_EXPR@@;
+  v_impl_rev := @@IMPL_POST@@;
+  SELECT string_agg(format('%s: %s', y.x, CASE WHEN y.x = ANY (v_impl) THEN 'în plus' ELSE 'lipsește' END), '; ' ORDER BY y.x COLLATE "C") INTO v_x
+    FROM ((SELECT unnest(v_impl) EXCEPT SELECT unnest(v_impl_rev)) UNION (SELECT unnest(v_impl_rev) EXCEPT SELECT unnest(v_impl))) y(x);
+  IF v_x IS NOT NULL THEN
+    RAISE EXCEPTION 'Postcondiție P6 (@@CAND@@): invocările implicite ale fn_izo_* diferă de lista post-E3 revizuită: %', v_x;
+  END IF;"""
+assert mig.count('@@VERIF_POST_INAINTE@@') == 1 and mig.count('@@VERIF_POST_DUPA@@') == 1 and mig.count('@@IMPL_PRE@@') == 1
+mig = (mig.replace('@@VERIF_POST_INAINTE@@', VERIF_POST.replace('@@CAND@@', 'înainte de ștampila E3'))
+          .replace('@@VERIF_POST_DUPA@@', VERIF_POST.replace('@@CAND@@', 'după ștampila E3'))
+          .replace('@@IMPL_PRE@@', lit_arr(IMPL_PRE, '    ')).replace('@@IMPL_POST@@', lit_arr(IMPL_POST, '    '))
+          .replace('@@IMPL_EXPR@@', IMPL_EXPR))
 assert '@@' not in mig, re.findall('@@[A-Z_0-9]+@@', mig)
 open(R + 'supabase/migrations/20261103b_izometrie_e3_documente.sql', 'w', encoding='utf-8', newline='\n').write(mig)
 

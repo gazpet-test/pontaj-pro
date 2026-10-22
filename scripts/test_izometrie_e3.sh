@@ -14,6 +14,9 @@
 #      r5g #825 NO-GO: invocarea implicită prin expresii din catalog — CHECK / DEFAULT / generată / index / trigger / politică — refuz);
 #      r5g #825 NO-GO: țintele fn_izo_* (sămânța E3) — DEFINER / view / operator / DEFAULT peste un cititor fn_izo_* → poarta reală
 #      roșie; martorul P2 (comentariu oarecare + CAST(, cale fixă fără realtime) — nouă = E2a, verde;
+#      r5h #825 r5g NO-GO: invocarea implicită a unui MUTATOR de cale (trigger cu set_config pornit de un DEFINER) — refuz;
+#      (pasul 1: postcondiția P6 — o invocare implicită a unei fn_izo_* în plus față de lista post-E3 fixă; pasul 5a: precondiția
+#      0m — lista pre-E3 a invocărilor implicite ale fn_izo_* schimbată → E3 refuzată)
 #      r5f (#825): sămânța din migrare = E2a + tabelele documentelor E3 (teste.inchidere_noua_e3) — adaugă exact cele 3 tabele pe
 #      toate mutațiile, iar mutațiile pe documente (DEFINER / view fără security_invoker / lanț) fac poarta reală roșie
 #   3. curse cu barieră: lock-ul „schemă” (operație E3 ↔ runner + DDL), în ambele ordini
@@ -102,12 +105,22 @@ OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpe
   -f "$MUT/20261103b_izometrie_e3_documente.sql" -c "SELECT 1/0" 2>&1)" && esec "1 migrarea fără GRANT pe fn_izo_lock_partajat a trecut"
 grep -q "Postcondiție P5" <<<"$OUT" || esec "1 migrarea fără GRANT pe fn_izo_lock_partajat refuzată din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
 [ "$(q "SELECT count(*) FROM pg_roles WHERE rolname = 'izo_receptie_writer'")" = 0 ] || esec "1 mutația P5 a lăsat obiecte"
+# r5h (#825 r5g NO-GO, Copilot P1): postcondiția P6 — o invocare implicită a unei fn_izo_* în plus față de lista post-E3 fixă
+# (aici: un DEFAULT peste fn_izo_doc_hash creat chiar de migrare, înaintea ștampilelor) e refuzată ÎNAINTE de ștampila E3 (fără P6:
+# ștampila ar lua-o „cum e găsită” și poarta ar fi verde)
+sed '/-- ── M\. ștampilele: porțile E2a/i\  CREATE TABLE public.izo_r5h_mutant (h text DEFAULT public.fn_izo_doc_hash(1));' "$MIG_E3" > "$MUT/20261103b_izometrie_e3_documente.sql"
+cmp -s "$MIG_E3" "$MUT/20261103b_izometrie_e3_documente.sql" && esec "1 mutația P6 nu a schimbat migrarea (marcajul secțiunii M lipsește)"
+OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '20261103b_izometrie_e3_documente:' || txid_current(), true);" \
+  -f "$MUT/20261103b_izometrie_e3_documente.sql" -c "SELECT 1/0" 2>&1)" && esec "1 migrarea cu o invocare implicită în plus a trecut"
+grep -q "Postcondiție P6 (înainte de ștampila E3)" <<<"$OUT" && grep -qF "default value|for public.izo_r5h_mutant.h|public.fn_izo_doc_hash(bigint): în plus" <<<"$OUT" \
+  || esec "1 migrarea cu o invocare implicită în plus refuzată din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname = 'izo_receptie_writer'")" = 0 ] || esec "1 mutația P6 a lăsat obiecte"
 rm -rf "$MUT"
 livreaza "$BAZA" 20261103120000 "$MIG_E3"
 gate_0e "după 20261103b"
 OUT="$("${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3.test.sql" 2>&1)" || { echo "$OUT" | grep -E 'ERROR|TEST|CONTEXT' >&2; esec "1 teste SQL E3"; }
 grep -q 'TESTE E3: TOATE OK' <<<"$OUT" || esec "1 testele E3 nu au ajuns la final"
-ok "1 E3 prin runner (fără runner → refuz; fără GRANT pe fn_izo_lock_partajat → P5), gate 0e, teste SQL: $(grep -c 'NOTICE:  OK' <<<"$OUT") verificări"
+ok "1 E3 prin runner (fără runner → refuz; fără GRANT pe fn_izo_lock_partajat → P5; r5h: o invocare implicită a unei fn_izo_* în plus → P6 înainte de ștampilă), gate 0e, teste SQL: $(grep -c 'NOTICE:  OK' <<<"$OUT") verificări"
 
 # ── 2. diferențial: închiderea nouă (rapidă, textul din migrare) = închiderea E2a (exact), pe fiecare mutație ──
 "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3_inchidere.sql" >/dev/null
@@ -545,6 +558,29 @@ dif_strict "invocare implicită din catalog: CHECK pe domeniu / tabel, DEFAULT, 
    AND $(impc 'index audit.t\_ix → audit.cit\_ix(integer)%') AND $(impc 'trigger t\_bi on table audit.t → audit.cit\_trg()%')
    AND $(impc 'policy t\_p on table audit.t → audit.cit(integer)%')
    AND NOT ('teste.ic_def()' = ANY (coalesce($FN_NOU, '{}')) OR 'teste.ic_def()' = ANY (coalesce($FN_VECHI, '{}')))"
+# ── r5h (#825 r5g NO-GO, Jak P1): invocarea implicită a unui MUTATOR de cale — trigger INVOKER cu set_config('search_path',
+# 'storage, public', true) pe un tabel auxiliar; DEFINER-ul (cale public, pg_temp) inserează acolo, apoi cheamă NECALIFICAT
+# izo_c6() — storage.izo_c6, care citește registrul. Nimeni nu numește mutatorul ⇒ DEFINER-ul nu e mutator și nici în închidere
+# (E2a și r5g: verde fals); r5h: refuz explicit pe trigger. Verificarea rulează și DEFINER-ul: ajunge la storage.izo_c6 (calea a
+# fost schimbată de trigger — fără el, izo_c6() nu s-ar rezolva) ──
+IMP_MUT=" (obiect din catalog care cheamă un mutator de cale) (citire nerevizuită)"
+impm() { echo "EXISTS (SELECT 1 FROM unnest((teste.inchidere_noua()).o_mesaje) m WHERE m LIKE 'invocare implicită neanalizată: $1' AND m LIKE '%$IMP_MUT')
+  AND EXISTS (SELECT 1 FROM unnest(public.fn_izo_porti_lipsa()) m WHERE m LIKE 'invocare implicită neanalizată: $1' AND m LIKE '%$IMP_MUT')"; }
+IMPM="$(cat <<'SQL'
+CREATE SCHEMA audit;
+CREATE TABLE audit.aux (x int);
+CREATE FUNCTION audit.cale_trg() RETURNS trigger LANGUAGE plpgsql AS $f$BEGIN PERFORM set_config('search_path', 'storage, public', true); RETURN NEW; END$f$;
+CREATE TRIGGER aux_bi BEFORE INSERT ON audit.aux FOR EACH ROW EXECUTE FUNCTION audit.cale_trg();
+CREATE FUNCTION storage.izo_c6() RETURNS text LANGUAGE sql AS $f$SELECT 'storage:' || count(*) FROM public.magazie_bucati$f$;
+CREATE FUNCTION public.t_r5h_cale() RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $b$BEGIN INSERT INTO audit.aux VALUES (1); RETURN izo_c6(); END$b$;
+SQL
+)"
+dif_strict "invocare implicită a unui mutator de cale: trigger INVOKER cu set_config pe un tabel auxiliar + DEFINER (cale public, pg_temp) care inserează și cheamă necalificat cititorul din storage" \
+  "$IMPM" "SET client_min_messages = warning; DROP FUNCTION public.t_r5h_cale(), storage.izo_c6(); DROP SCHEMA audit CASCADE" ok \
+  "$(impm 'trigger aux\_bi on table audit.aux → audit.cale\_trg()%') AND 'audit.cale_trg()' = ANY ($MUT_NOU)
+   AND NOT ('t_r5h_cale()' = ANY (coalesce($FN_NOU, '{}')) OR 't_r5h_cale()' = ANY (coalesce($FN_VECHI, '{}')) OR 't_r5h_cale()' = ANY (coalesce($MUT_NOU, '{}')))
+   AND public.t_r5h_cale() LIKE 'storage:%'"
 # ── r5g (#825) NO-GO P2: martorul (nouă = E2a, poarta verde) — forma de pe prod (DEFINER cu cale public, pg_temp, CAST() + un
 # comentariu oarecare, cu realtime.cast în închidere ca INVOKER cu SQL dinamic); regula largă (orice „--” / „/*”) îl înroșea ──
 P2W="$(cat <<'SQL'
@@ -560,7 +596,7 @@ dif "martor r5g P2: DEFINER (cale public, pg_temp) cu un comentariu oarecare și
   "SET client_min_messages = warning; DROP FUNCTION public.t_r5g_tichet(); DROP SCHEMA realtime CASCADE" 0 \
   "cardinality(public.fn_izo_porti_lipsa()) = 0 AND 'realtime.\"cast\"(text,regtype)' = ANY ($FN_NOU) AND NOT ('t_r5g_tichet()' = ANY ($FN_NOU))"
 [ "$(q "SELECT cardinality(public.fn_izo_porti_lipsa())")" = 0 ] || esec "2 porțile nu au revenit complete"
-ok "2 diferențial: poarta nouă (rapidă) = poarta E2a pe 24 de mutații (DEFINER direct, view, lanț de 3 view-uri, INVOKER prin DEFINER, citat, overload, mutator; r5f: 7 cicluri — DEFINER ↔ INVOKER ×3, mutatori, view ↔ view, view ↔ funcție, view ↔ ATOMIC; pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență; 2 frontiere largi; 2 martori cu cale fixă) + 12 mutații pe care e mai strictă (3 cu schemă construită — E2a: eroare; „|” în schemă; ghilimele în nume; 16 citiri fără nume scris / fără EXECUTE; 4 comentarii în numele calificat; 40 000 de comentarii imbricate; r5g: 2 literali „--” / „/*” care taie copia fără comentarii; operator prefix + infix peste mutator; cast; 2 agregate) + martorul r5g (operator / cast / agregat nevinovate: nouă = E2a, poarta verde); r5f #825: sămânța din migrare = E2a + exact cele 3 tabele ale documentelor (stare curată + toate cele 24) + 6 mutații pe documente (DEFINER, view fără / cu security_invoker, INVOKER singur, DEFINER → INVOKER, citat); r5g #825 NO-GO: 6 mutații pe țintele fn_izo_* (DEFINER peste cititorul INVOKER / peste DEFINER-ul intern E2a, view, operator, DEFAULT → ștampila E3: roșu; INVOKER nechemat: verde) + invocarea implicită din catalog (7 obiecte: CHECK pe domeniu / tabel, 2 DEFAULT / generată, index, trigger, politică — mai strictă) + martorul P2 (comentariu oarecare + CAST(, nouă = E2a, verde)"
+ok "2 diferențial: poarta nouă (rapidă) = poarta E2a pe 24 de mutații (DEFINER direct, view, lanț de 3 view-uri, INVOKER prin DEFINER, citat, overload, mutator; r5f: 7 cicluri — DEFINER ↔ INVOKER ×3, mutatori, view ↔ view, view ↔ funcție, view ↔ ATOMIC; pragul de 100 pe ambele bucle — sub / la / peste, refuz la neconvergență; 2 frontiere largi; 2 martori cu cale fixă) + 12 mutații pe care e mai strictă (3 cu schemă construită — E2a: eroare; „|” în schemă; ghilimele în nume; 16 citiri fără nume scris / fără EXECUTE; 4 comentarii în numele calificat; 40 000 de comentarii imbricate; r5g: 2 literali „--” / „/*” care taie copia fără comentarii; operator prefix + infix peste mutator; cast; 2 agregate) + martorul r5g (operator / cast / agregat nevinovate: nouă = E2a, poarta verde); r5f #825: sămânța din migrare = E2a + exact cele 3 tabele ale documentelor (stare curată + toate cele 24) + 6 mutații pe documente (DEFINER, view fără / cu security_invoker, INVOKER singur, DEFINER → INVOKER, citat); r5g #825 NO-GO: 6 mutații pe țintele fn_izo_* (DEFINER peste cititorul INVOKER / peste DEFINER-ul intern E2a, view, operator, DEFAULT → ștampila E3: roșu; INVOKER nechemat: verde) + invocarea implicită din catalog (7 obiecte: CHECK pe domeniu / tabel, 2 DEFAULT / generată, index, trigger, politică — mai strictă) + martorul P2 (comentariu oarecare + CAST(, nouă = E2a, verde); r5h (#825 r5g NO-GO): invocarea implicită a unui mutator de cale (trigger INVOKER cu set_config pe un tabel auxiliar + DEFINER care inserează și cheamă necalificat cititorul din storage — mai strictă, refuz explicit pe trigger)"
 
 # ── 3. curse: lock-ul „schemă” ──
 CA_J="SET SESSION AUTHORIZATION authenticator; SELECT teste.ca('00000000-0000-0000-0000-000000000030')"
@@ -598,15 +634,15 @@ livreaza "$BAZA2" 20261102120000 "$MIG_A"
 livreaza "$BAZA2" 20261102140000 "$MIG_C"
 # r5f (#825 NO-GO, P1-3/P1-4): preflight-ul 0l — baseline-ul extern pre-E3 schimbat → E3 refuzată de runner (neaplicată, cod 10),
 # cu diferența numită; mutația se anulează și abia apoi E3 trece (mai jos)
-refuz_0l() { local et="$1" strica="$2" repara="$3" tipar="$4" sha sis rc=0
+refuz_0l() { local et="$1" strica="$2" repara="$3" tipar="$4" cod="${5:-0l}" sha sis rc=0
   q "$strica" "$BAZA2" >/dev/null
   sha="$(sha256sum "$MIG_E3" | cut -d' ' -f1)"; sis="$(q "SELECT system_identifier FROM pg_control_system()" "$BAZA2")"
   PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migrare "$MIG_E3" --sha256 "$sha" --versiune 20261103120000 \
     --tinta-db "$BAZA2" --tinta-sistem "$sis" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >/tmp/izo_e3_${PORT}_runner.out 2>&1 || rc=$?
   q "$repara" "$BAZA2" >/dev/null
   [ "$rc" = 10 ] || { cat /tmp/izo_e3_${PORT}_runner.out >&2; esec "5 $et: runner cod $rc (așteptat 10 = refuzat, neaplicat)"; }
-  grep -q "Precondiție 0l" /tmp/izo_e3_${PORT}_runner.out && grep -qF -- "$tipar" /tmp/izo_e3_${PORT}_runner.out \
-    || { grep -m3 ERROR /tmp/izo_e3_${PORT}_runner.out >&2; esec "5 $et: refuzul nu e 0l sau nu numește „$tipar”"; }
+  grep -q "Precondiție $cod" /tmp/izo_e3_${PORT}_runner.out && grep -qF -- "$tipar" /tmp/izo_e3_${PORT}_runner.out \
+    || { grep -m3 ERROR /tmp/izo_e3_${PORT}_runner.out >&2; esec "5 $et: refuzul nu e $cod sau nu numește „$tipar”"; }
   [ "$(q "SELECT count(*) FROM pg_roles WHERE rolname IN ('izo_doc_editor', 'izo_receptie_writer')" "$BAZA2")" = 0 ] || esec "5 $et: ceva s-a creat"; }
 refuz_0l "politică permisivă generală nouă pe storage.objects" \
   "CREATE POLICY mutant_general_r5f ON storage.objects FOR ALL TO public USING (true) WITH CHECK (true)" \
@@ -630,7 +666,17 @@ refuz_0l "politică permisivă nouă pe storage.buckets" \
   "DROP POLICY mutant_buckets_r5f ON storage.buckets" "politici/storage.buckets.mutant_buckets_r5f: în plus"
 refuz_0l "DISABLE RLS pe storage.buckets" "ALTER TABLE storage.buckets DISABLE ROW LEVEL SECURITY" \
   "ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY" "relatii/storage.buckets: diferă"
-ok "5a preflight 0l: baseline-ul extern pre-E3 schimbat (politică nouă / slăbită, RLS, ACL, trigger profiles cu WHEN, funcție; storage.buckets: politică, RLS) → E3 refuzată, diferența numită"
+# r5h (#825 r5g NO-GO, Copilot P1): precondiția 0m — invocările implicite ale fn_izo_* diferă de lista pre-E3 fixă (capturată de pe
+# prod): un obiect nou apărut între review și apply (DEFAULT / trigger peste o fn_izo_*) sau unul lipsă / redenumit → E3 refuzată,
+# cu diferența numită (fără 0m: ștampila E3 l-ar lua „cum e găsit”)
+refuz_0l "DEFAULT nou peste fn_izo_citire pe un tabel oarecare" "CREATE TABLE public.izo_r5h_0m (h boolean DEFAULT public.fn_izo_citire(1))" \
+  "DROP TABLE public.izo_r5h_0m" "default value|for public.izo_r5h_0m.h|public.fn_izo_citire(bigint): în plus" 0m
+refuz_0l "trigger nou peste garda fn_izo_garda_fapte" \
+  "CREATE TRIGGER trg_r5h_0m BEFORE INSERT ON public.izo_importuri FOR EACH ROW EXECUTE FUNCTION public.fn_izo_garda_fapte()" \
+  "DROP TRIGGER trg_r5h_0m ON public.izo_importuri" "trigger|trg_r5h_0m on public.izo_importuri|public.fn_izo_garda_fapte(): în plus" 0m
+refuz_0l "politică E2a redenumită (lipsește din lista revizuită)" "ALTER POLICY izo_atr_sel ON public.izo_atribuiri RENAME TO izo_atr_sel_r5h" \
+  "ALTER POLICY izo_atr_sel_r5h ON public.izo_atribuiri RENAME TO izo_atr_sel" "policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint): lipsește" 0m
+ok "5a preflight 0l: baseline-ul extern pre-E3 schimbat (politică nouă / slăbită, RLS, ACL, trigger profiles cu WHEN, funcție; storage.buckets: politică, RLS) → E3 refuzată, diferența numită; r5h preflight 0m: invocările implicite ale fn_izo_* ≠ lista pre-E3 fixă (DEFAULT nou, trigger nou, politică redenumită) → E3 refuzată, diferența numită"
 AMPR_INAINTE="$(q "SELECT obj_description('public.magazie_bucati_evenimente'::regclass, 'pg_class') || '#' || obj_description('public.fn_izo_porti_definitii()'::regprocedure, 'pg_proc')" "$BAZA2")"
 # r5f (#825 NO-GO, a doua ușă): Storage-ul (politicile, owner / RLS / FORCE / ACL pe storage.*, bucket-urile) e refăcut EXACT de revenire
 STORAGE_AMPR="SELECT md5(concat_ws(' | ',

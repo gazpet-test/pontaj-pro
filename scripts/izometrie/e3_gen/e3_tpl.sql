@@ -24,6 +24,11 @@
 -- r5g (#825) NO-GO, în poarta E2a înlocuită aici (fn_izo_porti_lipsa): funcțiile fn_izo_* sunt ținte ale închiderii citirilor
 --   (P1-C); invocarea implicită din catalog peste o funcție din închidere → refuz, în afara listei revizuite de pe prod (P1-D);
 --   calea devine necunoscută doar la un comentariu lipit de o schemă a platformei (P2).
+-- r5h (#825 r5g NO-GO): invocările implicite ale fn_izo_* FIXATE, nu ștampilate cum sunt găsite — precondiția 0m (lista pre-E3
+--   revizuită, capturată de pe prod) și postcondiția P6 (lista post-E3 fixă, înainte și după ștampila E3) (Copilot P1); lista
+--   albă a invocărilor implicite cu CORPUL funcției în amprentă (Jak P1); invocarea implicită a unui MUTATOR de cale (trigger /
+--   DEFAULT … peste o funcție cu set_config / search_path) → refuz ca peste închidere, cu excepții precise (Jak P1). Orice
+--   migrare ulterioară care schimbă aceste mulțimi (E3b, E4) re-ștampilează după procedura din design §17.
 -- r5f (#825 NO-GO, P1-3/P1-4): baseline-ul EXTERN de dinainte de E3 (Storage + trigger-ele profiles) se verifică la apply
 --   (precondiția 0l) față de amprenta pre-E3 REVIZUITĂ (scripts/izometrie/e3_gen/baseline_pre_e3.json), nu se ștampilează cum e găsit.
 -- Poarta E2a completă (fn_izo_porti_lipsa, ~8,5 s pe prod) rulează în confirmare / PV ÎNAINTEA lock-urilor; după lock-uri
@@ -37,6 +42,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $migrare$
 DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_lipsa text[]; v_x text; v_comentariu text; v_baza jsonb; v_baza_rev jsonb;
+  v_impl text[]; v_impl_rev text[];
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261103b_izometrie_e3_documente:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261103b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
@@ -118,6 +124,18 @@ BEGIN
                    LATERAL (SELECT jsonb_object_keys(coalesce(v_baza -> c.k, '{}')) UNION SELECT jsonb_object_keys(coalesce(v_baza_rev -> c.k, '{}'))) e(cheie)
              WHERE (v_baza -> c.k -> e.cheie) IS DISTINCT FROM (v_baza_rev -> c.k -> e.cheie)) d;
     RAISE EXCEPTION 'Precondiție 0l: baseline-ul Storage / profiles diferă de amprenta pre-E3 revizuită (captură nouă + review): %', coalesce(v_x, '?');
+  END IF;
+  -- r5h (#825 r5g NO-GO, Copilot P1): invocările IMPLICITE ale fn_izo_* (trigger / politică / DEFAULT / CHECK / index / operator /
+  -- cast …: orice obiect din catalog în afara view-urilor și a funcțiilor) = lista pre-E3 FIXĂ, capturată read-only de pe prod și
+  -- revizuită (baseline_pre_e3.json, cheia „implicite”: 13 politici + 22 trigger-e E2a / 2c), sub lock-ul runner-ului, înainte de
+  -- orice DDL: altfel un obiect nou apărut între review și apply (ex. un DEFAULT peste fn_izo_citire) ar intra în ștampila E3
+  -- „cum e găsit” (TOFU) și ar fi binecuvântat de ea. Orice diferență → refuz, cu lista; baseline nou = captură nouă revizuită.
+  v_impl := @@IMPL_EXPR@@;
+  v_impl_rev := @@IMPL_PRE@@;
+  SELECT string_agg(format('%s: %s', y.x, CASE WHEN y.x = ANY (v_impl) THEN 'în plus' ELSE 'lipsește' END), '; ' ORDER BY y.x COLLATE "C") INTO v_x
+    FROM ((SELECT unnest(v_impl) EXCEPT SELECT unnest(v_impl_rev)) UNION (SELECT unnest(v_impl_rev) EXCEPT SELECT unnest(v_impl))) y(x);
+  IF v_x IS NOT NULL THEN
+    RAISE EXCEPTION 'Precondiție 0m: invocările implicite ale fn_izo_* diferă de lista pre-E3 revizuită (captură nouă + review): %', v_x;
   END IF;
   -- porțile E2a complete și amprenta de revenire consistentă înainte (o rulăm o dată, aici: ~8,5 s pe prod)
   v_lipsa := public.fn_izo_porti_lipsa();
@@ -1042,8 +1060,14 @@ BEGIN
 @@OWNERI@@
 
   -- ── M. ștampilele: porțile E2a, porțile E3, amprenta de revenire E2a ──────────────────────────────────
+  -- r5h (#825 r5g NO-GO, Copilot P1): ÎNAINTE de ștampila E3, mulțimea finală a invocărilor implicite ale fn_izo_* = lista
+  -- post-E3 FIXĂ (pre-E3 revizuită ∪ cele 17 create chiar aici, IMPL_E3 în gen_e3.py) — ștampila descrie ce s-a revizuit, nu ce
+  -- s-a găsit. Verificarea se repetă DUPĂ ștampilă (un obiect comis de altă sesiune între verificare și ștampilă ar intra în
+  -- ștampilă; al doilea tur îl vede), iar postcondiția P1 (poarta completă) confirmă că ștampila scrisă = starea finală
+@@VERIF_POST_INAINTE@@
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L', 'porti=' || public.fn_izo_porti_definitii());
   EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e3_definitii() IS %L', 'porti_e3=' || public.fn_izo_porti_e3_definitii());
+@@VERIF_POST_DUPA@@
 
   -- ── postcondiții ──────────────────────────────────────────────────────────────────────────────────────
   -- P5 (r5f, #825 NO-GO): owner-ii intrărilor au EXECUTE pe EXACT semnăturile lanțului de lock-uri pe care îl cheamă (ACL-ul
