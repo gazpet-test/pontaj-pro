@@ -58,7 +58,7 @@ class GeneratorTest(unittest.TestCase):
                 self.assertEqual(added, old_body)
                 self.assertIn(g.MD5_VECHI[n], mig)
                 self.assertIn(g.MD5_VECHI[n], rev)
-            elif n not in ('fn_izo_porti_lipsa', 'fn_izo_doc_salveaza'):
+            elif n not in ('fn_izo_porti_lipsa', 'fn_izo_doc_salveaza') and n not in g.D2_OLD:
                 self.assertIsNone(re.search(r'CREATE (?:OR REPLACE )?FUNCTION public\.' + n + r'\(', mig), n)
 
     def test_contract_lista_si_invocari(self):
@@ -82,7 +82,14 @@ class GeneratorTest(unittest.TestCase):
         # nu sunt corpuri E3b (md5-ul lor e verificat de generator), deci se scot înainte de verificare
         import re as _re
         def fara_poarta(t):
-            return _re.sub(r'CREATE OR REPLACE FUNCTION public\.fn_izo_porti_lipsa\(\).*?\n  END \$f\$;', '', t, flags=_re.S)
+            # Excludem numai blocurile exacte, verificate separat; verificam corpurile,
+            # nu headerele DDL / preconditiile / listele de rollback.
+            for name in ('fn_izo_import_sold_initial', 'fn_izo_import_storno'):
+                for block in (g.D2_OLD[name], g.D2_NEW[name]):
+                    for header in ('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION'):
+                        t = t.replace(block.replace('CREATE OR REPLACE FUNCTION', 'CREATE FUNCTION', 1).replace('CREATE FUNCTION', header, 1), '')
+            t = t.replace(g.pl_noua, '').replace(g.pl_veche.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),'')
+            return '\n'.join(_re.findall(r'AS \$f\$(.*?)\$f\$;',t,flags=_re.S))
         for text in (mig, rev):
             for name in forbidden:
                 self.assertNotIn(name, fara_poarta(text))
@@ -221,6 +228,42 @@ class D1Test(unittest.TestCase):
         guard = g.prosrc(g.bloc_functie(mig, 'fn_izo_doc_ist_garda'))
         for check in ['NEW.continut IS DISTINCT FROM', 'NEW.hash IS DISTINCT FROM', 'NEW.diff IS DISTINCT FROM', 'NEW.baza IS DISTINCT FROM']:
             self.assertIn(check, guard)
+
+
+class D2Test(unittest.TestCase):
+    def test_13_prologue_only_and_exact_rollback(self):
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf8')
+        rev = (R / 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf8')
+        for name, old in g.D2_OLD.items():
+            self.assertEqual(g.prosrc(g.bloc_functie(rev,name)),g.prosrc(old))
+            self.assertIn(g.md5(g.prosrc(old)),mig)
+            self.assertIn(g.md5(g.prosrc(old)),rev)
+        name = 'fn_izo_import_sold_initial'
+        body = g.prosrc(g.bloc_functie(mig,name))
+        self.assertEqual(body.count(g.PROLOG),1)
+        self.assertEqual(body.replace(g.PROLOG,'',1),g.prosrc(g.D2_OLD[name]))
+        for name in ('fn_izo_import_sold_initial','fn_izo_import_storno'):
+            body = g.prosrc(g.bloc_functie(mig,name))
+            self.assertLess(body.index(g.PROLOG),body.index('fn_izo_lock_proiect'))
+        self.assertIn('DROP FUNCTION public.fn_izo_doc_anuleaza(bigint, text);',mig)
+        self.assertIn('DROP FUNCTION public.fn_izo_doc_anuleaza(bigint, text, uuid);',rev)
+        self.assertIn('GRANT EXECUTE ON FUNCTION public.fn_izo_doc_anuleaza(bigint, text) TO postgres;',rev)
+
+    def test_current_state_and_guard(self):
+        imp = g.prosrc(g.D2_NEW['fn_izo_import_storno'])
+        doc = g.prosrc(g.D2_NEW['fn_izo_doc_anuleaza'])
+        for body in (imp,doc):
+            self.assertIn('fn_izo_cor_deschise',body)
+            self.assertIn('fn_izo_lant_blocant',body)
+            self.assertLess(body.index('FOR UPDATE'),body.index('fn_izo_cor_deschise'))
+            self.assertIn('cardinality(v_m)',body)
+        guard = g.prosrc(g.D2_NEW['fn_izo_garda_receptie'])
+        self.assertIn("v_b.stare <> 'receptionat'",guard)
+        self.assertIn('m.eveniment_id=v_ev_pv',guard)
+        for event in ('v_st_pv','v_st_intrare'):
+            self.assertIn('m.eveniment_id='+event,guard)
+        self.assertIn("AND b.stare='receptionat'",doc)
+        self.assertIn('v_motiv, p_cerut_de, public.fn_izo_uid()',doc)
 
 
 if __name__ == '__main__':

@@ -1034,3 +1034,199 @@ DO $d1_hash_e3$ DECLARE v_hash_e3 text; BEGIN
     RAISE EXCEPTION 'D1 hash diferit de implementarea pre-E3b'; END IF;
 END $d1_hash_e3$;
 ROLLBACK;
+
+-- D2 / Q1=A, Q17=A, Q14=A. Negative inaintea fluxurilor pozitive.
+BEGIN;
+SAVEPOINT d2_poarta;
+GRANT UPDATE (atribute) ON public.magazie_bucati TO izo_corectie_writer;
+DO $d2_rosu$ BEGIN
+  BEGIN
+    PERFORM public.fn_izo_import_sold_initial(3,'D2-rosu','{}');
+    RAISE EXCEPTION 'D2 importul a ignorat poarta rosie';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: porti incomplete' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.fn_izo_import_storno(3,'D2-rosu','test poarta');
+    RAISE EXCEPTION 'D2 storno a ignorat poarta rosie';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: porti incomplete' THEN RAISE; END IF;
+  END;
+END $d2_rosu$;
+ROLLBACK TO d2_poarta;
+-- Importul precede orice alta scriere de registru; activare prin intrarea combinata.
+SELECT set_config('request.jwt.claims','{}',true);
+SELECT public.fn_izo_activeaza_si_importa(3,'D2-import',
+  '{"motiv":"fixture D2","surse":[{"fisier":"D2.xlsx","sha256":"2222222222222222222222222222222222222222222222222222222222222222"}],"bucati":[
+    {"tip":"teava","serie":"D2-1","sarja":"D2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"D2.xlsx","foaie":"F","rand":1}},
+    {"tip":"teava","serie":"D2-2","sarja":"D2-S","lungime_mm":12000,"perete_mm":8,"stare":"sosit","depozit_id":11,"sursa":{"fisier":"D2.xlsx","foaie":"F","rand":2}},
+    {"tip":"teava","serie":"D2-3","sarja":"D2-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"D2.xlsx","foaie":"F","rand":3}}]}','fixture D2: activare + import');
+SELECT set_config('izo.registru_tx','',true);
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de,motiv) VALUES
+  (3,'00000000-0000-0000-0000-000000000030','gestionar',11,'test','fixture D2'),
+  (3,'00000000-0000-0000-0000-000000000117','manager_aprobator',NULL,'test','fixture D2');
+INSERT INTO public.user_module_access(profile_id,module,access_level)
+  VALUES('00000000-0000-0000-0000-000000000117','magazie','editor');
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $d2_doc$ DECLARE v_r jsonb; v_doc bigint; v_ver jsonb; BEGIN
+  v_r:=public.fn_izo_doc_salveaza(NULL,NULL,
+    '{"proiect_id":3,"depozit_id":11,"sablon":"aviz_teava","furnizor":"D2 Furnizor","nr_document":"D2 CONF","data_document":"2026-10-22","total_m":24}',
+    '[{"nr_crt":1,"serie":"D2-DOC-1","sarja":"D2-S","perete_mm":8,"lungime_doc_mm":12000},{"nr_crt":2,"serie":"D2-DOC-2","sarja":"D2-S","perete_mm":8,"lungime_doc_mm":12000}]',NULL);
+  v_doc:=(v_r->>'document_id')::bigint;
+  PERFORM set_config('test.d2_doc',v_doc::text,true);
+  v_ver:=public.fn_izo_doc_verifica(v_doc);
+  PERFORM public.fn_izo_doc_confirma(v_doc,(v_ver->>'versiune')::bigint,v_ver->>'hash');
+  PERFORM set_config('izo.receptie_ctx','',true);
+  PERFORM public.fn_izo_doc_pv(v_doc,2,'D2-PV','2026-10-22');
+  PERFORM set_config('izo.receptie_ctx','',true);
+  PERFORM set_config('izo.corectie_ctx','',true);
+  v_r:=public.fn_izo_cor_propune('carantina_intrare',3,(SELECT id FROM public.magazie_bucati WHERE serie='D2-1'),'{"ncr_ref":"D2-IMPORT"}','carantina D2 import');
+  PERFORM set_config('test.d2_cor_import',v_r->>'corectie_id',true);
+  PERFORM set_config('izo.corectie_ctx','',true);
+  v_r:=public.fn_izo_cor_propune('carantina_intrare',3,(SELECT id FROM public.magazie_bucati WHERE serie='D2-DOC-1'),'{"ncr_ref":"D2-DOC"}','carantina D2 document');
+  PERFORM set_config('test.d2_cor_doc',v_r->>'corectie_id',true);
+END $d2_doc$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SELECT set_config('request.jwt.claims','{}',true);
+SELECT set_config('izo.corectie_ctx','',true);
+DO $d2_negative$ DECLARE v_doc bigint:=current_setting('test.d2_doc')::bigint; BEGIN
+  BEGIN
+    PERFORM public.fn_izo_import_storno(3,'D2-import','test propunere deschisa');
+    RAISE EXCEPTION 'D2 full storno a ignorat propunerea';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'E3b: decide / retrage intai propunerile:%'
+      OR position((SELECT id::text FROM public.magazie_bucati WHERE serie='D2-1') IN SQLERRM)=0 THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.fn_izo_doc_anuleaza(v_doc,'test fara cerut_de');
+    RAISE EXCEPTION 'D2 anulare fara cerut_de a trecut';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: cerut_de neeligibil' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.fn_izo_doc_anuleaza(v_doc,'test propunere deschisa','00000000-0000-0000-0000-000000000117');
+    RAISE EXCEPTION 'D2 anulare a ignorat propunerea';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'E3b: decide / retrage intai propunerile:%'
+      OR position((SELECT id::text FROM public.magazie_bucati WHERE serie='D2-DOC-1') IN SQLERRM)=0 THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.magazie_bucati WHERE serie LIKE 'D2-%' AND stare='anulata') THEN
+    RAISE EXCEPTION 'D2 negative au lasat efecte'; END IF;
+END $d2_negative$;
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $d2_corectii$ DECLARE v_b public.magazie_bucati; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);
+  PERFORM public.fn_izo_cor_aproba(current_setting('test.d2_cor_import')::bigint,1);
+  PERFORM set_config('izo.corectie_ctx','',true);
+  PERFORM public.fn_izo_cor_aproba(current_setting('test.d2_cor_doc')::bigint,1);
+  PERFORM set_config('izo.corectie_ctx','',true);
+  SELECT * INTO STRICT v_b FROM public.magazie_bucati WHERE serie='D2-2';
+  PERFORM public.fn_izo_cor_camp(v_b.id,v_b.server_ver,'{"perete_mm":9}','camp D2 inainte de storno');
+END $d2_corectii$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SELECT set_config('request.jwt.claims','{}',true);
+SELECT set_config('izo.corectie_ctx','',true);
+-- O bucată inchisa partial nu mai primeste o a doua miscare anulat la full storno.
+SAVEPOINT d2_lant;
+SET LOCAL ROLE izo_registru_writer;
+SELECT set_config('izo.registru_tx',txid_current()::text,true);
+DO $d2_lant_fixture$ DECLARE v_ev bigint; BEGIN
+  INSERT INTO public.magazie_bucati_evenimente(tip,proiect_id,document_tip,document_id,motiv,server_ver)
+    VALUES('corectie',3,'test_lant_d2','D2','simulare miscare non-E3b',nextval('public.izo_server_ver_seq')) RETURNING id INTO v_ev;
+  INSERT INTO public.magazie_bucati_miscari(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,server_ver)
+    SELECT v_ev,3,b.id,'corectat',b.stare,b.stare,nextval('public.izo_server_ver_seq') FROM public.magazie_bucati b
+      WHERE b.serie IN ('D2-2','D2-DOC-2');
+END $d2_lant_fixture$;
+RESET ROLE;
+SELECT set_config('izo.registru_tx','',true);
+DO $d2_lant$ BEGIN
+  BEGIN
+    PERFORM public.fn_izo_import_storno(3,'D2-import','test lant ulterior');
+    RAISE EXCEPTION 'D2 full storno a ignorat lantul non-E3b';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'izo: storno refuzat:%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.fn_izo_doc_anuleaza(current_setting('test.d2_doc')::bigint,'test lant ulterior','00000000-0000-0000-0000-000000000117');
+    RAISE EXCEPTION 'D2 anulare a ignorat lantul non-E3b';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'izo E3: anulare refuzata:%' THEN RAISE; END IF;
+  END;
+END $d2_lant$;
+ROLLBACK TO d2_lant;
+SELECT public.fn_izo_cor_storno_import(3,'D2-import',ARRAY[(SELECT id FROM public.magazie_bucati WHERE serie='D2-3')],
+  'partial inainte de complet D2','00000000-0000-0000-0000-000000000117');
+SELECT set_config('izo.corectie_ctx','',true);
+SAVEPOINT d2_garda;
+SET LOCAL ROLE izo_receptie_writer;
+DO $d2_garda$
+DECLARE v_doc public.izo_documente_intrare; v_pv bigint; v_i bigint; v_b bigint; v_q bigint;
+BEGIN
+  SELECT * INTO STRICT v_doc FROM public.izo_documente_intrare WHERE id=current_setting('test.d2_doc')::bigint;
+  SELECT id INTO STRICT v_b FROM public.magazie_bucati WHERE serie='D2-DOC-2';
+  SELECT id INTO STRICT v_q FROM public.magazie_bucati WHERE serie='D2-DOC-1';
+  PERFORM public.fn_izo_receptie_marcheaza('anulare',v_doc.id,3,11,v_doc.versiune,'test direct garda D2');
+  PERFORM set_config('izo.anulare_cerut_de',txid_current()::text||'|'||v_doc.id::text||'|00000000-0000-0000-0000-000000000117',true);
+  INSERT INTO public.magazie_bucati_evenimente(tip,proiect_id,document_tip,document_id,storno_de_eveniment_id,motiv,declarat_de,aplicat_de,server_ver)
+    VALUES('storno',3,'doc_intrare',v_doc.id::text,v_doc.eveniment_pv_id,'test direct garda D2','00000000-0000-0000-0000-000000000117',NULL,nextval('public.izo_server_ver_seq')) RETURNING id INTO v_pv;
+  BEGIN
+    INSERT INTO public.magazie_bucati_miscari(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,server_ver)
+      VALUES(v_pv,3,v_q,'stare','receptionat','sosit',nextval('public.izo_server_ver_seq'));
+    RAISE EXCEPTION 'D2 garda a acceptat PV fals pe carantina';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: miscare storno invalida / repetata' THEN RAISE; END IF;
+  END;
+  INSERT INTO public.magazie_bucati_miscari(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,server_ver)
+    VALUES(v_pv,3,v_b,'stare','receptionat','sosit',nextval('public.izo_server_ver_seq'));
+  BEGIN
+    INSERT INTO public.magazie_bucati_miscari(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,server_ver)
+      VALUES(v_pv,3,v_b,'stare','receptionat','sosit',nextval('public.izo_server_ver_seq'));
+    RAISE EXCEPTION 'D2 garda a acceptat duplicat PV';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: miscare storno invalida / repetata' THEN RAISE; END IF;
+  END;
+  INSERT INTO public.magazie_bucati_evenimente(tip,proiect_id,document_tip,document_id,storno_de_eveniment_id,motiv,declarat_de,aplicat_de,server_ver)
+    VALUES('storno',3,'doc_intrare',v_doc.id::text,v_doc.eveniment_intrare_id,'test direct garda D2','00000000-0000-0000-0000-000000000117',NULL,nextval('public.izo_server_ver_seq')) RETURNING id INTO v_i;
+  INSERT INTO public.magazie_bucati_miscari(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,server_ver)
+    VALUES(v_i,3,v_q,'anulat','carantina','anulata',nextval('public.izo_server_ver_seq'));
+  BEGIN
+    INSERT INTO public.magazie_bucati_miscari(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,server_ver)
+      VALUES(v_i,3,v_q,'anulat','carantina','anulata',nextval('public.izo_server_ver_seq'));
+    RAISE EXCEPTION 'D2 garda a acceptat duplicat intrare';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'E3b: miscare storno invalida / repetata' THEN RAISE; END IF;
+  END;
+END $d2_garda$;
+RESET ROLE;
+ROLLBACK TO d2_garda;
+DO $d2_pozitive$ DECLARE v_r jsonb; v_doc bigint:=current_setting('test.d2_doc')::bigint; v_i bigint; v_pv bigint; BEGIN
+  v_r:=public.fn_izo_import_storno(3,'D2-import','storno complet dupa corectii D2');
+  v_i:=(v_r->>'storno_eveniment_id')::bigint;
+  IF v_r->>'bucati_anulate'<>'2'
+    OR (SELECT stare FROM public.izo_importuri WHERE proiect_id=3 AND import_id='D2-import')<>'stornat'
+    OR (SELECT count(*) FROM public.magazie_bucati WHERE serie IN ('D2-1','D2-2','D2-3') AND stare='anulata')<>3
+    OR (SELECT count(*) FROM public.magazie_bucati_miscari WHERE eveniment_id=v_i AND rol='anulat' AND stare_dupa='anulata')<>2
+    OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_miscari m JOIN public.magazie_bucati b ON b.id=m.bucata_id
+      WHERE m.eveniment_id=v_i AND b.serie='D2-1' AND m.stare_inainte='carantina')
+    OR EXISTS (SELECT 1 FROM public.magazie_bucati_miscari m JOIN public.magazie_bucati b ON b.id=m.bucata_id
+      WHERE m.eveniment_id=v_i AND b.serie='D2-3') THEN RAISE EXCEPTION 'D2 import nereconciliat: %',v_r; END IF;
+  PERFORM set_config('izo.registru_tx','',true);
+  v_r:=public.fn_izo_doc_anuleaza(v_doc,'anulare dupa carantina D2','00000000-0000-0000-0000-000000000117');
+  v_i:=(v_r->>'storno_intrare_id')::bigint; v_pv:=(v_r->>'storno_pv_id')::bigint;
+  IF v_r->>'bucati_anulate'<>'2' OR v_r->>'stare'<>'anulat'
+    OR (SELECT count(*) FROM public.magazie_bucati WHERE aviz_intrare_id=v_doc AND stare='anulata')<>2
+    OR (SELECT count(*) FROM public.magazie_bucati_evenimente WHERE id IN (v_i,v_pv)
+      AND declarat_de='00000000-0000-0000-0000-000000000117' AND aplicat_de IS NULL AND aplicat_rol='postgres')<>2
+    OR (SELECT count(*) FROM public.magazie_bucati_miscari WHERE eveniment_id=v_pv AND stare_inainte='receptionat' AND stare_dupa='sosit')<>1
+    OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_miscari m JOIN public.magazie_bucati b ON b.id=m.bucata_id
+      WHERE m.eveniment_id=v_i AND b.serie='D2-DOC-1' AND m.stare_inainte='carantina' AND m.stare_dupa='anulata')
+    OR EXISTS (SELECT 1 FROM public.magazie_bucati_miscari m JOIN public.magazie_bucati b ON b.id=m.bucata_id
+      WHERE m.eveniment_id=v_pv AND b.serie='D2-DOC-1') THEN RAISE EXCEPTION 'D2 document nereconciliat: %',v_r; END IF;
+END $d2_pozitive$;
+ROLLBACK;

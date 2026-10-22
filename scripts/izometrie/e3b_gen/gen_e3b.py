@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from e3b_d2 import build_d2, PROLOG
 
 SP = Path(__file__).resolve().parent
 R = SP.parents[2]
@@ -123,7 +124,7 @@ for fn in ['fn_izo_garda_scriitor()', 'fn_izo_blocheaza_locuri(bigint, integer[]
 FN_B = {
     'fn_izo_cor_chei(text, text, text)': ROLURI,
     'fn_izo_cor_autorizare_lock(bigint, text, integer)': ROLURI,
-    'fn_izo_cor_cerut_de_valid(bigint, uuid)': ['izo_corectie_writer'],
+    'fn_izo_cor_cerut_de_valid(bigint, uuid)': ['izo_corectie_writer', 'izo_receptie_writer'],
     'fn_izo_cor_bucata_lock(bigint, bigint)': ['izo_cor_editor'],
     'fn_izo_cor_doc_lock(bigint, bigint)': ['izo_cor_editor'],
     'fn_izo_cor_deschise(bigint[])': ['izo_registru_writer', 'izo_receptie_writer'],
@@ -155,7 +156,7 @@ FN_C2 = {
 }
 FN_D1 = {'fn_izo_cor_storno_import(bigint, text, bigint[], text, uuid)': 'izo_corectie_writer'}
 FN_B.update({
-    'fn_izo_lant_blocant(bigint[], bigint[])': ['izo_corectie_writer'],
+    'fn_izo_lant_blocant(bigint[], bigint[])': ['izo_corectie_writer', 'izo_registru_writer', 'izo_receptie_writer'],
     'fn_izo_doc_instantaneu(bigint)': ['izo_doc_editor'],
     'fn_izo_doc_diff(jsonb, jsonb)': ['izo_doc_editor'],
     'fn_izo_doc_ist_garda()': [],
@@ -178,6 +179,7 @@ INLOCUIRI_D = {
     'fn_izo_garda_bucati': e3, 'fn_izo_garda_fapte': e3, 'fn_izo_doc_garda': e3,
     'fn_izo_porti_lipsa': e3, 'fn_izo_doc_salveaza': e3,
     'fn_izo_doc_anuleaza': e3, 'fn_izo_garda_receptie': e3,
+    'fn_izo_import_sold_initial': e2, 'fn_izo_import_storno': e2,
 }
 BLOCURI_VECHI = {n: bloc_functie(s, n) for n, s in INLOCUIRI_D.items()}
 MD5_VECHI = {n: md5(prosrc(b)) for n, b in BLOCURI_VECHI.items()}
@@ -351,6 +353,18 @@ def ca_editor(bloc):
 garzi_vechi.append(ca_editor(salveaza_veche.replace('  CREATE FUNCTION','  CREATE OR REPLACE FUNCTION',1)))
 garzi_vechi.append("  IF (SELECT md5(prosrc) FROM pg_proc WHERE proname='fn_izo_doc_salveaza' AND pronamespace='public'::regnamespace) IS DISTINCT FROM " + q(MD5_VECHI['fn_izo_doc_salveaza']) + " THEN RAISE EXCEPTION 'E3b: restaurare salvare diferita'; END IF;")
 
+D2_OLD, D2_NEW, d2_forward, d2_reverse = build_d2(e2, e3, bloc_functie, prosrc, q, md5)
+garzi_vechi.append(d2_reverse)
+pre_md5.append("""  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.fn_izo_doc_anuleaza(bigint, text)'::regprocedure
+    AND proowner='izo_receptie_writer'::regrole
+    AND proacl::text='{izo_receptie_writer=X/izo_receptie_writer,postgres=X/izo_receptie_writer}') THEN
+    RAISE EXCEPTION 'Preconditie E3b: owner / ACL anulare LIVE diferit'; END IF;""")
+checks.append("""    IF (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_doc_anuleaza') <> 1
+      OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.fn_izo_doc_anuleaza(bigint, text, uuid)'::regprocedure
+        AND proowner='izo_receptie_writer'::regrole AND prosecdef AND proconfig=ARRAY['search_path=public, pg_temp']
+        AND proacl::text='{izo_receptie_writer=X/izo_receptie_writer,postgres=X/izo_receptie_writer}') THEN
+      v := array_append(v,'definition / ACL anulare administrativa D2'); END IF;""")
+
 assert len(set(IMPL_E3B)) == len(IMPL_E3B)
 IMPL_POST = sorted(IMPL_PRE + IMPL_E3B)
 def verifica_impl(lista, etapa):
@@ -381,7 +395,7 @@ replacements = {
     'REVOKE_FUNCTII': '\n'.join('  REVOKE ALL ON FUNCTION %s FROM %s;' % (fn, ', '.join(rs)) for fn, rs in FUNCTII.items()
                               if rs and fn != 'public.fn_izo_cor_marcheaza(bigint)' and fn[7:] not in FN_OPERATII),
     'GARZI_NOI': '\n'.join(garzi_noi), 'GARZI_VECHI': '\n'.join(garzi_vechi),
-    'NUME_FN_B': arr([fn.split('(')[0] for fn in list(FN_B) + list(FN_OPERATII) + ['fn_izo_doc_salveaza']]),
+    'NUME_FN_B': arr([fn.split('(')[0] for fn in list(FN_B) + list(FN_OPERATII) + ['fn_izo_doc_salveaza', 'fn_izo_doc_anuleaza', 'fn_izo_garda_receptie']]),
     'ACL_GARDA': '\n'.join('  REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon, authenticated, service_role;\n%s'
                           % (fn, ("  GRANT CREATE ON SCHEMA public TO izo_corectie_writer;\n"
                                   "  ALTER FUNCTION public.%s OWNER TO izo_corectie_writer;\n"
@@ -391,7 +405,7 @@ replacements = {
     'DROP_GARDA': '\n'.join(('  SET LOCAL ROLE izo_corectie_writer;\n  DROP FUNCTION public.%s;\n  RESET ROLE;' % fn)
                            if fn.startswith('fn_izo_cor_marcheaza(') else '  DROP FUNCTION public.%s;' % fn for fn in reversed(FN_B)),
     'DROP_OPERATII': '\n'.join('  SET LOCAL ROLE %s;\n  DROP FUNCTION public.%s;\n  RESET ROLE;' % (owner, fn) for fn, owner in reversed(list(FN_OPERATII.items()))),
-    'GARDA': '', 'OPERATII': operatii, 'STORNO': '', 'ISTORIC': instantaneu + '\n' + ca_editor(salveaza_noua) + '\n' + canonical_check,
+    'GARDA': '', 'OPERATII': operatii, 'STORNO': d2_forward, 'ISTORIC': instantaneu + '\n' + ca_editor(salveaza_noua) + '\n' + canonical_check,
 }
 
 def genereaza(tpl, destinatie):
@@ -409,4 +423,4 @@ def genereaza(tpl, destinatie):
 if __name__ == '__main__':
     mig = genereaza('e3b_tpl.sql', 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql')
     rev = genereaza('e3b_rev_tpl.sql', 'supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql')
-    print('ok E3b-A+B+C1+C2+D1', len(mig.splitlines()), len(rev.splitlines()), 'implicit additions', len(IMPL_E3B))
+    print('ok E3b-A+B+C1+C2+D1+D2 (Q1=A, Q17=A, Q14=A)', len(mig.splitlines()), len(rev.splitlines()), 'implicit additions', len(IMPL_E3B))
