@@ -1,3 +1,81 @@
+  -- C2: corectii directe; ordinea lock-urilor din §4, normalizare in garda B.
+  CREATE FUNCTION public.fn_izo_cor_camp(p_bucata_id bigint, p_server_ver bigint, p_dupa jsonb, p_motiv text) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_uid uuid; v_b public.magazie_bucati; v_after public.magazie_bucati; v_cor public.izo_corectii;
+    v_proiect bigint; v_ev bigint; v_event public.magazie_bucati_evenimente; v_move public.magazie_bucati_miscari;
+  BEGIN
+    v_uid := public.fn_izo_cor_api_verifica();
+    SELECT b.proiect_id INTO v_proiect FROM public.magazie_bucati b WHERE b.id=p_bucata_id AND b.provenienta='beneficiar';
+    IF NOT public.fn_izo_cor_autorizare_lock(v_proiect,'responsabil',NULL) THEN
+      RAISE EXCEPTION 'E3b: bucata nu exista sau nu ai acces' USING ERRCODE='42501'; END IF;
+    PERFORM public.fn_izo_blocheaza_tabele();
+    PERFORM public.fn_izo_lock_partajat(VARIADIC ARRAY[v_proiect]);
+    SELECT b.* INTO v_b FROM public.magazie_bucati b WHERE b.id=p_bucata_id AND b.proiect_id=v_proiect AND b.provenienta='beneficiar' FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'E3b: bucata nu exista sau nu ai acces' USING ERRCODE='42501'; END IF;
+    IF p_server_ver IS DISTINCT FROM v_b.server_ver THEN
+      RAISE EXCEPTION 'E3b: bucata s-a schimbat, reincarca' USING ERRCODE='40001'; END IF;
+    IF jsonb_typeof(p_dupa) IS DISTINCT FROM 'object' OR p_dupa='{}'::jsonb
+      OR p_motiv IS NULL OR char_length(btrim(p_motiv)) NOT BETWEEN 3 AND 1000 THEN
+      RAISE EXCEPTION 'E3b: cerere invalida' USING ERRCODE='22023'; END IF;
+    IF p_dupa ?| public.fn_izo_coloane_identitate() THEN
+      RAISE EXCEPTION 'E3b: trimite prin propunere' USING ERRCODE='22023'; END IF;
+    IF EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.bucata_id=v_b.id AND cor.stare='propusa') THEN
+      RAISE EXCEPTION 'E3b: exista o propunere deschisa pe bucata - decide / retrage intai' USING ERRCODE='23505'; END IF;
+    BEGIN
+    INSERT INTO public.izo_corectii(proiect_id,tip,bucata_id,inainte,dupa,motiv,stare,versiune,cale,propus_de,propus_rol,propus_la)
+      VALUES(v_proiect,'camp',v_b.id,NULL,p_dupa,btrim(p_motiv),'propusa',1,'direct',v_uid,session_user,now()) RETURNING * INTO v_cor;
+    v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_dupa(v_cor,v_b));
+    IF EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.id<>v_b.id @@COLLISION_PRED@@) THEN
+      RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505'; END IF;
+    PERFORM public.fn_izo_cor_marcheaza(v_cor.id);
+    v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
+    INSERT INTO public.magazie_bucati_evenimente(@@EV_COLS@@) SELECT @@EV_VALUES@@ RETURNING id INTO v_ev;
+    v_move:=jsonb_populate_record(NULL::public.magazie_bucati_miscari,public.fn_izo_cor_miscare_asteptata(v_cor,v_b));
+    INSERT INTO public.magazie_bucati_miscari(@@MIS_COLS@@) SELECT @@MIS_VALUES@@;
+    UPDATE public.magazie_bucati SET @@UPDATE_VALUES@@,server_ver=nextval('public.izo_server_ver_seq'),updated_at=now()
+      WHERE id=v_b.id RETURNING * INTO v_b;
+    UPDATE public.izo_corectii SET stare='aplicata',versiune=versiune+1,decis_de=v_uid,decis_rol=session_user,decis_la=now(),eveniment_id=v_ev
+      WHERE id=v_cor.id;
+    RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'inainte',v_cor.inainte,'dupa',v_cor.dupa,'server_ver',v_b.server_ver);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+    END;
+  EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    RAISE EXCEPTION 'E3b: valoare invalida' USING ERRCODE='22023';
+  END $f$;
+
+  CREATE FUNCTION public.fn_izo_cor_pv(p_doc_id bigint, p_versiune bigint, p_pv_nr text, p_pv_data date, p_motiv text) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_uid uuid; v_doc public.izo_documente_intrare; v_cor public.izo_corectii;
+    v_ev bigint; v_event public.magazie_bucati_evenimente;
+  BEGIN
+    v_uid := public.fn_izo_cor_api_verifica();
+    SELECT doc.* INTO v_doc FROM public.izo_documente_intrare doc WHERE doc.id=p_doc_id FOR UPDATE;
+    IF NOT FOUND OR NOT public.fn_izo_cor_autorizare_lock(v_doc.proiect_id,'responsabil',NULL) THEN
+      RAISE EXCEPTION 'E3b: documentul nu exista sau nu ai acces' USING ERRCODE='42501'; END IF;
+    PERFORM public.fn_izo_blocheaza_tabele();
+    PERFORM public.fn_izo_lock_partajat(VARIADIC ARRAY[v_doc.proiect_id]);
+    IF p_versiune IS DISTINCT FROM v_doc.versiune THEN
+      RAISE EXCEPTION 'E3b: documentul s-a schimbat, reincarca' USING ERRCODE='40001'; END IF;
+    IF v_doc.stare<>'confirmat' OR v_doc.eveniment_pv_id IS NULL THEN
+      RAISE EXCEPTION 'E3b: document neconfirmat sau fara PV' USING ERRCODE='22023'; END IF;
+    IF p_motiv IS NULL OR char_length(btrim(p_motiv)) NOT BETWEEN 3 AND 1000 THEN
+      RAISE EXCEPTION 'E3b: motiv invalid' USING ERRCODE='22023'; END IF;
+    INSERT INTO public.izo_corectii(proiect_id,tip,document_intrare_id,inainte,dupa,motiv,stare,versiune,cale,propus_de,propus_rol,propus_la)
+      VALUES(v_doc.proiect_id,'pv',v_doc.id,NULL,jsonb_build_object('pv_nr',p_pv_nr,'pv_data',p_pv_data),
+        btrim(p_motiv),'propusa',1,'direct',v_uid,session_user,now()) RETURNING * INTO v_cor;
+    PERFORM public.fn_izo_cor_marcheaza(v_cor.id);
+    v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
+    INSERT INTO public.magazie_bucati_evenimente(@@EV_COLS@@) SELECT @@EV_VALUES@@ RETURNING id INTO v_ev;
+    UPDATE public.izo_documente_intrare SET pv_nr=v_cor.dupa->>'pv_nr',pv_nr_canon=v_cor.dupa->>'pv_nr_canon',
+      pv_data=(v_cor.dupa->>'pv_data')::date,versiune=versiune+1,updated_at=now() WHERE id=v_doc.id RETURNING * INTO v_doc;
+    UPDATE public.izo_corectii SET stare='aplicata',versiune=versiune+1,decis_de=v_uid,decis_rol=session_user,decis_la=now(),eveniment_id=v_ev
+      WHERE id=v_cor.id;
+    RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'document_id',v_doc.id,'versiune',v_doc.versiune);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+  END $f$;
+
   -- C1: frontiera de propuneri (§1, §4, §5.6).
   CREATE FUNCTION public.fn_izo_cor_propune(p_tip text, p_proiect bigint, p_bucata_id bigint, p_detalii jsonb, p_motiv text) RETURNS jsonb
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$

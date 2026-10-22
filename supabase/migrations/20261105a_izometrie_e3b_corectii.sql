@@ -1,6 +1,6 @@
 -- GENERAT de scripts/izometrie/e3b_gen/gen_e3b.py. NU se editează manual.
-  -- 20261105a: E3b piesele A+B+C1, infrastructură, gărzi și propuneri.
-  -- Design r5: toate Q-E3b-1..18 = A. Operațiile directe, storno și istoricul vin în C2/D.
+  -- 20261105a: E3b piesele A+B+C1+C2, infrastructură, gărzi, propuneri și corecții directe.
+  -- Design r5: toate Q-E3b-1..18 = A. Storno și istoricul vin în D.
 -- Numai runner; nicio modificare de date. Implementare parțială E3b: fluxul propunerilor C1.
 DO $migrare$
 DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_comentariu text;
@@ -1053,6 +1053,90 @@ BEGIN
   ALTER TABLE public.izo_corectii ENABLE ALWAYS TRIGGER trg_izo_cor_truncate;
   ALTER TABLE public.izo_corectii_bucati ENABLE ALWAYS TRIGGER trg_izo_cor_garda;
   ALTER TABLE public.izo_corectii_bucati ENABLE ALWAYS TRIGGER trg_izo_cor_truncate;
+  -- C2: corectii directe; ordinea lock-urilor din §4, normalizare in garda B.
+  CREATE FUNCTION public.fn_izo_cor_camp(p_bucata_id bigint, p_server_ver bigint, p_dupa jsonb, p_motiv text) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_uid uuid; v_b public.magazie_bucati; v_after public.magazie_bucati; v_cor public.izo_corectii;
+    v_proiect bigint; v_ev bigint; v_event public.magazie_bucati_evenimente; v_move public.magazie_bucati_miscari;
+  BEGIN
+    v_uid := public.fn_izo_cor_api_verifica();
+    SELECT b.proiect_id INTO v_proiect FROM public.magazie_bucati b WHERE b.id=p_bucata_id AND b.provenienta='beneficiar';
+    IF NOT public.fn_izo_cor_autorizare_lock(v_proiect,'responsabil',NULL) THEN
+      RAISE EXCEPTION 'E3b: bucata nu exista sau nu ai acces' USING ERRCODE='42501'; END IF;
+    PERFORM public.fn_izo_blocheaza_tabele();
+    PERFORM public.fn_izo_lock_partajat(VARIADIC ARRAY[v_proiect]);
+    SELECT b.* INTO v_b FROM public.magazie_bucati b WHERE b.id=p_bucata_id AND b.proiect_id=v_proiect AND b.provenienta='beneficiar' FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'E3b: bucata nu exista sau nu ai acces' USING ERRCODE='42501'; END IF;
+    IF p_server_ver IS DISTINCT FROM v_b.server_ver THEN
+      RAISE EXCEPTION 'E3b: bucata s-a schimbat, reincarca' USING ERRCODE='40001'; END IF;
+    IF jsonb_typeof(p_dupa) IS DISTINCT FROM 'object' OR p_dupa='{}'::jsonb
+      OR p_motiv IS NULL OR char_length(btrim(p_motiv)) NOT BETWEEN 3 AND 1000 THEN
+      RAISE EXCEPTION 'E3b: cerere invalida' USING ERRCODE='22023'; END IF;
+    IF p_dupa ?| public.fn_izo_coloane_identitate() THEN
+      RAISE EXCEPTION 'E3b: trimite prin propunere' USING ERRCODE='22023'; END IF;
+    IF EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.bucata_id=v_b.id AND cor.stare='propusa') THEN
+      RAISE EXCEPTION 'E3b: exista o propunere deschisa pe bucata - decide / retrage intai' USING ERRCODE='23505'; END IF;
+    BEGIN
+    INSERT INTO public.izo_corectii(proiect_id,tip,bucata_id,inainte,dupa,motiv,stare,versiune,cale,propus_de,propus_rol,propus_la)
+      VALUES(v_proiect,'camp',v_b.id,NULL,p_dupa,btrim(p_motiv),'propusa',1,'direct',v_uid,session_user,now()) RETURNING * INTO v_cor;
+    v_after:=jsonb_populate_record(NULL::public.magazie_bucati,public.fn_izo_cor_bucata_dupa(v_cor,v_b));
+    IF EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.id<>v_b.id AND b.provenienta='beneficiar' AND b.tip_cod=v_after.tip_cod AND b.stare<>'anulata'
+          AND b.serie_canon=public.fn_izo_canon_serie(v_after.serie)
+          AND ((b.tip_cod='teava' AND b.dezambiguare IS NOT DISTINCT FROM v_after.dezambiguare
+            AND (b.parinte_id IS NULL OR (b.stare<>'taiata' AND b.sarja IS NOT DISTINCT FROM v_after.sarja
+              AND b.lungime_cm IS NOT DISTINCT FROM round(v_after.lungime_mm/10.0)::integer)))
+          OR (b.tip_cod='curba' AND b.sarja IS NOT DISTINCT FROM v_after.sarja AND b.unghi_curba IS NOT DISTINCT FROM v_after.unghi_curba
+            AND b.cod_bucata IS NOT DISTINCT FROM v_after.cod_bucata))) THEN
+      RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505'; END IF;
+    PERFORM public.fn_izo_cor_marcheaza(v_cor.id);
+    v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
+    INSERT INTO public.magazie_bucati_evenimente(tip, proiect_id, document_tip, document_id, import_id, storno_de_eveniment_id, motiv, declarat_de, aplicat_de, aplicat_rol, ora_tableta, dispozitiv_id, server_ver) SELECT v_event.tip, v_event.proiect_id, v_event.document_tip, v_event.document_id, v_event.import_id, v_event.storno_de_eveniment_id, v_event.motiv, v_event.declarat_de, v_event.aplicat_de, v_event.aplicat_rol, v_event.ora_tableta, v_event.dispozitiv_id, nextval('public.izo_server_ver_seq') RETURNING id INTO v_ev;
+    v_move:=jsonb_populate_record(NULL::public.magazie_bucati_miscari,public.fn_izo_cor_miscare_asteptata(v_cor,v_b));
+    INSERT INTO public.magazie_bucati_miscari(eveniment_id, proiect_id, bucata_id, rol, stare_inainte, stare_dupa, din_loc, in_loc, lungime_mm, inainte, dupa, server_ver) SELECT v_move.eveniment_id, v_move.proiect_id, v_move.bucata_id, v_move.rol, v_move.stare_inainte, v_move.stare_dupa, v_move.din_loc, v_move.in_loc, v_move.lungime_mm, v_move.inainte, v_move.dupa, nextval('public.izo_server_ver_seq');
+    UPDATE public.magazie_bucati SET depozit_id=v_after.depozit_id, diametru_mm=v_after.diametru_mm, dimensiune=v_after.dimensiune, grad_otel=v_after.grad_otel, greutate_kg=v_after.greutate_kg, izolatie=v_after.izolatie, lot=v_after.lot, lungime_aviz_mm=v_after.lungime_aviz_mm, lungime_m=v_after.lungime_m, lungime_masurata_mm=v_after.lungime_masurata_mm, lungime_mm=v_after.lungime_mm, lungime_originala_m=v_after.lungime_originala_m, perete_mm=v_after.perete_mm, sarja=v_after.sarja, serie=v_after.serie, standard=v_after.standard, stare=v_after.stare, unghi_curba=v_after.unghi_curba,server_ver=nextval('public.izo_server_ver_seq'),updated_at=now()
+      WHERE id=v_b.id RETURNING * INTO v_b;
+    UPDATE public.izo_corectii SET stare='aplicata',versiune=versiune+1,decis_de=v_uid,decis_rol=session_user,decis_la=now(),eveniment_id=v_ev
+      WHERE id=v_cor.id;
+    RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'inainte',v_cor.inainte,'dupa',v_cor.dupa,'server_ver',v_b.server_ver);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+    END;
+  EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    RAISE EXCEPTION 'E3b: valoare invalida' USING ERRCODE='22023';
+  END $f$;
+
+  CREATE FUNCTION public.fn_izo_cor_pv(p_doc_id bigint, p_versiune bigint, p_pv_nr text, p_pv_data date, p_motiv text) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_uid uuid; v_doc public.izo_documente_intrare; v_cor public.izo_corectii;
+    v_ev bigint; v_event public.magazie_bucati_evenimente;
+  BEGIN
+    v_uid := public.fn_izo_cor_api_verifica();
+    SELECT doc.* INTO v_doc FROM public.izo_documente_intrare doc WHERE doc.id=p_doc_id FOR UPDATE;
+    IF NOT FOUND OR NOT public.fn_izo_cor_autorizare_lock(v_doc.proiect_id,'responsabil',NULL) THEN
+      RAISE EXCEPTION 'E3b: documentul nu exista sau nu ai acces' USING ERRCODE='42501'; END IF;
+    PERFORM public.fn_izo_blocheaza_tabele();
+    PERFORM public.fn_izo_lock_partajat(VARIADIC ARRAY[v_doc.proiect_id]);
+    IF p_versiune IS DISTINCT FROM v_doc.versiune THEN
+      RAISE EXCEPTION 'E3b: documentul s-a schimbat, reincarca' USING ERRCODE='40001'; END IF;
+    IF v_doc.stare<>'confirmat' OR v_doc.eveniment_pv_id IS NULL THEN
+      RAISE EXCEPTION 'E3b: document neconfirmat sau fara PV' USING ERRCODE='22023'; END IF;
+    IF p_motiv IS NULL OR char_length(btrim(p_motiv)) NOT BETWEEN 3 AND 1000 THEN
+      RAISE EXCEPTION 'E3b: motiv invalid' USING ERRCODE='22023'; END IF;
+    INSERT INTO public.izo_corectii(proiect_id,tip,document_intrare_id,inainte,dupa,motiv,stare,versiune,cale,propus_de,propus_rol,propus_la)
+      VALUES(v_doc.proiect_id,'pv',v_doc.id,NULL,jsonb_build_object('pv_nr',p_pv_nr,'pv_data',p_pv_data),
+        btrim(p_motiv),'propusa',1,'direct',v_uid,session_user,now()) RETURNING * INTO v_cor;
+    PERFORM public.fn_izo_cor_marcheaza(v_cor.id);
+    v_event:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,public.fn_izo_cor_eveniment_asteptat(v_cor));
+    INSERT INTO public.magazie_bucati_evenimente(tip, proiect_id, document_tip, document_id, import_id, storno_de_eveniment_id, motiv, declarat_de, aplicat_de, aplicat_rol, ora_tableta, dispozitiv_id, server_ver) SELECT v_event.tip, v_event.proiect_id, v_event.document_tip, v_event.document_id, v_event.import_id, v_event.storno_de_eveniment_id, v_event.motiv, v_event.declarat_de, v_event.aplicat_de, v_event.aplicat_rol, v_event.ora_tableta, v_event.dispozitiv_id, nextval('public.izo_server_ver_seq') RETURNING id INTO v_ev;
+    UPDATE public.izo_documente_intrare SET pv_nr=v_cor.dupa->>'pv_nr',pv_nr_canon=v_cor.dupa->>'pv_nr_canon',
+      pv_data=(v_cor.dupa->>'pv_data')::date,versiune=versiune+1,updated_at=now() WHERE id=v_doc.id RETURNING * INTO v_doc;
+    UPDATE public.izo_corectii SET stare='aplicata',versiune=versiune+1,decis_de=v_uid,decis_rol=session_user,decis_la=now(),eveniment_id=v_ev
+      WHERE id=v_cor.id;
+    RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_ev,'document_id',v_doc.id,'versiune',v_doc.versiune);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'E3b: conflict de unicitate in registru' USING ERRCODE='23505';
+  END $f$;
+
   -- C1: frontiera de propuneri (§1, §4, §5.6).
   CREATE FUNCTION public.fn_izo_cor_propune(p_tip text, p_proiect bigint, p_bucata_id bigint, p_detalii jsonb, p_motiv text) RETURNS jsonb
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
@@ -1323,6 +1407,20 @@ BEGIN
   REVOKE ALL ON FUNCTION public.fn_izo_cor_aproba(bigint, bigint) FROM PUBLIC, anon, authenticated, service_role;
   GRANT EXECUTE ON FUNCTION public.fn_izo_cor_aproba(bigint, bigint) TO authenticated;
   RESET ROLE;
+  GRANT CREATE ON SCHEMA public TO izo_corectie_writer;
+  ALTER FUNCTION public.fn_izo_cor_camp(bigint, bigint, jsonb, text) OWNER TO izo_corectie_writer;
+  REVOKE CREATE ON SCHEMA public FROM izo_corectie_writer;
+  SET LOCAL ROLE izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_camp(bigint, bigint, jsonb, text) FROM PUBLIC, anon, authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.fn_izo_cor_camp(bigint, bigint, jsonb, text) TO authenticated;
+  RESET ROLE;
+  GRANT CREATE ON SCHEMA public TO izo_corectie_writer;
+  ALTER FUNCTION public.fn_izo_cor_pv(bigint, bigint, text, date, text) OWNER TO izo_corectie_writer;
+  REVOKE CREATE ON SCHEMA public FROM izo_corectie_writer;
+  SET LOCAL ROLE izo_corectie_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_cor_pv(bigint, bigint, text, date, text) FROM PUBLIC, anon, authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.fn_izo_cor_pv(bigint, bigint, text, date, text) TO authenticated;
+  RESET ROLE;
 
 
 
@@ -1332,7 +1430,7 @@ BEGIN
     SELECT md5(concat_ws(' | ',
       (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s',pr.oid::regprocedure,pg_get_userbyid(pr.proowner),pr.prosecdef,
         pr.provolatile,pr.proconfig,pr.proacl,md5(pr.prosrc)),',' ORDER BY pr.oid::regprocedure::text)
-        FROM pg_proc pr WHERE pr.pronamespace='public'::regnamespace AND pr.proname=ANY(ARRAY['fn_izo_cor_chei', 'fn_izo_cor_autorizare_lock', 'fn_izo_cor_cerut_de_valid', 'fn_izo_cor_bucata_lock', 'fn_izo_cor_doc_lock', 'fn_izo_cor_deschise', 'fn_izo_cor_api_verifica', 'fn_izo_cor_adm_verifica', 'fn_izo_cor_marcheaza', 'fn_izo_cor_loc', 'fn_izo_cor_tinta_iesire', 'fn_izo_cor_valori', 'fn_izo_cor_valideaza', 'fn_izo_cor_inainte', 'fn_izo_cor_eveniment_asteptat', 'fn_izo_cor_bucata_dupa', 'fn_izo_cor_bucata_noua', 'fn_izo_cor_miscare_asteptata', 'fn_izo_garda_corectie', 'fn_izo_cor_garda', 'fn_izo_cor_propune', 'fn_izo_cor_retrage', 'fn_izo_cor_respinge', 'fn_izo_cor_verifica', 'fn_izo_cor_aproba']::text[])),
+        FROM pg_proc pr WHERE pr.pronamespace='public'::regnamespace AND pr.proname=ANY(ARRAY['fn_izo_cor_chei', 'fn_izo_cor_autorizare_lock', 'fn_izo_cor_cerut_de_valid', 'fn_izo_cor_bucata_lock', 'fn_izo_cor_doc_lock', 'fn_izo_cor_deschise', 'fn_izo_cor_api_verifica', 'fn_izo_cor_adm_verifica', 'fn_izo_cor_marcheaza', 'fn_izo_cor_loc', 'fn_izo_cor_tinta_iesire', 'fn_izo_cor_valori', 'fn_izo_cor_valideaza', 'fn_izo_cor_inainte', 'fn_izo_cor_eveniment_asteptat', 'fn_izo_cor_bucata_dupa', 'fn_izo_cor_bucata_noua', 'fn_izo_cor_miscare_asteptata', 'fn_izo_garda_corectie', 'fn_izo_cor_garda', 'fn_izo_cor_propune', 'fn_izo_cor_retrage', 'fn_izo_cor_respinge', 'fn_izo_cor_verifica', 'fn_izo_cor_aproba', 'fn_izo_cor_camp', 'fn_izo_cor_pv']::text[])),
       (SELECT string_agg(format('%s:%s:%s:%s:%s', c.relname, pg_get_userbyid(c.relowner), c.relacl::text,
         c.relrowsecurity, c.relforcerowsecurity), ',' ORDER BY c.relname)
         FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN
@@ -1702,6 +1800,20 @@ BEGIN
     IF has_function_privilege('izo_receptie_writer', 'public.fn_izo_cor_aproba(bigint, bigint)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_receptie_writer public.fn_izo_cor_aproba(bigint, bigint)'); END IF;
     IF has_function_privilege('izo_cor_editor', 'public.fn_izo_cor_aproba(bigint, bigint)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_cor_editor public.fn_izo_cor_aproba(bigint, bigint)'); END IF;
     IF has_function_privilege('izo_corectie_writer', 'public.fn_izo_cor_aproba(bigint, bigint)', 'EXECUTE') IS DISTINCT FROM true THEN v := array_append(v, 'EXECUTE izo_corectie_writer public.fn_izo_cor_aproba(bigint, bigint)'); END IF;
+    IF has_function_privilege('anon', 'public.fn_izo_cor_camp(bigint, bigint, jsonb, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE anon public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF has_function_privilege('authenticated', 'public.fn_izo_cor_camp(bigint, bigint, jsonb, text)', 'EXECUTE') IS DISTINCT FROM true THEN v := array_append(v, 'EXECUTE authenticated public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF has_function_privilege('service_role', 'public.fn_izo_cor_camp(bigint, bigint, jsonb, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE service_role public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF has_function_privilege('izo_registru_writer', 'public.fn_izo_cor_camp(bigint, bigint, jsonb, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_registru_writer public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF has_function_privilege('izo_receptie_writer', 'public.fn_izo_cor_camp(bigint, bigint, jsonb, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_receptie_writer public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF has_function_privilege('izo_cor_editor', 'public.fn_izo_cor_camp(bigint, bigint, jsonb, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_cor_editor public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF has_function_privilege('izo_corectie_writer', 'public.fn_izo_cor_camp(bigint, bigint, jsonb, text)', 'EXECUTE') IS DISTINCT FROM true THEN v := array_append(v, 'EXECUTE izo_corectie_writer public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF has_function_privilege('anon', 'public.fn_izo_cor_pv(bigint, bigint, text, date, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE anon public.fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
+    IF has_function_privilege('authenticated', 'public.fn_izo_cor_pv(bigint, bigint, text, date, text)', 'EXECUTE') IS DISTINCT FROM true THEN v := array_append(v, 'EXECUTE authenticated public.fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
+    IF has_function_privilege('service_role', 'public.fn_izo_cor_pv(bigint, bigint, text, date, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE service_role public.fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
+    IF has_function_privilege('izo_registru_writer', 'public.fn_izo_cor_pv(bigint, bigint, text, date, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_registru_writer public.fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
+    IF has_function_privilege('izo_receptie_writer', 'public.fn_izo_cor_pv(bigint, bigint, text, date, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_receptie_writer public.fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
+    IF has_function_privilege('izo_cor_editor', 'public.fn_izo_cor_pv(bigint, bigint, text, date, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE izo_cor_editor public.fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
+    IF has_function_privilege('izo_corectie_writer', 'public.fn_izo_cor_pv(bigint, bigint, text, date, text)', 'EXECUTE') IS DISTINCT FROM true THEN v := array_append(v, 'EXECUTE izo_corectie_writer public.fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
     IF has_function_privilege('anon', 'public.fn_izo_cor_chei(text, text, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE anon public.fn_izo_cor_chei(text, text, text)'); END IF;
     IF has_function_privilege('authenticated', 'public.fn_izo_cor_chei(text, text, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE authenticated public.fn_izo_cor_chei(text, text, text)'); END IF;
     IF has_function_privilege('service_role', 'public.fn_izo_cor_chei(text, text, text)', 'EXECUTE') IS DISTINCT FROM false THEN v := array_append(v, 'EXECUTE service_role public.fn_izo_cor_chei(text, text, text)'); END IF;
@@ -1867,6 +1979,8 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.fn_izo_cor_respinge(bigint, bigint, text)'::regprocedure AND proowner='izo_cor_editor'::regrole AND prosecdef AND proconfig=ARRAY['search_path=public, pg_temp']) THEN v := array_append(v,'définition fn_izo_cor_respinge(bigint, bigint, text)'); END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.fn_izo_cor_verifica(bigint, text, bigint, bigint, jsonb)'::regprocedure AND proowner='izo_cor_editor'::regrole AND prosecdef AND proconfig=ARRAY['search_path=public, pg_temp']) THEN v := array_append(v,'définition fn_izo_cor_verifica(bigint, text, bigint, bigint, jsonb)'); END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.fn_izo_cor_aproba(bigint, bigint)'::regprocedure AND proowner='izo_corectie_writer'::regrole AND prosecdef AND proconfig=ARRAY['search_path=public, pg_temp']) THEN v := array_append(v,'définition fn_izo_cor_aproba(bigint, bigint)'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.fn_izo_cor_camp(bigint, bigint, jsonb, text)'::regprocedure AND proowner='izo_corectie_writer'::regrole AND prosecdef AND proconfig=ARRAY['search_path=public, pg_temp']) THEN v := array_append(v,'définition fn_izo_cor_camp(bigint, bigint, jsonb, text)'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='public.fn_izo_cor_pv(bigint, bigint, text, date, text)'::regprocedure AND proowner='izo_corectie_writer'::regrole AND prosecdef AND proconfig=ARRAY['search_path=public, pg_temp']) THEN v := array_append(v,'définition fn_izo_cor_pv(bigint, bigint, text, date, text)'); END IF;
     IF EXISTS (SELECT 1 FROM pg_proc p CROSS JOIN unnest(ARRAY['anon','service_role']) api(n)
         WHERE p.pronamespace='public'::regnamespace AND p.proname LIKE 'fn\_izo\_cor\_%' AND has_function_privilege(api.n,p.oid,'EXECUTE')) THEN
       v := array_append(v,'API poate executa helpere E3b');

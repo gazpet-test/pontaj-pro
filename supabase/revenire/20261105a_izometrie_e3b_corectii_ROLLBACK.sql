@@ -314,6 +314,12 @@ BEGIN
   DROP TRIGGER trg_izo_cor_garda ON public.izo_corectii_bucati;
   DROP TRIGGER trg_izo_cor_truncate ON public.izo_corectii_bucati;
   SET LOCAL ROLE izo_corectie_writer;
+  DROP FUNCTION public.fn_izo_cor_pv(bigint, bigint, text, date, text);
+  RESET ROLE;
+  SET LOCAL ROLE izo_corectie_writer;
+  DROP FUNCTION public.fn_izo_cor_camp(bigint, bigint, jsonb, text);
+  RESET ROLE;
+  SET LOCAL ROLE izo_corectie_writer;
   DROP FUNCTION public.fn_izo_cor_aproba(bigint, bigint);
   RESET ROLE;
   SET LOCAL ROLE izo_cor_editor;

@@ -124,7 +124,7 @@ DECLARE v_fn record; v_g record;
 BEGIN
   FOR v_fn IN SELECT pr.*,pg_get_userbyid(pr.proowner) AS owner_name FROM pg_proc pr
     WHERE pr.pronamespace='public'::regnamespace AND (pr.proname LIKE 'fn\_izo\_cor\_%' OR pr.proname='fn_izo_garda_corectie')
-      AND pr.proname NOT IN ('fn_izo_cor_propune','fn_izo_cor_retrage','fn_izo_cor_respinge','fn_izo_cor_verifica','fn_izo_cor_aproba') LOOP
+      AND pr.proname NOT IN ('fn_izo_cor_propune','fn_izo_cor_retrage','fn_izo_cor_respinge','fn_izo_cor_verifica','fn_izo_cor_aproba','fn_izo_cor_camp','fn_izo_cor_pv') LOOP
     IF v_fn.owner_name IS DISTINCT FROM (CASE WHEN v_fn.proname='fn_izo_cor_marcheaza' THEN 'izo_corectie_writer' ELSE 'postgres' END)
       OR v_fn.prosecdef IS DISTINCT FROM (v_fn.proname IN ('fn_izo_cor_autorizare_lock','fn_izo_cor_cerut_de_valid',
         'fn_izo_cor_bucata_lock','fn_izo_cor_doc_lock','fn_izo_cor_deschise'))
@@ -567,3 +567,223 @@ END $camp$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 ROLLBACK;
+
+-- C2: fluxul real E3 pregateste documentele; toate fixture-urile dispar la ROLLBACK.
+BEGIN;
+SET LOCAL ROLE izo_registru_writer;
+SELECT set_config('izo.registru_tx',txid_current()::text,true);
+INSERT INTO public.izo_proiect_config(proiect_id,nivel_izo,server_ver)
+  VALUES(3,'stoc',nextval('public.izo_server_ver_seq'));
+RESET ROLE;
+SELECT set_config('izo.registru_tx','',true);
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de,motiv) VALUES
+  (3,'00000000-0000-0000-0000-000000000030','gestionar',11,'test','fixture C2'),
+  (3,'00000000-0000-0000-0000-000000000117','manager_aprobator',NULL,'test','fixture C2');
+INSERT INTO public.user_module_access(profile_id,module,access_level)
+  VALUES('00000000-0000-0000-0000-000000000117','magazie','editor');
+SET SESSION AUTHORIZATION authenticator;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+SET LOCAL ROLE authenticated;
+DO $c2_fixture$
+DECLARE v_r jsonb; v_ver jsonb; v_doc bigint;
+BEGIN
+  v_r:=public.fn_izo_doc_salveaza(NULL,NULL,
+    '{"proiect_id":3,"depozit_id":11,"sablon":"aviz_teava","furnizor":"C2 Furnizor","nr_document":"C2 CONF","data_document":"2026-10-22","total_m":12}',
+    '[{"nr_crt":1,"serie":"C2-TEAVA","sarja":"C2-S","perete_mm":8,"lungime_doc_mm":12000}]',NULL);
+  v_doc:=(v_r->>'document_id')::bigint;
+  PERFORM set_config('test.c2_doc',v_doc::text,true);
+  v_ver:=public.fn_izo_doc_verifica(v_doc);
+  v_r:=public.fn_izo_doc_confirma(v_doc,(v_ver->>'versiune')::bigint,v_ver->>'hash');
+  PERFORM set_config('test.c2_bucata',v_r->'bucati'->>0,true);
+  PERFORM set_config('izo.receptie_ctx','',true); -- tranzactie E3 noua simulata
+  v_r:=public.fn_izo_doc_salveaza(NULL,NULL,
+    '{"proiect_id":3,"depozit_id":11,"sablon":"aviz_teava","furnizor":"C2 Furnizor","nr_document":"C2 DRAFT","data_document":"2026-10-22"}',
+    '[]',NULL);
+  PERFORM set_config('test.c2_draft',v_r->>'document_id',true);
+END $c2_fixture$;
+
+-- Gestionarul are acces de citire, dar nu drept de corectie directa, nici la PV.
+DO $c2_neg_gestionar$
+DECLARE v_id bigint:=current_setting('test.c2_bucata')::bigint; v_sv bigint;
+BEGIN
+  SELECT b.server_ver INTO v_sv FROM public.magazie_bucati b WHERE b.id=v_id;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_camp(v_id,v_sv,'{"perete_mm":9}','test gestionar');
+    RAISE EXCEPTION 'C2 gestionar camp a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_pv(current_setting('test.c2_doc')::bigint,2,'C2-PV','2026-10-22','test gestionar');
+    RAISE EXCEPTION 'C2 gestionar PV a trecut';
+  EXCEPTION WHEN SQLSTATE '42501' THEN NULL; END;
+END $c2_neg_gestionar$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $c2_neg$
+DECLARE v_id bigint:=current_setting('test.c2_bucata')::bigint; v_sv bigint; v_delta jsonb;
+BEGIN
+  SELECT b.server_ver INTO v_sv FROM public.magazie_bucati b WHERE b.id=v_id;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_camp(v_id,v_sv,'{"serie":"C2-IDENT"}','test identitate');
+    RAISE EXCEPTION 'C2 identitate directa a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN
+    IF SQLERRM NOT LIKE '%trimite prin propunere%' THEN RAISE; END IF;
+  END;
+  FOREACH v_delta IN ARRAY ARRAY['{"observatii":"interzis"}'::jsonb,'{"lungime_mm":11000}'::jsonb,
+      '{"stare":"carantina"}'::jsonb,'{}'::jsonb,'{"perete_mm":8}'::jsonb,'{"perete_mm":-1}'::jsonb] LOOP
+    BEGIN
+      PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+      PERFORM public.fn_izo_cor_camp(v_id,v_sv,v_delta,'test lista sau valoare');
+      RAISE EXCEPTION 'C2 cerere camp invalida a trecut: %',v_delta;
+    EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  END LOOP;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_camp(v_id,-1,'{"perete_mm":9}','test CAS');
+    RAISE EXCEPTION 'C2 server_ver vechi a trecut';
+  EXCEPTION WHEN SQLSTATE '40001' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_pv(current_setting('test.c2_draft')::bigint,1,'C2-PV','2026-10-22','test draft');
+    RAISE EXCEPTION 'C2 PV draft a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_pv(current_setting('test.c2_doc')::bigint,2,'C2-PV','2026-10-22','test fara PV');
+    RAISE EXCEPTION 'C2 confirmat fara PV a trecut';
+  EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  IF EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.bucata_id=v_id OR cor.document_intrare_id=current_setting('test.c2_doc')::bigint) THEN
+    RAISE EXCEPTION 'C2 refuzurile au lasat corectii'; END IF;
+END $c2_neg$;
+
+-- Punerea initiala a PV-ului apartine E3, gestionarului.
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+SELECT set_config('izo.receptie_ctx','',true);
+SELECT public.fn_izo_doc_pv(current_setting('test.c2_doc')::bigint,2,'C2 INITIAL','2026-10-21');
+SELECT set_config('izo.receptie_ctx','',true);
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $c2_neg_pv$
+DECLARE v_doc bigint:=current_setting('test.c2_doc')::bigint; v_delta text;
+BEGIN
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_pv(v_doc,2,'C2 NOU','2026-10-22','test versiune veche');
+    RAISE EXCEPTION 'C2 versiune PV veche a trecut';
+  EXCEPTION WHEN SQLSTATE '40001' THEN NULL; END;
+  FOREACH v_delta IN ARRAY ARRAY['','PV|INVALID','C2 INITIAL',' c2   initial '] LOOP
+    BEGIN
+      PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+      PERFORM public.fn_izo_cor_pv(v_doc,3,v_delta,'2026-10-21','test PV invalid sau egal');
+      RAISE EXCEPTION 'C2 PV invalid a trecut';
+    EXCEPTION WHEN SQLSTATE '22023' THEN NULL; END;
+  END LOOP;
+END $c2_neg_pv$;
+
+-- O propunere deschisa blocheaza corectia directa pana la retragere.
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $c2_propunere$ DECLARE v_r jsonb; BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+  v_r:=public.fn_izo_cor_propune('camp',3,current_setting('test.c2_bucata')::bigint,'{"lot":"C2 LOT"}','fixture propunere deschisa');
+  PERFORM set_config('test.c2_prop',v_r->>'corectie_id',true);
+END $c2_propunere$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $c2_neg_deschisa$
+DECLARE v_id bigint:=current_setting('test.c2_bucata')::bigint; v_sv bigint;
+BEGIN
+  SELECT b.server_ver INTO v_sv FROM public.magazie_bucati b WHERE b.id=v_id;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_camp(v_id,v_sv,'{"perete_mm":9}','test propunere deschisa');
+    RAISE EXCEPTION 'C2 propunere deschisa ignorata';
+  EXCEPTION WHEN SQLSTATE '23505' THEN
+    IF SQLERRM NOT LIKE '%propunere deschisa%' THEN RAISE; END IF;
+  END;
+  IF (SELECT b.server_ver FROM public.magazie_bucati b WHERE b.id=v_id) IS DISTINCT FROM v_sv
+    OR EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.bucata_id=v_id AND cor.cale='direct') THEN
+    RAISE EXCEPTION 'C2 blocarea prin propunere a lasat efecte'; END IF;
+END $c2_neg_deschisa$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000030","role":"authenticated"}',true);
+DO $c2_retrage$ BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+  PERFORM public.fn_izo_cor_retrage(current_setting('test.c2_prop')::bigint,1,'inchidere fixture C2');
+END $c2_retrage$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+
+-- Responsabil non-owner: camp produce exact un eveniment si o miscare, apoi CAS opreste retry-ul vechi.
+DO $c2_camp$
+DECLARE v_id bigint:=current_setting('test.c2_bucata')::bigint; v_b public.magazie_bucati; v_sv bigint;
+  v_r jsonb; v_doc_inainte jsonb; v_ev bigint;
+BEGIN
+  SELECT b.* INTO v_b FROM public.magazie_bucati b WHERE b.id=v_id; v_sv:=v_b.server_ver;
+  SELECT to_jsonb(doc) INTO v_doc_inainte FROM public.izo_documente_intrare doc WHERE doc.id=v_b.aviz_intrare_id;
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+  v_r:=public.fn_izo_cor_camp(v_id,v_sv,'{"perete_mm":"9.0"}','corectie perete C2');
+  v_ev:=(v_r->>'eveniment_id')::bigint;
+  IF (SELECT to_jsonb(b)-ARRAY['perete_mm','server_ver','updated_at'] FROM public.magazie_bucati b WHERE b.id=v_id)
+       IS DISTINCT FROM to_jsonb(v_b)-ARRAY['perete_mm','server_ver','updated_at']
+    OR (SELECT b.perete_mm FROM public.magazie_bucati b WHERE b.id=v_id)<>9
+    OR (v_r->>'server_ver')::bigint<=v_sv
+    OR (SELECT b.server_ver FROM public.magazie_bucati b WHERE b.id=v_id) IS DISTINCT FROM (v_r->>'server_ver')::bigint
+    OR v_r->'inainte' IS DISTINCT FROM jsonb_build_object('perete_mm',8,'server_ver',v_sv)
+    OR v_r->'dupa' IS DISTINCT FROM '{"perete_mm":9}'::jsonb
+    OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente ev WHERE ev.id=v_ev AND ev.tip='corectie'
+      AND ev.document_tip='izo_corectie' AND ev.document_id=v_r->>'corectie_id' AND ev.server_ver IS NOT NULL)
+    OR (SELECT count(*) FROM public.magazie_bucati_miscari mis WHERE mis.eveniment_id=v_ev AND mis.bucata_id=v_id
+      AND mis.rol='corectat' AND mis.inainte=v_r->'inainte' AND mis.dupa=v_r->'dupa' AND mis.lungime_mm IS NULL
+      AND mis.stare_inainte IS NULL AND mis.stare_dupa IS NULL AND mis.server_ver IS NOT NULL)<>1
+    OR NOT EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.id=(v_r->>'corectie_id')::bigint
+      AND cor.cale='direct' AND cor.stare='aplicata' AND cor.decis_de=cor.propus_de AND cor.eveniment_id=v_ev)
+    OR (SELECT to_jsonb(doc) FROM public.izo_documente_intrare doc WHERE doc.id=v_b.aviz_intrare_id) IS DISTINCT FROM v_doc_inainte THEN
+    RAISE EXCEPTION 'C2 camp incomplet: %',v_r; END IF;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_camp(v_id,v_sv,'{"perete_mm":9}','corectie perete C2');
+    RAISE EXCEPTION 'C2 camp retry a trecut';
+  EXCEPTION WHEN SQLSTATE '40001' THEN NULL; END;
+  IF (SELECT count(*) FROM public.izo_corectii cor WHERE cor.bucata_id=v_id AND cor.cale='direct')<>1 THEN RAISE EXCEPTION 'C2 retry camp a duplicat'; END IF;
+END $c2_camp$;
+
+DO $c2_pv$
+DECLARE v_doc bigint:=current_setting('test.c2_doc')::bigint; v_inainte public.izo_documente_intrare;
+  v_r jsonb; v_ev bigint; v_bucati jsonb; v_randuri jsonb; v_evenimente jsonb; v_miscari jsonb;
+BEGIN
+  SELECT doc.* INTO v_inainte FROM public.izo_documente_intrare doc WHERE doc.id=v_doc;
+  SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) INTO v_bucati FROM public.magazie_bucati b WHERE b.aviz_intrare_id=v_doc;
+  SELECT jsonb_agg(to_jsonb(r) ORDER BY r.nr_crt) INTO v_randuri FROM public.izo_documente_intrare_randuri r WHERE r.document_id=v_doc;
+  SELECT to_jsonb(ev) INTO v_evenimente FROM public.magazie_bucati_evenimente ev WHERE ev.id=v_inainte.eveniment_pv_id;
+  SELECT jsonb_agg(to_jsonb(mis) ORDER BY mis.id) INTO v_miscari FROM public.magazie_bucati_miscari mis WHERE mis.eveniment_id=v_inainte.eveniment_pv_id;
+  PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+  v_r:=public.fn_izo_cor_pv(v_doc,v_inainte.versiune,'  C2   corectat  ','2026-10-22','corectie PV C2');
+  v_ev:=(v_r->>'eveniment_id')::bigint;
+  IF v_r->>'document_id'<>v_doc::text OR (v_r->>'versiune')::bigint<>v_inainte.versiune+1
+    OR NOT EXISTS (SELECT 1 FROM public.izo_documente_intrare doc WHERE doc.id=v_doc AND doc.pv_nr='C2   corectat'
+      AND doc.pv_nr_canon='C2 CORECTAT' AND doc.pv_data='2026-10-22' AND doc.versiune=v_inainte.versiune+1)
+    OR (SELECT to_jsonb(doc)-ARRAY['pv_nr','pv_nr_canon','pv_data','versiune','updated_at'] FROM public.izo_documente_intrare doc WHERE doc.id=v_doc)
+      IS DISTINCT FROM to_jsonb(v_inainte)-ARRAY['pv_nr','pv_nr_canon','pv_data','versiune','updated_at']
+    OR NOT EXISTS (SELECT 1 FROM public.magazie_bucati_evenimente ev WHERE ev.id=v_ev AND ev.tip='corectie' AND ev.document_tip='izo_corectie'
+      AND ev.document_id=v_r->>'corectie_id' AND ev.storno_de_eveniment_id IS NULL AND ev.server_ver IS NOT NULL)
+    OR EXISTS (SELECT 1 FROM public.magazie_bucati_miscari mis WHERE mis.eveniment_id=v_ev)
+    OR (SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM public.magazie_bucati b WHERE b.aviz_intrare_id=v_doc) IS DISTINCT FROM v_bucati
+    OR (SELECT jsonb_agg(to_jsonb(r) ORDER BY r.nr_crt) FROM public.izo_documente_intrare_randuri r WHERE r.document_id=v_doc) IS DISTINCT FROM v_randuri
+    OR (SELECT to_jsonb(ev) FROM public.magazie_bucati_evenimente ev WHERE ev.id=v_inainte.eveniment_pv_id) IS DISTINCT FROM v_evenimente
+    OR (SELECT jsonb_agg(to_jsonb(mis) ORDER BY mis.id) FROM public.magazie_bucati_miscari mis WHERE mis.eveniment_id=v_inainte.eveniment_pv_id) IS DISTINCT FROM v_miscari
+    OR NOT EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.id=(v_r->>'corectie_id')::bigint AND cor.tip='pv' AND cor.cale='direct'
+      AND cor.stare='aplicata' AND cor.document_intrare_id=v_doc AND cor.eveniment_id=v_ev
+      AND cor.inainte=jsonb_build_object('pv_nr',v_inainte.pv_nr,'pv_nr_canon',v_inainte.pv_nr_canon,'pv_data',v_inainte.pv_data,'versiune',v_inainte.versiune)) THEN
+    RAISE EXCEPTION 'C2 PV incomplet: %',v_r; END IF;
+  BEGIN
+    PERFORM set_config('izo.corectie_ctx','',true); -- tranzactie noua simulata (PostgREST: un RPC = o tranzactie)
+    PERFORM public.fn_izo_cor_pv(v_doc,v_inainte.versiune,'C2 corectat','2026-10-22','corectie PV C2');
+    RAISE EXCEPTION 'C2 PV retry a trecut';
+  EXCEPTION WHEN SQLSTATE '40001' THEN NULL; END;
+  IF (SELECT count(*) FROM public.izo_corectii cor WHERE cor.document_intrare_id=v_doc AND cor.tip='pv')<>1 THEN
+    RAISE EXCEPTION 'C2 retry PV a duplicat'; END IF;
+END $c2_pv$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK;
+DO $c2_final$ BEGIN
+  IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'C2 poarta dupa rollback'; END IF;
+  RAISE NOTICE 'TESTE E3b-C2: TOATE OK';
+END $c2_final$;

@@ -1,6 +1,6 @@
 -- GENERAT de scripts/izometrie/e3b_gen/gen_e3b.py. NU se editează manual.
-  -- 20261105a: E3b piesele A+B+C1, infrastructură, gărzi și propuneri.
-  -- Design r5: toate Q-E3b-1..18 = A. Operațiile directe, storno și istoricul vin în C2/D.
+  -- 20261105a: E3b piesele A+B+C1+C2, infrastructură, gărzi, propuneri și corecții directe.
+  -- Design r5: toate Q-E3b-1..18 = A. Storno și istoricul vin în D.
 -- Numai runner; nicio modificare de date. Implementare parțială E3b: fluxul propunerilor C1.
 DO $migrare$
 DECLARE v_amprenta text; v_scrisa text; v_inainte text; v_comentariu text;

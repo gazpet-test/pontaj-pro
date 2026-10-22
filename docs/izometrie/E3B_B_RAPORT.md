@@ -6,3 +6,10 @@
 - §5.0 / §5.2 / §5.3: eligibilitatea, PV-ul și țintele de stare refolosesc B. Găsit nou intră în carantină, cu sursă manuală și `atribute.sursa=e3b`. §5.6 / Q18=A: verificarea arată doar coliziuni vizibile; aprobarea verifică global și păstrează indexul arbitru, cu 23505 generic. Retry-ul aprobatorului, cu versiunea anterioară, nu scrie din nou.
 - Teste: generatorul, 6 teste PASS (inclusiv generare repetabilă, LIVE nemodificat, frontiera C1, lista INSERT C și rollback). SQL adăugat cu identitate `authenticator` + JWT + `authenticated`, integral în tranzacție anulată: negativele cerute, patru ochi inclusiv owner, CAS, toate fluxurile de stare, camp cu derivate, cele două verificări, retragere/respingere și retry.
 - Nu am executat SQL, PostgreSQL 16, PostgREST sau harness-ul: restricția brief-ului interzice accesul la baze de date. Testele SQL rămân de executat de Claude; PASS-ul Python nu certifică execuția PL/pgSQL. Nu sunt incluse camp direct, PV, storno și istoric (C2/D).
+
+## C2
+
+- Adăugate `fn_izo_cor_camp` și `fn_izo_cor_pv` în `scripts/izometrie/e3b_gen/e3b_operatii_tpl.sql`: autorizare responsabil, CAS, ordinea lock-urilor §4, normalizare prin garda B, marcaj intern și audit. PV produce zero mișcări; recepția inițială rămâne intactă. Migrarea/rollback-ul regenerate includ ACL, owneri și ștampile.
+- Teste SQL adăugate în `supabase/tests/izometrie_e3b.test.sql`, cu fixture E3 prin RPC și responsabil non-owner: refuz gestionar, identitate/listă/derivate/valori, CAS, draft/fără PV, propunere deschisă; succes camp/PV și verificarea auditului/invariantelor. Retry cu versiunea veche → 40001, fără duplicate, conform designului §9.17; retry-ul idempotent C1 rămâne neschimbat. `observatii` este exclus din L (§2.5); pozitivul folosește `perete_mm`.
+- Verificare executată: generator + 7 teste Python PASS, inclusiv repetabilitate, LIVE nemodificat, ACL/owner/ștampile/rollback și frontiera 0e a noilor RPC-uri.
+- Nu am rulat PostgreSQL 16, SQL, PostgREST sau harness-ul: brief-ul interzice accesul la baze de date. Execuția PL/pgSQL și concurența rămân de verificat de Claude. Fără modificări în `src/`, Git, secrete, rețea sau deploy.

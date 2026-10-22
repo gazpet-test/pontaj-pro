@@ -108,7 +108,7 @@ class GeneratorTest(unittest.TestCase):
         mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
         rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
         self.assertEqual(len(g.FN_C1), 5)
-        for signature, owner in g.FN_C1.items():
+        for signature, owner in g.FN_OPERATII.items():
             name = signature.split('(')[0]
             block = g.bloc_functie(mig, name)
             self.assertIn('SECURITY DEFINER SET search_path = public, pg_temp', block)
@@ -126,6 +126,45 @@ class GeneratorTest(unittest.TestCase):
         self.assertLess(body.index('FOR SHARE'), body.index('FOR UPDATE'))
         self.assertLess(body.index('fn_izo_blocheaza_tabele'), body.index('fn_izo_cor_marcheaza'))
         self.assertNotIn('set_config', g.prosrc(g.bloc_functie(mig, 'fn_izo_cor_verifica')))
+
+    def test_c2_acl_stampile_rollback_si_frontiera_fara_guc(self):
+        mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
+        rev = (R / 'supabase/revenire/20261105a_izometrie_e3b_corectii_ROLLBACK.sql').read_text(encoding='utf-8')
+        self.assertEqual(g.FN_C2, {
+            'fn_izo_cor_camp(bigint, bigint, jsonb, text)': 'izo_corectie_writer',
+            'fn_izo_cor_pv(bigint, bigint, text, date, text)': 'izo_corectie_writer',
+        })
+        self.assertEqual(g.FN_OPERATII, g.FN_C1 | g.FN_C2)
+        stamp = g.prosrc(g.bloc_functie(mig, 'fn_izo_porti_e3b_definitii'))
+        for signature, owner in g.FN_C2.items():
+            name = signature.split('(')[0]
+            self.assertIn(name, stamp)
+            self.assertIn('DROP FUNCTION public.' + signature + ';', rev)
+            self.assertIn("'public.%s'::regprocedure AND proowner='%s'::regrole" % (signature, owner), mig)
+            body = g.prosrc(g.bloc_functie(mig, name))
+            # Inclusiv comentariile: aceeasi frontiera permanenta ca 0e.
+            self.assertNotRegex(body.lower(), r'set_config|request\s*\.\s*jwt|session[_\s]+authorization|\b(?:set|reset)\s+(?:local\s+)?role\b|\bexecute\b|\bu&')
+            self.assertIn("'responsabil',NULL", body)
+            self.assertNotIn("'gestionar'", body)
+            self.assertEqual(body.count('fn_izo_cor_marcheaza('), 1)
+            self.assertLess(body.index('fn_izo_blocheaza_tabele'), body.index('fn_izo_lock_partajat'))
+            self.assertLess(body.index('fn_izo_lock_partajat'), body.index('INSERT INTO public.izo_corectii'))
+            self.assertLess(body.index('RETURNING * INTO v_cor'), body.index('fn_izo_cor_marcheaza'))
+            self.assertLess(body.index('fn_izo_cor_marcheaza'), body.index('INSERT INTO public.magazie_bucati_evenimente'))
+        camp = g.prosrc(g.bloc_functie(mig, 'fn_izo_cor_camp'))
+        self.assertLess(camp.index('fn_izo_lock_partajat'), camp.index('FOR UPDATE'))
+        self.assertLess(camp.index('FOR UPDATE'), camp.index('INSERT INTO public.izo_corectii'))
+        self.assertIn('p_server_ver IS DISTINCT FROM v_b.server_ver', camp)
+        self.assertIn('trimite prin propunere', camp)
+        self.assertIn('fn_izo_cor_miscare_asteptata(v_cor,v_b)', camp)
+        self.assertNotIn('UPDATE public.izo_documente_intrare', camp)
+        pv = g.prosrc(g.bloc_functie(mig, 'fn_izo_cor_pv'))
+        self.assertLess(pv.index('FOR UPDATE'), pv.index('fn_izo_cor_autorizare_lock'))
+        self.assertIn('p_versiune IS DISTINCT FROM v_doc.versiune', pv)
+        self.assertNotIn('INSERT INTO public.magazie_bucati_miscari', pv)
+        self.assertNotIn('UPDATE public.magazie_bucati', pv)
+        self.assertNotIn('fn_izo_doc_anuleaza', pv)
+        self.assertNotIn("'storno_pv'", pv)
 
     def test_transfer_owner_nesuperuser(self):
         mig = (R / 'supabase/migrations/20261105a_izometrie_e3b_corectii.sql').read_text(encoding='utf-8')
