@@ -48,7 +48,12 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
     pas()
     Promise.resolve(promisiune).then(v => inchide(resolve, v), e => inchide(reject, e))
   })
-  const pauza = ms => new Promise(resolve => timers.setTimeout(resolve, ms))
+  // pauză anulabilă: verifică contextul la cel mult 250 ms și nu lasă timere după abandon (Copilot B4 P2)
+  const pauza = ms => new Promise(resolve => {
+    const final = timers.now() + ms
+    const pas = () => { if (!actual() || timers.now() >= final) return resolve(); timers.setTimeout(pas, Math.min(250, final - timers.now())) }
+    pas()
+  })
   const apel = async (body, termen) => {
     verifica()
     const r = await asteapta(raspunsInvokeOCR(invoke, 'izo-e3-ocr-local', body), termen)
@@ -65,6 +70,13 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
     const start = timers.now()
     let r = await apel({ op:'cere', pdf_base64, proiect_id, depozit_id, sablon }, start + local + marja)
     // B2 nu întoarce cerere_id la refuz: numai aici se folosește pilotul direct (R3-7).
+    // 5xx CU răspuns JSON de la edge (fără cerere_id): cererea nu a fost confirmată pentru worker (confirma_upload e
+    // ultimul pas înainte de 200), deci Haiku direct nu poate dubla un apel plătit (Copilot B4 P1). O eroare de
+    // transport FĂRĂ status rămâne ambiguă (cererea poate exista) -> nu trecem automat pe Haiku.
+    if (r.status >= 500 && r.raspuns && r.raspuns.success === false && !r.raspuns.cerere_id) {
+      anunta('Serverul local nu răspunde corect — citesc cu Haiku')
+      return { haiku:true, motiv:r.raspuns.eroare || 'serviciu_indisponibil' }
+    }
     if ([409, 429].includes(r.status)) {
       anunta(r.raspuns?.eroare === 'noapte' ? 'Serverul local e oprit (noaptea 22–06) — citesc cu Haiku' : 'Citirea locală nu este disponibilă — citesc cu Haiku')
       return { haiku:true, motiv:r.raspuns?.eroare }

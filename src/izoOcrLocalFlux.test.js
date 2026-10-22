@@ -133,3 +133,12 @@ it('afișează cele trei proveniențe din contractul B2', () => {
   expect(descrieSursaOCR({ ...propunere, model:'ocr_local:lighton+mineru+claude-haiku-5-5', sursa:{ dezacorduri:3 } })).toBe('Local + Haiku pe 3 celule')
   expect(descrieSursaOCR({ sursa:{ ramura:'haiku' } })).toBe('Haiku fallback')
 })
+it('503 cu răspuns JSON de la edge la cere → Haiku direct; eroare de transport fără status → fără Haiku (Copilot B4 P1)', async () => {
+    const a = vi.fn(async () => refuz(503, 'storage_indisponibil'))
+    expect(await start(a)).toMatchObject({ haiku:true, motiv:'storage_indisponibil' })
+    expect(operatii(a)).toEqual(['cere'])
+    const b = vi.fn(async () => ({ data:null, error:{ message:'Failed to fetch' } }))
+    const r = await start(b).catch(e => ({ eroare:e }))
+    expect(r.haiku).not.toBe(true)
+    expect(operatii(b)).toEqual(['cere'])
+  })
