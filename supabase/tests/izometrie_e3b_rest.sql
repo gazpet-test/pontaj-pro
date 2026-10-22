@@ -1668,7 +1668,7 @@ SET SESSION AUTHORIZATION authenticator;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
 
-SELECT teste.e3_refuz(format('SELECT teste.e3_rpc(''SELECT public.fn_izo_cor_aproba(%s,1)'')',current_setting('test.e4_cor')),'40001','E3b: corecția s-a schimbat%');
+SELECT teste.e3_refuz(format('SELECT teste.e3_rpc(''SELECT public.fn_izo_cor_aproba(%s,1)'')',current_setting('test.e4_cor')),'42501','E3b: retry permis numai decidentului');
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
 
 DO $retry$ DECLARE v_r jsonb; BEGIN
@@ -1830,6 +1830,11 @@ SET SESSION AUTHORIZATION authenticator;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
 
+DO $finite$ DECLARE v_data text; BEGIN
+ FOREACH v_data IN ARRAY ARRAY['infinity','-infinity'] LOOP
+  PERFORM teste.e3_refuz(format('SELECT teste.e3_rpc(%L)',format('SELECT public.fn_izo_cor_pv(%s,3,%L,%L,%L)',current_setting('test.e4_doc'),'E4-PV-NOU',v_data,'F1 data infinita')),'22023','E3b: PV invalid');
+ END LOOP;
+END $finite$;
 SELECT teste.e3_rpc(format('SELECT public.fn_izo_cor_pv(%s,3,''E4-PV-NOU'',''2026-10-23'',''E4 corectie PV'')',current_setting('test.e4_doc')));
 SELECT teste.e3_refuz(format('SELECT public.fn_izo_doc_pv(%s,4,''E4-PV'',''2026-10-22'')',current_setting('test.e4_doc')),'23505','%PV%');
 RESET ROLE;
@@ -3819,6 +3824,144 @@ DO $rpc_result$ BEGIN
  'm',(SELECT jsonb_agg(to_jsonb(m) ORDER BY id) FROM public.magazie_bucati_miscari m)) IS DISTINCT FROM current_setting('test.e4_atom_before')::jsonb
  OR (SELECT stare FROM public.izo_corectii WHERE id=current_setting('test.e4_cor')::bigint) IS DISTINCT FROM 'propusa' THEN RAISE EXCEPTION 'E4 RPC a lasat efecte'; END IF;
 END $rpc_result$;
+
+ROLLBACK;
+
+-- F1 lant blocant refuza NULL fail-closed
+BEGIN;
+
+SELECT public.fn_izo_activeaza_si_importa(3,'E3-import','{"motiv":"fixture E3 garzi","surse":[{"fisier":"E3.xlsx","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}],"bucati":[{"tip":"teava","serie":"E3-1","sarja":"E3-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":1}},{"tip":"teava","serie":"E3-2","sarja":"E3-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":2}},{"tip":"teava","serie":"E3-3","sarja":"E3-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":3}},{"tip":"teava","serie":"E3-4","sarja":"E3-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":4}},{"tip":"teava","serie":"E3-5","sarja":"E3-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":5}},{"tip":"teava","serie":"E3-6","sarja":"E3-S","lungime_mm":12000,"perete_mm":8,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":6}},{"tip":"curba","serie":"E3-CURBA-1","sarja":"E3-S","perete_mm":8,"unghi_curba":45,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":7}},{"tip":"curba","serie":"E3-CURBA-2","sarja":"E3-S","perete_mm":8,"unghi_curba":90,"stare":"receptionat","depozit_id":11,"sursa":{"fisier":"E3.xlsx","foaie":"F","rand":8}}]}'::jsonb,'fixture E3');
+SELECT set_config('izo.registru_tx','',true);
+-- bucata E3-ALT-1 NU e născută de E3-import (E2a permite un singur import pe tranzacție): scrisă direct de scriitorul registrului
+SET LOCAL ROLE izo_registru_writer;
+SELECT set_config('izo.registru_tx',txid_current()::text,true);
+DO $alt$ DECLARE v_id bigint:=nextval('public.magazie_bucati_id_seq'); BEGIN
+  INSERT INTO public.magazie_bucati(id,uid,radacina_id,server_ver,proiect_id,tip_material_id,tip_cod,
+    serie,sarja,perete_mm,lungime_aviz_mm,lungime_mm,lungime_m,lungime_originala_m,cod_bucata,capat_stanga,capat_dreapta,
+    provenienta,stare,locatie_tip,locatie_site_id,depozit_id,sursa_receptie)
+  VALUES(v_id,gen_random_uuid(),v_id,nextval('public.izo_server_ver_seq'),3,1,'teava','E3-ALT-1','E3-S',8,
+    12000,12000,12,12,'AB','A','B','beneficiar','receptionat','depozit',6,11,'manual');
+END $alt$;
+RESET ROLE;
+SELECT set_config('izo.registru_tx','',true);
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-000000000030','gestionar',11,'test','fixture E3');
+SELECT set_config('test.e3_b',(SELECT id::text FROM public.magazie_bucati WHERE serie='E3-1'),true);
+SELECT set_config('test.e3_b2',(SELECT id::text FROM public.magazie_bucati WHERE serie='E3-2'),true);
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+
+-- E2 e2_refuz dispare la ROLLBACK. Varianta de aici pastreaza contextul pentru
+-- atacurile directe; RPC-urile sunt resetate explicit in e3_rpc.
+CREATE FUNCTION teste.e3_refuz(p_sql text,p_state text,p_mesaj text DEFAULT 'E3b:%') RETURNS void
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_state text; v_msg text; v_detail text; v_hint text; v_rows bigint;
+BEGIN
+  BEGIN
+    EXECUTE p_sql;
+    GET DIAGNOSTICS v_rows=ROW_COUNT;
+    RAISE EXCEPTION 'E3: scriere acceptata (% randuri): %',v_rows,p_sql USING ERRCODE='ZE301';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_state=RETURNED_SQLSTATE,v_msg=MESSAGE_TEXT,v_detail=PG_EXCEPTION_DETAIL,v_hint=PG_EXCEPTION_HINT;
+    IF v_state IS DISTINCT FROM p_state OR (p_mesaj IS NOT NULL AND v_msg NOT LIKE p_mesaj) THEN
+      RAISE EXCEPTION 'E3: asteptat % / %, primit % / %; SQL=%',p_state,p_mesaj,v_state,v_msg,p_sql;
+    END IF;
+    IF p_state='23505' AND p_mesaj LIKE 'E3b: conflict%' AND (coalesce(v_detail,'')<>'' OR coalesce(v_hint,'')<>'') THEN
+      RAISE EXCEPTION 'E3: coliziune generica dezvaluie DETAIL/HINT: % / %',v_detail,v_hint;
+    END IF;
+  END;
+END $f$;
+CREATE FUNCTION teste.e3_rpc(p_sql text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_r jsonb;
+BEGIN
+  PERFORM set_config('izo.corectie_ctx','',true);
+  PERFORM set_config('izo.receptie_ctx','',true);
+  EXECUTE p_sql INTO v_r;
+  PERFORM set_config('izo.corectie_ctx','',true);
+  PERFORM set_config('izo.receptie_ctx','',true);
+  RETURN v_r;
+END $f$;
+-- Design §5.1 linia 504 / §9.5 linia 796: mesaj cu detalii pentru proiect CITIBIL.
+-- Nu acceptam un mesaj generic doar fiindca verifica() afiseaza separat detaliile.
+CREATE FUNCTION teste.e3_coliziune_vizibila(p_sql text,p_b bigint,p_proiect bigint,p_stare text) RETURNS void
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_state text; v_msg text; v_detail text; v_text text;
+BEGIN
+ BEGIN
+   EXECUTE p_sql;
+   RAISE EXCEPTION 'E3: coliziune vizibila acceptata' USING ERRCODE='ZE301';
+ EXCEPTION WHEN OTHERS THEN
+   GET STACKED DIAGNOSTICS v_state=RETURNED_SQLSTATE,v_msg=MESSAGE_TEXT,v_detail=PG_EXCEPTION_DETAIL;
+   v_text:=coalesce(v_msg,'')||' '||coalesce(v_detail,'');
+   IF v_state<>'23505' OR position(p_b::text IN v_text)=0 OR position(p_proiect::text IN v_text)=0 OR position(p_stare IN v_text)=0 THEN
+     RAISE EXCEPTION 'E3 mismatch design §5.1/§9.5: coliziune citibila trebuie 23505 cu bucata %, proiect %, stare %; primit %: %',p_b,p_proiect,p_stare,v_state,v_text;
+   END IF;
+ END;
+END $f$;
+-- DML real, nu apelarea izolata a helperului de garda. Listele explicite
+-- EV/MIS/C sunt aceleasi coloane folosite de fixture-urile E3/E3b.
+CREATE FUNCTION teste.e3_put(p_t text,p_j jsonb,p_cols text[]) RETURNS bigint
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_cols text; v_values text; v_id bigint;
+BEGIN
+  SELECT string_agg(format('%I',x),','),string_agg(format('(jsonb_populate_record(NULL::public.%I,$1)).%I',p_t,x),',')
+    INTO v_cols,v_values FROM unnest(p_cols) x;
+  EXECUTE format('INSERT INTO public.%I(%s) SELECT %s RETURNING id',p_t,v_cols,v_values) INTO v_id USING p_j;
+  RETURN v_id;
+END $f$;
+CREATE FUNCTION teste.e3_ev(p_c bigint,p_patch jsonb DEFAULT '{}') RETURNS bigint
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_c public.izo_corectii;
+BEGIN
+  SELECT * INTO STRICT v_c FROM public.izo_corectii WHERE id=p_c;
+  RETURN teste.e3_put('magazie_bucati_evenimente',public.fn_izo_cor_eveniment_asteptat(v_c)
+    ||jsonb_build_object('server_ver',nextval('public.izo_server_ver_seq'))||p_patch,ARRAY['tip','proiect_id','document_tip','document_id','import_id','storno_de_eveniment_id','motiv','declarat_de','aplicat_de','aplicat_rol','ora_tableta','dispozitiv_id','server_ver']::text[]);
+END $f$;
+CREATE FUNCTION teste.e3_mis(p_c bigint,p_b bigint,p_patch jsonb DEFAULT '{}') RETURNS bigint
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_c public.izo_corectii; v_b public.magazie_bucati;
+BEGIN
+  SELECT * INTO STRICT v_c FROM public.izo_corectii WHERE id=p_c;
+  SELECT * INTO STRICT v_b FROM public.magazie_bucati WHERE id=p_b;
+  RETURN teste.e3_put('magazie_bucati_miscari',public.fn_izo_cor_miscare_asteptata(v_c,v_b)
+    ||jsonb_build_object('server_ver',nextval('public.izo_server_ver_seq'))||p_patch,ARRAY['eveniment_id','proiect_id','bucata_id','rol','stare_inainte','stare_dupa','din_loc','in_loc','lungime_mm','inainte','dupa','server_ver']::text[]);
+END $f$;
+CREATE FUNCTION teste.e3_upd(p_b bigint,p_j jsonb) RETURNS bigint
+LANGUAGE plpgsql SECURITY INVOKER SET search_path=public,pg_temp AS $f$
+DECLARE v_cols text; v_values text; v_id bigint;
+BEGIN
+ SELECT string_agg(format('%I',x),','),string_agg(format('(jsonb_populate_record(NULL::public.magazie_bucati,$1)).%I',x),',')
+ INTO v_cols,v_values FROM unnest(public.fn_izo_coloane_c()||ARRAY['server_ver']) x;
+ EXECUTE format('UPDATE public.magazie_bucati SET (%s)=(SELECT %s) WHERE id=$2 RETURNING id',v_cols,v_values)
+ INTO v_id USING p_j,p_b;
+ RETURN v_id;
+END $f$;
+REVOKE ALL ON FUNCTION teste.e3_refuz(text,text,text),teste.e3_rpc(text),teste.e3_put(text,jsonb,text[]),
+  teste.e3_ev(bigint,jsonb),teste.e3_mis(bigint,bigint,jsonb),teste.e3_upd(bigint,jsonb),
+  teste.e3_coliziune_vizibila(text,bigint,bigint,text) FROM PUBLIC;
+GRANT USAGE ON SCHEMA teste TO authenticated,izo_cor_editor,izo_corectie_writer;
+GRANT EXECUTE ON FUNCTION teste.e3_refuz(text,text,text),teste.e3_rpc(text),teste.e3_put(text,jsonb,text[]),
+  teste.e3_ev(bigint,jsonb),teste.e3_mis(bigint,bigint,jsonb),teste.e3_upd(bigint,jsonb),
+  teste.e3_coliziune_vizibila(text,bigint,bigint,text) TO authenticated,izo_cor_editor,izo_corectie_writer;
+
+DO $baseline$ BEGIN IF public.fn_izo_porti_lipsa() IS DISTINCT FROM '{}'::text[] THEN RAISE EXCEPTION 'E4 baseline: poarta trebuie verde inaintea probei'; END IF; END $baseline$;
+
+SET LOCAL ROLE izo_registru_writer;
+DO $null_events$ DECLARE v_b bigint:=current_setting('test.e3_b')::bigint; v_ev bigint; BEGIN
+ SELECT m.eveniment_id INTO STRICT v_ev FROM public.magazie_bucati_miscari m WHERE m.bucata_id=v_b AND m.rol='nascut';
+ BEGIN
+  PERFORM * FROM public.fn_izo_lant_blocant(ARRAY[v_b],ARRAY[v_ev,NULL]::bigint[]);
+  RAISE EXCEPTION 'F1 NULL in lista acceptat';
+ EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
+ BEGIN
+  PERFORM * FROM public.fn_izo_lant_blocant(ARRAY[v_b],NULL::bigint[]);
+  RAISE EXCEPTION 'F1 lista NULL acceptata';
+ EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
+ IF NOT EXISTS (SELECT 1 FROM public.fn_izo_lant_blocant(ARRAY[v_b],ARRAY[]::bigint[]))
+ OR EXISTS (SELECT 1 FROM public.fn_izo_lant_blocant(ARRAY[v_b],ARRAY[v_ev])) THEN
+  RAISE EXCEPTION 'F1 lant valid incorect'; END IF;
+END $null_events$;
+RESET ROLE;
 
 ROLLBACK;
 

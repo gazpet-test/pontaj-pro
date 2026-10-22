@@ -1601,15 +1601,26 @@ RESET SESSION AUTHORIZATION;
 SAVEPOINT e3_header;
 SET LOCAL ROLE izo_corectie_writer;
 DO $header_setup$ DECLARE v_c bigint; BEGIN
+ -- F1: guard-ul valideaza si INSERT-ul intern, independent de intrarea RPC.
+ PERFORM teste.e3_refuz(format('INSERT INTO public.izo_corectii(proiect_id,tip,document_intrare_id,inainte,dupa,motiv,propus_de) VALUES(3,''pv'',%s,NULL,%L,''F1 infinit'',''00000000-0000-0000-0000-000000000121'')',current_setting('test.e3_d'),'{"pv_nr":"F1","pv_data":"infinity"}'),'22023','E3b: PV invalid');
+ PERFORM teste.e3_refuz(format('INSERT INTO public.izo_corectii(proiect_id,tip,document_intrare_id,inainte,dupa,motiv,propus_de) VALUES(3,''pv'',%s,NULL,%L,''F1 infinit'',''00000000-0000-0000-0000-000000000121'')',current_setting('test.e3_d'),'{"pv_nr":"F1","pv_data":"-infinity"}'),'22023','E3b: PV invalid');
  INSERT INTO public.izo_corectii(proiect_id,tip,document_intrare_id,inainte,dupa,motiv,propus_de)
  VALUES(3,'pv',current_setting('test.e3_d')::bigint,NULL,'{"pv_nr":"E3-PV-NOU","pv_data":"2026-10-23"}',
   'E3 header guard','00000000-0000-0000-0000-000000000121') RETURNING id INTO v_c;
  PERFORM public.fn_izo_cor_marcheaza(v_c); PERFORM teste.e3_ev(v_c);
 END $header_setup$;
-RESET ROLE;
-GRANT UPDATE(furnizor) ON public.izo_documente_intrare TO izo_corectie_writer;
-SET LOCAL ROLE izo_corectie_writer;
-SELECT teste.e3_refuz(format('UPDATE public.izo_documente_intrare SET pv_nr=''E3-PV-NOU'',pv_nr_canon=''E3-PV-NOU'',pv_data=''2026-10-23'',versiune=versiune+1,furnizor=''E3 fals'' WHERE id=%s',current_setting('test.e3_d')),'42501','E3b: UPDATE PV diferit');
+-- Proba proiectiei direct pe helper: trigger-ul E3 recanonizeaza valorile,
+-- iar writer-ul nu are UPDATE pe furnizor/canoane; nu schimbam ACL-ul testului.
+DO $header_canon$ DECLARE v_old jsonb; v_new jsonb; v_col text; BEGIN
+ SELECT to_jsonb(d) INTO v_old FROM public.izo_documente_intrare d WHERE id=current_setting('test.e3_d')::bigint;
+ v_new:=v_old || jsonb_build_object('pv_nr','E3-PV-NOU','pv_nr_canon','E3-PV-NOU','pv_data','2026-10-23','versiune',(v_old->>'versiune')::bigint+1);
+ IF public.fn_izo_garda_corectie('izo_documente_intrare','UPDATE',v_old,v_new) IS NOT TRUE THEN
+  RAISE EXCEPTION 'F1 PV valid refuzat'; END IF;
+ -- *_canon sunt GENERATED ALWAYS (nu pot fi scrise direct): se verifică sursele lor
+ FOREACH v_col IN ARRAY ARRAY['furnizor','nr_document'] LOOP
+  PERFORM teste.e3_refuz(format('SELECT public.fn_izo_garda_corectie(''izo_documente_intrare'',''UPDATE'',%L::jsonb,%L::jsonb)',v_old,v_new || jsonb_build_object(v_col,'F1 fals')),'42501','E3b: UPDATE PV diferit');
+ END LOOP;
+END $header_canon$;
 RESET ROLE;
 ROLLBACK TO e3_header;
 -- Anularea referintei nu modifica piesa gasita (snapshot complet).

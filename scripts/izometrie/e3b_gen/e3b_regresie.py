@@ -22,7 +22,7 @@ def generate(root):
     e2 = change(e2, "'mi\u0219c\u0103ri ulterioare');", "'miscari ulterioare');")
     e3 = (root / 'supabase/tests/izometrie_e3.test.sql').read_text(encoding='utf8')
     # Q14=A: semnatura noua, omul declarat obligatoriu la anularea confirmatului.
-    e3 = e3.replace("fn_izo_doc_anuleaza(bigint, text)", "fn_izo_doc_anuleaza(bigint, text, uuid)")
+    e3 = change(e3, "fn_izo_doc_anuleaza(bigint, text)", "fn_izo_doc_anuleaza(bigint, text, uuid)")
     e3 = change(e3, "fn_izo_doc_anuleaza(:doc1, 'aviz gre\u0219it, reintrodus')", "fn_izo_doc_anuleaza(:doc1, 'aviz gre\u0219it, reintrodus', '00000000-0000-0000-0000-000000000121')")
     # Celelalte apeluri cu 2 argumente rezolva DEFAULT NULL si pastreaza refuzul API / izolarii.
     out = "-- GENERAT de e3b_regresie.py; suitele LIVE nu se editeaza.\n-- Selectati cu -v e2a=true|false; cate o baza proaspata pentru fiecare ramura.\n\\if :e2a\n" + e2 + "\n\\else\n" + e3 + "\n\\endif\n"

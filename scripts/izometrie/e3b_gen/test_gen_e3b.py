@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 SP = Path(__file__).resolve().parent
@@ -303,6 +304,51 @@ class E1Test(unittest.TestCase):
         expected3 = expected3.replace("fn_izo_doc_anuleaza(:doc1, 'aviz gre\u0219it, reintrodus')",
                                       "fn_izo_doc_anuleaza(:doc1, 'aviz gre\u0219it, reintrodus', '00000000-0000-0000-0000-000000000121')")
         self.assertEqual(e3, expected3)
+
+
+class F1Test(unittest.TestCase):
+    def test_import_does_not_write_any_artifact(self):
+        original_open = Path.open
+        def readonly(path, mode='r', *args, **kwargs):
+            if any(flag in mode for flag in 'wax+'):
+                raise AssertionError('import writes ' + str(path))
+            return original_open(path, mode, *args, **kwargs)
+        fresh = importlib.util.spec_from_file_location('e3b_readonly_import', SP / 'gen_e3b.py')
+        with patch.object(Path, 'open', readonly), patch.object(Path, 'write_text', side_effect=AssertionError('import writes')):
+            fresh.loader.exec_module(importlib.util.module_from_spec(fresh))
+
+    def test_regression_signature_drift_fails_before_writing(self):
+        from e3b_regresie import generate
+        original_read = Path.read_text
+        signature = 'fn_izo_doc_anuleaza(bigint, text)'
+        def drift(path, *args, **kwargs):
+            text = original_read(path, *args, **kwargs)
+            if path.name == 'izometrie_e3.test.sql':
+                text += '\n-- duplicated signature: ' + signature
+            return text
+        with patch.object(Path, 'read_text', drift), patch.object(Path, 'write_text', side_effect=RuntimeError('unexpected write')):
+            with self.assertRaises(AssertionError):
+                generate(R)
+
+    def test_d2_cardinality_drift_fails_closed(self):
+        anchor = 'IF v_n <> cardinality(v_toate) THEN'
+        self.assertEqual(g.e3.count(anchor), 1)
+        drift = g.e3.replace(anchor, anchor + ' -- cardinality(v_toate)', 1)
+        with self.assertRaises(AssertionError):
+            g.build_d2(g.e2, drift, g.bloc_functie, g.prosrc, g.q, g.md5)
+
+    def test_retry_only_decider_and_proposal_before_assignment_check(self):
+        mig = (R / 'supabase/migrations/20261106a_izometrie_e3b_corectii.sql').read_text(encoding='utf8')
+        body = g.prosrc(g.bloc_functie(mig, 'fn_izo_cor_aproba'))
+        retry = body.index("'idempotent',true")
+        self.assertLess(body.index('v_cor.decis_de IS DISTINCT FROM v_uid'), retry)
+        self.assertLess(body.index("v_cor.cale<>'propunere'"), retry)
+        self.assertLess(retry, body.index('fn_izo_cor_autorizare_lock'))
+        # Revoking the ONLY assignment also revokes citire: the narrow retry
+        # exception must be present before the first access refusal.
+        access = body.split('SELECT b.aviz_intrare_id', 1)[0]
+        self.assertIn("v_cor.cale='propunere' AND v_cor.stare='aplicata'", access)
+        self.assertIn('v_cor.versiune=p_versiune+1 AND v_cor.decis_de=v_uid', access)
 
 
 if __name__ == '__main__':

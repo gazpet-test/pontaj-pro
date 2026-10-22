@@ -171,7 +171,7 @@ INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,depozit_id,acordat_de
 INSERT INTO public.user_module_access(profile_id,module,access_level) VALUES('00000000-0000-0000-0000-000000000117','magazie','editor') ON CONFLICT(profile_id,module) DO UPDATE SET access_level='editor';
 SELECT set_config('test.e4_before',(SELECT jsonb_build_object('c',to_jsonb(c),'b',(SELECT to_jsonb(b) FROM public.magazie_bucati b WHERE b.id=c.bucata_id),'events',(SELECT count(*) FROM public.magazie_bucati_evenimente),'moves',(SELECT count(*) FROM public.magazie_bucati_miscari))::text FROM public.izo_corectii c WHERE c.id=current_setting('test.e4_cor')::bigint),true);
 """ + api + jwt('117') + r"""
-SELECT teste.e3_refuz(format('SELECT teste.e3_rpc(''SELECT public.fn_izo_cor_aproba(%s,1)'')',current_setting('test.e4_cor')),'40001','E3b: corecția s-a schimbat%');
+SELECT teste.e3_refuz(format('SELECT teste.e3_rpc(''SELECT public.fn_izo_cor_aproba(%s,1)'')',current_setting('test.e4_cor')),'42501','E3b: retry permis numai decidentului');
 """ + jwt('121') + r"""
 DO $retry$ DECLARE v_r jsonb; BEGIN
  v_r:=teste.e3_rpc(format('SELECT public.fn_izo_cor_aproba(%s,1)',current_setting('test.e4_cor')));
@@ -190,6 +190,11 @@ SELECT set_config('izo.receptie_ctx','',true);
 SELECT set_config('test.e4_pv',(SELECT to_jsonb(e)::text FROM public.magazie_bucati_evenimente e JOIN public.izo_documente_intrare d ON d.eveniment_pv_id=e.id WHERE d.id=current_setting('test.e4_doc')::bigint),true);
 SELECT set_config('test.e4_pieces',(SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id)::text FROM public.magazie_bucati b WHERE aviz_intrare_id=current_setting('test.e4_doc')::bigint),true);
 """ + api + jwt('121') + r"""
+DO $finite$ DECLARE v_data text; BEGIN
+ FOREACH v_data IN ARRAY ARRAY['infinity','-infinity'] LOOP
+  PERFORM teste.e3_refuz(format('SELECT teste.e3_rpc(%L)',format('SELECT public.fn_izo_cor_pv(%s,3,%L,%L,%L)',current_setting('test.e4_doc'),'E4-PV-NOU',v_data,'F1 data infinita')),'22023','E3b: PV invalid');
+ END LOOP;
+END $finite$;
 SELECT teste.e3_rpc(format('SELECT public.fn_izo_cor_pv(%s,3,''E4-PV-NOU'',''2026-10-23'',''E4 corectie PV'')',current_setting('test.e4_doc')));
 SELECT teste.e3_refuz(format('SELECT public.fn_izo_doc_pv(%s,4,''E4-PV'',''2026-10-22'')',current_setting('test.e4_doc')),'23505','%PV%');
 """ + reset + r"""
@@ -509,6 +514,25 @@ DO $rpc_result$ BEGIN
  'm',(SELECT jsonb_agg(to_jsonb(m) ORDER BY id) FROM public.magazie_bucati_miscari m)) IS DISTINCT FROM current_setting('test.e4_atom_before')::jsonb
  OR (SELECT stare FROM public.izo_corectii WHERE id=current_setting('test.e4_cor')::bigint) IS DISTINCT FROM 'propusa' THEN RAISE EXCEPTION 'E4 RPC a lasat efecte'; END IF;
 END $rpc_result$;
+""")
+
+block('F1 lant blocant refuza NULL fail-closed', r"""
+SET LOCAL ROLE izo_registru_writer;
+DO $null_events$ DECLARE v_b bigint:=current_setting('test.e3_b')::bigint; v_ev bigint; BEGIN
+ SELECT m.eveniment_id INTO STRICT v_ev FROM public.magazie_bucati_miscari m WHERE m.bucata_id=v_b AND m.rol='nascut';
+ BEGIN
+  PERFORM * FROM public.fn_izo_lant_blocant(ARRAY[v_b],ARRAY[v_ev,NULL]::bigint[]);
+  RAISE EXCEPTION 'F1 NULL in lista acceptat';
+ EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
+ BEGIN
+  PERFORM * FROM public.fn_izo_lant_blocant(ARRAY[v_b],NULL::bigint[]);
+  RAISE EXCEPTION 'F1 lista NULL acceptata';
+ EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
+ IF NOT EXISTS (SELECT 1 FROM public.fn_izo_lant_blocant(ARRAY[v_b],ARRAY[]::bigint[]))
+ OR EXISTS (SELECT 1 FROM public.fn_izo_lant_blocant(ARRAY[v_b],ARRAY[v_ev])) THEN
+  RAISE EXCEPTION 'F1 lant valid incorect'; END IF;
+END $null_events$;
+RESET ROLE;
 """)
 
 def write():

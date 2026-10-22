@@ -528,6 +528,8 @@ BEGIN
         OR position('|' IN v_d->>'pv_nr')>0 OR v_d->>'pv_data' IS NULL THEN
         RAISE EXCEPTION 'E3b: PV invalid' USING ERRCODE='22023'; END IF;
       v_target := upper(regexp_replace(btrim(v_d->>'pv_nr'),'[[:space:]]+',' ','g'));
+      IF NOT isfinite((v_d->>'pv_data')::date) THEN
+        RAISE EXCEPTION 'E3b: PV invalid' USING ERRCODE='22023'; END IF;
       v_d := jsonb_build_object('pv_nr',btrim(v_d->>'pv_nr'),'pv_nr_canon',v_target,'pv_data',(v_d->>'pv_data')::date);
       IF (v_target,(v_d->>'pv_data')::date) IS NOT DISTINCT FROM (v_doc.pv_nr_canon,v_doc.pv_data) THEN
         RAISE EXCEPTION 'E3b: nimic de corectat' USING ERRCODE='22023'; END IF;
@@ -695,6 +697,8 @@ BEGIN
       RETURN true;
     END IF;
     IF p_tabel='izo_documente_intrare' AND p_op='UPDATE' AND v_cor.tip='pv' THEN
+      -- furnizor_canon / nr_document_canon sunt GENERATED ALWAYS ... STORED: în trigger-ul BEFORE apar NULL în NEW și nu pot fi
+      -- scrise direct (derivă din furnizor / nr_document, care NU sunt permise), deci se exclud ca la E3 (c_gen_doc)
       v_permise := ARRAY['pv_nr','pv_nr_canon','pv_data','versiune','updated_at','furnizor_canon','nr_document_canon'];
       IF (p_old->>'id')::bigint IS DISTINCT FROM v_cor.document_intrare_id OR p_old->>'stare' IS DISTINCT FROM 'confirmat'
         OR p_old->>'eveniment_pv_id' IS NULL OR public.fn_izo_proiectie(p_old,ARRAY['pv_nr','pv_nr_canon','pv_data','versiune']) IS DISTINCT FROM v_cor.inainte
@@ -860,6 +864,8 @@ BEGIN
       RAISE EXCEPTION 'E3b: documentul s-a schimbat, reincarca' USING ERRCODE='40001'; END IF;
     IF v_doc.stare<>'confirmat' OR v_doc.eveniment_pv_id IS NULL THEN
       RAISE EXCEPTION 'E3b: document neconfirmat sau fara PV' USING ERRCODE='22023'; END IF;
+    IF p_pv_data IS NULL OR NOT isfinite(p_pv_data) THEN
+      RAISE EXCEPTION 'E3b: PV invalid' USING ERRCODE='22023'; END IF;
     IF p_motiv IS NULL OR char_length(btrim(p_motiv)) NOT BETWEEN 3 AND 1000 THEN
       RAISE EXCEPTION 'E3b: motiv invalid' USING ERRCODE='22023'; END IF;
     INSERT INTO public.izo_corectii(proiect_id,tip,document_intrare_id,inainte,dupa,motiv,stare,versiune,cale,propus_de,propus_rol,propus_la)
@@ -1036,7 +1042,8 @@ BEGIN
   BEGIN
     v_uid := public.fn_izo_cor_api_verifica();
     SELECT cor.* INTO v_cor FROM public.izo_corectii cor WHERE cor.id=p_corectie_id;
-    IF NOT FOUND OR NOT public.fn_izo_citire(v_cor.proiect_id) THEN
+    IF NOT FOUND OR (public.fn_izo_citire(v_cor.proiect_id) IS NOT TRUE
+      AND (v_cor.cale='propunere' AND v_cor.stare='aplicata' AND v_cor.versiune=p_versiune+1 AND v_cor.decis_de=v_uid) IS NOT TRUE) THEN
       RAISE EXCEPTION 'E3b: corecția nu există sau nu ai acces' USING ERRCODE='42501'; END IF;
     SELECT b.aviz_intrare_id INTO v_doc FROM public.magazie_bucati b WHERE b.id=v_cor.bucata_id AND b.proiect_id=v_cor.proiect_id;
     v_doc:=coalesce(v_doc,v_cor.document_intrare_id);
@@ -1045,11 +1052,15 @@ BEGIN
         WHERE doc.id=v_doc AND doc.proiect_id=v_cor.proiect_id FOR SHARE;
     END IF;
     SELECT cor.* INTO v_cor FROM public.izo_corectii cor WHERE cor.id=p_corectie_id FOR UPDATE;
-    IF NOT public.fn_izo_cor_autorizare_lock(v_cor.proiect_id,'responsabil',NULL) OR v_uid=v_cor.propus_de OR v_cor.cale<>'propunere' THEN
+    IF v_uid=v_cor.propus_de OR v_cor.cale<>'propunere' THEN
       RAISE EXCEPTION 'E3b: acces refuzat; patru ochi obligatoriu' USING ERRCODE='42501'; END IF;
-    IF v_cor.stare='aplicata' AND v_cor.versiune=p_versiune+1 AND v_cor.decis_de=v_uid THEN
+    IF v_cor.stare='aplicata' AND v_cor.versiune=p_versiune+1 THEN
+      IF v_cor.decis_de IS DISTINCT FROM v_uid THEN
+        RAISE EXCEPTION 'E3b: retry permis numai decidentului' USING ERRCODE='42501'; END IF;
       RETURN jsonb_build_object('corectie_id',v_cor.id,'eveniment_id',v_cor.eveniment_id,'bucata_id',v_cor.bucata_id,
         'stare_dupa',CASE WHEN v_cor.tip='gasit_nou' THEN 'carantina' WHEN v_cor.tip='camp' THEN (SELECT b.stare FROM public.magazie_bucati b WHERE b.id=v_cor.bucata_id) ELSE v_cor.dupa->>'stare' END,'versiune',v_cor.versiune,'idempotent',true); END IF;
+    IF NOT public.fn_izo_cor_autorizare_lock(v_cor.proiect_id,'responsabil',NULL) THEN
+      RAISE EXCEPTION 'E3b: acces refuzat; patru ochi obligatoriu' USING ERRCODE='42501'; END IF;
     IF v_cor.stare<>'propusa' OR p_versiune IS DISTINCT FROM v_cor.versiune THEN
       RAISE EXCEPTION 'E3b: corecția s-a schimbat, reîncarcă' USING ERRCODE='40001'; END IF;
     IF v_cor.tip IN ('gasit_nou','gasit_recuperare') THEN
@@ -1170,13 +1181,18 @@ BEGIN
 
   CREATE FUNCTION public.fn_izo_lant_blocant(p_bucati bigint[], p_ev_proprii bigint[])
     RETURNS TABLE(bucata_id bigint, miscare_id bigint, eveniment_id bigint, tip text)
-    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    IF p_ev_proprii IS NULL OR EXISTS (SELECT 1 FROM unnest(p_ev_proprii) v_ev WHERE v_ev IS NULL) THEN
+      RAISE EXCEPTION 'E3b: evenimente proprii invalide' USING ERRCODE='22023'; END IF;
+    RETURN QUERY
     SELECT mis.bucata_id,mis.id,ev.id,ev.tip FROM public.magazie_bucati_miscari mis
       JOIN public.magazie_bucati_evenimente ev ON ev.id=mis.eveniment_id
       WHERE mis.bucata_id=ANY(p_bucati) AND NOT (mis.eveniment_id=ANY(p_ev_proprii))
         AND NOT EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.stare='aplicata'
           AND cor.tip IN ('camp','carantina_intrare','carantina_iesire','pierdut','gasit_recuperare')
-          AND cor.eveniment_id=ev.id AND ev.document_tip='izo_corectie' AND ev.document_id=cor.id::text)
+          AND cor.eveniment_id=ev.id AND ev.document_tip='izo_corectie' AND ev.document_id=cor.id::text);
+  END;
   $f$;
 
   CREATE FUNCTION public.fn_izo_doc_diff(p_anterior jsonb, p_curent jsonb) RETURNS jsonb

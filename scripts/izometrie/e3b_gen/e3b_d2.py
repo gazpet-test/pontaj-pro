@@ -69,7 +69,8 @@ def build_d2(e2, e3, bloc, prosrc, q, md5):
     change(n, point, "    SELECT coalesce(array_agg(b.id ORDER BY b.id),'{}') INTO v_m FROM public.magazie_bucati b WHERE b.id=ANY(v_toate) AND b.stare<>'anulata';\n" + point)
     change(n, 'FROM public.magazie_bucati b WHERE b.id = ANY (v_toate) ORDER BY b.id;', 'FROM public.magazie_bucati b WHERE b.id = ANY (v_m) ORDER BY b.id;')
     change(n, 'WHERE id = ANY (v_toate);', "WHERE id = ANY (v_m) AND stare<>'anulata';")
-    new[n] = new[n].replace('cardinality(v_toate)', 'cardinality(v_m)')
+    assert n == 'fn_izo_doc_anuleaza' and new[n].count('cardinality(v_toate)') == 2
+    new[n] = new[n].replace('cardinality(v_toate)', 'cardinality(v_m)', 2)
 
     n = 'fn_izo_garda_receptie'
     change(n, "p_old ->> 'stare' IN ('sosit', 'carantina')", "p_old ->> 'stare' IN ('sosit', 'receptionat', 'carantina', 'pierduta')")

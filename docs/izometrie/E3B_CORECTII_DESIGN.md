@@ -946,6 +946,8 @@ Butoanele de stare sunt dezactivate, cu explicație, pe bucățile unui document
 ## 12. Diferențe de implementare acceptate (cod 22.10.2026, `izometrie/e3b`)
 
 Găsite de testele E4. Codul rămâne cum e; textul de mai sus se citește cu aceste precizări:
+- **F1 / document înaintea bucății:** citirea referinței documentului înainte de lock-ul bucății poate produce un refuz concurent inutil; comportament acceptat, apelantul reîncarcă și reîncearcă.
+- **F1 / `unique_violation`:** maparea generică la conflict de serie/combinație poate descrie imprecis o altă constrângere unică; comportament acceptat, fără schimbarea tratării excepției.
 - **§3.5 (IDENTITY):** `izo_corectii_bucati` nu are coloană `id`. Cheia ei e compusă (`corectie_id`, `bucata_id`), ca în §2.2; fraza despre IDENTITY nu se aplică acestui tabel.
 - **§3.4 / §3.5 (`fn_izo_cor_cerut_de_valid`):** primește EXECUTE și `izo_receptie_writer`, pe lângă `izo_corectie_writer`. Motivul: anularea administrativă E3 înlocuită (`fn_izo_doc_anuleaza`, Q-E3b-14 = A, owner `izo_receptie_writer`) validează `p_cerut_de` prin același helper.
 - **§3.5 (volatilitate):** `fn_izo_garda_corectie` e VOLATILE, nu STABLE. Funcțiile de trigger care validează scrieri rămân VOLATILE; restul helper-elor sunt STABLE, cum spune rândul comun.

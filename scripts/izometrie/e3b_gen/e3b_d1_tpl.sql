@@ -48,13 +48,18 @@
 
   CREATE FUNCTION public.fn_izo_lant_blocant(p_bucati bigint[], p_ev_proprii bigint[])
     RETURNS TABLE(bucata_id bigint, miscare_id bigint, eveniment_id bigint, tip text)
-    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    IF p_ev_proprii IS NULL OR EXISTS (SELECT 1 FROM unnest(p_ev_proprii) v_ev WHERE v_ev IS NULL) THEN
+      RAISE EXCEPTION 'E3b: evenimente proprii invalide' USING ERRCODE='22023'; END IF;
+    RETURN QUERY
     SELECT mis.bucata_id,mis.id,ev.id,ev.tip FROM public.magazie_bucati_miscari mis
       JOIN public.magazie_bucati_evenimente ev ON ev.id=mis.eveniment_id
       WHERE mis.bucata_id=ANY(p_bucati) AND NOT (mis.eveniment_id=ANY(p_ev_proprii))
         AND NOT EXISTS (SELECT 1 FROM public.izo_corectii cor WHERE cor.stare='aplicata'
           AND cor.tip IN ('camp','carantina_intrare','carantina_iesire','pierdut','gasit_recuperare')
-          AND cor.eveniment_id=ev.id AND ev.document_tip='izo_corectie' AND ev.document_id=cor.id::text)
+          AND cor.eveniment_id=ev.id AND ev.document_tip='izo_corectie' AND ev.document_id=cor.id::text);
+  END;
   $f$;
 
   CREATE FUNCTION public.fn_izo_doc_diff(p_anterior jsonb, p_curent jsonb) RETURNS jsonb

@@ -380,6 +380,8 @@ BEGIN
         OR position('|' IN v_d->>'pv_nr')>0 OR v_d->>'pv_data' IS NULL THEN
         RAISE EXCEPTION 'E3b: PV invalid' USING ERRCODE='22023'; END IF;
       v_target := upper(regexp_replace(btrim(v_d->>'pv_nr'),'[[:space:]]+',' ','g'));
+      IF NOT isfinite((v_d->>'pv_data')::date) THEN
+        RAISE EXCEPTION 'E3b: PV invalid' USING ERRCODE='22023'; END IF;
       v_d := jsonb_build_object('pv_nr',btrim(v_d->>'pv_nr'),'pv_nr_canon',v_target,'pv_data',(v_d->>'pv_data')::date);
       IF (v_target,(v_d->>'pv_data')::date) IS NOT DISTINCT FROM (v_doc.pv_nr_canon,v_doc.pv_data) THEN
         RAISE EXCEPTION 'E3b: nimic de corectat' USING ERRCODE='22023'; END IF;
@@ -547,6 +549,8 @@ BEGIN
       RETURN true;
     END IF;
     IF p_tabel='izo_documente_intrare' AND p_op='UPDATE' AND v_cor.tip='pv' THEN
+      -- furnizor_canon / nr_document_canon sunt GENERATED ALWAYS ... STORED: în trigger-ul BEFORE apar NULL în NEW și nu pot fi
+      -- scrise direct (derivă din furnizor / nr_document, care NU sunt permise), deci se exclud ca la E3 (c_gen_doc)
       v_permise := ARRAY['pv_nr','pv_nr_canon','pv_data','versiune','updated_at','furnizor_canon','nr_document_canon'];
       IF (p_old->>'id')::bigint IS DISTINCT FROM v_cor.document_intrare_id OR p_old->>'stare' IS DISTINCT FROM 'confirmat'
         OR p_old->>'eveniment_pv_id' IS NULL OR public.fn_izo_proiectie(p_old,ARRAY['pv_nr','pv_nr_canon','pv_data','versiune']) IS DISTINCT FROM v_cor.inainte

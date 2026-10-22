@@ -153,6 +153,31 @@ e2_assert 'E2 propunere dupa partial atomica' "(SELECT stare='anulata' FROM publ
  AND (SELECT count(*)=1 FROM public.magazie_bucati_miscari WHERE bucata_id=$BID AND rol='anulat')"
 e2_sfarsit STORNO
 
+# F1: partial storno (postgres) and approval (API), distinct pieces of the
+# SAME project/import. Both succeed; B must wait on the project advisory.
+# The LIVE exclusive project helper takes table locks BEFORE that advisory.
+for n in 27 28; do
+  e2_bucata "$n"; e2_propune
+  if [ "$n" = 27 ]; then sn=29; else sn=30; fi
+  SBID="$(q "SELECT id FROM public.magazie_bucati WHERE serie='E2-$sn'")"
+  partial="SELECT public.fn_izo_cor_storno_import(3,'E2-import',ARRAY[$SBID]::bigint[],'F1 partial vs aproba','00000000-0000-0000-0000-000000000121')"
+  aproba="$CA_R; SELECT public.fn_izo_cor_aproba($COR,1)"
+  if [ "$n" = 27 ]; then
+    cursa 'F1 partial storno -> aproba' "$partial" "BEGIN; $aproba; COMMIT" ok corectie_id advisory
+  else
+    cursa 'F1 aproba -> partial storno' "$aproba" "BEGIN; $partial; COMMIT" ok bucati_anulate advisory
+  fi
+  if grep -q '40P01' /tmp/izo_e3b_${PORT}_{a,b}.out; then esec 'F1 deadlock partial/aproba'; fi
+  e2_stare aplicata carantina 1
+  e2_assert 'F1 partial/aproba reconciliere' "(SELECT stare='anulata' FROM public.magazie_bucati WHERE id=$SBID)
+    AND (SELECT stare='aplicat' FROM public.izo_importuri WHERE proiect_id=3 AND import_id='E2-import')
+    AND (SELECT count(*)=1 FROM public.magazie_bucati_miscari WHERE bucata_id=$SBID AND rol='anulat')
+    AND (SELECT count(*)=1 FROM public.izo_corectii c JOIN public.izo_corectii_bucati cb ON cb.corectie_id=c.id
+      WHERE cb.bucata_id=$SBID AND c.tip='storno_import' AND c.stare='aplicata' AND c.versiune=2
+      AND c.decis_de IS NULL AND c.decis_rol='postgres' AND c.eveniment_id IS NOT NULL)"
+done
+e2_sfarsit F1_PARTIAL_APROBA
+
 # 6. Two NULL-bucata proposals are legal; the series index arbitrates approvals.
 q "BEGIN; $CA_G;
  SELECT public.fn_izo_cor_propune('gasit_nou',3,NULL,'{\"tip_cod\":\"teava\",\"depozit_id\":11,\"serie\":\"E2-GASIT-COMUN\",\"sarja\":\"E2-S\",\"perete_mm\":8,\"lungime_aviz_mm\":12000}','gasit concurent E2 A');
@@ -230,6 +255,16 @@ cursa 'aprobare -> revocare atribuire' "$CA_M; SELECT public.fn_izo_cor_aproba($
   "BEGIN; UPDATE public.izo_atribuiri SET activ=false WHERE id=$ATR; SELECT 'revocat'; COMMIT" ok revocat transactionid
 e2_stare aplicata carantina 1
 e2_assert 'E2 revocare dupa aprobare' "(SELECT NOT activ FROM public.izo_atribuiri WHERE id=$ATR)"
+# F1: the original decider can retry after assignment revocation; another
+# user (even owner 121) cannot reuse that decision. Neither retry writes.
+F1_BEFORE="$(q "SELECT jsonb_build_object('c',(SELECT to_jsonb(c) FROM public.izo_corectii c WHERE id=$COR),'b',(SELECT to_jsonb(b) FROM public.magazie_bucati b WHERE id=$BID),'e',(SELECT count(*) FROM public.magazie_bucati_evenimente),'m',(SELECT count(*) FROM public.magazie_bucati_miscari))")"
+q "BEGIN; $CA_M; DO \$retry\$ DECLARE v_r jsonb; BEGIN
+ IF public.fn_izo_citire(3) IS NOT FALSE THEN RAISE EXCEPTION 'F1 fixture pastreaza accesul dupa revocare'; END IF;
+ v_r:=public.fn_izo_cor_aproba($COR,1);
+ IF v_r->>'idempotent' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'F1 retry dupa revocare'; END IF;
+ END \$retry\$; COMMIT" >/dev/null
+refuza 42501 "${PSQL[@]}" -d "$BAZA" -v VERBOSITY=verbose -c "BEGIN; $CA_R; SELECT public.fn_izo_cor_aproba($COR,1); COMMIT"
+[ "$F1_BEFORE" = "$(q "SELECT jsonb_build_object('c',(SELECT to_jsonb(c) FROM public.izo_corectii c WHERE id=$COR),'b',(SELECT to_jsonb(b) FROM public.magazie_bucati b WHERE id=$BID),'e',(SELECT count(*) FROM public.magazie_bucati_evenimente),'m',(SELECT count(*) FROM public.magazie_bucati_miscari))")" ] || esec 'F1 retry a scris'
 q "UPDATE public.izo_atribuiri SET activ=true WHERE id=$ATR" >/dev/null
 e2_bucata 21; e2_propune
 cursa 'revocare atribuire -> aprobare' "UPDATE public.izo_atribuiri SET activ=false WHERE id=$ATR" \

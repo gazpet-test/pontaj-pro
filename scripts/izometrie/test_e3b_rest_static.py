@@ -47,7 +47,7 @@ class RestStatic(unittest.TestCase):
                 if not active:
                     self.assertTrue(clean.startswith('DO $safe$'), clean[:100])
         self.assertFalse(active)
-        self.assertEqual(blocks, 28)
+        self.assertEqual(blocks, 29)
         self.assertNotIn('@@', self.sql)
 
     def test_gate_mutations_all_probe_required_entries(self):
