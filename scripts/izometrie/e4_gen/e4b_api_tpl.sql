@@ -182,7 +182,7 @@ BEGIN
  SELECT * INTO v_s FROM public.izo_preverificari WHERE uid=(v_p->>'preverificare_uid')::uuid;
  IF NOT FOUND OR v_s.autor_profile_id<>v_uid OR v_s.proiect_id<>p_front.proiect_id OR v_s.tronson_id<>p_front.tronson_id THEN
   RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
- IF v_s.stare<>'deschisa' THEN RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
+ IF v_s.stare<>'deschisa' AND NOT (v_s.stare='trimisa' AND v_type='decl_salveaza') THEN RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
  IF v_type='sesiune_trimite' THEN
   IF EXISTS(SELECT 1 FROM public.izo_declaratii WHERE preverificare_id=v_s.id AND stare IN ('conflict','blocata','revizie_ceruta')) THEN
    RAISE EXCEPTION 'rand_blocant' USING ERRCODE='IZ002'; END IF;
@@ -203,6 +203,8 @@ BEGIN
  END IF;
  IF v_type NOT IN ('decl_salveaza','decl_sterge') THEN RAISE EXCEPTION 'tip_op' USING ERRCODE='IZ001'; END IF;
  SELECT * INTO v_d FROM public.izo_declaratii WHERE uid=(v_p->>'uid')::uuid;
+ IF v_s.stare='trimisa' AND (v_d.id IS NULL OR v_d.stare NOT IN ('revizie_ceruta','conflict','blocata','in_verificare')) THEN
+  RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
  IF FOUND THEN
   IF v_d.declarat_de<>v_uid OR v_d.preverificare_id<>v_s.id THEN RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
   IF v_d.versiune IS DISTINCT FROM (v_p->>'versiune_baza')::integer OR v_d.stare NOT IN ('ciorna','conflict','blocata','in_verificare','revizie_ceruta') THEN
@@ -314,6 +316,9 @@ BEGIN
   END LOOP;
   IF v_sum<>v_base THEN RAISE EXCEPTION 'r3' USING ERRCODE='IZ001'; END IF;
  END IF;
+ IF v_s.stare='trimisa' AND v_state='ciorna' THEN
+  v_state:=CASE WHEN v_ident='nerezolvata' THEN 'in_verificare' ELSE 'trimisa' END;
+ END IF;
  -- Stable declaration identity; no facts are written to the registry.
  IF v_d.id IS NULL THEN
   INSERT INTO public.izo_declaratii(uid,preverificare_id,proiect_id,tronson_id,tip,versiune,declarat_de,declarat_de_angajat,dispozitiv_id,ultimul_op_id,
@@ -335,7 +340,8 @@ BEGIN
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=now(),motiv_eliberare='expirata',server_ver=nextval('public.izo_server_ver_seq')
    WHERE activa AND expira_dupa<now() AND (bucata_id=v_source OR bucata_decl_uid=v_decl);
   INSERT INTO public.izo_rezervari(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,bucata_decl_uid,din_depozit,expira_dupa)
-   VALUES(p_front.proiect_id,p_front.tronson_id,v_d.id,v_d.versiune,v_uid,v_source,v_decl,coalesce(v_b.depozit_id IS NOT NULL,false),p_front.expira_la+interval '24 hours');
+   VALUES(p_front.proiect_id,p_front.tronson_id,v_d.id,v_d.versiune,v_uid,v_source,v_decl,coalesce(v_b.depozit_id IS NOT NULL,false),
+    CASE WHEN v_s.stare='deschisa' THEN p_front.expira_la+interval '24 hours' END);
  END IF;
  IF v_d.tip='taiere' THEN
   -- Never recycle letters, including letters of cancelled declarations.

@@ -165,17 +165,22 @@ BEGIN
   ALTER TABLE public.executie_pachete_documente ENABLE ALWAYS TRIGGER a0_izo_flux_documente;
   ALTER TABLE public.executie_tronsoane ENABLE ALWAYS TRIGGER a0_izo_flux_tronsoane;
 
-  CREATE FUNCTION public.fn_izo_flux_storage() RETURNS trigger
-    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-  BEGIN
-    IF EXISTS (SELECT 1 FROM public.executie_pachete_documente d JOIN public.executie_pachete_lansare p ON p.id=d.pachet_id
+  -- PDF-urile pachetelor in flux: imuabile prin politici RESTRICTIVE pe storage.objects (proprietar supabase_storage_admin:
+  -- trigger-ele cer proprietarul la ENABLE ALWAYS / DROP; politicile se creeaza ca postgres, ca la E3 izo_doc_scan_*).
+  -- service_role ocoleste RLS (ca la toate bucket-urile); clientii anon/authenticated nu pot UPDATE / DELETE.
+  CREATE FUNCTION public.fn_izo_flux_pdf_blocat(p_bucket text,p_name text) RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT p_bucket='executie-pachete-pdf' AND EXISTS (SELECT 1 FROM public.executie_pachete_documente d
+      JOIN public.executie_pachete_lansare p ON p.id=d.pachet_id
       JOIN public.izo_tronson_config c ON c.tronson_id=p.tronson_id AND c.flux_montaj
-      WHERE d.fisier_path=OLD.name AND OLD.bucket_id='executie-pachete-pdf') THEN
-      RAISE EXCEPTION 'E4a PDF flux imuabil' USING ERRCODE='42501'; END IF;
-    RETURN (CASE WHEN TG_OP='DELETE' THEN OLD ELSE NEW END);
-  END $f$;
-  CREATE TRIGGER a0_izo_flux_storage BEFORE UPDATE OR DELETE ON storage.objects FOR EACH ROW EXECUTE FUNCTION public.fn_izo_flux_storage();
-  ALTER TABLE storage.objects ENABLE ALWAYS TRIGGER a0_izo_flux_storage;
+      WHERE d.fisier_path=p_name)
+  $f$;
+  REVOKE ALL ON FUNCTION public.fn_izo_flux_pdf_blocat(text,text) FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION public.fn_izo_flux_pdf_blocat(text,text) TO anon,authenticated,service_role;
+  CREATE POLICY izo_flux_pdf_imuabil_upd ON storage.objects AS RESTRICTIVE FOR UPDATE TO public
+    USING (NOT public.fn_izo_flux_pdf_blocat(bucket_id,name)) WITH CHECK (NOT public.fn_izo_flux_pdf_blocat(bucket_id,name));
+  CREATE POLICY izo_flux_pdf_imuabil_del ON storage.objects AS RESTRICTIVE FOR DELETE TO public
+    USING (NOT public.fn_izo_flux_pdf_blocat(bucket_id,name));
 
   -- Administrative helper takes locks unavailable to the NOLOGIN writer; never exposed to API.
   CREATE FUNCTION public.fn_izo_flux_admin(p_tronson bigint,p_activ boolean,p_motiv text) RETURNS boolean
@@ -285,7 +290,7 @@ BEGIN
     SELECT public.fn_izo_flux_aprobare_admin(p_pachet,p_updated_at,p_nume)
   $f$;
   REVOKE ALL ON FUNCTION public.fn_izo_flux_config_garda(),public.fn_izo_flux_garda(),public.fn_izo_flux_pachet_dupa(),
-    public.fn_izo_flux_storage(),public.fn_izo_flux_admin(bigint,boolean,text),public.fn_izo_seteaza_flux(bigint,boolean,text),
+    public.fn_izo_flux_admin(bigint,boolean,text),public.fn_izo_seteaza_flux(bigint,boolean,text),
     public.fn_izo_flux_aprobare_admin(bigint,timestamptz,text),public.fn_izo_pachet_aprobare_transgaz(bigint,timestamptz,text) FROM PUBLIC,anon,authenticated,service_role;
   GRANT EXECUTE ON FUNCTION public.fn_izo_flux_admin(bigint,boolean,text),public.fn_izo_flux_aprobare_admin(bigint,timestamptz,text) TO izo_montaj_writer;
   GRANT CREATE ON SCHEMA public TO izo_montaj_writer;
@@ -308,12 +313,13 @@ BEGIN
         FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND (p.proname LIKE 'fn_izo_flux_%' OR p.proname LIKE 'fn_izo_pachet_%' OR p.proname IN ('fn_izo_montaj_marcheaza','fn_izo_garda_montaj','fn_izo_seteaza_flux','fn_izo_porti_e4_definitii','fn_izo_porti_e4_lipsa'))),
       (SELECT string_agg(format('%s:%s:%s:%s',g.tgrelid::regclass,pg_get_triggerdef(g.oid),g.tgenabled,md5(p.prosrc)),',' ORDER BY g.tgrelid::regclass::text,g.tgname)
         FROM pg_trigger g JOIN pg_proc p ON p.oid=g.tgfoid WHERE NOT g.tgisinternal AND g.tgrelid IN
-          ('public.executie_tevi'::regclass,'public.executie_pachete_lansare'::regclass,'public.executie_pachete_documente'::regclass,'public.executie_tronsoane'::regclass,'public.izo_tronson_config'::regclass,'storage.objects'::regclass)),
+          ('public.executie_tevi'::regclass,'public.executie_pachete_lansare'::regclass,'public.executie_pachete_documente'::regclass,'public.executie_tronsoane'::regclass,'public.izo_tronson_config'::regclass)),
       (SELECT concat_ws(':',c.relowner,c.relrowsecurity,c.relforcerowsecurity,c.relacl) FROM pg_class c WHERE c.oid='public.izo_tronson_config'::regclass),
       (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',a.attname,a.atttypid,a.attnotnull,a.attacl,a.attidentity,pg_get_expr(d.adbin,d.adrelid)),',' ORDER BY a.attnum)
         FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid='public.izo_tronson_config'::regclass AND a.attnum>0 AND NOT a.attisdropped),
       (SELECT string_agg(pg_get_constraintdef(oid),',' ORDER BY conname) FROM pg_constraint WHERE conrelid='public.izo_tronson_config'::regclass),
       (SELECT string_agg(format('%s:%s:%s:%s:%s',polname,polcmd,polroles,pg_get_expr(polqual,polrelid),pg_get_expr(polwithcheck,polrelid)),',' ORDER BY polname) FROM pg_policy WHERE polrelid='public.izo_tronson_config'::regclass),
+      (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',polname,polcmd,polpermissive,polroles,pg_get_expr(polqual,polrelid),pg_get_expr(polwithcheck,polrelid)),',' ORDER BY polname) FROM pg_policy WHERE polrelid='storage.objects'::regclass AND polname LIKE 'izo\_flux\_pdf\_%'),
       (SELECT string_agg(pg_get_indexdef(indexrelid),',' ORDER BY indexrelid::regclass::text) FROM pg_index WHERE indrelid IN ('public.izo_tronson_config'::regclass,'public.profiles'::regclass)),
       (SELECT concat_ws(':',rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconfig) FROM pg_roles WHERE rolname='izo_montaj_writer'),
       (SELECT string_agg(format('%s:%s:%s:%s:%s',roleid,member,admin_option,inherit_option,set_option),',' ORDER BY roleid,member) FROM pg_auth_members WHERE roleid='izo_montaj_writer'::regrole OR member='izo_montaj_writer'::regrole)))

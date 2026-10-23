@@ -8,6 +8,9 @@ BEGIN
  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
  IF to_regclass('public.izo_fronturi') IS NOT NULL OR EXISTS(SELECT 1 FROM pg_roles WHERE rolname='izo_teren_editor') THEN RAISE EXCEPTION 'E4b deja exista'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_lipsa()'::regprocedure) IS DISTINCT FROM @@OLD_MD5@@ THEN RAISE EXCEPTION 'E4b baseline body'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_montaj(text,text,jsonb,jsonb)'::regprocedure) IS DISTINCT FROM @@GUARD_MD5@@ THEN RAISE EXCEPTION 'E4b baseline guard'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_admin(bigint,boolean,text)'::regprocedure) IS DISTINCT FROM @@FLUX_MD5@@ THEN RAISE EXCEPTION 'E4b baseline flux'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_e4_lipsa()'::regprocedure) IS DISTINCT FROM @@E4_GATE_MD5@@ THEN RAISE EXCEPTION 'E4b baseline E4 gate'; END IF;
  v_lipsa:=public.fn_izo_porti_lipsa(); IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b baseline porti %',v_lipsa; END IF;
  @@IMPL_PRE@@
  @@AMPRENTA@@
@@ -21,7 +24,24 @@ BEGIN
  @@SCHEMA@@
  @@SECURITY@@
  @@API@@
+ @@GUARD_NEW@@
+ @@FLUX_NEW@@
+ @@E4_GATE_NEW@@
+ CREATE UNIQUE INDEX ux_magbuc_ev_decl ON public.magazie_bucati_evenimente(document_id,tip)
+  WHERE document_tip='izo_declaratie' AND tip IN ('taiere','montaj','corectie');
  @@REVOKE_FUNCTIONS@@
+ GRANT UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute) ON public.magazie_bucati TO izo_montaj_writer;
+ GRANT SELECT ON public.magazie_bucati_evenimente,public.magazie_bucati_miscari TO izo_montaj_writer;
+ GRANT INSERT(tip,proiect_id,document_tip,document_id,import_id,storno_de_eveniment_id,motiv,declarat_de,aplicat_de,aplicat_rol,ora_server,ora_tableta,dispozitiv_id,server_ver)
+  ON public.magazie_bucati_evenimente TO izo_montaj_writer;
+ GRANT INSERT(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,din_loc,in_loc,lungime_mm,inainte,dupa,server_ver)
+  ON public.magazie_bucati_miscari TO izo_montaj_writer;
+ GRANT USAGE ON SEQUENCE public.magazie_bucati_evenimente_id_seq,public.magazie_bucati_miscari_id_seq TO izo_montaj_writer;
+ GRANT CREATE ON SCHEMA public TO izo_montaj_writer;
+ ALTER FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) OWNER TO izo_montaj_writer;
+ REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;
+ GRANT EXECUTE ON FUNCTION public.fn_izo_uid() TO izo_montaj_writer;
+ @@BIR0U_ACL@@
  -- NOLOGIN role has no direct write route. Private, typed helpers hold postgres privileges.
  -- API wrappers carry no setters, dynamic SQL, or identity text (control_0e).
  GRANT EXECUTE ON FUNCTION public.fn_izo_teren_intern(bigint,bigint,uuid,boolean),public.fn_izo_teren_push(uuid,jsonb) TO izo_teren_editor;
@@ -59,9 +79,9 @@ BEGIN
    (SELECT string_agg(format('%s:%s:%s',c.relname,pg_get_triggerdef(g.oid),g.tgenabled),',' ORDER BY c.relname,g.tgname)
     FROM pg_class c JOIN pg_trigger g ON g.tgrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(@@TABLES@@) AND NOT g.tgisinternal),
    (SELECT string_agg(pg_get_indexdef(i.indexrelid),',' ORDER BY i.indexrelid::regclass::text)
-    FROM pg_class c JOIN pg_index i ON i.indrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(@@TABLES@@)),
+    FROM pg_class c JOIN pg_index i ON i.indrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(@@TABLES@@) OR i.indexrelid=to_regclass('public.ux_magbuc_ev_decl'))),
    (SELECT string_agg(format('%s:%s:%s',c.relname,c.relowner,c.relacl),',' ORDER BY c.relname) FROM pg_class c
-    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%')),
+    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%' OR c.relname LIKE 'izo\_aprobari\_%')),
    (SELECT concat_ws(':',rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconfig) FROM pg_roles WHERE rolname='izo_teren_editor'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',roleid,member,admin_option,inherit_option,set_option),',' ORDER BY roleid,member) FROM pg_auth_members WHERE roleid='izo_teren_editor'::regrole OR member='izo_teren_editor'::regrole)))
  $f$;

@@ -50,6 +50,8 @@ livreaza 20261109140000 "$M/20261109b_izometrie_e4b_teren.sql"
 [[ -z "$("${PSQL[@]}" -d "$BAZA" -At -f "$RADACINA/scripts/control_0e.sql")" ]] || esec control_0e
 "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e4b.test.sql" >"$TMP/tests.log"
 grep -q 'E4B_TEST_END' "$TMP/tests.log" || esec 'test end marker'
+"${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e4b_aprobare.test.sql" >"$TMP/aprobare.log"
+grep -q 'E4B_APROBARE_TEST_END' "$TMP/aprobare.log" || esec 'approval end marker'
 # A rollback with even a rate-counter row must refuse. The failed connection rolls it back.
 if "${PSQL[@]}" -d "$BAZA" --single-transaction  -c "INSERT INTO public.izo_rata_apeluri VALUES ('00000000-0000-0000-0000-000000000121','fixture',now(),1)"  -c "SELECT set_config('gazpet.revenire_20261109b','IZO_E4B_SCOATE:' || txid_current(),true)"  -f "$V/20261109b_izometrie_e4b_teren_ROLLBACK.sql" >"$TMP/refuz.log" 2>&1; then esec 'rollback with data accepted'; fi
 grep -q 'date existente' "$TMP/refuz.log" || { cat "$TMP/refuz.log"; esec 'rollback wrong refusal'; }

@@ -39,6 +39,8 @@ CREATE TABLE public.izo_declaratii (
  depinde_de_uid uuid REFERENCES public.izo_declaratii(uid), depinde_de_versiune integer,
  payload jsonb NOT NULL CHECK(jsonb_typeof(payload)='object' AND NOT payload ? 'gps'),
  gps_prezent boolean NOT NULL DEFAULT false, data_montaj date NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT clock_timestamp(), aprobat_de uuid, aprobat_de_angajat bigint,
+ decis_la timestamptz, decizie_motiv text, eveniment_ids bigint[],
  server_ver bigint NOT NULL DEFAULT nextval('public.izo_server_ver_seq'),
  CHECK((stare='blocata')=(stare_inainte_blocare IS NOT NULL)),
  CHECK(stare<>'conflict' OR conflict_cod IS NOT NULL),
@@ -105,6 +107,36 @@ CREATE TABLE public.izo_sync_incercari (
  payload jsonb NOT NULL CHECK(NOT payload ? 'gps'), prima_la timestamptz NOT NULL DEFAULT now(), UNIQUE(autor_profile_id,op_id));
 CREATE TABLE public.izo_rata_apeluri (
  profile_id uuid NOT NULL, functie text NOT NULL, fereastra_de_la timestamptz NOT NULL, n integer NOT NULL, PRIMARY KEY(profile_id,functie));
+CREATE TABLE public.izo_aprobari (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, cheie_operatie uuid NOT NULL UNIQUE,
+ proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
+ tronson_id bigint NOT NULL REFERENCES public.executie_tronsoane(id),
+ aprobator uuid NOT NULL REFERENCES public.profiles(id), aprobator_angajat bigint NOT NULL,
+ randuri jsonb NOT NULL, decizii jsonb NOT NULL, hash_cerere text NOT NULL CHECK(hash_cerere ~ '^[0-9a-f]{64}$'),
+ amprenta_preview text NOT NULL, eveniment_ids bigint[] NOT NULL, raspuns jsonb NOT NULL,
+ creat_la timestamptz NOT NULL DEFAULT now());
+CREATE FUNCTION public.fn_izo_decl_ceas() RETURNS trigger
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+BEGIN
+ IF OLD.stare IN ('aprobata','respinsa','stearsa') THEN RAISE EXCEPTION 'declaratie_finala' USING ERRCODE='42501'; END IF;
+ IF (to_jsonb(OLD)-ARRAY['versiune','ultimul_op_id','stare','conflict_cod','stare_inainte_blocare','blocata_motiv',
+   'identificare','bucata_id','bucata_decl_uid','sursa_bucata_id','sursa_decl_uid','depinde_de_uid','depinde_de_versiune',
+   'payload','gps_prezent','data_montaj','server_ver','updated_at','aprobat_de','aprobat_de_angajat','decis_la','decizie_motiv','eveniment_ids'])
+  IS DISTINCT FROM (to_jsonb(NEW)-ARRAY['versiune','ultimul_op_id','stare','conflict_cod','stare_inainte_blocare','blocata_motiv',
+   'identificare','bucata_id','bucata_decl_uid','sursa_bucata_id','sursa_decl_uid','depinde_de_uid','depinde_de_versiune',
+   'payload','gps_prezent','data_montaj','server_ver','updated_at','aprobat_de','aprobat_de_angajat','decis_la','decizie_motiv','eveniment_ids']) THEN
+  RAISE EXCEPTION 'identitate_imuabila' USING ERRCODE='42501'; END IF;
+ IF NOT (CASE OLD.stare
+  WHEN 'ciorna' THEN NEW.stare IN ('ciorna','conflict','stearsa','trimisa','in_verificare','blocata','respinsa')
+  WHEN 'conflict' THEN NEW.stare IN ('ciorna','conflict','stearsa','trimisa','in_verificare','blocata','respinsa')
+  WHEN 'blocata' THEN NEW.stare IN ('ciorna','conflict','stearsa','trimisa','in_verificare','blocata','respinsa','revizie_ceruta')
+  WHEN 'trimisa' THEN NEW.stare IN ('aprobata','revizie_ceruta','respinsa','blocata')
+  WHEN 'in_verificare' THEN NEW.stare IN ('trimisa','conflict','revizie_ceruta','respinsa','blocata')
+  WHEN 'revizie_ceruta' THEN NEW.stare IN ('trimisa','conflict','in_verificare','respinsa','blocata')
+  ELSE false END) THEN RAISE EXCEPTION 'tranzitie_nepermisa' USING ERRCODE='42501'; END IF;
+ NEW.updated_at:=greatest(clock_timestamp(),OLD.updated_at+interval '1 microsecond');
+ RETURN NEW;
+END $f$;
 CREATE FUNCTION public.fn_izo_teren_imuabil() RETURNS trigger
  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 BEGIN RAISE EXCEPTION 'E4b jurnal/stergere imuabila' USING ERRCODE='42501'; END $f$;

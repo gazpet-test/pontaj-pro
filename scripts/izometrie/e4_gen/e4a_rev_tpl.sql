@@ -24,7 +24,8 @@ BEGIN
   v_porti_e3b:=substring(v_comentariu FROM 'porti_e3b_anterioare=(porti_e3b=[0-9a-f]{32})');
   IF v_amprenta IS DISTINCT FROM v_scrisa OR v_inainte IS NULL OR v_porti IS NULL OR v_porti_e3 IS NULL
     OR v_porti_e3b IS NULL OR position(' ‖ anterior: ' IN v_comentariu)=0 THEN RAISE EXCEPTION 'E4a stampile inconsistente'; END IF;
-  DROP TRIGGER a0_izo_flux_storage ON storage.objects;
+  DROP POLICY izo_flux_pdf_imuabil_upd ON storage.objects;
+  DROP POLICY izo_flux_pdf_imuabil_del ON storage.objects;
   DROP TRIGGER a0_izo_flux_tevi ON public.executie_tevi;
   DROP TRIGGER a0_izo_flux_pachete ON public.executie_pachete_lansare;
   DROP TRIGGER a0_izo_flux_pachete_dupa ON public.executie_pachete_lansare;
@@ -65,7 +66,7 @@ BEGIN
   REVOKE ALL ON FUNCTION public.fn_izo_garda_scriitor(),public.fn_izo_nivel(bigint),public.fn_izo_tip_cod(integer) FROM izo_montaj_writer;
   DROP FUNCTION public.fn_izo_flux_aprobare_admin(bigint,timestamptz,text);
   DROP FUNCTION public.fn_izo_flux_admin(bigint,boolean,text),public.fn_izo_flux_config_garda(),public.fn_izo_flux_garda(),
-    public.fn_izo_flux_pachet_dupa(),public.fn_izo_flux_storage();
+    public.fn_izo_flux_pachet_dupa(),public.fn_izo_flux_pdf_blocat(text,text);
   DROP TABLE public.izo_tronson_config;
   REVOKE USAGE ON SEQUENCE public.izo_server_ver_seq FROM izo_montaj_writer;
   REVOKE ALL ON SCHEMA public FROM izo_montaj_writer;

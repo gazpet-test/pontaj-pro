@@ -10,10 +10,10 @@ R, q, arr, block, src = (A[k] for k in ('R', 'q', 'arr', 'block', 'src'))
 baseline = (R / 'supabase/migrations/20261109a_izometrie_e4a_flux.sql').read_text(encoding='utf-8')
 tables = ['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii',
           'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii',
-          'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri']
-journals = ['izo_operatii', 'izo_declaratii_versiuni', 'izo_sync_incercari', 'izo_declaratii_gps']
+          'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri','izo_aprobari']
+journals = ['izo_operatii', 'izo_declaratii_versiuni', 'izo_sync_incercari', 'izo_declaratii_gps','izo_aprobari']
 schema = (SP / 'e4b_schema_tpl.sql').read_text(encoding='utf-8').replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
-api = (SP / 'e4b_api_tpl.sql').read_text(encoding='utf-8').replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
+api = '\n'.join((SP / f).read_text(encoding='utf-8') for f in ('e4b_api_tpl.sql','e4b_aprobare_tpl.sql')).replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
 security, implicit = [], list(A['B']['IMPL_POST'] + A['implicit'])
 for table in tables:
     security += [f'ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY;',
@@ -24,6 +24,8 @@ for table in tables:
             cols = 'id,autor_profile_id,op_id,canal,proiect_id,tronson_id,dispozitiv_id,seq,versiune_format,tip_op,payload,rezultat,cod,raspuns,ora_tableta,ora_server,offset_ceas_s,server_ver'
         elif table == 'izo_declaratii_versiuni':
             cols = 'declaratie_id,versiune,payload,op_id,la'
+        elif table == 'izo_aprobari':
+            cols = 'id,cheie_operatie,proiect_id,tronson_id,aprobator,aprobator_angajat,randuri,decizii,amprenta_preview,eveniment_ids,raspuns,creat_la'
         security.append(f'GRANT SELECT{("("+cols+")") if cols else ""} ON public.{table} TO authenticated;')
         expr = 'auth.uid() IS NOT NULL AND public.fn_izo_citire(proiect_id)'
         if table == 'izo_dispozitive':
@@ -44,7 +46,35 @@ for table in tables:
             security.append(f'ALTER TABLE public.{table} ENABLE ALWAYS TRIGGER a0_izo_teren_update;')
             implicit.append(f'trigger|a0_izo_teren_update on public.{table}|public.fn_izo_teren_imuabil()')
 
+security += ['CREATE TRIGGER a0_izo_decl_ceas BEFORE UPDATE ON public.izo_declaratii FOR EACH ROW EXECUTE FUNCTION public.fn_izo_decl_ceas();',
+             'ALTER TABLE public.izo_declaratii ENABLE ALWAYS TRIGGER a0_izo_decl_ceas;']
+for table in ('izo_fronturi','izo_preverificari','izo_declaratii','izo_rezervari','izo_operatii','izo_sync_incercari','izo_aprobari'):
+    security.append(f'REVOKE ALL ON SEQUENCE public.{table}_id_seq FROM PUBLIC,anon,authenticated,service_role;')
+implicit.append('trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()')
+for table in ('magazie_bucati_evenimente','magazie_bucati_miscari'):
+    for op in ('SELECT','INSERT'):
+        name = 'izo_montaj_' + table.removeprefix('magazie_bucati_') + '_' + ('sel' if op == 'SELECT' else 'ins')
+        security.append(f'CREATE POLICY {name} ON public.{table} FOR {op} TO izo_montaj_writer ' +
+                        ('USING' if op == 'SELECT' else 'WITH CHECK') + ' (proiect_id IS NOT NULL);')
+
 old = block(baseline, 'fn_izo_porti_lipsa')
+old_guard = block(baseline, 'fn_izo_garda_montaj')
+guard_branch = (SP / 'e4b_garda_tpl.sql').read_text(encoding='utf-8')
+assert old_guard.count('  BEGIN\n') == 1
+new_guard = old_guard.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION', 1).replace('  BEGIN\n', '  BEGIN\n' + guard_branch, 1)
+old_flux = block(baseline, 'fn_izo_flux_admin')
+old_e4_gate = block(baseline,'fn_izo_porti_e4_lipsa')
+seq_anchor = "(c.oid='public.izo_server_ver_seq'::regclass)"
+assert old_e4_gate.count(seq_anchor) == 1
+new_e4_gate = old_e4_gate.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1).replace(seq_anchor,
+    "(c.oid IN ('public.izo_server_ver_seq'::regclass,'public.magazie_bucati_evenimente_id_seq'::regclass,'public.magazie_bucati_miscari_id_seq'::regclass))")
+flux_anchor = """      IF to_regclass('public.izo_declaratii') IS NOT NULL OR to_regclass('public.izo_rezervari') IS NOT NULL
+        OR to_regclass('public.izo_fronturi') IS NOT NULL THEN RAISE EXCEPTION 'E4a oprirea necesita garda E4b'; END IF;"""
+assert old_flux.count(flux_anchor) == 1
+new_flux = old_flux.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1).replace(flux_anchor,"""      IF EXISTS(SELECT 1 FROM public.izo_declaratii WHERE tronson_id=p_tronson AND stare NOT IN ('aprobata','respinsa','stearsa'))
+        OR EXISTS(SELECT 1 FROM public.izo_rezervari WHERE tronson_id=p_tronson AND activa)
+        OR EXISTS(SELECT 1 FROM public.izo_fronturi WHERE tronson_id=p_tronson AND activ)
+        THEN RAISE EXCEPTION 'E4b front/declaratii/rezervari; oprire refuzata'; END IF;""")
 anchor = '    RETURN v;\n  END $f$;'
 assert old.count(anchor) == 1
 new = old.replace(anchor, '    v := v || public.fn_izo_porti_e4b_lipsa();\n' + anchor)
@@ -54,14 +84,37 @@ def inventory(xs):
 functions = re.findall(r'CREATE FUNCTION public\.(fn_izo_\w+)\(([^)]*)\)', schema + '\n' + api)
 # Explicit signatures: parameter declarations -> types. No catalog capture during apply.
 signatures = [name + '(' + ','.join(re.sub(r'^p_\w+\s+', '', p.strip()) for p in args.split(',') if p.strip()) + ')' for name,args in functions]
+wrappers = ['fn_izo_aprobare_lot','fn_izo_aproba','fn_izo_respinge','fn_izo_revizie_cere','fn_izo_iesire_tronson','fn_izo_front_elibereaza','fn_izo_serie_lamureste']
+internals = ['fn_izo_aprobare_intern','fn_izo_aproba_intern','fn_izo_decizie_intern','fn_izo_iesire_intern','fn_izo_front_intern','fn_izo_serie_intern']
+birou_acl = ['GRANT CREATE ON SCHEMA public TO izo_montaj_writer;']
+wrapper_signatures = []
+for signature in signatures:
+    name = signature.split('(')[0]
+    if name in internals:
+        birou_acl.append(f'GRANT EXECUTE ON FUNCTION public.{signature} TO izo_montaj_writer;')
+    if name in wrappers:
+        birou_acl.append(f'ALTER FUNCTION public.{signature} OWNER TO izo_montaj_writer;')
+        wrapper_signatures.append(signature)
+birou_acl.append('REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;')
+birou_acl.append('SET LOCAL ROLE izo_montaj_writer;')
+birou_acl.extend(f'GRANT EXECUTE ON FUNCTION public.{s} TO authenticated;' for s in wrapper_signatures)
+birou_acl.append('GRANT EXECUTE ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) TO postgres;')
+birou_acl.append('RESET ROLE;')
 values = {
     'SCHEMA': schema, 'API': api, 'SECURITY': '\n'.join(security),
+    'GUARD_NEW': new_guard, 'GUARD_OLD': old_guard.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
+    'GUARD_MD5': q(hashlib.md5(src(old_guard).encode()).hexdigest()),
+    'FLUX_NEW': new_flux, 'FLUX_OLD': old_flux.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
+    'FLUX_MD5': q(hashlib.md5(src(old_flux).encode()).hexdigest()),
+    'BIR0U_ACL': '\n'.join(birou_acl),
+    'E4_GATE_NEW': new_e4_gate, 'E4_GATE_OLD': old_e4_gate.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
+    'E4_GATE_MD5': q(hashlib.md5(src(old_e4_gate).encode()).hexdigest()),
     'PORTI_NEW': new, 'PORTI_OLD': old,
     'OLD_MD5': q(hashlib.md5(src(old).encode()).hexdigest()),
     'IMPL_PRE': inventory(A['B']['IMPL_POST'] + A['implicit']), 'IMPL_POST': inventory(implicit),
     'AMPRENTA': A['B']['AMP'], 'TABLES': arr(tables),
     'DROP_TABLES': '\n'.join(f'DROP TABLE public.{t};' for t in reversed(tables)),
-    'DROP_FUNCTIONS_BEFORE_TABLES': '\n'.join(f'DROP FUNCTION public.{s};' for s in reversed(signatures) if not s.startswith('fn_izo_teren_imuabil(')),
+    'DROP_FUNCTIONS_BEFORE_TABLES': '\n'.join(f'DROP FUNCTION public.{s};' for s in reversed(signatures) if not s.startswith(('fn_izo_teren_imuabil(','fn_izo_decl_ceas('))),
     'REVOKE_FUNCTIONS': '\n'.join(f'REVOKE ALL ON FUNCTION public.{s} FROM PUBLIC,anon,authenticated,service_role;' for s in signatures),
 }
 def render(template):

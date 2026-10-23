@@ -8,6 +8,9 @@ BEGIN
  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
  IF to_regclass('public.izo_fronturi') IS NOT NULL OR EXISTS(SELECT 1 FROM pg_roles WHERE rolname='izo_teren_editor') THEN RAISE EXCEPTION 'E4b deja exista'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_lipsa()'::regprocedure) IS DISTINCT FROM '5a4b766ca87edd9879f6fce787e94099' THEN RAISE EXCEPTION 'E4b baseline body'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_montaj(text,text,jsonb,jsonb)'::regprocedure) IS DISTINCT FROM '717b014983fd9ebf2f1bd03a2decb0db' THEN RAISE EXCEPTION 'E4b baseline guard'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_admin(bigint,boolean,text)'::regprocedure) IS DISTINCT FROM 'fcd8d97b064ecc27d57bc04fa1a11bf7' THEN RAISE EXCEPTION 'E4b baseline flux'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_e4_lipsa()'::regprocedure) IS DISTINCT FROM '3b22279764515549c47a55e48f5055c3' THEN RAISE EXCEPTION 'E4b baseline E4 gate'; END IF;
  v_lipsa:=public.fn_izo_porti_lipsa(); IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b baseline porti %',v_lipsa; END IF;
  v_impl := (SELECT coalesce(array_agg(x.d ORDER BY x.d COLLATE "C"), '{}'::text[])
        FROM (SELECT DISTINCT format('%s|%s|%s', o.type, o.identity, f.identity) d
@@ -15,7 +18,7 @@ BEGIN
                     CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
                     CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
               WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
-                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_storage on storage.objects|public.fn_izo_flux_storage()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
    -- <amprenta> (expresie IDENTICĂ în migrare și în revenire — verificată textual de scripts/test_izometrie_e2a.sh)
   SELECT md5(concat_ws(' | ',
       (SELECT string_agg(format('%s.%s:%s:%s:%s:%s', c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
@@ -111,6 +114,8 @@ CREATE TABLE public.izo_declaratii (
  depinde_de_uid uuid REFERENCES public.izo_declaratii(uid), depinde_de_versiune integer,
  payload jsonb NOT NULL CHECK(jsonb_typeof(payload)='object' AND NOT payload ? 'gps'),
  gps_prezent boolean NOT NULL DEFAULT false, data_montaj date NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT clock_timestamp(), aprobat_de uuid, aprobat_de_angajat bigint,
+ decis_la timestamptz, decizie_motiv text, eveniment_ids bigint[],
  server_ver bigint NOT NULL DEFAULT nextval('public.izo_server_ver_seq'),
  CHECK((stare='blocata')=(stare_inainte_blocare IS NOT NULL)),
  CHECK(stare<>'conflict' OR conflict_cod IS NOT NULL),
@@ -177,6 +182,36 @@ CREATE TABLE public.izo_sync_incercari (
  payload jsonb NOT NULL CHECK(NOT payload ? 'gps'), prima_la timestamptz NOT NULL DEFAULT now(), UNIQUE(autor_profile_id,op_id));
 CREATE TABLE public.izo_rata_apeluri (
  profile_id uuid NOT NULL, functie text NOT NULL, fereastra_de_la timestamptz NOT NULL, n integer NOT NULL, PRIMARY KEY(profile_id,functie));
+CREATE TABLE public.izo_aprobari (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, cheie_operatie uuid NOT NULL UNIQUE,
+ proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
+ tronson_id bigint NOT NULL REFERENCES public.executie_tronsoane(id),
+ aprobator uuid NOT NULL REFERENCES public.profiles(id), aprobator_angajat bigint NOT NULL,
+ randuri jsonb NOT NULL, decizii jsonb NOT NULL, hash_cerere text NOT NULL CHECK(hash_cerere ~ '^[0-9a-f]{64}$'),
+ amprenta_preview text NOT NULL, eveniment_ids bigint[] NOT NULL, raspuns jsonb NOT NULL,
+ creat_la timestamptz NOT NULL DEFAULT now());
+  CREATE FUNCTION public.fn_izo_decl_ceas() RETURNS trigger
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+BEGIN
+ IF OLD.stare IN ('aprobata','respinsa','stearsa') THEN RAISE EXCEPTION 'declaratie_finala' USING ERRCODE='42501'; END IF;
+ IF (to_jsonb(OLD)-ARRAY['versiune','ultimul_op_id','stare','conflict_cod','stare_inainte_blocare','blocata_motiv',
+   'identificare','bucata_id','bucata_decl_uid','sursa_bucata_id','sursa_decl_uid','depinde_de_uid','depinde_de_versiune',
+   'payload','gps_prezent','data_montaj','server_ver','updated_at','aprobat_de','aprobat_de_angajat','decis_la','decizie_motiv','eveniment_ids'])
+  IS DISTINCT FROM (to_jsonb(NEW)-ARRAY['versiune','ultimul_op_id','stare','conflict_cod','stare_inainte_blocare','blocata_motiv',
+   'identificare','bucata_id','bucata_decl_uid','sursa_bucata_id','sursa_decl_uid','depinde_de_uid','depinde_de_versiune',
+   'payload','gps_prezent','data_montaj','server_ver','updated_at','aprobat_de','aprobat_de_angajat','decis_la','decizie_motiv','eveniment_ids']) THEN
+  RAISE EXCEPTION 'identitate_imuabila' USING ERRCODE='42501'; END IF;
+ IF NOT (CASE OLD.stare
+  WHEN 'ciorna' THEN NEW.stare IN ('ciorna','conflict','stearsa','trimisa','in_verificare','blocata','respinsa')
+  WHEN 'conflict' THEN NEW.stare IN ('ciorna','conflict','stearsa','trimisa','in_verificare','blocata','respinsa')
+  WHEN 'blocata' THEN NEW.stare IN ('ciorna','conflict','stearsa','trimisa','in_verificare','blocata','respinsa','revizie_ceruta')
+  WHEN 'trimisa' THEN NEW.stare IN ('aprobata','revizie_ceruta','respinsa','blocata')
+  WHEN 'in_verificare' THEN NEW.stare IN ('trimisa','conflict','revizie_ceruta','respinsa','blocata')
+  WHEN 'revizie_ceruta' THEN NEW.stare IN ('trimisa','conflict','in_verificare','respinsa','blocata')
+  ELSE false END) THEN RAISE EXCEPTION 'tranzitie_nepermisa' USING ERRCODE='42501'; END IF;
+ NEW.updated_at:=greatest(clock_timestamp(),OLD.updated_at+interval '1 microsecond');
+ RETURN NEW;
+END $f$;
   CREATE FUNCTION public.fn_izo_teren_imuabil() RETURNS trigger
  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 BEGIN RAISE EXCEPTION 'E4b jurnal/stergere imuabila' USING ERRCODE='42501'; END $f$;
@@ -269,6 +304,29 @@ CREATE TRIGGER a0_izo_teren_update BEFORE UPDATE ON public.izo_sync_incercari FO
 ALTER TABLE public.izo_sync_incercari ENABLE ALWAYS TRIGGER a0_izo_teren_update;
 ALTER TABLE public.izo_rata_apeluri ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.izo_rata_apeluri FROM PUBLIC,anon,authenticated,service_role;
+ALTER TABLE public.izo_aprobari ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.izo_aprobari FROM PUBLIC,anon,authenticated,service_role;
+GRANT SELECT(id,cheie_operatie,proiect_id,tronson_id,aprobator,aprobator_angajat,randuri,decizii,amprenta_preview,eveniment_ids,raspuns,creat_la) ON public.izo_aprobari TO authenticated;
+CREATE POLICY izo_aprobari_api_sel ON public.izo_aprobari FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL AND public.fn_izo_citire(proiect_id));
+CREATE TRIGGER a0_izo_teren_delete BEFORE DELETE ON public.izo_aprobari FOR EACH ROW EXECUTE FUNCTION public.fn_izo_teren_imuabil();
+ALTER TABLE public.izo_aprobari ENABLE ALWAYS TRIGGER a0_izo_teren_delete;
+CREATE TRIGGER a0_izo_teren_truncate BEFORE TRUNCATE ON public.izo_aprobari FOR EACH STATEMENT EXECUTE FUNCTION public.fn_izo_teren_imuabil();
+ALTER TABLE public.izo_aprobari ENABLE ALWAYS TRIGGER a0_izo_teren_truncate;
+CREATE TRIGGER a0_izo_teren_update BEFORE UPDATE ON public.izo_aprobari FOR EACH ROW EXECUTE FUNCTION public.fn_izo_teren_imuabil();
+ALTER TABLE public.izo_aprobari ENABLE ALWAYS TRIGGER a0_izo_teren_update;
+CREATE TRIGGER a0_izo_decl_ceas BEFORE UPDATE ON public.izo_declaratii FOR EACH ROW EXECUTE FUNCTION public.fn_izo_decl_ceas();
+ALTER TABLE public.izo_declaratii ENABLE ALWAYS TRIGGER a0_izo_decl_ceas;
+REVOKE ALL ON SEQUENCE public.izo_fronturi_id_seq FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON SEQUENCE public.izo_preverificari_id_seq FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON SEQUENCE public.izo_declaratii_id_seq FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON SEQUENCE public.izo_rezervari_id_seq FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON SEQUENCE public.izo_operatii_id_seq FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON SEQUENCE public.izo_sync_incercari_id_seq FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON SEQUENCE public.izo_aprobari_id_seq FROM PUBLIC,anon,authenticated,service_role;
+CREATE POLICY izo_montaj_evenimente_sel ON public.magazie_bucati_evenimente FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+CREATE POLICY izo_montaj_evenimente_ins ON public.magazie_bucati_evenimente FOR INSERT TO izo_montaj_writer WITH CHECK (proiect_id IS NOT NULL);
+CREATE POLICY izo_montaj_miscari_sel ON public.magazie_bucati_miscari FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+CREATE POLICY izo_montaj_miscari_ins ON public.magazie_bucati_miscari FOR INSERT TO izo_montaj_writer WITH CHECK (proiect_id IS NOT NULL);
  -- Helpers are private. Only the three thin entry points are executable by API.
   CREATE FUNCTION public.fn_izo_teren_autorizat(p_proiect bigint,p_lock boolean) RETURNS bigint
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
@@ -453,7 +511,7 @@ BEGIN
  SELECT * INTO v_s FROM public.izo_preverificari WHERE uid=(v_p->>'preverificare_uid')::uuid;
  IF NOT FOUND OR v_s.autor_profile_id<>v_uid OR v_s.proiect_id<>p_front.proiect_id OR v_s.tronson_id<>p_front.tronson_id THEN
   RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
- IF v_s.stare<>'deschisa' THEN RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
+ IF v_s.stare<>'deschisa' AND NOT (v_s.stare='trimisa' AND v_type='decl_salveaza') THEN RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
  IF v_type='sesiune_trimite' THEN
   IF EXISTS(SELECT 1 FROM public.izo_declaratii WHERE preverificare_id=v_s.id AND stare IN ('conflict','blocata','revizie_ceruta')) THEN
    RAISE EXCEPTION 'rand_blocant' USING ERRCODE='IZ002'; END IF;
@@ -474,6 +532,8 @@ BEGIN
  END IF;
  IF v_type NOT IN ('decl_salveaza','decl_sterge') THEN RAISE EXCEPTION 'tip_op' USING ERRCODE='IZ001'; END IF;
  SELECT * INTO v_d FROM public.izo_declaratii WHERE uid=(v_p->>'uid')::uuid;
+ IF v_s.stare='trimisa' AND (v_d.id IS NULL OR v_d.stare NOT IN ('revizie_ceruta','conflict','blocata','in_verificare')) THEN
+  RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
  IF FOUND THEN
   IF v_d.declarat_de<>v_uid OR v_d.preverificare_id<>v_s.id THEN RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
   IF v_d.versiune IS DISTINCT FROM (v_p->>'versiune_baza')::integer OR v_d.stare NOT IN ('ciorna','conflict','blocata','in_verificare','revizie_ceruta') THEN
@@ -585,6 +645,9 @@ BEGIN
   END LOOP;
   IF v_sum<>v_base THEN RAISE EXCEPTION 'r3' USING ERRCODE='IZ001'; END IF;
  END IF;
+ IF v_s.stare='trimisa' AND v_state='ciorna' THEN
+  v_state:=CASE WHEN v_ident='nerezolvata' THEN 'in_verificare' ELSE 'trimisa' END;
+ END IF;
  -- Stable declaration identity; no facts are written to the registry.
  IF v_d.id IS NULL THEN
   INSERT INTO public.izo_declaratii(uid,preverificare_id,proiect_id,tronson_id,tip,versiune,declarat_de,declarat_de_angajat,dispozitiv_id,ultimul_op_id,
@@ -606,7 +669,8 @@ BEGIN
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=now(),motiv_eliberare='expirata',server_ver=nextval('public.izo_server_ver_seq')
    WHERE activa AND expira_dupa<now() AND (bucata_id=v_source OR bucata_decl_uid=v_decl);
   INSERT INTO public.izo_rezervari(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,bucata_decl_uid,din_depozit,expira_dupa)
-   VALUES(p_front.proiect_id,p_front.tronson_id,v_d.id,v_d.versiune,v_uid,v_source,v_decl,coalesce(v_b.depozit_id IS NOT NULL,false),p_front.expira_la+interval '24 hours');
+   VALUES(p_front.proiect_id,p_front.tronson_id,v_d.id,v_d.versiune,v_uid,v_source,v_decl,coalesce(v_b.depozit_id IS NOT NULL,false),
+    CASE WHEN v_s.stare='deschisa' THEN p_front.expira_la+interval '24 hours' END);
  END IF;
  IF v_d.tip='taiere' THEN
   -- Never recycle letters, including letters of cancelled declarations.
@@ -789,7 +853,622 @@ END $f$;
  SELECT public.fn_izo_teren_intern(p_proiect,p_tronson,p_dispozitiv,true)
 $f$;
 
- REVOKE ALL ON FUNCTION public.fn_izo_teren_imuabil() FROM PUBLIC,anon,authenticated,service_role;
+-- E4b-2. API wrappers are deliberately thin; all helpers are private.
+  CREATE FUNCTION public.fn_izo_autor_valabil(p_autor uuid,p_proiect bigint,p_lock boolean) RETURNS boolean
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_owner boolean; v_emp bigint;
+BEGIN
+ IF p_lock THEN
+  SELECT is_owner,employee_id INTO v_owner,v_emp FROM public.profiles WHERE id=p_autor FOR SHARE;
+ ELSE SELECT is_owner,employee_id INTO v_owner,v_emp FROM public.profiles WHERE id=p_autor; END IF;
+ IF v_emp IS NULL THEN RETURN false; END IF;
+ IF v_owner THEN RETURN true; END IF;
+ IF p_lock THEN
+  PERFORM 1 FROM public.user_module_access WHERE profile_id=p_autor AND module='executie.izometrie'
+   AND access_level IN ('editor','admin') ORDER BY id FOR SHARE;
+ ELSE
+  PERFORM 1 FROM public.user_module_access WHERE profile_id=p_autor AND module='executie.izometrie' AND access_level IN ('editor','admin');
+ END IF;
+ IF NOT FOUND THEN RETURN false; END IF;
+ IF p_lock THEN
+  PERFORM 1 FROM public.izo_atribuiri WHERE profile_id=p_autor AND proiect_id=p_proiect AND rol='inginer_izometrie'
+   AND activ AND current_date BETWEEN valabil_de AND coalesce(valabil_pana,current_date) ORDER BY id FOR SHARE;
+ ELSE
+  PERFORM 1 FROM public.izo_atribuiri WHERE profile_id=p_autor AND proiect_id=p_proiect AND rol='inginer_izometrie'
+   AND activ AND current_date BETWEEN valabil_de AND coalesce(valabil_pana,current_date);
+ END IF;
+ RETURN FOUND;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_birou_autorizat(p_proiect bigint,p_depozit integer,p_lock boolean) RETURNS bigint
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_emp bigint; v_owner boolean; v_uid uuid:=public.fn_izo_uid();
+BEGIN
+ IF p_lock THEN
+  SELECT employee_id,is_owner INTO v_emp,v_owner FROM public.profiles WHERE id=v_uid FOR SHARE;
+ ELSE SELECT employee_id,is_owner INTO v_emp,v_owner FROM public.profiles WHERE id=v_uid; END IF;
+ IF v_emp IS NULL THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+ IF v_owner THEN RETURN v_emp; END IF;
+ -- Reuse the deployed access contract; no access/module data is introduced here.
+ IF p_depozit IS NULL THEN
+  IF NOT (public.fn_izo_acces(p_proiect,'executie.izometrie','editor','manager_aprobator')
+    OR public.fn_izo_acces(p_proiect,'executie.izometrie','editor','inlocuitor_aprobator')) THEN
+   RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+ ELSE
+  IF NOT public.fn_izo_acces(p_proiect,'magazie','editor','gestionar') THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+ END IF;
+ IF p_lock THEN
+  PERFORM 1 FROM public.user_module_access WHERE profile_id=v_uid
+   AND module=(CASE WHEN p_depozit IS NULL THEN 'executie.izometrie' ELSE 'magazie' END)
+   AND access_level IN ('editor','admin') ORDER BY id FOR SHARE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+ END IF;
+ IF p_lock THEN
+  PERFORM 1 FROM public.izo_atribuiri WHERE profile_id=v_uid AND proiect_id=p_proiect AND activ
+   AND current_date BETWEEN valabil_de AND coalesce(valabil_pana,current_date)
+   AND ((p_depozit IS NULL AND rol IN ('manager_aprobator','inlocuitor_aprobator') AND depozit_id IS NULL)
+     OR (p_depozit IS NOT NULL AND rol='gestionar' AND depozit_id=p_depozit)) ORDER BY id FOR SHARE;
+ ELSE
+  PERFORM 1 FROM public.izo_atribuiri WHERE profile_id=v_uid AND proiect_id=p_proiect AND activ
+   AND current_date BETWEEN valabil_de AND coalesce(valabil_pana,current_date)
+   AND ((p_depozit IS NULL AND rol IN ('manager_aprobator','inlocuitor_aprobator') AND depozit_id IS NULL)
+     OR (p_depozit IS NOT NULL AND rol='gestionar' AND depozit_id=p_depozit));
+ END IF;
+ IF NOT FOUND THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+ RETURN v_emp;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_birou_intrare(p_proiect bigint,p_depozit integer) RETURNS void
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_lipsa text[];
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ IF session_user<>'authenticator' OR public.fn_izo_jwt_rol() IS DISTINCT FROM 'authenticated' OR public.fn_izo_uid() IS NULL THEN
+  RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+ IF coalesce(current_setting('izo.montaj_ctx',true),'')<>'' OR coalesce(current_setting('izo.receptie_ctx',true),'')<>''
+  OR coalesce(current_setting('izo.registru_tx',true),'')<>'' THEN RAISE EXCEPTION 'context_ocupat' USING ERRCODE='42501'; END IF;
+ PERFORM public.fn_izo_birou_autorizat(p_proiect,p_depozit,false);
+ v_lipsa:=public.fn_izo_porti_lipsa();
+ IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b porti %',v_lipsa; END IF;
+END $f$;
+
+-- Runs AS the existing E4 registry writer, never as postgres. Typed snapshots and
+-- exact event/movement images are checked by the existing registry guards.
+  CREATE FUNCTION public.fn_izo_birou_fapt(p_bucata bigint,p_op text,p_ref text,p_tronson bigint,p_depozit integer,
+ p_autor uuid,p_dispozitiv text,p_ora timestamptz,p_motiv text) RETURNS bigint
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_b public.magazie_bucati; v_dupa public.magazie_bucati; v_ev public.magazie_bucati_evenimente;
+ v_m public.magazie_bucati_miscari; v_ctx text; v_n bigint; v_now timestamptz:=clock_timestamp();
+BEGIN
+ IF current_user<>'izo_montaj_writer' OR p_op IS NULL OR p_op NOT IN ('aproba','iesire') THEN RAISE EXCEPTION 'scriitor_invalid' USING ERRCODE='42501'; END IF;
+ SELECT * INTO STRICT v_b FROM public.magazie_bucati WHERE id=p_bucata FOR UPDATE;
+ v_dupa:=v_b; v_dupa.updated_at:=v_now; v_dupa.server_ver:=nextval('public.izo_server_ver_seq');
+ IF p_op='aproba' THEN
+  IF v_b.stare<>'pe_tronson' OR v_b.tronson_id IS DISTINCT FROM p_tronson THEN RAISE EXCEPTION 'stare'; END IF;
+  v_dupa.stare:='montata';
+ ELSE
+  IF v_b.stare NOT IN ('sosit','receptionat','retur') OR v_b.depozit_id IS DISTINCT FROM p_depozit THEN RAISE EXCEPTION 'stare'; END IF;
+  v_dupa.stare:='pe_tronson'; v_dupa.locatie_tip:='tronson'; v_dupa.tronson_id:=p_tronson; v_dupa.depozit_id:=NULL;
+  v_dupa.atribute:=coalesce(v_b.atribute,'{}'::jsonb)||jsonb_build_object('depozit_origine_id',p_depozit);
+ END IF;
+ v_ctx:=concat_ws('|',txid_current()::text,p_op,p_ref,v_b.proiect_id,p_tronson,v_dupa.server_ver,v_b.id);
+ PERFORM public.fn_izo_montaj_marcheaza(v_ctx,to_jsonb(v_b),to_jsonb(v_dupa),NULL);
+ UPDATE public.magazie_bucati SET stare=v_dupa.stare,locatie_tip=v_dupa.locatie_tip,depozit_id=v_dupa.depozit_id,
+  tronson_id=v_dupa.tronson_id,atribute=v_dupa.atribute,server_ver=v_dupa.server_ver,updated_at=v_now WHERE id=v_b.id;
+ GET DIAGNOSTICS v_n=ROW_COUNT;
+ IF v_n<>1 THEN RAISE EXCEPTION 'bucata_schimbata'; END IF;
+ IF to_jsonb(v_dupa) IS DISTINCT FROM (SELECT to_jsonb(b) FROM public.magazie_bucati b WHERE b.id=v_b.id) THEN RAISE EXCEPTION 'reconciliere_bucata'; END IF;
+ v_ev:=jsonb_populate_record(NULL::public.magazie_bucati_evenimente,jsonb_build_object(
+  'tip',CASE WHEN p_op='aproba' THEN 'montaj' ELSE 'livrare' END,'proiect_id',v_b.proiect_id,
+  'document_tip',CASE WHEN p_op='aproba' THEN 'izo_declaratie' ELSE 'izo_iesire' END,'document_id',p_ref,
+  'motiv',p_motiv,'declarat_de',p_autor,'aplicat_de',public.fn_izo_uid(),'aplicat_rol','izo_montaj_writer',
+  'ora_server',v_now,'ora_tableta',p_ora,'dispozitiv_id',p_dispozitiv,'server_ver',nextval('public.izo_server_ver_seq')));
+ PERFORM public.fn_izo_montaj_marcheaza(v_ctx,NULL,NULL,jsonb_build_object('tabel','magazie_bucati_evenimente','rand',to_jsonb(v_ev)-'id'));
+ INSERT INTO public.magazie_bucati_evenimente(tip,proiect_id,document_tip,document_id,import_id,storno_de_eveniment_id,motiv,
+  declarat_de,aplicat_de,aplicat_rol,ora_server,ora_tableta,dispozitiv_id,server_ver)
+ VALUES(v_ev.tip,v_ev.proiect_id,v_ev.document_tip,v_ev.document_id,v_ev.import_id,v_ev.storno_de_eveniment_id,v_ev.motiv,
+  v_ev.declarat_de,v_ev.aplicat_de,v_ev.aplicat_rol,v_ev.ora_server,v_ev.ora_tableta,v_ev.dispozitiv_id,v_ev.server_ver) RETURNING id INTO v_ev.id;
+ v_m:=jsonb_populate_record(NULL::public.magazie_bucati_miscari,jsonb_build_object('eveniment_id',v_ev.id,'proiect_id',v_b.proiect_id,
+  'bucata_id',v_b.id,'rol',CASE WHEN p_op='aproba' THEN 'montat' ELSE 'mutat' END,'stare_inainte',v_b.stare,'stare_dupa',v_dupa.stare,
+  'din_loc',jsonb_build_object('depozit_id',v_b.depozit_id,'tronson_id',v_b.tronson_id),
+  'in_loc',jsonb_build_object('depozit_id',v_dupa.depozit_id,'tronson_id',v_dupa.tronson_id),
+  'lungime_mm',v_b.lungime_mm,'inainte',to_jsonb(v_b),'dupa',to_jsonb(v_dupa),'server_ver',nextval('public.izo_server_ver_seq')));
+ PERFORM public.fn_izo_montaj_marcheaza(v_ctx,NULL,NULL,jsonb_build_object('tabel','magazie_bucati_miscari','rand',to_jsonb(v_m)-'id'));
+ INSERT INTO public.magazie_bucati_miscari(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,din_loc,in_loc,lungime_mm,inainte,dupa,server_ver)
+ VALUES(v_m.eveniment_id,v_m.proiect_id,v_m.bucata_id,v_m.rol,v_m.stare_inainte,v_m.stare_dupa,v_m.din_loc,v_m.in_loc,
+  v_m.lungime_mm,v_m.inainte,v_m.dupa,v_m.server_ver);
+ PERFORM public.fn_izo_montaj_marcheaza(NULL,NULL,NULL,NULL);
+ RETURN v_ev.id;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_birou_preview(p_preverificare bigint) RETURNS jsonb
+ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT jsonb_build_object('preverificare',to_jsonb(s),'randuri',coalesce((
+  SELECT jsonb_agg(jsonb_build_object('declaratie',to_jsonb(d),'rezervari',(
+   SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]') FROM public.izo_rezervari r WHERE r.declaratie_id=d.id),
+   'bucata',(SELECT to_jsonb(b)||jsonb_build_object('radacina',(SELECT to_jsonb(root) FROM public.magazie_bucati root WHERE root.id=coalesce(b.radacina_id,b.id)),
+     'fara_pv',public.fn_izo_pv_lipsa(ARRAY[coalesce(b.radacina_id,b.id)])) FROM public.magazie_bucati b WHERE b.id=d.bucata_id),
+   'copii',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY c.uid),'[]') FROM public.izo_bucati_declarate c WHERE c.declaratie_id=d.id)) ORDER BY d.id)
+  FROM public.izo_declaratii d WHERE d.preverificare_id=s.id),'[]'),
+  'config',(SELECT to_jsonb(c) FROM public.izo_tronson_config c WHERE c.tronson_id=s.tronson_id),
+  'proiect_config',(SELECT to_jsonb(c) FROM public.izo_proiect_config c WHERE c.proiect_id=s.proiect_id),
+  'proiect',(SELECT to_jsonb(p) FROM public.executie_proiecte p WHERE p.id=s.proiect_id),
+  'tronson',(SELECT to_jsonb(t) FROM public.executie_tronsoane t WHERE t.id=s.tronson_id))
+ FROM public.izo_preverificari s WHERE s.id=p_preverificare
+$f$;
+
+  CREATE FUNCTION public.fn_izo_aprobare_intern(p_preverificare bigint) RETURNS jsonb
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_pr bigint; v_doc jsonb;
+BEGIN
+ -- API/isolation/schema precede the first table read.
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ SELECT proiect_id INTO v_pr FROM public.izo_preverificari WHERE id=p_preverificare;
+ PERFORM public.fn_izo_birou_intrare(v_pr,NULL);
+ v_doc:=public.fn_izo_birou_preview(p_preverificare);
+ IF v_doc IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
+ RETURN v_doc||jsonb_build_object('amprenta',encode(sha256(convert_to(v_doc::text,'UTF8')),'hex'),'decizii_cerute','[]'::jsonb);
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_birou_jurnal(p_cheie uuid,p_canal text,p_tip text,p_proiect bigint,p_tronson bigint,
+ p_payload jsonb,p_hash text,p_raspuns jsonb) RETURNS void
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ INSERT INTO public.izo_operatii(autor_profile_id,op_id,canal,proiect_id,tronson_id,dispozitiv_id,seq,versiune_format,
+  tip_op,payload,hash_cerere,rezultat,raspuns)
+ VALUES(public.fn_izo_uid(),p_cheie,p_canal,p_proiect,p_tronson,p_cheie,1,1,p_tip,p_payload,p_hash,'acceptat',p_raspuns)
+$f$;
+
+  CREATE FUNCTION public.fn_izo_aproba_intern(p_cheie uuid,p_preverificare bigint,p_randuri jsonb,p_amprenta text,p_decizii jsonb) RETURNS jsonb
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_s public.izo_preverificari; v_d public.izo_declaratii; v_b public.magazie_bucati; v_r jsonb;
+ v_emp bigint; v_ev bigint; v_evs bigint[]:='{}'; v_ids bigint[]; v_doc jsonb; v_hash text; v_payload jsonb; v_old public.izo_operatii; v_n bigint;
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ SELECT * INTO v_s FROM public.izo_preverificari WHERE id=p_preverificare;
+ PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL);
+ IF v_s.id IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
+ IF p_cheie IS NULL OR jsonb_typeof(p_randuri) IS DISTINCT FROM 'array' OR jsonb_array_length(p_randuri) NOT BETWEEN 1 AND 200
+  OR p_decizii IS DISTINCT FROM '{}'::jsonb OR p_amprenta IS NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
+ SELECT array_agg((x->>'declaratie_id')::bigint ORDER BY (x->>'declaratie_id')::bigint) INTO v_ids FROM jsonb_array_elements(p_randuri) x;
+ IF cardinality(v_ids)<>(SELECT count(DISTINCT x) FROM unnest(v_ids) x) OR array_position(v_ids,NULL) IS NOT NULL THEN RAISE EXCEPTION 'randuri_invalide'; END IF;
+ SELECT * INTO v_s FROM public.izo_preverificari WHERE id=p_preverificare FOR UPDATE;
+ PERFORM 1 FROM public.izo_declaratii WHERE preverificare_id=v_s.id ORDER BY id FOR UPDATE;
+ v_payload:=jsonb_build_object('preverificare',p_preverificare,'randuri',p_randuri,'amprenta',p_amprenta,'decizii',p_decizii);
+ v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
+ SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
+ IF FOUND THEN
+  IF v_old.canal<>'aprobare' OR v_old.tip_op<>'aproba' OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
+  PERFORM public.fn_izo_birou_autorizat(v_s.proiect_id,NULL,true);
+  RETURN v_old.raspuns;
+ END IF;
+ v_emp:=public.fn_izo_birou_autorizat(v_s.proiect_id,NULL,true);
+ IF v_s.stare<>'trimisa' THEN RAISE EXCEPTION 'sesiune_stare'; END IF;
+ PERFORM public.fn_izo_blocheaza_locuri(v_s.proiect_id,ARRAY[]::integer[],ARRAY[v_s.tronson_id]);
+ PERFORM public.fn_izo_blocheaza_tabele(); PERFORM public.fn_izo_lock_partajat(v_s.proiect_id);
+ IF coalesce(public.fn_izo_nivel(v_s.proiect_id),'off') NOT IN ('stoc','montaj') OR NOT EXISTS
+  (SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_s.tronson_id AND flux_montaj) THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
+ PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_s.proiect_id AND id=radacina_id ORDER BY id FOR UPDATE;
+ PERFORM 1 FROM public.magazie_bucati WHERE id IN (SELECT bucata_id FROM public.izo_declaratii WHERE id=ANY(v_ids)) ORDER BY id FOR UPDATE;
+ v_doc:=public.fn_izo_birou_preview(v_s.id);
+ IF encode(sha256(convert_to(v_doc::text,'UTF8')),'hex') IS DISTINCT FROM p_amprenta THEN RAISE EXCEPTION 'preview_vechi'; END IF;
+ -- Validate every selected row before the first fact. Partial approval is an explicit subset.
+ FOR v_r IN SELECT value FROM jsonb_array_elements(p_randuri) LOOP
+  SELECT * INTO v_d FROM public.izo_declaratii WHERE id=(v_r->>'declaratie_id')::bigint AND preverificare_id=v_s.id;
+  IF NOT FOUND OR v_d.versiune IS DISTINCT FROM (v_r->>'versiune')::integer
+   OR v_d.updated_at IS DISTINCT FROM (v_r->>'updated_at')::timestamptz OR v_d.stare<>'trimisa' THEN RAISE EXCEPTION 'cas'; END IF;
+  IF v_d.declarat_de=public.fn_izo_uid() OR v_d.declarat_de_angajat=v_emp THEN RAISE EXCEPTION 'propriul_rand' USING ERRCODE='42501'; END IF;
+  IF v_d.tip<>'montaj' OR v_d.identificare IS DISTINCT FROM 'bucata' OR v_d.depinde_de_uid IS NOT NULL
+   OR v_d.payload ? 'sudura' OR coalesce(v_d.payload#>>'{amonte,tip}','inceput_lant')<>'inceput_lant' THEN RAISE EXCEPTION 'necesita_graf_suduri_si_simulare'; END IF;
+  SELECT * INTO v_b FROM public.magazie_bucati WHERE id=v_d.bucata_id;
+  IF v_b.proiect_id IS DISTINCT FROM v_s.proiect_id OR v_b.stare IS DISTINCT FROM 'pe_tronson'
+   OR v_b.tronson_id IS DISTINCT FROM v_s.tronson_id OR v_b.tip_cod IS NULL OR v_b.executie_teava_id IS NOT NULL
+   OR v_b.lungime_mm IS DISTINCT FROM (v_d.payload->>'lungime_montata_mm')::integer THEN RAISE EXCEPTION 'stare'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.izo_rezervari WHERE declaratie_id=v_d.id AND declaratie_versiune=v_d.versiune
+   AND bucata_id=v_b.id AND activa AND expira_dupa IS NULL) THEN RAISE EXCEPTION 'rezervare_pierduta'; END IF;
+  IF cardinality(public.fn_izo_pv_lipsa(ARRAY[coalesce(v_b.radacina_id,v_b.id)]))>0 THEN RAISE EXCEPTION 'fara_pv'; END IF;
+  IF (v_d.payload#>>'{confirmare,mod}') IS NULL OR (v_d.payload#>>'{confirmare,mod}') NOT IN ('marcaj','taiata','masurat','marcaj_diferit') THEN RAISE EXCEPTION 'lungime_neconfirmata'; END IF;
+  IF v_d.payload#>>'{confirmare,mod}'='marcaj' AND (v_d.payload#>>'{confirmare,cm}')::integer IS DISTINCT FROM (round(v_b.lungime_mm::numeric/10)::integer%100) THEN RAISE EXCEPTION 'marcaj'; END IF;
+ END LOOP;
+ FOR v_d IN SELECT * FROM public.izo_declaratii WHERE id=ANY(v_ids) ORDER BY id LOOP
+  v_ev:=public.fn_izo_birou_fapt(v_d.bucata_id,'aproba',v_d.id::text,v_s.tronson_id,NULL,v_d.declarat_de,v_d.dispozitiv_id::text,
+   (SELECT ora_tableta FROM public.izo_operatii WHERE autor_profile_id=v_d.declarat_de AND op_id=v_d.ultimul_op_id AND canal='teren'),NULL);
+  v_evs:=array_append(v_evs,v_ev);
+  UPDATE public.izo_rezervari SET activa=false,eliberata_la=clock_timestamp(),motiv_eliberare='consumata',eveniment_id=v_ev,
+   server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND declaratie_versiune=v_d.versiune AND activa;
+  GET DIAGNOSTICS v_n=ROW_COUNT; IF v_n<>1 THEN RAISE EXCEPTION 'reconciliere_rezervare'; END IF;
+  UPDATE public.izo_declaratii SET stare='aprobata',aprobat_de=public.fn_izo_uid(),aprobat_de_angajat=v_emp,
+   decis_la=clock_timestamp(),eveniment_ids=ARRAY[v_ev],server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id;
+ END LOOP;
+ IF NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE preverificare_id=v_s.id AND stare NOT IN ('aprobata','respinsa','stearsa')) THEN
+  UPDATE public.izo_preverificari SET stare='inchisa',server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_s.id;
+ END IF;
+ v_r:=jsonb_build_object('cod','aprobat','eveniment_ids',to_jsonb(v_evs));
+ INSERT INTO public.izo_aprobari(cheie_operatie,proiect_id,tronson_id,aprobator,aprobator_angajat,randuri,decizii,hash_cerere,amprenta_preview,eveniment_ids,raspuns)
+ VALUES(p_cheie,v_s.proiect_id,v_s.tronson_id,public.fn_izo_uid(),v_emp,p_randuri,p_decizii,v_hash,p_amprenta,v_evs,v_r);
+ PERFORM public.fn_izo_birou_jurnal(p_cheie,'aprobare','aproba',v_s.proiect_id,v_s.tronson_id,v_payload,v_hash,v_r);
+ RETURN v_r;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_aprobare_lot(p_preverificare bigint) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_aprobare_intern(p_preverificare)
+$f$;
+  CREATE FUNCTION public.fn_izo_aproba(p_cheie uuid,p_preverificare bigint,p_randuri jsonb,p_amprenta text,p_decizii jsonb) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_aproba_intern(p_cheie,p_preverificare,p_randuri,p_amprenta,p_decizii)
+$f$;
+
+  CREATE FUNCTION public.fn_izo_iesire_intern(p_cheie uuid,p_depozit integer,p_tronson bigint,p_bucati bigint[],p_nr_aviz text,p_data date) RETURNS jsonb
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_pr bigint; v_b public.magazie_bucati; v_payload jsonb; v_hash text; v_old public.izo_operatii;
+ v_r jsonb; v_evs bigint[]:='{}'; v_ev bigint; v_ids bigint[]; v_site integer;
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ SELECT proiect_id INTO v_pr FROM public.executie_tronsoane WHERE id=p_tronson;
+ PERFORM public.fn_izo_birou_intrare(v_pr,p_depozit);
+ IF v_pr IS NULL THEN RAISE EXCEPTION 'tronson_lipsa'; END IF;
+ IF p_cheie IS NULL OR p_depozit IS NULL OR p_data IS NULL OR p_data>current_date
+  OR length(btrim(coalesce(p_nr_aviz,''))) NOT BETWEEN 3 AND 100 OR cardinality(p_bucati) NOT BETWEEN 1 AND 200
+  OR p_bucati IS NULL OR array_position(p_bucati,NULL) IS NOT NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
+ SELECT array_agg(x ORDER BY x) INTO v_ids FROM unnest(p_bucati) x;
+ IF cardinality(v_ids)<>(SELECT count(DISTINCT x) FROM unnest(v_ids) x) THEN RAISE EXCEPTION 'bucati_duplicate'; END IF;
+ -- Serialize a depot key without taking root locks before authorization/locations.
+ PERFORM pg_advisory_xact_lock(hashtextextended('izo.iesire|'||public.fn_izo_uid()::text||'|'||p_cheie::text,0));
+ v_payload:=jsonb_build_object('depozit',p_depozit,'tronson',p_tronson,'bucati',to_jsonb(v_ids),'nr_aviz',btrim(p_nr_aviz),'data',p_data);
+ v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
+ SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
+ PERFORM public.fn_izo_birou_autorizat(v_pr,p_depozit,true);
+ IF v_old.id IS NOT NULL THEN
+  IF v_old.canal<>'depozit' OR v_old.tip_op<>'iesire' OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
+  RETURN v_old.raspuns;
+ END IF;
+ PERFORM public.fn_izo_blocheaza_locuri(v_pr,ARRAY[p_depozit],ARRAY[p_tronson]);
+ PERFORM public.fn_izo_blocheaza_tabele(); PERFORM public.fn_izo_lock_partajat(v_pr);
+ IF coalesce(public.fn_izo_nivel(v_pr),'off') NOT IN ('stoc','montaj') OR NOT EXISTS
+  (SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=p_tronson AND flux_montaj) THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
+ SELECT site_id INTO v_site FROM public.executie_proiecte WHERE id=v_pr;
+ IF NOT EXISTS(SELECT 1 FROM public.logistica_depozite WHERE id=p_depozit AND activ AND site_id=v_site) THEN RAISE EXCEPTION 'depozit_invalid'; END IF;
+ PERFORM 1 FROM public.magazie_bucati WHERE id IN (SELECT coalesce(radacina_id,id) FROM public.magazie_bucati WHERE id=ANY(v_ids)) ORDER BY id FOR UPDATE;
+ PERFORM 1 FROM public.magazie_bucati WHERE id=ANY(v_ids) ORDER BY id FOR UPDATE;
+ IF (SELECT count(*) FROM public.magazie_bucati WHERE id=ANY(v_ids))<>cardinality(v_ids) THEN RAISE EXCEPTION 'bucata_lipsa'; END IF;
+ FOR v_b IN SELECT * FROM public.magazie_bucati WHERE id=ANY(v_ids) ORDER BY id LOOP
+  IF v_b.proiect_id IS DISTINCT FROM v_pr OR v_b.tip_cod IS NULL OR v_b.provenienta<>'beneficiar'
+   OR v_b.stare NOT IN ('sosit','receptionat','retur') OR v_b.depozit_id IS DISTINCT FROM p_depozit
+   OR v_b.executie_teava_id IS NOT NULL OR EXISTS(SELECT 1 FROM public.magazie_bucati WHERE parinte_id=v_b.id AND stare<>'anulata') THEN RAISE EXCEPTION 'stare'; END IF;
+  IF cardinality(public.fn_izo_pv_lipsa(ARRAY[coalesce(v_b.radacina_id,v_b.id)]))>0 THEN RAISE EXCEPTION 'fara_pv'; END IF;
+  -- A reservation on this tronson is regularized; one on another tronson is not.
+  IF EXISTS(SELECT 1 FROM public.izo_rezervari WHERE bucata_id=v_b.id AND activa
+    AND (expira_dupa IS NULL OR expira_dupa>now()) AND tronson_id<>p_tronson) THEN RAISE EXCEPTION 'rezervata_alt_tronson'; END IF;
+ END LOOP;
+ FOR v_b IN SELECT * FROM public.magazie_bucati WHERE id=ANY(v_ids) ORDER BY id LOOP
+  v_ev:=public.fn_izo_birou_fapt(v_b.id,'iesire',p_cheie::text,p_tronson,p_depozit,public.fn_izo_uid(),NULL,
+   p_data::timestamp AT TIME ZONE 'Europe/Bucharest','Aviz '||btrim(p_nr_aviz));
+  v_evs:=array_append(v_evs,v_ev);
+ END LOOP;
+ v_r:=jsonb_build_object('cod','iesit','eveniment_ids',to_jsonb(v_evs));
+ PERFORM public.fn_izo_birou_jurnal(p_cheie,'depozit','iesire',v_pr,p_tronson,v_payload,v_hash,v_r);
+ RETURN v_r;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_dependenti(p_decl bigint) RETURNS bigint[]
+ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ WITH RECURSIVE deps AS (
+  SELECT id,uid FROM public.izo_declaratii WHERE id=p_decl
+  UNION
+  SELECT d.id,d.uid FROM public.izo_declaratii d JOIN deps x ON d.depinde_de_uid=x.uid
+   OR EXISTS(SELECT 1 FROM public.izo_bucati_declarate c WHERE c.declaratie_id=x.id AND c.uid IN (d.bucata_decl_uid,d.sursa_decl_uid))
+  WHERE d.stare NOT IN ('aprobata','respinsa','stearsa')
+ ) SELECT coalesce(array_agg(id ORDER BY id),'{}'::bigint[]) FROM deps
+$f$;
+
+  CREATE FUNCTION public.fn_izo_decizie_intern(p_cheie uuid,p_decl bigint,p_versiune integer,p_updated_at timestamptz,
+ p_motiv text,p_dependente jsonb,p_revizie boolean) RETURNS jsonb
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_d public.izo_declaratii; v_x public.izo_declaratii; v_s public.izo_preverificari;
+ v_ids bigint[]; v_before bigint[]; v_keys text[]; v_actual text[]; v_choice text; v_hash text; v_payload jsonb; v_r jsonb;
+ v_old public.izo_operatii; v_type text:=CASE WHEN p_revizie THEN 'revizie' ELSE 'respinge' END;
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
+ PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL);
+ IF v_d.id IS NULL THEN RAISE EXCEPTION 'declaratie_lipsa'; END IF;
+ IF p_cheie IS NULL OR p_updated_at IS NULL OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000
+  OR p_revizie IS NULL OR jsonb_typeof(p_dependente) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
+ PERFORM 1 FROM public.izo_fronturi WHERE proiect_id=v_d.proiect_id ORDER BY id FOR SHARE;
+ v_before:=public.fn_izo_dependenti(p_decl);
+ -- Conservative project closure, acquired once in the same order as sync.
+ PERFORM 1 FROM public.izo_preverificari WHERE proiect_id=v_d.proiect_id ORDER BY id FOR UPDATE;
+ PERFORM 1 FROM public.izo_declaratii WHERE proiect_id=v_d.proiect_id ORDER BY id FOR UPDATE;
+ v_ids:=public.fn_izo_dependenti(p_decl);
+ IF v_before IS DISTINCT FROM v_ids THEN RAISE EXCEPTION 'preview_vechi'; END IF;
+ SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
+ v_payload:=jsonb_build_object('decl',p_decl,'versiune',p_versiune,'updated_at',p_updated_at,'motiv',btrim(p_motiv),'dependente',p_dependente,'revizie',p_revizie);
+ v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
+ SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
+ PERFORM public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ IF v_old.id IS NOT NULL THEN
+  IF v_old.canal<>'aprobare' OR v_old.tip_op<>v_type OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
+  RETURN v_old.raspuns;
+ END IF;
+ IF v_d.versiune IS DISTINCT FROM p_versiune OR v_d.updated_at IS DISTINCT FROM p_updated_at THEN RAISE EXCEPTION 'cas'; END IF;
+ PERFORM public.fn_izo_autor_valabil(declarat_de,proiect_id,true) FROM public.izo_declaratii WHERE id=ANY(v_ids) ORDER BY declarat_de;
+ SELECT * INTO v_s FROM public.izo_preverificari WHERE id=v_d.preverificare_id;
+ IF p_revizie THEN
+  IF v_s.stare<>'trimisa' OR v_d.stare NOT IN ('trimisa','in_verificare') OR p_dependente<>'{}'::jsonb THEN RAISE EXCEPTION 'stare'; END IF;
+  IF cardinality(v_ids)>1 THEN RAISE EXCEPTION 'necesita_revizie_dependente'; END IF;
+ ELSE
+  IF v_d.stare IN ('aprobata','respinsa','stearsa') OR (v_s.stare='deschisa' AND EXISTS(
+   SELECT 1 FROM public.izo_fronturi WHERE tronson_id=v_s.tronson_id AND profile_id=v_s.autor_profile_id AND activ AND expira_la>now())
+    AND public.fn_izo_autor_valabil(v_s.autor_profile_id,v_s.proiect_id,false)) THEN RAISE EXCEPTION 'stare'; END IF;
+  SELECT coalesce(array_agg(x::text ORDER BY x::text),'{}') INTO v_keys FROM unnest(v_ids) x WHERE x<>p_decl;
+  SELECT coalesce(array_agg(x ORDER BY x),'{}') INTO v_actual FROM jsonb_object_keys(p_dependente) x;
+  IF v_keys IS DISTINCT FROM v_actual THEN RAISE EXCEPTION 'dependente_schimbate'; END IF;
+ END IF;
+ PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_d.proiect_id AND id=radacina_id ORDER BY id FOR UPDATE;
+ FOR v_x IN SELECT * FROM public.izo_declaratii WHERE id=ANY(v_ids) ORDER BY id LOOP
+  IF v_x.id=p_decl THEN
+   UPDATE public.izo_declaratii SET stare=CASE WHEN p_revizie THEN 'revizie_ceruta' ELSE 'respinsa' END,
+    stare_inainte_blocare=NULL,blocata_motiv=NULL,conflict_cod=NULL,decis_la=clock_timestamp(),decizie_motiv=btrim(p_motiv),
+    server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_x.id;
+  ELSE
+   v_choice:=CASE WHEN p_revizie THEN 'blocheaza' ELSE p_dependente->>v_x.id::text END;
+   IF v_choice IS NULL OR v_choice NOT IN ('blocheaza','respinge') THEN RAISE EXCEPTION 'decizie_nepermisa'; END IF;
+   IF v_choice='respinge' AND EXISTS(SELECT 1 FROM public.izo_preverificari s JOIN public.izo_fronturi f
+    ON f.tronson_id=s.tronson_id AND f.profile_id=s.autor_profile_id
+    WHERE s.id=v_x.preverificare_id AND s.stare='deschisa' AND f.activ AND f.expira_la>now()
+     AND public.fn_izo_autor_valabil(s.autor_profile_id,s.proiect_id,false)) THEN RAISE EXCEPTION 'decizie_nepermisa'; END IF;
+   UPDATE public.izo_declaratii SET stare=CASE WHEN v_choice='respinge' THEN 'respinsa' ELSE 'blocata' END,
+    stare_inainte_blocare=CASE WHEN v_choice='blocheaza' THEN coalesce(v_x.stare_inainte_blocare,v_x.stare) END,
+    blocata_motiv=CASE WHEN v_choice='blocheaza' THEN CASE WHEN NOT p_revizie OR v_x.blocata_motiv='dependenta_anulata' THEN 'dependenta_anulata' ELSE 'dependenta_in_revizie' END END,
+    conflict_cod=CASE WHEN v_choice='blocheaza' THEN v_x.conflict_cod END,
+    decis_la=clock_timestamp(),decizie_motiv=btrim(p_motiv),server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_x.id;
+  END IF;
+ END LOOP;
+ IF NOT p_revizie THEN
+  UPDATE public.izo_rezervari SET activa=false,eliberata_la=clock_timestamp(),motiv_eliberare=CASE WHEN declaratie_id=p_decl THEN 'respinsa' ELSE 'parinte_anulat' END,
+   server_ver=nextval('public.izo_server_ver_seq') WHERE activa AND (declaratie_id=ANY(v_ids) OR bucata_decl_uid IN
+    (SELECT uid FROM public.izo_bucati_declarate WHERE declaratie_id=ANY(v_ids)));
+  UPDATE public.izo_bucati_declarate SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=ANY(v_ids) AND stare='declarata';
+ END IF;
+ UPDATE public.izo_preverificari s SET stare='inchisa',server_ver=nextval('public.izo_server_ver_seq')
+ WHERE s.id IN (SELECT preverificare_id FROM public.izo_declaratii WHERE id=ANY(v_ids)) AND s.stare<>'inchisa'
+  AND NOT EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.preverificare_id=s.id AND d.stare NOT IN ('aprobata','respinsa','stearsa'));
+ v_r:=jsonb_build_object('cod',CASE WHEN p_revizie THEN 'revizie_ceruta' ELSE 'respinsa' END,'declaratie_id',p_decl);
+ PERFORM public.fn_izo_birou_jurnal(p_cheie,'aprobare',v_type,v_d.proiect_id,v_d.tronson_id,v_payload,v_hash,v_r);
+ RETURN v_r;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_front_intern(p_tronson bigint,p_motiv text) RETURNS jsonb
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_pr bigint; v_n bigint;
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ SELECT proiect_id INTO v_pr FROM public.executie_tronsoane WHERE id=p_tronson;
+ PERFORM public.fn_izo_birou_intrare(v_pr,NULL);
+ IF v_pr IS NULL THEN RAISE EXCEPTION 'tronson_lipsa'; END IF;
+ IF length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'motiv_obligatoriu'; END IF;
+ PERFORM 1 FROM public.izo_fronturi WHERE tronson_id=p_tronson AND activ FOR UPDATE;
+ PERFORM public.fn_izo_birou_autorizat(v_pr,NULL,true);
+ UPDATE public.izo_fronturi SET activ=false,eliberat_de=public.fn_izo_uid(),eliberat_motiv=btrim(p_motiv),
+  server_ver=nextval('public.izo_server_ver_seq') WHERE tronson_id=p_tronson AND activ;
+ GET DIAGNOSTICS v_n=ROW_COUNT;
+ RETURN jsonb_build_object('cod',CASE WHEN v_n=0 THEN 'fara_efect' ELSE 'eliberat' END);
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_iesire_tronson(p_cheie uuid,p_depozit integer,p_tronson bigint,p_bucati bigint[],p_nr_aviz text,p_data date) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_iesire_intern(p_cheie,p_depozit,p_tronson,p_bucati,p_nr_aviz,p_data)
+$f$;
+  CREATE FUNCTION public.fn_izo_respinge(p_cheie uuid,p_decl bigint,p_versiune integer,p_updated_at timestamptz,p_motiv text,p_dependente jsonb) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_decizie_intern(p_cheie,p_decl,p_versiune,p_updated_at,p_motiv,p_dependente,false)
+$f$;
+  CREATE FUNCTION public.fn_izo_revizie_cere(p_cheie uuid,p_decl bigint,p_versiune integer,p_updated_at timestamptz,p_motiv text) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_decizie_intern(p_cheie,p_decl,p_versiune,p_updated_at,p_motiv,'{}'::jsonb,true)
+$f$;
+  CREATE FUNCTION public.fn_izo_front_elibereaza(p_tronson bigint,p_motiv text) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_front_intern(p_tronson,p_motiv)
+$f$;
+
+  CREATE FUNCTION public.fn_izo_serie_intern(p_cheie uuid,p_decl bigint,p_versiune integer,p_updated_at timestamptz,p_bucata bigint,p_motiv text) RETURNS jsonb
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_d public.izo_declaratii; v_b public.magazie_bucati; v_s public.izo_preverificari;
+ v_payload jsonb; v_hash text; v_old public.izo_operatii; v_r jsonb; v_conflict text;
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
+ PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL);
+ IF v_d.id IS NULL OR p_cheie IS NULL OR p_updated_at IS NULL OR p_bucata IS NULL
+  OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
+ SELECT * INTO v_s FROM public.izo_preverificari WHERE id=v_d.preverificare_id FOR UPDATE;
+ SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl FOR UPDATE;
+ v_payload:=jsonb_build_object('decl',p_decl,'versiune',p_versiune,'updated_at',p_updated_at,'bucata',p_bucata,'motiv',btrim(p_motiv));
+ v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
+ SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
+ PERFORM public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ IF v_old.id IS NOT NULL THEN
+  IF v_old.canal<>'aprobare' OR v_old.tip_op<>'serie' OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
+  RETURN v_old.raspuns;
+ END IF;
+ IF v_s.stare<>'trimisa' OR v_d.stare<>'in_verificare' OR v_d.identificare IS DISTINCT FROM 'nerezolvata'
+  OR v_d.versiune IS DISTINCT FROM p_versiune OR v_d.updated_at IS DISTINCT FROM p_updated_at THEN RAISE EXCEPTION 'cas'; END IF;
+ PERFORM public.fn_izo_blocheaza_locuri(v_d.proiect_id,ARRAY[]::integer[],ARRAY[v_d.tronson_id]);
+ PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=v_d.tronson_id FOR SHARE;
+ IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_d.tronson_id AND flux_montaj)
+  OR coalesce(public.fn_izo_nivel(v_d.proiect_id),'off')='off' THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
+ PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_d.proiect_id AND id=radacina_id ORDER BY id FOR UPDATE;
+ SELECT * INTO v_b FROM public.magazie_bucati WHERE id=p_bucata FOR UPDATE;
+ IF NOT FOUND OR v_b.proiect_id IS DISTINCT FROM v_d.proiect_id OR v_b.stare IS DISTINCT FROM 'pe_tronson'
+  OR v_b.tronson_id IS DISTINCT FROM v_d.tronson_id OR v_b.tip_cod IS NULL OR v_b.executie_teava_id IS NOT NULL
+  OR EXISTS(SELECT 1 FROM public.magazie_bucati WHERE parinte_id=v_b.id AND stare<>'anulata') THEN RAISE EXCEPTION 'stare'; END IF;
+ IF v_b.lungime_mm IS DISTINCT FROM (v_d.payload->>'lungime_montata_mm')::integer THEN RAISE EXCEPTION 'lungime_incompatibila'; END IF;
+ IF cardinality(public.fn_izo_pv_lipsa(ARRAY[coalesce(v_b.radacina_id,v_b.id)]))>0 THEN RAISE EXCEPTION 'fara_pv'; END IF;
+ IF EXISTS(SELECT 1 FROM public.izo_rezervari WHERE bucata_id=v_b.id AND activa AND (expira_dupa IS NULL OR expira_dupa>now())) THEN RAISE EXCEPTION 'bucata_rezervata'; END IF;
+ IF (SELECT count(*) FROM public.izo_rezervari WHERE autor_profile_id=v_d.declarat_de AND activa AND (expira_dupa IS NULL OR expira_dupa>now()))>=60 THEN RAISE EXCEPTION 'limita'; END IF;
+ UPDATE public.izo_rezervari SET activa=false,eliberata_la=clock_timestamp(),motiv_eliberare='expirata',
+  server_ver=nextval('public.izo_server_ver_seq') WHERE bucata_id=v_b.id AND activa AND expira_dupa<=now();
+ IF EXISTS(SELECT 1 FROM public.magazie_bucati b WHERE b.id<>v_b.id AND b.proiect_id=v_b.proiect_id AND b.stare NOT IN ('taiata','anulata')
+  AND b.serie_canon=v_b.serie_canon AND b.sarja IS NOT DISTINCT FROM v_b.sarja AND b.lungime_cm=v_b.lungime_cm
+  AND NOT EXISTS(SELECT 1 FROM public.magazie_bucati c WHERE c.parinte_id=b.id AND c.stare<>'anulata')) THEN v_conflict:='r1d'; END IF;
+ UPDATE public.izo_declaratii SET bucata_id=v_b.id,identificare='bucata',stare=CASE WHEN v_conflict IS NULL THEN 'trimisa' ELSE 'conflict' END,
+  conflict_cod=v_conflict,versiune=versiune+1,decis_la=clock_timestamp(),decizie_motiv=btrim(p_motiv),
+  payload=payload||jsonb_build_object('bucata',jsonb_build_object('bucata_id',v_b.id)),
+  server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id RETURNING * INTO v_d;
+ INSERT INTO public.izo_declaratii_versiuni(declaratie_id,versiune,payload,hash_cerere,op_id)
+ VALUES(v_d.id,v_d.versiune,v_d.payload,v_hash,p_cheie);
+ INSERT INTO public.izo_rezervari(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,din_depozit)
+ VALUES(v_d.proiect_id,v_d.tronson_id,v_d.id,v_d.versiune,v_d.declarat_de,v_b.id,false);
+ v_r:=jsonb_build_object('cod','lamurita','declaratie_id',v_d.id,'versiune',v_d.versiune,'updated_at',v_d.updated_at,'stare',v_d.stare);
+ PERFORM public.fn_izo_birou_jurnal(p_cheie,'aprobare','serie',v_d.proiect_id,v_d.tronson_id,v_payload,v_hash,v_r);
+ RETURN v_r;
+END $f$;
+  CREATE FUNCTION public.fn_izo_serie_lamureste(p_cheie uuid,p_decl bigint,p_versiune integer,p_updated_at timestamptz,p_bucata bigint,p_motiv text) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_serie_intern(p_cheie,p_decl,p_versiune,p_updated_at,p_bucata,p_motiv)
+$f$;
+
+   CREATE OR REPLACE FUNCTION public.fn_izo_garda_montaj(p_tabel text,p_op text,p_inainte jsonb,p_dupa jsonb)
+    RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_ctx text:=current_setting('izo.montaj_ctx',true); v_pachet bigint; v_op text; v_dupa_comparabil jsonb;
+  BEGIN
+    -- E4b-2: private writer supplies the exact typed image immediately before DML.
+    -- Generated STORED values are absent in BEFORE NEW, even on an unrelated UPDATE.
+    IF current_user='izo_montaj_writer'
+      AND split_part(v_ctx,'|',1)=txid_current()::text
+      AND split_part(v_ctx,'|',2) IN ('aproba','iesire')
+      AND p_op='UPDATE' AND p_tabel='magazie_bucati'
+      AND p_inainte IS NOT NULL AND p_dupa IS NOT NULL
+      AND p_dupa->'serie_canon'='null'::jsonb AND p_dupa->'lungime_cm'='null'::jsonb
+      AND p_inainte=nullif(current_setting('izo.montaj_bucata_inainte',true),'')::jsonb
+      AND (p_dupa || jsonb_build_object('serie_canon',p_inainte->'serie_canon','lungime_cm',p_inainte->'lungime_cm'))
+        =nullif(current_setting('izo.montaj_bucata_dupa',true),'')::jsonb
+      AND split_part(v_ctx,'|',4)=p_inainte->>'proiect_id'
+      AND split_part(v_ctx,'|',6)=p_dupa->>'server_ver'
+      AND split_part(v_ctx,'|',7)=p_inainte->>'id'
+      AND (p_inainte-ARRAY['stare','locatie_tip','depozit_id','tronson_id','atribute','server_ver','updated_at'])
+        =((p_dupa || jsonb_build_object('serie_canon',p_inainte->'serie_canon','lungime_cm',p_inainte->'lungime_cm'))
+          -ARRAY['stare','locatie_tip','depozit_id','tronson_id','atribute','server_ver','updated_at'])
+      AND ((split_part(v_ctx,'|',2)='aproba' AND p_inainte->>'stare'='pe_tronson' AND p_dupa->>'stare'='montata'
+        AND (p_inainte-ARRAY['stare','server_ver','updated_at'])=
+          ((p_dupa || jsonb_build_object('serie_canon',p_inainte->'serie_canon','lungime_cm',p_inainte->'lungime_cm'))-ARRAY['stare','server_ver','updated_at']))
+        OR (split_part(v_ctx,'|',2)='iesire' AND p_inainte->>'stare' IN ('sosit','receptionat','retur')
+          AND p_dupa->>'stare'='pe_tronson' AND p_dupa->>'locatie_tip'='tronson'
+          AND p_dupa->>'depozit_id' IS NULL AND p_dupa->>'tronson_id'=split_part(v_ctx,'|',5)))
+      THEN RETURN true; END IF;
+    IF current_user='izo_montaj_writer' AND split_part(v_ctx,'|',1)=txid_current()::text
+      AND split_part(v_ctx,'|',2) IN ('aproba','iesire') AND p_op='INSERT'
+      AND p_tabel IN ('magazie_bucati_evenimente','magazie_bucati_miscari')
+      AND p_inainte IS NULL AND p_dupa IS NOT NULL
+      AND split_part(v_ctx,'|',4)=p_dupa->>'proiect_id'
+      AND (nullif(current_setting('izo.montaj_rand_asteptat',true),'')::jsonb)
+        =jsonb_build_object('tabel',p_tabel,'rand',p_dupa-'id') THEN RETURN true; END IF;
+    -- E4a writes only the link. No events/movements/imports/config authorization yet.
+    IF current_user='izo_montaj_writer' AND p_tabel='magazie_bucati' AND p_op='UPDATE'
+      AND p_inainte IS NOT NULL AND p_dupa IS NOT NULL
+      -- PG16 computes STORED generated columns AFTER BEFORE triggers: NEW has NULL.
+      -- Require that exact trigger shape; restore only these two derived values for
+      -- comparison with the stored snapshot. Their sources (serie/lungime_mm) stay immutable.
+      AND p_dupa->'serie_canon' = 'null'::jsonb AND p_dupa->'lungime_cm' = 'null'::jsonb THEN
+      v_dupa_comparabil:=p_dupa || jsonb_build_object(
+        'serie_canon',p_inainte->'serie_canon','lungime_cm',p_inainte->'lungime_cm');
+      v_op:=CASE WHEN p_dupa->>'executie_teava_id' IS NULL THEN 'dezleaga' ELSE 'leaga' END;
+      SELECT pachet_id INTO v_pachet FROM public.executie_tevi
+        WHERE id=coalesce((p_dupa->>'executie_teava_id')::bigint,(p_inainte->>'executie_teava_id')::bigint);
+      IF v_ctx = concat_ws('|',txid_current()::text,v_op,v_pachet::text,
+          p_inainte->>'proiect_id',p_inainte->>'tronson_id',p_dupa->>'server_ver',p_inainte->>'id')
+        AND v_pachet IS NOT NULL AND p_inainte->>'tip_cod' IN ('teava','curba')
+        AND p_inainte->>'stare'='montata'
+        AND ((v_op='leaga' AND p_inainte->>'executie_teava_id' IS NULL)
+          OR (v_op='dezleaga' AND p_inainte->>'executie_teava_id' IS NOT NULL))
+        AND nullif(current_setting('izo.montaj_bucata_inainte',true),'')::jsonb=p_inainte
+        AND nullif(current_setting('izo.montaj_bucata_dupa',true),'')::jsonb=v_dupa_comparabil
+        AND (p_inainte-ARRAY['executie_teava_id','server_ver','updated_at'])=
+            (v_dupa_comparabil-ARRAY['executie_teava_id','server_ver','updated_at']) THEN RETURN true; END IF;
+    END IF;
+    RAISE EXCEPTION 'E4a context montaj invalid pe %',p_tabel USING ERRCODE='42501';
+  END $f$;
+   CREATE OR REPLACE FUNCTION public.fn_izo_flux_admin(p_tronson bigint,p_activ boolean,p_motiv text) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_pr bigint; v_c public.izo_tronson_config; v_lipsa text[];
+  BEGIN
+    IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'E4a READ COMMITTED' USING ERRCODE='25001'; END IF;
+    PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+    IF session_user<>'postgres' THEN RAISE EXCEPTION 'E4a numai sesiune postgres' USING ERRCODE='42501'; END IF;
+    IF coalesce(current_setting('izo.montaj_ctx',true),'')<>'' OR coalesce(current_setting('izo.receptie_ctx',true),'')<>''
+      OR coalesce(current_setting('izo.registru_tx',true),'')<>'' THEN RAISE EXCEPTION 'E4a context ocupat'; END IF;
+    IF p_activ IS NULL OR length(btrim(coalesce(p_motiv,'')))<3 THEN RAISE EXCEPTION 'E4a parametri flux'; END IF;
+    IF p_activ THEN
+      v_lipsa:=public.fn_izo_porti_lipsa();
+      IF cardinality(v_lipsa)<>0 THEN RAISE EXCEPTION 'E4a porti: %',v_lipsa; END IF;
+    END IF;
+    LOCK TABLE public.izo_tronson_config,public.executie_tronsoane,public.executie_pachete_lansare,
+      public.executie_tevi,public.magazie_bucati,public.magazie_bucati_evenimente IN ACCESS SHARE MODE;
+    SELECT proiect_id INTO v_pr FROM public.executie_tronsoane WHERE id=p_tronson;
+    IF v_pr IS NULL THEN RAISE EXCEPTION 'E4a tronson lipsa'; END IF;
+    PERFORM public.fn_izo_lock_proiect(v_pr,true);
+    SELECT * INTO v_c FROM public.izo_tronson_config WHERE tronson_id=p_tronson FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'config_lipsa'; END IF;
+    IF v_c.proiect_id<>v_pr THEN RAISE EXCEPTION 'E4a proiect diferit'; END IF;
+    IF p_activ THEN
+      IF coalesce(public.fn_izo_nivel(v_pr),'off')='off' THEN RAISE EXCEPTION 'E4a nivel off'; END IF;
+      -- E4a-1 cannot verify a legare without E4b suduri: fail closed on that row type.
+      IF EXISTS(SELECT 1 FROM public.executie_tevi t JOIN public.executie_pachete_lansare p ON p.id=t.pachet_id
+        WHERE p.tronson_id=p_tronson AND (coalesce(to_jsonb(t)->>'tip_rand','teava') NOT IN ('teava','curba')
+          OR (SELECT count(*) FROM public.magazie_bucati b WHERE b.executie_teava_id=t.id AND b.stare='montata'
+            AND b.tronson_id=p_tronson AND b.proiect_id=v_pr
+            AND b.tip_cod=coalesce(to_jsonb(t)->>'tip_rand','teava'))<>1))
+        THEN RAISE EXCEPTION 'E4a randuri nelegate'; END IF;
+      IF EXISTS(SELECT 1 FROM public.executie_pachete_lansare p WHERE p.tronson_id=p_tronson
+        AND (to_jsonb(p)->>'aprobat_la' IS NOT NULL OR to_jsonb(p)->>'pdf_aprobare_path' IS NOT NULL
+          OR to_jsonb(p)->>'status' IN ('aprobat','lansat','finalizat'))) THEN RAISE EXCEPTION 'E4a antet aprobat'; END IF;
+    ELSE
+      IF EXISTS(SELECT 1 FROM public.magazie_bucati WHERE tronson_id=p_tronson AND stare IN ('montata','taiata'))
+        OR EXISTS(SELECT 1 FROM public.magazie_bucati_miscari m JOIN public.magazie_bucati_evenimente e ON e.id=m.eveniment_id
+          WHERE e.proiect_id=v_pr AND e.tip IN ('montaj','taiere') AND
+            (m.inainte->>'tronson_id'=p_tronson::text OR m.dupa->>'tronson_id'=p_tronson::text
+             OR m.din_loc->>'tronson_id'=p_tronson::text OR m.in_loc->>'tronson_id'=p_tronson::text))
+        THEN RAISE EXCEPTION 'E4a fapte montaj; oprire refuzata'; END IF;
+      -- Later E4b must replace this entry with checks on declarations/reservations/fronts.
+      IF EXISTS(SELECT 1 FROM public.izo_declaratii WHERE tronson_id=p_tronson AND stare NOT IN ('aprobata','respinsa','stearsa'))
+        OR EXISTS(SELECT 1 FROM public.izo_rezervari WHERE tronson_id=p_tronson AND activa)
+        OR EXISTS(SELECT 1 FROM public.izo_fronturi WHERE tronson_id=p_tronson AND activ)
+        THEN RAISE EXCEPTION 'E4b front/declaratii/rezervari; oprire refuzata'; END IF;
+    END IF;
+    PERFORM set_config('izo.montaj_ctx',txid_current()::text || '|flux|' || p_tronson,true);
+    UPDATE public.izo_tronson_config SET flux_montaj=p_activ,flux_de_la=clock_timestamp(),flux_motiv=btrim(p_motiv),
+      flux_schimbat_de=session_user,server_ver=nextval('public.izo_server_ver_seq') WHERE tronson_id=p_tronson;
+    PERFORM set_config('izo.montaj_ctx','',true);
+    RETURN p_activ;
+  END $f$;
+   CREATE OR REPLACE FUNCTION public.fn_izo_porti_e4_lipsa() RETURNS text[]
+    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_lipsa text[]:='{}';
+  BEGIN
+    IF public.fn_izo_porti_e4_definitii() IS DISTINCT FROM substring(obj_description('public.fn_izo_porti_e4_definitii()'::regprocedure,'pg_proc') FROM '^porti_e4=([0-9a-f]{32})$') THEN
+      v_lipsa:=array_append(v_lipsa,'E4 definitii diferite'); END IF;
+    IF has_schema_privilege('izo_montaj_writer','public','CREATE') OR EXISTS
+      (SELECT 1 FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind='S'
+       AND has_sequence_privilege('izo_montaj_writer',c.oid,'USAGE') IS DISTINCT FROM (c.oid IN ('public.izo_server_ver_seq'::regclass,'public.magazie_bucati_evenimente_id_seq'::regclass,'public.magazie_bucati_miscari_id_seq'::regclass)))
+      THEN v_lipsa:=array_append(v_lipsa,'E4 ACL schema/secvente'); END IF;
+    IF EXISTS(SELECT 1 FROM pg_trigger g WHERE g.tgname LIKE 'a0_izo_flux_%' AND g.tgenabled<>'A') THEN v_lipsa:=array_append(v_lipsa,'E4 trigger dezactivat'); END IF;
+    IF EXISTS(SELECT 1 FROM pg_trigger g JOIN pg_trigger e ON e.tgrelid=g.tgrelid
+      WHERE e.tgname IN ('a0_izo_flux_tevi','a0_izo_flux_pachete','a0_izo_flux_documente')
+        AND NOT g.tgisinternal AND (g.tgtype::integer & 2)=2 AND g.tgname<e.tgname) THEN v_lipsa:=array_append(v_lipsa,'E4 ordinea BEFORE'); END IF;
+    RETURN v_lipsa;
+  END $f$;
+ CREATE UNIQUE INDEX ux_magbuc_ev_decl ON public.magazie_bucati_evenimente(document_id,tip)
+  WHERE document_tip='izo_declaratie' AND tip IN ('taiere','montaj','corectie');
+ REVOKE ALL ON FUNCTION public.fn_izo_decl_ceas() FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_teren_imuabil() FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_teren_autorizat(bigint,boolean) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_teren_entra(bigint,text) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) FROM PUBLIC,anon,authenticated,service_role;
@@ -802,6 +1481,62 @@ REVOKE ALL ON FUNCTION public.fn_izo_teren_push(uuid,jsonb) FROM PUBLIC,anon,aut
 REVOKE ALL ON FUNCTION public.fn_izo_sync_push(uuid,jsonb) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_gps_citeste(bigint) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_teren_pregateste(bigint,bigint,uuid) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_autor_valabil(uuid,bigint,boolean) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_birou_autorizat(bigint,integer,boolean) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_birou_intrare(bigint,integer) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_birou_preview(bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_aprobare_intern(bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_aproba_intern(uuid,bigint,jsonb,text,jsonb) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_aprobare_lot(bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_aproba(uuid,bigint,jsonb,text,jsonb) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_iesire_intern(uuid,integer,bigint,bigint[],text,date) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_dependenti(bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_decizie_intern(uuid,bigint,integer,timestamptz,text,jsonb,boolean) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_front_intern(bigint,text) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_iesire_tronson(uuid,integer,bigint,bigint[],text,date) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_respinge(uuid,bigint,integer,timestamptz,text,jsonb) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_revizie_cere(uuid,bigint,integer,timestamptz,text) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_front_elibereaza(bigint,text) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_serie_intern(uuid,bigint,integer,timestamptz,bigint,text) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_serie_lamureste(uuid,bigint,integer,timestamptz,bigint,text) FROM PUBLIC,anon,authenticated,service_role;
+ GRANT UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute) ON public.magazie_bucati TO izo_montaj_writer;
+ GRANT SELECT ON public.magazie_bucati_evenimente,public.magazie_bucati_miscari TO izo_montaj_writer;
+ GRANT INSERT(tip,proiect_id,document_tip,document_id,import_id,storno_de_eveniment_id,motiv,declarat_de,aplicat_de,aplicat_rol,ora_server,ora_tableta,dispozitiv_id,server_ver)
+  ON public.magazie_bucati_evenimente TO izo_montaj_writer;
+ GRANT INSERT(eveniment_id,proiect_id,bucata_id,rol,stare_inainte,stare_dupa,din_loc,in_loc,lungime_mm,inainte,dupa,server_ver)
+  ON public.magazie_bucati_miscari TO izo_montaj_writer;
+ GRANT USAGE ON SEQUENCE public.magazie_bucati_evenimente_id_seq,public.magazie_bucati_miscari_id_seq TO izo_montaj_writer;
+ GRANT CREATE ON SCHEMA public TO izo_montaj_writer;
+ ALTER FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) OWNER TO izo_montaj_writer;
+ REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;
+ GRANT EXECUTE ON FUNCTION public.fn_izo_uid() TO izo_montaj_writer;
+ GRANT CREATE ON SCHEMA public TO izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_aprobare_intern(bigint) TO izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_aproba_intern(uuid,bigint,jsonb,text,jsonb) TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_aprobare_lot(bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_aproba(uuid,bigint,jsonb,text,jsonb) OWNER TO izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_iesire_intern(uuid,integer,bigint,bigint[],text,date) TO izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_decizie_intern(uuid,bigint,integer,timestamptz,text,jsonb,boolean) TO izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_front_intern(bigint,text) TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_iesire_tronson(uuid,integer,bigint,bigint[],text,date) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_respinge(uuid,bigint,integer,timestamptz,text,jsonb) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_revizie_cere(uuid,bigint,integer,timestamptz,text) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_front_elibereaza(bigint,text) OWNER TO izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_serie_intern(uuid,bigint,integer,timestamptz,bigint,text) TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_serie_lamureste(uuid,bigint,integer,timestamptz,bigint,text) OWNER TO izo_montaj_writer;
+REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_aprobare_lot(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_izo_aproba(uuid,bigint,jsonb,text,jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_izo_iesire_tronson(uuid,integer,bigint,bigint[],text,date) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_izo_respinge(uuid,bigint,integer,timestamptz,text,jsonb) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_izo_revizie_cere(uuid,bigint,integer,timestamptz,text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_izo_front_elibereaza(bigint,text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_izo_serie_lamureste(uuid,bigint,integer,timestamptz,bigint,text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) TO postgres;
+RESET ROLE;
  -- NOLOGIN role has no direct write route. Private, typed helpers hold postgres privileges.
  -- API wrappers carry no setters, dynamic SQL, or identity text (control_0e).
  GRANT EXECUTE ON FUNCTION public.fn_izo_teren_intern(bigint,bigint,uuid,boolean),public.fn_izo_teren_push(uuid,jsonb) TO izo_teren_editor;
@@ -828,20 +1563,20 @@ REVOKE ALL ON FUNCTION public.fn_izo_teren_pregateste(bigint,bigint,uuid) FROM P
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',p.oid::regprocedure,p.proowner,p.prosecdef,p.proconfig,p.proacl,md5(p.prosrc)),',' ORDER BY p.oid::regprocedure::text)
     FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',c.relname,c.relowner,c.relrowsecurity,c.relacl,c.reloptions),',' ORDER BY c.relname)
-    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri']::text[]) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active'))),
+    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari']::text[]) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active'))),
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',c.relname,a.attname,a.atttypid,a.attnotnull,a.attacl,pg_get_expr(d.adbin,d.adrelid)),',' ORDER BY c.relname,a.attnum)
     FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
-    WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri']::text[]) AND a.attnum>0 AND NOT a.attisdropped),
+    WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari']::text[]) AND a.attnum>0 AND NOT a.attisdropped),
    (SELECT string_agg(format('%s:%s',c.relname,pg_get_constraintdef(k.oid)),',' ORDER BY c.relname,k.conname)
-    FROM pg_class c JOIN pg_constraint k ON k.conrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri']::text[])),
+    FROM pg_class c JOIN pg_constraint k ON k.conrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari']::text[])),
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',c.relname,p.polname,p.polcmd,p.polroles,pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid)),',' ORDER BY c.relname,p.polname)
-    FROM pg_class c JOIN pg_policy p ON p.polrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri']::text[])),
+    FROM pg_class c JOIN pg_policy p ON p.polrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari']::text[])),
    (SELECT string_agg(format('%s:%s:%s',c.relname,pg_get_triggerdef(g.oid),g.tgenabled),',' ORDER BY c.relname,g.tgname)
-    FROM pg_class c JOIN pg_trigger g ON g.tgrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri']::text[]) AND NOT g.tgisinternal),
+    FROM pg_class c JOIN pg_trigger g ON g.tgrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari']::text[]) AND NOT g.tgisinternal),
    (SELECT string_agg(pg_get_indexdef(i.indexrelid),',' ORDER BY i.indexrelid::regclass::text)
-    FROM pg_class c JOIN pg_index i ON i.indrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri']::text[])),
+    FROM pg_class c JOIN pg_index i ON i.indrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari']::text[]) OR i.indexrelid=to_regclass('public.ux_magbuc_ev_decl'))),
    (SELECT string_agg(format('%s:%s:%s',c.relname,c.relowner,c.relacl),',' ORDER BY c.relname) FROM pg_class c
-    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%')),
+    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%' OR c.relname LIKE 'izo\_aprobari\_%')),
    (SELECT concat_ws(':',rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconfig) FROM pg_roles WHERE rolname='izo_teren_editor'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',roleid,member,admin_option,inherit_option,set_option),',' ORDER BY roleid,member) FROM pg_auth_members WHERE roleid='izo_teren_editor'::regrole OR member='izo_teren_editor'::regrole)))
  $f$;
@@ -1239,7 +1974,7 @@ REVOKE ALL ON FUNCTION public.fn_izo_teren_pregateste(bigint,bigint,uuid) FROM P
                     CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
                     CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
               WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
-                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_storage on storage.objects|public.fn_izo_flux_storage()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_aprobari_api_sel on public.izo_aprobari|public.fn_izo_citire(bigint)', 'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_teren_delete on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
  -- E3 §17.4: fixed implicit inventory checked before and after deliberate restamping.
  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4_definitii() IS %L','porti_e4='||public.fn_izo_porti_e4_definitii());
  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L','porti='||public.fn_izo_porti_definitii());
@@ -1252,7 +1987,7 @@ REVOKE ALL ON FUNCTION public.fn_izo_teren_pregateste(bigint,bigint,uuid) FROM P
                     CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
                     CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
               WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
-                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_storage on storage.objects|public.fn_izo_flux_storage()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_aprobari_api_sel on public.izo_aprobari|public.fn_izo_citire(bigint)', 'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_teren_delete on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
  v_lipsa:=public.fn_izo_porti_lipsa(); IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b postconditie %',v_lipsa; END IF;
    -- <amprenta> (expresie IDENTICĂ în migrare și în revenire — verificată textual de scripts/test_izometrie_e2a.sh)
   SELECT md5(concat_ws(' | ',

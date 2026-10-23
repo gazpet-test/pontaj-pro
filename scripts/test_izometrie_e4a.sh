@@ -44,6 +44,9 @@ livreaza 20261102140000 "$M/20261102c_izometrie_cai_vechi_stoc.sql"
 livreaza 20261103120000 "$M/20261103b_izometrie_e3_documente.sql"
 livreaza 20261106120000 "$M/20261106a_izometrie_e3b_corectii.sql"
 INAINTE="$(baseline)"
+# Pe prod storage.objects e al supabase_storage_admin (postgres nu e proprietar, nici superuser): ALTER TABLE / trigger-e pe
+# storage.* pică acolo (DRY 23.10), iar aici postgres e superuser și nu vede diferența ⇒ probă statică pe migrare + revenire.
+! grep -nEi 'ALTER TABLE (ONLY )?storage\.|TRIGGER [^;]* ON storage\.' "$M/20261109a_izometrie_e4a_flux.sql" "$RADACINA/supabase/revenire/20261109a_izometrie_e4a_flux_ROLLBACK.sql" || esec 'storage: ALTER/TRIGGER cere proprietarul pe prod'
 livreaza 20261109120000 "$M/20261109a_izometrie_e4a_flux.sql"
 [[ "$(q 'SELECT public.fn_izo_porti_lipsa()')" == '{}' ]] || esec poarta
 [[ -z "$("${PSQL[@]}" -d "$BAZA" -At -f "$RADACINA/scripts/control_0e.sql")" ]] || esec control_0e

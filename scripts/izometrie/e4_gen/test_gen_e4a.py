@@ -1,5 +1,5 @@
 """Offline invariants; no PostgreSQL invocation."""
-import hashlib
+import hashlib, re
 import runpy
 import unittest
 from pathlib import Path
@@ -25,8 +25,8 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn(hashlib.md5(G['src'](old).encode()).hexdigest(), rev)
 
     def test_authorized_delta_is_fixed_and_unique(self):
-        self.assertEqual(len(G['implicit']),8)
-        self.assertEqual(len(set(G['implicit'])),8)
+        self.assertEqual(len(G['implicit']),9)
+        self.assertEqual(len(set(G['implicit'])),9)
         tpl=(SP / 'e4a_tpl.sql').read_text(encoding='utf-8')
         self.assertEqual(tpl.count('@@IMPL_POST@@'),2)
         self.assertLess(tpl.index('@@IMPL_PRE@@'),tpl.index('CREATE ROLE'))
@@ -34,7 +34,10 @@ class GeneratorTests(unittest.TestCase):
 
     def test_api_wrappers_and_internal_context_are_separate(self):
         tpl=(SP / 'e4a_tpl.sql').read_text(encoding='utf-8')
-        self.assertNotRegex(tpl,r'GRANT EXECUTE[^;]*TO (?:anon|authenticated|service_role)')
+        # singura exceptie: predicatul read-only al politicilor RLS de pe storage.objects (evaluat cu rolul apelantului)
+        api=[m for m in re.findall(r'GRANT EXECUTE[^;]*TO (?:anon|authenticated|service_role)[^;]*;',tpl)]
+        self.assertEqual(api,['GRANT EXECUTE ON FUNCTION public.fn_izo_flux_pdf_blocat(text,text) TO anon,authenticated,service_role;'])
+        self.assertNotIn('ON storage.objects ENABLE',tpl); self.assertNotIn('TRIGGER',tpl.split('fn_izo_flux_pdf_blocat')[1].split('CREATE FUNCTION')[0])
         self.assertNotIn('CREATE OR REPLACE FUNCTION',tpl)
         self.assertIn("server_ver bigint NOT NULL DEFAULT nextval('public.izo_server_ver_seq')",tpl)
         pkg=(SP / 'e4a_pachet_tpl.sql').read_text(encoding='utf-8')
