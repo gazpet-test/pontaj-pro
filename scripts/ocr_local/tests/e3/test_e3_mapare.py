@@ -171,11 +171,18 @@ class MappingTests(unittest.TestCase):
     def test_exact_120_cells_then_121_refused(self):
         from ocr_local.e3_contract import ARBITRABILE
         l, m = real(), real()
-        for obj in (l, m):
-            obj['totaluri_tiparite'] = dict.fromkeys(obj['totaluri_tiparite'])
         for r in m['randuri']:
             for field in ARBITRABILE['aviz_teava']:
                 r[field] = '999'
+        # regula fail-closed cere un total tiparit reconciliat, deci totalurile lui m bat cu randurile lui m
+        # si devin 2 dezacorduri; ca suma sa ramana exact 120, doua celule de kg raman ca la l
+        for i in (0, 1):
+            m['randuri'][i]['greutate_kg'] = l['randuri'][i]['greutate_kg']
+        from ocr_local.e3_contract import numarE3, numarKgE3
+        tm = sum(numarE3(r['lungime_doc']) for r in m['randuri'])
+        tk = sum(numarKgE3(r['greutate_kg']) for r in m['randuri'])
+        m['totaluri_tiparite'] = {'total_metri': f'{tm:.2f}', 'total_kg': str(int(tk)) if float(tk).is_integer() else f'{tk:.1f}'}
+        m['antet']['total_m'], m['antet']['total_kg'] = l['antet'].get('total_m'), l['antet'].get('total_kg')
         self.assertEqual(len(compara(l, m, 'aviz_teava')[1]), 120)
         m['antet']['nr_document'] = 'different'
         self.refuses(lambda: compara(l, m, 'aviz_teava'), 'prea_multe_dezacorduri')
