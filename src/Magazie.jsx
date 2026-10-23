@@ -9,11 +9,13 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
 import IzoStocTeava from './IzoStocTeava.jsx'
 import IzoDocumenteIntrare from './IzoDocumenteIntrare.jsx'
+import IzoCorectii from './IzoCorectii.jsx'
 import jsPDF from 'jspdf'
 
 const G = {
@@ -2262,7 +2264,10 @@ function CostModal({ poz, onClose, onDone }) {
 // SHELL cu tab-uri
 // ════════════════════════════════════════════════════════════════
 export default function MagaziePage() {
-  const [tab, setTab] = useState('materiale')
+  // link din Execuție: /magazie?tab=teava_proiecte&proiect=<id> (buton „Vezi țeava și curbele în Magazie”)
+  const [sp] = useSearchParams()
+  const proiectDinLink = Number(sp.get('proiect')) || null
+  const [tab, setTab] = useState(sp.get('tab') === 'teava_proiecte' ? 'teava_proiecte' : 'materiale')
   // Externii (email non-@gazpet.ro, ex. partenerul de agrement Adrom Evolution)
   // văd DOAR tab-ul Producție — restul magaziei e intern.
   const [extern, setExtern] = useState(null)
@@ -2289,8 +2294,8 @@ export default function MagaziePage() {
   }, [])
   if (extern === null) return <div style={{ ...S.page, padding:40, textAlign:'center', color:G.dim }}>Se încarcă…</div>
   const tabsVizibile = extern
-    ? [...(externE3 ? [['documente_intrare', '🧾 Documente de intrare']] : []), ['productie', '🏭 Producție']]
-    : [['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['teava_proiecte', '🧱 Țeavă proiecte'], ['documente_intrare', '🧾 Documente de intrare'], ['productie', '🏭 Producție']]
+    ? [...(externE3 ? [['documente_intrare', '🧾 Documente de intrare'], ['corectii_izo', '🛠️ Corecții']] : []), ['productie', '🏭 Producție']]
+    : [['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['teava_proiecte', '🧱 Țeavă proiecte'], ['documente_intrare', '🧾 Documente de intrare'], ['corectii_izo', '🛠️ Corecții'], ['productie', '🏭 Producție']]
   return (
     <div style={{ ...S.page, padding:'24px 0' }}>
       <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:18, flexWrap:'wrap' }}>
@@ -2319,8 +2324,9 @@ export default function MagaziePage() {
       {tab === 'catalog' && <CatalogTab />}
       {tab === 'echipamente' && <EchipamenteTab />}
       {tab === 'stoc_trasabil' && <StocTrasabilTab />}
-      {tab === 'teava_proiecte' && <IzoStocTeava />}
+      {tab === 'teava_proiecte' && <IzoStocTeava proiectInitial={proiectDinLink} />}
       {tab === 'documente_intrare' && <IzoDocumenteIntrare />}
+      {tab === 'corectii_izo' && <IzoCorectii />}
       {tab === 'productie' && <ProductieTab />}
     </div>
   )

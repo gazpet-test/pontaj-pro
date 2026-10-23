@@ -1453,3 +1453,12 @@ Recomandarea e prima variantă, dacă nu scrie altfel. Blochează codul: Q-E4-1,
    - activarea fluxului pe T14 / T15;
    - ieșirile Janetei pe T14 / T15.
 5. **Pilotul**, cu semnal, o săptămână în paralel cu hârtia.
+
+## Notă: probele pe branch Supabase (lecția E3b, 22.10.2026)
+
+De la E3 r5h, lista albă a porții amprentează **corpul** funcțiilor de platformă (`realtime.subscription_check_filters`, `extensions.grant_pg_net_access`, `extensions.grant_pg_graphql_access`, plus excepțiile mutatorilor; `E3_CONFIRMA_DESIGN.md` §17–18).
+- Un branch Supabase nou are adesea o platformă mai nouă decât prod (22.10: pg_net 0.20.4 pe branch, 0.20.0 pe prod). `postgres` nu poate înlocui acele funcții, al căror owner e `supabase_admin`; nici prin MCP nu se poate. Rezultatul: poarta E3 e roșie și orice migrare E3 / E3b / E4 e refuzată pe branch.
+- **Proba pe branch cere un override declarat** pe amprenta funcției respective, în copii de probă, cu diff-ul și ambele sha-uri în raport, cât timp platforma branch-ului e mai nouă decât prod.
+  - Override-ul a fost refuzat de clasificatorul de permisiuni al sesiunii (Security Weaken), deci cere aprobarea explicită a lui Razvan în acea sesiune.
+  - Alternativă: fără probă PG17. Garanțiile rămân harness-ul local, review-ul și dry-run-ul pe prod. Așa s-a decis pentru E3b (Razvan B, 22.10).
+- **Pentru E4:** se decide din design, înainte de cod, care variantă se folosește. Proba de pe branch a E3b (`scripts/izometrie/e3b_gen/proba_pg17/`) se refolosește, inclusiv replicile din `baseline_pre_e3.json` și verificarea amprentelor (`verifica.sql`).

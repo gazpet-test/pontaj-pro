@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { TIPURI, CATEGORII, tipStoc, categorieStare, totaluri, filtreaza, fmtM, metri, lipsaRegistru } from './lib/izoStoc.js'
+import { citestePagini } from './lib/exportTeava.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -25,15 +26,22 @@ const CAT_CULOARE = { disponibil:G.green, in_drum:G.yellow, carantina:G.red, pe_
 const PAGINA = 1000
 const MAX_LISTA = 400
 
-export default function IzoStocTeava({ proiectId: proiectFix = null, citire = false }) {
+export default function IzoStocTeava({ proiectId: proiectFix = null, citire = false, proiectInitial = null }) {
   const [stare, setStare] = useState({ incarc: true, eroare: null, neinstalat: false })
   const [bucati, setBucati] = useState([])
   const [proiecte, setProiecte] = useState([])
   const [depozite, setDepozite] = useState([])
   const [tronsoane, setTronsoane] = useState([])
-  const [proiectId, setProiectId] = useState(proiectFix)
+  const [proiectId, setProiectId] = useState(proiectFix || proiectInitial)
   const [f, setF] = useState({ depozitId: '', tip: '', categorie: '', cauta: '' })
   const [faraAcces, setFaraAcces] = useState(false)
+  const [documenteExport, setDocumenteExport] = useState([])
+  const [eroareDocumente, setEroareDocumente] = useState('')
+  const [meniuExport, setMeniuExport] = useState(false)
+  const [verificare, setVerificare] = useState(false)
+  const [tronsonExport, setTronsonExport] = useState('')
+  const [exporta, setExporta] = useState(false)
+  const [mesajExport, setMesajExport] = useState('')
   // proiectul afișat: cel fix (Execuție) sau cel ales (Magazie) — o singură sursă peste tot
   const pidActiv = proiectFix || proiectId
   // doar ultima încărcare se aplică (schimbarea rapidă a proiectului nu lasă un răspuns vechi să-l suprascrie pe cel nou)
@@ -43,12 +51,13 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
     const cerere = ++ultimaCerere.current
     const curenta = () => cerere === ultimaCerere.current
     setStare({ incarc: true, eroare: null, neinstalat: false })
+    setDocumenteExport([]); setEroareDocumente(''); setMesajExport(''); setMeniuExport(false); setTronsonExport('')
     try {
       // proiectele cu registru activ (nivel ≠ off) + numele lor
       const [rProt, rProj, rDep] = await Promise.all([
         supabase.rpc('fn_izo_proiecte_protejate'),
-        supabase.from('executie_proiecte').select('id, nume, site_id').order('id'),
-        supabase.from('logistica_depozite').select('id, name, cod_3litere, site_id').order('id'),
+        citestePagini(ultim => supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id').gt('id',ultim).order('id').limit(PAGINA)).then(data => ({data})),
+        citestePagini(ultim => supabase.from('logistica_depozite').select('id, name, cod_3litere, site_id').gt('id',ultim).order('id').limit(PAGINA)).then(data => ({data})),
       ])
       if (!curenta()) return
       if (lipsaRegistru(rProt.error)) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
@@ -69,28 +78,45 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
       const blocat = poate === false
       setFaraAcces(blocat)
       if (blocat) { setBucati([]); setStare({ incarc: false, eroare: null, neinstalat: false }); return }
-      const { data: tr, error: eTr } = await supabase.from('executie_tronsoane').select('id, cod, proiect_id').eq('proiect_id', pid)
-      if (eTr) throw eTr
+      const tr = await citestePagini(ultim => supabase.from('executie_tronsoane').select('id, cod, proiect_id').eq('proiect_id', pid).gt('id',ultim).order('id').limit(PAGINA))
       if (!curenta()) return
       setTronsoane(tr || [])
       // bucățile registrului, paginate pe CHEIE (id > ultimul), nu pe offset: orice bucată care există pe toată durata
       // încărcării apare exact o dată (mișcările concurente nu mută paginile); merge și sub limita max-rows a API-ului
-      const toate = []
-      for (let ultim = 0; ; ) {
+      let toate
+      try { toate = await citestePagini(async ultim => {
+        if (!curenta()) return { data:[] }
         const { data, error } = await supabase.from('magazie_bucati')
-          .select('id, proiect_id, tip_cod, serie, serie_canon, sarja, lungime_mm, perete_mm, unghi_curba, stare, depozit_id, tronson_id, atribute, nr_document, data_receptie, updated_at')
+          .select('id, proiect_id, tip_cod, serie, serie_canon, sarja, lungime_mm, lungime_aviz_mm, lungime_masurata_mm, parinte_id, perete_mm, unghi_curba, stare, depozit_id, tronson_id, atribute, nr_document, data_receptie, updated_at, greutate_kg, dimensiune, grad_otel, standard, um, lot, aviz_intrare_id, observatii')
           .eq('proiect_id', pid).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null)
           .gt('id', ultim).order('id').limit(PAGINA)
+        return { data, error }
+      }) } catch (error) {
         if (!curenta()) return
-        if (error) {
-          if (lipsaRegistru(error)) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
-          throw error
-        }
-        if (!data?.length) break
-        toate.push(...data); ultim = data[data.length - 1].id
+        if (lipsaRegistru(error)) { setStare({ incarc: false, eroare: null, neinstalat: true }); return }
+        throw error
       }
       if (!curenta()) return
       setBucati(toate)
+      // Numai documentele legate de piesele vizibile; același client autentificat, RLS intact.
+      // E3 poate lipsi pe instalările E2: ecranul rămâne utilizabil, exportul explică eroarea.
+      const ids = [...new Set(toate.map(b => b.aviz_intrare_id ?? b.atribute?.document_id).filter(id => id != null))]
+      try {
+        const docs = []
+        for (let i=0;i<ids.length;i+=100) {
+          const lotIds = ids.slice(i,i+100)
+          const pagina = await citestePagini(ultim => supabase.from('izo_documente_intrare')
+            .select('id, proiect_id, nr_document, data_document, pv_nr, pv_data, stare')
+            .eq('proiect_id',pid).in('id',lotIds).gt('id',ultim).order('id').limit(PAGINA))
+          if (!curenta()) return
+          docs.push(...pagina)
+        }
+        setDocumenteExport(docs)
+      } catch (e) {
+        if (!curenta()) return
+        setEroareDocumente(`Nu se pot încărca documentele pentru export: ${e.message || String(e)}`)
+      }
+      if (!curenta()) return
       setStare({ incarc: false, eroare: null, neinstalat: false })
     } catch (e) {
       console.error(e)
@@ -107,6 +133,27 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
   const depoziteProiect = useMemo(() => depozite.filter(d => proiect && d.site_id === proiect.site_id), [depozite, proiect])
   const tot = useMemo(() => totaluri(bucati, { depozite: depMap, tronsoane: trMap }), [bucati, depMap, trMap])
   const lista = useMemo(() => filtreaza(bucati, f), [bucati, f])
+
+  const descarcaExcel = async mod => {
+    if (stare.incarc || exporta) return
+    if (eroareDocumente) { setMesajExport(eroareDocumente); return }
+    const cerere = ultimaCerere.current
+    setExporta(true); setMesajExport('')
+    try {
+      const { construiesteWorkbook, serializeazaWorkbook, numeFisier } = await import('./lib/exportTeava.js')
+      const wb = construiesteWorkbook(bucati, { proiect:proiect || {id:pidActiv}, depozite, tronsoane, documente:documenteExport, mod, depozitId:f.depozitId, tronsonId:tronsonExport, verificare })
+      if (!wb) { setMesajExport('Nicio bucată de exportat pentru selecția aleasă.'); return }
+      const bytes = await serializeazaWorkbook(wb)
+      if (cerere !== ultimaCerere.current) return
+      const loc = mod === 'depozit' ? depMap[f.depozitId] : mod === 'tronson' ? `TR_${trMap[tronsonExport]}` : mod
+      const url = URL.createObjectURL(new Blob([bytes], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const a = document.createElement('a'); a.href=url; a.download=numeFisier(proiect || {id:pidActiv},loc)
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setMeniuExport(false)
+    } catch (e) { if (cerere === ultimaCerere.current) setMesajExport(`Export nereușit: ${e.message || String(e)}`) }
+    finally { setExporta(false) }
+  }
 
   if (stare.incarc) return <div style={{ padding:30, color:G.dim, textAlign:'center' }}>Se încarcă stocul de țeavă…</div>
   if (stare.neinstalat) return (
@@ -149,7 +196,21 @@ export default function IzoStocTeava({ proiectId: proiectFix = null, citire = fa
           {citire ? '👁️ Doar citire — ' : ''}Stocul de țeavă și curbe Transgaz, din registru (aceeași sursă în Magazie și în Execuție). Mișcările se fac doar prin modulul de țeavă.
         </div>
         <button style={S.btnS} onClick={incarca}>🔄 Reîncarcă</button>
+        <div style={{ position:'relative' }}>
+          <button style={S.btnS} disabled={stare.incarc || exporta} onClick={() => setMeniuExport(v => !v)} aria-expanded={meniuExport}>{exporta ? 'Se exportă…' : 'Export Excel'}</button>
+          {meniuExport && <div style={{ ...S.card, position:'absolute', right:0, top:'100%', zIndex:20, padding:12, minWidth:285, display:'grid', gap:7 }}>
+            <label style={{ fontSize:13, color:G.text }}><input type="checkbox" checked={verificare} onChange={e => setVerificare(e.target.checked)} disabled={exporta} /> Fișă de verificare fizică</label>
+            <select aria-label="Tronson pentru export" style={S.input} value={tronsonExport} disabled={exporta} onChange={e => setTronsonExport(e.target.value)}>
+              <option value="">Selectează tronsonul</option>
+              {tronsoane.map(t => <option key={t.id} value={t.id}>{t.cod}</option>)}
+            </select>
+            {[[ 'depozit','Depozitul selectat',!f.depozitId ],[ 'depozite','Toate depozitele',false ],[ 'tronson','Tronsonul selectat',!tronsonExport ],[ 'tronsoane','Toate tronsoanele',false ],[ 'cumulat','Cumulat',false ]].map(([mod,label,blocat]) =>
+              <button key={mod} style={{ ...S.btnS, textAlign:'left', opacity:blocat || exporta ? .5 : 1 }} disabled={stare.incarc || exporta || blocat} onClick={() => descarcaExcel(mod)}>{label}</button>)}
+            <div style={{ fontSize:11, color:G.muted }}>Locul curent al pieselor. Filtrele de tip, stare și căutare nu restrâng exportul. Bucățile anulate sunt excluse.</div>
+          </div>}
+        </div>
       </div>
+      {mesajExport && <div role="status" style={{ color:G.yellow, fontSize:13, marginBottom:12 }}>{mesajExport}</div>}
 
       {/* KPI pe categorii */}
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14 }}>
