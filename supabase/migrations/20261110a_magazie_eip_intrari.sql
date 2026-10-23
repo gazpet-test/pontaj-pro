@@ -29,16 +29,17 @@ CREATE TABLE public.eip_intrari (
   cantitate numeric NOT NULL CHECK (cantitate::text NOT IN ('NaN','Infinity','-Infinity')),
   data_intrare date NOT NULL DEFAULT CURRENT_DATE, furnizor_cui text, furnizor_nume text,
   factura_nr text, factura_data date, pret_unitar_fara_tva numeric CHECK (pret_unitar_fara_tva >= 0 AND pret_unitar_fara_tva::text NOT IN ('NaN','Infinity','-Infinity')),
-  sursa text NOT NULL CHECK (sursa IN ('manual','ai','migrare','corectie')),
+  sursa text NOT NULL CHECK (sursa IN ('manual','ai','migrare','corectie','mutare')),
   motiv text, cheie_idempotenta text UNIQUE, document_path text,
   created_by uuid DEFAULT auth.uid(), created_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (cantitate > 0 OR sursa = 'corectie' OR (sursa = 'migrare' AND cantitate = 0)),
-  CHECK (sursa <> 'corectie' OR coalesce(btrim(motiv),'') <> '')
+  CHECK (cantitate > 0 OR sursa = 'corectie' OR (sursa = 'mutare' AND cantitate <> 0) OR (sursa = 'migrare' AND cantitate = 0)),
+  CHECK (sursa NOT IN ('corectie','mutare') OR coalesce(btrim(motiv),'') <> '')
 );
 CREATE INDEX eip_intrari_echipament_idx ON public.eip_intrari(echipament_id);
 -- Registrul de cereri pastreaza raspunsul initial inclusiv pentru facturi multi-linie.
 CREATE TABLE public.eip_receptii (
   cheie text PRIMARY KEY CHECK (btrim(cheie) <> ''), rezultat jsonb NOT NULL,
+  continut_hash text NOT NULL CHECK (continut_hash ~ '^[0-9a-f]{32}$'),
   created_by uuid NOT NULL DEFAULT auth.uid(), created_at timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO public.eip_articole(denumire,familie,tip_marime,um) VALUES
@@ -116,19 +117,18 @@ BEGIN
     RAISE EXCEPTION 'eip_fara_drept' USING ERRCODE='42501';
   END IF;
 END $$;
-REVOKE ALL ON FUNCTION public.fn_eip_verifica_drept() FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.fn_eip_verifica_drept() FROM PUBLIC,anon,authenticated,service_role;
 CREATE FUNCTION public.fn_eip_intrare_factura(p_antet jsonb,p_linii jsonb,p_cheie text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE l jsonb; a public.eip_articole%ROWTYPE; e public.magazie_echipamente%ROWTYPE;
   m text; q numeric; pret numeric; jid bigint; rasp jsonb := '[]'; vechi jsonb;
+  amprenta text; hash_vechi text;
 BEGIN
   PERFORM public.fn_eip_verifica_drept();
   IF p_cheie IS NULL OR btrim(p_cheie)='' THEN RAISE EXCEPTION 'eip_cheie_obligatorie'; END IF;
   -- Serializare globala RPC: ordine stabila inclusiv pentru facturi cu mai multe articole.
   -- Nu blocheaza scrierea legacy; deriva este detectata mai jos.
   PERFORM pg_advisory_xact_lock(20261110,1);
-  SELECT rezultat INTO vechi FROM public.eip_receptii WHERE cheie=p_cheie;
-  IF FOUND THEN RETURN vechi; END IF;
   IF jsonb_typeof(p_antet) IS DISTINCT FROM 'object' OR jsonb_typeof(p_linii) IS DISTINCT FROM 'array' THEN
     RAISE EXCEPTION 'eip_parametri_invalizi';
   END IF;
@@ -136,10 +136,35 @@ BEGIN
     OR coalesce(btrim(p_antet->>'factura_nr'),'')='' OR (p_antet->>'factura_data') IS NULL THEN
     RAISE EXCEPTION 'eip_antet_linii_invalide';
   END IF;
+  -- Hash pe valorile efectiv persistate; ordinea liniilor/cheilor JSON si scara
+  -- numericelor nu schimba cererea. Data implicita ramane NULL in hash pentru
+  -- ca un retry in alta zi sa returneze receptia initiala.
+  p_antet := jsonb_build_object(
+    'furnizor_cui',upper(btrim(p_antet->>'furnizor_cui')),
+    'furnizor_nume',nullif(btrim(p_antet->>'furnizor_nume'),''),
+    'factura_nr',btrim(p_antet->>'factura_nr'),
+    'factura_data',(p_antet->>'factura_data')::date,
+    'data_intrare',(p_antet->>'data_intrare')::date);
+  SELECT jsonb_agg(x ORDER BY ord) INTO p_linii FROM (
+    SELECT jsonb_build_object('articol_id',(value->>'articol_id')::bigint,
+      'marime',nullif(upper(btrim(value->>'marime')),''),
+      'cantitate',trim_scale((value->>'cantitate')::numeric),
+      'pret_unitar',trim_scale((value->>'pret_unitar')::numeric)) AS x, ord
+    FROM jsonb_array_elements(p_linii) WITH ORDINALITY AS linii(value,ord)
+  ) normalizate;
+  -- Sortam doar pentru hash; raspunsul initial pastreaza ordinea ceruta de UI.
+  SELECT md5(jsonb_build_object('antet',p_antet,'linii',jsonb_agg(value ORDER BY value::text))::text)
+    INTO amprenta FROM jsonb_array_elements(p_linii);
+  SELECT rezultat,continut_hash INTO vechi,hash_vechi FROM public.eip_receptii WHERE cheie=p_cheie;
+  IF FOUND THEN
+    IF hash_vechi IS DISTINCT FROM amprenta THEN RAISE EXCEPTION 'eip_cheie_reutilizata'; END IF;
+    RETURN vechi;
+  END IF;
   FOR l IN SELECT value FROM jsonb_array_elements(p_linii) LOOP
     SELECT * INTO a FROM public.eip_articole WHERE id=(l->>'articol_id')::bigint AND activ FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION 'eip_articol_invalid'; END IF;
     m := nullif(upper(btrim(l->>'marime')),''); q := (l->>'cantitate')::numeric; pret := (l->>'pret_unitar')::numeric;
+    IF a.tip_marime IN ('numar','litera') AND m IS NULL THEN RAISE EXCEPTION 'eip_marime_obligatorie'; END IF;
     IF q IS NULL OR q<=0 OR q::text IN ('NaN','Infinity','-Infinity') OR pret<0 OR pret::text IN ('NaN','Infinity','-Infinity')
       OR (a.tip_marime='unica' AND m IS NOT NULL) THEN RAISE EXCEPTION 'eip_linie_invalida'; END IF;
     INSERT INTO public.magazie_echipamente(denumire,categorie,este_eip,um,stare,cantitate_total,activ,articol_id,marime,created_by)
@@ -157,7 +182,7 @@ BEGIN
     rasp := rasp || jsonb_build_array(jsonb_build_object('intrare_id',jid,'echipament_id',e.id,'cantitate',q));
   END LOOP;
   vechi := jsonb_build_object('cheie',p_cheie,'linii',rasp);
-  INSERT INTO public.eip_receptii(cheie,rezultat) VALUES(p_cheie,vechi);
+  INSERT INTO public.eip_receptii(cheie,rezultat,continut_hash) VALUES(p_cheie,vechi,amprenta);
   RETURN vechi;
 END $$;
 CREATE FUNCTION public.fn_eip_corectie(p_echipament_id bigint,p_cantitate_noua numeric,p_motiv text) RETURNS jsonb
@@ -182,6 +207,52 @@ BEGIN
   UPDATE public.magazie_echipamente SET cantitate_total=p_cantitate_noua WHERE id=e.id;
   RETURN jsonb_build_object('intrare_id',jid,'echipament_id',e.id,'total',p_cantitate_noua,'delta',delta);
 END $$;
+CREATE FUNCTION public.fn_eip_muta(p_din_echipament bigint,p_in_articol bigint,p_in_marime text,p_cantitate numeric,p_motiv text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE a public.eip_articole%ROWTYPE; e public.magazie_echipamente%ROWTYPE;
+  din public.magazie_echipamente%ROWTYPE; destinatie bigint; asignat numeric;
+  m text := nullif(upper(btrim(p_in_marime)),''); jid_din bigint; jid_in bigint;
+BEGIN
+  PERFORM public.fn_eip_verifica_drept();
+  IF coalesce(btrim(p_motiv),'')='' THEN RAISE EXCEPTION 'eip_motiv_obligatoriu'; END IF;
+  IF p_cantitate IS NULL OR p_cantitate<=0 OR p_cantitate::text IN ('NaN','Infinity','-Infinity') THEN
+    RAISE EXCEPTION 'eip_cantitate_invalida'; END IF;
+  PERFORM pg_advisory_xact_lock(20261110,1);
+  LOCK TABLE public.magazie_inventar_angajat IN SHARE ROW EXCLUSIVE MODE;
+  SELECT * INTO a FROM public.eip_articole WHERE id=p_in_articol AND activ FOR SHARE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'eip_articol_invalid'; END IF;
+  IF a.tip_marime IN ('numar','litera') AND m IS NULL THEN RAISE EXCEPTION 'eip_marime_obligatorie'; END IF;
+  IF a.tip_marime='unica' AND m IS NOT NULL THEN RAISE EXCEPTION 'eip_linie_invalida'; END IF;
+  INSERT INTO public.magazie_echipamente(denumire,categorie,este_eip,um,stare,cantitate_total,activ,articol_id,marime,created_by)
+    VALUES(a.denumire,'eip',true,a.um,'functional',0,true,a.id,m,auth.uid())
+    ON CONFLICT (articol_id,(coalesce(marime,''))) WHERE activ AND articol_id IS NOT NULL DO NOTHING;
+  SELECT id INTO STRICT destinatie FROM public.magazie_echipamente
+    WHERE articol_id=a.id AND activ AND marime IS NOT DISTINCT FROM m;
+  IF destinatie=p_din_echipament THEN RAISE EXCEPTION 'eip_mutare_aceeasi_destinatie'; END IF;
+  -- Ambele randuri sunt blocate in ordine crescatoare, inclusiv la mutari inverse.
+  FOR e IN SELECT * FROM public.magazie_echipamente
+    WHERE id IN (p_din_echipament,destinatie) ORDER BY id FOR UPDATE LOOP
+    IF NOT coalesce(e.este_eip,false) OR NOT coalesce(e.activ,false) OR e.articol_id IS NULL THEN
+      RAISE EXCEPTION 'eip_stoc_invalid'; END IF;
+    IF e.id=destinatie AND (e.articol_id IS DISTINCT FROM a.id OR e.marime IS DISTINCT FROM m) THEN
+      RAISE EXCEPTION 'eip_stoc_invalid'; END IF;
+    IF e.cantitate_total IS DISTINCT FROM (SELECT coalesce(sum(cantitate),0) FROM public.eip_intrari WHERE echipament_id=e.id) THEN
+      RAISE EXCEPTION 'eip_jurnal_divergent'; END IF;
+    IF e.id=p_din_echipament THEN din := e; END IF;
+  END LOOP;
+  IF din.id IS NULL THEN RAISE EXCEPTION 'eip_stoc_invalid'; END IF;
+  SELECT coalesce(sum(cantitate),0) INTO asignat FROM public.magazie_inventar_angajat
+    WHERE echipament_id=din.id AND data_retur IS NULL;
+  IF din.cantitate_total-p_cantitate<asignat THEN RAISE EXCEPTION 'eip_sub_asignat'; END IF;
+  INSERT INTO public.eip_intrari(echipament_id,articol_id,marime,cantitate,sursa,motiv)
+    VALUES(din.id,din.articol_id,din.marime,-p_cantitate,'mutare',btrim(p_motiv)) RETURNING id INTO jid_din;
+  INSERT INTO public.eip_intrari(echipament_id,articol_id,marime,cantitate,sursa,motiv)
+    VALUES(destinatie,a.id,m,p_cantitate,'mutare',btrim(p_motiv)) RETURNING id INTO jid_in;
+  UPDATE public.magazie_echipamente SET cantitate_total=cantitate_total-p_cantitate WHERE id=din.id;
+  UPDATE public.magazie_echipamente SET cantitate_total=cantitate_total+p_cantitate WHERE id=destinatie;
+  RETURN jsonb_build_object('din_echipament',din.id,'in_echipament',destinatie,
+    'intrare_din_id',jid_din,'intrare_in_id',jid_in,'cantitate',p_cantitate);
+END $$;
 CREATE FUNCTION public.fn_eip_articol_gaseste(p_furnizor_cui text,p_cod text,p_denumire text)
 RETURNS TABLE(articol_id bigint,potrivire text)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -205,11 +276,15 @@ ALTER TABLE public.eip_intrari ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.eip_receptii ENABLE ROW LEVEL SECURITY;
 CREATE POLICY eip_articole_select ON public.eip_articole FOR SELECT TO authenticated USING(auth.uid() IS NOT NULL);
 CREATE POLICY eip_alias_select ON public.eip_alias_furnizor FOR SELECT TO authenticated USING(auth.uid() IS NOT NULL);
-CREATE POLICY eip_intrari_select ON public.eip_intrari FOR SELECT TO authenticated USING(auth.uid() IS NOT NULL);
-CREATE POLICY eip_receptii_select ON public.eip_receptii FOR SELECT TO authenticated USING(auth.uid() IS NOT NULL);
+CREATE POLICY eip_intrari_select ON public.eip_intrari FOR SELECT TO authenticated USING(
+  EXISTS (SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+    AND (p.is_owner OR p.can_process_achizitii OR p.can_manage_stoc OR p.role='admin_logistica')));
+CREATE POLICY eip_receptii_select ON public.eip_receptii FOR SELECT TO authenticated USING(
+  EXISTS (SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+    AND (p.is_owner OR p.can_process_achizitii OR p.can_manage_stoc OR p.role='admin_logistica')));
 -- Neutralizeaza inclusiv default privileges Supabase; jurnalul nu are DML direct.
 REVOKE ALL ON public.eip_articole,public.eip_alias_furnizor,public.eip_intrari,public.eip_receptii FROM PUBLIC,anon,authenticated,service_role;
 GRANT SELECT ON public.eip_articole,public.eip_alias_furnizor,public.eip_intrari,public.eip_receptii,public.v_eip_stoc TO authenticated,service_role;
-REVOKE ALL ON FUNCTION public.fn_eip_intrare_factura(jsonb,jsonb,text),public.fn_eip_corectie(bigint,numeric,text),public.fn_eip_articol_gaseste(text,text,text) FROM PUBLIC,anon;
-GRANT EXECUTE ON FUNCTION public.fn_eip_intrare_factura(jsonb,jsonb,text),public.fn_eip_corectie(bigint,numeric,text),public.fn_eip_articol_gaseste(text,text,text) TO authenticated;
+REVOKE ALL ON FUNCTION public.fn_eip_intrare_factura(jsonb,jsonb,text),public.fn_eip_corectie(bigint,numeric,text),public.fn_eip_muta(bigint,bigint,text,numeric,text),public.fn_eip_articol_gaseste(text,text,text) FROM PUBLIC,anon,service_role;
+GRANT EXECUTE ON FUNCTION public.fn_eip_intrare_factura(jsonb,jsonb,text),public.fn_eip_corectie(bigint,numeric,text),public.fn_eip_muta(bigint,bigint,text,numeric,text),public.fn_eip_articol_gaseste(text,text,text) TO authenticated;
 COMMIT;
