@@ -73,6 +73,175 @@ BEGIN
  v_r:=public.fn_izo_sync_push(v_device,jsonb_build_array(v_op));
  IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION 'submit %',v_r; END IF;
 END $test$;
+
+-- E4b-5a: sent rows are immutable to teren; no identity bypass or new row.
+DO $test$
+DECLARE v_d public.izo_declaratii; v_r jsonb; v_payload jsonb; v_before jsonb; v_n bigint; v_seen integer:=0;
+BEGIN
+ FOR v_d IN SELECT * FROM public.izo_declaratii WHERE bucata_id=current_setting('test.e4b2.b1')::bigint
+  OR uid='00000000-0000-0000-0000-00000000b206' LOOP
+  v_seen:=v_seen+1;
+  v_before:=to_jsonb(v_d);
+  v_payload:=v_d.payload||jsonb_build_object('versiune_baza',v_d.versiune,'bucata',
+   jsonb_build_object('bucata_id',current_setting('test.e4b2.b6')::bigint));
+  v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b201',jsonb_build_array(jsonb_build_object(
+   'op_id',gen_random_uuid(),'seq',7,'versiune_format',1,'tip_op','decl_salveaza','payload',v_payload)));
+  IF v_r#>>'{rezultate,0,cod}' IS DISTINCT FROM 'conflict' OR v_r#>>'{rezultate,0,motiv}' IS DISTINCT FROM 'sesiune_stare'
+   THEN RAISE EXCEPTION '5a sent row edit %',v_r; END IF;
+  IF (SELECT to_jsonb(d) FROM public.izo_declaratii d WHERE id=v_d.id) IS DISTINCT FROM v_before
+   THEN RAISE EXCEPTION '5a refused row changed'; END IF;
+ END LOOP;
+ IF v_seen<>2 THEN RAISE EXCEPTION '5a missing sent rows'; END IF;
+ SELECT count(*) INTO v_n FROM public.izo_declaratii;
+ v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b201',jsonb_build_array(jsonb_build_object(
+  'op_id',gen_random_uuid(),'seq',7,'versiune_format',1,'tip_op','decl_salveaza','payload',
+  v_payload||jsonb_build_object('uid',gen_random_uuid(),'versiune_baza',0))));
+ IF v_r#>>'{rezultate,0,motiv}' IS DISTINCT FROM 'sesiune_stare' OR (SELECT count(*) FROM public.izo_declaratii)<>v_n
+  THEN RAISE EXCEPTION '5a new sent row accepted %',v_r; END IF;
+ v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b201',jsonb_build_array(jsonb_build_object(
+  'op_id',gen_random_uuid(),'seq',7,'versiune_format',1,'tip_op','sesiune_deschide','payload',jsonb_build_object(
+  'proiect_id',3,'tronson_id',19,'uid','00000000-0000-0000-0000-00000000b202','zi',(now() AT TIME ZONE 'Europe/Bucharest')::date))));
+ IF v_r#>>'{rezultate,0,motiv}' IS DISTINCT FROM 'sesiune_stare' THEN RAISE EXCEPTION '5a reopened sent session %',v_r; END IF;
+
+END $test$;
+-- Explicit MP revision does not give teren the right to resolve the serial either.
+SAVEPOINT e4b5a_identitate;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $test$ DECLARE v_d public.izo_declaratii; v_r jsonb; BEGIN
+ SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE uid='00000000-0000-0000-0000-00000000b206';
+ v_r:=public.fn_izo_revizie_cere(gen_random_uuid(),v_d.id,v_d.versiune,v_d.updated_at,'fixture identity revision');
+ IF v_r->>'cod' IS DISTINCT FROM 'revizie_ceruta' THEN RAISE EXCEPTION '5a identity revision setup %',v_r; END IF;
+END $test$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $test$ DECLARE v_d public.izo_declaratii; v_r jsonb; v_before jsonb; BEGIN
+ SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE uid='00000000-0000-0000-0000-00000000b206';
+ v_before:=to_jsonb(v_d);
+ v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b201',jsonb_build_array(jsonb_build_object(
+  'op_id',gen_random_uuid(),'seq',7,'versiune_format',1,'tip_op','decl_salveaza','payload',v_d.payload||jsonb_build_object(
+  'versiune_baza',v_d.versiune,'bucata',jsonb_build_object('bucata_id',current_setting('test.e4b2.b6')::bigint)))));
+ IF v_r#>>'{rezultate,0,cod}' IS DISTINCT FROM 'eroare' OR v_r#>>'{rezultate,0,motiv}' IS DISTINCT FROM 'serie_context'
+  THEN RAISE EXCEPTION '5a terrain resolved revision identity %',v_r; END IF;
+ IF (SELECT to_jsonb(d) FROM public.izo_declaratii d WHERE id=v_d.id) IS DISTINCT FROM v_before
+  THEN RAISE EXCEPTION '5a refused identity changed row'; END IF;
+END $test$;
+ROLLBACK TO SAVEPOINT e4b5a_identitate;
+RELEASE SAVEPOINT e4b5a_identitate;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
+-- Exercise the independent SQL trigger with the actual terrain column privileges.
+SET LOCAL ROLE izo_teren_editor;
+DO $test$ DECLARE v_n bigint; BEGIN
+ BEGIN
+  UPDATE public.izo_declaratii SET identificare='bucata',bucata_id=current_setting('test.e4b2.b6')::bigint,stare='trimisa',versiune=versiune+1
+   WHERE uid='00000000-0000-0000-0000-00000000b206';
+  GET DIAGNOSTICS v_n=ROW_COUNT;
+  IF v_n<>1 THEN RAISE EXCEPTION '5a missing trigger fixture'; END IF;
+  RAISE EXCEPTION '5a teren resolved identity';
+ EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'serie_context' THEN RAISE; END IF; END;
+ BEGIN
+  UPDATE public.izo_declaratii SET payload=payload||jsonb_build_object('serie_bruta','SCHIMBATA'),versiune=versiune+1
+   WHERE uid='00000000-0000-0000-0000-00000000b206';
+  GET DIAGNOSTICS v_n=ROW_COUNT;
+  IF v_n<>1 THEN RAISE EXCEPTION '5a missing trigger fixture'; END IF;
+  RAISE EXCEPTION '5a teren edited verification payload';
+ EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'teren_tranzitie' THEN RAISE; END IF; END;
+END $test$;
+RESET ROLE;
+
+-- Non-owner MP with actual module/project rights. Both identity branches isolated.
+-- fixture administrativ: fără JWT (prevent_role_escalation verifică apelantul)
+SELECT set_config('request.jwt.claims','',true);
+SELECT set_config('test.e4b5a.owner121',(SELECT is_owner::text FROM public.profiles WHERE id='00000000-0000-0000-0000-000000000121'),true);
+SELECT set_config('request.jwt.claims','',true);
+UPDATE public.profiles SET is_owner=false WHERE id IN ('00000000-0000-0000-0000-000000000121','00000000-0000-0000-0000-000000000117');
+INSERT INTO public.user_module_access(profile_id,module,access_level) VALUES
+ ('00000000-0000-0000-0000-000000000121','executie.izometrie','editor'),
+ ('00000000-0000-0000-0000-000000000117','executie.izometrie','editor')
+ ON CONFLICT(profile_id,module) DO UPDATE SET access_level='editor';
+INSERT INTO public.izo_atribuiri(proiect_id,profile_id,rol,acordat_de,motiv)
+ VALUES(3,'00000000-0000-0000-0000-000000000121','manager_aprobator','fixture','E4b-5a four eyes'),
+       (3,'00000000-0000-0000-0000-000000000117','manager_aprobator','fixture','E4b-5a four eyes') ON CONFLICT DO NOTHING;
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+DO $test$
+DECLARE v_uid uuid; v_d public.izo_declaratii; v_known public.izo_declaratii; v_p jsonb; v_before jsonb;
+BEGIN
+ FOREACH v_uid IN ARRAY ARRAY['00000000-0000-0000-0000-000000000121'::uuid] LOOP
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',v_uid,'role','authenticated')::text,true);
+  IF (SELECT is_owner FROM public.profiles WHERE id=v_uid) THEN RAISE EXCEPTION '5a MP must not be owner'; END IF;
+  SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE uid='00000000-0000-0000-0000-00000000b206';
+  SELECT * INTO STRICT v_known FROM public.izo_declaratii WHERE bucata_id=current_setting('test.e4b2.b1')::bigint;
+  v_p:=public.fn_izo_aprobare_lot(v_known.preverificare_id); -- proves MP rights
+  v_before:=to_jsonb(v_d);
+  BEGIN
+   PERFORM public.fn_izo_aproba(gen_random_uuid(),v_known.preverificare_id,
+    jsonb_build_array(jsonb_build_object('declaratie_id',v_known.id,'versiune',v_known.versiune,'updated_at',v_known.updated_at)),v_p->>'amprenta','{}');
+   RAISE EXCEPTION '5a four eyes approval accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  BEGIN
+   PERFORM public.fn_izo_respinge(gen_random_uuid(),v_d.id,v_d.versiune,v_d.updated_at,'fixture four eyes','{}');
+   RAISE EXCEPTION '5a four eyes rejection accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  BEGIN
+   PERFORM public.fn_izo_revizie_cere(gen_random_uuid(),v_d.id,v_d.versiune,v_d.updated_at,'fixture four eyes');
+   RAISE EXCEPTION '5a four eyes revision accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  BEGIN
+   PERFORM public.fn_izo_serie_lamureste(gen_random_uuid(),v_d.id,v_d.versiune,v_d.updated_at,current_setting('test.e4b2.b6')::bigint,'fixture four eyes');
+   RAISE EXCEPTION '5a four eyes series accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  IF (SELECT to_jsonb(d) FROM public.izo_declaratii d WHERE id=v_d.id) IS DISTINCT FROM v_before THEN RAISE EXCEPTION '5a four eyes mutated row'; END IF;
+ END LOOP;
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+-- Transfer the employee binding sequentially; respect uniq_profiles_employee_id.
+SELECT set_config('request.jwt.claims','',true);
+UPDATE public.profiles SET employee_id=NULL WHERE id='00000000-0000-0000-0000-000000000121';
+UPDATE public.profiles SET employee_id=121 WHERE id='00000000-0000-0000-0000-000000000117';
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+DO $test$
+DECLARE v_uid uuid; v_d public.izo_declaratii; v_known public.izo_declaratii; v_p jsonb; v_before jsonb;
+BEGIN
+ FOREACH v_uid IN ARRAY ARRAY['00000000-0000-0000-0000-000000000117'::uuid] LOOP
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',v_uid,'role','authenticated')::text,true);
+  IF (SELECT is_owner FROM public.profiles WHERE id=v_uid) THEN RAISE EXCEPTION '5a MP must not be owner'; END IF;
+  SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE uid='00000000-0000-0000-0000-00000000b206';
+  SELECT * INTO STRICT v_known FROM public.izo_declaratii WHERE bucata_id=current_setting('test.e4b2.b1')::bigint;
+  v_p:=public.fn_izo_aprobare_lot(v_known.preverificare_id); -- proves MP rights
+  v_before:=to_jsonb(v_d);
+  BEGIN
+   PERFORM public.fn_izo_aproba(gen_random_uuid(),v_known.preverificare_id,
+    jsonb_build_array(jsonb_build_object('declaratie_id',v_known.id,'versiune',v_known.versiune,'updated_at',v_known.updated_at)),v_p->>'amprenta','{}');
+   RAISE EXCEPTION '5a four eyes approval accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  BEGIN
+   PERFORM public.fn_izo_respinge(gen_random_uuid(),v_d.id,v_d.versiune,v_d.updated_at,'fixture four eyes','{}');
+   RAISE EXCEPTION '5a four eyes rejection accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  BEGIN
+   PERFORM public.fn_izo_revizie_cere(gen_random_uuid(),v_d.id,v_d.versiune,v_d.updated_at,'fixture four eyes');
+   RAISE EXCEPTION '5a four eyes revision accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  BEGIN
+   PERFORM public.fn_izo_serie_lamureste(gen_random_uuid(),v_d.id,v_d.versiune,v_d.updated_at,current_setting('test.e4b2.b6')::bigint,'fixture four eyes');
+   RAISE EXCEPTION '5a four eyes series accepted';
+  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
+  IF (SELECT to_jsonb(d) FROM public.izo_declaratii d WHERE id=v_d.id) IS DISTINCT FROM v_before THEN RAISE EXCEPTION '5a four eyes mutated row'; END IF;
+ END LOOP;
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+SELECT set_config('request.jwt.claims','',true);
+UPDATE public.profiles SET employee_id=117 WHERE id='00000000-0000-0000-0000-000000000117';
+UPDATE public.profiles SET employee_id=121 WHERE id='00000000-0000-0000-0000-000000000121';
+SELECT set_config('request.jwt.claims','',true);
+UPDATE public.profiles SET is_owner=current_setting('test.e4b5a.owner121')::boolean WHERE id='00000000-0000-0000-0000-000000000121';
+UPDATE public.profiles SET employee_id=117,is_owner=true WHERE id='00000000-0000-0000-0000-000000000117';
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
 DO $test$
 DECLARE v_s bigint; v_d public.izo_declaratii; v_other bigint; v_preview jsonb; v_rows jsonb; v_r jsonb; v_retry jsonb;
@@ -152,7 +321,7 @@ DO $test$ DECLARE v_d public.izo_declaratii; v_preview jsonb; BEGIN
  v_preview:=public.fn_izo_aprobare_lot(v_d.preverificare_id);
  BEGIN PERFORM public.fn_izo_aproba(gen_random_uuid(),v_d.preverificare_id,
   jsonb_build_array(jsonb_build_object('declaratie_id',v_d.id,'versiune',v_d.versiune,'updated_at',v_d.updated_at)),v_preview->>'amprenta','{}');
-  RAISE EXCEPTION 'owner self approval accepted'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RAISE EXCEPTION 'owner self approval accepted'; EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'propriul_rand' THEN RAISE; END IF; END;
 END $test$;
 DO $test$ DECLARE v_d public.izo_declaratii; v_r jsonb; BEGIN
  SELECT * INTO v_d FROM public.izo_declaratii WHERE bucata_id=current_setting('test.e4b2.b3')::bigint;
@@ -661,5 +830,21 @@ BEGIN
  EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'suduri_proiectie' THEN RAISE; END IF; END;
 END $test$;
 RESET ROLE;
+
+-- E4b-5a: the 31st office call is refused, including idempotent no-op calls.
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+UPDATE public.izo_rata_apeluri SET n=0 WHERE profile_id='00000000-0000-0000-0000-000000000117' AND functie='fn_izo_front_intern';
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $test$ DECLARE v_i integer; BEGIN
+ FOR v_i IN 1..30 LOOP PERFORM public.fn_izo_front_elibereaza(19,'fixture rate'); END LOOP;
+ BEGIN PERFORM public.fn_izo_front_elibereaza(19,'fixture rate'); RAISE EXCEPTION '5a office limit missing';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'limita' THEN RAISE; END IF; END;
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
 ROLLBACK;
 SELECT 'E4B_APROBARE_TEST_END';

@@ -11,6 +11,42 @@ M = (R/'supabase/migrations/20261109b_izometrie_e4b_teren.sql').read_text(encodi
 V = (R/'supabase/revenire/20261109b_izometrie_e4b_teren_ROLLBACK.sql').read_text(encoding='utf-8')
 
 class E4bTests(unittest.TestCase):
+ def test_e4b5a_rate_four_eyes_and_terrain_identity(self):
+  rate=G['src'](G['block'](M,'fn_izo_birou_intrare'))
+  self.assertLess(rate.index('izo_rata_apeluri'),rate.index('fn_izo_porti_lipsa'))
+  self.assertIn('IF v_n>30',rate)
+  self.assertIn('public.fn_izo_uid(),p_functie',rate)
+  import re
+  for args in re.findall(r'PERFORM public.fn_izo_birou_intrare\(([^;]+)\);',M):
+   self.assertEqual(args.count(','),2,args)
+  for name in ['fn_izo_decizie_intern','fn_izo_serie_intern']:
+   body=G['src'](G['block'](M,name))
+   self.assertIn('declarat_de_angajat=v_emp',body)
+   self.assertIn("RAISE EXCEPTION 'propriul_rand' USING ERRCODE='42501'",body)
+   self.assertLess(body.index('propriul_rand'),body.index('RETURN v_old.raspuns'))
+  body=G['src'](G['block'](M,'fn_izo_teren_op'))
+  self.assertIn("v_s.dispozitiv_id IS DISTINCT FROM p_dispozitiv",body)
+  self.assertIn("v_s.zi IS DISTINCT FROM (v_p->>'zi')::date",body)
+  self.assertNotIn("'blocata','in_verificare'",body[:body.index('IF v_d.id IS NOT NULL THEN')])
+  self.assertIn("v_d.identificare='nerezolvata' AND v_ident IS DISTINCT FROM 'nerezolvata'",body)
+ def test_e4b5a_ownership_scope_forward_and_rollback(self):
+  import re
+  for sql,initial in [(M,dict(G['baseline_owners'])),(V,dict(G['baseline_owners'],**G['function_owners']))]:
+   role='postgres'; owners=initial.copy()
+   for m in re.finditer(r'SET LOCAL ROLE (\w+);|RESET ROLE;|ALTER FUNCTION public\.(fn_izo_\w+\([^;]*?\)) OWNER TO (\w+);|(?:DROP FUNCTION|(?:GRANT|REVOKE) [^;\n]*? ON FUNCTION) (public\.fn_izo_\w+\([^;]*?\))(?:;| (?:TO|FROM) [^;]+;)',sql):
+    if m[1]: role=m[1]
+    elif m[0]=='RESET ROLE;': role='postgres'
+    else:
+     targets=[m[2]] if m[2] else re.findall(r'public\.(fn_izo_\w+\([^)]*\))',m[4])
+     for sig in targets: self.assertEqual(role,owners.get(sig,'postgres'),m[0])
+     if m[2]: owners[m[2]]=m[3]
+  self.assertNotRegex(M,r'(?i)(?:ALTER|CREATE TRIGGER)[^;]*\bstorage\.')
+  self.assertIn("v_grant->>'owner'",V)
+ def test_e4b5a_fingerprint_existing_policies_and_acls(self):
+  body=M[M.index('CREATE FUNCTION public.fn_izo_porti_e4b_definitii()'):M.index('CREATE FUNCTION public.fn_izo_porti_e4b_lipsa()')]
+  self.assertIn('p.polpermissive',body)
+  for table in G['extra_read']: self.assertIn("'"+table+"'",body)
+  self.assertIn("'magazie_bucati_id_seq'",body)
  def test_e4b3_matrix_owners_and_dependencies(self):
   for names,role in [(G['teren_owned'],'izo_teren_editor'),(G['writer_owned'] | G['shared_invoker'],'izo_montaj_writer')]:
    for name in names:

@@ -198,6 +198,13 @@ CREATE TABLE public.izo_aprobari (
 BEGIN
  IF current_user='izo_teren_editor' AND (OLD.declarat_de IS DISTINCT FROM public.fn_izo_uid()
   OR NEW.stare IN ('aprobata','respinsa') OR NEW.stare='revizie_ceruta' AND NOT (OLD.stare='blocata' AND OLD.stare_inainte_blocare='revizie_ceruta')) THEN RAISE EXCEPTION 'teren_tranzitie' USING ERRCODE='42501'; END IF;
+ IF current_user='izo_teren_editor' AND OLD.identificare='nerezolvata'
+  AND (NEW.identificare IS DISTINCT FROM OLD.identificare OR NEW.bucata_id IS NOT NULL OR NEW.bucata_decl_uid IS NOT NULL) THEN
+  RAISE EXCEPTION 'serie_context' USING ERRCODE='42501'; END IF;
+ IF current_user='izo_teren_editor' AND OLD.stare IN ('trimisa','in_verificare')
+  AND (NEW.versiune,NEW.payload,NEW.identificare,NEW.bucata_id,NEW.bucata_decl_uid,NEW.sursa_bucata_id,NEW.sursa_decl_uid)
+   IS DISTINCT FROM (OLD.versiune,OLD.payload,OLD.identificare,OLD.bucata_id,OLD.bucata_decl_uid,OLD.sursa_bucata_id,OLD.sursa_decl_uid) THEN
+  RAISE EXCEPTION 'teren_tranzitie' USING ERRCODE='42501'; END IF;
  IF current_user='izo_montaj_writer' AND (NEW.bucata_id,NEW.identificare,NEW.payload) IS DISTINCT FROM (OLD.bucata_id,OLD.identificare,OLD.payload) THEN
   IF OLD.stare<>'in_verificare' OR OLD.identificare IS DISTINCT FROM 'nerezolvata' OR NEW.stare NOT IN ('trimisa','conflict')
    OR NEW.identificare IS DISTINCT FROM 'bucata' OR NEW.bucata_id IS NULL
@@ -569,6 +576,8 @@ BEGIN
   IF FOUND THEN
    IF v_s.autor_profile_id<>v_uid OR v_s.proiect_id<>p_front.proiect_id OR v_s.tronson_id<>p_front.tronson_id THEN
     RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
+   IF v_s.dispozitiv_id IS DISTINCT FROM p_dispozitiv OR v_s.zi IS DISTINCT FROM (v_p->>'zi')::date
+    OR v_s.stare<>'deschisa' THEN RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
    RETURN jsonb_build_object('cod','acceptat','sesiune_id',v_s.id,'versiune',v_s.versiune);
   END IF;
   IF (v_p->>'zi')::date IS DISTINCT FROM (now() AT TIME ZONE 'Europe/Bucharest')::date THEN RAISE EXCEPTION 'zi' USING ERRCODE='IZ001'; END IF;
@@ -604,11 +613,11 @@ BEGIN
  END IF;
  IF v_type NOT IN ('decl_salveaza','decl_sterge') THEN RAISE EXCEPTION 'tip_op' USING ERRCODE='IZ001'; END IF;
  SELECT * INTO v_d FROM public.izo_declaratii WHERE uid=(v_p->>'uid')::uuid;
- IF v_s.stare='trimisa' AND (v_d.id IS NULL OR v_d.stare NOT IN ('revizie_ceruta','conflict','blocata','in_verificare')) THEN
+ IF v_s.stare='trimisa' AND (v_d.id IS NULL OR v_d.stare NOT IN ('revizie_ceruta','conflict','blocata')) THEN
   RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
  IF FOUND THEN
   IF v_d.declarat_de<>v_uid OR v_d.preverificare_id<>v_s.id THEN RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
-  IF v_d.versiune IS DISTINCT FROM (v_p->>'versiune_baza')::integer OR v_d.stare NOT IN ('ciorna','conflict','blocata','in_verificare','revizie_ceruta') THEN
+  IF v_d.versiune IS DISTINCT FROM (v_p->>'versiune_baza')::integer OR v_d.stare NOT IN ('ciorna','conflict','blocata','revizie_ceruta') THEN
    RAISE EXCEPTION 'cas' USING ERRCODE='IZ002'; END IF;
  ELSE
   IF (v_p->>'versiune_baza')::integer IS DISTINCT FROM 0 OR v_type='decl_sterge' THEN RAISE EXCEPTION 'cas' USING ERRCODE='IZ002'; END IF;
@@ -679,6 +688,9 @@ BEGIN
    RAISE EXCEPTION 'identificare' USING ERRCODE='IZ001'; END IF;
   v_ident:='nerezolvata'; v_len:=(v_p->>'lungime_masurata_mm')::integer;
  ELSE v_ident:=CASE WHEN v_decl IS NULL THEN 'bucata' ELSE 'bucata_decl' END; END IF;
+ -- O serie nerezolvata se lamureste exclusiv prin MP, inclusiv dupa o revizie.
+ IF v_d.identificare='nerezolvata' AND v_ident IS DISTINCT FROM 'nerezolvata' THEN
+  RAISE EXCEPTION 'serie_context' USING ERRCODE='IZ001'; END IF;
  IF v_len IS NULL OR v_len<=0 OR v_len>v_cfg.lungime_max_mm THEN RAISE EXCEPTION 'lungime' USING ERRCODE='IZ001'; END IF;
  IF coalesce(v_p#>>'{confirmare,mod}','') NOT IN ('marcaj','marcaj_diferit','masurat','taiata') THEN RAISE EXCEPTION 'lungime_neconfirmata' USING ERRCODE='IZ001'; END IF;
  IF v_p#>>'{confirmare,mod}'='marcaj' AND (v_p#>>'{confirmare,cm}')::integer IS DISTINCT FROM (round(v_len::numeric/10)::integer % 100) THEN
@@ -1034,9 +1046,9 @@ BEGIN
  RETURN v_emp;
 END $f$;
 
-  CREATE FUNCTION public.fn_izo_birou_intrare(p_proiect bigint,p_depozit integer) RETURNS void
+  CREATE FUNCTION public.fn_izo_birou_intrare(p_proiect bigint,p_depozit integer,p_functie text) RETURNS void
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_lipsa text[];
+DECLARE v_lipsa text[]; v_n integer;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
@@ -1045,6 +1057,12 @@ BEGIN
  IF coalesce(current_setting('izo.montaj_ctx',true),'')<>'' OR coalesce(current_setting('izo.receptie_ctx',true),'')<>''
   OR coalesce(current_setting('izo.registru_tx',true),'')<>'' THEN RAISE EXCEPTION 'context_ocupat' USING ERRCODE='42501'; END IF;
  PERFORM public.fn_izo_birou_autorizat(p_proiect,p_depozit,false);
+ INSERT INTO public.izo_rata_apeluri(profile_id,functie,fereastra_de_la,n)
+ VALUES(public.fn_izo_uid(),p_functie,date_trunc('minute',clock_timestamp()),1)
+ ON CONFLICT(profile_id,functie) DO UPDATE SET
+ n=CASE WHEN izo_rata_apeluri.fereastra_de_la=excluded.fereastra_de_la THEN izo_rata_apeluri.n+1 ELSE 1 END,
+ fereastra_de_la=excluded.fereastra_de_la RETURNING n INTO v_n;
+ IF v_n>30 THEN RAISE EXCEPTION 'limita'; END IF;
  v_lipsa:=public.fn_izo_porti_lipsa();
  IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b porti %',v_lipsa; END IF;
 END $f$;
@@ -1130,7 +1148,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT proiect_id INTO v_pr FROM public.izo_preverificari WHERE id=p_preverificare;
- PERFORM public.fn_izo_birou_intrare(v_pr,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_pr,NULL,'fn_izo_aprobare_intern');
  v_doc:=public.fn_izo_birou_preview(p_preverificare);
  IF v_doc IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
  SELECT coalesce(array_agg(d.id ORDER BY d.id),'{}') INTO v_ids FROM public.izo_declaratii d
@@ -1157,7 +1175,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_s FROM public.izo_preverificari WHERE id=p_preverificare;
- PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL,'fn_izo_aproba_intern');
  IF v_s.id IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
  IF p_cheie IS NULL OR jsonb_typeof(p_randuri) IS DISTINCT FROM 'array' OR jsonb_array_length(p_randuri) NOT BETWEEN 1 AND 200
   OR jsonb_typeof(p_decizii) IS DISTINCT FROM 'object' OR p_amprenta IS NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
@@ -1305,9 +1323,9 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT proiect_id INTO v_pr FROM public.executie_tronsoane WHERE id=p_tronson;
- PERFORM public.fn_izo_birou_intrare(v_pr,p_depozit);
+ PERFORM public.fn_izo_birou_intrare(v_pr,p_depozit,'fn_izo_iesire_intern');
  IF v_pr IS NULL THEN RAISE EXCEPTION 'tronson_lipsa'; END IF;
- IF p_cheie IS NULL OR p_depozit IS NULL OR p_data IS NULL OR p_data>current_date
+ IF p_cheie IS NULL OR p_depozit IS NULL OR p_data IS NULL OR p_data>(now() AT TIME ZONE 'Europe/Bucharest')::date
   OR length(btrim(coalesce(p_nr_aviz,''))) NOT BETWEEN 3 AND 100 OR cardinality(p_bucati) NOT BETWEEN 1 AND 200
   OR p_bucati IS NULL OR array_position(p_bucati,NULL) IS NOT NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
  SELECT array_agg(x ORDER BY x) INTO v_ids FROM unnest(p_bucati) x;
@@ -1366,12 +1384,12 @@ $f$;
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_x public.izo_declaratii; v_s public.izo_preverificari;
  v_ids bigint[]; v_before bigint[]; v_keys text[]; v_actual text[]; v_choice text; v_hash text; v_payload jsonb; v_r jsonb;
- v_old public.izo_operatii; v_type text:=CASE WHEN p_revizie THEN 'revizie' ELSE 'respinge' END;
+ v_old public.izo_operatii; v_emp bigint; v_type text:=CASE WHEN p_revizie THEN 'revizie' ELSE 'respinge' END;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
- PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL,'fn_izo_decizie_intern');
  IF v_d.id IS NULL THEN RAISE EXCEPTION 'declaratie_lipsa'; END IF;
  IF p_cheie IS NULL OR p_updated_at IS NULL OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000
   OR p_revizie IS NULL OR jsonb_typeof(p_dependente) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
@@ -1386,7 +1404,10 @@ BEGIN
  v_payload:=jsonb_build_object('decl',p_decl,'versiune',p_versiune,'updated_at',p_updated_at,'motiv',btrim(p_motiv),'dependente',p_dependente,'revizie',p_revizie);
  v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
  SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
- PERFORM public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ v_emp:=public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ IF EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.id=ANY(v_ids)
+  AND (d.declarat_de=public.fn_izo_uid() OR d.declarat_de_angajat=v_emp)) THEN
+  RAISE EXCEPTION 'propriul_rand' USING ERRCODE='42501'; END IF;
  IF v_old.id IS NOT NULL THEN
   IF v_old.canal<>'aprobare' OR v_old.tip_op<>v_type OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
   RETURN v_old.raspuns;
@@ -1446,7 +1467,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT proiect_id INTO v_pr FROM public.executie_tronsoane WHERE id=p_tronson;
- PERFORM public.fn_izo_birou_intrare(v_pr,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_pr,NULL,'fn_izo_front_intern');
  IF v_pr IS NULL THEN RAISE EXCEPTION 'tronson_lipsa'; END IF;
  IF length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'motiv_obligatoriu'; END IF;
  PERFORM 1 FROM public.izo_fronturi WHERE tronson_id=p_tronson AND activ FOR UPDATE;
@@ -1477,12 +1498,12 @@ $f$;
   CREATE FUNCTION public.fn_izo_serie_intern(p_cheie uuid,p_decl bigint,p_versiune integer,p_updated_at timestamptz,p_bucata bigint,p_motiv text) RETURNS jsonb
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_b public.magazie_bucati; v_s public.izo_preverificari;
- v_payload jsonb; v_hash text; v_old public.izo_operatii; v_r jsonb; v_conflict text;
+ v_payload jsonb; v_hash text; v_old public.izo_operatii; v_r jsonb; v_conflict text; v_emp bigint;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
- PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL,'fn_izo_serie_intern');
  IF v_d.id IS NULL OR p_cheie IS NULL OR p_updated_at IS NULL OR p_bucata IS NULL
   OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
  SELECT * INTO v_s FROM public.izo_preverificari WHERE id=v_d.preverificare_id FOR UPDATE;
@@ -1490,7 +1511,9 @@ BEGIN
  v_payload:=jsonb_build_object('decl',p_decl,'versiune',p_versiune,'updated_at',p_updated_at,'bucata',p_bucata,'motiv',btrim(p_motiv));
  v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
  SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
- PERFORM public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ v_emp:=public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ IF v_d.declarat_de=public.fn_izo_uid() OR v_d.declarat_de_angajat=v_emp THEN
+  RAISE EXCEPTION 'propriul_rand' USING ERRCODE='42501'; END IF;
  IF v_old.id IS NOT NULL THEN
   IF v_old.canal<>'aprobare' OR v_old.tip_op<>'serie' OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
   RETURN v_old.raspuns;
@@ -2071,7 +2094,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_s FROM public.izo_suduri WHERE id=p_sudura;
- PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL,'fn_izo_tranzitie_intern');
  IF v_s.id IS NULL OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
  PERFORM public.fn_izo_birou_autorizat(v_s.proiect_id,NULL,true);
  PERFORM public.fn_izo_blocheaza_locuri(v_s.proiect_id,ARRAY[]::integer[],ARRAY[v_s.tronson_id]);
@@ -2397,7 +2420,7 @@ REVOKE ALL ON FUNCTION public.fn_izo_gps_citeste(bigint) FROM PUBLIC,anon,authen
 REVOKE ALL ON FUNCTION public.fn_izo_teren_pregateste(bigint,bigint,uuid) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_autor_valabil(uuid,bigint,boolean) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_birou_autorizat(bigint,integer,boolean) FROM PUBLIC,anon,authenticated,service_role;
-REVOKE ALL ON FUNCTION public.fn_izo_birou_intrare(bigint,integer) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_birou_intrare(bigint,integer,text) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_birou_preview(bigint) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_aprobare_intern(bigint) FROM PUBLIC,anon,authenticated,service_role;
@@ -2524,131 +2547,219 @@ ALTER FUNCTION public.fn_izo_tranzitie_confirma(bigint,text) OWNER TO izo_montaj
 ALTER FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) OWNER TO izo_montaj_writer;
 REVOKE CREATE ON SCHEMA public FROM izo_teren_editor,izo_montaj_writer;
 v_meta:=v_meta||jsonb_build_object('e4b_execute_added','[]'::jsonb);
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_autor_valabil(uuid,bigint,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_autor_valabil(uuid,bigint,boolean)','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_autor_valabil(uuid,bigint,boolean)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_autor_valabil(uuid,bigint,boolean) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_autorizat(bigint,integer,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_autorizat(bigint,integer,boolean)','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_autorizat(bigint,integer,boolean)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_birou_autorizat(bigint,integer,boolean) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_intrare(bigint,integer)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_intrare(bigint,integer)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_birou_intrare(bigint,integer) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_preview(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_preview(bigint)','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_intrare(bigint,integer,text)','EXECUTE') THEN 
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_intrare(bigint,integer,text) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_preview(bigint)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_birou_preview(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','role','izo_teren_editor','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[]) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','role','izo_montaj_writer','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[]) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_blocheaza_tabele()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_tabele()','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_blocheaza_tabele()','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_tabele()','role','izo_montaj_writer','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_blocheaza_tabele() TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_citire(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_citire(bigint)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_citire(bigint)','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_citire(bigint)','role','izo_teren_editor','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_citire(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_citire(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_citire(bigint)','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_citire(bigint)','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_citire(bigint)','role','izo_montaj_writer','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_citire(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_config_blocheaza(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_config_blocheaza(bigint)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_config_blocheaza(bigint)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_config_blocheaza(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_config_blocheaza(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_config_blocheaza(bigint)','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_config_blocheaza(bigint)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_config_blocheaza(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_corectie_mm(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_corectie_mm(bigint)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_mm(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_corectie_mm(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_corectie_mm(bigint)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_mm(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_decl_ceas()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_decl_ceas()','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_decl_ceas() TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_decl_ceas()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_decl_ceas()','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_decl_ceas() TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_dependenti(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_dependenti(bigint)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_dependenti(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_dependenti(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_dependenti(bigint)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_dependenti(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_jwt_rol()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_jwt_rol()','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_corectie_mm(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_mm(bigint) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_corectie_mm(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_mm(bigint) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_decl_ceas()','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_decl_ceas() TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_decl_ceas()','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_decl_ceas() TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_dependenti(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_dependenti(bigint) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_dependenti(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_dependenti(bigint) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_jwt_rol()','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_jwt_rol()','role','izo_teren_editor','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_jwt_rol() TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_lock_partajat(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_lock_partajat(bigint[])','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_lock_partajat(bigint[])','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_lock_partajat(bigint[])','role','izo_montaj_writer','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_lock_partajat(bigint[]) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_lot_efecte(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_lot_efecte(bigint[])','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_lot_efecte(bigint[]) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_nivel(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_nivel(bigint)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_lot_efecte(bigint[])','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_lot_efecte(bigint[]) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb)','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb)','role','izo_montaj_writer','owner','izo_montaj_writer')));
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_nivel(bigint)','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_nivel(bigint)','role','izo_teren_editor','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_nivel(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_nivel(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_nivel(bigint)','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_nivel(bigint)','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_nivel(bigint)','role','izo_montaj_writer','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_nivel(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_proiect_config_citeste(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_proiect_config_citeste(bigint)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_proiect_config_citeste(bigint)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_proiect_config_citeste(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_proiect_config_citeste(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_proiect_config_citeste(bigint)','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_proiect_config_citeste(bigint)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_proiect_config_citeste(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_pv_lipsa(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_pv_lipsa(bigint[])','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_pv_lipsa(bigint[])','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_pv_lipsa(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_pv_lipsa(bigint[])','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_pv_lipsa(bigint[])','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_aproba(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_aproba(bigint)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_aproba(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_decl(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_decl(bigint)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_decl(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_normalizeaza(text,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_normalizeaza(text,jsonb)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_normalizeaza(text,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_normalizeaza(text,jsonb)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_stare(bigint,text,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_stare(bigint,text,boolean)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_stare(bigint,text,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_stare(bigint,text,boolean)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_garda()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_garda()','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_garda() TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_garda()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_garda()','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_garda() TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_invalideaza(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_invalideaza(bigint[])','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_invalideaza(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_invalideaza(bigint[])','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_taiere_fapt(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_taiere_fapt(bigint)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_fapt(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_taiere_ramura(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_taiere_ramura(bigint)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_ramura(bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_taiere_ramura(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_taiere_ramura(bigint)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_ramura(bigint) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_autorizat(bigint,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_autorizat(bigint,boolean)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_aproba(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_aproba(bigint) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_decl(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_teren_editor;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_decl(bigint) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_normalizeaza(text,jsonb)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_normalizeaza(text,jsonb)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_stare(bigint,text,boolean)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_stare(bigint,text,boolean)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_garda()','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_garda() TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_garda()','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_garda() TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_invalideaza(bigint[])','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_invalideaza(bigint[])','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_taiere_fapt(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_fapt(bigint) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_taiere_ramura(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_ramura(bigint) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_taiere_ramura(bigint)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_ramura(bigint) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_autorizat(bigint,boolean)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_teren_autorizat(bigint,boolean) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_entra(bigint,text)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_entra(bigint,text)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_entra(bigint,text)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_teren_entra(bigint,text) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_imuabil()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_imuabil()','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_teren_imuabil() TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_teren_imuabil()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_imuabil()','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_teren_imuabil() TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_payload(jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_payload(jsonb)','role','izo_teren_editor')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_teren_payload(jsonb) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_teren_payload(jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_payload(jsonb)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_teren_payload(jsonb) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_radacini_blocheaza(bigint,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_radacini_blocheaza(bigint,boolean)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_imuabil()','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_imuabil() TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_teren_imuabil()','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_imuabil() TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi)','EXECUTE') THEN 
+SET LOCAL ROLE izo_teren_editor;
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_payload(jsonb)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_payload(jsonb) TO izo_teren_editor;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_teren_payload(jsonb)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_payload(jsonb) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_radacini_blocheaza(bigint,boolean)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_teren_radacini_blocheaza(bigint,boolean) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_snapshot(bigint,bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_snapshot(bigint,bigint)','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_snapshot(bigint,bigint)','EXECUTE') THEN 
 GRANT EXECUTE ON FUNCTION public.fn_izo_teren_snapshot(bigint,bigint) TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_tranzitie_intern(bigint,text)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_tranzitie_intern(bigint,text)','role','izo_montaj_writer')));
-GRANT EXECUTE ON FUNCTION public.fn_izo_tranzitie_intern(bigint,text) TO izo_montaj_writer; END IF;
-IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_uid()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_uid()','role','izo_teren_editor')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_tranzitie_intern(bigint,text)','EXECUTE') THEN 
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_tranzitie_intern(bigint,text) TO izo_montaj_writer;
+RESET ROLE; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_uid()','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_uid()','role','izo_teren_editor','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_uid() TO izo_teren_editor; END IF;
-IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_uid()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_uid()','role','izo_montaj_writer')));
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_uid()','EXECUTE') THEN 
+v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_uid()','role','izo_montaj_writer','owner','postgres')));
 GRANT EXECUTE ON FUNCTION public.fn_izo_uid() TO izo_montaj_writer; END IF;
 SET LOCAL ROLE izo_montaj_writer;
 GRANT EXECUTE ON FUNCTION public.fn_izo_tranzitie_confirma(bigint,text) TO authenticated;
@@ -2814,7 +2925,9 @@ ALTER TABLE public.izo_suduri_capete ENABLE ALWAYS TRIGGER a0_izo_suduri_proiect
 GRANT EXECUTE ON FUNCTION public.fn_izo_teren_praguri(bigint),public.fn_izo_fisa_verifica(bigint) TO authenticated;
  -- Private helpers use the column matrix; API wrappers remain thin.
  -- API wrappers carry no setters, dynamic SQL, or identity text (control_0e).
- GRANT EXECUTE ON FUNCTION public.fn_izo_teren_intern(bigint,bigint,uuid,boolean),public.fn_izo_teren_push(uuid,jsonb) TO izo_teren_editor;
+ SET LOCAL ROLE izo_teren_editor;
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_intern(bigint,bigint,uuid,boolean),public.fn_izo_teren_push(uuid,jsonb) TO izo_teren_editor;
+RESET ROLE;
  GRANT EXECUTE ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) TO izo_teren_editor,izo_montaj_writer;
  GRANT CREATE ON SCHEMA public TO izo_teren_editor;
  ALTER FUNCTION public.fn_izo_teren_instantaneu(bigint,bigint) OWNER TO izo_teren_editor;
@@ -2838,20 +2951,20 @@ GRANT EXECUTE ON FUNCTION public.fn_izo_teren_praguri(bigint),public.fn_izo_fisa
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',p.oid::regprocedure,p.proowner,p.prosecdef,p.proconfig,p.proacl,md5(p.prosrc)),',' ORDER BY p.oid::regprocedure::text)
     FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',c.relname,c.relowner,c.relrowsecurity,c.relacl,c.reloptions),',' ORDER BY c.relname)
-    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[]) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active','v_izo_alerte'))),
+    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['executie_proiecte', 'executie_tronsoane', 'izo_aprobari', 'izo_bucati_declarate', 'izo_declaratii', 'izo_declaratii_gps', 'izo_declaratii_versiuni', 'izo_dispozitive', 'izo_fronturi', 'izo_operatii', 'izo_preverificari', 'izo_rata_apeluri', 'izo_rezervari', 'izo_suduri', 'izo_suduri_capete', 'izo_sync_incercari', 'izo_tronson_config', 'logistica_depozite', 'magazie_bucati', 'magazie_bucati_evenimente', 'magazie_bucati_miscari']::text[]) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active','v_izo_alerte'))),
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',c.relname,a.attname,a.atttypid,a.attnotnull,a.attacl,pg_get_expr(d.adbin,d.adrelid)),',' ORDER BY c.relname,a.attnum)
     FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
-    WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[]) AND a.attnum>0 AND NOT a.attisdropped),
+    WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['executie_proiecte', 'executie_tronsoane', 'izo_aprobari', 'izo_bucati_declarate', 'izo_declaratii', 'izo_declaratii_gps', 'izo_declaratii_versiuni', 'izo_dispozitive', 'izo_fronturi', 'izo_operatii', 'izo_preverificari', 'izo_rata_apeluri', 'izo_rezervari', 'izo_suduri', 'izo_suduri_capete', 'izo_sync_incercari', 'izo_tronson_config', 'logistica_depozite', 'magazie_bucati', 'magazie_bucati_evenimente', 'magazie_bucati_miscari']::text[]) AND a.attnum>0 AND NOT a.attisdropped),
    (SELECT string_agg(format('%s:%s',c.relname,pg_get_constraintdef(k.oid)),',' ORDER BY c.relname,k.conname)
     FROM pg_class c JOIN pg_constraint k ON k.conrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[])),
-   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',c.relname,p.polname,p.polcmd,p.polroles,pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid)),',' ORDER BY c.relname,p.polname)
-    FROM pg_class c JOIN pg_policy p ON p.polrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[])),
+   (SELECT string_agg(format('%s:%s:%s:%s:%s:%s:%s',c.relname,p.polname,p.polcmd,p.polpermissive,p.polroles,pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid)),',' ORDER BY c.relname,p.polname)
+    FROM pg_class c JOIN pg_policy p ON p.polrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['executie_proiecte', 'executie_tronsoane', 'izo_aprobari', 'izo_bucati_declarate', 'izo_declaratii', 'izo_declaratii_gps', 'izo_declaratii_versiuni', 'izo_dispozitive', 'izo_fronturi', 'izo_operatii', 'izo_preverificari', 'izo_rata_apeluri', 'izo_rezervari', 'izo_suduri', 'izo_suduri_capete', 'izo_sync_incercari', 'izo_tronson_config', 'logistica_depozite', 'magazie_bucati', 'magazie_bucati_evenimente', 'magazie_bucati_miscari']::text[])),
    (SELECT string_agg(format('%s:%s:%s',c.relname,pg_get_triggerdef(g.oid),g.tgenabled),',' ORDER BY c.relname,g.tgname)
     FROM pg_class c JOIN pg_trigger g ON g.tgrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[]) AND NOT g.tgisinternal),
    (SELECT string_agg(pg_get_indexdef(i.indexrelid),',' ORDER BY i.indexrelid::regclass::text)
     FROM pg_class c JOIN pg_index i ON i.indrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[]) OR i.indexrelid=to_regclass('public.ux_magbuc_ev_decl'))),
    (SELECT string_agg(format('%s:%s:%s',c.relname,c.relowner,c.relacl),',' ORDER BY c.relname) FROM pg_class c
-    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%' OR c.relname LIKE 'izo\_aprobari\_%' OR c.relname LIKE 'izo\_suduri\_%')),
+    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname IN ('izo_server_ver_seq','magazie_bucati_id_seq','magazie_bucati_evenimente_id_seq','magazie_bucati_miscari_id_seq') OR c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%' OR c.relname LIKE 'izo\_aprobari\_%' OR c.relname LIKE 'izo\_suduri\_%')),
    (SELECT concat_ws(':',rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconfig) FROM pg_roles WHERE rolname='izo_teren_editor'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',roleid,member,admin_option,inherit_option,set_option),',' ORDER BY roleid,member) FROM pg_auth_members WHERE roleid='izo_teren_editor'::regrole OR member='izo_teren_editor'::regrole)))
  $f$;

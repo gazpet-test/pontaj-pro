@@ -8,7 +8,8 @@ export function ziBucuresti(date = new Date()) {
 }
 
 export const toateOperatiile = s => [...(s?.arhiva || []), ...(s?.ops || [])].sort((a, b) => a.cerere.seq - b.cerere.seq)
-export const reusita = o => o.stare !== 'confirmata' || o.rezultat?.cod === 'acceptat'
+export const reusita = o => !o.de_verificat && !['conflict', 'blocata'].includes(o.rezultat?.stare)
+  && (o.rezultat ? o.rezultat.cod === 'acceptat' : o.stare !== 'confirmata')
 
 export function sesiuneLocala(s, tronson) {
   const log = toateOperatiile(s).filter(o => o.cerere.payload.tronson_id === tronson && reusita(o))

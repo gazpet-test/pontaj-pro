@@ -49,7 +49,7 @@ BEGIN
  DROP POLICY izo_montaj_miscari_sel ON public.magazie_bucati_miscari;
  DROP POLICY izo_montaj_miscari_ins ON public.magazie_bucati_miscari;
  @@DROP_TABLES@@
- DROP FUNCTION public.fn_izo_teren_imuabil(),public.fn_izo_decl_ceas();
+ @@DROP_GUARDS@@
  REVOKE ALL ON SCHEMA public FROM izo_teren_editor;
  DROP ROLE izo_teren_editor;
  @@IMPL_PRE@@

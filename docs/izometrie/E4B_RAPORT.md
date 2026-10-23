@@ -48,3 +48,10 @@ Gestionar §6.5/6.7 (parțial): ieșire cu aviz/data și retry cu aceeași cheie
 PASS Node: test_birou.mjs 14 scenarii (RPC fake, timeout după commit, CAS, cascadă, paginare 1201 rânduri, semnături comparate offline cu migrarea); test_coada.mjs 22 scenarii; test_normalizare.mjs 29 vectori; node --check src/lib/izoBirou.js.
 Lipsesc: primire resturi/acțiuni pe resturi încă declarate, tratarea sesiunilor deschise abandonate și alertă dedicată autor revocat (drepturile rămân validate pe server); cererea de retry birou este păstrată numai cât ecranul rămâne montat.
 NERULATE: browser/React, API/PostgREST și Vite build (la integrator); SQL și fișierele protejate verificate identice cu baza, fără pachete npm noi.
+E4b-5a — toate cele 5 P1 și P2 din brief corectate; exclusiv worktree, fără Git/BD/deploy.
+Teren: refuz după trimitere/în verificare, cu excepțiile de revizie din §6.4; identitatea nerezolvată se rezolvă numai la MP (API + trigger).
+Birou: patru ochi la decizie/serie (profil + angajat, inclusiv cascadă); 30 apeluri/minut/profil/funcție înaintea porții; data Europe/Bucharest.
+Owner: ACL/ALTER forward și DROP rollback executate ca owner; inventar fix pentru toate cele 59 funcții, inclusiv cele două triggere; fără DDL storage.*.
+P2/UI/coadă: uid sesiune verifică dispozitiv/zi/stare; amprentă cu polpermissive și ACL/policies existente; motiv minim 3 caractere; operațiile refuzate nu generează capete/copii.
+PASS: gen_e4b.py; test_gen_e4b.py 30 teste; Node birou 15, coadă 23, normalizare 29 vectori, picker 6. SQL adăugat pentru P1 1–3 și uid sesiune.
+NERULATE: harness PG16, API/PostgREST, browser/React și build; restricția fără BD respectată. E4a/20261109a și celelalte fișiere LIVE identice cu baza copiată.

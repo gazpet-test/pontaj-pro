@@ -39,8 +39,11 @@ for name in sorted(dependencies | shared_invoker):
     sig = known[name]
     for role in ('izo_teren_editor','izo_montaj_writer'):
         if name not in role_dependencies[role]: continue
-        matrix_acl.append(f"IF NOT has_function_privilege('{role}','public.{sig}','EXECUTE') THEN "
-                          f"v_meta:=jsonb_set(v_meta,'{{e4b_execute_added}}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.{sig}','role','{role}')));")
+        matrix_acl.append(f"IF NOT has_function_privilege('{role}','public.{sig}','EXECUTE') THEN ")
+        # Functiile E4b dispar la rollback; nu se revoca ACL-ul lor ca postgres.
+        if sig not in signatures:
+            owner = baseline_owners.get(sig, 'postgres')
+            matrix_acl.append(f"v_meta:=jsonb_set(v_meta,'{{e4b_execute_added}}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.{sig}','role','{role}','owner','{owner}')));")
         matrix_acl.append(f'GRANT EXECUTE ON FUNCTION public.{sig} TO {role}; END IF;')
 matrix_acl += ['SET LOCAL ROLE izo_montaj_writer;',
               'GRANT EXECUTE ON FUNCTION public.fn_izo_tranzitie_confirma(bigint,text) TO authenticated;', 'RESET ROLE;']
@@ -109,7 +112,7 @@ for table in extra_read:
     for role in ('izo_teren_editor','izo_montaj_writer'):
         if role=='izo_montaj_writer' and table in ('magazie_bucati','izo_tronson_config','magazie_bucati_evenimente','magazie_bucati_miscari'): continue
         matrix_rollback.append(f'DROP POLICY e4b_{table}_{role}_sel ON public.{table};')
-matrix_rollback += ["FOR v_grant IN SELECT value FROM jsonb_array_elements(v_meta->'e4b_execute_added') LOOP EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %I',v_grant->>'sig',v_grant->>'role'); END LOOP;",
+matrix_rollback += ["FOR v_grant IN SELECT value FROM jsonb_array_elements(v_meta->'e4b_execute_added') LOOP EXECUTE format('SET LOCAL ROLE %I',v_grant->>'owner'); EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM %I',v_grant->>'sig',v_grant->>'role'); RESET ROLE; END LOOP;",
                     "FOR v_grant IN SELECT value FROM jsonb_array_elements(v_meta->'e4b_select_added') LOOP EXECUTE format('REVOKE SELECT ON TABLE %s FROM %I',v_grant->>'table',v_grant->>'role'); END LOOP;",
                     'REVOKE USAGE ON SEQUENCE public.izo_server_ver_seq FROM izo_teren_editor;']
 

@@ -1,11 +1,32 @@
 import assert from 'node:assert/strict'
 import { adaugaOperatii, aplicaRaspuns, creeazaCoada, memorie, stareInitiala, stocareBrowser, urmatorulLot } from '../../../src/lib/izoCoada.js'
-import { capeteLocale, copiiLocali, codSudura, construiesteDeclaratii, propunereSudura, randuriSesiune, sesiuneLocala, ziBucuresti } from '../../../src/lib/izoTeren.js'
+import { capeteLocale, copiiLocali, codSudura, construiesteDeclaratii, propunereSudura, randuriSesiune, reusita, sesiuneLocala, ziBucuresti } from '../../../src/lib/izoTeren.js'
 
 let nr = 0, passed = 0
 const id = () => `00000000-0000-4000-8000-${String(++nr).padStart(12, '0')}`
 const request = (tronson = 18, extra = {}) => ({ tip_op: 'decl_salveaza', payload: { proiect_id: 3, tronson_id: tronson, uid: id(), ...extra } })
 async function test(name, f) { await f(); passed++; console.log(`PASS ${name}`) }
+
+await test('E4b-5a: operatiile blocate nu adauga capete/copii si nu ascund sursa', () => {
+  const session = { uid: id() }, piece = { id: 71, lungime_mm: 12000, serie: 'T71' }
+  const snapshot = { tronson_id: 18, frunze: [piece], lanturi: [piece] }
+  const mount = request(18, { preverificare_uid: session.uid, tip: 'montaj', bucata: { bucata_id: 72 }, lungime_montata_mm: 8000 })
+  const cut = request(18, { preverificare_uid: session.uid, tip: 'taiere', sursa: { bucata_id: 71 }, copii: [{ uid: id(), lungime_mm: 8000 }] })
+  const s = adaugaOperatii(stareInitiala(id()), [mount, cut], id), lot = urmatorulLot(s)
+  assert.equal(capeteLocale(s, snapshot, session).some(c => c.ref.bucata_id === 72), true)
+  assert.equal(copiiLocali(s, snapshot).length, 1)
+  for (const duplicate of [false, true]) {
+    const blocked = aplicaRaspuns(s, lot, { rezultate: lot.map(o => ({ op_id: o.op_id,
+      ...(duplicate ? { cod: 'duplicat', raspuns: { cod: 'blocat_de_conflict' } } : { cod: 'blocat_de_conflict' }) })) })
+    assert.equal(blocked.ops.length, 2)
+    assert.equal(blocked.ops.every(o => !reusita(o)), true)
+    assert.deepEqual(capeteLocale(blocked, snapshot, session).map(c => c.ref.bucata_id), [71])
+    assert.deepEqual(copiiLocali(blocked, snapshot), [])
+    const accepted = aplicaRaspuns(blocked, lot, { rezultate: lot.map(o => ({ op_id: o.op_id, cod: 'acceptat' })) })
+    assert.equal(copiiLocali(accepted, snapshot).length, 1)
+    assert.equal(capeteLocale(accepted, snapshot, session).some(c => c.ref.bucata_id === 72), true)
+  }
+})
 
 await test('UUID, seq, copie payload, stări și limită 50 / un singur tronson', () => {
   const p = request(), initial = stareInitiala(id())

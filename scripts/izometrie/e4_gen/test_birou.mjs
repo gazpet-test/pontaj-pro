@@ -117,4 +117,14 @@ await test('contracte offline: fiecare RPC din helper există în migrarea livra
     assert.deepEqual(Object.keys(req.args).sort(), signature.split(',').map(x => x.trim().split(/\s+/)[0]).sort(), req.nume)
   }
 })
+await test('E4b-5a: butoanele de decizie cer motiv inainte de RPC', async () => {
+  const jsx = await readFile(new URL('../../../src/IzometrieAprobare.jsx', import.meta.url), 'utf8')
+  const buttons = [...jsx.matchAll(/<Button disabled=\{([^}]+)\} onClick=\{\(\) => send\(\(\) => cerereDecizie/g)]
+  assert.equal(buttons.length, 3)
+  for (const [, expression] of buttons) {
+    const disabled = new Function('disabled', 'reason', 'decl', 'descendants', 'deps', 'piece', `return (${expression})`)
+    for (const reason of ['', '   ', 'ab']) assert.equal(disabled(false, reason, { stare: 'in_verificare' }, [], {}, '71'), true)
+    assert.equal(disabled(false, 'motiv valid', { stare: 'in_verificare' }, [], {}, '71'), false)
+  }
+})
 console.log(`PASS birou: ${passed} scenarii`)

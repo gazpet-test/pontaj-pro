@@ -130,7 +130,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_s FROM public.izo_suduri WHERE id=p_sudura;
- PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL,'fn_izo_tranzitie_intern');
  IF v_s.id IS NULL OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
  PERFORM public.fn_izo_birou_autorizat(v_s.proiect_id,NULL,true);
  PERFORM public.fn_izo_blocheaza_locuri(v_s.proiect_id,ARRAY[]::integer[],ARRAY[v_s.tronson_id]);

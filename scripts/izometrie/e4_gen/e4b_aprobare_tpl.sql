@@ -63,9 +63,9 @@ BEGIN
  RETURN v_emp;
 END $f$;
 
-CREATE FUNCTION public.fn_izo_birou_intrare(p_proiect bigint,p_depozit integer) RETURNS void
+CREATE FUNCTION public.fn_izo_birou_intrare(p_proiect bigint,p_depozit integer,p_functie text) RETURNS void
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_lipsa text[];
+DECLARE v_lipsa text[]; v_n integer;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
@@ -74,6 +74,12 @@ BEGIN
  IF coalesce(current_setting('izo.montaj_ctx',true),'')<>'' OR coalesce(current_setting('izo.receptie_ctx',true),'')<>''
   OR coalesce(current_setting('izo.registru_tx',true),'')<>'' THEN RAISE EXCEPTION 'context_ocupat' USING ERRCODE='42501'; END IF;
  PERFORM public.fn_izo_birou_autorizat(p_proiect,p_depozit,false);
+ INSERT INTO public.izo_rata_apeluri(profile_id,functie,fereastra_de_la,n)
+ VALUES(public.fn_izo_uid(),p_functie,date_trunc('minute',clock_timestamp()),1)
+ ON CONFLICT(profile_id,functie) DO UPDATE SET
+ n=CASE WHEN izo_rata_apeluri.fereastra_de_la=excluded.fereastra_de_la THEN izo_rata_apeluri.n+1 ELSE 1 END,
+ fereastra_de_la=excluded.fereastra_de_la RETURNING n INTO v_n;
+ IF v_n>30 THEN RAISE EXCEPTION 'limita'; END IF;
  v_lipsa:=public.fn_izo_porti_lipsa();
  IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b porti %',v_lipsa; END IF;
 END $f$;
@@ -159,7 +165,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT proiect_id INTO v_pr FROM public.izo_preverificari WHERE id=p_preverificare;
- PERFORM public.fn_izo_birou_intrare(v_pr,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_pr,NULL,'fn_izo_aprobare_intern');
  v_doc:=public.fn_izo_birou_preview(p_preverificare);
  IF v_doc IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
  SELECT coalesce(array_agg(d.id ORDER BY d.id),'{}') INTO v_ids FROM public.izo_declaratii d
@@ -186,7 +192,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_s FROM public.izo_preverificari WHERE id=p_preverificare;
- PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL,'fn_izo_aproba_intern');
  IF v_s.id IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
  IF p_cheie IS NULL OR jsonb_typeof(p_randuri) IS DISTINCT FROM 'array' OR jsonb_array_length(p_randuri) NOT BETWEEN 1 AND 200
   OR jsonb_typeof(p_decizii) IS DISTINCT FROM 'object' OR p_amprenta IS NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
@@ -334,9 +340,9 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT proiect_id INTO v_pr FROM public.executie_tronsoane WHERE id=p_tronson;
- PERFORM public.fn_izo_birou_intrare(v_pr,p_depozit);
+ PERFORM public.fn_izo_birou_intrare(v_pr,p_depozit,'fn_izo_iesire_intern');
  IF v_pr IS NULL THEN RAISE EXCEPTION 'tronson_lipsa'; END IF;
- IF p_cheie IS NULL OR p_depozit IS NULL OR p_data IS NULL OR p_data>current_date
+ IF p_cheie IS NULL OR p_depozit IS NULL OR p_data IS NULL OR p_data>(now() AT TIME ZONE 'Europe/Bucharest')::date
   OR length(btrim(coalesce(p_nr_aviz,''))) NOT BETWEEN 3 AND 100 OR cardinality(p_bucati) NOT BETWEEN 1 AND 200
   OR p_bucati IS NULL OR array_position(p_bucati,NULL) IS NOT NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
  SELECT array_agg(x ORDER BY x) INTO v_ids FROM unnest(p_bucati) x;
@@ -395,12 +401,12 @@ CREATE FUNCTION public.fn_izo_decizie_intern(p_cheie uuid,p_decl bigint,p_versiu
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_x public.izo_declaratii; v_s public.izo_preverificari;
  v_ids bigint[]; v_before bigint[]; v_keys text[]; v_actual text[]; v_choice text; v_hash text; v_payload jsonb; v_r jsonb;
- v_old public.izo_operatii; v_type text:=CASE WHEN p_revizie THEN 'revizie' ELSE 'respinge' END;
+ v_old public.izo_operatii; v_emp bigint; v_type text:=CASE WHEN p_revizie THEN 'revizie' ELSE 'respinge' END;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
- PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL,'fn_izo_decizie_intern');
  IF v_d.id IS NULL THEN RAISE EXCEPTION 'declaratie_lipsa'; END IF;
  IF p_cheie IS NULL OR p_updated_at IS NULL OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000
   OR p_revizie IS NULL OR jsonb_typeof(p_dependente) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
@@ -415,7 +421,10 @@ BEGIN
  v_payload:=jsonb_build_object('decl',p_decl,'versiune',p_versiune,'updated_at',p_updated_at,'motiv',btrim(p_motiv),'dependente',p_dependente,'revizie',p_revizie);
  v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
  SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
- PERFORM public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ v_emp:=public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ IF EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.id=ANY(v_ids)
+  AND (d.declarat_de=public.fn_izo_uid() OR d.declarat_de_angajat=v_emp)) THEN
+  RAISE EXCEPTION 'propriul_rand' USING ERRCODE='42501'; END IF;
  IF v_old.id IS NOT NULL THEN
   IF v_old.canal<>'aprobare' OR v_old.tip_op<>v_type OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
   RETURN v_old.raspuns;
@@ -475,7 +484,7 @@ BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT proiect_id INTO v_pr FROM public.executie_tronsoane WHERE id=p_tronson;
- PERFORM public.fn_izo_birou_intrare(v_pr,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_pr,NULL,'fn_izo_front_intern');
  IF v_pr IS NULL THEN RAISE EXCEPTION 'tronson_lipsa'; END IF;
  IF length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'motiv_obligatoriu'; END IF;
  PERFORM 1 FROM public.izo_fronturi WHERE tronson_id=p_tronson AND activ FOR UPDATE;
@@ -506,12 +515,12 @@ $f$;
 CREATE FUNCTION public.fn_izo_serie_intern(p_cheie uuid,p_decl bigint,p_versiune integer,p_updated_at timestamptz,p_bucata bigint,p_motiv text) RETURNS jsonb
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_b public.magazie_bucati; v_s public.izo_preverificari;
- v_payload jsonb; v_hash text; v_old public.izo_operatii; v_r jsonb; v_conflict text;
+ v_payload jsonb; v_hash text; v_old public.izo_operatii; v_r jsonb; v_conflict text; v_emp bigint;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
  SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
- PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL);
+ PERFORM public.fn_izo_birou_intrare(v_d.proiect_id,NULL,'fn_izo_serie_intern');
  IF v_d.id IS NULL OR p_cheie IS NULL OR p_updated_at IS NULL OR p_bucata IS NULL
   OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
  SELECT * INTO v_s FROM public.izo_preverificari WHERE id=v_d.preverificare_id FOR UPDATE;
@@ -519,7 +528,9 @@ BEGIN
  v_payload:=jsonb_build_object('decl',p_decl,'versiune',p_versiune,'updated_at',p_updated_at,'bucata',p_bucata,'motiv',btrim(p_motiv));
  v_hash:=encode(sha256(convert_to(v_payload::text,'UTF8')),'hex');
  SELECT * INTO v_old FROM public.izo_operatii WHERE autor_profile_id=public.fn_izo_uid() AND op_id=p_cheie;
- PERFORM public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ v_emp:=public.fn_izo_birou_autorizat(v_d.proiect_id,NULL,true);
+ IF v_d.declarat_de=public.fn_izo_uid() OR v_d.declarat_de_angajat=v_emp THEN
+  RAISE EXCEPTION 'propriul_rand' USING ERRCODE='42501'; END IF;
  IF v_old.id IS NOT NULL THEN
   IF v_old.canal<>'aprobare' OR v_old.tip_op<>'serie' OR v_old.hash_cerere<>v_hash THEN RAISE EXCEPTION 'cheie_refolosita'; END IF;
   RETURN v_old.raspuns;

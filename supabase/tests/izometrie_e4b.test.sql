@@ -44,6 +44,14 @@ BEGIN
  v_r:=public.fn_izo_sync_push(v_device,jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',1,'versiune_format',1,'tip_op','sesiune_deschide',
   'payload',jsonb_build_object('proiect_id',3,'tronson_id',19,'uid',v_session,'zi',(now() AT TIME ZONE 'Europe/Bucharest')::date))));
  IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION 'session %',v_r; END IF;
+ -- E4b-5a: a new op_id may reuse a session uid only with its original attributes.
+ v_r:=public.fn_izo_sync_push(v_device,jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',1,'versiune_format',1,'tip_op','sesiune_deschide',
+  'payload',jsonb_build_object('proiect_id',3,'tronson_id',19,'uid',v_session,'zi',(now() AT TIME ZONE 'Europe/Bucharest')::date))));
+ IF v_r#>>'{rezultate,0,cod}' IS DISTINCT FROM 'acceptat' THEN RAISE EXCEPTION '5a identical session reuse %',v_r; END IF;
+ v_r:=public.fn_izo_sync_push(v_device,jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',1,'versiune_format',1,'tip_op','sesiune_deschide',
+  'payload',jsonb_build_object('proiect_id',3,'tronson_id',19,'uid',v_session,'zi',(now() AT TIME ZONE 'Europe/Bucharest')::date-1))));
+ IF v_r#>>'{rezultate,0,motiv}' IS DISTINCT FROM 'sesiune_stare' THEN RAISE EXCEPTION '5a wrong session day %',v_r; END IF;
+
  v_op:=jsonb_build_object('op_id',gen_random_uuid(),'seq',2,'versiune_format',1,'tip_op','decl_salveaza','ora_tableta',now(),
   'payload',jsonb_build_object('proiect_id',3,'tronson_id',19,'uid',v_decl,'preverificare_uid',v_session,'versiune_baza',0,'tip','montaj',
    'bucata',jsonb_build_object('bucata_id',v_b),'lungime_montata_mm',12000,'confirmare',jsonb_build_object('mod','marcaj','cm',0),
@@ -103,6 +111,23 @@ DO $test$ DECLARE v_r jsonb; BEGIN
 END $test$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
+-- E4b-5a: isolate device comparison on an otherwise identical OPEN session.
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+SET LOCAL ROLE izo_teren_editor;
+DO $test$ DECLARE v_f public.izo_fronturi; v_n bigint; BEGIN
+ SELECT * INTO STRICT v_f FROM public.izo_fronturi WHERE tronson_id=19 AND activ;
+ BEGIN
+  PERFORM public.fn_izo_teren_op('00000000-0000-0000-0000-00000000ffff',
+   jsonb_build_object('tip_op','sesiune_deschide','versiune_format',1,'op_id',gen_random_uuid()),
+   jsonb_build_object('uid','00000000-0000-0000-0000-00000000b002','zi',(now() AT TIME ZONE 'Europe/Bucharest')::date),
+   121,repeat('a',64),v_f);
+  RAISE EXCEPTION '5a session device reuse accepted';
+ EXCEPTION WHEN SQLSTATE 'IZ002' THEN IF SQLERRM<>'sesiune_stare' THEN RAISE; END IF; END;
+ SELECT count(*) INTO v_n FROM public.izo_preverificari WHERE uid='00000000-0000-0000-0000-00000000b002'
+  AND dispozitiv_id='00000000-0000-0000-0000-00000000b001' AND stare='deschisa';
+ IF v_n<>1 THEN RAISE EXCEPTION '5a device refusal changed session'; END IF;
+END $test$;
+RESET ROLE;
 DO $test$
 BEGIN
  IF current_setting('test.e4b.before')::jsonb IS DISTINCT FROM (SELECT jsonb_agg(to_jsonb(b) ORDER BY id) FROM public.magazie_bucati b) THEN RAISE EXCEPTION 'push wrote official registry'; END IF;

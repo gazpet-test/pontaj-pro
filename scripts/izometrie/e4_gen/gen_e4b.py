@@ -148,7 +148,45 @@ new_emitere = old_emitere.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION'
     IF cardinality(public.fn_izo_emitere_blocaje(ARRAY(SELECT b.id FROM public.magazie_bucati b JOIN public.executie_tevi t
       ON t.id=b.executie_teava_id WHERE t.pachet_id=p_pachet)))>0 THEN RAISE EXCEPTION 'emitere_blocata'; END IF;
 '''+emitere_anchor)
+baseline_owners = {}
+for file in sorted((R/'supabase/migrations').glob('*izometrie*.sql')):
+    if file.name >= '20261109b': continue
+    for sig,owner in re.findall(r'ALTER FUNCTION public\.(fn_izo_\w+\([^;]*?\)) OWNER TO (\w+);', file.read_text(encoding='utf8')):
+        baseline_owners[sig] = owner
 exec((SP/'e4b_security.py').read_text(encoding='utf8'))
+
+# Inventar fix al owner-ilor E4b; toate celelalte obiecte noi raman postgres.
+function_owners = {s: ('izo_teren_editor' if s.split('(')[0] in teren_owned | {
+    'fn_izo_teren_instantaneu','fn_izo_teren_pregateste','fn_izo_sync_push'} else
+    'izo_montaj_writer' if s.split('(')[0] in writer_owned | shared_invoker | set(wrappers) | {
+    'fn_izo_birou_fapt','fn_izo_taiere_fapt','fn_izo_corectie_fapt'} else 'postgres') for s in signatures}
+
+def owned_drop(s):
+    stmt = f'DROP FUNCTION public.{s};'
+    owner = function_owners[s]
+    return stmt if owner == 'postgres' else f'SET LOCAL ROLE {owner};\n{stmt}\nRESET ROLE;'
+
+def scope_function_acl(sql):
+    """Executa ACL/ALTER ca owner-ul curent, inclusiv dupa transferul din forward.
+
+    Nu rescrie corpurile functiilor; expresia vizeaza doar DDL static cu semnaturi.
+    """
+    owners, active = dict(baseline_owners), 'postgres'
+    pattern = re.compile(r'SET LOCAL ROLE (\w+);|RESET ROLE;|'
+        r'ALTER FUNCTION (public\.fn_izo_\w+\([^;]*?\)) OWNER TO (\w+);|'
+        r'(?:GRANT|REVOKE) [^;\n]*? ON FUNCTION (public\.fn_izo_\w+\([^;]*?\)) (?:TO|FROM) [^;]+;')
+    def replace(m):
+        nonlocal active
+        if m[1]: active = m[1]; return m[0]
+        if m[0] == 'RESET ROLE;': active = 'postgres'; return m[0]
+        targets = re.findall(r'public\.(fn_izo_\w+\([^)]*\))', m[2] or m[4])
+        roles = {owners.get(s, 'postgres') for s in targets}
+        assert len(roles) == 1, (m[0], roles)
+        owner = roles.pop()
+        if m[2]: owners[targets[0]] = m[3]
+        if active == owner: return m[0]
+        return f'SET LOCAL ROLE {owner};\n{m[0]}\n' + ('RESET ROLE;' if active == 'postgres' else f'SET LOCAL ROLE {active};')
+    return pattern.sub(replace, sql)
 
 values = {
     'EMITERE_NEW': new_emitere, 'EMITERE_OLD': old_emitere.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
@@ -168,9 +206,10 @@ values = {
     'PORTI_NEW': new, 'PORTI_OLD': old,
     'OLD_MD5': q(hashlib.md5(src(old).encode()).hexdigest()),
     'IMPL_PRE': inventory(A['B']['IMPL_POST'] + A['implicit']), 'IMPL_POST': inventory(implicit),
-    'AMPRENTA': A['B']['AMP'], 'TABLES': arr(tables),
+    'AMPRENTA': A['B']['AMP'], 'TABLES': arr(tables), 'SECURITY_TABLES': arr(sorted(set(tables + extra_read))),
     'DROP_TABLES': '\n'.join(f'DROP TABLE public.{t};' for t in reversed(tables)),
-    'DROP_FUNCTIONS_BEFORE_TABLES': '\n'.join(f'DROP FUNCTION public.{s};' for s in reversed(signatures) if not s.startswith(('fn_izo_teren_imuabil(','fn_izo_decl_ceas('))),
+    'DROP_FUNCTIONS_BEFORE_TABLES': '\n'.join(owned_drop(s) for s in reversed(signatures) if not s.startswith(('fn_izo_teren_imuabil(','fn_izo_decl_ceas('))),
+    'DROP_GUARDS': '\n'.join(owned_drop(s) for s in signatures if s.startswith(('fn_izo_teren_imuabil(','fn_izo_decl_ceas('))),
     'REVOKE_FUNCTIONS': '\n'.join(f'REVOKE ALL ON FUNCTION public.{s} FROM PUBLIC,anon,authenticated,service_role;' for s in signatures),
 }
 def render(template):
@@ -178,6 +217,8 @@ def render(template):
     for key,val in values.items():
         result = result.replace('@@'+key+'@@',val)
     assert '@@' not in result
+    if template == 'e4b_tpl.sql':
+        result = scope_function_acl(result)
     for tag in set(re.findall(r'\$[A-Za-z_]*\$',result)):
         assert result.count(tag) % 2 == 0, tag
     return result

@@ -175,6 +175,8 @@ BEGIN
   IF FOUND THEN
    IF v_s.autor_profile_id<>v_uid OR v_s.proiect_id<>p_front.proiect_id OR v_s.tronson_id<>p_front.tronson_id THEN
     RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
+   IF v_s.dispozitiv_id IS DISTINCT FROM p_dispozitiv OR v_s.zi IS DISTINCT FROM (v_p->>'zi')::date
+    OR v_s.stare<>'deschisa' THEN RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
    RETURN jsonb_build_object('cod','acceptat','sesiune_id',v_s.id,'versiune',v_s.versiune);
   END IF;
   IF (v_p->>'zi')::date IS DISTINCT FROM (now() AT TIME ZONE 'Europe/Bucharest')::date THEN RAISE EXCEPTION 'zi' USING ERRCODE='IZ001'; END IF;
@@ -210,11 +212,11 @@ BEGIN
  END IF;
  IF v_type NOT IN ('decl_salveaza','decl_sterge') THEN RAISE EXCEPTION 'tip_op' USING ERRCODE='IZ001'; END IF;
  SELECT * INTO v_d FROM public.izo_declaratii WHERE uid=(v_p->>'uid')::uuid;
- IF v_s.stare='trimisa' AND (v_d.id IS NULL OR v_d.stare NOT IN ('revizie_ceruta','conflict','blocata','in_verificare')) THEN
+ IF v_s.stare='trimisa' AND (v_d.id IS NULL OR v_d.stare NOT IN ('revizie_ceruta','conflict','blocata')) THEN
   RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
  IF FOUND THEN
   IF v_d.declarat_de<>v_uid OR v_d.preverificare_id<>v_s.id THEN RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
-  IF v_d.versiune IS DISTINCT FROM (v_p->>'versiune_baza')::integer OR v_d.stare NOT IN ('ciorna','conflict','blocata','in_verificare','revizie_ceruta') THEN
+  IF v_d.versiune IS DISTINCT FROM (v_p->>'versiune_baza')::integer OR v_d.stare NOT IN ('ciorna','conflict','blocata','revizie_ceruta') THEN
    RAISE EXCEPTION 'cas' USING ERRCODE='IZ002'; END IF;
  ELSE
   IF (v_p->>'versiune_baza')::integer IS DISTINCT FROM 0 OR v_type='decl_sterge' THEN RAISE EXCEPTION 'cas' USING ERRCODE='IZ002'; END IF;
@@ -285,6 +287,9 @@ BEGIN
    RAISE EXCEPTION 'identificare' USING ERRCODE='IZ001'; END IF;
   v_ident:='nerezolvata'; v_len:=(v_p->>'lungime_masurata_mm')::integer;
  ELSE v_ident:=CASE WHEN v_decl IS NULL THEN 'bucata' ELSE 'bucata_decl' END; END IF;
+ -- O serie nerezolvata se lamureste exclusiv prin MP, inclusiv dupa o revizie.
+ IF v_d.identificare='nerezolvata' AND v_ident IS DISTINCT FROM 'nerezolvata' THEN
+  RAISE EXCEPTION 'serie_context' USING ERRCODE='IZ001'; END IF;
  IF v_len IS NULL OR v_len<=0 OR v_len>v_cfg.lungime_max_mm THEN RAISE EXCEPTION 'lungime' USING ERRCODE='IZ001'; END IF;
  IF coalesce(v_p#>>'{confirmare,mod}','') NOT IN ('marcaj','marcaj_diferit','masurat','taiata') THEN RAISE EXCEPTION 'lungime_neconfirmata' USING ERRCODE='IZ001'; END IF;
  IF v_p#>>'{confirmare,mod}'='marcaj' AND (v_p#>>'{confirmare,cm}')::integer IS DISTINCT FROM (round(v_len::numeric/10)::integer % 100) THEN
