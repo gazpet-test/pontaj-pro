@@ -1,0 +1,18 @@
+# Cost AI — implementare pentru review
+
+Fișiere: `src/AdministratorCostAI.jsx` (componentă lazy, interval implicit luna curentă + două luni, KPI, tabel lunar, module, top 10, Excel), `src/AdministratorAlerte.jsx` (numai integrarea tabului owner), `src/lib/costAi.js` și `src/lib/costAi.test.js`, migrarea `20261107a_ai_cost_raport.sql` și rollback-ul omonim din `supabase/revenire`.
+
+Acces: `fn_ai_cost_lunar(date,date)` SECURITY DEFINER, search_path fix, verificare server `auth.uid()` + `profiles.is_owner IS TRUE`, eroare 42501 pentru restul; EXECUTE retras PUBLIC/anon și acordat authenticated. View-urile detaliu/lunar sunt security_invoker, fără grant direct PUBLIC/anon/authenticated. Nu sunt modificate politici sau drepturi pe tabele. În istoricul disponibil nu apare definiția politicii SELECT pentru `ai_usage_log`; migrarea 20261105a acordă SELECT pe rezervări numai condiționat de helperul owner. Prin urmare accesul complet prin RLS nu poate fi demonstrat local; RPC-ul asigură poarta explicită și citirea completă de către owner.
+
+Legături verificate în istoric: OCR rezervare → `ofertare_ocr_rulari.licitatie_id` (20261029b); eticheta licitației folosește `nr_anunt` + `obiect` (20260912 și lista OfertareLicitatii). Pentru RFQ migrările disponibile nu descriu legătura ofertei la licitație: rămâne Ofertare fără proiect. Restul legăturilor și coloanele proiectului sunt cele confirmate în brief. Sursele necunoscute rămân Altele; referințele pierdute prin ștergerea documentului nu primesc o țintă ghicită.
+
+E9: se citesc numai cheile `izo_e3_ocr:<id numeric>` din registrul generic, fără alte obiecte Izometrie. `decontat` = cost_real, `pastrat` = suma_rezervata, `rezervat` = zero cost și zero apeluri finalizate + total separat rezervat_in_curs_usd. Luna raportului se calculează din created_at/creat_la în Europe/Bucharest, nu din luna UTC a plafonului. Modelul E9 este NULL, fiindcă registrul nu-l înregistrează. RON folosește estimarea 5.0 din Administrativ.jsx, neexportată acolo. Costurile se însumează înainte de formatare. Topul reunește lunile și modulele aceleiași ținte după tip + ID; rândurile fără țintă nu intră în top. Citirea UI paginează agregatele și verifică count exact; nu oferă un snapshot tranzacțional între pagini.
+
+Verificat local, fără rețea, Git sau BD:
+
+- `python -B scripts/livrare_validator.py supabase/migrations/20261107a_ai_cost_raport.sql`: OK, 7 instrucțiuni. Este validare lexicală a livrării, nu compilare SQL.
+- `node --check` pentru helper și test: OK.
+- Cele 12 scenarii din fișierul Vitest: 12/12 trecute printr-un adaptor temporar în memorie pentru `node:test` + assert (schimbate numai importul runnerului și implementarea expect). Acoperă limitele de lună București/UTC, trecerea anului, intervale invalide, modele, tip/ID, ținte fără nume, lipsa proiectului, costuri mici, rezervări în curs, top 10 și intrare nemodificată.
+- Runnerul Vitest și Vite build au fost încercate direct prin Node: ambele MODULE_NOT_FOUND, deoarece `node_modules` lipsește. Nu au fost instalate dependențe. Nu declar suitele Vitest sau build-ul trecute.
+
+De verificat de reviewer: compilarea migrării și rollback pe Postgres real; anon fără EXECUTE, non-owner 42501 chiar dacă apelează RPC direct, owner cu total egal ai_usage_log + E9 finalizat; limitele de lună, toate cele trei stări E9 și granturile view-urilor. Apoi calea reală PostgREST (count/range, inclusiv peste 500 agregate și interval gol), Vitest, Vite build și UI/export. Nu s-au verificat API-ul, browserul, RLS în execuție sau schema live; nu s-a accesat nicio bază de date și nu s-a făcut deploy.
