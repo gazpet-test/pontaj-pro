@@ -161,5 +161,56 @@ class GeneratorTests(unittest.TestCase):
             self.assertIn(stamp,migration)
             self.assertGreater(migration.index(stamp),migration.index(G['new_bucati']))
 
+    def test_e4a_3_replay_precedes_row_cas_under_locks(self):
+        pkg=(SP / 'e4a_pachet_tpl.sql').read_text(encoding='utf-8')
+        link=G['src'](G['block'](pkg,'fn_izo_flux_pachet_legatura'))
+        self.assertIn('fn_izo_flux_pachet_lock(p_teava,NULL,NULL)',link)
+        self.assertLess(link.index('FOR UPDATE'),link.index("'fara_efect'"))
+        self.assertLess(link.index("'fara_efect'"),link.index('v_t.updated_at IS DISTINCT FROM p_updated_at'))
+        self.assertIn('to_jsonb(v_t) @> public.fn_izo_flux_pachet_identitate(v_b)',link)
+        self.assertIn('v_veche IS DISTINCT FROM p_bucata_asteptata',link)
+        self.assertEqual(link.count('GET DIAGNOSTICS v_randuri = ROW_COUNT;'),3)
+        fixture=(R / 'supabase/tests/izometrie_e4a_pachet.test.sql').read_text(encoding='utf-8')
+        self.assertIn("fn_izo_pachet_leaga(9400,v_b,v_at)->>'cod'<>'fara_efect'",fixture)
+        for label in ('lost ACK replay changed piece','lost ACK replay changed row or package',
+                      'stale unlink accepted','wrong expected unlink accepted','piece type mismatch link accepted'):
+            self.assertIn(label,fixture)
+
+    def test_e4a_3_unlink_signature_acl_and_rollback_agree(self):
+        pkg=(SP / 'e4a_pachet_tpl.sql').read_text(encoding='utf-8')
+        rev=(SP / 'e4a_rev_tpl.sql').read_text(encoding='utf-8')
+        signature='fn_izo_pachet_dezleaga(bigint,text,timestamptz,bigint)'
+        self.assertEqual(pkg.count(signature),3)  # REVOKE, OWNER, GRANT
+        self.assertIn(signature,rev)
+        self.assertNotIn('fn_izo_pachet_dezleaga(bigint,text)',pkg+rev)
+        self.assertIn('fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text,bigint)',rev)
+
+    def test_e4a_3_header_activation_and_full_approval_projection(self):
+        tpl=(SP / 'e4a_tpl.sql').read_text(encoding='utf-8')
+        header=G['src'](G['block'](tpl,'fn_izo_flux_pachet_dupa'))
+        for field in ('km_start_m','status','aprobat_%','pdf_aprobare_%','nr_tevi','total_lungime_m','nr_pending_sant'):
+            self.assertIn(field,header)
+        activation=G['src'](G['block'](tpl,'fn_izo_flux_admin'))
+        self.assertIn("b.tip_cod=coalesce(to_jsonb(t)->>'tip_rand','teava')",activation)
+        approval=G['src'](G['block'](tpl,'fn_izo_flux_aprobare_admin'))
+        self.assertIn('to_jsonb(t) @> public.fn_izo_flux_pachet_identitate(b)',approval)
+        fixture=(R / 'supabase/tests/izometrie_e4a_pachet.test.sql').read_text(encoding='utf-8')
+        for label in ('piece type mismatch activation accepted','valid projection refused','full projection mismatch accepted'):
+            self.assertIn(label,fixture)
+        # Every field written from the registry is independently corrupted in SQL.
+        self.assertIn("ARRAY['serie_unica','sarja','lot','lungime_m','lungime_originala_m','tip','dimensiune','unghi_curba']",fixture)
+        client=(R / 'supabase/tests/izometrie_e4a.test.sql').read_text(encoding='utf-8')
+        self.assertIn('km_start_m) VALUES(3,19,100)',client)
+        self.assertNotRegex(fixture+client,r'(?im)^\s*(GRANT|REVOKE)\b')
+
+    def test_e4a_3_ui_structural_actions_and_future_completion(self):
+        ui=(R / 'src/Izometrie.jsx').read_text(encoding='utf-8')
+        for kind in ('teava','curba','legare','separator'):
+            self.assertIn("disabled={fluxMontaj !== false} onClick={() => addRow('"+kind+"')}",ui)
+        self.assertIn('if (fluxMontaj !== false) return',ui)
+        self.assertNotIn("modificaMontaj('completeaza')",ui)
+        self.assertIn('disponibilă în E4b',ui)
+        self.assertIn('dezleagaDinRegistru(supabase, row, pachet.id, bucatiLegate[rowId], motivDezlegare)',ui)
+
 if __name__ == '__main__':
     unittest.main()

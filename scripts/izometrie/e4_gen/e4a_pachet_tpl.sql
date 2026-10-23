@@ -76,25 +76,32 @@
       'tip',CASE WHEN p_b.tip_cod='curba' THEN 'CIC' ELSE p_b.grad_otel END,'dimensiune',v_dim,'unghi_curba',CASE WHEN p_b.tip_cod='curba' AND p_b.unghi_curba IS NOT NULL THEN p_b.unghi_curba::text || '°' END);
   END $f$;
 
-  CREATE FUNCTION public.fn_izo_flux_pachet_legatura(p_teava bigint,p_bucata bigint,p_updated_at timestamptz,p_motiv text)
+  CREATE FUNCTION public.fn_izo_flux_pachet_legatura(p_teava bigint,p_bucata bigint,p_updated_at timestamptz,p_motiv text,p_bucata_asteptata bigint)
     RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
   DECLARE v_lock jsonb; v_p jsonb; v_t public.executie_tevi; v_b public.magazie_bucati;
     v_veche bigint; v_patch jsonb; v_ctx text; v_now timestamptz:=clock_timestamp();
-    v_dupa public.magazie_bucati;
+    v_dupa public.magazie_bucati; v_randuri bigint;
   BEGIN
-    IF p_bucata IS NOT NULL AND p_updated_at IS NULL THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
+    IF p_updated_at IS NULL THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
     IF p_bucata IS NULL AND length(btrim(coalesce(p_motiv,'')))<3 THEN RAISE EXCEPTION 'motiv_obligatoriu'; END IF;
-    v_lock:=public.fn_izo_flux_pachet_lock(p_teava,NULL,p_updated_at);
+    -- Lock/authenticate/revalidate first; row CAS belongs below the exact replay check.
+    v_lock:=public.fn_izo_flux_pachet_lock(p_teava,NULL,NULL);
     v_p:=v_lock->'pachet'; v_t:=jsonb_populate_record(NULL::public.executie_tevi,v_lock->'teava');
-    IF v_t.tip_rand NOT IN ('teava','curba') THEN RAISE EXCEPTION 'rand_fara_bucata'; END IF;
+    IF v_t.tip_rand IS NULL OR v_t.tip_rand NOT IN ('teava','curba') THEN RAISE EXCEPTION 'rand_fara_bucata'; END IF;
     -- Natural idempotence is allowed even on an approved package; no stamp/write.
     SELECT id INTO v_veche FROM public.magazie_bucati WHERE executie_teava_id=p_teava AND tip_cod IS NOT NULL AND stare<>'anulata';
-    IF p_bucata IS NOT NULL AND v_veche=p_bucata THEN RETURN jsonb_build_object('cod','fara_efect'); END IF;
+    SELECT * INTO v_b FROM public.magazie_bucati WHERE id=coalesce(p_bucata,v_veche) FOR UPDATE;
+    IF p_bucata IS NOT NULL AND v_veche=p_bucata
+      AND v_b.proiect_id=(v_p->>'proiect_id')::bigint AND v_b.tronson_id=(v_p->>'tronson_id')::bigint
+      AND v_b.stare='montata' AND v_b.tip_cod=v_t.tip_rand
+      AND to_jsonb(v_t) @> public.fn_izo_flux_pachet_identitate(v_b)
+      THEN RETURN jsonb_build_object('cod','fara_efect'); END IF;
+    IF v_t.updated_at IS DISTINCT FROM p_updated_at OR (p_bucata IS NULL AND
+      (p_bucata_asteptata IS NULL OR v_veche IS DISTINCT FROM p_bucata_asteptata))
+      THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
     PERFORM public.fn_izo_flux_pachet_editabil(v_p);
     IF p_bucata IS NOT NULL AND v_veche IS NOT NULL THEN RAISE EXCEPTION 'rand_deja_legat'; END IF;
-    SELECT * INTO v_b FROM public.magazie_bucati WHERE id=coalesce(p_bucata,v_veche) FOR UPDATE;
-    IF p_bucata IS NULL AND NOT FOUND THEN RETURN jsonb_build_object('cod','fara_efect'); END IF;
-    IF NOT FOUND OR v_b.proiect_id IS DISTINCT FROM (v_p->>'proiect_id')::bigint
+    IF v_b.id IS NULL OR v_b.proiect_id IS DISTINCT FROM (v_p->>'proiect_id')::bigint
       OR v_b.tronson_id IS DISTINCT FROM (v_p->>'tronson_id')::bigint OR v_b.stare<>'montata'
       OR v_b.tip_cod IS DISTINCT FROM v_t.tip_rand THEN RAISE EXCEPTION 'bucata_incompatibila'; END IF;
     IF p_bucata IS NOT NULL AND v_b.executie_teava_id IS NOT NULL THEN RAISE EXCEPTION 'bucata_deja_legata'; END IF;
@@ -114,10 +121,16 @@
     PERFORM public.fn_izo_montaj_marcheaza(v_ctx,to_jsonb(v_b),to_jsonb(v_dupa),to_jsonb(v_t));
     UPDATE public.magazie_bucati SET executie_teava_id=v_dupa.executie_teava_id,
       server_ver=v_dupa.server_ver,updated_at=v_dupa.updated_at WHERE id=v_b.id;
+    GET DIAGNOSTICS v_randuri = ROW_COUNT;
+    IF v_randuri<>1 THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
     UPDATE public.executie_tevi SET serie_unica=v_t.serie_unica,sarja=v_t.sarja,lot=v_t.lot,
       lungime_m=v_t.lungime_m,lungime_originala_m=v_t.lungime_originala_m,
       tip=v_t.tip,dimensiune=v_t.dimensiune,unghi_curba=v_t.unghi_curba,updated_at=v_now WHERE id=p_teava;
+    GET DIAGNOSTICS v_randuri = ROW_COUNT;
+    IF v_randuri<>1 THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
     UPDATE public.executie_pachete_lansare SET updated_at=v_now WHERE id=(v_p->>'id')::bigint;
+    GET DIAGNOSTICS v_randuri = ROW_COUNT;
+    IF v_randuri<>1 THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
     PERFORM public.fn_izo_montaj_marcheaza(NULL,NULL,NULL,NULL);
     RETURN jsonb_build_object('cod',CASE WHEN p_bucata IS NULL THEN 'dezlegat' ELSE 'legat' END,'pachet_updated_at',v_now);
   END $f$;
@@ -126,11 +139,11 @@
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
   BEGIN
     IF p_bucata IS NULL THEN RAISE EXCEPTION 'bucata_lipsa'; END IF;
-    RETURN public.fn_izo_flux_pachet_legatura(p_teava,p_bucata,p_updated_at,NULL);
+    RETURN public.fn_izo_flux_pachet_legatura(p_teava,p_bucata,p_updated_at,NULL,NULL);
   END $f$;
-  CREATE FUNCTION public.fn_izo_pachet_dezleaga(p_teava bigint,p_motiv text) RETURNS jsonb
+  CREATE FUNCTION public.fn_izo_pachet_dezleaga(p_teava bigint,p_motiv text,p_updated_at timestamptz,p_bucata_asteptata bigint) RETURNS jsonb
     LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-    SELECT public.fn_izo_flux_pachet_legatura(p_teava,NULL,NULL,p_motiv)
+    SELECT public.fn_izo_flux_pachet_legatura(p_teava,NULL,p_updated_at,p_motiv,p_bucata_asteptata)
   $f$;
 
   -- E4b owns the approved weld graph and the operation journal. Until present, never infer a chain from weld numbers.
@@ -150,11 +163,11 @@
   $f$;
 
   REVOKE ALL ON FUNCTION public.fn_izo_flux_pachet_lock(bigint,bigint,timestamptz),public.fn_izo_flux_pachet_editabil(jsonb),
-    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text),
+    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text,bigint),
     public.fn_izo_flux_pachet_completeaza(uuid,bigint,timestamptz,text,text),public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),
-    public.fn_izo_pachet_dezleaga(bigint,text),public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text) FROM PUBLIC,anon,authenticated,service_role;
+    public.fn_izo_pachet_dezleaga(bigint,text,timestamptz,bigint),public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text) FROM PUBLIC,anon,authenticated,service_role;
   GRANT EXECUTE ON FUNCTION public.fn_izo_flux_pachet_lock(bigint,bigint,timestamptz),public.fn_izo_flux_pachet_editabil(jsonb),
-    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text),
+    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text,bigint),
     public.fn_izo_flux_pachet_completeaza(uuid,bigint,timestamptz,text,text) TO izo_montaj_writer;
   GRANT SELECT ON public.magazie_bucati,public.executie_tevi,public.executie_pachete_lansare TO izo_montaj_writer;
   GRANT UPDATE(executie_teava_id,server_ver,updated_at) ON public.magazie_bucati TO izo_montaj_writer;
@@ -169,10 +182,10 @@
   CREATE POLICY executie_pachete_izo_montaj_upd ON public.executie_pachete_lansare FOR UPDATE TO izo_montaj_writer USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
   GRANT CREATE ON SCHEMA public TO izo_montaj_writer;
   ALTER FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz) OWNER TO izo_montaj_writer;
-  ALTER FUNCTION public.fn_izo_pachet_dezleaga(bigint,text) OWNER TO izo_montaj_writer;
+  ALTER FUNCTION public.fn_izo_pachet_dezleaga(bigint,text,timestamptz,bigint) OWNER TO izo_montaj_writer;
   ALTER FUNCTION public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text) OWNER TO izo_montaj_writer;
   REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;
   SET LOCAL ROLE izo_montaj_writer;
-  GRANT EXECUTE ON FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),public.fn_izo_pachet_dezleaga(bigint,text),
+  GRANT EXECUTE ON FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),public.fn_izo_pachet_dezleaga(bigint,text,timestamptz,bigint),
     public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text) TO authenticated;
   RESET ROLE;

@@ -576,14 +576,14 @@ BEGIN
   DROP INDEX public.ux_magbuc_izo_teava;
   SET LOCAL ROLE izo_montaj_writer;
   DROP FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb);
-  DROP FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),public.fn_izo_pachet_dezleaga(bigint,text),
+  DROP FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),public.fn_izo_pachet_dezleaga(bigint,text,timestamptz,bigint),
     public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text);
   DROP FUNCTION public.fn_izo_seteaza_flux(bigint,boolean,text);
   DROP FUNCTION public.fn_izo_pachet_aprobare_transgaz(bigint,timestamptz,text);
   RESET ROLE;
   DROP FUNCTION public.fn_izo_garda_montaj(text,text,jsonb,jsonb);
   DROP FUNCTION public.fn_izo_flux_pachet_lock(bigint,bigint,timestamptz),public.fn_izo_flux_pachet_editabil(jsonb),
-    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text),
+    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text,bigint),
     public.fn_izo_flux_pachet_completeaza(uuid,bigint,timestamptz,text,text);
   REVOKE ALL ON public.magazie_bucati,public.executie_tevi,public.executie_pachete_lansare FROM izo_montaj_writer;
   REVOKE UPDATE(executie_teava_id,server_ver,updated_at) ON public.magazie_bucati FROM izo_montaj_writer;

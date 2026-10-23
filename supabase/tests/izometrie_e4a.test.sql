@@ -62,10 +62,19 @@ SET SESSION AUTHORIZATION authenticator;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
 DO $test$
-DECLARE v_sql text; v_msg text; v_count integer:=0;
+DECLARE v_sql text; v_msg text; v_count integer:=0; v_stamp timestamptz;
 BEGIN
   -- Paths 1/4/5/7/8/18/21: row create/edit/delete/move, header/km, approvals/docs.
   FOREACH v_sql IN ARRAY ARRAY[
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,km_start_m) VALUES(3,19,100)',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,km_start_m) VALUES(3,19,0)',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,status) VALUES(3,19,''aprobat'')',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,aprobat_la) VALUES(3,19,now())',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,pdf_aprobare_path) VALUES(3,19,''forged.pdf'')',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,pdf_aprobare_nume) VALUES(3,19,''forged.pdf'')',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,nr_tevi) VALUES(3,19,1)',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,total_lungime_m) VALUES(3,19,12)',
+    'INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,nr_pending_sant) VALUES(3,19,1)',
     'INSERT INTO public.executie_tevi(pachet_id,serie_unica,lungime_m) VALUES(9100,''client'',12)',
     'UPDATE public.executie_tevi SET observatii=''nota'' WHERE id=9200',
     'UPDATE public.executie_tevi SET pm_cod=''PM'' WHERE id=9200',
@@ -78,6 +87,9 @@ BEGIN
     'UPDATE public.executie_pachete_lansare SET tronson_id=19 WHERE id=9101',
     'UPDATE public.executie_pachete_lansare SET km_start_m=100 WHERE id=9100',
     'UPDATE public.executie_pachete_lansare SET status=''aprobat'' WHERE id=9100',
+    'UPDATE public.executie_pachete_lansare SET nr_tevi=1 WHERE id=9100',
+    'UPDATE public.executie_pachete_lansare SET aprobat_la=now() WHERE id=9100',
+    'UPDATE public.executie_pachete_lansare SET pdf_aprobare_path=''forged.pdf'' WHERE id=9100',
     'DELETE FROM public.executie_pachete_lansare WHERE id=9100',
     'UPDATE public.executie_pachete_documente SET fisier_path=''changed'' WHERE id=9300',
     'DELETE FROM public.executie_pachete_documente WHERE id=9300',
@@ -93,6 +105,14 @@ BEGIN
       v_count:=v_count+1;
     END;
   END LOOP;
+  -- The permitted header path remains usable on flow, with no structural data.
+  INSERT INTO public.executie_pachete_lansare(proiect_id,tronson_id,observatii) VALUES(3,19,'flow header allowed');
+  UPDATE public.executie_pachete_lansare SET observatii='header note allowed',data_lansare=current_date WHERE id=9100;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  IF v_count<>1 THEN RAISE EXCEPTION 'flow header metadata refused'; END IF;
+  UPDATE public.executie_pachete_lansare SET updated_at='2000-01-01'::timestamptz WHERE id=9100
+    RETURNING updated_at INTO STRICT v_stamp;
+  IF v_stamp='2000-01-01'::timestamptz THEN RAISE EXCEPTION 'client rewound header CAS'; END IF;
   -- Existing editor on non-flow: insert, notes, move, delete, header and document still work.
   INSERT INTO public.executie_tevi(pachet_id,serie_unica,lungime_m) VALUES(9101,'client-ok',12);
   UPDATE public.executie_tevi SET observatii='allowed',pm_cod='PM',pa_ut_cod='PA',ut_cod='UT' WHERE id=9201;

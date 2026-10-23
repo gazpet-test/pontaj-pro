@@ -79,6 +79,16 @@ export async function salveazaAlegereRegistru(client, row, pachetId, bucata, flu
   return actualizeazaRandInPachet(client, row.id, pachetId, patchDinRegistru(bucata))
 }
 
+// Dezlegarea folosește instantaneul afișat: versiunea rândului și id-ul legăturii.
+export async function dezleagaDinRegistru(client, row, pachetId, bucataId, motiv) {
+  if (!row || row.pachet_id !== pachetId || !row.updated_at || !bucataId || motiv.trim().length < 3) {
+    return { error: { message: 'Reîncărcați rândul și legătura înainte de dezlegare' } }
+  }
+  return client.rpc('fn_izo_pachet_dezleaga', {
+    p_teava: row.id, p_motiv: motiv.trim(), p_updated_at: row.updated_at, p_bucata_asteptata: bucataId,
+  })
+}
+
 // Unghiul ca număr, din registru (numeric) sau din rândul de pachet (text „22.5°” / „30˚” / „22,5”)
 const unghiNum = (u) => {
   if (u == null || u === '') return null
