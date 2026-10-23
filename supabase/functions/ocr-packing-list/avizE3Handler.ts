@@ -1,7 +1,8 @@
+import { utilizatorE3, verificaPoartaE3 } from '../_shared/izoE3Poarta.ts'
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { costApel, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { faraGandire } from '../_shared/gandire.ts'
-import { atribuireValidaE3, EroareE3, MAX_INPUT_E3, MAX_TOKENS_E3, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3 } from './avizE3.ts'
+import { EroareE3, MAX_INPUT_E3, MAX_TOKENS_E3, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3 } from './avizE3.ts'
 
 export async function citesteAvizE3(req: Request, body: Record<string, unknown>, caller: SupabaseClient, ledger: SupabaseClient, apiKey: string | undefined, cors: Record<string, string>) {
   const raspuns = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
@@ -18,20 +19,8 @@ export async function citesteAvizE3(req: Request, body: Record<string, unknown>,
   try {
     if (req.method !== 'POST') return raspuns(405, { success: false, eroare: 'metoda_invalida' })
     const b = valideazaCerereE3(body), model = b.model, rezerva = rezervaE3(model)
-    if (!req.headers.get('Authorization')?.startsWith('Bearer ')) return raspuns(403, { success: false, eroare: 'fara_drept' })
-    const { data: auth, error: authError } = await caller.auth.getUser()
-    const user = auth?.user
-    if (authError || !user) return raspuns(403, { success: false, eroare: 'fara_drept' })
-    // Toate citirile de drepturi sunt cu JWT-ul apelantului, inclusiv profiles: RLS rămâne activ.
-    const { data: profile, error: pe } = await caller.from('profiles').select('is_owner').eq('id', user.id).maybeSingle()
-    if (pe || !profile) return raspuns(403, { success: false, eroare: 'fara_drept' })
-    if (profile.is_owner !== true) {
-      const { data: acces, error: ae } = await caller.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'magazie').in('access_level', ['editor', 'admin']).limit(1)
-      if (ae || !acces?.length) return raspuns(403, { success: false, eroare: 'fara_drept' })
-      const { data: atribuiri, error: ie } = await caller.from('izo_atribuiri').select('proiect_id,depozit_id,rol,activ,valabil_de,valabil_pana').eq('profile_id', user.id).eq('proiect_id', b.proiect_id).eq('depozit_id', b.depozit_id).eq('rol', 'gestionar').eq('activ', true)
-      const azi = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
-      if (ie || !atribuiri?.some(a => atribuireValidaE3(a, b.proiect_id, b.depozit_id, azi))) return raspuns(403, { success: false, eroare: 'fara_drept' })
-    }
+    const user = { id: await utilizatorE3(req, caller) }
+    await verificaPoartaE3(caller, user.id, b.proiect_id, b.depozit_id)
     if (!apiKey) return raspuns(503, { success: false, eroare: 'ai_neconfigurat' })
     const cheie = `izo_e3_ocr:${b.proiect_id}`
     const citestePlafon = async (luna?: string) => {
