@@ -1,0 +1,72 @@
+# LightOnOCR-2-1B — aviz_comtech_26091505
+# timp citire: 7.78 s (1 pagină = 1 bandă) · stare: ok · rotire: rotită 90° (EXIF orientare 6), aplicată la plan
+# tabele găsite: 1 (rânduri: 17)
+
+## TEXT (tabele ca rânduri „|”)
+
+AVIZ DE INSOTIRE A MARFII
+
+Nr : 26091505 
+Data (ziua, luna, anul) : 15-Sep-2026
+
+Furnizor : SC COMTECH CO SRL 
+CIF/CUI : RO 9600823 
+Sediul : Strada Portului, no. 11 Zimnicea 
+Loc./Jud. : Zimnicea, Teleroman 
+Contul : RO17BACX0000004575070001 
+Banca : UNICREDIT BANK
+
+Cumpator : TRANSGAZ SA 
+CIF/CUI : RO 13068733 
+Nr. Reg. Com. /an : J32/301/2000 
+Sediul : P-ta C.I. Motas nr. 1 
+Loc./Jud. : Medias, Sibiu 
+Contul 
+Banca
+
+| Nr. Crt | Nr.Teava | Specificatia | Nr Sarja | Nr Lot | Cantitate livrata (m) | Greutate (kg) |
+| 1 | 254CA09016 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | SA04751 | 198 | 11.96 | 1,343 |
+| 2 | 254CA10020 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | SA04757 | 173 | 12.06 | 1,354 |
+| 3 | 254CA10135 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA00938 | 226 | 12.50 | 1,404 |
+| 4 | 254CA10137 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA00938 | 226 | 12.50 | 1,404 |
+| 5 | 254CA10139 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA00938 | 226 | 12.50 | 1,404 |
+| 6 | 254CA10142 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA00938 | 226 | 12.49 | 1,403 |
+| 7 | 254CA10161 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA01575 | 225 | 12.48 | 1,402 |
+| 8 | 254CA10167 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA01575 | 225 | 12.48 | 1,402 |
+| 9 | 254CA10193 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA01575 | 227 | 11.57 | 1,299 |
+| 10 | 254CA10194 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | TA01575 | 227 | 11.90 | 1,336 |
+| 11 | 254CA10323 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | SA08019 | 230 | 12.34 | 1,386 |
+| 12 | 254CA10324 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | SA08019 | 230 | 12.34 | 1,386 |
+| 13 | 254CA10480 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | SA07345 | 236 | 12.02 | 1,350 |
+| 14 | 254CA10482 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | SA07345 | 236 | 11.56 | 1,298 |
+| 15 | 254CA10562 | Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate | SA07342 | 239 | 12.09 | 1,358 |
+| TOTAL GENERAL |  |  |  |  | 182.79 | 20,529 |
+
+Transport : T-1144 
+PROJECT NAME : Prunisor - Jupa 
+LOT : 2 
+DELIVERY location : Jupanesti
+
+Data incarcare : 15-Sep-2026 
+Data descarcare : 16-Sep-2026 
+Numar camion : MH21VIK - MH19VIK
+
+## CSV (doar tabelele)
+
+Nr. Crt,Nr.Teava,Specificatia,Nr Sarja,Nr Lot,Cantitate livrata (m),Greutate (kg)
+1,254CA09016,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",SA04751,198,11.96,"1,343"
+2,254CA10020,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",SA04757,173,12.06,"1,354"
+3,254CA10135,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA00938,226,12.50,"1,404"
+4,254CA10137,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA00938,226,12.50,"1,404"
+5,254CA10139,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA00938,226,12.50,"1,404"
+6,254CA10142,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA00938,226,12.49,"1,403"
+7,254CA10161,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA01575,225,12.48,"1,402"
+8,254CA10167,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA01575,225,12.48,"1,402"
+9,254CA10193,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA01575,227,11.57,"1,299"
+10,254CA10194,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",TA01575,227,11.90,"1,336"
+11,254CA10323,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",SA08019,230,12.34,"1,386"
+12,254CA10324,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",SA08019,230,12.34,"1,386"
+13,254CA10480,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",SA07345,236,12.02,"1,350"
+14,254CA10482,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",SA07345,236,11.56,"1,298"
+15,254CA10562,"Tevi sudate elicoidal 610x7,10 mm, L 360 NE, izolate",SA07342,239,12.09,"1,358"
+TOTAL GENERAL,,,,,182.79,"20,529"
