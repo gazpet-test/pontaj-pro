@@ -24,7 +24,7 @@ import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
 import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
 import IzoStocTeava from './IzoStocTeava.jsx'
-import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri, reimprospateaza, actualizeazaRandInPachet } from './lib/izoRegistru.js'
+import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri, reimprospateaza, salveazaAlegereRegistru, dezleagaDinRegistru } from './lib/izoRegistru.js'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -616,6 +616,9 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   // Registrul de țeavă (doar citire): bucățile transportate pe tronsonul pachetului (stare pe_tronson). RLS-ul registrului
   // le arată doar owner-ului și celor atribuiți proiectului; pentru ceilalți lista e goală și seria rămâne text liber.
   const [registru, setRegistru] = useState([])
+  const [bucatiLegate, setBucatiLegate] = useState({})
+  const [fluxMontaj, setFluxMontaj] = useState(null) // null = config încă necitit / eroare: picker blocat
+  const [motivDezlegare, setMotivDezlegare] = useState('')
   // cheie pe tip (țeavă: serie; curbă: serie + șarjă + unghi) → [{ id, cod }] rânduri de pachet din proiect;
   // null = nu s-a putut verifica (eroare, nu „nimic folosit”)
   const [folosite, setFolosite] = useState({})
@@ -630,24 +633,28 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   const proiectPachet = pachet?.proiect_id ?? tronson?.proiect_id ?? null
 
   useEffect(() => { loadAll() }, [pachetId]) // eslint-disable-line
-  useEffect(() => { loadRegistru() }, [pachet?.id, pachet?.tronson_id, proiectPachet]) // eslint-disable-line
+  useEffect(() => { loadRegistru() }, [pachet?.id, pachet?.tronson_id, proiectPachet, fluxMontaj]) // eslint-disable-line
 
   async function loadRegistru() {
     const cheie = ++cerereRegistru.current
-    setRegistru([]); setFolosite({})
-    if (!pachet?.tronson_id || !proiectPachet) return
-    const { data, error } = await citesteTot(() => supabase
+    setRegistru([]); setFolosite({}); setBucatiLegate({})
+    if (!pachet?.tronson_id || !proiectPachet || fluxMontaj === null) return
+    const { data, error } = await citesteTot(() => {
+      let query = supabase
       .from('magazie_bucati')
-      .select('id, serie, sarja, lungime_mm, perete_mm, diametru_mm, unghi_curba, tip_cod, tronson_id, stare', { count: 'exact' })
+      .select('id, serie, sarja, lungime_mm, perete_mm, diametru_mm, unghi_curba, tip_cod, tronson_id, stare, executie_teava_id', { count: 'exact' })
       .eq('tronson_id', pachet.tronson_id)
-      .eq('stare', 'pe_tronson')
+      .eq('stare', fluxMontaj ? 'montata' : 'pe_tronson')
       .in('tip_cod', ['teava', 'curba'])
-      .order('serie').order('id'))
+      .order('serie').order('id')
+      return query
+    })
     if (cheie !== cerereRegistru.current) return
     if (error) { onWarn && onWarn('Registrul de țeavă nu s-a putut citi: ' + error.message); return }
     if (!data.length) return   // fără atribuire (RLS) sau fără bucăți pe tronson: seria rămâne text liber
-    setRegistru(data)
-    await loadFolosite(cheie)
+    setBucatiLegate(Object.fromEntries(data.filter(b => b.executie_teava_id != null).map(b => [b.executie_teava_id, b.id])))
+    setRegistru(fluxMontaj ? data.filter(b => b.executie_teava_id == null) : data)
+    if (!fluxMontaj) await loadFolosite(cheie) // în flux identitatea e bucata, nu seria comună copiilor unei tăieri
   }
 
   async function loadFolosite(cheie = cerereRegistru.current) {
@@ -662,10 +669,11 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   }
 
   // Alegerea unei bucăți din registru: completează seria, șarja, lungimea și dimensiunea (perete; la curbe și unghiul).
-  // Scrie DOAR în executie_tevi, ca editarea manuală; nu leagă bucata de registru (legătura vine la E4a).
+  // Pe flux: legătură + identitate într-un singur RPC. În afara fluxului rămâne editorul text.
   async function alegeDinRegistru(rowId, b) {
     const row = tevi.find(r => r.id === rowId)
     if (!row) return
+    if (fluxMontaj === null || !['teava', 'curba'].includes(row.tip_rand)) return
     // apărare (Copilot / Jak #824 P1): pachetul afișat e cel cerut, rândul îi aparține, iar bucata e de pe tronsonul lui,
     // de tipul rândului; altfel nu scriu nimic și reîncarc
     if (pachet?.id !== pachetId || row.pachet_id !== pachet.id) {
@@ -674,10 +682,22 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
       loadAll()
       return
     }
-    if (b.tronson_id !== pachet?.tronson_id || b.stare !== 'pe_tronson' || b.tip_cod !== row.tip_rand) {
+    if (b.tronson_id !== pachet?.tronson_id || b.stare !== (fluxMontaj ? 'montata' : 'pe_tronson') || b.tip_cod !== row.tip_rand) {
       onError('Bucata aleasă nu e pe tronsonul acestui pachet — lista se reîncarcă')
       cancelEdit()
       loadRegistru()
+      return
+    }
+    if (fluxMontaj) {
+      const gen = paznicPachet.actuala()
+      cancelEdit(); setSaving(true)
+      try {
+        const { error } = await salveazaAlegereRegistru(supabase, row, pachet.id, b, true)
+        if (!paznicPachet.curenta(gen)) return
+        if (error) onError('Legare refuzată: ' + error.message)
+        else onSuccess(`Bucată legată: ${b.serie}`)
+        await Promise.all([refetchPachet(), refetchTevi(), loadRegistru()])
+      } finally { if (paznicPachet.curenta(gen)) setSaving(false) }
       return
     }
     const patch = patchDinRegistru(b)   // la curbe, unghi_curba vine direct din registru (22.5° rămâne 22.5°)
@@ -687,7 +707,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     cancelEdit()
     setSaving(true)
     // CAS pe pachet: scrie doar dacă rândul e încă în pachetul afișat (alt utilizator l-ar fi putut muta)
-    const rez = await actualizeazaRandInPachet(supabase, rowId, pachet.id, patch)
+    const rez = await salveazaAlegereRegistru(supabase, row, pachet.id, b, false)
     setSaving(false)
     if (!rez.ok) {
       if (paznicPachet.curenta(gen)) setTevi(prev => prev.map(r => r.id === rowId ? original : r))
@@ -704,6 +724,8 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   async function loadAll() {
     const gen = paznicPachet.porneste()
     setLoading(true)
+    setFluxMontaj(null); setBucatiLegate({}); setMotivDezlegare(''); setSelected(new Set()); cancelEdit()
+    setSaving(false)
     cerereRegistru.current++; setRegistru([]); setFolosite({})   // alt pachet: lista veche dispare imediat, răspunsurile ei se ignoră
     // Pachet + țevi în paralel
     const [pRes, tRes] = await Promise.all([
@@ -717,8 +739,30 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     setTevi(tRes.data || [])
     const tron = tronsoane.find(t => t.id === pRes.data.tronson_id)
     setTronson(tron)
+    const config = await supabase.from('izo_tronson_config').select('flux_montaj').eq('tronson_id', pRes.data.tronson_id).maybeSingle()
+    if (!paznicPachet.curenta(gen)) return
+    if (config.error) onError('Configurația fluxului nu s-a putut citi: ' + config.error.message)
+    else setFluxMontaj(config.data?.flux_montaj === true)
     setLoading(false)
     setDirty(new Set())
+  }
+
+  async function modificaMontaj(op) {
+    if (op !== 'dezleaga' || !fluxMontaj || saving || pachet?.id !== pachetId) return
+    const gen = paznicPachet.actuala()
+    const rowId = selected.size === 1 ? [...selected][0] : null
+    if (op === 'dezleaga' && (!rowId || motivDezlegare.trim().length < 3)) return
+    if (op === 'dezleaga' && !tevi.some(r => r.id === rowId && r.pachet_id === pachet.id)) return
+    setSaving(true)
+    try {
+      const row = tevi.find(r => r.id === rowId && r.pachet_id === pachet.id)
+      const { error } = await dezleagaDinRegistru(supabase, row, pachet.id, bucatiLegate[rowId], motivDezlegare)
+      if (!paznicPachet.curenta(gen)) return
+      if (error) onError(error.message === 'completare_necesita_E4b_suduri_capete_jurnal'
+        ? 'Completarea necesită registrul de suduri și capete E4b.' : 'Operație refuzată: ' + error.message)
+      else onSuccess(op === 'dezleaga' ? 'Bucată dezlegată' : 'Pachet completat')
+      await Promise.all([refetchPachet(), refetchTevi(), loadRegistru()])
+    } finally { if (paznicPachet.curenta(gen)) setSaving(false) }
   }
 
   // ───────── POZ KM cascade preview (client-side) ─────────
@@ -822,6 +866,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 
   // ───────── Add row ─────────
   async function addRow(tip_rand) {
+    if (fluxMontaj !== false) return
     const newPoz = tevi.length + 1
     const payload = {
       pachet_id: pachetId,
@@ -865,6 +910,8 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   function startEdit(rowId, field) {
     const row = tevi.find(r => r.id === rowId)
     if (!row) return
+    if (fluxMontaj === null) return
+    if (fluxMontaj && (field !== 'serie_unica' || !['teava', 'curba'].includes(row.tip_rand))) return
     if (!EDITABLE_FIELDS[row.tip_rand]?.has(field)) return
     setEditingCell({ rowId, field })
     setDraft(row[field] != null ? String(row[field]) : '')
@@ -878,6 +925,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   // commitEdit: saveBD + clear editing
   async function commitEdit(opts = {}) {
     if (!editingCell) return
+    if (fluxMontaj !== false) { cancelEdit(); return } // pe flux alegerea din picker este singura scriere
     const { rowId, field } = editingCell
     const row = tevi.find(r => r.id === rowId)
     if (!row) { cancelEdit(); return }
@@ -1431,17 +1479,24 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
       </div>
 
       {/* TOOLBAR */}
+      {fluxMontaj && <div style={{...S.card, padding:'10px 14px', marginBottom:12, display:'flex', gap:8, flexWrap:'wrap', alignItems:'center'}}>
+        <span style={{fontSize:12, color:G.muted}}>Completarea din montajele aprobate va fi disponibilă în E4b.</span>
+        <input aria-label="Motivul dezlegării" placeholder="Motiv dezlegare" value={motivDezlegare}
+          onChange={e => setMotivDezlegare(e.target.value)} style={{...S.input, width:180}} />
+        <button style={S.btnS} disabled={saving || selected.size !== 1 || !bucatiLegate[[...selected][0]] || motivDezlegare.trim().length < 3}
+          onClick={() => modificaMontaj('dezleaga')}>Dezleagă rândul selectat</button>
+      </div>}
       <div style={{...S.card, padding:'10px 14px', marginBottom: 12, display:'flex', alignItems:'center', gap: 6, flexWrap:'wrap'}}>
-        <button onClick={() => addRow('teava')} style={{...S.btnS, padding:'6px 12px', borderColor: G.blue, color: G.blue, background: G.blue+'14'}}>
+        <button disabled={fluxMontaj !== false} onClick={() => addRow('teava')} style={{...S.btnS, padding:'6px 12px', borderColor: G.blue, color: G.blue, background: G.blue+'14'}}>
           ➕ Țeavă
         </button>
-        <button onClick={() => addRow('curba')} style={{...S.btnS, padding:'6px 12px', borderColor: G.orange, color: G.orange, background: G.orange+'14'}}>
+        <button disabled={fluxMontaj !== false} onClick={() => addRow('curba')} style={{...S.btnS, padding:'6px 12px', borderColor: G.orange, color: G.orange, background: G.orange+'14'}}>
           ➕ Curbă CIC
         </button>
-        <button onClick={() => addRow('legare')} style={{...S.btnS, padding:'6px 12px', borderColor: G.green, color: G.green, background: G.green+'14'}}>
+        <button disabled={fluxMontaj !== false} onClick={() => addRow('legare')} style={{...S.btnS, padding:'6px 12px', borderColor: G.green, color: G.green, background: G.green+'14'}}>
           ➕ Legare
         </button>
-        <button onClick={() => addRow('separator')} style={{...S.btnS, padding:'6px 12px'}}>
+        <button disabled={fluxMontaj !== false} onClick={() => addRow('separator')} style={{...S.btnS, padding:'6px 12px'}}>
           ➕ Separator
         </button>
 
