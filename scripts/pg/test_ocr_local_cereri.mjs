@@ -15,6 +15,9 @@ assert.match(decodeURIComponent(target.pathname.slice(1)), /^e9_b1_test_[a-z0-9_
 assert.ok(!process.env.PGOPTIONS && !process.env.PGSERVICE, 'Nu folosi PGOPTIONS/PGSERVICE în harness')
 const migration = readFileSync(new URL('../../supabase/migrations/20261108a_ocr_local_cereri.sql', import.meta.url), 'utf8')
 const rollback = readFileSync(new URL('../../supabase/revenire/20261108a_ocr_local_cereri_ROLLBACK.sql', import.meta.url), 'utf8')
+// 20261108b (fix 42702 in fn_ocr_local_admite) se aplica imediat dupa fiecare instalare a lui 20261108a, ca pe prod
+const fixAdmite = readFileSync(new URL('../../supabase/migrations/20261108b_ocr_local_admite_fix.sql', import.meta.url), 'utf8')
+const cuFix = `BEGIN; SELECT set_config('gazpet.livrare_migrare','20261108b_ocr_local_admite_fix:'||txid_current(),true); ${fixAdmite} COMMIT;`
 const quote = s => "'" + String(s).replaceAll("'", "''") + "'"
 const sessions = new Set()
 const env = { ...process.env, PGCLIENTENCODING: 'UTF8', PGCONNECT_TIMEOUT: '5' }
@@ -154,10 +157,14 @@ async function ledger() {
   return o.value(`(SELECT jsonb_build_array(rezervat_usd,consumat_usd) FROM public.ai_plafon_lunar WHERE cheie='izo_e3_ocr:${project}')`)
 }
 
+test('clona nu are schema teste (fals-pozitiv al porții E3: „în” citit ca identificatorul n)', async () => {
+  assert.equal(await o.value(`(SELECT to_regnamespace('teste') IS NULL)`), true, 'Scoateți schema teste din clonă (DROP SCHEMA teste CASCADE după E3), ca la proba PG17')
+})
 test('gardă livrare, re-aplicare refuzată; gate E3 și ACL existente identice', async () => {
   await denies(o, migration, 'garda start invalida')
   await denies(a, `PERFORM set_config('gazpet.livrare_migrare','20261108a_ocr_local_cereri:'||txid_current(),true); ${migration}`, 'necesita postgres')
   await o.command(`BEGIN; SELECT set_config('gazpet.livrare_migrare','20261108a_ocr_local_cereri:'||txid_current(),true); ${migration} COMMIT;`)
+  await o.command(cuFix)
   installed = true
   assert.deepEqual(await o.value('to_jsonb(public.fn_izo_porti_lipsa())'), [])
   const applied = await o.value(fingerprint)
@@ -171,6 +178,7 @@ test('gardă livrare, re-aplicare refuzată; gate E3 și ACL existente identice'
   await o.command(`BEGIN; SELECT set_config('gazpet.revenire_20261108a','OCR_LOCAL_REVENIRE:'||txid_current(),true); ${rollback} COMMIT;`)
   assert.deepEqual(await o.value(fingerprint), baseline)
   await o.command(`BEGIN; SELECT set_config('gazpet.livrare_migrare','20261108a_ocr_local_cereri:'||txid_current(),true); ${migration} COMMIT;`)
+  await o.command(cuFix)
 })
 
 test('roluri reale: niciun SELECT direct; niciun DML/RPC pentru authenticated/anon; worker doar RPC', async () => {
