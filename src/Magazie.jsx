@@ -11,6 +11,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
 import IzoStocTeava from './IzoStocTeava.jsx'
@@ -542,19 +543,23 @@ function EchipamenteTab() {
   const saveEchip = async (form) => {
     setBusy(true)
     try {
+      const eroareTotal = eroareTotalEchipament(form.cantitate_total, form.id ? editModal.cantitate_asignata : 0)
+      if (eroareTotal) throw new Error(eroareTotal)
+      if (form.id && !window.confirm(`Confirmi salvarea echipamentului „${form.denumire.trim()}”?\nTotal în evidență (inclusiv ce e predat): ${fmtNr(editModal.cantitate_total)} → ${fmtNr(form.cantitate_total)} ${form.um}.`)) return
       const payload = {
         denumire: form.denumire.trim(),
         categorie: form.categorie,
         este_eip: form.categorie === 'eip' ? true : !!form.este_eip,
         um: form.um.trim() || 'buc',
         serie: form.serie?.trim() || null,
-        cantitate_total: Number(form.cantitate_total) || 0,
+        cantitate_total: Number(form.cantitate_total),
         stare: form.stare,
         observatii: form.observatii?.trim() || null,
       }
       if (form.id) {
-        const { error } = await supabase.from('magazie_echipamente').update(payload).eq('id', form.id)
+        const { data, error } = await supabase.from('magazie_echipamente').update(payload).eq('id', form.id).select('id')
         if (error) throw error
+        if (data?.length !== 1) throw new Error('Actualizarea nu a confirmat exact un echipament. Reîncarcă lista și verifică totalul înainte de a reîncerca.')
       } else {
         payload.created_by = uid
         const { error } = await supabase.from('magazie_echipamente').insert(payload)
@@ -605,12 +610,16 @@ function EchipamenteTab() {
     } catch (err) { alert('Eroare: ' + err.message) } finally { setBusy(false) }
   }
 
-  const predaCatre = async (echip, employeeId, cantitate, observatii) => {
+  const predaCatre = async (echip, employeeId, cantitate, observatii, dataPredare) => {
     setBusy(true)
     try {
+      const eroare = eroareDataPredare(dataPredare, dataAziBucuresti(new Date())) || eroareCantitatePredare(cantitate, echip.cantitate_disponibila)
+      if (eroare) throw new Error(eroare)
+      if (!employeeId) throw new Error('Selectează angajatul căruia îi predai echipamentul.')
       const { error } = await supabase.from('magazie_inventar_angajat').insert({
         echipament_id: echip.id, employee_id: Number(employeeId),
-        cantitate: Number(cantitate) || 1, predat_de: uid, observatii: observatii?.trim() || null,
+        cantitate: Number(cantitate), predat_de: uid, observatii: observatii?.trim() || null,
+        data_predare: dataPredare,
       })
       if (error) throw error
       setPredaModal(null)
@@ -737,7 +746,8 @@ function EchipamenteTab() {
 // ── Modal adăugare/editare echipament ──
 function EchipModal({ initial, busy, onSave, onClose }) {
   const [f, setF] = useState(initial)
-  const valid = f.denumire.trim().length > 0 && Number(f.cantitate_total) >= 0
+  const eroareTotal = eroareTotalEchipament(f.cantitate_total, initial.id ? initial.cantitate_asignata : 0)
+  const valid = f.denumire.trim().length > 0 && !eroareTotal
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }} onClick={onClose}>
       <div style={{ ...S.card, padding:22, maxWidth:480, width:'100%' }} onClick={e => e.stopPropagation()}>
@@ -757,7 +767,12 @@ function EchipModal({ initial, busy, onSave, onClose }) {
             🦺 Echipament de protecția muncii (EIP) <span style={{ fontSize:11, color:G.dim }}>— pentru notificarea HR la angajare</span>
           </label>
           <div style={{ display:'flex', gap:10 }}>
-            <div style={{ flex:1 }}><label style={{ fontSize:12, color:G.muted }}>Cantitate total</label><input type="number" min="0" style={S.input} value={f.cantitate_total} onChange={e => setF({ ...f, cantitate_total:e.target.value })} /></div>
+            <div style={{ flex:1 }}>
+              <label style={{ fontSize:12, color:G.muted }}>Total in evidenta (inclusiv ce e predat)</label>
+              <input type="number" min="0" style={S.input} value={f.cantitate_total} onChange={e => setF({ ...f, cantitate_total:e.target.value })} />
+              {initial.id && <div style={{ fontSize:11.5, color:G.muted, marginTop:5 }}>Asignat acum: {fmtNr(initial.cantitate_asignata)} {initial.um} · Disponibil: {fmtNr(initial.cantitate_disponibila)} {initial.um}</div>}
+              {eroareTotal && <div role="alert" style={{ fontSize:11.5, color:G.red, marginTop:5 }}>{eroareTotal}</div>}
+            </div>
             <div style={{ flex:1 }}><label style={{ fontSize:12, color:G.muted }}>Serie / nr. inventar</label><input style={S.input} value={f.serie || ''} onChange={e => setF({ ...f, serie:e.target.value })} placeholder="opțional" /></div>
           </div>
           <div><label style={{ fontSize:12, color:G.muted }}>Stare</label>
@@ -855,6 +870,7 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
   const [empId, setEmpId] = useState('')
   const [cant, setCant] = useState(1)
   const [obs, setObs] = useState('')
+  const [dataPredare, setDataPredare] = useState(() => dataAziBucuresti(new Date()))
   const [sortMasura, setSortMasura] = useState(false)
   const [salvandMasura, setSalvandMasura] = useState(null)   // employee_id în curs de salvare
   const campMasura = MASURA_DIN_DENUMIRE(echip.denumire)
@@ -873,7 +889,10 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
     return list
   }, [employees, empSearch, campMasura, sortMasura])
   const maxim = Number(echip.cantitate_disponibila)
-  const valid = empId && Number(cant) > 0 && Number(cant) <= maxim
+  const azi = dataAziBucuresti(new Date())
+  const eroareData = eroareDataPredare(dataPredare, azi)
+  const eroareCantitate = eroareCantitatePredare(cant, echip.cantitate_disponibila)
+  const valid = empId && !eroareCantitate && !eroareData
   const salveazaMasura = async (empIdRow, valoare) => {
     setSalvandMasura(empIdRow)
     const { error } = await supabase.from('employees').update({ [campMasura]: valoare || null }).eq('id', empIdRow)
@@ -917,11 +936,16 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
             <div style={{ width:140 }}><label style={{ fontSize:12, color:G.muted }}>Cantitate</label><input type="number" min="1" max={maxim} step="1" style={S.input} value={cant} onChange={e => setCant(e.target.value)} /></div>
             <div style={{ flex:1 }}><label style={{ fontSize:12, color:G.muted }}>Observații</label><input style={S.input} value={obs} onChange={e => setObs(e.target.value)} placeholder="opțional" /></div>
           </div>
-          {Number(cant) > maxim && <div style={{ fontSize:11.5, color:G.red }}>Cantitatea depășește disponibilul ({fmtNr(maxim)}).</div>}
+          <div>
+            <label htmlFor="eip-data-predare" style={{ fontSize:12, color:G.muted }}>Data predarii</label>
+            <input id="eip-data-predare" type="date" required max={azi} style={S.input} value={dataPredare} onChange={e => setDataPredare(e.target.value)} />
+            {eroareData && <div role="alert" style={{ fontSize:11.5, color:G.red, marginTop:5 }}>{eroareData}</div>}
+          </div>
+          {eroareCantitate && <div role="alert" style={{ fontSize:11.5, color:G.red }}>{eroareCantitate}</div>}
         </div>
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18 }}>
           <button onClick={onClose} style={S.btnS}>Anulează</button>
-          <button onClick={() => onPreda(echip, empId, cant, obs)} disabled={!valid || busy} style={{ ...S.btnP, opacity: (!valid || busy) ? .5 : 1 }}>{busy ? 'Se predă...' : '✓ Predă'}</button>
+          <button onClick={() => onPreda(echip, empId, cant, obs, dataPredare)} disabled={!valid || busy} style={{ ...S.btnP, opacity: (!valid || busy) ? .5 : 1 }}>{busy ? 'Se predă...' : '✓ Predă'}</button>
         </div>
       </div>
     </div>
