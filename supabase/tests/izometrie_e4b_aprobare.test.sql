@@ -469,6 +469,17 @@ BEGIN
   v_seq:=v_seq+1;
   v_r:=public.fn_izo_sync_push(v_dev,jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',v_seq,'versiune_format',1,'tip_op','decl_salveaza','payload',v_p)));
   IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION '2c cut % %',v_i,v_r; END IF;
+  -- E4b-2d: sync must retain the cut's own child reservations before submit.
+  IF v_i IN (1,3) AND (
+   (SELECT count(*) FROM public.izo_rezervari r JOIN public.izo_declaratii d ON d.id=r.declaratie_id
+    JOIN public.izo_bucati_declarate c ON c.uid=r.bucata_decl_uid AND c.declaratie_id=d.id
+    WHERE d.uid=v_uid AND c.destinatie='ramane_montat' AND c.stare='declarata'
+     AND r.declaratie_versiune=d.versiune AND c.declaratie_versiune=d.versiune
+     AND r.activa AND r.expira_dupa>now())<>CASE WHEN v_i=1 THEN 2 ELSE 1 END
+   OR EXISTS(SELECT 1 FROM public.izo_rezervari r JOIN public.izo_declaratii d ON d.id=r.declaratie_id
+    WHERE d.uid=v_uid AND r.motiv_eliberare='parinte_anulat')) THEN
+   RAISE EXCEPTION '2d sync lost own mounted child reservation';
+  END IF;
  END LOOP;
  v_seq:=v_seq+1;
  v_r:=public.fn_izo_sync_push(v_dev,jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',v_seq,'versiune_format',1,'tip_op','sesiune_trimite',
@@ -479,9 +490,33 @@ END $test$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 DO $test$
-DECLARE v_id bigint;
+DECLARE v_id bigint; v_rid bigint; v_n integer; v_affected bigint;
 BEGIN
  SELECT id INTO v_id FROM public.izo_declaratii WHERE uid=current_setting('test.e4bc.t1')::uuid;
+ IF (SELECT count(*) FROM public.izo_rezervari r JOIN public.izo_bucati_declarate c ON c.uid=r.bucata_decl_uid
+  JOIN public.izo_declaratii d ON d.id=c.declaratie_id
+  WHERE d.id=v_id AND r.declaratie_id=d.id AND c.destinatie='ramane_montat'
+   AND r.declaratie_versiune=d.versiune AND r.activa AND r.expira_dupa IS NULL)<>2 THEN
+  RAISE EXCEPTION '2d submit lost own mounted child reservation';
+ END IF;
+ PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]);
+ SELECT r.id INTO STRICT v_rid FROM public.izo_rezervari r
+  WHERE r.declaratie_id=v_id AND r.bucata_decl_uid IS NOT NULL AND r.activa ORDER BY r.id LIMIT 1;
+ -- Each subtransaction rolls back the forced deviation; no grants or guard bypass.
+ FOR v_n IN 1..3 LOOP
+  BEGIN
+   IF v_n=1 THEN
+    UPDATE public.izo_rezervari SET activa=false,eliberata_la=now(),motiv_eliberare='parinte_anulat' WHERE id=v_rid;
+   ELSIF v_n=2 THEN
+    UPDATE public.izo_rezervari SET declaratie_versiune=declaratie_versiune+1 WHERE id=v_rid;
+   ELSE
+    UPDATE public.izo_rezervari SET expira_dupa=now()+interval '1 hour' WHERE id=v_rid;
+   END IF;
+   GET DIAGNOSTICS v_affected=ROW_COUNT;
+   IF v_affected<>1 THEN RAISE EXCEPTION '2d reservation fixture missed row'; END IF;
+   PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RAISE EXCEPTION '2d invalid child reservation accepted';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'rezervare_pierduta' THEN RAISE; END IF; END;
+ END LOOP;
  PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]);
  BEGIN
   UPDATE public.izo_bucati_declarate SET destinatie='montaj' WHERE declaratie_id=v_id AND destinatie='ramane_montat';
@@ -520,6 +555,15 @@ BEGIN
  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'decizii_invalide' THEN RAISE; END IF; END;
  IF (SELECT count(*) FROM public.magazie_bucati_evenimente)<>v_n THEN RAISE EXCEPTION '2c decision wrote facts'; END IF;
  v_r:=public.fn_izo_aproba(gen_random_uuid(),v_s,v_rows,v_preview->>'amprenta',v_dec);
+ IF (SELECT count(*) FROM public.izo_rezervari r JOIN public.izo_bucati_declarate c ON c.uid=r.bucata_decl_uid
+  JOIN public.izo_declaratii d ON d.id=c.declaratie_id
+  WHERE d.preverificare_id=v_s AND r.declaratie_id=d.id AND c.destinatie='ramane_montat'
+   AND c.stare='aprobata' AND r.declaratie_versiune=d.versiune AND NOT r.activa
+   AND r.motiv_eliberare='consumata' AND r.eveniment_id=d.eveniment_ids[1])<>3
+  OR EXISTS(SELECT 1 FROM public.izo_rezervari r JOIN public.izo_declaratii d ON d.id=r.declaratie_id
+   WHERE d.preverificare_id=v_s AND r.activa) THEN
+  RAISE EXCEPTION '2d approval did not consume own child reservations';
+ END IF;
  IF EXISTS(SELECT 1 FROM public.izo_suduri_capete WHERE bucata_id=current_setting('test.e4bc.b2')::bigint AND activ)
   OR (SELECT count(*) FROM public.izo_suduri_capete c JOIN public.izo_suduri w ON w.id=c.sudura_id WHERE c.activ AND w.nr IN (501,502) AND w.tronson_id=19)<>4 THEN RAISE EXCEPTION '2c R4 transfer'; END IF;
  IF (SELECT lungime_mm FROM public.magazie_bucati WHERE id=current_setting('test.e4bc.b4')::bigint)<>12100

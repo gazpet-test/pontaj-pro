@@ -775,10 +775,13 @@ BEGIN
  PERFORM public.fn_izo_sudura_decl(v_d.id);
  PERFORM public.fn_izo_taiere_ramura(v_d.id);
  -- A changed/disappeared child cannot keep its old consumer reservation.
+ -- Rezervarea proprie a taierii tine copilul ramane_montat, nu consuma
+ -- lungimea lui: baza_mm a taierii este lungimea parintelui. Comparam doar
+ -- consumatorii distincti; anularea copilului elibereaza orice rezervare.
  UPDATE public.izo_rezervari r SET activa=false,eliberata_la=now(),motiv_eliberare='parinte_anulat',
   server_ver=nextval('public.izo_server_ver_seq') WHERE r.activa AND r.bucata_decl_uid IN
    (SELECT c.uid FROM public.izo_bucati_declarate c WHERE c.declaratie_id=v_d.id AND
-    (c.stare='anulata' OR EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.id=r.declaratie_id
+    (c.stare='anulata' OR EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.id=r.declaratie_id AND d.id<>c.declaratie_id
       AND coalesce((d.payload->>'lungime_montata_mm')::integer,(d.payload->>'baza_mm')::integer) IS DISTINCT FROM c.lungime_mm)));
  -- Keep the severe reason; only unchanged referenced children can restore a row.
  UPDATE public.izo_declaratii d SET blocata_motiv='dependenta_anulata',server_ver=nextval('public.izo_server_ver_seq')

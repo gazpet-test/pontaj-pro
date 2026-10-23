@@ -134,5 +134,18 @@ class E4bTests(unittest.TestCase):
                '2c extra MP decision accepted','2c correction before cut','2c R4 transfer']:
    self.assertIn(name,tests)
   self.assertNotRegex(tests,r'(?im)^\s*(GRANT|REVOKE)\b')
+ def test_mounted_child_cleanup_distinguishes_owner_from_consumer(self):
+  body=G['src'](G['block'](M,'fn_izo_teren_op'))
+  cleanup=body[body.index('-- A changed/disappeared child'):body.index('-- Keep the severe reason')]
+  self.assertIn("c.stare='anulata' OR EXISTS",cleanup)
+  self.assertIn('d.id=r.declaratie_id AND d.id<>c.declaratie_id',cleanup)
+  self.assertIn("(d.payload->>'baza_mm')::integer) IS DISTINCT FROM c.lungime_mm",cleanup)
+  sim=G['src'](G['block'](M,'fn_izo_lot_efecte'))
+  self.assertIn('r.declaratie_id=v_d.id AND r.declaratie_versiune=v_d.versiune AND r.activa AND r.expira_dupa IS NULL',sim)
+  tests=(R/'supabase/tests/izometrie_e4b_aprobare.test.sql').read_text(encoding='utf8')
+  for name in ['2d sync lost own mounted child reservation','2d submit lost own mounted child reservation',
+               '2d invalid child reservation accepted','2d approval did not consume own child reservations',
+               'changed child restored or reserved']:
+   self.assertIn(name,tests)
 
 if __name__=='__main__': unittest.main()
