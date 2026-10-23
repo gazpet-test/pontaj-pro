@@ -135,10 +135,13 @@ CREATE FUNCTION public.fn_izo_birou_preview(p_preverificare bigint) RETURNS json
    'bucata',(SELECT to_jsonb(b)||jsonb_build_object('radacina',(SELECT to_jsonb(root) FROM public.magazie_bucati root WHERE root.id=coalesce(b.radacina_id,b.id)),
      'fara_pv',public.fn_izo_pv_lipsa(ARRAY[coalesce(b.radacina_id,b.id)])) FROM public.magazie_bucati b WHERE b.id=d.bucata_id),
    'copii',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY c.uid),'[]') FROM public.izo_bucati_declarate c WHERE c.declaratie_id=d.id)) ORDER BY d.id)
-  FROM public.izo_declaratii d WHERE d.preverificare_id=s.id),'[]'),
+  FROM public.izo_declaratii d WHERE d.proiect_id=s.proiect_id AND d.tronson_id=s.tronson_id AND d.preverificare_id IN (SELECT p.id FROM public.izo_preverificari p WHERE p.zi=s.zi AND p.stare='trimisa')),'[]'),
+  'suduri',(SELECT coalesce(jsonb_agg(to_jsonb(w) ORDER BY w.id),'[]') FROM public.izo_suduri w WHERE w.proiect_id=s.proiect_id),
+  'capete',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY c.id),'[]') FROM public.izo_suduri_capete c JOIN public.izo_suduri w ON w.id=c.sudura_id WHERE w.proiect_id=s.proiect_id),
   'registru',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.id),'[]') FROM public.magazie_bucati b WHERE b.proiect_id=s.proiect_id),
   'rezervari_proiect',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]') FROM public.izo_rezervari r WHERE r.proiect_id=s.proiect_id),
   'copii_proiect',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY c.uid),'[]') FROM public.izo_bucati_declarate c JOIN public.izo_declaratii d ON d.id=c.declaratie_id WHERE d.proiect_id=s.proiect_id),
+  'sesiuni_proiect',(SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]') FROM public.izo_preverificari p WHERE p.proiect_id=s.proiect_id),
   'declaratii_proiect',(SELECT coalesce(jsonb_agg(to_jsonb(d) ORDER BY d.id),'[]') FROM public.izo_declaratii d WHERE d.proiect_id=s.proiect_id),
   'depozite',(SELECT coalesce(jsonb_agg(to_jsonb(dep) ORDER BY dep.id),'[]') FROM public.logistica_depozite dep JOIN public.executie_proiecte pr ON pr.site_id=dep.site_id WHERE pr.id=s.proiect_id),
   'config',(SELECT to_jsonb(c) FROM public.izo_tronson_config c WHERE c.tronson_id=s.tronson_id),
@@ -160,10 +163,10 @@ BEGIN
  v_doc:=public.fn_izo_birou_preview(p_preverificare);
  IF v_doc IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
  SELECT coalesce(array_agg(d.id ORDER BY d.id),'{}') INTO v_ids FROM public.izo_declaratii d
-  WHERE d.preverificare_id=p_preverificare AND d.stare='trimisa';
+  WHERE d.preverificare_id IN (SELECT p.id FROM public.izo_preverificari p JOIN public.izo_preverificari a ON a.id=p_preverificare WHERE p.proiect_id=a.proiect_id AND p.tronson_id=a.tronson_id AND p.zi=a.zi AND p.stare='trimisa') AND d.stare='trimisa';
  BEGIN v_sim:=public.fn_izo_lot_efecte(v_ids);
  EXCEPTION WHEN raise_exception THEN v_sim:=jsonb_build_object('refuz',SQLERRM); END;
- RETURN v_doc||jsonb_build_object('amprenta',encode(sha256(convert_to(v_doc::text,'UTF8')),'hex'),'decizii_cerute','[]'::jsonb,'simulare',v_sim);
+ RETURN v_doc||jsonb_build_object('amprenta',encode(sha256(convert_to(v_doc::text,'UTF8')),'hex'),'decizii_cerute',coalesce((SELECT jsonb_agg('corectie:'||d.id ORDER BY d.id) FROM public.izo_declaratii d WHERE d.id=ANY(v_ids) AND public.fn_izo_corectie_mm(d.id) IS NOT NULL),'[]'::jsonb),'simulare',v_sim);
 END $f$;
 
 CREATE FUNCTION public.fn_izo_birou_jurnal(p_cheie uuid,p_canal text,p_tip text,p_proiect bigint,p_tronson bigint,
@@ -177,7 +180,7 @@ $f$;
 CREATE FUNCTION public.fn_izo_aproba_intern(p_cheie uuid,p_preverificare bigint,p_randuri jsonb,p_amprenta text,p_decizii jsonb) RETURNS jsonb
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE v_s public.izo_preverificari; v_d public.izo_declaratii; v_b public.magazie_bucati; v_r jsonb;
- v_plan jsonb; v_id bigint; v_res public.izo_rezervari; v_child public.izo_bucati_declarate; v_expected record; v_rez_before jsonb;
+ v_plan jsonb; v_id bigint; v_res public.izo_rezervari; v_child public.izo_bucati_declarate; v_expected record; v_rez_before jsonb; v_keys text[]; v_given text[]; v_mm integer; v_corr bigint;
  v_emp bigint; v_ev bigint; v_evs bigint[]:='{}'; v_ids bigint[]; v_doc jsonb; v_hash text; v_payload jsonb; v_old public.izo_operatii; v_n bigint;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
@@ -186,7 +189,7 @@ BEGIN
  PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL);
  IF v_s.id IS NULL THEN RAISE EXCEPTION 'sesiune_lipsa'; END IF;
  IF p_cheie IS NULL OR jsonb_typeof(p_randuri) IS DISTINCT FROM 'array' OR jsonb_array_length(p_randuri) NOT BETWEEN 1 AND 200
-  OR p_decizii IS DISTINCT FROM '{}'::jsonb OR p_amprenta IS NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
+  OR jsonb_typeof(p_decizii) IS DISTINCT FROM 'object' OR p_amprenta IS NULL THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
  SELECT array_agg((x->>'declaratie_id')::bigint ORDER BY (x->>'declaratie_id')::bigint) INTO v_ids FROM jsonb_array_elements(p_randuri) x;
  IF cardinality(v_ids)<>(SELECT count(DISTINCT x) FROM unnest(v_ids) x) OR array_position(v_ids,NULL) IS NOT NULL THEN RAISE EXCEPTION 'randuri_invalide'; END IF;
  -- Conservative project closure, same session-before-declaration order as sync.
@@ -211,23 +214,36 @@ BEGIN
   (SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_s.tronson_id AND flux_montaj) THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
  PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_s.proiect_id AND id=radacina_id ORDER BY id FOR UPDATE;
  PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_s.proiect_id ORDER BY id FOR UPDATE;
+ PERFORM 1 FROM public.izo_suduri WHERE proiect_id=v_s.proiect_id ORDER BY id FOR UPDATE;
  v_doc:=public.fn_izo_birou_preview(v_s.id);
  IF encode(sha256(convert_to(v_doc::text,'UTF8')),'hex') IS DISTINCT FROM p_amprenta THEN RAISE EXCEPTION 'preview_vechi'; END IF;
  -- Validate every selected row before the first fact. Partial approval is an explicit subset.
  FOR v_r IN SELECT value FROM jsonb_array_elements(p_randuri) LOOP
-  SELECT * INTO v_d FROM public.izo_declaratii WHERE id=(v_r->>'declaratie_id')::bigint AND preverificare_id=v_s.id;
+  SELECT * INTO v_d FROM public.izo_declaratii WHERE id=(v_r->>'declaratie_id')::bigint AND proiect_id=v_s.proiect_id AND tronson_id=v_s.tronson_id
+   AND preverificare_id IN (SELECT s.id FROM public.izo_preverificari s WHERE s.zi=v_s.zi AND s.stare='trimisa');
   IF NOT FOUND OR v_d.versiune IS DISTINCT FROM (v_r->>'versiune')::integer
    OR v_d.updated_at IS DISTINCT FROM (v_r->>'updated_at')::timestamptz OR v_d.stare<>'trimisa' THEN RAISE EXCEPTION 'cas'; END IF;
   IF v_d.declarat_de=public.fn_izo_uid() OR v_d.declarat_de_angajat=v_emp THEN RAISE EXCEPTION 'propriul_rand' USING ERRCODE='42501'; END IF;
  END LOOP;
  -- No registry DML precedes the complete simulation.
  v_plan:=public.fn_izo_lot_efecte(v_ids);
+ SELECT coalesce(array_agg('corectie:'||d.id ORDER BY 'corectie:'||d.id),'{}') INTO v_keys FROM public.izo_declaratii d
+  WHERE d.id=ANY(v_ids) AND public.fn_izo_corectie_mm(d.id) IS NOT NULL;
+ SELECT coalesce(array_agg(k ORDER BY k),'{}') INTO v_given FROM jsonb_object_keys(p_decizii) k;
+ IF v_keys IS DISTINCT FROM v_given OR EXISTS(SELECT 1 FROM jsonb_each(p_decizii) x WHERE jsonb_typeof(x.value)<>'string')
+  OR EXISTS(SELECT 1 FROM jsonb_each_text(p_decizii) x WHERE length(btrim(coalesce(x.value,''))) NOT BETWEEN 3 AND 1000) THEN RAISE EXCEPTION 'decizii_invalide'; END IF;
  SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]') INTO v_rez_before FROM public.izo_rezervari r
   JOIN public.izo_bucati_declarate c ON c.uid=r.bucata_decl_uid WHERE c.declaratie_id=ANY(v_ids) AND r.activa;
  FOR v_id IN SELECT value::bigint FROM jsonb_array_elements_text(v_plan->'ordine') LOOP
   SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE id=v_id;
+  IF v_d.tip<>'cuplare' THEN
   SELECT * INTO STRICT v_b FROM public.magazie_bucati WHERE id=coalesce(v_d.bucata_id,v_d.sursa_bucata_id)
    OR uid=coalesce(v_d.bucata_decl_uid,v_d.sursa_decl_uid);
+  v_corr:=NULL; v_mm:=public.fn_izo_corectie_mm(v_d.id);
+  IF v_mm IS NOT NULL THEN
+   v_corr:=public.fn_izo_corectie_fapt(v_b.id,v_d.id::text,v_d.tronson_id,v_d.declarat_de,v_d.dispozitiv_id::text,p_decizii->>('corectie:'||v_d.id),v_mm);
+   v_evs:=array_append(v_evs,v_corr);
+  END IF;
   IF v_d.tip='taiere' THEN v_ev:=public.fn_izo_taiere_fapt(v_d.id);
   ELSE
   v_ev:=public.fn_izo_birou_fapt(v_b.id,'aproba',v_d.id::text,v_s.tronson_id,NULL,v_d.declarat_de,v_d.dispozitiv_id::text,
@@ -237,8 +253,20 @@ BEGIN
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=clock_timestamp(),motiv_eliberare='consumata',eveniment_id=v_ev,
    server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND declaratie_versiune=v_d.versiune AND bucata_id=v_b.id AND activa;
   GET DIAGNOSTICS v_n=ROW_COUNT; IF v_n<>1 THEN RAISE EXCEPTION 'reconciliere_rezervare'; END IF;
+  END IF;
+  PERFORM public.fn_izo_sudura_aproba(v_d.id);
   UPDATE public.izo_declaratii SET stare='aprobata',aprobat_de=public.fn_izo_uid(),aprobat_de_angajat=v_emp,
-   decis_la=clock_timestamp(),eveniment_ids=ARRAY[v_ev],server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id;
+   decis_la=clock_timestamp(),eveniment_ids=CASE WHEN v_d.tip='cuplare' THEN '{}'::bigint[] ELSE CASE WHEN v_corr IS NULL THEN ARRAY[v_ev] ELSE ARRAY[v_ev,v_corr] END END,server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id;
+ END LOOP;
+ IF EXISTS(SELECT 1 FROM public.izo_suduri w WHERE w.proiect_id=v_s.proiect_id AND w.stare='aprobata'
+  AND (SELECT count(*) FROM public.izo_suduri_capete c WHERE c.sudura_id=w.id AND c.activ)<>2)
+  OR EXISTS(SELECT 1 FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.id=c.bucata_id
+   WHERE b.proiect_id=v_s.proiect_id AND b.stare='taiata' AND c.activ) THEN RAISE EXCEPTION 'reconciliere_r4'; END IF;
+ FOR v_expected IN SELECT key,value FROM jsonb_each(v_plan->'capete') LOOP
+  IF v_expected.value->>'stare_sudura'='aprobata' AND NOT EXISTS(SELECT 1 FROM public.izo_suduri_capete c
+   JOIN public.magazie_bucati b ON b.id=c.bucata_id WHERE c.sudura_id=(v_expected.value->>'sudura_id')::bigint
+    AND c.parte=v_expected.value->>'parte' AND c.activ AND b.uid=(v_expected.value->>'uid')::uuid
+    AND c.capat_litera=v_expected.value->>'capat_litera' AND b.stare='montata') THEN RAISE EXCEPTION 'reconciliere_r4'; END IF;
  END LOOP;
  FOR v_expected IN SELECT key,value FROM jsonb_each(v_plan->'bucati') LOOP
   SELECT * INTO STRICT v_b FROM public.magazie_bucati WHERE uid=v_expected.key::uuid;
@@ -250,6 +278,11 @@ BEGIN
  -- Reconcile the complete reservation transfer chain, including consumers outside this lot.
  FOR v_r IN SELECT value FROM jsonb_array_elements(v_rez_before) LOOP
   SELECT * INTO STRICT v_res FROM public.izo_rezervari WHERE id=(v_r->>'id')::bigint;
+  IF EXISTS(SELECT 1 FROM public.izo_bucati_declarate c WHERE c.uid=v_res.bucata_decl_uid AND c.destinatie='ramane_montat' AND c.declaratie_id=v_res.declaratie_id) THEN
+   IF v_res.activa OR v_res.motiv_eliberare IS DISTINCT FROM 'consumata' OR v_res.eveniment_id IS DISTINCT FROM
+    (SELECT d.eveniment_ids[1] FROM public.izo_declaratii d WHERE d.id=v_res.declaratie_id) THEN RAISE EXCEPTION 'reconciliere_transfer'; END IF;
+   CONTINUE;
+  END IF;
   IF v_res.activa OR v_res.motiv_eliberare IS DISTINCT FROM 'transferata'
    OR (to_jsonb(v_res)-ARRAY['activa','eliberata_la','motiv_eliberare','eveniment_id','server_ver'])
      IS DISTINCT FROM (v_r-ARRAY['activa','eliberata_la','motiv_eliberare','eveniment_id','server_ver'])
@@ -271,9 +304,9 @@ BEGIN
  IF EXISTS(SELECT 1 FROM public.magazie_bucati root WHERE root.proiect_id=v_s.proiect_id AND root.id=root.radacina_id
   AND root.lungime_mm IS DISTINCT FROM (SELECT sum(b.lungime_mm)::integer FROM public.magazie_bucati b
    WHERE b.radacina_id=root.id AND b.stare NOT IN ('taiata','anulata'))) THEN RAISE EXCEPTION 'r3'; END IF;
- IF NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE preverificare_id=v_s.id AND stare NOT IN ('aprobata','respinsa','stearsa')) THEN
-  UPDATE public.izo_preverificari SET stare='inchisa',server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_s.id;
- END IF;
+ UPDATE public.izo_preverificari s SET stare='inchisa',server_ver=nextval('public.izo_server_ver_seq')
+ WHERE s.id IN (SELECT d.preverificare_id FROM public.izo_declaratii d WHERE d.id=ANY(v_ids))
+ AND NOT EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.preverificare_id=s.id AND d.stare NOT IN ('aprobata','respinsa','stearsa')); 
  v_r:=jsonb_build_object('cod','aprobat','eveniment_ids',to_jsonb(v_evs),
   'bucati_noi',(SELECT coalesce(jsonb_object_agg(c.uid,c.bucata_id),'{}') FROM public.izo_bucati_declarate c WHERE c.declaratie_id=ANY(v_ids) AND c.stare='aprobata'),
   'fise_taiere_radacini',(SELECT coalesce(jsonb_agg(x.radacina_id ORDER BY x.radacina_id),'[]') FROM
@@ -421,6 +454,8 @@ BEGIN
   END IF;
  END LOOP;
  IF NOT p_revizie THEN
+  UPDATE public.izo_suduri_capete c SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE c.activ AND c.sudura_id IN (SELECT s.id FROM public.izo_suduri s JOIN public.izo_declaratii d ON d.id=s.declaratie_id WHERE d.id=ANY(v_ids) AND d.stare='respinsa' AND s.stare='declarata');
+  UPDATE public.izo_suduri s SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE s.declaratie_id IN (SELECT d.id FROM public.izo_declaratii d WHERE d.id=ANY(v_ids) AND d.stare='respinsa') AND s.stare='declarata';
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=clock_timestamp(),motiv_eliberare=CASE WHEN declaratie_id=p_decl THEN 'respinsa' ELSE 'parinte_anulat' END,
    server_ver=nextval('public.izo_server_ver_seq') WHERE activa AND (declaratie_id=ANY(v_ids) OR bucata_decl_uid IN
     (SELECT uid FROM public.izo_bucati_declarate WHERE declaratie_id=ANY(v_ids)));

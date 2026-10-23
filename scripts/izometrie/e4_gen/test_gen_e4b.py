@@ -97,5 +97,42 @@ class E4bTests(unittest.TestCase):
                 'equal cut children accepted','changed cut preview accepted']:
    self.assertIn(check,tests)
   self.assertTrue(tests.rstrip().endswith("SELECT 'E4B_APROBARE_TEST_END';"))
+ def test_weld_tables_and_private_writers(self):
+  for t in ['izo_suduri','izo_suduri_capete']:
+   self.assertIn(t,G['tables'])
+   self.assertIn('REVOKE ALL ON SEQUENCE public.'+t+'_id_seq FROM PUBLIC,anon,authenticated,service_role',M)
+  for name in ['fn_izo_sudura_decl','fn_izo_sudura_aproba','fn_izo_capete_muta','fn_izo_corectie_mm','fn_izo_corectie_fapt']:
+   self.assertIn('REVOKE ALL ON FUNCTION public.'+name,M)
+  self.assertIn('CREATE UNIQUE INDEX ux_izo_capat_parte',M)
+  self.assertIn('CREATE UNIQUE INDEX ux_izo_capat_bucata',M)
+  self.assertIn('CREATE UNIQUE INDEX ux_izo_capat_decl',M)
+ def test_movement_role_matches_real_schema(self):
+  correction=G['src'](G['block'](M,'fn_izo_corectie_fapt'))
+  self.assertIn("'rol','corectat'",correction)
+  self.assertNotIn("'rol','corectie'",correction)
+  self.assertIn('GET DIAGNOSTICS v_n=ROW_COUNT',correction)
+  self.assertIn("'corectie',p_ref",correction)
+ def test_decisions_and_correction_precede_cut(self):
+  body=G['src'](G['block'](M,'fn_izo_aproba_intern'))
+  self.assertLess(body.index('decizii_invalide'),body.index('v_corr:=public.fn_izo_corectie_fapt'))
+  self.assertLess(body.index('v_corr:=public.fn_izo_corectie_fapt'),body.index('v_ev:=public.fn_izo_taiere_fapt'))
+  self.assertIn('jsonb_object_keys(p_decizii)',body)
+  self.assertIn('s.zi=v_s.zi',body)
+ def test_cap_simulation_and_full_reservation_chain(self):
+  body=G['src'](G['block'](M,'fn_izo_lot_efecte'))
+  self.assertIn("'capete',v_caps",body)
+  self.assertIn("RAISE EXCEPTION 'ramura_gresita'",body)
+  self.assertIn("RAISE EXCEPTION 'ramura_neacoperita'",body)
+  self.assertIn("c.destinatie='ramane_montat'",body)
+  cut=G['src'](G['block'](M,'fn_izo_taiere_fapt'))
+  self.assertIn("v_c.destinatie='ramane_montat' AND v_r.declaratie_id=v_d.id",cut)
+  self.assertIn('fn_izo_capete_muta(v_b.id,v_child.id,v_ev.id)',cut)
+ def test_new_sql_scenarios_are_in_real_harness(self):
+  tests=(R/'supabase/tests/izometrie_e4b_aprobare.test.sql').read_text(encoding='utf8')
+  for name in ['2c single cap accepted','2c mixed-session weld approval','2c wrong mounted branch accepted',
+               '2c free-end branch accepted wrong child','2c tree correction accepted','2c missing MP decision accepted',
+               '2c extra MP decision accepted','2c correction before cut','2c R4 transfer']:
+   self.assertIn(name,tests)
+  self.assertNotRegex(tests,r'(?im)^\s*(GRANT|REVOKE)\b')
 
 if __name__=='__main__': unittest.main()

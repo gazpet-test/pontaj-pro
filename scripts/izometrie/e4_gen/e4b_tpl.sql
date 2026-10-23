@@ -32,7 +32,7 @@ BEGIN
  CREATE UNIQUE INDEX ux_magbuc_ev_decl ON public.magazie_bucati_evenimente(document_id,tip)
   WHERE document_tip='izo_declaratie' AND tip IN ('taiere','montaj','corectie');
  @@REVOKE_FUNCTIONS@@
- GRANT UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute) ON public.magazie_bucati TO izo_montaj_writer;
+ GRANT UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute,lungime_mm,lungime_masurata_mm,lungime_m,lungime_originala_m) ON public.magazie_bucati TO izo_montaj_writer;
  GRANT SELECT ON public.magazie_bucati_evenimente,public.magazie_bucati_miscari TO izo_montaj_writer;
  GRANT INSERT(tip,proiect_id,document_tip,document_id,import_id,storno_de_eveniment_id,motiv,declarat_de,aplicat_de,aplicat_rol,ora_server,ora_tableta,dispozitiv_id,server_ver)
   ON public.magazie_bucati_evenimente TO izo_montaj_writer;
@@ -83,7 +83,7 @@ BEGIN
    (SELECT string_agg(pg_get_indexdef(i.indexrelid),',' ORDER BY i.indexrelid::regclass::text)
     FROM pg_class c JOIN pg_index i ON i.indrelid=c.oid WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(@@TABLES@@) OR i.indexrelid=to_regclass('public.ux_magbuc_ev_decl'))),
    (SELECT string_agg(format('%s:%s:%s',c.relname,c.relowner,c.relacl),',' ORDER BY c.relname) FROM pg_class c
-    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%' OR c.relname LIKE 'izo\_aprobari\_%')),
+    WHERE c.relnamespace='public'::regnamespace AND c.relkind='S' AND (c.relname LIKE 'izo\_fronturi\_%' OR c.relname LIKE 'izo\_preverificari\_%' OR c.relname LIKE 'izo\_declaratii\_%' OR c.relname LIKE 'izo\_rezervari\_%' OR c.relname LIKE 'izo\_operatii\_%' OR c.relname LIKE 'izo\_sync\_incercari\_%' OR c.relname LIKE 'izo\_aprobari\_%' OR c.relname LIKE 'izo\_suduri\_%')),
    (SELECT concat_ws(':',rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconfig) FROM pg_roles WHERE rolname='izo_teren_editor'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',roleid,member,admin_option,inherit_option,set_option),',' ORDER BY roleid,member) FROM pg_auth_members WHERE roleid='izo_teren_editor'::regrole OR member='izo_teren_editor'::regrole)))
  $f$;

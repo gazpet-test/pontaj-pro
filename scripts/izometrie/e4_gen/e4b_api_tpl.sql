@@ -76,7 +76,7 @@ BEGIN
  SELECT jsonb_build_object('proiect_id',p_proiect,'tronson_id',p_tronson,
  'frunze',coalesce((SELECT jsonb_agg(to_jsonb(f)||jsonb_build_object('disponibila',NOT rezervata AND NOT fara_pv AND
   (stare='pe_tronson' AND tronson_id=p_tronson OR stare IN ('sosit','receptionat','retur') AND depozit_id IS NOT NULL)) ORDER BY f.id) FROM frunze f),'[]'::jsonb),
- 'suduri','[]'::jsonb,'numar_urmator',(SELECT CASE WHEN sens_numerotare='descrescator' THEN nr_sudura_start ELSE 1 END FROM public.izo_tronson_config WHERE tronson_id=p_tronson),
+ 'suduri',coalesce((SELECT jsonb_agg(to_jsonb(s)||jsonb_build_object('capete',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM public.izo_suduri_capete c WHERE c.sudura_id=s.id AND c.activ)) ORDER BY s.id) FROM public.izo_suduri s WHERE s.proiect_id=p_proiect AND s.tronson_id=p_tronson),'[]'::jsonb),'numar_urmator',(SELECT CASE WHEN cfg.sens_numerotare='descrescator' THEN nullif(greatest(coalesce((SELECT min(w.nr)-1 FROM public.izo_suduri w WHERE w.tronson_id=p_tronson AND w.stare<>'anulata'),cfg.nr_sudura_start),0),0) ELSE coalesce((SELECT max(w.nr)+1 FROM public.izo_suduri w WHERE w.tronson_id=p_tronson AND w.stare<>'anulata'),1) END FROM public.izo_tronson_config cfg WHERE cfg.tronson_id=p_tronson),
  'config',(SELECT to_jsonb(c) FROM public.izo_tronson_config c WHERE tronson_id=p_tronson),
  'praguri',(SELECT to_jsonb(c)-ARRAY['modificat_de','modificat_la'] FROM public.izo_proiect_config c WHERE proiect_id=p_proiect),
  'declaratii',coalesce((SELECT jsonb_agg(to_jsonb(d) ORDER BY d.id) FROM proprii d),'[]'::jsonb),
@@ -87,6 +87,8 @@ BEGIN
  'server_ver_max',greatest(coalesce((SELECT max(server_ver) FROM public.magazie_bucati WHERE proiect_id=p_proiect),0),
  coalesce((SELECT max(server_ver) FROM public.izo_declaratii WHERE proiect_id=p_proiect),0),
  coalesce((SELECT max(server_ver) FROM public.izo_rezervari WHERE proiect_id=p_proiect),0),
+ coalesce((SELECT max(server_ver) FROM public.izo_suduri WHERE proiect_id=p_proiect),0),
+ coalesce((SELECT max(c.server_ver) FROM public.izo_suduri_capete c JOIN public.izo_suduri w ON w.id=c.sudura_id WHERE w.proiect_id=p_proiect),0),
  coalesce((SELECT server_ver FROM public.izo_tronson_config WHERE tronson_id=p_tronson),0))) INTO v_doc;
  RETURN jsonb_build_object('snapshot_id',gen_random_uuid(),'checksum',encode(sha256(convert_to(v_doc::text,'UTF8')),'hex')) || v_doc;
 END $f$;
@@ -134,16 +136,17 @@ CREATE FUNCTION public.fn_izo_teren_payload(p_payload jsonb) RETURNS jsonb
 DECLARE v_p jsonb:=p_payload-'gps'; v_key text; v_allowed text[];
 BEGIN
  IF jsonb_typeof(v_p) IS DISTINCT FROM 'object' OR v_p-ARRAY['proiect_id','tronson_id','uid','preverificare_uid','versiune_baza','tip',
- 'zi','bucata','sursa','baza_mm','puncte_mm','copii','confirmare','capat_amonte','amonte','sudura','lungime_montata_mm',
+ 'zi','bucata','sursa','baza_mm','puncte_mm','copii','confirmare','capat_amonte','amonte','sudura','capat1','capat2','lungime_montata_mm',
  'depinde_de_uid','depinde_de_versiune','serie_bruta','sarja_declarata','perete_declarat','lungime_masurata_mm',
  'ultimele3_reconfirmate','km_propus_m','executant','poanson','data_montaj','randuri']<>'{}'::jsonb THEN
   RAISE EXCEPTION 'payload' USING ERRCODE='IZ001'; END IF;
  IF jsonb_path_exists(v_p,'$.**.gps') OR jsonb_path_exists(v_p,'$.**.lat') OR jsonb_path_exists(v_p,'$.**.lon') THEN
   RAISE EXCEPTION 'gps_nested' USING ERRCODE='IZ001'; END IF;
- FOREACH v_key IN ARRAY ARRAY['bucata','sursa','confirmare','amonte','sudura'] LOOP
+ FOREACH v_key IN ARRAY ARRAY['bucata','sursa','confirmare','amonte','sudura','capat1','capat2'] LOOP
   IF v_p ? v_key THEN
    v_allowed:=CASE v_key WHEN 'bucata' THEN ARRAY['bucata_id','decl_uid'] WHEN 'sursa' THEN ARRAY['bucata_id','decl_uid']
-    WHEN 'confirmare' THEN ARRAY['mod','cm','la','masurata_mm'] WHEN 'amonte' THEN ARRAY['tip','bucata_id','decl_uid','capat']
+    WHEN 'capat1' THEN ARRAY['bucata_id','decl_uid','capat'] WHEN 'capat2' THEN ARRAY['bucata_id','decl_uid','capat']
+     WHEN 'confirmare' THEN ARRAY['mod','cm','la','masurata_mm'] WHEN 'amonte' THEN ARRAY['tip','bucata_id','decl_uid','capat']
     ELSE ARRAY['nr','sufix'] END;
    IF jsonb_typeof(v_p->v_key)<>'object' OR (v_p->v_key)-v_allowed<>'{}'::jsonb THEN RAISE EXCEPTION 'payload_nested' USING ERRCODE='IZ001'; END IF;
   END IF;
@@ -184,13 +187,17 @@ BEGIN
   RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
  IF v_s.stare<>'deschisa' AND NOT (v_s.stare='trimisa' AND v_type='decl_salveaza') THEN RAISE EXCEPTION 'sesiune_stare' USING ERRCODE='IZ002'; END IF;
  IF v_type='sesiune_trimite' THEN
+  IF EXISTS(SELECT 1 FROM public.izo_suduri w JOIN public.izo_declaratii d ON d.id=w.declaratie_id
+   WHERE d.preverificare_id=v_s.id AND w.stare='declarata'
+    AND (SELECT count(*) FROM public.izo_suduri_capete c WHERE c.sudura_id=w.id AND c.activ)<>2) THEN
+   RAISE EXCEPTION 'r4' USING ERRCODE='IZ002'; END IF;
   IF EXISTS(SELECT 1 FROM public.izo_declaratii WHERE preverificare_id=v_s.id AND stare IN ('conflict','blocata','revizie_ceruta')) THEN
    RAISE EXCEPTION 'rand_blocant' USING ERRCODE='IZ002'; END IF;
   IF (SELECT coalesce(jsonb_agg(jsonb_build_object('uid',uid,'versiune',versiune) ORDER BY uid),'[]'::jsonb)
     FROM public.izo_declaratii WHERE preverificare_id=v_s.id AND stare='ciorna') IS DISTINCT FROM
    (SELECT coalesce(jsonb_agg(x ORDER BY x->>'uid'),'[]'::jsonb) FROM jsonb_array_elements(v_p->'randuri') x) THEN
    RAISE EXCEPTION 'cas' USING ERRCODE='IZ002'; END IF;
-  IF EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE preverificare_id=v_s.id AND stare='ciorna' AND identificare IS DISTINCT FROM 'nerezolvata'
+  IF EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE preverificare_id=v_s.id AND stare='ciorna' AND tip<>'cuplare' AND identificare IS DISTINCT FROM 'nerezolvata'
    AND NOT EXISTS(SELECT 1 FROM public.izo_rezervari r WHERE r.declaratie_id=d.id AND r.activa AND (r.expira_dupa IS NULL OR r.expira_dupa>now()))) THEN
    RAISE EXCEPTION 'rezervare_pierduta' USING ERRCODE='IZ002'; END IF;
   UPDATE public.izo_declaratii SET stare=CASE WHEN identificare='nerezolvata' THEN 'in_verificare' ELSE 'trimisa' END,
@@ -220,6 +227,8 @@ BEGIN
    WHERE uid IN (SELECT uid FROM deps) AND stare IN ('ciorna','conflict','trimisa','in_verificare','revizie_ceruta');
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=now(),motiv_eliberare=CASE WHEN v_type='decl_sterge' THEN 'stearsa' ELSE 'versiune_noua' END,
    server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND activa;
+  UPDATE public.izo_suduri_capete c SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE c.activ AND c.sudura_id IN (SELECT s.id FROM public.izo_suduri s WHERE s.declaratie_id=v_d.id AND s.stare='declarata');
+  UPDATE public.izo_suduri SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND stare='declarata';
   UPDATE public.izo_bucati_declarate SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND stare='declarata';
  END IF;
  IF v_type='decl_sterge' THEN
@@ -228,7 +237,7 @@ BEGIN
   INSERT INTO public.izo_declaratii_versiuni(declaratie_id,versiune,payload,hash_cerere,op_id) VALUES(v_d.id,v_d.versiune,v_p,p_hash,v_id);
   RETURN jsonb_build_object('cod','acceptat','uid',v_d.uid,'versiune',v_d.versiune,'stare',v_d.stare);
  END IF;
- IF v_p->>'tip' NOT IN ('montaj','taiere') OR v_p->>'tip' IS NULL THEN
+ IF v_p->>'tip' NOT IN ('montaj','taiere','cuplare') OR v_p->>'tip' IS NULL THEN
   RAISE EXCEPTION 'necesita_suduri_capete_E4b2' USING ERRCODE='IZ001'; END IF;
  IF v_p ? 'depinde_de_uid' THEN
   IF NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE uid=(v_p->>'depinde_de_uid')::uuid AND declarat_de=v_uid
@@ -243,6 +252,7 @@ BEGIN
  v_date:=coalesce((v_p->>'data_montaj')::date,(now() AT TIME ZONE 'Europe/Bucharest')::date);
  IF v_date>(now() AT TIME ZONE 'Europe/Bucharest')::date THEN RAISE EXCEPTION 'data_viitoare' USING ERRCODE='IZ001'; END IF;
  SELECT * INTO STRICT v_cfg FROM public.izo_proiect_config WHERE proiect_id=p_front.proiect_id;
+ IF v_p->>'tip'<>'cuplare' THEN
  v_ref:=CASE WHEN v_p->>'tip'='taiere' THEN v_p->'sursa' ELSE v_p->'bucata' END;
  v_source:=(v_ref->>'bucata_id')::bigint; v_decl:=(v_ref->>'decl_uid')::uuid;
  IF num_nonnulls(v_source,v_decl)>1 THEN RAISE EXCEPTION 'resursa' USING ERRCODE='IZ001'; END IF;
@@ -260,7 +270,7 @@ BEGIN
   SELECT * INTO v_b FROM public.magazie_bucati WHERE id=v_source;
   IF NOT FOUND OR v_b.proiect_id<>p_front.proiect_id OR v_b.tip_cod IS NULL THEN RAISE EXCEPTION 'bucata' USING ERRCODE='IZ001'; END IF;
   IF v_b.stare='carantina' THEN RAISE EXCEPTION 'carantina' USING ERRCODE='IZ001'; END IF;
-  IF NOT (v_b.stare='pe_tronson' AND v_b.tronson_id=p_front.tronson_id OR v_b.stare IN ('sosit','receptionat','retur') AND v_b.depozit_id IS NOT NULL) THEN
+  IF NOT (v_b.stare IN ('pe_tronson','montata') AND (v_b.stare<>'montata' OR v_p->>'tip'='taiere') AND v_b.tronson_id=p_front.tronson_id OR v_b.stare IN ('sosit','receptionat','retur') AND v_b.depozit_id IS NOT NULL) THEN
    RAISE EXCEPTION 'stare_bucata' USING ERRCODE='IZ002'; END IF;
   v_root:=coalesce(v_b.radacina_id,v_b.id); v_len:=v_b.lungime_mm;
   IF cardinality(public.fn_izo_pv_lipsa(ARRAY[v_root]))>0 THEN RAISE EXCEPTION 'fara_pv' USING ERRCODE='IZ001'; END IF;
@@ -281,8 +291,12 @@ BEGIN
  IF v_p#>>'{confirmare,mod}'='marcaj' AND (v_p#>>'{confirmare,cm}')::integer IS DISTINCT FROM (round(v_len::numeric/10)::integer % 100) THEN
   RAISE EXCEPTION 'confirmare_cm' USING ERRCODE='IZ001'; END IF;
  IF v_p->>'tip'='montaj' THEN
-  IF coalesce(v_p#>>'{amonte,tip}','inceput_lant')<>'inceput_lant' OR v_p ? 'sudura' THEN RAISE EXCEPTION 'necesita_suduri_capete_E4b2' USING ERRCODE='IZ001'; END IF;
-  IF (v_p->>'lungime_montata_mm')::integer IS NULL OR (v_p->>'lungime_montata_mm')::integer<>v_len THEN RAISE EXCEPTION 'montaj_lungime' USING ERRCODE='IZ001'; END IF;
+  IF v_p#>>'{confirmare,mod}' IN ('masurat','marcaj_diferit') AND abs(coalesce((v_p#>>'{confirmare,masurata_mm}')::integer,(v_p->>'lungime_masurata_mm')::integer,v_len)-v_len)>v_cfg.toleranta_mm
+   AND (v_source IS DISTINCT FROM v_root OR EXISTS(SELECT 1 FROM public.magazie_bucati b WHERE b.parinte_id=v_source)
+    OR EXISTS(SELECT 1 FROM public.izo_bucati_declarate c WHERE c.radacina_id=v_root AND c.declaratie_id IS DISTINCT FROM v_d.id AND c.stare<>'anulata')) THEN
+   v_state:='conflict'; v_conflict:='corectie_in_arbore'; END IF;
+  -- Sudura si cele doua capete se valideaza dupa identitatea declaratiei.
+  IF (v_p->>'lungime_montata_mm')::integer IS NULL OR (v_p->>'lungime_montata_mm')::integer<>(CASE WHEN v_p#>>'{confirmare,mod}' ='marcaj_diferit' OR v_p#>>'{confirmare,mod}'='masurat' AND abs(coalesce((v_p#>>'{confirmare,masurata_mm}')::integer,(v_p->>'lungime_masurata_mm')::integer,v_len)-v_len)>v_cfg.toleranta_mm THEN coalesce((v_p#>>'{confirmare,masurata_mm}')::integer,(v_p->>'lungime_masurata_mm')::integer) ELSE v_len END) THEN RAISE EXCEPTION 'montaj_lungime' USING ERRCODE='IZ001'; END IF;
  ELSE
   v_base:=(v_p->>'baza_mm')::integer;
   IF v_base IS NULL OR v_base<=0 OR v_base>v_cfg.lungime_max_mm THEN RAISE EXCEPTION 'baza' USING ERRCODE='IZ001'; END IF;
@@ -301,7 +315,7 @@ BEGIN
    IF v_len IS NULL OR v_len<=0 OR v_len IS DISTINCT FROM
     (CASE WHEN v_i=v_n THEN v_base ELSE v_points[v_i] END)-(CASE WHEN v_i=1 THEN 0 ELSE v_points[v_i-1] END) THEN RAISE EXCEPTION 'r3' USING ERRCODE='IZ001'; END IF;
    v_sum:=v_sum+v_len;
-   IF v_child->>'destinatie' NOT IN ('montaj','depozit') OR v_child->>'destinatie' IS NULL THEN RAISE EXCEPTION 'destinatie' USING ERRCODE='IZ001'; END IF;
+   IF v_child->>'destinatie' NOT IN ('montaj','ramane_montat','depozit') OR v_child->>'destinatie' IS NULL THEN RAISE EXCEPTION 'destinatie' USING ERRCODE='IZ001'; END IF;
    IF EXISTS(SELECT 1 FROM public.magazie_bucati WHERE uid=(v_child->>'uid')::uuid) OR EXISTS
     (SELECT 1 FROM public.izo_bucati_declarate WHERE uid=(v_child->>'uid')::uuid AND
      (declaratie_id IS DISTINCT FROM v_d.id OR radacina_id IS DISTINCT FROM v_root OR parinte_bucata_id IS DISTINCT FROM v_source OR parinte_decl_uid IS DISTINCT FROM v_decl)) THEN RAISE EXCEPTION 'uid_alt_arbore' USING ERRCODE='IZ002'; END IF;
@@ -316,6 +330,7 @@ BEGIN
   END LOOP;
   IF v_sum<>v_base THEN RAISE EXCEPTION 'r3' USING ERRCODE='IZ001'; END IF;
  END IF;
+ END IF; -- montaj / taiere; cuplarea rezerva capete, nu bucati
  IF v_s.stare='trimisa' AND v_state='ciorna' THEN
   v_state:=CASE WHEN v_ident='nerezolvata' THEN 'in_verificare' ELSE 'trimisa' END;
  END IF;
@@ -365,9 +380,16 @@ BEGIN
     capat_dreapta=CASE WHEN izo_bucati_declarate.lungime_mm=excluded.lungime_mm THEN izo_bucati_declarate.capat_dreapta ELSE excluded.capat_dreapta END,
     cod_bucata=CASE WHEN izo_bucati_declarate.lungime_mm=excluded.lungime_mm THEN izo_bucati_declarate.cod_bucata ELSE excluded.cod_bucata END,
     destinatie=excluded.destinatie,depozit_destinatie_id=excluded.depozit_destinatie_id,stare='declarata',server_ver=nextval('public.izo_server_ver_seq');
+   IF v_child->>'destinatie'='ramane_montat' THEN
+    INSERT INTO public.izo_rezervari(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_decl_uid,din_depozit,expira_dupa)
+    VALUES(p_front.proiect_id,p_front.tronson_id,v_d.id,v_d.versiune,v_uid,(v_child->>'uid')::uuid,false,
+     CASE WHEN v_s.stare='deschisa' THEN p_front.expira_la+interval '24 hours' END);
+   END IF;
    v_prev:=v_right;
   END LOOP;
  END IF;
+ PERFORM public.fn_izo_sudura_decl(v_d.id);
+ PERFORM public.fn_izo_taiere_ramura(v_d.id);
  -- A changed/disappeared child cannot keep its old consumer reservation.
  UPDATE public.izo_rezervari r SET activa=false,eliberata_la=now(),motiv_eliberare='parinte_anulat',
   server_ver=nextval('public.izo_server_ver_seq') WHERE r.activa AND r.bucata_decl_uid IN

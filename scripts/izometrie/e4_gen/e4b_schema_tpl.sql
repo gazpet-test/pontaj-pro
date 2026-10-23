@@ -141,3 +141,25 @@ END $f$;
 CREATE FUNCTION public.fn_izo_teren_imuabil() RETURNS trigger
  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 BEGIN RAISE EXCEPTION 'E4b jurnal/stergere imuabila' USING ERRCODE='42501'; END $f$;
+
+CREATE TABLE public.izo_suduri (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ proiect_id bigint NOT NULL REFERENCES public.executie_proiecte(id),
+ tronson_id bigint NOT NULL REFERENCES public.executie_tronsoane(id), nr integer NOT NULL CHECK(nr>0), sufix text NOT NULL DEFAULT '',
+ tip_sudura text NOT NULL CHECK(tip_sudura IN ('linie','cuplare','reparatie')),
+ stare text NOT NULL DEFAULT 'declarata' CHECK(stare IN ('declarata','aprobata','anulata')),
+ declaratie_id bigint NOT NULL REFERENCES public.izo_declaratii(id), executant text,poanson text,data_sudura date NOT NULL,
+ tranzitie_perete boolean NOT NULL DEFAULT false,tranzitie_confirmata_de uuid REFERENCES public.profiles(id),
+ tranzitie_confirmata_la timestamptz,tranzitie_confirmata_motiv text,
+ server_ver bigint NOT NULL DEFAULT nextval('public.izo_server_ver_seq'));
+CREATE UNIQUE INDEX ux_izo_sudura_cod ON public.izo_suduri(proiect_id,tronson_id,nr,sufix) WHERE stare<>'anulata';
+CREATE UNIQUE INDEX ux_izo_sudura_decl ON public.izo_suduri(declaratie_id) WHERE stare<>'anulata';
+CREATE TABLE public.izo_suduri_capete (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,sudura_id bigint NOT NULL REFERENCES public.izo_suduri(id),
+ parte text NOT NULL CHECK(parte IN ('amonte','aval')),bucata_id bigint REFERENCES public.magazie_bucati(id),
+ bucata_decl_uid uuid REFERENCES public.izo_bucati_declarate(uid),capat_litera text NOT NULL,
+ activ boolean NOT NULL DEFAULT true,de_la_eveniment_id bigint REFERENCES public.magazie_bucati_evenimente(id),
+ server_ver bigint NOT NULL DEFAULT nextval('public.izo_server_ver_seq'),CHECK(num_nonnulls(bucata_id,bucata_decl_uid)=1));
+CREATE UNIQUE INDEX ux_izo_capat_parte ON public.izo_suduri_capete(sudura_id,parte) WHERE activ;
+CREATE UNIQUE INDEX ux_izo_capat_bucata ON public.izo_suduri_capete(bucata_id,capat_litera) WHERE activ;
+CREATE UNIQUE INDEX ux_izo_capat_decl ON public.izo_suduri_capete(bucata_decl_uid,capat_litera) WHERE activ;

@@ -37,7 +37,7 @@ BEGIN
  @@CUT_REVOKE@@
  REVOKE USAGE ON SEQUENCE public.magazie_bucati_id_seq FROM izo_montaj_writer;
  REVOKE EXECUTE ON FUNCTION public.fn_izo_uid() FROM izo_montaj_writer;
- REVOKE UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute) ON public.magazie_bucati FROM izo_montaj_writer;
+ REVOKE UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute,lungime_mm,lungime_masurata_mm,lungime_m,lungime_originala_m) ON public.magazie_bucati FROM izo_montaj_writer;
  REVOKE ALL ON public.magazie_bucati_evenimente,public.magazie_bucati_miscari FROM izo_montaj_writer;
  REVOKE ALL ON SEQUENCE public.magazie_bucati_evenimente_id_seq,public.magazie_bucati_miscari_id_seq FROM izo_montaj_writer;
  DROP POLICY izo_montaj_evenimente_sel ON public.magazie_bucati_evenimente;

@@ -10,11 +10,11 @@ R, q, arr, block, src = (A[k] for k in ('R', 'q', 'arr', 'block', 'src'))
 baseline = (R / 'supabase/migrations/20261109a_izometrie_e4a_flux.sql').read_text(encoding='utf-8')
 tables = ['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii',
           'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii',
-          'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri','izo_aprobari']
+          'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri','izo_aprobari','izo_suduri','izo_suduri_capete']
 journals = ['izo_operatii', 'izo_declaratii_versiuni', 'izo_sync_incercari', 'izo_declaratii_gps','izo_aprobari']
 schema = (SP / 'e4b_schema_tpl.sql').read_text(encoding='utf-8').replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
 cut_cols = A['B']['C'] + ['id', 'uid', 'radacina_id', 'server_ver', 'created_at', 'updated_at']
-api = '\n'.join((SP / f).read_text(encoding='utf-8') for f in ('e4b_api_tpl.sql','e4b_aprobare_tpl.sql','e4b_simulare_tpl.sql')).replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
+api = '\n'.join((SP / f).read_text(encoding='utf-8') for f in ('e4b_api_tpl.sql','e4b_aprobare_tpl.sql','e4b_simulare_tpl.sql','e4b_suduri_tpl.sql')).replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
 api = api.replace('@@CUT_COLS@@', ','.join(cut_cols)).replace('@@CUT_VALUES@@', ','.join('v_child.'+c for c in cut_cols))
 security, implicit = [], list(A['B']['IMPL_POST'] + A['implicit'])
 for table in tables:
@@ -32,10 +32,12 @@ for table in tables:
         expr = 'auth.uid() IS NOT NULL AND public.fn_izo_citire(proiect_id)'
         if table == 'izo_dispozitive':
             expr = 'auth.uid() IS NOT NULL AND profile_id=auth.uid()'
+        if table == 'izo_suduri_capete':
+            expr = 'auth.uid() IS NOT NULL AND EXISTS(SELECT 1 FROM public.izo_suduri s WHERE s.id=izo_suduri_capete.sudura_id)'
         if table in ('izo_bucati_declarate', 'izo_declaratii_versiuni'):
             expr = f'auth.uid() IS NOT NULL AND EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.id={table}.declaratie_id)'
         security.append(f'CREATE POLICY {table}_api_sel ON public.{table} FOR SELECT TO authenticated USING ({expr});')
-        if table not in ('izo_bucati_declarate', 'izo_declaratii_versiuni', 'izo_dispozitive'):
+        if table not in ('izo_bucati_declarate', 'izo_declaratii_versiuni', 'izo_dispozitive','izo_suduri_capete'):
             implicit.append(f'policy|{table}_api_sel on public.{table}|public.fn_izo_citire(bigint)')
     if table != 'izo_rata_apeluri':
         for event, level in [('DELETE', 'ROW'), ('TRUNCATE', 'STATEMENT')]:
@@ -50,7 +52,7 @@ for table in tables:
 
 security += ['CREATE TRIGGER a0_izo_decl_ceas BEFORE UPDATE ON public.izo_declaratii FOR EACH ROW EXECUTE FUNCTION public.fn_izo_decl_ceas();',
              'ALTER TABLE public.izo_declaratii ENABLE ALWAYS TRIGGER a0_izo_decl_ceas;']
-for table in ('izo_fronturi','izo_preverificari','izo_declaratii','izo_rezervari','izo_operatii','izo_sync_incercari','izo_aprobari'):
+for table in ('izo_fronturi','izo_preverificari','izo_declaratii','izo_rezervari','izo_operatii','izo_sync_incercari','izo_aprobari','izo_suduri','izo_suduri_capete'):
     security.append(f'REVOKE ALL ON SEQUENCE public.{table}_id_seq FROM PUBLIC,anon,authenticated,service_role;')
 implicit.append('trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()')
 for table in ('magazie_bucati_evenimente','magazie_bucati_miscari'):
@@ -127,6 +129,13 @@ birou_acl += [
  'SET LOCAL ROLE izo_montaj_writer;',
  'GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_fapt(bigint) TO postgres;',
  'RESET ROLE;',
+ 'GRANT CREATE ON SCHEMA public TO izo_montaj_writer;',
+ 'ALTER FUNCTION public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer) OWNER TO izo_montaj_writer;',
+ 'REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;',
+ 'SET LOCAL ROLE izo_montaj_writer;',
+ 'GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer) TO postgres;',
+ 'RESET ROLE;',
+ 'GRANT EXECUTE ON FUNCTION public.fn_izo_capete_muta(bigint,bigint,bigint) TO izo_montaj_writer;',
  'GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,jsonb) TO izo_montaj_writer;',
 ]
 values = {
