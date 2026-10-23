@@ -116,14 +116,17 @@ try {
     GRANT USAGE ON ALL SEQUENCES IN SCHEMA teste TO authenticated;
     INSERT INTO teste.magazie_echipamente(denumire,categorie,este_eip,um,cantitate_total,stare)
       SELECT denumire,'eip',true,'buc',cantitate,'functional' FROM (VALUES
-      ('SARDEGNA',40),('bocanci s3 sudura',30),('salopeta clasica',40),('IGNIFUGA',30),('VESTA NEON',30),('casca protectie alba',20)) x(denumire,cantitate);
+      ('BOCANCI SARDEGNA S3 SRC',47),('bocanci s3 - sudura',24),('salopeta cu pieptar clasica',50),('SALOPETA IGNIFUGA',24),('VESTA NEON',40),('casca protectie alba',5)) x(denumire,cantitate);
+    INSERT INTO teste.magazie_echipamente(denumire,categorie,este_eip,um,cantitate_total,stare,activ) VALUES('bocanci','eip',true,'buc',1,'functional',false),('BOCANCI SARDEGNA S3 SRC','echipament',true,'buc',3,'functional',false);
     INSERT INTO teste.magazie_echipamente(denumire,categorie,um,cantitate_total,stare) VALUES('SCULA','echipament','buc',7,'functional');
   `)
   const baseline = await state(), policies = await acl()
   await o.command(migration)
   await test('migrare 6 randuri, 190 buc, mapare explicita, totaluri nemodificate', async () => {
     await invariant()
-    assert.equal(await o.value('(SELECT to_jsonb(sum(cantitate_total)) FROM teste.magazie_echipamente WHERE este_eip)'), 190)
+    assert.equal(await o.value('(SELECT to_jsonb(sum(cantitate_total)) FROM teste.magazie_echipamente WHERE este_eip AND activ)'), 190)
+    assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM teste.magazie_echipamente WHERE NOT activ AND articol_id IS NOT NULL)'), 0, 'randurile inactive raman neatinse')
+    assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM teste.eip_intrari i JOIN teste.magazie_echipamente e ON e.id=i.echipament_id WHERE NOT e.activ)'), 0, 'fara jurnal pentru randuri inactive')
     assert.deepEqual(await o.value(`(SELECT jsonb_agg(a.denumire ORDER BY e.id) FROM teste.magazie_echipamente e JOIN teste.eip_articole a ON a.id=e.articol_id)`),
       ['BOCANCI SARDEGNA S3 SRC','BOCANCI NEW WELDSTAR S3','SALOPETA CU PIEPTAR BBC','SALOPETA CU PIEPTAR IGNIFUGATA','VESTA NEON 386B-30R','CASCA INAP MASTER 2680'])
     assert.deepEqual((await state()).map(({ articol_id, marime, ...rest }) => rest), baseline)
@@ -225,10 +228,10 @@ try {
     await invariant()
   })
   await test('deriva legacy detectata; rollback cu istoric refuzat', async () => {
-    await a.command('UPDATE teste.magazie_echipamente SET cantitate_total=41 WHERE id=1;')
-    await denies(a, "PERFORM teste.fn_eip_corectie(1,40,'inventar')", 'eip_jurnal_divergent')
+    await a.command('UPDATE teste.magazie_echipamente SET cantitate_total=48 WHERE id=1;')
+    await denies(a, "PERFORM teste.fn_eip_corectie(1,47,'inventar')", 'eip_jurnal_divergent')
     await denies(a, `PERFORM ${call(articol, null, 1, 'deriva')}`, 'eip_jurnal_divergent')
-    await a.command('UPDATE teste.magazie_echipamente SET cantitate_total=40 WHERE id=1;'); await invariant()
+    await a.command('UPDATE teste.magazie_echipamente SET cantitate_total=47 WHERE id=1;'); await invariant()
     // Rollback contine BEGIN/COMMIT: verificam garda ca subtranzactie separat.
     const guard = rollback.match(/DO \$\$[\s\S]*?END \$\$;/)[0]
     await denies(o, guard, 'eip_rollback_refuzat_istoric')
