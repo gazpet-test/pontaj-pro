@@ -38,7 +38,8 @@ implicit = [
     'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()',
     'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()',
     'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()',
-    'trigger|a0_izo_flux_storage on storage.objects|public.fn_izo_flux_storage()',
+    'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)',
+    'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)',
 ]
 
 def inventory(xs):

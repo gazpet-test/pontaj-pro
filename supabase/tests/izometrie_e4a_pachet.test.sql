@@ -347,5 +347,39 @@ BEGIN
       RAISE EXCEPTION 'projection refusal changed approval'; END IF;
   END LOOP;
 END $projection$;
+-- 20261109a r2 (DRY pe prod: storage.objects e al supabase_storage_admin, deci fără trigger-e ale noastre acolo):
+-- PDF-ul aprobat al unui pachet în flux e imuabil prin politicile RESTRICTIVE izo_flux_pdf_imuabil_*; controlul
+-- (alt obiect din același bucket) rămâne modificabil. Stub-ul de acces permite tot, ca restricția să fie singura barieră.
+CREATE OR REPLACE FUNCTION public.fn_executie_pachete_acces(p_scriere boolean) RETURNS boolean LANGUAGE sql STABLE AS $s$ SELECT true $s$;
+INSERT INTO storage.buckets(id,name) VALUES('executie-pachete-pdf','executie-pachete-pdf') ON CONFLICT DO NOTHING;
+DO $pdf$
+DECLARE v_r jsonb;
+BEGIN
+  v_r:=public.fn_izo_pachet_aprobare_transgaz(9405,(SELECT updated_at FROM public.executie_pachete_lansare WHERE id=9405),'semnat.pdf');
+  IF v_r->>'cod' IS DISTINCT FROM 'incarca_pdf' THEN RAISE EXCEPTION 'pdf: cale lipsa %',v_r; END IF;
+  INSERT INTO storage.objects(bucket_id,name) VALUES('executie-pachete-pdf',v_r->>'fisier_path'),('executie-pachete-pdf','3/9401/control.pdf');
+  v_r:=public.fn_izo_pachet_aprobare_transgaz(9405,(SELECT updated_at FROM public.executie_pachete_lansare WHERE id=9405),'semnat.pdf');
+  IF v_r->>'cod' IS DISTINCT FROM 'aprobat' THEN RAISE EXCEPTION 'pdf: aprobare %',v_r; END IF;
+  PERFORM set_config('test.e4a_pdf',v_r->>'fisier_path',true);
+END $pdf$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+SET LOCAL ROLE authenticated;
+DO $pdf$
+DECLARE v_n integer; v_p text:=current_setting('test.e4a_pdf');
+BEGIN
+  UPDATE storage.objects SET owner=gen_random_uuid() WHERE bucket_id='executie-pachete-pdf' AND name=v_p;
+  GET DIAGNOSTICS v_n=ROW_COUNT; IF v_n<>0 THEN RAISE EXCEPTION 'pdf flux modificat din client'; END IF;
+  DELETE FROM storage.objects WHERE bucket_id='executie-pachete-pdf' AND name=v_p;
+  GET DIAGNOSTICS v_n=ROW_COUNT; IF v_n<>0 THEN RAISE EXCEPTION 'pdf flux sters din client'; END IF;
+  UPDATE storage.objects SET owner=gen_random_uuid() WHERE bucket_id='executie-pachete-pdf' AND name='3/9401/control.pdf';
+  GET DIAGNOSTICS v_n=ROW_COUNT; IF v_n<>1 THEN RAISE EXCEPTION 'pdf control blocat (restrictia prea larga)'; END IF;
+  DELETE FROM storage.objects WHERE bucket_id='executie-pachete-pdf' AND name='3/9401/control.pdf';
+  GET DIAGNOSTICS v_n=ROW_COUNT; IF v_n<>1 THEN RAISE EXCEPTION 'pdf control nesters'; END IF;
+END $pdf$;
+RESET ROLE;
+DO $pdf$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM storage.objects WHERE bucket_id='executie-pachete-pdf' AND name=current_setting('test.e4a_pdf')) THEN
+    RAISE EXCEPTION 'pdf flux disparut'; END IF;
+END $pdf$;
 ROLLBACK;
 SELECT 'E4A2_PACHET_END' AS marker;
