@@ -72,10 +72,12 @@ const test = (name, body) => tests.push([name, body])
 const one = (s, call) => s.value(`(SELECT to_jsonb(x) FROM ${call} x)`)
 const all = (s, call) => s.value(`(SELECT coalesce(jsonb_agg(x),'[]') FROM ${call} x)`)
 const row = id => o.value(`(SELECT to_jsonb(q) FROM public.ocr_local_cereri q WHERE id=${quote(id)})`)
+// SQL-ul inserat în DO nu are voie să se termine cu „;” + comentarii (ar rămâne o instrucțiune goală → eroare de sintaxă).
+const faraFinal = sql => sql.replace(/(?:\s+|--[^\n]*(?:\n|$))*$/, '').replace(/;\s*$/, '')
 async function denies(s, sql, message) {
   // Catch în subtranzacție: sesiunea rămâne utilizabilă, eroarea trebuie să fie cea așteptată.
   await s.command(`DO $test$ BEGIN BEGIN
-    ${sql}; RAISE EXCEPTION 'TEST_expected_refusal_missing';
+    ${faraFinal(sql)}; RAISE EXCEPTION 'TEST_expected_refusal_missing';
     EXCEPTION WHEN OTHERS THEN IF SQLERRM NOT LIKE ${quote('%' + message + '%')} THEN RAISE; END IF;
     END; END $test$;`)
 }
