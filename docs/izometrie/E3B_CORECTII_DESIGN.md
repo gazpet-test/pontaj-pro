@@ -36,6 +36,8 @@
 - cele 3352 de bucăți: 1884 `receptionat`, 1466 `pe_tronson`, 2 `carantina`, 0 `sosit`;
 - atribuirile active: 3 `gestionar`, 2 `inginer_izometrie`, 1 `manager_aprobator`.
 
+**Notă de implementare (22.10.2026):** migrarea se numește `20261106a_izometrie_e3b_corectii` (numele `20261104a` / `20261105a` au fost luate pe main de Ofertare / E9). Matricea Q-E3b-1 × Q-E3b-17 se implementează doar pe celula aleasă (Q1 = A, Q17 = A, Q14 = A, Q16 = A, #1823); celelalte celule din §6 / §7 / §9.18 nu se construiesc.
+
 ## 0. Ce face E3b (și ce nu)
 
 **Face (cele șase corecții din #1819):**
@@ -102,7 +104,7 @@ Cheia `tip` din exemplul r1 devine `tip_cod`, ca să nu se confunde cu `p_tip`. 
 - **Regula de cod:** niciun corp E3b nu numește cele patru funcții E2a, nici măcar în comentarii (`prosrc` include comentariile).
 - Testul 13 o dovedește.
 
-## 2. Schema nouă (migrarea `20261104a_izometrie_e3b_corectii`; 20261102a / 20261103b NU se modifică ca fișiere)
+## 2. Schema nouă (migrarea `20261106a_izometrie_e3b_corectii`; 20261102a / 20261103b NU se modifică ca fișiere)
 
 ### 2.1 `izo_corectii` — „documentul” fiecărei corecții
 
@@ -412,7 +414,7 @@ Revocările (modul, atribuire, `is_owner`) se comportă exact ca în E3 §3.4: a
   - `porti=` (E2a; acoperă automat toate funcțiile `fn_izo_*`, deci și pe cele E3b și cele înlocuite);
   - `porti_e3=` (se schimbă: privilegii pe coloane și politici noi pe tabelele pe care le inventariază);
   - `porti_e3b=`;
-  - amprenta de revenire E2a, cu valoarea de dinainte păstrată în comentariu (`inainte_20261104a=…`), ca la E3.
+  - amprenta de revenire E2a, cu valoarea de dinainte păstrată în comentariu (`inainte_20261106a=…`), ca la E3.
 - **Închiderea citirilor:** toate funcțiile E3b sunt `fn_izo_*`, deci în afara corpurilor scanate și în amprenta E2a (corp, owner, ACL, config). Nu apar view-uri. **DEFINER-ele care citesc registrul / documentele, complet (r3; r2 spunea, greșit, „doar `fn_izo_lant_blocant`”):**
   - intrările din §1 (owner `izo_cor_editor` / `izo_corectie_writer`, NOLOGIN): citesc doar după autorizarea pe proiect, iar ce întorc e filtrat pe proiectul autorizat (coliziunile, §5.6);
   - `fn_izo_cor_bucata_lock`, `fn_izo_cor_doc_lock` (owner `postgres`, EXECUTE doar `izo_cor_editor`): filtrate pe `p_proiect`, chemate doar din `fn_izo_cor_propune`;
@@ -699,7 +701,7 @@ Generatorul migrării primește cele două decizii ca parametri și produce exac
 
 Testele 9–10 și regresia (testul 14) sunt scrise pe ambele ramuri. Sub A, testele E2a / E3 care cer refuzul la „orice mișcare” se adaptează explicit, cu lista lor în PR (nu se șterg).
 
-## 7. Revenirea (`supabase/revenire/20261104a_izometrie_e3b_corectii_ROLLBACK.sql`; rulează ÎNAINTEA revenirii E3)
+## 7. Revenirea (`supabase/revenire/20261106a_izometrie_e3b_corectii_ROLLBACK.sql`; rulează ÎNAINTEA revenirii E3)
 
 - **Refuză dacă există ORICE fapt E3b:**
   - vreun rând în `izo_corectii` / `izo_corectii_bucati` / `izo_documente_istoric`;
@@ -710,7 +712,7 @@ Testele 9–10 și regresia (testul 14) sunt scrise pe ambele ramuri. Sub A, tes
 - **Fără fapte:**
   - scoate trigger-ele / politicile / funcțiile / tabelele / rolurile E3b, indexul `ux_magbuc_ev_corectie` și `magbuc_ev_e3b_motiv`;
   - reface CHECK-ul tipurilor (forma E3) și funcțiile înlocuite, din definițiile salvate, exact celula din matricea §6 (r4): setul comun (gărzile E3, `fn_izo_doc_garda`, `fn_izo_porti_lipsa`, `fn_izo_doc_salveaza`) + `fn_izo_import_storno` dacă Q-E3b-1 ∈ {A, C} **sau** Q-E3b-17 = A + `fn_izo_doc_anuleaza` / `fn_izo_garda_receptie` dacă Q-E3b-1 = A + `fn_izo_import_sold_initial` dacă Q-E3b-17 = A; scoate `fn_izo_lant_blocant` și, dacă există, `fn_izo_cor_deschise` (după ce funcțiile care le cheamă au fost restaurate);
-  - reface ștampilele `porti=` / `porti_e3=` și COMMENT-ul amprentei de revenire, cu valoarea păstrată după `inainte_20261104a=`;
+  - reface ștampilele `porti=` / `porti_e3=` și COMMENT-ul amprentei de revenire, cu valoarea păstrată după `inainte_20261106a=`;
   - verifică egalitatea cu starea dinainte de E3b.
 - **Criteriu obligatoriu de acceptare (r5; rezultatele vin la cod, §9 testul 18):** pe baza curată, lanțul E3b → revenire E3b → revenire E3 → revenire 2c → revenire E2a trebuie să treacă integral, pe fiecare celulă a matricei §6. Fără rezultatul lui atașat, PR-ul de cod nu intră la review și migrarea nu se aplică.
 
@@ -940,3 +942,14 @@ Butoanele de stare sunt dezactivate, cu explicație, pe bucățile unui document
   - **A** detalii doar din proiectele citite de apelant; în rest, 23505 generic, fără bucată / proiect / stare; `verifica` nu certifică disponibilitatea globală; oracolul „există undeva” rămâne, declarat (§10);
   - **B** detalii complete pentru orice coliziune, oricui poate scrie pe proiect (mai util la recepție, dar dezvăluie bucăți și proiecte inaccesibile);
   - **C** ca A, plus o verificare globală cu detalii doar pentru owner, într-un ecran separat.
+
+## 12. Diferențe de implementare acceptate (cod 22.10.2026, `izometrie/e3b`)
+
+Găsite de testele E4. Codul rămâne cum e; textul de mai sus se citește cu aceste precizări:
+- **F1 / document înaintea bucății:** citirea referinței documentului înainte de lock-ul bucății poate produce un refuz concurent inutil; comportament acceptat, apelantul reîncarcă și reîncearcă.
+- **F1 / `unique_violation`:** maparea generică la conflict de serie/combinație poate descrie imprecis o altă constrângere unică; comportament acceptat, fără schimbarea tratării excepției.
+- **§3.5 (IDENTITY):** `izo_corectii_bucati` nu are coloană `id`. Cheia ei e compusă (`corectie_id`, `bucata_id`), ca în §2.2; fraza despre IDENTITY nu se aplică acestui tabel.
+- **§3.4 / §3.5 (`fn_izo_cor_cerut_de_valid`):** primește EXECUTE și `izo_receptie_writer`, pe lângă `izo_corectie_writer`. Motivul: anularea administrativă E3 înlocuită (`fn_izo_doc_anuleaza`, Q-E3b-14 = A, owner `izo_receptie_writer`) validează `p_cerut_de` prin același helper.
+- **§3.5 (volatilitate):** `fn_izo_garda_corectie` e VOLATILE, nu STABLE. Funcțiile de trigger care validează scrieri rămân VOLATILE; restul helper-elor sunt STABLE, cum spune rândul comun.
+- **§5.1 / Q-E3b-18 = A:** la coliziunile de serie, mesajul cu detalii are forma „E3b: conflict de unicitate în registru: bucata N (proiectul P, stare S)”. Mesajul generic e cel din §5.1 („… pe un proiect la care nu ai acces”) și se folosește atât la pre-verificare, cât și la `unique_violation`.
+- **Testele (§9):** sunt în `supabase/tests/izometrie_e3b*.sql` și `scripts/test_izometrie_e3b.sh`: catalog, gărzi executate, proiecție, unicitate, stări, 32 + 1 curse cu barieră, autorizare, porți, drepturi, istoric, atomicitate, revenire pe fiecare fel de fapt, lanțul pe bază curată, regresiile E2a + E3 și diferențialul E3 peste E3b. Pe branch-ul PG17 rămân: timeout-urile efective, PostgREST real și copia LOT 2 (§9.2 r5, §9.15, §9.18).
