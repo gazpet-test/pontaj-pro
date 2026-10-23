@@ -6,6 +6,13 @@ DO $test$ BEGIN
  IF has_function_privilege('authenticated','public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text)','EXECUTE')
   OR has_function_privilege('anon','public.fn_izo_aproba(uuid,bigint,jsonb,text,jsonb)','EXECUTE')
   OR has_column_privilege('authenticated','public.izo_aprobari','hash_cerere','SELECT') THEN RAISE EXCEPTION 'private ACL'; END IF;
+ IF (SELECT p.proowner::regrole::text FROM pg_proc p WHERE p.oid='public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi)'::regprocedure AND p.pronamespace='public'::regnamespace)<>'izo_teren_editor'
+  OR (SELECT p.proowner::regrole::text FROM pg_proc p WHERE p.oid='public.fn_izo_aproba_intern(uuid,bigint,jsonb,text,jsonb)'::regprocedure AND p.pronamespace='public'::regnamespace)<>'izo_montaj_writer' THEN RAISE EXCEPTION '3 matrix owner'; END IF;
+ IF has_function_privilege('izo_teren_editor','public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text)','EXECUTE')
+  OR has_function_privilege('authenticated','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','EXECUTE')
+  OR has_column_privilege('izo_teren_editor','public.izo_suduri','tranzitie_confirmata_de','UPDATE')
+  OR has_table_privilege('izo_montaj_writer','public.izo_declaratii_gps','SELECT')
+  OR has_table_privilege('izo_montaj_writer','public.izo_declaratii_gps','INSERT') THEN RAISE EXCEPTION '3 matrix isolation'; END IF;
 END $test$;
 UPDATE public.profiles SET employee_id=121 WHERE id='00000000-0000-0000-0000-000000000121';
 -- Existing employee/profile pair; owner bypass only inside this rolled-back fixture.
@@ -423,6 +430,47 @@ BEGIN
   PERFORM public.fn_izo_lot_efecte(v_ids); RAISE EXCEPTION '2c single cap accepted';
  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'r4' THEN RAISE; END IF; END;
 END $test$;
+-- E4b-3: execute revision/resave on the real API, then roll back only this probe.
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $test$
+DECLARE v_d public.izo_declaratii; v_old bigint; v_r jsonb; v_key uuid:=gen_random_uuid(); v_seq bigint;
+BEGIN
+ SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE uid=current_setting('test.e4bc.d2')::uuid;
+ SELECT id INTO STRICT v_old FROM public.izo_suduri WHERE declaratie_id=v_d.id AND stare='declarata';
+ BEGIN
+  v_r:=public.fn_izo_revizie_cere(v_key,v_d.id,v_d.versiune,v_d.updated_at,'Reverificare capete');
+  IF v_r->>'cod'<>'revizie_ceruta' THEN RAISE EXCEPTION '3 revision refused %',v_r; END IF;
+  IF public.fn_izo_revizie_cere(v_key,v_d.id,v_d.versiune,v_d.updated_at,'Reverificare capete') IS DISTINCT FROM v_r THEN RAISE EXCEPTION '3 revision idempotency'; END IF;
+  BEGIN
+   v_r:=public.fn_izo_respinge(gen_random_uuid(),v_d.id,v_d.versiune,
+    (SELECT updated_at FROM public.izo_declaratii WHERE id=v_d.id),'Sudura respinsa dupa verificare','{}');
+   IF v_r->>'cod'<>'respinsa' OR EXISTS(SELECT 1 FROM public.izo_suduri_capete WHERE sudura_id=v_old AND activ)
+    OR (SELECT stare FROM public.izo_suduri WHERE id=v_old)<>'anulata' THEN RAISE EXCEPTION '3 rejection cap invalidation'; END IF;
+   RAISE EXCEPTION 'reject probe rollback' USING ERRCODE='IZ098';
+  EXCEPTION WHEN SQLSTATE 'IZ098' THEN NULL; END;
+  IF (SELECT count(*) FROM public.izo_suduri_capete WHERE sudura_id=v_old AND activ)<>2 THEN RAISE EXCEPTION '3 rejection rollback lost caps'; END IF;
+
+  PERFORM set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+  v_seq:=current_setting('test.e4bc.seq')::bigint+1;
+  v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b301',jsonb_build_array(jsonb_build_object(
+   'op_id',gen_random_uuid(),'seq',v_seq,'versiune_format',1,'tip_op','decl_salveaza','payload',v_d.payload||jsonb_build_object('versiune_baza',v_d.versiune))));
+  IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION '3 revision resave %',v_r; END IF;
+  IF (SELECT stare FROM public.izo_suduri WHERE id=v_old)<>'anulata'
+   OR EXISTS(SELECT 1 FROM public.izo_suduri_capete WHERE sudura_id=v_old AND activ)
+   OR (SELECT count(*) FROM public.izo_suduri_capete c JOIN public.izo_suduri s ON s.id=c.sudura_id
+    WHERE s.declaratie_id=v_d.id AND s.stare='declarata' AND c.activ)<>2 THEN RAISE EXCEPTION '3 revision cap invalidation'; END IF;
+  -- A stale edit must roll back its attempted invalidation, including caps.
+  v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b301',jsonb_build_array(jsonb_build_object(
+   'op_id',gen_random_uuid(),'seq',v_seq+1,'versiune_format',1,'tip_op','decl_salveaza','payload',v_d.payload||jsonb_build_object('versiune_baza',v_d.versiune))));
+  IF v_r#>>'{rezultate,0,cod}'<>'conflict' OR (SELECT count(*) FROM public.izo_suduri_capete c JOIN public.izo_suduri s ON s.id=c.sudura_id
+    WHERE s.declaratie_id=v_d.id AND s.stare='declarata' AND c.activ)<>2 THEN RAISE EXCEPTION '3 stale revision changed caps %',v_r; END IF;
+  RAISE EXCEPTION 'probe rollback' USING ERRCODE='IZ099';
+ EXCEPTION WHEN SQLSTATE 'IZ099' THEN NULL; END;
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
 SET SESSION AUTHORIZATION authenticator;
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
@@ -435,6 +483,15 @@ BEGIN
  v_preview:=public.fn_izo_aprobare_lot(v_s);
  v_r:=public.fn_izo_aproba(gen_random_uuid(),v_s,v_rows,v_preview->>'amprenta','{}');
  IF (SELECT count(*) FROM public.izo_suduri WHERE tronson_id=19 AND nr IN (501,502) AND stare='aprobata' AND tranzitie_perete)<>2 THEN RAISE EXCEPTION '2c mixed-session weld approval %',v_r; END IF;
+ -- Confirmed transition is naturally idempotent: actor, reason, time and version stay fixed.
+ PERFORM set_config('test.e4b3.w501',(SELECT id::text FROM public.izo_suduri WHERE nr=501 AND tronson_id=19 AND stare='aprobata'),true);
+ IF NOT EXISTS(SELECT 1 FROM public.v_izo_alerte WHERE sudura_id=current_setting('test.e4b3.w501')::bigint AND cod='izo_tranzitie_perete_neconfirmata') THEN RAISE EXCEPTION '3 missing wall alert'; END IF;
+ PERFORM public.fn_izo_tranzitie_confirma(current_setting('test.e4b3.w501')::bigint,'Conform proiect si WPS');
+ PERFORM set_config('test.e4b3.wall',(SELECT to_jsonb(s)::text FROM public.izo_suduri s WHERE id=current_setting('test.e4b3.w501')::bigint),true);
+ PERFORM public.fn_izo_tranzitie_confirma(current_setting('test.e4b3.w501')::bigint,'Alt motiv nu suprascrie');
+ IF (SELECT to_jsonb(s) FROM public.izo_suduri s WHERE id=current_setting('test.e4b3.w501')::bigint) IS DISTINCT FROM current_setting('test.e4b3.wall')::jsonb
+  OR EXISTS(SELECT 1 FROM public.v_izo_alerte WHERE sudura_id=current_setting('test.e4b3.w501')::bigint) THEN RAISE EXCEPTION '3 wall idempotency'; END IF;
+
 END $test$;
 SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
 DO $test$
@@ -545,6 +602,11 @@ BEGIN
  SELECT id INTO v_id FROM public.izo_declaratii WHERE uid=current_setting('test.e4bc.t2')::uuid;
  SELECT jsonb_agg(jsonb_build_object('declaratie_id',d.id,'versiune',d.versiune,'updated_at',d.updated_at)) INTO v_rows FROM public.izo_declaratii d WHERE d.preverificare_id=v_s;
  v_preview:=public.fn_izo_aprobare_lot(v_s); v_dec:=jsonb_build_object('corectie:'||v_id,'Marcaj verificat de MP');
+ IF NOT EXISTS(SELECT 1 FROM public.v_izo_alerte WHERE declaratie_id=v_id AND cod='izo_lungime_diferita_aviz' AND blocanta) THEN RAISE EXCEPTION '3 missing length alert'; END IF;
+ BEGIN
+  PERFORM public.fn_izo_fisa_verifica(v_id); RAISE EXCEPTION '3 length sheet accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'emitere_blocata:%' THEN RAISE; END IF; END;
+
  SELECT count(*) INTO v_n FROM public.magazie_bucati_evenimente;
  BEGIN
   PERFORM public.fn_izo_aproba(gen_random_uuid(),v_s,v_rows,v_preview->>'amprenta','{}'); RAISE EXCEPTION '2c missing MP decision accepted';
@@ -566,11 +628,38 @@ BEGIN
  END IF;
  IF EXISTS(SELECT 1 FROM public.izo_suduri_capete WHERE bucata_id=current_setting('test.e4bc.b2')::bigint AND activ)
   OR (SELECT count(*) FROM public.izo_suduri_capete c JOIN public.izo_suduri w ON w.id=c.sudura_id WHERE c.activ AND w.nr IN (501,502) AND w.tronson_id=19)<>4 THEN RAISE EXCEPTION '2c R4 transfer'; END IF;
+ IF EXISTS(SELECT 1 FROM public.v_izo_alerte WHERE declaratie_id=v_id AND cod='izo_lungime_diferita_aviz') OR NOT public.fn_izo_fisa_verifica(v_id) THEN RAISE EXCEPTION '3 decided length still blocks'; END IF;
  IF (SELECT lungime_mm FROM public.magazie_bucati WHERE id=current_setting('test.e4bc.b4')::bigint)<>12100
   OR (SELECT count(*) FROM public.magazie_bucati_evenimente WHERE document_tip='izo_declaratie' AND document_id=v_id::text AND tip IN ('corectie','taiere'))<>2 THEN RAISE EXCEPTION '2c correction before cut'; END IF;
 END $test$;
 RESET ROLE;
 RESET SESSION AUTHORIZATION;
 
+-- Direct writer DML without the exact projection is rejected, even from a local admin session.
+SET LOCAL ROLE izo_montaj_writer;
+DO $test$
+DECLARE v_id bigint; v_count bigint;
+BEGIN
+ SELECT id INTO STRICT v_id FROM public.izo_suduri_capete WHERE sudura_id=current_setting('test.e4b3.w501')::bigint AND activ ORDER BY id LIMIT 1;
+ BEGIN
+  UPDATE public.izo_suduri_capete SET activ=false WHERE id=v_id;
+  GET DIAGNOSTICS v_count=ROW_COUNT;
+  IF v_count<>1 THEN RAISE EXCEPTION '3 guard fixture missed row'; END IF;
+  RAISE EXCEPTION '3 unprojected cap accepted';
+ EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'suduri_proiectie' THEN RAISE; END IF; END;
+END $test$;
+RESET ROLE;
+SET LOCAL ROLE izo_teren_editor;
+DO $test$
+DECLARE v_count bigint;
+BEGIN
+ BEGIN
+  UPDATE public.izo_suduri SET stare='anulata' WHERE id=current_setting('test.e4b3.w501')::bigint;
+  GET DIAGNOSTICS v_count=ROW_COUNT;
+  IF v_count<>1 THEN RAISE EXCEPTION '3 terrain fixture missed row'; END IF;
+  RAISE EXCEPTION '3 terrain changed approved weld';
+ EXCEPTION WHEN insufficient_privilege THEN IF SQLERRM<>'suduri_proiectie' THEN RAISE; END IF; END;
+END $test$;
+RESET ROLE;
 ROLLBACK;
 SELECT 'E4B_APROBARE_TEST_END';

@@ -119,6 +119,15 @@ CREATE TABLE public.izo_aprobari (
 CREATE FUNCTION public.fn_izo_decl_ceas() RETURNS trigger
  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 BEGIN
+ IF current_user='izo_teren_editor' AND (OLD.declarat_de IS DISTINCT FROM public.fn_izo_uid()
+  OR NEW.stare IN ('aprobata','respinsa') OR NEW.stare='revizie_ceruta' AND NOT (OLD.stare='blocata' AND OLD.stare_inainte_blocare='revizie_ceruta')) THEN RAISE EXCEPTION 'teren_tranzitie' USING ERRCODE='42501'; END IF;
+ IF current_user='izo_montaj_writer' AND (NEW.bucata_id,NEW.identificare,NEW.payload) IS DISTINCT FROM (OLD.bucata_id,OLD.identificare,OLD.payload) THEN
+  IF OLD.stare<>'in_verificare' OR OLD.identificare IS DISTINCT FROM 'nerezolvata' OR NEW.stare NOT IN ('trimisa','conflict')
+   OR NEW.identificare IS DISTINCT FROM 'bucata' OR NEW.bucata_id IS NULL
+   OR NEW.payload IS DISTINCT FROM OLD.payload||jsonb_build_object('bucata',jsonb_build_object('bucata_id',NEW.bucata_id))
+   OR current_setting('izo.montaj_ctx',true) IS DISTINCT FROM concat_ws('|',txid_current(),'serie',OLD.id,OLD.proiect_id,OLD.tronson_id,NEW.versiune,NEW.bucata_id)
+   THEN RAISE EXCEPTION 'serie_context' USING ERRCODE='42501'; END IF;
+ END IF;
  IF OLD.stare IN ('aprobata','respinsa','stearsa') THEN RAISE EXCEPTION 'declaratie_finala' USING ERRCODE='42501'; END IF;
  IF (to_jsonb(OLD)-ARRAY['versiune','ultimul_op_id','stare','conflict_cod','stare_inainte_blocare','blocata_motiv',
    'identificare','bucata_id','bucata_decl_uid','sursa_bucata_id','sursa_decl_uid','depinde_de_uid','depinde_de_versiune',

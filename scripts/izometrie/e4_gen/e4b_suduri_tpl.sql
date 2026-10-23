@@ -11,12 +11,10 @@ BEGIN
   RETURN;
  END IF;
  IF v_d.tip NOT IN ('montaj','cuplare') OR (v_d.payload#>>'{sudura,nr}')::integer IS NULL
-  OR (v_d.payload#>>'{sudura,nr}')::integer<1 OR (coalesce(v_d.payload#>>'{sudura,sufix}','')<>'' AND NOT EXISTS(SELECT 1 FROM public.izo_proiect_config cfg WHERE cfg.proiect_id=v_d.proiect_id AND upper(v_d.payload#>>'{sudura,sufix}')=ANY(cfg.conventie_sufixe))) THEN
+  OR (v_d.payload#>>'{sudura,nr}')::integer<1 OR (coalesce(v_d.payload#>>'{sudura,sufix}','')<>'' AND NOT EXISTS(SELECT 1 FROM public.fn_izo_proiect_config_citeste(v_d.proiect_id) cfg WHERE cfg.proiect_id=v_d.proiect_id AND upper(v_d.payload#>>'{sudura,sufix}')=ANY(cfg.conventie_sufixe))) THEN
   RAISE EXCEPTION 'sudura_cod' USING ERRCODE='IZ001'; END IF;
- INSERT INTO public.izo_suduri(proiect_id,tronson_id,nr,sufix,tip_sudura,declaratie_id,executant,poanson,data_sudura)
- VALUES(v_d.proiect_id,v_d.tronson_id,(v_d.payload#>>'{sudura,nr}')::integer,upper(coalesce(v_d.payload#>>'{sudura,sufix}','')),
-  CASE WHEN v_d.tip='cuplare' THEN 'cuplare' ELSE 'linie' END,v_d.id,v_d.payload->>'executant',v_d.payload->>'poanson',v_d.data_montaj)
- RETURNING id INTO v_s;
+ v_s:=public.fn_izo_sudura_ins(v_d.id,(v_d.payload#>>'{sudura,nr}')::integer,upper(coalesce(v_d.payload#>>'{sudura,sufix}','')),
+  CASE WHEN v_d.tip='cuplare' THEN 'cuplare' ELSE 'linie' END,v_d.payload->>'executant',v_d.payload->>'poanson',v_d.data_montaj);
  FOREACH v_part IN ARRAY ARRAY['amonte','aval'] LOOP
   v_ref:=CASE WHEN v_d.tip='cuplare' THEN v_d.payload->CASE WHEN v_part='amonte' THEN 'capat1' ELSE 'capat2' END
    WHEN v_part='amonte' THEN v_d.payload->'amonte'
@@ -38,8 +36,7 @@ BEGIN
     OR v_b.stare NOT IN ('pe_tronson','montata') OR v_letter NOT IN (v_b.capat_stanga,v_b.capat_dreapta) THEN
     RAISE EXCEPTION 'r4' USING ERRCODE='IZ002'; END IF;
   END IF;
-  INSERT INTO public.izo_suduri_capete(sudura_id,parte,bucata_id,bucata_decl_uid,capat_litera)
-  VALUES(v_s,v_part,v_id,v_uid,v_letter);
+  PERFORM public.fn_izo_capat_ins(v_s,v_part,v_id,v_uid,v_letter,NULL);
  END LOOP;
  IF EXISTS(SELECT 1 FROM public.izo_suduri_capete a JOIN public.izo_suduri_capete b ON b.sudura_id=a.sudura_id AND b.parte<>a.parte
   WHERE a.sudura_id=v_s AND (a.bucata_id=b.bucata_id OR a.bucata_decl_uid=b.bucata_decl_uid)) THEN
@@ -49,7 +46,7 @@ END $f$;
 -- Declaration-time checks use committed outer endpoints. Approval repeats them
 -- on the virtual graph, including earlier cuts in the selected lot.
 CREATE FUNCTION public.fn_izo_taiere_ramura(p_decl bigint) RETURNS void
- LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_b public.magazie_bucati; v_n integer;
 BEGIN
  SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE id=p_decl;
@@ -76,19 +73,20 @@ END $f$;
 
 CREATE FUNCTION public.fn_izo_sudura_aproba(p_decl bigint) RETURNS void
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_s public.izo_suduri; v_n bigint;
+DECLARE v_s public.izo_suduri; v_n bigint; v_c record;
 BEGIN
  SELECT * INTO v_s FROM public.izo_suduri WHERE declaratie_id=p_decl AND stare='declarata';
  IF NOT FOUND THEN RETURN; END IF;
- UPDATE public.izo_suduri_capete c SET bucata_id=b.id,bucata_decl_uid=NULL,server_ver=nextval('public.izo_server_ver_seq')
- FROM public.magazie_bucati b WHERE c.sudura_id=v_s.id AND c.activ AND b.uid=c.bucata_decl_uid;
+ FOR v_c IN SELECT c.id,b.id AS bid FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.uid=c.bucata_decl_uid
+  WHERE c.sudura_id=v_s.id AND c.activ ORDER BY c.id LOOP
+  PERFORM public.fn_izo_capat_modifica(v_c.id,v_c.bid,NULL,true);
+ END LOOP;
  SELECT count(*) INTO v_n FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.id=c.bucata_id
  WHERE c.sudura_id=v_s.id AND c.activ AND b.stare='montata' AND b.tronson_id=v_s.tronson_id
  AND c.capat_litera IN (b.capat_stanga,b.capat_dreapta);
  IF v_n<>2 THEN RAISE EXCEPTION 'r4'; END IF;
- UPDATE public.izo_suduri SET stare='aprobata',tranzitie_perete=(SELECT count(DISTINCT b.perete_mm)>1
-  FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.id=c.bucata_id WHERE c.sudura_id=v_s.id AND c.activ),
-  server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_s.id;
+ PERFORM public.fn_izo_sudura_stare(v_s.id,'aprobata',(SELECT count(DISTINCT b.perete_mm)>1
+  FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.id=c.bucata_id WHERE c.sudura_id=v_s.id AND c.activ));
 END $f$;
 
 CREATE FUNCTION public.fn_izo_capete_muta(p_sursa bigint,p_copil bigint,p_ev bigint) RETURNS void
@@ -98,14 +96,13 @@ BEGIN
  SELECT * INTO STRICT v_c FROM public.magazie_bucati WHERE id=p_copil;
  FOR v_e IN SELECT * FROM public.izo_suduri_capete WHERE bucata_id=p_sursa AND activ
   AND capat_litera IN (v_c.capat_stanga,v_c.capat_dreapta) ORDER BY id LOOP
-  UPDATE public.izo_suduri_capete SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_e.id;
-  INSERT INTO public.izo_suduri_capete(sudura_id,parte,bucata_id,capat_litera,de_la_eveniment_id)
-  VALUES(v_e.sudura_id,v_e.parte,p_copil,v_e.capat_litera,p_ev);
+  PERFORM public.fn_izo_capat_modifica(v_e.id,v_e.bucata_id,v_e.bucata_decl_uid,false);
+  PERFORM public.fn_izo_capat_ins(v_e.sudura_id,v_e.parte,p_copil,NULL,v_e.capat_litera,p_ev);
  END LOOP;
 END $f$;
 
 CREATE FUNCTION public.fn_izo_corectie_mm(p_decl bigint) RETURNS integer
- LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_b public.magazie_bucati; v_mm integer; v_tol integer;
 BEGIN
  SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE id=p_decl;
@@ -114,7 +111,7 @@ BEGIN
   OR uid=coalesce(v_d.sursa_decl_uid,v_d.bucata_decl_uid);
  v_mm:=CASE WHEN v_d.tip='taiere' THEN (v_d.payload->>'baza_mm')::integer
   ELSE coalesce((v_d.payload#>>'{confirmare,masurata_mm}')::integer,(v_d.payload->>'lungime_masurata_mm')::integer) END;
- SELECT toleranta_mm INTO v_tol FROM public.izo_proiect_config WHERE proiect_id=v_d.proiect_id;
+ SELECT c.toleranta_mm INTO v_tol FROM public.fn_izo_proiect_config_citeste(v_d.proiect_id) c;
  IF v_mm IS NULL OR v_mm=v_b.lungime_mm THEN RETURN NULL; END IF;
  IF v_d.payload#>>'{confirmare,mod}' NOT IN ('marcaj_diferit','masurat') THEN RETURN NULL; END IF;
  IF v_d.payload#>>'{confirmare,mod}'='masurat' AND abs(v_mm-v_b.lungime_mm)<=v_tol THEN RETURN NULL; END IF;

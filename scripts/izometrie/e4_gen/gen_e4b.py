@@ -1,4 +1,5 @@
 """E4b-1 generator. Read-only E4a baseline; no database or network."""
+import json
 import hashlib
 import re
 import runpy
@@ -14,7 +15,7 @@ tables = ['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declarati
 journals = ['izo_operatii', 'izo_declaratii_versiuni', 'izo_sync_incercari', 'izo_declaratii_gps','izo_aprobari']
 schema = (SP / 'e4b_schema_tpl.sql').read_text(encoding='utf-8').replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
 cut_cols = A['B']['C'] + ['id', 'uid', 'radacina_id', 'server_ver', 'created_at', 'updated_at']
-api = '\n'.join((SP / f).read_text(encoding='utf-8') for f in ('e4b_api_tpl.sql','e4b_aprobare_tpl.sql','e4b_simulare_tpl.sql','e4b_suduri_tpl.sql')).replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
+api = '\n'.join((SP / f).read_text(encoding='utf-8') for f in ('e4b_api_tpl.sql','e4b_aprobare_tpl.sql','e4b_simulare_tpl.sql','e4b_suduri_tpl.sql','e4b_writer_tpl.sql','e4b_normalizare_tpl.sql','e4b_alerte_tpl.sql')).replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
 api = api.replace('@@CUT_COLS@@', ','.join(cut_cols)).replace('@@CUT_VALUES@@', ','.join('v_child.'+c for c in cut_cols))
 security, implicit = [], list(A['B']['IMPL_POST'] + A['implicit'])
 for table in tables:
@@ -138,7 +139,21 @@ birou_acl += [
  'GRANT EXECUTE ON FUNCTION public.fn_izo_capete_muta(bigint,bigint,bigint) TO izo_montaj_writer;',
  'GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,jsonb) TO izo_montaj_writer;',
 ]
+old_emitere = block(baseline,'fn_izo_flux_aprobare_admin')
+emitere_anchor = "    IF p_nume IS NULL OR p_nume !~"
+assert old_emitere.count(emitere_anchor)==1
+new_emitere = old_emitere.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1).replace(emitere_anchor,'''    PERFORM 1 FROM public.izo_suduri WHERE id IN (SELECT c.sudura_id FROM public.izo_suduri_capete c
+      JOIN public.magazie_bucati b ON b.id=c.bucata_id JOIN public.executie_tevi t ON t.id=b.executie_teava_id
+      WHERE t.pachet_id=p_pachet AND c.activ) ORDER BY id FOR SHARE;
+    IF cardinality(public.fn_izo_emitere_blocaje(ARRAY(SELECT b.id FROM public.magazie_bucati b JOIN public.executie_tevi t
+      ON t.id=b.executie_teava_id WHERE t.pachet_id=p_pachet)))>0 THEN RAISE EXCEPTION 'emitere_blocata'; END IF;
+'''+emitere_anchor)
+exec((SP/'e4b_security.py').read_text(encoding='utf8'))
+
 values = {
+    'EMITERE_NEW': new_emitere, 'EMITERE_OLD': old_emitere.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
+    'EMITERE_MD5': q(hashlib.md5(src(old_emitere).encode()).hexdigest()),
+    'MATRIX_ACL': '\n'.join(matrix_acl), 'MATRIX_ROLLBACK': '\n'.join(matrix_rollback),
     'SCHEMA': schema, 'API': api, 'SECURITY': '\n'.join(security),
     'GUARD_NEW': new_guard, 'GUARD_OLD': old_guard.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
     'GUARD_MD5': q(hashlib.md5(src(old_guard).encode()).hexdigest()),
@@ -171,4 +186,23 @@ if __name__ == '__main__':
     for tpl,dest in [('e4b_tpl.sql','supabase/migrations/20261109b_izometrie_e4b_teren.sql'),
                      ('e4b_rev_tpl.sql','supabase/revenire/20261109b_izometrie_e4b_teren_ROLLBACK.sql')]:
         (R/dest).write_text(render(tpl),encoding='utf-8',newline='\n')
+    vectors = json.loads((R/'src/lib/izoSudura.cazuri.json').read_text(encoding='utf8'))['cazuri']
+    sql_test = """-- GENERATED: shared izoSudura.cazuri.json vectors; local harness only.
+BEGIN;
+DO $test$
+DECLARE v_c jsonb; v_r jsonb; v_key text; v_value jsonb; v_actual jsonb;
+BEGIN
+ FOR v_c IN SELECT value FROM jsonb_array_elements($vectori$""" + json.dumps(vectors,ensure_ascii=False) + """$vectori$::jsonb) LOOP
+  v_r:=public.fn_izo_sudura_normalizeaza(v_c->>'in',v_c->'opt');
+  FOR v_key,v_value IN SELECT key,value FROM jsonb_each(v_c->'asteptat') LOOP
+   v_actual:=CASE WHEN v_key IN ('lot1','lot2') THEN to_jsonb((CASE WHEN v_key='lot1' THEN 'T' ELSE 'TR' END)||
+    (v_r->>'tronson')||'S'||(v_r->>'nr')||(v_r->>'sufix')) ELSE v_r->v_key END;
+   IF v_actual IS DISTINCT FROM v_value THEN RAISE EXCEPTION 'normalizare % %: % != %',v_c->>'in',v_key,v_actual,v_value; END IF;
+  END LOOP;
+ END LOOP;
+END $test$;
+ROLLBACK;
+SELECT 'E4B_NORMALIZARE_TEST_END';
+"""
+    (R/'supabase/tests/izometrie_e4b_normalizare.test.sql').write_text(sql_test,encoding='utf8',newline='\n')
     print('E4b generated:',len(tables),'tables;',len(signatures),'functions')

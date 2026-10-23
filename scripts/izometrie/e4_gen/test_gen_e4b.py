@@ -11,6 +11,46 @@ M = (R/'supabase/migrations/20261109b_izometrie_e4b_teren.sql').read_text(encodi
 V = (R/'supabase/revenire/20261109b_izometrie_e4b_teren_ROLLBACK.sql').read_text(encoding='utf-8')
 
 class E4bTests(unittest.TestCase):
+ def test_e4b3_matrix_owners_and_dependencies(self):
+  for names,role in [(G['teren_owned'],'izo_teren_editor'),(G['writer_owned'] | G['shared_invoker'],'izo_montaj_writer')]:
+   for name in names:
+    sig=next(s for s in G['signatures'] if s.startswith(name+'('))
+    self.assertIn('ALTER FUNCTION public.'+sig+' OWNER TO '+role+';',M)
+  teren=G['role_dependencies']['izo_teren_editor']
+  self.assertTrue({'fn_izo_config_blocheaza','fn_izo_teren_radacini_blocheaza'} <= teren)
+  self.assertFalse({'fn_izo_birou_fapt','fn_izo_corectie_fapt','fn_izo_taiere_fapt','fn_izo_montaj_marcheaza'} & teren)
+  for c in ['bucata_id','bucata_decl_uid','tranzitie_confirmata_de']:
+   self.assertNotIn(c,G['teren_upd']['izo_suduri_capete'])
+ def test_e4b3_projected_caps_and_stored_defaults(self):
+  guard=G['src'](G['block'](M,'fn_izo_suduri_garda'))
+  for check in ["v_ctx->'inainte'","v_ctx->'dupa'","txid_current()",'TG_TABLE_NAME']:
+   self.assertIn(check,guard)
+  for name in ['fn_izo_capat_modifica','fn_izo_sudura_stare','fn_izo_tranzitie_intern']:
+   body=G['src'](G['block'](M,name))
+   self.assertLess(body.index('fn_izo_suduri_marcheaza'),body.index('UPDATE public.'))
+   self.assertIn('ROW_COUNT',body)
+  self.assertIn("'server_ver',nextval('public.izo_server_ver_seq')",G['src'](G['block'](M,'fn_izo_capat_ins')))
+ def test_e4b3_alerts_emitere_and_exact_restore(self):
+  self.assertIn('CREATE VIEW public.v_izo_alerte WITH (security_invoker=on)',M)
+  self.assertIn('izo_lungime_diferita_aviz',M)
+  self.assertIn('fn_izo_emitere_blocaje',G['new_emitere'])
+  self.assertEqual(G['src'](G['block'](V,'fn_izo_flux_aprobare_admin')),G['src'](G['old_emitere']))
+  self.assertIn('e4b_execute_added',V)
+  for seq in ['izo_operatii','izo_aprobari','izo_suduri_capete']:
+   self.assertIn('public.'+seq+'_id_seq',G['new_e4_gate'])
+ def test_e4b3_exposed_bodies_and_scenarios(self):
+  for name in ['fn_izo_tranzitie_confirma','fn_izo_fisa_verifica','fn_izo_teren_praguri']:
+   self.assertNotRegex(G['src'](G['block'](M,name)).lower(),r'set_config|request[.]jwt|\bexecute\b')
+  tests=(R/'supabase/tests/izometrie_e4b_aprobare.test.sql').read_text(encoding='utf8')
+  for check in ['3 revision cap invalidation','3 stale revision changed caps','3 wall idempotency',
+                '3 missing length alert','3 unprojected cap accepted','3 terrain changed approved weld']:
+   self.assertIn(check,tests)
+  self.assertIn('izometrie_e4b_normalizare.test.sql',(R/'scripts/test_izometrie_e4b.sh').read_text(encoding='utf8'))
+ def test_e4b3_matrix_is_explicit_and_no_new_global_grants(self):
+  self.assertNotRegex(M,r'GRANT (?:INSERT|UPDATE) ON public\.izo_')
+  self.assertNotIn('USING (true)', '\n'.join(G['matrix_acl']))
+  self.assertNotRegex('\n'.join(G['matrix_acl']),r'GRANT ALL|ON ALL FUNCTIONS')
+  self.assertIn("'serie',OLD.id",G['src'](G['block'](M,'fn_izo_decl_ceas')))
  def test_generated_outputs(self):
   self.assertEqual(M,G['render']('e4b_tpl.sql'))
   self.assertEqual(V,G['render']('e4b_rev_tpl.sql'))

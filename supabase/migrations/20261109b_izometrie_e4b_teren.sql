@@ -74,6 +74,7 @@ BEGIN
   'e3b',obj_description('public.fn_izo_porti_e3b_definitii()'::regprocedure,'pg_proc'),
   'e4',obj_description('public.fn_izo_porti_e4_definitii()'::regprocedure,'pg_proc'));
  IF v_amprenta IS DISTINCT FROM substring(v_meta->>'evenimente' FROM 'amprenta=([0-9a-f]{32})') THEN RAISE EXCEPTION 'E4b baseline amprenta'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_aprobare_admin(bigint,timestamptz,text)'::regprocedure) IS DISTINCT FROM '1b6dbee69366499fd8679f2d27712fd8' THEN RAISE EXCEPTION 'E4b baseline emitere'; END IF;
  CREATE ROLE izo_teren_editor NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 GRANT izo_teren_editor TO postgres WITH INHERIT FALSE, SET TRUE;
 GRANT USAGE ON SCHEMA public TO izo_teren_editor;
@@ -195,6 +196,15 @@ CREATE TABLE public.izo_aprobari (
   CREATE FUNCTION public.fn_izo_decl_ceas() RETURNS trigger
  LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 BEGIN
+ IF current_user='izo_teren_editor' AND (OLD.declarat_de IS DISTINCT FROM public.fn_izo_uid()
+  OR NEW.stare IN ('aprobata','respinsa') OR NEW.stare='revizie_ceruta' AND NOT (OLD.stare='blocata' AND OLD.stare_inainte_blocare='revizie_ceruta')) THEN RAISE EXCEPTION 'teren_tranzitie' USING ERRCODE='42501'; END IF;
+ IF current_user='izo_montaj_writer' AND (NEW.bucata_id,NEW.identificare,NEW.payload) IS DISTINCT FROM (OLD.bucata_id,OLD.identificare,OLD.payload) THEN
+  IF OLD.stare<>'in_verificare' OR OLD.identificare IS DISTINCT FROM 'nerezolvata' OR NEW.stare NOT IN ('trimisa','conflict')
+   OR NEW.identificare IS DISTINCT FROM 'bucata' OR NEW.bucata_id IS NULL
+   OR NEW.payload IS DISTINCT FROM OLD.payload||jsonb_build_object('bucata',jsonb_build_object('bucata_id',NEW.bucata_id))
+   OR current_setting('izo.montaj_ctx',true) IS DISTINCT FROM concat_ws('|',txid_current(),'serie',OLD.id,OLD.proiect_id,OLD.tronson_id,NEW.versiune,NEW.bucata_id)
+   THEN RAISE EXCEPTION 'serie_context' USING ERRCODE='42501'; END IF;
+ END IF;
  IF OLD.stare IN ('aprobata','respinsa','stearsa') THEN RAISE EXCEPTION 'declaratie_finala' USING ERRCODE='42501'; END IF;
  IF (to_jsonb(OLD)-ARRAY['versiune','ultimul_op_id','stare','conflict_cod','stare_inainte_blocare','blocata_motiv',
    'identificare','bucata_id','bucata_decl_uid','sursa_bucata_id','sursa_decl_uid','depinde_de_uid','depinde_de_versiune',
@@ -496,10 +506,10 @@ BEGIN
   SELECT * INTO v_f FROM public.izo_fronturi WHERE tronson_id=p_tronson AND activ FOR UPDATE;
   IF v_f.profile_id<>public.fn_izo_uid() OR v_f.dispozitiv_id<>p_dispozitiv THEN RAISE EXCEPTION 'alt_dispozitiv' USING ERRCODE='IZ004'; END IF;
   IF public.fn_izo_teren_autorizat(p_proiect,true) IS NULL THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='IZ004'; END IF;
-  PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=p_tronson FOR SHARE;
+  PERFORM public.fn_izo_config_blocheaza(p_tronson);
   IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=p_tronson AND flux_montaj)
    OR coalesce(public.fn_izo_nivel(p_proiect),'off') NOT IN ('stoc','montaj') THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
-  PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=p_proiect AND id=radacina_id ORDER BY id FOR UPDATE;
+  PERFORM public.fn_izo_teren_radacini_blocheaza(p_proiect,false);
   UPDATE public.izo_fronturi SET expira_la=now()+interval '12 hours',server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_f.id;
    UPDATE public.izo_rezervari SET expira_dupa=now()+interval '36 hours',server_ver=nextval('public.izo_server_ver_seq')
    WHERE autor_profile_id=public.fn_izo_uid() AND tronson_id=p_tronson AND activa AND expira_dupa IS NOT NULL;
@@ -611,8 +621,7 @@ BEGIN
    WHERE uid IN (SELECT uid FROM deps) AND stare IN ('ciorna','conflict','trimisa','in_verificare','revizie_ceruta');
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=now(),motiv_eliberare=CASE WHEN v_type='decl_sterge' THEN 'stearsa' ELSE 'versiune_noua' END,
    server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND activa;
-  UPDATE public.izo_suduri_capete c SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE c.activ AND c.sudura_id IN (SELECT s.id FROM public.izo_suduri s WHERE s.declaratie_id=v_d.id AND s.stare='declarata');
-  UPDATE public.izo_suduri SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND stare='declarata';
+  PERFORM public.fn_izo_suduri_invalideaza(ARRAY[v_d.id]);
   UPDATE public.izo_bucati_declarate SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND stare='declarata';
  END IF;
  IF v_type='decl_sterge' THEN
@@ -635,7 +644,7 @@ BEGIN
  END IF;
  v_date:=coalesce((v_p->>'data_montaj')::date,(now() AT TIME ZONE 'Europe/Bucharest')::date);
  IF v_date>(now() AT TIME ZONE 'Europe/Bucharest')::date THEN RAISE EXCEPTION 'data_viitoare' USING ERRCODE='IZ001'; END IF;
- SELECT * INTO STRICT v_cfg FROM public.izo_proiect_config WHERE proiect_id=p_front.proiect_id;
+ SELECT * INTO STRICT v_cfg FROM public.fn_izo_proiect_config_citeste(p_front.proiect_id);
  IF v_p->>'tip'<>'cuplare' THEN
  v_ref:=CASE WHEN v_p->>'tip'='taiere' THEN v_p->'sursa' ELSE v_p->'bucata' END;
  v_source:=(v_ref->>'bucata_id')::bigint; v_decl:=(v_ref->>'decl_uid')::uuid;
@@ -862,13 +871,12 @@ BEGIN
  IF NOT EXISTS(SELECT 1 FROM public.izo_dispozitive WHERE dispozitiv_id=p_dispozitiv AND profile_id=v_uid) THEN RETURN jsonb_build_object('cod','fara_drept'); END IF;
  -- Conservative, fixed superset of the transitive closure: all this author's project rows.
  -- It also contains dependencies introduced by earlier operations in the same batch.
- PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=v_tr AND proiect_id=v_pr FOR SHARE;
+ PERFORM public.fn_izo_config_blocheaza(v_tr);
  PERFORM public.fn_izo_blocheaza_locuri(v_pr,ARRAY(SELECT DISTINCT depozit_id FROM public.magazie_bucati WHERE proiect_id=v_pr AND depozit_id IS NOT NULL ORDER BY depozit_id),ARRAY[v_tr]);
  IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_tr AND proiect_id=v_pr AND flux_montaj)
   OR coalesce(public.fn_izo_nivel(v_pr),'off') NOT IN ('stoc','montaj') THEN RETURN jsonb_build_object('cod','fara_drept'); END IF;
  -- No project advisory: roots serialize reservation races across fronts (§10.5).
- PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_pr AND tip_cod IS NOT NULL AND id=radacina_id ORDER BY id FOR UPDATE;
- PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_pr AND tip_cod IS NOT NULL ORDER BY id FOR UPDATE;
+ PERFORM public.fn_izo_teren_radacini_blocheaza(v_pr,true);
  SELECT ultimul_seq INTO v_last FROM public.izo_dispozitive WHERE dispozitiv_id=p_dispozitiv FOR UPDATE;
  IF (SELECT count(*) FROM public.izo_operatii WHERE autor_profile_id=v_uid AND ora_server>now()-interval '1 hour')+jsonb_array_length(p_ops)>600 THEN
   RETURN jsonb_build_object('cod','limita'); END IF;
@@ -1219,7 +1227,7 @@ BEGIN
   END IF;
   PERFORM public.fn_izo_sudura_aproba(v_d.id);
   UPDATE public.izo_declaratii SET stare='aprobata',aprobat_de=public.fn_izo_uid(),aprobat_de_angajat=v_emp,
-   decis_la=clock_timestamp(),eveniment_ids=CASE WHEN v_d.tip='cuplare' THEN '{}'::bigint[] ELSE CASE WHEN v_corr IS NULL THEN ARRAY[v_ev] ELSE ARRAY[v_ev,v_corr] END END,server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id;
+   decis_la=clock_timestamp(),decizie_motiv=coalesce(p_decizii->>('corectie:'||v_d.id),decizie_motiv),eveniment_ids=CASE WHEN v_d.tip='cuplare' THEN '{}'::bigint[] ELSE CASE WHEN v_corr IS NULL THEN ARRAY[v_ev] ELSE ARRAY[v_ev,v_corr] END END,server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id;
  END LOOP;
  IF EXISTS(SELECT 1 FROM public.izo_suduri w WHERE w.proiect_id=v_s.proiect_id AND w.stare='aprobata'
   AND (SELECT count(*) FROM public.izo_suduri_capete c WHERE c.sudura_id=w.id AND c.activ)<>2)
@@ -1343,7 +1351,7 @@ BEGIN
 END $f$;
 
   CREATE FUNCTION public.fn_izo_dependenti(p_decl bigint) RETURNS bigint[]
- LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
  WITH RECURSIVE deps AS (
   SELECT id,uid FROM public.izo_declaratii WHERE id=p_decl
   UNION
@@ -1417,8 +1425,7 @@ BEGIN
   END IF;
  END LOOP;
  IF NOT p_revizie THEN
-  UPDATE public.izo_suduri_capete c SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE c.activ AND c.sudura_id IN (SELECT s.id FROM public.izo_suduri s JOIN public.izo_declaratii d ON d.id=s.declaratie_id WHERE d.id=ANY(v_ids) AND d.stare='respinsa' AND s.stare='declarata');
-  UPDATE public.izo_suduri s SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE s.declaratie_id IN (SELECT d.id FROM public.izo_declaratii d WHERE d.id=ANY(v_ids) AND d.stare='respinsa') AND s.stare='declarata';
+  PERFORM public.fn_izo_suduri_invalideaza(ARRAY(SELECT d.id FROM public.izo_declaratii d WHERE d.id=ANY(v_ids) AND d.stare='respinsa'));
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=clock_timestamp(),motiv_eliberare=CASE WHEN declaratie_id=p_decl THEN 'respinsa' ELSE 'parinte_anulat' END,
    server_ver=nextval('public.izo_server_ver_seq') WHERE activa AND (declaratie_id=ANY(v_ids) OR bucata_decl_uid IN
     (SELECT uid FROM public.izo_bucati_declarate WHERE declaratie_id=ANY(v_ids)));
@@ -1491,7 +1498,7 @@ BEGIN
  IF v_s.stare<>'trimisa' OR v_d.stare<>'in_verificare' OR v_d.identificare IS DISTINCT FROM 'nerezolvata'
   OR v_d.versiune IS DISTINCT FROM p_versiune OR v_d.updated_at IS DISTINCT FROM p_updated_at THEN RAISE EXCEPTION 'cas'; END IF;
  PERFORM public.fn_izo_blocheaza_locuri(v_d.proiect_id,ARRAY[]::integer[],ARRAY[v_d.tronson_id]);
- PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=v_d.tronson_id FOR SHARE;
+ PERFORM public.fn_izo_config_blocheaza(v_d.tronson_id);
  IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_d.tronson_id AND flux_montaj)
   OR coalesce(public.fn_izo_nivel(v_d.proiect_id),'off')='off' THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
  PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_d.proiect_id AND id=radacina_id ORDER BY id FOR UPDATE;
@@ -1508,10 +1515,12 @@ BEGIN
  IF EXISTS(SELECT 1 FROM public.magazie_bucati b WHERE b.id<>v_b.id AND b.proiect_id=v_b.proiect_id AND b.stare NOT IN ('taiata','anulata')
   AND b.serie_canon=v_b.serie_canon AND b.sarja IS NOT DISTINCT FROM v_b.sarja AND b.lungime_cm=v_b.lungime_cm
   AND NOT EXISTS(SELECT 1 FROM public.magazie_bucati c WHERE c.parinte_id=b.id AND c.stare<>'anulata')) THEN v_conflict:='r1d'; END IF;
+ PERFORM public.fn_izo_montaj_marcheaza(concat_ws('|',txid_current(),'serie',v_d.id,v_d.proiect_id,v_d.tronson_id,v_d.versiune+1,v_b.id),NULL,NULL,NULL);
  UPDATE public.izo_declaratii SET bucata_id=v_b.id,identificare='bucata',stare=CASE WHEN v_conflict IS NULL THEN 'trimisa' ELSE 'conflict' END,
   conflict_cod=v_conflict,versiune=versiune+1,decis_la=clock_timestamp(),decizie_motiv=btrim(p_motiv),
   payload=payload||jsonb_build_object('bucata',jsonb_build_object('bucata_id',v_b.id)),
   server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id RETURNING * INTO v_d;
+ PERFORM public.fn_izo_montaj_marcheaza(NULL,NULL,NULL,NULL);
  INSERT INTO public.izo_declaratii_versiuni(declaratie_id,versiune,payload,hash_cerere,op_id)
  VALUES(v_d.id,v_d.versiune,v_d.payload,v_hash,p_cheie);
  INSERT INTO public.izo_rezervari(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,din_depozit)
@@ -1777,12 +1786,10 @@ BEGIN
   RETURN;
  END IF;
  IF v_d.tip NOT IN ('montaj','cuplare') OR (v_d.payload#>>'{sudura,nr}')::integer IS NULL
-  OR (v_d.payload#>>'{sudura,nr}')::integer<1 OR (coalesce(v_d.payload#>>'{sudura,sufix}','')<>'' AND NOT EXISTS(SELECT 1 FROM public.izo_proiect_config cfg WHERE cfg.proiect_id=v_d.proiect_id AND upper(v_d.payload#>>'{sudura,sufix}')=ANY(cfg.conventie_sufixe))) THEN
+  OR (v_d.payload#>>'{sudura,nr}')::integer<1 OR (coalesce(v_d.payload#>>'{sudura,sufix}','')<>'' AND NOT EXISTS(SELECT 1 FROM public.fn_izo_proiect_config_citeste(v_d.proiect_id) cfg WHERE cfg.proiect_id=v_d.proiect_id AND upper(v_d.payload#>>'{sudura,sufix}')=ANY(cfg.conventie_sufixe))) THEN
   RAISE EXCEPTION 'sudura_cod' USING ERRCODE='IZ001'; END IF;
- INSERT INTO public.izo_suduri(proiect_id,tronson_id,nr,sufix,tip_sudura,declaratie_id,executant,poanson,data_sudura)
- VALUES(v_d.proiect_id,v_d.tronson_id,(v_d.payload#>>'{sudura,nr}')::integer,upper(coalesce(v_d.payload#>>'{sudura,sufix}','')),
-  CASE WHEN v_d.tip='cuplare' THEN 'cuplare' ELSE 'linie' END,v_d.id,v_d.payload->>'executant',v_d.payload->>'poanson',v_d.data_montaj)
- RETURNING id INTO v_s;
+ v_s:=public.fn_izo_sudura_ins(v_d.id,(v_d.payload#>>'{sudura,nr}')::integer,upper(coalesce(v_d.payload#>>'{sudura,sufix}','')),
+  CASE WHEN v_d.tip='cuplare' THEN 'cuplare' ELSE 'linie' END,v_d.payload->>'executant',v_d.payload->>'poanson',v_d.data_montaj);
  FOREACH v_part IN ARRAY ARRAY['amonte','aval'] LOOP
   v_ref:=CASE WHEN v_d.tip='cuplare' THEN v_d.payload->CASE WHEN v_part='amonte' THEN 'capat1' ELSE 'capat2' END
    WHEN v_part='amonte' THEN v_d.payload->'amonte'
@@ -1804,8 +1811,7 @@ BEGIN
     OR v_b.stare NOT IN ('pe_tronson','montata') OR v_letter NOT IN (v_b.capat_stanga,v_b.capat_dreapta) THEN
     RAISE EXCEPTION 'r4' USING ERRCODE='IZ002'; END IF;
   END IF;
-  INSERT INTO public.izo_suduri_capete(sudura_id,parte,bucata_id,bucata_decl_uid,capat_litera)
-  VALUES(v_s,v_part,v_id,v_uid,v_letter);
+  PERFORM public.fn_izo_capat_ins(v_s,v_part,v_id,v_uid,v_letter,NULL);
  END LOOP;
  IF EXISTS(SELECT 1 FROM public.izo_suduri_capete a JOIN public.izo_suduri_capete b ON b.sudura_id=a.sudura_id AND b.parte<>a.parte
   WHERE a.sudura_id=v_s AND (a.bucata_id=b.bucata_id OR a.bucata_decl_uid=b.bucata_decl_uid)) THEN
@@ -1815,7 +1821,7 @@ END $f$;
 -- Declaration-time checks use committed outer endpoints. Approval repeats them
 -- on the virtual graph, including earlier cuts in the selected lot.
   CREATE FUNCTION public.fn_izo_taiere_ramura(p_decl bigint) RETURNS void
- LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_b public.magazie_bucati; v_n integer;
 BEGIN
  SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE id=p_decl;
@@ -1842,19 +1848,20 @@ END $f$;
 
   CREATE FUNCTION public.fn_izo_sudura_aproba(p_decl bigint) RETURNS void
  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
-DECLARE v_s public.izo_suduri; v_n bigint;
+DECLARE v_s public.izo_suduri; v_n bigint; v_c record;
 BEGIN
  SELECT * INTO v_s FROM public.izo_suduri WHERE declaratie_id=p_decl AND stare='declarata';
  IF NOT FOUND THEN RETURN; END IF;
- UPDATE public.izo_suduri_capete c SET bucata_id=b.id,bucata_decl_uid=NULL,server_ver=nextval('public.izo_server_ver_seq')
- FROM public.magazie_bucati b WHERE c.sudura_id=v_s.id AND c.activ AND b.uid=c.bucata_decl_uid;
+ FOR v_c IN SELECT c.id,b.id AS bid FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.uid=c.bucata_decl_uid
+  WHERE c.sudura_id=v_s.id AND c.activ ORDER BY c.id LOOP
+  PERFORM public.fn_izo_capat_modifica(v_c.id,v_c.bid,NULL,true);
+ END LOOP;
  SELECT count(*) INTO v_n FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.id=c.bucata_id
  WHERE c.sudura_id=v_s.id AND c.activ AND b.stare='montata' AND b.tronson_id=v_s.tronson_id
  AND c.capat_litera IN (b.capat_stanga,b.capat_dreapta);
  IF v_n<>2 THEN RAISE EXCEPTION 'r4'; END IF;
- UPDATE public.izo_suduri SET stare='aprobata',tranzitie_perete=(SELECT count(DISTINCT b.perete_mm)>1
-  FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.id=c.bucata_id WHERE c.sudura_id=v_s.id AND c.activ),
-  server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_s.id;
+ PERFORM public.fn_izo_sudura_stare(v_s.id,'aprobata',(SELECT count(DISTINCT b.perete_mm)>1
+  FROM public.izo_suduri_capete c JOIN public.magazie_bucati b ON b.id=c.bucata_id WHERE c.sudura_id=v_s.id AND c.activ));
 END $f$;
 
   CREATE FUNCTION public.fn_izo_capete_muta(p_sursa bigint,p_copil bigint,p_ev bigint) RETURNS void
@@ -1864,14 +1871,13 @@ BEGIN
  SELECT * INTO STRICT v_c FROM public.magazie_bucati WHERE id=p_copil;
  FOR v_e IN SELECT * FROM public.izo_suduri_capete WHERE bucata_id=p_sursa AND activ
   AND capat_litera IN (v_c.capat_stanga,v_c.capat_dreapta) ORDER BY id LOOP
-  UPDATE public.izo_suduri_capete SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_e.id;
-  INSERT INTO public.izo_suduri_capete(sudura_id,parte,bucata_id,capat_litera,de_la_eveniment_id)
-  VALUES(v_e.sudura_id,v_e.parte,p_copil,v_e.capat_litera,p_ev);
+  PERFORM public.fn_izo_capat_modifica(v_e.id,v_e.bucata_id,v_e.bucata_decl_uid,false);
+  PERFORM public.fn_izo_capat_ins(v_e.sudura_id,v_e.parte,p_copil,NULL,v_e.capat_litera,p_ev);
  END LOOP;
 END $f$;
 
   CREATE FUNCTION public.fn_izo_corectie_mm(p_decl bigint) RETURNS integer
- LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
 DECLARE v_d public.izo_declaratii; v_b public.magazie_bucati; v_mm integer; v_tol integer;
 BEGIN
  SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE id=p_decl;
@@ -1880,7 +1886,7 @@ BEGIN
   OR uid=coalesce(v_d.sursa_decl_uid,v_d.bucata_decl_uid);
  v_mm:=CASE WHEN v_d.tip='taiere' THEN (v_d.payload->>'baza_mm')::integer
   ELSE coalesce((v_d.payload#>>'{confirmare,masurata_mm}')::integer,(v_d.payload->>'lungime_masurata_mm')::integer) END;
- SELECT toleranta_mm INTO v_tol FROM public.izo_proiect_config WHERE proiect_id=v_d.proiect_id;
+ SELECT c.toleranta_mm INTO v_tol FROM public.fn_izo_proiect_config_citeste(v_d.proiect_id) c;
  IF v_mm IS NULL OR v_mm=v_b.lungime_mm THEN RETURN NULL; END IF;
  IF v_d.payload#>>'{confirmare,mod}' NOT IN ('marcaj_diferit','masurat') THEN RETURN NULL; END IF;
  IF v_d.payload#>>'{confirmare,mod}'='masurat' AND abs(v_mm-v_b.lungime_mm)<=v_tol THEN RETURN NULL; END IF;
@@ -1931,6 +1937,243 @@ BEGIN
   v_m.lungime_mm,v_m.inainte,v_m.dupa,v_m.server_ver);
  PERFORM public.fn_izo_montaj_marcheaza(NULL,NULL,NULL,NULL);
  RETURN v_ev.id;
+END $f$;
+
+-- E4b-3: only lock/read helpers retain postgres ownership.
+-- Privileged postgres DEFINER boundaries, deliberately not API write routes:
+-- teren_autorizat / autor_valabil / birou_autorizat lock profiles/access/assignments;
+-- teren_entra validates identity/schema/gates and writes only the private rate counter;
+-- birou_intrare validates identity/schema/gates, with no business writes;
+-- config_blocheaza / teren_radacini_blocheaza lock tables with no caller UPDATE;
+-- pv_lipsa reads E3 evidence; gps_citeste is the sole authorized GPS reader;
+-- teren_snapshot / birou_preview / proiect_config_citeste / teren_praguri read
+-- config and related evidence without table grants to API/business writer roles;
+-- emitere_blocaje / fisa_verifica read evidence; fisa_verifica checks project access.
+-- INVOKER guards/pure helpers do not acquire their postgres owner's privileges.
+  CREATE FUNCTION public.fn_izo_config_blocheaza(p_tronson bigint) RETURNS void
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=p_tronson FOR SHARE; END $f$;
+  CREATE FUNCTION public.fn_izo_teren_radacini_blocheaza(p_proiect bigint,p_toate boolean) RETURNS void
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+BEGIN
+ PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=p_proiect AND id=radacina_id ORDER BY id FOR UPDATE;
+ IF p_toate THEN PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=p_proiect ORDER BY id FOR UPDATE; END IF;
+END $f$;
+  CREATE FUNCTION public.fn_izo_proiect_config_citeste(p_proiect bigint) RETURNS public.izo_proiect_config
+ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT c FROM public.izo_proiect_config c WHERE c.proiect_id=p_proiect
+$f$;
+
+-- Invoker: marker records the actual writer, and the trigger checks the exact image.
+-- These helpers have no API EXECUTE privilege. Neither role is available to the API.
+  CREATE FUNCTION public.fn_izo_suduri_marcheaza(p_tabel text,p_inainte jsonb,p_dupa jsonb) RETURNS void
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+BEGIN
+ IF current_user NOT IN ('izo_teren_editor','izo_montaj_writer') THEN RAISE EXCEPTION 'scriitor_invalid' USING ERRCODE='42501'; END IF;
+ PERFORM set_config('izo.suduri_proiectie',jsonb_build_object('tx',txid_current(),'rol',current_user,
+  'tabel',p_tabel,'inainte',p_inainte,'dupa',p_dupa)::text,true);
+END $f$;
+  CREATE FUNCTION public.fn_izo_suduri_garda() RETURNS trigger
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+DECLARE v_ctx jsonb:=nullif(current_setting('izo.suduri_proiectie',true),'')::jsonb; v_old jsonb; v_new jsonb;
+BEGIN
+ -- Administrative fixtures/repairs still pass table constraints and immutable journals.
+ IF current_user='postgres' AND session_user='postgres' THEN RETURN NEW; END IF;
+ IF TG_OP='UPDATE' THEN v_old:=to_jsonb(OLD); END IF;
+ v_new:=to_jsonb(NEW);
+ IF TG_OP='INSERT' THEN v_new:=v_new-'id'; END IF;
+ IF current_user NOT IN ('izo_teren_editor','izo_montaj_writer') OR v_ctx IS NULL
+  OR v_ctx->>'tx' IS DISTINCT FROM txid_current()::text OR v_ctx->>'rol' IS DISTINCT FROM current_user
+  OR v_ctx->>'tabel' IS DISTINCT FROM TG_TABLE_NAME OR v_ctx->'inainte' IS DISTINCT FROM coalesce(v_old,'null'::jsonb)
+  OR v_ctx->'dupa' IS DISTINCT FROM v_new THEN RAISE EXCEPTION 'suduri_proiectie' USING ERRCODE='42501'; END IF;
+ RETURN NEW;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_sudura_ins(p_decl bigint,p_nr integer,p_sufix text,p_tip text,p_executant text,p_poanson text,p_data date) RETURNS bigint
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+DECLARE v_d public.izo_declaratii; v_s public.izo_suduri;
+BEGIN
+ IF current_user<>'izo_teren_editor' THEN RAISE EXCEPTION 'scriitor_invalid' USING ERRCODE='42501'; END IF;
+ SELECT * INTO STRICT v_d FROM public.izo_declaratii WHERE id=p_decl;
+ v_s:=jsonb_populate_record(NULL::public.izo_suduri,jsonb_build_object('proiect_id',v_d.proiect_id,'tronson_id',v_d.tronson_id,
+  'nr',p_nr,'sufix',p_sufix,'tip_sudura',p_tip,'stare','declarata','declaratie_id',p_decl,'executant',p_executant,
+  'poanson',p_poanson,'data_sudura',p_data,'tranzitie_perete',false,'server_ver',nextval('public.izo_server_ver_seq')));
+ PERFORM public.fn_izo_suduri_marcheaza('izo_suduri',NULL,to_jsonb(v_s)-'id');
+ INSERT INTO public.izo_suduri(proiect_id,tronson_id,nr,sufix,tip_sudura,stare,declaratie_id,executant,poanson,data_sudura,server_ver)
+ VALUES(v_s.proiect_id,v_s.tronson_id,v_s.nr,v_s.sufix,v_s.tip_sudura,v_s.stare,v_s.declaratie_id,v_s.executant,v_s.poanson,v_s.data_sudura,v_s.server_ver) RETURNING id INTO v_s.id;
+ PERFORM public.fn_izo_suduri_marcheaza(NULL,NULL,NULL);
+ RETURN v_s.id;
+END $f$;
+  CREATE FUNCTION public.fn_izo_capat_ins(p_sudura bigint,p_parte text,p_bucata bigint,p_uid uuid,p_litera text,p_ev bigint) RETURNS void
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+DECLARE v_c public.izo_suduri_capete; v_s public.izo_suduri;
+BEGIN
+ SELECT * INTO STRICT v_s FROM public.izo_suduri WHERE id=p_sudura;
+ IF current_user='izo_teren_editor' AND (v_s.stare<>'declarata' OR p_ev IS NOT NULL) THEN RAISE EXCEPTION 'sudura_finala' USING ERRCODE='42501'; END IF;
+ v_c:=jsonb_populate_record(NULL::public.izo_suduri_capete,jsonb_build_object('sudura_id',p_sudura,'parte',p_parte,
+  'bucata_id',p_bucata,'bucata_decl_uid',p_uid,'capat_litera',p_litera,'activ',true,'de_la_eveniment_id',p_ev,'server_ver',nextval('public.izo_server_ver_seq')));
+ PERFORM public.fn_izo_suduri_marcheaza('izo_suduri_capete',NULL,to_jsonb(v_c)-'id');
+ INSERT INTO public.izo_suduri_capete(sudura_id,parte,bucata_id,bucata_decl_uid,capat_litera,activ,de_la_eveniment_id,server_ver)
+ VALUES(v_c.sudura_id,v_c.parte,v_c.bucata_id,v_c.bucata_decl_uid,v_c.capat_litera,v_c.activ,v_c.de_la_eveniment_id,v_c.server_ver);
+ PERFORM public.fn_izo_suduri_marcheaza(NULL,NULL,NULL);
+END $f$;
+  CREATE FUNCTION public.fn_izo_capat_modifica(p_id bigint,p_bucata bigint,p_uid uuid,p_activ boolean) RETURNS void
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+DECLARE v_c public.izo_suduri_capete; v_n public.izo_suduri_capete; v_stare text; v_count bigint;
+BEGIN
+ SELECT * INTO STRICT v_c FROM public.izo_suduri_capete WHERE id=p_id FOR UPDATE;
+ SELECT stare INTO STRICT v_stare FROM public.izo_suduri WHERE id=v_c.sudura_id;
+ v_n:=v_c; v_n.bucata_id:=p_bucata; v_n.bucata_decl_uid:=p_uid; v_n.activ:=p_activ; v_n.server_ver:=nextval('public.izo_server_ver_seq');
+ IF NOT v_c.activ OR p_activ AND (current_user<>'izo_montaj_writer' OR v_c.bucata_decl_uid IS NULL
+   OR p_uid IS NOT NULL OR NOT EXISTS(SELECT 1 FROM public.magazie_bucati WHERE id=p_bucata AND uid=v_c.bucata_decl_uid))
+  OR current_user='izo_teren_editor' AND (v_stare<>'declarata' OR p_bucata IS DISTINCT FROM v_c.bucata_id OR p_uid IS DISTINCT FROM v_c.bucata_decl_uid)
+ THEN RAISE EXCEPTION 'capat_tranzitie' USING ERRCODE='42501'; END IF;
+ PERFORM public.fn_izo_suduri_marcheaza('izo_suduri_capete',to_jsonb(v_c),to_jsonb(v_n));
+ IF current_user='izo_teren_editor' THEN
+  UPDATE public.izo_suduri_capete SET activ=v_n.activ,server_ver=v_n.server_ver WHERE id=p_id;
+ ELSE
+  UPDATE public.izo_suduri_capete SET bucata_id=v_n.bucata_id,bucata_decl_uid=v_n.bucata_decl_uid,activ=v_n.activ,server_ver=v_n.server_ver WHERE id=p_id;
+ END IF;
+ GET DIAGNOSTICS v_count=ROW_COUNT; IF v_count<>1 THEN RAISE EXCEPTION 'capat_schimbat'; END IF;
+ PERFORM public.fn_izo_suduri_marcheaza(NULL,NULL,NULL);
+END $f$;
+  CREATE FUNCTION public.fn_izo_sudura_stare(p_id bigint,p_stare text,p_tranzitie boolean) RETURNS void
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+DECLARE v_s public.izo_suduri; v_n public.izo_suduri; v_count bigint;
+BEGIN
+ SELECT * INTO STRICT v_s FROM public.izo_suduri WHERE id=p_id FOR UPDATE;
+ IF v_s.stare<>'declarata' OR p_stare NOT IN ('aprobata','anulata') OR p_stare IS NULL
+  OR current_user='izo_teren_editor' AND p_stare<>'anulata' THEN RAISE EXCEPTION 'sudura_finala' USING ERRCODE='42501'; END IF;
+ v_n:=v_s; v_n.stare:=p_stare; v_n.server_ver:=nextval('public.izo_server_ver_seq');
+ IF p_stare='aprobata' THEN v_n.tranzitie_perete:=p_tranzitie; END IF;
+ PERFORM public.fn_izo_suduri_marcheaza('izo_suduri',to_jsonb(v_s),to_jsonb(v_n));
+ IF p_stare='anulata' THEN UPDATE public.izo_suduri SET stare=v_n.stare,server_ver=v_n.server_ver WHERE id=p_id;
+ ELSE UPDATE public.izo_suduri SET stare=v_n.stare,tranzitie_perete=v_n.tranzitie_perete,server_ver=v_n.server_ver WHERE id=p_id; END IF;
+ GET DIAGNOSTICS v_count=ROW_COUNT; IF v_count<>1 THEN RAISE EXCEPTION 'sudura_schimbata'; END IF;
+ PERFORM public.fn_izo_suduri_marcheaza(NULL,NULL,NULL);
+END $f$;
+  CREATE FUNCTION public.fn_izo_suduri_invalideaza(p_declaratii bigint[]) RETURNS void
+ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+DECLARE v_s public.izo_suduri; v_c public.izo_suduri_capete;
+BEGIN
+ FOR v_s IN SELECT * FROM public.izo_suduri WHERE declaratie_id=ANY(p_declaratii) AND stare='declarata' ORDER BY id LOOP
+  FOR v_c IN SELECT * FROM public.izo_suduri_capete WHERE sudura_id=v_s.id AND activ ORDER BY id LOOP
+   PERFORM public.fn_izo_capat_modifica(v_c.id,v_c.bucata_id,v_c.bucata_decl_uid,false);
+  END LOOP;
+  PERFORM public.fn_izo_sudura_stare(v_s.id,'anulata',NULL);
+ END LOOP;
+END $f$;
+
+  CREATE FUNCTION public.fn_izo_tranzitie_intern(p_sudura bigint,p_motiv text) RETURNS jsonb
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_s public.izo_suduri; v_n public.izo_suduri; v_count bigint;
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
+ PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ SELECT * INTO v_s FROM public.izo_suduri WHERE id=p_sudura;
+ PERFORM public.fn_izo_birou_intrare(v_s.proiect_id,NULL);
+ IF v_s.id IS NULL OR length(btrim(coalesce(p_motiv,''))) NOT BETWEEN 3 AND 1000 THEN RAISE EXCEPTION 'parametri_invalizi'; END IF;
+ PERFORM public.fn_izo_birou_autorizat(v_s.proiect_id,NULL,true);
+ PERFORM public.fn_izo_blocheaza_locuri(v_s.proiect_id,ARRAY[]::integer[],ARRAY[v_s.tronson_id]);
+ PERFORM public.fn_izo_blocheaza_tabele(); PERFORM public.fn_izo_lock_partajat(v_s.proiect_id);
+ PERFORM 1 FROM public.magazie_bucati WHERE id IN (SELECT bucata_id FROM public.izo_suduri_capete WHERE sudura_id=p_sudura AND activ) ORDER BY id FOR UPDATE;
+ SELECT * INTO STRICT v_s FROM public.izo_suduri WHERE id=p_sudura FOR UPDATE;
+ IF v_s.stare<>'aprobata' OR NOT v_s.tranzitie_perete THEN RAISE EXCEPTION 'tranzitie_inexistenta'; END IF;
+ IF v_s.tranzitie_confirmata_de IS NOT NULL THEN RETURN jsonb_build_object('cod','confirmata','sudura_id',v_s.id); END IF;
+ v_n:=v_s; v_n.tranzitie_confirmata_de:=public.fn_izo_uid(); v_n.tranzitie_confirmata_la:=clock_timestamp();
+ v_n.tranzitie_confirmata_motiv:=btrim(p_motiv); v_n.server_ver:=nextval('public.izo_server_ver_seq');
+ PERFORM public.fn_izo_suduri_marcheaza('izo_suduri',to_jsonb(v_s),to_jsonb(v_n));
+ UPDATE public.izo_suduri SET tranzitie_confirmata_de=v_n.tranzitie_confirmata_de,tranzitie_confirmata_la=v_n.tranzitie_confirmata_la,
+  tranzitie_confirmata_motiv=v_n.tranzitie_confirmata_motiv,server_ver=v_n.server_ver WHERE id=p_sudura;
+ GET DIAGNOSTICS v_count=ROW_COUNT; IF v_count<>1 THEN RAISE EXCEPTION 'sudura_schimbata'; END IF;
+ PERFORM public.fn_izo_suduri_marcheaza(NULL,NULL,NULL);
+ RETURN jsonb_build_object('cod','confirmata','sudura_id',v_s.id);
+END $f$;
+  CREATE FUNCTION public.fn_izo_tranzitie_confirma(p_sudura bigint,p_motiv text) RETURNS jsonb
+ LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT public.fn_izo_tranzitie_intern(p_sudura,p_motiv)
+$f$;
+
+-- Same contract and vectors as src/lib/izoSudura.js, through izoNormalizare.js.
+  CREATE FUNCTION public.fn_izo_sudura_normalizeaza(p_raw text,p_opt jsonb) RETURNS jsonb
+ LANGUAGE plpgsql IMMUTABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+DECLARE v_original text:=coalesce(p_raw,''); v_s text; v_m text[]; v_ctx integer; v_t integer; v_nr integer;
+ v_suf text:=''; v_mod text:=coalesce(p_opt->>'mod','legacy'); v_conv text[]; v_r jsonb;
+BEGIN
+ v_r:=jsonb_build_object('original',v_original,'stare','cod_ilizibil','motiv',NULL,'tronson',NULL,'nr',NULL,
+  'sufix','','refacuta',false,'refacutaPropusa',false,'altTronson',false,'canon',NULL);
+ v_m:=regexp_match(upper(btrim(coalesce(p_opt->>'tronson',''))),'^(?:T(?:R)?\s*)?([0-9]{1,3})$');
+ IF v_m IS NOT NULL THEN v_ctx:=v_m[1]::integer; END IF;
+ SELECT coalesce(array_agg(regexp_replace(upper(x),'\s','','g')),'{}') INTO v_conv
+  FROM jsonb_array_elements_text(coalesce(p_opt->'conventie','[]')) x;
+ v_s:=btrim(regexp_replace(regexp_replace(upper(btrim(v_original)),'^(?:GAZPET\s+INSTAL|GAZPET)\s+',''),'\s+',' ','g'));
+ IF v_s='' THEN RETURN v_r||'{"motiv":"gol"}'::jsonb; END IF;
+ v_m:=regexp_match(v_s,'^T(?:R)?\s*-?\s*([0-9]{1,3})\s*-?\s*S\s*-?\s*([0-9]{1,5})\s*((?:/\s*)?[A-Z]{1,2}[0-9]?)?$');
+ IF v_m IS NOT NULL THEN v_t:=v_m[1]::integer; v_nr:=v_m[2]::integer; v_suf:=coalesce(v_m[3],'');
+ ELSE
+  v_m:=regexp_match(v_s,'^(?:S\s*-?\s*)?([0-9]{1,5})\s*((?:/\s*)?[A-Z]{1,2}[0-9]?)?$');
+  IF v_m IS NULL THEN RETURN v_r||'{"motiv":"format"}'::jsonb; END IF;
+  IF v_ctx IS NULL THEN RETURN v_r||'{"motiv":"fara_tronson"}'::jsonb; END IF;
+  v_t:=v_ctx; v_nr:=v_m[1]::integer; v_suf:=coalesce(v_m[2],'');
+ END IF;
+ IF v_t<=0 THEN RETURN v_r||'{"motiv":"tronson"}'::jsonb; END IF;
+ IF v_nr<=0 THEN RETURN v_r||'{"motiv":"numar"}'::jsonb; END IF;
+ v_suf:=regexp_replace(v_suf,'\s','','g');
+ v_r:=v_r||jsonb_build_object('tronson',v_t,'nr',v_nr,'altTronson',v_ctx IS NOT NULL AND v_ctx<>v_t);
+ IF v_mod<>'strict' THEN
+  IF right(v_suf,1)='R' THEN v_r:=v_r||'{"refacuta":true}'::jsonb; v_suf:=regexp_replace(left(v_suf,length(v_suf)-1),'/$',''); END IF;
+  v_r:=v_r||'{"stare":"ok"}'::jsonb;
+ ELSIF v_suf='' OR v_suf=ANY(v_conv) THEN v_r:=v_r||jsonb_build_object('stare','ok','refacuta',v_suf='R');
+ ELSIF right(v_suf,1)='R' THEN v_r:=v_r||'{"stare":"cod_de_confirmat","refacutaPropusa":true,"motiv":"sufix_r_neconfirmat"}'::jsonb;
+ ELSE v_r:=v_r||jsonb_build_object('motiv',CASE WHEN cardinality(v_conv)>0 THEN 'sufix_necunoscut' ELSE 'conventie_goala' END);
+ END IF;
+ RETURN v_r||jsonb_build_object('sufix',v_suf,'canon','TR'||v_t||'S'||v_nr||v_suf);
+END $f$;
+
+-- Live alerts: no notifications, cron, external messages or persisted side effects.
+  CREATE FUNCTION public.fn_izo_teren_praguri(p_proiect bigint) RETURNS jsonb
+ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT jsonb_build_object('toleranta_mm',c.toleranta_mm) FROM public.izo_proiect_config c
+ WHERE c.proiect_id=p_proiect AND public.fn_izo_citire(p_proiect)
+$f$;
+CREATE VIEW public.v_izo_alerte WITH (security_invoker=on) AS
+ SELECT 'izo_lungime_diferita_aviz'::text AS cod,d.proiect_id,d.tronson_id,d.id AS declaratie_id,b.id AS bucata_id,
+  NULL::bigint AS sudura_id,true AS blocanta,
+  jsonb_build_object('aviz_mm',b.lungime_aviz_mm,'stoc_mm',b.lungime_mm,'declarat_mm',n.mm,'versiune',d.versiune) AS detalii
+ FROM public.izo_declaratii d
+ JOIN public.magazie_bucati b ON b.id=coalesce(d.sursa_bucata_id,d.bucata_id) OR b.uid=coalesce(d.sursa_decl_uid,d.bucata_decl_uid)
+ CROSS JOIN LATERAL (SELECT CASE WHEN d.tip='taiere' THEN (d.payload->>'baza_mm')::integer
+  ELSE coalesce((d.payload#>>'{confirmare,masurata_mm}')::integer,(d.payload->>'lungime_masurata_mm')::integer) END AS mm) n
+ WHERE d.stare NOT IN ('aprobata','respinsa','stearsa') AND d.tip<>'cuplare' AND n.mm IS NOT NULL
+  AND ((d.payload#>>'{confirmare,mod}'='marcaj_diferit' AND n.mm<>b.lungime_mm)
+    OR (d.payload#>>'{confirmare,mod}'='masurat' AND abs(n.mm-b.lungime_mm)>
+     coalesce((SELECT (c->>'toleranta_mm')::integer FROM public.fn_izo_teren_praguri(d.proiect_id) c),20)))
+ UNION ALL
+ SELECT 'izo_tranzitie_perete_neconfirmata',s.proiect_id,s.tronson_id,s.declaratie_id,NULL::bigint,s.id,true,
+  jsonb_build_object('nr',s.nr,'sufix',s.sufix)
+ FROM public.izo_suduri s WHERE s.stare='aprobata' AND s.tranzitie_perete AND s.tranzitie_confirmata_de IS NULL;
+REVOKE ALL ON public.v_izo_alerte FROM PUBLIC,anon,authenticated,service_role;
+GRANT SELECT ON public.v_izo_alerte TO authenticated;
+
+  CREATE FUNCTION public.fn_izo_emitere_blocaje(p_bucati bigint[]) RETURNS text[]
+ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ SELECT coalesce(array_agg(DISTINCT a.cod ORDER BY a.cod),'{}') FROM public.v_izo_alerte a
+ WHERE (a.bucata_id IS NOT NULL AND EXISTS(SELECT 1 FROM public.magazie_bucati b JOIN public.magazie_bucati src
+  ON coalesce(src.radacina_id,src.id)=coalesce(b.radacina_id,b.id) WHERE b.id=ANY(p_bucati) AND src.id=a.bucata_id))
+ OR (a.sudura_id IS NOT NULL AND EXISTS(SELECT 1 FROM public.izo_suduri_capete c WHERE c.sudura_id=a.sudura_id AND c.activ AND c.bucata_id=ANY(p_bucati)))
+$f$;
+  CREATE FUNCTION public.fn_izo_fisa_verifica(p_decl bigint) RETURNS boolean
+ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+DECLARE v_d public.izo_declaratii; v_blocaje text[]; v_ids bigint[];
+BEGIN
+ SELECT * INTO v_d FROM public.izo_declaratii WHERE id=p_decl;
+ IF v_d.id IS NULL OR NOT public.fn_izo_citire(v_d.proiect_id) THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+ SELECT array_agg(b.id ORDER BY b.id) INTO v_ids FROM public.magazie_bucati b
+ WHERE b.id=coalesce(v_d.bucata_id,v_d.sursa_bucata_id) OR b.uid=coalesce(v_d.bucata_decl_uid,v_d.sursa_decl_uid)
+ OR b.uid IN (SELECT c.uid FROM public.izo_bucati_declarate c WHERE c.declaratie_id=p_decl);
+ v_blocaje:=public.fn_izo_emitere_blocaje(v_ids);
+ IF cardinality(v_blocaje)>0 THEN RAISE EXCEPTION 'emitere_blocata: %',v_blocaje; END IF;
+ RETURN true;
 END $f$;
 
    CREATE OR REPLACE FUNCTION public.fn_izo_garda_montaj(p_tabel text,p_op text,p_inainte jsonb,p_dupa jsonb)
@@ -2073,7 +2316,7 @@ END $f$;
       v_lipsa:=array_append(v_lipsa,'E4 definitii diferite'); END IF;
     IF has_schema_privilege('izo_montaj_writer','public','CREATE') OR EXISTS
       (SELECT 1 FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind='S'
-       AND has_sequence_privilege('izo_montaj_writer',c.oid,'USAGE') IS DISTINCT FROM (c.oid IN ('public.izo_server_ver_seq'::regclass,'public.magazie_bucati_evenimente_id_seq'::regclass,'public.magazie_bucati_miscari_id_seq'::regclass,'public.magazie_bucati_id_seq'::regclass,'public.izo_rezervari_id_seq'::regclass)))
+       AND has_sequence_privilege('izo_montaj_writer',c.oid,'USAGE') IS DISTINCT FROM (c.oid IN ('public.izo_server_ver_seq'::regclass,'public.magazie_bucati_evenimente_id_seq'::regclass,'public.magazie_bucati_miscari_id_seq'::regclass,'public.magazie_bucati_id_seq'::regclass,'public.izo_rezervari_id_seq'::regclass,'public.izo_operatii_id_seq'::regclass,'public.izo_aprobari_id_seq'::regclass,'public.izo_suduri_capete_id_seq'::regclass)))
       THEN v_lipsa:=array_append(v_lipsa,'E4 ACL schema/secvente'); END IF;
     IF EXISTS(SELECT 1 FROM pg_trigger g WHERE g.tgname LIKE 'a0_izo_flux_%' AND g.tgenabled<>'A') THEN v_lipsa:=array_append(v_lipsa,'E4 trigger dezactivat'); END IF;
     IF EXISTS(SELECT 1 FROM pg_trigger g JOIN pg_trigger e ON e.tgrelid=g.tgrelid
@@ -2086,6 +2329,56 @@ END $f$;
     SELECT EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.tip_cod IS NOT NULL
                     AND (b.depozit_id = p_depozit OR b.atribute->>'depozit_origine_id' = p_depozit::text OR b.atribute->>'destinatie_depozit_id' = p_depozit::text))
   $f$;
+   CREATE OR REPLACE FUNCTION public.fn_izo_flux_aprobare_admin(p_pachet bigint,p_updated_at timestamptz,p_nume text) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_p public.executie_pachete_lansare; v_path text; v_pr bigint; v_tr bigint; v_lipsa text[];
+  BEGIN
+    IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'E4a READ COMMITTED' USING ERRCODE='25001'; END IF;
+    PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+    IF session_user<>'postgres' THEN RAISE EXCEPTION 'E4a numai postgres' USING ERRCODE='42501'; END IF;
+    IF coalesce(current_setting('izo.montaj_ctx',true),'')<>'' THEN RAISE EXCEPTION 'E4a context ocupat'; END IF;
+    v_lipsa:=public.fn_izo_porti_lipsa(); IF cardinality(v_lipsa)<>0 THEN RAISE EXCEPTION 'E4a porti %',v_lipsa; END IF;
+    SELECT proiect_id,tronson_id INTO v_pr,v_tr FROM public.executie_pachete_lansare WHERE id=p_pachet;
+    PERFORM public.fn_izo_blocheaza_locuri(v_pr,ARRAY[]::integer[],ARRAY[v_tr]);
+    SELECT * INTO v_p FROM public.executie_pachete_lansare WHERE id=p_pachet FOR NO KEY UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'pachet_lipsa'; END IF;
+    PERFORM 1 FROM public.executie_tevi WHERE pachet_id=p_pachet ORDER BY id FOR NO KEY UPDATE;
+    PERFORM public.fn_izo_blocheaza_tabele(); PERFORM public.fn_izo_lock_partajat(v_pr);
+    IF v_p.proiect_id IS DISTINCT FROM v_pr OR v_p.tronson_id IS DISTINCT FROM v_tr
+      OR v_pr IS DISTINCT FROM (SELECT proiect_id FROM public.executie_tronsoane WHERE id=v_tr) THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
+    IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_tr AND flux_montaj) THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
+    IF (to_jsonb(v_p)->>'updated_at')::timestamptz IS DISTINCT FROM p_updated_at OR p_updated_at IS NULL THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
+    IF to_jsonb(v_p)->>'status' IS DISTINCT FROM 'draft' THEN RAISE EXCEPTION 'pachet_needitabil'; END IF;
+    IF NOT EXISTS(SELECT 1 FROM public.executie_tevi WHERE pachet_id=p_pachet) THEN RAISE EXCEPTION 'pachet_gol'; END IF;
+    -- Minimal variant: only existing teava/curba links can be proven before E4b.
+    -- legare needs E4b's coupling verifier; refuse rather than approve incomplete evidence.
+    PERFORM 1 FROM public.magazie_bucati b WHERE b.executie_teava_id IN
+      (SELECT id FROM public.executie_tevi WHERE pachet_id=p_pachet) ORDER BY b.id FOR SHARE;
+    IF EXISTS(SELECT 1 FROM public.executie_tevi t WHERE t.pachet_id=p_pachet AND
+      (coalesce(to_jsonb(t)->>'tip_rand','teava') NOT IN ('teava','curba') OR
+       (SELECT count(*) FROM public.magazie_bucati b WHERE b.executie_teava_id=t.id AND b.stare='montata'
+         AND b.proiect_id=v_pr AND b.tronson_id=v_tr AND b.tip_cod=coalesce(to_jsonb(t)->>'tip_rand','teava')
+         AND to_jsonb(t) @> public.fn_izo_flux_pachet_identitate(b))<>1))
+      THEN RAISE EXCEPTION 'rand_nelegat_sau_proiectie_invalida'; END IF;
+    PERFORM 1 FROM public.izo_suduri WHERE id IN (SELECT c.sudura_id FROM public.izo_suduri_capete c
+      JOIN public.magazie_bucati b ON b.id=c.bucata_id JOIN public.executie_tevi t ON t.id=b.executie_teava_id
+      WHERE t.pachet_id=p_pachet AND c.activ) ORDER BY id FOR SHARE;
+    IF cardinality(public.fn_izo_emitere_blocaje(ARRAY(SELECT b.id FROM public.magazie_bucati b JOIN public.executie_tevi t
+      ON t.id=b.executie_teava_id WHERE t.pachet_id=p_pachet)))>0 THEN RAISE EXCEPTION 'emitere_blocata'; END IF;
+    IF p_nume IS NULL OR p_nume !~ '^[^/\\]+[.]pdf$' THEN RAISE EXCEPTION 'nume_pdf_invalid'; END IF;
+    v_path:=v_pr::text || '/' || p_pachet::text || '/aprobare/' || md5(extract(epoch FROM p_updated_at)::text) || '.pdf';
+    -- Storage must already contain the signed PDF at this server supplied path.
+    -- First call returns a deterministic server path; retry after upload revalidates CAS.
+    IF NOT EXISTS(SELECT 1 FROM storage.objects WHERE bucket_id='executie-pachete-pdf' AND name=v_path) THEN
+      RETURN jsonb_build_object('cod','incarca_pdf','fisier_path',v_path,'pachet_updated_at',p_updated_at); END IF;
+    PERFORM set_config('izo.montaj_ctx',txid_current()::text || '|transgaz|' || p_pachet,true);
+    INSERT INTO public.executie_pachete_documente(pachet_id,tip_document,fisier_path,fisier_nume,mime_type)
+      VALUES(p_pachet,'pdf_aprobare_transgaz',v_path,p_nume,'application/pdf');
+    UPDATE public.executie_pachete_lansare SET status='aprobat',aprobat_la=clock_timestamp(),pdf_aprobare_path=v_path,
+      pdf_aprobare_nume=p_nume,updated_at=clock_timestamp() WHERE id=p_pachet;
+    PERFORM set_config('izo.montaj_ctx','',true);
+    RETURN jsonb_build_object('cod','aprobat','fisier_path',v_path);
+  END $f$;
  CREATE UNIQUE INDEX ux_magbuc_ev_decl ON public.magazie_bucati_evenimente(document_id,tip)
   WHERE document_tip='izo_declaratie' AND tip IN ('taiere','montaj','corectie');
  REVOKE ALL ON FUNCTION public.fn_izo_decl_ceas() FROM PUBLIC,anon,authenticated,service_role;
@@ -2131,6 +2424,22 @@ REVOKE ALL ON FUNCTION public.fn_izo_sudura_aproba(bigint) FROM PUBLIC,anon,auth
 REVOKE ALL ON FUNCTION public.fn_izo_capete_muta(bigint,bigint,bigint) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_corectie_mm(bigint) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_config_blocheaza(bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_teren_radacini_blocheaza(bigint,boolean) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_proiect_config_citeste(bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_suduri_garda() FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_tranzitie_intern(bigint,text) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_tranzitie_confirma(bigint,text) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_teren_praguri(bigint) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_emitere_blocaje(bigint[]) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.fn_izo_fisa_verifica(bigint) FROM PUBLIC,anon,authenticated,service_role;
  GRANT UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute,lungime_mm,lungime_masurata_mm,lungime_m,lungime_originala_m) ON public.magazie_bucati TO izo_montaj_writer;
  GRANT SELECT ON public.magazie_bucati_evenimente,public.magazie_bucati_miscari TO izo_montaj_writer;
  GRANT INSERT(tip,proiect_id,document_tip,document_id,import_id,storno_de_eveniment_id,motiv,declarat_de,aplicat_de,aplicat_rol,ora_server,ora_tableta,dispozitiv_id,server_ver)
@@ -2181,7 +2490,329 @@ GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,te
 RESET ROLE;
 GRANT EXECUTE ON FUNCTION public.fn_izo_capete_muta(bigint,bigint,bigint) TO izo_montaj_writer;
 GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,jsonb) TO izo_montaj_writer;
- -- NOLOGIN role has no direct write route. Private, typed helpers hold postgres privileges.
+ GRANT CREATE ON SCHEMA public TO izo_teren_editor,izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_decl_ceas() OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_teren_imuabil() OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_teren_intern(bigint,bigint,uuid,boolean) OWNER TO izo_teren_editor;
+ALTER FUNCTION public.fn_izo_teren_payload(jsonb) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi) OWNER TO izo_teren_editor;
+ALTER FUNCTION public.fn_izo_teren_push(uuid,jsonb) OWNER TO izo_teren_editor;
+ALTER FUNCTION public.fn_izo_aprobare_intern(bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_aproba_intern(uuid,bigint,jsonb,text,jsonb) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_iesire_intern(uuid,integer,bigint,bigint[],text,date) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_dependenti(bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_decizie_intern(uuid,bigint,integer,timestamptz,text,jsonb,boolean) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_front_intern(bigint,text) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_serie_intern(uuid,bigint,integer,timestamptz,bigint,text) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_lot_efecte(bigint[]) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,jsonb) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_sudura_decl(bigint) OWNER TO izo_teren_editor;
+ALTER FUNCTION public.fn_izo_taiere_ramura(bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_sudura_aproba(bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_capete_muta(bigint,bigint,bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_corectie_mm(bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_suduri_garda() OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_tranzitie_intern(bigint,text) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_tranzitie_confirma(bigint,text) OWNER TO izo_montaj_writer;
+ALTER FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) OWNER TO izo_montaj_writer;
+REVOKE CREATE ON SCHEMA public FROM izo_teren_editor,izo_montaj_writer;
+v_meta:=v_meta||jsonb_build_object('e4b_execute_added','[]'::jsonb);
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_autor_valabil(uuid,bigint,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_autor_valabil(uuid,bigint,boolean)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_autor_valabil(uuid,bigint,boolean) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_autorizat(bigint,integer,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_autorizat(bigint,integer,boolean)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_autorizat(bigint,integer,boolean) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_intrare(bigint,integer)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_intrare(bigint,integer)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_intrare(bigint,integer) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_jurnal(uuid,text,text,bigint,bigint,jsonb,text,jsonb) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_birou_preview(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_birou_preview(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_birou_preview(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[]) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[])','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_blocheaza_locuri(bigint,integer[],bigint[]) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_blocheaza_tabele()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_blocheaza_tabele()','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_blocheaza_tabele() TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_ins(bigint,text,bigint,uuid,text,bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_capat_modifica(bigint,bigint,uuid,boolean) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_citire(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_citire(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_citire(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_citire(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_citire(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_citire(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_config_blocheaza(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_config_blocheaza(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_config_blocheaza(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_config_blocheaza(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_config_blocheaza(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_config_blocheaza(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_fapt(bigint,text,bigint,uuid,text,text,integer) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_corectie_mm(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_corectie_mm(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_mm(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_corectie_mm(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_corectie_mm(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_corectie_mm(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_decl_ceas()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_decl_ceas()','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_decl_ceas() TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_decl_ceas()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_decl_ceas()','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_decl_ceas() TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_dependenti(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_dependenti(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_dependenti(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_dependenti(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_dependenti(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_dependenti(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_jwt_rol()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_jwt_rol()','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_jwt_rol() TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_lock_partajat(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_lock_partajat(bigint[])','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_lock_partajat(bigint[]) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_lot_efecte(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_lot_efecte(bigint[])','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_lot_efecte(bigint[]) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_nivel(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_nivel(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_nivel(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_nivel(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_nivel(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_nivel(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_proiect_config_citeste(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_proiect_config_citeste(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_proiect_config_citeste(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_proiect_config_citeste(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_proiect_config_citeste(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_proiect_config_citeste(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_pv_lipsa(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_pv_lipsa(bigint[])','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_pv_lipsa(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_pv_lipsa(bigint[])','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_aproba(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_aproba(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_aproba(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_decl(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_decl(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_decl(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_ins(bigint,integer,text,text,text,text,date) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_normalizeaza(text,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_normalizeaza(text,jsonb)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_normalizeaza(text,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_normalizeaza(text,jsonb)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_normalizeaza(text,jsonb) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_sudura_stare(bigint,text,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_stare(bigint,text,boolean)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_sudura_stare(bigint,text,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_sudura_stare(bigint,text,boolean)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_sudura_stare(bigint,text,boolean) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_garda()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_garda()','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_garda() TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_garda()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_garda()','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_garda() TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_invalideaza(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_invalideaza(bigint[])','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_invalideaza(bigint[])','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_invalideaza(bigint[])','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_invalideaza(bigint[]) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_suduri_marcheaza(text,jsonb,jsonb)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_marcheaza(text,jsonb,jsonb) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_taiere_fapt(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_taiere_fapt(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_fapt(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_taiere_ramura(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_taiere_ramura(bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_ramura(bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_taiere_ramura(bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_taiere_ramura(bigint)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_ramura(bigint) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_autorizat(bigint,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_autorizat(bigint,boolean)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_autorizat(bigint,boolean) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_entra(bigint,text)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_entra(bigint,text)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_entra(bigint,text) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_imuabil()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_imuabil()','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_imuabil() TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_teren_imuabil()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_imuabil()','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_imuabil() TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_op(uuid,jsonb,jsonb,bigint,text,public.izo_fronturi) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_payload(jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_payload(jsonb)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_payload(jsonb) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_teren_payload(jsonb)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_payload(jsonb)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_payload(jsonb) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_radacini_blocheaza(bigint,boolean)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_radacini_blocheaza(bigint,boolean)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_radacini_blocheaza(bigint,boolean) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_teren_snapshot(bigint,bigint)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_teren_snapshot(bigint,bigint)','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_snapshot(bigint,bigint) TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_tranzitie_intern(bigint,text)','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_tranzitie_intern(bigint,text)','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_tranzitie_intern(bigint,text) TO izo_montaj_writer; END IF;
+IF NOT has_function_privilege('izo_teren_editor','public.fn_izo_uid()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_uid()','role','izo_teren_editor')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_uid() TO izo_teren_editor; END IF;
+IF NOT has_function_privilege('izo_montaj_writer','public.fn_izo_uid()','EXECUTE') THEN v_meta:=jsonb_set(v_meta,'{e4b_execute_added}',(v_meta->'e4b_execute_added')||jsonb_build_array(jsonb_build_object('sig','public.fn_izo_uid()','role','izo_montaj_writer')));
+GRANT EXECUTE ON FUNCTION public.fn_izo_uid() TO izo_montaj_writer; END IF;
+SET LOCAL ROLE izo_montaj_writer;
+GRANT EXECUTE ON FUNCTION public.fn_izo_tranzitie_confirma(bigint,text) TO authenticated;
+RESET ROLE;
+GRANT SELECT ON public.izo_fronturi TO izo_teren_editor;
+CREATE POLICY izo_teren_fronturi_sel ON public.izo_fronturi FOR SELECT TO izo_teren_editor USING (proiect_id IS NOT NULL);
+GRANT INSERT(proiect_id,tronson_id,profile_id,dispozitiv_id,activ,expira_la,predat_la,eliberat_de,eliberat_motiv,server_ver) ON public.izo_fronturi TO izo_teren_editor;
+CREATE POLICY izo_teren_fronturi_ins ON public.izo_fronturi FOR INSERT TO izo_teren_editor WITH CHECK (proiect_id IS NOT NULL);
+GRANT UPDATE(expira_la,predat_la,activ,server_ver) ON public.izo_fronturi TO izo_teren_editor;
+CREATE POLICY izo_teren_fronturi_upd ON public.izo_fronturi FOR UPDATE TO izo_teren_editor USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_fronturi_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_dispozitive TO izo_teren_editor;
+CREATE POLICY izo_teren_dispozitive_sel ON public.izo_dispozitive FOR SELECT TO izo_teren_editor USING (profile_id IS NOT NULL);
+GRANT INSERT(dispozitiv_id,profile_id,ultimul_seq,server_ver) ON public.izo_dispozitive TO izo_teren_editor;
+CREATE POLICY izo_teren_dispozitive_ins ON public.izo_dispozitive FOR INSERT TO izo_teren_editor WITH CHECK (profile_id IS NOT NULL);
+GRANT UPDATE(ultimul_seq,server_ver) ON public.izo_dispozitive TO izo_teren_editor;
+CREATE POLICY izo_teren_dispozitive_upd ON public.izo_dispozitive FOR UPDATE TO izo_teren_editor USING (profile_id IS NOT NULL) WITH CHECK (profile_id IS NOT NULL);
+GRANT SELECT ON public.izo_preverificari TO izo_teren_editor;
+CREATE POLICY izo_teren_preverificari_sel ON public.izo_preverificari FOR SELECT TO izo_teren_editor USING (proiect_id IS NOT NULL);
+GRANT INSERT(uid,proiect_id,tronson_id,zi,autor_profile_id,dispozitiv_id,stare,trimisa_la,trimisa_op_id,versiune,server_ver) ON public.izo_preverificari TO izo_teren_editor;
+CREATE POLICY izo_teren_preverificari_ins ON public.izo_preverificari FOR INSERT TO izo_teren_editor WITH CHECK (proiect_id IS NOT NULL);
+GRANT UPDATE(stare,trimisa_la,trimisa_op_id,versiune,server_ver) ON public.izo_preverificari TO izo_teren_editor;
+CREATE POLICY izo_teren_preverificari_upd ON public.izo_preverificari FOR UPDATE TO izo_teren_editor USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_preverificari_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_declaratii TO izo_teren_editor;
+CREATE POLICY izo_teren_declaratii_sel ON public.izo_declaratii FOR SELECT TO izo_teren_editor USING (proiect_id IS NOT NULL);
+GRANT INSERT(uid,preverificare_id,proiect_id,tronson_id,tip,versiune,declarat_de,declarat_de_angajat,dispozitiv_id,ultimul_op_id,stare,conflict_cod,stare_inainte_blocare,blocata_motiv,identificare,bucata_id,bucata_decl_uid,sursa_bucata_id,sursa_decl_uid,depinde_de_uid,depinde_de_versiune,payload,gps_prezent,data_montaj,updated_at,server_ver) ON public.izo_declaratii TO izo_teren_editor;
+CREATE POLICY izo_teren_declaratii_ins ON public.izo_declaratii FOR INSERT TO izo_teren_editor WITH CHECK (proiect_id IS NOT NULL);
+GRANT UPDATE(versiune,ultimul_op_id,stare,conflict_cod,stare_inainte_blocare,blocata_motiv,identificare,bucata_id,bucata_decl_uid,sursa_bucata_id,sursa_decl_uid,depinde_de_uid,depinde_de_versiune,payload,gps_prezent,data_montaj,server_ver) ON public.izo_declaratii TO izo_teren_editor;
+CREATE POLICY izo_teren_declaratii_upd ON public.izo_declaratii FOR UPDATE TO izo_teren_editor USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_declaratii_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_bucati_declarate TO izo_teren_editor;
+CREATE POLICY izo_teren_bucati_declarate_sel ON public.izo_bucati_declarate FOR SELECT TO izo_teren_editor USING (declaratie_id IS NOT NULL);
+GRANT INSERT(uid,declaratie_id,declaratie_versiune,parinte_bucata_id,parinte_decl_uid,radacina_id,lungime_mm,lungime_calculata,capat_stanga,capat_dreapta,cod_bucata,destinatie,depozit_destinatie_id,stare,bucata_id,server_ver) ON public.izo_bucati_declarate TO izo_teren_editor;
+CREATE POLICY izo_teren_bucati_declarate_ins ON public.izo_bucati_declarate FOR INSERT TO izo_teren_editor WITH CHECK (declaratie_id IS NOT NULL);
+GRANT UPDATE(stare,declaratie_versiune,lungime_mm,lungime_calculata,capat_stanga,capat_dreapta,cod_bucata,destinatie,depozit_destinatie_id,server_ver) ON public.izo_bucati_declarate TO izo_teren_editor;
+CREATE POLICY izo_teren_bucati_declarate_upd ON public.izo_bucati_declarate FOR UPDATE TO izo_teren_editor USING (declaratie_id IS NOT NULL) WITH CHECK (declaratie_id IS NOT NULL);
+GRANT SELECT ON public.izo_rezervari TO izo_teren_editor;
+CREATE POLICY izo_teren_rezervari_sel ON public.izo_rezervari FOR SELECT TO izo_teren_editor USING (proiect_id IS NOT NULL);
+GRANT INSERT(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,bucata_decl_uid,din_depozit,tip,activa,creata_la,eliberata_la,expira_dupa,motiv_eliberare,eveniment_id,transfer_din_id,server_ver) ON public.izo_rezervari TO izo_teren_editor;
+CREATE POLICY izo_teren_rezervari_ins ON public.izo_rezervari FOR INSERT TO izo_teren_editor WITH CHECK (proiect_id IS NOT NULL);
+GRANT UPDATE(activa,eliberata_la,motiv_eliberare,expira_dupa,server_ver) ON public.izo_rezervari TO izo_teren_editor;
+CREATE POLICY izo_teren_rezervari_upd ON public.izo_rezervari FOR UPDATE TO izo_teren_editor USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_rezervari_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_operatii TO izo_teren_editor;
+CREATE POLICY izo_teren_operatii_sel ON public.izo_operatii FOR SELECT TO izo_teren_editor USING (proiect_id IS NOT NULL);
+GRANT INSERT(autor_profile_id,op_id,canal,proiect_id,tronson_id,dispozitiv_id,seq,versiune_format,tip_op,payload,hash_cerere,rezultat,cod,raspuns,ora_tableta,ora_server,offset_ceas_s,server_ver) ON public.izo_operatii TO izo_teren_editor;
+CREATE POLICY izo_teren_operatii_ins ON public.izo_operatii FOR INSERT TO izo_teren_editor WITH CHECK (canal='teren' AND autor_profile_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_operatii_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_declaratii_versiuni TO izo_teren_editor;
+CREATE POLICY izo_teren_declaratii_versiuni_sel ON public.izo_declaratii_versiuni FOR SELECT TO izo_teren_editor USING (declaratie_id IS NOT NULL);
+GRANT INSERT(declaratie_id,versiune,payload,hash_cerere,op_id,la) ON public.izo_declaratii_versiuni TO izo_teren_editor;
+CREATE POLICY izo_teren_declaratii_versiuni_ins ON public.izo_declaratii_versiuni FOR INSERT TO izo_teren_editor WITH CHECK (declaratie_id IS NOT NULL);
+GRANT INSERT(declaratie_id,versiune,lat,lon,precizie_m,la) ON public.izo_declaratii_gps TO izo_teren_editor;
+CREATE POLICY izo_teren_declaratii_gps_ins ON public.izo_declaratii_gps FOR INSERT TO izo_teren_editor WITH CHECK (declaratie_id IS NOT NULL);
+GRANT SELECT ON public.izo_sync_incercari TO izo_teren_editor;
+CREATE POLICY izo_teren_sync_incercari_sel ON public.izo_sync_incercari FOR SELECT TO izo_teren_editor USING (proiect_id IS NOT NULL);
+GRANT INSERT(proiect_id,tronson_id,autor_profile_id,op_id,dispozitiv_id,tip_op,payload,prima_la) ON public.izo_sync_incercari TO izo_teren_editor;
+CREATE POLICY izo_teren_sync_incercari_ins ON public.izo_sync_incercari FOR INSERT TO izo_teren_editor WITH CHECK (proiect_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_sync_incercari_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_suduri TO izo_teren_editor;
+CREATE POLICY izo_teren_suduri_sel ON public.izo_suduri FOR SELECT TO izo_teren_editor USING (proiect_id IS NOT NULL);
+GRANT INSERT(proiect_id,tronson_id,nr,sufix,tip_sudura,stare,declaratie_id,executant,poanson,data_sudura,tranzitie_perete,tranzitie_confirmata_de,tranzitie_confirmata_la,tranzitie_confirmata_motiv,server_ver) ON public.izo_suduri TO izo_teren_editor;
+CREATE POLICY izo_teren_suduri_ins ON public.izo_suduri FOR INSERT TO izo_teren_editor WITH CHECK (proiect_id IS NOT NULL);
+GRANT UPDATE(nr,sufix,executant,poanson,data_sudura,stare,server_ver) ON public.izo_suduri TO izo_teren_editor;
+CREATE POLICY izo_teren_suduri_upd ON public.izo_suduri FOR UPDATE TO izo_teren_editor USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_suduri_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_suduri_capete TO izo_teren_editor;
+CREATE POLICY izo_teren_suduri_capete_sel ON public.izo_suduri_capete FOR SELECT TO izo_teren_editor USING (sudura_id IS NOT NULL);
+GRANT INSERT(sudura_id,parte,bucata_id,bucata_decl_uid,capat_litera,activ,de_la_eveniment_id,server_ver) ON public.izo_suduri_capete TO izo_teren_editor;
+CREATE POLICY izo_teren_suduri_capete_ins ON public.izo_suduri_capete FOR INSERT TO izo_teren_editor WITH CHECK (sudura_id IS NOT NULL);
+GRANT UPDATE(activ,server_ver) ON public.izo_suduri_capete TO izo_teren_editor;
+CREATE POLICY izo_teren_suduri_capete_upd ON public.izo_suduri_capete FOR UPDATE TO izo_teren_editor USING (sudura_id IS NOT NULL) WITH CHECK (sudura_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_suduri_capete_id_seq TO izo_teren_editor;
+GRANT SELECT ON public.izo_fronturi TO izo_montaj_writer;
+CREATE POLICY izo_montaj_fronturi_sel ON public.izo_fronturi FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+GRANT UPDATE(activ,predat_la,eliberat_de,eliberat_motiv,server_ver) ON public.izo_fronturi TO izo_montaj_writer;
+CREATE POLICY izo_montaj_fronturi_upd ON public.izo_fronturi FOR UPDATE TO izo_montaj_writer USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT SELECT ON public.izo_preverificari TO izo_montaj_writer;
+CREATE POLICY izo_montaj_preverificari_sel ON public.izo_preverificari FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+GRANT UPDATE(stare,versiune,server_ver) ON public.izo_preverificari TO izo_montaj_writer;
+CREATE POLICY izo_montaj_preverificari_upd ON public.izo_preverificari FOR UPDATE TO izo_montaj_writer USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT SELECT ON public.izo_declaratii TO izo_montaj_writer;
+GRANT UPDATE(stare,conflict_cod,stare_inainte_blocare,blocata_motiv,versiune,bucata_id,identificare,payload,aprobat_de,aprobat_de_angajat,decis_la,decizie_motiv,eveniment_ids,server_ver) ON public.izo_declaratii TO izo_montaj_writer;
+CREATE POLICY izo_montaj_declaratii_upd ON public.izo_declaratii FOR UPDATE TO izo_montaj_writer USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT SELECT ON public.izo_bucati_declarate TO izo_montaj_writer;
+GRANT UPDATE(stare,bucata_id,depozit_destinatie_id,server_ver) ON public.izo_bucati_declarate TO izo_montaj_writer;
+GRANT SELECT ON public.izo_rezervari TO izo_montaj_writer;
+GRANT INSERT(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,bucata_decl_uid,din_depozit,tip,activa,creata_la,eliberata_la,expira_dupa,motiv_eliberare,eveniment_id,transfer_din_id,server_ver) ON public.izo_rezervari TO izo_montaj_writer;
+GRANT UPDATE(activa,eliberata_la,motiv_eliberare,eveniment_id,server_ver) ON public.izo_rezervari TO izo_montaj_writer;
+GRANT USAGE ON SEQUENCE public.izo_rezervari_id_seq TO izo_montaj_writer;
+GRANT SELECT ON public.izo_operatii TO izo_montaj_writer;
+CREATE POLICY izo_montaj_operatii_sel ON public.izo_operatii FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+GRANT INSERT(autor_profile_id,op_id,canal,proiect_id,tronson_id,dispozitiv_id,seq,versiune_format,tip_op,payload,hash_cerere,rezultat,cod,raspuns,ora_tableta,ora_server,offset_ceas_s,server_ver) ON public.izo_operatii TO izo_montaj_writer;
+CREATE POLICY izo_montaj_operatii_ins ON public.izo_operatii FOR INSERT TO izo_montaj_writer WITH CHECK (canal IN ('aprobare','depozit','pachet'));
+GRANT USAGE ON SEQUENCE public.izo_operatii_id_seq TO izo_montaj_writer;
+GRANT SELECT ON public.izo_declaratii_versiuni TO izo_montaj_writer;
+CREATE POLICY izo_montaj_declaratii_versiuni_sel ON public.izo_declaratii_versiuni FOR SELECT TO izo_montaj_writer USING (declaratie_id IS NOT NULL);
+GRANT INSERT(declaratie_id,versiune,payload,hash_cerere,op_id,la) ON public.izo_declaratii_versiuni TO izo_montaj_writer;
+CREATE POLICY izo_montaj_declaratii_versiuni_ins ON public.izo_declaratii_versiuni FOR INSERT TO izo_montaj_writer WITH CHECK (declaratie_id IS NOT NULL);
+GRANT SELECT ON public.izo_sync_incercari TO izo_montaj_writer;
+CREATE POLICY izo_montaj_sync_incercari_sel ON public.izo_sync_incercari FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+GRANT SELECT ON public.izo_aprobari TO izo_montaj_writer;
+CREATE POLICY izo_montaj_aprobari_sel ON public.izo_aprobari FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+GRANT INSERT(cheie_operatie,proiect_id,tronson_id,aprobator,aprobator_angajat,randuri,decizii,hash_cerere,amprenta_preview,eveniment_ids,raspuns,creat_la) ON public.izo_aprobari TO izo_montaj_writer;
+CREATE POLICY izo_montaj_aprobari_ins ON public.izo_aprobari FOR INSERT TO izo_montaj_writer WITH CHECK (proiect_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_aprobari_id_seq TO izo_montaj_writer;
+GRANT SELECT ON public.izo_suduri TO izo_montaj_writer;
+CREATE POLICY izo_montaj_suduri_sel ON public.izo_suduri FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+GRANT UPDATE(stare,tranzitie_perete,tranzitie_confirmata_de,tranzitie_confirmata_la,tranzitie_confirmata_motiv,server_ver) ON public.izo_suduri TO izo_montaj_writer;
+CREATE POLICY izo_montaj_suduri_upd ON public.izo_suduri FOR UPDATE TO izo_montaj_writer USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+GRANT SELECT ON public.izo_suduri_capete TO izo_montaj_writer;
+CREATE POLICY izo_montaj_suduri_capete_sel ON public.izo_suduri_capete FOR SELECT TO izo_montaj_writer USING (sudura_id IS NOT NULL);
+GRANT INSERT(sudura_id,parte,bucata_id,bucata_decl_uid,capat_litera,activ,de_la_eveniment_id,server_ver) ON public.izo_suduri_capete TO izo_montaj_writer;
+CREATE POLICY izo_montaj_suduri_capete_ins ON public.izo_suduri_capete FOR INSERT TO izo_montaj_writer WITH CHECK (sudura_id IS NOT NULL);
+GRANT UPDATE(activ,bucata_id,bucata_decl_uid,de_la_eveniment_id,server_ver) ON public.izo_suduri_capete TO izo_montaj_writer;
+CREATE POLICY izo_montaj_suduri_capete_upd ON public.izo_suduri_capete FOR UPDATE TO izo_montaj_writer USING (sudura_id IS NOT NULL) WITH CHECK (sudura_id IS NOT NULL);
+GRANT USAGE ON SEQUENCE public.izo_suduri_capete_id_seq TO izo_montaj_writer;
+GRANT USAGE ON SEQUENCE public.izo_server_ver_seq TO izo_teren_editor;
+v_meta:=v_meta||jsonb_build_object('e4b_select_added','[]'::jsonb);
+IF NOT has_table_privilege('izo_teren_editor','public.magazie_bucati','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.magazie_bucati','role','izo_teren_editor')));
+GRANT SELECT ON public.magazie_bucati TO izo_teren_editor; END IF;
+CREATE POLICY e4b_magazie_bucati_izo_teren_editor_sel ON public.magazie_bucati FOR SELECT TO izo_teren_editor USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_montaj_writer','public.magazie_bucati','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.magazie_bucati','role','izo_montaj_writer')));
+GRANT SELECT ON public.magazie_bucati TO izo_montaj_writer; END IF;
+IF NOT has_table_privilege('izo_teren_editor','public.izo_tronson_config','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.izo_tronson_config','role','izo_teren_editor')));
+GRANT SELECT ON public.izo_tronson_config TO izo_teren_editor; END IF;
+CREATE POLICY e4b_izo_tronson_config_izo_teren_editor_sel ON public.izo_tronson_config FOR SELECT TO izo_teren_editor USING (tronson_id IS NOT NULL);
+IF NOT has_table_privilege('izo_montaj_writer','public.izo_tronson_config','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.izo_tronson_config','role','izo_montaj_writer')));
+GRANT SELECT ON public.izo_tronson_config TO izo_montaj_writer; END IF;
+IF NOT has_table_privilege('izo_teren_editor','public.executie_proiecte','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.executie_proiecte','role','izo_teren_editor')));
+GRANT SELECT ON public.executie_proiecte TO izo_teren_editor; END IF;
+CREATE POLICY e4b_executie_proiecte_izo_teren_editor_sel ON public.executie_proiecte FOR SELECT TO izo_teren_editor USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_montaj_writer','public.executie_proiecte','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.executie_proiecte','role','izo_montaj_writer')));
+GRANT SELECT ON public.executie_proiecte TO izo_montaj_writer; END IF;
+CREATE POLICY e4b_executie_proiecte_izo_montaj_writer_sel ON public.executie_proiecte FOR SELECT TO izo_montaj_writer USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_teren_editor','public.executie_tronsoane','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.executie_tronsoane','role','izo_teren_editor')));
+GRANT SELECT ON public.executie_tronsoane TO izo_teren_editor; END IF;
+CREATE POLICY e4b_executie_tronsoane_izo_teren_editor_sel ON public.executie_tronsoane FOR SELECT TO izo_teren_editor USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_montaj_writer','public.executie_tronsoane','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.executie_tronsoane','role','izo_montaj_writer')));
+GRANT SELECT ON public.executie_tronsoane TO izo_montaj_writer; END IF;
+CREATE POLICY e4b_executie_tronsoane_izo_montaj_writer_sel ON public.executie_tronsoane FOR SELECT TO izo_montaj_writer USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_teren_editor','public.logistica_depozite','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.logistica_depozite','role','izo_teren_editor')));
+GRANT SELECT ON public.logistica_depozite TO izo_teren_editor; END IF;
+CREATE POLICY e4b_logistica_depozite_izo_teren_editor_sel ON public.logistica_depozite FOR SELECT TO izo_teren_editor USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_montaj_writer','public.logistica_depozite','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.logistica_depozite','role','izo_montaj_writer')));
+GRANT SELECT ON public.logistica_depozite TO izo_montaj_writer; END IF;
+CREATE POLICY e4b_logistica_depozite_izo_montaj_writer_sel ON public.logistica_depozite FOR SELECT TO izo_montaj_writer USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_teren_editor','public.magazie_bucati_evenimente','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.magazie_bucati_evenimente','role','izo_teren_editor')));
+GRANT SELECT ON public.magazie_bucati_evenimente TO izo_teren_editor; END IF;
+CREATE POLICY e4b_magazie_bucati_evenimente_izo_teren_editor_sel ON public.magazie_bucati_evenimente FOR SELECT TO izo_teren_editor USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_montaj_writer','public.magazie_bucati_evenimente','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.magazie_bucati_evenimente','role','izo_montaj_writer')));
+GRANT SELECT ON public.magazie_bucati_evenimente TO izo_montaj_writer; END IF;
+IF NOT has_table_privilege('izo_teren_editor','public.magazie_bucati_miscari','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.magazie_bucati_miscari','role','izo_teren_editor')));
+GRANT SELECT ON public.magazie_bucati_miscari TO izo_teren_editor; END IF;
+CREATE POLICY e4b_magazie_bucati_miscari_izo_teren_editor_sel ON public.magazie_bucati_miscari FOR SELECT TO izo_teren_editor USING (id IS NOT NULL);
+IF NOT has_table_privilege('izo_montaj_writer','public.magazie_bucati_miscari','SELECT') THEN v_meta:=jsonb_set(v_meta,'{e4b_select_added}',(v_meta->'e4b_select_added')||jsonb_build_array(jsonb_build_object('table','public.magazie_bucati_miscari','role','izo_montaj_writer')));
+GRANT SELECT ON public.magazie_bucati_miscari TO izo_montaj_writer; END IF;
+CREATE TRIGGER a0_izo_suduri_proiectie BEFORE INSERT OR UPDATE ON public.izo_suduri FOR EACH ROW EXECUTE FUNCTION public.fn_izo_suduri_garda();
+ALTER TABLE public.izo_suduri ENABLE ALWAYS TRIGGER a0_izo_suduri_proiectie;
+CREATE TRIGGER a0_izo_suduri_proiectie BEFORE INSERT OR UPDATE ON public.izo_suduri_capete FOR EACH ROW EXECUTE FUNCTION public.fn_izo_suduri_garda();
+ALTER TABLE public.izo_suduri_capete ENABLE ALWAYS TRIGGER a0_izo_suduri_proiectie;
+GRANT EXECUTE ON FUNCTION public.fn_izo_teren_praguri(bigint),public.fn_izo_fisa_verifica(bigint) TO authenticated;
+ -- Private helpers use the column matrix; API wrappers remain thin.
  -- API wrappers carry no setters, dynamic SQL, or identity text (control_0e).
  GRANT EXECUTE ON FUNCTION public.fn_izo_teren_intern(bigint,bigint,uuid,boolean),public.fn_izo_teren_push(uuid,jsonb) TO izo_teren_editor;
  GRANT EXECUTE ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) TO izo_teren_editor,izo_montaj_writer;
@@ -2207,7 +2838,7 @@ GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,js
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',p.oid::regprocedure,p.proowner,p.prosecdef,p.proconfig,p.proacl,md5(p.prosrc)),',' ORDER BY p.oid::regprocedure::text)
     FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',c.relname,c.relowner,c.relrowsecurity,c.relacl,c.reloptions),',' ORDER BY c.relname)
-    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[]) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active'))),
+    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[]) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active','v_izo_alerte'))),
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',c.relname,a.attname,a.atttypid,a.attnotnull,a.attacl,pg_get_expr(d.adbin,d.adrelid)),',' ORDER BY c.relname,a.attnum)
     FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
     WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(ARRAY['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declaratii', 'izo_bucati_declarate', 'izo_rezervari', 'izo_operatii', 'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri', 'izo_aprobari', 'izo_suduri', 'izo_suduri_capete']::text[]) AND a.attnum>0 AND NOT a.attisdropped),
@@ -2618,7 +3249,7 @@ GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,js
                     CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
                     CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
               WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
-                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_aprobari_api_sel on public.izo_aprobari|public.fn_izo_citire(bigint)', 'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_suduri_api_sel on public.izo_suduri|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_teren_delete on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_aprobari_api_sel on public.izo_aprobari|public.fn_izo_citire(bigint)', 'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_suduri_api_sel on public.izo_suduri|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_suduri_proiectie on public.izo_suduri_capete|public.fn_izo_suduri_garda()', 'trigger|a0_izo_suduri_proiectie on public.izo_suduri|public.fn_izo_suduri_garda()', 'trigger|a0_izo_teren_delete on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
  -- E3 §17.4: fixed implicit inventory checked before and after deliberate restamping.
  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_e4_definitii() IS %L','porti_e4='||public.fn_izo_porti_e4_definitii());
  EXECUTE format('COMMENT ON FUNCTION public.fn_izo_porti_definitii() IS %L','porti='||public.fn_izo_porti_definitii());
@@ -2631,7 +3262,7 @@ GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,js
                     CROSS JOIN LATERAL pg_identify_object(d.classid, d.objid, d.objsubid) o
                     CROSS JOIN LATERAL pg_identify_object('pg_proc'::regclass, q.oid, 0) f
               WHERE d.refclassid = 'pg_proc'::regclass AND q.pronamespace = 'public'::regnamespace AND q.proname LIKE 'fn\_izo\_%'
-                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_aprobari_api_sel on public.izo_aprobari|public.fn_izo_citire(bigint)', 'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_suduri_api_sel on public.izo_suduri|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_teren_delete on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
+                AND d.classid NOT IN ('pg_rewrite'::regclass, 'pg_proc'::regclass)) x); IF v_impl IS DISTINCT FROM ARRAY['policy|izo_aprobari_api_sel on public.izo_aprobari|public.fn_izo_citire(bigint)', 'policy|izo_atr_sel on public.izo_atribuiri|public.fn_izo_citire(bigint)', 'policy|izo_cfg_sel on public.izo_proiect_config|public.fn_izo_citire(bigint)', 'policy|izo_corectii_api_sel on public.izo_corectii|public.fn_izo_citire(bigint)', 'policy|izo_corectii_bucati_api_sel on public.izo_corectii_bucati|public.fn_izo_citire(bigint)', 'policy|izo_declaratii_api_sel on public.izo_declaratii|public.fn_izo_citire(bigint)', 'policy|izo_doc_api_sel on public.izo_documente_intrare|public.fn_izo_citire(bigint)', 'policy|izo_doc_scan_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_del on storage.objects|public.fn_izo_scan_poate_sterge(pg_catalog.text)', 'policy|izo_doc_scan_r_ins on storage.objects|public.fn_izo_scan_poate_incarca(pg_catalog.text)', 'policy|izo_doc_scan_r_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_doc_scan_sel on storage.objects|public.fn_izo_scan_poate_citi(pg_catalog.text)', 'policy|izo_documente_istoric_api_sel on public.izo_documente_istoric|public.fn_izo_citire(bigint)', 'policy|izo_ev_corectie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_receptie_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_ev_sel on public.magazie_bucati_evenimente|public.fn_izo_citire(bigint)', 'policy|izo_ev_writer_ins on public.magazie_bucati_evenimente|public.fn_izo_nivel(bigint)', 'policy|izo_flux_pdf_imuabil_del on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_flux_pdf_imuabil_upd on storage.objects|public.fn_izo_flux_pdf_blocat(pg_catalog.text,pg_catalog.text)', 'policy|izo_fronturi_api_sel on public.izo_fronturi|public.fn_izo_citire(bigint)', 'policy|izo_imp_sel on public.izo_importuri|public.fn_izo_citire(bigint)', 'policy|izo_mis_corectie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_receptie_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_mis_sel on public.magazie_bucati_miscari|public.fn_izo_citire(bigint)', 'policy|izo_mis_writer_ins on public.magazie_bucati_miscari|public.fn_izo_nivel(bigint)', 'policy|izo_operatii_api_sel on public.izo_operatii|public.fn_izo_citire(bigint)', 'policy|izo_preverificari_api_sel on public.izo_preverificari|public.fn_izo_citire(bigint)', 'policy|izo_rezervari_api_sel on public.izo_rezervari|public.fn_izo_citire(bigint)', 'policy|izo_suduri_api_sel on public.izo_suduri|public.fn_izo_citire(bigint)', 'policy|izo_sync_incercari_api_sel on public.izo_sync_incercari|public.fn_izo_citire(bigint)', 'policy|izo_tronson_config_api_sel on public.izo_tronson_config|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_del on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_client_sel on public.magazie_bucati|public.fn_izo_citire(bigint)', 'policy|magbuc_izo_client_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_corectie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_receptie_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_ins on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'policy|magbuc_izo_writer_upd on public.magazie_bucati|public.fn_izo_nivel(bigint)', 'trigger|a0_izo_decl_ceas on public.izo_declaratii|public.fn_izo_decl_ceas()', 'trigger|a0_izo_flux_config on public.izo_tronson_config|public.fn_izo_flux_config_garda()', 'trigger|a0_izo_flux_documente on public.executie_pachete_documente|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete on public.executie_pachete_lansare|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_pachete_dupa on public.executie_pachete_lansare|public.fn_izo_flux_pachet_dupa()', 'trigger|a0_izo_flux_tevi on public.executie_tevi|public.fn_izo_flux_garda()', 'trigger|a0_izo_flux_tronsoane on public.executie_tronsoane|public.fn_izo_flux_garda()', 'trigger|a0_izo_suduri_proiectie on public.izo_suduri_capete|public.fn_izo_suduri_garda()', 'trigger|a0_izo_suduri_proiectie on public.izo_suduri|public.fn_izo_suduri_garda()', 'trigger|a0_izo_teren_delete on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_delete on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_bucati_declarate|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_declaratii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_dispozitive|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_fronturi|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_preverificari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_rezervari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri_capete|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_suduri|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_truncate on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_aprobari|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_gps|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_declaratii_versiuni|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_operatii|public.fn_izo_teren_imuabil()', 'trigger|a0_izo_teren_update on public.izo_sync_incercari|public.fn_izo_teren_imuabil()', 'trigger|trg_bon_linii_izo_bucata on public.executie_bonuri_consum_linii|public.fn_izo_refuz_bon_bucata()', 'trigger|trg_depozite_izo_mutare on public.logistica_depozite|public.fn_izo_refuz_mutare_depozit()', 'trigger|trg_executie_tevi_izo_delete on public.executie_tevi|public.fn_izo_refuz_delete_tevi()', 'trigger|trg_executie_tevi_izo_mutare on public.executie_tevi|public.fn_izo_refuz_mutare_tevi()', 'trigger|trg_executie_tevi_izo_truncate on public.executie_tevi|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_izo_atr_garda on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_atr_truncate on public.izo_atribuiri|public.fn_izo_garda_atribuiri()', 'trigger|trg_izo_cfg_garda on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cfg_truncate on public.izo_proiect_config|public.fn_izo_garda_fapte()', 'trigger|trg_izo_cor_garda on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_garda on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii_bucati|public.fn_izo_cor_garda()', 'trigger|trg_izo_cor_truncate on public.izo_corectii|public.fn_izo_cor_garda()', 'trigger|trg_izo_doc_garda on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_ist_garda on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_ist_truncate on public.izo_documente_istoric|public.fn_izo_doc_ist_garda()', 'trigger|trg_izo_doc_rand_garda on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_rand_truncate on public.izo_documente_intrare_randuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_garda on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_scan_truncate on public.izo_documente_scanuri|public.fn_izo_doc_garda()', 'trigger|trg_izo_doc_truncate on public.izo_documente_intrare|public.fn_izo_doc_garda()', 'trigger|trg_izo_ev_garda on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_ev_truncate on public.magazie_bucati_evenimente|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_garda on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_imp_truncate on public.izo_importuri|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_garda on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_izo_mis_truncate on public.magazie_bucati_miscari|public.fn_izo_garda_fapte()', 'trigger|trg_magbuc_izo_garda on public.magazie_bucati|public.fn_izo_garda_bucati()', 'trigger|trg_magbuc_izo_truncate on public.magazie_bucati|public.fn_izo_garda_truncate_bucati()', 'trigger|trg_pachete_izo_delete on public.executie_pachete_lansare|public.fn_izo_refuz_delete_pachet()', 'trigger|trg_pachete_izo_mutare on public.executie_pachete_lansare|public.fn_izo_refuz_mutare_pachet()', 'trigger|trg_pachete_izo_truncate on public.executie_pachete_lansare|public.fn_izo_refuz_truncate_cai_vechi()', 'trigger|trg_proiecte_izo_site on public.executie_proiecte|public.fn_izo_refuz_site_proiect()', 'trigger|trg_tronsoane_izo_mutare on public.executie_tronsoane|public.fn_izo_refuz_mutare_tronson()']::text[] THEN RAISE EXCEPTION 'E4b inventar implicit: %',v_impl; END IF;
  v_lipsa:=public.fn_izo_porti_lipsa(); IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b postconditie %',v_lipsa; END IF;
    -- <amprenta> (expresie IDENTICĂ în migrare și în revenire — verificată textual de scripts/test_izometrie_e2a.sh)
   SELECT md5(concat_ws(' | ',

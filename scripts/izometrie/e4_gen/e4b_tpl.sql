@@ -22,6 +22,7 @@ BEGIN
   'e3b',obj_description('public.fn_izo_porti_e3b_definitii()'::regprocedure,'pg_proc'),
   'e4',obj_description('public.fn_izo_porti_e4_definitii()'::regprocedure,'pg_proc'));
  IF v_amprenta IS DISTINCT FROM substring(v_meta->>'evenimente' FROM 'amprenta=([0-9a-f]{32})') THEN RAISE EXCEPTION 'E4b baseline amprenta'; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_aprobare_admin(bigint,timestamptz,text)'::regprocedure) IS DISTINCT FROM @@EMITERE_MD5@@ THEN RAISE EXCEPTION 'E4b baseline emitere'; END IF;
  @@SCHEMA@@
  @@SECURITY@@
  @@API@@
@@ -29,6 +30,7 @@ BEGIN
  @@FLUX_NEW@@
  @@E4_GATE_NEW@@
  @@DEPOT_NEW@@
+ @@EMITERE_NEW@@
  CREATE UNIQUE INDEX ux_magbuc_ev_decl ON public.magazie_bucati_evenimente(document_id,tip)
   WHERE document_tip='izo_declaratie' AND tip IN ('taiere','montaj','corectie');
  @@REVOKE_FUNCTIONS@@
@@ -44,7 +46,8 @@ BEGIN
  REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;
  GRANT EXECUTE ON FUNCTION public.fn_izo_uid() TO izo_montaj_writer;
  @@BIR0U_ACL@@
- -- NOLOGIN role has no direct write route. Private, typed helpers hold postgres privileges.
+ @@MATRIX_ACL@@
+ -- Private helpers use the column matrix; API wrappers remain thin.
  -- API wrappers carry no setters, dynamic SQL, or identity text (control_0e).
  GRANT EXECUTE ON FUNCTION public.fn_izo_teren_intern(bigint,bigint,uuid,boolean),public.fn_izo_teren_push(uuid,jsonb) TO izo_teren_editor;
  GRANT EXECUTE ON FUNCTION public.fn_izo_pv_lipsa(bigint[]) TO izo_teren_editor,izo_montaj_writer;
@@ -70,7 +73,7 @@ BEGIN
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',p.oid::regprocedure,p.proowner,p.prosecdef,p.proconfig,p.proacl,md5(p.prosrc)),',' ORDER BY p.oid::regprocedure::text)
     FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname LIKE 'fn\_izo\_%'),
    (SELECT string_agg(format('%s:%s:%s:%s:%s',c.relname,c.relowner,c.relrowsecurity,c.relacl,c.reloptions),',' ORDER BY c.relname)
-    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(@@TABLES@@) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active'))),
+    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND (c.relname=ANY(@@TABLES@@) OR c.relname IN ('v_izo_carantina_sync','v_izo_rezervari_active','v_izo_alerte'))),
    (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',c.relname,a.attname,a.atttypid,a.attnotnull,a.attacl,pg_get_expr(d.adbin,d.adrelid)),',' ORDER BY c.relname,a.attnum)
     FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
     WHERE c.relnamespace='public'::regnamespace AND c.relname=ANY(@@TABLES@@) AND a.attnum>0 AND NOT a.attisdropped),

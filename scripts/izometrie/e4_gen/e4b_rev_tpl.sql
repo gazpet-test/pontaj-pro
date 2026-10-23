@@ -1,6 +1,6 @@
 -- GENERATED. Refuses any E4b facts; restores exact E4a body and all stamps.
 DO $revenire$
-DECLARE v_amprenta text; v_scrisa text; v_impl text[]; v_lipsa text[]; v_meta jsonb; v_t text; v_count bigint;
+DECLARE v_amprenta text; v_scrisa text; v_impl text[]; v_lipsa text[]; v_meta jsonb; v_t text; v_count bigint; v_grant jsonb;
 BEGIN
  IF current_user<>'postgres' OR current_setting('gazpet.revenire_20261109b',true)
   IS DISTINCT FROM 'IZO_E4B_SCOATE:'||txid_current() THEN RAISE EXCEPTION 'E4b revenire nearmata'; END IF;
@@ -23,14 +23,18 @@ BEGIN
  @@FLUX_OLD@@
  @@E4_GATE_OLD@@
  @@DEPOT_OLD@@
+ @@EMITERE_OLD@@
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_depozit_in_registru(integer)'::regprocedure) IS DISTINCT FROM @@DEPOT_MD5@@ THEN RAISE EXCEPTION 'E4b depot restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_e4_lipsa()'::regprocedure) IS DISTINCT FROM @@E4_GATE_MD5@@ THEN RAISE EXCEPTION 'E4b E4 gate restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_admin(bigint,boolean,text)'::regprocedure) IS DISTINCT FROM @@FLUX_MD5@@ THEN RAISE EXCEPTION 'E4b flux restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_montaj(text,text,jsonb,jsonb)'::regprocedure) IS DISTINCT FROM @@GUARD_MD5@@ THEN RAISE EXCEPTION 'E4b guard restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_lipsa()'::regprocedure) IS DISTINCT FROM @@OLD_MD5@@ THEN RAISE EXCEPTION 'E4b restore body differs'; END IF;
- DROP VIEW public.v_izo_carantina_sync,public.v_izo_rezervari_active;
+ DROP VIEW public.v_izo_carantina_sync,public.v_izo_rezervari_active,public.v_izo_alerte;
  DROP FUNCTION public.fn_izo_porti_e4b_lipsa(),public.fn_izo_porti_e4b_definitii();
  -- Triggers depend on the immutable guard; remove them with the empty tables first.
+ @@MATRIX_ROLLBACK@@
+ DROP TRIGGER a0_izo_suduri_proiectie ON public.izo_suduri;
+ DROP TRIGGER a0_izo_suduri_proiectie ON public.izo_suduri_capete;
  @@DROP_FUNCTIONS_BEFORE_TABLES@@
  DROP INDEX public.ux_magbuc_ev_decl;
  DROP POLICY magbuc_izo_montaj_ins ON public.magazie_bucati;

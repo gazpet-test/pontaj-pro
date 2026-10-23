@@ -256,7 +256,7 @@ BEGIN
   END IF;
   PERFORM public.fn_izo_sudura_aproba(v_d.id);
   UPDATE public.izo_declaratii SET stare='aprobata',aprobat_de=public.fn_izo_uid(),aprobat_de_angajat=v_emp,
-   decis_la=clock_timestamp(),eveniment_ids=CASE WHEN v_d.tip='cuplare' THEN '{}'::bigint[] ELSE CASE WHEN v_corr IS NULL THEN ARRAY[v_ev] ELSE ARRAY[v_ev,v_corr] END END,server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id;
+   decis_la=clock_timestamp(),decizie_motiv=coalesce(p_decizii->>('corectie:'||v_d.id),decizie_motiv),eveniment_ids=CASE WHEN v_d.tip='cuplare' THEN '{}'::bigint[] ELSE CASE WHEN v_corr IS NULL THEN ARRAY[v_ev] ELSE ARRAY[v_ev,v_corr] END END,server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id;
  END LOOP;
  IF EXISTS(SELECT 1 FROM public.izo_suduri w WHERE w.proiect_id=v_s.proiect_id AND w.stare='aprobata'
   AND (SELECT count(*) FROM public.izo_suduri_capete c WHERE c.sudura_id=w.id AND c.activ)<>2)
@@ -380,7 +380,7 @@ BEGIN
 END $f$;
 
 CREATE FUNCTION public.fn_izo_dependenti(p_decl bigint) RETURNS bigint[]
- LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
  WITH RECURSIVE deps AS (
   SELECT id,uid FROM public.izo_declaratii WHERE id=p_decl
   UNION
@@ -454,8 +454,7 @@ BEGIN
   END IF;
  END LOOP;
  IF NOT p_revizie THEN
-  UPDATE public.izo_suduri_capete c SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE c.activ AND c.sudura_id IN (SELECT s.id FROM public.izo_suduri s JOIN public.izo_declaratii d ON d.id=s.declaratie_id WHERE d.id=ANY(v_ids) AND d.stare='respinsa' AND s.stare='declarata');
-  UPDATE public.izo_suduri s SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE s.declaratie_id IN (SELECT d.id FROM public.izo_declaratii d WHERE d.id=ANY(v_ids) AND d.stare='respinsa') AND s.stare='declarata';
+  PERFORM public.fn_izo_suduri_invalideaza(ARRAY(SELECT d.id FROM public.izo_declaratii d WHERE d.id=ANY(v_ids) AND d.stare='respinsa'));
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=clock_timestamp(),motiv_eliberare=CASE WHEN declaratie_id=p_decl THEN 'respinsa' ELSE 'parinte_anulat' END,
    server_ver=nextval('public.izo_server_ver_seq') WHERE activa AND (declaratie_id=ANY(v_ids) OR bucata_decl_uid IN
     (SELECT uid FROM public.izo_bucati_declarate WHERE declaratie_id=ANY(v_ids)));
@@ -528,7 +527,7 @@ BEGIN
  IF v_s.stare<>'trimisa' OR v_d.stare<>'in_verificare' OR v_d.identificare IS DISTINCT FROM 'nerezolvata'
   OR v_d.versiune IS DISTINCT FROM p_versiune OR v_d.updated_at IS DISTINCT FROM p_updated_at THEN RAISE EXCEPTION 'cas'; END IF;
  PERFORM public.fn_izo_blocheaza_locuri(v_d.proiect_id,ARRAY[]::integer[],ARRAY[v_d.tronson_id]);
- PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=v_d.tronson_id FOR SHARE;
+ PERFORM public.fn_izo_config_blocheaza(v_d.tronson_id);
  IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_d.tronson_id AND flux_montaj)
   OR coalesce(public.fn_izo_nivel(v_d.proiect_id),'off')='off' THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
  PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_d.proiect_id AND id=radacina_id ORDER BY id FOR UPDATE;
@@ -545,10 +544,12 @@ BEGIN
  IF EXISTS(SELECT 1 FROM public.magazie_bucati b WHERE b.id<>v_b.id AND b.proiect_id=v_b.proiect_id AND b.stare NOT IN ('taiata','anulata')
   AND b.serie_canon=v_b.serie_canon AND b.sarja IS NOT DISTINCT FROM v_b.sarja AND b.lungime_cm=v_b.lungime_cm
   AND NOT EXISTS(SELECT 1 FROM public.magazie_bucati c WHERE c.parinte_id=b.id AND c.stare<>'anulata')) THEN v_conflict:='r1d'; END IF;
+ PERFORM public.fn_izo_montaj_marcheaza(concat_ws('|',txid_current(),'serie',v_d.id,v_d.proiect_id,v_d.tronson_id,v_d.versiune+1,v_b.id),NULL,NULL,NULL);
  UPDATE public.izo_declaratii SET bucata_id=v_b.id,identificare='bucata',stare=CASE WHEN v_conflict IS NULL THEN 'trimisa' ELSE 'conflict' END,
   conflict_cod=v_conflict,versiune=versiune+1,decis_la=clock_timestamp(),decizie_motiv=btrim(p_motiv),
   payload=payload||jsonb_build_object('bucata',jsonb_build_object('bucata_id',v_b.id)),
   server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_d.id RETURNING * INTO v_d;
+ PERFORM public.fn_izo_montaj_marcheaza(NULL,NULL,NULL,NULL);
  INSERT INTO public.izo_declaratii_versiuni(declaratie_id,versiune,payload,hash_cerere,op_id)
  VALUES(v_d.id,v_d.versiune,v_d.payload,v_hash,p_cheie);
  INSERT INTO public.izo_rezervari(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,din_depozit)

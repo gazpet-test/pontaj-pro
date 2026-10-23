@@ -112,10 +112,10 @@ BEGIN
   SELECT * INTO v_f FROM public.izo_fronturi WHERE tronson_id=p_tronson AND activ FOR UPDATE;
   IF v_f.profile_id<>public.fn_izo_uid() OR v_f.dispozitiv_id<>p_dispozitiv THEN RAISE EXCEPTION 'alt_dispozitiv' USING ERRCODE='IZ004'; END IF;
   IF public.fn_izo_teren_autorizat(p_proiect,true) IS NULL THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='IZ004'; END IF;
-  PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=p_tronson FOR SHARE;
+  PERFORM public.fn_izo_config_blocheaza(p_tronson);
   IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=p_tronson AND flux_montaj)
    OR coalesce(public.fn_izo_nivel(p_proiect),'off') NOT IN ('stoc','montaj') THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
-  PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=p_proiect AND id=radacina_id ORDER BY id FOR UPDATE;
+  PERFORM public.fn_izo_teren_radacini_blocheaza(p_proiect,false);
   UPDATE public.izo_fronturi SET expira_la=now()+interval '12 hours',server_ver=nextval('public.izo_server_ver_seq') WHERE id=v_f.id;
    UPDATE public.izo_rezervari SET expira_dupa=now()+interval '36 hours',server_ver=nextval('public.izo_server_ver_seq')
    WHERE autor_profile_id=public.fn_izo_uid() AND tronson_id=p_tronson AND activa AND expira_dupa IS NOT NULL;
@@ -227,8 +227,7 @@ BEGIN
    WHERE uid IN (SELECT uid FROM deps) AND stare IN ('ciorna','conflict','trimisa','in_verificare','revizie_ceruta');
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=now(),motiv_eliberare=CASE WHEN v_type='decl_sterge' THEN 'stearsa' ELSE 'versiune_noua' END,
    server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND activa;
-  UPDATE public.izo_suduri_capete c SET activ=false,server_ver=nextval('public.izo_server_ver_seq') WHERE c.activ AND c.sudura_id IN (SELECT s.id FROM public.izo_suduri s WHERE s.declaratie_id=v_d.id AND s.stare='declarata');
-  UPDATE public.izo_suduri SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND stare='declarata';
+  PERFORM public.fn_izo_suduri_invalideaza(ARRAY[v_d.id]);
   UPDATE public.izo_bucati_declarate SET stare='anulata',server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND stare='declarata';
  END IF;
  IF v_type='decl_sterge' THEN
@@ -251,7 +250,7 @@ BEGIN
  END IF;
  v_date:=coalesce((v_p->>'data_montaj')::date,(now() AT TIME ZONE 'Europe/Bucharest')::date);
  IF v_date>(now() AT TIME ZONE 'Europe/Bucharest')::date THEN RAISE EXCEPTION 'data_viitoare' USING ERRCODE='IZ001'; END IF;
- SELECT * INTO STRICT v_cfg FROM public.izo_proiect_config WHERE proiect_id=p_front.proiect_id;
+ SELECT * INTO STRICT v_cfg FROM public.fn_izo_proiect_config_citeste(p_front.proiect_id);
  IF v_p->>'tip'<>'cuplare' THEN
  v_ref:=CASE WHEN v_p->>'tip'='taiere' THEN v_p->'sursa' ELSE v_p->'bucata' END;
  v_source:=(v_ref->>'bucata_id')::bigint; v_decl:=(v_ref->>'decl_uid')::uuid;
@@ -478,13 +477,12 @@ BEGIN
  IF NOT EXISTS(SELECT 1 FROM public.izo_dispozitive WHERE dispozitiv_id=p_dispozitiv AND profile_id=v_uid) THEN RETURN jsonb_build_object('cod','fara_drept'); END IF;
  -- Conservative, fixed superset of the transitive closure: all this author's project rows.
  -- It also contains dependencies introduced by earlier operations in the same batch.
- PERFORM 1 FROM public.izo_tronson_config WHERE tronson_id=v_tr AND proiect_id=v_pr FOR SHARE;
+ PERFORM public.fn_izo_config_blocheaza(v_tr);
  PERFORM public.fn_izo_blocheaza_locuri(v_pr,ARRAY(SELECT DISTINCT depozit_id FROM public.magazie_bucati WHERE proiect_id=v_pr AND depozit_id IS NOT NULL ORDER BY depozit_id),ARRAY[v_tr]);
  IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_tr AND proiect_id=v_pr AND flux_montaj)
   OR coalesce(public.fn_izo_nivel(v_pr),'off') NOT IN ('stoc','montaj') THEN RETURN jsonb_build_object('cod','fara_drept'); END IF;
  -- No project advisory: roots serialize reservation races across fronts (§10.5).
- PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_pr AND tip_cod IS NOT NULL AND id=radacina_id ORDER BY id FOR UPDATE;
- PERFORM 1 FROM public.magazie_bucati WHERE proiect_id=v_pr AND tip_cod IS NOT NULL ORDER BY id FOR UPDATE;
+ PERFORM public.fn_izo_teren_radacini_blocheaza(v_pr,true);
  SELECT ultimul_seq INTO v_last FROM public.izo_dispozitive WHERE dispozitiv_id=p_dispozitiv FOR UPDATE;
  IF (SELECT count(*) FROM public.izo_operatii WHERE autor_profile_id=v_uid AND ora_server>now()-interval '1 hour')+jsonb_array_length(p_ops)>600 THEN
   RETURN jsonb_build_object('cod','limita'); END IF;
