@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import { aplicaPropunereOCR, avertismenteOCR, cantitateMultiplaOCR } from './izoDocumentePrefill.js'
+import { citesteLocal, raspunsInvokeOCR, descrieSursaOCR } from './izoOcrLocalFlux.js'
 import {
   SABLOANE, DECIZII, COLOANE, IZOLATII, esteCurba, parseNumar, fmtNr, fmtM, randGol, validareDocument, eroriSalvare, eroriPv, eroareMotiv,
   randuriDinLipire, randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, normalizeazaSalvare,
@@ -111,6 +112,9 @@ export default function IzoDocumenteIntrare() {
   const [imagineAI, setImagineAI] = useState(null)
   const [rotatieMesaj, setRotatieMesaj] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
+  const [aiProgres, setAiProgres] = useState('')
+  const aiMontat = useRef(true)
+  useEffect(() => { aiMontat.current = true; return () => { aiMontat.current = false } }, [])
   const [propunere, setPropunere] = useState(null)
   const [modAI, setModAI] = useState('completeaza')
   const [aiMeta, setAiMeta] = useState(null)
@@ -481,11 +485,11 @@ export default function IzoDocumenteIntrare() {
     } catch (e) { flash('err', e.message) }
     finally { aiLock.current = false; setAiBusy(false) }
   }
-  const citesteAI = async (model = 'haiku') => {
+  const citesteAI = async (model = 'local') => {
     if (!pdfAI || busy || aiLock.current || !edScrie || !edRol || opritScriere(ed)) return
-    aiLock.current = true; setAiBusy(true); setPropunere(null); setAiMeta(null)
+    aiLock.current = true; setAiBusy(true); setPropunere(null); setAiMeta(null); setAiProgres('Se pregătește citirea…')
     const context = contextAI(), seq = fisierSeq.current
-    const actual = () => context === contextAI() && seq === fisierSeq.current
+    const actual = () => aiMontat.current && context === contextAI() && seq === fisierSeq.current
     try {
       const pdf_base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader(); reader.onerror = () => reject(new Error('Nu s-a putut citi PDF-ul.'))
@@ -497,14 +501,25 @@ export default function IzoDocumenteIntrare() {
       if (!Number.isSafeInteger(proiectId) || proiectId <= 0 || !Number.isSafeInteger(depozitId) || depozitId <= 0) {
         flash('err', 'Alege proiectul și depozitul înainte de citirea AI.'); return
       }
-      const { data, error } = await supabase.functions.invoke('ocr-packing-list', { body:{ tip:'aviz_e3', proiect_id:proiectId,
-        depozit_id:depozitId, sablon:esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava', pdf_base64, nume_fisier:pdfAI.name, model } })
-      let raspuns = data
-      if (error?.context?.json) { try { raspuns = await error.context.json() } catch { /* răspuns fără JSON */ } }
+      const sablon = esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava'
+      const invoke = (nume, opt) => supabase.functions.invoke(nume, opt)
+      // Un singur aiLock pe întreaga operație. Haiku direct nu reintră în citesteAI (R3-7).
+      const executaHaikuE3 = () => raspunsInvokeOCR(invoke, 'ocr-packing-list', { tip:'aviz_e3', proiect_id:proiectId,
+        depozit_id:depozitId, sablon, pdf_base64, nume_fisier:pdfAI.name, model:model === 'local' ? 'haiku' : model })
+      let rez = model === 'local'
+        ? await citesteLocal({ pdf_base64, proiect_id:proiectId, depozit_id:depozitId, sablon, actual, invoke, progres:setAiProgres })
+        : { haiku:true }
+      if (rez.abandonat || !actual()) return
+      if (rez.haiku) {
+        if (model !== 'local') setAiProgres('Citesc cu Haiku…')
+        rez = await executaHaikuE3()
+        if (model === 'local' && rez.raspuns) rez = { ...rez, raspuns:{ ...rez.raspuns, sursa:{ ...rez.raspuns.sursa, ramura:'haiku' } } }
+      }
+      const { raspuns, error, status } = rez
       if (!actual()) { flash('err', 'Răspuns AI ignorat: documentul, proiectul, depozitul, șablonul sau formularul s-a schimbat.'); return }
       setAiMeta(raspuns || null)
       if (error || !raspuns?.success) {
-        const status = error?.context?.status, cod = raspuns?.eroare
+        const cod = raspuns?.eroare
         throw new Error(cod === 'fara_drept' || status === 403 ? 'Nu ai dreptul să citești cu AI pentru acest proiect și depozit.'
           : cod === 'plafon_depasit' || status === 429 ? 'Plafonul AI a fost depășit. Citirea nu a fost efectuată.'
           : status === 400 ? 'Cerere incompletă: verifică proiectul, depozitul și tipul documentului.'
@@ -529,8 +544,18 @@ export default function IzoDocumenteIntrare() {
         } else setRotatieMesaj(`Pagina pare rotita ${raspuns.rotatie_grade} grade`)
       }
       setPropunere({ raspuns, context })
-    } catch (e) { flash('err', actual() ? e.message || 'Citirea AI a eșuat.' : 'Răspuns AI ignorat: editorul s-a schimbat.') }
-    finally { aiLock.current = false; setAiBusy(false) }
+    } catch (e) {
+      if (!actual()) return
+      if (e.raspuns) setAiMeta(e.raspuns)
+      const cod = e.raspuns?.eroare
+      flash('err', cod === 'plafon_depasit' ? 'Plafonul AI a fost depășit. Citirea nu a fost efectuată.'
+        : e.status === 403 ? 'Nu ai dreptul să citești cu AI pentru acest proiect și depozit.'
+        : e.status === 400 ? 'Cerere incompletă: verifică proiectul, depozitul și tipul documentului.'
+        : e.status === 413 ? 'PDF prea mare. Limita AI este 8 MB.'
+        : cod === 'pdf_invalid' ? 'PDF invalid sau criptat. Alege alt scan ori completează manual.'
+        : e.raspuns ? 'Citirea a eșuat. Completează manual sau încearcă din nou cu Haiku.' : e.message || 'Citirea AI a eșuat.')
+    }
+    finally { aiLock.current = false; if (aiMontat.current) { setAiBusy(false); setAiProgres('') } }
   }
   // PDF-ul din care s-a aplicat propunerea: doar el poate fi atașat ca „scan citit” (Jak ux2 r2 P1)
   const pdfAplicat = useRef(null)
@@ -676,8 +701,11 @@ export default function IzoDocumenteIntrare() {
             onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; pregatesteAI(f) }} />
         </label>
         <button style={{ ...S.btnP, minHeight:44 }} onClick={() => citesteAI()} disabled={!pdfAI || busy || aiBusy || !edRol}>{aiBusy ? 'Se procesează…' : 'Citește cu AI'}</button>
+        <button style={{ ...S.btnS, minHeight:44 }} onClick={() => citesteAI('haiku')} disabled={!pdfAI || busy || aiBusy || !edRol}>Citește cu Haiku</button>
       </div>
       <p style={{ fontSize:12, color:G.muted }}>O fotografie per document; pentru mai multe pagini alege un PDF. Maxim 8 MB. AI propune; tu verifici și salvezi.</p>
+      <div style={{ fontSize:12, color:G.muted }}>Citire locală implicită; Haiku automat dacă serviciul local nu poate citi. Cost variabil, în plafonul AI.</div>
+      {aiProgres && <div role="status" style={{ marginTop:8, color:G.yellow }}>{aiProgres}</div>}
       {/* confirmare vizibilă (Razvan 22.10: „să știu sigur că s-a încărcat”) */}
       {aiBusy && !pdfAI && <div style={{ margin:'8px 0', padding:'10px 12px', borderRadius:8, background:G.yellow + '22', border:`1px solid ${G.yellow}`, color:G.yellow, fontWeight:700 }}>⏳ Se pregătește poza…</div>}
       {pdfAI && <div style={{ margin:'8px 0', padding:'10px 12px', borderRadius:8, background:G.green + '22', border:`1px solid ${G.green}`, color:G.green, fontWeight:700 }}>
@@ -690,8 +718,11 @@ export default function IzoDocumenteIntrare() {
         dimensiuni={(width, height) => setImagineAI(x => x ? { ...x, width, height } : x)} />}
       {rotatieMesaj && <div style={{ color:G.yellow }}>{rotatieMesaj}</div>}
       {aiMeta && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>
+        {aiMeta.success && <b>{descrieSursaOCR(aiMeta)}. </b>}
         {aiMeta.model && <>Model: {aiMeta.model}. </>}
         {aiMeta.cost_usd != null && <>Cost: {fmtNr(aiMeta.cost_usd, 4)} USD. </>}
+        {aiMeta.success && aiMeta.cost_usd == null && <>Cost necunoscut. </>}
+        {aiMeta.sursa && <div>Durată: {aiMeta.sursa.secunde ?? '—'} s · Dezacorduri: {aiMeta.sursa.dezacorduri ?? '—'} · Perspectivă: {({ aplicata:'aplicată', nesigura:'nesigură', inutila:'inutilă' })[aiMeta.sursa.perspectiva] || '—'}</div>}
         {aiMeta.plafon && <>Plafon rămas: {fmtNr(Number(aiMeta.plafon.plafon_usd) - Number(aiMeta.plafon.consumat_usd) - Number(aiMeta.plafon.rezervat_usd), 4)} USD (după rezervări).</>}
       </div>}
       {aiMeta?.success && pdfAI && <><button style={S.btnS} disabled={busy || aiBusy} onClick={() => citesteAI('sonnet')}>Reciteste cu model superior (~5 centi)</button><span style={{ color:G.muted, fontSize:12 }}> Cost variabil; rezervă maximă 0,20 USD.</span></>}

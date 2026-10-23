@@ -8,6 +8,15 @@ const raspuns = { antet:{ furnizor:'OCR', nr_document:'001', proiect_id:99, depo
   randuri:[{ serie:'000O01I', sarja:'0009', lungime_doc:12.345, lungime_masurata:12, decizie:'primit', necunoscut:'x' }],
   totaluri_tiparite:{ total_metri:100, total_kg:200 } }
 describe('prefill OCR E3', () => {
+  it('E9 local normalizat: kg 1343, metri zecimali și null nestructural până la randNormalizat', () => {
+    // B2 normalizează „1,343” kg la numărul 1343 înainte de răspunsul către UI.
+    // UI nu reinterpretează textul brut al workerului.
+    const d = aplicaPropunereOCR(doc(), { antet:{}, randuri:[{
+      serie:'001', greutate_kg:1343, lungime_doc:12.5, sarja:null,
+    }] }, { mod:'inlocuieste' })
+    expect(d.randuri[0]).toMatchObject({ greutate_kg:'1343', lungime_doc:'12.5', sarja:'', decizie:'' })
+    expect(randNormalizat(d.randuri[0], 'aviz_teava')).toMatchObject({ greutate_kg:1343, lungime_doc_mm:12500 })
+  })
   it('completează golurile sau înlocuiește; păstrează contextul ales', () => {
     const d = doc(), a = aplicaPropunereOCR(d, raspuns), b = aplicaPropunereOCR(d, raspuns, { mod:'inlocuieste' })
     expect(a.antet.furnizor).toBe('Manual'); expect(b.antet.furnizor).toBe('OCR')
