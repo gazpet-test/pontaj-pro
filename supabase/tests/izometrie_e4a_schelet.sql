@@ -4,6 +4,9 @@ ALTER TABLE public.executie_pachete_lansare
   ADD COLUMN status text NOT NULL DEFAULT 'draft', ADD COLUMN aprobat_la timestamptz,
   ADD COLUMN pdf_aprobare_path text, ADD COLUMN pdf_aprobare_nume text,
   ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE public.executie_pachete_lansare ADD COLUMN observatii text, ADD COLUMN data_lansare date,
+  ADD COLUMN nr_tevi integer NOT NULL DEFAULT 0, ADD COLUMN total_lungime_m numeric NOT NULL DEFAULT 0,
+  ADD COLUMN nr_pending_sant integer NOT NULL DEFAULT 0;
 ALTER TABLE public.executie_tevi ADD COLUMN observatii text, ADD COLUMN pm_cod text,
   ADD COLUMN pa_ut_cod text, ADD COLUMN ut_cod text, ADD COLUMN tip_rand text NOT NULL DEFAULT 'teava',
   ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now(), ADD COLUMN sarja text, ADD COLUMN lot text,

@@ -78,6 +78,8 @@ BEGIN
   BEGIN
     IF TG_OP<>'INSERT' THEN v_old:=to_jsonb(OLD); END IF;
     IF TG_OP<>'DELETE' THEN v_new:=to_jsonb(NEW); END IF;
+    -- INSERT keeps the legacy lock order; AFTER validates the final header after
+    -- defaults/numbering and the legacy shared advisory lock (including km).
     IF TG_TABLE_NAME='executie_pachete_lansare' AND TG_OP='INSERT' THEN RETURN NEW; END IF;
     IF TG_TABLE_NAME IN ('executie_tevi','executie_pachete_documente') THEN
       SELECT array_agg(p.tronson_id),array_agg(p.proiect_id) INTO v_tr,v_pr FROM public.executie_pachete_lansare p
@@ -119,6 +121,15 @@ BEGIN
                   (v_new-ARRAY['status','aprobat_la','pdf_aprobare_path','pdf_aprobare_nume','updated_at']))) THEN RETURN NEW; END IF;
         IF TG_TABLE_NAME='executie_pachete_documente' AND TG_OP='INSERT'
           AND v_new->>'tip_document' IS DISTINCT FROM 'pdf_aprobare_transgaz' THEN RETURN NEW; END IF;
+        -- Only ordinary header metadata may be edited by the client. All other
+        -- columns, including new columns added later, remain protected.
+        IF TG_TABLE_NAME='executie_pachete_lansare' AND TG_OP='UPDATE'
+          AND (v_old-ARRAY['observatii','data_lansare','updated_at']) =
+              (v_new-ARRAY['observatii','data_lansare','updated_at']) THEN
+          -- A caller must not rewind the header CAS after a structural write.
+          NEW.updated_at:=clock_timestamp();
+          RETURN NEW;
+        END IF;
         IF TG_TABLE_NAME='executie_pachete_lansare' AND TG_OP='UPDATE'
           AND (v_old-ARRAY['updated_at','nr_tevi','total_lungime_m','nr_pending_sant']) =
               (v_new-ARRAY['updated_at','nr_tevi','total_lungime_m','nr_pending_sant'])
@@ -135,9 +146,12 @@ BEGIN
   DECLARE v_j jsonb:=to_jsonb(NEW);
   BEGIN
     IF EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=NEW.tronson_id AND flux_montaj)
-      AND (coalesce(v_j->>'status','draft')<>'draft' OR EXISTS
+      AND (v_j->>'status' IS DISTINCT FROM 'draft' OR v_j->>'km_start_m' IS NOT NULL
+        OR coalesce((v_j->>'nr_tevi')::numeric,0)<>0
+        OR coalesce((v_j->>'total_lungime_m')::numeric,0)<>0
+        OR coalesce((v_j->>'nr_pending_sant')::numeric,0)<>0 OR EXISTS
         (SELECT 1 FROM jsonb_each(v_j) e WHERE (e.key LIKE 'aprobat_%' OR e.key LIKE 'pdf_aprobare_%') AND e.value<>'null'::jsonb))
-      THEN RAISE EXCEPTION 'E4a antet aprobat din client' USING ERRCODE='42501'; END IF;
+      THEN RAISE EXCEPTION 'E4a flux: antet initial invalid din client' USING ERRCODE='42501'; END IF;
     RETURN NEW;
   END $f$;
   CREATE TRIGGER a0_izo_flux_tevi BEFORE INSERT OR UPDATE OR DELETE ON public.executie_tevi FOR EACH ROW EXECUTE FUNCTION public.fn_izo_flux_garda();
@@ -191,7 +205,9 @@ BEGIN
       -- E4a-1 cannot verify a legare without E4b suduri: fail closed on that row type.
       IF EXISTS(SELECT 1 FROM public.executie_tevi t JOIN public.executie_pachete_lansare p ON p.id=t.pachet_id
         WHERE p.tronson_id=p_tronson AND (coalesce(to_jsonb(t)->>'tip_rand','teava') NOT IN ('teava','curba')
-          OR NOT EXISTS(SELECT 1 FROM public.magazie_bucati b WHERE b.executie_teava_id=t.id AND b.stare='montata' AND b.tronson_id=p_tronson)))
+          OR (SELECT count(*) FROM public.magazie_bucati b WHERE b.executie_teava_id=t.id AND b.stare='montata'
+            AND b.tronson_id=p_tronson AND b.proiect_id=v_pr
+            AND b.tip_cod=coalesce(to_jsonb(t)->>'tip_rand','teava'))<>1))
         THEN RAISE EXCEPTION 'E4a randuri nelegate'; END IF;
       IF EXISTS(SELECT 1 FROM public.executie_pachete_lansare p WHERE p.tronson_id=p_tronson
         AND (to_jsonb(p)->>'aprobat_la' IS NOT NULL OR to_jsonb(p)->>'pdf_aprobare_path' IS NOT NULL
@@ -248,7 +264,7 @@ BEGIN
       (coalesce(to_jsonb(t)->>'tip_rand','teava') NOT IN ('teava','curba') OR
        (SELECT count(*) FROM public.magazie_bucati b WHERE b.executie_teava_id=t.id AND b.stare='montata'
          AND b.proiect_id=v_pr AND b.tronson_id=v_tr AND b.tip_cod=coalesce(to_jsonb(t)->>'tip_rand','teava')
-         AND t.serie_unica IS NOT DISTINCT FROM b.serie AND t.lungime_m IS NOT DISTINCT FROM b.lungime_m)<>1))
+         AND to_jsonb(t) @> public.fn_izo_flux_pachet_identitate(b))<>1))
       THEN RAISE EXCEPTION 'rand_nelegat_sau_proiectie_invalida'; END IF;
     IF p_nume IS NULL OR p_nume !~ '^[^/\\]+[.]pdf$' THEN RAISE EXCEPTION 'nume_pdf_invalid'; END IF;
     v_path:=v_pr::text || '/' || p_pachet::text || '/aprobare/' || md5(extract(epoch FROM p_updated_at)::text) || '.pdf';

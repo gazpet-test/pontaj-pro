@@ -1,9 +1,29 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { salveazaAlegereRegistru } from '../../../src/lib/izoRegistru.js'
+import { salveazaAlegereRegistru, dezleagaDinRegistru } from '../../../src/lib/izoRegistru.js'
 
 const row = { id: 12, pachet_id: 7, updated_at: '2026-10-23T10:00:00Z' }
 const piece = { id: 88, serie: 'AB', tip_cod: 'teava', lungime_mm: 12000 }
+
+test('unlink sends the displayed row CAS and expected piece', async () => {
+  const calls = []
+  const client = { rpc: async (...args) => { calls.push(args); return { data: { cod: 'dezlegat' }, error: null } } }
+  assert.equal((await dezleagaDinRegistru(client, row, 7, 88, ' corectie ')).error, null)
+  assert.deepEqual(calls, [['fn_izo_pachet_dezleaga', {
+    p_teava: 12, p_motiv: 'corectie', p_updated_at: row.updated_at, p_bucata_asteptata: 88,
+  }]])
+})
+
+test('unlink refuses incomplete snapshots and never retries stale RPC with a fresh version', async () => {
+  const noWrite = { rpc: () => assert.fail('incomplete unlink wrote') }
+  for (const [r, pkg, b] of [[row, 8, 88], [row, 7, null], [{ ...row, updated_at: null }, 7, 88]]) {
+    assert.ok((await dezleagaDinRegistru(noWrite, r, pkg, b, 'corectie')).error)
+  }
+  let calls = 0
+  const error = { message: 'pachet_schimbat' }
+  assert.equal((await dezleagaDinRegistru({ rpc: async () => { calls++; return { error } } }, row, 7, 88, 'corectie')).error, error)
+  assert.equal(calls, 1)
+})
 
 test('flow picker calls link RPC with row CAS, never client UPDATE', async () => {
   const calls = []
