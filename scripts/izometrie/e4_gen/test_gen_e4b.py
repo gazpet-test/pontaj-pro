@@ -48,7 +48,7 @@ class E4bTests(unittest.TestCase):
    self.assertNotRegex(body,r'set_config|request[.]jwt|\bexecute\b')
    self.assertIn('OWNER TO izo_montaj_writer',M[M.index('ALTER FUNCTION public.'+name):][:300])
  def test_guard_and_flux_exact_restore(self):
-  for name,key in [('fn_izo_garda_montaj','old_guard'),('fn_izo_flux_admin','old_flux'),('fn_izo_porti_e4_lipsa','old_e4_gate')]:
+  for name,key in [('fn_izo_garda_montaj','old_guard'),('fn_izo_flux_admin','old_flux'),('fn_izo_porti_e4_lipsa','old_e4_gate'),('fn_izo_depozit_in_registru','old_depot')]:
    self.assertEqual(G['src'](G['block'](V,name)),G['src'](G[key]))
    digest=hashlib.md5(G['src'](G[key]).encode()).hexdigest()
    self.assertIn(digest,M); self.assertIn(digest,V)
@@ -69,5 +69,33 @@ class E4bTests(unittest.TestCase):
   self.assertNotRegex(tests,r'(?im)^\s*(GRANT|REVOKE)\b')
   self.assertIn('GET DIAGNOSTICS v_count=ROW_COUNT',tests)
   self.assertIn('push wrote official registry',tests)
+ def test_cut_simulation_is_read_only_and_precedes_facts(self):
+  sim=G['src'](G['block'](M,'fn_izo_lot_efecte'))
+  self.assertNotRegex(sim,r'(?i)\b(?:INSERT|UPDATE|DELETE|nextval|set_config)\b')
+  apply=G['src'](G['block'](M,'fn_izo_aproba_intern'))
+  self.assertLess(apply.index('v_plan:=public.fn_izo_lot_efecte'),apply.index('v_ev:=public.fn_izo_taiere_fapt'))
+  self.assertIn("jsonb_array_elements_text(v_plan->'ordine')",apply)
+  self.assertIn('reconciliere_simulare',apply)
+  self.assertIn('reconciliere_transfer',apply)
+ def test_cut_writer_has_fixed_insert_projection_and_restore(self):
+  cut=G['src'](G['block'](M,'fn_izo_taiere_fapt'))
+  self.assertIn('INSERT INTO public.magazie_bucati('+','.join(G['cut_cols'])+')',cut)
+  self.assertIn('ALTER FUNCTION public.fn_izo_taiere_fapt(bigint) OWNER TO izo_montaj_writer',M)
+  self.assertIn('DROP POLICY magbuc_izo_montaj_ins',V)
+  self.assertIn("'public.magazie_bucati_id_seq'::regclass",G['new_e4_gate'])
+  self.assertIn("'public.izo_rezervari_id_seq'::regclass",G['new_e4_gate'])
+  self.assertIn('destinatie_depozit_id',G['new_depot'])
+ def test_transfer_chain_is_exclusive_and_preserves_consumer(self):
+  self.assertIn('CREATE UNIQUE INDEX ux_izo_rez_transfer',M)
+  cut=G['src'](G['block'](M,'fn_izo_taiere_fapt'))
+  self.assertLess(cut.index("motiv_eliberare='transferata'"),cut.index('INSERT INTO public.izo_rezervari'))
+  self.assertIn('v_r.declaratie_id,v_r.declaratie_versiune,v_r.autor_profile_id,v_child.id,false,v_r.expira_dupa,v_r.id',cut)
+ def test_revision_and_cut_scenarios_remain_connected(self):
+  tests=(R/'supabase/tests/izometrie_e4b_aprobare.test.sql').read_text(encoding='utf-8')
+  for check in ['simulation wrote events','separate transfer lost','transfer chain','revision closure',
+                'unchanged child not restored','changed child restored or reserved','bad cut sum accepted',
+                'equal cut children accepted','changed cut preview accepted']:
+   self.assertIn(check,tests)
+  self.assertTrue(tests.rstrip().endswith("SELECT 'E4B_APROBARE_TEST_END';"))
 
 if __name__=='__main__': unittest.main()

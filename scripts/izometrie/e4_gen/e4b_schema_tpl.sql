@@ -81,6 +81,7 @@ CREATE TABLE public.izo_rezervari (
  CHECK(activa=(eliberata_la IS NULL AND motiv_eliberare IS NULL)));
 CREATE UNIQUE INDEX ux_izo_rez_bucata ON public.izo_rezervari(bucata_id) WHERE activa;
 CREATE UNIQUE INDEX ux_izo_rez_decl ON public.izo_rezervari(bucata_decl_uid) WHERE activa;
+CREATE UNIQUE INDEX ux_izo_rez_transfer ON public.izo_rezervari(transfer_din_id) WHERE transfer_din_id IS NOT NULL;
 CREATE TABLE public.izo_operatii (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, autor_profile_id uuid NOT NULL REFERENCES public.profiles(id), op_id uuid NOT NULL,
  canal text NOT NULL CHECK(canal IN ('teren','aprobare','depozit','pachet')),

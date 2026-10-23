@@ -12,6 +12,7 @@ BEGIN
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_admin(bigint,boolean,text)'::regprocedure) IS DISTINCT FROM @@FLUX_MD5@@ THEN RAISE EXCEPTION 'E4b baseline flux'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_e4_lipsa()'::regprocedure) IS DISTINCT FROM @@E4_GATE_MD5@@ THEN RAISE EXCEPTION 'E4b baseline E4 gate'; END IF;
  v_lipsa:=public.fn_izo_porti_lipsa(); IF cardinality(v_lipsa)>0 THEN RAISE EXCEPTION 'E4b baseline porti %',v_lipsa; END IF;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_depozit_in_registru(integer)'::regprocedure) IS DISTINCT FROM @@DEPOT_MD5@@ THEN RAISE EXCEPTION 'E4b baseline depozit'; END IF;
  @@IMPL_PRE@@
  @@AMPRENTA@@
  v_meta:=jsonb_build_object('amprenta',v_amprenta,
@@ -27,6 +28,7 @@ BEGIN
  @@GUARD_NEW@@
  @@FLUX_NEW@@
  @@E4_GATE_NEW@@
+ @@DEPOT_NEW@@
  CREATE UNIQUE INDEX ux_magbuc_ev_decl ON public.magazie_bucati_evenimente(document_id,tip)
   WHERE document_tip='izo_declaratie' AND tip IN ('taiere','montaj','corectie');
  @@REVOKE_FUNCTIONS@@

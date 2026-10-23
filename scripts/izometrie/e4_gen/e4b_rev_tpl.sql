@@ -22,6 +22,8 @@ BEGIN
  @@GUARD_OLD@@
  @@FLUX_OLD@@
  @@E4_GATE_OLD@@
+ @@DEPOT_OLD@@
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_depozit_in_registru(integer)'::regprocedure) IS DISTINCT FROM @@DEPOT_MD5@@ THEN RAISE EXCEPTION 'E4b depot restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_e4_lipsa()'::regprocedure) IS DISTINCT FROM @@E4_GATE_MD5@@ THEN RAISE EXCEPTION 'E4b E4 gate restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_admin(bigint,boolean,text)'::regprocedure) IS DISTINCT FROM @@FLUX_MD5@@ THEN RAISE EXCEPTION 'E4b flux restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_montaj(text,text,jsonb,jsonb)'::regprocedure) IS DISTINCT FROM @@GUARD_MD5@@ THEN RAISE EXCEPTION 'E4b guard restore differs'; END IF;
@@ -31,6 +33,9 @@ BEGIN
  -- Triggers depend on the immutable guard; remove them with the empty tables first.
  @@DROP_FUNCTIONS_BEFORE_TABLES@@
  DROP INDEX public.ux_magbuc_ev_decl;
+ DROP POLICY magbuc_izo_montaj_ins ON public.magazie_bucati;
+ @@CUT_REVOKE@@
+ REVOKE USAGE ON SEQUENCE public.magazie_bucati_id_seq FROM izo_montaj_writer;
  REVOKE EXECUTE ON FUNCTION public.fn_izo_uid() FROM izo_montaj_writer;
  REVOKE UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute) ON public.magazie_bucati FROM izo_montaj_writer;
  REVOKE ALL ON public.magazie_bucati_evenimente,public.magazie_bucati_miscari FROM izo_montaj_writer;

@@ -9,3 +9,9 @@ SQL: preview + amprentă, CAS updated_at/versiune, aprobare parțială a montaje
 Faptele sunt scrise de izo_montaj_writer cu proiecții exacte; porți/ștampile/inventar actualizate, secvențe închise; corpurile E4a înlocuite au precondiții MD5 și restaurare exactă verificată static.
 PASS: 12 teste Python E4b + 15 E4a; izometrie_e4b_aprobare.test.sql legat la harness cu E4B_APROBARE_TEST_END. SQL/PG16/control_0e/PostgREST/curse/rollback efectiv NERULATE, conform interdicției BD.
 Neimplementate: aprobarea tăierilor/sudurilor/cuplărilor, simularea topologică și transferul rezervărilor; revizia cu descendenți refuzată explicit. Matricea §9.4 rămâne parțială: orchestrarea E4 încă folosește helpere postgres.
+
+E4b-2b — PARȚIAL: tăieri pe pe_tronson; consumatori copii în lot comun sau separat; revizie cu descendenți. E4a e identic cu baza.
+SQL: simulare topologică fără scrieri pentru tăieri și montaje simple; amprentă pe proiect; proiecții exacte prin writer (R3/R1d); lanțul de rezervări R→R′ exclusiv, cu reconciliere. Destinația restului protejează depozitul, cu restaurare exactă la rollback.
+Verificat de cdx: generator, 16 teste Python E4b și 15 E4a PASS. Integrat de Claude: harness-ul PG16 E4b PASS, după un fix de test (`zi` lipsea la `sesiune_deschide` în scenariul de tăiere).
+Lipsesc: tabelele, declararea și aprobarea sudurilor și cuplărilor; simularea capetelor (R4); tăierile pe montată (§8.5); corecțiile și deciziile MP (§8.6); loturile cu declarații din sesiuni diferite; matricea §9.4 completă și testele SQL ale acestor ramuri. Aprobările lor rămân refuzate.
+Orchestrarea rulează încă pe postgres (fn_izo_*): teren_intern, teren_push, teren_op, aprobare_intern, aproba_intern, decizie_intern, iesire_intern, front_intern, serie_intern, birou_jurnal. Doar faptele de montaj, ieșire și tăiere și transferul rezervărilor trec prin izo_montaj_writer.

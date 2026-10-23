@@ -216,7 +216,7 @@ BEGIN
   -- Entire author/project declaration closure was locked before any root lock.
   WITH RECURSIVE deps AS (SELECT uid FROM public.izo_declaratii WHERE depinde_de_uid=v_d.uid
    UNION SELECT d.uid FROM public.izo_declaratii d JOIN deps x ON d.depinde_de_uid=x.uid)
-  UPDATE public.izo_declaratii SET stare_inainte_blocare=stare,stare='blocata',blocata_motiv='parinte_modificat',server_ver=nextval('public.izo_server_ver_seq')
+  UPDATE public.izo_declaratii SET stare_inainte_blocare=stare,stare='blocata',blocata_motiv=CASE WHEN v_type='decl_sterge' THEN 'dependenta_anulata' ELSE 'dependenta_in_revizie' END,server_ver=nextval('public.izo_server_ver_seq')
    WHERE uid IN (SELECT uid FROM deps) AND stare IN ('ciorna','conflict','trimisa','in_verificare','revizie_ceruta');
   UPDATE public.izo_rezervari SET activa=false,eliberata_la=now(),motiv_eliberare=CASE WHEN v_type='decl_sterge' THEN 'stearsa' ELSE 'versiune_noua' END,
    server_ver=nextval('public.izo_server_ver_seq') WHERE declaratie_id=v_d.id AND activa;
@@ -233,7 +233,7 @@ BEGIN
  IF v_p ? 'depinde_de_uid' THEN
   IF NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE uid=(v_p->>'depinde_de_uid')::uuid AND declarat_de=v_uid
    AND proiect_id=p_front.proiect_id AND tronson_id=p_front.tronson_id AND versiune=(v_p->>'depinde_de_versiune')::integer
-   AND stare IN ('ciorna','trimisa')) THEN RAISE EXCEPTION 'dependenta' USING ERRCODE='IZ003'; END IF;
+   AND stare IN ('ciorna','trimisa','aprobata')) THEN RAISE EXCEPTION 'dependenta' USING ERRCODE='IZ003'; END IF;
   IF (v_p->>'depinde_de_uid')::uuid=(v_p->>'uid')::uuid THEN RAISE EXCEPTION 'ciclu' USING ERRCODE='IZ001'; END IF;
   IF EXISTS(WITH RECURSIVE parinti AS (
    SELECT uid,depinde_de_uid FROM public.izo_declaratii WHERE uid=(v_p->>'depinde_de_uid')::uuid
@@ -250,7 +250,7 @@ BEGIN
   SELECT * INTO v_c FROM public.izo_bucati_declarate WHERE uid=v_decl;
   IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE id=v_c.declaratie_id AND declarat_de=v_uid
    AND proiect_id=p_front.proiect_id AND tronson_id=p_front.tronson_id AND uid=(v_p->>'depinde_de_uid')::uuid
-   AND versiune=(v_p->>'depinde_de_versiune')::integer AND stare IN ('ciorna','trimisa')) THEN
+   AND versiune=(v_p->>'depinde_de_versiune')::integer AND stare IN ('ciorna','trimisa','aprobata')) THEN
    RAISE EXCEPTION 'ref_alt_autor' USING ERRCODE='IZ001'; END IF;
   SELECT id INTO v_source FROM public.magazie_bucati WHERE uid=v_decl;
   IF v_source IS NOT NULL THEN v_decl:=NULL;
@@ -360,9 +360,37 @@ BEGIN
    VALUES((v_child->>'uid')::uuid,v_d.id,v_d.versiune,v_source,v_decl,v_root,(v_child->>'lungime_mm')::integer,coalesce((v_child->>'calculata')::boolean,false),
     v_left,v_right,v_left||v_right,v_child->>'destinatie',(v_child->>'depozit_destinatie_id')::integer)
    ON CONFLICT(uid) DO UPDATE SET declaratie_versiune=excluded.declaratie_versiune,lungime_mm=excluded.lungime_mm,
-    lungime_calculata=excluded.lungime_calculata,capat_stanga=excluded.capat_stanga,capat_dreapta=excluded.capat_dreapta,cod_bucata=excluded.cod_bucata,
+    lungime_calculata=excluded.lungime_calculata,
+    capat_stanga=CASE WHEN izo_bucati_declarate.lungime_mm=excluded.lungime_mm THEN izo_bucati_declarate.capat_stanga ELSE excluded.capat_stanga END,
+    capat_dreapta=CASE WHEN izo_bucati_declarate.lungime_mm=excluded.lungime_mm THEN izo_bucati_declarate.capat_dreapta ELSE excluded.capat_dreapta END,
+    cod_bucata=CASE WHEN izo_bucati_declarate.lungime_mm=excluded.lungime_mm THEN izo_bucati_declarate.cod_bucata ELSE excluded.cod_bucata END,
     destinatie=excluded.destinatie,depozit_destinatie_id=excluded.depozit_destinatie_id,stare='declarata',server_ver=nextval('public.izo_server_ver_seq');
    v_prev:=v_right;
+  END LOOP;
+ END IF;
+ -- A changed/disappeared child cannot keep its old consumer reservation.
+ UPDATE public.izo_rezervari r SET activa=false,eliberata_la=now(),motiv_eliberare='parinte_anulat',
+  server_ver=nextval('public.izo_server_ver_seq') WHERE r.activa AND r.bucata_decl_uid IN
+   (SELECT c.uid FROM public.izo_bucati_declarate c WHERE c.declaratie_id=v_d.id AND
+    (c.stare='anulata' OR EXISTS(SELECT 1 FROM public.izo_declaratii d WHERE d.id=r.declaratie_id
+      AND coalesce((d.payload->>'lungime_montata_mm')::integer,(d.payload->>'baza_mm')::integer) IS DISTINCT FROM c.lungime_mm)));
+ -- Keep the severe reason; only unchanged referenced children can restore a row.
+ UPDATE public.izo_declaratii d SET blocata_motiv='dependenta_anulata',server_ver=nextval('public.izo_server_ver_seq')
+ WHERE d.stare='blocata' AND d.depinde_de_uid=v_d.uid AND EXISTS
+  (SELECT 1 FROM public.izo_bucati_declarate c WHERE c.declaratie_id=v_d.id AND c.uid IN (d.bucata_decl_uid,d.sursa_decl_uid)
+    AND (c.stare='anulata' OR coalesce((d.payload->>'lungime_montata_mm')::integer,(d.payload->>'baza_mm')::integer) IS DISTINCT FROM c.lungime_mm));
+ IF v_d.stare='trimisa' THEN
+  -- Iterate in dependency order; a transitive descendant waits for its parent.
+  LOOP
+   UPDATE public.izo_declaratii d SET stare=d.stare_inainte_blocare,stare_inainte_blocare=NULL,blocata_motiv=NULL,
+    depinde_de_versiune=p.versiune,server_ver=nextval('public.izo_server_ver_seq')
+   FROM public.izo_declaratii p WHERE d.depinde_de_uid=p.uid AND d.proiect_id=p_front.proiect_id AND d.declarat_de=v_uid
+    AND d.id=ANY(public.fn_izo_dependenti(v_d.id))
+    AND d.stare='blocata' AND d.blocata_motiv='dependenta_in_revizie' AND p.stare IN ('trimisa','ciorna','conflict')
+    AND (coalesce(d.bucata_decl_uid,d.sursa_decl_uid) IS NULL OR EXISTS(SELECT 1 FROM public.izo_bucati_declarate c
+     WHERE c.uid=coalesce(d.bucata_decl_uid,d.sursa_decl_uid) AND c.declaratie_id=p.id AND c.stare='declarata'
+      AND c.lungime_mm=coalesce((d.payload->>'lungime_montata_mm')::integer,(d.payload->>'baza_mm')::integer)));
+   GET DIAGNOSTICS v_affected=ROW_COUNT; EXIT WHEN v_affected=0;
   END LOOP;
  END IF;
  INSERT INTO public.izo_declaratii_versiuni(declaratie_id,versiune,payload,hash_cerere,op_id) VALUES(v_d.id,v_d.versiune,v_p,p_hash,v_id);

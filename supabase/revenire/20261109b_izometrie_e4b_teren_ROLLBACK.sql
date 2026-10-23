@@ -500,6 +500,12 @@ BEGIN
         AND NOT g.tgisinternal AND (g.tgtype::integer & 2)=2 AND g.tgname<e.tgname) THEN v_lipsa:=array_append(v_lipsa,'E4 ordinea BEFORE'); END IF;
     RETURN v_lipsa;
   END $f$;
+   CREATE OR REPLACE FUNCTION public.fn_izo_depozit_in_registru(p_depozit integer) RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT EXISTS (SELECT 1 FROM public.magazie_bucati b WHERE b.tip_cod IS NOT NULL
+                    AND (b.depozit_id = p_depozit OR b.atribute->>'depozit_origine_id' = p_depozit::text))
+  $f$;
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_depozit_in_registru(integer)'::regprocedure) IS DISTINCT FROM 'b0537805af14e6eaa49057256bd61a67' THEN RAISE EXCEPTION 'E4b depot restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_e4_lipsa()'::regprocedure) IS DISTINCT FROM '3b22279764515549c47a55e48f5055c3' THEN RAISE EXCEPTION 'E4b E4 gate restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_flux_admin(bigint,boolean,text)'::regprocedure) IS DISTINCT FROM 'fcd8d97b064ecc27d57bc04fa1a11bf7' THEN RAISE EXCEPTION 'E4b flux restore differs'; END IF;
  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_montaj(text,text,jsonb,jsonb)'::regprocedure) IS DISTINCT FROM '717b014983fd9ebf2f1bd03a2decb0db' THEN RAISE EXCEPTION 'E4b guard restore differs'; END IF;
@@ -507,7 +513,10 @@ BEGIN
  DROP VIEW public.v_izo_carantina_sync,public.v_izo_rezervari_active;
  DROP FUNCTION public.fn_izo_porti_e4b_lipsa(),public.fn_izo_porti_e4b_definitii();
  -- Triggers depend on the immutable guard; remove them with the empty tables first.
- DROP FUNCTION public.fn_izo_serie_lamureste(uuid,bigint,integer,timestamptz,bigint,text);
+ DROP FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,jsonb);
+DROP FUNCTION public.fn_izo_taiere_fapt(bigint);
+DROP FUNCTION public.fn_izo_lot_efecte(bigint[]);
+DROP FUNCTION public.fn_izo_serie_lamureste(uuid,bigint,integer,timestamptz,bigint,text);
 DROP FUNCTION public.fn_izo_serie_intern(uuid,bigint,integer,timestamptz,bigint,text);
 DROP FUNCTION public.fn_izo_front_elibereaza(bigint,text);
 DROP FUNCTION public.fn_izo_revizie_cere(uuid,bigint,integer,timestamptz,text);
@@ -540,6 +549,9 @@ DROP FUNCTION public.fn_izo_pv_lipsa(bigint[]);
 DROP FUNCTION public.fn_izo_teren_entra(bigint,text);
 DROP FUNCTION public.fn_izo_teren_autorizat(bigint,boolean);
  DROP INDEX public.ux_magbuc_ev_decl;
+ DROP POLICY magbuc_izo_montaj_ins ON public.magazie_bucati;
+ REVOKE INSERT(proiect_id,comanda_furnizor_id,tip_material_id,serie,sarja,dimensiune,grad_otel,standard,lungime_m,lungime_originala_m,greutate_kg,unghi_curba,cantitate,um,provenienta,izolatie,furnizor,producator,sursa_receptie,fara_packing_list,nr_document,data_receptie,mtc_path,stare,locatie_tip,locatie_site_id,executie_teava_id,atribute,observatii,receptionat_de,receptionat_la,created_by,tip_cod,parinte_id,cod_bucata,capat_stanga,capat_dreapta,dezambiguare,lungime_aviz_mm,lungime_masurata_mm,lungime_mm,lungime_calculata,perete_mm,diametru_mm,lot,aviz_intrare_id,nr_crt_aviz,bend_no,capat_marcaj,depozit_id,tronson_id,id,uid,radacina_id,server_ver,created_at,updated_at) ON public.magazie_bucati FROM izo_montaj_writer;
+ REVOKE USAGE ON SEQUENCE public.magazie_bucati_id_seq FROM izo_montaj_writer;
  REVOKE EXECUTE ON FUNCTION public.fn_izo_uid() FROM izo_montaj_writer;
  REVOKE UPDATE(stare,locatie_tip,depozit_id,tronson_id,atribute) ON public.magazie_bucati FROM izo_montaj_writer;
  REVOKE ALL ON public.magazie_bucati_evenimente,public.magazie_bucati_miscari FROM izo_montaj_writer;

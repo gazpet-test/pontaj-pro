@@ -13,7 +13,9 @@ tables = ['izo_fronturi', 'izo_dispozitive', 'izo_preverificari', 'izo_declarati
           'izo_declaratii_versiuni', 'izo_declaratii_gps', 'izo_sync_incercari', 'izo_rata_apeluri','izo_aprobari']
 journals = ['izo_operatii', 'izo_declaratii_versiuni', 'izo_sync_incercari', 'izo_declaratii_gps','izo_aprobari']
 schema = (SP / 'e4b_schema_tpl.sql').read_text(encoding='utf-8').replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
-api = '\n'.join((SP / f).read_text(encoding='utf-8') for f in ('e4b_api_tpl.sql','e4b_aprobare_tpl.sql')).replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
+cut_cols = A['B']['C'] + ['id', 'uid', 'radacina_id', 'server_ver', 'created_at', 'updated_at']
+api = '\n'.join((SP / f).read_text(encoding='utf-8') for f in ('e4b_api_tpl.sql','e4b_aprobare_tpl.sql','e4b_simulare_tpl.sql')).replace('CREATE FUNCTION public.', '  CREATE FUNCTION public.')
+api = api.replace('@@CUT_COLS@@', ','.join(cut_cols)).replace('@@CUT_VALUES@@', ','.join('v_child.'+c for c in cut_cols))
 security, implicit = [], list(A['B']['IMPL_POST'] + A['implicit'])
 for table in tables:
     security += [f'ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY;',
@@ -56,6 +58,19 @@ for table in ('magazie_bucati_evenimente','magazie_bucati_miscari'):
         name = 'izo_montaj_' + table.removeprefix('magazie_bucati_') + '_' + ('sel' if op == 'SELECT' else 'ins')
         security.append(f'CREATE POLICY {name} ON public.{table} FOR {op} TO izo_montaj_writer ' +
                         ('USING' if op == 'SELECT' else 'WITH CHECK') + ' (proiect_id IS NOT NULL);')
+security += [
+ 'CREATE POLICY magbuc_izo_montaj_ins ON public.magazie_bucati FOR INSERT TO izo_montaj_writer WITH CHECK (proiect_id IS NOT NULL);',
+ 'GRANT INSERT('+','.join(cut_cols)+') ON public.magazie_bucati TO izo_montaj_writer;',
+ 'GRANT USAGE ON SEQUENCE public.magazie_bucati_id_seq,public.izo_rezervari_id_seq TO izo_montaj_writer;',
+ 'GRANT SELECT ON public.izo_declaratii,public.izo_bucati_declarate,public.izo_rezervari TO izo_montaj_writer;',
+ 'GRANT UPDATE(stare,bucata_id,server_ver) ON public.izo_bucati_declarate TO izo_montaj_writer;',
+ 'GRANT UPDATE(activa,eliberata_la,motiv_eliberare,eveniment_id,server_ver) ON public.izo_rezervari TO izo_montaj_writer;',
+ 'GRANT INSERT(proiect_id,tronson_id,declaratie_id,declaratie_versiune,autor_profile_id,bucata_id,din_depozit,expira_dupa,transfer_din_id) ON public.izo_rezervari TO izo_montaj_writer;',
+]
+for t,expr in [('izo_declaratii','proiect_id IS NOT NULL'),('izo_bucati_declarate','declaratie_id IS NOT NULL'),('izo_rezervari','proiect_id IS NOT NULL')]:
+    for op in (['SELECT'] if t=='izo_declaratii' else ['SELECT','UPDATE'] + (['INSERT'] if t=='izo_rezervari' else [])):
+        tail = {'SELECT':f'USING ({expr})','INSERT':f'WITH CHECK ({expr})','UPDATE':f'USING ({expr}) WITH CHECK ({expr})'}[op]
+        security.append(f'CREATE POLICY izo_montaj_{t.removeprefix("izo_")}_{op[:3].lower()} ON public.{t} FOR {op} TO izo_montaj_writer {tail};')
 
 old = block(baseline, 'fn_izo_porti_lipsa')
 old_guard = block(baseline, 'fn_izo_garda_montaj')
@@ -64,10 +79,15 @@ assert old_guard.count('  BEGIN\n') == 1
 new_guard = old_guard.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION', 1).replace('  BEGIN\n', '  BEGIN\n' + guard_branch, 1)
 old_flux = block(baseline, 'fn_izo_flux_admin')
 old_e4_gate = block(baseline,'fn_izo_porti_e4_lipsa')
+old_depot = block((R/'supabase/migrations/20261102a_izometrie_e2a_registru.sql').read_text(encoding='utf-8'),'fn_izo_depozit_in_registru')
+depot_anchor = "b.atribute->>'depozit_origine_id' = p_depozit::text"
+assert old_depot.count(depot_anchor) == 1
+new_depot = old_depot.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1).replace(depot_anchor,
+    depot_anchor + " OR b.atribute->>'destinatie_depozit_id' = p_depozit::text")
 seq_anchor = "(c.oid='public.izo_server_ver_seq'::regclass)"
 assert old_e4_gate.count(seq_anchor) == 1
 new_e4_gate = old_e4_gate.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1).replace(seq_anchor,
-    "(c.oid IN ('public.izo_server_ver_seq'::regclass,'public.magazie_bucati_evenimente_id_seq'::regclass,'public.magazie_bucati_miscari_id_seq'::regclass))")
+    "(c.oid IN ('public.izo_server_ver_seq'::regclass,'public.magazie_bucati_evenimente_id_seq'::regclass,'public.magazie_bucati_miscari_id_seq'::regclass,'public.magazie_bucati_id_seq'::regclass,'public.izo_rezervari_id_seq'::regclass))")
 flux_anchor = """      IF to_regclass('public.izo_declaratii') IS NOT NULL OR to_regclass('public.izo_rezervari') IS NOT NULL
         OR to_regclass('public.izo_fronturi') IS NOT NULL THEN RAISE EXCEPTION 'E4a oprirea necesita garda E4b'; END IF;"""
 assert old_flux.count(flux_anchor) == 1
@@ -100,6 +120,15 @@ birou_acl.append('SET LOCAL ROLE izo_montaj_writer;')
 birou_acl.extend(f'GRANT EXECUTE ON FUNCTION public.{s} TO authenticated;' for s in wrapper_signatures)
 birou_acl.append('GRANT EXECUTE ON FUNCTION public.fn_izo_birou_fapt(bigint,text,text,bigint,integer,uuid,text,timestamptz,text) TO postgres;')
 birou_acl.append('RESET ROLE;')
+birou_acl += [
+ 'GRANT CREATE ON SCHEMA public TO izo_montaj_writer;',
+ 'ALTER FUNCTION public.fn_izo_taiere_fapt(bigint) OWNER TO izo_montaj_writer;',
+ 'REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;',
+ 'SET LOCAL ROLE izo_montaj_writer;',
+ 'GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_fapt(bigint) TO postgres;',
+ 'RESET ROLE;',
+ 'GRANT EXECUTE ON FUNCTION public.fn_izo_taiere_miscare(text,bigint,text,jsonb,jsonb) TO izo_montaj_writer;',
+]
 values = {
     'SCHEMA': schema, 'API': api, 'SECURITY': '\n'.join(security),
     'GUARD_NEW': new_guard, 'GUARD_OLD': old_guard.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
@@ -107,8 +136,11 @@ values = {
     'FLUX_NEW': new_flux, 'FLUX_OLD': old_flux.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
     'FLUX_MD5': q(hashlib.md5(src(old_flux).encode()).hexdigest()),
     'BIR0U_ACL': '\n'.join(birou_acl),
+    'CUT_REVOKE': 'REVOKE INSERT('+','.join(cut_cols)+') ON public.magazie_bucati FROM izo_montaj_writer;',
     'E4_GATE_NEW': new_e4_gate, 'E4_GATE_OLD': old_e4_gate.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
     'E4_GATE_MD5': q(hashlib.md5(src(old_e4_gate).encode()).hexdigest()),
+    'DEPOT_NEW': new_depot, 'DEPOT_OLD': old_depot.replace('CREATE FUNCTION','CREATE OR REPLACE FUNCTION',1),
+    'DEPOT_MD5': q(hashlib.md5(src(old_depot).encode()).hexdigest()),
     'PORTI_NEW': new, 'PORTI_OLD': old,
     'OLD_MD5': q(hashlib.md5(src(old).encode()).hexdigest()),
     'IMPL_PRE': inventory(A['B']['IMPL_POST'] + A['implicit']), 'IMPL_POST': inventory(implicit),

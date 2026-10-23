@@ -19,13 +19,13 @@ SELECT set_config('izo.registru_tx',txid_current()::text,true);
 DO $fixture$
 DECLARE v_id bigint; v_i integer;
 BEGIN
- FOR v_i IN 1..6 LOOP
+ FOR v_i IN 1..11 LOOP
   v_id:=nextval('public.magazie_bucati_id_seq');
   INSERT INTO public.magazie_bucati(id,uid,radacina_id,server_ver,proiect_id,tip_material_id,tip_cod,serie,sarja,perete_mm,diametru_mm,
    lungime_aviz_mm,lungime_mm,lungime_m,lungime_originala_m,cod_bucata,capat_stanga,capat_dreapta,provenienta,stare,locatie_tip,locatie_site_id,tronson_id,depozit_id,sursa_receptie)
   VALUES(v_id,gen_random_uuid(),v_id,nextval('public.izo_server_ver_seq'),3,1,'teava','E4B2-'||v_i,'SARJA',8,610,
-   12000,12000,12,12,'AB','A','B','beneficiar',CASE WHEN v_i<=3 OR v_i=6 THEN 'pe_tronson' WHEN v_i=4 THEN 'sosit' ELSE 'carantina' END,
-   CASE WHEN v_i<=3 OR v_i=6 THEN 'tronson' ELSE 'depozit' END,6,CASE WHEN v_i<=3 OR v_i=6 THEN 19 END,CASE WHEN v_i IN (4,5) THEN 9 END,'manual');
+   12000,12000,12,12,'AB','A','B','beneficiar',CASE WHEN v_i<=3 OR v_i>=6 THEN 'pe_tronson' WHEN v_i=4 THEN 'sosit' ELSE 'carantina' END,
+   CASE WHEN v_i<=3 OR v_i>=6 THEN 'tronson' ELSE 'depozit' END,6,CASE WHEN v_i<=3 OR v_i>=6 THEN 19 END,CASE WHEN v_i IN (4,5) THEN 9 END,'manual');
   PERFORM set_config('test.e4b2.b'||v_i,v_id::text,true);
  END LOOP;
 END $fixture$;
@@ -171,5 +171,170 @@ DO $test$ BEGIN
  BEGIN UPDATE public.izo_aprobari SET amprenta_preview='changed' WHERE proiect_id=3; RAISE EXCEPTION 'approval journal changed';
  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $test$;
+-- Included inside the existing rolled-back fixture, after all E4b-2 assertions.
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $test$
+DECLARE v_r jsonb; v_ops jsonb:='[]'; v_i integer; v_seq integer:=1; v_t uuid; v_m uuid; v_c uuid; v_rest uuid; v_p jsonb;
+ v_device uuid:='00000000-0000-0000-0000-00000000b301'; v_session uuid:='00000000-0000-0000-0000-00000000b302';
+BEGIN
+ v_r:=public.fn_izo_teren_pregateste(3,19,v_device);
+ IF NOT v_r ? 'checksum' THEN RAISE EXCEPTION 'cut prepare %',v_r; END IF;
+ v_r:=public.fn_izo_sync_push(v_device,jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',1,'versiune_format',1,
+  'tip_op','sesiune_deschide','payload',jsonb_build_object('proiect_id',3,'tronson_id',19,'uid',v_session,'zi',(now() AT TIME ZONE 'Europe/Bucharest')::date))));
+ IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION 'cut session %',v_r; END IF;
+ FOR v_i IN 7..11 LOOP
+  v_t:=gen_random_uuid(); v_m:=gen_random_uuid(); v_c:=gen_random_uuid(); v_rest:=gen_random_uuid();
+  PERFORM set_config('test.e4b3.t'||v_i,v_t::text,true);
+  PERFORM set_config('test.e4b3.m'||v_i,v_m::text,true);
+  PERFORM set_config('test.e4b3.c'||v_i,v_c::text,true);
+  v_p:=jsonb_build_object('proiect_id',3,'tronson_id',19,'uid',v_t,'preverificare_uid',v_session,'versiune_baza',0,'tip','taiere',
+   'sursa',jsonb_build_object('bucata_id',current_setting('test.e4b2.b'||v_i)::bigint),'baza_mm',12000,'puncte_mm',jsonb_build_array(8000),
+   'confirmare',jsonb_build_object('mod','marcaj','cm',0),'copii',jsonb_build_array(
+    jsonb_build_object('uid',v_c,'lungime_mm',8000,'destinatie','montaj'),
+    jsonb_build_object('uid',v_rest,'lungime_mm',4000,'destinatie','depozit','depozit_destinatie_id',9,'calculata',true)));
+  v_seq:=v_seq+1;
+  v_ops:=v_ops||jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',v_seq,'versiune_format',1,'tip_op','decl_salveaza','payload',v_p));
+  v_p:=jsonb_build_object('proiect_id',3,'tronson_id',19,'uid',v_m,'preverificare_uid',v_session,'versiune_baza',0,
+   'tip',CASE WHEN v_i IN (8,10) THEN 'taiere' ELSE 'montaj' END,'depinde_de_uid',v_t,'depinde_de_versiune',1,'confirmare',jsonb_build_object('mod','taiata'));
+  IF v_i IN (8,10) THEN
+   v_p:=v_p||jsonb_build_object('sursa',jsonb_build_object('decl_uid',v_c),'baza_mm',8000,'puncte_mm',jsonb_build_array(5500),
+    'copii',jsonb_build_array(jsonb_build_object('uid',gen_random_uuid(),'lungime_mm',5500,'destinatie','montaj'),
+     jsonb_build_object('uid',gen_random_uuid(),'lungime_mm',2500,'destinatie','depozit','depozit_destinatie_id',9)));
+  ELSE v_p:=v_p||jsonb_build_object('bucata',jsonb_build_object('decl_uid',v_c),'lungime_montata_mm',8000); END IF;
+  v_seq:=v_seq+1;
+  v_ops:=v_ops||jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',v_seq,'versiune_format',1,'tip_op','decl_salveaza','payload',v_p));
+ END LOOP;
+ v_r:=public.fn_izo_sync_push(v_device,v_ops);
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(v_r->'rezultate') x WHERE x->>'cod'<>'acceptat') THEN RAISE EXCEPTION 'cut sync %',v_r; END IF;
+ v_seq:=v_seq+1;
+ v_r:=public.fn_izo_sync_push(v_device,jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),'seq',v_seq,'versiune_format',1,'tip_op','sesiune_trimite',
+  'payload',jsonb_build_object('proiect_id',3,'tronson_id',19,'preverificare_uid',v_session,'randuri',
+   (SELECT jsonb_agg(jsonb_build_object('uid',d.uid,'versiune',d.versiune)) FROM public.izo_declaratii d
+    JOIN public.izo_preverificari s ON s.id=d.preverificare_id WHERE s.uid=v_session)))));
+ IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION 'cut submit %',v_r; END IF;
+END $test$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+-- Force isolated fixture deviations to prove pre-apply refusals on the public API.
+DO $test$ DECLARE v_s bigint; v_p jsonb; BEGIN
+ SELECT id INTO STRICT v_s FROM public.izo_preverificari WHERE uid='00000000-0000-0000-0000-00000000b302';
+ v_p:=public.fn_izo_aprobare_lot(v_s);
+ PERFORM set_config('test.e4b3.stale',v_p->>'amprenta',true);
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+UPDATE public.izo_bucati_declarate SET lungime_mm=lungime_mm+1 WHERE uid=current_setting('test.e4b3.c9')::uuid;
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $test$ DECLARE v_t public.izo_declaratii; v_p jsonb; v_rows jsonb; v_n bigint; BEGIN
+ SELECT * INTO STRICT v_t FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.t9')::uuid;
+ v_rows:=jsonb_build_array(jsonb_build_object('declaratie_id',v_t.id,'versiune',v_t.versiune,'updated_at',v_t.updated_at));
+ SELECT count(*) INTO v_n FROM public.magazie_bucati_evenimente;
+ BEGIN PERFORM public.fn_izo_aproba(gen_random_uuid(),v_t.preverificare_id,v_rows,current_setting('test.e4b3.stale'),'{}');
+  RAISE EXCEPTION 'changed cut preview accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'preview_vechi' THEN RAISE; END IF; END;
+ v_p:=public.fn_izo_aprobare_lot(v_t.preverificare_id);
+ BEGIN PERFORM public.fn_izo_aproba(gen_random_uuid(),v_t.preverificare_id,v_rows,v_p->>'amprenta','{}');
+  RAISE EXCEPTION 'bad cut sum accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'r3' THEN RAISE; END IF; END;
+ IF (SELECT count(*) FROM public.magazie_bucati_evenimente)<>v_n OR EXISTS(SELECT 1 FROM public.izo_aprobari a
+  WHERE a.randuri @> v_rows) THEN RAISE EXCEPTION 'failed simulation left facts'; END IF;
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+UPDATE public.izo_bucati_declarate SET lungime_mm=8000 WHERE uid=current_setting('test.e4b3.c9')::uuid;
+SAVEPOINT r1d_fixture;
+UPDATE public.izo_bucati_declarate SET lungime_mm=6000 WHERE declaratie_id=(SELECT d.id FROM public.izo_declaratii d WHERE d.uid=current_setting('test.e4b3.t9')::uuid);
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $test$ DECLARE v_t public.izo_declaratii; v_p jsonb; BEGIN
+ SELECT * INTO STRICT v_t FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.t9')::uuid;
+ v_p:=public.fn_izo_aprobare_lot(v_t.preverificare_id);
+ BEGIN PERFORM public.fn_izo_aproba(gen_random_uuid(),v_t.preverificare_id,
+  jsonb_build_array(jsonb_build_object('declaratie_id',v_t.id,'versiune',v_t.versiune,'updated_at',v_t.updated_at)),v_p->>'amprenta','{}');
+  RAISE EXCEPTION 'equal cut children accepted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'r1d' THEN RAISE; END IF; END;
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+ROLLBACK TO SAVEPOINT r1d_fixture;
+RELEASE SAVEPOINT r1d_fixture;
+SET SESSION AUTHORIZATION authenticator;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $test$
+DECLARE v_s bigint; v_t public.izo_declaratii; v_m public.izo_declaratii; v_p jsonb; v_rows jsonb; v_r jsonb; v_i integer; v_n bigint;
+BEGIN
+ SELECT id INTO STRICT v_s FROM public.izo_preverificari WHERE uid='00000000-0000-0000-0000-00000000b302';
+ FOR v_i IN SELECT x FROM unnest(ARRAY[7,8,10,11]) x LOOP
+  SELECT * INTO STRICT v_t FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.t'||v_i)::uuid;
+  SELECT * INTO STRICT v_m FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.m'||v_i)::uuid;
+  v_p:=public.fn_izo_aprobare_lot(v_s);
+  -- A child consumer alone must fail before any event is written.
+  SELECT count(*) INTO v_n FROM public.magazie_bucati_evenimente;
+  BEGIN
+   PERFORM public.fn_izo_aproba(gen_random_uuid(),v_s,jsonb_build_array(jsonb_build_object('declaratie_id',v_m.id,'versiune',v_m.versiune,'updated_at',v_m.updated_at)),v_p->>'amprenta','{}');
+   RAISE EXCEPTION 'missing cut accepted';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'dependenta_lipsa' THEN RAISE; END IF; END;
+  IF (SELECT count(*) FROM public.magazie_bucati_evenimente)<>v_n THEN RAISE EXCEPTION 'simulation wrote events'; END IF;
+  IF v_i IN (7,10) THEN
+   -- Reverse input order: the simulation must still create the child first.
+   v_rows:=jsonb_build_array(jsonb_build_object('declaratie_id',v_m.id,'versiune',v_m.versiune,'updated_at',v_m.updated_at),
+    jsonb_build_object('declaratie_id',v_t.id,'versiune',v_t.versiune,'updated_at',v_t.updated_at));
+   v_r:=public.fn_izo_aproba(gen_random_uuid(),v_s,v_rows,v_p->>'amprenta','{}');
+  ELSE
+   -- Separate approvals must preserve an exclusive physical reservation for T2.
+   v_r:=public.fn_izo_aproba(gen_random_uuid(),v_s,jsonb_build_array(jsonb_build_object('declaratie_id',v_t.id,'versiune',v_t.versiune,'updated_at',v_t.updated_at)),v_p->>'amprenta','{}');
+   IF NOT EXISTS(SELECT 1 FROM public.izo_rezervari r JOIN public.izo_rezervari old ON old.id=r.transfer_din_id
+    WHERE r.declaratie_id=v_m.id AND r.activa AND r.bucata_id IS NOT NULL AND old.motiv_eliberare='transferata' AND NOT old.activa) THEN RAISE EXCEPTION 'separate transfer lost'; END IF;
+   v_p:=public.fn_izo_aprobare_lot(v_s);
+   v_r:=public.fn_izo_aproba(gen_random_uuid(),v_s,jsonb_build_array(jsonb_build_object('declaratie_id',v_m.id,'versiune',v_m.versiune,'updated_at',v_m.updated_at)),v_p->>'amprenta','{}');
+  END IF;
+  IF v_r->>'cod'<>'aprobat' THEN RAISE EXCEPTION 'cut approval %',v_r; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.izo_rezervari r JOIN public.izo_rezervari old ON old.id=r.transfer_din_id
+   JOIN public.izo_declaratii d ON d.id=r.declaratie_id WHERE d.id=v_m.id AND r.motiv_eliberare='consumata'
+   AND r.eveniment_id=d.eveniment_ids[1] AND old.motiv_eliberare='transferata' AND NOT r.activa AND NOT old.activa) THEN RAISE EXCEPTION 'transfer chain'; END IF;
+  IF (SELECT stare FROM public.magazie_bucati WHERE id=current_setting('test.e4b2.b'||v_i)::bigint)<>'taiata' THEN RAISE EXCEPTION 'cut parent'; END IF;
+ END LOOP;
+ SELECT * INTO STRICT v_t FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.t9')::uuid;
+ SELECT * INTO STRICT v_m FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.m9')::uuid;
+ v_r:=public.fn_izo_revizie_cere(gen_random_uuid(),v_t.id,v_t.versiune,v_t.updated_at,'revizie cu descendenti');
+ IF NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE id=v_m.id AND stare='blocata' AND stare_inainte_blocare='trimisa'
+  AND blocata_motiv='dependenta_in_revizie') OR NOT EXISTS(SELECT 1 FROM public.izo_rezervari WHERE declaratie_id=v_m.id AND activa) THEN RAISE EXCEPTION 'revision closure'; END IF;
+END $test$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $test$
+DECLARE v_t public.izo_declaratii; v_r jsonb; v_codes jsonb;
+BEGIN
+ SELECT * INTO STRICT v_t FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.t9')::uuid;
+ SELECT jsonb_object_agg(uid,cod_bucata) INTO v_codes FROM public.izo_bucati_declarate WHERE declaratie_id=v_t.id;
+ v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b301',jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),
+  'seq',13,'versiune_format',1,'tip_op','decl_salveaza','payload',v_t.payload||jsonb_build_object('versiune_baza',v_t.versiune))));
+ IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION 'revision with children resubmit %',v_r; END IF;
+ IF (SELECT jsonb_object_agg(uid,cod_bucata) FROM public.izo_bucati_declarate WHERE declaratie_id=v_t.id) IS DISTINCT FROM v_codes THEN RAISE EXCEPTION 'unchanged child letters changed'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.m9')::uuid AND stare='trimisa'
+  AND depinde_de_versiune=v_t.versiune+1) THEN RAISE EXCEPTION 'unchanged child not restored'; END IF;
+END $test$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000117","role":"authenticated"}',true);
+DO $test$ DECLARE v_t public.izo_declaratii; BEGIN
+ SELECT * INTO STRICT v_t FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.t9')::uuid;
+ PERFORM public.fn_izo_revizie_cere(gen_random_uuid(),v_t.id,v_t.versiune,v_t.updated_at,'schimbare copil la revizie');
+END $test$;
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+DO $test$ DECLARE v_t public.izo_declaratii; v_p jsonb; v_r jsonb; BEGIN
+ SELECT * INTO STRICT v_t FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.t9')::uuid;
+ v_p:=jsonb_set(v_t.payload,'{puncte_mm}','[8100]');
+ v_p:=jsonb_set(v_p,'{copii,0,lungime_mm}','8100');
+ v_p:=jsonb_set(v_p,'{copii,1,lungime_mm}','3900');
+ v_r:=public.fn_izo_sync_push('00000000-0000-0000-0000-00000000b301',jsonb_build_array(jsonb_build_object('op_id',gen_random_uuid(),
+  'seq',14,'versiune_format',1,'tip_op','decl_salveaza','payload',v_p||jsonb_build_object('versiune_baza',v_t.versiune))));
+ IF v_r#>>'{rezultate,0,cod}'<>'acceptat' THEN RAISE EXCEPTION 'changed child revision %',v_r; END IF;
+ IF NOT EXISTS(SELECT 1 FROM public.izo_declaratii WHERE uid=current_setting('test.e4b3.m9')::uuid AND stare='blocata'
+  AND blocata_motiv='dependenta_anulata') OR EXISTS(SELECT 1 FROM public.izo_rezervari r JOIN public.izo_declaratii d ON d.id=r.declaratie_id
+   WHERE d.uid=current_setting('test.e4b3.m9')::uuid AND r.activa) THEN RAISE EXCEPTION 'changed child restored or reserved'; END IF;
+END $test$;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
+
 ROLLBACK;
 SELECT 'E4B_APROBARE_TEST_END';
