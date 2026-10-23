@@ -172,3 +172,14 @@ describe.skipIf(!existsSync(modele+'TOPLET_LOT_2_TEAVA.xlsx'))('modelele origina
     expect(v.Sheets.Depozite.A2.v).toMatch(/^Verifică:/)
   })
 })
+
+import { locExport as _loc, totalExport as _tot } from './exportTeava.js'
+describe('Copilot r1 export', () => {
+  it('pierdută pe tronson rămâne la tronson', () => {
+    expect(_loc({ stare:'pierduta', tronson_id:55, depozit_id:null }, [], [{ id:55, name:'T55' }]).tip).toBe('tronson')
+  })
+  it('părintele tăiat nu intră în metri', () => {
+    const t = _tot([{ tip_cod:'teava', stare:'taiata', lungime_mm:12000 }, { tip_cod:'teava', stare:'receptionata', lungime_mm:5000 }, { tip_cod:'teava', stare:'receptionata', lungime_mm:7000 }])
+    expect(t.metri).toBe(12)
+  })
+})

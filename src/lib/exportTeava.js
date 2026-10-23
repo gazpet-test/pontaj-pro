@@ -28,7 +28,8 @@ export async function citestePagini(citeste) {
 
 /** Locul curent, ca în matricea ecranului; originea nu duplică piesa într-un depozit. */
 export function locExport(b, depozite = [], tronsoane = []) {
-  const peTronson = ['pe_tronson','montat'].includes(categorieStare(b.stare))
+  // Locul real, nu doar starea (Copilot r1): o piesă pierdută / carantinată pe tronson rămâne la tronsonul ei.
+  const peTronson = ['pe_tronson','montat'].includes(categorieStare(b.stare)) || (b.tronson_id != null && b.depozit_id == null)
   const id = peTronson ? b.tronson_id : b.depozit_id
   const loc = (peTronson ? tronsoane : depozite).find(x => String(x.id) === String(id))
   const tip = peTronson ? 'tronson' : 'depozit'
@@ -56,9 +57,9 @@ export function totalExport(bucati) {
   for (const b of bucati) {
     if (b.stare === 'anulata') continue
     t.bucati++
-    t.metri += metri(b)
-    // Părintele tăiat e istoric; greutatea lui nu se adună din nou peste copii.
+    // Părintele tăiat e istoric: nici metrii, nici greutatea lui nu se adună din nou peste copii (Copilot r1).
     if (b.stare === 'taiata') continue
+    t.metri += metri(b)
     const kg = nr(b.greutate_kg)
     if (kg === '') t.kgLipsa++
     else t.kg += kg
