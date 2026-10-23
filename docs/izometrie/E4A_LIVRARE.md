@@ -1,13 +1,17 @@
 # E4a — pachetul de livrare (run_mig DRY → „da” → apply)
 
-Branch `izometrie/e4a` @ `4b183b90` (conținut identic cu `046f9946`, la care s-a dat GO-ul Copilot; după el vin doar commit-ul de normalizare LF și acest document). PR #869 (draft).
+Branch `izometrie/e4a` @ `3863bbf3` (r2). PR #869 (draft). GO-ul Copilot s-a dat pe `046f9946`. r2 schimbă un singur lucru: mecanismul de imuabilitate pentru PDF-urile din flux (vezi „r2” mai jos). Schimbarea merge la Copilot ca delta înainte de apply.
+
+## r2 — de ce (DRY pe prod, 23.10)
+
+DRY-ul r1 a picat la `ALTER TABLE storage.objects ENABLE ALWAYS TRIGGER`: pe Supabase, `storage.objects` aparține lui `supabase_storage_admin`, iar `postgres` nu e nici proprietar, nici superuser. Și `DROP TRIGGER` din rollback ar fi picat din același motiv. r2 scoate complet trigger-ul și funcția `fn_izo_flux_storage` și pune în loc două politici **RESTRICTIVE**, `izo_flux_pdf_imuabil_upd` și `izo_flux_pdf_imuabil_del` (`FOR UPDATE` / `FOR DELETE TO public`, predicatul read-only `fn_izo_flux_pdf_blocat(bucket,name)`). E același tip de obiect pe care E3 l-a creat deja pe prod ca postgres (`izo_doc_scan_*`). O politică restrictivă se combină prin AND cu politicile permisive existente ale bucket-ului, deci clienții anon/authenticated nu mai pot modifica sau șterge PDF-ul aprobat al unui pachet în flux. Excepții, ca la toate bucket-urile: `service_role` ocolește RLS, iar înainte trigger-ul îl oprea și pe el; garanția e deci puțin mai slabă, dar `service_role` e doar pe server. În harness: test RLS ca authenticated, care arată că UPDATE/DELETE pe PDF-ul din flux dă 0 rânduri, iar obiectul de control se modifică (1 rând). Plus o probă statică: migrarea și revenirea nu au `ALTER TABLE storage.` și nici `TRIGGER … ON storage.`. În harness, postgres e superuser și n-ar vedea diferența de proprietar.
 
 ## Artefacte
 
 | Fișier | sha256 (blob git, LF) | octeți |
 |---|---|---|
-| `supabase/migrations/20261109a_izometrie_e4a_flux.sql` | `43ee46b59327ec04c26b4824764eb3ef5a62ca1a3033e99d8117c64736d2be24` | 125674 |
-| `supabase/revenire/20261109a_izometrie_e4a_flux_ROLLBACK.sql` | `09ff62fcadedd5792d26c1c81e63c3baf16ad77a8ba440003931e93aa5581f70` | 74710 |
+| `supabase/migrations/20261109a_izometrie_e4a_flux.sql` | `a7f4e4903328b8a9878e0d52eb01af2997356990744c6780e317cdd176875bb7` | 126790 |
+| `supabase/revenire/20261109a_izometrie_e4a_flux_ROLLBACK.sql` | `8b9f7c361204d178a981a75e03ab04d078fd93129a565939bc72f8dbb563915b` | 74940 |
 
 Ambele fișiere sunt generate de `scripts/izometrie/e4_gen/gen_e4a.py`; regenerarea la `4b183b90` dă fișiere identice. Sha-ul se ia din blob (`git cat-file -p 4b183b90:<cale> | sha256sum`), nu din copia de lucru: pe Windows, cu `autocrlf`, copia de lucru are CRLF.
 
@@ -40,16 +44,16 @@ Date: niciuna. Migrarea nu are DML pe date. `INSERT INTO executie_pachete_docume
   - CREATE pe `public` i se dă doar temporar, în timpul migrării, și i se retrage tot acolo.
 - **Tabel nou** `izo_tronson_config`: flux per tronson (Q-E4-1 A), cu RLS. `authenticated` are doar SELECT; scrierea merge numai prin `fn_izo_seteaza_flux`, din sesiunea postgres.
 - **Funcții noi (20):**
-  - `fn_izo_flux_*` (garda, config_garda, storage, pachet_lock / editabil / identitate / legatura / completeaza / dupa, admin, aprobare_admin);
+  - `fn_izo_flux_*` (garda, config_garda, pdf_blocat, pachet_lock / editabil / identitate / legatura / completeaza / dupa, admin, aprobare_admin);
   - `fn_izo_pachet_leaga` / `dezleaga` / `completeaza` / `aprobare_transgaz`;
   - `fn_izo_montaj_marcheaza`, `fn_izo_garda_montaj`, `fn_izo_seteaza_flux`;
   - `fn_izo_porti_e4_definitii` / `_lipsa`.
   - EXECUTE pentru `authenticated` au DOAR `fn_izo_pachet_leaga`, `fn_izo_pachet_dezleaga` și `fn_izo_pachet_completeaza` (aceasta din urmă rămâne ascunsă în UI până la E4b).
+  - `fn_izo_flux_pdf_blocat(text,text)`: EXECUTE pentru anon/authenticated/service_role, pentru că predicatul politicilor RLS se evaluează cu rolul apelantului. E read-only (`STABLE`, fără scrieri și fără context).
   - `fn_izo_seteaza_flux` și `fn_izo_pachet_aprobare_transgaz` se execută doar de `postgres`. Helper-ele interne se execută doar de `izo_montaj_writer`; PUBLIC are `REVOKE ALL`.
 - **Funcții înlocuite (3, cu restaurare exactă în rollback):** `fn_izo_porti_lipsa`, `fn_izo_garda_bucati` și `fn_izo_garda_fapte`, la care se adaugă termenul `izo_montaj_writer` în `v_aut`.
-- **Trigger-e noi `a0_izo_flux_*` (ENABLE ALWAYS):**
-  - pe `executie_tronsoane`, `executie_tevi`, `executie_pachete_lansare` (BEFORE și AFTER), `executie_pachete_documente`, `izo_tronson_config`;
-  - **pe `storage.objects`** (BEFORE UPDATE/DELETE): face PDF-urile pachetelor în flux imuabile.
+- **Trigger-e noi `a0_izo_flux_*` (ENABLE ALWAYS):** pe `executie_tronsoane`, `executie_tevi`, `executie_pachete_lansare` (BEFORE și AFTER), `executie_pachete_documente`, `izo_tronson_config`. Pe `storage.objects` nu se pune niciun trigger.
+- **Politici noi pe `storage.objects` (r2):** `izo_flux_pdf_imuabil_upd` / `_del`, AS RESTRICTIVE, TO public.
   - Pe tronsoanele care NU sunt în flux, trigger-ele lasă totul ca azi.
 - **Index unic parțial** `ux_magbuc_izo_teava` pe `magazie_bucati(executie_teava_id)`.
 - **Comentariu** pe `magazie_bucati_evenimente`: amprenta E4a plus comentariul anterior. Rollback-ul îl restaurează.
@@ -72,4 +76,4 @@ Ordinea pentru #869: **întâi apply, apoi merge.** UI-ul nou citește `izo_tron
 
 ## Dry-run sugerat (chat)
 
-Runner-ul nu are flag de dry-run; ca la E3b: `BEGIN; <prolog runner>; \i migrare; SELECT fn_izo_porti_lipsa()||fn_izo_porti_e3_lipsa()||fn_izo_porti_e4_lipsa(); \i control_0e.sql; ROLLBACK;`. Rezultatul așteptat: porți `{}`, 0e = 0, fără erori.
+Runner-ul nu are flag de dry-run; ca la E3b: `BEGIN; <prolog runner>; \i migrare; SELECT fn_izo_porti_lipsa()||fn_izo_porti_e3_lipsa()||fn_izo_porti_e4_lipsa(); \i control_0e.sql; ROLLBACK;`. Rezultatul așteptat: porți `{}`, 0e = 0, fără erori. **r2: recomand să ruleze în același DRY și revenirea** (`\i` rollback după migrare, apoi `ROLLBACK`). Așa se verifică pe prod că `DROP POLICY … ON storage.objects` merge ca postgres. CREATE POLICY e dovedit de E3, DROP-ul nu a rulat niciodată pe prod.
