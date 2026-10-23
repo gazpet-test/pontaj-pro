@@ -13,7 +13,7 @@
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
@@ -196,6 +196,14 @@ export default function ExecutiePage() {
               )
             })}
           </>}
+
+          {proiectIdStr && (
+            <Link to={`/magazie?tab=teava_proiecte&proiect=${encodeURIComponent(proiectIdStr)}`}
+              title="Registrul de țeavă și curbe al proiectului, în Magazie → Țeavă proiecte"
+              style={{ padding:'14px 12px', color:G.text, fontSize:13, textDecoration:'none', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap', flexShrink:0 }}>
+              🧱 Vezi țeava și curbele în Magazie
+            </Link>
+          )}
 
           {/* Citește Orice — AI Document Router (dreapta) */}
           {profile && (
