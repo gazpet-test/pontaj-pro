@@ -17,7 +17,9 @@ const isolate = sql => sql.replaceAll('public.', 'teste.').replaceAll('search_pa
 const migration = isolate(readFileSync(new URL('../../supabase/migrations/20261110a_magazie_eip_intrari.sql', import.meta.url), 'utf8'))
 const rollback = isolate(readFileSync(new URL('../../supabase/revenire/20261110a_magazie_eip_intrari_ROLLBACK.sql', import.meta.url), 'utf8'))
 const rollbackGuard = rollback.match(/DO \$\$[\s\S]*?END \$\$;/)[0]
+const migrationMapping = migration.match(/DO \$\$[\s\S]*?END \$\$;/)[0]
 const quote = s => "'" + String(s).replaceAll("'", "''") + "'"
+const sqlText = s => s === null ? 'NULL' : quote(s)
 const sessions = new Set()
 class Session {
   constructor(name) {
@@ -66,9 +68,13 @@ async function denies(s, sql, message) {
 const uid = n => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`
 const login = (s, n) => s.command(`SET request.jwt.claims=${quote(JSON.stringify({ sub: uid(n), role: 'authenticated' }))};`)
 const antet = { furnizor_cui: 'RO14912759', furnizor_nume: 'LITIND SRL', factura_nr: 'TEST', factura_data: '2026-10-23' }
-const invoice = (header, lines, key) => `teste.fn_eip_intrare_factura(${quote(JSON.stringify(header))}::jsonb,${quote(JSON.stringify(lines))}::jsonb,${quote(key)})`
+const invoice = (header, lines, key) => `teste.fn_eip_intrare_factura(${quote(JSON.stringify(header))}::jsonb,${quote(JSON.stringify(lines))}::jsonb,${sqlText(key)})`
 const call = (articol, marime, cantitate, key, pret = 10) => invoice(antet, [{ articol_id: articol, marime, cantitate, pret_unitar: pret }], key)
-const move = (src, article, size, quantity, reason = 'reclasificare') => `teste.fn_eip_muta(${src},${article},${size === null ? 'NULL' : quote(size)},${quote(quantity)}::numeric,${reason === null ? 'NULL' : quote(reason)})`
+let moveSequence = 0
+// Implicit o cheie noua pentru fiecare operatie distincta din testele r2.
+// Testele de retry/concurenta r3 transmit explicit aceeasi cheie.
+const move = (src, article, size, quantity, reason = 'reclasificare', key = `mutare-${++moveSequence}`) =>
+  `teste.fn_eip_muta(${src},${article},${sqlText(size)},${sqlText(quantity)}::numeric,${sqlText(reason)},${sqlText(key)})`
 let o, a, b, ownedSchema = false, passed = 0
 const test = async (name, body) => { await body(); passed++; console.log(`PASS ${name}`) }
 const invariant = async () => assert.equal(await o.value(`to_jsonb(NOT EXISTS (
@@ -134,7 +140,7 @@ try {
   `)
   const baseline = await state(), policies = await acl()
   await o.command(migration)
-  await test('migrare 6 randuri, 190 buc, mapare explicita, totaluri nemodificate', async () => {
+  await test('migrare 6 randuri, total 190, mapare explicita, cantitati nemodificate', async () => {
     await invariant()
     assert.equal(await o.value('(SELECT to_jsonb(sum(cantitate_total)) FROM teste.magazie_echipamente WHERE este_eip AND activ)'), 190)
     assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM teste.eip_intrari WHERE sursa=\'migrare\')'), 6)
@@ -142,8 +148,38 @@ try {
     assert.equal(await o.value('(SELECT to_jsonb(count(*)) FROM teste.eip_intrari i JOIN teste.magazie_echipamente e ON e.id=i.echipament_id WHERE NOT e.activ)'), 0)
     assert.deepEqual(await o.value(`(SELECT jsonb_agg(a.denumire ORDER BY e.id) FROM teste.magazie_echipamente e JOIN teste.eip_articole a ON a.id=e.articol_id)`),
       ['BOCANCI SARDEGNA S3 SRC','BOCANCI NEW WELDSTAR S3','SALOPETA CU PIEPTAR BBC','SALOPETA CU PIEPTAR IGNIFUGATA','VESTA NEON 386B-30R','CASCA INAP MASTER 2680'])
-    assert.deepEqual((await state()).map(({ articol_id, marime, ...rest }) => rest), baseline)
+    const expected = baseline.map(e => [1, 2].includes(e.id) ? { ...e, um: 'pereche' } : e)
+    assert.deepEqual((await state()).map(({ articol_id, marime, ...rest }) => rest), expected)
     assert.deepEqual(await acl(), policies)
+  })
+  await test('r3 migrare: toate UM egale cu articolul, backup exact, total 190', async () => {
+    assert.equal(await o.value(`to_jsonb(NOT EXISTS(SELECT 1 FROM teste.magazie_echipamente e JOIN teste.eip_articole a ON a.id=e.articol_id WHERE e.um IS DISTINCT FROM a.um))`), true)
+    assert.deepEqual(await o.value(`(SELECT jsonb_agg(jsonb_build_array(echipament_id,um_initial) ORDER BY echipament_id) FROM teste.eip_migrare_um)`),
+      baseline.filter(e => e.este_eip && e.activ).map(e => [e.id, e.um]))
+    assert.deepEqual(await o.value(`(SELECT jsonb_agg(jsonb_build_array(um,cantitate_total) ORDER BY id) FROM teste.magazie_echipamente WHERE id IN (1,2))`), [['pereche', 47], ['pereche', 24]])
+    assert.equal(await o.value(`(SELECT to_jsonb(sum(cantitate)) FROM teste.eip_intrari WHERE sursa='migrare')`), 190)
+  })
+  await test('r3 mapare: UM incompatibila refuzata atomic; etichete normalizate', async () => {
+    const before = await snapshot()
+    await o.command('BEGIN;')
+    try {
+      // Reconstituim numai intr-o tranzactie anulata fixture-ul dinaintea maparii.
+      await o.command(`DELETE FROM teste.eip_intrari WHERE sursa='migrare';
+        DELETE FROM teste.eip_migrare_um WHERE echipament_id BETWEEN 1 AND 6;
+        UPDATE teste.magazie_echipamente SET articol_id=NULL,um=' BUC ' WHERE articol_id IS NOT NULL;
+        UPDATE teste.magazie_echipamente SET um='pereche' WHERE id=3;`)
+      const invalid = await snapshot()
+      await denies(o, migrationMapping, 'eip_um_incompatibil')
+      assert.deepEqual(await snapshot(), invalid)
+      assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM teste.eip_migrare_um)`), 0)
+      await o.command("UPDATE teste.magazie_echipamente SET um=' BUC ' WHERE id=3;")
+      await o.command(migrationMapping)
+      assert.equal(await o.value(`to_jsonb(NOT EXISTS(SELECT 1 FROM teste.magazie_echipamente e JOIN teste.eip_articole a ON a.id=e.articol_id WHERE e.um IS DISTINCT FROM a.um))`), true)
+      assert.equal(await o.value(`(SELECT to_jsonb(sum(cantitate)) FROM teste.eip_intrari WHERE sursa='migrare')`), 190)
+      assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM teste.eip_migrare_um WHERE um_initial=' BUC ')`), 6)
+      await invariant()
+    } finally { await o.command('ROLLBACK;') }
+    assert.deepEqual(await snapshot(), before)
   })
   await test('rollback refuza deriva chiar fara istoric operational', async () => {
     await o.command('UPDATE teste.magazie_echipamente SET cantitate_total=48 WHERE id=1;')
@@ -151,7 +187,7 @@ try {
     assert.equal(await o.value(`to_jsonb(to_regclass('teste.eip_intrari') IS NOT NULL)`), true)
     await o.command('UPDATE teste.magazie_echipamente SET cantitate_total=47 WHERE id=1;'); await invariant()
   })
-  await test('rollback complet pe baza curata pastreaza toate randurile legacy', async () => {
+  await test('rollback complet pe baza curata pastreaza toate randurile legacy si UM initiale', async () => {
     await o.command(rollback)
     assert.deepEqual(await state(), baseline); assert.deepEqual(await acl(), policies)
     assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='teste' AND (c.relname LIKE 'eip_%' OR c.relname='v_eip_stoc'))`), 0)
@@ -164,7 +200,7 @@ try {
   const articol = await article('BOCANCI SARDEGNA S3 SRC')
   const weldstar = await article('BOCANCI NEW WELDSTAR S3'), steeler = await article('BOCANCI STEELER WELDER S3')
   const salopeta = await article('SALOPETA CU PIEPTAR BBC'), casca = await article('CASCA INAP MASTER 2680')
-  const stockId = (aid, size) => o.value(`(SELECT to_jsonb(id) FROM teste.magazie_echipamente WHERE articol_id=${aid} AND activ AND marime IS NOT DISTINCT FROM ${size === null ? 'NULL' : quote(size)})`)
+  const stockId = (aid, size) => o.value(`(SELECT to_jsonb(id) FROM teste.magazie_echipamente WHERE articol_id=${aid} AND activ AND marime IS NOT DISTINCT FROM ${sqlText(size)})`)
   await test('drepturi: owner/stoc/admin_logistica/achizitii; fara drept refuzat', async () => {
     for (const n of [1, 2, 3, 4]) { await login(a, n); await a.value(call(articol, String(40 + n), 2, `drept-${n}`)); await invariant() }
     await login(a, 5)
@@ -192,12 +228,17 @@ try {
   })
   await test('ACL explicite si Gate 0e fara set_config', async () => {
     const signatures = ['fn_eip_verifica_drept()', 'fn_eip_intrare_factura(jsonb,jsonb,text)',
-      'fn_eip_corectie(bigint,numeric,text)', 'fn_eip_muta(bigint,bigint,text,numeric,text)', 'fn_eip_articol_gaseste(text,text,text)']
+      'fn_eip_corectie(bigint,numeric,text)', 'fn_eip_muta(bigint,bigint,text,numeric,text,text)', 'fn_eip_articol_gaseste(text,text,text)']
     for (const sig of signatures) {
       for (const role of ['anon', 'service_role', 'authenticated']) assert.equal(
         await o.value(`to_jsonb(has_function_privilege(${quote(role)},${quote('teste.' + sig)},'EXECUTE'))`),
         role === 'authenticated' && !sig.startsWith('fn_eip_verifica_drept'))
       assert.equal(await o.value(`(SELECT to_jsonb(NOT EXISTS(SELECT 1 FROM aclexplode(p.proacl) x WHERE x.grantee=0 AND x.privilege_type='EXECUTE')) FROM pg_proc p WHERE oid=${quote('teste.' + sig)}::regprocedure)`), true)
+    }
+    assert.equal(await o.value(`to_jsonb(to_regprocedure('teste.fn_eip_muta(bigint,bigint,text,numeric,text)') IS NULL)`), true)
+    assert.equal(await o.value(`(SELECT to_jsonb(relrowsecurity) FROM pg_class WHERE oid='teste.eip_migrare_um'::regclass)`), true)
+    for (const role of ['anon', 'service_role', 'authenticated']) for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+      assert.equal(await o.value(`to_jsonb(has_table_privilege(${quote(role)},'teste.eip_migrare_um',${quote(privilege)}))`), false)
     }
     assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM pg_proc WHERE pronamespace='teste'::regnamespace AND proname LIKE 'fn_eip_%' AND prosrc ~* 'set_config')`), 0)
     const service = await new Session('service_acl').init('service_role')
@@ -333,7 +374,7 @@ try {
     await denies(a, `PERFORM ${move(1, articol, '61', 3)}`, 'eip_sub_asignat')
     for (const reason of ['', ' ', null]) await denies(a, `PERFORM ${move(1, articol, '61', 1, reason)}`, 'eip_mutare_invalida')
     for (const quantity of [0, -1, 'NaN', 'Infinity', '-Infinity']) await denies(a, `PERFORM ${move(1, articol, '61', quantity)}`, 'eip_mutare_invalida')
-    await denies(a, `PERFORM teste.fn_eip_muta(1,${articol},'61',NULL,'test')`, 'eip_mutare_invalida')
+    await denies(a, `PERFORM ${move(1, articol, '61', null, 'test')}`, 'eip_mutare_invalida')
     await denies(a, `PERFORM ${move(await stockId(articol, '42'), articol, '42', 1)}`, 'eip_mutare_aceeasi_destinatie')
     assert.deepEqual(await snapshot(), before)
     assert.equal(await stockId(articol, '61'), null, 'destinatia creata se anuleaza la refuz')
@@ -342,8 +383,8 @@ try {
     const after = await snapshot()
     await denies(a, `PERFORM ${move(1, articol, '61', 1)}`, 'eip_sub_asignat')
     assert.deepEqual(await snapshot(), after)
-    // Destinatie unica cu NULL permisa si pentru mutare.
-    await a.value(move(await stockId(articol, '61'), casca, null, 1)); await invariant()
+    // Destinatie unica NULL, cu UM compatibila: salopeta buc -> casca buc.
+    await a.value(move(await stockId(salopeta, 'XL'), casca, null, 1)); await invariant()
   })
   await test('doua mutari concurente serializate, inclusiv destinatie noua comuna', async () => {
     const src = await stockId(articol, '45')
@@ -380,7 +421,8 @@ try {
       for (const s of [a, service]) for (const sql of [
         'UPDATE teste.eip_intrari SET cantitate=999 WHERE id=1', 'DELETE FROM teste.eip_intrari WHERE id=1',
         `INSERT INTO teste.eip_intrari(echipament_id,articol_id,cantitate,sursa) VALUES(1,${articol},2,'manual')`,
-        `INSERT INTO teste.eip_receptii(cheie,continut_hash,rezultat) VALUES('fals',md5('fals'),'{}')`,
+        `INSERT INTO teste.eip_receptii(cheie,tip,continut_hash,rezultat) VALUES('fals','receptie',md5('fals'),'{}')`,
+        "UPDATE teste.eip_migrare_um SET um_initial='fals' WHERE echipament_id=1",
       ]) await denies(s, sql, 'permission denied')
     } finally { await service.close() }
     await invariant()
@@ -395,6 +437,95 @@ try {
     await denies(a, `PERFORM ${move(await stockId(articol, '62'), articol, '45', 1)}`, 'eip_jurnal_divergent')
     await a.command(`UPDATE teste.magazie_echipamente SET cantitate_total=${total} WHERE id=${id};`); await invariant()
     await denies(o, rollbackGuard, 'eip_rollback_refuzat_istoric')
+  })
+  await test('r3 mutare idempotenta: sursa 23, destinatie 1, doar doua randuri jurnal', async () => {
+    await a.value(call(weldstar, '71', 24, 'r3-stoc-idem'))
+    const src = await stockId(weldstar, '71')
+    const count = await o.value(`(SELECT to_jsonb(count(*)) FROM teste.eip_intrari)`)
+    const first = await a.value(move(src, steeler, '72', 1, ' separare ', 'r3-muta-idem'))
+    const after = await snapshot()
+    assert.deepEqual(await a.value(move(src, steeler, ' 72 ', '1.00', 'separare', 'r3-muta-idem')), first)
+    assert.deepEqual(await snapshot(), after)
+    assert.equal(await o.value(`(SELECT to_jsonb(cantitate_total) FROM teste.magazie_echipamente WHERE id=${src})`), 23)
+    assert.equal(await o.value(`(SELECT to_jsonb(cantitate_total) FROM teste.magazie_echipamente WHERE id=${first.in_echipament_id})`), 1)
+    assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM teste.eip_intrari)`), count + 2)
+    assert.equal(await o.value(`(SELECT to_jsonb(tip) FROM teste.eip_receptii WHERE cheie='r3-muta-idem')`), 'mutare')
+    // Retry dupa alta mutare: rezultatul initial ramane memorat.
+    await a.value(move(src, steeler, '73', 1, 'alta', 'r3-muta-alta'))
+    const later = await snapshot()
+    assert.deepEqual(await a.value(move(src, steeler, '72', 1, 'separare', 'r3-muta-idem')), first)
+    assert.deepEqual(await snapshot(), later); await invariant()
+  })
+  await test('r3 aceeasi cheie de mutare cu alt continut refuzata atomic', async () => {
+    const src = await stockId(weldstar, '71'), before = await snapshot()
+    for (const rpc of [
+      move(src, steeler, '72', 2, 'separare', 'r3-muta-idem'),
+      move(src, steeler, '74', 1, 'separare', 'r3-muta-idem'),
+      move(src, weldstar, '72', 1, 'separare', 'r3-muta-idem'),
+      move(2, steeler, '72', 1, 'separare', 'r3-muta-idem'),
+      move(src, steeler, '72', 1, 'alt motiv', 'r3-muta-idem'),
+    ]) await denies(a, `PERFORM ${rpc}`, 'eip_cheie_reutilizata')
+    assert.deepEqual(await snapshot(), before); await invariant()
+  })
+  await test('r3 cheia globala: receptie->mutare si mutare->receptie refuzate', async () => {
+    const before = await snapshot(), src = await stockId(weldstar, '71')
+    await denies(a, `PERFORM ${move(src, steeler, '74', 1, 'test', 'r3-stoc-idem')}`, 'eip_cheie_reutilizata')
+    await denies(a, `PERFORM ${call(steeler, '75', 1, 'r3-muta-idem')}`, 'eip_cheie_reutilizata')
+    assert.deepEqual(await snapshot(), before)
+    assert.equal(await stockId(steeler, '74'), null)
+    assert.equal(await stockId(steeler, '75'), null); await invariant()
+  })
+  await test('r3 doua mutari concurente cu aceeasi cheie au un singur efect', async () => {
+    await a.value(call(weldstar, '76', 24, 'r3-stoc-concurent'))
+    const src = await stockId(weldstar, '76')
+    const count = await o.value(`(SELECT to_jsonb(count(*)) FROM teste.eip_intrari)`)
+    await a.command('BEGIN;')
+    const first = await a.value(move(src, steeler, '77', 1, 'concurent', 'r3-muta-concurent'))
+    let pending
+    try {
+      pending = b.value(move(src, steeler, ' 77 ', '1.00', ' concurent ', 'r3-muta-concurent'))
+      await barrier(b.pid); await a.command('COMMIT;')
+      assert.deepEqual(await pending, first)
+    } finally { await a.command('ROLLBACK;'); if (pending) await pending }
+    assert.equal(await o.value(`(SELECT to_jsonb(cantitate_total) FROM teste.magazie_echipamente WHERE id=${src})`), 23)
+    assert.equal(await o.value(`(SELECT to_jsonb(cantitate_total) FROM teste.magazie_echipamente WHERE id=${first.in_echipament_id})`), 1)
+    assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM teste.eip_intrari)`), count + 2)
+    assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM teste.eip_receptii WHERE cheie='r3-muta-concurent')`), 1)
+    await invariant()
+  })
+  await test('r3 mutare cu cheie NULL, goala sau spatii refuzata', async () => {
+    const before = await snapshot(), src = await stockId(weldstar, '71')
+    for (const key of [null, '', '   ']) {
+      await denies(a, `PERFORM ${move(src, steeler, '78', 1, 'test', key)}`, 'eip_cheie_obligatorie')
+      await denies(a, `PERFORM ${call(steeler, '78', 1, key)}`, 'eip_cheie_obligatorie')
+    }
+    assert.deepEqual(await snapshot(), before); await invariant()
+  })
+  await test('r3 UM sursa buc -> articol pereche refuzata fara efect', async () => {
+    const before = await snapshot()
+    await denies(a, `PERFORM ${move(3, steeler, '79', 1, 'test', 'r3-um-src')}`, 'eip_um_incompatibil')
+    assert.deepEqual(await snapshot(), before)
+    assert.equal(await stockId(steeler, '79'), null)
+    // Sensul invers este de asemenea incompatibil.
+    await denies(a, `PERFORM ${move(2, casca, null, 1, 'test', 'r3-um-invers')}`, 'eip_um_incompatibil')
+    assert.deepEqual(await snapshot(), before); await invariant()
+  })
+  await test('r3 UM destinatie incompatibila refuzata; upper/btrim acceptate intre articole', async () => {
+    const src = await stockId(weldstar, '76'), dst = await stockId(steeler, '77')
+    await o.command(`UPDATE teste.magazie_echipamente SET um='buc' WHERE id=${dst};`)
+    try {
+      const before = await snapshot()
+      await denies(a, `PERFORM ${move(src, steeler, '77', 1, 'test', 'r3-um-dst')}`, 'eip_um_incompatibil')
+      assert.deepEqual(await snapshot(), before)
+    } finally { await o.command(`UPDATE teste.magazie_echipamente SET um='pereche' WHERE id=${dst};`) }
+    await o.command(`UPDATE teste.magazie_echipamente SET um=' PERECHE ' WHERE id IN (${src},${dst});`)
+    try {
+      const result = await a.value(move(src, steeler, '77', 1, 'test', 'r3-um-normalizat'))
+      assert.equal(result.in_echipament_id, dst)
+      assert.equal(await o.value(`(SELECT to_jsonb(cantitate_total) FROM teste.magazie_echipamente WHERE id=${src})`), 22)
+      assert.equal(await o.value(`(SELECT to_jsonb(cantitate_total) FROM teste.magazie_echipamente WHERE id=${dst})`), 2)
+    } finally { await o.command(`UPDATE teste.magazie_echipamente SET um='pereche' WHERE id IN (${src},${dst});`) }
+    await invariant()
   })
   console.log(`${passed} PASS (PG17 real; fixture izolata, fara API PostgREST).`)
 } catch (error) {

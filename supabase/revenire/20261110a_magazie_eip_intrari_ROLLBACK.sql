@@ -4,7 +4,7 @@ BEGIN;
 SELECT pg_advisory_xact_lock(20261110,1);
 LOCK TABLE public.magazie_inventar_angajat IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE public.magazie_echipamente IN SHARE ROW EXCLUSIVE MODE;
-LOCK TABLE public.eip_intrari,public.eip_receptii IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.eip_intrari,public.eip_receptii,public.eip_migrare_um IN ACCESS EXCLUSIVE MODE;
 DO $$ BEGIN
   -- Verificam inclusiv randuri inactive si randuri cu jurnal ramas fara mapare.
   IF EXISTS (SELECT 1 FROM public.magazie_echipamente e
@@ -19,10 +19,13 @@ DO $$ BEGIN
     RAISE EXCEPTION 'eip_rollback_refuzat_istoric';
   END IF;
 END $$;
+-- Restauram exact UM initiala, inclusiv 'buc' pentru cele doua randuri de bocanci.
+UPDATE public.magazie_echipamente e SET um=b.um_initial
+  FROM public.eip_migrare_um b WHERE e.id=b.echipament_id;
 DROP VIEW public.v_eip_stoc;
 DROP FUNCTION public.fn_eip_intrare_factura(jsonb,jsonb,text);
 DROP FUNCTION public.fn_eip_corectie(bigint,numeric,text);
-DROP FUNCTION public.fn_eip_muta(bigint,bigint,text,numeric,text);
+DROP FUNCTION public.fn_eip_muta(bigint,bigint,text,numeric,text,text);
 DROP FUNCTION public.fn_eip_articol_gaseste(text,text,text);
 DROP FUNCTION public.fn_eip_verifica_drept();
 DROP TRIGGER eip_inventar_marime ON public.magazie_inventar_angajat;
@@ -30,6 +33,7 @@ DROP FUNCTION public.fn_eip_copiaza_marime();
 DROP TABLE public.eip_receptii;
 DROP TABLE public.eip_intrari;
 DROP TABLE public.eip_alias_furnizor;
+DROP TABLE public.eip_migrare_um;
 DROP INDEX public.eip_stoc_articol_marime_uq;
 ALTER TABLE public.magazie_inventar_angajat DROP COLUMN marime;
 ALTER TABLE public.magazie_echipamente DROP COLUMN marime,DROP COLUMN articol_id;
