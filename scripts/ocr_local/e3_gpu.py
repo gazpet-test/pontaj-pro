@@ -237,7 +237,8 @@ class WslModels:
         self.py(code, json.dumps(targets))
 
     def memory_mb(self):
-        raw = self.wsl(['nvidia-smi', '--query-gpu=memory.used', '--format=csv,noheader,nounits'])
+        # wsl --exec nu trece prin shell: nvidia-smi nu e in PATH, calea WSL e fixa (config: nvidia_smi)
+        raw = self.wsl([self.config.get('nvidia_smi', '/usr/lib/wsl/lib/nvidia-smi'), '--query-gpu=memory.used', '--format=csv,noheader,nounits'])
         return max(float(v) for v in raw.splitlines())
 
 
