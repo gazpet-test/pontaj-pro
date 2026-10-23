@@ -9,6 +9,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
@@ -2263,7 +2264,10 @@ function CostModal({ poz, onClose, onDone }) {
 // SHELL cu tab-uri
 // ════════════════════════════════════════════════════════════════
 export default function MagaziePage() {
-  const [tab, setTab] = useState('materiale')
+  // link din Execuție: /magazie?tab=teava_proiecte&proiect=<id> (buton „Vezi țeava și curbele în Magazie”)
+  const [sp] = useSearchParams()
+  const proiectDinLink = Number(sp.get('proiect')) || null
+  const [tab, setTab] = useState(sp.get('tab') === 'teava_proiecte' ? 'teava_proiecte' : 'materiale')
   // Externii (email non-@gazpet.ro, ex. partenerul de agrement Adrom Evolution)
   // văd DOAR tab-ul Producție — restul magaziei e intern.
   const [extern, setExtern] = useState(null)
@@ -2320,7 +2324,7 @@ export default function MagaziePage() {
       {tab === 'catalog' && <CatalogTab />}
       {tab === 'echipamente' && <EchipamenteTab />}
       {tab === 'stoc_trasabil' && <StocTrasabilTab />}
-      {tab === 'teava_proiecte' && <IzoStocTeava />}
+      {tab === 'teava_proiecte' && <IzoStocTeava proiectInitial={proiectDinLink} />}
       {tab === 'documente_intrare' && <IzoDocumenteIntrare />}
       {tab === 'corectii_izo' && <IzoCorectii />}
       {tab === 'productie' && <ProductieTab />}

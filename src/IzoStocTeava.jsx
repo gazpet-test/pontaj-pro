@@ -25,13 +25,13 @@ const CAT_CULOARE = { disponibil:G.green, in_drum:G.yellow, carantina:G.red, pe_
 const PAGINA = 1000
 const MAX_LISTA = 400
 
-export default function IzoStocTeava({ proiectId: proiectFix = null, citire = false }) {
+export default function IzoStocTeava({ proiectId: proiectFix = null, citire = false, proiectInitial = null }) {
   const [stare, setStare] = useState({ incarc: true, eroare: null, neinstalat: false })
   const [bucati, setBucati] = useState([])
   const [proiecte, setProiecte] = useState([])
   const [depozite, setDepozite] = useState([])
   const [tronsoane, setTronsoane] = useState([])
-  const [proiectId, setProiectId] = useState(proiectFix)
+  const [proiectId, setProiectId] = useState(proiectFix || proiectInitial)
   const [f, setF] = useState({ depozitId: '', tip: '', categorie: '', cauta: '' })
   const [faraAcces, setFaraAcces] = useState(false)
   // proiectul afișat: cel fix (Execuție) sau cel ales (Magazie) — o singură sursă peste tot
