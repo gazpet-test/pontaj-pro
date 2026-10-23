@@ -40,3 +40,11 @@ Coada: IndexedDB atomic / fallback memorie cu banner, UUID/seq pe dispozitiv și
 PASS executat cu C:/Program Files/nodejs/node.exe: test_coada.mjs — 22 scenarii storage/RPC simulate; test_normalizare.mjs — 29 vectori; node --check pe cele două module JS. Fișierele SQL/E9/App.jsx identice byte-cu-byte cu baza copiată.
 Lipsesc UI: serii necunoscute, corecții de lungime/revizii și repararea conflictelor, tăiere la ambele capete/cut-out laptop; cuplarea copiilor din tăieri diferite cere aprobare înainte; blocarea globală a logoutului nu este integrată (doar protecție beforeunload, fără modificări App.jsx).
 NERULATE: browser/tabletă reală, IndexedDB/Web Locks reale, API/PostgREST și Vite build; acestea necesită validarea integratorului. Pornirea fără rețea/service worker rămâne E6.
+
+E4b-4b — UI birou/MP și gestionar, numai worktree; fără Git, secrete, BD sau deploy.
+Fișiere: src/IzometrieAprobare.jsx (include IzometrieGestionar), src/lib/izoBirou.js, scripts/izometrie/e4_gen/test_birou.mjs; integrare lazy src/Izometrie.jsx:29–30,252–253,265–268.
+Acoperire §6.2–6.4, §8.6 și alerte: sesiuni trimise pe proiect/tronson, preview topologic, aprobare totală/parțială, CAS versiune/updated_at/amprentă, respingere cu motiv și decizii pe descendenți, revizie și serie lămurită; motiv corecție lungime și confirmare tranziție perete prin RPC.
+Gestionar §6.5/6.7 (parțial): ieșire cu aviz/data și retry cu aceeași cheie/payload, rezervări active paginate, fronturi și eliberare prin RPC (serverul cere MP); resturi în tranzit doar afișate. Generații izolate, inclusiv remontarea StrictMode.
+PASS Node: test_birou.mjs 14 scenarii (RPC fake, timeout după commit, CAS, cascadă, paginare 1201 rânduri, semnături comparate offline cu migrarea); test_coada.mjs 22 scenarii; test_normalizare.mjs 29 vectori; node --check src/lib/izoBirou.js.
+Lipsesc: primire resturi/acțiuni pe resturi încă declarate, tratarea sesiunilor deschise abandonate și alertă dedicată autor revocat (drepturile rămân validate pe server); cererea de retry birou este păstrată numai cât ecranul rămâne montat.
+NERULATE: browser/React, API/PostgREST și Vite build (la integrator); SQL și fișierele protejate verificate identice cu baza, fără pachete npm noi.

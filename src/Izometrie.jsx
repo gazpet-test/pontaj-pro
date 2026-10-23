@@ -26,6 +26,8 @@ import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportC
 import IzoStocTeava from './IzoStocTeava.jsx'
 import { patchDinRegistru, indexFolosite, sugestiiRegistru, citesteTot, paznicCereri, reimprospateaza, salveazaAlegereRegistru, dezleagaDinRegistru } from './lib/izoRegistru.js'
 const IzometrieTeren = lazy(() => import('./IzometrieTeren.jsx'))
+const IzometrieAprobare = lazy(() => import('./IzometrieAprobare.jsx'))
+const IzometrieGestionar = lazy(() => import('./IzometrieAprobare.jsx').then(m => ({ default: m.IzometrieGestionar })))
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -247,8 +249,8 @@ export default function IzometriePage({ initialProiectId } = {}) {
 
   // comutatorul Pachete ↔ Stoc țeavă (registrul izometrie, doar citire)
   const comutator = (
-    <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-      {[['pachete', '📐 Pachete lansare'], ['stoc', '🧱 Stoc țeavă (registru)'], ['teren', '👷 Teren (tabletă)']].map(([k, l]) => (
+    <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
+      {[['pachete', '📐 Pachete lansare'], ['stoc', '🧱 Stoc țeavă (registru)'], ['teren', '👷 Teren (tabletă)'], ['aprobare', '✅ Aprobare teren (MP)'], ['depozit', '📦 Gestionar (depozit)']].map(([k, l]) => (
         <button key={k} onClick={() => setVedere(k)} style={{
           padding:'8px 16px', fontSize:13, fontWeight:700, cursor:'pointer', borderRadius:8, fontFamily:'inherit',
           background: vedere === k ? '#58A6FF22' : 'transparent', color: vedere === k ? '#58A6FF' : G.muted,
@@ -259,6 +261,11 @@ export default function IzometriePage({ initialProiectId } = {}) {
   )
 
   if (vedere === 'teren') return <div style={S.page}>{comutator}<Suspense fallback={<p>Se încarcă ecranul de teren…</p>}><IzometrieTeren proiectId={proiectId} proiecte={proiecte} onProiect={setProiectId} tronsoane={tronsoane} initialTronsonId={tronsonId} lockedMode={lockedMode} /></Suspense></div>
+
+  if (vedere === 'aprobare' || vedere === 'depozit') {
+    const Birou = vedere === 'aprobare' ? IzometrieAprobare : IzometrieGestionar
+    return <div style={S.page}>{comutator}<Suspense fallback={<p>Se încarcă ecranul de birou…</p>}><Birou key={`${vedere}-${proiectId}`} proiectId={proiectId} proiecte={proiecte} onProiect={setProiectId} tronsoane={tronsoane} lockedMode={lockedMode} /></Suspense></div>
+  }
 
   if (vedere === 'stoc') {
     return (
