@@ -71,6 +71,8 @@ Fără date: migrarea nu are DML pe date existente.
 
 Harness-ul (ambele moduri) verifică restaurarea exactă.
 
+**Armarea revenirii.** Revenirea cere, în aceeași tranzacție, `SELECT set_config('gazpet.revenire_20261109b','IZO_E4B_SCOATE:'||txid_current(),true);` și `current_user = postgres`. Fără armare, se oprește cu „E4b revenire nearmata”. Atenție (P2 Copilot): orice apel de birou scrie contorul `izo_rata_apeluri`. După primul apel real, rollback-ul e deci refuzat ca „date existente” până la o curățare explicită, cu „da”.
+
 ## Ordinea
 
 1. DRY pe prod: `BEGIN` + prologul runner-ului, apoi migrarea, porțile și `control_0e`, apoi **revenirea în aceeași tranzacție**, apoi `ROLLBACK`, ca la E4a r2.
