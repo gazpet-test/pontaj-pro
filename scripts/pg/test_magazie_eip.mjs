@@ -1,6 +1,6 @@
 // ASCII. Node stdlib + psql; numai baza LOCALA dedicata, fara modificari de roluri.
 // PGURI=postgresql://localhost/eip_b1_test_local node scripts/pg/test_magazie_eip.mjs
-// Owner nesuperuser cu SET ROLE authenticated/service_role/anon; schema teste trebuie sa lipseasca.
+// Owner nesuperuser eip_owner cu SET ROLE authenticated/service_role/anon; schema teste trebuie sa lipseasca.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -12,14 +12,81 @@ assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(target.hostname), 'Doar P
 assert.match(decodeURIComponent(target.pathname.slice(1)), /^eip_b1_test_[a-z0-9_]+$/)
 assert.equal(target.search, ''); assert.equal(target.hash, '')
 assert.ok(!process.env.PGOPTIONS && !process.env.PGSERVICE && !process.env.PGSERVICEFILE)
-// Aceleasi corpuri SQL; doar namespace-ul se muta. Nu atingem public/auth reale.
-const isolate = sql => sql.replaceAll('public.', 'teste.').replaceAll('search_path = public, pg_temp', 'search_path = teste, pg_temp').replaceAll('auth.uid()', 'teste.uid()')
-const migration = isolate(readFileSync(new URL('../../supabase/migrations/20261110a_magazie_eip_intrari.sql', import.meta.url), 'utf8'))
-const rollback = isolate(readFileSync(new URL('../../supabase/revenire/20261110a_magazie_eip_intrari_ROLLBACK.sql', import.meta.url), 'utf8'))
-const rollbackGuard = rollback.match(/DO \$\$[\s\S]*?END \$\$;/)[0]
+const migrationSource = readFileSync(new URL('../../supabase/migrations/20261110a_magazie_eip_intrari.sql', import.meta.url), 'utf8')
+const rollbackSource = readFileSync(new URL('../../supabase/revenire/20261110a_magazie_eip_intrari_ROLLBACK.sql', import.meta.url), 'utf8')
+// Numai copia izolata: namespace teste si exceptia de identitate pentru eip_owner.
+// Marcajul legat de txid, izolarea si advisory lock raman verificate in SQL.
+const isolate = sql => {
+  assert.equal(sql.split("current_user <> 'postgres'").length - 1, 1)
+  return sql.replaceAll('public.', 'teste.').replaceAll('search_path = public, pg_temp', 'search_path = teste, pg_temp')
+    .replaceAll('auth.uid()', 'teste.uid()').replace("current_user <> 'postgres'", 'current_user <> current_user')
+}
+const migration = isolate(migrationSource), rollback = isolate(rollbackSource)
 const migrationMapping = migration.match(/DO \$\$[\s\S]*?END \$\$;/)[0]
 const quote = s => "'" + String(s).replaceAll("'", "''") + "'"
 const sqlText = s => s === null ? 'NULL' : quote(s)
+// Scanner lexical pentru regresia de ambalare; nu este validatorul oficial.
+// Comentariile, identificatorii/literalii citati si corpurile dollar nu sunt comenzi top-level.
+// Verificam literalii obisnuiti si in interiorul corpurilor dollar.
+function topLevel(sql) {
+  let out = '', i = 0
+  while (i < sql.length) {
+    const rest = sql.slice(i)
+    if (rest.startsWith('--')) {
+      const end = sql.indexOf('\n', i)
+      i = end < 0 ? sql.length : end + 1; out += ' '; continue
+    }
+    if (rest.startsWith('/*')) {
+      let depth = 1; i += 2
+      while (i < sql.length && depth) {
+        if (sql.startsWith('/*', i)) { depth++; i += 2 }
+        else if (sql.startsWith('*/', i)) { depth--; i += 2 }
+        else i++
+      }
+      assert.equal(depth, 0, 'comentariu neterminat'); out += ' '; continue
+    }
+    const dollar = rest.match(/^\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$/)?.[0]
+    if (dollar) {
+      const end = sql.indexOf(dollar, i + dollar.length)
+      assert.ok(end >= 0, 'dollar quote neterminat')
+      topLevel(sql.slice(i + dollar.length, end))
+      i = end + dollar.length; out += ' '; continue
+    }
+    const escaped = /^[eE]'/.test(rest) && (i === 0 || !/[A-Za-z_0-9$]/.test(sql[i - 1]))
+    if (sql[i] === "'" || escaped || sql[i] === '"') {
+      const delimiter = escaped ? "'" : sql[i]
+      i += escaped ? 2 : 1
+      let closed = false
+      while (i < sql.length) {
+        if (sql[i] === '\\' && delimiter === "'") {
+          assert.ok(escaped, 'backslash in literal obisnuit')
+          i += 2; continue
+        }
+        if (sql[i] === delimiter) {
+          if (sql[i + 1] === delimiter) { i += 2; continue }
+          i++; closed = true; break
+        }
+        i++
+      }
+      assert.ok(closed, 'literal neterminat'); out += ' '; continue
+    }
+    out += sql[i++]
+  }
+  return out
+}
+function checkPackaging(sql, tag) {
+  assert.doesNotMatch(sql, /[^\x00-\x7f]/, 'SQL ASCII')
+  assert.doesNotMatch(sql, /standard_conforming_strings|client_encoding|escape_string_warning|backslash_quote/i)
+  const top = topLevel(sql)
+  for (const statement of top.split(';')) assert.doesNotMatch(statement.trim(), /^(?:BEGIN|START|COMMIT|END|ROLLBACK|SAVEPOINT)\b/i)
+  assert.ok(!top.includes('\\'), 'fara meta-comenzi psql')
+  // Cast-urile sunt permise, interpolarile psql nu.
+  assert.doesNotMatch(top.replaceAll('::', ''), /:(?:[A-Za-z_]|['"])/)
+  assert.match(sql.replace(/^\s*--[^\n]*(?:\n|$)/, ''), new RegExp('^\\s*DO \\$' + tag + '\\$'))
+  assert.doesNotMatch(top, /\bset_config\s*\(/i)
+  if (tag === 'garda') assert.match(sql, /current_setting\('gazpet\.livrare_migrare', true\)/)
+  else assert.match(sql, /current_setting\('gazpet\.revenire_20261110a', true\)/)
+}
 const sessions = new Set()
 class Session {
   constructor(name) {
@@ -60,6 +127,27 @@ class Session {
     try { await this.closed } finally { clearTimeout(timer); sessions.delete(this) }
   }
 }
+// Reproducem runnerul: o singura tranzactie, READ COMMITTED, marcaje locale legate de txid.
+// Rollback-ul primeste si marcajul general al runnerului, si armarea specifica revenirii.
+function deliverySql(sql, { returning = false, mark = 'valid', isolation = 'READ COMMITTED' } = {}) {
+  const name = mark === 'wrong-name' ? 'alta_migrare:' : '20261110a_magazie_eip_intrari:'
+  const txid = mark === 'wrong-txid' ? '(txid_current() + 1)' : 'txid_current()'
+  return `BEGIN; SET TRANSACTION ISOLATION LEVEL ${isolation};
+    ${mark === 'missing' ? '' : `SELECT set_config('gazpet.livrare_migrare', ${quote(name)} || ${txid}, true);`}
+    ${returning && mark !== 'missing' ? "SELECT set_config('gazpet.revenire_20261110a', 'EIP_B1_SCOATE:' || txid_current(), true);" : ''}
+    ${sql}
+    COMMIT;`
+}
+const applyMigration = () => o.command(deliverySql(migration))
+const applyRollback = () => o.command(deliverySql(rollback, { returning: true }))
+async function refusesDelivery(sql, message, options = {}) {
+  // ON_ERROR_STOP inchide sesiunea la refuz; asteptam inchiderea pentru rollback atomic.
+  const s = new Session('delivery_refusal')
+  try {
+    await s.init()
+    await assert.rejects(s.command(deliverySql(sql, options)), error => error.message.includes(message))
+  } finally { await s.close() }
+}
 async function denies(s, sql, message) {
   await s.command(`DO $test$ BEGIN BEGIN ${sql.replace(/;\s*$/, '')};
     RAISE EXCEPTION 'TEST_expected_refusal_missing'; EXCEPTION WHEN OTHERS THEN
@@ -86,6 +174,11 @@ const snapshot = () => o.value(`jsonb_build_object(
   'jurnal',(SELECT jsonb_agg(to_jsonb(i) ORDER BY id) FROM teste.eip_intrari i),
   'receptii',(SELECT jsonb_agg(to_jsonb(r) ORDER BY cheie) FROM teste.eip_receptii r))`)
 const acl = () => o.value(`(SELECT jsonb_agg(to_jsonb(p) ORDER BY tablename,policyname) FROM pg_policies p WHERE schemaname='teste' AND tablename LIKE 'magazie_%')`)
+async function noEipObjects() {
+  assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='teste' AND (c.relname LIKE 'eip_%' OR c.relname='v_eip_stoc'))`), 0)
+  assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM pg_proc WHERE pronamespace='teste'::regnamespace AND proname LIKE 'fn_eip_%')`), 0)
+  assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM information_schema.columns WHERE table_schema='teste' AND table_name IN ('magazie_echipamente','magazie_inventar_angajat') AND column_name IN ('articol_id','marime'))`), 0)
+}
 async function barrier(pid) {
   const until = Date.now() + 6000
   while (Date.now() < until) {
@@ -95,6 +188,17 @@ async function barrier(pid) {
   throw new Error('concurenta fara asteptare pe advisory lock')
 }
 try {
+  await test('r4 ambalare statica: tranzactie externa, literali si parametri protejati', async () => {
+    checkPackaging(migrationSource, 'garda'); checkPackaging(rollbackSource, 'revenire')
+    // Probe negative pentru scanner: nu poate ascunde tranzactii in comentarii/corpuri.
+    assert.equal(topLevel('-- COMMIT;\nDO $$ BEGIN NULL; END $$; SELECT 1;').trim(), 'DO  ; SELECT 1;')
+    for (const command of ['BEGIN', 'START TRANSACTION', 'COMMIT', 'END', 'ROLLBACK', 'SAVEPOINT x']) {
+      assert.throws(() => checkPackaging(migrationSource + `\n${command};`, 'garda'))
+    }
+    assert.throws(() => checkPackaging(migrationSource + "\nSELECT 'bad\\literal';", 'garda'))
+    assert.throws(() => checkPackaging(migrationSource + "\nDO $$ BEGIN PERFORM 'bad\\literal'; END $$;", 'garda'))
+    assert.throws(() => checkPackaging(migrationSource + '\n-- client_encoding', 'garda'))
+  })
   o = await new Session('observer').init()
   const version = Number(await o.command('SHOW server_version_num;'))
   assert.ok(version >= 170000 && version < 180000, 'PG17 obligatoriu')
@@ -139,7 +243,31 @@ try {
     INSERT INTO teste.magazie_echipamente(denumire,categorie,um,cantitate_total,stare) VALUES('SCULA','echipament','buc',7,'functional');
   `)
   const baseline = await state(), policies = await acl()
-  await o.command(migration)
+  await test('r4 migrare fara marcaj refuzata fara efecte', async () => {
+    await refusesDelivery(migration, 'numai postgres prin runner', { mark: 'missing' })
+    await noEipObjects(); assert.deepEqual(await state(), baseline); assert.deepEqual(await acl(), policies)
+  })
+  await test('r4 migrare cu nume sau txid gresit refuzata; izolarea obligatorie', async () => {
+    for (const mark of ['wrong-name', 'wrong-txid']) {
+      await refusesDelivery(migration, 'numai postgres prin runner', { mark })
+      await noEipObjects(); assert.deepEqual(await state(), baseline); assert.deepEqual(await acl(), policies)
+    }
+    await refusesDelivery(migration, 'READ COMMITTED', { isolation: 'REPEATABLE READ' })
+    await noEipObjects(); assert.deepEqual(await state(), baseline)
+  })
+  await applyMigration()
+  await test('r4 a doua aplicare refuzata fara efecte', async () => {
+    const before = await snapshot()
+    await refusesDelivery(migration, 'exista deja')
+    assert.deepEqual(await snapshot(), before); await invariant()
+  })
+  await test('r4 rollback fara marcaj refuzat fara stergeri', async () => {
+    const before = await snapshot()
+    await refusesDelivery(rollback, 'Revenire EIP B1 nearmata', { returning: true, mark: 'missing' })
+    assert.deepEqual(await snapshot(), before)
+    assert.equal(await o.value(`to_jsonb(to_regclass('teste.eip_migrare_um') IS NOT NULL)`), true)
+    await invariant()
+  })
   await test('migrare 6 randuri, total 190, mapare explicita, cantitati nemodificate', async () => {
     await invariant()
     assert.equal(await o.value('(SELECT to_jsonb(sum(cantitate_total)) FROM teste.magazie_echipamente WHERE este_eip AND activ)'), 190)
@@ -183,16 +311,15 @@ try {
   })
   await test('rollback refuza deriva chiar fara istoric operational', async () => {
     await o.command('UPDATE teste.magazie_echipamente SET cantitate_total=48 WHERE id=1;')
-    await denies(o, rollbackGuard, 'eip_jurnal_divergent')
+    await refusesDelivery(rollback, 'eip_jurnal_divergent', { returning: true })
     assert.equal(await o.value(`to_jsonb(to_regclass('teste.eip_intrari') IS NOT NULL)`), true)
     await o.command('UPDATE teste.magazie_echipamente SET cantitate_total=47 WHERE id=1;'); await invariant()
   })
   await test('rollback complet pe baza curata pastreaza toate randurile legacy si UM initiale', async () => {
-    await o.command(rollback)
+    await applyRollback()
     assert.deepEqual(await state(), baseline); assert.deepEqual(await acl(), policies)
-    assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='teste' AND (c.relname LIKE 'eip_%' OR c.relname='v_eip_stoc'))`), 0)
-    assert.equal(await o.value(`(SELECT to_jsonb(count(*)) FROM pg_proc WHERE pronamespace='teste'::regnamespace AND proname LIKE 'fn_eip_%')`), 0)
-    await o.command(migration); await invariant()
+    await noEipObjects()
+    await applyMigration(); await invariant()
   })
   a = await new Session('ui_a').init('authenticated'); b = await new Session('ui_b').init('authenticated')
   await login(a, 1); await login(b, 1)
@@ -436,7 +563,7 @@ try {
     await denies(a, `PERFORM ${move(id, articol, '65', 1)}`, 'eip_jurnal_divergent')
     await denies(a, `PERFORM ${move(await stockId(articol, '62'), articol, '45', 1)}`, 'eip_jurnal_divergent')
     await a.command(`UPDATE teste.magazie_echipamente SET cantitate_total=${total} WHERE id=${id};`); await invariant()
-    await denies(o, rollbackGuard, 'eip_rollback_refuzat_istoric')
+    await refusesDelivery(rollback, 'eip_rollback_refuzat_istoric', { returning: true })
   })
   await test('r3 mutare idempotenta: sursa 23, destinatie 1, doar doua randuri jurnal', async () => {
     await a.value(call(weldstar, '71', 24, 'r3-stoc-idem'))

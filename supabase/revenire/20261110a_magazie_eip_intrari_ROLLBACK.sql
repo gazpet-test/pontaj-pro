@@ -1,5 +1,9 @@
 -- Revenire numai inainte de folosirea B1; nu sterge istoric operational.
-BEGIN;
+DO $revenire$ BEGIN
+  IF current_user <> 'postgres' OR current_setting('gazpet.revenire_20261110a', true) IS DISTINCT FROM 'EIP_B1_SCOATE:' || txid_current() THEN RAISE EXCEPTION 'Revenire EIP B1 nearmata'; END IF;
+  IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION 'EIP B1: READ COMMITTED'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
+END $revenire$;
 -- Aceeasi ordine ca RPC-urile; o cerere in curs se termina inaintea garzilor.
 SELECT pg_advisory_xact_lock(20261110,1);
 LOCK TABLE public.magazie_inventar_angajat IN ACCESS EXCLUSIVE MODE;
@@ -38,4 +42,3 @@ DROP INDEX public.eip_stoc_articol_marime_uq;
 ALTER TABLE public.magazie_inventar_angajat DROP COLUMN marime;
 ALTER TABLE public.magazie_echipamente DROP COLUMN marime,DROP COLUMN articol_id;
 DROP TABLE public.eip_articole;
-COMMIT;
