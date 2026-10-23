@@ -8,6 +8,15 @@ const raspuns = { antet:{ furnizor:'OCR', nr_document:'001', proiect_id:99, depo
   randuri:[{ serie:'000O01I', sarja:'0009', lungime_doc:12.345, lungime_masurata:12, decizie:'primit', necunoscut:'x' }],
   totaluri_tiparite:{ total_metri:100, total_kg:200 } }
 describe('prefill OCR E3', () => {
+  it('E9 local normalizat: kg 1343, metri zecimali și null nestructural până la randNormalizat', () => {
+    // B2 normalizează „1,343” kg la numărul 1343 înainte de răspunsul către UI.
+    // UI nu reinterpretează textul brut al workerului.
+    const d = aplicaPropunereOCR(doc(), { antet:{}, randuri:[{
+      serie:'001', greutate_kg:1343, lungime_doc:12.5, sarja:null,
+    }] }, { mod:'inlocuieste' })
+    expect(d.randuri[0]).toMatchObject({ greutate_kg:'1343', lungime_doc:'12.5', sarja:'', decizie:'' })
+    expect(randNormalizat(d.randuri[0], 'aviz_teava')).toMatchObject({ greutate_kg:1343, lungime_doc_mm:12500 })
+  })
   it('completează golurile sau înlocuiește; păstrează contextul ales', () => {
     const d = doc(), a = aplicaPropunereOCR(d, raspuns), b = aplicaPropunereOCR(d, raspuns, { mod:'inlocuieste' })
     expect(a.antet.furnizor).toBe('Manual'); expect(b.antet.furnizor).toBe('OCR')
@@ -65,4 +74,23 @@ describe('prefill OCR E3', () => {
       totaluri_tiparite:{ total_kg:1500 } }, { mod:'inlocuieste' })
     expect(d.antet.total_net_kg).toBe(''); expect(d.antet.total_brut_kg).toBe('')
   })
+  it('izolația „izolate” de pe aviz devine PEHD (regulă Razvan 22.10)', () => {
+    const d = aplicaPropunereOCR(doc(), { antet:{}, randuri:[{ serie:'1', izolatie:'izolata' }, { serie:'2', izolatie:'Neizolata' }] }, { mod:'inlocuieste' })
+    expect(d.randuri.map(r => r.izolatie)).toEqual(['PEHD', 'neizolata'])
+  })
+})
+import { randPoatePrimiBulk, validareDocument } from './izoDocumenteLogica.js'
+it('regresie 12 curbe: 11 primite, rândul 8 cu CODE/heat rămâne gol', () => {
+  const raspuns = { antet:{ total_bucati:12 }, randuri:Array.from({ length:12 }, (_, i) => ({
+    serie:String(1001 + i), sarja:'2513619', item:'9', diametru_mm:610, perete_mm:8.8, unghi_doc:25,
+    cod:`${1001 + i}-610-8,8-25-6100-${i === 7 ? '2513614' : '2513619'}-9`, cantitate:1,
+    pachet_nr:String(Math.floor(i / 2) + 1), net_kg:i % 2 ? null : 1500, brut_kg:i % 2 ? null : 1550,
+  })) }
+  const d = aplicaPropunereOCR({ ...doc(), sablon:'lista_ambalare_curbe' }, raspuns, { mod:'inlocuieste' })
+  expect(d.randuri.every(r => r.decizie === '')).toBe(true)
+  const v = validareDocument(d)
+  const primite = d.randuri.map((r, i) => randPoatePrimiBulk(v.norm[i], d.sablon, d, v.randuri[i]))
+  expect(primite.filter(Boolean).length).toBe(11)
+  expect(primite[7]).toBe(false)
+  expect(d.randuri[7].decizie).toBe('')
 })

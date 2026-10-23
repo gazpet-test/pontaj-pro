@@ -14,6 +14,10 @@ def pagini(spec):
     return out
 
 def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == 'e3':
+        from .e3_serviciu import main as e3_main
+        return e3_main(args[1:])
     p = argparse.ArgumentParser(prog='ocr_local', description=__doc__)
     sub = p.add_subparsers(dest='cmd', required=True)
     a = sub.add_parser('plan', help='CPU: randare, rutare, orientare, deskew, benzi')

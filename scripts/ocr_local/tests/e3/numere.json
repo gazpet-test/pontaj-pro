@@ -1,0 +1,21 @@
+[
+  {"input":"1,343","numar":1.343,"kg":1343},
+  {"input":"9.920","numar":9.92,"kg":9920},
+  {"input":"12.50","numar":12.5,"kg":12.5},
+  {"input":"8,8","numar":8.8,"kg":8.8},
+  {"input":"20,529","numar":20.529,"kg":20529},
+  {"input":"1.234,56","numar":1234.56,"kg":1234.56},
+  {"input":"1,234.56","numar":1234.56,"kg":1234.56},
+  {"input":"1 234,50","numar":1234.5,"kg":1234.5},
+  {"input":"1 343","numar":1343,"kg":1343},
+  {"input":"1,234,567","numar":null,"kg":1234567},
+  {"input":"-1,343","numar":-1.343,"kg":-1.343},
+  {"input":"0","numar":0,"kg":0},
+  {"input":"1e3","numar":null,"kg":null},
+  {"input":"12 m","numar":null,"kg":null},
+  {"input":"1?","numar":null,"kg":null},
+  {"input":"","numar":null,"kg":null},
+  {"input":null,"numar":null,"kg":null},
+  {"input":true,"numar":null,"kg":null},
+  {"input":12.5,"numar":12.5,"kg":12.5}
+]

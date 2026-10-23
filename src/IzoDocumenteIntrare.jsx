@@ -13,11 +13,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import { aplicaPropunereOCR, avertismenteOCR, cantitateMultiplaOCR } from './izoDocumentePrefill.js'
+import { citesteLocal, raspunsInvokeOCR, descrieSursaOCR } from './izoOcrLocalFlux.js'
 import {
   SABLOANE, DECIZII, COLOANE, IZOLATII, esteCurba, parseNumar, fmtNr, fmtM, randGol, validareDocument, eroriSalvare, eroriPv, eroareMotiv,
   randuriDinLipire, randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, normalizeazaSalvare,
   normalizeazaVerificare, normalizeazaConfirmare, normalizeazaPv, normalizeazaAnulare, listaServer, lipsaReceptie, mesajEroareDoc, poateScrie,
   pregatesteScan, ataseazaScanSigur, stergeScanObiect, linkScan,
+  randPoatePrimiBulk, problemeDeVerificat, avertismentVerificare, descriereProbleme, codCuValoare,
+  geometrieRotatie, limiteCrop, rotesteCrop,
 } from './izoDocumenteLogica.js'
 
 const G = {
@@ -41,7 +44,7 @@ const STARE_META = { draft:{ label:'Draft', color:G.yellow }, confirmat:{ label:
 const DECIZIE_CULOARE = { primit:G.green, primit_neconform:G.orange, refuzat_la_receptie:G.red }
 const IZOLATIE_LABEL = { neizolata:'neizolată', PEHD:'PEHD', GRP:'GRP' }
 const LATIME = { nr_crt:44, serie:118, sarja:92, lot:58, lungime_doc:74, lungime_masurata:74, greutate_kg:66, perete_mm:56, diametru_mm:56, specificatie:150,
-  cod:190, item:44, unghi_doc:62, unghi_masurat:66, standard:92, cantitate:42, pachet_nr:54, dimensiuni_cm:100, net_kg:64, brut_kg:64,
+  cod:250, item:56, unghi_doc:62, unghi_masurat:66, standard:92, cantitate:42, pachet_nr:54, dimensiuni_cm:100, net_kg:64, brut_kg:64,
   dimensiune:100, grad_otel:80, izolatie:104 }
 // câmpul din validare (valori tipizate) → câmpul editorului
 const CAMP_EDITOR = { lungime_doc_mm:'lungime_doc', lungime_masurata_mm:'lungime_masurata' }
@@ -106,7 +109,12 @@ export default function IzoDocumenteIntrare() {
   const revEd = useRef(0), aiLock = useRef(false), fisierSeq = useRef(0)
   const edRef = useRef(ed); edRef.current = ed
   const [pdfAI, setPdfAI] = useState(null)
+  const [imagineAI, setImagineAI] = useState(null)
+  const [rotatieMesaj, setRotatieMesaj] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
+  const [aiProgres, setAiProgres] = useState('')
+  const aiMontat = useRef(true)
+  useEffect(() => { aiMontat.current = true; return () => { aiMontat.current = false } }, [])
   const [propunere, setPropunere] = useState(null)
   const [modAI, setModAI] = useState('completeaza')
   const [aiMeta, setAiMeta] = useState(null)
@@ -118,7 +126,7 @@ export default function IzoDocumenteIntrare() {
   useEffect(() => { const resize = () => setIngust(window.innerWidth < 760); window.addEventListener('resize', resize); return () => window.removeEventListener('resize', resize) }, [])
   const contextAI = () => JSON.stringify([cerereEd.current, edRef.current?.id, edRef.current?.proiect_id,
     edRef.current?.depozit_id, edRef.current?.sablon, revEd.current])
-  const resetAI = () => { ++fisierSeq.current; setPdfAI(null); setPropunere(null); setAiMeta(null); setAiAplicat(false); setMobilSalvat(null) }
+  const resetAI = () => { ++fisierSeq.current; setPdfAI(null); setImagineAI(null); setRotatieMesaj(''); setPropunere(null); setAiMeta(null); setAiAplicat(false); setMobilSalvat(null) }
 
   const flash = useCallback((tip, text) => { setMsg({ tip, text }); if (tip === 'ok') setTimeout(() => setMsg(m => (m?.text === text ? null : m)), 7000) }, [])
   const inPregatire = useCallback(() => setSt({ incarc:false, eroare:null, neinstalat:true }), [])
@@ -242,6 +250,13 @@ export default function IzoDocumenteIntrare() {
   const modifica = fn => { ++revEd.current; setEd(e => ({ ...fn(e), dirty:true })); setVerif(null) }
   const setAntet = (k, v) => modifica(e => ({ ...e, antet:{ ...e.antet, [k]:v } }))
   const setRand = (i, k, v) => modifica(e => { const r = e.randuri.slice(); r[i] = { ...r[i], [k]:v }; return { ...e, randuri:r } })
+  const toatePrimite = () => {
+    if (busy || aiLock.current || !edScrie || opritScriere(ed)) return
+    const accepta = ed.randuri.map((r, i) => randPoatePrimiBulk(val.norm[i], ed.sablon, ed, val.randuri[i]))
+    const ramase = ed.randuri.flatMap((r, i) => problemeDeVerificat(val.randuri[i]).length || (!r.decizie && !accepta[i]) ? [`randul ${r.nr_crt || i + 1} (${descriereProbleme(val.randuri[i]) || 'greutate pachet'})`] : [])
+    modifica(e => ({ ...e, randuri:e.randuri.map((r, i) => accepta[i] ? { ...r, decizie:'primit' } : r) }))
+    flash('ok', `${accepta.filter(Boolean).length} randuri marcate primite. ${ramase.length} raman de verificat${ramase.length ? ': ' + ramase.join('; ') : '.'}`)
+  }
   const nrMax = e => Math.max(0, ...e.randuri.map(r => parseNumar(r.nr_crt) || 0))
   const adaugaRand = () => modifica(e => ({ ...e, randuri:[...e.randuri, { _k:uid8(), ...randGol(e.sablon, nrMax(e) + 1, e.randuri[e.randuri.length - 1]) }] }))
   const stergeRand = i => modifica(e => ({ ...e, randuri:e.randuri.filter((_, j) => j !== i) }))
@@ -444,39 +459,70 @@ export default function IzoDocumenteIntrare() {
     if (!fisier || aiLock.current || busy) return
     aiLock.current = true; setAiBusy(true)
     const context = contextAI(), seq = ++fisierSeq.current
-    setPropunere(null); setPdfAI(null); setAiMeta(null); setAiAplicat(false); setMobilSalvat(null)
+    setPropunere(null); setPdfAI(null); setImagineAI(null); setRotatieMesaj(''); setAiMeta(null); setAiAplicat(false); setMobilSalvat(null)
     try {
       if (fisier.size > 8 * 1024 * 1024) throw new Error('Fișier prea mare. Limita AI este 8 MB.')
-      const pdf = fisier.type.startsWith('image/') ? await imageToPdf(fisier) : fisier
+      const pdf = fisier.type.startsWith('image/') ? await imageToPdf(fisier, { maxDim:2600, calitate:0.9 }) : fisier // rezoluție mai mare: cifrele mici din tabel (seria) se pierdeau la 1600 px
       if (pdf.size > 8 * 1024 * 1024) throw new Error('PDF-ul pregătit depășește limita de 8 MB.')
       const semn = new TextDecoder().decode(await pdf.slice(0, 5).arrayBuffer())
       if (semn !== '%PDF-') throw new Error('Fișierul nu este PDF. Alege un PDF valid sau o fotografie.')
       if (context !== contextAI() || seq !== fisierSeq.current) { flash('err', 'Editorul s-a schimbat. Alege din nou fișierul.'); return }
       setPdfAI(pdf)
+      if (fisier.type.startsWith('image/')) setImagineAI({ file:fisier, rotatie:0, crop:null })
     } catch (e) { flash('err', e.message || 'Nu s-a putut pregăti fișierul.') }
     finally { aiLock.current = false; setAiBusy(false) }
   }
-  const citesteAI = async () => {
+  const refaceImagine = async opt => {
+    if (!imagineAI || busy || aiLock.current || aiAplicat) return   // scanul citit rămâne cel aplicat (Jak ux2 P1)
+    aiLock.current = true; setAiBusy(true)
+    const context = contextAI(), seq = ++fisierSeq.current
+    try {
+      const next = { ...imagineAI, ...opt }
+      const pdf = await imageToPdf(next.file, { ...next, maxDim:2600, calitate:0.9 })
+      if (pdf.size > 8 * 1024 * 1024) throw new Error('PDF-ul pregătit depășește limita de 8 MB.')
+      if (context !== contextAI() || seq !== fisierSeq.current) return
+      setPdfAI(pdf); setImagineAI(next); setPropunere(null); setAiMeta(null); setRotatieMesaj('')
+    } catch (e) { flash('err', e.message) }
+    finally { aiLock.current = false; setAiBusy(false) }
+  }
+  const citesteAI = async (model = 'local') => {
     if (!pdfAI || busy || aiLock.current || !edScrie || !edRol || opritScriere(ed)) return
-    aiLock.current = true; setAiBusy(true); setPropunere(null); setAiMeta(null)
+    aiLock.current = true; setAiBusy(true); setPropunere(null); setAiMeta(null); setAiProgres('Se pregătește citirea…')
     const context = contextAI(), seq = fisierSeq.current
-    const actual = () => context === contextAI() && seq === fisierSeq.current
+    const actual = () => aiMontat.current && context === contextAI() && seq === fisierSeq.current
     try {
       const pdf_base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader(); reader.onerror = () => reject(new Error('Nu s-a putut citi PDF-ul.'))
         reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(pdfAI)
       })
       if (!actual()) { flash('err', 'Editorul s-a schimbat. Citirea AI a fost abandonată.'); return }
-      const { data, error } = await supabase.functions.invoke('ocr-packing-list', { body:{ tip:'aviz_e3', proiect_id:ed.proiect_id,
-        depozit_id:ed.depozit_id, sablon:esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava', pdf_base64, nume_fisier:pdfAI.name } })
-      let raspuns = data
-      if (error?.context?.json) { try { raspuns = await error.context.json() } catch { /* răspuns fără JSON */ } }
+      // id-urile vin ca text din <select> → număr (serverul cere întregi, altfel 400 „cerere_invalida”)
+      const proiectId = Number(ed.proiect_id), depozitId = Number(ed.depozit_id)
+      if (!Number.isSafeInteger(proiectId) || proiectId <= 0 || !Number.isSafeInteger(depozitId) || depozitId <= 0) {
+        flash('err', 'Alege proiectul și depozitul înainte de citirea AI.'); return
+      }
+      const sablon = esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava'
+      const invoke = (nume, opt) => supabase.functions.invoke(nume, opt)
+      // Un singur aiLock pe întreaga operație. Haiku direct nu reintră în citesteAI (R3-7).
+      const executaHaikuE3 = () => raspunsInvokeOCR(invoke, 'ocr-packing-list', { tip:'aviz_e3', proiect_id:proiectId,
+        depozit_id:depozitId, sablon, pdf_base64, nume_fisier:pdfAI.name, model:model === 'local' ? 'haiku' : model })
+      let rez = model === 'local'
+        ? await citesteLocal({ pdf_base64, proiect_id:proiectId, depozit_id:depozitId, sablon, actual, invoke, progres:setAiProgres })
+        : { haiku:true }
+      if (rez.abandonat || !actual()) return
+      if (rez.haiku) {
+        if (model !== 'local') setAiProgres('Citesc cu Haiku…')
+        rez = await executaHaikuE3()
+        if (model === 'local' && rez.raspuns) rez = { ...rez, raspuns:{ ...rez.raspuns, sursa:{ ...rez.raspuns.sursa, ramura:'haiku' } } }
+      }
+      const { raspuns, error, status } = rez
       if (!actual()) { flash('err', 'Răspuns AI ignorat: documentul, proiectul, depozitul, șablonul sau formularul s-a schimbat.'); return }
       setAiMeta(raspuns || null)
       if (error || !raspuns?.success) {
-        const status = error?.context?.status, cod = raspuns?.eroare
+        const cod = raspuns?.eroare
         throw new Error(cod === 'fara_drept' || status === 403 ? 'Nu ai dreptul să citești cu AI pentru acest proiect și depozit.'
           : cod === 'plafon_depasit' || status === 429 ? 'Plafonul AI a fost depășit. Citirea nu a fost efectuată.'
+          : status === 400 ? 'Cerere incompletă: verifică proiectul, depozitul și tipul documentului.'
           : status === 413 ? 'PDF prea mare. Limita AI este 8 MB.'
           : status === 422 ? 'PDF invalid sau citire refuzată de AI. Alege alt scan ori completează manual.'
           : 'Citirea AI a eșuat. Încearcă din nou sau completează manual.')
@@ -484,19 +530,44 @@ export default function IzoDocumenteIntrare() {
       if (raspuns.tip !== 'aviz_e3' || raspuns.sablon !== (esteCurba(ed.sablon) ? 'lista_curbe' : 'aviz_teava')
         || !raspuns.antet || !Array.isArray(raspuns.randuri) || raspuns.randuri.some(r => !r || typeof r !== 'object' || Array.isArray(r)))
         throw new Error('Răspuns AI incompatibil cu documentul. Completează manual.')
+      if ([90, 180, 270].includes(raspuns.rotatie_grade)) {
+        if (imagineAI) {
+          const g = geometrieRotatie(imagineAI.width, imagineAI.height, raspuns.rotatie_grade)
+          const next = { ...imagineAI, rotatie:(imagineAI.rotatie + raspuns.rotatie_grade) % 360,
+            width:g.width, height:g.height,
+            crop:rotesteCrop(imagineAI.crop, imagineAI.width, imagineAI.height, raspuns.rotatie_grade) }
+          const pdf = await imageToPdf(next.file, { ...next, maxDim:2600, calitate:0.9 })
+          if (!actual()) return
+          if (pdf.size > 8 * 1024 * 1024) throw new Error('PDF-ul îndreptat depășește 8 MB.')
+          setPdfAI(pdf); setImagineAI(next)
+          setRotatieMesaj(`Pagina a fost indreptata automat (${raspuns.rotatie_grade} grade)`)
+        } else setRotatieMesaj(`Pagina pare rotita ${raspuns.rotatie_grade} grade`)
+      }
       setPropunere({ raspuns, context })
-    } catch (e) { flash('err', actual() ? e.message || 'Citirea AI a eșuat.' : 'Răspuns AI ignorat: editorul s-a schimbat.') }
-    finally { aiLock.current = false; setAiBusy(false) }
+    } catch (e) {
+      if (!actual()) return
+      if (e.raspuns) setAiMeta(e.raspuns)
+      const cod = e.raspuns?.eroare
+      flash('err', cod === 'plafon_depasit' ? 'Plafonul AI a fost depășit. Citirea nu a fost efectuată.'
+        : e.status === 403 ? 'Nu ai dreptul să citești cu AI pentru acest proiect și depozit.'
+        : e.status === 400 ? 'Cerere incompletă: verifică proiectul, depozitul și tipul documentului.'
+        : e.status === 413 ? 'PDF prea mare. Limita AI este 8 MB.'
+        : cod === 'pdf_invalid' ? 'PDF invalid sau criptat. Alege alt scan ori completează manual.'
+        : e.raspuns ? 'Citirea a eșuat. Completează manual sau încearcă din nou cu Haiku.' : e.message || 'Citirea AI a eșuat.')
+    }
+    finally { aiLock.current = false; if (aiMontat.current) { setAiBusy(false); setAiProgres('') } }
   }
+  // PDF-ul din care s-a aplicat propunerea: doar el poate fi atașat ca „scan citit” (Jak ux2 r2 P1)
+  const pdfAplicat = useRef(null)
   const aplicaAI = mod => {
     if (!propunere || busy || aiLock.current || !edScrie || opritScriere(ed)) return
     if (propunere.context !== contextAI()) { setPropunere(null); flash('err', 'Propunerea a expirat: formularul s-a schimbat. Citește din nou documentul.'); return }
     modifica(e => aplicaPropunereOCR(e, propunere.raspuns, { mod }))
-    setPropunere(null); setAiAplicat(true)
+    setPropunere(null); setAiAplicat(true); pdfAplicat.current = pdfAI
     flash('ok', 'Propunere aplicată. Verifică datele și alege decizia pentru fiecare bucată înainte de salvare.')
   }
   const ataseazaCitit = async () => {
-    if (!pdfAI || busy || aiLock.current || !edScrie || opritScriere(ed)) return
+    if (!pdfAI || pdfAI !== pdfAplicat.current || busy || aiLock.current || !edScrie || opritScriere(ed)) return
     aiLock.current = true; setAiBusy(true)
     try {
       // La salvare se schimbă versiunea: atașăm exclusiv documentului întors de calea E3.
@@ -512,7 +583,7 @@ export default function IzoDocumenteIntrare() {
     try {
       const document = await salveaza(ed)
       if (!document) return
-      const atasat = pdfAI ? await adaugaScan(pdfAI, document) : false
+      const atasat = pdfAI && pdfAI === pdfAplicat.current ? await adaugaScan(pdfAI, document) : false
       if (atasat) setPdfAI(null)
       setMobilSalvat({ nr:document.antet.nr_document, n:document.randuri.length, atasat })
     } finally { aiLock.current = false; setAiBusy(false) }
@@ -542,16 +613,18 @@ export default function IzoDocumenteIntrare() {
   if (!ed) return (
     <div>
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:12 }}>
-        <select style={{ ...S.input, maxWidth:360 }} value={proiectId || ''} onChange={e => { golesteLista(); setProiectId(Number(e.target.value)) }} disabled={busy}>
+        <select style={{ ...S.input, maxWidth:420, fontSize:16, fontWeight:800, color:G.blue, border:`2px solid ${G.blue}`, background:G.blue + '18' }} value={proiectId || ''} onChange={e => { golesteLista(); setProiectId(Number(e.target.value)) }} disabled={busy}>
           {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? `${p.cod_intern} · ` : ''}{p.nume}</option>)}
         </select>
-        <div style={{ flex:1, fontSize:12, color:G.muted, minWidth:220 }}>
+        <div style={{ display:'flex', gap:8, flexWrap:'nowrap' }}>
+          {depoziteScriere.length > 0 && Object.entries(SABLOANE).map(([k, s]) => (
+            <button key={k} style={{ ...S.btnS, color:G.green, borderColor:G.green + '66', whiteSpace:'nowrap' }} onClick={() => nou(k)} disabled={busy}>+ {s.emoji} {s.label}</button>
+          ))}
+          <button style={S.btnS} onClick={() => incarcaDocs(proiectId)} disabled={incarcDocs}>🔄</button>
+        </div>
+        <div style={{ flexBasis:'100%', fontSize:12, color:G.muted }}>
           Avizele de țeavă și listele de ambalare ale curbelor. După „Confirmă recepția” bucățile intră în registru și apar în 🧱 Țeavă proiecte.
         </div>
-        {depoziteScriere.length > 0 && Object.entries(SABLOANE).map(([k, s]) => (
-          <button key={k} style={{ ...S.btnS, color:G.green, borderColor:G.green + '66' }} onClick={() => nou(k)} disabled={busy}>+ {s.emoji} {s.label}</button>
-        ))}
-        <button style={S.btnS} onClick={() => incarcaDocs(proiectId)} disabled={incarcDocs}>🔄</button>
       </div>
       {mesaj}
       {!depoziteScriere.length && (
@@ -579,7 +652,7 @@ export default function IzoDocumenteIntrare() {
                   <td style={{ ...S.td, padding:'8px 10px' }}>{depNume[d.depozit_id] || '—'}</td>
                   <td style={{ ...S.td, padding:'8px 10px', whiteSpace:'nowrap' }}>{k ? <>{k.n}<span style={{ color:G.muted }}> · <span style={{ color:G.green }}>{k.primit}</span>{k.primit_neconform ? <> · <span style={{ color:G.orange }}>{k.primit_neconform} carant.</span></> : null}{k.refuzat_la_receptie ? <> · <span style={{ color:G.red }}>{k.refuzat_la_receptie} ref.</span></> : null}</span></> : '—'}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color:G.muted }}>{tot}</td>
-                  <td style={{ ...S.td, padding:'8px 10px', color:sm.color, fontWeight:700 }}>{sm.label}</td>
+                  <td style={{ ...S.td, padding:'8px 10px', color:sm.color, fontWeight:700 }}>{sm.label}{d.stare === 'anulat' && d.anulat_motiv ? <div style={{ fontSize:11, fontWeight:500, color:G.muted, maxWidth:220, whiteSpace:'normal' }}>motiv: {d.anulat_motiv}</div> : null}</td>
                   <td style={{ ...S.td, padding:'8px 10px', color: pvTxt === '—' ? G.dim : G.green }}>{pvTxt}</td>
                   <td style={{ ...S.td, padding:'8px 10px' }}><button style={{ ...S.btnS, padding:'5px 10px' }} disabled={busy} onClick={ev => { ev.stopPropagation(); deschideDinLista(d.id) }}>{busy ? '…' : 'Deschide'}</button></td>
                 </tr>
@@ -627,14 +700,32 @@ export default function IzoDocumenteIntrare() {
           <input type="file" accept="image/*,application/pdf" disabled={busy || aiBusy} style={{ display:'none' }}
             onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; pregatesteAI(f) }} />
         </label>
-        <button style={{ ...S.btnP, minHeight:44 }} onClick={citesteAI} disabled={!pdfAI || busy || aiBusy || !edRol}>{aiBusy ? 'Se procesează…' : 'Citește cu AI'}</button>
+        <button style={{ ...S.btnP, minHeight:44 }} onClick={() => citesteAI()} disabled={!pdfAI || busy || aiBusy || !edRol}>{aiBusy ? 'Se procesează…' : 'Citește cu AI'}</button>
+        <button style={{ ...S.btnS, minHeight:44 }} onClick={() => citesteAI('haiku')} disabled={!pdfAI || busy || aiBusy || !edRol}>Citește cu Haiku</button>
       </div>
       <p style={{ fontSize:12, color:G.muted }}>O fotografie per document; pentru mai multe pagini alege un PDF. Maxim 8 MB. AI propune; tu verifici și salvezi.</p>
-      {pdfAI && <div style={{ fontSize:13 }}>{pdfAI.name} · {Math.ceil(pdfAI.size / 1024)} KB</div>}
+      <div style={{ fontSize:12, color:G.muted }}>Citire locală implicită; Haiku automat dacă serviciul local nu poate citi. Cost variabil, în plafonul AI.</div>
+      {aiProgres && <div role="status" style={{ marginTop:8, color:G.yellow }}>{aiProgres}</div>}
+      {/* confirmare vizibilă (Razvan 22.10: „să știu sigur că s-a încărcat”) */}
+      {aiBusy && !pdfAI && <div style={{ margin:'8px 0', padding:'10px 12px', borderRadius:8, background:G.yellow + '22', border:`1px solid ${G.yellow}`, color:G.yellow, fontWeight:700 }}>⏳ Se pregătește poza…</div>}
+      {pdfAI && <div style={{ margin:'8px 0', padding:'10px 12px', borderRadius:8, background:G.green + '22', border:`1px solid ${G.green}`, color:G.green, fontWeight:700 }}>
+        ✓ {imagineAI ? 'Poză încărcată' : 'PDF încărcat'} — {Math.ceil(pdfAI.size / 1024)} KB{imagineAI && (imagineAI.rotatie || imagineAI.crop) ? ` (${[imagineAI.rotatie ? `rotită ${imagineAI.rotatie}°` : '', imagineAI.crop ? 'decupată' : ''].filter(Boolean).join(', ')})` : ''}, gata de citit
+        <div style={{ fontSize:11, fontWeight:400, color:G.muted, marginTop:2, overflowWrap:'anywhere' }}>{pdfAI.name}</div>
+      </div>}
+      {/* după „Aplică în formular” poza se blochează: altfel s-ar putea atașa un scan schimbat la rândurile citite din altul (Jak ux2 P1) */}
+      {pdfAI && imagineAI && aiAplicat && <div style={{ color:G.muted, fontSize:12, margin:'6px 0' }}>🔒 Poza e blocată după aplicarea propunerii. Pentru altă poză sau alt decupaj: alege din nou fotografia / PDF-ul și citește din nou.</div>}
+      {pdfAI && imagineAI && !aiAplicat && <PregatireImagine imagine={imagineAI} busy={busy || aiBusy} aplica={refaceImagine}
+        dimensiuni={(width, height) => setImagineAI(x => x ? { ...x, width, height } : x)} />}
+      {rotatieMesaj && <div style={{ color:G.yellow }}>{rotatieMesaj}</div>}
       {aiMeta && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>
+        {aiMeta.success && <b>{descrieSursaOCR(aiMeta)}. </b>}
+        {aiMeta.model && <>Model: {aiMeta.model}. </>}
         {aiMeta.cost_usd != null && <>Cost: {fmtNr(aiMeta.cost_usd, 4)} USD. </>}
+        {aiMeta.success && aiMeta.cost_usd == null && <>Cost necunoscut. </>}
+        {aiMeta.sursa && <div>Durată: {aiMeta.sursa.secunde ?? '—'} s · Dezacorduri: {aiMeta.sursa.dezacorduri ?? '—'} · Perspectivă: {({ aplicata:'aplicată', nesigura:'nesigură', inutila:'inutilă' })[aiMeta.sursa.perspectiva] || '—'}</div>}
         {aiMeta.plafon && <>Plafon rămas: {fmtNr(Number(aiMeta.plafon.plafon_usd) - Number(aiMeta.plafon.consumat_usd) - Number(aiMeta.plafon.rezervat_usd), 4)} USD (după rezervări).</>}
       </div>}
+      {aiMeta?.success && pdfAI && <><button style={S.btnS} disabled={busy || aiBusy} onClick={() => citesteAI('sonnet')}>Reciteste cu model superior (~5 centi)</button><span style={{ color:G.muted, fontSize:12 }}> Cost variabil; rezervă maximă 0,20 USD.</span></>}
       {propunere && <>
         <PropunereOCR raspuns={propunere.raspuns} ed={ed} mobil={mobil} />
         <label style={S.lbl}>Aplicare în formular</label>
@@ -648,13 +739,13 @@ export default function IzoDocumenteIntrare() {
         </div>
       </>}
       {!propunere && ed.ocrAvertismente?.map((x, i) => <div key={i} style={{ color:G.yellow, marginTop:8 }}>{x}</div>)}
-      {pdfAI && ed.id && !mobil && <button style={{ ...S.btnS, minHeight:44, marginTop:10 }} disabled={busy || aiBusy} onClick={ataseazaCitit}>Atașează scanul citit</button>}
+      {pdfAI && pdfAI === pdfAplicat.current && ed.id && !mobil && <button style={{ ...S.btnS, minHeight:44, marginTop:10 }} disabled={busy || aiBusy} onClick={ataseazaCitit}>Atașează scanul citit</button>}
     </div>
   )
 
   if (mobil && edScrie) return <IzoAvizMobil ed={ed} proiecte={proiecte.filter(p => p.id === ed.proiect_id || depozite.some(d => d.site_id === p.site_id && d.activ === true && scrie(p.id, d.id)))} depozite={optDep} depNume={depNume} mesaj={mesaj}
     panouAI={panouAI} busy={busy || aiBusy} val={val} aiAplicat={aiAplicat} salvat={mobilSalvat}
-    inchide={inchide} complet={() => setMobilFortat(false)} setRand={setRand} modifica={modifica} salveaza={salveazaMobil}
+    inchide={inchide} complet={() => setMobilFortat(false)} setRand={setRand} modifica={modifica} salveaza={salveazaMobil} toatePrimite={toatePrimite}
     schimbaProiect={id => { resetAI(); setProiectId(id); modifica(x => ({ ...x, proiect_id:id, depozit_id:'' })) }}
     schimbaSablon={nou} />
 
@@ -668,7 +759,7 @@ export default function IzoDocumenteIntrare() {
         {ed.versiune != null && <span style={{ fontSize:11.5, color:G.dim }}>versiunea {ed.versiune}</span>}
         {ed.dirty && <span style={{ fontSize:11.5, color:G.yellow }}>● nesalvat</span>}
         <div style={{ flex:1 }} />
-        <span style={{ fontSize:12, color:G.muted }}>{proiect?.cod_intern ? `${proiect.cod_intern} · ` : ''}{proiect?.nume}</span>
+        <span style={{ fontSize:16, fontWeight:800, color:G.blue, padding:'4px 10px', border:`2px solid ${G.blue}`, borderRadius:8, background:G.blue + '18' }}>📁 {proiect?.cod_intern ? `${proiect.cod_intern} · ` : ''}{proiect?.nume}</span>
       </div>
       {mesaj}
       {panouAI}
@@ -784,10 +875,12 @@ export default function IzoDocumenteIntrare() {
           {ed.stare === 'draft' && <div style={{ fontSize:12, color: val.blocante ? G.red : G.muted }}>{val.blocante ? `⛔ ${val.blocante} blocante în ecran` : '✓ fără blocante în ecran'}{val.avertismente ? <span style={{ color:G.yellow }}> · ⚠️ {val.avertismente} avertismente</span> : null}<span style={{ color:G.dim }}> (verificări locale; decide „Verifică” pe server)</span></div>}
           <div style={{ flex:1 }} />
           {edScrie && <>
+            <button style={S.btnS} onClick={toatePrimite} disabled={busy || aiBusy}>Toate primite (fara cele de verificat)</button>
             <button style={S.btnS} onClick={() => setLipire({ text:'', inlocuieste:false })} disabled={busy}>📋 Lipește din Excel</button>
             <button style={S.btnS} onClick={adaugaRand} disabled={busy}>+ Rând</button>
           </>}
         </div>
+        <RezumatProbleme ed={ed} val={val} />
         <div style={{ overflowX:'auto' }}>
           <table style={{ borderCollapse:'collapse', minWidth:'100%' }}>
             <thead><tr>
@@ -797,35 +890,39 @@ export default function IzoDocumenteIntrare() {
             <tbody>
               {ed.randuri.map((r, i) => {
                 const rosii = campuriRosii(i), v = ed.stare === 'draft' ? val.randuri[i] : []
+                const galbene = new Set(v.filter(x => x.nivel === 'avertisment').flatMap(x => x.campuri || [x.camp]).map(c => CAMP_EDITOR[c] || c))
+                const culoare = c => rosii.has(c) ? G.red : galbene.has(c) ? G.yellow : null
+                const stilCamp = c => ({ borderColor:culoare(c) || G.border2, background:culoare(c) ? culoare(c) + '18' : G.bg })
                 return [
-                  <tr key={r._k}>
+                  <tr key={r._k} id={`izo-rand-${i}`} style={{ borderLeft:`4px solid ${rosii.size ? G.red : v.some(avertismentVerificare) ? G.yellow : 'transparent'}` }}>
                     {cols.map(([c, , tip]) => (
                       <td key={c} style={S.td}>
                         {tip === 'izolatie'
-                          ? <select style={{ ...S.cel, width:LATIME[c], borderColor: rosii.has(c) ? G.red : G.border2 }} value={r[c] ?? ''} onChange={e => setRand(i, c, e.target.value)} disabled={!edScrie || busy}>
+                          ? <select style={{ ...S.cel, width:LATIME[c], ...stilCamp(c) }} value={r[c] ?? ''} onChange={e => setRand(i, c, e.target.value)} disabled={!edScrie || busy}>
                               <option value="">—</option>
                               {IZOLATII.map(z => <option key={z} value={z}>{IZOLATIE_LABEL[z]}</option>)}
                               {r[c] && !IZOLATII.includes(r[c]) && <option value={r[c]}>{r[c]} (necunoscut)</option>}
                             </select>
-                          : <input style={{ ...S.cel, width:LATIME[c] || 80, borderColor: rosii.has(c) ? G.red : G.border2, fontFamily: c === 'serie' || c === 'sarja' ? 'monospace' : 'inherit' }}
+                          : <input style={{ ...S.cel, width:LATIME[c] || 80, ...stilCamp(c), fontFamily: c === 'serie' || c === 'sarja' ? 'monospace' : 'inherit' }}
                               value={r[c] ?? ''} onChange={e => setRand(i, c, e.target.value)} disabled={!edScrie || busy} />}
                       </td>
                     ))}
                     <td style={S.td}>
-                      <select style={{ ...S.cel, width:150, color:DECIZIE_CULOARE[r.decizie] || G.text, borderColor: rosii.has('decizie') ? G.red : G.border2 }} value={r.decizie || ''}
+                      <select style={{ ...S.cel, width:150, color:DECIZIE_CULOARE[r.decizie] || G.text, ...stilCamp('decizie') }} value={r.decizie || ''}
                         onChange={e => setRand(i, 'decizie', e.target.value)} disabled={!edScrie || busy}>
                         {!DECIZII.some(d => d.cheie === r.decizie) && <option value="">Alege decizia</option>}
                         {DECIZII.map(d => <option key={d.cheie} value={d.cheie}>{d.label}</option>)}
                       </select>
                     </td>
-                    <td style={S.td}><input style={{ ...S.cel, width:150, borderColor: rosii.has('motiv') ? G.red : G.border2 }} value={r.motiv ?? ''} onChange={e => setRand(i, 'motiv', e.target.value)} disabled={!edScrie || busy} placeholder={r.decizie !== 'primit' ? 'obligatoriu' : ''} /></td>
-                    <td style={S.td}><input style={{ ...S.cel, width:170, borderColor: rosii.has('observatie') ? G.red : G.border2 }} value={r.observatie ?? ''} onChange={e => setRand(i, 'observatie', e.target.value)} disabled={!edScrie || busy} /></td>
+                    <td style={S.td}><input style={{ ...S.cel, width:150, ...stilCamp('motiv') }} value={r.motiv ?? ''} onChange={e => setRand(i, 'motiv', e.target.value)} disabled={!edScrie || busy} placeholder={r.decizie !== 'primit' ? 'obligatoriu' : ''} /></td>
+                    <td style={S.td}><input style={{ ...S.cel, width:170, ...stilCamp('observatie') }} value={r.observatie ?? ''} onChange={e => setRand(i, 'observatie', e.target.value)} disabled={!edScrie || busy} /></td>
                     {edScrie && <td style={S.td}><button title="Șterge rândul" onClick={() => stergeRand(i)} disabled={busy} style={{ background:'none', border:'none', color:G.red, cursor:'pointer', fontSize:15, padding:'4px 6px' }}>✕</button></td>}
                   </tr>,
                   v.length > 0 && (
                     <tr key={r._k + '_v'}>
                       <td colSpan={cols.length + 4} style={{ padding:'2px 8px 6px 52px', borderBottom:`1px solid ${G.border}` }}>
                         {v.map((x, j) => <div key={j} style={{ fontSize:11.5, color: x.nivel === 'blocant' ? G.red : G.yellow }}>{x.nivel === 'blocant' ? '⛔' : '⚠️'} {x.mesaj}</div>)}
+                        {edScrie && <CorectiiRand r={r} probleme={v} busy={busy || aiBusy} schimba={(k, valoare) => setRand(i, k, valoare)} />}
                       </td>
                     </tr>
                   ),
@@ -977,14 +1074,15 @@ function PropunereOCR({ raspuns, ed, mobil }) {
       {c.bate === false ? ' — diferență, verifică documentul' : ''}
     </div>)}
     {avertismenteOCR(raspuns).map((x, i) => <div key={i} style={{ color:G.yellow, marginTop:8 }}>⚠ {x}</div>)}
-    {mobil ? raspuns.randuri.map((r, i) => <div key={i} style={{ ...S.card, padding:12, marginTop:10, borderColor:cantitateMultiplaOCR(r) ? G.yellow : G.border2 }}>
+    {/* pe ecran îngust tabelul derulat tăia începutul coloanelor (seria / șarja) → carduri (test Razvan 22.10) */}
+    {(mobil || (typeof window !== 'undefined' && window.innerWidth < 900)) ? raspuns.randuri.map((r, i) => <div key={i} style={{ ...S.card, padding:12, marginTop:10, borderColor:cantitateMultiplaOCR(r) ? G.yellow : G.border2 }}>
       <b>Rândul {i + 1}{cantitateMultiplaOCR(r) ? ' — nu se aplică' : ''}</b>
       {coloane.filter(([k]) => r[k] != null && r[k] !== '').map(([k, et]) => <div key={k}>{et}: {String(r[k])}</div>)}
       {cantitateMultiplaOCR(r) && <div style={{ color:G.yellow }}>Rând cu cantitate {String(r.cantitate)} fără serii individuale — introdu manual bucățile.</div>}
     </div>) : <div style={{ overflowX:'auto', marginTop:10 }}><table style={{ borderCollapse:'collapse', width:'100%' }}>
       <thead><tr>{coloane.map(([k, et]) => <th style={S.th} key={k}>{et}</th>)}<th style={S.th}>Cantitate / avertisment</th></tr></thead>
       <tbody>{raspuns.randuri.map((r, i) => <tr key={i} style={{ background:cantitateMultiplaOCR(r) ? G.yellow + '22' : undefined }}>
-        {coloane.map(([k]) => <td style={S.td} key={k}>{r[k] == null ? '—' : String(r[k])}</td>)}
+        {coloane.map(([k]) => <td style={{ ...S.td, whiteSpace:k === 'cod' || k === 'serie' || k === 'sarja' ? 'nowrap' : undefined }} key={k}>{r[k] == null ? '—' : String(r[k])}</td>)}
         <td style={{ ...S.td, color:G.yellow }}>{cantitateMultiplaOCR(r) ? `Rând cu cantitate ${String(r.cantitate)} fără serii individuale — introdu manual bucățile.` : String(r.cantitate ?? '1')}</td>
       </tr>)}</tbody>
     </table></div>}
@@ -992,11 +1090,10 @@ function PropunereOCR({ raspuns, ed, mobil }) {
 }
 
 // Fereastra telefonului folosește același editor în memorie, fără o a doua cale de salvare.
-function IzoAvizMobil({ ed, proiecte, depozite, depNume, mesaj, panouAI, busy, val, aiAplicat, salvat,
+function IzoAvizMobil({ ed, proiecte, depozite, depNume, mesaj, panouAI, busy, val, aiAplicat, salvat, toatePrimite,
   inchide, complet, setRand, modifica, salveaza, schimbaProiect, schimbaSablon }) {
   const buton = { ...S.btnS, minHeight:44 }, input = { ...S.input, minHeight:44, boxSizing:'border-box' }
   const probleme = i => val.randuri[i].filter(v => v.camp !== 'decizie')
-  const poateBulk = i => !ed.ocrAvertismente?.length && !probleme(i).length
   const coloane = COLOANE[ed.sablon].filter(([k]) => !['lungime_masurata', 'unghi_masurat'].includes(k))
   return <div style={{ width:'100%', maxWidth:720, margin:'0 auto', overflowWrap:'anywhere', boxSizing:'border-box' }}>
     <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:12 }}>
@@ -1034,12 +1131,19 @@ function IzoAvizMobil({ ed, proiecte, depozite, depNume, mesaj, panouAI, busy, v
               {et}<input style={input} type={tip === 'date' ? 'date' : 'text'} disabled={busy} value={ed.antet[k] ?? ''}
                 onChange={e => modifica(x => ({ ...x, antet:{ ...x.antet, [k]:e.target.value } }))} />
             </label>)}
-          <button style={buton} disabled={busy} onClick={() => modifica(x => ({ ...x, randuri:x.randuri.map((r, i) => poateBulk(i) && !r.decizie ? { ...r, decizie:'primit' } : r) }))}>Toate primite (doar fără avertismente)</button>
+          <button style={buton} disabled={busy} onClick={toatePrimite}>Toate primite (fara cele de verificat)</button>
         </div>
-        {ed.randuri.map((r, i) => <div key={r._k} style={{ ...S.card, padding:14, marginBottom:12 }}>
+        <RezumatProbleme ed={ed} val={val} />
+        {ed.randuri.map((r, i) => <div key={r._k} id={`izo-rand-${i}`} style={{ ...S.card, padding:14, marginBottom:12,
+          borderLeft:`4px solid ${val.randuri[i].some(x => x.nivel === 'blocant') ? G.red : val.randuri[i].some(avertismentVerificare) ? G.yellow : 'transparent'}` }}>
           <b>Bucata {r.nr_crt} · {r.serie || 'serie lipsă'}</b>
-          {coloane.map(([k, et]) => <div key={k}>{et}: <b>{r[k] || '—'}</b></div>)}
+          {coloane.map(([k, et]) => {
+            const issues = val.randuri[i].filter(x => (x.campuri || [x.camp]).includes(k))
+            const color = issues.some(x => x.nivel === 'blocant') ? G.red : issues.some(x => x.nivel === 'avertisment') ? G.yellow : null
+            return <label key={k} style={S.lbl}>{et}<input style={{ ...input, borderColor:color || G.border2, background:color ? color + '18' : G.bg }} disabled={busy} value={r[k] ?? ''} onChange={e => setRand(i, k, e.target.value)} /></label>
+          })}
           {probleme(i).map((v, j) => <div key={j} style={{ color:v.nivel === 'blocant' ? G.red : G.yellow }}>{v.mesaj}</div>)}
+          <CorectiiRand r={r} probleme={val.randuri[i]} busy={busy} schimba={(k, valoare) => setRand(i, k, valoare)} />
           <div style={{ display:'flex', flexWrap:'wrap', gap:8, margin:'10px 0' }}>
             {DECIZII.map(d => <button key={d.cheie} disabled={busy} style={{ ...buton, flex:'1 1 120px', borderColor:r.decizie === d.cheie ? G.green : G.border2,
               background:r.decizie === d.cheie ? G.green + '22' : G.bg }} onClick={() => setRand(i, 'decizie', d.cheie)}>{d.label}</button>)}
@@ -1056,5 +1160,97 @@ function IzoAvizMobil({ ed, proiecte, depozite, depNume, mesaj, panouAI, busy, v
         <p style={{ fontSize:12, color:G.muted }}>Scanul se atașează după salvare. Verificarea și confirmarea se fac în ecranul complet.</p>
       </>}
     </>}
+  </div>
+}
+
+function RezumatProbleme({ ed, val }) {
+  const lista = val.randuri.flatMap((v, i) => problemeDeVerificat(v).length ? [{ i, text:`randul ${ed.randuri[i].nr_crt || i + 1} (${descriereProbleme(v)})` }] : [])
+  if (!lista.length || ed.stare !== 'draft') return null
+  return <div style={{ padding:10, color:G.yellow }}>De verificat: {lista.map(x => <button key={x.i} style={{ ...S.btnS, color:G.yellow, margin:3 }} onClick={() => document.getElementById(`izo-rand-${x.i}`)?.scrollIntoView({ behavior:'smooth', block:'center' })}>{x.text}</button>)}</div>
+}
+function CorectiiRand({ r, probleme, busy, schimba }) {
+  const diferente = probleme.flatMap(x => x.diferente || [])
+  const sugestie = probleme.find(x => x.sugestie)?.sugestie
+  return <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:4 }}>
+    {diferente.map(d => <span key={d.camp} style={{ display:'inline-flex', gap:4, flexWrap:'wrap' }}>
+      <button style={S.btnS} disabled={busy} onClick={() => schimba(d.camp, d.valoare)}>Ia {d.label} din cod ({d.valoare})</button>
+      <button style={S.btnS} disabled={busy || !codCuValoare(r.cod, d.camp, r[d.camp])} onClick={() => schimba('cod', codCuValoare(r.cod, d.camp, r[d.camp]))}>Corecteaza codul ({codCuValoare(r.cod, d.camp, r[d.camp])})</button>
+    </span>)}
+    {sugestie && <button style={S.btnS} disabled={busy} onClick={() => schimba('serie', sugestie)}>Aplica propunerea ({sugestie})</button>}
+  </div>
+}
+
+// Previzualizarea și decupajul folosesc pixeli ai imaginii rotite, nu ai PDF-ului micșorat.
+function PregatireImagine({ imagine, busy, aplica, dimensiuni }) {
+  const canvas = useRef(null), drag = useRef(null)
+  const [mare, setMare] = useState(false), [rect, setRect] = useState(null), [size, setSize] = useState(null)
+  const [eroare, setEroare] = useState('')
+  useEffect(() => {
+    let activ = true
+    const url = URL.createObjectURL(imagine.file), img = new Image()
+    img.onload = () => {
+      if (!activ) return
+      const g = geometrieRotatie(img.naturalWidth, img.naturalHeight, imagine.rotatie)
+      const c = canvas.current
+      if (!c) return
+      const scale = Math.min(1, 1000 / Math.max(g.width, g.height))
+      c.width = Math.round(g.width * scale); c.height = Math.round(g.height * scale)
+      const ctx = c.getContext('2d'); ctx.scale(c.width / g.width, c.height / g.height)
+      ctx.translate(g.x, g.y); ctx.rotate(g.rotatie * Math.PI / 180); ctx.drawImage(img, 0, 0)
+      setSize({ width:g.width, height:g.height }); dimensiuni(g.width, g.height)
+      setRect(limiteCrop(imagine.crop, g.width, g.height)); setEroare('')
+    }
+    img.onerror = () => { if (activ) setEroare('Previzualizarea imaginii a eșuat.') }
+    img.src = url
+    return () => { activ = false; URL.revokeObjectURL(url) }
+  }, [imagine.file, imagine.rotatie, imagine.crop, mare])
+  const start = (e, colt) => {
+    if (busy || !mare || !size || !rect) return
+    e.preventDefault(); e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId)
+    const b = canvas.current.getBoundingClientRect()
+    drag.current = { pointer:e.pointerId, colt, rect, x:e.clientX, y:e.clientY, sx:size.width / b.width, sy:size.height / b.height }
+  }
+  const move = e => {
+    const d = drag.current
+    if (!d || d.pointer !== e.pointerId || busy) return
+    const dx = (e.clientX - d.x) * d.sx, dy = (e.clientY - d.y) * d.sy, r = d.rect
+    if (d.colt === 'move') setRect(limiteCrop({ ...r, x:r.x + dx, y:r.y + dy }, size.width, size.height))
+    else {
+      const left = d.colt.includes('w'), top = d.colt.includes('n')
+      const x1 = left ? Math.max(0, Math.min(r.x + r.width - Math.min(50, size.width), r.x + dx)) : r.x
+      const y1 = top ? Math.max(0, Math.min(r.y + r.height - Math.min(50, size.height), r.y + dy)) : r.y
+      const x2 = left ? r.x + r.width : Math.min(size.width, Math.max(r.x + Math.min(50, size.width), r.x + r.width + dx))
+      const y2 = top ? r.y + r.height : Math.min(size.height, Math.max(r.y + Math.min(50, size.height), r.y + r.height + dy))
+      setRect(limiteCrop({ x:x1, y:y1, width:x2 - x1, height:y2 - y1 }, size.width, size.height))
+    }
+  }
+  const end = e => { if (drag.current?.pointer === e.pointerId) drag.current = null }
+  const shown = mare ? rect : imagine.crop
+  return <div style={mare ? { ...S.modal, zIndex:1100 } : { marginTop:8 }}>
+    <div style={mare ? { ...S.card, padding:18, maxHeight:'95vh', overflow:'auto', maxWidth:1000, width:'100%' } : {}}>
+      {eroare && <div style={{ color:G.red }}>{eroare}</div>}
+      <div style={{ position:'relative', width:mare ? `min(100%, ${size ? size.width / size.height * 60 : 80}vh)` : 220, maxWidth:'100%', margin:'auto' }}>
+        <canvas ref={canvas} style={{ width:'100%', height:'auto', display:'block' }} />
+        {size && shown && <div onPointerDown={e => start(e, 'move')} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
+          style={{ position:'absolute', left:`${shown.x / size.width * 100}%`, top:`${shown.y / size.height * 100}%`, width:`${shown.width / size.width * 100}%`, height:`${shown.height / size.height * 100}%`, border:'2px solid #58A6FF', boxSizing:'border-box', background:'#58A6FF18', touchAction:'none' }}>
+          {mare && ['nw', 'ne', 'sw', 'se'].map(colt => <span key={colt} onPointerDown={e => start(e, colt)}
+            style={{ position:'absolute', width:32, height:32, background:G.blue, border:'2px solid white', borderRadius:6, boxSizing:'border-box', cursor:`${colt}-resize`, [colt.includes('w') ? 'left' : 'right']:-16, [colt.includes('n') ? 'top' : 'bottom']:-16 }} />)}
+        </div>}
+      </div>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:18 }}>
+        {mare ? <>
+          <button style={S.btnP} disabled={busy || !rect} onClick={async () => { await aplica({ crop:rect }); setMare(false) }}>Aplica decupajul</button>
+          <button style={S.btnS} disabled={busy} onClick={() => setMare(false)}>Anuleaza</button>
+          <button style={S.btnS} disabled={busy || !size} onClick={() => setRect(limiteCrop(null, size.width, size.height))}>Reseteaza</button>
+        </> : <>
+          <button style={S.btnS} disabled={busy} onClick={() => aplica({ rotatie:(imagine.rotatie + 90) % 360,
+            // decupajul se rotește odată cu pagina (Razvan 22.10: ordinea e liberă, poza originală rămâne întreagă)
+            crop:imagine.crop && imagine.width && imagine.height ? rotesteCrop(imagine.crop, imagine.width, imagine.height, 90) : null,
+            ...(imagine.width && imagine.height ? { width:imagine.height, height:imagine.width } : {}) })}>Roteste 90 grade</button>
+          <button style={S.btnS} disabled={busy || !size} onClick={() => setMare(true)}>Decupeaza</button>
+        </>}
+      </div>
+      <div style={{ color:G.muted, fontSize:12 }}>Rotirea păstrează decupajul (se rotește odată cu pagina); poza originală rămâne întreagă, „Reseteaza” revine la pagina întreagă. Trage dreptunghiul sau colțurile pentru decupare. Nu se apelează AI.</div>
+    </div>
   </div>
 }

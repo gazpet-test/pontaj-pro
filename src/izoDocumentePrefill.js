@@ -1,4 +1,4 @@
-import { CHEI_ANTET, COLOANE, randGol, parseNumar } from './izoDocumenteLogica.js'
+import { CHEI_ANTET, COLOANE, randGol, parseNumar, izolatieDinText } from './izoDocumenteLogica.js'
 
 const text = v => typeof v === 'string' || typeof v === 'number' ? String(v) : ''
 const gol = v => v == null || String(v).trim() === ''
@@ -30,6 +30,7 @@ export function aplicaPropunereOCR(editorDoc, raspuns, { mod = 'completeaza' } =
   if (totaluri.total_kg != null) propus.total_kg = totaluri.total_kg
   const avKg = []
   const valoare = (k, v, unde) => {
+    if (k === 'izolatie') return izolatieDinText(text(v)) || ''
     if (!esteKg(k)) return text(v)
     const { val, ok } = textKg(v)
     if (!ok) avKg.push(`${unde}: valoarea de kg „${text(v)}” e ambiguă (3+ zecimale) — introdu-o manual de pe document.`)
