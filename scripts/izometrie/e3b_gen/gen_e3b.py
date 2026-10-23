@@ -286,7 +286,9 @@ for rol in ['anon', 'authenticated', 'service_role', 'izo_doc_editor'] + ROLURI:
                 cond = 'has_table_privilege(%s, %s, %s)' % (q(rol), q('public.' + t), q(p))
             checks.append("    IF %s THEN v := array_append(v, %s); END IF;" % (cond, q('ACL ' + rol + ' ' + t + ' ' + p)))
 for rol in ROLURI:
-    checks.append("    IF EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind = 'S' AND has_sequence_privilege(%s, c.oid, 'USAGE') IS DISTINCT FROM (c.oid = ANY (%s::regclass[]))) THEN v := array_append(v, %s); END IF;" %
+    # doar secvențele din public: pe prod, platforma are secvențe cu USAGE pentru PUBLIC (ex. net.http_request_queue_id_seq),
+    # pe care orice rol le vede — nu sunt ale registrului (dry-run 23.10.2026, postcondiția roșie)
+    checks.append("    IF EXISTS (SELECT 1 FROM pg_class c WHERE c.relkind = 'S' AND c.relnamespace = 'public'::regnamespace AND has_sequence_privilege(%s, c.oid, 'USAGE') IS DISTINCT FROM (c.oid = ANY (%s::regclass[]))) THEN v := array_append(v, %s); END IF;" %
                   (q(rol), arr(['public.' + s for s in SECV] if rol == 'izo_corectie_writer' else []), q('USAGE secvențe ' + rol)))
 for fn, rs in FUNCTII.items():
     for rol in (['anon', 'authenticated', 'service_role', 'izo_registru_writer', 'izo_receptie_writer', 'izo_doc_editor'] + ROLURI if fn[7:] in FN_B or fn[7:] in FN_OPERATII else ROLURI):

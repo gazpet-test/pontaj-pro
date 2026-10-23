@@ -101,6 +101,8 @@ baseline() { q "SELECT jsonb_build_array(obj_description('public.magazie_bucati_
 "${PSQL[@]}" -d postgres -c "CREATE DATABASE $BAZA" >/dev/null
 "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e2a_schelet.sql" >/dev/null
 "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3_schelet.sql" >/dev/null
+# ca pe prod (dry-run 23.10.2026): o secvență de platformă cu USAGE pentru PUBLIC, în afara lui public (pg_net)
+"${PSQL[@]}" -d "$BAZA" -c "CREATE SCHEMA IF NOT EXISTS net; CREATE SEQUENCE IF NOT EXISTS net.http_request_queue_id_seq; GRANT USAGE, SELECT, UPDATE ON SEQUENCE net.http_request_queue_id_seq TO PUBLIC;" >/dev/null
 livreaza 20261102120000 "$MIG_A"
 livreaza 20261102140000 "$MIG_C"
 livreaza 20261103120000 "$MIG_E3"
@@ -190,6 +192,8 @@ baza_noua() {
   "${PSQL[@]}" -d postgres -c "CREATE DATABASE $BAZA" >/dev/null
   "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e2a_schelet.sql" >/dev/null
   "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e3_schelet.sql" >/dev/null
+  # ca pe prod (dry-run 23.10.2026): o secvență de platformă cu USAGE pentru PUBLIC, în afara lui public (pg_net)
+  "${PSQL[@]}" -d "$BAZA" -c "CREATE SCHEMA IF NOT EXISTS net; CREATE SEQUENCE IF NOT EXISTS net.http_request_queue_id_seq; GRANT USAGE, SELECT, UPDATE ON SEQUENCE net.http_request_queue_id_seq TO PUBLIC;" >/dev/null
 }
 baza_scoate() {
   [[ "$BAZA" =~ ^izo_e3b_[a-z0-9_]+_test$ ]] || esec 'baza nu este fixture E3b'
