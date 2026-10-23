@@ -35,10 +35,34 @@ BEGIN
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_lipsa()'::regprocedure) IS DISTINCT FROM @@OLD_MD5@@ THEN
     RAISE EXCEPTION 'E4a restore body differs'; END IF;
   DROP FUNCTION public.fn_izo_porti_e4_lipsa(),public.fn_izo_porti_e4_definitii();
+  @@BUCATI_OLD@@
+  @@FAPTE_OLD@@
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_bucati()'::regprocedure) IS DISTINCT FROM @@BUCATI_MD5@@
+    OR (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_fapte()'::regprocedure) IS DISTINCT FROM @@FAPTE_MD5@@ THEN
+    RAISE EXCEPTION 'E4a restore registry guards differ'; END IF;
+  DROP POLICY magbuc_izo_montaj_sel ON public.magazie_bucati;
+  DROP POLICY magbuc_izo_montaj_upd ON public.magazie_bucati;
+  DROP POLICY executie_tevi_izo_montaj_sel ON public.executie_tevi;
+  DROP POLICY executie_tevi_izo_montaj_upd ON public.executie_tevi;
+  DROP POLICY executie_pachete_izo_montaj_sel ON public.executie_pachete_lansare;
+  DROP POLICY executie_pachete_izo_montaj_upd ON public.executie_pachete_lansare;
+  DROP INDEX public.ux_magbuc_izo_teava;
   SET LOCAL ROLE izo_montaj_writer;
+  DROP FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb);
+  DROP FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),public.fn_izo_pachet_dezleaga(bigint,text),
+    public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text);
   DROP FUNCTION public.fn_izo_seteaza_flux(bigint,boolean,text);
   DROP FUNCTION public.fn_izo_pachet_aprobare_transgaz(bigint,timestamptz,text);
   RESET ROLE;
+  DROP FUNCTION public.fn_izo_garda_montaj(text,text,jsonb,jsonb);
+  DROP FUNCTION public.fn_izo_flux_pachet_lock(bigint,bigint,timestamptz),public.fn_izo_flux_pachet_editabil(jsonb),
+    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text),
+    public.fn_izo_flux_pachet_completeaza(uuid,bigint,timestamptz,text,text);
+  REVOKE ALL ON public.magazie_bucati,public.executie_tevi,public.executie_pachete_lansare FROM izo_montaj_writer;
+  REVOKE UPDATE(executie_teava_id,server_ver,updated_at) ON public.magazie_bucati FROM izo_montaj_writer;
+  REVOKE UPDATE(serie_unica,sarja,lot,lungime_m,lungime_originala_m,tip,dimensiune,unghi_curba,updated_at) ON public.executie_tevi FROM izo_montaj_writer;
+  REVOKE UPDATE(updated_at) ON public.executie_pachete_lansare FROM izo_montaj_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_garda_scriitor(),public.fn_izo_nivel(bigint),public.fn_izo_tip_cod(integer) FROM izo_montaj_writer;
   DROP FUNCTION public.fn_izo_flux_aprobare_admin(bigint,timestamptz,text);
   DROP FUNCTION public.fn_izo_flux_admin(bigint,boolean,text),public.fn_izo_flux_config_garda(),public.fn_izo_flux_garda(),
     public.fn_izo_flux_pachet_dupa(),public.fn_izo_flux_storage();

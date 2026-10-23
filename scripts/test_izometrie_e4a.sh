@@ -48,6 +48,8 @@ livreaza 20261109120000 "$M/20261109a_izometrie_e4a_flux.sql"
 [[ "$(q 'SELECT public.fn_izo_porti_lipsa()')" == '{}' ]] || esec poarta
 [[ -z "$("${PSQL[@]}" -d "$BAZA" -At -f "$RADACINA/scripts/control_0e.sql")" ]] || esec control_0e
 "${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e4a.test.sql"
+"${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/izometrie_e4a_pachet.test.sql" >"$TMP/pachet.log"
+grep -q 'E4A2_PACHET_END' "$TMP/pachet.log" || esec 'pachet end marker'
 # Reapply through the runner with conflicting version must be refused before DDL.
 sha="$(sha256sum "$M/20261109a_izometrie_e4a_flux.sql" | cut -d' ' -f1)"
 sis="$(q 'SELECT system_identifier FROM pg_control_system()')"

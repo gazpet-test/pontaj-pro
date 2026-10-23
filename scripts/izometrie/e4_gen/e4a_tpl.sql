@@ -92,12 +92,24 @@ BEGIN
     FOR v_pass IN 1..2 LOOP
       SELECT EXISTS(SELECT 1 FROM public.izo_tronson_config c WHERE c.tronson_id=ANY(v_tr) AND c.flux_montaj) INTO v_flux;
       IF v_flux THEN
+        -- The private INVOKER writer sets exact row images. No API setter is exposed.
+        IF split_part(current_setting('izo.montaj_ctx',true),'|',1)=txid_current()::text
+          AND split_part(current_setting('izo.montaj_ctx',true),'|',2) IN ('leaga','dezleaga')
+          AND split_part(current_setting('izo.montaj_ctx',true),'|',3)=coalesce(v_new->>'pachet_id',v_new->>'id') THEN
+          IF TG_TABLE_NAME='executie_tevi' AND TG_OP='UPDATE' AND
+            ((nullif(current_setting('izo.montaj_rand_asteptat',true),'')::jsonb-ARRAY['poz_in_pachet','poz_km_m'])=
+               (v_new-ARRAY['poz_in_pachet','poz_km_m']) OR
+             (v_old-ARRAY['poz_in_pachet','poz_km_m','updated_at'])=(v_new-ARRAY['poz_in_pachet','poz_km_m','updated_at'])) THEN RETURN NEW; END IF;
+          IF TG_TABLE_NAME='executie_pachete_lansare' AND TG_OP='UPDATE' AND
+            (v_old-ARRAY['updated_at','nr_tevi','total_lungime_m','nr_pending_sant'])=
+            (v_new-ARRAY['updated_at','nr_tevi','total_lungime_m','nr_pending_sant']) THEN RETURN NEW; END IF;
+        END IF;
         -- E4a administrative server write: exact expected row, bound to transaction/package.
         -- API callers cannot impersonate session_user postgres, even with forged GUCs.
         IF TG_TABLE_NAME='executie_tevi' AND TG_OP<>'DELETE' AND session_user='postgres'
           AND current_setting('izo.montaj_ctx',true)=txid_current()::text || '|completeaza|' || (v_new->>'pachet_id')
           AND nullif(current_setting('izo.montaj_rand_asteptat',true),'')::jsonb = v_new THEN RETURN NEW; END IF;
-        -- Until E4b there is no completeaza/leaga/note RPC. No permissive writer bypass.
+        -- Until E4b, completeaza refuses; leaga/dezleaga use the private marker above.
         -- Minimal Transgaz entry writes exactly document + approval header, in its transaction.
         IF session_user='postgres' AND current_setting('izo.montaj_ctx',true) =
           txid_current()::text || '|transgaz|' || coalesce(v_new->>'pachet_id',v_new->>'id')
@@ -268,11 +280,16 @@ BEGIN
   GRANT EXECUTE ON FUNCTION public.fn_izo_seteaza_flux(bigint,boolean,text),public.fn_izo_pachet_aprobare_transgaz(bigint,timestamptz,text) TO postgres;
   RESET ROLE;
 
+  @@MONTAJ@@
+  @@BUCATI_NEW@@
+  @@FAPTE_NEW@@
+  @@PACHET@@
+
   CREATE FUNCTION public.fn_izo_porti_e4_definitii() RETURNS text
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     SELECT md5(concat_ws('|',
       (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',p.oid::regprocedure,p.proowner,p.prosecdef,p.proconfig,p.proacl,md5(p.prosrc)),',' ORDER BY p.oid::regprocedure::text)
-        FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND (p.proname LIKE 'fn_izo_flux_%' OR p.proname IN ('fn_izo_seteaza_flux','fn_izo_pachet_aprobare_transgaz','fn_izo_porti_e4_definitii','fn_izo_porti_e4_lipsa'))),
+        FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND (p.proname LIKE 'fn_izo_flux_%' OR p.proname LIKE 'fn_izo_pachet_%' OR p.proname IN ('fn_izo_montaj_marcheaza','fn_izo_garda_montaj','fn_izo_seteaza_flux','fn_izo_porti_e4_definitii','fn_izo_porti_e4_lipsa'))),
       (SELECT string_agg(format('%s:%s:%s:%s',g.tgrelid::regclass,pg_get_triggerdef(g.oid),g.tgenabled,md5(p.prosrc)),',' ORDER BY g.tgrelid::regclass::text,g.tgname)
         FROM pg_trigger g JOIN pg_proc p ON p.oid=g.tgfoid WHERE NOT g.tgisinternal AND g.tgrelid IN
           ('public.executie_tevi'::regclass,'public.executie_pachete_lansare'::regclass,'public.executie_pachete_documente'::regclass,'public.executie_tronsoane'::regclass,'public.izo_tronson_config'::regclass,'storage.objects'::regclass)),

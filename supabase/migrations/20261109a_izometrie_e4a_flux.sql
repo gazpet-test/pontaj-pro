@@ -15,6 +15,8 @@ BEGIN
   IF (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_porti_lipsa') <> 1 OR (SELECT md5(prosrc) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_porti_lipsa' LIMIT 1) IS DISTINCT FROM 'adc6d91bfa725a057257f5248709384b' THEN RAISE EXCEPTION 'E4a baseline body: fn_izo_porti_lipsa'; END IF;
   IF (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_porti_e3b_definitii') <> 1 OR (SELECT md5(prosrc) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_porti_e3b_definitii' LIMIT 1) IS DISTINCT FROM 'a20d5acb7c2bf2c60511cc653a2d9183' THEN RAISE EXCEPTION 'E4a baseline body: fn_izo_porti_e3b_definitii'; END IF;
   IF (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_porti_e3b_lipsa') <> 1 OR (SELECT md5(prosrc) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_porti_e3b_lipsa' LIMIT 1) IS DISTINCT FROM '457beda01c8f6d4716f132ef7efae6ff' THEN RAISE EXCEPTION 'E4a baseline body: fn_izo_porti_e3b_lipsa'; END IF;
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_garda_bucati') <> 1 OR (SELECT md5(prosrc) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_garda_bucati' LIMIT 1) IS DISTINCT FROM 'ab8d39ce47eda8cf1045437b4c0022ef' THEN RAISE EXCEPTION 'E4a baseline body: fn_izo_garda_bucati'; END IF;
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_garda_fapte') <> 1 OR (SELECT md5(prosrc) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_izo_garda_fapte' LIMIT 1) IS DISTINCT FROM 'ed4132b394371a813c40f5cf0025c144' THEN RAISE EXCEPTION 'E4a baseline body: fn_izo_garda_fapte'; END IF;
   v_lipsa := public.fn_izo_porti_lipsa() || public.fn_izo_porti_e3_lipsa();
   IF cardinality(v_lipsa) <> 0 THEN RAISE EXCEPTION 'E4a baseline: %',v_lipsa; END IF;
   v_impl := (SELECT coalesce(array_agg(x.d ORDER BY x.d COLLATE "C"), '{}'::text[])
@@ -147,12 +149,24 @@ BEGIN
     FOR v_pass IN 1..2 LOOP
       SELECT EXISTS(SELECT 1 FROM public.izo_tronson_config c WHERE c.tronson_id=ANY(v_tr) AND c.flux_montaj) INTO v_flux;
       IF v_flux THEN
+        -- The private INVOKER writer sets exact row images. No API setter is exposed.
+        IF split_part(current_setting('izo.montaj_ctx',true),'|',1)=txid_current()::text
+          AND split_part(current_setting('izo.montaj_ctx',true),'|',2) IN ('leaga','dezleaga')
+          AND split_part(current_setting('izo.montaj_ctx',true),'|',3)=coalesce(v_new->>'pachet_id',v_new->>'id') THEN
+          IF TG_TABLE_NAME='executie_tevi' AND TG_OP='UPDATE' AND
+            ((nullif(current_setting('izo.montaj_rand_asteptat',true),'')::jsonb-ARRAY['poz_in_pachet','poz_km_m'])=
+               (v_new-ARRAY['poz_in_pachet','poz_km_m']) OR
+             (v_old-ARRAY['poz_in_pachet','poz_km_m','updated_at'])=(v_new-ARRAY['poz_in_pachet','poz_km_m','updated_at'])) THEN RETURN NEW; END IF;
+          IF TG_TABLE_NAME='executie_pachete_lansare' AND TG_OP='UPDATE' AND
+            (v_old-ARRAY['updated_at','nr_tevi','total_lungime_m','nr_pending_sant'])=
+            (v_new-ARRAY['updated_at','nr_tevi','total_lungime_m','nr_pending_sant']) THEN RETURN NEW; END IF;
+        END IF;
         -- E4a administrative server write: exact expected row, bound to transaction/package.
         -- API callers cannot impersonate session_user postgres, even with forged GUCs.
         IF TG_TABLE_NAME='executie_tevi' AND TG_OP<>'DELETE' AND session_user='postgres'
           AND current_setting('izo.montaj_ctx',true)=txid_current()::text || '|completeaza|' || (v_new->>'pachet_id')
           AND nullif(current_setting('izo.montaj_rand_asteptat',true),'')::jsonb = v_new THEN RETURN NEW; END IF;
-        -- Until E4b there is no completeaza/leaga/note RPC. No permissive writer bypass.
+        -- Until E4b, completeaza refuses; leaga/dezleaga use the private marker above.
         -- Minimal Transgaz entry writes exactly document + approval header, in its transaction.
         IF session_user='postgres' AND current_setting('izo.montaj_ctx',true) =
           txid_current()::text || '|transgaz|' || coalesce(v_new->>'pachet_id',v_new->>'id')
@@ -323,11 +337,347 @@ BEGIN
   GRANT EXECUTE ON FUNCTION public.fn_izo_seteaza_flux(bigint,boolean,text),public.fn_izo_pachet_aprobare_transgaz(bigint,timestamptz,text) TO postgres;
   RESET ROLE;
 
+    -- E4a-2b: private marker; never grant this entry to API roles.
+  CREATE FUNCTION public.fn_izo_montaj_marcheaza(p_ctx text,p_inainte jsonb,p_dupa jsonb,p_rand jsonb)
+    RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    IF current_user <> 'izo_montaj_writer' THEN
+      RAISE EXCEPTION 'E4a marcaj: scriitor invalid' USING ERRCODE='42501'; END IF;
+    PERFORM set_config('izo.montaj_ctx',coalesce(p_ctx,''),true);
+    PERFORM set_config('izo.montaj_bucata_inainte',coalesce(p_inainte::text,''),true);
+    PERFORM set_config('izo.montaj_bucata_dupa',coalesce(p_dupa::text,''),true);
+    PERFORM set_config('izo.montaj_rand_asteptat',coalesce(p_rand::text,''),true);
+  END $f$;
+
+  CREATE FUNCTION public.fn_izo_garda_montaj(p_tabel text,p_op text,p_inainte jsonb,p_dupa jsonb)
+    RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_ctx text:=current_setting('izo.montaj_ctx',true); v_pachet bigint; v_op text; v_dupa_comparabil jsonb;
+  BEGIN
+    -- E4a writes only the link. No events/movements/imports/config authorization yet.
+    IF current_user='izo_montaj_writer' AND p_tabel='magazie_bucati' AND p_op='UPDATE'
+      AND p_inainte IS NOT NULL AND p_dupa IS NOT NULL
+      -- PG16 computes STORED generated columns AFTER BEFORE triggers: NEW has NULL.
+      -- Require that exact trigger shape; restore only these two derived values for
+      -- comparison with the stored snapshot. Their sources (serie/lungime_mm) stay immutable.
+      AND p_dupa->'serie_canon' = 'null'::jsonb AND p_dupa->'lungime_cm' = 'null'::jsonb THEN
+      v_dupa_comparabil:=p_dupa || jsonb_build_object(
+        'serie_canon',p_inainte->'serie_canon','lungime_cm',p_inainte->'lungime_cm');
+      v_op:=CASE WHEN p_dupa->>'executie_teava_id' IS NULL THEN 'dezleaga' ELSE 'leaga' END;
+      SELECT pachet_id INTO v_pachet FROM public.executie_tevi
+        WHERE id=coalesce((p_dupa->>'executie_teava_id')::bigint,(p_inainte->>'executie_teava_id')::bigint);
+      IF v_ctx = concat_ws('|',txid_current()::text,v_op,v_pachet::text,
+          p_inainte->>'proiect_id',p_inainte->>'tronson_id',p_dupa->>'server_ver',p_inainte->>'id')
+        AND v_pachet IS NOT NULL AND p_inainte->>'tip_cod' IN ('teava','curba')
+        AND p_inainte->>'stare'='montata'
+        AND ((v_op='leaga' AND p_inainte->>'executie_teava_id' IS NULL)
+          OR (v_op='dezleaga' AND p_inainte->>'executie_teava_id' IS NOT NULL))
+        AND nullif(current_setting('izo.montaj_bucata_inainte',true),'')::jsonb=p_inainte
+        AND nullif(current_setting('izo.montaj_bucata_dupa',true),'')::jsonb=v_dupa_comparabil
+        AND (p_inainte-ARRAY['executie_teava_id','server_ver','updated_at'])=
+            (v_dupa_comparabil-ARRAY['executie_teava_id','server_ver','updated_at']) THEN RETURN true; END IF;
+    END IF;
+    RAISE EXCEPTION 'E4a context montaj invalid pe %',p_tabel USING ERRCODE='42501';
+  END $f$;
+  REVOKE ALL ON FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb),
+    public.fn_izo_garda_montaj(text,text,jsonb,jsonb) FROM PUBLIC,anon,authenticated,service_role;
+  GRANT EXECUTE ON FUNCTION public.fn_izo_garda_montaj(text,text,jsonb,jsonb) TO izo_montaj_writer;
+  GRANT CREATE ON SCHEMA public TO izo_montaj_writer;
+  ALTER FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb) OWNER TO izo_montaj_writer;
+  REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;
+
+    CREATE OR REPLACE FUNCTION public.fn_izo_garda_bucati() RETURNS trigger
+    LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE
+    v_old boolean := false;
+    v_new boolean := false;
+    v_p bigint;
+    v_aut boolean;
+  BEGIN
+    -- E3 (20261103b): predicatul de autorizare, calculat o singură dată — scriitorul E2a cu marcaj SAU scriitorul E3 în
+    -- contextul operației (true sau excepție); fără RETURN timpuriu: verificările E2a de mai jos se aplică tuturor
+    v_aut := public.fn_izo_garda_scriitor();
+    IF v_aut IS NOT TRUE AND current_user = 'izo_montaj_writer' THEN
+      v_aut := public.fn_izo_garda_montaj(TG_TABLE_NAME, TG_OP,
+        CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+        CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    IF v_aut IS NOT TRUE AND current_user = 'izo_receptie_writer' THEN
+      v_aut := public.fn_izo_garda_receptie(TG_TABLE_NAME, TG_OP, CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+                                            CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    IF v_aut IS NOT TRUE AND current_user = 'izo_corectie_writer' THEN
+      v_aut := public.fn_izo_garda_corectie(TG_TABLE_NAME, TG_OP,
+        CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END, CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    -- (1) rândurile registrului sunt protejate PERMANENT: refuz imediat, fără lock (altfel un UPDATE al clientului, care
+    --     ține deja rândul, ar aștepta lock-ul advisory al unui storno care așteaptă rândul → blocaj circular)
+    IF ((TG_OP <> 'INSERT' AND OLD.tip_cod IS NOT NULL) OR (TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL))
+       AND v_aut IS NOT TRUE THEN
+      RAISE EXCEPTION 'izo: bucățile beneficiar ale unui proiect cu registru (nivel ≠ off) se scriu doar prin funcțiile registrului'
+        USING ERRCODE = '42501';
+    END IF;
+    -- (2) beneficiar în afara registrului: lock PARTAJAT pe proiectele OLD/NEW (crescător; cere READ COMMITTED — sub
+    --     REPEATABLE READ o activare comisă între timp n-ar fi văzută), apoi nivelul, citit cu snapshot nou
+    IF (TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar') OR (TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar') THEN
+      IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'izo: scrierile care ating registrul cer READ COMMITTED (acum %)', current_setting('transaction_isolation')
+          USING ERRCODE = '25001';
+      END IF;
+      FOR v_p IN SELECT DISTINCT x FROM unnest(ARRAY[CASE WHEN TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar' THEN OLD.proiect_id END,
+                                                       CASE WHEN TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar' THEN NEW.proiect_id END]) x
+                  WHERE x IS NOT NULL ORDER BY 1 LOOP
+        PERFORM pg_advisory_xact_lock_shared(73010, v_p::integer);
+      END LOOP;
+    END IF;
+    IF TG_OP <> 'INSERT' AND (OLD.tip_cod IS NOT NULL OR OLD.provenienta = 'beneficiar') THEN
+      v_old := OLD.tip_cod IS NOT NULL OR public.fn_izo_nivel(OLD.proiect_id) <> 'off';
+    END IF;
+    IF TG_OP <> 'DELETE' AND (NEW.tip_cod IS NOT NULL OR NEW.provenienta = 'beneficiar') THEN
+      v_new := NEW.tip_cod IS NOT NULL OR public.fn_izo_nivel(NEW.proiect_id) <> 'off';
+    END IF;
+    IF v_old OR v_new THEN
+      IF v_aut IS NOT TRUE THEN
+        RAISE EXCEPTION 'izo: bucățile beneficiar ale unui proiect cu registru (nivel ≠ off) se scriu doar prin funcțiile registrului'
+          USING ERRCODE = '42501';
+      END IF;
+      IF TG_OP <> 'DELETE' AND NEW.stare IN ('rezervata','consumata') THEN
+        RAISE EXCEPTION 'izo: starea % e interzisă pe bucățile registrului (rezervările stau în izo_rezervari; consumul = montata/taiata)', NEW.stare
+          USING ERRCODE = '23514';
+      END IF;
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'izo: bucățile registrului nu se șterg (anulare = storno)' USING ERRCODE = '42501';
+      END IF;
+      -- un rând de registru nu stă niciodată pe un proiect off (nici scris de writer) — review #806 A
+      IF TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL AND public.fn_izo_nivel(NEW.proiect_id) = 'off' THEN
+        RAISE EXCEPTION 'izo: rândurile registrului cer proiect cu nivel ≠ off (proiectul %)', NEW.proiect_id USING ERRCODE = '42501';
+      END IF;
+    END IF;
+    -- tip_cod e copie controlată de server: trebuie să bată cu tip_material_id
+    IF TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL AND NEW.tip_cod IS DISTINCT FROM public.fn_izo_tip_cod(NEW.tip_material_id) THEN
+      RAISE EXCEPTION 'izo: tip_cod % nu bate cu tip_material_id %', NEW.tip_cod, NEW.tip_material_id USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+  END $f$;
+    CREATE OR REPLACE FUNCTION public.fn_izo_garda_fapte() RETURNS trigger
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_aut boolean;
+  BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+      RAISE EXCEPTION 'izo: TRUNCATE pe % e refuzat (registru doar-adaug)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'izo: DELETE pe % e refuzat (registru doar-adaug; anulare = storno)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'UPDATE' AND TG_TABLE_NAME IN ('magazie_bucati_evenimente','magazie_bucati_miscari') THEN
+      RAISE EXCEPTION 'izo: UPDATE pe % e refuzat (registru doar-adaug)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    -- E3 (20261103b): predicatul de autorizare, calculat o singură dată — scriitorul E2a cu marcaj SAU scriitorul E3 în
+    -- contextul operației (true sau excepție); fără RETURN timpuriu: verificările E2a de mai jos se aplică tuturor
+    v_aut := public.fn_izo_garda_scriitor();
+    IF v_aut IS NOT TRUE AND current_user = 'izo_montaj_writer' THEN
+      v_aut := public.fn_izo_garda_montaj(TG_TABLE_NAME, TG_OP,
+        CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+        CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    IF v_aut IS NOT TRUE AND current_user = 'izo_receptie_writer' THEN
+      v_aut := public.fn_izo_garda_receptie(TG_TABLE_NAME, TG_OP, CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+                                            to_jsonb(NEW));
+    END IF;
+    IF v_aut IS NOT TRUE AND current_user = 'izo_corectie_writer' THEN
+      v_aut := public.fn_izo_garda_corectie(TG_TABLE_NAME, TG_OP,
+        CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END, CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    IF v_aut IS NOT TRUE THEN
+      RAISE EXCEPTION 'izo: % se scrie doar prin funcțiile registrului', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END $f$;
+    -- E4a-2. API wrappers contain no context setter; internal entries are not executable by API roles.
+  IF EXISTS(SELECT 1 FROM public.magazie_bucati WHERE tip_cod IS NOT NULL AND executie_teava_id IS NOT NULL) THEN
+    RAISE EXCEPTION 'E4a preflight: bucati deja legate'; END IF;
+  CREATE UNIQUE INDEX ux_magbuc_izo_teava ON public.magazie_bucati(executie_teava_id)
+    WHERE executie_teava_id IS NOT NULL AND tip_cod IS NOT NULL AND stare <> 'anulata';
+
+  CREATE FUNCTION public.fn_izo_flux_pachet_lock(p_teava bigint,p_pachet bigint,p_updated_at timestamptz)
+    RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  DECLARE v_p public.executie_pachete_lansare; v_t public.executie_tevi; v_id bigint;
+    v_pr bigint; v_tr bigint; v_owner boolean; v_uid uuid; v_lipsa text[];
+  BEGIN
+    IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'E4a READ COMMITTED' USING ERRCODE='25001'; END IF;
+    PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+    IF session_user<>'authenticator' OR public.fn_izo_jwt_rol() IS DISTINCT FROM 'authenticated' THEN
+      RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+    v_uid:=public.fn_izo_uid();
+    IF coalesce(current_setting('izo.montaj_ctx',true),'')<>''
+      OR coalesce(current_setting('izo.receptie_ctx',true),'')<>''
+      OR coalesce(current_setting('izo.registru_tx',true),'')<>'' THEN RAISE EXCEPTION 'context_ocupat'; END IF;
+    v_id:=p_pachet;
+    IF p_teava IS NOT NULL THEN SELECT pachet_id INTO v_id FROM public.executie_tevi WHERE id=p_teava; END IF;
+    SELECT proiect_id,tronson_id INTO v_pr,v_tr FROM public.executie_pachete_lansare WHERE id=v_id;
+    IF v_pr IS NULL THEN RAISE EXCEPTION 'pachet_lipsa'; END IF;
+    -- Early refusal avoids the legacy row -> package lock order on non-flow tronsoane.
+    IF NOT EXISTS(SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_tr AND flux_montaj) THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
+    SELECT is_owner INTO v_owner FROM public.profiles WHERE id=v_uid AND employee_id IS NOT NULL FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+    IF v_owner IS NOT TRUE THEN
+      PERFORM 1 FROM public.user_module_access WHERE profile_id=v_uid AND module='executie.izometrie'
+        AND access_level IN ('editor','admin') FOR SHARE;
+      IF NOT FOUND THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+      PERFORM 1 FROM public.izo_atribuiri WHERE profile_id=v_uid AND proiect_id=v_pr AND activ
+        AND rol IN ('manager_aprobator','inlocuitor_aprobator') AND depozit_id IS NULL
+        AND current_date BETWEEN valabil_de AND coalesce(valabil_pana,current_date) ORDER BY id FOR SHARE;
+      IF NOT FOUND THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
+    END IF;
+    v_lipsa:=public.fn_izo_porti_lipsa();
+    IF cardinality(v_lipsa)<>0 THEN RAISE EXCEPTION 'E4a porti %',v_lipsa; END IF;
+    PERFORM public.fn_izo_blocheaza_locuri(v_pr,ARRAY[]::integer[],ARRAY[v_tr]);
+    SELECT * INTO v_p FROM public.executie_pachete_lansare WHERE id=v_id FOR NO KEY UPDATE;
+    PERFORM 1 FROM public.executie_tronsoane WHERE id=v_tr FOR SHARE;
+    -- All package rows, including rows touched by renumber/km cascades, in id order.
+    PERFORM 1 FROM public.executie_tevi WHERE pachet_id=v_id ORDER BY id FOR NO KEY UPDATE;
+    IF p_teava IS NOT NULL THEN SELECT * INTO v_t FROM public.executie_tevi WHERE id=p_teava; END IF;
+    PERFORM public.fn_izo_blocheaza_tabele();
+    PERFORM public.fn_izo_lock_partajat(v_pr);
+    IF v_p.proiect_id IS DISTINCT FROM v_pr OR v_p.tronson_id IS DISTINCT FROM v_tr
+      OR v_pr IS DISTINCT FROM (SELECT proiect_id FROM public.executie_tronsoane WHERE id=v_tr)
+      OR (p_teava IS NOT NULL AND v_t.pachet_id IS DISTINCT FROM v_id) THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
+    IF coalesce(public.fn_izo_nivel(v_pr),'off') NOT IN ('stoc','montaj') OR NOT EXISTS
+      (SELECT 1 FROM public.izo_tronson_config WHERE tronson_id=v_tr AND flux_montaj) THEN RAISE EXCEPTION 'flux_inactiv'; END IF;
+    IF p_updated_at IS NOT NULL AND p_updated_at IS DISTINCT FROM
+      ((CASE WHEN p_teava IS NULL THEN to_jsonb(v_p) ELSE to_jsonb(v_t) END)->>'updated_at')::timestamptz
+      THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
+    RETURN jsonb_build_object('pachet',to_jsonb(v_p),'teava',to_jsonb(v_t));
+  END $f$;
+
+  CREATE FUNCTION public.fn_izo_flux_pachet_editabil(p_pachet jsonb) RETURNS void
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    IF p_pachet->>'status' IS DISTINCT FROM 'draft' OR EXISTS
+      (SELECT 1 FROM jsonb_each(p_pachet) e WHERE (e.key LIKE 'aprobat_%' OR e.key LIKE 'pdf_aprobare_%') AND e.value<>'null'::jsonb)
+      THEN RAISE EXCEPTION 'pachet_needitabil'; END IF;
+  END $f$;
+
+  CREATE FUNCTION public.fn_izo_flux_pachet_identitate(p_b public.magazie_bucati) RETURNS jsonb
+    LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_rad public.magazie_bucati; v_dim text;
+  BEGIN
+    SELECT * INTO v_rad FROM public.magazie_bucati WHERE id=coalesce(p_b.radacina_id,p_b.id);
+    v_dim:=CASE WHEN p_b.diametru_mm IS NOT NULL OR p_b.perete_mm IS NOT NULL THEN
+      coalesce(p_b.diametru_mm::text,'') || 'X' || coalesce(p_b.perete_mm::text,'') ||
+      CASE WHEN p_b.tip_cod='curba' AND p_b.unghi_curba IS NOT NULL THEN ' ' || p_b.unghi_curba::text || '°' ELSE '' END END;
+    RETURN jsonb_build_object('serie_unica',p_b.serie,'sarja',p_b.sarja,'lot',p_b.lot,
+      'lungime_m',p_b.lungime_mm/1000.0,'lungime_originala_m',coalesce(v_rad.lungime_mm/1000.0,v_rad.lungime_m),
+      'tip',CASE WHEN p_b.tip_cod='curba' THEN 'CIC' ELSE p_b.grad_otel END,'dimensiune',v_dim,'unghi_curba',CASE WHEN p_b.tip_cod='curba' AND p_b.unghi_curba IS NOT NULL THEN p_b.unghi_curba::text || '°' END);
+  END $f$;
+
+  CREATE FUNCTION public.fn_izo_flux_pachet_legatura(p_teava bigint,p_bucata bigint,p_updated_at timestamptz,p_motiv text)
+    RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_lock jsonb; v_p jsonb; v_t public.executie_tevi; v_b public.magazie_bucati;
+    v_veche bigint; v_patch jsonb; v_ctx text; v_now timestamptz:=clock_timestamp();
+    v_dupa public.magazie_bucati;
+  BEGIN
+    IF p_bucata IS NOT NULL AND p_updated_at IS NULL THEN RAISE EXCEPTION 'pachet_schimbat'; END IF;
+    IF p_bucata IS NULL AND length(btrim(coalesce(p_motiv,'')))<3 THEN RAISE EXCEPTION 'motiv_obligatoriu'; END IF;
+    v_lock:=public.fn_izo_flux_pachet_lock(p_teava,NULL,p_updated_at);
+    v_p:=v_lock->'pachet'; v_t:=jsonb_populate_record(NULL::public.executie_tevi,v_lock->'teava');
+    IF v_t.tip_rand NOT IN ('teava','curba') THEN RAISE EXCEPTION 'rand_fara_bucata'; END IF;
+    -- Natural idempotence is allowed even on an approved package; no stamp/write.
+    SELECT id INTO v_veche FROM public.magazie_bucati WHERE executie_teava_id=p_teava AND tip_cod IS NOT NULL AND stare<>'anulata';
+    IF p_bucata IS NOT NULL AND v_veche=p_bucata THEN RETURN jsonb_build_object('cod','fara_efect'); END IF;
+    PERFORM public.fn_izo_flux_pachet_editabil(v_p);
+    IF p_bucata IS NOT NULL AND v_veche IS NOT NULL THEN RAISE EXCEPTION 'rand_deja_legat'; END IF;
+    SELECT * INTO v_b FROM public.magazie_bucati WHERE id=coalesce(p_bucata,v_veche) FOR UPDATE;
+    IF p_bucata IS NULL AND NOT FOUND THEN RETURN jsonb_build_object('cod','fara_efect'); END IF;
+    IF NOT FOUND OR v_b.proiect_id IS DISTINCT FROM (v_p->>'proiect_id')::bigint
+      OR v_b.tronson_id IS DISTINCT FROM (v_p->>'tronson_id')::bigint OR v_b.stare<>'montata'
+      OR v_b.tip_cod IS DISTINCT FROM v_t.tip_rand THEN RAISE EXCEPTION 'bucata_incompatibila'; END IF;
+    IF p_bucata IS NOT NULL AND v_b.executie_teava_id IS NOT NULL THEN RAISE EXCEPTION 'bucata_deja_legata'; END IF;
+    -- Expected stored image uses the same typed values as UPDATE.
+    -- fn_izo_garda_montaj restores the two generated columns absent from BEFORE NEW.
+    v_dupa:=v_b;
+    v_dupa.executie_teava_id:=CASE WHEN p_bucata IS NOT NULL THEN p_teava END;
+    v_dupa.server_ver:=nextval('public.izo_server_ver_seq'); v_dupa.updated_at:=v_now;
+    v_ctx:=concat_ws('|',txid_current()::text,CASE WHEN p_bucata IS NULL THEN 'dezleaga' ELSE 'leaga' END,
+      v_p->>'id',v_p->>'proiect_id',v_p->>'tronson_id',v_dupa.server_ver::text,v_b.id::text);
+    IF p_bucata IS NOT NULL THEN
+      v_patch:=public.fn_izo_flux_pachet_identitate(v_b)||jsonb_build_object('updated_at',v_now);
+    ELSE
+      v_patch:=jsonb_build_object('updated_at',v_now);
+    END IF;
+    v_t:=jsonb_populate_record(v_t,v_patch);
+    PERFORM public.fn_izo_montaj_marcheaza(v_ctx,to_jsonb(v_b),to_jsonb(v_dupa),to_jsonb(v_t));
+    UPDATE public.magazie_bucati SET executie_teava_id=v_dupa.executie_teava_id,
+      server_ver=v_dupa.server_ver,updated_at=v_dupa.updated_at WHERE id=v_b.id;
+    UPDATE public.executie_tevi SET serie_unica=v_t.serie_unica,sarja=v_t.sarja,lot=v_t.lot,
+      lungime_m=v_t.lungime_m,lungime_originala_m=v_t.lungime_originala_m,
+      tip=v_t.tip,dimensiune=v_t.dimensiune,unghi_curba=v_t.unghi_curba,updated_at=v_now WHERE id=p_teava;
+    UPDATE public.executie_pachete_lansare SET updated_at=v_now WHERE id=(v_p->>'id')::bigint;
+    PERFORM public.fn_izo_montaj_marcheaza(NULL,NULL,NULL,NULL);
+    RETURN jsonb_build_object('cod',CASE WHEN p_bucata IS NULL THEN 'dezlegat' ELSE 'legat' END,'pachet_updated_at',v_now);
+  END $f$;
+
+  CREATE FUNCTION public.fn_izo_pachet_leaga(p_teava bigint,p_bucata bigint,p_updated_at timestamptz) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+  BEGIN
+    IF p_bucata IS NULL THEN RAISE EXCEPTION 'bucata_lipsa'; END IF;
+    RETURN public.fn_izo_flux_pachet_legatura(p_teava,p_bucata,p_updated_at,NULL);
+  END $f$;
+  CREATE FUNCTION public.fn_izo_pachet_dezleaga(p_teava bigint,p_motiv text) RETURNS jsonb
+    LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT public.fn_izo_flux_pachet_legatura(p_teava,NULL,NULL,p_motiv)
+  $f$;
+
+  -- E4b owns the approved weld graph and the operation journal. Until present, never infer a chain from weld numbers.
+  CREATE FUNCTION public.fn_izo_flux_pachet_completeaza(p_cheie uuid,p_pachet bigint,p_updated_at timestamptz,p_sudura_de text,p_sudura_pana text)
+    RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_lock jsonb;
+  BEGIN
+    IF p_cheie IS NULL OR p_updated_at IS NULL OR nullif(btrim(p_sudura_de),'') IS NULL OR nullif(btrim(p_sudura_pana),'') IS NULL THEN
+      RAISE EXCEPTION 'parametri_invalizi'; END IF;
+    v_lock:=public.fn_izo_flux_pachet_lock(NULL,p_pachet,p_updated_at);
+    PERFORM public.fn_izo_flux_pachet_editabil(v_lock->'pachet');
+    RAISE EXCEPTION 'completare_necesita_E4b_suduri_capete_jurnal';
+  END $f$;
+  CREATE FUNCTION public.fn_izo_pachet_completeaza(p_cheie uuid,p_pachet bigint,p_updated_at timestamptz,p_sudura_de text,p_sudura_pana text)
+    RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
+    SELECT public.fn_izo_flux_pachet_completeaza(p_cheie,p_pachet,p_updated_at,p_sudura_de,p_sudura_pana)
+  $f$;
+
+  REVOKE ALL ON FUNCTION public.fn_izo_flux_pachet_lock(bigint,bigint,timestamptz),public.fn_izo_flux_pachet_editabil(jsonb),
+    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text),
+    public.fn_izo_flux_pachet_completeaza(uuid,bigint,timestamptz,text,text),public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),
+    public.fn_izo_pachet_dezleaga(bigint,text),public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text) FROM PUBLIC,anon,authenticated,service_role;
+  GRANT EXECUTE ON FUNCTION public.fn_izo_flux_pachet_lock(bigint,bigint,timestamptz),public.fn_izo_flux_pachet_editabil(jsonb),
+    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text),
+    public.fn_izo_flux_pachet_completeaza(uuid,bigint,timestamptz,text,text) TO izo_montaj_writer;
+  GRANT SELECT ON public.magazie_bucati,public.executie_tevi,public.executie_pachete_lansare TO izo_montaj_writer;
+  GRANT UPDATE(executie_teava_id,server_ver,updated_at) ON public.magazie_bucati TO izo_montaj_writer;
+  GRANT UPDATE(serie_unica,sarja,lot,lungime_m,lungime_originala_m,tip,dimensiune,unghi_curba,updated_at) ON public.executie_tevi TO izo_montaj_writer;
+  GRANT UPDATE(updated_at) ON public.executie_pachete_lansare TO izo_montaj_writer;
+  GRANT EXECUTE ON FUNCTION public.fn_izo_garda_scriitor(),public.fn_izo_nivel(bigint),public.fn_izo_tip_cod(integer) TO izo_montaj_writer;
+  CREATE POLICY magbuc_izo_montaj_sel ON public.magazie_bucati FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+  CREATE POLICY magbuc_izo_montaj_upd ON public.magazie_bucati FOR UPDATE TO izo_montaj_writer USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+  CREATE POLICY executie_tevi_izo_montaj_sel ON public.executie_tevi FOR SELECT TO izo_montaj_writer USING (pachet_id IS NOT NULL);
+  CREATE POLICY executie_tevi_izo_montaj_upd ON public.executie_tevi FOR UPDATE TO izo_montaj_writer USING (pachet_id IS NOT NULL) WITH CHECK (pachet_id IS NOT NULL);
+  CREATE POLICY executie_pachete_izo_montaj_sel ON public.executie_pachete_lansare FOR SELECT TO izo_montaj_writer USING (proiect_id IS NOT NULL);
+  CREATE POLICY executie_pachete_izo_montaj_upd ON public.executie_pachete_lansare FOR UPDATE TO izo_montaj_writer USING (proiect_id IS NOT NULL) WITH CHECK (proiect_id IS NOT NULL);
+  GRANT CREATE ON SCHEMA public TO izo_montaj_writer;
+  ALTER FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz) OWNER TO izo_montaj_writer;
+  ALTER FUNCTION public.fn_izo_pachet_dezleaga(bigint,text) OWNER TO izo_montaj_writer;
+  ALTER FUNCTION public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text) OWNER TO izo_montaj_writer;
+  REVOKE CREATE ON SCHEMA public FROM izo_montaj_writer;
+  SET LOCAL ROLE izo_montaj_writer;
+  GRANT EXECUTE ON FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),public.fn_izo_pachet_dezleaga(bigint,text),
+    public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text) TO authenticated;
+  RESET ROLE;
+
+
   CREATE FUNCTION public.fn_izo_porti_e4_definitii() RETURNS text
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
     SELECT md5(concat_ws('|',
       (SELECT string_agg(format('%s:%s:%s:%s:%s:%s',p.oid::regprocedure,p.proowner,p.prosecdef,p.proconfig,p.proacl,md5(p.prosrc)),',' ORDER BY p.oid::regprocedure::text)
-        FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND (p.proname LIKE 'fn_izo_flux_%' OR p.proname IN ('fn_izo_seteaza_flux','fn_izo_pachet_aprobare_transgaz','fn_izo_porti_e4_definitii','fn_izo_porti_e4_lipsa'))),
+        FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND (p.proname LIKE 'fn_izo_flux_%' OR p.proname LIKE 'fn_izo_pachet_%' OR p.proname IN ('fn_izo_montaj_marcheaza','fn_izo_garda_montaj','fn_izo_seteaza_flux','fn_izo_porti_e4_definitii','fn_izo_porti_e4_lipsa'))),
       (SELECT string_agg(format('%s:%s:%s:%s',g.tgrelid::regclass,pg_get_triggerdef(g.oid),g.tgenabled,md5(p.prosrc)),',' ORDER BY g.tgrelid::regclass::text,g.tgname)
         FROM pg_trigger g JOIN pg_proc p ON p.oid=g.tgfoid WHERE NOT g.tgisinternal AND g.tgrelid IN
           ('public.executie_tevi'::regclass,'public.executie_pachete_lansare'::regclass,'public.executie_pachete_documente'::regclass,'public.executie_tronsoane'::regclass,'public.izo_tronson_config'::regclass,'storage.objects'::regclass)),

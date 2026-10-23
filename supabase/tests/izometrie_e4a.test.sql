@@ -43,7 +43,7 @@ SELECT public.fn_izo_seteaza_flux(19,true,'fixture flux E4a');
 -- Administrative server insert, exact projection and transaction context.
 SELECT set_config('izo.montaj_ctx',txid_current()::text || '|completeaza|9100',true);
 SELECT set_config('izo.montaj_rand_asteptat',to_jsonb(jsonb_populate_record(NULL::public.executie_tevi,
-  '{"id":9200,"pachet_id":9100,"serie_unica":"FLOW","lungime_m":12,"tip_rand":"teava"}'::jsonb))::text,true);
+  '{"id":9200,"pachet_id":9100,"serie_unica":"FLOW","lungime_m":12,"tip_rand":"teava"}'::jsonb || jsonb_build_object('updated_at',now())))::text,true);
 INSERT INTO public.executie_tevi(id,pachet_id,serie_unica,lungime_m,tip_rand) VALUES(9200,9100,'FLOW',12,'teava');
 SELECT set_config('izo.montaj_ctx','',true);
 SELECT set_config('izo.montaj_rand_asteptat','',true);

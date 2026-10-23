@@ -466,10 +466,130 @@ BEGIN
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_porti_lipsa()'::regprocedure) IS DISTINCT FROM 'adc6d91bfa725a057257f5248709384b' THEN
     RAISE EXCEPTION 'E4a restore body differs'; END IF;
   DROP FUNCTION public.fn_izo_porti_e4_lipsa(),public.fn_izo_porti_e4_definitii();
+    CREATE OR REPLACE FUNCTION public.fn_izo_garda_bucati() RETURNS trigger
+    LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE
+    v_old boolean := false;
+    v_new boolean := false;
+    v_p bigint;
+    v_aut boolean;
+  BEGIN
+    -- E3 (20261103b): predicatul de autorizare, calculat o singură dată — scriitorul E2a cu marcaj SAU scriitorul E3 în
+    -- contextul operației (true sau excepție); fără RETURN timpuriu: verificările E2a de mai jos se aplică tuturor
+    v_aut := public.fn_izo_garda_scriitor();
+    IF v_aut IS NOT TRUE AND current_user = 'izo_receptie_writer' THEN
+      v_aut := public.fn_izo_garda_receptie(TG_TABLE_NAME, TG_OP, CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+                                            CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    IF v_aut IS NOT TRUE AND current_user = 'izo_corectie_writer' THEN
+      v_aut := public.fn_izo_garda_corectie(TG_TABLE_NAME, TG_OP,
+        CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END, CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    -- (1) rândurile registrului sunt protejate PERMANENT: refuz imediat, fără lock (altfel un UPDATE al clientului, care
+    --     ține deja rândul, ar aștepta lock-ul advisory al unui storno care așteaptă rândul → blocaj circular)
+    IF ((TG_OP <> 'INSERT' AND OLD.tip_cod IS NOT NULL) OR (TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL))
+       AND v_aut IS NOT TRUE THEN
+      RAISE EXCEPTION 'izo: bucățile beneficiar ale unui proiect cu registru (nivel ≠ off) se scriu doar prin funcțiile registrului'
+        USING ERRCODE = '42501';
+    END IF;
+    -- (2) beneficiar în afara registrului: lock PARTAJAT pe proiectele OLD/NEW (crescător; cere READ COMMITTED — sub
+    --     REPEATABLE READ o activare comisă între timp n-ar fi văzută), apoi nivelul, citit cu snapshot nou
+    IF (TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar') OR (TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar') THEN
+      IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'izo: scrierile care ating registrul cer READ COMMITTED (acum %)', current_setting('transaction_isolation')
+          USING ERRCODE = '25001';
+      END IF;
+      FOR v_p IN SELECT DISTINCT x FROM unnest(ARRAY[CASE WHEN TG_OP <> 'INSERT' AND OLD.provenienta = 'beneficiar' THEN OLD.proiect_id END,
+                                                       CASE WHEN TG_OP <> 'DELETE' AND NEW.provenienta = 'beneficiar' THEN NEW.proiect_id END]) x
+                  WHERE x IS NOT NULL ORDER BY 1 LOOP
+        PERFORM pg_advisory_xact_lock_shared(73010, v_p::integer);
+      END LOOP;
+    END IF;
+    IF TG_OP <> 'INSERT' AND (OLD.tip_cod IS NOT NULL OR OLD.provenienta = 'beneficiar') THEN
+      v_old := OLD.tip_cod IS NOT NULL OR public.fn_izo_nivel(OLD.proiect_id) <> 'off';
+    END IF;
+    IF TG_OP <> 'DELETE' AND (NEW.tip_cod IS NOT NULL OR NEW.provenienta = 'beneficiar') THEN
+      v_new := NEW.tip_cod IS NOT NULL OR public.fn_izo_nivel(NEW.proiect_id) <> 'off';
+    END IF;
+    IF v_old OR v_new THEN
+      IF v_aut IS NOT TRUE THEN
+        RAISE EXCEPTION 'izo: bucățile beneficiar ale unui proiect cu registru (nivel ≠ off) se scriu doar prin funcțiile registrului'
+          USING ERRCODE = '42501';
+      END IF;
+      IF TG_OP <> 'DELETE' AND NEW.stare IN ('rezervata','consumata') THEN
+        RAISE EXCEPTION 'izo: starea % e interzisă pe bucățile registrului (rezervările stau în izo_rezervari; consumul = montata/taiata)', NEW.stare
+          USING ERRCODE = '23514';
+      END IF;
+      IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'izo: bucățile registrului nu se șterg (anulare = storno)' USING ERRCODE = '42501';
+      END IF;
+      -- un rând de registru nu stă niciodată pe un proiect off (nici scris de writer) — review #806 A
+      IF TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL AND public.fn_izo_nivel(NEW.proiect_id) = 'off' THEN
+        RAISE EXCEPTION 'izo: rândurile registrului cer proiect cu nivel ≠ off (proiectul %)', NEW.proiect_id USING ERRCODE = '42501';
+      END IF;
+    END IF;
+    -- tip_cod e copie controlată de server: trebuie să bată cu tip_material_id
+    IF TG_OP <> 'DELETE' AND NEW.tip_cod IS NOT NULL AND NEW.tip_cod IS DISTINCT FROM public.fn_izo_tip_cod(NEW.tip_material_id) THEN
+      RAISE EXCEPTION 'izo: tip_cod % nu bate cu tip_material_id %', NEW.tip_cod, NEW.tip_material_id USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+  END $f$;
+    CREATE OR REPLACE FUNCTION public.fn_izo_garda_fapte() RETURNS trigger
+    LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $f$
+  DECLARE v_aut boolean;
+  BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+      RAISE EXCEPTION 'izo: TRUNCATE pe % e refuzat (registru doar-adaug)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+      RAISE EXCEPTION 'izo: DELETE pe % e refuzat (registru doar-adaug; anulare = storno)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'UPDATE' AND TG_TABLE_NAME IN ('magazie_bucati_evenimente','magazie_bucati_miscari') THEN
+      RAISE EXCEPTION 'izo: UPDATE pe % e refuzat (registru doar-adaug)', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    -- E3 (20261103b): predicatul de autorizare, calculat o singură dată — scriitorul E2a cu marcaj SAU scriitorul E3 în
+    -- contextul operației (true sau excepție); fără RETURN timpuriu: verificările E2a de mai jos se aplică tuturor
+    v_aut := public.fn_izo_garda_scriitor();
+    IF v_aut IS NOT TRUE AND current_user = 'izo_receptie_writer' THEN
+      v_aut := public.fn_izo_garda_receptie(TG_TABLE_NAME, TG_OP, CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,
+                                            to_jsonb(NEW));
+    END IF;
+    IF v_aut IS NOT TRUE AND current_user = 'izo_corectie_writer' THEN
+      v_aut := public.fn_izo_garda_corectie(TG_TABLE_NAME, TG_OP,
+        CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END, CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);
+    END IF;
+    IF v_aut IS NOT TRUE THEN
+      RAISE EXCEPTION 'izo: % se scrie doar prin funcțiile registrului', TG_TABLE_NAME USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END $f$;
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_bucati()'::regprocedure) IS DISTINCT FROM 'ab8d39ce47eda8cf1045437b4c0022ef'
+    OR (SELECT md5(prosrc) FROM pg_proc WHERE oid='public.fn_izo_garda_fapte()'::regprocedure) IS DISTINCT FROM 'ed4132b394371a813c40f5cf0025c144' THEN
+    RAISE EXCEPTION 'E4a restore registry guards differ'; END IF;
+  DROP POLICY magbuc_izo_montaj_sel ON public.magazie_bucati;
+  DROP POLICY magbuc_izo_montaj_upd ON public.magazie_bucati;
+  DROP POLICY executie_tevi_izo_montaj_sel ON public.executie_tevi;
+  DROP POLICY executie_tevi_izo_montaj_upd ON public.executie_tevi;
+  DROP POLICY executie_pachete_izo_montaj_sel ON public.executie_pachete_lansare;
+  DROP POLICY executie_pachete_izo_montaj_upd ON public.executie_pachete_lansare;
+  DROP INDEX public.ux_magbuc_izo_teava;
   SET LOCAL ROLE izo_montaj_writer;
+  DROP FUNCTION public.fn_izo_montaj_marcheaza(text,jsonb,jsonb,jsonb);
+  DROP FUNCTION public.fn_izo_pachet_leaga(bigint,bigint,timestamptz),public.fn_izo_pachet_dezleaga(bigint,text),
+    public.fn_izo_pachet_completeaza(uuid,bigint,timestamptz,text,text);
   DROP FUNCTION public.fn_izo_seteaza_flux(bigint,boolean,text);
   DROP FUNCTION public.fn_izo_pachet_aprobare_transgaz(bigint,timestamptz,text);
   RESET ROLE;
+  DROP FUNCTION public.fn_izo_garda_montaj(text,text,jsonb,jsonb);
+  DROP FUNCTION public.fn_izo_flux_pachet_lock(bigint,bigint,timestamptz),public.fn_izo_flux_pachet_editabil(jsonb),
+    public.fn_izo_flux_pachet_identitate(public.magazie_bucati),public.fn_izo_flux_pachet_legatura(bigint,bigint,timestamptz,text),
+    public.fn_izo_flux_pachet_completeaza(uuid,bigint,timestamptz,text,text);
+  REVOKE ALL ON public.magazie_bucati,public.executie_tevi,public.executie_pachete_lansare FROM izo_montaj_writer;
+  REVOKE UPDATE(executie_teava_id,server_ver,updated_at) ON public.magazie_bucati FROM izo_montaj_writer;
+  REVOKE UPDATE(serie_unica,sarja,lot,lungime_m,lungime_originala_m,tip,dimensiune,unghi_curba,updated_at) ON public.executie_tevi FROM izo_montaj_writer;
+  REVOKE UPDATE(updated_at) ON public.executie_pachete_lansare FROM izo_montaj_writer;
+  REVOKE ALL ON FUNCTION public.fn_izo_garda_scriitor(),public.fn_izo_nivel(bigint),public.fn_izo_tip_cod(integer) FROM izo_montaj_writer;
   DROP FUNCTION public.fn_izo_flux_aprobare_admin(bigint,timestamptz,text);
   DROP FUNCTION public.fn_izo_flux_admin(bigint,boolean,text),public.fn_izo_flux_config_garda(),public.fn_izo_flux_garda(),
     public.fn_izo_flux_pachet_dupa(),public.fn_izo_flux_storage();

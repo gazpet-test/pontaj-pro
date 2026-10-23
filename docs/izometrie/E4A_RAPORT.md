@@ -3,3 +3,24 @@ E4a-1: generator/template-uri `scripts/izometrie/e4_gen/`; migrare generată `20
 Interpretări/limite: Transgaz doar administrativ până la autorizarea modulului; varianta minimă verifică legătura/seria/lungimea, oferă cale PDF + CAS; refuză `legare` până la verificatorul E4b. Proiecția completă și cascadele E4b rămân de implementat/revizuit; rollback refuză orice config existent.
 Harness: `scripts/test_izometrie_e4a.sh`, wrapper `e4_gen/harness_wsl.sh`, fixture + `supabase/tests/izometrie_e4a.test.sql`; porturi 6400+slot, cluster/loguri în worktree, secvență net cu USAGE PUBLIC, lanț prin runner, control_0e, reaplicare/rollback/E3b rollback.
 Verificat: generator executat și 4 teste offline Python PASS. SQL/harness PG16, curse, PostgREST și PG17 NERULATE (instrucțiunea interzice BD); fără rețea/git/secrete/deploy, fără modul nou sau modificări LIVE. Livrarea necesită validare SQL și completarea limitelor de mai sus înainte de utilizare.
+
+E4a-2 — PARȚIAL: leaga/dezleaga, lock-uri §7.3, CAS, identitate din registru, antet/rând timestamp, index unic; fără acces/modul/date reale modificate.
+SQL: doar template-uri/gen_e4a.py + regenerare 20261109a/rollback; gardă exactă OLD/NEW, API wrappers fără setters, ACL, preflight și reștampilare; inventarul implicit rămâne 8 (nicio invocare implicită nouă).
+Teste rulate: 5 Python + 4 Node PASS; SQL pozitiv legare/dezlegare și refuzuri adăugate în izometrie_e4a_pachet.test.sql, runner cu E4A2_PACHET_END; PG/curse/PostgREST/control_0e NERULATE (BD interzisă), build/vitest NERULATE (node_modules absent).
+UI: src/Izometrie.jsx linia 27, 619–621, 636–770, 912–931, 1484–1495; helper src/lib/izoRegistru.js:71; montata/nelegate + RPC pe flux, cale text păstrată pe non-flux, selecție anulată la schimbarea pachetului.
+NEFINALIZAT §7.1/7.2: completeaza validează intrarea/CAS, apoi refuză explicit — baza nu conține izo_suduri/izo_suduri_capete/izo_operatii; fără completare pozitivă, verificator legare/cuplat, jurnalizare motiv sau proiecția sudurii aval. NU este livrare completă E4a-2.
+E4a-2b: integrare §10.3 în v_aut pentru ambele gărzi, fără RETURN timpuriu; context exact și marker privat deținut de izo_montaj_writer.
+Generator: corpuri LIVE + un termen, precondiții md5 pentru ambele gărzi; rollback exact cu verificare md5; inventar implicit 8 și reștampilare §17.4 păstrate.
+Legare/dezlegare: proiecția așteptată și UPDATE folosesc aceleași valori tipizate; context legat de tx/op/pachet/proiect/tronson/server_ver/bucată, șters după operație.
+Teste: gen_e4a.py executat, test_gen_e4a.py 8 PASS; regresii SQL adăugate pentru UPDATE client, GUC fals, writer fără context/tx greșit/proiecție schimbată și păstrarea datelor la legare/dezlegare.
+Limite: PG16, SQL/control_0e, PostgREST și curse NERULATE (BD interzisă); cauza exactă a refuzului inițial rămâne de confirmat în harness; completeaza refuză în continuare până la E4b; fără git/secrete/BD/deploy.
+E4a-2c: cauza din cod este un fals pozitiv al testului: RLS magbuc_izo_client_upd exclude bucata beneficiar la nivel stoc; UPDATE 0 nu execută garda pe rând și nu scrie legătura.
+Nu există excepție executie_teava_id în garda LIVE; termenul E4a-2b cere current_user=izo_montaj_writer. Fără relaxarea RLS/autorizării și fără schimbări SQL speculative.
+Reparație în izometrie_e4a_pachet.test.sql: ROW_COUNT=0 sau 42501, fixture vizibil STRICT pe flow, imagine completă neschimbată; regresii client legare/GUC fals/dezlegare/relegare și picker text non-flow cu UPDATE RETURNING STRICT.
+Verificat: gen_e4a.py executat; test_gen_e4a.py 10 PASS; test_picker.mjs 4 PASS; migrare/rollback regenerate identic bazei, md5/restaurare exactă/inventar 8/reștampilare §17.4 păstrate.
+Limite: PG16/harness SQL/control_0e/PostgREST/curse NERULATE (BD interzisă); explicația RLS este dedusă din politici și fixture, nu măsurată aici; fără Git/secrete/BD/deploy.
+E4a-2d: nepotrivirea exact? este la serie_canon/lungime_cm, GENERATED ALWAYS STORED: snapshot-ul SELECT are E4A21/1200, dar NEW din BEFORE UPDATE are NULL; e?uau imaginea dup? ?i invariantul coloanelor nemodificabile.
+Fix ?n e4a_montaj_tpl.sql: cere NULL explicit pentru cele dou? c?mpuri din BEFORE, apoi reconstruie?te numai valorile derivate din OLD pentru compara?iile complete; serie/lungime_mm, OLD, updated_at, server_ver ?i toate cele 7 coordonate r?m?n verificate.
+Generator rulat; migrare regenerat?, rollback exact LIVE + md5, inventar implicit 8 ?i re?tampilare ?17.4 p?strate; markerul privat ?i ACL-urile nu sunt schimbate.
+Verificat local: test_gen_e4a.py ? 11 PASS; regresii SQL p?strate/extinse pentru proiec?ia BEFORE, context fals/stale, stamps, toate sursele nemodificabile ?i a doua legare/dezlegare ?n aceea?i tranzac?ie, cu cur??area normal? din RPC.
+Limite: PG16/harness SQL/control_0e/PostgREST/curse NERULATE ? cauza dedus? din schema ?i g?rzile LIVE, f?r? prob? BD; f?r? Git, creden?iale, BD sau deploy; scrieri exclusiv ?n worktree.
