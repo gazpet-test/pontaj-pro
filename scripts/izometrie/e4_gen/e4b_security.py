@@ -103,6 +103,8 @@ for table in extra_read:
         name='e4b_'+table+'_'+role+'_sel'
         idcol = 'tronson_id' if table=='izo_tronson_config' else 'id'
         matrix_acl.append(f'CREATE POLICY {name} ON public.{table} FOR SELECT TO {role} USING ({idcol} IS NOT NULL);')
+# CREATE TRIGGER cere EXECUTE pe funcție; pe prod postgres nu e superuser, iar funcția e a writer-ului (modul prodlike).
+matrix_acl += ['SET LOCAL ROLE izo_montaj_writer;','GRANT EXECUTE ON FUNCTION public.fn_izo_suduri_garda() TO postgres;','RESET ROLE;']
 for table in ('izo_suduri','izo_suduri_capete'):
     matrix_acl += [f'CREATE TRIGGER a0_izo_suduri_proiectie BEFORE INSERT OR UPDATE ON public.{table} FOR EACH ROW EXECUTE FUNCTION public.fn_izo_suduri_garda();',
                    f'ALTER TABLE public.{table} ENABLE ALWAYS TRIGGER a0_izo_suduri_proiectie;']

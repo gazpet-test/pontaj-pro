@@ -592,11 +592,11 @@ BEGIN
  SELECT array_agg(d.id ORDER BY d.id DESC) INTO v_ids FROM public.izo_declaratii d WHERE d.uid IN
   (current_setting('test.e4bc.d1')::uuid,current_setting('test.e4bc.d2')::uuid,current_setting('test.e4bc.d3')::uuid,current_setting('test.e4bc.d4')::uuid);
  SELECT count(*) INTO v_n FROM public.magazie_bucati_evenimente;
- v_plan:=public.fn_izo_lot_efecte(v_ids);
+ SET LOCAL ROLE izo_montaj_writer; v_plan:=public.fn_izo_lot_efecte(v_ids); RESET ROLE;
  IF jsonb_array_length(v_plan->'ordine')<>4 OR (SELECT count(*) FROM public.magazie_bucati_evenimente)<>v_n THEN RAISE EXCEPTION '2c read-only topology'; END IF;
  BEGIN
   UPDATE public.izo_suduri_capete SET activ=false WHERE sudura_id=(SELECT id FROM public.izo_suduri WHERE nr=501 AND tronson_id=19) AND parte='aval';
-  PERFORM public.fn_izo_lot_efecte(v_ids); RAISE EXCEPTION '2c single cap accepted';
+  SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_lot_efecte(v_ids); RESET ROLE; RAISE EXCEPTION '2c single cap accepted';
  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'r4' THEN RAISE; END IF; END;
 END $test$;
 -- E4b-3: execute revision/resave on the real API, then roll back only this probe.
@@ -725,7 +725,7 @@ BEGIN
    AND r.declaratie_versiune=d.versiune AND r.activa AND r.expira_dupa IS NULL)<>2 THEN
   RAISE EXCEPTION '2d submit lost own mounted child reservation';
  END IF;
- PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]);
+ SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RESET ROLE;
  SELECT r.id INTO STRICT v_rid FROM public.izo_rezervari r
   WHERE r.declaratie_id=v_id AND r.bucata_decl_uid IS NOT NULL AND r.activa ORDER BY r.id LIMIT 1;
  -- Each subtransaction rolls back the forced deviation; no grants or guard bypass.
@@ -740,24 +740,24 @@ BEGIN
    END IF;
    GET DIAGNOSTICS v_affected=ROW_COUNT;
    IF v_affected<>1 THEN RAISE EXCEPTION '2d reservation fixture missed row'; END IF;
-   PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RAISE EXCEPTION '2d invalid child reservation accepted';
+   SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RESET ROLE; RAISE EXCEPTION '2d invalid child reservation accepted';
   EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'rezervare_pierduta' THEN RAISE; END IF; END;
  END LOOP;
- PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]);
+ SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RESET ROLE;
  BEGIN
   UPDATE public.izo_bucati_declarate SET destinatie='montaj' WHERE declaratie_id=v_id AND destinatie='ramane_montat';
-  PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RAISE EXCEPTION '2c wrong mounted branch accepted';
+  SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RESET ROLE; RAISE EXCEPTION '2c wrong mounted branch accepted';
  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'ramura_gresita' THEN RAISE; END IF; END;
  SELECT id INTO v_id FROM public.izo_declaratii WHERE uid=current_setting('test.e4bc.t3')::uuid;
- PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]);
+ SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RESET ROLE;
  BEGIN
   UPDATE public.izo_bucati_declarate SET destinatie=CASE WHEN destinatie='depozit' THEN 'ramane_montat' ELSE 'depozit' END,depozit_destinatie_id=9 WHERE declaratie_id=v_id;
-  PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RAISE EXCEPTION '2c free-end branch accepted wrong child';
+  SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_lot_efecte(ARRAY[v_id]); RESET ROLE; RAISE EXCEPTION '2c free-end branch accepted wrong child';
  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'ramura_gresita' THEN RAISE; END IF; END;
  BEGIN
   INSERT INTO public.izo_bucati_declarate(uid,declaratie_id,declaratie_versiune,parinte_bucata_id,radacina_id,lungime_mm,lungime_calculata,capat_stanga,capat_dreapta,cod_bucata,destinatie)
   VALUES(gen_random_uuid(),v_id,1,current_setting('test.e4bc.b4')::bigint,current_setting('test.e4bc.b4')::bigint,111,false,'X','Y','XY','montaj');
-  PERFORM public.fn_izo_corectie_mm((SELECT d.id FROM public.izo_declaratii d WHERE d.uid=current_setting('test.e4bc.t2')::uuid));
+  SET LOCAL ROLE izo_montaj_writer; PERFORM public.fn_izo_corectie_mm((SELECT d.id FROM public.izo_declaratii d WHERE d.uid=current_setting('test.e4bc.t2')::uuid)); RESET ROLE;
   RAISE EXCEPTION '2c tree correction accepted';
  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'corectie_in_arbore' THEN RAISE; END IF; END;
 END $test$;

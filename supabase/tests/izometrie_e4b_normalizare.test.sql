@@ -1,5 +1,7 @@
 -- GENERATED: shared izoSudura.cazuri.json vectors; local harness only.
 BEGIN;
+-- prodlike: postgres nu e superuser; funcția e a writer-ului, se apelează cu rolul lui.
+SET LOCAL ROLE izo_montaj_writer;
 DO $test$
 DECLARE v_c jsonb; v_r jsonb; v_key text; v_value jsonb; v_actual jsonb;
 BEGIN

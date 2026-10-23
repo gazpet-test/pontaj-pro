@@ -55,3 +55,10 @@ Owner: ACL/ALTER forward și DROP rollback executate ca owner; inventar fix pent
 P2/UI/coadă: uid sesiune verifică dispozitiv/zi/stare; amprentă cu polpermissive și ACL/policies existente; motiv minim 3 caractere; operațiile refuzate nu generează capete/copii.
 PASS: gen_e4b.py; test_gen_e4b.py 30 teste; Node birou 15, coadă 23, normalizare 29 vectori, picker 6. SQL adăugat pentru P1 1–3 și uid sesiune.
 NERULATE: harness PG16, API/PostgREST, browser/React și build; restricția fără BD respectată. E4a/20261109a și celelalte fișiere LIVE identice cu baza copiată.
+
+E4b-5b — mod IZO_E4B_PROD_LIKE=1 implicit în harness și WSL; =0 păstrează modul superuser; fără Git/BD/secrete/deploy.
+Bootstrap supabase_admin; postgres NOSUPERUSER CREATEROLE BYPASSRLS LOGIN permanent; proprietari expliciți ai fixture-urilor, default ACL postgres și EXECUTE pg_control_system documentate.
+E3/E4a primesc temporar membership Storage numai pentru pregătire, retras înainte de baseline E4b; probe directe postgres înainte/după apply/rollback: rolsuper=f, writer SET fără INHERIT, ALTER Storage refuzat must-be-owner.
+Apply/reapply prin runner ca postgres (reapply cere cod 11); rollback LIVE neschimbat concatenat cu adaptor local prin același runner, cu înregistrare separată doar în istoricul harness-ului; gate/control_0e/rollback exact păstrate.
+Testele SQL existente folosesc login bootstrap pentru SET SESSION AUTHORIZATION, dar identitatea efectivă și resetările sunt postgres; copii temporare, fără modificarea surselor testelor.
+PASS static: bash -n ambele scripturi; validatorul oficial pe adaptor+rollback; verificare adaptare 1+14 resetări și comparație byte-cu-byte cu baza pentru fișierele protejate. PG16 și testele SQL NERULATE, conform brief-ului.
