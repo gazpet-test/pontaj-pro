@@ -1,4 +1,17 @@
-# E4 — pachetul de pilot pe tabletă (PREVIEW, nimic aplicat)
+# E4 — pachetul de pilot pe tabletă
+
+> **APLICAT 24.10.2026 de chat, cu „da”-ul lui Răzvan pe preview:**
+> - **§2:** cheia `executie.izometrie` + editor:
+>   - `user_module_access` 443 TITI JENO;
+>   - 444 VICIU MARIUS ALEXANDRU;
+>   - 445 TOMA RAZVAN ALIN;
+>   - **446 NICA EUGEN** (emp 81, profil `cb29a12a-b318-40bc-85c0-bb4f5b3bc2d3`, adăugat de Răzvan; NU Nica Florentin, emp 179).
+>
+>   Revenirea: DELETE din `user_module_access` pentru id-urile 443–446, apoi DELETE pe cheie.
+> - **§1:** T15 (id 19) e în flux pentru **etapa 1, repetiția**. Etapa 2 (Toma aprobă, ireversibil) pornește doar la cuvântul lui Răzvan, după repetiție.
+> - **§3:** GPS, varianta B (60 de zile), în implementare.
+>
+> Textul de mai jos e preview-ul original.
 
 Stare la 24.10.2026: E4a (`20261109a`) și E4b (`20261109b`) sunt aplicate pe prod și pe main (#869, #872). Fluxul nu e activ pe niciun tronson. Cheia `executie.izometrie` nu există. Nu există dispozitive și nici coordonate GPS.
 
