@@ -14,7 +14,18 @@ export const reusita = o => !o.abandonata && !o.de_verificat && !['conflict', 'b
 export function sesiuneLocala(s, tronson) {
   const log = toateOperatiile(s).filter(o => o.cerere.payload.tronson_id === tronson && reusita(o))
   const open = log.filter(o => o.cerere.tip_op === 'sesiune_deschide').at(-1)
-  if (!open) return null
+  const server = s?.snapshots?.[tronson]?.sesiuni?.find(x => x.stare === 'deschisa')
+  if (!open && !server) return null
+  if (server && (!open || server.uid !== open.cerere.payload.uid)) {
+    const submit = log.find(o => o.cerere.tip_op === 'sesiune_trimite' && o.cerere.payload.preverificare_uid === server.uid)
+    return { ...server, trimisa: Boolean(submit), confirmata: submit?.stare === 'confirmata' && submit.rezultat?.cod === 'acceptat' }
+  }
+  const snap = s?.snapshots?.[tronson]
+  if (!server && Array.isArray(snap?.sesiuni) && open?.stare === 'confirmata' && (!open.confirmata_la || snap.salvat_la >= open.confirmata_la)) {
+    // Un instantaneu ulterior ACK-ului dovedește că sesiunea nu mai e deschisă
+    // (trimitere sau închidere MP); istoricul local nu o redeschide.
+    return { uid: open.cerere.payload.uid, id: open.rezultat?.sesiune_id, zi: open.cerere.payload.zi, trimisa: true, confirmata: true }
+  }
   const submit = log.find(o => o.cerere.tip_op === 'sesiune_trimite' && o.cerere.payload.preverificare_uid === open.cerere.payload.uid)
   return { uid: open.cerere.payload.uid, id: open.rezultat?.sesiune_id, zi: open.cerere.payload.zi, trimisa: Boolean(submit), confirmata: submit?.stare === 'confirmata' && submit.rezultat?.cod === 'acceptat' }
 }

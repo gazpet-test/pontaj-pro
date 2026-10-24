@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { ziBucuresti } from './lib/izoTeren.js'
+import { frontVechi } from './lib/izoSesiuni.js'
 import { CAS_MESAJ, creeazaControlBirou, eroareBirou, declaratiiLot, cheiDecizii, descendenti, cerereAprobare, cerereDecizie, cerereIesire, cerereFront, cerereTranzitie, executaBirou, citestePagini } from './lib/izoBirou.js'
 
 const G = { bg: '#F4F6F8', card: '#FFFFFF', text: '#152536', muted: '#4A5969', border: '#9BA9B6', blue: '#1259A7', red: '#9C2121', yellow: '#FFF0BA' }
@@ -55,6 +56,31 @@ function Scope({ proiectId, proiecte = [], onProiect, tronsoane = [], tronson, s
   </div>
 }
 
+function SesiuniAbandonate({ proiectId, onSelect }) {
+  const ui = useBirou(proiectId)
+  const [sessions, setSessions] = useState([]), [fronts, setFronts] = useState([]), [motiv, setMotiv] = useState('')
+  const disabled = ui.busy || Boolean(ui.pending)
+  async function refresh(current) {
+    const [s, f] = await Promise.all([
+      citestePagini((from, to) => supabase.from('izo_preverificari').select('*').eq('proiect_id', proiectId).eq('stare', 'deschisa').lt('zi', ziBucuresti()).order('id').range(from, to)),
+      citestePagini((from, to) => supabase.from('izo_fronturi').select('*').eq('proiect_id', proiectId).eq('activ', true).order('id').range(from, to)),
+    ])
+    if (current()) { setSessions(s); setFronts(f) }
+  }
+  useEffect(() => { setSessions([]); setFronts([]); setMotiv(''); if (proiectId) ui.run(refresh) }, [proiectId])
+  const staleFronts = fronts.filter(f => frontVechi(f) || sessions.some(s => s.tronson_id === f.tronson_id))
+  return <div style={S.card}><h3>Sesiuni și fronturi rămase din zile precedente</h3>
+    <Button disabled={disabled} onClick={() => ui.run(refresh)}>Reîncarcă sesiunile abandonate</Button>
+    <p role="status">{ui.mesaj}</p>
+    <p>Eliberarea frontului permite altei tablete să lucreze. Declarațiile rămân: autorul le trimite sau MP-ul le respinge cu motiv după eliberare. Dreptul de gestionar singur nu permite eliberarea.</p>
+    {sessions.map(s => <p key={s.id}>{s.zi} · tronson {s.tronson_id} · sesiunea #{s.id} · autor {s.autor_profile_id} {onSelect && <Button disabled={disabled} onClick={() => onSelect(s)}>Deschide ciornele pentru respingere MP</Button>}</p>)}
+    <Input aria-label="Motiv eliberare front vechi" disabled={disabled} placeholder="Motiv obligatoriu pentru eliberare MP" value={motiv} maxLength={1000} onChange={e => setMotiv(e.target.value)} />
+    {staleFronts.map(f => <p key={f.id}>Tronson {f.tronson_id} · autor {f.profile_id} · expiră {f.expira_la} <Button disabled={disabled || motiv.trim().length < 3} onClick={() => ui.run(current => ui.send(cerereFront(f.tronson_id, motiv), refresh, current))}>Eliberează frontul (MP)</Button></p>)}
+    {ui.pending && <Button disabled={ui.busy} onClick={() => ui.run(current => ui.send(ui.pending, refresh, current))}>Reîncearcă identic eliberarea neconfirmată</Button>}
+    {!sessions.length && !staleFronts.length && <p>Nicio sesiune sau front vechi vizibil.</p>}
+  </div>
+}
+
 export default function IzometrieAprobare(props) {
   const { proiectId } = props
   const ui = useBirou(proiectId)
@@ -82,11 +108,17 @@ export default function IzometrieAprobare(props) {
     const ticket = selection.current
     const { data, error } = await supabase.rpc('fn_izo_aprobare_lot', { p_preverificare: session.id })
     if (error) throw error
+    if (session.stare === 'deschisa') {
+      // Preview-ul LIVE grupează doar sesiunile trimise. Ciornele sunt deja
+      // în proiecția autorizată declaratii_proiect; deciziile RPC le reverifică.
+      data.randuri = (data.declaratii_proiect || []).filter(d => d.preverificare_id === session.id).map(d => ({ declaratie: d }))
+    }
     if (current() && selection.current === ticket) { setPreview(data); ui.setMesaj('Preview încărcat. Verifică simularea și selectează rândurile.') }
   }
   const send = build => ui.run(async current => { const request = build(); await ui.send(request, refresh, current) })
   return <div style={S.page}>
     <h2>Aprobare teren · MP</h2>
+    <SesiuniAbandonate proiectId={proiectId} onSelect={s => ui.run(current => load(s, current))} />
     <Scope {...props} tronson={tronson} setTronson={v => { setTronson(v); clearPreview() }} disabled={disabled} />
     <p>Lotul grupează sesiunile trimise din aceeași zi și același tronson. Nimeni nu își poate aproba propriile declarații; serverul verifică drepturile și dependențele.</p>
     <Button disabled={ui.busy || Boolean(ui.pending)} onClick={() => ui.run(async current => { await refresh(current); if (current()) ui.setMesaj('Lista reîncărcată. Deschide din nou lotul și verifică selecția.') })}>Reîncarcă lista și lotul</Button>
@@ -153,6 +185,7 @@ export function IzometrieGestionar(props) {
   const available = bucati.filter(b => String(b.depozit_id) === depozit && ['sosit', 'receptionat', 'retur'].includes(b.stare))
   const send = build => ui.run(async current => { const request = build(); await ui.send(request, refresh, current) })
   return <div style={S.page}><h2>Gestionar · depozit</h2>
+    <SesiuniAbandonate proiectId={proiectId} />
     <Scope {...props} tronson={tronson} setTronson={v => { setTronson(v); setIds([]) }} disabled={disabled} />
     <p role="status" aria-live="polite">{ui.mesaj}</p>
     {ui.pending && <div style={S.card}>Răspuns neconfirmat. <Button disabled={ui.busy} onClick={() => ui.run(current => ui.send(ui.pending, refresh, current))}>Reîncearcă aceeași operație</Button></div>}

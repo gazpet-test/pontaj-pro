@@ -1,3 +1,4 @@
+import { abandoneazaCiorneLocale } from './izoSesiuni.js'
 // E4: reducer pur + adaptoare IO. Cererea trimisă nu se modifică la retry.
 const copie = x => structuredClone(x)
 export const uuid = () => globalThis.crypto.randomUUID()
@@ -36,7 +37,7 @@ export function aplicaRaspuns(stare, lot, raspuns) {
       if (oprire.has(ack?.cod)) s.pauza = ack.cod
       continue
     }
-    s.arhiva.push({ ...op, stare: 'confirmata', rezultat: copie(ack), ack: copie(r), de_verificat: ack.cod !== 'acceptat' || ['conflict', 'blocata'].includes(ack.stare) })
+    s.arhiva.push({ ...op, stare: 'confirmata', confirmata_la: new Date().toISOString(), rezultat: copie(ack), ack: copie(r), de_verificat: ack.cod !== 'acceptat' || ['conflict', 'blocata'].includes(ack.stare) })
     s.ops = s.ops.filter(x => x.cerere.op_id !== req.op_id)
   }
   return s
@@ -104,6 +105,7 @@ export function creeazaCoada({ storage, rpc, refresh = async () => {}, id = uuid
     durabil: storage.durabil,
     citeste: () => exclusiv((s, existing) => existing ? copie(s) : salveaza(s)),
     adauga: cereri => exclusiv(s => salveaza(adaugaOperatii(s, cereri, id))),
+    abandoneazaCiorne: uid => exclusiv(s => salveaza(abandoneazaCiorneLocale(s, uid))),
     local: (key, value) => exclusiv(s => { s.local[key] = copie(value); return salveaza(s) }),
     reincearca: opId => exclusiv(s => {
       const o = s.ops.find(x => x.cerere.op_id === opId)

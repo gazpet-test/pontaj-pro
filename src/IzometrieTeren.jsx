@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { creeazaCoada, stocareBrowser, uuid } from './lib/izoCoada.js'
+import { coziDeschise } from './lib/izoLogout.js'
+import { sesiuneVeche } from './lib/izoSesiuni.js'
 import { ziBucuresti, toateOperatiile, sesiuneLocala, randuriSesiune, codSudura, construiesteDeclaratii, capeteLocale, copiiLocali, propunereSudura, reusita, mesajConflict, poateCorecta, declaratieNecunoscuta, corecteazaDeclaratie } from './lib/izoTeren.js'
 
 const G = { bg: '#F4F6F8', card: '#FFFFFF', text: '#152536', muted: '#4A5969', border: '#9BA9B6', blue: '#1259A7', red: '#9C2121', yellow: '#FFF0BA' }
@@ -11,7 +13,7 @@ const S = {
   btn: { minHeight: 56, padding: '12px 20px', borderRadius: 8, border: `1px solid ${G.border}`, background: G.blue, color: 'white', fontSize: 18, cursor: 'pointer' },
   row: { display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end' },
 }
-const caches = new Map()
+const caches = coziDeschise
 const gps = () => new Promise(resolve => {
   if (!navigator.geolocation) return resolve(null)
   navigator.geolocation.getCurrentPosition(p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, precizie_m: p.coords.accuracy, la: new Date(p.timestamp).toISOString() }), () => resolve(null), { timeout: 2500, maximumAge: 0 })
@@ -75,6 +77,8 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
   const activ = useRef(false)
   const retryDelai = useRef(1500)
   const [catalog, setCatalog] = useState([])
+  const [azi, setAzi] = useState(ziBucuresti())
+  useEffect(() => { const timer = setInterval(() => setAzi(ziBucuresti()), 30000); return () => clearInterval(timer) }, [])
 
   useEffect(() => {
     let mounted = true
@@ -94,7 +98,13 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
       return creeazaCoada({ storage, rpc: async (n, a) => {
         const { data } = await supabase.auth.getSession()
         if (data.session?.user.id !== profile) throw Error('Profil schimbat; sincronizarea a fost oprită')
-        return supabase.rpc(n, a)
+        const result = await supabase.rpc(n, a)
+        if (!result.error && result.data?.snapshot_id) {
+          const { data: sessions, error } = await supabase.from('izo_preverificari').select('id,uid,zi,stare,tronson_id,dispozitiv_id').eq('proiect_id', proiectId).eq('tronson_id', a.p_tronson).eq('autor_profile_id', profile).eq('stare', 'deschisa').order('id')
+          if (error) throw error
+          result.data.sesiuni = sessions
+        }
+        return result
       }, refresh: async () => {
         const { data: current } = await supabase.auth.getSession()
         if (current.session?.user.id !== profile) throw Error('Profil schimbat; coada rămâne la autorul ei')
@@ -175,11 +185,12 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
   }, [])
   useEffect(() => {
     if (!writer || !online || busy || !q || !stare?.ops.length || stare.pauza || stare.ops[0].de_verificat) return
+    if (sesiuneVeche(sesiuneLocala(stare, stare.ops[0].cerere.payload.tronson_id), azi)) return
     // Backoff pentru refuzuri nefinale; fără buclă rapidă peste limita serverului.
     const delay = Math.max(retryDelai.current, stare.ops.some(o => o.stare === 'trimisa') ? 15000 : 1500)
     const timer = setTimeout(synchronise, delay)
     return () => clearTimeout(timer)
-  }, [online, busy, q, stare, writer])
+  }, [online, busy, q, stare, writer, azi])
   useEffect(() => {
     const protect = e => { if (stare?.ops.length || (!q?.durabil && stare?.arhiva.length)) { e.preventDefault(); e.returnValue = '' } }
     window.addEventListener('beforeunload', protect)
@@ -188,6 +199,7 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
 
   const snapshot = stare?.snapshots[tronsonId]
   const sesiune = sesiuneLocala(stare, tronsonId)
+  const veche = sesiuneVeche(sesiune, azi)
   const tronson = catalog.find(t => t.id === tronsonId)
   const log = toateOperatiile(stare).filter(o => o.cerere.payload.tronson_id === tronsonId)
   const ultimele = new Map()
@@ -207,6 +219,7 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
   async function salveaza() {
     await action(async () => {
       if (!sesiune || sesiune.trimisa) throw Error('Deschide o sesiune')
+      if (sesiuneVeche(sesiune)) throw Error('Rezolvă sesiunea zilei precedente înainte de alte declarații')
       if (!snapshot) throw Error('Pregătește tronsonul cu semnal înainte de lucru')
       if (necunoscuta && tip === 'montaj') {
         const c = declaratieNecunoscuta({ proiect_id: proiectId, tronson_id: tronsonId, preverificare_uid: sesiune.uid, data_montaj: sesiune.zi }, serie, mmNecunoscut, confirmata)
@@ -249,6 +262,13 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
     {(!q?.durabil || !persistenta) && <p role="status" style={{ ...S.card, background: G.yellow }}>Stocarea {q?.durabil ? 'persistentă nu este garantată' : 'este doar în memorie; datele se pierd la închidere'}. Exportă coada de siguranță.</p>}
     <p style={{ color: G.muted }}>Pregătește cu semnal. Poți continua când cade rețeaua, cât aplicația este deschisă. Repornirea fără rețea vine în E6.</p>
     {mesaj && <p role="status" style={S.card}>{mesaj}</p>}
+    {veche && <div role="alert" style={{ ...S.card, background: G.yellow }}>
+      <strong>Sesiune rămasă deschisă din {sesiune.zi}</strong>
+      <p>Pregătește tronsonul cu semnal, apoi trimite sesiunea la MP folosind butonul de jos. Poți abandona doar ciornele care nu au plecat de pe tabletă. Declarațiile de pe server rămân și se trimit sau se resping de MP după eliberarea frontului.</p>
+      <button style={S.btn} disabled={busy || !writer} onClick={() => {
+        if (window.confirm('Abandonezi ciornele acestei sesiuni care nu au plecat? Declarațiile de pe server rămân. Exportă înainte dacă ai nevoie de o copie.')) action(() => q.abandoneazaCiorne(sesiune.uid))
+      }}>Abandonează ciornele netrimise</button>
+    </div>}
     {stare?.pauza && <p role="alert" style={{ color: G.red }}>{stare.pauza === 'alt_dispozitiv' ? 'Tronsonul este luat de altă tabletă — decide MP-ul.' : `Sincronizare oprită: ${stare.pauza}`}</p>}
     <fieldset disabled={busy || !writer} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <div style={{ ...S.card, ...S.row }}>
@@ -267,7 +287,7 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
       })}>Deschide sesiune</button>
       <span>{sesiune ? `${sesiune.zi} · ${sesiune.trimisa ? 'trimitere înregistrată' : 'deschisă'}` : 'Nicio sesiune locală'}</span>
     </div>
-    {sesiune && !sesiune.trimisa && snapshot && <div style={S.card}>
+    {sesiune && !sesiune.trimisa && !veche && snapshot && <div style={S.card}>
       <div style={S.row}>
         {field('Operație', <select style={S.input} value={tip} onChange={e => { setTip(e.target.value); setNecunoscuta(false); setPiesa(''); setAmonte(''); setCm(''); setConfirmata(false) }}><option value="montaj">Montaj întreg</option><option value="taiere">Țeavă tăiată + montaj</option><option value="taiere_libera">Tăiere pe montată · capăt liber</option><option value="cuplare">Sudură de cuplare</option></select>)}
         {field(necunoscuta ? 'Seria citită pe piesă' : 'Caută seria', <input style={S.input} value={serie} onChange={e => { setSerie(e.target.value); if (necunoscuta) setConfirmata(false) }} />)}
@@ -312,7 +332,6 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
         <button style={S.btn} disabled={busy || !writer || !sesiune || sesiune.trimisa || !q} onClick={() => action(async () => {
           const current = await q.citeste()
           const rows = randuriSesiune(current, sesiune, current.snapshots[tronsonId])
-          if (!rows.length) throw Error('Sesiunea nu conține declarații')
           return q.adauga([{ tip_op: 'sesiune_trimite', payload: { proiect_id: proiectId, tronson_id: tronsonId, preverificare_uid: sesiune.uid, randuri: rows } }])
         })}>Trimite sesiunea la MP</button>
       </div>

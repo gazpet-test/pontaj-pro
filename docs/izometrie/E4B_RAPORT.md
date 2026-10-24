@@ -70,3 +70,12 @@ Revizii/corecții: UID și versiune CAS păstrate; lungime, puncte/copii R3, alt
 Conflicte: mesaje RO, retry explicit identic pentru blocat_de_conflict, abandon doar pentru refuzuri certe, istoric păstrat; acceptat+conflict și răspunsurile incerte nu pot fi abandonate local.
 Necesită server: fn_izo_teren_payload/fn_izo_teren_op nu acceptă foto/descriere; fn_izo_sudura_decl refuză R4 pe piesă nerezolvată (fără capăt identificat), deci UI declară numai început de lanț confirmat; fn_izo_serie_lamureste cere lungime exact compatibilă.
 PASS: toate cele 5 suite Node (15 birou, 23 coadă, 29 vectori, 6 picker, 12 teren UI) + node --check module; browser/React, API/PostgREST și Vite build NERULATE (build la integrator).
+
+E4c-2 — sesiuni vechi + gardă logout; numai worktree, fără Git/BD/secrete/deploy; migrările LIVE nemodificate.
+Tabletă: sesiune veche vizibilă, fără declarații noi/autosync implicit; trimitere inclusiv goală, abandon atomic doar pentru operații neexpediate; ACK incert păstrat.
+Recuperare sesiune proprie din izo_preverificari; instantaneul ulterior ACK reflectă închiderea MP; istoric local păstrat.
+MP/gestionar: liste sesiuni/fronturi vechi; fn_izo_front_elibereaza existent, motiv și retry identic; MP deschide ciornele pentru respingere CAS/cascadă.
+Logout: toate proiectele profilului, IndexedDB + cozi în memorie după demontare; blocare, export JSON, override cu două confirmări; eroare de citire = blocare.
+Hook exact src/App.jsx:4 (import), :111 (signOut); logică src/lib/izoLogout.js, izoLogoutBrowser.js, izoSesiuni.js; fără SQL/cron nou (design §6.7: expirare leneșă).
+PASS: toate cele 6 suite test_*.mjs (12 scenarii noi), 45 teste Python generatoare; verificare offline a contractelor LIVE, fără execuție SQL.
+NERULATE: browser/React/build (node_modules absent), API/PostgREST; E4_PILOT.md și gen_e4c_gps.py lipsesc din baza furnizată.
