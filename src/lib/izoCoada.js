@@ -32,6 +32,7 @@ export function aplicaRaspuns(stare, lot, raspuns) {
     const ack = r.cod === 'duplicat' ? r.raspuns : r
     if (!ack || !finale.has(ack.cod)) {
       op.rezultat = copie(ack || { cod: 'reincearca' })
+      if (ack?.cod === 'blocat_de_conflict') op.de_verificat = true
       if (oprire.has(ack?.cod)) s.pauza = ack.cod
       continue
     }
@@ -46,6 +47,7 @@ export function urmatorulLot(s) {
   if (!first || s.pauza) return []
   const lot = []
   for (const o of s.ops) {
+    if (o.de_verificat) break
     const r = o.cerere
     if (r.payload.proiect_id !== first.payload.proiect_id || r.payload.tronson_id !== first.payload.tronson_id || lot.length === 50) break
     // Marjă pentru serializarea jsonb de pe server (256 KB).
@@ -103,6 +105,22 @@ export function creeazaCoada({ storage, rpc, refresh = async () => {}, id = uuid
     citeste: () => exclusiv((s, existing) => existing ? copie(s) : salveaza(s)),
     adauga: cereri => exclusiv(s => salveaza(adaugaOperatii(s, cereri, id))),
     local: (key, value) => exclusiv(s => { s.local[key] = copie(value); return salveaza(s) }),
+    reincearca: opId => exclusiv(s => {
+      const o = s.ops.find(x => x.cerere.op_id === opId)
+      if (!o || !['blocat_de_conflict', 'alt_dispozitiv', 'front_expirat', 'reincearca'].includes(o.rezultat?.cod)) throw Error('Refuz final: corectează cu o operație nouă')
+      o.de_verificat = false
+      return salveaza(s)
+    }),
+    abandoneaza: opId => exclusiv(s => {
+      const o = [...s.ops, ...s.arhiva].find(x => x.cerere.op_id === opId)
+      if (!o || o.rezultat?.cod === 'acceptat' || !['conflict', 'conflict_op', 'eroare', 'eroare_interna', 'blocat_de_conflict', 'alt_dispozitiv', 'front_expirat'].includes(o.rezultat?.cod)) throw Error('Răspuns incert sau declarație existentă: actualizează, apoi repară declarația')
+      if (o.abandonata) throw Error('Operația este deja abandonată local')
+      const uid = o.cerere.payload.uid
+      if (uid && s.ops.some(x => x !== o && (x.cerere.payload.depinde_de_uid === uid || x.cerere.payload.preverificare_uid === uid))) throw Error('Renunță întâi la operațiile locale dependente')
+      if (s.ops.includes(o)) { s.ops = s.ops.filter(x => x !== o); s.arhiva.push(o) }
+      o.abandonata = true; o.de_verificat = true; o.stare = 'abandonata_local'
+      return salveaza(s)
+    }),
     snapshot: (proiect, tronson, pregateste = false) => exclusiv(async s => {
       await refresh()
       const doc = await apel(pregateste ? 'fn_izo_teren_pregateste' : 'fn_izo_teren_instantaneu', {

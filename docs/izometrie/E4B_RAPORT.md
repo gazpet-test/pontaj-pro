@@ -62,3 +62,11 @@ E3/E4a primesc temporar membership Storage numai pentru pregătire, retras înai
 Apply/reapply prin runner ca postgres (reapply cere cod 11); rollback LIVE neschimbat concatenat cu adaptor local prin același runner, cu înregistrare separată doar în istoricul harness-ului; gate/control_0e/rollback exact păstrate.
 Testele SQL existente folosesc login bootstrap pentru SET SESSION AUTHORIZATION, dar identitatea efectivă și resetările sunt postgres; copii temporare, fără modificarea surselor testelor.
 PASS static: bash -n ambele scripturi; validatorul oficial pe adaptor+rollback; verificare adaptare 1+14 resetări și comparație byte-cu-byte cu baza pentru fișierele protejate. PG16 și testele SQL NERULATE, conform brief-ului.
+
+E4c-1 — UI pilot în worktree; fără Git/BD/secrete/deploy, fără modificări SQL sau pachete noi.
+Fișiere: src/IzometrieTeren.jsx, src/IzometrieAprobare.jsx, src/lib/izoTeren.js, src/lib/izoCoada.js, scripts/izometrie/e4_gen/test_teren_ui.mjs.
+Serii necunoscute: serie_bruta + măsurătoare confirmată, identitate nerezolvată vizibilă pe tabletă/MP; MP folosește fn_izo_serie_lamureste existent, cu CAS și motiv.
+Revizii/corecții: UID și versiune CAS păstrate; lungime, puncte/copii R3, altă piesă/capete de cuplare; fără editarea rândurilor trimise până la revizie; refresh după sync.
+Conflicte: mesaje RO, retry explicit identic pentru blocat_de_conflict, abandon doar pentru refuzuri certe, istoric păstrat; acceptat+conflict și răspunsurile incerte nu pot fi abandonate local.
+Necesită server: fn_izo_teren_payload/fn_izo_teren_op nu acceptă foto/descriere; fn_izo_sudura_decl refuză R4 pe piesă nerezolvată (fără capăt identificat), deci UI declară numai început de lanț confirmat; fn_izo_serie_lamureste cere lungime exact compatibilă.
+PASS: toate cele 5 suite Node (15 birou, 23 coadă, 29 vectori, 6 picker, 12 teren UI) + node --check module; browser/React, API/PostgREST și Vite build NERULATE (build la integrator).

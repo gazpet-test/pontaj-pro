@@ -104,6 +104,10 @@ export default function IzometrieAprobare(props) {
       {preview.randuri.map(r => { const d = r.declaratie; const b = r.bucata || preview.registru?.find(x => x.id === (d.sursa_bucata_id || d.bucata_id)); return <div style={S.card} key={d.id}>
         <label><input type="checkbox" disabled={disabled || d.stare !== 'trimisa'} checked={ids.includes(d.id)} onChange={e => setIds(e.target.checked ? [...ids, d.id] : ids.filter(x => x !== d.id))} /> #{d.id} · {d.tip} · {d.stare} · v{d.versiune}</label>
         <p>{b ? labelPiece(b) : 'Bucată încă neidentificată / copil declarat'} · depinde de {d.depinde_de_uid || '—'} · {d.conflict_cod || d.blocata_motiv || ''}</p>
+        {d.identificare === 'nerezolvata' && <div style={{ ...S.card, background: G.yellow }}><strong>Identificare nerezolvată · seria citită: {d.payload?.serie_bruta}</strong>
+          <p>Lungime măsurată: {d.payload?.lungime_masurata_mm} mm · șarjă: {d.payload?.sarja_declarata || 'neprecizată'} · perete: {d.payload?.perete_declarat || 'necunoscut'}. Nu poate fi aprobată până la lămurirea seriei.</p>
+          <Button disabled={disabled || d.stare !== 'in_verificare'} onClick={() => { setTarget(String(d.id)); setPiece(''); setReason(''); setDeps({}) }}>Alege acest rând pentru lămurirea seriei</Button>
+        </div>}
         {alerts.filter(a => a.declaratie_id === d.id).map((a, i) => <p key={i} style={{ color: G.red }}>{a.cod}: {JSON.stringify(a.detalii)}</p>)}
         <Json label="Declarație, măsurători, copii și rezervări" value={r} />
       </div> })}
@@ -117,7 +121,7 @@ export default function IzometrieAprobare(props) {
         <p>Respingerea eliberează rezervările și anulează copiii declarați. O decizie este obligatorie pentru fiecare descendent afișat.</p>
         <div style={S.row}><Button disabled={disabled || reason.trim().length < 3 || !decl || descendants.some(d => !deps[d.id])} onClick={() => send(() => cerereDecizie('respinge', decl, reason, Object.fromEntries(descendants.map(d => [d.id, deps[d.id]]))))}>Respinge cu motiv</Button>
           <Button disabled={disabled || reason.trim().length < 3 || !decl || !['trimisa', 'in_verificare'].includes(decl.stare)} onClick={() => send(() => cerereDecizie('revizie_cere', decl, reason))}>Cere revizie (blochează descendenții)</Button></div>
-        {decl?.stare === 'in_verificare' && <div style={S.row}><Select aria-label="Bucată reală" value={piece} disabled={disabled} onChange={e => setPiece(e.target.value)}><option value="">Alege bucata reală</option>{(preview.registru || []).filter(b => b.stare === 'pe_tronson' && b.tronson_id === decl.tronson_id).map(b => <option key={b.id} value={b.id}>{labelPiece(b)}</option>)}</Select><Button disabled={disabled || reason.trim().length < 3 || !piece} onClick={() => send(() => cerereDecizie('serie_lamureste', decl, reason, { bucata: piece }))}>Lămurește seria</Button></div>}
+        {decl?.stare === 'in_verificare' && <div style={S.card}><p>Serie citită: {decl.payload?.serie_bruta} · măsurată: {decl.payload?.lungime_masurata_mm} mm. Verifică fizic identitatea; lămurirea păstrează măsurătorile și lasă rândul de aprobat.</p><div style={S.row}><Select aria-label="Bucată reală" value={piece} disabled={disabled} onChange={e => setPiece(e.target.value)}><option value="">Alege bucata reală</option>{(preview.registru || []).filter(b => b.stare === 'pe_tronson' && b.tronson_id === decl.tronson_id).map(b => <option key={b.id} value={b.id}>{labelPiece(b)}</option>)}</Select><Button disabled={disabled || reason.trim().length < 3 || !piece} onClick={() => send(() => cerereDecizie('serie_lamureste', decl, reason, { bucata: piece }))}>Lămurește seria</Button></div></div>}
       </div>
     </div>}
     <div style={S.card}><h3>Alerte active ale proiectului</h3>{!alerts.length && <p>Nicio alertă activă.</p>}{alerts.filter(a => !tronson || String(a.tronson_id) === tronson).map(a => <div style={S.card} key={`${a.cod}-${a.declaratie_id}-${a.sudura_id}`}>

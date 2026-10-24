@@ -8,7 +8,7 @@ export function ziBucuresti(date = new Date()) {
 }
 
 export const toateOperatiile = s => [...(s?.arhiva || []), ...(s?.ops || [])].sort((a, b) => a.cerere.seq - b.cerere.seq)
-export const reusita = o => !o.de_verificat && !['conflict', 'blocata'].includes(o.rezultat?.stare)
+export const reusita = o => !o.abandonata && !o.de_verificat && !['conflict', 'blocata'].includes(o.rezultat?.stare)
   && (o.rezultat ? o.rezultat.cod === 'acceptat' : o.stare !== 'confirmata')
 
 export function sesiuneLocala(s, tronson) {
@@ -22,14 +22,78 @@ export function sesiuneLocala(s, tronson) {
 export function randuriSesiune(s, sesiune, snapshot) {
   if ((snapshot?.declaratii || []).some(d => d.preverificare_id === sesiune.id && (['conflict', 'blocata', 'revizie_ceruta'].includes(d.stare) || d.rezervare_pierduta))) throw Error('Instantaneul conține declarații de reverificat')
   const map = new Map((snapshot?.declaratii || []).filter(d => d.preverificare_id === sesiune.id && d.stare === 'ciorna').map(d => [d.uid, { uid: d.uid, versiune: d.versiune }]))
+  const latest = new Map()
   for (const o of toateOperatiile(s)) {
     const p = o.cerere.payload
-    if (p.preverificare_uid !== sesiune.uid) continue
+    if (p.preverificare_uid !== sesiune.uid || o.abandonata) continue
+    if (p.uid) latest.set(p.uid, o)
+    else if (!reusita(o)) throw Error('Există operații de verificat în sesiune')
+  }
+  for (const o of latest.values()) {
+    const p = o.cerere.payload
+    const d = snapshot?.declaratii?.find(d => d.uid === p.uid)
+    if (d && o.stare === 'confirmata' && d.versiune > (o.rezultat?.versiune || p.versiune_baza)) continue
     if (!reusita(o) || o.de_verificat || o.rezultat?.cod === 'blocat_de_conflict') throw Error('Există operații de verificat în sesiune')
     if (o.cerere.tip_op === 'decl_salveaza') map.set(p.uid, { uid: p.uid, versiune: o.rezultat?.versiune || p.versiune_baza + 1 })
     if (o.cerere.tip_op === 'decl_sterge') map.delete(p.uid)
   }
   return [...map.values()]
+}
+
+export function mesajConflict(o) {
+  const r = o.rezultat || o
+  if (r.cod === 'alt_dispozitiv') return 'Frontul este preluat pe altă tabletă. MP-ul trebuie să îl elibereze; apoi apasă Pregătește și reîncearcă.'
+  if (r.cod === 'blocat_de_conflict' || r.stare === 'blocata') return 'Dependența este în conflict sau revizie. Repară mai întâi declarația părinte, actualizează, apoi reîncearcă.'
+  if (r.rezervare_pierduta || r.motiv === 'rezervare_pierduta') return 'Rezervarea s-a pierdut. Actualizează și alege altă bucată sau încearcă o versiune nouă dacă piesa este disponibilă.'
+  if (r.conflict_cod === 'r1d') return 'Serie, șarjă și lungime identice cu altă piesă. Remăsoară și corectează lungimile.'
+  if (r.conflict_cod === 'corectie_in_arbore') return 'Corecția afectează o piesă deja tăiată. MP-ul trebuie să verifice arborele.'
+  return 'Operația nu este confirmată ca reușită. Actualizează declarația; corectează pe versiunea curentă sau renunță doar la operația locală refuzată.'
+}
+
+export const poateCorecta = d => ['ciorna', 'conflict', 'blocata', 'revizie_ceruta'].includes(d.stare)
+
+export function declaratieNecunoscuta(baza, serie, mm, confirmata, id = uuid) {
+  const n = Number(mm)
+  if (!serie.trim() || !Number.isInteger(n) || n <= 0 || n > 30000 || !confirmata) throw Error('Completează seria citită și confirmă separat lungimea măsurată (1–30000 mm)')
+  return { tip_op: 'decl_salveaza', payload: { ...baza, uid: id(), versiune_baza: 0, tip: 'montaj', serie_bruta: serie.trim(), lungime_masurata_mm: n, lungime_montata_mm: n, confirmare: { mod: 'masurat', masurata_mm: n }, amonte: { tip: 'inceput_lant' }, capat_amonte: 'A' } }
+}
+
+// Se păstrează identitatea declarației și a copiilor; numai serverul rezolvă seria.
+export function corecteazaDeclaratie(d, { mm, puncte, bucata, confirmata, capat1, capat2 }, snapshot) {
+  if (!poateCorecta(d) || !confirmata) throw Error('Este necesară revizia MP sau confirmarea separată a măsurătorii')
+  const p = structuredClone(d.payload)
+  p.uid = d.uid; p.versiune_baza = d.versiune
+  delete p.gps
+  if (d.tip === 'cuplare' && (capat1 || capat2)) {
+    for (const [key, ref] of [['capat1', capat1], ['capat2', capat2]]) {
+      if (!ref) continue
+      if (!/^[A-Z]$/.test(ref.capat) || !snapshot.frunze?.some(b => b.id === Number(ref.bucata_id) && b.tronson_id === d.tronson_id && ['montata', 'pe_tronson'].includes(b.stare))) throw Error('Capăt de cuplare indisponibil')
+      p[key] = { bucata_id: Number(ref.bucata_id), capat: ref.capat }
+    }
+    if (p.capat1.bucata_id && p.capat1.bucata_id === p.capat2.bucata_id) throw Error('Alege două piese diferite')
+    if (!p.capat1.decl_uid && !p.capat2.decl_uid) { delete p.depinde_de_uid; delete p.depinde_de_versiune }
+  }
+  if (bucata) {
+    if (d.identificare === 'nerezolvata') throw Error('Doar MP-ul poate lămuri seria')
+    const b = snapshot.frunze?.find(b => String(b.id) === String(bucata) && b.disponibila)
+    if (!b || d.tip === 'cuplare') throw Error('Bucată indisponibilă')
+    p[d.tip === 'taiere' ? 'sursa' : 'bucata'] = { bucata_id: b.id }
+    delete p.depinde_de_uid; delete p.depinde_de_versiune
+  }
+  if (d.tip !== 'cuplare') {
+    const n = Number(mm)
+    if (!Number.isInteger(n) || n <= 0 || n > (snapshot.praguri?.lungime_max_mm || 30000)) throw Error('Lungime invalidă în mm')
+    p.confirmare = { mod: 'marcaj_diferit', masurata_mm: n }
+    p.lungime_masurata_mm = n
+    if (d.tip === 'montaj') p.lungime_montata_mm = n
+    else {
+      const points = String(puncte).split(',').map(x => Number(x.trim()))
+      if (points.length !== p.copii.length - 1 || points.some((x, i) => !Number.isInteger(x) || x <= (points[i - 1] || 0) || x >= n)) throw Error('Puncte de tăiere invalide; păstrează numărul copiilor')
+      p.baza_mm = n; p.puncte_mm = points
+      p.copii = p.copii.map((c, i) => ({ ...c, lungime_mm: (points[i] ?? n) - (points[i - 1] || 0) }))
+    }
+  }
+  return { tip_op: 'decl_salveaza', payload: p }
 }
 
 export function codSudura(raw, tronson, snapshot) {
