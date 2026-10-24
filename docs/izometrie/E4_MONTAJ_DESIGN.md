@@ -1434,7 +1434,7 @@ Recomandarea e prima variantă, dacă nu scrie altfel. Blochează codul: Q-E4-1,
 14. **Q-E4-14 — Fronturile.**
     - **A** un singur dispozitiv activ pe tronson, în pilot.
     - B pe interval de km.
-15. **Q-E4-15 — Coordonatele GPS (date personale).** În toate variantele, coordonatele stau doar în `izo_declaratii_gps`, niciodată în JSON-uri (§9.5).
+15. **Q-E4-15 — Coordonatele GPS (date personale).** În toate variantele, coordonatele stau doar în `izo_declaratii_gps`, niciodată în JSON-uri (§9.5). **DECIS 24.10.2026 (Răzvan): B, cu termenul de 60 de zile de la decizia pe declarație (aprobare, respingere sau ștergere)**, nu de la aprobarea Transgaz. Implementarea e în migrarea nouă `20261111a` (`fn_izo_gps_curata` + pg_cron zilnic + jurnalul `izo_gps_stergeri`, fără coordonate). Până la apply rămâne comportamentul A (coordonatele se păstrează). Detalii în `E4_PILOT.md` §3.
     - **A** păstrate, vizibile doar MP-ului și owner-ului (fără SELECT pe tabel, doar `fn_izo_gps_citeste`).
     - B ca A, dar șterse după aprobarea pachetului de Transgaz (singurul DELETE din E4, printr-o funcție sub context).
     - C păstrat doar km-ul calculat; tabelul GPS nu se mai creează. (r4: C cere sursa km-ului, adică axul calibrat din Q-E4-10 B; cu Q-E4-10 A nu e implementabil.)
