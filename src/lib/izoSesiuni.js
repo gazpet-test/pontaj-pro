@@ -1,7 +1,11 @@
 import { ziBucuresti } from './izoTeren.js'
 
 export const sesiuneVeche = (s, azi = ziBucuresti()) => Boolean(s && !s.trimisa && (s.stare == null || s.stare === 'deschisa') && s.zi < azi)
-export const frontVechi = (f, acum = new Date()) => Boolean(f.activ && (new Date(f.expira_la) <= acum || ziBucuresti(new Date(f.de_la)) < ziBucuresti(acum)))
+// izo_fronturi (LIVE) nu are moment de start: un front e vechi doar când a expirat (expira_la), fără date invalide.
+export const frontVechi = (f, acum = new Date()) => {
+  const exp = new Date(f?.expira_la)
+  return Boolean(f?.activ && !Number.isNaN(exp.getTime()) && exp <= acum)
+}
 
 // Niciun ACK pierdut nu se interpretează ca operație neaplicată.
 export function abandoneazaCiorneLocale(stare, uid) {

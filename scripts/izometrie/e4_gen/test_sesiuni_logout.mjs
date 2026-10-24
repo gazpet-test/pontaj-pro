@@ -12,7 +12,10 @@ test('Zi București: sesiune anterioară, aceeași zi, viitoare, trimisă', () =
   const s = { zi: '2026-10-23' }
   assert.equal(sesiuneVeche(s, '2026-10-24'), true)
   for (const x of [{ ...s, trimisa: true }, { ...s, stare: 'inchisa' }, { zi: '2026-10-24' }, { zi: '2026-10-25' }, null]) assert.equal(sesiuneVeche(x, '2026-10-24'), false)
-  assert.equal(frontVechi({ activ: true, de_la: '2026-10-23T20:00:00Z', expira_la: '2026-10-24T12:00:00Z' }, new Date('2026-10-24T06:00:00Z')), true)
+  // schema LIVE: fără de_la; vechi = activ și expirat; dată lipsă/invalidă → nu e vechi și nu aruncă
+  assert.equal(frontVechi({ activ: true, expira_la: '2026-10-24T05:00:00Z' }, new Date('2026-10-24T06:00:00Z')), true)
+  assert.equal(frontVechi({ activ: true, expira_la: '2026-10-24T12:00:00Z' }, new Date('2026-10-24T06:00:00Z')), false)
+  assert.equal(frontVechi({ activ: true }, new Date('2026-10-24T06:00:00Z')), false)
   assert.equal(frontVechi({ activ: false }), false)
 })
 test('Abandon atomic: ciorne și dependențe locale, fără ștergerea istoricului sau altei sesiuni', () => {
