@@ -155,17 +155,16 @@ COMMIT;
 
 ---
 
-## 3. Întrebare pentru Răzvan (da / nu)
+## 3. GPS — DECIS: varianta B, 60 de zile (Răzvan, 24.10)
 
-**Q-E4-15 A: păstrăm permanent coordonatele GPS ale declarațiilor de pe tabletă?**
+**Decizia:** coordonatele GPS ale unei declarații se șterg la **60 de zile după decizia pe ea**. Asta înlocuiește Q-E4-15 A din design.
 
-- Coordonatele stau doar în `izo_declaratii_gps`.
-- Le pot vedea numai MP-ul proiectului și owner-ul, prin `fn_izo_gps_citeste`; nimeni nu are SELECT pe tabel.
-- Se folosesc ca dovadă a locului montajului.
-
-Răspuns: **da** = rămâne așa, cum e deja construit. **Nu** = trecem la B: ștergere după aprobarea Transgaz a pachetului, ceea ce cere o migrare nouă (20261111*).
-
-Tableta cere GPS doar la salvarea declarației. Dacă GPS-ul e refuzat sau indisponibil, declarația se salvează fără coordonate, iar mesajul spune „GPS indisponibil” (verificat în `src/IzometrieTeren.jsx`).
+- **Ce se șterge:** rândul întreg din `izo_declaratii_gps` (rândul conține doar coordonatele). Se aplică declarațiilor aprobate, respinse sau șterse, după 60 de zile de la decizie (`decis_la`; la cele șterse, `updated_at`).
+- **De ce și respinsele tot la 60 de zile, nu imediat:** aceeași fereastră de contestare pentru toate deciziile, apoi minimizarea datelor. Coordonatele din **repetiția din etapa 1** (toate respinse) se șterg deci la 60 de zile după respingere.
+- **Ce nu se șterge:** declarațiile încă nedecise își păstrează coordonatele până la decizie.
+- **Jurnalul:** fiecare ștergere lasă un rând în `izo_gps_stergeri` (declarația, versiunea, decizia, data), fără coordonate.
+- **Cum:** funcția `fn_izo_gps_curata()` și jobul pg_cron `izo_gps_curatare_zilnic` (zilnic la 03:23), într-o migrare nouă `20261111a`. Migrarea trece prin harness prodlike, Copilot, DRY și „da”. Jobul se trece în `registru_automatizari` și în `automatizari`, cu fișa a–e.
+- **Până la apply, coordonatele se păstrează** (comportamentul actual al E4b).
 
 ---
 
