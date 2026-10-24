@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import { logoutProtejat } from './lib/izoLogoutBrowser.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -107,7 +108,7 @@ function AuthProvider({ children }) {
     finally { if (fetchingRef.current === userId) fetchingRef.current = null }
   }
   const signIn = (email, password) => supabase.auth.signInWithPassword({ email, password })
-  const signOut = () => supabase.auth.signOut()
+  const signOut = () => logoutProtejat(session?.user?.id, () => supabase.auth.signOut())
   return <AuthContext.Provider value={{ session, profile, profileReady, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
 }
 

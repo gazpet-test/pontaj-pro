@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { creeazaCoada, stocareBrowser, uuid } from './lib/izoCoada.js'
-import { ziBucuresti, toateOperatiile, sesiuneLocala, randuriSesiune, codSudura, construiesteDeclaratii, capeteLocale, copiiLocali, propunereSudura } from './lib/izoTeren.js'
+import { coziDeschise } from './lib/izoLogout.js'
+import { sesiuneVeche } from './lib/izoSesiuni.js'
+import { ziBucuresti, toateOperatiile, sesiuneLocala, randuriSesiune, codSudura, construiesteDeclaratii, capeteLocale, copiiLocali, propunereSudura, reusita, mesajConflict, poateCorecta, declaratieNecunoscuta, corecteazaDeclaratie } from './lib/izoTeren.js'
 
 const G = { bg: '#F4F6F8', card: '#FFFFFF', text: '#152536', muted: '#4A5969', border: '#9BA9B6', blue: '#1259A7', red: '#9C2121', yellow: '#FFF0BA' }
 const S = {
@@ -11,12 +13,42 @@ const S = {
   btn: { minHeight: 56, padding: '12px 20px', borderRadius: 8, border: `1px solid ${G.border}`, background: G.blue, color: 'white', fontSize: 18, cursor: 'pointer' },
   row: { display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end' },
 }
-const caches = new Map()
+const caches = coziDeschise
 const gps = () => new Promise(resolve => {
   if (!navigator.geolocation) return resolve(null)
   navigator.geolocation.getCurrentPosition(p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, precizie_m: p.coords.accuracy, la: new Date(p.timestamp).toISOString() }), () => resolve(null), { timeout: 2500, maximumAge: 0 })
 })
 const field = (label, child) => <label style={{ display: 'grid', gap: 6, flex: '1 1 220px' }}>{label}{child}</label>
+
+function DeclaratieTeren({ d, snapshot, disabled, onSave }) {
+  const [mm, setMm] = useState(String(d.payload?.lungime_masurata_mm || d.payload?.baza_mm || d.payload?.lungime_montata_mm || ''))
+  const [puncte, setPuncte] = useState((d.payload?.puncte_mm || []).join(','))
+  const [bucata, setBucata] = useState(''), [confirmata, setConfirmata] = useState(false)
+  const [capete, setCapete] = useState({})
+  const b = snapshot.frunze?.find(b => b.id === (d.bucata_id || d.sursa_bucata_id))
+  const diferenta = b && Number(mm) !== b.lungime_mm
+  return <div style={S.card}>
+    <h3>Declarația #{d.id} · {d.tip} · {d.stare} · v{d.versiune}</h3>
+    {d.identificare === 'nerezolvata' && <p style={{ background: G.yellow }}>Serie necunoscută: {d.payload?.serie_bruta}. Identificare nerezolvată; MP-ul alege bucata reală înainte de aprobare.</p>}
+    {d.decizie_motiv && <p>Motiv MP: {d.decizie_motiv}</p>}
+    {(d.stare === 'conflict' || d.stare === 'blocata' || d.rezervare_pierduta) && <p role="alert" style={{ color: G.red }}>{mesajConflict(d)}</p>}
+    {diferenta && <p style={{ color: G.red }}>Diferență față de aviz: {b.lungime_mm} mm → {mm} mm. MP-ul decide corecția cu motiv la aprobare.</p>}
+    {!poateCorecta(d) ? <p>{d.stare === 'in_verificare' ? 'Așteaptă lămurirea seriei sau cererea de revizie de la MP.' : 'Trimisă la MP. Pentru corectare, MP-ul trebuie să ceară revizie.'}</p> : <fieldset disabled={disabled} style={{ border: 0, padding: 0 }}>
+      <div style={S.row}>
+        {d.tip === 'cuplare' && ['capat1', 'capat2'].map((key, i) => <div key={key}>
+          {field(`Schimbă piesa ${i + 1}`, <select style={S.input} value={capete[key]?.bucata_id || ''} onChange={e => { setCapete({ ...capete, [key]: e.target.value ? { bucata_id: Number(e.target.value), capat: capete[key]?.capat || d.payload[key]?.capat || 'A' } : undefined }); setConfirmata(false) }}><option value="">Păstrează capătul curent</option>{snapshot.frunze?.filter(b => b.tronson_id === d.tronson_id && ['montata', 'pe_tronson'].includes(b.stare)).map(b => <option key={b.id} value={b.id}>{b.serie} · {b.sarja} · {b.lungime_mm} mm</option>)}</select>)}
+          {capete[key] && field('Litera capătului', <input style={S.input} maxLength={1} value={capete[key].capat} onChange={e => { setCapete({ ...capete, [key]: { ...capete[key], capat: e.target.value.toUpperCase() } }); setConfirmata(false) }} />)}
+        </div>)}
+        {d.tip !== 'cuplare' && field('Lungime reală măsurată / baza tăierii (mm)', <input style={S.input} inputMode="numeric" value={mm} onChange={e => { setMm(e.target.value); setConfirmata(false) }} />)}
+        {d.tip === 'taiere' && field('Puncte de tăiere (mm), separate prin virgulă', <input style={S.input} value={puncte} onChange={e => { setPuncte(e.target.value); setConfirmata(false) }} />)}
+        {d.tip !== 'cuplare' && d.identificare !== 'nerezolvata' && field('Schimbă piesa, dacă este necesar', <select style={S.input} value={bucata} onChange={e => { setBucata(e.target.value); setConfirmata(false) }}><option value="">Păstrează piesa curentă</option>{snapshot.frunze?.filter(b => b.disponibila).map(b => <option key={b.id} value={b.id}>{b.serie} · {b.sarja} · {b.lungime_mm} mm</option>)}</select>)}
+      </div>
+      <p>O versiune nouă reverifică rezervarea și poate bloca descendenții. Verifică fizic piesa și toate măsurătorile.</p>
+      <button style={S.btn} onClick={() => setConfirmata(true)}>{confirmata ? '✓ Măsurători confirmate' : 'Confirmă separat măsurătorile'}</button>{' '}
+      <button style={S.btn} disabled={!confirmata} onClick={() => onSave(d, { mm, puncte, bucata, confirmata, ...capete })}>Salvează corecția și retrimite la sincronizare</button>
+    </fieldset>}
+  </div>
+}
 
 export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoane, initialTronsonId, lockedMode }) {
   const [profile, setProfile] = useState(null)
@@ -40,10 +72,13 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
   const [cod, setCod] = useState('')
   const [zi, setZi] = useState(ziBucuresti())
   const [serie, setSerie] = useState('')
+  const [necunoscuta, setNecunoscuta] = useState(false), [mmNecunoscut, setMmNecunoscut] = useState('')
   const generatie = useRef(0)
   const activ = useRef(false)
   const retryDelai = useRef(1500)
   const [catalog, setCatalog] = useState([])
+  const [azi, setAzi] = useState(ziBucuresti())
+  useEffect(() => { const timer = setInterval(() => setAzi(ziBucuresti()), 30000); return () => clearInterval(timer) }, [])
 
   useEffect(() => {
     let mounted = true
@@ -55,7 +90,7 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
   useEffect(() => {
     const generation = ++generatie.current
     setQ(null); setStare(null); setMesaj(''); setCatalog([]); setTronson(null)
-    setPiesa(''); setAmonte(''); setConfirmata(false); setCm(''); setCod('')
+    setPiesa(''); setAmonte(''); setConfirmata(false); setCm(''); setCod(''); setNecunoscuta(false); setMmNecunoscut(''); setSerie('')
     if (!profile || !proiectId) return
     const name = `izo-e4-${profile}-${proiectId}`
     if (!caches.has(name)) caches.set(name, (async () => {
@@ -63,7 +98,13 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
       return creeazaCoada({ storage, rpc: async (n, a) => {
         const { data } = await supabase.auth.getSession()
         if (data.session?.user.id !== profile) throw Error('Profil schimbat; sincronizarea a fost oprită')
-        return supabase.rpc(n, a)
+        const result = await supabase.rpc(n, a)
+        if (!result.error && result.data?.snapshot_id) {
+          const { data: sessions, error } = await supabase.from('izo_preverificari').select('id,uid,zi,stare,tronson_id,dispozitiv_id').eq('proiect_id', proiectId).eq('tronson_id', a.p_tronson).eq('autor_profile_id', profile).eq('stare', 'deschisa').order('id')
+          if (error) throw error
+          result.data.sesiuni = sessions
+        }
+        return result
       }, refresh: async () => {
         const { data: current } = await supabase.auth.getSession()
         if (current.session?.user.id !== profile) throw Error('Profil schimbat; coada rămâne la autorul ei')
@@ -128,6 +169,10 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
       let s
       try { s = await q.sync(); retryDelai.current = 1500 }
       catch (e) { retryDelai.current = Math.min(60000, Math.max(15000, retryDelai.current * 2)); throw e }
+      if (tronsonId && !s.pauza) {
+        try { s = await q.snapshot(proiectId, tronsonId) }
+        catch { setMesaj('Răspunsul serverului este salvat. Instantaneul nu a putut fi actualizat; apasă Actualizează.'); return s }
+      }
       setMesaj(s.pauza ? `Sincronizare oprită: ${s.pauza}. Reia cu Pregătește.` : 'Răspunsul serverului a fost salvat.')
       return s
     })
@@ -139,12 +184,13 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
     return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) }
   }, [])
   useEffect(() => {
-    if (!writer || !online || busy || !q || !stare?.ops.length || stare.pauza) return
+    if (!writer || !online || busy || !q || !stare?.ops.length || stare.pauza || stare.ops[0].de_verificat) return
+    if (sesiuneVeche(sesiuneLocala(stare, stare.ops[0].cerere.payload.tronson_id), azi)) return
     // Backoff pentru refuzuri nefinale; fără buclă rapidă peste limita serverului.
     const delay = Math.max(retryDelai.current, stare.ops.some(o => o.stare === 'trimisa') ? 15000 : 1500)
     const timer = setTimeout(synchronise, delay)
     return () => clearTimeout(timer)
-  }, [online, busy, q, stare, writer])
+  }, [online, busy, q, stare, writer, azi])
   useEffect(() => {
     const protect = e => { if (stare?.ops.length || (!q?.durabil && stare?.arhiva.length)) { e.preventDefault(); e.returnValue = '' } }
     window.addEventListener('beforeunload', protect)
@@ -153,10 +199,14 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
 
   const snapshot = stare?.snapshots[tronsonId]
   const sesiune = sesiuneLocala(stare, tronsonId)
+  const veche = sesiuneVeche(sesiune, azi)
   const tronson = catalog.find(t => t.id === tronsonId)
   const log = toateOperatiile(stare).filter(o => o.cerere.payload.tronson_id === tronsonId)
-  const folosite = new Set(log.filter(o => o.cerere.tip_op === 'decl_salveaza' && (o.stare !== 'confirmata' || o.rezultat?.cod === 'acceptat')).map(o => o.cerere.payload.bucata?.bucata_id || o.cerere.payload.sursa?.bucata_id))
-  const taiate = new Set(log.filter(o => o.cerere.payload.tip === 'taiere' && (o.stare !== 'confirmata' || o.rezultat?.cod === 'acceptat')).map(o => o.cerere.payload.sursa?.bucata_id))
+  const ultimele = new Map()
+  for (const o of log) if (o.cerere.payload.uid && !o.abandonata) ultimele.set(o.cerere.payload.uid, o)
+  const efecteLocale = [...ultimele.values()].filter(o => reusita(o) && !(snapshot?.declaratii || []).some(d => d.uid === o.cerere.payload.uid && d.versiune >= (o.rezultat?.versiune || o.cerere.payload.versiune_baza + 1)))
+  const folosite = new Set(efecteLocale.filter(o => o.cerere.tip_op === 'decl_salveaza').map(o => o.cerere.payload.bucata?.bucata_id || o.cerere.payload.sursa?.bucata_id))
+  const taiate = new Set(efecteLocale.filter(o => o.cerere.payload.tip === 'taiere').map(o => o.cerere.payload.sursa?.bucata_id))
   const endpoints = capeteLocale(stare, snapshot, sesiune)
   const piese = (snapshot?.frunze || []).filter(b => (tip === 'taiere_libera' ? b.stare === 'montata' && b.tronson_id === tronsonId && !taiate.has(b.id) : b.disponibila && !folosite.has(b.id)))
   const piesa = piese.find(b => String(b.id) === piesaId)
@@ -169,7 +219,18 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
   async function salveaza() {
     await action(async () => {
       if (!sesiune || sesiune.trimisa) throw Error('Deschide o sesiune')
+      if (sesiuneVeche(sesiune)) throw Error('Rezolvă sesiunea zilei precedente înainte de alte declarații')
       if (!snapshot) throw Error('Pregătește tronsonul cu semnal înainte de lucru')
+      if (necunoscuta && tip === 'montaj') {
+        const c = declaratieNecunoscuta({ proiect_id: proiectId, tronson_id: tronsonId, preverificare_uid: sesiune.uid, data_montaj: sesiune.zi }, serie, mmNecunoscut, confirmata)
+        if (!/^[A-Z]$/.test(capat)) throw Error('Capătul este o literă A–Z')
+        c.payload.capat_amonte = capat
+        if (amonteId) throw Error('Serverul refuză sudura pe piesă neidentificată (R4). MP-ul trebuie să lămurească întâi seria.')
+        const coord = await gps(); if (coord) c.payload.gps = coord
+        const s = await q.adauga([c]); setConfirmata(false); setMmNecunoscut(''); setSerie('')
+        setMesaj('Salvat cu identificare nerezolvată. După trimitere, MP-ul trebuie să lămurească seria.')
+        return s
+      }
       if (tip !== 'cuplare' && !piesa) throw Error('Alege o bucată disponibilă')
       const endpoint1 = endpoints.find(e => e.key === amonteId)
       const amonte = endpoint1 ? { ...endpoint1.ref, capat: amonteCapat, ...(tip !== 'cuplare' ? { tip: 'bucata' } : {}) } : null
@@ -201,6 +262,13 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
     {(!q?.durabil || !persistenta) && <p role="status" style={{ ...S.card, background: G.yellow }}>Stocarea {q?.durabil ? 'persistentă nu este garantată' : 'este doar în memorie; datele se pierd la închidere'}. Exportă coada de siguranță.</p>}
     <p style={{ color: G.muted }}>Pregătește cu semnal. Poți continua când cade rețeaua, cât aplicația este deschisă. Repornirea fără rețea vine în E6.</p>
     {mesaj && <p role="status" style={S.card}>{mesaj}</p>}
+    {veche && <div role="alert" style={{ ...S.card, background: G.yellow }}>
+      <strong>Sesiune rămasă deschisă din {sesiune.zi}</strong>
+      <p>Pregătește tronsonul cu semnal, apoi trimite sesiunea la MP folosind butonul de jos. Poți abandona doar ciornele care nu au plecat de pe tabletă. Declarațiile de pe server rămân și se trimit sau se resping de MP după eliberarea frontului.</p>
+      <button style={S.btn} disabled={busy || !writer} onClick={() => {
+        if (window.confirm('Abandonezi ciornele acestei sesiuni care nu au plecat? Declarațiile de pe server rămân. Exportă înainte dacă ai nevoie de o copie.')) action(() => q.abandoneazaCiorne(sesiune.uid))
+      }}>Abandonează ciornele netrimise</button>
+    </div>}
     {stare?.pauza && <p role="alert" style={{ color: G.red }}>{stare.pauza === 'alt_dispozitiv' ? 'Tronsonul este luat de altă tabletă — decide MP-ul.' : `Sincronizare oprită: ${stare.pauza}`}</p>}
     <fieldset disabled={busy || !writer} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <div style={{ ...S.card, ...S.row }}>
@@ -219,20 +287,26 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
       })}>Deschide sesiune</button>
       <span>{sesiune ? `${sesiune.zi} · ${sesiune.trimisa ? 'trimitere înregistrată' : 'deschisă'}` : 'Nicio sesiune locală'}</span>
     </div>
-    {sesiune && !sesiune.trimisa && snapshot && <div style={S.card}>
+    {sesiune && !sesiune.trimisa && !veche && snapshot && <div style={S.card}>
       <div style={S.row}>
-        {field('Operație', <select style={S.input} value={tip} onChange={e => { setTip(e.target.value); setPiesa(''); setAmonte(''); setCm(''); setConfirmata(false) }}><option value="montaj">Montaj întreg</option><option value="taiere">Țeavă tăiată + montaj</option><option value="taiere_libera">Tăiere pe montată · capăt liber</option><option value="cuplare">Sudură de cuplare</option></select>)}
-        {field('Caută seria', <input style={S.input} value={serie} onChange={e => setSerie(e.target.value)} />)}
-        {field(tip === 'cuplare' ? 'Bucata 2' : 'Bucată', <select style={S.input} value={piesaId} onChange={e => { setPiesa(e.target.value); setCm(''); setConfirmata(false) }}><option value="">Alege seria și șarja</option>{tip === 'cuplare' ? endpoints.map(e => <option key={e.key} value={e.key}>{e.label}</option>) : piese.filter(b => String(b.serie).toUpperCase().includes(serie.toUpperCase())).map(b => <option key={b.id} value={b.id}>{labelPiesa(b)}</option>)}</select>)}
+        {field('Operație', <select style={S.input} value={tip} onChange={e => { setTip(e.target.value); setNecunoscuta(false); setPiesa(''); setAmonte(''); setCm(''); setConfirmata(false) }}><option value="montaj">Montaj întreg</option><option value="taiere">Țeavă tăiată + montaj</option><option value="taiere_libera">Tăiere pe montată · capăt liber</option><option value="cuplare">Sudură de cuplare</option></select>)}
+        {field(necunoscuta ? 'Seria citită pe piesă' : 'Caută seria', <input style={S.input} value={serie} onChange={e => { setSerie(e.target.value); if (necunoscuta) setConfirmata(false) }} />)}
+        {!necunoscuta && field(tip === 'cuplare' ? 'Bucata 2' : 'Bucată', <select style={S.input} value={piesaId} onChange={e => { setPiesa(e.target.value); setCm(''); setConfirmata(false) }}><option value="">Alege seria și șarja</option>{tip === 'cuplare' ? endpoints.map(e => <option key={e.key} value={e.key}>{e.label}</option>) : piese.filter(b => String(b.serie).toUpperCase().includes(serie.toUpperCase())).map(b => <option key={b.id} value={b.id}>{labelPiesa(b)}</option>)}</select>)}
       </div>
+      {tip === 'montaj' && <div style={S.card}><button style={S.btn} onClick={() => { setNecunoscuta(!necunoscuta); setConfirmata(false); setPiesa(''); setAmonte('') }}>{necunoscuta ? 'Revino la piesele din instantaneu' : 'Seria nu este în instantaneu'}</button>
+        {necunoscuta && <><p style={{ background: G.yellow }}>Identificare nerezolvată. Completează seria citită și măsoară piesa. MP-ul va alege bucata reală.</p>
+          {field('Lungime măsurată (mm)', <input style={S.input} inputMode="numeric" value={mmNecunoscut} onChange={e => { setMmNecunoscut(e.target.value); setConfirmata(false) }} />)}
+          <button style={S.btn} onClick={() => setConfirmata(true)}>{confirmata ? '✓ Lungime și început de lanț confirmate' : 'Confirm lungimea și că piesa începe un lanț fără sudură'}</button>
+          <p>Fotografia și descrierea nu pot fi trimise prin API-ul actual. Serverul permite aici doar început de lanț, fără sudură pe piesa neidentificată. Nu declara început de lanț dacă există fizic o sudură.</p></>}
+      </div>}
       {piesa && <p style={{ fontSize: 26, fontWeight: 700 }}>{labelPiesa(piesa)}</p>}
-      {tip !== 'cuplare' && <div style={S.row}>
+      {!necunoscuta && tip !== 'cuplare' && <div style={S.row}>
         {field('Ultimele două cifre de cm de pe marcaj', <input inputMode="numeric" style={S.input} value={cm} onChange={e => { setCm(e.target.value); setConfirmata(false) }} />)}
         <button style={S.btn} disabled={!piesa || cm.trim() === ''} onClick={() => { const ok = /^\d{1,2}$/.test(cm) && Number(cm) === Math.round(piesa.lungime_mm / 10) % 100; setConfirmata(ok); setMesaj(ok ? 'Lungime confirmată separat.' : 'Marcajul diferă: remăsoară; corecția necesită verificare.') }}>{confirmata ? '✓ Lungime confirmată' : 'Confirmă lungimea'}</button>
         {tip.startsWith('taiere') && field('Punctul de tăiere, de la capătul inițial (mm)', <input inputMode="numeric" style={S.input} value={taiere} onChange={e => setTaiere(e.target.value)} />)}
         {tip === 'taiere_libera' && field('Partea care rămâne montată', <select style={S.input} value={ramane} onChange={e => setRamane(e.target.value)}><option value="stanga">Înaintea tăierii</option><option value="dreapta">După tăiere</option></select>)}
       </div>}
-      {tip !== 'taiere_libera' && <div style={{ ...S.row, marginTop: 12 }}>
+      {!necunoscuta && tip !== 'taiere_libera' && <div style={{ ...S.row, marginTop: 12 }}>
         {field(tip === 'cuplare' ? 'Bucata 1' : 'Amont / început de lanț', <select style={S.input} value={amonteId} onChange={e => setAmonte(e.target.value)}><option value="">{tip === 'cuplare' ? 'Alege bucata 1' : 'Început de lanț (fără sudură)'}</option>{endpoints.map(e => <option key={e.key} value={e.key}>{e.label}</option>)}</select>)}
         {field('Capăt amont / bucata 1', <input style={S.input} maxLength={1} value={amonteCapat} onChange={e => setAmonteCapat(e.target.value.toUpperCase())} />)}
         {field('Capăt piesă / bucata 2', <input style={S.input} maxLength={1} value={capat} onChange={e => setCapat(e.target.value.toUpperCase())} />)}
@@ -243,6 +317,14 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
       <button style={S.btn} disabled={busy || !q} onClick={salveaza}>Salvează pe tabletă</button>
     </div>}
     </fieldset>
+    {(snapshot?.declaratii || []).map(d => <DeclaratieTeren key={`${tronsonId}-${d.uid}-${d.versiune}-${snapshot.snapshot_id}`} d={d} snapshot={snapshot} disabled={busy || !writer || (stare?.ops || []).some(o => o.cerere.payload.uid === d.uid)} onSave={(decl, values) => action(async () => {
+      const current = await q.citeste(), snap = current.snapshots[tronsonId]
+      const latest = snap.declaratii.find(x => x.uid === decl.uid)
+      if (!latest || latest.versiune !== decl.versiune || latest.stare !== decl.stare) throw Error('Declarația s-a schimbat. Actualizează și verifică din nou.')
+      const c = corecteazaDeclaratie(latest, values, snap)
+      const coord = await gps(); if (coord) c.payload.gps = coord
+      const s = await q.adauga([c]); setMesaj('Versiune nouă salvată; așteaptă sincronizarea și apoi actualizează declarațiile.'); return s
+    })} />)}
     <div style={S.card}>
       <div style={S.row}>
         <button style={S.btn} disabled={busy || !writer || !online || !q || !stare?.ops.length || Boolean(stare?.pauza)} onClick={synchronise}>Sincronizează ({stare?.ops.length || 0})</button>
@@ -250,7 +332,6 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
         <button style={S.btn} disabled={busy || !writer || !sesiune || sesiune.trimisa || !q} onClick={() => action(async () => {
           const current = await q.citeste()
           const rows = randuriSesiune(current, sesiune, current.snapshots[tronsonId])
-          if (!rows.length) throw Error('Sesiunea nu conține declarații')
           return q.adauga([{ tip_op: 'sesiune_trimite', payload: { proiect_id: proiectId, tronson_id: tronsonId, preverificare_uid: sesiune.uid, randuri: rows } }])
         })}>Trimite sesiunea la MP</button>
       </div>
@@ -258,6 +339,12 @@ export default function IzometrieTeren({ proiectId, proiecte, onProiect, tronsoa
       <ul style={{ paddingLeft: 22 }}>{log.map(o => <li key={o.cerere.op_id} style={{ margin: '14px 0', overflowWrap: 'anywhere', color: o.de_verificat ? G.red : G.text }}>
         #{o.cerere.seq} · {o.cerere.payload.tip || o.cerere.tip_op} · {o.stare} · {o.rezultat?.cod || 'așteaptă'} {o.rezultat?.stare || ''} {o.rezultat?.motiv || o.rezultat?.conflict_cod || ''}
         {o.de_verificat && ' · DE VERIFICAT'}
+        {o.cerere.payload.serie_bruta && <p>Serie declarată: {o.cerere.payload.serie_bruta} · identificare nerezolvată, de lămurit de MP.</p>}
+        {!o.abandonata && (o.de_verificat || (o.rezultat && !reusita(o))) && <div style={S.card}><p style={{ color: G.red }}>{mesajConflict(o)}</p>
+          <button style={S.btn} disabled={busy || !writer || !online} onClick={() => action(() => q.snapshot(proiectId, tronsonId))}>Actualizează declarația și piesele</button>{' '}
+          {['blocat_de_conflict', 'alt_dispozitiv', 'front_expirat', 'reincearca'].includes(o.rezultat?.cod) && <button style={S.btn} disabled={busy || !writer || Boolean(stare?.pauza)} onClick={() => action(() => q.reincearca(o.cerere.op_id))}>Reîncearcă identic după repararea cauzei</button>}{' '}
+          {o.rezultat?.cod !== 'acceptat' && ['conflict', 'conflict_op', 'eroare', 'eroare_interna', 'blocat_de_conflict', 'alt_dispozitiv', 'front_expirat'].includes(o.rezultat?.cod) && <button style={S.btn} disabled={busy || !writer} onClick={() => action(() => q.abandoneaza(o.cerere.op_id))}>Renunță la operația locală refuzată; apoi alege altă piesă</button>}
+        </div>}
         {o.cerere.tip_op === 'sesiune_trimite' && o.stare === 'pe_tableta' && <button style={{ ...S.btn, marginLeft: 12 }} disabled={busy} onClick={() => action(() => q.retrage(o.cerere.op_id))}>Retrage trimiterea</button>}
       </li>)}</ul>
     </div>
