@@ -41,6 +41,9 @@ Deno.serve(async (req: Request) => {
       const macAsteptat = typeof d0?.meta?.mac === 'string' ? d0.meta.mac.toLowerCase() : null;
       const macDiferit = !!(c.online && c.mac && macAsteptat && c.mac !== macAsteptat);
       const valori = {
+        ...('ups_pct' in c ? { ups_pct: c.ups_pct } : {}),
+        ...('ups_pe_baterie' in c ? { ups_pe_baterie: c.ups_pe_baterie } : {}),
+        ...('ups_runtime_min' in c ? { ups_runtime_min: c.ups_runtime_min } : {}),
         online: macDiferit ? false : c.online,
         ...(c.mac ? { mac_vazut: c.mac } : {}),
         ...(macDiferit ? { motiv: 'mac_diferit', mac_asteptat: macAsteptat } : {}), latency_ms: c.latency_ms, cpu_temp: c.cpu_temp,

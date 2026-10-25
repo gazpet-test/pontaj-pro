@@ -1,6 +1,32 @@
 import { assertEquals } from 'jsr:@std/assert';
 import { valideazaCitiri } from './valideaza.ts';
 
+Deno.test('UPS: limite valide, false si null pastrate, lipsa ramane absenta', () => {
+  for (const ups_pct of [0, 25, 50, 80.5, 100]) {
+    for (const ups_pe_baterie of [false, true]) {
+      for (const ups_runtime_min of [0, 12.5, 10000, null]) {
+        const ups = { ups_pct, ups_pe_baterie, ups_runtime_min };
+        const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ...ups }] });
+        if (!r.ok) throw new Error(r.error);
+        for (const k of Object.keys(ups)) assertEquals(r.citiri[0][k as keyof typeof ups], ups[k as keyof typeof ups]);
+      }
+    }
+  }
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true }] });
+  if (!r.ok) throw new Error(r.error);
+  for (const k of ['ups_pct', 'ups_pe_baterie', 'ups_runtime_min']) assertEquals(k in r.citiri[0], false);
+});
+Deno.test('UPS: respinge intervale, tipuri gresite si chei necunoscute', () => {
+  for (const [k, valori] of Object.entries({
+    ups_pct: [-1, 101, NaN, Infinity, '92', true, null],
+    ups_pe_baterie: ['true', 'false', 0, 1, null],
+    ups_runtime_min: [-1, 10001, NaN, Infinity, '12', false],
+    ups_altceva: [1],
+  })) for (const v of valori) {
+    assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, [k]: v }] }).ok, false, `${k}=${v}`);
+  }
+});
+
 Deno.test('lot valid cu QNAP', () => {
   const r = valideazaCitiri({ citiri: [
     { extern_id: '192.168.1.42', online: true, latency_ms: 0.5, cpu_temp: 41, hdd_max: 35, disk_pct: 72, ram_pct: 86, uptime_s: 100600, raid_ok: true },

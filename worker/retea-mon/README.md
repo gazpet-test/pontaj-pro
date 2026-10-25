@@ -31,3 +31,10 @@ care nu poate citi secretele uid-0 și eșuează silențios. Folosește crontab-
 Citește doar stare tehnică (ping/temp) — niciun text scris de om, deci fără risc de prompt-injection.
 Scrie doar `iot_dispozitive`/`iot_citiri` pe dispozitive `sursa='retea'` EXISTENTE (funcția nu creează dispozitive).
 Poarta e secretul `x-retea-secret` (comparat în timp constant în funcție), nu doar JWT. Nu trimite mail, nu atinge bani/drepturi.
+
+## UPS server AI (25.10.2026)
+Tipul aiserver citeste si ups_pct (0..100), ups_pe_baterie (boolean JSON,
+inclusiv false) si ups_runtime_min (0..10000 sau null) din metrics.json.
+Se foloseste jq deja existent, fara dependente noi. Cheile absente/invalide sunt
+omise; runtime null este transmis explicit. Colectorul Windows se modifica separat
+de operator. Frecventa Terra ramane 10 min; alerta nu este instantanee.

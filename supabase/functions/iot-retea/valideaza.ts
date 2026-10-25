@@ -17,6 +17,9 @@ export type CitireRetea = {
   ai_claude_ramas_pct: number | null;
   ai_gemini_reset_s: number | null;
   ai_claude_reset_s: number | null;
+  ups_pct?: number;
+  ups_pe_baterie?: boolean;
+  ups_runtime_min?: number | null;
   mac: string | null;
 } & { [K in typeof AI_PCT[number] | typeof AI_ISO[number] | typeof AI_TEXT[number]]: number | string | null };
 type Rezultat = { ok: true; citiri: CitireRetea[] } | { ok: false; error: string };
@@ -38,7 +41,7 @@ export const AI_NOI = [...AI_PCT, ...AI_ISO, ...AI_TEXT];
 
 // 13.10.2026: MAC-ul văzut în ARP de sondă (Terra), comparat în index.ts cu meta.mac al dispozitivului.
 const MAC = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
-const CHEI = ['mac', ...AI_NOI, 'extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
+const CHEI = ['ups_pct', 'ups_pe_baterie', 'ups_runtime_min', 'mac', ...AI_NOI, 'extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
   'gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct',
   'ai_gemini_ramas_pct', 'ai_claude_ramas_pct', 'ai_gemini_reset_s', 'ai_claude_reset_s'];
 
@@ -71,6 +74,9 @@ export function valideazaCitiri(body: unknown): Rezultat {
     }
     if ('disk_pct' in c && !numarIn(c.disk_pct, 0, 100)) return { ok: false, error: 'disk_pct invalid' };
     if ('ram_pct' in c && !numarIn(c.ram_pct, 0, 100)) return { ok: false, error: 'ram_pct invalid' };
+    if ('ups_pct' in c && !numarIn(c.ups_pct, 0, 100)) return { ok: false, error: 'ups_pct invalid' };
+    if ('ups_pe_baterie' in c && typeof c.ups_pe_baterie !== 'boolean') return { ok: false, error: 'ups_pe_baterie invalid' };
+    if ('ups_runtime_min' in c && c.ups_runtime_min !== null && !numarIn(c.ups_runtime_min, 0, 10000)) return { ok: false, error: 'ups_runtime_min invalid' };
     if ('raid_ok' in c && typeof c.raid_ok !== 'boolean') return { ok: false, error: 'raid_ok invalid' };
     // Server AI (09.10.2026): chei GPU opționale
     if ('gpu_temp' in c && !numarIn(c.gpu_temp, -20, 120)) return { ok: false, error: 'gpu_temp invalid' };
@@ -93,6 +99,9 @@ export function valideazaCitiri(body: unknown): Rezultat {
       if (k in c && (typeof c[k] !== 'string' || !TEXT_SCURT.test(c[k] as string))) return { ok: false, error: `${k} invalid` };
     }
     out.push({
+      ...('ups_pct' in c ? { ups_pct: c.ups_pct as number } : {}),
+      ...('ups_pe_baterie' in c ? { ups_pe_baterie: c.ups_pe_baterie as boolean } : {}),
+      ...('ups_runtime_min' in c ? { ups_runtime_min: c.ups_runtime_min as number | null } : {}),
       ...Object.fromEntries(AI_NOI.map(k => [k, (c[k] ?? null) as number | string | null])),
       extern_id: c.extern_id,
       online: c.online,
