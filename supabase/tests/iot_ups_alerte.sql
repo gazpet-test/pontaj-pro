@@ -37,8 +37,8 @@ BEGIN
     IF actual <> expected THEN RAISE EXCEPTION 'UPS pct %, expected %, got %', pct,expected,actual; END IF;
     IF (SELECT count(*) FROM public.notifications WHERE type='warning' AND title='UPS: serverul AI ruleaza pe baterie'
       AND message LIKE '%' || pct || ' % - autonomie estimata 12 min%') <> 1 THEN RAISE EXCEPTION 'warning title/message'; END IF;
-    IF (SELECT count(*) FROM public.notifications WHERE type='error' AND title='UPS: baterie sub 50% pe server') <> CASE WHEN pct < 50 THEN 1 ELSE 0 END THEN RAISE EXCEPTION '50 threshold/title'; END IF;
-    IF (SELECT count(*) FROM public.notifications WHERE type='error' AND title='UPS: oprire iminenta (Windows opreste serverul la 20%)') <> CASE WHEN pct < 25 THEN 1 ELSE 0 END THEN RAISE EXCEPTION '25 threshold/title'; END IF;
+    IF (SELECT count(*) FROM public.notifications WHERE type='error' AND title='UPS: baterie sub 50% pe server') <> (CASE WHEN pct < 50 THEN 1 ELSE 0 END) THEN RAISE EXCEPTION '50 threshold/title'; END IF;
+    IF (SELECT count(*) FROM public.notifications WHERE type='error' AND title='UPS: oprire iminenta (Windows opreste serverul la 20%)') <> (CASE WHEN pct < 25 THEN 1 ELSE 0 END) THEN RAISE EXCEPTION '25 threshold/title'; END IF;
     PERFORM public.iot_verifica_retea();
     IF (SELECT count(*) FROM public.notifications) <> expected THEN RAISE EXCEPTION 'dedup duplicated alerts'; END IF;
   END LOOP;
