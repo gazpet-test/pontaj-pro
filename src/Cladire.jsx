@@ -475,7 +475,21 @@ export default function Cladire() {
                   <span style={{ color: on ? G.text : G.muted }}>{x.nume}<Edit x={x} />{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}{load}<IpSub x={x} /></span>
                   {stare}
                 </div>
-                {x.meta?.tip === 'server' && textUps(r, x.meta?.ups?.model) && <div style={{ fontSize:11, padding:'0 0 4px 12px', color:culori[nivelUps(r.ups_pct, r.ups_pe_baterie)] }}>{textUps(r, x.meta?.ups?.model)}</div>}
+                {x.meta?.tip === 'server' && (x.meta?.ups || textUps(r, x.meta?.ups?.model)) && (() => {
+                  const u = x.meta?.ups || {}
+                  const are = Number.isFinite(r.ups_pct) && r.ups_pct >= 0 && r.ups_pct <= 100
+                  const nivel = nivelUps(r.ups_pct, r.ups_pe_baterie)
+                  const stareUps = !are ? 'fără date de la UPS'
+                    : `${nr(r.ups_pct, 0)}% · ${r.ups_pe_baterie === true ? 'pe baterie' : r.ups_pe_baterie === false ? 'pe rețea' : 'stare necunoscută'}${r.ups_pe_baterie === true && Number.isFinite(r.ups_runtime_min) ? ` · ~${nr(r.ups_runtime_min, 0)} min` : ''}`
+                  const detalii = [u.serie && `serie ${u.serie}`, u.part_number, u.montat_la && `montat ${fmtDT(u.montat_la).split(',')[0]}`, u.alimenteaza && `alimentează ${u.alimenteaza}`].filter(Boolean).join(' · ')
+                  return <div style={{ margin:'2px 0 6px 12px', padding:'6px 10px', background:G.surface, border:`1px solid ${G.border}`, borderRadius:8 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap', fontSize:12.5 }}>
+                      <span>🔋 <b>{u.model || 'UPS'}</b>{Number.isFinite(u.capacitate_va) ? ` · ${nr(u.capacitate_va, 0)} VA` : ''}</span>
+                      <b style={{ color:culori[nivel] }}>{stareUps}</b>
+                    </div>
+                    {detalii && <div style={{ fontSize:10.5, color:G.dim, marginTop:2 }}>{detalii}</div>}
+                  </div>
+                })()}
                 {areGpu(x) && <ServerGpu dispozitiv={x} />}
                 {areLimiteAi(x) && <LimiteAi r={x.ultima_citire} />}
               </div>
