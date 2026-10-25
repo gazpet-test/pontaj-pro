@@ -184,3 +184,51 @@ describe('remedieri review Jakarinos r1', () => {
     expect(arbore.props.children[1].props.cheie).toBe('cheie-deschisa')
   })
 })
+
+describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
+  const mem = {}
+  const randare = props => {
+    harness.cursor = 0
+    return EipIntrareModal({ cheie: 'cheie-p', G: {}, S: {}, onClose: vi.fn(), onSuccess: vi.fn(), ...props })
+  }
+  const submit = props => randare(props).props.children.props.onSubmit({ preventDefault() {} })
+  beforeEach(() => {
+    for (const k of Object.keys(mem)) delete mem[k]
+    vi.stubGlobal('localStorage', { getItem: k => mem[k] ?? null, setItem: (k, v) => { mem[k] = v }, removeItem: k => { delete mem[k] } })
+    harness.stare = [formular(), [articol], false]
+    harness.cursor = 0
+    harness.rpc.mockReset()
+  })
+  it('rezultat incert: cheia si payload-ul raman in stocare; succesul la retrimitere le sterge', async () => {
+    harness.rpc.mockRejectedValueOnce(new Error('Failed to fetch'))
+    await submit()
+    const salvat = JSON.parse(mem.eip_intrare_pending_v1)
+    expect(salvat.cheie).toBe('cheie-p')
+    expect(salvat.cerere.p_cheie).toBe('cheie-p')
+    // simulam inchiderea/refresh: modal nou, doar cu pending, formular gol
+    harness.stare = [{ furnizor_cui: '', furnizor_nume: '', factura_nr: '', factura_data: '2026-10-25', observatii: '', linii: [] }, [], false]
+    harness.rpc.mockResolvedValueOnce({ error: null })
+    const succes = vi.fn()
+    await submit({ pending: salvat, onSuccess: succes })
+    expect(harness.rpc).toHaveBeenLastCalledWith('fn_eip_intrare_factura', salvat.cerere)
+    expect(succes).toHaveBeenCalledTimes(1)
+    expect(mem.eip_intrare_pending_v1).toBeUndefined()
+  })
+  it('respingere definitiva: pending-ul se sterge si formularul se poate corecta', async () => {
+    harness.rpc.mockResolvedValueOnce({ error: { code: 'P0001', message: 'eip_linie_invalida' } })
+    await submit()
+    expect(mem.eip_intrare_pending_v1).toBeUndefined()
+  })
+  it('butonul de deschidere reia receptia pastrata, cu aceeasi cheie', () => {
+    mem.eip_intrare_pending_v1 = JSON.stringify({ cheie: 'cheie-veche', cerere: construiesteCerere(formular(), 'cheie-veche') })
+    harness.stare = [true]
+    harness.cursor = 0
+    let arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
+    arbore.props.children[0].props.onClick()
+    harness.cursor = 0
+    arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
+    expect(arbore.props.children[1].props.cheie).toBe('cheie-veche')
+    expect(arbore.props.children[1].props.pending.cerere.p_cheie).toBe('cheie-veche')
+  })
+})
+

@@ -3,6 +3,17 @@ import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti } from './magazieEipLogica.js'
 import { construiesteCerere, validareRepartizare } from './eipIntrareLogica.js'
 
+const PENDING = 'eip_intrare_pending_v1'
+// Receptia cu rezultat incert (cheie + payload) supravietuieste inchiderii si refresh-ului: retry identic, fara dublare.
+const citestePending = () => {
+  try {
+    const p = JSON.parse(globalThis.localStorage?.getItem(PENDING) || 'null')
+    return p && typeof p.cheie === 'string' && p.cheie && p.cerere && Array.isArray(p.cerere.p_linii) ? p : null
+  } catch { return null }
+}
+const salveazaPending = p => { try { globalThis.localStorage?.setItem(PENDING, JSON.stringify(p)) } catch { /* fara stocare locala nu putem pastra retry-ul */ } }
+const stergePending = () => { try { globalThis.localStorage?.removeItem(PENDING) } catch { /* nimic de sters */ } }
+
 const linieNoua = () => ({ articol: null, cautare: '', cantitate: '', pe_marimi: [{ marime: '', cantitate: '' }] })
 
 // Montarea include butonul, dreptul de scriere si toast-ul; Magazie ramane minimal.
@@ -10,6 +21,7 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
   const [poateScrie, setPoateScrie] = useState(false)
   const [cheie, setCheie] = useState(null)
   const [toast, setToast] = useState('')
+  const [pending, setPending] = useState(() => citestePending())
   useEffect(() => {
     let activ = true
     const verifica = async () => {
@@ -19,7 +31,7 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
         const { data: p, error } = await supabase.from('profiles')
           .select('is_owner,can_process_achizitii,can_manage_stoc,role').eq('id', user.id).maybeSingle()
         if (activ) setPoateScrie(!error && !!(p && (p.is_owner || p.can_process_achizitii || p.can_manage_stoc || p.role === 'admin_logistica')))
-      } catch { /* Fara profil verificat nu afisam actiunea. */ }
+      } catch { if (activ) setPoateScrie(false) /* Fara profil verificat nu afisam actiunea. */ }
     }
     verifica()
     const { data: { subscription } } = supabase.auth.onAuthStateChange(() => { setTimeout(verifica, 0) })
@@ -31,9 +43,10 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
     return () => clearTimeout(timer)
   }, [toast])
   return <>
-    {poateScrie && <button style={S.btnP} onClick={() => { setToast(''); setCheie(crypto.randomUUID()) }}>+ Intrare EIP</button>}
-    {cheie && <EipIntrareModal key={cheie} cheie={cheie} G={G} S={S} onClose={() => setCheie(null)} onSuccess={() => {
+    {poateScrie && <button style={S.btnP} onClick={() => { setToast(''); const p = citestePending(); setPending(p); setCheie(p ? p.cheie : crypto.randomUUID()) }}>{pending ? '+ Intrare EIP (una necomfirmata)' : '+ Intrare EIP'}</button>}
+    {cheie && <EipIntrareModal key={cheie} cheie={cheie} pending={pending && pending.cheie === cheie ? pending : null} G={G} S={S} onClose={() => { setCheie(null); setPending(citestePending()) }} onSuccess={() => {
       setCheie(null)
+      setPending(null)
       setToast('Intrarea EIP a fost salvata.')
       onSuccess()
     }} />}
@@ -41,7 +54,7 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
   </>
 }
 
-export function EipIntrareModal({ cheie, G, S, onClose, onSuccess }) {
+export function EipIntrareModal({ cheie, pending = null, G, S, onClose, onSuccess }) {
   const [formular, setFormular] = useState(() => ({ furnizor_cui: '', furnizor_nume: '', factura_nr: '', factura_data: dataAziBucuresti(new Date()), observatii: '', linii: [linieNoua()] }))
   const [catalog, setCatalog] = useState([])
   const [incarca, setIncarca] = useState(true)
@@ -49,9 +62,9 @@ export function EipIntrareModal({ cheie, G, S, onClose, onSuccess }) {
   const [incercare, setIncercare] = useState(0)
   const [eroare, setEroare] = useState('')
   const [busy, setBusy] = useState(false)
-  const [blocat, setBlocat] = useState(false)
+  const [blocat, setBlocat] = useState(() => !!pending)
   const inCurs = useRef(false)
-  const cerereTrimisa = useRef(null)
+  const cerereTrimisa = useRef(pending?.cerere ?? null)
   useEffect(() => {
     let activ = true
     setIncarca(true)
@@ -73,16 +86,18 @@ export function EipIntrareModal({ cheie, G, S, onClose, onSuccess }) {
   try { cerere = construiesteCerere(formular, cheie) } catch (e) { validare = e.message }
   const salveaza = async e => {
     e.preventDefault()
-    if (inCurs.current || !cerere || incarca || eroareCatalog) return
+    if (inCurs.current || (!pending && (!cerere || incarca || eroareCatalog))) return
     inCurs.current = true
     setBusy(true)
     setEroare('')
     // Pastram si payload-ul dupa rezultat incert, nu doar cheia: retry identic.
     cerereTrimisa.current ||= cerere
+    salveazaPending({ cheie, cerere: cerereTrimisa.current })
     setBlocat(true)
     try {
       const { error } = await supabase.rpc('fn_eip_intrare_factura', cerereTrimisa.current)
       if (error) throw error
+      stergePending()
     } catch (e) {
       const mesaj = e.message || ''
       const drept = e.code === '42501' || mesaj.includes('eip_fara_drept')
@@ -98,6 +113,7 @@ export function EipIntrareModal({ cheie, G, S, onClose, onSuccess }) {
       const explicatie = Object.entries(explicatii).find(([cod]) => mesaj.includes(cod))?.[1] || 'Verifica datele documentului si repartizarea pe marimi.'
       if (respins && !mesaj.includes('eip_cheie_reutilizata')) {
         cerereTrimisa.current = null
+        stergePending()
         setBlocat(false)
       }
       setEroare(drept ? 'Nu ai drept de inregistrare EIP. Datele introduse au fost pastrate.' : respins ? `Receptie respinsa. ${explicatie} Datele au fost pastrate.` : 'Rezultatul salvarii este incert. Apasa Salveaza pentru a retrimite exact aceeasi receptie, fara dublare. Nu incepe o receptie noua pentru acelasi document.')
@@ -115,7 +131,11 @@ export function EipIntrareModal({ cheie, G, S, onClose, onSuccess }) {
       {incarca && <p role="status">Se incarca catalogul...</p>}
       {eroareCatalog && <p role="alert">{eroareCatalog} <button type="button" style={S.btnS} onClick={() => setIncercare(n => n + 1)}>Reincearca</button></p>}
       {!incarca && !eroareCatalog && !catalog.length && <p>Catalogul nu contine articole active.</p>}
-      <fieldset disabled={busy || blocat} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      {pending && <div style={{ border: `1px solid ${G.yellow}`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+        <b>Receptie cu rezultat necunoscut, pastrata pentru retrimitere.</b>
+        <p style={{ margin: '6px 0 0' }}>{pending.cerere.p_antet?.furnizor_nume} - document {pending.cerere.p_antet?.factura_nr} ({pending.cerere.p_linii.length} linii). Apasa Retrimite: aceeasi receptie nu se dubleaza. Abandonezi doar dupa ce ai verificat in Magazie ca nu a fost salvata.</p>
+      </div>}
+      <fieldset hidden={!!pending} disabled={busy || blocat} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           {camp('CUI furnizor', 'furnizor_cui')}{camp('Denumire furnizor', 'furnizor_nume')}
           {camp('Numar document', 'factura_nr')}{camp('Data document', 'factura_data', 'date')}
@@ -149,12 +169,13 @@ export function EipIntrareModal({ cheie, G, S, onClose, onSuccess }) {
         <label style={{ display: 'block', marginTop: 16 }}>Observatii<textarea disabled style={S.input} value="" readOnly /></label>
         <p style={{ fontSize: 12, color: G.muted }}>Observatiile nu sunt disponibile: RPC-ul B1 nu are camp pentru salvarea lor.</p>
       </fieldset>
-      {validare && <p style={{ color: G.yellow }}>{validare}</p>}
+      {validare && !pending && <p style={{ color: G.yellow }}>{validare}</p>}
       {eroare && <p role="alert" style={{ color: G.red }}>{eroare}</p>}
       {blocat && !busy && <p>Formularul este blocat pentru retrimiterea aceleiasi receptii.</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
         <button type="button" disabled={busy} style={S.btnS} onClick={onClose}>Inchide</button>
-        <button type="submit" disabled={!cerere || busy || incarca || !!eroareCatalog || !catalog.length} style={{ ...S.btnP, opacity: !cerere || busy || incarca || eroareCatalog || !catalog.length ? 0.5 : 1 }}>{busy ? 'Se salveaza...' : 'Salveaza'}</button>
+        {blocat && !busy && <button type="button" style={S.btnS} onClick={() => { if (window.confirm('Ai verificat in Magazie ca receptia NU a fost salvata? Abandonarea o sterge definitiv din acest browser.')) { stergePending(); onClose() } }}>Abandoneaza receptia</button>}
+        <button type="submit" disabled={pending ? busy : (!cerere || busy || incarca || !!eroareCatalog || !catalog.length)} style={{ ...S.btnP, opacity: (pending ? busy : (!cerere || busy || incarca || eroareCatalog || !catalog.length)) ? 0.5 : 1 }}>{busy ? 'Se salveaza...' : blocat ? 'Retrimite' : 'Salveaza'}</button>
       </div>
     </form>
   </div>
