@@ -7,6 +7,7 @@
 //   GET /v1.0/iot-01/associated-users/actions/list-users? — pe unele conturi nu e disponibil → alternativ config.uids in iot_integrari.
 // Stare: GET /v1.0/iot-03/devices/{id}/status → lista {code, value}.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { autorizeazaLumini, executaLumini } from './lumini_edge.ts';
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -23,11 +24,16 @@ async function hmac(secret: string, msg: string) {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
+  if (req.method !== 'POST') return new Response('Doar POST', { status: 405, headers: CORS });
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!;
   const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-  let body: any = {}; try { body = await req.json(); } catch { /* gol */ }
-  const actiune = String(body.actiune || 'sync');
+  let body: any = {}; try { body = await req.json(); } catch { return json({ error: 'JSON invalid' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Obiect JSON obligatoriu' }, 400);
+  if (body.actiune !== undefined && typeof body.actiune !== 'string') return json({ error: 'actiune trebuie sa fie string' }, 400);
+  const actiune = body.actiune === undefined ? 'sync' : body.actiune;
+  const lumini = ['comanda','test_comanda_noop','programe_tick'].includes(actiune);
+  let luminiUser: string | null = null;
 
   const sec = req.headers.get('x-iot-secret') || '';
   if (sec) {
@@ -42,12 +48,18 @@ Deno.serve(async (req: Request) => {
   }
   const setInteg = (patch: any) => db.from('iot_integrari').update({ ...patch, actualizat_la: new Date().toISOString() }).eq('cheie', 'tuya');
 
+  if (lumini) {
+    const gate = await autorizeazaLumini(req, db, actiune, !!sec);
+    if (!gate.ok) return json({ error: gate.error }, gate.status || 403);
+    luminiUser = gate.userId || null;
+  }
+
   try {
     const [{ data: id }, { data: secret }, { data: integ }] = await Promise.all([
       db.rpc('iot_secret_get', { p_name: 'TUYA_ACCESS_ID' }), db.rpc('iot_secret_get', { p_name: 'TUYA_ACCESS_SECRET' }),
       db.from('iot_integrari').select('config').eq('cheie', 'tuya').maybeSingle(),
     ]);
-    if (!id || !secret) return json({ error: 'TUYA_ACCESS_ID / TUYA_ACCESS_SECRET lipsă în Vault' }, 500);
+    if ((!id || !secret) && !lumini) return json({ error: 'TUYA_ACCESS_ID / TUYA_ACCESS_SECRET lipsă în Vault' }, 500);
     const cfg = integ?.config || {};
     const BASE = cfg.endpoint || 'https://openapi.tuyaeu.com';
     let token = '';
@@ -58,11 +70,29 @@ Deno.serve(async (req: Request) => {
       const bodyStr = bodyObj ? JSON.stringify(bodyObj) : '';
       const strToSign = [method, await sha256(bodyStr), '', path].join('\n');
       const sign = await hmac(secret, id + token + t + nonce + strToSign);
-      const r = await fetch(`${BASE}${path}`, { method, headers: { client_id: id, sign, t, nonce, sign_method: 'HMAC-SHA256', ...(token ? { access_token: token } : {}), 'Content-Type': 'application/json' }, body: bodyStr || undefined });
+      const r = await fetch(`${BASE}${path}`, { method, signal: AbortSignal.timeout(10000), headers: { client_id: id, sign, t, nonce, sign_method: 'HMAC-SHA256', ...(token ? { access_token: token } : {}), 'Content-Type': 'application/json' }, body: bodyStr || undefined });
       const j = await r.json().catch(() => ({}));
-      if (!j.success) throw new Error(`${path}: ${j.code} ${j.msg || ''}`);
+      if (!j.success) {
+        const error = new Error(`${path}: ${j.code} ${j.msg || ''}`);
+        // Doar raspunsul explicit de business este refuz cert; reteaua ramane incerta.
+        Object.assign(error, { refuzCert: j.success === false && j.code != null });
+        throw error;
+      }
       return j.result;
     };
+    // Includem tokenul in calea jurnalizata a comenzilor, inclusiv esecul autentificarii Tuya.
+    if (lumini) {
+      let tokenPromise: Promise<void> | undefined;
+      const luminiCall = async (method: string, path: string, payload?: unknown) => {
+        if (!id || !secret) throw new Error('Chei Tuya indisponibile in Vault');
+        // Inclusiv esecul este comun: nu reluam autentificarea pentru fiecare lumina.
+        tokenPromise ||= call('GET','/v1.0/token?grant_type=1').then(tk => { token=tk.access_token; });
+        await tokenPromise;
+        return call(method,path,payload);
+      };
+      const result = await executaLumini(db, luminiCall, { ...body, actiune }, luminiUser);
+      return json(result, result.ok ? 200 : 409);
+    }
     const tk = await call('GET', '/v1.0/token?grant_type=1');
     token = tk.access_token;
     const uid = tk.uid;
