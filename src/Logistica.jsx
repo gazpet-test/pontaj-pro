@@ -21,6 +21,7 @@ import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import CarteTehnicaSearch from './CarteTehnicaSearch.jsx'
 import FisaActivExport from './FisaActivExport.jsx'
+import BmwCardataCard from './BmwCardataCard.jsx'
 import { construiesteF23, numeFisier, descarcaDocx } from './OfertareExport.js'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import ImportRompetrolModal from './ImportRompetrolModal.jsx'
@@ -2245,6 +2246,7 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
           )}
         </div>
 
+        {activ?.id && <BmwCardataCard key={activ.id} serieSasiu={activ.serie_sasiu} G={G} S={S} />}
         {activ?.id && (
           <CarteTehnicaSearch activ={activ} showToast={showToast} />
         )}
