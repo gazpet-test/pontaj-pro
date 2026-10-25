@@ -97,10 +97,13 @@ describe('contractul RPC B1', () => {
 describe('salvarea din modal, RPC simulat fara BD', () => {
   const randare = props => {
     harness.cursor = 0
-    return EipIntrareModal({ cheie: 'cheie-sesiune', G: {}, S: {}, onClose: vi.fn(), onSuccess: vi.fn(), ...props })
+    return EipIntrareModal({ cheie: 'cheie-sesiune', uid: 'u1', G: {}, S: {}, onClose: vi.fn(), onSuccess: vi.fn(), ...props })
   }
   const submit = props => randare(props).props.children.props.onSubmit({ preventDefault() {} })
+  const stocare = {}
   beforeEach(() => {
+    for (const k of Object.keys(stocare)) delete stocare[k]
+    vi.stubGlobal('localStorage', { getItem: k => stocare[k] ?? null, setItem: (k, v) => { stocare[k] = v }, removeItem: k => { delete stocare[k] } })
     harness.stare = [formular(), [articol], false]
     harness.cursor = 0
     harness.rpc.mockReset()
@@ -144,7 +147,7 @@ describe('salvarea din modal, RPC simulat fara BD', () => {
     expect(rezultat.props.children[0]).toBe(false)
   })
   it('genereaza UUID doar la deschidere si il pastreaza la rerandare', () => {
-    harness.stare = [true]
+    harness.stare = [true, null, '', null, 'u1']
     const uuid = vi.spyOn(crypto, 'randomUUID').mockReturnValue('11111111-1111-4111-8111-111111111111')
     try {
       const randareActiune = () => {
@@ -189,7 +192,7 @@ describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
   const mem = {}
   const randare = props => {
     harness.cursor = 0
-    return EipIntrareModal({ cheie: 'cheie-p', G: {}, S: {}, onClose: vi.fn(), onSuccess: vi.fn(), ...props })
+    return EipIntrareModal({ cheie: 'cheie-p', uid: 'u1', G: {}, S: {}, onClose: vi.fn(), onSuccess: vi.fn(), ...props })
   }
   const submit = props => randare(props).props.children.props.onSubmit({ preventDefault() {} })
   beforeEach(() => {
@@ -202,7 +205,7 @@ describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
   it('rezultat incert: cheia si payload-ul raman in stocare; succesul la retrimitere le sterge', async () => {
     harness.rpc.mockRejectedValueOnce(new Error('Failed to fetch'))
     await submit()
-    const salvat = JSON.parse(mem.eip_intrare_pending_v1)
+    const salvat = JSON.parse(mem['eip_intrare_pending_v1:u1'])
     expect(salvat.cheie).toBe('cheie-p')
     expect(salvat.cerere.p_cheie).toBe('cheie-p')
     // simulam inchiderea/refresh: modal nou, doar cu pending, formular gol
@@ -212,16 +215,16 @@ describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
     await submit({ pending: salvat, onSuccess: succes })
     expect(harness.rpc).toHaveBeenLastCalledWith('fn_eip_intrare_factura', salvat.cerere)
     expect(succes).toHaveBeenCalledTimes(1)
-    expect(mem.eip_intrare_pending_v1).toBeUndefined()
+    expect(mem['eip_intrare_pending_v1:u1']).toBeUndefined()
   })
   it('respingere definitiva: pending-ul se sterge si formularul se poate corecta', async () => {
     harness.rpc.mockResolvedValueOnce({ error: { code: 'P0001', message: 'eip_linie_invalida' } })
     await submit()
-    expect(mem.eip_intrare_pending_v1).toBeUndefined()
+    expect(mem['eip_intrare_pending_v1:u1']).toBeUndefined()
   })
   it('butonul de deschidere reia receptia pastrata, cu aceeasi cheie', () => {
-    mem.eip_intrare_pending_v1 = JSON.stringify({ cheie: 'cheie-veche', cerere: construiesteCerere(formular(), 'cheie-veche') })
-    harness.stare = [true]
+    mem['eip_intrare_pending_v1:u1'] = JSON.stringify({ cheie: 'cheie-veche', cerere: construiesteCerere(formular(), 'cheie-veche') })
+    harness.stare = [true, null, '', null, 'u1']
     harness.cursor = 0
     let arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
     arbore.props.children[0].props.onClick()
@@ -229,6 +232,27 @@ describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
     arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
     expect(arbore.props.children[1].props.cheie).toBe('cheie-veche')
     expect(arbore.props.children[1].props.pending.cerere.p_cheie).toBe('cheie-veche')
+  })
+  it('fail-closed: daca stocarea locala nu poate pastra receptia, RPC-ul NU porneste', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError') }, removeItem: () => {} })
+    await submit()
+    expect(harness.rpc).not.toHaveBeenCalled()
+    vi.stubGlobal('localStorage', { getItem: () => 'altceva', setItem: () => {}, removeItem: () => {} })
+    await submit()
+    expect(harness.rpc).not.toHaveBeenCalled()
+    await submit({ uid: null })
+    expect(harness.rpc).not.toHaveBeenCalled()
+  })
+  it('pending-ul e separat pe utilizator: B nu vede receptia lui A', () => {
+    mem['eip_intrare_pending_v1:u1'] = JSON.stringify({ cheie: 'cheie-A', cerere: construiesteCerere(formular(), 'cheie-A') })
+    harness.stare = [true, null, '', null, 'u2']
+    harness.cursor = 0
+    let arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
+    arbore.props.children[0].props.onClick()
+    harness.cursor = 0
+    arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
+    expect(arbore.props.children[1].props.cheie).not.toBe('cheie-A')
+    expect(arbore.props.children[1].props.pending).toBe(null)
   })
 })
 

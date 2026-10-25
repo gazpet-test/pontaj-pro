@@ -4,15 +4,25 @@ import { dataAziBucuresti } from './magazieEipLogica.js'
 import { construiesteCerere, validareRepartizare } from './eipIntrareLogica.js'
 
 const PENDING = 'eip_intrare_pending_v1'
-// Receptia cu rezultat incert (cheie + payload) supravietuieste inchiderii si refresh-ului: retry identic, fara dublare.
-const citestePending = () => {
+const cheiePending = uid => `${PENDING}:${uid}`
+// Receptia cu rezultat incert (cheie + payload) supravietuieste inchiderii/refresh-ului, separat pe utilizator: retry identic, fara dublare.
+const citestePending = uid => {
+  if (!uid) return null
   try {
-    const p = JSON.parse(globalThis.localStorage?.getItem(PENDING) || 'null')
+    const p = JSON.parse(globalThis.localStorage?.getItem(cheiePending(uid)) || 'null')
     return p && typeof p.cheie === 'string' && p.cheie && p.cerere && Array.isArray(p.cerere.p_linii) ? p : null
   } catch { return null }
 }
-const salveazaPending = p => { try { globalThis.localStorage?.setItem(PENDING, JSON.stringify(p)) } catch { /* fara stocare locala nu putem pastra retry-ul */ } }
-const stergePending = () => { try { globalThis.localStorage?.removeItem(PENDING) } catch { /* nimic de sters */ } }
+// Fail-closed: RPC-ul porneste doar daca receptia a fost scrisa SI recitita identic.
+const salveazaPending = (uid, p) => {
+  if (!uid) return false
+  try {
+    const text = JSON.stringify(p)
+    globalThis.localStorage.setItem(cheiePending(uid), text)
+    return globalThis.localStorage.getItem(cheiePending(uid)) === text
+  } catch { return false }
+}
+const stergePending = uid => { try { if (uid) globalThis.localStorage?.removeItem(cheiePending(uid)) } catch { /* nimic de sters */ } }
 
 const linieNoua = () => ({ articol: null, cautare: '', cantitate: '', pe_marimi: [{ marime: '', cantitate: '' }] })
 
@@ -21,13 +31,22 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
   const [poateScrie, setPoateScrie] = useState(false)
   const [cheie, setCheie] = useState(null)
   const [toast, setToast] = useState('')
-  const [pending, setPending] = useState(() => citestePending())
+  const [pending, setPending] = useState(null)
+  const [uid, setUid] = useState(null)
+  const uidRef = useRef(null)
   useEffect(() => {
     let activ = true
     const verifica = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser()
-        if (!user) { if (activ) setPoateScrie(false); return }
+        if (!user) { if (activ) { uidRef.current = null; setUid(null); setPending(null); setCheie(null); setPoateScrie(false) } return }
+        if (activ) {
+          // alt utilizator in acelasi browser: nu preluam receptia si nu pastram modalul celuilalt
+          if (uidRef.current && uidRef.current !== user.id) setCheie(null)
+          uidRef.current = user.id
+          setUid(user.id)
+          setPending(citestePending(user.id))
+        }
         const { data: p, error } = await supabase.from('profiles')
           .select('is_owner,can_process_achizitii,can_manage_stoc,role').eq('id', user.id).maybeSingle()
         if (activ) setPoateScrie(!error && !!(p && (p.is_owner || p.can_process_achizitii || p.can_manage_stoc || p.role === 'admin_logistica')))
@@ -43,8 +62,8 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
     return () => clearTimeout(timer)
   }, [toast])
   return <>
-    {poateScrie && <button style={S.btnP} onClick={() => { setToast(''); const p = citestePending(); setPending(p); setCheie(p ? p.cheie : crypto.randomUUID()) }}>{pending ? '+ Intrare EIP (una necomfirmata)' : '+ Intrare EIP'}</button>}
-    {cheie && <EipIntrareModal key={cheie} cheie={cheie} pending={pending && pending.cheie === cheie ? pending : null} G={G} S={S} onClose={() => { setCheie(null); setPending(citestePending()) }} onSuccess={() => {
+    {poateScrie && <button style={S.btnP} onClick={() => { setToast(''); const p = citestePending(uid); setPending(p); setCheie(p ? p.cheie : crypto.randomUUID()) }}>{pending ? '+ Intrare EIP (una necomfirmata)' : '+ Intrare EIP'}</button>}
+    {cheie && <EipIntrareModal key={cheie} cheie={cheie} uid={uid} pending={pending && pending.cheie === cheie ? pending : null} G={G} S={S} onClose={() => { setCheie(null); setPending(citestePending(uid)) }} onSuccess={() => {
       setCheie(null)
       setPending(null)
       setToast('Intrarea EIP a fost salvata.')
@@ -54,7 +73,7 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
   </>
 }
 
-export function EipIntrareModal({ cheie, pending = null, G, S, onClose, onSuccess }) {
+export function EipIntrareModal({ cheie, uid, pending = null, G, S, onClose, onSuccess }) {
   const [formular, setFormular] = useState(() => ({ furnizor_cui: '', furnizor_nume: '', factura_nr: '', factura_data: dataAziBucuresti(new Date()), observatii: '', linii: [linieNoua()] }))
   const [catalog, setCatalog] = useState([])
   const [incarca, setIncarca] = useState(true)
@@ -92,12 +111,19 @@ export function EipIntrareModal({ cheie, pending = null, G, S, onClose, onSucces
     setEroare('')
     // Pastram si payload-ul dupa rezultat incert, nu doar cheia: retry identic.
     cerereTrimisa.current ||= cerere
-    salveazaPending({ cheie, cerere: cerereTrimisa.current })
+    if (!pending && !salveazaPending(uid, { cheie, cerere: cerereTrimisa.current })) {
+      // Fara retry durabil nu trimitem: un raspuns pierdut ar putea dubla receptia.
+      cerereTrimisa.current = null
+      inCurs.current = false
+      setBusy(false)
+      setEroare('Nu pot pastra receptia in acest browser (stocare locala indisponibila sau utilizator neidentificat), deci nu o trimit. Datele au fost pastrate; deblocheaza stocarea locala si reincearca.')
+      return
+    }
     setBlocat(true)
     try {
       const { error } = await supabase.rpc('fn_eip_intrare_factura', cerereTrimisa.current)
       if (error) throw error
-      stergePending()
+      stergePending(uid)
     } catch (e) {
       const mesaj = e.message || ''
       const drept = e.code === '42501' || mesaj.includes('eip_fara_drept')
@@ -113,7 +139,7 @@ export function EipIntrareModal({ cheie, pending = null, G, S, onClose, onSucces
       const explicatie = Object.entries(explicatii).find(([cod]) => mesaj.includes(cod))?.[1] || 'Verifica datele documentului si repartizarea pe marimi.'
       if (respins && !mesaj.includes('eip_cheie_reutilizata')) {
         cerereTrimisa.current = null
-        stergePending()
+        stergePending(uid)
         setBlocat(false)
       }
       setEroare(drept ? 'Nu ai drept de inregistrare EIP. Datele introduse au fost pastrate.' : respins ? `Receptie respinsa. ${explicatie} Datele au fost pastrate.` : 'Rezultatul salvarii este incert. Apasa Salveaza pentru a retrimite exact aceeasi receptie, fara dublare. Nu incepe o receptie noua pentru acelasi document.')
@@ -174,7 +200,7 @@ export function EipIntrareModal({ cheie, pending = null, G, S, onClose, onSucces
       {blocat && !busy && <p>Formularul este blocat pentru retrimiterea aceleiasi receptii.</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
         <button type="button" disabled={busy} style={S.btnS} onClick={onClose}>Inchide</button>
-        {blocat && !busy && <button type="button" style={S.btnS} onClick={() => { if (window.confirm('Ai verificat in Magazie ca receptia NU a fost salvata? Abandonarea o sterge definitiv din acest browser.')) { stergePending(); onClose() } }}>Abandoneaza receptia</button>}
+        {blocat && !busy && <button type="button" style={S.btnS} onClick={() => { if (window.confirm('Ai verificat in Magazie ca receptia NU a fost salvata? Abandonarea o sterge definitiv din acest browser.')) { stergePending(uid); onClose() } }}>Abandoneaza receptia</button>}
         <button type="submit" disabled={pending ? busy : (!cerere || busy || incarca || !!eroareCatalog || !catalog.length)} style={{ ...S.btnP, opacity: (pending ? busy : (!cerere || busy || incarca || eroareCatalog || !catalog.length)) ? 0.5 : 1 }}>{busy ? 'Se salveaza...' : blocat ? 'Retrimite' : 'Salveaza'}</button>
       </div>
     </form>
