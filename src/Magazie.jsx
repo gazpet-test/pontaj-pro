@@ -13,6 +13,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
+import EipIntrareActiune from './EipIntrareModal.jsx'
 import ProductieTab from './MagazieProductie.jsx'
 import IzoStocTeava from './IzoStocTeava.jsx'
 import IzoDocumenteIntrare from './IzoDocumenteIntrare.jsx'
@@ -664,6 +665,7 @@ function EchipamenteTab() {
         <div style={{ flex:1 }} />
         <button onClick={loadAll} style={{ ...S.btnS }}>🔄</button>
         <button onClick={() => setBulkOpen(true)} style={{ ...S.btnS }}>📄 Adaugă din factură</button>
+        <EipIntrareActiune G={G} S={S} onSuccess={loadAll} />
         <button onClick={() => setEditModal({ denumire:'', categorie:'echipament', este_eip:false, um:'buc', serie:'', cantitate_total:1, stare:'functional', observatii:'' })} style={{ ...S.btnP }}>+ Echipament</button>
       </div>
 
