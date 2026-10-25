@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { MeteoSantier } from './Meteo.jsx'
 import { textInregistrare } from './cameraInregistrare.js'
+import CladireLumini from './CladireLumini.jsx'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681', green:'#3FB950', red:'#F85149', yellow:'#E3B341', blue:'#58A6FF', orange:'#F0883E' }
 const S = { card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10, padding:16 }, btnS: { padding:'7px 13px', background:G.surface, color:G.text, border:`1px solid ${G.border}`, borderRadius:7, cursor:'pointer', fontSize:12.5, textDecoration:'none' } }
@@ -448,6 +449,7 @@ export default function Cladire() {
         </div>
 
         <TerraMonitor />
+        <CladireLumini />
         <QnapMonitor />
 
         {/* Rețea & servere: ping (online/offline) + temperaturi QNAP; datele vin de la workerul retea-mon (Terra) prin iot-retea */}
