@@ -34,13 +34,18 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
   const [pending, setPending] = useState(null)
   const [uid, setUid] = useState(null)
   const uidRef = useRef(null)
+  const generatie = useRef(0)
   useEffect(() => {
     let activ = true
     const verifica = async () => {
+      // Fiecare verificare are un token: un raspuns vechi (alt utilizator) nu mai poate scrie in stare.
+      const gen = ++generatie.current
+      const curenta = () => activ && gen === generatie.current
       try {
         const { data: { user } } = await supabase.auth.getUser()
+        if (!curenta()) return
         if (!user) { if (activ) { uidRef.current = null; setUid(null); setPending(null); setCheie(null); setPoateScrie(false) } return }
-        if (activ) {
+        if (curenta()) {
           // alt utilizator in acelasi browser: nu preluam receptia si nu pastram modalul celuilalt
           if (uidRef.current && uidRef.current !== user.id) setCheie(null)
           uidRef.current = user.id
@@ -49,8 +54,8 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
         }
         const { data: p, error } = await supabase.from('profiles')
           .select('is_owner,can_process_achizitii,can_manage_stoc,role').eq('id', user.id).maybeSingle()
-        if (activ) setPoateScrie(!error && !!(p && (p.is_owner || p.can_process_achizitii || p.can_manage_stoc || p.role === 'admin_logistica')))
-      } catch { if (activ) setPoateScrie(false) /* Fara profil verificat nu afisam actiunea. */ }
+        if (curenta()) setPoateScrie(!error && !!(p && (p.is_owner || p.can_process_achizitii || p.can_manage_stoc || p.role === 'admin_logistica')))
+      } catch { if (curenta()) setPoateScrie(false) /* Fara profil verificat nu afisam actiunea. */ }
     }
     verifica()
     const { data: { subscription } } = supabase.auth.onAuthStateChange(() => { setTimeout(verifica, 0) })
@@ -109,15 +114,17 @@ export function EipIntrareModal({ cheie, uid, pending = null, G, S, onClose, onS
     inCurs.current = true
     setBusy(true)
     setEroare('')
+    const elibereaza = mesaj => { inCurs.current = false; setBusy(false); setEroare(mesaj) }
+    // Identitatea se reverifica chiar inainte de trimitere: payload-ul unui utilizator nu pleaca sub sesiunea altuia.
+    let curent = null
+    try { const { data } = await supabase.auth.getUser(); curent = data?.user?.id ?? null } catch { curent = null }
+    if (!uid || curent !== uid) return elibereaza('Sesiunea s-a schimbat sau nu poate fi verificata, deci nu trimit receptia. Datele au fost pastrate; autentifica-te cu utilizatorul care a inceput receptia.')
     // Pastram si payload-ul dupa rezultat incert, nu doar cheia: retry identic.
     cerereTrimisa.current ||= cerere
     if (!pending && !salveazaPending(uid, { cheie, cerere: cerereTrimisa.current })) {
       // Fara retry durabil nu trimitem: un raspuns pierdut ar putea dubla receptia.
       cerereTrimisa.current = null
-      inCurs.current = false
-      setBusy(false)
-      setEroare('Nu pot pastra receptia in acest browser (stocare locala indisponibila sau utilizator neidentificat), deci nu o trimit. Datele au fost pastrate; deblocheaza stocarea locala si reincearca.')
-      return
+      return elibereaza('Nu pot pastra receptia in acest browser (stocare locala indisponibila sau utilizator neidentificat), deci nu o trimit. Datele au fost pastrate; deblocheaza stocarea locala si reincearca.')
     }
     setBlocat(true)
     try {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { canonicalMarime, construiesteAntetSiLinii, construiesteCerere, normalizeazaNumar, validareMarime, validareRepartizare } from './eipIntrareLogica.js'
 
-const harness = vi.hoisted(() => ({ stare: [], cursor: 0, rpc: vi.fn() }))
+const harness = vi.hoisted(() => ({ stare: [], cursor: 0, rpc: vi.fn(), getUser: vi.fn() }))
 vi.mock('react', async importa => ({
   ...await importa(),
   // Harness local fara DOM: pastram starea si ref-urile intre randari.
@@ -16,7 +16,7 @@ vi.mock('react', async importa => ({
   },
   useEffect: () => {},
 }))
-vi.mock('./lib/supabase.js', () => ({ supabase: { rpc: harness.rpc } }))
+vi.mock('./lib/supabase.js', () => ({ supabase: { rpc: harness.rpc, auth: { getUser: harness.getUser } } }))
 import EipIntrareActiune, { EipIntrareModal } from './EipIntrareModal.jsx'
 
 const articol = { id: 7, denumire: 'BOCANCI', tip_marime: 'numar', um: 'pereche', activ: true }
@@ -107,6 +107,8 @@ describe('salvarea din modal, RPC simulat fara BD', () => {
     harness.stare = [formular(), [articol], false]
     harness.cursor = 0
     harness.rpc.mockReset()
+    harness.getUser.mockReset()
+    harness.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
   })
   it('blocheaza dublul click si dupa eroare de retea retrimite acelasi payload si aceeasi cheie', async () => {
     let respinge
@@ -201,6 +203,8 @@ describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
     harness.stare = [formular(), [articol], false]
     harness.cursor = 0
     harness.rpc.mockReset()
+    harness.getUser.mockReset()
+    harness.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
   })
   it('rezultat incert: cheia si payload-ul raman in stocare; succesul la retrimitere le sterge', async () => {
     harness.rpc.mockRejectedValueOnce(new Error('Failed to fetch'))
@@ -253,6 +257,22 @@ describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
     arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
     expect(arbore.props.children[1].props.cheie).not.toBe('cheie-A')
     expect(arbore.props.children[1].props.pending).toBe(null)
+  })
+  it('reverifica identitatea la trimitere: alt utilizator sau sesiune necitibila => RPC-ul NU porneste', async () => {
+    harness.getUser.mockResolvedValue({ data: { user: { id: 'u2' } } })
+    await submit()
+    expect(harness.rpc).not.toHaveBeenCalled()
+    harness.getUser.mockResolvedValue({ data: { user: null } })
+    await submit()
+    expect(harness.rpc).not.toHaveBeenCalled()
+    harness.getUser.mockRejectedValue(new Error('retea'))
+    await submit()
+    expect(harness.rpc).not.toHaveBeenCalled()
+    expect(mem['eip_intrare_pending_v1:u1']).toBeUndefined()
+    harness.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    harness.rpc.mockResolvedValueOnce({ error: null })
+    await submit()
+    expect(harness.rpc).toHaveBeenCalledTimes(1)
   })
 })
 
