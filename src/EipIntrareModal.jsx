@@ -207,7 +207,15 @@ export function EipIntrareModal({ cheie, uid, pending = null, G, S, onClose, onS
       {blocat && !busy && <p>Formularul este blocat pentru retrimiterea aceleiasi receptii.</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
         <button type="button" disabled={busy} style={S.btnS} onClick={onClose}>Inchide</button>
-        {blocat && !busy && <button type="button" style={S.btnS} onClick={() => { if (window.confirm('Ai verificat in Magazie ca receptia NU a fost salvata? Abandonarea o sterge definitiv din acest browser.')) { stergePending(uid); onClose() } }}>Abandoneaza receptia</button>}
+        {blocat && !busy && <button type="button" style={S.btnS} onClick={async () => {
+          if (!window.confirm('Ai verificat in Magazie ca receptia NU a fost salvata? Abandonarea o sterge definitiv din acest browser.')) return
+          // Identitatea se reverifica si la abandon: la eroare/null/alt utilizator nu se sterge nimic.
+          let curent = null
+          try { const { data } = await supabase.auth.getUser(); curent = data?.user?.id ?? null } catch { curent = null }
+          if (!uid || curent !== uid) { setEroare('Sesiunea s-a schimbat sau nu poate fi verificata, deci nu sterg receptia pastrata.'); return }
+          stergePending(uid)
+          onClose()
+        }}>Abandoneaza receptia</button>}
         <button type="submit" disabled={pending ? busy : (!cerere || busy || incarca || !!eroareCatalog || !catalog.length)} style={{ ...S.btnP, opacity: (pending ? busy : (!cerere || busy || incarca || eroareCatalog || !catalog.length)) ? 0.5 : 1 }}>{busy ? 'Se salveaza...' : blocat ? 'Retrimite' : 'Salveaza'}</button>
       </div>
     </form>

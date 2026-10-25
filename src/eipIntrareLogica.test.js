@@ -274,5 +274,31 @@ describe('remedieri review Copilot r1: retry dupa inchidere/refresh', () => {
     await submit()
     expect(harness.rpc).toHaveBeenCalledTimes(1)
   })
+  it('abandonarea reverifica identitatea: alt utilizator/eroare => pending-ul NU se sterge', async () => {
+    const salvat = { cheie: 'cheie-p', cerere: construiesteCerere(formular(), 'cheie-p') }
+    mem['eip_intrare_pending_v1:u1'] = JSON.stringify(salvat)
+    vi.stubGlobal('window', { confirm: () => true })
+    const buton = arbore => {
+      const gasit = []
+      const umbla = n => { if (!n || typeof n !== 'object') return; if (Array.isArray(n)) return n.forEach(umbla); if (n.props?.children?.[0] === 'Abandoneaza receptia' || n.props?.children === 'Abandoneaza receptia') gasit.push(n); umbla(n.props?.children) }
+      umbla(arbore)
+      return gasit[0]
+    }
+    harness.stare = [{ furnizor_cui: '', furnizor_nume: '', factura_nr: '', factura_data: '2026-10-25', observatii: '', linii: [] }, [], false]
+    harness.cursor = 0
+    const arbore = EipIntrareModal({ cheie: 'cheie-p', uid: 'u1', pending: salvat, G: {}, S: {}, onClose: vi.fn(), onSuccess: vi.fn() })
+    const b = buton(arbore)
+    expect(b).toBeTruthy()
+    harness.getUser.mockResolvedValue({ data: { user: { id: 'u2' } } })
+    await b.props.onClick()
+    expect(mem['eip_intrare_pending_v1:u1']).toBeDefined()
+    harness.getUser.mockRejectedValue(new Error('retea'))
+    await b.props.onClick()
+    expect(mem['eip_intrare_pending_v1:u1']).toBeDefined()
+    harness.getUser.mockResolvedValue({ data: { user: { id: 'u1' } } })
+    await b.props.onClick()
+    expect(mem['eip_intrare_pending_v1:u1']).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
 })
 
