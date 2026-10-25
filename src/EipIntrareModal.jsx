@@ -18,7 +18,7 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
         if (!user) { if (activ) setPoateScrie(false); return }
         const { data: p, error } = await supabase.from('profiles')
           .select('is_owner,can_process_achizitii,can_manage_stoc,role').eq('id', user.id).maybeSingle()
-        if (activ && !error) setPoateScrie(!!(p && (p.is_owner || p.can_process_achizitii || p.can_manage_stoc || p.role === 'admin_logistica')))
+        if (activ) setPoateScrie(!error && !!(p && (p.is_owner || p.can_process_achizitii || p.can_manage_stoc || p.role === 'admin_logistica')))
       } catch { /* Fara profil verificat nu afisam actiunea. */ }
     }
     verifica()

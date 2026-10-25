@@ -64,3 +64,9 @@ Testele sarite sunt cele existente, nu sunt declarate trecute. Harness-ul de com
 - Dupa inchiderea/redeschiderea modalului se genereaza alta cheie. Daca raspunsul anterior a fost pierdut, utilizatorul trebuie sa reincearce in acelasi modal; mesajul explica riscul duplicarii la o receptie noua.
 - Build-ul avertizeaza asupra dimensiunii chunk-ului principal; nu s-a schimbat strategia de bundling.
 - Fara Git, commit, push, secrete, acces BD, migrari sau deploy. Interdictia explicita de commit prevaleaza fata de cerinta contradictorie de livrare din brief.
+
+## Dupa review Jakarinos r1 + r2 (chat, 25.10.2026)
+- P1 (retry dupa refresh auth) remediat; r2: la eroare de citire a profilului butonul se ascunde (poateScrie=false), modalul ramane montat cat exista cheia.
+- P3 (total exact) remediat.
+- P2 (canonicalizare marime numerica): UI trimite o singura forma (42, 042 si 42.0 -> 42). Identitatea stocului din SQL (B1) NU normalizeaza marimea: alte cai de scriere (fn_eip_muta, citirea AI B4, predarea B3) trebuie sa foloseasca aceeasi regula. Verificat in BD 25.10: 6 intrari, 0 cu marime, 0 necanonice, deci nu exista rand istoric afectat. Remediere definitiva = normalizare in functiile SQL (migrare B1.1, cere da Razvan), de facut inainte de B3/B4.
+
