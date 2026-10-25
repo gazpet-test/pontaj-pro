@@ -1,6 +1,6 @@
 #!/bin/sh
 # Terra -> IoT (iot-retea): sondează dispozitivele de rețea (ping + temp QNAP) și trimite un lot de citiri.
-# POSIX sh, o singură încercare per rulare. Fără jq/python.
+# POSIX sh, o singura incercare per rulare. jq pentru whitelist AI/UPS; fara Python.
 set -u
 umask 077
 LC_ALL=C; export LC_ALL
@@ -109,6 +109,16 @@ while IFS=' ' read -r extern_id ip tip _rest; do
       v=$(printf '%s' "$m" | sed -n "s/.*\"$k\":\([0-9]\{1,10\}\(\.[0-9]\{1,3\}\)\{0,1\}\)[,}].*/\1/p")
       [ -n "${v:-}" ] && extra="${extra},\"$k\":${v}"
     done
+    # UPS: jq exista deja; pastreaza boolean/null si omite valori invalide.
+    ups=$(printf '%s' "$m" | jq -c '. as $m | [
+      (["ups_pct", "ups_runtime_min"][] as $k
+        | select(($m[$k]|type)=="number" and $m[$k]>=0 and $m[$k]<=(if $k=="ups_pct" then 100 else 10000 end))
+        | {($k): $m[$k]}),
+      (select(($m.ups_pe_baterie|type)=="boolean") | {ups_pe_baterie: $m.ups_pe_baterie}),
+      (select($m|has("ups_runtime_min")) | select($m.ups_runtime_min==null) | {ups_runtime_min:null})
+      ] | add // {}' 2>/dev/null)
+    ups=${ups#\{}; ups=${ups%\}}
+    [ -n "${ups:-}" ] && extra="${extra},${ups}"
     # 10.10.2026: limite AI (whitelist iot-retea v9). Valorile lipsa/invalide se OMIT (null respinge tot lotul).
     ai=$(printf '%s' "$m" | jq -c '. as $m
       | ([ "ai_gemini_ramas_pct","ai_claude_ramas_pct","ai_codex_ramas_pct","ai_anthropic_saptamana_ramas_pct","ai_anthropic_saptamana_fable_ramas_pct","ai_anthropic_sesiune_ramas_pct" ][]

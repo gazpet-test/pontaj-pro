@@ -30,6 +30,13 @@ export const RETEA_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60], gpu_temp: 
 export const nivelRetea = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa'
   : valoare > RETEA_PRAGURI[cheie][1] ? 'error' : valoare > RETEA_PRAGURI[cheie][0] ? 'warning' : 'ok'
 
+// UPS: UI rosu sub 50%; SQL adauga alerta distincta de oprire sub 25%.
+export const UPS_PRAGURI = { baterie: 50, oprire: 25 }
+export const nivelUps = (pct, peBaterie) => !Number.isFinite(pct) || pct < 0 || pct > 100 || typeof peBaterie !== 'boolean' ? 'lipsa'
+  : peBaterie ? (pct < UPS_PRAGURI.baterie ? 'error' : 'warning') : 'ok'
+export const textUps = (r = {}, model) => !Number.isFinite(r.ups_pct) || r.ups_pct < 0 || r.ups_pct > 100 ? ''
+  : `UPS${typeof model === 'string' && model.trim() ? ' ' + model.trim() : ''}: ${nr(r.ups_pct)}% - ${r.ups_pe_baterie === true ? 'pe baterie' : r.ups_pe_baterie === false ? 'pe retea' : 'stare necunoscuta'}${Number.isFinite(r.ups_runtime_min) && r.ups_runtime_min >= 0 ? ' - autonomie estimata ' + nr(r.ups_runtime_min) + ' min' : ''}`
+
 // QNAP are card propriu (nu mai apare în lista generică „Rețea & servere").
 export const QNAP_EXTERN_ID = '192.168.1.42'
 export const QNAP_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60], disk_pct: [80, 90], ram_pct: [85, 95] }
@@ -468,6 +475,7 @@ export default function Cladire() {
                   <span style={{ color: on ? G.text : G.muted }}>{x.nume}<Edit x={x} />{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}{load}<IpSub x={x} /></span>
                   {stare}
                 </div>
+                {x.meta?.tip === 'server' && textUps(r, x.meta?.ups?.model) && <div style={{ fontSize:11, padding:'0 0 4px 12px', color:culori[nivelUps(r.ups_pct, r.ups_pe_baterie)] }}>{textUps(r, x.meta?.ups?.model)}</div>}
                 {areGpu(x) && <ServerGpu dispozitiv={x} />}
                 {areLimiteAi(x) && <LimiteAi r={x.ultima_citire} />}
               </div>
