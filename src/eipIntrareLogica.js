@@ -16,6 +16,15 @@ function zecimalaCanonica(text) {
   return (intreg.replace(/^0+/, '') || '0') + '.' + fractie.replace(/0+$/, '')
 }
 
+// Marimea numerica are o singura forma (42, 042 si 42.0 devin 42), ca stocul sa nu se fragmenteze.
+export function canonicalMarime(marime) {
+  const m = String(marime ?? '').trim().toUpperCase().replace(',', '.')
+  if (!/^\d+(?:\.\d+)?$/.test(m)) return m
+  const [intreg, fractie = ''] = m.split('.')
+  const f = fractie.replace(/0+$/, '')
+  return (intreg.replace(/^0+/, '') || '0') + (f ? '.' + f : '')
+}
+
 export function normalizeazaNumar(valoare) {
   const text = textZecimal(valoare)
   if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)) return NaN
@@ -32,7 +41,7 @@ export function validareRepartizare(cantitate, pe_marimi) {
   const vazute = new Set()
   for (const rand of pe_marimi) {
     // NULL este rezervat articolelor cu marime unica; sirul gol nu este o marime.
-    const marime = rand.marime === null ? null : String(rand.marime ?? '').trim().toUpperCase()
+    const marime = rand.marime === null ? null : canonicalMarime(rand.marime)
     if (marime === '') return invalid('Marimea lipseste. Alege nespecificat daca nu este cunoscuta.')
     if (vazute.has(marime)) return invalid('Aceeasi marime apare de doua ori.')
     vazute.add(marime)
@@ -46,7 +55,8 @@ export function validareRepartizare(cantitate, pe_marimi) {
     return BigInt((a || '0') + b.padEnd(scala, '0'))
   }
   const sumaExacta = texte.slice(1).reduce((s, t) => s + intreg(t), 0n)
-  const suma = pe_marimi.reduce((s, r) => s + normalizeazaNumar(r.cantitate), 0)
+  const cifre = sumaExacta.toString().padStart(scala + 1, '0')
+  const suma = scala ? (cifre.slice(0, -scala) + '.' + cifre.slice(-scala)).replace(/\.?0+$/, '') : cifre
   const valid = sumaExacta === intreg(texte[0])
   return { valid, suma, eroare: valid ? '' : 'Suma pe marimi trebuie sa fie egala cu cantitatea.' }
 }
@@ -74,7 +84,7 @@ export function construiesteAntetSiLinii(formular) {
     if (!verificare.valid) throw new Error(verificare.eroare)
     return linie.pe_marimi.map(r => {
       if (!validareMarime(a.tip_marime, r.marime)) throw new Error('Marimea nu corespunde tipului articolului.')
-      return { articol_id: a.id, marime: r.marime === null ? null : text(r.marime).toUpperCase().replace(',', '.'), cantitate: normalizeazaNumar(r.cantitate) }
+      return { articol_id: a.id, marime: r.marime === null ? null : canonicalMarime(r.marime), cantitate: normalizeazaNumar(r.cantitate) }
     })
   })
   return { p_antet: { furnizor_cui: text(furnizor_cui).toUpperCase(), furnizor_nume: text(furnizor_nume), factura_nr: text(factura_nr), factura_data }, p_linii }

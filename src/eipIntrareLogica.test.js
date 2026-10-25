@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { construiesteAntetSiLinii, construiesteCerere, normalizeazaNumar, validareMarime, validareRepartizare } from './eipIntrareLogica.js'
+import { canonicalMarime, construiesteAntetSiLinii, construiesteCerere, normalizeazaNumar, validareMarime, validareRepartizare } from './eipIntrareLogica.js'
 
 const harness = vi.hoisted(() => ({ stare: [], cursor: 0, rpc: vi.fn() }))
 vi.mock('react', async importa => ({
@@ -157,5 +157,30 @@ describe('salvarea din modal, RPC simulat fara BD', () => {
       expect(randareActiune().props.children[1].props.cheie).toBe(modal.props.cheie)
       expect(uuid).toHaveBeenCalledTimes(1)
     } finally { uuid.mockRestore() }
+  })
+})
+
+describe('remedieri review Jakarinos r1', () => {
+  it('P2: aceeasi marime numerica are o singura forma si e detectata ca duplicat', () => {
+    expect(['42', '042', '42.0', '42,00'].map(canonicalMarime)).toEqual(['42', '42', '42', '42'])
+    expect(canonicalMarime('42,5')).toBe('42.5')
+    expect(canonicalMarime(' xl ')).toBe('XL')
+    expect(validareRepartizare(2, [{ marime: '42', cantitate: 1 }, { marime: '42.0', cantitate: 1 }]).valid).toBe(false)
+    const f = formular()
+    f.linii[0].pe_marimi = [{ marime: '042', cantitate: '1' }, { marime: '43,0', cantitate: '2' }]
+    expect(construiesteAntetSiLinii(f).p_linii.map(l => l.marime)).toEqual(['42', '43'])
+  })
+  it('P3: totalul afisat vine din suma zecimala exacta', () => {
+    expect(validareRepartizare('0.3', [{ marime: '42', cantitate: '0.1' }, { marime: '43', cantitate: '0.2' }]).suma).toBe('0.3')
+    expect(validareRepartizare('3', [{ marime: '42', cantitate: '1' }, { marime: '43', cantitate: '2' }]).suma).toBe('3')
+    expect(validareRepartizare('10', [{ marime: '42', cantitate: '4' }, { marime: '43', cantitate: '6' }]).suma).toBe('10')
+  })
+  it('P1: modalul ramane montat cat timp exista cheie, chiar daca dreptul se reverifica', () => {
+    harness.stare.length = 0
+    harness.cursor = 0
+    harness.stare[0] = false
+    harness.stare[1] = 'cheie-deschisa'
+    const arbore = EipIntrareActiune({ G: {}, S: {}, onSuccess: vi.fn() })
+    expect(arbore.props.children[1].props.cheie).toBe('cheie-deschisa')
   })
 })

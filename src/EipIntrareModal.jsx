@@ -13,10 +13,9 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
   useEffect(() => {
     let activ = true
     const verifica = async () => {
-      if (activ) setPoateScrie(false)
       try {
         const { data: { user } } = await supabase.auth.getUser()
-        if (!user) return
+        if (!user) { if (activ) setPoateScrie(false); return }
         const { data: p, error } = await supabase.from('profiles')
           .select('is_owner,can_process_achizitii,can_manage_stoc,role').eq('id', user.id).maybeSingle()
         if (activ && !error) setPoateScrie(!!(p && (p.is_owner || p.can_process_achizitii || p.can_manage_stoc || p.role === 'admin_logistica')))
@@ -33,7 +32,7 @@ export default function EipIntrareActiune({ G, S, onSuccess }) {
   }, [toast])
   return <>
     {poateScrie && <button style={S.btnP} onClick={() => { setToast(''); setCheie(crypto.randomUUID()) }}>+ Intrare EIP</button>}
-    {cheie && poateScrie && <EipIntrareModal key={cheie} cheie={cheie} G={G} S={S} onClose={() => setCheie(null)} onSuccess={() => {
+    {cheie && <EipIntrareModal key={cheie} cheie={cheie} G={G} S={S} onClose={() => setCheie(null)} onSuccess={() => {
       setCheie(null)
       setToast('Intrarea EIP a fost salvata.')
       onSuccess()
