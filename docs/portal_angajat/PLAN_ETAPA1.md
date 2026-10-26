@@ -330,3 +330,16 @@ Problema P1 din r1 rămâne: **cine are doar linkul nu trebuie să poată activa
   - Se potrivește la angajare / instruire sau pe șantier, când șeful e acolo.
 - **Combinat (propunerea mea):** A′ ca regulă, A pentru cei care nu pot veni față în față.
 - **Respins:** activarea doar cu linkul sau cu date cunoscute de alții (CNP, data nașterii, telefon), pentru că redeschide P1.
+
+### Verdict Copilot pe r3 (26.10): **GO**
+- **Pct. 5** (cheie de dispozitiv + PIN la fiecare deschidere + sesiune de 15 minute fix): păstrează GO-ul din r2, fără P1 nou. Condiții de implementare:
+  - cheia se generează cu CSPRNG în browser; în BD stă doar hash-ul; verificarea se face pe server;
+  - limitele sunt atomice și se verifică înaintea bcrypt; maximum 2 dispozitive;
+  - CSP strict face parte din frontieră.
+  - P2: `sessionStorage` nu garantează „PIN la fiecare deschidere” la restaurarea sesiunii în browser, așa că se testează pe telefoanele țintă. TTL-ul de 15 minute pe server limitează impactul.
+- **Pct. 10 A′** (QR față în față): închide P1-1 din r1. Obligatoriu:
+  - emiterea doar de rolul autorizat;
+  - legarea de angajatul selectat;
+  - consum atomic, de unică folosință;
+  - expirare pe server;
+  - audit.
