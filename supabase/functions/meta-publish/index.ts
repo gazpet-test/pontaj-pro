@@ -204,7 +204,7 @@ ${lucrari || '(niciun raport selectat — scrie despre progresul general al lucr
       const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-        body: JSON.stringify({ model: MODEL, max_tokens: 600, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userMsg }] }),
+        body: JSON.stringify({ model: MODEL, max_tokens: 3000, system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userMsg }] }),
       });
       if (!r.ok) return json({ error: `Anthropic ${r.status}: ${(await r.text()).slice(0, 300)}` }, 502);
       const j = await r.json();
@@ -218,7 +218,7 @@ ${lucrari || '(niciun raport selectat — scrie despre progresul general al lucr
         const r2 = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-          body: JSON.stringify({ model: MODEL, max_tokens: 200, system: PROMPT_DISTRIBUIRE, messages: [{ role: 'user', content: `Postarea distribuită:\n${text}` }] }),
+          body: JSON.stringify({ model: MODEL, max_tokens: 800, system: PROMPT_DISTRIBUIRE, messages: [{ role: 'user', content: `Postarea distribuită:\n${text}` }] }),
         });
         const j2 = await r2.json();
         if (r2.ok && j2.stop_reason !== 'max_tokens' && !mesajRefuz(j2)) {
