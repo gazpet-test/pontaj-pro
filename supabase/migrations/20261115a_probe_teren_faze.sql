@@ -517,7 +517,7 @@ BEGIN
   END IF;
   IF p_tip_fluid IS NULL OR p_tip_fluid NOT IN ('aer','apa') THEN RAISE EXCEPTION 'pt_faza_tip: tip fluid invalid'; END IF;
   IF p_proiect_id IS NULL THEN RAISE EXCEPTION 'pt_proiect: proiect obligatoriu pentru orice beneficiar'; END IF;
-  PERFORM 1 FROM public.executie_proiecte WHERE id=p_proiect_id FOR KEY SHARE;
+  PERFORM 1 FROM public.executie_proiecte WHERE id=p_proiect_id FOR UPDATE; -- lock exclusiv: un tronson nou concurent nu poate trece intre numarare si completare
   IF NOT FOUND THEN RAISE EXCEPTION 'pt_proiect: proiect inexistent'; END IF;
   SELECT count(*),min(id) INTO v_nr_tronsoane,v_unic_tronson FROM public.executie_tronsoane WHERE proiect_id=p_proiect_id;
   IF v_tronson IS NULL THEN
