@@ -1,0 +1,7 @@
+[
+  {"nume":"ore si numere echivalente, gol/NULL", "initial":{"lat":44.94,"lon":26.03,"vacanta_de":null,"vacanta_pana":null,"simulare_pana_la":"23:30:00","pauza_ore":3},"salvat":{"lat":"44.9400","lon":"26.030","vacanta_de":"","vacanta_pana":"","simulare_pana_la":"23:30","pauza_ore":"1.00"},"schimba":false},
+  {"nume":"date identice si ore echivalente", "initial":{"lat":44.94,"lon":26.03,"vacanta_de":"2026-12-24","vacanta_pana":"2026-12-31","simulare_pana_la":"23:30","pauza_ore":3},"salvat":{"lat":"44.94","lon":"26.03","vacanta_de":"2026-12-24","vacanta_pana":"2026-12-31","simulare_pana_la":"23:30:00","pauza_ore":3},"schimba":false},
+  {"nume":"gol spre NULL", "initial":{"lat":44.94,"lon":26.03,"vacanta_de":"","vacanta_pana":"","simulare_pana_la":"23:30","pauza_ore":3},"salvat":{"lat":44.94,"lon":26.03,"vacanta_de":null,"vacanta_pana":null,"simulare_pana_la":"23:30:00","pauza_ore":3},"schimba":false},
+  {"nume":"pauza si ora schimbate simultan", "initial":{"lat":44.94,"lon":26.03,"vacanta_de":null,"vacanta_pana":null,"simulare_pana_la":"23:30","pauza_ore":3},"salvat":{"lat":44.94,"lon":26.03,"vacanta_de":null,"vacanta_pana":null,"simulare_pana_la":"22:00","pauza_ore":1},"schimba":true},
+  {"nume":"pauza si date schimbate simultan", "initial":{"lat":44.94,"lon":26.03,"vacanta_de":null,"vacanta_pana":null,"simulare_pana_la":"23:30","pauza_ore":3},"salvat":{"lat":44.94,"lon":26.03,"vacanta_de":"2026-12-24","vacanta_pana":"2026-12-31","simulare_pana_la":"23:30","pauza_ore":1},"schimba":true}
+]
