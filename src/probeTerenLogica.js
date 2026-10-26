@@ -143,7 +143,8 @@ export function confirmaSalt(op, motiv) {
   const copie = JSON.parse(JSON.stringify(op))
   const aplica = u => ({ ...u, confirma_salt: true, motiv_salt: motiv.trim() })
   if (copie.args.p_utilaje) copie.args.p_utilaje = copie.args.p_utilaje.map(aplica)
-  else Object.assign(copie.args, { p_confirma_salt: true, p_motiv_salt: motiv.trim() })
+  // Parametrii top-level (citire, schimba_faza, opreste_utilaj) se seteaza MEREU cand exista; porneste/inchide nu ii au
+  if ('p_confirma_salt' in copie.args || !copie.args.p_utilaje) Object.assign(copie.args, { p_confirma_salt: true, p_motiv_salt: motiv.trim() })
   if (copie.args.p_inlocuitor) copie.args.p_inlocuitor = aplica(copie.args.p_inlocuitor)
   return copie
 }

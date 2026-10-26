@@ -204,7 +204,7 @@ export default function ProbeTerenMobil({ profile, onBack }) {
   const uploadBusy = delta => setUploads(n => Math.max(0, n + delta))
   const assetLabel = id => { const a = assets.find(x => String(x.id) === String(id)); return a ? `${a.cod || ''} ${a.nume}` : `Utilaj #${id}` }
   const assetRows = assets.map(a => ({ id: a.id, label: assetLabel(a.id) }))
-  const listRows = list.filter(p => String(p.tronson_id || '') === String(section || ''))
+  const listRows = list.filter(p => !p.tronson_id || String(p.tronson_id) === String(section || ''))  // probele la nivel de proiect (fara tronson) raman vizibile
   const planned = listRows.filter(p => p.status === 'planificata' && p.tip_fluid === fluid && p.beneficiar_tip === benef &&
     (benef !== 'tert' || (p.tert_ref_tip === refType && (refType === 'comanda' ? p.tert_ref_text === refText.trim() : String(p.tert_ref_id) === String(refId)) && p.tert_client === client.trim())))
   const benefOk = benef === 'gazpet' || (benef === 'tert' && client.trim() && (refType === 'comanda' ? refText.trim().length >= 3 : !!refId))

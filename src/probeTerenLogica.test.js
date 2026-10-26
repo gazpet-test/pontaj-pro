@@ -102,6 +102,12 @@ describe('dovezi si payload RPC', () => {
     assert.equal(c.args.p_confirma_salt, true)
     assert.equal(c.args.p_inlocuitor.confirma_salt, true)
     assert.equal(c.args.p_cheie, 'stop')
+    const faza = pregatestePayload(form(aer, 'schimba_faza'), 'faza-k')
+    const cf = confirmaSalt(faza, 'verificat')
+    assert.equal(cf.args.p_confirma_salt, true)
+    assert.equal(cf.args.p_motiv_salt, 'verificat')
+    assert.equal(cf.args.p_utilaje[0].confirma_salt, true)
+    assert.equal(faza.args.p_confirma_salt, false)
   })
   it('payload-urile au exact argumentele semnaturilor SQL', () => {
     for (const actiune of ['porneste', 'citire', 'schimba_faza', 'inchide', 'opreste_utilaj']) {
