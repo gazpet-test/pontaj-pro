@@ -30,6 +30,13 @@ export const textStareLumina = (citire, cititLa, acum = Date.now()) => {
 export const dispozitiveImplicite = (lumini, tip) => lumini.filter(l=>l.activ && (tip==='solar' ? l.rol==='exterior' : tip==='simulare_prezenta' ? ['interior','mixt'].includes(l.rol) : true)).map(l=>l.dispozitiv_id)
 export const poateSelectaLumina = (lumina, tip) => lumina.activ && (tip!=='simulare_prezenta' || lumina.rol!=='exterior') && (tip!=='solar' || lumina.rol!=='interior')
 export const formatMomentLumini = t => t == null ? '-' : new Intl.DateTimeFormat('ro-RO',{timeZone:'Europe/Bucharest',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(t))
+export const textCitireLumina = t => t && Number.isFinite(Date.parse(t)) ? `stare citita la ${formatMomentLumini(t)}` : 'stare fara citire disponibila'
+export function textConsumTuya(consum) {
+  if(!consum) return 'Consum Tuya indisponibil'
+  const stare=consum.stare==='blocata' ? `blocata pana la ${formatMomentLumini(consum.cota_blocata_pana)}` :
+    consum.stare==='doar_off' ? 'buget 100%: doar OFF si comenzi manuale owner' : consum.stare
+  return `Consum Tuya: azi ${consum.azi}, ciclu ${consum.n} / ${consum.buget} - ${stare}`
+}
 export function textUrmatoare(program, acum, setari, lumini) {
   if(!program.activ || !program.aprobat_de || !program.aprobat_la) return 'Inactiv - necesita aprobarea ownerului pentru activare'
   try {
