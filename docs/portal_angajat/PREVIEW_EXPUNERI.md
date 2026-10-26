@@ -24,7 +24,7 @@ Mai grav decât ce scria planul: **și scrierea e deschisă**, nu doar citirea.
 - view-urile dependente `v_magazie_inventar_activ`, `v_magazie_echipamente`, `v_eip_stoc` sunt toate security_invoker și sunt citite tot doar din Magazie;
 - funcțiile EIP `fn_eip_muta` și `fn_eip_corectie` sunt SECURITY DEFINER, deci nu sunt afectate.
 
-**Propunere** (migrarea `20261115a_sec_inventar_hr_anon.sql`):
+**Propunere** (migrarea `20261116a_sec_inventar_hr_anon.sql`):
 - citirea: owner + oricine are modulul `magazie` / `magazie.*` / `hr` / `hr.*`;
 - scrierea: owner + modulul `magazie` / `magazie.*` cu `editor` / `admin`.
 
@@ -103,16 +103,16 @@ UPDATE public.hr_concediu_tokens SET activ = true WHERE employee_id = ANY('{<lis
 
 ## A + B: apply și revenire
 
-- **Apply:** `supabase/migrations/20261115a_sec_inventar_hr_anon.sql`, prin `apply_migration` sau prin runner.
+- **Apply:** `supabase/migrations/20261116a_sec_inventar_hr_anon.sql`, prin `apply_migration` sau prin runner.
   - Are precondiții: politicile trebuie să fie exact cele de mai sus, altfel se oprește.
   - La final verifică: 0 granturi anon pe cele 4 tabele, 4 politici.
   - Nu șterge date.
-- **Revenire:** `supabase/revenire/20261115a_sec_inventar_hr_anon_ROLLBACK.sql` recreează exact politicile și granturile vechi.
+- **Revenire:** `supabase/revenire/20261116a_sec_inventar_hr_anon_ROLLBACK.sql` recreează exact politicile și granturile vechi.
 - **DRY recomandat** (chat): `BEGIN` + migrarea + un test ca `authenticated` pentru un profil fără modul (0 rânduri vizibile) și un profil cu `magazie` editor (166 de rânduri) + revenirea + `ROLLBACK`.
 
 ## Test local (26.10)
 
-`scripts/sec/test_20261115a.sh` rulează pe PG16 local (WSL, ca utilizatorul postgres, cu `postgres` NOSUPERUSER, ca pe prod). Scheletul reproduce exact politicile de pe prod: amprenta e identică, `668a7e22…`. Rezultatul: **PASS**.
+`scripts/sec/test_20261116a.sh` rulează pe PG16 local (WSL, ca utilizatorul postgres, cu `postgres` NOSUPERUSER, ca pe prod). Scheletul reproduce exact politicile de pe prod: amprenta e identică, `668a7e22…`. Rezultatul: **PASS**.
 - apply-ul fără marcajul runner-ului e refuzat;
 - profilul fără modul vede 0 rânduri;
 - magazie editor, hr admin și owner văd tot;
