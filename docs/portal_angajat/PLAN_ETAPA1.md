@@ -247,3 +247,12 @@ Toate cele 6 P1 sunt închise în plan:
 6. fallback automat la HR → `ruta_lipsa`, cu rută HR doar explicită.
 
 P2 incluse: limitarea înainte de bcrypt, HMAC pe IP, fereastra de 24 de ore pentru cele 15 greșeli, idempotența legată de payload, REVOKE explicit, jurnalul acțiunilor de administrare.
+
+### Verdict Copilot pe r2: **GO pentru E1** (P0 0, P1 0)
+
+GO-ul e pentru implementare, nu pentru producție: poarta reală e pe SQL-ul și edge-ul efective. P2 de respectat în E1:
+- `portal_idempotenta` cu `UNIQUE(employee_id, operatie, cheie)`, iar coliziunea se tratează atomic;
+- cele 15 minute sunt **TTL absolut** după ultima introducere a PIN-ului (nu fereastră sliding), mai ușor de demonstrat pe un telefon comun;
+- se documentează exact privilegiile lui `portal_edge`: CONNECT pe bază, USAGE pe schema `public`, EXECUTE doar pe funcțiile listate, nimic pe tabele sau secvențe; harness-ul verifică ACL-ul real.
+
+La review-ul E1, poarta va fi pe ACL-ul `portal_edge`, corpurile SECURITY DEFINER, trigger-ul global de stare, concurență și idempotență.
