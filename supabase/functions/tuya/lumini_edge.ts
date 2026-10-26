@@ -1,5 +1,6 @@
 import { poartaModul } from '../_shared/poartaModul.ts';
 import { evalueaza } from './lumini_logica.ts';
+import { planCitire } from './lumini_adaptiv.ts';
 
 const BUGET_ON_MS = 75000, BUGET_DUR_TICK_MS = 140000, CONCURENTA_OFF = 3;
 // 140s lasa 10s pana la limita minima Edge de 150s si este sub lease-ul de 240s.
@@ -11,6 +12,7 @@ export async function autorizeazaLumini(req: Request, db: any, actiune: string, 
   // Secretul cron nu autorizeaza comenzi manuale, nici teste.
   const gate = await poartaModul(req,db,['cladire']);
   if (!gate.ok) return gate;
+  if(actiune==='consum') return gate;
   const [profile, access] = await Promise.all([
     db.from('profiles').select('is_owner').eq('id',gate.userId).maybeSingle(),
     db.from('user_module_access').select('access_level').eq('profile_id',gate.userId).eq('module','cladire').maybeSingle(),
@@ -18,7 +20,7 @@ export async function autorizeazaLumini(req: Request, db: any, actiune: string, 
   if (profile.error || access.error) return { ok:false,status:403,error:'Drept indisponibil' };
   const owner = profile.data?.is_owner === true;
   if (!owner && (actiune === 'test_comanda_noop' || !['editor','admin'].includes(access.data?.access_level))) return { ok:false,status:403,error:'Fara drept de comanda' };
-  return { ok:true, userId:gate.userId };
+  return { ok:true, userId:gate.userId, owner };
 }
 
 export const eroareTuya = (error: any) => /\b1106\b|permission\s*(deny|denied)|no permission/i.test(String(error?.message || error)) ? 'cheia nu are drept de comanda' : String(error?.message || error).slice(0,500);
@@ -28,7 +30,7 @@ export function citesteSwitch(status: any[]) {
   return item;
 }
 
-export async function executaLumini(db: any, call: any, body: any, userId: string | null) {
+export async function executaLumini(db: any, call: any, body: any, userId: string | null, control: any = {}) {
   if (!['comanda','test_comanda_noop','programe_tick'].includes(body.actiune) || (body.actiune!=='programe_tick' && !userId)) return {ok:false,error:'Actiune sau utilizator invalid'};
   const tick=body.actiune==='programe_tick', token=crypto.randomUUID(), start=Date.now();
   const deadlineOn=start+BUGET_ON_MS, deadlineOff=start+BUGET_DUR_TICK_MS-REZERVA_OFF_MS;
@@ -67,16 +69,32 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
     const map=Object.fromEntries(list.map((l:any)=>[l.dispozitiv_id,l]));
     const stari:any={},codes:any={};
     const setari={...settings.data,roluri:Object.fromEntries(list.map((l:any)=>[l.dispozitiv_id,l.rol]))};
+    const pauzeAnterioare={...runtime.pauze};
     // Curatarea este doar dupa timp/configuratie, niciodata dupa o presupunere despre POST.
     for(const [id,until] of Object.entries(runtime.pauze)) if(Number(until)<=Date.now() || !map[id]) delete runtime.pauze[id];
     const keys=new Set((schedules.data || []).filter((p:any)=>p.activ && p.aprobat_de && p.aprobat_la).flatMap((p:any)=>p.dispozitive.map((id:number)=>`${p.id}:${id}`)));
     for(const [key,until] of Object.entries(runtime.backoff)) if(Number(until)<=Date.now() || !keys.has(key)) delete runtime.backoff[key];
-    for(const id of Object.keys(runtime.citiri_esuate)) if(!map[id]) delete runtime.citiri_esuate[id];
+    for(const id of Object.keys(runtime.citiri_esuate)) if(id!=='_adaptiv' && !map[id]) delete runtime.citiri_esuate[id];
+    if(tick && !(schedules.data || []).some((p:any)=>p.activ && p.aprobat_de && p.aprobat_la) && !Object.values(runtime.pauze).some(until=>Number(until)>Date.now())) {
+      runtime.amanate=[];
+      return {ok:true,rezultat:'nimic de facut',comenzi:[],amanate:[],amanate_off:[],erori:[]};
+    }
+    const plan=planCitire(schedules.data || [],setari,{...runtime,pauze:pauzeAnterioare});
+    if(tick && !plan.citeste) {
+      for(const p of plan.erori) await alert('parametri program invalizi',`Program ${p.id}: ${p.eroare}`);
+      return {ok:plan.erori.length===0,rezultat:'citire adaptiva amanata',comenzi:[],amanate:runtime.amanate || [],amanate_off:[],erori:plan.erori.map((p:any)=>`Program ${p.id}: ${p.eroare}`)};
+    }
+    const buget=control.buget ? await control.buget() : {procent:0};
+    const reverifica=runtime.citiri_esuate._adaptiv?.reverifica;
+    if(tick) runtime.citiri_esuate._adaptiv={...(runtime.citiri_esuate._adaptiv || {}),reverifica:false};
+    const scopCitire=(id:number)=>plan.dorite[id]===false &&
+      (buget.procent>=1 || plan.aproape || reverifica || map[id].iot_dispozitive.ultima_citire?.pornit!==false)
+      ? 'off' : plan.aproape?'tranzitie':'periodic';
     const read=async(id:number)=>{
       const d=map[id].iot_dispozitive;
       readIds.add(id);
       try {
-        const s=citesteSwitch(await call('GET',`/v1.0/iot-03/devices/${encodeURIComponent(d.extern_id)}/status`));
+        const s=citesteSwitch(await call('GET',`/v1.0/iot-03/devices/${encodeURIComponent(d.extern_id)}/status`,undefined,undefined,scopCitire(id)));
         codes[id]=s.code;stari[id]=s.value;
         const latest={...(d.ultima_citire || {}),pornit:s.value,stare_bruta:{...(d.ultima_citire?.stare_bruta || {}),[s.code]:s.value}};
         const r=await db.from('iot_dispozitive').update({ultima_citire:latest,citit_la:new Date().toISOString()}).eq('id',id).eq('sursa','tuya');
@@ -84,6 +102,7 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
         d.ultima_citire=latest;
         return s.value;
       } catch(e) {
+        if((e as any)?.cotaTuya) stop=true;
         stari[id]=null;failedReadIds.add(id);
         // UI nu trebuie sa prezinte drept reala o citire esuata recent.
         await db.from('iot_dispozitive').update({ultima_citire:{...(d.ultima_citire || {}),pornit:null}}).eq('id',id).eq('sursa','tuya');
@@ -106,12 +125,14 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
     };
     const send=async(id:number,value:boolean,sursa:string,programId:any)=>{
       if(stop) return {ok:false,error:'Executie oprita'};
+      if(tick && stari[id]!==value) runtime.citiri_esuate._adaptiv.reverifica=true;
       if(bugetDepasit(value)) return await refuzBuget(id,value,sursa,programId);
       // OFF idempotent inclusiv manual; testul noop ramane o proba explicita de drept.
       if(sursa!=='test' && stari[id]===value) {
         const logged=await journal(id,value,sursa,programId,true,'Starea este deja cea ceruta; fara POST');
         return {ok:logged,stare:stari[id]};
       }
+      if(tick) runtime.citiri_esuate._adaptiv.reverifica=true;
       const reserved=await rpc('reserve',{stare:value});
       if(!reserved.ok) {
         await journal(id,value,sursa,programId,false,reserved.error);
@@ -127,10 +148,12 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
       if(bugetDepasit(value)) return await refuzBuget(id,value,sursa,programId);
       let error:string|null=null,posted=false;
       try {
-        const accepted=await call('POST',`/v1.0/iot-03/devices/${encodeURIComponent(map[id].iot_dispozitive.extern_id)}/commands`,{commands:[{code:codes[id],value}]});
+        const accepted=await call('POST',`/v1.0/iot-03/devices/${encodeURIComponent(map[id].iot_dispozitive.extern_id)}/commands`,{commands:[{code:codes[id],value}]},()=>!stop && !bugetDepasit(value),value?(plan.aproape?'tranzitie':'periodic'):'off');
         if(accepted!==true) throw Object.assign(new Error('Comanda refuzata de Tuya'),{refuzCert:true});
         posted=true;
       } catch(e) {
+        if((e as any)?.cotaTuya) stop=true;
+        if((e as any)?.bugetExpirat) return await refuzBuget(id,value,sursa,programId);
         error=eroareTuya(e);
         if(value && sursa==='program' && (e as any)?.refuzCert) {
           runtime.backoff[`${programId}:${id}`]=Date.now()+30*60000;
@@ -168,8 +191,12 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
     const offset=Number.isInteger(runtime.off_offset)?runtime.off_offset % Math.max(list.length,1):0;
     const offOrder=[...list.slice(offset),...list.slice(0,offset)].map((l:any)=>l.dispozitiv_id);
     runtime.off_offset=(offset+1)%Math.max(list.length,1);
-    // Citim toate luminile active, inclusiv cele fara program (capacitate conservatoare).
-    await Promise.all(list.map(async(l:any)=>{
+    // Citim doar acoperirea aprobata si pauzele active; restul ocupa conservator capacitate.
+    const acoperite=list.filter((l:any)=>plan.ids.includes(l.dispozitiv_id) &&
+      (buget.procent<.9 || (buget.procent<1 && plan.aproape) ||
+        (scopCitire(l.dispozitiv_id)==='off' && !(runtime.pauze[l.dispozitiv_id]>Date.now()))));
+    if(!acoperite.length) return {ok:true,rezultat:'Tuya in mod economie: citire periodica oprita',comenzi:[],amanate:[],amanate_off:[],erori:[]};
+    await Promise.all(acoperite.map(async(l:any)=>{
       const id=l.dispozitiv_id;
       try {await read(id);}
       catch(e) {
@@ -177,6 +204,8 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
         await journal(id,false,'program',null,false,`Citire esuata; nicio comanda: ${error}`);
       }
     }));
+    if(!failedReadIds.size && acoperite.length===list.filter((l:any)=>plan.ids.includes(l.dispozitiv_id)).length) runtime.citiri_esuate._adaptiv={...runtime.citiri_esuate._adaptiv,ultima_completa:Date.now(),semnatura:plan.semnatura};
+    if(failedReadIds.size) runtime.citiri_esuate._adaptiv.reverifica=true;
     if(!(await save()).ok) return {ok:false,error:'Runtime nesalvat'};
     const jobs:any[]=[], covered=new Set<number>(), momentEvaluare=new Date();
     let simulareActiva=false;
