@@ -7,7 +7,7 @@
 // Profilul personal „Gazpet Instal" nu e postabil prin API → butonul „Distribuie" deschide
 // postarea de pe pagină ca s-o dai mai departe manual.
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 
@@ -23,6 +23,34 @@ const S = {
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
 }
 const BUCKET = 'rapoarte-zilnice'
+// Dictare in browser (Razvan 26.10.2026): recunoastere vocala ro-RO (Web Speech API), fara server si fara cost.
+// Textul dictat se adauga la capatul campului si ramane editabil. Fara suport (ex. Safari vechi) butonul nu apare.
+function ButonDictare({ onText, disabled }) {
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null
+  const [ascult, setAscult] = useState(false)
+  const rec = useRef(null)
+  const vreau = useRef(false)  // true cat timp utilizatorul vrea sa dicteze: repornim dupa pauza, ca sa nu se opreasca la prima propozitie
+  useEffect(() => () => { vreau.current = false; try { rec.current?.stop() } catch { /* deja oprit */ } }, [])
+  if (!SR) return null
+  const porneste = () => {
+    const r = new SR()
+    r.lang = 'ro-RO'; r.continuous = false; r.interimResults = false  // continuous=true dubleaza cuvintele pe unele Chrome Android
+    r.onresult = (ev) => {
+      let t = ''
+      for (let i = ev.resultIndex; i < ev.results.length; i++) if (ev.results[i].isFinal) t += ev.results[i][0].transcript
+      t = t.trim(); if (t) onText(t)
+    }
+    r.onend = () => { if (vreau.current) { try { r.start(); return } catch { /* nu repornim */ } } setAscult(false) }
+    r.onerror = () => { vreau.current = false; setAscult(false) }
+    rec.current = r; vreau.current = true
+    try { r.start(); setAscult(true) } catch { vreau.current = false; setAscult(false) }
+  }
+  const opreste = () => { vreau.current = false; try { rec.current?.stop() } catch { /* deja oprit */ } setAscult(false) }
+  return <button type="button" disabled={disabled} onClick={ascult ? opreste : porneste} title={ascult ? 'Oprește dictarea' : 'Dictează indicațiile (română)'}
+    style={{ ...S.btnS, padding:'7px 11px', ...(ascult ? { background:G.red + '22', color:G.red, borderColor:G.red + '88' } : null) }}>{ascult ? '⏹ Ascult…' : '🎤 Dictează'}</button>
+}
+
+
 // Clepsidra (Răzvan 07.09.2026): în timpul publicării/generării, o bară animată + cronometru, ca să nu pară blocat.
 function Lucru({ text, detaliu }) {
   const [sec, setSec] = useState(0)
@@ -76,6 +104,7 @@ export default function Marketing() {
   const [tab, setTab] = useState('postari')
   const [nou, setNou] = useState(null)        // panoul de ciornă nouă
   const [edit, setEdit] = useState(null)      // {id, text}
+  const [rescrie, setRescrie] = useState(null)  // {id, ind}: panou Rescrie cu AI (indicatii tastate sau dictate)
   const [thumbs, setThumbs] = useState({})    // path → signed url
   const [busy, setBusy] = useState(null)
   const [busyDetaliu, setBusyDetaliu] = useState(null)
@@ -309,6 +338,7 @@ export default function Marketing() {
               {Object.entries(ETAPE).map(([k, e]) => <option key={k} value={k}>{e.l}</option>)}
             </select>
             <input style={{ ...S.input, flex:1, minWidth:280 }} value={nou.indicatii} onChange={e => setNou(n => ({ ...n, indicatii: e.target.value }))} placeholder="indicații pentru AI (opțional): ex. accent pe probele de presiune, ton mai scurt" />
+            <ButonDictare disabled={!!busy} onText={t => setNou(n => n ? { ...n, indicatii: n.indicatii ? n.indicatii + ' ' + t : t } : n)} />
             <button style={{ ...S.btnP, opacity: nou.pozeAlese.length && !busy ? 1 : .5 }} disabled={!nou.pozeAlese.length || !!busy} onClick={() => creeazaCiorna(true)}>🤖 Creează ciornă cu text AI</button>
             <button style={S.btnS} disabled={!nou.pozeAlese.length || !!busy} onClick={() => creeazaCiorna(false)}>Creează goală (scriu eu)</button>
             <div style={{ width:'100%', fontSize:11.5, color:G.muted }}>{(ETAPE[nou.etapa] || ETAPE.executie).hint}{nou.etapa === 'start' && !(mk[nou.site_id]?.etape_lucrare || '').trim() ? <b style={{ color:G.orange }}> — completează „Ce cuprinde lucrarea” la Șantiere postabile, altfel AI-ul rămâne general.</b> : ''}</div>
@@ -388,7 +418,12 @@ export default function Marketing() {
                     {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && !inEdit && <button style={S.btnS} onClick={() => setEdit({ id: p.id, text: p.text_postare || '' })}>✏️ Editează</button>}
                     {inEdit && <button style={S.btnP} onClick={async () => { if (await upd(p.id, { text_postare: edit.text })) setEdit(null) }}>💾 Salvează textul</button>}
                     {inEdit && <button style={S.btnS} onClick={() => setEdit(null)}>Renunță</button>}
-                    {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && <button style={S.btnS} disabled={!!busy} onClick={() => { const ind = window.prompt('Indicații pentru AI (opțional):', '') ; if (ind !== null) regenereaza(p, ind) }}>🤖 Rescrie cu AI</button>}
+                    {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && <button style={S.btnS} disabled={!!busy} onClick={() => setRescrie(r => r?.id === p.id ? null : { id: p.id, ind: '' })}>🤖 Rescrie cu AI</button>}
+                    {rescrie?.id === p.id && <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', width:'100%' }}>
+                      <input style={{ ...S.input, flex:1, minWidth:240 }} value={rescrie.ind} onChange={e => setRescrie(r => ({ ...r, ind: e.target.value }))} placeholder="indicații pentru AI (opțional): scrie sau dictează" />
+                      <ButonDictare disabled={!!busy} onText={t => setRescrie(r => r ? { ...r, ind: r.ind ? r.ind + ' ' + t : t } : r)} />
+                      <button style={S.btnP} disabled={!!busy} onClick={() => { const ind = rescrie.ind; setRescrie(null); regenereaza(p, ind) }}>Rescrie</button>
+                    </div>}
                     {p.status === 'ciorna' && poateAproba && !inEdit && <button style={{ ...S.btnS, color:G.blue, borderColor:G.blue + '66' }} disabled={!(p.text_postare || '').trim()} onClick={() => upd(p.id, { status: 'aprobata', aprobat_de: profile.id, aprobat_la: new Date().toISOString() })}>✔ Aprobă</button>}
                     {p.status === 'aprobata' && poateAproba && <button style={{ ...S.btnP, background:G.green, color:'#0D1117', opacity: busy ? .6 : 1 }} disabled={!!busy} onClick={() => publica(p)}>{busy && String(busy).startsWith('Se publică') ? '⏳ Se publică…' : '📣 Publică pe Facebook'}</button>}
                     {poateAproba && p.status === 'aprobata' && !p.programat_la && <span style={{ display:'inline-flex', gap:6, alignItems:'center' }}>
