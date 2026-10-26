@@ -15,12 +15,19 @@
 
 DO $pre$
 BEGIN
-  IF (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.magazie_inventar_angajat'::regclass) <> 4
-     OR NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'public.magazie_inventar_angajat'::regclass
-                    AND polname = 'mia_select' AND pg_get_expr(polqual, polrelid) = 'true')
-     OR NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'public.magazie_inventar_angajat'::regclass
-                    AND polname = 'mia_insert' AND pg_get_expr(polwithcheck, polrelid) = '(auth.uid() IS NOT NULL)')
-  THEN
+  -- garda runner-ului (scripts/livrare_migrare.sh), ca la celelalte migrări cu livrare controlată
+  IF current_user <> 'postgres' OR current_setting('gazpet.livrare_migrare', true)
+     IS DISTINCT FROM '20261115a_sec_inventar_hr_anon:' || txid_current() THEN
+    RAISE EXCEPTION '20261115a: numai prin runner, ca postgres';
+  END IF;
+  IF current_setting('transaction_isolation') <> 'read committed' THEN RAISE EXCEPTION '20261115a: READ COMMITTED'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'));
+  -- amprenta EXACTĂ a celor 4 politici văzute în preview (26.10): nume, comandă, permisivă, roluri, USING, WITH CHECK
+  IF (SELECT md5(string_agg(polname::text || '|' || polcmd::text || '|' || polpermissive::text || '|'
+          || polroles::regrole[]::text || '|' || coalesce(pg_get_expr(polqual, polrelid), '') || '|'
+          || coalesce(pg_get_expr(polwithcheck, polrelid), ''), ';' ORDER BY polname))
+      FROM pg_policy WHERE polrelid = 'public.magazie_inventar_angajat'::regclass)
+     IS DISTINCT FROM '668a7e226edbe58202b35858ef0f2b96' THEN
     RAISE EXCEPTION '20261115a: politicile magazie_inventar_angajat nu mai sunt cele din preview (26.10)';
   END IF;
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.magazie_inventar_angajat'::regclass) THEN
@@ -78,8 +85,17 @@ BEGIN
              AND table_name IN ('hr_aprobatori', 'hr_cereri_concediu', 'hr_concediu_rute', 'magazie_inventar_angajat')) THEN
     RAISE EXCEPTION '20261115a: anon are încă granturi';
   END IF;
-  IF (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.magazie_inventar_angajat'::regclass) <> 4 THEN
-    RAISE EXCEPTION '20261115a: numărul de politici diferă';
+  -- exact cele 4 politici noi, toate permisive, doar TO authenticated, fiecare cu verificarea owner + user_module_access
+  IF (SELECT count(*) FROM pg_policy WHERE polrelid = 'public.magazie_inventar_angajat'::regclass) <> 4
+     OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = 'public.magazie_inventar_angajat'::regclass
+                AND (polname NOT IN ('mia_select', 'mia_insert', 'mia_update', 'mia_delete')
+                     OR NOT polpermissive
+                     OR polroles <> ARRAY['authenticated'::regrole]::oid[]
+                     OR coalesce(pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)) !~ 'is_owner'
+                     OR coalesce(pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)) !~ 'user_module_access'
+                     OR (polname <> 'mia_select' AND coalesce(pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)) !~ 'editor')
+                     OR (polcmd = 'w' AND pg_get_expr(polwithcheck, polrelid) IS NULL))) THEN
+    RAISE EXCEPTION '20261115a: politicile finale nu sunt cele așteptate';
   END IF;
 END
 $post$;

@@ -109,3 +109,16 @@ UPDATE public.hr_concediu_tokens SET activ = true WHERE employee_id = ANY('{<lis
   - Nu șterge date.
 - **Revenire:** `supabase/revenire/20261115a_sec_inventar_hr_anon_ROLLBACK.sql` recreează exact politicile și granturile vechi.
 - **DRY recomandat** (chat): `BEGIN` + migrarea + un test ca `authenticated` pentru un profil fără modul (0 rânduri vizibile) și un profil cu `magazie` editor (166 de rânduri) + revenirea + `ROLLBACK`.
+
+## Test local (26.10)
+
+`scripts/sec/test_20261115a.sh` rulează pe PG16 local (WSL, ca utilizatorul postgres, cu `postgres` NOSUPERUSER, ca pe prod). Scheletul reproduce exact politicile de pe prod: amprenta e identică, `668a7e22…`. Rezultatul: **PASS**.
+- apply-ul fără marcajul runner-ului e refuzat;
+- profilul fără modul vede 0 rânduri;
+- magazie editor, hr admin și owner văd tot;
+- hr / magazie viewer nu poate modifica și nici insera; fără modul nu poate șterge; magazie editor modifică;
+- granturile anon dispar;
+- reaplicarea e refuzată de amprentă;
+- revenirea restaurează exact amprenta și granturile.
+
+Garda runner-ului și amprenta exactă a celor 4 politici sunt adăugate după review-ul Copilot (NO-GO, 2 P1).
