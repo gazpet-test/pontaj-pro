@@ -29,22 +29,23 @@ function ButonDictare({ onText, disabled }) {
   const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null
   const [ascult, setAscult] = useState(false)
   const rec = useRef(null)
-  useEffect(() => () => { try { rec.current?.stop() } catch { /* deja oprit */ } }, [])
+  const vreau = useRef(false)  // true cat timp utilizatorul vrea sa dicteze: repornim dupa pauza, ca sa nu se opreasca la prima propozitie
+  useEffect(() => () => { vreau.current = false; try { rec.current?.stop() } catch { /* deja oprit */ } }, [])
   if (!SR) return null
   const porneste = () => {
     const r = new SR()
-    r.lang = 'ro-RO'; r.continuous = true; r.interimResults = false
+    r.lang = 'ro-RO'; r.continuous = false; r.interimResults = false  // continuous=true dubleaza cuvintele pe unele Chrome Android
     r.onresult = (ev) => {
       let t = ''
       for (let i = ev.resultIndex; i < ev.results.length; i++) if (ev.results[i].isFinal) t += ev.results[i][0].transcript
       t = t.trim(); if (t) onText(t)
     }
-    r.onend = () => setAscult(false)
-    r.onerror = () => setAscult(false)
-    rec.current = r
-    try { r.start(); setAscult(true) } catch { setAscult(false) }
+    r.onend = () => { if (vreau.current) { try { r.start(); return } catch { /* nu repornim */ } } setAscult(false) }
+    r.onerror = () => { vreau.current = false; setAscult(false) }
+    rec.current = r; vreau.current = true
+    try { r.start(); setAscult(true) } catch { vreau.current = false; setAscult(false) }
   }
-  const opreste = () => { try { rec.current?.stop() } catch { /* deja oprit */ } setAscult(false) }
+  const opreste = () => { vreau.current = false; try { rec.current?.stop() } catch { /* deja oprit */ } setAscult(false) }
   return <button type="button" disabled={disabled} onClick={ascult ? opreste : porneste} title={ascult ? 'Oprește dictarea' : 'Dictează indicațiile (română)'}
     style={{ ...S.btnS, padding:'7px 11px', ...(ascult ? { background:G.red + '22', color:G.red, borderColor:G.red + '88' } : null) }}>{ascult ? '⏹ Ascult…' : '🎤 Dictează'}</button>
 }
@@ -337,7 +338,7 @@ export default function Marketing() {
               {Object.entries(ETAPE).map(([k, e]) => <option key={k} value={k}>{e.l}</option>)}
             </select>
             <input style={{ ...S.input, flex:1, minWidth:280 }} value={nou.indicatii} onChange={e => setNou(n => ({ ...n, indicatii: e.target.value }))} placeholder="indicații pentru AI (opțional): ex. accent pe probele de presiune, ton mai scurt" />
-            <ButonDictare disabled={!!busy} onText={t => setNou(n => ({ ...n, indicatii: n.indicatii ? n.indicatii + ' ' + t : t }))} />
+            <ButonDictare disabled={!!busy} onText={t => setNou(n => n ? { ...n, indicatii: n.indicatii ? n.indicatii + ' ' + t : t } : n)} />
             <button style={{ ...S.btnP, opacity: nou.pozeAlese.length && !busy ? 1 : .5 }} disabled={!nou.pozeAlese.length || !!busy} onClick={() => creeazaCiorna(true)}>🤖 Creează ciornă cu text AI</button>
             <button style={S.btnS} disabled={!nou.pozeAlese.length || !!busy} onClick={() => creeazaCiorna(false)}>Creează goală (scriu eu)</button>
             <div style={{ width:'100%', fontSize:11.5, color:G.muted }}>{(ETAPE[nou.etapa] || ETAPE.executie).hint}{nou.etapa === 'start' && !(mk[nou.site_id]?.etape_lucrare || '').trim() ? <b style={{ color:G.orange }}> — completează „Ce cuprinde lucrarea” la Șantiere postabile, altfel AI-ul rămâne general.</b> : ''}</div>
@@ -420,7 +421,7 @@ export default function Marketing() {
                     {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && <button style={S.btnS} disabled={!!busy} onClick={() => setRescrie(r => r?.id === p.id ? null : { id: p.id, ind: '' })}>🤖 Rescrie cu AI</button>}
                     {rescrie?.id === p.id && <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', width:'100%' }}>
                       <input style={{ ...S.input, flex:1, minWidth:240 }} value={rescrie.ind} onChange={e => setRescrie(r => ({ ...r, ind: e.target.value }))} placeholder="indicații pentru AI (opțional): scrie sau dictează" />
-                      <ButonDictare disabled={!!busy} onText={t => setRescrie(r => ({ ...r, ind: r.ind ? r.ind + ' ' + t : t }))} />
+                      <ButonDictare disabled={!!busy} onText={t => setRescrie(r => r ? { ...r, ind: r.ind ? r.ind + ' ' + t : t } : r)} />
                       <button style={S.btnP} disabled={!!busy} onClick={() => { const ind = rescrie.ind; setRescrie(null); regenereaza(p, ind) }}>Rescrie</button>
                     </div>}
                     {p.status === 'ciorna' && poateAproba && !inEdit && <button style={{ ...S.btnS, color:G.blue, borderColor:G.blue + '66' }} disabled={!(p.text_postare || '').trim()} onClick={() => upd(p.id, { status: 'aprobata', aprobat_de: profile.id, aprobat_la: new Date().toISOString() })}>✔ Aprobă</button>}
