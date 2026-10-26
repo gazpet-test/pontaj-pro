@@ -59,6 +59,9 @@ const STATUS = {
   eroare:    { l:'Eroare',     c:G.red },
   anulata:   { l:'Anulată',    c:G.dim },
 }
+// supabase-js ascunde corpul erorii non-2xx: il citim din error.context ca sa vedem motivul real
+const motivEroare = async (error, data) => { try { const j = await error?.context?.json?.(); if (j?.error) return j.error } catch { /* fara corp */ } return error?.message || data?.error }
+
 const fmtD = (d) => d ? new Date(d).toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric' }) : ''
 const fmtDT = (d) => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : ''
 
@@ -158,7 +161,7 @@ export default function Marketing() {
     if (cuAI) {
       setBusy('AI scrie textul postării…'); setBusyDetaliu('Citește rapoartele zilnice alese și pozele; 10–30 secunde.')
       const { data, error: e2 } = await supabase.functions.invoke('meta-publish', { body: { actiune: 'genereaza', postare_id: ins.id, indicatii: nou.indicatii } })
-      if (e2 || data?.error) showToast('Ciorna e creată, dar AI a dat eroare: ' + (e2?.message || data?.error), 'err')
+      if (e2 || data?.error) showToast('Ciorna e creată, dar AI a dat eroare: ' + (await motivEroare(e2, data)), 'err')
     }
     setBusy(null); setBusyDetaliu(null); setNou(null); await load()
     setEdit({ id: ins.id, text: '' })
@@ -175,7 +178,7 @@ export default function Marketing() {
     setBusy('AI rescrie textul…'); setBusyDetaliu('10–30 secunde.')
     const { data, error } = await supabase.functions.invoke('meta-publish', { body: { actiune: 'genereaza', postare_id: p.id, indicatii } })
     setBusy(null); setBusyDetaliu(null)
-    if (error || data?.error) { showToast('Eroare AI: ' + (error?.message || data?.error), 'err'); return }
+    if (error || data?.error) { showToast('Eroare AI: ' + (await motivEroare(error, data)), 'err'); return }
     setEdit({ id: p.id, text: data.text }); await load()
   }
   // Programare (Răzvan 05.09.2026): aprobată + programat_la → cron-ul marketing_publica_programate (la 10 min) o publică singur
