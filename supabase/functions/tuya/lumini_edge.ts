@@ -72,6 +72,10 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
     const keys=new Set((schedules.data || []).filter((p:any)=>p.activ && p.aprobat_de && p.aprobat_la).flatMap((p:any)=>p.dispozitive.map((id:number)=>`${p.id}:${id}`)));
     for(const [key,until] of Object.entries(runtime.backoff)) if(Number(until)<=Date.now() || !keys.has(key)) delete runtime.backoff[key];
     for(const id of Object.keys(runtime.citiri_esuate)) if(!map[id]) delete runtime.citiri_esuate[id];
+    if(tick && !(schedules.data || []).some((p:any)=>p.activ && p.aprobat_de && p.aprobat_la) && !Object.values(runtime.pauze).some(until=>Number(until)>Date.now())) {
+      runtime.amanate=[];
+      return {ok:true,rezultat:'nimic de facut',comenzi:[],amanate:[],amanate_off:[],erori:[]};
+    }
     const read=async(id:number)=>{
       const d=map[id].iot_dispozitive;
       readIds.add(id);
@@ -84,6 +88,7 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
         d.ultima_citire=latest;
         return s.value;
       } catch(e) {
+        if((e as any)?.cotaTuya) stop=true;
         stari[id]=null;failedReadIds.add(id);
         // UI nu trebuie sa prezinte drept reala o citire esuata recent.
         await db.from('iot_dispozitive').update({ultima_citire:{...(d.ultima_citire || {}),pornit:null}}).eq('id',id).eq('sursa','tuya');
@@ -127,10 +132,12 @@ export async function executaLumini(db: any, call: any, body: any, userId: strin
       if(bugetDepasit(value)) return await refuzBuget(id,value,sursa,programId);
       let error:string|null=null,posted=false;
       try {
-        const accepted=await call('POST',`/v1.0/iot-03/devices/${encodeURIComponent(map[id].iot_dispozitive.extern_id)}/commands`,{commands:[{code:codes[id],value}]});
+        const accepted=await call('POST',`/v1.0/iot-03/devices/${encodeURIComponent(map[id].iot_dispozitive.extern_id)}/commands`,{commands:[{code:codes[id],value}]},()=>!stop && !bugetDepasit(value));
         if(accepted!==true) throw Object.assign(new Error('Comanda refuzata de Tuya'),{refuzCert:true});
         posted=true;
       } catch(e) {
+        if((e as any)?.cotaTuya) stop=true;
+        if((e as any)?.bugetExpirat) return await refuzBuget(id,value,sursa,programId);
         error=eroareTuya(e);
         if(value && sursa==='program' && (e as any)?.refuzCert) {
           runtime.backoff[`${programId}:${id}`]=Date.now()+30*60000;

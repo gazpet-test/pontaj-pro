@@ -137,6 +137,193 @@ async function at(time,fn){
 const tick=(db,hw)=>executaLumini(db,hw.call,{actiune:'programe_tick'},null);
 const manual=(db,hw,value)=>executaLumini(db,hw.call,{actiune:'comanda',dispozitiv_id:3,stare:value},'u');
 
+// Extensie a mock-ului existent: catalog/config/notificari pentru handlerul sync real.
+function consumDb(options={}) {
+  const db=persistentDb(options),from=db.from.bind(db),rpc=db.rpc.bind(db);
+  db.config={uids:['u1','u2','u3']};db.catalog=[];db.citiri=[];db.writes=[];db.failConfig=false;
+  db.from=table=>{
+    if(!['iot_integrari','iot_dispozitive','iot_citiri','notifications'].includes(table))return from(table);
+    let patch=null,kind=null,single=false,limit=Infinity;const filters=[];
+    const q={select(){return q},eq(k,v){filters.push(r=>k==='config'?JSON.stringify(r[k])===v:r[k]===v);return q},gt(k,v){filters.push(r=>r[k]>v);return q},limit(n){limit=n;return q},
+      maybeSingle(){single=true;return q},single(){single=true;return q},
+      update(v){patch=v;kind='update';return q},upsert(v,opts){assert.equal(opts.ignoreDuplicates,true);patch=v;kind='upsert';return q},insert(v){patch=v;kind='insert';return q},
+      then(resolve){
+        let rows=table==='iot_integrari'?[{cheie:'tuya',config:db.config}]:table==='iot_dispozitive'?db.catalog:table==='notifications'?db.state.alerts.map((a,i)=>({id:i,type:a.p_type,title:a.p_title,created_at:new Date(a.created_at).toISOString()})):db.citiri;
+        rows=rows.filter(r=>filters.every(f=>f(r)));
+        if(patch){
+          if(table==='iot_integrari' && db.failConfig)return Promise.resolve({error:{message:'config indisponibil'}}).then(resolve);
+          db.writes.push({table,kind,patch:structuredClone(patch)});
+          if(kind==='update')for(const row of rows)Object.assign(row,structuredClone(patch));
+          if(table==='iot_integrari' && patch.config)db.config=structuredClone(patch.config);
+          if(kind==='upsert'){
+            if(db.catalog.some(r=>r.extern_id===patch.extern_id && r.sursa===patch.sursa))rows=[];
+            else {const row={id:100+db.catalog.length,activ:true,...structuredClone(patch)};db.catalog.push(row);rows=[row]}
+          }
+          if(kind==='insert')db.citiri.push(structuredClone(patch));
+        }
+        rows=rows.slice(0,limit);
+        return Promise.resolve({data:structuredClone(single?(rows[0]??null):rows),error:null}).then(resolve);
+      }};return q;
+  };
+  db.rpc=async(name,args)=>rpc(name,args);
+  return db;
+}
+let handlerSequence=0;
+async function withHandler(db,fetchMock,fn) {
+  const {stripTypeScriptTypes}=await import('node:module');
+  const originals=[globalThis.Deno,globalThis.__luminiCreateClient,globalThis.fetch];let handler;
+  globalThis.__luminiCreateClient=()=>db;
+  globalThis.Deno={env:{get:()=> 'fake-local-only'},serve(fn){handler=fn}};
+  globalThis.fetch=fetchMock;
+  try {
+    const source=readFileSync(new URL('../supabase/functions/tuya/index.ts',import.meta.url),'utf8')
+      .replace("import { createClient } from 'npm:@supabase/supabase-js@2';",'const createClient = globalThis.__luminiCreateClient;')
+      .replace("'./lumini_edge.ts'",JSON.stringify(new URL('../supabase/functions/tuya/lumini_edge.ts',import.meta.url).href));
+    await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)+`\n// consum ${++handlerSequence}`).toString('base64'));
+    await fn(async(actiune='sync')=>{
+      const response=await handler(new Request('https://local.invalid',{method:'POST',headers:{'x-iot-secret':'cron-test'},body:JSON.stringify({actiune})}));
+      return {status:response.status,...await response.json()};
+    });
+  } finally {[globalThis.Deno,globalThis.__luminiCreateClient,globalThis.fetch]=originals}
+}
+const tuyaResult=result=>new Response(JSON.stringify({success:true,result}));
+const localDevice=(id,tip='priza',activ=true)=>({id,extern_id:String(id),sursa:'tuya',activ,nume:`D${id}`,meta:{tip,categorie:tip==='camera'?'sp':'cz',model:'model'},ultima_citire:{online:true,pornit:false},citit_la:'2026-10-20T00:00:00.000Z'});
+
+test('consum: handler real fara programe/pauze => zero token/status; aprobarea si pauza mentin citirile',async()=>at(now,async()=>{
+  for(const schedules of [[],[{...p,activ:false}],[{...p,aprobat_de:null}],[{...p,aprobat_la:null}]]) {
+    const db=consumDb({schedules});let calls=0;
+    await withHandler(db,async()=>{calls++;throw new Error('Nu trebuie apelat Tuya')},async run=>{
+      const r=await run('programe_tick');assert.equal(r.rezultat,'nimic de facut');assert.equal(r.apeluri_tuya,0);assert.equal(calls,0);assert.equal(db.state.lease,null);
+    });
+  }
+  for(const approved of [false,true]){
+    const db=consumDb({schedules:approved?[{...p,dispozitive:[]}]:[],runtime:{pauze:{3:now+300000}}});const paths=[];
+    await withHandler(db,async url=>{const path=new URL(url).pathname;paths.push(path);return tuyaResult(path==='/v1.0/token'?{access_token:'fake'}:[{code:'switch_1',value:false}])},async run=>{
+      assert.equal((await run('programe_tick')).ok,true);assert.equal(paths.length,2);
+    });
+  }
+}));
+
+test('consum: liste/camere la 6h, priza la fiecare sync, inactiv nici citit nici reactivat',async()=>at(now,async advance=>{
+  const db=consumDb();db.catalog=[localDevice(1,'camera'),localDevice(2),...[279,280,281,283].map(id=>localDevice(id,'camera',false))];
+  const paths=[];
+  await withHandler(db,async url=>{
+    const path=new URL(url).pathname;paths.push(path);
+    if(path==='/v1.0/token')return tuyaResult({access_token:'fake'});
+    if(path.includes('/users/'))return tuyaResult(db.catalog.map(d=>({id:d.extern_id,name:d.nume,category:d.meta.categorie,online:false})));
+    return tuyaResult([{code:'switch_1',value:true}]);
+  },async run=>{
+    assert.equal((await run()).apeluri_tuya,6); // token + 3 liste + camera + priza (dedup intre uid)
+    const camera=structuredClone(db.catalog[0]);paths.length=0;
+    advance(6*3600000-1);
+    assert.equal((await run()).apeluri_tuya,2);assert.deepEqual(paths,['/v1.0/token','/v1.0/iot-03/devices/2/status']);assert.deepEqual(db.catalog[0],camera);
+    advance(1);paths.length=0;assert.equal((await run()).apeluri_tuya,6);
+    assert.ok(!paths.some(p=>/\/(279|280|281|283)\//.test(p)));assert.ok(db.catalog.slice(2).every(d=>d.activ===false));
+    assert.ok(db.writes.every(w=>!Object.hasOwn(w.patch,'activ')));
+  });
+}));
+
+test('consum: lista actualizeaza online camera fara status sau citire proaspata; status esuat asteapta 6h',async()=>at(now,async advance=>{
+  const db=consumDb();db.catalog=[localDevice(1,'camera')];db.config.status_camere_tuya_la=new Date().toISOString();
+  const originalRead=db.catalog[0].citit_la;let reads=0;
+  await withHandler(db,async url=>{
+    const path=new URL(url).pathname;
+    if(path==='/v1.0/token')return tuyaResult({access_token:'fake'});
+    if(path.includes('/users/'))return tuyaResult([{id:'1',name:'Camera',category:'sp',online:false}]);
+    reads++;return new Response(JSON.stringify({success:false,code:1106,msg:'permission deny'}));
+  },async run=>{
+    assert.equal((await run()).apeluri_tuya,4);assert.equal(reads,0);assert.equal(db.catalog[0].ultima_citire.online,false);assert.equal(db.catalog[0].citit_la,originalRead);
+    advance(6*3600000);await run();assert.equal(reads,1);
+    advance(300000);await run();assert.equal(reads,1);
+  });
+}));
+
+test('consum: fallback gol limitat la 6h si catalogul manual persista pentru sync',async()=>at(now,async()=>{
+  const db=consumDb();const paths=[];
+  await withHandler(db,async url=>{const path=new URL(url).pathname;paths.push(path);return tuyaResult(path==='/v1.0/token'?{access_token:'fake'}:path.includes('/users/')?[]:path==='/v1.3/iot-03/devices'?{list:[{id:'7',name:'Camera',category:'sp',online:true}]}:[])},async run=>{
+    assert.equal((await run('lista')).apeluri_tuya,5);assert.equal(db.catalog.length,1);paths.length=0;
+    assert.equal((await run()).apeluri_tuya,2); // token + primul status camera
+    assert.ok(!paths.some(p=>p.includes('/users/') || p.startsWith('/v1.3/')));
+    paths.length=0;assert.equal((await run()).apeluri_tuya,1);
+  });
+}));
+
+test('consum: cota opreste dupa primul refuz, dedup 24h comun sync/tick/token/lista/status',async()=>at(now,async advance=>{
+  for(const stage of ['token','lista','status','tick']){
+    const db=consumDb({lights:[1,2,3].map(id=>({id,rol:'exterior'})),schedules:[{...p,dispozitive:[]}]});db.catalog=[localDevice(1),localDevice(2)];
+    if(['status','tick'].includes(stage))db.config.lista_tuya_la=new Date().toISOString();
+    let calls=0;
+    await withHandler(db,async url=>{
+      calls++;const path=new URL(url).pathname;
+      if(path==='/v1.0/token' && stage!=='token')return tuyaResult({access_token:'fake'});
+      return new Response(JSON.stringify({success:false,code:28841004,msg:'IoT Core trial quota is exhausted'}));
+    },async run=>{
+      for(const hours of [0,13,11]) {
+        advance(hours*3600000);calls=0;
+        const r=await run(stage==='tick'?'programe_tick':'sync');
+        assert.equal(r.ok===true,false);assert.equal(calls,stage==='token'?1:2);assert.equal(r.apeluri_tuya,calls);
+        assert.equal(db.state.alerts.filter(a=>a.p_title==='Tuya: cota API epuizata').length,hours===11?2:1);
+      }
+      assert.match(db.state.alerts[0].p_message,/28841004.*Alimentati contul.*pachet de resurse Tuya/);
+    });
+  }
+}));
+
+test('consum: alta eroare de plata opreste tick; esec config opreste listele',async()=>at(now,async()=>{
+  const db=consumDb();let calls=0;
+  await withHandler(db,async()=>{calls++;return new Response(JSON.stringify({success:false,code:99999,msg:'Insufficient balance'}))},async run=>{
+    assert.equal((await run('programe_tick')).apeluri_tuya,1);assert.equal(calls,1);assert.equal(db.state.alerts[0].p_title,'Tuya: cota API epuizata');
+  });
+  db.failConfig=true;calls=0;
+  await withHandler(db,async()=>{calls++;return tuyaResult({access_token:'fake'})},async run=>{
+    const r=await run();assert.equal(r.ok,false);assert.equal(calls,1);
+  });
+}));
+
+test('consum: rezervare concurenta lista si alerta are un singur castigator',async()=>at(now,async()=>{
+  for(const quota of [false,true]){
+    const db=consumDb();let lists=0,notices=0;
+    const rpc=db.rpc.bind(db);db.rpc=async(name,args)=>{if(name==='iot_alerta' && args.p_title==='Tuya: cota API epuizata')notices++;return rpc(name,args)};
+    await withHandler(db,async url=>{
+      if(quota)return new Response(JSON.stringify({success:false,code:28841004}));
+      if(new URL(url).pathname==='/v1.0/token')return tuyaResult({access_token:'fake'});
+      lists++;return tuyaResult(new URL(url).pathname.startsWith('/v1.3/')?{list:[]}:[]);
+    },async run=>{
+      const results=await Promise.all([run(),run()]);
+      if(quota){assert.equal(notices,1);assert.equal(db.state.alerts.length,1)}
+      else {assert.equal(lists,4);assert.equal(results.filter(r=>r.ok).length,1)}
+    });
+  }
+}));
+
+test('consum: rezervare alerta abandonata expira in 10min; RPC esuat permite reincercare',async()=>at(now,async advance=>{
+  const db=consumDb();db.config.cota_alerta_tuya_la=new Date().toISOString();
+  const rpc=db.rpc.bind(db);let failNotice=true;
+  db.rpc=async(name,args)=>name==='iot_alerta' && failNotice?{error:{message:'notificare esuata'}}:rpc(name,args);
+  await withHandler(db,async()=>new Response(JSON.stringify({success:false,code:28841004})),async run=>{
+    await run();assert.equal(db.state.alerts.length,0);
+    advance(600000);await run();assert.equal(db.state.alerts.length,0);
+    failNotice=false;await run();assert.equal(db.state.alerts.length,1);
+  });
+}));
+
+test('consum: cota la POST opreste celelalte POST si recitiri',async()=>at(hour('12:00'),async()=>{
+  const db=consumDb({lights:[1,2,3].map(id=>({id,rol:'exterior'})),schedules:[{...p,dispozitive:[1,2,3]}]});let calls=0,posts=0;
+  await withHandler(db,async(url,options)=>{
+    calls++;
+    if(options.method==='POST'){posts++;return new Response(JSON.stringify({success:false,code:28841004}))}
+    return tuyaResult(new URL(url).pathname==='/v1.0/token'?{access_token:'fake'}:[{code:'switch_1',value:true}]);
+  },async run=>{const r=await run('programe_tick');assert.equal(r.ok,false);assert.equal(posts,1);assert.equal(calls,5);assert.equal(r.apeluri_tuya,5);assert.equal(db.state.lease,null)});
+}));
+
+test('consum: transportul real revalideaza bugetul OFF la iesirea din coada',async()=>at(hour('12:00'),async advance=>{
+  const db=consumDb({lights:[1,2,3].map(id=>({id,rol:'exterior'})),schedules:[{...p,dispozitive:[1,2,3]}]});let posts=0;
+  await withHandler(db,async(url,options)=>{
+    if(options.method==='POST'){posts++;advance(121000);return tuyaResult(true)}
+    return tuyaResult(new URL(url).pathname==='/v1.0/token'?{access_token:'fake'}:[{code:'switch_1',value:posts===0}]);
+  },async run=>{const r=await run('programe_tick');assert.equal(posts,1);assert.equal(r.amanate_off.length,2);assert.equal(db.state.lease,null)});
+}));
+
 // Ceas virtual cu asteptari concurente: trei operatii de 8s consuma 8s, nu 24s.
 function timpSimulat(advance) {
   let queue=[],scheduled=false;
@@ -351,7 +538,7 @@ test('r4 P2-2: plafon comun pentru orar/simulare in ambele ordini, inclusiv ON n
 
 test('r4 P2-1: handler real, sase citiri folosesc o singura promisiune token, inclusiv esec',async()=>{
   const {stripTypeScriptTypes}=await import('node:module');
-  const db=persistentDb({lights:[1,2,3,4,5,6].map(id=>({id,rol:'exterior'})),schedules:[]});
+  const db=persistentDb({lights:[1,2,3,4,5,6].map(id=>({id,rol:'exterior'})),schedules:[{...p,dispozitive:[]}]});
   let handler,tokens=0,statusReads=0,rejectToken=false;
   const originalDeno=globalThis.Deno,originalFactory=globalThis.__luminiCreateClient,originalFetch=globalThis.fetch;
   globalThis.__luminiCreateClient=()=>db;
