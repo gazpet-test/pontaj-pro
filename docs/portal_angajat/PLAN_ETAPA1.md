@@ -65,34 +65,45 @@ Data: 26.10.2026.
 ## 2. Arhitectura propusă
 
 - **Fără conturi Supabase Auth pentru cei 98 fără cont.** Contul ERP ar deschide RLS-ul existent, care e larg (vezi P1 de mai sus). Portalul are identitatea lui proprie: link personal + PIN, cu sesiune pe telefon.
-- **Un singur edge nou, `portal-angajat`** (`verify_jwt=false`).
-  - Nu atinge tabele direct: **apelează doar funcții SQL `fn_portal_*`** (SECURITY DEFINER, `search_path = public, pg_temp`, EXECUTE **doar** pentru `service_role`).
+- **Un singur edge nou, `portal-angajat`** (`verify_jwt=false`), **fără `service_role`** (r2, P1 Copilot).
+  - Se conectează la Postgres cu un **rol dedicat `portal_edge`** (LOGIN, NOINHERIT, NOBYPASSRLS, fără drepturi pe tabele, **doar EXECUTE pe `fn_portal_*` de angajat**). Conexiunea vine dintr-un secret nou al edge-ului, `PORTAL_EDGE_DB_URL`, care intră în registrul de automatizări.
+  - Un bug în edge nu poate atinge mai mult decât funcțiile portalului.
+  - Funcțiile sunt SECURITY DEFINER, cu `search_path = public, pg_temp`, `REVOKE EXECUTE FROM PUBLIC, anon, authenticated, service_role` explicit pe fiecare și `GRANT` doar către `portal_edge`.
+- **Funcțiile de administrare** (`link_genereaza` / `link_revoca` / `deblocheaza` / `reseteaza`) **nu trec prin edge**. Se apelează din ERP cu JWT-ul utilizatorului (`authenticated`) și verifică în corp, prin `auth.uid()`, owner sau modulul `hr`. Fiecare acțiune intră în jurnal cu profilul care a făcut-o.
   - Fiecare funcție primește **tokenul de sesiune**, nu `employee_id`. Funcția derivă angajatul din sesiune, verifică `employees.active` și întoarce **doar coloanele proprii**: fără CNP, salariu, IBAN sau semnături.
   - Așa, regula „doar datele proprii” stă într-un singur loc, testabil în harness, nu în React și nici în edge.
 - **Tokenuri:**
   - linkul personal: 256 de biți aleatori;
-  - sesiunea: 256 de biți.
+  - sesiunea: 256 de biți;
+  - **codul de activare** (r2, P1 Copilot): 8 cifre, de unică folosință, valabil 7 zile.
+    - E afișat **o singură dată** lui HR, la generarea linkului, și se transmite **pe alt canal** decât linkul: linkul pe WhatsApp, codul verbal, telefonic sau pe hârtie, prin șeful de șantier.
+    - Setarea PIN-ului cere **link + cod de activare**, deci un link scurs înainte de activare nu ajunge.
+    - Codul se stochează bcrypt; 5 coduri greșite revocă linkul.
   - În BD se salvează **doar `sha256(token)`**. Linkul folosește **fragment** (`/p#…`), care nu ajunge în logurile serverului și nici în Referer. Pagina îl scoate imediat din bara de adresă. `Referrer-Policy: no-referrer`, `Cache-Control: no-store`.
 - **PIN-ul** se salvează cu `extensions.crypt(pin, extensions.gen_salt('bf', 10))` (pgcrypto 1.3 stă în schema `extensions`; funcțiile au `search_path = public, pg_temp`, deci apelul se califică explicit).
   - Ghicirea se oprește prin limite, nu prin hash: un PIN de 6 cifre are doar 10⁶ variante.
   - Se refuză PIN-urile triviale (000000, 123456, 111111…) și cele egale cu data nașterii (DDMMYY / YYMMDD din `employees.data_nasterii`).
-- **Limite, persistente și atomice în BD** (nu în memoria edge-ului):
-  - pe angajat: 5 PIN-uri greșite → blocare 30 de minute; 15 cumulate → link revocat, iar resetul îl face HR;
-  - pe sursă (IP trunchiat / hash): 30 de încercări eșuate pe oră;
+- **Limite, persistente și atomice în BD** (nu în memoria edge-ului), **verificate înaintea calculului bcrypt** (anti-DoS):
+  - pe angajat: 5 PIN-uri greșite consecutive → blocare 30 de minute; 15 greșite în 24 de ore → link revocat, iar resetul îl face HR (contorul pe fereastră nu blochează definitiv după greșeli vechi);
+  - pe sursă: 30 de încercări eșuate pe oră. Sursa e **HMAC(IP, secret `PORTAL_IP_PEPPER`)**, nu SHA simplu, pentru că spațiul IPv4 se enumeră ușor;
   - răspunsurile sunt generice („link sau PIN invalid”).
-- **Sesiunea pe telefon:** 30 de zile (Q5), stocată în `localStorage` (Vercel și edge-ul sunt pe domenii diferite, deci un cookie HttpOnly comun nu e posibil).
-  - **Step-up:** PIN-ul se cere din nou la depunerea sau anularea unei cereri.
-  - Delogarea și „deconectează toate telefoanele” sunt în portal.
+- **Telefonul și sesiunea** (r2, P1 Copilot: telefoane comune / pierdute, XSS):
+  - telefonul ține minte **linkul** 30 de zile, ca să nu-l caute iar angajatul (Q5);
+  - **sesiunea de date** are o fereastră de **15 minute de inactivitate**, impusă **pe server** (`pin_valabil_pana` pe sesiune). După ea, orice citire (inventar, istoric) cere din nou PIN-ul, inclusiv pe un telefon comun;
+  - **PIN de step-up** la depunerea sau anularea unei cereri **și la orice aprobare a șefului**;
+  - pagina `/p` are CSP strict (fără scripturi terțe, `script-src 'self'`), nu folosește `dangerouslySetInnerHTML` și nu are librării de UI noi. Tokenul de sesiune scurt limitează paguba unui XSS;
+  - delogarea și „deconectează toate telefoanele” sunt în portal.
 
 ### Tabele noi (schiță)
 
 | Tabel | Câmpuri principale | Note |
 |---|---|---|
-| `portal_linkuri` | `id`, `employee_id`, `token_hash` UNIQUE, `creat_de`, `creat_la`, `pin_pana_la` (creat + 7 zile), `revocat_la`, `revocat_motiv` | un singur link activ pe angajat (index unic parțial); linkul nou îl revocă pe cel vechi |
+| `portal_linkuri` | `id`, `employee_id`, `token_hash` UNIQUE, `cod_activare_hash`, `cod_gresite`, `creat_de`, `creat_la`, `activare_pana_la` (creat + 7 zile), `activat_la`, `revocat_la`, `revocat_motiv` | un singur link activ pe angajat (index unic parțial); linkul nou îl revocă pe cel vechi și **dezactivează tokenul `/co` al angajatului în aceeași tranzacție** (r2) |
 | `portal_credentiale` | `employee_id` PK, `pin_hash`, `pin_setat_la`, `gresite_consecutive`, `gresite_total`, `blocat_pana`, `limba` (`ro` / `en`, implicit `ro`) | PIN-ul nu se citește niciodată în UI; resetarea șterge hash-ul |
-| `portal_sesiuni` | `id`, `employee_id`, `link_id`, `token_hash` UNIQUE, `creat_la`, `ultima_folosire`, `expira_la`, `revocat_la`, `eticheta_dispozitiv` | se revocă în cascadă la reset, la revocarea linkului și la `employees.active=false` |
+| `portal_sesiuni` | `id`, `employee_id`, `link_id`, `token_hash` UNIQUE, `creat_la`, `ultima_folosire`, `pin_valabil_pana` (15 minute de inactivitate), `expira_la`, `revocat_la`, `eticheta_dispozitiv` | se revocă în cascadă la reset, la revocarea linkului și la `employees.active=false` |
 | `portal_jurnal` | `id`, `employee_id` (null dacă e necunoscut), `actiune`, `rezultat`, `sursa_hash`, `ua_scurt`, `la` | doar adăugare (trigger de imuabilitate); fără tokenuri sau PIN; retenție 12 luni (Q7), cu job de curățare înregistrat în `automatizari` |
-| `portal_rata` | `cheie` (tip + valoare hash), `fereastra`, `contor` | limitare pe IP / sursă, cu `INSERT … ON CONFLICT` atomic |
+| `portal_rata` | `cheie` (tip + valoare HMAC), `fereastra`, `contor` | limitare pe IP / sursă, cu `INSERT … ON CONFLICT` atomic |
+| `portal_idempotenta` | `employee_id`, `operatie`, `cheie`, `payload_hash`, `rezultat`, `la` | aceeași cheie cu alt payload e refuzată (r2) |
 
 Toate au RLS activ, `REVOKE ALL` pentru PUBLIC / anon / authenticated, fără politici pentru clienți. Accesul trece numai prin funcții.
 
@@ -114,7 +125,7 @@ Toate au RLS activ, `REVOKE ALL` pentru PUBLIC / anon / authenticated, fără po
    - HR / owner apasă „Generează link” în ecranul de administrare (Q6). Primește `https://…/p#<token>` și îl trimite **manual** (WhatsApp / afișat pe ecran). Claude nu trimite nimic.
    - Linkul generat îl revocă pe cel vechi și toate sesiunile.
 2. **Prima intrare.**
-   - Linkul cu PIN nesetat duce la alegerea limbii și apoi a PIN-ului de 6 cifre, introdus de 2 ori.
+   - Linkul cu PIN nesetat duce la alegerea limbii, apoi la **codul de activare** primit pe celălalt canal, apoi la PIN-ul de 6 cifre, introdus de 2 ori.
    - Urmează sesiunea, apoi Acasă.
    - Dacă PIN-ul nu e setat în 7 zile, linkul expiră și HR generează altul.
 3. **Telefon nou, sesiune expirată sau delogare:** același link + PIN. Linkul identifică persoana, PIN-ul o autentifică.
@@ -126,11 +137,19 @@ Toate au RLS activ, `REVOKE ALL` pentru PUBLIC / anon / authenticated, fără po
      - ia lock pe angajat;
      - verifică suprapunerea;
      - setează `an = an(data_start)` și refuză intervalele care trec dintr-un an în altul (se depun 2 cereri);
-     - pune `aprobator_id` = **șeful din `hr_concediu_rute`** (fallback: HR, Q2);
+     - pune `aprobator_id` = **șeful din `hr_concediu_rute`**. **Fără rută validă, depunerea e refuzată (`ruta_lipsa`)** și angajatul vede „cere-i lui HR să-ți stabilească șeful”. Trimiterea directă la HR se face doar printr-o rută explicită spre profilul HR, setată și jurnalizată de HR / owner (r2, P1 Copilot);
      - inserează `depusa`, `sursa='mobil'`;
      - jurnalizează depunerea cu id-ul sesiunii, ca dovadă de confirmare.
    - **Șeful** aprobă sau respinge (Q1) → `aprobata_mp` (`semnat_mp_de`). **HR** aprobă → `aprobata` (`semnat_hr_de`). Aprobarea HR rămâne în ERP, ca azi.
-   - Tranzițiile se fac doar din starea așteptată (CAS pe status). **Nimeni nu își aprobă propria cerere.**
+   - **Mașina de stări e în BD, pentru toate căile** (portal și ERP), cu un trigger pe `hr_cereri_concediu` (r2, P1 Copilot):
+     - `depusa → aprobata_mp` doar de aprobatorul cererii;
+     - `aprobata_mp → aprobata` doar de HR;
+     - respingerea doar din `depusa` / `aprobata_mp`;
+     - anularea de către angajat doar din `depusa`;
+     - fără salturi și fără suprascrieri concurente (CAS pe status);
+     - **nimeni nu își aprobă propria cerere.**
+
+     Inserările din reconciliere / import (sursele `reconciliere`, `import_scanat`) își păstrează regulile lor. Dacă HR mai are voie să semneze și pasul șefului (de exemplu cu șeful absent), asta se face doar cu motiv obligatoriu, jurnalizat (Q9). Trigger-ul schimbă comportamentul `TabConcedii` (HR) pe căile nepermise: se testează în harness înainte, iar UI-ul afișează refuzul.
    - PDF-ul și semnătura rămân fluxul HR existent din ERP. Nu le schimbăm în etapa asta.
 
 ---
@@ -167,7 +186,10 @@ Portalul e o pagină publică nouă `/p`, într-un chunk separat, fără xlsx / 
 | două cereri simultane / retry dublu | lock pe angajat + cheie de idempotență + verificarea suprapunerii în aceeași tranzacție |
 | șeful își aprobă singur concediul / ocolește ruta | verificare pe server: aprobatorul = ruta angajatului, altcineva decât angajatul, CAS pe status |
 | date personale | doar coloanele proprii; jurnal fără tokenuri sau PIN, IP hash-uit, retenție 12 luni; fără CNP / salariu / IBAN |
-| `/co` vechi rămâne deschis cu tokenuri în clar | la lansarea portalului, `/co` se închide (Q4) și tokenurile vechi se dezactivează |
+| `/co` vechi rămâne deschis cu tokenuri în clar și ocolește controalele noi | **trecere pe angajat:** generarea linkului de portal dezactivează în aceeași tranzacție tokenul `/co` al acelui angajat (inclusiv în pilot); la lansarea generală `/co` se închide (Q4) |
+| link scurs înainte de activare | codul de activare de unică folosință, pe alt canal |
+| telefon comun / pierdut | fereastra PIN de 15 minute pe server, PIN de step-up la acțiuni, „deconectează toate telefoanele”, revocarea de către HR |
+| bug în edge | rol `portal_edge` fără `service_role` și fără tabele, doar EXECUTE pe funcții |
 | inventar incomplet („tot ce primește”) | azi datele sunt doar EIP: completitudinea ține de înregistrare (Q3), nu de portal |
 
 ---
@@ -189,7 +211,7 @@ Portalul e o pagină publică nouă `/p`, într-un chunk separat, fără xlsx / 
    - **A:** în portal, secțiunea „De aprobat”. Merge și pentru șefii fără cont ERP și nu atinge `HR.jsx` / `TabConcedii.jsx`.
    - B: în ERP. Cere cont ERP pentru fiecare șef și modificarea `TabConcedii.jsx`.
 2. **Cine e șeful superior:**
-   - **A:** `hr_concediu_rute` (azi 12 / 123), completat de HR pentru toți; fără rută, cererea merge direct la HR.
+   - **A:** `hr_concediu_rute` (azi 12 / 123), completat de HR pentru toți. **Fără rută, depunerea e refuzată** (`ruta_lipsa`); trimiterea directă la HR se face doar ca rută explicită, setată de HR.
    - B: din `employees` (departament / funcție), după o regulă. Fragil.
 3. **Inventarul (telefon, mașină, scule):** azi există doar EIP.
    - **A:** se înregistrează în Magazie ca echipamente (categoriile `it`, `vehicul`, `scule`), cu predarea existentă. Fără schemă nouă; portalul le arată automat.
@@ -197,9 +219,9 @@ Portalul e o pagină publică nouă `/p`, într-un chunk separat, fără xlsx / 
 4. **`/co`:**
    - **A:** portalul îl înlocuiește. La lansare, tokenurile vechi se dezactivează și angajații primesc linkul nou.
    - B: coexistă o perioadă.
-5. **Sesiunea:**
-   - **A:** 30 de zile pe telefon + PIN la depunerea / anularea cererii.
-   - B: PIN la fiecare deschidere.
+5. **Sesiunea (r2):**
+   - **A:** linkul ținut minte 30 de zile pe telefon + PIN după 15 minute de inactivitate (impus pe server) + PIN la fiecare depunere / anulare / aprobare.
+   - B: PIN la fiecare deschidere a paginii.
 6. **Ecranul de administrare:**
    - **A:** rută nouă în ERP `/portal-admin` (o linie în `App.jsx`), pentru owner + cei cu modulul `hr`.
    - B: tab în HR, ceea ce înseamnă modificarea `HR.jsx`.
@@ -207,3 +229,21 @@ Portalul e o pagină publică nouă `/p`, într-un chunk separat, fără xlsx / 
    - **A:** IP-ul stocat doar ca hash, retenție 12 luni.
    - B: fără IP.
 8. **Limba:** confirmi RO implicit, cu EN la alegere?
+9. **Pasul șefului în ERP (r2):** după trigger-ul cu mașina de stări:
+   - **A:** HR poate semna pasul șefului doar cu motiv obligatoriu (șef absent etc.), jurnalizat;
+   - B: HR nu mai poate semna niciodată pasul șefului.
+10. **Codul de activare (r2):**
+    - **A:** 8 cifre, pe alt canal decât linkul (verbal / pe hârtie prin șeful de șantier);
+    - B: HR activează manual fiecare telefon, după un apel cu angajatul.
+
+## r2 (26.10, după review-ul Copilot pe r1: NO-GO, P0 0, 6 P1)
+
+Toate cele 6 P1 sunt închise în plan:
+1. setarea PIN-ului doar cu linkul → cod de activare de unică folosință, pe alt canal;
+2. sesiunea bearer de 30 de zile → fereastră PIN de 15 minute pe server + step-up și la aprobări + CSP;
+3. `service_role` în edge → rolul `portal_edge`, doar EXECUTE; administrarea prin JWT ERP + `auth.uid()`;
+4. ERP-ul ocolește fluxul șef → HR → mașina de stări în BD pentru toate căile (Q9);
+5. `/co` paralel în pilot → dezactivarea tokenului `/co` la generarea linkului;
+6. fallback automat la HR → `ruta_lipsa`, cu rută HR doar explicită.
+
+P2 incluse: limitarea înainte de bcrypt, HMAC pe IP, fereastra de 24 de ore pentru cele 15 greșeli, idempotența legată de payload, REVOKE explicit, jurnalul acțiunilor de administrare.
