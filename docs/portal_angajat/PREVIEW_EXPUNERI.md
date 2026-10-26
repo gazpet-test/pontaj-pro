@@ -122,3 +122,22 @@ UPDATE public.hr_concediu_tokens SET activ = true WHERE employee_id = ANY('{<lis
 - revenirea restaurează exact amprenta și granturile.
 
 Garda runner-ului și amprenta exactă a celor 4 politici sunt adăugate după review-ul Copilot (NO-GO, 2 P1).
+
+## DRY pe prod, 26.10 (Izometrie, o singură tranzacție, `ROLLBACK` la final)
+
+Migrarea `20261116a_sec_inventar_hr_anon.sql`: sha256 `5096c9a57561a6d18f419939eb819c9ab35fef87f971af69dc25bc689caf1ca5` (6654 octeți). Revenirea: `efaca4cf9471b02ef0deae283e5fd02b37abb6ffd2fa0b6818d0dc6412233c2f` (2593 octeți). Ambele blob LF.
+
+| pas | rezultat |
+|---|---|
+| înainte | 166 de rânduri, amprenta politicilor `668a7e22…` |
+| apply cu marcajul runner-ului (`20261116a_sec_inventar_hr_anon:txid`) | OK, precondiții + post-check trecute |
+| fără modul (test.fara.modul) vede | **0** |
+| magazie editor (CIOC JANETA) vede | 166 |
+| doar hr (UDREA NATALIA) vede | 166 |
+| owner (TRUSU RAZVAN) vede | 166 |
+| granturi anon rămase pe cele 4 tabele | **0** |
+| `control_0e` | 0 rânduri |
+| revenirea armată în aceeași tranzacție | OK: 4 tabele cu anon, amprenta `668a7e22…` restaurată exact |
+| după `ROLLBACK` | prod neschimbat (amprenta `668a7e22…`), migrarea neînregistrată |
+
+Apply-ul real (runner, `--versiune 20261116120000`) se face doar după „da”-ul lui Răzvan.
