@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabase.js'
-import { dispozitiveImplicite, poateSelectaLumina, textStareLumina, textUrmatoare, formatMomentLumini, programPentruSalvare, avertismentAcoperire, confirmareSetariLumini, textAmanareLumini } from './luminiUi.js'
+import { dispozitiveImplicite, poateSelectaLumina, textStareLumina, textUrmatoare, formatMomentLumini, programPentruSalvare, avertismentAcoperire, confirmareSetariLumini, textAmanareLumini, textConsumTuya, textCitireLumina } from './luminiUi.js'
 
 const G={card:'#1C2128',surface:'#161B22',border:'#30363D',text:'#E6EDF3',muted:'#8B949E',red:'#F85149',green:'#3FB950'}
 const S={card:{background:G.card,border:`1px solid ${G.border}`,borderRadius:10,padding:16,color:G.text},btn:{background:G.surface,color:G.text,border:`1px solid ${G.border}`,borderRadius:6,padding:'7px 10px',cursor:'pointer'},row:{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',margin:'10px 0'},input:{background:G.surface,color:G.text,border:`1px solid ${G.border}`,borderRadius:5,padding:6}}
@@ -8,6 +8,7 @@ const nou=()=>({nume:'',tip:'solar',dispozitive:[],parametri:{offset_pornire:0,o
 
 export default function CladireLumini() {
   const [lumini,setLumini]=useState([]),[programe,setPrograme]=useState([]),[jurnal,setJurnal]=useState([]),[setari,setSetari]=useState(null)
+  const [consum,setConsum]=useState(null)
   const [owner,setOwner]=useState(false),[scrie,setScrie]=useState(false),[err,setErr]=useState(''),[busy,setBusy]=useState(false),[form,setForm]=useState(null),[acum,setAcum]=useState(Date.now())
   const load=async()=>{
     const r=await Promise.all([
@@ -16,8 +17,10 @@ export default function CladireLumini() {
       supabase.from('iot_lumini_jurnal').select('*').order('id',{ascending:false}).limit(20),
       supabase.from('iot_lumini_setari').select('lat,lon,tz,vacanta_de,vacanta_pana,simulare_pana_la,pauza_ore,runtime,versiune').eq('id',true).single(),
       supabase.rpc('iot_lumini_drept',{p_owner:true}),supabase.rpc('iot_lumini_drept',{p_owner:false}),
+      supabase.functions.invoke('tuya',{body:{actiune:'consum'}}),
     ])
-    const error=r.find(x=>x.error)?.error
+    const error=r.slice(0,6).find(x=>x.error)?.error
+    setConsum(!r[6].error && r[6].data?.ok ? r[6].data.consum_tuya : null)
     setOwner(!r[4].error && r[4].data===true);setScrie(!r[5].error && r[5].data===true)
     if(error) {setErr(error.message);return}
     setLumini(r[0].data || []);setPrograme(r[1].data || []);setJurnal(r[2].data || []);setSetari(r[3].data);setAcum(Date.now())
@@ -41,11 +44,12 @@ export default function CladireLumini() {
   const param=(key,value)=>setForm(f=>({...f,parametri:{...f.parametri,[key]:value}}))
   return <section style={S.card}>
     <div style={S.row}><b>Lumini sediu</b><button style={S.btn} disabled={busy} onClick={()=>run()}>Actualizeaza</button><small style={{color:G.muted}}>Starea este ultima citire; comenzile recitesc dispozitivul.</small></div>
+    <p style={{color:G.muted}}>{textConsumTuya(consum)}</p>
     {err && <div role="alert" style={{color:G.red}}>{err}</div>}
     {!lumini.length && <p style={{color:G.muted}}>Nu sunt lumini configurate sau migrarea nu este disponibila.</p>}
     {lumini.map(l=><div key={l.dispozitiv_id} style={{...S.row,borderBottom:`1px solid ${G.border}`,paddingBottom:8}}>
       {textAmanareLumini(setari,l.dispozitiv_id) && <small style={{color:G.red}}>{textAmanareLumini(setari,l.dispozitiv_id)}</small>}
-      <span style={{flex:1}}>{l.iot_dispozitive.nume}<small style={{display:'block',color:G.muted}}>{textStareLumina(l.iot_dispozitive.ultima_citire,l.iot_dispozitive.citit_la,acum)} - {formatMomentLumini(l.iot_dispozitive.citit_la)} - rol {l.rol}</small><small style={{display:'block',color:G.muted}}>{setari?.runtime?.motor?.pauze?.[l.dispozitiv_id]>acum ? `Pauza manuala pana la ${formatMomentLumini(setari.runtime.motor.pauze[l.dispozitiv_id])}` : 'Automatizare disponibila pentru programele active'}</small></span>
+      <span style={{flex:1}}>{l.iot_dispozitive.nume}<small style={{display:'block',color:G.muted}}>{textStareLumina(l.iot_dispozitive.ultima_citire,l.iot_dispozitive.citit_la,acum,consum)} - {textCitireLumina(l.iot_dispozitive.citit_la)} - rol {l.rol}</small><small style={{display:'block',color:G.muted}}>{setari?.runtime?.motor?.pauze?.[l.dispozitiv_id]>acum ? `Pauza manuala pana la ${formatMomentLumini(setari.runtime.motor.pauze[l.dispozitiv_id])}` : 'Automatizare disponibila pentru programele active'}</small></span>
       {owner && <select aria-label={`Rol ${l.iot_dispozitive.nume}`} style={S.input} value={l.rol} disabled={busy} onChange={e=>{const rol=e.target.value;if(window.confirm(`Schimbarea rolului dezactiveaza programele afectate. ${avertismentAcoperire} Continui?`))run(()=>save('rol',{dispozitiv_id:l.dispozitiv_id,rol}))}}>{['exterior','interior','mixt'].map(r=><option key={r}>{r}</option>)}</select>}
       {scrie && <button style={S.btn} disabled={busy || !l.activ} onClick={()=>command(l)}>{l.iot_dispozitive.ultima_citire?.pornit===true?'Opreste':'Porneste'}</button>}
       {owner && <button style={S.btn} disabled={busy || !l.activ} onClick={()=>command(l,true)}>Testeaza dreptul de comanda</button>}
