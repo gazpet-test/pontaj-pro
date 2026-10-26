@@ -1,5 +1,7 @@
 # Portal angajat mobil — planul etapei 1 (fără cod, fără migrări)
 
+> **r3 (26.10, deciziile lui Răzvan):** 1 = A, 2 = A, 3 = A cu mașinile din `logistica_active`, 4 = A, 5 = **PIN la fiecare deschidere**, 6–9 = A, 10 = nedecis. Secțiunea **„r3”** de la final **înlocuiește** părțile vechi despre sesiune (§2 „Telefonul și sesiunea”, `portal_sesiuni`, §3 pașii 2–3), inventar (§1 / §4.4) și activare.
+
 Data: 26.10.2026.
 - Sursa cererii: `claude_docs.spec_portal_angajat_mobil` (md5 `32f10c65…`), cu deciziile lui Răzvan din 26.10.
 - Analiza codului: Jakarinos (read-only), raportul e în `paw-data/out/portal_jak_1.log`.
@@ -256,3 +258,75 @@ GO-ul e pentru implementare, nu pentru producție: poarta reală e pe SQL-ul și
 - se documentează exact privilegiile lui `portal_edge`: CONNECT pe bază, USAGE pe schema `public`, EXECUTE doar pe funcțiile listate, nimic pe tabele sau secvențe; harness-ul verifică ACL-ul real.
 
 La review-ul E1, poarta va fi pe ACL-ul `portal_edge`, corpurile SECURITY DEFINER, trigger-ul global de stare, concurență și idempotență.
+
+---
+
+## r3 — deciziile lui Răzvan din 26.10 (înlocuiește părțile vechi indicate sus)
+
+**Decis:** 1 A (șeful aprobă în portal), 2 A (`hr_concediu_rute`, fără fallback), 4 A (portalul înlocuiește `/co`), 6 A (`/portal-admin`), 7 A (IP ca HMAC, 12 luni), 8 A (RO implicit), 9 A (HR semnează pasul șefului doar cu motiv). Rămân 3 (parțial), 5 (proiectat mai jos) și 10.
+
+### Pct. 3: inventarul
+
+- **Telefoane și scule** se înregistrează în Magazie ca echipamente (categoriile `it` / `scule`), cu predarea existentă. Portalul le arată automat, din `magazie_inventar_angajat` (+ `denumire_en`).
+- **Mașinile rămân în `logistica_active`**, iar portalul le citește de acolo, doar citire.
+- **Blocaj de date, verificat pe prod 26.10:** `logistica_active` **nu are nicio atribuire a unei mașini de serviciu către un angajat**.
+  - Singura coloană cu angajat, `comodat_employee_id`, înseamnă invers: mașina **personală** a angajatului, folosită de firmă.
+  - `logistica_alocari` leagă activul de un șantier sau mecanic, iar `sofer_employee_id` e pe transporturi. Niciuna nu e custodie.
+  - Variante pentru Răzvan:
+    - **(a)** o coloană nouă pe `logistica_active` (de exemplu `utilizator_employee_id` + `utilizator_de_la`), completată în Logistica. Atinge `Logistica.jsx`, deci cere „da”. Portalul citește apoi „mașina mea” cu nr. de înmatriculare, marcă și model;
+    - **(b)** mașinile se amână până există evidența. În prima versiune portalul arată doar Magazie.
+
+### Pct. 5: PIN la fiecare deschidere (varianta lui Răzvan)
+
+**Fluxul:**
+- Angajatul **deschide aplicația, scrie PIN-ul și intră**.
+- Linkul personal servește **doar la activarea inițială**.
+- La activare, telefonul primește o **cheie de dispozitiv** invizibilă pentru angajat: 256 de biți, în `localStorage`, iar în BD doar `sha256`.
+- La fiecare deschidere se trimit **cheia de dispozitiv + PIN-ul**. Un PIN singur nu identifică pe nimeni: cu 123 de oameni, PIN-ul n-ar putea fi și nume, și parolă fără enumerare.
+
+**Cum rămâne sigur:**
+- **Doi factori:** telefonul activat (cheia) + PIN-ul. Un link scurs după activare nu mai deschide nimic. Un telefon furat fără PIN e oprit de limite.
+- **Limitele, persistente în BD, verificate înaintea bcrypt:**
+  - 5 PIN-uri greșite consecutive pe dispozitiv → blocare 30 de minute;
+  - 10 greșite în 24 de ore → dispozitivul se revocă, iar reactivarea o face HR, cu link + cod nou;
+  - pe sursă: HMAC(IP), 30 de eșecuri pe oră;
+  - mesaje generice.
+- **Sesiunea scurtă:**
+  - după PIN, sesiunea ține **15 minute absolut** (TTL fix, nu se prelungește la activitate);
+  - tokenul stă doar în memorie / `sessionStorage`: închizi aplicația, iar data viitoare scrii iar PIN-ul;
+  - la expirare se cere din nou PIN-ul.
+  - Pentru că PIN-ul tocmai a fost introdus, **nu mai cerem PIN suplimentar** la depunere sau aprobare cât sesiunea e validă (recomandarea mea). Dacă Răzvan vrea o protecție în plus pentru aprobări, se poate cere PIN la aprobare dacă au trecut peste 5 minute de la introducere.
+- **Telefon comun** (mai mulți angajați pe același telefon): fiecare își activează propria cheie. La deschidere apare lista numelor activate **pe acel telefon** → alegi numele → PIN-ul tău. Lista nu există pe alte telefoane.
+- **Telefon nou sau pierdut:** HR revocă dispozitivul (sau toate) și generează link + cod nou. Maximum 2 dispozitive active pe angajat.
+- **XSS:** CSP strict, fără scripturi terțe. Cheia de dispozitiv singură nu ajunge fără PIN, iar sesiunea trăiește 15 minute.
+
+**Schema, schimbată față de r2:**
+- `portal_dispozitive`: `id`, `employee_id`, `cheie_hash` UNIQUE, `eticheta`, `activat_la`, `ultima_folosire`, `gresite_consecutive`, `blocat_pana`, `revocat_la`, `revocat_motiv`;
+- contorul pe 24 de ore e în `portal_rata`;
+- `portal_sesiuni`: `id`, `dispozitiv_id`, `employee_id`, `token_hash`, `creat_la`, `expira_la` (= creat + 15 min, fix), `revocat_la`. Dispare `pin_valabil_pana`;
+- `portal_credentiale` rămâne un singur PIN pe angajat, valabil pe toate dispozitivele lui.
+
+**Diferența față de varianta A (r2):**
+
+| | A (r2): link ținut minte + fereastră PIN de 15 minute | Varianta lui Răzvan (r3): PIN la fiecare deschidere |
+|---|---|---|
+| ce face angajatul zilnic | deschide; PIN doar dacă au trecut 15 minute de la ultima folosire | deschide → PIN → intră |
+| ce identifică telefonul | linkul ținut minte | cheia de dispozitiv (invizibilă) |
+| sesiunea de date | se prelungește cât folosește | 15 minute fix, în memorie |
+| PIN la depunere / aprobare | da (step-up) | nu: sesiunea e scurtă și abia deschisă cu PIN |
+| telefon comun / lăsat deblocat | protejat după 15 minute de inactivitate | protejat la fiecare închidere / redeschidere și după 15 minute fix |
+| complexitate | fereastră sliding + step-up | mai simplu: un singur punct de PIN |
+| verdict de securitate | GO Copilot (r2) | de re-verificat (Copilot r3); după mine e cel puțin la fel de sigur |
+
+### Pct. 10: activarea (nedecis), cu o variantă mai ușoară
+
+Problema P1 din r1 rămâne: **cine are doar linkul nu trebuie să poată activa contul**, deci al doilea factor la activare e obligatoriu.
+
+- **A (rămâne recomandarea pentru angajații departe de birou):** codul de 8 cifre, de unică folosință, pe alt canal decât linkul (verbal / pe hârtie prin șeful de șantier).
+- **A′, mai ușor, fără să slăbească P1: activarea față în față, cu QR.**
+  - HR sau șeful de șantier (cu acces la `/portal-admin`) deschide pe ecranul lui un **QR de activare** valabil **10 minute**, de unică folosință, care conține linkul + codul.
+  - Angajatul îl scanează, își alege PIN-ul și gata. Nu se trimite nimic pe WhatsApp și nu se dictează niciun cod.
+  - Al doilea factor e **prezența fizică** în fața cuiva cu cont ERP; QR-ul expiră repede și nu circulă.
+  - Se potrivește la angajare / instruire sau pe șantier, când șeful e acolo.
+- **Combinat (propunerea mea):** A′ ca regulă, A pentru cei care nu pot veni față în față.
+- **Respins:** activarea doar cu linkul sau cu date cunoscute de alții (CNP, data nașterii, telefon), pentru că redeschide P1.
