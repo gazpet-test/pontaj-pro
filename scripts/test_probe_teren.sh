@@ -54,6 +54,69 @@ SYSTEM="$(q 'SELECT system_identifier FROM pg_control_system()')"
 PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$MIG" --sha256 "$SHA" --versiune 20261114120000 --tinta-db probe_teren_test --tinta-sistem "$SYSTEM" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >"$DIR/runner.log" 2>&1 || { cat "$DIR/runner.log"; fail 'official runner'; }
 "${P[@]}" -f "$ROOT/scripts/test_probe_teren.sql" >"$DIR/tests.log" 2>&1 || { cat "$DIR/tests.log"; fail 'SQL tests'; }
 grep -q 'PASS probe_teren SQL' "$DIR/tests.log" || fail 'SQL end marker missing'
+# E2a foloseste o clona locala; testele E1, concurenta si rollback-ul lor raman intacte.
+"${ADMIN[@]}" -c 'CREATE DATABASE probe_teren_faze TEMPLATE probe_teren_test OWNER postgres'
+F=("${P[@]}" -d probe_teren_faze)
+MIG2="$ROOT/supabase/migrations/20261115a_probe_teren_faze.sql"
+REV2="$ROOT/supabase/revenire/20261115a_probe_teren_faze_ROLLBACK.sql"
+"${F[@]}" -c "INSERT INTO probe_calcule(id,proiect_id) VALUES(880,1); INSERT INTO storage.objects VALUES('probe-citiri','teren/880/start'),('probe-citiri','teren/880/utilaj'),('probe-citiri','teren/880/final'),('probe-citiri','teren/880/stop'); SELECT set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',false); SELECT fn_probe_porneste(880,'[{\"active_id\":12,\"rol\":\"compresor\",\"ore_bord\":100,\"poza_path\":\"teren/880/utilaj\"}]',1,'teren/880/start','legacy-start')" >"$DIR/faze-legacy.log"
+BEFORE2="$("${F[@]}" -Atc "SELECT md5(string_agg(to_jsonb(c)::text,',' ORDER BY id)) FROM probe_calcule c")"
+if "${F[@]}" -f "$MIG2" >"$DIR/faze-guard.log" 2>&1; then fail 'E2a unguarded apply accepted'; fi
+grep -q 'pt_garda' "$DIR/faze-guard.log" || fail 'E2a wrong guard refusal'
+for OBJ in probe_teren_scrie_e1 probe_teren_faze_guard fn_probe_schimba_faza fn_probe_creeaza_teren; do
+  if "${F[@]}" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare','20261115a_probe_teren_faze:' || txid_current(),true)" -c "CREATE FUNCTION public.$OBJ(integer) RETURNS integer LANGUAGE sql AS 'SELECT 1'" -f "$MIG2" >"$DIR/faze-preflight-$OBJ.log" 2>&1; then fail "E2a preflight accepted $OBJ"; fi
+  grep -q pt_preflight "$DIR/faze-preflight-$OBJ.log" || fail "E2a wrong preflight $OBJ"
+done
+for COL in faza_curenta creat_din_teren faza limita_faza faza_start faza_stop; do
+  case "$COL" in faza_curenta|creat_din_teren) TAB=probe_calcule ;; faza|limita_faza) TAB=probe_log_executie ;; *) TAB=probe_exec_utilaje ;; esac
+  if "${F[@]}" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare','20261115a_probe_teren_faze:' || txid_current(),true)" -c "ALTER TABLE public.$TAB ADD COLUMN $COL text" -f "$MIG2" >"$DIR/faze-preflight-$COL.log" 2>&1; then fail "E2a preflight accepted $COL"; fi
+  grep -q pt_preflight "$DIR/faze-preflight-$COL.log" || fail "E2a wrong preflight $COL"
+done
+SHA2="$(sha256sum "$MIG2" | cut -d' ' -f1)"
+PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$MIG2" --sha256 "$SHA2" --versiune 20261115120000 --tinta-db probe_teren_faze --tinta-sistem "$SYSTEM" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >"$DIR/faze-runner.log" 2>&1 || { cat "$DIR/faze-runner.log"; fail 'E2a official runner'; }
+[[ "$("${F[@]}" -Atc "SELECT md5(string_agg((to_jsonb(c)-'faza_curenta'-'creat_din_teren')::text,',' ORDER BY id)) FROM probe_calcule c")" = "$BEFORE2" ]] || fail 'E2a changed existing calculations'
+"${F[@]}" -v probe_e2a=1 -f "$ROOT/scripts/test_probe_teren.sql" >"$DIR/faze-tests.log" 2>&1 || { cat "$DIR/faze-tests.log"; fail 'E2a SQL'; }
+grep -q 'PASS probe_teren E2a SQL' "$DIR/faze-tests.log" || fail 'E2a SQL end marker missing'
+# Concurenta E2a pe alta clona: lockul nou serializeaza acelasi utilaj intre probe.
+"${ADMIN[@]}" -c 'CREATE DATABASE probe_teren_faze_concurenta TEMPLATE probe_teren_faze OWNER postgres'
+FC=("${P[@]}" -d probe_teren_faze_concurenta)
+"${FC[@]}" -c "INSERT INTO probe_calcule(id,proiect_id) VALUES(200,1),(201,1); INSERT INTO storage.objects SELECT 'probe-citiri','teren/'||c||'/'||p FROM generate_series(200,201) c CROSS JOIN unnest(ARRAY['m','u']) p"
+FAUTH="SELECT set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',true); SET LOCAL ROLE authenticated"
+FSTART="SELECT fn_probe_porneste(200,'[{\"active_id\":10,\"rol\":\"compresor\",\"ore_bord\":100,\"poza_path\":\"teren/200/u\"}]',1,'teren/200/m','faze-concurent-a')"
+"${FC[@]}" -c "BEGIN; $FAUTH; $FSTART; SELECT pg_sleep(3) /* probe_faze_session_a */; COMMIT" >"$DIR/faze-session-a.log" 2>&1 &
+FA_PID=$!
+READY=false
+for i in {1..80}; do
+  if [[ "$(q "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid() AND query LIKE '%probe_faze_session_a%' AND wait_event='PgSleep')")" = t ]]; then READY=true; break; fi
+  sleep 0.025
+done
+[[ "$READY" = true ]] || fail 'E2a session A did not acquire lock'
+if "${FC[@]}" --single-transaction -c "$FAUTH" -c "SELECT fn_probe_porneste(201,'[{\"active_id\":10,\"rol\":\"compresor\",\"ore_bord\":100,\"poza_path\":\"teren/201/u\"}]',1,'teren/201/m','faze-concurent-b')" >"$DIR/faze-session-b.log" 2>&1; then fail 'E2a concurrent asset accepted'; fi
+wait "$FA_PID" || fail 'E2a session A failed'
+grep -q pt_utilaj_ocupat "$DIR/faze-session-b.log" || fail 'E2a wrong concurrent refusal'
+"${FC[@]}" --single-transaction -c "$FAUTH" -c "$FSTART" >"$DIR/faze-session-retry.log"
+[[ "$("${FC[@]}" -Atc "SELECT count(*)=1 FROM probe_exec_utilaje WHERE calc_id=200")" = t ]] || fail 'E2a retry duplicated interval'
+if "${FC[@]}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261115a','PROBE_FAZE_SCOATE:' || txid_current(),true)" -f "$REV2" >"$DIR/faze-rollback-committed.log" 2>&1; then fail 'E2a rollback erased committed RPC'; fi
+grep -q pt_rollback_date "$DIR/faze-rollback-committed.log" || fail 'E2a wrong committed rollback refusal'
+if "${F[@]}" -f "$REV2" >"$DIR/faze-rollback-guard.log" 2>&1; then fail 'E2a unguarded rollback accepted'; fi
+grep -q pt_garda "$DIR/faze-rollback-guard.log" || fail 'E2a wrong rollback guard'
+for CASE in faza citire creat interval limita operatie; do
+  case "$CASE" in
+    faza) PREP="UPDATE probe_calcule SET faza_curenta='pistonare' WHERE id=900" ;;
+    citire) PREP="INSERT INTO probe_log_executie(calc_id,faza) VALUES(900,'pistonare')" ;;
+    creat) PREP="UPDATE probe_calcule SET creat_din_teren=true WHERE id=900" ;;
+    interval) PREP="INSERT INTO probe_exec_utilaje(calc_id,active_id,rol,ore_bord_start,poza_start_path,creat_de,faza_start) VALUES(900,1,'compresor',100,'fictiv','00000000-0000-0000-0000-000000000001','pistonare')" ;;
+    limita) PREP="INSERT INTO probe_log_executie(calc_id,limita_faza) VALUES(900,true)" ;;
+    operatie) PREP="SELECT set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',true); SELECT fn_probe_creeaza_teren(1,NULL,'apa','gazpet',NULL,NULL,NULL,NULL,'rollback-create')" ;;
+  esac
+  if "${F[@]}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261115a','PROBE_FAZE_SCOATE:' || txid_current(),true)" -c "$PREP" -f "$REV2" >"$DIR/faze-rollback-$CASE.log" 2>&1; then fail "E2a rollback erased $CASE"; fi
+  grep -q pt_rollback_date "$DIR/faze-rollback-$CASE.log" || fail "E2a wrong rollback refusal $CASE"
+done
+"${F[@]}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261115a','PROBE_FAZE_SCOATE:' || txid_current(),true)" -f "$REV2" >"$DIR/faze-rollback.log"
+[[ "$("${F[@]}" -Atc "SELECT md5(string_agg(to_jsonb(c)::text,',' ORDER BY id)) FROM probe_calcule c")" = "$BEFORE2" ]] || fail 'E2a rollback changed existing rows'
+[[ "$("${F[@]}" -Atc "SELECT count(*)=4 FROM pg_attribute WHERE attrelid='public.probe_calcule'::regclass AND attname IN ('dn_id','lungime_m','presiune_bar','config_id') AND attnotnull")" = t ]] || fail 'E2a NOT NULL restoration failed'
+[[ "$("${F[@]}" -Atc "SELECT to_regclass('public.probe_teren_e2a_schema') IS NULL AND to_regprocedure('public.probe_teren_scrie_e1(text,bigint,jsonb,text)') IS NULL AND to_regprocedure('public.fn_probe_schimba_faza(bigint,text,numeric,text,jsonb,text,boolean,text,text)') IS NULL")" = t ]] || fail 'E2a rollback objects remain'
+echo 'PASS: E2a guards, preflight, unchanged calculations, phases, hydraulic, create, rights, rollback'
 # Doua sesiuni REALE: B asteapta commit-ul A, apoi refuza acelasi utilaj in alta proba.
 # Clona separata pastreaza main curat pentru proba rollback fara stergere de date operative.
 "${ADMIN[@]}" -c 'CREATE DATABASE probe_teren_concurenta TEMPLATE probe_teren_test OWNER postgres'

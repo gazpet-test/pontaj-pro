@@ -1,4 +1,8 @@
 \set ON_ERROR_STOP on
+-- E2a are scenarii separate: testele E1 continua sa ruleze integral inainte de migrare.
+\if :{?probe_e2a}
+\ir test_probe_teren_faze.sql
+\else
 -- Tot scenariul este anulat; rollback-ul de migrare se testeaza separat in shell.
 BEGIN;
 CREATE FUNCTION public.pt_assert(p_ok boolean,p_mesaj text) RETURNS void LANGUAGE plpgsql AS $pt_test_assert$
@@ -383,3 +387,4 @@ SET LOCAL ROLE authenticated;
 RESET ROLE;
 ROLLBACK;
 \echo PASS probe_teren SQL: reguli business, RLS, RPC, atomicitate, idempotenta, raport
+\endif
