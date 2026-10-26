@@ -370,12 +370,12 @@ SELECT pt_assert((SELECT count(*)=2 FROM probe_calcule WHERE id IN (41,42) AND s
 -- Editorul nu poate modifica direct documentele nici dupa inchidere.
 SELECT pt_refuza('UPDATE probe_calcule SET pv_path=''pv/editor-final.pdf'' WHERE id=1','pt_rpc');
 SELECT pt_refuza('UPDATE probe_calcule SET aep_diagrama_path=''aep/editor-final.pdf'' WHERE id=1','pt_rpc');
-SELECT pt_refuza('UPDATE probe_calcule SET pv_generat_la=now() WHERE id=1','pt_rpc');
+SELECT pt_refuza('UPDATE probe_calcule SET pv_generat_la=now() + interval ''1 day'' WHERE id=1','pt_rpc');
 -- Owner din aplicatie este tot authenticated: nu ocoleste writer-ul.
 SELECT set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',true);
 SELECT pt_refuza('UPDATE probe_calcule SET pv_path=''pv/owner-direct.pdf'' WHERE id=1','pt_rpc');
 SELECT pt_refuza('UPDATE probe_calcule SET aep_diagrama_path=''aep/owner-direct.pdf'' WHERE id=1','pt_rpc');
-SELECT pt_refuza('UPDATE probe_calcule SET pv_generat_la=now() WHERE id=1','pt_rpc');
+SELECT pt_refuza('UPDATE probe_calcule SET pv_generat_la=now() + interval ''1 day'' WHERE id=1','pt_rpc');
 RESET ROLE;
 SELECT pt_assert((SELECT count(*)=0 FROM probe_teren_operatii WHERE cheie IN ('deleted-contract','deleted-offer')),'refuz referinta fara jurnal rezidual');
 SELECT pt_assert((SELECT count(*)=2 FROM probe_teren_operatii WHERE cheie IN ('docs-nine','docs-tert') AND actiune='completeaza_executie'),'documentele trec prin jurnal');
