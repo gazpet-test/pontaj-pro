@@ -161,7 +161,9 @@ SELECT pt_assert(fn_probe_inchide(123,'respins',NULL,NULL,NULL,'Racord cedat','h
 SELECT pt_assert((SELECT status='respinsa' AND faza_curenta='umplere' AND presiune_finala_bar IS NULL FROM probe_calcule WHERE id=123),'respins umplere fara manometru');
 SELECT pt_assert((SELECT count(*)=0 FROM probe_log_executie WHERE calc_id=123),'fara citire inventata in umplere');
 SELECT pt_assert((SELECT ora_stop=now() AND faza_stop='umplere' FROM probe_exec_utilaje WHERE calc_id=123),'pompa oprita la respingere');
+RESET ROLE;
 SELECT pt_assert((SELECT continut->>'observatii'='Racord cedat' FROM probe_teren_operatii WHERE cheie='h-reject-fill'),'motiv respingere auditat');
+SET LOCAL ROLE authenticated;
 SELECT fn_probe_porneste(124,NULL,NULL,NULL,'h-reject-press-start');
 SELECT fn_probe_schimba_faza(124,'presurizare',3,'teren/124/1',NULL,NULL,false,NULL,'h-reject-press-phase');
 SELECT pt_refuza($q$SELECT fn_probe_inchide(124,'admis',1,'teren/124/2',NULL,NULL,'h-reject-press-close')$q$,'pt_hidraulic_citiri');
