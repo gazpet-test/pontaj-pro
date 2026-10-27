@@ -217,6 +217,18 @@ DO $test$ DECLARE r jsonb; n int; BEGIN
   RAISE EXCEPTION 'bend without mass accepted';
  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'instantaneu_incomplet' THEN RAISE; END IF; END;
  IF (SELECT s.ultim_nr FROM public.izo_avize_serii s WHERE s.depozit_id=9)<>n THEN RAISE EXCEPTION 'refusal consumed number'; END IF;
+ -- Copilot P1-02: cheie deja folosită de o ieșire manuală (vechiul RPC, fără aviz) → refuz, fără număr, fără aviz, fără eveniment nou.
+ DECLARE km uuid:=gen_random_uuid(); ev_inainte bigint; BEGIN
+  PERFORM public.fn_izo_iesire_tronson(km,9,19,ARRAY[current_setting('test.aviz.b11')::bigint],'CJPJ MANUAL 1',(now() AT TIME ZONE 'Europe/Bucharest')::date);
+  SELECT count(*) INTO ev_inainte FROM public.magazie_bucati_evenimente;
+  BEGIN
+   PERFORM public.fn_izo_iesire_cu_aviz(km,9,19,ARRAY[current_setting('test.aviz.b11')::bigint],
+    (now() AT TIME ZONE 'Europe/Bucharest')::date,121,NULL,false,NULL,'PH 01 ABC','{"tip":"intern"}');
+   RAISE EXCEPTION 'manual key accepted';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'cheie_operatie_existenta' THEN RAISE; END IF; END;
+  IF (SELECT s.ultim_nr FROM public.izo_avize_serii s WHERE s.depozit_id=9)<>n OR EXISTS(SELECT 1 FROM public.izo_avize_iesire a WHERE a.op_cheie=km)
+   OR (SELECT count(*) FROM public.magazie_bucati_evenimente)<>ev_inainte THEN RAISE EXCEPTION 'manual key side effects'; END IF;
+ END;
  r:=public.fn_izo_iesire_cu_aviz(gen_random_uuid(),9,19,ARRAY[current_setting('test.aviz.b13')::bigint],
   (now() AT TIME ZONE 'Europe/Bucharest')::date,121,NULL,false,NULL,'PH 01 ABC','{"tip":"intern"}');
  IF r->>'cod' IS DISTINCT FROM 'iesit' OR (r#>>'{aviz,numar}')::int IS DISTINCT FROM n+1 OR (r#>>'{aviz,total_m}')::numeric IS DISTINCT FROM 0

@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { filtreazaBucati, totaluri, cerereIesireAviz, caleAviz, htmlAviz, normNrAuto, semnaturaUnica } from './izoAviz.js'
+import { filtreazaBucati, totaluri, cerereIesireAviz, caleAviz, htmlAviz, normNrAuto, semnaturaUnica, refuzDefinitiv } from './izoAviz.js'
+
+describe('rezultat necunoscut al RPC-ului (Copilot P1-01)', () => {
+  it('refuzurile bazei de date eliberează cererea', () => {
+    for (const code of ['P0001', '23505', '42501', '22023']) expect(refuzDefinitiv({ code })).toBe(true)
+  })
+  it('transport, timeout, conexiune, serializare și erori fără cod păstrează aceeași cheie', () => {
+    for (const e of [{ message: 'Failed to fetch' }, { code: '' }, { code: 'PGRST000' }, { code: '08006' }, { code: '40001' }, { code: '57014' }, { code: '53300' }, null, undefined])
+      expect(refuzDefinitiv(e)).toBe(false)
+  })
+})
 
 describe('semnătura emitentului (Jakarinos P1)', () => {
   it('ia doar semnătura angajatului emitent, chiar dacă una străină e prima', () => {

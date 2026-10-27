@@ -56,6 +56,15 @@ export function cerereIesireAviz({ depozit, tronson, bucati, data, sofer, vehicu
   } }
 }
 
+// Copilot P1-01: doar un refuz al bazei de date (SQLSTATE din RPC, tranzacția anulată) e definitiv și permite o cerere nouă.
+// Transport (fără cod, fetch eșuat, 5xx / timeout la gateway), conexiune (08xxx) sau serializare (40xxx) = rezultat
+// NECUNOSCUT: cererea (aceeași cheie, același payload) se păstrează pentru „Reîncearcă aceeași emitere”.
+export function refuzDefinitiv(error) {
+  const c = String(error?.code || '')
+  if (!/^[0-9A-Z]{5}$/.test(c)) return false
+  return !/^(08|40|53|57|58|XX)/.test(c)
+}
+
 // Exact o semnătură activă a angajatului cerut; orice rând al altui angajat e ignorat, ambiguitatea → fără semnătură.
 export function semnaturaUnica(rows, employeeId) {
   const ale = (rows || []).filter(r => employeeId != null && String(r.employee_id) === String(employeeId) && r.fisier_path)

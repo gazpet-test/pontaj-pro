@@ -5,7 +5,7 @@ import { jsPDF } from 'jspdf'
 import { supabase } from './lib/supabase.js'
 import { ziBucuresti } from './lib/izoTeren.js'
 import { citestePagini, eroareBirou } from './lib/izoBirou.js'
-import { filtreazaBucati, totaluri, fmtNr, cerereIesireAviz, caleAviz, numeFisierAviz, htmlAviz, semnaturaUnica } from './lib/izoAviz.js'
+import { filtreazaBucati, totaluri, fmtNr, cerereIesireAviz, caleAviz, numeFisierAviz, htmlAviz, semnaturaUnica, refuzDefinitiv } from './lib/izoAviz.js'
 
 const G = { card: '#FFFFFF', text: '#152536', muted: '#4A5969', border: '#9BA9B6', blue: '#1259A7', red: '#9C2121', yellow: '#FFF0BA', green: '#1E6B3A' }
 const S = {
@@ -120,12 +120,13 @@ function useNomenclatoare(depozit) {
 // Formularul de emitere: înlocuiește vechiul „Aviz CJPT / CJPJ” tastat.
 export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, available, rezervari, refresh, disabled }) {
   const [q, setQ] = useState(''), [ids, setIds] = useState([]), [data, setData] = useState(ziBucuresti())
-  const [soferExtern, setSoferExtern] = useState(false), [soferId, setSoferId] = useState(''), [soferNume, setSoferNume] = useState(''), [confirmat, setConfirmat] = useState(false)
+  const [soferExtern, setSoferExtern] = useState(false), [soferId, setSoferId] = useState(''), [soferNume, setSoferNume] = useState('')
   const [vehiculAlt, setVehiculAlt] = useState(false), [vehiculId, setVehiculId] = useState(''), [nrAuto, setNrAuto] = useState('')
   const [destExtern, setDestExtern] = useState(false), [dest, setDest] = useState({ denumire: '', cui: '', adresa: '' })
   const [emis, setEmis] = useState(null), [cerere, setCerere] = useState(null)
   const { angajati, vehicule, serii } = useNomenclatoare(depozit)
-  useEffect(() => { setIds([]); setCerere(null) }, [depozit, tronson])
+  // Schimbarea depozitului / tronsonului golește selecția, dar NU cererea neconfirmată (Copilot P1-01): ea se reia sau se verifică în arhivă.
+  useEffect(() => { setIds([]) }, [depozit, tronson])
   const vizibile = useMemo(() => filtreazaBucati(available, q), [available, q])
   const tot = totaluri(available, ids), totViz = totaluri(available, vizibile.map(b => b.id).filter(id => ids.includes(id)))
   const ascunse = ids.length - totViz.n
@@ -135,15 +136,18 @@ export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, availa
 
   function construieste() {
     return cerereIesireAviz({ depozit, tronson, bucati: ids, data,
-      sofer: soferExtern ? { extern: soferNume } : { employeeId: soferId, confirmat },
+      // Etapa 1 (decizia Razvan Q-B, Copilot P2-03): fără semnătura salvată a șoferului, deci fără bifa de confirmare.
+      sofer: soferExtern ? { extern: soferNume } : { employeeId: soferId, confirmat: false },
       vehicul: vehiculAlt ? { nrAuto } : { id: vehiculId },
       destinatar: destExtern ? { tip: 'extern', ...dest } : { tip: 'intern' } })
   }
   const emite = req => ui.run(async current => {
     setCerere(req)
     const { data: r, error } = await supabase.rpc(req.nume, req.args)
-    if (error) { if (error.code) setCerere(null); throw error }
-    if (!r || ['eroare', 'conflict', 'cas'].includes(r.cod)) { setCerere(null); throw Error(r?.motiv || r?.cod || 'Răspuns lipsă') }
+    // Doar un refuz al bazei (tranzacție anulată) eliberează cererea; orice rezultat necunoscut păstrează aceeași cheie.
+    if (error) { if (refuzDefinitiv(error)) setCerere(null); throw error }
+    if (!r) throw Error('Răspuns lipsă: reîncearcă aceeași emitere (nu se dublează avizul).')
+    if (['eroare', 'conflict', 'cas'].includes(r.cod)) { setCerere(null); throw Error(r.motiv || r.cod) }
     if (!current()) return
     setCerere(null); setIds([])
     const avizId = r.aviz?.id || r.aviz_id
@@ -177,7 +181,7 @@ export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, availa
       {soferExtern
         ? <input style={S.input} disabled={disabled} aria-label="Nume șofer extern" placeholder="Nume și prenume șofer" maxLength={120} value={soferNume} onChange={e => setSoferNume(e.target.value)} />
         : <><select style={S.input} disabled={disabled} aria-label="Șofer" value={soferId} onChange={e => setSoferId(e.target.value)}><option value="">Alege șoferul</option>{angajati.map(a => <option key={a.id} value={a.id}>{a.name}{a.position ? ` · ${a.position}` : ''}</option>)}</select>
-          <label title="Fără bifă, șoferul semnează de mână pe avizul tipărit"><input type="checkbox" disabled={disabled} checked={confirmat} onChange={e => setConfirmat(e.target.checked)} /> Șoferul a fost prezent și a confirmat preluarea</label></>}
+          <span style={{ color: G.muted }}>În această etapă șoferul semnează de mână pe avizul tipărit.</span></>}
     </div>
     <div style={{ ...S.row, marginTop: 8 }}>
       <label><input type="checkbox" disabled={disabled} checked={vehiculAlt} onChange={e => setVehiculAlt(e.target.checked)} /> Alt număr (transportator extern)</label>
@@ -193,7 +197,7 @@ export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, availa
     </div>
     {ids.length > 0 && <div style={S.rez}><b>De emis: {tot.n} bucăți · {fmtNr(tot.m, 2)} m · {fmtNr(tot.kg, 0)} kg</b>{tot.kgLipsa ? ` · ${tot.kgLipsa} fără masă` : ''}
       <div style={{ fontSize: 12, marginTop: 4 }}>{selectate.map(b => b.serie || b.uid).join(', ')}</div></div>}
-    {cerere && <div style={S.rez}>Răspuns neconfirmat. <button style={S.btn2} disabled={ui.busy} onClick={() => emite(cerere)}>Reîncearcă aceeași emitere (nu se dublează avizul)</button></div>}
+    {cerere && <div style={S.rez}>Răspuns neconfirmat de server: avizul poate fi deja emis. Reîncearcă aceeași cerere: serverul întoarce avizul existent sau îl emite acum, cu un singur număr. <button style={S.btn2} disabled={ui.busy} onClick={() => emite(cerere)}>Reîncearcă aceeași emitere (nu se dublează avizul)</button></div>}
     <div style={{ marginTop: 10 }}><button style={S.btn} disabled={disabled || !ids.length || !tronson || !depozit || Boolean(cerere)} onClick={pornit}>Emite avizul și înregistrează ieșirea ({ids.length})</button></div>
     {emis && <div style={{ ...S.rez, background: emis.stare === 'anulat' ? '#FBEAEA' : '#E5F3EA' }}>Aviz <b>{emis.nr_complet}</b>{emis.stare === 'anulat' && <b style={{ color: G.red }}> · ANULAT: {emis.anulat_motiv}</b>} · {emis.total_bucati} buc · {fmtNr(emis.total_m, 2)} m · {fmtNr(emis.total_kg, 0)} kg {emis.pdf_path && <button style={S.btn2} onClick={() => deschidePdf(emis, r => setEmis(prev => (prev && prev.id === r.id ? r : prev))).catch(e => ui.setMesaj(eroareBirou(e)))}>{emis.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide / tipărește PDF'}</button>}</div>}
   </div>

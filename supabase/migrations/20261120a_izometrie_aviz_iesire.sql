@@ -168,6 +168,9 @@ BEGIN
   IF public.fn_izo_citire(v_old.proiect_id) IS NOT TRUE THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
   RETURN jsonb_build_object('cod','iesit','aviz',to_jsonb(v_old),'eveniment_ids',v_old.eveniment_ids);
  END IF;
+ -- Copilot P1-02: o cheie deja jurnalizată în izo_operatii fără aviz (de ex. o ieșire manuală prin fn_izo_iesire_tronson) ar face
+ -- ieșirea LIVE să întoarcă răspunsul vechi „iesit”, iar wrapper-ul ar numerota un aviz pentru o ieșire neefectuată acum. Refuz, fără alocare.
+ IF EXISTS(SELECT 1 FROM public.izo_operatii o WHERE o.op_id=p_cheie) THEN RAISE EXCEPTION 'cheie_operatie_existenta'; END IF;
  SELECT t.proiect_id INTO v_pr FROM public.executie_tronsoane t WHERE t.id=p_tronson;
  v_emp:=public.fn_izo_birou_autorizat(v_pr,p_depozit,true);
  IF p_cheie IS NULL OR p_depozit IS NULL OR v_pr IS NULL OR p_data IS NULL OR p_data>(now() AT TIME ZONE 'Europe/Bucharest')::date
