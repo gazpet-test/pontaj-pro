@@ -30,8 +30,9 @@ export function descrieSursaOCR(meta) {
   return String(meta.model).includes('sonnet') ? 'Model superior direct' : 'Haiku direct'
 }
 
+// timers implicit cu wrapper: setTimeout apelat ca metoda a altui obiect da "Illegal invocation" in browser
 export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon, actual, invoke,
-  progres = () => {}, timers = { now:() => Date.now(), setTimeout, clearTimeout } }) {
+  progres = () => {}, timers = { now:() => Date.now(), setTimeout:(f, ms) => setTimeout(f, ms), clearTimeout:t => clearTimeout(t) } }) {
   const { local, fallback, marja, polling, backoffMax } = TIMPI_OCR_LOCAL
   const verifica = () => { if (!actual()) throw ABANDON }
   const anunta = text => { verifica(); progres(text) }
