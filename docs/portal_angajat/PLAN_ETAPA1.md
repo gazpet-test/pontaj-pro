@@ -628,3 +628,15 @@ La review-ul implementării se cer dovezi (fișier / linie / test) pentru L02, L
     - migrarea le trece pe rolul `teren`, cu `conturi_teren` + `portal_provisioning` reconstruite (provisioning retroactiv, cu „da”);
     - testul Probe teren rulează pe rolul `teren`.
   - Până atunci, Răzvan decide dacă rămân active, cu riscul de mai sus, sau sunt suspendate până la E1.
+
+### Decizia /co (Răzvan, 27.10): **C3**
+Tokenurile `/co` nu se ating acum.
+
+**În planul de lansare** (etapa 3, la închiderea `/co`):
+- se dezactivează toate tokenurile `hr_concediu_tokens` (`activ = false`, cu RETURNING pentru revenire);
+- se golește textul în clar: coloana `token` primește o valoare-sentinelă / NULL, după ce se verifică că niciun cod nu o mai citește;
+- se oprește edge-ul `concediu-mobil` și ruta `/co`.
+
+Fiecare pas se face cu preview → „da” → apply.
+
+Până la lansare, trecerea pe angajat rămâne: generarea unui cont de portal dezactivează tokenul `/co` al acelui angajat.
