@@ -1,7 +1,7 @@
 -- Toate mutatiile sunt fixture-uri tranzactionale; markerul preceda ROLLBACK.
 BEGIN;
 CREATE SCHEMA portal_test;
-GRANT USAGE ON SCHEMA portal_test TO supabase_auth_admin,teren;
+GRANT USAGE ON SCHEMA portal_test TO supabase_auth_admin;
 CREATE FUNCTION portal_test.expect_hook(u uuid,expected text) RETURNS void
 LANGUAGE plpgsql SECURITY INVOKER AS $f$
 DECLARE e jsonb; r jsonb;
@@ -27,12 +27,13 @@ BEGIN
  IF (SELECT count(*) FROM public.conturi_tip) <> 5 OR (SELECT count(*) FROM public.conturi_teren) <> 3
   OR EXISTS (SELECT id FROM auth.users EXCEPT SELECT auth_user_id FROM public.conturi_tip)
   OR EXISTS (SELECT auth_user_id FROM public.conturi_tip EXCEPT SELECT id FROM auth.users) THEN RAISE EXCEPTION 'inventory'; END IF;
+ IF (SELECT tip FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000002') IS DISTINCT FROM 'neaprobat' THEN RAISE EXCEPTION 'pending approved'; END IF;
  IF (SELECT employee_id FROM public.conturi_teren WHERE auth_user_id='a2a3a7c3-b285-4306-8d5b-39749c2abb0c') IS NOT NULL
   THEN RAISE EXCEPTION 'invented employee'; END IF;
 END $checks$;
 SET LOCAL ROLE supabase_auth_admin;
 SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000001','erp');
-SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000002','erp');
+SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000002','error');
 SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','teren');
 SELECT portal_test.expect_hook('393709f9-bcb6-4ce5-ba22-2eca5c353f23','teren');
 SELECT portal_test.expect_hook('a2a3a7c3-b285-4306-8d5b-39749c2abb0c','error');
@@ -43,6 +44,9 @@ BEGIN
   OR public.fn_auth_token_hook('{}')->'error' IS NULL
   OR public.fn_auth_token_hook('{"user_id":"44387376-e48c-44d5-a88b-752c653c5639","claims":null}')->'error' IS NULL THEN
   RAISE EXCEPTION 'malformed input accepted'; END IF;
+ IF public.fn_auth_token_hook('{"user_id":"00000000-0000-0000-0000-000000000001","claims":{"role":"service_role"}}')->'error' IS NULL
+ OR public.fn_auth_token_hook('{"user_id":"00000000-0000-0000-0000-000000000001","claims":{}}')->'error' IS NULL THEN
+  RAISE EXCEPTION 'ERP unexpected role accepted'; END IF;
 END $bad$;
 RESET ROLE;
 SAVEPOINT missing;
@@ -126,6 +130,8 @@ RESET ROLE;
 ROLLBACK TO inaccessible;
 
 -- (pe prod postgres nu poate da USAGE pe auth; identitatea teren vine din public.fn_portal_uid())
+-- GUC simuleaza JWT numai in harness; dovada reala necesita Auth/PostgREST semnat pe proiectul de test.
+GRANT USAGE ON SCHEMA portal_test TO teren;
 SELECT set_config('request.jwt.claims','{"sub":"44387376-e48c-44d5-a88b-752c653c5639","role":"teren"}',true);
 SET LOCAL ROLE teren;
 DO $client$
@@ -172,6 +178,7 @@ SET LOCAL ROLE authenticated;
 DO $$ BEGIN IF (SELECT count(*) FROM public.employees) <> 2 THEN RAISE EXCEPTION 'fixture RLS not broad'; END IF; END $$;
 RESET ROLE;
 REVOKE USAGE ON SCHEMA auth FROM teren;
+REVOKE USAGE ON SCHEMA portal_test FROM teren;
 SAVEPOINT drift;
 CREATE FUNCTION public.portal_bad_public() RETURNS integer LANGUAGE sql AS $$SELECT 1$$;
 DO $$ BEGIN IF cardinality(public.fn_portal_porti_lipsa())=0 THEN RAISE EXCEPTION 'new public function missed'; END IF; END $$;
@@ -218,5 +225,46 @@ DO $$ BEGIN
    RAISE EXCEPTION 'audit truncate allowed'; EXCEPTION WHEN raise_exception THEN
    IF SQLERRM <> 'PORTAL_AUDIT_APPEND_ONLY' THEN RAISE; END IF; END;
 END $$;
+
+SAVEPOINT body_drift;
+CREATE OR REPLACE FUNCTION public.portal_fixture_public_01() RETURNS integer LANGUAGE sql IMMUTABLE AS $$SELECT 99$$;
+DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'body drift missed'; END IF; END $$;
+ROLLBACK TO body_drift;
+SAVEPOINT definer_drift;
+ALTER FUNCTION public.portal_fixture_public_01() SECURITY DEFINER;
+DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'definer drift missed'; END IF; END $$;
+ROLLBACK TO definer_drift;
+SAVEPOINT acl_drift;
+REVOKE EXECUTE ON FUNCTION public.portal_fixture_public_01() FROM PUBLIC;
+DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'ACL drift missed'; END IF; END $$;
+ROLLBACK TO acl_drift;
+SAVEPOINT config_drift;
+ALTER FUNCTION public.portal_fixture_public_01() SET search_path TO 'public';
+DO $$ BEGIN IF NOT ('amprenta:public.portal_fixture_public_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'config drift missed'; END IF; END $$;
+ROLLBACK TO config_drift;
+SAVEPOINT net_drift;
+ALTER FUNCTION net.portal_fixture_net_01() SECURITY DEFINER;
+DO $$ BEGIN IF NOT ('amprenta:net.portal_fixture_net_01()'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'net drift missed'; END IF; END $$;
+ROLLBACK TO net_drift;
+SAVEPOINT schema_drift;
+CREATE SCHEMA portal_extra;
+GRANT USAGE ON SCHEMA portal_extra TO teren;
+DO $$ BEGIN IF NOT ('teren scheme USAGE'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'schema usage missed'; END IF; END $$;
+CREATE FUNCTION portal_extra.privileged() RETURNS integer LANGUAGE sql SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $$SELECT 1$$;
+CREATE TABLE portal_extra.secret(id integer);
+GRANT SELECT ON portal_extra.secret TO teren;
+DO $$ BEGIN IF NOT ('functie:portal_extra.privileged()'=ANY(public.fn_portal_porti_lipsa()))
+ OR NOT ('relatie:secret'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'other schema surface missed'; END IF; END $$;
+ROLLBACK TO schema_drift;
+SAVEPOINT arbitrary_membership;
+CREATE ROLE portal_extra_role;
+GRANT portal_extra_role TO teren;
+DO $$ BEGIN IF NOT ('teren membership'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'arbitrary membership missed'; END IF; END $$;
+ROLLBACK TO arbitrary_membership;
+SAVEPOINT no_authenticator;
+REVOKE teren FROM authenticator;
+DO $$ BEGIN IF NOT ('config incompleta: authenticator teren'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'missing authenticator missed'; END IF; END $$;
+ROLLBACK TO no_authenticator;
+DO $$ BEGIN IF public.fn_portal_porti_lipsa() <> '{}' THEN RAISE EXCEPTION 'final gate'; END IF; END $$;
 SELECT 'PORTAL_E1_1A_TEST_END';
 ROLLBACK;

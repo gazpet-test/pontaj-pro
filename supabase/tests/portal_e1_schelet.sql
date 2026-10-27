@@ -68,6 +68,16 @@ INSERT INTO public.user_module_access(profile_id,module,access_level)
  SELECT id,'probe_teren','editor' FROM public.profiles WHERE employee_id IS NOT NULL;
 INSERT INTO public.facturi VALUES(1,123);
 INSERT INTO public.contracte VALUES(1,'fixture');
+-- pg_net sintetic: schema cu USAGE PUBLIC si 12 functii INVOKER, fara acces la date.
+CREATE SCHEMA net;
+GRANT USAGE ON SCHEMA net TO PUBLIC;
+DO $net_fixture$
+BEGIN
+ FOR i IN 1..12 LOOP
+  EXECUTE format('CREATE FUNCTION net.portal_fixture_net_%s() RETURNS integer LANGUAGE sql AS %L',
+   lpad(i::text,2,'0'),'SELECT 1');
+ END LOOP;
+END $net_fixture$;
 -- Exact 21 de functii sintetice: NU reprezinta inventarul PUBLIC din productie.
 DO $fixture$
 BEGIN

@@ -441,15 +441,20 @@ BEGIN
  -- Provisioning nu ia lock pe auth.users existent (NEW este propria insertie).
  PERFORM 1 FROM auth.users WHERE id=p_auth_user_id FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'PORTAL_TARGET_INVALID'; END IF;
- IF EXISTS (SELECT FROM public.conturi_tip WHERE auth_user_id=p_auth_user_id)
+ IF EXISTS (SELECT FROM public.conturi_tip WHERE auth_user_id=p_auth_user_id AND tip <> 'neaprobat')
   OR EXISTS (SELECT FROM public.conturi_teren WHERE auth_user_id=p_auth_user_id)
   OR EXISTS (SELECT FROM auth.users WHERE id=p_auth_user_id AND raw_app_meta_data->>'tip_cont'='teren')
  THEN RAISE EXCEPTION 'PORTAL_TARGET_CLASSIFIED'; END IF;
- PERFORM 1 FROM public.profiles WHERE id=p_auth_user_id AND role='in_asteptare' FOR UPDATE;
+ PERFORM 1 FROM public.profiles WHERE id=p_auth_user_id AND (role='in_asteptare' OR EXISTS
+   (SELECT FROM public.conturi_tip WHERE auth_user_id=p_auth_user_id AND tip='neaprobat')) FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'PORTAL_TARGET_INVALID'; END IF;
  INSERT INTO public.conturi_tip(auth_user_id,tip,sursa,clasificat_de)
-  VALUES(p_auth_user_id,'erp','aprobare_owner_e1_1b',v_uid);
- UPDATE public.profiles SET role=p_rol WHERE id=p_auth_user_id AND role='in_asteptare';
+  VALUES(p_auth_user_id,'erp','aprobare_owner_e1_1b',v_uid)
+ ON CONFLICT (auth_user_id) DO UPDATE SET tip='erp',sursa=EXCLUDED.sursa,
+  clasificat_de=EXCLUDED.clasificat_de,clasificat_la=clock_timestamp()
+ WHERE conturi_tip.tip='neaprobat';
+ IF NOT FOUND THEN RAISE EXCEPTION 'PORTAL_APPROVAL_CONFLICT'; END IF;
+ UPDATE public.profiles SET role=p_rol WHERE id=p_auth_user_id;
  IF NOT FOUND THEN RAISE EXCEPTION 'PORTAL_APPROVAL_CONFLICT'; END IF;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_aproba_erp(uuid,text) FROM PUBLIC,anon,authenticated,service_role,teren;

@@ -1,6 +1,7 @@
 -- Exclusiv harness efemer, executat de bootstrap supabase_admin inaintea baseline-ului.
 SET ROLE postgres;
 ALTER TABLE public.profiles ADD COLUMN is_owner boolean NOT NULL DEFAULT false;
+UPDATE public.profiles SET is_owner=true WHERE id='00000000-0000-0000-0000-000000000001';
 ALTER TABLE public.profiles RENAME CONSTRAINT profiles_role_check TO profiles_role_chk;
 CREATE FUNCTION public.fn_cont_candidati_angajat(text)
 RETURNS TABLE(employee_id integer,employee_name text,metoda text,profil_legat uuid)

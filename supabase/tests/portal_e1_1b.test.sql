@@ -137,11 +137,20 @@ SELECT portal_test.expect_error($$SELECT public.fn_cont_aproba_erp('20000000-000
 SELECT portal_test.expect_error($$SELECT public.fn_cont_aproba_erp('20000000-0000-0000-0000-000000000010','teren')$$,'PORTAL_ROLE_INVALID');
 SELECT portal_test.expect_error($$SELECT public.fn_cont_aproba_erp('29999999-0000-0000-0000-000000000099','hr')$$,'PORTAL_TARGET_INVALID');
 SELECT public.fn_cont_aproba_erp('20000000-0000-0000-0000-000000000010','hr');
+SELECT public.fn_cont_aproba_erp('00000000-0000-0000-0000-000000000002','hr');
 SELECT portal_test.expect_error($$SELECT public.fn_cont_aproba_erp('20000000-0000-0000-0000-000000000010','hr')$$,'PORTAL_TARGET_CLASSIFIED');
 RESET ROLE;
 SET LOCAL ROLE supabase_auth_admin;
 SELECT portal_test.hook('20000000-0000-0000-0000-000000000010','authenticated');
+SELECT portal_test.hook('00000000-0000-0000-0000-000000000002','authenticated');
 RESET ROLE;
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT FROM public.conturi_tip WHERE auth_user_id='00000000-0000-0000-0000-000000000002'
+   AND tip='erp' AND clasificat_de='00000000-0000-0000-0000-000000000001')
+ OR NOT EXISTS (SELECT FROM public.conturi_tip_jurnal WHERE auth_user_id='00000000-0000-0000-0000-000000000002'
+   AND operatie='UPDATE' AND vechi->>'tip'='neaprobat' AND nou->>'tip'='erp') THEN
+  RAISE EXCEPTION 'pending approval not audited'; END IF;
+END $$;
 -- Postconditiile sunt testate si negativ: drept de modul prezent -> nicio jumatate finalizata.
 INSERT INTO public.user_module_access(profile_id,module,access_level) VALUES('20000000-0000-0000-0000-000000000001','probe_teren','editor');
 SET LOCAL ROLE service_role;

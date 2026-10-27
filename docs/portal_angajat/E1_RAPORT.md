@@ -99,3 +99,49 @@ Referințe: M = `supabase/migrations/20261119a_portal_teren_provisioning.sql`; R
 - L23 n/a.
 - L24 n/a.
 - L25: fixture pre-baseline cu corpul LIVE și trigger real pe auth.users; apeluri SET LOCAL ROLE authenticated/service_role/supabase_auth_admin și runner postgres NOSUPERUSER. Concurență cu FIFO + pg_stat_activity + wait ambele PID și motiv exact. **PG16/17 și GoTrue real nerulate; cele 9 teste trecute sunt numai statice.**
+
+
+## E1-1a r2
+- Pasul 0 executat; modificari exclusiv in worktree, fara Git/DB/deploy/credentiale.
+- 18a: inventar ERP numai pe dovezile aprobate; restul `neaprobat`, NOTICE numai cu numarul.
+- Hook: `neaprobat` refuzat; ERP cere claims.role=authenticated; teste pending si rol neasteptat.
+- 19a: owner poate aproba neaprobat → erp; UPDATE jurnalizat, autor server-side; lipsa clasificarii ramane admisa pentru conturile noi.
+- Baseline: cele 21 de md5 furnizate fixate in migrare; cele 12 net fixate la apply; definitie, DEFINER, owner, config si ACL comparate integral.
+- Poarta: zero apartenente teren, authenticator→teren obligatoriu, set exact de scheme aplicative, functii/relatii/coloane/secvente in toate schemele accesibile.
+- Interpretare explicita necesara: pg_catalog exclus ca suprafata interna; obiectele standard information_schema (OID<16384) amprentate separat la apply, fara granturi noi. Altfel un PG standard este permanent rosu; aceasta exceptie extinde baseline-ul celor 33 din brief.
+- Revenire 18a: atestare Auth in aceeasi tranzactie, dupa verificarea snapshot-ului si inainte de DROP; stub sigur pastrat. Procedura: E1_REVENIRE_AUTH.md.
+- Snapshot harness: schema separat, date ORDER BY cheia primara, secvente incluse; UPDATE fara schimbare semantica trebuie sa pastreze snapshot-ul identic.
+- Testul static 1b citeste numai definitia LIVE sanitizata din fapte_prod/handle_new_user_27_10.sql, fara dependenta de live/.
+- Executat: test_static.py (3), test_static_1b.py (6), test_static_r2.py (2): 11/11; bash -n scripts/test_portal_e1.sh: PASS.
+- Adaugat SQL: drift corp/DEFINER/ACL/config/net, schema/functie/relatie noua, membership arbitrar, lipsa authenticator, aprobare pending si stub.
+- NERULAT: PostgreSQL, concurenta reala, roundtrip DDL, Auth/PostgREST. Operatorul ruleaza PORTAL_PG_MAJOR=16; niciun PASS PG revendicat.
+- Limita: md5-urile prod sunt cele furnizate, neverificate local pe prod; callee-urile tranzitive ale functiilor existente/net nu pot fi certificate din inventarul disponibil.
+
+## L01–L25 — verificare revizia r2
+| Regula | Dovada / limita |
+|---|---|
+| L01 | 18a blocheaza profiles + user_module_access inainte de inventar; fn_cont_aproba_erp blocheaza parintele Auth inainte de clasificare. Concurenta PG nerulata. |
+| L02 | Apply/revenire raman tranzactii unice ale runnerului; aprobarea + jurnalul sunt in acelasi RPC/trigger. |
+| L03 | n/a |
+| L04 | n/a pentru delta; protocolul UUID provisioning existent pastrat. |
+| L05 | Runnerul si reconcilierea existente nemodificate; E1_REVENIRE_AUTH.md cere reconciliere la rezultat necunoscut. |
+| L06 | Ordinea lockurilor documentata in 18a/19a; revenirea ia lock inainte de snapshot. |
+| L07 | fn_portal_porti_lipsa verifica accesul efectiv pe toate schemele aplicative; baseline RLS + ACL fara clienti; teste SQL schema_drift/column_drift. |
+| L08 | fn_cont_aproba_erp pastreaza auth.uid() + owner; testele GUC marcate simulare, dovada Auth reala ramane nerulata. |
+| L09 | Aprobare numai owner; poarta verifica orice schema cu USAGE si orice membership teren. Teste arbitrary_membership/schema_drift. |
+| L10 | Hook/stub eroare generica; NOTICE fara emailuri; test_portable_fact_has_no_inventory. |
+| L11 | n/a |
+| L12 | Inventar complet auth.users↔conturi_tip, necunoscutele raman neaprobat; teste inventory/pending. |
+| L13 | Generator fixture refuza marker lipsa/duplicat (test_fixture_refuses_missing_or_duplicate_marker); domeniul verificat prin egalitate, fara regex de email. |
+| L14 | Snapshot include baseline nou, DDL/RLS/politici/triggere; atestare inainte de DROP, stub pastrat intentionat; roundtrip numai pregatit in harness, nerulat. |
+| L15 | Amprenta completa in portal_public_baseline; body_drift/definer_drift/acl_drift/config_drift/net_drift. Limita explicita: callee tranzitive necertificate din lipsa definitiilor prod/net; exceptie catalog documentata. |
+| L16 | PK baseline pe semnatura canonica; CHECK conturi_tip extins explicit, FK/UNIQUE existente pastrate. |
+| L17 | Predicatul existent Europe/Bucharest nemodificat; test_hook_and_provisioning_share_employee_predicate trecut static. |
+| L18 | Hook refuza necunoscut/neaprobat/rol ERP incorect; amprente comparate IS DISTINCT FROM; snapshot propaga erorile q. |
+| L19 | Hook/provisioning pastreaza helperul comun; test de paritate static 1b trecut, md5 fixture distinct de artefactul prod. |
+| L20 | Teste pozitive ERP/teren/aprobare pending si negative de rol, acces, drift; stub permite eveniment ERP identic. SQL nerulat. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | n/a |
+| L24 | n/a |
+| L25 | 11 teste statice executate; fixture owner demonstrat si pending neaprobat; harness NOSUPERUSER/regresii/concurenta pastrate, PG16 si Auth real raman nerulate. |

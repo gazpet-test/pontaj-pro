@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 MIG = ROOT / 'supabase/migrations/20261119a_portal_teren_provisioning.sql'
 REV = ROOT / 'supabase/revenire/20261119a_portal_teren_provisioning_ROLLBACK.sql'
-FACTS = ROOT / 'live/prod_fapte_27_10.txt'
+FACTS = ROOT / 'docs/portal_angajat/fapte_prod/handle_new_user_27_10.sql'
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('delivery_validator', ROOT / 'scripts/livrare_validator.py')
 validator = importlib.util.module_from_spec(spec)
@@ -19,7 +19,7 @@ spec.loader.exec_module(validator)
 
 def live_source():
     facts = FACTS.read_text(encoding='utf-8')
-    definition = facts[facts.index('CREATE OR REPLACE FUNCTION'):facts.index('\n-- owner / acl / config')].rstrip()
+    definition = facts.strip()
     return definition.split('AS $function$', 1)[1].rsplit('$function$', 1)[0]
 
 

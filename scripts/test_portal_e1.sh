@@ -39,17 +39,40 @@ runner() {
     --tinta-db "$DB" --tinta-sistem "$SIS" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres
 }
 baseline() {
-  # Corpus complet al tabelelor vechi + schema, ACL, politici si functii.
-  # Registrul de livrare e exclus intentionat: istoricul NU se sterge la revenire.
-  "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U supabase_admin -d "$DB" --schema=public --schema=auth \
+  # Schema/ACL separat; datele sunt citite explicit in ordinea cheii primare.
+  # Stub-ul este singurul obiect pastrat intentionat dupa revenirea 18a; testat separat.
+  "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U supabase_admin -d "$DB" --schema=public --schema=auth --schema-only \
     --exclude-table='public.conturi_*' --exclude-table='public.portal_*' \
-    | sed '/^\\restrict /d; /^\\unrestrict /d' >"$1"
+    | python3 "$ROOT/scripts/portal/snapshot_schema.py" "${2:-full}" >"$1"
+  local snapshot_sql
+  q "SELECT format('SELECT %L, coalesce(jsonb_agg(to_jsonb(t) ORDER BY %s), ''[]''::jsonb) FROM %I.%I t;',
+    n.nspname||'.'||c.relname,
+    coalesce((SELECT string_agg(format('t.%I',a.attname),',' ORDER BY k.ord)
+      FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ord)
+      JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum
+      WHERE i.indrelid=c.oid AND i.indisprimary), 'to_jsonb(t)::text'),n.nspname,c.relname)
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname IN ('public','auth') AND c.relkind IN ('r','p')
+      AND c.relname NOT LIKE 'conturi_%' AND c.relname NOT LIKE 'portal_%'
+    ORDER BY n.nspname,c.relname" >"$TMP/snapshot_queries.sql" || return 1
+  while IFS= read -r snapshot_sql; do
+    q "$snapshot_sql" >>"$1" || return 1
+  done <"$TMP/snapshot_queries.sql"
+  q "SELECT format('SELECT %L,last_value,is_called FROM %I.%I ORDER BY last_value;',n.nspname||'.'||c.relname,n.nspname,c.relname)
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname IN ('public','auth') AND c.relkind='S'
+      AND c.relname NOT LIKE 'conturi_%' AND c.relname NOT LIKE 'portal_%'
+    ORDER BY n.nspname,c.relname" >"$TMP/snapshot_sequences.sql" || return 1
+  while IFS= read -r snapshot_sql; do
+    q "$snapshot_sql" >>"$1" || return 1
+  done <"$TMP/snapshot_sequences.sql"
 }
+
 roles() {
   q "SELECT jsonb_build_object('roles',(SELECT jsonb_agg(to_jsonb(r) ORDER BY rolname) FROM pg_roles r),
     'membership',(SELECT jsonb_agg(to_jsonb(m) ORDER BY roleid,member,grantor) FROM pg_auth_members m))" >"$1"
 }
-baseline "$TMP/before.sql"
+baseline "$TMP/before.sql" omit-stub
 roles "$TMP/roles_before.json"
 ORIGINAL="$ROOT/supabase/migrations/20261118a_portal_teren_identitate.sql"
 MIG="$TMP/20261118a_portal_teren_identitate.sql"
@@ -96,6 +119,11 @@ grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_config_refused.l
  -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning:'||txid_current(),true)" \
  -f "$MIG_1B" >"$TMP/roundtrip_1b.log" 2>&1 || { cat "$TMP/roundtrip_1b.log"; fail 'E1-1b DDL roundtrip'; }
 runner 20261119120001 "$REV_1B" >"$TMP/rollback_1b.log" 2>&1 || { cat "$TMP/rollback_1b.log"; fail 'rollback E1-1b'; }
+# Regresie pentru ordinea fizica: UPDATE fara schimbare semantica, snapshot identic.
+baseline "$TMP/order_before.sql"
+q "UPDATE public.profiles SET email=email WHERE id='00000000-0000-0000-0000-000000000002'" >/dev/null
+baseline "$TMP/order_after.sql"
+diff -u "$TMP/order_before.sql" "$TMP/order_after.sql" || fail 'snapshot depends on physical row order'
 baseline "$TMP/after_1b.sql"
 diff -u "$TMP/before_1b.sql" "$TMP/after_1b.sql" || fail 'E1-1b changed original handle/ACL/schema/data'
 [[ "$(q "SELECT to_regclass('public.portal_provisioning') IS NULL AND to_regprocedure('public.fn_portal_cont_finalizeaza(uuid)') IS NULL")" == t ]] || fail 'E1-1b objects left'
@@ -114,11 +142,22 @@ if "${PSQL[@]}" --single-transaction \
   -c 'ALTER TABLE public.conturi_tip DISABLE ROW LEVEL SECURITY' \
   -f "$REV" >"$TMP/rollback_config_refused.log" 2>&1; then fail 'rollback accepted changed RLS'; fi
 grep -q PORTAL_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_config_refused.log" || { cat "$TMP/rollback_config_refused.log"; fail 'wrong config refusal'; }
-runner 20261118120001 "$REV" >"$TMP/rollback.log" 2>&1 || { cat "$TMP/rollback.log"; fail rollback; }
+if runner 20261118120001 "$REV" >"$TMP/no_attestation.log" 2>&1; then fail 'rollback accepted missing Auth attestation'; fi
+grep -q PORTAL_AUTH_HOOK_ATTESTATION_REQUIRED "$TMP/no_attestation.log" || { cat "$TMP/no_attestation.log"; fail 'wrong Auth attestation refusal'; }
+# Atestare simulata EXCLUSIV in copia harness; SQL-ul de productie continua sa o ceara operatorului.
+ATTESTED_REV="$TMP/20261118a_portal_teren_identitate_ROLLBACK.sql"
+python3 - "$REV" "$ATTESTED_REV" <<'PY'
+from pathlib import Path
+import sys
+source, target = map(Path, sys.argv[1:])
+target.write_text("SELECT set_config('gazpet.hook_auth_dezactivat','ATEST:'||txid_current(),true);\n" + source.read_text(encoding='utf-8'), encoding='utf-8')
+PY
+runner 20261118120001 "$ATTESTED_REV" >"$TMP/rollback.log" 2>&1 || { cat "$TMP/rollback.log"; fail rollback; }
 [[ "$(q "SELECT count(*) FROM pg_roles WHERE rolname='teren'")" == 0 ]] || fail 'role left'
 [[ "$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('conturi_tip','conturi_teren','conturi_tip_jurnal','conturi_tip_jurnal_id_seq')")" == 0 ]] || fail 'tables left'
-[[ "$(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil','fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil')")" == 0 ]] || fail 'functions left'
-baseline "$TMP/after.sql"
+[[ "$(q "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('fn_portal_public_md5','fn_portal_catalog_amprenta','fn_teren_eligibil','fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil')")" == 0 ]] || fail 'functions left'
+"${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_stub.test.sql" >"$TMP/stub.log" 2>&1 || { cat "$TMP/stub.log"; fail stub; }
+baseline "$TMP/after.sql" omit-stub
 roles "$TMP/roles_after.json"
 diff -u "$TMP/before.sql" "$TMP/after.sql" || fail 'existing schema/data/ACL changed'
 diff -u "$TMP/roles_before.json" "$TMP/roles_after.json" || fail 'existing roles/membership changed'
