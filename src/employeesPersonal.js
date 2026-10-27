@@ -8,6 +8,12 @@ export function employeeFieldRead(source, key) {
   return source != null && Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined
 }
 
+// Paritate cu predicatul server pentru scrierea marimilor EIP.
+export function employeeMarimiCanWrite(profile, access) {
+  return profile?.is_owner === true || profile?.can_access_personal_data === true ||
+    (access?.module === 'magazie' && ['editor', 'admin'].includes(access.access_level))
+}
+
 // Sursa este randul citit, nu formularul care poate initializa campuri cu ''.
 export function employeePersonalWrite(source, values) {
   return Object.fromEntries(Object.entries(values).filter(([key]) =>

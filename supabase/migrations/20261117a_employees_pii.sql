@@ -74,7 +74,7 @@ BEGIN
         (polname='hr_personal_extern_insert' AND polcmd='a' AND polqual IS NULL AND pg_get_expr(polwithcheck,polrelid)='(auth.uid() IS NOT NULL)')) )<>3 THEN
     RAISE EXCEPTION 'epi_preflight: drift politici extern';
   END IF;
-  IF to_regprocedure('public.fn_employees_pii_write_guard()') IS NOT NULL OR EXISTS(
+  IF EXISTS(SELECT 1 FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('fn_employees_pii_write_guard','fn_employees_marimi_write_guard')) OR EXISTS(
     SELECT 1 FROM pg_trigger WHERE tgrelid='public.employees'::regclass AND NOT tgisinternal
       AND (tgname='trg_employees_zz_pii_write' OR
         ((tgtype::int & 3)=3 AND (tgtype::int & 20)<>0 AND tgname COLLATE "C">='trg_employees_zz_pii_write' COLLATE "C"))) THEN
@@ -102,6 +102,7 @@ CREATE TABLE public.employees_pii_acl_20261117a (
   fost_extern_acl aclitem[],
   extern_policies_before jsonb, extern_policies_after jsonb,
   members_after jsonb, write_guard_after jsonb,
+  policies_after jsonb, objects_after jsonb,
   policies_before jsonb NOT NULL
 );
 ALTER TABLE public.employees_pii_acl_20261117a ENABLE ROW LEVEL SECURITY;
@@ -130,42 +131,73 @@ END $epi_columns_20261117a$;
 GRANT SELECT (id,name,department,position,active,created_at,site_id,hire_date,termination_date,functii_extra,functie,departament_hr,rol_in_firma,are_autorizatii,cetatenie,tip_contract,procent_ocupare,co_maxim_zile,cetatenie_secundara,protejat_la_stergere,cod_cor,functie_cim,colaborare_externa_status,colaborare_externa_confirmat_de,colaborare_externa_confirmat_la,colaborare_externa_nota,colaborare_externa_document)
   ON public.employees TO authenticated;
 
--- Ultimul BEFORE ROW: valideaza NEW dupa triggerele care il pot modifica.
--- Nu luam lock-uri pe alte tabele; citim numai profilul apelantului.
+-- UPDATE OF verifica tintele SET, inclusiv SET x=x (PG17 CREATE TRIGGER, Notes).
+-- https://www.postgresql.org/docs/17/sql-createtrigger.html
+-- Ultimul trigger general verifica si transformarile NEW ale trigger-elor anterioare.
+-- Fara lock-uri pe alte tabele; identitatea ramane auth.uid().
 CREATE FUNCTION public.fn_employees_pii_write_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp'
 AS $epi_write_guard$
-DECLARE changed boolean;
+DECLARE personal boolean;
 BEGIN
-  -- Exceptia server aprobata in brief; nu deducem identitatea din current_user DEFINER.
   IF auth.uid() IS NULL THEN RETURN NEW; END IF;
-  IF TG_OP='UPDATE' THEN
-    changed := ROW(NEW.cnp,NEW.iban,NEW.adresa,NEW.data_nasterii,NEW.telefon,NEW.email,NEW.observatii_hr,NEW.qr_pin,NEW.qr_pin_active,NEW.qr_pin_creat_la,NEW.marime_incaltaminte,NEW.marime_imbracaminte)
-      IS DISTINCT FROM ROW(OLD.cnp,OLD.iban,OLD.adresa,OLD.data_nasterii,OLD.telefon,OLD.email,OLD.observatii_hr,OLD.qr_pin,OLD.qr_pin_active,OLD.qr_pin_creat_la,OLD.marime_incaltaminte,OLD.marime_imbracaminte);
+  personal := EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid() AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE));
+  IF TG_OP='INSERT' THEN
+    -- false implicit/explicit ramane exceptia aprobata la INSERT.
+    IF (NEW.cnp IS NOT NULL OR NEW.iban IS NOT NULL OR NEW.adresa IS NOT NULL OR NEW.data_nasterii IS NOT NULL OR NEW.telefon IS NOT NULL OR NEW.email IS NOT NULL OR NEW.observatii_hr IS NOT NULL OR NEW.qr_pin IS NOT NULL OR NEW.qr_pin_active IS TRUE OR NEW.qr_pin_creat_la IS NOT NULL) AND NOT personal THEN
+      RAISE EXCEPTION 'Acces refuzat la modificarea datelor personale ale angajatului' USING ERRCODE='42501';
+    END IF;
+  ELSIF TG_NARGS>0 THEN
+    -- Refuz independent de valoarea veche sau noua: inchide oracolul PIN/CNP/IBAN.
+    IF NOT personal THEN RAISE EXCEPTION 'Acces refuzat la modificarea datelor personale ale angajatului' USING ERRCODE='42501'; END IF;
   ELSE
-    -- false este DEFAULT NOT NULL fara PIN, inclusiv la INSERT fara campuri personale.
-    changed := NEW.cnp IS NOT NULL OR
-      NEW.iban IS NOT NULL OR
-      NEW.adresa IS NOT NULL OR
-      NEW.data_nasterii IS NOT NULL OR
-      NEW.telefon IS NOT NULL OR
-      NEW.email IS NOT NULL OR
-      NEW.observatii_hr IS NOT NULL OR
-      NEW.qr_pin IS NOT NULL OR
-      NEW.qr_pin_active IS TRUE OR
-      NEW.qr_pin_creat_la IS NOT NULL OR
-      NEW.marime_incaltaminte IS NOT NULL OR
-      NEW.marime_imbracaminte IS NOT NULL;
-  END IF;
-  IF changed AND NOT EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
-    AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE)) THEN
-    RAISE EXCEPTION 'Acces refuzat la modificarea datelor personale ale angajatului' USING ERRCODE='42501';
+    IF ROW(NEW.cnp,NEW.iban,NEW.adresa,NEW.data_nasterii,NEW.telefon,NEW.email,NEW.observatii_hr,NEW.qr_pin,NEW.qr_pin_active,NEW.qr_pin_creat_la) IS DISTINCT FROM ROW(OLD.cnp,OLD.iban,OLD.adresa,OLD.data_nasterii,OLD.telefon,OLD.email,OLD.observatii_hr,OLD.qr_pin,OLD.qr_pin_active,OLD.qr_pin_creat_la) AND NOT personal THEN
+      RAISE EXCEPTION 'Acces refuzat la modificarea datelor personale ale angajatului' USING ERRCODE='42501';
+    END IF;
+    -- RLS Magazie permite numai marimi; nu extinde scrierea publica pentru gestionari.
+    IF NOT EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+      AND (p.is_owner IS TRUE OR p.can_modify_employees IS TRUE))
+      AND (to_jsonb(NEW)-ARRAY['marime_incaltaminte','marime_imbracaminte'])
+        IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['marime_incaltaminte','marime_imbracaminte']) THEN
+      RAISE EXCEPTION 'Acces refuzat la modificarea datelor personale ale angajatului' USING ERRCODE='42501';
+    END IF;
   END IF;
   RETURN NEW;
 END $epi_write_guard$;
 REVOKE ALL ON FUNCTION public.fn_employees_pii_write_guard() FROM PUBLIC,anon,authenticated,service_role;
+
+CREATE FUNCTION public.fn_employees_marimi_write_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp'
+AS $epi_marimi_write$
+DECLARE addressed boolean;
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN NEW; END IF;
+  IF TG_OP='INSERT' THEN
+    addressed := NEW.marime_incaltaminte IS NOT NULL OR NEW.marime_imbracaminte IS NOT NULL;
+  ELSIF TG_NARGS>0 THEN
+    addressed := true;
+  ELSE
+    addressed := ROW(NEW.marime_incaltaminte,NEW.marime_imbracaminte) IS DISTINCT FROM ROW(OLD.marime_incaltaminte,OLD.marime_imbracaminte);
+  END IF;
+  IF addressed AND NOT (EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid() AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE)) OR EXISTS(SELECT 1 FROM public.user_module_access u WHERE u.profile_id=auth.uid() AND u.module='magazie' AND u.access_level IN ('editor','admin'))) THEN
+    RAISE EXCEPTION 'Acces refuzat la modificarea datelor personale ale angajatului' USING ERRCODE='42501';
+  END IF;
+  RETURN NEW;
+END $epi_marimi_write$;
+REVOKE ALL ON FUNCTION public.fn_employees_marimi_write_guard() FROM PUBLIC,anon,authenticated,service_role;
+CREATE TRIGGER trg_employees_zz_pii_write_personal BEFORE UPDATE OF cnp,iban,adresa,data_nasterii,telefon,email,observatii_hr,qr_pin,qr_pin_active,qr_pin_creat_la ON public.employees
+  FOR EACH ROW EXECUTE FUNCTION public.fn_employees_pii_write_guard('addressed');
+CREATE TRIGGER trg_employees_zz_pii_write_marimi BEFORE UPDATE OF marime_incaltaminte,marime_imbracaminte ON public.employees
+  FOR EACH ROW EXECUTE FUNCTION public.fn_employees_marimi_write_guard('addressed');
 CREATE TRIGGER trg_employees_zz_pii_write BEFORE INSERT OR UPDATE ON public.employees
   FOR EACH ROW EXECUTE FUNCTION public.fn_employees_pii_write_guard();
+CREATE TRIGGER trg_employees_zz_pii_write_sizes_final BEFORE INSERT OR UPDATE ON public.employees
+  FOR EACH ROW EXECUTE FUNCTION public.fn_employees_marimi_write_guard();
+CREATE POLICY employees_update_magazie_marimi ON public.employees FOR UPDATE TO authenticated
+  USING (EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid() AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE))
+    OR EXISTS(SELECT 1 FROM public.user_module_access u WHERE u.profile_id=auth.uid() AND u.module='magazie' AND u.access_level IN ('editor','admin')))
+  WITH CHECK (EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid() AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE))
+    OR EXISTS(SELECT 1 FROM public.user_module_access u WHERE u.profile_id=auth.uid() AND u.module='magazie' AND u.access_level IN ('editor','admin')));
 
 CREATE FUNCTION public.fn_employees_personal(p_ids bigint[] DEFAULT NULL)
 RETURNS TABLE(id bigint,cnp text,iban text,adresa text,data_nasterii date,telefon text,email text,observatii_hr text,
@@ -317,6 +349,10 @@ BEGIN
     RAISE EXCEPTION 'epi_post: ACL functie externa schimbat';
   END IF;
   UPDATE public.employees_pii_acl_20261117a SET
+    objects_after=(SELECT jsonb_agg(jsonb_build_object('signature',sig,'definition',pg_get_functiondef(p.oid),'catalog',to_jsonb(p)) ORDER BY sig)
+      FROM unnest(ARRAY['public.fn_employees_personal(bigint[])','public.fn_employees_marimi(bigint[])','public.fn_employees_pii_write_guard()','public.fn_employees_marimi_write_guard()']) sig
+      LEFT JOIN pg_proc p ON p.oid=to_regprocedure(sig)),
+    policies_after=(SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb) FROM pg_policy p WHERE polrelid='public.employees'::regclass),
     extern_policies_after=(SELECT jsonb_agg(jsonb_build_object('name',polname,'cmd',polcmd,'roles',polroles,'permissive',polpermissive,'qual',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) ORDER BY polname) FROM pg_policy WHERE polrelid='public.hr_personal_extern'::regclass), members_after=(WITH RECURSIVE ancestors(id) AS (SELECT unnest(ARRAY['authenticated'::regrole::oid,'anon'::regrole::oid,'service_role'::regrole::oid]) UNION SELECT a.roleid FROM pg_auth_members a JOIN ancestors p ON a.member=p.id) SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.roleid,a.member,a.grantor),'[]'::jsonb) FROM pg_auth_members a WHERE a.member IN (SELECT id FROM ancestors)),
     write_guard_after=(SELECT jsonb_build_object('all_triggers',(SELECT jsonb_agg(to_jsonb(tg) ORDER BY tg.tgname) FROM pg_trigger tg WHERE tg.tgrelid='public.employees'::regclass),'extern_table',(SELECT jsonb_build_object('acl',relacl,'owner',relowner,'rls',relrowsecurity,'force',relforcerowsecurity) FROM pg_class WHERE oid='public.hr_personal_extern'::regclass),'trigger',to_jsonb(t),'function',pg_get_functiondef(p.oid),'acl',p.proacl,'owner',p.proowner) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgrelid='public.employees'::regclass AND t.tgname='trg_employees_zz_pii_write'),
     fost_extern_after=pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure), after_acl=(
@@ -324,7 +360,7 @@ BEGIN
       SELECT ''::text col,x.* FROM pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) x WHERE c.oid='public.employees'::regclass
       UNION ALL SELECT attname::text,x.* FROM pg_attribute CROSS JOIN LATERAL aclexplode(attacl) x WHERE attrelid='public.employees'::regclass AND attnum>0 AND NOT attisdropped
     ) a) WHERE singleton;
-  IF (SELECT policies_before IS DISTINCT FROM (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb) FROM pg_policy p WHERE polrelid='public.employees'::regclass)
+  IF (SELECT policies_before IS DISTINCT FROM (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb) FROM pg_policy p WHERE polrelid='public.employees'::regclass AND polname<>'employees_update_magazie_marimi')
       FROM public.employees_pii_acl_20261117a WHERE singleton) THEN RAISE EXCEPTION 'epi_post: politici schimbate'; END IF;
 END $epi_post_20261117a$;
 NOTIFY pgrst,'reload schema';

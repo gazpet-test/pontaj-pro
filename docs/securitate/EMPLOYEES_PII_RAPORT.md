@@ -1,5 +1,7 @@
 # Employees PII - runda 4, 27.10.2026
 
+Raport istoric r4. Pentru starea curenta vezi [raportul r5](EMPLOYEES_PII_R5_RAPORT.md).
+
 Numai worktree; fara commit/push, credentiale, BD externa sau deploy.
 Commit de baza, citit din ref local: `89b296f2ed9f6f07b25e1c608c97011dcf9c0e60`.
 Nu exista commit nou: interdictia explicita prevaleaza asupra cererii contradictorii din brief.

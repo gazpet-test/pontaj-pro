@@ -1,4 +1,4 @@
-import { employeeFieldRead, withEmployeeMarimi } from './employeesPersonal.js'
+import { employeeMarimiCanWrite, employeeFieldRead, withEmployeeMarimi } from './employeesPersonal.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL MAGAZIE — v1.0 (13.06.2026)
 // Tab MATERIALE (viewer stoc cantitativ, alimentat automat din Achiziții) +
@@ -485,6 +485,7 @@ function IstoricDrawer({ poz, onClose }) {
 function EchipamenteTab() {
   const loadGeneration = useRef(0)
   const [marimiError, setMarimiError] = useState('')
+  const [poateScrieMarimi, setPoateScrieMarimi] = useState(false)
   const [loading, setLoading] = useState(true)
   const [echipamente, setEchipamente] = useState([])
   const [asignari, setAsignari] = useState([])
@@ -502,6 +503,7 @@ function EchipamenteTab() {
   const loadAll = useCallback(async () => {
     const generation = ++loadGeneration.current
     setMarimiError('')
+    setPoateScrieMarimi(false)
     setLoading(true)
     try {
       const [rEch, rAsig, rEmp, rUser, rFurn] = await Promise.all([
@@ -514,6 +516,17 @@ function EchipamenteTab() {
         supabase.from('v_echipament_furnizor').select('*'),
       ])
       if (generation !== loadGeneration.current) return
+      const caller = rUser.data?.user?.id
+      if (rUser.error) throw rUser.error
+      if (caller) {
+        const [rp, ra] = await Promise.all([
+          supabase.from('profiles').select('is_owner,can_access_personal_data').eq('id', caller).single(),
+          supabase.from('user_module_access').select('module,access_level').eq('profile_id', caller).eq('module', 'magazie').maybeSingle(),
+        ])
+        if (generation !== loadGeneration.current) return
+        if (rp.error || ra.error) setMarimiError('Dreptul de scriere a marimilor nu poate fi verificat. Reincarca.')
+        else setPoateScrieMarimi(employeeMarimiCanWrite(rp.data, ra.data))
+      }
       setEchipamente(rEch.data || [])
       setAsignari(rAsig.data || [])
       setEmployees(rEmp.data || [])
@@ -749,7 +762,7 @@ function EchipamenteTab() {
 
       {bulkOpen && <BulkEchipModal busy={busy} onSave={saveBulk} onClose={() => setBulkOpen(false)} />}
       {editModal && <EchipModal initial={editModal} busy={busy} onSave={saveEchip} onClose={() => setEditModal(null)} />}
-      {predaModal && <PredaModal echip={predaModal} employees={employees} busy={busy} onPreda={predaCatre} onClose={() => setPredaModal(null)}
+      {predaModal && <PredaModal poateScrieMarimi={poateScrieMarimi} echip={predaModal} employees={employees} busy={busy} onPreda={predaCatre} onClose={() => setPredaModal(null)}
         onMasuraSalvata={(id, camp, val) => setEmployees(prev => prev.map(e => e.id === id ? { ...e, [camp]: val } : e))} />}
     </>
   )
@@ -877,7 +890,7 @@ const MASURA_DIN_DENUMIRE = (denumire) => {
   return null
 }
 
-function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata }) {
+function PredaModal({ poateScrieMarimi = false, echip, employees, busy, onPreda, onClose, onMasuraSalvata }) {
   const [empSearch, setEmpSearch] = useState('')
   const [empId, setEmpId] = useState('')
   const [cant, setCant] = useState(1)
@@ -908,7 +921,7 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
   const valid = empId && !eroareCantitate && !eroareData
   const salveazaMasura = async (empIdRow, valoare) => {
     // Formularul nu modifica randul original: nu poate fabrica o citire.
-    if (!employeeFieldRead(employees.find(e => e.id === empIdRow), campMasura)) return
+    if (!poateScrieMarimi || !employeeFieldRead(employees.find(e => e.id === empIdRow), campMasura)) return
     setSalvandMasura(empIdRow)
     const { error } = await supabase.from('employees').update({ [campMasura]: valoare || null }).eq('id', empIdRow)
     setSalvandMasura(null)
@@ -937,7 +950,7 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
                   style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:8, background: empId === e.id ? G.green + '22' : 'transparent', borderBottom:`1px solid ${G.border}` }}>
                   <span style={{ flex:1 }}>{empId === e.id ? '✓ ' : ''}{e.name}{e.functie && <span style={{ color:G.dim }}> · {e.functie}</span>}</span>
                   {campMasura && (
-                    <input disabled={!employeeFieldRead(e, campMasura)} value={masuriEditate[e.id] ?? e[campMasura] ?? ''} onClick={ev => ev.stopPropagation()}
+                    <input disabled={!poateScrieMarimi || !employeeFieldRead(e, campMasura)} value={masuriEditate[e.id] ?? e[campMasura] ?? ''} onClick={ev => ev.stopPropagation()}
                       onChange={ev => setMasuriEditate(prev => ({ ...prev, [e.id]: ev.target.value }))}
                       onBlur={ev => salveazaMasura(e.id, ev.target.value)}
                       placeholder="masura" title={employeeFieldRead(e, campMasura) ? "Marime - salvata automat la iesirea din camp" : "marimi indisponibile - fara drept / eroare"}

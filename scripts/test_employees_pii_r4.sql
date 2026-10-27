@@ -32,7 +32,11 @@ BEGIN
   IF new_id<>1 THEN RAISE EXCEPTION 'Scriere publica refuzata'; END IF;
   -- No-op pe un rand fara personal nu necesita privilegiu personal.
   INSERT INTO public.employees(name,department) VALUES('FARA PERSONAL','TEST') RETURNING id INTO new_id;
-  UPDATE public.employees SET cnp=NULL,qr_pin_active=false WHERE id=new_id;
+  BEGIN
+    UPDATE public.employees SET cnp=NULL,qr_pin_active=false WHERE id=new_id;
+    RAISE EXCEPTION 'No-op personal permis';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  UPDATE public.employees SET name='FARA PERSONAL' WHERE id=new_id;
   GET DIAGNOSTICS n=ROW_COUNT;
   IF n<>1 THEN RAISE EXCEPTION 'No-op refuzat'; END IF;
 END $test$;

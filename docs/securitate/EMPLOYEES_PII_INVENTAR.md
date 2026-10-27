@@ -1,5 +1,8 @@
 # EMPLOYEES PII - inventar static
 
+Inventar initial pastrat mai jos. Verdictul curent despre Magazie si payload-uri
+este in [raportul r5](EMPLOYEES_PII_R5_RAPORT.md), inclusiv verificarile la DRY.
+
 Sursa: worktree, fara conexiune BD. Nu reprezinta catalogul live.
 Fiecare aparitie executabila directa/embed este listata; SQL include si DDL/FK/trigger pentru completitudine.
 Coloanele SQL sunt un superset de identificatori din blocul obiectului (pot apartine si altor tabele), nu dovada ca toate sunt returnate. Vezi constatarile revizuite pentru datele personale.

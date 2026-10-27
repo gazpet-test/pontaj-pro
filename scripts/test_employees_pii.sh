@@ -67,13 +67,17 @@ PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$MIG"
 [[ "$(q "SELECT md5(string_agg(to_jsonb(e)::text,',' ORDER BY id)) FROM employees e")" = "$DATA" ]] || fail 'apply changed HR data'
 "${P[@]}" -f "$ROOT/scripts/test_employees_pii.sql" >"$DIR/tests.log" 2>&1 || { cat "$DIR/tests.log"; fail 'SQL rights tests'; }
 "${P[@]}" -f "$ROOT/scripts/test_employees_pii_r4.sql" >"$DIR/r4.log" 2>&1 || { cat "$DIR/r4.log"; fail 'r4 rights tests'; }
+"${P[@]}" -f "$ROOT/scripts/test_employees_pii_r5.sql" >"$DIR/r5.log" 2>&1 || { cat "$DIR/r5.log"; fail 'r5 rights tests'; }
 "${P[@]}" -f "$ROOT/scripts/test_employees_pii_trigger_order.sql" >"$DIR/order.log" 2>&1 || { cat "$DIR/order.log"; fail 'trigger order tests'; }
 grep -q 'PASS employees_pii SQL'  "$DIR/tests.log" || fail 'SQL end marker missing'
 if "${P[@]}" -f "$REV" >"$DIR/rollback-guard.log" 2>&1; then fail 'unguarded rollback accepted'; fi
 grep -q epi_garda "$DIR/rollback-guard.log" || fail 'wrong rollback guard error'
 # Drift ACL direct/PUBLIC/rol intermediar si membership: refuz atomic, configuratia ramane.
-for CASE in public_table public_column intermediate membership extern_policy write_trigger; do
+for CASE in public_table public_column intermediate membership extern_policy write_trigger rpc_body rpc_acl guard_config; do
   case "$CASE" in
+    rpc_body) PREP="CREATE OR REPLACE FUNCTION public.fn_employees_marimi(p_ids bigint[] DEFAULT NULL) RETURNS TABLE(id bigint,marime_incaltaminte text,marime_imbracaminte text) LANGUAGE sql AS 'SELECT 1::bigint,NULL::text,NULL::text'" ;;
+    rpc_acl) PREP='GRANT EXECUTE ON FUNCTION public.fn_employees_personal(bigint[]) TO PUBLIC' ;;
+    guard_config) PREP='ALTER FUNCTION public.fn_employees_marimi_write_guard() SET search_path TO public' ;;
     public_table) PREP='GRANT SELECT ON employees TO PUBLIC' ;;
     public_column) PREP='GRANT SELECT(cnp) ON employees TO PUBLIC' ;;
     intermediate) PREP='GRANT SELECT(cnp) ON employees TO pii_intermediate; GRANT pii_intermediate TO authenticated' ;;
@@ -99,4 +103,5 @@ grep -q epi_rollback_drift "$DIR/function-drift.log" || fail 'wrong function dri
 "${P[@]}" --single-transaction -c 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED' -c "SELECT set_config('gazpet.livrare_migrare','20261117a_employees_pii:' || txid_current(),true)" -f "$MIG" >"$DIR/reapply.log"
 "${P[@]}" -f "$ROOT/scripts/test_employees_pii.sql" >"$DIR/reapply-tests.log" 2>&1 || { cat "$DIR/reapply-tests.log"; fail 'reapply SQL tests'; }
 "${P[@]}" -f "$ROOT/scripts/test_employees_pii_r4.sql" >"$DIR/reapply-r4.log" 2>&1 || { cat "$DIR/reapply-r4.log"; fail 'reapply r4 tests'; }
+"${P[@]}" -f "$ROOT/scripts/test_employees_pii_r5.sql" >"$DIR/reapply-r5.log" 2>&1 || { cat "$DIR/reapply-r5.log"; fail 'reapply r5 tests'; }
 echo 'PASS: PG17 NOSUPERUSER, guards, preflight, SELECT/RPC/DML/RETURNING, service_role, exact ACL rollback, reapply'

@@ -29,9 +29,18 @@ BEGIN
      saved.write_guard_after IS DISTINCT FROM (SELECT jsonb_build_object('all_triggers',(SELECT jsonb_agg(to_jsonb(tg) ORDER BY tg.tgname) FROM pg_trigger tg WHERE tg.tgrelid='public.employees'::regclass),'extern_table',(SELECT jsonb_build_object('acl',relacl,'owner',relowner,'rls',relrowsecurity,'force',relforcerowsecurity) FROM pg_class WHERE oid='public.hr_personal_extern'::regclass),'trigger',to_jsonb(t),'function',pg_get_functiondef(p.oid),'acl',p.proacl,'owner',p.proowner) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgrelid='public.employees'::regclass AND t.tgname='trg_employees_zz_pii_write') THEN
     RAISE EXCEPTION 'epi_rollback_drift: politici/roluri/trigger schimbate';
   END IF;
-  IF saved.policies_before IS DISTINCT FROM (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb)
+  IF saved.objects_after IS DISTINCT FROM (SELECT jsonb_agg(jsonb_build_object('signature',sig,'definition',pg_get_functiondef(p.oid),'catalog',to_jsonb(p)) ORDER BY sig)
+      FROM unnest(ARRAY['public.fn_employees_personal(bigint[])','public.fn_employees_marimi(bigint[])','public.fn_employees_pii_write_guard()','public.fn_employees_marimi_write_guard()']) sig
+      LEFT JOIN pg_proc p ON p.oid=to_regprocedure(sig)) THEN
+    RAISE EXCEPTION 'epi_rollback_drift: functii noi schimbate';
+  END IF;
+  IF saved.policies_after IS DISTINCT FROM (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb)
     FROM pg_policy p WHERE polrelid='public.employees'::regclass) THEN
     RAISE EXCEPTION 'epi_rollback_drift: politici employees schimbate';
+  END IF;
+  DROP POLICY employees_update_magazie_marimi ON public.employees;
+  IF saved.policies_before IS DISTINCT FROM (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb) FROM pg_policy p WHERE polrelid='public.employees'::regclass) THEN
+    RAISE EXCEPTION 'epi_rollback: restaurare politici employees inexacta';
   END IF;
   -- Restauram exact expresiile din snapshot protejat; numele/rolurile nu au fost schimbate.
   FOR a IN SELECT * FROM jsonb_to_recordset(saved.extern_policies_before) AS x(name text,qual text,"check" text) LOOP
@@ -67,6 +76,10 @@ BEGIN
   IF actual IS DISTINCT FROM saved.before_acl THEN RAISE EXCEPTION 'epi_rollback: restaurare ACL inexacta'; END IF;
 END $epi_rollback_20261117a$;
 DROP TRIGGER trg_employees_zz_pii_write ON public.employees;
+DROP TRIGGER trg_employees_zz_pii_write_personal ON public.employees;
+DROP TRIGGER trg_employees_zz_pii_write_marimi ON public.employees;
+DROP TRIGGER trg_employees_zz_pii_write_sizes_final ON public.employees;
+DROP FUNCTION public.fn_employees_marimi_write_guard();
 DROP FUNCTION public.fn_employees_pii_write_guard();
 DROP FUNCTION public.fn_employees_marimi(bigint[]);
 DROP FUNCTION public.fn_employees_personal(bigint[]);

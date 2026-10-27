@@ -127,9 +127,12 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000005',true);
   SELECT cnp INTO value FROM public.fn_employees_personal(ARRAY[1]::bigint[]);
   IF value IS DISTINCT FROM 'FICTIV' THEN RAISE EXCEPTION 'HR doar citire refuzat'; END IF;
-  UPDATE public.employees SET cnp='NU' WHERE id=1;
-  GET DIAGNOSTICS n=ROW_COUNT;
-  IF n<>0 THEN RAISE EXCEPTION 'HR doar citire a scris'; END IF;
+  BEGIN
+    UPDATE public.employees SET cnp='NU' WHERE id=1;
+    RAISE EXCEPTION 'HR doar citire a scris';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM<>'Acces refuzat la modificarea datelor personale ale angajatului' THEN RAISE; END IF;
+  END;
   PERFORM set_config('request.jwt.claim.sub','',true);
   BEGIN
     PERFORM * FROM public.fn_employees_personal(NULL);

@@ -242,7 +242,7 @@ test('Magazie: RPC esuat -> input dezactivat; blur si salvare directa nu scriu n
   const m = await setup({ rpcError: new Error('refuz') })
   const { data: employees } = await m.withEmployeeMarimi(Promise.resolve({ data: [{ id: 1 }] }), m.notify)
   const campMasura = 'marime_incaltaminte'
-  assert.equal(disabledFor(magazie, 'value={masuriEditate[e.id]', ['employeeFieldRead','e','campMasura'], [m.employeeFieldRead, employees[0], campMasura]), true)
+  assert.equal(disabledFor(magazie, 'value={masuriEditate[e.id]', ['employeeFieldRead','e','campMasura','poateScrieMarimi'], [m.employeeFieldRead, employees[0], campMasura,true]), true)
   assert.match(magazie, /marimi indisponibile - fara drept \/ eroare/)
   const callback = magazie.match(/onChange=\{ev => setMasuriEditate\(([^\n]+)\)\}/)[1]
   const draft = new Function('ev', 'e', `return ${callback}`)({ target: { value: '44' } }, employees[0])({})
@@ -252,14 +252,14 @@ test('Magazie: RPC esuat -> input dezactivat; blur si salvare directa nu scriu n
   const writes = []
   const supabase = { from() { return { update(value) { writes.push(value); return { eq: async () => ({}) } } } } }
   const saved = []
-  const save = new asyncFunction('employees','campMasura','employeeFieldRead','setSalvandMasura','supabase','onMasuraSalvata','empIdRow','valoare',saveBody)
-  for (const value of ['', draft[1]]) await save(employees,campMasura,m.employeeFieldRead,()=>{},supabase,(...args)=>saved.push(args),1,value)
+  const save = new asyncFunction('poateScrieMarimi','employees','campMasura','employeeFieldRead','setSalvandMasura','supabase','onMasuraSalvata','empIdRow','valoare',saveBody)
+  for (const value of ['', draft[1]]) await save(true,employees,campMasura,m.employeeFieldRead,()=>{},supabase,(...args)=>saved.push(args),1,value)
   assert.deepEqual(writes, [])
   assert.deepEqual(saved, [])
   // Null citit este legitim: editare si stergere explicita permise.
-  for (const value of ['43','']) await save([{ id: 1, [campMasura]: null }],campMasura,m.employeeFieldRead,()=>{},supabase,(...args)=>saved.push(args),1,value)
+  for (const value of ['43','']) await save(true,[{ id: 1, [campMasura]: null }],campMasura,m.employeeFieldRead,()=>{},supabase,(...args)=>saved.push(args),1,value)
   assert.deepEqual(writes, [{ marime_incaltaminte: '43' }, { marime_incaltaminte: null }])
-  assert.equal(disabledFor(magazie, 'value={masuriEditate[e.id]', ['employeeFieldRead','e','campMasura'], [m.employeeFieldRead, { [campMasura]: null }, campMasura]), false)
+  assert.equal(disabledFor(magazie, 'value={masuriEditate[e.id]', ['employeeFieldRead','e','campMasura','poateScrieMarimi'], [m.employeeFieldRead, { [campMasura]: null }, campMasura,true]), false)
 })
 
 test('Admin/Salarii: disabled se bazeaza pe sursa, nu pe valoarea tastata; null citit editabil', async () => {
