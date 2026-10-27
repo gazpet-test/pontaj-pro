@@ -113,6 +113,7 @@ function RuleazaCdx {
   $rez=Ruleaza (Join-Path $runtime 'node.exe') $argv $prompt $target $T.timeout (GetCdxEnvironment $target $runtime $cdxHomePath) $true
   [IO.File]::WriteAllText((Join-Path $OUT_ROOT ($RUNID+'.events.jsonl')),$rez.out,(New-Object Text.UTF8Encoding($false)))
   $report.codex_exit=$rez.exit;$report.timeout=$rez.timeout
+  if($rez.timeout -and -not $rez.treeStopped){throw (MotivOprire $rez $T.timeout)}
   $jobIdle=AsteaptaJobGol $JOB_GOL_ASTEPTARE
   if($sensitiveBefore){
    $sensitiveChecked=$true;$report.sensitive_files.job_idle=$jobIdle

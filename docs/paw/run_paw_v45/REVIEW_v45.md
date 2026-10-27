@@ -138,3 +138,54 @@ fara push si sensitive_files.status=unchanged (16 cai). Pornirile legacy se
 reactiveaza abia dupa succes, dupa lista initiala.
 Smoke-ul runbook-ului foloseste lansatorul real si produce commit local; nu a
 fost executat aici, fiind in afara autorizarii acestei sesiuni.
+
+## Runda 3 - P1 descendenti dupa iesirea parintelui (27.10.2026)
+
+Baza recopiata din paw45_base inainte de editare. Scrieri numai in acest
+pachet din worktree; fara Git/commit/push, instalare, productie sau secrete.
+
+- run_paw.ps1: Ruleaza cheama LeagaCopiiiDeLansator pentru TOATE canalele
+  (jak, ollie, cop, gem, cdx), inainte de Start. Refoloseste acelasi Job Object
+  KILL_ON_JOB_CLOSE. Mostenirea din lansator elimina inclusiv fereastra dintre
+  Start si o eventuala atribuire ulterioara a copilului.
+- Dupa iesirea parintelui, pipe-urile au gratie de maximum 300 ms, in limita
+  termenului initial. Pipe ramas deschis -> parent_exited_pipes_open; proces
+  ramas activ pana la termen -> timeout. Ambele opresc membrii job-ului.
+- StopChildren enumera membrii job-ului prin QueryInformationJobObject,
+  deschide handle-uri, verifica IsProcessInJob (protectie la reutilizarea PID),
+  termina membrii si reciteste pana la ActiveProcesses=1, maximum 2 secunde.
+  Job-ul existent include lansatorul: TerminateJobObject l-ar omori inainte
+  sa scrie markerul. De aceea sunt terminati toti ceilalti membri, inclusiv
+  descendentii al caror parinte a iesit; confirmarea vine din job, nu din PID-ul
+  parintelui, taskkill sau CIM. KILL_ON_JOB_CLOSE ramane activ la iesire/crash.
+- Inchidere explicita StandardInput.BaseStream si stdout/stderr, inclusiv
+  in finally; asteptare limitata a thread-ului stdin. stdin_thread_pending
+  face vizibil un thread care nu s-a deblocat. Nu cerem Result pe task blocat.
+- "arbore oprit" apare numai cu confirmarea opririi. Lipsa confirmarii produce
+  tree_kill_failed in PAW_EROARE, fara mesajul de succes. Poarta de lock nu
+  mascheaza acest motiv. Verificarea cop/stare si cdx.ps1 propaga acelasi motiv
+  chiar daca rezultatul nu ajunge la tratarea comuna de final.
+- teste/test_run_paw.py: cinci teste noi pe COPII IZOLATE ale lansatorului:
+  jak/ollie cu parinte iesit imediat si descendent cu pipe-uri mostenite,
+  fiecare si cu stdin mare necitit; confirmare negativa injectata dupa oprirea
+  reala. Verifica termenul, PID-ul descendentului, stdout, markerul final si
+  absenta stdin_thread_pending. Injectia verifica raportarea confirmarii
+  negative, nu pretinde ca simuleaza refuzul kernelului de a termina un proces.
+  Probele AST existente incarca si clasa Job reala si functiile auxiliare.
+
+Validare Windows PowerShell 5.1 / Python 3.13 existent, fara instalari:
+
+- `python -m unittest -v teste.test_run_paw`: 47 teste, 84.752 s;
+  30 trecute, 17 esuate, zero skip. Toate cele 5 teste noi trec. Cele 17
+  esecuri existente intalnesc refuzul CIM: "Access to a CIM resource was not
+  available to the client", inainte de scenariul dorit. Nu declar suita verde.
+  Log: teste/rezultate_runda3.txt.
+- Grupul tintit rerulat dupa ultimele ajustari: 11/11 in 12.308 s, inclusiv
+  toate cazurile noi, arbore la timeout, stdin 8 MiB, UTF-8/BOM si transfer
+  mare pe ambele iesiri. Log: teste/rezultate_runda3_tintite.txt.
+- SHA256.json: recalculate toate cele 10 intrari pentru octetii finali.
+
+Nu am rulat lansatorul real, canalele reale sau certificarea cdx. Nu am rulat
+harness-urile cdx care fac Git/commit in fixture-uri, conform interdictiei de
+Git a sesiunii. Scenariile gem/cop dependente de CIM trebuie rerulate pe server;
+rezultatul anterior 42/42 raportat in brief nu valideaza aceasta modificare.

@@ -170,6 +170,25 @@ class Lansator(unittest.TestCase):
         cls.ps1 = os.path.join(cls.bin, "run_paw.ps1")
         with open(cls.ps1, "w", encoding="ascii", newline="") as f:
             f.write(src)
+        cls.r3_child = cls.scrie(cls.bin, "r3_child.py", r'''import os, sys, subprocess
+n = subprocess.Popen([sys.executable, '-c',
+    "import sys,time; print('nepot_stdout', flush=True); time.sleep(120)"],
+    stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, close_fds=False)
+open('r3_pid.txt', 'w').write(str(n.pid))
+''')
+        r3 = src.replace('$REPO = "C:\\Users\\Gazpet-Ai\\gazpet-erp"', '$REPO = "' + cls.data + '"')
+        for channel in ('jak', 'ollie'):
+            r3 = re.sub(r'(' + channel + r'\s*= @\{ exe = ")[^"]+',
+                        lambda m: m[1] + sys.executable, r3, count=1)
+        r3 = r3.replace('$rez = Ruleaza $T.exe $argv $prompt',
+                        '$rez = Ruleaza $T.exe @("' + cls.r3_child + '") $prompt')
+        r3 = r3.replace('$rez = Ruleaza $T.exe @("run", $m) $text',
+                        '$rez = Ruleaza $T.exe @("' + cls.r3_child + '") $text')
+        cls.ps1_r3 = cls.scrie(cls.bin, 'run_paw_r3.ps1', r3)
+        # Confirmare negativa DUPA oprirea reala: verificam raportarea, fara scurgeri.
+        cls.ps1_r3_fail = cls.scrie(cls.bin, 'run_paw_r3_fail.ps1',
+            r3.replace('$oprit = [PawV43.Job]::StopChildren(2000)',
+                       '$oprit = [PawV43.Job]::StopChildren(2000); $oprit = $false'))
         cls.stub = os.path.join(cls.bin, "gemini_pw.py")
         with open(cls.stub, "w", encoding="ascii") as f:
             f.write(STUB.replace("@FAKE_CLI@", cls.fake_cli))
@@ -755,6 +774,59 @@ class Lansator(unittest.TestCase):
     def test_cop_copii_ramasi_fara_succes(self):
         self.copii_ramasi("cop", "6abc000f", "lock_cop_6abc000f")
 
+    def r3_parinte_iesit(self, canal, mare=False, confirmare=True):
+        pidfile = os.path.join(self.data, 'r3_pid.txt')
+        if os.path.exists(pidfile): os.unlink(pidfile)
+        # jak limiteaza promptul la 200k; 180k depaseste capacitatea pipe-ului.
+        n = 180000 if canal == 'jak' else 8 * 1024 * 1024
+        brief = self.scrie(os.path.join(self.data, 'brief'), 'r3.md',
+                           'x' * n if mare else 'intrebare')
+        o = self.out()
+        t0 = time.monotonic()
+        try:
+            rc, linie, so = self.run_paw(canal, brief, o,
+                ps1=self.ps1_r3 if confirmare else self.ps1_r3_fail)
+            self.assertLess(time.monotonic() - t0, 15)
+            self.assertEqual(rc, 2, so)
+            with open(pidfile) as f: pid = int(f.read())
+            self.assertFalse(viu(pid), 'descendent ramas activ')
+            with open(o, encoding='utf-8-sig') as f: txt = f.read()
+            self.assertEqual(txt.strip().splitlines()[-1], linie)
+            self.assertIn('parent_exited_pipes_open', linie)
+            if confirmare:
+                self.assertIn('arbore oprit', linie)
+                self.assertNotIn('tree_kill_failed', txt)
+                self.assertIn('nepot_stdout', txt)
+                self.assertNotIn('stdin_thread_pending', txt)
+            else:
+                self.assertIn('tree_kill_failed', linie)
+                self.assertNotIn('arbore oprit', txt + so)
+        finally:
+            if os.path.exists(pidfile):
+                with open(pidfile) as f: pid = int(f.read())
+                if viu(pid):
+                    import ctypes
+                    k = ctypes.windll.kernel32
+                    h = k.OpenProcess(1, False, pid)
+                    if h:
+                        try: k.TerminateProcess(h, 1)
+                        finally: k.CloseHandle(h)
+
+    def test_r3_jak_parinte_iesit_pipe_mostenite(self):
+        self.r3_parinte_iesit('jak')
+
+    def test_r3_jak_stdin_mare_necitit(self):
+        self.r3_parinte_iesit('jak', mare=True)
+
+    def test_r3_ollie_parinte_iesit_pipe_mostenite(self):
+        self.r3_parinte_iesit('ollie')
+
+    def test_r3_ollie_stdin_mare_necitit(self):
+        self.r3_parinte_iesit('ollie', mare=True)
+
+    def test_r3_confirmare_esuata_fara_arbore_oprit(self):
+        self.r3_parinte_iesit('jak', confirmare=False)
+
     # --- dupa lock: doar stub-ul ruleaza ---
     def test_gem_cod_eroare_devine_motiv_si_lock_eliberat(self):
         rc, linie, so = self.run_paw("gem", self.brief_ok, self.out())
@@ -804,7 +876,11 @@ $ErrorActionPreference = 'Stop'
 $tokens = $null; $erori = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($sursa, [ref]$tokens, [ref]$erori)
 if ($erori.Count) { throw 'Eroare parsare' }
-foreach ($nume in @('Arg', 'Ruleaza')) {
+$src = [IO.File]::ReadAllText($sursa)
+$jobStart = $src.IndexOf('Add-Type -Namespace PawV43')
+$jobEnd = $src.IndexOf('function SecPrivat()', $jobStart)
+Invoke-Expression $src.Substring($jobStart, $jobEnd - $jobStart)
+foreach ($nume in @('Arg', 'Ruleaza', 'LeagaCopiiiDeLansator', 'InchidePipe')) {
   $fn = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $nume }, $true)
   Invoke-Expression $fn.Extent.Text
 }

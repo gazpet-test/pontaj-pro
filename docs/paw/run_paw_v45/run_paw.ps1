@@ -121,7 +121,7 @@ function LuaLock([string]$cale) {
 }
 function LeagaCopiiiDeLansator() {
   # r3 (Jakarinos r2 P1): Job Object cu JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, in care intra INSUSI lansatorul, INAINTE de orice copil
-  # gem/cop: copiii porniti dupa aceea sunt automat in job (fara fereastra intre Start si Assign). Handle-ul job-ului il tine doar
+  # Toate canalele: copiii porniti dupa aceea sunt automat in job (fara fereastra intre Start si Assign). Handle-ul job-ului il tine doar
   # lansatorul (nemostenibil); cand lansatorul moare (sau iese), sistemul inchide handle-ul si omoara tot arborele.
   [void][PawV43.Job]::LeagaDeLansator()
 }
@@ -178,7 +178,7 @@ function AsteaptaJobGol([int]$sec) {
     $a = [PawV43.Job]::Active()
     $script:JobActiv = $a
     if ($a -eq -2) { return $false }                                  # interogarea job-ului a esuat -> job_interogare_esuata
-    if ($a -eq -1) { return $true }                                   # fara job (jak/ollie)
+    if ($a -eq -1) { return $true }                                   # fara job (inainte de prima rulare)
     if ($a -eq 1) { return $true }                                    # doar lansatorul
     if ($a -lt 1) { $script:JobActiv = -2; return $false }            # valoare imposibila (0 sau alt negativ) = interogare nevalida
     if (((Get-Date) - $t).TotalSeconds -ge $sec) { return $false }
@@ -212,6 +212,21 @@ function EliberezLock() {
   if ($script:LockFs) { try { $script:LockFs.Close() } catch {}; $script:LockFs = $null }
 }
 function Arg([string]$a) { if ($a -match '["\r\n]') { throw "argument interzis" }; if ($a -match '\s' -or $a -eq "") { return '"' + $a + '"' } else { return $a } }
+function InchidePipe($p, $si) {
+  if ($si) { try { $si.Dispose() } catch {} }
+  if ($p) {
+    try { $p.StandardInput.BaseStream.Dispose() } catch {}
+    try { $p.StandardOutput.Dispose() } catch {}
+    try { $p.StandardError.Dispose() } catch {}
+  }
+}
+function MotivOprire($rez, [int]$sec) {
+  $motiv = $rez.stopReason
+  if (-not $motiv) { $motiv = 'timeout ' + $sec + 's' }
+  if ($rez.treeStopped) { return ($motiv + ' (arbore oprit)') }
+  if ($motiv -notmatch 'tree_kill_failed') { $motiv += ' tree_kill_failed' }
+  return $motiv
+}
 function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd, [int]$timeout, [hashtable]$env, [bool]$cleanEnvironment = $false, [bool]$trustedArguments = $false) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $exe
@@ -244,7 +259,8 @@ public static class PawStdinV45 {
 }
 "@
   }
-  $p = $null; $si = $null; $scriere = $null
+  LeagaCopiiiDeLansator   # Toate canalele, inainte de Start: fara cursa de mostenire a job-ului.
+  $p = $null; $si = $null; $scriere = $null; $so = $null; $se = $null
   $ceas = [Diagnostics.Stopwatch]::StartNew()
   $limita = [long]$timeout * 1000
   try {
@@ -261,48 +277,39 @@ public static class PawStdinV45 {
     $si = $p.StandardInput.BaseStream
     $b8 = (New-Object Text.UTF8Encoding($false)).GetBytes([string]$stdinText)
     $scriere = [PawStdinV45]::Write($si, $b8)
-    # Acelasi termen pentru proces, scriere si citiri (inclusiv pipe-uri mostenite).
+    # Dupa iesirea parintelui acordam pipe-urilor cel mult 300 ms pentru EOF.
     $gata = $p.WaitForExit([int][Math]::Max(0, $limita - $ceas.ElapsedMilliseconds))
-    foreach ($task in @($scriere, $so, $se)) {
-      if (-not $gata) { break }
-      # Eroarea de pipe nu trebuie sa ascunda timeout-ul procesului.
-      while (-not $task.IsCompleted -and $ceas.ElapsedMilliseconds -lt $limita) { Start-Sleep -Milliseconds 10 }
-      if (-not $task.IsCompleted) { $gata = $false }
+    $motivOprire = 'timeout'
+    if ($gata) {
+      $gratie = [Math]::Min($limita, $ceas.ElapsedMilliseconds + 300)
+      while ((-not $scriere.IsCompleted -or -not $so.IsCompleted -or -not $se.IsCompleted) -and $ceas.ElapsedMilliseconds -lt $gratie) { Start-Sleep -Milliseconds 10 }
+      $gata = $scriere.IsCompleted -and $so.IsCompleted -and $se.IsCompleted
+      if (-not $gata) { $motivOprire = 'parent_exited_pipes_open' }
     }
     if (-not $gata) {
-      $killEsec = $false
-      try {
-        & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
-        $killEsec = $LASTEXITCODE -ne 0
-      } catch { $killEsec = $true }
-      finally {
-        # Daca taskkill este refuzat, cel putin deblocam pipe-ul catre copil.
-        if (-not $p.HasExited) { $p.Kill() }
-      }
-      # Nu cerem Result pe un task ramas blocat, nici dupa kill.
+      $oprit = [PawV43.Job]::StopChildren(2000)
+      # Lasam citirile sa colecteze octetii aflati deja in pipe, fara Result blocant.
       $curatare = [Diagnostics.Stopwatch]::StartNew()
-      while ((-not $scriere.IsCompleted -or -not $so.IsCompleted -or -not $se.IsCompleted) -and $curatare.ElapsedMilliseconds -lt 2000) { Start-Sleep -Milliseconds 10 }
+      while ((-not $scriere.IsCompleted -or -not $so.IsCompleted -or -not $se.IsCompleted) -and $curatare.ElapsedMilliseconds -lt 500) { Start-Sleep -Milliseconds 10 }
       $outTimeout = ''; $errTimeout = ''
       if ($so.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $outTimeout = $so.Result }
       if ($se.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $errTimeout = $se.Result }
-      if ($killEsec) { $errTimeout = 'tree_kill_failed ' + $errTimeout }
-      return @{ timeout = $true; exit = -1; out = $outTimeout; err = $errTimeout }
+      # Dispose Process nu inchide pipe-urile pe .NET Framework.
+      InchidePipe $p $si
+      if ($scriere) { try { [void]$scriere.Wait(1000) } catch {} }
+      if (-not $oprit) { $motivOprire += ' tree_kill_failed' }
+      if (-not $scriere.IsCompleted) { $motivOprire += ' stdin_thread_pending' }
+      return @{ timeout = $true; exit = -1; out = $outTimeout; err = $errTimeout; treeStopped = $oprit; stopReason = $motivOprire }
     }
     [void]$scriere.GetAwaiter().GetResult()
     $errCurat = [regex]::Replace($se.Result, ('\x1b\[[0-9;?]*[A-Za-z]|[' + [char]0x2800 + '-' + [char]0x28FF + ']'), "")
     return @{ timeout = $false; exit = $p.ExitCode; out = $so.Result; err = $errCurat.Trim() }
   } catch {
-    if ($p -and -not $p.HasExited) {
-      try { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null } catch {}
-      finally { if (-not $p.HasExited) { $p.Kill() } }
-    }
+    if ($p -and -not [PawV43.Job]::StopChildren(2000)) { throw ('tree_kill_failed: ' + $_.Exception.Message) }
     throw
   } finally {
-    # Thread-ul inchide stdin inclusiv la exceptie. Daca nu a pornit, inchidem aici.
-    if ($p -and -not $scriere) {
-      if (-not $si) { $si = $p.StandardInput.BaseStream }
-      $si.Dispose()
-    }
+    InchidePipe $p $si
+    if ($scriere) { try { [void]$scriere.Wait(1000) } catch {} }
     if ($p) { $p.Dispose() }
   }
 }
@@ -359,6 +366,49 @@ public static int Active() {   // procese active in job (lansatorul inclus); -1 
   ACC a = new ACC();
   if (!QueryInformationJobObject(job, 1, ref a, Marshal.SizeOf(typeof(ACC)), IntPtr.Zero)) return -2;
   return (int)a.active;
+}
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool QueryInformationJobObject(IntPtr job, int cls, IntPtr info, int len, IntPtr ret);
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool inside);
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool TerminateProcess(IntPtr process, uint code);
+[DllImport("kernel32.dll")]
+static extern bool CloseHandle(IntPtr handle);
+public static bool StopChildren(int milliseconds) {
+  // Job-ul include lansatorul. Oprim toti ceilalti membri si confirmam Active=1.
+  // Lista job-ului ramane autoritatea chiar daca parintele a iesit. Fara CIM/taskkill.
+  var clock = System.Diagnostics.Stopwatch.StartNew();
+  do {
+    int active = Active();
+    if (active == 1) return true;
+    if (active < 1) return false;
+    int size = 8 + (active + 64) * IntPtr.Size;
+    IntPtr buffer = Marshal.AllocHGlobal(size);
+    try {
+      if (!QueryInformationJobObject(job, 3, buffer, size, IntPtr.Zero)) {
+        if (Marshal.GetLastWin32Error() != 234) return false;
+        continue; // lista a crescut; recitim, in acelasi termen
+      }
+      int count = Marshal.ReadInt32(buffer, 4);
+      uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+      for (int i = 0; i < count; i++) {
+        uint pid = unchecked((uint)Marshal.ReadIntPtr(buffer, 8 + i * IntPtr.Size).ToInt64());
+        if (pid == self) continue;
+        IntPtr process = OpenProcess(0x1001, false, pid); // query limited + terminate
+        if (process == IntPtr.Zero) continue; // poate a iesit; confirmarea finala decide
+        try {
+          bool inside;
+          // PID reutilizat: nu atingem niciodata un proces din afara job-ului nostru.
+          if (IsProcessInJob(process, job, out inside) && inside) TerminateProcess(process, 1);
+        } finally { CloseHandle(process); }
+      }
+    } finally { Marshal.FreeHGlobal(buffer); }
+    System.Threading.Thread.Sleep(10);
+  } while (clock.ElapsedMilliseconds < milliseconds);
+  return Active() == 1;
 }
 public static IntPtr LeagaDeLansator() {
   if (job != IntPtr.Zero) return job;
@@ -585,6 +635,7 @@ try {
       AsteaptaFaraDriverRamas   # r4: inainte de orice contact CDP (stare/trimite)
       $envc = @{ CGPT_TINTA = $Model }
       $st = Ruleaza $T.exe @($CGPT, "stare") "" $DATA 60 $envc
+      if ($st.timeout) { throw (MotivOprire $st 60) }
       $stareTxt = $st.out
       $stareFis = "C:\Users\Public\cgpt_pw_out_" + $Model + ".txt"
       if ((Test-Path -LiteralPath $stareFis) -and ((Get-Item -LiteralPath $stareFis).LastWriteTime -gt $T0)) { $stareTxt += (Get-Content -LiteralPath $stareFis -Raw -Encoding UTF8) }
@@ -610,6 +661,9 @@ try {
       }
     }
   }
+  if ($rez -and $rez.timeout -and -not $rez.treeStopped) {
+    EroareFaraEliberare (MotivOprire $rez $T.timeout)
+  }
   # r5 (Jakarinos r4 P2-1): lock liber DOAR cand in job a ramas doar lansatorul; altfel PAW_EROARE copii_ramasi, fara PAW_GATA
   if (-not (AsteaptaJobGol $JOB_GOL_ASTEPTARE)) {
     try { if ($rez) { Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8; if ($rez.err) { Add-Content -LiteralPath $script:OutFull -Value ("--- stderr ---`n" + $rez.err) -Encoding UTF8 } } } catch {}
@@ -620,7 +674,7 @@ try {
   if ($script:ImgDirCreat) { StergeDirImg $script:ImgDirCreat; $script:ImgDirCreat = $null }
   Add-Content -LiteralPath $script:OutFull -Value $rez.out -Encoding UTF8
   if ($rez.err) { Add-Content -LiteralPath $script:OutFull -Value ("--- stderr ---`n" + $rez.err) -Encoding UTF8 }
-  if ($rez.timeout) { Eroare ("timeout " + $T.timeout + "s (arbore oprit)") }
+  if ($rez.timeout) { Eroare (MotivOprire $rez $T.timeout) }
   # v4.3: la gem, codul de eroare al gemini_pw.py devine motivul markerului (ex. PAW_EROARE <id> fara_tab_gemini)
   if ($Cine -eq "gem" -and $script:GemCod) { Eroare $script:GemCod }
   # v4.2 (Jakarinos P2): o rulare cu imagini care iese nenul (ex. decodare esuata la consumator) nu se raporteaza ca reusita
