@@ -52,3 +52,50 @@
   - rularea pe **PG17** (în WSL nu există PG17; cere repo PGDG pe server, o schimbare de sistem care cere „da”);
   - review Copilot;
   - E1-1b (provisioning, `handle_new_user`, aprobarea ERP, revocarea).
+
+## E1-1b — 27.10.2026
+1. Citite întâi lecțiile L01–L25; executat Pasul 0. Scrieri exclusiv în worktree, fără Git/BD/credențiale/deploy.
+2. Migrare nouă `supabase/migrations/20261119a_portal_teren_provisioning.sql` și revenire omonimă în `supabase/revenire/`; fișierele migrării 18a nemodificate.
+3. Rezervări cu UUID de intenție, hash de payload, unicitate pe angajat deschis/email; RLS fără granturi client și jurnal append-only.
+4. Pregătire owner/modul exact `hr`; lock advisory email → angajat → rezervare; email prenume.nume, toate prenumele, fără diacritice, sufix .2/.3.
+5. Retry cu aceeași cheie întoarce aceeași rezervare și UUID Auth/stare; alt payload este refuzat; fără rezervare nouă după timeout.
+6. `handle_new_user`: corpul LIVE ancorat literal, owner/ACL/config verificate și manifest SHA256; ramură teren directă, fără fereastră manager și fără notificări.
+7. Ramura obișnuită păstrează exact codul LIVE, cu rol inițial `in_asteptare` și fără clasificare; aprobarea ERP este numai owner și jurnalizată.
+8. Constrângerea LIVE `profiles_role_chk` este extinsă pentru cele două roluri și restaurată exact la revenire; lista albă ERP rămâne cea LIVE.
+9. Finalizare unică, service_role real, CAS și postcondiții inclusiv zero module; apelul repetat validează aceeași identitate și este idempotent.
+10. Plecarea revocă în aceeași tranzacție; reactivarea nu reactivează contul. `creat_la` legacy rămâne NULL, fără inventarea unei date.
+11. **Diferență față de r6:** brief-ul cere azi/ieri → revocat; predicatul comun folosește `termination_date > azi Europe/Bucharest`. Inclusiv hook-ul îl folosește; definiția veche a `fn_teren_eligibil` este manifestată și restaurată.
+12. Poartă separată `fn_portal_porti_lipsa_1b`, fără funcții noi pentru teren; amprentează funcții public + auth.uid/jwt, ACL, coloane, RLS, politici și triggere. Conturile pending rămân alertă de inventar.
+13. Revenire: lock înaintea comparației tuturor rândurilor/istoricului și DDL; refuz dacă s-au schimbat; restaurare exactă definiții/owner/ACL/config. Snapshot-urile datelor sunt hash-uri; Auth nu copiază parole.
+14. `supabase/tests/portal_e1_1b.test.sql`: autorizare reală, coliziuni, metadate greșite, hook pending/aprobat, CAS/idempotent, plecare azi/ieri, nereactivare, angajat plecat între rezervare și creare, audit/callee drift.
+15. Harness extins: 18a → 19a, regresii 18a, două sesiuni cu FIFO/barieră și wait PID, refuz rollback cu date/RLS noi, rollback/reapply 19a, restaurare 19a apoi 18a și comparație pg_dump.
+16. **Rulate static:** `test_static_1b.py` 6/6 + `test_static.py` 3/3; ambele artefacte noi acceptate de validator; `bash -n` pentru harness, wrapper și concurență: trecute.
+17. **Nerulate:** PostgreSQL 16/17, concurența SQL, apply/revenire/reapply, control_0e și Supabase Auth real. Operatorul rulează `PORTAL_PG_MAJOR=16 bash scripts/portal/harness_wsl.sh <slot>`; PG17 și GoTrue real rămân necesare pentru validare finală.
+
+### E1-1b — L01–L25: dovezi și limite
+Referințe: M = `supabase/migrations/20261119a_portal_teren_provisioning.sql`; R = `supabase/revenire/20261119a_portal_teren_provisioning_ROLLBACK.sql`; T = `supabase/tests/portal_e1_1b.test.sql`. Toate dovezile SQL sunt **scrise, nerulate**.
+- L01: M `fn_portal_cont_pregateste`, `fn_portal_cont_finalizeaza`, `fn_cont_aproba_erp`: lock înainte de verificările țintei; T refuz rezervare dublă; `scripts/portal/concurrency_1b.sh` două sesiuni reale.
+- L02: M `fn_portal_cont_finalizeaza` actualizează rezervare + cont și jurnal în aceeași tranzacție, CAS cu verificarea fiecărui rezultat și postcondiții; T „Partial finalize”.
+- L03: M finalizare CAS pe UUID, starea citită și `auth_user_id`, fără suprascrierea unei rezervări schimbate; T finalizare dublă și refuz după revocare.
+- L04: M cheie UUID PK + payload_sha256(employee_id, auth.uid), UNIQUE angajat deschis/email; T aceeași cheie repetată, cheie cu alt angajat, altă cheie pe același angajat.
+- L05: M pregătirea repetată întoarce starea și auth_user_id persistente; T reconciliere după finalizare; niciun fallback sau cleanup automat după timeout.
+- L06: ordinea lock-urilor este comentată în fiecare RPC/trigger; namespace email înainte de angajat, apoi rezervare → clasificare → cont → profil; FK-urile către angajat/rezervare respectă ordinea. R blochează înainte de verificare.
+- L07: M tabele cu RLS și fără granturi client, proveniență/jurnal scrise server-side, trigger employees; T SELECT direct refuzat, INSERT Auth ca supabase_auth_admin, privilegii teren verificate.
+- L08: M RPC-urile client folosesc numai auth.uid() și refuză NULL; excepția finalizării verifică rolul SQL real service_role; `test_static_1b.py::test_client_executable_functions_have_no_identity_writer_or_dynamic_sql` trecut.
+- L09: M pregătire owner sau intrare pe cheia exactă hr; aprobare numai is_owner; T rol hr fără modul/hr_extra/non-owner refuzate și modul hr acceptat.
+- L10: nu se generează/parcurg parole ori PIN-uri; erorile noi de business au coduri generice. M snapshot Auth selectează numai identitatea/metadatele/ban-ul, fără encrypted_password; manifestul nu are granturi client.
+- L11 n/a.
+- L12: poarta 1a este păstrată și compară diferențele ambelor seturi de identități; poarta 1b nu ascunde conturile pending. Regresia `portal_e1_1a.test.sql::same_count_wrong_set` este relansată de harness.
+- L13: M regex email/nume ancorate; metacaracterele domeniului sunt literale `[.]`; T nume cu diacritice/multiple prenume și nume cu un singur cuvânt. Casting invalid în metadate eșuează, fără continuare tacită.
+- L14: M/R cer runner tranzacțional, lock/preflight înainte de CHECK/FK, postcondiții; R refuză date/istoric/DDL noi și nu folosește CASCADE. Harness: roundtrip, refuz date/RLS, pg_dump și revenire 19a înainte de 18a.
+- L15: M `fn_portal_1b_snapshot`/poarta separată: corp+owner+ACL+config, auth.uid/jwt, RLS/politici/triggere/coloane; T callee drift fără schimbare ACL. Limită: nu există analiză tranzitivă arbitrară a funcțiilor legacy din alte scheme/extensii; amprenta acoperă public și helperii Auth expliciți.
+- L16: M PK UUID, UNIQUE email canonic, employee_id NOT NULL + UNIQUE parțial rezervat/creat, conturi_teren.provisioning_id UNIQUE FK; T coliziune .2 și concurență în scriptul dedicat.
+- L17: M predicat comun Europe/Bucharest, fără offset fix; T azi/ieri și active NULL. Semantica azi este cea cerută de brief, diferită de r6; tranziția reală la miezul nopții nu a fost executată.
+- L18: M IS TRUE/IS NOT TRUE/IS DISTINCT FROM, liste albe de stări/roluri și excepții pentru rezervări/metadate/postcondiții nevalide; T neaprobat și in_creare nu primesc token.
+- L19: M `fn_portal_angajat_eligibil` folosit de pregătire, creare, finalizare, revocare și fn_teren_eligibil/hook; `test_static_1b.py::test_hook_and_provisioning_share_employee_predicate` trecut; revenirea restaurează predicatul 18a.
+- L20: T owner/hr legitimi și excepțiile negative, aprobare ERP, teren neconvertibil, finalizare validă/dublă/refuzată, angajat plecat între pași, reactivare fără cont reactivat și callee drift.
+- L21 n/a.
+- L22 n/a.
+- L23 n/a.
+- L24 n/a.
+- L25: fixture pre-baseline cu corpul LIVE și trigger real pe auth.users; apeluri SET LOCAL ROLE authenticated/service_role/supabase_auth_admin și runner postgres NOSUPERUSER. Concurență cu FIFO + pg_stat_activity + wait ambele PID și motiv exact. **PG16/17 și GoTrue real nerulate; cele 9 teste trecute sunt numai statice.**

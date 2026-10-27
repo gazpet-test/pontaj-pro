@@ -106,7 +106,9 @@ SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','error');
 RESET ROLE;
 UPDATE public.employees SET termination_date=(now() AT TIME ZONE 'Europe/Bucharest')::date WHERE id=55;
 SET LOCAL ROLE supabase_auth_admin;
-SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639','teren');
+-- E1-1a: ultima zi inclusiva. E1-1b: brief-ul cere revocare imediata; reactivarea nu anuleaza revocarea de ieri.
+SELECT portal_test.expect_hook('44387376-e48c-44d5-a88b-752c653c5639',
+ CASE WHEN to_regclass('public.portal_provisioning') IS NULL THEN 'teren' ELSE 'error' END);
 RESET ROLE;
 ROLLBACK TO ended;
 -- Ban: numai rolul Auth poate modifica auth.users, ca in productie.

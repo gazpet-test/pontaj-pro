@@ -28,6 +28,7 @@ PSQL=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgre
 fail() { echo "ESEC: $*" >&2; exit 1; }
 "${ADMIN[@]}" -d postgres -f "$ROOT/supabase/tests/portal_e1_prodlike_bootstrap.sql"
 "${ADMIN[@]}" -d "$DB" -f "$ROOT/supabase/tests/portal_e1_schelet.sql"
+"${ADMIN[@]}" -d "$DB" -f "$ROOT/supabase/tests/portal_e1_1b_fixture.sql"
 q() { "${PSQL[@]}" -Atc "$1"; }
 [[ "$(q "SELECT rolsuper::text||'|'||rolcreaterole::text||'|'||rolbypassrls::text FROM pg_roles WHERE rolname=current_user")" == 'false|true|true' ]] || fail 'postgres non-superuser'
 SIS="$(q 'SELECT system_identifier FROM pg_control_system()')"
@@ -67,6 +68,37 @@ q 'GRANT teren TO postgres WITH INHERIT FALSE, SET TRUE' >/dev/null
 "${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1a.test.sql" >"$TMP/tests.log" 2>&1 || { cat "$TMP/tests.log"; fail tests; }
 grep -q PORTAL_E1_1A_TEST_END "$TMP/tests.log" || fail 'test end marker'
 [[ "$(q 'SELECT public.fn_portal_porti_lipsa()')" == '{}' ]] || fail gate
+MIG_1B="$ROOT/supabase/migrations/20261119a_portal_teren_provisioning.sql"
+REV_1B="$ROOT/supabase/revenire/20261119a_portal_teren_provisioning_ROLLBACK.sql"
+baseline "$TMP/before_1b.sql"
+runner 20261119120000 "$MIG_1B" >"$TMP/apply_1b.log" 2>&1 || { cat "$TMP/apply_1b.log"; fail 'apply E1-1b'; }
+[[ "$(q 'SELECT public.fn_portal_porti_lipsa_1b()')" == '{}' ]] || fail 'gate E1-1b'
+[[ -z "$("${PSQL[@]}" -At -f "$ROOT/scripts/control_0e.sql")" ]] || fail 'E1-1b control 0e'
+"${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1b.test.sql" >"$TMP/tests_1b.log" 2>&1 || { cat "$TMP/tests_1b.log"; fail 'tests E1-1b'; }
+grep -q PORTAL_E1_1B_TEST_END "$TMP/tests_1b.log" || fail 'test end E1-1b'
+# Regresiile E1-1a raman active si dupa schimbarea provisioning-ului.
+"${PSQL[@]}" -f "$ROOT/supabase/tests/portal_e1_1a.test.sql" >"$TMP/regression_1a.log" 2>&1 || { cat "$TMP/regression_1a.log"; fail 'regression E1-1a'; }
+source "$ROOT/scripts/portal/concurrency_1b.sh"
+if "${PSQL[@]}" --single-transaction \
+ -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
+ -c "INSERT INTO public.portal_provisioning(provisioning_id,employee_id,email_calculat,stare,cerut_de,payload_sha256) VALUES ('10000000-0000-0000-0000-000000000077',55,'new.fixture@teren.gazpet.ro','rezervat','00000000-0000-0000-0000-000000000001',sha256('fixture'::bytea))" \
+ -f "$REV_1B" >"$TMP/rollback_1b_data_refused.log" 2>&1; then fail 'E1-1b rollback accepted new history'; fi
+grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_data_refused.log" || fail 'wrong E1-1b rollback data refusal'
+if "${PSQL[@]}" --single-transaction \
+ -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
+ -c 'ALTER TABLE public.portal_provisioning DISABLE ROW LEVEL SECURITY' \
+ -f "$REV_1B" >"$TMP/rollback_1b_config_refused.log" 2>&1; then fail 'E1-1b rollback accepted RLS drift'; fi
+grep -q PORTAL_1B_ROLLBACK_NEW_DATA_OR_CONFIG "$TMP/rollback_1b_config_refused.log" || fail 'wrong E1-1b rollback config refusal'
+# Apply -> rollback -> re-apply direct, tranzactional, pentru DDL. Runnerul refuza intentionat relivrarea aceluiasi nume.
+"${PSQL[@]}" --single-transaction \
+ -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning_ROLLBACK:'||txid_current(),true)" \
+ -f "$REV_1B" \
+ -c "SELECT set_config('gazpet.livrare_migrare','20261119a_portal_teren_provisioning:'||txid_current(),true)" \
+ -f "$MIG_1B" >"$TMP/roundtrip_1b.log" 2>&1 || { cat "$TMP/roundtrip_1b.log"; fail 'E1-1b DDL roundtrip'; }
+runner 20261119120001 "$REV_1B" >"$TMP/rollback_1b.log" 2>&1 || { cat "$TMP/rollback_1b.log"; fail 'rollback E1-1b'; }
+baseline "$TMP/after_1b.sql"
+diff -u "$TMP/before_1b.sql" "$TMP/after_1b.sql" || fail 'E1-1b changed original handle/ACL/schema/data'
+[[ "$(q "SELECT to_regclass('public.portal_provisioning') IS NULL AND to_regprocedure('public.fn_portal_cont_finalizeaza(uuid)') IS NULL")" == t ]] || fail 'E1-1b objects left'
 [[ -z "$("${PSQL[@]}" -At -f "$ROOT/scripts/control_0e.sql")" ]] || fail 'control 0e'
 rc=0
 runner 20261118120000 "$MIG" >"$TMP/reapply.log" 2>&1 || rc=$?
@@ -94,4 +126,4 @@ rc=0
 runner 20261118120000 "$MIG" >"$TMP/reapply_after_rollback.log" 2>&1 || rc=$?
 [[ "$rc" == 11 ]] || fail 'history allows reapply after rollback'
 [[ -z "$("${PSQL[@]}" -At -f "$ROOT/scripts/control_0e.sql")" ]] || fail 'rollback control 0e'
-echo "PASS PORTAL_E1_1A PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER); lista PUBLIC sintetica in harness, lista revizuita (21) in migrare"
+echo "PASS PORTAL_E1_1A+1B PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER); lista PUBLIC sintetica in harness, lista revizuita (21) in migrare"

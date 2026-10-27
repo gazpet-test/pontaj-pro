@@ -17,5 +17,5 @@ else
   (cd "$DST" && PORTAL_PG_MAJOR="${PORTAL_PG_MAJOR:-17}" PORTAL_E1_SLOT="$SLOT" bash scripts/test_portal_e1.sh) >"$DST/harness.log" 2>&1 && RC=0 || RC=$?
 fi
 tail -n "${2:-35}" "$DST/harness.log"
-echo "portal E1-1a slot=$SLOT cod=$RC; copie/log: $DST"
+echo "portal E1-1a+1b slot=$SLOT cod=$RC; copie/log: $DST"
 exit "$RC"
