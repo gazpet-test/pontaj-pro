@@ -1,5 +1,7 @@
 # Portal angajat mobil — planul etapei 1 (fără cod, fără migrări)
 
+> **r4 (27.10, decizia lui Răzvan):** fără login separat. Fiecare angajat are **un singur cont ERP (Supabase Auth) de tip „teren”**, iar portalul e o vedere restrânsă a acestui cont. Secțiunea **„r4”** de la final înlocuiește arhitectura din §2 (rolul `portal_edge`, tokenul de sesiune propriu) și modul de login din r3. Activarea (pct. 10) și PIN-ul la fiecare deschidere (pct. 5) rămân, dar setează și deschid **contul ERP**.
+
 > **r3 (26.10, deciziile lui Răzvan):** 1 = A, 2 = A, 3 = A cu mașinile din `logistica_active`, 4 = A, 5 = **PIN la fiecare deschidere**, 6–9 = A, 10 = nedecis. Secțiunea **„r3”** de la final **înlocuiește** părțile vechi despre sesiune (§2 „Telefonul și sesiunea”, `portal_sesiuni`, §3 pașii 2–3), inventar (§1 / §4.4) și activare.
 
 Data: 26.10.2026.
@@ -343,3 +345,86 @@ Problema P1 din r1 rămâne: **cine are doar linkul nu trebuie să poată activa
   - consum atomic, de unică folosință;
   - expirare pe server;
   - audit.
+
+---
+
+## r4 — un singur cont ERP de tip „teren” (decizia lui Răzvan, 27.10)
+
+**De ce:** modulul Probe teren (live, #888 / #889) verifică `auth.uid()` + `user_module_access`. Un login separat ar da aceleiași persoane două identități. Așa, portalul (`/m`) e o vedere restrânsă a contului ERP: inventar + concedii, plus butoanele modulelor pe care persoana le are explicit (de exemplu Probe teren pentru ILIE CORADO FLORINEL, emp 55, și MITITELU PETRONEL, emp 70; azi niciunul nu are cont).
+
+### Ce am găsit pe prod (read-only, 27.10): de ce contul „teren” NU poate fi un `authenticated` obișnuit
+
+- **290 de tabele** din `public` au o politică SELECT pentru `authenticated` cu `true` sau `auth.uid() IS NOT NULL`. Printre ele:
+  - `employees`, cu granturi pe coloanele `cnp`, `iban`, `adresa`;
+  - `hr_cereri_concediu`, `hr_aprobatori`, `hr_concediu_rute`, `hr_employees_audit`, `hr_autorizatii`;
+  - contractele, facturile emise, `logistica_active`.
+- **154 de tabele** au scriere deschisă oricărui `authenticated`.
+- **207 funcții SECURITY DEFINER** sunt executabile de `authenticated`.
+- `handle_new_user` (trigger pe `auth.users`) dă oricărui cont nou un profil cu **`role = 'manager_santier'`** și trimite notificări owner-ilor.
+
+Concluzia: dacă cei ~98 de oameni de pe teren ar primi conturi `authenticated`, ar putea citi CNP-ul, IBAN-ul și adresa tuturor colegilor și ar putea scrie în 154 de tabele. **Asta e inacceptabil.** Separat de portal, înseamnă că azi oricare dintre cei 33 de utilizatori ERP vede CNP / IBAN prin API. Flag-ul `can_access_personal_data` (6 oameni) e respectat doar în UI. E o expunere P1 existentă, de reparat separat, cu „da”.
+
+### Arhitectura r4
+
+1. **Rol Postgres dedicat `teren`** (NOLOGIN, acordat lui `authenticator`, ca `authenticated`).
+   - Un **Custom Access Token Hook** Supabase pune `role = 'teren'` în JWT pentru conturile cu `app_metadata.tip_cont = 'teren'`. Toate celelalte conturi rămân neschimbate (`authenticated`).
+   - Efectul: politicile `TO authenticated` **nu se aplică** rolului `teren`, iar `teren` **nu are niciun grant pe tabele**.
+   - Ce poate face un cont teren:
+     - cele 21 de funcții executabile de PUBLIC (aceleași pe care le are deja `anon`; doar una e DEFINER, se verifică în E1);
+     - funcțiile portalului, `GRANT EXECUTE … TO teren`;
+     - modulele în care a fost inclus explicit (pct. 4).
+   - Hook-ul rulează la **fiecare** emitere de token, pentru toți utilizatorii. Trebuie să fie trivial, testat și să nu arunce excepții: o eroare acolo ar bloca login-ul tuturor. Intră în registrul de automatizări și se configurează în Supabase Auth, cu „da”.
+2. **Conturile.**
+   - Le creează HR / owner din `/portal-admin`, printr-un edge `portal-admin`:
+     - edge-ul verifică JWT-ul ERP și rolul (owner / modulul `hr`);
+     - folosește `service_role` **doar** pentru API-ul admin Auth (creare, ban, revocare de sesiuni).
+   - Contul se creează cu:
+     - `email_confirm = true` și o parolă aleatoare de 64 de octeți, aruncată imediat: nimeni nu o știe, deci login-ul cu parolă e imposibil;
+     - `app_metadata = {tip_cont: 'teren', employee_id}`. `app_metadata` poate fi scris doar de admin, nu de utilizator.
+   - **Emailul-identificator:** recomand `t<employee_id>@teren.gazpet.ro`, pe un subdomeniu fără MX, fără nume (Q11).
+     - Varianta lui Răzvan, `prenume.nume@teren.gazpet.ro`, se ciocnește (MITITELU are 4 angajați) și pune numele în identificatorul Auth.
+     - Pe acest domeniu nu se trimite niciun mail. Recuperarea parolei e dezactivată pentru teren; resetul îl face HR.
+   - `handle_new_user` primește o ramură: pentru `tip_cont = 'teren'` → `role = 'teren'`, `employee_id` din `app_metadata` (validat: angajat activ, fără alt cont), fără notificări (Q14). Schimbarea funcției se face cu md5 pe corpul LIVE și restaurare exactă.
+3. **Activarea (pct. 10) și PIN-ul (pct. 5), ca în r3, dar pe contul ERP.**
+   - Activarea: link + cod de activare pe alt canal, sau QR față în față de 10 minute. Angajatul alege PIN-ul, iar telefonul primește cheia de dispozitiv.
+   - **Login la fiecare deschidere, prin edge-ul `portal-login`:**
+     - edge-ul primește cheia de dispozitiv + PIN-ul;
+     - verificarea și limitele (5 / 30 de minute, 10 / 24 de ore, HMAC pe IP) se fac în BD, înaintea bcrypt;
+     - dacă e OK, edge-ul emite o **sesiune Supabase** fără parolă: `admin.generateLink(magiclink)` + `verifyOtp(token_hash)` pe server, fără mail trimis;
+     - revocă celelalte sesiuni ale contului (`signOut` cu scope `others`);
+     - întoarce sesiunea, pe care clientul o ține doar în memorie / `sessionStorage`.
+   - **Poarta de 15 minute:** la login se înregistrează `session_id` din JWT în `portal_sesiuni`, cu TTL absolut de 15 minute. Funcțiile portalului și politicile modulelor deschise rolului `teren` cer `fn_portal_sesiune_valida()`. Un refresh token furat poate reînnoi JWT-ul, dar după 15 minute de la PIN nu mai deschide date.
+   - Rolul `portal_edge` din r2 / r3 **dispare**. Clientul cheamă funcțiile direct, cu JWT-ul `teren`, iar identitatea vine din `auth.uid()`.
+4. **Modulele cu drepturi explicite (Probe teren).**
+   - **A (recomandat):** fiecare modul se deschide **opt-in** rolului `teren`. Politicile și granturile lui primesc și `TO teren`, cu aceleași verificări (`auth.uid()` + `user_module_access` / `probe_teren_drept`) + poarta de 15 minute. Asta e o schimbare în migrarea modulului Probe (sesiunea care îl deține), cu „da”. Drepturile (`user_module_access`) se dau tot cu „da”.
+   - B: conturile teren cu drepturi pe module primesc `authenticated`. **Nerecomandat:** le-ar da acces la cele 290 de tabele largi, inclusiv CNP / IBAN.
+5. **Revocarea la plecare.**
+   - Funcțiile portalului verifică `employees.active` la fiecare apel, cu efect imediat.
+   - `/portal-admin` și un job zilnic fac `ban` pe contul Auth și șterg sesiunile pentru `employees.active = false`. Jobul intră în `automatizari` și în registru.
+   - Resetarea PIN-ului / telefonului revocă toate sesiunile și dispozitivele.
+6. **UI ERP:** un cont teren care deschide `/` e redirecționat la `/m`. Contul nu poate citi `profiles` / `user_module_access` prin RLS-ul `authenticated`, deci `/m` își ia meniul dintr-o funcție `fn_portal_acasa()` (nume, limbă, butoanele modulelor permise).
+
+### Impactul asupra deciziilor
+- **5 (PIN la fiecare deschidere): rămâne.** Doar că PIN-ul deschide acum o sesiune Supabase, emisă de server, plus poarta de 15 minute.
+- **10 (activarea): rămâne** (cod pe alt canal și / sau QR față în față). Activarea leagă PIN-ul și dispozitivul de contul ERP creat de HR.
+- **Securitatea:**
+  - rolul `portal_edge` dispare;
+  - RLS-ul existent nu se aplică rolului `teren` (grant-uri zero pe tabele);
+  - limitarea PIN-ului e pe cont, dispozitiv și IP, în BD;
+  - sesiunea Supabase ține o oră (expirarea JWT a proiectului) cu refresh, dar datele sunt închise după 15 minute de la PIN;
+  - plecarea angajatului înseamnă verificare `active` + ban + ștergerea sesiunilor.
+
+### Decizii noi (r4)
+- **11. Emailul-identificator:**
+  - **A:** `t<employee_id>@teren.gazpet.ro`;
+  - B: `prenume.nume@teren.gazpet.ro`, cu sufix la coliziuni.
+- **12. Separarea:**
+  - **A:** rolul `teren` prin Custom Access Token Hook;
+  - B: repararea tuturor celor 290 + 154 de politici largi înainte de lansare (luni de muncă).
+- **13. Modulele pentru teren:**
+  - **A:** opt-in pe modul (Probe întâi);
+  - B: `authenticated` pentru cei cu drepturi (nerecomandat).
+- **14. `handle_new_user`:**
+  - **A:** ramura `tip_cont = 'teren'` (rol `teren`, legare deterministă de fișă, fără notificări);
+  - B: profilul se corectează manual după creare.
+- **Separat, cu „da”:** repararea expunerii CNP / IBAN / adresă din `employees` pentru toți utilizatorii ERP (politica `employees_select_all_authenticated` = `true` + granturile pe coloane).
