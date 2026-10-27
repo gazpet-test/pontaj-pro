@@ -4,9 +4,9 @@
 
 | Consultant | Ce face bine | Rol |
 |---|---|---|
-| **Jakarinos** (Codex) | verifica pe sursa primara (legislatie.just.ro, EUR-Lex), cauta contraargumentele; cel mai sever | **obligatoriu** pe orice concluzie cu miza (contestatie, clauza, pozitie fata de autoritate) |
+| **Jakarinos** (Codex) | verifica pe sursa primara, prin cautarea web proprie (fara Firecrawl), cauta contraargumentele; cel mai sever. Nu tine minte intre apeluri: in brief pui verdictul lui anterior si ce s-a schimbat | **obligatoriu** pe orice concluzie cu miza (contestatie, clauza, pozitie fata de autoritate) |
 | **Copilot** (GPT, conv. Juridic) | poarta GO/NO-GO, structura argumentului, riscuri procedurale | **obligatoriu** pe orice livrabil care pleaca din firma |
-| **Gemini** (Argon) | a doua/a treia parere, corectii de arhitectura juridica (a adus 4 corectii esentiale la Lot 4) | suplimentar, cand e disponibil; NU e poarta |
+| **Gemini** (Argon) | a doua/a treia parere, corectii de arhitectura juridica (a adus 4 corectii esentiale la Lot 4). O conversatie pe lucrare (eticheta, ex. `laza-cnsc`), inchisa la final | suplimentar, cand e disponibil; NU e poarta |
 
 **Minimul acceptat** cand nu sunt toti disponibili: **Jakarinos + Copilot**.
 - Daca lipseste unul dintre ei, livrabilul poarta mentiunea "review incomplet: lipseste X".
@@ -20,6 +20,13 @@ Cum lucrezi:
   - verdictele individuale, cu procent.
 - Divergenta mare (ex. 55-65% vs 20-35%) nu se mediaza in secret: se prezinta lui Razvan, cu motivul diferentei. Pozitia cea mai severa se trateaza ca risc real, nu ca zgomot.
 - Spetele ANAP/CJUE pe care niciun consultant nu le-a putut verifica live NU intra intr-un document oficial pana nu sunt citite in sursa oficiala.
+
+## 1b. Pagini web - regula de securitate (Razvan 27.10.2026)
+
+- Consultantii (Jakarinos, Copilot, Gemini) nu deschid pagini pentru noi si nu au Firecrawl.
+- Paginile le deschide Claude din sesiunea de pe serverul AI (cu Razvan in bucla), doar pe domeniile oficiale din `cautare_portale.md`; continutul ajunge ca text in brief.
+- Motivul: un AI care are deodata date private, continut extern si iesire libera spre orice adresa poate fi pacalit sa scoata date afara.
+- Nu se pun date interne in adrese web sau in cautari.
 
 ## 2. Decizii inchise (nu se redeschid fara fapte noi)
 
