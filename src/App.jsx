@@ -1,3 +1,4 @@
+import { EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal } from './employeesPersonal.js'
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -1303,7 +1304,7 @@ function DashboardPage() {
   const loadData = async () => {
     setLoad(true)
     const today=todayStr()
-    let eq=supabase.from('employees').select('*,sites(name)').eq('active',true)
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').eq('active',true)
       .or(`termination_date.is.null,termination_date.gte.${today}`)
     if (!isAdmin){
       const siteIds=profile?.site_ids||[]
@@ -1867,7 +1868,7 @@ function PontajPage() {
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async()=>{
     const monthStart=date.slice(0,7)+'-01'
-    let q=supabase.from('employees').select('*,sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
+    let q=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
     if(!isAdmin){
       const siteIds=profile?.site_ids||[]
       if(siteIds.length===0){setEmps([]);setLoad(false);return}
@@ -3020,7 +3021,7 @@ function ReportsPage() {
 
     // Eligibili: activii + cei cu încetare de la începutul lunii încolo (au zile bifate înainte de plecare
     // și trebuie plătiți; cu active=true dispăreau din plată — Băiesu Darius, Tudurachi, Ioan Sorin, sept 2026)
-    let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).or(`active.eq.true,termination_date.gte.${monthStart}`)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
     // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
@@ -4392,7 +4393,7 @@ function ReportsPage() {
     const recEmpIds = [...new Set(recs.map(r=>r.employee_id))].filter(Boolean)
     
     // 3. Fetch employees: cei activi + cei cu records (chiar dacă acum inactivi)
-    let eq=supabase.from('employees').select('*,sites(name)').order('name')
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').order('name')
     if (recEmpIds.length > 0) {
       // OR logic: includ toți active=true SAU cei cu records în perioadă
       eq = eq.or(`active.eq.true,id.in.(${recEmpIds.join(',')})`)
@@ -4842,7 +4843,7 @@ function ReportsPage() {
     // Criteriul e „încetare DE LA începutul lunii exportate încolo", nu „încetare
     // ÎN luna exportată": cine a plecat pe 7 august a lucrat tot iulie, iar la
     // exportul pe iulie trebuie să apară. Un filtru pe luna exportată l-ar sări.
-    let eq=supabase.from('employees').select('*').order('name')
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).order('name')
       .or(`active.eq.true,termination_date.gte.${lunaStart}`)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
@@ -5144,9 +5145,9 @@ function ReportsPage() {
       const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)   // lunile atinse de tranșă
 
       // Eligibili: activii + cei cu încetare de la începutul lunii încolo (ca în savePayment)
-      let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
+      let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).or(`active.eq.true,termination_date.gte.${monthStart}`)
       if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
-      const {data:emps}=await eq
+      const {data:emps}=await withEmployeePersonal(eq, 'iban', showToast, true)
       // TOATE înregistrările lunii/lunilor — pentru plafon (CO) și bifele dinaintea tranșei
       let recs = []
       { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
@@ -5201,7 +5202,7 @@ function ReportsPage() {
     if (!hasPontajBrutAccess) { showToast('Acces refuzat — necesită bifa „Pontaj Brut" pe profil','error'); return }
     setExpS(true)
     try{
-    let eq=supabase.from('employees').select('*').eq('active',true).order('name')
+    let eq=supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).eq('active',true).order('name')
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
     // Paginare manuală
@@ -6527,13 +6528,13 @@ function AdminPage() {
   // Tichete — responsabil default per departament (tichete_default_responsabili, PK departament)
   const [tichDefaults, setTichDefaults] = useState({})   // { departament: profile_id }
   const [savingTichDefaults, setSavingTichDefaults] = useState(false)
-  useEffect(()=>{ loadAll() },[tab])
+  useEffect(()=>{ loadAll().catch(() => setLoad(false)) },[tab])
   const loadAll=async()=>{
     setLoad(true)
     const [s,p,e,c,st,ps,fs,os,dep,jr,sc,tdr]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
-      supabase.from('employees').select('*,sites(name)').order('name'),
+      withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').order('name'), 'iban,observatii_hr', showToast),
       supabase.from('calendar_days').select('*').order('date').limit(60),
       supabase.from('settings').select('*'),
       supabase.from('profile_sites').select('*'),
@@ -8380,7 +8381,7 @@ export function SalariiPage({ noExport = false } = {}) {
     setUnlockUntil(0)
   }
 
-  useEffect(()=>{ if(unlocked) loadData() },[unlocked])
+  useEffect(()=>{ if(unlocked) loadData().catch(() => setLoad(false)) },[unlocked])
 
   useEffect(()=>{ if(unlocked&&tab==='stat'&&statImporturi===null) loadStatImporturi() },[unlocked,tab])
   useEffect(()=>{ if(unlocked&&statImportSel!=null) loadStatLinii(statImportSel) },[unlocked,statImportSel])
@@ -8402,7 +8403,7 @@ export function SalariiPage({ noExport = false } = {}) {
   const loadData=async()=>{
     setLoad(true)
     const [{data:emps},{data:sals},{data:st}]=await Promise.all([
-      supabase.from('employees').select('*,sites(name)').eq('active',true).order('name'),
+      withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').eq('active',true).order('name'), 'email', showToast),
       supabase.from('employee_salaries').select('*'),
       supabase.from('settings').select('*')
     ])

@@ -502,7 +502,7 @@ function EchipamenteTab() {
       const [rEch, rAsig, rEmp, rUser, rFurn] = await Promise.all([
         supabase.from('v_magazie_echipamente').select('*').order('denumire'),
         supabase.from('v_magazie_inventar_activ').select('*').is('data_retur', null),
-        supabase.from('employees').select('id, name, functie, marime_incaltaminte, marime_imbracaminte').order('name'),
+        supabase.from('employees').select('id, name, functie').order('name'),
         supabase.auth.getUser(),
         supabase.from('v_echipament_furnizor').select('*'),
       ])

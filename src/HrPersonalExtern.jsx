@@ -1,3 +1,4 @@
+import { withEmployeePersonal } from './employeesPersonal.js'
 // ═══════════════════════════════════════════════════════════════════════════
 // PERSONAL EXTERN PENTRU LICITAȚII
 // ───────────────────────────────────────────────────────────────────────────
@@ -83,7 +84,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
       supabase.from('hr_autorizatii')
         .select('id, extern_id, tip_id, numar_autorizatie, emitent, data_emitere, data_expirare, fara_expirare, domenii, fisier_path, fisier_nume, observatii')
         .not('extern_id', 'is', null).is('deleted_at', null),
-      supabase.from('employees').select('id,name,email,termination_date,active').not('termination_date', 'is', null).neq('active', true),
+      withEmployeePersonal(supabase.from('employees').select('id,name,termination_date,active').not('termination_date', 'is', null).neq('active', true), 'email', showToast),
     ])
     if (pe) showToast?.('Nu pot încărca personalul extern: ' + pe.message, 'error')
     // Acordul foștilor angajați se citește separat, după id (fără embed: între cele două tabele
@@ -102,7 +103,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
     setLoad(false)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { incarca() }, [incarca])
+  useEffect(() => { incarca().catch(() => setLoad(false)) }, [incarca])
 
   const autPentru = (id) => autorizatii.filter(a => a.extern_id === id)
 

@@ -1,3 +1,4 @@
+import { withEmployeePersonal } from './employeesPersonal.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
@@ -9039,18 +9040,16 @@ function QrReconciliereTab({ profile, showToast }) {
     async function loadPins() {
       setPinsLoading(true)
       try {
-        const { data } = await supabase
-          .from('employees')
-          .select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la')
-          .eq('active', true)
-          .order('name')
+        const { data } = await withEmployeePersonal(supabase.from('employees')
+          .select('id, name, functie').eq('active', true).order('name'),
+          'qr_pin,qr_pin_active,qr_pin_creat_la', showToast)
         if (cancelled) return
         setPinsSoferi(data || [])
       } finally {
         if (!cancelled) setPinsLoading(false)
       }
     }
-    loadPins()
+    loadPins().catch(() => {})
     return () => { cancelled = true }
   }, [])
   
@@ -9240,7 +9239,7 @@ function QrReconciliereTab({ profile, showToast }) {
     } else {
       showToast?.('PIN setat ✓', 'success')
       // Reload pins
-      const { data } = await supabase.from('employees').select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la').eq('active', true).order('name')
+      const { data } = await withEmployeePersonal(supabase.from('employees').select('id, name, functie').eq('active', true).order('name'), 'qr_pin,qr_pin_active,qr_pin_creat_la', showToast)
       setPinsSoferi(data || [])
     }
   }
@@ -9253,7 +9252,7 @@ function QrReconciliereTab({ profile, showToast }) {
       showToast?.('Eroare: ' + error.message, 'error')
     } else {
       showToast?.(newActive ? 'PIN activat ✓' : 'PIN dezactivat', 'success')
-      const { data } = await supabase.from('employees').select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la').eq('active', true).order('name')
+      const { data } = await withEmployeePersonal(supabase.from('employees').select('id, name, functie').eq('active', true).order('name'), 'qr_pin,qr_pin_active,qr_pin_creat_la', showToast)
       setPinsSoferi(data || [])
     }
   }
