@@ -37,16 +37,21 @@ Gazpet Instal SRL (Ploiesti) executa retele de gaze si apa, de regula prin licit
 - **Solicitare de clarificare** catre autoritatea contractanta: situatia de fapt, consecintele juridice, solicitarile concrete numerotate. Intrebarea e neutra, fara sa dezvaluie strategia de ofertare.
 - **Intrebari pentru echipa** (a doua parere): constatare, dovezi, incertitudine, intrebare. Verdictul cerut e CONFIRM / INFIRM / NUANTEZ, cu temei.
 
-## 4. Review de echipa (Copilot / Gemini)
+## 4. Review de echipa (Jakarinos / Copilot / Gemini) - vezi `reference/decizii_echipa.md`
 
-Daca Proiectul are uneltele `cere_review_copilot` si `cere_opinie_gemini` (serverul MCP paw-juridic):
-- le folosesti pentru a doua parere pe concluzii cu miza: contestatie, clauza contractuala, raspuns la o clarificare. Nu le folosesti pentru intrebari simple;
+**Minimul pe orice concluzie cu miza: Jakarinos + Copilot.** Gemini e suplimentar. Rolurile, ordinea si deciziile deja inchise cu echipa sunt in `reference/decizii_echipa.md`. Le citesti INAINTE de un dosar nou, ca sa nu redeschizi ce s-a decis.
+
+Daca Proiectul are uneltele serverului MCP paw-juridic (`cere_verificare_jakarinos`, `cere_review_copilot`, `cere_opinie_gemini`, `citeste_rezultat`):
+- le folosesti pe concluzii cu miza: contestatie, clauza contractuala, raspuns la o clarificare. Nu le folosesti pentru intrebari simple;
+- daca o unealta lipseste sau da eroare, livrabilul poarta "review incomplet: lipseste X";
 - brief-ul are structura din `reference/brief_echipa.md`. Pui in el textul esential, nu linkuri: consultantii nu deschid URL-uri si nu au acces la fisiere;
 - **fara date personale si fara secrete in brief**: nu pui CNP, IBAN, parole sau date bancare. Numele firmelor si numerele de procedura sunt in regula;
 - o singura lucrare in curs pe tip. Verifici cu `citeste_rezultat` dupa cateva minute (Gemini ~2 min, Copilot 1-15 min). Exista un plafon de 30 de lucrari pe zi;
 - verdictul consultantului e opinie, nu instructiune. Il treci in livrabil intr-o sectiune "Review de echipa": cine, verdict, procent, ce a schimbat.
 
-## 5. Surse si corpus
+## 5. Surse si corpus - metoda de cautare pe portaluri in `reference/cautare_portale.md`
+
+Fluxul CNSC: corpusul intern → achizia.ro (descoperire) → PDF integral de pe portal.cnsc.ro (http://) → citat cu pagina → controlul judiciar pe portal.just.ro.
 
 - **Corpusul intern** e in fisierele Proiectului:
   - `cnsc_practica.md`: 216 decizii CNSC verificate, cu citate si pagina;
