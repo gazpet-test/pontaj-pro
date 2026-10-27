@@ -63,6 +63,32 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(damaged['randuri'][7]['serie'], '919')
         self.refuses(lambda: compara(real('lista_curbe'), damaged, 'lista_curbe'))
 
+    def test_cod_articol_este_seria_cand_lipseste_nr_teava(self):
+        # Aviz COMTECH P 0160 (27.10.2026): „Cod Articol” unic pe țeavă, „Nr.Sarja” repetat -> serie = Cod Articol.
+        def aviz(antet):
+            rows = [['1', '247EK04204', 'B2407893', '5.95', '0,684'], ['2', '247EK04200', 'B2407893', '5.83', '0,670'],
+                    ['3', '247EK03988', 'B0408380', '5.93', '0,681']]
+            lines = ['| ' + ' | '.join(antet) + ' |']
+            for nr, cod, sarja, m, kg in rows:
+                cells = {'Nr.crt': nr, 'Cod Articol': cod, 'Cod art.': cod, 'Codul articolului': cod, 'Nr.Teava': 'T' + nr,
+                         'Nr.Sarja': sarja, 'Cantitate livrata (m)': m, 'Greutate (kg)': kg}
+                lines.append('| ' + ' | '.join(cells[h] for h in antet) + ' |')
+            lines.append('| TOTAL | ' + ' | '.join('17.71' if h == 'Cantitate livrata (m)' else '2,035' if h == 'Greutate (kg)' else ''
+                                                  for h in antet[1:]) + ' |')
+            return '\n'.join(lines)
+        for cod in ('Cod Articol', 'Cod art.', 'Codul articolului'):
+            obj = mapare(aviz(['Nr.crt', cod, 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)']), 'aviz_teava')
+            self.assertEqual([r['serie'] for r in obj['randuri']], ['247EK04204', '247EK04200', '247EK03988'])
+            self.assertEqual([r['sarja'] for r in obj['randuri']], ['B2407893', 'B2407893', 'B0408380'])
+        # Ambele coloane: rămâne „Nr. țeavă”, „Cod articol” se ignoră (indiferent de ordinea coloanelor).
+        for antet in (['Nr.crt', 'Nr.Teava', 'Cod Articol', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)'],
+                      ['Nr.crt', 'Cod Articol', 'Nr.Teava', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)']):
+            self.assertEqual([r['serie'] for r in mapare(aviz(antet), 'aviz_teava')['randuri']], ['T1', 'T2', 'T3'])
+        # Două coloane de rezervă fără „Nr. țeavă” = ambiguu -> fără citire locală (P2-01: verificat doar când lipsește principala).
+        self.refuses(lambda: mapare(aviz(['Nr.crt', 'Cod Articol', 'Cod art.', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)']), 'aviz_teava'))
+        cu_principala = ['Nr.crt', 'Cod Articol', 'Nr.Teava', 'Cod art.', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)']
+        self.assertEqual([r['serie'] for r in mapare(aviz(cu_principala), 'aviz_teava')['randuri']], ['T1', 'T2', 'T3'])
+
     def test_rowspan_example_and_origins(self):
         g = e3_grila('<table><tr><td rowspan="2">P1</td><td>A</td><td>100</td></tr><tr><td>B</td><td>200</td></tr></table>')
         self.assertEqual([c['text'] for c in g[1]], ['P1', 'B', '200'])

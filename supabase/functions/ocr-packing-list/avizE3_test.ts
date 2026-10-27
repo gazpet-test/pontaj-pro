@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { CHEI_ANTET, randGol } from '../../../src/izoDocumenteLogica.js'
-import { ANTET_COMUN, ANTET_SPECIFIC, atribuireValidaE3, EroareE3, MAX_PDF_E3, normalizeazaE3, numarE3, numarKgE3, RAND_NUMAR, RAND_TEXT, REZERVA_E3, rezervaE3, schemaE3, valideazaCerereE3 } from './avizE3.ts'
+import { ANTET_COMUN, ANTET_SPECIFIC, atribuireValidaE3, EroareE3, gradOtelE3, MAX_PDF_E3, MESAJ_SERIE_REPETATA_E3, normalizeazaE3, numarE3, numarKgE3, RAND_NUMAR, RAND_TEXT, REZERVA_E3, rezervaE3, schemaE3, valideazaCerereE3, verificaSeriiE3 } from './avizE3.ts'
 
 const ai = (r: Record<string, unknown> = {}) => JSON.stringify({ rotatie_grade:0, antet: { furnizor: '  Furnizor  ', nr_document: '00019', total_m: '99,15', decizie: 'primit' }, randuri: [{ serie: '  000123  ', sarja: '00009', lungime_doc: '12,345', pagina: 2, ...r }], totaluri_tiparite: { total_metri: '99,15', total_kg: '1.234,56' }, avertismente: ['  ilizibil  ', 7] })
 const cerere = () => ({ tip: 'aviz_e3', proiect_id: 1, depozit_id: 2, sablon: 'aviz_teava', pdf_base64: btoa('%PDF-1.7\n') })
@@ -77,12 +77,31 @@ Deno.test('kg: separator de mii din document (aviz Comtech, lista Gurgenler)', (
   assert.equal(numarKgE3('1402,5'), 1402.5)
   assert.equal(numarE3('12.50'), 12.5)
 })
-Deno.test('model per cerere: implicit haiku, sonnet și rezervă superioară', () => {
-  assert.equal(valideazaCerereE3(cerere()).model, 'claude-haiku-5-5')
-  assert.equal(valideazaCerereE3({ ...cerere(), model:'sonnet' }).model, 'claude-sonnet-5-5')
+Deno.test('model: aviz_e3 citește mereu pe Sonnet 5.5 (decizia Răzvan 27.10.2026), rezervă superioară', () => {
+  for (const model of [undefined, 'haiku', 'sonnet']) assert.equal(valideazaCerereE3({ ...cerere(), model }).model, 'claude-sonnet-5-5')
   assert.equal(rezervaE3('claude-sonnet-5-5'), 0.2)
   assert.ok(rezervaE3('claude-sonnet-5-5') > REZERVA_E3)
   for (const model of ['opus', '', null, 1, 'claude-sonnet-5-5']) assert.throws(() => valideazaCerereE3({ ...cerere(), model }), { status:400, cod:'cerere_invalida' })
+})
+Deno.test('P1-01: serie repetată pe țevi sau serie = șarjă → serie_repetata (aviz COMTECH P 0160)', () => {
+  const rand = (serie: string, sarja: string | null, extra: Record<string, unknown> = {}) => ({ serie, sarja, lungime_doc: '5,95', greutate_kg: 684, pagina: 1, ...extra })
+  const p = (randuri: unknown[], sablon: 'aviz_teava' | 'lista_curbe' = 'aviz_teava') => normalizeazaE3(JSON.stringify({ rotatie_grade: 0, antet: {}, randuri, totaluri_tiparite: {}, avertismente: [] }), sablon)
+  const corect = ['247EK04204', '247EK04200', '247EK03988', '247EK03887', '247EK04227', '247EK03818'].map((s, i) => rand(s, i < 2 || i === 4 ? 'B2407893' : 'B0408380'))
+  assert.doesNotThrow(() => verificaSeriiE3(p(corect), 'aviz_teava'))
+  const gresit = corect.map(r => ({ ...r, serie: 'B2407893', sarja: null }))   // șarja pe 6 țevi
+  assert.throws(() => verificaSeriiE3(p(gresit), 'aviz_teava'), (e: unknown) => e instanceof EroareE3 && e.cod === 'serie_repetata' && e.status === 422)
+  assert.throws(() => verificaSeriiE3(p([rand('B2407893', 'B2407893')]), 'aviz_teava'), { cod: 'serie_repetata' })
+  assert.doesNotThrow(() => verificaSeriiE3(p([rand('A', null, { cantitate: 3 }), rand('A', null, { cantitate: 3 })]), 'aviz_teava'))
+  assert.doesNotThrow(() => verificaSeriiE3(p([rand('1001', 'H', { cantitate: 1 }), rand('1001', 'H', { cantitate: 1 })], 'lista_curbe'), 'lista_curbe'))
+  assert.equal(MESAJ_SERIE_REPETATA_E3, 'Numărul țevii se repetă - posibil șarjă citită ca număr de țeavă; verificați coloana')
+})
+Deno.test('grad oțel: „L 360 NE” → L360NE din denumire pe aviz; X doar fără „cifră + spațiu” înainte', () => {
+  const p = normalizeazaE3(ai({ specificatie: 'Tevi sudate elicoidal 610x7.10 mm,L 360 NE,IZOLATE' }), 'aviz_teava')
+  assert.equal(p.randuri[0].grad_otel, 'L360NE')
+  assert.equal(normalizeazaE3(ai({ grad_otel: 'l 415 me' }), 'aviz_teava').randuri[0].grad_otel, 'L415ME')
+  assert.equal(normalizeazaE3(ai({ grad_otel: 'P235GH' }), 'aviz_teava').randuri[0].grad_otel, 'P235GH')
+  assert.equal(normalizeazaE3(ai({ specificatie: 'L 360 NE' }), 'lista_curbe').randuri[0].grad_otel, null)
+  assert.deepEqual(['L360NE/X52N', 'X52N', null, null].map(String), ['L360NE/X52N', 'API 5L X52N PSL2', '610 X 52', '610x7.10'].map(gradOtelE3).map(String))
 })
 Deno.test('rotatie: enum întreg strict; invalide => 0 și avertisment', () => {
   const baza = JSON.parse(ai())

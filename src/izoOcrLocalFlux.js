@@ -20,14 +20,26 @@ function esec(r, cod) {
   })
 }
 
+// ramura 'haiku' = fallback-ul B4 prin izo-e3-ocr-local (rămâne pe Haiku: rezerva lui e fixată în BD la 0,05 USD);
+// ramura 'sonnet' = citirea directă aviz_e3 (ocr-packing-list, Sonnet 5.5 din 27.10.2026) pornită automat de UI.
+// Indicatorul `haiku:true` din citesteLocal înseamnă „citire directă în cloud” (numele a rămas din B4).
 export function descrieSursaOCR(meta) {
   if (!meta) return ''
-  if (meta.sursa?.ramura === 'haiku') return 'Haiku fallback'
+  if (meta.sursa?.ramura === 'haiku') return 'Haiku (fallback local)'
+  if (meta.sursa?.ramura === 'sonnet') return 'Sonnet (citire directă, automat)'
   if (String(meta.model).startsWith('ocr_local:')) {
     return String(meta.model).includes('+claude-')
       ? `Local + Haiku pe ${meta.sursa?.dezacorduri ?? '?'} celule` : 'Local LightOn+MinerU'
   }
-  return String(meta.model).includes('sonnet') ? 'Model superior direct' : 'Haiku direct'
+  return String(meta.model).includes('sonnet') ? 'Sonnet (citire directă)' : 'Haiku (citire directă)'
+}
+// cui îi aparține costul afișat (P2 r2): fallback-ul local e pe Haiku, citirea directă pe Sonnet
+export function costEticheta(meta) {
+  if (!meta) return ''
+  if (meta.sursa?.ramura === 'haiku') return 'Haiku, fallback local'
+  if (String(meta.model).includes('sonnet')) return 'Sonnet, citire directă'
+  if (String(meta.model).startsWith('ocr_local:')) return String(meta.model).includes('+claude-') ? 'Haiku, arbitraj local' : 'local'
+  return 'Haiku, citire directă'
 }
 
 // timers implicit cu wrapper: setTimeout apelat ca metoda a altui obiect da "Illegal invocation" in browser
@@ -64,7 +76,7 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
   try {
     verifica()
     if (esteNoapteOCR(new Date(timers.now()))) {
-      anunta('Serverul local e oprit (noaptea 22–06) — citesc cu Haiku')
+      anunta('Serverul local e oprit (noaptea 22–06) — citesc cu Sonnet')
       return { haiku:true, motiv:'noapte' }
     }
     anunta('Citesc local…')
@@ -78,11 +90,11 @@ export async function citesteLocal({ pdf_base64, proiect_id, depozit_id, sablon,
     // (Copilot B4 r2): un 5xx generic poate veni și după confirmare.
     const PRE_CONFIRMARE = ['storage_indisponibil']
     if (r.status >= 500 && r.raspuns && r.raspuns.success === false && !r.raspuns.cerere_id && PRE_CONFIRMARE.includes(r.raspuns.eroare)) {
-      anunta('Serverul local nu răspunde corect — citesc cu Haiku')
+      anunta('Serverul local nu răspunde corect — citesc cu Sonnet')
       return { haiku:true, motiv:r.raspuns.eroare || 'serviciu_indisponibil' }
     }
     if ([409, 429].includes(r.status)) {
-      anunta(r.raspuns?.eroare === 'noapte' ? 'Serverul local e oprit (noaptea 22–06) — citesc cu Haiku' : 'Citirea locală nu este disponibilă — citesc cu Haiku')
+      anunta(r.raspuns?.eroare === 'noapte' ? 'Serverul local e oprit (noaptea 22–06) — citesc cu Sonnet' : 'Citirea locală nu este disponibilă — citesc cu Sonnet')
       return { haiku:true, motiv:r.raspuns?.eroare }
     }
     if (r.error || !r.raspuns?.success || !r.raspuns.cerere_id) throw esec(r)
