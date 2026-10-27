@@ -605,3 +605,15 @@ C2 și C3 sunt închise. C1 conținea o contradicție: „altfel `erp`, ca azi�
 - **P2-01:** procedura de urgență include, pe lângă `ban`, **revocarea refresh token-urilor** (ștergerea sesiunilor Auth ale conturilor `teren`). Un test real arată că, după dezactivarea hook-ului, nici login-ul, nici refresh-ul nu emit un JWT `authenticated` pentru un cont `teren`. Dacă testul eșuează, procedura rămâne HOLD.
 - **P2-02:** preflight-ul compară **exact** seturile de `auth_user_id` (`auth.users` ↔ `conturi_tip`) în ambele direcții: lipsuri, orfani, duplicate. Numărarea nu ajunge.
 - **P2-03:** finalizarea provisioning-ului (`conturi_teren → activ` și `portal_provisioning → finalizat`) se face într-**un singur RPC tranzacțional**, `fn_portal_cont_finalizeaza`, cu CAS și postcondiții. Edge-ul nu face două scrieri separate.
+
+### Verdict Copilot pe r7 (27.10): **GO pentru începerea E1** (P0 0, P1 0, P2 4)
+
+GO-ul acoperă cod, migrări pregătite, harness PG17 prodlike și testul Supabase Auth într-un mediu izolat. **Nu** autorizează merge, deploy, DRY sau apply pe prod: acestea au porți separate și cer „da”-ul lui Răzvan.
+
+P2 de urmat în E1:
+- respingerea tokenului de către hook nu trebuie să împiedice crearea contului Auth neaprobat; se testează cu Auth real;
+- `fn_cont_aproba_erp`: doar owner, identitatea țintă verificată, audit append-only, fără conversie `teren → erp`, test cu non-owner;
+- preflight-ul compară exact toate identitățile din `auth.users` (inclusiv pending / invite și orfani);
+- configurația reală a înscrierii publice pe prod se verifică fără modificări; dacă e activă, se escaladează imediat la Răzvan.
+
+La review-ul implementării se cer dovezi (fișier / linie / test) pentru L02, L04, L05, L07–L09, L14–L20 și L25.
