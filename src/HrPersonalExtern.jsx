@@ -1,3 +1,4 @@
+import { withEmployeePersonal } from './employeesPersonal.js'
 // ═══════════════════════════════════════════════════════════════════════════
 // PERSONAL EXTERN PENTRU LICITAȚII
 // ───────────────────────────────────────────────────────────────────────────
@@ -74,6 +75,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
   const [addAut, setAddAut] = useState(null)        // persoana pentru care adaug autorizație
   const [acorduri, setAcorduri] = useState(new Map()) // employee_id → fișa fostului angajat (acordul de colaborare)
   const [fosti, setFosti] = useState([])              // foștii angajați: detectarea externilor nelegați omonimi
+  const poateScrieContacte = esteOwner || poateLega
   const nav = useNavigate()
 
   const incarca = useCallback(async () => {
@@ -83,7 +85,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
       supabase.from('hr_autorizatii')
         .select('id, extern_id, tip_id, numar_autorizatie, emitent, data_emitere, data_expirare, fara_expirare, domenii, fisier_path, fisier_nume, observatii')
         .not('extern_id', 'is', null).is('deleted_at', null),
-      supabase.from('employees').select('id,name,email,termination_date,active').not('termination_date', 'is', null).neq('active', true),
+      withEmployeePersonal(supabase.from('employees').select('id,name,termination_date,active').not('termination_date', 'is', null).neq('active', true), 'email', showToast),
     ])
     if (pe) showToast?.('Nu pot încărca personalul extern: ' + pe.message, 'error')
     // Acordul foștilor angajați se citește separat, după id (fără embed: între cele două tabele
@@ -102,7 +104,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
     setLoad(false)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { incarca() }, [incarca])
+  useEffect(() => { incarca().catch(() => setLoad(false)) }, [incarca])
 
   const autPentru = (id) => autorizatii.filter(a => a.extern_id === id)
 
@@ -114,6 +116,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
 
   // Dezlegarea de fișă (legare greșită / omonim): colaborarea devine inactivă (triggerul BD o forțează).
   const dezleaga = async (p) => {
+    if (!poateScrieContacte) return
     if (!window.confirm(`Dezlegi „${p.nume}” de fișa fostului angajat?\n\n• marcajul „Fost angajat Gazpet” dispare\n• colaborarea devine INACTIVĂ; reactivarea verifică dacă numele e al unui fost angajat\n\nFolosește doar dacă legarea a fost greșită (altă persoană).`)) return
     const { error } = await supabase.from('hr_personal_extern').update({ fost_angajat_employee_id: null, updated_at: new Date().toISOString() }).eq('id', p.id)
     if (error) { showToast?.('Nu am putut dezlega: ' + error.message, 'error'); return }
@@ -139,7 +142,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
           {persoane.length} {persoane.length === 1 ? 'persoană' : 'persoane'} · {autorizatii.length} autorizații
         </div>
         <div style={{flex:1}}/>
-        {canEdit && (
+        {poateScrieContacte && (
           <button onClick={() => setEditPers({})} style={S.btnP}>➕ Persoană externă</button>
         )}
       </div>
@@ -148,6 +151,8 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
         Colaboratorii invocați în propunerile tehnice. Nu sunt angajați — nu apar în pontaj,
         în salarii sau în alertele de aviz medical. Aici se ține doar ce trebuie dovedit la licitație.
       </div>
+
+      {!poateScrieContacte && <div style={{color:G.muted, marginBottom:14}}>Doar citire: contactele pot fi modificate doar de owner sau HR cu drept de modificare angajati.</div>}
 
       {load && <div style={{padding:40, textAlign:'center', color:G.muted}}>Se încarcă…</div>}
 
@@ -273,10 +278,10 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
                   )
                 })}
 
-                {canEdit && (
+                {(canEdit || poateScrieContacte) && (
                   <div style={{display:'flex', gap:8, marginTop:12}}>
-                    <button onClick={() => setAddAut(p)} style={{...S.btnS, borderColor:G.hr+'66', color:G.hr}}>➕ Autorizație</button>
-                    <button onClick={() => setEditPers(p)} style={S.btnS}>✏️ Editează datele</button>
+                    {canEdit && <button onClick={() => setAddAut(p)} style={{...S.btnS, borderColor:G.hr+'66', color:G.hr}}>➕ Autorizație</button>}
+                    {poateScrieContacte && <button onClick={() => setEditPers(p)} style={S.btnS}>✏️ Editează datele</button>}
                   </div>
                 )}
               </div>
@@ -285,7 +290,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
         )
       })}
 
-      {editPers && (
+      {editPers && poateScrieContacte && (
         <ModalPersoana persoana={editPers} statusAcord={acorduri.get(editPers.fost_angajat_employee_id)?.colaborare_externa_status}
           fostInca={editPers.fost_angajat_employee_id == null || esteFostAngajat(acorduri.get(editPers.fost_angajat_employee_id))}
           fosti={fosti} esteOwner={esteOwner}

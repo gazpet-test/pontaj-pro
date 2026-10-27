@@ -1,3 +1,4 @@
+import { EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal } from './employeesPersonal.js'
 // ===========================================================================
 // MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături · Coș
 // ===========================================================================
@@ -162,7 +163,7 @@ export default function HRPage() {
           if (!areHr) { showToast('Acces refuzat la modul HR', 'error'); setTimeout(() => nav('/'), 2000); return }
         }
       }
-      loadAll()
+      await loadAll().catch(() => setLoad(false))
     })()
   }, [])
   
@@ -180,9 +181,9 @@ export default function HRPage() {
   const loadAll = async () => {
     setLoad(true)
     const [empRes, autRes, tipRes, cosRes, chuckRes, arhRes] = await Promise.all([
-      supabase.from('employees').select('*, sites(name)').eq('active', true)
+      withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS + ',sites(name)').eq('active', true)
         .or('termination_date.is.null,termination_date.gte.' + new Date().toISOString().split('T')[0])
-        .order('name'),
+        .order('name'), 'cnp,iban,adresa,data_nasterii,telefon,email,observatii_hr', showToast),
       supabase.from('v_hr_autorizatii_status').select('*').order('data_expirare', { ascending: true, nullsFirst: false }),
       supabase.from('hr_autorizatii_tipuri').select('*').eq('activ', true).order('ordine'),
       // Etapa 13: count itemi în Coș pentru badge tab
@@ -322,7 +323,7 @@ export default function HRPage() {
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} poateLega={profile?.is_owner === true || profile?.can_modify_employees === true} esteOwner={profile?.is_owner === true} />}
       {!load && tab === 'fosti' && <HrFostiAngajati profile={profile} showToast={showToast} onDeschideFisa={async (id) => {
         // fișa unui fost angajat nu e în lista HR (doar activi) → o citim după id și deschidem același modal
-        const { data, error } = await supabase.from('employees').select('*').eq('id', id).maybeSingle()
+        const { data, error } = await withEmployeePersonal(supabase.from('employees').select(EMPLOYEES_PUBLIC_COLUMNS).eq('id', id).maybeSingle(), 'cnp,iban,adresa,data_nasterii,telefon,email,observatii_hr', showToast)
         if (error || !data) { showToast('Nu pot deschide fișa: ' + (error?.message || 'nu există'), 'error'); return }
         setEditEmp(data)
       }} />}
