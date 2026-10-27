@@ -25,7 +25,7 @@ BEGIN
     AND p.proconfig=ARRAY['search_path=public, pg_temp']::text[]
     -- metadate comportamentale (Jakarinos r3 P2): CREATE OR REPLACE le-ar reseta tacit
     AND NOT p.proisstrict AND p.provolatile='v' AND NOT p.proretset AND p.proparallel='u' AND NOT p.proleakproof
-    AND p.prorettype='bigint'::regtype AND pg_get_expr(p.proargdefaults,0)='NULL::bigint' AND p.procost=100 AND p.prorows=0)
+    AND p.prorettype='bigint'::regtype AND pg_get_expr(p.proargdefaults,0)='NULL::bigint' AND p.procost=100 AND p.prorows=0 AND p.prosupport=0 AND p.proargmodes IS NULL)
     OR has_function_privilege('anon','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE')
     OR has_function_privilege('service_role','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE')
     OR NOT has_function_privilege('authenticated','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE') THEN
