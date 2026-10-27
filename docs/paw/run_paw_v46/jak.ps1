@@ -7,6 +7,9 @@ forced_login_method = "chatgpt"
 cli_auth_credentials_store = "file"
 web_search = "disabled"
 
+[windows]
+sandbox = "unelevated"
+
 [features]
 apps = false
 plugins = false
@@ -94,7 +97,7 @@ function GetJakRuntime {
 }
 
 function GetJakOverrides([string]$repo,[bool]$withKey) {
- $overrides=@()
+ $overrides=@('-c','windows.sandbox="unelevated"')
  foreach($setting in @('features.apps=false','features.plugins=false','features.remote_plugin=false','features.skill_mcp_dependency_install=false','features.hooks=false')){
   $overrides+=@('-c',$setting)
  }
@@ -102,6 +105,45 @@ function GetJakOverrides([string]$repo,[bool]$withKey) {
  $overrides+=@('-c',('projects."'+$repoToml+'".trust_level="untrusted"'))
  $overrides+=@('-c',('mcp_servers.firecrawl.enabled='+$withKey.ToString().ToLowerInvariant()))
  return ,$overrides
+}
+
+# CLI 0.162.0: only System/User/Project layers have a rules folder.
+# --ignore-rules covers User/Project. Reject ALL local system policy inputs;
+# do not attempt to parse Starlark/TOML with a permissive regex.
+function GetJakSystemPolicyRoots {
+ $common=[Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+ if([string]::IsNullOrWhiteSpace($common)){throw 'jak_rules_neverificabile'}
+ return @((Join-Path $common 'OpenAI\Codex'),'C:\ProgramData\OpenAI\Codex') | Select-Object -Unique
+}
+function GetJakPolicyItem([string]$path) {
+ try {return Get-Item -LiteralPath $path -Force -ErrorAction Stop}
+ catch [Management.Automation.ItemNotFoundException] {return $null}
+ catch {throw 'jak_rules_neverificabile'}
+}
+function AssertJakRules([string]$jakHomePath) {
+ try {
+  foreach($root in @(GetJakSystemPolicyRoots)){
+   # Check ancestors too: a junction must not redirect the policy namespace.
+   $cursor=$root
+   while($cursor){
+    $item=GetJakPolicyItem $cursor
+    if($item -and ((-not $item.PSIsContainer) -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint))){throw 'policy'}
+    $cursor=Split-Path $cursor -Parent
+   }
+   foreach($name in @('config.toml','requirements.toml','managed_config.toml')){
+    if(GetJakPolicyItem (Join-Path $root $name)){throw 'policy'}
+   }
+  }
+  # Home rules also refused, even though exec ignores them: fail before MCP.
+  foreach($root in @($jakHomePath)+@(GetJakSystemPolicyRoots)){
+   $dir=GetJakPolicyItem (Join-Path $root 'rules')
+   if($dir){
+    if((-not $dir.PSIsContainer) -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'policy'}
+    $files=@(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction Stop)
+    if(@($files | Where-Object {$_.Extension -ieq '.rules' -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)}).Count){throw 'policy'}
+   }
+  }
+ } catch {throw 'jak_rules_neverificabile'}
 }
 
 function AssertJakFirecrawl($server,[bool]$withKey,[bool]$checkTools) {
@@ -117,7 +159,8 @@ function AssertJakFirecrawl($server,[bool]$withKey,[bool]$checkTools) {
  }
 }
 
-function AssertJakMcp([string]$exe,[string]$cli,[string[]]$overrides,[string]$repo,[int]$timeout,$childEnv,[bool]$withKey) {
+function AssertJakMcp([string]$exe,[string]$cli,[string[]]$overrides,[string]$repo,[int]$timeout,$childEnv,[bool]$withKey,[string]$redactKey) {
+ if($childEnv.ContainsKey('FIRECRAWL_API_KEY')){throw 'jak_preflight_cu_secret'}
  # list nu include enabled_tools in CLI 0.162.0; get este obligatoriu, separat.
  # Fara brief pe stdin si fara publicarea stdout/stderr de diagnostic.
  $clock=[Diagnostics.Stopwatch]::StartNew()
@@ -132,7 +175,7 @@ function AssertJakMcp([string]$exe,[string]$cli,[string[]]$overrides,[string]$re
   if($server.name -cne 'firecrawl'){
    # Numele extern este date: nu permitem injectare de linii/secrete in log.
    $name=if($server.name -is [string] -and $server.name -cmatch '^[A-Za-z0-9_.-]{1,80}$'){$server.name}else{'nume_invalid'}
-   if($childEnv.FIRECRAWL_API_KEY){$name=$name.Replace($childEnv.FIRECRAWL_API_KEY,'[REDACTED]')}
+   if($redactKey){$name=$name.Replace($redactKey,'[REDACTED]')}
    throw ('jak_mcp_neasteptat '+$name)
   }
   AssertJakFirecrawl $server $withKey $false
@@ -170,15 +213,19 @@ function InvokeJak([string]$exe,[string[]]$argv,[string]$prompt,[string]$repo,[i
   try {$key=[IO.File]::ReadAllText($keyPath).Trim()}catch{throw 'jak_firecrawl_cheie_necitibila'}
   if($key -cnotmatch '^fc-[A-Za-z0-9_-]+$'){throw 'jak_firecrawl_cheie_invalida'}
  }
- if($key){$childEnv.FIRECRAWL_API_KEY=$key}
- else {Add-Content -LiteralPath $script:OutFull -Value 'FIRECRAWL: indisponibil' -Encoding UTF8}
+ if(-not $key){Add-Content -LiteralPath $script:OutFull -Value 'FIRECRAWL: indisponibil' -Encoding UTF8}
  # CLI are precedenta peste config de proiect/cont. Nu exista selectie automata OAuth.
  # Pastram markerul stdin ultimul, inclusiv dupa override-urile interne.
  if($argv[-1] -cne '-'){throw 'jak_stdin_obligatoriu'}
  $overrides=GetJakOverrides $repo ([bool]$key)
- $argv=@($argv | Select-Object -SkipLast 1)+@('--ephemeral')+$overrides+@('-')
+ $argv=@($argv | Select-Object -SkipLast 1)+@('--ephemeral','--ignore-rules')+$overrides+@('-')
  try {
-  AssertJakMcp $exe $argv[0] $overrides $repo ([Math]::Min(60,$timeout)) $childEnv ([bool]$key)
+  AssertJakRules $jakHomePath
+  # MCP auth discovery may contact unvalidated servers: NO secret in env.
+  AssertJakMcp $exe $argv[0] $overrides $repo ([Math]::Min(60,$timeout)) $childEnv ([bool]$key) $key
+  AssertJakRules $jakHomePath
+  # Only the validated exec child receives the dedicated Firecrawl key.
+  if($key){$childEnv.FIRECRAWL_API_KEY=$key}
   $remaining=[int][Math]::Floor($timeout-$clock.Elapsed.TotalSeconds)
   if($remaining -lt 1){throw 'jak_timeout'}
   try {$result=Ruleaza $exe $argv $prompt $repo $remaining $childEnv $true $true}

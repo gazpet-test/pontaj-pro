@@ -194,7 +194,7 @@ assert os.environ['CODEX_HOME'].endswith('state\\\\jak-home')
 assert expected not in ' '.join(sys.argv)
 if 'mcp' in sys.argv:
  assert sys.stdin.read()==''
- server={'name':'firecrawl','enabled':key is not None,'transport':{'type':'streamable_http','url':'https://mcp.firecrawl.dev/v2/mcp','bearer_token_env_var':'FIRECRAWL_API_KEY','http_headers':None,'env_http_headers':None,'http_headers_helper':None}}
+ server={'name':'firecrawl','enabled':'mcp_servers.firecrawl.enabled=true' in sys.argv,'transport':{'type':'streamable_http','url':'https://mcp.firecrawl.dev/v2/mcp','bearer_token_env_var':'FIRECRAWL_API_KEY','http_headers':None,'env_http_headers':None,'http_headers_helper':None}}
  if 'get' in sys.argv:
   server.update(enabled_tools=['firecrawl_search','firecrawl_scrape','firecrawl_map'],disabled_tools=None)
  print(json.dumps([server] if 'list' in sys.argv else server))
@@ -216,6 +216,7 @@ $PAW_ROOT='__ROOT__';$script:OutFull=Join-Path $PAW_ROOT 'out.log'
 . '__SOURCE__\jak.ps1'
 # Doar validarea ACL privilegiata este simulata pe fixture; parsarea caii ramane reala.
 function AssertCdxAdminAcl([string]$path) {}
+function GetJakSystemPolicyRoots {return (Join-Path $PAW_ROOT 'system')}
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\run_paw.ps1',[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'syntax'}

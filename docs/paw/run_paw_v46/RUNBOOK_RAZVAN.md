@@ -256,7 +256,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Login jak esuat' }
 if ($LASTEXITCODE -ne 0) { throw 'Status login jak esuat' }
 ```
 
-Asteptat: codex-cli 0.162.0, exec include --ephemeral, list/get includ --json;
+Asteptat: codex-cli 0.162.0, exec include --ephemeral si --ignore-rules, list/get includ --json;
 login ChatGPT reusit in jak-home. Nu citi auth.json. Inchide consola dupa login.
 
 ## 5. Smoke Firecrawl cu lista uneltelor verificata
@@ -284,11 +284,56 @@ Asteptat cu cheia configurata: PAW_GATA, lista EXACTA search/scrape/map de mai s
 titlul paginii, fara AuthRequired/OAuth si fara cheia in log. Lipsa cheii:
 exact un `FIRECRAWL: indisponibil`, jak poate continua, dar smoke Firecrawl NU e trecut.
 Garda executa inainte de brief `mcp list --json` si `mcp get firecrawl --json`,
-cu acelasi runtime/home/mediu/override-uri. List nu contine enabled_tools in 0.162.0;
+cu acelasi runtime/home/override-uri, dar FARA FIRECRAWL_API_KEY in mediu.
+Cheia se injecteaza numai in exec DUPA validare; nu se exporta in consola. List nu contine enabled_tools in 0.162.0;
 get verifica allowlist-ul exact. Orice server suplimentar (inclusiv disabled),
 URL/header/unelte schimbate sau interogare esuata = PAW_EROARE si STOP.
 Raspunsul modelului nu inlocuieste garda determinista sau recertificarea OS.
 Search/scrape/map consuma credite; foloseste cheia dedicata cu plafon.
+
+### Proba locala obligatorie read-only (runda 3)
+
+Backend explicit: `[windows] sandbox = "unelevated"`, ca in configuratia v45
+`C:\Users\Gazpet-Ai\.codex\config.toml:8-9`, verificata la 27.10.2026.
+Aceeasi valoare este fortata prin CLI in preflight/exec. `never` nu substituie
+backend-ul. `exec --ignore-rules` ignora user/project; garda refuza inainte de
+MCP orice fisier .rules din jak-home sau system si orice config.toml,
+requirements.toml/managed_config.toml local system. Erori de acces, junction,
+tip neasteptat = STOP `jak_rules_neverificabile`. Nu sterge/relaxa politicile
+system ca sa treaca; necesita review separat. Namespace system se rezolva din
+Windows CommonApplicationData (nu din variabila ProgramData), plus fallback
+C:\ProgramData\OpenAI\Codex. Nu modifica profilul normal ~/.codex.
+
+In N, din repo, dupa smoke Firecrawl, executa o proba separata prin lansator:
+
+```powershell
+$Repo = 'C:\Users\Gazpet-Ai\gazpet-erp'
+$ReadTarget = Join-Path $Repo 'docs\paw\run_paw_v46\REVIEW_v46.md'
+$ProbeTarget = Join-Path $Repo 'docs\paw\run_paw_v46\jak-write-probe.txt'
+if (-not (Test-Path -LiteralPath $ReadTarget -PathType Leaf)) { throw 'Lipseste tinta citirii' }
+if (Test-Path -LiteralPath $ProbeTarget) { throw 'Tinta scrierii ocupata' }
+$ProbeId = Get-Date -Format 'yyyyMMdd-HHmmss'
+$ProbeBrief = "C:\Users\Public\paw-data\brief\jak-readonly-$ProbeId.md"
+$ProbeOut = "C:\Users\Public\paw-data\out\jak-readonly-$ProbeId.log"
+if ((Test-Path -LiteralPath $ProbeBrief) -or (Test-Path -LiteralPath $ProbeOut)) { throw 'Nume ocupat' }
+@"
+Foloseste shell-ul pentru Get-Content -LiteralPath '$ReadTarget' -TotalCount 1.
+Apoi incearca exact o scriere shell cu [IO.File]::WriteAllText('$ProbeTarget','PAW_PROBE').
+Raporteaza separat codul/eroarea fiecarei operatii. Nu folosi MCP pentru acestea.
+Nu cere escaladare, nu schimba reguli/config, nu incerca alta cale de scriere.
+"@ | Set-Content -LiteralPath $ProbeBrief -Encoding ASCII
+Set-Location $Repo
+& "$Bin\run_paw.cmd" jak $ProbeBrief $ProbeOut
+if ($LASTEXITCODE -ne 0) { throw 'Smoke sandbox esuat' }
+if (Test-Path -LiteralPath $ProbeTarget) { throw 'NO-GO: scrierea a reusit' }
+Get-Content -LiteralPath $ProbeOut
+```
+
+Razvan verifica in transcript: citirea chiar a fost EXECUTATA si a REUSIT,
+scrierea chiar a fost INCERCATA si REFUZATA de sandbox/politica. Refuzul
+ambelor sau simpla afirmatie a modelului NU trec proba. Tinta absenta singura
+nu dovedeste refuzul. Orice rezultat neclar = STOP, fara certificare/Seal.
+Nu am executat aici smoke-ul cu sesiune AI sau sandbox-ul instalat.
 
 ## 6. Testul de canal Gemini
 
@@ -332,7 +377,7 @@ Revino manual la Argon. Numai dupa observarea rezultatelor, A scrie markerul:
 $barrier = OpenCdxInstallBarrier $true
 try {
     $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
-    $GemLine = 'CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v46-r2'
+    $GemLine = 'CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v46-r3'
     Set-Content -LiteralPath 'C:\Users\Public\paw-data\gem_canal_validat' -Value $GemLine -Encoding ASCII
 } finally { $barrier.Dispose() }
 ```
@@ -502,6 +547,11 @@ try {
     if (Test-Path -LiteralPath "$RetiredBin\cdx_sandbox_validat.json") { throw 'Marker in bin vechi; nu restaura automat' }
     AssertCdxAdminAcl $RetiredBin
     AssertCdxHashes (GetCdxTreeHashes $RetiredBin) (Get-Content -LiteralPath "$Audit\old_bin_hashes.json" -Raw | ConvertFrom-Json)
+    $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
+    $GemRetired = Join-Path $Audit ('gem-marker-v46-rollback-'+[guid]::NewGuid().ToString('N'))
+    if (Test-Path -LiteralPath $GemMarker) {
+        Move-Item -LiteralPath $GemMarker -Destination $GemRetired
+    }
     RemoveCdxWfp
     $FailedBin = Join-Path $PawRoot ('bin-audit-rollback-'+[guid]::NewGuid().ToString('N'))
     if ([IO.Path]::GetFullPath($Bin) -ine 'C:\ProgramData\Gazpet\Paw\bin') { throw 'Cale bin invalida' }
@@ -514,6 +564,72 @@ try {
 Nu se sterg recursiv runtime/home/dovezi/worktree-uri. Remove retrage numai GUID-urile
 WFP Paw; celelalte reguli/conturi nu se schimba. Dupa rollback cdx ramane NECERTIFICAT;
 un Run nou necesita iar un pachet/filtru corespunzator, review si Seal.
+
+### Retestare si marker Gemini v45 dupa restaurare
+
+Markerul Gemini v46 este retras sub bariera INAINTE de swap. Daca swap-ul
+esueaza, markerul ramane retras; nu se restaureaza automat nici markerul v46,
+nici arhiva v45. Mentenanta ramane activa. Dupa swap reusit, in N (operator),
+Edge de test, un singur tab Gemini liber, modelul cerut de v45 selectat manual:
+
+```powershell
+$Bin = 'C:\ProgramData\Gazpet\Paw\bin'
+$Python = 'C:\Program Files\Python313\python.exe'
+$RollbackId = Get-Date -Format 'yyyyMMdd-HHmmss'
+$RollbackBrief = "C:\Users\Public\paw-data\brief\gem-v45-rollback-$RollbackId.md"
+$RollbackOut = "C:\Users\Public\paw-data\out\gem-v45-rollback-$RollbackId.log"
+if ((Test-Path -LiteralPath $RollbackBrief) -or (Test-Path -LiteralPath $RollbackOut)) { throw 'Nume ocupat' }
+'Raspunde exact: PAW_GEM_TEST_OK' | Set-Content -LiteralPath $RollbackBrief -Encoding ASCII
+& $Python "$Bin\gemini_pw.py" stare
+if ($LASTEXITCODE -ne 0) { throw 'Stare v45 esuata' }
+& $Python "$Bin\gemini_pw.py" trimite $RollbackBrief 120
+if ($LASTEXITCODE -ne 0) { throw 'Canal v45 esuat' }
+& $Python "$Bin\gemini_pw.py" trimite $RollbackBrief 120
+if ($LASTEXITCODE -ne 0) { throw 'Al doilea test v45 esuat' }
+```
+
+Razvan observa ambele raspunsuri PAW_GEM_TEST_OK, fara taburi create/inchise.
+Probeaza detectarea atasamentelor v45 in N, exact astfel:
+
+1. Razvan pune manual un fisier mic neconfidential (.txt) in ciorna Gemini,
+   fara trimitere. Ruleaza `& $Python "$Bin\gemini_pw.py" stare`.
+   Asteptat: `atasamente in ciorna: 1` sau mai mult. Daca arata 0: STOP.
+2. Cu atasamentul in ciorna, ruleaza:
+   `& $Python "$Bin\gemini_pw.py" trimite $RollbackBrief 120`.
+   Asteptat exit 3 si `GEM_EROARE ciorna_cu_atasamente`, iar pe ecran niciun
+   mesaj trimis (fara Enter). Orice alt rezultat: STOP.
+3. Scoate manual atasamentul. Ruleaza iar `stare`: asteptat 0 atasamente.
+   Repeta aceeasi comanda `trimite`: exit 0 si raspuns PAW_GEM_TEST_OK.
+   V45 refuza atasamentele; nu cere trimiterea lor prin helper.
+
+Nu emite markerul daca oricare proba lipseste/esueaza. Numai dupa toate probele,
+in A, proces NOU (helper-ele se incarca din bin-ul v45 restaurat):
+
+```powershell
+$PAW_ROOT = 'C:\ProgramData\Gazpet\Paw'
+$Bin = Join-Path $PAW_ROOT 'bin'
+. "$Bin\cdx_security.ps1"
+$barrier = OpenCdxInstallBarrier $true
+try {
+    $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
+    if (Test-Path -LiteralPath $GemMarker) { throw 'Marker existent; STOP si review' }
+    $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
+    $GemLine = 'CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v45-rollback-r3'
+    Set-Content -LiteralPath $GemMarker -Value $GemLine -Encoding ASCII
+} finally { $barrier.Dispose() }
+```
+
+In N, folosind $RollbackBrief si $RollbackOut definite mai sus:
+
+```powershell
+& "$Bin\run_paw.cmd" gem $RollbackBrief $RollbackOut
+if ($LASTEXITCODE -ne 0) { throw 'Smoke lansator gem v45 esuat; retrage markerul sub bariera' }
+Get-Content -LiteralPath $RollbackOut -Tail 20
+```
+
+Asteptat PAW_GATA si PAW_GEM_TEST_OK. La esec, in A retrage markerul nou sub
+OpenCdxInstallBarrier in Audit cu nume unic, ca mai sus; pastreaza mentenanta.
+Canalul cdx ramane NECERTIFICAT, conform paragrafului anterior.
 
 ## Anexa: ACL numai la provisionare NOUA
 

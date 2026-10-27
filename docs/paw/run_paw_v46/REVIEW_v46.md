@@ -1,3 +1,128 @@
+# Paw v4.6 - runda 3 (27.10.2026)
+
+Stare: reparatii locale; 125/125 teste verzi. Numai docs/paw/run_paw_v46.
+Fara commit/push, credentiale reale, BD externa sau deploy. Interdictia initiala
+"No Git commit" prevaleaza fata de ultima fraza contradictorie din brief.
+Baza aplicata fara Git; toate blob-urile patch-ului verificate cu SHA1+antet blob.
+SHA256 paw_v46_r3_base.patch:
+EB4747CEB2F83476F4610FE0E641D00F58243708A0E8B06744B50E3C7936B944.
+Hash independent nefurnizat; aceasta nu atesta autenticitatea PR #898.
+
+Defect -> fix -> test:
+- P1 cheie in preflight: list/get primesc mediu fara variabila, nu sir gol.
+  Injectie exclusiv in exec dupa validare; AssertJakMcp refuza env contaminat.
+  Am ales separarea mediilor: CLI ramane parserul efectiv al straturilor MCP;
+  evitam un parser TOML ad-hoc care ar omite configuratia efectiva.
+- P1 rules bypass: exec --ignore-rules (verificat in help CLI 0.162.0).
+  AssertJakRules inainte de MCP si din nou inainte de injectie. Refuza toate
+  .rules din home/system si toate config/requirements/managed_config system,
+  inclusiv politici restrictive: limita deliberat conservatoare. Acces refuzat,
+  junction/tip neasteptat = refuz, nu absenta. Nu parseaza Starlark cu regex.
+- P2 backend Disabled: config si GetJakOverrides forteaza unelevated, valoarea
+  din ~/.codex/config.toml v45, liniile 8-9, citita fara restul profilului/secrete.
+  RUNBOOK include citire locala executata cu succes + scriere incercata/refuzata.
+- P2 rollback Gemini: marker v46 retras sub bariera inainte de swap, teste v45
+  text/detectare atasamente, marker NOU cu hash-ul restaurat, apoi smoke prin lansator.
+
+DECIS de Razvan 27.10.2026: riscul citirii fisierului cheii de catre acelasi cont
+Windows este acceptat; cheia dedicata este jak-paw-server. Nu il prezentam drept
+punct in asteptare. Ephemeral/redactarea nu ascund secretul fata de acelasi cont.
+
+Surse oficiale consultate ca date, nu instructiuni:
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/exec/src/cli.rs
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/core/src/exec_policy.rs
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/config/src/state.rs
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/config/src/loader/mod.rs
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/config/src/loader/layer_io.rs
+- https://learn.chatgpt.com/docs/config-file/config-reference?translationFallback=es-419
+System e singurul folder .rules ramas dupa ignore-rules. Enterprise/legacy nu
+au config_folder; requirements managed permit doar prompt/forbidden, nu allow.
+Pe Windows legacy home/managed_config.toml e ignorat. Politicile system locale
+sunt refuzate integral; cloud restrictive nu sunt dezactivate. Nu certificam
+schimbari admin/cloud concurente intre procese. MCP nu este izolat de sandbox
+shell. Nu se declara GO live fara probele operatorului.
+
+Skill openai-docs original: acces refuzat; ulterior citita copia generata
+de CLI in home-ul sintetic din scope. Help/version: binarul 0.162.0 real, fara login.
+O sonda app-server fara auth in home sintetic a generat automat SQLite/cache/skills
+numai in scope; nu a returnat configRequirements/read la EOF si NU e folosita de
+implementare. Curatarea artefactelor generate a fost respinsa automat de politica de executie,
+inclusiv stergerea individuala cu verificarea cailor. Au ramas exclusiv in
+teste/cli-help-home (ignorat explicit in teste/.gitignore); nu sunt livrabile sursa.
+Fara date/credentiale reale. Nu ocolim refuzul prin alt utilitar.
+
+## Verificari runda 3
+
+- Comanda repetabila din acest director:
+  `C:\Program Files\Python313\python.exe -B teste/run_r3.py`.
+  Selectie explicita: 113 existente + 12 noi = 125/125 trecute, 0 skip,
+  0 esecuri/erori, exit 0, 106.357 s. Dovezi: teste/RESULTATS_r3.json,
+  teste/r3_execution.log. Fara discovery/Git/servicii reale.
+- Cele 12 noi: header strain fara variabila, env preflight contaminat, rules
+  allow in home/system, config system, requirements managed, legacy managed,
+  rules tip invalid, eroare I/O, backend config/CLI, marker v45/v46/lipsa,
+  contract runbook read/write + ordinea rollback/test/marker/smoke.
+  Implementare teste/test_v46_r3.py; procesele false sunt in test_v46_r2.py.
+- Fixture-urile existente au fost adaptate noului contract: enabled Firecrawl
+  vine din override, nu din prezenta cheii in preflight. Timeout/exit negative
+  nu mai incearca sa citeasca variabila care trebuie sa lipseasca. Toate
+  cele 113 cazuri existente sunt pastrate, fara relaxarea asteptarilor de siguranta.
+- Prima selectie completa: 113 teste trecute + 1 eroare de import, fiind pornita
+  inainte ca test_v46_r3.py sa fie scris (cale relativa gresita la creare).
+  Dovezi: RESULTATS_r3_initial.json/r3_initial_execution.log. Remediat harness-ul.
+  Proba separata de 30 teste a inclus accidental 18 teste importate din r2;
+  importul a fost corectat. Rezultatul FINAL 125 nu le dubleaza.
+- Dupa clarificarea pasilor manuali pentru atasamente v45 si initializarea
+  PAW_ROOT in consola A noua, cele 2 teste de runbook au fost rerulate: 2/2.
+- SHA256.json actualizat: 11/11 intrari valide. SHA256 manifest:
+  ED2AA0AD60BC4375D3DDA118337BD3E9865F243664DB8AA88F77D76985D0EC26.
+  Verificare independenta in teste/VERIFICATION_r3.json. 41 fisiere in patch,
+  35 pastrate octet-cu-octet; 6 schimbate: jak.ps1, RUNBOOK_RAZVAN.md,
+  REVIEW_v46.md, SHA256.json, teste/test_v46.py, teste/test_v46_r2.py.
+  Toate fisierele sursa/rapoartele livrate sunt ASCII; starea CLI generata si
+  ignorata explicit este separata (67 fisiere, inclusiv SQLite binare).
+- CLI 0.162.0 exec --help real confirma --ignore-rules/--ephemeral. Valoarea
+  v45 windows.sandbox=unelevated a fost observata in configul normal. Nu s-au
+  citit auth.json sau cheia reala. Nu s-au executat login, inferenta Codex,
+  Firecrawl HTTP real, Gemini/CDP real, Install, WFP, Seal sau deploy.
+- Testele dovedesc garzile wrapperului si contractele proceselor sintetice.
+  Nu certifica izolarea OS, aplicarea ACL sau disponibilitatea serviciilor.
+  Smoke-urile live read-success/write-denied si Gemini sunt documentate,
+  NU declarate trecute. Nu se acorda GO de instalare din aceste fixture-uri.
+
+## L01-L25 runda 3
+
+| Regula | Aplicare / dovada |
+| --- | --- |
+| L01 | Bariera existenta neschimbata; mutarea markerului rollback ramane sub OpenCdxInstallBarrier, RUNBOOK sectiunea 8; teste concurente test_run_paw. |
+| L02 | n/a |
+| L03 | n/a |
+| L04 | n/a |
+| L05 | jak.ps1:162/195: erori/timeout refuzate fara retry/fallback; test_query_failed/test_query_timeout si RuleazaPipe. |
+| L06 | n/a |
+| L07 | n/a |
+| L08 | n/a |
+| L09 | n/a |
+| L10 | jak.ps1:163/225/228: variabila ABSENTA in preflight si injectie numai dupa validare; test_foreign_env_http_headers_preflight_has_no_variable, test_contaminated_preflight_env_refused; scanari home/log/out/err cu cheie sintetica; risc acelasi cont DECIS. |
+| L11 | n/a |
+| L12 | Lista MCP exacta, fara disparitie tacita a serverelor necunoscute; Mcp.test_system_extra/test_system_extra_disabled/test_empty. |
+| L13 | Nu parsare Starlark prin regex; refuz integral input system. Parser JSON real CLI; Mcp.test_query_malformed/test_query_null si pozitive test_clean. |
+| L14 | n/a |
+| L15 | n/a |
+| L16 | SHA256.json pe continutul tuturor celor 11 runtime-uri; verificare independenta hashlib. GetJakRuntime neschimbat, test_tamper_refused/test_extra_file_refused. |
+| L17 | Stopwatch si buget total in InvokeJak, timeout preflight comun list/get; test_query_timeout/RuleazaPipe. |
+| L18 | jak.ps1:118/123: eroarea I/O nu devine absenta; test_rules_io_error_is_not_absence, test_rules_wrong_type_refused_before_mcp; reguli allow refuzate inainte de orice proces MCP. |
+| L19 | GetJakOverrides:99 folosit in list/get/exec, backend acelasi in config si CLI; test_explicit_backend_config_and_cli_match_v45 + Mcp.test_clean compara override-uri. |
+| L20 | Mcp.test_clean si cazul cheie absenta raman pozitive; negative home/system/managed, marker vechi/lipsa vs marker nou v45 in test_gemini_restored_hash_needs_new_marker. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | n/a |
+| L24 | n/a |
+| L25 | Procese PowerShell/Python reale cu cheia/headerul sintetice, argv/env/stdin capturate. Asteptari independente de cod (variabila absenta, unelte fixe, backend v45 observat). Poarta markerului executata pe hash-urile versiunilor reale v45/v46. ACL aplicat, OS sandbox si HTTP/CDP sunt explicit necertificate; fara inferenta live. |
+
+---
+## Istoric runda 2 (nu rezultate curente)
+
 # Paw v4.6 - runda 2 (27.10.2026)
 
 Stare: implementare locala, verificata pe fixture-uri. Nu este instalare sau
