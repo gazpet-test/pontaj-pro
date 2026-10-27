@@ -1,0 +1,22 @@
+{
+  "selection": [
+    "teste.test_v46",
+    "teste.test_gemini_pw",
+    "teste.test_run_paw",
+    "teste.test_v46_r2",
+    "teste.test_jak_runtime",
+    "teste.test_v46_r3",
+    "teste.test_v46_r4",
+    "teste.test_cdx_installer",
+    "teste.test_cdx_policy",
+    "teste.test_cdx_r5",
+    "teste.test_cdx_r6",
+    "teste.test_cdx_security"
+  ],
+  "run": 152,
+  "passed": 152,
+  "skipped": [],
+  "failures": [],
+  "errors": [],
+  "scope": "Synthetic processes; real Win32 snapshots/jobs/pipes; no live Codex, ACL certification or CDP"
+}

@@ -1,0 +1,20 @@
+{
+  "patch_sha256": "EB4747CEB2F83476F4610FE0E641D00F58243708A0E8B06744B50E3C7936B944",
+  "base_files": 41,
+  "modified_base_files": [
+    "docs/paw/run_paw_v46/REVIEW_v46.md",
+    "docs/paw/run_paw_v46/RUNBOOK_RAZVAN.md",
+    "docs/paw/run_paw_v46/SHA256.json",
+    "docs/paw/run_paw_v46/jak.ps1",
+    "docs/paw/run_paw_v46/teste/test_v46.py",
+    "docs/paw/run_paw_v46/teste/test_v46_r2.py"
+  ],
+  "manifest_valid": 11,
+  "manifest_sha256": "ED2AA0AD60BC4375D3DDA118337BD3E9865F243664DB8AA88F77D76985D0EC26",
+  "ascii_source_files": 49,
+  "non_ascii_source_files": [],
+  "excluded_generated_directory": "docs\\paw\\run_paw_v46\\teste\\cli-help-home",
+  "generated_files_retained": 67,
+  "tests_passed": 125,
+  "runbook_followup_tests_passed": 2
+}
