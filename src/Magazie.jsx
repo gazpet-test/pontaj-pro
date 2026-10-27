@@ -1,4 +1,4 @@
-import { withEmployeeMarimi } from './employeesPersonal.js'
+import { employeeFieldRead, withEmployeeMarimi } from './employeesPersonal.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL MAGAZIE — v1.0 (13.06.2026)
 // Tab MATERIALE (viewer stoc cantitativ, alimentat automat din Achiziții) +
@@ -884,6 +884,7 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
   const [obs, setObs] = useState('')
   const [dataPredare, setDataPredare] = useState(() => dataAziBucuresti(new Date()))
   const [sortMasura, setSortMasura] = useState(false)
+  const [masuriEditate, setMasuriEditate] = useState({})
   const [salvandMasura, setSalvandMasura] = useState(null)   // employee_id în curs de salvare
   const campMasura = MASURA_DIN_DENUMIRE(echip.denumire)
   const filtered = useMemo(() => {
@@ -906,6 +907,8 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
   const eroareCantitate = eroareCantitatePredare(cant, echip.cantitate_disponibila)
   const valid = empId && !eroareCantitate && !eroareData
   const salveazaMasura = async (empIdRow, valoare) => {
+    // Formularul nu modifica randul original: nu poate fabrica o citire.
+    if (!employeeFieldRead(employees.find(e => e.id === empIdRow), campMasura)) return
     setSalvandMasura(empIdRow)
     const { error } = await supabase.from('employees').update({ [campMasura]: valoare || null }).eq('id', empIdRow)
     setSalvandMasura(null)
@@ -926,6 +929,7 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
                 </label>
               )}
             </div>
+            {campMasura && employees.some(e => !employeeFieldRead(e, campMasura)) && <div role="status">marimi indisponibile - fara drept / eroare</div>}
             <input style={S.input} value={empSearch} onChange={e => { setEmpSearch(e.target.value); setEmpId('') }} placeholder="Nume angajat..." />
             <div style={{ maxHeight:220, overflowY:'auto', marginTop:6, border:`1px solid ${G.border}`, borderRadius:8 }}>
               {filtered.map(e => (
@@ -933,10 +937,10 @@ function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata 
                   style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:8, background: empId === e.id ? G.green + '22' : 'transparent', borderBottom:`1px solid ${G.border}` }}>
                   <span style={{ flex:1 }}>{empId === e.id ? '✓ ' : ''}{e.name}{e.functie && <span style={{ color:G.dim }}> · {e.functie}</span>}</span>
                   {campMasura && (
-                    <input value={e[campMasura] || ''} onClick={ev => ev.stopPropagation()}
-                      onChange={ev => { e[campMasura] = ev.target.value }}
+                    <input disabled={!employeeFieldRead(e, campMasura)} value={masuriEditate[e.id] ?? e[campMasura] ?? ''} onClick={ev => ev.stopPropagation()}
+                      onChange={ev => setMasuriEditate(prev => ({ ...prev, [e.id]: ev.target.value }))}
                       onBlur={ev => salveazaMasura(e.id, ev.target.value)}
-                      placeholder="măsură" title="Mărime — salvată automat la ieșirea din câmp"
+                      placeholder="masura" title={employeeFieldRead(e, campMasura) ? "Marime - salvata automat la iesirea din camp" : "marimi indisponibile - fara drept / eroare"}
                       style={{ width:56, padding:'3px 6px', fontSize:11.5, background:G.bg, border:`1px solid ${G.border}`, borderRadius:5, color:G.text, opacity: salvandMasura === e.id ? .5 : 1 }} />
                   )}
                 </div>

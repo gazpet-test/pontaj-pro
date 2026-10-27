@@ -1,4 +1,4 @@
-import { withEmployeePersonal } from './employeesPersonal.js'
+import { employeeFieldRead, withEmployeePersonal } from './employeesPersonal.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
@@ -9216,6 +9216,7 @@ function QrReconciliereTab({ profile, showToast }) {
   const fmtL = (v) => Math.round(Number(v) || 0).toLocaleString('ro-RO')
   
   async function setPin(employeeId, newPin) {
+    if (!employeeFieldRead(pinsSoferi.find(p => p.id === employeeId), "qr_pin")) return
     if (!newPin || newPin.length < 4) {
       showToast?.('PIN minim 4 cifre', 'error')
       return
@@ -9245,6 +9246,7 @@ function QrReconciliereTab({ profile, showToast }) {
   }
   
   async function togglePin(employeeId, newActive) {
+    if (!employeeFieldRead(pinsSoferi.find(p => p.id === employeeId), "qr_pin")) return
     const { error } = await supabase
       .from('employees').update({ qr_pin_active: newActive })
       .eq('id', employeeId)
@@ -9437,7 +9439,7 @@ function QrReconciliereTab({ profile, showToast }) {
       {/* Section: PIN-uri șoferi */}
       <div style={{...S.card, marginBottom: 14}}>
         <div style={{padding: '14px 18px', borderBottom: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-          <div style={{fontWeight: 700, color: G.text, fontSize: 14}}>🔑 PIN-uri șoferi ({pinsSoferi.filter(p => p.qr_pin_active).length} active)</div>
+          <div style={{fontWeight: 700, color: G.text, fontSize: 14}}>🔑 PIN-uri șoferi ({pinsSoferi.length && pinsSoferi.every(p => employeeFieldRead(p, "qr_pin")) ? `${pinsSoferi.filter(p => p.qr_pin_active).length} active` : "PIN - doar owner/HR"})</div>
         </div>
         <div style={{maxHeight: 300, overflowY: 'auto'}}>
           {pinsLoading ? <div style={{padding: 20, textAlign: 'center', color: G.muted}}>Se încarcă...</div> :
@@ -9465,7 +9467,7 @@ function QrReconciliereTab({ profile, showToast }) {
                         borderRadius: 4,
                         color: s.qr_pin ? '#8B5CF6' : G.muted,
                         fontWeight: 700, letterSpacing: '0.1em',
-                      }}>{s.qr_pin || '—'}</code>
+                      }}>{employeeFieldRead(s, 'qr_pin') ? (s.qr_pin || '\u2014') : 'PIN - doar owner/HR'}</code>
                     </td>
                     <td style={{padding: '8px 12px', textAlign: 'center'}}>
                       {s.qr_pin && (
@@ -9478,12 +9480,13 @@ function QrReconciliereTab({ profile, showToast }) {
                     </td>
                     <td style={{padding: '8px 12px', textAlign: 'right'}}>
                       <button onClick={() => {
+                        if (!employeeFieldRead(s, "qr_pin")) return
                         const newPin = prompt(`PIN nou pentru ${s.name} (4-6 cifre):`, s.qr_pin || '')
                         if (newPin !== null && newPin.length >= 4) setPin(s.id, newPin)
-                      }} style={{
+                      }} disabled={!employeeFieldRead(s, 'qr_pin')} style={{
                         padding: '4px 10px', background: 'transparent', color: '#8B5CF6',
                         border: '1px solid #8B5CF655', borderRadius: 5, fontSize: 11, cursor: 'pointer', marginRight: 4,
-                      }}>{s.qr_pin ? '✏️ Schimbă' : '➕ Set PIN'}</button>
+                      }}>{!employeeFieldRead(s, 'qr_pin') ? 'PIN - doar owner/HR' : s.qr_pin ? 'Schimba PIN' : 'Set PIN'}</button>
                       {s.qr_pin && (
                         <button onClick={() => togglePin(s.id, !s.qr_pin_active)} style={{
                           padding: '4px 10px', background: 'transparent',

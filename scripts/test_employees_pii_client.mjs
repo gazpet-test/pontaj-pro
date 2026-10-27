@@ -224,3 +224,123 @@ test('Magazie: lista goala nu cere RPC; eroarea listei publice ramane eroare', a
   assert.match(magazie, /marimiError && <div role="status"/)
   assert.match(magazie, /generation !== loadGeneration.current/)
 })
+
+// Runda 3: executam expresiile JSX si callback-urile reale fara browser/npm.
+const magazie = readFileSync(new URL('src/Magazie.jsx', root), 'utf8')
+const logistica = readFileSync(new URL('src/Logistica.jsx', root), 'utf8')
+const asyncFunction = (async () => {}).constructor
+function disabledFor(text, marker, names, values) {
+  const index = text.indexOf(marker)
+  assert.ok(index >= 0, marker)
+  const tag = text.slice(text.lastIndexOf('<input', index), text.indexOf('/>', index))
+  const expression = tag.match(/disabled=\{([^}]+)\}/)?.[1]
+  assert.ok(expression, marker)
+  return new Function(...names, `return ${expression}`)(...values)
+}
+
+test('Magazie: RPC esuat -> input dezactivat; blur si salvare directa nu scriu nici dupa editarea draftului', async () => {
+  const m = await setup({ rpcError: new Error('refuz') })
+  const { data: employees } = await m.withEmployeeMarimi(Promise.resolve({ data: [{ id: 1 }] }), m.notify)
+  const campMasura = 'marime_incaltaminte'
+  assert.equal(disabledFor(magazie, 'value={masuriEditate[e.id]', ['employeeFieldRead','e','campMasura'], [m.employeeFieldRead, employees[0], campMasura]), true)
+  assert.match(magazie, /marimi indisponibile - fara drept \/ eroare/)
+  const callback = magazie.match(/onChange=\{ev => setMasuriEditate\(([^\n]+)\)\}/)[1]
+  const draft = new Function('ev', 'e', `return ${callback}`)({ target: { value: '44' } }, employees[0])({})
+  assert.deepEqual(draft, { 1: '44' })
+  assert.equal(Object.hasOwn(employees[0], campMasura), false)
+  const saveBody = magazie.match(/const salveazaMasura = async \(empIdRow, valoare\) => \{([\s\S]*?)\n  \}/)[1]
+  const writes = []
+  const supabase = { from() { return { update(value) { writes.push(value); return { eq: async () => ({}) } } } } }
+  const saved = []
+  const save = new asyncFunction('employees','campMasura','employeeFieldRead','setSalvandMasura','supabase','onMasuraSalvata','empIdRow','valoare',saveBody)
+  for (const value of ['', draft[1]]) await save(employees,campMasura,m.employeeFieldRead,()=>{},supabase,(...args)=>saved.push(args),1,value)
+  assert.deepEqual(writes, [])
+  assert.deepEqual(saved, [])
+  // Null citit este legitim: editare si stergere explicita permise.
+  for (const value of ['43','']) await save([{ id: 1, [campMasura]: null }],campMasura,m.employeeFieldRead,()=>{},supabase,(...args)=>saved.push(args),1,value)
+  assert.deepEqual(writes, [{ marime_incaltaminte: '43' }, { marime_incaltaminte: null }])
+  assert.equal(disabledFor(magazie, 'value={masuriEditate[e.id]', ['employeeFieldRead','e','campMasura'], [m.employeeFieldRead, { [campMasura]: null }, campMasura]), false)
+})
+
+test('Admin/Salarii: disabled se bazeaza pe sursa, nu pe valoarea tastata; null citit editabil', async () => {
+  const { employeeFieldRead } = await setup()
+  for (const [marker, key, form, variable] of [
+    ['placeholder="RO49AAAA1B31007593840000"','iban',{ id: 1, iban: 'EDITAT' },'editEmp'],
+    ['placeholder="email@gazpet.ro" value={editSal.empEmail}','email',{ employee_id: 1, empEmail: 'EDITAT' },'editSal'],
+  ]) {
+    for (const [row, expected] of [[{ id: 1 },true],[{ id: 1, [key]: undefined },true],[{ id: 1, [key]: null },false],[{ id: 1, [key]: '' },false]]) {
+      assert.equal(disabledFor(app,marker,['employees',variable,'employeeFieldRead'],[[row],form,employeeFieldRead]),expected)
+    }
+  }
+  assert.match(app, /IBAN indisponibil - fara drept \/ eroare/)
+  assert.match(app, /Email indisponibil - fara drept \/ eroare/)
+  assert.match(app, /observatii HR indisponibile - fara drept \/ eroare; nu se modifica/)
+})
+
+test('Logistica: necitit != PIN inexistent; contor si actiuni folosesc provenienta', async () => {
+  const { employeeFieldRead } = await setup()
+  const cell = logistica.match(/\}\}>\{(employeeFieldRead\(s, 'qr_pin'\)[^\n]+)\}<\/code>/)?.[1]
+  assert.ok(cell)
+  const render = new Function('s','employeeFieldRead',`return ${cell}`)
+  assert.equal(render({ id: 1 },employeeFieldRead),'PIN - doar owner/HR')
+  assert.notEqual(render({ id: 1, qr_pin: null },employeeFieldRead),'PIN - doar owner/HR')
+  assert.equal(render({ qr_pin: '1234' },employeeFieldRead),'1234')
+  const counter = logistica.match(/\(\{(pinsSoferi.length && pinsSoferi.every[^\n]+)\}\)<\/div>/)?.[1]
+  assert.ok(counter)
+  const count = new Function('pinsSoferi','employeeFieldRead',`return ${counter}`)
+  assert.equal(count([{ id: 1 }],employeeFieldRead),'PIN - doar owner/HR')
+  assert.equal(count([{ id: 1, qr_pin: null, qr_pin_active: false }],employeeFieldRead),'0 active')
+  assert.match(logistica, /disabled=\{!employeeFieldRead\(s, 'qr_pin'\)\}/)
+  for (const [name,args] of [['setPin',['employeeId','newPin']],['togglePin',['employeeId','newActive']]]) {
+    const body = logistica.match(new RegExp(`async function ${name}\\([^)]*\\) \\{([\\s\\S]*?)\\n  \\}`))[1]
+    const save = new asyncFunction('pinsSoferi','employeeFieldRead',...args,body)
+    // Fara supabase in scope: orice apel de scriere ar esua testul.
+    await save([{ id: 1 }],employeeFieldRead,1,'1234')
+  }
+})
+import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+const migration = readFileSync(new URL('supabase/migrations/20261117a_employees_pii.sql', root), 'utf8')
+const historical = readFileSync(new URL('supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql', root), 'utf8')
+const fixture = readFileSync(new URL('scripts/test_employees_pii_fixture.sql', root), 'utf8')
+const shell = readFileSync(new URL('scripts/test_employees_pii.sh', root), 'utf8')
+const oldFunction = historical.match(/CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern\([\s\S]*?END \$fn\$;/)[0]
+const oldBody = oldFunction.split('AS $fn$')[1].split('$fn$;')[0]
+
+test('SQL static: hash preflight si fixture provin din corpul istoric exact, UTF8/LF', () => {
+  const expectedHash = createHash('sha256').update(oldBody).digest('hex')
+  assert.ok(migration.includes(`encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')='${expectedHash}'`))
+  const encoded = fixture.slice(fixture.indexOf('CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern')).split("AS U&'")[1].split("';\nREVOKE")[0]
+  const decoded = encoded.replace(/''/g, "'").replace(/\\([0-9a-f]{4})/gi, (_, code) => String.fromCharCode(parseInt(code,16)))
+  assert.equal(decoded, oldBody)
+  assert.ok(!/[^\x00-\x7f]/.test(fixture))
+})
+
+test('SQL static: functia existenta pastreaza tot corpul in afara portii de copiere aprobate', () => {
+  const current = migration.match(/CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern\([\s\S]*?END \$fn\$;/)[0]
+  // Literalii U& pastreaza mesajele originale; comentariul nou nu schimba comportamentul.
+  const restored = current.replace(/U&'((?:''|[^'])*)'/g, (_, literal) => "'" + literal.replace(/\\([0-9a-f]{4})/gi, (_, code) => String.fromCharCode(parseInt(code,16))) + "'")
+    .replace('  v_personal boolean;\n','')
+    .replace(/  -- Dreptul de copiere[^\n]*\n  v_personal :=[\s\S]*?p.can_access_personal_data IS TRUE\)\);\n/,'')
+    .replace("CASE WHEN v_personal THEN v_e.telefon ELSE NULL END, CASE WHEN v_personal THEN NULLIF(btrim(v_e.email), '') ELSE NULL END", "v_e.telefon, NULLIF(btrim(v_e.email), '')")
+  assert.equal(restored,oldFunction)
+  const rollback = readFileSync(new URL('supabase/revenire/20261117a_employees_pii_ROLLBACK.sql', root), 'utf8')
+  assert.match(rollback,/EXECUTE saved.fost_extern_before;/)
+  assert.match(rollback,/IS DISTINCT FROM saved.fost_extern_before/)
+  assert.match(rollback,/IS DISTINCT FROM saved.fost_extern_after/)
+  assert.match(shell,/rollback function definition differs/)
+  assert.match(shell,/fost_drift/)
+  assert.match(shell,/rollback erased function drift/)
+})
+
+test('Harness: optiunea socket lipseste complet la gol si apare numai pentru valoare nevida', () => {
+  const options = shell.slice(shell.indexOf('SERVER_OPTIONS='),shell.indexOf('"$PG_BIN/pg_ctl" -D "$DIR/data" -l'))
+  assert.ok(options.length > 0 && options.length < 500)
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash'
+  for (const value of ['', '/tmp/pii-local']) {
+    const result = spawnSync(bash,['-c',options+'\nprintf "%s" "$SERVER_OPTIONS"'], { env: { ...process.env, PORT: '5997', UNIX_SOCKET_DIRECTORIES: value }, encoding: 'utf8' })
+    assert.equal(result.status,0,result.stderr)
+    assert.equal(result.stdout.includes('unix_socket_directories'),value !== '')
+    if (value) assert.ok(result.stdout.includes(value))
+  }
+})

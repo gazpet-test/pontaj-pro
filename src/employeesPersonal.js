@@ -3,10 +3,15 @@ import { supabase } from './lib/supabase.js'
 // Lista inchisa: coloanele noi nu devin citibile automat.
 export const EMPLOYEES_PUBLIC_COLUMNS = 'id,name,department,position,active,created_at,site_id,hire_date,termination_date,functii_extra,functie,departament_hr,rol_in_firma,are_autorizatii,cetatenie,tip_contract,procent_ocupare,co_maxim_zile,cetatenie_secundara,protejat_la_stergere,cod_cor,functie_cim,colaborare_externa_status,colaborare_externa_confirmat_de,colaborare_externa_confirmat_la,colaborare_externa_nota,colaborare_externa_document'
 
+// Lipsa proprietatii inseamna necitit; null citit ramane editabil.
+export function employeeFieldRead(source, key) {
+  return source != null && Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined
+}
+
 // Sursa este randul citit, nu formularul care poate initializa campuri cu ''.
 export function employeePersonalWrite(source, values) {
   return Object.fromEntries(Object.entries(values).filter(([key]) =>
-    source != null && Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined))
+    employeeFieldRead(source, key)))
 }
 
 // Pastreaza filtrele query-ului de baza. Dreptul este reverificat in RPC.

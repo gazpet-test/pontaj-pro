@@ -2,6 +2,54 @@
 
 Data: 27.10.2026. Migrare NEAPLICATA. Totul este numai in worktree.
 
+
+## Runda 3 - rezultat si limite
+
+Baza r2 verificata SHA256 `00b383c7d0982dba2a2c355c21795d8c6eff7287c3416f26f5bd372faea61960`,
+aplicata numai prin git apply. Fara commit/push/credentiale/BD/deploy.
+
+- P1 Magazie: RPC esuat/refuzat lasa campurile necitite. Input dezactivat si
+  explicatie; salveazaMasura refuza inainte de UPDATE. Draft separat de randul citit,
+  deci onChange nu poate fabrica drept de salvare. Null citit ramane editabil.
+- P1 copia externa: in 20261117a, CREATE OR REPLACE pastreaza functia din
+  20260929e, cu o singura schimbare de business: telefon/email conditionate de
+  auth.uid + owner/can_access_personal_data. Poarta can_modify_employees ramane.
+  Preflight hash SHA256 pe prosrc, owner/definer/search_path/privilegii; snapshot
+  pg_get_functiondef si ACL in backup protejat; rollback refuza driftul si verifica
+  egalitatea exacta a definitiei restaurate. Mesajele vechi sunt pastrate prin
+  literali SQL U& pentru sursa noua ASCII. Migrarea istorica nu este editata.
+- P2 Logistica: PIN necitit este etichetat "PIN - doar owner/HR", fara numar
+  fictiv de active; setarea dezactivata, cu garda si in setPin/togglePin.
+- P2 Admin/Salarii: IBAN/email necitite sunt dezactivate cu explicatie vizibila.
+  observatii_hr nu are input in App.jsx: confirmarea reactivarii distinge istoricul
+  necitit, iar garda payload ramane. Niciun calcul de salarii/taxe modificat.
+- Harness: adaugate cazuri de copiere modifier/owner/HR, rollback exact si drift.
+  Optiunea unix_socket_directories se trimite numai pentru valoare nevida.
+
+Conform situatiei comunicate in brief la 27.10: SELECT/UPDATE pe hr_personal_extern
+sunt deschise oricarui authenticated, cu 0 copii telefon/email la acea data.
+Nu am verificat independent in BD. Politicile acestui tabel raman nemodificate;
+copiile ulterioare autorizate owner/HR raman citibile conform acelor politici.
+Aceasta schimbare inchide copierea neautorizata, nu accesul la copiile autorizate.
+
+PG17/PostgREST: NERULAT, instructiunea "No ... database" interzice accesul si local.
+Verificari runda 3:
+- PASS: `node --test scripts/test_employees_pii_client.mjs`, 27/27 (21 existente + 6 noi).
+  Noile teste executa disabled/callback/save din sursa reala; includ null legitim,
+  necitit, draft editat, PIN necitit vs absent, contor si blocarea actiunilor.
+  Paritatea statica reconstruieste functia istorica exacta, verifica hash-ul prosrc
+  si decodeaza fixture-ul U& la corpul istoric; nu echivaleaza cu executie PG.
+  Testul shell executa fragmentul real pentru socket gol/nevid, fara a porni BD.
+- PASS: `node --check src/employeesPersonal.js`; `bash -n scripts/test_employees_pii.sh`.
+- Vitest / vite build: NERULATE. `npm ci --ignore-scripts --no-audit --no-fund`
+  esueaza inainte de instalare cu `uv_os_homedir returned ENOMEM`. node_modules lipseste.
+  Cache-ul si configuratiile npm directionate numai in worktree; nu s-au citit
+  credentiale si nu s-au schimbat package.json/package-lock.json.
+- PG17 apply/rollback/reapply, SQL privileges si PostgREST: SCRISE, NERULATE.
+  Nu afirm ca intreaga suita existenta sau integrarea SQL sunt verzi.
+- Toate fisierele atinse in runda 3 sunt LF; artefactele SQL/test noi sunt ASCII.
+  Textele existente din JSX au fost pastrate; nu s-a transliterat aplicatia.
+
 ## Stare
 
 Pregatite: inventar, migrare/rollback, selectii explicite, RPC de citire owner/HR,
@@ -16,7 +64,7 @@ S-a rulat numai git apply pentru patch-ul de baza cerut. Nu s-a facut commit/pus
 nicio BD si nu s-a facut deploy. Cererea initiala "No Git commit" prevaleaza
 asupra ultimei propozitii din brief.
 
-Patch verificat inainte de aplicare: SHA-256
+Istoric runda 2: patch verificat atunci, SHA-256
 `ef7f2828c2a0560e5f341741bd0db08dceb73f1f1c179cda1db616d64f605423`.
 
 ## Delta runda 2
@@ -80,7 +128,7 @@ Nu s-au modificat package.json/package-lock.json si nu s-au citit configuratii s
 Celelalte citiri explicite si embed-urile employees(name/functie/...) raman valide.
 Wizard-ul are deja INSERT cu RETURNING id,name, deci nu a fost modificat.
 Nu s-a schimbat calculul salarial, nicio politica RLS de scriere, niciun flag de profil,
-nicio atribuire user_module_access si niciun RPC existent.
+nicio atribuire user_module_access. Runda 3 modifica explicit RPC-ul de legare externa.
 
 ## Alegerea mecanismului
 
@@ -131,12 +179,11 @@ la apply, nici la rollback; nu e necesara conditia "fara angajati noi".
    foloseste numai fn_employees_marimi si acces explicit magazie/owner/HR.
    SELECT direct ramane blocat. PIN-urile qr_pin* raman numai owner/HR, fara
    exceptie Magazie sau Logistica. Telefonul soferului extern este alta sursa.
-3. **Copii in alte tabele.** fn_fost_angajat_leaga_extern (20260929e:590-592)
-   copiaza telefon/email in hr_personal_extern. Scheletul conturi_schelet_supabase.sql:552
-   are SELECT pentru orice logat. Asta poate pastra o cale de citire a datelor
-   copiate chiar dupa restrictionarea employees. Nu se poate confirma politica
-   live fara BD. Restrictionarea acestui tabel/RPC existent depaseste brief-ul;
-   necesita decizia lui Razvan. Verificati si audit/recycle-bin/exporturi vechi.
+3. **Copii in alte tabele (runda 3).** Copierea noua de telefon/email prin
+   fn_fost_angajat_leaga_extern cere drept personal. Politicile hr_personal_extern
+   nu se modifica: copiile facute legitim de owner/HR sunt in continuare citibile
+   de authenticated. Brief-ul comunica 0 copii la 27.10; fara verificare live.
+   Audit/recycle-bin/exporturi vechi raman de verificat separat.
 4. **Surse QR lipsa.** qr-utilaj-info, qr-alimentare-submit si qr-bon-comun-lookup
    sunt invocate de QrUtilajPage, dar nu exista surse qr-* in supabase/functions.
    Nu se poate confirma rolul folosit. Un service_role cu SELECT existent pe tabel
@@ -212,7 +259,7 @@ de date, rollback ACL integral, refuz drift si re-apply. Nu il indreptati spre p
 7. Verificati ACL/owner/proconfig/corp/callee pentru RPC-urile existente din inventar,
    politicile copiilor personale si orice view refuzat de preflight. Snapshot-ul
    local nu este dovada starii live. Exceptia EIP este aprobata in aceasta runda;
-   nicio exceptie pentru PIN. hr_personal_extern ramane explicit in afara rundei.
+   nicio exceptie pentru PIN. Politicile hr_personal_extern raman in afara rundei; copierea prin RPC este reparata in runda 3.
 8. Pe mediu local de integrare: apply -> rollback -> re-apply, verificand ACL tabel
    SI coloane, grant option/grantor si lipsa schimbarilor in employees.
 
@@ -227,38 +274,38 @@ de date, rollback ACL integral, refuz drift si re-apply. Nu il indreptati spre p
 | RETURNING | Refuz personal/* la rol authenticated; id/name permis |
 | Granturi mostenite/PUBLIC | Verificate efectiv; tranzactie refuzata daca raman |
 | View-uri | Garda recursiva conservatoare, fara rescrierea view-urilor existente |
-| Functii vechi/copii | Inventariate; auditul live/calea hr_personal_extern raman deschise |
+| Functii vechi/copii | Copiere externa conditionata de drept personal; politicile tabelului extern si auditul live raman separate |
 | Secrete | Nu se citesc sau se logheaza valori personale; fixture-uri fictive |
 | Service | Granturile tabelului pentru service_role nu sunt modificate; sursele qr-* absente |
 | Rollback | Restaurare ACL exacta semantic; refuz la drift, fara stergerea datelor HR |
 | Aplicare | Niciuna; numai artefacte in worktree, fara commit/deploy |
 
-## L01-L25
+## L01-L25 - evaluare finala runda 3
 
 | Regula | Aplicare / dovada / limita |
 | --- | --- |
-| L01 | Lock employees inainte de snapshot; rollback blocheaza employees/backup inainte de drift check. Nu sunt introduse cote sau mutatii concurente de date. |
-| L02 | Migrarea/rollback necesita tranzactie unica prin runner/psql --single-transaction. Noul RPC doar citeste. |
-| L03 | n/a - fara lease, cache derivat sau scriere conditionata de versiune. |
-| L04 | n/a - fara bani, cantitati, mail sau intentii mutabile noi. |
-| L05 | n/a - fara fallback platit, stergere storage sau retry de scrieri. |
-| L06 | Advisory gazpet.livrare_migrare -> lock employees; rollback apoi backup. Ordinea este explicita, nu se blocheaza mai multe entitati HR. |
-| L07 | GRANT pe coloane si poarta in RPC impun regula direct in BD, inclusiv SELECT/RETURNING. Limita: copiile hr_personal_extern si RPC-urile live vechi necesita audit separat. |
-| L08 | RPC foloseste numai auth.uid si profile flags. NULL refuzat in harness SQL; niciun parametru de identitate. |
-| L09 | fn_employees_marimi verifica auth.uid si intrarea explicita profile_id/module='magazie', nivel valid, sau owner/HR. Test SQL cu rol fara acces si alt modul, plus viewer/editor/admin; NERULAT. Nu exista scope de proiect pentru employees. |
-| L10 | Nu se creeaza parole sau se citesc secrete; PIN existent doar restrictionat la citire. Nicio derivare din CNP/telefon; fixture-urile sunt fictive. |
-| L11 | n/a - fara extragere AI/documente sau afirmatii de dovada. |
-| L12 | Inventarul numara 62 apeluri src independent de cifra din brief, include embed-uri/SQL. Helperul refuza raspunsul personal incomplet. Analiza SQL statica este declarata superset, nu dovada completa live. |
-| L13 | Regex-ul este folosit numai pentru inventar/static tests, nu ca poarta SQL/autoritate de acces. SELECT/RPC se valideaza prin privilegii/corp SQL; staticele nu sunt prezentate ca parser semantic. |
-| L14 | Fara BEGIN/COMMIT in artefact, garda txid/READ COMMITTED, tranzactie in runner, postconditii, backup ACL, rollback cu lock/drift check. Apply/rollback/reapply scris in harness, NERULAT. |
-| L15 | Partial: baseline inchis coloane/tipuri, ACL complet cu grantor/grant option, politici snapshot, dependente view pe catalog. NU pretind amprenta completa pe corp/callee/triggere live; necesita audit de integrare inainte de productie. |
-| L16 | n/a - nicio cheie noua de business/dedup. singleton backup are PRIMARY KEY/CHECK. |
-| L17 | n/a - nu se schimba parsarea numerelor sau regulile de timp; filtrele legacy sunt pastrate. |
-| L18 | withEmployeeMarimi: eroare/refuz/incompletitudine/sesiune schimbata = mesaj explicit si lista publica fara marimi, nu afirmatie ca marimile sunt goale. 3 teste negative noi PASS. Helperul personal/export ramane fail-closed. |
-| L19 | employeePersonalWrite comun celor 3 payload-uri; mergeEmployeeRpc comun ambelor citiri. Allow-list independenta si paritate GRANT testate. Autorizarea ramane in SQL, clientul nu reproduce accesul Magazie. |
-| L20 | Testele client pozitive/negative 21/21 PASS, inclusiv null citit si editare fara citire. Harness SQL extins cu toate exceptiile Magazie, refuzuri si PIN nemodificat; NERULAT. |
-| L21 | n/a - nu se modifica raspunsuri AI sau scrierea lor. |
-| L22 | n/a - nu se apeleaza AI/servicii platite. |
-| L23 | Ambele RPC-uri folosesc acelasi keyset pana la pagina goala, loturi 100; teste cap server 1, 205 id-uri personal si 103 id-uri marimi PASS. Listele publice legacy nu sunt repaginate global. |
-| L24 | Magazie EchipamenteTab: loadGeneration captureaza generatia, refuza rezultate vechi si invalideaza la unmount; helperul verifica sesiunea inainte de merge. Assert static pentru legarea garzii; fara test React de cursa. Limitele legacy din alte ecrane raman. |
-| L25 | 21 teste client executate; payload-uri reale din App.jsx, valori asteptate independente. Harness SQL NOSUPERUSER/authenticated cu FK/CHECK/UNIQUE si rollback exact extins, NERULAT. SQL/PostgREST real nevalidate; build consemnat separat. |
+| L01 | Migrare: advisory apoi lock employees; rollback lock employees/backup inainte de verificare. RPC extern pastreaza lock-urile FOR UPDATE si idempotenta istorice; test SQL repeta legarea aceluiasi angajat. Fara mutatii client noi. |
+| L02 | Migrare si rollback in tranzactia unica armata de runner; RPC copiaza atomic. Harness shell pastreaza --single-transaction; SQL NERULAT. |
+| L03 | n/a |
+| L04 | n/a - nu se introduc bani/cantitati/mail; idempotenta RPC externa existenta este pastrata si are caz SQL. |
+| L05 | n/a |
+| L06 | Ordinea advisory -> employees -> backup la revenire ramane. RPC extern pastreaza ordinea employees -> extern existent; fara lock nou. Testul static compara intregul corp vechi, exceptand poarta aprobata. |
+| L07 | Poarta de copiere in CREATE OR REPLACE, nu doar UI; fn_employees_personal si ACL pe coloane raman. Limita explicita: SELECT/UPDATE hr_personal_extern raman deschise pentru authenticated, conform brief; nu se pretinde inchiderea tuturor copiilor. |
+| L08 | Poarta noua foloseste auth.uid nenul + flags profiles; identitatea/poarta veche fn_identitate_om si can_modify_employees pastrate. Cazuri SQL NULL, modifier, owner, HR si HR doar citire; NERULATE. |
+| L09 | Exceptia Magazie ramane autorizata server-side pe module='magazie', nivel explicit, sau owner/HR. Nicio identitate client noua; tests SQL existente pastrate. |
+| L10 | Fara citire de secrete/credentiale; contacte exclusiv fictive in fixture. PIN necitit nu este tratat ca inexistent. |
+| L11 | n/a |
+| L12 | RPC esuat ramane eroare vizibila si lista publica fara marimi; inputs necitite dezactivate. Testele client pastreaza refuzul rezultatelor partiale. |
+| L13 | Test pozitiv/negativ pentru expresiile reale; regex numai pentru teste statice, nu pentru autorizare SQL. Baseline prosrc este SHA256 pe bytes UTF8/LF, nu regex. |
+| L14 | Backup cu definitia pg_get_functiondef si ACL; rollback verifica drift inainte de restaurare si egalitatea exacta dupa. Harness apply -> rollback -> reapply extins, NERULAT. Nu se modifica date employees la migrare. |
+| L15 | Preflight prosrc SHA256 din 20260929e + owner/definer/search_path/privilegii. Snapshot ACL si pg_get_functiondef; test static independent confirma baseline si pastrarea corpului. Partial: auditul tuturor callee/triggere live ramane neefectuat; nu se pretinde amprenta completa. EXECUTE la rollback foloseste doar snapshot protejat, fara text client. |
+| L16 | n/a - nicio cheie de business noua; constrangerile de unicitate ale fixture-ului extern sunt reproduse. |
+| L17 | n/a - calculul salarial/taxele si regulile de timp nu sunt modificate. |
+| L18 | employeeFieldRead distinge proprietate absenta/undefined de null citit. Magazie fara scriere la blur; Admin/Salarii disabled; Logistica fara 0 active sau Set PIN pentru necitit. Teste executabile PASS. |
+| L19 | employeeFieldRead comun UI, save Magazie/PIN si employeePersonalWrite. Poarta SQL de copiere foloseste acelasi predicat ca fn_employees_personal. Test static pentru paritatea corpului istoric; test SQL modifier/owner/HR scris. |
+| L20 | Teste pozitive null citit + editare/stergere marime, PIN null existent vs necitit; SQL owner/HR si modifier, idempotenta si legare explicita, HR read-only refuzat. Client PASS; SQL NERULAT. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | Paginarea comuna a celor doua RPC-uri ramane pana la pagina goala; testele existente loturi/cap server 1 PASS. Listele publice legacy nu sunt repaginate global. |
+| L24 | Garda generatie/unmount Magazie din r2 ramane. Draft-ul de marimi este separat de employees si nu fabrica proprietati citite. Nu sunt introduse load-uri async noi. Limitele de cursa legacy din alte ecrane raman. |
+| L25 | 27/27 node:test PASS; source callbacks/disabled executate cu expected independent. Testele SQL ruleaza ca authenticated, harness postgres NOSUPERUSER; fixture cu FK/UNIQUE si baseline prosrc exact. Fixture fn_identitate_om este minimala si nu reproduce intregul lant live de triggere. PG17/PostgREST/Vitest/build NERULATE; motivul de mai sus. |

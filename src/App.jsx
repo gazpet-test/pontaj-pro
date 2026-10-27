@@ -1,4 +1,4 @@
-import { EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeePersonalWrite } from './employeesPersonal.js'
+import { employeeFieldRead, EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeePersonalWrite } from './employeesPersonal.js'
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -6834,7 +6834,7 @@ function AdminPage() {
         ?`Contul ${cont.email} va fi închis automat (drepturi scoase, logare blocată). Continui?`
         :`Data încetării e în viitor (${formatDataRo(dataInc)}): contul ${cont.email} NU se închide acum și apare în alerte. Continui?`)) return
     } else {
-      if(!window.confirm(`Reactivezi ${emp.name}?${emp.termination_date?` Data încetării (${formatDataRo(emp.termination_date)}) se șterge (rămâne notată în observațiile HR).`:''}\n\nAcordul de colaborare externă (dacă exista) revine la „Necunoscut”: la o nouă plecare se reconfirmă.${cont?`\n\nAccesul contului ${cont.email} NU se redă automat — restaurarea o face owner-ul din Manageri.`:''}`)) return
+      if(!window.confirm(`Reactivezi ${emp.name}?${emp.termination_date?` Data încetării (${formatDataRo(emp.termination_date)}) se șterge ${employeeFieldRead(emp, "observatii_hr") ? "(ramane notata in observatiile HR)" : "(observatii HR indisponibile - fara drept / eroare; nu se modifica)"}.`:''}\n\nAcordul de colaborare externă (dacă exista) revine la „Necunoscut”: la o nouă plecare se reconfirmă.${cont?`\n\nAccesul contului ${cont.email} NU se redă automat — restaurarea o face owner-ul din Manageri.`:''}`)) return
       updates={active:true,termination_date:null}
       // D4: data încetării nu se pierde fără urmă (hr_employees_audit ține doar INSERT/DELETE)
       if(emp.termination_date && Object.prototype.hasOwnProperty.call(employeePersonalWrite(emp, {observatii_hr:null}), 'observatii_hr')) updates.observatii_hr=[emp.observatii_hr,`Reactivat la ${formatDataRo(new Date().toISOString())}; încetarea anterioară: ${formatDataRo(emp.termination_date)}.`].filter(Boolean).join('\n')
@@ -7098,7 +7098,7 @@ function AdminPage() {
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Angajat</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet *</Lbl><input style={S.input} value={editEmp.name||''} onChange={e=>setEditEmp({...editEmp,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Funcție</Lbl><input style={S.input} value={editEmp.position||''} onChange={e=>setEditEmp({...editEmp,position:e.target.value})}/></div>
-            {canEditIban&&<div style={{marginBottom:12}}><Lbl>IBAN (plăți bancă) <span style={{fontSize:10,color:G.yellow}}>· editabil Super Admin & HR</span></Lbl><input style={S.input} placeholder="RO49AAAA1B31007593840000" value={editEmp.iban||''} onChange={e=>setEditEmp({...editEmp,iban:e.target.value.toUpperCase().replace(/\s/g,'')})} maxLength={34}/></div>}
+            {canEditIban&&<div style={{marginBottom:12}}><Lbl>IBAN (plăți bancă) <span style={{fontSize:10,color:G.yellow}}>· editabil Super Admin & HR</span></Lbl><input style={S.input} disabled={!employeeFieldRead(employees.find(e=>e.id===editEmp.id), "iban")} title={employeeFieldRead(employees.find(e=>e.id===editEmp.id), "iban") ? "" : "IBAN indisponibil - fara drept / eroare"} placeholder="RO49AAAA1B31007593840000" value={editEmp.iban||''} onChange={e=>setEditEmp({...editEmp,iban:e.target.value.toUpperCase().replace(/\s/g,'')})} maxLength={34}/>{!employeeFieldRead(employees.find(e=>e.id===editEmp.id), "iban")&&<div role="status">IBAN indisponibil - fara drept / eroare</div>}</div>}
             <div style={{marginBottom:12}}><Lbl>Departament</Lbl>
               <select value={editEmp.department} onChange={e=>setEditEmp({...editEmp,department:e.target.value})} style={{width:'100%'}}>
                 {DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
@@ -8567,7 +8567,8 @@ export function SalariiPage({ noExport = false } = {}) {
                 <div style={{fontSize:12,fontWeight:700,color:G.blue,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📧 Contact</div>
                 <div style={{marginBottom:16}}>
                   <Lbl>Email angajat</Lbl>
-                  <input style={S.input} type="email" placeholder="email@gazpet.ro" value={editSal.empEmail} onChange={e=>setEditSal({...editSal,empEmail:e.target.value})}/>
+                  <input style={S.input} type="email" disabled={!employeeFieldRead(employees.find(e=>e.id===editSal.employee_id), "email")} title={employeeFieldRead(employees.find(e=>e.id===editSal.employee_id), "email") ? "" : "Email indisponibil - fara drept / eroare"} placeholder="email@gazpet.ro" value={editSal.empEmail} onChange={e=>setEditSal({...editSal,empEmail:e.target.value})}/>
+                  {!employeeFieldRead(employees.find(e=>e.id===editSal.employee_id), "email")&&<div role="status">Email indisponibil - fara drept / eroare</div>}
                 </div>
 
                 <div style={{fontSize:12,fontWeight:700,color:G.blue,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📋 Contract</div>

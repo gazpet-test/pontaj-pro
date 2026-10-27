@@ -155,5 +155,48 @@ DO $epi_test_service$
 BEGIN
   IF (SELECT qr_pin FROM public.employees WHERE id=1) IS DISTINCT FROM '9876' THEN RAISE EXCEPTION 'service_role afectat'; END IF;
 END $epi_test_service$;
+-- Calea reala authenticated: rolul de scriere nu acorda copiere personala.
+RESET ROLE;
+INSERT INTO public.employees(id,name,department,active,termination_date,telefon,email,colaborare_externa_status)
+VALUES (101,'TEST EXTERN MODIFIER','TEST',false,CURRENT_DATE-1,'TEL MODIFIER','modifier@example.invalid','accepta'),
+       (102,'TEST EXTERN OWNER','TEST',false,CURRENT_DATE-1,'TEL OWNER',' owner@example.invalid ','accepta'),
+       (103,'TEST EXTERN HR','TEST',false,CURRENT_DATE-1,'TEL HR','hr@example.invalid','refuza'),
+       (104,'TEST EXTERN REFUZ','TEST',false,CURRENT_DATE-1,'TEL REFUZ','refuz@example.invalid','accepta'),
+       (105,'TEST EXTERN LEGARE','TEST',false,CURRENT_DATE-1,'TEL SURSA','sursa@example.invalid','accepta');
+INSERT INTO public.hr_personal_extern(id,nume,telefon,email) VALUES(9001,'EXTERN EXISTENT','TEL EXISTENT','existent@example.invalid');
+SET LOCAL ROLE authenticated;
+DO $epi_test_fost_extern$
+DECLARE x bigint; y bigint;
+BEGIN
+  PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000004',true);
+  x := public.fn_fost_angajat_leaga_extern(101);
+  IF NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=x AND telefon IS NULL AND email IS NULL
+    AND fost_angajat_employee_id=101 AND activ IS TRUE) THEN RAISE EXCEPTION 'modifier copiaza personal sau pierde legatura'; END IF;
+  y := public.fn_fost_angajat_leaga_extern(101);
+  IF y IS DISTINCT FROM x THEN RAISE EXCEPTION 'idempotenta externa pierduta'; END IF;
+  y := public.fn_fost_angajat_leaga_extern(105,9001);
+  IF y<>9001 OR NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=9001
+    AND fost_angajat_employee_id=105 AND telefon='TEL EXISTENT' AND email='existent@example.invalid') THEN
+    RAISE EXCEPTION 'legarea explicita modifica contactele existente'; END IF;
+  PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000002',true);
+  x := public.fn_fost_angajat_leaga_extern(102);
+  IF NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=x AND telefon='TEL OWNER' AND email='owner@example.invalid') THEN
+    RAISE EXCEPTION 'owner nu copiaza'; END IF;
+  PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000003',true);
+  x := public.fn_fost_angajat_leaga_extern(103);
+  IF NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=x AND telefon='TEL HR' AND email='hr@example.invalid' AND activ IS FALSE) THEN
+    RAISE EXCEPTION 'HR nu copiaza sau pierde activ'; END IF;
+  PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000005',true);
+  BEGIN
+    PERFORM public.fn_fost_angajat_leaga_extern(104);
+    RAISE EXCEPTION 'HR doar citire a trecut poarta de scriere';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  PERFORM set_config('request.jwt.claim.sub','',true);
+  BEGIN
+    PERFORM public.fn_fost_angajat_leaga_extern(104);
+    RAISE EXCEPTION 'identitate NULL acceptata';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $epi_test_fost_extern$;
+RESET ROLE;
 ROLLBACK;
 \echo 'PASS employees_pii SQL'

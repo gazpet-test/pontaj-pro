@@ -18,6 +18,16 @@ BEGIN
     RAISE EXCEPTION 'epi_preflight: obiecte deja existente';
   END IF;
   IF to_regclass('public.employees') IS NULL OR to_regclass('public.profiles') IS NULL THEN RAISE EXCEPTION 'epi_preflight: schema lipsa'; END IF;
+  -- Baseline revizuit: corpul exact din 20260929e, UTF8/LF, fara normalizare.
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('public.fn_fost_angajat_leaga_extern(integer,bigint)')
+    AND encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')='3805eb86a4fb38c31b698620a6ac97014c72315cbe03245e516c3373ed60d43d'
+    AND p.proowner=current_user::regrole AND p.prosecdef AND p.prolang=(SELECT oid FROM pg_language WHERE lanname='plpgsql')
+    AND p.proconfig=ARRAY['search_path=public, pg_temp']::text[])
+    OR has_function_privilege('anon','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE')
+    OR has_function_privilege('service_role','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE')
+    OR NOT has_function_privilege('authenticated','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE') THEN
+    RAISE EXCEPTION 'epi_preflight: drift fn_fost_angajat_leaga_extern';
+  END IF;
   -- Lock inainte de citirea metadatelor; nu se blocheaza randuri HR si nu se modifica date.
   LOCK TABLE public.employees IN ACCESS EXCLUSIVE MODE;
   IF (SELECT relowner <> current_user::regrole OR NOT relrowsecurity OR relkind <> 'r' FROM pg_class WHERE oid='public.employees'::regclass) THEN
@@ -63,18 +73,22 @@ CREATE TABLE public.employees_pii_acl_20261117a (
   singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
   before_acl jsonb NOT NULL, after_acl jsonb,
   columns_before text[] NOT NULL,
+  fost_extern_before text NOT NULL, fost_extern_after text,
+  fost_extern_acl aclitem[],
   policies_before jsonb NOT NULL
 );
 ALTER TABLE public.employees_pii_acl_20261117a ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.employees_pii_acl_20261117a FROM PUBLIC,anon,authenticated,service_role;
-INSERT INTO public.employees_pii_acl_20261117a(before_acl,columns_before,policies_before)
+INSERT INTO public.employees_pii_acl_20261117a(before_acl,columns_before,policies_before,fost_extern_before,fost_extern_acl)
 SELECT
   (SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY col,grantor,grantee,privilege_type,is_grantable),'[]'::jsonb) FROM (
     SELECT ''::text col,x.* FROM pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) x WHERE c.oid='public.employees'::regclass
     UNION ALL SELECT attname::text,x.* FROM pg_attribute CROSS JOIN LATERAL aclexplode(attacl) x WHERE attrelid='public.employees'::regclass AND attnum>0 AND NOT attisdropped
   ) a),
   ARRAY(SELECT attname::text FROM pg_attribute WHERE attrelid='public.employees'::regclass AND attnum>0 AND NOT attisdropped ORDER BY attnum),
-  (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb) FROM pg_policy p WHERE polrelid='public.employees'::regclass);
+  (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.polname),'[]'::jsonb) FROM pg_policy p WHERE polrelid='public.employees'::regclass),
+  pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure),
+  (SELECT proacl FROM pg_proc WHERE oid='public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure);
 
 REVOKE SELECT ON public.employees FROM authenticated,anon;
 DO $epi_columns_20261117a$
@@ -124,6 +138,73 @@ END $epi_marimi_20261117a$;
 REVOKE ALL ON FUNCTION public.fn_employees_marimi(bigint[]) FROM PUBLIC,anon,service_role;
 GRANT EXECUTE ON FUNCTION public.fn_employees_marimi(bigint[]) TO authenticated;
 
+CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern(p_employee_id integer, p_extern_id bigint DEFAULT NULL)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_uid  uuid := public.fn_identitate_om();
+  v_e    public.employees%ROWTYPE;
+  v_x    public.hr_personal_extern%ROWTYPE;
+  v_id   bigint;
+  v_constr text;
+  v_exist  bigint;
+  v_personal boolean;
+BEGIN
+  IF v_uid IS NULL OR NOT EXISTS (SELECT 1 FROM public.profiles
+                                   WHERE id = v_uid AND (is_owner IS TRUE OR can_modify_employees IS TRUE)) THEN
+    RAISE EXCEPTION 'Doar owner sau HR (can_modify_employees) pot trece un fost angajat ca extern' USING ERRCODE = '42501';
+  END IF;
+  -- Dreptul de copiere este identic cu fn_employees_personal; rolul de scriere nu ajunge.
+  v_personal := auth.uid() IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.profiles p WHERE p.id = auth.uid()
+      AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE));
+  SELECT * INTO v_e FROM public.employees WHERE id = p_employee_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Fișa #% nu există', p_employee_id USING ERRCODE = 'P0002';
+  END IF;
+  IF NOT (v_e.termination_date IS NOT NULL AND v_e.termination_date <= CURRENT_DATE AND v_e.active IS NOT TRUE) THEN
+    RAISE EXCEPTION 'Fișa #% nu e a unui fost angajat (contract încheiat și fișă inactivă)', p_employee_id USING ERRCODE = '22023';
+  END IF;
+  SELECT x.id INTO v_id FROM public.hr_personal_extern x WHERE x.fost_angajat_employee_id = p_employee_id;
+  IF FOUND THEN RETURN v_id; END IF;                          -- idempotent
+
+  IF p_extern_id IS NOT NULL THEN
+    SELECT * INTO v_x FROM public.hr_personal_extern WHERE id = p_extern_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Externul #% nu există', p_extern_id USING ERRCODE = 'P0002';
+    END IF;
+    IF v_x.fost_angajat_employee_id IS NOT NULL THEN
+      RAISE EXCEPTION 'Externul #% e deja legat de fișa #%', p_extern_id, v_x.fost_angajat_employee_id USING ERRCODE = '23505';
+    END IF;
+    UPDATE public.hr_personal_extern
+       SET fost_angajat_employee_id = p_employee_id,
+           activ = (activ AND v_e.colaborare_externa_status = 'accepta'),
+           updated_at = now()
+     WHERE id = p_extern_id;
+    RETURN p_extern_id;
+  END IF;
+
+  BEGIN
+    INSERT INTO public.hr_personal_extern (nume, functie, telefon, email, observatii, activ, created_by, fost_angajat_employee_id)
+    VALUES (v_e.name, COALESCE(v_e.functie, v_e.position), CASE WHEN v_personal THEN v_e.telefon ELSE NULL END, CASE WHEN v_personal THEN NULLIF(btrim(v_e.email), '') ELSE NULL END,
+            format('Fost angajat Gazpet (fișa #%s), contract încheiat la %s', v_e.id, to_char(v_e.termination_date, 'DD.MM.YYYY')),
+            v_e.colaborare_externa_status = 'accepta', v_uid, p_employee_id)
+    RETURNING id INTO v_id;
+  EXCEPTION WHEN unique_violation THEN
+    GET STACKED DIAGNOSTICS v_constr = CONSTRAINT_NAME;
+    IF v_constr = 'uq_hr_personal_extern_nume' THEN
+      SELECT x.id INTO v_exist FROM public.hr_personal_extern x WHERE lower(btrim(x.nume)) = lower(btrim(v_e.name));
+      RAISE EXCEPTION 'Există deja un extern cu numele %', v_e.name
+        USING ERRCODE = '23505', HINT = format('Există deja externul %s (#%s): leagă-l explicit', v_e.name, v_exist);
+    END IF;
+    RAISE;
+  END;
+  RETURN v_id;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) TO authenticated;
+
 DO $epi_post_20261117a$
 DECLARE c text; r text; v record;
 BEGIN
@@ -160,7 +241,13 @@ BEGIN
   END LOOP;
   IF NOT has_column_privilege('authenticated','public.employees','name','SELECT') OR
      NOT has_column_privilege('authenticated','public.employees','functie','SELECT') THEN RAISE EXCEPTION 'epi_post: SELECT public lipsa'; END IF;
-  UPDATE public.employees_pii_acl_20261117a SET after_acl=(
+  IF (SELECT fost_extern_acl IS DISTINCT FROM (SELECT proacl FROM pg_proc
+      WHERE oid='public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)
+      FROM public.employees_pii_acl_20261117a WHERE singleton) THEN
+    RAISE EXCEPTION 'epi_post: ACL functie externa schimbat';
+  END IF;
+  UPDATE public.employees_pii_acl_20261117a SET
+    fost_extern_after=pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure), after_acl=(
     SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY col,grantor,grantee,privilege_type,is_grantable),'[]'::jsonb) FROM (
       SELECT ''::text col,x.* FROM pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) x WHERE c.oid='public.employees'::regclass
       UNION ALL SELECT attname::text,x.* FROM pg_attribute CROSS JOIN LATERAL aclexplode(attacl) x WHERE attrelid='public.employees'::regclass AND attnum>0 AND NOT attisdropped

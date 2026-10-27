@@ -18,6 +18,20 @@ BEGIN
     UNION ALL SELECT attname::text,x.* FROM pg_attribute CROSS JOIN LATERAL aclexplode(attacl) x WHERE attrelid='public.employees'::regclass AND attnum>0 AND NOT attisdropped
   ) x;
   IF actual IS DISTINCT FROM saved.after_acl THEN RAISE EXCEPTION 'epi_rollback_drift: privilegii schimbate dupa migrare'; END IF;
+  IF pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)
+      IS DISTINCT FROM saved.fost_extern_after OR
+      (SELECT proacl FROM pg_proc WHERE oid='public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)
+      IS DISTINCT FROM saved.fost_extern_acl THEN
+    RAISE EXCEPTION 'epi_rollback_drift: functie externa schimbata';
+  END IF;
+  -- Definitia provine exclusiv din snapshot-ul protejat, nu din parametri client.
+  EXECUTE saved.fost_extern_before;
+  IF pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)
+      IS DISTINCT FROM saved.fost_extern_before OR
+      (SELECT proacl FROM pg_proc WHERE oid='public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)
+      IS DISTINCT FROM saved.fost_extern_acl THEN
+    RAISE EXCEPTION 'epi_rollback: restaurare functie inexacta';
+  END IF;
   REVOKE SELECT ON public.employees FROM authenticated,anon;
   FOREACH c IN ARRAY cols LOOP EXECUTE format('REVOKE SELECT (%I) ON public.employees FROM authenticated,anon',c); END LOOP;
   FOR a IN SELECT * FROM jsonb_to_recordset(saved.before_acl) AS x(col text,grantor oid,grantee oid,privilege_type text,is_grantable boolean)
