@@ -1,5 +1,5 @@
 // Avizul de ieșire pe tronson: formularul de emitere, PDF-ul și arhiva (design docs/izometrie/AVIZ_IESIRE_DESIGN.md).
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import { supabase } from './lib/supabase.js'
@@ -84,8 +84,10 @@ export async function genereazaSiAtaseaza(avizId) {
   return await citesteAviz(a.id)
 }
 // Recitește avizul înainte de deschidere: un aviz anulat între timp se descarcă etichetat „ANULAT” (Jakarinos P2).
-export async function deschidePdf(a) {
+// laRecitire primește rândul proaspăt ÎNAINTE de Storage, ca starea din ecran să se reconcilieze și dacă signed URL-ul pică.
+export async function deschidePdf(a, laRecitire) {
   const r = await citesteAviz(a.id)
+  laRecitire?.(r)
   if (!r.pdf_path) throw Error(`Avizul ${r.nr_complet} nu are încă PDF salvat.`)
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(r.pdf_path, 300, { download: r.stare === 'anulat' ? `ANULAT ${numeFisierAviz(r)}` : false })
   if (error) throw error
@@ -193,7 +195,7 @@ export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, availa
       <div style={{ fontSize: 12, marginTop: 4 }}>{selectate.map(b => b.serie || b.uid).join(', ')}</div></div>}
     {cerere && <div style={S.rez}>Răspuns neconfirmat. <button style={S.btn2} disabled={ui.busy} onClick={() => emite(cerere)}>Reîncearcă aceeași emitere (nu se dublează avizul)</button></div>}
     <div style={{ marginTop: 10 }}><button style={S.btn} disabled={disabled || !ids.length || !tronson || !depozit || Boolean(cerere)} onClick={pornit}>Emite avizul și înregistrează ieșirea ({ids.length})</button></div>
-    {emis && <div style={{ ...S.rez, background: emis.stare === 'anulat' ? '#FBEAEA' : '#E5F3EA' }}>Aviz <b>{emis.nr_complet}</b>{emis.stare === 'anulat' && <b style={{ color: G.red }}> · ANULAT: {emis.anulat_motiv}</b>} · {emis.total_bucati} buc · {fmtNr(emis.total_m, 2)} m · {fmtNr(emis.total_kg, 0)} kg {emis.pdf_path && <button style={S.btn2} onClick={() => deschidePdf(emis).then(r => setEmis(r)).catch(e => ui.setMesaj(eroareBirou(e)))}>{emis.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide / tipărește PDF'}</button>}</div>}
+    {emis && <div style={{ ...S.rez, background: emis.stare === 'anulat' ? '#FBEAEA' : '#E5F3EA' }}>Aviz <b>{emis.nr_complet}</b>{emis.stare === 'anulat' && <b style={{ color: G.red }}> · ANULAT: {emis.anulat_motiv}</b>} · {emis.total_bucati} buc · {fmtNr(emis.total_m, 2)} m · {fmtNr(emis.total_kg, 0)} kg {emis.pdf_path && <button style={S.btn2} onClick={() => deschidePdf(emis, r => setEmis(prev => (prev && prev.id === r.id ? r : prev))).catch(e => ui.setMesaj(eroareBirou(e)))}>{emis.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide / tipărește PDF'}</button>}</div>}
   </div>
 }
 
@@ -201,19 +203,27 @@ export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, availa
 export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled, reincarca }) {
   const [avize, setAvize] = useState([]), [f, setF] = useState({ depozit: '', tronson: '', stare: '', de: '', pana: '' })
   const [eu, setEu] = useState(null), [anulez, setAnulez] = useState(null), [motiv, setMotiv] = useState('')
-  async function incarca(current = () => true) {
-    const r = await citestePagini((a, b) => supabase.from('izo_avize_iesire').select(COLOANE_AVIZ).eq('proiect_id', proiectId).order('emis_la', { ascending: false }).range(a, b))
-    if (current()) setAvize(r)
+  // Ciclu propriu de încărcare (ui.run al părintelui e invalidat de efectul lui pe proiect). Orice încărcare poartă generația
+  // + proiectul: un răspuns întârziat pentru alt proiect sau o încărcare mai veche nu suprascrie arhiva curentă (Jakarinos P2).
+  const gen = useRef(0), proiectCurent = useRef(proiectId)
+  async function incarca() {
+    const g = ++gen.current, p = proiectId
+    if (!p) return
+    try {
+      const r = await citestePagini((a, b) => supabase.from('izo_avize_iesire').select(COLOANE_AVIZ).eq('proiect_id', p).order('emis_la', { ascending: false }).range(a, b))
+      if (g === gen.current && p === proiectCurent.current) setAvize(r)
+    } catch (e) { if (g === gen.current && p === proiectCurent.current) ui.setMesaj(eroareBirou(e)) }
   }
-  // Ciclu propriu de încărcare: ui.run al părintelui e invalidat de efectul lui pe proiect și ar abandona rezultatul (Jakarinos P2).
+  const actualizeaza = r => { if (r.proiect_id === proiectCurent.current) setAvize(list => list.map(x => (x.id === r.id ? r : x))) }
   useEffect(() => {
     let viu = true
+    proiectCurent.current = proiectId; gen.current++
     setAvize([])
     if (proiectId) {
-      incarca(() => viu).catch(e => { if (viu) ui.setMesaj(eroareBirou(e)) })
+      incarca()
       supabase.auth.getUser().then(r => { if (viu) setEu(r.data?.user?.id || null) })
     }
-    return () => { viu = false }
+    return () => { viu = false; gen.current++ }
   }, [proiectId, reincarca])
   const vizibile = avize.filter(a => (!f.depozit || String(a.depozit_id) === f.depozit) && (!f.tronson || String(a.tronson_id) === f.tronson)
     && (!f.stare || a.stare === f.stare) && (!f.de || a.data_aviz >= f.de) && (!f.pana || a.data_aviz <= f.pana))
@@ -225,7 +235,7 @@ export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled,
     if (data && ['eroare', 'conflict'].includes(data.cod)) throw Error(data.motiv || data.cod)
     if (!current()) return
     ui.setMesaj(`Aviz ${anulez.nr_complet} anulat. Ieșirea bucăților rămâne înregistrată (se anulează separat).`); setAnulez(null); setMotiv('')
-    await incarca(current)
+    await incarca()
   })
   return <div style={S.card}><h3>Arhiva avizelor de ieșire ({avize.length})</h3>
     <div style={S.row}>
@@ -234,7 +244,7 @@ export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled,
       <select style={S.input} aria-label="Filtru stare" value={f.stare} onChange={e => setF({ ...f, stare: e.target.value })}><option value="">Toate</option><option value="emis">Emise</option><option value="anulat">Anulate</option></select>
       <label>De la <input style={S.input} type="date" value={f.de} onChange={e => setF({ ...f, de: e.target.value })} /></label>
       <label>Până la <input style={S.input} type="date" value={f.pana} onChange={e => setF({ ...f, pana: e.target.value })} /></label>
-      <button style={S.btn2} disabled={disabled} onClick={() => incarca().catch(e => ui.setMesaj(eroareBirou(e)))}>Reîncarcă</button>
+      <button style={S.btn2} disabled={disabled} onClick={() => incarca()}>Reîncarcă</button>
     </div>
     <div style={{ overflowX: 'auto', marginTop: 8 }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
       <thead><tr>{['Nr. aviz', 'Data', 'Tronson', 'Buc', 'm', 'kg', 'Șofer · auto', 'Stare', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
@@ -244,8 +254,8 @@ export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled,
         <td style={S.td}>{sofer(a)} · {a.nr_auto}</td>
         <td style={S.td}>{a.stare === 'anulat' ? <span style={{ color: G.red }} title={`${a.anulat_motiv} · ${a.anulat_la || ''}`}>ANULAT: {a.anulat_motiv}</span> : 'emis'}</td>
         <td style={{ ...S.td, whiteSpace: 'nowrap' }}>
-          {a.pdf_path ? <button style={S.btn2} onClick={() => deschidePdf(a).catch(e => ui.setMesaj(eroareBirou(e)))}>{a.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide PDF'}</button>
-            : a.emis_de === eu ? <button style={S.btn2} disabled={disabled} onClick={() => ui.run(async c => { await genereazaSiAtaseaza(a.id); if (c()) { ui.setMesaj(`PDF ${a.nr_complet} salvat.`); await incarca(c) } })}>PDF lipsă — regenerează</button>
+          {a.pdf_path ? <button style={S.btn2} onClick={() => deschidePdf(a, actualizeaza).catch(e => ui.setMesaj(eroareBirou(e)))}>{a.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide PDF'}</button>
+            : a.emis_de === eu ? <button style={S.btn2} disabled={disabled} onClick={() => ui.run(async c => { const r = await genereazaSiAtaseaza(a.id); actualizeaza(r); if (c()) { ui.setMesaj(`PDF ${a.nr_complet} salvat.`); await incarca() } })}>PDF lipsă — regenerează</button>
             : <span style={{ color: G.muted }}>PDF lipsă (îl regenerează emitentul)</span>}
           {a.stare === 'emis' && <button style={{ ...S.btn2, marginLeft: 6 }} disabled={disabled} onClick={() => { setAnulez(a); setMotiv('') }}>Anulează</button>}
         </td></tr>)}</tbody></table>
