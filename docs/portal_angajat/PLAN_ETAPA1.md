@@ -640,3 +640,9 @@ Tokenurile `/co` nu se ating acum.
 Fiecare pas se face cu preview → „da” → apply.
 
 Până la lansare, trecerea pe angajat rămâne: generarea unui cont de portal dezactivează tokenul `/co` al acelui angajat.
+
+### Decizia pct. 3, mașinile (Răzvan, 27.10): **(a)**
+- **Câmp nou de custodie pe `logistica_active`:** angajatul care are mașina de serviciu, plus data de la care o are. Se completează în Logistica și atinge `Logistica.jsx`.
+- **Portalul** citește „mașina mea” printr-o funcție DEFINER: nr. de înmatriculare, marcă, model, doar pentru angajatul curent.
+- **Etapa** e separată, după E1. Fără cod până atunci și fără migrare fără „da” separat.
+- **Telefoanele și sculele** intră în Magazie ca echipamente.
