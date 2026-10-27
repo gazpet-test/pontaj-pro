@@ -22,7 +22,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('public.fn_fost_angajat_leaga_extern(integer,bigint)')
     AND encode(sha256(convert_to(p.prosrc,'UTF8')),'hex')='3805eb86a4fb38c31b698620a6ac97014c72315cbe03245e516c3373ed60d43d'
     AND p.proowner=current_user::regrole AND p.prosecdef AND p.prolang=(SELECT oid FROM pg_language WHERE lanname='plpgsql')
-    AND p.proconfig=ARRAY['search_path=public, pg_temp']::text[])
+    AND p.proconfig=ARRAY['search_path=public, pg_temp']::text[]
+    -- metadate comportamentale (Jakarinos r3 P2): CREATE OR REPLACE le-ar reseta tacit
+    AND NOT p.proisstrict AND p.provolatile='v' AND NOT p.proretset AND p.proparallel='u' AND NOT p.proleakproof
+    AND p.prorettype='bigint'::regtype AND pg_get_expr(p.proargdefaults,0)='NULL::bigint' AND p.procost=100 AND p.prorows=0)
     OR has_function_privilege('anon','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE')
     OR has_function_privilege('service_role','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE')
     OR NOT has_function_privilege('authenticated','public.fn_fost_angajat_leaga_extern(integer,bigint)','EXECUTE') THEN

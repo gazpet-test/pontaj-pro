@@ -42,9 +42,11 @@ DATA="$(q "SELECT md5(string_agg(to_jsonb(e)::text,',' ORDER BY id)) FROM employ
 if "${P[@]}" -f "$MIG" >"$DIR/guard.log" 2>&1; then fail 'unguarded apply accepted'; fi
 grep -q epi_garda "$DIR/guard.log" || fail 'wrong apply guard error'
 FOST_BEFORE="$(q "SELECT pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)")"
-for CASE in column inherited view function marimi fost_drift; do
+for CASE in column inherited view function marimi fost_drift fost_strict fost_volatil; do
   case "$CASE" in
     fost_drift) PREP="CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern(p_employee_id integer, p_extern_id bigint DEFAULT NULL) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS 'BEGIN RETURN 0; END'" ;;
+    fost_strict) PREP='ALTER FUNCTION public.fn_fost_angajat_leaga_extern(integer,bigint) STRICT' ;;
+    fost_volatil) PREP='ALTER FUNCTION public.fn_fost_angajat_leaga_extern(integer,bigint) STABLE' ;;
     column) PREP='ALTER TABLE public.employees ADD COLUMN personal_nou text' ;;
     inherited) PREP='GRANT SELECT(cnp) ON public.employees TO PUBLIC' ;;
     view) PREP='CREATE VIEW public.pii_leak AS SELECT cnp FROM employees; GRANT SELECT ON public.pii_leak TO authenticated' ;;
