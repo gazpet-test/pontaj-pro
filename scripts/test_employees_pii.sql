@@ -112,9 +112,12 @@ BEGIN
   END LOOP;
   -- can_modify_employees singur pastreaza dreptul de scriere, nu primeste citire.
   PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000004',true);
-  UPDATE public.employees SET cnp='DOAR SCRIERE' WHERE id=1;
-  GET DIAGNOSTICS n=ROW_COUNT;
-  IF n<>1 THEN RAISE EXCEPTION 'Dreptul existent can_modify_employees a fost schimbat'; END IF;
+  BEGIN
+    UPDATE public.employees SET cnp='DOAR SCRIERE' WHERE id=1;
+    RAISE EXCEPTION 'Modifier fara personal a scris CNP';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM<>'Acces refuzat la modificarea datelor personale ale angajatului' THEN RAISE; END IF;
+  END;
   BEGIN
     PERFORM * FROM public.fn_employees_personal(ARRAY[1]::bigint[]);
     RAISE EXCEPTION 'can_modify_employees citeste personal';
@@ -123,7 +126,7 @@ BEGIN
   -- HR doar citire nu obtine automat drept de modificare.
   PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000005',true);
   SELECT cnp INTO value FROM public.fn_employees_personal(ARRAY[1]::bigint[]);
-  IF value IS DISTINCT FROM 'DOAR SCRIERE' THEN RAISE EXCEPTION 'HR doar citire refuzat'; END IF;
+  IF value IS DISTINCT FROM 'FICTIV' THEN RAISE EXCEPTION 'HR doar citire refuzat'; END IF;
   UPDATE public.employees SET cnp='NU' WHERE id=1;
   GET DIAGNOSTICS n=ROW_COUNT;
   IF n<>0 THEN RAISE EXCEPTION 'HR doar citire a scris'; END IF;
@@ -180,12 +183,12 @@ BEGIN
     RAISE EXCEPTION 'legarea explicita modifica contactele existente'; END IF;
   PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000002',true);
   x := public.fn_fost_angajat_leaga_extern(102);
-  IF NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=x AND telefon='TEL OWNER' AND email='owner@example.invalid') THEN
-    RAISE EXCEPTION 'owner nu copiaza'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=x AND telefon IS NULL AND email IS NULL) THEN
+    RAISE EXCEPTION 'owner copiaza contacte'; END IF;
   PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000003',true);
   x := public.fn_fost_angajat_leaga_extern(103);
-  IF NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=x AND telefon='TEL HR' AND email='hr@example.invalid' AND activ IS FALSE) THEN
-    RAISE EXCEPTION 'HR nu copiaza sau pierde activ'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.hr_personal_extern WHERE id=x AND telefon IS NULL AND email IS NULL AND activ IS FALSE) THEN
+    RAISE EXCEPTION 'HR copiaza contacte sau pierde activ'; END IF;
   PERFORM set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000005',true);
   BEGIN
     PERFORM public.fn_fost_angajat_leaga_extern(104);

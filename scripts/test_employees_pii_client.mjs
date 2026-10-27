@@ -316,13 +316,9 @@ test('SQL static: hash preflight si fixture provin din corpul istoric exact, UTF
   assert.ok(!/[^\x00-\x7f]/.test(fixture))
 })
 
-test('SQL static: functia existenta pastreaza tot corpul in afara portii de copiere aprobate', () => {
+test('SQL static: functia existenta pastreaza tot corpul in afara eliminarii contactelor', () => {
   const current = migration.match(/CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern\([\s\S]*?END \$fn\$;/)[0]
-  // Literalii U& pastreaza mesajele originale; comentariul nou nu schimba comportamentul.
-  const restored = current.replace(/U&'((?:''|[^'])*)'/g, (_, literal) => "'" + literal.replace(/\\([0-9a-f]{4})/gi, (_, code) => String.fromCharCode(parseInt(code,16))) + "'")
-    .replace('  v_personal boolean;\n','')
-    .replace(/  -- Dreptul de copiere[^\n]*\n  v_personal :=[\s\S]*?p.can_access_personal_data IS TRUE\)\);\n/,'')
-    .replace("CASE WHEN v_personal THEN v_e.telefon ELSE NULL END, CASE WHEN v_personal THEN NULLIF(btrim(v_e.email), '') ELSE NULL END", "v_e.telefon, NULLIF(btrim(v_e.email), '')")
+  const restored = current.replace('NULL, NULL,', "v_e.telefon, NULLIF(btrim(v_e.email), ''),")
   assert.equal(restored,oldFunction)
   const rollback = readFileSync(new URL('supabase/revenire/20261117a_employees_pii_ROLLBACK.sql', root), 'utf8')
   assert.match(rollback,/EXECUTE saved.fost_extern_before;/)

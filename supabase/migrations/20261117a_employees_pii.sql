@@ -62,6 +62,28 @@ BEGIN
     OR NOT EXISTS(SELECT 1 FROM pg_policy WHERE polrelid='public.employees'::regclass AND polname='employees_insert_authorized' AND polcmd='a') THEN
     RAISE EXCEPTION 'epi_preflight: politicile existente de scriere lipsesc';
   END IF;
+
+  LOCK TABLE public.hr_personal_extern IN ACCESS EXCLUSIVE MODE;
+  IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid='public.hr_personal_extern'::regclass
+    AND relowner=current_user::regrole AND relrowsecurity AND NOT relforcerowsecurity) OR
+    (SELECT count(*) FROM pg_policy WHERE polrelid='public.hr_personal_extern'::regclass)<>3 OR
+    (SELECT count(*) FROM pg_policy WHERE polrelid='public.hr_personal_extern'::regclass
+      AND polroles=ARRAY['authenticated'::regrole::oid] AND polpermissive AND (
+        (polname='hr_personal_extern_select' AND polcmd='r' AND pg_get_expr(polqual,polrelid)='(auth.uid() IS NOT NULL)' AND polwithcheck IS NULL) OR
+        (polname='hr_personal_extern_update' AND polcmd='w' AND pg_get_expr(polqual,polrelid)='(auth.uid() IS NOT NULL)' AND pg_get_expr(polwithcheck,polrelid)='(auth.uid() IS NOT NULL)') OR
+        (polname='hr_personal_extern_insert' AND polcmd='a' AND polqual IS NULL AND pg_get_expr(polwithcheck,polrelid)='(auth.uid() IS NOT NULL)')) )<>3 THEN
+    RAISE EXCEPTION 'epi_preflight: drift politici extern';
+  END IF;
+  IF to_regprocedure('public.fn_employees_pii_write_guard()') IS NOT NULL OR EXISTS(
+    SELECT 1 FROM pg_trigger WHERE tgrelid='public.employees'::regclass AND NOT tgisinternal
+      AND (tgname='trg_employees_zz_pii_write' OR
+        ((tgtype::int & 3)=3 AND (tgtype::int & 20)<>0 AND tgname COLLATE "C">='trg_employees_zz_pii_write' COLLATE "C"))) THEN
+    RAISE EXCEPTION 'epi_preflight: ordine trigger personal neasteptata';
+  END IF;
+  -- Lista din catalog este emisa in log; nu presupunem ca fixture-ul are cele 13 triggere live.
+  RAISE NOTICE 'employees triggere: %', (SELECT string_agg(tgname::text,', ' ORDER BY tgname COLLATE "C")
+    FROM pg_trigger WHERE tgrelid='public.employees'::regclass AND NOT tgisinternal);
+
   -- Nu folosim CASCADE pentru ACL: dependentele granturilor trebuie revizuite separat.
   FOR a IN SELECT x.* FROM (
     SELECT (aclexplode(relacl)).* FROM pg_class WHERE oid='public.employees'::regclass
@@ -78,6 +100,8 @@ CREATE TABLE public.employees_pii_acl_20261117a (
   columns_before text[] NOT NULL,
   fost_extern_before text NOT NULL, fost_extern_after text,
   fost_extern_acl aclitem[],
+  extern_policies_before jsonb, extern_policies_after jsonb,
+  members_after jsonb, write_guard_after jsonb,
   policies_before jsonb NOT NULL
 );
 ALTER TABLE public.employees_pii_acl_20261117a ENABLE ROW LEVEL SECURITY;
@@ -93,6 +117,8 @@ SELECT
   pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure),
   (SELECT proacl FROM pg_proc WHERE oid='public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure);
 
+UPDATE public.employees_pii_acl_20261117a SET extern_policies_before=(SELECT jsonb_agg(jsonb_build_object('name',polname,'cmd',polcmd,'roles',polroles,'permissive',polpermissive,'qual',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) ORDER BY polname) FROM pg_policy WHERE polrelid='public.hr_personal_extern'::regclass) WHERE singleton;
+
 REVOKE SELECT ON public.employees FROM authenticated,anon;
 DO $epi_columns_20261117a$
 DECLARE col text;
@@ -103,6 +129,43 @@ BEGIN
 END $epi_columns_20261117a$;
 GRANT SELECT (id,name,department,position,active,created_at,site_id,hire_date,termination_date,functii_extra,functie,departament_hr,rol_in_firma,are_autorizatii,cetatenie,tip_contract,procent_ocupare,co_maxim_zile,cetatenie_secundara,protejat_la_stergere,cod_cor,functie_cim,colaborare_externa_status,colaborare_externa_confirmat_de,colaborare_externa_confirmat_la,colaborare_externa_nota,colaborare_externa_document)
   ON public.employees TO authenticated;
+
+-- Ultimul BEFORE ROW: valideaza NEW dupa triggerele care il pot modifica.
+-- Nu luam lock-uri pe alte tabele; citim numai profilul apelantului.
+CREATE FUNCTION public.fn_employees_pii_write_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp'
+AS $epi_write_guard$
+DECLARE changed boolean;
+BEGIN
+  -- Exceptia server aprobata in brief; nu deducem identitatea din current_user DEFINER.
+  IF auth.uid() IS NULL THEN RETURN NEW; END IF;
+  IF TG_OP='UPDATE' THEN
+    changed := ROW(NEW.cnp,NEW.iban,NEW.adresa,NEW.data_nasterii,NEW.telefon,NEW.email,NEW.observatii_hr,NEW.qr_pin,NEW.qr_pin_active,NEW.qr_pin_creat_la,NEW.marime_incaltaminte,NEW.marime_imbracaminte)
+      IS DISTINCT FROM ROW(OLD.cnp,OLD.iban,OLD.adresa,OLD.data_nasterii,OLD.telefon,OLD.email,OLD.observatii_hr,OLD.qr_pin,OLD.qr_pin_active,OLD.qr_pin_creat_la,OLD.marime_incaltaminte,OLD.marime_imbracaminte);
+  ELSE
+    -- false este DEFAULT NOT NULL fara PIN, inclusiv la INSERT fara campuri personale.
+    changed := NEW.cnp IS NOT NULL OR
+      NEW.iban IS NOT NULL OR
+      NEW.adresa IS NOT NULL OR
+      NEW.data_nasterii IS NOT NULL OR
+      NEW.telefon IS NOT NULL OR
+      NEW.email IS NOT NULL OR
+      NEW.observatii_hr IS NOT NULL OR
+      NEW.qr_pin IS NOT NULL OR
+      NEW.qr_pin_active IS TRUE OR
+      NEW.qr_pin_creat_la IS NOT NULL OR
+      NEW.marime_incaltaminte IS NOT NULL OR
+      NEW.marime_imbracaminte IS NOT NULL;
+  END IF;
+  IF changed AND NOT EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+    AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE)) THEN
+    RAISE EXCEPTION 'Acces refuzat la modificarea datelor personale ale angajatului' USING ERRCODE='42501';
+  END IF;
+  RETURN NEW;
+END $epi_write_guard$;
+REVOKE ALL ON FUNCTION public.fn_employees_pii_write_guard() FROM PUBLIC,anon,authenticated,service_role;
+CREATE TRIGGER trg_employees_zz_pii_write BEFORE INSERT OR UPDATE ON public.employees
+  FOR EACH ROW EXECUTE FUNCTION public.fn_employees_pii_write_guard();
 
 CREATE FUNCTION public.fn_employees_personal(p_ids bigint[] DEFAULT NULL)
 RETURNS TABLE(id bigint,cnp text,iban text,adresa text,data_nasterii date,telefon text,email text,observatii_hr text,
@@ -152,16 +215,11 @@ DECLARE
   v_id   bigint;
   v_constr text;
   v_exist  bigint;
-  v_personal boolean;
 BEGIN
   IF v_uid IS NULL OR NOT EXISTS (SELECT 1 FROM public.profiles
                                    WHERE id = v_uid AND (is_owner IS TRUE OR can_modify_employees IS TRUE)) THEN
     RAISE EXCEPTION 'Doar owner sau HR (can_modify_employees) pot trece un fost angajat ca extern' USING ERRCODE = '42501';
   END IF;
-  -- Dreptul de copiere este identic cu fn_employees_personal; rolul de scriere nu ajunge.
-  v_personal := auth.uid() IS NOT NULL AND EXISTS (
-    SELECT 1 FROM public.profiles p WHERE p.id = auth.uid()
-      AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE));
   SELECT * INTO v_e FROM public.employees WHERE id = p_employee_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Fișa #% nu există', p_employee_id USING ERRCODE = 'P0002';
@@ -190,7 +248,7 @@ BEGIN
 
   BEGIN
     INSERT INTO public.hr_personal_extern (nume, functie, telefon, email, observatii, activ, created_by, fost_angajat_employee_id)
-    VALUES (v_e.name, COALESCE(v_e.functie, v_e.position), CASE WHEN v_personal THEN v_e.telefon ELSE NULL END, CASE WHEN v_personal THEN NULLIF(btrim(v_e.email), '') ELSE NULL END,
+    VALUES (v_e.name, COALESCE(v_e.functie, v_e.position), NULL, NULL,
             format('Fost angajat Gazpet (fișa #%s), contract încheiat la %s', v_e.id, to_char(v_e.termination_date, 'DD.MM.YYYY')),
             v_e.colaborare_externa_status = 'accepta', v_uid, p_employee_id)
     RETURNING id INTO v_id;
@@ -207,6 +265,15 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) TO authenticated;
+
+-- Regimul de citire ramane deliberat deschis pentru authenticated (decizia A).
+ALTER POLICY hr_personal_extern_update ON public.hr_personal_extern
+  USING (EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+    AND (p.is_owner IS TRUE OR p.can_modify_employees IS TRUE))) WITH CHECK (EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+    AND (p.is_owner IS TRUE OR p.can_modify_employees IS TRUE)));
+ALTER POLICY hr_personal_extern_insert ON public.hr_personal_extern
+  WITH CHECK (EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+    AND (p.is_owner IS TRUE OR p.can_modify_employees IS TRUE)));
 
 DO $epi_post_20261117a$
 DECLARE c text; r text; v record;
@@ -250,6 +317,8 @@ BEGIN
     RAISE EXCEPTION 'epi_post: ACL functie externa schimbat';
   END IF;
   UPDATE public.employees_pii_acl_20261117a SET
+    extern_policies_after=(SELECT jsonb_agg(jsonb_build_object('name',polname,'cmd',polcmd,'roles',polroles,'permissive',polpermissive,'qual',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) ORDER BY polname) FROM pg_policy WHERE polrelid='public.hr_personal_extern'::regclass), members_after=(WITH RECURSIVE ancestors(id) AS (SELECT unnest(ARRAY['authenticated'::regrole::oid,'anon'::regrole::oid,'service_role'::regrole::oid]) UNION SELECT a.roleid FROM pg_auth_members a JOIN ancestors p ON a.member=p.id) SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.roleid,a.member,a.grantor),'[]'::jsonb) FROM pg_auth_members a WHERE a.member IN (SELECT id FROM ancestors)),
+    write_guard_after=(SELECT jsonb_build_object('all_triggers',(SELECT jsonb_agg(to_jsonb(tg) ORDER BY tg.tgname) FROM pg_trigger tg WHERE tg.tgrelid='public.employees'::regclass),'extern_table',(SELECT jsonb_build_object('acl',relacl,'owner',relowner,'rls',relrowsecurity,'force',relforcerowsecurity) FROM pg_class WHERE oid='public.hr_personal_extern'::regclass),'trigger',to_jsonb(t),'function',pg_get_functiondef(p.oid),'acl',p.proacl,'owner',p.proowner) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid WHERE t.tgrelid='public.employees'::regclass AND t.tgname='trg_employees_zz_pii_write'),
     fost_extern_after=pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure), after_acl=(
     SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY col,grantor,grantee,privilege_type,is_grantable),'[]'::jsonb) FROM (
       SELECT ''::text col,x.* FROM pg_class c CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) x WHERE c.oid='public.employees'::regclass

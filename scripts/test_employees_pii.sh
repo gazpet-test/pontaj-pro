@@ -30,6 +30,7 @@ fi
 "$PG_BIN/pg_ctl" -D "$DIR/data" -l "$DIR/postgres.log" -w -t 30 start -o "$SERVER_OPTIONS" >"$DIR/start.log"
 ADMIN=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U pii_bootstrap -d postgres)
 "${ADMIN[@]}" -c 'CREATE ROLE postgres LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; CREATE ROLE authenticated NOLOGIN; CREATE ROLE anon NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS; GRANT authenticated,anon,service_role TO postgres'
+"${ADMIN[@]}" -c 'CREATE ROLE pii_intermediate NOLOGIN; GRANT pii_intermediate TO postgres WITH ADMIN OPTION'
 "${ADMIN[@]}" -c 'CREATE DATABASE employees_pii_test OWNER postgres'
 "${ADMIN[@]}" -d employees_pii_test -c 'GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO postgres'
 P=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d employees_pii_test)
@@ -41,9 +42,13 @@ BEFORE="$(q "$ACL")"
 DATA="$(q "SELECT md5(string_agg(to_jsonb(e)::text,',' ORDER BY id)) FROM employees e")"
 if "${P[@]}" -f "$MIG" >"$DIR/guard.log" 2>&1; then fail 'unguarded apply accepted'; fi
 grep -q epi_garda "$DIR/guard.log" || fail 'wrong apply guard error'
+EXTERN_POLICIES="SELECT jsonb_agg(jsonb_build_object('name',polname,'cmd',polcmd,'roles',polroles,'permissive',polpermissive,'qual',pg_get_expr(polqual,polrelid),'check',pg_get_expr(polwithcheck,polrelid)) ORDER BY polname) FROM pg_policy WHERE polrelid='public.hr_personal_extern'::regclass"
+EXTERN_BEFORE="$(q "$EXTERN_POLICIES")"
 FOST_BEFORE="$(q "SELECT pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)")"
-for CASE in column inherited view function marimi fost_drift fost_strict fost_volatil; do
+for CASE in column inherited view function marimi fost_drift fost_strict fost_volatil extern_policy trigger_order; do
   case "$CASE" in
+    extern_policy) PREP='ALTER POLICY hr_personal_extern_insert ON public.hr_personal_extern WITH CHECK(true)' ;;
+    trigger_order) PREP="CREATE FUNCTION public.pii_late() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'; CREATE TRIGGER zzz_late BEFORE UPDATE ON public.employees FOR EACH ROW EXECUTE FUNCTION public.pii_late()" ;;
     fost_drift) PREP="CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern(p_employee_id integer, p_extern_id bigint DEFAULT NULL) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,pg_temp AS 'BEGIN RETURN 0; END'" ;;
     fost_strict) PREP='ALTER FUNCTION public.fn_fost_angajat_leaga_extern(integer,bigint) STRICT' ;;
     fost_volatil) PREP='ALTER FUNCTION public.fn_fost_angajat_leaga_extern(integer,bigint) STABLE' ;;
@@ -61,19 +66,37 @@ SYSTEM="$(q 'SELECT system_identifier FROM pg_control_system()')"
 PSQL_BIN="$PG_BIN/psql" bash "$ROOT/scripts/livrare_migrare.sh" --migrare "$MIG" --sha256 "$SHA" --versiune 20261117120000 --tinta-db employees_pii_test --tinta-sistem "$SYSTEM" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >"$DIR/runner.log" 2>&1 || { cat "$DIR/runner.log"; fail 'official runner'; }
 [[ "$(q "SELECT md5(string_agg(to_jsonb(e)::text,',' ORDER BY id)) FROM employees e")" = "$DATA" ]] || fail 'apply changed HR data'
 "${P[@]}" -f "$ROOT/scripts/test_employees_pii.sql" >"$DIR/tests.log" 2>&1 || { cat "$DIR/tests.log"; fail 'SQL rights tests'; }
-grep -q 'PASS employees_pii SQL' "$DIR/tests.log" || fail 'SQL end marker missing'
+"${P[@]}" -f "$ROOT/scripts/test_employees_pii_r4.sql" >"$DIR/r4.log" 2>&1 || { cat "$DIR/r4.log"; fail 'r4 rights tests'; }
+"${P[@]}" -f "$ROOT/scripts/test_employees_pii_trigger_order.sql" >"$DIR/order.log" 2>&1 || { cat "$DIR/order.log"; fail 'trigger order tests'; }
+grep -q 'PASS employees_pii SQL'  "$DIR/tests.log" || fail 'SQL end marker missing'
 if "${P[@]}" -f "$REV" >"$DIR/rollback-guard.log" 2>&1; then fail 'unguarded rollback accepted'; fi
 grep -q epi_garda "$DIR/rollback-guard.log" || fail 'wrong rollback guard error'
+# Drift ACL direct/PUBLIC/rol intermediar si membership: refuz atomic, configuratia ramane.
+for CASE in public_table public_column intermediate membership extern_policy write_trigger; do
+  case "$CASE" in
+    public_table) PREP='GRANT SELECT ON employees TO PUBLIC' ;;
+    public_column) PREP='GRANT SELECT(cnp) ON employees TO PUBLIC' ;;
+    intermediate) PREP='GRANT SELECT(cnp) ON employees TO pii_intermediate; GRANT pii_intermediate TO authenticated' ;;
+    membership) PREP='GRANT pii_intermediate TO authenticated' ;;
+    extern_policy) PREP='ALTER POLICY hr_personal_extern_update ON hr_personal_extern USING(true)' ;;
+    write_trigger) PREP='ALTER TABLE employees DISABLE TRIGGER trg_employees_zz_pii_write' ;;
+  esac
+  if "${P[@]}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261117a','EMPLOYEES_PII_RESTAUREAZA:' || txid_current(),true)" -c "$PREP" -f "$REV" >"$DIR/rollback-$CASE.log" 2>&1; then fail "rollback erased drift $CASE"; fi
+  grep -q epi_rollback_drift "$DIR/rollback-$CASE.log" || { cat "$DIR/rollback-$CASE.log"; fail "wrong drift error $CASE"; }
+done
 if "${P[@]}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261117a','EMPLOYEES_PII_RESTAUREAZA:' || txid_current(),true)" -c 'GRANT SELECT(cnp) ON employees TO authenticated' -f "$REV" >"$DIR/drift.log" 2>&1; then fail 'rollback erased new ACL'; fi
 grep -q epi_rollback_drift "$DIR/drift.log" || fail 'wrong rollback drift error'
 if "${P[@]}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261117a','EMPLOYEES_PII_RESTAUREAZA:' || txid_current(),true)" -c "ALTER FUNCTION public.fn_fost_angajat_leaga_extern(integer,bigint) SET search_path TO public" -f "$REV" >"$DIR/function-drift.log" 2>&1; then fail 'rollback erased function drift'; fi
 grep -q epi_rollback_drift "$DIR/function-drift.log" || fail 'wrong function drift error'
 "${P[@]}" --single-transaction -c "SELECT set_config('gazpet.revenire_20261117a','EMPLOYEES_PII_RESTAUREAZA:' || txid_current(),true)" -f "$REV" >"$DIR/rollback.log"
 [[ "$(q "SELECT pg_get_functiondef('public.fn_fost_angajat_leaga_extern(integer,bigint)'::regprocedure)")" = "$FOST_BEFORE" ]] || fail 'rollback function definition differs'
+[[ "$(q "$EXTERN_POLICIES")" = "$EXTERN_BEFORE" ]] || fail 'rollback external policies differ'
+[[ "$(q "SELECT to_regprocedure('public.fn_employees_pii_write_guard()') IS NULL AND NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.employees'::regclass AND tgname='trg_employees_zz_pii_write')")" = t ]] || fail 'write guard remains'
 [[ "$(q "$ACL")" = "$BEFORE" ]] || fail 'rollback ACL differs'
 [[ "$(q "SELECT md5(string_agg(to_jsonb(e)::text,',' ORDER BY id)) FROM employees e")" = "$DATA" ]] || fail 'rollback changed data'
 [[ "$(q "SELECT to_regclass('public.employees_pii_acl_20261117a') IS NULL AND to_regprocedure('public.fn_employees_personal(bigint[])') IS NULL AND to_regprocedure('public.fn_employees_marimi(bigint[])') IS NULL")" = t ]] || fail 'rollback objects remain'
 # Re-apply dupa rollback, apoi aceleasi teste, fara registrul runner-ului deja aplicat.
 "${P[@]}" --single-transaction -c 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED' -c "SELECT set_config('gazpet.livrare_migrare','20261117a_employees_pii:' || txid_current(),true)" -f "$MIG" >"$DIR/reapply.log"
 "${P[@]}" -f "$ROOT/scripts/test_employees_pii.sql" >"$DIR/reapply-tests.log" 2>&1 || { cat "$DIR/reapply-tests.log"; fail 'reapply SQL tests'; }
+"${P[@]}" -f "$ROOT/scripts/test_employees_pii_r4.sql" >"$DIR/reapply-r4.log" 2>&1 || { cat "$DIR/reapply-r4.log"; fail 'reapply r4 tests'; }
 echo 'PASS: PG17 NOSUPERUSER, guards, preflight, SELECT/RPC/DML/RETURNING, service_role, exact ACL rollback, reapply'

@@ -108,7 +108,8 @@ CREATE POLICY employees_insert_authorized ON public.employees FOR INSERT TO auth
 CREATE POLICY employees_delete_owner ON public.employees FOR DELETE TO authenticated
   USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id=auth.uid() AND profiles.is_owner=true));
 GRANT SELECT,INSERT,UPDATE,DELETE ON employees TO authenticated;
-GRANT SELECT ON employees TO service_role;
+GRANT SELECT,INSERT,UPDATE ON employees TO service_role;
+GRANT USAGE ON SEQUENCE employees_id_seq TO service_role;
 GRANT USAGE ON SEQUENCE employees_id_seq TO authenticated;
 -- Suprapunere grant tabel/coloana si grant option pentru restaurare exacta.
 GRANT SELECT(name) ON employees TO authenticated WITH GRANT OPTION;
@@ -126,10 +127,12 @@ CREATE TABLE public.hr_personal_extern (
 );
 CREATE UNIQUE INDEX uq_hr_personal_extern_nume ON public.hr_personal_extern(lower(btrim(nume)));
 ALTER TABLE public.hr_personal_extern ENABLE ROW LEVEL SECURITY;
-CREATE POLICY extern_read ON public.hr_personal_extern FOR SELECT TO authenticated USING(auth.uid() IS NOT NULL);
-CREATE POLICY extern_update ON public.hr_personal_extern FOR UPDATE TO authenticated
+CREATE POLICY hr_personal_extern_select ON public.hr_personal_extern FOR SELECT TO authenticated USING(auth.uid() IS NOT NULL);
+CREATE POLICY hr_personal_extern_update ON public.hr_personal_extern FOR UPDATE TO authenticated
   USING(auth.uid() IS NOT NULL) WITH CHECK(auth.uid() IS NOT NULL);
-GRANT SELECT,UPDATE ON public.hr_personal_extern TO authenticated;
+CREATE POLICY hr_personal_extern_insert ON public.hr_personal_extern FOR INSERT TO authenticated WITH CHECK(auth.uid() IS NOT NULL);
+GRANT SELECT,INSERT,UPDATE ON public.hr_personal_extern TO authenticated;
+GRANT USAGE ON SEQUENCE hr_personal_extern_id_seq TO authenticated;
 CREATE FUNCTION public.fn_identitate_om() RETURNS uuid LANGUAGE plpgsql STABLE
   SET search_path TO 'public','pg_temp' AS $identity$
 BEGIN
