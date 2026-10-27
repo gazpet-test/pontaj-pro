@@ -1,3 +1,4 @@
+import { withEmployeeMarimi } from './employeesPersonal.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL MAGAZIE — v1.0 (13.06.2026)
 // Tab MATERIALE (viewer stoc cantitativ, alimentat automat din Achiziții) +
@@ -8,7 +9,7 @@
 // angajare fără EIP asignat; PV Inventar PDF; consum materiale pe proiect.
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { dataAziBucuresti, eroareTotalEchipament, eroareCantitatePredare, eroareDataPredare } from './magazieEipLogica.js'
@@ -482,6 +483,8 @@ function IstoricDrawer({ poz, onClose }) {
 // TAB ECHIPAMENTE — Faza 1: tipuri + predare/retur pe angajat
 // ════════════════════════════════════════════════════════════════
 function EchipamenteTab() {
+  const loadGeneration = useRef(0)
+  const [marimiError, setMarimiError] = useState('')
   const [loading, setLoading] = useState(true)
   const [echipamente, setEchipamente] = useState([])
   const [asignari, setAsignari] = useState([])
@@ -497,15 +500,20 @@ function EchipamenteTab() {
   const [bulkOpen, setBulkOpen] = useState(false)     // TKT-0279: adăugare în bloc din factură
 
   const loadAll = useCallback(async () => {
+    const generation = ++loadGeneration.current
+    setMarimiError('')
     setLoading(true)
     try {
       const [rEch, rAsig, rEmp, rUser, rFurn] = await Promise.all([
         supabase.from('v_magazie_echipamente').select('*').order('denumire'),
         supabase.from('v_magazie_inventar_activ').select('*').is('data_retur', null),
-        supabase.from('employees').select('id, name, functie').order('name'),
+        withEmployeeMarimi(supabase.from('employees').select('id, name, functie').order('name'), message => {
+          if (generation === loadGeneration.current) setMarimiError(message)
+        }),
         supabase.auth.getUser(),
         supabase.from('v_echipament_furnizor').select('*'),
       ])
+      if (generation !== loadGeneration.current) return
       setEchipamente(rEch.data || [])
       setAsignari(rAsig.data || [])
       setEmployees(rEmp.data || [])
@@ -513,9 +521,9 @@ function EchipamenteTab() {
       const fm = {}
       for (const r of (rFurn.data || [])) fm[r.echipament_id] = r.furnizor
       setFurnMap(fm)
-    } catch (e) { console.error(e) } finally { setLoading(false) }
+    } catch (e) { console.error(e) } finally { if (generation === loadGeneration.current) setLoading(false) }
   }, [])
-  useEffect(() => { loadAll() }, [loadAll])
+  useEffect(() => { loadAll(); return () => { ++loadGeneration.current } }, [loadAll])
 
   const asignariPerEchip = useMemo(() => {
     const m = new Map()
@@ -668,6 +676,8 @@ function EchipamenteTab() {
         <EipIntrareActiune G={G} S={S} onSuccess={loadAll} />
         <button onClick={() => setEditModal({ denumire:'', categorie:'echipament', este_eip:false, um:'buc', serie:'', cantitate_total:1, stare:'functional', observatii:'' })} style={{ ...S.btnP }}>+ Echipament</button>
       </div>
+
+      {marimiError && <div role="status" style={{ ...S.card, padding:12, color:G.orange }}>{marimiError}</div>}
 
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă echipamentele...</div>}
 

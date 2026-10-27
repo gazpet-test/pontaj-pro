@@ -23,7 +23,7 @@ async function setup({ owner = false, hr = false, profileError = null, rpcError 
       return { select: () => ({ eq: () => ({ single: async () => ({ data: { is_owner: owner, can_access_personal_data: hr }, error: profileError }) }) }) }
     },
     rpc(name, { p_ids }) {
-      assert.equal(name, 'fn_employees_personal')
+      assert.ok(['fn_employees_personal', 'fn_employees_marimi'].includes(name))
       let after = null
       let columns
       const request = {
@@ -32,9 +32,11 @@ async function setup({ owner = false, hr = false, profileError = null, rpcError 
         limit(value) { assert.equal(value, 100); return this },
         gt(field, value) { assert.equal(field, 'id'); after = value; return this },
         then(resolve, reject) {
-          calls.push({ ids: p_ids, after, columns })
+          calls.push({ name, ids: p_ids, after, columns })
           const data = p_ids.filter(id => (after === null || id > after) && !(missing && id === 1))
-            .sort((a, b) => a - b).slice(0, cap).map(id => ({ id, iban: `FICTIV-${id}` }))
+            .sort((a, b) => a - b).slice(0, cap).map(id => name === 'fn_employees_marimi'
+              ? { id, marime_incaltaminte: '42', marime_imbracaminte: 'L' }
+              : { id, iban: `FICTIV-${id}` })
           return Promise.resolve({ data, error: rpcError }).then(resolve, reject)
         },
       }
@@ -135,4 +137,90 @@ test('src: toate selectiile directe employees au lista explicita fara personal',
     }
   }
   scan(fileURLToPath(new URL('src', root)))
+})
+
+const app = readFileSync(new URL('src/App.jsx', root), 'utf8')
+const adminStart = app.indexOf('const empUpdates = {')
+const adminPayload = app.slice(adminStart, app.indexOf('const {error}=', adminStart))
+const reactivateStart = app.indexOf('updates={active:true,termination_date:null}')
+const reactivateBranch = app.slice(reactivateStart, app.indexOf("    const {error}=await supabase.from('employees').update(updates)", reactivateStart))
+const reactivatePayload = reactivateBranch.slice(0, reactivateBranch.lastIndexOf('}'))
+const salaryStart = app.indexOf('const employeeUpdates=')
+const salaryPayload = app.slice(salaryStart, app.indexOf('    const payload={', salaryStart))
+
+test('Admin: payload-ul real omite IBAN necitit, chiar introdus in formular; null citit ramane editabil', async () => {
+  const { employeePersonalWrite } = await setup()
+  assert.ok(adminStart > 0 && adminPayload.length < 2000)
+  const build = new Function('employees', 'editEmp', 'employeePersonalWrite', `${adminPayload}; return empUpdates`)
+  for (const original of [{ id: 1 }, { id: 1, iban: undefined }, Object.assign(Object.create({ iban: 'ASCUNS' }), { id: 1 })]) {
+    const payload = build([original], { id: 1, name: 'PUBLIC', iban: 'INTRODUS' }, employeePersonalWrite)
+    assert.equal(Object.hasOwn(payload, 'iban'), false)
+    assert.equal(payload.name, 'PUBLIC')
+    assert.equal(JSON.stringify(payload).includes('iban'), false)
+  }
+  for (const value of [null, '', 'RO FICTIV']) {
+    const payload = build([{ id: 1, iban: null }], { id: 1, iban: value }, employeePersonalWrite)
+    assert.equal(payload.iban, value || null)
+  }
+})
+
+test('Reactivare: executa constructia reala; istoricul necitit este omis, cel citit se concateneaza', async () => {
+  const { employeePersonalWrite } = await setup()
+  assert.ok(reactivateStart > 0 && reactivatePayload.length < 1500)
+  const build = new Function('emp', 'employeePersonalWrite', 'formatDataRo', `let updates; ${reactivatePayload}; return updates`)
+  const base = { id: 1, termination_date: '2026-10-01' }
+  const hidden = build(base, employeePersonalWrite, value => value)
+  assert.deepEqual(hidden, { active: true, termination_date: null })
+  for (const history of [null, '', 'ISTORIC PASTRAT']) {
+    const result = build({ ...base, observatii_hr: history }, employeePersonalWrite, value => value)
+    assert.match(result.observatii_hr, /Reactivat la .*anterioar/)
+    if (history) assert.ok(result.observatii_hr.startsWith(history + '\n'))
+  }
+})
+
+test('Salarii: executa scrierea employees reala; email initial gol sau editat nu se trimite daca nu a fost citit', async () => {
+  const { employeePersonalWrite } = await setup()
+  assert.ok(salaryStart > 0 && salaryPayload.length < 1000)
+  const save = new (async () => {}).constructor('employees', 'editSal', 'employeePersonalWrite', 'supabase', salaryPayload)
+  for (const original of [{ id: 1 }, { id: 1, email: null }, { id: 1, email: 'VECHI' }]) {
+    for (const value of ['', 'NOU']) {
+      const calls = []
+      const supabase = { from(table) { assert.equal(table, 'employees'); return { update(payload) {
+        calls.push(payload); return { eq(field, id) { assert.equal(field, 'id'); assert.equal(id, 1); return Promise.resolve({}) } }
+      } } } }
+      await save([original], { employee_id: 1, empEmail: value }, employeePersonalWrite, supabase)
+      assert.deepEqual(calls, Object.hasOwn(original, 'email') ? [{ email: value }] : [])
+    }
+  }
+})
+
+test('Magazie: non-HR citeste numai marimi prin RPC separat, loturi si cap server 1 pana la gol', async () => {
+  const m = await setup({ cap: 1 })
+  const data = Array.from({ length: 103 }, (_, i) => ({ id: i + 1, name: 'TEST' }))
+  const result = await m.withEmployeeMarimi(Promise.resolve({ data }), m.notify)
+  assert.equal(result.data.length, 103)
+  assert.ok(result.data.every(row => row.marime_incaltaminte === '42' && row.marime_imbracaminte === 'L' && !Object.hasOwn(row, 'qr_pin')))
+  assert.ok(m.calls.every(call => call.name === 'fn_employees_marimi' && call.columns === 'id,marime_incaltaminte,marime_imbracaminte' && call.ids.length <= 100))
+  assert.equal(m.calls.length, 105)
+})
+
+for (const [label, options] of [['refuz', { rpcError: new Error('refuz') }], ['incomplet', { missing: true }], ['sesiune schimbata', { switched: true }]]) {
+  test(`Magazie ${label}: continua fara marimi cu mesaj vizibil, fara rezultat partial`, async () => {
+    const m = await setup(options)
+    const original = { data: [{ id: 1, name: 'TEST' }], error: null }
+    assert.deepEqual(await m.withEmployeeMarimi(Promise.resolve(original), m.notify), original)
+    assert.equal(m.notices.length, 1)
+    assert.match(m.notices[0][0], /continua fara marimi/)
+  })
+}
+
+test('Magazie: lista goala nu cere RPC; eroarea listei publice ramane eroare', async () => {
+  const m = await setup()
+  assert.deepEqual(await m.withEmployeeMarimi(Promise.resolve({ data: [] }), m.notify), { data: [] })
+  await assert.rejects(m.withEmployeeMarimi(Promise.resolve({ error: new Error('public failed') }), m.notify), /public failed/)
+  assert.equal(m.calls.length, 0)
+  const magazie = readFileSync(new URL('src/Magazie.jsx', root), 'utf8')
+  assert.match(magazie, /withEmployeeMarimi\(supabase\.from\('employees'\)/)
+  assert.match(magazie, /marimiError && <div role="status"/)
+  assert.match(magazie, /generation !== loadGeneration.current/)
 })

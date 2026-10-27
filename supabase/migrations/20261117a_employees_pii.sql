@@ -14,7 +14,7 @@ BEGIN
     RAISE EXCEPTION 'epi_garda: armare persistenta';
   END IF;
   IF to_regclass('public.employees_pii_acl_20261117a') IS NOT NULL OR EXISTS(
-    SELECT 1 FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fn_employees_personal') THEN
+    SELECT 1 FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('fn_employees_personal','fn_employees_marimi')) THEN
     RAISE EXCEPTION 'epi_preflight: obiecte deja existente';
   END IF;
   IF to_regclass('public.employees') IS NULL OR to_regclass('public.profiles') IS NULL THEN RAISE EXCEPTION 'epi_preflight: schema lipsa'; END IF;
@@ -104,9 +104,34 @@ END $epi_read_20261117a$;
 REVOKE ALL ON FUNCTION public.fn_employees_personal(bigint[]) FROM PUBLIC,anon,service_role;
 GRANT EXECUTE ON FUNCTION public.fn_employees_personal(bigint[]) TO authenticated;
 
+CREATE FUNCTION public.fn_employees_marimi(p_ids bigint[] DEFAULT NULL)
+RETURNS TABLE(id bigint,marime_incaltaminte text,marime_imbracaminte text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp'
+AS $epi_marimi_20261117a$
+BEGIN
+  IF auth.uid() IS NULL OR NOT (
+    EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=auth.uid()
+      AND (p.is_owner IS TRUE OR p.can_access_personal_data IS TRUE))
+    OR EXISTS(SELECT 1 FROM public.user_module_access u WHERE u.profile_id=auth.uid()
+      AND u.module='magazie' AND u.access_level IN ('viewer','editor','admin'))
+  ) THEN
+    RAISE EXCEPTION 'Acces refuzat la marimi EIP' USING ERRCODE='42501';
+  END IF;
+  -- Ca la RPC personal: filtre id, ordine stabila; plafon/paginare prin PostgREST.
+  RETURN QUERY SELECT e.id::bigint,e.marime_incaltaminte,e.marime_imbracaminte
+    FROM public.employees e WHERE p_ids IS NULL OR e.id=ANY(p_ids) ORDER BY e.id;
+END $epi_marimi_20261117a$;
+REVOKE ALL ON FUNCTION public.fn_employees_marimi(bigint[]) FROM PUBLIC,anon,service_role;
+GRANT EXECUTE ON FUNCTION public.fn_employees_marimi(bigint[]) TO authenticated;
+
 DO $epi_post_20261117a$
 DECLARE c text; r text; v record;
 BEGIN
+  IF has_function_privilege('anon','public.fn_employees_marimi(bigint[])','EXECUTE')
+    OR has_function_privilege('service_role','public.fn_employees_marimi(bigint[])','EXECUTE')
+    OR NOT has_function_privilege('authenticated','public.fn_employees_marimi(bigint[])','EXECUTE') THEN
+    RAISE EXCEPTION 'epi_post: privilegii RPC marimi neasteptate';
+  END IF;
   FOREACH r IN ARRAY ARRAY['authenticated','anon'] LOOP
     FOREACH c IN ARRAY ARRAY['cnp','iban','adresa','data_nasterii','telefon','email','observatii_hr','qr_pin','qr_pin_active','qr_pin_creat_la','marime_incaltaminte','marime_imbracaminte'] LOOP
       IF has_column_privilege(r,'public.employees',c,'SELECT') THEN

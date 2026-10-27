@@ -64,15 +64,37 @@ CREATE TABLE public.profiles(
   id uuid PRIMARY KEY REFERENCES auth.users(id),
   is_owner boolean NOT NULL DEFAULT false,
   can_modify_employees boolean NOT NULL DEFAULT false,
-  can_access_personal_data boolean NOT NULL DEFAULT false
+  can_access_personal_data boolean NOT NULL DEFAULT false,
+  role text DEFAULT 'magazie'
 );
-INSERT INTO auth.users SELECT ('00000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid FROM generate_series(1,5) n;
-INSERT INTO profiles VALUES
+INSERT INTO auth.users SELECT ('00000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid FROM generate_series(1,9) n;
+INSERT INTO profiles(id,is_owner,can_modify_employees,can_access_personal_data) VALUES
 ('00000000-0000-0000-0000-000000000001',false,false,false),
 ('00000000-0000-0000-0000-000000000002',true,false,false),
 ('00000000-0000-0000-0000-000000000003',false,true,true),
 ('00000000-0000-0000-0000-000000000004',false,true,false),
 ('00000000-0000-0000-0000-000000000005',false,false,true);
+INSERT INTO profiles(id) SELECT id FROM auth.users WHERE id NOT IN (SELECT id FROM profiles);
+-- Schema reala a accesului: FK, CHECK, unicitate; rolul singur nu acorda modulul.
+CREATE TABLE public.app_modules(key text PRIMARY KEY);
+INSERT INTO app_modules VALUES('magazie'),('logistica');
+CREATE TABLE public.user_module_access (
+  id serial PRIMARY KEY,
+  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  module text NOT NULL REFERENCES public.app_modules(key) ON DELETE CASCADE,
+  access_level text NOT NULL CHECK(access_level IN ('admin','editor','viewer')),
+  granted_at timestamptz DEFAULT now(),
+  granted_by uuid REFERENCES public.profiles(id),
+  UNIQUE(profile_id,module)
+);
+INSERT INTO user_module_access(profile_id,module,access_level) VALUES
+('00000000-0000-0000-0000-000000000006','magazie','viewer'),
+('00000000-0000-0000-0000-000000000007','magazie','editor'),
+('00000000-0000-0000-0000-000000000008','magazie','admin'),
+('00000000-0000-0000-0000-000000000009','logistica','admin');
+ALTER TABLE user_module_access ENABLE ROW LEVEL SECURITY;
+CREATE POLICY access_self ON user_module_access FOR SELECT TO authenticated USING(profile_id=auth.uid());
+GRANT SELECT ON user_module_access TO authenticated;
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY profiles_self ON profiles FOR SELECT TO authenticated USING(id=auth.uid());
 GRANT SELECT ON profiles TO authenticated;
@@ -93,5 +115,5 @@ GRANT SELECT(name) ON employees TO authenticated WITH GRANT OPTION;
 GRANT SELECT(cnp) ON employees TO anon WITH GRANT OPTION;
 CREATE VIEW public.pii_safe_names WITH (security_invoker=on) AS SELECT id,name FROM public.employees;
 GRANT SELECT ON public.pii_safe_names TO authenticated;
-INSERT INTO employees(name,department,functie,cnp,iban,qr_pin,qr_pin_active)
-  VALUES('TEST ANGAJAT','TEST','TEST','FICTIV','IBAN FICTIV','9876',true);
+INSERT INTO employees(name,department,functie,cnp,iban,qr_pin,qr_pin_active,marime_incaltaminte,marime_imbracaminte)
+  VALUES('TEST ANGAJAT','TEST','TEST','FICTIV','IBAN FICTIV','9876',true,'42','L');

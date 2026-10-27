@@ -1,6 +1,48 @@
 -- Ruleaza numai pe fixture-ul PG17 izolat, dupa aplicarea migrarii.
 BEGIN;
 SET LOCAL ROLE authenticated;
+DO $epi_test_marimi$
+DECLARE who text; n integer; shoe text; clothing text;
+BEGIN
+  IF (SELECT proargnames FROM pg_proc WHERE oid='public.fn_employees_marimi(bigint[])'::regprocedure)
+    IS DISTINCT FROM ARRAY['p_ids','id','marime_incaltaminte','marime_imbracaminte']::text[] THEN
+    RAISE EXCEPTION 'RPC marimi expune alte coloane';
+  END IF;
+  FOREACH who IN ARRAY ARRAY['00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',
+    '00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000006',
+    '00000000-0000-0000-0000-000000000007','00000000-0000-0000-0000-000000000008'] LOOP
+    PERFORM set_config('request.jwt.claim.sub',who,true);
+    SELECT marime_incaltaminte,marime_imbracaminte INTO shoe,clothing FROM public.fn_employees_marimi(ARRAY[1]::bigint[]);
+    IF shoe IS DISTINCT FROM '42' OR clothing IS DISTINCT FROM 'L' THEN RAISE EXCEPTION 'Marimi autorizate lipsa'; END IF;
+    SELECT count(*) INTO n FROM public.fn_employees_marimi(ARRAY[]::bigint[]);
+    IF n<>0 THEN RAISE EXCEPTION 'Marimi ids goale expun date'; END IF;
+    SELECT count(*) INTO n FROM public.fn_employees_marimi(ARRAY[987654]::bigint[]);
+    IF n<>0 THEN RAISE EXCEPTION 'Marimi id inexistent'; END IF;
+    SELECT count(*) INTO n FROM public.fn_employees_marimi();
+    IF n<>1 THEN RAISE EXCEPTION 'Marimi DEFAULT NULL invalid'; END IF;
+    BEGIN
+      PERFORM marime_incaltaminte FROM public.employees WHERE id=1;
+      RAISE EXCEPTION 'Marimi direct SELECT permis';
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    IF right(who,1) IN ('6','7','8') THEN
+      BEGIN
+        PERFORM qr_pin FROM public.fn_employees_personal(ARRAY[1]::bigint[]);
+        RAISE EXCEPTION 'Acces Magazie expune PIN';
+      EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    END IF;
+  END LOOP;
+  -- Rol Magazie fara intrare explicita, modifier-only, alt modul, identitate NULL.
+  FOREACH who IN ARRAY ARRAY['00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000004',
+    '00000000-0000-0000-0000-000000000009',''] LOOP
+    PERFORM set_config('request.jwt.claim.sub',who,true);
+    BEGIN
+      PERFORM * FROM public.fn_employees_marimi(NULL);
+      RAISE EXCEPTION 'Marimi neautorizate permise';
+    EXCEPTION WHEN insufficient_privilege THEN
+      IF SQLERRM <> 'Acces refuzat la marimi EIP' THEN RAISE; END IF;
+    END;
+  END LOOP;
+END $epi_test_marimi$;
 SELECT set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',true);
 DO $epi_test_public$
 DECLARE n integer; c text;
@@ -96,6 +138,11 @@ RESET ROLE;
 SET LOCAL ROLE anon;
 DO $epi_test_anon$
 BEGIN
+  BEGIN
+    PERFORM * FROM public.fn_employees_marimi(NULL);
+    RAISE EXCEPTION 'anon marimi EXECUTE permis';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
   BEGIN
     PERFORM * FROM public.fn_employees_personal(NULL);
     RAISE EXCEPTION 'anon EXECUTE permis';

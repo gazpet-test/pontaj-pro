@@ -1,4 +1,4 @@
-import { EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal } from './employeesPersonal.js'
+import { EMPLOYEES_PUBLIC_COLUMNS, withEmployeePersonal, employeePersonalWrite } from './employeesPersonal.js'
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -6837,7 +6837,7 @@ function AdminPage() {
       if(!window.confirm(`Reactivezi ${emp.name}?${emp.termination_date?` Data încetării (${formatDataRo(emp.termination_date)}) se șterge (rămâne notată în observațiile HR).`:''}\n\nAcordul de colaborare externă (dacă exista) revine la „Necunoscut”: la o nouă plecare se reconfirmă.${cont?`\n\nAccesul contului ${cont.email} NU se redă automat — restaurarea o face owner-ul din Manageri.`:''}`)) return
       updates={active:true,termination_date:null}
       // D4: data încetării nu se pierde fără urmă (hr_employees_audit ține doar INSERT/DELETE)
-      if(emp.termination_date) updates.observatii_hr=[emp.observatii_hr,`Reactivat la ${formatDataRo(new Date().toISOString())}; încetarea anterioară: ${formatDataRo(emp.termination_date)}.`].filter(Boolean).join('\n')
+      if(emp.termination_date && Object.prototype.hasOwnProperty.call(employeePersonalWrite(emp, {observatii_hr:null}), 'observatii_hr')) updates.observatii_hr=[emp.observatii_hr,`Reactivat la ${formatDataRo(new Date().toISOString())}; încetarea anterioară: ${formatDataRo(emp.termination_date)}.`].filter(Boolean).join('\n')
     }
     const {error}=await supabase.from('employees').update(updates).eq('id',emp.id)
     if(error){showToast('Eroare: '+error.message,'error');return}
@@ -6870,7 +6870,7 @@ function AdminPage() {
       position:editEmp.position||null,
       department:editEmp.department,
       site_id:editEmp.site_id||null,
-      iban:editEmp.iban||null,
+      ...employeePersonalWrite(employees.find(e=>e.id===editEmp.id), {iban:editEmp.iban||null}),
       hire_date:editEmp.hire_date||null,
       termination_date:editEmp.termination_date||null,
       cetatenie:editEmp.cetatenie||null,
@@ -8442,8 +8442,9 @@ export function SalariiPage({ noExport = false } = {}) {
   const saveSalary=async()=>{
     setSaving(true)
     // Update email on employee
-    if(editSal.empEmail!==undefined){
-      await supabase.from('employees').update({email:editSal.empEmail}).eq('id',editSal.employee_id)
+    const employeeUpdates=employeePersonalWrite(employees.find(e=>e.id===editSal.employee_id), {email:editSal.empEmail})
+    if(editSal.empEmail!==undefined && Object.keys(employeeUpdates).length){
+      await supabase.from('employees').update(employeeUpdates).eq('id',editSal.employee_id)
     }
     const payload={
       employee_id:editSal.employee_id,

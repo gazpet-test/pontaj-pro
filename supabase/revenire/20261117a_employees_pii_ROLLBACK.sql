@@ -32,6 +32,7 @@ BEGIN
   ) x;
   IF actual IS DISTINCT FROM saved.before_acl THEN RAISE EXCEPTION 'epi_rollback: restaurare ACL inexacta'; END IF;
 END $epi_rollback_20261117a$;
+DROP FUNCTION public.fn_employees_marimi(bigint[]);
 DROP FUNCTION public.fn_employees_personal(bigint[]);
 DROP TABLE public.employees_pii_acl_20261117a;
 NOTIFY pgrst,'reload schema';
