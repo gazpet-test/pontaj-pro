@@ -1,3 +1,111 @@
+# Paw v4.6 - runda 4 (27.10.2026)
+
+Stare: implementare locala; 152/152 executii de test Paw + 40/40 paw-juridic verzi.
+Fara commit/push sau deploy.
+Baza: paw_v46_r4_base.patch aplicat cu git apply --whitespace=nowarn.
+SHA256 calculat: 5F12F8AB3027FBA02E66B74157CC906CBFE3312A2BC5949A0CEF5A1FA0AA4804.
+Nu a fost furnizata o amprenta independenta pentru comparatie/autenticitate.
+
+Decizia Razvan: jak fara integrari MCP sau chei; deschiderea paginilor prin
+integrarea externa ramane la Claude cu omul in bucla. Gemini are conversatie
+pe lucrare, optional; fara eticheta ramane chat nou. Dupa 30 schimburi roteste.
+
+Eliminat din executabile/config: server, bearer, secrets, prompt de instalare,
+preflight get si redactare. Testele vechi exclusiv pentru acea integrare sunt
+inlocuite cu contractul zero MCP si lipsa cheilor; nu sunt declarate regresii
+compatibile cu designul eliminat.
+
+P1 r3: notify=[] in config si override, config/read verifica notify/hooks/MCP;
+features list verifica apps/plugins/remote_plugin/hooks/dependency_install
+false DUPA normalizarea requirements cloud. Apps implicita este conditionata
+de features.apps: refuzul false inchide calea chiar daca mcp list omite Apps.
+.env refuzat inaintea oricarui copil si reverificat inainte de exec.
+Pastrat: runtime protejat, --ephemeral, --ignore-rules, refuz politici system,
+sandbox unelevated/read-only explicit, exit nenul = PAW_EROARE.
+
+Surse primare Codex rust-v0.162.0 (consultate read-only):
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/cli/src/main.rs
+  FeaturesSubcommand::List: cloud_config::load_config -> config.features.enabled.
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/app-server/src/config_manager_service.rs#L119
+  config/read: effective_config + apply_exact_to_config. Nu este un config local aproximat.
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/core/src/config/mod.rs#L3788
+  Web implicit Cached. v45/run_paw.ps1 nu are --search/web_search override;
+  r4 elimina web_search=disabled din v46, nu adauga live. Nu citim profil real.
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/core/src/mcp.rs#L394
+  Apps implicita la runtime: blocata de features.apps=false efectiv.
+
+Registru Gemini: numai lansatorul scrie JSON atomic cu flush pe disc, sub
+lock_gem; browserul returneaza URL doar in ultima linie de protocol. URL-ul
+este validat integral in ambele procese. URL invalid salvat = refuz tinta,
+mesaj explicit, chat nou. JSON invalid/I/O esuat = refuz, nu registru gol.
+Inainte de submit retragem intrarea veche; crash/timeout = context necunoscut,
+fara retry; urmatorul apel deschide chat nou. Niciun chat Gemini nu este sters.
+
+Limite: fara Codex/Edge/CDP real, instalare, login, ACL certificare sau smoke OS.
+Smoke citire executata OK / scriere incercata si refuzata ramane in RUNBOOK,
+obligatoriu pe server inainte de activare. Probe offline nu atesta acest lucru.
+Incercarea accidentala de citire skill ProgramData a fost refuzata de mediu;
+nu s-au facut scrieri acolo si nu s-a continuat accesul.
+
+## Dovezi r4 si L01-L25
+
+Rezultatele numerice sunt in teste/RESULTATS_r4.json si logul r4_execution.log.
+Ultima suita extinsa: 152/152, zero skip, zero erori, 116.368s. Include 11
+executii r3 repetate prin importul fixture-ului Isolation in modulul r4 (141
+scenarii distincte). Nu prezentam repetitia ca probe independente.
+Prima suita extinsa: 148/150; fixture Prepare fara noul helper si serializare
+ETS in harness. Ambele corectate si intreaga selectie rerulata.
+SHA256.json: 12/12 potriviri. Python AST/ASCII si parser PS 5.1: OK.
+Testele paw-juridic: 40/40 la ultima rulare; o prima rulare a avut o cursa
+in fixture-ul concurent (eroare locala, apoi rerulare completa verde).
+Rezultatul initial nu este ascuns: nu constituie dovada unei regresii rezolvate.
+Blocaj fixture PS URL invalid: serializarea JSON recursiva a proprietatilor
+ETS atasate de Get-Content textului, dupa ce produsul terminase. Harness-ul
+foloseste acum IO.File.ReadAllText pentru un string simplu. Fereastra harness
+este 30s; timeout-ul produsului nu s-a marit. Corectia File.Replace testata real pe NTFS:
+[NullString]::Value, nu $null convertit de PowerShell in string gol.
+
+Regresii modificate justificat:
+- test_v46.Jak si vechile Mcp r2 pentru server/bearer/cheie/redactare au fost
+  inlocuite cu teste zero MCP, notify/hooks, features cloud, .env, mediu curat.
+- test_gemini_pw sursa accepta o singura navigare la target validat, in loc
+  de literal /app; testele fara eticheta pastreaza /app la fiecare apel.
+- test_server asteapta 5 unelte si argon explicit; antetul jak reflecta decizia.
+Toate celelalte scenarii de proces/lock/pipes/rules/runtime raman in selectie.
+Suita nu ruleaza modulele cu Git/credential helper sau probele live.
+
+| Regula | Dovada r4 / motiv n/a |
+| --- | --- |
+| L01 | run_paw.ps1: LuaLock inainte de CitesteGemLucrari/contor; test_run_paw lock/cursa pe procese reale. |
+| L02 | ScrieGemLucrari: flush(true) + File.Replace atomic; Registry testeaza citire/scriere reala. |
+| L03 | Lock pastrat prin navigare/raspuns/salvare; context retras inainte de submit; test_partial_response_retires_context. |
+| L04 | n/a - fara cantitati/bani/mail noi; inchiderea este idempotenta prin Remove. |
+| L05 | Timeout/exit nenul nu salveaza contextul; fara retry; test_partial_response_retires_context si test_close_gemini_error_and_timeout_not_success. |
+| L06 | run_paw.ps1:568, comentariu ordine unica install barrier -> lock_gem -> state; fara lock nou imbricat invers. |
+| L07 | n/a - fara acces/schema/RPC/ERP. |
+| L08 | n/a - fara identitate BD/provenienta noua. |
+| L09 | n/a - fara entitati ERP sau service_role. |
+| L10 | Fara gestionare chei; Mcp.test_zero_mcp verifica env clean; Config.test_no_removed_integration_in_runtime_code. |
+| L11 | n/a - fara extragere juridica determinista noua. |
+| L12 | Raspuns incomplet nu salveaza contor/context; URL absent/invalid nu devine succes etichetat. |
+| L13 | GemEticheta/GemUrl si re.fullmatch; Navigation.test_bad_urls_never_navigate, Registry.test_label_validation. |
+| L14 | n/a - fara SQL/migrari. |
+| L15 | n/a - fara porti de schema. |
+| L16 | n/a - fara unicitate BD noua; registru indexat dupa eticheta canonica validata. |
+| L17 | Contor integer 0..30, fara reparsare; Registry.test_rotation_at_30. Fara calcul temporal nou. |
+| L18 | .env/I/O/config invalid/feature lipsa/JSON null = refuz; Mcp.test_env/test_unknown_feature/test_null/test_malformed. |
+| L19 | Paritate PS/Python pe acelasi tabel independent: Registry.test_label_parity_python_powershell. |
+| L20 | Caile legitime zero MCP/chat nou/reutilizare/inchidere; inchiderea nu consuma cota AI, test_close_gemini_fixed_args_no_paid_reservation. |
+| L21 | Browserul cere raspuns stabil complet; lansatorul cere exit=0 si ultima linie URL valida inainte de scriere. |
+| L22 | n/a pentru tarif/usage nou: niciun apel platit nou; rezervarea durabila paw-juridic existenta ramane neschimbata. |
+| L23 | n/a - fara paginare BD. |
+| L24 | n/a - fara React/load-uri UI. |
+| L25 | Procese reale sintetice, PS 5.1, NTFS atomic, teste de concurenta mostenite; fara Codex/Edge/ACL real. Expected fixat independent. |
+
+Istoricul r3 de mai jos nu este instructiune de operare si nu descrie r4.
+
+---
+
 # Paw v4.6 - runda 3 (27.10.2026)
 
 Stare: reparatii locale; 125/125 teste verzi. Numai docs/paw/run_paw_v46.

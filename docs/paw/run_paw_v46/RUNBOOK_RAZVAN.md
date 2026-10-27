@@ -2,7 +2,7 @@
 
 Numai operatorul executa pasii de mai jos. Agentul nu a instalat nimic.
 A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat (Medium).
-Orice eroare inseamna STOP. Nu repeta Install pentru login sau pentru cheie.
+Orice eroare inseamna STOP. Nu repeta Install pentru login.
 Pregateste o singura fereastra de mentenanta; pastreaza toate dovezile rollback.
 Nu reutiliza certificatul cdx sau markerul Gemini v45.
 
@@ -14,12 +14,7 @@ https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/cli/src/mcp_cmd.rs
 https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/exec/src/cli.rs
 La pasul 4 se verifica si help-ul runtime-ului instalat.
 
-Risc care cere decizia lui Razvan inainte de smoke: acelasi cont Windows poate
-citi cheia din state/secrets. Sandbox-ul legacy read-only nu ofera deny-read
-pe cai; backend-ul elevated cu profil granular este o configuratie separata,
-necertificata pentru jak. Mitigari: redactare stdout/stderr, --ephemeral si cheie
-Firecrawl dedicata cu plafon de credite. Ephemeral nu garanteaza absenta oricarui
-cache; procese ostile sau transformari ale cheii raman risc rezidual.
+Jak nu primeste integrari MCP sau chei. Nu configura secrete pentru jak.
 
 ## 1. Preambul si mentenanta
 
@@ -107,7 +102,7 @@ try {
 if ($LASTEXITCODE -ne 0) { throw 'Prepare esuat' }
 ```
 
-Prepare copiaza noua lista de **11 fisiere runtime** + manifest; nu instaleaza WFP.
+Prepare copiaza noua lista de **12 fisiere runtime** + manifest; nu instaleaza WFP.
 Run#1b foloseste acelasi set de GUID-uri, dar temporar. Installerul **refuza orice
 GUID deja existent**, chiar daca pare corect; nu inghite ALREADY_EXISTS si nu sterge
 filtre arbitrare. In mentenanta, A elimina explicit numai cele trei GUID-uri Paw
@@ -217,16 +212,11 @@ la fiecare lansare si la sfarsitul jobului, nu e monitorizare continua a traficu
 In inspectia Codex a filtrului VECHI, GetByKey a returnat ACCESS_DENIED; de aceea
 acest control N al noului ACL este obligatoriu. Nu relaxa verificarea daca pica.
 
-## 4. Cheia si login Codex separat in jak-home
+## 4. Login Codex separat in jak-home
 
-La UNICA instalare de la pasul 3, promptul
-`Configurati acum cheia Firecrawl?` accepta numai `DA` pentru configurare.
-La urmatorul `Read-Host 'Cheie API Firecrawl' -AsSecureString` lipesti cheia.
-Enter la primul prompt pastreaza cheia existenta sau absenta. Nu pune cheia in
-argv, transcript, ticket sau raport. Nu rula Start-Transcript.
-Install creeaza state/jak-home, config.toml protejat si state/secrets protejat.
-Gazpet-Ai are Modify pe home (login/cache), numai citire pe config/secrets.
-Nu se copiaza autentificarea din alt home.
+Install creeaza state/jak-home si config.toml protejat; nu solicita chei.
+Gazpet-Ai are Modify pe home (login/cache), numai citire pe config.
+Nu se copiaza autentificarea din alt home. Orice .env in home este refuzat.
 
 In N, consola noua, director neutru:
 
@@ -248,48 +238,35 @@ if ($LASTEXITCODE -ne 0) { throw 'Versiune CLI indisponibila' }
 if ($LASTEXITCODE -ne 0) { throw 'Help exec esuat' }
 & $Node $Cli mcp list --help
 if ($LASTEXITCODE -ne 0) { throw 'Help mcp list esuat' }
-& $Node $Cli mcp get --help
-if ($LASTEXITCODE -ne 0) { throw 'Help mcp get esuat' }
+& $Node $Cli features list
+if ($LASTEXITCODE -ne 0) { throw 'Features list esuat' }
 & $Node $Cli login
 if ($LASTEXITCODE -ne 0) { throw 'Login jak esuat' }
 & $Node $Cli login status
 if ($LASTEXITCODE -ne 0) { throw 'Status login jak esuat' }
 ```
 
-Asteptat: codex-cli 0.162.0, exec include --ephemeral si --ignore-rules, list/get includ --json;
+Asteptat: codex-cli 0.162.0, exec include --ephemeral si --ignore-rules, mcp list include --json;
 login ChatGPT reusit in jak-home. Nu citi auth.json. Inchide consola dupa login.
 
-## 5. Smoke Firecrawl cu lista uneltelor verificata
+## 5. Smoke jak curat si Gemini pe lucrare
 
-In N, un brief neconfidential prin jak, fara copierea cheii in consola:
+Garda cere config/read: notify=[] si hooks gol/absent, zero MCP;
+features list: apps/plugins/remote_plugin/hooks false efectiv; mcp list --json: [].
+Orice server, inclusiv disabled, features active/necunoscute, JSON invalid,
+.env sau eroare de interogare = PAW_EROARE. --ephemeral si --ignore-rules
+raman obligatorii. Nu relaxa garda. Web nativ ramane implicit cached ca v45.
 
-```powershell
-$Bin = 'C:\ProgramData\Gazpet\Paw\bin'
-$SmokeId = Get-Date -Format 'yyyyMMdd-HHmmss'
-$JakBrief = "C:\Users\Public\paw-data\brief\jak-firecrawl-$SmokeId.md"
-$JakOut = "C:\Users\Public\paw-data\out\jak-firecrawl-$SmokeId.log"
-if ((Test-Path -LiteralPath $JakBrief) -or (Test-Path -LiteralPath $JakOut)) { throw 'Nume ocupat' }
-@'
-Listeaza numele exacte ale uneltelor MCP expuse. Trebuie sa fie numai
-firecrawl_search, firecrawl_scrape, firecrawl_map. Fara actions/browser/crawl.
-Apoi foloseste scrape pentru https://example.com si spune titlul.
-Nu accesa fisiere locale, chei, conturi, ERP, baze de date sau mail.
-'@ | Set-Content -LiteralPath $JakBrief -Encoding ASCII
-& "$Bin\run_paw.cmd" jak $JakBrief $JakOut
-if ($LASTEXITCODE -ne 0) { throw 'Smoke jak esuat; inspecteaza logul redactat' }
-Get-Content -LiteralPath $JakOut -Tail 20
-```
-
-Asteptat cu cheia configurata: PAW_GATA, lista EXACTA search/scrape/map de mai sus,
-titlul paginii, fara AuthRequired/OAuth si fara cheia in log. Lipsa cheii:
-exact un `FIRECRAWL: indisponibil`, jak poate continua, dar smoke Firecrawl NU e trecut.
-Garda executa inainte de brief `mcp list --json` si `mcp get firecrawl --json`,
-cu acelasi runtime/home/override-uri, dar FARA FIRECRAWL_API_KEY in mediu.
-Cheia se injecteaza numai in exec DUPA validare; nu se exporta in consola. List nu contine enabled_tools in 0.162.0;
-get verifica allowlist-ul exact. Orice server suplimentar (inclusiv disabled),
-URL/header/unelte schimbate sau interogare esuata = PAW_EROARE si STOP.
-Raspunsul modelului nu inlocuieste garda determinista sau recertificarea OS.
-Search/scrape/map consuma credite; foloseste cheia dedicata cu plafon.
+Gemini (numai dupa recertificarea canalului de la sectiunea 6):
+`run_paw.cmd gem <brief.md> <log> argon` deschide /app.
+`run_paw.cmd gem <brief.md> <log> argon:dosar-123` continua aceeasi lucrare.
+Eticheta: 3..40 caractere, primul [a-z0-9], restul [a-z0-9-].
+Registru paw-data/state/gem_lucrari.json, numai lansatorul scrie atomic sub
+lock_gem. Accepta doar https://gemini.google.com/app/<id hex>.
+URL invalid = mesaj GEM_REGISTRU_REFUZAT si chat nou; contor 30 = chat nou.
+`run_paw.cmd gem-inchide dosar-123 <log>` retrage eticheta, fara browser,
+fara stergere in Gemini si fara a necesita markerul canalului.
+Crash/timeout retrage contextul incert; nu reincearca automat.
 
 ### Proba locala obligatorie read-only (runda 3)
 
@@ -304,7 +281,7 @@ system ca sa treaca; necesita review separat. Namespace system se rezolva din
 Windows CommonApplicationData (nu din variabila ProgramData), plus fallback
 C:\ProgramData\OpenAI\Codex. Nu modifica profilul normal ~/.codex.
 
-In N, din repo, dupa smoke Firecrawl, executa o proba separata prin lansator:
+In N, din repo, dupa verificarea configuratiei curate, executa o proba separata prin lansator:
 
 ```powershell
 $Repo = 'C:\Users\Gazpet-Ai\gazpet-erp'

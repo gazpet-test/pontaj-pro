@@ -1,7 +1,7 @@
 # run_paw.ps1 - lansator unic Paw v4.4 (v2-server, 09.10.2026; = v2 de pe laptop 07.10, cai mutate pe serverul AI Gazpet-Claude)
 # Apel: run_paw.cmd <cine> <brief.md> <iesire.log> [model] [imagini.txt]
 #   cine  : jak (Codex CLI, read-only) | cop (Copilot prin Edge CDP 9333; model = id conversatie) | ollie (Ollama local)
-#           | gem (Gemini 4 Argon prin acelasi Edge CDP 9333; model optional: "" sau "argon"; lock global - un apel odata)
+#           | gem (Gemini 4 Argon prin acelasi Edge CDP 9333; model optional: "argon" sau "argon:<eticheta>"; lock global - un apel odata)
 #   brief : fisier .md sub C:\Users\Public\paw-data\brief sau C:\Users\Public\erp_review (citit ca DATE)
 #   out   : fisier sub C:\Users\Public\paw-data\out (scris de lansator; ultima linie = PAW_GATA / PAW_EROARE)
 # Reguli (verdict Copilot conv.2 + Jakarinos 07.10): liste inchise, cai canonicalizate (fara UNC/ADS/reparse),
@@ -14,7 +14,7 @@
 #   (banca.py), fara ghilimele: wrapperul CMD nu e frontiera pentru argumente neincrezatoare.
 # v4.3 (16.10.2026, aprobat de Razvan): + gem = Gemini 4 Argon, consultant/reviewer suplimentar (NU poarta GO/NO-GO).
 #   gemini_pw.py (langa acest fisier): tab unic gemini.google.com, modelul afisat trebuie sa contina "Argon", brief-ul in editor,
-#   raspuns stabil (5 citiri identice la 2 s) pe stdout; chat nou la URL fix /app, fara alta navigare, fara atasamente, fara fisiere scrise. Lock global
+#   raspuns stabil (5 citiri identice la 2 s) pe stdout; chat nou la /app sau URL validat din registrul lansatorului, fara atasamente, fara fisiere scrise. Lock global
 #   paw-data\lock_gem. Erori: PAW_EROARE <id> <cod gemini_pw>.
 # v4.3 r2 (dupa Jakarinos r1, P1-a): lock-urile (lock_gem si lock_cop_<conv>) = handle FileShare.None tinut pe toata rularea;
 #   fisierul nu se mai sterge (nici la recuperare, nici la curatare) - v4.2 stergea dupa cale lock-ul altei rulari.
@@ -54,6 +54,7 @@ $TOOLS = @{
   jak   = @{ exe = "C:\Program Files\nodejs\node.exe"; modele = @("", "gpt-6-astra", "gpt-5.5-codex", "gpt-5.5"); timeout = 1200 }
   cop   = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @("6abc000f", "6ac5006f", "6ae06a05", "6ae06a9c", "6ae06a54"); timeout = 1800 }
   ollie = @{ exe = "C:\Users\Gazpet-Ai\AppData\Local\Programs\Ollama\ollama.exe"; modele = @("", "qwen3:14b", "qwen3:4b", "gpt-oss:20b"); timeout = 600 }
+  "gem-inchide" = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @(); timeout = 60 }
   gem   = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @("", "argon"); timeout = 1800 }
 }
 $CODEX_JS = $null   # jak: rezolvat exclusiv din instalarea protejata, in validare
@@ -564,6 +565,47 @@ function StergeDirImg([string]$d) {
   if ($motiv) { try { Add-Content -LiteralPath $JURNAL -Value ("{0} | tmp_img NESTERS: {1} | {2}" -f $RUNID, $d, $motiv) -Encoding UTF8 } catch {} }
 }
 
+# Registru exclusiv al lansatorului. Ordine: install barrier -> gem lock -> state.
+function GemEticheta([string]$value) {
+ if($value -cnotmatch '\A[a-z0-9][a-z0-9-]{2,39}\z'){throw 'gem_eticheta_invalida'}
+ return $value
+}
+function GemUrl([string]$value) {return $value -cmatch '\Ahttps://gemini\.google\.com/app/[0-9a-fA-F]+\z'}
+function CitesteGemLucrari {
+ if(-not $script:LockFs){throw 'gem_lock_lipsa'}
+ $script:GemRegistry=CaleSigura (Join-Path $DATA 'state\gem_lucrari.json') @($DATA) $false
+ $rows=@{}
+ if(Test-Path -LiteralPath $script:GemRegistry){
+  AssertCdxSingleFile $script:GemRegistry
+  $raw=Get-Content -LiteralPath $script:GemRegistry -Raw -Encoding UTF8
+  if($raw.Trim() -notmatch '^\{'){throw 'gem_registru_invalid'}
+  $obj=ConvertFrom-Json -InputObject $raw -ErrorAction Stop
+  foreach($prop in $obj.PSObject.Properties){
+   [void](GemEticheta $prop.Name)
+   $row=$prop.Value
+   if($null -eq $row -or $row.url -isnot [string] -or $row.schimburi -isnot [int] -or $row.schimburi -lt 0 -or $row.schimburi -gt 30){throw 'gem_registru_invalid'}
+   $rows[$prop.Name]=@{url=$row.url;schimburi=$row.schimburi}
+  }
+ }
+ return ,$rows
+}
+function ScrieGemLucrari($rows) {
+ if(-not $script:LockFs){throw 'gem_lock_lipsa'}
+ $parent=Split-Path $script:GemRegistry
+ [void][IO.Directory]::CreateDirectory($parent)
+ [void](CaleSigura $script:GemRegistry @($DATA) $false)
+ $tmp=Join-Path $parent ('gem-'+[guid]::NewGuid().ToString('N')+'.tmp')
+ $fs=New-Object IO.FileStream($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+ try {
+  $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes((ConvertTo-Json -InputObject $rows -Depth 5 -Compress))
+  $fs.Write($bytes,0,$bytes.Length);$fs.Flush($true)
+ } finally {$fs.Dispose()}
+ try {
+  if(Test-Path -LiteralPath $script:GemRegistry){[IO.File]::Replace($tmp,$script:GemRegistry,[NullString]::Value)}
+  else {[IO.File]::Move($tmp,$script:GemRegistry)}
+ } finally {if(Test-Path -LiteralPath $tmp){Remove-Item -LiteralPath $tmp -Force}}
+}
+
 # Global barrier is held until process exit on ALL channels, before loading helpers.
 # Installer owns the same inode exclusively, and rechecks active launchers after locking.
 try {
@@ -580,14 +622,26 @@ try {
 try {
   if (@($TOOLS.Keys) -cnotcontains $Cine) { throw "cine necunoscut '$Cine' (permis: jak, cop, ollie, gem, cdx)" }
   $T = $TOOLS[$Cine]
-  if ($Cine -cne "cdx" -and $T.modele -cnotcontains $Model) { throw "model/tinta nepermis(a) '$Model' pentru $Cine (permis: " + (($T.modele | Where-Object { $_ }) -join ", ") + ")" }
+  if ($Cine -cnotin @("cdx","gem","gem-inchide") -and $T.modele -cnotcontains $Model) { throw "model/tinta nepermis(a) '$Model' pentru $Cine (permis: " + (($T.modele | Where-Object { $_ }) -join ", ") + ")" }
   foreach ($d in @($DATA, "$DATA\brief", $OUT_ROOT)) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
   if ($Cine -eq "cdx") {
     if ($Model -cnotmatch '^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$') { throw "cdx_slug_invalid" }
     $BRIEF_ROOTS = @("$DATA\brief")
   }
-  $BriefFull = CaleSigura $Brief $BRIEF_ROOTS $true
-  if ([IO.Path]::GetExtension($BriefFull).ToLower() -ne ".md") { throw "brief-ul trebuie sa fie .md" }
+  $script:GemLabel=$null
+  if($Cine -ceq 'gem-inchide'){
+   $script:GemLabel=GemEticheta $Brief
+   if($Model -or $Imagini){throw 'gem_argumente_invalide'}
+   $BriefFull=$script:GemLabel
+  } else {
+   if($Cine -ceq 'gem'){
+    if($Model -ceq 'argon' -or $Model -ceq ''){} # compatibilitate v45
+    elseif($Model.StartsWith('argon:',[StringComparison]::Ordinal)){$script:GemLabel=GemEticheta $Model.Substring(6)}
+    else {throw ("model/tinta nepermis(a) '" + $Model + "' pentru gem")}
+   }
+   $BriefFull = CaleSigura $Brief $BRIEF_ROOTS $true
+   if ([IO.Path]::GetExtension($BriefFull).ToLower() -ne ".md") { throw "brief-ul trebuie sa fie .md" }
+  }
   $script:OutFull = CaleSigura $Out @($OUT_ROOT) $false
   if ($Cine -eq 'jak') {
     . (Join-Path $PSScriptRoot 'jak.ps1')
@@ -652,6 +706,14 @@ try {
         $rez.out = (Get-Content -LiteralPath $ultim -Raw -Encoding UTF8)
       } else { $rez.out = "(raspunsul nu a fost capturat in " + $ultim + ")`n" + $rez.out }
     }
+    "gem-inchide" {
+      LeagaCopiiiDeLansator
+      LuaLock (Join-Path $DATA 'lock_gem')
+      $rows=CitesteGemLucrari
+      $rows.Remove($script:GemLabel)
+      ScrieGemLucrari $rows
+      $rez=@{out='GEM_LUCRARE_INCHISA';err='';exit=0;timeout=$false}
+    }
     "gem" {
       # v4.3: lock global INAINTE de orice atingere a browserului; apoi CDP doar pe loopback; apoi gemini_pw.py (brief = cale validata)
       LeagaCopiiiDeLansator   # r3: inainte de lock si de orice copil gemini_pw.py
@@ -660,7 +722,25 @@ try {
       $ns = (& netstat.exe -ano | Select-String ":9333 " | Select-String "LISTENING")
       if (-not $ns) { throw "Edge CDP 9333 nu asculta" }
       if ($ns | Where-Object { $_ -notmatch "127\.0\.0\.1:9333" }) { throw "CDP 9333 nu e doar pe loopback - refuz" }
-      $rez = Ruleaza $T.exe @($GEMPW, "trimite", $BriefFull, [string]($T.timeout - 60)) "" $DATA $T.timeout $null
+      $target='https://gemini.google.com/app';$count=0;$rows=$null
+      if($script:GemLabel){
+       $rows=CitesteGemLucrari
+       if($rows.ContainsKey($script:GemLabel)){
+        $entry=$rows[$script:GemLabel]
+        if(-not (GemUrl $entry.url)){[IO.File]::AppendAllText($script:OutFull,"GEM_REGISTRU_REFUZAT url_invalid; chat nou`r`n",(New-Object Text.UTF8Encoding($false)))}
+        elseif($entry.schimburi -lt 30){$target=$entry.url;$count=$entry.schimburi}
+        # Retire before submit: crash/partial cannot reuse uncertain context.
+        $rows.Remove($script:GemLabel);ScrieGemLucrari $rows
+       }
+      }
+      $rez = Ruleaza $T.exe @($GEMPW, "trimite", $BriefFull, [string]($T.timeout - 60), $target) "" $DATA $T.timeout $null
+      if($script:GemLabel -and -not $rez.timeout -and $rez.exit -eq 0){
+       # Only final physical protocol line is accepted, never text inside answer.
+       $match=[regex]::Match([string]$rez.out,'(?:\r?\n|\A)GEM_CHAT_URL (https://gemini\.google\.com/app/[0-9a-fA-F]+)\r?\n\z')
+       if(-not $match.Success){throw 'gem_url_raspuns_invalid'}
+       $rows[$script:GemLabel]=@{url=$match.Groups[1].Value;schimburi=($count+1)}
+       ScrieGemLucrari $rows
+      }
       if (-not $rez.timeout -and $rez.exit -ne 0) {
         $mm = [regex]::Matches([string]$rez.out, '(?m)^GEM_EROARE ([a-z_]+)')
         if ($mm.Count -gt 0) { $script:GemCod = $mm[$mm.Count - 1].Groups[1].Value } else { $script:GemCod = "gemini_pw_exit_" + $rez.exit }

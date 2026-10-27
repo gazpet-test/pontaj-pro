@@ -12,7 +12,7 @@ param([ValidateSet('Prepare','Install')][string]$Phase='Prepare',
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'cdx_security.ps1')
 $PAW_ROOT='C:\ProgramData\Gazpet\Paw';$Destination=Join-Path $PAW_ROOT 'bin'
-$files=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','gemini_pw.py','jak.ps1','install.ps1')
+$files=@('run_paw.cmd','run_paw.ps1','cdx.ps1','cdx_security.ps1','certifica_cdx.ps1','cdx_wfp.ps1','cdx_wfp.cs','cdx_wfp_engine.ps1','gemini_pw.py','jak.ps1','jak_config_probe.py','install.ps1')
 $Stage=AssertCdxPath $Stage
 function GetLegacyHelperPlan([string]$destination,[string]$expectedHash) {
  # BEFORE changing any ancestor ACL: never turn an untrusted old helper into trusted code.

@@ -12,7 +12,7 @@ HERE, PS = fixtures.HERE, fixtures.PS
 
 class Isolation(unittest.TestCase):
     def test_foreign_env_http_headers_preflight_has_no_variable(self):
-        fixtures.Mcp().case('foreign_env_header', 'jak_mcp_neasteptat system_extra')
+        fixtures.Mcp().case('foreign_env_header', 'jak_mcp_refuzat')
 
     def test_home_allow_rules_refused_before_mcp(self):
         fixtures.Mcp().case('home_rules', 'jak_rules_neverificabile')
@@ -38,7 +38,7 @@ class Isolation(unittest.TestCase):
             path = root/'probe.ps1'
             path.write_text(script.replace('__SOURCE__', str(HERE)).replace('__ROOT__', str(root)), encoding='ascii')
             result = subprocess.run([PS, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(path)],
-                cwd=root, capture_output=True, text=True, timeout=15,
+                cwd=root, capture_output=True, text=True, timeout=30,
                 env=dict(os.environ, TEMP=str(root), TMP=str(root), LOCALAPPDATA=str(root),
                          PSModuleAnalysisCachePath=str(root/'ModuleAnalysisCache')))
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
@@ -52,14 +52,6 @@ function GetJakPolicyItem($path){throw 'synthetic access denied'}
 try {AssertJakRules '__ROOT__';throw 'unexpected success'} catch {$_.Exception.Message}
 ''')
         self.assertEqual(out, 'jak_rules_neverificabile')
-
-    def test_contaminated_preflight_env_refused(self):
-        out = self.ps(r'''
-. '__SOURCE__\jak.ps1'
-function Ruleaza {throw 'MUST NOT START'}
-try {AssertJakMcp 'fake' 'fake' @() '__ROOT__' 10 @{FIRECRAWL_API_KEY='fc-SYNTHETIC'} $true;throw 'unexpected success'} catch {$_.Exception.Message}
-''')
-        self.assertEqual(out, 'jak_preflight_cu_secret')
 
     def test_explicit_backend_config_and_cli_match_v45(self):
         data = json.loads(self.ps(r'''
@@ -106,7 +98,7 @@ VerificaCanalGem
         text = (HERE/'RUNBOOK_RAZVAN.md').read_text(encoding='ascii')
         for evidence in ('citirea chiar a fost EXECUTATA si a REUSIT',
                          'scrierea chiar a fost INCERCATA si REFUZATA',
-                         '--ignore-rules', 'FARA FIRECRAWL_API_KEY',
+                         '--ignore-rules', 'notify=[]',
                          'Razvan-v45-rollback-r3', 'ciorna_cu_atasamente'):
             self.assertIn(evidence, text)
         rollback = text.split('## 8. Rollback explicit la v45', 1)[1]

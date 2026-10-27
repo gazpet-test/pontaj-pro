@@ -1,6 +1,6 @@
 # gemini_pw.py - canal Gemini ("gem") pentru run_paw v4.6 (27.10.2026, aprobat de Razvan).
 # Playwright atasat la Edge-ul existent de pe serverul AI (CDP 9333, doar loopback, profil separat in care Razvan
-# s-a logat o data pe gemini.google.com). Model: cgpt_pw.py. NU inchide Edge, NU da reload; singura navigare permisa = chat nou la URL-ul fix /app,
+# s-a logat o data pe gemini.google.com). Model: cgpt_pw.py. NU inchide Edge, NU da reload; navigare la /app sau URL de chat validat de lansator,
 # NU ataseaza fisiere, NU scrie fisiere: brief-ul (citit ca DATE) intra in editor, raspunsul iese pe stdout.
 # uz:  python gemini_pw.py stare                       (doar citire: tab, model, daca scrie)
 #      python gemini_pw.py trimite <brief.md> [secunde_max=600]
@@ -11,7 +11,7 @@
 #   limita de marime pe textul citit inainte de strip.
 # Lansatorul (run_paw.ps1) tine lock-ul global gem, verifica CDP pe loopback si scrie markerul PAW_GATA / PAW_EROARE.
 # ASCII only.
-import sys, time, os
+import sys, time, os, re
 from urllib.parse import urlparse
 
 CDP = "http://127.0.0.1:9333"
@@ -170,15 +170,19 @@ def stare(pg):
           "| atasamente in ciorna:", _atasamente(pg))
 
 
-def trimite(pg, text, maxs):
+def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
+    if target != "https://gemini.google.com/app" and not re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", target):
+        raise GemEroare("url_invalid", "tinta refuzata")
     # Chat nou in acelasi tab, sub lock-ul global al lansatorului. Niciun URL din brief.
     if _genereaza(pg):
         raise GemEroare("gemini_ocupat", "Gemini inca scrie - nu navighez peste el")
-    pg.goto("https://gemini.google.com/app", wait_until="domcontentloaded", timeout=60000)
+    pg.goto(target, wait_until="domcontentloaded", timeout=60000)
     try:
         pg.locator(EDITOR).first.wait_for(state="visible", timeout=60000)
     except Exception:
         raise GemEroare("editor_lipsa", "chatul nou nu are camp de prompt gata")
+    if target != "https://gemini.google.com/app" and pg.url != target:
+        raise GemEroare("url_invalid", "conversatie indisponibila")
     model = verifica_model(_model_afisat(pg))
     if _genereaza(pg):
         raise GemEroare("gemini_ocupat", "Gemini inca scrie - nu trimit peste el")
@@ -223,6 +227,9 @@ def main(argv):
                 maxs = max(30, min(int(argv[3]), 3600))
             except ValueError:
                 raise GemEroare("brief_invalid", "secunde_max invalid")
+    target = argv[4] if cmd == "trimite" and len(argv) > 4 else "https://gemini.google.com/app"
+    if target != "https://gemini.google.com/app" and not re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", target):
+        raise GemEroare("url_invalid")
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         try:
@@ -233,7 +240,11 @@ def main(argv):
         if cmd == "stare":
             stare(pg)
         else:
-            trimite(pg, text, maxs)
+            trimite(pg, text, maxs, target)
+            if re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", pg.url):
+                spune("GEM_CHAT_URL", pg.url)
+            elif len(argv) > 4 and target != "https://gemini.google.com/app":
+                raise GemEroare("url_invalid", "conversatie indisponibila")
 
 
 if __name__ == "__main__":

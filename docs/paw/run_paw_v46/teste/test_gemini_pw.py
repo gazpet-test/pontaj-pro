@@ -243,7 +243,7 @@ class TestSursa(unittest.TestCase):
         for interzis in (".reload(", ".close()", "set_input_files", "new_page", "write_text", "open(full, \"w"):
             self.assertNotIn(interzis, src, interzis)
         self.assertEqual(src.count('pg.goto('), 1)
-        self.assertIn('pg.goto("https://gemini.google.com/app",', src)
+        self.assertIn('pg.goto(target,', src)
         self.assertIn('CDP = "http://127.0.0.1:9333"', src)
         # r2: Enter vine DOAR dupa verifica_ciorna (continut + atasamente), iar comparatia pe lungime a disparut
         i_ver, i_enter = src.index("verifica_ciorna(ed.inner_text()"), src.index('pg.keyboard.press("Enter")')
