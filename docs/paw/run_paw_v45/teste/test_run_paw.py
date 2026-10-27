@@ -1,5 +1,5 @@
-# Teste negative pentru lansatorul run_paw v4.3 (cine = gem si refuzurile comune), fara admin si fara browser. Rulare:
-#   python -I docs\paw\run_paw_v43\teste\test_run_paw.py
+# Teste pentru lansatorul run_paw v4.5, fara admin si fara browser. Rulare din folderul v45:
+#   python -m unittest teste.test_run_paw
 # Copiaza run_paw.ps1 intr-un director temporar cu $DATA rescris spre un paw-data TEMPORAR (jurnal, lock-uri, brief, out
 # izolate: paw-data-ul real nu e atins) si pune langa el un gemini_pw.py FALS (stub) - cel real nu ruleaza niciodata aici.
 # Cazurile care trec de verificarea CDP folosesc doar stub-ul; daca Edge 9333 nu asculta, lansatorul refuza inainte
@@ -127,10 +127,10 @@ def sha(p):
 class Lansator(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = os.path.realpath(tempfile.mkdtemp(prefix="paw_v44_test_", dir=os.path.dirname(SURSA)))   # cale lunga (fara 8.3), ca la FinalPath
+        cls.tmp = os.path.realpath(tempfile.mkdtemp(prefix="paw_v45_test_", dir=os.path.dirname(SURSA)))   # cale lunga (fara 8.3), ca la FinalPath
         cls.bin = os.path.join(cls.tmp, "bin")
-        cls.env_before={k:os.environ.get(k) for k in ("TEMP","TMP")}
-        os.environ.update(TEMP=cls.tmp,TMP=cls.tmp)
+        cls.env_before={k:os.environ.get(k) for k in ("TEMP","TMP","LOCALAPPDATA")}
+        os.environ.update(TEMP=cls.tmp,TMP=cls.tmp,LOCALAPPDATA=cls.tmp)
         cls.data = os.path.join(cls.tmp, "paw-data")
         cls.afara = os.path.join(cls.tmp, "afara")
         for d in (cls.bin, os.path.join(cls.data, "brief"), os.path.join(cls.data, "out"), cls.afara):
@@ -217,7 +217,7 @@ class Lansator(unittest.TestCase):
         r = subprocess.run(argv, capture_output=True, timeout=180)
         so = r.stdout.decode("utf-8", "replace")
         linii = [l for l in so.splitlines() if l.startswith("PAW_")]
-        return r.returncode, (linii[-1] if linii else ""), so
+        return r.returncode, (linii[-1] if linii else ""), so + r.stderr.decode("utf-8", "replace")
 
     def eroare(self, cine, brief, out, model=None, contine=""):
         rc, linie, so = self.run_paw(cine, brief, out, model)
@@ -229,6 +229,15 @@ class Lansator(unittest.TestCase):
     # --- refuzuri la validare (nu ajung la browser) ---
     def test_cine_necunoscut(self):
         self.eroare("gemini", self.brief_ok, self.out(), contine="cine necunoscut 'gemini' (permis: jak, cop, ollie, gem, cdx)")
+
+    def test_cop_id_majuscule_refuzat(self):
+        self.eroare("cop", self.brief_ok, self.out(), model="6AE06A05", contine="model/tinta nepermis(a)")
+
+    def test_cine_majuscule_refuzat(self):
+        self.eroare("COP", self.brief_ok, self.out(), model="6ae06a05", contine="cine necunoscut")
+
+    def test_gem_model_majuscule_refuzat(self):
+        self.eroare("gem", self.brief_ok, self.out(), model="ARGON", contine="model/tinta nepermis(a)")
 
     def test_gem_model_nepermis(self):
         self.eroare("gem", self.brief_ok, self.out(), model="flash", contine="model/tinta nepermis(a) 'flash' pentru gem")
@@ -776,6 +785,135 @@ class Lansator(unittest.TestCase):
             linii = [l for l in f.read().splitlines() if l.strip()]
         self.assertGreaterEqual(len(linii), 10)
         self.assertTrue(any("| gem |" in l for l in linii))
+
+
+class RuleazaPipe(unittest.TestCase):
+    # Doar functiile extrase prin AST; niciun cod de lansator real nu este executat.
+    def ruleaza(self, copil, text, limita=5, codare_bom=False, brut=False):
+        with tempfile.TemporaryDirectory(prefix="pipe_v45_", dir=os.path.dirname(SURSA)) as d:
+            child = os.path.join(d, "child.py")
+            payload = os.path.join(d, "stdin.txt")
+            ps = os.path.join(d, "probe.ps1")
+            rezultat = os.path.join(d, "rezultat.json")
+            pidfile = os.path.join(d, "pid.txt")
+            with open(child, "w", encoding="ascii") as f: f.write(copil)
+            with open(payload, "w", encoding="utf-8", newline="") as f: f.write(text)
+            script = r'''
+param($sursa, $python, $child, $payload, $cwd, $rezultat, $limita, $bom, $brut)
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $erori = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile($sursa, [ref]$tokens, [ref]$erori)
+if ($erori.Count) { throw 'Eroare parsare' }
+foreach ($nume in @('Arg', 'Ruleaza')) {
+  $fn = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $nume }, $true)
+  Invoke-Expression $fn.Extent.Text
+}
+if ($bom -eq '1') { [Console]::InputEncoding = New-Object Text.UTF8Encoding($true) }
+$codare = [Console]::InputEncoding
+if ($brut -eq '1') {
+  # Sonda .NET Framework: Start + AutoFlush, fara Write/Flush pe writer.
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = $python; $psi.Arguments = Arg $child
+  $psi.WorkingDirectory = $cwd; $psi.UseShellExecute = $false
+  $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true
+  $p = [Diagnostics.Process]::Start($psi)
+  try {
+    $citire = $p.StandardOutput.ReadToEndAsync()
+    $p.StandardInput.BaseStream.Dispose()
+    if (-not $p.WaitForExit(5000)) { $p.Kill(); throw 'Sonda Start blocata' }
+    $r = @{ timeout=$false; exit=$p.ExitCode; out=$citire.Result; err='' }
+  } finally { $p.Dispose() }
+} else {
+  $r = Ruleaza $python @($child) ([IO.File]::ReadAllText($payload)) $cwd ([int]$limita) @{}
+}
+if ([Console]::InputEncoding.CodePage -ne $codare.CodePage -or
+    [BitConverter]::ToString([Console]::InputEncoding.GetPreamble()) -cne [BitConverter]::ToString($codare.GetPreamble())) { throw 'Codare nerestaurata' }
+$r | ConvertTo-Json -Compress | Set-Content -LiteralPath $rezultat -Encoding UTF8
+'''
+            with open(ps, "w", encoding="ascii") as f: f.write(script)
+            env = dict(os.environ, TEMP=d, TMP=d, PYTHONDONTWRITEBYTECODE="1")
+            p = subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps,
+                                  os.path.abspath(SURSA), sys.executable, child, payload, d, rezultat,
+                                  str(limita), "1" if codare_bom else "0", "1" if brut else "0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+            t0 = time.monotonic()
+            try:
+                so, se = p.communicate(timeout=20)
+                self.assertEqual(p.returncode, 0, (so + se).decode("utf-8", "replace"))
+                import json
+                with open(rezultat, encoding="utf-8-sig") as f: r = json.load(f)
+                if os.path.exists(pidfile):
+                    with open(pidfile) as f: pids = [int(x) for x in f.read().split()]
+                    for pid in pids: self.assertFalse(viu(pid), "proces supravietuit: %d" % pid)
+                return r, time.monotonic() - t0
+            finally:
+                if p.poll() is None:
+                    subprocess.run(["taskkill.exe", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+                    p.communicate(timeout=10)
+                if os.path.exists(pidfile):
+                    with open(pidfile) as f:
+                        for pid in map(int, f.read().split()):
+                            if viu(pid):
+                                # Curatare directa a PID-urilor create de test, chiar fara WMI/taskkill.
+                                import ctypes
+                                k = ctypes.windll.kernel32
+                                h = k.OpenProcess(1 | 0x00100000, False, pid)
+                                if h:
+                                    try:
+                                        k.TerminateProcess(h, 1)
+                                        k.WaitForSingleObject(h, 5000)
+                                    finally: k.CloseHandle(h)
+
+    def test_stdin_utf8_fara_bom_si_codare_restaurata(self):
+        text = "\u0103\u00e2\u00ee\u0219\u021b \u0102\u00c2\u00ce\u0218\u021a\n"
+        for bom in (False, True):
+            with self.subTest(codare_console_cu_bom=bom):
+                r, _ = self.ruleaza("import sys; print(sys.stdin.buffer.read().hex())", text, codare_bom=bom)
+                self.assertFalse(r["timeout"])
+                self.assertEqual(r["exit"], 0)
+                raw = bytes.fromhex(r["out"].strip())
+                self.assertEqual(raw, text.encode("utf-8"))
+                self.assertEqual(raw.decode("utf-8"), text)
+                self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+
+    def test_framework_emite_preambul_la_start_fara_write(self):
+        r, _ = self.ruleaza("import sys; print(sys.stdin.buffer.read().hex())", "", codare_bom=True, brut=True)
+        self.assertEqual(r["out"].strip(), "efbbbf")
+
+    def test_fara_citire_stdin_timeout_chiar_daca_taskkill_refuzat(self):
+        r, durata = self.ruleaza("import time; time.sleep(120)", "x" * (8 * 1024 * 1024), limita=2)
+        self.assertTrue(r["timeout"])
+        self.assertEqual(r["exit"], -1)
+        self.assertLess(durata, 12)
+
+    def test_stdin_gol_fara_bom(self):
+        r, _ = self.ruleaza("import sys; print(sys.stdin.buffer.read().hex())", "", codare_bom=True)
+        self.assertFalse(r["timeout"])
+        self.assertEqual(r["out"].strip(), "")
+
+    def test_pipe_plin_fara_citire_stdin_timeout_omoara_arbore(self):
+        copil = ("import os, sys, subprocess, time\n"
+                 "n = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+                 "open('pid.txt', 'w').write(str(os.getpid()) + ' ' + str(n.pid))\n"
+                 "sys.stdout.buffer.write(b'o' * (2 * 1024 * 1024)); sys.stdout.flush()\n"
+                 "sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024)); sys.stderr.flush()\n"
+                 "time.sleep(120)\n")
+        r, durata = self.ruleaza(copil, "x" * (8 * 1024 * 1024), limita=2)
+        self.assertTrue(r["timeout"])
+        self.assertEqual(r["exit"], -1)
+        self.assertEqual(len(r["out"]), 2 * 1024 * 1024)
+        self.assertEqual(len(r["err"]), 2 * 1024 * 1024)
+        self.assertLess(durata, 12)
+
+    def test_pipe_plin_apoi_citeste_stdin_succes(self):
+        copil = ("import sys\n"
+                 "sys.stdout.buffer.write(b'o' * (2 * 1024 * 1024)); sys.stdout.flush()\n"
+                 "sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024)); sys.stderr.flush()\n"
+                 "print(len(sys.stdin.buffer.read()))\n")
+        r, _ = self.ruleaza(copil, "x" * (8 * 1024 * 1024))
+        self.assertFalse(r["timeout"])
+        self.assertEqual(r["exit"], 0)
+        self.assertTrue(r["out"].rstrip().endswith(str(8 * 1024 * 1024)))
+        self.assertEqual(len(r["err"]), 2 * 1024 * 1024)
 
 
 if __name__ == "__main__":

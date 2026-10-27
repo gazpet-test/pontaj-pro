@@ -228,20 +228,83 @@ function Ruleaza([string]$exe, [string[]]$argv, [string]$stdinText, [string]$cwd
   if ($env) { foreach ($k in $env.Keys) { $childEnvironment[$k] = [string]$env[$k] } }
   if (-not $cleanEnvironment) { $childEnvironment["PYTHONIOENCODING"] = "utf-8"; $childEnvironment["PYTHONUTF8"] = "1" }
   [void]$childEnvironment.Remove("PLAYWRIGHT_NODEJS_PATH")   # r4: driverul ramane mereu node.exe-ul din pachet (identificabil)
-  $p = [System.Diagnostics.Process]::Start($psi)
-  # v4.5: StandardInput din PS 5.1 scrie in codarea consolei (ANSI) => Codex primea "input is not valid UTF-8". Scriem octeti UTF-8 fara BOM.
-  if ($stdinText -ne $null) { $b8 = (New-Object Text.UTF8Encoding($false)).GetBytes($stdinText); $p.StandardInput.BaseStream.Write($b8, 0, $b8.Length); $p.StandardInput.BaseStream.Flush() }
-  $p.StandardInput.Close()
-  $so = $p.StandardOutput.ReadToEndAsync(); $se = $p.StandardError.ReadToEndAsync()
-  $gata = $p.WaitForExit($timeout * 1000)
-  if (-not $gata) {
-    & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
-    Start-Sleep -Seconds 2
-    return @{ timeout = $true; exit = -1; out = $so.Result; err = $se.Result }
+  # Thread .NET dedicat: fara scriptblock PowerShell pe thread fara runspace.
+  if (-not ('PawStdinV45' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+public static class PawStdinV45 {
+  public static Task Write(Stream stream, byte[] bytes) {
+    return Task.Factory.StartNew(() => {
+      try { stream.Write(bytes, 0, bytes.Length); stream.Flush(); }
+      finally { stream.Dispose(); }
+    }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
   }
-  [void]$so.Wait(); [void]$se.Wait()
-  $errCurat = [regex]::Replace($se.Result, ('\x1b\[[0-9;?]*[A-Za-z]|[' + [char]0x2800 + '-' + [char]0x28FF + ']'), "")
-  return @{ timeout = $false; exit = $p.ExitCode; out = $so.Result; err = $errCurat.Trim() }
+}
+"@
+  }
+  $p = $null; $si = $null; $scriere = $null
+  $ceas = [Diagnostics.Stopwatch]::StartNew()
+  $limita = [long]$timeout * 1000
+  try {
+    # .NET Framework creeaza writer-ul cu Console.InputEncoding si AutoFlush=true.
+    # AutoFlush poate emite preambulul chiar in Start, fara primul Write al nostru.
+    # Codarea consolei nu este neaparat ANSI. Fortam lipsa BOM inainte de creare.
+    $codareVeche = [Console]::InputEncoding
+    try {
+      [Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
+      $p = [System.Diagnostics.Process]::Start($psi)
+    } finally { [Console]::InputEncoding = $codareVeche }
+    # Citim imediat ambele pipe-uri, inainte de a incepe scrierea stdin.
+    $so = $p.StandardOutput.ReadToEndAsync(); $se = $p.StandardError.ReadToEndAsync()
+    $si = $p.StandardInput.BaseStream
+    $b8 = (New-Object Text.UTF8Encoding($false)).GetBytes([string]$stdinText)
+    $scriere = [PawStdinV45]::Write($si, $b8)
+    # Acelasi termen pentru proces, scriere si citiri (inclusiv pipe-uri mostenite).
+    $gata = $p.WaitForExit([int][Math]::Max(0, $limita - $ceas.ElapsedMilliseconds))
+    foreach ($task in @($scriere, $so, $se)) {
+      if (-not $gata) { break }
+      # Eroarea de pipe nu trebuie sa ascunda timeout-ul procesului.
+      while (-not $task.IsCompleted -and $ceas.ElapsedMilliseconds -lt $limita) { Start-Sleep -Milliseconds 10 }
+      if (-not $task.IsCompleted) { $gata = $false }
+    }
+    if (-not $gata) {
+      $killEsec = $false
+      try {
+        & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
+        $killEsec = $LASTEXITCODE -ne 0
+      } catch { $killEsec = $true }
+      finally {
+        # Daca taskkill este refuzat, cel putin deblocam pipe-ul catre copil.
+        if (-not $p.HasExited) { $p.Kill() }
+      }
+      # Nu cerem Result pe un task ramas blocat, nici dupa kill.
+      $curatare = [Diagnostics.Stopwatch]::StartNew()
+      while ((-not $scriere.IsCompleted -or -not $so.IsCompleted -or -not $se.IsCompleted) -and $curatare.ElapsedMilliseconds -lt 2000) { Start-Sleep -Milliseconds 10 }
+      $outTimeout = ''; $errTimeout = ''
+      if ($so.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $outTimeout = $so.Result }
+      if ($se.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $errTimeout = $se.Result }
+      if ($killEsec) { $errTimeout = 'tree_kill_failed ' + $errTimeout }
+      return @{ timeout = $true; exit = -1; out = $outTimeout; err = $errTimeout }
+    }
+    [void]$scriere.GetAwaiter().GetResult()
+    $errCurat = [regex]::Replace($se.Result, ('\x1b\[[0-9;?]*[A-Za-z]|[' + [char]0x2800 + '-' + [char]0x28FF + ']'), "")
+    return @{ timeout = $false; exit = $p.ExitCode; out = $so.Result; err = $errCurat.Trim() }
+  } catch {
+    if ($p -and -not $p.HasExited) {
+      try { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null } catch {}
+      finally { if (-not $p.HasExited) { $p.Kill() } }
+    }
+    throw
+  } finally {
+    # Thread-ul inchide stdin inclusiv la exceptie. Daca nu a pornit, inchidem aici.
+    if ($p -and -not $scriere) {
+      if (-not $si) { $si = $p.StandardInput.BaseStream }
+      $si.Dispose()
+    }
+    if ($p) { $p.Dispose() }
+  }
 }
 
 # v4: handle-uri, nu cai (Copilot P1-1): sursa se deschide o data, calea FINALA a handle-ului (dupa reparse) trebuie sa fie sub
@@ -465,9 +528,9 @@ try {
 
 # --- validari ---
 try {
-  if (-not $TOOLS.ContainsKey($Cine)) { throw "cine necunoscut '$Cine' (permis: jak, cop, ollie, gem, cdx)" }
+  if (@($TOOLS.Keys) -cnotcontains $Cine) { throw "cine necunoscut '$Cine' (permis: jak, cop, ollie, gem, cdx)" }
   $T = $TOOLS[$Cine]
-  if ($Cine -ne "cdx" -and $T.modele -notcontains $Model) { throw "model/tinta nepermis(a) '$Model' pentru $Cine (permis: " + (($T.modele | Where-Object { $_ }) -join ", ") + ")" }
+  if ($Cine -cne "cdx" -and $T.modele -cnotcontains $Model) { throw "model/tinta nepermis(a) '$Model' pentru $Cine (permis: " + (($T.modele | Where-Object { $_ }) -join ", ") + ")" }
   foreach ($d in @($DATA, "$DATA\brief", $OUT_ROOT)) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d | Out-Null } }
   if ($Cine -eq "cdx") {
     if ($Model -cnotmatch '^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$') { throw "cdx_slug_invalid" }
