@@ -20,7 +20,11 @@ DROP POLICY izo_aviz_pdf_r_ins ON storage.objects;
 DROP POLICY izo_aviz_pdf_r_upd ON storage.objects;
 DROP POLICY izo_aviz_pdf_r_del ON storage.objects;
 DROP POLICY izo_aviz_pdf_r_anon ON storage.objects;
+-- Supabase blochează DELETE pe storage.* (trigger protect_delete) ca să nu rămână fișiere orfane. Bucket-ul e
+-- dovedit gol mai sus (sub lock), deci deblocarea e locală tranzacției și se închide imediat după ștergere.
+PERFORM set_config('storage.allow_delete_query','true',true);
 DELETE FROM storage.buckets WHERE id='izo-avize' RETURNING id INTO v_bucket;
+PERFORM set_config('storage.allow_delete_query','false',true);
 IF v_bucket IS DISTINCT FROM 'izo-avize' THEN RAISE EXCEPTION 'AVIZ bucket lipsa'; END IF;
 SET LOCAL ROLE izo_montaj_writer;
 DROP FUNCTION public.fn_izo_aviz_iesire_intern(uuid,int,bigint,bigint[],text,date);
