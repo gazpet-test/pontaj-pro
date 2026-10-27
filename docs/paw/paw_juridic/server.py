@@ -25,7 +25,11 @@ DEFAULTS = {
 ID = re.compile(r"[0-9a-f]{16}")
 MARKER = re.compile(r"PAW_(START|GATA|EROARE)(?:[ \t]+(.*))?")
 TAIL_BYTES = 256 * 1024
-TIMEOUT = 40 * 60
+BLOCK_AFTER = 3600
+TERMINALE = {"gata", "eroare"}
+ACTIVE = {"in curs", "blocat"}
+TIPURI = {"copilot": "cop", "gemini": "gem", "jakarinos": "jak"}
+ROL_JAKARINOS = "Rol: verifica afirmatiile pe sursa primara (legislatie.just.ro, EUR-Lex, portal.cnsc.ro), cauta contraargumentele, da procent de sanse si verdict CONFIRM/INFIRM/NUANTEZ pe fiecare punct."
 
 
 def windows_api():
@@ -36,7 +40,6 @@ def windows_api():
         ("GetProcessTimes", [w.HANDLE] + [ctypes.POINTER(w.FILETIME)] * 4, w.BOOL),
         ("GetExitCodeProcess", [w.HANDLE, ctypes.POINTER(w.DWORD)], w.BOOL),
         ("WaitForSingleObject", [w.HANDLE, w.DWORD], w.DWORD),
-        ("TerminateProcess", [w.HANDLE, w.UINT], w.BOOL),
         ("CloseHandle", [w.HANDLE], w.BOOL),
     ]:
         fn = getattr(api, name)
@@ -52,11 +55,11 @@ def creation_time(handle):
     return (stamps[0].dwHighDateTime << 32) | stamps[0].dwLowDateTime
 
 
-def inspect_process(pid, created, terminate=False):
-    # Un singur handle pentru verificare si eventuala oprire: fara cursa PID reuse.
+def inspect_process(pid, created):
+    # Un singur handle pentru verificarea identitatii si a terminarii, doar citire.
     from ctypes import wintypes as w
     api = windows_api()
-    handle = api.OpenProcess(0x100000 | 0x1000 | (1 if terminate else 0), False, pid)
+    handle = api.OpenProcess(0x100000 | 0x1000, False, pid)
     if not handle:
         if ctypes.get_last_error() == 87:  # PID inexistent
             return "oprit"
@@ -72,12 +75,11 @@ def inspect_process(pid, created, terminate=False):
             return "oprit"
         if wait != 258:
             return "necunoscut"
-        if terminate and not api.TerminateProcess(handle, 1):
-            return "necunoscut"
         return "viu"
     finally:
         api.CloseHandle(handle)
-NAMES = {"cere_review_copilot": "copilot", "cere_opinie_gemini": "gemini"}
+NAMES = {"cere_review_copilot": "copilot", "cere_opinie_gemini": "gemini",
+         "cere_verificare_jakarinos": "jakarinos"}
 
 
 class Refuz(Exception):
@@ -171,8 +173,8 @@ class Server:
                 for row in rows:
                     if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
                             or not ID.fullmatch(row["id"]) or row["id"] in seen
-                            or row.get("tip") not in {"copilot", "gemini"}
-                            or row.get("stare", "in curs") not in {"in curs", "gata", "eroare"}
+                            or row.get("tip") not in TIPURI
+                            or row.get("stare", "in curs") not in ACTIVE | TERMINALE
                             or row.get("lansare") not in {"rezervata", "pornita", "esec"}):
                         raise Refuz("Registru invalid; este necesara verificarea administratorului.")
                     text_valid(row.get("titlu"), 120)
@@ -222,7 +224,7 @@ class Server:
         final = None
         if data.endswith(b"\n"):
             last = text.split("\n")[-2].removesuffix("\r")
-            kind = "cop" if row["tip"] == "copilot" else "gem"
+            kind = TIPURI[row["tip"]]
             # runid apartine lansatorului, nu ID-ului brief-ului MCP.
             final = re.fullmatch(
                 r"PAW_(GATA) ([A-Za-z0-9_-]+) " + kind + r"(?: [^\r\n]+)?", last)
@@ -236,42 +238,61 @@ class Server:
         visible = "".join(fragments)
         return visible[:60000], bool(offset or len(visible) > 60000), final
 
-    def stare_proces(self, row, terminate=False):
+    def stare_proces(self, row):
         proc = self.processes.get(row["id"])
         if proc is not None and proc.poll() is not None:
             return "oprit"
         if not isinstance(row.get("pid"), int) or not isinstance(row.get("process_created"), int):
             return "necunoscut"
         try:
-            return inspect_process(row["pid"], row["process_created"], terminate)
+            return inspect_process(row["pid"], row["process_created"])
         except OSError:
             return "necunoscut"
 
+    def curata_local(self, row):
+        # Popen-ul original confirma terminarea chiar dupa reconcilierea altei instante.
+        proc = self.processes.get(row["id"])
+        if proc is None or proc.poll() is None:
+            return
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+        if os.name == "nt":
+            proc._handle.Close()
+        self.processes.pop(row["id"], None)
+
     def actualizeaza(self, row, rows):
         # Aceeasi poarta sub lock la citire si la rezervarea unui slot.
-        if row.get("stare") in {"gata", "eroare"}:
+        if row.get("stare") in TERMINALE:
+            self.curata_local(row)
             return
         now = dt.datetime.now(dt.timezone.utc)
         age = (now - dt.datetime.fromisoformat(row["creat_utc"])).total_seconds()
         state, reason = None, None
         if row["lansare"] == "esec":
             state, reason = "eroare", "Lansarea procesului a esuat; cota ramane consumata."
-        elif age >= TIMEOUT:
-            # Lipsa identitatii nu permite kill; timeout-ul elibereaza doar slotul.
-            self.stare_proces(row, terminate=True)
-            state, reason = "eroare", "timeout"
-        elif self.stare_proces(row) == "oprit":
-            _, _, marker = self.coada(row)
-            if marker:
-                state = "gata" if marker[1] == "GATA" else "eroare"
-                if state == "eroare":
-                    reason = marker[0][:1000]
+        else:
+            process_state = self.stare_proces(row)
+            if process_state == "oprit":
+                # Terminarea are prioritate; citirea tarzie nu transforma succesul in timeout.
+                _, _, marker = self.coada(row)
+                if marker:
+                    state = "gata" if marker[1] == "GATA" else "eroare"
+                    if state == "eroare":
+                        reason = marker[0][:1000]
+            elif process_state == "viu" and age >= BLOCK_AFTER:
+                if row.get("stare") != "blocat":
+                    row.update(stare="blocat", motiv="blocat - cere verificare manuala")
+                    self.salveaza(rows)
+                return
+            # Identitatea necunoscuta nu confirma terminarea si nu elibereaza slotul.
         if state:
             row.update(stare=state, terminat_utc=now.isoformat())
+            row.pop("motiv", None)
             if reason:
                 row["motiv"] = reason
             self.salveaza(rows)
-            self.processes.pop(row["id"], None)
+            self.curata_local(row)
 
     def rezultat(self, row):
         text, truncated, _ = self.coada(row)
@@ -287,9 +308,9 @@ class Server:
         text_valid(text, 60000)
         with self.registru() as rows:
             for existing in rows:
-                if existing["tip"] == tip and existing.get("stare", "in curs") == "in curs":
+                if existing.get("stare") in TERMINALE or existing["tip"] == tip:
                     self.actualizeaza(existing, rows)
-            if any(r["tip"] == tip and r.get("stare", "in curs") == "in curs" for r in rows):
+            if any(r["tip"] == tip and r.get("stare", "in curs") in ACTIVE for r in rows):
                 raise Refuz("o lucrare e deja in curs")
             now = dt.datetime.now(dt.timezone.utc)
             if sum(zi_bucuresti(dt.datetime.fromisoformat(r["creat_utc"])) == zi_bucuresti(now) for r in rows) >= 30:
@@ -307,10 +328,11 @@ class Server:
             self.salveaza(rows)
             # Rezervarea ramane durabila la crash/eroare; niciun retry automat platit.
             with brief.open("x", encoding="utf-8", newline="\n") as handle:
-                handle.write(ANTET + "\n\n" + titlu + "\n\n" + text + "\n")
+                rol = ROL_JAKARINOS + "\n" if tip == "jakarinos" else ""
+                handle.write(ANTET + "\n" + rol + "\n" + titlu + "\n\n" + text + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            args = [str(paths["launcher"]), "cop" if tip == "copilot" else "gem", str(brief), str(log)]
+            args = [str(paths["launcher"]), TIPURI[tip], str(brief), str(log)]
             if tip == "copilot":
                 args.append(CONVERSATIE)
             try:
