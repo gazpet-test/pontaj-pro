@@ -1,4 +1,6 @@
-# Runbook Razvan — actualizare cdx r6 (#032)
+# Runbook Razvan — instalare Paw v4.5 (27.10.2026; baza: runbook-ul cdx r6 #032)
+
+> v4.5 = run_paw.ps1 (stdin UTF-8, fara deadlock, Job Object pe toate canalele, conversatiile Copilot 4-6) + cdx.ps1 (1 linie). PR #890, Jakarinos GO r3. $Source = copia inghetata din main dupa merge (C:\Users\Public\paw-data\pachet-v45), verificata prin ManifestHash; $Stage/$Audit noi; restul pasilor identici. Recertificarea cdx (sectiunile 4-6) e OBLIGATORIE: run_paw.ps1 intra in hash-urile cdx.
 
 18.10.2026. Procedura pentru operator; **Codex nu a executat Install, Run, Seal,
 login, setup sau modificari WFP**. Pachetul se revizuieste pe branch-ul
@@ -22,13 +24,13 @@ valoarea transmisa la review. Nu folosi `$HOME` ca variabila de lucru.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Source = 'C:\Users\Gazpet-Ai\gazpet-erp-chat\docs\paw\run_paw_v44'
+$Source = 'C:\Users\Public\paw-data\pachet-v45'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
 $CdxHome = Join-Path $PawRoot 'state\codex-home'
-$Stage = 'C:\Users\Public\paw-data\stage-v44-032'
-$Audit = Join-Path $PawRoot 'operator-20261018-032'
-$ManifestHash = 'D57CD86A163CEBC524FA6B981F31BB6DC4FDB044E11CA8EB7C3E37768DD62FA2'
+$Stage = 'C:\Users\Public\paw-data\stage-v45'
+$Audit = Join-Path $PawRoot 'operator-20261027-v45'
+$ManifestHash = 'CA1D496B37CC74EB6312312754453257808C5E046B06F94ECD7BD0D9A90A5916'
 $LegacyHash = '8F1FCDF73A23B94C1B7C804D46FF7011291F241A46319C7042FCF624CD6E9F50'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
