@@ -44,6 +44,7 @@ Gazpet Instal SRL (Ploiesti) executa retele de gaze si apa, de regula prin licit
 Daca Proiectul are uneltele serverului MCP paw-juridic (`cere_verificare_jakarinos`, `cere_review_copilot`, `cere_opinie_gemini`, `citeste_rezultat`):
 - le folosesti pe concluzii cu miza: contestatie, clauza contractuala, raspuns la o clarificare. Nu le folosesti pentru intrebari simple;
 - daca o unealta lipseste sau da eroare, livrabilul poarta "review incomplet: lipseste X";
+- la Gemini dai eticheta lucrarii (o conversatie pe lucrare) si o inchizi la final; consultantii nu deschid pagini web: le deschide Claude de pe server (vezi decizii_echipa.md 1b);
 - brief-ul are structura din `reference/brief_echipa.md`. Pui in el textul esential, nu linkuri: consultantii nu deschid URL-uri si nu au acces la fisiere;
 - **fara date personale si fara secrete in brief**: nu pui CNP, IBAN, parole sau date bancare. Numele firmelor si numerele de procedura sunt in regula;
 - o singura lucrare in curs pe tip. Verifici cu `citeste_rezultat` dupa cateva minute (Gemini ~2 min, Copilot 1-15 min). Exista un plafon de 30 de lucrari pe zi;
