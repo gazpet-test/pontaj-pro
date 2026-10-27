@@ -1,8 +1,12 @@
 {
   "aviz_teava": {
-    "nr_crt": ["NR CRT"], "serie": ["NR TEAVA"], "sarja": ["NR SARJA"],
-    "specificatie": ["SPECIFICATIA", "SPECIFICATIE"], "lot": ["NR LOT"],
-    "lungime_doc": ["CANTITATE LIVRATA M", "CANTITATE M"], "greutate_kg": ["GREUTATE KG"]
+    "nr_crt": ["NR CRT"], "serie": ["NR TEAVA", "NR TUB", "PIPE NO", "PIPE NUMBER"],
+    "sarja": ["NR SARJA", "SARJA", "HEAT NO", "HEAT NUMBER"],
+    "specificatie": ["SPECIFICATIA", "SPECIFICATIE", "DENUMIREA PRODUSELOR SERVICIILOR", "DENUMIREA PRODUSELOR", "DENUMIRE PRODUS"],
+    "lot": ["NR LOT"],
+    "lungime_doc": ["CANTITATE LIVRATA M", "CANTITATE M", "LUNGIMEA M", "LUNGIME M"],
+    "greutate_kg": ["GREUTATE KG", "GREUTATEA NETA KG", "GREUTATE NETA KG"],
+    "_bucati": ["CANTITATEA ML", "CANTITATE ML"]
   },
   "aviz_teava_rezerva": {
     "serie": ["COD ARTICOL", "COD ART", "CODUL ARTICOLULUI"]

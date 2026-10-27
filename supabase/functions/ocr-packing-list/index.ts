@@ -53,7 +53,7 @@ Extrage TOATE liniile si raspunde DOAR cu JSON valid, fara text in jur:
   "confidence": 0-100
 }
 Reguli: numere fara separatori de mii, zecimale cu punct. FIECARE teava/bucata cu serie proprie = o linie separata (NU grupa).
-serie = numarul individual al bucatii, diferit pe fiecare rand: coloana "Nr. teava"; daca tabelul nu o are, coloana "Cod articol" (ex. 247EK04204). Daca exista ambele, serie = "Nr. teava". Sarja ("Nr. sarja" / heat number, ex. B2407893) se repeta pe mai multe bucati: merge DOAR in sarja, niciodata in serie. Pentru curbe pune unghi_curba daca apare (45, 90 etc). dimensiune = diametru x perete (ex 508x8.0). Ignora randuri de TOTAL/subtotal. NU inventa date — daca un camp lipseste, null. DOAR JSON.`
+DOAR la TEVI: serie = numarul individual al tevii, diferit pe fiecare rand: coloana "Nr. teava"; daca tabelul nu o are, coloana "Cod articol" (ex. 247EK04204). Daca exista ambele, serie = "Nr. teava". Regula "Cod articol" NU se aplica curbelor si celorlalte bucati cu identificator propriu: la curbe serie ramane BEND NUMBER (sau numarul propriu al bucatii). La orice bucata, sarja ("Nr. sarja" / heat number, ex. B2407893) se repeta pe mai multe bucati: merge DOAR in sarja, niciodata in serie. Pentru curbe pune unghi_curba daca apare (45, 90 etc). dimensiune = diametru x perete (ex 508x8.0). Ignora randuri de TOTAL/subtotal. NU inventa date — daca un camp lipseste, null. DOAR JSON.`
 
 function abToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)

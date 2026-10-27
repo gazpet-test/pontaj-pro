@@ -84,8 +84,10 @@ class MappingTests(unittest.TestCase):
         for antet in (['Nr.crt', 'Nr.Teava', 'Cod Articol', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)'],
                       ['Nr.crt', 'Cod Articol', 'Nr.Teava', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)']):
             self.assertEqual([r['serie'] for r in mapare(aviz(antet), 'aviz_teava')['randuri']], ['T1', 'T2', 'T3'])
-        # Două coloane de rezervă = ambiguu -> fără citire locală.
+        # Două coloane de rezervă fără „Nr. țeavă” = ambiguu -> fără citire locală (P2-01: verificat doar când lipsește principala).
         self.refuses(lambda: mapare(aviz(['Nr.crt', 'Cod Articol', 'Cod art.', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)']), 'aviz_teava'))
+        cu_principala = ['Nr.crt', 'Cod Articol', 'Nr.Teava', 'Cod art.', 'Nr.Sarja', 'Cantitate livrata (m)', 'Greutate (kg)']
+        self.assertEqual([r['serie'] for r in mapare(aviz(cu_principala), 'aviz_teava')['randuri']], ['T1', 'T2', 'T3'])
 
     def test_rowspan_example_and_origins(self):
         g = e3_grila('<table><tr><td rowspan="2">P1</td><td>A</td><td>100</td></tr><tr><td>B</td><td>200</td></tr></table>')

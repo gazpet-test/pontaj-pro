@@ -2,7 +2,7 @@ import { utilizatorE3, verificaPoartaE3 } from '../_shared/izoE3Poarta.ts'
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { costApel, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { faraGandire } from '../_shared/gandire.ts'
-import { EroareE3, MAX_INPUT_E3, MAX_TOKENS_E3, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3 } from './avizE3.ts'
+import { EroareE3, MAX_INPUT_E3, MAX_TOKENS_E3, TERMEN_AI_E3_MS, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3, verificaSeriiE3 } from './avizE3.ts'
 
 export async function citesteAvizE3(req: Request, body: Record<string, unknown>, caller: SupabaseClient, ledger: SupabaseClient, apiKey: string | undefined, cors: Record<string, string>) {
   const raspuns = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
@@ -57,7 +57,7 @@ export async function citesteAvizE3(req: Request, body: Record<string, unknown>,
     if (!Number.isSafeInteger(tokens) || tokens <= 0) { cost = 0; throw new EroareE3('numarare_indisponibila', 502) }
     if (tokens > MAX_INPUT_E3) { cost = 0; throw new EroareE3('pdf_prea_multi_tokeni') }
     cost = null
-    const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_E3, thinking: faraGandire(model) }), signal: AbortSignal.timeout(90000) })
+    const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_E3, thinking: faraGandire(model) }), signal: AbortSignal.timeout(TERMEN_AI_E3_MS(model)) })
     if (!r.ok) throw new EroareE3('apel_ai_esuat', 502)
     const result = await r.json()
     // Usage absent/incomplet => nu subraportăm costul ca zero. Rezerva rămâne consumată integral.
@@ -66,6 +66,7 @@ export async function citesteAvizE3(req: Request, body: Record<string, unknown>,
     if (result.stop_reason === 'max_tokens') throw new EroareE3('raspuns_ai_incomplet')
     if (mesajRefuz(result)) throw new EroareE3('refuz_ai')
     const propunere = normalizeazaE3(textRaspuns(result), b.sablon)
+    verificaSeriiE3(propunere, b.sablon)   // serie repetată / serie = șarjă → 422 serie_repetata, fără propunere
     const { data: rezervata, error: le } = await ledger.from('ai_plafon_rezervari').select('luna').eq('id', rezervare).single()
     if (le || !rezervata) throw new EroareE3('plafon_indisponibil', 503)
     return raspuns(200, { success: true, tip: 'aviz_e3', sablon: b.sablon, ...propunere, model, cost_usd: cost ?? rezerva, plafon: await citestePlafon(rezervata.luna) })

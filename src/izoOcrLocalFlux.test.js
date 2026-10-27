@@ -132,6 +132,9 @@ it('afișează cele trei proveniențe din contractul B2', () => {
   expect(descrieSursaOCR(propunere)).toBe('Local LightOn+MinerU')
   expect(descrieSursaOCR({ ...propunere, model:'ocr_local:lighton+mineru+claude-haiku-5-5', sursa:{ dezacorduri:3 } })).toBe('Local + Haiku pe 3 celule')
   expect(descrieSursaOCR({ sursa:{ ramura:'haiku' } })).toBe('Haiku fallback')
+  // 27.10.2026: citirea directă aviz_e3 e pe Sonnet 5.5 — automat (UI pune ramura 'sonnet') sau „Recitește direct cu Sonnet”
+  expect(descrieSursaOCR({ sursa:{ ramura:'sonnet' }, model:'claude-sonnet-5-5' })).toBe('Sonnet automat')
+  expect(descrieSursaOCR({ model:'claude-sonnet-5-5' })).toBe('Sonnet direct')
 })
 it('503 cu răspuns JSON de la edge la cere → Haiku direct; eroare de transport fără status → fără Haiku (Copilot B4 P1)', async () => {
     const a = vi.fn(async () => refuz(503, 'storage_indisponibil'))
