@@ -139,6 +139,9 @@ class Lansator(unittest.TestCase):
             src = f.read()
         assert src.count(DATA_REAL) == 1, "linia $DATA nu a fost gasita exact o data"
         src = src.replace(DATA_REAL, '$DATA = "' + cls.data + '"')
+        fixture = os.path.join(AICI, 'process_fixture.ps1')
+        src = src.replace('$ErrorActionPreference = "Stop"',
+                          '$ErrorActionPreference = "Stop"\n. \'' + fixture + "'")
         # v46: numai starea CDP simulata; nu consultam Edge/netstat real.
         src = src.replace('(& netstat.exe -ano | Select-String ":9333 " | Select-String "LISTENING")',
                           '@("TCP 127.0.0.1:9333 0.0.0.0:0 LISTENING 123")')
@@ -187,6 +190,8 @@ n = subprocess.Popen([sys.executable, '-c',
 open('r3_pid.txt', 'w').write(str(n.pid))
 ''')
         r3 = src.replace('$REPO = "C:\\Users\\Gazpet-Ai\\gazpet-erp"', '$REPO = "' + cls.data + '"')
+        r3 = r3.replace('$jakRuntime = GetJakRuntime',
+                        '$jakRuntime = @{exe=\'' + sys.executable + "';cli='fixture'}")
         for channel in ('jak', 'ollie'):
             r3 = re.sub(r'(' + channel + r'\s*= @\{ exe = ")[^"]+',
                         lambda m: m[1] + sys.executable, r3, count=1)
@@ -218,6 +223,15 @@ open('r3_pid.txt', 'w').write(str(n.pid))
         with open(cls.marcaj, "w", encoding="ascii") as f:
             f.write(cls.marcaj_ok)
         cls.brief_afara = cls.scrie(cls.afara, "b.md", "x")
+        exit_child = cls.scrie(cls.bin, 'exit_child.py', "import sys; print('fake Codex'); sys.exit(int(sys.argv[1]))\n")
+        cls.jak_exit_scripts = {}
+        for code in (0, 7):
+            variant = src.replace('$REPO = "C:\\Users\\Gazpet-Ai\\gazpet-erp"', '$REPO = "' + cls.data + '"')
+            variant = variant.replace('$jakRuntime = GetJakRuntime',
+                                      '$jakRuntime = @{exe=\'' + sys.executable + "';cli='fixture'}")
+            variant = variant.replace('$rez = InvokeJak $T.exe $argv $prompt',
+                                      '$rez = Ruleaza $T.exe @(\'' + exit_child + "','" + str(code) + "') $prompt")
+            cls.jak_exit_scripts[code] = cls.scrie(cls.bin, 'jak_exit_%d.ps1' % code, variant)
         cls.n = 0
 
     @classmethod
@@ -256,6 +270,20 @@ open('r3_pid.txt', 'w').write(str(n.pid))
         return linie
 
     # --- refuzuri la validare (nu ajung la browser) ---
+    def test_jak_exit_nenul_fara_imagini(self):
+        out = self.out()
+        rc, line, text = self.run_paw('jak', self.brief_ok, out, ps1=self.jak_exit_scripts[7])
+        self.assertEqual(rc, 2, text)
+        self.assertIn('jak_exit_7', line)
+        with open(out, encoding='utf-8-sig') as f: log = f.read()
+        self.assertIn('PAW_EROARE', log)
+        self.assertNotIn('PAW_GATA', log + text)
+
+    def test_jak_exit_zero_fara_imagini(self):
+        rc, line, text = self.run_paw('jak', self.brief_ok, self.out(), ps1=self.jak_exit_scripts[0])
+        self.assertEqual(rc, 0, text)
+        self.assertTrue(line.startswith('PAW_GATA '), text)
+
     def test_cine_necunoscut(self):
         self.eroare("gemini", self.brief_ok, self.out(), contine="cine necunoscut 'gemini' (permis: jak, cop, ollie, gem, cdx)")
 
@@ -498,7 +526,15 @@ open('r3_pid.txt', 'w').write(str(n.pid))
 
     def omoara(self, pid):
         if viu(pid):
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+            # taskkill foloseste CIM blocat aici; terminam exact fixture-ul propriu.
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(1 | 0x100000, False, pid)
+            if not h: raise ctypes.WinError()
+            try:
+                if not k.TerminateProcess(h, 1): raise ctypes.WinError()
+                self.assertEqual(k.WaitForSingleObject(h, 10000), 0)
+            finally: k.CloseHandle(h)
         t0 = time.time()
         while viu(pid) and time.time() - t0 < 10:
             time.sleep(0.05)

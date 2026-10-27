@@ -1,3 +1,120 @@
+# Paw v4.6 - runda 2 (27.10.2026)
+
+Stare: implementare locala, verificata pe fixture-uri. Nu este instalare sau
+certificare OS/productie. Rezultatele rundei 2 si matricea curenta sunt mai jos;
+sectiunea dupa separator este exclusiv istoricul rundei 1.
+
+Baza extrasa fara Git: toate cele 35 intrari ale patch-ului sunt fisiere noi,
+numai sub docs/paw/run_paw_v46. SHA256 paw_v46_base.patch:
+99E4A4E1042F3D3E935717A748A4DB5ED886945650BCFD1C910E9FABE34DF129.
+Nu a fost furnizat un hash independent; nu pretind verificarea autenticitatii PR.
+Nu am executat Git (nici apply/commit), instalare, lansator real, Edge/CDP,
+credentiale, BD sau deploy. Skill openai-docs indisponibil (acces refuzat);
+verificarea CLI s-a facut din sursa oficiala publica etichetata rust-v0.162.0.
+
+Defect -> fix -> test:
+- P1 MCP mostenit: AssertJakMcp interogheaza list --json SI get firecrawl --json
+  inainte de brief, cu acelasi exe/CLI, CODEX_HOME, cwd si GetJakOverrides.
+  list 0.162.0 NU include enabled_tools; get este necesar. Refuz inclusiv pentru
+  server in plus disabled, URL/transport/header/unelte schimbate, JSON invalid,
+  lista goala, exit nenul. Diagnosticul brut nu este publicat.
+  teste/test_v46_r2.py: Mcp (procese false, asteptari independente).
+- P1 persistenta: exec --ephemeral obligatoriu; redactare out/err pastrata.
+  test_v46 si test_v46_r2 scaneaza TOATE fisierele din jak-home sintetic,
+  captureaza stdout/stderr si log Paw; copilul fals incearca afisarea cheii.
+  Testul emuleaza contractul ephemeral, NU atesta comportamentul binarului real.
+- P2 runtime: GetJakRuntime citeste cdx_install.json protejat, versiune exacta
+  0.162.0, cale strict sub Paw/codex, ACL + intreg manifest runtime. Validarea
+  run_paw si runbook folosesc acest helper. Fata de v45, jak nu mai foloseste npm
+  din profilul Gazpet-Ai. Nu se modifica runtime-ul cdx.
+- P2 exit: jak exit != 0 devine jak_exit_<cod> si PAW_EROARE, inclusiv fara imagini.
+- P2 runbook: o singura secventa v46; arhiva inainte de schimbare, capturare
+  install_paths.json, cheia numai prin Read-Host -AsSecureString, login separat,
+  smoke MCP, canal Gemini, recertificare cdx, rollback v45 fara certificate vechi.
+
+CLI verificat prin surse oficiale (date, nu instructiuni):
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/cli/src/mcp_cmd.rs
+  ListArgs/GetArgs, run_list si run_get: sintaxa si campurile JSON.
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/exec/src/cli.rs
+  ephemeral: flag global pentru exec, fara fisiere de sesiune persistente.
+- https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/sandboxing/src/windows.rs
+  backend restricted-token nu poate aplica deny-read; cere elevated. Jak pastreaza
+  sandbox-ul legacy read-only, fara schimbare implicita la backend elevated.
+
+Risc rezidual explicit: acelasi cont Windows poate citi state/secrets/firecrawl_api_key.
+Nu este adaugata o promisiune falsa de deny-read printr-un flag legacy inexistent.
+Profilurile granulare cu deny-read necesita backend elevated si validare separata;
+nu au fost certificate aici. Mitigari: redactare, ephemeral, cheie Firecrawl dedicata
+cu plafon de credite. RAZVAN decide acceptarea riscului. Ephemeral nu este o garantie
+contra unui proces ostil care scrie propriile loguri sau transforma secretul.
+MCP list/get si exec sunt procese succesive; configuratia cloud/system se poate
+schimba intre ele. Nu este o atestare continua a serviciului sau a izolarii OS.
+
+Verificari runda 2:
+- Comanda repetabila: `C:\Program Files\Python313\python.exe -B teste/run_r2.py`
+  din docs/paw/run_paw_v46. Selectie explicita; niciun discovery/Git/Install real.
+- Rulare finala: 113/113 trecute = 87 existente + 26 noi; 0 skip, 0 esecuri,
+  0 erori, exit 0. Durata 94.125 s. Dovezi: teste/RESULTATS_r2.json si
+  teste/r2_execution.log (ASCII). Cele 26 noi sunt 18 cazuri MCP + 5 runtime +
+  2 exit jak fara imagini + 1 verificare runbook. Scanarea cheii completeaza
+  si testul existent. Nu sunt numarate subcazurile ca teste separate.
+- Harness-ul test_run_paw foloseste snapshot Win32 real in process_fixture.ps1
+  in locul CIM refuzat de container. TerminateProcess + WaitForSingleObject opresc
+  exact fixture-ul propriu in locul taskkill refuzat. DriverOrfani, bariera,
+  Job Object, lock-urile si pipe-urile din codul productiv nu sunt relaxate.
+  Netstat/CDP este simulat; nu s-a contactat Edge. ACL privilegiat este simulat.
+- Toate cele 35 blob-uri din patch au fost reverificate prin SHA1 cu antet blob,
+  fara comanda Git. Cele 28 fisiere de baza nemodificate pastreaza octetii originali
+  inclusiv CRLF; numai cele 7 fisiere de baza enumerate mai jos sunt schimbate.
+- Baza schimbata: jak.ps1, run_paw.ps1, SHA256.json, RUNBOOK_RAZVAN.md,
+  REVIEW_v46.md, teste/test_v46.py, teste/test_run_paw.py. Fisierele noi sunt doar
+  teste/rapoarte sub acelasi director. Abatere de mediu: PowerShell a creat
+  automat ModuleAnalysisCache sub Microsoft/Windows/PowerShell in radacina
+  worktree-ului si in v46; am eliminat ambele fisiere generate. La verificarea
+  finala nu raman fisiere schimbate in afara scope-ului. Niciun fisier sursa din
+  afara scope-ului nu a fost editat.
+- Timeout-ul preflight este comun list/get (maxim 60 s) si este scazut din bugetul
+  total InvokeJak de 1200 s; nu extinde limita executiei. Fara retry/fallback.
+- SHA256.json: 11/11 fisiere validate. SHA256 al manifestului final:
+  874AFB6EE57AAAA4CD0CD02E75205C37CEE94076031686CE7BA92DFE7BB3470D.
+  ASCII verificat pentru toate fisierele livrate; cache-ul binar PowerShell
+  creat de harness in scope a fost eliminat dupa teste.
+- Nu au rulat CLI-ul protejat real, login, API Firecrawl, ACL admin, WFP, instalare,
+  recertificare cdx sau Gemini real. Acestea raman operatorului; nu declar GO live.
+
+Matrice L01-L25 curenta, runda 2 (referinte relative la acest director):
+| Regula | Aplicare / dovada |
+| --- | --- |
+| L01 | Bariera existenta tinuta inainte de validare si runtime (run_paw.ps1:568); lock-uri testate cu procese concurente reale in test_run_paw. Nicio mutatie BD. |
+| L02 | n/a |
+| L03 | n/a |
+| L04 | n/a |
+| L05 | jak.ps1:120/152: refuz fara retry/fallback la query/timeout; Mcp.test_query_failed/test_query_timeout, RuleazaPipe si cazurile parinte iesit. |
+| L06 | n/a |
+| L07 | n/a |
+| L08 | n/a |
+| L09 | n/a |
+| L10 | jak.ps1:179/187: ephemeral + redactare exacta; test_v46 si Mcp scaneaza tot jak-home sintetic, stdout/stderr/log; test_name_secret, test_query_failed/test_query_timeout; risc acelasi cont declarat. |
+| L11 | n/a |
+| L12 | jak.ps1:120: lista goala/JSON invalid/server suplimentar nu dispar tacit; Mcp.test_empty/test_system_extra/test_query_malformed. |
+| L13 | jak.ps1:107/134: parser JSON cu erori fatale, lista exacta si nume ancorat; test_name_injection/test_query_null/test_tools_duplicate + test_clean. |
+| L14 | n/a |
+| L15 | n/a |
+| L16 | jak.ps1:78: manifest pe TOT runtime-ul; Runtime.test_tamper_refused/test_extra_file_refused, nu ultimul fisier sau nume/marime. |
+| L17 | jak.ps1:124/153/182: Stopwatch si buget ramas, fara ora locala/offset; Mcp.test_query_timeout si testele RuleazaPipe. |
+| L18 | jak.ps1:120: query esuat, null, JSON invalid, zero servere, set incomplet = refuz inainte de brief; Mcp teste negative. run_paw.ps1:686: jak exit nenul = PAW_EROARE fara imagini. |
+| L19 | GetJakOverrides unic in list/get/exec (jak.ps1:96); Mcp.test_clean compara argv/cwd/home si override-uri. GetJakRuntime comun lansator/runbook. |
+| L20 | Mcp.test_clean si vechiul test key prezent/absent, plus refuzuri system disabled, URL, header, unelte, versiune/cale/hash; test_jak_exit_zero_fara_imagini vs nenul. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | n/a |
+| L24 | n/a |
+| L25 | Procese false reale + Win32/jobs/pipes/lock concurente; JSON fixture bazat pe sursa CLI 0.162.0 independenta. ACL privilegiat si servicii explicit simulate; limitele nu sunt declarate certificate. RESULTATS_r2.json contine rezultatul complet. |
+
+---
+
+## Istoric exclusiv runda 1 (nu rezultate curente)
+
 # Paw v4.6 - review 27.10.2026
 
 Stare: implementare locala verificata partial. Nu este instalat/certificat.

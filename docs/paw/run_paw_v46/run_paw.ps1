@@ -56,7 +56,7 @@ $TOOLS = @{
   ollie = @{ exe = "C:\Users\Gazpet-Ai\AppData\Local\Programs\Ollama\ollama.exe"; modele = @("", "qwen3:14b", "qwen3:4b", "gpt-oss:20b"); timeout = 600 }
   gem   = @{ exe = "C:\Program Files\Python313\python.exe"; modele = @("", "argon"); timeout = 1800 }
 }
-$CODEX_JS = "C:\Users\Gazpet-Ai\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js"
+$CODEX_JS = $null   # jak: rezolvat exclusiv din instalarea protejata, in validare
 $CGPT = Join-Path $PSScriptRoot "cgpt_pw.py"
 $GEMPW = Join-Path $PSScriptRoot "gemini_pw.py"
 # r4 (Jakarinos r3 P1, varianta A): driverul Node al Playwright din Python-ul folosit de gem/cop (node.exe <driver>\package\cli.js run-driver)
@@ -589,6 +589,11 @@ try {
   $BriefFull = CaleSigura $Brief $BRIEF_ROOTS $true
   if ([IO.Path]::GetExtension($BriefFull).ToLower() -ne ".md") { throw "brief-ul trebuie sa fie .md" }
   $script:OutFull = CaleSigura $Out @($OUT_ROOT) $false
+  if ($Cine -eq 'jak') {
+    . (Join-Path $PSScriptRoot 'jak.ps1')
+    $jakRuntime = GetJakRuntime
+    $T.exe = $jakRuntime.exe; $CODEX_JS = $jakRuntime.cli
+  }
   if (-not (Test-Path -LiteralPath $T.exe -PathType Leaf)) { throw "executabil lipsa: " + $T.exe }
   $script:Img = $null
   if ($Cine -eq "gem" -and -not (Test-Path -LiteralPath $GEMPW -PathType Leaf)) { throw "lipseste gemini_pw.py langa lansator" }
@@ -678,6 +683,7 @@ try {
   if ($rez.timeout) { Eroare (MotivOprire $rez $T.timeout) }
   # v4.3: la gem, codul de eroare al gemini_pw.py devine motivul markerului (ex. PAW_EROARE <id> fara_tab_gemini)
   if ($Cine -eq "gem" -and $script:GemCod) { Eroare $script:GemCod }
+  if ($Cine -eq 'jak' -and $rez.exit -ne 0) { Eroare ('jak_exit_' + $rez.exit) }
   # v4.2 (Jakarinos P2): o rulare cu imagini care iese nenul (ex. decodare esuata la consumator) nu se raporteaza ca reusita
   if ($ImgFolosite -and $rez.exit -ne 0) { Eroare ("consumatorul a iesit cu " + $rez.exit + " pe o rulare cu imagini") }
   $dur = [int]((Get-Date) - $T0).TotalSeconds

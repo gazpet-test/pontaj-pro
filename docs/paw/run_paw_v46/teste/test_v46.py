@@ -192,7 +192,18 @@ assert key in (None,expected)
 assert os.environ.get('UNRELATED_SECRET') is None
 assert os.environ['CODEX_HOME'].endswith('state\\\\jak-home')
 assert expected not in ' '.join(sys.argv)
+if 'mcp' in sys.argv:
+ assert sys.stdin.read()==''
+ server={'name':'firecrawl','enabled':key is not None,'transport':{'type':'streamable_http','url':'https://mcp.firecrawl.dev/v2/mcp','bearer_token_env_var':'FIRECRAWL_API_KEY','http_headers':None,'env_http_headers':None,'http_headers_helper':None}}
+ if 'get' in sys.argv:
+  server.update(enabled_tools=['firecrawl_search','firecrawl_scrape','firecrawl_map'],disabled_tools=None)
+ print(json.dumps([server] if 'list' in sys.argv else server))
+ sys.exit(0)
 assert sys.stdin.read()=='brief via stdin'
+assert '--ephemeral' in sys.argv
+# Emulam persistenta CLI: fara ephemeral ar scrie secretul in jak-home.
+if '--ephemeral' not in sys.argv:
+ open(os.path.join(os.environ['CODEX_HOME'],'history.jsonl'),'w').write(key or '')
 print(json.dumps({'argv':sys.argv[1:],'home':os.environ['CODEX_HOME'],'key_present':key is not None}))
 if key:
  print(key)
@@ -243,6 +254,9 @@ if($rejected -ne 2){throw 'guard missing'}
             for name, value in {'__ROOT__': str(root), '__SOURCE__': str(HERE), '__CHILD__': str(stub), '__PYTHON__': sys.executable}.items():
                 script = script.replace(name, value)
             data = json.loads(self.ps(script, root))
+            for path in (root / 'state/jak-home').rglob('*'):
+                if path.is_file():
+                    self.assertNotIn(b'fc-SYNTHETIC46', path.read_bytes(), str(path))
         self.assertEqual(data['log'].strip(), 'FIRECRAWL: indisponibil')
         for case in data['results']:
             result = case['result']

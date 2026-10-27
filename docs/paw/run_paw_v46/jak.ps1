@@ -75,7 +75,82 @@ function InitializeJakProfile([string]$pawRoot,[string]$readerSid) {
  }
 }
 
+function GetJakRuntime {
+ # Aceeasi instalare protejata ca la cdx; fara rezolvare npm/PATH din profil.
+ $cfgPath=Join-Path $PSScriptRoot 'cdx_install.json'
+ AssertCdxSingleFile $cfgPath;AssertCdxAdminAcl $cfgPath
+ $cfg=Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+ if($cfg.schema -ne 2 -or $cfg.version -cne '0.162.0'){throw 'jak_runtime_versiune'}
+ $root=AssertCdxPath ([IO.Path]::GetFullPath([string]$cfg.runtime_root))
+ if(-not $root.StartsWith((Join-Path $PAW_ROOT 'codex')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'jak_runtime_outside'}
+ foreach($p in @($PAW_ROOT,(Join-Path $PAW_ROOT 'codex'),$root)){AssertCdxAdminAcl $p}
+ foreach($entry in GetCdxTree $root){AssertCdxAdminAcl $entry.FullName}
+ $manifest=Join-Path $PSScriptRoot 'cdx_runtime_manifest.json'
+ AssertCdxSingleFile $manifest;AssertCdxAdminAcl $manifest
+ AssertCdxHashes (GetCdxTreeHashes $root) (Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json)
+ $node=Join-Path $root 'node.exe';$cli=Join-Path $root 'package\bin\codex.js'
+ AssertCdxSingleFile $node;AssertCdxSingleFile $cli
+ return @{exe=$node;cli=$cli}
+}
+
+function GetJakOverrides([string]$repo,[bool]$withKey) {
+ $overrides=@()
+ foreach($setting in @('features.apps=false','features.plugins=false','features.remote_plugin=false','features.skill_mcp_dependency_install=false','features.hooks=false')){
+  $overrides+=@('-c',$setting)
+ }
+ $repoToml=$repo.Replace('\','\\').Replace('"','\"')
+ $overrides+=@('-c',('projects."'+$repoToml+'".trust_level="untrusted"'))
+ $overrides+=@('-c',('mcp_servers.firecrawl.enabled='+$withKey.ToString().ToLowerInvariant()))
+ return ,$overrides
+}
+
+function AssertJakFirecrawl($server,[bool]$withKey,[bool]$checkTools) {
+ if($server.name -cne 'firecrawl' -or $server.enabled -isnot [bool] -or $server.enabled -ne $withKey -or
+    $server.transport.type -cne 'streamable_http' -or $server.transport.url -cne 'https://mcp.firecrawl.dev/v2/mcp' -or
+    $server.transport.bearer_token_env_var -cne 'FIRECRAWL_API_KEY' -or
+    $server.transport.http_headers_helper -or ($null -ne $server.transport.http_headers -and @($server.transport.http_headers.PSObject.Properties).Count -gt 0) -or
+    ($null -ne $server.transport.env_http_headers -and @($server.transport.env_http_headers.PSObject.Properties).Count -gt 0)){throw 'jak_mcp_neasteptat firecrawl'}
+ if($checkTools){
+  $tools=@($server.enabled_tools)
+  if($tools.Count -ne 3 -or @($tools | Where-Object {$_ -isnot [string] -or $_ -cnotin @('firecrawl_search','firecrawl_scrape','firecrawl_map')}).Count -or
+     @($tools | Select-Object -Unique).Count -ne 3 -or ($null -ne $server.disabled_tools -and @($server.disabled_tools).Count -gt 0)){throw 'jak_mcp_neasteptat firecrawl'}
+ }
+}
+
+function AssertJakMcp([string]$exe,[string]$cli,[string[]]$overrides,[string]$repo,[int]$timeout,$childEnv,[bool]$withKey) {
+ # list nu include enabled_tools in CLI 0.162.0; get este obligatoriu, separat.
+ # Fara brief pe stdin si fara publicarea stdout/stderr de diagnostic.
+ $clock=[Diagnostics.Stopwatch]::StartNew()
+ try {
+  $r=Ruleaza $exe (@($cli)+$overrides+@('mcp','list','--json')) '' $repo $timeout $childEnv $true $true
+  if($r.timeout -or $r.exit -ne 0){throw 'query'}
+  if(([string]$r.out).Trim() -notmatch '^\['){throw 'shape'}
+  $parsed=ConvertFrom-Json -InputObject $r.out -ErrorAction Stop
+  $servers=@();foreach($entry in $parsed){$servers+=,$entry}
+ } catch {throw 'jak_mcp_interogare_esuata'}
+ foreach($server in $servers){
+  if($server.name -cne 'firecrawl'){
+   # Numele extern este date: nu permitem injectare de linii/secrete in log.
+   $name=if($server.name -is [string] -and $server.name -cmatch '^[A-Za-z0-9_.-]{1,80}$'){$server.name}else{'nume_invalid'}
+   if($childEnv.FIRECRAWL_API_KEY){$name=$name.Replace($childEnv.FIRECRAWL_API_KEY,'[REDACTED]')}
+   throw ('jak_mcp_neasteptat '+$name)
+  }
+  AssertJakFirecrawl $server $withKey $false
+ }
+ if($servers.Count -ne 1){throw 'jak_mcp_neasteptat firecrawl'}
+ try {
+  $remaining=[int][Math]::Floor($timeout-$clock.Elapsed.TotalSeconds)
+  if($remaining -lt 1){throw 'timeout'}
+  $r=Ruleaza $exe (@($cli)+$overrides+@('mcp','get','firecrawl','--json')) '' $repo $remaining $childEnv $true $true
+  if($r.timeout -or $r.exit -ne 0){throw 'query'}
+  if(([string]$r.out).Trim() -notmatch '^\{'){throw 'shape'}
+  $server=ConvertFrom-Json -InputObject $r.out -ErrorAction Stop
+ } catch {throw 'jak_mcp_interogare_esuata'}
+ AssertJakFirecrawl $server $withKey $true
+}
+
 function InvokeJak([string]$exe,[string[]]$argv,[string]$prompt,[string]$repo,[int]$timeout) {
+ $clock=[Diagnostics.Stopwatch]::StartNew()
  $jakHomePath=Join-Path $PAW_ROOT 'state\jak-home'
  $config=Join-Path $jakHomePath 'config.toml'
  [void](AssertCdxPath $jakHomePath);AssertCdxSingleFile $config;AssertCdxAdminAcl $config
@@ -100,19 +175,16 @@ function InvokeJak([string]$exe,[string[]]$argv,[string]$prompt,[string]$repo,[i
  # CLI are precedenta peste config de proiect/cont. Nu exista selectie automata OAuth.
  # Pastram markerul stdin ultimul, inclusiv dupa override-urile interne.
  if($argv[-1] -cne '-'){throw 'jak_stdin_obligatoriu'}
- $argv=@($argv | Select-Object -SkipLast 1)
- foreach($setting in @('features.apps=false','features.plugins=false','features.remote_plugin=false','features.skill_mcp_dependency_install=false','features.hooks=false')){
-  $argv+=@('-c',$setting)
- }
- $repoToml=$repo.Replace('\','\\').Replace('"','\"')
- $argv+=@('-c',('projects."'+$repoToml+'".trust_level="untrusted"'))
- $argv+=@('-c',('mcp_servers.firecrawl.enabled='+([bool]$key).ToString().ToLowerInvariant()))
- $argv+=@('-')
+ $overrides=GetJakOverrides $repo ([bool]$key)
+ $argv=@($argv | Select-Object -SkipLast 1)+@('--ephemeral')+$overrides+@('-')
  try {
-  $result=Ruleaza $exe $argv $prompt $repo $timeout $childEnv $true $true
+  AssertJakMcp $exe $argv[0] $overrides $repo ([Math]::Min(60,$timeout)) $childEnv ([bool]$key)
+  $remaining=[int][Math]::Floor($timeout-$clock.Elapsed.TotalSeconds)
+  if($remaining -lt 1){throw 'jak_timeout'}
+  try {$result=Ruleaza $exe $argv $prompt $repo $remaining $childEnv $true $true}
+  catch {throw 'jak_proces_esuat; detaliile potential sensibile au fost omise'}
   # Aparare la un copil care repeta accidental credentialul in stdout/stderr.
   if($key){foreach($stream in @('out','err')){if($result[$stream]){$result[$stream]=$result[$stream].Replace($key,'[REDACTED]')}}}
   return $result
- } catch {throw 'jak_proces_esuat; detaliile potential sensibile au fost omise'}
- finally {$childEnv.Remove('FIRECRAWL_API_KEY');$key=$null}
+ } finally {$childEnv.Remove('FIRECRAWL_API_KEY');$key=$null}
 }

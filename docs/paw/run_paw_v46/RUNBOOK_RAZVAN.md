@@ -1,126 +1,25 @@
-# Paw v4.6 - pasi noi pentru Razvan (27.10.2026)
+# Paw v4.6 runda 2 - procedura unica pentru Razvan
 
-Pachet pentru review; agentul nu l-a instalat. Capitolul acesta are precedenta
-fata de exemplele v45 istorice de mai jos. Inlocuieste sursa/stage/hash cu v46.
-Pastreaza inventarul, oprirea lansatoarelor, bariera, backup-ul si recertificarea
-cdx din procedura v45. Nu reutiliza certificate sau marker Gemini vechi.
+Numai operatorul executa pasii de mai jos. Agentul nu a instalat nimic.
+A = PowerShell 5.1 admin Gazpet-Ai; N = acelasi cont NE-elevat (Medium).
+Orice eroare inseamna STOP. Nu repeta Install pentru login sau pentru cheie.
+Pregateste o singura fereastra de mentenanta; pastreaza toate dovezile rollback.
+Nu reutiliza certificatul cdx sau markerul Gemini v45.
 
-Gemini: exceptia unica de la "fara navigare" este chat nou in acelasi tab la
-https://gemini.google.com/app inainte de fiecare trimitere. Asteapta editorul,
-verifica Argon DUPA navigare; model_gresit inseamna refuz, fara schimbare de model.
-Nicio alta navigare, niciun tab nou/inchis. Stare ramane doar citire. Daca genereaza
-deja, refuza inainte de navigare. Nu lasa in tab ciorne/atasamente de pastrat.
+Jak foloseste acum runtime-ul protejat din Paw/codex/<versiune-id>, ca cdx,
+in locul copiei npm din profil folosita de v45. GetJakRuntime verifica versiunea
+0.162.0, ACL si manifestul complet; acelasi helper se foloseste la verificare.
+Sintaxa 0.162.0 a fost verificata in sursa oficiala, nu pe runtime-ul de productie:
+https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/cli/src/mcp_cmd.rs
+https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/exec/src/cli.rs
+La pasul 4 se verifica si help-ul runtime-ului instalat.
 
-1. PowerShell admin, dupa review: seteaza Source la COPIA v46 revizuita.
-
-```powershell
-$Source = 'C:\Users\Public\livrare\run_paw_v46\docs\paw\run_paw_v46'
-$Stage = 'C:\Users\Public\livrare\paw-v46-stage'
-$ManifestHash = (Get-FileHash -LiteralPath "$Source\SHA256.json" -Algorithm SHA256).Hash
-# Compara hash-ul cu valoarea aprobata separat; calculul singur nu dovedeste increderea.
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$Source\install.ps1" -Phase Prepare -Stage $Stage -ManifestSha256 $ManifestHash
-if ($LASTEXITCODE -ne 0) { throw 'Prepare esuat' }
-```
-
-Asteptat: `Prepared only...`; fara solicitare cheie. Stage include jak.ps1.
-Dupa inventar si oprirea pornirilor legacy din procedura v45:
-
-```powershell
-$InstallArgs = @{
- Phase = 'Install'; Stage = $Stage; ManifestSha256 = $ManifestHash
- LegacyStartsStopped = $true
- # Daca exista cgpt_pw.py: adauga LegacyHelperSha256 cu hash-ul revizuit separat.
-}
-& "$Stage\install.ps1" @InstallArgs
-```
-
-Nu ghici hash-ul legacy si nu ocoli verificarea. Asteptat: Installed, NOT certified.
-Install creeaza state\jak-home si state\secrets si genereaza config.toml.
-Home: Administrators/SYSTEM Full, Gazpet-Ai Modify pentru login/cache ca la cdx.
-Config, secrets si cheia: Administrators/SYSTEM Full, Gazpet-Ai ReadAndExecute
-(fisierul cheii doar citibil), fara mostenire sau alte ACE.
-Nu copiaza autentificarea si nu reseteaza recursiv home-ul existent.
-
-La `Configurati acum cheia Firecrawl?`, numai `DA` solicita cheia prin
-Read-Host -AsSecureString, fara afisare. Enter pastreaza cheia existenta sau absenta.
-Fisier: C:\ProgramData\Gazpet\Paw\state\secrets\firecrawl_api_key.
-Nu pune cheia in argv, transcript, ticket sau raport. Nu se instaleaza nimic npm.
-
-2. Login separat intr-o consola Gazpet-Ai NE-elevata, dintr-un director neutru:
-
-```powershell
-$Bin = 'C:\ProgramData\Gazpet\Paw\bin'
-$InstallInfo = Get-Content -LiteralPath "$Bin\cdx_install.json" -Raw | ConvertFrom-Json
-$env:CODEX_HOME = 'C:\ProgramData\Gazpet\Paw\state\jak-home'
-$Node = Join-Path $InstallInfo.runtime_root 'node.exe'
-$Cli = Join-Path $InstallInfo.runtime_root 'package\bin\codex.js'
-Set-Location $env:USERPROFILE
-& $Node $Cli login
-if ($LASTEXITCODE -ne 0) { throw 'Login jak esuat' }
-& $Node $Cli login status
-if ($LASTEXITCODE -ne 0) { throw 'Status login jak esuat' }
-& $Node $Cli features list
-& $Node $Cli mcp list
-```
-
-Asteptat: login ChatGPT reusit in jak-home; apps/plugins/remote_plugin,
-skill_mcp_dependency_install si hooks false. Numai firecrawl definit, disabled
-implicit, URL /v2/mcp cu bearer_token_env_var. Fara Neon, Gmail, Drive, Supabase,
-GitHub sau servere app-*. Daca flagurile nu sunt recunoscute sau apar alte servere:
-STOP; configuratia cloud/system si versiunea instalata cer review separat.
-Nu considera ignorarea unui flag drept dezactivare. Nu publica lista cu secrete.
-Inchide consola dupa verificari pentru a nu pastra CODEX_HOME pentru alte comenzi.
-Nu citesti auth.json; in admin verifici numai ACL:
-
-```powershell
-& icacls.exe 'C:\ProgramData\Gazpet\Paw\state\jak-home\config.toml'
-& icacls.exe 'C:\ProgramData\Gazpet\Paw\state\secrets'
-& icacls.exe 'C:\ProgramData\Gazpet\Paw\state\secrets\firecrawl_api_key'
-```
-
-3. Dupa recertificarea cdx din procedura v45, porneste jak prin run_paw.cmd cu un
-brief neconfidential ca inainte: read-only, -C repo, stdin, model/imagini optionale,
-timeout 1200. Cheie lipsa: exact o linie `FIRECRAWL: indisponibil`, continua fara
-Firecrawl. Cu cheie: fara acea linie si fara OAuth/AuthRequired. Testeaza o pagina
-publica neconfidentiala; nu trimite date interne in interogare. Cheie invalida ori
-necitibila/config modificat inseamna eroare explicita. Nu afisa cheia la diagnostic.
-
-4. Hash Gemini nou invalideaza markerul: refa testul de canal din procedura existenta
-si scrie markerul NUMAI dupa succes. Doua brief-uri consecutive trebuie sa apara in
-doua chat-uri noi ale aceluiasi tab. Verifica model_gresit dupa chat nou fara Enter.
-Verificarea atasamentelor se face pe ciorna DUPA navigarea la chat nou; mock-ul local
-testeaza separat refuzul ciornei. Lock-ul global gem ramane obligatoriu.
-
-Teste locale noi: `python -B -m unittest teste.test_v46 teste.test_gemini_pw`.
-Selectie offline repetabila: `python -B teste/run_safe.py`; rezultatul se scrie in
-teste/RESULTATS_v46.json. Aceasta selectie nu declara trecute cazurile CIM/HTTP
-excluse si nici certificarea OS sau conectivitatea Firecrawl.
-Nu rula discovery fara inspectie: test_cdx/test_instalare folosesc Git; harness-ul
-vechi test_run_paw consulta netstat real. Vezi REVIEW_v46.md pentru subsetul rulat.
-
----
-
-
-Procedura v45 istorica (capitolul v46 de mai sus are precedenta):
-
-# Runbook Razvan -- instalare Paw v4.5 (27.10.2026; baza: runbook-ul cdx r6 #032)
-
-> v4.5 = run_paw.ps1 (stdin UTF-8, fara deadlock, Job Object pe toate canalele, conversatiile Copilot 4-6) + cdx.ps1 (1 linie). PR #890, Jakarinos GO r3. $Source = copia inghetata din main dupa merge (C:\Users\Public\paw-data\pachet-v45), verificata prin ManifestHash; $Stage/$Audit noi; restul pasilor identici. Recertificarea cdx (sectiunile 4-6) e OBLIGATORIE: run_paw.ps1 intra in hash-urile cdx.
-
-18.10.2026. Procedura pentru operator; **Codex nu a executat Install, Run, Seal,
-login, setup sau modificari WFP**. Pachetul se revizuieste pe branch-ul
-`claude/cdx-acl-trustedinstaller`, peste `20ef5eb`. Hash-ul manifestului aprobat
-se ia din `REVIEW_032.md`/raportul final; nu se calculeaza si accepta orbeste din
-orice folder. Noul protocol este r6, certificat schema 7, binding schema 5.
-
-Doua ferestre **Windows PowerShell 5.1**: **A** = Gazpet-Ai ca administrator;
-**N** = acelasi utilizator, token Medium. Fiecare eroare inseamna STOP, fara
-retry automat, relaxare ACL sau editare a dovezilor. Tine sesiunea interactiva
-deschisa pentru taskul temporar de certificare.
-
-Run#1b ramane istoric, nesigilabil cu r6. Secventa ramasa este:
-**mentenanta -> pachet nou cu WFP persistent -> grant engine read explicit -> verificare N -> Run#2 -> review -> Seal**.
-Nu relua login/setup pentru aceasta actualizare: home-ul si conturile exista.
+Risc care cere decizia lui Razvan inainte de smoke: acelasi cont Windows poate
+citi cheia din state/secrets. Sandbox-ul legacy read-only nu ofera deny-read
+pe cai; backend-ul elevated cu profil granular este o configuratie separata,
+necertificata pentru jak. Mitigari: redactare stdout/stderr, --ephemeral si cheie
+Firecrawl dedicata cu plafon de credite. Ephemeral nu garanteaza absenta oricarui
+cache; procese ostile sau transformari ale cheii raman risc rezidual.
 
 ## 1. Preambul si mentenanta
 
@@ -129,14 +28,14 @@ valoarea transmisa la review. Nu folosi `$HOME` ca variabila de lucru.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Source = 'C:\Users\Public\paw-data\pachet-v45'
+$Source = 'C:\Users\Public\livrare\run_paw_v46\docs\paw\run_paw_v46'
 $PawRoot = 'C:\ProgramData\Gazpet\Paw'
 $Bin = Join-Path $PawRoot 'bin'
 $CdxHome = Join-Path $PawRoot 'state\codex-home'
-$Stage = 'C:\Users\Public\paw-data\stage-v45'
-$Audit = Join-Path $PawRoot 'operator-20261027-v45'
-$ManifestHash = 'CA1D496B37CC74EB6312312754453257808C5E046B06F94ECD7BD0D9A90A5916'
-$LegacyHash = '8F1FCDF73A23B94C1B7C804D46FF7011291F241A46319C7042FCF624CD6E9F50'
+$Stage = 'C:\Users\Public\paw-data\stage-v46-r2'
+$Audit = Join-Path $PawRoot 'operator-20261027-v46-r2'
+$ManifestHash = 'INLOCUIESTE_CU_HASH_MANIFEST_APROBAT_SEPARAT'
+$LegacyHash = 'INLOCUIESTE_CU_HASH_HELPER_LEGACY_REVIZUIT'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
 $Git = 'C:\Program Files\Git\bin\git.exe'
@@ -208,7 +107,7 @@ try {
 if ($LASTEXITCODE -ne 0) { throw 'Prepare esuat' }
 ```
 
-Prepare copiaza noua lista de **10 fisiere runtime** + manifest; nu instaleaza WFP.
+Prepare copiaza noua lista de **11 fisiere runtime** + manifest; nu instaleaza WFP.
 Run#1b foloseste acelasi set de GUID-uri, dar temporar. Installerul **refuza orice
 GUID deja existent**, chiar daca pare corect; nu inghite ALREADY_EXISTS si nu sterge
 filtre arbitrare. In mentenanta, A elimina explicit numai cele trei GUID-uri Paw
@@ -318,7 +217,131 @@ la fiecare lansare si la sfarsitul jobului, nu e monitorizare continua a traficu
 In inspectia Codex a filtrului VECHI, GetByKey a returnat ACCESS_DENIED; de aceea
 acest control N al noului ACL este obligatoriu. Nu relaxa verificarea daca pica.
 
-## 4. Run#2 nou pe r6
+## 4. Cheia si login Codex separat in jak-home
+
+La UNICA instalare de la pasul 3, promptul
+`Configurati acum cheia Firecrawl?` accepta numai `DA` pentru configurare.
+La urmatorul `Read-Host 'Cheie API Firecrawl' -AsSecureString` lipesti cheia.
+Enter la primul prompt pastreaza cheia existenta sau absenta. Nu pune cheia in
+argv, transcript, ticket sau raport. Nu rula Start-Transcript.
+Install creeaza state/jak-home, config.toml protejat si state/secrets protejat.
+Gazpet-Ai are Modify pe home (login/cache), numai citire pe config/secrets.
+Nu se copiaza autentificarea din alt home.
+
+In N, consola noua, director neutru:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$PawRoot = 'C:\ProgramData\Gazpet\Paw'
+$PAW_ROOT = $PawRoot
+$Bin = Join-Path $PawRoot 'bin'
+. "$Bin\cdx_security.ps1"
+. "$Bin\jak.ps1"
+$Runtime = GetJakRuntime
+$Node = $Runtime.exe
+$Cli = $Runtime.cli
+$env:CODEX_HOME = Join-Path $PawRoot 'state\jak-home'
+Set-Location $env:USERPROFILE
+& $Node $Cli --version
+if ($LASTEXITCODE -ne 0) { throw 'Versiune CLI indisponibila' }
+& $Node $Cli exec --help
+if ($LASTEXITCODE -ne 0) { throw 'Help exec esuat' }
+& $Node $Cli mcp list --help
+if ($LASTEXITCODE -ne 0) { throw 'Help mcp list esuat' }
+& $Node $Cli mcp get --help
+if ($LASTEXITCODE -ne 0) { throw 'Help mcp get esuat' }
+& $Node $Cli login
+if ($LASTEXITCODE -ne 0) { throw 'Login jak esuat' }
+& $Node $Cli login status
+if ($LASTEXITCODE -ne 0) { throw 'Status login jak esuat' }
+```
+
+Asteptat: codex-cli 0.162.0, exec include --ephemeral, list/get includ --json;
+login ChatGPT reusit in jak-home. Nu citi auth.json. Inchide consola dupa login.
+
+## 5. Smoke Firecrawl cu lista uneltelor verificata
+
+In N, un brief neconfidential prin jak, fara copierea cheii in consola:
+
+```powershell
+$Bin = 'C:\ProgramData\Gazpet\Paw\bin'
+$SmokeId = Get-Date -Format 'yyyyMMdd-HHmmss'
+$JakBrief = "C:\Users\Public\paw-data\brief\jak-firecrawl-$SmokeId.md"
+$JakOut = "C:\Users\Public\paw-data\out\jak-firecrawl-$SmokeId.log"
+if ((Test-Path -LiteralPath $JakBrief) -or (Test-Path -LiteralPath $JakOut)) { throw 'Nume ocupat' }
+@'
+Listeaza numele exacte ale uneltelor MCP expuse. Trebuie sa fie numai
+firecrawl_search, firecrawl_scrape, firecrawl_map. Fara actions/browser/crawl.
+Apoi foloseste scrape pentru https://example.com si spune titlul.
+Nu accesa fisiere locale, chei, conturi, ERP, baze de date sau mail.
+'@ | Set-Content -LiteralPath $JakBrief -Encoding ASCII
+& "$Bin\run_paw.cmd" jak $JakBrief $JakOut
+if ($LASTEXITCODE -ne 0) { throw 'Smoke jak esuat; inspecteaza logul redactat' }
+Get-Content -LiteralPath $JakOut -Tail 20
+```
+
+Asteptat cu cheia configurata: PAW_GATA, lista EXACTA search/scrape/map de mai sus,
+titlul paginii, fara AuthRequired/OAuth si fara cheia in log. Lipsa cheii:
+exact un `FIRECRAWL: indisponibil`, jak poate continua, dar smoke Firecrawl NU e trecut.
+Garda executa inainte de brief `mcp list --json` si `mcp get firecrawl --json`,
+cu acelasi runtime/home/mediu/override-uri. List nu contine enabled_tools in 0.162.0;
+get verifica allowlist-ul exact. Orice server suplimentar (inclusiv disabled),
+URL/header/unelte schimbate sau interogare esuata = PAW_EROARE si STOP.
+Raspunsul modelului nu inlocuieste garda determinista sau recertificarea OS.
+Search/scrape/map consuma credite; foloseste cheia dedicata cu plafon.
+
+## 6. Testul de canal Gemini
+
+Hash-ul nou invalideaza markerul vechi. In A, sub bariera si cu pornirile oprite,
+arhiveaza markerul vechi in Audit, fara a-l restaura automat:
+
+```powershell
+$barrier = OpenCdxInstallBarrier $true
+try {
+    $GemMarker = 'C:\Users\Public\paw-data\gem_canal_validat'
+    if (Test-Path -LiteralPath $GemMarker) {
+        Move-Item -LiteralPath $GemMarker -Destination "$Audit\gem-marker-v45-retired"
+    }
+} finally { $barrier.Dispose() }
+```
+
+In N, cu Edge de test pornit de operator prin helperul revizuit din Paw/tools,
+un singur tab Gemini liber, Argon selectat si fara ciorne/atasamente de pastrat:
+
+```powershell
+$Python = 'C:\Program Files\Python313\python.exe'
+$Bin = 'C:\ProgramData\Gazpet\Paw\bin'
+$GemId = Get-Date -Format 'yyyyMMdd-HHmmss'
+$GemBrief = "C:\Users\Public\paw-data\brief\gem-canal-$GemId.md"
+'Raspunde exact: PAW_GEM_TEST_OK' | Set-Content -LiteralPath $GemBrief -Encoding ASCII
+& $Python "$Bin\gemini_pw.py" stare
+if ($LASTEXITCODE -ne 0) { throw 'Stare Gemini esuata' }
+& $Python "$Bin\gemini_pw.py" trimite $GemBrief 120
+if ($LASTEXITCODE -ne 0) { throw 'Test canal Gemini esuat' }
+& $Python "$Bin\gemini_pw.py" trimite $GemBrief 120
+if ($LASTEXITCODE -ne 0) { throw 'Al doilea test canal Gemini esuat' }
+```
+
+Mentenanta exclude orice alta pornire pe gem/cop in timpul acestor probe directe.
+Asteptat: ambele PAW_GEM_TEST_OK, fiecare intr-un chat nou al ACELUIASI tab,
+fara taburi create/inchise; Argon verificat dupa navigarea la URL fix /app.
+Selecteaza manual alt model si repeta: GEM_EROARE model_gresit, fara Enter.
+Revino manual la Argon. Numai dupa observarea rezultatelor, A scrie markerul:
+
+```powershell
+$barrier = OpenCdxInstallBarrier $true
+try {
+    $GemHash = (Get-FileHash -LiteralPath "$Bin\gemini_pw.py" -Algorithm SHA256).Hash
+    $GemLine = 'CANAL_VALIDAT ' + $GemHash + ' ' + (Get-Date -Format o) + ' Razvan-v46-r2'
+    Set-Content -LiteralPath 'C:\Users\Public\paw-data\gem_canal_validat' -Value $GemLine -Encoding ASCII
+} finally { $barrier.Dispose() }
+```
+
+In N, acum probeaza `run_paw.cmd gem` cu acelasi brief intr-un out NOU.
+Asteptat PAW_GATA; se aplica lock-ul global si verificarea markerului.
+Testul direct nu inlocuieste smoke-ul prin lansator.
+
+## 7. Recertificarea cdx: Run nou pe r6
 
 Nu sunt necesare noi login/setup/ACL pentru home-ul deja configurat. Inspecteaza
 doar ACL-ul auth.json, fara continut. Run creeaza canare sintetice cu acelasi ACL.
@@ -348,7 +371,7 @@ evenimente file_change/error/diff. Aceasta limita apare si in certificat ca `par
 in scope, cu confirmarea si motivul adminului. Restrictia uneltei parinte este
 politica Codex (writable_roots/sandbox policy), nu o atestare OS.
 
-## 5. Review: exceptie DNS #031 si risc parent apply_patch #032
+### 7a. Review: exceptie DNS #031 si risc parent apply_patch #032
 
 In A, deschide `captured\probes.json`, evenimentele numerotate si template-ul
 `admin_review.json`. **Nu edita captured/external_result/hash-urile.**
@@ -413,7 +436,7 @@ alte cai, numai schimbari ACL si o modificare dupa verificare nu sunt acoperite
 de hash-uri. Daca jobul nu este idle, proba este marcata ca atare si rularea esueaza.
 Controlul nu se foloseste pentru a pretinde ca parent apply_patch este OS-confined.
 
-## 6. Seal si smoke
+### 7b. Seal si smoke
 
 In A, dupa review, in maximum 24h de la INCEPUTUL Run#2:
 
@@ -445,7 +468,7 @@ Get-Content -LiteralPath $OutputPath -Tail 5
 Verifica PAW_GATA, raport `status=complete`, diff numai paw_smoke.txt, commit LOCAL,
 fara push si sensitive_files.status=unchanged (16 cai). Abia apoi reactivezi taskurile legacy necesare, dupa lista initiala.
 
-## 7. Rollback explicit
+## 8. Rollback explicit la v45
 
 Mentenanta activa, procese oprite, marker retras ca la pasul 2. Nu restabili un
 marker vechi peste alta stare. Nu exista rollback automat dupa un Run esuat.
