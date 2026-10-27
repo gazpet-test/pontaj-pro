@@ -1,4 +1,4 @@
-import { HAIKU_55, PRETURI_HAIKU, jsonDinText } from '../_shared/haiku55.ts'
+import { HAIKU_55, PRETURI_HAIKU, costApel, jsonDinText } from '../_shared/haiku55.ts'
 
 // MODEL_E3 (Haiku) rămâne pentru izo-e3-ocr-local (arbitraj + fallback B4): rezerva lui e fixată la 0,05 USD în BD
 // (ocr_local_config.rezerva_usd CHECK = 0.05, migrarea 20261108a) — Sonnet acolo cere întâi schimbarea rezervei în BD.
@@ -7,8 +7,21 @@ export const MODELE_E3 = { haiku:HAIKU_55, sonnet:'claude-sonnet-5-5' }
 // Decizia Răzvan 27.10.2026: citirea directă aviz_e3 (ocr-packing-list) rulează pe Sonnet 5.5, gândirea oprită (faraGandire →
 // between_tools), rezerva 0,20 USD (rezervaE3). Restul ocr-packing-list rămâne pe modelParsare (Haiku).
 export const MODEL_AVIZ_E3 = MODELE_E3.sonnet
-// Sonnet scrie mai încet decât Haiku: 30 de rânduri × ~24 de chei ≈ 8k tokeni de ieșire; termenul rămâne sub limita de 150 s a funcției.
-export const TERMEN_AI_E3_MS = (model: string) => model === MODELE_E3.sonnet ? 140000 : 90000
+
+// P1-01 r2 (Copilot): costul MAXIM al apelului plătit, cu tariful efectiv (costApel), la plafoanele IMPUSE înainte de apel:
+// intrarea = numărarea gratuită count_tokens pe tot corpul (PDF/imagini + system + schema), refuz peste limită → 422
+// pdf_prea_multi_tokeni fără generare; ieșirea ≤ max_tokens (MAX_TOKENS_E3, include și gândirea). Fără cache_control → fără
+// tokeni de cache. Pe Sonnet limita de intrare e 46.000 (nu 48.000): costul maxim 0,196 ≤ rezerva 0,20 și rămân ~2.000 de tokeni
+// de intrare rezervă pentru o eventuală diferență numărare ↔ usage. Haiku (izo-e3-ocr-local) păstrează 48.000 → 0,01 ≤ 0,05.
+export const MAX_INPUT_SONNET_E3 = 46000
+export const limitaInputE3 = (model: string) => model === MODELE_E3.sonnet ? MAX_INPUT_SONNET_E3 : MAX_INPUT_E3
+export const costMaximE3 = (model: string) => costApel(model, { input_tokens: limitaInputE3(model), output_tokens: MAX_TOKENS_E3 })
+
+// P1-02 r2 (Copilot): termen GLOBAL pe cerere, măsurat de la intrarea în handler (limita funcției e 150 s). Apelul plătit primește
+// doar timpul rămas minus marja pentru decontare + normalizare + 2 citiri de plafon (3 apeluri BD scurte, ≪ 15 s). Sub
+// MIN_APEL nu se mai pornește apelul plătit (cost 0, rezerva eliberată); timeout în timpul apelului = rezultat necunoscut →
+// decontare cu NULL (rezerva rămâne consumată, logica existentă), fără reîncercare plătită.
+export const TERMENE_E3 = Object.freeze({ total: 135000, marja: 15000, minApel: 20000, numarare: 30000 })
 export const MAX_TOKENS_E3 = 10400
 export const MAX_INPUT_E3 = 48000
 export const MAX_PDF_E3 = 8 * 1024 * 1024

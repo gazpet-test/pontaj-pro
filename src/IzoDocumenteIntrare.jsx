@@ -14,7 +14,7 @@ import { supabase } from './lib/supabase.js'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import { aplicaPropunereOCR, avertismenteOCR, cantitateMultiplaOCR, seriiRepetateOCR, textSeriiRepetate, MESAJ_SERIE_REPETATA } from './izoDocumentePrefill.js'
 import IzoDocumentIstoric from './IzoDocumentIstoric.jsx'
-import { citesteLocal, raspunsInvokeOCR, descrieSursaOCR } from './izoOcrLocalFlux.js'
+import { citesteLocal, raspunsInvokeOCR, descrieSursaOCR, costEticheta } from './izoOcrLocalFlux.js'
 import {
   SABLOANE, DECIZII, COLOANE, IZOLATII, esteCurba, parseNumar, fmtNr, fmtM, randGol, validareDocument, eroriSalvare, eroriPv, eroareMotiv,
   randuriDinLipire, randDinBd, antetDinBd, argumenteSalveaza, argumenteConfirma, argumentePv, argumenteAnuleazaDraft, normalizeazaSalvare,
@@ -569,7 +569,8 @@ export default function IzoDocumenteIntrare() {
     // oricum blocante la salvare (validareDocument + serie_dublura pe server), deci confirmarea nu poate duce date greșite în registru
     const repetate = seriiRepetateOCR(propunere.raspuns)
     if (repetate.length && !window.confirm(`${textSeriiRepetate(repetate)}\n\nVerifică pe original coloana cu numărul țevii (ex. „Cod articol” / „Nr. țeavă”), nu „Nr. șarjă”. `
-      + 'Recomandat: Renunță și recitește. Dacă aplici, rândurile cu număr repetat rămân blocate la salvare până le corectezi.\n\nAplici totuși propunerea?')) return
+      + 'Recomandat: Renunță și recitește. Dacă aplici, rândurile cu număr repetat rămân blocate la salvare până le corectezi.\n\n'
+      + 'Atenție: verificarea prinde doar numerele repetate, nu dovedește din ce coloană au fost citite — confirmarea pe original rămâne a ta.\n\nAplici totuși propunerea?')) return
     modifica(e => aplicaPropunereOCR(e, propunere.raspuns, { mod }))
     setPropunere(null); setAiAplicat(true); pdfAplicat.current = pdfAI
     flash('ok', 'Propunere aplicată. Verifică datele și alege decizia pentru fiecare bucată înainte de salvare.')
@@ -727,7 +728,7 @@ export default function IzoDocumenteIntrare() {
       {aiMeta && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>
         {aiMeta.success && <b>{descrieSursaOCR(aiMeta)}. </b>}
         {aiMeta.model && <>Model: {aiMeta.model}. </>}
-        {aiMeta.cost_usd != null && <>Cost: {fmtNr(aiMeta.cost_usd, 4)} USD. </>}
+        {aiMeta.cost_usd != null && <>Cost ({costEticheta(aiMeta)}): {fmtNr(aiMeta.cost_usd, 4)} USD. </>}
         {aiMeta.success && aiMeta.cost_usd == null && <>Cost necunoscut. </>}
         {aiMeta.sursa && <div>Durată: {aiMeta.sursa.secunde ?? '—'} s · Dezacorduri: {aiMeta.sursa.dezacorduri ?? '—'} · Perspectivă: {({ aplicata:'aplicată', nesigura:'nesigură', inutila:'inutilă' })[aiMeta.sursa.perspectiva] || '—'}</div>}
         {aiMeta.plafon && <>Plafon rămas: {fmtNr(Number(aiMeta.plafon.plafon_usd) - Number(aiMeta.plafon.consumat_usd) - Number(aiMeta.plafon.rezervat_usd), 4)} USD (după rezervări).</>}
@@ -1076,6 +1077,7 @@ function PropunereOCR({ raspuns, ed, mobil }) {
     ['data_document', 'Data'], ['observatii', 'Observații'], ...SABLOANE[ed.sablon].antet, ...SABLOANE[ed.sablon].totaluri])
   return <div style={{ margin:'12px 0', fontSize:13, overflowWrap:'anywhere' }}>
     <b>Propunere AI — verifică după original</b>
+    <div style={{ fontSize:12, color:G.muted }}>Verificarea automată prinde doar numerele de țeavă repetate; nu confirmă că au fost citite din coloana corectă (Nr. țeavă / Cod articol) — compară cu documentul.</div>
     {Object.entries(doc.antet).map(([k, v]) => <div key={k}>{etichete[k] || k}: <b>{v || '—'}</b></div>)}
     <div>Totaluri tipărite OCR: {raspuns.totaluri_tiparite?.total_metri ?? '—'} m · {raspuns.totaluri_tiparite?.total_kg ?? '—'} kg</div>
     {comparatii.map(c => <div key={c.cheie} style={{ color:c.bate === false ? G.red : G.muted, marginTop:4 }}>

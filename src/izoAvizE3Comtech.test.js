@@ -2,7 +2,7 @@
 // transcris (scripts/ocr_local/tests/e3/aviz_comtech_p0160.json) → normalizare edge (avizE3.ts) → garda pe server → prefill UI.
 import { describe, it, expect } from 'vitest'
 import aviz from '../scripts/ocr_local/tests/e3/aviz_comtech_p0160.json'
-import { EroareE3, MESAJ_SERIE_REPETATA_E3, MODEL_AVIZ_E3, gradOtelE3, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3, verificaSeriiE3 } from '../supabase/functions/ocr-packing-list/avizE3.ts'
+import { EroareE3, MESAJ_SERIE_REPETATA_E3, MODEL_AVIZ_E3, costMaximE3, limitaInputE3, gradOtelE3, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3, verificaSeriiE3 } from '../supabase/functions/ocr-packing-list/avizE3.ts'
 import { MESAJ_SERIE_REPETATA, aplicaPropunereOCR, avertismenteOCR, seriiRepetateOCR } from './izoDocumentePrefill.js'
 import { randNormalizat, validareDocument } from './izoDocumenteLogica.js'
 
@@ -65,6 +65,9 @@ describe('aviz COMTECH P 0160 — calea Sonnet (ocr-packing-list aviz_e3)', () =
     for (const model of [undefined, 'haiku', 'sonnet']) expect(valideazaCerereE3({ ...cerere, model }).model).toBe('claude-sonnet-5-5')
     expect(MODEL_AVIZ_E3).toBe('claude-sonnet-5-5')
     expect(rezervaE3(MODEL_AVIZ_E3)).toBe(0.2)
+    // P1-01 r2: costul maxim (costApel la limita de intrare impusă + max_tokens) încape în rezervă
+    expect(costMaximE3(MODEL_AVIZ_E3)).toBeLessThanOrEqual(rezervaE3(MODEL_AVIZ_E3))
+    expect(limitaInputE3(MODEL_AVIZ_E3)).toBe(46000)
     expect(() => valideazaCerereE3({ ...cerere, model:'opus' })).toThrow()
   })
   it('promptul aviz: Cod articol → serie doar fără Nr. țeavă, șarja doar în sarja, grad fără spații, exemplul descris', () => {

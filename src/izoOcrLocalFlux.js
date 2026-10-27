@@ -25,13 +25,21 @@ function esec(r, cod) {
 // Indicatorul `haiku:true` din citesteLocal înseamnă „citire directă în cloud” (numele a rămas din B4).
 export function descrieSursaOCR(meta) {
   if (!meta) return ''
-  if (meta.sursa?.ramura === 'haiku') return 'Haiku fallback'
-  if (meta.sursa?.ramura === 'sonnet') return 'Sonnet automat'
+  if (meta.sursa?.ramura === 'haiku') return 'Haiku (fallback local)'
+  if (meta.sursa?.ramura === 'sonnet') return 'Sonnet (citire directă, automat)'
   if (String(meta.model).startsWith('ocr_local:')) {
     return String(meta.model).includes('+claude-')
       ? `Local + Haiku pe ${meta.sursa?.dezacorduri ?? '?'} celule` : 'Local LightOn+MinerU'
   }
-  return String(meta.model).includes('sonnet') ? 'Sonnet direct' : 'Haiku direct'
+  return String(meta.model).includes('sonnet') ? 'Sonnet (citire directă)' : 'Haiku (citire directă)'
+}
+// cui îi aparține costul afișat (P2 r2): fallback-ul local e pe Haiku, citirea directă pe Sonnet
+export function costEticheta(meta) {
+  if (!meta) return ''
+  if (meta.sursa?.ramura === 'haiku') return 'Haiku, fallback local'
+  if (String(meta.model).includes('sonnet')) return 'Sonnet, citire directă'
+  if (String(meta.model).startsWith('ocr_local:')) return String(meta.model).includes('+claude-') ? 'Haiku, arbitraj local' : 'local'
+  return 'Haiku, citire directă'
 }
 
 // timers implicit cu wrapper: setTimeout apelat ca metoda a altui obiect da "Illegal invocation" in browser

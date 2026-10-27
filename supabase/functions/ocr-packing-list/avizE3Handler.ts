@@ -2,9 +2,16 @@ import { utilizatorE3, verificaPoartaE3 } from '../_shared/izoE3Poarta.ts'
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { costApel, mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { faraGandire } from '../_shared/gandire.ts'
-import { EroareE3, MAX_INPUT_E3, MAX_TOKENS_E3, TERMEN_AI_E3_MS, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3, verificaSeriiE3 } from './avizE3.ts'
+import { EroareE3, MAX_TOKENS_E3, TERMENE_E3, limitaInputE3, normalizeazaE3, promptE3, rezervaE3, valideazaCerereE3, verificaSeriiE3 } from './avizE3.ts'
 
-export async function citesteAvizE3(req: Request, body: Record<string, unknown>, caller: SupabaseClient, ledger: SupabaseClient, apiKey: string | undefined, cors: Record<string, string>) {
+// Dependențe injectabile DOAR pentru teste (ceas, transport, termene); producția folosește Date.now / fetch / TERMENE_E3.
+export type DepsE3 = { acum?: () => number; transport?: typeof fetch; termene?: typeof TERMENE_E3 }
+
+export async function citesteAvizE3(req: Request, body: Record<string, unknown>, caller: SupabaseClient, ledger: SupabaseClient, apiKey: string | undefined, cors: Record<string, string>, deps: DepsE3 = {}) {
+  const acum = deps.acum ?? Date.now, transport = deps.transport ?? fetch, T = deps.termene ?? TERMENE_E3
+  const final = acum() + T.total   // termen GLOBAL al cererii, de la intrarea în handler (P1-02 r2)
+  const ramasApel = () => final - T.marja - acum()
+  const expirat = (e: unknown) => e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')
   const raspuns = (status: number, data: Record<string, unknown>) => new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
   let rezervare: number | null = null
   // 0 până imediat înaintea apelului plătit (numărarea e gratuită); null = cost necunoscut după pornirea generării (Jak E9 r2 P2)
@@ -50,16 +57,29 @@ export async function citesteAvizE3(req: Request, body: Record<string, unknown>,
     }
     const headers = { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }
     // 8 MB nu limitează tokenii unui PDF. Endpoint gratuit, fără generare; lipsa numărării => fail closed.
-    const count = await fetch('https://api.anthropic.com/v1/messages/count_tokens', { method: 'POST', headers, body: JSON.stringify({ ...payload, thinking: faraGandire(model) }), signal: AbortSignal.timeout(30000) })
+    const count = await transport('https://api.anthropic.com/v1/messages/count_tokens', { method: 'POST', headers, body: JSON.stringify({ ...payload, thinking: faraGandire(model) }), signal: AbortSignal.timeout(Math.max(1, Math.min(T.numarare, ramasApel()))) })
     // Numărarea e gratuită: dacă pică, nu s-a cheltuit nimic → cost 0, rezerva se eliberează (Jak E9 r1 P2).
     if (!count.ok) { cost = 0; throw new EroareE3('numarare_indisponibila', 502) }
     const tokens = await count.json().then(j => j.input_tokens).catch(() => null)
     if (!Number.isSafeInteger(tokens) || tokens <= 0) { cost = 0; throw new EroareE3('numarare_indisponibila', 502) }
-    if (tokens > MAX_INPUT_E3) { cost = 0; throw new EroareE3('pdf_prea_multi_tokeni') }
+    // Plafonul de intrare e impus AICI, pe numărarea întregului corp (PDF/imagini + system), înainte de apelul plătit (P1-01 r2).
+    if (tokens > limitaInputE3(model)) { cost = 0; throw new EroareE3('pdf_prea_multi_tokeni') }
+    // Nu mai e timp pentru apel + marja de după el → apelul plătit nu pornește (cost 0, rezerva eliberată).
+    const timpApel = ramasApel()
+    if (timpApel < T.minApel) { cost = 0; throw new EroareE3('termen_depasit', 504) }
     cost = null
-    const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_E3, thinking: faraGandire(model) }), signal: AbortSignal.timeout(TERMEN_AI_E3_MS(model)) })
-    if (!r.ok) throw new EroareE3('apel_ai_esuat', 502)
-    const result = await r.json()
+    let result
+    const semnal = AbortSignal.timeout(timpApel)
+    // Și antetul, și corpul răspunsului concurează cu termenul: un răspuns sosit după termen e abandonat, nu folosit
+    // (chiar dacă transportul n-ar respecta semnalul).
+    const cuTermen = <X>(p: Promise<X>) => Promise.race([p, new Promise<never>((_, nu) => {
+      if (semnal.aborted) nu(semnal.reason); else semnal.addEventListener('abort', () => nu(semnal.reason), { once: true })
+    })])
+    try {
+      const r = await cuTermen(transport('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify({ ...payload, max_tokens: MAX_TOKENS_E3, thinking: faraGandire(model) }), signal: semnal }))
+      if (!r.ok) throw new EroareE3('apel_ai_esuat', 502)
+      result = await cuTermen(r.json())
+    } catch (e) { throw expirat(e) ? new EroareE3('termen_depasit', 504) : e }   // cost rămâne null = rezultat necunoscut
     // Usage absent/incomplet => nu subraportăm costul ca zero. Rezerva rămâne consumată integral.
     if (Number.isSafeInteger(result.usage?.input_tokens) && result.usage.input_tokens >= 0 && Number.isSafeInteger(result.usage?.output_tokens) && result.usage.output_tokens >= 0) cost = costApel(model, result.usage)
     await deconteaza() // inclusiv la refuz, trunchiere sau JSON invalid: apelul a costat.
