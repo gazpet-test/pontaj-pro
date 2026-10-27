@@ -577,3 +577,31 @@ Copilot închide la nivel de plan P1-02, 04, 05, 06 și 08 din r4 și cere trei 
 - **P2-02:** `generateLink` lucrează cu emailul. Backend-ul îl ia din contul Auth verificat (`auth_user_id` din `conturi_teren` → admin `getUserById` → email), niciodată din cerere. Se testează și cazul unui cont șters concurent, care nu are voie să ducă la o creare implicită.
 - **P2-03:** inventarul tuturor rolurilor care creează funcții în `public` (postgres, supabase_admin, rolurile `izo_*_writer` etc.), cu `ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` pentru fiecare. Poarta ACL a rolului `teren` prinde orice scăpare.
 - **P2-04:** `termination_date` e de tip `date`, iar semantica e: ultima zi lucrată inclusiv, în fusul **Europe/Bucharest**. `fn_teren_eligibil` compară `termination_date >= (now() AT TIME ZONE 'Europe/Bucharest')::date`, deci acoperă și trecerea timpului fără niciun UPDATE. Trigger-ul acoperă schimbarea în BD. Se testează tranziția exactă la miezul nopții.
+
+---
+
+## r7 — ultima P1 din re-review-ul r6 (Copilot conv. 5: NO-GO, P0 0, P1 1, P2 3)
+
+C2 și C3 sunt închise. C1 conținea o contradicție: „altfel `erp`, ca azi” lăsa orice cont nou (de exemplu prin `auth.signUp` cu cheia anon) să primească automat `erp`, adică `authenticated` cu acces la tabelele largi. **Varianta A a lui Copilot, aleasă:**
+
+**C1′ — `erp` se acordă doar printr-o aprobare server-side.**
+- **Cum se creează azi conturile ERP** (din `src/App.jsx`, `createManager`):
+  - fie `supabase.auth.signUp` din client, dacă înscrierea publică e permisă;
+  - fie Supabase Dashboard → Auth → Add user, când înscrierea e oprită (D1-B).
+  - Legarea de fișă o confirmă deja owner-ul („🔗 Leagă automat” / Edit → Fișă angajat, R1).
+  - Starea reală a înscrierii publice nu se poate citi din BD: **se verifică în E1** cu un `auth.signUp` real cu cheia anon, pe proiectul de test, și se notează pentru prod.
+- **Regula nouă:**
+  - `handle_new_user` **nu mai inserează niciodată** `conturi_tip = 'erp'`. Pentru un cont nou non-teren nu se inserează nicio clasificare, deci hook-ul **refuză tokenul** până la aprobare;
+  - **aprobarea ERP** e o funcție nouă, `fn_cont_aproba_erp(auth_user_id)`: doar owner, verificat în corp, jurnalizată. Inserează `conturi_tip = 'erp'` și se leagă în fluxul existent de confirmare a contului (Admin → Manageri). Un manager nou nu se poate loga până nu îl confirmă owner-ul;
+  - `teren` rămâne doar prin provisioning (C2);
+  - **cele 33 de conturi existente** se clasifică explicit `erp` la inventarul dinaintea activării hook-ului, fără schimbarea drepturilor.
+- **Test decisiv în E1:** un utilizator nou fără aprobare ERP și fără provisioning teren nu obține un JWT `authenticated` pe nicio cale Auth (signUp, Dashboard add user, invite, magic link), înainte de `fn_cont_aproba_erp`.
+- **Separat, de semnalat lui Răzvan:** dacă înscrierea publică e azi **permisă** pe prod, oricine poate deja crea un cont `authenticated` și citi cele 290 de tabele (inclusiv CNP / IBAN). E o expunere existentă, independentă de portal. Ce se recomandă:
+  - „Allow new users to sign up” = OFF;
+  - conturile se creează doar din Dashboard / edge-ul admin;
+  - verificarea o face chat-ul în Supabase Dashboard.
+
+**P2 din r6, preluate în E1:**
+- **P2-01:** procedura de urgență include, pe lângă `ban`, **revocarea refresh token-urilor** (ștergerea sesiunilor Auth ale conturilor `teren`). Un test real arată că, după dezactivarea hook-ului, nici login-ul, nici refresh-ul nu emit un JWT `authenticated` pentru un cont `teren`. Dacă testul eșuează, procedura rămâne HOLD.
+- **P2-02:** preflight-ul compară **exact** seturile de `auth_user_id` (`auth.users` ↔ `conturi_tip`) în ambele direcții: lipsuri, orfani, duplicate. Numărarea nu ajunge.
+- **P2-03:** finalizarea provisioning-ului (`conturi_teren → activ` și `portal_provisioning → finalizat`) se face într-**un singur RPC tranzacțional**, `fn_portal_cont_finalizeaza`, cu CAS și postcondiții. Edge-ul nu face două scrieri separate.
