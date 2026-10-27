@@ -146,11 +146,15 @@ DECLARE v_uid uuid:=auth.uid(); v_old public.izo_avize_iesire; v_av public.izo_a
 BEGIN
  IF v_uid IS NULL THEN RAISE EXCEPTION 'fara_drept' USING ERRCODE='42501'; END IF;
  IF current_setting('transaction_isolation')<>'read committed' THEN RAISE EXCEPTION 'READ COMMITTED' USING ERRCODE='25001'; END IF;
- -- Order: delivery shared -> canonical aviz key -> global key -> authorization
- -- SHARE rows -> series row -> LIVE entry/rate row -> LIVE exit key ->
- -- locations -> roots/pieces sorted by id. Manual exit never
- -- locks a series or aviz key, so it cannot create a reverse edge/deadlock.
+ -- Order: delivery shared -> LIVE exit key (izo.iesire) -> canonical aviz key -> global key -> authorization
+ -- SHARE rows -> series row -> LIVE entry/rate row -> LIVE exit key (reentrant) -> locations -> roots/pieces sorted by id.
+ -- Manual exit never locks a series or aviz key. The only reverse edge is rate row vs exit key for the SAME author AND the
+ -- SAME key used concurrently by a manual exit: PostgreSQL then aborts one side (40P01), nothing is committed wrongly.
  PERFORM pg_advisory_xact_lock_shared(hashtext('gazpet.livrare_migrare'));
+ -- Jakarinos r4/r5 P1: ÎNTÂI exact lock-ul căii manuale (fn_izo_iesire_intern, 20261109b), apoi izo.aviz*. Sub el, o ieșire
+ -- manuală cu aceeași cheie nu mai poate fi confirmată între verificarea cheii (mai jos) și apelul LIVE; lock-ul e reentrant,
+ -- deci LIVE îl reia fără blocare. Calea manuală nu ia niciodată izo.aviz*, deci ordinea e mereu ieșire → aviz.
+ PERFORM pg_advisory_xact_lock(hashtextextended('izo.iesire|'||public.fn_izo_uid()::text||'|'||p_cheie::text,0));
  PERFORM pg_advisory_xact_lock(hashtextextended('izo.aviz|'||public.fn_izo_uid()||'|'||p_cheie,0));
  -- op_cheie is globally UNIQUE; also serialize different authors reusing it.
  PERFORM pg_advisory_xact_lock(hashtextextended('izo.aviz.global|'||p_cheie,0));
@@ -201,11 +205,8 @@ BEGIN
  v_nr:=v_serie||' '||lpad(v_num::text,greatest(4,length(v_num::text)),'0');
  v_r:=public.fn_izo_aviz_iesire_intern(p_cheie,p_depozit,p_tronson,v_ids,v_nr,p_data);
  IF v_r->>'cod' IS DISTINCT FROM 'iesit' THEN RAISE EXCEPTION 'iesire_refuzata'; END IF;
- -- Jakarinos r4 P1: o ieșire manuală cu aceeași cheie, confirmată între verificarea de mai sus și apelul LIVE (care ia
- -- lock-ul izo.iesire|autor|cheie abia acum), ar fi întoarsă de LIVE ca răspuns reluat („iesit”). Avizul se numerotează
- -- DOAR dacă operația jurnalizată pentru cheie a fost scrisă chiar de această tranzacție; altfel refuz → rollback complet, numărul nu se consumă.
- -- fn_izo_birou_jurnal lasă ora_server pe implicitul now() = începutul tranzacției care scrie (xmin nu merge: rândul poate fi
- -- scris într-o subtranzacție); o operație confirmată de altă tranzacție are alt now().
+ -- Garanția e lock-ul izo.iesire de la început (determinist). Verificarea de mai jos e doar o a doua plasă: operația pentru cheie
+ -- trebuie să aibă ora_server = now() a acestei tranzacții (fn_izo_birou_jurnal lasă implicitul); nu e folosită ca identitate.
  IF NOT EXISTS(SELECT 1 FROM public.izo_operatii o WHERE o.op_id=p_cheie AND o.autor_profile_id=public.fn_izo_uid()
   AND o.ora_server=now()) THEN RAISE EXCEPTION 'iesire_nu_e_din_aceasta_cerere'; END IF;
  IF EXISTS(SELECT 1 FROM public.magazie_bucati b WHERE b.id=ANY(v_ids) AND

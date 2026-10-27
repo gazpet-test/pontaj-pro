@@ -75,17 +75,52 @@ SQL
 m=$!
 wait_app izo_aviz_m || esec 'manual exit did not reach barrier'
 emit_session "$K" AVIZ-9 izo_aviz_r & r=$!
-# A a trecut de verificarea cheii și a alocat numărul; așteaptă în LIVE (rândul de rată sau lock-ul cheii) după B neconfirmat.
-wait_app izo_aviz_r "wait_event_type='Lock'" || esec 'aviz did not wait inside LIVE exit'
-[[ "$("${ADMIN[@]}" -d "$BAZA" -Atc "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.application_name='izo_aviz_r' AND l.locktype='advisory' AND l.granted AND l.objid::bigint=(hashtextextended('izo.aviz.global|$K',0) & 4294967295)")" == 1 ]] || esec 'aviz not past key check'
+# Cu fix-ul r5, A se oprește pe lock-ul căii manuale (izo.iesire|autor|K, ținut de B) ÎNAINTE de verificarea cheii și de alocare.
+wait_app izo_aviz_r || esec 'aviz did not wait on the manual exit key lock'
+[[ "$(q 'SELECT ultim_nr FROM public.izo_avize_serii WHERE depozit_id=9')" == "$((before+3))" ]] || esec 'aviz allocated before the exit key lock'
 printf '%s\n' 'SELECT pg_advisory_unlock(20261120,6601);' '\q' >&9
 exec 9>&-
 wait "$coord2" || esec coordinator2
 wait "$m" || { cat "$TMP/izo_aviz_m.log"; esec manual_exit; }
 if wait "$r"; then cat "$TMP/izo_aviz_r.log"; esec 'aviz accepted on replayed manual exit'; fi
 rm "$TMP/barrier2.in"
-grep -q 'iesire_nu_e_din_aceasta_cerere' "$TMP/izo_aviz_r.log" || { cat "$TMP/izo_aviz_r.log"; esec 'wrong refusal for replayed exit'; }
+grep -q 'cheie_operatie_existenta' "$TMP/izo_aviz_r.log" || { cat "$TMP/izo_aviz_r.log"; esec 'wrong refusal for manual exit with same key'; }
 [[ "$(q "SELECT count(*) FROM public.izo_avize_iesire WHERE op_cheie='$K'")" == 0 ]] || esec 'aviz created on manual exit'
 [[ "$(q 'SELECT ultim_nr FROM public.izo_avize_serii WHERE depozit_id=9')" == "$((before+3))" ]] || esec 'replay consumed number'
 [[ "$(q "SELECT count(*) FROM public.izo_operatii WHERE op_id='$K' AND tip_op='iesire'")" == 1 ]] || esec 'manual exit missing'
+# Varianta „pornire simultană” (Jakarinos r5): manual C și aviz D cu aceeași cheie L și același număr, eliberate de aceeași barieră.
+# Orice ordine e acceptată (manual întâi → aviz refuzat; aviz întâi → manualul primește operația existentă; sau 40P01), dar
+# invariantul e strict: cel mult un aviz pe L, contorul = baza + avize create, o singură operație pe L, iar avizul (dacă există)
+# are exact evenimentele operației.
+L=00000000-0000-0000-0000-00000000a005; base="$(q 'SELECT ultim_nr FROM public.izo_avize_serii WHERE depozit_id=9')"; NR2="CJPJ $(printf '%04d' $((base+1)))"
+mkfifo "$TMP/barrier3.in"
+"${PSQL[@]}" -d "$BAZA" <"$TMP/barrier3.in" >"$TMP/barrier3.log" 2>&1 & coord3=$!
+exec 7>"$TMP/barrier3.in"
+printf '%s\n' 'SELECT pg_advisory_lock(20261120,6600);' >&7
+for ((i=0;i<100;i++)); do [[ "$(q "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=20261120 AND objid=6600 AND granted")" == 1 ]] && break; sleep 0.1; done
+"${ADMIN[@]}" -d "$BAZA" >"$TMP/izo_aviz_c.log" 2>&1 <<SQL &
+SET SESSION AUTHORIZATION authenticator;
+BEGIN;
+SET LOCAL ROLE authenticated;
+SET LOCAL application_name='izo_aviz_c';
+SELECT set_config('request.jwt.claims','{"sub":"00000000-0000-0000-0000-000000000121","role":"authenticated"}',true);
+SELECT pg_advisory_xact_lock_shared(20261120,6600);
+SELECT public.fn_izo_iesire_tronson('$L',9,19,ARRAY[(SELECT id FROM public.magazie_bucati WHERE serie='AVIZ-10')],'$NR2',(now() AT TIME ZONE 'Europe/Bucharest')::date);
+COMMIT;
+SQL
+c=$!
+emit_session "$L" AVIZ-10 izo_aviz_d & d=$!
+wait_app izo_aviz_c || esec 'simultaneous manual did not reach barrier'
+wait_app izo_aviz_d || esec 'simultaneous aviz did not reach barrier'
+printf '%s\n' 'SELECT pg_advisory_unlock(20261120,6600);' '\q' >&7
+exec 7>&-
+wait "$coord3" || esec coordinator3
+rc_c=0; wait "$c" || rc_c=$?; rc_d=0; wait "$d" || rc_d=$?
+rm "$TMP/barrier3.in"
+navize="$(q "SELECT count(*) FROM public.izo_avize_iesire WHERE op_cheie='$L'")"
+[[ "$navize" == 0 || "$navize" == 1 ]] || esec 'simultaneous: more than one aviz'
+[[ "$(q 'SELECT ultim_nr FROM public.izo_avize_serii WHERE depozit_id=9')" == "$((base+navize))" ]] || esec 'simultaneous: counter mismatch'
+[[ "$(q "SELECT count(*) FROM public.izo_operatii WHERE op_id='$L'")" == 1 ]] || esec 'simultaneous: operation count'
+[[ "$(q "SELECT count(*) FROM public.izo_avize_iesire a JOIN public.izo_operatii o ON o.op_id=a.op_cheie WHERE a.op_cheie='$L' AND to_jsonb(a.eveniment_ids) IS DISTINCT FROM o.raspuns->'eveniment_ids'")" == 0 ]] || esec 'simultaneous: aviz events differ from operation'
+echo "PASS AVIZ simultaneous same key: avize=$navize rc_manual=$rc_c rc_aviz=$rc_d (invariants hold)"
 echo 'PASS AVIZ concurrency: same key one aviz/exit/number; distinct keys consecutive; replayed manual exit refused without number'
