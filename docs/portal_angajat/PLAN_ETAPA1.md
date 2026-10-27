@@ -428,3 +428,93 @@ Concluzia: dacă cei ~98 de oameni de pe teren ar primi conturi `authenticated`,
   - **A:** ramura `tip_cont = 'teren'` (rol `teren`, legare deterministă de fișă, fără notificări);
   - B: profilul se corectează manual după creare.
 - **Separat, cu „da”:** repararea expunerii CNP / IBAN / adresă din `employees` pentru toți utilizatorii ERP (politica `employees_select_all_authenticated` = `true` + granturile pe coloane).
+
+---
+
+## r5 — contractul de securitate pentru r4 (după review-ul Copilot conv. 5 pe r4: NO-GO, P0 0, 8 P1, 5 P2)
+
+Copilot acceptă direcția r4 (un singur cont, rolul `teren`, module opt-in; deciziile 11–14 pe A) și cere un contract mai strict. Mai jos, fiecare P1 cu corecția din specificație și **dovada obligatorie în E1**: harness prodlike + un test real al fluxului Auth pe un proiect / branch Supabase de test, înainte de orice DRY.
+
+**P1-01 — clasificarea contului nu poate eșua deschis.**
+- **Sursa autoritativă** e o tabelă server-side, `conturi_teren`:
+  - coloane: `auth_user_id` PK, `employee_id` UNIQUE, `stare` ∈ {`in_creare`, `activ`, `revocat`}, `provisioning_id` UNIQUE, `creat_de`, `creat_la`;
+  - RLS, fără granturi pentru clienți.
+- **Hook-ul** (Custom Access Token):
+  - dacă `auth_user_id` e în `conturi_teren` **sau** `app_metadata.tip_cont = 'teren'` → `role = 'teren'`, doar dacă rândul există, e `activ` și `employee_id` coincide cu metadatele;
+  - orice lipsă, conflict sau eroare **pentru un astfel de cont** → hook-ul **refuză emiterea tokenului** acelui cont. Nu există fallback la `authenticated`;
+  - pentru conturile fără rând și fără marker, hook-ul nu schimbă nimic și nu poate arunca excepții. Calea e trivială și testată, ca un hook defect să nu blocheze cei 33 de utilizatori existenți.
+- **Procedura de urgență:**
+  - dezactivarea hook-ului e precedată **automat** de `ban` pe toate conturile `teren` (scriptul de urgență din `/portal-admin` sau un job), apoi de oprirea hook-ului. Fără hook nu există niciun cont `teren` utilizabil, deci nu poate apărea niciun `authenticated` cu acces larg;
+  - JWT-urile deja emise expiră în maximum o oră, iar poarta de sesiune (P1-04) le refuză imediat, pentru că sesiunile se revocă în BD.
+- **Teste:** marker absent sau invalid, schimbarea tipului, angajat inactiv, refresh după schimbarea metadatelor, hook dezactivat după procedura de urgență.
+
+**P1-02 — izolarea rolului `teren`, demonstrată, nu presupusă.**
+- E1 conține un **preflight** în harness și în DRY:
+  - granturile efective ale rolului `teren` pe tabele, view-uri, secvențe, scheme și funcții (inclusiv prin PUBLIC);
+  - apartenențele (`teren` nu e membru al `authenticated` / `anon`, nu are BYPASSRLS);
+  - schemele expuse prin PostgREST.
+- **`ALTER DEFAULT PRIVILEGES`**: funcțiile noi nu primesc EXECUTE pentru PUBLIC. Se revocă explicit pe fiecare funcție nouă, iar poarta automată verifică.
+- **Audit pe cele 21 de funcții PUBLIC** (în special DEFINER-ul): li se revocă EXECUTE pentru `teren`, sau se demonstrează că sunt inofensive.
+- **Teste ca rol `teren` real**, prin REST, RPC, Storage (buckets), Realtime și GraphQL, unde sunt activate: zero acces în afara listei.
+- **Amprenta ACL-urilor** rolului `teren` intră într-o poartă permanentă (ca `fn_izo_porti_lipsa`). Orice grant nou o face roșie.
+
+**P1-03 — emiterea sesiunii, contract strict.**
+- `portal-login` cheamă `generateLink(magiclink)` **doar** pentru un `auth_user_id` existent, citit din `conturi_teren` (stare `activ`), niciodată după un email venit din cerere. Fără creare implicită de cont.
+- `verifyOtp` rulează pe un **client Auth separat**, fără sesiune persistentă, distinct de clientul `service_role`.
+- După `verifyOtp`, backend-ul verifică `sub` = contul așteptat, rolul `teren` și `session_id`.
+- OTP-ul și refresh token-ul nu apar în loguri, URL-uri sau erori.
+- Retry, timeout, OTP consumat și două login-uri concurente se testează (L05: timeout = rezultat necunoscut, urmat de reconciliere).
+- Se măsoară limitele de rată Auth pentru `generateLink`.
+- **Revocarea celorlalte sesiuni nu se bazează pe `signOut(others)`**. Autoritatea e poarta din BD (P1-04): un login nou face CAS pe versiunea sesiunii, iar toate sesiunile vechi devin invalide atomic, indiferent de JWT-urile lor. `signOut` e doar curățenie.
+- Varianta e plauzibilă tehnic, dar **trebuie dovedită pe un proiect de test** înainte de DRY. Dacă nu trece, alternativa e semnarea unui JWT propriu pentru rolul `teren` cu secretul JWT al proiectului (cere „da” separat pentru un secret nou în edge).
+
+**P1-04 — poarta de 15 minute pe toate căile.** `fn_portal_sesiune_valida()` (DEFINER, `STABLE`) verifică:
+- `auth.uid()` și `session_id` din `auth.jwt()`;
+- rândul exact din `portal_sesiuni`, nerevocat, cu `expira_la` = momentul PIN + 15 minute, **absolut, fără prelungire la refresh**;
+- `versiune_sesiune` = cea curentă a contului (un login nou o incrementează prin CAS, deci invalidează atomic sesiunea veche);
+- eligibilitatea (P1-06).
+
+Funcția e apelată de **fiecare** funcție a portalului, de **fiecare** politică `TO teren` (restrictivă, P1-05) și de orice edge care servește conturi `teren`. Testul decisiv: după minutul 15, un refresh Auth reușit nu permite nicio citire sau scriere, inclusiv prin apel direct la API.
+
+**P1-05 — opt-in pe modul, cu poartă efectivă.** Fiecare modul deschis rolului `teren` are un **contract scris** în migrarea lui:
+- granturile minime pentru `teren`;
+- o politică **RESTRICTIVE `TO teren`** (se combină cu AND), cu: dreptul exact din `user_module_access` (cheia modulului) + `fn_portal_sesiune_valida()` + eligibilitatea, alături de politica permisivă;
+- inventarul complet al RPC-urilor și edge-urilor modulului, fiecare cu aceleași verificări în corp;
+- butonul din `/m` nu autorizează nimic.
+
+Pentru **Probe teren**, testele acoperă: drept da / nu / revocat, sesiune expirată, angajat inactiv, apel direct la fiecare RPC / edge. Modificarea e în migrarea modulului Probe, cu sesiunea care îl deține, cu „da”.
+
+**P1-06 — revocarea la plecare, imediată.**
+- **Un singur predicat server-side**, `fn_teren_eligibil(uid)`:
+  - angajat activ;
+  - fără `termination_date` trecută;
+  - contul din `conturi_teren` în stare `activ`;
+  - nebanat.
+  - Îl folosesc toate căile de la P1-04 / P1-05.
+- La închiderea contractului (`termination_date` sau `active = false`), un trigger DB marchează în aceeași tranzacție `conturi_teren.stare = 'revocat'` și revocă `portal_sesiuni`, deci accesul se închide imediat.
+- `ban` pe Auth și ștergerea sesiunilor le face edge-ul / jobul zilnic, care e doar reconciliere.
+- Reactivarea angajatului **nu** reactivează contul și nici drepturile: HR le reactivează explicit.
+- Jurnal persistent pentru revocare și revenire.
+- Contul owner-ului nu poate fi niciodată un cont `teren`.
+
+**P1-07 — provisioning fără conturi parțiale sau privilegiate.**
+Ordinea:
+1. `fn_portal_cont_pregateste(employee_id)` (HR / owner verificat în corp, lock pe angajat) inserează `conturi_teren(stare = 'in_creare', provisioning_id)`, cu UNIQUE pe `employee_id`, deci două cereri concurente nu pot crea două conturi.
+2. Edge-ul creează contul Auth cu `app_metadata = {tip_cont: 'teren', employee_id, provisioning_id}`.
+3. **`handle_new_user`** (ramura `teren`) găsește rândul `in_creare` cu același `provisioning_id` și `employee_id`, apoi creează **direct** profilul cu `role = 'teren'`, fără nicio fereastră cu `manager_santier` și fără notificări. Rând lipsă sau neconcordant → **excepție, iar crearea contului Auth eșuează**.
+4. Edge-ul trece rândul în `activ` (CAS). Un eșec după crearea Auth lasă `in_creare`, iar contul e inutilizabil (hook-ul refuză orice altă stare decât `activ`). Reluarea e idempotentă după `provisioning_id`.
+5. `service_role` rămâne o cheie largă: disciplina e în cod (doar Auth Admin API). Se acceptă ca risc documentat și se reduce prin edge minim și audit.
+
+Schimbarea `handle_new_user` se face cu **manifest de versiune + sha256** pe definiția completă (corp, ACL, owner, `search_path`) și test de rollback / reaplicare (P2-04).
+
+**P1-08 — două garanții separate.**
+- **Garanția server:** nicio sesiune Auth care nu e înregistrată prin fluxul PIN (rând valid în `portal_sesiuni`, P1-04) nu accesează date, indiferent cum a fost obținut JWT-ul: refresh, schimbare de parolă sau email prin API-ul Auth. Pentru `teren`, schimbarea parolei / emailului din API e dezactivată (refuzată de hook / de setări).
+- **Comportamentul UI:** sesiunea se ține **doar în memorie**, nu în `localStorage` și nici în `sessionStorage`. Orice reîncărcare sau redeschidere cere PIN-ul.
+- Limita e declarată: o aplicație web nu poate detecta pe server fiecare închidere a browserului. Garanția literală e „PIN la fiecare încărcare a paginii + maximum 15 minute de la PIN”.
+
+**P2** (de urmat în E1):
+- domeniul `teren.gazpet.ro` configurat explicit fără recepție, iar fluxurile Auth de email / recovery sunt oprite pentru `teren`;
+- cheia de dispozitiv ca **challenge-response cu cheie privată neexportabilă** (WebCrypto, ECDSA non-extractable în IndexedDB) în loc de secret transmis;
+- indicatori de sănătate pentru hook (tokenuri refuzate, erori de refresh), fără secrete în loguri;
+- manifest + sha256 pentru `handle_new_user`;
+- `fn_portal_acasa()` minimă, iar UI-ul distinge eroarea de lipsa modulelor.
