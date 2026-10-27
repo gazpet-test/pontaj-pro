@@ -12,9 +12,9 @@ cp -r "$SRC/supabase/migrations" "$SRC/supabase/revenire" "$SRC/supabase/tests" 
 find "$DST" -type f \( -name '*.sh' -o -name '*.sql' -o -name '*.py' \) -exec sed -i 's/\r$//' {} +
 if [[ "$(id -u)" == 0 ]]; then
   chown -R postgres "$DST"
-  su postgres -s /bin/bash -c "cd '$DST' && PORTAL_E1_SLOT=$SLOT bash scripts/test_portal_e1.sh" >"$DST/harness.log" 2>&1 && RC=0 || RC=$?
+  su postgres -s /bin/bash -c "cd '$DST' && PORTAL_PG_MAJOR=${PORTAL_PG_MAJOR:-17} PORTAL_E1_SLOT=$SLOT bash scripts/test_portal_e1.sh" >"$DST/harness.log" 2>&1 && RC=0 || RC=$?
 else
-  (cd "$DST" && PORTAL_E1_SLOT="$SLOT" bash scripts/test_portal_e1.sh) >"$DST/harness.log" 2>&1 && RC=0 || RC=$?
+  (cd "$DST" && PORTAL_PG_MAJOR="${PORTAL_PG_MAJOR:-17}" PORTAL_E1_SLOT="$SLOT" bash scripts/test_portal_e1.sh) >"$DST/harness.log" 2>&1 && RC=0 || RC=$?
 fi
 tail -n "${2:-35}" "$DST/harness.log"
 echo "portal E1-1a slot=$SLOT cod=$RC; copie/log: $DST"

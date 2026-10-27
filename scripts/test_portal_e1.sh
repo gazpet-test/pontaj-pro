@@ -2,12 +2,15 @@
 # PG17 PRODLIKE; NUMAI cluster nou efemer. Nu accepta conexiuni externe.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PG_BIN="${PG_BIN:-/usr/lib/postgresql/17/bin}"
+PG_MAJOR="${PORTAL_PG_MAJOR:-17}"; [[ "$PG_MAJOR" =~ ^1[67]$ ]] || exit 2
+PG_BIN="${PG_BIN:-/usr/lib/postgresql/$PG_MAJOR/bin}"
 SLOT="${PORTAL_E1_SLOT:-0}"
 [[ "$SLOT" =~ ^[0-9]$ ]] || exit 2
 [[ "$(id -u)" != 0 ]] || { echo 'MEDIU: ruleaza ca postgres, nu root'; exit 2; }
-[[ -x "$PG_BIN/initdb" ]] || { echo 'MEDIU: PG17 lipsa'; exit 2; }
-[[ "$("$PG_BIN/postgres" --version)" == *' 17.'* ]] || { echo 'MEDIU: este necesar PG17'; exit 2; }
+[[ -x "$PG_BIN/initdb" ]] || { echo "MEDIU: PG$PG_MAJOR lipsa"; exit 2; }
+[[ "$("$PG_BIN/postgres" --version)" == *" $PG_MAJOR."* ]] || { echo "MEDIU: este necesar PG$PG_MAJOR"; exit 2; }
+# PG16 e acceptat doar explicit (PORTAL_PG_MAJOR=16) pentru iteratie locala; dovada pentru review / DRY = PG17 (L25).
+[[ "$PG_MAJOR" == 17 ]] || echo "AVERTISMENT: rulare PG$PG_MAJOR, nu PG17 prodlike"
 for v in PGPASSWORD PGOPTIONS PGDATABASE PGSERVICE PGSERVICEFILE PGHOSTADDR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS PGSYSCONFDIR PSQLRC; do
   [[ -z "${!v+x}" ]] || { echo "MEDIU: variabila $v nepermisa"; exit 2; }
 done

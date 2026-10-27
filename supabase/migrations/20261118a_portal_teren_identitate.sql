@@ -17,7 +17,7 @@ BEGIN
     OR to_regclass('public.conturi_tip_jurnal') IS NOT NULL
     OR EXISTS (SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil',
-        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil')) THEN
+        'fn_portal_porti_lipsa','fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')) THEN
     RAISE EXCEPTION 'PORTAL_ALREADY_EXISTS';
   END IF;
 END $pre$;
@@ -116,6 +116,16 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_teren_eligibil(uuid) FROM PUBLIC,anon,authenticated,service_role,teren;
 GRANT EXECUTE ON FUNCTION public.fn_teren_eligibil(uuid) TO supabase_auth_admin,teren;
 
+-- Pe prod, schema auth da USAGE doar lui anon/authenticated/service_role/postgres, iar postgres NU are GRANT OPTION:
+-- rolul teren nu poate primi acces direct la auth.uid(). Identitatea clientului teren (si a politicilor TO teren din
+-- modulele opt-in) trece prin acest helper DEFINER (proprietar postgres, care are USAGE pe auth).
+CREATE FUNCTION public.fn_portal_uid() RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public','pg_temp' AS $fn$
+  SELECT auth.uid();
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_portal_uid() FROM PUBLIC,anon,authenticated,service_role,teren;
+GRANT EXECUTE ON FUNCTION public.fn_portal_uid() TO teren;
+
 CREATE FUNCTION public.fn_auth_token_hook(event jsonb) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path TO 'public','pg_temp' AS $fn$
 DECLARE v_uid uuid; v_tip text;
@@ -182,7 +192,10 @@ BEGIN
     IF r.relkind='S' THEN
       IF has_sequence_privilege('teren',r.oid,'USAGE,SELECT,UPDATE') THEN
         v:=array_append(v,'secventa:'||r.relname); END IF;
-    ELSIF has_table_privilege('teren',r.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+    -- MAINTAIN exista doar din PG17 (prod); harness-ul local PG16 il omite.
+    ELSIF has_table_privilege('teren',r.oid,CASE WHEN current_setting('server_version_num')::int >= 170000
+        THEN 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        ELSE 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' END)
       OR has_any_column_privilege('teren',r.oid,'SELECT,INSERT,UPDATE,REFERENCES') THEN
       v:=array_append(v,'relatie:'||r.relname);
     END IF;
@@ -191,7 +204,7 @@ BEGIN
     WHERE n.nspname='public' AND has_function_privilege('teren',p.oid,'EXECUTE') ORDER BY p.oid LOOP
     -- Semnatura canonica: schema + nume + tipuri (fara numele argumentelor).
     v_signature := 'public.' || quote_ident(r.proname) || '(' || oidvectortypes(r.proargtypes) || ')';
-    IF v_signature <> 'public.fn_teren_eligibil(uuid)'
+    IF v_signature NOT IN ('public.fn_teren_eligibil(uuid)','public.fn_portal_uid()')
       AND NOT (v_signature=ANY(public.fn_portal_public_aprobat())) THEN
       v:=array_append(v,'functie:'||v_signature);
     END IF;
@@ -237,7 +250,7 @@ BEGIN
       SELECT 'f:'||p.oid AS cheie,jsonb_build_array('functie',p.oid,pg_get_functiondef(p.oid),p.proowner,p.proacl,p.proconfig) AS obj
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' AND p.proname IN ('fn_auth_token_hook','fn_teren_eligibil','fn_portal_porti_lipsa',
-        'fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil')
+        'fn_portal_public_aprobat','fn_conturi_tip_audit','fn_conturi_jurnal_imuabil','fn_portal_uid')
       UNION ALL
       SELECT 'r:'||c.oid,jsonb_build_array('relatie',c.relname,c.relkind,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity)
       FROM pg_class c WHERE c.oid IN ('public.conturi_tip'::regclass,'public.conturi_teren'::regclass,

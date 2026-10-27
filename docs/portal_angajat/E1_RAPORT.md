@@ -41,3 +41,14 @@
 - L23 n/a.
 - L24 n/a.
 - L25: bootstrap PG17 NOSUPERUSER/BYPASSRLS, membership de test fără INHERIT, RLS și granturi reale, apel hook ca supabase_auth_admin și clienți ca teren/authenticated; **dovada de execuție PG rămâne de obținut**.
+
+### E1-1a — integrare (Izometrie, 27.10)
+- **Lista albă PUBLIC completată:** cele 21 de semnături din inventarul read-only de pe prod (`scripts/portal/inventar_public.sql`). 20 sunt SECURITY INVOKER, deci rolul `teren`, fără tabele, nu poate citi sau scrie nimic prin ele. Singura DEFINER, `fn_trg_categorie_cantitate`, e funcție de trigger și nu se poate apela prin RPC. Fixture-ul harness-ului o înlocuiește cu 21 de funcții sintetice.
+- **Constatare pe prod:** schema `auth` dă USAGE doar lui anon / authenticated / service_role / postgres, iar `postgres` **nu are GRANT OPTION**. De aceea s-a adăugat helper-ul DEFINER `public.fn_portal_uid()` (EXECUTE doar `teren`). **Politicile `TO teren` din modulele opt-in vor folosi `fn_portal_uid()`, nu `auth.uid()`**. Testul verifică și că `teren` nu ajunge la schema `auth`.
+- `MAINTAIN` (PG17) intră în poartă doar pe serverele de la 17 în sus. Harness-ul acceptă PG16 doar explicit (`PORTAL_PG_MAJOR=16`).
+- **Testul:** reparată coliziunea variabilă / alias (`p`) în bucla pe funcții (L-coliziune).
+- **Rezultat:** `PORTAL_PG_MAJOR=16 scripts/portal/harness_wsl.sh 4` → **PASS** (apply prin runner ca postgres NOSUPERUSER, hook, izolarea `teren`, poarta, inventarul, revenirea).
+- **Rămâne:**
+  - rularea pe **PG17** (în WSL nu există PG17; cere repo PGDG pe server, o schimbare de sistem care cere „da”);
+  - review Copilot;
+  - E1-1b (provisioning, `handle_new_user`, aprobarea ERP, revocarea).

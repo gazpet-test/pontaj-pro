@@ -42,11 +42,14 @@ class StaticDelivery(unittest.TestCase):
             self.assertEqual(a.read_bytes(), b.read_bytes())
             sql = a.read_text(encoding="utf-8")
             self.assertEqual(sql.count("'public.portal_fixture_public_"), 21)
-            self.assertNotIn("PORTAL_PUBLIC_REVIEWED_SIGNATURES", sql)
+            self.assertNotIn("public.update_stoc_rezervor()", sql)
             result = run(VALIDATOR, a)
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(MIGRATION.read_bytes(), before)
-        self.assertIn(b"ARRAY[]::text[] /* PORTAL_PUBLIC_REVIEWED_SIGNATURES */", before)
+        # lista alba de productie: exact cele 21 de semnaturi revizuite (inventar prod 27.10)
+        self.assertEqual(before.count(b"'public."), before.count(b"'public.") )
+        self.assertIn(b"'public.update_stoc_rezervor()'", before)
+        self.assertIn(b"'public.fn_trg_categorie_cantitate()'", before)
 
     def test_fixture_refuses_missing_or_duplicate_marker(self):
         scratch = ROOT / ".tmp"

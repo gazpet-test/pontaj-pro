@@ -123,13 +123,15 @@ SELECT portal_test.expect_hook('00000000-0000-0000-0000-000000000001','error');
 RESET ROLE;
 ROLLBACK TO inaccessible;
 
-GRANT USAGE ON SCHEMA auth TO teren;
+-- (pe prod postgres nu poate da USAGE pe auth; identitatea teren vine din public.fn_portal_uid())
 SELECT set_config('request.jwt.claims','{"sub":"44387376-e48c-44d5-a88b-752c653c5639","role":"teren"}',true);
 SET LOCAL ROLE teren;
 DO $client$
 DECLARE t text; p record;
 BEGIN
- IF auth.jwt()->>'sub' <> '44387376-e48c-44d5-a88b-752c653c5639' THEN RAISE EXCEPTION 'bad client fixture'; END IF;
+ IF public.fn_portal_uid() IS DISTINCT FROM '44387376-e48c-44d5-a88b-752c653c5639'::uuid THEN RAISE EXCEPTION 'bad client fixture'; END IF;
+ BEGIN PERFORM auth.uid(); RAISE EXCEPTION 'teren reaches auth schema';
+ EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  FOREACH t IN ARRAY ARRAY['employees','profiles','user_module_access','facturi','contracte','conturi_tip','conturi_teren','conturi_tip_jurnal'] LOOP
    BEGIN
      EXECUTE format('SELECT * FROM public.%I',t);
@@ -147,9 +149,9 @@ BEGIN
  IF public.fn_teren_eligibil('44387376-e48c-44d5-a88b-752c653c5639') IS NOT TRUE
    OR public.fn_teren_eligibil('393709f9-bcb6-4ce5-ba22-2eca5c353f23') IS NOT FALSE
    OR public.fn_teren_eligibil(NULL) IS NOT FALSE THEN RAISE EXCEPTION 'self check boundary'; END IF;
- FOR p IN SELECT p.oid,p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-    WHERE n.nspname='public' AND has_function_privilege(current_user,p.oid,'EXECUTE') LOOP
-   IF p.proname <> 'fn_teren_eligibil' AND p.proname NOT IN
+ FOR p IN SELECT pr.oid,pr.proname FROM pg_proc pr JOIN pg_namespace n ON n.oid=pr.pronamespace
+    WHERE n.nspname='public' AND has_function_privilege(current_user,pr.oid,'EXECUTE') LOOP
+   IF p.proname NOT IN ('fn_teren_eligibil','fn_portal_uid') AND p.proname NOT IN
      ('portal_fixture_public_01','portal_fixture_public_02','portal_fixture_public_03','portal_fixture_public_04',
       'portal_fixture_public_05','portal_fixture_public_06','portal_fixture_public_07','portal_fixture_public_08',
       'portal_fixture_public_09','portal_fixture_public_10','portal_fixture_public_11','portal_fixture_public_12',
@@ -181,8 +183,13 @@ GRANT SELECT(cnp) ON public.employees TO teren;
 DO $$ BEGIN IF NOT ('relatie:employees'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'column grant missed'; END IF; END $$;
 ROLLBACK TO column_drift;
 SAVEPOINT maintain_drift;
-GRANT MAINTAIN ON public.employees TO teren;
-DO $$ BEGIN IF NOT ('relatie:employees'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'PG17 MAINTAIN missed'; END IF; END $$;
+DO $$ BEGIN
+  IF current_setting('server_version_num')::int >= 170000 THEN
+    EXECUTE 'GRANT MAINTAIN ON public.employees TO teren';
+    IF NOT ('relatie:employees'=ANY(public.fn_portal_porti_lipsa())) THEN RAISE EXCEPTION 'PG17 MAINTAIN missed'; END IF;
+  ELSE RAISE NOTICE 'PG16: testul MAINTAIN sarit (privilegiul exista doar din PG17)';
+  END IF;
+END $$;
 ROLLBACK TO maintain_drift;
 SAVEPOINT membership_drift;
 GRANT authenticated TO teren;
