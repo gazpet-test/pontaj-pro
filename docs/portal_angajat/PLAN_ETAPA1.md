@@ -466,7 +466,7 @@ Copilot acceptă direcția r4 (un singur cont, rolul `teren`, module opt-in; dec
 - Retry, timeout, OTP consumat și două login-uri concurente se testează (L05: timeout = rezultat necunoscut, urmat de reconciliere).
 - Se măsoară limitele de rată Auth pentru `generateLink`.
 - **Revocarea celorlalte sesiuni nu se bazează pe `signOut(others)`**. Autoritatea e poarta din BD (P1-04): un login nou face CAS pe versiunea sesiunii, iar toate sesiunile vechi devin invalide atomic, indiferent de JWT-urile lor. `signOut` e doar curățenie.
-- Varianta e plauzibilă tehnic, dar **trebuie dovedită pe un proiect de test** înainte de DRY. Dacă nu trece, alternativa e semnarea unui JWT propriu pentru rolul `teren` cu secretul JWT al proiectului (cere „da” separat pentru un secret nou în edge).
+- Varianta e plauzibilă tehnic, dar **trebuie dovedită pe un proiect de test** înainte de DRY. **(r6) Nu există alternativă automată:** dacă testul real `generateLink` + `verifyOtp` eșuează, autentificarea rămâne în HOLD și revine la review cu o alternativă documentată. Semnarea manuală a unui JWT e eliminată.
 
 **P1-04 — poarta de 15 minute pe toate căile.** `fn_portal_sesiune_valida()` (DEFINER, `STABLE`) verifică:
 - `auth.uid()` și `session_id` din `auth.jwt()`;
@@ -518,3 +518,62 @@ Schimbarea `handle_new_user` se face cu **manifest de versiune + sha256** pe def
 - indicatori de sănătate pentru hook (tokenuri refuzate, erori de refresh), fără secrete în loguri;
 - manifest + sha256 pentru `handle_new_user`;
 - `fn_portal_acasa()` minimă, iar UI-ul distinge eroarea de lipsa modulelor.
+
+---
+
+## r6 — cele 3 P1 rămase din re-review-ul r5 (Copilot conv. 5: NO-GO, P0 0, P1 3, P2 4)
+
+Copilot închide la nivel de plan P1-02, 04, 05, 06 și 08 din r4 și cere trei corecții locale, C1–C3. **Ele înlocuiesc** textul corespunzător din r5.
+
+**C1 — clasificarea explicită a TUTUROR conturilor, fail-closed.**
+- **Tabela `conturi_tip`:** `auth_user_id` PK, `tip` ∈ {`erp`, `teren`}, `sursa`, `clasificat_de`, `clasificat_la`. RLS, fără granturi pentru clienți, jurnal la orice schimbare.
+- **Înainte de activarea hook-ului:**
+  - se inventariază cele 33 de conturi existente, toate `erp`, **fără nicio schimbare a drepturilor lor**;
+  - se verifică `count(auth.users) = count(conturi_tip)`.
+- **Hook-ul**, la fiecare emitere de token:
+  - `erp` → tokenul rămâne neschimbat (`authenticated`);
+  - `teren` → `role = 'teren'`, doar dacă `conturi_teren` are rândul `activ`, coerent cu `employee_id` și cu metadatele;
+  - **rând lipsă, tip necunoscut, inconsistență sau eroare de citire → tokenul e refuzat.** Niciun caz nu ajunge la `authenticated` din lipsă de clasificare.
+  - Prețul declarat: o eroare de infrastructură la clasificare poate refuza temporar și conturile ERP. Nu promitem disponibilitate printr-un fallback nesigur.
+- **Conturile noi:** `handle_new_user` inserează în aceeași tranzacție rândul `conturi_tip`:
+  - `teren` doar pe calea provisioning-ului (C2);
+  - altfel `erp`, ca azi.
+  - Fără rând, hook-ul refuză primul token, deci un cont creat pe altă cale nu primește nimic până nu e clasificat.
+- **Fostul cont teren:** tipul nu se șterge niciodată. Rândul `teren` rămâne, iar revocarea se face prin `conturi_teren.stare = 'revocat'`. Dispariția markerului `app_metadata` nu schimbă nimic, pentru că sursa e `conturi_tip`. Trecerea `teren → erp` cere „da” și se jurnalizează.
+- **Procedura de urgență** (dezactivarea hook-ului), în ordine:
+  1. provisioning-ul se îngheață;
+  2. toate conturile `teren` primesc ban în Auth și `conturi_teren.stare = 'revocat'`;
+  3. sesiunile portalului se revocă;
+  4. **se verifică** 0 conturi `teren` nebanate și 0 sesiuni portal valide;
+  5. abia apoi se schimbă configurația Auth.
+  - Re-activarea e procedura inversă, cu verificarea clasificării.
+- **Test negativ decisiv:** un cont teren cu markerul absent și rândul lipsă sau inaccesibil nu primește **niciodată** un JWT `authenticated`.
+
+**C2 — rezervarea există înaintea contului Auth.**
+- **Două tabele:**
+  - `portal_provisioning`:
+    - coloane: `provisioning_id` PK, `employee_id`, `stare` ∈ {`rezervat`, `creat`, `finalizat`, `anulat`}, `cerut_de`, `cerut_la`, `auth_user_id` NULL până la creare;
+    - un index UNIQUE parțial pe `employee_id` pentru stările `rezervat` / `creat` (o singură rezervare deschisă pe angajat).
+  - `conturi_teren`:
+    - coloane: `auth_user_id` PK, `employee_id` UNIQUE, `provisioning_id` UNIQUE (FK), `stare` ∈ {`in_creare`, `activ`, `revocat`}, proveniență.
+- **Ordinea:**
+  1. `fn_portal_cont_pregateste(employee_id)` (HR / owner verificat în corp, lock pe angajat → `portal_provisioning` → `conturi_tip`, în această ordine, L06) inserează `portal_provisioning(rezervat)`. Două cereri concurente pentru același angajat se lovesc de indexul UNIQUE.
+  2. Edge-ul creează contul Auth cu `app_metadata = {tip_cont: 'teren', employee_id, provisioning_id}`.
+  3. **`handle_new_user`**, în tranzacția GoTrue:
+     - validează rezervarea (`rezervat`, același `employee_id`, angajat eligibil);
+     - inserează `conturi_tip(NEW.id, 'teren')`, `conturi_teren(NEW.id, …, 'in_creare')` și profilul cu `role = 'teren'`;
+     - trece rezervarea în `creat` cu `auth_user_id = NEW.id`.
+     - Orice nepotrivire → excepție, iar crearea Auth eșuează. Nu există niciodată un profil `manager_santier`.
+  4. Edge-ul face CAS `conturi_teren` `in_creare → activ` și `portal_provisioning → finalizat`, doar după postcondiții: profilul `teren`, clasificarea `teren`, fără alte drepturi.
+- **Timeout / rezultat necunoscut (L05):** reluarea după `provisioning_id`:
+  - dacă `auth_user_id` e deja setat, se reconciliază utilizatorul existent, fără creare nouă;
+  - dacă a rămas `rezervat` și utilizatorul Auth nu există (căutat după emailul determinist `t<employee_id>@teren.gazpet.ro`), se reia crearea.
+  - Hook-ul refuză orice cont `in_creare`, deci un cont la jumătate nu poate fi folosit.
+
+**C3 — fără alternativă JWT.** Fallback-ul cu JWT semnat manual e eliminat (vezi P1-03 r5). Un eșec al fluxului Auth înseamnă HOLD + review nou.
+
+**P2 din r5, preluate în E1:**
+- **P2-01:** hook-ul **nu** blochează schimbarea parolei / emailului prin API-ul Auth (rulează doar la emiterea tokenului). Afirmația din r5 se retrage. Garanția rămâne poarta PIN: o schimbare de parolă sau email nu deschide nimic fără o sesiune `portal_sesiuni` înregistrată după PIN. În E1 se testează și se dezactivează, unde Supabase permite, schimbarea emailului / parolei pentru `teren`.
+- **P2-02:** `generateLink` lucrează cu emailul. Backend-ul îl ia din contul Auth verificat (`auth_user_id` din `conturi_teren` → admin `getUserById` → email), niciodată din cerere. Se testează și cazul unui cont șters concurent, care nu are voie să ducă la o creare implicită.
+- **P2-03:** inventarul tuturor rolurilor care creează funcții în `public` (postgres, supabase_admin, rolurile `izo_*_writer` etc.), cu `ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` pentru fiecare. Poarta ACL a rolului `teren` prinde orice scăpare.
+- **P2-04:** `termination_date` e de tip `date`, iar semantica e: ultima zi lucrată inclusiv, în fusul **Europe/Bucharest**. `fn_teren_eligibil` compară `termination_date >= (now() AT TIME ZONE 'Europe/Bucharest')::date`, deci acoperă și trecerea timpului fără niciun UPDATE. Trigger-ul acoperă schimbarea în BD. Se testează tranziția exactă la miezul nopții.
