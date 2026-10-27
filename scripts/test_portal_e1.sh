@@ -94,4 +94,4 @@ rc=0
 runner 20261118120000 "$MIG" >"$TMP/reapply_after_rollback.log" 2>&1 || rc=$?
 [[ "$rc" == 11 ]] || fail 'history allows reapply after rollback'
 [[ -z "$("${PSQL[@]}" -At -f "$ROOT/scripts/control_0e.sql")" ]] || fail 'rollback control 0e'
-echo 'PASS PORTAL_E1_1A PRODLIKE PG17; PUBLIC baseline SYNTHETIC ONLY; original migration HOLD'
+echo "PASS PORTAL_E1_1A PRODLIKE PG$PG_MAJOR (postgres NOSUPERUSER); lista PUBLIC sintetica in harness, lista revizuita (21) in migrare"
