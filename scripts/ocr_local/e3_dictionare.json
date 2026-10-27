@@ -4,6 +4,9 @@
     "specificatie": ["SPECIFICATIA", "SPECIFICATIE"], "lot": ["NR LOT"],
     "lungime_doc": ["CANTITATE LIVRATA M", "CANTITATE M"], "greutate_kg": ["GREUTATE KG"]
   },
+  "aviz_teava_rezerva": {
+    "serie": ["COD ARTICOL", "COD ART", "CODUL ARTICOLULUI"]
+  },
   "lista_curbe": {
     "serie": ["BEND NUMBER"], "cod": ["CODE"], "sarja": ["PIPE HEAT NUMBER"],
     "item": ["ITEM"], "diametru_mm": ["SIZE"], "perete_mm": ["WALL THICKNESS"],

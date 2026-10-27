@@ -113,6 +113,8 @@ Un rând per piesă fizică cu serie proprie. Dacă o linie are cantitate > 1 f�
 Extrage totalurile TIPĂRITE total_metri și total_kg independent de rânduri, fără însumare; necunoscute=null.
 Antetul total_m/total_kg și totalurile listelor se completează tot numai din valorile tipărite, fără deducții.
 Pe rânduri, lot = lotul TIPĂRIT pe rândul piesei (coloana „Nr Lot” / „Lot” din tabel), nu lotul contractului din antet; dacă tabelul nu are coloană de lot, null.
+serie = numărul individual al țevii, diferit pe fiecare rând: coloana „Nr. țeavă”; dacă tabelul nu o are, coloana „Cod articol” (ex. 247EK04204). Dacă există ambele, serie = „Nr. țeavă”.
+Șarja („Nr. șarjă” / „Șarja” / „Heat No”, ex. B2407893) se repetă pe mai multe țevi: merge DOAR în sarja, niciodată în serie.
 Seriile țevilor și șarjele se citesc caracter cu caracter (0/8/6/9, 1/7, 2/0 se confundă ușor în poze); orice caracter nesigur → avertisment cu rândul.
 izolatie: „PEHD” dacă țeava e izolată (izolate / izolată / PE / 3LPE), „neizolata” dacă e neizolată, „GRP” doar dacă scrie GRP; altfel null.
 Greutățile (greutate_kg, net_kg, brut_kg, total_kg, total_net_kg, total_brut_kg) le întorci ca NUMĂR JSON de kilograme, nu ca text:

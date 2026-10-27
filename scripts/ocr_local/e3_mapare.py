@@ -41,7 +41,7 @@ def tabele_text(raw):
 
 
 def colonnes(row, sablon):
-    out = {}
+    out, rezerva = {}, {}
     for ci, c in enumerate(row):
         label = norm(c['text'])
         for k, aliases in D[sablon].items():
@@ -49,6 +49,14 @@ def colonnes(row, sablon):
                 if k in out:
                     raise E3Error('structura_incerta')
                 out[k] = ci
+        # Antete de rezervă (27.10.2026, aviz COMTECH P 0160): „Cod articol” = numărul țevii doar când lipsește „Nr. țeavă”.
+        for k, aliases in D.get(sablon + '_rezerva', {}).items():
+            if label in aliases:
+                if k in rezerva:
+                    raise E3Error('structura_incerta')
+                rezerva[k] = ci
+    for k, ci in rezerva.items():
+        out.setdefault(k, ci)
     required = {'nr_crt', 'serie', 'sarja', 'lungime_doc'} if sablon == 'aviz_teava' else {'serie', 'cod', 'sarja', 'cantitate'}
     return out if required <= out.keys() else None
 
