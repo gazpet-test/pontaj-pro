@@ -5,7 +5,7 @@ import { jsPDF } from 'jspdf'
 import { supabase } from './lib/supabase.js'
 import { ziBucuresti } from './lib/izoTeren.js'
 import { citestePagini, eroareBirou } from './lib/izoBirou.js'
-import { filtreazaBucati, totaluri, fmtNr, cerereIesireAviz, caleAviz, numeFisierAviz, htmlAviz } from './lib/izoAviz.js'
+import { filtreazaBucati, totaluri, fmtNr, cerereIesireAviz, caleAviz, numeFisierAviz, htmlAviz, semnaturaUnica } from './lib/izoAviz.js'
 
 const G = { card: '#FFFFFF', text: '#152536', muted: '#4A5969', border: '#9BA9B6', blue: '#1259A7', red: '#9C2121', yellow: '#FFF0BA', green: '#1E6B3A' }
 const S = {
@@ -20,7 +20,7 @@ const S = {
   td: { padding: '6px 8px', borderBottom: '1px solid #E3E8ED', fontSize: 13 },
 }
 const BUCKET = 'izo-avize'
-const COLOANE_AVIZ = 'id,proiect_id,depozit_id,tronson_id,serie,numar,nr_complet,data_aviz,emis_de,emis_la,sofer_employee_id,sofer_extern_nume,sofer_confirmat,nr_auto,destinatar_tip,destinatar_denumire,destinatar_cui,destinatar_adresa,motiv,antet,continut,total_bucati,total_m,total_kg,stare,anulat_motiv,anulat_de,anulat_la,pdf_path,pdf_atasat_la'
+const COLOANE_AVIZ = 'id,proiect_id,depozit_id,tronson_id,serie,numar,nr_complet,data_aviz,emis_de,emis_de_employee_id,emis_la,sofer_employee_id,sofer_extern_nume,sofer_confirmat,nr_auto,destinatar_tip,destinatar_denumire,destinatar_cui,destinatar_adresa,motiv,antet,continut,total_bucati,total_m,total_kg,stare,anulat_motiv,anulat_de,anulat_la,pdf_path,pdf_atasat_la'
 
 const labelPiece = b => `${b.serie || b.uid} · ${b.sarja || 'fără șarjă'} · DN ${b.diametru_mm ?? '—'} × ${b.perete_mm ?? '—'} mm · ${b.lungime_mm ? fmtNr(b.lungime_mm / 1000, 2) + ' m' : (b.tip_cod === 'curba' ? 'curbă' : '— m')} · ${fmtNr(b.greutate_kg, 0)} kg`
 
@@ -28,12 +28,17 @@ async function dataUrl(url) {
   const blob = await (await fetch(url)).blob()
   return await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(blob) })
 }
-// Semnătura proprie a emitentului (politica hr-semnaturi permite doar folderul propriu). Fără cache persistent.
-async function semnaturaProprie() {
+// Semnătura EMITENTULUI avizului, legată strict de emis_de_employee_id și doar când utilizatorul curent e emitentul.
+// Owner / HR văd semnăturile tuturor: fără filtrul pe angajat s-ar putea lua semnătura altcuiva (Jakarinos P1). Fără cache persistent.
+async function semnaturaEmitent(a) {
   try {
-    const { data: rows } = await supabase.from('hr_semnaturi_electronice').select('fisier_path').eq('activ', true).is('deleted_at', null).limit(1)
-    if (!rows?.length) return null
-    const { data: su } = await supabase.storage.from('hr-semnaturi').createSignedUrl(rows[0].fisier_path, 60)
+    const { data: u } = await supabase.auth.getUser()
+    if (!a?.emis_de_employee_id || !u?.user?.id || u.user.id !== a.emis_de) return null
+    const { data: rows } = await supabase.from('hr_semnaturi_electronice').select('employee_id,fisier_path')
+      .eq('employee_id', a.emis_de_employee_id).eq('activ', true).is('deleted_at', null).limit(2)
+    const path = semnaturaUnica(rows, a.emis_de_employee_id)
+    if (!path) return null
+    const { data: su } = await supabase.storage.from('hr-semnaturi').createSignedUrl(path, 60)
     return su?.signedUrl ? await dataUrl(su.signedUrl) : null
   } catch { return null }
 }
@@ -69,7 +74,7 @@ async function citesteAviz(id) {
 export async function genereazaSiAtaseaza(avizId) {
   const a = await citesteAviz(avizId)
   if (a.pdf_path) return a
-  const semnGestionar = await semnaturaProprie()
+  const semnGestionar = await semnaturaEmitent(a)
   const blob = await pdfDinHtml(htmlAviz(a, { semnGestionar }))
   const { error: up } = await supabase.storage.from(BUCKET).upload(caleAviz(a), blob, { contentType: 'application/pdf', upsert: false })
   if (up && !/exist|duplicate|409/i.test(`${up.message} ${up.statusCode || ''}`)) throw up
@@ -78,10 +83,14 @@ export async function genereazaSiAtaseaza(avizId) {
   if (data && ['eroare', 'conflict'].includes(data.cod)) throw Error(data.motiv || data.cod)
   return await citesteAviz(a.id)
 }
+// Recitește avizul înainte de deschidere: un aviz anulat între timp se descarcă etichetat „ANULAT” (Jakarinos P2).
 export async function deschidePdf(a) {
-  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(a.pdf_path, 300, { download: a.stare === 'anulat' ? `ANULAT ${numeFisierAviz(a)}` : false })
+  const r = await citesteAviz(a.id)
+  if (!r.pdf_path) throw Error(`Avizul ${r.nr_complet} nu are încă PDF salvat.`)
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(r.pdf_path, 300, { download: r.stare === 'anulat' ? `ANULAT ${numeFisierAviz(r)}` : false })
   if (error) throw error
   window.open(data.signedUrl, '_blank', 'noopener')
+  return r
 }
 
 function useNomenclatoare(depozit) {
@@ -184,7 +193,7 @@ export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, availa
       <div style={{ fontSize: 12, marginTop: 4 }}>{selectate.map(b => b.serie || b.uid).join(', ')}</div></div>}
     {cerere && <div style={S.rez}>Răspuns neconfirmat. <button style={S.btn2} disabled={ui.busy} onClick={() => emite(cerere)}>Reîncearcă aceeași emitere (nu se dublează avizul)</button></div>}
     <div style={{ marginTop: 10 }}><button style={S.btn} disabled={disabled || !ids.length || !tronson || !depozit || Boolean(cerere)} onClick={pornit}>Emite avizul și înregistrează ieșirea ({ids.length})</button></div>
-    {emis && <div style={{ ...S.rez, background: '#E5F3EA' }}>Aviz <b>{emis.nr_complet}</b> · {emis.total_bucati} buc · {fmtNr(emis.total_m, 2)} m · {fmtNr(emis.total_kg, 0)} kg {emis.pdf_path && <button style={S.btn2} onClick={() => deschidePdf(emis).catch(e => ui.setMesaj(eroareBirou(e)))}>Deschide / tipărește PDF</button>}</div>}
+    {emis && <div style={{ ...S.rez, background: emis.stare === 'anulat' ? '#FBEAEA' : '#E5F3EA' }}>Aviz <b>{emis.nr_complet}</b>{emis.stare === 'anulat' && <b style={{ color: G.red }}> · ANULAT: {emis.anulat_motiv}</b>} · {emis.total_bucati} buc · {fmtNr(emis.total_m, 2)} m · {fmtNr(emis.total_kg, 0)} kg {emis.pdf_path && <button style={S.btn2} onClick={() => deschidePdf(emis).then(r => setEmis(r)).catch(e => ui.setMesaj(eroareBirou(e)))}>{emis.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide / tipărește PDF'}</button>}</div>}
   </div>
 }
 
@@ -196,7 +205,16 @@ export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled,
     const r = await citestePagini((a, b) => supabase.from('izo_avize_iesire').select(COLOANE_AVIZ).eq('proiect_id', proiectId).order('emis_la', { ascending: false }).range(a, b))
     if (current()) setAvize(r)
   }
-  useEffect(() => { setAvize([]); if (proiectId) { ui.run(incarca); supabase.auth.getUser().then(r => setEu(r.data?.user?.id || null)) } }, [proiectId, reincarca])
+  // Ciclu propriu de încărcare: ui.run al părintelui e invalidat de efectul lui pe proiect și ar abandona rezultatul (Jakarinos P2).
+  useEffect(() => {
+    let viu = true
+    setAvize([])
+    if (proiectId) {
+      incarca(() => viu).catch(e => { if (viu) ui.setMesaj(eroareBirou(e)) })
+      supabase.auth.getUser().then(r => { if (viu) setEu(r.data?.user?.id || null) })
+    }
+    return () => { viu = false }
+  }, [proiectId, reincarca])
   const vizibile = avize.filter(a => (!f.depozit || String(a.depozit_id) === f.depozit) && (!f.tronson || String(a.tronson_id) === f.tronson)
     && (!f.stare || a.stare === f.stare) && (!f.de || a.data_aviz >= f.de) && (!f.pana || a.data_aviz <= f.pana))
   const numeTronson = id => tronsoane.find(t => t.id === id)?.cod || id
@@ -216,7 +234,7 @@ export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled,
       <select style={S.input} aria-label="Filtru stare" value={f.stare} onChange={e => setF({ ...f, stare: e.target.value })}><option value="">Toate</option><option value="emis">Emise</option><option value="anulat">Anulate</option></select>
       <label>De la <input style={S.input} type="date" value={f.de} onChange={e => setF({ ...f, de: e.target.value })} /></label>
       <label>Până la <input style={S.input} type="date" value={f.pana} onChange={e => setF({ ...f, pana: e.target.value })} /></label>
-      <button style={S.btn2} disabled={disabled} onClick={() => ui.run(incarca)}>Reîncarcă</button>
+      <button style={S.btn2} disabled={disabled} onClick={() => incarca().catch(e => ui.setMesaj(eroareBirou(e)))}>Reîncarcă</button>
     </div>
     <div style={{ overflowX: 'auto', marginTop: 8 }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
       <thead><tr>{['Nr. aviz', 'Data', 'Tronson', 'Buc', 'm', 'kg', 'Șofer · auto', 'Stare', ''].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>

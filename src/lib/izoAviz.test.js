@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
-import { filtreazaBucati, totaluri, cerereIesireAviz, caleAviz, htmlAviz, normNrAuto } from './izoAviz.js'
+import { filtreazaBucati, totaluri, cerereIesireAviz, caleAviz, htmlAviz, normNrAuto, semnaturaUnica } from './izoAviz.js'
+
+describe('semnătura emitentului (Jakarinos P1)', () => {
+  it('ia doar semnătura angajatului emitent, chiar dacă una străină e prima', () => {
+    const rows = [{ employee_id: 77, fisier_path: '77/alt.png' }, { employee_id: 30, fisier_path: '30/a.png' }]
+    expect(semnaturaUnica(rows, 30)).toBe('30/a.png')
+    expect(semnaturaUnica(rows, '30')).toBe('30/a.png')
+  })
+  it('fără semnătură când lipsește angajatul, lipsesc rândurile sau sunt două active', () => {
+    expect(semnaturaUnica([{ employee_id: 77, fisier_path: '77/alt.png' }], 30)).toBeNull()
+    expect(semnaturaUnica([{ employee_id: 30, fisier_path: '30/a.png' }], null)).toBeNull()
+    expect(semnaturaUnica(null, 30)).toBeNull()
+    expect(semnaturaUnica([{ employee_id: 30, fisier_path: '30/a.png' }, { employee_id: 30, fisier_path: '30/b.png' }], 30)).toBeNull()
+  })
+})
 
 const b = (id, o = {}) => ({ id, serie: `247EK0860${id}`, sarja: `S${id}`, diametru_mm: 711, perete_mm: 8.8, lungime_mm: 12000, greutate_kg: 1850.5, ...o })
 const lista = [b(1), b(2, { perete_mm: 7.1, sarja: 'A77' }), b(3, { diametru_mm: 610, greutate_kg: null, lungime_mm: 6500 })]

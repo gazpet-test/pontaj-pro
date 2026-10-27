@@ -56,6 +56,12 @@ export function cerereIesireAviz({ depozit, tronson, bucati, data, sofer, vehicu
   } }
 }
 
+// Exact o semnătură activă a angajatului cerut; orice rând al altui angajat e ignorat, ambiguitatea → fără semnătură.
+export function semnaturaUnica(rows, employeeId) {
+  const ale = (rows || []).filter(r => employeeId != null && String(r.employee_id) === String(employeeId) && r.fisier_path)
+  return ale.length === 1 ? ale[0].fisier_path : null
+}
+
 export const caleAviz = a => `${a.proiect_id}/${a.serie}-${a.numar}.pdf`
 export const numeFisierAviz = a => `Aviz ${a.nr_complet || `${a.serie} ${a.numar}`}.pdf`
 
