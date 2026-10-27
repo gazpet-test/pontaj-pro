@@ -22,7 +22,7 @@ const S = {
 const BUCKET = 'izo-avize'
 const COLOANE_AVIZ = 'id,proiect_id,depozit_id,tronson_id,serie,numar,nr_complet,data_aviz,emis_de,emis_la,sofer_employee_id,sofer_extern_nume,sofer_confirmat,nr_auto,destinatar_tip,destinatar_denumire,destinatar_cui,destinatar_adresa,motiv,antet,continut,total_bucati,total_m,total_kg,stare,anulat_motiv,anulat_de,anulat_la,pdf_path,pdf_atasat_la'
 
-const labelPiece = b => `${b.serie || b.uid} · ${b.sarja || 'fără șarjă'} · DN ${b.diametru_mm ?? '—'} × ${b.perete_mm ?? '—'} mm · ${fmtNr((b.lungime_mm || 0) / 1000, 2)} m · ${fmtNr(b.greutate_kg, 0)} kg`
+const labelPiece = b => `${b.serie || b.uid} · ${b.sarja || 'fără șarjă'} · DN ${b.diametru_mm ?? '—'} × ${b.perete_mm ?? '—'} mm · ${b.lungime_mm ? fmtNr(b.lungime_mm / 1000, 2) + ' m' : (b.tip_cod === 'curba' ? 'curbă' : '— m')} · ${fmtNr(b.greutate_kg, 0)} kg`
 
 async function dataUrl(url) {
   const blob = await (await fetch(url)).blob()
@@ -200,7 +200,7 @@ export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled,
   const vizibile = avize.filter(a => (!f.depozit || String(a.depozit_id) === f.depozit) && (!f.tronson || String(a.tronson_id) === f.tronson)
     && (!f.stare || a.stare === f.stare) && (!f.de || a.data_aviz >= f.de) && (!f.pana || a.data_aviz <= f.pana))
   const numeTronson = id => tronsoane.find(t => t.id === id)?.cod || id
-  const sofer = a => a.sofer_extern_nume ? `${a.sofer_extern_nume} (extern)` : (a.antet?.sofer?.nume || `angajat #${a.sofer_employee_id}`)
+  const sofer = a => a.sofer_extern_nume ? `${a.sofer_extern_nume} (extern)` : (a.antet?.sofer_nume || `angajat #${a.sofer_employee_id}`)
   const anuleaza = () => ui.run(async current => {
     const { data, error } = await supabase.rpc('fn_izo_aviz_anuleaza', { p_aviz: anulez.id, p_motiv: motiv.trim() })
     if (error) throw error

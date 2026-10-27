@@ -175,7 +175,7 @@ export function IzometrieGestionar(props) {
     const project = props.proiecte?.find(p => p.id === proiectId)
     if (!project?.site_id) throw Error('Proiectul nu are șantier/depozite configurate.')
     const [pieces, reservations, fronts, depots] = await Promise.all([
-      citestePagini((from, to) => supabase.from('magazie_bucati').select('id,uid,serie,sarja,lungime_mm,perete_mm,diametru_mm,greutate_kg,stare,depozit_id,tronson_id,atribute').eq('proiect_id', proiectId).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null).is('executie_teava_id', null).in('stare', ['sosit', 'receptionat', 'retur', 'in_tranzit']).order('id').range(from, to)),
+      citestePagini((from, to) => supabase.from('magazie_bucati').select('id,uid,tip_cod,serie,sarja,lungime_mm,perete_mm,diametru_mm,greutate_kg,stare,depozit_id,tronson_id,atribute').eq('proiect_id', proiectId).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null).is('executie_teava_id', null).in('stare', ['sosit', 'receptionat', 'retur', 'in_tranzit']).order('id').range(from, to)),
       citestePagini((from, to) => supabase.from('v_izo_rezervari_active').select('*').eq('proiect_id', proiectId).order('id').range(from, to)),
       citestePagini((from, to) => supabase.from('izo_fronturi').select('*').eq('proiect_id', proiectId).eq('activ', true).order('id').range(from, to)),
       citestePagini((from, to) => supabase.from('logistica_depozite').select('id,name').eq('site_id', project.site_id).eq('activ', true).order('id').range(from, to)),

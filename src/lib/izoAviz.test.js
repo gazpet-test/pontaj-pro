@@ -50,12 +50,15 @@ describe('cererea fn_izo_iesire_cu_aviz', () => {
 describe('PDF-ul avizului din instantaneu', () => {
   const aviz = { id: 5, proiect_id: 3, serie: 'CJPJ', numar: 47, nr_complet: 'CJPJ 0047', data_aviz: '2026-10-28', stare: 'emis', nr_auto: 'PH 12 ABC',
     motiv: 'Transfer intern — materiale puse la dispoziție de beneficiar', total_bucati: 1, total_m: 12, total_kg: 1850.5, destinatar_tip: 'intern',
-    antet: { firma: { nume: 'GAZPET INSTAL SRL', cui: 'RO 22029920', reg_com: 'J29/0001650/2007', adresa: 'Ploiești' }, proiect: { nume: 'Lot 2 <Topleț>' },
-      depozit: { nume: 'DM Jupânești' }, tronson: { cod: 'T17' }, sofer: { nume: 'POPESCU ION' }, emitent: { nume: 'CIOC JANETA' } },
-    continut: [{ bucata_id: 1, serie: '247EK08601', sarja: 'S1', diametru_mm: 711, perete_mm: 8.8, lungime_mm: 12000, greutate_kg: 1850.5 }] }
+    // forma exactă scrisă de fn_izo_iesire_cu_aviz (harness 27.10)
+    antet: { firma: { firma_nume: 'GAZPET INSTAL SRL', firma_cui: 'RO 22029920', firma_reg_com: 'J29/0001650/2007', firma_adresa: 'Ploiești' }, proiect: { nume: 'Lot 2 <Topleț>' },
+      depozit: { id: 9, name: 'DM Jupânești' }, tronson: { cod: 'T17', km_start_m: 81600, km_end_m: 84250 }, sofer_nume: 'POPESCU ION', emitent_nume: 'CIOC JANETA' },
+    continut: [{ bucata_id: 1, tip_cod: 'teava', serie: '247EK08601', sarja: 'S1', diametru_mm: 711, perete_mm: 8.8, lungime_mm: 12000, greutate_kg: 1850.5 },
+      { bucata_id: 2, tip_cod: 'curba', serie: '362', sarja: '2520914', diametru_mm: 610, perete_mm: 8, unghi_curba: 20, lungime_mm: null, greutate_kg: 321.5 }] }
   it('conține câmpurile obligatorii, escapează textul și marchează rubricile olografe', () => {
     const h = htmlAviz(aviz)
-    for (const s of ['AVIZ DE ÎNSOȚIRE A MĂRFII', 'CJPJ', '0047', '28.10.2026', 'RO 22029920', 'J29/0001650/2007', 'DM Jupânești', 'T17', '247EK08601', 'PH 12 ABC', 'POPESCU ION', 'Primitor', 'Transfer intern'])
+    for (const s of ['AVIZ DE ÎNSOȚIRE A MĂRFII', 'CJPJ', '0047', '28.10.2026', 'GAZPET INSTAL SRL', 'RO 22029920', 'J29/0001650/2007', 'DM Jupânești', 'T17 · km 81+600–84+250',
+      '247EK08601', 'Curbă DN 610 × 8,0 mm · 20°', 'PH 12 ABC', 'POPESCU ION', 'CIOC JANETA', 'Primitor', 'Transfer intern'])
       expect(h).toContain(s)
     expect(h).toContain('Lot 2 &lt;Topleț&gt;')
     expect(h).not.toContain('<Topleț>')
