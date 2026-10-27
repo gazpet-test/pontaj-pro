@@ -617,3 +617,14 @@ P2 de urmat în E1:
 - configurația reală a înscrierii publice pe prod se verifică fără modificări; dacă e activă, se escaladează imediat la Răzvan.
 
 La review-ul implementării se cer dovezi (fișier / linie / test) pentru L02, L04, L05, L07–L09, L14–L20 și L25.
+
+### Starea reală la 27.10 (chat, citit din Dashboard)
+- Supabase Auth: „Allow new users to sign up” = **OFF**, anonymous sign-ins = OFF, Confirm email = ON. Expunerea prin înscriere publică **nu există**. Rămâne P1-ul existent: `employees` are SELECT `USING (true)` pentru orice `authenticated`, deci CNP / IBAN sunt vizibile.
+- **3 conturi „teren” create pe 27.10 ca `authenticated` obișnuite:** `florinel.ilie@teren.gazpet.ro`, `petronel.mititelu@teren.gazpet.ro`, `test.razvan@teren.gazpet.ro`.
+  - Profilul are `role = manager_santier` și au doar `probe_teren` editor.
+  - **Până la migrarea spre rolul `teren`, au accesul larg al oricărui `authenticated`** (cele 290 de tabele, inclusiv CNP / IBAN).
+  - În E1:
+    - inventarul `conturi_tip` le clasifică `teren`;
+    - migrarea le trece pe rolul `teren`, cu `conturi_teren` + `portal_provisioning` reconstruite (provisioning retroactiv, cu „da”);
+    - testul Probe teren rulează pe rolul `teren`.
+  - Până atunci, Răzvan decide dacă rămân active, cu riscul de mai sus, sau sunt suspendate până la E1.
