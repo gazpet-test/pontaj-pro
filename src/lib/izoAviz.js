@@ -65,6 +65,18 @@ export function refuzDefinitiv(error) {
   return !/^(08|40|53|57|58|XX)/.test(c)
 }
 
+// Starea unui aviz pe ecran e monotonă (Jakarinos r3): un rând citit mai târziu NU readuce „emis” peste un „anulat” confirmat
+// și nu șterge un PDF deja atașat, oricare ar fi ordinea în care sosesc răspunsurile (listă vs. recitire individuală).
+export function reconciliazaAviz(prev, r) {
+  if (!r) return prev
+  if (!prev || prev.id !== r.id) return r
+  let x = r
+  if (prev.stare === 'anulat' && r.stare !== 'anulat') x = { ...x, stare: 'anulat', anulat_motiv: prev.anulat_motiv, anulat_de: prev.anulat_de, anulat_la: prev.anulat_la }
+  if (prev.pdf_path && !r.pdf_path) x = { ...x, pdf_path: prev.pdf_path, pdf_atasat_la: prev.pdf_atasat_la }
+  return x
+}
+export const reconciliazaLista = (vechi, noi) => { const m = new Map((vechi || []).map(a => [a.id, a])); return (noi || []).map(r => reconciliazaAviz(m.get(r.id), r)) }
+
 // Exact o semnătură activă a angajatului cerut; orice rând al altui angajat e ignorat, ambiguitatea → fără semnătură.
 export function semnaturaUnica(rows, employeeId) {
   const ale = (rows || []).filter(r => employeeId != null && String(r.employee_id) === String(employeeId) && r.fisier_path)

@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import { filtreazaBucati, totaluri, cerereIesireAviz, caleAviz, htmlAviz, normNrAuto, semnaturaUnica, refuzDefinitiv } from './izoAviz.js'
+import { filtreazaBucati, totaluri, cerereIesireAviz, caleAviz, htmlAviz, normNrAuto, semnaturaUnica, refuzDefinitiv, reconciliazaAviz, reconciliazaLista } from './izoAviz.js'
+
+describe('stare monotonă pe ecran (Jakarinos r3)', () => {
+  const emis = { id: 1, stare: 'emis', pdf_path: null }
+  const anulat = { id: 1, stare: 'anulat', anulat_motiv: 'greșit', anulat_la: 't1', pdf_path: '3/CJPJ-47.pdf', pdf_atasat_la: 't0' }
+  it('un răspuns vechi „emis” fără PDF nu readuce avizul anulat și nu șterge PDF-ul', () => {
+    expect(reconciliazaAviz(anulat, emis)).toMatchObject({ stare: 'anulat', anulat_motiv: 'greșit', pdf_path: '3/CJPJ-47.pdf' })
+  })
+  it('avansul (emis → anulat, PDF nou) se aplică; alt aviz nu atinge panoul', () => {
+    expect(reconciliazaAviz(emis, anulat)).toBe(anulat)
+    expect(reconciliazaAviz({ id: 2, stare: 'emis' }, anulat)).toBe(anulat)
+    expect(reconciliazaAviz(anulat, null)).toBe(anulat)
+  })
+  it('o listă întârziată nu regresează rândurile deja anulate', () => {
+    expect(reconciliazaLista([anulat, { id: 2, stare: 'emis' }], [emis, { id: 3, stare: 'emis' }])).toEqual([
+      expect.objectContaining({ id: 1, stare: 'anulat' }), { id: 3, stare: 'emis' }])
+  })
+})
 
 describe('rezultat necunoscut al RPC-ului (Copilot P1-01)', () => {
   it('refuzurile bazei de date eliberează cererea', () => {

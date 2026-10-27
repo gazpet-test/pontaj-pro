@@ -5,7 +5,7 @@ import { jsPDF } from 'jspdf'
 import { supabase } from './lib/supabase.js'
 import { ziBucuresti } from './lib/izoTeren.js'
 import { citestePagini, eroareBirou } from './lib/izoBirou.js'
-import { filtreazaBucati, totaluri, fmtNr, cerereIesireAviz, caleAviz, numeFisierAviz, htmlAviz, semnaturaUnica, refuzDefinitiv } from './lib/izoAviz.js'
+import { filtreazaBucati, totaluri, fmtNr, cerereIesireAviz, caleAviz, numeFisierAviz, htmlAviz, semnaturaUnica, refuzDefinitiv, reconciliazaAviz, reconciliazaLista } from './lib/izoAviz.js'
 
 const G = { card: '#FFFFFF', text: '#152536', muted: '#4A5969', border: '#9BA9B6', blue: '#1259A7', red: '#9C2121', yellow: '#FFF0BA', green: '#1E6B3A' }
 const S = {
@@ -199,7 +199,7 @@ export function EmitereAviz({ ui, depozit, setDepozit, depozite, tronson, availa
       <div style={{ fontSize: 12, marginTop: 4 }}>{selectate.map(b => b.serie || b.uid).join(', ')}</div></div>}
     {cerere && <div style={S.rez}>Răspuns neconfirmat de server: avizul poate fi deja emis. Reîncearcă aceeași cerere: serverul întoarce avizul existent sau îl emite acum, cu un singur număr. <button style={S.btn2} disabled={ui.busy} onClick={() => emite(cerere)}>Reîncearcă aceeași emitere (nu se dublează avizul)</button></div>}
     <div style={{ marginTop: 10 }}><button style={S.btn} disabled={disabled || !ids.length || !tronson || !depozit || Boolean(cerere)} onClick={pornit}>Emite avizul și înregistrează ieșirea ({ids.length})</button></div>
-    {emis && <div style={{ ...S.rez, background: emis.stare === 'anulat' ? '#FBEAEA' : '#E5F3EA' }}>Aviz <b>{emis.nr_complet}</b>{emis.stare === 'anulat' && <b style={{ color: G.red }}> · ANULAT: {emis.anulat_motiv}</b>} · {emis.total_bucati} buc · {fmtNr(emis.total_m, 2)} m · {fmtNr(emis.total_kg, 0)} kg {emis.pdf_path && <button style={S.btn2} onClick={() => deschidePdf(emis, r => setEmis(prev => (prev && prev.id === r.id ? r : prev))).catch(e => ui.setMesaj(eroareBirou(e)))}>{emis.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide / tipărește PDF'}</button>}</div>}
+    {emis && <div style={{ ...S.rez, background: emis.stare === 'anulat' ? '#FBEAEA' : '#E5F3EA' }}>Aviz <b>{emis.nr_complet}</b>{emis.stare === 'anulat' && <b style={{ color: G.red }}> · ANULAT: {emis.anulat_motiv}</b>} · {emis.total_bucati} buc · {fmtNr(emis.total_m, 2)} m · {fmtNr(emis.total_kg, 0)} kg {emis.pdf_path && <button style={S.btn2} onClick={() => deschidePdf(emis, r => setEmis(prev => (prev && prev.id === r.id ? reconciliazaAviz(prev, r) : prev))).catch(e => ui.setMesaj(eroareBirou(e)))}>{emis.stare === 'anulat' ? 'PDF (document anulat)' : 'Deschide / tipărește PDF'}</button>}</div>}
   </div>
 }
 
@@ -215,10 +215,10 @@ export function ArhivaAvize({ ui, proiectId, depozite, tronsoane = [], disabled,
     if (!p) return
     try {
       const r = await citestePagini((a, b) => supabase.from('izo_avize_iesire').select(COLOANE_AVIZ).eq('proiect_id', p).order('emis_la', { ascending: false }).range(a, b))
-      if (g === gen.current && p === proiectCurent.current) setAvize(r)
+      if (g === gen.current && p === proiectCurent.current) setAvize(vechi => reconciliazaLista(vechi, r))
     } catch (e) { if (g === gen.current && p === proiectCurent.current) ui.setMesaj(eroareBirou(e)) }
   }
-  const actualizeaza = r => { if (r.proiect_id === proiectCurent.current) setAvize(list => list.map(x => (x.id === r.id ? r : x))) }
+  const actualizeaza = r => { if (r.proiect_id === proiectCurent.current) setAvize(list => list.map(x => (x.id === r.id ? reconciliazaAviz(x, r) : x))) }
   useEffect(() => {
     let viu = true
     proiectCurent.current = proiectId; gen.current++
