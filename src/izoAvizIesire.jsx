@@ -86,7 +86,8 @@ export async function genereazaSiAtaseaza(avizId) {
 // Recitește avizul înainte de deschidere: un aviz anulat între timp se descarcă etichetat „ANULAT” (Jakarinos P2).
 // laRecitire primește rândul proaspăt ÎNAINTE de Storage, ca starea din ecran să se reconcilieze și dacă signed URL-ul pică.
 export async function deschidePdf(a, laRecitire) {
-  const r = await citesteAviz(a.id)
+  // „anulat câștigă” și la descărcare: o recitire mai veche decât ecranul nu scoate eticheta ANULAT (Jakarinos r4 P2).
+  const r = reconciliazaAviz(a, await citesteAviz(a.id))
   laRecitire?.(r)
   if (!r.pdf_path) throw Error(`Avizul ${r.nr_complet} nu are încă PDF salvat.`)
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(r.pdf_path, 300, { download: r.stare === 'anulat' ? `ANULAT ${numeFisierAviz(r)}` : false })

@@ -201,6 +201,13 @@ BEGIN
  v_nr:=v_serie||' '||lpad(v_num::text,greatest(4,length(v_num::text)),'0');
  v_r:=public.fn_izo_aviz_iesire_intern(p_cheie,p_depozit,p_tronson,v_ids,v_nr,p_data);
  IF v_r->>'cod' IS DISTINCT FROM 'iesit' THEN RAISE EXCEPTION 'iesire_refuzata'; END IF;
+ -- Jakarinos r4 P1: o ieșire manuală cu aceeași cheie, confirmată între verificarea de mai sus și apelul LIVE (care ia
+ -- lock-ul izo.iesire|autor|cheie abia acum), ar fi întoarsă de LIVE ca răspuns reluat („iesit”). Avizul se numerotează
+ -- DOAR dacă operația jurnalizată pentru cheie a fost scrisă chiar de această tranzacție; altfel refuz → rollback complet, numărul nu se consumă.
+ -- fn_izo_birou_jurnal lasă ora_server pe implicitul now() = începutul tranzacției care scrie (xmin nu merge: rândul poate fi
+ -- scris într-o subtranzacție); o operație confirmată de altă tranzacție are alt now().
+ IF NOT EXISTS(SELECT 1 FROM public.izo_operatii o WHERE o.op_id=p_cheie AND o.autor_profile_id=public.fn_izo_uid()
+  AND o.ora_server=now()) THEN RAISE EXCEPTION 'iesire_nu_e_din_aceasta_cerere'; END IF;
  IF EXISTS(SELECT 1 FROM public.magazie_bucati b WHERE b.id=ANY(v_ids) AND
  -- Curbele n-au lungime în registru (325 pe prod la 27.10): lungimea e cerută doar la țeavă (ca magazie_bucati_izo_registru_check); masa e obligatorie.
  (b.greutate_kg IS NULL OR b.greutate_kg<0 OR (b.lungime_mm IS NULL AND b.tip_cod='teava'))) THEN RAISE EXCEPTION 'instantaneu_incomplet'; END IF;
