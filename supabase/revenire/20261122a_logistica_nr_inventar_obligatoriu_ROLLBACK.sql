@@ -9,7 +9,8 @@ BEGIN
 END $revenire$;
 DROP TRIGGER trg_active_nr_inventar ON public.logistica_active;
 DROP FUNCTION public.fn_active_nr_inventar_obligatoriu();
+DROP FUNCTION public.fn_nr_inventar_norm(text);
 DO $post$
 BEGIN
- IF to_regprocedure('public.fn_active_nr_inventar_obligatoriu()') IS NOT NULL THEN RAISE EXCEPTION 'INV postconditie revenire'; END IF;
+ IF to_regprocedure('public.fn_active_nr_inventar_obligatoriu()') IS NOT NULL OR to_regprocedure('public.fn_nr_inventar_norm(text)') IS NOT NULL THEN RAISE EXCEPTION 'INV postconditie revenire'; END IF;
 END $post$;
