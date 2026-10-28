@@ -49,7 +49,7 @@ BEGIN
   -- fără WHEN, funcția, activ (nu textul deparsat, care depinde de search_path)
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND tgname = 'trg_ofertare_responsabil_setat_de'
                  AND tgenabled = 'O' AND tgtype = 23 AND tgfoid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure
-                 AND tgattr = ''::int2vector AND tgqual IS NULL AND NOT tgisinternal) THEN
+                 AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0 AND NOT tgisinternal) THEN
     RAISE EXCEPTION '20261121a: trigger-ul trg_ofertare_responsabil_setat_de lipseste / e inactiv / altfel definit';
   END IF;
 END $pre$;
@@ -691,7 +691,7 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND tgname = 'trg_ofertare_responsabil_setat_de'
                  AND tgenabled = 'O' AND tgtype = 23 AND tgfoid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure
-                 AND tgattr = ''::int2vector AND tgqual IS NULL AND NOT tgisinternal) THEN
+                 AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0 AND NOT tgisinternal) THEN
     RAISE EXCEPTION '20261121a: postconditie trigger';
   END IF;
   IF md5(pg_get_viewdef('public.v_ofertare_dashboard'::regclass, true)) IS DISTINCT FROM 'fd36ddf4eca807bef34c96fec16785c9'
