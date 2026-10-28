@@ -64,6 +64,10 @@ Deno.serve(async (req: Request) => {
     return (ps || []).filter((p: any) => p.email);
   };
 
+  // 20261121a (review Jakarinos P3): TO / CC normalizate (trim + lower), fără goluri, fără dubluri, CC fără nimic din TO
+  const normE = (e: unknown) => String(e ?? '').trim().toLowerCase();
+  const listaTo = (s: any, team: any[]) => [...new Set((s.resp?.emails?.length ? s.resp.emails : team.map((p: any) => p.email)).map(normE).filter(Boolean))] as string[];
+  const listaCc = (to: string[], team: any[]) => [...new Set(team.map((p: any) => normE(p.email)).filter(Boolean))].filter((e) => !to.includes(e)) as string[];
   // starea completă a unei licitații (pentru Etapa 1 și pentru raportul zilnic)
   const stare = async (lid: number) => {
     const [{ data: l }, { data: docs }, { data: cer }, { data: cl }, { data: g }] = await Promise.all([
@@ -164,8 +168,8 @@ Deno.serve(async (req: Request) => {
       const html = htmlEtapa1(s, team);
       if (actiune === 'previzualizare') return json({ ok: true, html, rezumat: { docs: s.docs, cerinte: s.cerinte, acoperire: s.acoperire, clarificari: s.clarificari, sarcini: s.sarcini.length, neevaluate: s.neevaluate, responsabil: s.resp?.name || null }, destinatari: team.map((p: any) => p.email) });
       // responsabilul în TO, restul echipei în CC
-      const to = s.resp?.emails?.length ? s.resp.emails : team.map((p: any) => p.email);
-      const cc = team.map((p: any) => p.email).filter((e: string) => e && !to.map((t: string) => t.toLowerCase()).includes(String(e).trim().toLowerCase()));
+      const to = listaTo(s, team);
+      const cc = listaCc(to, team);
       const subject = `📑 Etapa 1 gata — ${s.l.nr_anunt} ${s.l.autoritate}: ${s.sarcini.length} sarcini, depunere ${fmtZi(s.termen)}`;
       const id = await trimite(to, cc, subject, html);
       await db.from('ofertare_mailuri').insert({ licitatie_id: lid, tip: 'etapa1', destinatari: [...to, ...cc], subiect: subject, corp_html: html, trimis_de: userId, resend_id: id,
@@ -195,8 +199,8 @@ Deno.serve(async (req: Request) => {
           const { data: deja } = await db.from('ofertare_mailuri').select('id').eq('licitatie_id', r.id).eq('tip', 'reminder_depunere').limit(1);
           if (!deja?.length && team.length) {
             const html = htmlEtapa1(s, team).replace('📑 Etapa 1 încheiată', `⏰ ${s.zile} zile până la depunere`);
-            const to = s.resp?.emails?.length ? s.resp.emails : team.map((p: any) => p.email);
-            const cc = team.map((p: any) => p.email).filter((e: string) => e && !to.map((t: string) => t.toLowerCase()).includes(String(e).trim().toLowerCase()));
+            const to = listaTo(s, team);
+            const cc = listaCc(to, team);
             const subject = `⏰ ${s.zile} zile până la depunere — ${s.l.nr_anunt} ${s.l.autoritate}: ${s.sarcini.length} sarcini deschise`;
             try { const id = await trimite(to, cc, subject, html); await db.from('ofertare_mailuri').insert({ licitatie_id: r.id, tip: 'reminder_depunere', destinatari: [...to, ...cc], subiect: subject, corp_html: html, resend_id: id, rezumat: rez }); reminder = true; } catch (e) { rez.reminder_eroare = (e as Error).message; }
           }
