@@ -166,7 +166,7 @@ Deno.serve(async (req: Request) => {
       const s = await stare(lid); if (!s) return json({ error: 'licitația nu există' }, 404);
       const team = await echipa();
       const html = htmlEtapa1(s, team);
-      if (actiune === 'previzualizare') return json({ ok: true, html, rezumat: { docs: s.docs, cerinte: s.cerinte, acoperire: s.acoperire, clarificari: s.clarificari, sarcini: s.sarcini.length, neevaluate: s.neevaluate, responsabil: s.resp?.name || null }, destinatari: team.map((p: any) => p.email) });
+      if (actiune === 'previzualizare') return json({ ok: true, html, rezumat: { docs: s.docs, cerinte: s.cerinte, acoperire: s.acoperire, clarificari: s.clarificari, sarcini: s.sarcini.length, neevaluate: s.neevaluate, responsabil: s.resp?.name || null }, ...(() => { const to = listaTo(s, team), cc = listaCc(to, team); return { destinatari: [...to, ...cc], to, cc }; })() });   // review Copilot #903: aceiași helperi ca trimiterea (destinatari = TO + CC, ca înainte)
       // responsabilul în TO, restul echipei în CC
       const to = listaTo(s, team);
       const cc = listaCc(to, team);

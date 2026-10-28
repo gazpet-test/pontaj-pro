@@ -108,6 +108,12 @@ BEGIN
      OR md5(pg_get_functiondef('public.ofertare_alerta_rc_necitit()'::regprocedure)) IS DISTINCT FROM '069c87b6b8a5f99ae86466d1bba365bc' THEN
     ok := false; r := r || 'FAIL revenire; ';
   END IF;
+  -- review Copilot #903 P2-06: atribuirile R2 ale licitațiilor de test (A, C, E) sunt în rezerva recuperabilă, cu cine le-a numit
+  IF (SELECT count(*) FROM public._bak_20261121a_responsabil2 WHERE licitatie_id IN (la, lc, le) AND responsabil2_setat_de IS NOT NULL) <> 3
+     OR EXISTS (SELECT 1 FROM public._bak_20261121a_responsabil2 WHERE licitatie_id IN (lb, ld))
+     OR has_table_privilege('authenticated', 'public._bak_20261121a_responsabil2', 'SELECT') OR has_table_privilege('anon', 'public._bak_20261121a_responsabil2', 'SELECT') THEN
+    ok := false; r := r || 'FAIL rezerva R2; ';
+  END IF;
   -- review Jakarinos P2: ciclul complet apply → revenire → RE-apply (preflight-ul trebuie să treacă din nou pe starea restaurată)
   EXECUTE $mig$:MIG$mig$;
   IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ofertare_licitatii' AND column_name LIKE 'responsabil2%') <> 2 THEN

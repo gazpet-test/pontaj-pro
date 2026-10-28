@@ -21,7 +21,7 @@ const PLATA_TO = ['marilena.tudorache@gazpet.ro', 'mirela.popescu@gazpet.ro'];
 const OFFICE = 'office@gazpet.ro';
 // 20261121a (review Jakarinos P3): adrese comparate normalizat; CC fără dubluri și fără nimic din TO
 const norm = (e: unknown) => String(e ?? '').trim().toLowerCase();
-const ccFara = (to: string[], cc: (string | null | undefined)[]) => [...new Set(cc.filter(Boolean).map(norm))].filter((e) => !to.map(norm).includes(e));
+const ccFara = (to: string[], cc: (string | null | undefined)[]) => [...new Set(cc.map(norm).filter(Boolean))].filter((e) => !to.map(norm).includes(e));
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 const fmtZi = (d?: string | null) => d ? new Date(d).toLocaleDateString('ro-RO', { timeZone: 'Europe/Bucharest' }) : '—';
 const fmtLei = (v?: number | null, m = 'RON') => v == null ? '—' : `${Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${m}`;

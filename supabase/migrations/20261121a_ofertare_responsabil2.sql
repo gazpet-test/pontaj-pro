@@ -45,9 +45,10 @@ BEGIN
      OR (SELECT relacl::text FROM pg_class WHERE oid = 'public.v_ofertare_dashboard'::regclass) IS DISTINCT FROM '{postgres=arwdDxtm/postgres,anon=arwdxt/postgres,authenticated=arwdxt/postgres,service_role=arwdDxtm/postgres}' THEN
     RAISE EXCEPTION '20261121a: v_ofertare_dashboard nu e versiunea asteptata';
   END IF;
+  -- review Copilot #903 P2-02: trigger-ul exact (tip BEFORE INSERT OR UPDATE, FOR EACH ROW, funcția), activ
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND tgname = 'trg_ofertare_responsabil_setat_de'
-                 AND tgfoid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure AND tgenabled = 'O') THEN
-    RAISE EXCEPTION '20261121a: trigger-ul trg_ofertare_responsabil_setat_de lipseste / e inactiv';
+                 AND tgenabled = 'O' AND pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_ofertare_responsabil_setat_de BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION fn_ofertare_responsabil_setat_de()') THEN
+    RAISE EXCEPTION '20261121a: trigger-ul trg_ofertare_responsabil_setat_de lipseste / e inactiv / altfel definit';
   END IF;
 END $pre$;
 
@@ -631,23 +632,51 @@ BEGIN
   IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres}' THEN
     RAISE EXCEPTION '20261121a: postconditie drepturi fn_ofertare_responsabil_setat_de';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure AND prosecdef = false AND provolatile = 'v'
+                 AND proconfig = ARRAY['search_path=public, pg_temp'] AND proowner = 'postgres'::regrole) THEN
+    RAISE EXCEPTION '20261121a: postconditie atribute fn_ofertare_responsabil_setat_de';
+  END IF;
   IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.ofertare_alerta_rc_necitit()'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
     RAISE EXCEPTION '20261121a: postconditie drepturi ofertare_alerta_rc_necitit';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.ofertare_alerta_rc_necitit()'::regprocedure AND prosecdef = true AND provolatile = 'v'
+                 AND proconfig = ARRAY['search_path=public, pg_temp'] AND proowner = 'postgres'::regrole) THEN
+    RAISE EXCEPTION '20261121a: postconditie atribute ofertare_alerta_rc_necitit';
   END IF;
   IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.ofertare_alerte_atentie(integer)'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
     RAISE EXCEPTION '20261121a: postconditie drepturi ofertare_alerte_atentie';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.ofertare_alerte_atentie(integer)'::regprocedure AND prosecdef = true AND provolatile = 'v'
+                 AND proconfig = ARRAY['search_path=public, pg_temp'] AND proowner = 'postgres'::regrole) THEN
+    RAISE EXCEPTION '20261121a: postconditie atribute ofertare_alerte_atentie';
+  END IF;
   IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.ofertare_alerta_pagini_goale(bigint)'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
     RAISE EXCEPTION '20261121a: postconditie drepturi ofertare_alerta_pagini_goale';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.ofertare_alerta_pagini_goale(bigint)'::regprocedure AND prosecdef = true AND provolatile = 'v'
+                 AND proconfig = ARRAY['search_path=public, pg_temp'] AND proowner = 'postgres'::regrole) THEN
+    RAISE EXCEPTION '20261121a: postconditie atribute ofertare_alerta_pagini_goale';
   END IF;
   IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.ofertare_clarificari_notifica(bigint)'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}' THEN
     RAISE EXCEPTION '20261121a: postconditie drepturi ofertare_clarificari_notifica';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.ofertare_clarificari_notifica(bigint)'::regprocedure AND prosecdef = true AND provolatile = 'v'
+                 AND proconfig = ARRAY['search_path=public, pg_temp'] AND proowner = 'postgres'::regrole) THEN
+    RAISE EXCEPTION '20261121a: postconditie atribute ofertare_clarificari_notifica';
+  END IF;
   IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.ofertare_clarificari_reminder()'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
     RAISE EXCEPTION '20261121a: postconditie drepturi ofertare_clarificari_reminder';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.ofertare_clarificari_reminder()'::regprocedure AND prosecdef = true AND provolatile = 'v'
+                 AND proconfig = ARRAY['search_path=public, pg_temp'] AND proowner = 'postgres'::regrole) THEN
+    RAISE EXCEPTION '20261121a: postconditie atribute ofertare_clarificari_reminder';
+  END IF;
   IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.ofertare_clarificare_planse_auto(bigint)'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
     RAISE EXCEPTION '20261121a: postconditie drepturi ofertare_clarificare_planse_auto';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.ofertare_clarificare_planse_auto(bigint)'::regprocedure AND prosecdef = true AND provolatile = 'v'
+                 AND proconfig = ARRAY['search_path=public, pg_temp'] AND proowner = 'postgres'::regrole) THEN
+    RAISE EXCEPTION '20261121a: postconditie atribute ofertare_clarificare_planse_auto';
   END IF;
   IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ofertare_licitatii'
       AND column_name IN ('responsabil2_id', 'responsabil2_setat_de') AND data_type = 'uuid' AND is_nullable = 'YES') <> 2
@@ -657,6 +686,10 @@ BEGIN
      OR NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.ofertare_licitatii'::regclass AND conname = 'ofertare_licitatii_responsabil2_diferit' AND convalidated)
      OR (SELECT count(*) FROM public.ofertare_licitatii WHERE responsabil2_id IS NOT NULL OR responsabil2_setat_de IS NOT NULL) <> 0 THEN
     RAISE EXCEPTION '20261121a: postconditie coloane';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND tgname = 'trg_ofertare_responsabil_setat_de'
+                 AND tgenabled = 'O' AND pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_ofertare_responsabil_setat_de BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION fn_ofertare_responsabil_setat_de()') THEN
+    RAISE EXCEPTION '20261121a: postconditie trigger';
   END IF;
   IF md5(pg_get_viewdef('public.v_ofertare_dashboard'::regclass, true)) IS DISTINCT FROM 'fd36ddf4eca807bef34c96fec16785c9'
      OR (SELECT reloptions FROM pg_class WHERE oid = 'public.v_ofertare_dashboard'::regclass) IS DISTINCT FROM ARRAY['security_invoker=on']

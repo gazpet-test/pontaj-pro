@@ -942,7 +942,11 @@ Deno.serve(async (req: Request) => {
             let { data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', rid).maybeSingle();
             if (eResp) ({ data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', rid).maybeSingle());
             if (eResp) { destinatariOk = false; raport.push({ licitatie: lic.nr_anunt, destinatari_necunoscuti: `responsabil: ${eResp.message}` }); }
-            else if (resp?.email && !to.includes(resp.email)) to.push(resp.email);
+            else {
+              // review Copilot #903 P2-01: comparatie normalizata (trim + lower), fara dubluri fata de OFFICE / celalalt responsabil
+              const e = String(resp?.email ?? '').trim().toLowerCase();
+              if (e && !to.map((t) => t.trim().toLowerCase()).includes(e)) to.push(e);
+            }
           }
           const neaduse = raspunsuriMail.filter((n) => !areNume(urcate, n));
           const html = `

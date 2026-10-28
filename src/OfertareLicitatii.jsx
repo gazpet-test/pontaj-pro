@@ -496,7 +496,7 @@ export default function OfertareLicitatiiTab() {
                   {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
                   {sx.verdict && <span>🔍 verificare: <b style={{ color:(VC[sx.verdict] || [])[1] || G.muted }}>{(VC[sx.verdict] || [sx.verdict])[0]}</b></span>}
                   {sx.clarificari > 0 && <span>❓ clarificări: <b style={{ color:G.text }}>{sx.clarificari}</b></span>}
-                  <span title="Responsabil licitație">👤 {(l.responsabil_nume || l.responsabil2_nume) ? <b style={{ color:G.text }}>{numeResponsabili(l)}</b> : <span style={{ color:G.orange }}>fără responsabil</span>}</span>
+                  <span title="Responsabil licitație">👤 {(l.responsabil_id || l.responsabil2_id) ? <b style={{ color:G.text }}>{numeResponsabili(l) || '—'}</b> : <span style={{ color:G.orange }}>fără responsabil</span>}</span>
                 </div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, textAlign:'right' }}>

@@ -9,6 +9,11 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261121a revenire: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  -- review Copilot #903 P2-06: DROP VIEW doar dacă nimic nu depinde de view
+  IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid
+             WHERE d.refobjid = 'public.v_ofertare_dashboard'::regclass AND r.ev_class <> 'public.v_ofertare_dashboard'::regclass) THEN
+    RAISE EXCEPTION '20261121a revenire: v_ofertare_dashboard are dependenti';
+  END IF;
   RAISE NOTICE '20261121a revenire: responsabil 2 setat pe %', (SELECT coalesce(jsonb_agg(jsonb_build_object('licitatie', id, 'r2', responsabil2_id, 'setat_de', responsabil2_setat_de) ORDER BY id), '[]')
                                                               FROM public.ofertare_licitatii WHERE responsabil2_id IS NOT NULL);
 END $pre$;
@@ -546,6 +551,23 @@ CREATE VIEW public.v_ofertare_dashboard WITH (security_invoker = on) AS
 REVOKE ALL ON public.v_ofertare_dashboard FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER ON public.v_ofertare_dashboard TO anon, authenticated;
 GRANT ALL ON public.v_ofertare_dashboard TO service_role;
+-- review Copilot #903 P2-06: înainte de DROP COLUMN, atribuirile R2 se păstrează RECUPERABIL într-un tabel de rezervă (NOTICE-ul singur nu
+-- e durabil); tabel închis: RLS fără politici, fără drepturi pentru anon / authenticated — doar postgres / service_role.
+CREATE TABLE IF NOT EXISTS public._bak_20261121a_responsabil2 (
+  licitatie_id bigint NOT NULL, responsabil2_id uuid NOT NULL, responsabil2_setat_de uuid, salvat_la timestamptz NOT NULL DEFAULT now());
+ALTER TABLE public._bak_20261121a_responsabil2 ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public._bak_20261121a_responsabil2 FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public._bak_20261121a_responsabil2 TO service_role;
+DO $bak$
+DECLARE n_sursa int; n_bak int;
+BEGIN
+  SELECT count(*) INTO n_sursa FROM public.ofertare_licitatii WHERE responsabil2_id IS NOT NULL;
+  WITH x AS (INSERT INTO public._bak_20261121a_responsabil2 (licitatie_id, responsabil2_id, responsabil2_setat_de)
+             SELECT id, responsabil2_id, responsabil2_setat_de FROM public.ofertare_licitatii WHERE responsabil2_id IS NOT NULL RETURNING 1)
+  SELECT count(*) INTO n_bak FROM x;
+  IF n_bak <> n_sursa THEN RAISE EXCEPTION '20261121a revenire: rezerva R2 incompleta (% / %)', n_bak, n_sursa; END IF;
+  RAISE NOTICE '20261121a revenire: % atribuiri R2 salvate in _bak_20261121a_responsabil2', n_bak;
+END $bak$;
 ALTER TABLE public.ofertare_licitatii DROP CONSTRAINT ofertare_licitatii_responsabil2_diferit, DROP COLUMN responsabil2_id, DROP COLUMN responsabil2_setat_de;
 
 DO $post$
