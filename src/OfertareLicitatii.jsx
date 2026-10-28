@@ -20,6 +20,7 @@ import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareTermene from './OfertareTermene.jsx'
 import { rcNecitite, etichetaRc } from './ofertareRcNecitit.js'
+import { numeResponsabili, esteResponsabil } from './ofertareResponsabili.js'
 import OfertareProbaExtractor from './OfertareProbaExtractor.jsx'
 import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
@@ -156,7 +157,11 @@ export default function OfertareLicitatiiTab() {
 
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 4000) }
 
+  // 20261121a (review Jakarinos r4 P2, L24): o reîncărcare pornită mai devreme dar terminată mai târziu nu mai suprascrie rezultatul uneia
+  // mai noi (ex. două salvări de responsabil la rând → două load(); doar ultima pornită se aplică)
+  const loadGen = useRef(0)
   const load = async () => {
+    const gen = ++loadGen.current
     setLoading(true)
     const [{ data: v }, { data: full }] = await Promise.all([
       supabase.from('v_ofertare_dashboard').select('*').order('termen_depunere', { ascending: true, nullsFirst: false }),
@@ -204,6 +209,7 @@ export default function OfertareLicitatiiTab() {
       ;(vf || []).forEach(x => { const st = stats[x.licitatie_id]; if (st && !st.verdict) { st.verdict = x.verdict; st.verdict_la = x.created_at } })
       ;(cl || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].clarificari++ })
     }
+    if (gen !== loadGen.current) return   // a pornit între timp o reîncărcare mai nouă — ea aplică rezultatul (și setLoading(false))
     const randuri = (v || []).map(r => ({ ...fullMap[r.id], ...r, _st: stats[r.id] }))
     setRows(randuri)
     setSelected(s => s ? (randuri.find(x => x.id === s.id) || s) : s)   // fișa deschisă vede KPI-urile noi (garanție, acoperire)
@@ -235,9 +241,9 @@ export default function OfertareLicitatiiTab() {
     : fStatus === 'depuse' ? r.status === 'depusa'
     : fStatus === 'radar' ? /^Radar/i.test(r.observatii || '') && !FINALE.includes(r.status)
     : fStatus === 'probleme' ? areProbleme(r) && !FINALE.includes(r.status) : true)
-    && (!fSegment || r.segment === fSegment) && (!fResp || r.responsabil_id === fResp)
+    && (!fSegment || r.segment === fSegment) && (!fResp || esteResponsabil(r, fResp))
     && (!fBenef || normText(r.autoritate).includes(normText(fBenef)))
-    && (!cautaN || [r.obiect, r.autoritate, r.nr_anunt, r.responsabil_nume, r.observatii]
+    && (!cautaN || [r.obiect, r.autoritate, r.nr_anunt, r.responsabil_nume, r.responsabil2_nume, r.observatii]
       .some(v => normText(v).includes(cautaN))))
   // TKT-2026-0302: lista beneficiarilor, grupați (Transgaz / Distrigaz / Delgaz / Romgaz / Conpet adună toate sucursalele), sortați după nr. licitații
   const beneficiari = (() => {
@@ -251,9 +257,11 @@ export default function OfertareLicitatiiTab() {
   // contor pe responsabil: în lucru acum + total pe anul curent (cine ce are și câte face pe an)
   const anCurent = new Date().getFullYear()
   const perResp = {}
-  rows.forEach(r => { if (!r.responsabil_id) return; const x = perResp[r.responsabil_id] ||= { nume: r.responsabil_nume, in_lucru: 0, an: 0 }
+  // 20261121a: responsabilul 2 (opțional) se numără la fel ca responsabilul 1 — licitația apare la fiecare dintre ei
+  rows.forEach(r => [[r.responsabil_id, r.responsabil_nume], [r.responsabil2_id, r.responsabil2_nume]].forEach(([id, nume]) => {
+    if (!id) return; const x = perResp[id] ||= { nume, in_lucru: 0, an: 0 }
     if (!FINALE.includes(r.status)) x.in_lucru++
-    if (new Date(r.created_at).getFullYear() === anCurent) x.an++ })
+    if (new Date(r.created_at).getFullYear() === anCurent) x.an++ }))
   // Filtru responsabil (Răzvan 25.09): chips „Ale mele” / per responsabil / toți — DOAR filtru de vedere, nu drepturi.
   // Default: non-owner cu cel puțin o licitație ca responsabil → „Ale mele”; ownerul → toți. Ultima alegere se ține per user.
   const respInit = useRef(false)
@@ -264,7 +272,7 @@ export default function OfertareLicitatiiTab() {
     let v = null
     try { v = localStorage.getItem(respKey) } catch { /* fără stocare locală */ }
     if (v != null) { setFResp(v === 'toti' ? '' : v); return }
-    if (!profile.is_owner && rows.some(r => r.responsabil_id === profile.id && !FINALE.includes(r.status))) setFResp(profile.id)
+    if (!profile.is_owner && rows.some(r => esteResponsabil(r, profile.id) && !FINALE.includes(r.status))) setFResp(profile.id)
   }, [profile, loading, rows, respKey])
   const alegeResp = v => { setFResp(v); try { if (respKey) localStorage.setItem(respKey, v || 'toti') } catch { /* fără stocare locală */ } }
   const respChips = Object.entries(perResp).filter(([id, x]) => x.in_lucru > 0 && id !== profile?.id)
@@ -488,7 +496,7 @@ export default function OfertareLicitatiiTab() {
                   {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
                   {sx.verdict && <span>🔍 verificare: <b style={{ color:(VC[sx.verdict] || [])[1] || G.muted }}>{(VC[sx.verdict] || [sx.verdict])[0]}</b></span>}
                   {sx.clarificari > 0 && <span>❓ clarificări: <b style={{ color:G.text }}>{sx.clarificari}</b></span>}
-                  <span title="Responsabil licitație">👤 {l.responsabil_nume ? <b style={{ color:G.text }}>{l.responsabil_nume}</b> : <span style={{ color:G.orange }}>fără responsabil</span>}</span>
+                  <span title="Responsabil licitație">👤 {(l.responsabil_id || l.responsabil2_id) ? <b style={{ color:G.text }}>{numeResponsabili(l) || '—'}</b> : <span style={{ color:G.orange }}>fără responsabil</span>}</span>
                 </div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, textAlign:'right' }}>
@@ -3696,6 +3704,36 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const [motivare, setMotivare] = useState(l.decizie_motivare || '')
   const [regim, setRegim] = useState(l.regim_achizitie || '')
   const [resp, setResp] = useState(l.responsabil_id || '')
+  const [resp2, setResp2] = useState(l.responsabil2_id || '')   // 20261121a: al doilea responsabil, opțional
+  // 20261121a (review Jakarinos r1/r2 P2): cei doi responsabili se salvează printr-o singură cale, SERIALIZAT — cât timp o salvare e în curs
+  // ambele selectoare sunt blocate (nu există două scrieri concurente pe pereche); starea afișată e PERECHEA confirmată de BD (rândul întors
+  // sau recitit), nu valoarea optimistă; orice refuz (ex. CHECK R2 ≠ R1 când altcineva a setat între timp același om) se arată mereu.
+  // Tokenul invalidează DOAR la schimbarea licitației (alt l.id, L24); props noi pentru ACEEAȘI licitație (refresh după o salvare) se aplică
+  // doar când nu e o salvare în curs — fiecare salvare reușită cheamă onChanged(), deci ultimul refresh aduce perechea finală (review r3 P2).
+  const respSeq = useRef(0)
+  const respSalvareRef = useRef(false)
+  const [respSalvare, setRespSalvare] = useState(false)
+  useEffect(() => { respSeq.current++; respSalvareRef.current = false; setRespSalvare(false); setResp(l.responsabil_id || ''); setResp2(l.responsabil2_id || '') }, [l.id])
+  useEffect(() => { if (!respSalvareRef.current) { setResp(l.responsabil_id || ''); setResp2(l.responsabil2_id || '') } }, [l.responsabil_id, l.responsabil2_id])
+  const salveazaResponsabil = async (camp, v) => {
+    if (respSalvareRef.current) return
+    respSalvareRef.current = true; setRespSalvare(true)
+    const seq = respSeq.current
+    if (camp === 'responsabil_id') setResp(v); else setResp2(v)
+    const { data, error } = await supabase.from('ofertare_licitatii').update({ [camp]: v || null, updated_at: new Date().toISOString() })
+      .eq('id', l.id).select('responsabil_id, responsabil2_id')
+    const salvat = !error && Array.isArray(data) && data.length === 1
+    let rand = salvat ? data[0] : null
+    if (!rand) { const r = await supabase.from('ofertare_licitatii').select('responsabil_id, responsabil2_id').eq('id', l.id).maybeSingle(); rand = r.error ? null : r.data }
+    if (seq === respSeq.current) { respSalvareRef.current = false; setRespSalvare(false) }
+    if (!salvat) {   // refuzul se arată ÎNTOTDEAUNA, indiferent ce s-a întâmplat între timp cu fișa
+      const m = 'Responsabilul nu s-a salvat' + (error ? ': ' + error.message : ' (nicio licitație modificată)') + (rand ? '' : ' — reîncarcă fișa')
+      showToast ? showToast(m, 'err') : alert(m)
+    }
+    if (seq !== respSeq.current) return   // s-a deschis altă licitație în timpul salvării — afișarea vine din props
+    if (rand) { setResp(rand.responsabil_id || ''); setResp2(rand.responsabil2_id || '') }
+    if (salvat) onChanged && onChanged()
+  }
   // Intrarea din Clarificări deschide fișa direct pe Documente; altfel, tabul obișnuit.
   // Etapa 0 (14.09.2026): fără registru generat, fișa se deschide pe ⚡ Triere — decizia vine din fișa de date, nu din 40 de documente citite
   const [tab, setTab] = useState(() => (intrareDocument ? 'documente' : (l._st?.cerinte || l.nr_cerinte) ? 'cerinte' : 'triere'))   // triere | cerinte | documente | clarificari | detalii | verificari
@@ -3940,10 +3978,17 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <div style={{ fontSize:14, fontWeight:800, marginBottom:8 }}>⚡ Pe scurt</div>
               <Row k="Autoritate" v={l.autoritate} />
               <Row k="Responsabil" v={
-                <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px', color: resp ? G.text : G.orange }} value={resp} title="Colegul care are licitația în lucru — primește sarcinile nominal"
-                  onChange={async e => { const v = e.target.value; setResp(v); await supabase.from('ofertare_licitatii').update({ responsabil_id: v || null, updated_at: new Date().toISOString() }).eq('id', l.id); onChanged && onChanged() }}>
+                <select disabled={respSalvare} style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px', color: resp ? G.text : G.orange }} value={resp} title="Colegul care are licitația în lucru — primește sarcinile nominal"
+                  onChange={e => salveazaResponsabil('responsabil_id', e.target.value)}>
                   <option value="">— fără responsabil —</option>
-                  {echipa.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {echipa.filter(p => p.id !== resp2).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>} />
+              <Row k="Responsabil 2 (opțional)" v={
+                <select disabled={respSalvare} style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px', color: resp2 ? G.text : G.muted }} value={resp2}
+                  title="Al doilea coleg pe licitație (opțional) — primește aceleași notificări ca responsabilul; nu poate fi același om"
+                  onChange={e => { if (e.target.value && e.target.value === resp) return; salveazaResponsabil('responsabil2_id', e.target.value) }}>
+                  <option value="">—</option>
+                  {echipa.filter(p => p.id !== resp).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>} />
               <Row k="Regim" v={
                 <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px' }} value={regim} title="legea citată în fișa de date primează asupra tipului autorității"

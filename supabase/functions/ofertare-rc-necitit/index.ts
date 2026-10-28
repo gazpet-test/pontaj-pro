@@ -84,10 +84,10 @@ Deno.serve(async (req) => {
   if (eOwn) return await esec('owneri: ' + eOwn.message, deTrimis)
   const owner = (owners || []).map((o: any) => emailValid(o.email)).find((e: string | null) => e === OWNER_PRINCIPAL) ?? null
   if (!owner) return await esec('owner-ul principal nu e în profiles (is_owner, @gazpet.ro)', deTrimis)
-  // responsabilii licitațiilor (ofertare_licitatii.responsabil_id → profiles)
-  const { data: lics, error: eLic } = await sb.from('ofertare_licitatii').select('id, responsabil_id').in('id', deTrimis.map((l) => l.licitatie_id))
+  // responsabilii licitațiilor (ofertare_licitatii.responsabil_id + responsabil2_id opțional, 20261121a → profiles)
+  const { data: lics, error: eLic } = await sb.from('ofertare_licitatii').select('id, responsabil_id, responsabil2_id').in('id', deTrimis.map((l) => l.licitatie_id))
   if (eLic || !Array.isArray(lics)) return await esec('responsabili: ' + (eLic?.message || 'fără date'), deTrimis)
-  const respIds = [...new Set(lics.map((x: any) => x.responsabil_id).filter(Boolean))]
+  const respIds = [...new Set(lics.flatMap((x: any) => [x.responsabil_id, x.responsabil2_id]).filter(Boolean))]
   const { data: resps, error: eResp } = respIds.length
     ? await sb.from('profiles').select('id, name, email').in('id', respIds) : { data: [], error: null }
   if (eResp || !Array.isArray(resps)) return await esec('profil responsabil: ' + (eResp?.message || 'fără date'), deTrimis)
@@ -97,9 +97,13 @@ Deno.serve(async (req) => {
   if (lipsa.length) return await esec('citire incompletă: licitațiile ' + lipsa.map((l) => l.licitatie_id).join(', ') + ' lipsesc', deTrimis)
   const dest = new Map<number, Destinatari>()
   for (const l of deTrimis) {
-    const rid = lics.find((x: any) => Number(x.id) === Number(l.licitatie_id))!.responsabil_id ?? null
-    const p = rid ? resps.find((x: any) => x.id === rid) : null
-    const r: Responsabil = !rid ? { stare: 'fara_responsabil' } : !p ? { stare: 'profil_lipsa' } : { stare: 'profil', name: p.name, email: p.email }
+    const li = lics.find((x: any) => Number(x.id) === Number(l.licitatie_id))!
+    const loc = (rid: string | null): Responsabil => {
+      const p = rid ? resps.find((x: any) => x.id === rid) : null
+      return !rid ? { stare: 'fara_responsabil' } : !p ? { stare: 'profil_lipsa' } : { stare: 'profil', name: p.name, email: p.email }
+    }
+    // responsabilul 2 gol nu e un loc „fără responsabil” — doar se omite
+    const r: Responsabil[] = [loc(li.responsabil_id ?? null), ...(li.responsabil2_id ? [loc(li.responsabil2_id)] : [])]
     dest.set(l.licitatie_id, destinatariLicitatie(r, owner)!)
   }
 
@@ -112,7 +116,7 @@ Deno.serve(async (req) => {
     <div style="padding:20px 24px;font-size:13.5px;line-height:1.55">
       ${d.faraResponsabil
         ? `<div style="border:1px solid #F59E0B;border-radius:10px;padding:10px 14px;margin-bottom:12px;background:#1F1A0B;color:#FBBF24;font-weight:700">⚠ FĂRĂ RESPONSABIL — ${esc(d.motiv)}. Setează responsabilul în fișa licitației.</div>`
-        : `<div style="color:#8B949E;font-size:12.5px;margin-bottom:10px">Responsabil: <b style="color:#E6EDF3">${esc(d.responsabil || '—')}</b></div>`}
+        : `<div style="color:#8B949E;font-size:12.5px;margin-bottom:10px">Responsabil: <b style="color:#E6EDF3">${esc(d.responsabil || '—')}</b>${d.motiv ? ` · <span style="color:#FBBF24">⚠ ${esc(d.motiv)}</span>` : ''}</div>`}
       <div style="border:1px solid #7F1D1D;border-radius:10px;padding:12px 16px;margin-bottom:12px;background:#161B22">
         <div style="font-weight:700;font-size:14px;margin-bottom:4px"><span style="color:#F87171">${l.zile_depunere <= 0 ? 'depunerea e AZI' : l.zile_depunere + (l.zile_depunere === 1 ? ' zi' : ' zile') + ' până la depunere'}</span></div>
         <div style="color:#8B949E;font-size:12.5px;margin-bottom:6px">${esc(l.obiect)}</div>
