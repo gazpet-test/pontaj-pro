@@ -12,11 +12,12 @@ BEGIN
  THEN RAISE EXCEPTION 'INV coloana nr_inventar lipseste'; END IF;
 END $migrare$;
 
--- Aceeași definiție a „necompletat” ca String.prototype.trim() din UI (review Jakarinos #904 r1/r2): spații ASCII + Unicode
+-- Aceeași definiție a „necompletat” ca String.prototype.trim() din UI (review Jakarinos #904 r1–r3): clasă EXPLICITĂ, fără \s
+-- ([[:space:]] depinde de collation — pe ICU ia și U+0085/U+001C–1F, pe care trim() le păstrează): TAB..CR, spațiu + Unicode
 -- (NBSP U+00A0, U+1680, U+2000–U+200A, U+2028/2029, U+202F, U+205F, U+3000, BOM U+FEFF). Întoarce NULL dacă rămâne gol.
 CREATE FUNCTION public.fn_nr_inventar_norm(p text) RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = public, pg_temp AS $fn$
-  SELECT nullif(regexp_replace(p, '^[\s   -     　﻿]+|[\s   -     　﻿]+$', '', 'g'), '')
+  SELECT nullif(regexp_replace(p, '^[\u0009-\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+|[\u0009-\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+$', '', 'g'), '')
 $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_nr_inventar_norm(text) FROM PUBLIC;
 
