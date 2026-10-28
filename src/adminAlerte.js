@@ -74,7 +74,7 @@ export function alerteOfertare(rows, now = new Date()) {
     const valid = deadline && Number.isFinite(deadline.getTime())
     const date = valid ? ziBucuresti(deadline) : null
     const days = zileRamase(date, today)
-    const unassigned = !row.responsabil_id
+    const unassigned = !row.responsabil_id && !row.responsabil2_id   // 20261121a: neatribuit = niciunul dintre cei doi
     if (valid && days > 7 && !unassigned) return []
     const late = valid && deadline < now
     const committed = ['go', 'in_lucru'].includes(row.status)
@@ -291,7 +291,7 @@ export async function citesteToate(makeQuery, signal) {
 
 // Proiecții explicite, reutilizabile în verificarea API. Niciun SELECT * pe personal/financiar.
 export const SELECT_ADMIN = {
-  ofertare_licitatii: 'id,nr_anunt,obiect,autoritate,status,decizie_go,responsabil_id,termen_depunere',
+  ofertare_licitatii: 'id,nr_anunt,obiect,autoritate,status,decizie_go,responsabil_id,responsabil2_id,termen_depunere',
   v_hr_autorizatii_status: 'id,employee_id,employee_name,tip_denumire,numar_autorizatie,data_expirare,fara_expirare,necesita_confirmare_rsvti,rsvti_urmatoarea_confirmare',
   documente_firma: 'id,denumire,numar_document,data_valabilitate,fara_expirare,se_reemite,activ',
   logistica_documente: 'id,active_id,entitate_id,entitate_tip,tip_id,numar_document,data_expirare,fara_expirare',

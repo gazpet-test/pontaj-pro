@@ -401,7 +401,7 @@ Deno.serve(async (req: Request) => {
   // Licitatiile de vegheat: au anunt SEAP legat si termenul nu a trecut inca
   // (o zi de toleranta - documentele apar uneori chiar in ziua depunerii)
   let q = supa.from('ofertare_licitatii')
-    .select('id, nr_anunt, obiect, c_notice_id, sys_notice_type_id, termen_depunere, created_by, responsabil_id, status')
+    .select('id, nr_anunt, obiect, c_notice_id, sys_notice_type_id, termen_depunere, created_by, responsabil_id, responsabil2_id, status')
     .not('c_notice_id', 'is', null);
   if (body?.licitatie_id) q = q.eq('id', Number(body.licitatie_id));
   else q = q.gte('termen_depunere', new Date(Date.now() - 86400000).toISOString());
@@ -746,6 +746,7 @@ Deno.serve(async (req: Request) => {
     const catre = new Set<string>((owners || []).map((o: any) => o.id));
     if (lic.created_by) catre.add(lic.created_by);
     if (lic.responsabil_id) catre.add(lic.responsabil_id);
+    if (lic.responsabil2_id) catre.add(lic.responsabil2_id); // 20261121a: responsabilul 2 (optional), aceleasi notificari
     // review PR-1 r5: INSERT-ul e acum unul singur, cu toti destinatarii — un id fara profil (cont sters) l-ar pica pentru TOTI.
     // Se pastreaza doar destinatarii cu profil; citirea esuata = destinatari necunoscuti (canalul versiunilor ramane restant).
     let eValizi: any = null;
@@ -936,9 +937,10 @@ Deno.serve(async (req: Request) => {
           mailOk = true;
         } else {
           const to = [OFFICE];
-          if (lic.responsabil_id) {
-            let { data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle();
-            if (eResp) ({ data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle());
+          // 20261121a: ambii responsabili (al doilea e optional), aceeasi regula pentru fiecare
+          for (const rid of [lic.responsabil_id, lic.responsabil2_id].filter(Boolean)) {
+            let { data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', rid).maybeSingle();
+            if (eResp) ({ data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', rid).maybeSingle());
             if (eResp) { destinatariOk = false; raport.push({ licitatie: lic.nr_anunt, destinatari_necunoscuti: `responsabil: ${eResp.message}` }); }
             else if (resp?.email && !to.includes(resp.email)) to.push(resp.email);
           }

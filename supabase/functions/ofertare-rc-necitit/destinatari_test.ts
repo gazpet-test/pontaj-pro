@@ -38,3 +38,31 @@ Deno.test('numeCurat: caractere de control / format / separatori Unicode scoase'
   assertEquals(numeCurat('\u0000​'), null)
   assertEquals(numeCurat(null), null)
 })
+// 20261121a: responsabilul 2 (opțional)
+Deno.test('doi responsabili valizi: TO ambii, CC owner, nume „A + B”', () => {
+  const d = destinatariLicitatie([prof('Mirela Rosu', 'mirela.rosu@gazpet.ro'), prof('Oana Nica', 'Oana.Nica@gazpet.ro')], O)!
+  assertEquals([d.to, d.cc, d.faraResponsabil, d.motiv, d.responsabil], [['mirela.rosu@gazpet.ro', 'oana.nica@gazpet.ro'], [O], false, null, 'Mirela Rosu + Oana Nica'])
+})
+Deno.test('R2 = owner-ul principal: TO ambii, fără CC dublu', () => {
+  const d = destinatariLicitatie([prof('Mirela Rosu', 'mirela.rosu@gazpet.ro'), prof('Razvan Trusu', O)], O)!
+  assertEquals([d.to, d.cc], [['mirela.rosu@gazpet.ro', O], []])
+})
+Deno.test('același email pe ambele locuri: un singur TO', () => {
+  assertEquals(destinatariLicitatie([prof('A', 'a@gazpet.ro'), prof('A', 'A@gazpet.ro')], O)!.to, ['a@gazpet.ro'])
+})
+Deno.test('R1 invalid, R2 valid: TO doar R2, NU „FĂRĂ RESPONSABIL”, avertisment pentru R1; garda @gazpet.ro și pe R2', () => {
+  const d = destinatariLicitatie([prof('X', 'x@gmail.com'), prof('Oana Nica', 'oana.nica@gazpet.ro')], O)!
+  assertEquals([d.to, d.cc, d.faraResponsabil], [['oana.nica@gazpet.ro'], [O], false])
+  assertEquals(d.motiv?.includes('X'), true)
+  const e = destinatariLicitatie([prof('Mirela Rosu', 'mirela.rosu@gazpet.ro'), prof('Y', 'y@gazpet.ro.evil.com')], O)!
+  assertEquals([e.to, e.faraResponsabil], [['mirela.rosu@gazpet.ro'], false])
+})
+Deno.test('fără R1, doar R2 valid: TO R2 (nu „FĂRĂ RESPONSABIL”)', () => {
+  const d = destinatariLicitatie([{ stare: 'fara_responsabil' }, prof('Oana Nica', 'oana.nica@gazpet.ro')], O)!
+  assertEquals([d.to, d.faraResponsabil, d.motiv], [['oana.nica@gazpet.ro'], false, null])
+})
+Deno.test('ambii invalizi / lipsă: TO owner, FĂRĂ RESPONSABIL', () => {
+  const d = destinatariLicitatie([prof('X', null), { stare: 'profil_lipsa' }], O)!
+  assertEquals([d.to, d.cc, d.faraResponsabil], [[O], [], true])
+  assertEquals(destinatariLicitatie([], O)!.faraResponsabil, true)
+})

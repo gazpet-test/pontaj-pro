@@ -86,11 +86,17 @@ Deno.serve(async (req: Request) => {
   const gid = Number(body.garantie_id);
   if (!gid) return json({ error: 'garantie_id lipsă' }, 400);
 
-  const { data: g } = await db.from('ofertare_garantii').select('*, broker:ofertare_brokeri(nume, email, contact), licitatie:ofertare_licitatii(id, nr_anunt, autoritate, obiect, termen_depunere, garantie_participare, responsabil_id, link_seap)').eq('id', gid).maybeSingle();
+  const { data: g } = await db.from('ofertare_garantii').select('*, broker:ofertare_brokeri(nume, email, contact), licitatie:ofertare_licitatii(id, nr_anunt, autoritate, obiect, termen_depunere, garantie_participare, responsabil_id, responsabil2_id, link_seap)').eq('id', gid).maybeSingle();
   if (!g) return json({ error: 'garanția nu există' }, 404);
   const l = g.licitatie || {};
-  let resp: { name?: string; email?: string } | null = null;
-  if (l.responsabil_id) { const { data } = await db.from('profiles').select('name, email').eq('id', l.responsabil_id).maybeSingle(); resp = data; }
+  // 20261121a: responsabilul 2 (opțional) — aceleași mailuri ca responsabilul; resp = { name: „A + B”, emails: [...] }
+  let resp: { name?: string; emails: string[] } | null = null;
+  const rids = [l.responsabil_id, l.responsabil2_id].filter(Boolean);
+  if (rids.length) {
+    const { data } = await db.from('profiles').select('id, name, email').in('id', rids);
+    const ps = rids.map((id: string) => (data || []).find((p: any) => p.id === id)).filter(Boolean);
+    if (ps.length) resp = { name: ps.map((p: any) => p.name).filter(Boolean).join(' + '), emails: [...new Set(ps.map((p: any) => p.email).filter(Boolean))] as string[] };
+  }
   const titlu = `${l.nr_anunt} — ${l.autoritate}`;
   const linkFisa = `${APP}/ofertare`;
 
@@ -155,13 +161,13 @@ Deno.serve(async (req: Request) => {
         `<p style="margin:14px 0 6px">Draftul poliței și decontul sunt atașate. După plată, vă rugăm să încărcați OP-ul în platformă și să bifați <b>„achitată”</b> — responsabilul primește automat vestea și cere originalul de la broker.</p>` +
         `<p style="margin:10px 0"><a href="${linkFisa}" style="background:#0b7a3b;color:#fff;padding:9px 16px;border-radius:7px;text-decoration:none;font-weight:700">Deschide licitația în platformă → tab Garanție</a></p>` +
         `<p style="margin:8px 0 0;color:#5a6b7b;font-size:13px">Trimis de ${esc(meNume)}.</p>`);
-      const id = await trimite(PLATA_TO, [resp?.email, meMail].filter(Boolean).filter((x, i, a) => a.indexOf(x) === i) as string[], `💳 De plătit: poliță garanție participare — ${titlu} (${fmtLei(g.decont_valoare, g.moneda)})`, html, out);
+      const id = await trimite(PLATA_TO, [...(resp?.emails || []), meMail].filter(Boolean).filter((x, i, a) => a.indexOf(x) === i) as string[], `💳 De plătit: poliță garanție participare — ${titlu} (${fmtLei(g.decont_valoare, g.moneda)})`, html, out);
       await db.from('ofertare_garantii').update({ notificat_plata_la: now, updated_at: now }).eq('id', gid);
       return json({ ok: true, id, atasate: out.length, sarite });
     }
 
     if (actiune === 'achitata') {
-      const to = resp?.email ? [resp.email] : [OFFICE];
+      const to = resp?.emails?.length ? resp.emails : [OFFICE];
       const { out, sarite } = await atas(g.op_path ? [{ path: g.op_path, nume: `OP prima polita ${l.nr_anunt}.pdf` }] : []);
       const html = wrap(
         `<h2 style="margin:0 0 6px;color:#0b7a3b">✅ Polița de garanție a fost achitată</h2>` +
