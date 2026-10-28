@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { ziBucuresti } from './lib/izoTeren.js'
 import { frontVechi } from './lib/izoSesiuni.js'
-import { CAS_MESAJ, creeazaControlBirou, eroareBirou, declaratiiLot, cheiDecizii, descendenti, cerereAprobare, cerereDecizie, cerereIesire, cerereFront, cerereTranzitie, executaBirou, citestePagini } from './lib/izoBirou.js'
+import { EmitereAviz, ArhivaAvize } from './izoAvizIesire.jsx'
+import { CAS_MESAJ, creeazaControlBirou, eroareBirou, declaratiiLot, cheiDecizii, descendenti, cerereAprobare, cerereDecizie, cerereFront, cerereTranzitie, executaBirou, citestePagini } from './lib/izoBirou.js'
 
 const G = { bg: '#F4F6F8', card: '#FFFFFF', text: '#152536', muted: '#4A5969', border: '#9BA9B6', blue: '#1259A7', red: '#9C2121', yellow: '#FFF0BA' }
 const S = {
@@ -168,20 +169,20 @@ export function IzometrieGestionar(props) {
   const ui = useBirou(proiectId)
   const [tronson, setTronson] = useState(''), [depozit, setDepozit] = useState(''), [depozite, setDepozite] = useState([])
   const [bucati, setBucati] = useState([]), [rezervari, setRezervari] = useState([]), [fronturi, setFronturi] = useState([])
-  const [ids, setIds] = useState([]), [aviz, setAviz] = useState(''), [date, setDate] = useState(ziBucuresti()), [reason, setReason] = useState('')
+  const [ids, setIds] = useState([]), [arhiva, setArhiva] = useState(0), [reason, setReason] = useState('')
   const disabled = ui.busy || Boolean(ui.pending)
   async function refresh(current) {
     const project = props.proiecte?.find(p => p.id === proiectId)
     if (!project?.site_id) throw Error('Proiectul nu are șantier/depozite configurate.')
     const [pieces, reservations, fronts, depots] = await Promise.all([
-      citestePagini((from, to) => supabase.from('magazie_bucati').select('id,uid,serie,sarja,lungime_mm,perete_mm,stare,depozit_id,tronson_id,atribute').eq('proiect_id', proiectId).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null).is('executie_teava_id', null).in('stare', ['sosit', 'receptionat', 'retur', 'in_tranzit']).order('id').range(from, to)),
+      citestePagini((from, to) => supabase.from('magazie_bucati').select('id,uid,tip_cod,serie,sarja,lungime_mm,perete_mm,diametru_mm,greutate_kg,stare,depozit_id,tronson_id,atribute').eq('proiect_id', proiectId).eq('provenienta', 'beneficiar').not('tip_cod', 'is', null).is('executie_teava_id', null).in('stare', ['sosit', 'receptionat', 'retur', 'in_tranzit']).order('id').range(from, to)),
       citestePagini((from, to) => supabase.from('v_izo_rezervari_active').select('*').eq('proiect_id', proiectId).order('id').range(from, to)),
       citestePagini((from, to) => supabase.from('izo_fronturi').select('*').eq('proiect_id', proiectId).eq('activ', true).order('id').range(from, to)),
       citestePagini((from, to) => supabase.from('logistica_depozite').select('id,name').eq('site_id', project.site_id).eq('activ', true).order('id').range(from, to)),
     ])
     if (current()) { setBucati(pieces); setRezervari(reservations); setFronturi(fronts); setDepozite(depots); setIds([]) }
   }
-  useEffect(() => { setBucati([]); setRezervari([]); setFronturi([]); setDepozite([]); setIds([]); setTronson(''); setDepozit(''); setAviz(''); setReason(''); if (proiectId) ui.run(refresh) }, [proiectId])
+  useEffect(() => { setBucati([]); setRezervari([]); setFronturi([]); setDepozite([]); setIds([]); setTronson(''); setDepozit(''); setReason(''); if (proiectId) ui.run(refresh) }, [proiectId])
   const available = bucati.filter(b => String(b.depozit_id) === depozit && ['sosit', 'receptionat', 'retur'].includes(b.stare))
   const send = build => ui.run(async current => { const request = build(); await ui.send(request, refresh, current) })
   return <div style={S.page}><h2>Gestionar · depozit</h2>
@@ -190,14 +191,8 @@ export function IzometrieGestionar(props) {
     <p role="status" aria-live="polite">{ui.mesaj}</p>
     {ui.pending && <div style={S.card}>Răspuns neconfirmat. <Button disabled={ui.busy} onClick={() => ui.run(current => ui.send(ui.pending, refresh, current))}>Reîncearcă aceeași operație</Button></div>}
     <Button disabled={disabled} onClick={() => ui.run(refresh)}>Reîncarcă depozitul și rezervările</Button>
-    <div style={S.card}><h3>Ieșire din depozit pe tronson</h3>
-      <Select disabled={disabled} aria-label="Depozit" value={depozit} onChange={e => { setDepozit(e.target.value); setIds([]) }}><option value="">Alege depozitul</option>{depozite.map(d => <option key={d.id} value={d.id}>{d.name || d.id}</option>)}</Select>
-      <Input disabled={disabled} aria-label="Număr aviz" placeholder="Aviz CJPT / CJPJ" maxLength={100} value={aviz} onChange={e => setAviz(e.target.value)} /> <Input disabled={disabled} aria-label="Data avizului" type="date" max={ziBucuresti()} value={date} onChange={e => setDate(e.target.value)} />
-      <p>Ieșirea cere un tronson. Serverul verifică depozitul atribuit, PV-ul și starea fiecărei bucăți.</p>
-      {available.map(b => <label key={b.id} style={{ display: 'block', padding: 8 }}><input disabled={disabled} type="checkbox" checked={ids.includes(b.id)} onChange={e => setIds(e.target.checked ? [...ids, b.id] : ids.filter(x => x !== b.id))} /> {labelPiece(b)} {rezervari.some(r => r.bucata_id === b.id) ? ' · rezervată (regularizare)' : ''}</label>)}
-      {depozit && !available.length && <p>Nicio bucată pentru ieșire din acest depozit.</p>}
-      <Button disabled={disabled || !ids.length || !tronson} onClick={() => send(() => cerereIesire({ depozit: Number(depozit), tronson: Number(tronson), bucati: ids, aviz, data: date }))}>Înregistrează ieșirea ({ids.length})</Button>
-    </div>
+    <EmitereAviz ui={ui} depozit={depozit} setDepozit={setDepozit} depozite={depozite} tronson={tronson} available={available} rezervari={rezervari} refresh={async current => { await refresh(current); setArhiva(x => x + 1) }} disabled={disabled} />
+    <ArhivaAvize ui={ui} proiectId={proiectId} depozite={depozite} tronsoane={props.tronsoane} disabled={disabled} reincarca={arhiva} />
     <div style={S.card}><h3>Rezervări active ({rezervari.length})</h3>{rezervari.filter(r => !tronson || String(r.tronson_id) === tronson).map(r => <p key={r.id}>#{r.id} · bucata {r.bucata_id || `declarată ${r.bucata_decl_uid}`} · declarație #{r.declaratie_id} v{r.declaratie_versiune} · tronson {r.tronson_id} · expiră {r.expira_dupa || 'la decizie'}</p>)}</div>
     <div style={S.card}><h3>Fronturi active · eliberare MP</h3><p>Eliberarea oprește frontul. Inginerul trebuie să îl preia din nou înainte de sincronizare. Dreptul de gestionar singur nu permite această operație.</p>
       {fronturi.filter(f => !tronson || String(f.tronson_id) === tronson).map(f => <p key={f.id}>Tronson {f.tronson_id} · {f.profile_id} · expiră {f.expira_la}</p>)}
