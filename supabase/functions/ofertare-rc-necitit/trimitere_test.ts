@@ -64,3 +64,12 @@ Deno.test('alt 4xx → refuzat + eliberare', async () => {
   const rez = await trimiteLicitatie(1, K, nou, { trimite: async () => ({ status: 422, text: '{"name":"validation_error"}' }), ...s })
   assertEquals([rez.rezultat, rez.eliberat, s.apeluri], ['refuzat', true, ['elibereaza']])
 })
+Deno.test('excepție în confirma după 2xx → trimis_neconfirmat (fără eliberare); excepție în elibereaza la 4xx → refuzat, eliberat=false', async () => {
+  let eliberari = 0
+  const a = await trimiteLicitatie(1, K, nou, { trimite: async () => ({ status: 200, text: '{}' }),
+    confirma: async () => { throw new TypeError('Failed to fetch') }, elibereaza: async () => { eliberari++; return { data: true, error: null } } })
+  assertEquals([a.rezultat, eliberari], ['trimis_neconfirmat', 0])
+  const b = await trimiteLicitatie(1, K, nou, { trimite: async () => ({ status: 400, text: '{}' }),
+    confirma: async () => { throw new Error('nu') }, elibereaza: async () => { throw new TypeError('Failed to fetch') } })
+  assertEquals([b.rezultat, b.eliberat], ['refuzat', false])
+})
