@@ -9,6 +9,9 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261121a revenire: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  -- review Jakarinos / Copilot r6 (P1): tabelul se blochează EXCLUSIV înainte de inventar și rezervă și rămâne blocat până la DROP COLUMN
+  -- (aceeași tranzacție) — nicio atribuire R2 nu se poate schimba între copiere și ștergerea coloanelor
+  LOCK TABLE public.ofertare_licitatii IN ACCESS EXCLUSIVE MODE;
   -- review Copilot #903 P2-06: DROP VIEW doar dacă nimic nu depinde de view
   IF EXISTS (SELECT 1 FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid
              WHERE d.refobjid = 'public.v_ofertare_dashboard'::regclass AND r.ev_class <> 'public.v_ofertare_dashboard'::regclass) THEN
@@ -553,8 +556,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER ON public.v_ofertare_d
 GRANT ALL ON public.v_ofertare_dashboard TO service_role;
 -- review Copilot #903 P2-06: înainte de DROP COLUMN, atribuirile R2 se păstrează RECUPERABIL într-un tabel de rezervă (NOTICE-ul singur nu
 -- e durabil); tabel închis: RLS fără politici, fără drepturi pentru anon / authenticated — doar postgres / service_role.
-CREATE TABLE IF NOT EXISTS public._bak_20261121a_responsabil2 (
-  licitatie_id bigint NOT NULL, responsabil2_id uuid NOT NULL, responsabil2_setat_de uuid, salvat_la timestamptz NOT NULL DEFAULT now());
+-- review Copilot r6 P2-01: O SINGURĂ generație — CREATE TABLE fără IF NOT EXISTS: dacă rezerva unei reveniri anterioare există, revenirea
+-- se oprește (întâi se arhivează / redenumește explicit). Tabelul gol = instantaneu gol (zero atribuiri), nu „lipsă”.
+CREATE TABLE public._bak_20261121a_responsabil2 (
+  licitatie_id bigint PRIMARY KEY, responsabil2_id uuid NOT NULL, responsabil2_setat_de uuid,
+  revenire_txid bigint NOT NULL DEFAULT txid_current(), salvat_la timestamptz NOT NULL DEFAULT now());
 ALTER TABLE public._bak_20261121a_responsabil2 ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public._bak_20261121a_responsabil2 FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public._bak_20261121a_responsabil2 TO service_role;

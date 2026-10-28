@@ -45,9 +45,11 @@ BEGIN
      OR (SELECT relacl::text FROM pg_class WHERE oid = 'public.v_ofertare_dashboard'::regclass) IS DISTINCT FROM '{postgres=arwdDxtm/postgres,anon=arwdxt/postgres,authenticated=arwdxt/postgres,service_role=arwdDxtm/postgres}' THEN
     RAISE EXCEPTION '20261121a: v_ofertare_dashboard nu e versiunea asteptata';
   END IF;
-  -- review Copilot #903 P2-02: trigger-ul exact (tip BEFORE INSERT OR UPDATE, FOR EACH ROW, funcția), activ
+  -- review Copilot #903 P2-02 / r6 P3-01: trigger-ul exact din catalog — tgtype 23 = ROW + BEFORE + INSERT + UPDATE, fără listă de coloane,
+  -- fără WHEN, funcția, activ (nu textul deparsat, care depinde de search_path)
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND tgname = 'trg_ofertare_responsabil_setat_de'
-                 AND tgenabled = 'O' AND pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_ofertare_responsabil_setat_de BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION fn_ofertare_responsabil_setat_de()') THEN
+                 AND tgenabled = 'O' AND tgtype = 23 AND tgfoid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure
+                 AND tgattr = ''::int2vector AND tgqual IS NULL AND NOT tgisinternal) THEN
     RAISE EXCEPTION '20261121a: trigger-ul trg_ofertare_responsabil_setat_de lipseste / e inactiv / altfel definit';
   END IF;
 END $pre$;
@@ -688,7 +690,8 @@ BEGIN
     RAISE EXCEPTION '20261121a: postconditie coloane';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND tgname = 'trg_ofertare_responsabil_setat_de'
-                 AND tgenabled = 'O' AND pg_get_triggerdef(oid) = 'CREATE TRIGGER trg_ofertare_responsabil_setat_de BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION fn_ofertare_responsabil_setat_de()') THEN
+                 AND tgenabled = 'O' AND tgtype = 23 AND tgfoid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure
+                 AND tgattr = ''::int2vector AND tgqual IS NULL AND NOT tgisinternal) THEN
     RAISE EXCEPTION '20261121a: postconditie trigger';
   END IF;
   IF md5(pg_get_viewdef('public.v_ofertare_dashboard'::regclass, true)) IS DISTINCT FROM 'fd36ddf4eca807bef34c96fec16785c9'

@@ -108,8 +108,10 @@ BEGIN
      OR md5(pg_get_functiondef('public.ofertare_alerta_rc_necitit()'::regprocedure)) IS DISTINCT FROM '069c87b6b8a5f99ae86466d1bba365bc' THEN
     ok := false; r := r || 'FAIL revenire; ';
   END IF;
-  -- review Copilot #903 P2-06: atribuirile R2 ale licitațiilor de test (A, C, E) sunt în rezerva recuperabilă, cu cine le-a numit
-  IF (SELECT count(*) FROM public._bak_20261121a_responsabil2 WHERE licitatie_id IN (la, lc, le) AND responsabil2_setat_de IS NOT NULL) <> 3
+  -- review Copilot #903 P2-06 / r6 P2-02: rezerva conține EXACT valorile sursă pentru A, C, E (R2 + cine l-a numit) și nimic pentru B, D
+  IF (SELECT count(*) FROM public._bak_20261121a_responsabil2 b
+      JOIN (VALUES (la, v_b, v_owner), (lc, v_a, v_a), (le, v_b, v_owner)) e(lic, r2, setat) ON e.lic = b.licitatie_id
+      WHERE b.responsabil2_id = e.r2 AND b.responsabil2_setat_de = e.setat AND b.revenire_txid = txid_current()) <> 3
      OR EXISTS (SELECT 1 FROM public._bak_20261121a_responsabil2 WHERE licitatie_id IN (lb, ld))
      OR has_table_privilege('authenticated', 'public._bak_20261121a_responsabil2', 'SELECT') OR has_table_privilege('anon', 'public._bak_20261121a_responsabil2', 'SELECT') THEN
     ok := false; r := r || 'FAIL rezerva R2; ';
