@@ -14,12 +14,13 @@ END $migrare$;
 
 CREATE FUNCTION public.fn_active_nr_inventar_obligatoriu() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+DECLARE v_gol constant text := ' ' || chr(9) || chr(10) || chr(13) || chr(12) || chr(11) || chr(160); -- „necompletat” = NULL sau doar spații/TAB/CR/LF/NBSP (review Jakarinos #904 P2-1/P2-2)
 BEGIN
-  NEW.nr_inventar := nullif(btrim(NEW.nr_inventar), '');
+  NEW.nr_inventar := nullif(btrim(NEW.nr_inventar, v_gol), '');
   IF TG_OP = 'INSERT' AND NEW.nr_inventar IS NULL THEN
     RAISE EXCEPTION 'Nr. inventar (registrul imobilizărilor) este obligatoriu la activ nou' USING ERRCODE = 'check_violation';
   END IF;
-  IF TG_OP = 'UPDATE' AND OLD.nr_inventar IS NOT NULL AND NEW.nr_inventar IS NULL THEN
+  IF TG_OP = 'UPDATE' AND nullif(btrim(OLD.nr_inventar, v_gol), '') IS NOT NULL AND NEW.nr_inventar IS NULL THEN
     RAISE EXCEPTION 'Nr. inventar nu se poate șterge, doar corecta' USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -35,6 +36,6 @@ BEGIN
  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.logistica_active'::regclass AND tgname='trg_active_nr_inventar' AND tgenabled='O') <> 1
  THEN RAISE EXCEPTION 'INV postconditie trigger'; END IF;
  -- datele existente nu se ating
- IF EXISTS (SELECT 1 FROM public.logistica_active WHERE nr_inventar IS NOT NULL AND nr_inventar <> btrim(nr_inventar))
+ IF EXISTS (SELECT 1 FROM public.logistica_active WHERE nr_inventar IS NOT NULL AND nr_inventar <> btrim(nr_inventar, ' ' || chr(9) || chr(10) || chr(13) || chr(12) || chr(11) || chr(160)))
  THEN RAISE EXCEPTION 'INV date cu spatii la capete (de curatat separat, cu da)'; END IF;
 END $post$;

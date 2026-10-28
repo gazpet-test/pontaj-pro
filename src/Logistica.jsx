@@ -1475,7 +1475,7 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
     // 28.10.2026 (Răzvan): activ NOU doar cu nr. din registrul imobilizărilor; cele vechi se completează treptat
     // (trigger-ul trg_active_nr_inventar din BD refuză la fel inserarea fără număr și golirea unui număr existent).
     if (mode === 'create' && !form.nr_inventar.trim()) { showToast('Nr. inventar (registrul imobilizărilor) este obligatoriu la activ nou', 'error'); return }
-    if (mode !== 'create' && activ?.nr_inventar && !form.nr_inventar.trim()) { showToast('Nr. inventar nu se poate șterge, doar corecta', 'error'); return }
+    if (mode !== 'create' && activ?.nr_inventar?.trim() && !form.nr_inventar.trim()) { showToast('Nr. inventar nu se poate șterge, doar corecta', 'error'); return }
     if (!form.cod_intern.trim() && !form.nr_inmatriculare.trim()) {
       showToast('Trebuie cod intern SAU plăcuță înmatriculare', 'error'); return
     }
@@ -1706,7 +1706,7 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>🆔 Identificare</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12}}>
             <FieldText label="Cod intern (TST...)" value={form.cod_intern} onChange={v => setField('cod_intern', v)} placeholder="ex: TST094" readonly={isReadOnly} />
-            <FieldText label="Nr inventar (registrul imobilizărilor)" value={form.nr_inventar} onChange={v => setField('nr_inventar', v)} placeholder="ex: MF-00123" required={mode === 'create' || (!isReadOnly && !!activ?.nr_inventar)} readonly={isReadOnly} />
+            <FieldText label="Nr inventar (registrul imobilizărilor)" value={form.nr_inventar} onChange={v => setField('nr_inventar', v)} placeholder="ex: MF-00123" required={mode === 'create' || (!isReadOnly && !!activ?.nr_inventar?.trim())} readonly={isReadOnly} />
             <FieldText label="Plăcuță înmatriculare" value={form.nr_inmatriculare} onChange={v => setField('nr_inmatriculare', v)} placeholder="ex: PH 99 GAZ" readonly={isReadOnly} />
             <FieldSelect label="Tip" value={form.tip} onChange={v => setField('tip', v)} options={tipuri} required={!isReadOnly} placeholder="— alege tipul —" readonly={isReadOnly} />
             <FieldSelect label="Subcategorie" value={form.subcategorie} onChange={v => setField('subcategorie', v)} options={subcategoriiDisponibile} placeholder={subcategoriiDisponibile.length > 1 ? '— alege subcategorie —' : '— niciuna —'} readonly={isReadOnly} />
@@ -12012,8 +12012,8 @@ export default function LogisticaPage() {
       if (stareF !== 'Toate' && a.stare !== stareF) return false
       // 27.05.2026: filtru tip proprietate
       if (proprietateF !== 'Toate' && (a.tip_proprietate || 'firma') !== proprietateF) return false
-      if (inventarF === 'fara' && a.nr_inventar) return false
-      if (inventarF === 'cu' && !a.nr_inventar) return false
+      if (inventarF === 'fara' && a.nr_inventar?.trim()) return false
+      if (inventarF === 'cu' && !a.nr_inventar?.trim()) return false
       return true
     })
     
@@ -12735,7 +12735,7 @@ export default function LogisticaPage() {
           {/* 28.10.2026: nr. inventar (registrul imobilizărilor) — obligatoriu la activ nou, cele vechi se completează treptat */}
           <select value={inventarF} onChange={e => setInventarF(e.target.value)} title="Filtrare după nr. inventar (registrul imobilizărilor)">
             <option value="Toate">🔢 Nr. inventar: toate</option>
-            <option value="fara">⚠️ Fără nr. inventar ({active.filter(a => !a.nr_inventar).length})</option>
+            <option value="fara">⚠️ Fără nr. inventar ({active.filter(a => !a.nr_inventar?.trim()).length})</option>
             <option value="cu">✓ Cu nr. inventar</option>
           </select>
           {(search || tipF !== 'Toate' || subF !== 'Toate' || stareF !== 'Toate' || proprietateF !== 'Toate' || inventarF !== 'Toate') && (
