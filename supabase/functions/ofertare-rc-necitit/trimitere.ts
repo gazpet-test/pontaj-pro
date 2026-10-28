@@ -20,6 +20,11 @@ export type Deps = {
   elibereaza: () => Promise<{ data: unknown; error: unknown }>
 }
 
+// review Copilot #901 r2 (P2-01): o excepție aruncată de RPC (transport / client) se tratează ca eșec al acelui apel, nu iese din funcție
+const sigur = async (f: () => Promise<{ data: unknown; error: unknown }>) => {
+  try { return await f() } catch (e) { return { data: null, error: { message: 'excepție: ' + String((e as Error)?.message || e).slice(0, 200) } } }
+}
+
 export async function trimiteLicitatie(licitatie_id: number, cheie: string, payload: Record<string, unknown>, deps: Deps): Promise<Rezultat> {
   let r: { status: number; text: string }
   try { r = await deps.trimite(cheie, payload) } catch (e) {
@@ -32,10 +37,10 @@ export async function trimiteLicitatie(licitatie_id: number, cheie: string, payl
     return { licitatie_id, rezultat: 'conflict', eroare: 'Resend 409' + (nume ? ' ' + nume : '') + ': ' + r.text.slice(0, 200) }
   }
   if (r.status < 200 || r.status >= 300) {
-    const { data, error } = await deps.elibereaza()
+    const { data, error } = await sigur(deps.elibereaza)
     return { licitatie_id, rezultat: 'refuzat', eroare: 'Resend ' + r.status + ': ' + r.text.slice(0, 200), eliberat: !error && data === true }
   }
-  const { data, error } = await deps.confirma()
+  const { data, error } = await sigur(deps.confirma)
   if (error || data !== true) return { licitatie_id, rezultat: 'trimis_neconfirmat', confirmat: false,
     eroare: 'confirmare: ' + (error ? String((error as any)?.message ?? error).slice(0, 200) : 'false (revendicarea nu mai e cea de la trimitere)') }
   return { licitatie_id, rezultat: 'trimis', confirmat: true }

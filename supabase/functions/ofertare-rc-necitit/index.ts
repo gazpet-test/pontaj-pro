@@ -41,8 +41,10 @@ Deno.serve(async (req) => {
   const elibereaza = async (ls: Lic[]) => {
     const esuate: number[] = []
     for (const l of ls) {
-      const { data, error } = await sb.rpc('ofertare_alerta_rc_mail_elibereaza', { p_licitatie_id: l.licitatie_id, p_amprenta: l.amprenta_mail })
-      if (error || data !== true) esuate.push(l.licitatie_id)
+      try {
+        const { data, error } = await sb.rpc('ofertare_alerta_rc_mail_elibereaza', { p_licitatie_id: l.licitatie_id, p_amprenta: l.amprenta_mail })
+        if (error || data !== true) esuate.push(l.licitatie_id)
+      } catch { esuate.push(l.licitatie_id) } // o excepție la o licitație nu oprește eliberarea celorlalte (review #901 r2 P2-01)
     }
     return esuate
   }
