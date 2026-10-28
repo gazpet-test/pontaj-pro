@@ -157,7 +157,11 @@ export default function OfertareLicitatiiTab() {
 
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 4000) }
 
+  // 20261121a (review Jakarinos r4 P2, L24): o reîncărcare pornită mai devreme dar terminată mai târziu nu mai suprascrie rezultatul uneia
+  // mai noi (ex. două salvări de responsabil la rând → două load(); doar ultima pornită se aplică)
+  const loadGen = useRef(0)
   const load = async () => {
+    const gen = ++loadGen.current
     setLoading(true)
     const [{ data: v }, { data: full }] = await Promise.all([
       supabase.from('v_ofertare_dashboard').select('*').order('termen_depunere', { ascending: true, nullsFirst: false }),
@@ -205,6 +209,7 @@ export default function OfertareLicitatiiTab() {
       ;(vf || []).forEach(x => { const st = stats[x.licitatie_id]; if (st && !st.verdict) { st.verdict = x.verdict; st.verdict_la = x.created_at } })
       ;(cl || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].clarificari++ })
     }
+    if (gen !== loadGen.current) return   // a pornit între timp o reîncărcare mai nouă — ea aplică rezultatul (și setLoading(false))
     const randuri = (v || []).map(r => ({ ...fullMap[r.id], ...r, _st: stats[r.id] }))
     setRows(randuri)
     setSelected(s => s ? (randuri.find(x => x.id === s.id) || s) : s)   // fișa deschisă vede KPI-urile noi (garanție, acoperire)
