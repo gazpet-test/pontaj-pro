@@ -3703,26 +3703,29 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   // 20261121a (review Jakarinos r1/r2 P2): cei doi responsabili se salvează printr-o singură cale, SERIALIZAT — cât timp o salvare e în curs
   // ambele selectoare sunt blocate (nu există două scrieri concurente pe pereche); starea afișată e PERECHEA confirmată de BD (rândul întors
   // sau recitit), nu valoarea optimistă; orice refuz (ex. CHECK R2 ≠ R1 când altcineva a setat între timp același om) se arată mereu.
-  // Tokenul rămâne doar pentru schimbarea licitației / props în timpul salvării (L24).
+  // Tokenul invalidează DOAR la schimbarea licitației (alt l.id, L24); props noi pentru ACEEAȘI licitație (refresh după o salvare) se aplică
+  // doar când nu e o salvare în curs — fiecare salvare reușită cheamă onChanged(), deci ultimul refresh aduce perechea finală (review r3 P2).
   const respSeq = useRef(0)
+  const respSalvareRef = useRef(false)
   const [respSalvare, setRespSalvare] = useState(false)
-  useEffect(() => { respSeq.current++; setResp(l.responsabil_id || ''); setResp2(l.responsabil2_id || '') }, [l.id, l.responsabil_id, l.responsabil2_id])
+  useEffect(() => { respSeq.current++; respSalvareRef.current = false; setRespSalvare(false); setResp(l.responsabil_id || ''); setResp2(l.responsabil2_id || '') }, [l.id])
+  useEffect(() => { if (!respSalvareRef.current) { setResp(l.responsabil_id || ''); setResp2(l.responsabil2_id || '') } }, [l.responsabil_id, l.responsabil2_id])
   const salveazaResponsabil = async (camp, v) => {
-    if (respSalvare) return
-    setRespSalvare(true)
-    const seq = ++respSeq.current
+    if (respSalvareRef.current) return
+    respSalvareRef.current = true; setRespSalvare(true)
+    const seq = respSeq.current
     if (camp === 'responsabil_id') setResp(v); else setResp2(v)
     const { data, error } = await supabase.from('ofertare_licitatii').update({ [camp]: v || null, updated_at: new Date().toISOString() })
       .eq('id', l.id).select('responsabil_id, responsabil2_id')
     const salvat = !error && Array.isArray(data) && data.length === 1
     let rand = salvat ? data[0] : null
     if (!rand) { const r = await supabase.from('ofertare_licitatii').select('responsabil_id, responsabil2_id').eq('id', l.id).maybeSingle(); rand = r.error ? null : r.data }
-    setRespSalvare(false)
+    if (seq === respSeq.current) { respSalvareRef.current = false; setRespSalvare(false) }
     if (!salvat) {   // refuzul se arată ÎNTOTDEAUNA, indiferent ce s-a întâmplat între timp cu fișa
       const m = 'Responsabilul nu s-a salvat' + (error ? ': ' + error.message : ' (nicio licitație modificată)') + (rand ? '' : ' — reîncarcă fișa')
       showToast ? showToast(m, 'err') : alert(m)
     }
-    if (seq !== respSeq.current) return   // fișa s-a schimbat (alte props) în timpul salvării — afișarea vine din props
+    if (seq !== respSeq.current) return   // s-a deschis altă licitație în timpul salvării — afișarea vine din props
     if (rand) { setResp(rand.responsabil_id || ''); setResp2(rand.responsabil2_id || '') }
     if (salvat) onChanged && onChanged()
   }
