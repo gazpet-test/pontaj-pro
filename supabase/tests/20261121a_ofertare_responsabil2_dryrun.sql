@@ -46,6 +46,16 @@ BEGIN
   UPDATE ofertare_licitatii SET responsabil2_id = v_a WHERE id = lc;   -- înapoi la scenariul C (doar R2 = v_a)
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_owner, 'role', 'authenticated')::text, true);
 
+  -- review Jakarinos P2: cine poate scrie R2 = cine poate scrie R1. Poarta de scriere (fn_ofertare_licitatii_scriere) NU e atinsă de migrare
+  -- și compară TOT rândul pentru service_role / financiar (to_jsonb(OLD) - … vs to_jsonb(NEW) - …), deci acoperă și coloanele noi fără
+  -- modificare. O sesiune neprivilegiată nu se poate emula aici (session_user = postgres trece prin excepția administrativă) — se verifică
+  -- static că poarta e neschimbată.
+  IF md5(pg_get_functiondef('public.fn_ofertare_licitatii_scriere()'::regprocedure)) IS DISTINCT FROM '081cd829e8400001e1c31ea6e6506a8f'
+     OR position('(to_jsonb(OLD) - ''termen_depunere''' IN pg_get_functiondef('public.fn_ofertare_licitatii_scriere()'::regprocedure)) = 0
+     OR position('(to_jsonb(OLD) - ''contract_id''' IN pg_get_functiondef('public.fn_ofertare_licitatii_scriere()'::regprocedure)) = 0 THEN
+    ok := false; r := r || 'FAIL poarta scriere; ';
+  END IF;
+
   -- CHECK: R2 nu poate fi aceeași persoană cu R1
   BEGIN
     UPDATE ofertare_licitatii SET responsabil2_id = v_a WHERE id = la;
@@ -63,7 +73,8 @@ BEGIN
       (la, (SELECT array_agg(DISTINCT u ORDER BY u) FROM unnest(ARRAY[v_a, v_b] || v_owneri) u)),
       (lc, ARRAY[v_a]),
       (lb, v_owneri),
-      (le, (SELECT array_agg(DISTINCT u ORDER BY u) FROM unnest(ARRAY[v_owner, v_b]) u)))   -- doc de ieri, 4 zile: ownerul doar ca R1, o dată t(lic, astept) LOOP
+      -- E: doc de ieri, 4 zile — ownerul doar ca R1, o singură dată
+      (le, (SELECT array_agg(DISTINCT u ORDER BY u) FROM unnest(ARRAY[v_owner, v_b]) u))) t(lic, astept) LOOP
     IF (SELECT array_agg(profile_id ORDER BY profile_id) FROM notifications
         WHERE type = 'critical' AND title LIKE '%TEST-20261121-%' AND title LIKE '%' || (SELECT nr_anunt FROM ofertare_licitatii WHERE id = x.lic) || '%')
        IS DISTINCT FROM x.astept THEN
@@ -97,6 +108,12 @@ BEGIN
      OR md5(pg_get_functiondef('public.ofertare_alerta_rc_necitit()'::regprocedure)) IS DISTINCT FROM '069c87b6b8a5f99ae86466d1bba365bc' THEN
     ok := false; r := r || 'FAIL revenire; ';
   END IF;
+  -- review Jakarinos P2: ciclul complet apply → revenire → RE-apply (preflight-ul trebuie să treacă din nou pe starea restaurată)
+  EXECUTE $mig$:MIG$mig$;
+  IF (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ofertare_licitatii' AND column_name LIKE 'responsabil2%') <> 2 THEN
+    ok := false; r := r || 'FAIL re-apply; ';
+  END IF;
+  r := r || 'reapply=ok; ';
   RAISE EXCEPTION 'REZULTAT %: %', CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END, r;
 END
 $do$;

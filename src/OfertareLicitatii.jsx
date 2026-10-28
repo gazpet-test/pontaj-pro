@@ -3700,6 +3700,28 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const [regim, setRegim] = useState(l.regim_achizitie || '')
   const [resp, setResp] = useState(l.responsabil_id || '')
   const [resp2, setResp2] = useState(l.responsabil2_id || '')   // 20261121a: al doilea responsabil, opțional
+  // 20261121a (review Jakarinos P2): cei doi responsabili se salvează printr-o singură cale — rezultatul unei salvări se aplică doar dacă e
+  // ultima pornită (L24), iar starea afișată e PERECHEA confirmată de BD (rândul întors sau recitit), nu valoarea optimistă. O eroare
+  // (ex. CHECK R2 ≠ R1 când altcineva a setat între timp același om) se arată și ecranul revine la ce e în BD.
+  const respSeq = useRef(0)
+  useEffect(() => { setResp(l.responsabil_id || ''); setResp2(l.responsabil2_id || '') }, [l.id, l.responsabil_id, l.responsabil2_id])
+  const salveazaResponsabil = async (camp, v) => {
+    const seq = ++respSeq.current
+    if (camp === 'responsabil_id') setResp(v); else setResp2(v)
+    const { data, error } = await supabase.from('ofertare_licitatii').update({ [camp]: v || null, updated_at: new Date().toISOString() })
+      .eq('id', l.id).select('responsabil_id, responsabil2_id')
+    const salvat = !error && Array.isArray(data) && data.length === 1
+    let rand = salvat ? data[0] : null
+    if (!rand) { const r = await supabase.from('ofertare_licitatii').select('responsabil_id, responsabil2_id').eq('id', l.id).maybeSingle(); rand = r.error ? null : r.data }
+    if (seq !== respSeq.current) return   // a pornit între timp altă salvare — ea aduce starea finală
+    if (rand) { setResp(rand.responsabil_id || ''); setResp2(rand.responsabil2_id || '') }
+    if (!salvat) {
+      const m = 'Responsabilul nu s-a salvat' + (error ? ': ' + error.message : ' (nicio licitație modificată)') + (rand ? '' : ' — reîncarcă fișa')
+      showToast ? showToast(m, 'err') : alert(m)
+      return
+    }
+    onChanged && onChanged()
+  }
   // Intrarea din Clarificări deschide fișa direct pe Documente; altfel, tabul obișnuit.
   // Etapa 0 (14.09.2026): fără registru generat, fișa se deschide pe ⚡ Triere — decizia vine din fișa de date, nu din 40 de documente citite
   const [tab, setTab] = useState(() => (intrareDocument ? 'documente' : (l._st?.cerinte || l.nr_cerinte) ? 'cerinte' : 'triere'))   // triere | cerinte | documente | clarificari | detalii | verificari
@@ -3945,20 +3967,14 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <Row k="Autoritate" v={l.autoritate} />
               <Row k="Responsabil" v={
                 <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px', color: resp ? G.text : G.orange }} value={resp} title="Colegul care are licitația în lucru — primește sarcinile nominal"
-                  onChange={async e => { const v = e.target.value; setResp(v); await supabase.from('ofertare_licitatii').update({ responsabil_id: v || null, updated_at: new Date().toISOString() }).eq('id', l.id); onChanged && onChanged() }}>
+                  onChange={e => salveazaResponsabil('responsabil_id', e.target.value)}>
                   <option value="">— fără responsabil —</option>
                   {echipa.filter(p => p.id !== resp2).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>} />
               <Row k="Responsabil 2 (opțional)" v={
                 <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px', color: resp2 ? G.text : G.muted }} value={resp2}
                   title="Al doilea coleg pe licitație (opțional) — primește aceleași notificări ca responsabilul; nu poate fi același om"
-                  onChange={async e => {
-                    const v = e.target.value, vechi = resp2
-                    if (v && v === resp) return
-                    setResp2(v)
-                    const { error } = await supabase.from('ofertare_licitatii').update({ responsabil2_id: v || null, updated_at: new Date().toISOString() }).eq('id', l.id)
-                    if (error) { setResp2(vechi); showToast ? showToast('Responsabilul 2 nu s-a salvat: ' + error.message, 'err') : alert('Responsabilul 2 nu s-a salvat: ' + error.message); return }
-                    onChanged && onChanged() }}>
+                  onChange={e => { if (e.target.value && e.target.value === resp) return; salveazaResponsabil('responsabil2_id', e.target.value) }}>
                   <option value="">—</option>
                   {echipa.filter(p => p.id !== resp).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>} />

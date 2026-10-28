@@ -1,4 +1,5 @@
--- REVENIRE 20261121a_ofertare_responsabil2 (armată; doar la cererea lui Răzvan). ÎNTÂI se retrage UI-ul / edge-ul care citesc responsabil2_id, apoi:
+-- REVENIRE 20261121a_ofertare_responsabil2 (armată; doar la cererea lui Răzvan). ÎNTÂI se retrag UI-ul și edge-urile care citesc responsabil2_id (ofertare-rc-necitit,
+-- ofertare-seap-veghe, ofertare-etapa1-mail, ofertare-garantie-mail: redeploy pe versiunea anterioară; o rulare în curs se lasă să termine), apoi:
 -- reface EXACT cele 7 funcții și v_ofertare_dashboard dinaintea migrării, apoi scoate coloanele (ATENȚIE: numirile de responsabil 2 se pierd —
 -- lista lor e afișată în NOTICE înainte de ștergere, pentru reconstituire manuală).
 DO $pre$

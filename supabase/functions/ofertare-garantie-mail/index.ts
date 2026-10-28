@@ -19,6 +19,9 @@ const CORS: Record<string, string> = {
 const APP = 'https://pontaj-pro-sooty.vercel.app';
 const PLATA_TO = ['marilena.tudorache@gazpet.ro', 'mirela.popescu@gazpet.ro'];
 const OFFICE = 'office@gazpet.ro';
+// 20261121a (review Jakarinos P3): adrese comparate normalizat; CC fără dubluri și fără nimic din TO
+const norm = (e: unknown) => String(e ?? '').trim().toLowerCase();
+const ccFara = (to: string[], cc: (string | null | undefined)[]) => [...new Set(cc.filter(Boolean).map(norm))].filter((e) => !to.map(norm).includes(e));
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 const fmtZi = (d?: string | null) => d ? new Date(d).toLocaleDateString('ro-RO', { timeZone: 'Europe/Bucharest' }) : '—';
 const fmtLei = (v?: number | null, m = 'RON') => v == null ? '—' : `${Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${m}`;
@@ -95,7 +98,7 @@ Deno.serve(async (req: Request) => {
   if (rids.length) {
     const { data } = await db.from('profiles').select('id, name, email').in('id', rids);
     const ps = rids.map((id: string) => (data || []).find((p: any) => p.id === id)).filter(Boolean);
-    if (ps.length) resp = { name: ps.map((p: any) => p.name).filter(Boolean).join(' + '), emails: [...new Set(ps.map((p: any) => p.email).filter(Boolean))] as string[] };
+    if (ps.length) resp = { name: ps.map((p: any) => p.name).filter(Boolean).join(' + '), emails: [...new Set(ps.map((p: any) => norm(p.email)).filter(Boolean))] as string[] };
   }
   const titlu = `${l.nr_anunt} — ${l.autoritate}`;
   const linkFisa = `${APP}/ofertare`;
@@ -161,7 +164,7 @@ Deno.serve(async (req: Request) => {
         `<p style="margin:14px 0 6px">Draftul poliței și decontul sunt atașate. După plată, vă rugăm să încărcați OP-ul în platformă și să bifați <b>„achitată”</b> — responsabilul primește automat vestea și cere originalul de la broker.</p>` +
         `<p style="margin:10px 0"><a href="${linkFisa}" style="background:#0b7a3b;color:#fff;padding:9px 16px;border-radius:7px;text-decoration:none;font-weight:700">Deschide licitația în platformă → tab Garanție</a></p>` +
         `<p style="margin:8px 0 0;color:#5a6b7b;font-size:13px">Trimis de ${esc(meNume)}.</p>`);
-      const id = await trimite(PLATA_TO, [...(resp?.emails || []), meMail].filter(Boolean).filter((x, i, a) => a.indexOf(x) === i) as string[], `💳 De plătit: poliță garanție participare — ${titlu} (${fmtLei(g.decont_valoare, g.moneda)})`, html, out);
+      const id = await trimite(PLATA_TO, ccFara(PLATA_TO, [...(resp?.emails || []), meMail]), `💳 De plătit: poliță garanție participare — ${titlu} (${fmtLei(g.decont_valoare, g.moneda)})`, html, out);
       await db.from('ofertare_garantii').update({ notificat_plata_la: now, updated_at: now }).eq('id', gid);
       return json({ ok: true, id, atasate: out.length, sarite });
     }
@@ -175,7 +178,7 @@ Deno.serve(async (req: Request) => {
         `<p>Prima de <b>${fmtLei(g.decont_valoare, g.moneda)}</b> a fost plătită (OP atașat). Poți cere brokerului <b>${esc(g.broker?.nume || '')}</b>${g.broker?.email ? ` (<a href="mailto:${esc(g.broker.email)}">${esc(g.broker.email)}</a>)` : ''} <b>polița în original</b> — la depunere trebuie prezentată în original.</p>` +
         `<p>Termen depunere: <b>${fmtZi(l.termen_depunere)}</b>. Când vine originalul, încarcă-l în platformă (număr poliță + valoarea primei) și indicatorul „Garanție participare” devine verde.</p>` +
         `<p style="margin:10px 0"><a href="${linkFisa}" style="background:#0b4f8a;color:#fff;padding:9px 16px;border-radius:7px;text-decoration:none;font-weight:700">Deschide licitația → tab Garanție</a></p>`);
-      const id = await trimite(to, [OFFICE, meMail].filter((x, i, a) => a.indexOf(x) === i), `✅ Poliță achitată — cere originalul: ${titlu}`, html, out);
+      const id = await trimite(to, ccFara(to, [OFFICE, meMail]), `✅ Poliță achitată — cere originalul: ${titlu}`, html, out);
       await db.from('ofertare_garantii').update({ notificat_achitata_la: now, updated_at: now }).eq('id', gid);
       return json({ ok: true, id, atasate: out.length, sarite, catre: to });
     }

@@ -5,7 +5,9 @@
 -- Cine setează responsabilul 2 = cine setează azi responsabilul 1 (trigger-ul fn_ofertare_licitatii_scriere: acces Ofertare); R2 ≠ R1 (CHECK).
 -- ON DELETE SET NULL: ștergerea unui profil care e R2 golește R2 (ca acțiune FK; sub service_role trigger-ul de scriere o refuză, la fel cum
 -- FK-ul fără acțiune al lui responsabil_id refuză azi ștergerea unui responsabil — ștergerile de profil se fac ca postgres).
--- Revenire: supabase/revenire/20261121a_ofertare_responsabil2_ROLLBACK.sql (armată; ÎNTÂI se retrage UI-ul care citește coloanele). LIVRARE: doar prin scripts/livrare_migrare.sh.
+-- Revenire: supabase/revenire/20261121a_ofertare_responsabil2_ROLLBACK.sql (armată). ÎNTÂI se retrag UI-ul ȘI edge-urile care citesc responsabil2_id (ofertare-rc-necitit,
+-- ofertare-seap-veghe, ofertare-etapa1-mail, ofertare-garantie-mail — redeploy pe versiunea anterioară), apoi revenirea BD. LIVRARE: doar prin scripts/livrare_migrare.sh.
+-- ORDINEA LA LIVRARE: migrarea ÎNAINTEA deploy-ului edge / UI (acestea selectează responsabil2_id).
 DO $pre$
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261121a_ofertare_responsabil2:' || txid_current() THEN

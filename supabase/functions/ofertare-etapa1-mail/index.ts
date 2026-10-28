@@ -85,7 +85,7 @@ Deno.serve(async (req: Request) => {
     if (rids.length) {
       const { data } = await db.from('profiles').select('id, name, email').in('id', rids);
       const ps = rids.map((id: string) => (data || []).find((p: any) => p.id === id)).filter(Boolean);
-      if (ps.length) resp = { name: ps.map((p: any) => p.name).filter(Boolean).join(' + '), emails: [...new Set(ps.map((p: any) => p.email).filter(Boolean))] };
+      if (ps.length) resp = { name: ps.map((p: any) => p.name).filter(Boolean).join(' + '), emails: [...new Set(ps.map((p: any) => String(p.email ?? '').trim().toLowerCase()).filter(Boolean))] };
     }
     const pdf = (docs || []).filter((d: any) => /\.pdf$/i.test(d.nume_original || ''));
     const nr = (arr: any[], f: (x: any) => boolean) => arr.filter(f).length;
@@ -165,7 +165,7 @@ Deno.serve(async (req: Request) => {
       if (actiune === 'previzualizare') return json({ ok: true, html, rezumat: { docs: s.docs, cerinte: s.cerinte, acoperire: s.acoperire, clarificari: s.clarificari, sarcini: s.sarcini.length, neevaluate: s.neevaluate, responsabil: s.resp?.name || null }, destinatari: team.map((p: any) => p.email) });
       // responsabilul în TO, restul echipei în CC
       const to = s.resp?.emails?.length ? s.resp.emails : team.map((p: any) => p.email);
-      const cc = team.map((p: any) => p.email).filter((e: string) => !to.includes(e));
+      const cc = team.map((p: any) => p.email).filter((e: string) => e && !to.map((t: string) => t.toLowerCase()).includes(String(e).trim().toLowerCase()));
       const subject = `📑 Etapa 1 gata — ${s.l.nr_anunt} ${s.l.autoritate}: ${s.sarcini.length} sarcini, depunere ${fmtZi(s.termen)}`;
       const id = await trimite(to, cc, subject, html);
       await db.from('ofertare_mailuri').insert({ licitatie_id: lid, tip: 'etapa1', destinatari: [...to, ...cc], subiect: subject, corp_html: html, trimis_de: userId, resend_id: id,
@@ -196,7 +196,7 @@ Deno.serve(async (req: Request) => {
           if (!deja?.length && team.length) {
             const html = htmlEtapa1(s, team).replace('📑 Etapa 1 încheiată', `⏰ ${s.zile} zile până la depunere`);
             const to = s.resp?.emails?.length ? s.resp.emails : team.map((p: any) => p.email);
-            const cc = team.map((p: any) => p.email).filter((e: string) => !to.includes(e));
+            const cc = team.map((p: any) => p.email).filter((e: string) => e && !to.map((t: string) => t.toLowerCase()).includes(String(e).trim().toLowerCase()));
             const subject = `⏰ ${s.zile} zile până la depunere — ${s.l.nr_anunt} ${s.l.autoritate}: ${s.sarcini.length} sarcini deschise`;
             try { const id = await trimite(to, cc, subject, html); await db.from('ofertare_mailuri').insert({ licitatie_id: r.id, tip: 'reminder_depunere', destinatari: [...to, ...cc], subiect: subject, corp_html: html, resend_id: id, rezumat: rez }); reminder = true; } catch (e) { rez.reminder_eroare = (e as Error).message; }
           }
