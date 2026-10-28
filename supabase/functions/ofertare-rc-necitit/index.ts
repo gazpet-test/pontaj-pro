@@ -12,7 +12,8 @@
 // Citește doar metadate (tip, status, nume fișier, termen) — NU textul documentelor. Nu pornește procesări, nu atinge bani sau drepturi.
 // Erori de business → return, nu throw.
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { destinatariLicitatie, emailValid, OWNER_PRINCIPAL, type Destinatari } from './destinatari.ts'
+import { destinatariLicitatie, emailValid, OWNER_PRINCIPAL, type Destinatari, type Responsabil } from './destinatari.ts'
+import { trimiteLicitatie, type Rezultat } from './trimitere.ts'
 
 const FROM = 'PontajPRO <rapoarte@gazpet.ro>'
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { 'Content-Type': 'application/json' } })
@@ -88,14 +89,19 @@ Deno.serve(async (req) => {
   const { data: resps, error: eResp } = respIds.length
     ? await sb.from('profiles').select('id, name, email').in('id', respIds) : { data: [], error: null }
   if (eResp || !Array.isArray(resps)) return await esec('profil responsabil: ' + (eResp?.message || 'fără date'), deTrimis)
+  // review #901 r1 (P2-01): o licitație revendicată care lipsește din citire = citire incompletă → eroare + eliberarea revendicărilor
+  // (nu se degradează la „FĂRĂ RESPONSABIL”); responsabil_id NULL și profil inexistent rămân fallback-uri legitime
+  const lipsa = deTrimis.filter((l) => !lics.some((x: any) => Number(x.id) === Number(l.licitatie_id)))
+  if (lipsa.length) return await esec('citire incompletă: licitațiile ' + lipsa.map((l) => l.licitatie_id).join(', ') + ' lipsesc', deTrimis)
   const dest = new Map<number, Destinatari>()
   for (const l of deTrimis) {
-    const rid = lics.find((x: any) => Number(x.id) === Number(l.licitatie_id))?.responsabil_id ?? null
-    const p = rid ? (resps.find((x: any) => x.id === rid) ?? { name: null, email: null }) : null
-    dest.set(l.licitatie_id, destinatariLicitatie(p, owner)!)
+    const rid = lics.find((x: any) => Number(x.id) === Number(l.licitatie_id))!.responsabil_id ?? null
+    const p = rid ? resps.find((x: any) => x.id === rid) : null
+    const r: Responsabil = !rid ? { stare: 'fara_responsabil' } : !p ? { stare: 'profil_lipsa' } : { stare: 'profil', name: p.name, email: p.email }
+    dest.set(l.licitatie_id, destinatariLicitatie(r, owner)!)
   }
 
-  // review Copilot r4 (P1): câte UN mail per licitație, cu cheia de idempotență a ACELEI licitații ('rc-necitit-<licitație>-<zi>-<id maxim>',
+  // review Copilot r4 (P1): câte UN mail per licitație, cu cheia de idempotență a ACELEI licitații ('rc-necitit-<licitație>-<zi>',
   // calculată în SQL, stabilă la orice reîncercare) — confirmarea / eliberarea sunt tot per licitație, deci nu mai există un lot a cărui
   // cheie să se schimbe când doar o parte din licitații trebuie reîncercate
   const htmlLic = (l: Lic, d: Destinatari) => `
@@ -115,34 +121,24 @@ Deno.serve(async (req) => {
     </div>
   </div>`
 
-  const rezultate: Record<string, unknown>[] = []
-  let trimise = 0
+  // trimiterea + rezolvarea revendicării: trimitere.ts (rezultate trimis / trimis_neconfirmat / conflict / necunoscut / refuzat, review #901 r1)
+  const rezultate: (Rezultat & { catre?: number; fara_responsabil?: boolean })[] = []
   for (const l of deTrimis) {
     const d = dest.get(l.licitatie_id)!
-    let resp: Response | null = null, eroare: string | null = null
-    try {
-      resp = await fetch('https://api.resend.com/emails', {
-        method: 'POST', headers: { Authorization: 'Bearer ' + RESEND, 'Content-Type': 'application/json', 'Idempotency-Key': String(l.cheie_mail) },
-        body: JSON.stringify({ from: FROM, to: d.to, ...(d.cc.length ? { cc: d.cc } : {}),
-          subject: unRand(`🚨 RC necitit${d.faraResponsabil ? ' — FĂRĂ RESPONSABIL' : ''}: ${unRand(l.nr_anunt || l.licitatie_id)} — ${l.zile_depunere <= 0 ? 'depunere AZI' : l.zile_depunere + ' zile până la depunere'}`), html: htmlLic(l, d) }),
-      })
-    } catch (e) { eroare = 'transport: ' + String((e as Error)?.message || e).slice(0, 200) }
-    if (!resp || resp.status >= 500) {
-      // rezultat AMBIGUU: revendicarea rămâne „în curs”; rularea următoare (după 10 minute) o re-revendică și reîncearcă cu aceeași cheie
-      rezultate.push({ licitatie_id: l.licitatie_id, rezultat: 'necunoscut', eroare: eroare ?? ('Resend ' + resp!.status) })
-      continue
-    }
-    const txt = await resp.text()
-    if (!resp.ok && resp.status !== 409) {
-      const { data, error } = await sb.rpc('ofertare_alerta_rc_mail_elibereaza', { p_licitatie_id: l.licitatie_id, p_amprenta: l.amprenta_mail })
-      rezultate.push({ licitatie_id: l.licitatie_id, rezultat: 'refuzat', eroare: 'Resend ' + resp.status + ': ' + txt.slice(0, 200), eliberat: !error && data === true })
-      continue
-    }
-    // trimis (2xx, sau 409 = aceeași cheie deja folosită ⇒ deja trimis)
-    const { data, error } = await sb.rpc('ofertare_alerta_rc_mail_confirma', { p_licitatie_id: l.licitatie_id, p_amprenta: l.amprenta_mail })
-    trimise++
-    rezultate.push({ licitatie_id: l.licitatie_id, rezultat: 'trimis', confirmat: !error && data === true, catre: d.to.length + d.cc.length, fara_responsabil: d.faraResponsabil })
+    const payload = { from: FROM, to: d.to, ...(d.cc.length ? { cc: d.cc } : {}),
+      subject: unRand(`🚨 RC necitit${d.faraResponsabil ? ' — FĂRĂ RESPONSABIL' : ''}: ${unRand(l.nr_anunt || l.licitatie_id)} — ${l.zile_depunere <= 0 ? 'depunere AZI' : l.zile_depunere + ' zile până la depunere'}`), html: htmlLic(l, d) }
+    const rez = await trimiteLicitatie(l.licitatie_id, String(l.cheie_mail), payload, {
+      trimite: async (cheie, body) => {
+        const resp = await fetch('https://api.resend.com/emails', { method: 'POST',
+          headers: { Authorization: 'Bearer ' + RESEND, 'Content-Type': 'application/json', 'Idempotency-Key': cheie }, body: JSON.stringify(body) })
+        return { status: resp.status, text: await resp.text() }
+      },
+      confirma: async () => await sb.rpc('ofertare_alerta_rc_mail_confirma', { p_licitatie_id: l.licitatie_id, p_amprenta: l.amprenta_mail }),
+      elibereaza: async () => await sb.rpc('ofertare_alerta_rc_mail_elibereaza', { p_licitatie_id: l.licitatie_id, p_amprenta: l.amprenta_mail }),
+    })
+    rezultate.push({ ...rez, catre: d.to.length + d.cc.length, fara_responsabil: d.faraResponsabil })
   }
+  const trimise = rezultate.filter((x) => x.rezultat === 'trimis' || x.rezultat === 'trimis_neconfirmat').length
   return json({ ok: rezultate.every((x) => x.rezultat === 'trimis'), notificari, mail: trimise, rezultate,
     ...(neeliberateProcesate.length ? { revendicari_neeliberate: neeliberateProcesate } : {}) })
 })
