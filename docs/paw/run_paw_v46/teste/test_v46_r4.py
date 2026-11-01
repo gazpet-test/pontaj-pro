@@ -46,7 +46,7 @@ class Navigation(unittest.TestCase):
             self.assertEqual(pg.events,[])
 
 class Registry(unittest.TestCase):
-    def run_case(self, initial, label='dosar-123', close=False, failed=False):
+    def run_case(self, initial, label='dosar-123', close=False, failed=False, raw=None, mismatch=False):
         source=(HERE/'run_paw.ps1').read_text()
         begin=source.index('    "gem-inchide" {' if close else '    "gem" {',source.index('# --- rulare ---'))
         end=source.index('    "gem" {',begin) if close else source.index('\n  }\n  if ($rez',begin)
@@ -59,7 +59,7 @@ $script:GemLabel='__LABEL__';$script:events=@()
 $T=@{exe='fake';timeout=120};$BriefFull='fake.md';$GEMPW='fake.py'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\run_paw.ps1',[ref]$tokens,[ref]$errors)
-foreach($name in @('GemEticheta','GemUrl','CitesteGemLucrari','ScrieGemLucrari')){
+foreach($name in @('GemEticheta','GemUrl','GemCheiUnice','CitesteGemLucrari','ScrieGemLucrari')){
  $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true)
  Invoke-Expression $fn.Extent.Text
 }
@@ -71,13 +71,14 @@ function AsteaptaFaraDriverRamas{}
 function netstat.exe {return '127.0.0.1:9333 LISTENING'}
 function Ruleaza($exe,$argv){
  $script:events+=,@($argv)
- return @{out="answer`nGEM_CHAT_URL https://gemini.google.com/app/abc123`n";err='';exit=0;timeout=$false}
+ $u=[string]$argv[-1];if($u -ceq 'https://gemini.google.com/app' -or '__MISMATCH__' -eq '1'){$u='https://gemini.google.com/app/abc123'}
+ return @{out="answer`nGEM_CHAT_URL $u`n";err='';exit=0;timeout=$false}
 }
 [void][IO.Directory]::CreateDirectory((Join-Path $DATA 'state'))
 [IO.File]::WriteAllText((Join-Path $DATA 'state\gem_lucrari.json'),'__INITIAL__')
 __BODY__
 @{events=$script:events;rows=(Get-Content (Join-Path $DATA 'state\gem_lucrari.json') -Raw|ConvertFrom-Json);log=$(if(Test-Path $script:OutFull){[IO.File]::ReadAllText($script:OutFull)}else{''})}|ConvertTo-Json -Depth 10 -Compress
-'''.replace('__LABEL__',label or '').replace('__INITIAL__',json.dumps(initial)).replace('__BODY__',body)
+'''.replace('__LABEL__',label or '').replace('__INITIAL__',raw if raw is not None else json.dumps(initial)).replace('__MISMATCH__','1' if mismatch else '0').replace('__BODY__',body)
         if failed:
             script=script.replace("err='';exit=0;timeout=$false","err='';exit=3;timeout=$false")
         return json.loads(Isolation().ps(script))

@@ -1,3 +1,21 @@
+# Paw v4.6 - runda 5 (01.11.2026, Claude chat, dupa Jakarinos r4 NO-GO)
+
+Stare: 185/185 executii de test Paw (teste/run_r5.py, RESULTATS_r5.json, r5_execution.log).
+SHA256 SHA256.json (manifest de aprobat la instalare): 802D870C01AC544BDBB1BC4FA4188700FBEAFF986805836BF0B1880B8FF5EFDA.
+
+- P1 r4 (URL Gemini falsificabil din raspuns): gemini_pw.py url_final() - dupa ORICE trimitere
+  URL-ul real al tab-ului trebuie sa fie /app/<hex>, altfel GEM_EROARE url_invalid si exit 3;
+  la conversatie continuata URL-ul real trebuie sa fie identic cu tinta. GEM_CHAT_URL vine doar
+  din pg.url si e mereu ultima linie. A doua bariera in run_paw.ps1: la eticheta existenta,
+  URL-ul raportat diferit de tinta -> gem_url_raspuns_invalid. Teste: test_v46_r5.UrlFinal
+  (marker fals in raspuns + tab ramas pe /app -> eroare), RegistryR5.test_launcher_refuses_other_conversation_for_continued_label.
+- P2 r4 (chei duplicate in registru): run_paw.ps1 GemCheiUnice scaneaza textul brut si refuza
+  cheie repetata in acelasi obiect (eticheta sau camp), cheie cu escape (-) si acolade
+  dezechilibrate; randul trebuie sa aiba exact url + schimburi. Teste: RegistryR5 (duplicat
+  eticheta, duplicat camp, duplicat prin escape, camp in plus, registru valid).
+- test_v46_r4 Registry: Ruleaza fals intoarce acum URL-ul tintei (conversatie continuata), plus
+  optiunile raw/mismatch; SHA256.json actualizat pentru run_paw.ps1 si gemini_pw.py.
+
 # Paw v4.6 - runda 4 (27.10.2026)
 
 Stare: implementare locala; 152/152 executii de test Paw + 40/40 paw-juridic verzi.

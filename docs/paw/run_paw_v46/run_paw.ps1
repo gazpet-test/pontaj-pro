@@ -571,6 +571,36 @@ function GemEticheta([string]$value) {
  return $value
 }
 function GemUrl([string]$value) {return $value -cmatch '\Ahttps://gemini\.google\.com/app/[0-9a-fA-F]+\z'}
+# r5 (Jakarinos r4 P2): ConvertFrom-Json pastreaza tacit ultima cheie duplicata; scanez textul brut si refuz orice cheie
+# repetata in acelasi obiect (eticheta sau camp) si orice cheie cu escape (- ar ocoli comparatia pe text)
+function GemCheiUnice([string]$raw) {
+ $stack=New-Object 'System.Collections.Generic.Stack[object]'
+ $i=0;$n=$raw.Length
+ while($i -lt $n){
+  $c=$raw[$i]
+  if($c -eq [char]'{'){$stack.Push((New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)));$i++;continue}
+  if($c -eq [char]'}'){if($stack.Count -eq 0){throw 'gem_registru_invalid'};[void]$stack.Pop();$i++;continue}
+  if($c -eq [char]'"'){
+   $start=++$i;$esc=$false
+   while($true){
+    if($i -ge $n){throw 'gem_registru_invalid'}
+    $d=$raw[$i]
+    if($d -eq [char]'\'){$esc=$true;$i+=2;continue}
+    if($d -eq [char]'"'){break}
+    $i++
+   }
+   $key=$raw.Substring($start,$i-$start);$i++
+   $j=$i;while($j -lt $n -and [char]::IsWhiteSpace($raw[$j])){$j++}
+   if($j -lt $n -and $raw[$j] -eq [char]':'){
+    if($esc -or $stack.Count -eq 0){throw 'gem_registru_invalid'}
+    if(-not $stack.Peek().Add($key)){throw 'gem_registru_invalid'}
+   }
+   continue
+  }
+  $i++
+ }
+ if($stack.Count -ne 0){throw 'gem_registru_invalid'}
+}
 function CitesteGemLucrari {
  if(-not $script:LockFs){throw 'gem_lock_lipsa'}
  $script:GemRegistry=CaleSigura (Join-Path $DATA 'state\gem_lucrari.json') @($DATA) $false
@@ -579,11 +609,12 @@ function CitesteGemLucrari {
   AssertCdxSingleFile $script:GemRegistry
   $raw=Get-Content -LiteralPath $script:GemRegistry -Raw -Encoding UTF8
   if($raw.Trim() -notmatch '^\{'){throw 'gem_registru_invalid'}
+  GemCheiUnice $raw
   $obj=ConvertFrom-Json -InputObject $raw -ErrorAction Stop
   foreach($prop in $obj.PSObject.Properties){
    [void](GemEticheta $prop.Name)
    $row=$prop.Value
-   if($null -eq $row -or $row.url -isnot [string] -or $row.schimburi -isnot [int] -or $row.schimburi -lt 0 -or $row.schimburi -gt 30){throw 'gem_registru_invalid'}
+   if($null -eq $row -or $row -isnot [Management.Automation.PSCustomObject] -or @($row.PSObject.Properties).Count -ne 2 -or $row.url -isnot [string] -or $row.schimburi -isnot [int] -or $row.schimburi -lt 0 -or $row.schimburi -gt 30){throw 'gem_registru_invalid'}
    $rows[$prop.Name]=@{url=$row.url;schimburi=$row.schimburi}
   }
  }
@@ -738,6 +769,8 @@ try {
        # Only final physical protocol line is accepted, never text inside answer.
        $match=[regex]::Match([string]$rez.out,'(?:\r?\n|\A)GEM_CHAT_URL (https://gemini\.google\.com/app/[0-9a-fA-F]+)\r?\n\z')
        if(-not $match.Success){throw 'gem_url_raspuns_invalid'}
+       # r5 (Jakarinos r4 P1, a doua bariera): o lucrare continuata ramane pe aceeasi conversatie
+       if($target -cne 'https://gemini.google.com/app' -and $match.Groups[1].Value -cne $target){throw 'gem_url_raspuns_invalid'}
        $rows[$script:GemLabel]=@{url=$match.Groups[1].Value;schimburi=($count+1)}
        ScrieGemLucrari $rows
       }

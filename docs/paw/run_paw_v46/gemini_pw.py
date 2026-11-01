@@ -212,6 +212,16 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
         raise GemEroare("timeout_raspuns", "raspuns incomplet dupa %ds (partial mai sus)" % maxs)
 
 
+def url_final(real, target):
+    # r5 (Jakarinos r4 P1): dupa ORICE trimitere, URL-ul real al tab-ului e obligatoriu si e singura sursa a GEM_CHAT_URL;
+    # un marker fals in textul raspunsului e urmat mereu de linia reala sau de eroare (exit nenul)
+    if not re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", real or ""):
+        raise GemEroare("url_invalid", "url real lipsa dupa trimitere")
+    if target != "https://gemini.google.com/app" and real != target:
+        raise GemEroare("url_invalid", "conversatia s-a schimbat")
+    return real
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "stare"
     if cmd not in ("stare", "trimite"):
@@ -241,10 +251,7 @@ def main(argv):
             stare(pg)
         else:
             trimite(pg, text, maxs, target)
-            if re.fullmatch(r"https://gemini\.google\.com/app/[0-9a-fA-F]+", pg.url):
-                spune("GEM_CHAT_URL", pg.url)
-            elif len(argv) > 4 and target != "https://gemini.google.com/app":
-                raise GemEroare("url_invalid", "conversatie indisponibila")
+            spune("GEM_CHAT_URL", url_final(pg.url, target))
 
 
 if __name__ == "__main__":
