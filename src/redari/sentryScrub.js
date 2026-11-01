@@ -19,6 +19,9 @@ const RX_CALE_ENC = /%2Fredari%2Fraspuns%2F([^\s/?#"'&%]+)/gi
 // `raspuns/` sau `raspuns%2F`, apoi tokenul de 43; `p_token`, până la 16 separatoare (non-token sau %XX), apoi tokenul de 43
 const RX_TOKEN_RASPUNS = /(raspuns(?:\/|%2F))([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/gi
 const RX_TOKEN_P_TOKEN = /(p_token(?:%[0-9A-Fa-f]{2}|[^A-Za-z0-9_-]){0,16})([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/gi
+// r8 P1-1 (Jakarinos): cheie SERIALIZATĂ cu „token” sau „raspuns” în nume (ex. `"token_raspuns_public":"<43>"` într-un corp JSON),
+// cu sufix de cheie și până la 16 separatoare (sau %XX) — tokenul de 43 se colectează și se înlocuiește
+const RX_TOKEN_CHEIE = /((?:token|raspuns)[A-Za-z0-9_-]{0,32}?(?:%[0-9A-Fa-f]{2}|[^A-Za-z0-9_-]){1,16})([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/gi
 const RX_T43 = /^[A-Za-z0-9_-]{43}$/
 const RX_T43_ORIUNDE = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/
 const RX_DROP = /\/redari\/raspuns|rpc\/fn_red_formular_public|rpc\/fn_red_raspuns_public/i
@@ -28,7 +31,7 @@ const RX_RASPUNS_PUBLIC = /\/redari\/raspuns/i
 const MAX_DECODARI = 3
 const MIN_LUNGIME_COADA = 16
 
-const pareSuspect = (s) => /redari|raspuns|p_token/i.test(s)
+const pareSuspect = (s) => /redari|raspuns|token/i.test(s)
 const cheieDeToken = (cheie) => typeof cheie === 'string' && /token/i.test(cheie)
 // r7 P1-2: valoarea unei chei de token e token dacă ORICE formă decodată are exact 43 [A-Za-z0-9_-] (ex. `%30` + 42 caractere)
 const valoareDeToken = (v) => typeof v === 'string' && formele(v).some(f => RX_T43.test(f))
@@ -51,7 +54,7 @@ export const formele = (s) => {
   return lista
 }
 const colecteazaTokenuri = (forma, set) => {
-  for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN]) {
+  for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN, RX_TOKEN_CHEIE]) {
     rx.lastIndex = 0
     for (const m of forma.matchAll(rx)) { const t = m[m.length - 1]; if (t && t !== TOKEN && t.length >= MIN_LUNGIME_COADA) set.add(t) }
   }
@@ -61,6 +64,7 @@ const aplicaRegulileDeCale = (s) => s
   .replace(RX_CALE, `/redari/raspuns/${TOKEN}`)
   .replace(RX_TOKEN_RASPUNS, (_, prefix) => `${prefix}${TOKEN}`)
   .replace(RX_TOKEN_P_TOKEN, (_, prefix) => `${prefix}${TOKEN}`)
+  .replace(RX_TOKEN_CHEIE, (_, prefix) => `${prefix}${TOKEN}`)
 const varianteToken = (t) => new Set([t, encodeURIComponent(t), encodeURIComponent(encodeURIComponent(t))])
 
 // Redactarea unui șir: tokenurile globale (din tot evenimentul) + tokenurile din propriile forme + regulile de cale.
@@ -161,12 +165,13 @@ export function esteDinFormularulPublic(event) {
 }
 
 // (3) verificarea finală pe serializare, pe toate formele decodate
-export function maiScurgeToken(event, tokenuri) {
+// `aPurtatToken` = evenimentul a avut tokenuri colectate SAU un corp de cerere suspect (șters fără să-l putem redacta sigur)
+export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0) {
   const text = serializeaza(event)
   for (const f of formele(text)) {
     if (contineVreunToken(f, tokenuri)) return true
     if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true
-    if (tokenuri.size && RX_T43_ORIUNDE.test(f)) return true   // a purtat token: orice alt șir de 43 rămas e suspect
+    if (aPurtatToken && RX_T43_ORIUNDE.test(f)) return true   // a purtat token: orice alt șir de 43 rămas e suspect
   }
   return false
 }
@@ -193,15 +198,18 @@ export function scrubSentryEvent(event) {
   try {
     if (event === null || typeof event !== 'object') return null
     if (esteDinFormularulPublic(event)) return null
-    const tokenuri = colecteazaTokenuriEveniment(event)
+    const tokenuri = colecteazaTokenuriEveniment(event)   // ÎNAINTE de ștergerea corpului — colectează și din request.data/body
+    let corpSuspect = false
     const req = event.request
     if (req && typeof req === 'object') {
       const corp = serializeaza({ data: req.data, body: req.body })
       const urlRpc = vreoFormaSePotriveste(typeof req.url === 'string' ? req.url : '', /rpc\/fn_red_/i)
-      if (urlRpc || contineVreunToken(corp, tokenuri) || /p_token|raspuns/i.test(corp)) { delete req.data; delete req.body }
+      // r8 P1-1: corpul suspect se șterge, dar evenimentul rămâne „purtător de token” — orice șir de 43 rămas în rest ⇒ null
+      corpSuspect = urlRpc || contineVreunToken(corp, tokenuri) || formele(corp).some(f => /p_token|raspuns|token/i.test(f))
+      if (corpSuspect) { delete req.data; delete req.body }
     }
     redacteazaAdanc(event, tokenuri)
-    if (maiScurgeToken(event, tokenuri)) return null
+    if (maiScurgeToken(event, tokenuri, tokenuri.size > 0 || corpSuspect)) return null
     return event
   } catch {
     return null

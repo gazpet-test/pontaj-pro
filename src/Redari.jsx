@@ -181,13 +181,13 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       if (g !== generatie.current) return   // a pornit o cerere mai nouă: rândurile și totalul acesteia nu se mai aplică
       if (error) throw error
       setRanduri(data || []); setTotal(count || 0)
-    } catch (e) { if (g === generatie.current) show('Registru: ' + msgEroare(e), 'error') }
+    } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); show('Registru: ' + msgEroare(e), 'error') } }   // r8 P2-1: o încărcare eșuată nu lasă rândurile filtrului anterior (borderoul le-ar exporta)
     finally { if (g === generatie.current) setLoading(false) }
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show])
   useEffect(() => { incarca() }, [incarca])
   useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata])
   // P1-4: selecția e a rândurilor VĂZUTE — se golește la orice schimbare de filtre / pagină
-  useEffect(() => { setSelectie(new Set()) }, [fUat, fTronson, fStare, cautareAplicata, pagina])
+  useEffect(() => { setSelectie(new Set()); setRanduri([]) }, [fUat, fTronson, fStare, cautareAplicata, pagina])   // r8 P2-1: și rândurile se invalidează
 
   const nrPagini = Math.max(1, Math.ceil(total / PAGINA))
   const toateSelectate = randuri.length > 0 && randuri.every(r => selectie.has(r.detinator_id))
