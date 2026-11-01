@@ -117,7 +117,9 @@ export function faraRand(verdicte) {
 // consolidari” e gasit si citit COMPLET (fiecare link din bloc e o consolidare cu data calendaristica valida).
 // Altfel → null (actul cade pe AI, unde un „neschimbat” nu se mai accepta, vezi plafoneazaAI).
 
-export const URL_LEGISLATIE = (id) => `https://legislatie.just.ro/Public/DetaliiDocument/${Number(id)}`;
+// r3 (Copilot r2 P3-01): id strict intreg pozitiv la frontiera DB → HTTP (gazda e fixa)
+export const idOficialValid = (id) => Number.isSafeInteger(Number(id)) && Number(id) > 0 && String(id).trim() === String(Number(id));
+export const URL_LEGISLATIE = (id) => `https://legislatie.just.ro/Public/DetaliiDocument/${idOficialValid(id) ? Number(id) : 0}`;
 
 // Data calendaristica valida (31.02 / 00.13 / ani absurzi → null).
 export function dataISO(z, l, a) {
@@ -131,16 +133,25 @@ export function dataISO(z, l, a) {
 // Istoricul consolidarilor DIN BLOCUL <div id="istoric_fa">…</div> (comentariile HTML scoase).
 // Intoarce datele ISO unice, descrescator; null = bloc lipsa, gol sau citit incomplet (orice <a> din bloc fara
 // data valida) — adica NU exista dovada ca istoricul e complet.
+// r3 (Jakarinos r2 P1-1): elementul cu id EXACT „istoric_fa” (un singur element, atributul id adevarat, nu
+// data-id / istoric_fa_backup), continutul pana la </div>-ul PERECHE; orice <div> imbricat = structura ambigua → null.
+// In fiecare <a>, atributul title ADEVARAT (nu data-title).
+const RE_ID_ISTORIC = /<div\b(?=[^>]*(?:^|\s)id\s*=\s*(?:"istoric_fa"|'istoric_fa'|istoric_fa(?=[\s>])))[^>]*>/gi;
 export function consolidari(html) {
   const s = String(html || '').replace(/<!--[\s\S]*?-->/g, '');
-  const b = s.match(/<div\b[^>]*\bid\s*=\s*['"]?istoric_fa['"]?[^>]*>([\s\S]*?)<\/div>/i);
-  if (!b) return null;
-  const linkuri = [...b[1].matchAll(/<a\b([^>]*)>/gi)];
+  const deschideri = [...s.matchAll(RE_ID_ISTORIC)];
+  if (deschideri.length !== 1) return null;
+  const start = deschideri[0].index + deschideri[0][0].length;
+  const inchidere = s.indexOf('</div', start);
+  if (inchidere < 0) return null;
+  const continut = s.slice(start, inchidere);
+  if (/<div\b/i.test(continut)) return null;
+  const linkuri = [...continut.matchAll(/<a\b([^>]*)>/gi)];
   if (!linkuri.length) return null;
   const out = new Set();
   for (const [, attrs] of linkuri) {
     // formele din istoric: „Consolidarea din …” si „Republicarea din …” (ex. Legea 307/2006, republicata 17.04.2019)
-    const m = attrs.match(/\btitle\s*=\s*(['"])\s*(?:Consolidarea|Republicarea) din (\d{2})\.(\d{2})\.(\d{4})\s*\1/i);
+    const m = (' ' + attrs).match(/\stitle\s*=\s*(['"])\s*(?:Consolidarea|Republicarea) din (\d{2})\.(\d{2})\.(\d{4})\s*\1/i);
     const iso = m && dataISO(m[2], m[3], m[4]);
     if (!iso) return null;
     out.add(iso);
@@ -154,7 +165,8 @@ const TIPURI = {
   oug: { titlu: /^(OUG|ORD DE URGENTA|ORDONANTA DE URGENTA)$/, emitent: /GUVERNUL/ },
   lege: { titlu: /^LEGE$/, emitent: /PARLAMENTUL/ },
   ordin_anre: { titlu: /^ORDIN$/, emitent: /AUTORITATEA NA.IONAL. DE REGLEMENTARE .N DOMENIUL ENERGIEI/ },
-  ordin: { titlu: /^ORDIN$/, emitent: /MINISTERUL/ },
+  // r3 (Jakarinos r2 P1-2): „ordin” de ministru NU e pe calea oficiala — emitentul din ERP e o abreviere
+  // („MDRAP / MDLPA”), nu se poate dovedi exact; actul merge pe AI (plafonat).
 };
 
 // Identitatea actului: titlul „HG        395 02/06/2016 - Portal Legislativ” → tip HG, nr. 395, anul 2016 (exact),
@@ -204,7 +216,7 @@ export function verdictOficial(rand, date, refScan, vazutLa = null) {
 // Imparte lotul: actele cu id oficial se verifica direct, restul (standarde etc.) merg la AI.
 export function imparteLot(lot) {
   const oficial = [], ai = [];
-  for (const n of lot || []) (Number(n?.legislatie_doc_id) > 0 ? oficial : ai).push(n);
+  for (const n of lot || []) (idOficialValid(n?.legislatie_doc_id) ? oficial : ai).push(n);
   return { oficial, ai };
 }
 
@@ -219,9 +231,10 @@ export function plafoneazaAI(verdicte, idsCuOficial) {
 }
 
 // r2: actele cu id oficial primele in rulare → loturile sunt cat mai „pure” (oficial sau AI), mai putine loturi mixte.
+// r3 (Jakarinos r2 P2-3): se aplica DUPA selectia pe prioritate (slice la plafon), nu inainte.
 export function ordineRulare(norme) {
-  const a = (norme || []).filter((n) => Number(n?.legislatie_doc_id) > 0);
-  const b = (norme || []).filter((n) => !(Number(n?.legislatie_doc_id) > 0));
+  const a = (norme || []).filter((n) => idOficialValid(n?.legislatie_doc_id));
+  const b = (norme || []).filter((n) => !idOficialValid(n?.legislatie_doc_id));
   return [...a, ...b];
 }
 

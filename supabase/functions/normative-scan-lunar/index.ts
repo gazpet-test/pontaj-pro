@@ -68,7 +68,9 @@ async function porneste(supa: Supa, test: boolean) {
     .or('prioritate.in.(CRITIC,IMPORTANT,ACTUALIZARE),stare.neq.în vigoare')
     .order('prioritate').order('id');
   if (error) throw new Error('ofertare_normative: ' + error.message);
-  const lista = ordineRulare(norme || []).slice(0, MAX_ACTE);
+  // r3: selectia ramane pe prioritate (CRITIC primele); abia apoi actele oficiale se grupeaza la inceput
+  if ((norme || []).length > MAX_ACTE) console.error(`normative-scan-lunar: ${(norme || []).length} acte > plafonul ${MAX_ACTE}; ultimele ${(norme || []).length - MAX_ACTE} (prioritate mica) nu intra in rulare`);
+  const lista = ordineRulare((norme || []).slice(0, MAX_ACTE));
   return await rpc(supa, 'fn_norm_scan_porneste', {
     p_test: test, p_azi: azi, p_ref_scan: ultimulScan(norme || []),
     p_acte: lista.map((n: any) => n.id), p_marime: MARIME_LOT, p_nr_loturi: nrLoturi(lista.length, MARIME_LOT),
@@ -185,21 +187,32 @@ async function inLant(runId: number) {
 // r2 (Jakarinos P2-5/P2-6, Copilot P2-04): urma verificarii oficiale = informatie, nu pas obligatoriu.
 // Se scrie DOAR pe randul care are inca documentul si baza vazute la citire, si doar daca nu exista deja o urma
 // mai noua (o finalizare intarziata nu suprascrie una mai noua). Esecul sau 0 randuri NU blocheaza notele/mailul.
+// r3 (Jakarinos r2 P2-4): fiecare UPDATE are timeout propriu (5s) si tot auditul un buget (25s), apoi se abandoneaza.
+const URMA_TIMEOUT_MS = 5_000;
+const URMA_BUGET_MS = 25_000;
 async function scrieUrmaOficiala(supa: Supa, runId: number, verdicte: any[]) {
-  for (const v of verdicte.filter((x: any) => x.sursa === 'oficial' && x.doc && x.vazut_la)) {
+  const pana = Date.now() + URMA_BUGET_MS;
+  const deScris = verdicte.filter((x: any) => x.sursa === 'oficial' && x.doc && x.vazut_la);
+  const c = { scrise: 0, sarite_cas: 0, esuate: 0, abandonate: 0 }; // r3 (Copilot r2 P3-02): observabil intr-o singura linie
+  for (const v of deScris) {
+    if (Date.now() > pana) { c.abandonate = deScris.length - c.scrise - c.sarite_cas - c.esuate; break; }
     try {
       let q = supa.from('ofertare_normative').update({
         verificat_auto_la: v.vazut_la,
         verificare_auto: { rulare: runId, verdict: v.verdict, consolidare_curenta: v.curent, nr_consolidari: v.nr_consolidari, baza: v.baza, sursa: URL_LEGISLATIE(v.doc) },
       }).eq('id', v.id).eq('legislatie_doc_id', v.doc).or(`verificat_auto_la.is.null,verificat_auto_la.lt."${v.vazut_la}"`);
       q = v.baza ? q.eq('forma_oficiala_la', v.baza) : q.is('forma_oficiala_la', null);
-      const { data, error } = await q.select('id');
-      if (error) console.error(`normative-scan-lunar: urma oficiala rand ${v.id}: ${error.message}`);
-      else if (!data?.length) console.warn(`normative-scan-lunar: urma oficiala rand ${v.id} nescrisa (randul s-a schimbat sau exista o urma mai noua)`);
+      const { data, error } = await q.select('id').abortSignal(AbortSignal.timeout(URMA_TIMEOUT_MS));
+      if (error) { c.esuate++; console.error(`normative-scan-lunar: urma oficiala rand ${v.id}: ${error.message}`); }
+      else if (!data?.length) c.sarite_cas++;
+      else c.scrise++;
     } catch (e) {
+      c.esuate++;
       console.error(`normative-scan-lunar: urma oficiala rand ${v.id}:`, String((e as Error)?.message || e));
     }
   }
+  const linie = `normative-scan-lunar: urma oficiala rularea ${runId}: ${JSON.stringify(c)} din ${deScris.length}`;
+  if (c.esuate || c.abandonate) console.error(linie); else console.log(linie);
 }
 
 // Finalul, cu lease separat (fn_norm_scan_ia_final). Ordinea e impusa si in baza:

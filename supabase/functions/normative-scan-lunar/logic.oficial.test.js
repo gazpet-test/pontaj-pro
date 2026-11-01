@@ -51,6 +51,20 @@ describe('consolidari()', () => {
     const h = HTML.replace('<html>', `<html><!-- <div id="istoric_fa"><a title='Consolidarea din 01.10.2030'></a></div> --><a title='Consolidarea din 01.10.2029'></a>`);
     expect(consolidari(h)).toEqual(['2026-02-25', '2024-05-24', '2023-04-19', '2016-06-09']);
   });
+  it('r3: div imbricat in istoric → null (nu se citeste partial)', () => {
+    const h = `<div id="istoric_fa"><div><a title="Consolidarea din 24.05.2024">x</a></div><a title="Consolidarea din 25.02.2026">y</a></div>`;
+    expect(consolidari(h)).toBeNull();
+  });
+  it('r3: doar id-ul EXACT conteaza (nu istoric_fa_backup / data-id); doua blocuri → null', () => {
+    expect(consolidari(`<div id="istoric_fa_backup"><a title="Consolidarea din 24.05.2024">x</a></div>`)).toBeNull();
+    expect(consolidari(`<div data-id="istoric_fa"><a title="Consolidarea din 24.05.2024">x</a></div>`)).toBeNull();
+    const doua = `<div id="istoric_fa"><a title="Consolidarea din 24.05.2024">x</a></div><div id='istoric_fa'><a title="Consolidarea din 25.02.2026">y</a></div>`;
+    expect(consolidari(doua)).toBeNull();
+  });
+  it('r3: data-title nu tine loc de title', () => {
+    expect(consolidari(`<div id="istoric_fa"><a data-title="Consolidarea din 24.05.2024" title="Alta forma">x</a></div>`)).toBeNull();
+    expect(consolidari(`<div id="istoric_fa"><a data-title="x" title="Consolidarea din 24.05.2024">x</a></div>`)).toEqual(['2024-05-24']);
+  });
   it('republicarea face parte din istoric (Legea 307/2006: „Republicarea din 17.04.2019”)', () => {
     const bloc = `<a title='Consolidarea din 08.05.2026'>x</a><a title='Republicarea din 17.04.2019' href='~/x?isFormaDeBaza=True'>y</a><a title='Consolidarea din 18.09.2006'>z</a>`;
     expect(consolidari(pagina({ bloc }))).toEqual(['2026-05-08', '2019-04-17', '2006-09-18']);
@@ -79,7 +93,11 @@ describe('paginaPotrivita()', () => {
     const titluOrdin = 'ORDIN        395 02/06/2016 - Portal Legislativ';
     expect(paginaPotrivita(pagina({ titlu: titluOrdin, emitent: 'AUTORITATEA NAŢIONALĂ DE REGLEMENTARE ÎN DOMENIUL ENERGIEI' }), anre)).toBe(true);
     expect(paginaPotrivita(pagina({ titlu: titluOrdin, emitent: 'MINISTERUL DEZVOLTĂRII' }), anre)).toBe(false);
-    expect(paginaPotrivita(pagina({ titlu: titluOrdin, emitent: 'MINISTERUL DEZVOLTĂRII' }), rand({ tip: 'ordin' }))).toBe(true);
+  });
+  it('r3: ordin de ministru nu e pe calea oficiala (emitentul nu se poate dovedi exact) → false', () => {
+    const titluOrdin = 'ORDIN        395 02/06/2016 - Portal Legislativ';
+    expect(paginaPotrivita(pagina({ titlu: titluOrdin, emitent: 'MINISTERUL TRANSPORTURILOR' }), rand({ tip: 'ordin' }))).toBe(false);
+    expect(paginaPotrivita(pagina({ titlu: titluOrdin, emitent: 'MINISTERUL SĂNĂTĂȚII' }), rand({ tip: 'ordin' }))).toBe(false);
   });
   it('OUG: ambele forme de titlu ale portalului', () => {
     const oug = rand({ tip: 'oug', numar: '92/2021' });
