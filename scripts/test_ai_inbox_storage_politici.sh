@@ -168,7 +168,7 @@ ok "1p politică FOR ALL fără USING / WITH CHECK: precondiția trece, dar nu d
 [ "$(vede_a4 "$BAZA")" = 0 ] || esec "2 gaura nu e închisă: contul fără drepturi vede $(vede_a4 "$BAZA") obiecte (aștept 0 — nici nedecisul, varianta B)"
 [ "$(alte_politici "$BAZA")" = "$POL0" ] || esec "2 celelalte politici storage s-au schimbat"
 [ "$(date_ "$BAZA")" = "$DATE0" ] || esec "2 datele s-au schimbat"
-ok "2 aplicare (pre + post trecute): gaura închisă (10 → 1), celelalte politici storage și datele identice"
+ok "2 aplicare (pre + post trecute): gaura închisă (10 → 0, nici nedecisul — variantele A + B), celelalte politici storage și datele identice"
 suita "după 20261103c"
 
 # 3. reaplicare

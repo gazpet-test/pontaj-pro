@@ -14,7 +14,8 @@
 --      noi (`<ts>_<rand>`), deci niciun drum legitim nu reocupă o cale. NOT EXISTS rulează cu RLS-ul cozii al apelantului: pe
 --      `<uid>/…` rândurile sunt ale lui (uploadat_de = el, legate la INSERT — 4a), deci le vede mereu; vezi limitarea c pentru
 --      `wizard-angajare/…`.
---   2. ai_inbox_obj_select + ai_inbox_obj_delete (aceeași expresie). Vede / șterge un obiect:
+--   2. ai_inbox_obj_select + ai_inbox_obj_delete (aceeași structură; pe rândurile „nedecis” DIFERĂ — varianta B, 01.11: SELECT pentru
+--      uploader / owner / HR, DELETE doar uploader / owner). Vede / șterge un obiect:
 --      (a) cine l-a urcat: owner_id = auth.uid() (îl pune storage-api din JWT; prin API nu se alege). Acoperă și pașii de dinaintea
 --          rândului din coadă (panoul / wizard-ul șterg fișierul când INSERT-ul rândului pică) și căile wizard-ului;
 --      (b) cine poate confirma rândul din coadă LEGAT de obiect: EXISTS rând cu fisier_path = name ȘI uploadat_de = owner_id-ul
@@ -50,7 +51,8 @@
 --      Împreună: orice rând din coadă (vechi sau nou) arată doar spre un fișier al celui care l-a creat → edge-urile service_role
 --      descarcă / șterg doar fișierul acelui cont. Codul edge-urilor rămâne neschimbat (fără deploy).
 -- NEATINSE: service_role (edge citeste-orice descarcă, cleanup-recycle-bin șterge — ocolesc RLS), celelalte bucket-uri și politicile
--- lor (amprenta lor e comparată pre ↔ post, aici), politicile tabelei ai_documente_inbox, fn_ai_inbox_poate_confirma. Fără date
+-- lor (amprenta lor e comparată pre ↔ post, aici), fn_ai_inbox_poate_confirma, politicile cozii ai_inbox_insert / ai_inbox_delete. Politicile ai_inbox_select / ai_inbox_update SE
+-- SCHIMBĂ (5., varianta A, 01.11): nedecisul doar pentru uploader / owner / HR. Fără date
 -- modificate.
 -- Expresiile noi se compară în postcondiție (și în revenire) cu constante EXACTE ale deparse-ului, cu spațiile albe comprimate
 -- (fișierul e CRLF pe Windows — deparse-ul are LF și indentare proprie); search_path e fixat mai jos, deci deparse-ul e determinist.
@@ -59,13 +61,13 @@
 -- LIMITĂRI ACCEPTATE (de decis separat, nu aici):
 --   a. ÎNCHIS pentru FIȘIERE (varianta B, Răzvan 01.11.2026, Copilot r1 P1-01): fișierul unui rând „nedecis” (modul_tinta NULL) îl văd
 --      doar cine l-a urcat, ownerul și HR (can_access_personal_data) și îl șterg doar cine l-a urcat și ownerul — NU mai „oricine logat”.
---      fn_ai_inbox_poate_confirma rămâne neschimbată (o folosesc și politicile cozii). RĂMÂNE DESCHIS, temă separată: RÂNDUL „nedecis”
---      din coadă (ai_inbox_select / ai_inbox_update au `modul_tinta IS NULL` explicit) și payload_ai-ul lui sunt vizibile oricui logat.
+--      fn_ai_inbox_poate_confirma rămâne neschimbată. ÎNCHIS și pentru RÂNDUL din coadă (5., varianta A, Răzvan 01.11, Jakarinos r2
+--      P1-01 / P1-02): ai_inbox_select / ai_inbox_update — nedecisul îl văd și îl modifică doar uploader / owner / HR (nimeni altcineva
+--      nu-l mai mută în modulul lui și nu-l mai marchează „respins”).
 --      La 01.11: 0 obiecte cu rând „nedecis” în bucket (3 rânduri NULL, toate „respins”, fără fișier).
 --   b. cine poate edita un rând (ai_inbox_update) îi poate schimba modul_tinta, dar doar spre o stare pe care o vede în continuare
---      (PostgreSQL aplică ai_inbox_select și rândului nou — un cont fără drepturi nu mută „nedecisul” în HR, 42501). Un confirmator
---      poate însă muta un rând al lui în „nedecis” (ex. HR un act HR) → fișierul devine vizibil oricui (T6n–T6o). Actorul vedea
---      deja actul (insider, nu escaladare pentru el); politica UPDATE a cozii = migrare separată.
+--      (PostgreSQL aplică ai_inbox_select și rândului nou). Un confirmator HR poate muta un rând HR în „nedecis”: după varianta A
+--      (01.11) nedecisul rămâne vizibil doar uploaderului / ownerului / HR, deci actul NU devine vizibil oricui (T6n–T6o).
 --   c. căile `wizard-angajare/…` nu poartă uid-ul: le apără owner_id-ul + dreptul HR cerut la INSERT. Garda 4d vede acolo doar rândurile
 --      pe care contul HR le vede în coadă: calea eliberată a unui rând mutat într-un modul pe care HR nu-l vede s-ar putea reocupa de
 --      alt cont HR (insider, calea `<ts>_<rand>` trebuie știută). Obiectul nou are alt owner_id → clauza 2b cade (confirmatorii nu-l
@@ -237,6 +239,16 @@ BEGIN
   IF v_n > 0 THEN
     RAISE EXCEPTION 'PRECONDIȚIE 20261103c: % obiect(e) din bucket (și orfani) sunt în afara folderului celui care le-a urcat (owner_id) — se analizează întâi', v_n;
   END IF;
+  -- 5. politicile cozii: EXACT cele live din 01.11 (ai_inbox_select / ai_inbox_update), altfel nu se rescriu tacit
+  IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_select'
+                 AND p.polcmd = 'r' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polwithcheck IS NULL
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((uploadat_de = auth.uid()) OR (modul_tinta IS NULL) OR fn_ai_inbox_poate_confirma(modul_tinta, entitate_id))')
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_update'
+                 AND p.polcmd = 'w' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid]
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((modul_tinta IS NULL) OR fn_ai_inbox_poate_confirma(modul_tinta, entitate_id) OR (uploadat_de = auth.uid()))'
+                 AND regexp_replace(pg_get_expr(p.polwithcheck, p.polrelid), '[[:space:]]+', ' ', 'g') = '(auth.uid() IS NOT NULL)') THEN
+    RAISE EXCEPTION 'PRECONDIȚIE 20261103c: politicile cozii ai_inbox_select / ai_inbox_update nu sunt exact cele live din 01.11';
+  END IF;
 END $pre$;
 
 -- 4c. un rând per fișier + căutarea rândului legat (2b)
@@ -347,6 +359,26 @@ CREATE POLICY ai_inbox_obj_delete ON storage.objects AS PERMISSIVE FOR DELETE TO
                        AND i.modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
          OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner = true)));
 
+-- 5. COADA (varianta A peste B, Răzvan 01.11.2026, Jakarinos r2 P1-01 / P1-02): rândul „nedecis” (modul_tinta NULL) îl văd și îl
+-- modifică DOAR cine l-a urcat, ownerul și HR (can_access_personal_data) — nu mai „oricine logat”. Fără asta, un confirmator din alt
+-- modul își muta în modulul lui nedecisul altcuiva (și primea fișierul prin regula modulului), iar oricine îl putea marca „respins”
+-- (cleanup-recycle-bin, service_role, îi șterge apoi fișierul). Rândurile clasificate: neschimbat (fn_ai_inbox_poate_confirma).
+-- Clasificarea AI (edge citeste-orice) e pe service_role: neatinsă. Consecință acceptată de Răzvan: confirmatorii altor module nu mai
+-- văd / rutează nedecisul din panou.
+DROP POLICY ai_inbox_select ON public.ai_documente_inbox;
+CREATE POLICY ai_inbox_select ON public.ai_documente_inbox AS PERMISSIVE FOR SELECT TO authenticated
+  USING ((uploadat_de = auth.uid())
+    OR (modul_tinta IS NULL
+        AND EXISTS (SELECT 1 FROM public.profiles h WHERE h.id = auth.uid() AND (h.is_owner = true OR h.can_access_personal_data = true)))
+    OR (modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)));
+DROP POLICY ai_inbox_update ON public.ai_documente_inbox;
+CREATE POLICY ai_inbox_update ON public.ai_documente_inbox AS PERMISSIVE FOR UPDATE TO authenticated
+  USING ((uploadat_de = auth.uid())
+    OR (modul_tinta IS NULL
+        AND EXISTS (SELECT 1 FROM public.profiles h WHERE h.id = auth.uid() AND (h.is_owner = true OR h.can_access_personal_data = true)))
+    OR (modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)))
+  WITH CHECK (auth.uid() IS NOT NULL);
+
 DO $post$
 DECLARE
   -- deparse-ul exact (search_path = public, pg_temp), cu spațiile albe comprimate la un singur spațiu
@@ -419,6 +451,17 @@ BEGIN
     RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: bucket-ul ai-documente-inbox nu mai e privat';
   END IF;
   PERFORM set_config('gazpet.c20261103c_alte_politici', '', true);
+  -- 5. coada: ai_inbox_select / ai_inbox_update cu nedecisul doar pentru uploader / owner / HR (exact deparse-ul așteptat), tot 4 politici
+  IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_select'
+                 AND p.polcmd = 'r' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polwithcheck IS NULL
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((uploadat_de = auth.uid()) OR ((modul_tinta IS NULL) AND (EXISTS ( SELECT 1 FROM profiles h WHERE ((h.id = auth.uid()) AND ((h.is_owner = true) OR (h.can_access_personal_data = true)))))) OR ((modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)))')
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_update'
+                 AND p.polcmd = 'w' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid]
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((uploadat_de = auth.uid()) OR ((modul_tinta IS NULL) AND (EXISTS ( SELECT 1 FROM profiles h WHERE ((h.id = auth.uid()) AND ((h.is_owner = true) OR (h.can_access_personal_data = true)))))) OR ((modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)))'
+                 AND regexp_replace(pg_get_expr(p.polwithcheck, p.polrelid), '[[:space:]]+', ' ', 'g') = '(auth.uid() IS NOT NULL)')
+     OR (SELECT count(*) FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass) <> 4 THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: politicile cozii ai_inbox_select / ai_inbox_update nu sunt exact cele noi (nedecis doar uploader / owner / HR)';
+  END IF;
 END $post$;
 
 DO $livrare_final$

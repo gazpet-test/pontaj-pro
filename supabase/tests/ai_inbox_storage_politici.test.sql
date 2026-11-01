@@ -200,15 +200,15 @@ BEGIN
   -- T6 legătura obiect ↔ rând nu se poate falsifica (nici la INSERT, nici după)
   PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, rand || format('(%L, %L, %L, %L)', o1, 'x.pdf', 'in_asteptare', a4), NULL, true),
     m_leg, 'T6a rând nou „nedecis” cu calea actului HR al altcuiva (ai_inbox_insert l-ar permite) → refuz 42501 la INSERT (trg_ai_inbox_fisier_legat)');
-  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, format('UPDATE public.ai_documente_inbox SET fisier_path = %L WHERE id = 602', o1), NULL, true),
-    m_imut, 'T6b rândul nedecis (editabil de oricine) nu primește altă cale → 23514');
-  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, format('UPDATE public.ai_documente_inbox SET uploadat_de = %L WHERE id = 602', a4), NULL, true),
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a2, format('UPDATE public.ai_documente_inbox SET fisier_path = %L WHERE id = 602', o1), NULL, true),
+    m_imut, 'T6b rândul nedecis (editabil de HR, varianta A) nu primește altă cale → 23514');
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a2, format('UPDATE public.ai_documente_inbox SET uploadat_de = %L WHERE id = 602', a4), NULL, true),
     m_imut, 'T6c … nici alt uploadat_de');
-  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, 'UPDATE public.ai_documente_inbox SET fisier_nume = ''alt.pdf'' WHERE id = 602', NULL, true),
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a2, 'UPDATE public.ai_documente_inbox SET fisier_nume = ''alt.pdf'' WHERE id = 602', NULL, true),
     m_imut, 'T6d … nici alt fisier_nume');
-  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, 'UPDATE public.ai_documente_inbox SET fisier_size_bytes = 1 WHERE id = 602', NULL, true),
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a2, 'UPDATE public.ai_documente_inbox SET fisier_size_bytes = 1 WHERE id = 602', NULL, true),
     m_imut, 'T6e … nici altă mărime');
-  PERFORM pg_temp.like(pg_temp.efect('authenticated', a4, 'UPDATE public.ai_documente_inbox SET fisier_mime = NULL WHERE id = 602', NULL, true),
+  PERFORM pg_temp.like(pg_temp.efect('authenticated', a2, 'UPDATE public.ai_documente_inbox SET fisier_mime = NULL WHERE id = 602', NULL, true),
     m_imut, 'T6f … nici alt tip MIME');
   PERFORM pg_temp.like(pg_temp.efect('service_role', NULL, format('UPDATE public.ai_documente_inbox SET fisier_path = %L WHERE id = 601', o7), NULL, true),
     m_imut, 'T6g nemodificabil și pentru service_role');
@@ -227,7 +227,19 @@ BEGIN
         ins, b, a1 || '/fara_owner.pdf', a1 || '/fara_owner.pdf', 'f.pdf', 'clasificat', 'hr', a1), 'authenticated', a2, 'SELECT 1', lista),
     'ok:1:1_ci.pdf,2_nedecis.pdf,7_hr.pdf,CI.pdf', 'T6l obiect fără owner_id: nu se leagă de rând (fail-closed; doar ownerul îl vede)');
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a4, 'UPDATE public.ai_documente_inbox SET modul_tinta = ''hr'' WHERE id = 602'),
-    'err:42501', 'T6m rândul nedecis nu se mută într-un modul în care cel care mută nu-l mai vede (RLS aplică ai_inbox_select și rândului nou)');
+    'ok:0', 'T6m cont fără drepturi nu vede / nu modifică nedecisul altuia (varianta A, 01.11)');
+  -- Jakarinos r2 P1-01 / P1-02 (varianta A): nimeni în afară de uploader / owner / HR nu mai mută nedecisul altuia în modulul lui și
+  -- nu-l mai marchează „respins” (cleanup-recycle-bin i-ar șterge apoi fișierul)
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a5, 'UPDATE public.ai_documente_inbox SET modul_tinta = ''logistica'' WHERE id = 602'),
+    'ok:0', 'T6m2 admin_logistica nu reclasifică nedecisul altuia în logistică (P1-01 r2)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a5, format('SELECT 1 FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o2)),
+    'ok:0', 'T6m3 … deci nici fișierul nedecisului');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a4, 'UPDATE public.ai_documente_inbox SET status = ''respins'' WHERE id = 602'),
+    'ok:0', 'T6m4 cont fără drepturi nu marchează „respins” nedecisul altuia (P1-02 r2: cleanup i-ar șterge fișierul)');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a2, format('SELECT 1 FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o2)),
+    'ok:1', 'T6m5 HR (care n-a urcat) vede fișierul nedecis …');
+  PERFORM pg_temp.eq(pg_temp.efect('authenticated', a2, format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o2)),
+    'ok:0', 'T6m6 … dar nu-l șterge (asimetria B: DELETE pe nedecis doar uploader / owner — Jakarinos r2 P2)');
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a2, 'UPDATE public.ai_documente_inbox SET modul_tinta = NULL WHERE id = 601'),
     'ok:1', 'T6n limitarea b: HR poate muta un rând HR în „nedecis” (îl vede și acolo) …');
   PERFORM pg_temp.eq(pg_temp.cu('UPDATE public.ai_documente_inbox SET modul_tinta = NULL WHERE id = 601', 'authenticated', a4, 'SELECT 1', lista),
