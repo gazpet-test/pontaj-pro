@@ -1,6 +1,6 @@
 -- REVENIRE 20261126a_redari_teren (armată; doar la cererea lui Răzvan, după decizie + review). NU e migrare — niciun runner nu parcurge directorul.
 -- Scoate TOT ce a creat migrarea: politicile storage red_storage_*, bucket-ul `redari` (doar gol — DELETE pe storage.* cere
--- storage.allow_delete_query), cele 4 vederi, cele 14 tabele red_*, cele 21 de funcții fn_red_*, cheia de modul `redari` din app_modules
+-- storage.allow_delete_query), cele 4 vederi, cele 14 tabele red_*, cele 22 de funcții fn_red_*, cheia de modul `redari` din app_modules
 -- și rândul din supabase_migrations.schema_migrations (dacă tabelul există).
 -- Refuză: nearmată; armare persistentă (ALTER DATABASE/ROLE … SET); migrarea neaplicată; obiecte în bucket (se golesc prin API întâi);
 -- DATE în ORICARE din red_proiecte / uat / parcele / detinatori / convocari / raspunsuri / procese_verbale / import_loturi / numere / jurnal
@@ -91,6 +91,7 @@ DROP FUNCTION public.fn_red_valoare_parcela(uuid);
 DROP FUNCTION public.fn_red_numar_document(text, text, integer);
 DROP FUNCTION public.fn_red_rezerva_numere_parcele(text, integer, integer);
 DROP FUNCTION public.fn_red_adresa_cunoscuta(uuid);
+DROP FUNCTION public.fn_red_storage_expr_bucket(text);
 DROP FUNCTION public.fn_red_jurnal_imuabil();
 DROP FUNCTION public.fn_red_jurnal();
 DROP FUNCTION public.fn_red_updated_at();

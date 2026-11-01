@@ -38,7 +38,9 @@ BEGIN
   GET DIAGNOSTICS n = ROW_COUNT;
   RETURN n = 0;
 EXCEPTION WHEN OTHERS THEN
-  RETURN true;
+  -- doar refuzurile de drepturi / RLS / protectia Storage conteaza ca refuz; orice alta exceptie e un esec al testului
+  IF SQLERRM ~* 'row-level security|permission denied|Direct deletion from storage tables is not allowed|not allowed' THEN RETURN true; END IF;
+  RAISE EXCEPTION 'TEST9 FAIL: exceptie neasteptata la „%”: % (%)', p_sql, SQLERRM, SQLSTATE;
 END $h$;
 -- true DOAR dacă instrucțiunea a căzut cu exact SQLSTATE-ul așteptat (sub-tranzacție; nimic nu rămâne)
 CREATE FUNCTION pg_temp.red_refuza(p_sql text, p_stare text) RETURNS boolean LANGUAGE plpgsql AS $h$
@@ -146,6 +148,14 @@ BEGIN
     RAISE EXCEPTION 'TEST2 FAIL: proiect_id al parcelei nu e imutabil'; END IF;
   IF NOT pg_temp.red_refuza(format('UPDATE public.red_uat SET proiect_id = %L WHERE id = %L', v_pr2, v_uat), '23514') THEN
     RAISE EXCEPTION 'TEST2 FAIL: proiect_id al UAT-ului nu e imutabil'; END IF;
+  -- uat3 nu se schimba cat exista parcele pe UAT; numele da (r3 P2-02)
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_uat SET uat3 = ''HUX'' WHERE id = %L', v_uat), '23514') THEN RAISE EXCEPTION 'TEST2 FAIL: uat3 schimbat cu parcele pe UAT'; END IF;
+  UPDATE public.red_uat SET nume = 'UAT Test Husnicioara' WHERE id = v_uat;
+  -- proveniența raspunsurilor (r3 P2-04): authenticated nu poate scrie created_at / seq
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, zi_sesiune_aleasa, created_at) VALUES (%L, ''telefon'', ''particip'', %L, now() - interval ''1 day'')', v_d1, v_azi + 10), '42501') THEN
+    RAISE EXCEPTION 'TEST2 FAIL: created_at explicit acceptat de la authenticated'; END IF;
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, zi_sesiune_aleasa, seq) OVERRIDING SYSTEM VALUE VALUES (%L, ''telefon'', ''particip'', %L, 999999)', v_d1, v_azi + 10), '42501') THEN
+    RAISE EXCEPTION 'TEST2 FAIL: seq explicit acceptat de la authenticated'; END IF;
   -- tokenul: tabela separata, fara scriere pentru authenticated (nici admin)
   IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_detinatori_token (detinator_id, token_raspuns) VALUES (%L, %L)', v_d2, repeat('a', 43)), '42501') THEN
     RAISE EXCEPTION 'TEST2 FAIL: admin a scris in red_detinatori_token'; END IF;
@@ -394,14 +404,24 @@ BEGIN
   -- telefonic, fara obiectii, FARA bifa: acceptat (operatorul confirma); aceeasi data → castiga seq-ul mai mare
   INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, data) VALUES (v_d5, 'telefon', 'nu_particip_fara_obiectii', now() - interval '1 minute');
   s := pg_temp.red_stare(v_d5); IF (s = 'A_RASPUNS_FARA_OBIECTII') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: d5 fara obiectii telefonic % (astept A_RASPUNS_FARA_OBIECTII)', s; END IF;
-  -- seq imutabil (r2 P2-03): nici macar SET seq = DEFAULT (permis de identity ALWAYS) nu trece de trigger
-  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET seq = DEFAULT WHERE detinator_id = %L', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: seq modificabil prin SET DEFAULT'; END IF;
-  -- created_at = timpul de receptie, imutabil; `data` (declarata) ramane editabila
-  UPDATE public.red_raspunsuri SET created_at = now() - interval '7 days', data = now() - interval '2 minutes' WHERE detinator_id = v_d5 AND optiune = 'particip';
-  IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND created_at < now() - interval '1 day')
-     OR NOT EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND optiune = 'particip' AND data < now() - interval '90 seconds') THEN
-    RAISE EXCEPTION 'TEST6 FAIL: created_at trebuie imutabil, data editabila';
+  -- seq imutabil (r2 P2-03 / r3 P2-04): authenticated nu are privilegiu pe coloana (42501); ca postgres, SET seq = DEFAULT (permis de identity ALWAYS) e oprit de trigger (23514)
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET seq = DEFAULT WHERE detinator_id = %L', v_d5), '42501') THEN RAISE EXCEPTION 'TEST6 FAIL: seq scris de authenticated'; END IF;
+  PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET seq = DEFAULT WHERE detinator_id = %L', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: seq modificabil prin SET DEFAULT ca postgres'; END IF;
+  PERFORM pg_temp.red_ca(v_owner, 'authenticated', pg_temp.red_g('email'));
+  -- created_at = timpul de receptie: authenticated nu-l poate scrie (42501), postgres nu-l poate schimba (trigger); `data` (declarata) ramane editabila
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET created_at = now() - interval ''7 days'' WHERE detinator_id = %L', v_d5), '42501') THEN RAISE EXCEPTION 'TEST6 FAIL: created_at scris de authenticated'; END IF;
+  UPDATE public.red_raspunsuri SET data = now() - interval '2 minutes' WHERE detinator_id = v_d5 AND optiune = 'particip';
+  IF NOT EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND optiune = 'particip' AND data < now() - interval '90 seconds') THEN
+    RAISE EXCEPTION 'TEST6 FAIL: data trebuie editabila';
   END IF;
+  -- obiectii peste 4000 si in trigger; un UPDATE care nu schimba continutul (ex. semnatura) nu re-valideaza
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, obiectii_text) VALUES (%L, ''scris'', ''constatare_teren'', repeat(''x'', 4001))', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: obiectii > 4000 acceptate in trigger'; END IF;
+  UPDATE public.red_raspunsuri SET semnatura_electronica_ref = 'ref-test' WHERE detinator_id = v_d5 AND optiune = 'particip';
+  PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
+  UPDATE public.red_raspunsuri SET created_at = now() - interval '7 days' WHERE detinator_id = v_d5 AND optiune = 'particip';
+  IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND created_at < now() - interval '1 day') THEN RAISE EXCEPTION 'TEST6 FAIL: created_at modificat ca postgres'; END IF;
+  PERFORM pg_temp.red_ca(v_owner, 'authenticated', pg_temp.red_g('email'));
   -- aceeasi `data` ca raspunsul anterior: castiga seq-ul mai mare (P2-9)
   INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, obiectii_text, data) VALUES (v_d5, 'telefon', 'constatare_teren', 'Teren necompactat test', now() - interval '1 minute');
   s := pg_temp.red_stare(v_d5); IF (s = 'OBIECTII_DE_TRATAT') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: d5 obiectii (tie-break seq) % (astept OBIECTII_DE_TRATAT)', s; END IF;
@@ -465,17 +485,21 @@ BEGIN
   END IF;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
   IF (SELECT numar FROM public.red_rate_limit WHERE cheie = 'ip:10.0.0.2') <> 1 THEN RAISE EXCEPTION 'TEST7 FAIL: contorul IP'; END IF;
+  -- curatarea (r3 P2-05): pe prag (> 10.000 estimate), in loturi de 5000, cel mult o data la 10 min (rand de control _curatare), fortat sare peste
+  DELETE FROM public.red_rate_limit WHERE cheie = '_curatare';   -- o curatare aleatoare (2 %) de mai devreme ar bloca testul 10 min; ca postgres
   INSERT INTO public.red_rate_limit (cheie, fereastra_start, numar) VALUES ('ip:vechi', now() - interval '25 hours', 7) ON CONFLICT (cheie) DO NOTHING;
-  i := public.fn_red_rate_limit_curata(true);   -- intr-o instructiune separata: EXISTS-ul de mai jos trebuie sa vada stergerea
-  IF i < 1 OR EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie = 'ip:vechi')
-     OR NOT EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie = 'ip:10.0.0.2') THEN
-    RAISE EXCEPTION 'TEST7 FAIL: curatarea fortata (rand > 24 h sters, randul curent pastrat; sterse=%)', i;
-  END IF;
   INSERT INTO public.red_rate_limit (cheie, fereastra_start, numar) SELECT 'ip:vechi-' || g, now() - interval '25 hours', 1 FROM generate_series(1, 10001) g;
   ANALYZE public.red_rate_limit;
+  i := public.fn_red_rate_limit_curata(false);   -- instructiuni separate: EXISTS-urile trebuie sa vada stergerile
+  IF i <> 5000 OR (SELECT fereastra_start FROM public.red_rate_limit WHERE cheie = '_curatare') IS NULL THEN RAISE EXCEPTION 'TEST7 FAIL: primul lot pe prag (astept 5000, am %)', i; END IF;
   i := public.fn_red_rate_limit_curata(false);
-  IF i < 10001 OR EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie LIKE 'ip:vechi-%') THEN
-    RAISE EXCEPTION 'TEST7 FAIL: curatarea pe prag (> 10.000 randuri estimate) nu a sters randurile vechi (sterse=%)', i;
+  IF i <> 0 THEN RAISE EXCEPTION 'TEST7 FAIL: a doua curatare in mai putin de 10 min trebuia sa nu faca nimic (am %)', i; END IF;
+  i := public.fn_red_rate_limit_curata(true);
+  IF i <> 5000 THEN RAISE EXCEPTION 'TEST7 FAIL: al doilea lot fortat (astept 5000, am %)', i; END IF;
+  i := public.fn_red_rate_limit_curata(true);
+  IF i <> 2 OR EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie LIKE 'ip:vechi%') OR NOT EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie = 'ip:10.0.0.2')
+     OR NOT EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie = '_curatare') THEN
+    RAISE EXCEPTION 'TEST7 FAIL: ultimul lot (astept 2, am %), randul curent si _curatare pastrate', i;
   END IF;
   PERFORM pg_temp.red_ca(NULL, 'anon', NULL);
   v_r := public.fn_red_formular_public(v_t2);
@@ -554,7 +578,7 @@ BEGIN
   v_r := public.fn_red_formular_public(v_t3);
   IF ((v_r ->> 'ok')::boolean) IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST7 FAIL: tokenul d3 nu a revenit valid %', v_r; END IF;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
-  RAISE NOTICE 'TEST7 OK RPC public: format token (43) verificat inaintea contorului, token_invalid (inexistent / expirat, cu contact), validari jsonb (particip cere zi), 5/token si 30/IP → prea_multe, curatare >24h (fortata / pe prag, nu la fiecare atingere), al doilea raspuns acceptat, fara nume in raspuns, meta separata (jurnal doar nume de campuri), chei de token doar pentru tokenuri existente, anon fara tabele';
+  RAISE NOTICE 'TEST7 OK RPC public: format token (43) verificat inaintea contorului, token_invalid (inexistent / expirat, cu contact), validari jsonb (particip cere zi), 5/token si 30/IP → prea_multe, curatare >24h (pe prag, loturi de 5000, max o data la 10 min, fortat), al doilea raspuns acceptat, fara nume in raspuns, meta separata (jurnal doar nume de campuri), chei de token doar pentru tokenuri existente, anon fara tabele';
 END $t7$;
 
 -- ── TEST8: viewer (drept temporar în user_module_access, în tranzacție) ──────────────────────────────────────────────────────
@@ -603,8 +627,17 @@ BEGIN
   -- inventar: nicio politica PERMISIVA non-red_* de pe storage.objects nu poate acoperi bucket-ul redari (aceeasi regula ca postconditia)
   SELECT array_agg(p.policyname::text ORDER BY p.policyname) INTO v_rau FROM pg_policies p
    WHERE p.schemaname = 'storage' AND p.tablename = 'objects' AND p.permissive = 'PERMISSIVE' AND p.policyname NOT LIKE 'red\_storage\_%'
-     AND EXISTS (SELECT 1 FROM unnest(ARRAY[p.qual, p.with_check]) e WHERE e IS NOT NULL AND (e !~ '^[(]*bucket_id = ''[^'']+''::text[)]( AND .*)?$' OR e ~ 'bucket_id = ''redari'''));
+     AND ((p.cmd IN ('SELECT', 'DELETE', 'UPDATE', 'ALL') AND p.qual IS NULL) OR (p.cmd = 'INSERT' AND p.with_check IS NULL)
+          OR EXISTS (SELECT 1 FROM unnest(ARRAY[p.qual, p.with_check]) e WHERE e IS NOT NULL AND coalesce(public.fn_red_storage_expr_bucket(e), 'redari') = 'redari'));
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'TEST9 FAIL: politici storage care ar putea acoperi redari: %', v_rau; END IF;
+  -- verificatorul insusi: OR la nivel de sus / OR dupa un AND cu bucket-ul / bucket-ul nu e primul operand → NULL; OR imbricat sub AND → bucket
+  IF public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) OR (b = 2))') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) OR (a = 1))') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('((a = 1) AND (bucket_id = ''x''::text))') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) AND ((a = 1) OR (b = 2)))') IS DISTINCT FROM 'x'
+     OR public.fn_red_storage_expr_bucket('(bucket_id = ''redari''::text)') IS DISTINCT FROM 'redari' THEN
+    RAISE EXCEPTION 'TEST9 FAIL: fn_red_storage_expr_bucket nu discrimineaza';
+  END IF;
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname IN ('red_storage_sel', 'red_storage_ins')
         AND cmd IN ('SELECT', 'INSERT') AND coalesce(qual, with_check) LIKE '%fn_red_nivel()%') <> 2
      OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND policyname LIKE 'red\_%' AND cmd NOT IN ('SELECT', 'INSERT')) THEN
