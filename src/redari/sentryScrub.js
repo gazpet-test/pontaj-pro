@@ -57,7 +57,9 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // Jakarinos r16 P2-1: o cheie *token* cu valoare-șir e indiciu doar dacă șirul (chiar netrunchiat) conține o secvență de ≥43 — `"tokenuri_cumparate":"12"` nu e
 // Jakarinos r17 P1-1: în valoarea-șir se sar și secvențele escape (`\"`, `\\`), altfel `"prefix \"<T` ascundea tokenul după ghilimeaua escapată
 // Jakarinos r18 P1-1: cheia e ORICE șir JSON care conține „token” (`token.value`, `token value`…), aliniat cu `cheieSensibila` — nu doar [A-Za-z0-9_-]
-const RX_INDICIU_JSON = /p_token|raspuns|\\u[0-9a-f]{4}|token(?:[^"\\]|\\.)*"\s*:\s*(?:[\[{]|"(?:[^"\\]|\\.)*[A-Za-z0-9_-]{43})/i
+// Jakarinos r21 P2-1: simpla apariție a cuvântului „raspuns” („Eroare la salvare raspuns”) NU e indiciu — se cere sintaxă de cheie
+// (`"p_token":` / `p_token=`, sau `"…token…"`/`"…raspuns…"` urmată de `:` și valoare listă/obiect/șir cu secvență ≥43) sau escape `\uXXXX`
+const RX_INDICIU_JSON = /\\u[0-9a-f]{4}|p_token"?\s*[=:]|(?:raspuns|token)(?:[^"\\]|\\.)*"\s*:\s*(?:[\[{]|"(?:[^"\\]|\\.)*[A-Za-z0-9_-]{43})/i
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
@@ -291,8 +293,10 @@ export function scrubSentryEvent(event) {
       // (p_token/raspuns în vreo formă decodată); evenimentul devine „purtător” (orice secvență ≥43 rămasă ⇒ null) DOAR când
       // corpul șters avea indiciu de token — nu pentru simplul URL RPC fără corp sau cu corp curat (altfel un hash SHA-256
       // legitim ar pierde erori reale ale modulului)
-      const indiciu = formele(corp).some(f => /p_token|raspuns/i.test(f))
-      if (urlRpc || contineVreunToken(corp, tokenuri) || indiciu) { delete req.data; delete req.body }
+      // r21: același indiciu cu sintaxă de cheie ca la JSON-ul neparcurs (un corp `{msg:'raspuns salvat'}` nu face evenimentul purtător)
+      const indiciu = formele(corp).some(f => RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(f.replace(/\\(["\\/])/g, '$1')))
+      const pomeneste = formele(corp).some(f => /p_token|raspuns/i.test(f))
+      if (urlRpc || contineVreunToken(corp, tokenuri) || indiciu || pomeneste) { delete req.data; delete req.body }
       if (indiciu || tokenuri.refuzat) purtator = true
     }
     redacteazaAdanc(event, tokenuri)

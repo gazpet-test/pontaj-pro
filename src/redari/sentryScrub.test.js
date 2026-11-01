@@ -414,6 +414,17 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = { message: 'x', extra: { payload: '"tokenuri_cumparate":"12"}', continut_hash: 'a'.repeat(64) } }
     expect(scrubSentryEvent(ok)?.message).toBe('x')
   })
+  it('r21 P2-1 (Jakarinos): cuvantul „raspuns” in text liber + hash legitim NU pierde evenimentul/spanul', () => {
+    const ev = { message: 'Eroare la salvare raspuns', extra: { sha256: 'a'.repeat(64) } }
+    expect(scrubSentryEvent(ev)).toEqual({ message: 'Eroare la salvare raspuns', extra: { sha256: 'a'.repeat(64) } })
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', op: 'ui', description: 'salvare raspuns', data: { sha256: 'a'.repeat(64) } })
+    expect(sp.description).toBe('salvare raspuns'); expect(sp.data.sha256).toBe('a'.repeat(64))
+    // corp de cerere care doar pomeneste „raspuns”: se sterge (prudent), dar evenimentul NU devine purtator
+    const ev2 = { message: 'x', request: { url: '/intern', data: { msg: 'raspuns salvat' } }, extra: { sha256: 'a'.repeat(64) } }
+    expect(scrubSentryEvent(ev2)).toEqual({ message: 'x', request: { url: '/intern' }, extra: { sha256: 'a'.repeat(64) } })
+    // dar `p_token=` / `"p_token":` in corp ramane indiciu (purtator)
+    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'p_token=scurt&a=1' }, extra: { h: 'z'.repeat(43) } })).toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
