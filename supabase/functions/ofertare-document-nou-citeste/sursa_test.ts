@@ -87,11 +87,10 @@ Deno.test('rezumatul AI scris în text_extras NU e luat drept textul documentulu
 
 Deno.test('poarta PDF pe server: owner / responsabil / intern da; coleg cu acces Ofertare nu', () => {
   assert(poateCitiPdf({ intern: true }))
-  assert(poateCitiPdf({ intern: false, isOwner: true, uid: 'u1' }))
-  assert(poateCitiPdf({ intern: false, isOwner: false, responsabilId: 'u1', uid: 'u1' }))
-  assert(!poateCitiPdf({ intern: false, isOwner: false, responsabilId: 'u2', uid: 'u1' }))
-  assert(!poateCitiPdf({ intern: false, isOwner: null, responsabilId: null, uid: 'u1' }))
-  assert(!poateCitiPdf({ intern: false, responsabilId: null, uid: null }))
+  assert(poateCitiPdf({ intern: false, poateCheltui: true }))
+  assert(!poateCitiPdf({ intern: false, poateCheltui: false }))
+  assert(!poateCitiPdf({ intern: false, poateCheltui: null }))
+  assert(!poateCitiPdf({ intern: false }))
 })
 
 Deno.test('mesajul de timp depășit depinde de sursă: pe text nu trimite la «Procesează»', () => {

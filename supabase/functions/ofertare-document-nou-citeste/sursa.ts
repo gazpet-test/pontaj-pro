@@ -83,10 +83,11 @@ export const MESAJ_SURSA_SCHIMBATA = 'Documentul a fost recitit / reprocesat în
 // Poarta pe cheltuială și pe server (review ultracode 06.10, P2: P1 era reparat doar în UI — un bundle vechi din cache sau un apel
 // direct trecea): PDF-ul întreg (apel AI scump, până la 130 s) îl pornește doar ownerul, responsabilul licitației sau rutina internă,
 // ca la ofertare-ingest-doc. Rezumatul din textul deja extras rămâne pentru oricine are acces Ofertare.
-export function poateCitiPdf(a: { intern: boolean; isOwner?: boolean | null; responsabilId?: string | null; uid?: string | null }): boolean {
-  return a.intern || a.isOwner === true || (!!a.responsabilId && a.responsabilId === a.uid)
+// poarta unică pe cheltuială (20261124a): `poateCheltui` = rezultatul fn_ofertare_poate_cheltui (owner / responsabil 1-2 numit de owner sau admin)
+export function poateCitiPdf(a: { intern: boolean; poateCheltui?: boolean | null }): boolean {
+  return a.intern || a.poateCheltui === true
 }
-export const MESAJ_POARTA_PDF = 'Documentul nu are încă text extras, iar citirea PDF-ului întreg costă: o pornește doar ownerul sau responsabilul licitației. ' +
+export const MESAJ_POARTA_PDF = 'Documentul nu are încă text extras, iar citirea PDF-ului întreg costă: o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare. ' +
   'După ce e citit, rezumatul îl poate face oricine.'
 
 export const MESAJ_TIMEOUT = 'Citirea a depășit timpul (documentul e mare sau scanat). Deschide tab-ul Documentație și apasă ' +

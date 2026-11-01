@@ -48,6 +48,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { propuneAcoperiri } from './core.ts'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -67,12 +68,8 @@ async function autorizat(req: Request, supabase: any, licId: number, coadaTabel:
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
-    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-  ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
-  return 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).'
+  if (await poateCheltui(supabase, licId, uid)) return null
+  return 'Citirea integrală o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
 }
 
 Deno.serve(async (req: Request) => {

@@ -31,6 +31,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import { documentEligibil, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools (17.10.2026)
 import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
@@ -53,12 +54,8 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<st
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
-    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-  ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
-  return 'Extragerea clauzelor / formularelor și propunerea de completare le pornește doar ownerul sau responsabilul licitației (costă).'
+  if (await poateCheltui(supabase, licId, uid)) return null
+  return 'Extragerea clauzelor / formularelor și propunerea de completare le pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
 }
 
 // normalizare pentru verificarea citatului: spații, ghilimele, cratime, ş/ţ cu sedilă, NBSP; fără lowercase (citat EXACT)

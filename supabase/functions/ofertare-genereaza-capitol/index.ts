@@ -46,6 +46,7 @@ import { termenRO } from '../_shared/oraRO.ts'
 import { caleBlocata, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'
 import { COLOANE_SURSE, filtreazaClarificari } from '../_shared/provenientaClar.ts'   // proveniența derivatelor (20261025a)
 import { scrieCapitolCuUrma } from './scriere.ts'   // INTERDICȚIILE 3-5 la scriere (fix obsId 17.10.2026)
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
@@ -222,7 +223,7 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
 // pe orice capitol al oricărei licitații (aceeași gaură reparată în PR #318 la celelalte funcții).
 // Reguli, ca în ofertare-acoperire:
 //   - service_role: liber (rutine interne de pe server);
-//   - JWT de utilizator: doar ownerul sau responsabilul licitației — ei răspund de ce se depune;
+//   - JWT de utilizator: doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare — ei răspund de ce se depune;
 //   - cheia anon: RESPINSĂ. Generarea se pornește din UI de un om logat; nu există worker de coadă
 //     pentru capitole (când se face #110, generarea în fundal, poarta pentru el se adaugă AICI,
 //     pe tiparul cu coadă activă din ofertare-cerinte, nu prin relaxarea regulii).
@@ -242,12 +243,8 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<st
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
   actorUid = uid
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
-    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-  ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
-  return 'Capitolele le scrie doar ownerul sau responsabilul licitației (costă).'
+  if (await poateCheltui(supabase, licId, uid)) return null
+  return 'Capitolele le scrie doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
 }
 
 Deno.serve(async (req: Request) => {

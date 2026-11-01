@@ -232,9 +232,7 @@ Deno.test('structurat/admin: eroare de citire pe service_role (user_module_acces
   // user_module_access căzut: adminul nu poate fi dovedit → refuzul vechi, fără client de utilizator
   const a = await ruleazaS(ADMIN, { ...S }, { eroareService: ['user_module_access'] })
   assertEquals(a.status, 403); zeroCost(a.n); assertEquals(JSON.parse(a.corp).motiv, undefined); assertEquals(a.jwts, [])
-  // profiles căzut: owner-ul nu mai poate fi dovedit (și nu e admin) → refuz, fail-closed
-  const b = await ruleazaS(OWNER, S, { eroareService: ['profiles'] })
-  assertEquals(b.status, 403); zeroCost(b.n)
+  // poarta unică (20261124a) e un RPC: un profiles căzut în PostgREST nu o mai atinge; RPC-ul căzut e testat separat (fail-closed)
   // profiles căzut pentru un admin: condițiile de admin nu depind de profiles (verificate separat) → trece pe ramura de admin
   trecut(await ruleazaS(ADMIN, S, { eroareService: ['profiles'] }))
 })

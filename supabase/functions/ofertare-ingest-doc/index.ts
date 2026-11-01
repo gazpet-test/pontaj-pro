@@ -35,6 +35,7 @@ import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poar
 import { REGULA_TABEL, maxOut } from '../_shared/transcriereTabel.ts'   // v16: aceeași regulă + plafon ca ofertare-citire-test
 import { scrieProvenienta } from '../_shared/provenientaText.ts'   // TKT-0329 B: proveniența textului (transcriere)
 import { faraGandire } from '../_shared/gandire.ts'   // Sonnet 5.5: 'disabled' = 400 → between_tools; Haiku 5.5 rămâne pe 'disabled'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -139,12 +140,8 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<{ 
     const { data } = await supabase.from('ofertare_ingest_coada').select('cerut_de').eq('licitatie_id', licId).maybeSingle()
     return { eroare: null, status: 200, uid: data?.cerut_de || null }
   }
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', id.uid).maybeSingle(),
-    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-  ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === id.uid)) return { eroare: null, status: 200, uid: id.uid }
-  return { eroare: 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).', status: 403, uid: null }
+  if (await poateCheltui(supabase, licId, id.uid)) return { eroare: null, status: 200, uid: id.uid }
+  return { eroare: 'Citirea integrală o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).', status: 403, uid: null }
 }
 
 const JUNK_RE = /(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)Thumbs\.db$|(^|\/)desktop\.ini$/i

@@ -27,6 +27,7 @@ import { type Lucru, lucruPentru, scrieLucru, urmatoareaFelie } from './lucru.ts
 import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
 import { aceeasiIdentitate, identitateObiect, shaOcteti, type IdentitateObiect } from './obiect.ts'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5-5'  // Sonnet 5.5 (17.10.2026; înainte Sonnet 5)
@@ -148,11 +149,7 @@ Deno.serve(async (req: Request) => {
   // Răcari 06.10.2026: documentul citit deja pe felii („Procesează”) se citește din TEXT; altfel PDF, cu termen-limită (sursa.ts).
   const sursa = alegeSursa(row)
   if (sursa.mod === 'pdf' && cititDe !== 'intern') {
-    const [{ data: prof }, { data: lic }] = await Promise.all([
-      db.from('profiles').select('is_owner').eq('id', cititDe).maybeSingle(),
-      db.from('ofertare_licitatii').select('responsabil_id').eq('id', row.licitatie_id).maybeSingle(),
-    ])
-    if (!poateCitiPdf({ intern: false, isOwner: prof?.is_owner, responsabilId: lic?.responsabil_id, uid: cititDe }))
+    if (!poateCitiPdf({ intern: false, poateCheltui: await poateCheltui(db, row.licitatie_id, cititDe) }))
       return json({ error: MESAJ_POARTA_PDF, cod: 'poarta_cheltuiala' }, 403)
   }
   // amprenta sursei de dinainte de AI: scrierea refuză dacă documentul a fost recitit între timp (scriere.ts).

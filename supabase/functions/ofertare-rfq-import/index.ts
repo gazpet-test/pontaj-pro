@@ -12,6 +12,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { ofertaValida, pretNormalizat } from './validare.ts'
 import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -45,12 +46,9 @@ async function autorizat(req: Request, supabase: any, rfqId: number | null): Pro
   if (prof?.is_owner) return null
   if (rfqId) {
     const { data: rfq } = await supabase.from('ofertare_rfq').select('licitatie_id').eq('id', rfqId).maybeSingle()
-    if (rfq?.licitatie_id) {
-      const { data: lic } = await supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', rfq.licitatie_id).maybeSingle()
-      if (lic?.responsabil_id && lic.responsabil_id === uid) return null
-    }
+    if (rfq?.licitatie_id && await poateCheltui(supabase, rfq.licitatie_id, uid)) return null
   }
-  return 'Citirea ofertelor o pornește doar ownerul sau responsabilul licitației (costă).'
+  return 'Citirea ofertelor o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
 }
 
 Deno.serve(async (req: Request) => {

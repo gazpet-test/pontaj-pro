@@ -32,7 +32,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligibilLot.ts'
 import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
-import { poateCheltui } from './poarta.ts'
+import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 import { MESAJ_ADMIN, motivRefuzAdmin } from './poarta_admin.ts'
 import { feliiDocument, type TipLista } from './sectiuni.ts'
 import { extrageStructurat, MAX_IESIRE } from './structurat.ts'
@@ -235,11 +235,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // 25.09.2026 (audit țintit, CLAUDE.md 7d): apel PLĂTIT — „poarta pe cheltuială" și pe server, nu doar în UI.
   // Pornește doar ownerul sau responsabilul licitației (calea x-radar-secret/worker rămâne neatinsă).
   if (uidApelant) {
-    const [{ data: prof }, { data: lic }] = await Promise.all([
-      db.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
-      db.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
-    ])
-    if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uidApelant))
+    if (!await poateCheltui(db, licId, uidApelant))   // poarta unică (20261124a): owner / responsabil 1-2 numit de owner sau admin
       return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
   }
   const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
@@ -498,11 +494,11 @@ async function ruleazaStructurat(req: Request, deps: Deps, bodyBrut: string): Pr
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
   if (!cerereId) return json({ error: 'cerere_id lipsă — extragerea structurată pornește doar pe o cerere de cheltuială aprobată' }, 402)
   const db = deps.db
-  const [{ data: prof }, { data: lic }] = await Promise.all([
-    db.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
-    db.from('ofertare_licitatii').select('responsabil_id, stare_loturi').eq('id', licId).maybeSingle(),
+  const [poate, { data: lic }] = await Promise.all([
+    poateCheltui(db, licId, uid),   // poarta unică (20261124a): owner / responsabil 1-2 numit de owner sau admin Ofertare
+    db.from('ofertare_licitatii').select('stare_loturi').eq('id', licId).maybeSingle(),
   ])
-  if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uid)) {
+  if (!poate) {
     // 17.10.2026 (decizia Răzvan „B”): un ADMIN Ofertare pornește DOAR pe o cerere activă a licitației, cu plafon ≤ 5 USD și buget
     // neblocat (poarta_admin.ts). Adminul = aceeași interogare ca fn_ofertare_cb_este_admin (20261031d, neapelabilă din API).
     // Ne-adminii primesc exact refuzul de până acum, fără citiri în cereri / buget. Orice eroare de citire = refuz (fail-closed).

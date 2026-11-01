@@ -10,3 +10,9 @@ export const numeResponsabili = (l) => {
 }
 // licitația e „a mea” dacă sunt oricare dintre cei doi responsabili
 export const esteResponsabil = (l, uid) => !!uid && (l?.responsabil_id === uid || l?.responsabil2_id === uid)
+// Poarta pe cheltuială AI, afișarea în UI (20261124a, decizia Răzvan 1 + A). Serverul decide (fn_ofertare_poate_cheltui: și cine l-a numit
+// trebuie să fie owner / admin Ofertare); UI-ul doar ascunde butonul celui care evident nu trece: nu e owner, nu e responsabil 1 / 2
+// sau s-a numit singur. Câmpurile *_setat_de lipsă din select = nu se poate exclude (serverul refuză oricum).
+export const poateCheltuiUI = (l, profile) => !!profile?.id && (profile.is_owner === true ||
+  (l?.responsabil_id === profile.id && l?.responsabil_setat_de !== profile.id) ||
+  (l?.responsabil2_id === profile.id && l?.responsabil2_setat_de !== profile.id))
