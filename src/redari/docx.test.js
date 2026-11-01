@@ -5,21 +5,22 @@ import { resolve } from 'node:path'
 import JSZip from 'jszip'
 import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
-  completeazaDocx, genereazaQr, hashBlob, borderouCsv, genereazaConvocator, salveazaConvocator, caleConvocator,
-  formatDataRo, formatNumarRo, linkRaspuns, MIME_DOCX, COLOANE_BORDEROU,
+  completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
+  reincarcaConvocator, caleConvocator, formatDataRo, formatNumarRo, linkRaspuns, MIME_DOCX, COLOANE_BORDEROU,
 } from './docx.js'
 
 const SABLON = resolve(process.cwd(), 'public/redari/sabloane/convocator_provizoriu.docx')
 const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+const citesteSablon = () => { const b = readFileSync(SABLON); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) }
 
-// DOCX de test: un placeholder rupt în două run-uri („{{nu” + „me}}”), unul întreg, unul lipsă, unul în antet
-const docxTest = async () => {
+// DOCX de test: un placeholder rupt în două run-uri („{{nu” + „me}}”), unul întreg, unul necunoscut (opțional), unul în antet
+const docxTest = async ({ cuNecunoscut = true } = {}) => {
   const doc = new Document({
     sections: [{
       headers: { default: new Header({ children: [new Paragraph({ children: [new TextRun('Antet {{nr_document}}')] })] }) },
       children: [
         new Paragraph({ children: [new TextRun({ text: 'Către {{nu', bold: true }), new TextRun('me}}, parcela {{id_parcela}}')] }),
-        new Paragraph({ children: [new TextRun('Sat: {{sat}} / lipsă: [{{inexistent}}]')] }),
+        new Paragraph({ children: [new TextRun(cuNecunoscut ? 'Sat: {{sat}} / lipsă: [{{inexistent}}]' : 'Sat: {{sat}}')] }),
         new Paragraph({ children: [new TextRun('{{qr}}')] }),
         new Paragraph({ children: [new TextRun('Fără placeholder <neatins>')] }),
       ],
@@ -34,11 +35,12 @@ const xmlDin = async (blob, cale) => {
   return { zip, xml: f ? await f.async('string') : null }
 }
 const textDin = (xml) => [...xml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map(m => m[1]).join('')
+const pauza = (ms) => new Promise(r => setTimeout(r, ms))
 
 describe('completeazaDocx — înlocuire placeholder-e', () => {
   const campuri = { nume: 'POPESCU ION (fictiv)', id_parcela: 'T3-HUS-0001', sat: 'A & B <"test">', nr_document: 'C-0001' }
 
-  it('placeholder rupt între run-uri + întreg + lipsă → gol; antetul se completează', async () => {
+  it('placeholder rupt între run-uri + întreg + lipsă → gol (mod permisiv); antetul se completează', async () => {
     const blob = await completeazaDocx(await docxTest(), campuri)
     expect(blob.type).toBe(MIME_DOCX)
     const { xml } = await xmlDin(blob, 'word/document.xml')
@@ -49,6 +51,14 @@ describe('completeazaDocx — înlocuire placeholder-e', () => {
     expect(xml).toContain('Fără placeholder &lt;neatins&gt;')
     const { xml: antet } = await xmlDin(blob, 'word/header1.xml')
     expect(textDin(antet)).toBe('Antet C-0001')
+  })
+
+  it('strict: placeholder necunoscut ⇒ Error cu numele lui; fără necunoscute trece', async () => {
+    await expect(completeazaDocx(await docxTest(), campuri, { strict: true, imagini: { qr: PNG_1x1 } })).rejects.toThrow(/\{\{inexistent\}\}/)
+    // {{qr}} fără imagine și fără cheie e tot necunoscut în strict
+    await expect(completeazaDocx(await docxTest({ cuNecunoscut: false }), campuri, { strict: true })).rejects.toThrow(/\{\{qr\}\}/)
+    const blob = await completeazaDocx(await docxTest({ cuNecunoscut: false }), campuri, { strict: true, imagini: { qr: PNG_1x1 } })
+    expect(textDin((await xmlDin(blob, 'word/document.xml')).xml)).not.toMatch(/\{\{/)
   })
 
   it('escape XML pe valori; XML-ul rămâne bine format', async () => {
@@ -91,37 +101,44 @@ describe('completeazaDocx — înlocuire placeholder-e', () => {
     await expect(completeazaDocx(await zip.generateAsync({ type: 'arraybuffer' }), {})).rejects.toThrow(/document\.xml/)
   })
 
-  it('șablonul provizoriu din repo: toate cele 22 de câmpuri se completează, niciun {{ rămas', async () => {
-    const sablon = readFileSync(SABLON)
+  it('șablonul provizoriu din repo: toate cele 22 de câmpuri se completează în mod strict, niciun {{ rămas', async () => {
     const campuriToate = Object.fromEntries(['nume', 'id_parcela', 'uat', 'sat', 'tarla', 'nr_cadastral', 'suprafata', 'zi1', 'program1', 'zi2', 'program2',
       'zi3', 'program3', 'link', 'nr_document', 'data', 'contact_nume', 'contact_telefon', 'contact_email', 'reprezentant_tgz', 'text_gdpr'].map(k => [k, `<${k}>`]))
-    const blob = await completeazaDocx(sablon.buffer.slice(sablon.byteOffset, sablon.byteOffset + sablon.byteLength), campuriToate, { imagini: { qr: PNG_1x1 } })
+    const blob = await completeazaDocx(citesteSablon(), campuriToate, { imagini: { qr: PNG_1x1 }, strict: true })
     const { zip } = await xmlDin(blob, 'word/document.xml')
+    let tot = ''
     for (const cale of ['word/document.xml', 'word/header1.xml', 'word/footer1.xml']) {
       const xml = await zip.file(cale).async('string')
       expect(xml, cale).not.toMatch(/\{\{|\}\}/)
+      tot += xml
     }
-    const doc = await zip.file('word/document.xml').async('string')
-    for (const k of Object.keys(campuriToate)) expect(doc + await zip.file('word/header1.xml').async('string') + await zip.file('word/footer1.xml').async('string')).toContain(`&lt;${k}&gt;`)
-    expect(doc).toContain('<w:drawing>')
+    for (const k of Object.keys(campuriToate)) expect(tot).toContain(`&lt;${k}&gt;`)
+    expect(tot).toContain('<w:drawing>')
   })
 })
 
-describe('hashBlob / genereazaQr', () => {
+describe('hashBlob / genereazaQr / determinism', () => {
   it('sha256 hex, determinist pe același conținut; conținut diferit → hash diferit', async () => {
     const h1 = await hashBlob(new Blob(['abc']))
     expect(h1).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
     expect(await hashBlob(new Blob(['abc']))).toBe(h1)
     expect(await hashBlob(new Blob(['abd']))).not.toBe(h1)
   })
-  it('același șablon + aceleași câmpuri → același DOCX → același hash (datele intrărilor din zip sunt fixe)', async () => {
-    const t = await docxTest()
+  it('același șablon + câmpuri + QR → același hash și la 1,1 s distanță (fără intrări de director cu data curentă)', async () => {
+    const t = citesteSablon()
     const c = { nume: 'X', id_parcela: 'T1-PRU-0001' }
-    const h1 = await hashBlob(await completeazaDocx(t, c, { imagini: { qr: PNG_1x1 } }))
-    const h2 = await hashBlob(await completeazaDocx(t, c, { imagini: { qr: PNG_1x1 } }))
-    expect(h1).toBe(h2)
-    expect(await hashBlob(await completeazaDocx(t, { ...c, nume: 'Y' }))).not.toBe(h1)
-  })
+    const b1 = await completeazaDocx(t, c, { imagini: { qr: PNG_1x1 } })
+    await pauza(1100)
+    const b2 = await completeazaDocx(t, c, { imagini: { qr: PNG_1x1 } })
+    expect(await hashBlob(b1)).toBe(await hashBlob(b2))
+    // niciun director NOU față de șablon (word/media/ ar fi primit data curentă); cele din șablon rămân cu datele lor
+    const dirs = (zip) => Object.values(zip.files).filter(f => f.dir).map(f => f.name).sort()
+    const { zip } = await xmlDin(b2, 'word/document.xml')
+    expect(dirs(zip)).toEqual(dirs(await JSZip.loadAsync(t)))
+    expect(dirs(zip)).not.toContain('word/media/')
+    expect(zip.file('word/media/qr.png')).not.toBeNull()
+    expect(await hashBlob(await completeazaDocx(t, { ...c, nume: 'Y' }, { imagini: { qr: PNG_1x1 } }))).not.toBe(await hashBlob(b1))
+  }, 10000)
   it('QR → dataURL PNG', async () => {
     const d = await genereazaQr('https://exemplu.test/redari/raspuns/abc123')
     expect(d.startsWith('data:image/png;base64,')).toBe(true)
@@ -153,6 +170,27 @@ describe('borderouCsv', () => {
     expect([...octeti.slice(0, 3)]).toEqual([0xEF, 0xBB, 0xBF])
     expect(new TextDecoder().decode(octeti)).toBe(COLOANE_BORDEROU.join(';') + '\r\n')
   })
+  it('anti formula injection: = + - @ TAB CR (și după spații/caractere de control) → prefix apostrof + ghilimele', () => {
+    expect(celulaCsv('=1+1')).toBe(`"'=1+1"`)
+    expect(celulaCsv('@SUM(1)')).toBe(`"'@SUM(1)"`)
+    expect(celulaCsv('-2')).toBe(`"'-2"`)
+    expect(celulaCsv('+40722000000')).toBe(`"'+40722000000"`)
+    expect(celulaCsv(' =x')).toBe(`"' =x"`)
+    expect(celulaCsv('\u0000=cmd')).toBe(`"'\u0000=cmd"`)
+    expect(celulaCsv('\t=1')).toBe(`"'\t=1"`)
+    expect(celulaCsv('\r=1')).toBe(`"'\r=1"`)
+    expect(celulaCsv('=a"b')).toBe(`"'=a""b"`)
+    // valori normale neatinse
+    expect(celulaCsv('POPESCU ION')).toBe('POPESCU ION')
+    expect(celulaCsv('T3-HUS-0001')).toBe('T3-HUS-0001')
+    expect(celulaCsv('Str. 1 Mai, nr. 2')).toBe('Str. 1 Mai, nr. 2')
+    expect(celulaCsv(0)).toBe('0')
+    expect(celulaCsv(null)).toBe('')
+  })
+  it('borderoul aplică protecția pe fiecare celulă', async () => {
+    const text = new TextDecoder().decode(await borderouCsv([{ nr_document: 'C-1', nume: '=HYPERLINK("x")', adresa: '-str', id_parcela: 'P' }]).arrayBuffer())
+    expect(text.split('\r\n')[1]).toBe(`C-1;"'=HYPERLINK(""x"")";"'-str";;;;P`)
+  })
 })
 
 describe('formatări + link', () => {
@@ -170,65 +208,130 @@ describe('formatări + link', () => {
 })
 
 describe('genereazaConvocator', () => {
-  it('construiește câmpurile din contract §8, link + QR, hash', async () => {
-    const r = await genereazaConvocator({
-      detinator: { nume: 'POPESCU ION (fictiv)' },
-      contact: { nume: 'Operator Test', telefon: '0700000000', email: 'redari@exemplu.test' },
-      parcela: { id_parcela: 'T3-HUS-0001', sat: 'Satul Test', tarla: '12', nr_cadastral: '5001', suprafata_temporara_mp: 1500.25 },
-      uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-10', sesiune_zi2: '2026-11-11', program_zi1: '09-12 Sat A', program_zi2: '09-12 Sat B' },
-      proiect: { reprezentant_tgz_nume: 'Reprezentant Test', reprezentant_tgz_functie: 'inginer', text_gdpr: 'Text GDPR.\nRând 2' },
-      nrDocument: 'C-0001', token: 'tokenfictiv1234567890abcdefghijk', origin: 'https://exemplu.test',
-      templateArrayBuffer: await docxTest(), dataDocument: '2026-11-02',
-    })
+  const complet = () => ({
+    detinator: { nume: 'POPESCU ION (fictiv)' },
+    contact: { nume: 'Operator Test', telefon: '0700000000', email: 'redari@exemplu.test' },
+    parcela: { id_parcela: 'T3-HUS-0001', sat: 'Satul Test', tarla: '12', nr_cadastral: '5001', suprafata_temporara_mp: 1500.25 },
+    uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-10', sesiune_zi2: '2026-11-11', program_zi1: '09-12 Sat A', program_zi2: '09-12 Sat B' },
+    proiect: { reprezentant_tgz_nume: 'Reprezentant Test', reprezentant_tgz_functie: 'inginer', text_gdpr: 'Text GDPR.\nRând 2' },
+    nrDocument: 'C-0001', token: 'tokenfictiv1234567890abcdefghijk', origin: 'https://exemplu.test', dataDocument: '2026-11-02',
+  })
+
+  it('construiește câmpurile din contract §8, link + QR, hash (șablonul real, strict)', async () => {
+    const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: citesteSablon() })
     expect(r.link).toBe('https://exemplu.test/redari/raspuns/tokenfictiv1234567890abcdefghijk')
+    expect(r.lipsuri).toEqual([])
     expect(r.campuri).toMatchObject({
       nume: 'POPESCU ION (fictiv)', id_parcela: 'T3-HUS-0001', uat: 'Husnicioara', suprafata: '1.500,25', zi1: '10.11.2026', program1: '09-12 Sat A',
       zi3: '', program3: '', nr_document: 'C-0001', data: '02.11.2026', contact_email: 'redari@exemplu.test', reprezentant_tgz: 'Reprezentant Test, inginer',
     })
     expect(r.hash).toMatch(/^[0-9a-f]{64}$/)
     expect(r.hash).toBe(await hashBlob(r.blob))
-    const { zip } = await xmlDin(r.blob, 'word/document.xml')
+    const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
     expect(zip.file('word/media/qr.png')).not.toBeNull()
+    expect(textDin(xml)).not.toMatch(/\{\{/)
   })
-  it('fără token / fără șablon → eroare în română', async () => {
-    await expect(genereazaConvocator({ nrDocument: 'C-1', templateArrayBuffer: await docxTest() })).rejects.toThrow(/token/)
-    await expect(genereazaConvocator({ nrDocument: 'C-1', token: 't' })).rejects.toThrow(/șablonul/)
+
+  it('verificaDateConvocator listează toate lipsurile', () => {
+    expect(verificaDateConvocator(complet())).toEqual([])
+    const l = verificaDateConvocator({ nrDocument: '', token: null, uat: { sesiune_zi1: '2026-11-10' }, contact: {}, proiect: {} })
+    expect(l).toHaveLength(6)
+    expect(l.join(' | ')).toMatch(/nr_document.*token.*zi de sesiune cu program.*contact.*GDPR.*Transgaz/)
+    // zi fără program nu e suficientă; contactul poate veni din proiect
+    expect(verificaDateConvocator({ ...complet(), uat: { sesiune_zi1: '2026-11-10', program_zi2: 'x' } })).toHaveLength(1)
+    expect(verificaDateConvocator({ ...complet(), contact: null, proiect: { ...complet().proiect, contact_telefon: '07' } })).toEqual([])
+  })
+
+  it('date obligatorii lipsă ⇒ Error în română cu lista; permiteIncomplet le lasă goale și întoarce lipsurile', async () => {
+    const t = citesteSablon()
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, uat: { nume: 'Husnicioara' } })).rejects.toThrow(/lipsesc: cel puțin o zi de sesiune cu program/)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, proiect: { reprezentant_tgz_nume: 'R' } })).rejects.toThrow(/GDPR/)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, proiect: { text_gdpr: 'g' } })).rejects.toThrow(/Transgaz/)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, contact: null })).rejects.toThrow(/contact/)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, nrDocument: null })).rejects.toThrow(/nr_document/)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, token: '' })).rejects.toThrow(/token/)
+    await expect(genereazaConvocator({ ...complet() })).rejects.toThrow(/șablonul/)
+    const prev = await genereazaConvocator({ ...complet(), templateArrayBuffer: t, uat: { nume: 'Husnicioara' }, proiect: {}, permiteIncomplet: true })
+    expect(prev.lipsuri.length).toBe(3)
+    expect(prev.campuri.zi1).toBe('')
+    expect(prev.blob.size).toBeGreaterThan(0)
+    // previzualizarea fără token nu are sens (nici link, nici QR)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, token: '', permiteIncomplet: true })).rejects.toThrow(/token/)
+  })
+
+  it('placeholder necunoscut în șablon ⇒ Error (strict), nu dispare tăcut; cu permiteIncomplet trece', async () => {
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: await docxTest() })).rejects.toThrow(/\{\{inexistent\}\}/)
+    const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: await docxTest({ cuNecunoscut: false }) })
+    expect(r.hash).toMatch(/^[0-9a-f]{64}$/)
+    const prev = await genereazaConvocator({ ...complet(), templateArrayBuffer: await docxTest(), permiteIncomplet: true })
+    expect(prev.blob.size).toBeGreaterThan(0)
   })
 })
 
-describe('salveazaConvocator (fake supabase)', () => {
+describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
+  // fake minimal: insert().select().single(), update().eq().select().single(), storage.from().upload()
   const fake = (opt = {}) => {
     const apeluri = []
     const supabase = {
       storage: { from: (bucket) => ({ upload: async (path, blob, o) => { apeluri.push({ tip: 'upload', bucket, path, size: blob.size, o }); return opt.eUp ? { error: { message: opt.eUp } } : { data: { path }, error: null } } }) },
-      from: (tabel) => ({ insert: (rand) => ({ select: (col) => ({ single: async () => { apeluri.push({ tip: 'insert', tabel, rand, col }); return opt.eIns ? { data: null, error: { message: opt.eIns } } : { data: { id: 'uuid-fictiv-1' }, error: null } } }) }) }),
+      from: (tabel) => ({
+        insert: (rand) => ({ select: (col) => ({ single: async () => { apeluri.push({ tip: 'insert', tabel, rand, col }); return opt.eIns ? { data: null, error: { message: opt.eIns } } : { data: { id: 'uuid-fictiv-1' }, error: null } } }) }),
+        update: (rand) => ({ eq: (col, val) => ({ select: (c2) => ({ single: async () => { apeluri.push({ tip: 'update', tabel, rand, filtru: [col, val], col: c2 }); return opt.eUpd ? { data: null, error: { message: opt.eUpd } } : opt.updZero ? { data: null, error: null } : { data: { id: val }, error: null } } }) }) }),
+      }),
     }
     return { supabase, apeluri }
   }
   const arg = { blob: new Blob(['docx']), hash: 'ab'.repeat(32), proiectCod: 'LOT1-PRUNISOR-JUPA', uat3: 'HUS', idParcela: 'T3-HUS-0001', nrDocument: 'C-0001', detinatorId: 'det-1' }
+  const PATH = 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0001.docx'
 
-  it('calea §6, upload cu upsert false + contentType docx, apoi rândul în red_convocari', async () => {
+  it('ordinea: (1) insert fără path/hash → (2) upload upsert false → (3) update cu path + hash', async () => {
     const { supabase, apeluri } = fake()
     const r = await salveazaConvocator(supabase, arg)
-    expect(r).toEqual({ path: 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0001.docx', convocareId: 'uuid-fictiv-1' })
-    expect(apeluri[0]).toMatchObject({ tip: 'upload', bucket: 'redari', path: r.path, size: 4, o: { contentType: MIME_DOCX, upsert: false } })
-    expect(apeluri[1]).toMatchObject({ tip: 'insert', tabel: 'red_convocari', col: 'id',
-      rand: { detinator_id: 'det-1', canal: 'posta', nr_document: 'C-0001', continut_hash: arg.hash, fisier_convocator_path: r.path } })
-    expect(apeluri).toHaveLength(2)
+    expect(r).toEqual({ path: PATH, convocareId: 'uuid-fictiv-1' })
+    expect(apeluri.map(a => a.tip)).toEqual(['insert', 'upload', 'update'])
+    expect(apeluri[0]).toMatchObject({ tabel: 'red_convocari', col: 'id', rand: { detinator_id: 'det-1', canal: 'posta', nr_document: 'C-0001' } })
+    expect(apeluri[0].rand).not.toHaveProperty('fisier_convocator_path')
+    expect(apeluri[0].rand).not.toHaveProperty('continut_hash')
+    expect(apeluri[1]).toMatchObject({ bucket: 'redari', path: PATH, size: 4, o: { contentType: MIME_DOCX, upsert: false } })
+    expect(apeluri[2]).toMatchObject({ tabel: 'red_convocari', filtru: ['id', 'uuid-fictiv-1'], col: 'id', rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
   })
-  it('canal explicit; segment invalid în cale → eroare fără apeluri', async () => {
+  it('canal explicit; segment invalid în cale → eroare ÎNAINTE de orice apel (numărul nu se consumă)', async () => {
     const { supabase, apeluri } = fake()
     await salveazaConvocator(supabase, { ...arg, canal: 'email' })
-    expect(apeluri[1].rand.canal).toBe('email')
+    expect(apeluri[0].rand.canal).toBe('email')
     await expect(salveazaConvocator(supabase, { ...arg, idParcela: '../x' })).rejects.toThrow(/id_parcela/)
     expect(() => caleConvocator({ proiectCod: 'A', uat3: 'H/S', idParcela: 'P', nrDocument: 'C' })).toThrow(/uat3/)
-    expect(apeluri).toHaveLength(2)
+    await expect(salveazaConvocator(supabase, { ...arg, hash: '' })).rejects.toThrow(/hash/)
+    expect(apeluri).toHaveLength(3)
   })
-  it('eroare la upload → nu se inserează; eroare la insert → mesaj cu calea', async () => {
+  it('eroare la insert → niciun upload, mesaj în română', async () => {
+    const a = fake({ eIns: 'duplicate key' })
+    await expect(salveazaConvocator(a.supabase, arg)).rejects.toThrow(/red_convocari.*duplicate key/)
+    expect(a.apeluri.map(x => x.tip)).toEqual(['insert'])
+  })
+  it('eroare la upload → rândul rămâne fără path (fără update), eroarea poartă convocareId + path', async () => {
     const a = fake({ eUp: 'bucket inexistent' })
-    await expect(salveazaConvocator(a.supabase, arg)).rejects.toThrow(/storage.*bucket inexistent/)
-    expect(a.apeluri).toHaveLength(1)
-    const b = fake({ eIns: 'duplicate key' })
-    await expect(salveazaConvocator(b.supabase, arg)).rejects.toThrow(/red_convocari.*duplicate key/)
+    const e = await salveazaConvocator(a.supabase, arg).catch(x => x)
+    expect(e).toBeInstanceOf(Error)
+    expect(e.message).toMatch(/uuid-fictiv-1.*storage.*bucket inexistent.*Reluați/)
+    expect(e).toMatchObject({ convocareId: 'uuid-fictiv-1', path: PATH, pas: 'upload' })
+    expect(a.apeluri.map(x => x.tip)).toEqual(['insert', 'upload'])
+  })
+  it('eroare la update (sau 0 rânduri) → mesaj cu calea și id-ul', async () => {
+    const a = fake({ eUpd: 'permission denied' })
+    const e = await salveazaConvocator(a.supabase, arg).catch(x => x)
+    expect(e.message).toMatch(new RegExp(`${PATH}.*uuid-fictiv-1.*permission denied`))
+    expect(e).toMatchObject({ pas: 'update' })
+    const b = fake({ updZero: true })
+    await expect(salveazaConvocator(b.supabase, arg)).rejects.toThrow(/niciun rând actualizat/)
+  })
+  it('reincarcaConvocator: fără insert, upload cu upsert true pe aceeași cale, update pe id-ul dat', async () => {
+    const { supabase, apeluri } = fake()
+    const r = await reincarcaConvocator(supabase, { convocareId: 'uuid-vechi', blob: arg.blob, hash: arg.hash, proiectCod: arg.proiectCod, uat3: arg.uat3, idParcela: arg.idParcela, nrDocument: arg.nrDocument })
+    expect(r).toEqual({ path: PATH, convocareId: 'uuid-vechi' })
+    expect(apeluri.map(a => a.tip)).toEqual(['upload', 'update'])
+    expect(apeluri[0]).toMatchObject({ path: PATH, o: { contentType: MIME_DOCX, upsert: true } })
+    expect(apeluri[1]).toMatchObject({ filtru: ['id', 'uuid-vechi'], rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
+    await expect(reincarcaConvocator(supabase, { blob: arg.blob, hash: arg.hash })).rejects.toThrow(/id-ul convocării/)
   })
 })
