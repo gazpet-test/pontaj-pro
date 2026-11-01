@@ -1,10 +1,11 @@
 -- REVENIRE 20261126a_redari_teren (armată; doar la cererea lui Răzvan, după decizie + review). NU e migrare — niciun runner nu parcurge directorul.
 -- Scoate TOT ce a creat migrarea: politicile storage red_storage_*, bucket-ul `redari` (doar gol — DELETE pe storage.* cere
--- storage.allow_delete_query), cele 4 vederi, cele 13 tabele red_*, cele 19 funcții fn_red_*, cheia de modul `redari` din app_modules
+-- storage.allow_delete_query), cele 4 vederi, cele 14 tabele red_*, cele 19 funcții fn_red_*, cheia de modul `redari` din app_modules
 -- și rândul din supabase_migrations.schema_migrations (dacă tabelul există).
 -- Refuză: nearmată; armare persistentă (ALTER DATABASE/ROLE … SET); migrarea neaplicată; obiecte în bucket (se golesc prin API întâi);
--- DATE în red_parcele (rânduri) fără al doilea GUC gazpet.revenire_20261126a_forta = 'DA'; drepturi acordate pe `redari` în
--- user_module_access fără același GUC (ștergerea cheii le șterge în cascadă — sunt listate în NOTICE); dependenți străini pe vederi.
+-- DATE în ORICARE din red_proiecte / uat / parcele / detinatori / convocari / raspunsuri / procese_verbale / import_loturi / numere / jurnal
+-- fără al doilea GUC gazpet.revenire_20261126a_forta = 'DA' (Jakarinos r1 P2-7); drepturi acordate pe `redari` în user_module_access fără
+-- același GUC (ștergerea cheii le șterge în cascadă — sunt listate în NOTICE); dependenți străini pe vederi.
 -- Procedura (un singur string, gestionarul tranzacției e operatorul):
 --   BEGIN;
 --   SELECT set_config('gazpet.revenire_20261126a', 'REDARI_TEREN_SCOASA:' || txid_current(), true);
@@ -13,7 +14,7 @@
 --   COMMIT;
 -- harness-armare: gazpet.revenire_20261126a REDARI_TEREN_SCOASA
 DO $pre$
-DECLARE v_parcele bigint; v_drepturi text;
+DECLARE v_parcele bigint; v_date text; v_drepturi text;
 BEGIN
   IF current_setting('gazpet.revenire_20261126a', true) IS DISTINCT FROM 'REDARI_TEREN_SCOASA:' || txid_current() THEN
     RAISE EXCEPTION '20261126a revenire: neinarmata';
@@ -31,8 +32,14 @@ BEGIN
       (SELECT count(*) FROM storage.objects WHERE bucket_id = 'redari');
   END IF;
   SELECT count(*) INTO v_parcele FROM public.red_parcele;
-  IF v_parcele > 0 AND current_setting('gazpet.revenire_20261126a_forta', true) IS DISTINCT FROM 'DA' THEN
-    RAISE EXCEPTION '20261126a revenire: red_parcele are % randuri (date reale) — revenirea le-ar pierde; refuz fara gazpet.revenire_20261126a_forta = DA', v_parcele;
+  SELECT string_agg(t.nume || '=' || t.n, ', ') INTO v_date FROM (
+    SELECT 'red_proiecte' AS nume, count(*) AS n FROM public.red_proiecte UNION ALL SELECT 'red_uat', count(*) FROM public.red_uat
+    UNION ALL SELECT 'red_parcele', count(*) FROM public.red_parcele UNION ALL SELECT 'red_detinatori', count(*) FROM public.red_detinatori
+    UNION ALL SELECT 'red_convocari', count(*) FROM public.red_convocari UNION ALL SELECT 'red_raspunsuri', count(*) FROM public.red_raspunsuri
+    UNION ALL SELECT 'red_procese_verbale', count(*) FROM public.red_procese_verbale UNION ALL SELECT 'red_import_loturi', count(*) FROM public.red_import_loturi
+    UNION ALL SELECT 'red_numere', count(*) FROM public.red_numere UNION ALL SELECT 'red_jurnal', count(*) FROM public.red_jurnal) t WHERE t.n > 0;
+  IF v_date IS NOT NULL AND current_setting('gazpet.revenire_20261126a_forta', true) IS DISTINCT FROM 'DA' THEN
+    RAISE EXCEPTION '20261126a revenire: exista date reale (%) — revenirea le-ar pierde; refuz fara gazpet.revenire_20261126a_forta = DA', v_date;
   END IF;
   SELECT string_agg(profile_id::text || ':' || access_level, ', ' ORDER BY profile_id) INTO v_drepturi FROM public.user_module_access WHERE module = 'redari';
   IF v_drepturi IS NOT NULL AND current_setting('gazpet.revenire_20261126a_forta', true) IS DISTINCT FROM 'DA' THEN
@@ -59,7 +66,7 @@ DROP VIEW public.red_v_centralizator_uat;
 DROP VIEW public.red_v_tronson;
 DROP VIEW public.red_v_stare_parcela;
 DROP VIEW public.red_v_parcele;
-DROP TABLE public.red_rate_limit, public.red_import_loturi, public.red_procese_verbale, public.red_raspunsuri, public.red_convocari,
+DROP TABLE public.red_rate_limit, public.red_import_loturi, public.red_procese_verbale, public.red_raspunsuri_meta, public.red_raspunsuri, public.red_convocari,
   public.red_detinatori_contact, public.red_detinatori_token, public.red_detinatori, public.red_parcele, public.red_uat, public.red_proiecte, public.red_numere, public.red_jurnal;
 
 -- funcțiile (cele 19 ale migrării, pe semnătură exactă)
@@ -75,7 +82,7 @@ DROP FUNCTION public.fn_red_adresa_cunoscuta(uuid);
 DROP FUNCTION public.fn_red_jurnal_imuabil();
 DROP FUNCTION public.fn_red_jurnal();
 DROP FUNCTION public.fn_red_updated_at();
-DROP FUNCTION public.fn_red_parcela_uat_dupa();
+DROP FUNCTION public.fn_red_legaturi();
 DROP FUNCTION public.fn_red_uat_sesiuni_dupa();
 DROP FUNCTION public.fn_red_detinatori_before();
 DROP FUNCTION public.fn_red_detinatori_token_dupa();
