@@ -64,9 +64,16 @@ class Asamblare(unittest.TestCase):
         text, st = A.asambleaza_document(r.rd, 'd1', pagini_native={1: ''})
         self.assertNotIn('neverificat', text); self.assertIn('verificat de mineru', text)
 
-    def test_nr_cod_doar_pe_randuri_de_articol(self):
-        self.assertEqual(A.desparte_nr_cod('| 2024 ABC1 | Raport anual |'), '| 2024 ABC1 | Raport anual |')
-        self.assertEqual(A.desparte_nr_cod('| 001 RPCXA04 | M.C. | 70.200 |'), '| 001 | RPCXA04 | M.C. | 70.200 |')
+    def test_nr_cod_doar_cand_tabelul_arata_articole(self):
+        T = A.desparte_nr_cod_tabel
+        self.assertEqual(T([['2024 ABC1', 'Raport anual']]), [['2024 ABC1', 'Raport anual']])
+        self.assertEqual(T([['2024 ABC1', 'Raport anual 2023']]), [['2024 ABC1', 'Raport anual 2023']])  # contraexemplul Jakarinos r2
+        self.assertEqual(T([['001 RPCXA04', 'M.C.', '70.200'], ['002 GD11A1', 'M.C.', '19.5']]),
+                         [['001', 'RPCXA04', 'M.C.', '70.200'], ['002', 'GD11A1', 'M.C.', '19.5']])  # la rând
+        self.assertEqual(T([['003', 'SA11G1', 'M', '130'], ['005 TSD01D1', 'M.C.', '']]),
+                         [['003', 'SA11G1', 'M', '130'], ['005', 'TSD01D1', 'M.C.', '']])  # structura separată în același tabel
+        self.assertEqual(T([['2024 ABC1', 'x'], ['2030 XYZ9', 'y']]), [['2024 ABC1', 'x'], ['2030 XYZ9', 'y']])  # nu la rând
+        self.assertEqual(T([['012 TRA02A40', 'TONA', '1.894']]), [['012', 'TRA02A40', 'TONA', '1.894']])  # zerouri în față = articol de deviz
 
     def test_barele_nu_intra_in_pragul_cusaturii(self):
         r = Rulare([{'id': 'p1_b0', 'page': 1, 'index': 0}, {'id': 'p1_b1', 'page': 1, 'index': 1}])

@@ -22,20 +22,28 @@ def fara_tabele_o_coloana(segs):
     return [('text', '\n'.join(r[0] if r else '' for r in v)) if k == 'table' and all(len(r) <= 1 for r in v) else (k, v) for k, v in segs]
 
 
-# semn de articol în celulele de după prima: o cifră (cantitate, „Cantitate= 4.000 BUC.”) sau o unitate de măsură
-SEMN_ARTICOL = re.compile(r'\d|^\s*\[?\s*(?:\d+\]\s*)?(?:M\.?C\.?|M\.?P\.?|M\.?L\.?|M|MC|MP|ML|KG|TO|T|BUC\.?|SET|ORE|L|KM)\s*$', re.I)
+COD_SINGUR = re.compile(r'^\s*[A-Z0-9][A-Z0-9%]*[0-9][A-Z0-9%]*\s*$')
+NR_SINGUR = re.compile(r'^\s*\d{1,4}\s*$')
 
 
-def desparte_nr_cod(text):
-    """Doar pe rânduri de articol (Jakarinos #906 P2): o celulă de după prima are o cifră sau o UM. „| 2024 ABC1 | Raport anual |” rămâne."""
-    out = []
-    for l in text.split('\n'):
-        if l.startswith('| ') and l.endswith(' |'):
-            cel = l[2:-2].split(' | ')
-            m = NR_COD.match(cel[0]) if any(SEMN_ARTICOL.search(c) for c in cel[1:] if c.strip()) else None
-            if m: l = '| ' + ' | '.join([m.group(1), m.group(2)] + cel[1:]) + ' |'
-        out.append(l)
-    return '\n'.join(out)
+def desparte_nr_cod_tabel(rows):
+    """„nr. crt. + simbol” lipite în prima celulă se despart DOAR când structura tabelului arată că sunt articole (Jakarinos #906 r2 P2):
+    (a) alt rând din același tabel are deja nr. și cod în celule separate, sau (b) cel puțin două rânduri lipite au numere
+    consecutive sau egale (articole / resurse la rând); (c) pe rând, un nr. scris cu zerouri în față („007”, ca în devize) e articol.
+    Un rând izolat fără zerouri („| 2024 ABC1 | Raport anual 2023 |”) rămâne neschimbat."""
+    lipite = [(i, NR_COD.match(r[0])) for i, r in enumerate(rows) if r and NR_COD.match(r[0])]
+    if not lipite: return rows
+    separate = any(len(r) >= 2 and NR_SINGUR.match(r[0]) and COD_SINGUR.match(r[1]) for r in rows)
+    nr = [int(m.group(1)) for _, m in lipite]
+    la_rand = len(nr) >= 2 and all(0 <= b - a <= 1 for a, b in zip(nr, nr[1:]))
+    out = list(rows)
+    for i, m in lipite:
+        if separate or la_rand or (len(m.group(1)) >= 2 and m.group(1).startswith('0')): out[i] = [m.group(1), m.group(2)] + list(rows[i][1:])
+    return out
+
+
+def desparte_nr_cod(segs):
+    return [(k, desparte_nr_cod_tabel(v)) if k == 'table' else (k, v) for k, v in segs]
 
 
 def citire_valida(banda_dir):
@@ -54,7 +62,7 @@ def citire_valida(banda_dir):
 
 
 def text_banda(raw):
-    return desparte_nr_cod(render(fara_tabele_o_coloana(segments(raw))))
+    return render(desparte_nr_cod(fara_tabele_o_coloana(segments(raw))))
 
 
 def asambleaza_pagina(benzi_dirs, st):
