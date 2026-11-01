@@ -464,6 +464,21 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = { message: 'x', extra: { payload: '{ tokenuri_cumparate: 12, nume: "abc" }', continut_hash: 'a'.repeat(64) } }
     expect(scrubSentryEvent(ok)?.message).toBe('x')
   })
+  it('r25 P1-1 (Jakarinos): backtick, comentarii, orice sintaxa - cuvant-cheie urmat in <=200 caractere de o secventa de 43 e indiciu', () => {
+    for (const body of ['{ token: `prefix ' + T + '` }', '{ token: /* public */ "prefix ' + T + '" }', 'token => (' + T + ')', '<raspuns token="' + T + '"/>', 'p_token\n\t=\n' + T, 'TOKEN: ' + '.'.repeat(150) + T]) {
+      for (const ev of [
+        { request: { url: '/rest/v1/rpc/fn_red_numar_document', body }, extra: { copy: T } },
+        { message: 'ref_' + T, extra: { payload: body } },
+      ]) { const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true) }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'ref_' + T, data: { payload: body } })
+      expect(JSON.stringify(sp)).not.toContain(T)
+    }
+    // legitim: cuvantul token/raspuns fara secventa de 43 dupa el, in acelasi sir + hash in alt camp -> trece
+    for (const payload of ['{ token: `scurt` }', 'raspuns: ok /* 12 */', 'tokenuri_cumparate: 12, nume: "abc"']) {
+      const ok = { message: 'x', extra: { payload, continut_hash: 'a'.repeat(64) } }
+      expect(scrubSentryEvent(ok)?.message).toBe('x')
+    }
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

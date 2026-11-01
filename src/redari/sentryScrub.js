@@ -63,7 +63,11 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // Jakarinos r23 P1-1: delimitatorul șirului contează — un apostrof poate sta ÎN interiorul unui șir cu ghilimele duble (și invers);
 // cheia se închide cu delimitatorul ei (`"…"` sau `'…'`), valoarea-șir la fel
 // Jakarinos r24 P1-1: cheia poate fi și FĂRĂ ghilimele (`{ token: 'prefix <T>' }`, stil JS) — continuarea cheii = caractere de identificator
-const RX_INDICIU_JSON = /\\u[0-9a-f]{4}|p_token['"]?\s*[=:]|(?:raspuns|token)(?:(?:[^"\\]|\\.)*"|(?:[^'\\]|\\.)*'|[A-Za-z0-9_.$-]*)\s*:\s*(?:[\[{]|"(?:[^"\\]|\\.)*[A-Za-z0-9_-]{43}|'(?:[^'\\]|\\.)*[A-Za-z0-9_-]{43})/i
+// Jakarinos r25 P1-1 (backtick, comentarii `/* */` între cheie și valoare…): gata cu enumerarea sintaxelor — regula CONSERVATOARE:
+// într-un conținut pe care nu-l putem parcurge structural, un cuvânt-cheie (p_token/raspuns/token) urmat în cel mult 200 de caractere
+// de ORICE fel (delimitatori, comentarii, spații, escape-uri) de o secvență de ≥43 [A-Za-z0-9_-] e indiciu. Valorile legitime scurte
+// (`tokenuri_cumparate: 12`) rămân curate: nu au secvența de 43 după ele.
+const RX_INDICIU_JSON = /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]|(?:raspuns|token)[\s\S]{0,200}?[A-Za-z0-9_-]{43}/i
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
