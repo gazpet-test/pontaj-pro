@@ -282,6 +282,16 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const curat = { message: 'ok', request: { url: '/intern', body: JSON.stringify({ padding: 'x'.repeat(200001) }) } }
     expect(scrubSentryEvent(curat)?.message).toBe('ok')
   })
+  it('r13 P1-1/P1-2 (Jakarinos): cheie JSON cu escape Unicode (`"to\u006ben"`); JSON împachetat de 4 ori; padding peste limită', () => {
+    const uni = { message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: '{"to\u006ben":[null,"' + T + '"]}' } }
+    const r1 = scrubSentryEvent(uni); expect(r1 === null || !JSON.stringify(r1).includes(T)).toBe(true)
+    const uni2 = { message: 'ref_' + T, request: { url: '/intern', data: { 'p_token': { v: T } } } }   // cheie reală `p_token` (JS o decodează la creare)
+    const r2 = scrubSentryEvent(uni2); expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
+    let body = JSON.stringify({ token: { nested: { value: T } } })
+    for (let i = 0; i < 4; i++) body = JSON.stringify({ inner: body })
+    expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body } })).toBeNull()
+    expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: JSON.stringify({ padding: 'x'.repeat(200000), token: [null, T] }) } })).toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

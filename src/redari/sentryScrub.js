@@ -133,7 +133,8 @@ export function colecteazaTokenuriEveniment(event, adancime = 0) {
   // marchează setul ca `refuzat` → evenimentul devine „purtător” (orice secvență ≥43 rămasă ⇒ null) — nu ne bazăm pe limite
   const dinJson = (f) => {
     if (!/^\s*[[{]/.test(f)) return
-    const refuza = () => { if (/token|raspuns/i.test(f)) tokenuri.refuzat = true }
+    // Jakarinos r13 P1-1: cheia poate fi scrisă cu escape Unicode (`"to\u006ben"`) — un JSON neparcurs cu escape-uri e și el suspect
+    const refuza = () => { if (/token|raspuns|\u[0-9a-f]{4}/i.test(f)) tokenuri.refuzat = true }
     if (adancime >= 4 || f.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
     let obj
     try { obj = JSON.parse(f) } catch { return refuza() }
@@ -143,10 +144,13 @@ export function colecteazaTokenuriEveniment(event, adancime = 0) {
       if (sub.refuzat) tokenuri.refuzat = true
     }
   }
+  // Jakarinos r13 P1-1: parsarea JSON NU depinde de indiciul textual (cheia `token` poate fi `"to\u006ben"` în text) — orice șir
+  // care începe cu `{`/`[`, în oricare formă decodată, se parsează și se parcurge structural
   const dinText = (s, siJson = true) => {
     if (typeof s !== 'string') return
     const forme = formele(s)
-    if (forme.some(pareSuspect)) for (const f of forme) { colecteazaTokenuri(f, tokenuri); if (siJson) dinJson(f) }
+    if (forme.some(pareSuspect)) for (const f of forme) colecteazaTokenuri(f, tokenuri)
+    if (siJson) for (const f of forme) dinJson(f)
   }
   parcurge(event, (_obj, cheie, v, sensibil) => {
     if (typeof v === 'string') {
