@@ -2,8 +2,9 @@ import { PDFDocument } from 'npm:pdf-lib@1.17.1'
 export type VerdictPdf = 'mono' | 'multi' | 'invalid' | 'neverificabil'
 // În proces, fără Worker (01.11.2026): modulul worker separat, încărcat prin URL, nu intra în bundle-ul deployat (eszip ia doar
 // importurile statice), deci verificarea întorcea mereu „neverificabil” și orice cerere E3 primea 409 înainte de upload.
-// Un PDF care blochează parserul (max 12 MB, limitat de citesteCorp) e oprit de limita de CPU a Edge Runtime: cererea pică cu 5xx,
-// nimic nu urcă în Storage, iar clientul trece pe rezerva Haiku (izoOcrLocalFlux).
+// Un PDF care blochează parserul (max 12 MB, limitat de citesteCorp) e oprit de limita de CPU a Edge Runtime. Handler-ul verifică
+// ÎNAINTE de admite, deci nu rămâne nicio cerere și nu se consumă încercarea; clientul primește 5xx și afișează eroarea
+// (B4: un 5xx generic NU pornește automat rezerva Haiku), iar operatorul poate relua (Copilot #907 r2 P2-02).
 export async function verificaPdf(bytes: Uint8Array): Promise<VerdictPdf> {
   const text = new TextDecoder('latin1')
   if (!text.decode(bytes.slice(0, 5)).startsWith('%PDF-') || !/%%EOF\s*$/.test(text.decode(bytes.slice(-1024)))) return 'invalid'
