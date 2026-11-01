@@ -22,20 +22,25 @@ def fara_tabele_o_coloana(segs):
     return [('text', '\n'.join(r[0] if r else '' for r in v)) if k == 'table' and all(len(r) <= 1 for r in v) else (k, v) for k, v in segs]
 
 
+# semn de articol în celulele de după prima: o cifră (cantitate, „Cantitate= 4.000 BUC.”) sau o unitate de măsură
+SEMN_ARTICOL = re.compile(r'\d|^\s*\[?\s*(?:\d+\]\s*)?(?:M\.?C\.?|M\.?P\.?|M\.?L\.?|M|MC|MP|ML|KG|TO|T|BUC\.?|SET|ORE|L|KM)\s*$', re.I)
+
+
 def desparte_nr_cod(text):
+    """Doar pe rânduri de articol (Jakarinos #906 P2): o celulă de după prima are o cifră sau o UM. „| 2024 ABC1 | Raport anual |” rămâne."""
     out = []
     for l in text.split('\n'):
         if l.startswith('| ') and l.endswith(' |'):
             cel = l[2:-2].split(' | ')
-            m = NR_COD.match(cel[0])
+            m = NR_COD.match(cel[0]) if any(SEMN_ARTICOL.search(c) for c in cel[1:] if c.strip()) else None
             if m: l = '| ' + ' | '.join([m.group(1), m.group(2)] + cel[1:]) + ' |'
         out.append(l)
     return '\n'.join(out)
 
 
 def citire_valida(banda_dir):
-    """(cititor, raw) din prima citire validă, sau (None, None). Validă = result.json cu ok = true și, dacă result.json are raw_sha256,
-    acesta corespunde exact lui raw.txt (o citire rescrisă după rezultat nu se folosește)."""
+    """(cititor, raw) din prima citire validă, sau (None, None). Validă = result.json cu ok = true și raw_sha256 OBLIGATORIU, egal cu
+    sha256(raw.txt): lipsă / null / nepotrivire = citire neverificată, se trece la următorul cititor (Jakarinos #906 P1)."""
     for c in CITITORI:
         r, f = banda_dir / c / 'result.json', banda_dir / c / 'raw.txt'
         if not (r.exists() and f.exists()): continue
@@ -43,7 +48,7 @@ def citire_valida(banda_dir):
         except ValueError: continue
         if not isinstance(res, dict) or res.get('ok') is not True: continue
         raw = f.read_bytes().decode('utf-8')
-        if res.get('raw_sha256') is not None and res['raw_sha256'] != hashlib.sha256(raw.encode()).hexdigest(): continue
+        if res.get('raw_sha256') != hashlib.sha256(raw.encode()).hexdigest(): continue
         return c, raw
     return None, None
 
@@ -62,7 +67,7 @@ def asambleaza_pagina(benzi_dirs, st):
         if c == 'mineru': st['benzi_din_mineru'] += 1; st['lista_din_mineru'].append(bid)
         tx.append(text_banda(raw))
     if not tx: return ''
-    t = join_bands(tx, [])
+    t = join_bands(tx, [], nu_numara=frozenset({'|'}))
     if t is None: st['cusaturi_nesigure'] += 1; t = '\n'.join(tx)
     if '<td' in t.lower() or '<tr' in t.lower(): st['html_ramas'] += 1
     return t

@@ -57,6 +57,25 @@ class Asamblare(unittest.TestCase):
         self.assertIn('| 002 | TSA%10B | mc | 3.5 |', text)  # codul cu „%” e recunoscut
         self.assertNotIn('<td', text); self.assertEqual(st['html_ramas'], 0)
 
+    def test_fara_raw_sha256_citirea_nu_se_foloseste(self):
+        r = Rulare([{'id': 'p1_b0', 'page': 1, 'index': 0}])
+        citire(r.banda(1, 'p1_b0'), 'lighton', 'neverificat', sha=False)
+        citire(r.banda(1, 'p1_b0'), 'mineru', 'verificat de mineru')
+        text, st = A.asambleaza_document(r.rd, 'd1', pagini_native={1: ''})
+        self.assertNotIn('neverificat', text); self.assertIn('verificat de mineru', text)
+
+    def test_nr_cod_doar_pe_randuri_de_articol(self):
+        self.assertEqual(A.desparte_nr_cod('| 2024 ABC1 | Raport anual |'), '| 2024 ABC1 | Raport anual |')
+        self.assertEqual(A.desparte_nr_cod('| 001 RPCXA04 | M.C. | 70.200 |'), '| 001 | RPCXA04 | M.C. | 70.200 |')
+
+    def test_barele_nu_intra_in_pragul_cusaturii(self):
+        r = Rulare([{'id': 'p1_b0', 'page': 1, 'index': 0}, {'id': 'p1_b1', 'page': 1, 'index': 1}])
+        rand = '<tr><td>Beton</td><td>mc</td><td>10</td><td>20</td></tr>'
+        citire(r.banda(1, 'p1_b0'), 'lighton', '<table>' + rand + '</table>')
+        citire(r.banda(1, 'p1_b1'), 'lighton', '<table>' + rand + '<tr><td>Otel</td><td>kg</td><td>5</td><td>6</td></tr></table>')
+        text, st = A.asambleaza_document(r.rd, 'd1', pagini_native={1: ''})
+        self.assertEqual(text.count('Beton'), 2); self.assertEqual(st['cusaturi_nesigure'], 1)  # 4 tokeni de conținut < 8: nu se taie
+
     def test_tabel_o_coloana_devine_linii_de_text(self):
         r = Rulare([{'id': 'p1_b0', 'page': 1, 'index': 0}])
         citire(r.banda(1, 'p1_b0'), 'lighton', '<table><tr><td>Teava PE100 SDR11</td></tr><tr><td>2405</td></tr></table>')
