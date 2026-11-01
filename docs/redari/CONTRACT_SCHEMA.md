@@ -269,11 +269,13 @@ scrie în ordinea parcele → detinatori → contact → red_import_loturi, în 
 - `completeazaDocx(templateArrayBuffer, campuri) → Blob`: deschide DOCX cu jszip, înlocuiește `{{camp}}` în `word/document.xml`
   (și headers/footers), inclusiv când placeholder-ul e rupt între mai multe `<w:r>` (se reunesc run-urile unui paragraf înainte
   de înlocuire), escape XML pe valori; `{{qr}}` → imagine PNG inserată (QR generat local cu `qrcode`, `toDataURL`).
-- Convocator provizoriu: `public/redari/sabloane/convocator_provizoriu.docx` (generat cu `docx` din devDependencies printr-un
-  script `scripts/redari_sablon_provizoriu.mjs`, câmpuri: `{{nume}} {{id_parcela}} {{uat}} {{sat}} {{tarla}} {{nr_cadastral}}
-  {{suprafata}} {{zi1}} {{program1}} {{zi2}} {{program2}} {{zi3}} {{program3}} {{link}} {{qr}} {{nr_document}} {{data}}
-  {{contact_nume}} {{contact_telefon}} {{contact_email}} {{reprezentant_tgz}} {{text_gdpr}}`). Când vin Model_1..6, se
-  înlocuiește doar fișierul.
+- Convocator: `public/redari/sabloane/convocator.docx` (Model_1 v5 cu 36 de placeholder-e — harta completă în `docs/redari/SABLOANE.md`
+  §2.1; calea stă în `SABLON_CONVOCATOR` din `src/redari/ui/comune.jsx`). `genereazaConvocator({ detinator, contactDetinator, contact, parcela,
+  uat, proiect, nrDocument, token, origin, templateArrayBuffer, … })` furnizează cheile `CHEI_CONVOCATOR` (cele 36 + `id_parcela` pentru corelare);
+  `contactDetinator` = rândul din `red_detinatori_contact` (PII — doar admin/editor îl pot citi; din el se compune `{{adresa}}`), separat de
+  `contact` = persoana de contact Gazpet (fallback `proiect.contact_*`). `verificaDateConvocator` blochează generarea de trimis când lipsesc
+  câmpurile obligatorii (contract, împuternicire, sesiune cu program, contact, text GDPR, reprezentant TGZ, adresă cunoscută). Convocatorul
+  provizoriu (`convocator_provizoriu.docx`, 22 de câmpuri) a fost retras odată cu trecerea pe șablonul real (§10).
 - Link public: `${window.location.origin}/redari/raspuns/${token_raspuns}`.
 - `hashBlob(blob) → sha256 hex` (WebCrypto) pentru `continut_hash`.
 - Borderou Poștă CSV (UTF-8 cu BOM, `;`): `nr_document;nume;adresa;cod_postal;localitate;judet;id_parcela`.
