@@ -584,7 +584,26 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain('u0055')
     // si celelalte surse de `refuzat`: JSON prea mare cu indiciu, cheie codificata de 4+ ori - fara copie in clar => tot null
     expect(scrubSentryEvent({ message: 'x', extra: { payload: JSON.stringify({ token: [null, U], padding: 'x'.repeat(200000) }) } })).toBeNull()
-    expect(scrubSentryEvent({ message: 'x', extra: { '%25252574oken': [null, 'scurt'] } })).toBeNull()
+    expect(scrubSentryEvent({ message: 'x', extra: { '%25252574oken': [null, 'scurt'] } })?.message).toBe('x')   // r33: semnal slab, fara secventa de 43 -> trece
+  })
+  it('r33 P1-1 (Jakarinos): JSON VALID (fara duplicate) cu escape Unicode in mijlocul identificatorului - redactat in extra, request.data, span', () => {
+    const U = T.slice(0, 20) + '\\u00' + T.charCodeAt(20).toString(16).padStart(2, '0') + T.slice(21)   // al 21-lea caracter ca \\uXXXX
+    const payload = '{"token":"' + U + '"}'
+    expect(JSON.parse(payload).token).toBe(T)
+    for (const ev of [{ message: 'x', extra: { nota: payload } }, { message: 'x', request: { url: '/intern', data: payload } }, { message: 'x', extra: { lista: [payload, { adanc: payload }] } }]) {
+      const rez = scrubSentryEvent(ev)
+      if (rez !== null) { const j = JSON.stringify(rez); expect(j).not.toContain(T); expect(j).not.toContain(U) }
+    }
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { nota: payload } })
+    expect(JSON.stringify(sp)).not.toContain(U); expect(JSON.stringify(sp)).not.toContain(T)
+  })
+  it('r33 P2-1 (Jakarinos): escape Unicode singur sau %-codificare ramasa, FARA cuvant-cheie/identificator -> evenimentul trece', () => {
+    expect(scrubSentryEvent({ message: 'Caracter primit: \\u0041' })).toEqual({ message: 'Caracter primit: \\u0041' })
+    expect(scrubSentryEvent({ message: 'Link: /documente/%25252520' })).toEqual({ message: 'Link: /documente/%25252520' })
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'Caracter \\u0041', data: {} })
+    expect(sp.description).toBe('Caracter \\u0041')
+    // dar cu o secventa de 43 in eveniment, codificarea ramasa (ambigua) il face purtator -> null
+    expect(scrubSentryEvent({ message: 'ref_' + T, extra: { '%25252574oken': [null, 'scurt'] } })).toBeNull()
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }

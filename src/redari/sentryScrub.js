@@ -77,7 +77,11 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // Jakarinos r28 P2-1: regula e GLOBALĂ (beforeSend e unul singur) — deci costul atinge și alte module: un eveniment al cărui TEXT neparcurs
 // pune cuvântul token/raspuns lângă o secvență de ≥43 (ex. `tokenuri_cumparate=12, hash=<43>` într-un message) se pierde oriunde în ERP.
 // Decizie asumată (scoping-ul la /redari ar lăsa o gaură: un text cu token fără marcaj de modul ar trece); de confirmat de Răzvan.
-const RX_INDICIU_JSON = { test: (f) => /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && RX_RUN43.test(f)) }
+// Jakarinos r33 P2-1: un escape `\uXXXX` SINGUR (`Caracter primit: \u0041`) nu mai e indiciu; indiciul se judeca pe forma cu escape-urile
+// reconstruite (`"to\u006ben":[null,T]` -> `"token":[null,T]`), cu aceeasi regula: cuvant-cheie + secventa >=43, sau `p_token` urmat de `=`/`:`
+const cuUnicode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+const indiciuPe = (f) => /p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && RX_RUN43.test(f))
+const RX_INDICIU_JSON = { test: (f) => indiciuPe(f) || indiciuPe(cuUnicode(f)) }
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
@@ -118,6 +122,11 @@ export function redacteazaText(s, tokenuriGlobale = null) {
   if (typeof s !== 'string') return s
   const forme = formele(s)
   const tokenuri = new Set(tokenuriGlobale || [])
+  // Jakarinos r33 P1-1: JSON valid `{"token":"<T cu un \u0055 in mijloc>"}` — tokenul e colectat structural, dar in SIR sta sub escape;
+  // daca forma cu escape-urile reconstruite (si cu backslash-urile dublate reduse) contine un token colectat, tot sirul devine [token]
+  if (tokenuri.size && s.includes('\\u')) {
+    for (const f of forme) for (const g of [cuUnicode(f), cuUnicode(f.replace(/\\\\/g, '\\'))]) if (contineVreunToken(g, tokenuri)) return TOKEN
+  }
   let rezultat = s
   for (const t of tokenuri) for (const v of varianteToken(t)) rezultat = rezultat.split(v).join(TOKEN)
   if (!forme.some(pareSuspect)) return rezultat
@@ -228,12 +237,12 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
   }
   parcurge(event, (_obj, cheie, v, sensibilAici) => {
     if (typeof v === 'string') {
-      if (ramaneCodificat(v)) tokenuri.refuzat = true
+      if (ramaneCodificat(v)) tokenuri.ambiguu = true   // r33 P2-1: semnal SLAB -> purtator (nu eliminare neconditionata)
       if (sensibilAici || cheieDeToken(cheie)) tokenuriDinValoareSensibila(v, tokenuri)
       dinText(v, true, sensibilAici || cheieDeToken(cheie))
     }
     return v
-  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) tokenuri.refuzat = true; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
+  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) tokenuri.ambiguu = true; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
   dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
@@ -282,9 +291,9 @@ export function esteDinFormularulPublic(event) {
 export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0) {
   const text = serializeaza(event)
   // r32: pe lângă formele %-decodate, și forma cu escape-urile JSON `\uXXXX` reconstruite (un identificator poate sta doar sub ele)
-  const cuUnicode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
   const formeToate = formele(text)
-  for (const f of [...formeToate]) { const u = cuUnicode(f); if (u !== f) formeToate.push(u) }
+  // Jakarinos r33 P1-1: JSON.stringify dubleaza backslash-ul (`\\u0055`) — reducem `\\` -> `\` inainte de reconstruire
+  for (const f of [...formeToate]) for (const u of [cuUnicode(f), cuUnicode(f.replace(/\\\\/g, '\\'))]) if (u !== f) formeToate.push(u)
   for (const f of formeToate) {
     if (contineVreunToken(f, tokenuri)) return true
     if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true
@@ -313,7 +322,7 @@ export function scrubSentrySpan(span) {
     const tokenuri = colecteazaTokenuriEveniment(span)
     redacteazaAdanc(span, tokenuri)
     if (tokenuri.refuzat) return golit()   // r32 P1-1: refuzat ⇒ golit necondiționat
-    if (maiScurgeToken(span, tokenuri, tokenuri.size > 0)) return golit()   // r14 P1-1: si spanurile tin cont de `refuzat`
+    if (maiScurgeToken(span, tokenuri, tokenuri.size > 0 || !!tokenuri.ambiguu)) return golit()
     return span
   } catch {
     try {
@@ -331,7 +340,7 @@ export function scrubSentryEvent(event) {
     if (esteDinFormularulPublic(event)) return null
     const tokenuri = colecteazaTokenuriEveniment(event)   // ÎNAINTE de ștergerea corpului — colectează și din request.data/body
     // r14 P1-1 (Jakarinos + Copilot r8): `refuzat` (JSON suspect neparcurs, oriunde in eveniment, nu doar in corp) face evenimentul purtator
-    let purtator = tokenuri.size > 0 || !!tokenuri.refuzat
+    let purtator = tokenuri.size > 0 || !!tokenuri.refuzat || !!tokenuri.ambiguu
     const req = event.request
     if (req && typeof req === 'object' && (req.data !== undefined || req.body !== undefined)) {
       const corp = serializeaza({ data: req.data, body: req.body })
