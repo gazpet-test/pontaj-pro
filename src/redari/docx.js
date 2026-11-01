@@ -412,20 +412,27 @@ export async function salveazaConvocator(supabase, { blob, hash, proiectCod, uat
 
 export const MAX_INCERCARI_VERSIUNE = 20
 
+export const PAGINA_LISTARE_STORAGE = 1000
+const MAX_PAGINI_LISTARE = 100 // plafon de siguranță: 100.000 de obiecte într-un folder de parcelă nu există în practică
+
 /**
- * Cea mai mare versiune `{nrDocument}-v{n}.docx` existentă în folderul parcelei (listare storage); null dacă listarea eșuează.
+ * Cea mai mare versiune `{nrDocument}-v{n}.docx` existentă în folderul parcelei (listare storage PAGINATĂ, limit + offset,
+ * până la o pagină incompletă — maximul e real și peste 1000 de obiecte); null dacă vreo pagină eșuează.
  * Fișierele orfane (încărcate, dar nelegate de rând) contează — așa nu mai bâjbâim versiune cu versiune.
  */
-export async function versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument }) {
+export async function versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument }, { pagina = PAGINA_LISTARE_STORAGE } = {}) {
   const folder = `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/${segment(idParcela, 'id_parcela')}`
   const nr = segment(nrDocument, 'nr_document')
   const rx = new RegExp(`^${nr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-v(\\d+)\\.docx$`)
   try {
-    const { data, error } = await supabase.storage.from(BUCKET_REDARI).list(folder, { limit: 1000 })
-    if (error || !Array.isArray(data)) return null
     let max = 0
-    for (const f of data) { const m = rx.exec(f?.name || ''); if (m) max = Math.max(max, parseInt(m[1], 10)) }
-    return max
+    for (let p = 0; p < MAX_PAGINI_LISTARE; p++) {
+      const { data, error } = await supabase.storage.from(BUCKET_REDARI).list(folder, { limit: pagina, offset: p * pagina })
+      if (error || !Array.isArray(data)) return null
+      for (const f of data) { const m = rx.exec(f?.name || ''); if (m) max = Math.max(max, parseInt(m[1], 10)) }
+      if (data.length < pagina) return max // pagină incompletă = ultima
+    }
+    return null // prea multe pagini: nu ne bazăm pe un maxim parțial → cad pe încercări succesive
   } catch { return null }
 }
 
