@@ -438,6 +438,19 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = { message: 'x', extra: { payload: "{'tokenuri_cumparate': '12'}", continut_hash: 'a'.repeat(64) } }
     expect(scrubSentryEvent(ok)?.message).toBe('x')
   })
+  it('r23 P1-1 (Jakarinos): apostrof IN interiorul unui sir cu ghilimele duble (si invers) nu rupe indiciul', () => {
+    for (const body of ['{"token.value":"prefix \' ' + T, '{"token\'value":"' + T, "{'token.value':'prefix \" " + T, '{"raspuns":"it\'s ' + T + '"}', "{'p_token':'x\"" + T + "'}"]) {
+      for (const ev of [
+        { request: { url: '/api', body }, extra: { copy: T } },
+        { message: 'ref_' + T, extra: { payload: body } },
+      ]) { const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true) }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'ref_' + T, data: { payload: body } })
+      expect(JSON.stringify(sp)).not.toContain(T)
+    }
+    // legitim: apostrof in valoare scurta + hash -> trece
+    const ok = { message: 'x', extra: { payload: '{"tokenuri_cumparate":"it\'s 12"}', continut_hash: 'a'.repeat(64) } }
+    expect(scrubSentryEvent(ok)?.message).toBe('x')
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
