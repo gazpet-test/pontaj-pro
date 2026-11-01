@@ -31,16 +31,19 @@ const pdfDin = (pagini) => {
 const sb = createClient(URL_ERP, anon, { auth: { persistSession: false } })
 
 // status: codul HTTP real; null = eroare de transport (fără răspuns) — niciodată tratată ca succes
-async function apel(body) {
-  let rez
-  try { rez = await cuTimeout(sb.functions.invoke('izo-e3-ocr-local', { body }), APEL_MS, body.op) }
+// timeout pe TOATĂ operația (invocare + citirea corpului de eroare); ms = min(APEL_MS, timpul rămas până la termen, dacă e dat)
+async function apel(body, pana = Infinity) {
+  const ms = Math.max(1, Math.min(APEL_MS, pana - Date.now()))
+  const tot = (async () => {
+    const { data, error } = await sb.functions.invoke('izo-e3-ocr-local', { body })
+    if (!error) return { status: 200, corp: data }
+    const status = error.context?.status ?? null
+    let corp = null
+    if (error.context?.json) { try { corp = await error.context.json() } catch { /* fără JSON */ } }
+    return { status, corp, transport: status === null ? String(error.message || error) : undefined }
+  })()
+  try { return await cuTimeout(tot, ms, body.op) }
   catch (e) { return { status: null, corp: null, transport: String(e.message || e) } }
-  const { data, error } = rez
-  if (!error) return { status: 200, corp: data }
-  const status = error.context?.status ?? null
-  let corp = null
-  if (error.context?.json) { try { corp = await error.context.json() } catch { /* fără JSON */ } }
-  return { status, corp, transport: status === null ? String(error.message || error) : undefined }
 }
 const cere = (pdf_base64) => apel({ op: 'cere', pdf_base64, proiect_id: 37, depozit_id: 12, sablon: 'aviz_teava' })
 
@@ -64,8 +67,11 @@ try {
         let final = null, vazutPreluata = false
         const limita = Date.now() + TERMEN_MS
         for (let i = 0; !final && Date.now() < limita; i++) {
-          await new Promise((ok) => setTimeout(ok, 5000))
-          const s = await apel({ op: 'stare', cerere_id: id })
+          await new Promise((ok) => setTimeout(ok, Math.max(0, Math.min(5000, limita - Date.now()))))
+          if (Date.now() >= limita) break
+          const s = await apel({ op: 'stare', cerere_id: id }, limita)
+          // răspuns primit după termen = nu contează (termen absolut)
+          if (Date.now() > limita) break
           // orice răspuns de stare care nu e 200 + success = abatere (nu se interpretează mai departe)
           if (s.status !== 200 || s.corp?.success !== true) { verifica(`stare ${i}: 200 + success`, false, s); continue }
           const st = s.corp?.stare
@@ -82,7 +88,9 @@ try {
     }
   }
 } finally {
-  await cuTimeout(sb.auth.signOut(), APEL_MS, 'signOut').catch(() => {})
+  // timeout / eroare la închiderea sesiunii = abatere (sesiunea poate rămâne deschisă)
+  try { const { error } = await cuTimeout(sb.auth.signOut(), APEL_MS, 'signOut'); if (error) throw error }
+  catch (e) { console.log('ABATERE signOut', String(e.message || e)); abateri++ }
 }
 console.log(abateri ? `ESEC ${abateri} abateri` : 'TOATE OK')
 process.exit(abateri ? 1 : 0)
