@@ -418,6 +418,9 @@ BEGIN
   -- obiectii peste 4000 si in trigger; un UPDATE care nu schimba continutul (ex. semnatura) nu re-valideaza
   IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, obiectii_text) VALUES (%L, ''scris'', ''constatare_teren'', repeat(''x'', 4001))', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: obiectii > 4000 acceptate in trigger'; END IF;
   UPDATE public.red_raspunsuri SET semnatura_electronica_ref = 'ref-test' WHERE detinator_id = v_d5 AND optiune = 'particip';
+  -- trecerea la particip re-verifica ziua chiar daca ziua nu se schimba (r4 P2-02); schimbarea canalului re-valideaza (online fara bifa → 23514)
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET optiune = ''particip'' WHERE detinator_id = %L AND optiune = ''nu_particip_fara_obiectii''', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: trecerea la particip fara zi acceptata'; END IF;
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET canal = ''online'' WHERE detinator_id = %L AND optiune = ''nu_particip_fara_obiectii''', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: schimbarea canalului in online fara bifa acceptata'; END IF;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
   UPDATE public.red_raspunsuri SET created_at = now() - interval '7 days' WHERE detinator_id = v_d5 AND optiune = 'particip';
   IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND created_at < now() - interval '1 day') THEN RAISE EXCEPTION 'TEST6 FAIL: created_at modificat ca postgres'; END IF;
@@ -630,8 +633,12 @@ BEGIN
      AND ((p.cmd IN ('SELECT', 'DELETE', 'UPDATE', 'ALL') AND p.qual IS NULL) OR (p.cmd = 'INSERT' AND p.with_check IS NULL)
           OR EXISTS (SELECT 1 FROM unnest(ARRAY[p.qual, p.with_check]) e WHERE e IS NOT NULL AND coalesce(public.fn_red_storage_expr_bucket(e), 'redari') = 'redari'));
   IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'TEST9 FAIL: politici storage care ar putea acoperi redari: %', v_rau; END IF;
-  -- verificatorul insusi: OR la nivel de sus / OR dupa un AND cu bucket-ul / bucket-ul nu e primul operand → NULL; OR imbricat sub AND → bucket
+  -- verificatorul insusi: OR la nivel de sus / OR dupa un AND cu bucket-ul / bucket-ul nu e primul operand / text dupa grup / NOT inainte → NULL; OR imbricat sub AND → bucket
   IF public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) OR (b = 2))') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) IS FALSE)') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) IS NOT TRUE)') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('NOT ((bucket_id = ''x''::text) AND (a = 1))') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) AND (a = 1)) OR true') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) OR (a = 1))') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((a = 1) AND (bucket_id = ''x''::text))') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) AND ((a = 1) OR (b = 2)))') IS DISTINCT FROM 'x'

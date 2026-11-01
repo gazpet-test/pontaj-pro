@@ -26,7 +26,8 @@ trece; un deținător nou pe parcela ștearsă e refuzat; parcela ștearsă iese
 `zi_sesiune_aleasa` NOT NULL ∈ sesiune_zi1..3 ale UAT-ului deținătorului; `nu_particip_cu_obiectii` / `constatare_teren` ⇒ `obiectii_text` nevid;
 `nu_particip_fara_obiectii` ⇒ `declaratie_confirmata = true` DOAR pe canal `online` (telefon / scris / sesiune se acceptă fără bifă — operatorul
 confirmă); **[r4]** `obiectii_text` ≤ 4000 și în trigger; la UPDATE verificările rulează DOAR când se schimbă `optiune` / `zi_sesiune_aleasa` /
-`obiectii_text` / `declaratie_confirmata`, iar apartenența zilei la sesiunile CURENTE ale UAT-ului se verifică la INSERT și la schimbarea zilei.
+`obiectii_text` / `declaratie_confirmata` / **[r5]** `canal`, iar apartenența zilei la sesiunile CURENTE ale UAT-ului se verifică la INSERT, la
+schimbarea zilei și **[r5]** când opțiunea devine `particip`.
 RPC-ul public își păstrează mesajele jsonb (verificările lui rămân înaintea insertului). **[r4] Proveniență**: `created_at` = `now()` pus de
 trigger la INSERT și imutabil apoi; `authenticated` NU are privilegiu de coloană pe `seq` și `created_at` (nici `OVERRIDING SYSTEM VALUE`, nici
 `created_at` explicit nu trec — 42501); INSERT/UPDATE pe red_raspunsuri doar pe coloanele de conținut (`select=*` rămâne).
@@ -171,7 +172,8 @@ SECURITY DEFINER, EXECUTE authenticated, cer nivel admin/editor; peste 9999 → 
 **[r3]** Index pe `fereastra_start`; curățarea (rânduri > 24 h, singurul DELETE din modul, ca owner — `fn_red_rate_limit_curata`) NU la fiecare
 atingere, ci în ~2 % din apeluri sau când `pg_class.reltuples` > 10.000, o singură dată per apel RPC; **[r4]** cel mult o dată la 10 minute (rândul
 de control `cheie = '_curatare'`, `fereastra_start` = ultima curățare), în loturi de 5000 (subselect pe `ctid`), și rulează DUPĂ verificarea limitei
-IP, nu înaintea ei. **Cheia de token se atinge DOAR pentru
+IP, nu înaintea ei; **[r5]** intervalul e revendicat atomic (`UPDATE … RETURNING` pe rândul de control). **[r5]** `fn_red_legaturi` ia `FOR SHARE` pe
+rândul UAT la inserarea parcelei (serializare cu schimbarea `uat3`). **Cheia de token se atinge DOAR pentru
 tokenuri existente și valide** (mulțime finită — fără DoS prin chei arbitrare); pentru tokenuri cu format bun dar inexistente / expirate se
 contorizează doar IP-ul. Fără `x-forwarded-for` cheia e `ip:necunoscut` cu aceeași limită de 30 — limita reală pentru traficul fără IP e la
 gateway-ul Supabase, nu aici.
@@ -261,7 +263,7 @@ upload-urile se fac cu `upsert: false`). În tabele se salvează `*_path` (calea
 prin `fn_red_storage_expr_bucket` că nicio politică permisivă străină de pe `storage.objects` nu poate acoperi `redari`: expresia cerută a comenzii
 (USING pentru SELECT/DELETE/UPDATE/ALL, WITH CHECK pentru INSERT; WITH CHECK NULL pe UPDATE/ALL moștenește USING, ca în PostgreSQL) trebuie să aibă
 `bucket_id = '<alt bucket>'` ca prim operand al AND-ului de nivel superior, fără niciun OR la acel nivel sau mai sus (paranteze numărate, literale
-sărite). Verificarea prin Storage API pe prod rămâne manuală după apply — `docs/redari/MIGRARE_20261126a.md`.
+sărite), **[r5]** nimic înainte (`NOT`) și nimic după închiderea grupului (`IS FALSE` / `IS NOT TRUE` / `OR` / `::`). Verificarea prin Storage API pe prod rămâne manuală după apply — `docs/redari/MIGRARE_20261126a.md`.
 
 ## 7. Import (client-side, `src/redari/importTgz.js`)
 Excel TGZ: o foaie, antetul pe rândul 3, coloane: `Nr.Crt., Nr.Poz.Hg., UAT, Județ, Nume Deținător, Adresă, Suprafață Afectată
