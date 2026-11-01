@@ -74,6 +74,9 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // exact 43 de caractere — în text neparcurs cele două sunt INDISTINCTE. Alegem securitatea: orice secvență ≥43 după un cuvânt-cheie e
 // indiciu (hex inclus). Costul acceptat: un eveniment al modulului care pune un hash lângă cuvântul token/raspuns într-un TEXT neparcurs
 // se pierde. Obiectele structurate nu au această problemă (câmpurile vecine sunt separate), iar modulul raportează erorile structurat.
+// Jakarinos r28 P2-1: regula e GLOBALĂ (beforeSend e unul singur) — deci costul atinge și alte module: un eveniment al cărui TEXT neparcurs
+// pune cuvântul token/raspuns lângă o secvență de ≥43 (ex. `tokenuri_cumparate=12, hash=<43>` într-un message) se pierde oriunde în ERP.
+// Decizie asumată (scoping-ul la /redari ar lăsa o gaură: un text cu token fără marcaj de modul ar trece); de confirmat de Răzvan.
 const RX_INDICIU_JSON = { test: (f) => /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && RX_RUN43.test(f)) }
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
@@ -93,6 +96,9 @@ export const formele = (s) => {
   }
   return lista
 }
+// Jakarinos r28 P1-1: un șir care, după MAX_DECODARI decodări, ÎNCĂ mai conține `%XX` (codificat de ≥4 ori, ex. `%25252574oken`) e
+// AMBIGUU — nu putem ști ce cheie ascunde; evenimentul devine purtător (orice secvență ≥43 rămasă ⇒ null). Creșterea limitei ar muta pragul.
+const ramaneCodificat = (s) => { const f = formele(s); return f.length === MAX_DECODARI + 1 && /%[0-9A-Fa-f]{2}/.test(f[f.length - 1]) }
 const colecteazaTokenuri = (forma, set) => {
   for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN, RX_TOKEN_CHEIE]) {
     rx.lastIndex = 0
@@ -202,11 +208,12 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
   }
   parcurge(event, (_obj, cheie, v, sensibilAici) => {
     if (typeof v === 'string') {
+      if (ramaneCodificat(v)) tokenuri.refuzat = true
       if (sensibilAici || cheieDeToken(cheie)) tokenuriDinValoareSensibila(v, tokenuri)
       dinText(v, true, sensibilAici || cheieDeToken(cheie))
     }
     return v
-  }, (cheie, sensibilAici) => { if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
+  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) tokenuri.refuzat = true; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
   dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
