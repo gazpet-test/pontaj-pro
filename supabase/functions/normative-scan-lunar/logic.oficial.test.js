@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   consolidari, paginaPotrivita, verdictOficial, imparteLot, faraRand, construiesteMail, URL_LEGISLATIE,
-  dataISO, plafoneazaAI, ordineRulare,
+  dataISO, plafoneazaAI, ordineRulare, ordinePrioritate,
 } from './logic.js';
 
 const pagina = ({ titlu = 'HG        395 02/06/2016 - Portal Legislativ', emitent = 'GUVERNUL', bloc } = {}) =>
@@ -64,6 +64,25 @@ describe('consolidari()', () => {
   it('r3: data-title nu tine loc de title', () => {
     expect(consolidari(`<div id="istoric_fa"><a data-title="Consolidarea din 24.05.2024" title="Alta forma">x</a></div>`)).toBeNull();
     expect(consolidari(`<div id="istoric_fa"><a data-title="x" title="Consolidarea din 24.05.2024">x</a></div>`)).toEqual(['2024-05-24']);
+  });
+  it('r4: id/title scrise IN valoarea altui atribut nu conteaza', () => {
+    expect(consolidari(`<div data-note=' id="istoric_fa"'><a title="Consolidarea din 24.05.2024">x</a></div>`)).toBeNull();
+    expect(consolidari(`<div id="istoric_fa"><a data-note=' title="Consolidarea din 24.05.2024"' title="Alta forma">x</a></div>`)).toBeNull();
+  });
+  it('r4: </div> dintr-o valoare de atribut nu inchide blocul; </DIV> majuscul il inchide; </diversion> nu', () => {
+    const h = `<div id="istoric_fa"><a title="Consolidarea din 24.05.2024">x</a><span data-note="</div>"></span><a title="Consolidarea din 25.02.2026">y</a></div>`;
+    expect(consolidari(h)).toEqual(['2026-02-25', '2024-05-24']);
+    expect(consolidari(`<div id="istoric_fa"><a title="Consolidarea din 24.05.2024">x</a></DIV><a title="Consolidarea din 25.02.2026">y</a>`)).toEqual(['2024-05-24']);
+    expect(consolidari(`<div id="istoric_fa"><a title="Consolidarea din 24.05.2024">x</a></diversion><a title="Consolidarea din 25.02.2026">y</a></div>`)).toEqual(['2026-02-25', '2024-05-24']);
+  });
+  it('r4: pagina trunchiata (fara </div> sau tag neinchis) → null', () => {
+    expect(consolidari(`<div id="istoric_fa"><a title="Consolidarea din 24.05.2024">x</a>`)).toBeNull();
+    expect(consolidari(`<div id="istoric_fa"><a title="Consolidarea din 24.05.2024"`)).toBeNull();
+  });
+  it('r4: id-ul in <script> sau comentariu nu conteaza; atribut dublat = ambiguu', () => {
+    const scr = `<script>if (a<b) document.getElementById('istoric_fa'); var s = '<div id="istoric_fa">';</script>` + HTML.slice(HTML.indexOf('<div id="istoric_fa"'));
+    expect(consolidari(scr)).toEqual(['2026-02-25', '2024-05-24', '2023-04-19', '2016-06-09']);
+    expect(consolidari(`<div id="istoric_fa"><a title="Consolidarea din 24.05.2024" title="Consolidarea din 25.02.2026">x</a></div>`)).toBeNull();
   });
   it('republicarea face parte din istoric (Legea 307/2006: „Republicarea din 17.04.2019”)', () => {
     const bloc = `<a title='Consolidarea din 08.05.2026'>x</a><a title='Republicarea din 17.04.2019' href='~/x?isFormaDeBaza=True'>y</a><a title='Consolidarea din 18.09.2006'>z</a>`;
@@ -162,6 +181,26 @@ describe('plafoneazaAI() — AI nu confirma ce sursa oficiala n-a confirmat (Jak
     ], [9, 7]);
     expect(out.map((v) => v.verdict)).toEqual(['necunoscut', 'schimbare_noua', 'neschimbat']);
     expect(out[0].detalii).toContain('sursa oficială indisponibilă');
+  });
+});
+
+describe('ordinePrioritate() — r4', () => {
+  it('CRITIC inaintea ACTUALIZARE (nu alfabetic); 40 ACTUALIZARE + 1 CRITIC → CRITIC intra in primele 40', () => {
+    const l = [...Array(40)].map((_, k) => ({ id: k + 1, prioritate: 'ACTUALIZARE' })).concat([{ id: 99, prioritate: 'CRITIC' }]);
+    const sel = ordinePrioritate(l).slice(0, 40);
+    expect(sel[0].id).toBe(99);
+    expect(sel.map((n) => n.id)).toContain(99);
+  });
+});
+
+describe('paginaPotrivita() — r4 titlu/emitent ambigue', () => {
+  it('doua <title> sau doua span S_EMT_BDY → false', () => {
+    expect(paginaPotrivita(HTML.replace('</head>', '<title>LEGE 1 01/01/2020 - Portal Legislativ</title></head>'), rand())).toBe(false);
+    expect(paginaPotrivita(HTML.replace('</table>', '<span class="S_EMT_BDY">GUVERNUL</span></table>'), rand())).toBe(false);
+  });
+  it('clasa S_EMT_BDY scrisa in valoarea altui atribut nu conteaza', () => {
+    const h = HTML.replace(`<span class="S_EMT_BDY"><li>GUVERNUL</li></span>`, `<span data-x='class="S_EMT_BDY"'>GUVERNUL</span>`);
+    expect(paginaPotrivita(h, rand())).toBe(false);
   });
 });
 

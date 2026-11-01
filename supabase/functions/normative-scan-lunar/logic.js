@@ -133,30 +133,90 @@ export function dataISO(z, l, a) {
 // Istoricul consolidarilor DIN BLOCUL <div id="istoric_fa">…</div> (comentariile HTML scoase).
 // Intoarce datele ISO unice, descrescator; null = bloc lipsa, gol sau citit incomplet (orice <a> din bloc fara
 // data valida) — adica NU exista dovada ca istoricul e complet.
-// r3 (Jakarinos r2 P1-1): elementul cu id EXACT „istoric_fa” (un singur element, atributul id adevarat, nu
-// data-id / istoric_fa_backup), continutul pana la </div>-ul PERECHE; orice <div> imbricat = structura ambigua → null.
-// In fiecare <a>, atributul title ADEVARAT (nu data-title).
-const RE_ID_ISTORIC = /<div\b(?=[^>]*(?:^|\s)id\s*=\s*(?:"istoric_fa"|'istoric_fa'|istoric_fa(?=[\s>])))[^>]*>/gi;
-export function consolidari(html) {
-  const s = String(html || '').replace(/<!--[\s\S]*?-->/g, '');
-  const deschideri = [...s.matchAll(RE_ID_ISTORIC)];
-  if (deschideri.length !== 1) return null;
-  const start = deschideri[0].index + deschideri[0][0].length;
-  const inchidere = s.indexOf('</div', start);
-  if (inchidere < 0) return null;
-  const continut = s.slice(start, inchidere);
-  if (/<div\b/i.test(continut)) return null;
-  const linkuri = [...continut.matchAll(/<a\b([^>]*)>/gi)];
-  if (!linkuri.length) return null;
-  const out = new Set();
-  for (const [, attrs] of linkuri) {
-    // formele din istoric: „Consolidarea din …” si „Republicarea din …” (ex. Legea 307/2006, republicata 17.04.2019)
-    const m = (' ' + attrs).match(/\stitle\s*=\s*(['"])\s*(?:Consolidarea|Republicarea) din (\d{2})\.(\d{2})\.(\d{4})\s*\1/i);
-    const iso = m && dataISO(m[2], m[3], m[4]);
-    if (!iso) return null;
-    out.add(iso);
+// r4 (Jakarinos r3 P1-1/P1-2): fara regex pe HTML. Tokenizator minimal care separa tagurile, atributele si
+// valorile lor citate (un `id=` sau `</div>` scris IN valoarea altui atribut nu mai conteaza), sare comentariile si
+// continutul <script>/<style>. Taguri si atribute fara distinctie de majuscule.
+export function* taguri(html) {
+  const s = String(html || '');
+  const n = s.length;
+  let i = 0;
+  while (i < n) {
+    const lt = s.indexOf('<', i);
+    if (lt < 0) return;
+    if (s.startsWith('<!--', lt)) { const e = s.indexOf('-->', lt + 4); if (e < 0) return; i = e + 3; continue; }
+    let j = lt + 1;
+    const inchis = s[j] === '/';
+    if (inchis) j++;
+    const mNume = /^[A-Za-z][A-Za-z0-9-]*/.exec(s.slice(j, j + 40));
+    if (!mNume) { i = lt + 1; continue; }
+    const nume = mNume[0].toLowerCase();
+    j += mNume[0].length;
+    const attrs = new Map();
+    let gata = false;
+    while (j < n) {
+      while (j < n && /\s/.test(s[j])) j++;
+      if (s[j] === '>') { j++; gata = true; break; }
+      if (s[j] === '/' && s[j + 1] === '>') { j += 2; gata = true; break; }
+      const mA = /^[^\s=>\/"']+/.exec(s.slice(j, j + 200));
+      if (!mA) { j++; continue; }
+      const an = mA[0].toLowerCase();
+      j += mA[0].length;
+      while (j < n && /\s/.test(s[j])) j++;
+      let val = '';
+      if (s[j] === '=') {
+        j++;
+        while (j < n && /\s/.test(s[j])) j++;
+        if (s[j] === '"' || s[j] === "'") {
+          const q = s[j];
+          const e = s.indexOf(q, j + 1);
+          if (e < 0) return; // valoare neinchisa: pagina trunchiata
+          val = s.slice(j + 1, e);
+          j = e + 1;
+        } else {
+          const mV = /^[^\s>]*/.exec(s.slice(j, j + 500));
+          val = mV[0];
+          j += val.length;
+        }
+      }
+      if (!attrs.has(an)) attrs.set(an, val); else attrs.set(an, null); // atribut dublat = ambiguu
+    }
+    if (!gata) return; // tag neinchis: pagina trunchiata
+    yield { inchis, nume, attrs, poz: lt, sf: j };
+    i = j;
+    if (!inchis && (nume === 'script' || nume === 'style')) {
+      const e = s.toLowerCase().indexOf(`</${nume}`, i);
+      if (e < 0) return;
+      i = e;
+    }
   }
-  return [...out].sort().reverse();
+}
+
+// Istoricul consolidarilor: elementul <div> cu atributul id EXACT „istoric_fa” (unul singur in pagina), pana la
+// </div>-ul lui; orice <div> imbricat sau sfarsitul paginii inainte de </div> = ambiguu → null. In fiecare <a>,
+// atributul title real trebuie sa fie „Consolidarea|Republicarea din ZZ.LL.AAAA” cu data valida, altfel null.
+// Intoarce datele ISO unice, descrescator; null = fara dovada ca istoricul a fost citit complet.
+export function consolidari(html) {
+  const toate = [...taguri(html)];
+  const idx = toate.map((t, k) => (!t.inchis && t.nume === 'div' && t.attrs.get('id') === 'istoric_fa') ? k : -1).filter((k) => k >= 0);
+  if (idx.length !== 1) return null;
+  const out = new Set();
+  let linkuri = 0;
+  for (let k = idx[0] + 1; k < toate.length; k++) {
+    const t = toate[k];
+    if (t.nume === 'div') {
+      if (t.inchis) return linkuri ? [...out].sort().reverse() : null;
+      return null; // div imbricat
+    }
+    if (t.nume === 'a' && !t.inchis) {
+      linkuri++;
+      // formele din istoric: „Consolidarea din …” si „Republicarea din …” (ex. Legea 307/2006, republicata 17.04.2019)
+      const m = /^\s*(?:Consolidarea|Republicarea) din (\d{2})\.(\d{2})\.(\d{4})\s*$/i.exec(t.attrs.get('title') ?? '');
+      const iso = m && dataISO(m[1], m[2], m[3]);
+      if (!iso) return null;
+      out.add(iso);
+    }
+  }
+  return null; // pagina s-a terminat inainte de </div>
 }
 
 // Tipul actului din ERP → tipul din titlul paginii + emitentul din fisa (S_EMT_BDY).
@@ -171,16 +231,28 @@ const TIPURI = {
 
 // Identitatea actului: titlul „HG        395 02/06/2016 - Portal Legislativ” → tip HG, nr. 395, anul 2016 (exact),
 // plus emitentul din fisa. Orice nepotrivire sau tip necunoscut → false.
-export function paginaPotrivita(html, rand) {
+// Textul dintre tagul de deschidere al unui element unic (cautat cu tokenizatorul) si primul lui tag de inchidere.
+// r4: element lipsa sau dublat → null (identitatea nu se dovedeste din ceva ambiguu).
+function textElementUnic(html, potrivire, numeInchidere) {
   const s = String(html || '');
+  const toate = [...taguri(s)];
+  const idx = toate.map((t, k) => (!t.inchis && potrivire(t)) ? k : -1).filter((k) => k >= 0);
+  if (idx.length !== 1) return null;
+  const inc = toate.slice(idx[0] + 1).find((t) => t.inchis && t.nume === numeInchidere);
+  if (!inc) return null;
+  return s.slice(toate[idx[0]].sf, inc.poz).replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ');
+}
+
+export function paginaPotrivita(html, rand) {
   const reg = TIPURI[String(rand?.tip || '')];
   const m = String(rand?.numar || '').match(/^(\d+)\/(\d{4})$/);
-  const t = (s.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
-  const p = t.trim().toUpperCase().match(/^([A-Z][A-Z ]*?)\s+(\d+)\s+(\d{2})\/(\d{2})\/(\d{4})\s+-\s+PORTAL LEGISLATIV$/);
-  if (!reg || !m || !p) return false;
+  if (!reg || !m) return false;
+  const t = textElementUnic(html, (x) => x.nume === 'title', 'title');
+  const p = String(t ?? '').trim().toUpperCase().match(/^([A-Z][A-Z ]*?)\s+(\d+)\s+(\d{2})\/(\d{2})\/(\d{4})\s+-\s+PORTAL LEGISLATIV$/);
+  if (!p) return false;
   if (!reg.titlu.test(p[1].trim()) || p[2] !== String(Number(m[1])) || p[5] !== m[2]) return false;
-  const em = (s.match(/class\s*=\s*['"]S_EMT_BDY['"][^>]*>([\s\S]*?)<\/span>/i) || [])[1] || '';
-  return reg.emitent.test(em.replace(/<[^>]+>/g, ' ').toUpperCase());
+  const em = textElementUnic(html, (x) => x.nume === 'span' && x.attrs.get('class') === 'S_EMT_BDY', 'span');
+  return em != null && reg.emitent.test(em.toUpperCase());
 }
 
 const ro = (iso) => iso ? iso.split('-').reverse().join('.') : '—';
@@ -228,6 +300,12 @@ export function plafoneazaAI(verdicte, idsCuOficial) {
   return (verdicte || []).map((v) => (ids.has(String(v.id)) && v.verdict === 'neschimbat')
     ? { ...v, verdict: 'necunoscut', detalii: `sursa oficială indisponibilă; AI spune „neschimbat”, neconfirmat — ${String(v.detalii || '').slice(0, 250)}` }
     : v);
+}
+
+// r4 (Jakarinos r3): ordinea pe prioritate e explicita (text: ACTUALIZARE ar iesi alfabetic inaintea lui CRITIC).
+const RANG = { CRITIC: 0, IMPORTANT: 1, ACTUALIZARE: 2 };
+export function ordinePrioritate(norme) {
+  return [...(norme || [])].sort((a, b) => ((RANG[a?.prioritate] ?? 9) - (RANG[b?.prioritate] ?? 9)) || (Number(a?.id) - Number(b?.id)));
 }
 
 // r2: actele cu id oficial primele in rulare → loturile sunt cat mai „pure” (oficial sau AI), mai putine loturi mixte.
