@@ -122,7 +122,7 @@ function parcurge(radacina, fn, fnCheie = null) {
 }
 
 // (2a) tokenurile candidate din întreg evenimentul
-export function colecteazaTokenuriEveniment(event) {
+export function colecteazaTokenuriEveniment(event, adancime = 0) {
   const tokenuri = new Set()
   // r9 P1-1 (Jakarinos): indiciul se caută în TOATE formele decodate (o cheie complet %-codificată, ex. `%70%5f%74%6f%6b%65%6e`,
   // nu arată „suspect” brut), iar colectarea se face și pe evenimentul SERIALIZAT întreg — așa prindem și valorile din liste
@@ -130,15 +130,15 @@ export function colecteazaTokenuriEveniment(event) {
   // r12 P1-1 (Jakarinos): un șir care e JSON (corp de cerere serializat, `{"token":[null,T]}`, `{"token":{"nested":{"value":T}}}`)
   // se parsează (în fiecare formă decodată) și se parcurge STRUCTURAL, ca orice obiect — cheile de token își protejează descendenții
   const dinJson = (f) => {
-    if (!/^\s*[[{]/.test(f) || f.length > 200000) return
+    if (adancime >= 4 || !/^\s*[[{]/.test(f) || f.length > 200000) return   // adâncime limitată: JSON în JSON în JSON…
     let obj
     try { obj = JSON.parse(f) } catch { return }
-    if (obj && typeof obj === 'object') for (const t of colecteazaTokenuriEveniment(obj)) tokenuri.add(t)
+    if (obj && typeof obj === 'object') for (const t of colecteazaTokenuriEveniment(obj, adancime + 1)) tokenuri.add(t)
   }
-  const dinText = (s) => {
+  const dinText = (s, siJson = true) => {
     if (typeof s !== 'string') return
     const forme = formele(s)
-    if (forme.some(pareSuspect)) for (const f of forme) { colecteazaTokenuri(f, tokenuri); dinJson(f) }
+    if (forme.some(pareSuspect)) for (const f of forme) { colecteazaTokenuri(f, tokenuri); if (siJson) dinJson(f) }
   }
   parcurge(event, (_obj, cheie, v, sensibil) => {
     if (typeof v === 'string') {
@@ -147,7 +147,7 @@ export function colecteazaTokenuriEveniment(event) {
     }
     return v
   }, (cheie) => { dinText(cheie); return cheie })
-  dinText(serializeaza(event))
+  dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
 
