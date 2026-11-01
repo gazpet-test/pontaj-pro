@@ -9,7 +9,7 @@
 // Fără date personale (RPC-ul nu le dă), fără urmărire externă, fără fonturi externe.
 // Decizia 6 (Răzvan 01.11): răspunsul NU trimite mail/SMS și NU generează PV — operatorul le face din Registru.
 // ═══════════════════════════════════════════════════════════════════════════
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 
@@ -99,6 +99,8 @@ export default function RedariRaspunsPublic() {
   const [validare, setValidare] = useState('')  // mesaj de validare locală
   const [busy, setBusy] = useState(false)
   const [rezultat, setRezultat] = useState(null) // răspunsul fn_red_raspuns_public (sau eroare normalizată)
+  const tokenCurent = useRef(token)              // r3 P2-2: gardă la trimitere — rezultatul unei cereri pornite pe alt token se ignoră
+  tokenCurent.current = token
 
   useEffect(() => {
     document.title = 'Răspuns convocare — Gazpet'
@@ -136,18 +138,21 @@ export default function RedariRaspunsPublic() {
     if (cereObiectii && !obj) return setValidare('Scrieți pe scurt obiecțiile dumneavoastră.')
     if (obj.length > MAX_OBIECTII) return setValidare(`Textul este prea lung (maxim ${MAX_OBIECTII} caractere).`)
     setValidare(''); setBusy(true)
+    const tokenCerere = token   // capturat la pornirea cererii
     try {
       const { data, error } = await supabase.rpc('fn_red_raspuns_public', {
-        p_token: token,
+        p_token: tokenCerere,
         p_optiune: optiune,
         p_zi: cereZi ? zi : null,
         p_obiectii: cereObiectii ? obj : null,
         p_declaratie_confirmata: cereDeclaratie ? declaratie : false,
         p_user_agent: (typeof navigator !== 'undefined' && navigator.userAgent) ? String(navigator.userAgent).slice(0, 500) : null,
       })
+      if (tokenCerere !== tokenCurent.current) return   // tokenul s-a schimbat între timp: rezultatul nu e al acestui formular
       if (error || !data) setRezultat({ ok: false, motiv: 'eroare' })
       else setRezultat(data)
-    } catch { setRezultat({ ok: false, motiv: 'eroare' }) }
+    } catch { if (tokenCerere === tokenCurent.current) setRezultat({ ok: false, motiv: 'eroare' }) }
+    if (tokenCerere !== tokenCurent.current) return
     setBusy(false)
     window.scrollTo(0, 0)
   }

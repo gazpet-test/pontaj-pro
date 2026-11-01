@@ -14,6 +14,31 @@ export const COL_CONVOCARE = 'id, detinator_id, canal, nr_document, data_expedie
 export const COL_RASPUNS = 'id, seq, detinator_id, canal, data, optiune, zi_sesiune_aleasa, obiectii_text, declaratie_confirmata, semnatura_electronica_ref, created_by, created_at'
 export const COL_RASPUNS_META = 'raspuns_id, ip_sau_sursa, user_agent'
 
+// Paginare (review Jakarinos r3 P2-3): PostgREST întoarce max ~1000 rânduri pe cerere, iar `.in()` cu sute de id-uri umflă URL-ul.
+// citestePaginat(fabrica): fabrica() întoarce un query builder (fără range); se citește în bucle de LOT_RANGE până la o pagină incompletă.
+// citesteIn(fabrica, coloana, ids): împarte ids în loturi de LOT_IN și paginează fiecare lot. Ambele aruncă la eroare și întorc toate rândurile.
+export const LOT_RANGE = 1000
+export const LOT_IN = 100
+export async function citestePaginat(fabrica) {
+  const tot = []
+  for (let de = 0; ; de += LOT_RANGE) {
+    const { data, error } = await fabrica().range(de, de + LOT_RANGE - 1)
+    if (error) throw error
+    tot.push(...(data || []))
+    if (!data || data.length < LOT_RANGE) break
+  }
+  return tot
+}
+export async function citesteIn(fabrica, coloana, ids) {
+  const lista = [...new Set((ids || []).filter(Boolean))]
+  const tot = []
+  for (let i = 0; i < lista.length; i += LOT_IN) {
+    const lot = lista.slice(i, i + LOT_IN)
+    tot.push(...await citestePaginat(() => fabrica().in(coloana, lot)))
+  }
+  return tot
+}
+
 export async function citesteTokenRaspuns(detinatorId) {
   const { data, error } = await supabase.from('red_detinatori_token').select('token_raspuns').eq('detinator_id', detinatorId).maybeSingle()
   if (error) throw error
