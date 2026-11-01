@@ -1,6 +1,6 @@
 // Redări teren — teste pentru redactarea tokenului public din evenimentele Sentry (src/redari/sentryScrub.js). Tokenuri fictive.
 import { describe, it, expect } from 'vitest'
-import { redacteazaText, redacteazaAdanc, scrubSentryEvent, esteDinFormularulPublic } from './sentryScrub.js'
+import { redacteazaText, redacteazaAdanc, scrubSentryEvent, scrubSentrySpan, esteDinFormularulPublic } from './sentryScrub.js'
 
 const T43 = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdE'   // 43 caractere [A-Za-z0-9_-]
 const T42 = T43.slice(0, 42)
@@ -186,5 +186,40 @@ describe('scrubSentryEvent — r6: DROP pe formularul public, verificare finală
   it('null și dacă rămâne o copie a tokenului după regex-ul final (raspuns/token + 43), chiar necolectată', () => {
     expect(scrubSentryEvent({ message: `raspuns: ${T43}` })).toBeNull()
     expect(scrubSentryEvent({ extra: { nota: `token=${'b'.repeat(43)}` } })).toBeNull()
+  })
+})
+
+describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat sub cheie cu sufix, spanuri', () => {
+  const T = '0123456789abcdefghijklmnopqrstuvwxyzABCDEF_'   // 43
+  it('P1-2: message = T + extra.token_raspuns_public = %30 + T[1:] ⇒ tokenul codificat e colectat din forma decodată; nicio copie nu rămâne', () => {
+    for (const ev of [
+      { message: T, extra: { token_raspuns_public: '%30' + T.slice(1) } },
+      { extra: { token_raspuns_public: '%30' + T.slice(1) }, message: T },        // indiferent de ordinea cheilor
+      { message: T, extra: { token_x: '%25%33%30' + T.slice(1) } },               // dublu codificat
+      { message: 'x ' + T + ' y', contexts: { formular: { token: '%30' + T.slice(1) } } },
+    ]) {
+      const rez = scrubSentryEvent(ev)
+      if (rez !== null) { const j = JSON.stringify(rez); expect(j).not.toContain(T); expect(j).not.toContain(T.slice(1)); expect(j).toContain('[token]') }
+    }
+    expect(scrubSentryEvent({ message: T, extra: { token_raspuns_public: '%30' + T.slice(1) } })?.message ?? '[token]').toBe('[token]')
+  })
+  it('P1-2: cheie cu sufix fără altă copie ⇒ redactat (nu null), valoarea decodată nu rămâne', () => {
+    const rez = scrubSentryEvent({ message: 'ok', extra: { token_raspuns_public: '%30' + T.slice(1) } })
+    expect(rez).not.toBeNull()
+    expect(rez.extra.token_raspuns_public).toBe('[token]')
+    expect(JSON.stringify(rez)).not.toContain(T.slice(1))
+  })
+  it('P1-2: regex-ul final prinde și `token_raspuns_public":"<43>"` necolectat', () => {
+    expect(scrubSentryEvent({ message: `{"token_raspuns_public":"${'c'.repeat(43)}"}` })).toBeNull()
+  })
+  it('P1-1: spanul de pe formularul public sau cu token e golit (nu null — SDK-ul ignoră null), restul trec', () => {
+    const s1 = scrubSentrySpan({ span_id: 's', trace_id: 't', op: 'ui.interaction.click', description: 'body > div', data: { 'sentry.transaction': `/redari/raspuns/${T43}`, 'sentry.op': 'ui.interaction.click' } })
+    expect(s1.description).toBe('[redactat]'); expect(s1.data).toEqual({}); expect(JSON.stringify(s1)).not.toContain(T43)
+    const s2 = scrubSentrySpan({ span_id: 's', trace_id: 't', description: `click ${T43}`, data: { token: T43 } })
+    expect(JSON.stringify(s2)).not.toContain(T43)
+    const s3 = scrubSentrySpan({ span_id: 's', trace_id: 't', op: 'http.client', description: 'GET /rest/v1/employees', data: { url: 'https://x/rest/v1/employees' } })
+    expect(s3).toEqual({ span_id: 's', trace_id: 't', op: 'http.client', description: 'GET /rest/v1/employees', data: { url: 'https://x/rest/v1/employees' } })
+    const s4 = { span_id: 's' }; Object.defineProperty(s4, 'broken', { enumerable: true, get() { throw new Error('x') } })
+    expect(scrubSentrySpan(s4).description).toBe('[redactat]')
   })
 })

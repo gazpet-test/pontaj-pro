@@ -52,6 +52,17 @@ const verificaSablon = async (cale) => {
   const resturi = []          // {tip, fragment, text, intentionat}
   let qrSingur = null         // null = nu există {{qr}}; true/false
   let paragrafe = 0
+  // Copilot FE r1 P2-04: relații externe (TargetMode="External" în *.rels) — un șablon nu are voie să tragă nimic de pe servere
+  // externe (imagini/legături la deschidere) când documentul poartă PII + token; hyperlink-urile mailto:/https: din text se listează
+  const externe = []
+  for (const relPath of Object.keys(zip.files).filter(p => /\.rels$/.test(p))) {
+    const xml = await zip.file(relPath).async('string')
+    for (const m of xml.matchAll(/<Relationship[^>]*TargetMode="External"[^>]*>/g)) {
+      const target = /Target="([^"]*)"/.exec(m[0])?.[1] ?? ''
+      const tip = /Type="[^"]*\/([a-zA-Z]+)"/.exec(m[0])?.[1] ?? ''
+      externe.push({ rel: relPath, tip, target })
+    }
+  }
   for (const partPath of parti) {
     const xml = await zip.file(partPath).async('string')
     for (const m of xml.matchAll(RX_PARAGRAF)) {
@@ -80,7 +91,7 @@ const verificaSablon = async (cale) => {
       }
     }
   }
-  return { parti, paragrafe, aparitii, rupte, resturi, qrSingur }
+  return { parti, paragrafe, aparitii, rupte, resturi, qrSingur, externe }
 }
 
 const scurt = (t, n = 90) => (t.length > n ? `${t.slice(0, n)}…` : t)
@@ -94,13 +105,17 @@ for (const f of fisiere) {
   const rand = nume.filter(n => n.startsWith('rand.'))
   for (const n of nume) global.set(n, (global.get(n) ?? new Set()).add(basename(f, '.docx')))
   const eroriResturi = r.resturi.filter(x => !x.intentionat)
-  const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false
+  // relații externe: hyperlink-urile (deschise doar la clic) se acceptă; orice altceva (imagine/OLE/etc. externă) e problemă
+  const externeRele = r.externe.filter(x => x.tip !== 'hyperlink')
+  const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0
   if (!ok) probleme += 1
   console.log(`## ${f} — ${ok ? 'OK' : 'PROBLEME'}`)
   console.log(`- părți citite: ${r.parti.join(', ')}; paragrafe cu text: ${r.paragrafe}`)
   console.log(`- placeholder-e distincte: ${nume.length} (apariții: ${[...r.aparitii.values()].reduce((a, b) => a + b, 0)}); rupte între run-uri: ${r.rupte.length}`)
   console.log(`- ${nume.map(n => `\`{{${n}}}\`${r.aparitii.get(n) > 1 ? `×${r.aparitii.get(n)}` : ''}`).join(' ')}`)
   if (r.qrSingur !== null) console.log(`- {{qr}} singur în paragraf: ${r.qrSingur ? 'da' : 'NU — nu devine imagine'}`)
+  console.log(`- relații externe (.rels TargetMode=External): ${r.externe.length ? r.externe.map(x => `${x.tip}→${scurt(x.target, 60)}`).join('; ') : 'niciuna'}`)
+  for (const x of externeRele) console.log(`- EXTERN NEPERMIS: ${x.tip} „${x.target}” în ${x.rel}`)
   if (rand.length) console.log(`- rând-șablon (de repetat cu viitoarea \`repetaRand\`, docx.js nu le cunoaște azi): ${rand.map(n => `\`{{${n}}}\``).join(' ')}`)
   for (const x of r.rupte) console.log(`- RUPT: {{${x.nume}}} în „${scurt(x.text)}”`)
   const intent = r.resturi.filter(x => x.intentionat)

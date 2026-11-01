@@ -22,13 +22,16 @@ const RX_TOKEN_P_TOKEN = /(p_token(?:%[0-9A-Fa-f]{2}|[^A-Za-z0-9_-]){0,16})([A-Z
 const RX_T43 = /^[A-Za-z0-9_-]{43}$/
 const RX_T43_ORIUNDE = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/
 const RX_DROP = /\/redari\/raspuns|rpc\/fn_red_formular_public|rpc\/fn_red_raspuns_public/i
-const RX_FINAL = /(raspuns|token)[^A-Za-z0-9_-]{0,16}[A-Za-z0-9_-]{43}/i
+// r7 P1-2: cuvântul-cheie poate avea sufix (token_raspuns_public), apoi până la 16 separatoare, apoi tokenul de 43
+const RX_FINAL = /(raspuns|token)[A-Za-z0-9_-]{0,32}?[^A-Za-z0-9_-]{0,16}[A-Za-z0-9_-]{43}/i
 const RX_RASPUNS_PUBLIC = /\/redari\/raspuns/i
 const MAX_DECODARI = 3
 const MIN_LUNGIME_COADA = 16
 
 const pareSuspect = (s) => /redari|raspuns|p_token/i.test(s)
 const cheieDeToken = (cheie) => typeof cheie === 'string' && /token/i.test(cheie)
+// r7 P1-2: valoarea unei chei de token e token dacă ORICE formă decodată are exact 43 [A-Za-z0-9_-] (ex. `%30` + 42 caractere)
+const valoareDeToken = (v) => typeof v === 'string' && formele(v).some(f => RX_T43.test(f))
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
@@ -110,7 +113,7 @@ export function colecteazaTokenuriEveniment(event) {
   const dinText = (s) => { if (typeof s === 'string' && pareSuspect(s)) for (const f of formele(s)) colecteazaTokenuri(f, tokenuri) }
   parcurge(event, (_obj, cheie, v) => {
     if (typeof v === 'string') {
-      if (cheieDeToken(cheie) && RX_T43.test(v)) tokenuri.add(v)
+      if (cheieDeToken(cheie) && valoareDeToken(v)) for (const f of formele(v)) if (RX_T43.test(f)) tokenuri.add(f)
       dinText(v)
     }
     return v
@@ -124,7 +127,7 @@ export function redacteazaAdanc(radacina, tokenuriGlobale = null) {
   return parcurge(radacina,
     (_obj, cheie, v) => {
       if (typeof v !== 'string') return v
-      if (cheieDeToken(cheie) && RX_T43.test(v)) return TOKEN
+      if (cheieDeToken(cheie) && valoareDeToken(v)) return TOKEN
       return redacteazaText(v, tokenuriGlobale)
     },
     (cheie) => redacteazaText(cheie, tokenuriGlobale))
@@ -166,6 +169,23 @@ export function maiScurgeToken(event, tokenuri) {
     if (tokenuri.size && RX_T43_ORIUNDE.test(f)) return true   // a purtat token: orice alt șir de 43 rămas e suspect
   }
   return false
+}
+
+// r7 P1-1: spanurile de sine stătătoare (INP din browserTracingIntegration) NU trec prin beforeSend/beforeSendTransaction, iar
+// beforeSendSpan nu poate elimina un span (null e ignorat în SDK ≥ 9). Deci: (a) INP e OPRIT în src/main.jsx (enableInp: false),
+// (b) tracesSampler dă 0 pe formularul public, (c) beforeSendSpan redactează oricum, iar dacă rămâne ceva suspect golește spanul.
+export function scrubSentrySpan(span) {
+  try {
+    if (span === null || typeof span !== 'object') return span
+    const golit = () => { for (const k of Object.keys(span)) if (!['span_id', 'trace_id', 'parent_span_id', 'start_timestamp', 'timestamp', 'op', 'origin'].includes(k)) delete span[k]; span.description = '[redactat]'; span.data = {}; return span }
+    if (esteDinFormularulPublic({ transaction: span.description, request: { url: span.data?.['sentry.transaction'] ?? span.data?.url } })) return golit()
+    const tokenuri = colecteazaTokenuriEveniment(span)
+    redacteazaAdanc(span, tokenuri)
+    if (maiScurgeToken(span, tokenuri)) return golit()
+    return span
+  } catch {
+    try { return { span_id: span?.span_id, trace_id: span?.trace_id, start_timestamp: span?.start_timestamp, timestamp: span?.timestamp, description: '[redactat]', data: {} } } catch { return { description: '[redactat]', data: {} } }
+  }
 }
 
 // beforeSend / beforeSendTransaction

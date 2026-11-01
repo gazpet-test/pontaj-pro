@@ -104,6 +104,15 @@ export default function RedariRaspunsPublic() {
   const tokenCurent = useRef(token)              // r3 P2-2: gardă la trimitere — rezultatul unei cereri pornite pe alt token se ignoră
   tokenCurent.current = token
 
+  // Copilot FE r1 P2-01: tokenul e în URL → fără Referer către alte pagini (header-ul e și în vercel.json; meta = plasă de siguranță)
+  useEffect(() => {
+    let meta = document.querySelector('meta[name="referrer"]')
+    const creat = !meta
+    if (creat) { meta = document.createElement('meta'); meta.name = 'referrer'; document.head.appendChild(meta) }
+    const vechi = meta.content
+    meta.content = 'no-referrer'
+    return () => { if (creat) meta.remove(); else meta.content = vechi }
+  }, [])
   useEffect(() => {
     document.title = 'Răspuns convocare — Gazpet'
     // P2-6: alt token (navigare între două linkuri în același tab) = formular nou — nimic din răspunsul anterior nu rămâne pe ecran

@@ -259,7 +259,8 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
           {cautareAplicata && <button type="button" onClick={() => { setCautare(''); setCautareAplicata('') }} style={S.btnS}>✕</button>}
         </form>
         <div style={{ flex:1 }} />
-        {poateScrie && <button onClick={borderou} disabled={lucru} style={S.btnS} title="CSV pentru Poștă: selecția sau rândurile afișate">📮 Borderou CSV {selectie.size ? `(${selectie.size})` : ''}</button>}
+        {/* r7 P2-1: blocat și cât se încarcă rândurile filtrului curent — altfel borderoul ar lua rândurile filtrului anterior */}
+        {poateScrie && <button onClick={borderou} disabled={lucru || loading} style={S.btnS} title="CSV pentru Poștă: selecția sau rândurile afișate">📮 Borderou CSV {selectie.size ? `(${selectie.size})` : ''}</button>}
         <button onClick={incarca} style={S.btnS} title="Reîncarcă">↻</button>
       </div>
 
