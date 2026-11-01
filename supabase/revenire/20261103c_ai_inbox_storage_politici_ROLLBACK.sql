@@ -52,7 +52,8 @@ LOCK TABLE storage.objects IN ACCESS EXCLUSIVE MODE;
 DO $rb_pre$
 DECLARE
   c_ins CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND (((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text) OR (((storage.foldername(name))[1] = ''wizard-angajare''::text) AND (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))) AND (NOT (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE (i.fisier_path = objects.name)))))';
-  c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
+  c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND (((i.modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)) OR ((i.modul_tinta IS NULL) AND (EXISTS ( SELECT 1 FROM profiles h WHERE ((h.id = ( SELECT auth.uid() AS uid)) AND (h.can_access_personal_data = true))))))))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
+  c_del CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND (i.modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
   -- md5 al corpului (prosrc) cu spațiile albe comprimate la un spațiu și capetele tăiate — independent de CRLF / LF
   c_md5_imut CONSTANT text := '8b8f00a4db9b7cd9ec3d456ad94c9818';
   c_md5_legat CONSTANT text := '867bd0f16a5d50de0a5aa2c0daa4d230';
@@ -68,7 +69,7 @@ BEGIN
                     AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_sel)
      OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'ai_inbox_obj_delete'
                     AND p.polcmd = 'd' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polwithcheck IS NULL
-                    AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_sel) THEN
+                    AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_del) THEN
     RAISE EXCEPTION 'Precondiție revenire 20261103c: starea curentă nu e patch-ul 20261103c (exact) — politicile — nu se revine tacit' USING ERRCODE = '55000';
   END IF;
   IF (SELECT pg_get_indexdef(to_regclass('public.idx_ai_inbox_fisier_path'))) IS DISTINCT FROM
@@ -91,6 +92,17 @@ BEGIN
                     AND cardinality(t.tgattr::int2[]) = 0) THEN
     RAISE EXCEPTION 'Precondiție revenire 20261103c: starea curentă nu e patch-ul 20261103c (exact) — index / funcții / trigger-e — nu se revine tacit' USING ERRCODE = '55000';
   END IF;
+  -- 5. coada: starea curentă trebuie să fie exact politicile noi ale patch-ului
+  IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_select'
+                 AND p.polcmd = 'r' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polwithcheck IS NULL
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((uploadat_de = auth.uid()) OR ((modul_tinta IS NULL) AND (EXISTS ( SELECT 1 FROM profiles h WHERE ((h.id = auth.uid()) AND ((h.is_owner = true) OR (h.can_access_personal_data = true)))))) OR ((modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)))')
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_update'
+                 AND p.polcmd = 'w' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid]
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((uploadat_de = auth.uid()) OR ((modul_tinta IS NULL) AND (EXISTS ( SELECT 1 FROM profiles h WHERE ((h.id = auth.uid()) AND ((h.is_owner = true) OR (h.can_access_personal_data = true)))))) OR ((modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)))'
+                 AND regexp_replace(pg_get_expr(p.polwithcheck, p.polrelid), '[[:space:]]+', ' ', 'g') = '(auth.uid() IS NOT NULL)')
+     OR (SELECT count(*) FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass) <> 4 THEN
+    RAISE EXCEPTION 'Precondiție revenire 20261103c: politicile cozii nu sunt exact cele ale patch-ului — nu se revine tacit' USING ERRCODE = '55000';
+  END IF;
 END $rb_pre$;
 
 DROP POLICY ai_inbox_obj_delete ON storage.objects;
@@ -104,9 +116,25 @@ DROP FUNCTION public.ai_inbox_fisier_legat();
 DROP FUNCTION public.ai_inbox_fisier_imutabil();
 DROP INDEX public.idx_ai_inbox_fisier_path;
 
+-- 5. coada: politicile ai_inbox_select / ai_inbox_update EXACT cele live din 01.11 (redeschide nedecisul pentru oricine logat)
+DROP POLICY ai_inbox_select ON public.ai_documente_inbox;
+CREATE POLICY ai_inbox_select ON public.ai_documente_inbox AS PERMISSIVE FOR SELECT TO authenticated
+  USING (((uploadat_de = auth.uid()) OR (modul_tinta IS NULL) OR fn_ai_inbox_poate_confirma(modul_tinta, entitate_id)));
+DROP POLICY ai_inbox_update ON public.ai_documente_inbox;
+CREATE POLICY ai_inbox_update ON public.ai_documente_inbox AS PERMISSIVE FOR UPDATE TO authenticated
+  USING (((modul_tinta IS NULL) OR fn_ai_inbox_poate_confirma(modul_tinta, entitate_id) OR (uploadat_de = auth.uid())))
+  WITH CHECK ((auth.uid() IS NOT NULL));
+
 DO $rb_post$
 DECLARE c_vechi CONSTANT text := '(bucket_id = ''ai-documente-inbox''::text)';
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_select'
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((uploadat_de = auth.uid()) OR (modul_tinta IS NULL) OR fn_ai_inbox_poate_confirma(modul_tinta, entitate_id))')
+     OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'public.ai_documente_inbox'::regclass AND p.polname = 'ai_inbox_update'
+                 AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = '((modul_tinta IS NULL) OR fn_ai_inbox_poate_confirma(modul_tinta, entitate_id) OR (uploadat_de = auth.uid()))'
+                 AND regexp_replace(pg_get_expr(p.polwithcheck, p.polrelid), '[[:space:]]+', ' ', 'g') = '(auth.uid() IS NOT NULL)') THEN
+    RAISE EXCEPTION 'POSTCONDIȚIE revenire 20261103c: politicile cozii nu sunt exact cele dinainte';
+  END IF;
   IF (SELECT count(*) FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND starts_with(p.polname::text, 'ai_inbox_obj')) <> 1
      OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'ai_inbox_obj_all'
                     AND p.polcmd = '*' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid]
@@ -122,3 +150,10 @@ BEGIN
   END IF;
   PERFORM set_config('gazpet.revenire_20261103c', '', true);   -- dezarmare
 END $rb_post$;
+-- Jakarinos r1 P2: înregistrarea migrării se scoate, ca o re-aplicare ulterioară prin runner să nu fie refuzată ca „deja aplicată”
+DO $rb_reg$
+BEGIN
+  IF to_regclass('supabase_migrations.schema_migrations') IS NOT NULL THEN   -- lipsește pe harness-ul local
+    DELETE FROM supabase_migrations.schema_migrations WHERE name = '20261103c_ai_inbox_storage_politici';
+  END IF;
+END $rb_reg$;
