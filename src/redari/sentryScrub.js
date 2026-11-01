@@ -38,6 +38,23 @@ const pareSuspect = (s) => /redari|raspuns|token/i.test(s)
 const cheieDeToken = (cheie) => typeof cheie === 'string' && formele(cheie).some(f => /token/i.test(f))
 // r7 P1-2: valoarea unei chei de token e token dacă ORICE formă decodată are exact 43 [A-Za-z0-9_-] (ex. `%30` + 42 caractere)
 const valoareDeToken = (v) => typeof v === 'string' && formele(v).some(f => RX_T43.test(f))
+// Jakarinos r15 P1-2 / Copilot r9 P1-01: sub o cheie sensibila valoarea poate fi `'   ' + T` sau `'ref_' + T` - orice secventa de >=43
+// [A-Za-z0-9_-] din orice forma decodata conteaza: exact 43 -> token; 44..300 -> toate ferestrele de 43 (tokenul lipit); mai lung -> refuzat
+// ATENȚIE: `.test` cu flag `g` lasă `lastIndex` nenul, iar `matchAll` îl CLONEAZĂ — un regex global partajat între cele două a
+// pierdut colectarea (bug găsit în r19 la a doua rulare pe același modul). Deci: regex fără `g` pentru test, `g` doar pentru matchAll.
+const RX_RUN43 = /[A-Za-z0-9_-]{43,}/
+const RX_RUN43_TOATE = /[A-Za-z0-9_-]{43,}/g
+const areRun43 = (v) => typeof v === 'string' && formele(v).some(f => RX_RUN43.test(f))
+const tokenuriDinValoareSensibila = (v, set) => {
+  if (typeof v !== 'string') return
+  for (const f of formele(v)) for (const m of f.matchAll(RX_RUN43_TOATE)) {
+    const run = m[0]
+    if (run.length === 43) set.add(run)
+    else if (run.length <= 300) for (let i = 0; i + 43 <= run.length; i++) set.add(run.slice(i, i + 43))
+    else set.refuzat = true
+  }
+}
+const RX_INDICIU_JSON = /p_token|raspuns|\\u[0-9a-f]{4}|token[A-Za-z0-9_-]*"\s*:\s*["\[{]/i
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
@@ -109,7 +126,7 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
     }
     for (const cheie of Object.keys(obj)) {
       const v = obj[cheie]
-      const cheieNoua = fnCheie ? fnCheie(cheie) : cheie
+      const cheieNoua = fnCheie ? fnCheie(cheie, sensibil) : cheie   // Jakarinos r15 P1-1: si cheile primesc contextul sensibil
       if (cheieNoua !== cheie) delete obj[cheie]
       let vNou = v
       const sensibilCopil = sensibil || cheieSensibila(cheie)
@@ -135,7 +152,8 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
   const dinJson = (f, sensibilSir = false) => {
     if (!/^\s*[[{]/.test(f)) return
     // Jakarinos r13 P1-1: cheia poate fi scrisă cu escape Unicode (`"to\u006ben"`) — un JSON neparcurs cu escape-uri e și el suspect
-    const refuza = () => { if (sensibilSir || /token|raspuns|\\u[0-9a-f]{4}/i.test(f)) tokenuri.refuzat = true }
+    // Jakarinos r15 P2-1: `"tokenuri_cumparate":12` intr-un JSON trunchiat NU e indiciu; e indiciu o cheie *token* cu valoare sir/lista/obiect
+    const refuza = () => { if (sensibilSir || RX_INDICIU_JSON.test(f)) tokenuri.refuzat = true }
     if (adancime >= 4 || f.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
     let obj
     try { obj = JSON.parse(f) } catch { return refuza() }
@@ -155,11 +173,11 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
   }
   parcurge(event, (_obj, cheie, v, sensibilAici) => {
     if (typeof v === 'string') {
-      if ((sensibilAici || cheieDeToken(cheie)) && valoareDeToken(v)) for (const f of formele(v)) if (RX_T43.test(f)) tokenuri.add(f)
+      if (sensibilAici || cheieDeToken(cheie)) tokenuriDinValoareSensibila(v, tokenuri)
       dinText(v, true, sensibilAici || cheieDeToken(cheie))
     }
     return v
-  }, (cheie) => { dinText(cheie); return cheie }, sensibil)
+  }, (cheie, sensibilAici) => { if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
   dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
@@ -170,10 +188,10 @@ export function redacteazaAdanc(radacina, tokenuriGlobale = null) {
   return parcurge(radacina,
     (_obj, cheie, v, sensibil) => {
       if (typeof v !== 'string') return v
-      if ((sensibil || cheieDeToken(cheie)) && valoareDeToken(v)) return TOKEN
+      if ((sensibil || cheieDeToken(cheie)) && areRun43(v)) return TOKEN   // r15: orice secventa >=43 sub cheie sensibila -> toata valoarea
       return redacteazaText(v, tokenuriGlobale)
     },
-    (cheie) => redacteazaText(cheie, tokenuriGlobale))
+    (cheie, sensibil) => (sensibil && areRun43(cheie) ? TOKEN : redacteazaText(cheie, tokenuriGlobale)))
 }
 
 // serializare sigură la cicluri, pentru verificări

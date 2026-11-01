@@ -309,7 +309,39 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
     // sub cheie de token, un JSON prea mare/neparcurs e refuzat chiar fara cuvantul token in el
     const r3 = scrubSentryEvent({ message: 'ref_' + T, extra: { token: JSON.stringify({ padding: 'x'.repeat(200000), v: [null, T] }) } })
-    expect(r3).toBeNull()
+    expect(r3 === null || !JSON.stringify(r3).includes(T)).toBe(true)   // r19: tokenul e colectat din ferestrele de 43 → redactat (nu neapărat null)
+    // regresie r19: regex global partajat (lastIndex) — a doua rulare pe același modul pierdea colectarea; rulăm de 3 ori aceleași cazuri
+    for (let i = 0; i < 3; i++) {
+      const a = scrubSentryEvent({ extra: { p_token: [null, T] }, message: 'ref_' + T })
+      const b = scrubSentryEvent({ message: 'ref_' + T, extra: { p_token: { nested: { value: T } } } })
+      expect(a === null || !JSON.stringify(a).includes(T)).toBe(true)
+      expect(b === null || !JSON.stringify(b).includes(T)).toBe(true)
+    }
+  })
+  it('r15 P1-1 (Jakarinos): tokenul folosit drept CHEIE sub un obiect sensibil', () => {
+    const r1 = scrubSentryEvent({ extra: { token: { nested: { deep: { [T]: true } } } } })
+    expect(r1 === null || !JSON.stringify(r1).includes(T)).toBe(true)
+    const sp = scrubSentrySpan({ span_id: 's', trace_id: 't', data: { token: { nested: { [T]: 1 } } } })
+    expect(JSON.stringify(sp)).not.toContain(T)
+  })
+  it('r15 P1-2 (Jakarinos) / Copilot r9 P1-01: valoare sensibila cu spatii sau prefix (nu exact 43), si in JSON sub cheie sensibila', () => {
+    for (const ev of [
+      { extra: { token: ' '.repeat(30) + T } },
+      { extra: { token: 'ref_' + T } },
+      { extra: { p_token: JSON.stringify({ nested: { value: 'prefix-' + T } }) }, message: 'ref_' + T },
+      { message: 'x', extra: { raspuns: [' ', { z: 'a'.repeat(10) + T + 'b'.repeat(10) }] } },
+    ]) {
+      const rez = scrubSentryEvent(ev)
+      expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
+    }
+    const sp = scrubSentrySpan({ span_id: 's', trace_id: 't', data: { token: ' '.repeat(30) + T } })
+    expect(JSON.stringify(sp)).not.toContain(T)
+  })
+  it('r15 P2-1 (Jakarinos): JSON trunchiat cu `"tokenuri_cumparate":12` + hash legitim NU se pierde', () => {
+    const ev = { message: 'Eroare import', extra: { payload: '{"tokenuri_cumparate":12', continut_hash: 'a'.repeat(64) } }
+    expect(scrubSentryEvent(ev)).toEqual({ message: 'Eroare import', extra: { payload: '{"tokenuri_cumparate":12', continut_hash: 'a'.repeat(64) } })
+    // dar un JSON trunchiat cu cheie token si valoare structurala ramane indiciu
+    expect(scrubSentryEvent({ message: 'ref_' + T, extra: { payload: '{"token":[null,"' + T + '"' } })).toBeNull()
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
