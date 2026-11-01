@@ -153,13 +153,20 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
   // Copilot FE r7 P2-01: un JSON pe care NU-l putem parcurge (prea mare, prea adânc, invalid) dar care pomenește token/raspuns
   // marchează setul ca `refuzat` → evenimentul devine „purtător” (orice secvență ≥43 rămasă ⇒ null) — nu ne bazăm pe limite
   const dinJson = (f, sensibilSir = false) => {
-    if (!/^\s*[[{]/.test(f)) return
+    // Jakarinos r19 P1-1: JSON-ul poate sta ÎN MIJLOCUL unui șir (`payload={"token.value":"…"}`) — indiciul se caută pe tot șirul, iar
+    // parsarea se încearcă de la primul `{`/`[` (ce e înainte nu poate ascunde o cheie)
+    const start = f.search(/[[{]/)
+    if (start < 0) return
+    if (start > 0 && (RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(f.replace(/\\(["\\/])/g, '$1')))) tokenuri.refuzat = true
+    const json = start > 0 ? f.slice(start) : f
     // Jakarinos r13 P1-1: cheia poate fi scrisă cu escape Unicode (`"to\u006ben"`) — un JSON neparcurs cu escape-uri e și el suspect
     // Jakarinos r15 P2-1: `"tokenuri_cumparate":12` intr-un JSON trunchiat NU e indiciu; e indiciu o cheie *token* cu valoare sir/lista/obiect
-    const refuza = () => { if (sensibilSir || RX_INDICIU_JSON.test(f)) tokenuri.refuzat = true }
-    if (adancime >= 4 || f.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
+    // r19: JSON-ul poate fi un literal-șir JSON (`"{\"token.value\":\"…\"}"`) — indiciul se testează și pe forma cu escape-urile JSON scoase
+    const dezescapat = f.replace(/\\(["\\/])/g, '$1')
+    const refuza = () => { if (sensibilSir || RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(dezescapat)) tokenuri.refuzat = true }
+    if (adancime >= 4 || json.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
     let obj
-    try { obj = JSON.parse(f) } catch { return refuza() }
+    try { obj = JSON.parse(json) } catch { return refuza() }
     if (obj && typeof obj === 'object') {
       const sub = colecteazaTokenuriEveniment(obj, adancime + 1, sensibilSir)
       for (const t of sub) tokenuri.add(t)
