@@ -3,7 +3,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { normalizeazaNume } from '../idParcela.js'
-import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur } from './comune.jsx'
+// import de namespace: `reincarcaConvocator` vine de la agentul docx (P2-8); până aterizează, build-ul nu pică, iar butonul explică lipsa
+import * as docx from '../docx.js'
+import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
+  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS_BAZA, citesteTokenRaspuns } from './comune.jsx'
 
 const COL_PARCELA = 'id, proiect_id, uat_id, id_parcela, tronson, km_de_la, km_pana_la, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta, articol_deviz, cantitate, observatii, sters_la, sters_motiv, created_at'
 const CAMPURI_PARCELA = [
@@ -38,13 +41,14 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         const { data: v } = await supabase.from('red_parcele').select('valoare_lei').eq('id', parcelaId).maybeSingle()
         setValoare(v?.valoare_lei ?? null)
       }
-      const { data: det, error: e1 } = await supabase.from('red_detinatori').select('*').eq('parcela_id', parcelaId).order('sters_la', { nullsFirst:true }).order('nume')
+      const { data: det, error: e1 } = await supabase.from('red_detinatori').select(COL_DETINATOR).eq('parcela_id', parcelaId).order('sters_la', { nullsFirst:true }).order('nume')
       if (e1) throw e1
       setDetinatori(det || [])
       const ids = (det || []).map(d => d.id)
       const [rc, rr, rpv, rct] = await Promise.all([
-        ids.length ? supabase.from('red_convocari').select('*').in('detinator_id', ids).order('created_at') : { data: [] },
-        ids.length ? supabase.from('red_raspunsuri').select('*').in('detinator_id', ids).order('data') : { data: [] },
+        ids.length ? supabase.from('red_convocari').select(COL_CONVOCARE).in('detinator_id', ids).order('created_at') : { data: [] },
+        // P2-5: viewer-ul nu primește ip_sau_sursa; raw_payload / user_agent nu se cer deloc în UI
+        ids.length ? supabase.from('red_raspunsuri').select(COL_RASPUNS_BAZA + (poateScrie ? ', ip_sau_sursa' : '')).in('detinator_id', ids).order('data') : { data: [] },
         supabase.from('red_procese_verbale').select('*').or(`parcela_id.eq.${parcelaId}${ids.length ? `,detinator_id.in.(${ids.join(',')})` : ''}`).order('created_at'),
         poateScrie && ids.length ? supabase.from('red_detinatori_contact').select('*').in('detinator_id', ids) : { data: [] },
       ])
@@ -52,7 +56,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       setConvocari(rc.data || []); setRaspunsuri(rr.data || []); setPvs(rpv.data || [])
       setContacte(Object.fromEntries((rct.data || []).map(c => [c.detinator_id, c])))
       const toateId = [parcelaId, ...ids, ...(rc.data || []).map(x => x.id), ...(rr.data || []).map(x => x.id), ...(rpv.data || []).map(x => x.id)]
-      const { data: j, error: ej } = await supabase.from('red_jurnal').select('id, tabela, inregistrare_id, actiune, user_email, created_at, date_noi').in('inregistrare_id', toateId).order('created_at').limit(500)
+      // P2-5: fără date_vechi/date_noi în listă — se citesc la cerere, per rând, doar de admin (vedeJurnal)
+      const { data: j, error: ej } = await supabase.from('red_jurnal').select('id, tabela, inregistrare_id, actiune, user_email, created_at').in('inregistrare_id', toateId).order('created_at').limit(500)
       if (ej) throw ej
       setJurnal(j || [])
     } catch (e) { show('Fișa parcelei: ' + msgEroare(e), 'error') }
@@ -67,7 +72,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
   const cronologie = useMemo(() => {
     const ev = []
     convocari.forEach(c => {
-      ev.push({ t: c.created_at, tip:'convocare', text:`Convocator ${c.nr_document} generat (${c.canal})${c.stare === 'anulat' ? ' — ANULAT' : ''}`, cine: numeDet[c.detinator_id], path: c.fisier_convocator_path })
+      ev.push({ t: c.created_at, tip:'convocare', text:`Convocator ${c.nr_document} generat (${c.canal})${c.stare === 'anulat' ? ' — ANULAT' : ''}${!c.fisier_convocator_path ? ' — fișier neîncărcat' : ''}`, cine: numeDet[c.detinator_id], path: c.fisier_convocator_path, conv: !c.fisier_convocator_path && c.stare === 'activ' ? c : null })
       if (c.data_expediere) ev.push({ t: c.data_expediere, tip:'convocare', text:`${c.nr_document} expediat${c.nr_tracking ? ' · ' + c.nr_tracking : ''}`, cine: numeDet[c.detinator_id] })
       if (c.data_confirmare_primire) ev.push({ t: c.data_confirmare_primire, tip:'convocare', text:`${c.nr_document} confirmare de primire`, cine: numeDet[c.detinator_id] })
       if (c.retur) ev.push({ t: c.retur_data || c.created_at, tip:'retur', text:`${c.nr_document} retur: ${etichetaRetur(c.retur)}`, cine: numeDet[c.detinator_id] })
@@ -77,12 +82,13 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       ev.push({ t: p.created_at, tip:'pv', text:`PV ${p.tip} ${p.nr_pv} — ${p.stare}${p.obiectii_redare ? ' · cu obiecții' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_generat_path })
       if (p.semnat_primit_data) ev.push({ t: p.semnat_primit_data, tip:'pv', text:`PV ${p.nr_pv} semnat${p.semnat_fizic ? ' (fizic)' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_semnat_path })
     })
-    jurnal.forEach(j => ev.push({ t: j.created_at, tip:'jurnal', text:`${j.actiune} ${j.tabela.replace('red_', '')}`, cine: j.user_email || '', jurnal: true }))
+    jurnal.forEach(j => ev.push({ t: j.created_at, tip:'jurnal', text:`${j.actiune} ${j.tabela.replace('red_', '')}`, cine: j.user_email || '', jurnal: true, jurnalId: j.id }))
     return ev.sort((a, b) => new Date(a.t) - new Date(b.t))
   }, [convocari, raspunsuri, pvs, jurnal, numeDet])
 
   const fisiere = useMemo(() => [
-    ...convocari.filter(c => c.fisier_convocator_path).map(c => ({ path: c.fisier_convocator_path, eticheta:`Convocator ${c.nr_document}` })),
+    // P2-8: convocările active fără fișier (upload-ul a picat după inserarea rândului) apar „neîncărcat” + Reîncarcă
+    ...convocari.filter(c => c.stare === 'activ').map(c => c.fisier_convocator_path ? { path: c.fisier_convocator_path, eticheta:`Convocator ${c.nr_document}` } : { conv: c, eticheta:`Convocator ${c.nr_document}` }),
     ...pvs.flatMap(p => [p.fisier_generat_path && { path: p.fisier_generat_path, eticheta:`PV ${p.nr_pv} generat` }, p.fisier_semnat_path && { path: p.fisier_semnat_path, eticheta:`PV ${p.nr_pv} semnat` }].filter(Boolean)),
   ], [convocari, pvs])
 
@@ -96,7 +102,38 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
 
   const culoareTip = { convocare: G.blue, retur: G.orange, raspuns: G.green, pv: G.purple, jurnal: G.dim }
   const [arataJurnal, setArataJurnal] = useState(false)
+  const [jurnalDetalii, setJurnalDetalii] = useState(null)   // { id, date_vechi, date_noi } — doar admin, la cerere
+  const [reincarcId, setReincarcId] = useState(null)
   const dupaModal = () => { setModal(null); incarca(); onSchimbat?.() }
+
+  // P2-5: detaliile unei intrări de jurnal (date_vechi / date_noi) se citesc la cerere, doar de admin
+  const vedeJurnal = async (id) => {
+    if (!esteAdmin) return
+    try {
+      const { data, error } = await supabase.from('red_jurnal').select('id, tabela, actiune, user_email, created_at, date_vechi, date_noi').eq('id', id).single()
+      if (error) throw error
+      setJurnalDetalii(data)
+    } catch (e) { show('Jurnal: ' + msgEroare(e), 'error') }
+  }
+
+  // P2-8: regenerează documentul unei convocări existente (același nr_document, data originală) și îl încarcă în bucket
+  const reincarca = async (c) => {
+    if (!poateScrie || !parcela || !uat) return
+    setReincarcId(c.id)
+    try {
+      const det = detinatori.find(d => d.id === c.detinator_id)
+      if (!det) throw new Error('Deținătorul convocării nu mai e pe parcelă.')
+      const [token, rs] = await Promise.all([citesteTokenRaspuns(c.detinator_id), fetch(SABLON_CONVOCATOR)])
+      if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
+      const templateArrayBuffer = await rs.arrayBuffer()
+      if (typeof docx.reincarcaConvocator !== 'function') throw new Error('Reîncărcarea nu e disponibilă încă în această versiune (docx.js fără reincarcaConvocator).')
+      const { blob, hash } = await docx.genereazaConvocator({ detinator: det, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, origin: window.location.origin, templateArrayBuffer, dataDocument: c.created_at })
+      const { path } = await docx.reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
+      show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
+      incarca()
+    } catch (e) { show('Reîncărcare: ' + msgEroare(e), 'error') }
+    finally { setReincarcId(null) }
+  }
 
   if (loading && !parcela) return <Gol text="Se încarcă fișa…" />
   if (!parcela) return <Gol text="Parcela nu a fost găsită." />
@@ -168,8 +205,13 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
           {fisiere.length === 0 ? <Gol text="Niciun fișier." /> : fisiere.map((f, i) => (
             <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 0', borderTop:`1px solid ${G.border}`, fontSize:13 }}>
               <span style={{ flex:1 }}>{f.eticheta}</span>
-              <span style={{ ...S.mono, color:G.dim, fontSize:11 }}>{f.path.split('/').pop()}</span>
-              <button style={S.btnX} onClick={() => deschideFisier(f.path)} disabled={!poateScrie} title={poateScrie ? 'Deschide (link semnat 10 min)' : 'Doar admin/editor pot deschide fișierele'}>⬇</button>
+              {f.path ? (<>
+                <span style={{ ...S.mono, color:G.dim, fontSize:11 }}>{f.path.split('/').pop()}</span>
+                <button style={S.btnX} onClick={() => deschideFisier(f.path)} disabled={!poateScrie} title={poateScrie ? 'Deschide (link semnat 10 min)' : 'Doar admin/editor pot deschide fișierele'}>⬇</button>
+              </>) : (<>
+                <span style={{ ...S.tag, background:G.yellowDim, color:G.yellow }}>neîncărcat</span>
+                {poateScrie && <button style={S.btnX} onClick={() => reincarca(f.conv)} disabled={reincarcId === f.conv.id} title="Regenerează documentul și încarcă-l în arhivă">{reincarcId === f.conv.id ? '…' : '↻ Reîncarcă'}</button>}
+              </>)}
             </div>
           ))}
         </div>
@@ -191,6 +233,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                 <span style={{ flex:1, color: e.jurnal ? G.muted : G.text }}>{e.text}</span>
                 {e.cine && <span style={{ color:G.dim, fontSize:12 }}>{e.cine}</span>}
                 {e.path && poateScrie && <button style={S.btnX} onClick={() => deschideFisier(e.path)}>⬇</button>}
+                {e.conv && poateScrie && <button style={S.btnX} onClick={() => reincarca(e.conv)} disabled={reincarcId === e.conv.id}>{reincarcId === e.conv.id ? '…' : '↻ Reîncarcă'}</button>}
+                {e.jurnal && esteAdmin && <button style={S.btnX} onClick={() => vedeJurnal(e.jurnalId)} title="Detalii (date vechi / noi)">{'{ }'}</button>}
               </div>
             ))}
           </div>
@@ -200,6 +244,16 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       {modal?.tip === 'parcela' && <ModalParcela parcela={parcela} valoare={valoare} esteAdmin={esteAdmin} show={show} onClose={() => setModal(null)} onGata={dupaModal} />}
       {modal?.tip === 'detinator' && <ModalDetinator parcela={parcela} det={modal.det} contact={modal.contact} show={show} onClose={() => setModal(null)} onGata={dupaModal} />}
       {modal?.tip === 'sterge' && <ModalSterge tabela={modal.tabela} id={modal.id} ce={modal.ce} profile={profile} show={show} onClose={() => setModal(null)} onGata={() => { dupaModal(); if (modal.tabela === 'red_parcele') onInapoi() }} />}
+      {jurnalDetalii && (
+        <Modal titlu={`Jurnal #${jurnalDetalii.id} — ${jurnalDetalii.actiune} ${String(jurnalDetalii.tabela || '').replace('red_', '')}`} onClose={() => setJurnalDetalii(null)} latime={720}>
+          <div style={{ fontSize:12.5, color:G.muted, marginBottom:8 }}>{fmtDateTime(jurnalDetalii.created_at)} · {jurnalDetalii.user_email || '-'}</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            {[['Date vechi', jurnalDetalii.date_vechi], ['Date noi', jurnalDetalii.date_noi]].map(([et, v]) => (
+              <div key={et}><label style={S.label}>{et}</label><pre style={{ ...S.mono, fontSize:11.5, background:G.bg, border:`1px solid ${G.border}`, borderRadius:7, padding:10, maxHeight:360, overflow:'auto', margin:0, whiteSpace:'pre-wrap' }}>{v ? JSON.stringify(v, null, 2) : '—'}</pre></div>
+            ))}
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
