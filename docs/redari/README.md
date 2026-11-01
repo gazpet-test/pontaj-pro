@@ -4,7 +4,7 @@ Stare la 02.11.2026 dimineața (felia de noapte 01→02.11, branch `feat/redari-
 Juridic). Contractul tehnic obligatoriu: `CONTRACT_SCHEMA.md`. Șabloanele și harta câmpurilor: `SABLOANE.md`. Migrarea și verificarea ei:
 `MIGRARE_20261126a.md`. **Migrarea `20261126a` NU e aplicată pe producție** (runda 4 scrisă după Jakarinos r3 — 0 P1 / 6 P2 — și Copilot r3 — GO cu
 observații; verificată local PG17 PASS; review Jakarinos + Copilot r4 în curs). Frontend-ul: Jakarinos r3 NO-GO (2 P1 / 8 P2), runda 4 (logica r5 +
-docx r6) scrisă, restul P2-urilor în lucru. PR-ul nu e deschis.
+docx r6 + ui r6) scrisă și integrată — toate punctele r3 închise în cod, așteaptă review-ul Jakarinos r4. PR-ul nu e deschis.
 
 ## 1. Scop
 
@@ -64,18 +64,18 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
 | `src/Redari.jsx` | ecranul `/redari` (`requireModule="redari"`): antet cu proiect + nivel, taburi Registru / Fișa parcelei / Import TGZ; Registrul cu filtre, STARE colorată și acțiunile pe rând; modalele Convocator, Expediat, AR/Retur, Răspuns telefonic; borderoul CSV |
 | `src/redari/ui/FisaParcela.jsx` | fișa: date parcelă (`valoare_lei` doar admin), deținători + contact (admin/editor), cronologie unită (convocări, răspunsuri, PV, jurnal), fișiere cu link semnat 10 min, adăugare/editare deținător, soft delete cu motiv, reîncărcare convocator (versiune nouă) |
 | `src/redari/ui/ImportTgz.jsx` | importul Excel TGZ: previzualizare, raport (dubluri, neidentificați, fără cheie, ambigue, erori), commit în loturi |
-| `src/redari/ui/comune.jsx` | paletă G/S, proiecții explicite de coloane, `SABLON_CONVOCATOR`, `citesteTokenRaspuns`, `motivBlocareConvocator` |
+| `src/redari/ui/comune.jsx` | paletă G/S, proiecții explicite de coloane, `SABLON_CONVOCATOR`, `citesteTokenRaspuns`, `motivBlocareConvocator`, citiri paginate (`citestePaginat` în pagini de 1000, `citesteIn` în loturi de 100) folosite în Fișă și borderou |
 | `src/redari/stare.js` | cele 12 stări și ierarhia (identică cu `red_v_stare_parcela`), ultimul răspuns cu `seq` ca tie-break, returul acoperit de AR ulterior |
 | `src/redari/importTgz.js` | parsarea Excel-ului TGZ (antet rândul 3, `Nr.Crt.` x/y = coproprietari, neidentificat, `cheie_sursa`, județul din adresă; identități ambigue sau contradictorii sub același Nr.Crt. → necomise) și scrierea în loturi de 200 cu rezervare de numere prin RPC (oprire înainte de orice INSERT dacă s-ar depăși 9999), contoare după fiecare lot, reluare idempotentă |
 | `src/redari/idParcela.js` | `uat3`, normalizare nume, formatul `id_parcela` |
 | `src/redari/docx.js` | `completeazaDocx` (jszip, `{{camp}}`, QR ca imagine), `genereazaConvocator` / `verificaDateConvocator`, hash sha256, borderou CSV (anti formula-injection), `salveazaConvocator` / `reincarcaConvocator` (rând → upload `upsert:false` → update path+hash; versiunea nouă din listarea paginată a folderului) |
-| `src/redari/sentryScrub.js` | tokenul din `/redari/raspuns/<token>` nu ajunge în Sentry (`beforeSend` / `beforeSendTransaction` în `src/main.jsx`) |
+| `src/redari/sentryScrub.js` | tokenul din `/redari/raspuns/<token>` nu ajunge în Sentry (`beforeSend` / `beforeSendTransaction` în `src/main.jsx`): URL-uri, variante `%2F`, `p_token` în payload-uri codificate URL (decodare repetată), chei la orice adâncime; dacă scrub-ul însuși aruncă, evenimentul e eliminat, nu trimis brut |
 | `src/RedariRaspunsPublic.jsx` | formularul public `/redari/raspuns/:token`, fără login, mobile-first, 4 opțiuni, fără date personale |
 | `public/redari/sabloane/*.docx` | șabloanele reale Model_1..5 v5 cu placeholder-e (`convocator`, `pv_a`, `pv_b`, `adresa_uat`, `pv_c`); originalele în `docs/redari/referinta/` |
 | `scripts/redari_sabloane_verifica.mjs` | verifică placeholder-ele șabloanelor (0 rupte între run-uri) |
 
 `src/App.jsx` primește doar ruta lazy `/redari`, ruta publică `/redari/raspuns/:token` și intrarea în meniu (🌾 Redări teren). Teste vitest
-(`npm test`): `stare`, `idParcela`, `importTgz`, `docx`, `sentryScrub` — 129 de teste, toate pe date fictive.
+(`npm test`): `stare`, `idParcela`, `importTgz`, `docx`, `sentryScrub` — 131 de teste, toate pe date fictive.
 
 ## 3. Cum se folosește (după aplicarea migrării și acordarea rolurilor)
 
@@ -87,13 +87,15 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
 2. **Import TGZ** (tabul „📥 Import TGZ”, admin/editor): se alege fișierul „Raport Informații Generale Terenuri” (xlsx, antet pe rândul 3), se
    scrie versiunea listei (ex. „TGZ 13.07.2026”), sursa (TGZ / ANEXA7 — parserul Anexa 7 nu există încă) și tronsonul per UAT. Previzualizarea
    arată parcele, deținători, dubluri, neidentificați și rândurile care NU se importă: **fără cheie** (fără poziție HG, cadastru și tarla —
-   n-au identitate stabilă) și **ambigue** (aceeași identitate pe Nr.Crt. diferite) — acestea se adaugă manual din Fișă. Commit-ul rezervă
+   n-au identitate stabilă) și **ambigue** (aceeași identitate pe Nr.Crt. diferite sau identități contradictorii sub același Nr.Crt.) — pentru ele
+   se completează poziția HG / nr. cadastral în Excel și se reimportă (Fișa poate adăuga deținători la o parcelă existentă, nu parcele noi). Commit-ul rezervă
    numerele de parcelă prin `fn_red_rezerva_numere_parcele`, scrie parcele → deținători → contact în loturi de 200, deschide/închide lotul în
    `red_import_loturi`; un reimport al aceluiași fișier cade pe parcelele existente (`cheie_sursa`) și completează ce lipsește.
 3. **Registru** (tabul „📋 Registru”): o linie per parcelă × deținător din `red_v_stare_parcela`, filtre UAT / tronson / stare, căutare, STAREA
    colorată. Acțiuni pe rând (admin/editor): **Convocator** (rezervă `C-nnnn`, generează DOCX din `convocator.docx` cu link + QR unic, îl
    încarcă în bucket, descarcă), **Expediat** (dată + AWB), **AR primit / Retur** (motiv + dată), **Răspuns telefonic** (opțiune, zi, obiecții;
-   metadatele în `red_raspunsuri_meta`). Deținătorii neidentificați sau fără adresă nu primesc convocator (convocarea lor e prin afișare la Primărie).
+   metadatele în `red_raspunsuri_meta`; „particip” alege ziua doar dintre zilele UAT-ului). Deținătorii neidentificați sau fără adresă nu primesc
+   convocator (convocarea lor e prin afișare la Primărie).
 4. **Fișa parcelei** (din Registru): date, deținători (+ contact pentru admin/editor), cronologia, fișierele (link semnat 10 minute), „↻ Reîncarcă”
    pentru un convocator cu fișier lipsă sau de regenerat (versiune nouă `-v{n}`), adăugare/editare deținător, soft delete cu motiv.
 5. **Borderou Poștă** (Registru, „📮 Borderou CSV”): CSV UTF-8 cu BOM, separator `;`, coloane `nr_document;nume;adresa;cod_postal;localitate;judet;id_parcela`,
@@ -131,8 +133,9 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
 - Storage API pe prod: upload, refuzul suprascrierii (`upsert:false`), refuzul ștergerii, link semnat — TEST9 verifică doar metadatele din
   `storage.objects` (Jakarinos r3 P2-06), nu octeții prin API. Procedura manuală de după apply (cont editor + viewer, fișier de test, 3 pași) e în
   `MIGRARE_20261126a.md` „Verificare manuală pe prod, prin Storage API”.
-- P2-urile deschise din Jakarinos r3 frontend (contoare la scrieri parțiale, trimiterea în curs la schimbarea tokenului, paginarea în fișă/borderou,
-  cursa UAT-urilor la schimbarea proiectului, „particip” fără sesiuni în modalul telefonic, un contraexemplu la scrub-ul Sentry) — în lucru în runda 4.
+- Punctele Jakarinos r3 frontend (identități contradictorii, tokenul în payload codificat, contoare la scrieri parțiale, trimiterea în curs la
+  schimbarea tokenului, paginarea în fișă/borderou, cursa UAT-urilor, „particip” fără sesiuni, fallback-ul Sentry, ID peste 4 cifre) sunt închise în
+  cod (runda 4), dar neconfirmate încă de review-ul r4.
 - Performanța `red_v_stare_parcela` pe 2.728 parcele × deținători (LATERAL-uri + o funcție per rând) și importul sub 1 minut — de măsurat după import.
 - Formatul `x-forwarded-for` la gateway-ul Supabase: dacă antetul e influențabil de client, limita 30/IP e orientativă, limita reală e la gateway
   (Copilot r3 P2-01); fără antet cheia e `ip:necunoscut`.
