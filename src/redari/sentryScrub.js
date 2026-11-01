@@ -1,37 +1,42 @@
-// Redări teren — redactarea tokenului public (/redari/raspuns/<token>) din evenimentele Sentry (review Jakarinos P1-4 / P2-3 / r3 P1-2, P2-7).
-// Modul pur (fără React, fără Sentry): se folosește ca beforeSend / beforeSendTransaction în src/main.jsx și se testează cu vitest.
+// Redări teren — protecția tokenului public (/redari/raspuns/<token>) în telemetria Sentry (review Jakarinos r1…r6).
+// Modul pur (fără React, fără Sentry): beforeSend / beforeSendTransaction în src/main.jsx; testat cu vitest (sentryScrub.test.js).
 //
-// Ce se redactează, în orice șir din eveniment (valori ȘI chei de obiect), la orice adâncime (parcurgere iterativă, cu set de vizitate):
-//  1. `/redari/raspuns/<orice>`                      → `/redari/raspuns/[token]`
-//  2. `%2Fredari%2Fraspuns%2F<orice>` (URL-encoded)   → `%2Fredari%2Fraspuns%2F[token]`
-//  3. orice șir de EXACT 43 caractere [A-Za-z0-9_-] (formatul tokenului) după `raspuns/` sau `raspuns%2F`, sau după `p_token` cu până la
-//     16 „separatoare” între ele (orice caracter non-token sau secvență %XX — ex. `%22%3A%22` din JSON URL-encoded) → `[token]`
-//  4. Se construiesc formele [brut, dec1, dec2, dec3] (decodare repetată, max 3); tokenurile găsite în ORICARE formă se înlocuiesc
-//     global în forma brută (literal + variante %-codificate); dacă vreo formă a rezultatului mai conține un tipar → tot șirul „[redactat]”.
-// Dacă parcurgerea aruncă (getter care aruncă, structuri exotice), NU se întoarce evenimentul brut: se întoarce o variantă minimă, fără
-// request / breadcrumbs / spans / contexts / extra; dacă nici aceea nu se poate construi → `null` (evenimentul e eliminat, nu trimis brut).
+// STRATEGIA (r6): nu ne bazăm pe completitudinea redactării.
+//  (1) DROP total pe formularul public: dacă pagina curentă e /redari/raspuns…, sau request.url / transaction / orice URL de breadcrumb
+//      (brut sau decodat) conține `/redari/raspuns`, `rpc/fn_red_formular_public` sau `rpc/fn_red_raspuns_public` ⇒ null. Nimic de pe
+//      formularul public nu ajunge la Sentry.
+//  (2) Pentru restul: colectare globală a tokenurilor (valoarea de 43 a oricărei chei cu „token” în nume + tokenul de 43 după raspuns/
+//      sau p_token din orice șir sau cheie, în toate formele decodate), apoi înlocuire globală (literal + codificat simplu/dublu) în toate
+//      șirurile și cheile; request.data / request.body se elimină dacă poartă token sau URL-ul e un RPC al modulului.
+//  (3) VERIFICAREA FINALĂ pe evenimentul serializat (safe la cicluri): formele [brut, dec1, dec2, dec3] cu un decodor care decodează ORICE
+//      %XX valid; pe FIECARE formă se caută orice token colectat, regex-ul (raspuns|token)…<43>, `/redari/raspuns` și — pentru evenimentele
+//      care au purtat token — orice alt șir de 43 [A-Za-z0-9_-] rămas. Dacă ceva se potrivește ⇒ null (evenimentul se pierde, acceptat).
+//  (4) La ORICE excepție ⇒ null. Niciodată evenimentul brut, niciodată o „variantă minimă”.
 
 const TOKEN = '[token]'
-const REDACTAT = '[redactat]'
 const RX_CALE = /\/redari\/raspuns\/([^\s/?#"'&]+)/g
 const RX_CALE_ENC = /%2Fredari%2Fraspuns%2F([^\s/?#"'&%]+)/gi
 // `raspuns/` sau `raspuns%2F`, apoi tokenul de 43; `p_token`, până la 16 separatoare (non-token sau %XX), apoi tokenul de 43
 const RX_TOKEN_RASPUNS = /(raspuns(?:\/|%2F))([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/gi
 const RX_TOKEN_P_TOKEN = /(p_token(?:%[0-9A-Fa-f]{2}|[^A-Za-z0-9_-]){0,16})([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/gi
-// orice coadă de cale „/redari/raspuns/…” care NU e deja marcajul
-const RX_CALE_NEREDACTATA = /\/redari\/raspuns\/(?!\[token\])[^\s/?#"'&]+/i
+const RX_T43 = /^[A-Za-z0-9_-]{43}$/
+const RX_T43_ORIUNDE = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/
+const RX_DROP = /\/redari\/raspuns|rpc\/fn_red_formular_public|rpc\/fn_red_raspuns_public/i
+const RX_FINAL = /(raspuns|token)[^A-Za-z0-9_-]{0,16}[A-Za-z0-9_-]{43}/i
+const RX_RASPUNS_PUBLIC = /\/redari\/raspuns/i
 const MAX_DECODARI = 3
-const MIN_LUNGIME_COADA = 16   // cozile de cale mai scurte nu se înlocuiesc global (ar atinge text nevinovat); rămân pe seama regulilor de cale
+const MIN_LUNGIME_COADA = 16
 
 const pareSuspect = (s) => /redari|raspuns|p_token/i.test(s)
+const cheieDeToken = (cheie) => typeof cheie === 'string' && /token/i.test(cheie)
 
-// Decodează procent-codificarea o dată; la eșec (secvență invalidă) decodează doar secvențele %XX valide, ca să nu rămână tokenul ascuns.
+// Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
   try { return decodeURIComponent(s) }
   catch { return s.replace(/%[0-9A-Fa-f]{2}/g, (m) => { try { return decodeURIComponent(m) } catch { return m } }) }
 }
 // [brut, dec1, dec2, dec3] — până la MAX_DECODARI sau până nu se mai schimbă
-const formele = (s) => {
+export const formele = (s) => {
   const lista = [s]
   let curent = s
   for (let i = 0; i < MAX_DECODARI; i++) {
@@ -42,7 +47,6 @@ const formele = (s) => {
   }
   return lista
 }
-// tokenurile găsite într-o formă: coada căii /redari/raspuns/… (literal sau %2F), tokenul de 43 după raspuns/ sau p_token
 const colecteazaTokenuri = (forma, set) => {
   for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN]) {
     rx.lastIndex = 0
@@ -54,22 +58,9 @@ const aplicaRegulileDeCale = (s) => s
   .replace(RX_CALE, `/redari/raspuns/${TOKEN}`)
   .replace(RX_TOKEN_RASPUNS, (_, prefix) => `${prefix}${TOKEN}`)
   .replace(RX_TOKEN_P_TOKEN, (_, prefix) => `${prefix}${TOKEN}`)
-const maiContineTipar = (s, tokenuri) => {
-  for (const f of formele(s)) {
-    for (const t of tokenuri) if (f.includes(t)) return true
-    RX_TOKEN_RASPUNS.lastIndex = 0; RX_TOKEN_P_TOKEN.lastIndex = 0
-    if (RX_TOKEN_RASPUNS.test(f) || RX_TOKEN_P_TOKEN.test(f) || RX_CALE_NEREDACTATA.test(f)) return true
-  }
-  return false
-}
-
-// Strategia (Jakarinos r4 P1-1): se construiesc formele [brut, dec1, dec2, dec3]; dacă ORICARE conține un tipar, tokenurile găsite în
-// toate formele se înlocuiesc GLOBAL în forma brută (encodeURIComponent(token) e identic pentru [A-Za-z0-9_-], deci replaceAll ajunge;
-// pentru cozi cu alte caractere se înlocuiesc și variantele codificate o dată / de două ori), apoi se aplică și regulile de cale.
-// Dacă după toate astea vreo formă a rezultatului tot mai conține un token / tipar → tot șirul devine „[redactat]”.
 const varianteToken = (t) => new Set([t, encodeURIComponent(t), encodeURIComponent(encodeURIComponent(t))])
 
-// `tokenuriGlobale` (opțional) = tokenurile colectate din tot evenimentul (prima trecere): se înlocuiesc în orice șir, chiar fără context.
+// Redactarea unui șir: tokenurile globale (din tot evenimentul) + tokenurile din propriile forme + regulile de cale.
 export function redacteazaText(s, tokenuriGlobale = null) {
   if (typeof s !== 'string') return s
   const forme = formele(s)
@@ -80,12 +71,10 @@ export function redacteazaText(s, tokenuriGlobale = null) {
   for (const f of forme) colecteazaTokenuri(f, tokenuri)
   rezultat = aplicaRegulileDeCale(rezultat)
   for (const t of tokenuri) for (const v of varianteToken(t)) rezultat = rezultat.split(v).join(TOKEN)
-  // verificarea finală rulează mereu: un tipar vizibil doar într-o formă decodată (ex. coadă scurtă sub codificare dublă) → tot șirul
-  return maiContineTipar(rezultat, tokenuri) ? REDACTAT : rezultat
+  return rezultat
 }
 
 // Parcurgere iterativă generică (fără recursivitate, fără limită de adâncime), cu set de vizitate pentru cicluri.
-// fn(obj, cheie, valoare) e apelat pentru fiecare pereche; întoarce valoarea nouă (sau aceeași). Cheile-șir trec prin fnCheie.
 function parcurge(radacina, fn, fnCheie = null) {
   if (radacina === null || typeof radacina !== 'object') return radacina
   const vizitate = new WeakSet()
@@ -115,11 +104,7 @@ function parcurge(radacina, fn, fnCheie = null) {
   return radacina
 }
 
-const RX_T43 = /^[A-Za-z0-9_-]{43}$/
-const cheieDeToken = (cheie) => typeof cheie === 'string' && /token/i.test(cheie)
-
-// Trecerea 1 (P1-1 r5): toate tokenurile candidate din întreg evenimentul — valoarea de 43 a oricărei chei cu „token” în nume
-// (p_token, token_raspuns, extra.token…), plus tokenurile după raspuns/ sau p_token din orice șir (toate formele decodate) și din chei.
+// (2a) tokenurile candidate din întreg evenimentul
 export function colecteazaTokenuriEveniment(event) {
   const tokenuri = new Set()
   const dinText = (s) => { if (typeof s === 'string' && pareSuspect(s)) for (const f of formele(s)) colecteazaTokenuri(f, tokenuri) }
@@ -133,8 +118,7 @@ export function colecteazaTokenuriEveniment(event) {
   return tokenuri
 }
 
-// Trecerea 2: înlocuiește global fiecare token colectat (literal + codificat simplu/dublu) în toate șirurile și cheile; valorile de 43 ale
-// cheilor cu „token” în nume devin „[token]” indiferent de conținut. Mută în loc.
+// (2b) înlocuire globală în toate șirurile și cheile; valorile de 43 ale cheilor cu „token” în nume → [token]. Mută în loc.
 export function redacteazaAdanc(radacina, tokenuriGlobale = null) {
   if (radacina === null || typeof radacina !== 'object') return typeof radacina === 'string' ? redacteazaText(radacina, tokenuriGlobale) : radacina
   return parcurge(radacina,
@@ -146,7 +130,7 @@ export function redacteazaAdanc(radacina, tokenuriGlobale = null) {
     (cheie) => redacteazaText(cheie, tokenuriGlobale))
 }
 
-// serializare sigură la cicluri / getter-e, pentru verificarea finală
+// serializare sigură la cicluri, pentru verificări
 const serializeaza = (obj) => {
   const vizitate = new WeakSet()
   return JSON.stringify(obj, (_k, v) => {
@@ -158,54 +142,48 @@ const contineVreunToken = (text, tokenuri) => {
   for (const t of tokenuri) for (const v of varianteToken(t)) if (text.includes(v)) return true
   return false
 }
+const vreoFormaSePotriveste = (s, rx) => typeof s === 'string' && formele(s).some(f => rx.test(f))
 
-// Varianta minimă, folosită DOAR când parcurgerea completă a aruncat: păstrează ce e util pentru diagnostic, fără câmpurile cu URL-uri.
-// Poate arunca ea însăși (getter pe timestamp etc.) — apelantul o protejează și întoarce null.
-export function evenimentMinim(event) {
-  const e = (event && typeof event === 'object') ? event : {}
-  const sigur = (v) => (typeof v === 'string' ? redacteazaText(v) : undefined)
-  const minim = {
-    event_id: typeof e.event_id === 'string' ? e.event_id : undefined,
-    timestamp: (typeof e.timestamp === 'number' || typeof e.timestamp === 'string') ? e.timestamp : undefined,
-    platform: typeof e.platform === 'string' ? e.platform : undefined,
-    level: typeof e.level === 'string' ? e.level : undefined,
-    environment: typeof e.environment === 'string' ? e.environment : undefined,
-    release: typeof e.release === 'string' ? e.release : undefined,
-    transaction: sigur(e.transaction),
-    message: sigur(typeof e.message === 'string' ? e.message : e.message?.formatted),
-    tags: { sentry_scrub: 'minim' },
+// (1) evenimentul vine de pe formularul public? — pagina curentă, URL-ul cererii, transaction, URL-urile din breadcrumb-uri
+export function esteDinFormularulPublic(event) {
+  if (typeof window !== 'undefined' && RX_RASPUNS_PUBLIC.test(String(window.location?.pathname || ''))) return true
+  const e = event || {}
+  if (vreoFormaSePotriveste(e.request?.url, RX_DROP) || vreoFormaSePotriveste(e.transaction, RX_DROP)) return true
+  const bc = Array.isArray(e.breadcrumbs) ? e.breadcrumbs : (Array.isArray(e.breadcrumbs?.values) ? e.breadcrumbs.values : [])
+  for (const b of bc) {
+    if (!b || typeof b !== 'object') continue
+    for (const u of [b.url, b.data?.url, b.data?.to, b.data?.from, b.message]) if (vreoFormaSePotriveste(u, RX_DROP)) return true
   }
-  // excepția: doar tipul + mesajul (redactate), fără stack cu URL-uri
-  const valori = e.exception?.values
-  if (Array.isArray(valori)) {
-    minim.exception = { values: valori.slice(0, 5).map(x => ({ type: sigur(x?.type), value: sigur(x?.value) })) }
-  }
-  for (const k of Object.keys(minim)) if (minim[k] === undefined) delete minim[k]
-  return minim
+  return false
 }
 
-// beforeSend / beforeSendTransaction (Jakarinos r5 P1-1), pe evenimentul STRUCTURAT:
-//  (1) colectare globală a tokenurilor; (2) înlocuire globală în toate șirurile și cheile; (3) request.data / request.body eliminate complet
-//  dacă conțin vreun token sau dacă URL-ul cererii conține `rpc/fn_red_`; (4) verificare finală pe evenimentul serializat: dacă mai apare
-//  vreun token → null (eveniment eliminat). La excepție: eveniment minim → altfel null. Niciodată evenimentul brut.
+// (3) verificarea finală pe serializare, pe toate formele decodate
+export function maiScurgeToken(event, tokenuri) {
+  const text = serializeaza(event)
+  for (const f of formele(text)) {
+    if (contineVreunToken(f, tokenuri)) return true
+    if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true
+    if (tokenuri.size && RX_T43_ORIUNDE.test(f)) return true   // a purtat token: orice alt șir de 43 rămas e suspect
+  }
+  return false
+}
+
+// beforeSend / beforeSendTransaction
 export function scrubSentryEvent(event) {
   try {
-    if (event === null || typeof event !== 'object') return event
+    if (event === null || typeof event !== 'object') return null
+    if (esteDinFormularulPublic(event)) return null
     const tokenuri = colecteazaTokenuriEveniment(event)
-    // (3) înainte de înlocuire: corpul cererii nu se păstrează dacă poartă token sau e un RPC al modulului
     const req = event.request
     if (req && typeof req === 'object') {
-      const url = typeof req.url === 'string' ? req.url : ''
       const corp = serializeaza({ data: req.data, body: req.body })
-      const urlRpc = /rpc\/fn_red_/i.test(url) || formele(url).some(f => /rpc\/fn_red_/i.test(f))
+      const urlRpc = vreoFormaSePotriveste(typeof req.url === 'string' ? req.url : '', /rpc\/fn_red_/i)
       if (urlRpc || contineVreunToken(corp, tokenuri) || /p_token|raspuns/i.test(corp)) { delete req.data; delete req.body }
     }
     redacteazaAdanc(event, tokenuri)
-    // (4) verificarea finală pe tot evenimentul
-    if (tokenuri.size && contineVreunToken(serializeaza(event), tokenuri)) return null
+    if (maiScurgeToken(event, tokenuri)) return null
     return event
   } catch {
-    try { return evenimentMinim(event) }
-    catch { return null }
+    return null
   }
 }

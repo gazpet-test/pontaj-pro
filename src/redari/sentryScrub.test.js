@@ -1,6 +1,6 @@
 // Redări teren — teste pentru redactarea tokenului public din evenimentele Sentry (src/redari/sentryScrub.js). Tokenuri fictive.
 import { describe, it, expect } from 'vitest'
-import { redacteazaText, redacteazaAdanc, scrubSentryEvent, evenimentMinim } from './sentryScrub.js'
+import { redacteazaText, redacteazaAdanc, scrubSentryEvent, esteDinFormularulPublic } from './sentryScrub.js'
 
 const T43 = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdE'   // 43 caractere [A-Za-z0-9_-]
 const T42 = T43.slice(0, 42)
@@ -51,10 +51,11 @@ describe('redacteazaText', () => {
     expect(rez).toBe(corp.split(T43).join('[token]'))
     expect(decodeURIComponent(rez)).not.toContain(T43)
   })
-  it('întoarce „[redactat]” când tokenul nu poate fi mapat înapoi (coadă scurtă ascunsă sub codificare dublă)', () => {
-    // coada „abc-scurt” e sub pragul de înlocuire globală, iar calea apare doar după două decodări → nu se poate redacta local
+  it('coadă scurtă ascunsă sub codificare dublă: nu se poate redacta local, dar evenimentul care o poartă se elimină (r6)', () => {
+    // coada „abc-scurt” e sub pragul de înlocuire globală, iar calea apare doar după două decodări → verificarea finală pe eveniment ⇒ null
     const s = encodeURIComponent(encodeURIComponent('/redari/raspuns/abc-scurt'))
-    expect(redacteazaText(s)).toBe('[redactat]')
+    expect(scrubSentryEvent({ message: s })).toBeNull()
+    expect(scrubSentryEvent({ extra: { nota: s } })).toBeNull()
   })
   it('nu atinge șiruri fără token (42 de caractere, alt context, text obișnuit, % invalid)', () => {
     expect(redacteazaText(`p_token=${T42}`)).toBe(`p_token=${T42}`)
@@ -98,33 +99,30 @@ describe('redacteazaAdanc', () => {
       contexts: { trace: { data: { next: `%2Fredari%2Fraspuns%2F${T43}` } } },
       exception: { values: [{ type: 'Error', value: 'ceva' }] },
     }
-    const rez = scrubSentryEvent(ev)
-    const text = JSON.stringify(rez)
-    expect(text).not.toContain(T43)
-    expect(rez.transaction).toBe('/redari/raspuns/[token]')
-    expect(rez.request.url).toBe('https://erp/redari/raspuns/[token]')
-    expect(rez.breadcrumbs[0].data.body).toBe('{"p_token":"[token]"}')
-    expect(rez.contexts.trace.data.next).toBe('%2Fredari%2Fraspuns%2F[token]')
-    expect(rez.exception.values[0].value).toBe('ceva')
+    // r6: evenimentul vine de pe formularul public (transaction / request.url) → se elimină complet, nu se redactează
+    expect(scrubSentryEvent(ev)).toBeNull()
+    // redactarea în sine (pentru evenimente interne) rămâne verificată pe șiruri:
+    expect(redacteazaText(`{"p_token":"${T43}"}`)).toBe('{"p_token":"[token]"}')
   })
 })
 
 describe('scrubSentryEvent pe eveniment structurat (Jakarinos r5)', () => {
-  it('request.data cu p_token: corpul dispare complet, tokenul nu mai apare nicăieri', () => {
+  it('cerere către RPC-ul public (fn_red_raspuns_public) → evenimentul se elimină complet (r6 DROP)', () => {
     const ev = { request: { url: 'https://api/rest/v1/rpc/fn_red_raspuns_public', data: { p_token: T43, p_optiune: 'particip' } }, breadcrumbs: [{ message: `trimis ${T43}` }] }
+    expect(scrubSentryEvent(ev)).toBeNull()
+  })
+  it('request.url pe /redari/raspuns/… → eliminat complet (r6 DROP), oricât de bine s-ar redacta restul', () => {
+    const ev = { request: { url: '/redari/raspuns/' + T43 }, extra: { token: T43, nota: `vezi ${T43} aici`, [T43]: 1 } }
+    expect(scrubSentryEvent(ev)).toBeNull()
+  })
+  it('eveniment intern cu token în request.data (URL intern): corpul dispare, tokenul e înlocuit global, inclusiv în chei', () => {
+    const ev = { request: { url: 'https://api/rest/v1/rpc/fn_altceva', data: { p_token: T43 } }, extra: { nota: `vezi ${T43} aici`, [T43]: 1 }, breadcrumbs: [{ message: `trimis ${T43}` }] }
     const rez = scrubSentryEvent(ev)
     expect(rez).not.toBeNull()
     expect(rez.request.data).toBeUndefined()
-    expect(rez.breadcrumbs[0].message).toBe('trimis [token]')   // colectat din cheia p_token, înlocuit global chiar fără context
-    expect(JSON.stringify(rez)).not.toContain(T43)
-  })
-  it('tokenul din request.url e colectat și înlocuit și în extra.token (fără context), inclusiv în chei', () => {
-    const ev = { request: { url: '/redari/raspuns/' + T43 }, extra: { token: T43, nota: `vezi ${T43} aici`, [T43]: 1 } }
-    const rez = scrubSentryEvent(ev)
-    expect(rez.request.url).toBe('/redari/raspuns/[token]')
-    expect(rez.extra.token).toBe('[token]')
     expect(rez.extra.nota).toBe('vezi [token] aici')
     expect(rez.extra['[token]']).toBe(1)
+    expect(rez.breadcrumbs[0].message).toBe('trimis [token]')
     expect(JSON.stringify(rez)).not.toContain(T43)
   })
   it('valoarea de 43 a unei chei cu „token” în nume devine [token] chiar fără alt context (token_raspuns)', () => {
@@ -133,9 +131,9 @@ describe('scrubSentryEvent pe eveniment structurat (Jakarinos r5)', () => {
     expect(rez.contexts.red.token_raspuns).toBe('[token]')
     expect(rez.contexts.red.altceva).toBe('x')
   })
-  it('request.body se elimină când URL-ul e un RPC al modulului, chiar fără token vizibil', () => {
-    const ev = { request: { url: 'https://api/rest/v1/rpc/fn_red_formular_public', body: '{"x":1}', method: 'POST' } }
-    const rez = scrubSentryEvent(ev)
+  it('cerere către fn_red_formular_public → eliminat (r6 DROP); alt RPC fn_red_* intern → doar corpul dispare', () => {
+    expect(scrubSentryEvent({ request: { url: 'https://api/rest/v1/rpc/fn_red_formular_public', body: '{"x":1}', method: 'POST' } })).toBeNull()
+    const rez = scrubSentryEvent({ request: { url: 'https://api/rest/v1/rpc/fn_red_numar_document', body: '{"p_tip":"C"}', method: 'POST' } })
     expect(rez.request.body).toBeUndefined()
     expect(rez.request.method).toBe('POST')
   })
@@ -146,28 +144,47 @@ describe('scrubSentryEvent pe eveniment structurat (Jakarinos r5)', () => {
   })
 })
 
-describe('scrubSentryEvent la excepție', () => {
-  it('întoarce evenimentul minim (fără request.url / breadcrumbs), nu evenimentul brut', () => {
-    const ev = { event_id: 'e1', level: 'error', transaction: `/redari/raspuns/${T43}`, request: { url: `https://erp/redari/raspuns/${T43}` }, breadcrumbs: [{ message: T43 }],
-      exception: { values: [{ type: 'TypeError', value: `la /redari/raspuns/${T43}` }] } }
-    Object.defineProperty(ev, 'capcana', { enumerable: true, configurable: true, get() { throw new Error('getter care aruncă') } })
+describe('scrubSentryEvent — r6: DROP pe formularul public, verificare finală pe toate formele, null la orice excepție', () => {
+  it('Jakarinos: token în extra + mesaj „%41” + 42×A (copie ascunsă sub codificare) ⇒ null', () => {
+    expect(scrubSentryEvent({ extra: { token: T43 }, message: '%41' + 'A'.repeat(42) })).toBeNull()
+    expect(scrubSentryEvent({ message: '%41' + 'A'.repeat(42), extra: { token: T43 } })).toBeNull()   // indiferent de ordinea cheilor
+  })
+  it('Jakarinos: getter care aruncă ⇒ null (fără „eveniment minim” care ar fi păstrat message: T)', () => {
+    const ev = { message: T43, extra: { token: T43 } }
+    Object.defineProperty(ev, 'broken', { enumerable: true, configurable: true, get() { throw new Error('broken') } })
+    expect(scrubSentryEvent(ev)).toBeNull()
+    const ev2 = { event_id: 'e2', message: 'x' }
+    Object.defineProperty(ev2, 'timestamp', { enumerable: true, configurable: true, get() { throw new Error('timestamp care aruncă') } })
+    expect(scrubSentryEvent(ev2)).toBeNull()
+  })
+  it('evenimentele obișnuite (fără tokenuri) trec neatinse', () => {
+    const ev = { message: 'TypeError: x', request: { url: 'https://erp/logistica', data: { a: 1 } }, extra: { tokenuri_cumparate: 12, hash: 'a'.repeat(43) }, breadcrumbs: [{ data: { url: 'https://erp/rest/v1/rpc/fn_pontaj' } }] }
     const rez = scrubSentryEvent(ev)
-    expect(Object.is(rez, ev)).toBe(false)   // nu toBe(ev): vitest ar face deep-equal pe `ev` și ar lovi getter-ul capcană
-    expect(rez.request).toBeUndefined()
-    expect(rez.breadcrumbs).toBeUndefined()
-    expect(rez.event_id).toBe('e1')
-    expect(rez.transaction).toBe('/redari/raspuns/[token]')
-    expect(rez.exception.values[0].value).toBe('la /redari/raspuns/[token]')
-    expect(rez.tags.sentry_scrub).toBe('minim')
+    expect(rez).toEqual({ message: 'TypeError: x', request: { url: 'https://erp/logistica', data: { a: 1 } }, extra: { tokenuri_cumparate: 12, hash: 'a'.repeat(43) }, breadcrumbs: [{ data: { url: 'https://erp/rest/v1/rpc/fn_pontaj' } }] })
+  })
+  it('eveniment intern cu token DOAR în extra.token (fără alte copii) ⇒ redactat, nu null', () => {
+    const rez = scrubSentryEvent({ message: 'convocator generat', extra: { token: T43, id_parcela: 'T3-HUS-0001' } })
+    expect(rez).not.toBeNull()
+    expect(rez.extra.token).toBe('[token]')
+    expect(rez.message).toBe('convocator generat')
     expect(JSON.stringify(rez)).not.toContain(T43)
   })
-  it('întoarce null (eveniment eliminat) când și varianta minimă aruncă — getter pe timestamp', () => {
-    const ev = { event_id: 'e2', request: { url: `https://erp/redari/raspuns/${T43}` } }
-    Object.defineProperty(ev, 'timestamp', { enumerable: true, configurable: true, get() { throw new Error('timestamp care aruncă') } })
-    expect(scrubSentryEvent(ev)).toBeNull()
+  it('DROP și după breadcrumb-uri (URL brut sau codificat) sau transaction', () => {
+    expect(scrubSentryEvent({ message: 'x', breadcrumbs: [{ category: 'navigation', data: { to: `/redari/raspuns/${T43}` } }] })).toBeNull()
+    expect(scrubSentryEvent({ message: 'x', breadcrumbs: [{ data: { url: `https://erp/?next=%252Fredari%252Fraspuns%252F${T43}` } }] })).toBeNull()
+    expect(scrubSentryEvent({ message: 'x', transaction: '/redari/raspuns/:token' })).toBeNull()
+    expect(esteDinFormularulPublic({ request: { url: 'https://api/rest/v1/rpc/fn_red_formular_public' } })).toBe(true)
+    expect(esteDinFormularulPublic({ request: { url: 'https://api/rest/v1/rpc/fn_red_numar_document' } })).toBe(false)
   })
-  it('evenimentMinim tolerează evenimente ciudate', () => {
-    expect(evenimentMinim(null)).toEqual({ tags: { sentry_scrub: 'minim' } })
-    expect(evenimentMinim({ message: { formatted: `p_token=${T43}` } }).message).toBe('p_token=[token]')
+  it('DROP după pagina curentă (window.location.pathname pe /redari/raspuns…)', () => {
+    const vechi = globalThis.window
+    globalThis.window = { location: { pathname: '/redari/raspuns/' + T43 } }
+    try { expect(scrubSentryEvent({ message: 'eroare oarecare', extra: { a: 1 } })).toBeNull() }
+    finally { if (vechi === undefined) delete globalThis.window; else globalThis.window = vechi }
+    expect(scrubSentryEvent({ message: 'eroare oarecare', extra: { a: 1 } })).toEqual({ message: 'eroare oarecare', extra: { a: 1 } })
+  })
+  it('null și dacă rămâne o copie a tokenului după regex-ul final (raspuns/token + 43), chiar necolectată', () => {
+    expect(scrubSentryEvent({ message: `raspuns: ${T43}` })).toBeNull()
+    expect(scrubSentryEvent({ extra: { nota: `token=${'b'.repeat(43)}` } })).toBeNull()
   })
 })

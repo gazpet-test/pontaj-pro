@@ -3,7 +3,7 @@
    Ecrane: Registru · Fișa parcelei · Import TGZ. Nivel utilizator: admin / editor / viewer (user_module_access.redari; owner = admin).
    Fără date reale aici — doar structuri. */
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
@@ -162,8 +162,10 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   const [actiune, setActiune] = useState(null) // { tip, rand }
   const [lucru, setLucru] = useState(false)
   const [borderouRez, setBorderouRez] = useState(null) // { randuri, exclusi } — rezultatul borderoului, înainte de descărcare
+  const generatie = useRef(0)   // r6 P2-1: contor de generație — răspunsul unei cereri depășite (filtru/pagină schimbate între timp) se ignoră
 
   const incarca = useCallback(async () => {
+    const g = ++generatie.current
     setLoading(true)
     try {
       let q = supabase.from('red_v_stare_parcela').select('*', { count:'exact' }).eq('proiect_id', proiect.id)
@@ -176,10 +178,11 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       }
       q = q.order('id_parcela').order('nume').range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1)
       const { data, error, count } = await q
+      if (g !== generatie.current) return   // a pornit o cerere mai nouă: rândurile și totalul acesteia nu se mai aplică
       if (error) throw error
       setRanduri(data || []); setTotal(count || 0)
-    } catch (e) { show('Registru: ' + msgEroare(e), 'error') }
-    finally { setLoading(false) }
+    } catch (e) { if (g === generatie.current) show('Registru: ' + msgEroare(e), 'error') }
+    finally { if (g === generatie.current) setLoading(false) }
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show])
   useEffect(() => { incarca() }, [incarca])
   useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata])
