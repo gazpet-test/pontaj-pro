@@ -36,7 +36,8 @@ const MIN_LUNGIME_COADA = 16
 const pareSuspect = (s) => /redari|raspuns|token/i.test(s)
 // r11 P1-1 (Jakarinos): cheile se judecă pe TOATE formele decodate (`%70%5f%74%6f%6b%65%6e` = p_token)
 // Jakarinos r36 P1-02: escape-urile Unicode (`\u0025` = `%`) se reconstruiesc INAINTE de orice judecata pe chei/valori
-const cuUnicode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+// Jakarinos r40 P1-01: si escape-urile JavaScript `\xHH` (si `\u{H..}`) se reconstruiesc, nu doar `\uXXXX`
+const cuUnicode = (s) => s.replace(/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g, (_m, a, b, c) => { try { return String.fromCodePoint(parseInt(a || b || c, 16)) } catch { return _m } })
 const cheieDeToken = (cheie) => typeof cheie === 'string' && [cheie, cuUnicode(cheie)].some(c => formele(c).some(f => /token/i.test(f)))
 // r7 P1-2: valoarea unei chei de token e token dacă ORICE formă decodată are exact 43 [A-Za-z0-9_-] (ex. `%30` + 42 caractere)
 const valoareDeToken = (v) => typeof v === 'string' && formele(v).some(f => RX_T43.test(f))
@@ -93,13 +94,14 @@ const decodeazaOdata = (s) => {
 // Jakarinos r38 P1-01: transformarile pot ALTERNA (`\u00255Cu0055` -> `%5Cu0055` -> `\u0055` -> `U`) — formele se construiesc
 // aplicand pe rand reconstruirea escape-urilor Unicode si decodarea procentuala, pana la stabilizare sau pana la limita de pasi
 const MAX_PASI = 8
-const RX_INCA_CODIFICAT = /%[0-9A-Fa-f]{2}|\\u[0-9a-fA-F]{4}/
+const RX_INCA_CODIFICAT = /%[0-9A-Fa-f]{2}|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]{1,6}\}|\\x[0-9a-fA-F]{2}/
+const RX_INCA_CODIFICAT_G = new RegExp(RX_INCA_CODIFICAT.source, 'g')
 export const formele = (s) => {
   const lista = [s]
   let curent = s
   for (let i = 0; i < MAX_PASI; i++) {
     if (!RX_INCA_CODIFICAT.test(curent)) break
-    const u = curent.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+    const u = cuUnicode(curent)
     const d = decodeazaOdata(u)
     if (d === curent) break
     if (u !== curent && u !== d) lista.push(u)
@@ -108,7 +110,7 @@ export const formele = (s) => {
   return lista
 }
 // a atins limita de pasi si INCA mai are %XX / \uXXXX = nu stim ce ascunde
-const aAtinsLimita = (s) => { let c = s, i = 0; for (; i < MAX_PASI; i++) { if (!RX_INCA_CODIFICAT.test(c)) return false; const u = c.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16))); const d = decodeazaOdata(u); if (d === c) return false; c = d }; return RX_INCA_CODIFICAT.test(c) }
+const aAtinsLimita = (s) => { let c = s, i = 0; for (; i < MAX_PASI; i++) { if (!RX_INCA_CODIFICAT.test(c)) return false; const u = cuUnicode(c); const d = decodeazaOdata(u); if (d === c) return false; c = d }; return RX_INCA_CODIFICAT.test(c) }
 // Jakarinos r28 P1-1: un șir care, după MAX_DECODARI decodări, ÎNCĂ mai conține `%XX` (codificat de ≥4 ori, ex. `%25252574oken`) e
 // AMBIGUU — nu putem ști ce cheie ascunde; evenimentul devine purtător (orice secvență ≥43 rămasă ⇒ null). Creșterea limitei ar muta pragul.
 const ramaneCodificat = (s) => typeof s === 'string' && aAtinsLimita(s)
@@ -118,7 +120,7 @@ const ramaneCodificat = (s) => typeof s === 'string' && aAtinsLimita(s)
 // potențială = caractere clare + câte un caracter pentru fiecare grup `%XX` rămas; dacă poate ajunge la 43 ⇒ poate ascunde identificatorul
 // Jakarinos r38 P2-01: lungimea potentiala se masoara pe CEA MAI LUNGA secventa [A-Za-z0-9_-] (cu %XX / \uXXXX numarate ca un caracter),
 // nu pe tot textul — un URL legitim lung cu separatori (`/oauth/provider/.../%25252520`) nu poate ascunde un identificator de 43
-const poateAscundeToken = (s) => ramaneCodificat(s) && (() => { const f = formele(s); const u = f[f.length - 1].replace(/%[0-9A-Fa-f]{2}|\\u[0-9a-fA-F]{4}/g, 'x'); return RX_RUN43.test(u) })()
+const poateAscundeToken = (s) => ramaneCodificat(s) && (() => { const f = formele(s); const u = f[f.length - 1].replace(RX_INCA_CODIFICAT_G, 'x'); return RX_RUN43.test(u) })()
 const colecteazaTokenuri = (forma, set) => {
   for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN, RX_TOKEN_CHEIE]) {
     rx.lastIndex = 0

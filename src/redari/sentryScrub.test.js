@@ -671,7 +671,7 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     let F = [...T].map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')   // fiecare caracter %XX
     for (let i = 0; i < 4; i++) F = encodeURIComponent(F.replaceAll('%', '\\u0025'))   // alternare: % -> \u0025 -> encodeURIComponent (backslash -> %5C)
     expect(F).not.toBe(T); expect(F.includes('%5Cu0025')).toBe(true)
-    const r2 = scrubSentryEvent({ message: 'ok', extra: { token: F } }); expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
+    const r2 = scrubSentryEvent({ message: 'ok', extra: { token: F } }); expect(r2 === null || (!JSON.stringify(r2).includes(T) && !JSON.stringify(r2).includes(F))).toBe(true)   // r40 P2-01: nici F (reprezentarea recuperabila) nu ramane
     // P2-01: URL legitim lung cu separatori, inca codificat, sub cheie token -> nu poate ascunde 43 -> trece
     const url = '/oauth/provider/session/authorization/callback/%25252520'
     expect(scrubSentryEvent({ message: 'Eroare OAuth', extra: { token_endpoint: url } })).toEqual({ message: 'Eroare OAuth', extra: { token_endpoint: url } })
@@ -691,6 +691,20 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // legitim: text scurt inca codificat adanc (nu poate ascunde 43) -> trece
     let scurt = '%41'; for (let i = 0; i < 9; i++) scurt = encodeURIComponent(scurt)
     expect(scrubSentryEvent({ message: 'cod: ' + scurt })?.message).toBe('cod: ' + scurt)
+  })
+  it('r40 P1-01 (Jakarinos): escape JavaScript `\\xHH` (si `\\u{..}`) in copia identificatorului - eveniment si span', () => {
+    const h = T.charCodeAt(20).toString(16).padStart(2, '0')
+    for (const E of [T.slice(0, 20) + '\\x' + h + T.slice(21), T.slice(0, 20) + '\\u{' + h + '}' + T.slice(21), T.slice(0, 10) + '\\x' + T.charCodeAt(10).toString(16) + T.slice(11, 20) + '\\u00' + h + T.slice(21)]) {
+      expect(E).not.toBe(T)
+      for (const ev of [{ extra: { token: T, copy: E } }, { message: E, extra: { token: T } }, { extra: { nota: JSON.stringify({ token: T, copy: E }) } }, { extra: { token: E } }]) {
+        const rez = scrubSentryEvent(ev); const j = rez === null ? '' : JSON.stringify(rez)
+        expect(!j.includes(T) && !j.includes(E) && !j.includes(JSON.stringify(E).slice(1, -1))).toBe(true)
+      }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: E, data: { token: T } })
+      const js = JSON.stringify(sp); expect(!js.includes(T) && !js.includes(E) && !js.includes(JSON.stringify(E).slice(1, -1))).toBe(true)
+    }
+    // legitim: `\\x41` singur fara identificator -> trece
+    expect(scrubSentryEvent({ message: 'Caracter: \\x41' })?.message).toBe('Caracter: \\x41')
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
