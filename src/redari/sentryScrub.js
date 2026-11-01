@@ -90,25 +90,35 @@ const decodeazaOdata = (s) => {
   catch { return s.replace(/%[0-9A-Fa-f]{2}/g, (m) => { try { return decodeURIComponent(m) } catch { return m } }) }
 }
 // [brut, dec1, dec2, dec3] — până la MAX_DECODARI sau până nu se mai schimbă
+// Jakarinos r38 P1-01: transformarile pot ALTERNA (`\u00255Cu0055` -> `%5Cu0055` -> `\u0055` -> `U`) — formele se construiesc
+// aplicand pe rand reconstruirea escape-urilor Unicode si decodarea procentuala, pana la stabilizare sau pana la limita de pasi
+const MAX_PASI = 8
+const RX_INCA_CODIFICAT = /%[0-9A-Fa-f]{2}|\\u[0-9a-fA-F]{4}/
 export const formele = (s) => {
   const lista = [s]
   let curent = s
-  for (let i = 0; i < MAX_DECODARI; i++) {
-    if (!curent.includes('%')) break
-    const d = decodeazaOdata(curent)
+  for (let i = 0; i < MAX_PASI; i++) {
+    if (!RX_INCA_CODIFICAT.test(curent)) break
+    const u = curent.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+    const d = decodeazaOdata(u)
     if (d === curent) break
+    if (u !== curent && u !== d) lista.push(u)
     lista.push(d); curent = d
   }
   return lista
 }
+// a atins limita de pasi si INCA mai are %XX / \uXXXX = nu stim ce ascunde
+const aAtinsLimita = (s) => { let c = s, i = 0; for (; i < MAX_PASI; i++) { if (!RX_INCA_CODIFICAT.test(c)) return false; const u = c.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16))); const d = decodeazaOdata(u); if (d === c) return false; c = d }; return RX_INCA_CODIFICAT.test(c) }
 // Jakarinos r28 P1-1: un șir care, după MAX_DECODARI decodări, ÎNCĂ mai conține `%XX` (codificat de ≥4 ori, ex. `%25252574oken`) e
 // AMBIGUU — nu putem ști ce cheie ascunde; evenimentul devine purtător (orice secvență ≥43 rămasă ⇒ null). Creșterea limitei ar muta pragul.
-const ramaneCodificat = (s) => [s, cuUnicode(s)].some(x => { const f = formele(x); return f.length === MAX_DECODARI + 1 && /%[0-9A-Fa-f]{2}/.test(f[f.length - 1]) })
+const ramaneCodificat = (s) => typeof s === 'string' && aAtinsLimita(s)
 // Jakarinos r36 P2-01: `token_endpoint: '/oauth/%25252520'` (scurt) NU poate ascunde un identificator de 43 — semnal TARE doar daca forma ramasa
 // are >=43 de grupuri %XX sau >=129 de caractere (un identificator codificat caracter cu caracter are cel putin 43 x 3)
 // Jakarinos r37 P1-01: identificatorul poate fi codificat DOAR PARȚIAL (un singur caracter `%25252555` între caractere clare) — lungimea
 // potențială = caractere clare + câte un caracter pentru fiecare grup `%XX` rămas; dacă poate ajunge la 43 ⇒ poate ascunde identificatorul
-const poateAscundeToken = (s) => ramaneCodificat(s) && [s, cuUnicode(s)].some(x => { const f = formele(x); const u = f[f.length - 1]; return u.replace(/%[0-9A-Fa-f]{2}/g, 'x').length >= 43 })
+// Jakarinos r38 P2-01: lungimea potentiala se masoara pe CEA MAI LUNGA secventa [A-Za-z0-9_-] (cu %XX / \uXXXX numarate ca un caracter),
+// nu pe tot textul — un URL legitim lung cu separatori (`/oauth/provider/.../%25252520`) nu poate ascunde un identificator de 43
+const poateAscundeToken = (s) => ramaneCodificat(s) && (() => { const f = formele(s); const u = f[f.length - 1].replace(/%[0-9A-Fa-f]{2}|\\u[0-9a-fA-F]{4}/g, 'x'); return RX_RUN43.test(u) })()
 const colecteazaTokenuri = (forma, set) => {
   for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN, RX_TOKEN_CHEIE]) {
     rx.lastIndex = 0

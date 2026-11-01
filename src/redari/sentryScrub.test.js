@@ -602,8 +602,8 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(scrubSentryEvent({ message: 'Link: /documente/%25252520' })).toEqual({ message: 'Link: /documente/%25252520' })
     const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'Caracter \\u0041', data: {} })
     expect(sp.description).toBe('Caracter \\u0041')
-    // dar cu o secventa de 43 in eveniment, codificarea ramasa (ambigua) il face purtator -> null
-    expect(scrubSentryEvent({ message: 'ref_' + T, extra: { '%25252574oken': [null, 'scurt'] } })).toBeNull()
+    // r39: cheia codificata de 4 ori se decodeaza complet (8 pasi alternante) -> e cheie `token`: valoarea de tip identificator se redacteaza
+    const r4 = scrubSentryEvent({ message: 'x', extra: { '%25252574oken': [null, T] } }); expect(r4 === null || !JSON.stringify(r4).includes(T)).toBe(true)
   })
   it('r34 P1-1 (Jakarinos): semnalul `ambiguu` se propaga din JSON-ul parsat (cheie `\\u0025...` = %-codificare ascunsa sub escape Unicode)', () => {
     const payload = '{"\\u002525252574oken":"' + T + '"}'
@@ -622,9 +622,9 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
       { request: { url: '/intern', data: { p_token: [null, E] } } },
       { extra: { nota: 'token=' + E } },
       { extra: { nota: JSON.stringify({ raspuns: { v: E } }) } },
-    ]) expect(scrubSentryEvent(ev)).toBeNull()
+    ]) { const rez = scrubSentryEvent(ev); expect(rez === null || (!JSON.stringify(rez).includes('%25252541') && !JSON.stringify(rez).includes(T))).toBe(true) }   // r39: null SAU redactat, niciodata E/T
     const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { token: E } })
-    expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain('%25252541')
+    expect(JSON.stringify(sp)).not.toContain('%25252541'); expect(JSON.stringify(sp)).not.toContain(T)
     // fara context sensibil si fara cuvant-cheie: semnal slab -> trece daca nu ramane nicio secventa de 43
     expect(scrubSentryEvent({ message: 'x', extra: { cale: '/doc/%25252520' } })?.message).toBe('x')
   })
@@ -638,10 +638,10 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
       { extra: { '%25252574oken': U } },
       { request: { url: '/intern', data: { x: { '%25252574oken': [E] } } } },
       { extra: { nota: JSON.stringify({ token: U }) } },
-    ]) expect(scrubSentryEvent(ev)).toBeNull()
+    ]) { const rez = scrubSentryEvent(ev); const j = rez === null ? '' : JSON.stringify(rez); expect(!j.includes(E) && !j.includes(U) && !j.includes(T)).toBe(true) }   // r39: null SAU redactat (cheia `%25252574oken` poate ramane - nu e identificatorul)
     for (const data of [{ '%25252574oken': E }, { token: U }]) {
       const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data })
-      expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain('2525')
+      const j = JSON.stringify(sp); expect(!j.includes(E) && !j.includes(U) && !j.includes(T)).toBe(true)
     }
     // P2-01: valoare scurta inca codificata sub cheie cu `token` in nume -> NU poate ascunde 43 de caractere -> trece
     expect(scrubSentryEvent({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })).toEqual({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })
@@ -659,6 +659,21 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(JSON.stringify(sp)).not.toContain('25252555')
     // legitim: scurt sub cheie token, inca codificat -> trece
     expect(scrubSentryEvent({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })?.message).toBe('Eroare OAuth')
+  })
+  it('r38 P1-01 (Jakarinos): alternarea Unicode -> procentual -> Unicode (`\\u00255Cu0055`) se reconstruieste; P2-01: URL lung legitim cu separatori trece', () => {
+    const E = T.slice(0, 20) + '\\u00255Cu00' + T.charCodeAt(20).toString(16).padStart(2, '0') + T.slice(21)
+    for (const ev of [{ message: 'ok', extra: { token: E } }, { message: 'ok', extra: { nota: JSON.stringify({ token: E }) } }, { message: 'ok', request: { url: '/intern', data: { p_token: [E] } } }]) {
+      const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes('5Cu00')).toBe(true); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
+    }
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { token: E } })
+    expect(JSON.stringify(sp)).not.toContain('5Cu00')
+    // alternare mai adanca (6 pasi) sub cheie sensibila -> refuzat (limita atinsa) -> null
+    let F = T; for (let i = 0; i < 3; i++) F = encodeURIComponent(F).replaceAll('%', '\\u0025')
+    F = F.replaceAll('\\', '\\u005C')
+    const r2 = scrubSentryEvent({ message: 'ok', extra: { token: F } }); expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
+    // P2-01: URL legitim lung cu separatori, inca codificat, sub cheie token -> nu poate ascunde 43 -> trece
+    const url = '/oauth/provider/session/authorization/callback/%25252520'
+    expect(scrubSentryEvent({ message: 'Eroare OAuth', extra: { token_endpoint: url } })).toEqual({ message: 'Eroare OAuth', extra: { token_endpoint: url } })
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
