@@ -45,6 +45,9 @@
 --     IS FALSE / IS NOT TRUE / OR / ::) și nimic înainte (NOT …); validatorul răspunsurilor urmărește și canal, iar trecerea la particip re-verifică
 --     ziua; curățarea revendică intervalul de 10 min atomic (UPDATE … RETURNING pe rândul de control); fn_red_legaturi ia FOR SHARE pe rândul UAT
 --     la inserarea parcelei (serializare cu schimbarea uat3).
+--   • runda 6 (Jakarinos r5): curățarea contorului nu așteaptă lock-uri (FOR UPDATE SKIP LOCKED pe rândul de control și pe candidați — fără deadlock
+--     cu incrementarea contorului IP); schimbarea uat3 cere tranzacție READ COMMITTED (PostgREST rulează așa) — sub REPEATABLE READ EXISTS-ul pe
+--     parcele n-ar vedea o parcelă comisă după snapshot; parser-ul storage acceptă și ((grup) IS TRUE).
 -- LIMITĂ explicită (P2-10): jurnalul append-only protejează față de rolurile aplicației (anon / authenticated / service_role), NU față de
 --   administratorul bazei (postgres poate dezactiva trigger-ul sau insera direct) — e o garanție de aplicație, nu una criptografică.
 -- Revenire: supabase/revenire/20261126a_redari_teren_ROLLBACK.sql (armată; refuză cu date în red_parcele fără al doilea GUC).
@@ -353,9 +356,15 @@ BEGIN
     END IF;
     -- uat3 intra in id_parcela: nu se mai schimba cat exista parcele pe UAT (numele ramane editabil); randul UAT e deja blocat FOR UPDATE de
     -- UPDATE-ul in curs, deci inserarile de parcele (FOR SHARE) asteapta, iar EXISTS-ul vede parcelele deja comise
-    IF TG_TABLE_NAME = 'red_uat' AND (to_jsonb(NEW) ->> 'uat3') IS DISTINCT FROM (to_jsonb(OLD) ->> 'uat3')
-       AND EXISTS (SELECT 1 FROM public.red_parcele p WHERE p.uat_id = (to_jsonb(OLD) ->> 'id')::uuid) THEN
-      RAISE EXCEPTION 'redari: uat3 nu se poate schimba cat exista parcele pe UAT' USING ERRCODE = '23514';
+    IF TG_TABLE_NAME = 'red_uat' AND (to_jsonb(NEW) ->> 'uat3') IS DISTINCT FROM (to_jsonb(OLD) ->> 'uat3') THEN
+      -- sub REPEATABLE READ / SERIALIZABLE EXISTS-ul de mai jos n-ar vedea o parcela comisa dupa snapshot (lock-ul FOR SHARE al parcelei nu
+      -- modifica randul UAT, deci nu da eroare de serializare) — schimbarea codului UAT se face doar in READ COMMITTED (asa ruleaza PostgREST)
+      IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'redari: schimbarea codului UAT doar in tranzactii READ COMMITTED' USING ERRCODE = '25001';
+      END IF;
+      IF EXISTS (SELECT 1 FROM public.red_parcele p WHERE p.uat_id = (to_jsonb(OLD) ->> 'id')::uuid) THEN
+        RAISE EXCEPTION 'redari: uat3 nu se poate schimba cat exista parcele pe UAT' USING ERRCODE = '23514';
+      END IF;
     END IF;
     RETURN NEW;
   END IF;
@@ -509,7 +518,7 @@ COMMENT ON FUNCTION public.fn_red_adresa_cunoscuta(uuid) IS 'Redări: doar boole
 CREATE FUNCTION public.fn_red_storage_expr_bucket(p_expr text) RETURNS text
 LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE
-  m text[]; v_adanc int; v_rest text; i int; c text; v_ghilimea boolean := false; n int;
+  m text[]; v_adanc int; v_rest text; i int; c text; v_ghilimea boolean := false; n int; v_is_true boolean := false;
 BEGIN
   -- Bucket-ul la care e legată o expresie de politică storage, DOAR dacă legarea e sigură: expresia începe cu (bucket_id = 'x'::text) ca prim
   -- operand al unui AND de nivel superior și nu există niciun OR la nivelul acelui AND sau mai sus (parantezele sunt numărate, literalele sărite).
@@ -521,9 +530,12 @@ BEGIN
   v_rest := m[4];
   IF v_adanc < 0 THEN RETURN NULL; END IF;
   IF v_rest = '' THEN RETURN CASE WHEN v_adanc = 0 THEN m[2] END; END IF;
+  -- forma ((bucket_id = 'x'::text) IS TRUE): singurul sufix acceptat, exact o dată, apoi doar parantezele de închidere
+  IF v_adanc >= 1 AND v_rest ~ ('^ IS TRUE[)]{' || v_adanc || '}$') THEN RETURN m[2]; END IF;
   IF v_rest NOT LIKE ' AND %' THEN RETURN NULL; END IF;
   -- grupul AND al bucket-ului trebuie să fie între paranteze (deparse-ul le pune mereu) și expresia să se TERMINE exact la închiderea lui:
-  -- după ce adâncimea coboară sub cea a grupului, mai pot urma doar paranteze de închidere ale învelișurilor (fără IS FALSE / IS NOT TRUE / OR / ::)
+  -- după ce adâncimea coboară sub cea a grupului, mai pot urma doar „ IS TRUE” (o singură dată, imediat după grup) și parantezele de închidere
+  -- ale învelișurilor (fără IS FALSE / IS NOT TRUE / IS NULL / OR / ::)
   IF v_adanc < 1 THEN RETURN NULL; END IF;
   n := length(v_rest); i := 1;
   WHILE i <= n LOOP
@@ -531,6 +543,9 @@ BEGIN
     IF v_ghilimea THEN
       IF c = '''' THEN v_ghilimea := false; END IF;
     ELSIF v_adanc < length(m[1]) - length(m[3]) THEN
+      IF c = ' ' AND substr(v_rest, i, 8) = ' IS TRUE' AND NOT v_is_true AND substr(v_rest, i - 1, 1) = ')' THEN
+        v_is_true := true; i := i + 8; CONTINUE;
+      END IF;
       IF c <> ')' THEN RETURN NULL; END IF;
       v_adanc := v_adanc - 1; IF v_adanc < 0 THEN RETURN NULL; END IF;
     ELSIF c = '''' THEN v_ghilimea := true;
@@ -543,7 +558,7 @@ BEGIN
   IF v_adanc <> 0 OR v_ghilimea THEN RETURN NULL; END IF;
   RETURN m[2];
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_storage_expr_bucket(text) IS 'Redări (verificator): bucket-ul la care e legată sigur o expresie de politică storage.objects — (bucket_id = ''x''::text) prim operand AND de nivel superior, fără OR la acel nivel sau mai sus, nimic înainte (NOT) și nimic după închiderea grupului (IS FALSE / IS NOT TRUE / OR / ::) — paranteze numărate, literale sărite; NULL dacă legarea nu e sigură. Folosit de postcondiție și de DRY (TEST9).';
+COMMENT ON FUNCTION public.fn_red_storage_expr_bucket(text) IS 'Redări (verificator): bucket-ul la care e legată sigur o expresie de politică storage.objects — (bucket_id = ''x''::text) prim operand AND de nivel superior, fără OR la acel nivel sau mai sus, nimic înainte (NOT) și nimic după închiderea grupului în afară de „IS TRUE” exact o dată (IS FALSE / IS NOT TRUE / IS NULL / OR / :: → refuz) — paranteze numărate, literale sărite; NULL dacă legarea nu e sigură. Folosit de postcondiție și de DRY (TEST9).';
 
 -- ─── 5. Numerotare, valoare (admin), RPC publice ──────────────────────────────────────────────────────────────────────────
 CREATE FUNCTION public.fn_red_numar_document(p_tip text, p_uat3 text, p_tronson int) RETURNS text
@@ -642,17 +657,21 @@ BEGIN
   -- revendicarea atomica a intervalului: randul de control exista (ON CONFLICT DO NOTHING), apoi UPDATE … RETURNING castiga doar daca ultima
   -- curatare e mai veche de 10 min (sau p_forteaza); doua apeluri concurente nu sterg amandoua
   INSERT INTO public.red_rate_limit (cheie, fereastra_start, numar) VALUES ('_curatare', now() - interval '1 day', 0) ON CONFLICT (cheie) DO NOTHING;
+  -- fara asteptare pe lock-uri (fara deadlock cu incrementarea contorului IP): randul de control blocat de altcineva → nu curatam acum;
+  -- candidatii blocati (un contor in curs de incrementare) sunt sariti, raman pentru lotul urmator
   UPDATE public.red_rate_limit SET fereastra_start = now()
-   WHERE cheie = '_curatare' AND (p_forteaza OR fereastra_start < now() - interval '10 minutes')
+   WHERE cheie IN (SELECT r.cheie FROM public.red_rate_limit r
+                    WHERE r.cheie = '_curatare' AND (p_forteaza OR r.fereastra_start < now() - interval '10 minutes') FOR UPDATE SKIP LOCKED)
    RETURNING cheie INTO v_ultima_cheie;
   IF v_ultima_cheie IS NULL THEN RETURN 0; END IF;
   DELETE FROM public.red_rate_limit WHERE ctid IN (SELECT r.ctid FROM public.red_rate_limit r
-                                                    WHERE r.cheie <> '_curatare' AND r.fereastra_start < now() - interval '24 hours' LIMIT 5000);
+                                                    WHERE r.cheie <> '_curatare' AND r.fereastra_start < now() - interval '24 hours'
+                                                    LIMIT 5000 FOR UPDATE SKIP LOCKED);
   GET DIAGNOSTICS v_n = ROW_COUNT;
   UPDATE public.red_rate_limit SET numar = v_n WHERE cheie = '_curatare';
   RETURN v_n;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_rate_limit_curata(boolean) IS 'Redări: șterge rândurile red_rate_limit mai vechi de 24 h, cel mult 5000 per apel, doar în ~2 % din apeluri sau peste 10.000 de rânduri estimate și nu mai des de 10 min (rândul de control _curatare, revendicat atomic cu UPDATE … RETURNING; p_forteaza = true sare peste condiții). Apelată o singură dată per apel RPC public, după verificarea limitei IP.';
+COMMENT ON FUNCTION public.fn_red_rate_limit_curata(boolean) IS 'Redări: șterge rândurile red_rate_limit mai vechi de 24 h, cel mult 5000 per apel, doar în ~2 % din apeluri sau peste 10.000 de rânduri estimate și nu mai des de 10 min (rândul de control _curatare, revendicat atomic cu UPDATE … RETURNING, FOR UPDATE SKIP LOCKED pe el și pe candidați — fără așteptare, fără deadlock; p_forteaza = true sare peste condiții). Apelată o singură dată per apel RPC public, după verificarea limitei IP.';
 
 CREATE FUNCTION public.fn_red_formular_public(p_token text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -1108,6 +1127,11 @@ BEGIN
      OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) AND (a = 1)) OR true') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('(bucket_id = ''x''::text) AND (a = 1)') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) AND (a = 1))::boolean') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) IS TRUE)') IS DISTINCT FROM 'x'
+     OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) IS TRUE)') IS DISTINCT FROM 'x'
+     OR public.fn_red_storage_expr_bucket('((((bucket_id = ''x''::text) AND (a = 1)) IS TRUE) IS TRUE)') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) IS TRUE) OR true') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) IS TRUE) OR true') IS NOT NULL
      OR public.fn_red_storage_expr_bucket(NULL) IS NOT NULL THEN
     RAISE EXCEPTION 'Postconditie: fn_red_storage_expr_bucket nu trece autotestul';
   END IF;

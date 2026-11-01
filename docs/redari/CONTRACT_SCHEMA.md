@@ -31,7 +31,9 @@ schimbarea zilei și **[r5]** când opțiunea devine `particip`.
 RPC-ul public își păstrează mesajele jsonb (verificările lui rămân înaintea insertului). **[r4] Proveniență**: `created_at` = `now()` pus de
 trigger la INSERT și imutabil apoi; `authenticated` NU are privilegiu de coloană pe `seq` și `created_at` (nici `OVERRIDING SYSTEM VALUE`, nici
 `created_at` explicit nu trec — 42501); INSERT/UPDATE pe red_raspunsuri doar pe coloanele de conținut (`select=*` rămâne).
-**[r4]** `red_uat.uat3` (intră în `id_parcela`) nu se mai schimbă cât există parcele pe UAT; `nume` rămâne editabil.
+**[r4]** `red_uat.uat3` (intră în `id_parcela`) nu se mai schimbă cât există parcele pe UAT; `nume` rămâne editabil. **[r6]** Schimbarea lui `uat3`
+cere tranzacție READ COMMITTED (cum rulează PostgREST); sub REPEATABLE READ / SERIALIZABLE → 25001 (EXISTS-ul pe parcele n-ar vedea o parcelă
+comisă după snapshot).
 **[r2] Limita jurnalului (P2-10)**: `red_jurnal` e append-only față de rolurile aplicației (anon / authenticated / service_role: fără INSERT /
 UPDATE / DELETE / TRUNCATE, trigger de imutabilitate). NU protejează față de administratorul bazei: `postgres` poate dezactiva trigger-ul sau
 insera direct. E o garanție de aplicație, nu una criptografică; dovada față de terți rămâne exportul semnat / datat, nu tabela în sine.
@@ -172,7 +174,8 @@ SECURITY DEFINER, EXECUTE authenticated, cer nivel admin/editor; peste 9999 → 
 **[r3]** Index pe `fereastra_start`; curățarea (rânduri > 24 h, singurul DELETE din modul, ca owner — `fn_red_rate_limit_curata`) NU la fiecare
 atingere, ci în ~2 % din apeluri sau când `pg_class.reltuples` > 10.000, o singură dată per apel RPC; **[r4]** cel mult o dată la 10 minute (rândul
 de control `cheie = '_curatare'`, `fereastra_start` = ultima curățare), în loturi de 5000 (subselect pe `ctid`), și rulează DUPĂ verificarea limitei
-IP, nu înaintea ei; **[r5]** intervalul e revendicat atomic (`UPDATE … RETURNING` pe rândul de control). **[r5]** `fn_red_legaturi` ia `FOR SHARE` pe
+IP, nu înaintea ei; **[r5]** intervalul e revendicat atomic (`UPDATE … RETURNING` pe rândul de control); **[r6]** fără așteptare pe lock-uri
+(`FOR UPDATE SKIP LOCKED` pe rândul de control și pe candidații la ștergere — fără deadlock cu incrementarea contorului IP). **[r5]** `fn_red_legaturi` ia `FOR SHARE` pe
 rândul UAT la inserarea parcelei (serializare cu schimbarea `uat3`). **Cheia de token se atinge DOAR pentru
 tokenuri existente și valide** (mulțime finită — fără DoS prin chei arbitrare); pentru tokenuri cu format bun dar inexistente / expirate se
 contorizează doar IP-ul. Fără `x-forwarded-for` cheia e `ip:necunoscut` cu aceeași limită de 30 — limita reală pentru traficul fără IP e la
@@ -263,7 +266,8 @@ upload-urile se fac cu `upsert: false`). În tabele se salvează `*_path` (calea
 prin `fn_red_storage_expr_bucket` că nicio politică permisivă străină de pe `storage.objects` nu poate acoperi `redari`: expresia cerută a comenzii
 (USING pentru SELECT/DELETE/UPDATE/ALL, WITH CHECK pentru INSERT; WITH CHECK NULL pe UPDATE/ALL moștenește USING, ca în PostgreSQL) trebuie să aibă
 `bucket_id = '<alt bucket>'` ca prim operand al AND-ului de nivel superior, fără niciun OR la acel nivel sau mai sus (paranteze numărate, literale
-sărite), **[r5]** nimic înainte (`NOT`) și nimic după închiderea grupului (`IS FALSE` / `IS NOT TRUE` / `OR` / `::`). Verificarea prin Storage API pe prod rămâne manuală după apply — `docs/redari/MIGRARE_20261126a.md`.
+sărite), **[r5]** nimic înainte (`NOT`) și nimic după închiderea grupului (`IS FALSE` / `IS NOT TRUE` / `OR` / `::`) — **[r6]** cu excepția
+`((grup) IS TRUE)`, exact o dată, imediat după grup. Verificarea prin Storage API pe prod rămâne manuală după apply — `docs/redari/MIGRARE_20261126a.md`.
 
 ## 7. Import (client-side, `src/redari/importTgz.js`)
 Excel TGZ: o foaie, antetul pe rândul 3, coloane: `Nr.Crt., Nr.Poz.Hg., UAT, Județ, Nume Deținător, Adresă, Suprafață Afectată

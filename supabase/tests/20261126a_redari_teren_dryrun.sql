@@ -421,6 +421,12 @@ BEGIN
   -- trecerea la particip re-verifica ziua chiar daca ziua nu se schimba (r4 P2-02); schimbarea canalului re-valideaza (online fara bifa → 23514)
   IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET optiune = ''particip'' WHERE detinator_id = %L AND optiune = ''nu_particip_fara_obiectii''', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: trecerea la particip fara zi acceptata'; END IF;
   IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET canal = ''online'' WHERE detinator_id = %L AND optiune = ''nu_particip_fara_obiectii''', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: schimbarea canalului in online fara bifa acceptata'; END IF;
+  -- trecerea la particip cu o zi NENULA, valida la data ei, dar devenita nevalida dupa mutarea sesiunilor UAT → 23514 (r5)
+  UPDATE public.red_raspunsuri SET zi_sesiune_aleasa = v_azi + 11 WHERE detinator_id = v_d5 AND optiune = 'nu_particip_fara_obiectii';
+  UPDATE public.red_uat SET sesiune_zi1 = v_azi + 30, sesiune_zi2 = v_azi + 31, sesiune_zi3 = v_azi + 32 WHERE id = v_uat;
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET optiune = ''particip'' WHERE detinator_id = %L AND optiune = ''nu_particip_fara_obiectii''', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: trecerea la particip cu zi devenita nevalida acceptata'; END IF;
+  UPDATE public.red_uat SET sesiune_zi1 = v_azi + 10, sesiune_zi2 = v_azi + 11, sesiune_zi3 = v_azi + 20 WHERE id = v_uat;
+  UPDATE public.red_raspunsuri SET zi_sesiune_aleasa = NULL WHERE detinator_id = v_d5 AND optiune = 'nu_particip_fara_obiectii';
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
   UPDATE public.red_raspunsuri SET created_at = now() - interval '7 days' WHERE detinator_id = v_d5 AND optiune = 'particip';
   IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND created_at < now() - interval '1 day') THEN RAISE EXCEPTION 'TEST6 FAIL: created_at modificat ca postgres'; END IF;
@@ -639,6 +645,8 @@ BEGIN
      OR public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) IS NOT TRUE)') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('NOT ((bucket_id = ''x''::text) AND (a = 1))') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) AND (a = 1)) OR true') IS NOT NULL
+     OR public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) IS TRUE)') IS DISTINCT FROM 'x'
+     OR public.fn_red_storage_expr_bucket('(((bucket_id = ''x''::text) AND (a = 1)) IS NOT TRUE)') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) OR (a = 1))') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((a = 1) AND (bucket_id = ''x''::text))') IS NOT NULL
      OR public.fn_red_storage_expr_bucket('((bucket_id = ''x''::text) AND ((a = 1) OR (b = 2)))') IS DISTINCT FROM 'x'
