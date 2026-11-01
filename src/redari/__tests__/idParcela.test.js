@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { uat3, idParcela, normalizeazaNume, faraDiacritice } from '../idParcela.js'
+import { uat3, idParcela, idParcelaProvizoriu, normalizeazaNume, faraDiacritice } from '../idParcela.js'
+
+describe('idParcelaProvizoriu', () => {
+  it('T{tronson}-{uat3}-????', () => {
+    expect(idParcelaProvizoriu(3, 'HUS')).toBe('T3-HUS-????')
+    expect(() => idParcelaProvizoriu(0, 'HUS')).toThrow(/tronson/)
+    expect(() => idParcelaProvizoriu(3, 'hus')).toThrow(/uat3/)
+  })
+})
 
 describe('uat3', () => {
   it('cele 7 UAT-uri din brief', () => {

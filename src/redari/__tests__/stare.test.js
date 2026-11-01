@@ -81,6 +81,16 @@ describe('calculeazaStare — prioritate și reguli fine', () => {
     ] })
     expect(r.stare).toBe('CONVOCAT_FARA_RASPUNS')
   })
+  it('P2-10: aceeași convocare cu retur ȘI AR primit ulterior returului = confirmată, nu returnată', () => {
+    const r = calculeazaStare({ ...baza, convocari: [conv({ retur: 'avizat_neridicat', retur_data: '2026-11-15', data_confirmare_primire: '2026-11-18' })] })
+    expect(r.stare).toBe('CONVOCAT_FARA_RASPUNS')
+    // fără retur_data, referința e data_expediere
+    const r2 = calculeazaStare({ ...baza, convocari: [conv({ data_expediere: '2026-11-10', retur: 'mutat', retur_data: null, data_confirmare_primire: '2026-11-12' })] })
+    expect(r2.stare).toBe('CONVOCAT_FARA_RASPUNS')
+    // AR înainte de retur → returul rămâne
+    const r3 = calculeazaStare({ ...baza, convocari: [conv({ retur: 'refuz', retur_data: '2026-11-15', data_confirmare_primire: '2026-11-12' })] })
+    expect(r3.stare).toBe('CONVOCARE_RETURNATA')
+  })
   it('convocare confirmată ÎNAINTE de retur nu anulează returul', () => {
     const r = calculeazaStare({ ...baza, convocari: [
       conv({ data_expediere: '2026-10-01', data_confirmare_primire: '2026-10-05' }),
