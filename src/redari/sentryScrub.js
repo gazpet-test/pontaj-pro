@@ -217,6 +217,7 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
       const sub = colecteazaTokenuriEveniment(obj, adancime + 1, sensibilSir)
       for (const t of sub) tokenuri.add(t)
       if (sub.refuzat) tokenuri.refuzat = true
+      if (sub.ambiguu) tokenuri.ambiguu = true   // Jakarinos r34 P1-1: și semnalul slab se propagă din JSON-ul parsat
       // Jakarinos r29 P1-1: CHEI DUPLICATE — JSON.parse păstrează doar ultima valoare (`{"token":{"value":T},"token":null}`), deci
       // structura pierde valoarea sensibilă, dar textul o are. Dacă textul are mai multe chei sensibile decât structura ⇒ duplicate ⇒
       // tratăm textul conservator (secvență ≥43 prezentă ⇒ refuzat)
@@ -294,6 +295,8 @@ export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0
   const formeToate = formele(text)
   // Jakarinos r33 P1-1: JSON.stringify dubleaza backslash-ul (`\\u0055`) — reducem `\\` -> `\` inainte de reconstruire
   for (const f of [...formeToate]) for (const u of [cuUnicode(f), cuUnicode(f.replace(/\\\\/g, '\\'))]) if (u !== f) formeToate.push(u)
+  // Jakarinos r34: și ordinea inversă — escape-urile Unicode pot ascunde un `%` (`%`), deci reconstruim ÎNTÂI, apoi decodăm procentual
+  for (const u of [cuUnicode(text), cuUnicode(text.replace(/\\\\/g, '\\'))]) if (u !== text) for (const f of formele(u)) if (!formeToate.includes(f)) formeToate.push(f)
   for (const f of formeToate) {
     if (contineVreunToken(f, tokenuri)) return true
     if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true

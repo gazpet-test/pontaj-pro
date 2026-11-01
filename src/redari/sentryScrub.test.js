@@ -605,6 +605,16 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // dar cu o secventa de 43 in eveniment, codificarea ramasa (ambigua) il face purtator -> null
     expect(scrubSentryEvent({ message: 'ref_' + T, extra: { '%25252574oken': [null, 'scurt'] } })).toBeNull()
   })
+  it('r34 P1-1 (Jakarinos): semnalul `ambiguu` se propaga din JSON-ul parsat (cheie `\\u0025...` = %-codificare ascunsa sub escape Unicode)', () => {
+    const payload = '{"\\u002525252574oken":"' + T + '"}'
+    expect(Object.keys(JSON.parse(payload))[0]).toBe('%25252574oken')
+    expect(scrubSentryEvent({ extra: { payload } })).toBeNull()
+    expect(scrubSentryEvent({ request: { url: '/intern', data: payload } })).toBeNull()
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'intern', data: { payload } })
+    expect(JSON.stringify(sp)).not.toContain(T)
+    // si varianta in care JSON-ul e imbricat in alt JSON
+    expect(scrubSentryEvent({ extra: { outer: JSON.stringify({ inner: payload }) } })).toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
