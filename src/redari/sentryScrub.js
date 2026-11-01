@@ -183,6 +183,20 @@ const numaraChei = (radacina) => {
 }
 // Copilot FE r5 P1-01: un obiect referit de două ori (o dată sub cheie obișnuită, o dată sub p_token) se parcurge DIN NOU când e atins
 // pe calea sensibilă — vizitatele țin nivelul (false → true), deci fiecare obiect e parcurs cel mult de două ori (ciclurile se termină).
+// Jakarinos r44 P1-01: toate FRUNZELE-sir ale unui subarbore, in ordinea parcurgerii, unite (fragmente in obiecte/liste imbricate)
+const frunzeUnite = (radacina, cuChei = false) => {
+  const vaz = new WeakSet(); const stiva = [radacina]; const out = []
+  while (stiva.length) {
+    const o = stiva.pop()
+    if (typeof o === 'string') { out.push(o); continue }
+    if (!o || typeof o !== 'object' || vaz.has(o)) continue
+    vaz.add(o)
+    if (Array.isArray(o)) { for (let i = o.length - 1; i >= 0; i--) stiva.push(o[i]); continue }
+    const chei = Object.keys(o)
+    for (let i = chei.length - 1; i >= 0; i--) { stiva.push(o[chei[i]]); if (cuChei) stiva.push(chei[i]) }
+  }
+  return out.join('')
+}
 function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
   if (radacina === null || typeof radacina !== 'object') return radacina
   const vizitate = new WeakMap()   // obj → sensibil cu care a fost parcurs
@@ -199,7 +213,7 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
         else { const n = fn(obj, null, v, sensibil); if (n !== v) obj[i] = n }
       }
       // Jakarinos r43: sub context sensibil, o LISTĂ de fragmente (`token: [T[0:20], T[20:]]`) se judecă și unită — identificatorul se colectează
-      if (sensibil) { const unit = obj.filter(x => typeof x === 'string').join(''); if (unit.length >= 43) fn(obj, null, unit, sensibil) }
+      if (sensibil) { const unit = frunzeUnite(obj); if (unit.length >= 43) fn(obj, null, unit, sensibil) }
       continue
     }
     for (const cheie of Object.keys(obj)) {
@@ -208,7 +222,11 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
       if (cheieNoua !== cheie) delete obj[cheie]
       let vNou = v
       const sensibilCopil = sensibil || cheieSensibila(cheie) || ramaneCodificat(cheie)   // r36 P1-01: cheie necunoscuta (inca codificata) = context sensibil
-      if (v && typeof v === 'object') stiva.push([v, sensibilCopil])
+      if (v && typeof v === 'object') {
+        stiva.push([v, sensibilCopil])
+        // Jakarinos r44 P1-01: `token: { a: T[0:20], b: T[20:] }` / `token: [[..],[..]]` — subarborele sensibil se judeca si cu frunzele unite
+        if (sensibilCopil) { const unit = frunzeUnite(v); if (unit.length >= 43) fn(obj, cheie, unit, true) }
+      }
       else vNou = fn(obj, cheie, v, sensibilCopil)
       if (cheieNoua !== cheie || vNou !== v) obj[cheieNoua] = vNou
     }
@@ -336,17 +354,26 @@ export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0
   // Jakarinos r43 P1-01: copia unui identificator CUNOSCUT poate fi fragmentată (listă de bucăți, câmpuri separate) — pe fiecare formă și pe
   // forma cu separatorii JSON scoși (unește fragmentele vecine) căutăm orice FEREASTRĂ de 6 caractere consecutive din identificator;
   // 64^6 ≈ 6,9e10 face coincidența cu un șir legitim practic nulă; fragmente sub 6 nu sunt reconstruibile fără identificator (rezidual asumat)
+  // Jakarinos r44 P2-01: fara ferestre de 6 (coincidente cu date legitime, ex. `id: '012345'`); in schimb (r44 P1-02) identificatorul INTREG
+  // se cauta in toate FRUNZELE-sir unite in ordinea parcurgerii (fragmente ordonate de orice marime, cu chei/indici intre ele), in
+  // cheile unite, si in formele cu separatorii JSON scosi
+  // ...si FERESTRE de 12 caractere (nu 6: `id: '012345'` e o coincidenta plauzibila; 12 caractere dintr-un identificator aleator — 64^12 ≈ 4,7e21 —
+  // nu apar legitim in alt camp): prind bucatile mari (span_id = H[0:16], trace_id = H[11:], `copy ` + H[0:20]) chiar si suprapuse/neordonate.
+  // Rezidual asumat: bucati sub 12 caractere in ordine amestecata.
   const ferestre = []
-  for (const t of tokenuri) for (let i = 0; i + 6 <= t.length; i++) ferestre.push(t.slice(i, i + 6))
+  if (tokenuri.size) {
+    for (const t of tokenuri) for (let i = 0; i + 12 <= t.length; i++) ferestre.push(t.slice(i, i + 12))
+    for (const u of [frunzeUnite(event), frunzeUnite(event, true)]) for (const g of [u, cuUnicode(u), ...formele(u)]) if (contineVreunToken(g, tokenuri) || ferestre.some(w => g.includes(w))) return true
+  }
   // formele „unite” (fără separatori) se folosesc DOAR pentru identificatorii cunoscuți (întregi sau ferestre) — nu pentru regex-urile
   // generice de 43, care pe un text lipit ar aprinde fals (șiruri scurte legitime puse cap la cap)
-  if (ferestre.length) for (const f of [...formeToate]) {
+  if (tokenuri.size) for (const f of [...formeToate]) {
     const u = f.replace(/["'\s,\[\]{}:]+/g, '')
     if (u !== f && (contineVreunToken(u, tokenuri) || ferestre.some(w => u.includes(w)))) return true
   }
   for (const f of formeToate) {
     if (contineVreunToken(f, tokenuri)) return true
-    if (ferestre.length) for (const w of ferestre) if (f.includes(w)) return true
+    if (ferestre.length && ferestre.some(w => f.includes(w))) return true
     if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true
     if (aPurtatToken && RX_T43_PLUS.test(f)) return true   // a purtat token: orice secvență de ≥43 rămasă (și lipită de prefix) e suspectă
     if (RX_T43_ORIUNDE.test(f) && tokenuri.size) return true
@@ -362,15 +389,18 @@ export function scrubSentrySpan(span) {
     if (span === null || typeof span !== 'object') return span
     // Jakarinos r16 P1-1: `op`/`origin` NU se păstrează (pot purta tokenul); id-urile/timpii rămân doar dacă sunt id-uri hex scurte / numere
     const idScurt = (v) => typeof v === 'string' && /^[0-9a-f]{1,32}$/i.test(v)
+    let esteBucata = () => false
     const golit = () => {
       for (const k of Object.keys(span)) if (!['span_id', 'trace_id', 'parent_span_id', 'start_timestamp', 'timestamp'].includes(k)) delete span[k]
-      for (const k of ['span_id', 'trace_id', 'parent_span_id']) if (k in span && !idScurt(span[k])) delete span[k]
+      for (const k of ['span_id', 'trace_id', 'parent_span_id']) if (k in span && (!idScurt(span[k]) || esteBucata(span[k]))) delete span[k]
       for (const k of ['start_timestamp', 'timestamp']) if (k in span && typeof span[k] !== 'number') delete span[k]
       span.op = 'redactat'; span.description = '[redactat]'; span.data = {}
       return span
     }
     if (esteDinFormularulPublic({ transaction: span.description, request: { url: span.data?.['sentry.transaction'] ?? span.data?.url } })) return golit()
     const tokenuri = colecteazaTokenuriEveniment(span)
+    // Jakarinos r44 P1-03: un id hex care e BUCATA dintr-un identificator colectat (span_id = H[0:16], trace_id = H[11:]) nu se pastreaza
+    esteBucata = (id) => { for (const t of tokenuri) if (t.includes(id)) return true; return false }
     redacteazaAdanc(span, tokenuri)
     if (tokenuri.refuzat) return golit()   // r32 P1-1: refuzat ⇒ golit necondiționat
     if (maiScurgeToken(span, tokenuri, tokenuri.size > 0 || !!tokenuri.ambiguu)) return golit()

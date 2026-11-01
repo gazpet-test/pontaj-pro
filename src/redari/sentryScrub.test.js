@@ -761,6 +761,25 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = scrubSentryEvent({ message: 'convocator generat', extra: { token: T, id_parcela: 'T3-HUS-0001', uat: 'Husnicioara' } })
     expect(ok).toEqual({ message: 'convocator generat', extra: { token: '[token]', id_parcela: 'T3-HUS-0001', uat: 'Husnicioara' } })
   })
+  it('r44 (Jakarinos): fragmente in obiect/liste imbricate sub cheia sensibila; fragmente ordonate de 5 cu indici; id-uri de span ca bucati; coincidenta de 6 legitima trece', () => {
+    // P1-01
+    for (const ev of [{ extra: { token: { a: T.slice(0, 20), b: T.slice(20) } } }, { extra: { token: [[T.slice(0, 20)], [T.slice(20)]] } }, { extra: { p_token: { x: { y: T.slice(0, 7) }, z: [T.slice(7, 30), { w: T.slice(30) }] } } }]) {
+      const rez = scrubSentryEvent(ev); const j = rez === null ? '' : JSON.stringify(rez).replace(/[^A-Za-z0-9_-]+/g, '')
+      expect(j.includes(T)).toBe(false); expect(j.includes(T.slice(20))).toBe(false)
+    }
+    // P1-02: fragmente de 5 cu indici intre ele, identificatorul cunoscut
+    const copy = T.match(/.{1,5}/g).map((v, i) => ({ i, v }))
+    expect(scrubSentryEvent({ extra: { token: T, copy } })).toBeNull()
+    expect(scrubSentryEvent({ extra: { token: T, copy: T.match(/.{1,3}/g) } })).toBeNull()
+    const sp2 = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { token: T, copy } })
+    expect(sp2.description).toBe('[redactat]'); expect(JSON.stringify(sp2)).not.toContain(T.slice(0, 5))
+    // P1-03: id-uri hex care sunt bucati din identificatorul colectat
+    const H = '0123456789abcdef0123456789abcdef0123456789a'
+    const sp = scrubSentrySpan({ span_id: H.slice(0, 16), trace_id: H.slice(11), description: 'copy ' + H.slice(0, 20), data: { token: H } })
+    expect(sp.span_id).toBeUndefined(); expect(sp.trace_id).toBeUndefined(); expect(sp.description).toBe('[redactat]')
+    // P2-01: coincidenta de 6 caractere cu o valoare legitima NU pierde evenimentul (redactat)
+    expect(scrubSentryEvent({ extra: { token: T, id: '012345', message: 'eroare' } })).toEqual({ extra: { token: '[token]', id: '012345', message: 'eroare' } })
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
