@@ -136,67 +136,93 @@ export function dataISO(z, l, a) {
 // r4 (Jakarinos r3 P1-1/P1-2): fara regex pe HTML. Tokenizator minimal care separa tagurile, atributele si
 // valorile lor citate (un `id=` sau `</div>` scris IN valoarea altui atribut nu mai conteaza), sare comentariile si
 // continutul <script>/<style>. Taguri si atribute fara distinctie de majuscule.
-export function* taguri(html) {
+// r5 (Jakarinos r4): STRICT. Intoarce { tags, complet }. complet=false la ORICE anomalie, oriunde in pagina:
+// comentariu / valoare citata / tag / text brut (script, style, textarea, title) neinchise; nume de tag urmat de
+// alt caracter decat spatiu, '>' sau '/'; atribut dublat; atribut sau valoare care incep cu ghilimele. Fara limite
+// de lungime (numele si valorile se consuma integral). Consumatorii nu confirma nimic dintr-o pagina incompleta.
+const SP = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f';
+const TEXT_BRUT = new Set(['script', 'style', 'textarea', 'title']);
+export function analizeazaHTML(html) {
   const s = String(html || '');
+  const mic = s.toLowerCase();
   const n = s.length;
+  const tags = [];
+  const rupt = () => ({ tags, complet: false });
   let i = 0;
   while (i < n) {
     const lt = s.indexOf('<', i);
-    if (lt < 0) return;
-    if (s.startsWith('<!--', lt)) { const e = s.indexOf('-->', lt + 4); if (e < 0) return; i = e + 3; continue; }
+    if (lt < 0) break;
+    if (s.startsWith('<!--', lt)) { const e = s.indexOf('-->', lt + 4); if (e < 0) return rupt(); i = e + 3; continue; }
+    if (s[lt + 1] === '!' || s[lt + 1] === '?') { const e = s.indexOf('>', lt + 2); if (e < 0) return rupt(); i = e + 1; continue; } // <!DOCTYPE>
     let j = lt + 1;
     const inchis = s[j] === '/';
     if (inchis) j++;
-    const mNume = /^[A-Za-z][A-Za-z0-9-]*/.exec(s.slice(j, j + 40));
-    if (!mNume) { i = lt + 1; continue; }
-    const nume = mNume[0].toLowerCase();
-    j += mNume[0].length;
+    if (!/[A-Za-z]/.test(s[j] || '')) { i = lt + 1; continue; } // „<” in text (ex. a<b) nu e tag
+    const k0 = j;
+    while (j < n && /[A-Za-z0-9-]/.test(s[j])) j++;
+    const nume = mic.slice(k0, j);
+    if (j < n && !SP(s[j]) && s[j] !== '>' && s[j] !== '/') return rupt(); // <div.foo>
     const attrs = new Map();
     let gata = false;
     while (j < n) {
-      while (j < n && /\s/.test(s[j])) j++;
+      while (j < n && SP(s[j])) j++;
       if (s[j] === '>') { j++; gata = true; break; }
       if (s[j] === '/' && s[j + 1] === '>') { j += 2; gata = true; break; }
-      const mA = /^[^\s=>\/"']+/.exec(s.slice(j, j + 200));
-      if (!mA) { j++; continue; }
-      const an = mA[0].toLowerCase();
-      j += mA[0].length;
-      while (j < n && /\s/.test(s[j])) j++;
+      if (s[j] === '/') { j++; continue; }
+      if (s[j] === '"' || s[j] === "'" || s[j] === '=') return rupt();
+      const a0 = j;
+      while (j < n && !SP(s[j]) && s[j] !== '=' && s[j] !== '>' && s[j] !== '/' && s[j] !== '"' && s[j] !== "'") j++;
+      const an = mic.slice(a0, j);
+      while (j < n && SP(s[j])) j++;
       let val = '';
       if (s[j] === '=') {
         j++;
-        while (j < n && /\s/.test(s[j])) j++;
+        while (j < n && SP(s[j])) j++;
         if (s[j] === '"' || s[j] === "'") {
           const q = s[j];
           const e = s.indexOf(q, j + 1);
-          if (e < 0) return; // valoare neinchisa: pagina trunchiata
+          if (e < 0) return rupt();
           val = s.slice(j + 1, e);
           j = e + 1;
         } else {
-          const mV = /^[^\s>]*/.exec(s.slice(j, j + 500));
-          val = mV[0];
-          j += val.length;
+          const v0 = j;
+          while (j < n && !SP(s[j]) && s[j] !== '>') j++;
+          val = s.slice(v0, j);
         }
       }
-      if (!attrs.has(an)) attrs.set(an, val); else attrs.set(an, null); // atribut dublat = ambiguu
+      if (attrs.has(an)) return rupt(); // atribut dublat
+      attrs.set(an, val);
     }
-    if (!gata) return; // tag neinchis: pagina trunchiata
-    yield { inchis, nume, attrs, poz: lt, sf: j };
+    if (!gata) return rupt();
+    tags.push({ inchis, nume, attrs, poz: lt, sf: j });
     i = j;
-    if (!inchis && (nume === 'script' || nume === 'style')) {
-      const e = s.toLowerCase().indexOf(`</${nume}`, i);
-      if (e < 0) return;
+    if (!inchis && TEXT_BRUT.has(nume)) {
+      // sfarsitul exact: </nume urmat de spatiu, '/' sau '>' (</scriptX> nu inchide)
+      let e = i;
+      for (;;) {
+        e = mic.indexOf(`</${nume}`, e);
+        if (e < 0) return rupt();
+        const c = s[e + 2 + nume.length];
+        if (c === undefined) return rupt();
+        if (SP(c) || c === '>' || c === '/') break;
+        e += 2;
+      }
       i = e;
     }
   }
+  return { tags, complet: true };
 }
+
+// Compatibilitate: doar tagurile (fara stare). Consumatorii noi folosesc analizeazaHTML().
+export function* taguri(html) { yield* analizeazaHTML(html).tags; }
 
 // Istoricul consolidarilor: elementul <div> cu atributul id EXACT „istoric_fa” (unul singur in pagina), pana la
 // </div>-ul lui; orice <div> imbricat sau sfarsitul paginii inainte de </div> = ambiguu → null. In fiecare <a>,
 // atributul title real trebuie sa fie „Consolidarea|Republicarea din ZZ.LL.AAAA” cu data valida, altfel null.
 // Intoarce datele ISO unice, descrescator; null = fara dovada ca istoricul a fost citit complet.
 export function consolidari(html) {
-  const toate = [...taguri(html)];
+  const { tags: toate, complet } = analizeazaHTML(html);
+  if (!complet) return null;
   const idx = toate.map((t, k) => (!t.inchis && t.nume === 'div' && t.attrs.get('id') === 'istoric_fa') ? k : -1).filter((k) => k >= 0);
   if (idx.length !== 1) return null;
   const out = new Set();
@@ -235,7 +261,8 @@ const TIPURI = {
 // r4: element lipsa sau dublat → null (identitatea nu se dovedeste din ceva ambiguu).
 function textElementUnic(html, potrivire, numeInchidere) {
   const s = String(html || '');
-  const toate = [...taguri(s)];
+  const { tags: toate, complet } = analizeazaHTML(s);
+  if (!complet) return null;
   const idx = toate.map((t, k) => (!t.inchis && potrivire(t)) ? k : -1).filter((k) => k >= 0);
   if (idx.length !== 1) return null;
   const inc = toate.slice(idx[0] + 1).find((t) => t.inchis && t.nume === numeInchidere);

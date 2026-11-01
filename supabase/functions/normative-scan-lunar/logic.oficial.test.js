@@ -84,6 +84,34 @@ describe('consolidari()', () => {
     expect(consolidari(scr)).toEqual(['2026-02-25', '2024-05-24', '2023-04-19', '2016-06-09']);
     expect(consolidari(`<div id="istoric_fa"><a title="Consolidarea din 24.05.2024" title="Consolidarea din 25.02.2026">x</a></div>`)).toBeNull();
   });
+  describe('r5 — tokenizator strict (Jakarinos r4)', () => {
+    const A = '<a title="Consolidarea din 24.05.2024">x</a>';
+    const H = '<div id="istoric_fa">' + A + '</div>';
+    it('valori si nume lungi nu se fragmenteaza in atribute', () => {
+      expect(consolidari('<div data-x=' + 'x'.repeat(500) + 'id=istoric_fa>' + A + '</div>')).toBeNull();
+      expect(consolidari('<div ' + 'q'.repeat(300) + 'id="istoric_fa">' + A + '</div>')).toBeNull();
+    });
+    it('</scriptX> nu inchide scriptul; textarea/style sunt text brut', () => {
+      expect(consolidari('<script>/* </scriptX>' + H + ' */</script>')).toBeNull();
+      expect(consolidari('<style>/* </styleX>' + H + ' */</style>')).toBeNull();
+      expect(consolidari('<textarea>' + H + '</textarea>')).toBeNull();
+      expect(consolidari('<script>var x = 1;</SCRIPT >' + H)).toEqual(['2024-05-24']);
+    });
+    it('nume de tag cu sufix (<div.foo>) → pagina incompleta → null', () => {
+      expect(consolidari('<div.foo id="istoric_fa">' + A + '</div.foo>')).toBeNull();
+    });
+    it('atribut dublat oriunde → pagina incompleta → null (nu ascunde un al doilea bloc)', () => {
+      expect(consolidari(H + '<div id="istoric_fa" id="other">' + A + '</div>')).toBeNull();
+    });
+    it('trunchiere dupa un istoric valid → null', () => {
+      expect(consolidari(H + '<div id="istoric_fa" data-x="')).toBeNull();
+      expect(consolidari(H + '<!-- neinchis')).toBeNull();
+      expect(consolidari(H + '<script>var a;')).toBeNull();
+    });
+    it('„<” in text, DOCTYPE si tag self-closing nu strica pagina', () => {
+      expect(consolidari('<!DOCTYPE html><p>a < b si 3<4</p><br/>' + H)).toEqual(['2024-05-24']);
+    });
+  });
   it('republicarea face parte din istoric (Legea 307/2006: „Republicarea din 17.04.2019”)', () => {
     const bloc = `<a title='Consolidarea din 08.05.2026'>x</a><a title='Republicarea din 17.04.2019' href='~/x?isFormaDeBaza=True'>y</a><a title='Consolidarea din 18.09.2006'>z</a>`;
     expect(consolidari(pagina({ bloc }))).toEqual(['2026-05-08', '2019-04-17', '2006-09-18']);

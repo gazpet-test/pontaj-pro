@@ -42,6 +42,7 @@ import {
 const DESTINATARI = ['razvan.trusu@gazpet.ro'];
 const MARIME_LOT = 4;           // v11: 4 (era 6) — cele 8 cautari se impart la mai putine acte
 const TIMEOUT_OFICIAL_MS = 20_000;
+const MAX_HTML = 5_000_000;     // caractere; peste → pagina nu se analizeaza (actul cade pe AI, plafonat)
 const CAUTARI_PE_LOT = 8;
 const MAX_ACTE = 40;
 const LEASE_SEC = 360;          // > timeout AI + salvare; un lot omorat se reia dupa expirare
@@ -86,6 +87,8 @@ async function verificaOficial(rand: any, refScan: string | null) {
     });
     if (!resp.ok) return null;
     const html = await resp.text();
+    // r5 (Copilot r4 P2-02): plafon de marime — cea mai mare pagina reala vazuta are ~1,7 MB (Legea 99/2016)
+    if (html.length > MAX_HTML) return null;
     // r2: identitate dovedita (tip + numar + an + emitent) SI istoric citit complet; altfel → AI (plafonat)
     if (!paginaPotrivita(html, rand)) return null;
     const date = consolidari(html);
