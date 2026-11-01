@@ -57,7 +57,7 @@ const verificaSablon = async (cale) => {
   const externe = []
   for (const relPath of Object.keys(zip.files).filter(p => /\.rels$/.test(p))) {
     const xml = await zip.file(relPath).async('string')
-    for (const m of xml.matchAll(/<Relationship[^>]*TargetMode="External"[^>]*>/g)) {
+    for (const m of xml.matchAll(/<Relationship(?=\s)[^>]*TargetMode="External"[^>]*>/g)) {
       const target = /Target="([^"]*)"/.exec(m[0])?.[1] ?? ''
       const tip = /Type="[^"]*\/([a-zA-Z]+)"/.exec(m[0])?.[1] ?? ''
       externe.push({ rel: relPath, tip, target })
