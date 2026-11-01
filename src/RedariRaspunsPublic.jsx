@@ -56,6 +56,7 @@ const S = {
   bifa: { display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 14, color: G.text, lineHeight: 1.45, marginTop: 10, cursor: 'pointer' },
   trimite: (dezactivat) => ({ marginTop: 18, width: '100%', minHeight: 52, padding: 13, background: G.green, color: '#fff', border: 'none', borderRadius: 10, fontSize: 17, fontWeight: 700, cursor: dezactivat ? 'default' : 'pointer', opacity: dezactivat ? .6 : 1, fontFamily: 'inherit' }),
   subsol: { textAlign: 'center', fontSize: 11.5, color: '#8a99a8', marginTop: 16, lineHeight: 1.5 },
+  fieldset: { border: 'none', padding: 0, margin: 0, minWidth: 0 },
 }
 
 // Datele de contact apar DOAR dacă RPC-ul le trimite (contract §5 nu le promite; dacă vin, le afișăm)
@@ -99,13 +100,14 @@ export default function RedariRaspunsPublic() {
   const [validare, setValidare] = useState('')  // mesaj de validare locală
   const [busy, setBusy] = useState(false)
   const [rezultat, setRezultat] = useState(null) // răspunsul fn_red_raspuns_public (sau eroare normalizată)
+  const [instantaneu, setInstantaneu] = useState(null) // r5 P2-2: ce s-a TRIMIS efectiv — rezumatul îl arată pe el, nu starea curentă
   const tokenCurent = useRef(token)              // r3 P2-2: gardă la trimitere — rezultatul unei cereri pornite pe alt token se ignoră
   tokenCurent.current = token
 
   useEffect(() => {
     document.title = 'Răspuns convocare — Gazpet'
     // P2-6: alt token (navigare între două linkuri în același tab) = formular nou — nimic din răspunsul anterior nu rămâne pe ecran
-    setForm(null); setIncarca(true); setOptiune(''); setZi(''); setObiectii(''); setDeclaratie(false); setValidare(''); setBusy(false); setRezultat(null)
+    setForm(null); setIncarca(true); setOptiune(''); setZi(''); setObiectii(''); setDeclaratie(false); setValidare(''); setBusy(false); setRezultat(null); setInstantaneu(null)
     if (!token) { setForm({ ok: false }); setIncarca(false); return }
     let anulat = false
     ;(async () => {
@@ -139,18 +141,20 @@ export default function RedariRaspunsPublic() {
     if (obj.length > MAX_OBIECTII) return setValidare(`Textul este prea lung (maxim ${MAX_OBIECTII} caractere).`)
     setValidare(''); setBusy(true)
     const tokenCerere = token   // capturat la pornirea cererii
+    // r5 P2-2: instantaneul datelor trimise — formularul e blocat (fieldset disabled) cât durează cererea, iar rezumatul arată exact ce s-a trimis
+    const trimis = { optiune, zi: cereZi ? zi : '', obiectii: cereObiectii ? obj : '', declaratie: cereDeclaratie ? declaratie : false, la: new Date() }
     try {
       const { data, error } = await supabase.rpc('fn_red_raspuns_public', {
         p_token: tokenCerere,
-        p_optiune: optiune,
-        p_zi: cereZi ? zi : null,
-        p_obiectii: cereObiectii ? obj : null,
-        p_declaratie_confirmata: cereDeclaratie ? declaratie : false,
+        p_optiune: trimis.optiune,
+        p_zi: cereZi ? trimis.zi : null,
+        p_obiectii: cereObiectii ? trimis.obiectii : null,
+        p_declaratie_confirmata: trimis.declaratie,
         p_user_agent: (typeof navigator !== 'undefined' && navigator.userAgent) ? String(navigator.userAgent).slice(0, 500) : null,
       })
       if (tokenCerere !== tokenCurent.current) return   // tokenul s-a schimbat între timp: rezultatul nu e al acestui formular
       if (error || !data) setRezultat({ ok: false, motiv: 'eroare' })
-      else setRezultat(data)
+      else { setInstantaneu(trimis); setRezultat(data) }
     } catch { if (tokenCerere === tokenCurent.current) setRezultat({ ok: false, motiv: 'eroare' }) }
     if (tokenCerere !== tokenCurent.current) return
     setBusy(false)
@@ -182,6 +186,9 @@ export default function RedariRaspunsPublic() {
   }
 
   if (rezultat?.ok) {
+    // rezumatul = instantaneul trimis (nu starea curentă a câmpurilor)
+    const inst = instantaneu || { optiune, zi, obiectii: obiectii.trim(), declaratie, la: new Date() }
+    const instZi = inst.optiune === 'particip', instDecl = inst.optiune === 'nu_particip_fara_obiectii', instObj = inst.optiune === 'nu_particip_cu_obiectii' || inst.optiune === 'constatare_teren'
     return (
       <div style={S.pagina}>
         <div style={S.card}>
@@ -193,11 +200,11 @@ export default function RedariRaspunsPublic() {
           </div>
           <div style={S.eticheta}>Rezumat</div>
           <table style={S.tabel}><tbody>
-            <tr><td style={{ ...S.td, color: G.muted, width: '38%' }}>Opțiunea</td><td style={{ ...S.td, fontWeight: 700 }}>{TITLU_OPTIUNE[optiune] || optiune}</td></tr>
-            {cereZi && <tr><td style={{ ...S.td, color: G.muted }}>Ziua aleasă</td><td style={S.td}>{fmtZi(zi)}{(() => { const s = sesiune.find(x => String(x.zi).slice(0, 10) === zi); return s?.program ? ` · ${s.program}` : '' })()}</td></tr>}
-            {cereDeclaratie && <tr><td style={{ ...S.td, color: G.muted }}>Declarație</td><td style={S.td}>Confirmată</td></tr>}
-            {cereObiectii && <tr><td style={{ ...S.td, color: G.muted }}>Obiecții</td><td style={{ ...S.td, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{obiectii.trim()}</td></tr>}
-            <tr><td style={{ ...S.td, color: G.muted, borderBottom: 'none' }}>Data</td><td style={{ ...S.td, borderBottom: 'none' }}>{new Date().toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td></tr>
+            <tr><td style={{ ...S.td, color: G.muted, width: '38%' }}>Opțiunea</td><td style={{ ...S.td, fontWeight: 700 }}>{TITLU_OPTIUNE[inst.optiune] || inst.optiune}</td></tr>
+            {instZi && <tr><td style={{ ...S.td, color: G.muted }}>Ziua aleasă</td><td style={S.td}>{fmtZi(inst.zi)}{(() => { const s = sesiune.find(x => String(x.zi).slice(0, 10) === inst.zi); return s?.program ? ` · ${s.program}` : '' })()}</td></tr>}
+            {instDecl && <tr><td style={{ ...S.td, color: G.muted }}>Declarație</td><td style={S.td}>{inst.declaratie ? 'Confirmată' : '—'}</td></tr>}
+            {instObj && <tr><td style={{ ...S.td, color: G.muted }}>Obiecții</td><td style={{ ...S.td, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{inst.obiectii}</td></tr>}
+            <tr><td style={{ ...S.td, color: G.muted, borderBottom: 'none' }}>Data</td><td style={{ ...S.td, borderBottom: 'none' }}>{(inst.la || new Date()).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td></tr>
           </tbody></table>
           <Contact f={form} />
           <div style={S.subsol}>gazpet.ro · răspunsul este păstrat în registrul lucrării și vizibil doar echipei Gazpet</div>
@@ -237,6 +244,8 @@ export default function RedariRaspunsPublic() {
           </tbody></table>
         ) : <div style={S.info}>Programul zilelor de constatare va fi comunicat separat.</div>}
 
+        {/* r5 P2-2: cât durează trimiterea, tot formularul e blocat — nimic nu se mai poate schimba sub cererea în curs */}
+        <fieldset disabled={busy} aria-busy={busy} style={S.fieldset}>
         <div style={S.eticheta}>Cum răspundeți?</div>
         <div role="radiogroup" aria-label="Varianta de răspuns">
           {OPTIUNI.map(o => {
@@ -290,6 +299,7 @@ export default function RedariRaspunsPublic() {
         {validare && <div style={{ ...S.eroare, marginTop: 12 }} role="alert">{validare}</div>}
 
         <button type="button" onClick={trimite} disabled={busy} style={S.trimite(busy)}>{busy ? 'Se trimite…' : 'Trimite răspunsul'}</button>
+        </fieldset>
 
         <Contact f={form} />
         <div style={S.subsol}>gazpet.ro · pagina nu afișează și nu cere date personale; răspunsul se leagă de convocarea dumneavoastră prin linkul primit</div>

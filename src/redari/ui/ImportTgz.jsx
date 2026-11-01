@@ -8,8 +8,21 @@ import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
 
 const TRONSOANE = Array.from({ length: 11 }, (_, i) => i + 1)
 const MAX_PREVIEW = 50
-// parcelele care chiar se comit: cu cheie_sursa (poziție HG / cadastru / tarla) și neambigue (logica r4)
-const parceleDeComis = (pv) => (pv?.parcele || []).filter(p => p.cheie_sursa && !p.ambigua).length
+// Cifrele „de importat” (Jakarinos r5 P2-1): din statistici.*_de_importat când le dă parseazaTgz; altfel calcul echivalent, fără scăderi —
+// deținătorii DEDUPLICAȚI (parcelă + nume normalizat) ai parcelelor eligibile și contactele lor.
+const cifreDeImportat = (pv) => {
+  const st = pv?.statistici || {}
+  const eligibile = new Set((pv?.parcele || []).filter(p => p.cheie_sursa && !p.ambigua).map(p => p.cheie))
+  const detEligibili = (pv?.detinatori || []).filter(d => eligibile.has(d.cheie_parcela))
+  const cheiDet = new Set(detEligibili.map(d => d.cheie ?? d.cheie_detinator ?? `${d.cheie_parcela}|${d.nume_normalizat ?? d.nume}`))
+  const detDedup = new Set(detEligibili.map(d => `${d.cheie_parcela}|${d.nume_normalizat ?? d.nume}`))
+  const contEligibile = (pv?.contacte || []).filter(c => cheiDet.has(c.cheie_detinator))
+  return {
+    parcele: st.parcele_de_importat ?? eligibile.size,
+    detinatori: st.detinatori_de_importat ?? detDedup.size,
+    contacte: st.contacte_de_importat ?? contEligibile.length,
+  }
+}
 const EXPLICATII = {
   fara_cheie: 'Rânduri la care lipsesc ȘI poziția HG, ȘI nr. cadastral (tarla singură nu ajunge): nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
   ambigue: 'Rânduri cu aceeași identitate (poziție HG / nr. cadastral) pe Nr.Crt. DIFERITE, sau cu identități CONTRADICTORII sub același Nr.Crt.: nu se poate ști care e parcela (vezi coloana „motiv” și detaliul din Erori). NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
@@ -47,17 +60,18 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
       setPreview(rez)
       const sarite = (rez.fara_cheie?.length || 0) + (rez.ambigue?.length || 0)
       if (rez.erori?.length) show(`${rez.erori.length} rânduri cu erori — vezi tab-ul „Erori”.`, 'error')
-      else show(`Previzualizare gata: ${parceleDeComis(rez)} parcele de importat, ${rez.detinatori?.length || 0} deținători${sarite ? `; ${sarite} rânduri NU se importă (fără cheie / ambigue)` : ''}.`, sarite ? 'info' : 'success')
+      else { const c = cifreDeImportat(rez); show(`Previzualizare gata: ${c.parcele} parcele și ${c.detinatori} deținători de importat${sarite ? `; ${sarite} rânduri NU se importă (fără cheie / ambigue)` : ''}.`, sarite ? 'info' : 'success') }
     } catch (e) { show('Citire fișier: ' + msgEroare(e), 'error') }
     finally { setLucru(false) }
   }
 
   const importa = async () => {
     if (!poateScrie || !preview) return
-    const nParc = parceleDeComis(preview)
+    const cifre = cifreDeImportat(preview)
+    const nParc = cifre.parcele
     if (!nParc) { show('Nu e nimic de importat (toate rândurile sunt fără cheie / ambigue sau cu erori).', 'error'); return }
     const sarite = (preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)
-    if (!window.confirm(`Import ${nParc} parcele și ${(preview.detinatori?.length || 0) - sarite} deținători în ${proiect.cod} (lista „${versiune.trim()}”)${sarite ? `.\n${sarite} rânduri NU se importă (fără cheie / ambigue) — ${SUGESTIE_SARITE}` : '?'}`)) return
+    if (!window.confirm(`Import ${nParc} parcele, ${cifre.detinatori} deținători și ${cifre.contacte} contacte în ${proiect.cod} (lista „${versiune.trim()}”)${sarite ? `.\n${sarite} rânduri NU se importă (fără cheie / ambigue) — ${SUGESTIE_SARITE}` : '?'}`)) return
     const judetDiferit = preview.statistici?.judet_diferit || 0
     setLucru(true); setProgres({ facut: 0, total: nParc, etapa: 'pornire' })
     // starea lotului (in_curs / finalizat / esuat + eroare) se citește din BD, nu se presupune
@@ -137,8 +151,10 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           <div style={{ fontWeight:700, marginBottom:10 }}>3. Previzualizare</div>
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
             {statCard('Rânduri citite', fmtNum(st.randuri_total))}
-            {statCard('Parcele de importat', fmtNum(parceleDeComis(preview)), G.green)}
-            {statCard('Deținători', fmtNum(st.detinatori ?? preview.detinatori?.length), G.blue)}
+            {statCard('Parcele de importat', fmtNum(cifreDeImportat(preview).parcele), G.green)}
+            {statCard('Deținători de importat', fmtNum(cifreDeImportat(preview).detinatori), G.blue)}
+            {statCard('Contacte de importat', fmtNum(cifreDeImportat(preview).contacte), G.blue)}
+            {statCard('Deținători citiți', fmtNum(st.detinatori ?? preview.detinatori?.length))}
             {statCard('Coproprietari', fmtNum(nrCoproprietari))}
             {statCard('Neidentificați', fmtNum(st.neidentificati ?? preview.neidentificati?.length), G.yellow)}
             {statCard('Dubluri', fmtNum(st.dubluri ?? preview.dubluri?.length), G.orange)}
@@ -171,7 +187,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {progres && <span style={{ fontSize:12.5, color:G.muted }}>{progres.etapa ? progres.etapa + ' · ' : ''}{progres.facut} / {progres.total}</span>}
             {progres && <div style={{ width:160, height:6, background:G.border2, borderRadius:3, overflow:'hidden' }}><div style={{ width:`${progres.total ? Math.min(100, Math.round(progres.facut / progres.total * 100)) : 0}%`, height:'100%', background:G.green }} /></div>}
             {!poateScrie && <span style={{ fontSize:12.5, color:G.muted }}>Doar admin/editor pot importa.</span>}
-            {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !parceleDeComis(preview)}>{lucru ? 'Import în curs…' : `📥 Importă ${parceleDeComis(preview)} parcele`}</button>}
+            {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !cifreDeImportat(preview).parcele}>{lucru ? 'Import în curs…' : `📥 Importă ${cifreDeImportat(preview).parcele} parcele / ${cifreDeImportat(preview).detinatori} deținători`}</button>}
           </div>
           {preview.erori?.length > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ Rândurile cu erori nu intră în import; corectează fișierul sau continuă fără ele.</div>}
           {((preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)) > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ {preview.fara_cheie?.length || 0} rânduri fără cheie și {preview.ambigue?.length || 0} ambigue NU se importă — {SUGESTIE_SARITE}</div>}
