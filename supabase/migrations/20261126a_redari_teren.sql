@@ -28,6 +28,14 @@
 --     IMUTABILITATEA coloanelor de legătură (proiect_id, uat_id, parcela_id, detinator_id) pentru toată lumea;
 --   • jurnalul NU copiază PII: pe red_detinatori_contact doar câmpurile schimbate cu sha256 al valorilor (P2-6); red_raspunsuri.seq
 --     (identity) = tie-break pentru „ultimul răspuns” (P2-9); red_rate_limit se curăță singur (rânduri > 24 h, P2-5).
+--   • runda 3 (Jakarinos r2): fn_red_raspunsuri_valideaza — aceleași reguli ca RPC-ul public și pentru operatori (particip ⇒ zi din sesiunile
+--     UAT-ului; obiecții ⇒ text nevid; fără obiecții online ⇒ declarație bifată); seq imutabil (fn_red_legaturi); red_rate_limit cu index pe
+--     fereastra_start și curățare probabilistică (2 % din apeluri sau > 10.000 rânduri estimate), o singură dată per apel RPC; postcondiția
+--     verifică că nicio politică permisivă non-red_* de pe storage.objects nu acoperă bucket_id = 'redari' (toate sunt legate de alt bucket).
+--   • runda 3 (Copilot r2): cheia de token din red_rate_limit se atinge DOAR pentru tokenuri existente (altfel doar cheia IP → fără DoS prin
+--     chei arbitrare); jurnalul pe contact / meta pune doar „modificat” pe câmpurile schimbate (fără hash — reversibil prin dicționar);
+--     id_parcela coerent cu tronson + uat3 și imutabil (cu tronson); red_raspunsuri.created_at imutabil (timpul de recepție), `data` =
+--     momentul declarat (editabil) — „ultimul răspuns” = data DESC, seq DESC; șabloane v5: red_uat.sate_zi1..3, red_proiecte.reprezentant_tgz_telefon.
 -- LIMITĂ explicită (P2-10): jurnalul append-only protejează față de rolurile aplicației (anon / authenticated / service_role), NU față de
 --   administratorul bazei (postgres poate dezactiva trigger-ul sau insera direct) — e o garanție de aplicație, nu una criptografică.
 -- Revenire: supabase/revenire/20261126a_redari_teren_ROLLBACK.sql (armată; refuză cu date în red_parcele fără al doilea GUC).
@@ -91,7 +99,7 @@ CREATE TABLE public.red_proiecte (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   cod text NOT NULL UNIQUE CHECK (btrim(cod) <> ''),
   denumire text, beneficiar text, contract_nr text, contract_data date, imputernicire_nr text, imputernicire_data date,
-  reprezentant_tgz_nume text, reprezentant_tgz_functie text, reprezentant_gazpet_nume text, reprezentant_gazpet_functie text,
+  reprezentant_tgz_nume text, reprezentant_tgz_functie text, reprezentant_tgz_telefon text, reprezentant_gazpet_nume text, reprezentant_gazpet_functie text,
   contact_nume text, contact_telefon text,
   contact_email text DEFAULT 'redari@gazpet.ro',
   text_gdpr text NOT NULL DEFAULT 'Operatori: S.N.T.G.N. TRANSGAZ S.A. (inițiatorul proiectului) și GAZPET INSTAL S.R.L. (împuternicit pentru organizarea convocării). Scop: constatarea readucerii terenului la starea inițială. Temei: Legea nr. 185/2016, art. 11 alin. (4), și interesul public al proiectului de importanță națională. Sursa datelor: baza de date a TRANSGAZ privind deținătorii de teren. Destinatari: Primăria [UAT], A.P.M. Mehedinți. Păstrare: pe durata contractului și a termenelor legale de arhivare. Drepturi: acces, rectificare, opoziție, plângere la ANSPDCP (www.dataprotection.ro).',
@@ -108,11 +116,12 @@ CREATE TABLE public.red_uat (
   uat3 text NOT NULL CHECK (uat3 ~ '^[A-Z]{3}$'),
   judet text, primarie_adresa text, primarie_email text, primarie_telefon text, reprezentant_uat_nume text, reprezentant_uat_functie text,
   sesiune_zi1 date, sesiune_zi2 date, sesiune_zi3 date, program_zi1 text, program_zi2 text, program_zi3 text,
+  sate_zi1 text, sate_zi2 text, sate_zi3 text,
   afisare_pv_nr text, afisare_data_start date, afisare_data_end date,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (proiect_id, uat3)
 );
-COMMENT ON TABLE public.red_uat IS 'Redări: UAT-urile proiectului (primărie, reprezentant nominalizat, cele 3 zile de sesiune, afișarea).';
+COMMENT ON TABLE public.red_uat IS 'Redări: UAT-urile proiectului (primărie, reprezentant nominalizat, cele 3 zile de sesiune cu programul și satele / tarlalele programate, afișarea).';
 
 CREATE TABLE public.red_parcele (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -201,7 +210,7 @@ CREATE TABLE public.red_raspunsuri_meta (
   raspuns_id uuid PRIMARY KEY REFERENCES public.red_raspunsuri(id),
   ip_sau_sursa text, user_agent text, raw_payload jsonb
 );
-COMMENT ON TABLE public.red_raspunsuri_meta IS 'Redări: metadatele tehnice ale unui răspuns (IP, user-agent, payload brut) — SELECT doar admin/editor (viewer-ul nu le vede); INSERT admin/editor sau RPC-ul public; în jurnal doar hash-uri.';
+COMMENT ON TABLE public.red_raspunsuri_meta IS 'Redări: metadatele tehnice ale unui răspuns (IP, user-agent, payload brut) — SELECT doar admin/editor (viewer-ul nu le vede); INSERT admin/editor sau RPC-ul public; în jurnal doar numele câmpurilor („modificat”).';
 COMMENT ON TABLE public.red_raspunsuri IS 'Redări: răspunsurile deținătorilor (online prin RPC public, created_by NULL; telefon/scris/sesiune de operator); IP / user-agent / payload în red_raspunsuri_meta. „Ultimul răspuns” = ORDER BY data DESC, seq DESC (seq = identitate crescătoare, tie-break; nu se trimite de client).';
 
 CREATE TABLE public.red_procese_verbale (
@@ -241,7 +250,7 @@ CREATE TABLE public.red_jurnal (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_red_jurnal_inregistrare ON public.red_jurnal (tabela, inregistrare_id);
-COMMENT ON TABLE public.red_jurnal IS 'Redări: jurnal append-only (trigger pe toate red_* în afară de red_jurnal și red_rate_limit). Fără INSERT direct; UPDATE/DELETE/TRUNCATE refuzate de trigger pentru oricine. valoare_lei și token_raspuns nu intră în jurnal; rândurile red_detinatori_contact le văd doar admin/editor.';
+COMMENT ON TABLE public.red_jurnal IS 'Redări: jurnal append-only (trigger pe toate red_* în afară de red_jurnal, red_rate_limit și red_detinatori_token). Fără INSERT direct; UPDATE/DELETE/TRUNCATE refuzate de trigger pentru rolurile aplicației și pentru postgres (dar postgres poate dezactiva trigger-ul — garanție de aplicație). valoare_lei și tokenul nu intră în jurnal; contact / meta doar numele câmpurilor schimbate; rândurile lor le văd doar admin/editor.';
 
 CREATE TABLE public.red_numere (
   cheie text PRIMARY KEY,
@@ -267,7 +276,8 @@ CREATE TABLE public.red_rate_limit (
   fereastra_start timestamptz NOT NULL DEFAULT now(),
   numar int NOT NULL DEFAULT 0
 );
-COMMENT ON TABLE public.red_rate_limit IS 'Redări: contor pe fereastră de 10 min pentru RPC-urile publice (ip:<ip> max 30, t:<sha256 token> max 5). Fără acces pentru authenticated/anon.';
+CREATE INDEX idx_red_rate_limit_fereastra ON public.red_rate_limit (fereastra_start);
+COMMENT ON TABLE public.red_rate_limit IS 'Redări: contor pe fereastră de 10 min pentru RPC-urile publice (ip:<ip> max 30, t:<sha256 token> max 5). Fără acces pentru authenticated/anon. Curățare (rânduri > 24 h) prin fn_red_rate_limit_curata: 2 % din apeluri sau > 10.000 rânduri estimate.';
 
 -- ─── 4. Funcții interne (trigger-e, calcule) — SECURITY DEFINER, search_path fix, fără EXECUTE pentru roluri ─────────────
 CREATE FUNCTION public.fn_red_token_expira_calc(p_uat_id uuid) RETURNS timestamptz
@@ -318,7 +328,7 @@ END $fn$;
 
 CREATE FUNCTION public.fn_red_legaturi() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_uat uuid; v_parcela uuid;
+DECLARE v_uat uuid; v_parcela uuid; v_uat3 text;
 BEGIN
   -- coloanele de legătură sunt imutabile după insert, pentru toată lumea (și postgres)
   IF TG_OP = 'UPDATE' THEN
@@ -326,8 +336,11 @@ BEGIN
        OR (to_jsonb(NEW) ->> 'uat_id') IS DISTINCT FROM (to_jsonb(OLD) ->> 'uat_id')
        OR (to_jsonb(NEW) ->> 'parcela_id') IS DISTINCT FROM (to_jsonb(OLD) ->> 'parcela_id')
        OR (to_jsonb(NEW) ->> 'detinator_id') IS DISTINCT FROM (to_jsonb(OLD) ->> 'detinator_id')
-       OR (to_jsonb(NEW) ->> 'raspuns_id') IS DISTINCT FROM (to_jsonb(OLD) ->> 'raspuns_id') THEN
-      RAISE EXCEPTION 'redari: coloanele de legatura (proiect_id / uat_id / parcela_id / detinator_id / raspuns_id) sunt imutabile pe %', TG_TABLE_NAME USING ERRCODE = '23514';
+       OR (to_jsonb(NEW) ->> 'raspuns_id') IS DISTINCT FROM (to_jsonb(OLD) ->> 'raspuns_id')
+       OR (to_jsonb(NEW) ->> 'seq') IS DISTINCT FROM (to_jsonb(OLD) ->> 'seq')
+       OR (TG_TABLE_NAME = 'red_parcele' AND ((to_jsonb(NEW) ->> 'id_parcela') IS DISTINCT FROM (to_jsonb(OLD) ->> 'id_parcela')
+                                             OR (to_jsonb(NEW) ->> 'tronson') IS DISTINCT FROM (to_jsonb(OLD) ->> 'tronson'))) THEN
+      RAISE EXCEPTION 'redari: coloanele de legatura (proiect_id / uat_id / parcela_id / detinator_id / raspuns_id / seq; id_parcela / tronson) sunt imutabile pe %', TG_TABLE_NAME USING ERRCODE = '23514';
     END IF;
     RETURN NEW;
   END IF;
@@ -337,8 +350,11 @@ BEGIN
         RAISE EXCEPTION 'redari: proiect inexistent' USING ERRCODE = '23503';
       END IF;
     WHEN 'red_parcele' THEN
-      IF NOT EXISTS (SELECT 1 FROM public.red_uat u WHERE u.id = (to_jsonb(NEW) ->> 'uat_id')::uuid AND u.proiect_id = (to_jsonb(NEW) ->> 'proiect_id')::uuid) THEN
-        RAISE EXCEPTION 'redari: UAT-ul nu apartine proiectului parcelei' USING ERRCODE = '23503';
+      SELECT u.uat3 INTO v_uat3 FROM public.red_uat u WHERE u.id = (to_jsonb(NEW) ->> 'uat_id')::uuid AND u.proiect_id = (to_jsonb(NEW) ->> 'proiect_id')::uuid;
+      IF v_uat3 IS NULL THEN RAISE EXCEPTION 'redari: UAT-ul nu apartine proiectului parcelei' USING ERRCODE = '23503'; END IF;
+      -- id_parcela = T{tronson}-{uat3}-{nnnn}, coerent cu tronsonul si UAT-ul randului
+      IF (to_jsonb(NEW) ->> 'id_parcela') !~ ('^T' || (to_jsonb(NEW) ->> 'tronson') || '-' || v_uat3 || '-[0-9]{4}$') THEN
+        RAISE EXCEPTION 'redari: id_parcela % nu corespunde tronsonului % si UAT-ului %', to_jsonb(NEW) ->> 'id_parcela', to_jsonb(NEW) ->> 'tronson', v_uat3 USING ERRCODE = '23514';
       END IF;
     WHEN 'red_detinatori' THEN
       IF NOT EXISTS (SELECT 1 FROM public.red_parcele p WHERE p.id = (to_jsonb(NEW) ->> 'parcela_id')::uuid AND p.sters_la IS NULL) THEN
@@ -376,7 +392,33 @@ BEGIN
   END CASE;
   RETURN NEW;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_legaturi() IS 'Redări: trigger BEFORE INSERT/UPDATE — coerența legăturilor (UAT → proiect, parcelă → UAT-ul proiectului, deținător → parcelă activă, contact/token/convocări/răspunsuri → deținător, PV A/B/C coerent) și imutabilitatea coloanelor de legătură după insert, pentru oricine.';
+COMMENT ON FUNCTION public.fn_red_legaturi() IS 'Redări: trigger BEFORE INSERT/UPDATE — coerența legăturilor (UAT → proiect, parcelă → UAT-ul proiectului cu id_parcela = T{tronson}-{uat3}-nnnn, deținător → parcelă activă, contact/token/convocări/răspunsuri → deținător, PV A/B/C coerent) și imutabilitatea coloanelor de legătură (seq, id_parcela, tronson incluse) după insert, pentru oricine.';
+
+CREATE FUNCTION public.fn_red_raspunsuri_valideaza() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE
+  r record;
+  v_ob text := nullif(btrim(coalesce(NEW.obiectii_text, '')), '');
+BEGIN
+  -- created_at = momentul recepției, imutabil; `data` = momentul declarat (editabil de operator) — „ultimul răspuns” = data DESC, seq DESC
+  IF TG_OP = 'UPDATE' THEN NEW.created_at := OLD.created_at; END IF;
+  -- aceleași reguli ca în RPC-ul public, și pentru operatori (telefon / scris / sesiune); RPC-ul își păstrează mesajele jsonb înaintea insertului
+  SELECT u.sesiune_zi1, u.sesiune_zi2, u.sesiune_zi3 INTO r
+    FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id JOIN public.red_uat u ON u.id = p.uat_id
+   WHERE d.id = NEW.detinator_id;
+  IF NEW.optiune = 'particip' THEN
+    IF NEW.zi_sesiune_aleasa IS NULL OR (NEW.zi_sesiune_aleasa IS DISTINCT FROM r.sesiune_zi1 AND NEW.zi_sesiune_aleasa IS DISTINCT FROM r.sesiune_zi2
+                                          AND NEW.zi_sesiune_aleasa IS DISTINCT FROM r.sesiune_zi3) THEN
+      RAISE EXCEPTION 'redari: particip cere zi_sesiune_aleasa = una din zilele de sesiune ale UAT-ului' USING ERRCODE = '23514';
+    END IF;
+  ELSIF NEW.optiune IN ('nu_particip_cu_obiectii', 'constatare_teren') THEN
+    IF v_ob IS NULL THEN RAISE EXCEPTION 'redari: % cere obiectii_text nevid', NEW.optiune USING ERRCODE = '23514'; END IF;
+  ELSIF NEW.optiune = 'nu_particip_fara_obiectii' AND NEW.canal = 'online' AND NEW.declaratie_confirmata IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'redari: nu_particip_fara_obiectii online cere declaratie_confirmata = true' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_raspunsuri_valideaza() IS 'Redări: trigger BEFORE INSERT/UPDATE pe red_raspunsuri — particip ⇒ zi din sesiunile UAT-ului deținătorului; nu_particip_cu_obiectii / constatare_teren ⇒ obiectii_text nevid; nu_particip_fara_obiectii pe canal online ⇒ declaratie_confirmata = true (telefon / scris / sesiune: operatorul confirmă); created_at imutabil.';
 
 CREATE FUNCTION public.fn_red_updated_at() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -400,12 +442,12 @@ BEGIN
   IF TG_TABLE_NAME = 'red_parcele' THEN
     IF v_vechi IS NOT NULL THEN v_vechi := (v_vechi - 'valoare_lei') || jsonb_build_object('valoare_lei_setata', (v_vechi ->> 'valoare_lei') IS NOT NULL); END IF;
     IF v_noi IS NOT NULL THEN v_noi := (v_noi - 'valoare_lei') || jsonb_build_object('valoare_lei_setata', (v_noi ->> 'valoare_lei') IS NOT NULL); END IF;
-  -- PII: pe contact jurnalul primește DOAR câmpurile schimbate, cu sha256 al valorilor, niciodată valorile
+  -- PII: pe contact / meta jurnalul primește DOAR numele câmpurilor schimbate („modificat”), niciodată valorile și nici hash-uri (reversibile prin dicționar)
   ELSIF TG_TABLE_NAME IN ('red_detinatori_contact', 'red_raspunsuri_meta') THEN
-    SELECT jsonb_object_agg(e.k, 'sha256:' || encode(sha256(convert_to(e.v, 'UTF8')), 'hex')) INTO v_hash_noi
+    SELECT jsonb_object_agg(e.k, 'modificat') INTO v_hash_noi
       FROM jsonb_each_text(coalesce(v_noi, '{}'::jsonb) - 'updated_at' - 'detinator_id' - 'raspuns_id') e(k, v)
      WHERE e.v IS NOT NULL AND (v_vechi IS NULL OR (v_vechi ->> e.k) IS DISTINCT FROM e.v);
-    SELECT jsonb_object_agg(e.k, 'sha256:' || encode(sha256(convert_to(e.v, 'UTF8')), 'hex')) INTO v_hash_vechi
+    SELECT jsonb_object_agg(e.k, 'modificat') INTO v_hash_vechi
       FROM jsonb_each_text(coalesce(v_vechi, '{}'::jsonb) - 'updated_at' - 'detinator_id' - 'raspuns_id') e(k, v)
      WHERE e.v IS NOT NULL AND (v_noi IS NULL OR (v_noi ->> e.k) IS DISTINCT FROM e.v);
     v_noi := CASE WHEN v_noi IS NULL THEN NULL ELSE coalesce(v_hash_noi, '{}'::jsonb) END;
@@ -417,7 +459,7 @@ BEGIN
   VALUES (TG_TABLE_NAME, v_id, lower(TG_OP), v_vechi, v_noi, auth.uid(), auth.jwt() ->> 'email');
   RETURN NULL;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_jurnal() IS 'Redări: trigger AFTER INSERT/UPDATE/DELETE pe red_* → rând în red_jurnal (user_id = auth.uid(), user_email din JWT). Mascare valoare_lei; pe red_detinatori_contact / red_raspunsuri_meta doar câmpurile schimbate cu sha256 al valorilor; sare peste actualizările care schimbă doar updated_at. Protejează față de rolurile aplicației, nu față de administratorul BD.';
+COMMENT ON FUNCTION public.fn_red_jurnal() IS 'Redări: trigger AFTER INSERT/UPDATE/DELETE pe red_* → rând în red_jurnal (user_id = auth.uid(), user_email din JWT). Mascare valoare_lei; pe red_detinatori_contact / red_raspunsuri_meta doar numele câmpurilor schimbate („modificat”), fără valori și fără hash-uri; sare peste actualizările care schimbă doar updated_at. Protejează față de rolurile aplicației, nu față de administratorul BD.';
 
 CREATE FUNCTION public.fn_red_jurnal_imuabil() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -508,8 +550,6 @@ CREATE FUNCTION public.fn_red_rate_limit_atinge(p_cheie text, p_max int) RETURNS
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_n int;
 BEGIN
-  -- întreținere: contorul nu e tabelă de business — rândurile mai vechi de 24 h se șterg (singurul DELETE din modul, ca owner)
-  DELETE FROM public.red_rate_limit WHERE fereastra_start < now() - interval '24 hours';
   INSERT INTO public.red_rate_limit (cheie, fereastra_start, numar) VALUES (p_cheie, now(), 1)
   ON CONFLICT (cheie) DO UPDATE SET
     numar = CASE WHEN red_rate_limit.fereastra_start < now() - interval '10 minutes' THEN 1 ELSE red_rate_limit.numar + 1 END,
@@ -517,7 +557,22 @@ BEGIN
   RETURNING numar INTO v_n;
   RETURN v_n > p_max;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_rate_limit_atinge(text, integer) IS 'Redări: incrementează contorul cheii în fereastra curentă de 10 min; true = peste limită. Șterge rândurile mai vechi de 24 h (red_rate_limit nu e tabelă de business).';
+COMMENT ON FUNCTION public.fn_red_rate_limit_atinge(text, integer) IS 'Redări: incrementează contorul cheii în fereastra curentă de 10 min; true = peste limită.';
+
+CREATE FUNCTION public.fn_red_rate_limit_curata(p_forteaza boolean) RETURNS int
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_est real; v_n int := 0;
+BEGIN
+  -- întreținere: contorul nu e tabelă de business — rândurile mai vechi de 24 h se șterg (singurul DELETE din modul, ca owner), dar nu la
+  -- fiecare atingere: în ~2 % din apeluri sau când tabela depășește 10.000 de rânduri (estimare pg_class.reltuples); o dată per apel RPC
+  SELECT c.reltuples INTO v_est FROM pg_class c WHERE c.oid = 'public.red_rate_limit'::regclass;
+  IF p_forteaza OR random() < 0.02 OR coalesce(v_est, 0) > 10000 THEN
+    DELETE FROM public.red_rate_limit WHERE fereastra_start < now() - interval '24 hours';
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  END IF;
+  RETURN v_n;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_rate_limit_curata(boolean) IS 'Redări: șterge rândurile red_rate_limit mai vechi de 24 h — doar în ~2 % din apeluri sau peste 10.000 de rânduri estimate (p_forteaza = true: mereu). Apelată o singură dată per apel RPC public.';
 
 CREATE FUNCTION public.fn_red_formular_public(p_token text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -533,6 +588,7 @@ BEGIN
   IF p_token IS NULL OR p_token !~ '^[A-Za-z0-9_-]{43}$' THEN
     RETURN jsonb_build_object('ok', false, 'motiv', 'token_invalid') || coalesce(v_contact, '{}'::jsonb);
   END IF;
+  PERFORM public.fn_red_rate_limit_curata(false);
   IF public.fn_red_rate_limit_atinge('ip:' || v_ip, 30) THEN RETURN jsonb_build_object('ok', false, 'motiv', 'prea_multe'); END IF;
   SELECT d.id AS detinator_id, t.token_expira_la, p.id_parcela, u.nume AS uat_nume,
          u.sesiune_zi1, u.sesiune_zi2, u.sesiune_zi3, u.program_zi1, u.program_zi2, u.program_zi3,
@@ -571,17 +627,14 @@ LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS 
 DECLARE
   v_ip text := coalesce(public.fn_red_ip_client(), 'necunoscut');
   v_ob text := nullif(btrim(coalesce(p_obiectii, '')), '');
-  v_deja boolean; v_id uuid;
+  v_deja boolean; v_id uuid; v_gasit boolean;
   r record;
 BEGIN
   -- formatul tokenului (exact 43 caractere base64url) se verifică ÎNAINTE de orice scriere în red_rate_limit
   IF p_token IS NULL OR p_token !~ '^[A-Za-z0-9_-]{43}$' THEN
     RETURN jsonb_build_object('ok', false, 'motiv', 'token_invalid');
   END IF;
-  IF public.fn_red_rate_limit_atinge('ip:' || v_ip, 30) THEN RETURN jsonb_build_object('ok', false, 'motiv', 'prea_multe'); END IF;
-  IF public.fn_red_rate_limit_atinge('t:' || encode(sha256(convert_to(p_token, 'UTF8')), 'hex'), 5) THEN
-    RETURN jsonb_build_object('ok', false, 'motiv', 'prea_multe');
-  END IF;
+  PERFORM public.fn_red_rate_limit_curata(false);
   SELECT d.id AS detinator_id, t.token_expira_la, u.sesiune_zi1, u.sesiune_zi2, u.sesiune_zi3
     INTO r
     FROM public.red_detinatori_token t
@@ -589,8 +642,13 @@ BEGIN
     JOIN public.red_parcele p ON p.id = d.parcela_id AND p.sters_la IS NULL
     JOIN public.red_uat u ON u.id = p.uat_id
    WHERE t.token_raspuns = p_token;
-  IF NOT FOUND OR (r.token_expira_la IS NOT NULL AND now() > r.token_expira_la) THEN
-    RETURN jsonb_build_object('ok', false, 'motiv', 'token_invalid');
+  v_gasit := FOUND AND (r.token_expira_la IS NULL OR now() <= r.token_expira_la);
+  -- contorul IP se atinge mereu (ip:necunoscut cand x-forwarded-for lipseste — limita reala e la gateway-ul Supabase); cheia de token DOAR
+  -- pentru tokenuri existente si valide (multime finita → fara DoS prin chei arbitrare)
+  IF public.fn_red_rate_limit_atinge('ip:' || v_ip, 30) THEN RETURN jsonb_build_object('ok', false, 'motiv', 'prea_multe'); END IF;
+  IF NOT v_gasit THEN RETURN jsonb_build_object('ok', false, 'motiv', 'token_invalid'); END IF;
+  IF public.fn_red_rate_limit_atinge('t:' || encode(sha256(convert_to(p_token, 'UTF8')), 'hex'), 5) THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'prea_multe');
   END IF;
   IF p_optiune IS NULL OR p_optiune NOT IN ('particip', 'nu_particip_fara_obiectii', 'nu_particip_cu_obiectii', 'constatare_teren') THEN
     RETURN jsonb_build_object('ok', false, 'motiv', 'optiune_invalida');
@@ -621,7 +679,7 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'raspuns_id', v_id, 'optiune', p_optiune, 'deja_raspuns', v_deja)
          || CASE WHEN v_deja THEN jsonb_build_object('mesaj', 'Răspunsul anterior a fost înlocuit.') ELSE '{}'::jsonb END;
 END $fn$;
-COMMENT ON FUNCTION public.fn_red_raspuns_public(text, text, date, text, boolean, text) IS 'Redări, RPC public (anon): înregistrează răspunsul online (canal online, created_by NULL, IP din x-forwarded-for). Validări prin jsonb (token_invalid — și la format greșit, înainte de contor; optiune_invalida; zi_invalida — particip cere o zi din sesiunile UAT-ului; declaratie_neconfirmata; obiectii_lipsa; obiectii_prea_lungi; prea_multe). Al doilea răspuns se acceptă (istoricul rămâne, ultimul contează) cu deja_raspuns = true. NU trimite mail/SMS, NU generează PV (decizia 6).';
+COMMENT ON FUNCTION public.fn_red_raspuns_public(text, text, date, text, boolean, text) IS 'Redări, RPC public (anon): înregistrează răspunsul online (canal online, created_by NULL, IP din x-forwarded-for). Validări prin jsonb (token_invalid — la format greșit înainte de orice contor, la token inexistent / expirat după contorul IP; cheia de token se atinge doar pentru tokenuri existente; optiune_invalida; zi_invalida — particip cere o zi din sesiunile UAT-ului; declaratie_neconfirmata; obiectii_lipsa; obiectii_prea_lungi; prea_multe). Al doilea răspuns se acceptă (istoricul rămâne, ultimul contează) cu deja_raspuns = true. NU trimite mail/SMS, NU generează PV (decizia 6).';
 
 -- ─── 6. Trigger-e ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 CREATE TRIGGER trg_red_detinatori_before BEFORE INSERT OR UPDATE ON public.red_detinatori
@@ -636,6 +694,7 @@ CREATE TRIGGER trg_red_legaturi BEFORE INSERT OR UPDATE ON public.red_detinatori
 CREATE TRIGGER trg_red_legaturi BEFORE INSERT OR UPDATE ON public.red_convocari FOR EACH ROW EXECUTE FUNCTION public.fn_red_legaturi();
 CREATE TRIGGER trg_red_legaturi BEFORE INSERT OR UPDATE ON public.red_raspunsuri FOR EACH ROW EXECUTE FUNCTION public.fn_red_legaturi();
 CREATE TRIGGER trg_red_legaturi BEFORE INSERT OR UPDATE ON public.red_raspunsuri_meta FOR EACH ROW EXECUTE FUNCTION public.fn_red_legaturi();
+CREATE TRIGGER trg_red_raspunsuri_valideaza BEFORE INSERT OR UPDATE ON public.red_raspunsuri FOR EACH ROW EXECUTE FUNCTION public.fn_red_raspunsuri_valideaza();
 CREATE TRIGGER trg_red_legaturi BEFORE INSERT OR UPDATE ON public.red_procese_verbale FOR EACH ROW EXECUTE FUNCTION public.fn_red_legaturi();
 CREATE TRIGGER trg_red_legaturi BEFORE INSERT OR UPDATE ON public.red_import_loturi FOR EACH ROW EXECUTE FUNCTION public.fn_red_legaturi();
 CREATE TRIGGER trg_red_token_imutabil BEFORE UPDATE ON public.red_detinatori_token
@@ -665,8 +724,8 @@ REVOKE EXECUTE ON FUNCTION public.fn_red_nivel(), public.fn_red_token_expira_cal
   public.fn_red_token_imutabil(), public.fn_red_uat_sesiuni_dupa(), public.fn_red_legaturi(), public.fn_red_updated_at(), public.fn_red_jurnal(),
   public.fn_red_jurnal_imuabil(), public.fn_red_adresa_cunoscuta(uuid), public.fn_red_numar_document(text, text, integer),
   public.fn_red_rezerva_numere_parcele(text, integer, integer), public.fn_red_valoare_parcela(uuid), public.fn_red_valoare_parcela_seteaza(uuid, numeric),
-  public.fn_red_ip_client(), public.fn_red_rate_limit_atinge(text, integer), public.fn_red_formular_public(text),
-  public.fn_red_raspuns_public(text, text, date, text, boolean, text)
+  public.fn_red_ip_client(), public.fn_red_rate_limit_atinge(text, integer), public.fn_red_rate_limit_curata(boolean), public.fn_red_raspunsuri_valideaza(),
+  public.fn_red_formular_public(text), public.fn_red_raspuns_public(text, text, date, text, boolean, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_nivel(), public.fn_red_adresa_cunoscuta(uuid), public.fn_red_numar_document(text, text, integer),
   public.fn_red_rezerva_numere_parcele(text, integer, integer), public.fn_red_valoare_parcela(uuid), public.fn_red_valoare_parcela_seteaza(uuid, numeric)
@@ -920,7 +979,8 @@ BEGIN
   -- jurnal: 11 trigger-e (toate tabelele in afara de red_jurnal, red_rate_limit, red_detinatori_token) + imutabilitate; legaturi: 10 tabele
   IF (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_red_jurnal' AND tgfoid = 'public.fn_red_jurnal()'::regprocedure AND NOT tgisinternal) <> 11
      OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_jurnal'::regclass AND tgfoid = 'public.fn_red_jurnal_imuabil()'::regprocedure) <> 2
-     OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_red_legaturi' AND tgfoid = 'public.fn_red_legaturi()'::regprocedure AND NOT tgisinternal) <> 10 THEN
+     OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_red_legaturi' AND tgfoid = 'public.fn_red_legaturi()'::regprocedure AND NOT tgisinternal) <> 10
+     OR (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.red_raspunsuri'::regclass AND tgfoid = 'public.fn_red_raspunsuri_valideaza()'::regprocedure) <> 1 THEN
     RAISE EXCEPTION 'Postconditie: trigger-ele de jurnal / legaturi lipsesc';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'red_raspunsuri' AND a.attname = 'seq' AND a.attidentity = 'a') THEN
@@ -938,8 +998,11 @@ BEGIN
       RAISE EXCEPTION 'Postconditie: EXECUTE neasteptat pe %', f.sig;
     END IF;
   END LOOP;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_red\_%') <> 19 THEN
-    RAISE EXCEPTION 'Postconditie: nu sunt exact 19 functii fn_red_*';
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_red\_%') <> 21 THEN
+    RAISE EXCEPTION 'Postconditie: nu sunt exact 21 functii fn_red_*';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'red_rate_limit' AND indexname = 'idx_red_rate_limit_fereastra') THEN
+    RAISE EXCEPTION 'Postconditie: lipseste indexul pe red_rate_limit.fereastra_start';
   END IF;
   -- control 0e echivalent pe functiile expuse: fara scriere de GUC-uri de identitate, fara SQL dinamic, fara set role
   SELECT array_agg(p.oid::regprocedure::text) INTO v_expuse
@@ -957,6 +1020,14 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND policyname LIKE 'red\_%' AND cmd NOT IN ('SELECT', 'INSERT')) THEN
     RAISE EXCEPTION 'Postconditie: politicile storage red_storage_* nu sunt cele 2 asteptate (SELECT, INSERT)';
   END IF;
+  -- nicio politica PERMISIVA non-red_* de pe storage.objects nu poate acoperi bucket-ul redari: fiecare e legata de ALT bucket, ca prim termen
+  -- al unui AND (forma (bucket_id = 'x'::text)[ AND …]); un OR la nivel superior sau o legare de redari → refuz
+  SELECT array_agg(p.policyname::text ORDER BY p.policyname) INTO v_expuse
+    FROM pg_policies p
+   WHERE p.schemaname = 'storage' AND p.tablename = 'objects' AND p.permissive = 'PERMISSIVE' AND p.policyname NOT LIKE 'red\_storage\_%'
+     AND EXISTS (SELECT 1 FROM unnest(ARRAY[p.qual, p.with_check]) e
+                  WHERE e IS NOT NULL AND (e !~ '^[(]*bucket_id = ''[^'']+''::text[)]( AND .*)?$' OR e ~ 'bucket_id = ''redari'''));
+  IF v_expuse IS NOT NULL THEN RAISE EXCEPTION 'Postconditie: politici storage.objects care ar putea acoperi bucket-ul redari (nelegate de alt bucket): %', v_expuse; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'redari' AND is_active) THEN RAISE EXCEPTION 'Postconditie: cheia de modul redari lipseste'; END IF;
   IF EXISTS (SELECT 1 FROM public.user_module_access WHERE module = 'redari') THEN RAISE EXCEPTION 'Postconditie: migrarea nu acorda drepturi'; END IF;
 END $post$;
