@@ -283,8 +283,12 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(scrubSentryEvent(curat)?.message).toBe('ok')
   })
   it('r13 P1-1/P1-2 (Jakarinos): cheie JSON cu escape Unicode (`"to\u006ben"`); JSON împachetat de 4 ori; padding peste limită', () => {
-    const uni = { message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: '{"to\u006ben":[null,"' + T + '"]}' } }
+    const uni = { message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: '{"to\\u006ben":[null,"' + T + '"]}' } }
+    expect(uni.request.body.includes('\\u006b')).toBe(true)   // sirul contine chiar backslash-u (nu "token" decodat de JS la parsarea sursei)
+    expect(uni.request.body.includes('token')).toBe(false)
     const r1 = scrubSentryEvent(uni); expect(r1 === null || !JSON.stringify(r1).includes(T)).toBe(true)
+    const r1b = scrubSentryEvent({ message: 'ref_' + T, request: { url: '/intern', body: '{"to\\u006ben":[null,"' + T + '"], "padding":"' + 'x'.repeat(200000) + '"}' } })
+    expect(r1b).toBeNull()   // neparcurs (prea mare) + escape-uri => purtator => null
     const uni2 = { message: 'ref_' + T, request: { url: '/intern', data: { 'p_token': { v: T } } } }   // cheie reală `p_token` (JS o decodează la creare)
     const r2 = scrubSentryEvent(uni2); expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
     let body = JSON.stringify({ token: { nested: { value: T } } })

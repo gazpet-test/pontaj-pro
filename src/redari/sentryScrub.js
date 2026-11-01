@@ -134,7 +134,7 @@ export function colecteazaTokenuriEveniment(event, adancime = 0) {
   const dinJson = (f) => {
     if (!/^\s*[[{]/.test(f)) return
     // Jakarinos r13 P1-1: cheia poate fi scrisă cu escape Unicode (`"to\u006ben"`) — un JSON neparcurs cu escape-uri e și el suspect
-    const refuza = () => { if (/token|raspuns|\u[0-9a-f]{4}/i.test(f)) tokenuri.refuzat = true }
+    const refuza = () => { if (/token|raspuns|\\u[0-9a-f]{4}/i.test(f)) tokenuri.refuzat = true }
     if (adancime >= 4 || f.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
     let obj
     try { obj = JSON.parse(f) } catch { return refuza() }
