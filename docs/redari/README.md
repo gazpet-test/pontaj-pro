@@ -2,9 +2,12 @@
 
 Stare la 02.11.2026 dimineața (felia de noapte 01→02.11, branch `feat/redari-teren`). Brief: `BRIEF_2026-11-01.md` (Răzvan, prin Proiectul
 Juridic). Contractul tehnic obligatoriu: `CONTRACT_SCHEMA.md`. Șabloanele și harta câmpurilor: `SABLOANE.md`. Migrarea și verificarea ei:
-`MIGRARE_20261126a.md`. **Migrarea `20261126a` NU e aplicată pe producție** (runda 4 scrisă după Jakarinos r3 — 0 P1 / 6 P2 — și Copilot r3 — GO cu
-observații; verificată local PG17 PASS; review Jakarinos + Copilot r4 în curs). Frontend-ul: Jakarinos r3 NO-GO (2 P1 / 8 P2), runda 4 (logica r5 +
-docx r6 + ui r6) scrisă și integrată — toate punctele r3 închise în cod, așteaptă review-ul Jakarinos r4. PR-ul nu e deschis.
+`MIGRARE_20261126a.md`. **Migrarea `20261126a` (r6) ESTE APLICATĂ pe producție** — 01.11.2026 23:4x, după regula #1877 (decizia 2A): Jakarinos
+r6 GO (P1=0, P2=0), Copilot r6 GO cu observații (P1=0), DRY r1–r6 verzi pe prod, apply prin `scripts/livrare_migrare.sh` (versiune
+`20261126120000`, sha256 `9fcc00c2…d955`, GATE 0e = 0). Sanity după aplicare: 14 tabele `red_*`, 22 funcții `fn_red_*`, 32 politici, bucket
+`redari` privat, cele 3 RPC publice/`fn_red_nivel` sunt SECURITY DEFINER cu `search_path = public, pg_temp`. **Niciun drept acordat** (vezi §5).
+Frontend-ul: Jakarinos r6 NO-GO (2 P1 Sentry + 1 P2) → runda 9 UI (Sentry DROP pe formularul public + verificare finală; generație în Registru)
+integrată în `feat/redari-teren` (commit `b8b4c32e`, build + 150 teste verzi); Jakarinos r7 + Copilot FE r1 în curs. PR-ul nu e deschis.
 
 ## 1. Scop
 
@@ -152,9 +155,9 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
 6. Completarea datelor proiectului și a zilelor de sesiune pe UAT (SQL de admin, până apare ecranul Setări/UAT).
 
 ## 6. Cum se revine
-- **Înainte de aplicare**: nimic de revenit — migrarea nu atinge niciun obiect existent (în afară de un rând în `app_modules` și 2 politici pe
+- Migrarea e aplicată (01.11.2026); nu a atins niciun obiect existent (în afară de un rând în `app_modules` și 2 politici pe
   `storage.objects`, create de ea).
-- **După aplicare**: `supabase/revenire/20261126a_redari_teren_ROLLBACK.sql`, într-o singură tranzacție, ca `postgres`, armată cu
+- **Revenire**: `supabase/revenire/20261126a_redari_teren_ROLLBACK.sql`, într-o singură tranzacție, ca `postgres`, armată cu
   `set_config('gazpet.revenire_20261126a', 'REDARI_TEREN_SCOASA:' || txid_current(), true)`. Ia ÎNTÂI lock-uri ACCESS EXCLUSIVE pe cele 14 tabele
   + SHARE ROW EXCLUSIVE pe `user_module_access` (fereastră de mentenanță; `lock_timeout` 5 s → dacă pică, nu face nimic). **Refuză** dacă: nu e
   armată; armarea e persistentă; migrarea nu e aplicată; bucket-ul `redari` are obiecte (se golește prin API întâi, cu decizia lui Răzvan);
