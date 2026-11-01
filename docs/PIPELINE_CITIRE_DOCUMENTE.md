@@ -228,6 +228,8 @@ Testele: 56 Deno (`deno test -A scripts/recitire_val1/`) și harness-ul PG16 `sc
 
 ### 1.5 Porțile și plafoanele (rezumat)
 
+**Poarta unică pe cheltuială (20261124a, #908, decizia Răzvan 01.11 „1 + A”):** „owner / responsabil” din tabelul de mai jos = `fn_ofertare_poate_cheltui(licitație, utilizator)`: ownerul, sau responsabilul 1 / 2 numit de owner / un admin Ofertare (nu autoatribuit); numirile vechi fără „numit de” rămân permise. Toate edge-urile cu poartă o cheamă prin `_shared/poartaCheltuiala.ts` (fail-closed); `scripts/verifica-poarta-identica.mjs` (CI) refuză comparațiile manuale pe `responsabil_id`.
+
 | Pas plătit | Cine îl poate porni | Plafon / control |
 |---|---|---|
 | Ingest (`ofertare-ingest-doc`) | owner sau responsabilul licitației, sau worker-ul NAS (secret) | per apel în `ai_usage_log`, fără plafon pe licitație |
@@ -416,3 +418,4 @@ cu textul (layout pe 2 coloane) sunt ambigue — marcate manual în `banca\v2\ex
 | 21.10.2026 | #819 | Normalizator **n7** (A și B): în `blocRand`, sub un articol numerotat cu zerouri („003 …”), linia „<n> COD <cod>” cu n fără zerouri care nu continuă secvența (≠ nr., nr.+1, 1) e continuarea denumirii rupte, nu început de articol — aceeași regulă ca inventarul B1 („posibila_continuare”, decizia Răzvan 21.10, cazul iii „A”). Orice altă formă rămâne început de articol (incert). Replay offline pe A n6 (lic. 15): 4 din 29 de rânduri F3 nedovedite devin dovedite |
 | 23.10.2026 | E9 | Worker E3 (`e3_gpu.memory_mb`): `wsl --exec` nu caută în PATH, deci `nvidia-smi` se cheamă cu calea WSL fixă `/usr/lib/wsl/lib/nvidia-smi` (config `nvidia_smi`). Înainte: la oprire / reconciliere serviciul cădea cu `vllm_control`, după ce oprise modelele, iar lacătul GPU rămânea (reluabil de E3). |
 | 01.11.2026 | #906 | Asamblarea textului pe document intră în `scripts/ocr_local/asamblare.py` (din `ocrlab_tmp/rt_text_conv.py`): doar benzi valide (ok + `raw_sha256` obligatoriu), tabele → rânduri înainte de lipire (barele nu intră în pragul cusăturii), nr. + cod despărțite doar cu context de deviz (nr. cu zerouri în față sau o celulă UM / „Cantitate=” pe rând), tabele cu o coloană → text. Regresie Răcari rt4: 15/16 identice, d1654 cu 3 cusături în plus marcate nesigure (suprapunerea păstrată, nu tăiată în tăcere) |
+| 01.11.2026 | #908 | Poarta unică pe cheltuială (`fn_ofertare_poate_cheltui`, 20261124a): responsabil 1 / 2 numit de owner / admin Ofertare, nu autoatribuit; ingest-doc, document-nou-citeste, plansa-citeste, cantitati-extrage și celelalte edge-uri ofertare-* cu cost o folosesc prin `_shared/poartaCheltuiala.ts` |
