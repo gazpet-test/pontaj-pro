@@ -226,4 +226,17 @@ BEGIN
                AND tablename IN ('ofertare_acoperire_coada', 'ofertare_clarificari_coada', 'ofertare_extragere_coada', 'ofertare_ingest_coada')
                AND cmd <> 'SELECT') THEN RAISE EXCEPTION 'TEST7 politici de scriere ramase'; END IF;
   RAISE NOTICE 'TEST7 OK';
+
+  -- (8) r4 (review r3 Copilot P1-02): cheltuiala fără licitație (RFQ neasociat) = doar ownerul, printr-o funcție a migrării; EXECUTE doar service_role
+  IF fn_ofertare_poate_cheltui_fara_licitatie(v_owner) IS DISTINCT FROM true OR fn_ofertare_poate_cheltui_fara_licitatie(v_admin) IS DISTINCT FROM false
+     OR fn_ofertare_poate_cheltui_fara_licitatie(v_editor) IS DISTINCT FROM false OR fn_ofertare_poate_cheltui_fara_licitatie(NULL) IS DISTINCT FROM false
+     OR fn_ofertare_poate_cheltui_fara_licitatie('00000000-0000-0000-0000-000000000000') IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'TEST8 poarta fara licitatie gresita';
+  END IF;
+  IF has_function_privilege('authenticated', 'public.fn_ofertare_poate_cheltui_fara_licitatie(uuid)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.fn_ofertare_poate_cheltui_fara_licitatie(uuid)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.fn_ofertare_poate_cheltui_fara_licitatie(uuid)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'TEST8 drepturi gresite pe poarta fara licitatie';
+  END IF;
+  RAISE NOTICE 'TEST8 OK (fara licitatie: doar owner, EXECUTE doar service_role)';
 END $t$;

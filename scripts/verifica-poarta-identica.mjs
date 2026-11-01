@@ -24,5 +24,16 @@ for (const d of readdirSync(F).filter((x) => x.startsWith('ofertare-'))) {
     readFileSync(p, 'utf8').split('\n').forEach((l, i) => { if (MANUAL.test(l) && !l.trim().startsWith('//')) eroare(`${p}:${i + 1} compară de mână responsabilul: ${l.trim().slice(0, 120)}`) })
   }
 }
+// (4) #908 r4 (review r3 Jakarinos P1-01): nicio funcție cu poartă nu mai lasă cheia de serviciu / un secret tehnic să cheltuie „liber”
+const SERVICIU_LIBER = /service_role'\)\s*return null|SERVICE_ROLE_KEY'\)\s*\|\|\s*rol\s*===\s*'service_role'\)\s*return null|fn_verifica_radar_secret/
+for (const d of CU_POARTA) {
+  for (const p of tsDin(d)) {
+    readFileSync(p, 'utf8').split('\n').forEach((l, i) => { if (SERVICIU_LIBER.test(l) && !l.trim().startsWith('//')) eroare(`${p}:${i + 1} cale de serviciu fără poartă: ${l.trim().slice(0, 120)}`) })
+  }
+}
+// planșe: prin HTTP cheia de serviciu nu e valabilă (handler-ul primește SERVICE = ''); workerul NAS cheamă handler-ul în proces, cu poarta
+if (!/handler\(req, \{ \.\.\.depsReale\(\), SERVICE: '' \}\)/.test(readFileSync(join(F, 'ofertare-plansa-citeste', 'index.ts'), 'utf8')))
+  eroare('ofertare-plansa-citeste/index.ts nu mai golește SERVICE pentru apelurile HTTP')
+if (!readFileSync('worker/ofertare/plansa.ts', 'utf8').includes("from '../../supabase/functions/_shared/poartaCheltuiala.ts'")) eroare('worker/ofertare/plansa.ts nu mai întreabă poarta pe cheltuială')
 if (rau) process.exit(1)
 console.log(`✅ poarta unică pe cheltuială: ${CU_POARTA.length} funcții pe _shared/poartaCheltuiala.ts, nicio comparație manuală`)

@@ -2,7 +2,7 @@
 -- (Vercel) și workerul NAS pe versiunea dinaintea PR-ului (altfel: edge-urile cheamă o funcție care nu mai există = poarta refuză tot, iar UI-ul
 -- vechi scrie direct în cozi), apoi: funcțiile EXACT ca înainte (plansa_coada_inscrie, j02b, trigger-ul de numire, tick-ul extragerii),
 -- RPC-urile cozilor scoase, politicile + privilegiile de scriere ale cozilor refăcute ca în 20260928p, funcția porții și coloanele de dovadă
--- (2A) scoase dacă sunt goale; dacă au dovezi, se conservă redenumite (r3).
+-- (2A) scoase; dovezile existente se copiază întâi în tabelul de arhivă ofertare_numiri_dovezi_arhiva (r4, decizia 2A).
 -- ORDINEA REVENIRII (r3, review r2 Copilot P1-03): consumatorii opriți (workerul NAS + joburile pg_cron, scripts/ofertare_908_consumatori.sql
 -- „suspenda”) → edge-urile + UI pe versiunea anterioară, FĂRĂ a reporni workerul → acest fișier → workerul vechi și cron-urile repornite DOAR
 -- cu acordul explicit al lui Răzvan: revenirea readuce politica veche, mai permisivă, de cheltuială (efect de securitate acceptat explicit).
@@ -253,18 +253,48 @@ GRANT INSERT, SELECT, UPDATE, DELETE, REFERENCES, TRIGGER
   ON public.ofertare_acoperire_coada, public.ofertare_clarificari_coada, public.ofertare_extragere_coada, public.ofertare_ingest_coada TO anon, authenticated;
 
 DROP FUNCTION public.fn_ofertare_poate_cheltui(bigint, uuid);
+DROP FUNCTION public.fn_ofertare_poate_cheltui_fara_licitatie(uuid);
 
--- r3 (review r2: Jakarinos P1-05 / Copilot P2-04): dovezile numirilor făcute după livrare NU se distrug. Sub lock: fără dovezi → coloanele
--- se scot; cu dovezi → se CONSERVĂ, redenumite *_arhiva_20261124a (codul vechi nu le citește, trigger-ul vechi nu le atinge). O reaplicare
--- ulterioară a porții cere atunci o migrare nouă care preia arhiva (garda „numit de completat” din 20261124a o oprește oricum).
+-- r4 (decizia Răzvan 2A, 01.11.2026; review r3 Copilot P2-04 / Jakarinos P2-02): dovezile numirilor făcute după livrare NU se distrug și nici
+-- nu rămân în coloane neprotejate: sub lock, ASOCIEREA completă (licitație, rol 1/2, responsabil, numit de, dovadă) se copiază într-un tabel
+-- de arhivă — RLS, citire doar pentru owner, nicio scriere din aplicație (nici authenticated, nici anon); apoi coloanele de dovadă se scot.
+-- Tabelul se creează DOAR dacă există dovezi; rămâne și după revenire (IF NOT EXISTS + marcajul revenirii): o reaplicare ulterioară a porții îl poate prelua printr-o migrare nouă.
 DO $dovezi$
+DECLARE v_n int;
 BEGIN
   LOCK TABLE public.ofertare_licitatii IN SHARE ROW EXCLUSIVE MODE;
-  IF EXISTS (SELECT 1 FROM public.ofertare_licitatii WHERE responsabil_numitor_autorizat IS NOT NULL OR responsabil2_numitor_autorizat IS NOT NULL) THEN
-    ALTER TABLE public.ofertare_licitatii RENAME COLUMN responsabil_numitor_autorizat TO responsabil_numitor_autorizat_arhiva_20261124a;
-    ALTER TABLE public.ofertare_licitatii RENAME COLUMN responsabil2_numitor_autorizat TO responsabil2_numitor_autorizat_arhiva_20261124a;
-    RAISE NOTICE '20261124a revenire: dovezile de numire CONSERVATE in *_arhiva_20261124a';
-  ELSE
+  SELECT count(*) INTO v_n FROM public.ofertare_licitatii WHERE responsabil_numitor_autorizat IS NOT NULL OR responsabil2_numitor_autorizat IS NOT NULL;
+  IF v_n = 0 THEN   -- nicio dovadă (ex. revenire imediat după livrare): doar coloanele se scot, nimic nou în schemă
     ALTER TABLE public.ofertare_licitatii DROP COLUMN responsabil_numitor_autorizat, DROP COLUMN responsabil2_numitor_autorizat;
+    RAISE NOTICE '20261124a revenire: nicio dovada de numire de arhivat';
+    RETURN;
   END IF;
+  CREATE TABLE IF NOT EXISTS public.ofertare_numiri_dovezi_arhiva (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    licitatie_id bigint NOT NULL,
+    rol smallint NOT NULL CHECK (rol IN (1, 2)),
+    responsabil_id uuid,
+    numit_de uuid,
+    dovada boolean NOT NULL,
+    revenire text NOT NULL,
+    arhivat_la timestamptz NOT NULL DEFAULT now()
+  );
+  COMMENT ON TABLE public.ofertare_numiri_dovezi_arhiva IS
+    'Arhiva dovezilor de numire (2A) la revenirea 20261124a: licitație, rol 1/2, responsabil, numit de, dovadă. Citire doar owner, fără scriere din aplicație.';
+  ALTER TABLE public.ofertare_numiri_dovezi_arhiva ENABLE ROW LEVEL SECURITY;
+  REVOKE ALL ON public.ofertare_numiri_dovezi_arhiva FROM PUBLIC, anon, authenticated;
+  GRANT SELECT ON public.ofertare_numiri_dovezi_arhiva TO authenticated;
+  GRANT ALL ON public.ofertare_numiri_dovezi_arhiva TO service_role;
+  DROP POLICY IF EXISTS ofertare_numiri_dovezi_arhiva_owner_sel ON public.ofertare_numiri_dovezi_arhiva;
+  CREATE POLICY ofertare_numiri_dovezi_arhiva_owner_sel ON public.ofertare_numiri_dovezi_arhiva FOR SELECT TO authenticated
+    USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner IS TRUE));
+  INSERT INTO public.ofertare_numiri_dovezi_arhiva (licitatie_id, rol, responsabil_id, numit_de, dovada, revenire)
+  SELECT l.id, r.rol, r.resp, r.numit_de, r.dovada, '20261124a:' || txid_current()
+    FROM public.ofertare_licitatii l
+    CROSS JOIN LATERAL (VALUES (1::smallint, l.responsabil_id, l.responsabil_setat_de, l.responsabil_numitor_autorizat),
+                               (2::smallint, l.responsabil2_id, l.responsabil2_setat_de, l.responsabil2_numitor_autorizat)) AS r(rol, resp, numit_de, dovada)
+   WHERE r.dovada IS NOT NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  ALTER TABLE public.ofertare_licitatii DROP COLUMN responsabil_numitor_autorizat, DROP COLUMN responsabil2_numitor_autorizat;
+  RAISE NOTICE '20261124a revenire: % dovezi de numire arhivate in ofertare_numiri_dovezi_arhiva', v_n;
 END $dovezi$;

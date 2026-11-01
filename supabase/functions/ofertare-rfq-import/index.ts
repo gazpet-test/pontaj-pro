@@ -12,7 +12,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { ofertaValida, pretNormalizat } from './validare.ts'
 import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
-import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
+import { poateCheltui, poateCheltuiFaraLicitatie } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -30,13 +30,15 @@ function fileToBase64(bytes: Uint8Array): string {
 
 // Poarta de rol. Rolul se ia din payload-ul JWT, nu prin comparație de string: env-ul funcției
 // poate avea alt format de cheie decât JWT-ul legacy trimis de workeri (lecția din 14.09).
-// service_role trece liber — așa o apelează ofertare-rfq-inbox. Omul: doar ownerul sau
+// r4 (#908, decizia Răzvan 1A 01.11): service_role NU mai trece — ofertare-rfq-inbox doar înregistrează oferta. Omul: doar ownerul sau
 // responsabilul licitației de care ține cererea de ofertă (poarta pe cheltuială).
 async function autorizat(req: Request, supabase: any, rfqId: number | null): Promise<string | null> {
   const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
   if (!jwt) return 'lipsește Authorization'
   const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
-  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  // r4 (#908, review r3 Jakarinos P1-01): cheia de serviciu NU mai e cale de cheltuială — autentificarea serviciului nu ține loc de dreptul
+  // de cheltuială al unei persoane (niciun apelant intern nu folosea calea; ofertare-rfq-inbox nu mai cheamă importul, decizia 1A 01.11)
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return 'apel neautorizat (cheie de serviciu)'
   if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') return 'apel neautorizat (cheie anon)'
   const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
   const { data: u } = await anon.auth.getUser()
@@ -49,8 +51,9 @@ async function autorizat(req: Request, supabase: any, rfqId: number | null): Pro
   // review #908 r1 Copilot P2-01: cererea legată de o licitație trece DOAR prin poarta unică (owner inclus, refuz la RPC căzut);
   // cererea de ofertă fără licitație nu are responsabil — o pornește doar ownerul (singura ramură în afara RPC-ului, fail-closed)
   if (rfq.licitatie_id) return (await poateCheltui(supabase, rfq.licitatie_id, uid)) ? null : refuz
-  const { data: prof, error: eProf } = await supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle()
-  return !eProf && prof?.is_owner === true ? null : refuz
+  // r4 (review r3 Copilot P1-02): și ramura fără licitație trece printr-o funcție a migrării 20261124a (doar ownerul) — până la migrare
+  // funcția lipsește → refuz; regula stă în SQL, nu în edge
+  return (await poateCheltuiFaraLicitatie(supabase, uid)) ? null : refuz
 }
 
 Deno.serve(async (req: Request) => {

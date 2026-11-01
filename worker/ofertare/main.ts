@@ -11,7 +11,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
 import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
-import { cerereaTrecePoarta, gardaCheltuiala, type CoadaAi } from './poarta_coada.ts'
+import { cerereaTrecePoarta, gardaCheltuiala, scrieCas, type CoadaAi, type Garda } from './poarta_coada.ts'
 import { proceseazaClarificari } from './clarificari.ts'
 import { proceseazaSourcePacks } from './source_pack.ts'
 import { proceseazaSeap } from './seap.ts'
@@ -66,7 +66,9 @@ async function proceseazaLicitatie(id: number) {
       if (c.poz >= pasi.length) {
         const acum = new Date().toISOString()
         const nota = `${pasi.length} pași, ${c.cerinte_noi} cerințe noi, ${c.erori} pași cu eroare (worker NAS ${SHA})`
-        await supabase.from('ofertare_extragere_coada').update({ activ: false, terminat_la: acum, nota, ultimul_tick: acum }).eq('licitatie_id', id)
+        // r4: închiderea doar pe ACEEAȘI cerere (CAS); o cerere nouă pusă între timp nu se închide cu nota celei vechi
+        const rInch = await scrieCas(supabase, 'ofertare_extragere_coada', id, { cerut_la: c.cerut_la, cerut_de: c.cerut_de ?? null }, { activ: false, terminat_la: acum, nota, ultimul_tick: acum })
+        if (rInch !== 'ok') { log(`#${id}: închiderea extragerii — ${rInch === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp, n-o ating' : 'scrierea a eșuat, reiau'}`); if (rInch === 'eroare') { await sleep(30_000); continue } return }
         if (c.cerut_de) {
           const { data: li } = await supabase.from('ofertare_licitatii').select('id, nr_anunt').eq('id', id).maybeSingle()
           const { error: eN } = await supabase.from('notifications').insert({
@@ -80,7 +82,7 @@ async function proceseazaLicitatie(id: number) {
         return
       }
       // 20261124a (3A): un pas nou costă — doar dacă cine a cerut extragerea trece ACUM poarta pe cheltuială (poarta_coada.ts)
-      const { v: pc } = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id, c.cerut_la)
+      const { v: pc } = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id, { cerut_la: c.cerut_la, cerut_de: c.cerut_de ?? null })
       if (pc === 'refuz' || pc === 'inlocuita') { log(`#${id}: extragere ${pc === 'refuz' ? 'refuzată / oprită — cerut_de nu trece poarta pe cheltuială' : 'înlocuită de o cerere nouă'}`); return }
       if (pc === 'eroare') { inLucru.set(id, 'aștept poarta pe cheltuială (eroare de citire)'); await sleep(30_000); continue }
       const pas = pasi[c.poz] ?? {}
@@ -158,10 +160,11 @@ for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => 
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
 // 20261124a (3A + r2 P1-03): ingest / acoperire / clarificări pornesc doar dacă cerut_de trece poarta, iar procesarea primește o gardă
-// legată de generația cererii (cerut_la), întrebată înaintea FIECĂRUI apel plătit. La eroare de citire la pornire: pauză (fără cost), se reia.
-async function cuPoarta(tabel: CoadaAi, lid: number, lucru: (poarta: () => Promise<boolean>) => Promise<unknown>) {
-  const { v, generatie } = await cerereaTrecePoarta(supabase, tabel, lid)
-  if (v === 'da') return await lucru(gardaCheltuiala(supabase, tabel, lid, generatie))
+// legată de cererea citită (cerut_la + cerut_de), întrebată înaintea FIECĂRUI apel plătit; scrierile pe coadă trec prin garda.scrie (CAS, r4).
+// La eroare de citire la pornire: pauză (fără cost), se reia.
+async function cuPoarta(tabel: CoadaAi, lid: number, lucru: (poarta: Garda) => Promise<unknown>) {
+  const { v, cerere } = await cerereaTrecePoarta(supabase, tabel, lid)
+  if (v === 'da' && cerere) return await lucru(gardaCheltuiala(supabase, tabel, lid, cerere))
   log(`#${lid}: ${tabel} ${v === 'eroare' ? 'poarta nu s-a putut verifica, reiau mai târziu' : v === 'refuz' ? 'refuzată — cerut_de nu trece poarta pe cheltuială' : 'înlocuită între timp'}`)
   if (v === 'eroare') await sleep(30_000)
 }

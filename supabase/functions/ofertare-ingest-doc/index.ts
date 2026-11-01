@@ -137,8 +137,14 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<{ 
   })
   if (id.tip === 'refuz') return { eroare: id.motiv, status: id.status, uid: null }
   if (id.tip === 'serviciu') {
-    const { data } = await supabase.from('ofertare_ingest_coada').select('cerut_de').eq('licitatie_id', licId).maybeSingle()
-    return { eroare: null, status: 200, uid: data?.cerut_de || null }
+    // r4 (#908, review r3 Jakarinos P1-02 / Copilot P1-04): secretul workerului dovedește doar CINE cheamă, nu cine plătește — fiecare
+    // invocare internă (= o felie AI) cere o cerere ACTIVĂ în coada de citire, cu cerut_de (scris doar de ofertare_coada_porneste după
+    // 20261124a) care trece ACUM poarta pe cheltuială. Citire căzută / coadă inactivă / cerut_de lipsă / poarta NU = refuz, fără AI.
+    const { data, error } = await supabase.from('ofertare_ingest_coada').select('activ, cerut_de').eq('licitatie_id', licId).maybeSingle()
+    if (error) return { eroare: 'coada de citire nu s-a putut verifica — nu pornesc nimic (fail-closed)', status: 503, uid: null }
+    if (data?.activ !== true || !data?.cerut_de) return { eroare: 'apel intern fără o cerere activă în coada de citire', status: 403, uid: null }
+    if (!(await poateCheltui(supabase, licId, data.cerut_de))) return { eroare: 'Cine a cerut citirea nu mai trece poarta pe cheltuială (owner / responsabil numit de owner sau de un admin Ofertare).', status: 403, uid: null }
+    return { eroare: null, status: 200, uid: data.cerut_de }
   }
   if (await poateCheltui(supabase, licId, id.uid)) return { eroare: null, status: 200, uid: id.uid }
   return { eroare: 'Citirea integrală o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).', status: 403, uid: null }

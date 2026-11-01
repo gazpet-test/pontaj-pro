@@ -19,7 +19,7 @@
 // scris. Fiecare rulare lucrează cât îi permite bugetul, SCRIE ce a găsit, și întoarce
 // `continua: true` + indexul următor. Același tipar ca ofertare-seap-import.
 //
-// Auth: JWT de utilizator SAU x-radar-secret. Body: {licitatie_id, dry_run?, de_la?}.
+// Auth: JWT de utilizator + poarta pe cheltuială (x-radar-secret scos în #908 r4). Body: {licitatie_id, dry_run?, de_la?}.
 // ⚠️ dry_run = PREVIZUALIZARE AI PLĂTITĂ: apelurile AI rulează (consumă credit, se jurnalizează în
 // ai_usage_log), doar scrierea în ofertare_cantitati e sărită. NU e o probă gratuită; limitează cu max_felii.
 // Răspunsul poartă previzualizare_platita:true. (Propunere, neimplementată: mod `preflight` fără AI —
@@ -138,13 +138,6 @@ async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG:
 // FELIE / SUPRAPUNERE și feliile pe secțiuni (F3 / C6 / C7–C9): sectiuni.ts
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
 
-async function secretOk(req: Request, db: any): Promise<boolean> {
-  const s = req.headers.get('x-radar-secret')
-  if (!s) return false
-  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
-  return !error && data === true
-}
-
 const PROMPT = (nume: string, tip: string, obiectCurent: string) => `Ești inginer de devize într-o firmă de construcții de conducte. Citește bucata de mai jos din documentația unei licitații publice și extrage POZIȚIILE CANTITATIVE — materiale, lucrări, echipamente — cu cantitatea și unitatea lor.
 
 Document: "${nume}" (tip: ${tip})
@@ -213,7 +206,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   let modCerut = ''
   try { modCerut = String(JSON.parse(bodyBrut || '{}')?.mod || '') } catch { /* gol */ }
   if (modCerut === 'structurat') return await ruleazaStructurat(req, deps, bodyBrut)
-  if (!(await secretOk(req, db))) {
+  // r4 (#908, review r3 Jakarinos P1-01): calea x-radar-secret e SCOASĂ și din modul vechi (fără apelanți în cron / edge / worker) —
+  // un secret tehnic nu ține loc de dreptul de cheltuială al unei persoane. Doar utilizator verificat de Auth + poarta unică.
+  {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim()
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
     uidApelant = await deps.getUser(jwt)
@@ -232,11 +227,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const M = MODELE[furnizor]
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
   // 25.09.2026 (audit țintit, CLAUDE.md 7d): apel PLĂTIT — „poarta pe cheltuială" și pe server, nu doar în UI.
-  // Pornește doar ownerul sau responsabilul licitației (calea x-radar-secret/worker rămâne neatinsă).
-  if (uidApelant) {
-    if (!await poateCheltui(db, licId, uidApelant))   // poarta unică (20261124a): owner / responsabil 1-2 numit de owner sau admin
-      return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
-  }
+  // Pornește doar ownerul sau responsabilul licitației (r4: fără excepția x-radar-secret).
+  if (!await poateCheltui(db, licId, uidApelant))   // poarta unică (20261124a): owner / responsabil 1-2 numit de owner sau admin
+    return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
   const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
     : furnizor === 'anthropic' ? (!KEY_A && 'ANTHROPIC_API_KEY')
     : (!KEY_O && 'OPENAI_API_KEY')

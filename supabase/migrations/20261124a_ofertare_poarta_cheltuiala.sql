@@ -26,6 +26,9 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261124a: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  IF to_regprocedure('public.fn_ofertare_poate_cheltui_fara_licitatie(uuid)') IS NOT NULL THEN
+    RAISE EXCEPTION '20261124a: fn_ofertare_poate_cheltui_fara_licitatie exista deja';
+  END IF;
   IF to_regprocedure('public.fn_ofertare_poate_cheltui(bigint,uuid)') IS NOT NULL THEN
     RAISE EXCEPTION '20261124a: fn_ofertare_poate_cheltui exista deja';
   END IF;
@@ -155,6 +158,22 @@ COMMENT ON FUNCTION public.fn_ofertare_poate_cheltui(bigint, uuid) IS
   'Poarta unică pe cheltuială AI în Ofertare (20261124a): owner, sau responsabil 1/2 cu dovada de numire (numitorul era owner / admin Ofertare la numire, nu el însuși — 2A); numirile vechi fără „numit de” și fără dovadă = permise (decizia A, 01.11.2026). Doar service_role + funcțiile SECURITY DEFINER.';
 REVOKE ALL ON FUNCTION public.fn_ofertare_poate_cheltui(bigint, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_ofertare_poate_cheltui(bigint, uuid) TO service_role;
+
+-- r4 (review r3 Copilot P1-02): cheltuiala fără licitație (RFQ neasociat, fără responsabil) = doar ownerul, tot printr-o funcție a acestei
+-- migrări — edge-ul nu mai citește is_owner de mână; înainte de migrare funcția lipsește → refuz (fail-closed).
+CREATE FUNCTION public.fn_ofertare_poate_cheltui_fara_licitatie(p_uid uuid)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT p_uid IS NOT NULL AND COALESCE((SELECT pr.is_owner FROM public.profiles pr WHERE pr.id = p_uid), false);
+$function$;
+COMMENT ON FUNCTION public.fn_ofertare_poate_cheltui_fara_licitatie(uuid) IS
+  'Poarta pe cheltuială AI în Ofertare fără licitație (RFQ neasociat): doar ownerul (20261124a r4). Doar service_role.';
+REVOKE ALL ON FUNCTION public.fn_ofertare_poate_cheltui_fara_licitatie(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_ofertare_poate_cheltui_fara_licitatie(uuid) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.ofertare_plansa_coada_inscrie(p_doc_id bigint, p_mod text DEFAULT 'citeste'::text)
  RETURNS jsonb

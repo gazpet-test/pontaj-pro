@@ -4,18 +4,20 @@
 // fără limita de 150 s a gateway-ului: batch-ul „eliminatorie” de 51 cerințe la Jilava cădea acolo.
 // Orchestrarea (felii de 55, reluări la 27, note finale) e portată din OfertareLicitatii.jsx → propune().
 import { propuneAcoperiri } from '../../supabase/functions/ofertare-acoperire/core.ts'
+import type { Garda } from './poarta_coada.ts'
 
 const FELIE = 55, FELIE_RELUARE = 27, MAX_INCERCARI = 3
 // 20261124a (r2 Jakarinos P1-03): poarta pe cheltuială se întreabă înaintea FIECĂRUI apel plătit (felie, reîncercare, jumătate);
 // refuz / cerere înlocuită / eroare → rularea se oprește fără notă finală (garda a închis deja cererea, sau e o cerere nouă).
-type Poarta = () => Promise<boolean>
+// r4 (review r3): garda e OBLIGATORIE, iar scrierile pe coadă (tick + închiderea) trec prin garda.scrie (CAS pe cerere).
+type Poarta = Garda
 const OPRIT_POARTA = 'oprit de poarta pe cheltuială'
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[acoperire]', ...a)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-async function felie(supabase: any, licId: number, batch: string, ids: number[], poarta?: Poarta): Promise<any> {
+async function felie(supabase: any, licId: number, batch: string, ids: number[], poarta: Poarta): Promise<any> {
   for (let inc = 1; inc <= MAX_INCERCARI; inc++) {
-    if (poarta && !(await poarta())) return { error: OPRIT_POARTA, oprit_poarta: true }
+    if (!(await poarta())) return { error: OPRIT_POARTA, oprit_poarta: true }
     const r = await propuneAcoperiri(supabase, { licitatie_id: licId, batch, ids })
     if (!r?.error) return r
     // răspuns tăiat la max_tokens: e determinist pe aceeași felie (Jilava 22.09: de 3 ori la rând pe 55) —
@@ -48,7 +50,7 @@ async function felie(supabase: any, licId: number, batch: string, ids: number[],
   return { error: 'reîncercări epuizate' }
 }
 
-export async function proceseazaAcoperire(supabase: any, licId: number, esteOprire: () => boolean, stare: (s: string) => void, poarta?: Poarta) {
+export async function proceseazaAcoperire(supabase: any, licId: number, esteOprire: () => boolean, stare: (s: string) => void, poarta: Poarta) {
   const { data: c } = await supabase.from('ofertare_acoperire_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
   const t0 = Date.now()
@@ -56,7 +58,7 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
   const conflicte: any[] = [], raspunsuriPierdute: any[] = [], erori: string[] = []
   let neacoperite = 0, neconfirmate = 0, duplicate = 0, propuneri = 0, goluri = 0, cost = 0, felii = 0
   const tick = async (extra: Record<string, unknown> = {}) =>
-    supabase.from('ofertare_acoperire_coada').update({ ultimul_tick: new Date().toISOString(), jurnal, stare: { propuneri, goluri, felii, cost_usd: Number(cost.toFixed(4)), ...extra } }).eq('licitatie_id', licId)
+    poarta.scrie({ ultimul_tick: new Date().toISOString(), jurnal, stare: { propuneri, goluri, felii, cost_usd: Number(cost.toFixed(4)), ...extra } })
 
   let qc = supabase.from('ofertare_cerinte').select('id, tip').eq('licitatie_id', licId).is('inlocuita_de', null).order('id')
   // cerinte_ids: reluare doar pe o listă (ex. felia rămasă fără răspuns), nu pe tot registrul
@@ -126,7 +128,9 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
   if (conflicte.length) note.push(`🔒 ${conflicte.length} cerințe au dovadă verificată de om: propunerea AI-ului NU le-a suprascris.`)
   const durata = Math.round((Date.now() - t0) / 1000)
   const nota = `${propuneri} propuneri (${goluri} goluri) în ${felii} felii, ${durata} s, ${cost.toFixed(2)} USD (worker NAS)${note.length ? ' · ' + note.join(' ') : ''}`
-  await supabase.from('ofertare_acoperire_coada').update({ activ: false, terminat_la: new Date().toISOString(), nota, jurnal, ultimul_tick: new Date().toISOString(), stare: { propuneri, goluri, felii, cost_usd: Number(cost.toFixed(4)), erori: erori.length } }).eq('licitatie_id', licId)
+  // r4 (Jakarinos r3 P2-01): închiderea doar pe ACEEAȘI cerere (CAS) — rezultatul unei rulări vechi nu închide cererea nouă
+  const rInch = await poarta.scrie({ activ: false, terminat_la: new Date().toISOString(), nota, jurnal, ultimul_tick: new Date().toISOString(), stare: { propuneri, goluri, felii, cost_usd: Number(cost.toFixed(4)), erori: erori.length } })
+  if (rInch !== 'ok') { log('#' + licId + ': rezultatul NU s-a scris pe coadă (' + (rInch === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp' : 'eroare de scriere') + ')'); return }
   if (c.cerut_de) {
     const { data: li } = await supabase.from('ofertare_licitatii').select('nr_anunt').eq('id', licId).maybeSingle()
     await supabase.from('notifications').insert({ profile_id: c.cerut_de, type: erori.length ? 'warning' : 'info', modul: 'Ofertare', title: `Ofertare: propunerea de acoperiri s-a terminat la ${li?.nr_anunt ?? '#' + licId}`, message: nota.slice(0, 900), link_to: '/ofertare' })

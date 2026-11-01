@@ -40,32 +40,21 @@ Deno.test('cantitati: token invalid -> 401, zero cost', async () => {
   const r = await ruleaza('invalid', { licitatie_id: 95 }); assertEquals(r.status, 401); zeroCost(r.n)
 })
 
-// --- calea worker x-radar-secret ---
+// --- r4 (#908, review r3 Jakarinos P1-01): calea x-radar-secret e SCOASĂ — secretul (valid sau nu) nu mai autorizează nimic ---
 function ruleazaH(headers: Record<string, string>, radarSecret?: string) {
   const { supa: s0, n } = fakeSupa({ profiles: PROFILE, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: DOCS }, { radarSecret })
   const { supa } = cuPoartaLot(s0, DOCS.map((d) => d.id))
   const deps = { db: supa, getUser, fetch: fakeFetch(n), chei: { A: 'a', G: 'g', O: 'o' } }
   return handler(cerereH(headers, { licitatie_id: 95, max_felii: 1 }), deps).then(async (r) => ({ status: r.status, corp: await r.text(), n }))
 }
-Deno.test('cantitati: x-radar-secret valid -> trece (fără JWT)', async () => {
-  const r = await ruleazaH({ 'x-radar-secret': 'rs-ok' }, 'rs-ok'); assertEquals(r.status, 200); assertEquals(r.n.ai, 1)
+Deno.test('cantitati r4: x-radar-secret VALID, fără JWT -> 401, zero cost, secretul nici nu se verifică', async () => {
+  const r = await ruleazaH({ 'x-radar-secret': 'rs-ok' }, 'rs-ok'); assertEquals(r.status, 401); assertEquals(r.n.rpcSecret, 0); zeroCost(r.n)
 })
-Deno.test('cantitati: x-radar-secret greșit, fără JWT -> 401, zero cost', async () => {
-  const r = await ruleazaH({ 'x-radar-secret': 'rs-gresit' }, 'rs-ok'); assertEquals(r.status, 401); assertEquals(r.n.rpcSecret, 1); zeroCost(r.n)
+Deno.test('cantitati r4: x-radar-secret valid + JWT de utilizator fără drept -> 403 (secretul nu ține loc de poartă), zero cost', async () => {
+  const r = await ruleazaH({ 'x-radar-secret': 'rs-ok', Authorization: `Bearer ${STRAIN}` }, 'rs-ok'); assertEquals(r.status, 403); zeroCost(r.n)
 })
 Deno.test('cantitati: x-radar-secret greșit + JWT fals service_role -> 401, zero cost', async () => {
   const r = await ruleazaH({ 'x-radar-secret': 'rs-gresit', Authorization: `Bearer ${JWT_FALS_SERVICE}` }, 'rs-ok'); assertEquals(r.status, 401); zeroCost(r.n)
-})
-Deno.test('cantitati: secret NECONFIGURAT (undefined/"") + header absent sau gol -> NU autorizează', async () => {
-  for (const cfg of [undefined, '']) {
-    for (const h of [{}, { 'x-radar-secret': '' }, { 'x-radar-secret': '   ' }] as Record<string, string>[]) {
-      const r = await ruleazaH(h, cfg); assertEquals(r.status, 401, `cfg=${JSON.stringify(cfg)} h=${JSON.stringify(h)}`)
-      assertEquals(r.n.rpcSecret, 0, 'header gol nu ajunge nici la RPC'); zeroCost(r.n)
-    }
-  }
-})
-Deno.test('cantitati: secret neconfigurat + header nenul -> 401 (RPC întoarce false)', async () => {
-  const r = await ruleazaH({ 'x-radar-secret': 'orice' }, undefined); assertEquals(r.status, 401); assertEquals(r.n.rpcSecret, 1); zeroCost(r.n)
 })
 Deno.test('cantitati: Authorization gol / doar "Bearer " -> 401, zero cost', async () => {
   for (const v of ['', 'Bearer ']) { const r = await ruleazaH({ Authorization: v }, 'rs-ok'); assertEquals(r.status, 401); zeroCost(r.n) }

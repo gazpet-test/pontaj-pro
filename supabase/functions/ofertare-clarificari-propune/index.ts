@@ -13,7 +13,9 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<st
   if (!jwt) return 'lipsește autorizarea'
   let rol = ''
   try { rol = JSON.parse(atob(jwt.split('.')[1] || '')).role || '' } catch (_) { /* nu e JWT */ }
-  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  // r4 (#908, review r3 Jakarinos P1-01): cheia de serviciu NU mai e cale de cheltuială — autentificarea serviciului nu ține loc de dreptul
+  // de cheltuială al unei persoane (niciun apelant intern nu folosea calea; ofertare-rfq-inbox nu mai cheamă importul, decizia 1A 01.11)
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return 'apel neautorizat (cheie de serviciu)'
   if (rol === 'anon') return 'apel neautorizat (cheie anon)'
   const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
   const { data: u } = await anon.auth.getUser()

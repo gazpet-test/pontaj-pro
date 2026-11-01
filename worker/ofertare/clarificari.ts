@@ -2,11 +2,12 @@
 // un apel Sonnet pe licitație (core.ts, același cod ca edge function-ul), scrie propunerile în ofertare_clarificari
 // (de_trimis, origine platforma) și notifică cine a cerut. Poarta pe cost e în UI (owner/responsabil).
 import { propuneClarificari } from '../../supabase/functions/ofertare-clarificari-propune/core.ts'
+import type { Garda } from './poarta_coada.ts'
 
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[clarificari]', ...a)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-export async function proceseazaClarificari(supabase: any, licId: number, stare: (s: string) => void, poarta?: () => Promise<boolean>) {
+export async function proceseazaClarificari(supabase: any, licId: number, stare: (s: string) => void, poarta: Garda) {
   const { data: c } = await supabase.from('ofertare_clarificari_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
   // „după acoperire” se impune aici: cât timp acoperirea aceleiași licitații e în coadă/activă, așteptăm (max 30 min)
@@ -21,7 +22,7 @@ export async function proceseazaClarificari(supabase: any, licId: number, stare:
   for (let inc = 1; inc <= 3; inc++) {
     stare(`apel ${inc}`)
     // 20261124a (r2 P1-03): poarta înaintea fiecărui apel plătit; refuz / eroare → fără notă finală (garda a închis cererea)
-    if (poarta && !(await poarta())) { log(`#${licId}: oprit de poarta pe cheltuială`); return }
+    if (!(await poarta())) { log(`#${licId}: oprit de poarta pe cheltuială`); return }
     r = await propuneClarificari(supabase, { licitatie_id: licId, model: c.model || undefined })
     costTotal += Number(r?.cost_usd || 0)
     // eroarea de salvare și tăierea la max_tokens sunt deterministe: reapelarea identică e risipă (Mânăstirea: 3×3 apeluri pierdute)
@@ -32,7 +33,9 @@ export async function proceseazaClarificari(supabase: any, licId: number, stare:
   const durata = Math.round((Date.now() - t0) / 1000)
   const nota = r?.error ? `❌ ${r.error}` : r?.skip ? `⏭ ${r.skip}` :
     `${r.scrise} clarificări propuse (${(r.clarificari || []).filter((x: any) => x.prioritate === 'eliminatorie').length} eliminatorii), ${r.propuse} generate, ${(r.sarite || []).length} sărite (duplicat / fără dovadă) · ${durata} s · ${costTotal.toFixed(2)} USD (worker NAS)`
-  await supabase.from('ofertare_clarificari_coada').update({ activ: false, terminat_la: new Date().toISOString(), ultimul_tick: new Date().toISOString(), nota, rezultat: r }).eq('licitatie_id', licId)
+  // r4 (Jakarinos r3 P2-01): închiderea doar pe ACEEAȘI cerere (CAS) — rezultatul unei rulări vechi nu închide cererea nouă
+  const rInch = await poarta.scrie({ activ: false, terminat_la: new Date().toISOString(), ultimul_tick: new Date().toISOString(), nota, rezultat: r })
+  if (rInch !== 'ok') { log(`#${licId}: rezultatul NU s-a scris pe coadă (${rInch === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp' : 'eroare de scriere'})`); return }
   if (c.cerut_de) {
     const { data: li } = await supabase.from('ofertare_licitatii').select('nr_anunt').eq('id', licId).maybeSingle()
     await supabase.from('notifications').insert({ profile_id: c.cerut_de, type: r?.error ? 'warning' : 'info', modul: 'Ofertare', title: `Ofertare: propunerea de clarificări s-a terminat la ${li?.nr_anunt ?? '#' + licId}`, message: nota.slice(0, 900), link_to: '/ofertare' })
