@@ -106,51 +106,91 @@ export function faraRand(verdicte) {
   return (verdicte || []).map((v) => ({
     id: v.id, identificator: v.identificator, verdict: v.verdict, tip: v.tip ?? null, data_act: v.data_act ?? null, detalii: v.detalii ?? '',
     sursa: v.sursa === 'oficial' ? 'oficial' : 'ai', curent: v.curent ?? null, nr_consolidari: v.nr_consolidari ?? null,
+    // r2: ce a vazut verificarea oficiala (pentru scrierea conditionata a urmei in finalizare)
+    doc: v.doc ?? null, baza: v.baza ?? null, vazut_la: v.vazut_la ?? null,
   }));
 }
 
 // ── v11 (01.11.2026): verificare pe sursa oficiala (legislatie.just.ro), fara AI ──
+// r2 (review Copilot + Jakarinos r1, NO-GO): fara dovada pozitiva NU exista „neschimbat”. Pagina se accepta doar daca
+// (1) identitatea actului e dovedita (tip + numar + an din <title> si emitentul din fisa) si (2) blocul „istoric
+// consolidari” e gasit si citit COMPLET (fiecare link din bloc e o consolidare cu data calendaristica valida).
+// Altfel → null (actul cade pe AI, unde un „neschimbat” nu se mai accepta, vezi plafoneazaAI).
 
 export const URL_LEGISLATIE = (id) => `https://legislatie.just.ro/Public/DetaliiDocument/${Number(id)}`;
 
-// Istoricul consolidarilor din pagina actului: title='Consolidarea din DD.MM.YYYY' (prima = forma curenta).
-// Intoarce datele ISO, unice, descrescator. Pagina fara bloc de istoric → [] (act fara consolidari).
+// Data calendaristica valida (31.02 / 00.13 / ani absurzi → null).
+export function dataISO(z, l, a) {
+  const d = Number(z), m = Number(l), y = Number(a);
+  if (!(y >= 1990 && y <= 2100 && m >= 1 && m <= 12 && d >= 1)) return null;
+  const t = new Date(Date.UTC(y, m - 1, d));
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== m - 1 || t.getUTCDate() !== d) return null;
+  return `${a}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// Istoricul consolidarilor DIN BLOCUL <div id="istoric_fa">…</div> (comentariile HTML scoase).
+// Intoarce datele ISO unice, descrescator; null = bloc lipsa, gol sau citit incomplet (orice <a> din bloc fara
+// data valida) — adica NU exista dovada ca istoricul e complet.
 export function consolidari(html) {
-  const s = String(html || '');
+  const s = String(html || '').replace(/<!--[\s\S]*?-->/g, '');
+  const b = s.match(/<div\b[^>]*\bid\s*=\s*['"]?istoric_fa['"]?[^>]*>([\s\S]*?)<\/div>/i);
+  if (!b) return null;
+  const linkuri = [...b[1].matchAll(/<a\b([^>]*)>/gi)];
+  if (!linkuri.length) return null;
   const out = new Set();
-  for (const m of s.matchAll(/title=['"]Consolidarea din (\d{2})\.(\d{2})\.(\d{4})['"]/g)) out.add(`${m[3]}-${m[2]}-${m[1]}`);
+  for (const [, attrs] of linkuri) {
+    // formele din istoric: „Consolidarea din …” si „Republicarea din …” (ex. Legea 307/2006, republicata 17.04.2019)
+    const m = attrs.match(/\btitle\s*=\s*(['"])\s*(?:Consolidarea|Republicarea) din (\d{2})\.(\d{2})\.(\d{4})\s*\1/i);
+    const iso = m && dataISO(m[2], m[3], m[4]);
+    if (!iso) return null;
+    out.add(iso);
+  }
   return [...out].sort().reverse();
 }
 
-// Pagina e chiar fisa actului (nu o pagina de eroare / alt document): <title> poarta numarul si anul actului.
-// rand.numar = '395/2016' → titlul „HG        395 02/06/2016 - Portal Legislativ” contine '395' si '/2016'.
+// Tipul actului din ERP → tipul din titlul paginii + emitentul din fisa (S_EMT_BDY).
+const TIPURI = {
+  hg: { titlu: /^HG$/, emitent: /GUVERNUL/ },
+  oug: { titlu: /^(OUG|ORD DE URGENTA|ORDONANTA DE URGENTA)$/, emitent: /GUVERNUL/ },
+  lege: { titlu: /^LEGE$/, emitent: /PARLAMENTUL/ },
+  ordin_anre: { titlu: /^ORDIN$/, emitent: /AUTORITATEA NA.IONAL. DE REGLEMENTARE .N DOMENIUL ENERGIEI/ },
+  ordin: { titlu: /^ORDIN$/, emitent: /MINISTERUL/ },
+};
+
+// Identitatea actului: titlul „HG        395 02/06/2016 - Portal Legislativ” → tip HG, nr. 395, anul 2016 (exact),
+// plus emitentul din fisa. Orice nepotrivire sau tip necunoscut → false.
 export function paginaPotrivita(html, rand) {
-  const t = (String(html || '').match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
+  const s = String(html || '');
+  const reg = TIPURI[String(rand?.tip || '')];
   const m = String(rand?.numar || '').match(/^(\d+)\/(\d{4})$/);
-  if (!m || !t) return false;
-  return new RegExp(`(^|\\D)${m[1]}(\\D|$)`).test(t) && t.includes(`/${m[2]}`);
+  const t = (s.match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
+  const p = t.trim().toUpperCase().match(/^([A-Z][A-Z ]*?)\s+(\d+)\s+(\d{2})\/(\d{2})\/(\d{4})\s+-\s+PORTAL LEGISLATIV$/);
+  if (!reg || !m || !p) return false;
+  if (!reg.titlu.test(p[1].trim()) || p[2] !== String(Number(m[1])) || p[5] !== m[2]) return false;
+  const em = (s.match(/class\s*=\s*['"]S_EMT_BDY['"][^>]*>([\s\S]*?)<\/span>/i) || [])[1] || '';
+  return reg.emitent.test(em.replace(/<[^>]+>/g, ' ').toUpperCase());
 }
 
 const ro = (iso) => iso ? iso.split('-').reverse().join('.') : '—';
 
-// Verdict determinist. baza = forma_oficiala_la (forma confirmata de noi), date = consolidari(html).
-//  - fara baza: act fara consolidari → neschimbat (forma de baza); altfel necunoscut (baza de setat, o singura data)
+// Verdict determinist, DOAR cu istoric complet (date = array nevid din consolidari(); altfel nu se cheama).
+//  - fara baza confirmata → necunoscut (de setat o singura data), indiferent de istoric
 //  - consolidare curenta > baza → schimbare_noua (sau forma_incompleta daca era deja publicata la ultimul scan)
 //  - egala → neschimbat, confirmat automat; mai veche decat baza → necunoscut (baza gresita?)
-export function verdictOficial(rand, date, refScan) {
-  const baza = /^\d{4}-\d{2}-\d{2}$/.test(String(rand?.forma_oficiala_la || '')) ? String(rand.forma_oficiala_la) : null;
+export function verdictOficial(rand, date, refScan, vazutLa = null) {
+  const b = String(rand?.forma_oficiala_la || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const baza = b ? dataISO(b[3], b[2], b[1]) : null;
   const curent = (date || [])[0] || null;
   const v = {
     id: rand.id, identificator: rand.identificator || `${rand.tip} ${rand.numar}`, tip: null, data_act: null,
     sursa: 'oficial', curent, nr_consolidari: (date || []).length, rand,
+    doc: Number(rand.legislatie_doc_id) || null, baza, vazut_la: vazutLa,
   };
   const url = URL_LEGISLATIE(rand.legislatie_doc_id);
-  if (!baza) {
-    if (!curent) return { ...v, verdict: 'neschimbat', detalii: `legislatie.just.ro: fără consolidări (forma de bază) — ${url}` };
-    return { ...v, verdict: 'necunoscut', detalii: `bază nesetată: forma consolidată curentă e din ${ro(curent)} — de confirmat o dată (${url})` };
-  }
-  if (!curent || curent === baza) {
-    return { ...v, verdict: 'neschimbat', detalii: `confirmat automat pe legislatie.just.ro: forma curentă ${curent ? 'din ' + ro(curent) : 'de bază'} = forma confirmată — ${url}` };
+  if (!curent) return { ...v, verdict: 'necunoscut', detalii: `istoric de consolidări necitit — ${url}` };
+  if (!baza) return { ...v, verdict: 'necunoscut', detalii: `bază nesetată: forma consolidată curentă e din ${ro(curent)} — de confirmat o dată (${url})` };
+  if (curent === baza) {
+    return { ...v, verdict: 'neschimbat', detalii: `confirmat automat pe legislatie.just.ro: forma curentă din ${ro(curent)} = forma confirmată — ${url}` };
   }
   if (curent < baza) return { ...v, verdict: 'necunoscut', detalii: `forma curentă (${ro(curent)}) e mai veche decât baza confirmată (${ro(baza)}) — de verificat baza (${url})` };
   const noi = (date || []).filter((d) => d > baza);
@@ -166,6 +206,23 @@ export function imparteLot(lot) {
   const oficial = [], ai = [];
   for (const n of lot || []) (Number(n?.legislatie_doc_id) > 0 ? oficial : ai).push(n);
   return { oficial, ai };
+}
+
+// r2 (Jakarinos P1-3): un act CU id oficial ajuns pe AI (portal indisponibil / pagina nedovedita) nu poate iesi
+// „neschimbat” din AI — AI-ul nu confirma ce sursa oficiala n-a putut confirma (si nu poate sterge un semnal
+// oficial vazut la o incercare anterioara). Semnalele AI raman; „neschimbat” devine „necunoscut”.
+export function plafoneazaAI(verdicte, idsCuOficial) {
+  const ids = new Set((idsCuOficial || []).map(String));
+  return (verdicte || []).map((v) => (ids.has(String(v.id)) && v.verdict === 'neschimbat')
+    ? { ...v, verdict: 'necunoscut', detalii: `sursa oficială indisponibilă; AI spune „neschimbat”, neconfirmat — ${String(v.detalii || '').slice(0, 250)}` }
+    : v);
+}
+
+// r2: actele cu id oficial primele in rulare → loturile sunt cat mai „pure” (oficial sau AI), mai putine loturi mixte.
+export function ordineRulare(norme) {
+  const a = (norme || []).filter((n) => Number(n?.legislatie_doc_id) > 0);
+  const b = (norme || []).filter((n) => !(Number(n?.legislatie_doc_id) > 0));
+  return [...a, ...b];
 }
 
 // Lot sarit dupa prea multe incercari (invocari omorate la rand): toate actele → necunoscut.

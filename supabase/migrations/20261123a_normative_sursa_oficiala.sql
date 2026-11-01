@@ -29,3 +29,38 @@ COMMENT ON COLUMN public.ofertare_normative.legislatie_doc_id IS '20261123a: id 
 COMMENT ON COLUMN public.ofertare_normative.forma_oficiala_la IS '20261123a: data consolidarii confirmate de noi; o consolidare mai noua = semnal de schimbare';
 COMMENT ON COLUMN public.ofertare_normative.verificat_auto_la IS '20261123a: ultima verificare automata reusita pe sursa oficiala';
 COMMENT ON COLUMN public.ofertare_normative.verificare_auto IS '20261123a: ce a vazut ultima verificare automata (consolidare curenta, nr. consolidari, url)';
+
+-- r2 (Jakarinos P2-7): urma verificării automate o scrie DOAR jobul (service_role) sau un administrator de bază.
+-- Un utilizator Ofertare cu drept de UPDATE pe rând nu o poate fabrica (PATCH direct prin API).
+-- Funcția e SECURITY INVOKER: current_user = rolul cererii (authenticated / service_role / postgres).
+CREATE FUNCTION public.fn_normative_urma_auto_garda() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF current_user IN ('service_role', 'postgres', 'supabase_admin') THEN RETURN NEW; END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.verificat_auto_la IS NOT NULL OR NEW.verificare_auto IS NOT NULL THEN
+      RAISE EXCEPTION 'verificat_auto_la / verificare_auto se scriu doar de verificarea automată' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+  ELSIF NEW.verificat_auto_la IS DISTINCT FROM OLD.verificat_auto_la OR NEW.verificare_auto IS DISTINCT FROM OLD.verificare_auto THEN
+    RAISE EXCEPTION 'verificat_auto_la / verificare_auto se scriu doar de verificarea automată' USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END $fn$;
+REVOKE EXECUTE ON FUNCTION public.fn_normative_urma_auto_garda() FROM PUBLIC;
+COMMENT ON FUNCTION public.fn_normative_urma_auto_garda() IS '20261123a r2: urma verificarii automate doar din service_role/postgres';
+
+CREATE TRIGGER trg_normative_urma_auto BEFORE INSERT OR UPDATE ON public.ofertare_normative
+FOR EACH ROW EXECUTE FUNCTION public.fn_normative_urma_auto_garda();
+
+-- Postcondiții
+DO $post$
+BEGIN
+  IF (SELECT count(*) FROM pg_attribute WHERE attrelid='public.ofertare_normative'::regclass
+      AND attname IN ('legislatie_doc_id','forma_oficiala_la','verificat_auto_la','verificare_auto') AND NOT attisdropped) <> 4
+  THEN RAISE EXCEPTION 'NSO post: coloane lipsa'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.ofertare_normative'::regclass AND tgname='trg_normative_urma_auto' AND NOT tgisinternal)
+  THEN RAISE EXCEPTION 'NSO post: trigger lipsa'; END IF;
+  IF EXISTS (SELECT 1 FROM public.ofertare_normative WHERE legislatie_doc_id IS NOT NULL OR forma_oficiala_la IS NOT NULL
+             OR verificat_auto_la IS NOT NULL OR verificare_auto IS NOT NULL)
+  THEN RAISE EXCEPTION 'NSO post: date neasteptate in coloanele noi'; END IF;
+END $post$;

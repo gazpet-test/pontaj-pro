@@ -36,7 +36,7 @@ import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 import {
   ultimulScan, inventarLot, extrageJSON, leagaLot, egalConstant, nrLoturi, idsLot, ordoneazaDupaIds,
   faraRand, lotSarit, urmatorulPas, areNotaScan, linieNota, construiesteMail, grupeaza, esteTranzitoriu,
-  consolidari, paginaPotrivita, verdictOficial, imparteLot, URL_LEGISLATIE,
+  consolidari, paginaPotrivita, verdictOficial, imparteLot, URL_LEGISLATIE, plafoneazaAI, ordineRulare,
 } from './logic.js';
 
 const DESTINATARI = ['razvan.trusu@gazpet.ro'];
@@ -68,7 +68,7 @@ async function porneste(supa: Supa, test: boolean) {
     .or('prioritate.in.(CRITIC,IMPORTANT,ACTUALIZARE),stare.neq.în vigoare')
     .order('prioritate').order('id');
   if (error) throw new Error('ofertare_normative: ' + error.message);
-  const lista = (norme || []).slice(0, MAX_ACTE);
+  const lista = ordineRulare(norme || []).slice(0, MAX_ACTE);
   return await rpc(supa, 'fn_norm_scan_porneste', {
     p_test: test, p_azi: azi, p_ref_scan: ultimulScan(norme || []),
     p_acte: lista.map((n: any) => n.id), p_marime: MARIME_LOT, p_nr_loturi: nrLoturi(lista.length, MARIME_LOT),
@@ -84,27 +84,31 @@ async function verificaOficial(rand: any, refScan: string | null) {
     });
     if (!resp.ok) return null;
     const html = await resp.text();
+    // r2: identitate dovedita (tip + numar + an + emitent) SI istoric citit complet; altfel → AI (plafonat)
     if (!paginaPotrivita(html, rand)) return null;
-    return verdictOficial(rand, consolidari(html), refScan);
+    const date = consolidari(html);
+    if (!date) return null;
+    return verdictOficial(rand, date, refScan, new Date().toISOString());
   } catch {
     return null;
   }
 }
 
-// Un lot: intai sursa oficiala, apoi AI + cautari doar pentru ce a ramas. Intoarce verdictele (fara randuri), erorile si consumul.
+// Un lot: intai sursa oficiala (in paralel, max. 20s), apoi AI + cautari doar pentru ce a ramas.
+// Intoarce verdictele (fara randuri), erorile si consumul.
 async function scaneazaLot(lot: any[], k: number, r: any) {
   const nume = `lot ${k + 1}/${r.nr_loturi}`;
   const { oficial, ai } = imparteLot(lot);
+  const rezultate = await Promise.all(oficial.map((rand: any) => verificaOficial(rand, r.ref_scan)));
   const verdOficial: any[] = [];
-  for (const rand of oficial) {
-    const v = await verificaOficial(rand, r.ref_scan);
-    if (v) verdOficial.push(v); else ai.push(rand);
-  }
-  const cazut = oficial.length - verdOficial.length;
-  if (!ai.length) return { verdicte: faraRand(verdOficial), erori: [] as string[], cautari: 0, tokIn: 0, tokOut: 0, tranzitoriu: false };
-  const rez = await scaneazaAI(ai, nume, r);
-  if (cazut) rez.erori.push(`${nume}: ${cazut} act(e) fără răspuns de la legislatie.just.ro, verificate prin AI`);
-  rez.verdicte = [...faraRand(verdOficial), ...rez.verdicte];
+  const cazuteOficial: any[] = [];
+  rezultate.forEach((v, i) => { if (v) verdOficial.push(v); else cazuteOficial.push(oficial[i]); });
+  const deAI = [...cazuteOficial, ...ai];
+  if (!deAI.length) return { verdicte: faraRand(verdOficial), erori: [] as string[], cautari: 0, tokIn: 0, tokOut: 0, tranzitoriu: false };
+  const rez = await scaneazaAI(deAI, nume, r);
+  if (cazuteOficial.length) rez.erori.push(`${nume}: ${cazuteOficial.length} act(e) nedovedite pe legislatie.just.ro, verificate prin AI (fără „neschimbat” automat)`);
+  // r2: AI-ul nu confirma „neschimbat” pentru actele cu id oficial (nici la reluarea lotului)
+  rez.verdicte = [...faraRand(verdOficial), ...plafoneazaAI(rez.verdicte, cazuteOficial.map((n: any) => n.id))];
   return rez;
 }
 
@@ -178,6 +182,26 @@ async function inLant(runId: number) {
   }
 }
 
+// r2 (Jakarinos P2-5/P2-6, Copilot P2-04): urma verificarii oficiale = informatie, nu pas obligatoriu.
+// Se scrie DOAR pe randul care are inca documentul si baza vazute la citire, si doar daca nu exista deja o urma
+// mai noua (o finalizare intarziata nu suprascrie una mai noua). Esecul sau 0 randuri NU blocheaza notele/mailul.
+async function scrieUrmaOficiala(supa: Supa, runId: number, verdicte: any[]) {
+  for (const v of verdicte.filter((x: any) => x.sursa === 'oficial' && x.doc && x.vazut_la)) {
+    try {
+      let q = supa.from('ofertare_normative').update({
+        verificat_auto_la: v.vazut_la,
+        verificare_auto: { rulare: runId, verdict: v.verdict, consolidare_curenta: v.curent, nr_consolidari: v.nr_consolidari, baza: v.baza, sursa: URL_LEGISLATIE(v.doc) },
+      }).eq('id', v.id).eq('legislatie_doc_id', v.doc).or(`verificat_auto_la.is.null,verificat_auto_la.lt."${v.vazut_la}"`);
+      q = v.baza ? q.eq('forma_oficiala_la', v.baza) : q.is('forma_oficiala_la', null);
+      const { data, error } = await q.select('id');
+      if (error) console.error(`normative-scan-lunar: urma oficiala rand ${v.id}: ${error.message}`);
+      else if (!data?.length) console.warn(`normative-scan-lunar: urma oficiala rand ${v.id} nescrisa (randul s-a schimbat sau exista o urma mai noua)`);
+    } catch (e) {
+      console.error(`normative-scan-lunar: urma oficiala rand ${v.id}:`, String((e as Error)?.message || e));
+    }
+  }
+}
+
 // Finalul, cu lease separat (fn_norm_scan_ia_final). Ordinea e impusa si in baza:
 // note scrise → note_la → mail acceptat de Resend → mail_la + finalizat. Orice esec elibereaza lease-ul
 // (sau il lasa sa expire, daca invocarea moare), iar urmatoarea invocare reia de unde a ramas.
@@ -209,15 +233,7 @@ async function finalizeaza(supa: Supa, runId: number) {
         if (e2) throw new Error(`nota pe randul ${v.id}: ${e2.message}`); // reluam tot finalul (garda per rand)
         notate++;
       }
-      // v11: urma verificarii pe sursa oficiala (idempotent: suprascrie aceeasi informatie la reluarea finalului)
-      const acum = new Date().toISOString();
-      for (const v of (f.verdicte || []).filter((x: any) => x.sursa === 'oficial')) {
-        const { error: e3 } = await supa.from('ofertare_normative').update({
-          verificat_auto_la: acum,
-          verificare_auto: { rulare: runId, verdict: v.verdict, consolidare_curenta: v.curent, nr_consolidari: v.nr_consolidari, sursa: 'legislatie.just.ro' },
-        }).eq('id', v.id);
-        if (e3) throw new Error(`verificat_auto pe randul ${v.id}: ${e3.message}`);
-      }
+      await scrieUrmaOficiala(supa, runId, f.verdicte || []);
       const n = await rpc(supa, 'fn_norm_scan_note_gata', { p_run: runId, p_token: token, p_note_scrise: notate });
       if (!n) return; // lease pierdut intre timp: nu trimitem mail din aceasta invocare
       f = n;
