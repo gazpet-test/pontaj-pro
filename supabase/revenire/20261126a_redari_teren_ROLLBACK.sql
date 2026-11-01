@@ -1,6 +1,6 @@
 -- REVENIRE 20261126a_redari_teren (armată; doar la cererea lui Răzvan, după decizie + review). NU e migrare — niciun runner nu parcurge directorul.
 -- Scoate TOT ce a creat migrarea: politicile storage red_storage_*, bucket-ul `redari` (doar gol — DELETE pe storage.* cere
--- storage.allow_delete_query), cele 4 vederi, cele 14 tabele red_*, cele 19 funcții fn_red_*, cheia de modul `redari` din app_modules
+-- storage.allow_delete_query), cele 4 vederi, cele 14 tabele red_*, cele 21 de funcții fn_red_*, cheia de modul `redari` din app_modules
 -- și rândul din supabase_migrations.schema_migrations (dacă tabelul există).
 -- Refuză: nearmată; armare persistentă (ALTER DATABASE/ROLE … SET); migrarea neaplicată; obiecte în bucket (se golesc prin API întâi);
 -- DATE în ORICARE din red_proiecte / uat / parcele / detinatori / convocari / raspunsuri / procese_verbale / import_loturi / numere / jurnal
@@ -12,6 +12,11 @@
 --   -- opțional, DOAR cu decizia explicită a lui Răzvan: SELECT set_config('gazpet.revenire_20261126a_forta', 'DA', true);
 --   -- <conținutul exact al fișierului>
 --   COMMIT;
+-- FEREASTRĂ DE MENTENANȚĂ (Jakarinos r2 P1-01): ÎNAINTE de orice verificare de date / drepturi se iau LOCK TABLE … ACCESS EXCLUSIVE pe toate
+-- tabelele red_* și SHARE ROW EXCLUSIVE pe public.user_module_access (blochează INSERT/UPDATE/DELETE pe drepturi, dar lasă citirile —
+-- fn_red_nivel / meniul aplicației citesc uma la fiecare cerere, ACCESS EXCLUSIVE ar îngheța tot ERP-ul); lock-urile se țin până la COMMIT,
+-- deci garda e atomică: nimeni nu poate strecura date sau drepturi între verificare și DROP. lock_timeout 5 s: dacă cineva ține tabelele,
+-- revenirea pică fără să facă nimic — se reia în fereastră.
 -- harness-armare: gazpet.revenire_20261126a REDARI_TEREN_SCOASA
 DO $pre$
 DECLARE v_parcele bigint; v_date text; v_drepturi text;
@@ -27,6 +32,11 @@ BEGIN
   IF to_regclass('public.red_parcele') IS NULL OR to_regclass('public.red_jurnal') IS NULL THEN
     RAISE EXCEPTION '20261126a revenire: migrarea nu e aplicata (red_parcele / red_jurnal lipsesc)';
   END IF;
+  -- garda atomica (P1-01): lock-urile INAINTEA oricarei verificari, tinute pana la COMMIT
+  LOCK TABLE public.red_proiecte, public.red_uat, public.red_parcele, public.red_detinatori, public.red_detinatori_contact, public.red_detinatori_token,
+             public.red_convocari, public.red_raspunsuri, public.red_raspunsuri_meta, public.red_procese_verbale, public.red_jurnal, public.red_numere,
+             public.red_import_loturi, public.red_rate_limit IN ACCESS EXCLUSIVE MODE;
+  LOCK TABLE public.user_module_access IN SHARE ROW EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'redari') THEN
     RAISE EXCEPTION '20261126a revenire: bucket-ul redari nu e gol (% obiecte) — se goleste prin API, cu decizia lui Razvan, inainte',
       (SELECT count(*) FROM storage.objects WHERE bucket_id = 'redari');
@@ -73,6 +83,8 @@ DROP TABLE public.red_rate_limit, public.red_import_loturi, public.red_procese_v
 DROP FUNCTION public.fn_red_formular_public(text);
 DROP FUNCTION public.fn_red_raspuns_public(text, text, date, text, boolean, text);
 DROP FUNCTION public.fn_red_rate_limit_atinge(text, integer);
+DROP FUNCTION public.fn_red_rate_limit_curata(boolean);
+DROP FUNCTION public.fn_red_raspunsuri_valideaza();
 DROP FUNCTION public.fn_red_ip_client();
 DROP FUNCTION public.fn_red_valoare_parcela_seteaza(uuid, numeric);
 DROP FUNCTION public.fn_red_valoare_parcela(uuid);

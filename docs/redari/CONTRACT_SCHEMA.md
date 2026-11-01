@@ -12,15 +12,20 @@ Fără date reale de proprietari nicăieri (cod, teste, fixture-uri, brief-uri P
 **Implementarea BD**: `supabase/migrations/20261126a_redari_teren.sql` (revenire `supabase/revenire/20261126a_redari_teren_ROLLBACK.sql`,
 DRY `supabase/tests/20261126a_redari_teren_dryrun.sql`, detalii și harness local `docs/redari/MIGRARE_20261126a.md`). Abaterile agentului de
 migrare față de textul inițial sunt marcate mai jos cu **[mig]**; completările cerute de coordonator / Jakarinos r1 cu **[r1]**; runda 2
-(Jakarinos r1 pe SQL + Copilot r1, NO-GO) cu **[r2]**.
+(Jakarinos r1 pe SQL + Copilot r1, NO-GO) cu **[r2]**; runda 3 (Jakarinos r2 + Copilot r2, NO-GO; șabloane v5) cu **[r3]**.
 
 **[r2] Coerența și imutabilitatea legăturilor** (trigger `fn_red_legaturi`, BEFORE INSERT/UPDATE, pentru oricine): red_uat / red_import_loturi →
 proiect existent; red_parcele → UAT-ul aparține proiectului parcelei; red_detinatori → parcelă activă (`sters_la IS NULL`); contact / token /
 convocări / răspunsuri → deținător existent; red_raspunsuri_meta → răspuns existent; red_procese_verbale: tip A ⇒ `detinator_id` NOT NULL,
 deținătorul e pe `parcela_id`, `uat_id` = UAT-ul parcelei; tip B ⇒ `parcela_id` NOT NULL, `detinator_id` NULL, `uat_id` = UAT-ul parcelei;
-tip C ⇒ `parcela_id` NULL, `detinator_id` NULL, `tronson` și `uat_id` NOT NULL. Coloanele `proiect_id, uat_id, parcela_id, detinator_id,
-raspuns_id` sunt IMUTABILE după insert (23514) — o mutare = rând nou + soft delete pe cel vechi. Erori: 23503 (legătură lipsă), 23514 (coerență /
-imutabilitate).
+tip C ⇒ `parcela_id` NULL, `detinator_id` NULL, `tronson` și `uat_id` NOT NULL. **[r3]** red_parcele la INSERT: `id_parcela ~ '^T{tronson}-{uat3}-[0-9]{4}$'`
+(uat3 din red_uat). Coloanele `proiect_id, uat_id, parcela_id, detinator_id, raspuns_id, seq` **[r3]** și `red_parcele.id_parcela / tronson` sunt
+IMUTABILE după insert (23514) — o corecție = rând nou + soft delete pe cel vechi (soft delete-ul unei parcele cu deținători și convocări active
+trece; un deținător nou pe parcela ștearsă e refuzat; parcela ștearsă iese din vederi). Erori: 23503 (legătură lipsă), 23514 (coerență / imutabilitate).
+**[r3] Validarea răspunsurilor și pentru operatori** (trigger `fn_red_raspunsuri_valideaza`, BEFORE INSERT/UPDATE pe red_raspunsuri): `particip` ⇒
+`zi_sesiune_aleasa` NOT NULL ∈ sesiune_zi1..3 ale UAT-ului deținătorului; `nu_particip_cu_obiectii` / `constatare_teren` ⇒ `obiectii_text` nevid;
+`nu_particip_fara_obiectii` ⇒ `declaratie_confirmata = true` DOAR pe canal `online` (telefon / scris / sesiune se acceptă fără bifă — operatorul
+confirmă). RPC-ul public își păstrează mesajele jsonb (verificările lui rămân înaintea insertului). `created_at` e imutabil (timpul de recepție).
 **[r2] Limita jurnalului (P2-10)**: `red_jurnal` e append-only față de rolurile aplicației (anon / authenticated / service_role: fără INSERT /
 UPDATE / DELETE / TRUNCATE, trigger de imutabilitate). NU protejează față de administratorul bazei: `postgres` poate dezactiva trigger-ul sau
 insera direct. E o garanție de aplicație, nu una criptografică; dovada față de terți rămâne exportul semnat / datat, nu tabela în sine.
@@ -40,7 +45,7 @@ nici UPDATE pentru nimeni (REVOKE UPDATE, DELETE, TRUNCATE de la authenticated, 
 
 ### red_proiecte
 `id, cod text UNIQUE NOT NULL` (ex. `LOT1-PRUNISOR-JUPA`), `denumire, beneficiar, contract_nr, contract_data date,
-imputernicire_nr, imputernicire_data date, reprezentant_tgz_nume, reprezentant_tgz_functie, reprezentant_gazpet_nume,
+imputernicire_nr, imputernicire_data date, reprezentant_tgz_nume, reprezentant_tgz_functie, reprezentant_tgz_telefon` **[r3]**, `reprezentant_gazpet_nume,
 reprezentant_gazpet_functie, contact_nume, contact_telefon, contact_email` (ex. redari@gazpet.ro), `text_gdpr text,
 text_declaratie text NOT NULL` **[r1]** (textul declarației „nu particip — fără obiecții”; îl citește formularul public), `activ bool
 default true, created_at`. **[r2] DEFAULT-uri editabile** (texte confirmate de Proiectul Juridic 01.11.2026, puse pe coloane, nu în RPC):
@@ -52,7 +57,8 @@ procesul-verbal completat, spre semnare, prin poștă / electronic.” Formularu
 `id, proiect_id FK, nume text NOT NULL, uat3 text NOT NULL` (3 litere mari, ex. PRU/GOD/HUS/CAZ/ILO/BAL/SIS; UNIQUE (proiect_id, uat3)),
 `judet, primarie_adresa, primarie_email, primarie_telefon, reprezentant_uat_nume, reprezentant_uat_functie,
 sesiune_zi1 date, sesiune_zi2 date, sesiune_zi3 date, program_zi1 text, program_zi2 text, program_zi3 text,
-afisare_pv_nr, afisare_data_start date, afisare_data_end date, created_at`.
+sate_zi1 text, sate_zi2 text, sate_zi3 text` **[r3]** (satele / tarlalele programate pe zi, șabloane v5 — `docs/redari/SABLOANE.md` §2.1/§3),
+`afisare_pv_nr, afisare_data_start date, afisare_data_end date, created_at`.
 
 ### red_parcele
 `id, proiect_id FK, uat_id FK, id_parcela text NOT NULL` (UNIQUE (proiect_id, id_parcela), format `T{tronson}-{uat3}-{nnnn}`),
@@ -104,7 +110,8 @@ optiune text CHECK IN ('particip','nu_particip_fara_obiectii','nu_particip_cu_ob
 `zi_sesiune_aleasa date, obiectii_text` (business — vizibil și viewer), `declaratie_confirmata bool, semnatura_electronica_ref text,
 created_by uuid NULL` (NULL la online), `created_at`.
 **[r2] „Ultimul răspuns” = `ORDER BY data DESC, seq DESC`** — în view, în RPC și în `src/redari/stare.js` (UI-ul trebuie să folosească `seq` ca
-tie-break, nu ordinea din listă). **[r2]** `ip_sau_sursa`, `user_agent`, `raw_payload` NU mai sunt aici (Copilot r1 P2-02) — vezi
+tie-break, nu ordinea din listă). **[r3] Semantica**: `data` = momentul DECLARAT al răspunsului (editabil de operator: „a sunat ieri”), `seq` =
+ordinea de înregistrare (tie-break la `data` egală), `created_at` = momentul recepției, IMUTABIL (trigger). Starea urmărește declarația, nu recepția. **[r2]** `ip_sau_sursa`, `user_agent`, `raw_payload` NU mai sunt aici (Copilot r1 P2-02) — vezi
 `red_raspunsuri_meta`.
 
 ### red_raspunsuri_meta  (tehnic — doar admin/editor) **[r2]**
@@ -129,8 +136,8 @@ UPDATE/DELETE/TRUNCATE refuzate de trigger pentru oricine, inclusiv postgres.
 `valoare_lei` e înlocuit cu `valoare_lei_setata` (bool); rândurile cu `tabela IN ('red_detinatori_contact','red_raspunsuri_meta')` le văd doar
 admin/editor; un UPDATE care schimbă doar `updated_at` nu produce rând. `inregistrare_id` = `id` (sau `detinator_id` la contact, `raspuns_id`
 la meta; NULL la red_numere). **[r2] Fără copia PII (P2-6)**: pe `red_detinatori_contact` și `red_raspunsuri_meta` jurnalul primește DOAR
-câmpurile schimbate (la insert: toate cele nenule) cu `sha256` al valorilor — ex. `{"telefon":"sha256:…","adresa_strada":"sha256:…"}` — niciodată
-valorile; `date_vechi` are hash-urile vechi ale acelorași câmpuri.
+câmpurile schimbate (la insert: toate cele nenule), ca nume: **[r3]** `{"telefon":"modificat","adresa_strada":"modificat"}` — niciodată valorile și
+nici hash-uri (sha256 pe telefon / adresă e reversibil prin dicționar — Copilot r2 P2-01); `date_vechi` are aceleași nume de câmpuri.
 
 ### red_numere  (numerotare fără refolosire)
 `cheie text PK` (ex. `C`, `PVA-HUS`, `PVB-HUS`, `PVC-T3`), `ultimul int NOT NULL default 0`.
@@ -155,8 +162,12 @@ SECURITY DEFINER, EXECUTE authenticated, cer nivel admin/editor; peste 9999 → 
 
 ### red_rate_limit  (contor pentru RPC-urile publice; fără acces authenticated/anon)
 `cheie text PK` (`ip:<ip>` sau `t:<sha256 hex al tokenului>` — tokenul nu se stochează în clar), `fereastra_start timestamptz, numar int`.
-**[r2]** NU e tabelă de business: la fiecare apel al RPC-urilor publice se șterg rândurile mai vechi de 24 h (singurul DELETE din modul, ca owner,
-în `fn_red_rate_limit_atinge`); formatul tokenului (exact 43 caractere `[A-Za-z0-9_-]`) se verifică ÎNAINTE de orice scriere în contor.
+**[r2]** NU e tabelă de business; formatul tokenului (exact 43 caractere `[A-Za-z0-9_-]`) se verifică ÎNAINTE de orice scriere în contor.
+**[r3]** Index pe `fereastra_start`; curățarea (rânduri > 24 h, singurul DELETE din modul, ca owner — `fn_red_rate_limit_curata`) NU la fiecare
+atingere, ci în ~2 % din apeluri sau când `pg_class.reltuples` > 10.000, o singură dată per apel RPC. **Cheia de token se atinge DOAR pentru
+tokenuri existente și valide** (mulțime finită — fără DoS prin chei arbitrare); pentru tokenuri cu format bun dar inexistente / expirate se
+contorizează doar IP-ul. Fără `x-forwarded-for` cheia e `ip:necunoscut` cu aceeași limită de 30 — limita reală pentru traficul fără IP e la
+gateway-ul Supabase, nu aici.
 
 ## 3. Vederi (toate `WITH (security_invoker = on)`)
 ### red_v_stare_parcela — o linie per (parcela, detinator) activ (sters_la IS NULL)
@@ -219,9 +230,10 @@ procentul se repetă pe fiecare rând al UAT-ului).
   red_rate_limit). Întoarce și `text_gdpr` **[r2]**. Rate limit **[mig]**: doar pe IP (30 / 10 min) → `{ok:false, motiv:'prea_multe'}`; contorul
   pe token nu se consumă la afișare, ca să nu blocheze trimiterea.
 - `fn_red_raspuns_public(p_token text, p_optiune text, p_zi date, p_obiectii text, p_declaratie_confirmata bool, p_user_agent text)
-  RETURNS jsonb` — ordinea **[r2]**: formatul tokenului (exact 43 caractere) → `token_invalid` fără a atinge contorul; rate limit IP
-  (30 / 10 min) → rate limit token (5 / 10 min, cheia = sha256 al tokenului, se consumă și pe tokenuri cu format bun dar inexistente) →
-  `{ok:false, motiv:'prea_multe'}`; token (existență, expirare) → `token_invalid`; opțiune → `optiune_invalida`; `particip` cere **[r2]**
+  RETURNS jsonb` — ordinea **[r3]**: formatul tokenului (exact 43 caractere) → `token_invalid` fără a atinge contorul; (curățare rară a
+  contorului); căutarea tokenului; rate limit IP (30 / 10 min) → `prea_multe`; token inexistent / expirat → `token_invalid` (fără cheie de token);
+  rate limit token (5 / 10 min, cheia = sha256 al tokenului, DOAR pentru tokenuri existente) → `{ok:false, motiv:'prea_multe'}`; opțiune →
+  `optiune_invalida`; `particip` cere **[r2]**
   `p_zi` NOT NULL și egală cu una din `sesiune_zi1..3` ale UAT-ului deținătorului, altfel `zi_invalida`;
   `nu_particip_fara_obiectii` fără `p_declaratie_confirmata = true` → `declaratie_neconfirmata`; `constatare_teren` /
   `nu_particip_cu_obiectii` cu `p_obiectii` gol → `obiectii_lipsa`, peste 4000 caractere → `obiectii_prea_lungi` (la celelalte opțiuni

@@ -82,15 +82,15 @@ DECLARE
   v_tok text; v_tok2 text; v_exp timestamptz; v_astept timestamptz; v_n numeric; v_gdpr text;
 BEGIN
   PERFORM pg_temp.red_ca(v_owner, 'authenticated', pg_temp.red_g('email'));
-  INSERT INTO public.red_proiecte (cod, denumire, beneficiar, contact_nume, contact_telefon, activ)
-  VALUES ('TEST-REDARI-DRY', 'Proiect test redari (DRY)', 'Beneficiar test', 'Contact Test', '0700000000', true) RETURNING id, text_gdpr INTO v_pr, v_gdpr;
+  INSERT INTO public.red_proiecte (cod, denumire, beneficiar, contact_nume, contact_telefon, reprezentant_tgz_nume, reprezentant_tgz_telefon, activ)
+  VALUES ('TEST-REDARI-DRY', 'Proiect test redari (DRY)', 'Beneficiar test', 'Contact Test', '0700000000', 'Reprezentant TGZ Test', '0700000003', true) RETURNING id, text_gdpr INTO v_pr, v_gdpr;
   INSERT INTO public.red_proiecte (cod, denumire, activ) VALUES ('TEST-REDARI-DRY-2', 'Al doilea proiect (DRY)', false) RETURNING id INTO v_pr2;
   IF (SELECT contact_email FROM public.red_proiecte WHERE id = v_pr) IS DISTINCT FROM 'redari@gazpet.ro' OR v_gdpr NOT LIKE 'Operatori: S.N.T.G.N. TRANSGAZ%'
      OR (SELECT text_declaratie FROM public.red_proiecte WHERE id = v_pr) NOT LIKE 'Nu particip.%' THEN
     RAISE EXCEPTION 'TEST2 FAIL: DEFAULT-urile proiectului (contact_email / text_gdpr / text_declaratie)';
   END IF;
-  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet, sesiune_zi1, sesiune_zi2, sesiune_zi3, program_zi1, program_zi2, program_zi3)
-  VALUES (v_pr, 'UAT Test Husnicioara', 'HUS', 'Mehedinti', v_azi + 10, v_azi + 11, v_azi + 12, '09-12', '09-12', '13-16') RETURNING id INTO v_uat;
+  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet, sesiune_zi1, sesiune_zi2, sesiune_zi3, program_zi1, program_zi2, program_zi3, sate_zi1, sate_zi2, sate_zi3)
+  VALUES (v_pr, 'UAT Test Husnicioara', 'HUS', 'Mehedinti', v_azi + 10, v_azi + 11, v_azi + 12, '09-12', '09-12', '13-16', 'Sat Test (T12, T13)', 'Sat Doi', 'Sat Trei') RETURNING id INTO v_uat;
   INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson, sat, tarla, suprafata_temporara_mp, articol_deviz, cantitate)
   VALUES (v_pr, v_uat, 'T3-HUS-0001', 3, 'Sat Test', 'T12', 250, 'Readucere teren arabil', 250) RETURNING id INTO v_p;
   INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate, cota)
@@ -116,6 +116,13 @@ BEGIN
   -- legaturi (P1-1): UAT-ul altui proiect, parcela stearsa, detinator inexistent; imutabilitatea coloanelor de legatura
   IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (%L, %L, %L, 3)', v_pr2, v_uat, 'T3-HUS-0009'), '23503') THEN
     RAISE EXCEPTION 'TEST2 FAIL: parcela cu UAT-ul altui proiect acceptata'; END IF;
+  -- id_parcela coerent cu tronson + uat3 (Copilot r2 P2-02); id_parcela / tronson imutabile
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (%L, %L, %L, 3)', v_pr, v_uat, 'T5-HUS-0004'), '23514') THEN
+    RAISE EXCEPTION 'TEST2 FAIL: id_parcela cu alt tronson acceptat'; END IF;
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (%L, %L, %L, 3)', v_pr, v_uat, 'T3-GOD-0004'), '23514') THEN
+    RAISE EXCEPTION 'TEST2 FAIL: id_parcela cu alt uat3 acceptat'; END IF;
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_parcele SET tronson = 4 WHERE id = %L', v_p2), '23514') THEN RAISE EXCEPTION 'TEST2 FAIL: tronson nu e imutabil'; END IF;
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_parcele SET id_parcela = %L WHERE id = %L', 'T3-HUS-0007', v_p2), '23514') THEN RAISE EXCEPTION 'TEST2 FAIL: id_parcela nu e imutabil'; END IF;
   UPDATE public.red_parcele SET sters_la = now(), sters_motiv = 'test' WHERE id = v_p2;
   IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (%L, %L, %L, %L)', v_p2, 'X Test', 'X TEST', 'proprietar'), '23503') THEN
     RAISE EXCEPTION 'TEST2 FAIL: detinator pe parcela stearsa acceptat'; END IF;
@@ -165,7 +172,7 @@ BEGIN
   PERFORM set_config('red_test.d1', v_d1::text, true); PERFORM set_config('red_test.d2', v_d2::text, true); PERFORM set_config('red_test.d3', v_d3::text, true);
   PERFORM set_config('red_test.d4', v_d4::text, true); PERFORM set_config('red_test.d5', v_d5::text, true);
   PERFORM set_config('red_test.tok1', v_tok, true); PERFORM set_config('red_test.tok2', v_tok2, true);
-  RAISE NOTICE 'TEST2 OK insert owner: DEFAULT-uri proiect, token % caractere in red_detinatori_token, imutabil, expira % (+30 zile dupa ultima sesiune), cheie_sursa unica, legaturi coerente + imutabile, valoare_lei doar prin functii', length(v_tok), v_astept;
+  RAISE NOTICE 'TEST2 OK insert owner: DEFAULT-uri proiect, token % caractere in red_detinatori_token, imutabil, expira % (+30 zile dupa ultima sesiune), cheie_sursa unica, legaturi coerente + imutabile (si id_parcela/tronson), sate_zi / reprezentant_tgz_telefon, valoare_lei doar prin functii', length(v_tok), v_astept;
 END $t2$;
 
 -- ── TEST3: contul fără modul nu vede nimic și nu poate scrie ─────────────────────────────────────────────────────────────────
@@ -183,7 +190,7 @@ BEGIN
   IF v_total <> 0 THEN RAISE EXCEPTION 'TEST3 FAIL: contul fara modul vede % randuri', v_total; END IF;
   IF NOT pg_temp.red_refuza('SELECT count(*) FROM public.red_rate_limit', '42501') THEN RAISE EXCEPTION 'TEST3 FAIL: red_rate_limit citibil de authenticated'; END IF;
   IF NOT pg_temp.red_refuza('INSERT INTO public.red_proiecte (cod) VALUES (''TEST-FARA'')', '42501') THEN RAISE EXCEPTION 'TEST3 FAIL: insert proiect acceptat pentru cont fara modul'; END IF;
-  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES (%L, %L, %L)', pg_temp.red_g('d1'), 'telefon', 'particip'), '42501') THEN
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, zi_sesiune_aleasa) VALUES (%L, %L, %L, %L)', pg_temp.red_g('d1'), 'telefon', 'particip', pg_temp.red_g('azi')::date + 10), '42501') THEN
     RAISE EXCEPTION 'TEST3 FAIL: insert raspuns acceptat pentru cont fara modul'; END IF;
   UPDATE public.red_detinatori SET cota = 'x' WHERE id = pg_temp.red_g('d1')::uuid;
   GET DIAGNOSTICS n = ROW_COUNT;
@@ -220,25 +227,25 @@ BEGIN
                       AND date_vechi ->> 'valoare_lei_setata' = 'false' AND date_noi ->> 'valoare_lei_setata' = 'true') THEN
     RAISE EXCEPTION 'TEST4 FAIL: mascarea valoare_lei in jurnal';
   END IF;
-  -- contactul: doar campurile cu sha256, NICIODATA valorile (P2-6)
+  -- contactul: doar numele campurilor („modificat”), NICIODATA valorile si nici hash-uri (P2-6 / Copilot r2 P2-01)
   SELECT date_noi INTO x FROM public.red_jurnal WHERE tabela = 'red_detinatori_contact' AND inregistrare_id = v_d1 AND actiune = 'insert';
-  IF x IS NULL OR x ->> 'telefon' NOT LIKE 'sha256:%' OR x ->> 'adresa_strada' NOT LIKE 'sha256:%' OR x ? 'detinator_id' OR x ? 'updated_at'
-     OR x ->> 'telefon' <> 'sha256:' || encode(sha256(convert_to('0700000001', 'UTF8')), 'hex') THEN
-    RAISE EXCEPTION 'TEST4 FAIL: jurnalul contactului nu e doar hash-uri (%)', x;
+  IF x IS NULL OR x ->> 'telefon' <> 'modificat' OR x ->> 'adresa_strada' <> 'modificat' OR x ->> 'adresa_cunoscuta' <> 'modificat'
+     OR x ? 'detinator_id' OR x ? 'updated_at' OR x ? 'email' THEN
+    RAISE EXCEPTION 'TEST4 FAIL: jurnalul contactului nu e doar lista campurilor (%)', x;
   END IF;
   IF EXISTS (SELECT 1 FROM public.red_jurnal WHERE date_noi::text LIKE '%0700000001%' OR date_vechi::text LIKE '%0700000001%'
-                                                 OR date_noi::text LIKE '%Str. Test nr. 1%' OR date_vechi::text LIKE '%Str. Test nr. 1%') THEN
-    RAISE EXCEPTION 'TEST4 FAIL: telefonul / adresa apar in clar in jurnal';
+                                                 OR date_noi::text LIKE '%Str. Test nr. 1%' OR date_vechi::text LIKE '%Str. Test nr. 1%'
+                                                 OR date_noi::text LIKE '%sha256%' OR date_vechi::text LIKE '%sha256%') THEN
+    RAISE EXCEPTION 'TEST4 FAIL: telefonul / adresa (sau un hash) apar in jurnal';
   END IF;
   -- la UPDATE pe contact: doar campurile schimbate
   PERFORM pg_temp.red_ca(v_owner, 'authenticated', pg_temp.red_g('email'));
   UPDATE public.red_detinatori_contact SET telefon = '0700000002' WHERE detinator_id = v_d1;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
   SELECT date_noi INTO x FROM public.red_jurnal WHERE tabela = 'red_detinatori_contact' AND inregistrare_id = v_d1 AND actiune = 'update';
-  IF x IS NULL OR (SELECT count(*) FROM jsonb_object_keys(x)) <> 1 OR x ->> 'telefon' <> 'sha256:' || encode(sha256(convert_to('0700000002', 'UTF8')), 'hex')
-     OR (SELECT date_vechi ->> 'telefon' FROM public.red_jurnal WHERE tabela = 'red_detinatori_contact' AND inregistrare_id = v_d1 AND actiune = 'update')
-        <> 'sha256:' || encode(sha256(convert_to('0700000001', 'UTF8')), 'hex') THEN
-    RAISE EXCEPTION 'TEST4 FAIL: update-ul contactului nu jurnalizeaza doar campul schimbat, ca hash (%)', x;
+  IF x IS NULL OR (SELECT count(*) FROM jsonb_object_keys(x)) <> 1 OR x ->> 'telefon' <> 'modificat'
+     OR (SELECT date_vechi FROM public.red_jurnal WHERE tabela = 'red_detinatori_contact' AND inregistrare_id = v_d1 AND actiune = 'update') <> '{"telefon": "modificat"}'::jsonb THEN
+    RAISE EXCEPTION 'TEST4 FAIL: update-ul contactului nu jurnalizeaza doar campul schimbat (%)', x;
   END IF;
   -- append-only, chiar ca postgres (owner-ul tabelului)
   SELECT min(id) INTO v_min FROM public.red_jurnal;
@@ -252,7 +259,7 @@ BEGIN
      OR NOT has_table_privilege('service_role', 'public.red_jurnal', 'SELECT') OR NOT has_table_privilege('authenticated', 'public.red_jurnal', 'SELECT') THEN
     RAISE EXCEPTION 'TEST4 FAIL: privilegiile pe red_jurnal';
   END IF;
-  RAISE NOTICE 'TEST4 OK jurnal: % randuri, autor + email, mascare valoare_lei, contact doar hash-uri (fara telefon / adresa in clar), UPDATE/DELETE/TRUNCATE refuzate si pentru postgres', (SELECT count(*) FROM public.red_jurnal);
+  RAISE NOTICE 'TEST4 OK jurnal: % randuri, autor + email, mascare valoare_lei, contact doar numele campurilor schimbate (fara telefon / adresa, fara hash-uri), UPDATE/DELETE/TRUNCATE refuzate si pentru postgres', (SELECT count(*) FROM public.red_jurnal);
 END $t4$;
 
 -- ── TEST5: numerotarea documentelor și rezervarea numerelor de parcelă ───────────────────────────────────────────────────────
@@ -366,8 +373,24 @@ BEGIN
   s := pg_temp.red_stare(v_d5); IF (s = 'CONVOCARE_RETURNATA') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: d5 confirmare INAINTEA returului % (astept CONVOCARE_RETURNATA)', s; END IF;
   UPDATE public.red_convocari SET data_confirmare_primire = v_azi + 8 WHERE detinator_id = v_d5 AND retur IS NULL;
   s := pg_temp.red_stare(v_d5); IF (s = 'CONVOCAT_FARA_RASPUNS') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: d5 confirmare dupa retur % (astept CONVOCAT_FARA_RASPUNS)', s; END IF;
+  -- validarea raspunsurilor si pentru operatori (r2 P2-02): particip fara zi / zi straina, obiectii goale, online fara declaratie → 23514
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES (%L, ''telefon'', ''particip'')', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: particip telefonic fara zi acceptat'; END IF;
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, zi_sesiune_aleasa) VALUES (%L, ''telefon'', ''particip'', %L)', v_d5, v_azi + 99), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: particip cu zi straina acceptat'; END IF;
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, obiectii_text) VALUES (%L, ''scris'', ''constatare_teren'', ''  '')', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: constatare fara obiectii acceptata'; END IF;
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES (%L, ''online'', ''nu_particip_fara_obiectii'')', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: fara obiectii online fara declaratie acceptat'; END IF;
   INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, zi_sesiune_aleasa, data) VALUES (v_d5, 'telefon', 'particip', v_azi + 10, now() - interval '1 minute');
   s := pg_temp.red_stare(v_d5); IF (s = 'A_RASPUNS_PARTICIPA') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: d5 particip % (astept A_RASPUNS_PARTICIPA)', s; END IF;
+  -- telefonic, fara obiectii, FARA bifa: acceptat (operatorul confirma); aceeasi data → castiga seq-ul mai mare
+  INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, data) VALUES (v_d5, 'telefon', 'nu_particip_fara_obiectii', now() - interval '1 minute');
+  s := pg_temp.red_stare(v_d5); IF (s = 'A_RASPUNS_FARA_OBIECTII') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: d5 fara obiectii telefonic % (astept A_RASPUNS_FARA_OBIECTII)', s; END IF;
+  -- seq imutabil (r2 P2-03): nici macar SET seq = DEFAULT (permis de identity ALWAYS) nu trece de trigger
+  IF NOT pg_temp.red_refuza(format('UPDATE public.red_raspunsuri SET seq = DEFAULT WHERE detinator_id = %L', v_d5), '23514') THEN RAISE EXCEPTION 'TEST6 FAIL: seq modificabil prin SET DEFAULT'; END IF;
+  -- created_at = timpul de receptie, imutabil; `data` (declarata) ramane editabila
+  UPDATE public.red_raspunsuri SET created_at = now() - interval '7 days', data = now() - interval '2 minutes' WHERE detinator_id = v_d5 AND optiune = 'particip';
+  IF EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND created_at < now() - interval '1 day')
+     OR NOT EXISTS (SELECT 1 FROM public.red_raspunsuri WHERE detinator_id = v_d5 AND optiune = 'particip' AND data < now() - interval '90 seconds') THEN
+    RAISE EXCEPTION 'TEST6 FAIL: created_at trebuie imutabil, data editabila';
+  END IF;
   -- aceeasi `data` ca raspunsul anterior: castiga seq-ul mai mare (P2-9)
   INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, obiectii_text, data) VALUES (v_d5, 'telefon', 'constatare_teren', 'Teren necompactat test', now() - interval '1 minute');
   s := pg_temp.red_stare(v_d5); IF (s = 'OBIECTII_DE_TRATAT') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: d5 obiectii (tie-break seq) % (astept OBIECTII_DE_TRATAT)', s; END IF;
@@ -387,8 +410,18 @@ BEGIN
      OR (SELECT max(procent_inchise) FROM public.red_v_centralizator_uat WHERE uat_id = v_uat) <> 20.0 THEN
     RAISE EXCEPTION 'TEST6 FAIL: centralizator final (astept 4 stari, FARA_ADRESA=2, 20%%)';
   END IF;
+  -- corectia unei parcele = soft delete + rand nou (Copilot r2 P2-03): soft delete-ul cu detinatori si convocari active trece, parcela iese din
+  -- vederi, un detinator nou pe parcela stearsa e refuzat; apoi se reactiveaza pentru testele urmatoare
+  UPDATE public.red_parcele SET sters_la = now(), sters_motiv = 'test corectie' WHERE id = v_p;
+  IF (SELECT count(*) FROM public.red_v_stare_parcela WHERE parcela_id = v_p) <> 0 OR (SELECT count(*) FROM public.red_v_tronson WHERE parcela_id = v_p) <> 0 THEN
+    RAISE EXCEPTION 'TEST6 FAIL: parcela stearsa mai apare in vederi';
+  END IF;
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (%L, ''Nou Test'', ''NOU TEST'', ''proprietar'')', v_p), '23503') THEN
+    RAISE EXCEPTION 'TEST6 FAIL: detinator nou pe parcela stearsa acceptat'; END IF;
+  UPDATE public.red_parcele SET sters_la = NULL, sters_motiv = NULL WHERE id = v_p;
+  IF (SELECT count(*) FROM public.red_v_stare_parcela WHERE parcela_id = v_p) <> 5 THEN RAISE EXCEPTION 'TEST6 FAIL: parcela reactivata nu revine in vederi'; END IF;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
-  RAISE NOTICE 'TEST6 OK stari: DE_CONVOCAT → EXPEDIAT_ASTEPTAM_AR → CONVOCAT_FARA_RASPUNS → A_RASPUNS_FARA_OBIECTII → PV_TRIMIS_SPRE_SEMNARE → PV_A_SEMNAT; NEIDENTIFICAT / FARA_ADRESA / CONVOCARE_RETURNATA (acoperita de confirmare ulterioara) / A_RASPUNS_PARTICIPA / OBIECTII_DE_TRATAT (tie-break seq) / PV_B_CONSTATARE; PV A/B/C coerente; centralizator + tronson';
+  RAISE NOTICE 'TEST6 OK stari: DE_CONVOCAT → EXPEDIAT_ASTEPTAM_AR → CONVOCAT_FARA_RASPUNS → A_RASPUNS_FARA_OBIECTII → PV_TRIMIS_SPRE_SEMNARE → PV_A_SEMNAT; NEIDENTIFICAT / FARA_ADRESA / CONVOCARE_RETURNATA (acoperita de confirmare ulterioara) / A_RASPUNS_PARTICIPA / A_RASPUNS_FARA_OBIECTII (telefonic, fara bifa) / OBIECTII_DE_TRATAT (tie-break seq) / PV_B_CONSTATARE; validarea raspunsurilor si pentru operatori; seq + created_at imutabile; soft delete parcela cu detinatori; PV A/B/C coerente; centralizator + tronson';
 END $t6$;
 
 -- ── TEST7: RPC public — format token, validări, rate limit (+ curățare), fără nume, meta, expirare ───────────────────────────
@@ -398,7 +431,7 @@ DECLARE
   v_t1 text := pg_temp.red_g('tok1'); v_t2 text := pg_temp.red_g('tok2'); v_t3 text; v_r jsonb; i int;
 BEGIN
   SELECT token_raspuns INTO v_t3 FROM public.red_detinatori_token WHERE detinator_id = pg_temp.red_g('d3')::uuid;
-  -- curatarea contorului (P2-5): un rand mai vechi de 24 h dispare la urmatorul apel
+  -- curatarea contorului (P2-5 / r2 P2-01): randul vechi NU se sterge la un apel cu format gresit; fortat → dispare; > 10.000 randuri estimate → dispare
   INSERT INTO public.red_rate_limit (cheie, fereastra_start, numar) VALUES ('ip:vechi', now() - interval '25 hours', 7);
   PERFORM pg_temp.red_ca(NULL, 'anon', NULL);
   PERFORM pg_temp.red_ip('10.0.0.2');
@@ -420,8 +453,18 @@ BEGIN
     RAISE EXCEPTION 'TEST7 FAIL: token inexistent %', v_r;
   END IF;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
-  IF (SELECT numar FROM public.red_rate_limit WHERE cheie = 'ip:10.0.0.2') <> 1 OR EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie = 'ip:vechi') THEN
-    RAISE EXCEPTION 'TEST7 FAIL: contorul IP / curatarea randurilor mai vechi de 24 h';
+  IF (SELECT numar FROM public.red_rate_limit WHERE cheie = 'ip:10.0.0.2') <> 1 THEN RAISE EXCEPTION 'TEST7 FAIL: contorul IP'; END IF;
+  INSERT INTO public.red_rate_limit (cheie, fereastra_start, numar) VALUES ('ip:vechi', now() - interval '25 hours', 7) ON CONFLICT (cheie) DO NOTHING;
+  i := public.fn_red_rate_limit_curata(true);   -- intr-o instructiune separata: EXISTS-ul de mai jos trebuie sa vada stergerea
+  IF i < 1 OR EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie = 'ip:vechi')
+     OR NOT EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie = 'ip:10.0.0.2') THEN
+    RAISE EXCEPTION 'TEST7 FAIL: curatarea fortata (rand > 24 h sters, randul curent pastrat; sterse=%)', i;
+  END IF;
+  INSERT INTO public.red_rate_limit (cheie, fereastra_start, numar) SELECT 'ip:vechi-' || g, now() - interval '25 hours', 1 FROM generate_series(1, 10001) g;
+  ANALYZE public.red_rate_limit;
+  i := public.fn_red_rate_limit_curata(false);
+  IF i < 10001 OR EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie LIKE 'ip:vechi-%') THEN
+    RAISE EXCEPTION 'TEST7 FAIL: curatarea pe prag (> 10.000 randuri estimate) nu a sters randurile vechi (sterse=%)', i;
   END IF;
   PERFORM pg_temp.red_ca(NULL, 'anon', NULL);
   v_r := public.fn_red_formular_public(v_t2);
@@ -476,9 +519,14 @@ BEGIN
     RAISE EXCEPTION 'TEST7 FAIL: istoricul raspunsurilor d1 (+ meta)';
   END IF;
   -- meta in jurnal: doar hash-uri, IP-ul nu apare in clar (P2-02 Copilot / P2-6)
-  IF NOT EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_raspunsuri_meta' AND actiune = 'insert' AND date_noi ->> 'ip_sau_sursa' LIKE 'sha256:%')
+  IF NOT EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_raspunsuri_meta' AND actiune = 'insert' AND date_noi ->> 'ip_sau_sursa' = 'modificat' AND date_noi ->> 'user_agent' = 'modificat')
      OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE date_noi::text LIKE '%10.0.0.1%' OR date_noi::text LIKE '%DRY/1.0%') THEN
     RAISE EXCEPTION 'TEST7 FAIL: metadatele raspunsului apar in clar in jurnal';
+  END IF;
+  -- cheia de token se atinge DOAR pentru tokenuri existente (Copilot r2 P1-01): 3 tokenuri reale (d1, d2, d3), niciuna pentru cele inventate
+  IF (SELECT count(*) FROM public.red_rate_limit WHERE cheie LIKE 't:%') <> 3
+     OR EXISTS (SELECT 1 FROM public.red_rate_limit WHERE cheie IN ('t:' || encode(sha256(convert_to(repeat('y', 43), 'UTF8')), 'hex'), 't:' || encode(sha256(convert_to(repeat('x', 43), 'UTF8')), 'hex'))) THEN
+    RAISE EXCEPTION 'TEST7 FAIL: red_rate_limit are chei de token pentru tokenuri inexistente (%)', (SELECT count(*) FROM public.red_rate_limit WHERE cheie LIKE 't:%');
   END IF;
   -- expirare: sesiunile UAT in trecut → tokenul d3 devine invalid; apoi sesiunile revin
   PERFORM pg_temp.red_ca(v_owner, 'authenticated', pg_temp.red_g('email'));
@@ -495,7 +543,7 @@ BEGIN
   v_r := public.fn_red_formular_public(v_t3);
   IF ((v_r ->> 'ok')::boolean) IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST7 FAIL: tokenul d3 nu a revenit valid %', v_r; END IF;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
-  RAISE NOTICE 'TEST7 OK RPC public: format token (43) verificat inaintea contorului, token_invalid (inexistent / expirat, cu contact), validari jsonb (particip cere zi), 5/token si 30/IP → prea_multe, curatare >24h, al doilea raspuns acceptat, fara nume in raspuns, meta separata si hash in jurnal, anon fara tabele';
+  RAISE NOTICE 'TEST7 OK RPC public: format token (43) verificat inaintea contorului, token_invalid (inexistent / expirat, cu contact), validari jsonb (particip cere zi), 5/token si 30/IP → prea_multe, curatare >24h (fortata / pe prag, nu la fiecare atingere), al doilea raspuns acceptat, fara nume in raspuns, meta separata (jurnal doar nume de campuri), chei de token doar pentru tokenuri existente, anon fara tabele';
 END $t7$;
 
 -- ── TEST8: viewer (drept temporar în user_module_access, în tranzacție) ──────────────────────────────────────────────────────
@@ -522,7 +570,7 @@ BEGIN
   IF (SELECT count(*) FROM public.red_v_centralizator_uat) = 0 OR (SELECT count(*) FROM public.red_v_tronson) = 0 OR (SELECT count(*) FROM public.red_v_parcele) = 0 THEN
     RAISE EXCEPTION 'TEST8 FAIL: viewer nu vede vederile';
   END IF;
-  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES (%L, %L, %L)', pg_temp.red_g('d2'), 'telefon', 'particip'), '42501') THEN
+  IF NOT pg_temp.red_refuza(format('INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune, zi_sesiune_aleasa) VALUES (%L, %L, %L, %L)', pg_temp.red_g('d2'), 'telefon', 'particip', pg_temp.red_g('azi')::date + 10), '42501') THEN
     RAISE EXCEPTION 'TEST8 FAIL: viewer a inserat raspuns'; END IF;
   UPDATE public.red_detinatori SET cota = 'x' WHERE id = pg_temp.red_g('d1')::uuid;
   GET DIAGNOSTICS n = ROW_COUNT;
@@ -539,8 +587,13 @@ END $t8$;
 
 -- ── TEST9: storage — doar SELECT + INSERT admin/editor, fără UPDATE / DELETE; anon și contul fără acces refuzați ───────────────
 DO $t9$
-DECLARE v_fara uuid := pg_temp.red_g('fara')::uuid;
+DECLARE v_fara uuid := pg_temp.red_g('fara')::uuid; n bigint; v_obj uuid; v_cale text := 'TEST-REDARI-DRY/HUS/T3-HUS-0001/C-0003-v1.docx'; v_rau text[];
 BEGIN
+  -- inventar: nicio politica PERMISIVA non-red_* de pe storage.objects nu poate acoperi bucket-ul redari (aceeasi regula ca postconditia)
+  SELECT array_agg(p.policyname::text ORDER BY p.policyname) INTO v_rau FROM pg_policies p
+   WHERE p.schemaname = 'storage' AND p.tablename = 'objects' AND p.permissive = 'PERMISSIVE' AND p.policyname NOT LIKE 'red\_storage\_%'
+     AND EXISTS (SELECT 1 FROM unnest(ARRAY[p.qual, p.with_check]) e WHERE e IS NOT NULL AND (e !~ '^[(]*bucket_id = ''[^'']+''::text[)]( AND .*)?$' OR e ~ 'bucket_id = ''redari'''));
+  IF v_rau IS NOT NULL THEN RAISE EXCEPTION 'TEST9 FAIL: politici storage care ar putea acoperi redari: %', v_rau; END IF;
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname IN ('red_storage_sel', 'red_storage_ins')
         AND cmd IN ('SELECT', 'INSERT') AND coalesce(qual, with_check) LIKE '%fn_red_nivel()%') <> 2
      OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'storage' AND policyname LIKE 'red\_%' AND cmd NOT IN ('SELECT', 'INSERT')) THEN
@@ -554,8 +607,24 @@ BEGIN
   IF (SELECT count(*) FROM storage.objects WHERE bucket_id = 'redari') <> 0 THEN RAISE EXCEPTION 'TEST9 FAIL: anon vede obiecte in redari'; END IF;
   PERFORM pg_temp.red_ca(v_fara, 'authenticated', 'fara@redari.local');
   IF NOT pg_temp.red_refuza('INSERT INTO storage.objects (bucket_id, name) VALUES (''redari'', ''TEST-REDARI-DRY/fara.pdf'')', '42501') THEN RAISE EXCEPTION 'TEST9 FAIL: contul fara acces a scris in bucket-ul redari'; END IF;
+  -- editor (drept temporar): INSERT real reuseste; UPDATE / DELETE pe obiectul lui → 0 randuri (nicio politica); anon nu-l vede
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
-  RAISE NOTICE 'TEST9 OK storage: 2 politici (SELECT / INSERT, fara UPDATE si fara DELETE) pe fn_red_nivel, bucket privat, anon si contul fara acces refuzati';
+  INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES (v_fara, 'redari', 'editor');
+  PERFORM pg_temp.red_ca(v_fara, 'authenticated', 'editor@redari.local');
+  INSERT INTO storage.objects (bucket_id, name, owner_id, metadata) VALUES ('redari', v_cale, v_fara::text, '{"mimetype":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}'::jsonb) RETURNING id INTO v_obj;
+  IF (SELECT count(*) FROM storage.objects WHERE bucket_id = 'redari' AND name = v_cale) <> 1 THEN RAISE EXCEPTION 'TEST9 FAIL: editorul nu-si vede obiectul'; END IF;
+  UPDATE storage.objects SET name = v_cale || '.x' WHERE id = v_obj;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n <> 0 THEN RAISE EXCEPTION 'TEST9 FAIL: editorul a modificat obiectul (% randuri)', n; END IF;
+  DELETE FROM storage.objects WHERE id = v_obj;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n <> 0 THEN RAISE EXCEPTION 'TEST9 FAIL: editorul a sters obiectul (% randuri)', n; END IF;
+  PERFORM pg_temp.red_ca(NULL, 'anon', NULL);
+  IF (SELECT count(*) FROM storage.objects WHERE bucket_id = 'redari') <> 0 THEN RAISE EXCEPTION 'TEST9 FAIL: anon vede obiectul editorului'; END IF;
+  PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
+  IF (SELECT name FROM storage.objects WHERE id = v_obj) IS DISTINCT FROM v_cale THEN RAISE EXCEPTION 'TEST9 FAIL: obiectul nu a ramas neatins'; END IF;
+  DELETE FROM public.user_module_access WHERE profile_id = v_fara AND module = 'redari';
+  RAISE NOTICE 'TEST9 OK storage: 2 politici (SELECT / INSERT, fara UPDATE si fara DELETE) pe fn_red_nivel, nicio politica straina pe redari, bucket privat; editorul scrie dar nu modifica / nu sterge; anon si contul fara acces refuzati';
 END $t9$;
 
 DO $fin$
