@@ -20,9 +20,10 @@ BEGIN
   END IF;
   SELECT count(*) INTO v_f FROM _dry_dovezi_908;
   IF v_f = 0 THEN
-    IF to_regclass('public.ofertare_numiri_dovezi_arhiva') IS NOT NULL
-       AND EXISTS (SELECT 1 FROM public.ofertare_numiri_dovezi_arhiva WHERE revenire = v_rev) THEN
-      RAISE EXCEPTION 'REV2a fara dovezi inainte, dar arhiva are randuri pentru revenirea curenta';
+    -- r6 (review r6 Jakarinos P2-01 / Copilot P2-01): IF imbricat + EXECUTE — referința la tabel nu se rezolvă când arhiva lipsește
+    IF to_regclass('public.ofertare_numiri_dovezi_arhiva') IS NOT NULL THEN
+      EXECUTE 'SELECT count(*) FROM public.ofertare_numiri_dovezi_arhiva WHERE revenire = $1' INTO v_n USING v_rev;
+      IF v_n > 0 THEN RAISE EXCEPTION 'REV2a fara dovezi inainte, dar arhiva are % randuri pentru revenirea curenta', v_n; END IF;
     END IF;
     RAISE NOTICE 'REV OK (a): fara dovezi — coloane scoase, nimic arhivat';
     RETURN;

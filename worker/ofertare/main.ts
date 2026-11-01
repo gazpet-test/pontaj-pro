@@ -173,7 +173,7 @@ await heartbeat({ stare: 'pornit' })
 // La eroare de citire la pornire: pauză (fără cost), se reia.
 async function cuPoarta(tabel: CoadaAi, lid: number, lucru: (poarta: Garda) => Promise<unknown>) {
   const { v, cerere } = await cerereaTrecePoarta(supabase, tabel, lid)
-  if (v === 'da' && cerere) return await lucru(gardaCheltuiala(supabase, tabel, lid, cerere))
+  if (v === 'da' && cerere) return await lucru(gardaCheltuiala(supabase, tabel, lid, cerere, { oprire: () => oprire, log: (m) => log(m) }))
   log(`#${lid}: ${tabel} ${v === 'eroare' ? 'poarta nu s-a putut verifica, reiau mai târziu' : v === 'refuz' ? 'refuzată — cerut_de nu trece poarta pe cheltuială' : 'înlocuită între timp'}`)
   if (v === 'eroare') await sleep(30_000)
 }

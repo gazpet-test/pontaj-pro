@@ -151,7 +151,7 @@ Deno.test('r5: AI reușit + scrierea progresului eșuează de 4 ori → aceeași
   const { supa, j } = fake({ rand: R(), eroriUpdate: 4 })
   const pauze: number[] = []
   const r = await scrieCuReincercare(supa, 'ofertare_extragere_coada', 7, C(), { poz: 3, cerinte_noi: 5 }, { oprire: () => false, pauza: async (ms) => { pauze.push(ms) } })
-  assertEquals(r, 'ok'); assertEquals(j.incercariUpdate, 5); assertEquals(j.update, [{ poz: 3, cerinte_noi: 5 }]); assertEquals(j.rpc, [])
+  assertEquals(r, 'ok'); assertEquals(j.incercariUpdate, 5); assertEquals(j.update, [{ poz: 3, cerinte_noi: 5 }]); assertEquals(j.rpc, []); assertEquals(j.citiri, 0)
   assertEquals(pauze, [30_000, 60_000, 90_000, 120_000])
 })
 Deno.test('r5: scriere eșuată persistent + worker oprit → „stop” (nu „reia”), fără alt apel; cererea înlocuită → „stop”, rândul nou neatins', async () => {
@@ -162,4 +162,19 @@ Deno.test('r5: scriere eșuată persistent + worker oprit → „stop” (nu „
   const b = fake({ rand: R('owner', 'g2') })
   assertEquals(await scrieCuReincercare(b.supa, 'ofertare_extragere_coada', 7, C(), { poz: 3 }, { oprire: () => false, pauza: async () => {} }), 'stop')
   assertEquals(b.j.update, []); assertEquals(b.supa.rand?.cerut_la, 'g2')
+})// r6 (review r6 Jakarinos P1-01): aceeași persistare pe acoperire / clarificări / ingest — garda.scrie reîncearcă ACEEAȘI scriere (nu o
+// abandonează, ceea ce ar lăsa cererea activă și preluarea următoare ar plăti din nou); 'eroare' doar dacă workerul se oprește între timp
+Deno.test('r6: garda.scrie — închiderea finală eșuează de 2 ori → reîncercată până la ok, cererea închisă, fără apel RPC / AI', async () => {
+  const { supa, j } = fake({ rand: R(), eroriUpdate: 2 })
+  const g = gardaCheltuiala(supa, 'ofertare_clarificari_coada', 7, C(), fara)
+  assertEquals(await g.scrie({ activ: false, nota: 'gata' }), 'ok')
+  assertEquals(j.incercariUpdate, 3); assertEquals(supa.rand?.activ, false); assertEquals(supa.rand?.nota, 'gata'); assertEquals(j.rpc, [])
+})
+Deno.test('r6: garda.scrie — eșec persistent + worker oprit → „eroare” (rularea se oprește), cererea neatinsă; înlocuită → „inlocuita”', async () => {
+  let n = 0
+  const a = fake({ rand: R(), eroareUpdate: true })
+  const g = gardaCheltuiala(a.supa, 'ofertare_acoperire_coada', 7, C(), { ...fara, oprire: () => ++n >= 2 })
+  assertEquals(await g.scrie({ ultimul_tick: 't' }), 'eroare'); assertEquals(a.supa.rand?.activ, true); assertEquals(a.j.rpc, [])
+  const b = fake({ rand: R('owner', 'g2') })
+  assertEquals(await gardaCheltuiala(b.supa, 'ofertare_acoperire_coada', 7, C(), fara).scrie({ activ: false }), 'inlocuita'); assertEquals(b.supa.rand?.activ, true)
 })

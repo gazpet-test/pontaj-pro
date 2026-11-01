@@ -92,7 +92,7 @@ export async function cerereaTrecePoarta(supabase: any, tabel: CoadaAi, licId: n
 // închide cererea (CAS pe cerere, rezultat verificat) cu NOTA_EROARE și întoarce false. `pauza` / `log` injectabile pentru teste.
 // deno-lint-ignore no-explicit-any
 export function gardaCheltuiala(supabase: any, tabel: CoadaAi, licId: number, cer: Cerere,
-  o: { incercari?: number; pauza?: (ms: number) => Promise<void>; log?: (m: string) => void } = {}): Garda {
+  o: { incercari?: number; pauza?: (ms: number) => Promise<void>; log?: (m: string) => void; oprire?: () => boolean } = {}): Garda {
   const pauza = o.pauza ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const log = o.log ?? ((m: string) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[poarta]', m))
   const n = o.incercari ?? 3
@@ -110,6 +110,13 @@ export function gardaCheltuiala(supabase: any, tabel: CoadaAi, licId: number, ce
     return false
   }) as Garda
   g.cerere = cer
-  g.scrie = (patch) => scrieCas(supabase, tabel, licId, cer, patch)
+  // r6 (review r6 Jakarinos P1-01): progresul și închiderea pe coadă (acoperire, clarificări, ingest) persistă un rezultat DEJA PLĂTIT —
+  // o scriere eșuată se reîncearcă (aceeași scriere), nu se abandonează (cererea ar rămâne activă și preluarea următoare ar plăti din nou).
+  // 'ok' = scris; 'inlocuita' = cerere înlocuită / oprită (rândul nou neatins); 'eroare' = DOAR când workerul se oprește în timpul reîncercărilor.
+  const oprire = o.oprire ?? (() => false)
+  g.scrie = async (patch) => {
+    const r = await scrieCuReincercare(supabase, tabel, licId, cer, patch, { oprire, pauza, log })
+    return r === 'ok' ? 'ok' : oprire() ? 'eroare' : 'inlocuita'
+  }
   return g
 }
