@@ -42,7 +42,7 @@ import {
 const DESTINATARI = ['razvan.trusu@gazpet.ro'];
 const MARIME_LOT = 4;           // v11: 4 (era 6) — cele 8 cautari se impart la mai putine acte
 const TIMEOUT_OFICIAL_MS = 20_000;
-const MAX_HTML = 5_000_000;     // caractere; peste → pagina nu se analizeaza (actul cade pe AI, plafonat)
+const MAX_HTML = 5_000_000;     // octeti (citire in flux); peste → pagina nu se analizeaza (actul cade pe AI, plafonat)
 const CAUTARI_PE_LOT = 8;
 const MAX_ACTE = 40;
 const LEASE_SEC = 360;          // > timeout AI + salvare; un lot omorat se reia dupa expirare
