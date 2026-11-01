@@ -9,6 +9,10 @@ le face din Registru. Șabloanele Model_1..6 vin de la Răzvan; până atunci co
 Toți agenții codează STRICT pe numele de mai jos. Cine are nevoie de ceva în plus adaugă aici, nu inventează în cod.
 Fără date reale de proprietari nicăieri (cod, teste, fixture-uri, brief-uri Paw): doar nume fictive evidente.
 
+**Implementarea BD**: `supabase/migrations/20261126a_redari_teren.sql` (revenire `supabase/revenire/20261126a_redari_teren_ROLLBACK.sql`,
+DRY `supabase/tests/20261126a_redari_teren_dryrun.sql`, detalii și harness local `docs/redari/MIGRARE_20261126a.md`). Abaterile agentului de
+migrare față de textul inițial sunt marcate mai jos cu **[mig]**; completările cerute de coordonator / Jakarinos r1 cu **[r1]**.
+
 ## 1. Drepturi (3A)
 - Cheia de modul: `redari`. Niveluri în `user_module_access.access_level`: `admin` (= redari_admin), `editor`
   (= redari_operator), `viewer` (= redari_viewer). Owner (`profiles.is_owner`) = admin implicit.
@@ -26,7 +30,8 @@ nici UPDATE pentru nimeni (REVOKE UPDATE, DELETE, TRUNCATE de la authenticated, 
 `id, cod text UNIQUE NOT NULL` (ex. `LOT1-PRUNISOR-JUPA`), `denumire, beneficiar, contract_nr, contract_data date,
 imputernicire_nr, imputernicire_data date, reprezentant_tgz_nume, reprezentant_tgz_functie, reprezentant_gazpet_nume,
 reprezentant_gazpet_functie, contact_nume, contact_telefon, contact_email` (ex. redari@gazpet.ro), `text_gdpr text,
-activ bool default true, created_at`.
+text_declaratie text NOT NULL` **[r1]** (textul declarației „nu particip — fără obiecții”, cu un implicit scurt în migrare; îl citește
+formularul public), `activ bool default true, created_at`.
 
 ### red_uat
 `id, proiect_id FK, nume text NOT NULL, uat3 text NOT NULL` (3 litere mari, ex. PRU/GOD/HUS/CAZ/ILO/BAL/SIS; UNIQUE (proiect_id, uat3)),
@@ -38,15 +43,28 @@ afisare_pv_nr, afisare_data_start date, afisare_data_end date, created_at`.
 `id, proiect_id FK, uat_id FK, id_parcela text NOT NULL` (UNIQUE (proiect_id, id_parcela), format `T{tronson}-{uat3}-{nnnn}`),
 `tronson int CHECK 1..11, km_de_la numeric, km_pana_la numeric, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp numeric,
 categoria_folosinta, articol_deviz, cantitate numeric, valoare_lei numeric` (vizibilă doar admin — vezi §4), `observatii,
-sters_la, sters_de, sters_motiv, created_at`.
+cheie_sursa text` **[r1]** (identitatea stabilă a rândului din Excel-ul TGZ: `{uat3}|{poz_hg}|{nr_cadastral}|{tarla}`, majuscule, fără
+diacritice / spații duble; NULL dacă poz_hg, nr_cadastral și tarla sunt toate goale; CHECK majuscule; UNIQUE parțial
+`(proiect_id, cheie_sursa) WHERE cheie_sursa IS NOT NULL AND sters_la IS NULL` — reimportul aceluiași fișier cade pe parcela existentă),
+`sters_la, sters_de, sters_motiv, created_at`.
+**[mig]** `authenticated` are privilegii de coloană pe red_parcele FĂRĂ `valoare_lei` ⇒ `select=*` / `RETURNING *` pe tabel pică cu
+42501: UI-ul citește **`red_v_parcele`** (toate coloanele fără valoare_lei) sau liste explicite de coloane; INSERT/UPDATE pe tabel merg cu
+coloane explicite (supabase-js `.insert(...)` fără `.select()` e OK). `service_role` vede tot.
 
 ### red_detinatori  (persoana, FĂRĂ contact)
 `id, parcela_id FK, nume text NOT NULL, nume_normalizat text NOT NULL` (majuscule, fără diacritice, spații simple),
 `calitate text CHECK IN ('proprietar','coproprietar','mostenitor','arendas','utilizator','neidentificat')`, `cota text,
-decedat bool default false, sursa_date text, versiune_lista_tgz text, token_raspuns text UNIQUE` (32+ caractere aleatoare
-url-safe, generat în BD la insert), `token_expira_la timestamptz` (= max(sesiune_zi1..3 ale UAT-ului) + 30 zile, recalculat
-de o funcție la nevoie), `sters_la, sters_de, sters_motiv, created_at, updated_at`.
-UNIQUE (parcela_id, nume_normalizat) WHERE sters_la IS NULL.
+decedat bool default false, sursa_date text, versiune_lista_tgz text, sters_la, sters_de, sters_motiv, created_at, updated_at`
+(updated_at îl pune trigger-ul). UNIQUE (parcela_id, nume_normalizat) WHERE sters_la IS NULL. `nume_normalizat` are CHECK majuscule.
+**[r1] Tokenul NU mai stă pe red_detinatori** (viewer-ul are SELECT pe rând, deci ar fi văzut secretul) — vezi `red_detinatori_token`.
+
+### red_detinatori_token  (secret — doar admin/editor) **[r1]**
+`detinator_id uuid PK FK red_detinatori, token_raspuns text UNIQUE NOT NULL` (43 caractere base64url din `gen_random_bytes(32)`, generat de
+trigger AFTER INSERT pe red_detinatori; clientul nu are nicio cale de scriere; imutabil — trigger BEFORE UPDATE îl păstrează),
+`token_expira_la timestamptz` (= max(sesiune_zi1..3 ale UAT-ului) + 30 zile, ora 23:59:59 București; NULL dacă UAT-ul nu are încă zile ⇒
+tokenul NU expiră până se pun zilele; recalculat de trigger-e la schimbarea zilelor UAT-ului, a UAT-ului parcelei sau a parcelei deținătorului).
+RLS: SELECT doar admin/editor; fără INSERT/UPDATE pentru nimeni (nici service_role). Nu intră în jurnal. UI-ul (convocator, link, QR) îl
+citește de aici: `red_detinatori_token.token_raspuns WHERE detinator_id = …`. RPC-urile publice îl caută ca SECURITY DEFINER.
 
 ### red_detinatori_contact  (PII — doar admin/editor)
 `detinator_id uuid PK FK red_detinatori, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal,
@@ -58,7 +76,10 @@ red_detinatori_contact — mascare reală, nu doar în UI.
 `id, detinator_id FK, canal text CHECK IN ('posta','sms','email','afisare','telefon'), nr_document text UNIQUE` (ex. `C-0001`),
 `data_expediere date, nr_tracking, data_confirmare_primire date, retur text CHECK IN (NULL,'destinatar_necunoscut','mutat',
 'avizat_neridicat','refuz','adresa_incompleta'), retur_data date, continut_hash text` (sha256 hex), `fisier_convocator_path text`
-(cale în bucket `redari`), `stare text CHECK IN ('activ','anulat') default 'activ', motiv_anulare, created_by, created_at`.
+(cale în bucket `redari`), `stare text CHECK IN ('activ','anulat') default 'activ', motiv_anulare, sters_la, sters_de, sters_motiv,
+created_by, created_at`. **[r1]** `fisier_convocator_path` și `continut_hash` rămân NULL-abile: UI-ul inserează rândul ÎNTÂI (număr
+rezervat), încarcă fișierul, apoi UPDATE cu path + hash (politica de UPDATE admin/editor o permite) — un rând fără path = convocator
+neîncărcat, de reluat.
 
 ### red_raspunsuri
 `id, detinator_id FK, canal text CHECK IN ('online','telefon','scris','sesiune','email','sms'), data timestamptz default now(),
@@ -76,8 +97,12 @@ semnatari jsonb, sters_la, sters_de, sters_motiv, created_by, created_at`.
 
 ### red_jurnal  (append-only)
 `id bigserial PK, tabela text, inregistrare_id uuid, actiune text CHECK IN ('insert','update','delete'), date_vechi jsonb,
-date_noi jsonb, user_id uuid, user_email text, created_at`. Trigger AFTER INSERT/UPDATE pe toate red_* (nu pe red_jurnal),
-`user_email` din `auth.jwt() ->> 'email'`. SELECT pentru admin/editor/viewer, INSERT doar prin trigger (funcție SECURITY DEFINER).
+date_noi jsonb, user_id uuid, user_email text, created_at`. Trigger AFTER INSERT/UPDATE/DELETE pe red_* (nu pe red_jurnal),
+`user_email` din `auth.jwt() ->> 'email'`. SELECT pentru admin/editor/viewer, INSERT doar prin trigger (funcție SECURITY DEFINER);
+UPDATE/DELETE/TRUNCATE refuzate de trigger pentru oricine, inclusiv postgres.
+**[mig]** Excepții: `red_rate_limit` (contor anonim — ar umple jurnalul) și `red_detinatori_token` (secret) NU se jurnalizează; pe `red_parcele`
+`valoare_lei` e înlocuit cu `valoare_lei_setata` (bool); rândurile cu `tabela = 'red_detinatori_contact'` (PII) le văd doar admin/editor;
+un UPDATE care schimbă doar `updated_at` nu produce rând. `inregistrare_id` = `id` (sau `detinator_id` la contact; NULL la red_numere).
 
 ### red_numere  (numerotare fără refolosire)
 `cheie text PK` (ex. `C`, `PVA-HUS`, `PVB-HUS`, `PVC-T3`), `ultimul int NOT NULL default 0`.
@@ -87,13 +112,28 @@ cu lock pe rând, EXECUTE doar authenticated (verifică `fn_red_nivel() IN ('adm
 
 ### red_import_loturi
 `id, proiect_id FK, versiune_lista_tgz text NOT NULL, sursa text` (TGZ / ANEXA7), `fisier_nume, randuri_total int,
-parcele_noi int, detinatori_noi int, dubluri int, neidentificati int, diferente jsonb, created_by, created_at`.
+parcele_noi int, detinatori_noi int, dubluri int, neidentificati int, diferente jsonb, stare text CHECK IN ('in_curs','finalizat','esuat')
+default 'in_curs', eroare text` **[r1]** (UI-ul creează lotul la început și îl închide la final — reluarea unui lot eșuat e vizibilă),
+`created_by, created_at`.
+
+### red_numere — completare **[r1]**
+`public.fn_red_rezerva_numere_parcele(p_uat3 text, p_tronson int, p_n int) RETURNS int` — rezervă un bloc de `p_n` numere (1..5000) pe
+cheia `P-T{tronson}-{uat3}` și întoarce PRIMUL număr din bloc; `id_parcela = T{tronson}-{uat3}-{lpad(nr, 4, '0')}`. Pornește de la
+max(nnnn) deja existent în red_parcele pe (tronson, uat3) (import anterior fără rezervare), sigură la concurență (UPDATE sub lock de rând),
+SECURITY DEFINER, EXECUTE authenticated, cer nivel admin/editor; peste 9999 → eroare.
+
+### red_rate_limit  (contor pentru RPC-urile publice; fără acces authenticated/anon)
+`cheie text PK` (`ip:<ip>` sau `t:<sha256 hex al tokenului>` — tokenul nu se stochează în clar), `fereastra_start timestamptz, numar int`.
 
 ## 3. Vederi (toate `WITH (security_invoker = on)`)
 ### red_v_stare_parcela — o linie per (parcela, detinator) activ (sters_la IS NULL)
 Coloane: `parcela_id, detinator_id, proiect_id, uat_id, uat3, uat_nume, id_parcela, tronson, nume, calitate, cota, decedat,
 adresa_cunoscuta` (din contact, prin LEFT JOIN — NULL pentru viewer), `stare text, stare_ordine int, ultima_convocare_data,
-ultimul_raspuns_optiune, ultimul_raspuns_data, pv_nr, pv_stare`.
+ultimul_raspuns_optiune, ultimul_raspuns_data, pv_nr, pv_stare` (**[mig]** pv_nr / pv_stare = PV-ul tip A ne-anulat al deținătorului,
+cu prioritate semnat > trimis_spre_semnare > generat; ultimul răspuns = max(`data`, `created_at`); `ultima_convocare_data` =
+max(`data_expediere`) pe convocările active).
+### red_v_parcele **[mig]**
+Toate coloanele din red_parcele FĂRĂ `valoare_lei` — vederea pe care o citește UI-ul (vezi §4).
 Ierarhia STĂRII, în ordinea asta (prima adevărată câștigă; aceeași logică și în `src/redari/stare.js`):
 1. `PV_A_SEMNAT` — există PV tip A activ cu stare `semnat` pe deținător.
 2. `PV_B_CONSTATARE` — există PV tip B activ pe parcelă (stare ≠ anulat).
@@ -101,12 +141,14 @@ Ierarhia STĂRII, în ordinea asta (prima adevărată câștigă; aceeași logic
 4. `OBIECTII_DE_TRATAT` — ultimul răspuns e `nu_particip_cu_obiectii` sau `constatare_teren`, fără PV A semnat.
 5. `A_RASPUNS_FARA_OBIECTII` — ultimul răspuns `nu_particip_fara_obiectii`.
 6. `A_RASPUNS_PARTICIPA` — ultimul răspuns `particip`.
-7. `CONVOCARE_RETURNATA` — există convocare activă cu `retur IS NOT NULL` și nicio convocare activă confirmată ulterior.
+7. `CONVOCARE_RETURNATA` — există convocare activă cu `retur IS NOT NULL` și nicio convocare activă confirmată ulterior
+   (**[mig]** „ulterior” = `created_at` mai mare; „activă” = `stare = 'activ' AND sters_la IS NULL`, peste tot în view).
 8. `CONVOCAT_FARA_RASPUNS` — există convocare activă cu `data_confirmare_primire` și niciun răspuns.
 9. `EXPEDIAT_ASTEPTAM_AR` — există convocare activă cu `data_expediere`, fără confirmare și fără retur.
 10. `NEIDENTIFICAT_AFISARE` — `calitate = 'neidentificat'`.
 11. `FARA_ADRESA_AFISARE` — `adresa_cunoscuta = false` (din contact; pentru viewer se evaluează tot în view, pe tabela
-    de contact prin funcție SECURITY DEFINER `fn_red_adresa_cunoscuta(detinator_id)` care întoarce doar boolean-ul).
+    de contact prin funcție SECURITY DEFINER `fn_red_adresa_cunoscuta(detinator_id)` care întoarce doar boolean-ul). **[mig]** Un
+    deținător FĂRĂ rând de contact e tratat tot `FARA_ADRESA_AFISARE` (`coalesce(…, false) = false`) — nu are unde fi convocat.
 12. `DE_CONVOCAT` — restul.
 `stare_ordine` = numărul de mai sus (1 = cel mai avansat).
 
@@ -120,35 +162,59 @@ procentul se repetă pe fiecare rând al UAT-ului).
 
 ## 4. RLS (rezumat)
 - SELECT pe red_proiecte/uat/parcele/detinatori/convocari/raspunsuri/procese_verbale/jurnal/import_loturi/numere: `fn_red_nivel() IS NOT NULL`.
-- `red_parcele.valoare_lei`: coloană citită de toți prin RLS, dar UI-ul o ascunde sub admin; pentru mascare reală în BD se
-  expune `red_v_parcele` (security_invoker) fără `valoare_lei`, iar valoarea se citește doar prin `fn_red_valoare_parcela(id)`
-  (SECURITY DEFINER, doar admin). Agentul de migrare alege varianta și o notează aici.
+- `red_parcele.valoare_lei` — **[mig] varianta aleasă: privilegii de coloană.** `authenticated` primește SELECT/INSERT/UPDATE pe
+  red_parcele pe TOATE coloanele în afară de `valoare_lei` (mascare reală în BD, indiferent de nivel); UI-ul citește `red_v_parcele`;
+  valoarea se citește prin `fn_red_valoare_parcela(id) RETURNS numeric` și se scrie prin `fn_red_valoare_parcela_seteaza(id, valoare)`
+  (ambele SECURITY DEFINER, EXECUTE authenticated, 42501 dacă nivelul nu e admin). Jurnalul primește doar `valoare_lei_setata` (bool).
+- `red_detinatori_token`: SELECT doar admin/editor; fără scriere pentru nimeni. `red_jurnal`: SELECT orice nivel, dar rândurile
+  `red_detinatori_contact` doar admin/editor. `red_numere`: SELECT orice nivel, scriere doar prin funcții. `red_rate_limit`: nimic.
+- `service_role` (edge-uri): SELECT/INSERT/UPDATE pe toate tabelele (fără DELETE nicăieri, fără scriere pe jurnal / token), ocolește RLS;
+  `fn_red_nivel()` îi dă NULL (fără `auth.uid()`), deci `fn_red_numar_document` / rezervarea / valoarea îl refuză — dacă un edge are nevoie,
+  se adaugă explicit, cu decizie.
 - INSERT/UPDATE pe parcele, detinatori, contact, convocari, raspunsuri, procese_verbale, import_loturi: `fn_red_nivel() IN ('admin','editor')`.
 - red_proiecte, red_uat: INSERT/UPDATE doar `admin`.
 - red_detinatori_contact: SELECT doar `admin`/`editor`.
 - anon: nimic direct pe nicio tabelă; doar cele două RPC publice din §5.
 
 ## 5. RPC public (formular `/redari/raspuns/{token}`), SECURITY DEFINER, EXECUTE pentru anon + authenticated
-- `fn_red_formular_public(p_token text) RETURNS jsonb` — `{ok, id_parcela, uat_nume, proiect_denumire, sesiune: [{zi, program}],
-  deja_raspuns: bool, expirat: bool}`; niciun nume/adresă/telefon. Token necunoscut → `{ok:false, motiv:'token_invalid'}` (același
-  răspuns pentru inexistent și expirat ca să nu se poată enumera; timpul de răspuns constant nu e cerut).
+- `fn_red_formular_public(p_token text) RETURNS jsonb` — la succes `{ok:true, id_parcela, uat_nume, proiect_denumire,
+  sesiune: [{zi:'YYYY-MM-DD', program}]` (doar zilele setate, ordonate), `deja_raspuns: bool, expirat: false, text_declaratie,
+  contact_nume, contact_telefon, contact_email}` (ultimele patru din red_proiecte — **[r1]**); niciun nume/adresă/telefon de deținător.
+  Token necunoscut SAU expirat → `{ok:false, motiv:'token_invalid', contact_nume, contact_telefon, contact_email}` (contactul proiectului
+  activ, ca omul să ne poată suna; același motiv pentru inexistent și expirat ca să nu se poată enumera — de aceea `expirat` e mereu
+  `false` la `ok:true`; timpul de răspuns constant nu e cerut). Token cu format greșit (nu 32..128 caractere `[A-Za-z0-9_-]`) → la fel,
+  fără interogare. Rate limit **[mig]**: doar pe IP (30 / 10 min) → `{ok:false, motiv:'prea_multe'}`; contorul pe token nu se consumă la
+  afișare, ca să nu blocheze trimiterea.
 - `fn_red_raspuns_public(p_token text, p_optiune text, p_zi date, p_obiectii text, p_declaratie_confirmata bool, p_user_agent text)
-  RETURNS jsonb` — validează token + expirare + opțiune; `nu_particip_fara_obiectii` cere `p_declaratie_confirmata = true`;
-  `constatare_teren` și `nu_particip_cu_obiectii` cer `p_obiectii` nevid (max 4000 caractere); inserează în red_raspunsuri cu
-  `canal='online'`, `ip_sau_sursa` din `current_setting('request.headers', true)::jsonb ->> 'x-forwarded-for'`, `created_by NULL`;
-  rate limit în `red_rate_limit (cheie text PK, fereastra_start timestamptz, numar int)`: max 5 cereri / token / 10 min și max 30 /
-  IP / 10 min → `{ok:false, motiv:'prea_multe'}`. NU trimite email/SMS, NU generează PV (decizia 6: manual).
+  RETURNS jsonb` — ordinea: rate limit IP (30 / 10 min) → rate limit token (5 / 10 min, cheia = sha256 al tokenului, se consumă și pe
+  tokenuri invalide) → `{ok:false, motiv:'prea_multe'}`; token (format, existență, expirare) → `token_invalid`; opțiune →
+  `optiune_invalida`; `particip` cu `p_zi` dat care nu e una din zilele UAT-ului → `zi_invalida` (p_zi poate lipsi);
+  `nu_particip_fara_obiectii` fără `p_declaratie_confirmata = true` → `declaratie_neconfirmata`; `constatare_teren` /
+  `nu_particip_cu_obiectii` cu `p_obiectii` gol → `obiectii_lipsa`, peste 4000 caractere → `obiectii_prea_lungi` (la celelalte opțiuni
+  obiecțiile se ignoră). Inserează în red_raspunsuri cu `canal='online'`, `ip_sau_sursa` = primul IP din
+  `current_setting('request.headers', true)::jsonb ->> 'x-forwarded-for'` (NULL dacă lipsește), `user_agent` (≤ 500), `raw_payload`
+  (fără token), `created_by NULL`. Succes: `{ok:true, raspuns_id, optiune, deja_raspuns:false}`. **[r1]** Al doilea răspuns pe același token
+  e ACCEPTAT (istoricul rămâne, ultimul contează în stare): `{ok:true, raspuns_id, optiune, deja_raspuns:true, mesaj:'Răspunsul anterior a
+  fost înlocuit.'}`. NU trimite email/SMS, NU generează PV (decizia 6: manual). Toate erorile așteptate vin prin jsonb, nu prin EXCEPTION.
+- `red_rate_limit`: fereastră fixă de 10 minute pe cheie (`fereastra_start`); când expiră, contorul pornește de la 1.
 
 ## 6. Storage
-Bucket privat `redari`; căi `{proiect_cod}/{uat3}/{id_parcela}/{nr_document}.docx|.pdf`. Politici: SELECT/INSERT/UPDATE pentru
-`fn_red_nivel() IN ('admin','editor')`, fără DELETE. În tabele se salvează `*_path` (calea în bucket), nu URL-uri semnate.
+Bucket privat `redari` (**[mig]** 25 MB / fișier; MIME: `application/pdf`,
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `image/jpeg`, `image/png` — scanul PV-ului semnat poate fi
+poză); căi `{proiect_cod}/{uat3}/{id_parcela}/{nr_document}.docx|.pdf`. Politici `red_storage_sel / _ins / _upd` pe storage.objects:
+SELECT/INSERT/UPDATE pentru `fn_red_nivel() IN ('admin','editor')`, fără DELETE. În tabele se salvează `*_path` (calea în bucket), nu
+URL-uri semnate.
 
 ## 7. Import (client-side, `src/redari/importTgz.js`)
 Excel TGZ: o foaie, antetul pe rândul 3, coloane: `Nr.Crt., Nr.Poz.Hg., UAT, Județ, Nume Deținător, Adresă, Suprafață Afectată
 Temporar, Categorie Folosință, Tarla/Nr. Topo, Nr. cadastral/Parcelă, Regim juridic`. Reguli: `Nr.Crt.` de forma `x/y` →
 coproprietari (rânduri separate pe aceeași parcelă; `x` = parcela, `y` = indexul persoanei); nume care conține „neidentificat”
 → `calitate='neidentificat'`, `adresa_cunoscuta=false`; `nume_normalizat` pentru deduplicare; tronsonul se dă manual per UAT la
-import (până la corelarea km); `id_parcela = T{tronson}-{uat3}-{nnnn}` cu `nnnn` continuat de la ultimul existent pe (proiect, uat).
+import (până la corelarea km); **[r1]** `id_parcela = T{tronson}-{uat3}-{nnnn}` cu `nnnn` rezervat server-side prin
+`fn_red_rezerva_numere_parcele(uat3, tronson, n)` (un bloc per lot / UAT; primul număr întors, apoi consecutiv), nu calculat în client;
+`cheie_sursa` se calculează pe fiecare rând și se trimite la INSERT — un rând cu cheie deja existentă pe proiect e „dublură” (se leagă de
+parcela existentă, nu creează alta). Lotul se deschide (`red_import_loturi.stare = 'in_curs'`) înainte de scriere și se închide la final
+(`finalizat` / `esuat` + `eroare`).
 Rezultatul previzualizării: `{parcele: [...], detinatori: [...], contacte: [...], dubluri, neidentificati, erori}`; commit-ul
 scrie în ordinea parcele → detinatori → contact → red_import_loturi, în loturi de 200 (ținta: 2.728 parcele sub 1 minut).
 
