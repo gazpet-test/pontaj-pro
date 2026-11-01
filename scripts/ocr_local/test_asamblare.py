@@ -64,16 +64,21 @@ class Asamblare(unittest.TestCase):
         text, st = A.asambleaza_document(r.rd, 'd1', pagini_native={1: ''})
         self.assertNotIn('neverificat', text); self.assertIn('verificat de mineru', text)
 
-    def test_nr_cod_doar_cand_tabelul_arata_articole(self):
+    def test_nr_cod_doar_cu_context_de_deviz(self):
         T = A.desparte_nr_cod_tabel
-        self.assertEqual(T([['2024 ABC1', 'Raport anual']]), [['2024 ABC1', 'Raport anual']])
-        self.assertEqual(T([['2024 ABC1', 'Raport anual 2023']]), [['2024 ABC1', 'Raport anual 2023']])  # contraexemplul Jakarinos r2
-        self.assertEqual(T([['001 RPCXA04', 'M.C.', '70.200'], ['002 GD11A1', 'M.C.', '19.5']]),
-                         [['001', 'RPCXA04', 'M.C.', '70.200'], ['002', 'GD11A1', 'M.C.', '19.5']])  # la rând
-        self.assertEqual(T([['003', 'SA11G1', 'M', '130'], ['005 TSD01D1', 'M.C.', '']]),
-                         [['003', 'SA11G1', 'M', '130'], ['005', 'TSD01D1', 'M.C.', '']])  # structura separată în același tabel
-        self.assertEqual(T([['2024 ABC1', 'x'], ['2030 XYZ9', 'y']]), [['2024 ABC1', 'x'], ['2030 XYZ9', 'y']])  # nu la rând
-        self.assertEqual(T([['012 TRA02A40', 'TONA', '1.894']]), [['012', 'TRA02A40', 'TONA', '1.894']])  # zerouri în față = articol de deviz
+        # contraexemplele Jakarinos r2 / r3: ani, rânduri la rând, rând vecin numeric -> nimic nu se schimbă
+        for rows in ([['2024 ABC1', 'Raport anual']], [['2024 ABC1', 'Raport anual 2023']],
+                     [['2024 ABC1', 'Raport anual 2023'], ['2025 XYZ9', 'Raport anual 2024']],
+                     [['2023', '2022', 'Raport anual'], ['2024 ABC1', 'Raport anual 2023']]):
+            self.assertEqual(T(rows), rows)
+        # (c) zerouri în față, fără alt context
+        self.assertEqual(T([['012 TRA02A40', 'x']]), [['012', 'TRA02A40', 'x']])
+        # (d) UM exactă / „[ 1] M.C.” / „Cantitate=”, fără zerouri
+        self.assertEqual(T([['26 4117966', 'Cantitate= 4.000 BUC.']]), [['26', '4117966', 'Cantitate= 4.000 BUC.']])
+        self.assertEqual(T([['7 GD11A1', '[ 1] M.C.', '19.5']]), [['7', 'GD11A1', '[ 1] M.C.', '19.5']])
+        self.assertEqual(T([['7 GD11A1', 'TONA', '1.8']]), [['7', 'GD11A1', 'TONA', '1.8']])
+        # o UM în text liber nu e celulă-UM
+        self.assertEqual(T([['2024 ABC1', 'Raport 5 M']]), [['2024 ABC1', 'Raport 5 M']])
 
     def test_barele_nu_intra_in_pragul_cusaturii(self):
         r = Rulare([{'id': 'p1_b0', 'page': 1, 'index': 0}, {'id': 'p1_b1', 'page': 1, 'index': 1}])

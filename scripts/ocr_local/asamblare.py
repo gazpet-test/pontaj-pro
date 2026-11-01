@@ -22,23 +22,22 @@ def fara_tabele_o_coloana(segs):
     return [('text', '\n'.join(r[0] if r else '' for r in v)) if k == 'table' and all(len(r) <= 1 for r in v) else (k, v) for k, v in segs]
 
 
-COD_SINGUR = re.compile(r'^\s*[A-Z0-9][A-Z0-9%]*[0-9][A-Z0-9%]*\s*$')
-NR_SINGUR = re.compile(r'^\s*\d{1,4}\s*$')
+# context de deviz pe același rând, independent de numere: o celulă care e EXACT o unitate de măsură sau începe cu „Cantitate=”
+UM_CELULA = re.compile(r'^\s*(?:\[\s*\d+\]\s*)?(?:M\.?C\.?|M\.?P\.?|M\.?L\.?|M|MC|MP|ML|KG|TO|TONA|T|BUC\.?|SET|ORE|L|KM|ORA)\s*$', re.I)
+CANTITATE_ETICHETA = re.compile(r'^\s*Cantitate\s*=', re.I)
 
 
 def desparte_nr_cod_tabel(rows):
-    """„nr. crt. + simbol” lipite în prima celulă se despart DOAR când structura tabelului arată că sunt articole (Jakarinos #906 r2 P2):
-    (a) alt rând din același tabel are deja nr. și cod în celule separate, sau (b) cel puțin două rânduri lipite au numere
-    consecutive sau egale (articole / resurse la rând); (c) pe rând, un nr. scris cu zerouri în față („007”, ca în devize) e articol.
-    Un rând izolat fără zerouri („| 2024 ABC1 | Raport anual 2023 |”) rămâne neschimbat."""
-    lipite = [(i, NR_COD.match(r[0])) for i, r in enumerate(rows) if r and NR_COD.match(r[0])]
-    if not lipite: return rows
-    separate = any(len(r) >= 2 and NR_SINGUR.match(r[0]) and COD_SINGUR.match(r[1]) for r in rows)
-    nr = [int(m.group(1)) for _, m in lipite]
-    la_rand = len(nr) >= 2 and all(0 <= b - a <= 1 for a, b in zip(nr, nr[1:]))
-    out = list(rows)
-    for i, m in lipite:
-        if separate or la_rand or (len(m.group(1)) >= 2 and m.group(1).startswith('0')): out[i] = [m.group(1), m.group(2)] + list(rows[i][1:])
+    """„nr. crt. + simbol” lipite în prima celulă se despart DOAR cu un indiciu de deviz independent de numere (Jakarinos #906 r3):
+    (c) nr. scris cu zerouri în față („007”), sau (d) pe același rând o celulă e exact o UM („M.C.”, „BUC.”, „TONA”, „[ 1] M”)
+    ori începe cu „Cantitate=”. Consecutivitatea / anii nu contează: „| 2024 ABC1 | Raport anual 2023 |” rămâne neschimbat."""
+    out = []
+    for r in rows:
+        m = NR_COD.match(r[0]) if r else None
+        if m and ((len(m.group(1)) >= 2 and m.group(1).startswith('0'))
+                  or any(UM_CELULA.match(c) or CANTITATE_ETICHETA.match(c) for c in r[1:])):
+            r = [m.group(1), m.group(2)] + list(r[1:])
+        out.append(r)
     return out
 
 
