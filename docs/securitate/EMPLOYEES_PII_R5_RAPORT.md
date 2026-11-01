@@ -1,5 +1,7 @@
 # Employees PII - runda 5, 27.10.2026
 
+> Stare la 01.11.2026: migrarea 20261117a este APLICATA pe prod (schema_migrations versiunea 20261117120000). Textul de mai jos descrie starea de la momentul rundei 5.
+
 Numai worktree. Fara commit/push, credentiale, BD existenta sau deploy.
 SHA256 patch verificat integral:
 `1a026b67962163730ab00e23c145e69440d38caae7285bc5900ecabe30125bb1`.
