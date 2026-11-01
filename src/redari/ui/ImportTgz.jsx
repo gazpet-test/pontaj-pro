@@ -11,8 +11,8 @@ const MAX_PREVIEW = 50
 // parcelele care chiar se comit: cu cheie_sursa (poziție HG / cadastru / tarla) și neambigue (logica r4)
 const parceleDeComis = (pv) => (pv?.parcele || []).filter(p => p.cheie_sursa && !p.ambigua).length
 const EXPLICATII = {
-  fara_cheie: 'Rânduri FĂRĂ poziție HG, nr. cadastral și tarla: nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
-  ambigue: 'Rânduri cu ACEEAȘI identitate (poziție HG / cadastru / tarla) pe Nr.Crt. diferite: nu se poate ști care e parcela. NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
+  fara_cheie: 'Rânduri la care lipsesc ȘI poziția HG, ȘI nr. cadastral (tarla singură nu ajunge): nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
+  ambigue: 'Rânduri cu aceeași identitate (poziție HG / nr. cadastral) pe Nr.Crt. DIFERITE, sau cu identități CONTRADICTORII sub același Nr.Crt.: nu se poate ști care e parcela (vezi coloana „motiv” și detaliul din Erori). NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
 }
 const SUGESTIE_SARITE = 'necesită completarea poziției HG / nr. cadastral în Excel și reimport (reimportul aceluiași fișier completează doar ce lipsește).'
 
@@ -158,7 +158,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           {subTab === 'erori' ? (
             (preview.erori || []).length === 0 ? <Gol text="Nicio eroare." /> : (
               <div style={{ maxHeight:360, overflow:'auto' }}>
-                {preview.erori.map((e, i) => <div key={i} style={{ padding:'5px 0', borderTop:`1px solid ${G.border}`, fontSize:12.5, color:G.red }}>{e.rand ? `Rând ${e.rand}: ` : ''}{e.motiv}{e.uat ? <span style={{ color:G.muted }}> · UAT „{e.uat}”</span> : null}</div>)}
+                {preview.erori.map((e, i) => <div key={i} style={{ padding:'5px 0', borderTop:`1px solid ${G.border}`, fontSize:12.5, color:G.red }}>{e.rand ? `Rând ${e.rand}: ` : ''}{e.motiv}{e.uat ? <span style={{ color:G.muted }}> · UAT „{e.uat}”</span> : null}{e.detaliu ? <div style={{ color:G.muted, fontSize:12, paddingLeft:12 }}>{e.detaliu}</div> : null}</div>)}
               </div>
             )
           ) : (<>

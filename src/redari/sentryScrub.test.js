@@ -33,6 +33,29 @@ describe('redacteazaText', () => {
     expect(rez2).not.toContain(T43)
     expect(rez2).toContain('[token]')
   })
+  it('Jakarinos r4: redactează TOATE aparițiile, inclusiv pe cele dublu-codificate din același șir', () => {
+    const s = `/redari/raspuns/${T43} p_token%2522%253A%2522${T43}`
+    const rez = redacteazaText(s)
+    expect(rez).not.toContain(T43)
+    expect(rez).toBe('/redari/raspuns/[token] p_token%2522%253A%2522[token]')
+  })
+  it('Jakarinos r4: redactează când și „p_token” e procent-codificat', () => {
+    const s = `%70%5f%74%6f%6b%65%6e%22%3A%22${T43}`
+    const rez = redacteazaText(s)
+    expect(rez).not.toContain(T43)
+    expect(rez).toBe('%70%5f%74%6f%6b%65%6e%22%3A%22[token]')
+  })
+  it('forma brută rămâne forma brută (nu se întoarce textul decodat); tokenul dispare din toate formele', () => {
+    const corp = encodeURIComponent(JSON.stringify({ p_token: T43 }))
+    const rez = redacteazaText(corp)
+    expect(rez).toBe(corp.split(T43).join('[token]'))
+    expect(decodeURIComponent(rez)).not.toContain(T43)
+  })
+  it('întoarce „[redactat]” când tokenul nu poate fi mapat înapoi (coadă scurtă ascunsă sub codificare dublă)', () => {
+    // coada „abc-scurt” e sub pragul de înlocuire globală, iar calea apare doar după două decodări → nu se poate redacta local
+    const s = encodeURIComponent(encodeURIComponent('/redari/raspuns/abc-scurt'))
+    expect(redacteazaText(s)).toBe('[redactat]')
+  })
   it('nu atinge șiruri fără token (42 de caractere, alt context, text obișnuit, % invalid)', () => {
     expect(redacteazaText(`p_token=${T42}`)).toBe(`p_token=${T42}`)
     expect(redacteazaText(`altceva/${T43}`)).toBe(`altceva/${T43}`)

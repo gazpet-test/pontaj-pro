@@ -44,10 +44,10 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         const { data: v } = await supabase.rpc('fn_red_valoare_parcela', { p_parcela_id: parcelaId })
         setValoare(v ?? null)
       }
-      const { data: det, error: e1 } = await supabase.from('red_detinatori').select(COL_DETINATOR).eq('parcela_id', parcelaId).order('sters_la', { nullsFirst:true }).order('nume')
-      if (e1) throw e1
-      setDetinatori(det || [])
-      const ids = (det || []).map(d => d.id)
+      // r4 P2-3: și deținătorii paginat (o parcelă cu mulți moștenitori nu se trunchiază)
+      const det = await citestePaginat(() => supabase.from('red_detinatori').select(COL_DETINATOR).eq('parcela_id', parcelaId).order('sters_la', { nullsFirst:true }).order('nume').order('id'))
+      setDetinatori(det)
+      const ids = det.map(d => d.id)
       // r3 P2-3: toate listele se citesc paginat (range în bucle de 1000, `.in()` în loturi de 100) — fără limite ascunse
       const [conv, rasp, pvParcela, pvDet, cont] = await Promise.all([
         citesteIn(() => supabase.from('red_convocari').select(COL_CONVOCARE).order('created_at').order('id'), 'detinator_id', ids),
