@@ -14,8 +14,12 @@ import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
 
 const PAGINA = 100
-// Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2) — doar structură, fără persoane.
-const LOT1 = { cod:'LOT1-PRUNISOR-JUPA', denumire:'Redare teren — Lot 1 Prunișor–Jupa', beneficiar:'SNTGN Transgaz SA' }
+// Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2). text_gdpr / text_declaratie / contact_email NU se trimit:
+// rămân DEFAULT-urile din BD (texte confirmate de Juridic, contract §2 [r2]). Fără telefoane.
+const LOT1 = {
+  cod:'LOT1-PRUNISOR-JUPA', denumire:'Redare teren — Lot 1 Prunișor–Jupa', beneficiar:'S.N.T.G.N. TRANSGAZ S.A.',
+  contact_nume:'Ramona Brehui (delegat Gazpet)', reprezentant_gazpet_nume:'Răzvan Toma', reprezentant_gazpet_functie:'coordonator',
+}
 const UAT_LOT1 = ['Prunișor', 'Godeanu', 'Husnicioara', 'Căzănești', 'Ilovăț', 'Bâlvănești', 'Șișești']
 const JUDET_LOT1 = 'Mehedinți'
 
@@ -455,12 +459,17 @@ function ModalRaspunsTelefon({ rand, profile, uats, show, onClose, onGata }) {
     if (optiune === 'particip' && !zi) { show('Alege ziua de sesiune.', 'error'); return }
     setLucru(true)
     try {
-      const { error } = await supabase.from('red_raspunsuri').insert({
+      // [r2] red_raspunsuri nu mai are ip_sau_sursa: rândul principal întâi, apoi meta (admin/editor) cu sursa „telefon, operator …”
+      const { data: rasp, error } = await supabase.from('red_raspunsuri').insert({
         detinator_id: rand.detinator_id, canal:'telefon', optiune, zi_sesiune_aleasa: zi || null, obiectii_text: obiectii.trim() || null,
-        declaratie_confirmata: optiune === 'nu_particip_fara_obiectii' ? true : null, ip_sau_sursa: sursa.trim() || 'telefon', created_by: profile?.id || null,
-      })
+        declaratie_confirmata: optiune === 'nu_particip_fara_obiectii' ? true : null, created_by: profile?.id || null,
+      }).select('id').single()
       if (error) throw error
-      show('Răspunsul telefonic a fost înregistrat.', 'success'); onGata()
+      const operator = profile?.name || profile?.email || 'operator'
+      const { error: eMeta } = await supabase.from('red_raspunsuri_meta').insert({ raspuns_id: rasp.id, ip_sau_sursa: `telefon, operator ${operator}${sursa.trim() ? ' — ' + sursa.trim() : ''}`.slice(0, 500) })
+      if (eMeta) show('Răspunsul s-a salvat, dar sursa (meta) nu: ' + msgEroare(eMeta), 'error')
+      else show('Răspunsul telefonic a fost înregistrat.', 'success')
+      onGata()
     } catch (e) { show('Răspuns: ' + msgEroare(e), 'error') }
     finally { setLucru(false) }
   }

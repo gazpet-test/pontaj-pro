@@ -9,7 +9,10 @@ export const SABLON_CONVOCATOR = '/redari/sabloane/convocator_provizoriu.docx'
 // și se citește DOAR la generarea / reîncărcarea convocatorului (admin/editor), prin citesteTokenRaspuns().
 export const COL_DETINATOR = 'id, parcela_id, nume, nume_normalizat, calitate, cota, decedat, sursa_date, versiune_lista_tgz, sters_la, sters_de, sters_motiv, created_at, updated_at'
 export const COL_CONVOCARE = 'id, detinator_id, canal, nr_document, data_expediere, nr_tracking, data_confirmare_primire, retur, retur_data, continut_hash, fisier_convocator_path, stare, motiv_anulare, created_by, created_at'
-export const COL_RASPUNS_BAZA = 'id, detinator_id, canal, data, optiune, zi_sesiune_aleasa, obiectii_text, declaratie_confirmata, created_by, created_at'
+// [r2] red_raspunsuri nu mai are ip_sau_sursa / user_agent / raw_payload (sunt în red_raspunsuri_meta, doar admin/editor); `seq` = tie-break
+// pentru „ultimul răspuns” (ORDER BY data DESC, seq DESC).
+export const COL_RASPUNS = 'id, seq, detinator_id, canal, data, optiune, zi_sesiune_aleasa, obiectii_text, declaratie_confirmata, semnatura_electronica_ref, created_by, created_at'
+export const COL_RASPUNS_META = 'raspuns_id, ip_sau_sursa, user_agent'
 
 export async function citesteTokenRaspuns(detinatorId) {
   const { data, error } = await supabase.from('red_detinatori_token').select('token_raspuns').eq('detinator_id', detinatorId).maybeSingle()

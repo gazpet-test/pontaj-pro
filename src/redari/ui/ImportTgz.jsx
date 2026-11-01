@@ -50,13 +50,25 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
     if (!nParc) { show('Nu e nimic de importat.', 'error'); return }
     if (!window.confirm(`Import ${nParc} parcele și ${preview.detinatori?.length || 0} deținători în ${proiect.cod} (lista „${versiune.trim()}”)?`)) return
     setLucru(true); setProgres({ facut: 0, total: nParc, etapa: 'pornire' })
+    // starea lotului (in_curs / finalizat / esuat + eroare) se citește din BD, nu se presupune
+    const citesteLot = async (lotId) => {
+      if (!lotId) return null
+      const { data } = await supabase.from('red_import_loturi').select('id, stare, eroare, parcele_noi, detinatori_noi, created_at').eq('id', lotId).maybeSingle()
+      return data || null
+    }
     try {
       const rez = await scrieImport(supabase, preview, { proiectId: proiect.id, versiune: versiune.trim(), sursa, fisierNume: fisier?.name || null,
         onProgress: ({ etapa, facut, total } = {}) => setProgres({ etapa: etapa || '', facut: facut ?? 0, total: total ?? nParc }) })
-      setRaport(rez); setPreview(null); setFisier(null)
+      const lot = await citesteLot(rez.lotId)
+      setRaport({ ...rez, lot, esuat: lot?.stare === 'esuat' }); setPreview(null); setFisier(null)
       show(`Import terminat: ${rez.parceleNoi ?? 0} parcele noi, ${rez.detinatoriNoi ?? 0} deținători${(rez.parceleRefolosite ?? (Array.isArray(rez.existente) ? rez.existente.length : 0)) ? `, ${rez.parceleRefolosite ?? rez.existente.length} parcele existente refolosite` : ''}.`, 'success')
       onImportat?.()
-    } catch (e) { show('Import: ' + msgEroare(e), 'error') }
+    } catch (e) {
+      // lotul rămâne în BD cu stare 'esuat' + eroare; previzualizarea și fișierul rămân ca să se poată relua (completează doar ce lipsește)
+      const lot = await citesteLot(e?.lotId)
+      setRaport({ esuat: true, lotId: e?.lotId || null, lot, mesaj: msgEroare(e) })
+      show('Import eșuat: ' + msgEroare(e), 'error')
+    }
     finally { setLucru(false); setProgres(null) }
   }
 
@@ -150,9 +162,17 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
         </div>
       )}
 
-      {raport && (
+      {raport?.esuat && (
+        <div style={{ ...S.card, borderColor:G.red, marginBottom:12 }}>
+          <div style={{ fontWeight:700, marginBottom:6, color:G.red }}>4. Import eșuat</div>
+          <div style={{ fontSize:13 }}>{raport.lot?.eroare || raport.mesaj}</div>
+          <div style={{ fontSize:12, color:G.muted, marginTop:6 }}>Lot: <span style={S.mono}>{raport.lotId || '-'}</span> · stare <b>{raport.lot?.stare || 'esuat'}</b>{raport.lot ? ` · ${fmtNum(raport.lot.parcele_noi)} parcele / ${fmtNum(raport.lot.detinatori_noi)} deținători scrise până la eroare` : ''}</div>
+          <div style={{ fontSize:12.5, color:G.yellow, marginTop:8 }}>Sugestie: reia importul cu același fișier și aceeași versiune — se completează doar ce lipsește (parcelele deja scrise se refolosesc).</div>
+        </div>
+      )}
+      {raport && !raport.esuat && (
         <div style={{ ...S.card, borderColor:G.green }}>
-          <div style={{ fontWeight:700, marginBottom:8 }}>4. Raport import</div>
+          <div style={{ fontWeight:700, marginBottom:8 }}>4. Raport import <span style={{ ...S.tag, background:G.greenDim, color:G.green, marginLeft:8 }}>lot {raport.lot?.stare || 'finalizat'}</span></div>
           <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
             {statCard('Parcele noi', fmtNum(raport.parceleNoi), G.green)}
             {statCard('Deținători noi', fmtNum(raport.detinatoriNoi), G.blue)}
