@@ -57,12 +57,11 @@
 -- Constantele sunt verificate pe PG17 local; pe ținta reală le confirmă chiar postcondiția (deparse diferit ⇒ migrarea cade, nimic
 -- aplicat) — pasul 3 din planul cu branch Supabase (docs/HR/INBOX_STORAGE_RLS.md).
 -- LIMITĂRI ACCEPTATE (de decis separat, nu aici):
---   a. fn_ai_inbox_poate_confirma(NULL, …) = true pentru orice cont cu profil: fișierul unui rând „nedecis” rămâne vizibil și
---      ștergibil de oricine, ca rândul însuși și payload_ai-ul lui (ai_inbox_select / ai_inbox_update). NU doar rânduri istorice:
---      orice upload fără modul pre-setat e „nedecis” cât îl clasifică AI-ul (secunde) și definitiv dacă ajunge în „eroare” fără
---      modul. Panoul pre-setează modulul pentru UPA, Execuție cu proiect și (din același PR) HR; wizard-ul „Angajat nou” pune
---      modul_tinta = 'hr' de la upload → actele HR urcate din HR nu mai trec prin „nedecis”. Rămân nedecise upload-urile din
---      Execuție fără proiect, Logistică și Financiar (rutate de AI). Restrângerea = migrare separată pe regula cozii.
+--   a. ÎNCHIS pentru FIȘIERE (varianta B, Răzvan 01.11.2026, Copilot r1 P1-01): fișierul unui rând „nedecis” (modul_tinta NULL) îl văd
+--      doar cine l-a urcat, ownerul și HR (can_access_personal_data) și îl șterg doar cine l-a urcat și ownerul — NU mai „oricine logat”.
+--      fn_ai_inbox_poate_confirma rămâne neschimbată (o folosesc și politicile cozii). RĂMÂNE DESCHIS, temă separată: RÂNDUL „nedecis”
+--      din coadă (ai_inbox_select / ai_inbox_update au `modul_tinta IS NULL` explicit) și payload_ai-ul lui sunt vizibile oricui logat.
+--      La 01.11: 0 obiecte cu rând „nedecis” în bucket (3 rânduri NULL, toate „respins”, fără fișier).
 --   b. cine poate edita un rând (ai_inbox_update) îi poate schimba modul_tinta, dar doar spre o stare pe care o vede în continuare
 --      (PostgreSQL aplică ai_inbox_select și rândului nou — un cont fără drepturi nu mută „nedecisul” în HR, 42501). Un confirmator
 --      poate însă muta un rând al lui în „nedecis” (ex. HR un act HR) → fișierul devine vizibil oricui (T6n–T6o). Actorul vedea
@@ -323,6 +322,8 @@ CREATE POLICY ai_inbox_obj_insert ON storage.objects AS PERMISSIVE FOR INSERT TO
     -- 4d: o cale deja legată de un rând din coadă nu se reocupă (alt conținut sub un rând clasificat)
     AND NOT EXISTS (SELECT 1 FROM public.ai_documente_inbox i WHERE i.fisier_path = objects.name));
 
+-- B (Răzvan 01.11.2026, Copilot r1 P1-01): rândul „nedecis” (modul_tinta NULL) NU mai deschide fișierul oricui — îl văd doar cine l-a urcat
+-- (owner_id), ownerul și HR (can_access_personal_data); rândurile clasificate rămân pe regula modulului (fn_ai_inbox_poate_confirma).
 CREATE POLICY ai_inbox_obj_select ON storage.objects AS PERMISSIVE FOR SELECT TO authenticated
   USING (
     bucket_id = 'ai-documente-inbox'
@@ -330,9 +331,12 @@ CREATE POLICY ai_inbox_obj_select ON storage.objects AS PERMISSIVE FOR SELECT TO
     AND (owner_id = (SELECT auth.uid())::text
          OR EXISTS (SELECT 1 FROM public.ai_documente_inbox i
                      WHERE i.fisier_path = objects.name AND i.uploadat_de::text = objects.owner_id
-                       AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
+                       AND ((i.modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
+                            OR (i.modul_tinta IS NULL
+                                AND EXISTS (SELECT 1 FROM public.profiles h WHERE h.id = (SELECT auth.uid()) AND h.can_access_personal_data = true))))
          OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner = true)));
 
+-- B: fișierul unui rând „nedecis” îl șterg DOAR cine l-a urcat (owner_id) și ownerul; confirmatorii șterg doar pe rânduri clasificate.
 CREATE POLICY ai_inbox_obj_delete ON storage.objects AS PERMISSIVE FOR DELETE TO authenticated
   USING (
     bucket_id = 'ai-documente-inbox'
@@ -340,14 +344,15 @@ CREATE POLICY ai_inbox_obj_delete ON storage.objects AS PERMISSIVE FOR DELETE TO
     AND (owner_id = (SELECT auth.uid())::text
          OR EXISTS (SELECT 1 FROM public.ai_documente_inbox i
                      WHERE i.fisier_path = objects.name AND i.uploadat_de::text = objects.owner_id
-                       AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
+                       AND i.modul_tinta IS NOT NULL AND public.fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id))
          OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = (SELECT auth.uid()) AND p.is_owner = true)));
 
 DO $post$
 DECLARE
   -- deparse-ul exact (search_path = public, pg_temp), cu spațiile albe comprimate la un singur spațiu
   c_ins CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND (((storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text) OR (((storage.foldername(name))[1] = ''wizard-angajare''::text) AND (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND ((p.is_owner = true) OR (p.can_access_personal_data = true))))))) AND (NOT (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE (i.fisier_path = objects.name)))))';
-  c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
+  c_sel CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND (((i.modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)) OR ((i.modul_tinta IS NULL) AND (EXISTS ( SELECT 1 FROM profiles h WHERE ((h.id = ( SELECT auth.uid() AS uid)) AND (h.can_access_personal_data = true))))))))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
+  c_del CONSTANT text := '((bucket_id = ''ai-documente-inbox''::text) AND (( SELECT auth.uid() AS uid) IS NOT NULL) AND ((owner_id = (( SELECT auth.uid() AS uid))::text) OR (EXISTS ( SELECT 1 FROM ai_documente_inbox i WHERE ((i.fisier_path = objects.name) AND ((i.uploadat_de)::text = objects.owner_id) AND (i.modul_tinta IS NOT NULL) AND fn_ai_inbox_poate_confirma(i.modul_tinta, i.entitate_id)))) OR (EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = ( SELECT auth.uid() AS uid)) AND (p.is_owner = true))))))';
   v_fn oid := to_regprocedure('public.ai_inbox_fisier_imutabil()');
   v_fl oid := to_regprocedure('public.ai_inbox_fisier_legat()');
 BEGIN
@@ -368,7 +373,7 @@ BEGIN
                     AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_sel)
      OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = 'storage.objects'::regclass AND p.polname = 'ai_inbox_obj_delete'
                     AND p.polcmd = 'd' AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid] AND p.polwithcheck IS NULL
-                    AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_sel) THEN
+                    AND regexp_replace(pg_get_expr(p.polqual, p.polrelid), '[[:space:]]+', ' ', 'g') = c_del) THEN
     RAISE EXCEPTION 'POSTCONDIȚIE 20261103c: politicile ai_inbox_obj_insert / _select / _delete lipsesc sau au altă definiție (sau a rămas ai_inbox_obj_all)';
   END IF;
   -- nicio politică UPDATE / ALL nu mai atinge bucket-ul

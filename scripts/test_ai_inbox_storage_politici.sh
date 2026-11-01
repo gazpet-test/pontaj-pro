@@ -62,7 +62,7 @@ trap 'ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -m fast -w stop >/dev/null
 # interogări prin fișier UTF-8 (argumentele din linia de comandă nu păstrează diacriticele / ghilimelele pe Windows)
 qf() { printf '%s\n' "$2" > "$TMP/qf.sql"; "${PSQL[@]}" -d "$1" -At -f "$TMP/qf.sql"; }
 copie() { "${PSQL[@]}" -d postgres -c "CREATE DATABASE $1 TEMPLATE $2"; }
-# câte obiecte din coadă vede contul fără drepturi (a4) — 10 = gaura, 1 = doar nedecisul (limitarea a)
+# câte obiecte din coadă vede contul fără drepturi (a4) — 10 = gaura; după 20261103c (varianta B, 01.11) = 0, nici nedecisul
 vede_a4() { qf "$1" "BEGIN; SET LOCAL \"request.jwt.claims\" = '{\"sub\":\"00000000-0000-0000-0000-0000000000a4\",\"role\":\"authenticated\"}'; SET LOCAL ROLE authenticated; SELECT count(*) FROM storage.objects WHERE bucket_id = 'ai-documente-inbox'; ROLLBACK;"; }
 # starea politicilor bucket-ului: <nr ai_inbox_obj_*>:<are ai_inbox_obj_all>:<obiecte patch (index + 2 funcții + 2 trigger-e)>
 stare() { qf "$1" "SELECT (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND starts_with(polname::text, 'ai_inbox_obj')) || ':' || (SELECT count(*) FROM pg_policy WHERE polrelid = 'storage.objects'::regclass AND polname = 'ai_inbox_obj_all') || ':' || ((to_regclass('public.idx_ai_inbox_fisier_path') IS NOT NULL)::int + (to_regprocedure('public.ai_inbox_fisier_imutabil()') IS NOT NULL)::int + (to_regprocedure('public.ai_inbox_fisier_legat()') IS NOT NULL)::int + (SELECT count(*) FROM pg_trigger WHERE tgname IN ('trg_ai_inbox_fisier_imutabil', 'trg_ai_inbox_fisier_legat')))"; }
@@ -158,14 +158,14 @@ ok "1o storage.objects ținut de altă sesiune → lock_timeout, nimic schimbat 
 copie ai_inbox_g1p_test "$BAZA"
 qf ai_inbox_g1p_test "CREATE POLICY accidental ON storage.objects FOR ALL TO authenticated" >/dev/null
 "${PSQL[@]}" -d ai_inbox_g1p_test --single-transaction -f "$MIGRARE" >"$OUT" 2>&1 || { cat "$OUT"; esec "1p aplicare cu politica fără expresii"; }
-[ "$(vede_a4 ai_inbox_g1p_test)" = 1 ] || esec "1p politica fără USING dă acces: contul fără drepturi vede $(vede_a4 ai_inbox_g1p_test) obiecte"
+[ "$(vede_a4 ai_inbox_g1p_test)" = 0 ] || esec "1p politica fără USING dă acces: contul fără drepturi vede $(vede_a4 ai_inbox_g1p_test) obiecte"
 refuza "1p INSERT prin politica fără WITH CHECK" 'violates row-level security policy' qf ai_inbox_g1p_test "BEGIN; SET LOCAL \"request.jwt.claims\" = '{\"sub\":\"00000000-0000-0000-0000-0000000000a4\",\"role\":\"authenticated\"}'; SET LOCAL ROLE authenticated; INSERT INTO storage.objects (bucket_id, name, owner_id) VALUES ('ai-documente-inbox', 'radacina.pdf', '00000000-0000-0000-0000-0000000000a4'); ROLLBACK;"
-ok "1p politică FOR ALL fără USING / WITH CHECK: precondiția trece, dar nu dă nimic (vede 1 = nedecisul, INSERT refuzat)"
+ok "1p politică FOR ALL fără USING / WITH CHECK: precondiția trece, dar nu dă nimic (vede 0, INSERT refuzat)"
 
 # 2. aplicare
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$MIGRARE" >"$OUT" 2>&1 || { cat "$OUT"; esec "2 aplicare"; }
 [ "$(stare "$BAZA")" = "3:0:5" ] || esec "2 starea după aplicare: $(stare "$BAZA") (aștept 3:0:5)"
-[ "$(vede_a4 "$BAZA")" = 1 ] || esec "2 gaura nu e închisă: contul fără drepturi vede $(vede_a4 "$BAZA") obiecte (aștept 1 — nedecisul)"
+[ "$(vede_a4 "$BAZA")" = 0 ] || esec "2 gaura nu e închisă: contul fără drepturi vede $(vede_a4 "$BAZA") obiecte (aștept 0 — nici nedecisul, varianta B)"
 [ "$(alte_politici "$BAZA")" = "$POL0" ] || esec "2 celelalte politici storage s-au schimbat"
 [ "$(date_ "$BAZA")" = "$DATE0" ] || esec "2 datele s-au schimbat"
 ok "2 aplicare (pre + post trecute): gaura închisă (10 → 1), celelalte politici storage și datele identice"
