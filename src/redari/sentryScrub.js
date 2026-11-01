@@ -54,7 +54,8 @@ const tokenuriDinValoareSensibila = (v, set) => {
     else set.refuzat = true
   }
 }
-const RX_INDICIU_JSON = /p_token|raspuns|\\u[0-9a-f]{4}|token[A-Za-z0-9_-]*"\s*:\s*["\[{]/i
+// Jakarinos r16 P2-1: o cheie *token* cu valoare-șir e indiciu doar dacă șirul (chiar netrunchiat) conține o secvență de ≥43 — `"tokenuri_cumparate":"12"` nu e
+const RX_INDICIU_JSON = /p_token|raspuns|\\u[0-9a-f]{4}|token[A-Za-z0-9_-]*"\s*:\s*(?:[\[{]|"[^"]*[A-Za-z0-9_-]{43})/i
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
@@ -240,14 +241,26 @@ export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0
 export function scrubSentrySpan(span) {
   try {
     if (span === null || typeof span !== 'object') return span
-    const golit = () => { for (const k of Object.keys(span)) if (!['span_id', 'trace_id', 'parent_span_id', 'start_timestamp', 'timestamp', 'op', 'origin'].includes(k)) delete span[k]; span.description = '[redactat]'; span.data = {}; return span }
+    // Jakarinos r16 P1-1: `op`/`origin` NU se păstrează (pot purta tokenul); id-urile/timpii rămân doar dacă sunt id-uri hex scurte / numere
+    const idScurt = (v) => typeof v === 'string' && /^[0-9a-f]{1,32}$/i.test(v)
+    const golit = () => {
+      for (const k of Object.keys(span)) if (!['span_id', 'trace_id', 'parent_span_id', 'start_timestamp', 'timestamp'].includes(k)) delete span[k]
+      for (const k of ['span_id', 'trace_id', 'parent_span_id']) if (k in span && !idScurt(span[k])) delete span[k]
+      for (const k of ['start_timestamp', 'timestamp']) if (k in span && typeof span[k] !== 'number') delete span[k]
+      span.op = 'redactat'; span.description = '[redactat]'; span.data = {}
+      return span
+    }
     if (esteDinFormularulPublic({ transaction: span.description, request: { url: span.data?.['sentry.transaction'] ?? span.data?.url } })) return golit()
     const tokenuri = colecteazaTokenuriEveniment(span)
     redacteazaAdanc(span, tokenuri)
     if (maiScurgeToken(span, tokenuri, tokenuri.size > 0 || !!tokenuri.refuzat)) return golit()   // r14 P1-1: si spanurile tin cont de `refuzat`
     return span
   } catch {
-    try { return { span_id: span?.span_id, trace_id: span?.trace_id, start_timestamp: span?.start_timestamp, timestamp: span?.timestamp, description: '[redactat]', data: {} } } catch { return { description: '[redactat]', data: {} } }
+    try {
+      const idScurt = (v) => (typeof v === 'string' && /^[0-9a-f]{1,32}$/i.test(v) ? v : undefined)
+      const nr = (v) => (typeof v === 'number' ? v : undefined)
+      return { span_id: idScurt(span?.span_id), trace_id: idScurt(span?.trace_id), start_timestamp: nr(span?.start_timestamp), timestamp: nr(span?.timestamp), op: 'redactat', description: '[redactat]', data: {} }
+    } catch { return { op: 'redactat', description: '[redactat]', data: {} } }
   }
 }
 
