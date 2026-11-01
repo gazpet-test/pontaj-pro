@@ -222,6 +222,19 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(redacteazaText(`{"token_raspuns_public":"${T}"}`)).toBe('{"token_raspuns_public":"[token]"}')
     expect(redacteazaText(`tokenul=${T}`)).toBe('tokenul=[token]')
   })
+  it('r9 P1-1 (Jakarinos): cheie complet %-codificată în corp + token lipit de prefix în message; valoare-listă sub p_token', () => {
+    const r1 = scrubSentryEvent({ message: 'ref_' + T, request: { url: 'https://example.test/api', body: '{"%70%5f%74%6f%6b%65%6e":"' + T + '"}' } })
+    expect(r1 === null || !JSON.stringify(r1).includes(T)).toBe(true)
+    if (r1) expect(r1.message).toBe('ref_[token]')
+    const r2 = scrubSentryEvent({ message: 'ref_' + T, request: { url: 'https://example.test/api', data: { p_token: [T] } } })
+    expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
+    const r3 = scrubSentryEvent({ message: T, request: { url: 'https://e/api', body: encodeURIComponent(encodeURIComponent('{"p_token":"' + T + '"}')) } })
+    expect(r3 === null || !JSON.stringify(r3).includes(T)).toBe(true)
+  })
+  it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
+    const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
+    expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
+  })
   it('P1-2: `token_raspuns_public":"<43>"` în text liber e redactat; regex-ul final prinde varianta fără separator', () => {
     expect(scrubSentryEvent({ message: `{"token_raspuns_public":"${'c'.repeat(43)}"}` })).toEqual({ message: '{"token_raspuns_public":"[token]"}' })
     expect(scrubSentryEvent({ message: `token_raspuns_public${'c'.repeat(43)}` })).toBeNull()

@@ -114,7 +114,14 @@ function parcurge(radacina, fn, fnCheie = null) {
 // (2a) tokenurile candidate din întreg evenimentul
 export function colecteazaTokenuriEveniment(event) {
   const tokenuri = new Set()
-  const dinText = (s) => { if (typeof s === 'string' && pareSuspect(s)) for (const f of formele(s)) colecteazaTokenuri(f, tokenuri) }
+  // r9 P1-1 (Jakarinos): indiciul se caută în TOATE formele decodate (o cheie complet %-codificată, ex. `%70%5f%74%6f%6b%65%6e`,
+  // nu arată „suspect” brut), iar colectarea se face și pe evenimentul SERIALIZAT întreg — așa prindem și valorile din liste
+  // (`p_token: [T]`) sau cheile/valorile despărțite de structură, care la parcurgerea șir-cu-șir n-au context
+  const dinText = (s) => {
+    if (typeof s !== 'string') return
+    const forme = formele(s)
+    if (forme.some(pareSuspect)) for (const f of forme) colecteazaTokenuri(f, tokenuri)
+  }
   parcurge(event, (_obj, cheie, v) => {
     if (typeof v === 'string') {
       if (cheieDeToken(cheie) && valoareDeToken(v)) for (const f of formele(v)) if (RX_T43.test(f)) tokenuri.add(f)
@@ -122,6 +129,7 @@ export function colecteazaTokenuriEveniment(event) {
     }
     return v
   }, (cheie) => { dinText(cheie); return cheie })
+  dinText(serializeaza(event))
   return tokenuri
 }
 
@@ -204,8 +212,10 @@ export function scrubSentryEvent(event) {
     if (req && typeof req === 'object') {
       const corp = serializeaza({ data: req.data, body: req.body })
       const urlRpc = vreoFormaSePotriveste(typeof req.url === 'string' ? req.url : '', /rpc\/fn_red_/i)
-      // r8 P1-1: corpul suspect se șterge, dar evenimentul rămâne „purtător de token” — orice șir de 43 rămas în rest ⇒ null
-      corpSuspect = urlRpc || contineVreunToken(corp, tokenuri) || formele(corp).some(f => /p_token|raspuns|token/i.test(f))
+      // r8 P1-1: corpul suspect se șterge, dar evenimentul rămâne „purtător de token” — orice șir de 43 rămas în rest ⇒ null.
+      // r9 P2-2: „suspect” = URL RPC al modulului, token colectat, sau p_token/raspuns în vreo formă decodată — NU orice „token”
+      // (altfel `tokenuri_cumparate: 12` + un hash legitim de 43 ar pierde evenimente reale)
+      corpSuspect = urlRpc || contineVreunToken(corp, tokenuri) || formele(corp).some(f => /p_token|raspuns/i.test(f))
       if (corpSuspect) { delete req.data; delete req.body }
     }
     redacteazaAdanc(event, tokenuri)

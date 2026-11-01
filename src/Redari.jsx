@@ -181,7 +181,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       if (g !== generatie.current) return   // a pornit o cerere mai nouă: rândurile și totalul acesteia nu se mai aplică
       if (error) throw error
       setRanduri(data || []); setTotal(count || 0)
-    } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); show('Registru: ' + msgEroare(e), 'error') } }   // r8 P2-1: o încărcare eșuată nu lasă rândurile filtrului anterior (borderoul le-ar exporta)
+    } catch (e) { if (g === generatie.current) { setRanduri([]); setTotal(0); setSelectie(new Set()); show('Registru: ' + msgEroare(e), 'error') } }   // r8/r9 P2-1: o încărcare eșuată nu lasă rândurile sau selecția anterioare (borderoul le-ar exporta)
     finally { if (g === generatie.current) setLoading(false) }
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show])
   useEffect(() => { incarca() }, [incarca])
