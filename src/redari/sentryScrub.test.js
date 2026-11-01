@@ -273,6 +273,15 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
       expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
     }
   })
+  it('Copilot FE r7 P2-01: corp JSON peste limita parserului (200k) / JSON invalid cu cheie token ⇒ purtător ⇒ null', () => {
+    const mare = { message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: JSON.stringify({ token: [null, T], padding: 'x'.repeat(200000) }) } }
+    expect(scrubSentryEvent(mare)).toBeNull()
+    const invalid = { message: 'ref_' + T, request: { url: '/intern', body: '{"token":[null,"' + T + '"' } }   // JSON trunchiat
+    expect(scrubSentryEvent(invalid)).toBeNull()
+    // JSON mare FĂRĂ token/raspuns și fără secvențe de 43: trece (corpul se șterge doar dacă URL-ul e RPC al modulului)
+    const curat = { message: 'ok', request: { url: '/intern', body: JSON.stringify({ padding: 'x'.repeat(200001) }) } }
+    expect(scrubSentryEvent(curat)?.message).toBe('ok')
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

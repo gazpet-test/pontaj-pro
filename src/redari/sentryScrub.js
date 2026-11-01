@@ -129,11 +129,19 @@ export function colecteazaTokenuriEveniment(event, adancime = 0) {
   // (`p_token: [T]`) sau cheile/valorile despărțite de structură, care la parcurgerea șir-cu-șir n-au context
   // r12 P1-1 (Jakarinos): un șir care e JSON (corp de cerere serializat, `{"token":[null,T]}`, `{"token":{"nested":{"value":T}}}`)
   // se parsează (în fiecare formă decodată) și se parcurge STRUCTURAL, ca orice obiect — cheile de token își protejează descendenții
+  // Copilot FE r7 P2-01: un JSON pe care NU-l putem parcurge (prea mare, prea adânc, invalid) dar care pomenește token/raspuns
+  // marchează setul ca `refuzat` → evenimentul devine „purtător” (orice secvență ≥43 rămasă ⇒ null) — nu ne bazăm pe limite
   const dinJson = (f) => {
-    if (adancime >= 4 || !/^\s*[[{]/.test(f) || f.length > 200000) return   // adâncime limitată: JSON în JSON în JSON…
+    if (!/^\s*[[{]/.test(f)) return
+    const refuza = () => { if (/token|raspuns/i.test(f)) tokenuri.refuzat = true }
+    if (adancime >= 4 || f.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
     let obj
-    try { obj = JSON.parse(f) } catch { return }
-    if (obj && typeof obj === 'object') for (const t of colecteazaTokenuriEveniment(obj, adancime + 1)) tokenuri.add(t)
+    try { obj = JSON.parse(f) } catch { return refuza() }
+    if (obj && typeof obj === 'object') {
+      const sub = colecteazaTokenuriEveniment(obj, adancime + 1)
+      for (const t of sub) tokenuri.add(t)
+      if (sub.refuzat) tokenuri.refuzat = true
+    }
   }
   const dinText = (s, siJson = true) => {
     if (typeof s !== 'string') return
@@ -237,7 +245,7 @@ export function scrubSentryEvent(event) {
       // legitim ar pierde erori reale ale modulului)
       const indiciu = formele(corp).some(f => /p_token|raspuns/i.test(f))
       if (urlRpc || contineVreunToken(corp, tokenuri) || indiciu) { delete req.data; delete req.body }
-      if (indiciu) purtator = true
+      if (indiciu || tokenuri.refuzat) purtator = true
     }
     redacteazaAdanc(event, tokenuri)
     if (maiScurgeToken(event, tokenuri, purtator)) return null
