@@ -277,8 +277,15 @@ BEGIN
     numit_de uuid,
     dovada boolean NOT NULL,
     revenire text NOT NULL,
-    arhivat_la timestamptz NOT NULL DEFAULT now()
+    arhivat_la timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (revenire, licitatie_id, rol)   -- r5 (Copilot r4 P2-05): o dovadă o singură dată pe revenire
   );
+  -- r5 (Copilot r4 P2-05): un tabel preexistent (revenire anterioară) trebuie să aibă exact forma de mai sus, altfel revenirea se oprește
+  IF (SELECT string_agg(column_name || ':' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'ofertare_numiri_dovezi_arhiva')
+     IS DISTINCT FROM 'id:bigint,licitatie_id:bigint,rol:smallint,responsabil_id:uuid,numit_de:uuid,dovada:boolean,revenire:text,arhivat_la:timestamp with time zone' THEN
+    RAISE EXCEPTION '20261124a revenire: ofertare_numiri_dovezi_arhiva exista cu alta forma — verificare manuala';
+  END IF;
   COMMENT ON TABLE public.ofertare_numiri_dovezi_arhiva IS
     'Arhiva dovezilor de numire (2A) la revenirea 20261124a: licitație, rol 1/2, responsabil, numit de, dovadă. Citire doar owner, fără scriere din aplicație.';
   ALTER TABLE public.ofertare_numiri_dovezi_arhiva ENABLE ROW LEVEL SECURITY;

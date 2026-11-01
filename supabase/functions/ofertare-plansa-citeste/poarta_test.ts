@@ -105,6 +105,20 @@ Deno.test('plansa: Authorization gol / doar "Bearer " -> 401, zero cost', async 
 Deno.test('plansa: SERVICE nesetat ("") nu face din header gol o cheie valabilă -> 401', async () => {
   for (const v of ['', 'Bearer ']) { const r = await ruleazaH({ Authorization: v }, ''); assertEquals(r.status, 401); zeroCost(r.n) }
 })
+// #908 r5 (review r4 Copilot P1-03): exact configurația din index.ts (HTTP) — SERVICE = '': nicio cheie / header gol / JWT de serviciu
+// (real sau falsificat) nu trece, fără storage / AI / scrieri; un utilizator verificat cu drept trece (ajunge la storage)
+Deno.test('plansa r5: HTTP cu SERVICE "" — fără Authorization, gol, cheia de serviciu reală, JWT fals service_role -> 401, zero cost', async () => {
+  // cheia de serviciu reală e un JWT fără utilizator (Auth nu întoarce user pentru ea) — în fake: un șir cu puncte
+  for (const h of [{}, { Authorization: '' }, { Authorization: 'Bearer ' }, { Authorization: 'Bearer eyJ.cheie-serviciu.reala' }, { Authorization: `Bearer ${JWT_FALS_SERVICE}` }] as Record<string, string>[]) {
+    const r = await ruleazaH(h, ''); assertEquals(r.status, 401, JSON.stringify(h)); zeroCost(r.n)
+  }
+  // chiar dacă Auth ar întoarce un „utilizator” pentru cheie, el nu trece poarta pe cheltuială: 403, zero cost
+  const r = await ruleazaH({ Authorization: 'Bearer service-key' }, ''); assertEquals(r.status, 403); zeroCost(r.n)
+})
+Deno.test('plansa r5: HTTP cu SERVICE "" — owner / responsabil verificat trece poarta; străinul primește 403', async () => {
+  for (const uid of [OWNER, RESP]) { const r = await ruleazaH({ Authorization: `Bearer ${uid}` }, ''); assert(r.status !== 401 && r.status !== 403, uid); assertEquals(r.n.storage, 1) }
+  const r = await ruleazaH({ Authorization: `Bearer ${STRAIN}` }, ''); assertEquals(r.status, 403); zeroCost(r.n)
+})
 
 // #494 r5: proveniența jobului se verifică înainte de orice rezervare sau AI, și la lipire.
 Deno.test('plansa: asteptat diferit → 409, fără in_lucru, zero fetch/storage/scrieri pe citire și lipire', async () => {

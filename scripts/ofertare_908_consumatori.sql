@@ -2,14 +2,15 @@
 -- Workerul NAS se oprește separat (docker stop gazpet-ofertare-worker pe Terra); aici: rezerva din BD — joburile pg_cron
 -- ofertare_extragere_worker (ofertare_extragere_tick) și ofertare_ingest_worker (ofertare_ingest_tick), care preiau cozile când
 -- heartbeat-ul workerului e mai vechi de 10 minute. NU atinge datele din cozi.
--- Rulare (psql):  psql ... -v mod=suspenda|verifica|reia -f scripts/ofertare_908_consumatori.sql
+-- Rulare (psql):  psql ... -v mod=suspenda|verifica|reia [-v deploy_la=<ISO, obligatoriu la verifica>] -f scripts/ofertare_908_consumatori.sql
 --   „suspenda”: joburile active → inactive (tranzacție, ambele verificate pe NUME), apoi raportul.
 --   „verifica”: DOAR citire. BARIERA DE DRENARE (r4): pică (ON_ERROR_STOP) dacă oricare condiție nu e îndeplinită; livrarea continuă
 --               numai după un „verifica” trecut. Ce dovedește și ce NU:
 --               - net.http_request_queue = cererile pg_net ÎN AȘTEPTARE (nepreluate). pg_net scoate cererea din coadă ÎNAINTE s-o execute,
 --                 deci 0 aici NU înseamnă „nimic în zbor” (r3: Jakarinos P1-03, Copilot P1-01) — e doar una din condiții;
 --               - apelurile DEJA lansate se dovedesc prin timp: o invocare Edge trăiește cel mult 400 s (limita de wall-clock a platformei),
---                 deci bariera cere ca ULTIMA lansare posibilă să fie mai veche de 7 minute: ultimul start al joburilor pg_cron, ultimul
+--                 deci bariera cere ca ULTIMA lansare posibilă să fie mai veche de 7 minute: ultimul deploy al celor 11 edge-uri (r5, reper
+--                 dat explicit cu -v deploy_la), ultimul start al joburilor pg_cron (și nicio rulare a lor încă în execuție), ultimul
 --                 heartbeat al workerului NAS (oprit) și ultimul cost AI Ofertare înregistrat (ai_usage_log);
 --               - extragerea lansată de tick păstrează req_id: fiecare req_id trebuie să aibă răspuns în net._http_response (sau să fie
 --                 mai vechi de 7 minute);
@@ -22,6 +23,9 @@
 \set ON_ERROR_STOP 1
 BEGIN;
 SELECT set_config('gazpet.consumatori_908', :'mod', true) IS NOT NULL AS marcaj;
+\if :{?deploy_la}
+SELECT set_config('gazpet.deploy_la_908', :'deploy_la', true) IS NOT NULL AS reper_deploy;
+\endif
 DO $c$
 DECLARE v_mod text := current_setting('gazpet.consumatori_908', true); v_j text; v_n int; v_t timestamptz;
 BEGIN
@@ -44,9 +48,22 @@ BEGIN
   IF EXISTS (SELECT 1 FROM cron.job WHERE jobname IN ('ofertare_extragere_worker', 'ofertare_ingest_worker') AND active) THEN
     RAISE EXCEPTION 'drenare #908: joburile pg_cron nu sunt suspendate (ruleaza intai mod=suspenda)';
   END IF;
+  -- r5 (review r4 Jakarinos P2-02): reperul de timp e ULTIMUL deploy confirmat dintre cele 11 edge-uri (până la el, codul vechi putea
+  -- accepta un apel din UI): -v deploy_la='<timestamp ISO al ultimului deploy terminat>' e obligatoriu, iar bariera cere >= 7 minute de atunci
+  v_t := NULLIF(current_setting('gazpet.deploy_la_908', true), '')::timestamptz;
+  IF v_t IS NULL THEN RAISE EXCEPTION 'drenare #908: lipseste -v deploy_la (momentul ultimului deploy confirmat dintre cele 11 edge-uri)'; END IF;
+  IF v_t > now() - interval '7 minutes' THEN RAISE EXCEPTION 'drenare #908: ultimul deploy la % (< 7 min) — asteapta', v_t; END IF;
   SELECT max(d.start_time) INTO v_t FROM cron.job_run_details d JOIN cron.job j USING (jobid)
    WHERE j.jobname IN ('ofertare_extragere_worker', 'ofertare_ingest_worker');
   IF v_t > now() - interval '7 minutes' THEN RAISE EXCEPTION 'drenare #908: ultimul tick pg_cron a pornit la % (< 7 min) — asteapta', v_t; END IF;
+  -- r5 (review r4 Copilot P1-01): un start vechi nu dovedește că execuția s-a terminat — nicio rulare a celor 2 joburi fără sfârșit /
+  -- „running”, și nicio sesiune Postgres care execută acum unul dintre tick-uri
+  SELECT count(*) INTO v_n FROM cron.job_run_details d JOIN cron.job j USING (jobid)
+   WHERE j.jobname IN ('ofertare_extragere_worker', 'ofertare_ingest_worker') AND (d.end_time IS NULL OR d.status IN ('running', 'starting'));
+  IF v_n > 0 THEN RAISE EXCEPTION 'drenare #908: % rulari pg_cron ale tick-urilor fara sfarsit (running / starting)', v_n; END IF;
+  SELECT count(*) INTO v_n FROM pg_stat_activity
+   WHERE pid <> pg_backend_pid() AND state <> 'idle' AND query ~* 'ofertare_(extragere|ingest)_tick';
+  IF v_n > 0 THEN RAISE EXCEPTION 'drenare #908: % sesiuni Postgres executa acum un tick al cozilor', v_n; END IF;
   SELECT max(ultimul) INTO v_t FROM public.worker_heartbeat WHERE nume = 'ofertare-worker';
   IF v_t > now() - interval '7 minutes' THEN RAISE EXCEPTION 'drenare #908: workerul NAS a dat semn de viata la % (< 7 min) — opreste-l si asteapta', v_t; END IF;
   SELECT count(*) INTO v_n FROM net.http_request_queue WHERE url ~ '/functions/v1/ofertare-(cerinte|ingest-doc)$';

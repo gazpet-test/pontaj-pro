@@ -56,19 +56,28 @@ async function proceseazaLicitatie(id: number) {
       const { data: c, error } = await supabase.from('ofertare_extragere_coada').select('*').eq('licitatie_id', id).maybeSingle()
       if (error || !c) { log(`#${id}: rândul din coadă nu se mai citește`, error?.message ?? ''); return }
       if (!c.activ) return
+      // r4 (#908, review r4 Jakarinos P1-01): TOATE scrierile pe coada extragerii sunt CAS pe cererea citită acum (cerut_la + cerut_de +
+      // activ); 'stop' = cererea a fost înlocuită / oprită între timp → mă opresc fără s-o ating; 'reia' = scrierea a eșuat → pauză, reiau
+      const cerC = { cerut_la: c.cerut_la, cerut_de: c.cerut_de ?? null }
+      const scrieC = async (patch: Record<string, unknown>): Promise<'ok' | 'stop' | 'reia'> => {
+        const rz = await scrieCas(supabase, 'ofertare_extragere_coada', id, cerC, patch)
+        if (rz === 'ok') return 'ok'
+        log(`#${id}: scrierea pe coada extragerii — ${rz === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp, n-o ating' : 'a eșuat, reiau'}`)
+        if (rz === 'eroare') { await sleep(30_000); return 'reia' }
+        return 'stop'
+      }
       // un apel lansat de tick-ul din Supabase (înainte să pornim noi) încă în zbor? îl lăsăm până expiră lease-ul
       if (c.req_id != null) {
         const vechime = Date.now() - new Date(c.lansat_la ?? 0).getTime()
         if (vechime < LEASE_TICK_MS) { inLucru.set(id, 'aștept apelul lansat de tick'); await sleep(30_000); continue }
-        await supabase.from('ofertare_extragere_coada').update({ req_id: null }).eq('licitatie_id', id)
+        const s0 = await scrieC({ req_id: null }); if (s0 === 'stop') return; if (s0 === 'reia') continue
       }
       const pasi: any[] = Array.isArray(c.pasi) ? c.pasi : []
       if (c.poz >= pasi.length) {
         const acum = new Date().toISOString()
         const nota = `${pasi.length} pași, ${c.cerinte_noi} cerințe noi, ${c.erori} pași cu eroare (worker NAS ${SHA})`
         // r4: închiderea doar pe ACEEAȘI cerere (CAS); o cerere nouă pusă între timp nu se închide cu nota celei vechi
-        const rInch = await scrieCas(supabase, 'ofertare_extragere_coada', id, { cerut_la: c.cerut_la, cerut_de: c.cerut_de ?? null }, { activ: false, terminat_la: acum, nota, ultimul_tick: acum })
-        if (rInch !== 'ok') { log(`#${id}: închiderea extragerii — ${rInch === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp, n-o ating' : 'scrierea a eșuat, reiau'}`); if (rInch === 'eroare') { await sleep(30_000); continue } return }
+        const sI = await scrieC({ activ: false, terminat_la: acum, nota, ultimul_tick: acum }); if (sI === 'stop') return; if (sI === 'reia') continue
         if (c.cerut_de) {
           const { data: li } = await supabase.from('ofertare_licitatii').select('id, nr_anunt').eq('id', id).maybeSingle()
           const { error: eN } = await supabase.from('notifications').insert({
@@ -82,7 +91,7 @@ async function proceseazaLicitatie(id: number) {
         return
       }
       // 20261124a (3A): un pas nou costă — doar dacă cine a cerut extragerea trece ACUM poarta pe cheltuială (poarta_coada.ts)
-      const { v: pc } = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id, { cerut_la: c.cerut_la, cerut_de: c.cerut_de ?? null })
+      const { v: pc } = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id, cerC)
       if (pc === 'refuz' || pc === 'inlocuita') { log(`#${id}: extragere ${pc === 'refuz' ? 'refuzată / oprită — cerut_de nu trece poarta pe cheltuială' : 'înlocuită de o cerere nouă'}`); return }
       if (pc === 'eroare') { inLucru.set(id, 'aștept poarta pe cheltuială (eroare de citire)'); await sleep(30_000); continue }
       const pas = pasi[c.poz] ?? {}
@@ -103,10 +112,11 @@ async function proceseazaLicitatie(id: number) {
       const el = pas.doc_id != null ? await documentEligibil(supabase, Number(pas.doc_id)) : null
       if (el && !el.eligibil && el.motiv !== 'eroare_poarta') {
         const acumL = new Date().toISOString()
-        await supabase.from('ofertare_extragere_coada').update({
+        const sL = await scrieC({
           poz: c.poz + 1, bucata: 0, incercari: 0, ultimul_tick: acumL,
           jurnal: [...(c.jurnal ?? []), { poz: c.poz, bucata: c.bucata, cerinte: 0, skip: mesajLot(el.motiv), blocat_lot: el.motiv, worker: NUME, la: acumL }],
-        }).eq('licitatie_id', id)
+        })
+        if (sL === 'stop') return; if (sL === 'reia') continue
         log(`#${id}: ${eticheta} sărit — ${mesajLot(el.motiv)}`)
         incercari = 0
         continue
@@ -119,13 +129,14 @@ async function proceseazaLicitatie(id: number) {
         const msg = String(r?.error ?? 'răspuns gol')
         log(`#${id}: ${eticheta} bucata ${c.bucata + 1} EROARE ${incercari}/${MAX_INCERCARI} (${ms} ms): ${msg}`)
         if (incercari >= MAX_INCERCARI) {
-          await supabase.from('ofertare_extragere_coada').update({
+          const sE = await scrieC({
             erori: c.erori + 1, poz: c.poz + 1, bucata: 0, incercari: 0, ultimul_tick: acum,
             jurnal: [...(c.jurnal ?? []), { poz: c.poz, bucata: c.bucata, eroare: msg.slice(0, 200), worker: NUME, la: acum }],
-          }).eq('licitatie_id', id)
+          })
+          if (sE === 'stop') return
           incercari = 0
         } else {
-          await supabase.from('ofertare_extragere_coada').update({ incercari, ultimul_tick: acum }).eq('licitatie_id', id)
+          if (await scrieC({ incercari, ultimul_tick: acum }) === 'stop') return
           await sleep(20_000 * incercari)
         }
         continue
@@ -135,10 +146,11 @@ async function proceseazaLicitatie(id: number) {
       const intrare: Record<string, unknown> = { poz: c.poz, bucata: c.bucata, cerinte: cer, bucati: r.bucati ?? null, ms, worker: NUME, la: acum }
       if (r.trunchiat === true) intrare.trunchiat = true
       if (r.skip) intrare.skip = r.skip
-      await supabase.from('ofertare_extragere_coada').update({
+      const sP = await scrieC({
         cerinte_noi: c.cerinte_noi + cer, bucata: continua ? (r.bucata_urmatoare ?? c.bucata + 1) : 0,
         poz: continua ? c.poz : c.poz + 1, incercari: 0, ultimul_tick: acum, jurnal: [...(c.jurnal ?? []), intrare],
-      }).eq('licitatie_id', id)
+      })
+      if (sP === 'stop') return
       log(`#${id}: ${eticheta} bucata ${c.bucata + 1}/${r.bucati ?? '?'} [${String(body.model).replace('claude-', '')}] → ${cer} cerințe${r.trunchiat ? ' (TĂIAT la max_tokens!)' : ''}${r.skip ? ' · ' + r.skip : ''} · ${ms} ms · ${r.cost_usd ?? '?'} USD`)
     }
   } catch (e) {

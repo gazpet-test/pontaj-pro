@@ -60,6 +60,9 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
   const tick = async (extra: Record<string, unknown> = {}) =>
     poarta.scrie({ ultimul_tick: new Date().toISOString(), jurnal, stare: { propuneri, goluri, felii, cost_usd: Number(cost.toFixed(4)), ...extra } })
 
+  // r4 (review r4 Jakarinos P2-01): o scriere de progres care nu reușește (cerere înlocuită / oprită sau eroare) oprește rularea —
+  // nu se mai plătește felia următoare; nota finală nu se scrie (CAS)
+  const opritScriere = () => { log('#' + licId + ': scrierea progresului pe coadă n-a reușit (cerere înlocuită / oprită sau eroare) — mă opresc') }
   let qc = supabase.from('ofertare_cerinte').select('id, tip').eq('licitatie_id', licId).is('inlocuita_de', null).order('id')
   // cerinte_ids: reluare doar pe o listă (ex. felia rămasă fără răspuns), nu pe tot registrul
   if (Array.isArray(c.cerinte_ids) && c.cerinte_ids.length) qc = qc.in('id', c.cerinte_ids)
@@ -83,7 +86,7 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
         erori.push(`${batch} (felia ${i / FELIE + 1}): ${r.error}`)
         jurnal.push({ la: new Date().toISOString(), batch, felie: f.length, eroare: r.error.slice(0, 300), ms })
         log(`#${licId} ${batch} felia ${i / FELIE + 1}: EROARE ${r.error.slice(0, 200)}`)
-        await tick(); continue
+        if (await tick() !== 'ok') return opritScriere(); continue
       }
       propuneri += r.propuneri || 0; goluri += r.goluri || 0
       cost += ((r.tokens_in || 0) * 5 + (r.tokens_out || 0) * 25) / 1e6
@@ -95,7 +98,7 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
       if (r.eroare_partiala) erori.push(`${batch} (jumătate de felie): ${r.eroare_partiala}`)
       jurnal.push({ la: new Date().toISOString(), batch, felie: f.length, propuneri: r.propuneri, goluri: r.goluri, fara_raspuns: r.fara_raspuns, trunchiat: !!r.trunchiat, eroare_partiala: r.eroare_partiala, ms })
       log(`#${licId} ${batch} felia ${i / FELIE + 1}: ${r.propuneri ?? 0} propuneri, ${r.goluri ?? 0} goluri, ${r.fara_raspuns ?? 0} fără răspuns${r.trunchiat ? ' (TĂIAT)' : ''} · ${ms} ms`)
-      await tick()
+      if (await tick() !== 'ok') return opritScriere()
     }
     for (let i = 0; i < deReluat.length; i += FELIE_RELUARE) {
       if (esteOprire()) break
@@ -105,7 +108,7 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
       const r = await felie(supabase, licId, batch, f, poarta)
       if (r?.oprit_poarta) { log(`#${licId}: ${OPRIT_POARTA} — mă opresc`); return }
       felii++
-      if (r?.error) { erori.push(`${batch} (reluare): ${r.error}`); neconfirmate += deReluat.length - i; jurnal.push({ la: new Date().toISOString(), batch, reluare: f.length, eroare: r.error.slice(0, 300) }); await tick(); break }
+      if (r?.error) { erori.push(`${batch} (reluare): ${r.error}`); neconfirmate += deReluat.length - i; jurnal.push({ la: new Date().toISOString(), batch, reluare: f.length, eroare: r.error.slice(0, 300) }); if (await tick() !== 'ok') return opritScriere(); break }
       propuneri += r.propuneri || 0; goluri += r.goluri || 0
       cost += ((r.tokens_in || 0) * 5 + (r.tokens_out || 0) * 25) / 1e6
       if (r.conflicte_verificate?.length) conflicte.push(...r.conflicte_verificate)
@@ -114,7 +117,7 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
       if (r.conflicte_raspuns?.length) raspunsuriPierdute.push(...r.conflicte_raspuns)
       jurnal.push({ la: new Date().toISOString(), batch, reluare: f.length, propuneri: r.propuneri, fara_raspuns: r.fara_raspuns, ms: Date.now() - tf })
       log(`#${licId} ${batch} reluare ${i / FELIE_RELUARE + 1}: ${r.propuneri ?? 0} propuneri, ${r.fara_raspuns ?? 0} fără răspuns`)
-      await tick()
+      if (await tick() !== 'ok') return opritScriere()
     }
   }
   if (esteOprire()) { await tick({ oprit: 'worker oprit — reia propunerea' }); return }

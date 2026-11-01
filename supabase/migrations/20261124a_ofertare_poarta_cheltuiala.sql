@@ -72,6 +72,12 @@ BEGIN
      OR EXISTS (SELECT 1 FROM public.ofertare_extragere_coada WHERE activ) OR EXISTS (SELECT 1 FROM public.ofertare_ingest_coada WHERE activ) THEN
     RAISE EXCEPTION '20261124a: exista cereri ACTIVE in cozile AI (proveniența cerut_de nedovedita) — opreste consumatorii, inchide cererile, apoi aplica';
   END IF;
+  -- r5 (review r4 Copilot P1-02): coada planșelor — fără scriere directă (RLS doar SELECT, fără INSERT/UPDATE pentru authenticated / anon),
+  -- cerut_de scris doar de ofertare_plansa_coada_inscrie = auth.uid(); în plus, ca la celelalte cozi, nu se aplică cu joburi vii (la 01.11: 0)
+  LOCK TABLE public.ofertare_plansa_coada IN SHARE ROW EXCLUSIVE MODE;
+  IF EXISTS (SELECT 1 FROM public.ofertare_plansa_coada WHERE stare IN ('asteapta', 'lucru')) THEN
+    RAISE EXCEPTION '20261124a: exista joburi vii in ofertare_plansa_coada — opreste workerul, lasa-le sa se termine sau anuleaza-le (cu da), apoi aplica';
+  END IF;
   IF to_regprocedure('public.ofertare_coada_porneste(text,bigint)') IS NOT NULL OR to_regprocedure('public.ofertare_coada_opreste(text,bigint)') IS NOT NULL THEN
     RAISE EXCEPTION '20261124a: RPC-urile cozilor exista deja';
   END IF;
@@ -373,6 +379,8 @@ BEGIN
   SELECT decrypted_secret INTO secret FROM vault.decrypted_secrets WHERE name = 'INTERN_EDGE_SECRET' LIMIT 1;
   IF secret IS NULL THEN RETURN; END IF;
 
+  -- r4 (#908, review r4 Jakarinos P1-01): fiecare UPDATE pe coadă e CAS pe cererea citită (cerut_la + cerut_de + activ) — răspunsul /
+  -- progresul unei cereri vechi nu se scrie peste o cerere nouă pusă între timp
   FOR c IN SELECT * FROM ofertare_extragere_coada WHERE activ ORDER BY cerut_la LOOP
     n_pasi := jsonb_array_length(coalesce(c.pasi, '[]'::jsonb));
 
@@ -386,10 +394,10 @@ BEGIN
             UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = 0, erori = erori + 1,
               poz = poz + 1, bucata = 0,
               jurnal = jurnal || jsonb_build_object('poz', c.poz, 'eroare', 'fara raspuns dupa ' || MAX_INCERCARI || ' incercari', 'la', now())
-             WHERE licitatie_id = c.licitatie_id;
+             WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
           ELSE
             UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = incercari + 1
-             WHERE licitatie_id = c.licitatie_id;
+             WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
           END IF;
         END IF;
         CONTINUE;                       -- se asteapta raspunsul
@@ -406,17 +414,17 @@ BEGIN
           poz = CASE WHEN continua THEN poz ELSE poz + 1 END,
           jurnal = jurnal || jsonb_build_object('poz', c.poz, 'bucata', c.bucata, 'cerinte', cer,
                                                 'bucati', corp->>'bucati', 'la', now())
-         WHERE licitatie_id = c.licitatie_id;
+         WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
       ELSE
         IF c.incercari + 1 >= MAX_INCERCARI THEN
           UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = 0, erori = erori + 1,
             poz = poz + 1, bucata = 0,
             jurnal = jurnal || jsonb_build_object('poz', c.poz, 'bucata', c.bucata,
                        'eroare', left(coalesce(corp->>'error', 'HTTP ' || coalesce(resp.status_code::text,'?')), 200), 'la', now())
-           WHERE licitatie_id = c.licitatie_id;
+           WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
         ELSE
           UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = incercari + 1
-           WHERE licitatie_id = c.licitatie_id;
+           WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
         END IF;
       END IF;
       SELECT * INTO c FROM ofertare_extragere_coada WHERE licitatie_id = c.licitatie_id;
@@ -427,7 +435,7 @@ BEGIN
     IF c.poz >= n_pasi THEN
       UPDATE ofertare_extragere_coada SET activ = false, terminat_la = now(),
         nota = format('%s pași, %s cerințe noi, %s pași cu eroare', n_pasi, c.cerinte_noi, c.erori)
-       WHERE licitatie_id = c.licitatie_id;
+       WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
       IF c.cerut_de IS NOT NULL THEN
         INSERT INTO notifications (profile_id, type, modul, title, message, link_to)
         SELECT c.cerut_de, 'info', 'Ofertare',
@@ -443,7 +451,7 @@ BEGIN
     IF NOT COALESCE(public.fn_ofertare_poate_cheltui(c.licitatie_id, c.cerut_de), false) THEN
       UPDATE ofertare_extragere_coada SET activ = false, terminat_la = now(), req_id = NULL,
         nota = '❌ refuzat: cine a cerut extragerea nu trece poarta pe cheltuială (owner / responsabil numit de owner sau de un admin Ofertare)'
-       WHERE licitatie_id = c.licitatie_id;
+       WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
       CONTINUE;
     END IF;
 
@@ -466,6 +474,6 @@ BEGIN
       headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || jwt, 'x-intern-secret', secret),
       body := corp_body, timeout_milliseconds := 150000);
     UPDATE ofertare_extragere_coada SET req_id = rid, lansat_la = now(), ultimul_tick = now()
-     WHERE licitatie_id = c.licitatie_id;
+     WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
   END LOOP;
 END $function$;

@@ -454,7 +454,9 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
   const amanaPoarta = async (unde: string) => {
     poartaCazuta.set(licId, Date.now() + PAUZE.poartaLoturiMs)
     log(`#${licId} citire: poarta pe loturi n-a răspuns (${unde}) — nu procesez nimic din licitație în tura asta; reîncerc peste ${Math.round(PAUZE.poartaLoturiMs / 1000)} s`)
-    await poarta.scrie({ ultimul_tick: new Date().toISOString() })
+    // r5 (Copilot r4 P2-02): tura se oprește oricum aici (return la apelant); rezultatul negativ al scrierii se spune explicit
+    const sa = await poarta.scrie({ ultimul_tick: new Date().toISOString() })
+    if (sa !== 'ok') log(`#${licId} citire: ultimul_tick nu s-a scris (${sa === 'inlocuita' ? 'cerere înlocuită / oprită' : 'eroare'})`)
   }
   {
     const p0 = await eligibilitateLicitatie(supabase as any, licId)
@@ -516,7 +518,9 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
       // PDF mare: încercarea e deja numărată în BD (max. MAX_INCERCARI_MARE), se reia în tura asta; întrerupt = SIGTERM
       // (și pe drumul AI, între felii: documentul rămâne 'in_lucru' cu pagini_procesate, tura următoare continuă de acolo)
     } else citite++
-    if (await poarta.scrie({ ultimul_tick: new Date().toISOString(), lansari: (c.lansari ?? 0) + citite + esuate.size }) === 'inlocuita') { log(`#${licId} citire: cererea a fost înlocuită / oprită între timp — mă opresc`); return }
+    // r5 (review r4 Jakarinos P2-01 / Copilot P2-02): orice rezultat diferit de „ok” (înlocuită / oprită / eroare de scriere) oprește tura
+    const sp = await poarta.scrie({ ultimul_tick: new Date().toISOString(), lansari: (c.lansari ?? 0) + citite + esuate.size })
+    if (sp !== 'ok') { log(`#${licId} citire: scrierea progresului pe coadă — ${sp === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp' : 'eroare'} — mă opresc`); return }
   }
   if (esteOprire()) return
   const { data: toate } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%')
