@@ -2,7 +2,9 @@
 
 Stare la 02.11.2026 dimineața (felia de noapte 01→02.11, branch `feat/redari-teren`). Brief: `BRIEF_2026-11-01.md` (Răzvan, prin Proiectul
 Juridic). Contractul tehnic obligatoriu: `CONTRACT_SCHEMA.md`. Șabloanele și harta câmpurilor: `SABLOANE.md`. Migrarea și verificarea ei:
-`MIGRARE_20261126a.md`. **Migrarea `20261126a` NU e aplicată pe producție** (review r4 în curs), frontend-ul e în review r3, PR-ul nu e deschis.
+`MIGRARE_20261126a.md`. **Migrarea `20261126a` NU e aplicată pe producție** (runda 4 scrisă după Jakarinos r3 — 0 P1 / 6 P2 — și Copilot r3 — GO cu
+observații; verificată local PG17 PASS; review Jakarinos + Copilot r4 în curs). Frontend-ul: Jakarinos r3 NO-GO (2 P1 / 8 P2), runda 4 (logica r5 +
+docx r6) scrisă, restul P2-urilor în lucru. PR-ul nu e deschis.
 
 ## 1. Scop
 
@@ -37,10 +39,13 @@ Deciziile lui Răzvan (01.11 seara): **2A** migrarea se aplică doar după GO Ja
 Vederi (`security_invoker`): `red_v_stare_parcela` (o linie per parcelă × deținător, cu STAREA din cele 12 — contract §3),
 `red_v_centralizator_uat`, `red_v_tronson`, `red_v_parcele` (parcele fără `valoare_lei`; UI-ul citește de aici, nu din tabel).
 
-Funcții (21, toate SECURITY DEFINER cu `search_path` fix): `fn_red_nivel()` (admin/editor/viewer/NULL; owner = admin),
+Funcții (22, toate SECURITY DEFINER cu `search_path` fix): `fn_red_nivel()` (admin/editor/viewer/NULL; owner = admin),
 `fn_red_numar_document`, `fn_red_rezerva_numere_parcele`, `fn_red_valoare_parcela` / `_seteaza`, `fn_red_adresa_cunoscuta`, RPC-urile publice
 `fn_red_formular_public(token)` și `fn_red_raspuns_public(token, optiune, zi, obiectii, declaratie, user_agent)` (anon + authenticated),
-trigger-ele de legături/imutabilitate (`fn_red_legaturi`), validarea răspunsurilor (`fn_red_raspunsuri_valideaza`), jurnal, token, rate limit.
+trigger-ele de legături/imutabilitate (`fn_red_legaturi`: legături, `id_parcela`/`tronson`, `seq`, `uat3` cât există parcele pe UAT), validarea
+răspunsurilor (`fn_red_raspunsuri_valideaza`, și la UPDATE-urile de conținut), jurnal, token, rate limit (curățare cel mult o dată la 10 min, în
+loturi), `fn_red_storage_expr_bucket` (verificatorul politicilor străine de pe `storage.objects`, intern). `created_at` al răspunsurilor îl pune
+trigger-ul; `authenticated` nu are privilegiu pe `seq` / `created_at`.
 
 Bucket privat `redari` (pdf/docx/jpeg/png, 25 MB): politici doar SELECT + INSERT pentru admin/editor; fișierele sunt imutabile — o
 regenerare = cale nouă `{nr_document}-v{n}.docx`. Căi: `{proiect_cod}/{uat3}/{id_parcela}/…`.
@@ -61,16 +66,16 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
 | `src/redari/ui/ImportTgz.jsx` | importul Excel TGZ: previzualizare, raport (dubluri, neidentificați, fără cheie, ambigue, erori), commit în loturi |
 | `src/redari/ui/comune.jsx` | paletă G/S, proiecții explicite de coloane, `SABLON_CONVOCATOR`, `citesteTokenRaspuns`, `motivBlocareConvocator` |
 | `src/redari/stare.js` | cele 12 stări și ierarhia (identică cu `red_v_stare_parcela`), ultimul răspuns cu `seq` ca tie-break, returul acoperit de AR ulterior |
-| `src/redari/importTgz.js` | parsarea Excel-ului TGZ (antet rândul 3, `Nr.Crt.` x/y = coproprietari, neidentificat, `cheie_sursa`, județul din adresă) și scrierea în loturi de 200 cu rezervare de numere prin RPC, reluare idempotentă |
+| `src/redari/importTgz.js` | parsarea Excel-ului TGZ (antet rândul 3, `Nr.Crt.` x/y = coproprietari, neidentificat, `cheie_sursa`, județul din adresă; identități ambigue sau contradictorii sub același Nr.Crt. → necomise) și scrierea în loturi de 200 cu rezervare de numere prin RPC (oprire înainte de orice INSERT dacă s-ar depăși 9999), contoare după fiecare lot, reluare idempotentă |
 | `src/redari/idParcela.js` | `uat3`, normalizare nume, formatul `id_parcela` |
-| `src/redari/docx.js` | `completeazaDocx` (jszip, `{{camp}}`, QR ca imagine), `genereazaConvocator` / `verificaDateConvocator`, hash sha256, borderou CSV (anti formula-injection), `salveazaConvocator` / `reincarcaConvocator` (rând → upload `upsert:false` → update path+hash) |
+| `src/redari/docx.js` | `completeazaDocx` (jszip, `{{camp}}`, QR ca imagine), `genereazaConvocator` / `verificaDateConvocator`, hash sha256, borderou CSV (anti formula-injection), `salveazaConvocator` / `reincarcaConvocator` (rând → upload `upsert:false` → update path+hash; versiunea nouă din listarea paginată a folderului) |
 | `src/redari/sentryScrub.js` | tokenul din `/redari/raspuns/<token>` nu ajunge în Sentry (`beforeSend` / `beforeSendTransaction` în `src/main.jsx`) |
 | `src/RedariRaspunsPublic.jsx` | formularul public `/redari/raspuns/:token`, fără login, mobile-first, 4 opțiuni, fără date personale |
 | `public/redari/sabloane/*.docx` | șabloanele reale Model_1..5 v5 cu placeholder-e (`convocator`, `pv_a`, `pv_b`, `adresa_uat`, `pv_c`); originalele în `docs/redari/referinta/` |
 | `scripts/redari_sabloane_verifica.mjs` | verifică placeholder-ele șabloanelor (0 rupte între run-uri) |
 
 `src/App.jsx` primește doar ruta lazy `/redari`, ruta publică `/redari/raspuns/:token` și intrarea în meniu (🌾 Redări teren). Teste vitest
-(`npm test`): `stare`, `idParcela`, `importTgz`, `docx`, `sentryScrub` — 124 de teste, toate pe date fictive.
+(`npm test`): `stare`, `idParcela`, `importTgz`, `docx`, `sentryScrub` — 129 de teste, toate pe date fictive.
 
 ## 3. Cum se folosește (după aplicarea migrării și acordarea rolurilor)
 
@@ -124,7 +129,10 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
   expediat → răspuns online → stare) nu a rulat pe producție.
 - RLS pe conturi reale non-owner (editor / viewer) — DRY-ul le simulează cu `SET LOCAL ROLE` + un cont fără modul; conturile reale apar abia după §5.
 - Storage API pe prod: upload, refuzul suprascrierii (`upsert:false`), refuzul ștergerii, link semnat — TEST9 verifică doar metadatele din
-  `storage.objects` (Jakarinos r3 P2-06), nu octeții prin API.
+  `storage.objects` (Jakarinos r3 P2-06), nu octeții prin API. Procedura manuală de după apply (cont editor + viewer, fișier de test, 3 pași) e în
+  `MIGRARE_20261126a.md` „Verificare manuală pe prod, prin Storage API”.
+- P2-urile deschise din Jakarinos r3 frontend (contoare la scrieri parțiale, trimiterea în curs la schimbarea tokenului, paginarea în fișă/borderou,
+  cursa UAT-urilor la schimbarea proiectului, „particip” fără sesiuni în modalul telefonic, un contraexemplu la scrub-ul Sentry) — în lucru în runda 4.
 - Performanța `red_v_stare_parcela` pe 2.728 parcele × deținători (LATERAL-uri + o funcție per rând) și importul sub 1 minut — de măsurat după import.
 - Formatul `x-forwarded-for` la gateway-ul Supabase: dacă antetul e influențabil de client, limita 30/IP e orientativă, limita reală e la gateway
   (Copilot r3 P2-01); fără antet cheia e `ip:necunoscut`.
