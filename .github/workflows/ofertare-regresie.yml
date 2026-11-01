@@ -129,7 +129,15 @@ jobs:
           persist-credentials: false
       - name: Postgres 16 local (binare, fără serviciu)
         run: |
-          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then sudo apt-get update && sudo apt-get install --yes postgresql-16; fi
+          # 01.11.2026: imaginea ubuntu-latest (resolute) nu mai are postgresql-16 în arhivă → rezervă: repo-ul oficial PGDG
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-16 || {
+              sudo apt-get install --yes postgresql-common
+              sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+              sudo apt-get install --yes postgresql-16
+            }
+          fi
           sudo systemctl stop postgresql || true
       - name: Harness loturi MVP (20261024b)
         run: bash scripts/test_ofertare_loturi_mvp.sh --opreste
