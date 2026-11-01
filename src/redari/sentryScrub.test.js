@@ -109,6 +109,43 @@ describe('redacteazaAdanc', () => {
   })
 })
 
+describe('scrubSentryEvent pe eveniment structurat (Jakarinos r5)', () => {
+  it('request.data cu p_token: corpul dispare complet, tokenul nu mai apare nicăieri', () => {
+    const ev = { request: { url: 'https://api/rest/v1/rpc/fn_red_raspuns_public', data: { p_token: T43, p_optiune: 'particip' } }, breadcrumbs: [{ message: `trimis ${T43}` }] }
+    const rez = scrubSentryEvent(ev)
+    expect(rez).not.toBeNull()
+    expect(rez.request.data).toBeUndefined()
+    expect(rez.breadcrumbs[0].message).toBe('trimis [token]')   // colectat din cheia p_token, înlocuit global chiar fără context
+    expect(JSON.stringify(rez)).not.toContain(T43)
+  })
+  it('tokenul din request.url e colectat și înlocuit și în extra.token (fără context), inclusiv în chei', () => {
+    const ev = { request: { url: '/redari/raspuns/' + T43 }, extra: { token: T43, nota: `vezi ${T43} aici`, [T43]: 1 } }
+    const rez = scrubSentryEvent(ev)
+    expect(rez.request.url).toBe('/redari/raspuns/[token]')
+    expect(rez.extra.token).toBe('[token]')
+    expect(rez.extra.nota).toBe('vezi [token] aici')
+    expect(rez.extra['[token]']).toBe(1)
+    expect(JSON.stringify(rez)).not.toContain(T43)
+  })
+  it('valoarea de 43 a unei chei cu „token” în nume devine [token] chiar fără alt context (token_raspuns)', () => {
+    const ev = { contexts: { red: { token_raspuns: T43, altceva: 'x' } } }
+    const rez = scrubSentryEvent(ev)
+    expect(rez.contexts.red.token_raspuns).toBe('[token]')
+    expect(rez.contexts.red.altceva).toBe('x')
+  })
+  it('request.body se elimină când URL-ul e un RPC al modulului, chiar fără token vizibil', () => {
+    const ev = { request: { url: 'https://api/rest/v1/rpc/fn_red_formular_public', body: '{"x":1}', method: 'POST' } }
+    const rez = scrubSentryEvent(ev)
+    expect(rez.request.body).toBeUndefined()
+    expect(rez.request.method).toBe('POST')
+  })
+  it('nu atinge un eveniment obișnuit', () => {
+    const ev = { message: 'TypeError: x', request: { url: 'https://erp/logistica', data: { a: 1 } }, extra: { tokenuri_cumparate: 12 } }
+    const rez = scrubSentryEvent(ev)
+    expect(rez).toEqual({ message: 'TypeError: x', request: { url: 'https://erp/logistica', data: { a: 1 } }, extra: { tokenuri_cumparate: 12 } })
+  })
+})
+
 describe('scrubSentryEvent la excepție', () => {
   it('întoarce evenimentul minim (fără request.url / breadcrumbs), nu evenimentul brut', () => {
     const ev = { event_id: 'e1', level: 'error', transaction: `/redari/raspuns/${T43}`, request: { url: `https://erp/redari/raspuns/${T43}` }, breadcrumbs: [{ message: T43 }],
