@@ -34,7 +34,8 @@ const MAX_DECODARI = 3
 const MIN_LUNGIME_COADA = 16
 
 const pareSuspect = (s) => /redari|raspuns|token/i.test(s)
-const cheieDeToken = (cheie) => typeof cheie === 'string' && /token/i.test(cheie)
+// r11 P1-1 (Jakarinos): cheile se judecă pe TOATE formele decodate (`%70%5f%74%6f%6b%65%6e` = p_token)
+const cheieDeToken = (cheie) => typeof cheie === 'string' && formele(cheie).some(f => /token/i.test(f))
 // r7 P1-2: valoarea unei chei de token e token dacă ORICE formă decodată are exact 43 [A-Za-z0-9_-] (ex. `%30` + 42 caractere)
 const valoareDeToken = (v) => typeof v === 'string' && formele(v).some(f => RX_T43.test(f))
 
@@ -86,15 +87,18 @@ export function redacteazaText(s, tokenuriGlobale = null) {
 // Parcurgere iterativă generică (fără recursivitate, fără limită de adâncime), cu set de vizitate pentru cicluri.
 // r10 P1-1 (Jakarinos): `sensibil` = un STRĂMOȘ e o cheie de token (p_token, token*, raspuns*) — descendenții ei (liste `[null, T]`,
 // obiecte `{ value: T }`) se tratează ca valori de token, structural, nu prin regex pe serializare.
-const cheieSensibila = (cheie) => typeof cheie === 'string' && /token|raspuns/i.test(cheie)
+const cheieSensibila = (cheie) => typeof cheie === 'string' && formele(cheie).some(f => /token|raspuns/i.test(f))
+// Copilot FE r5 P1-01: un obiect referit de două ori (o dată sub cheie obișnuită, o dată sub p_token) se parcurge DIN NOU când e atins
+// pe calea sensibilă — vizitatele țin nivelul (false → true), deci fiecare obiect e parcurs cel mult de două ori (ciclurile se termină).
 function parcurge(radacina, fn, fnCheie = null) {
   if (radacina === null || typeof radacina !== 'object') return radacina
-  const vizitate = new WeakSet()
+  const vizitate = new WeakMap()   // obj → sensibil cu care a fost parcurs
   const stiva = [[radacina, false]]
   while (stiva.length) {
     const [obj, sensibil] = stiva.pop()
-    if (obj === null || typeof obj !== 'object' || vizitate.has(obj)) continue
-    vizitate.add(obj)
+    if (obj === null || typeof obj !== 'object') continue
+    if (vizitate.has(obj) && (vizitate.get(obj) || !sensibil)) continue
+    vizitate.set(obj, sensibil)
     if (Array.isArray(obj)) {
       for (let i = 0; i < obj.length; i++) {
         const v = obj[i]
@@ -214,19 +218,21 @@ export function scrubSentryEvent(event) {
     if (event === null || typeof event !== 'object') return null
     if (esteDinFormularulPublic(event)) return null
     const tokenuri = colecteazaTokenuriEveniment(event)   // ÎNAINTE de ștergerea corpului — colectează și din request.data/body
-    let corpSuspect = false
+    let purtator = tokenuri.size > 0
     const req = event.request
-    if (req && typeof req === 'object') {
+    if (req && typeof req === 'object' && (req.data !== undefined || req.body !== undefined)) {
       const corp = serializeaza({ data: req.data, body: req.body })
       const urlRpc = vreoFormaSePotriveste(typeof req.url === 'string' ? req.url : '', /rpc\/fn_red_/i)
-      // r8 P1-1: corpul suspect se șterge, dar evenimentul rămâne „purtător de token” — orice șir de 43 rămas în rest ⇒ null.
-      // r9 P2-2: „suspect” = URL RPC al modulului, token colectat, sau p_token/raspuns în vreo formă decodată — NU orice „token”
-      // (altfel `tokenuri_cumparate: 12` + un hash legitim de 43 ar pierde evenimente reale)
-      corpSuspect = urlRpc || contineVreunToken(corp, tokenuri) || formele(corp).some(f => /p_token|raspuns/i.test(f))
-      if (corpSuspect) { delete req.data; delete req.body }
+      // r9 P2-2 / r11 P2-1: corpul se ȘTERGE dacă URL-ul e un RPC al modulului, dacă poartă un token colectat sau dacă are indiciu
+      // (p_token/raspuns în vreo formă decodată); evenimentul devine „purtător” (orice secvență ≥43 rămasă ⇒ null) DOAR când
+      // corpul șters avea indiciu de token — nu pentru simplul URL RPC fără corp sau cu corp curat (altfel un hash SHA-256
+      // legitim ar pierde erori reale ale modulului)
+      const indiciu = formele(corp).some(f => /p_token|raspuns/i.test(f))
+      if (urlRpc || contineVreunToken(corp, tokenuri) || indiciu) { delete req.data; delete req.body }
+      if (indiciu) purtator = true
     }
     redacteazaAdanc(event, tokenuri)
-    if (maiScurgeToken(event, tokenuri, tokenuri.size > 0 || corpSuspect)) return null
+    if (maiScurgeToken(event, tokenuri, purtator)) return null
     return event
   } catch {
     return null

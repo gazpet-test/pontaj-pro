@@ -240,6 +240,33 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // purtător de token (corp suspect șters) + secvență ≥43 lipită de prefix, necolectabilă ⇒ null
     expect(scrubSentryEvent({ request: { url: '/intern', body: '{"p_token":"scurt"}' }, message: 'ref_' + 'q'.repeat(43) })).toBeNull()
   })
+  it('Copilot FE r5 P1-01: obiect referit de două ori (sub cheie obișnuită și sub p_token) — contextul sensibil nu se pierde', () => {
+    const comun = { value: 'q'.repeat(43) }
+    const rez = scrubSentryEvent({ extra: { p_token: comun, alta_referinta: comun } })
+    expect(rez === null || !JSON.stringify(rez).includes('q'.repeat(43))).toBe(true)
+    const comun2 = { value: 'w'.repeat(43) }
+    const rez2 = scrubSentryEvent({ extra: { alta_referinta: comun2, p_token: comun2 } })
+    expect(rez2 === null || !JSON.stringify(rez2).includes('w'.repeat(43))).toBe(true)
+    // ciclu + referință dublă: se termină și nu scapă nimic
+    const c = { value: 'e'.repeat(43) }; c.self = c; c.lista = [c, { adanc: c }]
+    const rez3 = scrubSentryEvent({ message: 'x', extra: { a: c, token_ref: { b: c } } })
+    const vaz = new WeakSet(); const sigur = JSON.stringify(rez3, (_k, v) => { if (v && typeof v === 'object') { if (vaz.has(v)) return '[ciclu]'; vaz.add(v) } return v })
+    expect(rez3 === null || !sigur.includes('e'.repeat(43))).toBe(true)
+  })
+  it('r11 P1-1 (Jakarinos): cheie %-codificată ca obiect structural (`%70%5f%74%6f%6b%65%6e`: [null, T] / {nested:{value:T}}) + ref_<T>', () => {
+    for (const extra of [{ '%70%5f%74%6f%6b%65%6e': [null, T] }, { '%70%5f%74%6f%6b%65%6e': { nested: { value: T } } }, { '%72%61%73%70%75%6e%73': { v: '%30' + T.slice(1) } }]) {
+      const rez = scrubSentryEvent({ extra, message: 'ref_' + T })
+      expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
+      expect(rez === null || !JSON.stringify(rez).includes(T.slice(1))).toBe(true)
+    }
+  })
+  it('r11 P2-1 (Jakarinos): URL RPC al modulului fără corp + hash SHA-256 legitim ⇒ evenimentul trece', () => {
+    const ev = { request: { url: '/rest/v1/rpc/fn_red_numar_document' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'Eroare generare convocator' }
+    expect(scrubSentryEvent(ev)).toEqual({ request: { url: '/rest/v1/rpc/fn_red_numar_document' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'Eroare generare convocator' })
+    // cu corp curat: corpul se șterge (RPC al modulului), hash-ul rămâne, evenimentul trece
+    const ev2 = { request: { url: '/rest/v1/rpc/fn_red_numar_document', data: { p_uat: 3 } }, extra: { continut_hash: 'a'.repeat(64) }, message: 'x' }
+    expect(scrubSentryEvent(ev2)).toEqual({ request: { url: '/rest/v1/rpc/fn_red_numar_document' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'x' })
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
