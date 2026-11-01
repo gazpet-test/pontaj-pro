@@ -3,10 +3,9 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { normalizeazaNume } from '../idParcela.js'
-// import de namespace: `reincarcaConvocator` vine de la agentul docx (P2-8); până aterizează, build-ul nu pică, iar butonul explică lipsa
-import * as docx from '../docx.js'
+import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
-  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS_BAZA, citesteTokenRaspuns } from './comune.jsx'
+  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns } from './comune.jsx'
 
 const COL_PARCELA = 'id, proiect_id, uat_id, id_parcela, tronson, km_de_la, km_pana_la, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta, articol_deviz, cantitate, observatii, sters_la, sters_motiv, created_at'
 const CAMPURI_PARCELA = [
@@ -26,6 +25,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
   const [contacte, setContacte] = useState({})    // detinator_id → contact
   const [convocari, setConvocari] = useState([])
   const [raspunsuri, setRaspunsuri] = useState([])
+  const [metaRaspuns, setMetaRaspuns] = useState({})   // raspuns_id → { ip_sau_sursa, user_agent } — doar admin/editor
   const [pvs, setPvs] = useState([])
   const [jurnal, setJurnal] = useState([])
   const [loading, setLoading] = useState(true)
@@ -48,14 +48,19 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       const ids = (det || []).map(d => d.id)
       const [rc, rr, rpv, rct] = await Promise.all([
         ids.length ? supabase.from('red_convocari').select(COL_CONVOCARE).in('detinator_id', ids).order('created_at') : { data: [] },
-        // P2-5: viewer-ul nu primește ip_sau_sursa; raw_payload / user_agent nu se cer deloc în UI
-        ids.length ? supabase.from('red_raspunsuri').select(COL_RASPUNS_BAZA + (poateScrie ? ', ip_sau_sursa' : '')).in('detinator_id', ids).order('data') : { data: [] },
+        // [r2] ordinea = data desc, seq desc (tie-break); meta (ip/user agent) e tabelă separată, citită mai jos doar de admin/editor
+        ids.length ? supabase.from('red_raspunsuri').select(COL_RASPUNS).in('detinator_id', ids).order('data', { ascending:false }).order('seq', { ascending:false }) : { data: [] },
         supabase.from('red_procese_verbale').select('*').or(`parcela_id.eq.${parcelaId}${ids.length ? `,detinator_id.in.(${ids.join(',')})` : ''}`).order('created_at'),
         poateScrie && ids.length ? supabase.from('red_detinatori_contact').select('*').in('detinator_id', ids) : { data: [] },
       ])
       for (const r of [rc, rr, rpv, rct]) if (r.error) throw r.error
       setConvocari(rc.data || []); setRaspunsuri(rr.data || []); setPvs(rpv.data || [])
       setContacte(Object.fromEntries((rct.data || []).map(c => [c.detinator_id, c])))
+      if (poateScrie && (rr.data || []).length) {
+        const { data: m, error: em } = await supabase.from('red_raspunsuri_meta').select(COL_RASPUNS_META).in('raspuns_id', rr.data.map(x => x.id))
+        if (em) throw em
+        setMetaRaspuns(Object.fromEntries((m || []).map(x => [x.raspuns_id, x])))
+      } else setMetaRaspuns({})
       const toateId = [parcelaId, ...ids, ...(rc.data || []).map(x => x.id), ...(rr.data || []).map(x => x.id), ...(rpv.data || []).map(x => x.id)]
       // P2-5: fără date_vechi/date_noi în listă — se citesc la cerere, per rând, doar de admin (vedeJurnal)
       const { data: j, error: ej } = await supabase.from('red_jurnal').select('id, tabela, inregistrare_id, actiune, user_email, created_at').in('inregistrare_id', toateId).order('created_at').limit(500)
@@ -78,14 +83,19 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (c.data_confirmare_primire) ev.push({ t: c.data_confirmare_primire, tip:'convocare', text:`${c.nr_document} confirmare de primire`, cine: numeDet[c.detinator_id] })
       if (c.retur) ev.push({ t: c.retur_data || c.created_at, tip:'retur', text:`${c.nr_document} retur: ${etichetaRetur(c.retur)}`, cine: numeDet[c.detinator_id] })
     })
-    raspunsuri.forEach(r => ev.push({ t: r.data || r.created_at, tip:'raspuns', text:`Răspuns (${r.canal}): ${etichetaOptiune(r.optiune)}${r.zi_sesiune_aleasa ? ' · ' + fmtDate(r.zi_sesiune_aleasa) : ''}${r.obiectii_text ? ' — „' + r.obiectii_text.slice(0, 160) + (r.obiectii_text.length > 160 ? '…' : '') + '”' : ''}`, cine: numeDet[r.detinator_id] }))
+    raspunsuri.forEach(r => {
+      const m = metaRaspuns[r.id]
+      ev.push({ t: r.data || r.created_at, seq: r.seq, tip:'raspuns', text:`Răspuns (${r.canal}): ${etichetaOptiune(r.optiune)}${r.zi_sesiune_aleasa ? ' · ' + fmtDate(r.zi_sesiune_aleasa) : ''}${r.obiectii_text ? ' — „' + r.obiectii_text.slice(0, 160) + (r.obiectii_text.length > 160 ? '…' : '') + '”' : ''}`,
+        cine: numeDet[r.detinator_id], meta: m ? [m.ip_sau_sursa, m.user_agent ? String(m.user_agent).slice(0, 60) : null].filter(Boolean).join(' · ') : null })
+    })
     pvs.forEach(p => {
       ev.push({ t: p.created_at, tip:'pv', text:`PV ${p.tip} ${p.nr_pv} — ${p.stare}${p.obiectii_redare ? ' · cu obiecții' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_generat_path })
       if (p.semnat_primit_data) ev.push({ t: p.semnat_primit_data, tip:'pv', text:`PV ${p.nr_pv} semnat${p.semnat_fizic ? ' (fizic)' : ''}`, cine: numeDet[p.detinator_id], path: p.fisier_semnat_path })
     })
     jurnal.forEach(j => ev.push({ t: j.created_at, tip:'jurnal', text:`${j.actiune} ${j.tabela.replace('red_', '')}`, cine: j.user_email || '', jurnal: true, jurnalId: j.id }))
-    return ev.sort((a, b) => new Date(a.t) - new Date(b.t))
-  }, [convocari, raspunsuri, pvs, jurnal, numeDet])
+    // cronologic crescător; la aceeași clipă răspunsurile se despart după seq (contract [r2])
+    return ev.sort((a, b) => (new Date(a.t) - new Date(b.t)) || ((a.seq ?? 0) - (b.seq ?? 0)))
+  }, [convocari, raspunsuri, metaRaspuns, pvs, jurnal, numeDet])
 
   const fisiere = useMemo(() => [
     // P2-8: convocările active fără fișier (upload-ul a picat după inserarea rândului) apar „neîncărcat” + Reîncarcă
@@ -127,9 +137,9 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       const [token, rs] = await Promise.all([citesteTokenRaspuns(c.detinator_id), fetch(SABLON_CONVOCATOR)])
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
-      if (typeof docx.reincarcaConvocator !== 'function') throw new Error('Reîncărcarea nu e disponibilă încă în această versiune (docx.js fără reincarcaConvocator).')
-      const { blob, hash } = await docx.genereazaConvocator({ detinator: det, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, origin: window.location.origin, templateArrayBuffer, dataDocument: c.created_at })
-      const { path } = await docx.reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
+      // fișierele din bucket sunt imutabile: reincarcaConvocator scrie o cale nouă versionată ({nr_document}-v{n}.docx) și mută *_path
+      const { blob, hash } = await genereazaConvocator({ detinator: det, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, origin: window.location.origin, templateArrayBuffer, dataDocument: c.created_at })
+      const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
       show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
       incarca()
     } catch (e) { show('Reîncărcare: ' + msgEroare(e), 'error') }
@@ -233,6 +243,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                 <span style={{ width:8, height:8, borderRadius:'50%', background: culoareTip[e.tip] || G.muted, flexShrink:0, alignSelf:'center' }} />
                 <span style={{ flex:1, color: e.jurnal ? G.muted : G.text }}>{e.text}</span>
                 {e.cine && <span style={{ color:G.dim, fontSize:12 }}>{e.cine}</span>}
+                {e.meta && <span style={{ color:G.dim, fontSize:11 }} title="sursă tehnică (red_raspunsuri_meta, doar admin/editor)">⌁ {e.meta}</span>}
                 {e.path && poateScrie && <button style={S.btnX} onClick={() => deschideFisier(e.path)}>⬇</button>}
                 {e.conv && poateScrie && <button style={S.btnX} onClick={() => reincarca(e.conv)} disabled={reincarcId === e.conv.id}>{reincarcId === e.conv.id ? '…' : '↻ Reîncarcă'}</button>}
                 {e.jurnal && esteAdmin && <button style={S.btnX} onClick={() => vedeJurnal(e.jurnalId)} title="Detalii (date vechi / noi)">{'{ }'}</button>}
@@ -283,6 +294,8 @@ function ModalParcela({ parcela, valoare, esteAdmin, show, onClose, onGata }) {
   }
   return (
     <Modal titlu={`Editează parcela ${parcela.id_parcela}`} onClose={onClose} latime={640}>
+      {/* [r2] proiect_id / uat_id / id_parcela sunt imutabile după insert (trigger fn_red_legaturi): nu se oferă aici; corecția = ștergere (soft) + rând nou */}
+      <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>UAT-ul și id-ul parcelei nu se pot schimba. Dacă parcela e în UAT-ul greșit: „Șterge” (cu motiv) și adaugă-o din nou prin import.</div>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
         {CAMPURI_PARCELA.map(([k, et, tip]) => <Camp key={k} eticheta={et}><input type={tip === 'number' ? 'number' : 'text'} step="any" value={f[k]} onChange={set(k)} style={S.input} /></Camp>)}
         {esteAdmin && <Camp eticheta="Valoare (lei) — doar admin"><input type="number" step="any" value={f.valoare_lei} onChange={set('valoare_lei')} style={S.input} /></Camp>}
@@ -330,6 +343,8 @@ function ModalDetinator({ parcela, det, contact, show, onClose, onGata }) {
   }
   return (
     <Modal titlu={det ? `Editează deținătorul` : `Adaugă deținător — ${parcela.id_parcela}`} onClose={onClose} latime={680}>
+      {/* [r2] parcela_id e imutabil după insert: deținătorul nu se „mută” pe altă parcelă; corecția = ștergere (soft) + rând nou pe parcela corectă */}
+      {det && <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>Deținătorul rămâne pe parcela {parcela.id_parcela}. Dacă e pe parcela greșită: „Șterge” (cu motiv) și adaugă-l pe parcela corectă.</div>}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
         <Camp eticheta="Nume (NUME Prenume)" span={2}><input value={f.nume} onChange={set('nume')} style={S.input} /></Camp>
         <Camp eticheta="Calitate"><select value={f.calitate} onChange={set('calitate')} style={{ ...S.select, width:'100%' }}>{CALITATI.map(c => <option key={c} value={c}>{c}</option>)}</select></Camp>
