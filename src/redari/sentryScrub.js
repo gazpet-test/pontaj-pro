@@ -67,7 +67,10 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // într-un conținut pe care nu-l putem parcurge structural, un cuvânt-cheie (p_token/raspuns/token) urmat în cel mult 200 de caractere
 // de ORICE fel (delimitatori, comentarii, spații, escape-uri) de o secvență de ≥43 [A-Za-z0-9_-] e indiciu. Valorile legitime scurte
 // (`tokenuri_cumparate: 12`) rămân curate: nu au secvența de 43 după ele.
-const RX_INDICIU_JSON = /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]|(?:raspuns|token)[\s\S]{0,200}?[A-Za-z0-9_-]{43}/i
+// Jakarinos r26 P1-1: fără limită de distanță — conținut TEXT neparcurs care pomenește un cuvânt-cheie ȘI conține undeva o secvență
+// de ≥43 e indiciu (orice prag de distanță doar mută problema). Se aplică DOAR textului neparcurs structural (dinJson / corp-șir),
+// nu serializării unui obiect valid — câmpurile vecine ale unui obiect (`{tokenuri_cumparate: 12, hash}`) sunt parcurse structural (r26 P2-1).
+const RX_INDICIU_JSON = { test: (f) => /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && RX_RUN43.test(f)) }
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
@@ -302,7 +305,11 @@ export function scrubSentryEvent(event) {
       // corpul șters avea indiciu de token — nu pentru simplul URL RPC fără corp sau cu corp curat (altfel un hash SHA-256
       // legitim ar pierde erori reale ale modulului)
       // r21: același indiciu cu sintaxă de cheie ca la JSON-ul neparcurs (un corp `{msg:'raspuns salvat'}` nu face evenimentul purtător)
-      const indiciu = formele(corp).some(f => RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(f.replace(/\\(["\\/])/g, '$1')))
+      // r26 P2-1: indiciul textual se aplică doar corpurilor-ȘIR (neparcurse structural); un obiect `data` valid a fost deja parcurs
+      // structural (cheile de token colectate), iar câmpurile lui vecine nu se amestecă; cheia `p_token` prezentă rămâne indiciu
+      const siruri = [req.data, req.body].filter(v => typeof v === 'string')
+      const indiciu = siruri.some(s => formele(s).some(f => RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(f.replace(/\\(["\\/])/g, '$1'))))
+        || formele(corp).some(f => /"p_token"\s*:/i.test(f))
       const pomeneste = formele(corp).some(f => /p_token|raspuns/i.test(f))
       if (urlRpc || contineVreunToken(corp, tokenuri) || indiciu || pomeneste) { delete req.data; delete req.body }
       if (indiciu || tokenuri.refuzat) purtator = true

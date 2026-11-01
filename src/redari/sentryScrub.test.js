@@ -479,6 +479,23 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
       expect(scrubSentryEvent(ok)?.message).toBe('x')
     }
   })
+  it('r26 P1-1 (Jakarinos): token la >200 de caractere dupa cuvantul-cheie, in text neparcurs - tot indiciu (fara prag de distanta)', () => {
+    for (const body of ['{ token: \'' + 'x'.repeat(500) + T + '\' }', 'raspuns ' + '.'.repeat(1000) + ' ' + T, 'TOKEN\n' + 'a b '.repeat(300) + T]) {
+      for (const ev of [
+        { message: T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body } },
+        { message: 'ref_' + T, extra: { payload: body } },
+      ]) { const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true) }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'ref_' + T, data: { payload: body } })
+      expect(JSON.stringify(sp)).not.toContain(T)
+    }
+  })
+  it('r26 P2-1 (Jakarinos): corp OBIECT valid cu `tokenuri_cumparate: 12` si un hash in campul vecin + hash in extra -> evenimentul trece', () => {
+    const hash = 'a'.repeat(64)
+    const ev = { message: 'Eroare interna', request: { url: '/intern', data: { tokenuri_cumparate: 12, hash } }, extra: { sha256: hash } }
+    expect(scrubSentryEvent(ev)).toEqual({ message: 'Eroare interna', request: { url: '/intern', data: { tokenuri_cumparate: 12, hash } }, extra: { sha256: hash } })
+    // dar acelasi continut ca TEXT neparcurs e indiciu (conservator)
+    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'tokenuri_cumparate: 12, hash: ' + hash }, extra: { sha256: hash } })).toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
