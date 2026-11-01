@@ -108,6 +108,16 @@ describe('consolidari()', () => {
       expect(consolidari(H + '<!-- neinchis')).toBeNull();
       expect(consolidari(H + '<script>var a;')).toBeNull();
     });
+    it('r7: valoare necitata care contine < " \' ` = → pagina incompleta (Copilot r5 P1-01)', () => {
+      const h = `<div id="istoric_fa">
+  <a title="Consolidarea din 24.05.2024">veche</a>
+  <span data-x=<a title="Consolidarea din 25.02.2026">noua</a>
+</div>`;
+      expect(consolidari(h)).toBeNull();
+      expect(consolidari('<div id="istoric_fa"><a title="Consolidarea din 24.05.2024" data-x=a`b>x</a></div>')).toBeNull();
+      expect(consolidari('<div id="istoric_fa"><a title="Consolidarea din 24.05.2024" data-x=a=b>x</a></div>')).toBeNull();
+      expect(consolidari('<div id=istoric_fa><a title="Consolidarea din 24.05.2024" class=x>x</a></div>')).toEqual(['2024-05-24']);
+    });
     it('r6: caractere Unicode care isi schimba lungimea la lowercase (U+0130) nu decaleaza parsarea', () => {
       const I = '<title>HG 395 02/06/2016 - Portal Legislativ</title><span class="S_EMT_BDY">GUVERNUL</span>';
       const B = (d) => '<div id="istoric_fa"><a title="Consolidarea din ' + d + '">x</a></div>';

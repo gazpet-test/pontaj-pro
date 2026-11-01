@@ -85,10 +85,25 @@ async function verificaOficial(rand: any, refScan: string | null) {
       signal: AbortSignal.timeout(TIMEOUT_OFICIAL_MS), redirect: 'follow',
       headers: { 'User-Agent': 'GazpetERP-normative/1.1 (verificare lunara)', 'Accept': 'text/html' },
     });
-    if (!resp.ok) return null;
-    const html = await resp.text();
-    // r5 (Copilot r4 P2-02): plafon de marime — cea mai mare pagina reala vazuta are ~1,7 MB (Legea 99/2016)
-    if (html.length > MAX_HTML) return null;
+    if (!resp.ok || !resp.body) return null;
+    // r5/r7 (Copilot r4 P2-02, r5 P2-01): plafon de marime aplicat IN TIMPUL citirii (cea mai mare pagina reala
+    // vazuta are ~1,7 MB, Legea 99/2016); peste plafon citirea se opreste si actul cade pe AI (plafonat)
+    const lung = Number(resp.headers.get('content-length') || 0);
+    if (lung > MAX_HTML) { await resp.body.cancel().catch(() => {}); return null; }
+    const cititor = resp.body.getReader();
+    const bucati: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await cititor.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX_HTML) { await cititor.cancel().catch(() => {}); return null; }
+      bucati.push(value);
+    }
+    const tot = new Uint8Array(total);
+    let o = 0;
+    for (const b of bucati) { tot.set(b, o); o += b.length; }
+    const html = new TextDecoder('utf-8').decode(tot);
     // r2: identitate dovedita (tip + numar + an + emitent) SI istoric citit complet; altfel → AI (plafonat)
     if (!paginaPotrivita(html, rand)) return null;
     const date = consolidari(html);

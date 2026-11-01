@@ -190,6 +190,9 @@ export function analizeazaHTML(html) {
           const v0 = j;
           while (j < n && !SP(s[j]) && s[j] !== '>') j++;
           val = s.slice(v0, j);
+          // r7 (Copilot r5 P1-01): valoare necitata cu caractere interzise de HTML (< " ' ` =) sau goala = ambigua
+          // (ex. `data-x=<a title=…>` ar inghiti inceputul altui tag) → pagina incompleta
+          if (!val || /[<"'`=]/.test(val)) return rupt();
         }
       }
       if (attrs.has(an)) return rupt(); // atribut dublat
