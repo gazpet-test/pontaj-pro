@@ -267,6 +267,12 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ev2 = { request: { url: '/rest/v1/rpc/fn_red_numar_document', data: { p_uat: 3 } }, extra: { continut_hash: 'a'.repeat(64) }, message: 'x' }
     expect(scrubSentryEvent(ev2)).toEqual({ request: { url: '/rest/v1/rpc/fn_red_numar_document' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'x' })
   })
+  it('r12 P1-1 (Jakarinos): corp de cerere ca ȘIR JSON cu cheie `token` structurală ([null, T], {nested:{value:T}}) + ref_<T>', () => {
+    for (const body of [JSON.stringify({ token: [null, T] }), JSON.stringify({ token: { nested: { value: T } } }), encodeURIComponent(JSON.stringify({ x: 1, raspuns: { lista: ['a', { t: T }] } })), JSON.stringify({ inner: JSON.stringify({ token: [T] }) })]) {
+      const rez = scrubSentryEvent({ request: { url: '/rest/v1/rpc/fn_red_numar_document', body }, message: 'ref_' + T })
+      expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
+    }
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

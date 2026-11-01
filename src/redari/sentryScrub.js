@@ -127,10 +127,18 @@ export function colecteazaTokenuriEveniment(event) {
   // r9 P1-1 (Jakarinos): indiciul se caută în TOATE formele decodate (o cheie complet %-codificată, ex. `%70%5f%74%6f%6b%65%6e`,
   // nu arată „suspect” brut), iar colectarea se face și pe evenimentul SERIALIZAT întreg — așa prindem și valorile din liste
   // (`p_token: [T]`) sau cheile/valorile despărțite de structură, care la parcurgerea șir-cu-șir n-au context
+  // r12 P1-1 (Jakarinos): un șir care e JSON (corp de cerere serializat, `{"token":[null,T]}`, `{"token":{"nested":{"value":T}}}`)
+  // se parsează (în fiecare formă decodată) și se parcurge STRUCTURAL, ca orice obiect — cheile de token își protejează descendenții
+  const dinJson = (f) => {
+    if (!/^\s*[[{]/.test(f) || f.length > 200000) return
+    let obj
+    try { obj = JSON.parse(f) } catch { return }
+    if (obj && typeof obj === 'object') for (const t of colecteazaTokenuriEveniment(obj)) tokenuri.add(t)
+  }
   const dinText = (s) => {
     if (typeof s !== 'string') return
     const forme = formele(s)
-    if (forme.some(pareSuspect)) for (const f of forme) colecteazaTokenuri(f, tokenuri)
+    if (forme.some(pareSuspect)) for (const f of forme) { colecteazaTokenuri(f, tokenuri); dinJson(f) }
   }
   parcurge(event, (_obj, cheie, v, sensibil) => {
     if (typeof v === 'string') {
