@@ -9,7 +9,7 @@ import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
 import { genereazaConvocator, verificaDateConvocator, salveazaConvocator, borderouCsv, descarcaBlob } from './redari/docx.js'
 import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune, etichetaRetur,
-  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator } from './redari/ui/comune.jsx'
+  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator, citesteIn } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
 
@@ -63,10 +63,15 @@ export default function Redari() {
   useEffect(() => { if (gataProfil && nivel) incarcaProiecte() }, [gataProfil, nivel, incarcaProiecte])
 
   useEffect(() => {
-    if (!proiectId) { setUats([]); return }
+    // r3 P2-5: la schimbarea proiectului lista veche dispare imediat, iar un răspuns întârziat al cererii anterioare se ignoră
+    setUats([])
+    if (!proiectId) return
+    let activ = true
     supabase.from('red_uat').select('*').eq('proiect_id', proiectId).order('nume').then(({ data, error }) => {
+      if (!activ) return
       if (error) show('UAT-uri: ' + msgEroare(error), 'error'); else setUats(data || [])
     })
+    return () => { activ = false }
   }, [proiectId, reload, show])
 
   const proiect = useMemo(() => proiecte.find(p => p.id === proiectId) || null, [proiecte, proiectId])
@@ -194,13 +199,13 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
     if (!ids.length) { show('Nu e niciun rând de pus în borderou.', 'error'); return }
     setLucru(true)
     try {
-      const [{ data: contacte, error: e1 }, { data: conv, error: e2 }, { data: det, error: e3 }] = await Promise.all([
-        supabase.from('red_detinatori_contact').select('detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta').in('detinator_id', ids),
-        supabase.from('red_convocari').select('id, detinator_id, nr_document, created_at').in('detinator_id', ids)
-          .eq('canal', 'posta').eq('stare', 'activ').is('data_expediere', null).not('fisier_convocator_path', 'is', null).order('created_at'),
-        supabase.from('red_detinatori').select('id, nume, parcela_id, red_parcele(id_parcela)').in('id', ids).is('sters_la', null),
+      // r3 P2-3: citire paginată (loturi de 100 id-uri, range în bucle de 1000)
+      const [contacte, conv, det] = await Promise.all([
+        citesteIn(() => supabase.from('red_detinatori_contact').select('detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta').order('detinator_id'), 'detinator_id', ids),
+        citesteIn(() => supabase.from('red_convocari').select('id, detinator_id, nr_document, created_at')
+          .eq('canal', 'posta').eq('stare', 'activ').is('data_expediere', null).not('fisier_convocator_path', 'is', null).order('created_at').order('id'), 'detinator_id', ids),
+        citesteIn(() => supabase.from('red_detinatori').select('id, nume, parcela_id, red_parcele(id_parcela)').is('sters_la', null).order('id'), 'id', ids),
       ])
-      if (e1 || e2 || e3) throw (e1 || e2 || e3)
       const cMap = Object.fromEntries((contacte || []).map(c => [c.detinator_id, c]))
       const dMap = Object.fromEntries((det || []).map(d => [d.id, d]))
       const convPeDet = {}; (conv || []).forEach(c => { (convPeDet[c.detinator_id] ||= []).push(c) })
@@ -496,7 +501,9 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
 function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGata }) {
   const uat = uats.find(u => u.id === rand.uat_id)
   const zile = [uat?.sesiune_zi1, uat?.sesiune_zi2, uat?.sesiune_zi3].filter(Boolean)
-  const [optiune, setOptiune] = useState('particip')
+  // r3 P2-4: „particip” se poate alege DOAR dacă UAT-ul are zile de sesiune; ziua vine strict din lista UAT-ului (fără câmp liber)
+  const faraSesiune = zile.length === 0
+  const [optiune, setOptiune] = useState(faraSesiune ? 'nu_particip_fara_obiectii' : 'particip')
   const [zi, setZi] = useState(zile[0] || '')
   const [obiectii, setObiectii] = useState('')
   const [sursa, setSursa] = useState('')
@@ -516,7 +523,8 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
 
   const salveaza = async () => {
     if (cereObiectii && !obiectii.trim()) { show('Pentru această opțiune obiecțiile sunt obligatorii.', 'error'); return }
-    if (cereZi && !zi) { show('Alege ziua de sesiune.', 'error'); return }
+    if (cereZi && faraSesiune) { show('UAT-ul nu are zile de sesiune stabilite — „particip” nu se poate înregistra încă.', 'error'); return }
+    if (cereZi && !zile.includes(zi)) { show('Alege ziua de sesiune din lista UAT-ului.', 'error'); return }
     if (cereDeclaratie && !declaratie) { show('Bifează că deținătorul a confirmat verbal textul declarației.', 'error'); return }
     setLucru(true)
     try {
@@ -544,11 +552,15 @@ function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGa
     <Modal titlu={`Răspuns telefonic — ${rand.nume}`} onClose={onClose}>
       {raspunsId && <div style={{ ...S.card, borderColor:G.yellow, color:G.yellow, fontSize:12.5, marginBottom:10 }}>Răspunsul e salvat; a rămas de scris nota cu sursa. Poți corecta sursa și apăsa „Reîncearcă nota”.</div>}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <Camp eticheta="Opțiune" span={2}><select value={optiune} onChange={e => setOptiune(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}>{OPTIUNI_RASPUNS.map(o => <option key={o.cod} value={o.cod}>{o.eticheta}</option>)}</select></Camp>
-        {cereZi && (
-          <Camp eticheta="Ziua de sesiune aleasă (obligatoriu)">
-            {zile.length ? <select value={zi} onChange={e => setZi(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}><option value="">—</option>{zile.map(z => <option key={z} value={z}>{fmtDate(z)}</option>)}</select>
-              : <input type="date" value={zi} onChange={e => setZi(e.target.value)} disabled={!!raspunsId} style={S.input} />}
+        <Camp eticheta="Opțiune" span={2}>
+          <select value={optiune} onChange={e => setOptiune(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}>
+            {OPTIUNI_RASPUNS.map(o => <option key={o.cod} value={o.cod} disabled={o.cod === 'particip' && faraSesiune}>{o.eticheta}{o.cod === 'particip' && faraSesiune ? ' — indisponibil: UAT-ul nu are zile de sesiune' : ''}</option>)}
+          </select>
+          {faraSesiune && <div style={{ fontSize:12, color:G.yellow, marginTop:4 }}>⚠ UAT-ul {uat?.nume || rand.uat3} nu are zile de sesiune stabilite: „particip” se poate înregistra după ce se completează sesiunea.</div>}
+        </Camp>
+        {cereZi && !faraSesiune && (
+          <Camp eticheta="Ziua de sesiune aleasă (obligatoriu, din zilele UAT-ului)">
+            <select value={zi} onChange={e => setZi(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}><option value="">—</option>{zile.map((z, i) => <option key={z} value={z}>Ziua {i + 1}: {fmtDate(z)}{uat?.[`program_zi${i + 1}`] ? ` · ${uat[`program_zi${i + 1}`]}` : ''}</option>)}</select>
           </Camp>
         )}
         <Camp eticheta="Sursa (nr. telefon apelat / notă)"><input value={sursa} onChange={e => setSursa(e.target.value)} style={S.input} placeholder="opțional" /></Camp>
