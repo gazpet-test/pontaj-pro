@@ -1,4 +1,24 @@
-# Runbook — normative-scan-lunar v10 (scan în bucăți, 12.10.2026)
+# Runbook — normative-scan-lunar v11 (sursa oficială întâi, 01.11.2026)
+
+**v11 (decizie Răzvan 01.11.2026, varianta A):** actele cu `legislatie_doc_id` se verifică direct pe
+legislatie.just.ro (fișa actului → „istoric consolidări”), fără AI. Consolidarea curentă egală cu `forma_oficiala_la`
+= „neschimbat”, confirmat automat; mai nouă = semnal (notă + NECONFIRMAT, ca înainte). Pagina inaccesibilă sau cu alt
+titlu → actul cade pe calea AI. Standardele (ASRO) și actele fără id rămân pe AI, în loturi de 4 (erau 6).
+
+Ordinea livrării v11 (fiecare pas cu „da” de la Răzvan):
+1. Migrarea `20261123a_normative_sursa_oficiala` (4 coloane noi pe `ofertare_normative`) prin `scripts/livrare_migrare.sh`.
+   Revenire: întâi redeploy v10, apoi `supabase/revenire/20261123a_normative_sursa_oficiala_ROLLBACK.sql`.
+2. Deploy `normative-scan-lunar` v11 (migrarea ÎNAINTE: v11 cere coloanele noi).
+3. Completarea o singură dată a `legislatie_doc_id` + `forma_oficiala_la` (forma confirmată = consolidarea curentă
+   la data confirmării), cu preview + „da”. Fără bază, actul iese „necunoscut — bază nesetată” (nu dispare din raport).
+4. Test în mod test (`?test=1`, comanda de mai jos) → în mail: „N acte citite direct pe legislatie.just.ro”.
+5. Când un semnal e validat (schimbarea citită, citările din documentele noastre actualizate dacă e cazul):
+   `UPDATE ofertare_normative SET forma_oficiala_la = <noua consolidare>, stare = 'în vigoare' WHERE id = …`
+   — de acolo înainte actul revine la „neschimbat”.
+
+---
+
+# (istoric) normative-scan-lunar v10 (scan în bucăți, 12.10.2026)
 
 v9 era omorâtă la limita `EdgeRuntime.waitUntil` (~400s): 37 acte = 7 loturi × (Opus + până la 8 căutări) într-o
 singură invocare. v10: **o invocare = un lot** (apelul AI tăiat la 240s), progresul în `public.normative_scan_rulari`,
