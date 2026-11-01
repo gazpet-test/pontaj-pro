@@ -8,12 +8,16 @@
 //    cu toate câmpurile înlocuite, ajunge în primul <w:t>, restul <w:t> se golesc. Formatarea rămâne cea a PRIMULUI run
 //    (bold/italic parțial în mijlocul paragrafului se pierde), iar <w:tab/>/<w:br/> dintre run-uri rămân pe loc, deci
 //    ajung DUPĂ tot textul. Dacă fiecare placeholder stă într-un singur <w:t>, înlocuirea e locală și nimic nu se mută.
-// 2. Un placeholder rupt între două paragrafe NU se înlocuiește (rămâne ca în șablon).
+// 2. Un placeholder rupt între două paragrafe NU se înlocuiește (rămâne ca în șablon; cu `strict` ⇒ Error).
 // 3. Se procesează doar paragrafele „frunză” (fără alt <w:p> înăuntru): într-o casetă text (textbox) se înlocuiesc
 //    paragrafele din casetă, dar nu și run-urile paragrafului-gazdă din jurul casetei.
 // 4. {{qr}} devine imagine DOAR dacă paragraful conține exclusiv {{qr}} (plus spații); altfel se înlocuiește cu șir gol.
 // 5. Valorile sunt text simplu (escape XML); \n din valoare devine <w:br/> (rând nou în același paragraf).
 // 6. Nu se ating w:instrText / câmpuri Word, comentarii, note de subsol.
+// 7. `strict: true` → placeholder necunoscut (fără cheie în `campuri`) sau rămas în XML după completare ⇒ Error, nu
+//    dispare tăcut. Fără `strict`, câmpul lipsă → șir gol (doar pentru previzualizare).
+// 8. Determinism (hash): toate intrările scrise în zip primesc dată fixă și NU se creează intrări de director
+//    (createFolders:false) — același șablon + aceleași câmpuri + același QR ⇒ același Blob ⇒ același hash, oricând.
 
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
@@ -22,7 +26,8 @@ export const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordproc
 export const BUCKET_REDARI = 'redari'
 const QR_CM = 3
 const EMU_PER_CM = 360000
-const DATA_FIXA_ZIP = new Date(Date.UTC(2026, 0, 1, 0, 0, 0)) // intrări noi în zip cu dată fixă → același conținut ⇒ același hash
+const DATA_FIXA_ZIP = new Date(Date.UTC(2026, 0, 1, 0, 0, 0)) // intrări în zip cu dată fixă → același conținut ⇒ același hash
+const OPT_ZIP = { date: DATA_FIXA_ZIP, createFolders: false } // fără intrări de director (ar primi data curentă)
 
 const RX_PLACEHOLDER = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g
 // paragraf „frunză”: nu conține alt <w:p ...> înăuntru (casetele text se tratează prin paragrafele lor interioare)
@@ -48,30 +53,28 @@ const textParagraf = (pXml) => {
   return t
 }
 
-const inlocuiesteText = (text, campuri) =>
-  text.replace(RX_PLACEHOLDER, (_, nume) => {
-    const v = campuri[nume]
-    return v === null || v === undefined ? '' : String(v)
-  })
+const areText = (s) => { const r = RX_PLACEHOLDER.test(s); RX_PLACEHOLDER.lastIndex = 0; return r }
+
+// înlocuitor cu evidența numelor necunoscute (fără cheie în campuri)
+const inlocuitor = (campuri, necunoscute) => (_, nume) => {
+  if (!Object.prototype.hasOwnProperty.call(campuri, nume)) necunoscute.add(nume)
+  const v = campuri[nume]
+  return v === null || v === undefined ? '' : String(v)
+}
 
 // Înlocuirea într-un paragraf: întâi local (placeholder întreg într-un singur <w:t>), apoi, dacă a rămas ceva rupt
 // între run-uri, consolidare în primul <w:t>.
-const completeazaParagraf = (pXml, campuri) => {
-  if (!/\{\{/.test(pXml) && !/\{\{/.test(textParagraf(pXml))) return pXml
+const completeazaParagraf = (pXml, campuri, necunoscute) => {
+  if (!pXml.includes('{{')) return pXml
+  const inl = inlocuitor(campuri, necunoscute)
   let out = pXml.replace(RX_WT, (m, inner) => {
-    if (inner === undefined || !RX_PLACEHOLDER.test(inner)) { RX_PLACEHOLDER.lastIndex = 0; return m }
-    RX_PLACEHOLDER.lastIndex = 0
-    const nou = unescapeXml(inner).replace(RX_PLACEHOLDER, (_, nume) => {
-      const v = campuri[nume]
-      return v === null || v === undefined ? '' : String(v)
-    })
-    return `<w:t xml:space="preserve">${valoareInWt(nou)}</w:t>`
+    if (inner === undefined || !areText(inner)) return m
+    return `<w:t xml:space="preserve">${valoareInWt(unescapeXml(inner).replace(RX_PLACEHOLDER, inl))}</w:t>`
   })
   const textRamas = textParagraf(out)
-  if (!RX_PLACEHOLDER.test(textRamas)) { RX_PLACEHOLDER.lastIndex = 0; return out }
-  RX_PLACEHOLDER.lastIndex = 0
+  if (!areText(textRamas)) return out
   // placeholder rupt între run-uri: tot textul în primul <w:t>, restul golite (limita 1 din antet)
-  const textNou = inlocuiesteText(textRamas, campuri)
+  const textNou = textRamas.replace(RX_PLACEHOLDER, inl)
   let primul = true
   out = out.replace(RX_WT, () => {
     if (primul) { primul = false; return `<w:t xml:space="preserve">${valoareInWt(textNou)}</w:t>` }
@@ -103,7 +106,7 @@ const adaugaRelatieImagine = async (zip, partPath, target) => {
   const rId = `rId${max + 1}`
   rels = rels.replace('</Relationships>',
     `<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${target}"/></Relationships>`)
-  zip.file(relsPath, rels, { date: f ? f.date : DATA_FIXA_ZIP })
+  zip.file(relsPath, rels, OPT_ZIP)
   return rId
 }
 
@@ -112,7 +115,7 @@ const asiguraContentTypePng = async (zip) => {
   if (!f) throw new Error('Șablonul DOCX nu are [Content_Types].xml')
   const ct = await f.async('string')
   if (/Extension="png"/i.test(ct)) return
-  zip.file('[Content_Types].xml', ct.replace(/(<Types[^>]*>)/, '$1<Default Extension="png" ContentType="image/png"/>'), { date: f.date })
+  zip.file('[Content_Types].xml', ct.replace(/(<Types[^>]*>)/, '$1<Default Extension="png" ContentType="image/png"/>'), OPT_ZIP)
 }
 
 const dataUrlBase64 = (dataUrl) => {
@@ -121,19 +124,30 @@ const dataUrlBase64 = (dataUrl) => {
   return m[1].replace(/\s+/g, '')
 }
 
+const textParagrafeConcatenate = (xml) => {
+  let t = ''
+  for (const m of xml.matchAll(RX_PARAGRAF)) t += textParagraf(m[0]) + '\n'
+  return t
+}
+
 /**
- * Completează un șablon DOCX: {{camp}} → campuri[camp] (șir gol dacă lipsește), în document + antete + subsoluri.
+ * Completează un șablon DOCX: {{camp}} → campuri[camp], în document + antete + subsoluri.
  * @param {ArrayBuffer|Uint8Array|Blob} templateArrayBuffer
  * @param {Record<string, any>} campuri
- * @param {{ imagini?: { qr?: string } }} [optiuni] imagini.qr = dataURL PNG → înlocuiește paragraful {{qr}} cu imaginea (~3 cm)
+ * @param {{ imagini?: { qr?: string }, strict?: boolean }} [optiuni]
+ *   imagini.qr = dataURL PNG → înlocuiește paragraful {{qr}} cu imaginea (~3 cm);
+ *   strict = true → Error dacă un placeholder nu are cheie în `campuri` sau rămâne necompletat în XML (altfel → șir gol).
  * @returns {Promise<Blob>} DOCX completat
  */
-export async function completeazaDocx(templateArrayBuffer, campuri = {}, { imagini } = {}) {
+export async function completeazaDocx(templateArrayBuffer, campuri = {}, { imagini, strict = false } = {}) {
   const sursa = templateArrayBuffer instanceof Blob ? await templateArrayBuffer.arrayBuffer() : templateArrayBuffer
-  const zip = await JSZip.loadAsync(sursa)
+  const zip = await JSZip.loadAsync(sursa, { createFolders: false })
   if (!zip.file('word/document.xml')) throw new Error('Fișierul nu este un DOCX valid (lipsește word/document.xml)')
   const parti = Object.keys(zip.files).filter(p => p === 'word/document.xml' || /^word\/(header|footer)\d*\.xml$/.test(p)).sort()
   const qrDataUrl = imagini?.qr
+  const campuriEf = qrDataUrl && !Object.prototype.hasOwnProperty.call(campuri, 'qr') ? { ...campuri, qr: '' } : campuri
+  const necunoscute = new Set()
+  const ramase = new Set()
   let qrAdaugat = false
   let docPrId = 9000
 
@@ -144,7 +158,7 @@ export async function completeazaDocx(templateArrayBuffer, campuri = {}, { imagi
     let rId = null
     if (qrDataUrl && /\{\{\s*qr\s*\}\}/.test(textParagrafeConcatenate(xml))) {
       if (!qrAdaugat) {
-        zip.file('word/media/qr.png', dataUrlBase64(qrDataUrl), { base64: true, date: DATA_FIXA_ZIP })
+        zip.file('word/media/qr.png', dataUrlBase64(qrDataUrl), { ...OPT_ZIP, base64: true })
         await asiguraContentTypePng(zip)
         qrAdaugat = true
       }
@@ -157,18 +171,19 @@ export async function completeazaDocx(templateArrayBuffer, campuri = {}, { imagi
         docPrId += 1
         return `${deschidere}${pPr}${xmlDrawingQr(rId, docPrId)}</w:p>`
       }
-      return completeazaParagraf(pXml, campuri)
+      return completeazaParagraf(pXml, campuriEf, necunoscute)
     })
-    zip.file(partPath, nou, { date: f.date })
+    for (const m of textParagrafeConcatenate(nou).matchAll(RX_PLACEHOLDER)) ramase.add(m[1])
+    zip.file(partPath, nou, OPT_ZIP)
+  }
+  if (strict && (necunoscute.size || ramase.size)) {
+    const parti2 = []
+    if (necunoscute.size) parti2.push(`câmpuri fără valoare în șablon: ${[...necunoscute].map(n => `{{${n}}}`).join(', ')}`)
+    if (ramase.size) parti2.push(`placeholder-e rămase necompletate (rupte între paragrafe?): ${[...ramase].map(n => `{{${n}}}`).join(', ')}`)
+    throw new Error(`Șablonul nu a putut fi completat integral — ${parti2.join('; ')}`)
   }
   const u8 = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
   return new Blob([u8], { type: MIME_DOCX })
-}
-
-const textParagrafeConcatenate = (xml) => {
-  let t = ''
-  for (const m of xml.matchAll(RX_PARAGRAF)) t += textParagraf(m[0]) + '\n'
-  return t
 }
 
 /** QR PNG ca dataURL (margin 1, 300 px). */
@@ -183,9 +198,15 @@ export async function hashBlob(blob) {
 
 export const COLOANE_BORDEROU = ['nr_document', 'nume', 'adresa', 'cod_postal', 'localitate', 'judet', 'id_parcela']
 
-const celulaCsv = (v) => {
-  const s = v === null || v === undefined ? '' : String(v)
-  return /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+// Anti „formula injection” la deschiderea CSV-ului în Excel/LibreOffice: o valoare care începe (după spații / caractere de
+// control) cu = + - @ TAB sau CR primește prefix apostrof și intră în ghilimele. Telefoanele cu + și numerele negative
+// sunt afectate intenționat (apostroful se vede ca text în Excel, nu se evaluează).
+const RX_FORMULA = /^[\s\u0000-\u001f\u007f]*[=+\-@\t\r]/
+export const celulaCsv = (v) => {
+  let s = v === null || v === undefined ? '' : String(v)
+  const formula = RX_FORMULA.test(s)
+  if (formula) s = "'" + s
+  return formula || /[;"\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 /** Borderou Poștă: CSV UTF-8 cu BOM, separator `;`, antet fix (contract §8). */
@@ -224,15 +245,37 @@ export const formatNumarRo = (n) => {
 /** Linkul public de răspuns (contract §8). */
 export const linkRaspuns = (origin, token) => `${String(origin || '').replace(/\/+$/, '')}/redari/raspuns/${token}`
 
+const plin = (v) => v !== null && v !== undefined && String(v).trim() !== ''
+
+/**
+ * Lipsurile care blochează generarea unui convocator de trimis (nu de previzualizat). Întoarce lista mesajelor (goală = OK).
+ */
+export function verificaDateConvocator({ nrDocument, token, uat, contact, proiect }) {
+  const u = uat || {}, pr = proiect || {}, c = contact || {}
+  const lipsuri = []
+  if (!plin(nrDocument)) lipsuri.push('numărul documentului (nr_document)')
+  if (!plin(token)) lipsuri.push('tokenul de răspuns al deținătorului')
+  const ziCuProgram = [1, 2, 3].some(i => plin(u[`sesiune_zi${i}`]) && plin(u[`program_zi${i}`]))
+  if (!ziCuProgram) lipsuri.push('cel puțin o zi de sesiune cu program pe UAT (sesiune_zi1..3 + program_zi1..3)')
+  if (!(plin(c.nume ?? pr.contact_nume) || plin(c.telefon ?? pr.contact_telefon) || plin(c.email ?? pr.contact_email))) lipsuri.push('persoana de contact (nume, telefon sau e-mail)')
+  if (!plin(pr.text_gdpr)) lipsuri.push('textul de informare GDPR (proiect.text_gdpr)')
+  if (!plin(pr.reprezentant_tgz_nume)) lipsuri.push('reprezentantul Transgaz (proiect.reprezentant_tgz_nume)')
+  return lipsuri
+}
+
 /**
  * Construiește câmpurile din contract §8, completează șablonul, calculează hash-ul.
  * `contact` = { nume, telefon, email } (fallback: proiect.contact_*); `dataDocument` opțional (implicit azi).
- * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string> }>}
+ * Implicit STRICT: Error în română dacă lipsesc date obligatorii (verificaDateConvocator) sau dacă rămâne un placeholder
+ * necompletat/necunoscut în șablon. `permiteIncomplet: true` DOAR pentru previzualizare (câmpurile lipsă → gol) — niciodată
+ * pentru salvare.
+ * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string>, lipsuri: string[] }>}
  */
-export async function genereazaConvocator({ detinator, contact, parcela, uat, proiect, nrDocument, token, origin, templateArrayBuffer, dataDocument }) {
+export async function genereazaConvocator({ detinator, contact, parcela, uat, proiect, nrDocument, token, origin, templateArrayBuffer, dataDocument, permiteIncomplet = false }) {
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
-  if (!token) throw new Error('Deținătorul nu are token de răspuns')
-  if (!nrDocument) throw new Error('Lipsește numărul documentului (nr_document)')
+  const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect })
+  if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
+  if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
   const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}
   const link = linkRaspuns(origin ?? (typeof window !== 'undefined' ? window.location.origin : ''), token)
   const reprezentant = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(Boolean).join(', ')
@@ -248,7 +291,7 @@ export async function genereazaConvocator({ detinator, contact, parcela, uat, pr
     zi2: formatDataRo(u.sesiune_zi2), program2: u.program_zi2 ?? '',
     zi3: formatDataRo(u.sesiune_zi3), program3: u.program_zi3 ?? '',
     link,
-    nr_document: nrDocument,
+    nr_document: nrDocument ?? '',
     data: formatDataRo(dataDocument || new Date()),
     contact_nume: c.nume ?? pr.contact_nume ?? '',
     contact_telefon: c.telefon ?? pr.contact_telefon ?? '',
@@ -257,9 +300,9 @@ export async function genereazaConvocator({ detinator, contact, parcela, uat, pr
     text_gdpr: pr.text_gdpr ?? '',
   }
   const qr = await genereazaQr(link)
-  const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr } })
+  const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
   const hash = await hashBlob(blob)
-  return { blob, hash, link, campuri }
+  return { blob, hash, link, campuri, lipsuri }
 }
 
 const RX_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -273,21 +316,48 @@ const segment = (v, nume) => {
 export const caleConvocator = ({ proiectCod, uat3, idParcela, nrDocument }) =>
   `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/${segment(idParcela, 'id_parcela')}/${segment(nrDocument, 'nr_document')}.docx`
 
+const eroareCu = (mesaj, extra) => Object.assign(new Error(mesaj), extra)
+
+// pașii 2–3: upload la cale + UPDATE rândul cu path + hash; eșecul lasă rândul fără path (reluabil cu reincarcaConvocator)
+const incarcaSiLeaga = async (supabase, { convocareId, blob, hash, path, upsert }) => {
+  const { error: eUp } = await supabase.storage.from(BUCKET_REDARI).upload(path, blob, { contentType: MIME_DOCX, upsert })
+  if (eUp) throw eroareCu(`Convocarea ${convocareId} e înregistrată, dar fișierul nu a putut fi încărcat în storage (${path}): ${eUp.message || eUp}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'upload' })
+  const { data, error: eUpd } = await supabase.from('red_convocari')
+    .update({ fisier_convocator_path: path, continut_hash: hash }).eq('id', convocareId).select('id').single()
+  if (eUpd || !data?.id) throw eroareCu(`Fișierul e în storage (${path}), dar legarea de convocarea ${convocareId} a eșuat: ${eUpd?.message || eUpd || 'niciun rând actualizat'}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'update' })
+  return { path, convocareId }
+}
+
 /**
- * Upload în bucket-ul `redari` (upsert false) + rând în red_convocari.
+ * Salvare în 3 pași, ca numărul de document să nu se piardă și să nu rămână fișiere orfane:
+ * (1) INSERT red_convocari {detinator_id, canal, nr_document} (path/hash NULL) → id; (2) upload la cale (upsert false);
+ * (3) UPDATE rândul cu fisier_convocator_path + continut_hash. Dacă (2) sau (3) eșuează, rândul rămâne fără path
+ * („neîncărcat” în UI) și se reia cu reincarcaConvocator; eroarea poartă `convocareId` și `path`.
  * @returns {Promise<{ path: string, convocareId: string }>}
  */
 export async function salveazaConvocator(supabase, { blob, hash, proiectCod, uat3, idParcela, nrDocument, detinatorId, canal = 'posta' }) {
   if (!supabase) throw new Error('Lipsește clientul Supabase')
   if (!blob) throw new Error('Lipsește fișierul convocatorului')
+  if (!plin(hash)) throw new Error('Lipsește hash-ul conținutului')
   if (!detinatorId) throw new Error('Lipsește deținătorul (detinator_id)')
   const path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument })
-  const { error: eUp } = await supabase.storage.from(BUCKET_REDARI).upload(path, blob, { contentType: MIME_DOCX, upsert: false })
-  if (eUp) throw new Error(`Încărcarea convocatorului în storage a eșuat (${path}): ${eUp.message || eUp}`)
   const { data, error: eIns } = await supabase.from('red_convocari')
-    .insert({ detinator_id: detinatorId, canal, nr_document: nrDocument, continut_hash: hash, fisier_convocator_path: path })
+    .insert({ detinator_id: detinatorId, canal, nr_document: nrDocument })
     .select('id').single()
-  if (eIns) throw new Error(`Fișierul a fost încărcat la ${path}, dar înregistrarea convocării în red_convocari a eșuat: ${eIns.message || eIns}`)
+  if (eIns) throw new Error(`Înregistrarea convocării ${nrDocument} în red_convocari a eșuat: ${eIns.message || eIns}`)
   if (!data?.id) throw new Error('Înregistrarea convocării nu a întors un id')
-  return { path, convocareId: data.id }
+  return incarcaSiLeaga(supabase, { convocareId: data.id, blob, hash, path, upsert: false })
+}
+
+/**
+ * Reluarea pașilor 2–3 pentru o convocare rămasă fără fișier (upsert true pe aceeași cale).
+ * @returns {Promise<{ path: string, convocareId: string }>}
+ */
+export async function reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod, uat3, idParcela, nrDocument }) {
+  if (!supabase) throw new Error('Lipsește clientul Supabase')
+  if (!convocareId) throw new Error('Lipsește id-ul convocării de reîncărcat')
+  if (!blob) throw new Error('Lipsește fișierul convocatorului')
+  if (!plin(hash)) throw new Error('Lipsește hash-ul conținutului')
+  const path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument })
+  return incarcaSiLeaga(supabase, { convocareId, blob, hash, path, upsert: true })
 }
