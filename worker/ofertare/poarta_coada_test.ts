@@ -2,7 +2,7 @@
 import { assertEquals } from 'jsr:@std/assert@1'
 import { cerereaTrecePoarta, gardaCheltuiala, NOTA_EROARE, NOTA_REFUZ } from './poarta_coada.ts'
 
-type Rand = { activ: boolean; cerut_de: string | null; cerut_la: string } | null
+type Rand = { activ: boolean; cerut_de: string | null; cerut_la: string; nota?: string } | null
 // fake: un singur rând, filtrele .eq() ale UPDATE-ului se aplică pe el (CAS real), rpc programabil per apel
 function fake(o: { rand?: Rand; eroareCitire?: boolean; eroareUpdate?: boolean; rpc?: Array<{ data: unknown; error: unknown } | 'arunca'>; inainteDeUpdate?: (r: Rand) => Rand }) {
   let rand: Rand = o.rand ?? null
