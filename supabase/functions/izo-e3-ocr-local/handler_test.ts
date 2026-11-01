@@ -151,11 +151,17 @@ Deno.test('admiterea/cota preced Storage; multipagină, invalid, neverificabil n
   for (const [verdict, status, code] of [['multi', 409, 'multipagina'], ['invalid', 422, 'pdf_invalid'], ['neverificabil', 409, 'verificare_indisponibila']] as const) {
     const f = fixture(), r = await handle(new Request('https://test.invalid', { method: 'POST', headers: { Authorization: 'Bearer fake' }, body: JSON.stringify(cere()) }), { ...f.d, pdf: async () => verdict })
     assert.equal(r.status, status); assert.equal((await r.json()).eroare, code)
-    assert.equal(f.events.includes('upload'), false)
+    assert.equal(f.events.includes('upload'), false); assert.ok(f.events.includes('fn_ocr_local_admite'))  // respinsul consumă încercarea
   }
   const f = fixture(); assert.equal((await f.call(cere())).status, 200)
   assert.ok(f.events.indexOf('fn_ocr_local_admite') < f.events.indexOf('upload'))
   assert.ok(f.events.indexOf('upload') < f.events.indexOf('fn_ocr_local_confirma_upload'))
+  // Copilot #907 P1-01: verificarea precede admite; o verificare care cade (invocare oprită) nu lasă cerere admisă.
+  const ordine: string[] = [], h = fixture()
+  const rh = await handle(new Request('https://test.invalid', { method: 'POST', headers: { Authorization: 'Bearer fake' }, body: JSON.stringify(cere()) }),
+    { ...h.d, pdf: async () => { ordine.push(String(h.events.includes('fn_ocr_local_admite'))); throw new Error('cpu') } })
+  assert.equal(rh.status, 503); assert.deepEqual(ordine, ['false'])
+  assert.equal(h.events.includes('fn_ocr_local_admite'), false); assert.equal(h.events.includes('upload'), false)
   const g = fixture(); g.set({ uploadError: true }); assert.equal((await g.call(cere())).status, 503)
   assert.equal(g.events.includes('fn_ocr_local_confirma_upload'), false)
 })
