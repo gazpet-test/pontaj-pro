@@ -6,7 +6,7 @@ import JSZip from 'jszip'
 import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
-  reincarcaConvocator, caleConvocator, versiuneDinCale, formatDataRo, formatNumarRo, linkRaspuns, adresaDetinator, textGdprPentruUat,
+  reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, adresaDetinator, textGdprPentruUat,
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
@@ -332,12 +332,15 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
           if (existente.has(path)) return { error: { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' } }
           existente.add(path); return { data: { path }, error: null }
         },
-        // listarea folderului: numele fișierelor (fără prefix) din `existente` aflate direct în folder; opt.eList → eroare
-        list: async (folder, o) => {
+        // listarea folderului: numele fișierelor (fără prefix) din `existente` aflate direct în folder, PAGINATĂ după
+        // o.limit / o.offset (ca Supabase Storage, sortat după nume); opt.eList → eroare (opt.eListPagina = doar pagina cu acel index)
+        list: async (folder, o = {}) => {
           apeluri.push({ tip: 'list', bucket, folder, o })
-          if (opt.eList) return { data: null, error: { message: opt.eList } }
+          const idx = Math.floor((o.offset || 0) / (o.limit || 100))
+          if (opt.eList && (opt.eListPagina === undefined || opt.eListPagina === idx)) return { data: null, error: { message: opt.eList } }
           const pref = folder.replace(/\/?$/, '/')
-          return { data: [...existente].filter(p => p.startsWith(pref) && !p.slice(pref.length).includes('/')).map(p => ({ name: p.slice(pref.length) })), error: null }
+          const toate = [...existente].filter(p => p.startsWith(pref) && !p.slice(pref.length).includes('/')).map(p => ({ name: p.slice(pref.length) })).sort((a, b) => a.name.localeCompare(b.name))
+          return { data: toate.slice(o.offset || 0, (o.offset || 0) + (o.limit || 100)), error: null }
         },
       }) },
       from: (tabel) => ({
@@ -438,6 +441,29 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     // rândul spune v5 dar bucket-ul are max v2 → câștigă maximul dintre ele (v6)
     const b = fake({ caleCurenta: `${BAZA}-v5.docx`, existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`] })
     expect((await reincarcaConvocator(b.supabase, argRe)).versiune).toBe(6)
+  })
+  it('P2-6: listarea e paginată (limit + offset până la pagina incompletă) — maximul e real și peste o pagină', async () => {
+    // 1.003 obiecte în folder: 1.000 de PDF-uri cu nume mici alfabetic + C-0001-v1..v2 și, la coada listei, C-0001-v7
+    const multe = Array.from({ length: 1000 }, (_, i) => `${BAZA.replace(/C-0001$/, 'A-')}${String(i).padStart(4, '0')}.pdf`)
+    const existente = [...multe, `${BAZA}-v1.docx`, `${BAZA}-v2.docx`, `${BAZA}-v7.docx`]
+    const a = fake({ existente })
+    const cheie = { proiectCod: arg.proiectCod, uat3: arg.uat3, idParcela: arg.idParcela, nrDocument: arg.nrDocument }
+    expect(await versiuneMaximaInBucket(a.supabase, cheie)).toBe(7)
+    const listari = a.apeluri.filter(x => x.tip === 'list')
+    expect(listari.map(x => [x.o.limit, x.o.offset])).toEqual([[1000, 0], [1000, 1000]]) // a doua pagină (3 obiecte) e incompletă → stop
+    // și prin reincarcaConvocator: direct pe v8, un singur upload
+    const b = fake({ caleCurenta: null, existente })
+    const r = await reincarcaConvocator(b.supabase, argRe)
+    expect(r.versiune).toBe(8)
+    expect(b.apeluri.filter(x => x.tip === 'list')).toHaveLength(2)
+    expect(b.apeluri.filter(x => x.tip === 'upload').map(x => x.path)).toEqual([`${BAZA}-v8.docx`])
+    // pagină mică (3) cu exact 6 obiecte: a treia pagină vine goală și oprește bucla; maximul tot real
+    const c = fake({ existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`, `${BAZA}-v3.docx`, `${BAZA}-v4.docx`, `${BAZA}-v5.docx`, `${BAZA}-v6.docx`] })
+    expect(await versiuneMaximaInBucket(c.supabase, cheie, { pagina: 3 })).toBe(6)
+    expect(c.apeluri.filter(x => x.tip === 'list').map(x => x.o.offset)).toEqual([0, 3, 6])
+    // eroare pe a doua pagină → null (nu un maxim parțial) → reincarcaConvocator cade pe încercări succesive
+    const d = fake({ existente, eList: 'timeout', eListPagina: 1 })
+    expect(await versiuneMaximaInBucket(d.supabase, cheie)).toBeNull()
   })
   it('P2-1: listarea eșuează → încercări succesive cu upsert false; peste 20 ⇒ eroare clară, fără update', async () => {
     const a = fake({ caleCurenta: null, eList: 'list indisponibil', existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`] })
