@@ -108,6 +108,22 @@ describe('calculeazaStare — prioritate și reguli fine', () => {
     const r2 = calculeazaStare({ ...baza, raspunsuri: [rasp('nu_particip_cu_obiectii', '2026-11-20T10:00:00Z'), rasp('nu_particip_fara_obiectii', '2026-11-25T10:00:00Z')] })
     expect(r2.stare).toBe('A_RASPUNS_FARA_OBIECTII')
   })
+  it('r3: la aceeași `data`, tie-break pe seq (identitatea din BD), nu pe poziția în listă', () => {
+    const t = '2026-11-20T10:00:00Z'
+    expect(ultimulRaspuns([{ optiune: 'particip', data: t, seq: 7 }, { optiune: 'constatare_teren', data: t, seq: 3 }]).optiune).toBe('particip')
+    expect(calculeazaStare({ ...baza, raspunsuri: [{ optiune: 'particip', data: t, seq: 7 }, { optiune: 'constatare_teren', data: t, seq: 3 }] }).stare).toBe('A_RASPUNS_PARTICIPA')
+    // data bate seq
+    expect(ultimulRaspuns([{ optiune: 'particip', data: '2026-11-21T00:00:00Z', seq: 1 }, { optiune: 'constatare_teren', data: t, seq: 99 }]).optiune).toBe('particip')
+    // seq ca string (bigint serializat) e acceptat; fără seq → created_at, apoi poziția
+    expect(ultimulRaspuns([{ optiune: 'particip', data: t, seq: '12' }, { optiune: 'constatare_teren', data: t, seq: '9' }]).optiune).toBe('particip')
+    expect(ultimulRaspuns([{ optiune: 'particip', data: t, created_at: '2026-11-20T10:05:00Z' }, { optiune: 'constatare_teren', data: t, created_at: '2026-11-20T10:01:00Z' }]).optiune).toBe('particip')
+    expect(ultimulRaspuns([{ optiune: 'particip', data: t }, { optiune: 'constatare_teren', data: t }]).optiune).toBe('constatare_teren')
+    // obiect cu seq bate obiectul fără seq la aceeași dată
+    expect(ultimulRaspuns([{ optiune: 'particip', data: t, seq: 1 }, { optiune: 'constatare_teren', data: t }]).optiune).toBe('particip')
+  })
+  it('convocarea ștearsă (sters_la) nu contează, ca în SQL', () => {
+    expect(calculeazaStare({ ...baza, convocari: [conv({ sters_la: '2026-11-30T00:00:00Z' })] }).stare).toBe('DE_CONVOCAT')
+  })
   it('răspunsuri fără dată: câștigă ultimul din listă', () => {
     expect(ultimulRaspuns([{ optiune: 'particip' }, { optiune: 'constatare_teren' }]).optiune).toBe('constatare_teren')
     expect(ultimulRaspuns([])).toBeNull()

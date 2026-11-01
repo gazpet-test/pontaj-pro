@@ -38,18 +38,23 @@ function ms(v) {
 }
 
 const pvActiv = pv => pv && pv.sters_la == null && pv.stare !== 'anulat'
-const convActiva = c => c && c.stare === 'activ'
+const convActiva = c => c && c.stare === 'activ' && c.sters_la == null
 
-// „Ultimul răspuns” = cel cu `data` cea mai mare (fallback created_at); la egalitate / fără dată, ultimul din listă.
+// „Ultimul răspuns” = ORDER BY data DESC, seq DESC (identitatea din BD, tie-break), apoi created_at DESC, apoi poziția în listă
+// (compatibilitate cu obiecte fără seq). Identic cu LATERAL-ul din red_v_stare_parcela.
+const numarSau = (v, implicit) => { const n = Number(v); return v == null || v === '' || Number.isNaN(n) ? implicit : n }
 export function ultimulRaspuns(raspunsuri) {
   if (!Array.isArray(raspunsuri) || raspunsuri.length === 0) return null
-  let best = null, bestT = -Infinity, bestI = -1
+  const cheie = (r, i) => {
+    const t = ms(r.data)
+    return [Number.isNaN(t) ? -Infinity : t, numarSau(r.seq, -Infinity), Number.isNaN(ms(r.created_at)) ? -Infinity : ms(r.created_at), i]
+  }
+  const maiMare = (a, b) => { for (let j = 0; j < a.length; j++) { if (a[j] !== b[j]) return a[j] > b[j] } return false }
+  let best = null, bestK = null
   raspunsuri.forEach((r, i) => {
     if (!r) return
-    let t = ms(r.data)
-    if (Number.isNaN(t)) t = ms(r.created_at)
-    if (Number.isNaN(t)) t = -Infinity
-    if (t > bestT || (t === bestT && i > bestI)) { best = r; bestT = t; bestI = i }
+    const k = cheie(r, i)
+    if (!bestK || maiMare(k, bestK)) { best = r; bestK = k }
   })
   return best
 }
