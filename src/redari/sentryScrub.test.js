@@ -493,10 +493,26 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const hash = 'a'.repeat(64)
     const ev = { message: 'Eroare interna', request: { url: '/intern', data: { tokenuri_cumparate: 12, hash } }, extra: { sha256: hash } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'Eroare interna', request: { url: '/intern', data: { tokenuri_cumparate: 12, hash } }, extra: { sha256: hash } })
-    // Copilot r20 P2-01: acelasi continut ca TEXT: hash-ul hex NU arata ca un token -> trece; cu o secventa de tip token -> null
-    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'tokenuri_cumparate: 12, hash: ' + hash }, extra: { sha256: hash } })?.message).toBe('x')
+    // DECIZIE r27 (Copilot r21 P1-01 vs r20 P2-01): in TEXT neparcurs un hash (hex sau base64url de 43) e indistinct de un token ->
+    // securitatea castiga: acelasi continut ca TEXT e indiciu si evenimentul se pierde (cost acceptat, documentat in sentryScrub.js)
+    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'tokenuri_cumparate: 12, hash: ' + hash }, extra: { sha256: hash } })).toBeNull()
     expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'tokenuri_cumparate: 12, v: ' + T }, extra: { sha256: hash } })).toBeNull()
-    expect(scrubSentryEvent({ message: 'raspuns salvat, hash ' + hash, extra: { sha256: hash } })?.extra?.sha256).toBe(hash)
+    expect(scrubSentryEvent({ message: 'raspuns salvat, hash ' + hash, extra: { sha256: hash } })).toBeNull()
+    // un token pur hexazecimal (teoretic valid) sub cuvant-cheie in text -> tot indiciu
+    const Thex = 'abcdef0123456789abcdef0123456789abcdef01234'
+    const rh = scrubSentryEvent({ message: 'ref_' + Thex, extra: { payload: 'token => ' + Thex } })
+    expect(rh === null || !JSON.stringify(rh).includes(Thex)).toBe(true)
+    // fara cuvant-cheie: hash-ul in text trece (nu e purtator)
+    expect(scrubSentryEvent({ message: 'Eroare: fisier ' + hash, extra: { sha256: hash } })?.extra?.sha256).toBe(hash)
+  })
+  it('r27 P2-1 (Jakarinos): corp-SIR care se parseaza ca JSON e tratat structural - hash base64url de 43 in campul vecin nu pierde evenimentul', () => {
+    const hash = 'ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0'   // SHA-256 in base64url: exact 43, indistinct de un token ca text
+    const data = { tokenuri_cumparate: 12, hash }
+    const ev = { message: 'Eroare interna', request: { url: '/intern', data: JSON.stringify(data) }, extra: { sha256: hash } }
+    expect(scrubSentryEvent(ev)).toEqual({ message: 'Eroare interna', request: { url: '/intern', data: JSON.stringify(data) }, extra: { sha256: hash } })
+    // dar sub o cheie de token, structural, acelasi hash E token (colectat si redactat)
+    const ev2 = { message: 'x ' + hash, request: { url: '/intern', data: JSON.stringify({ token: hash }) } }
+    const r2 = scrubSentryEvent(ev2); expect(r2 === null || !JSON.stringify(r2).includes(hash)).toBe(true)
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }

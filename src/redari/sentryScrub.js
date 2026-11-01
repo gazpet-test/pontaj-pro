@@ -70,10 +70,11 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // Jakarinos r26 P1-1: fără limită de distanță — conținut TEXT neparcurs care pomenește un cuvânt-cheie ȘI conține undeva o secvență
 // de ≥43 e indiciu (orice prag de distanță doar mută problema). Se aplică DOAR textului neparcurs structural (dinJson / corp-șir),
 // nu serializării unui obiect valid — câmpurile vecine ale unui obiect (`{tokenuri_cumparate: 12, hash}`) sunt parcurse structural (r26 P2-1).
-// Copilot r20 P2-01: un hash hex (SHA-256 = 64 × [0-9a-f]) NU arată ca un token (base64url aleator, cu litere mari/mici și cifre) —
-// secvențele pur hexazecimale/numerice nu declanșează indiciul (șansa ca un token real de 43 să fie pur hex e nulă practic)
-const areRun43TipToken = (f) => { for (const m of f.matchAll(RX_RUN43_TOATE)) if (!/^[0-9a-f]+$/i.test(m[0])) return true; return false }
-const RX_INDICIU_JSON = { test: (f) => /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && areRun43TipToken(f)) }
+// DECIZIE (r27, după Copilot r21 P1-01 vs r20 P2-01): un token de 43 poate fi, teoretic, pur hexazecimal, iar un SHA-256 în base64url are
+// exact 43 de caractere — în text neparcurs cele două sunt INDISTINCTE. Alegem securitatea: orice secvență ≥43 după un cuvânt-cheie e
+// indiciu (hex inclus). Costul acceptat: un eveniment al modulului care pune un hash lângă cuvântul token/raspuns într-un TEXT neparcurs
+// se pierde. Obiectele structurate nu au această problemă (câmpurile vecine sunt separate), iar modulul raportează erorile structurat.
+const RX_INDICIU_JSON = { test: (f) => /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && RX_RUN43.test(f)) }
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
@@ -310,9 +311,12 @@ export function scrubSentryEvent(event) {
       // r21: același indiciu cu sintaxă de cheie ca la JSON-ul neparcurs (un corp `{msg:'raspuns salvat'}` nu face evenimentul purtător)
       // r26 P2-1: indiciul textual se aplică doar corpurilor-ȘIR (neparcurse structural); un obiect `data` valid a fost deja parcurs
       // structural (cheile de token colectate), iar câmpurile lui vecine nu se amestecă; cheia `p_token` prezentă rămâne indiciu
-      const siruri = [req.data, req.body].filter(v => typeof v === 'string')
+      // Jakarinos r27 P2-1: un corp-șir care SE PARSEAZĂ ca JSON a fost deja parcurs structural (dinJson) — indiciul textual nu i se
+      // mai aplică (altfel câmpurile vecine s-ar amesteca din nou); rămâne pentru textul care NU se parsează
+      const seParseaza = (s) => formele(s).some(f => { try { const o = JSON.parse(f); return !!o && typeof o === 'object' } catch { return false } })
+      const siruri = [req.data, req.body].filter(v => typeof v === 'string' && !seParseaza(v))
       const indiciu = siruri.some(s => formele(s).some(f => RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(f.replace(/\\(["\\/])/g, '$1'))))
-        || formele(corp).some(f => /"p_token"\s*:/i.test(f))
+        || formele(corp).some(f => /p_token[^A-Za-z0-9_]{0,4}[:=]/i.test(f))   // cheia p_token (și în corp-șir serializat: `\"p_token\":`)
       const pomeneste = formele(corp).some(f => /p_token|raspuns/i.test(f))
       if (urlRpc || contineVreunToken(corp, tokenuri) || indiciu || pomeneste) { delete req.data; delete req.body }
       if (indiciu || tokenuri.refuzat) purtator = true
