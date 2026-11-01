@@ -247,14 +247,37 @@ export const linkRaspuns = (origin, token) => `${String(origin || '').replace(/\
 
 const plin = (v) => v !== null && v !== undefined && String(v).trim() !== ''
 
+/** Eticheta în română a calității deținătorului (red_detinatori.calitate). `neidentificat` nu primește convocator. */
+export const ETICHETA_CALITATE = { proprietar: 'proprietar', coproprietar: 'coproprietar', mostenitor: 'moștenitor', arendas: 'arendaș', utilizator: 'utilizator', neidentificat: 'neidentificat' }
+
+/** O linie de adresă din red_detinatori_contact: strada, sat, comuna, județ, cod poștal — părțile nevide, cu virgulă. */
+export const adresaDetinator = (c) => !c ? '' :
+  [c.adresa_strada, c.adresa_sat, c.adresa_comuna, c.adresa_judet, c.cod_postal].map(v => plin(v) ? String(v).trim() : '').filter(Boolean).join(', ')
+
+/** Textul GDPR din proiect cu marcajul `{uat}` / `[UAT]` înlocuit cu numele UAT-ului. */
+export const textGdprPentruUat = (text, numeUat) => String(text ?? '').replace(/\{uat\}|\[UAT\]/gi, numeUat ?? '')
+
+const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
+
 /**
  * Lipsurile care blochează generarea unui convocator de trimis (nu de previzualizat). Întoarce lista mesajelor (goală = OK).
+ * `contactDetinator` = rândul din red_detinatori_contact (PII; doar admin/editor îl pot citi).
  */
-export function verificaDateConvocator({ nrDocument, token, uat, contact, proiect }) {
+export function verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator }) {
   const u = uat || {}, pr = proiect || {}, c = contact || {}
   const lipsuri = []
   if (!plin(nrDocument)) lipsuri.push('numărul documentului (nr_document)')
   if (!plin(token)) lipsuri.push('tokenul de răspuns al deținătorului')
+  if (!plin(pr.contract_nr) || !plin(pr.contract_data)) lipsuri.push('numărul și data contractului (proiect.contract_nr + contract_data)')
+  if (!plin(pr.imputernicire_nr) || !plin(pr.imputernicire_data)) lipsuri.push('numărul și data împuternicirii Transgaz (proiect.imputernicire_nr + imputernicire_data) — fără împuternicire nu se trimite')
+  if (!detinator) lipsuri.push('deținătorul')
+  else {
+    if (!plin(detinator.nume)) lipsuri.push('numele deținătorului')
+    if (detinator.calitate === 'neidentificat') lipsuri.push('deținător neidentificat — nu primește convocator (parcela merge pe afișare la Primărie)')
+    else if (!ETICHETA_CALITATE[detinator.calitate]) lipsuri.push(`calitatea deținătorului („${detinator.calitate ?? ''}” necunoscută)`)
+    const cd = contactDet(detinator, contactDetinator)
+    if (!cd || cd.adresa_cunoscuta === false || !adresaDetinator(cd)) lipsuri.push('deținător fără adresă — convocare prin afișare')
+  }
   const ziCuProgram = [1, 2, 3].some(i => plin(u[`sesiune_zi${i}`]) && plin(u[`program_zi${i}`]))
   if (!ziCuProgram) lipsuri.push('cel puțin o zi de sesiune cu program pe UAT (sesiune_zi1..3 + program_zi1..3)')
   if (!(plin(c.nume ?? pr.contact_nume) || plin(c.telefon ?? pr.contact_telefon) || plin(c.email ?? pr.contact_email))) lipsuri.push('persoana de contact (nume, telefon sau e-mail)')
@@ -263,41 +286,61 @@ export function verificaDateConvocator({ nrDocument, token, uat, contact, proiec
   return lipsuri
 }
 
+/** Cheile pe care le furnizează genereazaConvocator (cele 36 din convocator.docx, SABLOANE.md §2.1, + id_parcela pentru corelare). */
+export const CHEI_CONVOCATOR = ['contract_nr', 'contract_data', 'proiect_denumire', 'imputernicire_nr', 'imputernicire_data', 'nr_document', 'data',
+  'nume', 'calitate', 'adresa', 'uat', 'sat', 'tarla', 'nr_cadastral', 'poz_hg', 'suprafata', 'tronson', 'zi1', 'program1', 'sate_zi1',
+  'zi2', 'program2', 'sate_zi2', 'zi3', 'program3', 'sate_zi3', 'link', 'qr', 'contact_telefon', 'contact_nume', 'contact_email', 'text_gdpr',
+  'reprezentant_tgz', 'reprezentant_tgz_telefon', 'semnatar_gazpet', 'semnatar_tgz', 'id_parcela']
+
 /**
- * Construiește câmpurile din contract §8, completează șablonul, calculează hash-ul.
- * `contact` = { nume, telefon, email } (fallback: proiect.contact_*); `dataDocument` opțional (implicit azi).
+ * Construiește câmpurile convocatorului real (SABLOANE.md §2.1, 36 placeholder-e), completează șablonul, calculează hash-ul.
+ * `contact` = persoana de contact Gazpet { nume, telefon, email } (fallback: proiect.contact_*); `contactDetinator` = rândul
+ * din red_detinatori_contact (adresa; fallback detinator.contact); `dataDocument` opțional (implicit azi).
  * Implicit STRICT: Error în română dacă lipsesc date obligatorii (verificaDateConvocator) sau dacă rămâne un placeholder
  * necompletat/necunoscut în șablon. `permiteIncomplet: true` DOAR pentru previzualizare (câmpurile lipsă → gol) — niciodată
  * pentru salvare.
  * @returns {Promise<{ blob: Blob, hash: string, link: string, campuri: Record<string,string>, lipsuri: string[] }>}
  */
-export async function genereazaConvocator({ detinator, contact, parcela, uat, proiect, nrDocument, token, origin, templateArrayBuffer, dataDocument, permiteIncomplet = false }) {
+export async function genereazaConvocator({ detinator, contactDetinator, contact, parcela, uat, proiect, nrDocument, token, origin, templateArrayBuffer, dataDocument, permiteIncomplet = false }) {
   if (!templateArrayBuffer) throw new Error('Lipsește șablonul convocatorului (templateArrayBuffer)')
-  const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect })
+  const lipsuri = verificaDateConvocator({ nrDocument, token, uat, contact, proiect, detinator, contactDetinator })
   if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
   if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
-  const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}
+  const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}, d = detinator || {}
   const link = linkRaspuns(origin ?? (typeof window !== 'undefined' ? window.location.origin : ''), token)
-  const reprezentant = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(Boolean).join(', ')
+  const semnatarTgz = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(plin).join(', ')
+  const semnatarGazpet = [pr.reprezentant_gazpet_nume, pr.reprezentant_gazpet_functie].filter(plin).join(', ')
   const campuri = {
-    nume: detinator?.nume ?? '',
+    contract_nr: pr.contract_nr ?? '',
+    contract_data: formatDataRo(pr.contract_data),
+    proiect_denumire: pr.denumire ?? '',
+    imputernicire_nr: pr.imputernicire_nr ?? '',
+    imputernicire_data: formatDataRo(pr.imputernicire_data),
+    nr_document: nrDocument ?? '',
+    data: formatDataRo(dataDocument || new Date()),
+    nume: d.nume ?? '',
+    calitate: ETICHETA_CALITATE[d.calitate] ?? (d.calitate ?? ''),
+    adresa: adresaDetinator(contactDet(detinator, contactDetinator)),
     id_parcela: p.id_parcela ?? '',
     uat: u.nume ?? '',
     sat: p.sat ?? '',
     tarla: p.tarla ?? '',
     nr_cadastral: p.nr_cadastral ?? '',
+    poz_hg: p.poz_hg ?? '',
     suprafata: formatNumarRo(p.suprafata_temporara_mp),
-    zi1: formatDataRo(u.sesiune_zi1), program1: u.program_zi1 ?? '',
-    zi2: formatDataRo(u.sesiune_zi2), program2: u.program_zi2 ?? '',
-    zi3: formatDataRo(u.sesiune_zi3), program3: u.program_zi3 ?? '',
+    tronson: p.tronson ?? '',
+    zi1: formatDataRo(u.sesiune_zi1), program1: u.program_zi1 ?? '', sate_zi1: u.sate_zi1 ?? '',
+    zi2: formatDataRo(u.sesiune_zi2), program2: u.program_zi2 ?? '', sate_zi2: u.sate_zi2 ?? '',
+    zi3: formatDataRo(u.sesiune_zi3), program3: u.program_zi3 ?? '', sate_zi3: u.sate_zi3 ?? '',
     link,
-    nr_document: nrDocument ?? '',
-    data: formatDataRo(dataDocument || new Date()),
     contact_nume: c.nume ?? pr.contact_nume ?? '',
     contact_telefon: c.telefon ?? pr.contact_telefon ?? '',
     contact_email: c.email ?? pr.contact_email ?? '',
-    reprezentant_tgz: reprezentant,
-    text_gdpr: pr.text_gdpr ?? '',
+    text_gdpr: textGdprPentruUat(pr.text_gdpr, u.nume),
+    reprezentant_tgz: semnatarTgz,
+    reprezentant_tgz_telefon: pr.reprezentant_tgz_telefon ?? '',
+    semnatar_gazpet: semnatarGazpet,
+    semnatar_tgz: semnatarTgz,
   }
   const qr = await genereazaQr(link)
   const blob = await completeazaDocx(templateArrayBuffer, campuri, { imagini: { qr }, strict: !permiteIncomplet })
@@ -367,10 +410,31 @@ export async function salveazaConvocator(supabase, { blob, hash, proiectCod, uat
   return leagaDeRand(supabase, { convocareId, path, hash })
 }
 
+export const MAX_INCERCARI_VERSIUNE = 20
+
 /**
- * Reîncărcarea unei convocări (rămasă fără fișier sau regenerată): citește calea curentă din rând, încarcă pe versiunea
- * următoare (n = versiunea curentă sau 0, +1; upsert false — la coliziune „already exists” încearcă n+1 o singură dată) și
- * face UPDATE pe rând cu noua cale + hash. Fișierul vechi rămâne în bucket; schimbarea coloanei e jurnalizată de trigger.
+ * Cea mai mare versiune `{nrDocument}-v{n}.docx` existentă în folderul parcelei (listare storage); null dacă listarea eșuează.
+ * Fișierele orfane (încărcate, dar nelegate de rând) contează — așa nu mai bâjbâim versiune cu versiune.
+ */
+export async function versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument }) {
+  const folder = `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/${segment(idParcela, 'id_parcela')}`
+  const nr = segment(nrDocument, 'nr_document')
+  const rx = new RegExp(`^${nr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-v(\\d+)\\.docx$`)
+  try {
+    const { data, error } = await supabase.storage.from(BUCKET_REDARI).list(folder, { limit: 1000 })
+    if (error || !Array.isArray(data)) return null
+    let max = 0
+    for (const f of data) { const m = rx.exec(f?.name || ''); if (m) max = Math.max(max, parseInt(m[1], 10)) }
+    return max
+  } catch { return null }
+}
+
+/**
+ * Reîncărcarea unei convocări (rămasă fără fișier sau regenerată): citește calea curentă din rând, determină versiunea LIBERĂ
+ * (max dintre versiunea din rând și cea mai mare `-v{n}` din folderul parcelei, +1), încarcă cu upsert false și face UPDATE
+ * pe rând cu noua cale + hash. Dacă listarea folderului eșuează sau apare totuși „already exists”, încearcă versiunile
+ * următoare, succesiv, până la MAX_INCERCARI_VERSIUNE încărcări; peste → eroare clară. Fișierele vechi rămân în bucket
+ * (imutabile); schimbarea coloanei e jurnalizată de trigger.
  * @returns {Promise<{ path: string, convocareId: string, versiune: number }>}
  */
 export async function reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod, uat3, idParcela, nrDocument }) {
@@ -381,15 +445,17 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
   caleConvocator({ proiectCod, uat3, idParcela, nrDocument }) // validează segmentele înainte de orice apel
   const { data: rand, error: eSel } = await supabase.from('red_convocari').select('id, fisier_convocator_path').eq('id', convocareId).single()
   if (eSel || !rand) throw new Error(`Convocarea ${convocareId} nu a putut fi citită: ${eSel?.message || eSel || 'rând inexistent'}`)
-  let versiune = versiuneDinCale(rand.fisier_convocator_path) + 1
-  let path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument, versiune })
-  let { error: eUp } = await incarca(supabase, path, blob)
-  if (eUp && eExistaDeja(eUp)) { // coliziune (fișier orfan dintr-o reluare anterioară): o singură reîncercare pe n+1
-    versiune += 1
+  const dinBucket = await versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument })
+  let versiune = Math.max(versiuneDinCale(rand.fisier_convocator_path), dinBucket ?? 0) + 1
+  let path, eUp
+  for (let incercare = 1; ; incercare++) {
     path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument, versiune })
     ;({ error: eUp } = await incarca(supabase, path, blob))
+    if (!eUp) break
+    if (!eExistaDeja(eUp)) throw eroareCu(`Fișierul convocării ${convocareId} nu a putut fi încărcat în storage (${path}): ${eUp.message || eUp}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'upload' })
+    if (incercare >= MAX_INCERCARI_VERSIUNE) throw eroareCu(`Fișierul convocării ${convocareId} nu a putut fi încărcat: ${MAX_INCERCARI_VERSIUNE} versiuni consecutive (până la ${path}) există deja în storage. Verificați folderul parcelei în bucket-ul redari.`, { convocareId, path, pas: 'upload' })
+    versiune += 1 // coliziune (fișier orfan): următoarea versiune, tot cu upsert false
   }
-  if (eUp) throw eroareCu(`Fișierul convocării ${convocareId} nu a putut fi încărcat în storage (${path}): ${eUp.message || eUp}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'upload' })
   const r = await leagaDeRand(supabase, { convocareId, path, hash })
   return { ...r, versiune }
 }

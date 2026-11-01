@@ -6,10 +6,11 @@ import JSZip from 'jszip'
 import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
-  reincarcaConvocator, caleConvocator, versiuneDinCale, formatDataRo, formatNumarRo, linkRaspuns, MIME_DOCX, COLOANE_BORDEROU,
+  reincarcaConvocator, caleConvocator, versiuneDinCale, formatDataRo, formatNumarRo, linkRaspuns, adresaDetinator, textGdprPentruUat,
+  MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
-const SABLON = resolve(process.cwd(), 'public/redari/sabloane/convocator_provizoriu.docx')
+const SABLON = resolve(process.cwd(), 'public/redari/sabloane/convocator.docx') // Model_1 v5, 36 placeholder-e (SABLOANE.md §2.1)
 const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 const citesteSablon = () => { const b = readFileSync(SABLON); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) }
 
@@ -101,19 +102,23 @@ describe('completeazaDocx — înlocuire placeholder-e', () => {
     await expect(completeazaDocx(await zip.generateAsync({ type: 'arraybuffer' }), {})).rejects.toThrow(/document\.xml/)
   })
 
-  it('șablonul provizoriu din repo: toate cele 22 de câmpuri se completează în mod strict, niciun {{ rămas', async () => {
-    const campuriToate = Object.fromEntries(['nume', 'id_parcela', 'uat', 'sat', 'tarla', 'nr_cadastral', 'suprafata', 'zi1', 'program1', 'zi2', 'program2',
-      'zi3', 'program3', 'link', 'nr_document', 'data', 'contact_nume', 'contact_telefon', 'contact_email', 'reprezentant_tgz', 'text_gdpr'].map(k => [k, `<${k}>`]))
+  it('șablonul REAL convocator.docx: cele 35 de câmpuri text + qr se completează strict, niciun {{ rămas', async () => {
+    const chei = CHEI_CONVOCATOR.filter(k => k !== 'qr' && k !== 'id_parcela')
+    expect(chei).toHaveLength(35)
+    const campuriToate = Object.fromEntries(chei.map(k => [k, `<${k}>`]))
     const blob = await completeazaDocx(citesteSablon(), campuriToate, { imagini: { qr: PNG_1x1 }, strict: true })
     const { zip } = await xmlDin(blob, 'word/document.xml')
     let tot = ''
-    for (const cale of ['word/document.xml', 'word/header1.xml', 'word/footer1.xml']) {
+    for (const cale of Object.keys(zip.files).filter(f => f === 'word/document.xml' || /^word\/(header|footer)\d*\.xml$/.test(f))) {
       const xml = await zip.file(cale).async('string')
       expect(xml, cale).not.toMatch(/\{\{|\}\}/)
       tot += xml
     }
-    for (const k of Object.keys(campuriToate)) expect(tot).toContain(`&lt;${k}&gt;`)
+    for (const k of chei) expect(tot, k).toContain(`&lt;${k}&gt;`)
     expect(tot).toContain('<w:drawing>')
+    // fără una dintre chei, strict refuză și spune care
+    const { contract_nr, ...faraUna } = campuriToate
+    await expect(completeazaDocx(citesteSablon(), faraUna, { imagini: { qr: PNG_1x1 }, strict: true })).rejects.toThrow(/\{\{contract_nr\}\}/)
   })
 })
 
@@ -209,37 +214,78 @@ describe('formatări + link', () => {
 
 describe('genereazaConvocator', () => {
   const complet = () => ({
-    detinator: { nume: 'POPESCU ION (fictiv)' },
+    detinator: { nume: 'POPESCU ION (fictiv)', calitate: 'mostenitor', cota: '1/2' },
+    contactDetinator: { adresa_strada: 'Str. Fictivă nr. 1', adresa_sat: '', adresa_comuna: 'Husnicioara', adresa_judet: 'Mehedinți', cod_postal: '227001', adresa_cunoscuta: true },
     contact: { nume: 'Operator Test', telefon: '0700000000', email: 'redari@exemplu.test' },
-    parcela: { id_parcela: 'T3-HUS-0001', sat: 'Satul Test', tarla: '12', nr_cadastral: '5001', suprafata_temporara_mp: 1500.25 },
-    uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-10', sesiune_zi2: '2026-11-11', program_zi1: '09-12 Sat A', program_zi2: '09-12 Sat B' },
-    proiect: { reprezentant_tgz_nume: 'Reprezentant Test', reprezentant_tgz_functie: 'inginer', text_gdpr: 'Text GDPR.\nRând 2' },
+    parcela: { id_parcela: 'T3-HUS-0001', sat: 'Satul Test', tarla: '12', nr_cadastral: '5001', poz_hg: '117', tronson: 3, suprafata_temporara_mp: 1500.25 },
+    uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-10', sesiune_zi2: '2026-11-11', program_zi1: '09-12 Sat A', program_zi2: '09-12 Sat B', sate_zi1: 'Sat A, Sat B' },
+    proiect: {
+      denumire: 'Conductă test Lot 1', contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '12', imputernicire_data: '2026-10-15',
+      reprezentant_tgz_nume: 'Reprezentant Test', reprezentant_tgz_functie: 'inginer', reprezentant_tgz_telefon: '0711111111',
+      reprezentant_gazpet_nume: 'Administrator Test', reprezentant_gazpet_functie: 'administrator',
+      text_gdpr: 'Operatori: Gazpet și Primăria {uat}.\nDestinatari: Primăria [UAT].',
+    },
     nrDocument: 'C-0001', token: 'tokenfictiv1234567890abcdefghijk', origin: 'https://exemplu.test', dataDocument: '2026-11-02',
   })
 
-  it('construiește câmpurile din contract §8, link + QR, hash (șablonul real, strict)', async () => {
+  it('construiește toate cele 36 de chei (SABLOANE.md §2.1), link + QR, hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
     const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: citesteSablon() })
     expect(r.link).toBe('https://exemplu.test/redari/raspuns/tokenfictiv1234567890abcdefghijk')
     expect(r.lipsuri).toEqual([])
+    for (const k of CHEI_CONVOCATOR.filter(k => k !== 'qr')) expect(r.campuri, k).toHaveProperty(k)
     expect(r.campuri).toMatchObject({
-      nume: 'POPESCU ION (fictiv)', id_parcela: 'T3-HUS-0001', uat: 'Husnicioara', suprafata: '1.500,25', zi1: '10.11.2026', program1: '09-12 Sat A',
-      zi3: '', program3: '', nr_document: 'C-0001', data: '02.11.2026', contact_email: 'redari@exemplu.test', reprezentant_tgz: 'Reprezentant Test, inginer',
+      contract_nr: '30', contract_data: '22.01.2025', proiect_denumire: 'Conductă test Lot 1', imputernicire_nr: '12', imputernicire_data: '15.10.2026',
+      nume: 'POPESCU ION (fictiv)', calitate: 'moștenitor', adresa: 'Str. Fictivă nr. 1, Husnicioara, Mehedinți, 227001',
+      id_parcela: 'T3-HUS-0001', uat: 'Husnicioara', sat: 'Satul Test', tarla: '12', nr_cadastral: '5001', poz_hg: '117', tronson: 3, suprafata: '1.500,25',
+      zi1: '10.11.2026', program1: '09-12 Sat A', sate_zi1: 'Sat A, Sat B', zi2: '11.11.2026', sate_zi2: '', zi3: '', program3: '', sate_zi3: '',
+      nr_document: 'C-0001', data: '02.11.2026', contact_nume: 'Operator Test', contact_telefon: '0700000000', contact_email: 'redari@exemplu.test',
+      text_gdpr: 'Operatori: Gazpet și Primăria Husnicioara.\nDestinatari: Primăria Husnicioara.',
+      reprezentant_tgz: 'Reprezentant Test, inginer', reprezentant_tgz_telefon: '0711111111',
+      semnatar_gazpet: 'Administrator Test, administrator', semnatar_tgz: 'Reprezentant Test, inginer',
     })
     expect(r.hash).toMatch(/^[0-9a-f]{64}$/)
     expect(r.hash).toBe(await hashBlob(r.blob))
     const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
     expect(zip.file('word/media/qr.png')).not.toBeNull()
-    expect(textDin(xml)).not.toMatch(/\{\{/)
+    expect(xml).toContain('<w:drawing>')
+    const text = textDin(xml)
+    expect(text).not.toMatch(/\{\{|\}\}/)
+    expect(text).toContain('POPESCU ION (fictiv) (moștenitor)')
+    expect(text).toContain('Primăria Husnicioara')
+    expect(text).not.toMatch(/\{uat\}|\[UAT\]/)
   })
 
-  it('verificaDateConvocator listează toate lipsurile', () => {
+  it('helper-e: etichete calitate, adresa pe o linie, {uat}/[UAT] în GDPR', () => {
+    expect(ETICHETA_CALITATE).toMatchObject({ proprietar: 'proprietar', coproprietar: 'coproprietar', mostenitor: 'moștenitor', arendas: 'arendaș', utilizator: 'utilizator' })
+    expect(adresaDetinator({ adresa_strada: ' Str. X ', adresa_sat: null, adresa_comuna: 'C', adresa_judet: '', cod_postal: '227001' })).toBe('Str. X, C, 227001')
+    expect(adresaDetinator(null)).toBe('')
+    expect(adresaDetinator({})).toBe('')
+    expect(textGdprPentruUat('Primăria {uat} / Primăria [UAT] / {UAT}', 'Godeanu')).toBe('Primăria Godeanu / Primăria Godeanu / Godeanu')
+    expect(textGdprPentruUat(null, 'X')).toBe('')
+    // reprezentant_tgz_telefon și sate_zi lipsă → gol, fără eroare
+    const l = verificaDateConvocator({ ...complet(), uat: { ...complet().uat, sate_zi1: undefined }, proiect: { ...complet().proiect, reprezentant_tgz_telefon: null } })
+    expect(l).toEqual([])
+  })
+
+  it('verificaDateConvocator listează toate lipsurile, inclusiv cele noi (contract, împuternicire, calitate, adresă)', () => {
     expect(verificaDateConvocator(complet())).toEqual([])
-    const l = verificaDateConvocator({ nrDocument: '', token: null, uat: { sesiune_zi1: '2026-11-10' }, contact: {}, proiect: {} })
-    expect(l).toHaveLength(6)
-    expect(l.join(' | ')).toMatch(/nr_document.*token.*zi de sesiune cu program.*contact.*GDPR.*Transgaz/)
+    const l = verificaDateConvocator({ nrDocument: '', token: null, uat: { sesiune_zi1: '2026-11-10' }, contact: {}, proiect: {}, detinator: null })
+    expect(l).toHaveLength(9)
+    expect(l.join(' | ')).toMatch(/nr_document.*token.*contract.*împuternicir.*deținătorul.*zi de sesiune cu program.*contact.*GDPR.*Transgaz/)
     // zi fără program nu e suficientă; contactul poate veni din proiect
     expect(verificaDateConvocator({ ...complet(), uat: { sesiune_zi1: '2026-11-10', program_zi2: 'x' } })).toHaveLength(1)
     expect(verificaDateConvocator({ ...complet(), contact: null, proiect: { ...complet().proiect, contact_telefon: '07' } })).toEqual([])
+    // contract / împuternicire: ambele părți (nr + dată)
+    expect(verificaDateConvocator({ ...complet(), proiect: { ...complet().proiect, contract_data: null } }).join()).toMatch(/contract_nr \+ contract_data/)
+    expect(verificaDateConvocator({ ...complet(), proiect: { ...complet().proiect, imputernicire_nr: '' } }).join()).toMatch(/fără împuternicire nu se trimite/)
+    // calitate
+    expect(verificaDateConvocator({ ...complet(), detinator: { nume: 'X', calitate: 'neidentificat' } }).join()).toMatch(/neidentificat — nu primește convocator/)
+    expect(verificaDateConvocator({ ...complet(), detinator: { nume: 'X', calitate: 'altceva' } }).join()).toMatch(/calitatea deținătorului/)
+    // adresa: fără contact / contact gol / adresa_cunoscuta=false; adresa poate veni și din detinator.contact
+    expect(verificaDateConvocator({ ...complet(), contactDetinator: null }).join()).toMatch(/deținător fără adresă — convocare prin afișare/)
+    expect(verificaDateConvocator({ ...complet(), contactDetinator: { adresa_strada: '', cod_postal: null } }).join()).toMatch(/fără adresă/)
+    expect(verificaDateConvocator({ ...complet(), contactDetinator: { ...complet().contactDetinator, adresa_cunoscuta: false } }).join()).toMatch(/fără adresă/)
+    expect(verificaDateConvocator({ ...complet(), contactDetinator: undefined, detinator: { ...complet().detinator, contact: complet().contactDetinator } })).toEqual([])
   })
 
   it('date obligatorii lipsă ⇒ Error în română cu lista; permiteIncomplet le lasă goale și întoarce lipsurile', async () => {
@@ -251,9 +297,13 @@ describe('genereazaConvocator', () => {
     await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, nrDocument: null })).rejects.toThrow(/nr_document/)
     await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, token: '' })).rejects.toThrow(/token/)
     await expect(genereazaConvocator({ ...complet() })).rejects.toThrow(/șablonul/)
-    const prev = await genereazaConvocator({ ...complet(), templateArrayBuffer: t, uat: { nume: 'Husnicioara' }, proiect: {}, permiteIncomplet: true })
-    expect(prev.lipsuri.length).toBe(3)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, detinator: { nume: 'X', calitate: 'neidentificat' } })).rejects.toThrow(/neidentificat — nu primește convocator/)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, contactDetinator: null })).rejects.toThrow(/deținător fără adresă — convocare prin afișare/)
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, proiect: { ...complet().proiect, imputernicire_data: null } })).rejects.toThrow(/împuternicir/)
+    const prev = await genereazaConvocator({ ...complet(), templateArrayBuffer: t, uat: { nume: 'Husnicioara' }, proiect: {}, contactDetinator: null, permiteIncomplet: true })
+    expect(prev.lipsuri.length).toBe(6) // contract, împuternicire, adresă, zi cu program, GDPR, reprezentant TGZ
     expect(prev.campuri.zi1).toBe('')
+    expect(prev.campuri.adresa).toBe('')
     expect(prev.blob.size).toBeGreaterThan(0)
     // previzualizarea fără token nu are sens (nici link, nici QR)
     await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t, token: '', permiteIncomplet: true })).rejects.toThrow(/token/)
@@ -275,12 +325,21 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const apeluri = []
     const existente = new Set(opt.existente || [])
     const supabase = {
-      storage: { from: (bucket) => ({ upload: async (path, blob, o) => {
-        apeluri.push({ tip: 'upload', bucket, path, size: blob.size, o })
-        if (opt.eUp) return { error: { message: opt.eUp } }
-        if (existente.has(path)) return { error: { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' } }
-        existente.add(path); return { data: { path }, error: null }
-      } }) },
+      storage: { from: (bucket) => ({
+        upload: async (path, blob, o) => {
+          apeluri.push({ tip: 'upload', bucket, path, size: blob.size, o })
+          if (opt.eUp) return { error: { message: opt.eUp } }
+          if (existente.has(path)) return { error: { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' } }
+          existente.add(path); return { data: { path }, error: null }
+        },
+        // listarea folderului: numele fișierelor (fără prefix) din `existente` aflate direct în folder; opt.eList → eroare
+        list: async (folder, o) => {
+          apeluri.push({ tip: 'list', bucket, folder, o })
+          if (opt.eList) return { data: null, error: { message: opt.eList } }
+          const pref = folder.replace(/\/?$/, '/')
+          return { data: [...existente].filter(p => p.startsWith(pref) && !p.slice(pref.length).includes('/')).map(p => ({ name: p.slice(pref.length) })), error: null }
+        },
+      }) },
       from: (tabel) => ({
         insert: (rand) => ({ select: (col) => ({ single: async () => { apeluri.push({ tip: 'insert', tabel, rand, col }); return opt.eIns ? { data: null, error: { message: opt.eIns } } : { data: { id: 'uuid-fictiv-1' }, error: null } } }) }),
         select: (col) => ({ eq: (c, val) => ({ single: async () => { apeluri.push({ tip: 'select', tabel, col, filtru: [c, val] }); return opt.eSel ? { data: null, error: { message: opt.eSel } } : { data: { id: val, fisier_convocator_path: opt.caleCurenta ?? null }, error: null } } }) }),
@@ -350,11 +409,12 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const { supabase, apeluri } = fake({ caleCurenta: null })
     const r = await reincarcaConvocator(supabase, argRe)
     expect(r).toEqual({ path: PATH, convocareId: 'uuid-vechi', versiune: 1 })
-    expect(apeluri.map(a => a.tip)).toEqual(['select', 'upload', 'update'])
+    expect(apeluri.map(a => a.tip)).toEqual(['select', 'list', 'upload', 'update'])
     expect(apeluri[0]).toMatchObject({ tabel: 'red_convocari', filtru: ['id', 'uuid-vechi'] })
     expect(apeluri[0].col).toMatch(/fisier_convocator_path/)
-    expect(apeluri[1]).toMatchObject({ bucket: 'redari', path: PATH, o: { contentType: MIME_DOCX, upsert: false } })
-    expect(apeluri[2]).toMatchObject({ filtru: ['id', 'uuid-vechi'], rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
+    expect(apeluri[1]).toMatchObject({ bucket: 'redari', folder: 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001' })
+    expect(apeluri[2]).toMatchObject({ bucket: 'redari', path: PATH, o: { contentType: MIME_DOCX, upsert: false } })
+    expect(apeluri[3]).toMatchObject({ filtru: ['id', 'uuid-vechi'], rand: { fisier_convocator_path: PATH, continut_hash: arg.hash } })
     await expect(reincarcaConvocator(supabase, { blob: arg.blob, hash: arg.hash })).rejects.toThrow(/id-ul convocării/)
   })
   it('reincarcaConvocator pe rând CU fișier: versiunea următoare, calea veche nu se atinge (niciun upsert:true nicăieri)', async () => {
@@ -368,17 +428,39 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const b = fake({ caleCurenta: `${BAZA}.docx` })
     expect((await reincarcaConvocator(b.supabase, argRe)).path).toBe(`${BAZA}-v1.docx`)
   })
-  it('coliziune „already exists” pe n → o singură reîncercare pe n+1; a doua coliziune ⇒ eroare, fără update', async () => {
-    const a = fake({ caleCurenta: null, existente: [`${BAZA}-v1.docx`] }) // fișier orfan dintr-o reluare anterioară
+  it('P2-1: două orfane (v1, v2) în bucket, rând fără path → listarea folderului dă max=2 → upload DIRECT pe v3', async () => {
+    const a = fake({ caleCurenta: null, existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`, `${BAZA}-v1.pdf`, 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0002-v9.docx'] })
     const r = await reincarcaConvocator(a.supabase, argRe)
-    expect(r).toEqual({ path: `${BAZA}-v2.docx`, convocareId: 'uuid-vechi', versiune: 2 })
-    expect(a.apeluri.filter(x => x.tip === 'upload').map(x => x.path)).toEqual([`${BAZA}-v1.docx`, `${BAZA}-v2.docx`])
-    expect(a.apeluri.at(-1).rand.fisier_convocator_path).toBe(`${BAZA}-v2.docx`)
-    const b = fake({ caleCurenta: null, existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`] })
+    expect(r).toEqual({ path: `${BAZA}-v3.docx`, convocareId: 'uuid-vechi', versiune: 3 })
+    expect(a.apeluri.map(x => x.tip)).toEqual(['select', 'list', 'upload', 'update'])
+    expect(a.apeluri[2].path).toBe(`${BAZA}-v3.docx`) // un singur upload, fără bâjbâit pe v1/v2; C-0002 și .pdf nu contează
+    expect(a.apeluri.at(-1).rand.fisier_convocator_path).toBe(`${BAZA}-v3.docx`)
+    // rândul spune v5 dar bucket-ul are max v2 → câștigă maximul dintre ele (v6)
+    const b = fake({ caleCurenta: `${BAZA}-v5.docx`, existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`] })
+    expect((await reincarcaConvocator(b.supabase, argRe)).versiune).toBe(6)
+  })
+  it('P2-1: listarea eșuează → încercări succesive cu upsert false; peste 20 ⇒ eroare clară, fără update', async () => {
+    const a = fake({ caleCurenta: null, eList: 'list indisponibil', existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`] })
+    const r = await reincarcaConvocator(a.supabase, argRe)
+    expect(r).toEqual({ path: `${BAZA}-v3.docx`, convocareId: 'uuid-vechi', versiune: 3 })
+    expect(a.apeluri.filter(x => x.tip === 'upload').map(x => x.path)).toEqual([`${BAZA}-v1.docx`, `${BAZA}-v2.docx`, `${BAZA}-v3.docx`])
+    expect(a.apeluri.filter(x => x.tip === 'upload').every(x => x.o.upsert === false)).toBe(true)
+    // 20 versiuni ocupate și listarea picată → exact 20 încercări, apoi eroare cu mesaj clar
+    const ocupate = Array.from({ length: 25 }, (_, i) => `${BAZA}-v${i + 1}.docx`)
+    const b = fake({ caleCurenta: null, eList: 'list indisponibil', existente: ocupate })
     const e = await reincarcaConvocator(b.supabase, argRe).catch(x => x)
-    expect(e.message).toMatch(/already exists/)
-    expect(e).toMatchObject({ convocareId: 'uuid-vechi', path: `${BAZA}-v2.docx`, pas: 'upload' })
-    expect(b.apeluri.map(x => x.tip)).toEqual(['select', 'upload', 'upload'])
+    expect(e.message).toMatch(/20 versiuni consecutive/)
+    expect(e).toMatchObject({ convocareId: 'uuid-vechi', path: `${BAZA}-v20.docx`, pas: 'upload' })
+    expect(b.apeluri.filter(x => x.tip === 'upload')).toHaveLength(20)
+    expect(b.apeluri.some(x => x.tip === 'update')).toBe(false)
+    // listarea dă max=25 → direct v26, un singur upload
+    const c = fake({ caleCurenta: null, existente: ocupate })
+    expect((await reincarcaConvocator(c.supabase, argRe)).versiune).toBe(26)
+    expect(c.apeluri.filter(x => x.tip === 'upload')).toHaveLength(1)
+    // altă eroare de upload (nu „already exists”) → nu se reîncearcă
+    const d = fake({ caleCurenta: null, eUp: 'bucket inexistent' })
+    await expect(reincarcaConvocator(d.supabase, argRe)).rejects.toThrow(/bucket inexistent/)
+    expect(d.apeluri.filter(x => x.tip === 'upload')).toHaveLength(1)
   })
   it('reincarcaConvocator: eroare la citirea rândului sau segment invalid ⇒ niciun upload', async () => {
     const a = fake({ eSel: 'permission denied' })

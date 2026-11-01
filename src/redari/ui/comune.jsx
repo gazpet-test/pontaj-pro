@@ -4,7 +4,7 @@ import React, { useState, useCallback } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { STARI } from '../stare.js'
 
-export const SABLON_CONVOCATOR = '/redari/sabloane/convocator_provizoriu.docx'
+export const SABLON_CONVOCATOR = '/redari/sabloane/convocator.docx'
 // Proiecții explicite (review Jakarinos P2-5): fără token_raspuns pe red_detinatori — tokenul stă în red_detinatori_token
 // și se citește DOAR la generarea / reîncărcarea convocatorului (admin/editor), prin citesteTokenRaspuns().
 export const COL_DETINATOR = 'id, parcela_id, nume, nume_normalizat, calitate, cota, decedat, sursa_date, versiune_lista_tgz, sters_la, sters_de, sters_motiv, created_at, updated_at'
