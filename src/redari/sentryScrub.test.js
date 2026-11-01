@@ -493,8 +493,10 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const hash = 'a'.repeat(64)
     const ev = { message: 'Eroare interna', request: { url: '/intern', data: { tokenuri_cumparate: 12, hash } }, extra: { sha256: hash } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'Eroare interna', request: { url: '/intern', data: { tokenuri_cumparate: 12, hash } }, extra: { sha256: hash } })
-    // dar acelasi continut ca TEXT neparcurs e indiciu (conservator)
-    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'tokenuri_cumparate: 12, hash: ' + hash }, extra: { sha256: hash } })).toBeNull()
+    // Copilot r20 P2-01: acelasi continut ca TEXT: hash-ul hex NU arata ca un token -> trece; cu o secventa de tip token -> null
+    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'tokenuri_cumparate: 12, hash: ' + hash }, extra: { sha256: hash } })?.message).toBe('x')
+    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', body: 'tokenuri_cumparate: 12, v: ' + T }, extra: { sha256: hash } })).toBeNull()
+    expect(scrubSentryEvent({ message: 'raspuns salvat, hash ' + hash, extra: { sha256: hash } })?.extra?.sha256).toBe(hash)
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }

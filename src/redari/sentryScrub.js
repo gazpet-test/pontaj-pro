@@ -70,7 +70,10 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // Jakarinos r26 P1-1: fără limită de distanță — conținut TEXT neparcurs care pomenește un cuvânt-cheie ȘI conține undeva o secvență
 // de ≥43 e indiciu (orice prag de distanță doar mută problema). Se aplică DOAR textului neparcurs structural (dinJson / corp-șir),
 // nu serializării unui obiect valid — câmpurile vecine ale unui obiect (`{tokenuri_cumparate: 12, hash}`) sunt parcurse structural (r26 P2-1).
-const RX_INDICIU_JSON = { test: (f) => /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && RX_RUN43.test(f)) }
+// Copilot r20 P2-01: un hash hex (SHA-256 = 64 × [0-9a-f]) NU arată ca un token (base64url aleator, cu litere mari/mici și cifre) —
+// secvențele pur hexazecimale/numerice nu declanșează indiciul (șansa ca un token real de 43 să fie pur hex e nulă practic)
+const areRun43TipToken = (f) => { for (const m of f.matchAll(RX_RUN43_TOATE)) if (!/^[0-9a-f]+$/i.test(m[0])) return true; return false }
+const RX_INDICIU_JSON = { test: (f) => /\\u[0-9a-f]{4}|p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && areRun43TipToken(f)) }
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {
