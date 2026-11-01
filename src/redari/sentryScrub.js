@@ -62,7 +62,8 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // Jakarinos r22 P1-1: pseudo-JSON cu APOSTROFURI (`{'p_token':'prefix <T>'}`) — cheile și valorile sensibile se recunosc cu `"` sau `'`
 // Jakarinos r23 P1-1: delimitatorul șirului contează — un apostrof poate sta ÎN interiorul unui șir cu ghilimele duble (și invers);
 // cheia se închide cu delimitatorul ei (`"…"` sau `'…'`), valoarea-șir la fel
-const RX_INDICIU_JSON = /\\u[0-9a-f]{4}|p_token['"]?\s*[=:]|(?:raspuns|token)(?:(?:[^"\\]|\\.)*"|(?:[^'\\]|\\.)*')\s*:\s*(?:[\[{]|"(?:[^"\\]|\\.)*[A-Za-z0-9_-]{43}|'(?:[^'\\]|\\.)*[A-Za-z0-9_-]{43})/i
+// Jakarinos r24 P1-1: cheia poate fi și FĂRĂ ghilimele (`{ token: 'prefix <T>' }`, stil JS) — continuarea cheii = caractere de identificator
+const RX_INDICIU_JSON = /\\u[0-9a-f]{4}|p_token['"]?\s*[=:]|(?:raspuns|token)(?:(?:[^"\\]|\\.)*"|(?:[^'\\]|\\.)*'|[A-Za-z0-9_.$-]*)\s*:\s*(?:[\[{]|"(?:[^"\\]|\\.)*[A-Za-z0-9_-]{43}|'(?:[^'\\]|\\.)*[A-Za-z0-9_-]{43})/i
 
 // Decodează ORICE secvență %XX validă (litere, cifre, separatoare), o dată; secvențele invalide rămân.
 const decodeazaOdata = (s) => {

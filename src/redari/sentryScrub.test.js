@@ -451,6 +451,19 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = { message: 'x', extra: { payload: '{"tokenuri_cumparate":"it\'s 12"}', continut_hash: 'a'.repeat(64) } }
     expect(scrubSentryEvent(ok)?.message).toBe('x')
   })
+  it('r24 P1-1 (Jakarinos): cheie FARA ghilimele (stil JS: `{ token: \'prefix <T>\' }`) ramane indiciu', () => {
+    for (const body of ['{ token: \'prefix ' + T + '\' }', '{token.value: "' + T + '"}', 'raspuns_token: ["' + T + '"]', '{ p_token: "x" , extra: { token: { v: \'' + T]) {
+      for (const ev of [
+        { request: { url: '/api', body }, extra: { copy: T } },
+        { message: 'ref_' + T, extra: { payload: body } },
+      ]) { const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true) }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'ref_' + T, data: { payload: body } })
+      expect(JSON.stringify(sp)).not.toContain(T)
+    }
+    // legitim: cheie fara ghilimele cu valoare scurta + hash -> trece
+    const ok = { message: 'x', extra: { payload: '{ tokenuri_cumparate: 12, nume: "abc" }', continut_hash: 'a'.repeat(64) } }
+    expect(scrubSentryEvent(ok)?.message).toBe('x')
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
