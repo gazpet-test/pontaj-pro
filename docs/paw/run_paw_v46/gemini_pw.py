@@ -183,6 +183,11 @@ def trimite(pg, text, maxs, target="https://gemini.google.com/app"):
         raise GemEroare("editor_lipsa", "chatul nou nu are camp de prompt gata")
     if target != "https://gemini.google.com/app" and pg.url != target:
         raise GemEroare("url_invalid", "conversatie indisponibila")
+    # r7 (test de canal 01.11): pe chat nou butonul de model apare dupa editor; il astept explicit, apoi verific Argon
+    try:
+        pg.locator(MODEL).first.wait_for(state="visible", timeout=20000)
+    except Exception:
+        raise GemEroare("model_gresit", "selectorul modelului nu a aparut in 20s (pagina schimbata sau nelogat)")
     model = verifica_model(_model_afisat(pg))
     if _genereaza(pg):
         raise GemEroare("gemini_ocupat", "Gemini inca scrie - nu trimit peste el")
