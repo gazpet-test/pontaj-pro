@@ -4,14 +4,13 @@
 //  - tick-ul pg_cron (ofertare_extragere_tick): antet x-intern-secret = Vault INTERN_EDGE_SECRET (verificat în BD, _shared/poartaIntern.ts),
 //    coada licitației activă ȘI cine a cerut-o (cerut_de, scris de ofertare_coada_porneste / serviciu) trece poarta pe cheltuială;
 //  - utilizatorul: JWT verificat de Auth + poarta pe cheltuială.
-// service_role ca Bearer (verificat de gateway, verify_jwt) rămâne pentru rutinele interne, ca la celelalte edge-uri ofertare-*.
-// Fail-closed: orice eroare de citire = refuz.
+// r3 (#908, review r2 Jakarinos P1-02 / Copilot P2-02): calea service_role (rol citit din payload) e SCOASĂ — niciun apelant n-o folosea
+// (workerul NAS rulează core.ts direct), iar autentificarea serviciului nu ține loc de autorizarea cheltuielii. Fail-closed: orice eroare = refuz.
 export type DepsAutorizare = {
   esteIntern: () => Promise<boolean>
   coada: (licId: number) => Promise<{ activ: boolean; cerut_de: string | null } | null>
   getUser: (jwt: string) => Promise<string | null>
   poateCheltui: (licId: number, uid: string | null) => Promise<boolean>
-  cheieServiciu: string | undefined
 }
 
 export const MESAJ_CERINTE = 'Citirea integrală o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
@@ -30,10 +29,9 @@ export async function autorizeazaCerinte(autorizare: string | null, licId: numbe
     }
     const jwt = (autorizare || '').replace(/^Bearer\s+/i, '')
     if (!jwt) return 'lipsește Authorization'
-    // rolul se ia din payload-ul JWT (semnătura e verificată de gateway, verify_jwt): env-ul funcției poate avea alt format de cheie
+    // cheia anon / service_role ca Bearer nu mai sunt căi de cheltuială: doar un utilizator verificat de Auth, prin poartă
     const rol = rolDinJwt(jwt)
-    if ((d.cheieServiciu && jwt === d.cheieServiciu) || rol === 'service_role') return null
-    if (rol === 'anon') return 'apel neautorizat (cheie anon)'
+    if (rol === 'anon' || rol === 'service_role') return `apel neautorizat (cheie ${rol})`
     const uid = await d.getUser(jwt)
     if (!uid) return 'sesiune invalidă'
     return (await d.poateCheltui(licId, uid)) ? null : MESAJ_CERINTE

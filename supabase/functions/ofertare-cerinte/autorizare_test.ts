@@ -9,7 +9,6 @@ const deps = (o: Partial<DepsAutorizare> & { apeluri?: string[] } = {}): DepsAut
   coada: async () => ({ activ: true, cerut_de: RESP }),
   getUser: async (t) => (t === 'tok-owner' ? OWNER : t === 'tok-resp' ? RESP : t === 'tok-strain' ? STRAIN : null),
   poateCheltui: async (_l, uid) => uid === OWNER || uid === RESP,
-  cheieServiciu: 'cheie-serviciu',
   ...o,
 })
 
@@ -52,7 +51,9 @@ Deno.test('fail-closed: excepție în verificări → refuz', async () => {
   assertEquals(await autorizeazaCerinte('Bearer tok-owner', 7, deps({ poateCheltui: boom })), 'eroare la autorizare')
   assertEquals(await autorizeazaCerinte(null, 7, deps({ esteIntern: async () => true, coada: boom })), 'eroare la autorizare')
 })
-Deno.test('service_role (semnat, verificat de gateway) trece ca la celelalte edge-uri', async () => {
-  assertEquals(await autorizeazaCerinte('Bearer ' + jwt('service_role'), 7, deps()), null)
-  assertEquals(await autorizeazaCerinte('Bearer cheie-serviciu', 7, deps()), null)
+Deno.test('r3: service_role ca Bearer NU mai trece (nicio cale de cheltuială fără utilizator / coadă autorizată), zero apeluri ale porții', async () => {
+  let porti = 0
+  const d = deps({ poateCheltui: async () => { porti++; return true } })
+  assertEquals(await autorizeazaCerinte('Bearer ' + jwt('service_role'), 7, d), 'apel neautorizat (cheie service_role)')
+  assertEquals(porti, 0)
 })

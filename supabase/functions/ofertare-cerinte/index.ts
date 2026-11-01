@@ -26,7 +26,6 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<st
       return u?.user?.id ?? null
     },
     poateCheltui: (id, uid) => poateCheltui(supabase, id, uid),
-    cheieServiciu: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
   })
 }
 

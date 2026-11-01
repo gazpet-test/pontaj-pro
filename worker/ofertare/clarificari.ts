@@ -6,7 +6,7 @@ import { propuneClarificari } from '../../supabase/functions/ofertare-clarificar
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[clarificari]', ...a)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-export async function proceseazaClarificari(supabase: any, licId: number, stare: (s: string) => void) {
+export async function proceseazaClarificari(supabase: any, licId: number, stare: (s: string) => void, poarta?: () => Promise<boolean>) {
   const { data: c } = await supabase.from('ofertare_clarificari_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
   // „după acoperire” se impune aici: cât timp acoperirea aceleiași licitații e în coadă/activă, așteptăm (max 30 min)
@@ -20,6 +20,8 @@ export async function proceseazaClarificari(supabase: any, licId: number, stare:
   let r: any = null, costTotal = 0
   for (let inc = 1; inc <= 3; inc++) {
     stare(`apel ${inc}`)
+    // 20261124a (r2 P1-03): poarta înaintea fiecărui apel plătit; refuz / eroare → fără notă finală (garda a închis cererea)
+    if (poarta && !(await poarta())) { log(`#${licId}: oprit de poarta pe cheltuială`); return }
     r = await propuneClarificari(supabase, { licitatie_id: licId, model: c.model || undefined })
     costTotal += Number(r?.cost_usd || 0)
     // eroarea de salvare și tăierea la max_tokens sunt deterministe: reapelarea identică e risipă (Mânăstirea: 3×3 apeluri pierdute)

@@ -15,8 +15,10 @@
 -- refuzată de ofertare-ingest-doc v13; workerul NAS e consumatorul real).
 -- Revenire: supabase/revenire/20261124a_ofertare_poarta_cheltuiala_ROLLBACK.sql (armată). ÎNTÂI se redeployează edge-urile + UI-ul + workerul
 -- pe versiunea anterioară.
--- ORDINEA LA LIVRARE (PR #908, „Plan de livrare”): operațiile plătite Ofertare suspendate → migrarea → edge-urile + UI + workerul NAS →
--- reluare. Migrarea înaintea deploy-ului edge (edge-urile cheamă funcția nouă; fără ea, poarta refuză tot = fail-closed).
+-- ORDINEA LA LIVRARE (r3, PR #908 „Plan de livrare”): (1) consumatorii opriți — workerul NAS + joburile pg_cron
+-- (scripts/ofertare_908_consumatori.sql „suspenda”), fără apeluri în zbor; (2) edge-urile NOI deployate ÎNAINTEA migrării: până la ea,
+-- poarta lor nu găsește funcția și refuză tot (fail-closed) = suspendarea tehnică, verificabilă, a intrărilor plătite din edge; (3) această
+-- migrare (garda: nicio cerere activă în cozi); (4) merge → UI; (5) workerul NAS pe codul nou + „reia”; (6) proba LIVE.
 DO $pre$
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261124a_ofertare_poarta_cheltuiala:' || txid_current() THEN
@@ -40,7 +42,9 @@ BEGIN
     RAISE EXCEPTION '20261124a: ofertare_extragere_tick nu e versiunea asteptata';
   END IF;
   -- 2A: dovada se poate fixa doar la numirile făcute de acum înainte; o numire cu „numit de” dar fără dovadă ar rămâne fără drept
-  -- (nici A, nici dovadă) → oprește aplicarea, se tratează explicit cu Răzvan (la 01.11: 0 rânduri).
+  -- (nici A, nici dovadă) → oprește aplicarea, se tratează explicit cu Răzvan (la 01.11: 0 rânduri). Sub lock (r3, review r2): nicio
+  -- numire nouă între verificare și ALTER TABLE.
+  LOCK TABLE public.ofertare_licitatii IN SHARE ROW EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM public.ofertare_licitatii WHERE responsabil_setat_de IS NOT NULL OR responsabil2_setat_de IS NOT NULL) THEN
     RAISE EXCEPTION '20261124a: exista numiri cu numit_de completat dinaintea dovezii (2A) — decizie explicita inainte de aplicare';
   END IF;
@@ -53,6 +57,17 @@ BEGIN
         AND tablename IN ('ofertare_acoperire_coada', 'ofertare_clarificari_coada', 'ofertare_extragere_coada', 'ofertare_ingest_coada')
         AND policyname ~ '_all_(ins|upd|del)$') <> 12 THEN
     RAISE EXCEPTION '20261124a: politicile de scriere ale cozilor nu sunt cele 12 asteptate';
+  END IF;
+  -- r3 (review r2: Jakarinos P1-01 / Copilot P1-01): un rând ACTIV scris direct înainte de migrare poate purta un cerut_de falsificat
+  -- (ex. UUID-ul ownerului, pus de un editor). Migrarea nu-l poate autentifica retroactiv → nu se aplică deloc cât există cereri active
+  -- (consumatorii se opresc și cozile se golesc ÎNAINTE — vezi „Plan de livrare” din PR). Sub lock: nimeni nu mai scrie în cozi până la
+  -- sfârșitul tranzacției; după ea, singura cale de (re)activare e ofertare_coada_porneste (cerut_de = auth.uid()). Rândurile inactive
+  -- nu se consumă, iar reactivarea lor rescrie cerut_de.
+  LOCK TABLE public.ofertare_acoperire_coada, public.ofertare_clarificari_coada, public.ofertare_extragere_coada, public.ofertare_ingest_coada
+    IN SHARE ROW EXCLUSIVE MODE;
+  IF EXISTS (SELECT 1 FROM public.ofertare_acoperire_coada WHERE activ) OR EXISTS (SELECT 1 FROM public.ofertare_clarificari_coada WHERE activ)
+     OR EXISTS (SELECT 1 FROM public.ofertare_extragere_coada WHERE activ) OR EXISTS (SELECT 1 FROM public.ofertare_ingest_coada WHERE activ) THEN
+    RAISE EXCEPTION '20261124a: exista cereri ACTIVE in cozile AI (proveniența cerut_de nedovedita) — opreste consumatorii, inchide cererile, apoi aplica';
   END IF;
   IF to_regprocedure('public.ofertare_coada_porneste(text,bigint)') IS NOT NULL OR to_regprocedure('public.ofertare_coada_opreste(text,bigint)') IS NOT NULL THEN
     RAISE EXCEPTION '20261124a: RPC-urile cozilor exista deja';

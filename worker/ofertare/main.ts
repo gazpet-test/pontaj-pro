@@ -11,7 +11,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
 import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
-import { cerereaTrecePoarta, type CoadaAi } from './poarta_coada.ts'
+import { cerereaTrecePoarta, gardaCheltuiala, type CoadaAi } from './poarta_coada.ts'
 import { proceseazaClarificari } from './clarificari.ts'
 import { proceseazaSourcePacks } from './source_pack.ts'
 import { proceseazaSeap } from './seap.ts'
@@ -80,8 +80,8 @@ async function proceseazaLicitatie(id: number) {
         return
       }
       // 20261124a (3A): un pas nou costă — doar dacă cine a cerut extragerea trece ACUM poarta pe cheltuială (poarta_coada.ts)
-      const pc = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id)
-      if (pc === 'refuz') { log(`#${id}: extragere refuzată / oprită — cerut_de nu trece poarta pe cheltuială`); return }
+      const { v: pc } = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id, c.cerut_la)
+      if (pc === 'refuz' || pc === 'inlocuita') { log(`#${id}: extragere ${pc === 'refuz' ? 'refuzată / oprită — cerut_de nu trece poarta pe cheltuială' : 'înlocuită de o cerere nouă'}`); return }
       if (pc === 'eroare') { inLucru.set(id, 'aștept poarta pe cheltuială (eroare de citire)'); await sleep(30_000); continue }
       const pas = pasi[c.poz] ?? {}
       const body: Record<string, unknown> = { licitatie_id: id, bucata: c.bucata, bucata_max: BUCATA_MAX, model: c.model || 'claude-opus-5' }
@@ -157,12 +157,13 @@ async function comitNou(): Promise<boolean> {
 for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => { log(`${s} — termin felia curentă și ies`); oprire = true })
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
-// 20261124a (3A): ingest / acoperire / clarificări pornesc doar dacă cerut_de trece poarta; la eroare de citire, pauză (fără cost) și se reia
-async function cuPoarta(tabel: CoadaAi, lid: number, lucru: () => Promise<unknown>) {
-  const p = await cerereaTrecePoarta(supabase, tabel, lid)
-  if (p === 'da') return await lucru()
-  log(`#${lid}: ${tabel} ${p === 'refuz' ? 'refuzată — cerut_de nu trece poarta pe cheltuială' : 'poarta nu s-a putut verifica, reiau mai târziu'}`)
-  if (p === 'eroare') await sleep(30_000)
+// 20261124a (3A + r2 P1-03): ingest / acoperire / clarificări pornesc doar dacă cerut_de trece poarta, iar procesarea primește o gardă
+// legată de generația cererii (cerut_la), întrebată înaintea FIECĂRUI apel plătit. La eroare de citire la pornire: pauză (fără cost), se reia.
+async function cuPoarta(tabel: CoadaAi, lid: number, lucru: (poarta: () => Promise<boolean>) => Promise<unknown>) {
+  const { v, generatie } = await cerereaTrecePoarta(supabase, tabel, lid)
+  if (v === 'da') return await lucru(gardaCheltuiala(supabase, tabel, lid, generatie))
+  log(`#${lid}: ${tabel} ${v === 'eroare' ? 'poarta nu s-a putut verifica, reiau mai târziu' : v === 'refuz' ? 'refuzată — cerut_de nu trece poarta pe cheltuială' : 'înlocuită între timp'}`)
+  if (v === 'eroare') await sleep(30_000)
 }
 let ultimHb = Date.now(), ultimGit = Date.now()
 let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false, seapInLucru = false, plansaInLucru = false
@@ -184,7 +185,7 @@ while (!oprire) {
       if (lid) {
         ingestInLucru = true
         inLucru.set(-lid, 'citire documente')
-        cuPoarta('ofertare_ingest_coada', lid, () => proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`)))
+        cuPoarta('ofertare_ingest_coada', lid, (p) => proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`), p))
           .catch(e => log('ingest:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-lid); ingestInLucru = false })
       }
@@ -196,7 +197,7 @@ while (!oprire) {
         acoperireInLucru = true
         inLucru.set(-1_000_000 - lid, 'acoperire')
         log(`#${lid}: propun acoperiri (coada)`)
-        cuPoarta('ofertare_acoperire_coada', lid, () => proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`)))
+        cuPoarta('ofertare_acoperire_coada', lid, (p) => proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`), p))
           .catch(e => log('acoperire:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-1_000_000 - lid); acoperireInLucru = false })
       }
@@ -208,7 +209,7 @@ while (!oprire) {
         clarificariInLucru = true
         inLucru.set(-2_000_000 - lid, 'clarificări')
         log(`#${lid}: propun clarificări (coada)`)
-        cuPoarta('ofertare_clarificari_coada', lid, () => proceseazaClarificari(supabase, lid, s => inLucru.set(-2_000_000 - lid, `clarificări: ${s}`)))
+        cuPoarta('ofertare_clarificari_coada', lid, (p) => proceseazaClarificari(supabase, lid, s => inLucru.set(-2_000_000 - lid, `clarificări: ${s}`), p))
           .catch(e => log('clarificari:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-2_000_000 - lid); clarificariInLucru = false })
       }

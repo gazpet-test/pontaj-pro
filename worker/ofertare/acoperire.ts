@@ -6,11 +6,16 @@
 import { propuneAcoperiri } from '../../supabase/functions/ofertare-acoperire/core.ts'
 
 const FELIE = 55, FELIE_RELUARE = 27, MAX_INCERCARI = 3
+// 20261124a (r2 Jakarinos P1-03): poarta pe cheltuială se întreabă înaintea FIECĂRUI apel plătit (felie, reîncercare, jumătate);
+// refuz / cerere înlocuită / eroare → rularea se oprește fără notă finală (garda a închis deja cererea, sau e o cerere nouă).
+type Poarta = () => Promise<boolean>
+const OPRIT_POARTA = 'oprit de poarta pe cheltuială'
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[acoperire]', ...a)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-async function felie(supabase: any, licId: number, batch: string, ids: number[]): Promise<any> {
+async function felie(supabase: any, licId: number, batch: string, ids: number[], poarta?: Poarta): Promise<any> {
   for (let inc = 1; inc <= MAX_INCERCARI; inc++) {
+    if (poarta && !(await poarta())) return { error: OPRIT_POARTA, oprit_poarta: true }
     const r = await propuneAcoperiri(supabase, { licitatie_id: licId, batch, ids })
     if (!r?.error) return r
     // răspuns tăiat la max_tokens: e determinist pe aceeași felie (Jilava 22.09: de 3 ori la rând pe 55) —
@@ -19,8 +24,10 @@ async function felie(supabase: any, licId: number, batch: string, ids: number[])
       if (ids.length <= 10) return r
       const j = Math.ceil(ids.length / 2)
       log(`#${licId} ${batch}: felie de ${ids.length} tăiată la max_tokens → o sparg în ${j} + ${ids.length - j}`)
-      const a = await felie(supabase, licId, batch, ids.slice(0, j))
-      const b = await felie(supabase, licId, batch, ids.slice(j))
+      const a = await felie(supabase, licId, batch, ids.slice(0, j), poarta)
+      if (a?.oprit_poarta) return a
+      const b = await felie(supabase, licId, batch, ids.slice(j), poarta)
+      if (b?.oprit_poarta) return b
       if (a?.error && b?.error) return { error: `${a.error} | ${b.error}` }
       const suma = (k: string) => (a?.[k] || 0) + (b?.[k] || 0)
       const lista = (k: string) => [...(a?.[k] || []), ...(b?.[k] || [])]
@@ -41,7 +48,7 @@ async function felie(supabase: any, licId: number, batch: string, ids: number[])
   return { error: 'reîncercări epuizate' }
 }
 
-export async function proceseazaAcoperire(supabase: any, licId: number, esteOprire: () => boolean, stare: (s: string) => void) {
+export async function proceseazaAcoperire(supabase: any, licId: number, esteOprire: () => boolean, stare: (s: string) => void, poarta?: Poarta) {
   const { data: c } = await supabase.from('ofertare_acoperire_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
   const t0 = Date.now()
@@ -66,7 +73,8 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
       const f = ids.slice(i, i + FELIE)
       stare(`${batch} ${Math.min(i + FELIE, ids.length)}/${ids.length}`)
       const tf = Date.now()
-      const r = await felie(supabase, licId, batch, f)
+      const r = await felie(supabase, licId, batch, f, poarta)
+      if (r?.oprit_poarta) { log(`#${licId}: ${OPRIT_POARTA} — mă opresc`); return }
       felii++
       const ms = Date.now() - tf
       if (r?.error) {
@@ -92,7 +100,8 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
       const f = deReluat.slice(i, i + FELIE_RELUARE)
       stare(`reluare ${batch} ${Math.min(i + FELIE_RELUARE, deReluat.length)}/${deReluat.length}`)
       const tf = Date.now()
-      const r = await felie(supabase, licId, batch, f)
+      const r = await felie(supabase, licId, batch, f, poarta)
+      if (r?.oprit_poarta) { log(`#${licId}: ${OPRIT_POARTA} — mă opresc`); return }
       felii++
       if (r?.error) { erori.push(`${batch} (reluare): ${r.error}`); neconfirmate += deReluat.length - i; jurnal.push({ la: new Date().toISOString(), batch, reluare: f.length, eroare: r.error.slice(0, 300) }); await tick(); break }
       propuneri += r.propuneri || 0; goluri += r.goluri || 0

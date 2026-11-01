@@ -438,7 +438,7 @@ async function coadaActiva(supabase: Supa, licId: number): Promise<boolean> {
 // LOTURI: licitațiile la care poarta n-a răspuns — până când nu se mai încearcă (în memorie; repornirea o golește)
 const poartaCazuta = new Map<number, number>()
 
-export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire: () => boolean, stare: (s: string) => void) {
+export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire: () => boolean, stare: (s: string) => void, poarta?: () => Promise<boolean>) {
   const { data: c } = await supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
   // LOTURI: poarta pe loturi n-a răspuns → NIMIC din licitația asta în tura asta (fail-closed). Coada rămâne activă (fără „GATA”
@@ -488,6 +488,8 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
     let rez = ''
     if (trecereBlocata(deCate, d._mare === true)) rez = `eroare: documentul revine în coadă după ${deCate - 1 === 1 ? 'o trecere' : `${deCate - 1} treceri`} în aceeași tură — oprit, ca să nu intre în buclă`
     else {
+      // 20261124a (r2 P1-03): poarta pe cheltuială înaintea fiecărui document (citirea poate chema AI)
+      if (poarta && !(await poarta())) { log(`#${licId} citire: oprit de poarta pe cheltuială (${citite} citite în tura asta)`); return }
       try { rez = await citesteDocument(supabase, d, c.cerut_de ?? null, esteOprire, s => stare(`${s} (${citite + 1}; ${lista.length} rămase)`)) } catch (e) { rez = 'eroare: ' + String((e as Error)?.message ?? e) }
     }
     log(`#${licId} doc ${d.id} „${String(d.nume_original).slice(-50)}" → ${rez} · ${Math.round((Date.now() - t0) / 1000)} s`)

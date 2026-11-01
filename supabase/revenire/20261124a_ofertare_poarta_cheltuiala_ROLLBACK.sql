@@ -2,7 +2,10 @@
 -- (Vercel) și workerul NAS pe versiunea dinaintea PR-ului (altfel: edge-urile cheamă o funcție care nu mai există = poarta refuză tot, iar UI-ul
 -- vechi scrie direct în cozi), apoi: funcțiile EXACT ca înainte (plansa_coada_inscrie, j02b, trigger-ul de numire, tick-ul extragerii),
 -- RPC-urile cozilor scoase, politicile + privilegiile de scriere ale cozilor refăcute ca în 20260928p, funcția porții și coloanele de dovadă
--- (2A) scoase. Dovada numirilor făcute între aplicare și revenire se pierde (coloanele dispar) — „numit de” rămâne.
+-- (2A) scoase dacă sunt goale; dacă au dovezi, se conservă redenumite (r3).
+-- ORDINEA REVENIRII (r3, review r2 Copilot P1-03): consumatorii opriți (workerul NAS + joburile pg_cron, scripts/ofertare_908_consumatori.sql
+-- „suspenda”) → edge-urile + UI pe versiunea anterioară, FĂRĂ a reporni workerul → acest fișier → workerul vechi și cron-urile repornite DOAR
+-- cu acordul explicit al lui Răzvan: revenirea readuce politica veche, mai permisivă, de cheltuială (efect de securitate acceptat explicit).
 DO $pre$
 BEGIN
   IF current_setting('gazpet.revenire_20261124a', true) IS DISTINCT FROM 'POARTA_CHELTUIALA_SCOASA:' || txid_current() THEN
@@ -251,4 +254,17 @@ GRANT INSERT, SELECT, UPDATE, DELETE, REFERENCES, TRIGGER
 
 DROP FUNCTION public.fn_ofertare_poate_cheltui(bigint, uuid);
 
-ALTER TABLE public.ofertare_licitatii DROP COLUMN responsabil_numitor_autorizat, DROP COLUMN responsabil2_numitor_autorizat;
+-- r3 (review r2: Jakarinos P1-05 / Copilot P2-04): dovezile numirilor făcute după livrare NU se distrug. Sub lock: fără dovezi → coloanele
+-- se scot; cu dovezi → se CONSERVĂ, redenumite *_arhiva_20261124a (codul vechi nu le citește, trigger-ul vechi nu le atinge). O reaplicare
+-- ulterioară a porții cere atunci o migrare nouă care preia arhiva (garda „numit de completat” din 20261124a o oprește oricum).
+DO $dovezi$
+BEGIN
+  LOCK TABLE public.ofertare_licitatii IN SHARE ROW EXCLUSIVE MODE;
+  IF EXISTS (SELECT 1 FROM public.ofertare_licitatii WHERE responsabil_numitor_autorizat IS NOT NULL OR responsabil2_numitor_autorizat IS NOT NULL) THEN
+    ALTER TABLE public.ofertare_licitatii RENAME COLUMN responsabil_numitor_autorizat TO responsabil_numitor_autorizat_arhiva_20261124a;
+    ALTER TABLE public.ofertare_licitatii RENAME COLUMN responsabil2_numitor_autorizat TO responsabil2_numitor_autorizat_arhiva_20261124a;
+    RAISE NOTICE '20261124a revenire: dovezile de numire CONSERVATE in *_arhiva_20261124a';
+  ELSE
+    ALTER TABLE public.ofertare_licitatii DROP COLUMN responsabil_numitor_autorizat, DROP COLUMN responsabil2_numitor_autorizat;
+  END IF;
+END $dovezi$;
