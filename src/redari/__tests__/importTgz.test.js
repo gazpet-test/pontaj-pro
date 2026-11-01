@@ -185,7 +185,9 @@ describe('parseazaTgz — robustețe', () => {
     ])
     expect(p.parcele[0]).toMatchObject({ nr_cadastral: 'CF 1007', nr_detinatori: 2 })   // atributele rămân ale primului rând
     expect(p.erori.map(e => [e.rand, e.motiv])).toEqual([[4, MOTIV_CONTRADICTORIU], [5, MOTIV_CONTRADICTORIU], [8, MOTIV_CONTRADICTORIU], [9, MOTIV_CONTRADICTORIU]])
-    expect(p.erori[1].detaliu).toMatch(/cadastru „CF 1007”.*cadastru „CF 1008”/)
+    expect(p.erori[1].detaliu).toBe('cadastru: „CF 1007” / „CF 1008”')
+    expect(p.erori[3].detaliu).toBe('tarla: „T30” / „T31”')
+    expect(p.ambigue[0].detaliu).toBe('cadastru: „CF 1007” / „CF 1008”')
     expect(p.ambigue.map(a => [a.rand, a.nume, a.motiv])).toEqual([
       [4, 'Test Coproprietar Alfa', MOTIV_CONTRADICTORIU], [5, 'Test Coproprietar Beta', MOTIV_CONTRADICTORIU],
       [8, 'Test Tarla Unu', MOTIV_CONTRADICTORIU], [9, 'Test Tarla Doi', MOTIV_CONTRADICTORIU],
@@ -198,6 +200,47 @@ describe('parseazaTgz — robustețe', () => {
     expect(r.ambigue.map(a => [a.rand, a.motiv])).toEqual([[4, MOTIV_CONTRADICTORIU], [5, MOTIV_CONTRADICTORIU], [8, MOTIV_CONTRADICTORIU], [9, MOTIV_CONTRADICTORIU]])
     expect(sb.tabele.red_parcele.map(x => x.cheie_sursa)).toEqual(['HUS|HG 8|CF 1009|T21'])
     expect(sb.tabele.red_detinatori.map(d => d.calitate)).toEqual(['coproprietar', 'coproprietar'])
+  })
+  it('P1-2 (r6, exemplul Jakarinos): contradicția se vede pe TOT grupul — 7/1 HG1/gol, 7/2 HG1/100, 7/3 HG1/200 ⇒ ambiguă; dublura de nume intră și ea în ambigue (P2-2)', async () => {
+    const p = parseazaTgz(xlsxDin([
+      ['7/1', 'HG 1', 'HUS', 'MH', 'Test Grup Unu', 'Str. A', 1, 'arabil', 'T5', '', ''],
+      ['7/2', 'HG 1', 'HUS', 'MH', 'Test Grup Doi', 'Str. B', 1, 'arabil', 'T5', '100', ''],
+      ['7/3', 'HG 1', 'HUS', 'MH', 'Test Grup Trei', 'Str. C', 1, 'arabil', 'T5', '200', ''],
+      ['7/4', 'HG 1', 'HUS', 'MH', 'TEST GRUP DOI', 'Str. B', 1, 'arabil', '', '100', ''],   // dublură de nume (același grup) → tot în ambigue
+      ['8/1', 'HG 8', 'HUS', 'MH', 'Test Ok Unu', 'Str. D', 1, 'arabil', 'T6', '300', ''],
+      ['8/2', '', 'HUS', 'MH', 'Test Ok Doi', 'Str. E', 1, 'arabil', '', '300', ''],          // valori egale sau goale → OK
+    ]), OPT)
+    expect(p.parcele.map(x => [x.cheie, x.ambigua, x.motiv_ambiguitate])).toEqual([['HUS:7', true, MOTIV_CONTRADICTORIU], ['HUS:8', false, null]])
+    expect(p.parcele[0]).toMatchObject({ nr_cadastral: null, cheie_sursa: 'HUS|HG 1||T5', randuri: expect.any(Array) })
+    expect(p.parcele[0].identitate).toBeUndefined()
+    expect(p.dubluri).toHaveLength(1)
+    expect(p.detinatori.filter(d => d.cheie_parcela === 'HUS:7')).toHaveLength(3)
+    // toate cele 4 rânduri ale grupului (și dublura) în erori și în ambigue, cu detaliul câmpului contradictoriu
+    expect(p.erori.map(e => [e.rand, e.motiv, e.detaliu])).toEqual([
+      [4, MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'], [5, MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'],
+      [6, MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'], [7, MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'],
+    ])
+    expect(p.ambigue.map(a => [a.rand, a.nr_crt, a.nume, a.detaliu])).toEqual([
+      [4, '7/1', 'Test Grup Unu', 'cadastru: „100” / „200”'], [5, '7/2', 'Test Grup Doi', 'cadastru: „100” / „200”'],
+      [6, '7/3', 'Test Grup Trei', 'cadastru: „100” / „200”'], [7, '7/4', 'TEST GRUP DOI', 'cadastru: „100” / „200”'],
+    ])
+    expect(p.statistici).toMatchObject({ parcele: 2, parcele_ambigue: 1, ambigue: 4, dubluri: 1, detinatori: 5 })
+    expect(p.statistici.pe_uat.HUS.ambigue).toBe(4)
+    // commit: doar parcela 8; rezultatul raportează toate cele 4 rânduri
+    const sb = creeazaFakeSupabase()
+    const r = await scrieImport(sb, p, { proiectId: 'proiect-1', versiune: 'v1' })
+    expect(r).toMatchObject({ parceleNoi: 1, detinatoriNoi: 2, contacteNoi: 2 })
+    expect(r.ambigue.map(a => [a.rand, a.nume, a.motiv, a.detaliu])).toEqual([
+      [4, 'Test Grup Unu', MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'], [5, 'Test Grup Doi', MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'],
+      [6, 'Test Grup Trei', MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'], [7, 'TEST GRUP DOI', MOTIV_CONTRADICTORIU, 'cadastru: „100” / „200”'],
+    ])
+    expect(sb.tabele.red_import_loturi[0].diferente.ambigue).toHaveLength(4)
+    // două câmpuri contradictorii → ambele în detaliu
+    const p2 = parseazaTgz(xlsxDin([
+      ['1/1', 'HG 1', 'HUS', 'MH', 'Test X', 'Str. A', 1, '', 'T1', 'CF 1', ''],
+      ['1/2', 'HG 2', 'HUS', 'MH', 'Test Y', 'Str. B', 1, '', 'T2', 'CF 1', ''],
+    ]), OPT)
+    expect(p2.ambigue[0].detaliu).toBe('HG: „HG 1” / „HG 2”; tarla: „T1” / „T2”')
   })
   it('P1-1: tarla egală dar HG/cadastru diferite NU e ambiguitate; rândurile x/1, x/2 nu sunt ambigue între ele', () => {
     const p = parseazaTgz(xlsxDin([
@@ -272,14 +315,14 @@ describe('parseazaTgz — robustețe', () => {
 })
 
 // ───────── fake supabase: înregistrează apelurile (inclusiv mărimea .in() și paginile .range()), rpc rezervă numere ─────────
-function creeazaFakeSupabase({ esueazaLa = null, esueazaLaLot = null, esueazaMarcareEsuat = false, numereInitiale = {} } = {}) {
+function creeazaFakeSupabase({ esueazaLa = null, esueazaLaLot = null, esueazaCitireDupaInsert = null, esueazaMarcareEsuat = false, numereInitiale = {} } = {}) {
   const tabele = { red_parcele: [], red_detinatori: [], red_detinatori_contact: [], red_import_loturi: [] }
   const apeluri = []
   const numere = { ...numereInitiale }   // 'HUS|3' → ultimul rezervat
   const contorInsert = {}
   let nr = 0
   const uuid = () => `uuid-${++nr}`
-  const stare = { esueazaLa, esueazaLaLot, esueazaMarcareEsuat }
+  const stare = { esueazaLa, esueazaLaLot, esueazaCitireDupaInsert, esueazaMarcareEsuat }
 
   class Query {
     constructor(tabel) { this.tabel = tabel; this.op = null; this.filtre = []; this.randuri = null; this.unRand = false; this.interval = null }
@@ -309,6 +352,7 @@ function creeazaFakeSupabase({ esueazaLa = null, esueazaLaLot = null, esueazaMar
         for (const r of tinta) Object.assign(r, this.valori)
         return { data: this.col ? tinta : null, error: null }
       }
+      if (stare.esueazaCitireDupaInsert === this.tabel && (contorInsert[this.tabel] ?? 0) > 0) return { data: null, error: { message: `citire eșuată simulată la ${this.tabel}` } }
       let data = t.filter(r => this.filtre.every(f => f(r)))
       if (this.interval) data = data.slice(this.interval[0], this.interval[1] + 1)
       return { data: this.unRand ? data[0] ?? null : data, error: null }
@@ -390,8 +434,8 @@ describe('scrieImport — fake supabase', () => {
       'insert:red_import_loturi',
       'select:red_parcele',            // existente pe cheie_sursa
       `rpc:${RPC_REZERVA_NUMERE}`, `rpc:${RPC_REZERVA_NUMERE}`,
-      'insert:red_parcele', 'select:red_parcele', 'update:red_import_loturi',
-      'insert:red_detinatori', 'select:red_detinatori', 'update:red_import_loturi',
+      'insert:red_parcele', 'update:red_import_loturi', 'select:red_parcele',          // contorul imediat după INSERT, apoi recitirea id-urilor (P2-1)
+      'insert:red_detinatori', 'update:red_import_loturi', 'select:red_detinatori',
       'insert:red_detinatori_contact', 'update:red_import_loturi',
       'update:red_import_loturi',
     ])
@@ -561,6 +605,24 @@ describe('scrieImport — fake supabase', () => {
     const sb2 = creeazaFakeSupabase({ esueazaLaLot: { tabel: 'red_detinatori_contact', lot: 2 } })
     await expect(scrieImport(sb2, previewMare(450), { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/inserare contacte/)
     expect(sb2.tabele.red_import_loturi[0]).toMatchObject({ stare: 'esuat', parcele_noi: 450, detinatori_noi: 450, diferente: expect.objectContaining({ contacte_noi: 200 }) })
+  })
+
+  it('P2-1 (r6): contorul crește imediat după INSERT — insert OK + recitirea id-urilor eșuată ⇒ lot esuat cu parcele_noi = N', async () => {
+    const sb = creeazaFakeSupabase({ esueazaCitireDupaInsert: 'red_parcele' })
+    await expect(scrieImport(sb, previewMare(7), { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/citire id parcele: citire eșuată simulată/)
+    expect(sb.tabele.red_parcele).toHaveLength(7)
+    expect(sb.tabele.red_import_loturi[0]).toMatchObject({ stare: 'esuat', parcele_noi: 7, detinatori_noi: 0, eroare: expect.stringMatching(/citire id parcele/) })
+    expect(updateuriLot(sb)).toEqual([{ parcele_noi: 7 }, expect.objectContaining({ stare: 'esuat', parcele_noi: 7 })])
+    // la fel pentru deținători: inserați, recitirea pică ⇒ detinatori_noi = N
+    const sb2 = creeazaFakeSupabase({ esueazaCitireDupaInsert: 'red_detinatori' })
+    await expect(scrieImport(sb2, previewMare(5), { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/citire id deținători/)
+    expect(sb2.tabele.red_detinatori).toHaveLength(5)
+    expect(sb2.tabele.red_import_loturi[0]).toMatchObject({ stare: 'esuat', parcele_noi: 5, detinatori_noi: 5, diferente: expect.objectContaining({ contacte_noi: 0 }) })
+    // reluarea completează ce lipsește (contactele) fără dubluri
+    sb2.stare.esueazaCitireDupaInsert = null
+    const r = await scrieImport(sb2, previewMare(5), { proiectId: 'proiect-1', versiune: 'v1' })
+    expect(r).toMatchObject({ parceleNoi: 0, parceleRefolosite: 5, detinatoriNoi: 0, detinatoriExistenti: 5, contacteNoi: 5 })
+    expect(sb2.tabele.red_detinatori).toHaveLength(5); expect(sb2.tabele.red_detinatori_contact).toHaveLength(5)
   })
 
   it('P2-8: dacă rezervarea ar depăși 9999 pe un UAT → oprire ÎNAINTE de orice INSERT, lot esuat cu 0 scrieri', async () => {
