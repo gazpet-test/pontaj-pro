@@ -563,6 +563,18 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
       expect(JSON.stringify(sp)).not.toContain(T)
     }
   })
+  it('r31 P1-1 (Jakarinos): duplicat + escape Unicode IN MIJLOCUL tokenului (rupe secventa de 43 in text) - duplicatele => refuzat neconditionat', () => {
+    const Tesc = T.slice(0, 20) + '\\u00' + T.charCodeAt(20).toString(16).padStart(2, '0') + T.slice(21)   // T cu al 21-lea caracter ca \\uXXXX
+    expect(JSON.parse('"' + Tesc + '"')).toBe(T)
+    const payload = '{"to\\u006ben":{"value":"' + Tesc + '"},"to\\u006ben":null}'
+    for (const ev of [{ message: T, extra: { nota: payload } }, { message: T, request: { url: '/intern', data: payload } }]) {
+      const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
+    }
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: T, data: { nota: payload } })
+    expect(JSON.stringify(sp)).not.toContain(T)
+    // duplicat fara nicio secventa lunga + hash in alt camp: se pierde (cost acceptat - duplicatele sunt oricum anormale)
+    expect(scrubSentryEvent({ message: 'x', extra: { nota: '{"a":1,"a":2}', sha256: 'a'.repeat(64) } })).toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

@@ -214,7 +214,8 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
       // Jakarinos r30 P1-1: numele din text pot avea escape-uri (`"token"`) — nu mai comparăm chei SENSIBILE, ci TOATE cheile:
       // text > structură ⇔ există duplicate undeva (indiferent de nume) ⇒ conservator
       const cheiText = [...json.matchAll(/"(?:[^"\\]|\\.)*"\s*:/g)].length
-      if (cheiText > numaraChei(obj) && RX_RUN43.test(json)) tokenuri.refuzat = true
+      // Jakarinos r31 P1-1: fără condiția „secvență de 43 în text” — un `v` în mijlocul tokenului o rupe; duplicatele ⇒ refuzat necondiționat
+      if (cheiText > numaraChei(obj)) tokenuri.refuzat = true
     }
   }
   // Jakarinos r13 P1-1: parsarea JSON NU depinde de indiciul textual (cheia `token` poate fi `"to\u006ben"` în text) — orice șir
