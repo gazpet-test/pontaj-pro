@@ -155,15 +155,17 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
   const dinJson = (f, sensibilSir = false) => {
     // Jakarinos r19 P1-1: JSON-ul poate sta ÎN MIJLOCUL unui șir (`payload={"token.value":"…"}`) — indiciul se caută pe tot șirul, iar
     // parsarea se încearcă de la primul `{`/`[` (ce e înainte nu poate ascunde o cheie)
+    // Jakarinos r20 P1-1: un FRAGMENT de JSON fără `{`/`[` (`"token.value":"prefix <T>"}`) e tot indiciu — indiciul textual se
+    // testează ÎNAINTE de orice ieșire, pe șirul brut și pe forma cu escape-urile JSON scoase
+    const indiciuText = RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(f.replace(/\\(["\\/])/g, '$1'))
     const start = f.search(/[[{]/)
-    if (start < 0) return
-    if (start > 0 && (RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(f.replace(/\\(["\\/])/g, '$1')))) tokenuri.refuzat = true
+    if (start < 0) { if (indiciuText) tokenuri.refuzat = true; return }
+    if (start > 0 && indiciuText) tokenuri.refuzat = true
     const json = start > 0 ? f.slice(start) : f
     // Jakarinos r13 P1-1: cheia poate fi scrisă cu escape Unicode (`"to\u006ben"`) — un JSON neparcurs cu escape-uri e și el suspect
     // Jakarinos r15 P2-1: `"tokenuri_cumparate":12` intr-un JSON trunchiat NU e indiciu; e indiciu o cheie *token* cu valoare sir/lista/obiect
     // r19: JSON-ul poate fi un literal-șir JSON (`"{\"token.value\":\"…\"}"`) — indiciul se testează și pe forma cu escape-urile JSON scoase
-    const dezescapat = f.replace(/\\(["\\/])/g, '$1')
-    const refuza = () => { if (sensibilSir || RX_INDICIU_JSON.test(f) || RX_INDICIU_JSON.test(dezescapat)) tokenuri.refuzat = true }
+    const refuza = () => { if (sensibilSir || indiciuText) tokenuri.refuzat = true }
     if (adancime >= 4 || json.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
     let obj
     try { obj = JSON.parse(json) } catch { return refuza() }
