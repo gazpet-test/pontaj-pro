@@ -18,6 +18,8 @@ export const LOT_CITIRE = 100   // max id-uri per .in() la citiri
 export const PAGINA = 1000      // mărimea paginii la .range() (limita implicită PostgREST)
 export const RPC_REZERVA_NUMERE = 'fn_red_rezerva_numere_parcele'
 export const MOTIV_AMBIGUU = 'identitate ambiguă (aceeași poziție HG / cadastru pe rânduri diferite)'
+export const MOTIV_CONTRADICTORIU = 'identitate contradictorie sub același Nr.Crt.'
+export const MAX_NUMAR_PARCELA = 9999   // id_parcela are fix 4 cifre
 const MAX_RAND_ANTET = 30       // căutăm antetul în primele 30 de rânduri
 
 // Cheie de potrivire pentru antet: fără diacritice, litere mici, doar [a-z0-9].
@@ -208,11 +210,23 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
 
     // parcela: cheiată pe (uat3, Nr.Crt. x); prima apariție îi dă atributele
     const cheieP = `${uat.uat3}:${nrCrt.x}`
+    const pozHg = text(celula(r, col.poz_hg)) || null
+    const nrCad = text(celula(r, col.nr_cadastral)) || null
+    const tarla = text(celula(r, col.tarla)) || null
     let parcela = parcelaDupaCheie.get(cheieP)
-    if (!parcela) {
-      const pozHg = text(celula(r, col.poz_hg)) || null
-      const nrCad = text(celula(r, col.nr_cadastral)) || null
-      const tarla = text(celula(r, col.tarla)) || null
+    if (parcela) {
+      // P1-1 (r5): același Nr.Crt. x, dar HG / cadastru / tarla nevide ȘI diferite de ale primului rând = contradicție → parcela nu se comite.
+      // Câmpurile goale pe rândul următor (moștenire de la x/1) sunt în regulă.
+      const difera = (a, b) => a && b && normalizeazaNume(a) !== normalizeazaNume(b)
+      if (difera(pozHg, parcela.poz_hg) || difera(nrCad, parcela.nr_cadastral) || difera(tarla, parcela.tarla)) {
+        if (!parcela.ambigua) {
+          parcela.ambigua = true; parcela.motiv_ambiguitate = MOTIV_CONTRADICTORIU; statistici.parcele_ambigue++
+          erori.push({ rand: parcela.rand, nr_crt: parcela.nr_crt, motiv: MOTIV_CONTRADICTORIU, cheie_sursa: parcela.cheie_sursa, uat: uatBrut })
+        }
+        erori.push({ rand: randExcel, nr_crt: nrCrt.x, motiv: MOTIV_CONTRADICTORIU, cheie_sursa: cheieSursa(uat.uat3, pozHg, nrCad, tarla), uat: uatBrut, nume: numeBrut,
+          detaliu: `rândul ${parcela.rand}: HG „${parcela.poz_hg ?? ''}” / cadastru „${parcela.nr_cadastral ?? ''}” / tarla „${parcela.tarla ?? ''}” ≠ HG „${pozHg ?? ''}” / cadastru „${nrCad ?? ''}” / tarla „${tarla ?? ''}”` })
+      }
+    } else {
       const cheieS = cheieSursa(uat.uat3, pozHg, nrCad, tarla)
       const regim = text(celula(r, col.regim))
       nrProvizoriu[uat.uat3] = (nrProvizoriu[uat.uat3] ?? 0) + 1
@@ -220,6 +234,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
         cheie: cheieP,
         cheie_sursa: cheieS,
         ambigua: false,
+        motiv_ambiguitate: null,
         nr_crt: nrCrt.x,
         uat_id: uat.id ?? null,
         uat3: uat.uat3,
@@ -240,8 +255,8 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
       else if (parcelaDupaCheieSursa.has(cheieS)) {
         // P1-1: alt Nr.Crt. cu aceeași identitate validă → ambele ambigue, niciuna nu se unește sau se comite
         const prima = parcelaDupaCheieSursa.get(cheieS)
-        if (!prima.ambigua) { prima.ambigua = true; statistici.parcele_ambigue++; erori.push({ rand: prima.rand, nr_crt: prima.nr_crt, motiv: MOTIV_AMBIGUU, cheie_sursa: cheieS, uat: uatBrut }) }
-        parcela.ambigua = true; statistici.parcele_ambigue++
+        if (!prima.ambigua) { prima.ambigua = true; prima.motiv_ambiguitate = MOTIV_AMBIGUU; statistici.parcele_ambigue++; erori.push({ rand: prima.rand, nr_crt: prima.nr_crt, motiv: MOTIV_AMBIGUU, cheie_sursa: cheieS, uat: uatBrut }) }
+        parcela.ambigua = true; parcela.motiv_ambiguitate = MOTIV_AMBIGUU; statistici.parcele_ambigue++
         erori.push({ rand: randExcel, nr_crt: nrCrt.x, motiv: MOTIV_AMBIGUU, cheie_sursa: cheieS, uat: uatBrut, nume: numeBrut })
       } else parcelaDupaCheieSursa.set(cheieS, parcela)
     }
@@ -296,7 +311,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
   for (const d of detinatori) {
     const p = parcelaDupaCheie.get(d.cheie_parcela)
     const intrare = { rand: d.rand, nr_crt: d.nr_crt, nume: d.nume, cheie_parcela: d.cheie_parcela }
-    if (p.ambigua) { ambigue.push({ ...intrare, cheie_sursa: p.cheie_sursa }); statUat(p.uat3).ambigue++ }
+    if (p.ambigua) { ambigue.push({ ...intrare, cheie_sursa: p.cheie_sursa, motiv: p.motiv_ambiguitate }); statUat(p.uat3).ambigue++ }
     else if (!p.cheie_sursa) { fara_cheie.push(intrare); statUat(p.uat3).fara_cheie++ }
   }
 
@@ -341,10 +356,12 @@ function primulNumar(data) {
  * scrieImport(supabase, preview, { proiectId, versiune, sursa, fisierNume, onProgress, pagina, lotCitire })
  *  → { lotId, parceleNoi, parceleRefolosite, detinatoriNoi, detinatoriExistenti, contacteNoi, existente, fara_cheie, ambigue }
  * Ordinea: INSERT red_import_loturi (stare 'in_curs') → select parcele existente pe (proiect_id, cheie_sursa) [≤100 chei per .in(), .range() paginat]
- * → rezervare numere prin RPC per (uat3, tronson) → INSERT parcele noi (loturi de 200) → id-uri înapoi → UPDATE lot parcele_noi
- * → deținătorii lipsă (select pe parcela_id + nume_normalizat, sters_la null) → INSERT → UPDATE lot detinatori_noi
- * → contactele lipsă (select pe detinator_id) → INSERT → UPDATE lot diferente.contacte_noi (tabela n-are coloana) → UPDATE lot 'finalizat'.
- * La eroare: UPDATE lot 'esuat' + eroare, apoi re-throw (e.lotId; dacă nici marcarea nu reușește: e.lotNeinchis = true + mesaj extins).
+ * → rezervare numere prin RPC per (uat3, tronson) [dacă blocul ar depăși 9999 → eroare ÎNAINTE de orice INSERT] → INSERT parcele noi
+ * (loturi de 200; după FIECARE lot UPDATE lot parcele_noi) → id-uri înapoi → deținătorii lipsă (select pe parcela_id + nume_normalizat,
+ * sters_la null) → INSERT (după fiecare lot UPDATE detinatori_noi) → contactele lipsă (select pe detinator_id) → INSERT (după fiecare lot
+ * UPDATE diferente.contacte_noi — tabela n-are coloana) → UPDATE lot 'finalizat'.
+ * La eroare: UPDATE lot 'esuat' + eroare + contoarele scrise până atunci, apoi re-throw (e.lotId; dacă nici marcarea nu reușește:
+ * e.lotNeinchis = true + mesaj extins).
  * NU se comit: parcelele fără cheie_sursa (`fara_cheie`) și cele ambigue (`ambigue`) — cu deținătorii lor; sunt raportate.
  * `existente` = id_parcela ale parcelelor refolosite. Reluarea aceluiași fișier completează doar ce lipsește.
  */
@@ -359,10 +376,14 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
   // P1-1 / P1-2: ce nu se comite
   const parceleSarite = new Set(parceleToate.filter(p => p.ambigua || !p.cheie_sursa).map(p => p.cheie))
   const parcele = parceleToate.filter(p => !parceleSarite.has(p.cheie))
+  const parcelaPreview = d => parceleToate.find(p => p.cheie === d.cheie_parcela)
   const intrare = d => ({ rand: d.rand ?? null, nr_crt: d.nr_crt ?? null, nume: d.nume })
-  const ambigue = detinatoriToti.filter(d => parceleToate.find(p => p.cheie === d.cheie_parcela)?.ambigua).map(intrare)
-  const fara_cheie = detinatoriToti.filter(d => { const p = parceleToate.find(p => p.cheie === d.cheie_parcela); return p && !p.ambigua && !p.cheie_sursa }).map(intrare)
+  const ambigue = detinatoriToti.filter(d => parcelaPreview(d)?.ambigua).map(d => ({ ...intrare(d), motiv: parcelaPreview(d).motiv_ambiguitate ?? MOTIV_AMBIGUU }))
+  const fara_cheie = detinatoriToti.filter(d => { const p = parcelaPreview(d); return p && !p.ambigua && !p.cheie_sursa }).map(intrare)
   const diferenteBaza = { erori: preview?.erori ?? [], fara_cheie, ambigue }
+  // P2-1: contoarele scrise până acum — actualizate după FIECARE lot și păstrate la 'esuat'
+  const scrise = { parcele_noi: 0, detinatori_noi: 0, contacte_noi: 0 }
+  const valoriLot = () => ({ parcele_noi: scrise.parcele_noi, detinatori_noi: scrise.detinatori_noi, diferente: { ...diferenteBaza, contacte_noi: scrise.contacte_noi } })
 
   // 0. lotul, întâi, cu stare 'in_curs'
   const lot = verifica(await supabase.from('red_import_loturi').insert({
@@ -398,6 +419,9 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     for (const [, grup] of grupuri) {
       const { uat3, tronson } = grup[0]
       const start = primulNumar(verifica(await supabase.rpc(RPC_REZERVA_NUMERE, { p_uat3: uat3, p_tronson: tronson, p_n: grup.length }), 'rezervare numere parcele'))
+      // P2-8: formatul are fix 4 cifre — dacă blocul ar depăși 9999 ne oprim AICI, înainte de orice INSERT (lotul rămâne cu 0 scrieri)
+      const ultim = start + grup.length - 1
+      if (ultim > MAX_NUMAR_PARCELA) throw new Error(`Numerotarea parcelelor pentru UAT ${uat3} / tronson T${tronson} ar depăși ${MAX_NUMAR_PARCELA} (${grup.length} parcele noi de la ${start} → ${ultim}); nimic nu a fost scris`)
       grup.forEach((p, i) => randuriParcele.push({ p, id_parcela: idParcela(tronson, uat3, start + i) }))
     }
 
@@ -421,9 +445,10 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
         if (!id) throw new Error(`Parcela ${id_parcela} nu s-a regăsit după inserare`)
         parcelaDupaCheie.set(p.cheie, { id, id_parcela, existenta: false })
       }
-      facut += lotP.length; progres('parcele', facut, randuriParcele.length)
+      facut += lotP.length; scrise.parcele_noi = facut
+      await actualizeazaLot({ parcele_noi: facut }, 'actualizare lot (parcele)')
+      progres('parcele', facut, randuriParcele.length)
     }
-    await actualizeazaLot({ parcele_noi: randuriParcele.length }, 'actualizare lot (parcele)')
 
     // 4. deținătorii: pe parcelele existente verificăm ce e deja scris, restul se inserează
     const uuidDetinator = new Map()      // cheie detinator (preview) → { id, existent }
@@ -458,9 +483,10 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
         if (!id) throw new Error(`Deținătorul „${d.nume}” (${d.cheie_parcela}) nu s-a regăsit după inserare`)
         uuidDetinator.set(d.cheie, { id, existent: false })
       }
-      facut += lotD.length; progres('detinatori', facut, deInserat.length)
+      facut += lotD.length; scrise.detinatori_noi = facut
+      await actualizeazaLot({ detinatori_noi: facut }, 'actualizare lot (deținători)')
+      progres('detinatori', facut, deInserat.length)
     }
-    await actualizeazaLot({ detinatori_noi: deInserat.length }, 'actualizare lot (deținători)')
 
     // 5. contactele: pentru deținătorii deja existenți verificăm dacă au contact; cei noi nu pot avea
     const idsDetExistenti = [...uuidDetinator.values()].filter(v => v.existent).map(v => v.id)
@@ -479,9 +505,10 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
         telefon: c.telefon ?? null, email: c.email ?? null,
       }))
       verifica(await supabase.from('red_detinatori_contact').insert(randuri), 'inserare contacte')
-      facut += lotC.length; progres('contacte', facut, contacteDeInserat.length)
+      facut += lotC.length; scrise.contacte_noi = facut
+      await actualizeazaLot({ diferente: { ...diferenteBaza, contacte_noi: facut } }, 'actualizare lot (contacte)')
+      progres('contacte', facut, contacteDeInserat.length)
     }
-    await actualizeazaLot({ diferente: { ...diferenteBaza, contacte_noi: contacteDeInserat.length } }, 'actualizare lot (contacte)')
 
     // 6. lotul: finalizat + cifre
     const existente = parceleRefolosite.map(p => parcelaDupaCheie.get(p.cheie).id_parcela)
@@ -501,7 +528,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     const err = e instanceof Error ? e : new Error(String(e))
     err.lotId = lotId
     try {
-      await actualizeazaLot({ stare: 'esuat', eroare: err.message }, 'marcare lot esuat')
+      await actualizeazaLot({ ...valoriLot(), stare: 'esuat', eroare: err.message }, 'marcare lot esuat')
     } catch (e2) {
       err.lotNeinchis = true
       err.message = `${err.message} — lotul ${lotId} a rămas „in_curs” (${e2?.message || e2})`
