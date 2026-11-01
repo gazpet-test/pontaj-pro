@@ -741,6 +741,26 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const txt = 'linia 1 \\\nlinia 2'
     expect(scrubSentryEvent({ message: txt })?.message).toBe(txt)
   })
+  it('r43 P1-01 (Jakarinos): copia identificatorului FRAGMENTATA (lista de bucati, campuri separate) cand identificatorul e cunoscut -> nu se trimite', () => {
+    const buc = [T.slice(0, 20), T.slice(20)]
+    const buc3 = [T.slice(0, 10), T.slice(10, 25), T.slice(25)]
+    for (const ev of [
+      { extra: { token: T, copy: buc } },
+      { extra: { token: buc } },
+      { extra: { token: T, a: buc3[0], b: { c: buc3[1] }, d: [buc3[2]] } },
+      { message: 'x ' + T.slice(0, 15) + ' y', extra: { token: T, rest: T.slice(15) } },
+      { extra: { nota: JSON.stringify({ token: T, copy: buc }) } },
+    ]) {
+      const rez = scrubSentryEvent(ev); const j = rez === null ? '' : JSON.stringify(rez).replace(/[^A-Za-z0-9_-]+/g, '')
+      expect(j.includes(T)).toBe(false)
+      for (const b of [...buc, ...buc3]) expect(j.includes(b)).toBe(false)
+    }
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: T.slice(0, 20), data: { token: T, rest: T.slice(20) } })
+    expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain(T.slice(20))
+    // legitim: identificator colectat + alte siruri scurte fara legatura -> trece (redactat)
+    const ok = scrubSentryEvent({ message: 'convocator generat', extra: { token: T, id_parcela: 'T3-HUS-0001', uat: 'Husnicioara' } })
+    expect(ok).toEqual({ message: 'convocator generat', extra: { token: '[token]', id_parcela: 'T3-HUS-0001', uat: 'Husnicioara' } })
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

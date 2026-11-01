@@ -198,6 +198,8 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
         if (v && typeof v === 'object') stiva.push([v, sensibil])
         else { const n = fn(obj, null, v, sensibil); if (n !== v) obj[i] = n }
       }
+      // Jakarinos r43: sub context sensibil, o LISTĂ de fragmente (`token: [T[0:20], T[20:]]`) se judecă și unită — identificatorul se colectează
+      if (sensibil) { const unit = obj.filter(x => typeof x === 'string').join(''); if (unit.length >= 43) fn(obj, null, unit, sensibil) }
       continue
     }
     for (const cheie of Object.keys(obj)) {
@@ -331,8 +333,20 @@ export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0
   for (const f of [...formeToate]) for (const u of [cuUnicode(f), cuUnicode(f.replace(/\\\\/g, '\\'))]) if (u !== f) formeToate.push(u)
   // Jakarinos r34: și ordinea inversă — escape-urile Unicode pot ascunde un `%` (`%`), deci reconstruim ÎNTÂI, apoi decodăm procentual
   for (const u of [cuUnicode(text), cuUnicode(text.replace(/\\\\/g, '\\'))]) if (u !== text) for (const f of formele(u)) if (!formeToate.includes(f)) formeToate.push(f)
+  // Jakarinos r43 P1-01: copia unui identificator CUNOSCUT poate fi fragmentată (listă de bucăți, câmpuri separate) — pe fiecare formă și pe
+  // forma cu separatorii JSON scoși (unește fragmentele vecine) căutăm orice FEREASTRĂ de 6 caractere consecutive din identificator;
+  // 64^6 ≈ 6,9e10 face coincidența cu un șir legitim practic nulă; fragmente sub 6 nu sunt reconstruibile fără identificator (rezidual asumat)
+  const ferestre = []
+  for (const t of tokenuri) for (let i = 0; i + 6 <= t.length; i++) ferestre.push(t.slice(i, i + 6))
+  // formele „unite” (fără separatori) se folosesc DOAR pentru identificatorii cunoscuți (întregi sau ferestre) — nu pentru regex-urile
+  // generice de 43, care pe un text lipit ar aprinde fals (șiruri scurte legitime puse cap la cap)
+  if (ferestre.length) for (const f of [...formeToate]) {
+    const u = f.replace(/["'\s,\[\]{}:]+/g, '')
+    if (u !== f && (contineVreunToken(u, tokenuri) || ferestre.some(w => u.includes(w)))) return true
+  }
   for (const f of formeToate) {
     if (contineVreunToken(f, tokenuri)) return true
+    if (ferestre.length) for (const w of ferestre) if (f.includes(w)) return true
     if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true
     if (aPurtatToken && RX_T43_PLUS.test(f)) return true   // a purtat token: orice secvență de ≥43 rămasă (și lipită de prefix) e suspectă
     if (RX_T43_ORIUNDE.test(f) && tokenuri.size) return true
