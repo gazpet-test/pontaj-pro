@@ -24,6 +24,8 @@ const RX_TOKEN_P_TOKEN = /(p_token(?:%[0-9A-Fa-f]{2}|[^A-Za-z0-9_-]){0,16})([A-Z
 const RX_TOKEN_CHEIE = /((?:token|raspuns)[A-Za-z0-9_-]{0,32}?(?:%[0-9A-Fa-f]{2}|[^A-Za-z0-9_-]){1,16})([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/gi
 const RX_T43 = /^[A-Za-z0-9_-]{43}$/
 const RX_T43_ORIUNDE = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/
+// r10 P1-1 (Jakarinos): într-un eveniment „purtător de token” orice secvență de ≥43 (tokenul lipit de un prefix/sufix, ex. `ref_<T>`) e suspectă
+const RX_T43_PLUS = /[A-Za-z0-9_-]{43,}/
 const RX_DROP = /\/redari\/raspuns|rpc\/fn_red_formular_public|rpc\/fn_red_raspuns_public/i
 // r7 P1-2: cuvântul-cheie poate avea sufix (token_raspuns_public), apoi până la 16 separatoare, apoi tokenul de 43
 const RX_FINAL = /(raspuns|token)[A-Za-z0-9_-]{0,32}?[^A-Za-z0-9_-]{0,16}[A-Za-z0-9_-]{43}/i
@@ -82,19 +84,22 @@ export function redacteazaText(s, tokenuriGlobale = null) {
 }
 
 // Parcurgere iterativă generică (fără recursivitate, fără limită de adâncime), cu set de vizitate pentru cicluri.
+// r10 P1-1 (Jakarinos): `sensibil` = un STRĂMOȘ e o cheie de token (p_token, token*, raspuns*) — descendenții ei (liste `[null, T]`,
+// obiecte `{ value: T }`) se tratează ca valori de token, structural, nu prin regex pe serializare.
+const cheieSensibila = (cheie) => typeof cheie === 'string' && /token|raspuns/i.test(cheie)
 function parcurge(radacina, fn, fnCheie = null) {
   if (radacina === null || typeof radacina !== 'object') return radacina
   const vizitate = new WeakSet()
-  const stiva = [radacina]
+  const stiva = [[radacina, false]]
   while (stiva.length) {
-    const obj = stiva.pop()
+    const [obj, sensibil] = stiva.pop()
     if (obj === null || typeof obj !== 'object' || vizitate.has(obj)) continue
     vizitate.add(obj)
     if (Array.isArray(obj)) {
       for (let i = 0; i < obj.length; i++) {
         const v = obj[i]
-        if (v && typeof v === 'object') stiva.push(v)
-        else { const n = fn(obj, null, v); if (n !== v) obj[i] = n }
+        if (v && typeof v === 'object') stiva.push([v, sensibil])
+        else { const n = fn(obj, null, v, sensibil); if (n !== v) obj[i] = n }
       }
       continue
     }
@@ -103,8 +108,9 @@ function parcurge(radacina, fn, fnCheie = null) {
       const cheieNoua = fnCheie ? fnCheie(cheie) : cheie
       if (cheieNoua !== cheie) delete obj[cheie]
       let vNou = v
-      if (v && typeof v === 'object') stiva.push(v)
-      else vNou = fn(obj, cheie, v)
+      const sensibilCopil = sensibil || cheieSensibila(cheie)
+      if (v && typeof v === 'object') stiva.push([v, sensibilCopil])
+      else vNou = fn(obj, cheie, v, sensibilCopil)
       if (cheieNoua !== cheie || vNou !== v) obj[cheieNoua] = vNou
     }
   }
@@ -122,9 +128,9 @@ export function colecteazaTokenuriEveniment(event) {
     const forme = formele(s)
     if (forme.some(pareSuspect)) for (const f of forme) colecteazaTokenuri(f, tokenuri)
   }
-  parcurge(event, (_obj, cheie, v) => {
+  parcurge(event, (_obj, cheie, v, sensibil) => {
     if (typeof v === 'string') {
-      if (cheieDeToken(cheie) && valoareDeToken(v)) for (const f of formele(v)) if (RX_T43.test(f)) tokenuri.add(f)
+      if ((sensibil || cheieDeToken(cheie)) && valoareDeToken(v)) for (const f of formele(v)) if (RX_T43.test(f)) tokenuri.add(f)
       dinText(v)
     }
     return v
@@ -137,9 +143,9 @@ export function colecteazaTokenuriEveniment(event) {
 export function redacteazaAdanc(radacina, tokenuriGlobale = null) {
   if (radacina === null || typeof radacina !== 'object') return typeof radacina === 'string' ? redacteazaText(radacina, tokenuriGlobale) : radacina
   return parcurge(radacina,
-    (_obj, cheie, v) => {
+    (_obj, cheie, v, sensibil) => {
       if (typeof v !== 'string') return v
-      if (cheieDeToken(cheie) && valoareDeToken(v)) return TOKEN
+      if ((sensibil || cheieDeToken(cheie)) && valoareDeToken(v)) return TOKEN
       return redacteazaText(v, tokenuriGlobale)
     },
     (cheie) => redacteazaText(cheie, tokenuriGlobale))
@@ -179,7 +185,8 @@ export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0
   for (const f of formele(text)) {
     if (contineVreunToken(f, tokenuri)) return true
     if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true
-    if (aPurtatToken && RX_T43_ORIUNDE.test(f)) return true   // a purtat token: orice alt șir de 43 rămas e suspect
+    if (aPurtatToken && RX_T43_PLUS.test(f)) return true   // a purtat token: orice secvență de ≥43 rămasă (și lipită de prefix) e suspectă
+    if (RX_T43_ORIUNDE.test(f) && tokenuri.size) return true
   }
   return false
 }
