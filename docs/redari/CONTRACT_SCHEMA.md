@@ -12,7 +12,7 @@ Fără date reale de proprietari nicăieri (cod, teste, fixture-uri, brief-uri P
 **Implementarea BD**: `supabase/migrations/20261126a_redari_teren.sql` (revenire `supabase/revenire/20261126a_redari_teren_ROLLBACK.sql`,
 DRY `supabase/tests/20261126a_redari_teren_dryrun.sql`, detalii și harness local `docs/redari/MIGRARE_20261126a.md`). Abaterile agentului de
 migrare față de textul inițial sunt marcate mai jos cu **[mig]**; completările cerute de coordonator / Jakarinos r1 cu **[r1]**; runda 2
-(Jakarinos r1 pe SQL + Copilot r1, NO-GO) cu **[r2]**; runda 3 (Jakarinos r2 + Copilot r2, NO-GO; șabloane v5) cu **[r3]**.
+(Jakarinos r1 pe SQL + Copilot r1, NO-GO) cu **[r2]**; runda 3 (Jakarinos r2 + Copilot r2, NO-GO; șabloane v5) cu **[r3]**; runda 4 (Jakarinos r3) cu **[r4]**.
 
 **[r2] Coerența și imutabilitatea legăturilor** (trigger `fn_red_legaturi`, BEFORE INSERT/UPDATE, pentru oricine): red_uat / red_import_loturi →
 proiect existent; red_parcele → UAT-ul aparține proiectului parcelei; red_detinatori → parcelă activă (`sters_la IS NULL`); contact / token /
@@ -25,7 +25,12 @@ trece; un deținător nou pe parcela ștearsă e refuzat; parcela ștearsă iese
 **[r3] Validarea răspunsurilor și pentru operatori** (trigger `fn_red_raspunsuri_valideaza`, BEFORE INSERT/UPDATE pe red_raspunsuri): `particip` ⇒
 `zi_sesiune_aleasa` NOT NULL ∈ sesiune_zi1..3 ale UAT-ului deținătorului; `nu_particip_cu_obiectii` / `constatare_teren` ⇒ `obiectii_text` nevid;
 `nu_particip_fara_obiectii` ⇒ `declaratie_confirmata = true` DOAR pe canal `online` (telefon / scris / sesiune se acceptă fără bifă — operatorul
-confirmă). RPC-ul public își păstrează mesajele jsonb (verificările lui rămân înaintea insertului). `created_at` e imutabil (timpul de recepție).
+confirmă); **[r4]** `obiectii_text` ≤ 4000 și în trigger; la UPDATE verificările rulează DOAR când se schimbă `optiune` / `zi_sesiune_aleasa` /
+`obiectii_text` / `declaratie_confirmata`, iar apartenența zilei la sesiunile CURENTE ale UAT-ului se verifică la INSERT și la schimbarea zilei.
+RPC-ul public își păstrează mesajele jsonb (verificările lui rămân înaintea insertului). **[r4] Proveniență**: `created_at` = `now()` pus de
+trigger la INSERT și imutabil apoi; `authenticated` NU are privilegiu de coloană pe `seq` și `created_at` (nici `OVERRIDING SYSTEM VALUE`, nici
+`created_at` explicit nu trec — 42501); INSERT/UPDATE pe red_raspunsuri doar pe coloanele de conținut (`select=*` rămâne).
+**[r4]** `red_uat.uat3` (intră în `id_parcela`) nu se mai schimbă cât există parcele pe UAT; `nume` rămâne editabil.
 **[r2] Limita jurnalului (P2-10)**: `red_jurnal` e append-only față de rolurile aplicației (anon / authenticated / service_role: fără INSERT /
 UPDATE / DELETE / TRUNCATE, trigger de imutabilitate). NU protejează față de administratorul bazei: `postgres` poate dezactiva trigger-ul sau
 insera direct. E o garanție de aplicație, nu una criptografică; dovada față de terți rămâne exportul semnat / datat, nu tabela în sine.
@@ -164,7 +169,9 @@ SECURITY DEFINER, EXECUTE authenticated, cer nivel admin/editor; peste 9999 → 
 `cheie text PK` (`ip:<ip>` sau `t:<sha256 hex al tokenului>` — tokenul nu se stochează în clar), `fereastra_start timestamptz, numar int`.
 **[r2]** NU e tabelă de business; formatul tokenului (exact 43 caractere `[A-Za-z0-9_-]`) se verifică ÎNAINTE de orice scriere în contor.
 **[r3]** Index pe `fereastra_start`; curățarea (rânduri > 24 h, singurul DELETE din modul, ca owner — `fn_red_rate_limit_curata`) NU la fiecare
-atingere, ci în ~2 % din apeluri sau când `pg_class.reltuples` > 10.000, o singură dată per apel RPC. **Cheia de token se atinge DOAR pentru
+atingere, ci în ~2 % din apeluri sau când `pg_class.reltuples` > 10.000, o singură dată per apel RPC; **[r4]** cel mult o dată la 10 minute (rândul
+de control `cheie = '_curatare'`, `fereastra_start` = ultima curățare), în loturi de 5000 (subselect pe `ctid`), și rulează DUPĂ verificarea limitei
+IP, nu înaintea ei. **Cheia de token se atinge DOAR pentru
 tokenuri existente și valide** (mulțime finită — fără DoS prin chei arbitrare); pentru tokenuri cu format bun dar inexistente / expirate se
 contorizează doar IP-ul. Fără `x-forwarded-for` cheia e `ip:necunoscut` cu aceeași limită de 30 — limita reală pentru traficul fără IP e la
 gateway-ul Supabase, nu aici.
@@ -230,8 +237,8 @@ procentul se repetă pe fiecare rând al UAT-ului).
   red_rate_limit). Întoarce și `text_gdpr` **[r2]**. Rate limit **[mig]**: doar pe IP (30 / 10 min) → `{ok:false, motiv:'prea_multe'}`; contorul
   pe token nu se consumă la afișare, ca să nu blocheze trimiterea.
 - `fn_red_raspuns_public(p_token text, p_optiune text, p_zi date, p_obiectii text, p_declaratie_confirmata bool, p_user_agent text)
-  RETURNS jsonb` — ordinea **[r3]**: formatul tokenului (exact 43 caractere) → `token_invalid` fără a atinge contorul; (curățare rară a
-  contorului); căutarea tokenului; rate limit IP (30 / 10 min) → `prea_multe`; token inexistent / expirat → `token_invalid` (fără cheie de token);
+  RETURNS jsonb` — ordinea **[r4]**: formatul tokenului (exact 43 caractere) → `token_invalid` fără a atinge contorul; căutarea tokenului;
+  rate limit IP (30 / 10 min) → `prea_multe`; (curățare rară a contorului); token inexistent / expirat → `token_invalid` (fără cheie de token);
   rate limit token (5 / 10 min, cheia = sha256 al tokenului, DOAR pentru tokenuri existente) → `{ok:false, motiv:'prea_multe'}`; opțiune →
   `optiune_invalida`; `particip` cere **[r2]**
   `p_zi` NOT NULL și egală cu una din `sesiune_zi1..3` ale UAT-ului deținătorului, altfel `zi_invalida`;
@@ -250,7 +257,11 @@ Bucket privat `redari` (**[mig]** 25 MB / fișier; MIME: `application/pdf`,
 poză); căi `{proiect_cod}/{uat3}/{id_parcela}/{nr_document}.docx|.pdf`. Politici `red_storage_sel / _ins` pe storage.objects:
 SELECT și INSERT pentru `fn_red_nivel() IN ('admin','editor')`; **[r2] fără UPDATE și fără DELETE** — fișierele sunt imutabile; o versiune
 nouă = cale nouă (`{nr_document}-v{n}.docx|.pdf`), iar coloana `*_path` din tabele arată spre versiunea curentă (schimbarea ei e jurnalizată;
-upload-urile se fac cu `upsert: false`). În tabele se salvează `*_path` (calea în bucket), nu URL-uri semnate.
+upload-urile se fac cu `upsert: false`). În tabele se salvează `*_path` (calea în bucket), nu URL-uri semnate. **[r4]** Postcondiția și TEST9 verifică
+prin `fn_red_storage_expr_bucket` că nicio politică permisivă străină de pe `storage.objects` nu poate acoperi `redari`: expresia cerută a comenzii
+(USING pentru SELECT/DELETE/UPDATE/ALL, WITH CHECK pentru INSERT; WITH CHECK NULL pe UPDATE/ALL moștenește USING, ca în PostgreSQL) trebuie să aibă
+`bucket_id = '<alt bucket>'` ca prim operand al AND-ului de nivel superior, fără niciun OR la acel nivel sau mai sus (paranteze numărate, literale
+sărite). Verificarea prin Storage API pe prod rămâne manuală după apply — `docs/redari/MIGRARE_20261126a.md`.
 
 ## 7. Import (client-side, `src/redari/importTgz.js`)
 Excel TGZ: o foaie, antetul pe rândul 3, coloane: `Nr.Crt., Nr.Poz.Hg., UAT, Județ, Nume Deținător, Adresă, Suprafață Afectată
