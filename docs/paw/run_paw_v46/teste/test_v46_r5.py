@@ -11,6 +11,7 @@ from .test_v46_r4 import Registry
 
 BASE = 'https://gemini.google.com/app'
 FAKE = 'https://gemini.google.com/app/deadbeef'
+U = BASE + '/'
 
 
 class UrlFinal(unittest.TestCase):
@@ -70,7 +71,7 @@ $ErrorActionPreference='Stop'
 $DATA='__ROOT__';$script:LockFs=New-Object object
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\run_paw.ps1',[ref]$tokens,[ref]$errors)
-foreach($name in @('GemEticheta','GemUrl','GemCheiUnice','CitesteGemLucrari')){
+foreach($name in @('GemEticheta','GemUrl','GemParseRegistru','CitesteGemLucrari')){
  $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true)
  Invoke-Expression $fn.Extent.Text
 }
@@ -83,28 +84,73 @@ try {$r=CitesteGemLucrari;'OK '+((@($r.Keys)|Sort-Object) -join ',')} catch {'ER
         return Isolation().ps(script)
 
     def test_valid_registry_accepted(self):
-        out = self.read_raw('{"dosar-123":{"url":"https://gemini.google.com/app/aaaa","schimburi":29},"alta-123":{"url":"https://gemini.google.com/app/bbbb","schimburi":0}}')
+        out = self.read_raw('{"dosar-123":{"url":"%saaaa","schimburi":29},"alta-123":{"url":"%sbbbb","schimburi":0}}' % (U, U))
         self.assertEqual(out, 'OK alta-123,dosar-123')
 
-    def test_duplicate_label_refused(self):
-        out = self.read_raw('{"dosar-123":{"url":"https://gemini.google.com/app/aaaa","schimburi":29},"dosar-123":{"url":"https://gemini.google.com/app/bbbb","schimburi":0}}')
-        self.assertEqual(out, 'ERR gem_registru_invalid')
-
-    def test_duplicate_field_refused(self):
-        out = self.read_raw('{"dosar-123":{"url":"https://gemini.google.com/app/aaaa","schimburi":29,"schimburi":0}}')
-        self.assertEqual(out, 'ERR gem_registru_invalid')
-
-    def test_escaped_duplicate_label_refused(self):
-        out = self.read_raw('{"dosar-123":{"url":"https://gemini.google.com/app/aaaa","schimburi":29},"dosar\u002d123":{"url":"https://gemini.google.com/app/bbbb","schimburi":0}}')
-        self.assertEqual(out, 'ERR gem_registru_invalid')
-
-    def test_extra_field_refused(self):
-        out = self.read_raw('{"dosar-123":{"url":"https://gemini.google.com/app/aaaa","schimburi":1,"x":1}}')
-        self.assertEqual(out, 'ERR gem_registru_invalid')
-
-    def test_string_with_braces_and_colon_not_a_key(self):
-        out = self.read_raw('{"dosar-123":{"url":"https://gemini.google.com/app/aaaa","schimburi":1}}')
+    def test_whitespace_and_field_order_accepted(self):
+        out = self.read_raw('{ "dosar-123" : { "schimburi" : 3 ,\r\n "url" : "%saaaa" } }\r\n' % U)
         self.assertEqual(out, 'OK dosar-123')
+
+    def test_empty_registry_accepted(self):
+        self.assertEqual(self.read_raw('{}'), 'OK')
+
+    def test_value_with_braces_and_colon_is_just_a_string(self):
+        # citirea accepta sirul; URL-ul invalid e refuzat la folosire (GemUrl), nu aici
+        out = self.read_raw('{"dosar-123":{"url":"{x:y},\\"","schimburi":1}}'.replace('\\"', ''))
+        self.assertEqual(out, 'OK dosar-123')
+
+    def test_refused_variants(self):
+        bad = {
+            'duplicate_label': '{"dosar-123":{"url":"%saaaa","schimburi":29},"dosar-123":{"url":"%sbbbb","schimburi":0}}' % (U, U),
+            'duplicate_field': '{"dosar-123":{"url":"%saaaa","schimburi":29,"schimburi":0}}' % U,
+            'case_duplicate_field': '{"dosar-123":{"url":"%saaaa","URL":"%sbbbb","schimburi":2}}' % (U, U),
+            'case_field_only': '{"dosar-123":{"URL":"%saaaa","SCHIMBURI":2}}' % U,
+            'case_duplicate_label': '{"dosar-123":{"url":"%saaaa","schimburi":1},"DOSAR-123":{"url":"%sbbbb","schimburi":0}}' % (U, U),
+            'json_escape_in_key': r'{"dosar-123":{"url":"%saaaa","schimburi":29},"dosar-123":{"url":"%sbbbb","schimburi":0}}' % (U, U),
+            'json_escape_in_value': r'{"dosar-123":{"url":"https:\/\/gemini.google.com\/app\/aaaa","schimburi":1}}',
+            'single_quotes': "{'dosar-123':{'url':'%saaaa','schimburi':29,'schimburi':0}}" % U,
+            'mixed_quotes': '{"dosar-123":{"url":"%saaaa","schimburi":29,\'schimburi\':0}}' % U,
+            'unquoted_keys': '{dosar-123:{url:"%saaaa",schimburi:1}}' % U,
+            'extra_field': '{"dosar-123":{"url":"%saaaa","schimburi":1,"x":1}}' % U,
+            'missing_field': '{"dosar-123":{"url":"%saaaa"}}' % U,
+            'fraction': '{"dosar-123":{"url":"%saaaa","schimburi":1.5}}' % U,
+            'exponent': '{"dosar-123":{"url":"%saaaa","schimburi":1e1}}' % U,
+            'negative': '{"dosar-123":{"url":"%saaaa","schimburi":-1}}' % U,
+            'over_30': '{"dosar-123":{"url":"%saaaa","schimburi":31}}' % U,
+            'string_count': '{"dosar-123":{"url":"%saaaa","schimburi":"1"}}' % U,
+            'array_row': '{"dosar-123":[1,2]}',
+            'nested_url': '{"dosar-123":{"url":{"a":1},"schimburi":1}}',
+            'empty_key': '{"":{"url":"%saaaa","schimburi":1}}' % U,
+            'trailing_text': '{"dosar-123":{"url":"%saaaa","schimburi":1}} x' % U,
+            'trailing_comma': '{"dosar-123":{"url":"%saaaa","schimburi":1},}' % U,
+            'two_objects': '{}{}',
+            'unclosed': '{"dosar-123":{"url":"%saaaa","schimburi":1}' % U,
+        }
+        for name, raw in bad.items():
+            with self.subTest(name=name):
+                self.assertTrue(self.read_raw(raw).startswith('ERR gem_'), name)
+
+    def test_writer_output_roundtrips_through_strict_reader(self):
+        script = r"""
+$ErrorActionPreference='Stop'
+$DATA='__ROOT__';$script:LockFs=New-Object object
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\run_paw.ps1',[ref]$tokens,[ref]$errors)
+foreach($name in @('GemEticheta','GemUrl','GemParseRegistru','CitesteGemLucrari','ScrieGemLucrari')){
+ $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true)
+ Invoke-Expression $fn.Extent.Text
+}
+function CaleSigura($path,$roots,$must){return $path}
+function AssertCdxSingleFile($path){}
+[void][IO.Directory]::CreateDirectory((Join-Path $DATA 'state'))
+$script:GemRegistry=Join-Path $DATA 'state\gem_lucrari.json'
+$w=@{'dosar-123'=@{url='https://gemini.google.com/app/aabb';schimburi=30};'alta-123'=@{url='https://gemini.google.com/app/1234';schimburi=0}}
+ScrieGemLucrari $w
+$r=CitesteGemLucrari
+(@($r.Keys)|Sort-Object|ForEach-Object{$_+'='+$r[$_].url+'#'+$r[$_].schimburi}) -join ','
+"""
+        out = Isolation().ps(script)
+        self.assertEqual(out, 'alta-123=https://gemini.google.com/app/1234#0,dosar-123=https://gemini.google.com/app/aabb#30')
 
     def test_launcher_refuses_other_conversation_for_continued_label(self):
         with self.assertRaises(AssertionError) as ctx:

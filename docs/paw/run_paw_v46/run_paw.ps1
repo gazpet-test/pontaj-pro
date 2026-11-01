@@ -571,35 +571,57 @@ function GemEticheta([string]$value) {
  return $value
 }
 function GemUrl([string]$value) {return $value -cmatch '\Ahttps://gemini\.google\.com/app/[0-9a-fA-F]+\z'}
-# r5 (Jakarinos r4 P2): ConvertFrom-Json pastreaza tacit ultima cheie duplicata; scanez textul brut si refuz orice cheie
-# repetata in acelasi obiect (eticheta sau camp) si orice cheie cu escape (- ar ocoli comparatia pe text)
-function GemCheiUnice([string]$raw) {
- $stack=New-Object 'System.Collections.Generic.Stack[object]'
- $i=0;$n=$raw.Length
- while($i -lt $n){
-  $c=$raw[$i]
-  if($c -eq [char]'{'){$stack.Push((New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)));$i++;continue}
-  if($c -eq [char]'}'){if($stack.Count -eq 0){throw 'gem_registru_invalid'};[void]$stack.Pop();$i++;continue}
-  if($c -eq [char]'"'){
-   $start=++$i;$esc=$false
-   while($true){
-    if($i -ge $n){throw 'gem_registru_invalid'}
-    $d=$raw[$i]
-    if($d -eq [char]'\'){$esc=$true;$i+=2;continue}
-    if($d -eq [char]'"'){break}
-    $i++
-   }
-   $key=$raw.Substring($start,$i-$start);$i++
-   $j=$i;while($j -lt $n -and [char]::IsWhiteSpace($raw[$j])){$j++}
-   if($j -lt $n -and $raw[$j] -eq [char]':'){
-    if($esc -or $stack.Count -eq 0){throw 'gem_registru_invalid'}
-    if(-not $stack.Peek().Add($key)){throw 'gem_registru_invalid'}
-   }
-   continue
+# r6 (Jakarinos r5 P2 + Copilot r5 P2-01): registrul NU mai trece prin ConvertFrom-Json (PS 5.1 accepta apostrofuri, chei
+# fara ghilimele si chei care difera doar prin majuscule, pastrand tacit ultima valoare). Parser strict, doar forma scrisa de
+# lansator: {"<eticheta>":{"url":"<sir>","schimburi":<0..30>},...}; orice alta sintaxa, escape, cheie repetata (fara diferenta de
+# majuscule), camp necunoscut sau text dupa obiect -> gem_registru_invalid.
+function GemParseRegistru([string]$raw) {
+ $script:GJs=$raw;$script:GJp=0
+ function GJws { while($script:GJp -lt $script:GJs.Length -and ([int]$script:GJs[$script:GJp] -in 32,9,13,10)){$script:GJp++} }
+ function GJexp([char]$c) { GJws; if($script:GJp -ge $script:GJs.Length -or $script:GJs[$script:GJp] -cne $c){throw 'gem_registru_invalid'}; $script:GJp++ }
+ function GJpeek { GJws; if($script:GJp -ge $script:GJs.Length){throw 'gem_registru_invalid'}; return [string]$script:GJs[$script:GJp] }
+ function GJstr {
+  GJexp ([char]34); $a=$script:GJp
+  while($true){
+   if($script:GJp -ge $script:GJs.Length){throw 'gem_registru_invalid'}
+   $c=[int]$script:GJs[$script:GJp]
+   if($c -eq 34){break}
+   if($c -eq 92 -or $c -lt 32 -or $c -gt 126){throw 'gem_registru_invalid'}
+   $script:GJp++
   }
-  $i++
+  $v=$script:GJs.Substring($a,$script:GJp-$a);$script:GJp++;return $v
  }
- if($stack.Count -ne 0){throw 'gem_registru_invalid'}
+ function GJint {
+  GJws; $a=$script:GJp
+  while($script:GJp -lt $script:GJs.Length -and [int]$script:GJs[$script:GJp] -ge 48 -and [int]$script:GJs[$script:GJp] -le 57){$script:GJp++}
+  $len=$script:GJp-$a; if($len -lt 1 -or $len -gt 2){throw 'gem_registru_invalid'}
+  return [int]$script:GJs.Substring($a,$len)
+ }
+ $rows=@{}
+ GJexp ([char]'{')
+ if((GJpeek) -cne '}'){
+  while($true){
+   $label=GemEticheta (GJstr)
+   if($rows.ContainsKey($label)){throw 'gem_registru_invalid'}
+   GJexp ([char]':');GJexp ([char]'{')
+   $row=@{}
+   while($true){
+    $k=GJstr
+    if($row.ContainsKey($k)){throw 'gem_registru_invalid'}
+    GJexp ([char]':')
+    if($k -ceq 'url'){$row['url']=GJstr} elseif($k -ceq 'schimburi'){$row['schimburi']=GJint} else {throw 'gem_registru_invalid'}
+    if((GJpeek) -ceq ','){$script:GJp++;continue}
+    GJexp ([char]'}');break
+   }
+   if(-not $row.ContainsKey('url') -or -not $row.ContainsKey('schimburi') -or $row['schimburi'] -gt 30){throw 'gem_registru_invalid'}
+   $rows[$label]=@{url=$row['url'];schimburi=$row['schimburi']}
+   if((GJpeek) -ceq ','){$script:GJp++;continue}
+   break
+  }
+ }
+ GJexp ([char]'}')
+ GJws; if($script:GJp -ne $script:GJs.Length){throw 'gem_registru_invalid'}
+ return ,$rows
 }
 function CitesteGemLucrari {
  if(-not $script:LockFs){throw 'gem_lock_lipsa'}
@@ -609,14 +631,7 @@ function CitesteGemLucrari {
   AssertCdxSingleFile $script:GemRegistry
   $raw=Get-Content -LiteralPath $script:GemRegistry -Raw -Encoding UTF8
   if($raw.Trim() -notmatch '^\{'){throw 'gem_registru_invalid'}
-  GemCheiUnice $raw
-  $obj=ConvertFrom-Json -InputObject $raw -ErrorAction Stop
-  foreach($prop in $obj.PSObject.Properties){
-   [void](GemEticheta $prop.Name)
-   $row=$prop.Value
-   if($null -eq $row -or $row -isnot [Management.Automation.PSCustomObject] -or @($row.PSObject.Properties).Count -ne 2 -or $row.url -isnot [string] -or $row.schimburi -isnot [int] -or $row.schimburi -lt 0 -or $row.schimburi -gt 30){throw 'gem_registru_invalid'}
-   $rows[$prop.Name]=@{url=$row.url;schimburi=$row.schimburi}
-  }
+  $rows=GemParseRegistru $raw
  }
  return ,$rows
 }

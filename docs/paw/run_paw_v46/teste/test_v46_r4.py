@@ -59,7 +59,7 @@ $script:GemLabel='__LABEL__';$script:events=@()
 $T=@{exe='fake';timeout=120};$BriefFull='fake.md';$GEMPW='fake.py'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile('__SOURCE__\run_paw.ps1',[ref]$tokens,[ref]$errors)
-foreach($name in @('GemEticheta','GemUrl','GemCheiUnice','CitesteGemLucrari','ScrieGemLucrari')){
+foreach($name in @('GemEticheta','GemUrl','GemParseRegistru','CitesteGemLucrari','ScrieGemLucrari')){
  $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true)
  Invoke-Expression $fn.Extent.Text
 }

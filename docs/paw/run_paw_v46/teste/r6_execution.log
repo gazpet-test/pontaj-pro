@@ -160,14 +160,14 @@ test_new_label_saved_after_response (teste.test_v46_r4.Registry.test_new_label_s
 test_no_label_fresh_and_no_save (teste.test_v46_r4.Registry.test_no_label_fresh_and_no_save) ... ok
 test_partial_response_retires_context (teste.test_v46_r4.Registry.test_partial_response_retires_context) ... ok
 test_rotation_at_30 (teste.test_v46_r4.Registry.test_rotation_at_30) ... ok
-test_duplicate_field_refused (teste.test_v46_r5.RegistryR5.test_duplicate_field_refused) ... ok
-test_duplicate_label_refused (teste.test_v46_r5.RegistryR5.test_duplicate_label_refused) ... ok
-test_escaped_duplicate_label_refused (teste.test_v46_r5.RegistryR5.test_escaped_duplicate_label_refused) ... ok
-test_extra_field_refused (teste.test_v46_r5.RegistryR5.test_extra_field_refused) ... ok
+test_empty_registry_accepted (teste.test_v46_r5.RegistryR5.test_empty_registry_accepted) ... ok
 test_launcher_refuses_other_conversation_for_continued_label (teste.test_v46_r5.RegistryR5.test_launcher_refuses_other_conversation_for_continued_label) ... ok
 test_launcher_same_conversation_saved (teste.test_v46_r5.RegistryR5.test_launcher_same_conversation_saved) ... ok
-test_string_with_braces_and_colon_not_a_key (teste.test_v46_r5.RegistryR5.test_string_with_braces_and_colon_not_a_key) ... ok
+test_refused_variants (teste.test_v46_r5.RegistryR5.test_refused_variants) ... ok
 test_valid_registry_accepted (teste.test_v46_r5.RegistryR5.test_valid_registry_accepted) ... ok
+test_value_with_braces_and_colon_is_just_a_string (teste.test_v46_r5.RegistryR5.test_value_with_braces_and_colon_is_just_a_string) ... ok
+test_whitespace_and_field_order_accepted (teste.test_v46_r5.RegistryR5.test_whitespace_and_field_order_accepted) ... ok
+test_writer_output_roundtrips_through_strict_reader (teste.test_v46_r5.RegistryR5.test_writer_output_roundtrips_through_strict_reader) ... ok
 test_continued_chat_must_stay_same (teste.test_v46_r5.UrlFinal.test_continued_chat_must_stay_same) ... ok
 test_fake_marker_in_answer_with_tab_still_on_app_fails (teste.test_v46_r5.UrlFinal.test_fake_marker_in_answer_with_tab_still_on_app_fails) ... ok
 test_fake_marker_is_followed_by_real_line (teste.test_v46_r5.UrlFinal.test_fake_marker_is_followed_by_real_line) ... ok
@@ -185,6 +185,6 @@ test_residual_and_engine_plans (teste.test_cdx_r6.R6.test_residual_and_engine_pl
 test_all_cases (teste.test_cdx_security.Security.test_all_cases) ... ok
 
 ----------------------------------------------------------------------
-Ran 185 tests in 124.880s
+Ran 185 tests in 141.824s
 
 OK

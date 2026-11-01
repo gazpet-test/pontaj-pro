@@ -1,3 +1,18 @@
+# Paw v4.6 - runda 6 (01.11.2026, Claude chat, dupa Jakarinos r5 NO-GO + Copilot r5 NO-GO, ambele doar pe P2)
+
+Stare: 185/185 executii de test Paw (teste/run_r6.py, RESULTATS_r6.json, r6_execution.log). P1 r4 confirmat inchis de ambii in r5.
+SHA256 SHA256.json (manifest de aprobat la instalare): 8F769EE9E202A69333A6F26A8E74CF254D84D6F262C15388B1DE76CB4EDE1FB0.
+
+- P2 (Jak r5: PS 5.1 accepta apostrofuri si chei fara ghilimele; Copilot r5 P2-01: chei care difera doar prin majuscule):
+  registrul nu mai trece deloc prin ConvertFrom-Json. run_paw.ps1 GemParseRegistru = parser strict doar pentru forma scrisa de
+  lansator {"<eticheta>":{"url":"<sir ASCII fara backslash>","schimburi":<1-2 cifre, max 30>}}; whitespace doar spatiu/tab/CR/LF;
+  cheile se compara fara diferenta de majuscule (hashtable PS) si sunt apoi cerute exact (url/schimburi, eticheta prin GemEticheta);
+  orice escape, apostrof, cheie fara ghilimele, camp in plus/lipsa, numar fractionar/exponent/negativ/sir, array, obiect imbricat,
+  virgula finala sau text dupa obiect -> gem_registru_invalid. GemCheiUnice (r5) eliminat.
+- Copilot r5 P2-02 (testul de escape decodat de Python): test_refused_variants foloseste sir raw r'...-...' si acopera si
+  escape in valoare, apostrofuri, chei fara ghilimele, url/URL, schimburi/SCHIMBURI, DOSAR-123, plus proba dus-intors
+  ScrieGemLucrari -> CitesteGemLucrari (test_writer_output_roundtrips_through_strict_reader).
+
 # Paw v4.6 - runda 5 (01.11.2026, Claude chat, dupa Jakarinos r4 NO-GO)
 
 Stare: 185/185 executii de test Paw (teste/run_r5.py, RESULTATS_r5.json, r5_execution.log).
