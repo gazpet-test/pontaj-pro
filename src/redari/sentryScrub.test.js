@@ -547,6 +547,22 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = { message: 'x', extra: { nota: JSON.stringify({ tokenuri_cumparate: 12, hash, alt: { tokens: [1, 2] } }) } }
     expect(scrubSentryEvent(ok)).toEqual({ message: 'x', extra: { nota: JSON.stringify({ tokenuri_cumparate: 12, hash, alt: { tokens: [1, 2] } }) } })
   })
+  it('r30 P1-1 (Jakarinos): chei duplicate scrise cu escape Unicode (`"to\\u006ben"`) sau mixte - detectate pe TOATE cheile', () => {
+    const u = '"to\\u006ben"'
+    expect(u.includes('\\u006b')).toBe(true)
+    for (const payload of [
+      '{' + u + ':{"value":"prefix ' + T + '"},' + u + ':null}',
+      '{' + u + ':{"value":"prefix ' + T + '"},"token":null}',
+      '{"token":{"value":"prefix ' + T + '"},' + u + ':null}',
+      '{"a":1,"x":{"\\u0070_token":["' + T + '"]},"x":{}}',
+    ]) {
+      for (const ev of [{ extra: { nota: payload } }, { message: 'ref_' + T, request: { url: '/intern', data: payload } }]) {
+        const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
+      }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { nota: payload } })
+      expect(JSON.stringify(sp)).not.toContain(T)
+    }
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

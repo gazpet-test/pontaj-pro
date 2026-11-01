@@ -131,15 +131,15 @@ export function redacteazaText(s, tokenuriGlobale = null) {
 // r10 P1-1 (Jakarinos): `sensibil` = un STRĂMOȘ e o cheie de token (p_token, token*, raspuns*) — descendenții ei (liste `[null, T]`,
 // obiecte `{ value: T }`) se tratează ca valori de token, structural, nu prin regex pe serializare.
 const cheieSensibila = (cheie) => typeof cheie === 'string' && formele(cheie).some(f => /token|raspuns/i.test(f))
-// numără cheile sensibile dintr-o structură parsată (toate adâncimile, iterativ, fără cicluri — JSON.parse nu produce cicluri)
-const numaraCheiSensibile = (radacina) => {
+// numără TOATE cheile dintr-o structură parsată (toate adâncimile, iterativ; JSON.parse nu produce cicluri) — pentru detectarea duplicatelor
+const numaraChei = (radacina) => {
   let n = 0
   const stiva = [radacina]
   while (stiva.length) {
     const o = stiva.pop()
     if (!o || typeof o !== 'object') continue
     if (Array.isArray(o)) { for (const v of o) if (v && typeof v === 'object') stiva.push(v); continue }
-    for (const k of Object.keys(o)) { if (cheieSensibila(k)) n++; const v = o[k]; if (v && typeof v === 'object') stiva.push(v) }
+    for (const k of Object.keys(o)) { n++; const v = o[k]; if (v && typeof v === 'object') stiva.push(v) }
   }
   return n
 }
@@ -211,8 +211,10 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
       // Jakarinos r29 P1-1: CHEI DUPLICATE — JSON.parse păstrează doar ultima valoare (`{"token":{"value":T},"token":null}`), deci
       // structura pierde valoarea sensibilă, dar textul o are. Dacă textul are mai multe chei sensibile decât structura ⇒ duplicate ⇒
       // tratăm textul conservator (secvență ≥43 prezentă ⇒ refuzat)
-      const cheiText = [...json.matchAll(/"((?:[^"\\]|\\.)*)"\s*:/g)].filter(m => cheieSensibila(m[1])).length
-      if (cheiText > numaraCheiSensibile(obj) && RX_RUN43.test(json)) tokenuri.refuzat = true
+      // Jakarinos r30 P1-1: numele din text pot avea escape-uri (`"token"`) — nu mai comparăm chei SENSIBILE, ci TOATE cheile:
+      // text > structură ⇔ există duplicate undeva (indiferent de nume) ⇒ conservator
+      const cheiText = [...json.matchAll(/"(?:[^"\\]|\\.)*"\s*:/g)].length
+      if (cheiText > numaraChei(obj) && RX_RUN43.test(json)) tokenuri.refuzat = true
     }
   }
   // Jakarinos r13 P1-1: parsarea JSON NU depinde de indiciul textual (cheia `token` poate fi `"to\u006ben"` în text) — orice șir
