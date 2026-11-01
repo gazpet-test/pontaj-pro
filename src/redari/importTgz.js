@@ -19,6 +19,8 @@ export const PAGINA = 1000      // mărimea paginii la .range() (limita implicit
 export const RPC_REZERVA_NUMERE = 'fn_red_rezerva_numere_parcele'
 export const MOTIV_AMBIGUU = 'identitate ambiguă (aceeași poziție HG / cadastru pe rânduri diferite)'
 export const MOTIV_CONTRADICTORIU = 'identitate contradictorie sub același Nr.Crt.'
+// câmpurile consolidate pe grupul Nr.Crt. x (P1-2 r7): [câmp, eticheta din detaliu]
+const CAMPURI_GRUP = [['poz_hg', 'HG'], ['nr_cadastral', 'cadastru'], ['tarla', 'tarla'], ['suprafata_temporara_mp', 'suprafață'], ['categoria_folosinta', 'categorie'], ['regim', 'regim']]
 export const MAX_NUMAR_PARCELA = 9999   // id_parcela are fix 4 cifre
 const MAX_RAND_ANTET = 30       // căutăm antetul în primele 30 de rânduri
 
@@ -184,7 +186,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
   const parcelaDupaCheieSursa = new Map()  // cheie_sursa validă → prima parcelă cu ea (pentru detectarea ambiguității)
   const detinatorDupaCheie = new Map()     // 'HUS:7|POPESCU ION' → detinator
   const statUat = uat3 => (statistici.pe_uat[uat3] ??= { parcele: 0, detinatori: 0, dubluri: 0, neidentificati: 0, fara_cheie: 0, ambigue: 0, erori: 0 })
-  const noteazaObs = (p, nota) => { if (!p.observatii) p.observatii = nota; else if (!p.observatii.includes(nota)) p.observatii += `; ${nota}` }
+  const noteazaObs = (p, nota) => { if (!p.note.includes(nota)) p.note.push(nota) }   // notele intră în observatii după consolidare
 
   const celula = (r, c) => { if (c == null) return null; const cel = sheet[XLSX.utils.encode_cell({ r, c })]; return cel ? cel.v : null }
 
@@ -208,19 +210,15 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
       erori.push({ rand: randExcel, motiv: `Tronson lipsă sau invalid pentru UAT ${uat.uat3}`, uat: uatBrut, nume: numeBrut }); s.erori++; continue
     }
 
-    // parcela: cheiată pe (uat3, Nr.Crt. x); prima apariție îi dă atributele
+    // parcela: cheiată pe (uat3, Nr.Crt. x). Atributele și cheie_sursa se CONSOLIDEAZĂ pe tot grupul după buclă (P1-2 r7):
+    // valoarea unui câmp = unica valoare nevidă din grup; mai multe valori distincte ⇒ parcelă ambiguă.
     const cheieP = `${uat.uat3}:${nrCrt.x}`
-    const pozHg = text(celula(r, col.poz_hg)) || null
-    const nrCad = text(celula(r, col.nr_cadastral)) || null
-    const tarla = text(celula(r, col.tarla)) || null
     let parcela = parcelaDupaCheie.get(cheieP)
     if (!parcela) {
-      const cheieS = cheieSursa(uat.uat3, pozHg, nrCad, tarla)
-      const regim = text(celula(r, col.regim))
       nrProvizoriu[uat.uat3] = (nrProvizoriu[uat.uat3] ?? 0) + 1
       parcela = {
         cheie: cheieP,
-        cheie_sursa: cheieS,
+        cheie_sursa: null,
         ambigua: false,
         motiv_ambiguitate: null,
         nr_crt: nrCrt.x,
@@ -229,32 +227,27 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
         id_parcela: idParcelaProvizoriu(tronson, uat.uat3),
         nr_provizoriu: nrProvizoriu[uat.uat3],
         tronson,
-        poz_hg: pozHg,
-        suprafata_temporara_mp: numar(celula(r, col.suprafata)),
-        categoria_folosinta: text(celula(r, col.categorie)) || null,
-        tarla,
-        nr_cadastral: nrCad,
-        observatii: regim ? `Regim juridic: ${regim}` : null,
+        poz_hg: null, suprafata_temporara_mp: null, categoria_folosinta: null, tarla: null, nr_cadastral: null, observatii: null,
         rand: randExcel,
         nr_detinatori: 0,
         uat_text: uatBrut,
-        identitate: { poz_hg: new Set(), nr_cadastral: new Set(), tarla: new Set() },   // valorile NEVIDE normalizate întâlnite în grupul Nr.Crt. x (P1-2)
-        randuri: [],                                                                    // TOATE rândurile grupului, inclusiv dublurile de nume (P2-2)
+        note: [],                                                                      // note (ex. județ diferit) → observatii
+        valori: Object.fromEntries(CAMPURI_GRUP.map(([camp]) => [camp, new Map()])),   // camp → Map(normalizat → prima valoare originală) din tot grupul
+        randuri: [],                                                                   // TOATE rândurile grupului, inclusiv dublurile de nume (P2-2)
       }
       parcelaDupaCheie.set(cheieP, parcela); parcele.push(parcela); s.parcele++
-      if (!cheieS) statistici.parcele_fara_cheie++
-      else if (parcelaDupaCheieSursa.has(cheieS)) {
-        // P1-1: alt Nr.Crt. cu aceeași identitate validă → ambele ambigue, niciuna nu se unește sau se comite
-        const prima = parcelaDupaCheieSursa.get(cheieS)
-        if (!prima.ambigua) { prima.ambigua = true; prima.motiv_ambiguitate = MOTIV_AMBIGUU; statistici.parcele_ambigue++; erori.push({ rand: prima.rand, nr_crt: prima.nr_crt, motiv: MOTIV_AMBIGUU, cheie_sursa: cheieS, uat: uatBrut }) }
-        parcela.ambigua = true; parcela.motiv_ambiguitate = MOTIV_AMBIGUU; statistici.parcele_ambigue++
-        erori.push({ rand: randExcel, nr_crt: nrCrt.x, motiv: MOTIV_AMBIGUU, cheie_sursa: cheieS, uat: uatBrut, nume: numeBrut })
-      } else parcelaDupaCheieSursa.set(cheieS, parcela)
     }
-    // identitatea pe TOT grupul de rânduri cu același Nr.Crt. x: câmpurile goale (moștenire de la x/1) nu contează
-    if (pozHg) parcela.identitate.poz_hg.add(normalizeazaNume(pozHg))
-    if (nrCad) parcela.identitate.nr_cadastral.add(normalizeazaNume(nrCad))
-    if (tarla) parcela.identitate.tarla.add(normalizeazaNume(tarla))
+    // valorile NEVIDE ale grupului, per câmp (goale = moștenire de la x/1, nu contează)
+    const brute = {
+      poz_hg: text(celula(r, col.poz_hg)), nr_cadastral: text(celula(r, col.nr_cadastral)), tarla: text(celula(r, col.tarla)),
+      suprafata_temporara_mp: numar(celula(r, col.suprafata)), categoria_folosinta: text(celula(r, col.categorie)), regim: text(celula(r, col.regim)),
+    }
+    for (const [camp] of CAMPURI_GRUP) {
+      const v = brute[camp]
+      if (v == null || v === '') continue
+      const k = typeof v === 'number' ? String(v) : normalizeazaNume(v)
+      if (!parcela.valori[camp].has(k)) parcela.valori[camp].set(k, v)
+    }
     parcela.randuri.push({ rand: randExcel, nr_crt: text(nrCrtBrut), nume: numeBrut })
 
     // deținătorul
@@ -302,15 +295,32 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
     const p = parcelaDupaCheie.get(d.cheie_parcela)
     if (p.nr_detinatori > 1 && d.calitate === 'proprietar') d.calitate = 'coproprietar'
   }
-  // P1-2: contradicție pe grup — vreun câmp de identitate cu >1 valori nevide distincte în rândurile aceluiași Nr.Crt. x
-  const CAMPURI_IDENTITATE = [['poz_hg', 'HG'], ['nr_cadastral', 'cadastru'], ['tarla', 'tarla']]
+  // P1-2 (r7): consolidarea pe grup — câmpul ia unica valoare nevidă (prima apariție ca formă originală); >1 valori distincte ⇒ contradicție
   for (const p of parcele) {
-    const contradictorii = CAMPURI_IDENTITATE.filter(([camp]) => p.identitate[camp].size > 1)
+    const contradictorii = []
+    for (const [camp, eticheta] of CAMPURI_GRUP) {
+      const m = p.valori[camp]
+      const valoare = m.size ? m.values().next().value : null
+      if (camp === 'regim') p.observatii = [valoare ? `Regim juridic: ${valoare}` : null, ...p.note].filter(Boolean).join('; ') || null
+      else p[camp] = valoare
+      if (m.size > 1) contradictorii.push(`${eticheta}: ${[...m.keys()].map(v => `„${v}”`).join(' / ')}`)
+    }
+    p.cheie_sursa = cheieSursa(p.uat3, p.poz_hg, p.nr_cadastral, p.tarla)   // DUPĂ consolidare — independent de ordinea rândurilor
+    if (!p.cheie_sursa) statistici.parcele_fara_cheie++
     if (!contradictorii.length) continue
-    const detaliu = contradictorii.map(([camp, eticheta]) => `${eticheta}: ${[...p.identitate[camp]].map(v => `„${v}”`).join(' / ')}`).join('; ')
-    if (!p.ambigua) { p.ambigua = true; p.motiv_ambiguitate = MOTIV_CONTRADICTORIU; statistici.parcele_ambigue++ }
-    p.detaliu_ambiguitate = detaliu
+    const detaliu = contradictorii.join('; ')
+    p.ambigua = true; p.motiv_ambiguitate = MOTIV_CONTRADICTORIU; p.detaliu_ambiguitate = detaliu; statistici.parcele_ambigue++
     for (const rnd of p.randuri) erori.push({ rand: rnd.rand, nr_crt: p.nr_crt, nume: rnd.nume, motiv: MOTIV_CONTRADICTORIU, cheie_sursa: p.cheie_sursa, uat: p.uat_text, detaliu })
+  }
+  // P1-1: coliziune între grupuri — același cheie_sursa consolidat pe Nr.Crt. diferite ⇒ ambele grupuri ambigue (nu se unesc, nu se comit)
+  const grupuriDupaSursa = new Map()
+  for (const p of parcele) if (p.cheie_sursa) { if (!grupuriDupaSursa.has(p.cheie_sursa)) grupuriDupaSursa.set(p.cheie_sursa, []); grupuriDupaSursa.get(p.cheie_sursa).push(p) }
+  for (const [cheieS, grup] of grupuriDupaSursa) {
+    if (grup.length < 2) continue
+    for (const p of grup) {
+      if (!p.ambigua) { p.ambigua = true; p.motiv_ambiguitate = MOTIV_AMBIGUU; statistici.parcele_ambigue++ }
+      for (const rnd of p.randuri) erori.push({ rand: rnd.rand, nr_crt: p.nr_crt, nume: rnd.nume, motiv: MOTIV_AMBIGUU, cheie_sursa: cheieS, uat: p.uat_text })
+    }
   }
   erori.sort((a, b) => (a.rand ?? -1) - (b.rand ?? -1))
 
@@ -325,7 +335,15 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
     const p = parcelaDupaCheie.get(d.cheie_parcela)
     if (!p.ambigua && !p.cheie_sursa) { fara_cheie.push({ rand: d.rand, nr_crt: d.nr_crt, nume: d.nume, cheie_parcela: d.cheie_parcela }); statUat(p.uat3).fara_cheie++ }
   }
-  for (const p of parcele) { delete p.identitate; delete p.uat_text }   // structuri de lucru, nu fac parte din preview
+  for (const p of parcele) { delete p.valori; delete p.uat_text; delete p.note }   // structuri de lucru, nu fac parte din preview
+
+  // P2-1 (r7): ce se va importa efectiv — eligibile = cu cheie_sursa, neambigue; deținătorii deduplicați ai lor; câte un contact per deținător
+  const eligibile = new Set(parcele.filter(p => p.cheie_sursa && !p.ambigua).map(p => p.cheie))
+  const detinatoriEligibili = detinatori.filter(d => eligibile.has(d.cheie_parcela))
+  const cheiEligibile = new Set(detinatoriEligibili.map(d => d.cheie))
+  statistici.parcele_de_importat = eligibile.size
+  statistici.detinatori_de_importat = detinatoriEligibili.length
+  statistici.contacte_de_importat = contacte.filter(c => cheiEligibile.has(c.cheie_detinator)).length
 
   statistici.parcele = parcele.length; statistici.detinatori = detinatori.length; statistici.contacte = contacte.length
   statistici.dubluri = dubluri.length; statistici.neidentificati = neidentificati.length; statistici.erori = erori.length
