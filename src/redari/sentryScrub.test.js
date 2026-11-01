@@ -373,6 +373,20 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = { message: 'x', extra: { payload: '{"tokenuri_cumparate":"1\\"2"', continut_hash: 'a'.repeat(64) } }
     expect(scrubSentryEvent(ok)?.message).toBe('x')
   })
+  it('r18 P1-1 (Jakarinos): cheie JSON cu punct/spatiu/alte caractere (`token.value`) in JSON trunchiat ramane indiciu', () => {
+    for (const cheie of ['token.value', 'token value', 'x-token/y', 'tok\u0065n', 'mytoken[0]']) {
+      const body = '{"' + cheie + '":"prefix ' + T
+      for (const ev of [
+        { message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body } },
+        { message: 'ref_' + T, extra: { payload: body } },
+      ]) { const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true) }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'ref_' + T, data: { payload: body } })
+      expect(JSON.stringify(sp)).not.toContain(T)
+    }
+    // cheie cu ghilimea escapata DUPA „token” (cheia decodata contine „token”)
+    const r = scrubSentryEvent({ message: 'ref_' + T, extra: { payload: '{"token\\"x":"' + T } })
+    expect(r === null || !JSON.stringify(r).includes(T)).toBe(true)
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
