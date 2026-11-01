@@ -296,6 +296,21 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body } })).toBeNull()
     expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: JSON.stringify({ padding: 'x'.repeat(200000), token: [null, T] }) } })).toBeNull()
   })
+  it('r14 P1-1 (Jakarinos + Copilot r8): JSON refuzat in afara corpului (extra, span.data) face evenimentul/spanul purtator', () => {
+    expect(scrubSentryEvent({ message: 'ref_' + T, extra: { payload: '{"token":[null,"' + T + '"' } })).toBeNull()
+    expect(scrubSentryEvent({ message: 'ref_' + T, extra: { payload: JSON.stringify({ padding: 'x'.repeat(200000), token: [null, T] }) } })).toBeNull()
+    const sp = scrubSentrySpan({ span_id: 's', trace_id: 't', description: 'ref_' + T, data: { payload: '{"token":[null,"' + T + '"' } })
+    expect(JSON.stringify(sp)).not.toContain(T)
+  })
+  it('r14 P1-2 (Jakarinos): contextul sensibil trece din cheie in JSON-ul parsat din valoarea-sir', () => {
+    const r1 = scrubSentryEvent({ extra: { token: JSON.stringify({ nested: { value: T } }) } })
+    expect(r1 === null || !JSON.stringify(r1).includes(T)).toBe(true)
+    const r2 = scrubSentryEvent({ message: 'x', contexts: { p_token: JSON.stringify([null, { a: [T] }]) } })
+    expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
+    // sub cheie de token, un JSON prea mare/neparcurs e refuzat chiar fara cuvantul token in el
+    const r3 = scrubSentryEvent({ message: 'ref_' + T, extra: { token: JSON.stringify({ padding: 'x'.repeat(200000), v: [null, T] }) } })
+    expect(r3).toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

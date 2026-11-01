@@ -90,10 +90,10 @@ export function redacteazaText(s, tokenuriGlobale = null) {
 const cheieSensibila = (cheie) => typeof cheie === 'string' && formele(cheie).some(f => /token|raspuns/i.test(f))
 // Copilot FE r5 P1-01: un obiect referit de două ori (o dată sub cheie obișnuită, o dată sub p_token) se parcurge DIN NOU când e atins
 // pe calea sensibilă — vizitatele țin nivelul (false → true), deci fiecare obiect e parcurs cel mult de două ori (ciclurile se termină).
-function parcurge(radacina, fn, fnCheie = null) {
+function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
   if (radacina === null || typeof radacina !== 'object') return radacina
   const vizitate = new WeakMap()   // obj → sensibil cu care a fost parcurs
-  const stiva = [[radacina, false]]
+  const stiva = [[radacina, sensibilInitial]]
   while (stiva.length) {
     const [obj, sensibil] = stiva.pop()
     if (obj === null || typeof obj !== 'object') continue
@@ -122,7 +122,8 @@ function parcurge(radacina, fn, fnCheie = null) {
 }
 
 // (2a) tokenurile candidate din întreg evenimentul
-export function colecteazaTokenuriEveniment(event, adancime = 0) {
+// Jakarinos r14 P1-2: `sensibil` = structura asta e descendenta unei chei de token (si JSON-ul parsat dintr-o valoare-sir mosteneste contextul)
+export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = false) {
   const tokenuri = new Set()
   // r9 P1-1 (Jakarinos): indiciul se caută în TOATE formele decodate (o cheie complet %-codificată, ex. `%70%5f%74%6f%6b%65%6e`,
   // nu arată „suspect” brut), iar colectarea se face și pe evenimentul SERIALIZAT întreg — așa prindem și valorile din liste
@@ -131,34 +132,34 @@ export function colecteazaTokenuriEveniment(event, adancime = 0) {
   // se parsează (în fiecare formă decodată) și se parcurge STRUCTURAL, ca orice obiect — cheile de token își protejează descendenții
   // Copilot FE r7 P2-01: un JSON pe care NU-l putem parcurge (prea mare, prea adânc, invalid) dar care pomenește token/raspuns
   // marchează setul ca `refuzat` → evenimentul devine „purtător” (orice secvență ≥43 rămasă ⇒ null) — nu ne bazăm pe limite
-  const dinJson = (f) => {
+  const dinJson = (f, sensibilSir = false) => {
     if (!/^\s*[[{]/.test(f)) return
     // Jakarinos r13 P1-1: cheia poate fi scrisă cu escape Unicode (`"to\u006ben"`) — un JSON neparcurs cu escape-uri e și el suspect
-    const refuza = () => { if (/token|raspuns|\\u[0-9a-f]{4}/i.test(f)) tokenuri.refuzat = true }
+    const refuza = () => { if (sensibilSir || /token|raspuns|\\u[0-9a-f]{4}/i.test(f)) tokenuri.refuzat = true }
     if (adancime >= 4 || f.length > 200000) return refuza()   // adâncime limitată: JSON în JSON în JSON…
     let obj
     try { obj = JSON.parse(f) } catch { return refuza() }
     if (obj && typeof obj === 'object') {
-      const sub = colecteazaTokenuriEveniment(obj, adancime + 1)
+      const sub = colecteazaTokenuriEveniment(obj, adancime + 1, sensibilSir)
       for (const t of sub) tokenuri.add(t)
       if (sub.refuzat) tokenuri.refuzat = true
     }
   }
   // Jakarinos r13 P1-1: parsarea JSON NU depinde de indiciul textual (cheia `token` poate fi `"to\u006ben"` în text) — orice șir
   // care începe cu `{`/`[`, în oricare formă decodată, se parsează și se parcurge structural
-  const dinText = (s, siJson = true) => {
+  const dinText = (s, siJson = true, sensibilSir = false) => {
     if (typeof s !== 'string') return
     const forme = formele(s)
     if (forme.some(pareSuspect)) for (const f of forme) colecteazaTokenuri(f, tokenuri)
-    if (siJson) for (const f of forme) dinJson(f)
+    if (siJson) for (const f of forme) dinJson(f, sensibilSir)
   }
-  parcurge(event, (_obj, cheie, v, sensibil) => {
+  parcurge(event, (_obj, cheie, v, sensibilAici) => {
     if (typeof v === 'string') {
-      if ((sensibil || cheieDeToken(cheie)) && valoareDeToken(v)) for (const f of formele(v)) if (RX_T43.test(f)) tokenuri.add(f)
-      dinText(v)
+      if ((sensibilAici || cheieDeToken(cheie)) && valoareDeToken(v)) for (const f of formele(v)) if (RX_T43.test(f)) tokenuri.add(f)
+      dinText(v, true, sensibilAici || cheieDeToken(cheie))
     }
     return v
-  }, (cheie) => { dinText(cheie); return cheie })
+  }, (cheie) => { dinText(cheie); return cheie }, sensibil)
   dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
@@ -225,7 +226,7 @@ export function scrubSentrySpan(span) {
     if (esteDinFormularulPublic({ transaction: span.description, request: { url: span.data?.['sentry.transaction'] ?? span.data?.url } })) return golit()
     const tokenuri = colecteazaTokenuriEveniment(span)
     redacteazaAdanc(span, tokenuri)
-    if (maiScurgeToken(span, tokenuri)) return golit()
+    if (maiScurgeToken(span, tokenuri, tokenuri.size > 0 || !!tokenuri.refuzat)) return golit()   // r14 P1-1: si spanurile tin cont de `refuzat`
     return span
   } catch {
     try { return { span_id: span?.span_id, trace_id: span?.trace_id, start_timestamp: span?.start_timestamp, timestamp: span?.timestamp, description: '[redactat]', data: {} } } catch { return { description: '[redactat]', data: {} } }
@@ -238,7 +239,8 @@ export function scrubSentryEvent(event) {
     if (event === null || typeof event !== 'object') return null
     if (esteDinFormularulPublic(event)) return null
     const tokenuri = colecteazaTokenuriEveniment(event)   // ÎNAINTE de ștergerea corpului — colectează și din request.data/body
-    let purtator = tokenuri.size > 0
+    // r14 P1-1 (Jakarinos + Copilot r8): `refuzat` (JSON suspect neparcurs, oriunde in eveniment, nu doar in corp) face evenimentul purtator
+    let purtator = tokenuri.size > 0 || !!tokenuri.refuzat
     const req = event.request
     if (req && typeof req === 'object' && (req.data !== undefined || req.body !== undefined)) {
       const corp = serializeaza({ data: req.data, body: req.body })
