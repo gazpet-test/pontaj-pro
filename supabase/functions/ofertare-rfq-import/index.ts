@@ -42,13 +42,15 @@ async function autorizat(req: Request, supabase: any, rfqId: number | null): Pro
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
-  const { data: prof } = await supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle()
-  if (prof?.is_owner) return null
-  if (rfqId) {
-    const { data: rfq } = await supabase.from('ofertare_rfq').select('licitatie_id').eq('id', rfqId).maybeSingle()
-    if (rfq?.licitatie_id && await poateCheltui(supabase, rfq.licitatie_id, uid)) return null
-  }
-  return 'Citirea ofertelor o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
+  const refuz = 'Citirea ofertelor o pornește doar ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).'
+  if (!rfqId) return refuz
+  const { data: rfq, error: eRfq } = await supabase.from('ofertare_rfq').select('licitatie_id').eq('id', rfqId).maybeSingle()
+  if (eRfq || !rfq) return refuz
+  // review #908 r1 Copilot P2-01: cererea legată de o licitație trece DOAR prin poarta unică (owner inclus, refuz la RPC căzut);
+  // cererea de ofertă fără licitație nu are responsabil — o pornește doar ownerul (singura ramură în afara RPC-ului, fail-closed)
+  if (rfq.licitatie_id) return (await poateCheltui(supabase, rfq.licitatie_id, uid)) ? null : refuz
+  const { data: prof, error: eProf } = await supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle()
+  return !eProf && prof?.is_owner === true ? null : refuz
 }
 
 Deno.serve(async (req: Request) => {

@@ -1,5 +1,8 @@
--- REVENIRE 20261124a_ofertare_poarta_cheltuiala (armată; doar la cererea lui Răzvan). ÎNTÂI se redeployează cele 11 edge-uri ofertare-* pe versiunea
--- dinaintea PR-ului (altfel cheamă o funcție care nu mai există = poarta refuză tot), apoi: cele două funcții EXACT ca înainte + DROP funcția nouă.
+-- REVENIRE 20261124a_ofertare_poarta_cheltuiala (armată; doar la cererea lui Răzvan). ÎNTÂI se redeployează cele 11 edge-uri ofertare-*, UI-ul
+-- (Vercel) și workerul NAS pe versiunea dinaintea PR-ului (altfel: edge-urile cheamă o funcție care nu mai există = poarta refuză tot, iar UI-ul
+-- vechi scrie direct în cozi), apoi: funcțiile EXACT ca înainte (plansa_coada_inscrie, j02b, trigger-ul de numire, tick-ul extragerii),
+-- RPC-urile cozilor scoase, politicile + privilegiile de scriere ale cozilor refăcute ca în 20260928p, funcția porții și coloanele de dovadă
+-- (2A) scoase. Dovada numirilor făcute între aplicare și revenire se pierde (coloanele dispar) — „numit de” rămâne.
 DO $pre$
 BEGIN
   IF current_setting('gazpet.revenire_20261124a', true) IS DISTINCT FROM 'POARTA_CHELTUIALA_SCOASA:' || txid_current() THEN
@@ -92,4 +95,160 @@ BEGIN
   RETURN v_n;
 END $function$;
 
+-- trigger-ul de numire, exact ca în 20261121a (fără dovadă, SECURITY INVOKER)
+CREATE OR REPLACE FUNCTION public.fn_ofertare_responsabil_setat_de()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.responsabil_setat_de := CASE WHEN NEW.responsabil_id IS NULL THEN NULL ELSE auth.uid() END;
+  ELSIF NEW.responsabil_id IS DISTINCT FROM OLD.responsabil_id THEN
+    NEW.responsabil_setat_de := auth.uid();
+  ELSE
+    NEW.responsabil_setat_de := OLD.responsabil_setat_de;
+  END IF;
+  -- 20261121a: responsabilul 2 (opțional), aceeași regulă — reține cine l-a numit, clientul nu poate scrie coloana
+  IF TG_OP = 'INSERT' THEN
+    NEW.responsabil2_setat_de := CASE WHEN NEW.responsabil2_id IS NULL THEN NULL ELSE auth.uid() END;
+  ELSIF NEW.responsabil2_id IS DISTINCT FROM OLD.responsabil2_id THEN
+    NEW.responsabil2_setat_de := auth.uid();
+  ELSE
+    NEW.responsabil2_setat_de := OLD.responsabil2_setat_de;
+  END IF;
+  RETURN NEW;
+END $function$
+;
+
+-- tick-ul extragerii, exact ca înainte (cheia anon, fără x-intern-secret)
+CREATE OR REPLACE FUNCTION public.ofertare_extragere_tick()
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  jwt text; c record; resp record; corp jsonb; pas jsonb; rid bigint; corp_body jsonb;
+  n_pasi int; continua boolean; cer int;
+  LEASE constant interval := interval '4 minutes';
+  MAX_INCERCARI constant int := 3;
+BEGIN
+  -- 22.09.2026: workerul de pe NAS (worker/ofertare) consuma aceeasi coada fara limita de 150 s;
+  -- cat timp da semn de viata (sub 10 min), tick-ul nu lanseaza nimic. Daca workerul cade, tick-ul reia singur.
+  IF EXISTS (SELECT 1 FROM public.worker_heartbeat WHERE nume = 'ofertare-worker' AND ultimul > now() - interval '10 minutes') THEN RETURN; END IF;
+  SELECT decrypted_secret INTO jwt FROM vault.decrypted_secrets WHERE name = 'SUPABASE_ANON_JWT' LIMIT 1;
+  IF jwt IS NULL THEN RETURN; END IF;
+
+  FOR c IN SELECT * FROM ofertare_extragere_coada WHERE activ ORDER BY cerut_la LOOP
+    n_pasi := jsonb_array_length(coalesce(c.pasi, '[]'::jsonb));
+
+    -- (1) exista un apel in zbor?
+    IF c.req_id IS NOT NULL THEN
+      SELECT * INTO resp FROM net._http_response WHERE id = c.req_id;
+      IF NOT FOUND THEN
+        -- inca ruleaza; dupa lease se reia ACEEASI bucata, nu se sare peste ea
+        IF c.lansat_la < now() - LEASE THEN
+          IF c.incercari + 1 >= MAX_INCERCARI THEN
+            UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = 0, erori = erori + 1,
+              poz = poz + 1, bucata = 0,
+              jurnal = jurnal || jsonb_build_object('poz', c.poz, 'eroare', 'fara raspuns dupa ' || MAX_INCERCARI || ' incercari', 'la', now())
+             WHERE licitatie_id = c.licitatie_id;
+          ELSE
+            UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = incercari + 1
+             WHERE licitatie_id = c.licitatie_id;
+          END IF;
+        END IF;
+        CONTINUE;                       -- se asteapta raspunsul
+      END IF;
+
+      corp := NULL;
+      BEGIN corp := resp.content::jsonb; EXCEPTION WHEN others THEN corp := NULL; END;
+      IF resp.status_code = 200 AND coalesce((corp->>'ok')::boolean, false) THEN
+        cer := coalesce((corp->>'cerinte')::int, 0);
+        continua := coalesce((corp->>'continua')::boolean, false);
+        UPDATE ofertare_extragere_coada SET
+          req_id = NULL, incercari = 0, cerinte_noi = cerinte_noi + cer,
+          bucata = CASE WHEN continua THEN coalesce((corp->>'bucata_urmatoare')::int, c.bucata + 1) ELSE 0 END,
+          poz = CASE WHEN continua THEN poz ELSE poz + 1 END,
+          jurnal = jurnal || jsonb_build_object('poz', c.poz, 'bucata', c.bucata, 'cerinte', cer,
+                                                'bucati', corp->>'bucati', 'la', now())
+         WHERE licitatie_id = c.licitatie_id;
+      ELSE
+        IF c.incercari + 1 >= MAX_INCERCARI THEN
+          UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = 0, erori = erori + 1,
+            poz = poz + 1, bucata = 0,
+            jurnal = jurnal || jsonb_build_object('poz', c.poz, 'bucata', c.bucata,
+                       'eroare', left(coalesce(corp->>'error', 'HTTP ' || coalesce(resp.status_code::text,'?')), 200), 'la', now())
+           WHERE licitatie_id = c.licitatie_id;
+        ELSE
+          UPDATE ofertare_extragere_coada SET req_id = NULL, incercari = incercari + 1
+           WHERE licitatie_id = c.licitatie_id;
+        END IF;
+      END IF;
+      SELECT * INTO c FROM ofertare_extragere_coada WHERE licitatie_id = c.licitatie_id;
+      n_pasi := jsonb_array_length(coalesce(c.pasi, '[]'::jsonb));
+    END IF;
+
+    -- (2) s-au terminat pasii?
+    IF c.poz >= n_pasi THEN
+      UPDATE ofertare_extragere_coada SET activ = false, terminat_la = now(),
+        nota = format('%s pași, %s cerințe noi, %s pași cu eroare', n_pasi, c.cerinte_noi, c.erori)
+       WHERE licitatie_id = c.licitatie_id;
+      IF c.cerut_de IS NOT NULL THEN
+        INSERT INTO notifications (profile_id, type, modul, title, message, link_to)
+        SELECT c.cerut_de, 'info', 'Ofertare',
+          'Ofertare: extragerea cerințelor s-a terminat la ' || coalesce(li.nr_anunt, '#' || li.id),
+          format('%s pași, %s cerințe noi, %s pași cu eroare. Confirmă registrul și rulează „Propune acoperire".',
+                 n_pasi, c.cerinte_noi, c.erori), '/ofertare'
+        FROM ofertare_licitatii li WHERE li.id = c.licitatie_id;
+      END IF;
+      CONTINUE;
+    END IF;
+
+    -- (3) se lanseaza pasul curent
+    pas := c.pasi -> c.poz;
+    corp_body := jsonb_build_object('licitatie_id', c.licitatie_id, 'bucata', c.bucata,
+                                    'bucata_max', c.bucata_max, 'model', c.model);
+    IF pas ? 'doc_id' THEN
+      corp_body := corp_body || jsonb_build_object('doc_id', (pas->>'doc_id')::bigint);
+    ELSE
+      corp_body := corp_body || jsonb_build_object('sectiune', pas->>'sectiune');
+      -- reset doar la prima bucata a pasului, altfel s-ar sterge ce tocmai s-a extras
+      IF coalesce((pas->>'reset')::boolean, false) AND c.bucata = 0 THEN
+        corp_body := corp_body || jsonb_build_object('reset', true);
+      END IF;
+    END IF;
+
+    rid := net.http_post(
+      url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/ofertare-cerinte',
+      headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || jwt),
+      body := corp_body, timeout_milliseconds := 150000);
+    UPDATE ofertare_extragere_coada SET req_id = rid, lansat_la = now(), ultimul_tick = now()
+     WHERE licitatie_id = c.licitatie_id;
+  END LOOP;
+END $function$
+;
+
+DROP FUNCTION public.ofertare_coada_porneste(text, bigint);
+DROP FUNCTION public.ofertare_coada_opreste(text, bigint);
+
+-- politicile + privilegiile de scriere ale cozilor, ca în 20260928p
+CREATE POLICY ofertare_acoperire_coada_all_ins ON public.ofertare_acoperire_coada FOR INSERT TO authenticated WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_acoperire_coada_all_upd ON public.ofertare_acoperire_coada FOR UPDATE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare)) WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_acoperire_coada_all_del ON public.ofertare_acoperire_coada FOR DELETE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_clarificari_coada_all_ins ON public.ofertare_clarificari_coada FOR INSERT TO authenticated WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_clarificari_coada_all_upd ON public.ofertare_clarificari_coada FOR UPDATE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare)) WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_clarificari_coada_all_del ON public.ofertare_clarificari_coada FOR DELETE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_extragere_coada_all_ins ON public.ofertare_extragere_coada FOR INSERT TO authenticated WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_extragere_coada_all_upd ON public.ofertare_extragere_coada FOR UPDATE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare)) WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_extragere_coada_all_del ON public.ofertare_extragere_coada FOR DELETE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_ingest_coada_all_ins ON public.ofertare_ingest_coada FOR INSERT TO authenticated WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_ingest_coada_all_upd ON public.ofertare_ingest_coada FOR UPDATE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare)) WITH CHECK (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+CREATE POLICY ofertare_ingest_coada_all_del ON public.ofertare_ingest_coada FOR DELETE TO authenticated USING (( SELECT fn_are_acces_ofertare() AS fn_are_acces_ofertare));
+GRANT INSERT, SELECT, UPDATE, DELETE, REFERENCES, TRIGGER
+  ON public.ofertare_acoperire_coada, public.ofertare_clarificari_coada, public.ofertare_extragere_coada, public.ofertare_ingest_coada TO anon, authenticated;
+
 DROP FUNCTION public.fn_ofertare_poate_cheltui(bigint, uuid);
+
+ALTER TABLE public.ofertare_licitatii DROP COLUMN responsabil_numitor_autorizat, DROP COLUMN responsabil2_numitor_autorizat;

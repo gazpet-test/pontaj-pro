@@ -191,7 +191,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const propuneServer = async () => {
     if (!licId) return
     if (!poateCheltuiUI(licitatii?.find(l => l.id === licId), profile)) { showToast('Propunerea de clarificări o pornește ownerul sau un responsabil al licitației numit de owner / un admin Ofertare (costă).', 'err'); return }
-    const { error } = await supabase.from('ofertare_clarificari_coada').upsert({ licitatie_id: licId, activ: true, cerut_de: profile?.id || null, cerut_la: new Date().toISOString(), terminat_la: null, nota: null, rezultat: null }, { onConflict: 'licitatie_id' })
+    // 20261124a (3A): coada se pornește doar prin RPC (poarta pe cheltuială pe server, cerut_de = utilizatorul logat)
+    const { error } = await supabase.rpc('ofertare_coada_porneste', { p_coada: 'clarificari', p_licitatie_id: licId })
     if (error) { showToast('Nu s-a putut porni: ' + error.message, 'err'); return }
     setBusy('Sonnet citește registrul, golurile, cantitățile și răspunsurile primite, pe server (1-3 min)...')
     for (let i = 0; i < 120; i++) {

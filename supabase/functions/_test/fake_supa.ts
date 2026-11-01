@@ -34,17 +34,17 @@ export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string; eroareChel
         return Promise.resolve({ data: s !== undefined && p.length === s.length && p === s, error: null })
       }
       if (name === 'fn_ofertare_poate_cheltui') {
-        // aceeași regulă ca SQL-ul din 20261124a: owner; sau responsabil 1/2 numit de owner / admin Ofertare (nu autoatribuit); numit_de NULL = permis
+        // aceeași regulă ca SQL-ul din 20261124a: owner; sau responsabil 1/2 cu dovada de numire (2A: *_numitor_autorizat === true, scrisă de
+        // trigger la numire; numitorul ≠ responsabilul); numire veche fără „numit de” și fără dovadă (ambele lipsă / null) = permis (A)
         n.rpcCheltuiala++
         if (opt.eroareCheltuiala) return Promise.resolve({ data: null, error: { message: 'fake: poarta cheltuială căzută' } })
         const a = (args ?? {}) as { p_licitatie_id?: number; p_uid?: string }
         const prof = (u: unknown) => (tabele.profiles || []).find((p) => p.id === u)
-        const numitor = (u: unknown) => prof(u)?.is_owner === true ||
-          (tabele.user_module_access || []).some((x) => x.profile_id === u && x.module === 'ofertare' && x.access_level === 'admin')
         const lic = (tabele.ofertare_licitatii || []).find((l) => String(l.id) === String(a.p_licitatie_id))
         const ok = !!a.p_uid && a.p_licitatie_id != null && (prof(a.p_uid)?.is_owner === true || (!!lic &&
-          [[lic.responsabil_id, lic.responsabil_setat_de], [lic.responsabil2_id, lic.responsabil2_setat_de]]
-            .some(([r, s]) => r != null && r === a.p_uid && (s == null || (s !== a.p_uid && numitor(s))))))
+          [[lic.responsabil_id, lic.responsabil_setat_de, lic.responsabil_numitor_autorizat],
+           [lic.responsabil2_id, lic.responsabil2_setat_de, lic.responsabil2_numitor_autorizat]]
+            .some(([r, s, d]) => r != null && r === a.p_uid && ((d === true && s !== a.p_uid) || (d == null && s == null)))))
         return Promise.resolve({ data: ok, error: null })
       }
       n.scrieri++

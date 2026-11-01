@@ -24,7 +24,7 @@ import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts'
 import { scrieCitireNoi } from './scriere.ts'
 import { combinaFelii, imparteCuGranite, parteDinAi, type Parte, rezultatFelii, type Sinteza } from './felii.ts'
 import { type Lucru, lucruPentru, scrieLucru, urmatoareaFelie } from './lucru.ts'
-import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_POARTA_TEXT, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poatePorniAi, provenanta, timpRamas } from './sursa.ts'
 import { aceeasiIdentitate, identitateObiect, shaOcteti, type IdentitateObiect } from './obiect.ts'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 import { poateCheltui } from '../_shared/poartaCheltuiala.ts'   // poarta unică pe cheltuială (20261124a)
@@ -148,9 +148,10 @@ Deno.serve(async (req: Request) => {
 
   // Răcari 06.10.2026: documentul citit deja pe felii („Procesează”) se citește din TEXT; altfel PDF, cu termen-limită (sursa.ts).
   const sursa = alegeSursa(row)
-  if (sursa.mod === 'pdf' && cititDe !== 'intern') {
-    if (!poateCitiPdf({ intern: false, poateCheltui: await poateCheltui(db, row.licitatie_id, cititDe) }))
-      return json({ error: MESAJ_POARTA_PDF, cod: 'poarta_cheltuiala' }, 403)
+  // 4A (20261124a): poarta pe cheltuială pe AMBELE ramuri (PDF și text), înainte de orice descărcare / apel AI; RPC căzut = refuz
+  if (cititDe !== 'intern') {
+    if (!poatePorniAi({ intern: false, poateCheltui: await poateCheltui(db, row.licitatie_id, cititDe) }))
+      return json({ error: sursa.mod === 'pdf' ? MESAJ_POARTA_PDF : MESAJ_POARTA_TEXT, cod: 'poarta_cheltuiala' }, 403)
   }
   // amprenta sursei de dinainte de AI: scrierea refuză dacă documentul a fost recitit între timp (scriere.ts).
   // Text: SHA-256 al text_extras. PDF: SHA-256 pe bytes-ii descărcați + identitatea obiectului din Storage (obiect.ts).

@@ -32,6 +32,7 @@ on:
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
       - 'worker/ofertare/plansa*.ts'
+      - 'worker/ofertare/poarta_coada*.ts'
       - 'worker/ofertare/seap.ts'
       - 'worker/ofertare/egress.ts'
       - 'worker/ofertare/arhive_platforma_test.ts'
@@ -88,6 +89,7 @@ on:
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
       - 'worker/ofertare/plansa*.ts'
+      - 'worker/ofertare/poarta_coada*.ts'
       - 'worker/ofertare/seap.ts'
       - 'worker/ofertare/egress.ts'
       - 'worker/ofertare/arhive_platforma_test.ts'
@@ -190,7 +192,9 @@ jobs:
           supabase/functions/api-consum-extern
           supabase/functions/ofertare-seap-import
           supabase/functions/ofertare-seap-veghe
+          supabase/functions/ofertare-cerinte/autorizare_test.ts
           worker/ofertare/plansa_test.ts
+          worker/ofertare/poarta_coada_test.ts
           worker/ofertare/arhive_platforma_test.ts
       # Verificarea R6 a manifestului (dovada sha 'urcat' nu se mai distruge — audit Jakarinos 07.10, #13). --no-check: tiparea
       # supabase-js din bibliotecă are erori vechi de tip „never”, fără efect la rulare (același cod rulează pe NAS).

@@ -11,6 +11,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
 import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
+import { cerereaTrecePoarta, type CoadaAi } from './poarta_coada.ts'
 import { proceseazaClarificari } from './clarificari.ts'
 import { proceseazaSourcePacks } from './source_pack.ts'
 import { proceseazaSeap } from './seap.ts'
@@ -78,6 +79,10 @@ async function proceseazaLicitatie(id: number) {
         log(`#${id}: GATA — ${nota}`)
         return
       }
+      // 20261124a (3A): un pas nou costă — doar dacă cine a cerut extragerea trece ACUM poarta pe cheltuială (poarta_coada.ts)
+      const pc = await cerereaTrecePoarta(supabase, 'ofertare_extragere_coada', id)
+      if (pc === 'refuz') { log(`#${id}: extragere refuzată / oprită — cerut_de nu trece poarta pe cheltuială`); return }
+      if (pc === 'eroare') { inLucru.set(id, 'aștept poarta pe cheltuială (eroare de citire)'); await sleep(30_000); continue }
       const pas = pasi[c.poz] ?? {}
       const body: Record<string, unknown> = { licitatie_id: id, bucata: c.bucata, bucata_max: BUCATA_MAX, model: c.model || 'claude-opus-5' }
       if (pas.doc_id != null) {
@@ -152,6 +157,13 @@ async function comitNou(): Promise<boolean> {
 for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => { log(`${s} — termin felia curentă și ies`); oprire = true })
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
+// 20261124a (3A): ingest / acoperire / clarificări pornesc doar dacă cerut_de trece poarta; la eroare de citire, pauză (fără cost) și se reia
+async function cuPoarta(tabel: CoadaAi, lid: number, lucru: () => Promise<unknown>) {
+  const p = await cerereaTrecePoarta(supabase, tabel, lid)
+  if (p === 'da') return await lucru()
+  log(`#${lid}: ${tabel} ${p === 'refuz' ? 'refuzată — cerut_de nu trece poarta pe cheltuială' : 'poarta nu s-a putut verifica, reiau mai târziu'}`)
+  if (p === 'eroare') await sleep(30_000)
+}
 let ultimHb = Date.now(), ultimGit = Date.now()
 let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false, seapInLucru = false, plansaInLucru = false
 // R4 #142: citirea planșelor din ofertare_plansa_coada — același handler ca edge-ul, cu service_role și timeout pe AI.
@@ -172,7 +184,7 @@ while (!oprire) {
       if (lid) {
         ingestInLucru = true
         inLucru.set(-lid, 'citire documente')
-        proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`))
+        cuPoarta('ofertare_ingest_coada', lid, () => proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`)))
           .catch(e => log('ingest:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-lid); ingestInLucru = false })
       }
@@ -184,7 +196,7 @@ while (!oprire) {
         acoperireInLucru = true
         inLucru.set(-1_000_000 - lid, 'acoperire')
         log(`#${lid}: propun acoperiri (coada)`)
-        proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`))
+        cuPoarta('ofertare_acoperire_coada', lid, () => proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`)))
           .catch(e => log('acoperire:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-1_000_000 - lid); acoperireInLucru = false })
       }
@@ -196,7 +208,7 @@ while (!oprire) {
         clarificariInLucru = true
         inLucru.set(-2_000_000 - lid, 'clarificări')
         log(`#${lid}: propun clarificări (coada)`)
-        proceseazaClarificari(supabase, lid, s => inLucru.set(-2_000_000 - lid, `clarificări: ${s}`))
+        cuPoarta('ofertare_clarificari_coada', lid, () => proceseazaClarificari(supabase, lid, s => inLucru.set(-2_000_000 - lid, `clarificări: ${s}`)))
           .catch(e => log('clarificari:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-2_000_000 - lid); clarificariInLucru = false })
       }

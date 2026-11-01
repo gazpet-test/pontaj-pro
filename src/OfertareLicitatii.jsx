@@ -845,13 +845,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // Citire PE SERVER (09.09.2026): coada e bătută de un cron la fiecare minut (ofertare_ingest_tick),
   // deci nu mai depinde de tab-ul deschis / laptopul treaz. La final vine notificare în clopoțel.
   const proceseazaPeServer = async () => {
-    const { error } = await supabase.from('ofertare_ingest_coada')
-      .upsert({ licitatie_id: licitatie.id, activ: true, cerut_de: profile?.id || null, cerut_la: new Date().toISOString(), terminat_la: null, nota: null }, { onConflict: 'licitatie_id' })
+    // 20261124a (3A): coada se pornește doar prin RPC (poarta pe cheltuială pe server, cerut_de = utilizatorul logat)
+    const { error } = await supabase.rpc('ofertare_coada_porneste', { p_coada: 'ingest', p_licitatie_id: licitatie.id })
     if (error) { setWarn(`Nu am putut porni citirea pe server: ${error.message}`); return }
     setWarn(null); await load()
   }
   const opresteServer = async () => {
-    await supabase.from('ofertare_ingest_coada').update({ activ: false, nota: 'oprită manual' }).eq('licitatie_id', licitatie.id)
+    const { error } = await supabase.rpc('ofertare_coada_opreste', { p_coada: 'ingest', p_licitatie_id: licitatie.id })
+    if (error) setWarn(`Nu am putut opri citirea pe server: ${error.message}`)
     await load()
   }
 
@@ -2855,10 +2856,8 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   // „eliminatorie” de 51 cerințe (Jilava) cădea acolo. UI-ul doar pune rândul în coadă și urmărește starea.
   const propune = async () => {
     setWarn(null)
-    const { error } = await supabase.from('ofertare_acoperire_coada').upsert({
-      licitatie_id: licitatie.id, activ: true, cerut_de: profile?.id || null, cerut_la: new Date().toISOString(),
-      terminat_la: null, nota: null, stare: null, jurnal: [],
-    }, { onConflict: 'licitatie_id' })
+    // 20261124a (3A): coada se pornește doar prin RPC (poarta pe cheltuială pe server, cerut_de = utilizatorul logat)
+    const { error } = await supabase.rpc('ofertare_coada_porneste', { p_coada: 'acoperire', p_licitatie_id: licitatie.id })
     if (error) { setWarn('Nu s-a putut porni: ' + error.message); return }
     setBusy('Opus confruntă cerințele cu catalogul HR, pe server — poți închide tab-ul; primești notificare în clopoțel...')
     // urmărim rândul din coadă: workerul scrie stare/jurnal la fiecare felie și nota la final

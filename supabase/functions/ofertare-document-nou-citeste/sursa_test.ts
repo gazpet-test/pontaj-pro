@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none --no-lock -A supabase/functions/ofertare-document-nou-citeste/sursa_test.ts
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { alegeSursa, amprentaText, MAX_MODIFICARI, MAX_REZUMAT, plafoneazaRezultat, BUGET_MS, eRezumatAi, eTimeout, MESAJ_TIMEOUT, MESAJ_TIMEOUT_TEXT, mesajTimeout, MIN_AI_MS, notaSursa, poateCitiPdf, provenanta, TEXT_MAX, TEXT_MIN, TIMEOUT_MS, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, MAX_MODIFICARI, MAX_REZUMAT, plafoneazaRezultat, BUGET_MS, eRezumatAi, eTimeout, MESAJ_TIMEOUT, MESAJ_TIMEOUT_TEXT, mesajTimeout, MIN_AI_MS, notaSursa, poatePorniAi, provenanta, TEXT_MAX, TEXT_MIN, TIMEOUT_MS, timpRamas } from './sursa.ts'
 import { scrieCitireNoi } from './scriere.ts'
 
 Deno.test('document procesat cu text real → citește textul, nu PDF-ul', () => {
@@ -86,11 +86,11 @@ Deno.test('rezumatul AI scris în text_extras NU e luat drept textul documentulu
 })
 
 Deno.test('poarta PDF pe server: owner / responsabil / intern da; coleg cu acces Ofertare nu', () => {
-  assert(poateCitiPdf({ intern: true }))
-  assert(poateCitiPdf({ intern: false, poateCheltui: true }))
-  assert(!poateCitiPdf({ intern: false, poateCheltui: false }))
-  assert(!poateCitiPdf({ intern: false, poateCheltui: null }))
-  assert(!poateCitiPdf({ intern: false }))
+  assert(poatePorniAi({ intern: true }))
+  assert(poatePorniAi({ intern: false, poateCheltui: true }))
+  assert(!poatePorniAi({ intern: false, poateCheltui: false }))
+  assert(!poatePorniAi({ intern: false, poateCheltui: null }))
+  assert(!poatePorniAi({ intern: false }))
 })
 
 Deno.test('mesajul de timp depășit depinde de sursă: pe text nu trimite la «Procesează»', () => {

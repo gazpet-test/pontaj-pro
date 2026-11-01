@@ -35,4 +35,11 @@ describe('responsabili licitație (20261121a)', () => {
     expect(poateCheltuiUI({ responsabil_id: 'a' }, P('c'))).toBe(false)
     expect(poateCheltuiUI({ responsabil_id: 'a' }, null)).toBe(false)
   })
+  it('poateCheltuiUI (2A): dovada de numire false (numit de un editor / fără utilizator) -> nu; true sau lipsă din select -> nu exclude', () => {
+    const P = (id) => ({ id, is_owner: false })
+    expect(poateCheltuiUI({ responsabil_id: 'a', responsabil_setat_de: 'e', responsabil_numitor_autorizat: false }, P('a'))).toBe(false)
+    expect(poateCheltuiUI({ responsabil_id: 'a', responsabil_setat_de: 'o', responsabil_numitor_autorizat: true }, P('a'))).toBe(true)
+    expect(poateCheltuiUI({ responsabil_id: 'a', responsabil2_id: 'b', responsabil2_setat_de: 'e', responsabil2_numitor_autorizat: false }, P('b'))).toBe(false)
+    expect(poateCheltuiUI({ responsabil_id: 'a', responsabil2_id: 'b', responsabil2_setat_de: 'o', responsabil2_numitor_autorizat: true }, P('b'))).toBe(true)
+  })
 })
