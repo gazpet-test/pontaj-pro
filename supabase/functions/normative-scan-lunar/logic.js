@@ -101,10 +101,71 @@ export function ordoneazaDupaIds(randuri, ids) {
 }
 
 // Verdictele salvate in rulare nu poarta randul intreg (note etc.) — doar ce trebuie in mail.
+// v11: „sursa” = 'oficial' (citit direct pe legislatie.just.ro) sau 'ai' (cautare web); „curent” = consolidarea vazuta.
 export function faraRand(verdicte) {
   return (verdicte || []).map((v) => ({
     id: v.id, identificator: v.identificator, verdict: v.verdict, tip: v.tip ?? null, data_act: v.data_act ?? null, detalii: v.detalii ?? '',
+    sursa: v.sursa === 'oficial' ? 'oficial' : 'ai', curent: v.curent ?? null, nr_consolidari: v.nr_consolidari ?? null,
   }));
+}
+
+// ── v11 (01.11.2026): verificare pe sursa oficiala (legislatie.just.ro), fara AI ──
+
+export const URL_LEGISLATIE = (id) => `https://legislatie.just.ro/Public/DetaliiDocument/${Number(id)}`;
+
+// Istoricul consolidarilor din pagina actului: title='Consolidarea din DD.MM.YYYY' (prima = forma curenta).
+// Intoarce datele ISO, unice, descrescator. Pagina fara bloc de istoric → [] (act fara consolidari).
+export function consolidari(html) {
+  const s = String(html || '');
+  const out = new Set();
+  for (const m of s.matchAll(/title=['"]Consolidarea din (\d{2})\.(\d{2})\.(\d{4})['"]/g)) out.add(`${m[3]}-${m[2]}-${m[1]}`);
+  return [...out].sort().reverse();
+}
+
+// Pagina e chiar fisa actului (nu o pagina de eroare / alt document): <title> poarta numarul si anul actului.
+// rand.numar = '395/2016' → titlul „HG        395 02/06/2016 - Portal Legislativ” contine '395' si '/2016'.
+export function paginaPotrivita(html, rand) {
+  const t = (String(html || '').match(/<title>([\s\S]*?)<\/title>/i) || [])[1] || '';
+  const m = String(rand?.numar || '').match(/^(\d+)\/(\d{4})$/);
+  if (!m || !t) return false;
+  return new RegExp(`(^|\\D)${m[1]}(\\D|$)`).test(t) && t.includes(`/${m[2]}`);
+}
+
+const ro = (iso) => iso ? iso.split('-').reverse().join('.') : '—';
+
+// Verdict determinist. baza = forma_oficiala_la (forma confirmata de noi), date = consolidari(html).
+//  - fara baza: act fara consolidari → neschimbat (forma de baza); altfel necunoscut (baza de setat, o singura data)
+//  - consolidare curenta > baza → schimbare_noua (sau forma_incompleta daca era deja publicata la ultimul scan)
+//  - egala → neschimbat, confirmat automat; mai veche decat baza → necunoscut (baza gresita?)
+export function verdictOficial(rand, date, refScan) {
+  const baza = /^\d{4}-\d{2}-\d{2}$/.test(String(rand?.forma_oficiala_la || '')) ? String(rand.forma_oficiala_la) : null;
+  const curent = (date || [])[0] || null;
+  const v = {
+    id: rand.id, identificator: rand.identificator || `${rand.tip} ${rand.numar}`, tip: null, data_act: null,
+    sursa: 'oficial', curent, nr_consolidari: (date || []).length, rand,
+  };
+  const url = URL_LEGISLATIE(rand.legislatie_doc_id);
+  if (!baza) {
+    if (!curent) return { ...v, verdict: 'neschimbat', detalii: `legislatie.just.ro: fără consolidări (forma de bază) — ${url}` };
+    return { ...v, verdict: 'necunoscut', detalii: `bază nesetată: forma consolidată curentă e din ${ro(curent)} — de confirmat o dată (${url})` };
+  }
+  if (!curent || curent === baza) {
+    return { ...v, verdict: 'neschimbat', detalii: `confirmat automat pe legislatie.just.ro: forma curentă ${curent ? 'din ' + ro(curent) : 'de bază'} = forma confirmată — ${url}` };
+  }
+  if (curent < baza) return { ...v, verdict: 'necunoscut', detalii: `forma curentă (${ro(curent)}) e mai veche decât baza confirmată (${ro(baza)}) — de verificat baza (${url})` };
+  const noi = (date || []).filter((d) => d > baza);
+  const verdict = refScan && curent <= refScan ? 'forma_incompleta' : 'schimbare_noua';
+  return {
+    ...v, verdict, tip: 'modificat', data_act: curent,
+    detalii: `legislatie.just.ro: ${noi.length} consolidare(i) nouă(i) după forma confirmată (${ro(baza)}): ${noi.map(ro).join(', ')} — ${url}`,
+  };
+}
+
+// Imparte lotul: actele cu id oficial se verifica direct, restul (standarde etc.) merg la AI.
+export function imparteLot(lot) {
+  const oficial = [], ai = [];
+  for (const n of lot || []) (Number(n?.legislatie_doc_id) > 0 ? oficial : ai).push(n);
+  return { oficial, ai };
 }
 
 // Lot sarit dupa prea multe incercari (invocari omorate la rand): toate actele → necunoscut.
@@ -150,6 +211,8 @@ export function construiesteMail(r, notate) {
   const erori = r.erori || [];
   const nActe = (r.acte_ids || []).length;
   const nSemn = g.schimbare_noua.length;
+  const nOficial = (r.verdicte || []).filter((v) => v.sursa === 'oficial').length;
+  const nAuto = g.neschimbat.filter((v) => v.sursa === 'oficial').length;
   const cost = costAprox(r.tok_in, r.tok_out, r.cautari);
   const culoare = { schimbare_noua: '#a32a21', forma_incompleta: '#b5651d', necunoscut: '#8a6d1a', neschimbat: '#17703c' };
   const tabel = (titlu, rows) => !rows.length ? '' :
@@ -164,7 +227,8 @@ export function construiesteMail(r, notate) {
     `<p style="margin:0 0 6px;color:#5a6975">${esc(r.azi)} · ${nActe} acte · ${r.nr_loturi} loturi · rularea #${esc(r.id)} · referință: ${esc(r.ref_scan || 'fără scan anterior')} · ` +
     `schimbări noi: ${nSemn} · forme incomplete: ${g.forma_incompleta.length} · necunoscut: ${g.necunoscut.length} · neschimbat: ${g.neschimbat.length}` +
     `${r.test ? ' · TEST: nimic scris în bibliotecă' : ' · note scrise: ' + (notate ?? '?')}</p>` +
-    `<p style="margin:0 0 10px;color:#5a6975;font-size:12px">${r.cautari || 0} căutări web · ~$${cost.toFixed(2)}. Scanul doar semnalează — validează pe M. Oficial înainte de a schimba citările.</p>` +
+    `<p style="margin:0 0 10px;color:#5a6975;font-size:12px">${nOficial} acte citite direct pe legislatie.just.ro (${nAuto} confirmate automat, fără AI) · ` +
+    `${r.cautari || 0} căutări web pentru restul · ~$${cost.toFixed(2)}. Scanul doar semnalează — validează pe M. Oficial înainte de a schimba citările.</p>` +
     (nSemn ? tabel('🔴 Schimbări noi (după ultimul scan)', g.schimbare_noua) : `<p style="color:#17703c"><b>Nicio schimbare nouă după ${esc(r.ref_scan || 'ultima verificare')}.</b></p>`) +
     tabel('🟠 Forma cunoscută incompletă (goluri vechi, nu noutăți)', g.forma_incompleta) +
     tabel('🟡 Necunoscut', g.necunoscut) +

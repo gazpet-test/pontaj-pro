@@ -90,7 +90,7 @@ describe('v10 — scan in bucati', () => {
   it('faraRand scoate randul (note) din verdictele salvate', () => {
     const v = faraRand(leagaLot([{ id: 7, verdict: 'neschimbat' }], lot, null));
     expect(v[0]).not.toHaveProperty('rand');
-    expect(Object.keys(v[0]).sort()).toEqual(['data_act', 'detalii', 'id', 'identificator', 'tip', 'verdict']);
+    expect(Object.keys(v[0]).sort()).toEqual(['curent', 'data_act', 'detalii', 'id', 'identificator', 'nr_consolidari', 'sursa', 'tip', 'verdict']);
     expect(JSON.stringify(v)).not.toContain('Ord. 2020');
   });
   it('lotSarit: toate actele necunoscut, cu motivul', () => {

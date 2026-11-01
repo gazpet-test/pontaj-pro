@@ -2,6 +2,14 @@
 // Ofertare s-au modificat/abrogat, cu Claude + cautare web. DOAR SEMNALEAZA: mail +
 // nota pe rand + stare NECONFIRMAT la semnal nou; nu rescrie citari singur.
 //
+// v11 (01.11.2026, decizie Razvan varianta A) — SURSA OFICIALA INTAI. Actele cu legislatie_doc_id (migrarea
+// 20261123a) se verifica direct pe legislatie.just.ro: istoricul consolidarilor din fisa actului vs forma
+// confirmata de noi (forma_oficiala_la). Fara AI, fara cautari: „neschimbat” = confirmat automat, consolidare
+// noua = semnal. Pagina inaccesibila / necorespunzatoare → actul cade pe calea veche (AI + cautare).
+// Doar standardele si actele fara id oficial mai trec prin AI, in loturi mai mici (4) → mai multe cautari pe act.
+// Continut extern nou: HTML-ul paginilor legislatie.just.ro — din el se extrag DOAR date de consolidare (regex);
+// nu se trimite la AI si nu declanseaza nimic in afara de verdict/nota/verificat_auto_la.
+//
 // v10 (12.10.2026) — SCAN IN BUCATI. v9 facea toate loturile intr-o singura invocare si era
 // omorata la limita EdgeRuntime.waitUntil (~400s; 37 acte = 7 loturi × Opus + cautari).
 // Acum: o invocare = UN lot (apelul AI taiat la 240s), progresul in public.normative_scan_rulari,
@@ -28,10 +36,12 @@ import { mesajRefuz, textRaspuns } from '../_shared/haiku55.ts';
 import {
   ultimulScan, inventarLot, extrageJSON, leagaLot, egalConstant, nrLoturi, idsLot, ordoneazaDupaIds,
   faraRand, lotSarit, urmatorulPas, areNotaScan, linieNota, construiesteMail, grupeaza, esteTranzitoriu,
+  consolidari, paginaPotrivita, verdictOficial, imparteLot, URL_LEGISLATIE,
 } from './logic.js';
 
 const DESTINATARI = ['razvan.trusu@gazpet.ro'];
-const MARIME_LOT = 6;
+const MARIME_LOT = 4;           // v11: 4 (era 6) — cele 8 cautari se impart la mai putine acte
+const TIMEOUT_OFICIAL_MS = 20_000;
 const CAUTARI_PE_LOT = 8;
 const MAX_ACTE = 40;
 const LEASE_SEC = 360;          // > timeout AI + salvare; un lot omorat se reia dupa expirare
@@ -39,7 +49,7 @@ const TIMEOUT_AI_MS = 240_000;  // sub limita waitUntil, cu rezerva pentru salva
 const MAX_INCERCARI_LOT = 3;    // 3 incercari esuate/omorate pe acelasi lot → lotul iese „necunoscut”
 const LEASE_FINAL_SEC = 180;    // note (secunde) + un apel Resend
 const MAX_INCERCARI_MAIL = 3;   // apoi stare mail_esuat (rularea nu ramane deschisa la nesfarsit)
-const COLOANE = 'id, identificator, tip, numar, titlu, modificari_ulterioare, stare, prioritate, note';
+const COLOANE = 'id, identificator, tip, numar, titlu, modificari_ulterioare, stare, prioritate, note, legislatie_doc_id, forma_oficiala_la';
 
 const json = (b: unknown, status = 200) =>
   new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
@@ -65,9 +75,41 @@ async function porneste(supa: Supa, test: boolean) {
   });
 }
 
-// Un lot: AI + cautari, cu timeout. Intoarce verdictele (fara randuri), erorile si consumul.
+// v11: un act cu id oficial — fisa de pe legislatie.just.ro. null = nu s-a putut citi (cade pe AI).
+async function verificaOficial(rand: any, refScan: string | null) {
+  try {
+    const resp = await fetch(URL_LEGISLATIE(rand.legislatie_doc_id), {
+      signal: AbortSignal.timeout(TIMEOUT_OFICIAL_MS), redirect: 'follow',
+      headers: { 'User-Agent': 'GazpetERP-normative/1.1 (verificare lunara)', 'Accept': 'text/html' },
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    if (!paginaPotrivita(html, rand)) return null;
+    return verdictOficial(rand, consolidari(html), refScan);
+  } catch {
+    return null;
+  }
+}
+
+// Un lot: intai sursa oficiala, apoi AI + cautari doar pentru ce a ramas. Intoarce verdictele (fara randuri), erorile si consumul.
 async function scaneazaLot(lot: any[], k: number, r: any) {
   const nume = `lot ${k + 1}/${r.nr_loturi}`;
+  const { oficial, ai } = imparteLot(lot);
+  const verdOficial: any[] = [];
+  for (const rand of oficial) {
+    const v = await verificaOficial(rand, r.ref_scan);
+    if (v) verdOficial.push(v); else ai.push(rand);
+  }
+  const cazut = oficial.length - verdOficial.length;
+  if (!ai.length) return { verdicte: faraRand(verdOficial), erori: [] as string[], cautari: 0, tokIn: 0, tokOut: 0, tranzitoriu: false };
+  const rez = await scaneazaAI(ai, nume, r);
+  if (cazut) rez.erori.push(`${nume}: ${cazut} act(e) fără răspuns de la legislatie.just.ro, verificate prin AI`);
+  rez.verdicte = [...faraRand(verdOficial), ...rez.verdicte];
+  return rez;
+}
+
+// Partea AI (calea veche, v10): AI + cautari, cu timeout.
+async function scaneazaAI(lot: any[], nume: string, r: any) {
   const prompt =
     `Ești juristul de achiziții al unui constructor român de conducte de gaz. Azi e ${r.azi}. ` +
     (r.ref_scan ? `Ultima verificare a fost pe ${r.ref_scan}. ` : 'Nu există o verificare anterioară înregistrată. ') +
@@ -166,6 +208,15 @@ async function finalizeaza(supa: Supa, runId: number) {
         const { error: e2 } = await supa.from('ofertare_normative').update(patch).eq('id', v.id);
         if (e2) throw new Error(`nota pe randul ${v.id}: ${e2.message}`); // reluam tot finalul (garda per rand)
         notate++;
+      }
+      // v11: urma verificarii pe sursa oficiala (idempotent: suprascrie aceeasi informatie la reluarea finalului)
+      const acum = new Date().toISOString();
+      for (const v of (f.verdicte || []).filter((x: any) => x.sursa === 'oficial')) {
+        const { error: e3 } = await supa.from('ofertare_normative').update({
+          verificat_auto_la: acum,
+          verificare_auto: { rulare: runId, verdict: v.verdict, consolidare_curenta: v.curent, nr_consolidari: v.nr_consolidari, sursa: 'legislatie.just.ro' },
+        }).eq('id', v.id);
+        if (e3) throw new Error(`verificat_auto pe randul ${v.id}: ${e3.message}`);
       }
       const n = await rpc(supa, 'fn_norm_scan_note_gata', { p_run: runId, p_token: token, p_note_scrise: notate });
       if (!n) return; // lease pierdut intre timp: nu trimitem mail din aceasta invocare
