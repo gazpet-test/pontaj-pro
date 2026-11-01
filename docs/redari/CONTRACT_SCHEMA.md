@@ -237,3 +237,42 @@ acțiuni: generează convocator, marchează expediat / AR primit / retur, înreg
 (date, deținători + contact dacă nivelul permite, cronologie din convocări/răspunsuri/PV/jurnal), **Import** (previzualizare +
 raport + commit). Restul (Dashboard, UAT, Sesiune, Setări, PV A/B/C) = după. Pagina publică: `src/RedariRaspunsPublic.jsx`,
 ruta `/redari/raspuns/:token` fără login.
+
+## 10. Șabloane reale (Model_1..7, v5 din 01.11.2026 după review R3) — adăugat 01.11.2026, branch `redari/sabloane`
+Harta completă placeholder → sursă: `docs/redari/SABLOANE.md`. Originalele: `docs/redari/referinta/` (Model_1..5 .docx v5,
+Model_6 registru .xlsx și cele 3 PDF-uri din pachetul v3, Model_7 tipizat Anexa 7 .xlsx v5). Șabloanele cu placeholder-e,
+verificate cu `node scripts/redari_sabloane_verifica.mjs` (0 placeholder-e rupte) și completate de probă cu `completeazaDocx`
+strict: `public/redari/sabloane/convocator.docx` (Model 1, 36 placeholder-e), `pv_a.docx` (Model 2, 54), `pv_b.docx`
+(Model 3, 77), `adresa_uat.docx` (Model 4, 44, inclusiv rândul-șablon `{{rand.*}}`), `pv_c.docx` (Model 5, 23).
+`convocator_provizoriu.docx` rămâne doar până trece codul pe `convocator.docx`.
+
+Schimbări față de §8 (convocatorul): placeholder-e noi `{{calitate}} {{adresa}} {{poz_hg}} {{tronson}} {{sate_zi1..3}}
+{{imputernicire_nr}} {{imputernicire_data}} {{contract_nr}} {{contract_data}} {{proiect_denumire}} {{reprezentant_tgz_telefon}}
+{{semnatar_gazpet}} {{semnatar_tgz}}`; `{{text_gdpr}}` e tot paragraful de informare (textul din Model_1 v5 = valoarea
+implicită a `red_proiecte.text_gdpr`); `{{id_parcela}}` NU apare în model (de decis). Convenții noi: `{{bifa_*}}` → „☒”/„☐”,
+`{{semnatar_*}}` → „Nume, funcție”, `{{rand.camp}}` → rând repetat (funcție viitoare `repetaRand` în docx.js; `RX_PLACEHOLDER`
+nu acceptă punctul, deci azi rămân literal, fără eroare în strict).
+
+Coloane/obiecte NOI necesare (fără sursă în §2; propuneri, de confirmat de Răzvan înainte de migrare):
+- `red_proiecte`: `reprezentant_tgz_telefon text`, `apm_nume text`.
+- `red_uat`: `sate_zi1, sate_zi2, sate_zi3 text` (sate/tarlale pe zi), `reprezentant_uat_telefon text`, `afisare_ora text`,
+  `termen_confirmare date`, `adresa_nr text, adresa_data date` (adresa către primărie; cheie nouă `AU` în `red_numere` sau
+  nr. din registratura Gazpet), `afisare_reprezentant_gazpet text` (cine afișează), `responsabil_id`/`responsabil text`.
+- `red_parcele`: `verificare_data date, verificare_de_gazpet text, verificare_de_tgz text, jurnal_santier_ref text`
+  (verificarea efectivă a comisiei pe teren, cerută de PV B v5 și de PV A „constatarea s-a făcut la sediu … pe baza
+  verificării … la data …”).
+- `red_procese_verbale`: `stare_teren` ca bife + „alta” (înlocuiește/completează `stare_teren_text`: nivelat, strat vegetal
+  refăcut, însămânțat, gard/drum refăcut, alta text), `plan_situatie bool`, `foto_nr int`, `constatare_mod text CHECK
+  ('sediu','teren')` (PV A), `reverificare_la date`, `alte_observatii text` (pct. 6, nu privesc redarea), `motiv_pv_b text
+  CHECK ('declaratie','neprezentat','neidentificat','refuz')` (pct. 4 din PV B; „refuz” nu are azi nicio stare/opțiune),
+  `lucrari jsonb` dacă bifele lucrărilor se aleg manual (altfel mapare `articol_deviz → bife`, de definit).
+- `red_convocari`: `adresa_tgz_nr text` (reluarea convocării după date corectate de Beneficiar — a doua convocare pe
+  deținător; Model_3 v5 rândul „Reluarea convocării”).
+- `red_raspunsuri`: sursă pentru prezența la sesiune (`canal='sesiune'` = prezent) și `constatare_teren_data date`
+  (data stabilită de comisie).
+- `red_detinatori` (din Model_7): `act_doveditor_cunoscut bool`, `reprezentant_mandat text`, `despagubire_doc text`,
+  `stadiu_verificare text`; parser nou în `importTgz.js` pentru formatul Anexa 7 (antet pe rândul 5, 30 de coloane).
+- `red_numere`: cheie `AU` (adrese UAT) dacă se numerotează în ERP.
+- Decizii deschise: `link_afisare` (pagină publică pe UAT fără token sau se scoate din Anexa 2), `act_identitate`/`act_doveditor`
+  (rămân de mână, nu se stochează), `pva_sesiune` vs `pva_corespondenta` (calcul pe `trimis_spre_semnare_data`), tabelul de
+  parcele/articole din PV C (nu există în Model_5; anexa = export xlsx din registru).
