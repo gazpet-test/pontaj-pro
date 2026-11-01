@@ -615,6 +615,19 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // si varianta in care JSON-ul e imbricat in alt JSON
     expect(scrubSentryEvent({ extra: { outer: JSON.stringify({ inner: payload }) } })).toBeNull()
   })
+  it('Copilot r28 P1-01: identificator codificat caracter cu caracter de 4 ori (`%25252541`×43) sub cheie sensibila -> refuzat -> null', () => {
+    const E = '%25252541'.repeat(43)   // fiecare A = %41, apoi % codificat inca de 3 ori
+    for (const ev of [
+      { extra: { token: E } },
+      { request: { url: '/intern', data: { p_token: [null, E] } } },
+      { extra: { nota: 'token=' + E } },
+      { extra: { nota: JSON.stringify({ raspuns: { v: E } }) } },
+    ]) expect(scrubSentryEvent(ev)).toBeNull()
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { token: E } })
+    expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain('%25252541')
+    // fara context sensibil si fara cuvant-cheie: semnal slab -> trece daca nu ramane nicio secventa de 43
+    expect(scrubSentryEvent({ message: 'x', extra: { cale: '/doc/%25252520' } })?.message).toBe('x')
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

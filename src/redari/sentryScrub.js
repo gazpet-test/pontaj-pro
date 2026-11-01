@@ -238,12 +238,14 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
   }
   parcurge(event, (_obj, cheie, v, sensibilAici) => {
     if (typeof v === 'string') {
-      if (ramaneCodificat(v)) tokenuri.ambiguu = true   // r33 P2-1: semnal SLAB -> purtator (nu eliminare neconditionata)
+      // Copilot r28 P1-01: o valoare inca codificata (de >=4 ori) sub CHEIE SENSIBILA sau intr-un sir care pomeneste un cuvant-cheie e semnal
+      // TARE (refuzat): un identificator codificat caracter cu caracter nu are nicio secventa de 43 in nicio forma; in rest, semnal slab
+      if (ramaneCodificat(v)) { if (sensibilAici || cheieDeToken(cheie) || formele(v).some(f => /p_token|raspuns|token/i.test(f))) tokenuri.refuzat = true; else tokenuri.ambiguu = true }
       if (sensibilAici || cheieDeToken(cheie)) tokenuriDinValoareSensibila(v, tokenuri)
       dinText(v, true, sensibilAici || cheieDeToken(cheie))
     }
     return v
-  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) tokenuri.ambiguu = true; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
+  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) { if (sensibilAici) tokenuri.refuzat = true; else tokenuri.ambiguu = true }; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
   dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
