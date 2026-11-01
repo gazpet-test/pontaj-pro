@@ -137,7 +137,7 @@ describe('parseazaTgz — preview', () => {
   })
   it('statistici și un contact per deținător', () => {
     expect(p.contacte).toHaveLength(p.detinatori.length)
-    expect(p.statistici).toMatchObject({ parcele: 8, detinatori: 9, contacte: 9, dubluri: 1, neidentificati: 1, erori: 2 })
+    expect(p.statistici).toMatchObject({ parcele: 8, detinatori: 9, contacte: 9, dubluri: 1, neidentificati: 1, erori: 2, parcele_de_importat: 8, detinatori_de_importat: 9, contacte_de_importat: 9 })
     expect(p.statistici.pe_uat.HUS).toMatchObject({ parcele: 7, detinatori: 8, dubluri: 1, neidentificati: 1, fara_cheie: 0, ambigue: 0 })
     expect(p.statistici.pe_uat.PRU).toMatchObject({ parcele: 1, detinatori: 1 })
   })
@@ -211,8 +211,9 @@ describe('parseazaTgz — robustețe', () => {
       ['8/2', '', 'HUS', 'MH', 'Test Ok Doi', 'Str. E', 1, 'arabil', '', '300', ''],          // valori egale sau goale → OK
     ]), OPT)
     expect(p.parcele.map(x => [x.cheie, x.ambigua, x.motiv_ambiguitate])).toEqual([['HUS:7', true, MOTIV_CONTRADICTORIU], ['HUS:8', false, null]])
-    expect(p.parcele[0]).toMatchObject({ nr_cadastral: null, cheie_sursa: 'HUS|HG 1||T5', randuri: expect.any(Array) })
-    expect(p.parcele[0].identitate).toBeUndefined()
+    expect(p.parcele[0]).toMatchObject({ nr_cadastral: '100', cheie_sursa: 'HUS|HG 1|100|T5', randuri: expect.any(Array) })   // consolidat: prima valoare nevidă
+    expect(p.parcele[0].valori).toBeUndefined(); expect(p.parcele[0].note).toBeUndefined()
+    expect(p.statistici).toMatchObject({ parcele_de_importat: 1, detinatori_de_importat: 2, contacte_de_importat: 2 })
     expect(p.dubluri).toHaveLength(1)
     expect(p.detinatori.filter(d => d.cheie_parcela === 'HUS:7')).toHaveLength(3)
     // toate cele 4 rânduri ale grupului (și dublura) în erori și în ambigue, cu detaliul câmpului contradictoriu
@@ -242,6 +243,55 @@ describe('parseazaTgz — robustețe', () => {
     ]), OPT)
     expect(p2.ambigue[0].detaliu).toBe('HG: „HG 1” / „HG 2”; tarla: „T1” / „T2”')
   })
+  it('P1-2 (r7): identitatea se consolidează pe grup ÎNAINTE de cheie — ordinea rândurilor nu schimbă cheie_sursa; reimportul în altă ordine ⇒ 0 noi', async () => {
+    const a = [
+      ['7/1', 'HG 1', 'HUS', 'MH', 'Test Unu', 'Str. A', 300, '', 'T5', '', 'privat'],
+      ['7/2', 'HG 1', 'HUS', 'MH', 'Test Doi', 'Str. B', '', 'arabil', '', '100', ''],
+    ]
+    const b = [a[1], a[0]]
+    const pa = parseazaTgz(xlsxDin(a), OPT); const pb = parseazaTgz(xlsxDin(b), OPT)
+    for (const p of [pa, pb]) {
+      expect(p.erori).toEqual([]); expect(p.ambigue).toEqual([])
+      expect(p.parcele).toHaveLength(1)
+      expect(p.parcele[0]).toMatchObject({ cheie: 'HUS:7', cheie_sursa: 'HUS|HG 1|100|T5', poz_hg: 'HG 1', nr_cadastral: '100', tarla: 'T5', suprafata_temporara_mp: 300, categoria_folosinta: 'arabil', observatii: 'Regim juridic: privat', ambigua: false })
+      expect(p.statistici).toMatchObject({ parcele_de_importat: 1, detinatori_de_importat: 2, contacte_de_importat: 2, parcele_fara_cheie: 0 })
+    }
+    expect(pb.parcele[0].rand).toBe(4)   // rândul primei apariții
+    const sb = creeazaFakeSupabase()
+    const r1 = await scrieImport(sb, pa, { proiectId: 'proiect-1', versiune: 'v1' })
+    expect(r1).toMatchObject({ parceleNoi: 1, detinatoriNoi: 2 })
+    expect(sb.tabele.red_parcele[0]).toMatchObject({ cheie_sursa: 'HUS|HG 1|100|T5', nr_cadastral: '100', tarla: 'T5', suprafata_temporara_mp: 300 })
+    const r2 = await scrieImport(sb, pb, { proiectId: 'proiect-1', versiune: 'v2' })
+    expect(r2).toMatchObject({ parceleNoi: 0, parceleRefolosite: 1, detinatoriNoi: 0, detinatoriExistenti: 2, contacteNoi: 0 })
+    expect(sb.tabele.red_parcele).toHaveLength(1); expect(sb.tabele.red_detinatori).toHaveLength(2)
+  })
+  it('P1-2 (r7): suprafața / categoria / regimul contradictorii în grup ⇒ ambiguă, cu detaliu', () => {
+    const p = parseazaTgz(xlsxDin([
+      ['7/1', 'HG 1', 'HUS', 'MH', 'Test Unu', 'Str. A', '300', 'arabil', 'T5', '100', 'privat'],
+      ['7/2', 'HG 1', 'HUS', 'MH', 'Test Doi', 'Str. B', '250,5', 'Arabil', 'T5', '100', 'Privat'],
+    ]), OPT)
+    expect(p.parcele[0]).toMatchObject({ ambigua: true, motiv_ambiguitate: MOTIV_CONTRADICTORIU, detaliu_ambiguitate: 'suprafață: „300” / „250.5”', cheie_sursa: 'HUS|HG 1|100|T5', suprafata_temporara_mp: 300 })
+    expect(p.ambigue.map(a => a.rand)).toEqual([4, 5])
+    expect(p.statistici).toMatchObject({ parcele_de_importat: 0, detinatori_de_importat: 0, contacte_de_importat: 0 })
+  })
+  it('P1-1 (r7): coliziune pe cheia CONSOLIDATĂ — grupul 7 (HG1/gol + HG1/100) și grupul 8 (HG1/100) ⇒ ambele grupuri ambigue', async () => {
+    const p = parseazaTgz(xlsxDin([
+      ['7/1', 'HG 1', 'HUS', 'MH', 'Test G7 Unu', 'Str. A', 1, '', '', '', ''],
+      ['7/2', 'HG 1', 'HUS', 'MH', 'Test G7 Doi', 'Str. B', 1, '', '', '100', ''],
+      ['8', 'HG 1', 'HUS', 'MH', 'Test G8', 'Str. C', 1, '', '', '100', ''],
+      ['9', 'HG 9', 'HUS', 'MH', 'Test G9', 'Str. D', 1, '', '', '900', ''],
+    ]), OPT)
+    expect(p.parcele.map(x => [x.cheie, x.cheie_sursa, x.ambigua, x.motiv_ambiguitate])).toEqual([
+      ['HUS:7', 'HUS|HG 1|100|', true, MOTIV_AMBIGUU], ['HUS:8', 'HUS|HG 1|100|', true, MOTIV_AMBIGUU], ['HUS:9', 'HUS|HG 9|900|', false, null],
+    ])
+    expect(p.erori.map(e => [e.rand, e.motiv])).toEqual([[4, MOTIV_AMBIGUU], [5, MOTIV_AMBIGUU], [6, MOTIV_AMBIGUU]])
+    expect(p.ambigue.map(a => [a.rand, a.cheie_parcela])).toEqual([[4, 'HUS:7'], [5, 'HUS:7'], [6, 'HUS:8']])
+    expect(p.statistici).toMatchObject({ parcele: 3, parcele_ambigue: 2, ambigue: 3, parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1 })
+    const sb = creeazaFakeSupabase()
+    const r = await scrieImport(sb, p, { proiectId: 'proiect-1', versiune: 'v1' })
+    expect(r).toMatchObject({ parceleNoi: 1, detinatoriNoi: 1 })
+    expect(sb.tabele.red_parcele.map(x => x.cheie_sursa)).toEqual(['HUS|HG 9|900|'])
+  })
   it('P1-1: tarla egală dar HG/cadastru diferite NU e ambiguitate; rândurile x/1, x/2 nu sunt ambigue între ele', () => {
     const p = parseazaTgz(xlsxDin([
       ['1/1', 'HG 1', 'HUS', 'MH', 'Test A', 'Str. A', 1, 'arabil', 'T1', 'CF 1', ''],
@@ -259,7 +309,7 @@ describe('parseazaTgz — robustețe', () => {
     expect(p.parcele[0]).toMatchObject({ cheie_sursa: null, cheie: 'HUS:5', tarla: 'T9' })
     expect(p.parcele[1]).toMatchObject({ cheie_sursa: 'HUS|HG 6||', cheie: 'HUS:6' })
     expect(p.fara_cheie).toEqual([{ rand: 4, nr_crt: '5', nume: 'Test Fără Cheie', cheie_parcela: 'HUS:5' }])
-    expect(p.statistici).toMatchObject({ parcele_fara_cheie: 1, fara_cheie: 1 })
+    expect(p.statistici).toMatchObject({ parcele_fara_cheie: 1, fara_cheie: 1, parcele_de_importat: 1, detinatori_de_importat: 1, contacte_de_importat: 1 })
     expect(p.erori).toEqual([])
   })
   it('P1-3: județ în adresă diferit de coloana Județ → adresa_judet din adresă + notă în observatii-le parcelei', () => {
@@ -299,7 +349,7 @@ describe('parseazaTgz — robustețe', () => {
       const x = i % 10 === 1 && i > 1 ? i - 1 : i          // rândul x/2 urmează rândului x/1
       const uat = x % 2 ? 'Husnicioara' : 'Prunișor'
       const nrCrt = i % 10 === 0 ? `${i}/1` : (x !== i ? `${x}/2` : String(i))
-      randuri.push([nrCrt, `HG ${x}`, uat, 'Mehedinți', `Test Persoană ${i}`, i % 7 === 0 ? '' : `Sat Fictiv ${i % 30}, Com. ${uat}, Str. Test nr. ${i}`, i * 1.5, 'arabil', `T${x % 40}`, `CF ${1000 + x}`, 'privat'])
+      randuri.push([nrCrt, `HG ${x}`, uat, 'Mehedinți', `Test Persoană ${i}`, i % 7 === 0 ? '' : `Sat Fictiv ${i % 30}, Com. ${uat}, Str. Test nr. ${i}`, x * 1.5, 'arabil', `T${x % 40}`, `CF ${1000 + x}`, 'privat'])
     }
     const buf = xlsxDin(randuri)
     const t0 = performance.now()
