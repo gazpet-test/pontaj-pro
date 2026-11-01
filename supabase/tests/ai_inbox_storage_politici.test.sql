@@ -300,7 +300,7 @@ BEGIN
   PERFORM pg_temp.eq(pg_temp.efect('authenticated', a4,
       format('SELECT 1 FROM storage.objects WHERE bucket_id = %L AND name = %L;;', b, o2)
       || format('DELETE FROM storage.objects WHERE bucket_id = %L AND name = %L', b, o2)),
-    'ok:0', 'T7i cont fără HR nu descarcă / nu șterge fișierul unui rând nedecis (varianta B, 01.11; rândul îl vede încă în coadă — temă separată)');
+    'ok:0', 'T7i cont fără HR nu descarcă / nu șterge fișierul unui rând nedecis (varianta B + A, 01.11; nici rândul nu-l mai vede în coadă)');
 
   -- T9 atacurile indirecte prin service_role (edge citeste-orice descarcă row.fisier_path; cleanup-recycle-bin șterge fișierele
   --    rândurilor „respins”): atacatorul nu mai are un rând care să arate spre fișierul altcuiva, deci edge-urile ating doar ce a urcat el
