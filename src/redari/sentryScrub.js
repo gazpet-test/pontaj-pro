@@ -106,7 +106,9 @@ export const formele = (s) => {
 const ramaneCodificat = (s) => [s, cuUnicode(s)].some(x => { const f = formele(x); return f.length === MAX_DECODARI + 1 && /%[0-9A-Fa-f]{2}/.test(f[f.length - 1]) })
 // Jakarinos r36 P2-01: `token_endpoint: '/oauth/%25252520'` (scurt) NU poate ascunde un identificator de 43 — semnal TARE doar daca forma ramasa
 // are >=43 de grupuri %XX sau >=129 de caractere (un identificator codificat caracter cu caracter are cel putin 43 x 3)
-const poateAscundeToken = (s) => ramaneCodificat(s) && [s, cuUnicode(s)].some(x => { const f = formele(x); const u = f[f.length - 1]; return (u.match(/%[0-9A-Fa-f]{2}/g) || []).length >= 43 || u.length >= 129 })
+// Jakarinos r37 P1-01: identificatorul poate fi codificat DOAR PARȚIAL (un singur caracter `%25252555` între caractere clare) — lungimea
+// potențială = caractere clare + câte un caracter pentru fiecare grup `%XX` rămas; dacă poate ajunge la 43 ⇒ poate ascunde identificatorul
+const poateAscundeToken = (s) => ramaneCodificat(s) && [s, cuUnicode(s)].some(x => { const f = formele(x); const u = f[f.length - 1]; return u.replace(/%[0-9A-Fa-f]{2}/g, 'x').length >= 43 })
 const colecteazaTokenuri = (forma, set) => {
   for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN, RX_TOKEN_CHEIE]) {
     rx.lastIndex = 0

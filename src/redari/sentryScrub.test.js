@@ -646,6 +646,20 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // P2-01: valoare scurta inca codificata sub cheie cu `token` in nume -> NU poate ascunde 43 de caractere -> trece
     expect(scrubSentryEvent({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })).toEqual({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })
   })
+  it('r37 P1-01 (Jakarinos): identificator codificat PARTIAL (un singur caracter %25252555) sub cheie sensibila / cheie codificata / cu escape / in JSON', () => {
+    const E = T.slice(0, 20) + '%25252555' + T.slice(21)
+    for (const ev of [
+      { extra: { token: E } },
+      { extra: { '%25252574oken': E } },
+      { extra: { token: E.replace('%', '\\u0025') } },
+      { extra: { nota: JSON.stringify({ token: E }) } },
+      { request: { url: '/intern', data: { p_token: [null, E] } } },
+    ]) { const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes('25252555')).toBe(true) }
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { token: E } })
+    expect(JSON.stringify(sp)).not.toContain('25252555')
+    // legitim: scurt sub cheie token, inca codificat -> trece
+    expect(scrubSentryEvent({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })?.message).toBe('Eroare OAuth')
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
