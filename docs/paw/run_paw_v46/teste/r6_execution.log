@@ -185,6 +185,6 @@ test_residual_and_engine_plans (teste.test_cdx_r6.R6.test_residual_and_engine_pl
 test_all_cases (teste.test_cdx_security.Security.test_all_cases) ... ok
 
 ----------------------------------------------------------------------
-Ran 185 tests in 141.824s
+Ran 185 tests in 135.912s
 
 OK

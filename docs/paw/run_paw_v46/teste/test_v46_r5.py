@@ -106,7 +106,8 @@ try {$r=CitesteGemLucrari;'OK '+((@($r.Keys)|Sort-Object) -join ',')} catch {'ER
             'case_duplicate_field': '{"dosar-123":{"url":"%saaaa","URL":"%sbbbb","schimburi":2}}' % (U, U),
             'case_field_only': '{"dosar-123":{"URL":"%saaaa","SCHIMBURI":2}}' % U,
             'case_duplicate_label': '{"dosar-123":{"url":"%saaaa","schimburi":1},"DOSAR-123":{"url":"%sbbbb","schimburi":0}}' % (U, U),
-            'json_escape_in_key': r'{"dosar-123":{"url":"%saaaa","schimburi":29},"dosar-123":{"url":"%sbbbb","schimburi":0}}' % (U, U),
+            # escape JSON real in cheie (backslash construit la rulare, ca sa nu-l decodeze nici Python, nici editorul)
+            'json_escape_in_key': '{"dosar-123":{"url":"%saaaa","schimburi":29},"dosar' % U + chr(92) + 'u002d123":{"url":"%sbbbb","schimburi":0}}' % U,
             'json_escape_in_value': r'{"dosar-123":{"url":"https:\/\/gemini.google.com\/app\/aaaa","schimburi":1}}',
             'single_quotes': "{'dosar-123':{'url':'%saaaa','schimburi':29,'schimburi':0}}" % U,
             'mixed_quotes': '{"dosar-123":{"url":"%saaaa","schimburi":29,\'schimburi\':0}}' % U,
@@ -126,6 +127,7 @@ try {$r=CitesteGemLucrari;'OK '+((@($r.Keys)|Sort-Object) -join ',')} catch {'ER
             'two_objects': '{}{}',
             'unclosed': '{"dosar-123":{"url":"%saaaa","schimburi":1}' % U,
         }
+        self.assertIn(chr(92) + 'u002d', bad['json_escape_in_key'])
         for name, raw in bad.items():
             with self.subTest(name=name):
                 self.assertTrue(self.read_raw(raw).startswith('ERR gem_'), name)
