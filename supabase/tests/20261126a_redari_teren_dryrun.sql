@@ -29,6 +29,17 @@ CREATE FUNCTION pg_temp.red_g(p_nume text) RETURNS text LANGUAGE sql STABLE AS $
 CREATE FUNCTION pg_temp.red_stare(p_detinator uuid) RETURNS text LANGUAGE sql STABLE AS $h$
   SELECT s.stare FROM public.red_v_stare_parcela s WHERE s.detinator_id = p_detinator;
 $h$;
+-- true dacă instrucțiunea a căzut (orice eroare) SAU a atins 0 rânduri — pentru storage.objects pe prod, unde trigger-ul Supabase
+-- protect_objects_delete RAISE la orice DELETE direct, iar local (schelet fără trigger) RLS-ul dă 0 rânduri; sub-tranzacție, nimic nu rămâne
+CREATE FUNCTION pg_temp.red_refuza_sau_zero(p_sql text) RETURNS boolean LANGUAGE plpgsql AS $h$
+DECLARE n bigint;
+BEGIN
+  EXECUTE p_sql;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n = 0;
+EXCEPTION WHEN OTHERS THEN
+  RETURN true;
+END $h$;
 -- true DOAR dacă instrucțiunea a căzut cu exact SQLSTATE-ul așteptat (sub-tranzacție; nimic nu rămâne)
 CREATE FUNCTION pg_temp.red_refuza(p_sql text, p_stare text) RETURNS boolean LANGUAGE plpgsql AS $h$
 BEGIN
@@ -613,12 +624,9 @@ BEGIN
   PERFORM pg_temp.red_ca(v_fara, 'authenticated', 'editor@redari.local');
   INSERT INTO storage.objects (bucket_id, name, owner_id, metadata) VALUES ('redari', v_cale, v_fara::text, '{"mimetype":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}'::jsonb) RETURNING id INTO v_obj;
   IF (SELECT count(*) FROM storage.objects WHERE bucket_id = 'redari' AND name = v_cale) <> 1 THEN RAISE EXCEPTION 'TEST9 FAIL: editorul nu-si vede obiectul'; END IF;
-  UPDATE storage.objects SET name = v_cale || '.x' WHERE id = v_obj;
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 0 THEN RAISE EXCEPTION 'TEST9 FAIL: editorul a modificat obiectul (% randuri)', n; END IF;
-  DELETE FROM storage.objects WHERE id = v_obj;
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 0 THEN RAISE EXCEPTION 'TEST9 FAIL: editorul a sters obiectul (% randuri)', n; END IF;
+  -- UPDATE / DELETE ca editor: refuz = exceptie (prod: protect_objects_delete RAISE la orice DELETE direct) SAU 0 randuri (RLS fara politica)
+  IF NOT pg_temp.red_refuza_sau_zero(format('UPDATE storage.objects SET name = %L WHERE id = %L', v_cale || '.x', v_obj)) THEN RAISE EXCEPTION 'TEST9 FAIL: editorul a modificat obiectul'; END IF;
+  IF NOT pg_temp.red_refuza_sau_zero(format('DELETE FROM storage.objects WHERE id = %L', v_obj)) THEN RAISE EXCEPTION 'TEST9 FAIL: editorul a sters obiectul'; END IF;
   PERFORM pg_temp.red_ca(NULL, 'anon', NULL);
   IF (SELECT count(*) FROM storage.objects WHERE bucket_id = 'redari') <> 0 THEN RAISE EXCEPTION 'TEST9 FAIL: anon vede obiectul editorului'; END IF;
   PERFORM pg_temp.red_ca(NULL, 'postgres', NULL);
