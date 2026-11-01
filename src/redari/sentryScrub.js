@@ -39,10 +39,13 @@ const pareSuspect = (s) => /redari|raspuns|token/i.test(s)
 // Jakarinos r40/r41 P1-01: decodor COMPLET de escape-uri JavaScript — `\uXXXX`, `\u{H..}`, `\xHH`, octal `\125`, escape de identitate `\U` -> `U`
 // (si `\n`,`\t`... -> caracterul de control). Orice backslash poate rupe secventa de 43 si poate fi reconstruit de un motor JS — deci TOATE se reconstruiesc.
 const CONTROL = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v', 0: '\0' }
-const cuUnicode = (s) => s.replace(/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\([0-7]{1,3})|\\([^])/g, (_m, a, b, c, o, i) => {
+// Jakarinos r42: (1) continuarea de linie `\` + CR/LF/CRLF/U+2028/U+2029 dispare complet (ca in JS); (2) octal: `[0-3]` ia pana la 3 cifre,
+// `[4-7]` pana la 2 (`\600` = `\60` + `0`), exact ca motorul JS
+const cuUnicode = (s) => s.replace(/\\(?:\r\n|[\n\r\u2028\u2029])|\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\([0-3][0-7]{0,2}|[4-7][0-7]?)|\\([^])/g, (_m, a, b, c, o, i) => {
   try {
     if (a || b || c) return String.fromCodePoint(parseInt(a || b || c, 16))
     if (o !== undefined) return String.fromCharCode(parseInt(o, 8))
+    if (i === undefined) return ''   // continuare de linie
     return i in CONTROL ? CONTROL[i] : i
   } catch { return _m }
 })
