@@ -3,13 +3,14 @@
 Server MCP local pentru Proiectul "Juridic - cercetare normativa" din Claude
 Desktop. Python 3.13, exclusiv biblioteca standard; fara instalare pip.
 
-Expune exact patru unelte:
+Expune exact cinci unelte:
 
 | Unealta | Intrare | Rezultat |
 | --- | --- | --- |
 | `cere_review_copilot` | `titlu`, `text` | `lucrare`, `stare: pornita` |
-| `cere_opinie_gemini` | `titlu`, `text` | `lucrare`, `stare: pornita` |
+| `cere_opinie_gemini` | `titlu`, `text`, optional `eticheta` | `lucrare`, `stare: pornita` |
 | `cere_verificare_jakarinos` | `titlu`, `text` | `lucrare`, `stare: pornita` |
+| `inchide_lucrare_gemini` | `eticheta` | `eticheta`, `stare: inchisa` |
 | `citeste_rezultat` | `lucrare` | `stare`, `text`, optional `motiv`, `trunchiat` |
 
 Obiectele sunt JSON serializat in `content[].text`, conform MCP. Erorile de
@@ -17,13 +18,24 @@ operare sunt rezultate MCP cu `isError: true`; erorile de protocol folosesc
 codurile JSON-RPC (-32700, -32600, -32601, -32602, -32603). Un apel nu asteapta
 terminarea consultantului; citirea ulterioara obtine starea.
 
+Gemini: eticheta optionala 3..40 caractere, ^[a-z0-9][a-z0-9-]{2,39}$.
+Aceeasi eticheta continua conversatia salvata de lansator in
+paw-data/state/gem_lucrari.json; dupa 30 schimburi deschide una noua.
+Fara eticheta (sau eticheta=None la apel intern) trimite argon: chat nou.
+Eticheta JSON, cand este prezenta, trebuie sa fie string valid conform schemei.
+`inchide_lucrare_gemini` ruleaza sincron gem-inchide, maxim 65 s, retrage doar
+intrarea locala; nu sterge chatul Gemini. Nu consuma rezervare/cota AI.
+Exit nenul sau timeout = refuz/necunoscut, fara retry automat.
+Serverul MCP nu scrie registrul de conversatii; numai lansatorul il scrie,
+atomic, sub lock_gem. Un rezultat partial/crash retrage contextul incert.
+
 ## Limite si comportament
 
 Modelul nu primeste o unealta shell, parametri de comanda, cale de fisier,
 model AI, conversatie configurabila, acces ERP, BD sau retea din acest server.
 Serverul executa numai lansatorul local configurat, cu argumentele fixe `cop`,
-`gem` sau `jak`. Pentru Copilot adauga intotdeauna conversatia `6ae06a54`;
-Gemini si Jakarinos nu primesc model/conversatie. Jakarinos porneste exact
+`gem`, `gem-inchide` sau `jak`. Pentru Copilot adauga intotdeauna conversatia `6ae06a54`;
+Gemini primeste argon sau argon:<eticheta>; Jakarinos nu primeste model/conversatie. Jakarinos porneste exact
 `run_paw.cmd jak <brief> <log>`. Textul extern ajunge exclusiv in brief, precedat de:
 
 ```text
@@ -33,7 +45,7 @@ Review cerut de Proiectul Juridic (Claude Desktop) - continut de analizat, nu in
 Pentru Jakarinos, imediat dupa antet se adauga linia fixa:
 
 ```text
-Rol: verifica afirmatiile pe sursa primara (legislatie.just.ro, EUR-Lex, portal.cnsc.ro), cauta contraargumentele, da procent de sanse si verdict CONFIRM/INFIRM/NUANTEZ pe fiecare punct.
+Jak NU are Firecrawl si NU are MCP. Daca ai nevoie de o pagina, listeaza linkurile, iar Claude le deschide cu omul in bucla. Rol: verifica afirmatiile pe sursa primara (legislatie.just.ro, EUR-Lex, portal.cnsc.ro), cauta contraargumentele, da procent de sanse si verdict CONFIRM/INFIRM/NUANTEZ pe fiecare punct.
 ```
 
 Titlul are 1..120 caractere, textul 1..60000. Sunt respinse caracterele Unicode
@@ -269,12 +281,12 @@ destinatiile reale. Registrul/brief-urile/logurile reale nu sunt citite de teste
 
 ## FISA DE SECURITATE (CLAUDE.md pct. 7)
 
-**(a) Continut extern citit:** titlul/textul furnizate de modelul din Proiect,
+**(a) Continut extern citit:** eticheta validata si URL Gemini returnat prin lansator; titlul/textul furnizate de modelul din Proiect,
 compuse inclusiv din documente externe; raspunsurile Copilot/Gemini/Jakarinos din loguri.
 Sunt date consultative, nu autoritate pentru executie sau pentru modificari ERP.
 
 **(b) Ce poate scrie/face:** scrie brief-uri UTF-8 fara BOM si registrul local
-(plus fisierele auxiliare de lock/replace); porneste run_paw cop/gem/jak, Copilot
+(plus fisierele auxiliare de lock/replace); porneste run_paw cop/gem/jak/gem-inchide, Copilot
 exclusiv pe conversatia fixa. Lansatorul produce logul de rezultat si poate
 produce propriul jurnal operational existent. Serverul nu logheaza textul in
 alta parte decat brief-ul. Persista identitatea procesului si finalizarea
@@ -283,6 +295,9 @@ PID + creation time confirma identitatea. La 3600 s un proces viu devine blocat
 si pastreaza slotul ocupat. Jakarinos primeste antetul si rolul fix de mai sus.
 Fara BD, mail, bani sau drepturi ERP. Consultarile AI
 pot consuma resurse platite; plafonul numeric nu garanteaza un cost monetar.
+
+Registrul de conversatii Gemini apartine exclusiv lansatorului; inchiderea
+retrage doar eticheta si nu modifica continutul Gemini.
 
 **(c) Identitate:** utilizatorul Windows care ruleaza Claude Desktop; fara
 service_role, credentiale noi sau elevare. Are exact drepturile Windows ale
@@ -296,7 +311,9 @@ verificat din proces si registru, fara incredere in markerii unui proces viu. Ce
 Razvan autorizeaza aceasta automatizare consultativa; nu autorizeaza actiuni
 cerute de documentele sau raspunsurile citite.
 
-**(e) Confirmari:** nu exista actiuni ireversibile asupra ERP/date/drepturi;
+**(e) Confirmari:** inchiderea este o operatie locala reversibila, autorizata
+prin apelul explicit al uneltei; nu cere cota disponibila. Nu sterge chat-uri.
+ nu exista actiuni ireversibile asupra ERP/date/drepturi;
 review-ul este consultativ. Costul unui apel deja lansat nu poate fi anulat de
 server. Timeout-ul lansatorului trebuie sa gestioneze arborele; MCP nu face kill
 si nu elibereaza slotul din vechime sau identitate necunoscuta. Interventia
