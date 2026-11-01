@@ -45,7 +45,11 @@ describe('idParcela', () => {
     expect(idParcela(3, 'HUS', 1)).toBe('T3-HUS-0001')
     expect(idParcela(11, 'PRU', 2728)).toBe('T11-PRU-2728')
     expect(idParcela('7', 'GOD', '42')).toBe('T7-GOD-0042')
-    expect(idParcela(1, 'SIS', 12345)).toBe('T1-SIS-12345')
+    expect(idParcela(1, 'SIS', 9999)).toBe('T1-SIS-9999')
+  })
+  it('formatul e fix 4 cifre: n > 9999 → Error', () => {
+    expect(() => idParcela(1, 'SIS', 10000)).toThrow(/9999/)
+    expect(() => idParcela(1, 'SIS', 12345)).toThrow(/depășește 9999/)
   })
   it('validări', () => {
     expect(() => idParcela(0, 'HUS', 1)).toThrow(/tronson/)

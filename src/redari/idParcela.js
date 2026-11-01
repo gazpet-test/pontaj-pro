@@ -30,6 +30,7 @@ export function idParcela(tronson, cod3, n) {
   if (!/^[A-Z]{3}$/.test(String(cod3))) throw new Error(`idParcela: uat3 invalid „${cod3}”`)
   const nr = Number(n)
   if (!Number.isInteger(nr) || nr < 1) throw new Error(`idParcela: număr invalid „${n}”`)
+  if (nr > 9999) throw new Error(`idParcela: numărul ${nr} depășește 9999 (formatul e fix 4 cifre)`)
   return `T${t}-${cod3}-${String(nr).padStart(4, '0')}`
 }
 
