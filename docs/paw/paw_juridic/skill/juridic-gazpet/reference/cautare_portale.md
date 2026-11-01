@@ -1,5 +1,7 @@
 # Cautarea pe portaluri - ce merge, pe unde, in ce ordine
 
+Cine deschide paginile: Claude, in sesiunea de pe serverul AI (regula 27.10.2026, vezi `decizii_echipa.md` 1b). Consultantii doar propun linkuri. Fara intrebare se deschid doar domeniile de mai jos; orice alt domeniu cere acordul lui Razvan.
+
 Metoda a fost verificata in cercetarea 01.10-27.10.2026. Sursele: `surse_lipsa.md`, `CORPUS_CJ_PAGINI`, handoff-ul juridic. Daca o cale nu mai merge, noteaza in livrabil ce ai incercat si data. Nu inventa continut.
 
 ## 1. O decizie CNSC: de la subiect la citat cu pagina

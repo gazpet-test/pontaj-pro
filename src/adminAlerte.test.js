@@ -69,6 +69,11 @@ describe('Termene, stări și excluderi', () => {
     const [row] = alerteOfertare([{ id: 1, status: 'go', termen_depunere: '2026-09-24T12:00:00Z' }], now)
     expect(row.priority).toBe('critical'); expect(row.impact).toContain('Responsabil neatribuit')
   })
+  it('20261121a: doar responsabilul 2 setat = atribuită (nu „neatribuit”); niciunul = neatribuit', () => {
+    const [r2] = alerteOfertare([{ id: 1, status: 'go', responsabil2_id: 'y', termen_depunere: '2026-09-24T12:00:00Z' }], now)
+    expect(r2.impact).not.toContain('Responsabil neatribuit'); expect(r2.owner).not.toBe('Neatribuit')
+    expect(alerteOfertare([{ id: 1, status: 'go', responsabil2_id: 'y', termen_depunere: '2026-12-24T12:00:00Z' }], now)).toEqual([])
+  })
   it('termenul licitației se compară la ora exactă; stările închise sunt excluse', () => {
     const base = { id: 1, status: 'in_lucru', responsabil_id: 'x', termen_depunere: '2026-09-22T11:59:00Z' }
     expect(alerteOfertare([base], now)[0].priority).toBe('critical')

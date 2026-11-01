@@ -1,3 +1,4 @@
+import { employeeFieldRead, withEmployeePersonal } from './employeesPersonal.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
@@ -1471,6 +1472,10 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
   const handleSave = async () => {
     if (!form.tip) { showToast('Selectează tipul (Camion, Utilaj, Autoturism...)', 'error'); return }
     if (!form.model.trim()) { showToast('Modelul este obligatoriu', 'error'); return }
+    // 28.10.2026 (Răzvan): activ NOU doar cu nr. din registrul imobilizărilor; cele vechi se completează treptat
+    // (trigger-ul trg_active_nr_inventar din BD refuză la fel inserarea fără număr și golirea unui număr existent).
+    if (mode === 'create' && !form.nr_inventar.trim()) { showToast('Nr. inventar (registrul imobilizărilor) este obligatoriu la activ nou', 'error'); return }
+    if (mode !== 'create' && activ?.nr_inventar?.trim() && !form.nr_inventar.trim()) { showToast('Nr. inventar nu se poate șterge, doar corecta', 'error'); return }
     if (!form.cod_intern.trim() && !form.nr_inmatriculare.trim()) {
       showToast('Trebuie cod intern SAU plăcuță înmatriculare', 'error'); return
     }
@@ -1701,7 +1706,7 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>🆔 Identificare</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12}}>
             <FieldText label="Cod intern (TST...)" value={form.cod_intern} onChange={v => setField('cod_intern', v)} placeholder="ex: TST094" readonly={isReadOnly} />
-            <FieldText label="Nr inventar" value={form.nr_inventar} onChange={v => setField('nr_inventar', v)} placeholder="ex: MF-00123" readonly={isReadOnly} />
+            <FieldText label="Nr inventar (registrul imobilizărilor)" value={form.nr_inventar} onChange={v => setField('nr_inventar', v)} placeholder="ex: MF-00123" required={mode === 'create' || (!isReadOnly && !!activ?.nr_inventar?.trim())} readonly={isReadOnly} />
             <FieldText label="Plăcuță înmatriculare" value={form.nr_inmatriculare} onChange={v => setField('nr_inmatriculare', v)} placeholder="ex: PH 99 GAZ" readonly={isReadOnly} />
             <FieldSelect label="Tip" value={form.tip} onChange={v => setField('tip', v)} options={tipuri} required={!isReadOnly} placeholder="— alege tipul —" readonly={isReadOnly} />
             <FieldSelect label="Subcategorie" value={form.subcategorie} onChange={v => setField('subcategorie', v)} options={subcategoriiDisponibile} placeholder={subcategoriiDisponibile.length > 1 ? '— alege subcategorie —' : '— niciuna —'} readonly={isReadOnly} />
@@ -9039,18 +9044,16 @@ function QrReconciliereTab({ profile, showToast }) {
     async function loadPins() {
       setPinsLoading(true)
       try {
-        const { data } = await supabase
-          .from('employees')
-          .select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la')
-          .eq('active', true)
-          .order('name')
+        const { data } = await withEmployeePersonal(supabase.from('employees')
+          .select('id, name, functie').eq('active', true).order('name'),
+          'qr_pin,qr_pin_active,qr_pin_creat_la', showToast)
         if (cancelled) return
         setPinsSoferi(data || [])
       } finally {
         if (!cancelled) setPinsLoading(false)
       }
     }
-    loadPins()
+    loadPins().catch(() => {})
     return () => { cancelled = true }
   }, [])
   
@@ -9217,6 +9220,7 @@ function QrReconciliereTab({ profile, showToast }) {
   const fmtL = (v) => Math.round(Number(v) || 0).toLocaleString('ro-RO')
   
   async function setPin(employeeId, newPin) {
+    if (!employeeFieldRead(pinsSoferi.find(p => p.id === employeeId), "qr_pin")) return
     if (!newPin || newPin.length < 4) {
       showToast?.('PIN minim 4 cifre', 'error')
       return
@@ -9240,12 +9244,13 @@ function QrReconciliereTab({ profile, showToast }) {
     } else {
       showToast?.('PIN setat ✓', 'success')
       // Reload pins
-      const { data } = await supabase.from('employees').select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la').eq('active', true).order('name')
+      const { data } = await withEmployeePersonal(supabase.from('employees').select('id, name, functie').eq('active', true).order('name'), 'qr_pin,qr_pin_active,qr_pin_creat_la', showToast)
       setPinsSoferi(data || [])
     }
   }
   
   async function togglePin(employeeId, newActive) {
+    if (!employeeFieldRead(pinsSoferi.find(p => p.id === employeeId), "qr_pin")) return
     const { error } = await supabase
       .from('employees').update({ qr_pin_active: newActive })
       .eq('id', employeeId)
@@ -9253,7 +9258,7 @@ function QrReconciliereTab({ profile, showToast }) {
       showToast?.('Eroare: ' + error.message, 'error')
     } else {
       showToast?.(newActive ? 'PIN activat ✓' : 'PIN dezactivat', 'success')
-      const { data } = await supabase.from('employees').select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la').eq('active', true).order('name')
+      const { data } = await withEmployeePersonal(supabase.from('employees').select('id, name, functie').eq('active', true).order('name'), 'qr_pin,qr_pin_active,qr_pin_creat_la', showToast)
       setPinsSoferi(data || [])
     }
   }
@@ -9438,7 +9443,7 @@ function QrReconciliereTab({ profile, showToast }) {
       {/* Section: PIN-uri șoferi */}
       <div style={{...S.card, marginBottom: 14}}>
         <div style={{padding: '14px 18px', borderBottom: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-          <div style={{fontWeight: 700, color: G.text, fontSize: 14}}>🔑 PIN-uri șoferi ({pinsSoferi.filter(p => p.qr_pin_active).length} active)</div>
+          <div style={{fontWeight: 700, color: G.text, fontSize: 14}}>🔑 PIN-uri șoferi ({pinsSoferi.length && pinsSoferi.every(p => employeeFieldRead(p, "qr_pin")) ? `${pinsSoferi.filter(p => p.qr_pin_active).length} active` : "PIN - doar owner/HR"})</div>
         </div>
         <div style={{maxHeight: 300, overflowY: 'auto'}}>
           {pinsLoading ? <div style={{padding: 20, textAlign: 'center', color: G.muted}}>Se încarcă...</div> :
@@ -9466,7 +9471,7 @@ function QrReconciliereTab({ profile, showToast }) {
                         borderRadius: 4,
                         color: s.qr_pin ? '#8B5CF6' : G.muted,
                         fontWeight: 700, letterSpacing: '0.1em',
-                      }}>{s.qr_pin || '—'}</code>
+                      }}>{employeeFieldRead(s, 'qr_pin') ? (s.qr_pin || '\u2014') : 'PIN - doar owner/HR'}</code>
                     </td>
                     <td style={{padding: '8px 12px', textAlign: 'center'}}>
                       {s.qr_pin && (
@@ -9479,12 +9484,13 @@ function QrReconciliereTab({ profile, showToast }) {
                     </td>
                     <td style={{padding: '8px 12px', textAlign: 'right'}}>
                       <button onClick={() => {
+                        if (!employeeFieldRead(s, "qr_pin")) return
                         const newPin = prompt(`PIN nou pentru ${s.name} (4-6 cifre):`, s.qr_pin || '')
                         if (newPin !== null && newPin.length >= 4) setPin(s.id, newPin)
-                      }} style={{
+                      }} disabled={!employeeFieldRead(s, 'qr_pin')} style={{
                         padding: '4px 10px', background: 'transparent', color: '#8B5CF6',
                         border: '1px solid #8B5CF655', borderRadius: 5, fontSize: 11, cursor: 'pointer', marginRight: 4,
-                      }}>{s.qr_pin ? '✏️ Schimbă' : '➕ Set PIN'}</button>
+                      }}>{!employeeFieldRead(s, 'qr_pin') ? 'PIN - doar owner/HR' : s.qr_pin ? 'Schimba PIN' : 'Set PIN'}</button>
                       {s.qr_pin && (
                         <button onClick={() => togglePin(s.id, !s.qr_pin_active)} style={{
                           padding: '4px 10px', background: 'transparent',
@@ -11158,6 +11164,7 @@ export default function LogisticaPage() {
   const [stareF, setStareF] = useState('Toate')
   // 27.05.2026: filtru tip proprietate (firmă/comodat/închiriat)
   const [proprietateF, setProprietateF] = useState('Toate')
+  const [inventarF, setInventarF] = useState('Toate') // 28.10.2026: Toate | fara | cu — completarea treptată a nr. din registrul imobilizărilor
   // 27.05.2026: sub-tab Active pentru Contracte Comodat
   const [activeSubTab, setActiveSubTab] = useState('lista') // 'lista' | 'comodat'
   const [employeesComodat, setEmployeesComodat] = useState({}) // {id: name}
@@ -12005,6 +12012,8 @@ export default function LogisticaPage() {
       if (stareF !== 'Toate' && a.stare !== stareF) return false
       // 27.05.2026: filtru tip proprietate
       if (proprietateF !== 'Toate' && (a.tip_proprietate || 'firma') !== proprietateF) return false
+      if (inventarF === 'fara' && a.nr_inventar?.trim()) return false
+      if (inventarF === 'cu' && !a.nr_inventar?.trim()) return false
       return true
     })
     
@@ -12031,7 +12040,7 @@ export default function LogisticaPage() {
       return String(va).localeCompare(String(vb), 'ro') * dir
     })
     return result
-  }, [active, search, tipF, subF, stareF, proprietateF, sortBy])
+  }, [active, search, tipF, subF, stareF, proprietateF, inventarF, sortBy])
   
   // Calculez alerte mentenanță (pentru widget)
   const alerteMentenanta = useMemo(() => {
@@ -12723,8 +12732,14 @@ export default function LogisticaPage() {
             <option value="comodat">📄 Doar comodat</option>
             <option value="inchiriat">🔑 Doar închiriate</option>
           </select>
-          {(search || tipF !== 'Toate' || subF !== 'Toate' || stareF !== 'Toate' || proprietateF !== 'Toate') && (
-            <button onClick={() => { setSearch(''); setTipF('Toate'); setSubF('Toate'); setStareF('Toate'); setProprietateF('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
+          {/* 28.10.2026: nr. inventar (registrul imobilizărilor) — obligatoriu la activ nou, cele vechi se completează treptat */}
+          <select value={inventarF} onChange={e => setInventarF(e.target.value)} title="Filtrare după nr. inventar (registrul imobilizărilor)">
+            <option value="Toate">🔢 Nr. inventar: toate</option>
+            <option value="fara">⚠️ Fără nr. inventar ({active.filter(a => !a.nr_inventar?.trim()).length})</option>
+            <option value="cu">✓ Cu nr. inventar</option>
+          </select>
+          {(search || tipF !== 'Toate' || subF !== 'Toate' || stareF !== 'Toate' || proprietateF !== 'Toate' || inventarF !== 'Toate') && (
+            <button onClick={() => { setSearch(''); setTipF('Toate'); setSubF('Toate'); setStareF('Toate'); setProprietateF('Toate'); setInventarF('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
               ✕ Șterge filtre
             </button>
           )}
