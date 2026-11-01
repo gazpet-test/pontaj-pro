@@ -11,9 +11,10 @@ const MAX_PREVIEW = 50
 // parcelele care chiar se comit: cu cheie_sursa (poziție HG / cadastru / tarla) și neambigue (logica r4)
 const parceleDeComis = (pv) => (pv?.parcele || []).filter(p => p.cheie_sursa && !p.ambigua).length
 const EXPLICATII = {
-  fara_cheie: 'Rânduri FĂRĂ poziție HG, nr. cadastral și tarla: nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — se adaugă manual din Fișa parcelei, după import.',
-  ambigue: 'Rânduri cu ACEEAȘI identitate (poziție HG / cadastru / tarla) pe Nr.Crt. diferite: nu se poate ști care e parcela. NU se importă — se lămuresc cu TGZ sau se adaugă manual din Fișă.',
+  fara_cheie: 'Rânduri FĂRĂ poziție HG, nr. cadastral și tarla: nu au o identitate stabilă în Excel, iar un reimport le-ar dubla. NU se importă — necesită completarea poziției HG / nr. cadastral în Excel și reimport.',
+  ambigue: 'Rânduri cu ACEEAȘI identitate (poziție HG / cadastru / tarla) pe Nr.Crt. diferite: nu se poate ști care e parcela. NU se importă — se lămuresc cu TGZ (poziție HG / nr. cadastral corectate în Excel) și se reimportă.',
 }
+const SUGESTIE_SARITE = 'necesită completarea poziției HG / nr. cadastral în Excel și reimport (reimportul aceluiași fișier completează doar ce lipsește).'
 
 export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const poateScrie = nivel === 'admin' || nivel === 'editor'
@@ -56,7 +57,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
     const nParc = parceleDeComis(preview)
     if (!nParc) { show('Nu e nimic de importat (toate rândurile sunt fără cheie / ambigue sau cu erori).', 'error'); return }
     const sarite = (preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)
-    if (!window.confirm(`Import ${nParc} parcele și ${(preview.detinatori?.length || 0) - sarite} deținători în ${proiect.cod} (lista „${versiune.trim()}”)${sarite ? `.\n${sarite} rânduri NU se importă (fără cheie / ambigue) — se completează manual din Fișă.` : '?'}`)) return
+    if (!window.confirm(`Import ${nParc} parcele și ${(preview.detinatori?.length || 0) - sarite} deținători în ${proiect.cod} (lista „${versiune.trim()}”)${sarite ? `.\n${sarite} rânduri NU se importă (fără cheie / ambigue) — ${SUGESTIE_SARITE}` : '?'}`)) return
     const judetDiferit = preview.statistici?.judet_diferit || 0
     setLucru(true); setProgres({ facut: 0, total: nParc, etapa: 'pornire' })
     // starea lotului (in_curs / finalizat / esuat + eroare) se citește din BD, nu se presupune
@@ -173,7 +174,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !parceleDeComis(preview)}>{lucru ? 'Import în curs…' : `📥 Importă ${parceleDeComis(preview)} parcele`}</button>}
           </div>
           {preview.erori?.length > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ Rândurile cu erori nu intră în import; corectează fișierul sau continuă fără ele.</div>}
-          {((preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)) > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ {preview.fara_cheie?.length || 0} rânduri fără cheie și {preview.ambigue?.length || 0} ambigue NU se importă — se completează manual din Fișă după import.</div>}
+          {((preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)) > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ {preview.fara_cheie?.length || 0} rânduri fără cheie și {preview.ambigue?.length || 0} ambigue NU se importă — {SUGESTIE_SARITE}</div>}
         </div>
       )}
 
@@ -205,7 +206,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
                   <tbody>{raport[k].map((x, i) => <tr key={i}><td style={S.td}>{x.rand ?? '-'}</td><td style={S.td}>{x.nr_crt ?? '-'}</td><td style={S.td}>{x.nume}</td>{k === 'ambigue' && <td style={{ ...S.td, ...S.mono, fontSize:11.5 }}>{x.cheie_sursa || '-'}</td>}</tr>)}</tbody>
                 </table>
               </div>
-              <div style={{ fontSize:12, color:G.muted, marginTop:4 }}>{EXPLICATII[k]} Sugestie: se completează manual din Fișa parcelei după import.</div>
+              <div style={{ fontSize:12, color:G.muted, marginTop:4 }}>{EXPLICATII[k]} Sugestie: {SUGESTIE_SARITE}</div>
             </div>
           ))}
           {Array.isArray(raport.existente) && raport.existente.length > 0 && (

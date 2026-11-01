@@ -10,19 +10,34 @@ describe('redacteazaText', () => {
     expect(redacteazaText(`https://erp.example/redari/raspuns/${T43}?x=1`)).toBe('https://erp.example/redari/raspuns/[token]?x=1')
     expect(redacteazaText('/redari/raspuns/abc-scurt')).toBe('/redari/raspuns/[token]')
   })
-  it('redactează varianta URL-encoded (%2F)', () => {
+  it('redactează varianta URL-encoded (%2F), inclusiv cu litere mici', () => {
     expect(redacteazaText(`https://x/?next=%2Fredari%2Fraspuns%2F${T43}%3Fa%3D1`)).toBe('https://x/?next=%2Fredari%2Fraspuns%2F[token]%3Fa%3D1')
     expect(redacteazaText(`next=%2fredari%2fraspuns%2f${T43}`)).toBe('next=%2Fredari%2Fraspuns%2F[token]')
+    expect(redacteazaText(`raspuns%2F${T43}`)).toBe('raspuns%2F[token]')
   })
-  it('redactează tokenul de 43 de caractere precedat de raspuns/ sau p_token', () => {
+  it('redactează tokenul de 43 de caractere după raspuns/ sau p_token, indiferent de separatori', () => {
     expect(redacteazaText(`raspuns/${T43}`)).toBe('raspuns/[token]')
     expect(redacteazaText(`{"p_token":"${T43}","p_optiune":"particip"}`)).toBe('{"p_token":"[token]","p_optiune":"particip"}')
     expect(redacteazaText(`p_token=${T43}&x=1`)).toBe('p_token=[token]&x=1')
+    expect(redacteazaText(`p_token%22%3A%22${T43}%22`)).toBe('p_token%22%3A%22[token]%22')            // separatoare %XX, formă brută
+    expect(redacteazaText(`p_token : '${T43}'`)).toBe("p_token : '[token]'")
   })
-  it('nu atinge șiruri fără token (42 de caractere, alt context, text obișnuit)', () => {
+  it('redactează după decodarea procent-codificării (JSON URL-encoded, dublu-encoded)', () => {
+    const corp = encodeURIComponent(JSON.stringify({ p_token: T43, p_optiune: 'particip' }))
+    const rez = redacteazaText(corp)
+    expect(rez).not.toContain(T43)
+    expect(rez).toContain('[token]')
+    const dublu = encodeURIComponent(encodeURIComponent(`/redari/raspuns/${T43}`))
+    expect(dublu).not.toContain('/redari/raspuns/')    // nici forma brută, nici prima decodare nu au calea în clar
+    const rez2 = redacteazaText(dublu)
+    expect(rez2).not.toContain(T43)
+    expect(rez2).toContain('[token]')
+  })
+  it('nu atinge șiruri fără token (42 de caractere, alt context, text obișnuit, % invalid)', () => {
     expect(redacteazaText(`p_token=${T42}`)).toBe(`p_token=${T42}`)
     expect(redacteazaText(`altceva/${T43}`)).toBe(`altceva/${T43}`)
     expect(redacteazaText('TypeError: x is not a function')).toBe('TypeError: x is not a function')
+    expect(redacteazaText('raspuns 100% sigur %ZZ')).toBe('raspuns 100% sigur %ZZ')
     expect(redacteazaText(123)).toBe(123)
   })
 })
@@ -51,7 +66,11 @@ describe('redacteazaAdanc', () => {
     const ev = {
       transaction: `/redari/raspuns/${T43}`,
       request: { url: `https://erp/redari/raspuns/${T43}`, headers: { Referer: `https://erp/redari/raspuns/${T43}` } },
-      breadcrumbs: [{ category: 'fetch', data: { url: `https://api/rest/v1/rpc/fn_red_formular_public`, body: `{"p_token":"${T43}"}` } }, { message: `navigare la /redari/raspuns/${T43}` }],
+      breadcrumbs: [
+        { category: 'fetch', data: { url: `https://api/rest/v1/rpc/fn_red_formular_public`, body: `{"p_token":"${T43}"}` } },
+        { message: `navigare la /redari/raspuns/${T43}` },
+        { data: { query: `?body=${encodeURIComponent(JSON.stringify({ p_token: T43 }))}` } },
+      ],
       spans: [{ description: `GET /redari/raspuns/${T43}`, data: { 'http.url': `https://erp/redari/raspuns/${T43}` } }],
       contexts: { trace: { data: { next: `%2Fredari%2Fraspuns%2F${T43}` } } },
       exception: { values: [{ type: 'Error', value: 'ceva' }] },
@@ -81,6 +100,11 @@ describe('scrubSentryEvent la excepție', () => {
     expect(rez.exception.values[0].value).toBe('la /redari/raspuns/[token]')
     expect(rez.tags.sentry_scrub).toBe('minim')
     expect(JSON.stringify(rez)).not.toContain(T43)
+  })
+  it('întoarce null (eveniment eliminat) când și varianta minimă aruncă — getter pe timestamp', () => {
+    const ev = { event_id: 'e2', request: { url: `https://erp/redari/raspuns/${T43}` } }
+    Object.defineProperty(ev, 'timestamp', { enumerable: true, configurable: true, get() { throw new Error('timestamp care aruncă') } })
+    expect(scrubSentryEvent(ev)).toBeNull()
   })
   it('evenimentMinim tolerează evenimente ciudate', () => {
     expect(evenimentMinim(null)).toEqual({ tags: { sentry_scrub: 'minim' } })

@@ -5,7 +5,7 @@ import { supabase } from '../../lib/supabase.js'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
-  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns } from './comune.jsx'
+  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, COL_RASPUNS, COL_RASPUNS_META, citesteTokenRaspuns, citestePaginat, citesteIn } from './comune.jsx'
 
 const COL_PARCELA = 'id, proiect_id, uat_id, id_parcela, tronson, km_de_la, km_pana_la, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta, articol_deviz, cantitate, observatii, sters_la, sters_motiv, created_at'
 const CAMPURI_PARCELA = [
@@ -48,26 +48,27 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (e1) throw e1
       setDetinatori(det || [])
       const ids = (det || []).map(d => d.id)
-      const [rc, rr, rpv, rct] = await Promise.all([
-        ids.length ? supabase.from('red_convocari').select(COL_CONVOCARE).in('detinator_id', ids).order('created_at') : { data: [] },
+      // r3 P2-3: toate listele se citesc paginat (range în bucle de 1000, `.in()` în loturi de 100) — fără limite ascunse
+      const [conv, rasp, pvParcela, pvDet, cont] = await Promise.all([
+        citesteIn(() => supabase.from('red_convocari').select(COL_CONVOCARE).order('created_at').order('id'), 'detinator_id', ids),
         // [r2] ordinea = data desc, seq desc (tie-break); meta (ip/user agent) e tabelă separată, citită mai jos doar de admin/editor
-        ids.length ? supabase.from('red_raspunsuri').select(COL_RASPUNS).in('detinator_id', ids).order('data', { ascending:false }).order('seq', { ascending:false }) : { data: [] },
-        supabase.from('red_procese_verbale').select('*').or(`parcela_id.eq.${parcelaId}${ids.length ? `,detinator_id.in.(${ids.join(',')})` : ''}`).order('created_at'),
-        poateScrie && ids.length ? supabase.from('red_detinatori_contact').select('*').in('detinator_id', ids) : { data: [] },
+        citesteIn(() => supabase.from('red_raspunsuri').select(COL_RASPUNS).order('data', { ascending:false }).order('seq', { ascending:false }), 'detinator_id', ids),
+        citestePaginat(() => supabase.from('red_procese_verbale').select('*').eq('parcela_id', parcelaId).order('created_at').order('id')),
+        citesteIn(() => supabase.from('red_procese_verbale').select('*').order('created_at').order('id'), 'detinator_id', ids),
+        poateScrie ? citesteIn(() => supabase.from('red_detinatori_contact').select('*').order('detinator_id'), 'detinator_id', ids) : Promise.resolve([]),
       ])
-      for (const r of [rc, rr, rpv, rct]) if (r.error) throw r.error
-      setConvocari(rc.data || []); setRaspunsuri(rr.data || []); setPvs(rpv.data || [])
-      setContacte(Object.fromEntries((rct.data || []).map(c => [c.detinator_id, c])))
-      if (poateScrie && (rr.data || []).length) {
-        const { data: m, error: em } = await supabase.from('red_raspunsuri_meta').select(COL_RASPUNS_META).in('raspuns_id', rr.data.map(x => x.id))
-        if (em) throw em
-        setMetaRaspuns(Object.fromEntries((m || []).map(x => [x.raspuns_id, x])))
+      const pvMap = new Map(); [...pvParcela, ...pvDet].forEach(p => pvMap.set(p.id, p))
+      const pv = [...pvMap.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+      setConvocari(conv); setRaspunsuri(rasp); setPvs(pv)
+      setContacte(Object.fromEntries(cont.map(c => [c.detinator_id, c])))
+      if (poateScrie && rasp.length) {
+        const m = await citesteIn(() => supabase.from('red_raspunsuri_meta').select(COL_RASPUNS_META).order('raspuns_id'), 'raspuns_id', rasp.map(x => x.id))
+        setMetaRaspuns(Object.fromEntries(m.map(x => [x.raspuns_id, x])))
       } else setMetaRaspuns({})
-      const toateId = [parcelaId, ...ids, ...(rc.data || []).map(x => x.id), ...(rr.data || []).map(x => x.id), ...(rpv.data || []).map(x => x.id)]
+      const toateId = [parcelaId, ...ids, ...conv.map(x => x.id), ...rasp.map(x => x.id), ...pv.map(x => x.id)]
       // P2-5: fără date_vechi/date_noi în listă — se citesc la cerere, per rând, doar de admin (vedeJurnal)
-      const { data: j, error: ej } = await supabase.from('red_jurnal').select('id, tabela, inregistrare_id, actiune, user_email, created_at').in('inregistrare_id', toateId).order('created_at').limit(500)
-      if (ej) throw ej
-      setJurnal(j || [])
+      const j = await citesteIn(() => supabase.from('red_jurnal').select('id, tabela, inregistrare_id, actiune, user_email, created_at').order('created_at').order('id'), 'inregistrare_id', toateId)
+      setJurnal(j.sort((a, b) => (new Date(a.created_at) - new Date(b.created_at)) || (a.id - b.id)))
     } catch (e) { show('Fișa parcelei: ' + msgEroare(e), 'error') }
     finally { setLoading(false) }
   }, [parcelaId, proiect?.id, esteAdmin, poateScrie, show, onInapoi])
