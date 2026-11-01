@@ -54,7 +54,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
       const rez = await scrieImport(supabase, preview, { proiectId: proiect.id, versiune: versiune.trim(), sursa, fisierNume: fisier?.name || null,
         onProgress: ({ etapa, facut, total } = {}) => setProgres({ etapa: etapa || '', facut: facut ?? 0, total: total ?? nParc }) })
       setRaport(rez); setPreview(null); setFisier(null)
-      show(`Import terminat: ${rez.parceleNoi ?? 0} parcele noi, ${rez.detinatoriNoi ?? 0} deținători${rez.existente ? `, ${rez.existente} parcele existente sărite` : ''}.`, 'success')
+      show(`Import terminat: ${rez.parceleNoi ?? 0} parcele noi, ${rez.detinatoriNoi ?? 0} deținători${(rez.parceleRefolosite ?? (Array.isArray(rez.existente) ? rez.existente.length : 0)) ? `, ${rez.parceleRefolosite ?? rez.existente.length} parcele existente refolosite` : ''}.`, 'success')
       onImportat?.()
     } catch (e) { show('Import: ' + msgEroare(e), 'error') }
     finally { setLucru(false); setProgres(null) }
@@ -157,14 +157,14 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {statCard('Parcele noi', fmtNum(raport.parceleNoi), G.green)}
             {statCard('Deținători noi', fmtNum(raport.detinatoriNoi), G.blue)}
             {statCard('Contacte', fmtNum(raport.contacteNoi))}
-            {statCard('Parcele existente (sărite)', fmtNum(raport.existente ?? 0), raport.existente ? G.orange : G.text)}
+            {statCard('Parcele existente (refolosite)', fmtNum(raport.parceleRefolosite ?? (Array.isArray(raport.existente) ? raport.existente.length : 0)), (raport.parceleRefolosite || raport.existente?.length) ? G.orange : G.text)}
           </div>
           <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>Lot import: <span style={S.mono}>{raport.lotId || '-'}</span> · lista „{versiune}” · {sursa}</div>
-          {Array.isArray(raport.idParcele) && raport.idParcele.length > 0 && (
+          {Array.isArray(raport.existente) && raport.existente.length > 0 && (
             <div style={{ marginTop:10 }}>
-              <div style={{ fontSize:12.5, fontWeight:600, marginBottom:4 }}>ID-urile finale ale parcelelor ({raport.idParcele.length})</div>
+              <div style={{ fontSize:12.5, fontWeight:600, marginBottom:4 }}>Parcele existente refolosite ({raport.existente.length})</div>
               <div style={{ ...S.mono, fontSize:12, background:G.bg, border:`1px solid ${G.border}`, borderRadius:7, padding:10, maxHeight:220, overflow:'auto', display:'flex', flexWrap:'wrap', gap:'4px 12px' }}>
-                {raport.idParcele.map((id, i) => <span key={i}>{typeof id === 'string' ? id : (id?.id_parcela || JSON.stringify(id))}</span>)}
+                {raport.existente.map((id, i) => <span key={i}>{typeof id === 'string' ? id : (id?.id_parcela || JSON.stringify(id))}</span>)}
               </div>
             </div>
           )}
