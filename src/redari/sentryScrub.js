@@ -281,7 +281,11 @@ export function esteDinFormularulPublic(event) {
 // `aPurtatToken` = evenimentul a avut tokenuri colectate SAU un corp de cerere suspect (șters fără să-l putem redacta sigur)
 export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0) {
   const text = serializeaza(event)
-  for (const f of formele(text)) {
+  // r32: pe lângă formele %-decodate, și forma cu escape-urile JSON `\uXXXX` reconstruite (un identificator poate sta doar sub ele)
+  const cuUnicode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+  const formeToate = formele(text)
+  for (const f of [...formeToate]) { const u = cuUnicode(f); if (u !== f) formeToate.push(u) }
+  for (const f of formeToate) {
     if (contineVreunToken(f, tokenuri)) return true
     if (RX_FINAL.test(f) || RX_RASPUNS_PUBLIC.test(f)) return true
     if (aPurtatToken && RX_T43_PLUS.test(f)) return true   // a purtat token: orice secvență de ≥43 rămasă (și lipită de prefix) e suspectă
@@ -308,7 +312,8 @@ export function scrubSentrySpan(span) {
     if (esteDinFormularulPublic({ transaction: span.description, request: { url: span.data?.['sentry.transaction'] ?? span.data?.url } })) return golit()
     const tokenuri = colecteazaTokenuriEveniment(span)
     redacteazaAdanc(span, tokenuri)
-    if (maiScurgeToken(span, tokenuri, tokenuri.size > 0 || !!tokenuri.refuzat)) return golit()   // r14 P1-1: si spanurile tin cont de `refuzat`
+    if (tokenuri.refuzat) return golit()   // r32 P1-1: refuzat ⇒ golit necondiționat
+    if (maiScurgeToken(span, tokenuri, tokenuri.size > 0)) return golit()   // r14 P1-1: si spanurile tin cont de `refuzat`
     return span
   } catch {
     try {
@@ -349,6 +354,10 @@ export function scrubSentryEvent(event) {
       if (indiciu || tokenuri.refuzat) purtator = true
     }
     redacteazaAdanc(event, tokenuri)
+    // Jakarinos r32 P1-1: `refuzat` (conținut suspect pe care NU l-am putut parcurge/redacta sigur: duplicate, codificări peste limită,
+    // JSON neparcurs cu indiciu) ⇒ evenimentul se elimină NECONDIȚIONAT — nu mai depinde de găsirea unei copii în clar (identificatorul
+    // poate sta doar sub escape-uri Unicode în textul păstrat)
+    if (tokenuri.refuzat) return null
     if (maiScurgeToken(event, tokenuri, purtator)) return null
     return event
   } catch {

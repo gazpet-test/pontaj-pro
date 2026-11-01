@@ -184,8 +184,8 @@ describe('scrubSentryEvent — r6: DROP pe formularul public, verificare finală
     expect(scrubSentryEvent({ message: 'eroare oarecare', extra: { a: 1 } })).toEqual({ message: 'eroare oarecare', extra: { a: 1 } })
   })
   it('o copie a tokenului după raspuns/token + separatori nu rămâne (r8: redactată de RX_TOKEN_CHEIE; altfel null din regex-ul final)', () => {
-    expect(scrubSentryEvent({ message: `raspuns: ${T43}` })).toEqual({ message: 'raspuns: [token]' })
-    expect(scrubSentryEvent({ extra: { nota: `token=${'b'.repeat(43)}` } })).toEqual({ extra: { nota: 'token=[token]' } })
+    // r32: textul neparcurs cu cuvant-cheie + secventa de 43 e `refuzat` => null (inainte: redactat); ambele sunt sigure
+    for (const r of [scrubSentryEvent({ message: `raspuns: ${T43}` }), scrubSentryEvent({ extra: { nota: `token=${'b'.repeat(43)}` } })]) expect(r === null || !JSON.stringify(r).includes(T43)).toBe(true)
     expect(scrubSentryEvent({ message: `raspuns${T43}` })).toBeNull()   // fără separator: necolectat → regex-ul final ⇒ null
   })
 })
@@ -217,7 +217,7 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // corp suspect șters + un alt șir de 43 rămas (ex. tokenul sub altă cheie, fără context) ⇒ null
     expect(scrubSentryEvent({ extra: { x: 'z'.repeat(43) }, request: { url: 'https://e/api', body: '{"p_token":"nu-e-43"}' } })).toBeNull()
     const r2 = scrubSentryEvent({ message: T, request: { data: encodeURIComponent(JSON.stringify({ raspuns_token: T })) } })
-    expect(r2).toEqual({ message: '[token]', request: {} })
+    expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)   // r32: poate fi null (refuzat) sau redactat
     // cheie serializată cu sufix, în text liber
     expect(redacteazaText(`{"token_raspuns_public":"${T}"}`)).toBe('{"token_raspuns_public":"[token]"}')
     expect(redacteazaText(`tokenul=${T}`)).toBe('tokenul=[token]')
@@ -574,6 +574,17 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(JSON.stringify(sp)).not.toContain(T)
     // duplicat fara nicio secventa lunga + hash in alt camp: se pierde (cost acceptat - duplicatele sunt oricum anormale)
     expect(scrubSentryEvent({ message: 'x', extra: { nota: '{"a":1,"a":2}', sha256: 'a'.repeat(64) } })).toBeNull()
+  })
+  it('r32 P1-1 (Jakarinos): `refuzat` => eveniment eliminat / span golit NECONDITIONAT (identificatorul poate sta doar sub escape-uri Unicode)', () => {
+    const U = T.slice(0, 20) + '\\u0055' + T.slice(21)
+    const payload = '{"to\\u006ben":{"value":"' + U + '"},"to\\u006ben":null}'
+    expect(scrubSentryEvent({ message: 'x', extra: { nota: payload } })).toBeNull()
+    expect(scrubSentryEvent({ message: 'x', request: { url: '/intern', data: payload } })).toBeNull()
+    const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data: { nota: payload } })
+    expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain('u0055')
+    // si celelalte surse de `refuzat`: JSON prea mare cu indiciu, cheie codificata de 4+ ori - fara copie in clar => tot null
+    expect(scrubSentryEvent({ message: 'x', extra: { payload: JSON.stringify({ token: [null, U], padding: 'x'.repeat(200000) }) } })).toBeNull()
+    expect(scrubSentryEvent({ message: 'x', extra: { '%25252574oken': [null, 'scurt'] } })).toBeNull()
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
