@@ -608,12 +608,12 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
   it('r34 P1-1 (Jakarinos): semnalul `ambiguu` se propaga din JSON-ul parsat (cheie `\\u0025...` = %-codificare ascunsa sub escape Unicode)', () => {
     const payload = '{"\\u002525252574oken":"' + T + '"}'
     expect(Object.keys(JSON.parse(payload))[0]).toBe('%25252574oken')
-    expect(scrubSentryEvent({ extra: { payload } })).toBeNull()
-    expect(scrubSentryEvent({ request: { url: '/intern', data: payload } })).toBeNull()
+    // r37: cheia inca codificata face subarborele sensibil -> T e colectat si redactat (poate fi null SAU '[token]', niciodata T)
+    for (const ev of [{ extra: { payload } }, { request: { url: '/intern', data: payload } }, { extra: { outer: JSON.stringify({ inner: payload }) } }]) {
+      const rez = scrubSentryEvent(ev); expect(rez === null || !JSON.stringify(rez).includes(T)).toBe(true)
+    }
     const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'intern', data: { payload } })
     expect(JSON.stringify(sp)).not.toContain(T)
-    // si varianta in care JSON-ul e imbricat in alt JSON
-    expect(scrubSentryEvent({ extra: { outer: JSON.stringify({ inner: payload }) } })).toBeNull()
   })
   it('Copilot r28 P1-01: identificator codificat caracter cu caracter de 4 ori (`%25252541`×43) sub cheie sensibila -> refuzat -> null', () => {
     const E = '%25252541'.repeat(43)   // fiecare A = %41, apoi % codificat inca de 3 ori
@@ -627,6 +627,24 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain('%25252541')
     // fara context sensibil si fara cuvant-cheie: semnal slab -> trece daca nu ramane nicio secventa de 43
     expect(scrubSentryEvent({ message: 'x', extra: { cale: '/doc/%25252520' } })?.message).toBe('x')
+  })
+  it('r36 P1-01/P1-02 (Jakarinos): cheie SI valoare codificate de 4 ori; procentele ascunse sub escape Unicode; P2-01: valoare scurta legitima sub cheie token trece', () => {
+    let E = [...T].map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
+    for (let i = 0; i < 3; i++) E = encodeURIComponent(E)
+    const U = E.replaceAll('%', '\\u0025')
+    for (const ev of [
+      { extra: { '%25252574oken': E } },
+      { extra: { token: U } },
+      { extra: { '%25252574oken': U } },
+      { request: { url: '/intern', data: { x: { '%25252574oken': [E] } } } },
+      { extra: { nota: JSON.stringify({ token: U }) } },
+    ]) expect(scrubSentryEvent(ev)).toBeNull()
+    for (const data of [{ '%25252574oken': E }, { token: U }]) {
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: 'x', data })
+      expect(sp.description).toBe('[redactat]'); expect(JSON.stringify(sp)).not.toContain('2525')
+    }
+    // P2-01: valoare scurta inca codificata sub cheie cu `token` in nume -> NU poate ascunde 43 de caractere -> trece
+    expect(scrubSentryEvent({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })).toEqual({ message: 'Eroare OAuth', extra: { token_endpoint: '/oauth/%25252520' } })
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }

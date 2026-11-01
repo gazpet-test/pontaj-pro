@@ -35,7 +35,9 @@ const MIN_LUNGIME_COADA = 16
 
 const pareSuspect = (s) => /redari|raspuns|token/i.test(s)
 // r11 P1-1 (Jakarinos): cheile se judecă pe TOATE formele decodate (`%70%5f%74%6f%6b%65%6e` = p_token)
-const cheieDeToken = (cheie) => typeof cheie === 'string' && formele(cheie).some(f => /token/i.test(f))
+// Jakarinos r36 P1-02: escape-urile Unicode (`\u0025` = `%`) se reconstruiesc INAINTE de orice judecata pe chei/valori
+const cuUnicode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+const cheieDeToken = (cheie) => typeof cheie === 'string' && [cheie, cuUnicode(cheie)].some(c => formele(c).some(f => /token/i.test(f)))
 // r7 P1-2: valoarea unei chei de token e token dacă ORICE formă decodată are exact 43 [A-Za-z0-9_-] (ex. `%30` + 42 caractere)
 const valoareDeToken = (v) => typeof v === 'string' && formele(v).some(f => RX_T43.test(f))
 // Jakarinos r15 P1-2 / Copilot r9 P1-01: sub o cheie sensibila valoarea poate fi `'   ' + T` sau `'ref_' + T` - orice secventa de >=43
@@ -79,7 +81,6 @@ const tokenuriDinValoareSensibila = (v, set) => {
 // Decizie asumată (scoping-ul la /redari ar lăsa o gaură: un text cu token fără marcaj de modul ar trece); de confirmat de Răzvan.
 // Jakarinos r33 P2-1: un escape `\uXXXX` SINGUR (`Caracter primit: \u0041`) nu mai e indiciu; indiciul se judeca pe forma cu escape-urile
 // reconstruite (`"to\u006ben":[null,T]` -> `"token":[null,T]`), cu aceeasi regula: cuvant-cheie + secventa >=43, sau `p_token` urmat de `=`/`:`
-const cuUnicode = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
 const indiciuPe = (f) => /p_token\W{0,3}[=:]/i.test(f) || (/p_token|raspuns|token/i.test(f) && RX_RUN43.test(f))
 const RX_INDICIU_JSON = { test: (f) => indiciuPe(f) || indiciuPe(cuUnicode(f)) }
 
@@ -102,7 +103,10 @@ export const formele = (s) => {
 }
 // Jakarinos r28 P1-1: un șir care, după MAX_DECODARI decodări, ÎNCĂ mai conține `%XX` (codificat de ≥4 ori, ex. `%25252574oken`) e
 // AMBIGUU — nu putem ști ce cheie ascunde; evenimentul devine purtător (orice secvență ≥43 rămasă ⇒ null). Creșterea limitei ar muta pragul.
-const ramaneCodificat = (s) => { const f = formele(s); return f.length === MAX_DECODARI + 1 && /%[0-9A-Fa-f]{2}/.test(f[f.length - 1]) }
+const ramaneCodificat = (s) => [s, cuUnicode(s)].some(x => { const f = formele(x); return f.length === MAX_DECODARI + 1 && /%[0-9A-Fa-f]{2}/.test(f[f.length - 1]) })
+// Jakarinos r36 P2-01: `token_endpoint: '/oauth/%25252520'` (scurt) NU poate ascunde un identificator de 43 — semnal TARE doar daca forma ramasa
+// are >=43 de grupuri %XX sau >=129 de caractere (un identificator codificat caracter cu caracter are cel putin 43 x 3)
+const poateAscundeToken = (s) => ramaneCodificat(s) && [s, cuUnicode(s)].some(x => { const f = formele(x); const u = f[f.length - 1]; return (u.match(/%[0-9A-Fa-f]{2}/g) || []).length >= 43 || u.length >= 129 })
 const colecteazaTokenuri = (forma, set) => {
   for (const rx of [RX_CALE, RX_CALE_ENC, RX_TOKEN_RASPUNS, RX_TOKEN_P_TOKEN, RX_TOKEN_CHEIE]) {
     rx.lastIndex = 0
@@ -139,7 +143,7 @@ export function redacteazaText(s, tokenuriGlobale = null) {
 // Parcurgere iterativă generică (fără recursivitate, fără limită de adâncime), cu set de vizitate pentru cicluri.
 // r10 P1-1 (Jakarinos): `sensibil` = un STRĂMOȘ e o cheie de token (p_token, token*, raspuns*) — descendenții ei (liste `[null, T]`,
 // obiecte `{ value: T }`) se tratează ca valori de token, structural, nu prin regex pe serializare.
-const cheieSensibila = (cheie) => typeof cheie === 'string' && formele(cheie).some(f => /token|raspuns/i.test(f))
+const cheieSensibila = (cheie) => typeof cheie === 'string' && [cheie, cuUnicode(cheie)].some(c => formele(c).some(f => /token|raspuns/i.test(f)))
 // numără TOATE cheile dintr-o structură parsată (toate adâncimile, iterativ; JSON.parse nu produce cicluri) — pentru detectarea duplicatelor
 const numaraChei = (radacina) => {
   let n = 0
@@ -176,7 +180,7 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
       const cheieNoua = fnCheie ? fnCheie(cheie, sensibil) : cheie   // Jakarinos r15 P1-1: si cheile primesc contextul sensibil
       if (cheieNoua !== cheie) delete obj[cheie]
       let vNou = v
-      const sensibilCopil = sensibil || cheieSensibila(cheie)
+      const sensibilCopil = sensibil || cheieSensibila(cheie) || ramaneCodificat(cheie)   // r36 P1-01: cheie necunoscuta (inca codificata) = context sensibil
       if (v && typeof v === 'object') stiva.push([v, sensibilCopil])
       else vNou = fn(obj, cheie, v, sensibilCopil)
       if (cheieNoua !== cheie || vNou !== v) obj[cheieNoua] = vNou
@@ -240,12 +244,16 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
     if (typeof v === 'string') {
       // Copilot r28 P1-01: o valoare inca codificata (de >=4 ori) sub CHEIE SENSIBILA sau intr-un sir care pomeneste un cuvant-cheie e semnal
       // TARE (refuzat): un identificator codificat caracter cu caracter nu are nicio secventa de 43 in nicio forma; in rest, semnal slab
-      if (ramaneCodificat(v)) { if (sensibilAici || cheieDeToken(cheie) || formele(v).some(f => /p_token|raspuns|token/i.test(f))) tokenuri.refuzat = true; else tokenuri.ambiguu = true }
-      if (sensibilAici || cheieDeToken(cheie)) tokenuriDinValoareSensibila(v, tokenuri)
-      dinText(v, true, sensibilAici || cheieDeToken(cheie))
+      if (ramaneCodificat(v)) {
+        const context = sensibilAici || cheieDeToken(cheie) || [v, cuUnicode(v)].some(x => formele(x).some(f => /p_token|raspuns|token/i.test(f)))
+        if (context && poateAscundeToken(v)) tokenuri.refuzat = true; else tokenuri.ambiguu = true
+      }
+      const vU = cuUnicode(v)
+      if (sensibilAici || cheieDeToken(cheie)) { tokenuriDinValoareSensibila(v, tokenuri); if (vU !== v) tokenuriDinValoareSensibila(vU, tokenuri) }
+      dinText(v, true, sensibilAici || cheieDeToken(cheie)); if (vU !== v) dinText(vU, true, sensibilAici || cheieDeToken(cheie))
     }
     return v
-  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) { if (sensibilAici) tokenuri.refuzat = true; else tokenuri.ambiguu = true }; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
+  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) { if (sensibilAici && poateAscundeToken(cheie)) tokenuri.refuzat = true; else tokenuri.ambiguu = true }; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
   dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
@@ -256,7 +264,7 @@ export function redacteazaAdanc(radacina, tokenuriGlobale = null) {
   return parcurge(radacina,
     (_obj, cheie, v, sensibil) => {
       if (typeof v !== 'string') return v
-      if ((sensibil || cheieDeToken(cheie)) && areRun43(v)) return TOKEN   // r15: orice secventa >=43 sub cheie sensibila -> toata valoarea
+      if ((sensibil || cheieDeToken(cheie)) && (areRun43(v) || areRun43(cuUnicode(v)) || poateAscundeToken(v))) return TOKEN   // r15/r36: secventa >=43 (si sub escape) sau codificare care poate ascunde un token, sub cheie sensibila -> toata valoarea
       return redacteazaText(v, tokenuriGlobale)
     },
     (cheie, sensibil) => (sensibil && areRun43(cheie) ? TOKEN : redacteazaText(cheie, tokenuriGlobale)))
