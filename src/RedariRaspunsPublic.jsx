@@ -102,6 +102,8 @@ export default function RedariRaspunsPublic() {
 
   useEffect(() => {
     document.title = 'Răspuns convocare — Gazpet'
+    // P2-6: alt token (navigare între două linkuri în același tab) = formular nou — nimic din răspunsul anterior nu rămâne pe ecran
+    setForm(null); setIncarca(true); setOptiune(''); setZi(''); setObiectii(''); setDeclaratie(false); setValidare(''); setBusy(false); setRezultat(null)
     if (!token) { setForm({ ok: false }); setIncarca(false); return }
     let anulat = false
     ;(async () => {

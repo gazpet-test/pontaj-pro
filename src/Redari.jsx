@@ -7,7 +7,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
-import { genereazaConvocator, salveazaConvocator, borderouCsv, descarcaBlob } from './redari/docx.js'
+import { genereazaConvocator, verificaDateConvocator, salveazaConvocator, borderouCsv, descarcaBlob } from './redari/docx.js'
 import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune, etichetaRetur,
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
@@ -85,6 +85,9 @@ export default function Redari() {
   }
 
   const deschideFisa = (parcelaId) => { setParcelaFisa(parcelaId); setTab('fisa') }
+  const inapoiLaRegistru = useCallback(() => setTab('registru'), [])   // stabil: FisaParcela îl are în deps
+  // P1-5: schimbarea proiectului închide fișa (parcela e a altui proiect) și remontează Registrul (selecție + modale resetate prin key)
+  const schimbaProiect = (id) => { setProiectId(id); setParcelaFisa(null); setTab(t => (t === 'fisa' ? 'registru' : t)) }
 
   if (!gataProfil) return <div style={S.page}><div style={{ color:G.muted }}>Se încarcă…</div></div>
   if (!nivel) return (
@@ -107,7 +110,7 @@ export default function Redari() {
         <span style={{ ...S.tag, background:G.blueDim, color:G.blue }}>{nivel}</span>
         <div style={{ flex:1 }} />
         {proiecte.length > 0 ? (
-          <select value={proiectId} onChange={e => setProiectId(e.target.value)} style={S.select}>
+          <select value={proiectId} onChange={e => schimbaProiect(e.target.value)} style={S.select}>
             {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod} — {p.denumire || ''}</option>)}
           </select>
         ) : esteAdmin ? (
@@ -126,11 +129,11 @@ export default function Redari() {
       </div>
 
       {!proiect ? <Gol text="Alege sau creează un proiect." /> : (
-        <>
-          {tab === 'registru' && <Registru key={proiect.id + reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
-          {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={() => setTab('registru')} onSchimbat={() => setReload(r => r + 1)} />}
-          {tab === 'import' && <ImportTgz key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
-        </>
+        <div key={proiect.id}>
+          {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
+          {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
+          {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
+        </div>
       )}
     </div>
   )
@@ -153,6 +156,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   const [selectie, setSelectie] = useState(() => new Set())
   const [actiune, setActiune] = useState(null) // { tip, rand }
   const [lucru, setLucru] = useState(false)
+  const [borderouRez, setBorderouRez] = useState(null) // { randuri, exclusi } — rezultatul borderoului, înainte de descărcare
 
   const incarca = useCallback(async () => {
     setLoading(true)
@@ -174,13 +178,16 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
   }, [proiect.id, fUat, fTronson, fStare, cautareAplicata, pagina, show])
   useEffect(() => { incarca() }, [incarca])
   useEffect(() => { setPagina(0) }, [fUat, fTronson, fStare, cautareAplicata])
+  // P1-4: selecția e a rândurilor VĂZUTE — se golește la orice schimbare de filtre / pagină
+  useEffect(() => { setSelectie(new Set()) }, [fUat, fTronson, fStare, cautareAplicata, pagina])
 
   const nrPagini = Math.max(1, Math.ceil(total / PAGINA))
   const toateSelectate = randuri.length > 0 && randuri.every(r => selectie.has(r.detinator_id))
   const comutaToate = () => setSelectie(prev => { const n = new Set(prev); if (toateSelectate) randuri.forEach(r => n.delete(r.detinator_id)); else randuri.forEach(r => n.add(r.detinator_id)); return n })
   const comuta = (id) => setSelectie(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
-  // Borderou Poștă CSV pe selecție (sau pe rândurile afișate dacă nu e nimic selectat) — doar admin/editor (citește contactul)
+  // P1-4: Borderoul Poștă = CONVOCĂRI concrete (canal poștă, active, cu fișier, neexpediate) ale deținătorilor din selecție / pagina
+  // afișată, doar cu adresă cunoscută. Un rând = o convocare (nr_document al ei). Deținătorii fără așa ceva → „excluși” cu motiv.
   const borderou = async () => {
     if (!poateScrie) return
     const ids = selectie.size ? [...selectie] : randuri.map(r => r.detinator_id)
@@ -188,22 +195,35 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
     setLucru(true)
     try {
       const [{ data: contacte, error: e1 }, { data: conv, error: e2 }, { data: det, error: e3 }] = await Promise.all([
-        supabase.from('red_detinatori_contact').select('*').in('detinator_id', ids),
-        supabase.from('red_convocari').select('detinator_id, nr_document, created_at').in('detinator_id', ids).eq('stare', 'activ').order('created_at', { ascending:false }),
-        supabase.from('red_detinatori').select('id, nume, parcela_id, red_parcele(id_parcela)').in('id', ids),
+        supabase.from('red_detinatori_contact').select('detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta').in('detinator_id', ids),
+        supabase.from('red_convocari').select('id, detinator_id, nr_document, created_at').in('detinator_id', ids)
+          .eq('canal', 'posta').eq('stare', 'activ').is('data_expediere', null).not('fisier_convocator_path', 'is', null).order('created_at'),
+        supabase.from('red_detinatori').select('id, nume, parcela_id, red_parcele(id_parcela)').in('id', ids).is('sters_la', null),
       ])
       if (e1 || e2 || e3) throw (e1 || e2 || e3)
       const cMap = Object.fromEntries((contacte || []).map(c => [c.detinator_id, c]))
-      const nrMap = {}; (conv || []).forEach(c => { if (!nrMap[c.detinator_id]) nrMap[c.detinator_id] = c.nr_document })
-      const rows = (det || []).map(d => {
-        const c = cMap[d.id] || {}
-        return { nr_document: nrMap[d.id] || '', nume: d.nume, adresa: [c.adresa_strada, c.adresa_sat].filter(Boolean).join(', '),
-          cod_postal: c.cod_postal || '', localitate: c.adresa_comuna || c.adresa_sat || '', judet: c.adresa_judet || '', id_parcela: d.red_parcele?.id_parcela || '' }
-      })
-      descarcaBlob(borderouCsv(rows), `borderou_${proiect.cod}_${azi()}.csv`)
-      show(`Borderou generat: ${rows.length} rânduri.`, 'success')
+      const dMap = Object.fromEntries((det || []).map(d => [d.id, d]))
+      const convPeDet = {}; (conv || []).forEach(c => { (convPeDet[c.detinator_id] ||= []).push(c) })
+      const randuriCsv = [], exclusi = []
+      for (const id of ids) {
+        const d = dMap[id]
+        if (!d) { exclusi.push({ nume: '(deținător șters / indisponibil)', id_parcela: '', motiv: 'deținătorul nu mai e activ' }); continue }
+        const c = cMap[id]
+        const lista = convPeDet[id] || []
+        if (!lista.length) { exclusi.push({ nume: d.nume, id_parcela: d.red_parcele?.id_parcela || '', motiv: 'fără convocator poștal neexpediat (generează-l întâi sau e deja expediat)' }); continue }
+        if (!c || c.adresa_cunoscuta !== true) { exclusi.push({ nume: d.nume, id_parcela: d.red_parcele?.id_parcela || '', motiv: !c ? 'fără date de contact' : 'adresă necunoscută → afișare la primărie' }); continue }
+        for (const cv of lista) randuriCsv.push({ nr_document: cv.nr_document, nume: d.nume, adresa: [c.adresa_strada, c.adresa_sat].filter(Boolean).join(', '),
+          cod_postal: c.cod_postal || '', localitate: c.adresa_comuna || c.adresa_sat || '', judet: c.adresa_judet || '', id_parcela: d.red_parcele?.id_parcela || '' })
+      }
+      setBorderouRez({ randuri: randuriCsv, exclusi })
     } catch (e) { show('Borderou: ' + msgEroare(e), 'error') }
     finally { setLucru(false) }
+  }
+  const descarcaBorderou = () => {
+    if (!borderouRez?.randuri.length) return
+    descarcaBlob(borderouCsv(borderouRez.randuri), `borderou_${proiect.cod}_${azi()}.csv`)
+    show(`Borderou descărcat: ${borderouRez.randuri.length} convocări.`, 'success')
+    setBorderouRez(null)
   }
 
   const dupaActiune = () => { setActiune(null); incarca() }
@@ -263,7 +283,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
                 {poateScrie && (
                   <td style={{ ...S.td, whiteSpace:'nowrap' }}>
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                      {(() => { const motiv = motivBlocareConvocator(proiect, uats.find(u => u.id === r.uat_id)); return (
+                      {(() => { const motiv = motivBlocareConvocator(proiect, uats.find(u => u.id === r.uat_id), r); return (
                         <button style={{ ...S.btnX, opacity: motiv ? 0.45 : 1, cursor: motiv ? 'not-allowed' : 'pointer' }} disabled={!!motiv} title={motiv ? `Nu se poate genera: ${motiv}` : 'Generează convocator (DOCX)'} onClick={() => setActiune({ tip:'convocator', rand:r })}>📄 Convocator</button>
                       ) })()}
                       <button style={S.btnX} title="Marchează expediat" onClick={() => setActiune({ tip:'expediat', rand:r })}>📤 Expediat</button>
@@ -290,7 +310,27 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
       {actiune?.tip === 'expediat' && <ModalExpediat rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
       {actiune?.tip === 'ar' && <ModalArRetur mod="ar" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
       {actiune?.tip === 'retur' && <ModalArRetur mod="retur" rand={actiune.rand} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
-      {actiune?.tip === 'telefon' && <ModalRaspunsTelefon rand={actiune.rand} profile={profile} uats={uats} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
+      {actiune?.tip === 'telefon' && <ModalRaspunsTelefon rand={actiune.rand} profile={profile} uats={uats} proiect={proiect} show={show} onClose={() => setActiune(null)} onGata={dupaActiune} />}
+      {borderouRez && (
+        <Modal titlu="Borderou Poștă" onClose={() => setBorderouRez(null)} latime={640}>
+          <div style={{ fontSize:13, marginBottom:8 }}><b>{borderouRez.randuri.length}</b> convocări poștale neexpediate, cu fișier și adresă cunoscută{borderouRez.randuri.length ? ' — un rând per convocare (nr_document).' : '.'}</div>
+          {borderouRez.exclusi.length > 0 && (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:12.5, color:G.yellow, fontWeight:600, marginBottom:4 }}>Excluși din borderou ({borderouRez.exclusi.length})</div>
+              <div style={{ maxHeight:260, overflow:'auto', border:`1px solid ${G.border}`, borderRadius:7 }}>
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead><tr><th style={S.th}>Deținător</th><th style={S.th}>Parcelă</th><th style={S.th}>Motiv</th></tr></thead>
+                  <tbody>{borderouRez.exclusi.map((x, i) => <tr key={i}><td style={S.td}>{x.nume}</td><td style={{ ...S.td, ...S.mono }}>{x.id_parcela}</td><td style={{ ...S.td, color:G.muted }}>{x.motiv}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+            <button style={S.btnS} onClick={() => setBorderouRez(null)}>Închide</button>
+            <button style={S.btnP} onClick={descarcaBorderou} disabled={!borderouRez.randuri.length}>⬇ Descarcă CSV ({borderouRez.randuri.length})</button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -300,30 +340,33 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   const [canal, setCanal] = useState('posta')
   const [lucru, setLucru] = useState(false)
   const [pas, setPas] = useState('')
+  const [lipsuri, setLipsuri] = useState([])   // din verificaDateConvocator — afișate în modal, fără număr consumat
   const uat = uats.find(u => u.id === rand.uat_id)
-  const motiv = motivBlocareConvocator(proiect, uat)   // P2-11: precondiții (sesiune cu program, contact, GDPR, reprezentant TGZ)
+  const motiv = motivBlocareConvocator(proiect, uat, rand)   // P2-11: precondiții (sesiune cu program, contact, GDPR, reprezentant TGZ, contract, împuternicire, calitate, adresă)
 
-  // Ordinea nouă (P2-8): generare (aruncă dacă lipsesc câmpuri → toast, FĂRĂ număr consumat) → fn_red_numar_document('C')
-  // → generarea finală cu numărul → salveazaConvocator (rând → upload → update) → descărcare.
+  // Ordinea (P2-8): date + contactul deținătorului → verificaDateConvocator (lipsuri → afișate, FĂRĂ număr consumat)
+  // → fn_red_numar_document('C') → genereazaConvocator → salveazaConvocator (rând → upload → update) → descărcare.
   const genereaza = async () => {
     if (motiv) { show(`Nu se poate genera: ${motiv}.`, 'error'); return }
-    setLucru(true)
+    setLucru(true); setLipsuri([])
     try {
       setPas('Citesc datele…')
-      const [{ data: det, error: e1 }, { data: parcela, error: e3 }, token] = await Promise.all([
+      const [{ data: det, error: e1 }, { data: parcela, error: e3 }, { data: contactDetinator, error: e4 }, token] = await Promise.all([
         supabase.from('red_detinatori').select(COL_DETINATOR).eq('id', rand.detinator_id).single(),
         supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta').eq('id', rand.parcela_id).single(),
+        supabase.from('red_detinatori_contact').select('*').eq('detinator_id', rand.detinator_id).maybeSingle(),   // PII — doar admin/editor ajung aici
         citesteTokenRaspuns(rand.detinator_id),
       ])
-      if (e1 || e3) throw (e1 || e3)
+      if (e1 || e3 || e4) throw (e1 || e3 || e4)
+      setPas('Verific datele…')
+      // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
+      const lipsa = verificaDateConvocator({ nrDocument: 'C-0000', token, uat, contact: null, proiect, detinator: det, contactDetinator: contactDetinator || null })
+      if (lipsa.length) { setLipsuri(lipsa); show('Convocatorul nu se poate genera — vezi lipsurile din fereastră.', 'error'); return }
       setPas('Descarc șablonul…')
       const rs = await fetch(SABLON_CONVOCATOR)
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
-      // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
-      const intrare = { detinator: det, contact: null, parcela, uat, proiect, token, origin: window.location.origin, templateArrayBuffer }
-      setPas('Verific câmpurile…')
-      await genereazaConvocator({ ...intrare, nrDocument: 'C-0000' })   // pas de validare: dacă lipsește ceva, aruncă aici și nu consumăm niciun număr
+      const intrare = { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect, token, origin: window.location.origin, templateArrayBuffer }
       setPas('Rezerv numărul de document…')
       const { data: nrDocument, error: eNr } = await supabase.rpc('fn_red_numar_document', { p_tip:'C', p_uat3: rand.uat3, p_tronson: rand.tronson ?? null })
       if (eNr) throw eNr
@@ -343,6 +386,12 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
     <Modal titlu={`Generează convocator — ${rand.id_parcela}`} onClose={onClose}>
       <div style={{ fontSize:13, color:G.muted, marginBottom:10 }}>Deținător: <b style={{ color:G.text }}>{rand.nume}</b> · {rand.calitate} · UAT {uat?.nume || rand.uat3}</div>
       {motiv && <div style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, marginBottom:10 }}>⛔ Nu se poate genera: {motiv}. Completează datele UAT-ului / proiectului și revino.</div>}
+      {lipsuri.length > 0 && (
+        <div style={{ ...S.card, borderColor:G.red, fontSize:12.5, marginBottom:10 }}>
+          <div style={{ color:G.red, fontWeight:600, marginBottom:4 }}>⛔ Lipsesc date (niciun număr consumat):</div>
+          <ul style={{ margin:0, paddingLeft:18, color:G.text }}>{lipsuri.map((l, i) => <li key={i}>{l}</li>)}</ul>
+        </div>
+      )}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
         <Camp eticheta="Canal">
           <select value={canal} onChange={e => setCanal(e.target.value)} style={{ ...S.select, width:'100%' }}>{CANALE_CONVOCARE.filter(c => c !== 'telefon').map(c => <option key={c} value={c}>{c}</option>)}</select>
@@ -444,49 +493,79 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
   )
 }
 
-function ModalRaspunsTelefon({ rand, profile, uats, show, onClose, onGata }) {
+function ModalRaspunsTelefon({ rand, profile, uats, proiect, show, onClose, onGata }) {
   const uat = uats.find(u => u.id === rand.uat_id)
   const zile = [uat?.sesiune_zi1, uat?.sesiune_zi2, uat?.sesiune_zi3].filter(Boolean)
   const [optiune, setOptiune] = useState('particip')
   const [zi, setZi] = useState(zile[0] || '')
   const [obiectii, setObiectii] = useState('')
   const [sursa, setSursa] = useState('')
+  const [declaratie, setDeclaratie] = useState(false)     // P2-2: bifă explicită pentru „nu particip – fără obiecții”
+  const [raspunsId, setRaspunsId] = useState(null)        // P2-2: răspunsul s-a salvat, nota (meta) nu — se reîncearcă fără a pierde nimic
   const [lucru, setLucru] = useState(false)
+  const cereZi = optiune === 'particip'
+  const cereDeclaratie = optiune === 'nu_particip_fara_obiectii'
   const cereObiectii = optiune === 'nu_particip_cu_obiectii' || optiune === 'constatare_teren'
+  const textDeclaratie = (proiect?.text_declaratie && String(proiect.text_declaratie).trim()) || 'textul declarației (red_proiecte.text_declaratie)'
+
+  const scrieNota = async (id) => {
+    const operator = profile?.name || profile?.email || 'operator'
+    const { error } = await supabase.from('red_raspunsuri_meta').insert({ raspuns_id: id, ip_sau_sursa: `telefon, operator ${operator}${sursa.trim() ? ' — ' + sursa.trim() : ''}`.slice(0, 500) })
+    if (error) throw error
+  }
 
   const salveaza = async () => {
     if (cereObiectii && !obiectii.trim()) { show('Pentru această opțiune obiecțiile sunt obligatorii.', 'error'); return }
-    if (optiune === 'particip' && !zi) { show('Alege ziua de sesiune.', 'error'); return }
+    if (cereZi && !zi) { show('Alege ziua de sesiune.', 'error'); return }
+    if (cereDeclaratie && !declaratie) { show('Bifează că deținătorul a confirmat verbal textul declarației.', 'error'); return }
     setLucru(true)
     try {
-      // [r2] red_raspunsuri nu mai are ip_sau_sursa: rândul principal întâi, apoi meta (admin/editor) cu sursa „telefon, operator …”
-      const { data: rasp, error } = await supabase.from('red_raspunsuri').insert({
-        detinator_id: rand.detinator_id, canal:'telefon', optiune, zi_sesiune_aleasa: zi || null, obiectii_text: obiectii.trim() || null,
-        declaratie_confirmata: optiune === 'nu_particip_fara_obiectii' ? true : null, created_by: profile?.id || null,
-      }).select('id').single()
-      if (error) throw error
-      const operator = profile?.name || profile?.email || 'operator'
-      const { error: eMeta } = await supabase.from('red_raspunsuri_meta').insert({ raspuns_id: rasp.id, ip_sau_sursa: `telefon, operator ${operator}${sursa.trim() ? ' — ' + sursa.trim() : ''}`.slice(0, 500) })
-      if (eMeta) show('Răspunsul s-a salvat, dar sursa (meta) nu: ' + msgEroare(eMeta), 'error')
-      else show('Răspunsul telefonic a fost înregistrat.', 'success')
+      let id = raspunsId
+      if (!id) {
+        // [r2] red_raspunsuri nu mai are ip_sau_sursa: rândul principal întâi, apoi nota în red_raspunsuri_meta
+        const { data: rasp, error } = await supabase.from('red_raspunsuri').insert({
+          detinator_id: rand.detinator_id, canal:'telefon', optiune,
+          zi_sesiune_aleasa: cereZi ? zi : null,                       // doar pentru „particip”
+          obiectii_text: cereObiectii ? obiectii.trim() : null,
+          declaratie_confirmata: cereDeclaratie ? true : null,         // bifa explicită de mai sus
+          created_by: profile?.id || null,
+        }).select('id').single()
+        if (error) throw error
+        id = rasp.id; setRaspunsId(id)
+      }
+      try { await scrieNota(id) }
+      catch (eMeta) { show('Răspunsul s-a salvat, dar nota (sursa) nu: ' + msgEroare(eMeta) + '. Apasă „Reîncearcă nota”.', 'error'); return }
+      show('Răspunsul telefonic a fost înregistrat.', 'success')
       onGata()
     } catch (e) { show('Răspuns: ' + msgEroare(e), 'error') }
     finally { setLucru(false) }
   }
   return (
     <Modal titlu={`Răspuns telefonic — ${rand.nume}`} onClose={onClose}>
+      {raspunsId && <div style={{ ...S.card, borderColor:G.yellow, color:G.yellow, fontSize:12.5, marginBottom:10 }}>Răspunsul e salvat; a rămas de scris nota cu sursa. Poți corecta sursa și apăsa „Reîncearcă nota”.</div>}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <Camp eticheta="Opțiune" span={2}><select value={optiune} onChange={e => setOptiune(e.target.value)} style={{ ...S.select, width:'100%' }}>{OPTIUNI_RASPUNS.map(o => <option key={o.cod} value={o.cod}>{o.eticheta}</option>)}</select></Camp>
-        <Camp eticheta="Ziua de sesiune aleasă">
-          {zile.length ? <select value={zi} onChange={e => setZi(e.target.value)} style={{ ...S.select, width:'100%' }}><option value="">—</option>{zile.map(z => <option key={z} value={z}>{fmtDate(z)}</option>)}</select>
-            : <input type="date" value={zi} onChange={e => setZi(e.target.value)} style={S.input} />}
-        </Camp>
+        <Camp eticheta="Opțiune" span={2}><select value={optiune} onChange={e => setOptiune(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}>{OPTIUNI_RASPUNS.map(o => <option key={o.cod} value={o.cod}>{o.eticheta}</option>)}</select></Camp>
+        {cereZi && (
+          <Camp eticheta="Ziua de sesiune aleasă (obligatoriu)">
+            {zile.length ? <select value={zi} onChange={e => setZi(e.target.value)} disabled={!!raspunsId} style={{ ...S.select, width:'100%' }}><option value="">—</option>{zile.map(z => <option key={z} value={z}>{fmtDate(z)}</option>)}</select>
+              : <input type="date" value={zi} onChange={e => setZi(e.target.value)} disabled={!!raspunsId} style={S.input} />}
+          </Camp>
+        )}
         <Camp eticheta="Sursa (nr. telefon apelat / notă)"><input value={sursa} onChange={e => setSursa(e.target.value)} style={S.input} placeholder="opțional" /></Camp>
-        <Camp eticheta={`Obiecții${cereObiectii ? ' (obligatoriu)' : ''}`} span={2}><textarea value={obiectii} onChange={e => setObiectii(e.target.value)} rows={4} style={{ ...S.input, resize:'vertical' }} maxLength={4000} /></Camp>
+        {cereDeclaratie && (
+          <div style={{ gridColumn:'span 2' }}>
+            <div style={{ ...S.card, fontSize:12.5, color:G.muted, marginBottom:6 }}>{textDeclaratie}</div>
+            <label style={{ fontSize:13, display:'flex', gap:8, alignItems:'flex-start', cursor:'pointer' }}>
+              <input type="checkbox" checked={declaratie} onChange={e => setDeclaratie(e.target.checked)} disabled={!!raspunsId} style={{ marginTop:2 }} />
+              <span>Deținătorul a confirmat verbal textul declarației de mai sus (obligatoriu).</span>
+            </label>
+          </div>
+        )}
+        {cereObiectii && <Camp eticheta="Obiecții (obligatoriu)" span={2}><textarea value={obiectii} onChange={e => setObiectii(e.target.value)} disabled={!!raspunsId} rows={4} style={{ ...S.input, resize:'vertical' }} maxLength={4000} /></Camp>}
       </div>
       <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14 }}>
-        <button style={S.btnS} onClick={onClose} disabled={lucru}>Renunță</button>
-        <button style={S.btnP} onClick={salveaza} disabled={lucru}>Salvează</button>
+        <button style={S.btnS} onClick={onClose} disabled={lucru}>{raspunsId ? 'Închide (fără notă)' : 'Renunță'}</button>
+        <button style={S.btnP} onClick={salveaza} disabled={lucru}>{lucru ? 'Lucrez…' : raspunsId ? 'Reîncearcă nota' : 'Salvează'}</button>
       </div>
     </Modal>
   )

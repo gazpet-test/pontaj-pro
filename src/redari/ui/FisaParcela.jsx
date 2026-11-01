@@ -36,6 +36,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
     try {
       const { data: p, error: e0 } = await supabase.from('red_parcele').select(COL_PARCELA).eq('id', parcelaId).single()
       if (e0) throw e0
+      // P1-5: fișa aparține proiectului selectat; altfel (proiect schimbat între timp) se închide
+      if (p.proiect_id !== proiect?.id) { show('Parcela nu aparține proiectului selectat — fișa s-a închis.', 'error'); onInapoi?.(); return }
       setParcela(p)
       if (esteAdmin) {
         // valoare_lei nu are privilegiu de coloană pentru authenticated: doar prin RPC (admin)
@@ -68,7 +70,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       setJurnal(j || [])
     } catch (e) { show('Fișa parcelei: ' + msgEroare(e), 'error') }
     finally { setLoading(false) }
-  }, [parcelaId, esteAdmin, poateScrie, show])
+  }, [parcelaId, proiect?.id, esteAdmin, poateScrie, show, onInapoi])
   useEffect(() => { incarca() }, [incarca])
 
   const uat = uats.find(u => u.id === parcela?.uat_id)
@@ -103,11 +105,16 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
     ...pvs.flatMap(p => [p.fisier_generat_path && { path: p.fisier_generat_path, eticheta:`PV ${p.nr_pv} generat` }, p.fisier_semnat_path && { path: p.fisier_semnat_path, eticheta:`PV ${p.nr_pv} semnat` }].filter(Boolean)),
   ], [convocari, pvs])
 
+  // P2-7: link semnat obținut la click, deschis printr-un <a target=_blank rel=noopener> click-uit sincron după await (fără window.open);
+  // dacă browserul îl blochează, rămâne butonul „Deschide” cu href-ul primit (valabil 10 min)
   const deschideFisier = async (path) => {
     try {
       const { data, error } = await supabase.storage.from('redari').createSignedUrl(path, 600)
       if (error) throw error
-      window.open(data.signedUrl, '_blank', 'noopener')
+      const a = document.createElement('a')
+      a.href = data.signedUrl; a.target = '_blank'; a.rel = 'noopener noreferrer'
+      document.body.appendChild(a); a.click(); a.remove()
+      setLinkSemnat({ path, url: data.signedUrl, nume: path.split('/').pop() })
     } catch (e) { show('Fișier: ' + msgEroare(e), 'error') }
   }
 
@@ -115,6 +122,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
   const [arataJurnal, setArataJurnal] = useState(false)
   const [jurnalDetalii, setJurnalDetalii] = useState(null)   // { id, date_vechi, date_noi } — doar admin, la cerere
   const [reincarcId, setReincarcId] = useState(null)
+  const [linkSemnat, setLinkSemnat] = useState(null)   // { path, url, nume } — ultimul link semnat, ca buton „Deschide” (P2-7)
   const dupaModal = () => { setModal(null); incarca(); onSchimbat?.() }
 
   // P2-5: detaliile unei intrări de jurnal (date_vechi / date_noi) se citesc la cerere, doar de admin
@@ -138,7 +146,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
       // fișierele din bucket sunt imutabile: reincarcaConvocator scrie o cale nouă versionată ({nr_document}-v{n}.docx) și mută *_path
-      const { blob, hash } = await genereazaConvocator({ detinator: det, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, origin: window.location.origin, templateArrayBuffer, dataDocument: c.created_at })
+      const { blob, hash } = await genereazaConvocator({ detinator: det, contactDetinator: contacte[c.detinator_id] || null, contact: null, parcela, uat, proiect, nrDocument: c.nr_document, token, origin: window.location.origin, templateArrayBuffer, dataDocument: c.created_at })
       const { path } = await reincarcaConvocator(supabase, { convocareId: c.id, blob, hash, proiectCod: proiect.cod, uat3: uat.uat3, idParcela: parcela.id_parcela, nrDocument: c.nr_document })
       show(`Convocatorul ${c.nr_document} a fost reîncărcat (${path}).`, 'success')
       incarca()
@@ -213,6 +221,13 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         {/* Fișiere */}
         <div style={S.card}>
           <div style={{ fontWeight:700, marginBottom:8 }}>Fișiere ({fisiere.length})</div>
+          {linkSemnat && (
+            <div style={{ ...S.card, padding:'6px 10px', marginBottom:8, fontSize:12.5, display:'flex', gap:8, alignItems:'center' }}>
+              <span style={{ color:G.muted, flex:1 }}>Dacă nu s-a deschis: </span>
+              <a href={linkSemnat.url} target="_blank" rel="noopener noreferrer" style={{ ...S.btnX, color:G.blue, textDecoration:'none' }}>Deschide {linkSemnat.nume}</a>
+              <button style={{ ...S.btnX, border:'none' }} onClick={() => setLinkSemnat(null)} title="Ascunde">✕</button>
+            </div>
+          )}
           {fisiere.length === 0 ? <Gol text="Niciun fișier." /> : fisiere.map((f, i) => (
             <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'5px 0', borderTop:`1px solid ${G.border}`, fontSize:13 }}>
               <span style={{ flex:1 }}>{f.eticheta}</span>
@@ -317,26 +332,33 @@ function ModalDetinator({ parcela, det, contact, show, onClose, onGata }) {
     ...Object.fromEntries(CAMPURI_CONTACT.map(([k]) => [k, contact?.[k] || ''])),
   }))
   const [lucru, setLucru] = useState(false)
+  const [detIdCreat, setDetIdCreat] = useState(null)   // P2-5: deținătorul s-a creat, dar contactul a picat → „Salvează” reia DOAR contactul
   const set = (k) => (e) => setF(x => ({ ...x, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
   const salveaza = async () => {
     const nume = f.nume.trim()
     if (!nume) { show('Numele e obligatoriu.', 'error'); return }
     setLucru(true)
     try {
-      const randDet = { nume, nume_normalizat: normalizeazaNume(nume), calitate: f.calitate, cota: f.cota.trim() || null, decedat: f.decedat, sursa_date: f.sursa_date.trim() || null, versiune_lista_tgz: f.versiune_lista_tgz.trim() || null }
-      let detId = det?.id
-      if (detId) {
-        const { error } = await supabase.from('red_detinatori').update({ ...randDet, updated_at: new Date().toISOString() }).eq('id', detId)
-        if (error) throw error
-      } else {
-        const { data, error } = await supabase.from('red_detinatori').insert({ ...randDet, parcela_id: parcela.id }).select('id').single()
-        if (error) throw error
-        detId = data.id
+      let detId = det?.id || detIdCreat
+      if (!detIdCreat) {
+        const randDet = { nume, nume_normalizat: normalizeazaNume(nume), calitate: f.calitate, cota: f.cota.trim() || null, decedat: f.decedat, sursa_date: f.sursa_date.trim() || null, versiune_lista_tgz: f.versiune_lista_tgz.trim() || null }
+        if (detId) {
+          const { error } = await supabase.from('red_detinatori').update({ ...randDet, updated_at: new Date().toISOString() }).eq('id', detId)
+          if (error) throw error
+        } else {
+          const { data, error } = await supabase.from('red_detinatori').insert({ ...randDet, parcela_id: parcela.id }).select('id').single()
+          if (error) throw error
+          detId = data.id
+        }
       }
       const randContact = { detinator_id: detId, adresa_cunoscuta: f.adresa_cunoscuta, updated_at: new Date().toISOString() }
       CAMPURI_CONTACT.forEach(([k]) => { randContact[k] = String(f[k]).trim() || null })
       const { error: ec } = await supabase.from('red_detinatori_contact').upsert(randContact, { onConflict:'detinator_id' })
-      if (ec) throw ec
+      if (ec) {
+        if (!det) setDetIdCreat(detId)   // rândul de deținător există deja: la următorul „Salvează” nu se mai creează altul
+        show('Deținătorul s-a salvat, dar contactul nu: ' + msgEroare(ec) + '. Corectează și apasă din nou „Salvează” — se reia doar contactul.', 'error')
+        return
+      }
       show(det ? 'Deținătorul a fost salvat.' : 'Deținătorul a fost adăugat.', 'success'); onGata()
     } catch (e) { show('Deținător: ' + msgEroare(e), 'error') }
     finally { setLucru(false) }
@@ -345,6 +367,7 @@ function ModalDetinator({ parcela, det, contact, show, onClose, onGata }) {
     <Modal titlu={det ? `Editează deținătorul` : `Adaugă deținător — ${parcela.id_parcela}`} onClose={onClose} latime={680}>
       {/* [r2] parcela_id e imutabil după insert: deținătorul nu se „mută” pe altă parcelă; corecția = ștergere (soft) + rând nou pe parcela corectă */}
       {det && <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>Deținătorul rămâne pe parcela {parcela.id_parcela}. Dacă e pe parcela greșită: „Șterge” (cu motiv) și adaugă-l pe parcela corectă.</div>}
+      {detIdCreat && <div style={{ ...S.card, borderColor:G.yellow, color:G.yellow, fontSize:12.5, marginBottom:8 }}>Deținătorul e creat; a rămas de salvat contactul. „Salvează” scrie doar contactul (datele persoanei nu se mai modifică aici).</div>}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
         <Camp eticheta="Nume (NUME Prenume)" span={2}><input value={f.nume} onChange={set('nume')} style={S.input} /></Camp>
         <Camp eticheta="Calitate"><select value={f.calitate} onChange={set('calitate')} style={{ ...S.select, width:'100%' }}>{CALITATI.map(c => <option key={c} value={c}>{c}</option>)}</select></Camp>

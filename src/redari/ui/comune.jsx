@@ -21,10 +21,18 @@ export async function citesteTokenRaspuns(detinatorId) {
   return data.token_raspuns
 }
 
-// P2-11: convocatorul se generează doar dacă UAT-ul are o zi de sesiune cu program și proiectul are contact, text GDPR și reprezentant TGZ.
-// Întoarce null când totul e în regulă, altfel motivul (text) pentru butonul dezactivat.
-export function motivBlocareConvocator(proiect, uat) {
+// P2-11 (+ docx r4): convocatorul se generează doar dacă UAT-ul are o zi de sesiune cu program, proiectul are contact, text GDPR,
+// reprezentant TGZ, contract nr+dată și împuternicire nr+dată, iar deținătorul (rândul din red_v_stare_parcela, opțional) nu e
+// neidentificat și are adresă cunoscută — altfel convocarea e prin afișare la Primărie. Verificarea completă (cu contactul PII) o face
+// docx.verificaDateConvocator în modal. Întoarce null când totul e în regulă, altfel motivul (text) pentru butonul dezactivat.
+export function motivBlocareConvocator(proiect, uat, rand) {
   const lipsa = []
+  if (rand) {
+    if (rand.calitate === 'neidentificat') lipsa.push('deținător neidentificat → convocare prin afișare la Primărie')
+    else if (rand.adresa_cunoscuta === false) lipsa.push('adresă necunoscută → convocare prin afișare la Primărie')
+  }
+  if (!String(proiect?.contract_nr || '').trim() || !proiect?.contract_data) lipsa.push('proiect fără nr./dată contract')
+  if (!String(proiect?.imputernicire_nr || '').trim() || !proiect?.imputernicire_data) lipsa.push('proiect fără nr./dată împuternicire Transgaz')
   if (!uat) lipsa.push('UAT necunoscut')
   else if (![1, 2, 3].some(i => uat[`sesiune_zi${i}`] && String(uat[`program_zi${i}`] || '').trim())) lipsa.push('UAT fără zi de sesiune cu program')
   if (!String(proiect?.contact_nume || '').trim() && !String(proiect?.contact_telefon || '').trim() && !String(proiect?.contact_email || '').trim()) lipsa.push('proiect fără persoană de contact')
