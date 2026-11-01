@@ -144,7 +144,9 @@ const SP = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '
 const TEXT_BRUT = new Set(['script', 'style', 'textarea', 'title']);
 export function analizeazaHTML(html) {
   const s = String(html || '');
-  const mic = s.toLowerCase();
+  // r6 (Jakarinos r5): litere mici DOAR ASCII — pastreaza lungimea (toLowerCase pe Unicode, ex. U+0130 → 2 caractere,
+  // ar decala indicii folositi pe sirul original)
+  const mic = s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
   const n = s.length;
   const tags = [];
   const rupt = () => ({ tags, complet: false });

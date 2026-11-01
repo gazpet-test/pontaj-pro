@@ -108,6 +108,15 @@ describe('consolidari()', () => {
       expect(consolidari(H + '<!-- neinchis')).toBeNull();
       expect(consolidari(H + '<script>var a;')).toBeNull();
     });
+    it('r6: caractere Unicode care isi schimba lungimea la lowercase (U+0130) nu decaleaza parsarea', () => {
+      const I = '<title>HG 395 02/06/2016 - Portal Legislativ</title><span class="S_EMT_BDY">GUVERNUL</span>';
+      const B = (d) => '<div id="istoric_fa"><a title="Consolidarea din ' + d + '">x</a></div>';
+      const h = I + B('24.05.2024') + 'İ' + B('25.02.2026');
+      expect(consolidari(h)).toBeNull(); // doua blocuri → ambiguu
+      expect(consolidari(I + B('24.05.2024') + 'İİİ<script>var a;')).toBeNull(); // script neinchis
+      expect(consolidari('İ' + I + B('24.05.2024'))).toEqual(['2024-05-24']);
+      expect(paginaPotrivita('İĂÎȘ' + I + B('24.05.2024'), rand())).toBe(true);
+    });
     it('„<” in text, DOCTYPE si tag self-closing nu strica pagina', () => {
       expect(consolidari('<!DOCTYPE html><p>a < b si 3<4</p><br/>' + H)).toEqual(['2024-05-24']);
     });
