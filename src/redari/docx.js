@@ -312,16 +312,31 @@ const segment = (v, nume) => {
   return s
 }
 
-/** Calea în bucket (contract §6): {proiect_cod}/{uat3}/{id_parcela}/{nr_document}.docx */
-export const caleConvocator = ({ proiectCod, uat3, idParcela, nrDocument }) =>
-  `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/${segment(idParcela, 'id_parcela')}/${segment(nrDocument, 'nr_document')}.docx`
+/**
+ * Calea în bucket (contract §6, versionată — fișierele din `redari` sunt IMUTABILE, bucket-ul nu are politică de UPDATE):
+ * {proiect_cod}/{uat3}/{id_parcela}/{nr_document}-v{n}.docx. Orice reîncărcare merge pe o versiune NOUĂ; fișierele vechi rămân.
+ */
+export const caleConvocator = ({ proiectCod, uat3, idParcela, nrDocument, versiune = 1 }) => {
+  const n = Number(versiune)
+  if (!Number.isInteger(n) || n < 1) throw new Error(`Versiune invalidă pentru calea din storage: „${versiune}”`)
+  return `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/${segment(idParcela, 'id_parcela')}/${segment(nrDocument, 'nr_document')}-v${n}.docx`
+}
+
+/** Versiunea din calea curentă (`…-v7.docx` → 7); NULL / cale fără sufix → 0. */
+export const versiuneDinCale = (path) => {
+  const m = /-v(\d+)\.[A-Za-z0-9]+$/.exec(String(path || ''))
+  return m ? parseInt(m[1], 10) : 0
+}
 
 const eroareCu = (mesaj, extra) => Object.assign(new Error(mesaj), extra)
+// Supabase Storage la upload pe o cheie existentă (upsert false): 409 / „The resource already exists” / error „Duplicate”
+const eExistaDeja = (e) => !!e && (String(e.statusCode ?? e.status ?? '') === '409' || /already exists|duplicate/i.test(`${e.message || ''} ${e.error || ''}`))
 
-// pașii 2–3: upload la cale + UPDATE rândul cu path + hash; eșecul lasă rândul fără path (reluabil cu reincarcaConvocator)
-const incarcaSiLeaga = async (supabase, { convocareId, blob, hash, path, upsert }) => {
-  const { error: eUp } = await supabase.storage.from(BUCKET_REDARI).upload(path, blob, { contentType: MIME_DOCX, upsert })
-  if (eUp) throw eroareCu(`Convocarea ${convocareId} e înregistrată, dar fișierul nu a putut fi încărcat în storage (${path}): ${eUp.message || eUp}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'upload' })
+// upload fără suprascriere — NICIODATĂ upsert:true (bucket-ul nu are politică de UPDATE, fișierele sunt imutabile)
+const incarca = (supabase, path, blob) => supabase.storage.from(BUCKET_REDARI).upload(path, blob, { contentType: MIME_DOCX, upsert: false })
+
+// pasul 3: UPDATE rândul cu path + hash; eșecul lasă rândul pe calea veche (fișierul nou rămâne în bucket, reluabil)
+const leagaDeRand = async (supabase, { convocareId, path, hash }) => {
   const { data, error: eUpd } = await supabase.from('red_convocari')
     .update({ fisier_convocator_path: path, continut_hash: hash }).eq('id', convocareId).select('id').single()
   if (eUpd || !data?.id) throw eroareCu(`Fișierul e în storage (${path}), dar legarea de convocarea ${convocareId} a eșuat: ${eUpd?.message || eUpd || 'niciun rând actualizat'}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'update' })
@@ -330,9 +345,9 @@ const incarcaSiLeaga = async (supabase, { convocareId, blob, hash, path, upsert 
 
 /**
  * Salvare în 3 pași, ca numărul de document să nu se piardă și să nu rămână fișiere orfane:
- * (1) INSERT red_convocari {detinator_id, canal, nr_document} (path/hash NULL) → id; (2) upload la cale (upsert false);
- * (3) UPDATE rândul cu fisier_convocator_path + continut_hash. Dacă (2) sau (3) eșuează, rândul rămâne fără path
- * („neîncărcat” în UI) și se reia cu reincarcaConvocator; eroarea poartă `convocareId` și `path`.
+ * (1) INSERT red_convocari {detinator_id, canal, nr_document} (path/hash NULL) → id; (2) upload la `…-v1.docx` (upsert false,
+ * fără suprascriere); (3) UPDATE rândul cu fisier_convocator_path + continut_hash. Dacă (2) sau (3) eșuează, rândul rămâne
+ * fără path („neîncărcat” în UI) și se reia cu reincarcaConvocator; eroarea poartă `convocareId`, `path`, `pas`.
  * @returns {Promise<{ path: string, convocareId: string }>}
  */
 export async function salveazaConvocator(supabase, { blob, hash, proiectCod, uat3, idParcela, nrDocument, detinatorId, canal = 'posta' }) {
@@ -340,24 +355,41 @@ export async function salveazaConvocator(supabase, { blob, hash, proiectCod, uat
   if (!blob) throw new Error('Lipsește fișierul convocatorului')
   if (!plin(hash)) throw new Error('Lipsește hash-ul conținutului')
   if (!detinatorId) throw new Error('Lipsește deținătorul (detinator_id)')
-  const path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument })
+  const path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument, versiune: 1 })
   const { data, error: eIns } = await supabase.from('red_convocari')
     .insert({ detinator_id: detinatorId, canal, nr_document: nrDocument })
     .select('id').single()
   if (eIns) throw new Error(`Înregistrarea convocării ${nrDocument} în red_convocari a eșuat: ${eIns.message || eIns}`)
   if (!data?.id) throw new Error('Înregistrarea convocării nu a întors un id')
-  return incarcaSiLeaga(supabase, { convocareId: data.id, blob, hash, path, upsert: false })
+  const convocareId = data.id
+  const { error: eUp } = await incarca(supabase, path, blob)
+  if (eUp) throw eroareCu(`Convocarea ${convocareId} e înregistrată, dar fișierul nu a putut fi încărcat în storage (${path}): ${eUp.message || eUp}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'upload' })
+  return leagaDeRand(supabase, { convocareId, path, hash })
 }
 
 /**
- * Reluarea pașilor 2–3 pentru o convocare rămasă fără fișier (upsert true pe aceeași cale).
- * @returns {Promise<{ path: string, convocareId: string }>}
+ * Reîncărcarea unei convocări (rămasă fără fișier sau regenerată): citește calea curentă din rând, încarcă pe versiunea
+ * următoare (n = versiunea curentă sau 0, +1; upsert false — la coliziune „already exists” încearcă n+1 o singură dată) și
+ * face UPDATE pe rând cu noua cale + hash. Fișierul vechi rămâne în bucket; schimbarea coloanei e jurnalizată de trigger.
+ * @returns {Promise<{ path: string, convocareId: string, versiune: number }>}
  */
 export async function reincarcaConvocator(supabase, { convocareId, blob, hash, proiectCod, uat3, idParcela, nrDocument }) {
   if (!supabase) throw new Error('Lipsește clientul Supabase')
   if (!convocareId) throw new Error('Lipsește id-ul convocării de reîncărcat')
   if (!blob) throw new Error('Lipsește fișierul convocatorului')
   if (!plin(hash)) throw new Error('Lipsește hash-ul conținutului')
-  const path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument })
-  return incarcaSiLeaga(supabase, { convocareId, blob, hash, path, upsert: true })
+  caleConvocator({ proiectCod, uat3, idParcela, nrDocument }) // validează segmentele înainte de orice apel
+  const { data: rand, error: eSel } = await supabase.from('red_convocari').select('id, fisier_convocator_path').eq('id', convocareId).single()
+  if (eSel || !rand) throw new Error(`Convocarea ${convocareId} nu a putut fi citită: ${eSel?.message || eSel || 'rând inexistent'}`)
+  let versiune = versiuneDinCale(rand.fisier_convocator_path) + 1
+  let path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument, versiune })
+  let { error: eUp } = await incarca(supabase, path, blob)
+  if (eUp && eExistaDeja(eUp)) { // coliziune (fișier orfan dintr-o reluare anterioară): o singură reîncercare pe n+1
+    versiune += 1
+    path = caleConvocator({ proiectCod, uat3, idParcela, nrDocument, versiune })
+    ;({ error: eUp } = await incarca(supabase, path, blob))
+  }
+  if (eUp) throw eroareCu(`Fișierul convocării ${convocareId} nu a putut fi încărcat în storage (${path}): ${eUp.message || eUp}. Reluați încărcarea din Registru.`, { convocareId, path, pas: 'upload' })
+  const r = await leagaDeRand(supabase, { convocareId, path, hash })
+  return { ...r, versiune }
 }
