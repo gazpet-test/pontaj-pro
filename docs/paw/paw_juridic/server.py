@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -376,9 +377,22 @@ class Server:
             self.salveaza(rows)
             return {"lucrare": ident, "stare": "pornita"}
 
+    @staticmethod
+    def dialog_lstat(path):
+        # lstat fara urmarirea legaturilor; symlink/junction/reparse point = refuz. None daca lipseste.
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(info.st_mode) or (getattr(info, "st_file_attributes", 0)
+                                          & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)):
+            raise Refuz("Legaturi simbolice sau reparse points nu sunt permise in folderul de dialog.")
+        return info
+
     def dialog_folder(self):
         folder = self.paths()["dialog_dir"]
-        if not folder.is_dir():
+        info = self.dialog_lstat(folder)
+        if info is None or not stat.S_ISDIR(info.st_mode):
             raise Refuz("Folderul de dialog lipseste; nu se creeaza automat.")
         return folder
 
@@ -387,8 +401,10 @@ class Server:
         numere = {}
         for entry in self.dialog_folder().iterdir():
             potrivire = DIALOG_NUME.fullmatch(entry.name)
-            if potrivire and entry.is_file():
-                numere.setdefault(int(potrivire[2]), set()).add(potrivire[1])
+            if potrivire:
+                info = self.dialog_lstat(entry)
+                if info is not None and stat.S_ISREG(info.st_mode):
+                    numere.setdefault(int(potrivire[2]), set()).add(potrivire[1])
         return numere
 
     def dialog_trimite(self, subiect, text):
@@ -398,12 +414,14 @@ class Server:
             if tipar.search(subiect) or tipar.search(text):
                 raise Refuz("Fara date personale pe canal: textul contine ceva ce arata a " + nume + ".")
         folder = self.dialog_folder()
-        numar = max(self.dialog_numere(), default=0) + 1
         corp = text if text.endswith("\n") else text + "\n"
         for _ in range(2):
+            # La coliziune se recalculeaza maximul din folder, nu doar +1.
+            numar = max(self.dialog_numere(), default=0) + 1
             if numar > 999:
                 raise Refuz("Numerotarea dialogului a atins 999.")
             fisier = folder / ("juridic#%03d.md" % numar)
+            self.dialog_lstat(fisier)
             try:
                 # Numai fisier nou: "x" refuza suprascrierea unui mesaj existent.
                 with fisier.open("x", encoding="utf-8", newline="\n") as handle:
@@ -413,7 +431,6 @@ class Server:
                     handle.flush()
                     os.fsync(handle.fileno())
             except FileExistsError:
-                numar += 1
                 continue
             return {"ok": True, "numar": numar, "fisier": fisier.name}
         raise Refuz("Fisierul exista deja; verifica folderul de dialog inainte de a reincerca.")
@@ -428,11 +445,17 @@ class Server:
                 return {"ok": True, "numar": None, "exista": False}
             numar = max(raspunsuri)
         fisier = folder / ("claude#%03d.md" % numar)
-        try:
-            with fisier.open("rb") as handle:
-                data = handle.read(DIALOG_MAX_CITIRE + 1)
-        except FileNotFoundError:
+        inainte = self.dialog_lstat(fisier)
+        if inainte is None:
             return {"ok": True, "numar": numar, "exista": False}
+        if not stat.S_ISREG(inainte.st_mode):
+            raise Refuz("Tinta nu este un fisier obisnuit.")
+        with fisier.open("rb") as handle:
+            # Verificare pe handle: acelasi fisier obisnuit ca la lstat (reduce cursa).
+            acum = os.fstat(handle.fileno())
+            if not stat.S_ISREG(acum.st_mode) or (acum.st_ino, acum.st_dev) != (inainte.st_ino, inainte.st_dev):
+                raise Refuz("Fisierul s-a schimbat intre verificare si citire; reincearca.")
+            data = handle.read(DIALOG_MAX_CITIRE + 1)
         if len(data) > DIALOG_MAX_CITIRE:
             raise Refuz("Raspunsul depaseste 200 KB; se citeste manual.")
         text = data.decode("utf-8-sig").replace("\r\n", "\n")
@@ -445,7 +468,7 @@ class Server:
         for numar in sorted(numere)[-10:]:
             data = None
             if "claude" in numere[numar]:
-                stamp = (folder / ("claude#%03d.md" % numar)).stat().st_mtime
+                stamp = self.dialog_lstat(folder / ("claude#%03d.md" % numar)).st_mtime
                 data = dt.datetime.fromtimestamp(stamp).astimezone().isoformat(timespec="seconds")
             rezultat.append({"numar": numar, "juridic": "juridic" in numere[numar],
                              "claude": "claude" in numere[numar], "data_claude": data})
@@ -500,6 +523,8 @@ class Server:
         if name == "dialog_citeste":
             if set(args) - {"numar"}:
                 raise Refuz("Este permis doar numar (optional).")
+            if "numar" in args and args["numar"] is None:
+                raise Refuz("Numar invalid: null explicit nu e acceptat; omite parametrul.")
             return self.dialog_citeste(args.get("numar"))
         if name == "dialog_lista":
             if args:

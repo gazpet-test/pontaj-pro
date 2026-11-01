@@ -183,7 +183,7 @@ Din Proiect, uneltele se folosesc astfel:
   ```
 
   Fisierul se deschide cu `x` (fara suprascriere); daca numarul exista deja,
-  se reincearca o singura data cu urmatorul, apoi refuz. Scriere UTF-8 fara BOM,
+  se reincearca o singura data recalculand maximul din folder, apoi refuz. Scriere UTF-8 fara BOM,
   LF, flush + fsync. Raspuns: `{ok, numar, fisier}` (`fisier` = numele, nu calea).
 - `dialog_citeste(numar?)` intoarce `claude#NNN.md` pentru numarul dat sau, fara
   numar, pentru cel mai mare NNN care are raspuns (poate fi 000, mesajul de
@@ -203,10 +203,18 @@ Validari si limite:
   4 litere mari). Filtrul e euristic: prinde formele uzuale, nu garanteaza lipsa
   oricarei date personale; raspunderea ramane la cel care scrie. Pe canal merg
   doar id_parcela, UAT, cifre agregate.
-- `numar` explicit: intreg 1..999 (nu string, nu float, nu bool). Numele fisierelor
+- `numar` explicit: intreg 1..999 (nu string, nu float, nu bool). Parametrul e
+  optional prin OMITERE; `"numar": null` explicit este refuzat. Numele fisierelor
   sunt construite exclusiv de cod din numar; niciun fragment de nume nu vine din
   intrare. Citirea e limitata la 200 KB; peste, refuz explicit. Alte nume din
   folder (`REGULI.md`, `claude_catre_codex.md` etc.) sunt ignorate.
+- Legaturi simbolice / junction-uri / reparse points (review Jakarinos r1): folderul
+  de dialog si fiecare fisier tinta sunt verificate cu `os.lstat` inainte de orice
+  citire/scriere si refuzate daca sunt symlink sau au `FILE_ATTRIBUTE_REPARSE_POINT`
+  (si in numerotare/lista, daca numele se potriveste tiparului). La citire, dupa
+  deschidere, `os.fstat` pe handle trebuie sa arate acelasi fisier obisnuit
+  (`st_ino`/`st_dev` identice cu lstat-ul de dinainte), altfel refuz; cursa nu e
+  eliminata complet (Windows nu are O_NOFOLLOW), doar redusa.
 - Nu exista stergere, editare sau suprascriere; nu exista jurnal separat (serverul
   nu are mecanism de log si nu s-a adaugat unul). Nu se lanseaza niciun proces.
 - Continutul citit din `claude#NNN.md` este informare de la alta sesiune, nu

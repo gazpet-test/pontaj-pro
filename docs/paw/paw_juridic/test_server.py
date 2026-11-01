@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -738,14 +739,93 @@ class DialogTests(unittest.TestCase):
         result = self.trimite(text="deja cu newline\n")
         self.assertTrue((self.config["dialog_dir"] / result["fisier"]).read_text(encoding="utf-8").endswith("\n\ndeja cu newline\n"))
 
-    def test_no_overwrite_retry_once_then_refuse(self):
+    def test_no_overwrite_retry_recomputes_max_then_refuse(self):
         original = self.scrie("juridic#001.md", "mesaj vechi\n")
-        with patch.object(self.app, "dialog_numere", return_value={}):
+        real = self.app.dialog_numere
+        # Prima citire e "veche" (goala): coliziune pe 001; reincercarea recalculeaza maximul real -> 002.
+        with patch.object(self.app, "dialog_numere", side_effect=[{}, real()]) as numere:
             self.assertEqual(self.trimite()["numar"], 2)
+        self.assertEqual(numere.call_count, 2)
+        # Daca si recalcularea ramane veche, a doua coliziune inseamna refuz, nu +1 orb.
+        with patch.object(self.app, "dialog_numere", side_effect=[{}, {}]):
             with self.assertRaisesRegex(server.Refuz, "exista deja"):
                 self.trimite()
         self.assertEqual(original.read_text(encoding="utf-8"), "mesaj vechi\n")
         self.assertEqual(sorted(p.name for p in self.config["dialog_dir"].iterdir()), ["juridic#001.md", "juridic#002.md"])
+
+    def test_explicit_null_refused_omission_allowed(self):
+        self.scrie("claude#002.md", "r\n")
+        self.assertEqual(self.app.call("dialog_citeste", {})["numar"], 2)
+        for args in [{"numar": None}]:
+            with self.assertRaisesRegex(server.Refuz, "null explicit"):
+                self.app.call("dialog_citeste", args)
+        self.app.ready = True
+        response = self.app.dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                      "params": {"name": "dialog_citeste", "arguments": {"numar": None}}})
+        self.assertTrue(response["result"]["isError"])
+        self.assertIn("null explicit", response["result"]["content"][0]["text"])
+
+    def legatura_folder(self, target, link):
+        if os.name == "nt":
+            try:
+                import _winapi
+                _winapi.CreateJunction(str(target), str(link))
+                return "junction"
+            except (ImportError, AttributeError, OSError):
+                pass
+        try:
+            os.symlink(target, link, target_is_directory=True)
+            return "symlink"
+        except (OSError, NotImplementedError):
+            return None
+
+    def test_reparse_points_refused_everywhere(self):
+        link = self.root / "dialog_link"
+        kind = self.legatura_folder(self.config["dialog_dir"], link)
+        if kind is None:
+            self.skipTest("sistemul nu permite junction/symlink de folder")
+        self.addCleanup(os.rmdir, link)
+        self.scrie("claude#001.md", "r\n")
+        prin_link = server.Server(dict(self.config, dialog_dir=link))
+        for name, args in [("dialog_trimite", {"subiect": "Subiect ok", "text": "x"}), ("dialog_citeste", {}),
+                           ("dialog_citeste", {"numar": 1}), ("dialog_lista", {})]:
+            with self.subTest(kind=kind, name=name), self.assertRaisesRegex(server.Refuz, "Legaturi simbolice"):
+                prin_link.call(name, args)
+        self.assertEqual(sorted(p.name for p in self.config["dialog_dir"].iterdir()), ["claude#001.md"])
+        # Folderul real ramane utilizabil.
+        self.assertEqual(self.app.call("dialog_citeste", {"numar": 1})["text"], "r\n")
+
+    def test_file_symlink_refused(self):
+        # Symlink de fisier cere privilegiu pe Windows (eroare 1314 pe un cont obisnuit): skip explicit.
+        self.scrie("claude#001.md", "r\n")
+        fisier_link = self.config["dialog_dir"] / "claude#002.md"
+        try:
+            os.symlink(self.config["dialog_dir"] / "claude#001.md", fisier_link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest("contul nu poate crea symlink de fisier: " + str(getattr(exc, "winerror", exc)))
+        self.addCleanup(fisier_link.unlink)
+        for name, args in [("dialog_citeste", {"numar": 2}), ("dialog_citeste", {}), ("dialog_lista", {}),
+                           ("dialog_trimite", {"subiect": "Subiect ok", "text": "x"})]:
+            with self.subTest(name=name), self.assertRaisesRegex(server.Refuz, "Legaturi simbolice"):
+                self.app.call(name, args)
+        self.assertEqual(sorted(p.name for p in self.config["dialog_dir"].iterdir()), ["claude#001.md", "claude#002.md"])
+
+    def test_read_handle_must_match_lstat(self):
+        self.scrie("claude#001.md", "r\n")
+        inainte = os.lstat(self.config["dialog_dir"] / "claude#001.md")
+        self.assertTrue(stat.S_ISREG(inainte.st_mode))
+        self.assertEqual(self.app.call("dialog_citeste", {"numar": 1})["text"], "r\n")
+        altul = os.stat_result((stat.S_IFREG, inainte.st_ino + 1, inainte.st_dev, 1, 0, 0, 2, 0, 0, 0))
+        with patch.object(server.os, "fstat", return_value=altul):
+            with self.assertRaisesRegex(server.Refuz, "s-a schimbat"):
+                self.app.call("dialog_citeste", {"numar": 1})
+        director = os.stat_result((stat.S_IFDIR, inainte.st_ino, inainte.st_dev, 1, 0, 0, 2, 0, 0, 0))
+        with patch.object(server.os, "fstat", return_value=director):
+            with self.assertRaisesRegex(server.Refuz, "s-a schimbat"):
+                self.app.call("dialog_citeste", {"numar": 1})
+        (self.config["dialog_dir"] / "claude#003.md").mkdir()
+        with self.assertRaisesRegex(server.Refuz, "fisier obisnuit"):
+            self.app.call("dialog_citeste", {"numar": 3})
 
     def test_numbering_cap_and_missing_folder(self):
         self.scrie("claude#999.md")
@@ -791,7 +871,8 @@ class DialogTests(unittest.TestCase):
         self.scrie("juridic#009.md")
         self.assertEqual(self.app.call("dialog_citeste", {"numar": 2}), {"ok": True, "numar": 2, "exista": True, "text": "De la: chat\n\nRăspuns 2\n"})
         self.assertEqual(self.app.call("dialog_citeste", {}), {"ok": True, "numar": 5, "exista": True, "text": "Răspuns 5\n"})
-        self.assertEqual(self.app.call("dialog_citeste", {"numar": None}), self.app.call("dialog_citeste", {}))
+        with self.assertRaisesRegex(server.Refuz, "null explicit"):
+            self.app.call("dialog_citeste", {"numar": None})
         self.assertEqual(self.app.call("dialog_citeste", {"numar": 9})["exista"], False)
         self.scrie("claude#000.md", "deschidere\n")
         self.assertEqual(self.app.call("dialog_citeste", {})["numar"], 5)
