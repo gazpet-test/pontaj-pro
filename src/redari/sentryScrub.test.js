@@ -706,6 +706,22 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // legitim: `\\x41` singur fara identificator -> trece
     expect(scrubSentryEvent({ message: 'Caracter: \\x41' })?.message).toBe('Caracter: \\x41')
   })
+  it('r41 P1-01 (Jakarinos): escape octal `\\125` si escape de identitate `\\U` in copia identificatorului - eveniment si span', () => {
+    const c = T[20]
+    const oct = c.charCodeAt(0).toString(8)
+    for (const E of [T.slice(0, 20) + '\\' + oct + T.slice(21), T.slice(0, 20) + '\\' + c + T.slice(21), T.slice(0, 12) + '\\' + T[12] + T.slice(13, 20) + '\\' + oct + T.slice(21, 30) + '\\x' + T.charCodeAt(30).toString(16) + T.slice(31)]) {   // identitate pe o LITERA (o cifra ar fi escape octal)
+      expect(E).not.toBe(T)
+      for (const ev of [{ extra: { token: T, copy: E } }, { message: E, extra: { token: T } }, { extra: { nota: JSON.stringify({ token: T, copy: E }) } }, { extra: { token: E } }]) {
+        const rez = scrubSentryEvent(ev); const j = rez === null ? '' : JSON.stringify(rez)
+        expect(!j.includes(T) && !j.includes(E) && !j.includes(JSON.stringify(E).slice(1, -1))).toBe(true)
+      }
+      const sp = scrubSentrySpan({ span_id: 'ab', trace_id: 'cd', description: E, data: { token: T } })
+      const js = JSON.stringify(sp); expect(!js.includes(T) && !js.includes(E) && !js.includes(JSON.stringify(E).slice(1, -1))).toBe(true)
+    }
+    // legitim: cale Windows cu backslash-uri, fara identificator -> trece
+    const cale = 'C:\\Users\\Public\\fisier.txt'
+    expect(scrubSentryEvent({ message: 'Fisier lipsa: ' + cale })?.message).toBe('Fisier lipsa: ' + cale)
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

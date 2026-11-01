@@ -36,8 +36,16 @@ const MIN_LUNGIME_COADA = 16
 const pareSuspect = (s) => /redari|raspuns|token/i.test(s)
 // r11 P1-1 (Jakarinos): cheile se judecă pe TOATE formele decodate (`%70%5f%74%6f%6b%65%6e` = p_token)
 // Jakarinos r36 P1-02: escape-urile Unicode (`\u0025` = `%`) se reconstruiesc INAINTE de orice judecata pe chei/valori
-// Jakarinos r40 P1-01: si escape-urile JavaScript `\xHH` (si `\u{H..}`) se reconstruiesc, nu doar `\uXXXX`
-const cuUnicode = (s) => s.replace(/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g, (_m, a, b, c) => { try { return String.fromCodePoint(parseInt(a || b || c, 16)) } catch { return _m } })
+// Jakarinos r40/r41 P1-01: decodor COMPLET de escape-uri JavaScript — `\uXXXX`, `\u{H..}`, `\xHH`, octal `\125`, escape de identitate `\U` -> `U`
+// (si `\n`,`\t`... -> caracterul de control). Orice backslash poate rupe secventa de 43 si poate fi reconstruit de un motor JS — deci TOATE se reconstruiesc.
+const CONTROL = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v', 0: '\0' }
+const cuUnicode = (s) => s.replace(/\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\([0-7]{1,3})|\\([^])/g, (_m, a, b, c, o, i) => {
+  try {
+    if (a || b || c) return String.fromCodePoint(parseInt(a || b || c, 16))
+    if (o !== undefined) return String.fromCharCode(parseInt(o, 8))
+    return i in CONTROL ? CONTROL[i] : i
+  } catch { return _m }
+})
 const cheieDeToken = (cheie) => typeof cheie === 'string' && [cheie, cuUnicode(cheie)].some(c => formele(c).some(f => /token/i.test(f)))
 // r7 P1-2: valoarea unei chei de token e token dacă ORICE formă decodată are exact 43 [A-Za-z0-9_-] (ex. `%30` + 42 caractere)
 const valoareDeToken = (v) => typeof v === 'string' && formele(v).some(f => RX_T43.test(f))
@@ -94,7 +102,7 @@ const decodeazaOdata = (s) => {
 // Jakarinos r38 P1-01: transformarile pot ALTERNA (`\u00255Cu0055` -> `%5Cu0055` -> `\u0055` -> `U`) — formele se construiesc
 // aplicand pe rand reconstruirea escape-urilor Unicode si decodarea procentuala, pana la stabilizare sau pana la limita de pasi
 const MAX_PASI = 8
-const RX_INCA_CODIFICAT = /%[0-9A-Fa-f]{2}|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]{1,6}\}|\\x[0-9a-fA-F]{2}/
+const RX_INCA_CODIFICAT = /%[0-9A-Fa-f]{2}|\\[^]/   // orice %XX sau orice escape cu backslash (r41: inclusiv octal si identitate)
 const RX_INCA_CODIFICAT_G = new RegExp(RX_INCA_CODIFICAT.source, 'g')
 export const formele = (s) => {
   const lista = [s]
