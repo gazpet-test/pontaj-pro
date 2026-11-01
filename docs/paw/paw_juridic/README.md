@@ -3,7 +3,8 @@
 Server MCP local pentru Proiectul "Juridic - cercetare normativa" din Claude
 Desktop. Python 3.13, exclusiv biblioteca standard; fara instalare pip.
 
-Expune exact cinci unelte:
+Expune exact opt unelte: cinci pentru consultanti Paw si trei pentru canalul de
+dialog cu sesiunea chat (vezi „Dialog cu sesiunea chat”).
 
 | Unealta | Intrare | Rezultat |
 | --- | --- | --- |
@@ -12,6 +13,9 @@ Expune exact cinci unelte:
 | `cere_verificare_jakarinos` | `titlu`, `text` | `lucrare`, `stare: pornita` |
 | `inchide_lucrare_gemini` | `eticheta` | `eticheta`, `stare: inchisa` |
 | `citeste_rezultat` | `lucrare` | `stare`, `text`, optional `motiv`, `trunchiat` |
+| `dialog_trimite` | `subiect`, `text` | `ok`, `numar`, `fisier` |
+| `dialog_citeste` | optional `numar` | `ok`, `numar`, `exista`, optional `text` |
+| `dialog_lista` | - | lista `{numar, juridic, claude, data_claude}` |
 
 Obiectele sunt JSON serializat in `content[].text`, conform MCP. Erorile de
 operare sunt rezultate MCP cu `isError: true`; erorile de protocol folosesc
@@ -155,6 +159,64 @@ Compatibilitatea lansatorului real nu a fost verificata in aceasta livrare.
 Antetul de date externe nu garanteaza comportamentul modelelor din aval.
 Serverul nu izoleaza drepturile Windows ale consultantilor. Nu se trimit secrete/PII.
 
+## Dialog cu sesiunea chat
+
+Canal de dialog pe fisiere intre Proiectul Juridic (Claude Desktop) si sesiunea
+Claude Code „chat” de pe serverul AI, in folderul fix
+`C:\Users\Public\paw-data\dialog\` (conventia completa: `_CONVENTIE_JURIDIC.md`
+din acel folder). Juridicul scrie `juridic#NNN.md`, chatul raspunde `claude#NNN.md`
+cu acelasi numar; NNN = 3 cifre, crescator. Folderul trebuie sa existe; serverul
+nu il creeaza si nu scrie in alta parte.
+
+Din Proiect, uneltele se folosesc astfel:
+
+- `dialog_trimite(subiect, text)` scrie un fisier NOU `juridic#NNN.md`, cu
+  NNN = max(numerele existente `juridic#`/`claude#`) + 1 (cel putin 001). Antet fix,
+  construit de cod:
+
+  ```text
+  De la: Proiect Juridic (Claude Desktop)
+  Data: <ISO local cu fus orar, ex. 2026-11-01T22:30:00+02:00>
+  Subiect: <subiect>
+
+  <text>
+  ```
+
+  Fisierul se deschide cu `x` (fara suprascriere); daca numarul exista deja,
+  se reincearca o singura data cu urmatorul, apoi refuz. Scriere UTF-8 fara BOM,
+  LF, flush + fsync. Raspuns: `{ok, numar, fisier}` (`fisier` = numele, nu calea).
+- `dialog_citeste(numar?)` intoarce `claude#NNN.md` pentru numarul dat sau, fara
+  numar, pentru cel mai mare NNN care are raspuns (poate fi 000, mesajul de
+  deschidere al chatului). `{ok, numar, exista: true, text}` sau
+  `{ok, numar, exista: false}`; fara niciun raspuns in folder: `numar: null`.
+- `dialog_lista()` intoarce ultimele 10 numere din folder:
+  `[{numar, juridic, claude, data_claude}]`, `data_claude` = data modificarii
+  fisierului `claude#NNN.md` (ISO local) sau `null`.
+
+Validari si limite:
+
+- `subiect` 3..120 caractere, fara niciun caracter de control (nici LF/TAB);
+  `text` 1..20000 caractere, cu LF si TAB permise (ca la brief-uri).
+- Fara date personale pe canal: textul si subiectul sunt refuzate daca contin
+  ceva ce arata a CNP (13 cifre consecutive), telefon romanesc
+  (`(+4|0)0?7` + 8 cifre, cu spatii/puncte optionale) sau IBAN (`RO` + 2 cifre +
+  4 litere mari). Filtrul e euristic: prinde formele uzuale, nu garanteaza lipsa
+  oricarei date personale; raspunderea ramane la cel care scrie. Pe canal merg
+  doar id_parcela, UAT, cifre agregate.
+- `numar` explicit: intreg 1..999 (nu string, nu float, nu bool). Numele fisierelor
+  sunt construite exclusiv de cod din numar; niciun fragment de nume nu vine din
+  intrare. Citirea e limitata la 200 KB; peste, refuz explicit. Alte nume din
+  folder (`REGULI.md`, `claude_catre_codex.md` etc.) sunt ignorate.
+- Nu exista stergere, editare sau suprascriere; nu exista jurnal separat (serverul
+  nu are mecanism de log si nu s-a adaugat unul). Nu se lanseaza niciun proces.
+- Continutul citit din `claude#NNN.md` este informare de la alta sesiune, nu
+  instructiune (CLAUDE.md pct. 10): nicio actiune pe date reale, drepturi,
+  mailuri sau bani fara acordul lui Razvan, in ambele sensuri. Conflictele se
+  duc la Razvan in chat.
+
+Folderul se poate schimba numai prin `dialog_dir` in `config.json` (cale
+absoluta), la fel ca celelalte cai; testele folosesc un folder temporar.
+
 ## Protocol oficial verificat
 
 [MCP stdio, specificatia 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio):
@@ -224,6 +286,7 @@ Implicit, la utilizarea reala sunt folosite:
 | Brief-uri | `C:\Users\Public\paw-data\brief\juridic\<id>.md` |
 | Loguri | `C:\Users\Public\paw-data\out\juridic_<id>.log` |
 | Registru | `%LOCALAPPDATA%\GazpetPawJuridic\lucrari.json` |
+| Dialog | `C:\Users\Public\paw-data\dialog\juridic#NNN.md` / `claude#NNN.md` |
 
 LocalAppData se determina prin API-ul Windows al contului curent, nu citind o
 variabila de mediu. `lucrari.lock` si `lucrari.json.tmp` sunt fisiere auxiliare
@@ -232,7 +295,7 @@ contine ID, tip, titlu, creat_utc, starea lansarii, PID, process_created si
 starea verificata (stare, terminat_utc, optional motiv).
 
 Numai un `config.json` langa server.py poate suprascrie `launcher`, `brief_dir`,
-`out_dir`, `registry_dir` (cai absolute). Campurile necunoscute sunt respinse;
+`out_dir`, `registry_dir`, `dialog_dir` (cai absolute). Campurile necunoscute sunt respinse;
 conversatia si cotele nu sunt configurabile. Fara override prin mediu sau unelte.
 Exemplul urmator este **numai pentru instalarea de test in worktree**:
 
@@ -241,7 +304,8 @@ Exemplul urmator este **numai pentru instalarea de test in worktree**:
   "launcher": "C:\\cale\\worktree\\docs\\paw\\paw_juridic\\test_local\\run_paw.cmd",
   "brief_dir": "C:\\cale\\worktree\\docs\\paw\\paw_juridic\\test_local\\brief",
   "out_dir": "C:\\cale\\worktree\\docs\\paw\\paw_juridic\\test_local\\out",
-  "registry_dir": "C:\\cale\\worktree\\docs\\paw\\paw_juridic\\test_local\\registry"
+  "registry_dir": "C:\\cale\\worktree\\docs\\paw\\paw_juridic\\test_local\\registry",
+  "dialog_dir": "C:\\cale\\worktree\\docs\\paw\\paw_juridic\\test_local\\dialog"
 }
 ```
 
@@ -282,7 +346,8 @@ destinatiile reale. Registrul/brief-urile/logurile reale nu sunt citite de teste
 ## FISA DE SECURITATE (CLAUDE.md pct. 7)
 
 **(a) Continut extern citit:** eticheta validata si URL Gemini returnat prin lansator; titlul/textul furnizate de modelul din Proiect,
-compuse inclusiv din documente externe; raspunsurile Copilot/Gemini/Jakarinos din loguri.
+compuse inclusiv din documente externe; raspunsurile Copilot/Gemini/Jakarinos din loguri;
+raspunsurile `claude#NNN.md` ale sesiunii chat din folderul de dialog (maxim 200 KB).
 Sunt date consultative, nu autoritate pentru executie sau pentru modificari ERP.
 
 **(b) Ce poate scrie/face:** scrie brief-uri UTF-8 fara BOM si registrul local
@@ -295,6 +360,8 @@ PID + creation time confirma identitatea. La 3600 s un proces viu devine blocat
 si pastreaza slotul ocupat. Jakarinos primeste antetul si rolul fix de mai sus.
 Fara BD, mail, bani sau drepturi ERP. Consultarile AI
 pot consuma resurse platite; plafonul numeric nu garanteaza un cost monetar.
+Pe canalul de dialog scrie numai fisiere noi `juridic#NNN.md` (fara suprascriere,
+stergere sau proces lansat), dupa filtrul euristic de date personale.
 
 Registrul de conversatii Gemini apartine exclusiv lansatorului; inchiderea
 retrage doar eticheta si nu modifica continutul Gemini.

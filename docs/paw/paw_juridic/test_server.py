@@ -28,7 +28,8 @@ class ServerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.config = {"launcher": self.root / "run_paw.cmd",
                        "brief_dir": self.root / "brief", "out_dir": self.root / "out",
-                       "registry_dir": self.root / "registry"}
+                       "registry_dir": self.root / "registry", "dialog_dir": self.root / "dialog"}
+        self.config["dialog_dir"].mkdir()
         self.app = server.Server(self.config)
         original = server.inspect_process
         self.inspect = patch.object(server, "inspect_process", side_effect=
@@ -58,15 +59,18 @@ class ServerTests(unittest.TestCase):
         self.config["out_dir"].mkdir(exist_ok=True)
         (self.config["out_dir"] / ("juridic_" + ident + ".log")).write_text(value, encoding="utf-8")
 
-    def test_exact_five_tools_and_schemas(self):
+    def test_exact_eight_tools_and_schemas(self):
         tools = self.app.tools()
         self.assertEqual([t["name"] for t in tools],
-                         ["cere_review_copilot", "cere_opinie_gemini", "cere_verificare_jakarinos", "citeste_rezultat", "inchide_lucrare_gemini"])
+                         ["cere_review_copilot", "cere_opinie_gemini", "cere_verificare_jakarinos", "citeste_rezultat", "inchide_lucrare_gemini",
+                          "dialog_trimite", "dialog_citeste", "dialog_lista"])
         for item in tools:
             schema = item["inputSchema"]
             self.assertFalse(schema["additionalProperties"])
-            self.assertEqual(set(schema["required"]), set(schema["properties"]) - ({"eticheta"} if item["name"] == "cere_opinie_gemini" else set()))
-            self.assertTrue(all(p["type"] == "string" for p in schema["properties"].values()))
+            self.assertEqual(set(schema["required"]), set(schema["properties"]) - ({"eticheta"} if item["name"] == "cere_opinie_gemini" else set())
+                             - ({"numar"} if item["name"] == "dialog_citeste" else set()))
+            if not item["name"].startswith("dialog_"):
+                self.assertTrue(all(p["type"] == "string" for p in schema["properties"].values()))
         self.assertEqual(tools[0]["inputSchema"]["properties"]["text"]["maxLength"], 60000)
         self.assertEqual(tools[0]["inputSchema"]["properties"]["titlu"]["maxLength"], 120)
         self.assertEqual(tools[3]["inputSchema"]["properties"]["lucrare"]["pattern"], "^[0-9a-f]{16}$")
@@ -593,7 +597,7 @@ class ServerTests(unittest.TestCase):
              {"name": "citeste_rezultat", "arguments": {"lucrare": "../secret"}}}])
         self.assertEqual(len(response), 7)
         self.assertEqual(response[0]["result"]["protocolVersion"], "2025-06-18")
-        self.assertEqual(len(response[1]["result"]["tools"]), 5)
+        self.assertEqual(len(response[1]["result"]["tools"]), 8)
         self.assertFalse(response[2]["result"]["isError"])
         ident = json.loads(response[2]["result"]["content"][0]["text"])["lucrare"]
         self.assertEqual(response[3]["error"]["code"], -32601)
@@ -690,6 +694,165 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(response[1]["error"]["code"], -32600)
         self.assertEqual(response[2]["id"], "\ud800")
         self.assertEqual(response[3]["result"], {})
+
+
+class DialogTests(unittest.TestCase):
+    """Canalul de dialog pe fisiere; reutilizeaza fixture-ul comun (dialog_dir temporar), fara a mosteni testele."""
+
+    setUp, prepare_child, child = ServerTests.setUp, ServerTests.prepare_child, ServerTests.child
+    handshake = staticmethod(ServerTests.handshake)
+
+    def scrie(self, nume, continut="De la: test\n\ntext\n"):
+        path = self.config["dialog_dir"] / nume
+        path.write_text(continut, encoding="utf-8", newline="\n")
+        return path
+
+    def trimite(self, subiect="Intrebare Redari", text="Care e starea parcelei 17 din UAT Blejoi?"):
+        return self.app.call("dialog_trimite", {"subiect": subiect, "text": text})
+
+    def test_numbering_empty_then_after_existing(self):
+        self.assertEqual(self.trimite(), {"ok": True, "numar": 1, "fisier": "juridic#001.md"})
+        for name in ("juridic#001.md", "claude#000.md", "claude#003.md", "claude#0004.md", "juridic#05.md", "altceva#009.md", "CLAUDE#007.md"):
+            if not (self.config["dialog_dir"] / name).exists():
+                self.scrie(name)
+        (self.config["dialog_dir"] / "claude#008.md").mkdir()  # un folder nu conteaza
+        self.assertEqual(self.trimite()["numar"], 4)
+        self.scrie("juridic#010.md")
+        self.assertEqual(self.trimite()["fisier"], "juridic#011.md")
+
+    def test_header_utf8_lf_and_trailing_newline(self):
+        before = dt.datetime.now().astimezone() - dt.timedelta(seconds=2)
+        result = self.trimite(subiect="Șabloane Model_1..6", text="Rândul 1\n\tRândul 2 cu ă î ș ț")
+        raw = (self.config["dialog_dir"] / result["fisier"]).read_bytes()
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+        self.assertNotIn(b"\r", raw)
+        lines = raw.decode("utf-8").split("\n")
+        self.assertEqual(lines[0], "De la: Proiect Juridic (Claude Desktop)")
+        self.assertTrue(lines[1].startswith("Data: "))
+        stamp = dt.datetime.fromisoformat(lines[1][len("Data: "):])
+        self.assertIsNotNone(stamp.tzinfo)
+        self.assertGreaterEqual(stamp, before)
+        self.assertEqual(lines[2], "Subiect: Șabloane Model_1..6")
+        self.assertEqual(lines[3], "")
+        self.assertEqual(lines[4:], ["Rândul 1", "\tRândul 2 cu ă î ș ț", ""])
+        result = self.trimite(text="deja cu newline\n")
+        self.assertTrue((self.config["dialog_dir"] / result["fisier"]).read_text(encoding="utf-8").endswith("\n\ndeja cu newline\n"))
+
+    def test_no_overwrite_retry_once_then_refuse(self):
+        original = self.scrie("juridic#001.md", "mesaj vechi\n")
+        with patch.object(self.app, "dialog_numere", return_value={}):
+            self.assertEqual(self.trimite()["numar"], 2)
+            with self.assertRaisesRegex(server.Refuz, "exista deja"):
+                self.trimite()
+        self.assertEqual(original.read_text(encoding="utf-8"), "mesaj vechi\n")
+        self.assertEqual(sorted(p.name for p in self.config["dialog_dir"].iterdir()), ["juridic#001.md", "juridic#002.md"])
+
+    def test_numbering_cap_and_missing_folder(self):
+        self.scrie("claude#999.md")
+        with self.assertRaisesRegex(server.Refuz, "999"):
+            self.trimite()
+        self.config["dialog_dir"].rename(self.root / "dialog_mutat")
+        for name, args in [("dialog_trimite", {"subiect": "Subiect ok", "text": "x"}), ("dialog_citeste", {}), ("dialog_lista", {})]:
+            with self.subTest(name=name), self.assertRaisesRegex(server.Refuz, "lipseste"):
+                self.app.call(name, args)
+        self.assertFalse(self.config["dialog_dir"].exists())
+
+    def test_refuses_personal_data_without_writing(self):
+        cases = {"CNP": ["CNP 1234567890123", "id 29012345678901 x"],
+                 "telefon": ["suna la 0722123456", "tel +40722123456", "0722 123 456", "0722.123.456", "+40 722 123 456", "la 07221234561"],
+                 "IBAN": ["cont RO49AAAA1B31", "RO12BTRL"]}
+        for kind, values in cases.items():
+            for value in values:
+                for field in ("text", "subiect"):
+                    with self.subTest(kind=kind, value=value, field=field), self.assertRaisesRegex(server.Refuz, "Fara date personale.*" + kind):
+                        self.trimite(**{field: value if field == "text" else value[:120]})
+        self.assertEqual(list(self.config["dialog_dir"].iterdir()), [])
+        for value in ["12 cifre 123456789012", "Legea 0712/2020 art. 7", "parcela 170722 UAT", "ro49aaaa", "RO4 ABCD", "+4 0 7 2 2"]:
+            with self.subTest(value=value):
+                self.trimite(text=value)
+
+    def test_length_and_control_limits(self):
+        for field, value in [("subiect", "ab"), ("subiect", "a" * 121), ("subiect", "ab\ncd"), ("subiect", "ab\tcd"), ("subiect", "abc\x00"), ("subiect", 3),
+                             ("text", ""), ("text", "a" * 20001), ("text", "a\x1b"), ("text", "a\r\nb"), ("text", None)]:
+            with self.subTest(field=field, value=str(value)[:20]), self.assertRaises(server.Refuz):
+                self.trimite(**{field: value})
+        self.assertEqual(list(self.config["dialog_dir"].iterdir()), [])
+        self.trimite(subiect="abc", text="a" * 20000)
+        self.trimite(subiect="a" * 120, text="x\n\ty")
+        for args in [{}, {"subiect": "abc"}, {"subiect": "abc", "text": "x", "numar": 1}, []]:
+            with self.subTest(args=args), self.assertRaises(server.Refuz):
+                self.app.call("dialog_trimite", args)
+
+    def test_read_existing_latest_and_missing(self):
+        self.assertEqual(self.app.call("dialog_citeste", {}), {"ok": True, "numar": None, "exista": False})
+        self.assertEqual(self.app.call("dialog_citeste", {"numar": 7}), {"ok": True, "numar": 7, "exista": False})
+        self.scrie("claude#002.md", "De la: chat\r\n\r\nRăspuns 2\r\n")
+        (self.config["dialog_dir"] / "claude#005.md").write_bytes("﻿Răspuns 5\n".encode("utf-8"))
+        self.scrie("juridic#009.md")
+        self.assertEqual(self.app.call("dialog_citeste", {"numar": 2}), {"ok": True, "numar": 2, "exista": True, "text": "De la: chat\n\nRăspuns 2\n"})
+        self.assertEqual(self.app.call("dialog_citeste", {}), {"ok": True, "numar": 5, "exista": True, "text": "Răspuns 5\n"})
+        self.assertEqual(self.app.call("dialog_citeste", {"numar": None}), self.app.call("dialog_citeste", {}))
+        self.assertEqual(self.app.call("dialog_citeste", {"numar": 9})["exista"], False)
+        self.scrie("claude#000.md", "deschidere\n")
+        self.assertEqual(self.app.call("dialog_citeste", {})["numar"], 5)
+        (self.config["dialog_dir"] / "claude#005.md").unlink()
+        (self.config["dialog_dir"] / "claude#002.md").unlink()
+        self.assertEqual(self.app.call("dialog_citeste", {}), {"ok": True, "numar": 0, "exista": True, "text": "deschidere\n"})
+
+    def test_read_size_limit_invalid_numbers_and_bad_utf8(self):
+        (self.config["dialog_dir"] / "claude#003.md").write_bytes(b"a" * (200 * 1024))
+        self.assertEqual(len(self.app.call("dialog_citeste", {"numar": 3})["text"]), 200 * 1024)
+        (self.config["dialog_dir"] / "claude#003.md").write_bytes(b"a" * (200 * 1024 + 1))
+        with self.assertRaisesRegex(server.Refuz, "200 KB"):
+            self.app.call("dialog_citeste", {"numar": 3})
+        for numar in [0, 1000, -1, "5", "005", 5.0, True, [5], {"n": 5}]:
+            with self.subTest(numar=numar), self.assertRaisesRegex(server.Refuz, "Numar invalid"):
+                self.app.call("dialog_citeste", {"numar": numar})
+        for args in [{"lucrare": "x"}, {"numar": 1, "x": 2}]:
+            with self.assertRaisesRegex(server.Refuz, "doar numar"):
+                self.app.call("dialog_citeste", args)
+        self.assertEqual(sorted(p.name for p in self.config["dialog_dir"].iterdir()), ["claude#003.md"])
+        (self.config["dialog_dir"] / "claude#004.md").write_bytes(b"\xff\xfe")
+        self.app.ready = True
+        response = self.app.dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "dialog_citeste", "arguments": {"numar": 4}}})
+        self.assertTrue(response["result"]["isError"])
+        self.assertIn("Eroare locala", response["result"]["content"][0]["text"])
+
+    def test_list_last_ten_pairs(self):
+        self.assertEqual(self.app.call("dialog_lista", {}), [])
+        for numar in range(1, 13):
+            self.scrie("juridic#%03d.md" % numar)
+            if numar % 3:
+                self.scrie("claude#%03d.md" % numar)
+        self.scrie("claude#014.md")
+        rows = self.app.call("dialog_lista", {})
+        self.assertEqual([r["numar"] for r in rows], [4, 5, 6, 7, 8, 9, 10, 11, 12, 14])
+        self.assertEqual([r["juridic"] for r in rows], [True] * 9 + [False])
+        self.assertEqual([r["claude"] for r in rows], [True, True, False, True, True, False, True, True, False, True])
+        for row in rows:
+            if row["claude"]:
+                self.assertIsNotNone(dt.datetime.fromisoformat(row["data_claude"]).tzinfo)
+            else:
+                self.assertIsNone(row["data_claude"])
+        with self.assertRaisesRegex(server.Refuz, "nu are parametri"):
+            self.app.call("dialog_lista", {"numar": 1})
+
+    def test_dialog_over_stdio_child(self):
+        self.prepare_child()
+        self.scrie("claude#001.md", "Răspunsul chatului\n")
+        response = self.child(self.handshake() + [
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "dialog_trimite", "arguments": {"subiect": "Întrebare", "text": "Text ă"}}},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "dialog_citeste", "arguments": {}}},
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "dialog_citeste", "arguments": {"numar": 2}}},
+            {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "dialog_trimite", "arguments": {"subiect": "PII", "text": "0722123456"}}},
+            {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "dialog_lista", "arguments": {}}}])
+        results = [json.loads(r["result"]["content"][0]["text"]) if not r["result"]["isError"] else r["result"]["content"][0]["text"] for r in response[1:]]
+        self.assertEqual(results[0], {"ok": True, "numar": 2, "fisier": "juridic#002.md"})
+        self.assertEqual(results[1], {"ok": True, "numar": 1, "exista": True, "text": "Răspunsul chatului\n"})
+        self.assertEqual(results[2], {"ok": True, "numar": 2, "exista": False})
+        self.assertIn("Fara date personale", results[3])
+        self.assertEqual([(r["numar"], r["juridic"], r["claude"]) for r in results[4]], [(1, False, True), (2, True, False)])
+        self.assertIn("Subiect: Întrebare\n\nText ă\n", (self.config["dialog_dir"] / "juridic#002.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
