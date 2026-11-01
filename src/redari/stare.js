@@ -56,6 +56,7 @@ export function ultimulRaspuns(raspunsuri) {
 
 // Există convocare activă cu retur și nicio convocare activă confirmată ULTERIOR returului
 // (referința returului = retur_data, altfel data_expediere; fără nicio dată, orice confirmare activă contează ca ulterioară).
+// Confirmarea poate fi chiar pe convocarea returnată (P2-10): AR primit după retur stinge returul.
 function convocareReturnataFaraConfirmareUlterioara(convocari) {
   const active = convocari.filter(convActiva)
   const returnate = active.filter(c => c.retur != null && c.retur !== '')
@@ -63,7 +64,7 @@ function convocareReturnataFaraConfirmareUlterioara(convocari) {
   const confirmate = active.filter(c => c.data_confirmare_primire != null && c.data_confirmare_primire !== '')
   return returnate.some(r => {
     const ref = Number.isNaN(ms(r.retur_data)) ? ms(r.data_expediere) : ms(r.retur_data)
-    return !confirmate.some(c => c !== r && (Number.isNaN(ref) || ms(c.data_confirmare_primire) >= ref))
+    return !confirmate.some(c => Number.isNaN(ref) || ms(c.data_confirmare_primire) >= ref)
   })
 }
 

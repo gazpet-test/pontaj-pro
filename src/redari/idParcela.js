@@ -33,6 +33,14 @@ export function idParcela(tronson, cod3, n) {
   return `T${t}-${cod3}-${String(nr).padStart(4, '0')}`
 }
 
+/** idParcelaProvizoriu(tronson, uat3) → 'T3-HUS-????' — afișat în preview până la rezervarea numerelor la commit. */
+export function idParcelaProvizoriu(tronson, cod3) {
+  const t = Number(tronson)
+  if (!Number.isInteger(t) || t < 1 || t > 11) throw new Error(`idParcelaProvizoriu: tronson invalid „${tronson}” (1..11)`)
+  if (!/^[A-Z]{3}$/.test(String(cod3))) throw new Error(`idParcelaProvizoriu: uat3 invalid „${cod3}”`)
+  return `T${t}-${cod3}-????`
+}
+
 /**
  * normalizeazaNume(nume) → majuscule, fără diacritice, fără punctuație dublă, spații simple, trim.
  * Ex. „  Popescu   Ion,, jr. ” → 'POPESCU ION, JR.'
