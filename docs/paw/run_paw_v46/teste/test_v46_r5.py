@@ -164,5 +164,31 @@ $r=CitesteGemLucrari
         self.assertEqual(out['rows']['dosar-123'], {'url': 'https://gemini.google.com/app/aabb', 'schimburi': 5})
 
 
+class ModelWaitR7(unittest.TestCase):
+    """r7: pe chat nou butonul de model apare dupa editor; trimite il asteapta explicit inainte de citire."""
+    def test_waits_for_model_button_before_reading(self):
+        pg = FakePage(); pg.url = BASE + '/abc123'
+        with patch.object(gem, 'asteapta_raspuns', return_value=('ok', True)), contextlib.redirect_stdout(io.StringIO()):
+            gem.trimite(pg, 'data', 60, BASE)
+        self.assertIn(('ready', gem.MODEL), pg.events)
+        self.assertLess(pg.events.index(('ready', gem.MODEL)), pg.events.index(('read', gem.MODEL)))
+
+    def test_model_button_never_appears_fails_before_typing(self):
+        class Slow(FakePage):
+            def locator(self, selector):
+                loc = FakePage.locator(self, selector)
+                if selector == gem.MODEL:
+                    def wait_for(**kwargs):
+                        self.events.append(('ready', selector)); raise TimeoutError()
+                    loc.wait_for = wait_for
+                return loc
+        pg = Slow()
+        with self.assertRaises(gem.GemEroare) as ctx:
+            gem.trimite(pg, 'data', 60, BASE)
+        self.assertEqual(ctx.exception.cod, 'model_gresit')
+        self.assertNotIn(('press', 'Enter'), pg.events)
+        self.assertFalse(any(e[0] == 'insert' for e in pg.events))
+
+
 if __name__ == '__main__':
     unittest.main()

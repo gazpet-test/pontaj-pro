@@ -151,6 +151,8 @@ test_rules_wrong_type_refused_before_mcp (teste.test_v46_r3.Isolation.test_rules
 test_runbook_requires_observed_read_write_and_rollback_retest (teste.test_v46_r3.Isolation.test_runbook_requires_observed_read_write_and_rollback_retest) ... ok
 test_system_allow_rules_refused_before_mcp (teste.test_v46_r3.Isolation.test_system_allow_rules_refused_before_mcp) ... ok
 test_system_config_refused_before_mcp (teste.test_v46_r3.Isolation.test_system_config_refused_before_mcp) ... ok
+test_model_button_never_appears_fails_before_typing (teste.test_v46_r5.ModelWaitR7.test_model_button_never_appears_fails_before_typing) ... ok
+test_waits_for_model_button_before_reading (teste.test_v46_r5.ModelWaitR7.test_waits_for_model_button_before_reading) ... ok
 test_close_removes_only_requested_label_without_browser (teste.test_v46_r4.Registry.test_close_removes_only_requested_label_without_browser) ... ok
 test_existing_label_reused (teste.test_v46_r4.Registry.test_existing_label_reused) ... ok
 test_invalid_url_refused_and_new_chat (teste.test_v46_r4.Registry.test_invalid_url_refused_and_new_chat) ... ok
@@ -185,6 +187,6 @@ test_residual_and_engine_plans (teste.test_cdx_r6.R6.test_residual_and_engine_pl
 test_all_cases (teste.test_cdx_security.Security.test_all_cases) ... ok
 
 ----------------------------------------------------------------------
-Ran 185 tests in 135.912s
+Ran 187 tests in 135.600s
 
 OK
