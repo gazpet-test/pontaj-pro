@@ -256,16 +256,15 @@ export function colecteazaTokenuriEveniment(event, adancime = 0, sensibil = fals
     if (typeof v === 'string') {
       // Copilot r28 P1-01: o valoare inca codificata (de >=4 ori) sub CHEIE SENSIBILA sau intr-un sir care pomeneste un cuvant-cheie e semnal
       // TARE (refuzat): un identificator codificat caracter cu caracter nu are nicio secventa de 43 in nicio forma; in rest, semnal slab
-      if (ramaneCodificat(v)) {
-        const context = sensibilAici || cheieDeToken(cheie) || [v, cuUnicode(v)].some(x => formele(x).some(f => /p_token|raspuns|token/i.test(f)))
-        if (context && poateAscundeToken(v)) tokenuri.refuzat = true; else tokenuri.ambiguu = true
-      }
+      // Jakarinos r39 P1-01: continut INCA codificat dupa limita de pasi, care poate ascunde 43 de caractere, e semnal TARE indiferent de
+      // context — cuvantul-cheie insusi poate fi inca ascuns sub codificare (JSON codificat de 9+ ori); nu stim ce ascunde, deci nu trimitem
+      if (ramaneCodificat(v)) { if (poateAscundeToken(v)) tokenuri.refuzat = true; else tokenuri.ambiguu = true }
       const vU = cuUnicode(v)
       if (sensibilAici || cheieDeToken(cheie)) { tokenuriDinValoareSensibila(v, tokenuri); if (vU !== v) tokenuriDinValoareSensibila(vU, tokenuri) }
       dinText(v, true, sensibilAici || cheieDeToken(cheie)); if (vU !== v) dinText(vU, true, sensibilAici || cheieDeToken(cheie))
     }
     return v
-  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) { if (sensibilAici && poateAscundeToken(cheie)) tokenuri.refuzat = true; else tokenuri.ambiguu = true }; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
+  }, (cheie, sensibilAici) => { if (ramaneCodificat(cheie)) { if (poateAscundeToken(cheie)) tokenuri.refuzat = true; else tokenuri.ambiguu = true }; if (sensibilAici) tokenuriDinValoareSensibila(cheie, tokenuri); dinText(cheie, true, sensibilAici); return cheie }, sensibil)
   dinText(serializeaza(event), false)   // serializarea întregului eveniment NU se re-parsează (ar fi recursie infinită; structura e deja parcursă)
   return tokenuri
 }
