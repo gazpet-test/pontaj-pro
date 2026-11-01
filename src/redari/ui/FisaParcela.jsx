@@ -38,8 +38,9 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
       if (e0) throw e0
       setParcela(p)
       if (esteAdmin) {
-        const { data: v } = await supabase.from('red_parcele').select('valoare_lei').eq('id', parcelaId).maybeSingle()
-        setValoare(v?.valoare_lei ?? null)
+        // valoare_lei nu are privilegiu de coloană pentru authenticated: doar prin RPC (admin)
+        const { data: v } = await supabase.rpc('fn_red_valoare_parcela', { p_parcela_id: parcelaId })
+        setValoare(v ?? null)
       }
       const { data: det, error: e1 } = await supabase.from('red_detinatori').select(COL_DETINATOR).eq('parcela_id', parcelaId).order('sters_la', { nullsFirst:true }).order('nume')
       if (e1) throw e1
@@ -269,9 +270,13 @@ function ModalParcela({ parcela, valoare, esteAdmin, show, onClose, onGata }) {
       const upd = {}
       CAMPURI_PARCELA.forEach(([k, , tip]) => { upd[k] = tip === 'number' ? nrSauNull(f[k]) : (String(f[k]).trim() || null) })
       upd.observatii = f.observatii.trim() || null
-      if (esteAdmin) upd.valoare_lei = nrSauNull(f.valoare_lei)
+      const valoareNoua = esteAdmin ? nrSauNull(f.valoare_lei) : undefined
       const { error } = await supabase.from('red_parcele').update(upd).eq('id', parcela.id)
       if (error) throw error
+      if (esteAdmin && valoareNoua !== (valoare ?? null)) {
+        const { error: eV } = await supabase.rpc('fn_red_valoare_parcela_seteaza', { p_parcela_id: parcela.id, p_valoare: valoareNoua })
+        if (eV) throw eV
+      }
       show('Parcela a fost salvată.', 'success'); onGata()
     } catch (e) { show('Parcelă: ' + msgEroare(e), 'error') }
     finally { setLucru(false) }
