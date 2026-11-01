@@ -286,6 +286,14 @@ BEGIN
      IS DISTINCT FROM 'id:bigint,licitatie_id:bigint,rol:smallint,responsabil_id:uuid,numit_de:uuid,dovada:boolean,revenire:text,arhivat_la:timestamp with time zone' THEN
     RAISE EXCEPTION '20261124a revenire: ofertare_numiri_dovezi_arhiva exista cu alta forma — verificare manuala';
   END IF;
+  -- r5 (review r5 Jakarinos P2-02): și cheia exactă UNIQUE (revenire, licitatie_id, rol), cu coloanele ei NOT NULL — nu „orice” UNIQUE
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = 'public.ofertare_numiri_dovezi_arhiva'::regclass AND k.contype = 'u'
+                   AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
+                         WHERE a.attrelid = k.conrelid AND a.attnum = ANY (k.conkey)) = ARRAY['licitatie_id', 'revenire', 'rol'])
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.ofertare_numiri_dovezi_arhiva'::regclass
+                  AND a.attname IN ('licitatie_id', 'revenire', 'rol', 'dovada') AND NOT a.attnotnull) THEN
+    RAISE EXCEPTION '20261124a revenire: ofertare_numiri_dovezi_arhiva fara UNIQUE (revenire, licitatie_id, rol) / NOT NULL — verificare manuala';
+  END IF;
   COMMENT ON TABLE public.ofertare_numiri_dovezi_arhiva IS
     'Arhiva dovezilor de numire (2A) la revenirea 20261124a: licitație, rol 1/2, responsabil, numit de, dovadă. Citire doar owner, fără scriere din aplicație.';
   ALTER TABLE public.ofertare_numiri_dovezi_arhiva ENABLE ROW LEVEL SECURITY;

@@ -365,7 +365,7 @@ CREATE OR REPLACE FUNCTION public.ofertare_extragere_tick()
  SET search_path TO 'public', 'pg_temp'
 AS $function$
 DECLARE
-  jwt text; secret text; c record; resp record; corp jsonb; pas jsonb; rid bigint; corp_body jsonb;
+  jwt text; secret text; c record; resp record; corp jsonb; pas jsonb; rid bigint; corp_body jsonb; c_prev record;
   n_pasi int; continua boolean; cer int;
   LEASE constant interval := interval '4 minutes';
   MAX_INCERCARI constant int := 3;
@@ -427,7 +427,11 @@ BEGIN
            WHERE licitatie_id = c.licitatie_id AND activ AND cerut_la IS NOT DISTINCT FROM c.cerut_la AND cerut_de IS NOT DISTINCT FROM c.cerut_de;
         END IF;
       END IF;
-      SELECT * INTO c FROM ofertare_extragere_coada WHERE licitatie_id = c.licitatie_id;
+      -- r5 (review r5 Copilot P2-01): după recitire continuăm DOAR dacă rândul e aceeași cerere, încă activă; altfel (înlocuită / oprită)
+      -- nimic nu se mai decide pe valorile vechi (n_pasi etc.) — cererea nouă o ia tick-ul următor, de la zero
+      c_prev := c;
+      SELECT * INTO c FROM ofertare_extragere_coada WHERE licitatie_id = c_prev.licitatie_id;
+      IF NOT FOUND OR NOT c.activ OR c.cerut_la IS DISTINCT FROM c_prev.cerut_la OR c.cerut_de IS DISTINCT FROM c_prev.cerut_de THEN CONTINUE; END IF;
       n_pasi := jsonb_array_length(coalesce(c.pasi, '[]'::jsonb));
     END IF;
 

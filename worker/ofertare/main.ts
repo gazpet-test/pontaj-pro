@@ -11,7 +11,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
 import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
-import { cerereaTrecePoarta, gardaCheltuiala, scrieCas, type CoadaAi, type Garda } from './poarta_coada.ts'
+import { cerereaTrecePoarta, gardaCheltuiala, scrieCuReincercare, type CoadaAi, type Garda } from './poarta_coada.ts'
 import { proceseazaClarificari } from './clarificari.ts'
 import { proceseazaSourcePacks } from './source_pack.ts'
 import { proceseazaSeap } from './seap.ts'
@@ -57,15 +57,12 @@ async function proceseazaLicitatie(id: number) {
       if (error || !c) { log(`#${id}: rândul din coadă nu se mai citește`, error?.message ?? ''); return }
       if (!c.activ) return
       // r4 (#908, review r4 Jakarinos P1-01): TOATE scrierile pe coada extragerii sunt CAS pe cererea citită acum (cerut_la + cerut_de +
-      // activ); 'stop' = cererea a fost înlocuită / oprită între timp → mă opresc fără s-o ating; 'reia' = scrierea a eșuat → pauză, reiau
+      // activ); 'stop' = cererea a fost înlocuită / oprită între timp (sau workerul se oprește) → mă opresc fără s-o ating.
+      // r5 (review r5 Jakarinos P1-01): o scriere EȘUATĂ nu mai duce înapoi în buclă (ar reciti aceeași bucată și ar plăti din nou apelul AI):
+      // ACEEAȘI scriere (același rezultat deja obținut) se reîncearcă cu pauză crescătoare până reușește sau cererea e înlocuită / oprită.
       const cerC = { cerut_la: c.cerut_la, cerut_de: c.cerut_de ?? null }
-      const scrieC = async (patch: Record<string, unknown>): Promise<'ok' | 'stop' | 'reia'> => {
-        const rz = await scrieCas(supabase, 'ofertare_extragere_coada', id, cerC, patch)
-        if (rz === 'ok') return 'ok'
-        log(`#${id}: scrierea pe coada extragerii — ${rz === 'inlocuita' ? 'cererea a fost înlocuită / oprită între timp, n-o ating' : 'a eșuat, reiau'}`)
-        if (rz === 'eroare') { await sleep(30_000); return 'reia' }
-        return 'stop'
-      }
+      const scrieC = (patch: Record<string, unknown>): Promise<'ok' | 'stop' | 'reia'> =>
+        scrieCuReincercare(supabase, 'ofertare_extragere_coada', id, cerC, patch, { oprire: () => oprire, log: (m) => log(m) })
       // un apel lansat de tick-ul din Supabase (înainte să pornim noi) încă în zbor? îl lăsăm până expiră lease-ul
       if (c.req_id != null) {
         const vechime = Date.now() - new Date(c.lansat_la ?? 0).getTime()

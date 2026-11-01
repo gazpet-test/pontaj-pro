@@ -36,6 +36,24 @@ export async function scrieCas(supabase: any, tabel: CoadaAi, licId: number, cer
   }
 }
 
+// r5 (review r5 Jakarinos P1-01 / Copilot P1-01): persistarea unui rezultat DEJA PLĂTIT. O scriere eșuată nu se transformă în „reia bucla”
+// (care ar reciti aceeași bucată și ar plăti din nou apelul AI): ACEEAȘI scriere se reîncearcă, cu pauză crescătoare, până reușește ('ok'),
+// până cererea e înlocuită / oprită ('stop'), sau până se oprește workerul ('stop' — rezultatul nescris se pierde, fără apel AI nou).
+// deno-lint-ignore no-explicit-any
+export async function scrieCuReincercare(supabase: any, tabel: CoadaAi, licId: number, cer: Cerere, patch: Record<string, unknown>,
+  o: { oprire: () => boolean; pauza?: (ms: number) => Promise<void>; log?: (m: string) => void }): Promise<'ok' | 'stop'> {
+  const pauza = o.pauza ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const log = o.log ?? (() => {})
+  for (let n = 1; ; n++) {
+    const rz = await scrieCas(supabase, tabel, licId, cer, patch)
+    if (rz === 'ok') return 'ok'
+    if (rz === 'inlocuita') { log(`#${licId} ${tabel}: cererea a fost înlocuită / oprită între timp — n-o ating`); return 'stop' }
+    if (o.oprire()) { log(`#${licId} ${tabel}: scrierea a eșuat și workerul se oprește — rezultatul nescris se pierde, fără apel nou`); return 'stop' }
+    log(`#${licId} ${tabel}: scrierea a eșuat (încercarea ${n}) — reîncerc ACEEAȘI scriere, fără apel AI nou`)
+    await pauza(Math.min(30_000 * n, 300_000))
+  }
+}
+
 // cer = cererea pe care o procesezi; lipsă = prima citire (o adoptă). Întoarce verdictul și cererea văzută.
 // deno-lint-ignore no-explicit-any
 export async function cerereaTrecePoarta(supabase: any, tabel: CoadaAi, licId: number, cer?: Cerere | null): Promise<{ v: Verdict; cerere: Cerere | null }> {

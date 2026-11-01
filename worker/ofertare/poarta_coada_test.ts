@@ -1,15 +1,16 @@
 // deno test worker/ofertare/poarta_coada_test.ts — a doua barieră pe cozile AI (20261124a, 3A; review #908 r2: P1-03 per cost, P2-01 CAS;
 // r3: Copilot P2-01 cerut_de în CAS, P2-02 reconfirmare după RPC, P2-03 închiderea după erori verificată; Jakarinos P2-01 scrierile pe coadă)
 import { assertEquals } from 'jsr:@std/assert@1'
-import { cerereaTrecePoarta, gardaCheltuiala, NOTA_EROARE, NOTA_REFUZ, scrieCas } from './poarta_coada.ts'
+import { cerereaTrecePoarta, gardaCheltuiala, NOTA_EROARE, NOTA_REFUZ, scrieCas, scrieCuReincercare } from './poarta_coada.ts'
 
 type Rand = { activ: boolean; cerut_de: string | null; cerut_la: string; nota?: string; [k: string]: unknown } | null
 // fake: un singur rând; filtrele .eq()/.is() ale UPDATE-ului se aplică pe el (CAS real); rpc programabil per apel, cu cârlig
 // (dupaRpc) care poate schimba rândul ÎN TIMPUL RPC-ului (înlocuire / oprire concurentă)
 function fake(o: { rand?: Rand; eroareCitire?: boolean; eroareUpdate?: boolean; rpc?: Array<{ data: unknown; error: unknown } | 'arunca'>;
-  inainteDeUpdate?: (r: Rand) => Rand; dupaRpc?: (r: Rand) => Rand }) {
+  inainteDeUpdate?: (r: Rand) => Rand; dupaRpc?: (r: Rand) => Rand; eroriUpdate?: number }) {
   let rand: Rand = o.rand ?? null
-  const j = { rpc: [] as unknown[], update: [] as Record<string, unknown>[], citiri: 0 }
+  const j = { rpc: [] as unknown[], update: [] as Record<string, unknown>[], citiri: 0, incercariUpdate: 0 }
+  let eroriRamase = o.eroriUpdate ?? 0
   const rpcs = [...(o.rpc ?? [])]
   const supa = {
     from: (_t: string) => ({
@@ -18,7 +19,9 @@ function fake(o: { rand?: Rand; eroareCitire?: boolean; eroareUpdate?: boolean; 
         const filtre: Array<[string, unknown]> = []
         const exec = async () => {
           if (o.inainteDeUpdate) rand = o.inainteDeUpdate(rand)
+          j.incercariUpdate++
           if (o.eroareUpdate) return { data: null, error: { message: 'x' } }
+          if (eroriRamase > 0) { eroriRamase--; return { data: null, error: { message: 'x' } } }
           const potrivit = !!rand && filtre.every(([k, val]) => k === 'licitatie_id' || ((rand as any)[k] ?? null) === val)
           if (potrivit) { j.update.push(v); rand = { ...(rand as any), ...v } }
           return { data: potrivit ? [{ licitatie_id: 7 }] : [], error: null }
@@ -141,4 +144,22 @@ Deno.test('scrieCas: cerere fără cerut_de folosește IS NULL; eroare de scrier
   assertEquals(await scrieCas(a.supa, 'ofertare_ingest_coada', 7, C(null), { ultimul_tick: 'x' }), 'ok')
   const b = fake({ rand: R(), eroareUpdate: true })
   assertEquals(await scrieCas(b.supa, 'ofertare_ingest_coada', 7, C(), { ultimul_tick: 'x' }), 'eroare')
+})
+// r5 (review r5 Jakarinos P1-01 / Copilot P1-01): rezultatul unui apel DEJA PLĂTIT se persistă reîncercând ACEEAȘI scriere — funcția nu
+// întoarce controlul buclei (care ar plăti din nou pasul) până nu e „ok” sau „stop”; nu există rezultatul „reia”
+Deno.test('r5: AI reușit + scrierea progresului eșuează de 4 ori → aceeași scriere reîncercată până la ok, fără alt apel', async () => {
+  const { supa, j } = fake({ rand: R(), eroriUpdate: 4 })
+  const pauze: number[] = []
+  const r = await scrieCuReincercare(supa, 'ofertare_extragere_coada', 7, C(), { poz: 3, cerinte_noi: 5 }, { oprire: () => false, pauza: async (ms) => { pauze.push(ms) } })
+  assertEquals(r, 'ok'); assertEquals(j.incercariUpdate, 5); assertEquals(j.update, [{ poz: 3, cerinte_noi: 5 }]); assertEquals(j.rpc, [])
+  assertEquals(pauze, [30_000, 60_000, 90_000, 120_000])
+})
+Deno.test('r5: scriere eșuată persistent + worker oprit → „stop” (nu „reia”), fără alt apel; cererea înlocuită → „stop”, rândul nou neatins', async () => {
+  let n = 0
+  const a = fake({ rand: R(), eroareUpdate: true })
+  assertEquals(await scrieCuReincercare(a.supa, 'ofertare_extragere_coada', 7, C(), { poz: 3 }, { oprire: () => ++n >= 3, pauza: async () => {} }), 'stop')
+  assertEquals(a.j.incercariUpdate, 3); assertEquals(a.j.rpc, [])
+  const b = fake({ rand: R('owner', 'g2') })
+  assertEquals(await scrieCuReincercare(b.supa, 'ofertare_extragere_coada', 7, C(), { poz: 3 }, { oprire: () => false, pauza: async () => {} }), 'stop')
+  assertEquals(b.j.update, []); assertEquals(b.supa.rand?.cerut_la, 'g2')
 })
