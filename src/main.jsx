@@ -8,7 +8,22 @@ import App from './App.jsx'
 // scrollbars, input-uri) pe tot ERP-ul, indiferent de setarea OS light/dark.
 document.documentElement.style.colorScheme = 'dark'
 
+// Redări teren (01.11.2026, review Jakarinos P1-4): tokenul public din /redari/raspuns/<token> NU ajunge în telemetrie.
+// Se înlocuiește în orice șir din eveniment (request.url, transaction, breadcrumbs, spans, contexts) cu „[token]”.
+const RX_TOKEN_REDARI = /\/redari\/raspuns\/[^\s/?#"'&]+/g
+const redacteazaToken = (s) => s.replace(RX_TOKEN_REDARI, '/redari/raspuns/[token]')
+function redacteazaAdanc(val, adancime = 0) {
+  if (adancime > 12 || val === null || val === undefined) return val
+  if (typeof val === 'string') return val.includes('/redari/raspuns/') ? redacteazaToken(val) : val
+  if (Array.isArray(val)) { for (let i = 0; i < val.length; i++) val[i] = redacteazaAdanc(val[i], adancime + 1); return val }
+  if (typeof val === 'object') { for (const k of Object.keys(val)) val[k] = redacteazaAdanc(val[k], adancime + 1); return val }
+  return val
+}
+const faraTokenRedari = (event) => { try { return redacteazaAdanc(event) } catch { return event } }
+
 Sentry.init({
+  beforeSend: faraTokenRedari,
+  beforeSendTransaction: faraTokenRedari,
   dsn: 'https://78d9760da35bcd9f1271f8d782682e4f@o4511469034864640.ingest.de.sentry.io/4511469069729872',
   integrations: [Sentry.browserTracingIntegration()],
   tracesSampleRate: 0.1,

@@ -1,5 +1,6 @@
 // Import Excel TGZ: fișier → parseazaTgz (client-side) → previzualizare + statistici → scrieImport cu progres → raport.
-// Contract: docs/redari/CONTRACT_SCHEMA.md §7. Tronsonul se dă manual per UAT; id_parcela continuă de la ultimul existent pe (proiect, uat).
+// Contract: docs/redari/CONTRACT_SCHEMA.md §7. Tronsonul se dă manual per UAT. UI-ul NU calculează numerele parcelelor (P2-6/P1-1):
+// previzualizarea arată id-uri provizorii (T3-HUS-????), iar scrieImport le rezervă server-side (fn_red_rezerva_numere_parcele).
 import React, { useMemo, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { parseazaTgz, scrieImport } from '../importTgz.js'
@@ -15,7 +16,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const [sursa, setSursa] = useState('TGZ')
   const [tronsonPeUat, setTronsonPeUat] = useState(() => Object.fromEntries(uats.map(u => [u.uat3, 1])))
   const [preview, setPreview] = useState(null)
-  const [idStart, setIdStart] = useState(null)
+  const [nota, setNota] = useState('')            // P2-7: de ce s-a golit previzualizarea
   const [lucru, setLucru] = useState(false)
   const [progres, setProgres] = useState(null)   // { facut, total, etapa }
   const [raport, setRaport] = useState(null)
@@ -24,30 +25,18 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   // uats pot veni după primul render — completează tronsoanele lipsă cu 1
   const tronsoane = useMemo(() => ({ ...Object.fromEntries(uats.map(u => [u.uat3, 1])), ...tronsonPeUat }), [uats, tronsonPeUat])
 
-  // idStart[UAT3] = PRIMUL număr liber pe (proiect, uat) = max(nnnn din id_parcela existente) + 1 (contract §7; parseazaTgz îl cere așa)
-  const citesteIdStart = async () => {
-    const { data, error } = await supabase.from('red_parcele').select('id_parcela, uat_id').eq('proiect_id', proiect.id)
-    if (error) throw error
-    const uatMap = Object.fromEntries(uats.map(u => [u.id, u.uat3]))
-    const ultim = Object.fromEntries(uats.map(u => [u.uat3, 0]))
-    ;(data || []).forEach(p => {
-      const u3 = uatMap[p.uat_id]; if (!u3) return
-      const m = /-(\d+)$/.exec(p.id_parcela || '')
-      const n = m ? parseInt(m[1], 10) : 0
-      if (n > (ultim[u3] || 0)) ultim[u3] = n
-    })
-    return Object.fromEntries(Object.entries(ultim).map(([k, v]) => [k, v + 1]))
-  }
+  // P2-7: orice schimbare a intrărilor (fișier, versiune, sursă, tronson) golește previzualizarea — altfel s-ar importa altceva decât s-a văzut
+  const invalideaza = (motiv) => { if (preview) { setPreview(null); setNota(`Previzualizarea a fost golită (${motiv}). Apasă din nou „Previzualizează”.`) } }
 
   const previzualizeaza = async () => {
     if (!fisier) { show('Alege un fișier Excel (.xlsx).', 'error'); return }
     if (!versiune.trim()) { show('Versiunea listei e obligatorie (ex. „TGZ 13.07.2026”).', 'error'); return }
     if (!uats.length) { show('Proiectul nu are UAT-uri.', 'error'); return }
-    setLucru(true); setRaport(null); setPreview(null)
+    setLucru(true); setRaport(null); setPreview(null); setNota('')
     try {
-      const [ab, start] = await Promise.all([fisier.arrayBuffer(), citesteIdStart()])
-      setIdStart(start)
-      const rez = parseazaTgz(ab, { uats: uats.map(u => ({ id: u.id, nume: u.nume, uat3: u.uat3 })), tronsonPeUat: tronsoane, idStart: start, versiune: versiune.trim(), sursa })
+      const ab = await fisier.arrayBuffer()
+      // fără idStart: numerele finale se rezervă server-side la import; previzualizarea arată id-uri provizorii
+      const rez = parseazaTgz(ab, { uats: uats.map(u => ({ id: u.id, nume: u.nume, uat3: u.uat3 })), tronsonPeUat: tronsoane, versiune: versiune.trim(), sursa })
       setPreview(rez)
       if (rez.erori?.length) show(`${rez.erori.length} rânduri cu erori — vezi tab-ul „Erori”.`, 'error')
       else show(`Previzualizare gata: ${rez.parcele?.length || 0} parcele, ${rez.detinatori?.length || 0} deținători.`, 'success')
@@ -97,10 +86,10 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
         <div style={{ fontWeight:700, marginBottom:10 }}>1. Fișierul și versiunea listei</div>
         <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:10, alignItems:'end' }}>
           <Camp eticheta="Excel TGZ (.xlsx) — antet pe rândul 3">
-            <input type="file" accept=".xlsx,.xls" onChange={e => { setFisier(e.target.files?.[0] || null); setPreview(null); setRaport(null) }} style={{ ...S.input, padding:5 }} disabled={lucru} />
+            <input type="file" accept=".xlsx,.xls" onChange={e => { setFisier(e.target.files?.[0] || null); setRaport(null); invalideaza('alt fișier') }} style={{ ...S.input, padding:5 }} disabled={lucru} />
           </Camp>
-          <Camp eticheta="Versiunea listei (obligatoriu)"><input value={versiune} onChange={e => setVersiune(e.target.value)} style={S.input} placeholder="ex. TGZ 13.07.2026" disabled={lucru} /></Camp>
-          <Camp eticheta="Sursa"><select value={sursa} onChange={e => setSursa(e.target.value)} style={{ ...S.select, width:'100%' }} disabled={lucru}><option value="TGZ">TGZ</option><option value="ANEXA7">ANEXA7</option></select></Camp>
+          <Camp eticheta="Versiunea listei (obligatoriu)"><input value={versiune} onChange={e => { setVersiune(e.target.value); invalideaza('versiunea s-a schimbat') }} style={S.input} placeholder="ex. TGZ 13.07.2026" disabled={lucru} /></Camp>
+          <Camp eticheta="Sursa"><select value={sursa} onChange={e => { setSursa(e.target.value); invalideaza('sursa s-a schimbat') }} style={{ ...S.select, width:'100%' }} disabled={lucru}><option value="TGZ">TGZ</option><option value="ANEXA7">ANEXA7</option></select></Camp>
         </div>
         <div style={{ fontWeight:700, margin:'14px 0 8px' }}>2. Tronsonul per UAT (manual, până la corelarea pe km)</div>
         {uats.length === 0 ? <Gol text="Proiectul nu are UAT-uri." /> : (
@@ -108,15 +97,15 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {uats.map(u => (
               <div key={u.id} style={{ display:'flex', alignItems:'center', gap:6, fontSize:13 }}>
                 <span style={{ color:G.muted }}>{u.uat3}</span>
-                <select value={tronsoane[u.uat3] || 1} onChange={e => setTronsonPeUat(x => ({ ...x, [u.uat3]: Number(e.target.value) }))} style={S.select} disabled={lucru}>
+                <select value={tronsoane[u.uat3] || 1} onChange={e => { const t = Number(e.target.value); setTronsonPeUat(x => ({ ...x, [u.uat3]: t })); invalideaza(`tronsonul ${u.uat3} s-a schimbat`) }} style={S.select} disabled={lucru}>
                   {TRONSOANE.map(t => <option key={t} value={t}>T{t}</option>)}
                 </select>
-                {idStart && <span style={{ fontSize:11.5, color:G.dim }} title="ultimul nr. existent">· de la {String((idStart[u.uat3] || 0) + 1).padStart(4, '0')}</span>}
               </div>
             ))}
           </div>
         )}
-        <div style={{ display:'flex', justifyContent:'flex-end', marginTop:12 }}>
+        <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:10, marginTop:12 }}>
+          {nota && <span style={{ fontSize:12.5, color:G.yellow }}>⚠ {nota}</span>}
           <button style={S.btnS} onClick={previzualizeaza} disabled={lucru || !fisier}>{lucru && !progres ? 'Citesc…' : '🔍 Previzualizează'}</button>
         </div>
       </div>
@@ -146,7 +135,10 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
                 {preview.erori.map((e, i) => <div key={i} style={{ padding:'5px 0', borderTop:`1px solid ${G.border}`, fontSize:12.5, color:G.red }}>{e.rand ? `Rând ${e.rand}: ` : ''}{e.motiv}{e.uat ? <span style={{ color:G.muted }}> · UAT „{e.uat}”</span> : null}</div>)}
               </div>
             )
-          ) : <TabelPreview randuri={Array.isArray(preview[subTab]) ? preview[subTab] : []} gol="Nimic în această categorie." />}
+          ) : (<>
+            {subTab === 'parcele' && <div style={{ fontSize:12, color:G.muted, marginBottom:6 }}>ID-urile parcelelor sunt <b>provizorii</b> (numărul apare ca ????) — numerele finale se rezervă în BD la import și apar în raport.</div>}
+            <TabelPreview randuri={Array.isArray(preview[subTab]) ? preview[subTab] : []} gol="Nimic în această categorie." />
+          </>)}
 
           <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:12, alignItems:'center' }}>
             {progres && <span style={{ fontSize:12.5, color:G.muted }}>{progres.etapa ? progres.etapa + ' · ' : ''}{progres.facut} / {progres.total}</span>}
@@ -168,6 +160,14 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {statCard('Parcele existente (sărite)', fmtNum(raport.existente ?? 0), raport.existente ? G.orange : G.text)}
           </div>
           <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>Lot import: <span style={S.mono}>{raport.lotId || '-'}</span> · lista „{versiune}” · {sursa}</div>
+          {Array.isArray(raport.idParcele) && raport.idParcele.length > 0 && (
+            <div style={{ marginTop:10 }}>
+              <div style={{ fontSize:12.5, fontWeight:600, marginBottom:4 }}>ID-urile finale ale parcelelor ({raport.idParcele.length})</div>
+              <div style={{ ...S.mono, fontSize:12, background:G.bg, border:`1px solid ${G.border}`, borderRadius:7, padding:10, maxHeight:220, overflow:'auto', display:'flex', flexWrap:'wrap', gap:'4px 12px' }}>
+                {raport.idParcele.map((id, i) => <span key={i}>{typeof id === 'string' ? id : (id?.id_parcela || JSON.stringify(id))}</span>)}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

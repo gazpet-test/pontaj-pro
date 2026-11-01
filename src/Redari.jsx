@@ -8,12 +8,12 @@ import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
 import { genereazaConvocator, salveazaConvocator, borderouCsv, descarcaBlob } from './redari/docx.js'
-import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune } from './redari/ui/comune.jsx'
+import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CANALE_CONVOCARE, MOTIVE_RETUR, OPTIUNI_RASPUNS, etichetaOptiune, etichetaRetur,
+  SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
 
 const PAGINA = 100
-const SABLON_CONVOCATOR = '/redari/sabloane/convocator_provizoriu.docx'
 // Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2) — doar structură, fără persoane.
 const LOT1 = { cod:'LOT1-PRUNISOR-JUPA', denumire:'Redare teren — Lot 1 Prunișor–Jupa', beneficiar:'SNTGN Transgaz SA' }
 const UAT_LOT1 = ['Prunișor', 'Godeanu', 'Husnicioara', 'Căzănești', 'Ilovăț', 'Bâlvănești', 'Șișești']
@@ -125,7 +125,7 @@ export default function Redari() {
         <>
           {tab === 'registru' && <Registru key={proiect.id + reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={() => setTab('registru')} onSchimbat={() => setReload(r => r + 1)} />}
-          {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
+          {tab === 'import' && <ImportTgz key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
         </>
       )}
     </div>
@@ -259,7 +259,9 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
                 {poateScrie && (
                   <td style={{ ...S.td, whiteSpace:'nowrap' }}>
                     <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                      <button style={S.btnX} title="Generează convocator (DOCX)" onClick={() => setActiune({ tip:'convocator', rand:r })}>📄 Convocator</button>
+                      {(() => { const motiv = motivBlocareConvocator(proiect, uats.find(u => u.id === r.uat_id)); return (
+                        <button style={{ ...S.btnX, opacity: motiv ? 0.45 : 1, cursor: motiv ? 'not-allowed' : 'pointer' }} disabled={!!motiv} title={motiv ? `Nu se poate genera: ${motiv}` : 'Generează convocator (DOCX)'} onClick={() => setActiune({ tip:'convocator', rand:r })}>📄 Convocator</button>
+                      ) })()}
                       <button style={S.btnX} title="Marchează expediat" onClick={() => setActiune({ tip:'expediat', rand:r })}>📤 Expediat</button>
                       <button style={S.btnX} title="Confirmare de primire (AR)" onClick={() => setActiune({ tip:'ar', rand:r })}>✅ AR</button>
                       <button style={S.btnX} title="Retur poștal" onClick={() => setActiune({ tip:'retur', rand:r })}>↩ Retur</button>
@@ -295,28 +297,35 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   const [lucru, setLucru] = useState(false)
   const [pas, setPas] = useState('')
   const uat = uats.find(u => u.id === rand.uat_id)
+  const motiv = motivBlocareConvocator(proiect, uat)   // P2-11: precondiții (sesiune cu program, contact, GDPR, reprezentant TGZ)
 
+  // Ordinea nouă (P2-8): generare (aruncă dacă lipsesc câmpuri → toast, FĂRĂ număr consumat) → fn_red_numar_document('C')
+  // → generarea finală cu numărul → salveazaConvocator (rând → upload → update) → descărcare.
   const genereaza = async () => {
+    if (motiv) { show(`Nu se poate genera: ${motiv}.`, 'error'); return }
     setLucru(true)
     try {
       setPas('Citesc datele…')
-      const [{ data: det, error: e1 }, { data: parcela, error: e3 }] = await Promise.all([
-        supabase.from('red_detinatori').select('*').eq('id', rand.detinator_id).single(),
+      const [{ data: det, error: e1 }, { data: parcela, error: e3 }, token] = await Promise.all([
+        supabase.from('red_detinatori').select(COL_DETINATOR).eq('id', rand.detinator_id).single(),
         supabase.from('red_parcele').select('id, proiect_id, uat_id, id_parcela, tronson, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp, categoria_folosinta').eq('id', rand.parcela_id).single(),
+        citesteTokenRaspuns(rand.detinator_id),
       ])
       if (e1 || e3) throw (e1 || e3)
-      if (!det?.token_raspuns) throw new Error('Deținătorul nu are token de răspuns (se generează în BD la insert).')
       setPas('Descarc șablonul…')
       const rs = await fetch(SABLON_CONVOCATOR)
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
+      // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
+      const intrare = { detinator: det, contact: null, parcela, uat, proiect, token, origin: window.location.origin, templateArrayBuffer }
+      setPas('Verific câmpurile…')
+      await genereazaConvocator({ ...intrare, nrDocument: 'C-0000' })   // pas de validare: dacă lipsește ceva, aruncă aici și nu consumăm niciun număr
       setPas('Rezerv numărul de document…')
       const { data: nrDocument, error: eNr } = await supabase.rpc('fn_red_numar_document', { p_tip:'C', p_uat3: rand.uat3, p_tronson: rand.tronson ?? null })
       if (eNr) throw eNr
       if (!nrDocument) throw new Error('Numărul de document nu a fost generat.')
       setPas(`Generez ${nrDocument}…`)
-      // `contact` = persoana de contact Gazpet ({nume, telefon, email}); null → docx.js ia proiect.contact_*
-      const { blob, hash } = await genereazaConvocator({ detinator: det, contact: null, parcela, uat, proiect, nrDocument, token: det.token_raspuns, origin: window.location.origin, templateArrayBuffer })
+      const { blob, hash } = await genereazaConvocator({ ...intrare, nrDocument })
       setPas('Salvez în arhivă…')
       const { path } = await salveazaConvocator(supabase, { blob, hash, proiectCod: proiect.cod, uat3: rand.uat3, idParcela: rand.id_parcela, nrDocument, detinatorId: rand.detinator_id, canal })
       descarcaBlob(blob, `${nrDocument}_${rand.id_parcela}.docx`)
@@ -329,7 +338,7 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
   return (
     <Modal titlu={`Generează convocator — ${rand.id_parcela}`} onClose={onClose}>
       <div style={{ fontSize:13, color:G.muted, marginBottom:10 }}>Deținător: <b style={{ color:G.text }}>{rand.nume}</b> · {rand.calitate} · UAT {uat?.nume || rand.uat3}</div>
-      {!uat?.sesiune_zi1 && <div style={{ ...S.card, borderColor:G.yellow, color:G.yellow, fontSize:12.5, marginBottom:10 }}>⚠ UAT-ul nu are zilele de sesiune completate — convocatorul va avea câmpurile de program goale.</div>}
+      {motiv && <div style={{ ...S.card, borderColor:G.red, color:G.red, fontSize:12.5, marginBottom:10 }}>⛔ Nu se poate genera: {motiv}. Completează datele UAT-ului / proiectului și revino.</div>}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
         <Camp eticheta="Canal">
           <select value={canal} onChange={e => setCanal(e.target.value)} style={{ ...S.select, width:'100%' }}>{CANALE_CONVOCARE.filter(c => c !== 'telefon').map(c => <option key={c} value={c}>{c}</option>)}</select>
@@ -338,7 +347,7 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
       <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14, alignItems:'center' }}>
         {pas && <span style={{ fontSize:12, color:G.muted }}>{pas}</span>}
         <button style={S.btnS} onClick={onClose} disabled={lucru}>Renunță</button>
-        <button style={S.btnP} onClick={genereaza} disabled={lucru}>{lucru ? 'Lucrez…' : 'Generează și descarcă'}</button>
+        <button style={{ ...S.btnP, opacity: motiv ? 0.5 : 1 }} onClick={genereaza} disabled={lucru || !!motiv} title={motiv || ''}>{lucru ? 'Lucrez…' : 'Generează și descarcă'}</button>
       </div>
     </Modal>
   )
@@ -348,7 +357,7 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
 function useConvocariDetinator(detinatorId, show) {
   const [lista, setLista] = useState(null)
   useEffect(() => {
-    supabase.from('red_convocari').select('*').eq('detinator_id', detinatorId).eq('stare', 'activ').order('created_at', { ascending:false }).limit(20)
+    supabase.from('red_convocari').select(COL_CONVOCARE).eq('detinator_id', detinatorId).eq('stare', 'activ').order('created_at', { ascending:false }).limit(20)
       .then(({ data, error }) => { if (error) show('Convocări: ' + msgEroare(error), 'error'); setLista(data || []) })
   }, [detinatorId, show])
   return lista
@@ -398,6 +407,8 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
   const [motiv, setMotiv] = useState(MOTIVE_RETUR[0].cod)
   const [lucru, setLucru] = useState(false)
   useEffect(() => { if (lista && !convId) setConvId((lista.find(c => c.data_expediere && !c.data_confirmare_primire && !c.retur) || lista[0])?.id || '') }, [lista, convId])
+  const conv = lista?.find(c => c.id === convId)
+  const arDupaRetur = mod === 'ar' && !!conv?.retur   // P2-10: se permite, dar explicit
 
   const salveaza = async () => {
     if (!convId) { show('Alege o convocare.', 'error'); return }
@@ -418,6 +429,7 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
           <Camp eticheta="Convocare" span={2}><select value={convId} onChange={e => setConvId(e.target.value)} style={{ ...S.select, width:'100%' }}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
           <Camp eticheta={mod === 'ar' ? 'Data confirmării' : 'Data returului'}><input type="date" value={data} onChange={e => setData(e.target.value)} style={S.input} /></Camp>
           {mod === 'retur' && <Camp eticheta="Motiv retur"><select value={motiv} onChange={e => setMotiv(e.target.value)} style={{ ...S.select, width:'100%' }}>{MOTIVE_RETUR.map(m => <option key={m.cod} value={m.cod}>{m.eticheta}</option>)}</select></Camp>}
+          {arDupaRetur && <div style={{ gridColumn:'span 2', ...S.card, borderColor:G.yellow, color:G.yellow, fontSize:12.5 }}>⚠ Convocarea {conv.nr_document} are retur ({etichetaRetur(conv.retur)}, {fmtDate(conv.retur_data)}). AR ulterior returului → convocarea se consideră <b>confirmată</b> (returul rămâne în istoric).</div>}
         </div>
       )}
       <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:14 }}>

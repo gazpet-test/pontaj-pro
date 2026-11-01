@@ -1,7 +1,34 @@
 // Redări teren — paletă, stiluri și helper-e comune celor trei ecrane (Registru, Fișa parcelei, Import).
 // Contract: docs/redari/CONTRACT_SCHEMA.md §9. Fără date reale aici.
 import React, { useState, useCallback } from 'react'
+import { supabase } from '../../lib/supabase.js'
 import { STARI } from '../stare.js'
+
+export const SABLON_CONVOCATOR = '/redari/sabloane/convocator_provizoriu.docx'
+// Proiecții explicite (review Jakarinos P2-5): fără token_raspuns pe red_detinatori — tokenul stă în red_detinatori_token
+// și se citește DOAR la generarea / reîncărcarea convocatorului (admin/editor), prin citesteTokenRaspuns().
+export const COL_DETINATOR = 'id, parcela_id, nume, nume_normalizat, calitate, cota, decedat, sursa_date, versiune_lista_tgz, sters_la, sters_de, sters_motiv, created_at, updated_at'
+export const COL_CONVOCARE = 'id, detinator_id, canal, nr_document, data_expediere, nr_tracking, data_confirmare_primire, retur, retur_data, continut_hash, fisier_convocator_path, stare, motiv_anulare, created_by, created_at'
+export const COL_RASPUNS_BAZA = 'id, detinator_id, canal, data, optiune, zi_sesiune_aleasa, obiectii_text, declaratie_confirmata, created_by, created_at'
+
+export async function citesteTokenRaspuns(detinatorId) {
+  const { data, error } = await supabase.from('red_detinatori_token').select('token_raspuns').eq('detinator_id', detinatorId).maybeSingle()
+  if (error) throw error
+  if (!data?.token_raspuns) throw new Error('Deținătorul nu are token de răspuns (red_detinatori_token).')
+  return data.token_raspuns
+}
+
+// P2-11: convocatorul se generează doar dacă UAT-ul are o zi de sesiune cu program și proiectul are contact, text GDPR și reprezentant TGZ.
+// Întoarce null când totul e în regulă, altfel motivul (text) pentru butonul dezactivat.
+export function motivBlocareConvocator(proiect, uat) {
+  const lipsa = []
+  if (!uat) lipsa.push('UAT necunoscut')
+  else if (![1, 2, 3].some(i => uat[`sesiune_zi${i}`] && String(uat[`program_zi${i}`] || '').trim())) lipsa.push('UAT fără zi de sesiune cu program')
+  if (!String(proiect?.contact_nume || '').trim() && !String(proiect?.contact_telefon || '').trim() && !String(proiect?.contact_email || '').trim()) lipsa.push('proiect fără persoană de contact')
+  if (!String(proiect?.text_gdpr || '').trim()) lipsa.push('proiect fără text GDPR')
+  if (!String(proiect?.reprezentant_tgz_nume || '').trim()) lipsa.push('proiect fără reprezentant TGZ')
+  return lipsa.length ? lipsa.join('; ') : null
+}
 
 export const G = { bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   blue:'#58A6FF', green:'#3FB950', red:'#F85149', yellow:'#D29922', purple:'#BC8CFF', orange:'#F0883E', pink:'#F778BA',
