@@ -61,6 +61,8 @@ import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOre
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
+const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
+const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
@@ -1017,6 +1019,7 @@ function HomeDashboard() {
     { path:'/financiar', icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi emise · Generator · Email · NAS', active:true, requireModule:'financiar' },
     { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'logistica' },
     { path:'/ofertare', icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:true, requireModule:'ofertare' },
+    { path:'/redari',   icon:'🌾', label:'Redări teren', color:'#7CB342', desc:'Lot 1 Transgaz · convocări · PV', active:true, requireModule:'redari' },
     { path:'/magazie',  icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:true, requireModule:'magazie' },
     { path:'/comercial', icon:'🛒', label:'Comercial',   color:'#A371F7', desc:'Vânzări · Contracte · CRM',        active:true, requireModule:'comercial' },
     { path:'/achizitii', icon:'📥', label:'Achiziții',   color:'#3FB950', desc:'Inbox comenzi · Procesare · Recepție', active:true, requireModule:'achizitii' },
@@ -8912,6 +8915,8 @@ export default function App() {
         <Route path="/co" element={<ConcediuMobilPage/>}/>
         {/* Route PUBLIC RSVP ședință (token din email invitație) — FĂRĂ cont */}
         <Route path="/rsvp/:token/:status" element={<RsvpSedintaPage/>}/>
+        {/* Route PUBLIC Redări teren: răspunsul proprietarului la convocare (token din convocator) — FĂRĂ cont */}
+        <Route path="/redari/raspuns/:token" element={<Suspense fallback={<LoadingScreen/>}><RedariRaspunsPublic/></Suspense>}/>
         <Route path="/aplica" element={<AplicaPublic/>}/>
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
         <Route path="/panou" element={<ProtectedRoute requireModule="pontajpro"><DashboardPage/></ProtectedRoute>}/>
@@ -8933,6 +8938,7 @@ export default function App() {
         <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
         <Route path="/ofertare" element={<ProtectedRoute requireModule="ofertare"><Layout><OfertarePage/></Layout></ProtectedRoute>}/>
+        <Route path="/redari" element={<ProtectedRoute requireModule="redari"><Layout><Suspense fallback={<LoadingScreen/>}><Redari/></Suspense></Layout></ProtectedRoute>}/>
         <Route path="/ctc" element={<ProtectedRoute requireModule="ctc"><Layout><CTCPage/></Layout></ProtectedRoute>}/>
         <Route path="/magazie" element={<ProtectedRoute requireModule="magazie"><Layout><MagaziePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
