@@ -15,7 +15,11 @@ const TERMINALE = ['gata', 'esuata', 'expirata']
 const parola = readFileSync(`${SECRETE}/erp_claude_parola.txt`, 'utf8').split(/\r?\n/)[0]
 const anon = readFileSync(`${SECRETE}/supabase_anon_key.txt`, 'utf8').trim()
 const img = readFileSync(process.argv[2]).toString('base64')
+const CAZURI = ['toate', 'invalid', 'multi', 'mono']
 const caz = process.argv[3] || 'toate'
+if (!CAZURI.includes(caz)) { console.log(`ABATERE caz necunoscut „${caz}” (permis: ${CAZURI.join(' | ')})`); process.exit(1) }
+const TERMEN_MS = 200_000, APEL_MS = 30_000   // termen absolut pentru starea terminală; fiecare apel are propriul timeout
+const cuTimeout = (p, ms, ce) => Promise.race([p, new Promise((_, ko) => setTimeout(() => ko(new Error(`timeout ${ce} ${ms} ms`)), ms))])
 let abateri = 0
 const verifica = (nume, ok, detaliu) => { console.log(`${ok ? 'OK ' : 'ABATERE'} ${nume} ${JSON.stringify(detaliu)}`); if (!ok) abateri++ }
 
@@ -28,7 +32,10 @@ const sb = createClient(URL_ERP, anon, { auth: { persistSession: false } })
 
 // status: codul HTTP real; null = eroare de transport (fără răspuns) — niciodată tratată ca succes
 async function apel(body) {
-  const { data, error } = await sb.functions.invoke('izo-e3-ocr-local', { body })
+  let rez
+  try { rez = await cuTimeout(sb.functions.invoke('izo-e3-ocr-local', { body }), APEL_MS, body.op) }
+  catch (e) { return { status: null, corp: null, transport: String(e.message || e) } }
+  const { data, error } = rez
   if (!error) return { status: 200, corp: data }
   const status = error.context?.status ?? null
   let corp = null
@@ -38,7 +45,7 @@ async function apel(body) {
 const cere = (pdf_base64) => apel({ op: 'cere', pdf_base64, proiect_id: 37, depozit_id: 12, sablon: 'aviz_teava' })
 
 try {
-  const { error: eLogin } = await sb.auth.signInWithPassword({ email: 'claude@gazpet.ro', password: parola })
+  const { error: eLogin } = await cuTimeout(sb.auth.signInWithPassword({ email: 'claude@gazpet.ro', password: parola }), APEL_MS, 'login')
   if (eLogin) { console.log('ABATERE login', eLogin.message); abateri++ }
   else {
     if (caz === 'toate' || caz === 'invalid') {
@@ -55,9 +62,12 @@ try {
       verifica('mono -> 200 + cerere_id', r.status === 200 && r.corp?.success === true && typeof id === 'string', r)
       if (id) {
         let final = null, vazutPreluata = false
-        for (let i = 0; i < 40 && !final; i++) {
+        const limita = Date.now() + TERMEN_MS
+        for (let i = 0; !final && Date.now() < limita; i++) {
           await new Promise((ok) => setTimeout(ok, 5000))
           const s = await apel({ op: 'stare', cerere_id: id })
+          // orice răspuns de stare care nu e 200 + success = abatere (nu se interpretează mai departe)
+          if (s.status !== 200 || s.corp?.success !== true) { verifica(`stare ${i}: 200 + success`, false, s); continue }
           const st = s.corp?.stare
           if (st === 'preluata') vazutPreluata = true
           console.log('STARE', i, s.status, st ?? '-', s.corp?.eroare ?? '')
@@ -72,7 +82,7 @@ try {
     }
   }
 } finally {
-  await sb.auth.signOut().catch(() => {})
+  await cuTimeout(sb.auth.signOut(), APEL_MS, 'signOut').catch(() => {})
 }
 console.log(abateri ? `ESEC ${abateri} abateri` : 'TOATE OK')
 process.exit(abateri ? 1 : 0)
