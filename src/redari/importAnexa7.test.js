@@ -23,6 +23,16 @@ function excel(randuri, { titluri = 4, header = antet } = {}) {
 }
 
 describe('parseazaAnexa7', () => {
+  it('mapeaza col 12 exact DA/NU; valorile necunoscute raman in note', () => {
+    for (const [valoare, asteptat] of [['DA', true], ['NU', false], ['', null], ['DA partial', null]]) {
+      const pv = parseazaAnexa7(excel([rand({ 11: valoare })]), opt)
+      expect(pv.detinatori[0].act_doveditor_cunoscut).toBe(asteptat)
+      if (asteptat !== null) expect(pv.detinatori[0].sursa_date).not.toContain('Act doveditor cunoscut')
+      if (valoare === 'DA partial') expect(pv.detinatori[0].sursa_date).toContain('DA partial')
+    }
+    const pv = parseazaAnexa7(excel([rand(), rand({ 11: 'NU' })]), opt)
+    expect(pv.detinatori[0].act_doveditor_cunoscut).toBe(false)
+  })
   it('importa tipizatul real: coproprietari, mostenitor, neidentificat, lipsa cheie si erori', () => {
     const pv = parseazaAnexa7(excel([
       rand({ 7: 'km 5+100', 11: 'DA', 12: 'Str. Fictiva 1', 13: 'Sat Adresa Test', 14: 'Comuna Test', 16: '000000', 17: '0000 000 000', 18: 'test@example.invalid', 21: 'TEST MOSTENITOR', 22: 'primarie test', 23: 'TEST ARENDAS', 24: 'TEST MANDAT', 25: 'NU', 26: 'in verificare', 27: 'Nota test', 28: 'CF', 29: '02.11.2026' }),

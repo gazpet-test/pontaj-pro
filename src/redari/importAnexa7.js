@@ -113,6 +113,8 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
       // Gemini f3b r1 P2: contactul de pe rândul-dublură nu se pierde dacă primul rând nu avea contact; cota / decedat se completează dacă lipseau
       if (!d0.cota && v('cota')) d0.cota = v('cota')
       if (!d0.decedat && normalizeazaNume(v('decedat')) === 'DA') d0.decedat = true
+      const act = normalizeazaNume(v('act'))
+      if (d0.act_doveditor_cunoscut == null && (act === 'DA' || act === 'NU')) d0.act_doveditor_cunoscut = act === 'DA'
       const campuriContact = { adresa_strada: 'strada', adresa_sat: 'sat_adresa', adresa_comuna: 'comuna', adresa_judet: 'judet', cod_postal: 'cod_postal', telefon: 'telefon', email: 'email' }
       if (Object.values(campuriContact).some(c => v(c))) {
         // Copilot f3b r2 P2-01: contactul existent (chiar parțial, ex. doar telefon) se COMPLETEAZĂ cu câmpurile lipsă de pe dublură;
@@ -126,11 +128,14 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
       continue
     }
     const note = []
+    const act = normalizeazaNume(v('act'))
+    const actDoveditorCunoscut = act === 'DA' ? true : act === 'NU' ? false : null
     let calitate = CALITATI.find(c => cheie(v('calitate')).startsWith(c))
     if (!calitate) { calitate = 'proprietar'; note.push(`Calitate ${v('calitate') || 'lipsa'}: presupus proprietar, necesita verificare`) }
     const neidentificat = normalizeazaNume(v('neidentificat')) === 'DA' || calitate === 'neidentificat'
     if (neidentificat) calitate = 'neidentificat'
     for (const camp of ['act', 'neidentificat', 'decedat', 'mostenitori', 'sursa_mostenitori', 'utilizator', 'reprezentant', 'despagubire', 'stadiu', 'observatii', 'data']) {
+      if (camp === 'act' && actDoveditorCunoscut !== null) continue
       if (v(camp)) note.push(`${camp === 'reprezentant' ? 'reprezentant' : ANTETE.find(([c]) => c === camp)[1]}: ${v(camp)}`)
     }
     // Helperul TGZ interpreteaza punctul urmat de 3 cifre ca separator de mii; semnalam ambiguitatea.
@@ -138,6 +143,7 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
     const adresaCunoscuta = !neidentificat && !!(v('strada') || v('comuna'))
     const d = { cheie: cheieD, cheie_parcela: cheieP, id_parcela: p.id_parcela, nr_crt: null, nume: v('nume'), nume_normalizat: numeNorm, calitate, cota: v('cota') || null, decedat: normalizeazaNume(v('decedat')) === 'DA', adresa_cunoscuta: adresaCunoscuta, sursa_date: [v('sursa') || sursa, ...note].join('; '), versiune_lista_tgz: versiune, rand }
     detinatori.set(cheieD, d); rez.detinatori.push(d); p.nr_detinatori++; s.detinatori++
+    d.act_doveditor_cunoscut = actDoveditorCunoscut
     judetDet.set(cheieD, uat.judet || null)
     const intrare = { rand, nr_crt: null, nume: d.nume, cheie_parcela: cheieP }
     if (neidentificat) { rez.neidentificati.push(intrare); s.neidentificati++ }

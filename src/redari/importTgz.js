@@ -505,6 +505,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
       const randuri = lotD.map(d => ({
         parcela_id: parcelaDupaCheie.get(d.cheie_parcela).id, nume: d.nume, nume_normalizat: d.nume_normalizat, calitate: d.calitate,
         cota: d.cota ?? null, sursa_date: d.sursa_date ?? sursa, versiune_lista_tgz: d.versiune_lista_tgz ?? versiuneLot,
+        decedat: d.decedat === true, act_doveditor_cunoscut: d.act_doveditor_cunoscut ?? null,
       }))
       verifica(await supabase.from('red_detinatori').insert(randuri), 'inserare deținători')
       facut += lotD.length; scrise.detinatori_noi = facut
