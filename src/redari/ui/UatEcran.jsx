@@ -106,29 +106,33 @@ function ModalUat({ uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
     setErori(e)
     if (e.length) return
     if (!schimbate.length && !codSchimbat) { show('Nimic de salvat.', 'info'); return }
+    if (lucru) return
+    // Jakarinos f2 r3 P2: formularul (inclusiv codul) se blochează ÎNAINTE de primul await și se deblochează pe toate ieșirile;
+    // form / schimbate / cod sunt fixate aici, iar câmpurile nu mai acceptă tastare până la final.
     const atingeSesiuni = schimbate.some(k => CHEI_SESIUNE.includes(k))
-    // Jakarinos f2 r1 P2: numărătoarea se citește PROASPĂT la salvare; dacă nu se poate citi, nu salvăm (necunoscut ≠ zero convocați)
-    let proaspat = null
-    if (atingeSesiuni || codSchimbat) {
-      try { proaspat = await numaraUat(uat.id) }
-      catch (err) { show('Nu pot verifica convocările UAT-ului, nu salvez: ' + msgEroare(err), 'error'); return }
-      if (codSchimbat && proaspat.parceleToate > 0) { setErori(['Codul UAT nu se mai schimbă: UAT-ul are parcele (codul e în id_parcela)']); return }
-    }
-    if (atingeSesiuni && proaspat.convocati > 0 && !window.confirm(
-      `UAT-ul ${uat.nume} are ${proaspat.convocati} deținători deja convocați cu zilele vechi.\n` +
-      'Convocatoarele trimise NU se modifică, iar răspunsurile noi se vor raporta la zilele noi. Expirarea linkurilor se recalculează automat.\n\nContinui?')) return
     const tot = normalizeaza(form, CAMPURI_UAT)
     const patch = Object.fromEntries(schimbate.map(k => [k, tot[k]]))
     if (codSchimbat) patch.uat3 = cod
+    const cheiPatch = Object.keys(patch)   // include uat3 — conflictul pe cod se detectează la fel ca pe câmpuri (Jakarinos f2 r3 P2)
     setLucru(true)
     try {
+      // Jakarinos f2 r1 P2: numărătoarea se citește PROASPĂT la salvare; dacă nu se poate citi, nu salvăm (necunoscut ≠ zero convocați)
+      let proaspat = null
+      if (atingeSesiuni || codSchimbat) {
+        try { proaspat = await numaraUat(uat.id) }
+        catch (err) { show('Nu pot verifica convocările UAT-ului, nu salvez: ' + msgEroare(err), 'error'); return }
+        if (codSchimbat && proaspat.parceleToate > 0) { setErori(['Codul UAT nu se mai schimbă: UAT-ul are parcele (codul e în id_parcela)']); return }
+      }
+      if (atingeSesiuni && proaspat.convocati > 0 && !window.confirm(
+        `UAT-ul ${uat.nume} are ${proaspat.convocati} deținători deja convocați cu zilele vechi.\n` +
+        'Convocatoarele trimise NU se modifică, iar răspunsurile noi se vor raporta la zilele noi. Expirarea linkurilor se recalculează automat.\n\nContinui?')) return
       // Copilot f2 r2 P2: rândul de acum + scriere doar pe versiunea verificată (blocare optimistă, trg_red_versiune)
       const { data: acum, error: ea } = await supabase.from('red_uat').select(COL_UAT).eq('id', uat.id).maybeSingle()
       if (ea) throw ea
       if (!acum) throw new Error('UAT-ul nu mai e vizibil (fără drept pe modul?)')
       if (acum.versiune !== uat.versiune) {
-        const conf = conflicteConcurente(uat, acum, schimbate)
-        const etichete = conf.map(k => CAMPURI_UAT.find(c => c.cheie === k)?.eticheta || k)
+        const conf = conflicteConcurente(uat, acum, cheiPatch)
+        const etichete = conf.map(k => k === 'uat3' ? 'Cod UAT' : (CAMPURI_UAT.find(c => c.cheie === k)?.eticheta || k))
         if (conf.length && !window.confirm(`Alt administrator a schimbat între timp: ${etichete.join(', ')}.\nSuprascrii cu valorile tale?`)) return
       }
       const { data, error } = await supabase.from('red_uat').update(patch).eq('id', uat.id).eq('versiune', acum.versiune).select(COL_UAT)
@@ -145,7 +149,7 @@ function ModalUat({ uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', marginBottom: 12, flexWrap: 'wrap' }}>
         <Camp eticheta="Cod UAT (în id_parcela)">
           {poateSchimbaCod
-            ? <input value={cod} onChange={e => setCod(e.target.value.toUpperCase().slice(0, 3))} style={{ ...S.input, ...S.mono, width: 90 }} />
+            ? <input value={cod} disabled={lucru} onChange={e => { if (!lucru) setCod(e.target.value.toUpperCase().slice(0, 3)) }} style={{ ...S.input, ...S.mono, width: 90, ...(lucru ? { opacity: 0.6 } : null) }} />
             : <div style={{ ...S.mono, padding: '7px 0' }}>{uat.uat3}</div>}
         </Camp>
         <div style={{ fontSize: 12, color: G.dim, paddingBottom: 8 }}>

@@ -26,6 +26,7 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
     setErori(e)
     if (e.length) return
     if (!schimbate.length) { show('Nimic de salvat.', 'info'); return }
+    if (lucru) return
     const sensibile = CAMPURI_PROIECT.filter(c => c.sensibil && schimbate.includes(c.cheie)).map(c => c.eticheta)
     if (sensibile.length && !window.confirm(
       `Schimbi ${sensibile.join(' și ')}.\nTextele actuale sunt cele confirmate de Juridic și apar în convocatoare și în formularul public.\n\nContinui?`)) return
