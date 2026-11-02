@@ -50,7 +50,7 @@ describe('parseazaAnexa7', () => {
     expect(pv.detinatori).toHaveLength(6)
     expect(pv.contacte).toHaveLength(4)
     const p = pv.parcele[0]
-    expect(p).toMatchObject({ cheie_sursa: 'HUS|10|CF100|T12', id_parcela: 'T3-HUS-????', sat: 'Sat Parcela Test', suprafata_temporara_mp: 12.5, nr_detinatori: 3, ambigua: false, tronson: 3 })
+    expect(p).toMatchObject({ cheie_sursa: 'HUS|10|CF100|T12', id_parcela: 'HUS-????', sat: 'Sat Parcela Test', suprafata_temporara_mp: 12.5, nr_detinatori: 3, ambigua: false, tronson: 3 })
     expect(pv.detinatori.filter(d => d.cheie_parcela === p.cheie).map(d => d.calitate)).toEqual(['coproprietar', 'coproprietar', 'mostenitor'])
     expect(p.observatii).toContain('km 5+100')
     expect(pv.detinatori[2]).toMatchObject({ decedat: true, versiune_lista_tgz: 'TEST 2026', adresa_cunoscuta: false })
@@ -171,14 +171,14 @@ describe('parseazaAnexa7', () => {
     expect(pv2.parcele).toHaveLength(1)   // randul cu codul HSI (neambiguu) trece
   })
 
-  it('refuza antet incomplet sau ambiguu si tronson invalid', () => {
+  it('refuza antet incomplet sau ambiguu si admite tronson neatribuit', () => {
     const incomplet = [...antet]; incomplet[17] = 'Telefon necunoscut'
     expect(parseazaAnexa7(excel([rand()], { header: incomplet }), opt).erori[0].motiv).toContain('telefon')
     const ambiguu = [...antet]; ambiguu[2] = 'Sat'
     expect(parseazaAnexa7(excel([rand()], { header: ambiguu }), opt).erori[0].motiv).toContain('sat')
     const pv = parseazaAnexa7(excel([rand()]), { ...opt, tronsonPeUat: {} })
-    expect(pv.parcele).toEqual([])
-    expect(pv.erori[0].motiv).toContain('Tronson')
+    expect(pv.parcele[0]).toMatchObject({ tronson: null, id_parcela: 'HUS-????' })
+    expect(pv.erori).toEqual([])
     expect(parseazaAnexa7(excel([], { header: ['Antet gresit'] }), opt).erori[0].motiv).toContain('Nu gasesc antetul')
   })
 

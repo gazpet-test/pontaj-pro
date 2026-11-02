@@ -1,6 +1,6 @@
 // Fișa parcelei: date parcelă (valoare_lei doar admin), deținători + contact (admin/editor), cronologie unită
 // (convocări, răspunsuri, PV, jurnal), fișiere cu link semnat, editare câmpuri de bază, soft delete cu motiv.
-import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
@@ -21,6 +21,39 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
   const poateScrie = nivel === 'admin' || nivel === 'editor'
   const esteAdmin = nivel === 'admin'
   const [parcela, setParcela] = useState(null)
+  const [tronsonLucru,setTronsonLucru]=useState(false)
+  const tronsonGeneratie=useRef(0), tronsonOcupat=useRef(false)
+  useEffect(()=>{
+    tronsonGeneratie.current++;tronsonOcupat.current=false;setTronsonLucru(false)
+    return ()=>{tronsonGeneratie.current++}
+  },[parcelaId,proiect.id])
+  const schimbaTronson=async valoare=>{
+    // Copilot f8a r1 P1-01: tronsonul il schimba doar administratorul (impus si in BD)
+    if(!esteAdmin||tronsonOcupat.current||!parcela||parcela.id!==parcelaId||parcela.proiect_id!==proiect.id)return
+    const vechi=parcela.tronson, nou=valoare===''?null:Number(valoare)
+    if(nou===vechi)return
+    tronsonOcupat.current=true;setTronsonLucru(true)
+    const token=tronsonGeneratie.current, id=parcelaId, proiectId=proiect.id
+    const curent=()=>token===tronsonGeneratie.current
+    try{
+      let q=supabase.from('red_parcele').update({tronson:nou}).eq('id',id).eq('proiect_id',proiectId)
+      q=vechi==null?q.is('tronson',null):q.eq('tronson',vechi)
+      const {data,error}=await q.select('id,tronson')
+      if(!curent())return
+      if(error)throw error
+      if(!Array.isArray(data))throw new Error('Raspuns necunoscut; reincarca fisa inainte de reluare')
+      if(data.length!==1){
+        const {data:p,error:e}=await supabase.from('red_parcele').select('id,tronson').eq('id',id).eq('proiect_id',proiectId).single()
+        if(!curent())return
+        if(e)throw e
+        setParcela(v=>v?.id===id?{...v,tronson:p.tronson}:v)
+        throw new Error('Conflict: tronsonul a fost modificat. Valoarea a fost reincarcata.')
+      }
+      setParcela(v=>v?.id===id?{...v,tronson:data[0].tronson}:v)
+      show('Tronson actualizat','success');onSchimbat?.()
+    }catch(e){if(curent())show((e.code?e.code+': ':'')+msgEroare(e),'error')}
+    finally{if(curent()){tronsonOcupat.current=false;setTronsonLucru(false)}}
+  }
   const [valoare, setValoare] = useState(null)   // valoare_lei — doar admin
   const [detinatori, setDetinatori] = useState([])
   const [contacte, setContacte] = useState({})    // detinator_id → contact
@@ -168,6 +201,9 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
         <button style={S.btnS} onClick={onInapoi}>‹ Registru</button>
         <div style={{ fontSize:17, fontWeight:700, ...S.mono }}>{parcela.id_parcela}</div>
         <span style={{ color:G.muted, fontSize:13 }}>{uat ? `${uat.nume} (${uat.uat3})` : ''} · tronson {parcela.tronson ?? '-'}</span>
+        {esteAdmin && !parcela.sters_la && <label>Tronson <select aria-label="Tronson parcela" style={S.select} disabled={tronsonLucru||parcela.id!==parcelaId||parcela.proiect_id!==proiect.id} value={parcela.tronson??''} onChange={e=>schimbaTronson(e.target.value)}>
+          <option value="">-</option>{Array.from({length:11},(_,i)=><option key={i+1} value={i+1}>T{i+1}</option>)}
+        </select></label>}
         {parcela.sters_la && <span style={{ ...S.tag, background:G.redDim, color:G.red }}>ȘTEARSĂ · {parcela.sters_motiv}</span>}
         <div style={{ flex:1 }} />
         {poateScrie && !parcela.sters_la && <button style={S.btnS} onClick={() => setModal({ tip:'parcela' })}>✎ Editează parcela</button>}

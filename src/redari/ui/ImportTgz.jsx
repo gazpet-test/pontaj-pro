@@ -1,6 +1,6 @@
 // Import Excel TGZ: fișier → parseazaTgz (client-side) → previzualizare + statistici → scrieImport cu progres → raport.
-// Contract: docs/redari/CONTRACT_SCHEMA.md §7. Tronsonul se dă manual per UAT. UI-ul NU calculează numerele parcelelor (P2-6/P1-1):
-// previzualizarea arată id-uri provizorii (T3-HUS-????), iar scrieImport le rezervă server-side (fn_red_rezerva_numere_parcele).
+// Contract: docs/redari/CONTRACT_SCHEMA.md §7. Tronsonul este optional. UI-ul NU calculează numerele parcelelor (P2-6/P1-1):
+// previzualizarea arată id-uri provizorii (HUS-????), iar scrieImport le rezervă server-side (fn_red_rezerva_numere_parcele).
 import React, { useMemo, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { parseazaTgz, scrieImport } from '../importTgz.js'
@@ -35,7 +35,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const [fisier, setFisier] = useState(null)
   const [versiune, setVersiune] = useState('')
   const [sursa, setSursa] = useState('TGZ')
-  const [tronsonPeUat, setTronsonPeUat] = useState(() => Object.fromEntries(uats.map(u => [u.uat3, 1])))
+  const [tronsonPeUat, setTronsonPeUat] = useState({})
   const [preview, setPreview] = useState(null)
   const [nota, setNota] = useState('')            // P2-7: de ce s-a golit previzualizarea
   const [lucru, setLucru] = useState(false)
@@ -43,8 +43,8 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const [raport, setRaport] = useState(null)
   const [subTab, setSubTab] = useState('parcele')
 
-  // uats pot veni după primul render — completează tronsoanele lipsă cu 1
-  const tronsoane = useMemo(() => ({ ...Object.fromEntries(uats.map(u => [u.uat3, 1])), ...tronsonPeUat }), [uats, tronsonPeUat])
+  // uats pot veni după primul render — nu atribuie implicit tronsonul
+  const tronsoane = useMemo(() => ({ ...tronsonPeUat }), [tronsonPeUat])
 
   // P2-7: orice schimbare a intrărilor (fișier, versiune, sursă, tronson) golește previzualizarea — altfel s-ar importa altceva decât s-a văzut
   const invalideaza = (motiv) => { if (preview) { setPreview(null); setNota(`Previzualizarea a fost golită (${motiv}). Apasă din nou „Previzualizează”.`) } }
@@ -129,14 +129,14 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
           <Camp eticheta="Versiunea listei (obligatoriu)"><input value={versiune} onChange={e => { setVersiune(e.target.value); invalideaza('versiunea s-a schimbat') }} style={S.input} placeholder="ex. TGZ 13.07.2026" disabled={lucru} /></Camp>
           <Camp eticheta="Sursa"><select value={sursa} onChange={e => { setSursa(e.target.value); invalideaza('sursa s-a schimbat') }} style={{ ...S.select, width:'100%' }} disabled={lucru}><option value="TGZ">TGZ</option><option value="ANEXA7">Anexa 7 - tipizat Beneficiar</option></select><div style={{ fontSize:12, color:G.muted, marginTop:4 }}>{sursa === 'ANEXA7' ? 'Model 7: 30 de coloane, antet pe randul 5; adresa pe coloane separate.' : 'Format TGZ vechi: Nr.Crt., Nume Detinator si adresa intr-o singura coloana.'}</div></Camp>
         </div>
-        <div style={{ fontWeight:700, margin:'14px 0 8px' }}>2. Tronsonul per UAT (manual, până la corelarea pe km)</div>
+        <div style={{ fontWeight:700, margin:'14px 0 8px' }}>2. Tronson optional - se poate atribui ulterior din Tronsoane</div><p>Tronsonul se atribuie dupa import pe intervale de pozitie HG.</p>
         {uats.length === 0 ? <Gol text="Proiectul nu are UAT-uri." /> : (
           <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
             {uats.map(u => (
               <div key={u.id} style={{ display:'flex', alignItems:'center', gap:6, fontSize:13 }}>
                 <span style={{ color:G.muted }}>{u.uat3}</span>
-                <select value={tronsoane[u.uat3] || 1} onChange={e => { const t = Number(e.target.value); setTronsonPeUat(x => ({ ...x, [u.uat3]: t })); invalideaza(`tronsonul ${u.uat3} s-a schimbat`) }} style={S.select} disabled={lucru}>
-                  {TRONSOANE.map(t => <option key={t} value={t}>T{t}</option>)}
+                <select value={tronsoane[u.uat3] ?? ''} onChange={e => { const t = e.target.value === '' ? null : Number(e.target.value); setTronsonPeUat(x => ({ ...x, [u.uat3]: t })); invalideaza(`tronsonul ${u.uat3} s-a schimbat`) }} style={S.select} disabled={lucru}>
+                  <option value="">Neatribuit</option>{TRONSOANE.map(t => <option key={t} value={t}>T{t}</option>)}
                 </select>
               </div>
             ))}
