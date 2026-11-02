@@ -143,7 +143,8 @@ export function propune(randuri, mapare, modImplicit, convocari, { date1904 = fa
   for (const r of randuri) {
     const t = tracking(r[mapare.nr_tracking]); if (!t) continue
     const d = document(r[mapare.nr_document]) || '(fără număr)'
-    docuriPeAwb.set(t, new Set([...(docuriPeAwb.get(t) || []), d]))
+    if (!docuriPeAwb.has(t)) docuriPeAwb.set(t, new Set())
+    docuriPeAwb.get(t).add(d)   // Copilot f9 r2 P3-01: fără copii repetate ale setului
   }
   const valide = []   // trecerea 1: fiecare rând se evaluează independent; nimic nu „rezervă” convocarea
   randuri.forEach((r, i) => {
@@ -200,9 +201,9 @@ export function propune(randuri, mapare, modImplicit, convocari, { date1904 = fa
   })
   // Trecerea 2 (Copilot f9 r1 P3-02): mai multe rânduri valide pe aceeași convocare nu se rezolvă după ordine — toate devin excepții
   const pe = new Map()
-  for (const v of valide) pe.set(v.item.conv_id, [...(pe.get(v.item.conv_id) || []), v])
+  for (const v of valide) pe.set(v.item.conv_id, (pe.get(v.item.conv_id) || 0) + 1)
   for (const v of valide) {
-    if (pe.get(v.item.conv_id).length > 1) rezultat.exceptii.push({ ...v.baza, motiv: 'mai multe evenimente pentru aceeași convocare în fișier' })
+    if (pe.get(v.item.conv_id) > 1) rezultat.exceptii.push({ ...v.baza, motiv: 'mai multe evenimente pentru aceeași convocare în fișier' })
     else if (v.fel === 'deja') rezultat.deja.push(v.item)
     else rezultat.aplicabile.push(v.item)
   }
@@ -221,6 +222,13 @@ export async function aplica(supabase, aplicabile, { esteCurent = () => true } =
       if (!esteCurent() || consecutive >= 5) break lots
       const a = aplicabile[i]
       try {
+        // Copilot f9 r2 P2-01: AWB-ul nou se recitește chiar înainte de scriere — dacă între timp a ajuns pe altă convocare (alt import / altă fereastră), conflict.
+        // Unicitatea în BD (index) e o decizie de business în așteptare: un plic poate conține legitim mai multe convocări ale aceluiași om.
+        if (a.patch.nr_tracking) {
+          const { data: alte, error: eT } = await supabase.from('red_convocari').select('id').eq('nr_tracking', a.patch.nr_tracking).neq('id', a.conv_id).limit(1)
+          if (eT) throw eT
+          if (alte?.length) { rezultat.conflicte.push({ ...a, motiv: 'AWB-ul a fost înregistrat între timp pe altă convocare; verifică manual.' }); consecutive = 0; continue }
+        }
         let q = supabase.from('red_convocari').update(a.patch).eq('id', a.conv_id)
           .eq('stare', 'activ').eq('canal', 'posta').is('sters_la', null)
         for (const k of Object.keys(a.patch)) q = q.is(k, null)

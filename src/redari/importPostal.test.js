@@ -134,15 +134,22 @@ describe('propune', () => {
   })
 })
 
-function fakeSupabase(responses, apres = () => {}) {
-  const calls = []
-  return { calls, from(table) {
-    const call = { table, filtres: [] }; calls.push(call)
+// scrierile (update) intra in calls; recitirile AWB de dinainte de scriere (select fara update) intra in pre si raspund din alteAwb
+function fakeSupabase(responses, apres = () => {}, alteAwb = {}) {
+  const calls = [], pre = []
+  return { calls, pre, from(table) {
+    const call = { table, filtres: [] }
+    const citire = { filtres: [], eq(k, v) { this.filtres.push(['eq', k, v]); return this }, neq(k, v) { this.filtres.push(['neq', k, v]); return this },
+      limit() { return this }, then(ok, ko) { const awb = this.filtres.find(f => f[1] === 'nr_tracking')?.[2]; return Promise.resolve({ data: alteAwb[awb] || [], error: null }).then(ok, ko) } }
     const q = {
-      update(patch) { call.patch = patch; return q },
+      update(patch) { call.patch = patch; calls.push(call); return q },
       eq(k, v) { call.filtres.push(['eq', k, v]); return q },
       is(k, v) { call.filtres.push(['is', k, v]); return q },
-      async select(cols) { call.select = cols; apres(calls.length); const r = responses.shift(); if (r instanceof Error) throw r; return r ?? { data: [{ id: 'conv-fictiva-1' }], error: null } },
+      select(cols) {
+        if (!call.patch) { pre.push(citire); return citire }
+        call.select = cols; apres(calls.length)
+        return (async () => { const r = responses.shift(); if (r instanceof Error) throw r; return r ?? { data: [{ id: 'conv-fictiva-1' }], error: null } })()
+      },
     }
     return q
   } }
@@ -164,6 +171,12 @@ describe('aplica CAS', () => {
     await aplica(db, propunere({}, { nr_tracking: 'VECHI', data_expediere: '2026-11-01' }, 'ar').aplicabile)
     expect(db.calls[0].filtres).toEqual(expect.arrayContaining([['eq', 'data_expediere', '2026-11-01'], ['eq', 'nr_tracking', 'VECHI'], ['is', 'retur', null]]))
     expect(db.calls[0].filtres).not.toContainEqual(['is', 'nr_tracking', null])
+  })
+  it('AWB-ul ajuns intre timp pe alta convocare -> conflict, fara scriere (Copilot f9 r2 P2-01)', async () => {
+    const db = fakeSupabase([], () => {}, { AB123: [{ id: 'conv-fictiva-9' }] })
+    const r = await aplica(db, [a()])
+    expect(r.conflicte).toHaveLength(1); expect(r.conflicte[0].motiv).toMatch(/altă convocare/)
+    expect(db.calls).toHaveLength(0); expect(db.pre[0].filtres).toEqual([['eq', 'nr_tracking', 'AB123'], ['neq', 'id', 'conv-fictiva-1']])
   })
   it('eroare continua, fara retry; succesul reseteaza numarul erorilor consecutive', async () => {
     const err = { data: null, error: { message: 'eroare fictiva' } }
