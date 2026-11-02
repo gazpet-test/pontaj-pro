@@ -1,6 +1,6 @@
 // Redări teren — teste pentru redactarea tokenului public din evenimentele Sentry (src/redari/sentryScrub.js). Tokenuri fictive.
 import { describe, it, expect } from 'vitest'
-import { redacteazaText, redacteazaAdanc, scrubSentryEvent, scrubSentrySpan, esteDinFormularulPublic } from './sentryScrub.js'
+import { redacteazaText, redacteazaAdanc, scrubSentryEvent, scrubSentrySpan, esteDinFormularulPublic, esteDinContextRedari, doarCampurileSigure } from './sentryScrub.js'
 
 const T43 = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdE'   // 43 caractere [A-Za-z0-9_-]
 const T42 = T43.slice(0, 42)
@@ -261,11 +261,14 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     }
   })
   it('r11 P2-1 (Jakarinos): URL RPC al modulului fără corp + hash SHA-256 legitim ⇒ evenimentul trece', () => {
+    // r46: URL-ul rpc/fn_red_ = context Redari -> allow-list: `extra` dispare, evenimentul (message + url) ramane - NU se pierde
     const ev = { request: { url: '/rest/v1/rpc/fn_red_numar_document' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'Eroare generare convocator' }
-    expect(scrubSentryEvent(ev)).toEqual({ request: { url: '/rest/v1/rpc/fn_red_numar_document' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'Eroare generare convocator' })
-    // cu corp curat: corpul se șterge (RPC al modulului), hash-ul rămâne, evenimentul trece
+    expect(scrubSentryEvent(ev)).toEqual({ request: { url: '/rest/v1/rpc/fn_red_numar_document' }, message: 'Eroare generare convocator' })
     const ev2 = { request: { url: '/rest/v1/rpc/fn_red_numar_document', data: { p_uat: 3 } }, extra: { continut_hash: 'a'.repeat(64) }, message: 'x' }
-    expect(scrubSentryEvent(ev2)).toEqual({ request: { url: '/rest/v1/rpc/fn_red_numar_document' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'x' })
+    expect(scrubSentryEvent(ev2)).toEqual({ request: { url: '/rest/v1/rpc/fn_red_numar_document' }, message: 'x' })
+    // in afara contextului, hash-ul legitim ramane
+    const ev3 = { request: { url: '/rest/v1/rpc/fn_altceva' }, extra: { continut_hash: 'a'.repeat(64) }, message: 'x' }
+    expect(scrubSentryEvent(ev3)).toEqual(ev3)
   })
   it('r12 P1-1 (Jakarinos): corp de cerere ca ȘIR JSON cu cheie `token` structurală ([null, T], {nested:{value:T}}) + ref_<T>', () => {
     for (const body of [JSON.stringify({ token: [null, T] }), JSON.stringify({ token: { nested: { value: T } } }), encodeURIComponent(JSON.stringify({ x: 1, raspuns: { lista: ['a', { t: T }] } })), JSON.stringify({ inner: JSON.stringify({ token: [T] }) })]) {
@@ -275,7 +278,8 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
   })
   it('Copilot FE r7 P2-01: corp JSON peste limita parserului (200k) / JSON invalid cu cheie token ⇒ purtător ⇒ null', () => {
     const mare = { message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: JSON.stringify({ token: [null, T], padding: 'x'.repeat(200000) }) } }
-    expect(scrubSentryEvent(mare)).toBeNull()
+    const rm = scrubSentryEvent(mare); expect(rm === null || !JSON.stringify(rm).includes(T)).toBe(true)   // r46: context Redari -> schelet sigur
+    expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/intern', body: JSON.stringify({ token: [null, T], padding: 'x'.repeat(200000) }) } })).toBeNull()
     const invalid = { message: 'ref_' + T, request: { url: '/intern', body: '{"token":[null,"' + T + '"' } }   // JSON trunchiat
     expect(scrubSentryEvent(invalid)).toBeNull()
     // JSON mare FĂRĂ token/raspuns și fără secvențe de 43: trece (corpul se șterge doar dacă URL-ul e RPC al modulului)
@@ -293,8 +297,10 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const r2 = scrubSentryEvent(uni2); expect(r2 === null || !JSON.stringify(r2).includes(T)).toBe(true)
     let body = JSON.stringify({ token: { nested: { value: T } } })
     for (let i = 0; i < 4; i++) body = JSON.stringify({ inner: body })
-    expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body } })).toBeNull()
-    expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: JSON.stringify({ padding: 'x'.repeat(200000), token: [null, T] }) } })).toBeNull()
+    for (const ev of [{ message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body } }, { message: 'ref_' + T, request: { url: '/rest/v1/rpc/fn_red_numar_document', body: JSON.stringify({ padding: 'x'.repeat(200000), token: [null, T] }) } }]) {
+      const r = scrubSentryEvent(ev); expect(r === null || !JSON.stringify(r).includes(T)).toBe(true)   // r46: context Redari -> schelet sigur
+    }
+    expect(scrubSentryEvent({ message: 'ref_' + T, request: { url: '/intern', body } })).toBeNull()
   })
   it('r14 P1-1 (Jakarinos + Copilot r8): JSON refuzat in afara corpului (extra, span.data) face evenimentul/spanul purtator', () => {
     expect(scrubSentryEvent({ message: 'ref_' + T, extra: { payload: '{"token":[null,"' + T + '"' } })).toBeNull()
@@ -345,9 +351,9 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
   })
   it('r16 P1-1 (Jakarinos): spanul golit nu pastreaza `op`/`origin` (pot purta tokenul); id-urile raman doar daca sunt hex scurte', () => {
     const s1 = scrubSentrySpan({ span_id: 'a1b2', trace_id: 'c3d4', op: 'ref_' + T, origin: 'x' + T, data: { url: '/redari/raspuns/' + T } })
-    expect(JSON.stringify(s1)).not.toContain(T); expect(s1.op).toBe('redactat'); expect(s1.span_id).toBe('a1b2'); expect(s1.origin).toBeUndefined()
+    expect(JSON.stringify(s1)).not.toContain(T); expect(s1.op).toBe('redactat'); expect(s1.span_id).toBeUndefined(); expect(s1.origin).toBeUndefined()   // r45 P1-03: fara id-uri
     const s2 = scrubSentrySpan({ span_id: T, trace_id: 'abc', op: 'ref_' + T, data: { payload: '{"token":[null,"' + T + '"' } })   // refuzat -> golit
-    expect(JSON.stringify(s2)).not.toContain(T); expect(s2.span_id).toBeUndefined(); expect(s2.trace_id).toBe('abc')
+    expect(JSON.stringify(s2)).not.toContain(T); expect(s2.span_id).toBeUndefined(); expect(s2.trace_id).toBeUndefined()
     const s3 = { span_id: 'a', op: 'ref_' + T }; Object.defineProperty(s3, 'broken', { enumerable: true, get() { throw new Error('x') } })
     expect(JSON.stringify(scrubSentrySpan(s3))).not.toContain(T)
   })
@@ -779,6 +785,43 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     expect(sp.span_id).toBeUndefined(); expect(sp.trace_id).toBeUndefined(); expect(sp.description).toBe('[redactat]')
     // P2-01: coincidenta de 6 caractere cu o valoare legitima NU pierde evenimentul (redactat)
     expect(scrubSentryEvent({ extra: { token: T, id: '012345', message: 'eroare' } })).toEqual({ extra: { token: '[token]', id: '012345', message: 'eroare' } })
+  })
+  it('r46 CONTROL PRINCIPAL: evenimentele din contextul Redari (URL /redari, rpc/fn_red_*, breadcrumb) pastreaza doar campurile sigure', () => {
+    const ev = { event_id: 'e1', timestamp: 1, level: 'error', message: 'Registru: eroare', transaction: '/redari', request: { url: 'https://erp/redari?x=1', method: 'GET', data: { p_token: T }, headers: { Cookie: 'a=b' } },
+      extra: { oricare: T.match(/.{1,5}/g).map((v, i) => ({ i: String(i), v })), alt: [T.slice(0, 20), 123, T.slice(23)] }, contexts: { c: { token: { a: T.slice(0, 20), b: T.slice(20) } } }, user: { id: 'u1', email: 'x@y' },
+      breadcrumbs: [{ category: 'xhr', data: { url: 'https://api/rest/v1/rpc/fn_red_numar_document', body: T } }],
+      exception: { values: [{ type: 'TypeError', value: 'x is undefined', stacktrace: { frames: [{ filename: 'app://src/Redari.jsx', function: 'incarca', lineno: 170, colno: 5, in_app: true, vars: { token: T } }] } }] } }
+    expect(esteDinContextRedari(ev)).toBe(true)
+    const rez = scrubSentryEvent(ev)
+    expect(rez).not.toBeNull()
+    const j = JSON.stringify(rez)
+    expect(j).not.toContain(T); expect(j).not.toContain(T.slice(0, 5)); expect(j).not.toContain('x@y'); expect(j).not.toContain('Cookie')
+    expect(rez.extra).toBeUndefined(); expect(rez.contexts).toBeUndefined(); expect(rez.breadcrumbs).toBeUndefined(); expect(rez.user).toBeUndefined(); expect(rez.request.data).toBeUndefined(); expect(rez.request.headers).toBeUndefined()
+    expect(rez.message).toBe('Registru: eroare'); expect(rez.exception.values[0].type).toBe('TypeError'); expect(rez.exception.values[0].stacktrace.frames[0].filename).toBe('app://src/Redari.jsx'); expect(rez.exception.values[0].stacktrace.frames[0].vars).toBeUndefined()
+    // context si prin breadcrumb/transaction singure; NU prin cuvinte din message
+    expect(esteDinContextRedari({ transaction: '/redari/registru' })).toBe(true)
+    expect(esteDinContextRedari({ breadcrumbs: [{ data: { to: '/redari' } }] })).toBe(true)
+    expect(esteDinContextRedari({ message: 'redari teren', request: { url: '/logistica' } })).toBe(false)
+    expect(esteDinContextRedari({ request: { url: '/redarile' } })).toBe(false)
+    // un message lung cu secventa de 43 nu trece in forma sigura
+    expect(doarCampurileSigure({ message: 'x ' + T, level: 'error' }).message).toBeUndefined()
+  })
+  it('r45 (Jakarinos): indici-sir, fragmente numerice, span golit fara id-uri, cuvinte legitime unite NU inventeaza identificatori', () => {
+    // P1-01: indici ca siruri
+    expect(scrubSentryEvent({ extra: { token: T, copy: T.match(/.{1,5}/g).map((v, i) => ({ i: String(i), v })) } })).toBeNull()
+    // P1-02: fragmente numerice sub cheia sensibila
+    const bucati = T.match(/.{1,5}/g).map(v => /^\d+$/.test(v) ? Number(v) : v)
+    const r2 = scrubSentryEvent({ extra: { token: bucati } }); const j2 = r2 === null ? '' : JSON.stringify(r2).replace(/[^A-Za-z0-9_-]+/g, '')
+    expect(j2.includes(T)).toBe(false)
+    // P1-03: span golit (si pe iesirea anticipata de formular public, si pe exceptie) nu pastreaza id-urile
+    const H = '0123456789abcdef0123456789abcdef0123456789a'
+    const s1 = scrubSentrySpan({ span_id: H.slice(0, 16), trace_id: H.slice(11), description: '/redari/raspuns/' + H, data: {} })
+    expect(s1.span_id).toBeUndefined(); expect(s1.trace_id).toBeUndefined()
+    const s2 = { span_id: H.slice(0, 16), trace_id: H.slice(11), description: 'x', data: {} }; Object.defineProperty(s2, 'rau', { enumerable: true, get() { throw new Error('x') } })
+    const r3 = scrubSentrySpan(s2); expect(r3.span_id).toBeUndefined(); expect(r3.trace_id).toBeUndefined()
+    // P2-01: cuvinte legitime sub `token_cache` unite (47) NU inventeaza un identificator -> evenimentul trece
+    const ok = { message: 'Refresh failed', extra: { token_cache: { provider: 'identity-provider', status: 'temporarily-unavailable', operation: 'refresh' } } }
+    expect(scrubSentryEvent(ok)).toEqual(ok)
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }

@@ -188,7 +188,8 @@ const frunzeUnite = (radacina, cuChei = false) => {
   const vaz = new WeakSet(); const stiva = [radacina]; const out = []
   while (stiva.length) {
     const o = stiva.pop()
-    if (typeof o === 'string') { out.push(o); continue }
+    if (typeof o === 'number' && Number.isFinite(o)) { const t = String(o); if (!(t.length <= 2 || /^\d{1,3}$/.test(t))) out.push(t); continue }   // r45 P1-02: fragmentele numerice participa (indicii mici nu)
+    if (typeof o === 'string') { if (!(o.length <= 2 || /^\d{1,3}$/.test(o))) out.push(o); continue }   // r45 P1-01: indicii-sir scurti nu intrerup
     if (!o || typeof o !== 'object' || vaz.has(o)) continue
     vaz.add(o)
     if (Array.isArray(o)) { for (let i = o.length - 1; i >= 0; i--) stiva.push(o[i]); continue }
@@ -213,7 +214,7 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
         else { const n = fn(obj, null, v, sensibil); if (n !== v) obj[i] = n }
       }
       // Jakarinos r43: sub context sensibil, o LISTĂ de fragmente (`token: [T[0:20], T[20:]]`) se judecă și unită — identificatorul se colectează
-      if (sensibil) { const unit = frunzeUnite(obj); if (unit.length >= 43) fn(obj, null, unit, sensibil) }
+      if (sensibil) { const unit = frunzeUnite(obj); if (RX_T43.test(unit)) fn(obj, null, unit, sensibil) }   // r45 P2-01: doar daca uniunea E un identificator (exact 43)
       continue
     }
     for (const cheie of Object.keys(obj)) {
@@ -225,7 +226,7 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
       if (v && typeof v === 'object') {
         stiva.push([v, sensibilCopil])
         // Jakarinos r44 P1-01: `token: { a: T[0:20], b: T[20:] }` / `token: [[..],[..]]` — subarborele sensibil se judeca si cu frunzele unite
-        if (sensibilCopil) { const unit = frunzeUnite(v); if (unit.length >= 43) fn(obj, cheie, unit, true) }
+        if (sensibilCopil) { const unit = frunzeUnite(v); if (RX_T43.test(unit)) fn(obj, cheie, unit, true) }
       }
       else vNou = fn(obj, cheie, v, sensibilCopil)
       if (cheieNoua !== cheie || vNou !== v) obj[cheieNoua] = vNou
@@ -392,7 +393,7 @@ export function scrubSentrySpan(span) {
     let esteBucata = () => false
     const golit = () => {
       for (const k of Object.keys(span)) if (!['span_id', 'trace_id', 'parent_span_id', 'start_timestamp', 'timestamp'].includes(k)) delete span[k]
-      for (const k of ['span_id', 'trace_id', 'parent_span_id']) if (k in span && (!idScurt(span[k]) || esteBucata(span[k]))) delete span[k]
+      for (const k of ['span_id', 'trace_id', 'parent_span_id']) delete span[k]   // r45 P1-03: id-urile pot fi bucati din identificator — un span golit nu le pastreaza
       for (const k of ['start_timestamp', 'timestamp']) if (k in span && typeof span[k] !== 'number') delete span[k]
       span.op = 'redactat'; span.description = '[redactat]'; span.data = {}
       return span
@@ -409,16 +410,52 @@ export function scrubSentrySpan(span) {
     try {
       const idScurt = (v) => (typeof v === 'string' && /^[0-9a-f]{1,32}$/i.test(v) ? v : undefined)
       const nr = (v) => (typeof v === 'number' ? v : undefined)
-      return { span_id: idScurt(span?.span_id), trace_id: idScurt(span?.trace_id), start_timestamp: nr(span?.start_timestamp), timestamp: nr(span?.timestamp), op: 'redactat', description: '[redactat]', data: {} }
+      return { start_timestamp: nr(span?.start_timestamp), timestamp: nr(span?.timestamp), op: 'redactat', description: '[redactat]', data: {} }   // r45 P1-03: fara id-uri
     } catch { return { op: 'redactat', description: '[redactat]', data: {} } }
   }
 }
 
 // beforeSend / beforeSendTransaction
+// Controlul PRINCIPAL pentru evenimentele modulului (r46): un eveniment produs in contextul Redari (pagina /redari, cerere spre rpc/fn_red_*,
+// tranzactie/breadcrumb cu /redari) pastreaza DOAR campurile fara date de utilizator: tip/valoare/stack ale exceptiei (fara `vars`),
+// message, level, transaction, release/environment, timestamp, event_id, platform, sdk, tags fara valori lungi, request.url/method.
+// `extra`, `contexts`, `breadcrumbs`, `request.data/body/headers/cookies/query_string`, `user` dispar. Asa, clasa intreaga de
+// „identificator ascuns in extra sub orice forma" nu mai exista pentru evenimentele modulului; euristicile de mai jos raman aparare in
+// adancime pentru restul ERP-ului (unde un identificator al modulului nu are cum sa apara decat prin defect).
+const RX_CONTEXT_REDARI = /\/redari(?![a-z])|rpc\/fn_red_/i
+export function esteDinContextRedari(event) {
+  if (typeof window !== 'undefined' && RX_CONTEXT_REDARI.test(String(window.location?.pathname || ''))) return true
+  const e = event || {}
+  if (vreoFormaSePotriveste(e.request?.url, RX_CONTEXT_REDARI) || vreoFormaSePotriveste(e.transaction, RX_CONTEXT_REDARI)) return true
+  const bc = Array.isArray(e.breadcrumbs) ? e.breadcrumbs : (Array.isArray(e.breadcrumbs?.values) ? e.breadcrumbs.values : [])
+  for (const b of bc) { if (!b || typeof b !== 'object') continue; for (const u of [b.url, b.data?.url, b.data?.to, b.data?.from]) if (vreoFormaSePotriveste(u, RX_CONTEXT_REDARI)) return true }
+  return false
+}
+const sirScurt = (v, n = 200) => typeof v === 'string' && v.length <= n && !RX_RUN43.test(v)
+export function doarCampurileSigure(event) {
+  const e = event
+  const out = {}
+  for (const k of ['event_id', 'timestamp', 'platform', 'level', 'logger', 'release', 'dist', 'environment', 'server_name', 'type', 'start_timestamp']) if (k in e && (typeof e[k] === 'number' || sirScurt(e[k]))) out[k] = e[k]
+  if (sirScurt(e.message, 2000)) out.message = e.message
+  if (sirScurt(e.transaction, 500)) out.transaction = e.transaction
+  if (e.sdk && typeof e.sdk === 'object') out.sdk = { name: sirScurt(e.sdk.name) ? e.sdk.name : undefined, version: sirScurt(e.sdk.version) ? e.sdk.version : undefined }
+  if (e.request && typeof e.request === 'object') { out.request = {}; if (sirScurt(e.request.url, 2000)) out.request.url = e.request.url; if (sirScurt(e.request.method, 10)) out.request.method = e.request.method }
+  if (e.tags && typeof e.tags === 'object') { out.tags = {}; for (const [k, v] of Object.entries(e.tags)) if (sirScurt(k, 64) && (typeof v === 'number' || sirScurt(v, 64))) out.tags[k] = v }
+  const vals = e.exception?.values
+  if (Array.isArray(vals)) out.exception = { values: vals.filter(x => x && typeof x === 'object').map(x => ({
+    type: sirScurt(x.type, 200) ? x.type : undefined, value: sirScurt(x.value, 2000) ? x.value : undefined, mechanism: x.mechanism && typeof x.mechanism === 'object' ? { type: sirScurt(x.mechanism.type) ? x.mechanism.type : undefined, handled: typeof x.mechanism.handled === 'boolean' ? x.mechanism.handled : undefined } : undefined,
+    stacktrace: Array.isArray(x.stacktrace?.frames) ? { frames: x.stacktrace.frames.filter(f => f && typeof f === 'object').map(f => ({ filename: sirScurt(f.filename, 500) ? f.filename : undefined, function: sirScurt(f.function, 300) ? f.function : undefined, lineno: typeof f.lineno === 'number' ? f.lineno : undefined, colno: typeof f.colno === 'number' ? f.colno : undefined, in_app: typeof f.in_app === 'boolean' ? f.in_app : undefined })) } : undefined,
+  })) }
+  return out
+}
 export function scrubSentryEvent(event) {
   try {
     if (event === null || typeof event !== 'object') return null
     if (esteDinFormularulPublic(event)) return null
+    if (esteDinContextRedari(event)) {
+      // r46: controlul principal — doar campurile sigure; apoi aceleasi verificari ca pentru orice eveniment (aparare in adancime)
+      event = doarCampurileSigure(event)
+    }
     const tokenuri = colecteazaTokenuriEveniment(event)   // ÎNAINTE de ștergerea corpului — colectează și din request.data/body
     // r14 P1-1 (Jakarinos + Copilot r8): `refuzat` (JSON suspect neparcurs, oriunde in eveniment, nu doar in corp) face evenimentul purtator
     let purtator = tokenuri.size > 0 || !!tokenuri.refuzat || !!tokenuri.ambiguu
