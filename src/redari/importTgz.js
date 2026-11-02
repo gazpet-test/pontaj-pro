@@ -27,6 +27,10 @@ export function tronsonOptional(v) {
   const n = typeof v === 'number' ? v : typeof v === 'string' && /^(?:[1-9]|10|11)$/.test(v) ? Number(v) : null
   return Number.isInteger(n) && n >= 1 && n <= 11 ? n : null
 }
+// Copilot f8b r1 P3-01: absent = NULL (se atribuie ulterior); dat explicit dar in afara 1..11 = eroare de validare, nu NULL tacut
+export function tronsonDatInvalid(v) {
+  return v !== undefined && v !== null && v !== '' && tronsonOptional(v) === null
+}
 
 export const LOT = 200          // mărimea unui lot la INSERT
 export const LOT_CITIRE = 100   // max id-uri per .in() la citiri
@@ -220,6 +224,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
     const uat = uatDupa.get(normalizeazaNume(uatBrut)) || uatDupa.get(uatBrut.toUpperCase())
     if (!uat) { erori.push({ rand: randExcel, motiv: `UAT necunoscut „${uatBrut}”`, uat: uatBrut, nume: numeBrut }); continue }
     const s = statUat(uat.uat3)
+    if (tronsonDatInvalid(tronsonPeUat?.[uat.uat3])) { erori.push({ rand: randExcel, motiv: `Tronson invalid pentru UAT ${uat.uat3} (1..11 sau gol)`, uat: uatBrut, nume: numeBrut }); continue }
     const tronson = tronsonOptional(tronsonPeUat?.[uat.uat3])
 
     // parcela: cheiată pe (uat3, Nr.Crt. x). Atributele și cheie_sursa se CONSOLIDEAZĂ pe tot grupul după buclă (P1-2 r7):

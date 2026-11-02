@@ -22,12 +22,13 @@ export default function TronsoaneEcran({proiect,nivel,show}) {
   }
   useEffect(()=>{
     const token=++generatie.current, curent=()=>token===generatie.current
-    setDate(null);setPv(null);setLucru(true);ocupat.current=true
+    setDate(null);setLucru(true);ocupat.current=true
     citeste(curent).then(d=>{if(curent())setDate(d)}).catch(e=>{if(curent())setMesaj(msgEroare(e))})
       .finally(()=>{if(curent()){setLucru(false);ocupat.current=false}})
     return ()=>{generatie.current++}
   },[proiect.id,reload])
-  useEffect(()=>{setMesaj('');setAtribuire({uat:'',de:'',pana:'',tronson:'1'})},[proiect.id])
+  // Copilot f8b r1 P2-01: modalul PV C se inchide doar la schimbarea proiectului sau prin onClose, nu la reload (onGata)
+  useEffect(()=>{setPv(null);setMesaj('');setAtribuire({uat:'',de:'',pana:'',tronson:'1'})},[proiect.id])
   const atribuie=async e=>{
     e.preventDefault()
     if(ocupat.current || nivel!=='admin')return
@@ -92,7 +93,7 @@ export default function TronsoaneEcran({proiect,nivel,show}) {
         return <tr key={t}><td style={S.td}>{t}</td><td style={S.td}>{date.uats.filter(u=>ids.has(u.id)).map(u=>u.nume).sort().join(', ')}</td>
           {[rs.length,rs.filter(r=>r.tip_pv==='A').length,rs.filter(r=>r.tip_pv==='B').length,fara,rs.filter(r=>r.obiectii_deschise===true).length].map((v,i)=><td key={i} style={S.td}>{v}</td>)}
           <td style={S.td}>{existent?<button style={S.btnS} disabled={lucru} onClick={()=>deschide(t)}>{existent.nr_pv} - {existent.stare}</button>
-            :nivel==='admin' && <button style={S.btnP} disabled={lucru||fara!==0} onClick={()=>deschide(t)}>＋ Creează PV C</button>}</td></tr>
+            :nivel==='admin' && <button style={S.btnP} disabled={lucru||fara!==0||date.neatribuite>0} title={date.neatribuite>0?'Atribuie întâi tronsonul celor '+date.neatribuite+' parcele neatribuite':undefined} onClick={()=>deschide(t)}>＋ Creează PV C</button>}</td></tr>
       })}</tbody></table>}
     {pv && <ModalPv key={pv.id} pvId={pv.id} tronson={pv.tronson} proiectId={proiect.id} tip="C" nivel={nivel} show={show}
       onClose={()=>{setPv(null);setReload(n=>n+1)}} onGata={()=>setReload(n=>n+1)}/>}

@@ -1,6 +1,6 @@
 // Anexa 7: antet dupa continut, identitate comuna cu TGZ, fara Nr.Crt.
 import * as XLSX from 'xlsx-js-style'
-import { cheie, text, numar, cheieSursa, idParcelaProvizoriu, tronsonOptional } from './importTgz.js'
+import { cheie, text, numar, cheieSursa, idParcelaProvizoriu, tronsonOptional, tronsonDatInvalid } from './importTgz.js'
 import { normalizeazaNume } from './idParcela.js'
 
 const ANTETE = [
@@ -76,6 +76,7 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
     const s = st.pe_uat[uat.uat3] ??= { parcele: 0, detinatori: 0, dubluri: 0, neidentificati: 0, fara_cheie: 0, ambigue: 0, erori: 0 }
     const refuza = motiv => { eroare(rand, motiv, context); s.erori++ }
     if (!v('nume')) { refuza('Nume detinator gol'); continue }
+    if (tronsonDatInvalid(tronsonPeUat?.[uat.uat3])) { refuza(`Tronson invalid pentru UAT ${uat.uat3} (1..11 sau gol)`); continue }
     const tronson = tronsonOptional(tronsonPeUat?.[uat.uat3])
     const suprafata = v('suprafata') ? numar(brut('suprafata')) : null
     if (v('suprafata') && (suprafata == null || suprafata < 0)) { refuza('Suprafata invalida'); continue }

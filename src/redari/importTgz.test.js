@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx-js-style'
-import { parseazaTgz, scrieImport, idParcela, tronsonOptional } from './importTgz.js'
+import { parseazaTgz, scrieImport, idParcela, tronsonOptional, tronsonDatInvalid } from './importTgz.js'
 
 function excel() {
   const wb=XLSX.utils.book_new()
@@ -28,6 +28,14 @@ describe('import 8b - identitate fara tronson',()=>{
     expect(()=>idParcela('HUSX',1)).toThrow()
     for(const v of [undefined,null,'',0,12,true,'3x'])expect(tronsonOptional(v)).toBeNull()
     expect(tronsonOptional('3')).toBe(3)
+  })
+  it('tronson dat explicit dar invalid -> eroare pe rand, nu NULL tacut (Copilot f8b r1 P3-01)',()=>{
+    for(const v of [undefined,null,''])expect(tronsonDatInvalid(v)).toBe(false)
+    for(const v of [0,12,true,'3x'])expect(tronsonDatInvalid(v)).toBe(true)
+    const p=parseazaTgz(excel(),{...opt,tronsonPeUat:{HUS:12}})
+    expect(p.parcele).toHaveLength(0)
+    expect(p.erori).toHaveLength(2)
+    expect(p.erori[0].motiv).toMatch(/Tronson invalid pentru UAT HUS/)
   })
   it('rezerva un singur bloc per UAT, inclusiv tronsoane diferite',async()=>{
     const apeluri=[], scrise=[]
