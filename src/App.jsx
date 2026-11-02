@@ -247,7 +247,9 @@ tr:hover td{background:#1C2128}
 .navscroll::-webkit-scrollbar{display:none}
 /* sub 1800 px: în zona din dreapta rămân iconițele + contoarele, textul apare în tooltip */
 @media (max-width:1799px){.topbar .tb-txt{display:none}}
-@media (max-width:719px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{display:none}}
+/* tabletă / ecran îngust (<1100 px): zona din dreapta nu mai încape -> toată bara se derulează (ca înainte), fără să lățească pagina */
+@media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{flex:0 0 auto;-webkit-mask-image:none;mask-image:none}}
+@media (max-width:719px){.navscroll{display:none}}
 @media (max-width:719px){.nl{display:none}}
 .nl:hover,.nl.active{background:#21262D;color:#E6EDF3}
 .nl.active{color:#58A6FF;background:#1F6FEB15}
