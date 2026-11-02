@@ -209,7 +209,9 @@ const texteScheletFormeazaIdentificator = (sk) => {
   const tot = texte.filter(t => typeof t === 'string').join(' ')
   for (const f of [tot, cuUnicode(tot), ...formele(tot)]) {
     // r49 (Jak r48 P2-01): doar secventele care ARATA a bucata de identificator aleator (litere SI cifre); identificatorii de cod (camelCase, doar litere) nu
-    const unit = (f.match(/[A-Za-z0-9_-]{12,}/g) || []).filter(r => !/^[0-9a-f-]+$/i.test(r)).join('')
+    // r51 (Jak r50 P2-01): nici datele/orele ISO (`2026-11-02T12`) nu furnizeaza „cifrele” — doar secventele care au litere SI cifre AMESTECATE
+    // (cel putin o litera non-hex si o cifra in aceeasi secventa), cum arata orice bucata de identificator aleator
+    const unit = (f.match(/[A-Za-z0-9_-]{12,}/g) || []).filter(r => !/^[0-9a-f-]+$/i.test(r) && !/^[0-9T:.-]+$/.test(r)).join('')
     if (RX_RUN43.test(unit) && /[A-Za-z]/.test(unit) && /[0-9]/.test(unit)) return true   // conditia litere+cifre pe TEXTUL UNIT (o bucata poate fi doar litere)
   }
   return false

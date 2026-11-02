@@ -878,6 +878,13 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // dar bucati de identificator aleator (litere+cifre, nu hex) unite din message + value ⇒ null
     expect(scrubSentryEvent({ transaction: '/redari', message: 'prima: ' + T.slice(0, 20), exception: { values: [{ type: 'Error', value: 'ultima: ' + T.slice(20) }] } })).toBeNull()
   })
+  it('r50 P2-01 (Jakarinos): timestamp ISO + nume de campuri in message NU pierde evenimentul (context Redari)', () => {
+    const ev = { transaction: '/redari', message: '2026-11-02T12:34:56Z: red_detinatori versiune_lista_tgz', exception: { values: [{ type: 'TypeError', value: 'Cannot read properties of undefined (reading nume_normalizat)' }] } }
+    const rez = scrubSentryEvent(ev); expect(rez).not.toBeNull(); expect(rez.message).toBe(ev.message)
+    // bucati de identificator aleator (litere amestecate cu cifre) unite raman null
+    const R = 'Q7w3Zk9pL2xT5vN8mB4cH6jD1sF0gY'   // 30, litere+cifre amestecate
+    expect(scrubSentryEvent({ transaction: '/redari', message: 'a: ' + R, exception: { values: [{ type: 'E', value: 'b: ' + 'K3rP8nW2' + 'dV5' + 'xA' }] } })).toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
