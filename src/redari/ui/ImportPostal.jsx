@@ -87,7 +87,7 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
       let convocari
       try { convocari = await citesteConvocariPostal(supabase, proiect.id, curent) }
       catch { throw new Error('Nu s-au putut citi toate convocările. Previzualizarea nu a fost creată.') }
-      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari))
+      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari, { date1904: !!fisier.date1904 }))
     } catch (e) { if (curent()) setMesaj(msgEroare(e)) }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
@@ -112,7 +112,7 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     }
     const csv = [['rand', 'nr_document', 'tracking', 'motiv'], ...exceptii.map(r => [r.rand, r.nr_document, r.tracking, r.motiv])]
       .map(r => r.map(celula).join(';')).join('\r\n')
-    descarcaBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'exceptii-postale.csv')
+    descarcaBlob(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }), 'exceptii-postale.csv')
   }
   if (!poateScrie) return null
   return <div>

@@ -38,6 +38,7 @@ function csv(s, sep) {
 }
 
 export function citesteFisierPostal(arrayBuffer, numeFisier) {
+  let date1904 = false
   let rows
   if (/\.csv$/i.test(numeFisier)) {
     const s = new TextDecoder('utf-8', { fatal: true }).decode(arrayBuffer).replace(/^\uFEFF/, '')
@@ -54,6 +55,7 @@ export function citesteFisierPostal(arrayBuffer, numeFisier) {
     rows = csv(s, counts[';'] >= counts[','] ? ';' : ',')
   } else if (/\.xlsx?$/i.test(numeFisier)) {
     const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: false })
+    date1904 = !!wb.Workbook?.WBProps?.date1904   // Copilot f9 r1 P3-01: registrele cu baza 1904 au serialele decalate cu 1462 de zile
     const sh = wb.Sheets[wb.SheetNames[0]]
     if (!sh?.['!ref']) throw new Error('Fișierul nu are date.')
     const range = XLSX.utils.decode_range(sh['!ref'])
@@ -71,7 +73,7 @@ export function citesteFisierPostal(arrayBuffer, numeFisier) {
     if (r.cells.slice(coloane.length).some(v => text(v))) throw new Error(`Rândul ${r.line}: valori fără antet.`)
     return Object.assign(Object.create(null), Object.fromEntries(coloane.map((c, i) => [c, typeof r.cells[i] === 'string' ? r.cells[i].trim() : r.cells[i] ?? ''])), { __rand: r.line })
   })
-  return { coloane, randuri }
+  return { coloane, randuri, date1904 }
 }
 
 export function ghicesteMaparea(coloane) {
@@ -83,10 +85,10 @@ export function ghicesteMaparea(coloane) {
   return Object.fromEntries(Object.entries(reguli).map(([k, re]) => [k, coloane.find(c => re.test(simplu(c))) || '']))
 }
 
-export function parseazaData(v) {
+export function parseazaData(v, { date1904 = false } = {}) {
   let y, m, d
   if (typeof v === 'number' && Number.isFinite(v)) {
-    const dt = XLSX.SSF.parse_date_code(v)
+    const dt = XLSX.SSF.parse_date_code(date1904 ? v + 1462 : v)
     if (!dt) return null
     ;({ y, m, d } = dt)
   } else if (v instanceof Date && !isNaN(v)) {
@@ -126,36 +128,46 @@ export function motivRetur(v) {
   return null
 }
 
-export function propune(randuri, mapare, modImplicit, convocari) {
+export function propune(randuri, mapare, modImplicit, convocari, { date1904 = false } = {}) {
   if (!['expediere', 'ar', 'retur'].includes(modImplicit)) throw new Error('Mod implicit invalid.')
   if ((!mapare.nr_document && !mapare.nr_tracking) || !mapare.data) throw new Error('Mapează documentul sau tracking-ul și data.')
-  const rezultat = { aplicabile: [], deja: [], exceptii: [] }, vazute = new Set()
+  const rezultat = { aplicabile: [], deja: [], exceptii: [] }
   const docs = new Map(), tracks = new Map()
   for (const c of convocari) {
     for (const [map, k] of [[docs, document(c.nr_document)], [tracks, tracking(c.nr_tracking)]]) {
       if (k) map.set(k, [...(map.get(k) || []), c])
     }
   }
+  // Copilot f9 r1 P2-02: același AWB din fișier pe rânduri cu numere de convocare diferite = contradicție, toate rândurile la excepții
+  const docuriPeAwb = new Map()
+  for (const r of randuri) {
+    const t = tracking(r[mapare.nr_tracking]); if (!t) continue
+    const d = document(r[mapare.nr_document]) || '(fără număr)'
+    docuriPeAwb.set(t, new Set([...(docuriPeAwb.get(t) || []), d]))
+  }
+  const valide = []   // trecerea 1: fiecare rând se evaluează independent; nimic nu „rezervă” convocarea
   randuri.forEach((r, i) => {
     const nr_document = document(r[mapare.nr_document]), nr_tracking = tracking(r[mapare.nr_tracking])
     const baza = { rand: r.__rand ?? i + 2, nr_document, tracking: nr_tracking }
     const exceptie = motiv => rezultat.exceptii.push({ ...baza, motiv })
-    let lista = nr_document ? docs.get(nr_document) : null
-    if (!lista?.length) lista = nr_tracking ? tracks.get(nr_tracking) : null
+    if (nr_tracking && docuriPeAwb.get(nr_tracking)?.size > 1) return exceptie('același AWB apare la mai multe convocări în fișier')
+    // un nr_document dat explicit, dar inexistent, NU cade pe tracking (Gemini/Copilot f9 r1)
+    if (nr_document && !docs.get(nr_document)?.length) return exceptie('convocare inexistentă pentru numărul din fișier')
+    const lista = nr_document ? docs.get(nr_document) : (nr_tracking ? tracks.get(nr_tracking) : null)
     if (!lista?.length) return exceptie('fără convocare')
     if (lista.length !== 1) return exceptie('tracking pe mai multe convocări / document ambiguu')
     const c = lista[0], tip = clasificaEveniment(r[mapare.eveniment], modImplicit)
+    // Copilot f9 r1 P2-01: numărul și AWB-ul trebuie să indice aceeași convocare
+    if (nr_tracking && (tracks.get(nr_tracking) || []).some(x => x.id !== c.id)) return exceptie('AWB-ul aparține altei convocări')
+    if (tip !== 'expediere' && nr_tracking && c.nr_tracking && tracking(c.nr_tracking) !== nr_tracking) return exceptie(`tracking diferit de cel al convocării (${c.nr_tracking})`)
     const item = { ...baza, nr_document: c.nr_document, conv_id: c.id, tip }
-    const key = `${c.id}/${tip}`
-    if (vazute.has(key)) return exceptie('duplicat în fișier')
-    vazute.add(key)
-    const data = parseazaData(r[mapare.data])
+    const data = parseazaData(r[mapare.data], { date1904 })
     if (!data) return exceptie('dată lipsă sau invalidă (2025–2030)')
     let patch
     if (tip === 'expediere') {
       if (nr_tracking && c.nr_tracking != null && tracking(c.nr_tracking) !== nr_tracking) return exceptie(`conflict: deja expediată la ${c.data_expediere || '-'} / tracking ${c.nr_tracking}`)
       if (c.data_expediere != null) {
-        if (c.data_expediere === data && (!nr_tracking || tracking(c.nr_tracking) === nr_tracking)) { rezultat.deja.push(item); return }
+        if (c.data_expediere === data && (!nr_tracking || tracking(c.nr_tracking) === nr_tracking)) return valide.push({ fel: 'deja', item, baza })
         return exceptie(`conflict: deja expediată la ${c.data_expediere} / tracking ${c.nr_tracking || '-'}`)
       }
       patch = { data_expediere: data }
@@ -165,16 +177,18 @@ export function propune(randuri, mapare, modImplicit, convocari) {
       if (data < c.data_expediere) return exceptie('AR înainte de expediere')
       if (c.retur) return exceptie('are retur — verifică manual')
       if (c.data_confirmare_primire != null) {
-        if (c.data_confirmare_primire === data) { rezultat.deja.push(item); return }
+        if (c.data_confirmare_primire === data) return valide.push({ fel: 'deja', item, baza })
         return exceptie('conflict: AR înregistrat la altă dată')
       }
       patch = { data_confirmare_primire: data }
     } else {
       const motiv = motivRetur(r[mapare.motiv])
       if (!motiv) return exceptie('motiv de retur lipsă sau nerecunoscut')
+      if (!c.data_expediere) return exceptie('retur fără expediere')
+      if (data < c.data_expediere) return exceptie('retur înainte de expediere')
       if (c.data_confirmare_primire) return exceptie('are AR — verifică manual')
       if (c.retur != null || c.retur_data != null) {
-        if (c.retur === motiv && c.retur_data === data) { rezultat.deja.push(item); return }
+        if (c.retur === motiv && c.retur_data === data) return valide.push({ fel: 'deja', item, baza })
         return exceptie('conflict: retur deja înregistrat')
       }
       patch = { retur: motiv, retur_data: data }
@@ -182,8 +196,17 @@ export function propune(randuri, mapare, modImplicit, convocari) {
     const vechi = Object.fromEntries(Object.keys(patch).map(k => [k, c[k] ?? null]))
     // Snapshot of ALL decision fields protects AR vs retur and concurrent tracking edits.
     const conditii = Object.fromEntries(CAMPURI.map(k => [k, c[k] ?? null]))
-    rezultat.aplicabile.push({ ...item, patch, vechi, conditii })
+    valide.push({ fel: 'aplicabil', item: { ...item, patch, vechi, conditii }, baza })
   })
+  // Trecerea 2 (Copilot f9 r1 P3-02): mai multe rânduri valide pe aceeași convocare nu se rezolvă după ordine — toate devin excepții
+  const pe = new Map()
+  for (const v of valide) pe.set(v.item.conv_id, [...(pe.get(v.item.conv_id) || []), v])
+  for (const v of valide) {
+    if (pe.get(v.item.conv_id).length > 1) rezultat.exceptii.push({ ...v.baza, motiv: 'mai multe evenimente pentru aceeași convocare în fișier' })
+    else if (v.fel === 'deja') rezultat.deja.push(v.item)
+    else rezultat.aplicabile.push(v.item)
+  }
+  rezultat.exceptii.sort((a, b) => a.rand - b.rand)
   return rezultat
 }
 

@@ -44,6 +44,11 @@ describe('date, mapare si clasificare', () => {
     ['2026-11-02junk', null], ['', null], [NaN, null]])('parseazaData %s', (v, expected) => {
     expect(parseazaData(v)).toBe(expected)
   })
+  it('Excel cu baza 1904: serialul se decaleaza cu 1462 de zile (Copilot f9 r1 P3-01)', () => {
+    expect(parseazaData(46328)).toBe('2026-11-02')
+    expect(parseazaData(46328 - 1462, { date1904: true })).toBe('2026-11-02')
+  })
+
   it('ghiceste antete cu diacritice si majuscule', () => {
     expect(ghicesteMaparea(['Referință', 'Cod trimitere', 'DATA', 'Status', 'Observații'])).toEqual({
       nr_document: 'Referință', nr_tracking: 'Cod trimitere', data: 'DATA', eveniment: 'Status', motiv: 'Observații',
@@ -88,23 +93,41 @@ describe('propune', () => {
   })
   it('retur cere motiv, refuza AR si trateaza deja/conflict inclusiv retur_data orfan', () => {
     expect(propunere({}, {}, 'retur').exceptii[0].motiv).toMatch(/motiv/)
-    expect(propunere({ motiv: 'refuz' }, { data_confirmare_primire: '2026-11-01' }, 'retur').exceptii[0].motiv).toMatch(/are AR/)
-    expect(propunere({ motiv: 'refuz' }, {}, 'retur').aplicabile[0].patch).toEqual({ retur: 'refuz', retur_data: '2026-11-02' })
-    expect(propunere({ motiv: 'refuz' }, { retur: 'refuz', retur_data: '2026-11-02' }, 'retur').deja).toHaveLength(1)
-    expect(propunere({ motiv: 'refuz' }, { retur: 'mutat', retur_data: '2026-11-02' }, 'retur').exceptii).toHaveLength(1)
-    expect(propunere({ motiv: 'refuz' }, { retur_data: '2026-11-02' }, 'retur').exceptii).toHaveLength(1)
+    const exp = { data_expediere: '2026-11-01' }
+    expect(propunere({ motiv: 'refuz' }, { ...exp, data_confirmare_primire: '2026-11-01' }, 'retur').exceptii[0].motiv).toMatch(/are AR/)
+    expect(propunere({ motiv: 'refuz' }, exp, 'retur').aplicabile[0].patch).toEqual({ retur: 'refuz', retur_data: '2026-11-02' })
+    expect(propunere({ motiv: 'refuz' }, { ...exp, retur: 'refuz', retur_data: '2026-11-02' }, 'retur').deja).toHaveLength(1)
+    expect(propunere({ motiv: 'refuz' }, { ...exp, retur: 'mutat', retur_data: '2026-11-02' }, 'retur').exceptii).toHaveLength(1)
+    expect(propunere({ motiv: 'refuz' }, { ...exp, retur_data: '2026-11-02' }, 'retur').exceptii).toHaveLength(1)
+    // Gemini f9 r1 P2: retur fara expediere / inainte de expediere -> exceptie
+    expect(propunere({ motiv: 'refuz' }, {}, 'retur').exceptii[0].motiv).toBe('retur fără expediere')
+    expect(propunere({ motiv: 'refuz' }, { data_expediere: '2026-11-05' }, 'retur').exceptii[0].motiv).toBe('retur înainte de expediere')
   })
   it('tracking unic ca rezerva, ambiguu refuzat, document prioritar', () => {
     expect(propunere({ doc: '', awb: ' ab 123 ' }, { nr_tracking: 'AB123' }).aplicabile).toHaveLength(1)
     const cs = [convocare({ nr_tracking: 'AB123' }), convocare({ id: 'conv-fictiva-2', nr_document: 'C-0013', nr_tracking: 'AB123' })]
     expect(propune([rand({ doc: '', awb: 'ab123' })], mapare, 'expediere', cs).exceptii[0].motiv).toMatch(/mai multe/)
-    expect(propune([rand({ awb: 'ab123' })], mapare, 'expediere', cs).aplicabile[0].conv_id).toBe('conv-fictiva-1')
-    expect(propunere({ doc: 'C-9999' }).exceptii[0].motiv).toBe('fără convocare')
+    // Copilot f9 r1 P2-01: documentul gasit, dar AWB-ul e (si) al altei convocari -> exceptie, nu alegere tacita
+    expect(propune([rand({ awb: 'ab123' })], mapare, 'expediere', cs).exceptii[0].motiv).toMatch(/altei convoc/)
+    expect(propune([rand({ awb: 'ab123' })], mapare, 'expediere', [cs[0]]).aplicabile).toHaveLength(1)
+    expect(propune([rand({ awb: 'ab123' })], mapare, 'expediere', [convocare({ nr_tracking: null })]).aplicabile[0].conv_id).toBe('conv-fictiva-1')
+    expect(propunere({ doc: 'C-9999' }).exceptii[0].motiv).toBe('convocare inexistentă pentru numărul din fișier')
+    // Gemini f9 r1 P2: numar gresit + tracking al altei convocari -> NU cade pe tracking
+    expect(propune([rand({ doc: 'C-9999', awb: 'ab123' })], mapare, 'expediere', cs).exceptii[0].motiv).toMatch(/inexistent/)
+    expect(propune([rand({ awb: 'ZZ999', status: 'livrat' })], mapare, 'expediere', [convocare({ nr_tracking: 'AB123', data_expediere: '2026-11-01' })]).exceptii[0].motiv).toMatch(/tracking diferit/)
   })
   it('duplicatul nu dispare si evenimentul poate schimba modul implicit', () => {
+    // Copilot f9 r1 P3-02: doua randuri valide pe aceeasi convocare -> AMBELE la exceptii (nu castiga primul)
     const r = propune([rand(), rand({ __rand: 8 })], mapare, 'expediere', [convocare()])
-    expect(r.aplicabile).toHaveLength(1)
-    expect(r.exceptii[0]).toMatchObject({ rand: 8, motiv: 'duplicat în fișier' })
+    expect(r.aplicabile).toHaveLength(0)
+    expect(r.exceptii.map(e => e.motiv)).toEqual(['mai multe evenimente pentru aceeași convocare în fișier', 'mai multe evenimente pentru aceeași convocare în fișier'])
+    // un rand invalid nu blocheaza randul valid de dupa el
+    const r2 = propune([rand({ data: 'invalid' }), rand({ __rand: 8 })], mapare, 'expediere', [convocare()])
+    expect(r2.aplicabile).toHaveLength(1); expect(r2.exceptii).toHaveLength(1)
+    // Copilot f9 r1 P2-02: acelasi AWB nou pe doua convocari diferite in fisier -> ambele exceptii
+    const doua = [convocare({ nr_tracking: null }), convocare({ id: 'conv-fictiva-2', nr_document: 'C-0013', nr_tracking: null })]
+    const r3 = propune([rand({ awb: 'NOU1' }), rand({ doc: 'C-0013', awb: 'NOU1', __rand: 8 })], mapare, 'expediere', doua)
+    expect(r3.aplicabile).toHaveLength(0); expect(r3.exceptii.every(e => /același AWB/.test(e.motiv))).toBe(true)
     expect(propunere({ status: 'livrat' }, { data_expediere: '2026-11-01' }).aplicabile[0].tip).toBe('ar')
     expect(propunere({ data: 'invalid' }).exceptii).toHaveLength(1)
     expect(() => propune([], {}, 'expediere', [])).toThrow()
@@ -175,7 +198,9 @@ describe('aplica CAS', () => {
   })
   it('AR si retur din acelasi snapshot nu se pot aplica amandoua', async () => {
     const c = convocare({ data_expediere: '2026-11-01' })
-    const prop = propune([rand({ status: 'AR' }), rand({ status: 'retur', motiv: 'refuz', __rand: 8 })], mapare, 'expediere', [c])
+    // in acelasi fisier ambele devin exceptii; aici simulam doua importuri pe acelasi snapshot (doua ferestre deschise)
+    expect(propune([rand({ status: 'AR' }), rand({ status: 'retur', motiv: 'refuz', __rand: 8 })], mapare, 'expediere', [c]).aplicabile).toHaveLength(0)
+    const prop = { aplicabile: [...propune([rand({ status: 'AR' })], mapare, 'expediere', [c]).aplicabile, ...propune([rand({ status: 'retur', motiv: 'refuz' })], mapare, 'expediere', [c]).aplicabile] }
     expect(prop.aplicabile).toHaveLength(2)
     const stare = { ...c, stare: 'activ', canal: 'posta', sters_la: null }
     const db = { from() {
