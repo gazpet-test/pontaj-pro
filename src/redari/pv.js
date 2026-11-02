@@ -91,9 +91,28 @@ export const CHEI_PV_B = [
   'semnatar_tgz','semnatar_uat','stare_teren_alta','suprafata','tarla','tronson','uat','verificare_data',
   'verificare_de_gazpet','verificare_de_tgz','zi1','zi2','zi3',
 ]
-export function verificaDatePvB({ proiect = {}, uat = {}, parcela = {}, pv = {} }) {
+// One predicate for references, recipients and the modal guard.
+function pvsASemnate({ pvs = [], parcela = {} }) {
+  return pvs.filter(p => parcela.id != null && p.parcela_id === parcela.id && p.tip === 'A' && p.stare === 'semnat' && p.sters_la == null)
+}
+export function detinatoriFaraPvA({ detinatori = [], ...date }) {
+  const semnatari = new Set(pvsASemnate(date).map(p => p.detinator_id))
+  return detinatori.filter(d => d.sters_la == null && !semnatari.has(d.id))
+}
+export function referintaPvA(date) {
+  const semnate = pvsASemnate(date).slice().sort((a,b) => (a.data_pv ?? '').localeCompare(b.data_pv ?? '') || a.nr_pv.localeCompare(b.nr_pv))
+  if (!semnate.length) return ''
+  // Calendar dates from DB: compare YYYY-MM-DD without timezone conversion.
+  const ultimaData = semnate.map(p => p.semnat_primit_data || p.data_pv).filter(Boolean).sort().at(-1)
+  const referinte = semnate.map(p => p.nr_pv + ' din ' + formatDataRo(p.data_pv)).join(', ')
+  const noua = ultimaData && date.parcela?.verificare_data > ultimaData
+    ? ' Verificare noua a terenului la data de ' + formatDataRo(date.parcela.verificare_data) + '.' : ''
+  return 'Pe aceasta parcela exista PV A semnat: ' + referinte + '. Prezentul PV B priveste numai detinatorii fara PV A semnat.' + noua
+}
+export function verificaDatePvB({ proiect = {}, uat = {}, parcela = {}, pv = {}, detinatori = [], pvs = [] }) {
   const lipsuri = verificaDatePvA({proiect,uat,parcela,pv,detinator:{nume:'B'}})
     .filter(k => k !== 'modul constatarii')
+  if (detinatori.some(d => d.sters_la == null) && !detinatoriFaraPvA({detinatori,pvs,parcela}).length) lipsuri.push('toti detinatorii au PV A semnat')
   if (!MOTIVE_PV_B.includes(pv.motiv_pv_b)) lipsuri.push('motivul PV B')
   if (!plin(parcela.verificare_data)) lipsuri.push('data verificarii pe teren')
   if (![parcela.verificare_de_gazpet,parcela.verificare_de_tgz].some(plin)) lipsuri.push('comisia de verificare')
@@ -106,7 +125,7 @@ export async function genereazaPvB(date) {
   if (date.strict !== false && lipsuri.length) throw new Error('Lipsesc: ' + lipsuri.join('; '))
   const comune = campuriComune(date)
   const campuri = Object.fromEntries(CHEI_PV_B.map(k => [k, comune[k] ?? '']))
-  const activi = detinatori.filter(d => d.sters_la == null)
+  const activi = detinatoriFaraPvA(date)
   const ids = new Set(activi.map(d => d.id))
   const active = convocari.filter(c => ids.has(c.detinator_id) && c.sters_la == null && c.stare === 'activ')
   const ultima = lista => lista.slice().sort((a,b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')) || String(b.id).localeCompare(String(a.id)))[0]
@@ -116,6 +135,7 @@ export async function genereazaPvB(date) {
   // A response to a resending must belong to that recipient and follow its dispatch.
   const raspRel = rel && rel.data_expediere ? ultimulRaspuns(raspunsuri.filter(r => r.detinator_id === rel.detinator_id && r.data >= rel.data_expediere)) : null
   Object.assign(campuri, {
+    pv_a_referinta: referintaPvA(date),
     nume: activi.map(d => d.nume).filter(plin).join('; ') || 'neidentificat',
     bifa_neidentificat:bifa(!activi.length || activi.some(d => d.calitate === 'neidentificat')),
     bifa_fara_adresa:bifa(activi.some(d => d.adresa_cunoscuta === false)),
