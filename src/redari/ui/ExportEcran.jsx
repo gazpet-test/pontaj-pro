@@ -75,7 +75,13 @@ export async function citesteDateExport(client, proiectId, tip, curent) {
     return { parcela, uat, detinator, contact: cs.get(detinator.id), convocari: conv.get(detinator.id), raspunsuri: rasp.get(detinator.id), pvs: pv.get(parcela.id), stare, responsabil: rs.get(uat.responsabil_id) }
   })
   const registru = randuriRegistru(date, { pentruTgz: tip === 'TGZ' })
-  if (registru.length !== agregate.reduce((n, r) => n + Number(r.numar), 0)) throw new Error('Sursele s-au schimbat sau exportul este incomplet. Reincercati.')
+  // Copilot f6 r1 P2-01: distributia (UAT, stare) a randurilor exportate trebuie sa fie identica cu centralizatorul citit,
+  // altfel cele doua foi s-ar contrazice (o stare schimbata in timpul exportului) -> refuz, se reia.
+  const distributie = m => [...m].sort().join('|')
+  const dinRegistru = new Map(), dinVedere = new Map()
+  for (const d of date) { const k = d.uat.id + '/' + d.stare; dinRegistru.set(k, (dinRegistru.get(k) || 0) + 1) }
+  for (const r of agregate) { const k = r.uat_id + '/' + r.stare; dinVedere.set(k, (dinVedere.get(k) || 0) + Number(r.numar)) }
+  if (registru.length !== date.length || distributie(dinRegistru) !== distributie(dinVedere)) throw new Error('Sursele s-au schimbat in timpul exportului sau exportul este incomplet. Reincercati.')
   return { registru, centralizator, numar: registru.length }
 }
 
@@ -100,7 +106,7 @@ export default function ExportEcran({ proiect }) {
   }, [proiect.id])
   const poateRegistru = nivel === 'admin' || nivel === 'editor'
   async function exporta(tip) {
-    if (ocupat.current || !nivel || (tip !== 'centralizator' && !poateRegistru)) return
+    if (ocupat.current || !['admin','editor','viewer'].includes(nivel) || (tip !== 'centralizator' && !poateRegistru)) return
     ocupat.current = true; setLucru(true); setMesaj('')
     const token = generatie.current, id = proiect.id, curent = () => token === generatie.current
     try {

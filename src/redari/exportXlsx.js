@@ -59,9 +59,12 @@ export function randRegistru({ parcela = {}, uat = {}, detinator = {}, contact =
 // Free text cannot safely be classified as an address by regex. Suppress it for TGZ.
 // Other string cells containing obvious contact syntax fail closed as a whole cell.
 const LIBERE_TGZ = new Set(['N', 'Y', 'AM'])
+// Euristica de contact DOAR pe coloanele text introduse de oameni; datele (Q, S, W...), AWB-ul (R), numerele
+// de document si codurile raman (altfel datele si AWB-ul ar fi golite - gasit de chat la verificarea feliei 6).
+const EURISTIC_TGZ = new Set(['D', 'E', 'I', 'J', 'K', 'L', 'AL'])
 const randTgz = r => Object.fromEntries(COLOANE_REGISTRU.filter(c => c.col !== 'O').map(({ col }) => {
   const v = r[col] ?? ''
-  return [col, LIBERE_TGZ.has(col) || (typeof v === 'string' && /(?:\+?\d[\d ().-]{7,}\d|@|\b(?:strada|str\.|bulevard|adresa)\b)/i.test(v)) ? '' : v]
+  return [col, LIBERE_TGZ.has(col) || (EURISTIC_TGZ.has(col) && typeof v === 'string' && /(?:\+?\d[\d ().-]{7,}\d|@|\b(?:strada|bulevard|adresa|aleea|calea|soseaua)\b|\b(?:str|bd|bdul|sos|al)\.)/i.test(v)) ? '' : v]
 }))
 export function randuriRegistru(date, { pentruTgz = false } = {}) {
   return date.map(randRegistru).sort((a, b) => compara(a.B, b.B) || compara(a.C, b.C) || compara(a.A, b.A) || compara(a.J, b.J))
@@ -85,7 +88,8 @@ export function foaieCentralizator(randuriCentralizator, uats) {
     ['Stare', ...lista.map(u => u.nume), 'TOTAL'],
     ...STARI_PROCES.map(s => { const valori = lista.map(u => matrice.get(u.id).get(s.cod)); return [etichetaStare(s.cod), ...valori, suma(valori)] }),
     ['TOTAL randuri (parcela + persoana)', ...totaluri, suma(totaluri)],
-    ['% parcele inchise (PV A sau B)', ...inchise.map((n, i) => procent(n, totaluri[i])), procent(suma(inchise), suma(totaluri))],
+    // Copilot f6 r1 P2-02: procentul e pe randuri (parcela + persoana), ca red_v_centralizator_uat; eticheta o spune explicit
+    ['% randuri inchise (PV A sau B; perechi parcela + persoana)', ...inchise.map((n, i) => procent(n, totaluri[i])), procent(suma(inchise), suma(totaluri))],
   ]
 }
 

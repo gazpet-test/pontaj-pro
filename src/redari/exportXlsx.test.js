@@ -49,6 +49,14 @@ describe('Model_6', () => {
     expect(randuri[0]).not.toHaveProperty('O')
     expect(JSON.stringify(randuri)).not.toMatch(/0700000000|example\.invalid|strada Fictiva/)
     expect(randuri[0].J).toBe('EXEMPLU Doi')
+    // datele si AWB-ul nu sunt confundate cu telefoane in varianta TGZ
+    const cu = {...baza(), convocari:[conv('c1','2026-02-01',{nr_tracking:'RO123456789RO', data_confirmare_primire:'2026-02-05'})]}
+    expect(randuriRegistru([cu],{pentruTgz:true})[0]).toMatchObject({ Q:'01.02.2026', R:'RO123456789RO', S:'05.02.2026' })
+    // Copilot f6 r1 P3-01: abrevierile de adresa in coloanele text ramase
+    for (const t of ['Str. Lalelelor 7','Bd. Unirii 3','Aleea Rozelor','sos. Nationala']) {
+      const x = {...baza(), detinator:{...baza().detinator, cota:t}}
+      expect(randuriRegistru([x],{pentruTgz:true})[0].L).toBe('')
+    }
     expect(randuriRegistru([a])[0].O).toBe('0700000000')
   })
   it('timestamp la miezul noptii se afiseaza in Bucuresti, data calendaristica ramane identica', () => {
@@ -61,8 +69,8 @@ describe('Model_6', () => {
     expect(m[1]).toEqual(['De convocat',0,2,2])
     expect(m[12]).toEqual(['PV A semnat',0,1,1])
     expect(m[13]).toEqual(['TOTAL randuri (parcela + persoana)',0,3,3])
-    expect(m[14]).toEqual(['% parcele inchise (PV A sau B)',0,33.3,33.3])
-    expect(foaieCentralizator([],[]).at(-1)).toEqual(['% parcele inchise (PV A sau B)',0])
+    expect(m[14]).toEqual(['% randuri inchise (PV A sau B; perechi parcela + persoana)',0,33.3,33.3])
+    expect(foaieCentralizator([],[]).at(-1)).toEqual(['% randuri inchise (PV A sau B; perechi parcela + persoana)',0])
     expect(() => foaieCentralizator([{uat_id:'u1',stare:'necunoscut',numar:1}],[{id:'u1',nume:'X'}])).toThrow()
   })
   it.each([false,true])('scriere/recitire XLSX si antete rand 2 TGZ=%s', pentruTgz => {
@@ -129,5 +137,11 @@ describe('citirea exportului', () => {
     const agregat = clientFictiv(tabele)
     await citesteDateExport(agregat,'proiect','centralizator',()=>true)
     expect([...new Set(agregat.apeluri.map(a=>a[0]))]).toEqual(['red_uat','red_v_centralizator_uat'])
+  })
+  it('stare schimbata intre centralizator si registru refuza exportul (Copilot f6 r1 P2-01)', async () => {
+    const tabele = {red_uat:[[{id:'u1',nume:'Fictiv'}]], red_v_centralizator_uat:[[{uat_id:'u1',stare:'DE_CONVOCAT',numar:1}]],
+      red_v_parcele:[[{id:'p1',uat_id:'u1',id_parcela:'TEST'}]], red_detinatori:[[{id:'d1',parcela_id:'p1',nume:'FICTIV'}]],
+      red_detinatori_contact:[[{detinator_id:'d1',adresa_cunoscuta:true}]],red_v_stare_parcela:[[{parcela_id:'p1',detinator_id:'d1',stare:'PV_A_SEMNAT'}]]}
+    await expect(citesteDateExport(clientFictiv(tabele),'proiect','intern',()=>true)).rejects.toThrow('schimbat')
   })
 })
