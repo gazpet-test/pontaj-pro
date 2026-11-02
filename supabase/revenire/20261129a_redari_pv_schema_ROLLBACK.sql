@@ -70,6 +70,13 @@ BEGIN
     OR to_regclass('public.red_convocari_reluare_uq') IS NOT NULL THEN RAISE EXCEPTION '20261129a revenire: obiecte ramase'; END IF;
   IF has_column_privilege('authenticated','public.red_parcele','valoare_lei','SELECT,INSERT,UPDATE')
     OR NOT coalesce((SELECT 'security_invoker=on'=ANY(reloptions) FROM pg_class WHERE oid='public.red_v_parcele'::regclass),false) THEN RAISE EXCEPTION '20261129a revenire: vedere/valoare_lei'; END IF;
+  -- Gemini r1 P2 / Copilot r1 P3: vederea revine EXACT la cele 21 de coloane din 20261126a, în ordine; fără ACL pe coloane; GRANT SELECT pentru authenticated păstrat
+  IF (SELECT string_agg(attname::text, ',' ORDER BY attnum) FROM pg_attribute WHERE attrelid='public.red_v_parcele'::regclass AND attnum>0 AND NOT attisdropped)
+       IS DISTINCT FROM 'id,proiect_id,uat_id,id_parcela,tronson,km_de_la,km_pana_la,sat,tarla,nr_cadastral,poz_hg,suprafata_temporara_mp,categoria_folosinta,articol_deviz,cantitate,observatii,cheie_sursa,sters_la,sters_de,sters_motiv,created_at'
+     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.red_v_parcele'::regclass AND attnum>0 AND attacl IS NOT NULL)
+     OR NOT has_table_privilege('authenticated','public.red_v_parcele','SELECT') THEN
+    RAISE EXCEPTION '20261129a revenire: vederea red_v_parcele nu e identica cu 20261126a (coloane / ACL)';
+  END IF;
   IF (SELECT md5(string_agg(tablename || '|' || policyname || '|' || cmd || '|' || roles::text || '|' || coalesce(qual,'') || '|' || coalesce(with_check,''), E'\n' ORDER BY tablename,policyname)) FROM pg_policies WHERE schemaname='public' AND tablename IN ('red_procese_verbale','red_parcele','red_convocari','red_detinatori','red_uat')) IS DISTINCT FROM '2d8f0021e73320ed176e889abc764c92' THEN RAISE EXCEPTION '20261129a revenire: politici schimbate'; END IF;
   IF to_regclass('supabase_migrations.schema_migrations') IS NOT NULL THEN DELETE FROM supabase_migrations.schema_migrations WHERE version='20261129120000'; END IF;
 END $post$;
