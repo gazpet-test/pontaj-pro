@@ -99,6 +99,51 @@ BEGIN
 
   RAISE NOTICE 'TEST6 OK';
 END $t$;
+-- Copilot f8a r2 P2: PV A/B neanulat cu tronson != destinatie blocheaza mutarea (direct 23514, RPC P0001); anulat sau NULL -> permis
+SELECT pg_temp.r29g_ca(NULL,'postgres');
+DO $t$
+DECLARE pid uuid; det uuid;
+BEGIN
+  INSERT INTO public.red_parcele(proiect_id,uat_id,id_parcela,tronson,poz_hg)
+    VALUES(pg_temp.r29g_g('pr')::uuid,pg_temp.r29g_g('u')::uuid,'ZXG-0006',6,'30') RETURNING id INTO pid;
+  INSERT INTO public.red_detinatori(parcela_id,nume,nume_normalizat,calitate) VALUES(pid,'FICTIV ZXG6','FICTIV ZXG6','proprietar') RETURNING id INTO det;
+  INSERT INTO public.red_procese_verbale(tip,parcela_id,detinator_id,uat_id,tronson,nr_pv,data_pv,stare,fisier_semnat_path,semnat_primit_data)
+    VALUES('A',pid,det,pg_temp.r29g_g('u')::uuid,6,'PVA-ZXG-TEST-6','2026-11-02','semnat','test/scan6.pdf','2026-11-02');
+  PERFORM set_config('r29g.p6',pid::text,true);
+END $t$;
+SELECT pg_temp.r29g_ca(pg_temp.r29g_g('owner')::uuid,'authenticated');
+DO $t$
+BEGIN
+  IF NOT pg_temp.r29g_refuza(format('UPDATE public.red_parcele SET tronson=7 WHERE id=%L',pg_temp.r29g_g('p6')),'23514') THEN RAISE EXCEPTION 'TEST8 FAIL: direct PV A'; END IF;
+  IF NOT pg_temp.r29g_refuza(format('UPDATE public.red_parcele SET tronson=NULL WHERE id=%L',pg_temp.r29g_g('p6')),'23514') THEN RAISE EXCEPTION 'TEST8 FAIL: direct PV A -> NULL'; END IF;
+  IF NOT pg_temp.r29g_refuza(format('SELECT public.fn_red_seteaza_tronson(%L,NULL,30,30,7)',pg_temp.r29g_g('pr')),'P0001') THEN RAISE EXCEPTION 'TEST8 FAIL: RPC PV A'; END IF;
+  IF public.fn_red_seteaza_tronson(pg_temp.r29g_g('pr')::uuid,NULL,30,30,6) IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'TEST8 FAIL: same tronson'; END IF;
+  RAISE NOTICE 'TEST8a OK PV A pe alt tronson blocheaza';
+END $t$;
+SELECT pg_temp.r29g_ca(NULL,'postgres');
+UPDATE public.red_procese_verbale SET stare='anulat',motiv_anulare='TEST 29g' WHERE nr_pv='PVA-ZXG-TEST-6';
+SELECT pg_temp.r29g_ca(pg_temp.r29g_g('owner')::uuid,'authenticated');
+DO $t$
+BEGIN
+  IF public.fn_red_seteaza_tronson(pg_temp.r29g_g('pr')::uuid,NULL,30,30,7) IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'TEST8 FAIL: after annul'; END IF;
+  RAISE NOTICE 'TEST8b OK dupa anulare se muta';
+END $t$;
+-- Copilot f8a r2 P3-01: cerere anon / authenticated fara sub nu e scutita ca mentenanta
+SELECT pg_temp.r29g_ca(NULL,'authenticated');
+DO $t$ BEGIN
+  IF NOT pg_temp.r29g_refuza(format('UPDATE public.red_parcele SET tronson=8 WHERE id=%L',pg_temp.r29g_g('p6')),'42501') THEN RAISE EXCEPTION 'TEST9 FAIL authenticated fara sub'; END IF;
+  RAISE NOTICE 'TEST9a OK';
+END $t$;
+SELECT pg_temp.r29g_ca(NULL,'anon');
+DO $t$ BEGIN
+  IF NOT pg_temp.r29g_refuza(format('UPDATE public.red_parcele SET tronson=8 WHERE id=%L',pg_temp.r29g_g('p6')),'42501') THEN RAISE EXCEPTION 'TEST9 FAIL anon'; END IF;
+  RAISE NOTICE 'TEST9b OK';
+END $t$;
+SELECT pg_temp.r29g_ca(NULL,'postgres');
+DO $t$ BEGIN
+  IF (SELECT tronson FROM public.red_parcele WHERE id=pg_temp.r29g_g('p6')::uuid) IS DISTINCT FROM 7 THEN RAISE EXCEPTION 'TEST9 FAIL: tronson schimbat'; END IF;
+  RAISE NOTICE 'TEST9 OK';
+END $t$;
 SELECT pg_temp.r29g_ca(NULL,'anon');
 DO $t$ BEGIN
   IF NOT pg_temp.r29g_refuza('SELECT public.fn_red_rezerva_numere_parcele(''ZXG'',1)','42501')

@@ -33,8 +33,9 @@ BEGIN
     END IF;
     IF TG_TABLE_NAME = 'red_parcele' AND (to_jsonb(NEW) ->> 'tronson') IS DISTINCT FROM (to_jsonb(OLD) ->> 'tronson') THEN
       -- Copilot f8a r1 P1-01: tronsonul se schimba DOAR de admin (direct sau prin fn_red_seteaza_tronson);
-      -- fara utilizator autentificat (auth.uid() NULL) = mentenanta postgres/service, permisa.
-      IF auth.uid() IS NOT NULL AND public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN
+      -- Copilot f8a r2 P3-01: scutit doar contextul de mentenanta (fara JWT de aplicatie: postgres / service_role);
+      -- o cerere anon/authenticated fara sub NU e mentenanta (auth.role() citeste claim-ul, nu current_user - triggerul e SECURITY DEFINER).
+      IF (auth.uid() IS NOT NULL OR coalesce(auth.role(),'') IN ('anon','authenticated')) AND public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN
         RAISE EXCEPTION 'redari: tronsonul il schimba doar administratorul' USING ERRCODE='42501';
       END IF;
       -- UPDATE already holds ROW EXCLUSIVE on red_parcele: PV C creation's SHARE waits.
@@ -46,6 +47,14 @@ BEGIN
         WHERE u.proiect_id=(to_jsonb(NEW) ->> 'proiect_id')::uuid AND v.tip='C' AND v.stare<>'anulat' AND v.sters_la IS NULL
           AND (v.tronson=(to_jsonb(OLD) ->> 'tronson')::int OR v.tronson=(to_jsonb(NEW) ->> 'tronson')::int)) THEN
         RAISE EXCEPTION 'redari: tronson protejat de PV C activ' USING ERRCODE='23514';
+      END IF;
+      -- Copilot f8a r2 P2: un PV A/B neanulat care poarta deja un tronson ramane coerent cu parcela (documentul emis nu se rescrie).
+      -- Mutarea cere intai anularea PV-ului. PV A/B emis fara tronson (NULL) nu afirma niciun tronson: atribuirea initiala e permisa.
+      -- PV-ul nou blocheaza parcela FOR UPDATE inainte de INSERT; aici randul parcelei e deja blocat de UPDATE -> se vede PV-ul comis.
+      IF EXISTS (SELECT 1 FROM public.red_procese_verbale v
+        WHERE v.parcela_id=(to_jsonb(NEW) ->> 'id')::uuid AND v.tip IN ('A','B') AND v.stare<>'anulat' AND v.sters_la IS NULL
+          AND v.tronson IS NOT NULL AND v.tronson IS DISTINCT FROM (to_jsonb(NEW) ->> 'tronson')::int) THEN
+        RAISE EXCEPTION 'redari: parcela % are PV A/B emis pe alt tronson; anuleaza-l inainte de mutare', to_jsonb(NEW) ->> 'id_parcela' USING ERRCODE='23514';
       END IF;
     END IF;
     -- uat3 intra in id_parcela: nu se mai schimba cat exista parcele pe UAT (numele ramane editabil); randul UAT e deja blocat FOR UPDATE de
@@ -170,6 +179,13 @@ BEGIN
       AND (v.tronson=p_tronson OR EXISTS(SELECT 1 FROM public.red_parcele p WHERE p.id=ANY(v_ids) AND p.tronson=v.tronson))) THEN
     RAISE EXCEPTION 'redari: interval sau destinatie cu PV C activ' USING ERRCODE='P0001';
   END IF;
+  -- Copilot f8a r2 P2: aceeasi garda ca in trigger, cu mesaj agregat (cate parcele au PV A/B pe alt tronson)
+  SELECT count(DISTINCT v.parcela_id) INTO v_n FROM public.red_procese_verbale v
+    WHERE v.parcela_id=ANY(v_ids) AND v.tip IN ('A','B') AND v.stare<>'anulat' AND v.sters_la IS NULL
+      AND v.tronson IS NOT NULL AND v.tronson IS DISTINCT FROM p_tronson;
+  IF v_n>0 THEN
+    RAISE EXCEPTION 'redari: % parcele din interval au PV A/B emis pe alt tronson; anuleaza-le inainte de mutare', v_n USING ERRCODE='P0001';
+  END IF;
   -- P3-01: se numara doar parcelele al caror tronson se schimba efectiv
   UPDATE public.red_parcele SET tronson=p_tronson WHERE id=ANY(v_ids) AND tronson IS DISTINCT FROM p_tronson;
   GET DIAGNOSTICS v_n=ROW_COUNT;
@@ -177,7 +193,7 @@ BEGIN
 END $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_red_seteaza_tronson(uuid,uuid,integer,integer,integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_red_seteaza_tronson(uuid,uuid,integer,integer,integer) TO authenticated;
-COMMENT ON FUNCTION public.fn_red_seteaza_tronson(uuid,uuid,integer,integer,integer) IS 'Admin: prefix numeric poz_hg, UAT optional, parcele active; PV C activ protejeaza sursa si destinatia.';
+COMMENT ON FUNCTION public.fn_red_seteaza_tronson(uuid,uuid,integer,integer,integer) IS 'Admin: prefix numeric poz_hg, UAT optional, parcele active; PV C activ protejeaza sursa si destinatia; PV A/B emis pe alt tronson blocheaza mutarea.';
 CREATE OR REPLACE FUNCTION public.fn_red_pv_c_creeaza(p_proiect_id uuid,p_tronson int)
 RETURNS public.red_procese_verbale LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s' AS $fn$
 DECLARE ancora uuid; lipsa bigint; r public.red_procese_verbale;
@@ -212,7 +228,7 @@ BEGIN
 END $fn$;
 COMMENT ON COLUMN public.red_parcele.id_parcela IS 'Identitate imutabila {UAT3}-{nnnn}, cheia P-{uat3}, independenta de tronson.';
 COMMENT ON COLUMN public.red_parcele.tronson IS '1..11 sau NULL (neatribuit); modificabil pana la PV C activ pe sursa/destinatie in proiect.';
-COMMENT ON FUNCTION public.fn_red_legaturi() IS 'Coerenta si identitati imutabile; id_parcela={uat3}-{nnnn}; tronson modificabil fara PV C activ.';
+COMMENT ON FUNCTION public.fn_red_legaturi() IS 'Coerenta si identitati imutabile; id_parcela={uat3}-{nnnn}; tronson modificabil (doar admin) fara PV C activ si fara PV A/B emis pe alt tronson.';
 COMMENT ON TABLE public.red_numere IS 'Ultimul numar alocat pe cheie: C, PVA-{uat3}, PVB-{uat3}, PVC-T{n}, P-{uat3} (parcele).';
 DO $post$
 DECLARE f regprocedure;
@@ -224,6 +240,9 @@ BEGIN
   IF position('tronson protejat de PV C activ' in pg_get_functiondef('public.fn_red_legaturi()'::regprocedure))=0
     OR position('''^'' || v_uat3' in pg_get_functiondef('public.fn_red_legaturi()'::regprocedure))=0
     OR position('fara tronson atribuit' in pg_get_functiondef('public.fn_red_pv_c_creeaza(uuid,integer)'::regprocedure))=0
+    OR position('PV A/B emis pe alt tronson' in pg_get_functiondef('public.fn_red_legaturi()'::regprocedure))=0
+    OR position('PV A/B emis pe alt tronson' in pg_get_functiondef('public.fn_red_seteaza_tronson(uuid,uuid,integer,integer,integer)'::regprocedure))=0
+    OR position('auth.role()' in pg_get_functiondef('public.fn_red_legaturi()'::regprocedure))=0
     THEN RAISE EXCEPTION '20261129g: garzi lipsa'; END IF;
   IF to_regprocedure('public.fn_red_rezerva_numere_parcele(text,integer,integer)') IS NOT NULL THEN RAISE EXCEPTION '20261129g: semnatura veche exista'; END IF;
   FOREACH f IN ARRAY ARRAY['public.fn_red_rezerva_numere_parcele(text,integer)'::regprocedure,'public.fn_red_seteaza_tronson(uuid,uuid,integer,integer,integer)'::regprocedure] LOOP
