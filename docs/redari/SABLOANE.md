@@ -208,7 +208,7 @@ export xlsx din registru (§5).
 |---|---|---|---|
 | `sate_zi1..3` | convocator, adresa_uat | `red_uat.sate_zi1, sate_zi2, sate_zi3 text` | — |
 | `reprezentant_tgz_telefon` | convocator, adresa_uat | `red_proiecte.reprezentant_tgz_telefon text` | — |
-| `reprezentant_uat_telefon` | (nominalizare v5, Model 4 pct. 3) | `red_uat.reprezentant_uat_telefon text` | — |
+| `reprezentant_uat_telefon` | (nominalizare v5, Model 4 pct. 3) | `red_uat.reprezentant_uat_telefon text` (20261127a) | — |
 | `text_gdpr` cu UAT + link | convocator | textul din Model_1 v5 ca valoare implicită; UAT-ul și „Informarea completă” sunt în text | text generic sau marcaj `{uat}` înlocuit de cod |
 | `act_identitate`, `act_doveditor` | pv_a | NU se stochează (GDPR); rămân goale → de mână la sesiune | confirmare |
 | maparea articol_deviz → bife lucrări + `lucrari_altele` | pv_a, pv_b | constantă `articol_deviz → {sol_fertil, nivelare, arat, discuit, insamantare, gard, drum}`; sau `red_procese_verbale.lucrari jsonb` bifat de operator | automat sau manual |
@@ -219,14 +219,14 @@ export xlsx din registru (§5).
 | `reverificare_la` | pv_a | `red_procese_verbale.reverificare_la date` | — |
 | `alte_observatii` | pv_a | `red_procese_verbale.alte_observatii text` | — |
 | reluarea convocării (`reluare_*`) | pv_b | a doua `red_convocari` pe deținător după date corectate + `red_convocari.adresa_tgz_nr text` (adresa TGZ cu corecturi); starea nu se schimbă (CONVOCARE_RETURNATĂ → după reluare, logica existentă pe „convocare activă ulterioară”) | — |
-| `semnatar_apm` | pv_b, pv_c | `red_proiecte.apm_nume text` sau gol | — |
-| `nr_document` pentru adresa UAT | adresa_uat | cheie nouă în red_numere (`AU`) + `red_uat.adresa_nr, adresa_data` | sau registratura generală |
-| `termen_confirmare` | adresa_uat | `red_uat.termen_confirmare date` sau calcul (zi1 − N zile) | N |
-| `afisare_ora` | adresa_uat | `red_uat.afisare_ora text` | — |
-| `link_afisare` | adresa_uat | pagină publică pe UAT fără token (în afara contractului §5) SAU se scoate din text | ce apare la „online la …” |
-| `reprezentant_gazpet_nume` la PV afișare | adresa_uat | cine afișează fizic → `red_uat.afisare_reprezentant_gazpet` | — |
+| `semnatar_apm` | pv_b, pv_c | `red_proiecte.apm_nume text` (20261127a), gol = de mână | — |
+| `nr_document` pentru adresa UAT | adresa_uat | **DECIS 02.11: serie proprie `AU-0001`** — `fn_red_numar_document('AU')` + `red_uat.adresa_nr` (unic), `adresa_data` (20261127a) | — |
+| `termen_confirmare` | adresa_uat | `red_uat.termen_confirmare date` (20261127a), introdus de operator, CHECK < zi1 | N pentru o eventuală propunere automată |
+| `afisare_ora` | adresa_uat | `red_uat.afisare_ora text` HH:MM (20261127a) | — |
+| `link_afisare` | adresa_uat | **DECIS 02.11 (Răzvan): se SCOATE din text** — pe afișare rămân telefonul și e-mailul; nu există pagină publică pe UAT | — (de scos din `adresa_uat.docx` în felia Adresă UAT) |
+| `reprezentant_gazpet_nume` la PV afișare | adresa_uat | cine afișează fizic → `red_uat.afisare_reprezentant_gazpet` (20261127a) | — |
 | `prezent` (bifa „nu s-a prezentat”; Model 6 col. AA) | pv_b, registru | `red_raspunsuri` cu `canal='sesiune'` ⇒ prezent; sau `red_detinatori.prezent_la_sesiune date` | — |
-| refuz nemotivat (`bifa_sit_refuz`) | pv_b | nu există stare/opțiune „refuz semnare fără obiecții”; propunere `red_raspunsuri.optiune = 'refuz'` (nou) sau `red_procese_verbale.motiv_pv_b text CHECK (declaratie/neprezentat/neidentificat/refuz)` | — |
+| refuz nemotivat (`bifa_sit_refuz`) | pv_b | **DECIS 02.11: motiv pe PV B** — `red_procese_verbale.motiv_pv_b text CHECK (declaratie/neprezentat/neidentificat/refuz)`; opțiunile formularului public NU se schimbă | — (felia PV) |
 | `pva_sesiune` vs `pva_corespondenta` | pv_c | calcul pe `trimis_spre_semnare_data` (NULL = la sesiune) — de confirmat; alternativ `semnat_la_sesiune bool` | — |
 | `km_de_la`, `km_pana_la` pe tronson | pv_c | MIN/MAX din red_parcele sau tabel `red_tronsoane` | — |
 | `id_parcela` în documente | toate | modelele nu îl afișează; de decis dacă îl adăugăm | — |

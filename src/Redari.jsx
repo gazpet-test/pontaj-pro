@@ -1,6 +1,6 @@
 /* Redari.jsx — Modul „Redări teren" (Lot 1 Transgaz): convocări proprietari, registru pe parcelă/deținător, PV.
    Contract: docs/redari/CONTRACT_SCHEMA.md (tabele red_*, vederea red_v_stare_parcela, RPC fn_red_numar_document).
-   Ecrane: Registru · Fișa parcelei · Import TGZ. Nivel utilizator: admin / editor / viewer (user_module_access.redari; owner = admin).
+   Ecrane: Registru · Fișa parcelei · Import TGZ · UAT-uri · Setări proiect (faza 2, felia 1). Nivel utilizator: admin / editor / viewer (user_module_access.redari; owner = admin).
    Fără date reale aici — doar structuri. */
 
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
@@ -12,6 +12,8 @@ import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CA
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator, citesteIn } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
+import UatEcran from './redari/ui/UatEcran.jsx'
+import SetariProiect from './redari/ui/SetariProiect.jsx'
 
 const PAGINA = 100
 // Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2). text_gdpr / text_declaratie / contact_email NU se trimit:
@@ -29,7 +31,7 @@ export default function Redari() {
   const [profile, setProfile] = useState(null)
   const [nivel, setNivel] = useState(null)         // 'admin' | 'editor' | 'viewer' | null
   const [gataProfil, setGataProfil] = useState(false)
-  const [tab, setTab] = useState('registru')        // 'registru' | 'fisa' | 'import'
+  const [tab, setTab] = useState('registru')        // 'registru' | 'fisa' | 'import' | 'uat' | 'setari'
   const [proiecte, setProiecte] = useState([])
   const [proiectId, setProiectId] = useState('')
   const [uats, setUats] = useState([])
@@ -105,6 +107,8 @@ export default function Redari() {
     { cod:'registru', eticheta:'📋 Registru' },
     { cod:'fisa', eticheta:'📄 Fișa parcelei', dezactivat: !parcelaFisa },
     { cod:'import', eticheta:'📥 Import TGZ' },
+    { cod:'uat', eticheta:'🏛️ UAT-uri' },
+    { cod:'setari', eticheta:'⚙️ Setări proiect' },
   ]
 
   return (
@@ -138,6 +142,8 @@ export default function Redari() {
           {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
+          {tab === 'uat' && <UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} />}
+          {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
         </div>
       )}
     </div>

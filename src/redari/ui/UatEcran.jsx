@@ -1,0 +1,187 @@
+/* UatEcran.jsx — Redări faza 2, felia 1: UAT-urile proiectului (primărie, reprezentant, cele 3 zile de sesiune, afișarea).
+   Scrie doar admin (RLS red_uat_ins / red_uat_upd = admin); editor și viewer văd în citire. uat3 intră în id_parcela: se schimbă doar cât UAT-ul
+   nu are parcele (garda e și în BD, trigger-ul fn_red_legaturi). Schimbarea zilelor recalculează în BD expirarea tokenurilor (trg_red_uat_sesiuni). */
+import React, { useEffect, useState, useCallback } from 'react'
+import { supabase } from '../../lib/supabase.js'
+import { G, S, Modal, Camp, Gol, fmtDate, msgEroare, motivBlocareConvocator } from './comune.jsx'
+import { uat3 as uat3Din } from '../idParcela.js'
+import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, lipsuriUat, rezumatZile } from '../setari.js'
+import FormularCampuri from './FormularCampuri.jsx'
+
+const CHEI_SESIUNE = [...ZILE_SESIUNE, 'program_zi1', 'program_zi2', 'program_zi3']
+
+export default function UatEcran({ proiect, uats, nivel, show, onSchimbat }) {
+  const esteAdmin = nivel === 'admin'
+  const [numaratori, setNumaratori] = useState({})   // uat_id → { parcele, convocati }
+  const [editat, setEditat] = useState(null)         // rândul UAT deschis
+  const [nou, setNou] = useState(false)
+
+  const incarcaNumaratori = useCallback(async () => {
+    const rez = {}
+    for (const u of uats) {
+      const [p, c] = await Promise.all([
+        supabase.from('red_parcele').select('id', { count: 'exact', head: true }).eq('uat_id', u.id).is('sters_la', null),
+        supabase.from('red_v_stare_parcela').select('parcela_id', { count: 'exact', head: true }).eq('uat_id', u.id).not('ultima_convocare_data', 'is', null),
+      ])
+      if (p.error || c.error) { show('Numărători UAT: ' + msgEroare(p.error || c.error), 'error'); return }
+      rez[u.id] = { parcele: p.count || 0, convocati: c.count || 0 }
+    }
+    setNumaratori(rez)
+  }, [uats, show])
+  useEffect(() => { incarcaNumaratori() }, [incarcaNumaratori])
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: G.muted }}>
+          {uats.length} UAT-uri. {esteAdmin ? 'Click pe un rând ca să-l completezi.' : 'Doar administratorul modifică UAT-urile.'}
+        </div>
+        <div style={{ flex: 1 }} />
+        {esteAdmin && <button onClick={() => setNou(true)} style={S.btnS}>＋ UAT nou</button>}
+      </div>
+      {uats.length === 0 ? <Gol text="Proiectul nu are UAT-uri." /> : (
+        <div style={{ ...S.card, padding: 0, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              {['UAT', 'Cod', 'Zile sesiune', 'Reprezentant primărie', 'Termen confirmare', 'Afișare', 'Parcele', 'Convocați', 'Gata de convocare?'].map(h => <th key={h} style={S.th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {uats.map(u => {
+                const n = numaratori[u.id]
+                const lips = [...lipsuriUat(u)]
+                const pr = motivBlocareConvocator(proiect, u, null)
+                return (
+                  <tr key={u.id} onClick={() => setEditat(u)} style={{ cursor: 'pointer' }}>
+                    <td style={S.td}><b>{u.nume}</b><div style={{ fontSize: 11.5, color: G.dim }}>{u.judet || ''}</div></td>
+                    <td style={{ ...S.td, ...S.mono }}>{u.uat3}</td>
+                    <td style={S.td}>{rezumatZile(u)}</td>
+                    <td style={S.td}>{u.reprezentant_uat_nume || <span style={{ color: G.dim }}>-</span>}</td>
+                    <td style={S.td}>{fmtDate(u.termen_confirmare)}</td>
+                    <td style={S.td}>{u.afisare_data_start ? `${fmtDate(u.afisare_data_start)} – ${fmtDate(u.afisare_data_end)}` : '-'}</td>
+                    <td style={S.td}>{n ? n.parcele : '…'}</td>
+                    <td style={S.td}>{n ? n.convocati : '…'}</td>
+                    <td style={{ ...S.td, fontSize: 12 }}>
+                      {!lips.length && !pr ? <span style={{ color: G.green }}>✓ da</span>
+                        : <span style={{ color: G.yellow }}>{[...lips, ...(pr ? [pr] : [])].join('; ')}</span>}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {editat && <ModalUat uat={editat} uats={uats} numarator={numaratori[editat.id]} esteAdmin={esteAdmin} show={show}
+        onClose={() => setEditat(null)} onGata={() => { setEditat(null); onSchimbat() }} />}
+      {nou && <ModalUatNou proiect={proiect} uats={uats} show={show} onClose={() => setNou(false)} onGata={() => { setNou(false); onSchimbat() }} />}
+    </div>
+  )
+}
+
+function ModalUat({ uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
+  const [form, setForm] = useState(() => ({ ...uat }))
+  const [cod, setCod] = useState(uat.uat3)
+  const [lucru, setLucru] = useState(false)
+  const [erori, setErori] = useState([])
+  const schimbate = cheiSchimbate(uat, form, CAMPURI_UAT)
+  const codSchimbat = cod !== uat.uat3
+  const poateSchimbaCod = esteAdmin && numarator && numarator.parcele === 0
+
+  const salveaza = async () => {
+    const e = valideazaUat(form)
+    if (codSchimbat) {
+      if (!/^[A-Z]{3}$/.test(cod)) e.push('Codul UAT: exact 3 litere mari (A–Z)')
+      else if (uats.some(x => x.id !== uat.id && x.uat3 === cod)) e.push(`Codul UAT ${cod} e deja folosit în proiect`)
+      if (!poateSchimbaCod) e.push('Codul UAT nu se mai schimbă: UAT-ul are parcele (codul e în id_parcela)')
+    }
+    setErori(e)
+    if (e.length) return
+    if (!schimbate.length && !codSchimbat) { show('Nimic de salvat.', 'info'); return }
+    const atingeSesiuni = schimbate.some(k => CHEI_SESIUNE.includes(k))
+    if (atingeSesiuni && numarator?.convocati > 0 && !window.confirm(
+      `UAT-ul ${uat.nume} are ${numarator.convocati} deținători deja convocați cu zilele vechi.\n` +
+      'Convocatoarele trimise NU se modifică, iar răspunsurile noi se vor raporta la zilele noi. Expirarea linkurilor se recalculează automat.\n\nContinui?')) return
+    const tot = normalizeaza(form, CAMPURI_UAT)
+    const patch = Object.fromEntries(schimbate.map(k => [k, tot[k]]))
+    if (codSchimbat) patch.uat3 = cod
+    setLucru(true)
+    try {
+      const { data, error } = await supabase.from('red_uat').update(patch).eq('id', uat.id).select(COL_UAT)
+      if (error) throw error
+      if (!data?.length) throw new Error('Modificarea nu s-a salvat (fără drept de administrator pe modul?)')
+      show(`UAT ${uat.nume} salvat.`, 'success')
+      onGata()
+    } catch (err) { show('Salvare UAT: ' + msgEroare(err), 'error') }
+    finally { setLucru(false) }
+  }
+
+  return (
+    <Modal titlu={`UAT ${uat.nume}`} onClose={onClose} latime={820}>
+      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', marginBottom: 12, flexWrap: 'wrap' }}>
+        <Camp eticheta="Cod UAT (în id_parcela)">
+          {poateSchimbaCod
+            ? <input value={cod} onChange={e => setCod(e.target.value.toUpperCase().slice(0, 3))} style={{ ...S.input, ...S.mono, width: 90 }} />
+            : <div style={{ ...S.mono, padding: '7px 0' }}>{uat.uat3}</div>}
+        </Camp>
+        <div style={{ fontSize: 12, color: G.dim, paddingBottom: 8 }}>
+          {numarator ? `${numarator.parcele} parcele · ${numarator.convocati} deținători convocați` : 'se numără…'}
+          {uat.adresa_nr ? ` · adresa ${uat.adresa_nr} din ${fmtDate(uat.adresa_data)}` : ''}
+        </div>
+      </div>
+      <FormularCampuri campuri={CAMPURI_UAT} form={form} doarCitire={!esteAdmin} schimbate={schimbate}
+        onChange={(k, v) => setForm(f => ({ ...f, [k]: v }))} />
+      {erori.length > 0 && (
+        <div style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.redDim, color: G.red, fontSize: 12.5 }}>
+          {erori.map(e => <div key={e}>• {e}</div>)}
+        </div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+        <button onClick={onClose} style={S.btnS}>{esteAdmin ? 'Renunț' : 'Închide'}</button>
+        {esteAdmin && <button onClick={salveaza} disabled={lucru} style={{ ...S.btnP, opacity: lucru ? 0.6 : 1 }}>
+          {lucru ? 'Se salvează…' : `Salvează${schimbate.length || codSchimbat ? ` (${schimbate.length + (codSchimbat ? 1 : 0)})` : ''}`}
+        </button>}
+      </div>
+    </Modal>
+  )
+}
+
+function ModalUatNou({ proiect, uats, show, onClose, onGata }) {
+  const [nume, setNume] = useState('')
+  const [cod, setCod] = useState('')
+  const [codAtins, setCodAtins] = useState(false)
+  const [judet, setJudet] = useState(uats[0]?.judet || '')
+  const [lucru, setLucru] = useState(false)
+  const codEfectiv = codAtins ? cod : (() => { try { return nume.trim() ? uat3Din(nume) : '' } catch { return '' } })()
+
+  const salveaza = async () => {
+    const n = nume.trim()
+    if (!n) { show('Numele UAT-ului e obligatoriu.', 'error'); return }
+    if (!/^[A-Z]{3}$/.test(codEfectiv)) { show('Codul UAT: exact 3 litere mari (A–Z).', 'error'); return }
+    if (uats.some(x => x.uat3 === codEfectiv)) { show(`Codul ${codEfectiv} e deja folosit în proiect.`, 'error'); return }
+    setLucru(true)
+    try {
+      const { error } = await supabase.from('red_uat').insert({ proiect_id: proiect.id, nume: n, uat3: codEfectiv, judet: judet.trim() || null })
+      if (error) throw error
+      show(`UAT ${n} adăugat.`, 'success')
+      onGata()
+    } catch (err) { show('UAT nou: ' + msgEroare(err), 'error') }
+    finally { setLucru(false) }
+  }
+
+  return (
+    <Modal titlu="UAT nou" onClose={onClose}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px', gap: 10 }}>
+        <Camp eticheta="Nume UAT *"><input value={nume} onChange={e => setNume(e.target.value)} style={S.input} autoFocus /></Camp>
+        <Camp eticheta="Cod (3 litere)">
+          <input value={codEfectiv} onChange={e => { setCodAtins(true); setCod(e.target.value.toUpperCase().slice(0, 3)) }} style={{ ...S.input, ...S.mono }} />
+        </Camp>
+        <Camp eticheta="Județ" span={2}><input value={judet} onChange={e => setJudet(e.target.value)} style={S.input} /></Camp>
+      </div>
+      <div style={{ fontSize: 12, color: G.dim, marginTop: 8 }}>Codul intră în id-ul parcelelor (T3-{codEfectiv || 'XXX'}-0001) și nu se mai schimbă după primul import.</div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+        <button onClick={onClose} style={S.btnS}>Renunț</button>
+        <button onClick={salveaza} disabled={lucru} style={{ ...S.btnP, opacity: lucru ? 0.6 : 1 }}>{lucru ? 'Se salvează…' : 'Adaugă'}</button>
+      </div>
+    </Modal>
+  )
+}
