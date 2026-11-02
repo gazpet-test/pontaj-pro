@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CAMPURI_PROIECT, CAMPURI_UAT, COL_PROIECT, COL_UAT, normalizeaza, normalizeazaValoare, cheiSchimbate, valideazaUat, valideazaProiect,
-  lipsuriUat, rezumatZile, dataValida } from './setari.js'
+  lipsuriUat, rezumatZile, dataValida, conflicteConcurente } from './setari.js'
 
 const uatBun = () => ({ nume: 'Test UAT', sesiune_zi1: '2026-12-10', program_zi1: '09:00 – 16:00', sesiune_zi2: '2026-12-11', program_zi2: '09:00 – 19:00',
   termen_confirmare: '2026-11-28', afisare_data_start: '2026-11-20', afisare_data_end: '2026-12-12', afisare_ora: '09:30', reprezentant_uat_nume: 'Repr. test' })
@@ -65,6 +65,20 @@ describe('setari — valideazaUat (oglinda CHECK-urilor din BD)', () => {
     expect(valideazaUat({ ...uatBun(), sesiune_zi1: '2026-13-40' }).some(e => /Ziua 1: dată invalidă/.test(e))).toBe(true)
     expect(valideazaUat({ ...uatBun(), primarie_email: 'nu-e-mail' })).toContain('E-mail primărie: adresă de e-mail invalidă')
     expect(valideazaUat({ ...uatBun(), reprezentant_uat_telefon: '1'.repeat(41) })).toContain('Telefon reprezentant: maximum 40 caractere')
+  })
+})
+
+describe('setari — conflicte concurente (Copilot f2 r2 P2)', () => {
+  it('doar câmpurile schimbate de mine ȘI de altcineva', () => {
+    const baza = { contact_email: 'a@x.ro', contact_nume: 'N', denumire: 'D' }
+    const proaspat = { contact_email: 'b@x.ro', contact_nume: 'N2', denumire: 'D' }
+    expect(conflicteConcurente(baza, proaspat, ['contact_email', 'denumire'])).toEqual(['contact_email'])
+    expect(conflicteConcurente(baza, baza, ['contact_email'])).toEqual([])
+    expect(conflicteConcurente({ judet: null }, { judet: '' }, ['judet'])).toEqual([])
+  })
+  it('select-urile citesc versiunea', () => {
+    expect(COL_PROIECT.split(', ')).toContain('versiune')
+    expect(COL_UAT.split(', ')).toContain('versiune')
   })
 })
 

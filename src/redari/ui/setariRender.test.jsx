@@ -9,6 +9,8 @@ vi.mock('../../lib/supabase.js', () => ({ supabase: { from: () => { const q = { 
 
 import UatEcran from './UatEcran.jsx'
 import SetariProiect from './SetariProiect.jsx'
+import FormularCampuri from './FormularCampuri.jsx'
+import { CAMPURI_UAT } from '../setari.js'
 
 const proiect = { id: 'p1', cod: 'TEST-PR', denumire: 'Proiect test', text_gdpr: 'Text GDPR de test', text_declaratie: 'Declarație de test', contact_email: 'test@example.invalid' }
 const uats = [
@@ -34,6 +36,19 @@ describe('ecranul UAT', () => {
   })
   it('fără UAT-uri: mesaj gol', () => {
     expect(renderToString(<UatEcran proiect={proiect} uats={[]} nivel="admin" show={show} onSchimbat={() => {}} />)).toContain('Proiectul nu are UAT-uri')
+  })
+})
+
+describe('FormularCampuri', () => {
+  it('blocat = toate input-urile dezactivate (salvare în curs, Jakarinos f2 r2 P2)', () => {
+    const h = renderToString(<FormularCampuri campuri={CAMPURI_UAT} form={{}} onChange={() => {}} blocat />)
+    const inputuri = h.match(/<input[^>]*>/g) || []
+    expect(inputuri.length).toBe(CAMPURI_UAT.length)
+    expect(inputuri.every(i => /disabled=""/.test(i))).toBe(true)
+  })
+  it('neblocat = editabil', () => {
+    const h = renderToString(<FormularCampuri campuri={CAMPURI_UAT} form={{}} onChange={() => {}} />)
+    expect(/disabled/.test(h)).toBe(false)
   })
 })
 

@@ -3,7 +3,8 @@
 -- pagină publică pe UAT, formularul public rămâne doar cu token personal; (3) refuzul de a semna fără obiecții = MOTIV pe PV B (felia PV,
 -- nu aici); (4) adresele către UAT au serie proprie AU-0001 (red_numere, cheia 'AU').
 -- Ce face: coloane noi nullable pe red_uat / red_proiecte (SABLOANE.md §3), ordinea zilelor de sesiune verificată în BD, unicitatea numărului
--- de adresă, cheia 'AU' în fn_red_numar_document. Fără date, fără drepturi, fără politici noi: red_uat / red_proiecte au deja SELECT pentru
+-- de adresă, cheia 'AU' în fn_red_numar_document, coloana `versiune` (blocare optimistă: UI-ul scrie doar dacă versiunea citită e cea curentă,
+-- Copilot f2 r2 P2 — doi admini pe același câmp nu se mai suprascriu în tăcere). Fără date, fără drepturi, fără politici noi: red_uat / red_proiecte au deja SELECT pentru
 -- orice nivel și INSERT/UPDATE doar admin (20261126a §RLS); GRANT-ul e pe tabel, deci acoperă și coloanele noi.
 -- Revenire: supabase/revenire/20261127a_redari_uat_setari_ROLLBACK.sql. DRY: supabase/tests/20261127a_redari_uat_setari_dryrun.sql.
 
@@ -28,6 +29,10 @@ BEGIN
     RAISE EXCEPTION '20261127a: coloanele noi exista deja (migrarea a rulat?)';
   END IF;
   IF EXISTS (SELECT 1 FROM public.red_numere WHERE cheie = 'AU') THEN RAISE EXCEPTION '20261127a: cheia AU exista deja in red_numere'; END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('red_uat', 'red_proiecte') AND column_name = 'versiune')
+     OR to_regprocedure('public.fn_red_versiune_creste()') IS NOT NULL THEN
+    RAISE EXCEPTION '20261127a: versiune / fn_red_versiune_creste exista deja';
+  END IF;
   -- Copilot f2 r1 P2-04: politicile red_uat / red_proiecte sunt EXACT cele din 20261126a (6 politici: sel = nivel nenul; ins/upd = admin).
   -- Amprenta (tabelă|politică|cmd|roluri|USING|WITH CHECK, sortat) citită de pe prod 02.11.2026; orice abatere = refuz.
   IF (SELECT md5(string_agg(tablename || '|' || policyname || '|' || cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''), E'\n' ORDER BY tablename, policyname)) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('red_uat', 'red_proiecte')) IS DISTINCT FROM '5522f827069f68dfedd4b0a0c4c83e1d' THEN
@@ -68,6 +73,22 @@ COMMENT ON COLUMN public.red_uat.adresa_data IS 'Redări: data adresei către UA
 ALTER TABLE public.red_proiecte
   ADD COLUMN apm_nume text CONSTRAINT red_proiecte_apm_len CHECK (apm_nume IS NULL OR length(apm_nume) <= 200);
 COMMENT ON COLUMN public.red_proiecte.apm_nume IS 'Redări: reprezentantul A.P.M. semnatar pe PV B / PV C (gol = se completează de mână).';
+
+-- ─── 1b. Blocare optimistă: versiune pe rând, crescută de trigger la fiecare UPDATE (oricine scrie, valoarea trimisă e ignorată) ──
+ALTER TABLE public.red_proiecte ADD COLUMN versiune int NOT NULL DEFAULT 1 CONSTRAINT red_proiecte_versiune_poz CHECK (versiune >= 1);
+ALTER TABLE public.red_uat ADD COLUMN versiune int NOT NULL DEFAULT 1 CONSTRAINT red_uat_versiune_poz CHECK (versiune >= 1);
+CREATE FUNCTION public.fn_red_versiune_creste() RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, pg_temp AS $fn$
+BEGIN
+  NEW.versiune := OLD.versiune + 1;
+  RETURN NEW;
+END $fn$;
+COMMENT ON FUNCTION public.fn_red_versiune_creste() IS 'Redări: trigger BEFORE UPDATE pe red_proiecte / red_uat — versiune = versiunea veche + 1 (blocare optimistă în UI: UPDATE … WHERE versiune = <citită>). 20261127a.';
+REVOKE EXECUTE ON FUNCTION public.fn_red_versiune_creste() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER trg_red_versiune BEFORE UPDATE ON public.red_proiecte FOR EACH ROW EXECUTE FUNCTION public.fn_red_versiune_creste();
+CREATE TRIGGER trg_red_versiune BEFORE UPDATE ON public.red_uat FOR EACH ROW EXECUTE FUNCTION public.fn_red_versiune_creste();
+COMMENT ON COLUMN public.red_proiecte.versiune IS 'Redări: versiunea rândului (trg_red_versiune); UI-ul salvează cu .eq(versiune, citită) — 0 rânduri = altcineva a salvat între timp.';
+COMMENT ON COLUMN public.red_uat.versiune IS 'Redări: versiunea rândului (trg_red_versiune); UI-ul salvează cu .eq(versiune, citită) — 0 rânduri = altcineva a salvat între timp.';
 
 -- ─── 2. Numerotare: cheia AU (adrese către UAT) ───────────────────────────────────────────────────────────────────────────
 -- Același corp ca în 20261126a, plus ramura 'AU'. CREATE OR REPLACE păstrează owner-ul, GRANT EXECUTE (authenticated) și REVOKE-ul de la PUBLIC.
@@ -110,6 +131,12 @@ BEGIN
   IF (SELECT count(*) FROM pg_constraint WHERE conrelid = 'public.red_uat'::regclass
         AND conname IN ('red_uat_zile_ordonate', 'red_uat_termen_inainte', 'red_uat_afisare_ordonata', 'red_uat_adresa_nr_fmt', 'red_uat_afisare_ora_fmt', 'red_uat_repr_tel_len', 'red_uat_afisare_repr_len')) <> 7 THEN
     RAISE EXCEPTION 'Postconditie: constrangerile red_uat lipsesc';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_red_versiune' AND NOT tgisinternal AND tgenabled = 'O'
+        AND tgrelid IN ('public.red_proiecte'::regclass, 'public.red_uat'::regclass)) <> 2
+     OR has_function_privilege('authenticated', 'public.fn_red_versiune_creste()', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.fn_red_versiune_creste()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'Postconditie: trigger-ele trg_red_versiune / drepturile pe fn_red_versiune_creste';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_proiecte'::regclass AND conname = 'red_proiecte_apm_len')
      OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'red_uat' AND indexname = 'red_uat_adresa_nr_uq'

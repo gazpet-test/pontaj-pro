@@ -129,7 +129,10 @@ adresele UAT pe seria `AU-0001`.
 - Migrarea `20261127a_redari_uat_setari`: `red_uat` + `reprezentant_uat_telefon`, `termen_confirmare`, `afisare_ora`, `afisare_reprezentant_gazpet`,
   `adresa_nr` (unic, `AU-nnnn`), `adresa_data`; `red_proiecte.apm_nume`; CHECK-uri: zilele de sesiune în ordine (zi2 cere zi1, strict crescător),
   termenul de confirmare < ziua 1, afișarea ordonată, formate (ora, telefon); cheia `AU` în `fn_red_numar_document`. Fără politici sau drepturi noi.
-  Revenire: `supabase/revenire/20261127a_redari_uat_setari_ROLLBACK.sql`; DRY: `supabase/tests/20261127a_redari_uat_setari_dryrun.sql` (8 teste,
+  Blocare optimistă: coloana `versiune` pe `red_proiecte` / `red_uat`, crescută de `trg_red_versiune` la fiecare UPDATE; ecranele salvează cu
+  `.eq('versiune', citită)` și, dacă alt admin a schimbat aceleași câmpuri, le arată și cer confirmare (review Copilot f2 r2).
+  Ordinea revenirilor: întâi 20261127a, apoi (dacă e cazul) 20261126a.
+  Revenire: `supabase/revenire/20261127a_redari_uat_setari_ROLLBACK.sql`; DRY: `supabase/tests/20261127a_redari_uat_setari_dryrun.sql` (10 teste,
   identități reale owner / editor / viewer, date fictive, ROLLBACK).
 - Ecrane: **🏛️ UAT-uri** (tabel + „gata de convocare?”, editare admin, cod UAT blocat după primele parcele, avertisment la schimbarea zilelor când
   există convocați) și **⚙️ Setări proiect** (contract, împuternicire, reprezentanți, contact, texte GDPR / declarație cu confirmare la schimbare).

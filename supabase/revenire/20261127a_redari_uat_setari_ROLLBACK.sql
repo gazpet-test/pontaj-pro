@@ -1,7 +1,7 @@
 -- REVENIRE 20261127a_redari_uat_setari (armată; doar la cererea lui Răzvan, după decizie + review). NU e migrare — niciun runner nu parcurge directorul.
 -- Scoate ce a adăugat migrarea: coloanele noi din red_uat (reprezentant_uat_telefon, termen_confirmare, afisare_ora, afisare_reprezentant_gazpet,
 -- adresa_nr, adresa_data) și red_proiecte.apm_nume, constrângerile red_uat_zile_ordonate / _termen_inainte / _afisare_ordonata, indexul
--- red_uat_adresa_nr_uq, ramura 'AU' din fn_red_numar_document (corpul revine exact la 20261126a) și rândul 20261127120000 din
+-- red_uat_adresa_nr_uq, coloana `versiune` + trigger-ele trg_red_versiune + fn_red_versiune_creste, ramura 'AU' din fn_red_numar_document (corpul revine exact la 20261126a) și rândul 20261127120000 din
 -- supabase_migrations.schema_migrations (dacă tabelul există).
 -- Refuză: nearmată; armare persistentă; migrarea neaplicată; DATE în coloanele noi sau cheia AU în red_numere fără al doilea GUC
 -- gazpet.revenire_20261127a_forta = 'DA' (cu forța, valorile din coloanele noi se pierd, iar cheia AU se șterge din red_numere).
@@ -48,6 +48,11 @@ END $pre$;
 
 DELETE FROM public.red_numere WHERE cheie = 'AU';
 DROP INDEX public.red_uat_adresa_nr_uq;
+DROP TRIGGER trg_red_versiune ON public.red_proiecte;
+DROP TRIGGER trg_red_versiune ON public.red_uat;
+DROP FUNCTION public.fn_red_versiune_creste();
+ALTER TABLE public.red_proiecte DROP COLUMN versiune;
+ALTER TABLE public.red_uat DROP COLUMN versiune;
 ALTER TABLE public.red_uat
   DROP CONSTRAINT red_uat_zile_ordonate, DROP CONSTRAINT red_uat_termen_inainte, DROP CONSTRAINT red_uat_afisare_ordonata,
   DROP COLUMN reprezentant_uat_telefon, DROP COLUMN termen_confirmare, DROP COLUMN afisare_ora, DROP COLUMN afisare_reprezentant_gazpet,
@@ -95,6 +100,10 @@ BEGIN
                AND column_name IN ('reprezentant_uat_telefon', 'termen_confirmare', 'afisare_ora', 'afisare_reprezentant_gazpet', 'adresa_nr', 'adresa_data'))
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_proiecte' AND column_name = 'apm_nume') THEN
     RAISE EXCEPTION '20261127a revenire postconditie: coloanele au ramas';
+  END IF;
+  IF to_regprocedure('public.fn_red_versiune_creste()') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('red_uat', 'red_proiecte') AND column_name = 'versiune') THEN
+    RAISE EXCEPTION '20261127a revenire postconditie: versiune / fn_red_versiune_creste au ramas';
   END IF;
   IF position('''AU''' IN (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure)) > 0 THEN
     RAISE EXCEPTION '20261127a revenire postconditie: ramura AU a ramas';

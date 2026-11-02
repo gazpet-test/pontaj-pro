@@ -4,7 +4,7 @@
 import React, { useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, msgEroare, motivBlocareConvocator } from './comune.jsx'
-import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect } from '../setari.js'
+import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
 
 export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
@@ -16,7 +16,8 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
   const [lucru, setLucru] = useState(false)
   const [erori, setErori] = useState([])
   const schimbate = cheiSchimbate(baza, form, CAMPURI_PROIECT)
-  const altaVersiune = cheiSchimbate(baza, proiect, CAMPURI_PROIECT).length > 0   // alt admin a salvat între timp
+  // alt admin a salvat între timp: versiunea din părinte e mai nouă decât baza (propria salvare crește baza imediat — Copilot f2 r2 P3)
+  const altaVersiune = (proiect.versiune ?? 0) > (baza.versiune ?? 0)
   // ce lipsește la nivel de proiect pentru convocator (UAT-ul fictiv „complet” izolează doar cerințele proiectului)
   const lipsaProiect = motivBlocareConvocator(proiect, { sesiune_zi1: 'x', program_zi1: 'x' }, null)
 
@@ -32,9 +33,18 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
     const patch = Object.fromEntries(schimbate.map(k => [k, tot[k]]))
     setLucru(true)
     try {
-      const { data, error } = await supabase.from('red_proiecte').update(patch).eq('id', proiect.id).select(COL_PROIECT)
+      // Copilot f2 r2 P2: citesc rândul de acum; dacă altcineva a schimbat ACELEAȘI câmpuri, întreb; scriu doar pe versiunea verificată
+      const { data: acum, error: ea } = await supabase.from('red_proiecte').select(COL_PROIECT).eq('id', proiect.id).maybeSingle()
+      if (ea) throw ea
+      if (!acum) throw new Error('Proiectul nu mai e vizibil (fără drept pe modul?)')
+      if (acum.versiune !== baza.versiune) {
+        const conf = conflicteConcurente(baza, acum, schimbate)
+        const etichete = conf.map(k => CAMPURI_PROIECT.find(c => c.cheie === k)?.eticheta || k)
+        if (conf.length && !window.confirm(`Alt administrator a schimbat între timp: ${etichete.join(', ')}.\nSuprascrii cu valorile tale?`)) return
+      }
+      const { data, error } = await supabase.from('red_proiecte').update(patch).eq('id', proiect.id).eq('versiune', acum.versiune).select(COL_PROIECT)
       if (error) throw error
-      if (!data?.length) throw new Error('Modificarea nu s-a salvat (fără drept de administrator pe modul?)')
+      if (!data?.length) throw new Error('Nu s-a salvat: proiectul a fost modificat chiar acum de altcineva sau nu ai drept de administrator. Reîncarcă și reîncearcă.')
       setBaza({ ...data[0] }); setForm({ ...data[0] })
       show('Setările proiectului au fost salvate.', 'success')
       onSchimbat()
@@ -55,12 +65,12 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
       {esteAdmin && altaVersiune && (
         <div style={{ fontSize: 12.5, color: G.yellow, marginBottom: 10 }}>
           Proiectul a fost modificat între timp de altcineva. Salvarea ta scrie doar câmpurile pe care le-ai schimbat tu.{' '}
-          <button onClick={() => { setBaza({ ...proiect }); setForm(f => ({ ...proiect, ...Object.fromEntries(schimbate.map(k => [k, f[k]])) })) }} style={S.btnX}>Preia versiunea nouă</button>
+          <button disabled={lucru} onClick={() => { setBaza({ ...proiect }); setForm(f => ({ ...proiect, ...Object.fromEntries(schimbate.map(k => [k, f[k]])) })) }} style={S.btnX}>Preia versiunea nouă</button>
         </div>
       )}
       <div style={S.card}>
-        <FormularCampuri campuri={CAMPURI_PROIECT} form={form} doarCitire={!esteAdmin} schimbate={schimbate}
-          onChange={(k, v) => setForm(f => ({ ...f, [k]: v }))} />
+        <FormularCampuri campuri={CAMPURI_PROIECT} form={form} doarCitire={!esteAdmin} blocat={lucru} schimbate={schimbate}
+          onChange={(k, v) => { if (!lucru) setForm(f => ({ ...f, [k]: v })) }} />
         {erori.length > 0 && (
           <div style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.redDim, color: G.red, fontSize: 12.5 }}>
             {erori.map(e => <div key={e}>• {e}</div>)}

@@ -54,8 +54,8 @@ export const CAMPURI_UAT = [
 ]
 
 // Coloane citite din BD (select explicit, nu '*', ca un câmp nou din BD să nu ajungă nevăzut în formular)
-export const COL_PROIECT = ['id', 'cod', 'activ', 'created_at', ...CAMPURI_PROIECT.map(c => c.cheie)].join(', ')
-export const COL_UAT = ['id', 'proiect_id', 'uat3', 'adresa_nr', 'adresa_data', 'created_at', ...CAMPURI_UAT.map(c => c.cheie)].join(', ')
+export const COL_PROIECT = ['id', 'cod', 'activ', 'versiune', 'created_at', ...CAMPURI_PROIECT.map(c => c.cheie)].join(', ')
+export const COL_UAT = ['id', 'proiect_id', 'uat3', 'adresa_nr', 'adresa_data', 'versiune', 'created_at', ...CAMPURI_UAT.map(c => c.cheie)].join(', ')
 
 export const ZILE_SESIUNE = ['sesiune_zi1', 'sesiune_zi2', 'sesiune_zi3']
 const RX_DATA = /^\d{4}-\d{2}-\d{2}$/
@@ -98,6 +98,11 @@ function verificaFormat(c, v, erori) {
   else if (c.tip === 'tel' && s.length > MAX_TELEFON) erori.push(`${c.eticheta}: maximum ${MAX_TELEFON} caractere`)
   else if (c.tip === 'textarea' && s.length > MAX_TEXT_LUNG) erori.push(`${c.eticheta}: maximum ${MAX_TEXT_LUNG} caractere`)
   else if ((c.tip === 'text') && s.length > MAX_TEXT_SCURT) erori.push(`${c.eticheta}: maximum ${MAX_TEXT_SCURT} caractere`)
+}
+
+/** Câmpurile pe care le-am schimbat ȘI pe care altcineva le-a schimbat între timp (baza = ce am citit, proaspat = rândul de acum). */
+export function conflicteConcurente(baza, proaspat, schimbate) {
+  return (schimbate || []).filter(k => normalizeazaValoare(baza?.[k]) !== normalizeazaValoare(proaspat?.[k]))
 }
 
 /** Erorile unui UAT (în română), aceleași reguli ca CHECK-urile din BD: zile în ordine, termen înaintea zilei 1, afișare ordonată. */

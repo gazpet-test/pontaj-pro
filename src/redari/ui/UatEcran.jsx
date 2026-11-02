@@ -5,7 +5,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate, msgEroare, motivBlocareConvocator } from './comune.jsx'
 import { uat3 as uat3Din } from '../idParcela.js'
-import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, lipsuriUat, rezumatZile } from '../setari.js'
+import { CAMPURI_UAT, COL_UAT, ZILE_SESIUNE, normalizeaza, cheiSchimbate, valideazaUat, lipsuriUat, rezumatZile, conflicteConcurente } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
 
 const CHEI_SESIUNE = [...ZILE_SESIUNE, 'program_zi1', 'program_zi2', 'program_zi3']
@@ -122,9 +122,18 @@ function ModalUat({ uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
     if (codSchimbat) patch.uat3 = cod
     setLucru(true)
     try {
-      const { data, error } = await supabase.from('red_uat').update(patch).eq('id', uat.id).select(COL_UAT)
+      // Copilot f2 r2 P2: rândul de acum + scriere doar pe versiunea verificată (blocare optimistă, trg_red_versiune)
+      const { data: acum, error: ea } = await supabase.from('red_uat').select(COL_UAT).eq('id', uat.id).maybeSingle()
+      if (ea) throw ea
+      if (!acum) throw new Error('UAT-ul nu mai e vizibil (fără drept pe modul?)')
+      if (acum.versiune !== uat.versiune) {
+        const conf = conflicteConcurente(uat, acum, schimbate)
+        const etichete = conf.map(k => CAMPURI_UAT.find(c => c.cheie === k)?.eticheta || k)
+        if (conf.length && !window.confirm(`Alt administrator a schimbat între timp: ${etichete.join(', ')}.\nSuprascrii cu valorile tale?`)) return
+      }
+      const { data, error } = await supabase.from('red_uat').update(patch).eq('id', uat.id).eq('versiune', acum.versiune).select(COL_UAT)
       if (error) throw error
-      if (!data?.length) throw new Error('Modificarea nu s-a salvat (fără drept de administrator pe modul?)')
+      if (!data?.length) throw new Error('Nu s-a salvat: UAT-ul a fost modificat chiar acum de altcineva sau nu ai drept de administrator. Reîncarcă și reîncearcă.')
       show(`UAT ${uat.nume} salvat.`, 'success')
       onGata()
     } catch (err) { show('Salvare UAT: ' + msgEroare(err), 'error') }
@@ -144,8 +153,8 @@ function ModalUat({ uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
           {uat.adresa_nr ? ` · adresa ${uat.adresa_nr} din ${fmtDate(uat.adresa_data)}` : ''}
         </div>
       </div>
-      <FormularCampuri campuri={CAMPURI_UAT} form={form} doarCitire={!esteAdmin} schimbate={schimbate}
-        onChange={(k, v) => setForm(f => ({ ...f, [k]: v }))} />
+      <FormularCampuri campuri={CAMPURI_UAT} form={form} doarCitire={!esteAdmin} blocat={lucru} schimbate={schimbate}
+        onChange={(k, v) => { if (!lucru) setForm(f => ({ ...f, [k]: v })) }} />
       {erori.length > 0 && (
         <div style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.redDim, color: G.red, fontSize: 12.5 }}>
           {erori.map(e => <div key={e}>• {e}</div>)}

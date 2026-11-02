@@ -206,6 +206,32 @@ BEGIN
 END $t$;
 SELECT pg_temp.r27_ca(NULL, 'postgres');
 
+-- ── TEST9 (Copilot f2 r2 P2): blocarea optimistă — versiunea crește la fiecare UPDATE, valoarea trimisă e ignorată,
+--    un UPDATE cu versiunea veche nu atinge nimic ─────────────────────────────────────────────────────────────────────
+SELECT pg_temp.r27_ca(pg_temp.r27_g('owner')::uuid, 'authenticated');
+DO $t$
+DECLARE v0 int; v1 int; v_n int; p uuid := pg_temp.r27_g('pr')::uuid;
+BEGIN
+  SELECT versiune INTO v0 FROM public.red_proiecte WHERE id = p;
+  UPDATE public.red_proiecte SET contact_nume = 'A', versiune = 999 WHERE id = p AND versiune = v0;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  SELECT versiune INTO v1 FROM public.red_proiecte WHERE id = p;
+  IF v_n <> 1 OR v1 IS DISTINCT FROM v0 + 1 THEN RAISE EXCEPTION 'TEST9 FAIL: versiune % -> % (randuri %)', v0, v1, v_n; END IF;
+  UPDATE public.red_proiecte SET contact_nume = 'B' WHERE id = p AND versiune = v0;   -- al doilea admin, cu versiunea veche
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n <> 0 OR (SELECT contact_nume FROM public.red_proiecte WHERE id = p) IS DISTINCT FROM 'A' THEN
+    RAISE EXCEPTION 'TEST9 FAIL: UPDATE-ul cu versiunea veche a scris peste';
+  END IF;
+  SELECT versiune INTO v0 FROM public.red_uat WHERE id = pg_temp.r27_g('uat')::uuid;
+  UPDATE public.red_uat SET afisare_ora = '11:00' WHERE id = pg_temp.r27_g('uat')::uuid;
+  IF (SELECT versiune FROM public.red_uat WHERE id = pg_temp.r27_g('uat')::uuid) IS DISTINCT FROM v0 + 1 THEN RAISE EXCEPTION 'TEST9 FAIL: versiune red_uat'; END IF;
+  IF pg_temp.r27_refuza($s$SELECT public.fn_red_versiune_creste()$s$, '42501') IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'TEST9 FAIL: authenticated poate apela fn_red_versiune_creste';
+  END IF;
+  RAISE NOTICE 'TEST9 OK versiune';
+END $t$;
+SELECT pg_temp.r27_ca(NULL, 'postgres');
+
 -- ── TEST7: jurnalul a prins modificările pe UAT (append-only, fără date de deținători) ───────────────────────────────────
 DO $t$
 BEGIN
