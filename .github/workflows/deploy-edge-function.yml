@@ -91,7 +91,8 @@ jobs:
             extra=""
             if [[ "$NO_JWT" == *" $s "* ]]; then extra="--no-verify-jwt"; fi
             echo "::group::deploy $s $extra"
-            supabase functions deploy "$s" --project-ref dxczwkbciseqniprspcu $extra
+            # 03.11.2026: CLI-ul „latest” cere confirmare; fără terminal refuza („Nothing was changed”) → --yes explicit
+            supabase functions deploy "$s" --project-ref dxczwkbciseqniprspcu $extra --yes
             echo "::endgroup::"
           done
 
