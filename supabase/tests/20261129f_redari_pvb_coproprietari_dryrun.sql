@@ -6,6 +6,9 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare',true) IS DISTINCT FROM '20261129f_redari_pvb_coproprietari:'||txid_current() THEN RAISE EXCEPTION 'DRY: tranzactie neinarmata'; END IF;
   IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261129120500') THEN RAISE EXCEPTION 'DRY: versiune deja comisa'; END IF;
   SELECT id INTO proprietar FROM public.profiles WHERE is_owner AND email='razvan.trusu@gazpet.ro';
+  PERFORM set_config('r29f.editor',(SELECT a.profile_id::text FROM public.user_module_access a JOIN public.profiles pp ON pp.id=a.profile_id
+    WHERE a.module='redari' AND a.access_level='editor' AND pp.is_owner IS NOT TRUE ORDER BY a.id LIMIT 1),true);
+  IF current_setting('r29f.editor',true) IS NULL OR current_setting('r29f.editor',true)='' THEN RAISE EXCEPTION 'DRY: editor non-owner lipsa'; END IF;
   IF proprietar IS NULL THEN RAISE EXCEPTION 'DRY: owner lipsa'; END IF;
   INSERT INTO public.red_proiecte(cod,denumire) VALUES('TEST-29F','Fictiv coproprietari') RETURNING id INTO pr;
   INSERT INTO public.red_uat(proiect_id,nume,uat3,judet) VALUES(pr,'Fictiv','ZXF','Test') RETURNING id INTO u;
@@ -68,6 +71,8 @@ END $t$;
 RESET ROLE;
 INSERT INTO public.red_procese_verbale(tip,parcela_id,uat_id,tronson,nr_pv,data_pv,stare,motiv_pv_b)
   VALUES('B',current_setting('r29f.p')::uuid,current_setting('r29f.u')::uuid,7,'PVB-ZXF-0002','2026-11-02','generat','neprezentat');
+-- Copilot f7 r2 P3: TEST8 ruleaza ca EDITOR non-owner (garda e SECURITY INVOKER, sub RLS-ul apelantului)
+SELECT set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('r29f.editor'),'role','authenticated')::text,true);
 SET LOCAL ROLE authenticated;
 DO $t$
 DECLARE refuz boolean:=false;

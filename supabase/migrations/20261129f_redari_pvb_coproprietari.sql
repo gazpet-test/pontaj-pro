@@ -77,6 +77,11 @@ LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $g$
 BEGIN
   -- 20261129f (Copilot f7 r1 P2-02): un PV B nu se mai semneaza daca intre timp TOTI detinatorii activi au PV A semnat;
   -- se anuleaza (motiv). Parcela fara detinatori activi ramane semnabila prin PV B.
+  -- Copilot f7 r2 P2: semnarile PV A / PV B pe aceeasi parcela se serializeaza pe randul parcelei (acelasi lock ca
+  -- fn_red_pv_creeaza), apoi verificarea vede tot ce s-a comis inainte (READ COMMITTED: snapshot nou pe instructiune).
+  IF NEW.tip IN ('A','B') AND NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat' AND NEW.parcela_id IS NOT NULL THEN
+    PERFORM 1 FROM public.red_parcele WHERE id=NEW.parcela_id FOR UPDATE;
+  END IF;
   IF NEW.tip='B' AND NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat'
      AND EXISTS (SELECT 1 FROM public.red_detinatori x WHERE x.parcela_id=NEW.parcela_id AND x.sters_la IS NULL)
      AND NOT EXISTS (SELECT 1 FROM public.red_detinatori x WHERE x.parcela_id=NEW.parcela_id AND x.sters_la IS NULL
