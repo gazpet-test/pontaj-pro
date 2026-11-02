@@ -134,6 +134,14 @@ const textParagrafeConcatenate = (xml) => {
 /** Repetă numai rândul cu rand.*, păstrând celelalte celule și placeholder-ele simple. */
 export function repetaRand(xml, randuri) {
   if (!Array.isArray(randuri)) throw new Error('Lista de parcele trebuie să fie un tablou')
+  // Copilot f2b r1 P3: regex-ul de rând nu poate izola un <w:tr> care conține alt <w:tr>; cu tabele imbricate și rand.* refuzăm explicit
+  if (/\{\{\s*rand\./.test(xml)) {
+    let adancime = 0
+    for (const t of xml.match(/<\/?w:tbl[\s>]/g) || []) {
+      adancime += t.startsWith('</') ? -1 : 1
+      if (adancime > 1) throw new Error('Șablonul are tabele imbricate; rândul-șablon {{rand.*}} nu e suportat în această structură')
+    }
+  }
   return xml.replace(/<w:tr(?:\s[^>]*)?>(?:(?!<w:tr[\s>])[\s\S])*?<\/w:tr>/g, rand => {
     if (!/\{\{\s*rand\./.test(textParagrafeConcatenate(rand))) return rand
     if (!randuri.length) return '<w:tr><w:tc><w:tcPr><w:gridSpan w:val="6"/></w:tcPr><w:p><w:r><w:t>(nicio parcela importata)</w:t></w:r></w:p></w:tc></w:tr>'
@@ -589,8 +597,11 @@ export const caleAdresaUat = ({ proiectCod, uat3, nrDocument, versiune = 1 }) =>
   return `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/adresa/${segment(nrDocument, 'nr_document')}_v${versiune}.docx`
 }
 
-/** Upload imutabil; o eroare ambiguă sau un conflict CAS păstrează fișierul, pentru reconciliere. */
-export async function salveazaAdresaUat(supabase, { blob, proiectCod, uat, nrDocument, dataDocument, colUat = COL_UAT, esteCurent = () => true }) {
+/**
+ * Upload imutabil al adresei (versiunea următoare liberă). Numărul și data sunt DEJA pe red_uat (fn_red_adresa_uat_rezerva, Copilot f2b r1 P2-1):
+ * aici nu se mai scrie în BD, deci un eșec de upload lasă UAT-ul cu numărul rezervat și fără fișier — reluarea e „Regenerează” pe același număr.
+ */
+export async function salveazaAdresaUat(supabase, { blob, proiectCod, uat, nrDocument, esteCurent = () => true }) {
   const cheie = { proiectCod, uat3: uat.uat3, nrDocument, idParcela: 'adresa', adresa: true }
   caleAdresaUat(cheie)
   const max = await versiuneMaximaInBucket(supabase, cheie, { esteCurent })
@@ -603,11 +614,7 @@ export async function salveazaAdresaUat(supabase, { blob, proiectCod, uat, nrDoc
     path = caleAdresaUat({ ...cheie, versiune })
     const { error } = await incarca(supabase, path, blob)
     if (!error) break
-    if (!eExistaDeja(error) || i === MAX_INCERCARI_VERSIUNE - 1) throw new Error('Încărcarea adresei a eșuat; verifică starea înainte de reluare. ' + (error.message || 'Storage indisponibil'))
+    if (!eExistaDeja(error) || i === MAX_INCERCARI_VERSIUNE - 1) throw new Error('Încărcarea adresei a eșuat; numărul rămâne pe UAT, reia cu „Regenerează”. ' + (error.message || 'Storage indisponibil'))
   }
-  if (!esteCurent()) throw new Error(`Operație abandonată; fișierul rămâne în storage (${path})`)
-  const { data, error } = await supabase.from('red_uat').update({ adresa_nr: nrDocument, adresa_data: dataDocument })
-    .eq('id', uat.id).eq('versiune', uat.versiune).select(colUat)
-  if (error || data?.length !== 1) throw new Error(`Fișierul rămâne în storage (${path}), dar adresa nu a fost salvată. Reîncarcă UAT-ul și verifică starea înainte de reluare.`)
-  return { path, versiune, uat: data[0] }
+  return { path, versiune }
 }

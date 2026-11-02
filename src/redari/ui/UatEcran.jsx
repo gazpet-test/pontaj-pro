@@ -135,17 +135,20 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       if (!raspuns.ok) throw new Error('Șablonul adresei nu a putut fi citit')
       const templateArrayBuffer = await raspuns.arrayBuffer()
       if (!curent()) return
-      let nrDocument = uat.adresa_nr
-      if (!nrDocument) {
-        const { data, error } = await supabase.rpc('fn_red_numar_document', { p_tip: 'AU', p_uat3: null, p_tronson: null })
+      // Copilot f2b r1 P2-1: numărul se rezervă ȘI se scrie pe UAT într-un singur RPC (FOR UPDATE + CAS pe versiune), ÎNAINTE de generare.
+      // Un eșec ulterior (șablon, upload) lasă numărul pe UAT; reluarea = „Regenerează” pe același număr. Fără numere pierdute, fără fișiere orfane.
+      let uatCurent = uat
+      if (!uatCurent.adresa_nr) {
+        const { data, error } = await supabase.rpc('fn_red_adresa_uat_rezerva', { p_uat_id: id, p_versiune: uat.versiune })
         if (!curent()) return
-        if (error || !data) throw new Error('Rezervarea numărului AU a eșuat; verifică starea înainte de reluare')
-        nrDocument = data
+        if (error || !data?.adresa_nr) throw new Error('Rezervarea numărului adresei a eșuat: ' + (error?.message || 'răspuns gol') + '. Reîncarcă UAT-ul: dacă numărul a fost rezervat, e deja pe UAT și se reia cu „Regenerează”.')
+        uatCurent = data
       }
-      const dataDocument = aziBucuresti()
-      const { blob } = await genereazaAdresaUat({ proiect, uat, parcele, nrDocument, templateArrayBuffer, dataDocument })
+      const nrDocument = uatCurent.adresa_nr
+      const dataDocument = uatCurent.adresa_data || aziBucuresti()
+      const { blob } = await genereazaAdresaUat({ proiect, uat: uatCurent, parcele, nrDocument, templateArrayBuffer, dataDocument })
       if (!curent()) return
-      await salveazaAdresaUat(supabase, { blob, proiectCod: proiect.cod, uat, nrDocument, dataDocument, colUat: COL_UAT, esteCurent: curent })
+      await salveazaAdresaUat(supabase, { blob, proiectCod: proiect.cod, uat: uatCurent, nrDocument, esteCurent: curent })
       if (!curent()) return
       descarcaBlob(blob, `${nrDocument}.docx`)
       show(`Adresa ${nrDocument} salvată.`, 'success')

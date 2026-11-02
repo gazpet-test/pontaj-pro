@@ -53,7 +53,7 @@ nici UPDATE pentru nimeni (REVOKE UPDATE, DELETE, TRUNCATE de la authenticated, 
 
 ### red_proiecte
 **Faza 2, felia 2 — 20261128a (pregătită, neaplicată aici):** `executie_proiect_id bigint NULL REFERENCES public.executie_proiecte(id)` (tipul PK-ului din Execuție);
-index unic parțial `red_proiecte_executie_uq WHERE executie_proiect_id IS NOT NULL` (un montaj are cel mult un proiect Redări).
+index unic parțial `red_proiecte_executie_uq WHERE executie_proiect_id IS NOT NULL` (un montaj are cel mult un proiect Redări). RPC `fn_red_adresa_uat_rezerva(p_uat_id uuid, p_versiune int) → red_uat` (admin; FOR UPDATE + CAS pe versiune; idempotent dacă `adresa_nr` există): rezervă numărul AU și îl scrie pe UAT **înainte** de generarea documentului — un eșec de generare/upload lasă numărul pe UAT, reluarea e „Regenerează” pe același număr (Copilot f2b r1 P2-1).
 `link_informare_gdpr text NULL`: CHECK NULL sau prefix exact `https://` și lungime ≤ 300. Fără politici sau GRANT-uri noi.
 Contractul rămâne copiat în Redări; preluarea din Execuție este opțională, numai în formular, urmată de salvare explicită cu CAS.
 Lipsa accesului Execuție nu blochează citirea copiilor Redări. Linkul gol omite propoziția „Informarea completă” din convocator.

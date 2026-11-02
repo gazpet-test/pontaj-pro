@@ -140,6 +140,7 @@ adresele UAT pe seria `AU-0001`.
 - P3 Copilot r4 („UAT nou” editabil cât inserează) este reparat în felia 2, §4.1c.
 
 ### 4.1c Faza 2, felia 2 — adresă UAT + legătură Execuție (02.11.2026)
+- Numerotarea adresei UAT: `fn_red_adresa_uat_rezerva` rezervă numărul și îl scrie pe UAT atomic, înaintea generării; eșecul de upload lasă numărul pe UAT (reluare cu „Regenerează”, versiune nouă în bucket). Preluarea contractului din Execuție păstrează data din sufixul „nr/zz.ll.aaaa” când `data_contract` lipsește și semnalează nepotrivirea (review Copilot r1).
 - Migrarea pregătită `20261128a_redari_legatura_executie`: două coloane nullable, FK către montaj, unicitate parțială,
   CHECK HTTPS/300, amprenta politicilor în pre/post; revenire armată cu lock înaintea gărzii de date; DRY owner/editor/viewer,
   proiecte fictive, montaj existent numai citit, SQLSTATE-uri exacte, CAS/versiune, ROLLBACK final. **Nu a fost rulată aici.**

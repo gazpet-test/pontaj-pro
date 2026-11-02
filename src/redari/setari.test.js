@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CAMPURI_PROIECT, CAMPURI_UAT, COL_PROIECT, COL_UAT, normalizeaza, normalizeazaValoare, cheiSchimbate, valideazaUat, valideazaProiect,
-  lipsuriUat, rezumatZile, dataValida, conflicteConcurente } from './setari.js'
+  lipsuriUat, rezumatZile, dataValida, conflicteConcurente, contractDinExecutie } from './setari.js'
 
 const uatBun = () => ({ nume: 'Test UAT', sesiune_zi1: '2026-12-10', program_zi1: '09:00 – 16:00', sesiune_zi2: '2026-12-11', program_zi2: '09:00 – 19:00',
   termen_confirmare: '2026-11-28', afisare_data_start: '2026-11-20', afisare_data_end: '2026-12-12', afisare_ora: '09:30', reprezentant_uat_nume: 'Repr. test' })
@@ -79,6 +79,24 @@ describe('setari — conflicte concurente (Copilot f2 r2 P2)', () => {
   it('select-urile citesc versiunea', () => {
     expect(COL_PROIECT.split(', ')).toContain('versiune')
     expect(COL_UAT.split(', ')).toContain('versiune')
+  })
+})
+
+describe('setari — contractDinExecutie (Copilot f2b r1 P2-2)', () => {
+  it('data din sufixul numărului nu se pierde când data_contract lipsește', () => {
+    expect(contractDinExecutie({ nr_contract: '30/22.01.2025', data_contract: null, coordonator_transgaz: 'C' }))
+      .toEqual({ contract_nr: '30', contract_data: '2025-01-22', reprezentant_tgz_nume: 'C', avertisment: null })
+  })
+  it('data din Execuție are prioritate și nepotrivirea se semnalează', () => {
+    const c = contractDinExecutie({ nr_contract: '30/22.01.2025', data_contract: '2025-01-17' })
+    expect(c.contract_data).toBe('2025-01-17')
+    expect(c.avertisment).toContain('2025-01-22')
+    expect(contractDinExecutie({ nr_contract: '30/22.01.2025', data_contract: '2025-01-22' }).avertisment).toBeNull()
+  })
+  it('număr fără sufix de dată, sufix invalid, gol', () => {
+    expect(contractDinExecutie({ nr_contract: 'ABC-7' })).toMatchObject({ contract_nr: 'ABC-7', contract_data: null })
+    expect(contractDinExecutie({ nr_contract: '30/31.02.2025' })).toMatchObject({ contract_nr: '30', contract_data: null })
+    expect(contractDinExecutie({ nr_contract: '', data_contract: '' })).toMatchObject({ contract_nr: null, contract_data: null, reprezentant_tgz_nume: null })
   })
 })
 

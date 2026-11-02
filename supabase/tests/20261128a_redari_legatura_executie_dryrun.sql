@@ -102,4 +102,36 @@ BEGIN
   RAISE NOTICE 'TEST3 OK viewer citeste, nu scrie';
 END $t$;
 SELECT pg_temp.r28_ca(NULL, 'postgres');
+
+-- ── TEST4 (Copilot f2b r1 P2-1): rezervarea atomică a numărului adresei UAT — admin, persistat, idempotent, versiune verificată ──
+SELECT pg_temp.r28_ca(pg_temp.r28_g('owner')::uuid, 'authenticated');
+DO $t$
+DECLARE u uuid; r public.red_uat; r2 public.red_uat; v0 int; au0 int; au1 int;
+BEGIN
+  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet) VALUES (pg_temp.r28_g('pr')::uuid, 'UAT 28A', 'UAA', 'Test') RETURNING id, versiune INTO u, v0;
+  SELECT coalesce((SELECT ultimul FROM public.red_numere WHERE cheie = 'AU'), 0) INTO au0;
+  IF pg_temp.r28_refuza(format('SELECT public.fn_red_adresa_uat_rezerva(%L, %s)', u, v0 + 5), 'P0001') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST4 FAIL: versiune gresita acceptata'; END IF;
+  IF (SELECT adresa_nr FROM public.red_uat WHERE id = u) IS NOT NULL THEN RAISE EXCEPTION 'TEST4 FAIL: refuzul a scris'; END IF;
+  r := public.fn_red_adresa_uat_rezerva(u, v0);
+  IF r.adresa_nr !~ '^AU-[0-9]{4}$' OR r.adresa_data IS NULL OR r.versiune IS DISTINCT FROM v0 + 1 THEN RAISE EXCEPTION 'TEST4 FAIL: rezervare % / % / %', r.adresa_nr, r.adresa_data, r.versiune; END IF;
+  IF (SELECT adresa_nr FROM public.red_uat WHERE id = u) IS DISTINCT FROM r.adresa_nr THEN RAISE EXCEPTION 'TEST4 FAIL: numarul nu e persistat'; END IF;
+  SELECT ultimul INTO au1 FROM public.red_numere WHERE cheie = 'AU';
+  IF au1 IS DISTINCT FROM au0 + 1 THEN RAISE EXCEPTION 'TEST4 FAIL: red_numere.AU % -> %', au0, au1; END IF;
+  r2 := public.fn_red_adresa_uat_rezerva(u, 999);   -- idempotent: numarul existent se intoarce, fara alt numar, indiferent de versiune
+  IF r2.adresa_nr IS DISTINCT FROM r.adresa_nr OR (SELECT ultimul FROM public.red_numere WHERE cheie = 'AU') IS DISTINCT FROM au1 THEN RAISE EXCEPTION 'TEST4 FAIL: idempotenta'; END IF;
+  IF pg_temp.r28_refuza(format('SELECT public.fn_red_adresa_uat_rezerva(%L, 1)', gen_random_uuid()), 'P0002') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST4 FAIL: UAT inexistent acceptat'; END IF;
+  PERFORM set_config('r28.uat', u::text, true);
+  RAISE NOTICE 'TEST4 OK rezervare adresa UAT (admin)';
+END $t$;
+SELECT pg_temp.r28_ca(pg_temp.r28_g('editor')::uuid, 'authenticated');
+DO $t$ BEGIN
+  IF pg_temp.r28_refuza(format('SELECT public.fn_red_adresa_uat_rezerva(%L, 1)', pg_temp.r28_g('uat')), '42501') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST5 FAIL: editorul a rezervat'; END IF;
+  RAISE NOTICE 'TEST5 OK editor refuzat';
+END $t$;
+SELECT pg_temp.r28_ca(NULL, 'anon');
+DO $t$ BEGIN
+  IF pg_temp.r28_refuza(format('SELECT public.fn_red_adresa_uat_rezerva(%L, 1)', pg_temp.r28_g('uat')), '42501') IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST6 FAIL: anon a apelat'; END IF;
+  RAISE NOTICE 'TEST6 OK anon refuzat';
+END $t$;
+SELECT pg_temp.r28_ca(NULL, 'postgres');
 -- Tranzacția (migrare + DRY) o anulează OPERATORUL din runner (ROLLBACK la final); fișierul nu conține control de tranzacție.

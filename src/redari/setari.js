@@ -112,6 +112,21 @@ export function conflicteConcurente(baza, proaspat, schimbate) {
   return (schimbate || []).filter(k => normalizeazaValoare(baza?.[k]) !== normalizeazaValoare(proaspat?.[k]))
 }
 
+/** Datele contractului preluate din Execuție (Copilot f2b r1 P2-2): numărul fără sufixul „/zz.ll.aaaa”; data = data_contract din Execuție, altfel cea din sufix;
+ *  `avertisment` când ambele există și diferă. Valorile null nu suprascriu ce are deja formularul (decide apelantul). */
+export function contractDinExecutie(rand) {
+  const nr = String(rand?.nr_contract ?? '').trim()
+  const m = /^([^/]+)\/(\d{2})\.(\d{2})\.(\d{4})$/.exec(nr)
+  const dinNr = m && dataValida(`${m[4]}-${m[3]}-${m[2]}`) ? `${m[4]}-${m[3]}-${m[2]}` : null
+  const dataExec = normalizeazaValoare(rand?.data_contract)
+  return {
+    contract_nr: m ? m[1].trim() : (nr || null),
+    contract_data: dataExec ?? dinNr,
+    reprezentant_tgz_nume: normalizeazaValoare(rand?.coordonator_transgaz),
+    avertisment: dataExec && dinNr && dataExec !== dinNr ? `Execuția are data contractului ${dataExec}, iar numărul contractului spune ${dinNr}` : null,
+  }
+}
+
 /** Erorile unui UAT (în română), aceleași reguli ca CHECK-urile din BD: zile în ordine, termen înaintea zilei 1, afișare ordonată. */
 export function valideazaUat(form) {
   const erori = []

@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
-import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente } from '../setari.js'
+import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente, contractDinExecutie } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
 
 export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
@@ -40,10 +40,11 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
       if (!curent()) return
       if (error) throw error
       if (!data) throw new Error('Proiectul de montaj nu este vizibil: fără acces la Execuție')
-      const nr = data.nr_contract ?? ''
-      const m = /^([^/]+)\/\d{2}\.\d{2}\.\d{4}$/.exec(nr)
-      setForm(f => f && ({ ...f, contract_nr: m ? m[1].trim() : nr, contract_data: data.data_contract ?? '', reprezentant_tgz_nume: data.coordonator_transgaz ?? '' }))
-      show('Contract preluat în formular. Salvează explicit modificările.', 'info')
+      // Copilot f2b r1 P2-2: data din sufixul „nr/zz.ll.aaaa” nu se pierde; data din Execuție are prioritate; nepotrivirea se spune; null nu șterge ce există
+      const c = contractDinExecutie(data)
+      setForm(f => f && ({ ...f, contract_nr: c.contract_nr ?? f.contract_nr, contract_data: c.contract_data ?? f.contract_data, reprezentant_tgz_nume: c.reprezentant_tgz_nume ?? f.reprezentant_tgz_nume }))
+      if (c.avertisment) show('Atenție: ' + c.avertisment + '. Am preluat data din Execuție; verifică înainte să salvezi.', 'error')
+      else show('Contract preluat în formular. Salvează explicit modificările.', 'info')
     } catch (e) { if (curent()) show('Preluare contract: ' + msgEroare(e), 'error') }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }

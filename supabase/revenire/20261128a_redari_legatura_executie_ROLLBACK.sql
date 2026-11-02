@@ -22,13 +22,15 @@ BEGIN
     RAISE EXCEPTION '20261128a revenire: exista date; refuz fara gazpet.revenire_20261128a_forta = DA';
   END IF;
 END $pre$;
+DROP FUNCTION public.fn_red_adresa_uat_rezerva(uuid, integer);
 DROP INDEX public.red_proiecte_executie_uq;
 ALTER TABLE public.red_proiecte DROP CONSTRAINT red_proiecte_executie_fk, DROP CONSTRAINT red_proiecte_link_gdpr_ck,
   DROP COLUMN executie_proiect_id, DROP COLUMN link_informare_gdpr;
 DO $post$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_proiecte'
-      AND column_name IN ('executie_proiect_id', 'link_informare_gdpr')) OR to_regclass('public.red_proiecte_executie_uq') IS NOT NULL THEN
+      AND column_name IN ('executie_proiect_id', 'link_informare_gdpr')) OR to_regclass('public.red_proiecte_executie_uq') IS NOT NULL
+     OR to_regprocedure('public.fn_red_adresa_uat_rezerva(uuid,integer)') IS NOT NULL THEN
     RAISE EXCEPTION '20261128a revenire: postconditie esuata';
   END IF;
   IF to_regclass('supabase_migrations.schema_migrations') IS NOT NULL THEN

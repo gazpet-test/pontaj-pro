@@ -596,7 +596,7 @@ describe('Model 4: adresă UAT', () => {
   })
 })
 
-function storageAdresa({ conflict = false, eroareUpdate = false, coliziune = false, eroareUpload = false, eroareListare = false, plafon = 1000 } = {}) {
+function storageAdresa({ coliziune = false, eroareUpload = false, eroareListare = false, plafon = 1000 } = {}) {
   const apeluri = []
   const fisiere = new Set(['AU-0001_v1.docx', 'AU-0001_v3.docx', 'AU-0002_v90.docx'])
   let colizionat = false
@@ -614,50 +614,33 @@ function storageAdresa({ conflict = false, eroareUpdate = false, coliziune = fal
       },
       remove: () => { throw new Error('Nu se șterg fișierele') },
     }) },
-    from: tabel => ({ update: patch => {
-      apeluri.push(['update', tabel, patch])
-      const q = { eq: (k, v) => { apeluri.push(['eq', k, v]); return q }, select: async col => {
-        apeluri.push(['select', col])
-        return { data: conflict ? [] : [{ ...UAT_ADRESA, ...patch, versiune: 8 }], error: eroareUpdate ? { message: 'Rețea' } : null }
-      } }
-      return q
-    } }),
+    from: () => { throw new Error('salveazaAdresaUat nu mai scrie în BD (numărul e rezervat de fn_red_adresa_uat_rezerva)') },
   }
   return { client, apeluri, fisiere }
 }
-const argAdresa = { blob: new Blob(['DOCX FICTIV']), proiectCod: 'TEST', uat: UAT_ADRESA, nrDocument: 'AU-0001', dataDocument: '2026-11-02' }
-describe('salvarea adresei: versiuni + CAS', () => {
-  it('maxim real pe pagini plafonate; upload fără upsert, apoi CAS cu RETURNING', async () => {
+const argAdresa = { blob: new Blob(['DOCX FICTIV']), proiectCod: 'TEST', uat: UAT_ADRESA, nrDocument: 'AU-0001' }
+describe('salvarea adresei: doar upload versionat (numărul e deja pe UAT — Copilot f2b r1 P2-1)', () => {
+  it('maxim real pe pagini plafonate; upload fără upsert; fără scriere în BD', async () => {
     const f = storageAdresa({ plafon: 1 })
     const r = await salveazaAdresaUat(f.client, argAdresa)
-    expect(r.path).toBe('TEST/TST/adresa/AU-0001_v4.docx')
-    expect(r.uat.versiune).toBe(8)
+    expect(r).toEqual({ path: 'TEST/TST/adresa/AU-0001_v4.docx', versiune: 4 })
     expect(f.apeluri.filter(x => x[0] === 'list').map(x => x[2])).toEqual([0, 1, 2, 3])
     expect(f.apeluri.find(x => x[0] === 'upload')[2].upsert).toBe(false)
-    expect(f.apeluri).toContainEqual(['eq', 'versiune', 7])
-    expect(f.apeluri).toContainEqual(['eq', 'id', 'uat-fictiv'])
-    expect(f.apeluri.find(x => x[0] === 'select')[1]).toContain('adresa_nr')
-    expect(f.apeluri.findIndex(x => x[0] === 'upload')).toBeLessThan(f.apeluri.findIndex(x => x[0] === 'update'))
+    expect(f.apeluri.some(x => x[0] === 'update')).toBe(false)
   })
   it('coliziune deterministă: încearcă următoarea versiune cu același AU', async () => {
     const f = storageAdresa({ coliziune: true })
     expect((await salveazaAdresaUat(f.client, argAdresa)).path).toBe('TEST/TST/adresa/AU-0001_v5.docx')
   })
-  it.each([{ conflict: true }, { eroareUpdate: true }])('conflict/eroare de scriere: păstrează fișierul deja încărcat %j', async opt => {
+  it.each([{ eroareListare: true }, { eroareUpload: true }])('eroarea e explicită și spune că numărul rămâne pe UAT %j', async opt => {
     const f = storageAdresa(opt)
-    await expect(salveazaAdresaUat(f.client, argAdresa)).rejects.toThrow('Fișierul rămâne în storage')
-    expect(f.fisiere.has('AU-0001_v4.docx')).toBe(true)
-  })
-  it.each([{ eroareListare: true }, { eroareUpload: true }])('eroarea oprește scrierea BD, fără fallback pe răspuns ambiguu %j', async opt => {
-    const f = storageAdresa(opt)
-    await expect(salveazaAdresaUat(f.client, argAdresa)).rejects.toThrow()
-    expect(f.apeluri.some(x => x[0] === 'update')).toBe(false)
+    await expect(salveazaAdresaUat(f.client, argAdresa)).rejects.toThrow(opt.eroareUpload ? 'numărul rămâne pe UAT' : 'Nu pot lista')
     expect(f.apeluri.filter(x => x[0] === 'upload').length).toBe(opt.eroareListare ? 0 : 1)
   })
-  it('operație expirată: abandonează înainte de upload și BD', async () => {
+  it('operație expirată: abandonează înainte de upload', async () => {
     const f = storageAdresa()
     await expect(salveazaAdresaUat(f.client, { ...argAdresa, esteCurent: () => false })).rejects.toThrow('abandonată')
-    expect(f.apeluri.some(x => ['upload', 'update'].includes(x[0]))).toBe(false)
+    expect(f.apeluri.some(x => x[0] === 'upload')).toBe(false)
   })
   it('data civilă Europe/Bucharest la miezul nopții, iarnă și vară', () => {
     vi.useFakeTimers()
@@ -667,5 +650,16 @@ describe('salvarea adresei: versiuni + CAS', () => {
       vi.setSystemTime(new Date('2026-07-02T21:30:00Z'))
       expect(aziBucuresti()).toBe('2026-07-03')
     } finally { vi.useRealTimers() }
+  })
+})
+
+describe('repetaRand — structuri nesuportate (Copilot f2b r1 P3)', () => {
+  it('tabel imbricat cu rand.* → eroare explicită, nu document cu placeholder-e rămase', () => {
+    const xml = '<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:r><w:t>{{rand.sat}}</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>'
+    expect(() => repetaRand(xml, [{ sat: 'A' }])).toThrow('imbricate')
+  })
+  it('tabele imbricate FĂRĂ rand.* sunt lăsate în pace', () => {
+    const xml = '<w:tbl><w:tr><w:tc><w:tbl><w:tr><w:tc><w:p><w:r><w:t>{{uat}}</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>'
+    expect(repetaRand(xml, [])).toBe(xml)
   })
 })
