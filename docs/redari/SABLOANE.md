@@ -567,8 +567,8 @@ Calitate (col. K): proprietar, coproprietar, moștenitor, arendaș, utilizator, 
 | | X | Opțiune răspuns | red_raspunsuri.optiune (etichetă RO) |
 | | Y | Obiecții (text) | red_raspunsuri.obiectii_text |
 | SESIUNE | Z | Ziua programată | red_raspunsuri.zi_sesiune_aleasa („Ziua 2” în Excel, dată în ERP) |
-| | AA | Prezent? | **fără sursă** (§3 `prezent`) |
-| | AB | Constatare pe teren cerută? (data) | optiune = constatare_teren + **data fără sursă** (§3) |
+| | AA | Prezent? | DA daca exista red_raspunsuri.canal = sesiune pentru detinator; altfel gol |
+| | AB | Constatare pe teren cerută? (data) | red_raspunsuri.data pentru ultimul raspuns cu optiune = constatare_teren; altfel gol |
 | PV | AC | Tip PV | red_procese_verbale.tip (A/B/—) |
 | | AD | Nr. PV | red_procese_verbale.nr_pv |
 | | AE | Data PV | red_procese_verbale.data_pv |
@@ -578,12 +578,22 @@ Calitate (col. K): proprietar, coproprietar, moștenitor, arendaș, utilizator, 
 | | AI | Trimis spre semnare prin poștă (data) | red_procese_verbale.trimis_spre_semnare_data |
 | | AJ | PV semnat primit (data) | red_procese_verbale.semnat_primit_data |
 | STARE | AK | STARE (calculată) | red_v_stare_parcela.stare (etichetă RO din §5.2) |
-| | AL | Responsabil Gazpet | **fără sursă** (§3) |
+| | AL | Responsabil Gazpet | red_uat.responsabil_id -> profiles.name |
 | | AM | Observații | red_parcele.observatii |
 
 Centralizator: rând 3 antet `Stare | Prunișor | Godeanu | Husnicioara | Căzănești | Ilovăț | Bâlvănești | Șișești | TOTAL`;
 rândurile 4–15 = cele 12 stări în ordinea din §5.2; rândul 16 „TOTAL parcele”; rândul 18 „% parcele închise (PV A sau B)”.
 
+Implementat in felia 6 (4.1k README): export Model_6 din Dashboard, descarcare locala.
+Registru intern: 39 coloane; TGZ: 38 (O eliminata fizic). TGZ omite textele libere
+N/Y/AM si celulele cu sintaxa de contact; numele detinatorilor raman in registru.
+Centralizatorul foloseste cele 12 stari in ordinea 5.2, UAT sortate dupa nume,
+TOTAL randuri (parcela + persoana), apoi % parcele inchise (PV A sau B).
+Etichetele sunt cele comune ERP din stare.js; culorile celulelor urmeaza paleta Model_6
+5.3 (verde/galben/rosu/gri/alb). STARE este valoarea calculata de server, fara formule Excel.
+AA: prezenta = orice raspuns canal sesiune. AL: red_uat.responsabil_id -> profiles.name.
+AB: data ultimului raspuns, daca optiunea lui este constatare_teren.
+Legenda este adaptata exportului de consultare, fara promisiunea recalcularii in Excel.
 ## 6. Model_7 — Anexa 7, tipizatul pentru datele deținătorilor de la Beneficiar (xlsx, v5)
 
 O foaie „Date detinatori Lot 1”; rândul 1 titlu, rândul 2 reguli („Un rând = o parcelă + un deținător … Date transmise în

@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase.js'
 import { agregaCentralizator, agregaTronsoane } from '../sesiune.js'
 import { STARI } from '../stare.js'
 import { S, msgEroare } from './comune.jsx'
+import ExportEcran from './ExportEcran.jsx'
 
 // Cursor lexicografic: (uat_id, stare) este unic in vederea centralizatorului.
 async function pagini(fabrica, chei, curent) {
@@ -71,5 +72,6 @@ export default function DashboardEcran({ proiect }) {
         </tr>)}</tbody>
       </table></div>
     </>}
+    <ExportEcran key={proiect.id} proiect={proiect} />
   </div>
 }
