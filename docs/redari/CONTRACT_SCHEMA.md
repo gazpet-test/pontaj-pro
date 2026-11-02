@@ -406,3 +406,23 @@ Politicile/RLS si fn_red_jurnal nu se modifica; pre/post verifica amprenta celor
 Importul nou persista decedat prin d.decedat === true si act_doveditor_cunoscut inclusiv false/NULL.
 Nu modifica detinatorii deja existenti. Aceasta precizare inlocuieste limita istorica din felia 3b.
 
+
+### PV C - 20261129d (versiune 20261129120300)
+
+`fn_red_pv_c_creeaza(p_proiect_id uuid, p_tronson int) RETURNS red_procese_verbale`:
+SECURITY DEFINER, search_path public, pg_temp; auth.uid() obligatoriu, doar admin.
+Advisory lock pe red_pv_c|proiect|tronson precede verificarile. Tronson 1..11 (22023),
+minimum o parcela activa (P0002), fara PV C activ in acelasi proiect/tronson (P0001),
+fara parcele cu tip_pv NULL (P0001 cu numarul lipsurilor). Obiectiile nu blocheaza.
+Numarul PVC si INSERT sunt in aceeasi tranzactie; data este Europe/Bucharest.
+`uat_id` este numai ancora ceruta de schema: UAT cu cele mai multe parcele active,
+egalitate rezolvata prin uat3 alfabetic. Tabela PV nu are proiect_id; se deduce prin UAT.
+`fn_red_pv_creeaza('C',...)` indica noul RPC; restul corpului si ACL sunt pastrate.
+Garda `red_pv_c_garda` pastreaza politicile existente: INSERT C direct ca authenticated este
+refuzat (se foloseste RPC); orice UPDATE C cere admin. Triggerul 4c ramane intact.
+Editor/viewer citesc ecranul si PV C. Accesul Storage ramane cel existent; viewer poate
+primi refuz la descarcare (nu sunt extinse drepturile Storage in aceasta felie).
+Revenirea armata refuza orice PV C existent, inclusiv anulat/sters, si restaureaza corpul 4b.
+Limita: lock-ul serializeaza crearile C prin RPC; nu ingheata modificarile concurente ale
+parcelelor sau PV A/B. PV C reprezinta verificarea la crearea/generarea lui, nu un snapshot SQL durabil.
+PV C se scoate prin anulare; garda refuza schimbarea sters_la, inclusiv reactivarea.

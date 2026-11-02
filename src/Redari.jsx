@@ -15,6 +15,7 @@ import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
 import UatEcran from './redari/ui/UatEcran.jsx'
 import SetariProiect from './redari/ui/SetariProiect.jsx'
+import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 
 const PAGINA = 100
 // Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2). text_gdpr / text_declaratie / contact_email NU se trimit:
@@ -113,6 +114,7 @@ export default function Redari() {
   )
 
   const TABURI = [
+    { cod:'tronsoane', eticheta:'Tronsoane / PV C' },
     { cod:'registru', eticheta:'📋 Registru' },
     { cod:'fisa', eticheta:'📄 Fișa parcelei', dezactivat: !parcelaFisa },
     { cod:'import', eticheta:'📥 Import TGZ' },
@@ -148,6 +150,7 @@ export default function Redari() {
 
       {!proiect ? <Gol text="Alege sau creează un proiect." /> : (
         <div key={proiect.id}>
+          {tab === 'tronsoane' && <TronsoaneEcran proiect={proiect} nivel={nivel} show={show} />} 
           {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}

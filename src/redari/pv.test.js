@@ -190,3 +190,41 @@ describe('storage PV imutabil',()=>{
     expect(upload).not.toHaveBeenCalled()
   })
 })
+
+import { CHEI_PV_C, totaluriPvC, verificaDatePvC, genereazaPvC } from './pv.js'
+const dateC=()=>({proiect:{contract_nr:'TEST',contract_data:'2026-11-02',apm_nume:'APM TEST'},pv:{tronson:5,data_pv:'2026-11-02',nr_pv:'PVC-T5-0001'},
+  randuriTronson:[{parcela_id:'a',uat_id:'u',tip_pv:'A',suprafata_temporara_mp:100},{parcela_id:'b',uat_id:'u',tip_pv:'B',suprafata_temporara_mp:50,obiectii_deschise:true}],
+  pvs:[{parcela_id:'a',tip:'A',stare:'semnat',semnat_la_sesiune:true}],uats:[{id:'u',nume:'UAT TEST'}],
+  parcele:[{tronson:5,km_de_la:2,km_pana_la:4},{tronson:5,km_de_la:1,km_pana_la:6},{tronson:5,km_de_la:0,sters_la:'2026-01-01'}]})
+describe('PV C',()=>{
+  it('23 chei din DOCX independent',async()=>{
+    const z=await JSZip.loadAsync(readFileSync('public/redari/sabloane/pv_c.docx')), chei=new Set()
+    for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name)))
+      for(const m of (await f.async('string')).matchAll(/\{\{([^}]+)\}\}/g))chei.add(m[1])
+    expect([...CHEI_PV_C].sort()).toEqual([...chei].sort());expect(chei.size).toBe(23)
+  })
+  it.each([[true,1,0],[false,0,1],[null,0,1],[undefined,0,1]])('semnat_la_sesiune %s',(flag,s,c)=>{
+    const d=dateC();d.pvs[0].semnat_la_sesiune=flag
+    const r=totaluriPvC(d.randuriTronson,d.pvs)
+    expect(r.pva_sesiune_nr).toBe(s);expect(r.pva_corespondenta_nr).toBe(c)
+    expect(r.pvb_nr).toBe(1);expect(r.total_nr).toBe(2);expect(r.total_mp).toBe('150');expect(r.obiectii_deschise_mp).toBe('50')
+  })
+  it('coproprietari: o parcela o singura data; null mp este zero',()=>{
+    const d=dateC();d.pvs.push({...d.pvs[0]});d.randuriTronson[0].suprafata_temporara_mp=null
+    expect(totaluriPvC(d.randuriTronson,d.pvs).pva_sesiune_nr).toBe(1)
+    expect(totaluriPvC(d.randuriTronson,d.pvs).pva_sesiune_mp).toBe('0')
+  })
+  it('obiectiile nu blocheaza, lipsa PV blocheaza',()=>{
+    const d=dateC();expect(verificaDatePvC(d)).toEqual([])
+    d.randuriTronson[0].tip_pv=null;expect(verificaDatePvC(d)).toContain('parcele fara PV A semnat sau PV B')
+    d.randuriTronson=[];expect(verificaDatePvC(d)).toContain('cel putin o parcela')
+    d.pv.tronson=12;expect(verificaDatePvC(d)).toContain('tronson')
+  })
+  it('DOCX complet, MIN/MAX active si fara date personale',async()=>{
+    const d=dateC(),r=await genereazaPvC({...d,templateArrayBuffer:readFileSync('public/redari/sabloane/pv_c.docx')})
+    expect(r.campuri.km_de_la).toBe('1');expect(r.campuri.km_pana_la).toBe('6');expect(r.campuri.uat_uri).toBe('UAT TEST')
+    expect(r.campuri.semnatar_apm).toBe('APM TEST');expect(Object.keys(r.campuri).sort()).toEqual([...CHEI_PV_C].sort())
+    const z=await JSZip.loadAsync(await r.blob.arrayBuffer());expect(await z.file('word/document.xml').async('string')).not.toContain('{{')
+    d.parcele=[];const gol=await genereazaPvC({...d,templateArrayBuffer:readFileSync('public/redari/sabloane/pv_c.docx')});expect(gol.campuri.km_de_la).toBe('')
+  })
+})
