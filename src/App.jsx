@@ -250,6 +250,7 @@ tr:hover td{background:#1C2128}
 /* tabletă / ecran îngust (<1100 px): zona din dreapta nu mai încape -> toată bara se derulează (ca înainte), fără să lățească pagina */
 @media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{flex:0 0 auto;-webkit-mask-image:none;mask-image:none}}
 @media (max-width:719px){.navscroll{display:none}}
+@media (max-width:1199px){.home-header{flex-wrap:wrap;gap:12px!important;padding:12px 20px!important}.home-account{flex-wrap:wrap;margin-left:auto!important}.home-account>div{min-width:0;overflow-wrap:anywhere}}
 /* Panou PontajPRO (audit UI 02.11): grilele se reașază pe ecrane înguste, pagina nu se mai lățește */
 @media (max-width:1099px){.panou-kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))!important}.panou-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media (max-width:759px){.panou-grid{grid-template-columns:minmax(0,1fr)!important}}
@@ -861,7 +862,7 @@ function Layout({ children }) {
             onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
             onMouseLeave={e => { e.currentTarget.style.background = G.purple + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
           >
-            🎫 <span className="tb-txt">Tichete</span>
+            ⚡ <span className="tb-txt">Tichet rapid</span>
           </button>
           {/* Ale mele — popover split */}
           <div style={{ position:'relative' }}>
@@ -1065,17 +1066,17 @@ function HomeDashboard() {
   })
 
   return (
-    <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column'}}>
+    <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column',fontFamily:"'Barlow',sans-serif"}}>
       <style>{css}</style>
       {/* Header */}
-      <div style={{background:'#161B22',borderBottom:'1px solid #30363D',padding:'0 32px',height:60,display:'flex',alignItems:'center',gap:16,position:'sticky',top:0,zIndex:100}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,flex:1}}>
+      <div className="home-header" style={{background:'#161B22',borderBottom:'1px solid #30363D',padding:'0 32px',minHeight:60,display:'flex',alignItems:'center',gap:16,position:'sticky',top:0,zIndex:100,minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
           <div style={{width:32,height:32,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>⏱</div>
           <span style={{fontWeight:800,fontSize:16,letterSpacing:'-.3px',color:'#E6EDF3'}}>Gazpet</span>
           <span style={{fontWeight:300,fontSize:16,color:'#8B949E'}}>ERP</span>
         </div>
         <MeteoSediu style={{marginRight:12}} />
-        <div style={{textAlign:'right',marginRight:16}}>
+        <div style={{textAlign:'right',marginRight:16,whiteSpace:'nowrap',flexShrink:0}}>
           <div style={{fontSize:18,fontWeight:800,color:'#58A6FF',fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
           <div style={{fontSize:11,color:'#8B949E'}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}</div>
         </div>
@@ -1098,7 +1099,7 @@ function HomeDashboard() {
           }}>
           🎫 Tichete
         </button>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginLeft:10}}>
+        <div className="home-account" style={{display:'flex',alignItems:'center',gap:10,marginLeft:10,minWidth:0}}>
           <Avatar name={profile?.name} id={1} size={32}/>
           <div>
             <div style={{fontSize:13,fontWeight:600,color:'#E6EDF3',lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>

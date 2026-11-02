@@ -142,7 +142,7 @@ function ArhivaComenzi() {
             <Chip key={k} k={k} label={t.label} emoji={t.emoji} count={rows.filter(r => r.tip === k).length} color={t.color} />
           ))}
           <div style={{ flex: 1 }} />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Caută document / furnizor / comandă / proiect..."
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Caută (document, furnizor, comandă)..."
             style={{ padding: '9px 13px', background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, color: G.text, fontSize: 13, outline: 'none', minWidth: 280 }} />
         </div>
 
