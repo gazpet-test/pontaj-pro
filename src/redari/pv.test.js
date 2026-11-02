@@ -79,11 +79,11 @@ const dateB = () => {
 }
 const sablonB=()=>readFileSync('public/redari/sabloane/pv_b.docx')
 describe('PV B',()=>{
-  it('77 chei din sablonul independent, inclusiv antete',async()=>{
+  it('78 chei din sablonul independent, inclusiv antete',async()=>{
     const z=await JSZip.loadAsync(sablonB()), chei=new Set()
     for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name)))
       for(const m of (await f.async('string')).matchAll(/\{\{([^}]+)\}\}/g)) chei.add(m[1])
-    expect([...CHEI_PV_B].sort()).toEqual([...chei].sort());expect(chei.size).toBe(77)
+    expect([...CHEI_PV_B].sort()).toEqual([...chei].sort());expect(chei.size).toBe(78)
   })
   it.each([
     ['proiect','contract_nr','numarul contractului'],['proiect','contract_data','data contractului'],
