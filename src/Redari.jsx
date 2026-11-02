@@ -116,11 +116,11 @@ export default function Redari() {
   )
 
   const TABURI = [
-    { cod:'dashboard', eticheta:'Dashboard' },
-    { cod:'sesiune', eticheta:'Sesiune' },
+    { cod:'dashboard', eticheta:'📊 Dashboard' },
+    { cod:'sesiune', eticheta:'🗓️ Sesiune' },
     { cod:'registru', eticheta:'📋 Registru' },
     { cod:'fisa', eticheta:'📄 Fișa parcelei', dezactivat: !parcelaFisa },
-    { cod:'tronsoane', eticheta:'Tronsoane / PV C' },
+    { cod:'tronsoane', eticheta:'🛤️ Tronsoane / PV C' },
     { cod:'import', eticheta:'📥 Import TGZ' },
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
