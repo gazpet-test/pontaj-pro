@@ -24,6 +24,7 @@ const COUNT_DEFS = {
   '/hr':           { sub:'autorizații',       q: s => s.from('v_hr_autorizatii_status').select('id',{count:'exact',head:true}).is('inlocuita_de_id',null) },
   '/tichete':      { sub:'tichete deschise',  q: s => s.from('tichete').select('id',{count:'exact',head:true}).neq('status','inchis') },
   '/executie':     { sub:'proiecte active',   q: s => s.from('executie_proiecte').select('id',{count:'exact',head:true}).eq('activ',true) },
+  '/redari':       { sub:'parcele în registru', q: s => s.from('red_parcele').select('id',{count:'exact',head:true}).is('sters_la',null) },
 }
 
 const CSS = `
