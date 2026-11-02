@@ -823,6 +823,21 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok = { message: 'Refresh failed', extra: { token_cache: { provider: 'identity-provider', status: 'temporarily-unavailable', operation: 'refresh' } } }
     expect(scrubSentryEvent(ok)).toEqual(ok)
   })
+  it('r46 (Jakarinos): in context Redari identificatorii se colecteaza INAINTE de allow-list; textele pastrate se verifica decodat; context din breadcrumb.message; cost liniar', () => {
+    // P1-01: sursa (extra.token) dispare, dar fragmentele din tags/message/exception.value raman cunoscute -> eliminat
+    expect(scrubSentryEvent({ transaction: '/redari', extra: { token: T }, tags: { a: T.slice(0, 20), b: T.slice(20) } })).toBeNull()
+    expect(scrubSentryEvent({ transaction: '/redari', extra: { token: T }, message: 'x ' + T.slice(0, 20), exception: { values: [{ type: 'E', value: T.slice(20) }] } })).toBeNull()
+    // P1-02: un singur caracter %-codificat in message, in context Redari -> nu trece in schelet
+    const r2 = scrubSentryEvent({ transaction: '/redari', message: T.slice(0, 20) + '%' + T.charCodeAt(20).toString(16) + T.slice(21) })
+    expect(r2 === null || r2.message === undefined).toBe(true)
+    // P2-01: contextul si din breadcrumb.message
+    expect(esteDinContextRedari({ breadcrumbs: [{ message: 'navigare la /redari' }] })).toBe(true)
+    const r3 = scrubSentryEvent({ breadcrumbs: [{ message: 'navigare la /redari' }], extra: { token: [T.slice(0, 20), 'label', T.slice(20)] } })
+    expect(r3 === null || !JSON.stringify(r3).includes(T.slice(0, 20))).toBe(true)
+    // P2-02: lant adanc sub cheie sensibila — rapid (reunirea doar la radacina subarborelui)
+    let lant = { v: 'x' }; const rad = lant; for (let i = 0; i < 3000; i++) { lant.next = { v: 'y' + i }; lant = lant.next }
+    const t0 = Date.now(); const r4 = scrubSentryEvent({ message: 'ok', extra: { token_cache: rad } }); expect(Date.now() - t0).toBeLessThan(2000); expect(r4).not.toBeNull()
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })

@@ -184,12 +184,13 @@ const numaraChei = (radacina) => {
 // Copilot FE r5 P1-01: un obiect referit de două ori (o dată sub cheie obișnuită, o dată sub p_token) se parcurge DIN NOU când e atins
 // pe calea sensibilă — vizitatele țin nivelul (false → true), deci fiecare obiect e parcurs cel mult de două ori (ciclurile se termină).
 // Jakarinos r44 P1-01: toate FRUNZELE-sir ale unui subarbore, in ordinea parcurgerii, unite (fragmente in obiecte/liste imbricate)
-const frunzeUnite = (radacina, cuChei = false) => {
+// r47 (Copilot r40 P1-02): `saraIndici` — fragmentele de 1-2 caractere pot fi chiar bucati din identificator; se verifica AMBELE variante
+const frunzeUnite = (radacina, cuChei = false, saraIndici = true) => {
   const vaz = new WeakSet(); const stiva = [radacina]; const out = []
   while (stiva.length) {
     const o = stiva.pop()
-    if (typeof o === 'number' && Number.isFinite(o)) { const t = String(o); if (!(t.length <= 2 || /^\d{1,3}$/.test(t))) out.push(t); continue }   // r45 P1-02: fragmentele numerice participa (indicii mici nu)
-    if (typeof o === 'string') { if (!(o.length <= 2 || /^\d{1,3}$/.test(o))) out.push(o); continue }   // r45 P1-01: indicii-sir scurti nu intrerup
+    if (typeof o === 'number' && Number.isFinite(o)) { const t = String(o); if (!saraIndici || !(t.length <= 2 || /^\d{1,3}$/.test(t))) out.push(t); continue }   // r45 P1-02: fragmentele numerice participa (indicii mici nu)
+    if (typeof o === 'string') { if (!saraIndici || !(o.length <= 2 || /^\d{1,3}$/.test(o))) out.push(o); continue }   // r45 P1-01: indicii-sir scurti nu intrerup
     if (!o || typeof o !== 'object' || vaz.has(o)) continue
     vaz.add(o)
     if (Array.isArray(o)) { for (let i = o.length - 1; i >= 0; i--) stiva.push(o[i]); continue }
@@ -214,7 +215,7 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
         else { const n = fn(obj, null, v, sensibil); if (n !== v) obj[i] = n }
       }
       // Jakarinos r43: sub context sensibil, o LISTĂ de fragmente (`token: [T[0:20], T[20:]]`) se judecă și unită — identificatorul se colectează
-      if (sensibil) { const unit = frunzeUnite(obj); if (RX_T43.test(unit)) fn(obj, null, unit, sensibil) }   // r45 P2-01: doar daca uniunea E un identificator (exact 43)
+      // (reunirea listelor se face la radacina subarborelui sensibil, in ramura de obiect — r47)
       continue
     }
     for (const cheie of Object.keys(obj)) {
@@ -226,7 +227,7 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
       if (v && typeof v === 'object') {
         stiva.push([v, sensibilCopil])
         // Jakarinos r44 P1-01: `token: { a: T[0:20], b: T[20:] }` / `token: [[..],[..]]` — subarborele sensibil se judeca si cu frunzele unite
-        if (sensibilCopil) { const unit = frunzeUnite(v); if (RX_T43.test(unit)) fn(obj, cheie, unit, true) }
+        if (sensibilCopil && !sensibil) { for (const unit of [frunzeUnite(v), frunzeUnite(v, false, false)]) if (RX_T43.test(unit)) fn(obj, cheie, unit, true) }   // r47: doar la radacina subarborelui sensibil (cost liniar)
       }
       else vNou = fn(obj, cheie, v, sensibilCopil)
       if (cheieNoua !== cheie || vNou !== v) obj[cheieNoua] = vNou
@@ -364,7 +365,7 @@ export function maiScurgeToken(event, tokenuri, aPurtatToken = tokenuri.size > 0
   const ferestre = []
   if (tokenuri.size) {
     for (const t of tokenuri) for (let i = 0; i + 12 <= t.length; i++) ferestre.push(t.slice(i, i + 12))
-    for (const u of [frunzeUnite(event), frunzeUnite(event, true)]) for (const g of [u, cuUnicode(u), ...formele(u)]) if (contineVreunToken(g, tokenuri) || ferestre.some(w => g.includes(w))) return true
+    for (const u of [frunzeUnite(event), frunzeUnite(event, true), frunzeUnite(event, false, false), frunzeUnite(event, true, false)]) for (const g of [u, cuUnicode(u), ...formele(u)]) if (contineVreunToken(g, tokenuri) || ferestre.some(w => g.includes(w))) return true
   }
   // formele „unite” (fără separatori) se folosesc DOAR pentru identificatorii cunoscuți (întregi sau ferestre) — nu pentru regex-urile
   // generice de 43, care pe un text lipit ar aprinde fals (șiruri scurte legitime puse cap la cap)
@@ -428,10 +429,11 @@ export function esteDinContextRedari(event) {
   const e = event || {}
   if (vreoFormaSePotriveste(e.request?.url, RX_CONTEXT_REDARI) || vreoFormaSePotriveste(e.transaction, RX_CONTEXT_REDARI)) return true
   const bc = Array.isArray(e.breadcrumbs) ? e.breadcrumbs : (Array.isArray(e.breadcrumbs?.values) ? e.breadcrumbs.values : [])
-  for (const b of bc) { if (!b || typeof b !== 'object') continue; for (const u of [b.url, b.data?.url, b.data?.to, b.data?.from]) if (vreoFormaSePotriveste(u, RX_CONTEXT_REDARI)) return true }
+  for (const b of bc) { if (!b || typeof b !== 'object') continue; for (const u of [b.url, b.data?.url, b.data?.to, b.data?.from, b.message]) if (vreoFormaSePotriveste(u, RX_CONTEXT_REDARI)) return true }   // r47: si b.message
   return false
 }
-const sirScurt = (v, n = 200) => typeof v === 'string' && v.length <= n && !RX_RUN43.test(v)
+// r47 (Jakarinos r46 P1-02): si formele decodate (`%55` in mijloc, escape-uri JS) si continutul inca codificat
+const sirScurt = (v, n = 200) => typeof v === 'string' && v.length <= n && !formele(v).some(f => RX_RUN43.test(f) || RX_RUN43.test(cuUnicode(f))) && !ramaneCodificat(v)
 export function doarCampurileSigure(event) {
   const e = event
   const out = {}
@@ -452,11 +454,17 @@ export function scrubSentryEvent(event) {
   try {
     if (event === null || typeof event !== 'object') return null
     if (esteDinFormularulPublic(event)) return null
+    let tokOrig = null
     if (esteDinContextRedari(event)) {
       // r46: controlul principal — doar campurile sigure; apoi aceleasi verificari ca pentru orice eveniment (aparare in adancime)
+      tokOrig = colecteazaTokenuriEveniment(event)   // r47 (Jak r46 P1-01): identificatorii din ORIGINALUL complet, inainte de filtrare
       event = doarCampurileSigure(event)
+      // r47 (Copilot r40 P1-01): fragmente FARA sursa, raspandite intre campurile permise (message + exception.value) — frunzele scheletului
+      // unite in ordine nu au voie sa formeze o secventa de >=43 (scheletul are putine campuri, toate scurte; concatenarea lor nu e un caz legitim)
+      if ([frunzeUnite(event), frunzeUnite(event, false, false)].some(u => RX_RUN43.test(u) || RX_RUN43.test(cuUnicode(u)) || formele(u).some(f => RX_RUN43.test(f)))) return null
     }
     const tokenuri = colecteazaTokenuriEveniment(event)   // ÎNAINTE de ștergerea corpului — colectează și din request.data/body
+    if (tokOrig) { for (const t of tokOrig) tokenuri.add(t); if (tokOrig.refuzat) tokenuri.refuzat = true; if (tokOrig.ambiguu) tokenuri.ambiguu = true }
     // r14 P1-1 (Jakarinos + Copilot r8): `refuzat` (JSON suspect neparcurs, oriunde in eveniment, nu doar in corp) face evenimentul purtator
     let purtator = tokenuri.size > 0 || !!tokenuri.refuzat || !!tokenuri.ambiguu
     const req = event.request
