@@ -145,14 +145,16 @@ Deno.serve(async (req: Request) => {
     if (actiune === 'analiza') {
       const p = await pagina();
       const PT = p.access_token as string;
-      const { data: pubs } = await db.from('marketing_postari').select('id, fb_post_id, publicat_la, site_id, fb_reach, fb_impresii, fb_reactii, fb_comentarii, fb_distribuiri, fb_stats_la')
+      const { data: pubs, error: ePubs } = await db.from('marketing_postari').select('id, fb_post_id, publicat_la, site_id, fb_reach, fb_impresii, fb_reactii, fb_comentarii, fb_distribuiri, fb_stats_la')
         .eq('status', 'publicata').not('fb_post_id', 'is', null).order('publicat_la', { ascending: false }).limit(50);
+      // Copilot f17 r4 P3-01: eroarea de citire nu mai e tratata ca „nicio postare”
+      if (ePubs) return json({ error: `citire postari: ${ePubs.message}` }, 500);
       const out: any[] = [];
       const erori = new Set<string>();
       for (const ps of pubs || []) {
         let st: Record<string, number | null> = { fb_reach: ps.fb_reach, fb_impresii: ps.fb_impresii, fb_reactii: ps.fb_reactii, fb_comentarii: ps.fb_comentarii, fb_distribuiri: ps.fb_distribuiri };
-        // reach lipsă = insights necitite → se reîncearcă la fiecare deschidere a Analizei (max 50 de postări, doar la cererea userului), nu după 6 h
-        const vechi = !ps.fb_stats_la || ps.fb_reach == null || (Date.now() - new Date(ps.fb_stats_la).getTime()) > 6 * 3600e3;
+        // reach / impresii lipsă = insights necitite → se reîncearcă la fiecare deschidere a Analizei (max 50 de postări, doar la cererea userului), nu după 6 h
+        const vechi = !ps.fb_stats_la || ps.fb_reach == null || ps.fb_impresii == null || (Date.now() - new Date(ps.fb_stats_la).getTime()) > 6 * 3600e3;
         if (vechi || body.forta) {
           // audit 02.11 #17: interactiunile si insights-urile se cer SEPARAT si independent — o metrica retrasa de Meta (impresiile pe Pages)
           // facea sa pice tot apelul, iar eroarea era inghitita (fb_stats_la a ramas NULL la toate postarile). Ce nu se poate citi pastreaza
