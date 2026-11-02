@@ -196,3 +196,59 @@ export async function salveazaPv(supabase, { blob, proiectCod, uat3, nrPv, semna
   }
   throw new Error('Prea multe coliziuni la salvarea PV; reincarca.')
 }
+
+// PV C counts parcels once, including parcels with several signed co-owners.
+export const CHEI_PV_C = ['contract_data','contract_nr','data_pv','km_de_la','km_pana_la','nr_pv','numar_parcele',
+  'obiectii_deschise_mp','obiectii_deschise_nr','proiect_denumire','pva_corespondenta_mp','pva_corespondenta_nr',
+  'pva_sesiune_mp','pva_sesiune_nr','pvb_mp','pvb_nr','semnatar_apm','semnatar_gazpet','semnatar_tgz','total_mp','total_nr','tronson','uat_uri']
+export function totaluriPvC(randuriTronson, pvs) {
+  const sesiune = new Set(pvs.filter(p => p.tip === 'A' && p.stare === 'semnat' && p.sters_la == null && p.semnat_la_sesiune === true).map(p => p.parcela_id))
+  const grupe = {pva_sesiune:[],pva_corespondenta:[],pvb:[],obiectii_deschise:[],total:randuriTronson}
+  for (const r of randuriTronson) {
+    if (r.tip_pv === 'A') grupe[sesiune.has(r.parcela_id)?'pva_sesiune':'pva_corespondenta'].push(r)
+    if (r.tip_pv === 'B') grupe.pvb.push(r)
+    if (r.obiectii_deschise === true) grupe.obiectii_deschise.push(r)
+  }
+  return Object.fromEntries(Object.entries(grupe).flatMap(([k,rs]) => {
+    const suma = rs.reduce((n,r) => {
+      // Copilot f4d r1 P2-02: suprafata lipsa NU devine 0 intr-un act de receptie (verificaDatePvC o blocheaza)
+      if (r.suprafata_temporara_mp == null || r.suprafata_temporara_mp === '') throw new Error('Suprafata lipsa pentru parcela '+(r.id_parcela??r.parcela_id))
+      const v = Number(r.suprafata_temporara_mp)
+      if (!Number.isFinite(v)) throw new Error('Suprafata invalida pentru PV C')
+      return n+v
+    },0)
+    return [[k+'_nr',rs.length],[k+'_mp',formatNumarRo(Math.round(suma*100)/100)]]
+  }))
+}
+export function verificaDatePvC({proiect={},pv={},randuriTronson=[]}) {
+  const lipsuri=[]
+  for(const [v,k] of [[proiect.contract_nr,'numarul contractului'],[proiect.contract_data,'data contractului'],[pv.data_pv,'data PV']]) if(!plin(v)) lipsuri.push(k)
+  if(!Number.isInteger(pv.tronson) || pv.tronson<1 || pv.tronson>11) lipsuri.push('tronson')
+  if(!randuriTronson.length) lipsuri.push('cel putin o parcela')
+  if(randuriTronson.some(r=>r.tip_pv == null)) lipsuri.push('parcele fara PV A semnat sau PV B')
+  const faraMp=randuriTronson.filter(r=>r.suprafata_temporara_mp == null || r.suprafata_temporara_mp === '').length
+  if(faraMp) lipsuri.push('suprafata temporara lipsa la '+faraMp+' parcele')
+  return lipsuri
+}
+export async function genereazaPvC(date) {
+  const {proiect={},pv={},randuriTronson=[],pvs=[],uats=[],parcele=[]}=date
+  const lipsuri=verificaDatePvC(date)
+  if(date.strict!==false && lipsuri.length) throw new Error('Lipsesc: '+lipsuri.join('; '))
+  const active=parcele.filter(p=>p.sters_la==null && p.tronson===pv.tronson)
+  const limita=(k,fn)=>{
+    const valori=active.filter(p=>p[k]!=null && p[k]!=='').map(p=>Number(p[k]))
+    if(valori.some(v=>!Number.isFinite(v))) throw new Error('Kilometraj invalid')
+    return valori.length?formatNumarRo(fn(...valori)):''
+  }
+  const ids=new Set(randuriTronson.map(r=>r.uat_id))
+  // Copilot f4d r1 P3-01: fiecare UAT al tronsonului trebuie sa fie citit, altfel lista din PV ar fi incompleta
+  const lipsaUat=[...ids].filter(id=>!uats.some(u=>u.id===id))
+  if(lipsaUat.length) throw new Error('UAT-uri necitite pentru tronson: '+lipsaUat.length+'; reincarca.')
+  const campuri={...totaluriPvC(randuriTronson,pvs),contract_nr:proiect.contract_nr??'',contract_data:formatDataRo(proiect.contract_data),
+    proiect_denumire:proiect.denumire??'',nr_pv:pv.nr_pv??'',data_pv:formatDataRo(pv.data_pv),tronson:pv.tronson??'',
+    km_de_la:limita('km_de_la',Math.min),km_pana_la:limita('km_pana_la',Math.max),numar_parcele:randuriTronson.length,
+    uat_uri:[...new Set(uats.filter(u=>ids.has(u.id)).map(u=>u.nume))].sort((a,b)=>a.localeCompare(b,'ro')).join(', '),
+    semnatar_tgz:[proiect.reprezentant_tgz_nume,proiect.reprezentant_tgz_functie].filter(Boolean).join(', '),
+    semnatar_gazpet:[proiect.reprezentant_gazpet_nume,proiect.reprezentant_gazpet_functie].filter(Boolean).join(', '),semnatar_apm:proiect.apm_nume??''}
+  return documentPv(campuri,date.templateArrayBuffer,date.strict!==false)
+}

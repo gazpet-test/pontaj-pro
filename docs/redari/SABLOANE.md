@@ -206,25 +206,26 @@ Upload-ul precedă UPDATE-ul UAT cu CAS pe versiunea citită și RETURNING expli
 **Numerele rezervate prin RPC se consumă chiar dacă generarea/upload-ul/salvarea ulterioară eșuează** (ca la convocator).
 Regenerarea cere confirmare și păstrează `adresa_nr`, crescând numai versiunea fișierului. Modificările nesalvate blochează generarea.
 
-### 2.5 `pv_c.docx` (Model 5) — per tronson, 23 placeholder-e
+### 2.5 `pv_c.docx` (Model 5) - per tronson, 23 placeholder-e
 
-| placeholder | sursă în BD | oblig. | observații |
-|---|---|---|---|
-| antet (3) | red_proiecte | da | |
-| `{{nr_pv}}` (`PVC-T{n}-{nnnn}`), `{{data_pv}}`, `{{tronson}}` | red_procese_verbale | da | |
-| `{{km_de_la}}`, `{{km_pana_la}}` | calcul: MIN/MAX red_parcele.km_de_la / km_pana_la pe tronson (nu există tabel de tronsoane) | nu | |
-| `{{uat_uri}}`, `{{numar_parcele}}` | calcul pe tronson | da | |
-| `{{pva_sesiune_nr}}`, `{{pva_sesiune_mp}}` | calcul: PV A semnat cu `trimis_spre_semnare_data IS NULL` | da | **presupunere**: „prin corespondență” = `trimis_spre_semnare_data` setată; de confirmat |
-| `{{pva_corespondenta_nr}}`, `{{pva_corespondenta_mp}}` | calcul: PV A semnat cu `trimis_spre_semnare_data IS NOT NULL` | da | |
-| `{{pvb_nr}}`, `{{pvb_mp}}`, `{{obiectii_deschise_nr}}`, `{{obiectii_deschise_mp}}`, `{{total_nr}}`, `{{total_mp}}` | calcul din red_v_tronson | da | |
-| `{{semnatar_tgz}}`, `{{semnatar_gazpet}}`, `{{semnatar_apm}}` | red_proiecte / APM fără sursă | nu | |
+| Placeholder | Sursa finala |
+|---|---|
+| contract_nr, contract_data, proiect_denumire | red_proiecte; contract obligatoriu |
+| nr_pv, data_pv, tronson | red_procese_verbale tip C; PVC-T{n}-nnnn |
+| km_de_la, km_pana_la | MIN(km_de_la), MAX(km_pana_la) din parcelele active ale tronsonului/proiectului; lipsa = gol |
+| uat_uri, numar_parcele | Nume UAT distincte ordonate, numarul parcelelor active din red_v_tronson |
+| pva_sesiune_nr/mp | tip_pv A si cel putin un PV A activ semnat cu semnat_la_sesiune=true pe parcela |
+| pva_corespondenta_nr/mp | tip_pv A, fara PV A activ semnat cu semnat_la_sesiune=true |
+| pvb_nr/mp | tip_pv B din red_v_tronson |
+| obiectii_deschise_nr/mp | obiectii_deschise=true; nu blocheaza receptia |
+| total_nr/mp | Toate parcelele active; mp=sum(suprafata_temporara_mp), null=0; formatNumarRo |
+| semnatar_tgz, semnatar_gazpet, semnatar_apm | Reprezentantii proiectului (nume + functie), respectiv apm_nume |
 
-Divergențe față de brief §4.5: brief-ul vorbește de „tabelul redărilor executate (articole deviz, cantități agregate)” și
-de „listează parcelele” — Model 5 NU are niciun tabel de parcele sau de articole; spune doar „Lista parcelelor … este anexată
-(export din registrul de urmărire)”. Nu am adăugat tabele; dacă se vor, se adaugă în model un tabel cu rând-șablon
-`{{rand.id_parcela}} {{rand.nr_pv}} {{rand.tip_pv}}` / `{{rand.articol_deviz}} {{rand.cantitate}}`, iar anexa se face ca
-export xlsx din registru (§5).
-
+O parcela cu mai multi coproprietari se numara o singura data. Daca semnaturile sunt mixte,
+prezenta oricarui PV A semnat la sesiune clasifica parcela la sesiune. Data trimiterii nu decide categoria.
+Nu se includ nume de detinatori sau alte date personale. Modelul contine numai agregate;
+nu exista tabel de parcele/articole in acest DOCX. Locul si alte_observatii sunt campuri ale PV-ului,
+dar nu au placeholder in sablonul actual. Generarea reciteste toate sursele si le verifica dupa upload.
 ### 2.6 cerere_imputernicire.docx (anexa la scrisoarea TGZ) - 12 placeholder-e
 
 DRAFT Juridic, de validat de avocat. Nu se trimite automat. Adminul descarca DOCX-ul din Setari proiect pentru verificare.

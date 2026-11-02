@@ -495,3 +495,54 @@ Nu s-au rulat Git, commit, push, acces la credentiale, BD sau deploy.
   `gazpet.revenire_20261126a_forta = 'DA'` (care PIERDE datele și scoate drepturile în cascadă; doar cu decizia explicită a lui Răzvan).
 - Fișierele din bucket nu se șterg de nimeni prin politici; o convocare greșită = `stare = 'anulat'` + motiv, numărul rămâne consumat.
 - Frontend: `revert` al commit-urilor de pe branch / PR; ruta `/redari` e lazy și cere modulul, deci fără drepturi acordate nimeni nu o vede.
+
+### 4.1i Faza 2, felia 4d - receptie pe tronson / PV C
+
+Livrare locala, fara aplicare in BD. Tab nou Tronsoane / PV C: agregate paginate din
+red_v_tronson, creare numai admin si fara parcele neacoperite; PV C existent se deschide.
+ModalPv refoloseste CAS, scan verificat, recitire dupa upload si tranzitiile 4c.
+Campuri C: data_pv, locul, alte_observatii; DOCX fara date de detinatori.
+
+Fisiere: supabase/migrations/20261129d_redari_pv_c.sql,
+supabase/revenire/20261129d_redari_pv_c_ROLLBACK.sql,
+supabase/tests/20261129d_redari_pv_c_dryrun.sql; src/redari/pv.js, pv.test.js,
+ui/ModalPv.jsx, ui/TronsoaneEcran.jsx; src/Redari.jsx (import, tab, montare);
+SABLOANE.md 2.5 si CONTRACT_SCHEMA.md.
+
+Raport L01-L25 (referintele sunt sectiuni/functii, teste scrise, NU rezultate executate):
+
+| Regula | Aplicare / dovada |
+|---|---|
+| L01 | fn_red_pv_c_creeaza: advisory inainte de verificari; ModalPv: CAS existent |
+| L02 | Numar + INSERT RETURNING in acelasi RPC |
+| L03 | ModalPv.genereaza: surse recitite inainte/dupa upload si dupa CAS |
+| L04 | n/a - nu exista cantitati mutate, bani sau mail; unicitatea intentiei C este proiect/tronson activ |
+| L05 | TronsoaneEcran.deschide reciteste dupa RPC inclusiv la eroare; fara retry automat; upload-urile nu se sterg |
+| L06 | Ordinea lock-urilor comentata in RPC; nu ia lock pe copii |
+| L07 | red_pv_c_garda: admin pe scrieri C, INSERT direct refuzat; triggerul 4c pastrat |
+| L08 | auth.uid() + fn_red_nivel(), fara identitate primita de client |
+| L09 | Scope proiect prin red_uat, parcela din acelasi proiect; modul redari prin fn_red_nivel |
+| L10 | n/a |
+| L11 | CHEI_PV_C citite din DOCX real; test independent pe sablon |
+| L12 | Keyset pana la pagina goala; erori afisate, nu liste goale de succes |
+| L13 | n/a - fara parser/regex nou de productie |
+| L14 | Runner obligatoriu o tranzactie; pre/post; revenire cu lock si refuz daca exista C |
+| L15 | Pre/post: politici red_pv, proacl vechi, secdef/search_path/ACL nou; nu este audit tranzitiv complet |
+| L16 | Unicitate scope proiect/tronson sub advisory; INSERT direct blocat; fara index UNIQUE cross-table |
+| L17 | Europe/Bucharest in RPC; helper formatNumarRo existent |
+| L18 | Erorile de citire sunt aruncate; mp invalid refuzat; NULL mp explicit zero |
+| L19 | Clasificarea tip_pv vine din red_v_tronson; totaluriPvC comun generatorului |
+| L20 | DRY: succes si refuzuri; pv.test.js: null, false, coproprietari, obiectii |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | TronsoaneEcran si ModalPv C: keyset pana la gol, IN in loturi de 100 |
+| L24 | Generatie/useRef, invalidare la unmount/proiect; reload explicit dupa actiuni |
+| L25 | Teste scrise cu sablon independent si roluri reale ca in DRY 4b; nu au fost executate |
+
+Verificat local: citirea celor 23 de placeholder-e din ZIP/XML cu .NET; inspectie statica.
+NU au fost rulate npm/npx/node/vitest, DRY SQL, build, PostgREST, Storage, concurenta cu doua sesiuni,
+sau apply -> revenire -> reapply. Nu exista node_modules. Claude trebuie sa execute aceste verificari,
+inclusiv regresiile 4b (asteptarea veche 'felia 4e' trebuie adaptata de harness) si 4c.
+DRY cere identitati owner/editor/viewer existente si contor PVC-T5 nefolosit; nu modifica drepturi.
+Testele se ruleaza numai in tranzactia de proba a migrarii, fara commit.
+Limitele de concurenta si acces Storage viewer sunt descrise in CONTRACT_SCHEMA.md.

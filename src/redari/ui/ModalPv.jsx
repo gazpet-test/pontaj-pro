@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
-import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan } from '../pv.js'
+import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
 import { Modal, Camp, S, msgEroare, citestePaginat, COL_RASPUNS } from './comune.jsx'
 
 const COMISIE = ['verificare_data','verificare_de_gazpet','verificare_de_tgz']
@@ -11,15 +11,15 @@ const CAMPURI = ['data_pv','locul','constatare_mod','identitate_verificata','luc
 const canonic = v => v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o,k)=>(o[k]=canonic(v[k]),o),{}) : v
 const egal = (a,b) => JSON.stringify(canonic(a ?? null)) === JSON.stringify(canonic(b ?? null))
 const cas = (q, vechi, chei) => chei.reduce((r,k) => vechi[k] == null ? r.is(k,null) : r.eq(k,typeof vechi[k] === 'object' ? JSON.stringify(canonic(vechi[k])) : vechi[k]),q)
-const forma = s => !s ? {} : ['semnat','anulat'].includes(s.pv?.stare) ? {...s.pv} : { ...s.pv, lucrari: s.pv?.lucrari ?? propuneLucrari(s.parcela.articol_deviz), stare_teren: s.pv?.stare_teren ?? {} }
+const forma = s => !s ? {} : (s.pv?.tip === 'C' || ['semnat','anulat'].includes(s.pv?.stare)) ? {...s.pv} : { ...s.pv, lucrari: s.pv?.lucrari ?? propuneLucrari(s.parcela?.articol_deviz), stare_teren: s.pv?.stare_teren ?? {} }
 const conflict = () => new Error('Modificat de altcineva, reincarca.')
-export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', nivel, show, onClose, onGata }) {
+export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiectId, tip = 'A', nivel, show, onClose, onGata }) {
   const [sursa,setSursa] = useState(null), [form,setForm] = useState({}), [comisie,setComisie] = useState({})
   const [lucru,setLucru] = useState(false), [mesaj,setMesaj] = useState('')
   const [dataStare,setDataStare] = useState(aziBucuresti), [motivAnulare,setMotivAnulare] = useState('')
   const [scan,setScan] = useState(null), [fizic,setFizic] = useState(false), [sesiune,setSesiune] = useState(false)
   const generatie = useRef(0), ocupat = useRef(false)
-  const poateScrie = nivel === 'admin' || nivel === 'editor'
+  const poateScrie = nivel === 'admin' || (tip !== 'C' && nivel === 'editor')
   const final = ['semnat','anulat'].includes(sursa?.pv?.stare)
   const citeste = async (curent = () => true) => {
     const unul = async (t,id) => {
@@ -27,6 +27,23 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
       if (error) throw error
       if (!data) throw new Error('Date indisponibile; reincarca.')
       return data
+    }
+    if (tip === 'C') {
+      const opt={cheie:'id',esteCurent:curent}
+      const [proiect,pv,randuriTronson,uats,parcele]=await Promise.all([
+        unul('red_proiecte',proiectId),unul('red_procese_verbale',pvId),
+        citestePaginat(()=>supabase.from('red_v_tronson').select('*').eq('proiect_id',proiectId).eq('tronson',tronson),{cheie:'parcela_id',esteCurent:curent}),
+        citestePaginat(()=>supabase.from('red_uat').select('*').eq('proiect_id',proiectId),opt),
+        citestePaginat(()=>supabase.from('red_v_parcele').select('id,tronson,km_de_la,km_pana_la,sters_la').eq('proiect_id',proiectId).eq('tronson',tronson).is('sters_la',null),opt),
+      ])
+      const uat=uats.find(u=>u.id===pv.uat_id)
+      if(!uat || pv.tip!=='C' || pv.tronson!==tronson || pv.sters_la) throw new Error('PV C incompatibil cu proiectul/tronsonul.')
+      const pvs=[]
+      // Small IN batches, keyset until empty; no personal fields enter the aggregate.
+      for(let i=0;i<randuriTronson.length;i+=100) pvs.push(...await citestePaginat(()=>supabase.from('red_procese_verbale')
+        .select('id,parcela_id,tip,stare,sters_la,semnat_la_sesiune').in('parcela_id',randuriTronson.slice(i,i+100).map(r=>r.parcela_id))
+        .eq('tip','A').eq('stare','semnat').is('sters_la',null),opt))
+      return {proiect,pv,uat,uats,parcele,randuriTronson,pvs,parcela:{}}
     }
     // View excludes valoare_lei: authenticated cannot SELECT that column.
     const [parcela,detinator,proiect] = await Promise.all([
@@ -61,7 +78,7 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
       .catch(e => { if (generatie.current === token) setMesaj(msgEroare(e)) })
       .finally(() => { if (generatie.current === token) { ocupat.current=false; setLucru(false) } })
     return () => { generatie.current++ }
-  }, [parcelaId,detinatorId,proiectId,tip])
+  }, [parcelaId,detinatorId,proiectId,tip,pvId,tronson])
   const ruleaza = async f => {
     if (ocupat.current) return
     ocupat.current=true; setLucru(true); setMesaj('')
@@ -114,13 +131,13 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
     if(!egal(s,sursa) && !window.confirm('Datele s-au schimbat. Generez cu datele actuale din baza?')) return
     if (tip==='B' && s.areASemnat) throw new Error('Exista PV A semnat pe parcela; PV B nu se genereaza.')
     if (['semnat','anulat'].includes(s.pv.stare)) throw conflict()
-    const lipsuri=(tip==='B'?verificaDatePvB:verificaDatePvA)(s)
+    const lipsuri=(tip==='C'?verificaDatePvC:tip==='B'?verificaDatePvB:verificaDatePvA)(s)
     if(lipsuri.length) throw new Error('Lipsesc: '+lipsuri.join('; '))
     const r=await fetch('/redari/sabloane/pv_'+tip.toLowerCase()+'.docx')
     if(!r.ok) throw new Error('Sablonul PV '+tip+' nu poate fi citit.')
     const templateArrayBuffer=await r.arrayBuffer()
     if(!curent()) return
-    const {blob}=await (tip==='B'?genereazaPvB:genereazaPvA)({...s,templateArrayBuffer})
+    const {blob}=await (tip==='C'?genereazaPvC:tip==='B'?genereazaPvB:genereazaPvA)({...s,templateArrayBuffer})
     if(!curent()) return
     const {path}=await salveazaPv(supabase,{blob,proiectCod:s.proiect.cod,uat3:s.uat.uat3,nrPv:s.pv.nr_pv,esteCurent:curent})
     if(!curent()) return
@@ -193,13 +210,13 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
     <button style={S.btnS} disabled={lucru} onClick={reload}>Reincarca</button>
     {sursa && !sursa.pv && poateScrie && <button style={S.btnP} disabled={lucru||(tip==='B'&&sursa.areASemnat)} onClick={creeaza}>Creeaza PV {tip}</button>}
     {sursa?.pv && <>
-      <p>{sursa.detinator?.nume || 'PV B (parcela)'} - {sursa.pv.stare}</p>
+      <p>{sursa.detinator?.nume || (tip==='C'?'PV C (tronson)':'PV B (parcela)')} - {sursa.pv.stare}</p>
       <fieldset disabled={lucru || !poateScrie || final}>
-        {text('data_pv','date')}{text('locul')}
+        {text('data_pv','date')}{tip!=='C' && text('locul')}
         {tip==='B' && <Camp eticheta="Motiv PV B (obligatoriu)"><select style={S.input} value={form.motiv_pv_b??''} onChange={e=>schimba('motiv_pv_b',e.target.value||null)}><option value="">Alege</option>{MOTIVE_PV_B.map(k=><option key={k} value={k}>{k}</option>)}</select></Camp>}
         {tip==='A' && <Camp eticheta="Constatare"><select style={S.input} value={form.constatare_mod??''} onChange={e=>schimba('constatare_mod',e.target.value||null)}>
           <option value="">Alege</option><option value="sediu">Sediu</option><option value="teren">Teren</option></select></Camp>}
-        {(tip==='A'?['identitate_verificata','plan_situatie','obiectii_redare']:['plan_situatie','obiectii_redare']).map(k=><Camp key={k} eticheta={k}>
+        {tip!=='C' && <>{(tip==='A'?['identitate_verificata','plan_situatie','obiectii_redare']:['plan_situatie','obiectii_redare']).map(k=><Camp key={k} eticheta={k}>
           <select style={S.input} value={form[k]==null?'':String(form[k])} onChange={e=>schimba(k,e.target.value===''?null:e.target.value==='true')}>
             {k!=='obiectii_redare'&&<option value="">Necunoscut</option>}<option value="true">Da</option><option value="false">Nu</option>
           </select></Camp>)}
@@ -209,15 +226,15 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
             : <label key={k} style={{display:'block'}}><input type="checkbox" checked={form[grup]?.[k]===true} onChange={e=>schimba(grup,{...form[grup],[k]:e.target.checked})}/>{k}</label>)}
         </fieldset>)}
         {text('foto_nr','number')}{text('termen_remediere','date')}{text('reverificare_la','date')}
-        {['obiectii_text','alte_observatii'].map(k=><Camp key={k} eticheta={k}><textarea style={S.input} value={form[k]??''} onChange={e=>schimba(k,e.target.value||null)}/></Camp>)}
+        </>}{(tip==='C'?[]:['obiectii_text','alte_observatii']).map(k=><Camp key={k} eticheta={k}><textarea style={S.input} value={form[k]??''} onChange={e=>schimba(k,e.target.value||null)}/></Camp>)}
       </fieldset>
-      <fieldset disabled={lucru||!poateScrie}>{text('remediat_la','date')}</fieldset>
+      {tip!=='C' && <fieldset disabled={lucru||!poateScrie}>{text('remediat_la','date')}</fieldset>}
       {poateScrie && <button style={S.btnP} disabled={lucru||!schimbate.length} onClick={()=>salveaza()}>Salveaza PV</button>}
-      <fieldset disabled={lucru||!poateScrie||final}><legend>Verificare parcela (obligatorie PV B; salvare separata)</legend>
+      {tip!=='C' && <><fieldset disabled={lucru||!poateScrie||final}><legend>Verificare parcela (obligatorie PV B; salvare separata)</legend>
         {COMISIE.map(k=><Camp key={k} eticheta={k}><input style={S.input} type={k==='verificare_data'?'date':'text'} value={comisie[k]??''}
           onChange={e=>{if(!ocupat.current)setComisie(f=>({...f,[k]:e.target.value||null}))}}/></Camp>)}
       </fieldset>
-      {poateScrie && <button style={S.btnS} disabled={lucru||final||!comSchimbate.length} onClick={()=>salveaza(true)}>Salveaza verificarea parcelei</button>}
+      {poateScrie && <button style={S.btnS} disabled={lucru||final||!comSchimbate.length} onClick={()=>salveaza(true)}>Salveaza verificarea parcelei</button>}</>}
       <p>Salveaza toate modificarile inainte de generare.</p>
       {poateScrie && <button style={S.btnP} disabled={lucru||final||!!schimbate.length||!!comSchimbate.length} onClick={genereaza}>{sursa.pv.fisier_generat_path?'Regenereaza':'Genereaza DOCX'}</button>}
       <button style={S.btnS} disabled={lucru||!sursa.pv.fisier_generat_path} onClick={()=>descarca()}>Descarca</button>
