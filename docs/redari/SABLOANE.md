@@ -142,7 +142,7 @@ Operatorul confirma prin salvarea PV; generatorul foloseste exclusiv lucrari per
 PV atesta constatarea, nu executia presupusa din deviz. Categoria initiala ramane cea din baza TGZ.
 PV A are trei semnatari (detinator, TGZ, Gazpet); reprezentantul UAT este pe PV B.
 
-### 2.3 pv_b.docx (Model 3) - per parcela, 77 chei distincte
+### 2.3 pv_b.docx (Model 3) - per parcela, 78 chei distincte (pv_a_referinta adaugat 02.11: trimiterea la PV A semnat al altui coproprietar; gol daca nu exista)
 
 Generator: src/redari/pv.js; CHEI_PV_B verificat pe sablonul real in pv.test.js.
 PV B are detinator_id NULL. Motivul explicit este obligatoriu; nu se deduce din absenta raspunsului.

@@ -86,7 +86,7 @@ export const CHEI_PV_B = [
   'bifa_st_insamantat','bifa_st_nivelat','bifa_st_strat_vegetal','categoria_folosinta','categoria_initiala',
   'contract_data','contract_nr','conv_data_confirmare','conv_data_expediere','conv_nr_tracking','conv_retur',
   'data_pv','foto_nr','jurnal_santier','locul','lucrari_altele','nr_cadastral','nr_pv','nume','poz_hg',
-  'proiect_denumire','raspuns_alt_text','raspuns_canal','raspuns_data','reluare_adresa_tgz_nr','reluare_data',
+  'proiect_denumire','pv_a_referinta','raspuns_alt_text','raspuns_canal','raspuns_data','reluare_adresa_tgz_nr','reluare_data',
   'reluare_nr_tracking','reluare_raspuns_text','reprezentant_uat_nume','sat','semnatar_apm','semnatar_gazpet',
   'semnatar_tgz','semnatar_uat','stare_teren_alta','suprafata','tarla','tronson','uat','verificare_data',
   'verificare_de_gazpet','verificare_de_tgz','zi1','zi2','zi3',
