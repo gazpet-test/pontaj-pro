@@ -214,13 +214,15 @@ describe('FormularCampuri', () => {
 })
 
 describe('ecranul Setări proiect', () => {
-  it('cererea: admin vede sectiunea, lipsurile si butonul blocat; editor/viewer nu o vad', () => {
+  it('cererea: admin vede sectiunea si lipsurile ca indiciu (butonul NU e blocat de ele — Copilot f3a r2 P3-01); editor/viewer nu o vad', () => {
     const html = renderToString(<SetariProiect proiect={proiect} uats={[]} nivel="admin" show={show} />)
     expect(html).toContain('Cerere de imputernicire catre Beneficiar')
     expect(html).toContain('Nr. inregistrare (optional)')
     expect(html).toContain('Lipseste beneficiarul')
     expect(html).toContain('cel putin un UAT')
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Genereaza cererea \(DOCX\)<\/button>/)
+    expect(html).toContain('la generare se verifică datele actuale')
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Genereaza cererea \(DOCX\)<\/button>/)   // validarea reală e pe datele proaspete, la click
+    expect(html).toMatch(/<button[^>]*>Genereaza cererea \(DOCX\)<\/button>/)
     for (const nivel of ['editor', 'viewer']) {
       const h = renderToString(<SetariProiect proiect={proiect} uats={uats} nivel={nivel} show={show} />)
       expect(h).not.toContain('Cerere de imputernicire catre Beneficiar')

@@ -57,7 +57,7 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
   const schimbate = cheiSchimbate(baza, form, CAMPURI_PROIECT)
   const lipsuriCerere = verificaDateCerereImputernicire({ proiect, uats })
   const genereazaCererea = async () => {
-    if (!esteAdmin || lucru || ocupat.current || schimbate.length || lipsuriCerere.length) return
+    if (!esteAdmin || lucru || ocupat.current || schimbate.length) return   // lipsurile se verifică pe datele PROASPETE, mai jos (Copilot f3a r2 P3-01)
     ocupat.current = true
     setLucru(true)
     const token = generatie.current, id = proiect.id
@@ -72,8 +72,8 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
       if (!curent()) return
       if (ep) throw ep
       if (!proiectProaspat) throw new Error('Proiectul nu mai e vizibil (fără drept pe modul?)')
-      if (proiectProaspat.versiune !== proiect.versiune && !window.confirm(
-        `Proiectul a fost modificat între timp de altcineva (versiunea ${proiectProaspat.versiune}, tu vezi versiunea ${proiect.versiune}).\nGenerez cererea cu datele ACTUALE din bază?`)) return
+      if (proiectProaspat.versiune !== baza.versiune && !window.confirm(
+        `Proiectul a fost modificat între timp de altcineva (versiunea ${proiectProaspat.versiune}, tu vezi versiunea ${baza.versiune}).   // Gemini f3a r2 P3: referința e formularul (baza)\nGenerez cererea cu datele ACTUALE din bază?`)) return
       const lipsuri = verificaDateCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete })
       if (lipsuri.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuri.join('; '))
       const raspuns = await fetch('/redari/sabloane/cerere_imputernicire.docx')
@@ -84,14 +84,21 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
       const { blob } = await genereazaCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete, nrDocument, templateArrayBuffer })
       if (!curent()) return
       // Copilot f3a r1 P3-01: recitire finală — un singur mesaj: succes SAU „generat, dar datele s-au schimbat între timp”
-      const [{ data: prDupa, error: e2 }, { count: nrUat, error: e3 }] = await Promise.all([
-        supabase.from('red_proiecte').select('versiune').eq('id', id).maybeSingle(),
-        supabase.from('red_uat').select('id', { count: 'exact', head: true }).eq('proiect_id', id),
-      ])
+      // Copilot f3a r2 P2-01: se recitesc ACELEAȘI rânduri red_uat (id, nume) și se compară lista normalizată cu cea folosită la generare
+      const semnaturaUat = lista => lista.map(u => `${u.id}|${String(u.nume ?? '').trim()}`).sort().join('\n')
+      let prDupa = null, uatsDupa = null, eroareFinala = null
+      try {
+        const rez = await Promise.all([
+          supabase.from('red_proiecte').select('versiune').eq('id', id).maybeSingle(),
+          citestePaginat(() => supabase.from('red_uat').select('id, nume').eq('proiect_id', id), { cheie: 'id', esteCurent: curent }),
+        ])
+        if (rez[0].error) throw rez[0].error
+        prDupa = rez[0].data; uatsDupa = rez[1]
+      } catch (e) { eroareFinala = e }
       if (!curent()) return
       descarcaBlob(blob, `Cerere_imputernicire_${proiectProaspat.cod}.docx`)
-      const neverificat = !!(e2 || e3) || !prDupa || nrUat == null
-      const schimbat = !neverificat && (prDupa.versiune !== proiectProaspat.versiune || nrUat !== uatsProaspete.length)
+      const neverificat = !!eroareFinala || !prDupa || !Array.isArray(uatsDupa)
+      const schimbat = !neverificat && (prDupa.versiune !== proiectProaspat.versiune || semnaturaUat(uatsDupa) !== semnaturaUat(uatsProaspete))
       if (neverificat) show('Document generat, dar NU am putut verifica dacă proiectul s-a schimbat între timp. Reîncarcă și generează din nou înainte de a-l folosi. Nu pleacă nicăieri automat.', 'error')
       else if (schimbat) show('Atenție: proiectul sau UAT-urile s-au schimbat în timpul generării. Documentul poate avea date vechi — generează din nou. Nu pleacă nicăieri automat.', 'error')
       else show('Document generat pentru verificare. Nu pleacă nicăieri automat.', 'success')
@@ -191,10 +198,11 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
           <input style={S.input} value={nrDocument} disabled={lucru} onChange={e => { if (!lucru) setNrDocument(e.target.value) }} />
         </label>
         {lipsuriCerere.length > 0 && <div style={{ color: G.yellow, marginTop: 10 }}>
+          <div style={{ fontSize: 12 }}>Pe datele afișate lipsesc (la generare se verifică datele actuale din bază):</div>
           {lipsuriCerere.map(l => <div key={l}>{l}</div>)}
         </div>}
         {schimbate.length > 0 && <p style={{ color: G.yellow }}>Salveaza modificarile inainte de generare.</p>}
-        <button style={{ ...S.btnS, marginTop: 10 }} disabled={lucru || schimbate.length > 0 || lipsuriCerere.length > 0}
+        <button style={{ ...S.btnS, marginTop: 10 }} disabled={lucru || schimbate.length > 0}
           onClick={genereazaCererea}>Genereaza cererea (DOCX)</button>
       </div>}
     </div>
