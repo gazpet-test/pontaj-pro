@@ -92,7 +92,8 @@ export function alerteOfertare(rows, now = new Date()) {
 }
 
 export function alerteHr(rows, today) {
-  return rows.flatMap(row => {
+  // audit 02.11 #18: autorizațiile înlocuite de una nouă nu mai alertează (antetul HR le exclude la fel)
+  return rows.filter(row => row.inlocuita_de_id == null).flatMap(row => {
     const fields = { reference: `${row.employee_name || 'Titular necunoscut'} · ${row.numar_autorizatie || 'fără număr'}`, locator: `hr_autorizatii · ID ${row.id}`, reason: 'Autorizație din evidența HR curentă. Titularii cu contract încheiat și autorizațiile șterse sunt excluse de sursă. Impactul în licitații/șantiere nu este dedus.' }
     const result = []
     if (!row.fara_expirare) result.push(expirare('hr', row.id, row.tip_denumire || 'Autorizație', row.data_expirare, today, fields))
@@ -292,7 +293,7 @@ export async function citesteToate(makeQuery, signal) {
 // Proiecții explicite, reutilizabile în verificarea API. Niciun SELECT * pe personal/financiar.
 export const SELECT_ADMIN = {
   ofertare_licitatii: 'id,nr_anunt,obiect,autoritate,status,decizie_go,responsabil_id,responsabil2_id,termen_depunere',
-  v_hr_autorizatii_status: 'id,employee_id,employee_name,tip_denumire,numar_autorizatie,data_expirare,fara_expirare,necesita_confirmare_rsvti,rsvti_urmatoarea_confirmare',
+  v_hr_autorizatii_status: 'id,employee_id,employee_name,tip_denumire,numar_autorizatie,data_expirare,fara_expirare,necesita_confirmare_rsvti,rsvti_urmatoarea_confirmare,inlocuita_de_id',
   documente_firma: 'id,denumire,numar_document,data_valabilitate,fara_expirare,se_reemite,activ',
   logistica_documente: 'id,active_id,entitate_id,entitate_tip,tip_id,numar_document,data_expirare,fara_expirare',
   logistica_active: 'id,cod_intern,nr_inmatriculare,marca,model,vandut,deep_sleep',
