@@ -179,7 +179,8 @@ Deno.serve(async (req: Request) => {
             nou.fb_impresii = ins.post_impressions ?? ins.post_media_view ?? st.fb_impresii ?? null;
           } else eroriIns.forEach(x => erori.add(x));   // eroare raportata doar daca nicio varianta n-a mers
           if (Object.keys(nou).length) {
-            const { error: eu } = await db.from('marketing_postari').update(interOk ? { ...nou, fb_stats_la: new Date().toISOString() } : nou)   // fara interactiuni nu marcam postarea ca proaspata.eq('id', ps.id);
+            // fara interactiuni nu marcam postarea ca proaspata (fb_stats_la ramane)
+            const { error: eu } = await db.from('marketing_postari').update(interOk ? { ...nou, fb_stats_la: new Date().toISOString() } : nou).eq('id', ps.id);
             if (eu) erori.add(`salvare: ${String(eu.message).slice(0, 160)}`);
             else st = { ...st, ...nou };
           }
