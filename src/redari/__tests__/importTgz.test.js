@@ -89,16 +89,16 @@ describe('parseazaTgz — preview', () => {
   })
   it('parcele: 7 pe HUS (1,2,7,8,9,11,13) + 1 pe PRU, cheiate pe (uat3, Nr.Crt.), id-uri PROVIZORII, cheie_sursa stabilă', () => {
     expect(p.parcele).toHaveLength(8)
-    expect(p.parcele.filter(x => x.uat3 === 'HUS').map(x => x.id_parcela)).toEqual(Array(7).fill('T3-HUS-????'))
+    expect(p.parcele.filter(x => x.uat3 === 'HUS').map(x => x.id_parcela)).toEqual(Array(7).fill('HUS-????'))
     expect(p.parcele.filter(x => x.uat3 === 'HUS').map(x => x.nr_provizoriu)).toEqual([1, 2, 3, 4, 5, 6, 7])
-    expect(p.parcele.find(x => x.uat3 === 'PRU')).toMatchObject({ cheie: 'PRU:12', id_parcela: 'T2-PRU-????', nr_provizoriu: 1, tronson: 2, uat_id: 'uuid-pru', cheie_sursa: 'PRU|HG 12|CF 2001|T2', ambigua: false })
+    expect(p.parcele.find(x => x.uat3 === 'PRU')).toMatchObject({ cheie: 'PRU:12', id_parcela: 'PRU-????', nr_provizoriu: 1, tronson: 2, uat_id: 'uuid-pru', cheie_sursa: 'PRU|HG 12|CF 2001|T2', ambigua: false })
     expect(p.parcele[0]).toMatchObject({ cheie: 'HUS:1', cheie_sursa: 'HUS|HG 1|CF 1001|T12', ambigua: false, nr_crt: 1, uat_id: 'uuid-hus', tronson: 3, poz_hg: 'HG 1', suprafata_temporara_mp: 120.5, categoria_folosinta: 'arabil', tarla: 'T12', nr_cadastral: 'CF 1001', observatii: 'Regim juridic: privat' })
     expect(p.statistici).toMatchObject({ parcele_fara_cheie: 0, parcele_ambigue: 0, fara_cheie: 0, ambigue: 0, judet_diferit: 0 })
     expect(p.fara_cheie).toEqual([]); expect(p.ambigue).toEqual([])
   })
   it('idStart e ignorat (compatibilitate)', () => {
     const p2 = parseazaTgz(xlsxDin(RANDURI), { ...OPT, idStart: { HUS: 500 } })
-    expect(p2.parcele[0].id_parcela).toBe('T3-HUS-????')
+    expect(p2.parcele[0].id_parcela).toBe('HUS-????')
   })
   it('coproprietarii 7/1 și 7/2 stau pe aceeași parcelă, cu calitate coproprietar', () => {
     const p7 = p.parcele.find(x => x.nr_crt === 7)
@@ -150,7 +150,7 @@ describe('parseazaTgz — robustețe', () => {
     expect(p.erori).toEqual([])
     expect(p.antet.rand).toBe(5)
     expect(p.parcele).toHaveLength(1)
-    expect(p.detinatori[0]).toMatchObject({ nume: 'Test Antet', id_parcela: 'T3-HUS-????' })
+    expect(p.detinatori[0]).toMatchObject({ nume: 'Test Antet', id_parcela: 'HUS-????' })
   })
   it('P1-1: două Nr.Crt. diferite cu aceeași cheie_sursa validă → ambele AMBIGUE, nu se unesc, eroare pe fiecare rând', () => {
     const p = parseazaTgz(xlsxDin([
@@ -323,10 +323,11 @@ describe('parseazaTgz — robustețe', () => {
     expect(p.parcele[1].observatii).toBeNull()
     expect(p.statistici.judet_diferit).toBe(1)
   })
-  it('UAT dat prin uat3 în fișier se recunoaște; tronson lipsă → eroare pe rând', () => {
+  it('UAT dat prin uat3 în fișier se recunoaște; tronson lipsă → parcelă cu tronson NULL (felia 8b, se atribuie ulterior)', () => {
     const p = parseazaTgz(xlsxDin([['1', '', 'PRU', 'MH', 'Test Fără Tronson', 'Str. A', 1, '', '', '', '']]), { ...OPT, tronsonPeUat: { HUS: 3 } })
-    expect(p.parcele).toHaveLength(0)
-    expect(p.erori[0].motiv).toMatch(/Tronson/)
+    expect(p.parcele).toHaveLength(1)
+    expect(p.parcele[0]).toMatchObject({ uat3: 'PRU', tronson: null, id_parcela: 'PRU-????' })
+    expect(p.erori.filter(e => /Tronson/.test(e.motiv))).toEqual([])
   })
   it('fără antet → eroare, fără excepție', () => {
     const p = parseazaTgz(xlsxDin([['1', 'x']], { antet: ['A', 'B'] }), OPT)
@@ -368,7 +369,7 @@ describe('parseazaTgz — robustețe', () => {
 function creeazaFakeSupabase({ esueazaLa = null, esueazaLaLot = null, esueazaCitireDupaInsert = null, esueazaMarcareEsuat = false, numereInitiale = {} } = {}) {
   const tabele = { red_parcele: [], red_detinatori: [], red_detinatori_contact: [], red_import_loturi: [] }
   const apeluri = []
-  const numere = { ...numereInitiale }   // 'HUS|3' → ultimul rezervat
+  const numere = { ...numereInitiale }   // 'HUS' → ultimul rezervat
   const contorInsert = {}
   let nr = 0
   const uuid = () => `uuid-${++nr}`
@@ -412,7 +413,7 @@ function creeazaFakeSupabase({ esueazaLa = null, esueazaLaLot = null, esueazaCit
   const rpc = async (nume, args) => {
     apeluri.push({ op: 'rpc', nume, args })
     if (nume !== RPC_REZERVA_NUMERE) return { data: null, error: { message: `rpc necunoscut ${nume}` } }
-    const k = `${args.p_uat3}|${args.p_tronson}`
+    const k = `${args.p_uat3}`
     const start = (numere[k] ?? 0) + 1
     numere[k] = start + args.p_n - 1
     return { data: start, error: null }
@@ -425,9 +426,9 @@ function previewMare(n) {
   for (let i = 1; i <= n; i++) {
     const cheie = `HUS:${i}`
     const cheie_sursa = `HUS|HG ${i}|CF ${1000 + i}|T${i % 40}`
-    parcele.push({ cheie, cheie_sursa, ambigua: false, nr_crt: i, uat_id: 'uuid-hus', uat3: 'HUS', id_parcela: 'T3-HUS-????', nr_provizoriu: i, tronson: 3, poz_hg: `HG ${i}`, suprafata_temporara_mp: i, categoria_folosinta: 'arabil', tarla: `T${i % 40}`, nr_cadastral: `CF ${1000 + i}`, observatii: null, rand: 3 + i, nr_detinatori: 1 })
+    parcele.push({ cheie, cheie_sursa, ambigua: false, nr_crt: i, uat_id: 'uuid-hus', uat3: 'HUS', id_parcela: 'HUS-????', nr_provizoriu: i, tronson: 3, poz_hg: `HG ${i}`, suprafata_temporara_mp: i, categoria_folosinta: 'arabil', tarla: `T${i % 40}`, nr_cadastral: `CF ${1000 + i}`, observatii: null, rand: 3 + i, nr_detinatori: 1 })
     const cheieDet = `${cheie}|TEST PERSOANA ${i}`
-    detinatori.push({ cheie: cheieDet, cheie_parcela: cheie, id_parcela: 'T3-HUS-????', nr_crt: String(i), nume: `Test Persoana ${i}`, nume_normalizat: `TEST PERSOANA ${i}`, calitate: 'proprietar', cota: null, sursa_date: 'TGZ', versiune_lista_tgz: 'v1', rand: 3 + i })
+    detinatori.push({ cheie: cheieDet, cheie_parcela: cheie, id_parcela: 'HUS-????', nr_crt: String(i), nume: `Test Persoana ${i}`, nume_normalizat: `TEST PERSOANA ${i}`, calitate: 'proprietar', cota: null, sursa_date: 'TGZ', versiune_lista_tgz: 'v1', rand: 3 + i })
     contacte.push({ cheie_detinator: cheieDet, adresa_strada: `Str. ${i}`, adresa_sat: null, adresa_comuna: null, adresa_judet: 'Mehedinți', judet_adresa: null, cod_postal: null, adresa_cunoscuta: true })
   }
   return { parcele, detinatori, contacte, dubluri: [], neidentificati: [], fara_cheie: [], ambigue: [], erori: [], statistici: { randuri_total: n } }
@@ -453,14 +454,14 @@ describe('scrieImport — fake supabase', () => {
     expect(sb.tabele.red_import_loturi).toHaveLength(1)
 
     // id-urile finale vin din RPC: HUS 1..7, PRU 1
-    expect(sb.tabele.red_parcele.filter(p => p.uat_id === 'uuid-hus').map(p => p.id_parcela)).toEqual(['T3-HUS-0001', 'T3-HUS-0002', 'T3-HUS-0003', 'T3-HUS-0004', 'T3-HUS-0005', 'T3-HUS-0006', 'T3-HUS-0007'])
-    expect(sb.tabele.red_parcele.find(p => p.uat_id === 'uuid-pru').id_parcela).toBe('T2-PRU-0001')
-    expect(sb.apeluri.filter(a => a.op === 'rpc').map(a => a.args)).toEqual([{ p_uat3: 'HUS', p_tronson: 3, p_n: 7 }, { p_uat3: 'PRU', p_tronson: 2, p_n: 1 }])
-    expect(sb.tabele.red_parcele[0]).toMatchObject({ proiect_id: 'proiect-1', uat_id: 'uuid-hus', tronson: 3, id_parcela: 'T3-HUS-0001', cheie_sursa: 'HUS|HG 1|CF 1001|T12' })
+    expect(sb.tabele.red_parcele.filter(p => p.uat_id === 'uuid-hus').map(p => p.id_parcela)).toEqual(['HUS-0001', 'HUS-0002', 'HUS-0003', 'HUS-0004', 'HUS-0005', 'HUS-0006', 'HUS-0007'])
+    expect(sb.tabele.red_parcele.find(p => p.uat_id === 'uuid-pru').id_parcela).toBe('PRU-0001')
+    expect(sb.apeluri.filter(a => a.op === 'rpc').map(a => a.args)).toEqual([{ p_uat3: 'HUS', p_n: 7 }, { p_uat3: 'PRU', p_n: 1 }])
+    expect(sb.tabele.red_parcele[0]).toMatchObject({ proiect_id: 'proiect-1', uat_id: 'uuid-hus', tronson: 3, id_parcela: 'HUS-0001', cheie_sursa: 'HUS|HG 1|CF 1001|T12' })
     expect(sb.tabele.red_parcele.every(p => !p.id_parcela.includes('?'))).toBe(true)
 
-    // legături: coproprietarii pointează la uuid-ul parcelei T3-HUS-0003; contactul la uuid-ul deținătorului
-    const p7 = sb.tabele.red_parcele.find(p => p.id_parcela === 'T3-HUS-0003')
+    // legături: coproprietarii pointează la uuid-ul parcelei HUS-0003; contactul la uuid-ul deținătorului
+    const p7 = sb.tabele.red_parcele.find(p => p.id_parcela === 'HUS-0003')
     const cop = sb.tabele.red_detinatori.filter(d => d.parcela_id === p7.id)
     expect(cop.map(d => d.calitate)).toEqual(['coproprietar', 'coproprietar'])
     const dNeid = sb.tabele.red_detinatori.find(d => d.calitate === 'neidentificat')
@@ -501,8 +502,8 @@ describe('scrieImport — fake supabase', () => {
     expect(ins('red_detinatori')).toEqual([200, 200, 50])
     expect(ins('red_detinatori_contact')).toEqual([200, 200, 50])
     expect(ins('red_import_loturi')).toEqual([1])
-    expect(sb.apeluri.filter(a => a.op === 'rpc')).toEqual([{ op: 'rpc', nume: RPC_REZERVA_NUMERE, args: { p_uat3: 'HUS', p_tronson: 3, p_n: 450 } }])
-    expect(sb.tabele.red_parcele[449].id_parcela).toBe('T3-HUS-0450')
+    expect(sb.apeluri.filter(a => a.op === 'rpc')).toEqual([{ op: 'rpc', nume: RPC_REZERVA_NUMERE, args: { p_uat3: 'HUS', p_n: 450 } }])
+    expect(sb.tabele.red_parcele[449].id_parcela).toBe('HUS-0450')
     expect(LOT).toBe(200); expect(LOT_CITIRE).toBe(100)
     expect(selecturi(sb).every(a => a.in <= 100 && a.pagini >= 1)).toBe(true)
     // existență: 450 chei → 5 selecturi; citiri id după insert: 200→2, 200→2, 50→1
@@ -522,13 +523,13 @@ describe('scrieImport — fake supabase', () => {
     await scrieImport(sb, preview, { proiectId: 'proiect-1', versiune: 'v1' })
     const r2 = await scrieImport(sb, preview, { proiectId: 'proiect-1', versiune: 'v2' })
     expect(r2).toMatchObject({ parceleNoi: 0, parceleRefolosite: 8, detinatoriNoi: 0, detinatoriExistenti: 9, contacteNoi: 0 })
-    expect(r2.existente.sort()).toEqual(['T2-PRU-0001', 'T3-HUS-0001', 'T3-HUS-0002', 'T3-HUS-0003', 'T3-HUS-0004', 'T3-HUS-0005', 'T3-HUS-0006', 'T3-HUS-0007'])
+    expect(r2.existente.sort()).toEqual(['HUS-0001', 'HUS-0002', 'HUS-0003', 'HUS-0004', 'HUS-0005', 'HUS-0006', 'HUS-0007', 'PRU-0001'])
     expect(sb.tabele.red_parcele).toHaveLength(8)
     expect(sb.tabele.red_detinatori).toHaveLength(9)
     expect(sb.tabele.red_detinatori_contact).toHaveLength(9)
     expect(sb.tabele.red_import_loturi).toHaveLength(2)
     expect(sb.tabele.red_import_loturi[1]).toMatchObject({ stare: 'finalizat', parcele_noi: 0, detinatori_noi: 0, versiune_lista_tgz: 'v2', diferente: expect.objectContaining({ contacte_noi: 0 }) })
-    expect(sb.numere['HUS|3']).toBe(7)   // niciun număr rezervat în plus
+    expect(sb.numere['HUS']).toBe(7)   // niciun număr rezervat în plus
     expect(sb.apeluri.filter(a => a.op === 'rpc')).toHaveLength(2)
   })
 
@@ -538,7 +539,7 @@ describe('scrieImport — fake supabase', () => {
     const randuriV2 = [...RANDURI.slice(0, 2), ['1/2', 'HG 1', 'Husnicioara', 'Mehedinți', 'Test Mostenitor Nou', 'Str. Nouă 1', '120,5', 'arabil', 'T12', 'CF 1001', 'privat']]
     const r2 = await scrieImport(sb, parseazaTgz(xlsxDin(randuriV2), { ...OPT, versiune: 'v2' }), { proiectId: 'proiect-1', versiune: 'v2' })
     expect(r2).toMatchObject({ parceleNoi: 0, parceleRefolosite: 2, detinatoriNoi: 1, detinatoriExistenti: 2, contacteNoi: 1 })
-    const p1 = sb.tabele.red_parcele.find(p => p.id_parcela === 'T3-HUS-0001')
+    const p1 = sb.tabele.red_parcele.find(p => p.id_parcela === 'HUS-0001')
     expect(sb.tabele.red_parcele).toHaveLength(2)
     const dNou = sb.tabele.red_detinatori.find(d => d.nume === 'Test Mostenitor Nou')
     expect(dNou).toMatchObject({ parcela_id: p1.id, calitate: 'coproprietar', versiune_lista_tgz: 'v2' })
@@ -557,7 +558,7 @@ describe('scrieImport — fake supabase', () => {
     expect(r).toMatchObject({ parceleNoi: 1, detinatoriNoi: 1, contacteNoi: 1 })
     expect(r.ambigue).toEqual([{ rand: 4, nr_crt: '1', nume: 'Test Ambiguu A', motiv: MOTIV_AMBIGUU }, { rand: 5, nr_crt: '2', nume: 'Test Ambiguu B', motiv: MOTIV_AMBIGUU }])
     expect(r.fara_cheie).toEqual([{ rand: 6, nr_crt: '3', nume: 'Test Fără Cheie' }])
-    expect(sb.tabele.red_parcele.map(p => p.id_parcela)).toEqual(['T3-HUS-0001'])
+    expect(sb.tabele.red_parcele.map(p => p.id_parcela)).toEqual(['HUS-0001'])
     expect(sb.tabele.red_detinatori.map(d => d.nume)).toEqual(['Test Bun'])
     expect(sb.apeluri.filter(a => a.op === 'rpc')[0].args.p_n).toBe(1)
     expect(sb.tabele.red_import_loturi[0].diferente).toMatchObject({ fara_cheie: r.fara_cheie, ambigue: r.ambigue })
@@ -676,16 +677,16 @@ describe('scrieImport — fake supabase', () => {
   })
 
   it('P2-8: dacă rezervarea ar depăși 9999 pe un UAT → oprire ÎNAINTE de orice INSERT, lot esuat cu 0 scrieri', async () => {
-    const sb = creeazaFakeSupabase({ numereInitiale: { 'HUS|3': 9990 } })
-    await expect(scrieImport(sb, previewMare(15), { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/UAT HUS \/ tronson T3 ar depăși 9999 \(15 parcele noi de la 9991 → 10005\); nimic nu a fost scris/)
+    const sb = creeazaFakeSupabase({ numereInitiale: { 'HUS': 9990 } })
+    await expect(scrieImport(sb, previewMare(15), { proiectId: 'proiect-1', versiune: 'v1' })).rejects.toThrow(/UAT HUS ar depăși 9999 \(15 parcele noi de la 9991 → 10005\); nimic nu a fost scris/)
     expect(sb.tabele.red_parcele).toHaveLength(0); expect(sb.tabele.red_detinatori).toHaveLength(0); expect(sb.tabele.red_detinatori_contact).toHaveLength(0)
     expect(sb.apeluri.filter(a => a.op === 'insert').map(a => a.tabel)).toEqual(['red_import_loturi'])
     expect(sb.tabele.red_import_loturi[0]).toMatchObject({ stare: 'esuat', parcele_noi: 0, detinatori_noi: 0, eroare: expect.stringMatching(/9999/) })
     // exact 9999 e în regulă
-    const ok = creeazaFakeSupabase({ numereInitiale: { 'HUS|3': 9990 } })
+    const ok = creeazaFakeSupabase({ numereInitiale: { 'HUS': 9990 } })
     const r = await scrieImport(ok, previewMare(9), { proiectId: 'proiect-1', versiune: 'v1' })
     expect(r.parceleNoi).toBe(9)
-    expect(ok.tabele.red_parcele[8].id_parcela).toBe('T3-HUS-9999')
+    expect(ok.tabele.red_parcele[8].id_parcela).toBe('HUS-9999')
   })
 
   it('eroarea de la BD oprește scrierea, marchează lotul „esuat” și poartă lotId', async () => {
@@ -697,7 +698,7 @@ describe('scrieImport — fake supabase', () => {
     expect(eroare.lotNeinchis).toBeUndefined()
     expect(sb.tabele.red_import_loturi[0].stare).toBe('esuat')
     // numerele rezervate rămân consumate (fără refolosire, ca la red_numere)
-    expect(sb.numere['HUS|3']).toBe(3)
+    expect(sb.numere['HUS']).toBe(3)
   })
 
   it('P2-4: dacă nici marcarea „esuat” nu reușește, eroarea NU se înghite: mesaj extins + e.lotNeinchis', async () => {
@@ -716,7 +717,7 @@ describe('scrieImport — fake supabase', () => {
     sb.rpc = async (n, a) => { const r = await rpcVechi(n, a); return { data: [{ start: r.data }], error: null } }
     const r = await scrieImport(sb, previewMare(2), { proiectId: 'proiect-1', versiune: 'v1' })
     expect(r.parceleNoi).toBe(2)
-    expect(sb.tabele.red_parcele.map(p => p.id_parcela)).toEqual(['T3-HUS-0001', 'T3-HUS-0002'])
+    expect(sb.tabele.red_parcele.map(p => p.id_parcela)).toEqual(['HUS-0001', 'HUS-0002'])
 
     const sb2 = creeazaFakeSupabase()
     sb2.rpc = async () => ({ data: null, error: null })

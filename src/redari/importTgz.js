@@ -466,7 +466,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
       const start = primulNumar(verifica(await supabase.rpc(RPC_REZERVA_NUMERE, { p_uat3: uat3, p_n: grup.length }), 'rezervare numere parcele'))
       // P2-8: formatul are fix 4 cifre — dacă blocul ar depăși 9999 ne oprim AICI, înainte de orice INSERT (lotul rămâne cu 0 scrieri)
       const ultim = start + grup.length - 1
-      if (ultim > MAX_NUMAR_PARCELA) throw new Error(`Numerotarea parcelelor pentru UAT ${uat3} ar depasi ${MAX_NUMAR_PARCELA} (${grup.length} parcele noi de la ${start}); nimic nu a fost scris`)
+      if (ultim > MAX_NUMAR_PARCELA) throw new Error(`Numerotarea parcelelor: UAT ${uat3} ar depăși ${MAX_NUMAR_PARCELA} (${grup.length} parcele noi de la ${start} → ${ultim}); nimic nu a fost scris`)
       grup.forEach((p, i) => randuriParcele.push({ p, id_parcela: idParcela(uat3, start + i) }))
     }
 
