@@ -69,7 +69,7 @@ import { randuriDeTratat, csvRanduriDeTratat } from './importTgz.js'
 describe('randuri de tratat (export fara nume)', () => {
   it('erori + ambigue + fara cheie, fara campul nume, sortate dupa rand, deduplicate', () => {
     const preview = {
-      erori: [{ rand: 9, nume: 'TEST NUME', uat: 'HUS', nr_crt: '3', motiv: 'm1', detaliu: 'HG: „1” / „2”' }, { rand: 9, nume: 'TEST NUME', uat: 'HUS', nr_crt: '3', motiv: 'm1' }],
+      erori: [{ rand: 9, nume: 'TEST NUME', uat: 'HUS', nr_crt: '3', motiv: 'm1', detaliu: 'HG: „1” / „2”' }, { rand: 9, nume: 'TEST NUME', uat: 'HUS', nr_crt: '3', motiv: 'm1', detaliu: 'HG: „1” / „2”' }],
       ambigue: [{ rand: 4, nume: 'ALT NUME', nr_crt: '2', cheie_sursa: 'PRU|10|CF1|', motiv: 'm2' }],
       fara_cheie: [{ rand: 7, nume: 'X', nr_crt: '5' }],
     }
@@ -81,5 +81,8 @@ describe('randuri de tratat (export fara nume)', () => {
     expect(csv.startsWith('﻿')).toBe(true)
     expect(csv).not.toMatch(/TEST NUME|ALT NUME/)
     expect(csv).toContain('HG: „1” / „2”')
+    // CSV injection: valori care incep cu = + - @ primesc apostrof
+    const inj = csvRanduriDeTratat([{ rand: 1, categorie: 'eroare', uat: '=HYPERLINK(1)', nr_crt: '+2', cheie_sursa: '-3', motiv: '@x', detaliu: 'ok' }])
+    expect(inj).toContain("'=HYPERLINK(1);'+2;'-3;'@x;ok")
   })
 })

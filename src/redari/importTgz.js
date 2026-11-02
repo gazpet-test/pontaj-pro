@@ -594,7 +594,7 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
 export function randuriDeTratat(preview) {
   const out = [], vazut = new Set()
   const adauga = (categorie, r) => {
-    const k = `${categorie}|${r.rand ?? ''}|${r.motiv ?? ''}`
+    const k = `${categorie}|${r.rand ?? ''}|${r.motiv ?? ''}|${r.detaliu ?? ''}`   // Copilot r1 P3-01: detalii diferite nu se pierd
     if (vazut.has(k)) return
     vazut.add(k)
     out.push({ rand: r.rand ?? null, categorie, uat: r.uat ?? (r.cheie_sursa ? String(r.cheie_sursa).split('|')[0] : ''), nr_crt: r.nr_crt ?? '', cheie_sursa: r.cheie_sursa ?? '', motiv: r.motiv ?? '', detaliu: r.detaliu ?? '' })
@@ -606,7 +606,8 @@ export function randuriDeTratat(preview) {
 }
 
 export function csvRanduriDeTratat(randuri) {
-  const q = v => { const t = String(v ?? ''); return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+  // Copilot r1 P2-01: valorile vin dintr-un fișier extern și CSV-ul se deschide în Excel → = + - @ (și tab/CR) la început se neutralizează cu apostrof
+  const q = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`; return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
   const cap = ['Rând Excel', 'Categorie', 'UAT', 'Nr.Crt.', 'Cheie (UAT|HG|cadastru|tarla)', 'Motiv', 'Detaliu']
   return '\uFEFF' + [cap, ...randuri.map(r => [r.rand ?? '', r.categorie, r.uat, r.nr_crt, r.cheie_sursa, r.motiv, r.detaliu])].map(l => l.map(q).join(';')).join('\r\n')
 }
