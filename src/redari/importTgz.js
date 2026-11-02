@@ -588,3 +588,25 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     throw err
   }
 }
+
+// Rândurile care NU intră în import (erori + ambigue + fără cheie), pentru tratarea manuală în Excel — FĂRĂ nume / adrese / contacte:
+// doar rândul din fișier, UAT, Nr.Crt., cheia sursă (UAT|HG|cadastru|tarla) și motivul. Detaliul contradicțiilor conține doar câmpuri de parcelă.
+export function randuriDeTratat(preview) {
+  const out = [], vazut = new Set()
+  const adauga = (categorie, r) => {
+    const k = `${categorie}|${r.rand ?? ''}|${r.motiv ?? ''}`
+    if (vazut.has(k)) return
+    vazut.add(k)
+    out.push({ rand: r.rand ?? null, categorie, uat: r.uat ?? (r.cheie_sursa ? String(r.cheie_sursa).split('|')[0] : ''), nr_crt: r.nr_crt ?? '', cheie_sursa: r.cheie_sursa ?? '', motiv: r.motiv ?? '', detaliu: r.detaliu ?? '' })
+  }
+  for (const e of preview?.erori || []) adauga('eroare', e)
+  for (const a of preview?.ambigue || []) adauga('ambiguă', a)
+  for (const f of preview?.fara_cheie || []) adauga('fără cheie', { ...f, motiv: 'fără poziție HG și fără nr. cadastral' })
+  return out.sort((a, b) => (a.rand ?? 0) - (b.rand ?? 0))
+}
+
+export function csvRanduriDeTratat(randuri) {
+  const q = v => { const t = String(v ?? ''); return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+  const cap = ['Rând Excel', 'Categorie', 'UAT', 'Nr.Crt.', 'Cheie (UAT|HG|cadastru|tarla)', 'Motiv', 'Detaliu']
+  return '\uFEFF' + [cap, ...randuri.map(r => [r.rand ?? '', r.categorie, r.uat, r.nr_crt, r.cheie_sursa, r.motiv, r.detaliu])].map(l => l.map(q).join(';')).join('\r\n')
+}
