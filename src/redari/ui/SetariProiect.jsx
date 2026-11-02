@@ -1,10 +1,10 @@
 /* SetariProiect.jsx — Redări faza 2, felia 1: datele proiectului care intră în convocator / adresa UAT / PV (contract, împuternicire,
    reprezentanți, contact, texte GDPR + declarație). Scrie doar admin (RLS red_proiecte_upd = admin); ceilalți văd în citire.
    Textele GDPR / declarație sunt confirmate de Proiectul Juridic (01.11.2026) — schimbarea lor cere confirmare explicită. */
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { G, S, msgEroare, motivBlocareConvocator } from './comune.jsx'
-import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente } from '../setari.js'
+import { G, S, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
+import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente, contractDinExecutie } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
 
 export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
@@ -15,6 +15,39 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
   const [form, setForm] = useState(() => ({ ...proiect }))
   const [lucru, setLucru] = useState(false)
   const [erori, setErori] = useState([])
+  const [montaj, setMontaj] = useState(null)
+  const [eroareMontaj, setEroareMontaj] = useState('')
+  const generatie = useRef(0)
+  const ocupat = useRef(false)
+  useEffect(() => {
+    const token = ++generatie.current
+    setMontaj(null); setEroareMontaj('')
+    const curent = () => generatie.current === token
+    citestePaginat(() => supabase.from('executie_proiecte').select('id, nume, cod_intern').eq('activ', true), { cheie: 'id', esteCurent: curent })
+      .then(data => { if (curent()) setMontaj(data) })
+      .catch(e => { if (curent()) setEroareMontaj(e?.code === '42501' ? 'fără acces la Execuție' : 'Lista Execuție nu poate fi citită: ' + msgEroare(e)) })
+    return () => { generatie.current++ }
+  }, [proiect.id])
+  const preiaContract = async () => {
+    if (!esteAdmin || lucru || ocupat.current || !form.executie_proiect_id) return
+    ocupat.current = true
+    setLucru(true)
+    const token = generatie.current
+    const legatura = form.executie_proiect_id
+    const curent = () => generatie.current === token
+    try {
+      const { data, error } = await supabase.from('executie_proiecte').select('nr_contract, data_contract, coordonator_transgaz').eq('id', legatura).maybeSingle()
+      if (!curent()) return
+      if (error) throw error
+      if (!data) throw new Error('Proiectul de montaj nu este vizibil: fără acces la Execuție')
+      // Copilot f2b r1 P2-2: data din sufixul „nr/zz.ll.aaaa” nu se pierde; data din Execuție are prioritate; nepotrivirea se spune; null nu șterge ce există
+      const c = contractDinExecutie(data)
+      setForm(f => f && ({ ...f, contract_nr: c.contract_nr ?? f.contract_nr, contract_data: c.contract_data ?? f.contract_data, reprezentant_tgz_nume: c.reprezentant_tgz_nume ?? f.reprezentant_tgz_nume }))
+      if (c.avertisment) show('Atenție: ' + c.avertisment + '. Am preluat data din Execuție; verifică înainte să salvezi.', 'error')
+      else show('Contract preluat în formular. Salvează explicit modificările.', 'info')
+    } catch (e) { if (curent()) show('Preluare contract: ' + msgEroare(e), 'error') }
+    finally { if (curent()) { ocupat.current = false; setLucru(false) } }
+  }
   const schimbate = cheiSchimbate(baza, form, CAMPURI_PROIECT)
   // alt admin a salvat între timp: versiunea din părinte e mai nouă decât baza (propria salvare crește baza imediat — Copilot f2 r2 P3)
   const altaVersiune = (proiect.versiune ?? 0) > (baza.versiune ?? 0)
@@ -32,10 +65,15 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
       `Schimbi ${sensibile.join(' și ')}.\nTextele actuale sunt cele confirmate de Juridic și apar în convocatoare și în formularul public.\n\nContinui?`)) return
     const tot = normalizeaza(form, CAMPURI_PROIECT)
     const patch = Object.fromEntries(schimbate.map(k => [k, tot[k]]))
+    if (ocupat.current) return
+    ocupat.current = true
+    const token = generatie.current
+    const curent = () => generatie.current === token
     setLucru(true)
     try {
       // Copilot f2 r2 P2: citesc rândul de acum; dacă altcineva a schimbat ACELEAȘI câmpuri, întreb; scriu doar pe versiunea verificată
       const { data: acum, error: ea } = await supabase.from('red_proiecte').select(COL_PROIECT).eq('id', proiect.id).maybeSingle()
+      if (!curent()) return
       if (ea) throw ea
       if (!acum) throw new Error('Proiectul nu mai e vizibil (fără drept pe modul?)')
       if (acum.versiune !== baza.versiune) {
@@ -44,13 +82,14 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
         if (conf.length && !window.confirm(`Alt administrator a schimbat între timp: ${etichete.join(', ')}.\nSuprascrii cu valorile tale?`)) return
       }
       const { data, error } = await supabase.from('red_proiecte').update(patch).eq('id', proiect.id).eq('versiune', acum.versiune).select(COL_PROIECT)
+      if (!curent()) return
       if (error) throw error
       if (!data?.length) throw new Error('Nu s-a salvat: proiectul a fost modificat chiar acum de altcineva sau nu ai drept de administrator. Reîncarcă și reîncearcă.')
       setBaza({ ...data[0] }); setForm({ ...data[0] })
       show('Setările proiectului au fost salvate.', 'success')
       onSchimbat()
-    } catch (err) { show('Salvare proiect: ' + msgEroare(err), 'error') }
-    finally { setLucru(false) }
+    } catch (err) { if (curent()) show('Salvare proiect: ' + msgEroare(err), 'error') }
+    finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
 
   return (
@@ -70,7 +109,17 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
         </div>
       )}
       <div style={S.card}>
-        <FormularCampuri campuri={CAMPURI_PROIECT} form={form} doarCitire={!esteAdmin} blocat={lucru} schimbate={schimbate}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ color: G.muted, marginBottom: 8 }}>Proiect de montaj (Execuție)</div>
+          {esteAdmin && montaj && montaj.length > 0 && !eroareMontaj ? <select style={S.select} disabled={lucru}
+            value={form.executie_proiect_id ?? ''} onChange={e => { if (!lucru) setForm(f => ({ ...f, executie_proiect_id: e.target.value ? Number(e.target.value) : null })) }}>
+            <option value="">Fără legătură</option>
+            {form.executie_proiect_id && !montaj.some(p => p.id === Number(form.executie_proiect_id)) && <option value={form.executie_proiect_id}>Proiect legat #{form.executie_proiect_id} (inactiv sau fără acces)</option>}
+            {montaj.map(p => <option key={p.id} value={p.id}>{p.cod_intern} — {p.nume}</option>)}
+          </select> : <div>{eroareMontaj || (montaj ? 'fără acces la Execuție sau niciun proiect activ vizibil' : 'Se încarcă Execuție…')} · {form.executie_proiect_id ?? 'fără legătură'}</div>}
+          {esteAdmin && <button style={{ ...S.btnS, marginLeft: 8 }} disabled={lucru || !form.executie_proiect_id || !!eroareMontaj || !montaj?.length} onClick={preiaContract}>Preia contractul din Execuție</button>}
+        </div>
+        <FormularCampuri campuri={CAMPURI_PROIECT.filter(c => c.cheie !== 'executie_proiect_id')} form={form} doarCitire={!esteAdmin} blocat={lucru} schimbate={schimbate}
           onChange={(k, v) => { if (!lucru) setForm(f => ({ ...f, [k]: v })) }} />
         {erori.length > 0 && (
           <div style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.redDim, color: G.red, fontSize: 12.5 }}>

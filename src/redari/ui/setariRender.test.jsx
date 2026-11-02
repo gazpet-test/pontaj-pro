@@ -1,16 +1,35 @@
 // Randare server-side (react-dom/server) a ecranelor UAT + Setări proiect: prinde erorile de randare și verifică ce vede fiecare nivel.
 // Efectele (cererile Supabase) nu rulează la renderToString; supabase e oricum simulat.
 import React from 'react'
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { renderToString } from 'react-dom/server'
 
-vi.mock('../../lib/supabase.js', () => ({ supabase: { from: () => { const q = { then: r => Promise.resolve({ data: [], error: null, count: 0 }).then(r) }
-  for (const op of ['select', 'eq', 'is', 'not', 'update', 'insert', 'order']) q[op] = () => q; return q } } }))
+// Harness de hook-uri pentru evenimente fără DOM. Randarea SSR de mai jos folosește React real.
+const hooks = vi.hoisted(() => ({ current: null }))
+const raspunsuri = vi.hoisted(() => ({ singure: [], liste: [], apeluri: [] }))
+vi.mock('react', async original => {
+  const real = await original()
+  return { ...real,
+    useState: v => hooks.current ? hooks.current.state(v) : real.useState(v),
+    useRef: v => hooks.current ? hooks.current.ref(v) : real.useRef(v),
+    useEffect: (f, d) => hooks.current ? hooks.current.effect(f, d) : real.useEffect(f, d),
+  }
+})
+afterEach(() => { hooks.current = null; raspunsuri.singure = []; raspunsuri.liste = []; raspunsuri.apeluri = [] })
 
-import UatEcran from './UatEcran.jsx'
+vi.mock('../../lib/supabase.js', () => ({ supabase: { from: tabel => {
+  const q = { then: r => Promise.resolve(raspunsuri.liste.shift() || { data: [], error: null, count: 0 }).then(r),
+    maybeSingle: () => new Promise(resolve => raspunsuri.singure.push(resolve)) }
+  for (const op of ['select', 'eq', 'is', 'not', 'update', 'insert', 'order', 'limit', 'gt']) q[op] = (...args) => { raspunsuri.apeluri.push([tabel, op, ...args]); return q }
+  return q
+} } }))
+
+import UatEcran, { ModalUat, ModalUatNou } from './UatEcran.jsx'
 import SetariProiect from './SetariProiect.jsx'
 import FormularCampuri from './FormularCampuri.jsx'
+import LegaturaExecutie from './LegaturaExecutie.jsx'
 import { CAMPURI_UAT } from '../setari.js'
+import { citestePaginat } from './comune.jsx'
 
 const proiect = { id: 'p1', cod: 'TEST-PR', denumire: 'Proiect test', text_gdpr: 'Text GDPR de test', text_declaratie: 'Declarație de test', contact_email: 'test@example.invalid' }
 const uats = [
@@ -19,7 +38,131 @@ const uats = [
 ]
 const show = () => {}
 
+function harness() {
+  const valori = [], efecte = []
+  let index = 0
+  const h = {
+    state: initial => {
+      const i = index++
+      if (!(i in valori)) valori[i] = typeof initial === 'function' ? initial() : initial
+      return [valori[i], v => { valori[i] = typeof v === 'function' ? v(valori[i]) : v }]
+    },
+    ref: initial => { const i = index++; return valori[i] || (valori[i] = { current: initial }) },
+    effect: (f, deps) => {
+      const i = index++
+      if (!efecte[i] || deps.some((v, j) => v !== efecte[i].deps[j])) {
+        efecte[i]?.curata?.()
+        efecte[i] = { deps, curata: f() }
+      }
+    },
+    render: (component, props) => { index = 0; hooks.current = h; return component(props) },
+    unmount: () => { for (const e of efecte) e?.curata?.() },
+  }
+  return h
+}
+const elemente = (node, tip) => {
+  if (!node || typeof node !== 'object') return []
+  if (Array.isArray(node)) return node.flatMap(n => elemente(n, tip))
+  return [...(node.type === tip ? [node] : []), ...elemente(node.props?.children, tip)]
+}
+
+describe('ModalUatNou — inserare în curs', () => {
+  it('blochează nume/cod/județ și ignoră onChange până la răspuns', async () => {
+    const h = harness(), gata = vi.fn()
+    const props = { proiect, uats, show, onClose: () => {}, onGata: gata }
+    let tree = h.render(ModalUatNou, props)
+    elemente(tree, 'input')[0].props.onChange({ target: { value: 'Sat FICTIV' } })
+    tree = h.render(ModalUatNou, props)
+    const pending = elemente(tree, 'button').at(-1).props.onClick()
+    tree = h.render(ModalUatNou, props)
+    const inputuri = elemente(tree, 'input')
+    const valori = inputuri.map(n => n.props.value)
+    expect(inputuri).toHaveLength(3)
+    expect(inputuri.every(n => n.props.disabled)).toBe(true)
+    inputuri.forEach(n => n.props.onChange({ target: { value: 'NU SE SCRIE' } }))
+    expect(elemente(h.render(ModalUatNou, props), 'input').map(n => n.props.value)).toEqual(valori)
+    await pending
+    expect(gata).toHaveBeenCalledTimes(1)
+    expect(elemente(h.render(ModalUatNou, props), 'input').every(n => !n.props.disabled)).toBe(true)
+  })
+  it('răspuns după unmount: fără toast sau callback pe ecranul vechi', async () => {
+    const h = harness(), gata = vi.fn(), toast = vi.fn()
+    const props = { proiect, uats, show: toast, onClose: () => {}, onGata: gata }
+    let tree = h.render(ModalUatNou, props)
+    elemente(tree, 'input')[0].props.onChange({ target: { value: 'Sat FICTIV' } })
+    tree = h.render(ModalUatNou, props)
+    const pending = elemente(tree, 'button').at(-1).props.onClick()
+    h.unmount()
+    await pending
+    expect(gata).not.toHaveBeenCalled()
+    expect(toast).not.toHaveBeenCalled()
+  })
+})
+
+describe('legătura Execuție — generații async', () => {
+  it('ignoră răspunsul vechi după schimbarea proiectului; păstrează numai proiectul curent', async () => {
+    const h = harness()
+    expect(h.render(LegaturaExecutie, { proiectId: 1 })).toBeNull()
+    expect(h.render(LegaturaExecutie, { proiectId: 2 })).toBeNull()
+    raspunsuri.singure[0]({ data: { id: 'red-vechi' }, error: null })
+    await Promise.resolve()
+    expect(h.render(LegaturaExecutie, { proiectId: 2 })).toBeNull()
+    raspunsuri.singure[1]({ data: { id: 'red-curent' }, error: null })
+    await Promise.resolve()
+    expect(h.render(LegaturaExecutie, { proiectId: 2 }).props.to).toBe('/redari?proiect=red-curent')
+    expect(raspunsuri.apeluri).toContainEqual(['red_proiecte', 'eq', 'activ', true])
+    expect(raspunsuri.apeluri).toContainEqual(['red_proiecte', 'eq', 'executie_proiect_id', 2])
+  })
+  it.each([{ data: null, error: null }, { data: null, error: { code: '42501' } }])('RLS gol sau eroare: fără buton %j', async rezultat => {
+    const h = harness()
+    h.render(LegaturaExecutie, { proiectId: 1 })
+    raspunsuri.singure[0](rezultat)
+    await Promise.resolve()
+    expect(h.render(LegaturaExecutie, { proiectId: 1 })).toBeNull()
+  })
+})
+
+describe('preluare contract — numai în formular', () => {
+  it('preia nr/data/coordonator, fără UPDATE automat; blochează formularul cât citește', async () => {
+    const h = harness(), toast = vi.fn()
+    const props = { proiect: { ...proiect, executie_proiect_id: 12 }, nivel: 'admin', show: toast, onSchimbat: vi.fn() }
+    raspunsuri.liste.push({ data: [{ id: 12, nume: 'Montaj FICTIV', cod_intern: 'TEST' }], error: null }, { data: [], error: null })
+    h.render(SetariProiect, props)
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    let tree = h.render(SetariProiect, props)
+    const preia = elemente(tree, 'button').find(b => b.props.children === 'Preia contractul din Execuție')
+    expect(preia.props.disabled).toBe(false)
+    const pending = preia.props.onClick()
+    tree = h.render(SetariProiect, props)
+    expect(elemente(tree, 'select')[0].props.disabled).toBe(true)
+    raspunsuri.singure[0]({ data: { nr_contract: '30/22.01.2025', data_contract: '2025-01-22', coordonator_transgaz: 'Coordonator FICTIV' }, error: null })
+    await pending
+    tree = h.render(SetariProiect, props)
+    const gasesteForm = node => {
+      if (Array.isArray(node)) { for (const n of node) { const r = gasesteForm(n); if (r) return r } }
+      if (node?.type === FormularCampuri) return node.props.form
+      return node?.props?.children ? gasesteForm(node.props.children) : null
+    }
+    expect(gasesteForm(tree)).toMatchObject({ contract_nr: '30', contract_data: '2025-01-22', reprezentant_tgz_nume: 'Coordonator FICTIV', executie_proiect_id: 12 })
+    expect(raspunsuri.apeluri.some(x => x[1] === 'update')).toBe(false)
+    expect(props.onSchimbat).not.toHaveBeenCalled()
+  })
+})
+
 describe('ecranul UAT', () => {
+  it('admin: generează înainte de numerotare, descarcă și regenerează după numerotare; viewer fără acțiuni', () => {
+    const randare = (admin, nr) => renderToString(<ModalUat proiect={proiect} uat={{ ...uats[0], adresa_nr: nr }} uats={uats} esteAdmin={admin} show={show} onClose={() => {}} onGata={() => {}} />)
+    expect(randare(true, null)).toContain('Generează adresa UAT')
+    expect(randare(true, 'AU-0001')).toContain('Descarcă adresa')
+    expect(randare(true, 'AU-0001')).toContain('Regenerează')
+    expect(randare(true, 'AU-0001')).not.toContain('Generează adresa UAT')
+    for (const nr of [null, 'AU-0001']) {
+      const h = randare(false, nr)
+      expect(h).not.toContain('Generează adresa UAT')
+      expect(h).not.toContain('Descarcă adresa')
+      expect(h).not.toContain('Regenerează')
+    }
+  })
   it('admin: tabelul cu ambele UAT-uri și butonul de UAT nou', () => {
     const h = renderToString(<UatEcran proiect={proiect} uats={uats} nivel="admin" show={show} onSchimbat={() => {}} />)
     expect(h).toContain('Test UAT')
@@ -40,6 +183,24 @@ describe('ecranul UAT', () => {
 })
 
 describe('FormularCampuri', () => {
+  it('paginarea keyset continuă după pagini plafonate și se oprește numai la gol', async () => {
+    const apeluri = [], randuri = [{ id: 1 }, { id: 2 }, { id: 3 }]
+    const fabrica = () => {
+      let dupa = 0
+      const q = { order: k => { expect(k).toBe('id'); return q }, limit: () => q,
+        gt: (k, v) => { expect(k).toBe('id'); dupa = v; return q },
+        then: r => { apeluri.push(dupa); return Promise.resolve({ data: randuri.filter(x => x.id > dupa).slice(0, 1), error: null }).then(r) } }
+      return q
+    }
+    expect(await citestePaginat(fabrica, { cheie: 'id' })).toEqual(randuri)
+    expect(apeluri).toEqual([0, 1, 2, 3])
+  })
+  it('paginarea nu transformă eroarea sau răspunsul invalid în listă goală', async () => {
+    for (const raspuns of [{ data: null, error: new Error('Test refuz') }, { data: null, error: null }]) {
+      const fabrica = () => { const q = { order: () => q, limit: () => q, then: r => Promise.resolve(raspuns).then(r) }; return q }
+      await expect(citestePaginat(fabrica, { cheie: 'id' })).rejects.toThrow()
+    }
+  })
   it('blocat = toate input-urile dezactivate (salvare în curs, Jakarinos f2 r2 P2)', () => {
     const h = renderToString(<FormularCampuri campuri={CAMPURI_UAT} form={{}} onChange={() => {}} blocat />)
     const inputuri = h.match(/<input[^>]*>/g) || []

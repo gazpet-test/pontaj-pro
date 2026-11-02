@@ -19,8 +19,25 @@ export const COL_RASPUNS_META = 'raspuns_id, ip_sau_sursa, user_agent'
 // citesteIn(fabrica, coloana, ids): împarte ids în loturi de LOT_IN și paginează fiecare lot. Ambele aruncă la eroare și întorc toate rândurile.
 export const LOT_RANGE = 1000
 export const LOT_IN = 100
-export async function citestePaginat(fabrica) {
+export async function citestePaginat(fabrica, { cheie, esteCurent = () => true } = {}) {
   const tot = []
+  if (cheie) {
+    let ultimul
+    while (esteCurent()) {
+      let q = fabrica().order(cheie).limit(LOT_RANGE)
+      if (ultimul !== undefined) q = q.gt(cheie, ultimul)
+      const { data, error } = await q
+      if (error) throw error
+      if (!Array.isArray(data)) throw new Error('Citire incompletă: răspuns fără listă')
+      if (!esteCurent()) throw new Error('Citire abandonată: entitatea s-a schimbat')
+      if (!data.length) return tot
+      const urmator = data.at(-1)[cheie]
+      if (urmator == null || urmator === ultimul) throw new Error('Paginarea nu a avansat')
+      tot.push(...data)
+      ultimul = urmator
+    }
+    throw new Error('Citire abandonată')
+  }
   for (let de = 0; ; de += LOT_RANGE) {
     const { data, error } = await fabrica().range(de, de + LOT_RANGE - 1)
     if (error) throw error

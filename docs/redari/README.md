@@ -137,18 +137,33 @@ adresele UAT pe seria `AU-0001`.
 - Ecrane: **🏛️ UAT-uri** (tabel + „gata de convocare?”, editare admin, cod UAT blocat după primele parcele, avertisment la schimbarea zilelor când
   există convocați) și **⚙️ Setări proiect** (contract, împuternicire, reprezentanți, contact, texte GDPR / declarație cu confirmare la schimbare).
   Editor și viewer văd în citire (RLS: scrie doar admin). Logica: `src/redari/setari.js` (+ teste), randare: `src/redari/ui/setariRender.test.jsx`.
-- Rămas pentru felia 2 (P3 Copilot r4): fereastra „UAT nou” nu blochează câmpurile cât rulează inserarea.
+- P3 Copilot r4 („UAT nou” editabil cât inserează) este reparat în felia 2, §4.1c.
+
+### 4.1c Faza 2, felia 2 — adresă UAT + legătură Execuție (02.11.2026)
+- **Migrarea 20261128a APLICATĂ pe prod 02.11 ~12:30** (regula #1877: Copilot r4 GO, Gemini r3 GO, DRY de poartă 7/7 pe commit fixat). Revenire: `supabase/revenire/20261128a_redari_legatura_executie_ROLLBACK.sql`.
+- Numerotarea adresei UAT: `fn_red_adresa_uat_rezerva` rezervă numărul și îl scrie pe UAT atomic, înaintea generării; eșecul de upload lasă numărul pe UAT (reluare cu „Regenerează”, versiune nouă în bucket). Preluarea contractului din Execuție păstrează data din sufixul „nr/zz.ll.aaaa” când `data_contract` lipsește și semnalează nepotrivirea (review Copilot r1).
+- Migrarea pregătită `20261128a_redari_legatura_executie`: două coloane nullable, FK către montaj, unicitate parțială,
+  CHECK HTTPS/300, amprenta politicilor în pre/post; revenire armată cu lock înaintea gărzii de date; DRY owner/editor/viewer,
+  proiecte fictive, montaj existent numai citit, SQLSTATE-uri exacte, CAS/versiune, ROLLBACK final. **Nu a fost rulată aici.**
+- Model 4: `repetaRand`, verificări separate pentru adresă (împuternicire obligatorie), 43 de chei comparate cu șablonul real,
+  zero parcele acceptat, active ordonate; `link_afisare` scos prin script, fără alte modificări de text.
+- Modal UAT, admin: generează AU → upload versionat imutabil → UPDATE cu CAS → descărcare; regenerarea confirmată păstrează AU;
+  descărcarea existentului folosește URL semnat și versiunea maximă. Conflictul lasă fișierul în bucket. Numărul rezervat poate rămâne consumat.
+- Setări: legătură montaj și preluare contract doar în formular, cu salvare explicită; link GDPR opțional HTTPS.
+  Execuție are butonul spre proiectul Redări vizibil prin RLS; `/redari?proiect=UUID` selectează proiectul o singură dată.
+- P3 #918 închis: „UAT nou” blochează nume/cod/județ și ignoră tastarea cât inserează; acțiunile noi ignoră răspunsurile după unmount.
+- Verificări și limitări: `RAPORT_20261128a.md`. Nu s-au verificat BD/PostgREST/RLS/Storage reale, concurența între sesiuni,
+  aspectul în Word sau browserul pe conturi reale. Cererea către TGZ, PV, Sesiune, Dashboard, Anexa 7, xlsx, e-mail/SMS rămân în afara feliei.
 
 ### 4.2 NU e făcut (faza următoare, după brief §8 „apoi”)
 - PV A / B / C (generare din `pv_a` / `pv_b` / `pv_c.docx`, numerotare PVA/PVB/PVC, stările trimis/semnat, upload scan semnat) — doar schema există.
-- Adresă UAT + convocare de afișare + PV de afișare (`adresa_uat.docx`), ecranul UAT (primărie, reprezentant, zile, program).
-- Sesiune (mod tabletă), Dashboard (centralizator pe UAT), Setări proiect (contract, împuternicire, texte, șabloane).
+- Evidența ulterioară a afișării și semnării PV de afișare; documentul Model 4 se generează în 4.1c.
+- Sesiune (mod tabletă), Dashboard (centralizator pe UAT), configurarea șabloanelor.
 - Import Anexa 7 (Model_7, antet pe rândul 5, 30 de coloane) — `red_import_loturi.sursa = 'ANEXA7'` există, parserul nu.
 - Export registru xlsx (Model_6) și centralizator „fără date personale” pentru TGZ.
 - Email (Gmail API `redari@gazpet.ro`), SMS (SMSLink), FAN Courier — niciun canal automat; totul manual (decizia 6).
-- Repetarea rândurilor în DOCX (`{{rand.*}}`, funcția `repetaRand` în `docx.js`) — azi rămân literal în `adresa_uat.docx`.
 - Câmpurile fără sursă din `SABLOANE.md` §3 (bifele stării terenului, verificarea pe teren, reluarea convocării, `semnatar_apm`, numerotarea
-  adresei UAT, `link_afisare`, prezența la sesiune, refuzul nemotivat, `id_parcela` pe documente etc.) — de decis cu Juridic/Răzvan.
+  prezența la sesiune, refuzul nemotivat, `id_parcela` pe documente etc.) — de decis cu Juridic/Răzvan.
 - Importul REAL al listei TGZ și acordarea rolurilor (vezi §5).
 
 ### 4.3 NU e testat

@@ -4,6 +4,7 @@
    Fără date reale aici — doar structuri. */
 
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { STARI } from './redari/stare.js'
 import { uat3 } from './redari/idParcela.js'
@@ -27,6 +28,10 @@ const JUDET_LOT1 = 'Mehedinți'
 
 // ════════════════════════════════════════════════════════════════════════════
 export default function Redari() {
+  const [searchParams] = useSearchParams()
+  const proiectInitial = useRef(searchParams.get('proiect'))
+  const selectieInitiala = useRef(false)
+  const generatieProiecte = useRef(0)
   const { show, ToastContainer } = useToast()
   const [profile, setProfile] = useState(null)
   const [nivel, setNivel] = useState(null)         // 'admin' | 'editor' | 'viewer' | null
@@ -57,12 +62,16 @@ export default function Redari() {
   const esteAdmin = nivel === 'admin'
 
   const incarcaProiecte = useCallback(async () => {
+    const token = ++generatieProiecte.current
     const { data, error } = await supabase.from('red_proiecte').select('*').eq('activ', true).order('created_at')
+    if (generatieProiecte.current !== token) return
     if (error) { show('Proiecte: ' + msgEroare(error), 'error'); return }
     setProiecte(data || [])
-    setProiectId(prev => prev && (data || []).some(p => p.id === prev) ? prev : (data?.[0]?.id || ''))
+    const cerut = !selectieInitiala.current && (data || []).some(p => p.id === proiectInitial.current) ? proiectInitial.current : null
+    selectieInitiala.current = true
+    setProiectId(prev => cerut || (prev && (data || []).some(p => p.id === prev) ? prev : (data?.[0]?.id || '')))
   }, [show])
-  useEffect(() => { if (gataProfil && nivel) incarcaProiecte() }, [gataProfil, nivel, incarcaProiecte])
+  useEffect(() => { if (gataProfil && nivel) incarcaProiecte(); return () => { generatieProiecte.current++ } }, [gataProfil, nivel, incarcaProiecte])
 
   useEffect(() => {
     // r3 P2-5: la schimbarea proiectului lista veche dispare imediat, iar un răspuns întârziat al cererii anterioare se ignoră
