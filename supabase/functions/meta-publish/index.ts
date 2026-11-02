@@ -151,7 +151,8 @@ Deno.serve(async (req: Request) => {
       const erori = new Set<string>();
       for (const ps of pubs || []) {
         let st: Record<string, number | null> = { fb_reach: ps.fb_reach, fb_impresii: ps.fb_impresii, fb_reactii: ps.fb_reactii, fb_comentarii: ps.fb_comentarii, fb_distribuiri: ps.fb_distribuiri };
-        const vechi = !ps.fb_stats_la || (Date.now() - new Date(ps.fb_stats_la).getTime()) > 6 * 3600e3;
+        // reach lipsă = insights necitite → se reîncearcă la fiecare deschidere a Analizei (max 50 de postări, doar la cererea userului), nu după 6 h
+        const vechi = !ps.fb_stats_la || ps.fb_reach == null || (Date.now() - new Date(ps.fb_stats_la).getTime()) > 6 * 3600e3;
         if (vechi || body.forta) {
           // audit 02.11 #17: interactiunile si insights-urile se cer SEPARAT si independent — o metrica retrasa de Meta (impresiile pe Pages)
           // facea sa pice tot apelul, iar eroarea era inghitita (fb_stats_la a ramas NULL la toate postarile). Ce nu se poate citi pastreaza
@@ -160,7 +161,8 @@ Deno.serve(async (req: Request) => {
           let interOk = false
           try {
             const f = await graph(`${ps.fb_post_id}?fields=reactions.summary(true).limit(0),comments.summary(true).limit(0),shares`, { tok: PT });
-            Object.assign(nou, { fb_reactii: f.reactions?.summary?.total_count ?? 0, fb_comentarii: f.comments?.summary?.total_count ?? 0, fb_distribuiri: f.shares?.count ?? 0 });
+            // câmp lipsă din răspunsul Graph = valoarea veche (shares lipsește legitim când nu există distribuiri → 0 doar dacă nu aveam nimic)
+            Object.assign(nou, { fb_reactii: f.reactions?.summary?.total_count ?? st.fb_reactii ?? null, fb_comentarii: f.comments?.summary?.total_count ?? st.fb_comentarii ?? null, fb_distribuiri: f.shares?.count ?? st.fb_distribuiri ?? 0 });
             interOk = true
           } catch (e) { erori.add(`interactiuni: ${String((e as Error)?.message || e).slice(0, 160)}`); }
           const ins: Record<string, number> = {}, eroriIns: string[] = [];
