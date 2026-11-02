@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { citestePaginat, S, msgEroare } from './comune.jsx'
+import { citestePaginat, G, S, msgEroare } from './comune.jsx'
 import ModalPv from './ModalPv.jsx'
 
 export default function TronsoaneEcran({proiect,nivel,show}) {
@@ -48,17 +48,17 @@ export default function TronsoaneEcran({proiect,nivel,show}) {
   const tronsoane=[...new Set(date?.randuri.map(r=>r.tronson)??[])].sort((a,b)=>a-b)
   return <div style={S.card}>
     {mesaj && <p role="alert">{mesaj}</p>}
-    <button style={S.btnS} disabled={lucru} onClick={()=>setReload(n=>n+1)}>Reincarca</button>
-    {lucru && <p>Se incarca...</p>}
-    {date && !tronsoane.length && <p>Nicio parcela activa.</p>}
-    {date && <table><thead><tr>{['Tronson','UAT-uri','Parcele','PV A semnat','PV B','Fara PV','Obiectii deschise','PV C'].map(k=><th key={k} style={S.th}>{k}</th>)}</tr></thead>
+    <button style={S.btnS} disabled={lucru} onClick={()=>setReload(n=>n+1)}>↻ Reîncarcă</button>
+    {lucru && <p style={{ fontSize:12.5, color:G.muted }}>Se încarcă...</p>}
+    {date && !tronsoane.length && <p style={{ fontSize:12.5, color:G.muted }}>Nicio parcelă activă.</p>}
+    {date && <table><thead><tr>{['Tronson','UAT-uri','Parcele','PV A semnat','PV B','Fără PV','Obiecții deschise','PV C'].map(k=><th key={k} style={S.th}>{k}</th>)}</tr></thead>
       <tbody>{tronsoane.map(t=>{
         const rs=date.randuri.filter(r=>r.tronson===t), ids=new Set(rs.map(r=>r.uat_id))
         const fara=rs.filter(r=>r.tip_pv==null).length, existent=date.pvs.find(p=>p.tronson===t)
         return <tr key={t}><td style={S.td}>{t}</td><td style={S.td}>{date.uats.filter(u=>ids.has(u.id)).map(u=>u.nume).sort().join(', ')}</td>
           {[rs.length,rs.filter(r=>r.tip_pv==='A').length,rs.filter(r=>r.tip_pv==='B').length,fara,rs.filter(r=>r.obiectii_deschise===true).length].map((v,i)=><td key={i} style={S.td}>{v}</td>)}
           <td style={S.td}>{existent?<button style={S.btnS} disabled={lucru} onClick={()=>deschide(t)}>{existent.nr_pv} - {existent.stare}</button>
-            :nivel==='admin' && <button style={S.btnP} disabled={lucru||fara!==0} onClick={()=>deschide(t)}>Creeaza PV C</button>}</td></tr>
+            :nivel==='admin' && <button style={S.btnP} disabled={lucru||fara!==0} onClick={()=>deschide(t)}>＋ Creează PV C</button>}</td></tr>
       })}</tbody></table>}
     {pv && <ModalPv key={pv.id} pvId={pv.id} tronson={pv.tronson} proiectId={proiect.id} tip="C" nivel={nivel} show={show}
       onClose={()=>{setPv(null);setReload(n=>n+1)}} onGata={()=>setReload(n=>n+1)}/>}

@@ -42,9 +42,9 @@ export default function SesiuneEcran({ proiect, nivel, show }) {
   const uat = uats?.find(u => u.id === uatId)
   return <div style={S.card}>
     {mesaj && <p role="alert">{mesaj}</p>}
-    {!uats && !mesaj && <p>Se incarca UAT-urile...</p>}
-    {mesaj && <button style={buton} onClick={() => setReload(n => n + 1)}>Reincarca UAT-urile</button>}
-    {uats && !uats.length && <p>Niciun UAT in proiect.</p>}
+    {!uats && !mesaj && <p>Se încarcă UAT-urile...</p>}
+    {mesaj && <button style={buton} onClick={() => setReload(n => n + 1)}>↻ Reîncarcă UAT-urile</button>}
+    {uats && !uats.length && <p>Niciun UAT în proiect.</p>}
     {!!uats?.length && <label style={{ display: 'block', marginBottom: 12 }}>UAT
       <select aria-label="UAT" style={{ ...input, display: 'block' }} value={uatId} onChange={e => setUatId(e.target.value)}>
         {uats.map(u => <option key={u.id} value={u.id}>{u.nume}</option>)}
@@ -105,10 +105,10 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
       if (!curent()) return
       setDate(nou)
       // Copilot f5 r1 P2-02: a doua tableta primeste 23505 de la indexul unic -> prezenta exista deja
-      if (error?.code === '23505' && String(error.message||'').includes('red_raspunsuri_prezenta_uq')) setMesaj('Prezenta era deja inregistrata (alta tableta).')
+      if (error?.code === '23505' && String(error.message||'').includes('red_raspunsuri_prezenta_uq')) setMesaj('Prezența era deja înregistrată (altă tabletă).')
       else if (error) setMesaj(msgEroare(error) + (nou.prezenti.has(rand.detinator_id) ? ' Prezenta exista la recitire.' : ' Prezenta neconfirmata; verifica inainte de reluare.'))
       else if (!confirmat) setMesaj('Scriere neconfirmata; verifica prezentele reincarcate.')
-      else setMesaj('Prezenta inregistrata.')
+      else setMesaj('Prezența a fost înregistrată.')
     } catch (e) {
       if (curent()) { setDate(null); setMesaj((confirmat ? 'Prezenta salvata, reincarcarea a esuat: ' : 'Rezultat neconfirmat; reincarca inainte de reluare: ') + msgEroare(e)) }
     } finally { if (curent()) { ocupat.current = false; setLucru(false) } }
@@ -118,23 +118,23 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
   return <div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,280px),1fr))', gap: 12 }}>
       <label>Zi sesiune<select aria-label="Zi sesiune" style={input} value={zi} disabled={lucru} onChange={e => setZi(e.target.value)}>
-        {!zile.length && <option value="">Fara zile de sesiune</option>}
+        {!zile.length && <option value="">Fără zile de sesiune</option>}
         {zile.map(z => <option key={z.nr} value={z.data}>Ziua {z.nr}: {formatDataRo(z.data)} {z.program}</option>)}
       </select></label>
-      <label>Cauta nume / parcela<input style={input} value={cauta} onChange={e => setCauta(e.target.value)} /></label>
+      <label>Caută nume / parcelă<input style={input} value={cauta} onChange={e => setCauta(e.target.value)} /></label>
     </div>
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44, fontSize: 16 }}>
       <input type="checkbox" checked={doarNesemnate} onChange={e => setDoarNesemnate(e.target.checked)} />Doar nesemnate
     </label>
-    <button style={buton} disabled={lucru} onClick={() => setReload(n => n + 1)}>Reincarca</button>
+    <button style={buton} disabled={lucru} onClick={() => setReload(n => n + 1)}>↻ Reîncarcă</button>
     {mesaj && <p role="status">{mesaj}</p>}
-    {lucru && <p>Se incarca...</p>}
-    {rezumat && <p>Total: {rezumat.total} | Semnate: {rezumat.semnate} | Trimise: {rezumat.trimise} | Fara PV: {rezumat.fara_pv} | Prezenti azi ({formatDataRo(azi)}): {rezumat.prezenti_azi}</p>}
+    {lucru && <p>Se încarcă...</p>}
+    {rezumat && <p>Total: {rezumat.total} | Semnate: {rezumat.semnate} | Trimise: {rezumat.trimise} | Fără PV: {rezumat.fara_pv} | Prezenți azi ({formatDataRo(azi)}): {rezumat.prezenti_azi}</p>}
     {date && !randuri.length && <p>Niciun rezultat.</p>}
     <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
       {randuri.map(r => <article key={r.detinator_id} style={{ ...S.card, fontSize: 16, overflowWrap: 'anywhere' }}>
         <b>{r.id_parcela} - {r.nume}</b><p><TagStare cod={r.stare} /></p>
-        <p>PV: {r.pv_nr || '-'} / {r.pv_stare || 'fara PV'}{date.prezenti.has(r.detinator_id) ? ' | Prezent azi' : ''}</p>
+        <p>PV: {r.pv_nr || '-'} / {r.pv_stare || 'fără PV'}{date.prezenti.has(r.detinator_id) ? ' | Prezent azi' : ''}</p>
         {poateScrie && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           {!date.prezenti.has(r.detinator_id) && <button style={buton} disabled={lucru || !zile.some(z => z.data === zi)} onClick={() => prezent(r)}>Prezent</button>}
           <button style={buton} disabled={lucru} onClick={() => setPv(r)}>PV A</button>

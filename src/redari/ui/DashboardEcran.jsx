@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { agregaCentralizator, agregaTronsoane } from '../sesiune.js'
 import { STARI } from '../stare.js'
-import { S, msgEroare } from './comune.jsx'
+import { G, S, msgEroare } from './comune.jsx'
 import ExportEcran from './ExportEcran.jsx'
 
 // Cursor lexicografic: (uat_id, stare) este unic in vederea centralizatorului.
@@ -48,23 +48,23 @@ export default function DashboardEcran({ proiect }) {
     }).catch(e => { if (curent()) setMesaj(msgEroare(e)) })
     return () => { generatie.current++ }
   }, [proiect.id, reload])
-  const coloane = [['parcele', 'Parcele'], ['pv_a_semnat', 'Cu PV A semnat'], ['pv_b', 'Cu PV B'], ['fara_pv', 'Fara PV'], ['obiectii_deschise', 'Obiectii deschise']]
+  const coloane = [['parcele', 'Parcele'], ['pv_a_semnat', 'Cu PV A semnat'], ['pv_b', 'Cu PV B'], ['fara_pv', 'Fără PV'], ['obiectii_deschise', 'Obiecții deschise']]
   return <div style={S.card}>
-    <button style={S.btnS} disabled={!date && !mesaj} onClick={() => setReload(n => n + 1)}>Reincarca</button>
+    <button style={S.btnS} disabled={!date && !mesaj} onClick={() => setReload(n => n + 1)}>↻ Reîncarcă</button>
     {mesaj && <p role="alert">{mesaj}</p>}
-    {!date && !mesaj && <p>Se incarca...</p>}
+    {!date && !mesaj && <p style={{ fontSize:12.5, color:G.muted, margin:'0 0 8px' }}>Se încarcă...</p>}
     {date && <>
-      <h3>Centralizator pe UAT</h3>
-      <p>Numar de perechi parcela / detinator. UAT-urile fara perechi nu apar in vederea sursa.</p>
+      <h3 style={{ fontSize:15, fontWeight:700, margin:'16px 0 4px' }}>Centralizator pe UAT</h3>
+      <p style={{ fontSize:12.5, color:G.muted, margin:'0 0 8px' }}>Număr de perechi parcelă / deținător. UAT-urile fără perechi nu apar încă.</p>
       <div style={{ overflowX: 'auto' }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
-        <thead><tr>{['UAT', 'Total', 'Inchise', '% inchise', ...STARI.map(s => s.eticheta)].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
+        <thead><tr>{['UAT', 'Total', 'Închise', '% închise', ...STARI.map(s => s.eticheta)].map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
         <tbody>{date.uats.map((u, i) => <tr key={i} style={{ fontWeight: u.uat3 === 'TOTAL' ? 700 : 400 }}>
           <td style={S.td}>{u.uat_nume} {u.uat3 !== 'TOTAL' && `(${u.uat3})`}</td>
           {[u.total, u.inchise, `${u.procent.toFixed(1)}%`, ...STARI.map(s => u.pe_stare[s.cod] || 0)].map((v, j) => <td key={j} style={S.td}>{v}</td>)}
         </tr>)}</tbody>
       </table></div>
-      <h3>Centralizator pe tronson</h3>
-      {!date.tronsoane.length && <p>Nicio parcela activa.</p>}
+      <h3 style={{ fontSize:15, fontWeight:700, margin:'16px 0 4px' }}>Centralizator pe tronson</h3>
+      {!date.tronsoane.length && <p style={{ fontSize:12.5, color:G.muted, margin:'0 0 8px' }}>Nicio parcelă activă.</p>}
       <div style={{ overflowX: 'auto' }}><table style={{ borderCollapse: 'collapse', width: '100%' }}>
         <thead><tr><th style={S.th}>Tronson</th>{coloane.map(([k, text]) => <th key={k} style={S.th}>{text}</th>)}</tr></thead>
         <tbody>{date.tronsoane.map(t => <tr key={t.tronson}><td style={S.td}>{t.tronson ?? '-'}</td>

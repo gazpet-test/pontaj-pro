@@ -117,17 +117,17 @@ export default function ExportEcran({ proiect }) {
       const continut = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
       if (!curent()) return
       descarcaBlob(new Blob([continut], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fisier)
-      setMesaj(`${date.numar} randuri exportate.`)
+      setMesaj(`${date.numar} rânduri exportate.`)
     } catch (e) { if (curent()) setMesaj(msgEroare(e)) }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
   return <div style={{ marginTop: 16 }}>
     {poateRegistru && <>
-      <button style={S.btnS} disabled={lucru} onClick={() => exporta('intern')}>Registru intern (xlsx)</button>{' '}
-      <button style={S.btnS} disabled={lucru} onClick={() => exporta('TGZ')}>Registru pentru TGZ - fara telefoane (xlsx)</button>{' '}
+      <button style={S.btnS} disabled={lucru} onClick={() => exporta('intern')}>📥 Registru intern (xlsx)</button>{' '}
+      <button style={S.btnS} disabled={lucru} onClick={() => exporta('TGZ')}>📤 Registru pentru TGZ — fără telefoane (xlsx)</button>{' '}
     </>}
-    <button style={S.btnS} disabled={lucru || !['admin','editor','viewer'].includes(nivel)} onClick={() => exporta('centralizator')}>Centralizator (xlsx)</button>
-    {lucru && <p role="status">Se pregateste exportul...</p>}
+    <button style={S.btnS} disabled={lucru || !['admin','editor','viewer'].includes(nivel)} onClick={() => exporta('centralizator')}>📊 Centralizator (xlsx)</button>
+    {lucru && <p role="status">Se pregătește exportul...</p>}
     {mesaj && <p role="status">{mesaj}</p>}
   </div>
 }

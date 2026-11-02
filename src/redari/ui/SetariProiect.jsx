@@ -168,7 +168,7 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
       <div style={S.card}>
         <div style={{ marginBottom: 14 }}>
           <div style={{ color: G.muted, marginBottom: 8 }}>Proiect de montaj (Execuție)</div>
-          {esteAdmin && montaj && montaj.length > 0 && !eroareMontaj ? <select style={S.select} disabled={lucru}
+          {esteAdmin && montaj && montaj.length > 0 && !eroareMontaj ? <select style={{ ...S.select, width:'100%', maxWidth:'100%', boxSizing:'border-box', textOverflow:'ellipsis' }} disabled={lucru}
             value={form.executie_proiect_id ?? ''} onChange={e => { if (!lucru) setForm(f => ({ ...f, executie_proiect_id: e.target.value ? Number(e.target.value) : null })) }}>
             <option value="">Fără legătură</option>
             {form.executie_proiect_id && !montaj.some(p => p.id === Number(form.executie_proiect_id)) && <option value={form.executie_proiect_id}>Proiect legat #{form.executie_proiect_id} (inactiv sau fără acces)</option>}
