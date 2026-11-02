@@ -630,3 +630,75 @@ Nu s-au rulat Git/commit/push, acces la credentiale, BD sau deploy.
 indexul unic `red_raspunsuri_prezenta_uq` (migrarea 20261129e, canal `sesiune` + opțiune `particip`); a doua tabletă
 primește „Prezența era deja înregistrată”. `data` = momentul real al prezenței; ziua de sesiune aleasă rămâne în
 `zi_sesiune_aleasa`. Indicatorul „Prezent azi” urmărește ziua fizică (decizie: prezența se înregistrează o dată pe zi).
+
+### 4.1k Faza 2, felia 6 - export Model_6 xlsx (02.11.2026)
+
+Dashboard, sub tabele: Registru intern (xlsx) si Registru pentru TGZ - fara telefoane
+(xlsx) pentru admin/editor; Centralizator (xlsx) pentru admin/editor/viewer.
+Rolul este recitit prin clientul autentificat; owner este admin. Nicio modificare de drepturi.
+Fiecare actiune reciteste proiectul: pagini keyset de maximum 500 pana la gol,
+IN in loturi de 100; sursele fara id folosesc cheia compusa unica.
+Fara valoare_lei, tokenuri de raspuns, metadate sau campuri de adresa/email.
+
+Intern: 39 coloane A..AM, Registru + Centralizator + Legenda.
+TGZ: 38 coloane, Telefon eliminat fizic; query-ul contact selecteaza numai
+ detinator_id,adresa_cunoscuta. N/Y/AM (texte libere) sunt goale in TGZ, ca sa nu
+transporte date de contact introduse in observatii; celulele cu sintaxa evidenta
+telefon/email/adresa sunt omise. Acest filtru poate elimina si identificatori numerici
+lungi. Registrul TGZ pastreaza numele detinatorilor si responsabilului: contine date
+personale. Doar Centralizator + Legenda este varianta fara persoane/date de contact.
+Centralizator: toate UAT-urile proiectului, inclusiv zero; stari in ordinea procesului,
+total perechi parcela/persoana si procent ponderat, o zecimala, zero la numitor zero.
+AA = orice raspuns canal sesiune; AL = responsabil_id -> profiles.name.
+Nimic nu se trimite automat: numai Blob descarcat in browser, fara mail sau upload.
+Nu exista snapshot tranzactional intre surse/pagini: verificarea numarului de perechi
+prinde diferente de volum, dar nu schimbari simultane care pastreaza acelasi numar.
+Regex-ul de contact nu este un clasificator semantic pentru adrese arbitrare introduse
+in campuri structurate; acestea trebuie pastrate conform sensului coloanei.
+
+Fisiere: src/redari/exportXlsx.js (functii fara componente/hook-uri; etichetele de
+retur/optiune sunt refolosite din comune.jsx), exportXlsx.test.js,
+ui/ExportEcran.jsx, ui/DashboardEcran.jsx (numai import/montare), README.md, SABLOANE.md.
+Logica de generare nu scrie date si nu apeleaza clientul; citirile sunt numai in UI.
+Modulele comune existente aduc dependintele lor tranzitive React/client.
+
+Verificat aici: comparare statica a celor 39 de antete cu SABLOANE 5.4;
+revizie query-uri/proiectii si montare, ASCII pentru fisiere noi, UTF-8 fara BOM.
+Teste SCRISE, NERULATE: antete independente din documentatie; selectii convocare/PV;
+ultimul raspuns/data/seq; prezenta; coproprietari; TGZ; zero/procent ponderat;
+XLSX.write array -> XLSX.read; paginare inclusiv pagina scurta, duplicat, eroare,
+anulare; proiectii TGZ si absenta citirii persoanelor pentru centralizator.
+Claude ruleaza vitest/build si verifica browserul cu rolurile reale, PostgREST/RLS
+si schema efectiva. Nu am rulat npm/npx/node cu pachete sau instalari.
+Skill Supabase: citirea fisierului SKILL.md a fost refuzata de mediul local.
+Fara Git/commit/push, credentiale, acces BD sau deploy; fara fisiere suplimentare.
+
+Raport L01-L25 (referinte la functii/teste, nu rezultate de teste executate):
+
+| Regula | Respectare / dovada |
+|---|---|
+| L01 | ExportEcran.exporta: ocupat ref + setLucru inainte de primul await; fara UPDATE/lock BD. |
+| L02 | n/a - fara scrieri sau efecte externe legate. |
+| L03 | ExportEcran: token generatie si proiect capturat; fara cache sau derivat persistent. |
+| L04 | n/a - fara cantitati/bani/mail sau trimiteri. |
+| L05 | n/a - numai citiri; erorile opresc descarcarea, fara retry automat. |
+| L06 | n/a - fara lock-uri. |
+| L07 | ExportEcran: rol verificat la randare si handler; client autentificat/RLS existent, fara drepturi noi. Runtime RLS nerulat. |
+| L08 | n/a - fara scrieri de identitate/provenienta; rolul vine din profilul utilizatorului autentificat. |
+| L09 | citesteDateExport: proiect_id la radacini, copii exclusiv prin ID-urile citite din proiect. Fara service_role/DEFINER. |
+| L10 | Proiectii explicite: fara token/email/adrese; TGZ fara citire telefon. Test negativ 0700000000 inclusiv texte libere. Erorile vizibile conform brief. |
+| L11 | n/a - fara extragere de dovezi. |
+| L12 | paginiExport pana la gol, refuz raspuns invalid/duplicat; lipsa stare/UAT si diferenta total registru-agregate blocheaza exportul. |
+| L13 | numeFisier: regex ancorate, lista alba tip si data calendaristica verificata; teste nume/date valide/invalide. Filtrul TGZ este conservator, nu parser de adrese. |
+| L14 | n/a - fara migrari. |
+| L15 | n/a - fara porti de schema. |
+| L16 | n/a - fara obiecte sau identitati noi persistente. |
+| L17 | randRegistru: formatDataRo; timestamp raspuns in Europe/Bucharest; numeFisier foloseste aziBucuresti. Test miezul noptii si data DST. |
+| L18 | Erorile citirii propagate; lista invalida/stare lipsa/agregat invalid refuzate, numai lista valida goala devine zero. |
+| L19 | STARI/etichetaStare/ultimulRaspuns, ETICHETA_CALITATE, formatDataRo, etichetaRetur/Optiune refolosite; randTgz comun randuri/workbook. |
+| L20 | Teste selectie activa/anulata/stearsa, PV A strain/PV B, intern cu telefon si TGZ fara; zero si caz legitim de export. |
+| L21 | n/a - fara AI. |
+| L22 | n/a - fara apeluri platite. |
+| L23 | paginiExport: cursor unic, order + range 0..499 pana la pagina goala, duplicate refuzate; inLoturi maximum 100 ID-uri. Test pagina scurta continuata. |
+| L24 | ExportEcran key proiect.id, cleanup generatie, bucle abandonate, verificare curent inainte de Blob/descarcare/setState; fara rezultat vechi aplicat. |
+| L25 | exportXlsx.test.js: fixture-uri fictive, expected literale si antete din SABLOANE independent; roundtrip real XLSX pregatit. Executia, browser/BD/RLS/build NERULATE aici. |
