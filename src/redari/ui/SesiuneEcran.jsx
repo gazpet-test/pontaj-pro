@@ -105,7 +105,7 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
       if (!curent()) return
       setDate(nou)
       // Copilot f5 r1 P2-02: a doua tableta primeste 23505 de la indexul unic -> prezenta exista deja
-      if (error?.code === '23505') setMesaj('Prezenta era deja inregistrata (alta tableta).')
+      if (error?.code === '23505' && String(error.message||'').includes('red_raspunsuri_prezenta_uq')) setMesaj('Prezenta era deja inregistrata (alta tableta).')
       else if (error) setMesaj(msgEroare(error) + (nou.prezenti.has(rand.detinator_id) ? ' Prezenta exista la recitire.' : ' Prezenta neconfirmata; verifica inainte de reluare.'))
       else if (!confirmat) setMesaj('Scriere neconfirmata; verifica prezentele reincarcate.')
       else setMesaj('Prezenta inregistrata.')
