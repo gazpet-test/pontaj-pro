@@ -148,20 +148,42 @@ Deno.serve(async (req: Request) => {
       const { data: pubs } = await db.from('marketing_postari').select('id, fb_post_id, publicat_la, site_id, fb_reach, fb_impresii, fb_reactii, fb_comentarii, fb_distribuiri, fb_stats_la')
         .eq('status', 'publicata').not('fb_post_id', 'is', null).order('publicat_la', { ascending: false }).limit(50);
       const out: any[] = [];
+      const erori = new Set<string>();
       for (const ps of pubs || []) {
-        let st = { fb_reach: ps.fb_reach, fb_impresii: ps.fb_impresii, fb_reactii: ps.fb_reactii, fb_comentarii: ps.fb_comentarii, fb_distribuiri: ps.fb_distribuiri };
-        const vechi = !ps.fb_stats_la || (Date.now() - new Date(ps.fb_stats_la).getTime()) > 6 * 3600e3;
+        let st: Record<string, number | null> = { fb_reach: ps.fb_reach, fb_impresii: ps.fb_impresii, fb_reactii: ps.fb_reactii, fb_comentarii: ps.fb_comentarii, fb_distribuiri: ps.fb_distribuiri };
+        // reach lipsă = insights necitite → se reîncearcă la fiecare deschidere a Analizei (max 50 de postări, doar la cererea userului), nu după 6 h
+        const vechi = !ps.fb_stats_la || ps.fb_reach == null || (Date.now() - new Date(ps.fb_stats_la).getTime()) > 6 * 3600e3;
         if (vechi || body.forta) {
+          // audit 02.11 #17: interactiunile si insights-urile se cer SEPARAT si independent — o metrica retrasa de Meta (impresiile pe Pages)
+          // facea sa pice tot apelul, iar eroarea era inghitita (fb_stats_la a ramas NULL la toate postarile). Ce nu se poate citi pastreaza
+          // valoarea veche; fb_stats_la se pune doar daca macar o parte s-a citit si UPDATE-ul a reusit. Erorile se intorc in raspuns (doar mesajul Graph).
+          const nou: Record<string, number | null> = {}
+          let interOk = false
           try {
-            const f = await graph(`${ps.fb_post_id}?fields=reactions.summary(true).limit(0),comments.summary(true).limit(0),shares,insights.metric(post_impressions,post_impressions_unique)`, { tok: PT });
-            const ins: Record<string, number> = {};
-            for (const m of f.insights?.data || []) ins[m.name] = Number(m.values?.[0]?.value ?? 0);
-            st = {
-              fb_reach: ins.post_impressions_unique ?? null, fb_impresii: ins.post_impressions ?? null,
-              fb_reactii: f.reactions?.summary?.total_count ?? 0, fb_comentarii: f.comments?.summary?.total_count ?? 0, fb_distribuiri: f.shares?.count ?? 0,
-            };
-            await db.from('marketing_postari').update({ ...st, fb_stats_la: new Date().toISOString() }).eq('id', ps.id);
-          } catch { /* pastram ce aveam */ }
+            const f = await graph(`${ps.fb_post_id}?fields=reactions.summary(true).limit(0),comments.summary(true).limit(0),shares`, { tok: PT });
+            // câmp lipsă din răspunsul Graph = valoarea veche (shares lipsește legitim când nu există distribuiri → 0 doar dacă nu aveam nimic)
+            Object.assign(nou, { fb_reactii: f.reactions?.summary?.total_count ?? st.fb_reactii ?? null, fb_comentarii: f.comments?.summary?.total_count ?? st.fb_comentarii ?? null, fb_distribuiri: f.shares?.count ?? st.fb_distribuiri ?? 0 });
+            interOk = true
+          } catch (e) { erori.add(`interactiuni: ${String((e as Error)?.message || e).slice(0, 160)}`); }
+          const ins: Record<string, number> = {}, eroriIns: string[] = [];
+          for (const metrici of ['post_impressions_unique,post_impressions', 'post_total_media_view_unique,post_media_view']) {
+            try {
+              const r = await graph(`${ps.fb_post_id}/insights?metric=${metrici}`, { tok: PT });
+              for (const m of r.data || []) ins[m.name] = Number(m.values?.[0]?.value ?? 0);
+              if (Object.keys(ins).length) break;
+            } catch (e) { eroriIns.push(`insights (${metrici.split(',')[0]}): ${String((e as Error)?.message || e).slice(0, 160)}`); }
+          }
+          if (Object.keys(ins).length) {
+            // rezerva (vizualizari media) nu e identica semantic cu reach/impresii — o folosim doar cand metricile vechi lipsesc
+            nou.fb_reach = ins.post_impressions_unique ?? ins.post_total_media_view_unique ?? st.fb_reach ?? null;
+            nou.fb_impresii = ins.post_impressions ?? ins.post_media_view ?? st.fb_impresii ?? null;
+          } else eroriIns.forEach(x => erori.add(x));   // eroare raportata doar daca nicio varianta n-a mers
+          if (Object.keys(nou).length) {
+            // fara interactiuni nu marcam postarea ca proaspata (fb_stats_la ramane)
+            const { error: eu } = await db.from('marketing_postari').update(interOk ? { ...nou, fb_stats_la: new Date().toISOString() } : nou).eq('id', ps.id);
+            if (eu) erori.add(`salvare: ${String(eu.message).slice(0, 160)}`);
+            else st = { ...st, ...nou };
+          }
         }
         out.push({ id: ps.id, site_id: ps.site_id, publicat_la: ps.publicat_la, ...st });
       }
@@ -177,7 +199,7 @@ Deno.serve(async (req: Request) => {
         agg[k] ||= { n: 0, reach: 0, engaj: 0 };
         agg[k].n++; agg[k].reach += o.fb_reach || 0; agg[k].engaj += (o.fb_reactii || 0) + (o.fb_comentarii || 0) + (o.fb_distribuiri || 0);
       }
-      return json({ ok: true, postari: out, agregare: agg, urmaritori: p.followers_count ?? null });
+      return json({ ok: true, postari: out, agregare: agg, urmaritori: p.followers_count ?? null, erori: [...erori].slice(0, 5) });
     }
 
     if (!body.postare_id) return json({ error: 'postare_id lipsă' }, 400);

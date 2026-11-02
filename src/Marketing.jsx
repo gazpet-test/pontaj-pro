@@ -222,6 +222,7 @@ export default function Marketing() {
     setBusy(null)
     if (error || data?.error) { showToast('Eroare statistici: ' + (error?.message || data?.error), 'err'); return }
     setAnaliza(data); await load()
+    if (data?.erori?.length) showToast('Statistici Facebook parțiale: ' + data.erori[0], 'err')   // audit #17: motivul Graph nu mai e înghițit
   }
   useEffect(() => { if (tab === 'analiza' && !analiza) incarcaAnaliza(false) }, [tab])
   // Slot recomandat implicit (până avem destule postări proprii): marți–joi 18:30, sau duminică 10:30
