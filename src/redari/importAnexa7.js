@@ -21,8 +21,9 @@ const ANTETE = [
 // Aceeasi lista de valori ca CALITATI din comune.jsx; nu importam React in parser.
 const CALITATI = ['proprietar', 'coproprietar', 'mostenitor', 'arendas', 'utilizator', 'neidentificat']
 
+const MAX_RAND_ANTET = 30   // ca în parserul TGZ: antetul e în primele 30 de rânduri (Gemini f3b r1 P3)
 function gasesteAntet(sheet, range) {
-  for (let r = range.s.r; r <= range.e.r; r++) {
+  for (let r = range.s.r; r <= Math.min(range.e.r, range.s.r + MAX_RAND_ANTET - 1); r++) {
     const chei = []
     for (let c = range.s.c; c <= range.e.c; c++) chei.push(cheie(sheet[XLSX.utils.encode_cell({ r, c })]?.v))
     if (chei.includes('uat') && chei.includes('numesiprenumedenumire')) return { rand: r, chei }
@@ -54,20 +55,21 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
     else col[camp] = range.s.c + candidati[0]
   }
   if (lipsa.length) { eroare(antet.rand + 1, `Coloane lipsa sau ambigue: ${lipsa.join(', ')}`); return rez }
-  const dupaUat = new Map()
-  for (const u of uats) if (u) {
-    if (u.nume) dupaUat.set(normalizeazaNume(u.nume), u)
-    if (u.uat3) dupaUat.set(normalizeazaNume(u.uat3), u)
-  }
+  const dupaUat = new Map(); const ambigue = new Set()   // Copilot f3b r1 P3-02: chei care duc la mai multe UAT-uri → refuz explicit
+  const pune = (k, u) => { if (!k) return; const e = dupaUat.get(k); if (e && e.id !== u.id) ambigue.add(k); else dupaUat.set(k, u) }
+  for (const u of uats) if (u) { if (u.nume) pune(normalizeazaNume(u.nume), u); if (u.uat3) pune(normalizeazaNume(u.uat3), u) }
   const parcele = new Map(); const detinatori = new Map(); const contoare = new Map()
   for (let r = antet.rand + 1; r <= range.e.r; r++) {
     const rand = r + 1
     const brut = camp => sheet[XLSX.utils.encode_cell({ r, c: col[camp] })]?.v
     const v = camp => text(brut(camp))
-    if (!['uat', 'nume', 'poz_hg', 'nr_cadastral'].some(c => v(c))) { st.randuri_goale++; continue }
+    if (!ANTETE.some(([c]) => v(c))) { st.randuri_goale++; continue }   // Copilot f3b r1 P3-01: gol = TOATE coloanele goale
     st.randuri_total++
-    const uat = dupaUat.get(normalizeazaNume(v('uat')))
+    if (!v('uat')) { eroare(rand, 'UAT lipsa pe un rand cu date', { nume: v('nume') }); continue }
+    const cheieUat = normalizeazaNume(v('uat'))
     const context = { uat: v('uat'), nume: v('nume') }
+    if (ambigue.has(cheieUat)) { eroare(rand, 'UAT ambiguu: mai multe UAT-uri din proiect au acest nume normalizat', context); continue }
+    const uat = dupaUat.get(cheieUat)
     if (!uat) { eroare(rand, 'UAT necunoscut', context); continue }
     const s = st.pe_uat[uat.uat3] ??= { parcele: 0, detinatori: 0, dubluri: 0, neidentificati: 0, fara_cheie: 0, ambigue: 0, erori: 0 }
     const refuza = motiv => { eroare(rand, motiv, context); s.erori++ }
@@ -86,13 +88,16 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
       parcele.set(cheieP, p); rez.parcele.push(p); s.parcele++
       if (!cheieS) st.parcele_fara_cheie++
     } else {
+      // Gemini f3b r1 P2: un atribut gol pe primul rând se COMPLETEAZĂ din rândul următor (coproprietarii pot avea date parțiale);
+      // doar valorile diferite și nenule sunt contradictorii; numerele se compară numeric, nu prin normalizarea numelor
       for (const camp of ['sat', 'suprafata_temporara_mp', 'categoria_folosinta']) {
-        if (atribute[camp] != null && normalizeazaNume(atribute[camp]) !== normalizeazaNume(p[camp])) {
-          p.note.push(`Rand ${rand}: ${camp} contradictoriu (${atribute[camp]}); pastrat primul (${p[camp] ?? 'gol'})`)
-        }
+        if (atribute[camp] == null) continue
+        if (p[camp] == null) { p[camp] = atribute[camp]; continue }
+        const difera = camp === 'suprafata_temporara_mp' ? Number(atribute[camp]) !== Number(p[camp]) : normalizeazaNume(atribute[camp]) !== normalizeazaNume(p[camp])
+        if (difera) p.note.push(`Rand ${rand}: ${camp} contradictoriu (${atribute[camp]}); pastrat primul (${p[camp]})`)
       }
     }
-    if (v('tronson')) p.note.push(`Rand ${rand}: Tronson / km din fisier: ${v('tronson')} (configurare: T${tronson})`)
+    if (v('tronson') && !p.note.some(n => n.endsWith(`Tronson / km din fisier: ${v('tronson')} (configurare: T${tronson})`))) p.note.push(`Rand ${rand}: Tronson / km din fisier: ${v('tronson')} (configurare: T${tronson})`)   // o dată per valoare (Gemini f3b r1 P2)
     p.observatii = p.note.join('; ') || null
     p.randuri.push({ rand, nr_crt: null, nume: v('nume') })
     const numeNorm = normalizeazaNume(v('nume'))
@@ -101,7 +106,17 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
       rez.dubluri.push({ rand, nr_crt: null, nume: v('nume'), nume_normalizat: numeNorm, cheie_parcela: cheieP, rand_original: detinatori.get(cheieD).rand }); s.dubluri++
       // Nu pierdem informatiile randului duplicat la deduplicarea dupa nume.
       const date = ANTETE.filter(([camp]) => v(camp)).map(([camp, et]) => `${et}: ${v(camp)}`).join('; ')
-      detinatori.get(cheieD).sursa_date += `; Dublura rand ${rand}: ${date}`
+      const d0 = detinatori.get(cheieD)
+      d0.sursa_date += `; Dublura rand ${rand}: ${date}`
+      // Gemini f3b r1 P2: contactul de pe rândul-dublură nu se pierde dacă primul rând nu avea contact; cota / decedat se completează dacă lipseau
+      if (!d0.cota && v('cota')) d0.cota = v('cota')
+      if (!d0.decedat && normalizeazaNume(v('decedat')) === 'DA') d0.decedat = true
+      const areContact = ['strada', 'sat_adresa', 'comuna', 'judet', 'cod_postal', 'telefon', 'email'].some(c => v(c))
+      if (areContact && !rez.contacte.some(c => c.cheie_detinator === cheieD)) {
+        const adresaCunoscutaDublura = d0.calitate !== 'neidentificat' && !!(v('strada') || v('comuna'))
+        rez.contacte.push({ cheie_detinator: cheieD, adresa_strada: v('strada') || null, adresa_sat: v('sat_adresa') || null, adresa_comuna: v('comuna') || null, adresa_judet: v('judet') || uat.judet || null, cod_postal: v('cod_postal') || null, telefon: v('telefon') || null, email: v('email') || null, adresa_cunoscuta: adresaCunoscutaDublura })
+        if (adresaCunoscutaDublura) d0.adresa_cunoscuta = true
+      }
       continue
     }
     const note = []

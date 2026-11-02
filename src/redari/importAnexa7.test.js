@@ -86,6 +86,29 @@ describe('parseazaAnexa7', () => {
     expect(pv.statistici).toMatchObject({ dubluri: 1, fara_cheie: 2, parcele_de_importat: 1, detinatori_de_importat: 2 })
   })
 
+  it('atributele goale pe primul rand se completeaza din randul coproprietarului 2 (Gemini f3b r1 P2)', () => {
+    const pv = parseazaAnexa7(excel([
+      rand({ 1: '', 5: '', 6: '' }),
+      rand({ 8: 'ALT TEST NUME', 1: 'Sat Completat', 5: '500', 6: 'arabil', 7: 'km 5+100' }),
+      rand({ 8: 'AL TREILEA TEST', 1: 'Sat Completat', 5: '500,0', 7: 'km 5+100' }),
+    ]), opt)
+    expect(pv.parcele).toHaveLength(1)
+    expect(pv.parcele[0]).toMatchObject({ sat: 'Sat Completat', suprafata_temporara_mp: 500, categoria_folosinta: 'arabil', nr_detinatori: 3 })
+    expect(pv.parcele[0].observatii ?? '').not.toContain('contradictoriu')   // 500 vs 500,0 = aceeasi valoare numerica
+    expect((pv.parcele[0].observatii.match(/Tronson \/ km din fisier/g) || []).length).toBe(1)   // nota o singura data
+  })
+
+  it('dublura aceluiasi detinator aduce contactul, cota si decedat lipsa (Gemini f3b r1 P2)', () => {
+    const pv = parseazaAnexa7(excel([
+      rand({ 10: '' }),
+      rand({ 8: ' popescu test ion ', 10: '1/2', 20: 'DA', 12: 'Str. Dublura 1', 17: '0000 000 000' }),
+    ]), opt)
+    expect(pv.detinatori).toHaveLength(1)
+    expect(pv.dubluri).toHaveLength(1)
+    expect(pv.detinatori[0]).toMatchObject({ cota: '1/2', decedat: true, adresa_cunoscuta: true })
+    expect(pv.contacte).toEqual([expect.objectContaining({ cheie_detinator: pv.detinatori[0].cheie, adresa_strada: 'Str. Dublura 1', telefon: '0000 000 000', adresa_cunoscuta: true })])
+  })
+
   it('foloseste cheia TGZ completa: aceeasi HG cu cadastru diferit ramane parcela diferita', () => {
     const pv = parseazaAnexa7(excel([rand(), rand({ 3: 'CF101' })]), opt)
     expect(pv.parcele.map(p => p.cheie_sursa)).toEqual([cheieSursa('HUS', '10', 'CF100', 'T12'), cheieSursa('HUS', '10', 'CF101', 'T12')])
@@ -103,6 +126,16 @@ describe('parseazaAnexa7', () => {
     expect(pv.erori.map(e => e.motiv)).toEqual(['Nume detinator gol', 'Suprafata invalida', 'Suprafata invalida'])
     expect(pv.detinatori[1].sursa_date).toContain('Suprafata ambigua')
     expect(pv.statistici.pe_uat.HUS.erori).toBe(3)
+  })
+
+  it('rand partial (fara UAT, dar cu date) = eroare, nu rand gol; UAT-uri cu nume normalizat identic = ambiguitate (Copilot f3b r1 P3)', () => {
+    const pv = parseazaAnexa7(excel([rand({ 0: '', 8: '', 3: '', 4: '', 2: 'T13', 5: '100' })]), opt)
+    expect(pv.statistici.randuri_goale).toBe(0)
+    expect(pv.erori).toEqual([expect.objectContaining({ motiv: 'UAT lipsa pe un rand cu date' })])
+    const optAmbiguu = { ...opt, uats: [...opt.uats, { id: 'uat-2', nume: 'HUȘI', uat3: 'HSI', judet: 'Judet Test' }], tronsonPeUat: { HUS: 3, HSI: 3 } }
+    const pv2 = parseazaAnexa7(excel([rand(), rand({ 0: 'HSI', 8: 'TEST PE COD' })]), optAmbiguu)
+    expect(pv2.erori.map(e => e.motiv)).toEqual([expect.stringContaining('UAT ambiguu')])
+    expect(pv2.parcele).toHaveLength(1)   // randul cu codul HSI (neambiguu) trece
   })
 
   it('refuza antet incomplet sau ambiguu si tronson invalid', () => {
