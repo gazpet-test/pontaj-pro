@@ -550,6 +550,12 @@ describe('cererea de imputernicire', () => {
     expect(xml).toContain(nrDocument?.trim() || '___')
     expect(uats[0].nume).toBe('Zorile')
   })
+  it('spațiile de la capetele valorilor nu intră în document (Gemini f3a r1 P3)', async () => {
+    const r = await genereazaCerereImputernicire({ proiect: { ...PR_CERERE, beneficiar: '  Beneficiar FICTIV  ', contract_nr: ' TEST-1 ' }, uats: [{ nume: ' Alba ' }], dataDocument: '2026-11-02', templateArrayBuffer: sablonCerere() })
+    expect(r.campuri.beneficiar).toBe('Beneficiar FICTIV')
+    expect(r.campuri.contract_nr).toBe('TEST-1')
+    expect(r.campuri.uat_lista).toBe('Alba')
+  })
 })
 const PR_ADRESA = { contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: 'TEST-IMP', imputernicire_data: '2026-11-01', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator', contact_email: 'test@example.invalid' }
 const UAT_ADRESA = { id: 'uat-fictiv', nume: 'UAT FICTIV', uat3: 'TST', judet: 'Test', versiune: 7, sesiune_zi1: '2026-12-10', sesiune_zi2: '2026-12-11', sesiune_zi3: '2026-12-12', program_zi1: '09:00 – 16:00', program_zi2: '09:00 – 19:00', program_zi3: '09:00 – 16:00', afisare_data_start: '2026-11-10', afisare_data_end: '2026-12-12', termen_confirmare: '2026-12-01', afisare_ora: '09:30' }

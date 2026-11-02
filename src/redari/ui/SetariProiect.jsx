@@ -63,15 +63,38 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
     const token = generatie.current, id = proiect.id
     const curent = () => generatie.current === token && proiectCurent.current === id
     try {
+      // Copilot f3a r1 P2-01/P2-02 + Gemini P2: documentul se face din rândul PROASPĂT al proiectului și din lista ACTUALĂ a UAT-urilor
+      // (nu din props, care pot fi în urmă față de alt admin); la altă versiune a proiectului se cere confirmare, ca la adresa UAT.
+      const [{ data: proiectProaspat, error: ep }, uatsProaspete] = await Promise.all([
+        supabase.from('red_proiecte').select(COL_PROIECT).eq('id', id).maybeSingle(),
+        citestePaginat(() => supabase.from('red_uat').select('id, nume').eq('proiect_id', id), { cheie: 'id', esteCurent: curent }),
+      ])
+      if (!curent()) return
+      if (ep) throw ep
+      if (!proiectProaspat) throw new Error('Proiectul nu mai e vizibil (fără drept pe modul?)')
+      if (proiectProaspat.versiune !== proiect.versiune && !window.confirm(
+        `Proiectul a fost modificat între timp de altcineva (versiunea ${proiectProaspat.versiune}, tu vezi versiunea ${proiect.versiune}).\nGenerez cererea cu datele ACTUALE din bază?`)) return
+      const lipsuri = verificaDateCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete })
+      if (lipsuri.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuri.join('; '))
       const raspuns = await fetch('/redari/sabloane/cerere_imputernicire.docx')
       if (!curent()) return
       if (!raspuns.ok) throw new Error('Sablonul cererii nu poate fi descarcat')
       const templateArrayBuffer = await raspuns.arrayBuffer()
       if (!curent()) return
-      const { blob } = await genereazaCerereImputernicire({ proiect, uats, nrDocument, templateArrayBuffer })
+      const { blob } = await genereazaCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete, nrDocument, templateArrayBuffer })
       if (!curent()) return
-      descarcaBlob(blob, `Cerere_imputernicire_${proiect.cod}.docx`)
-      show('Document generat pentru verificare. Nu pleaca nicaieri automat.', 'success')
+      // Copilot f3a r1 P3-01: recitire finală — un singur mesaj: succes SAU „generat, dar datele s-au schimbat între timp”
+      const [{ data: prDupa, error: e2 }, { count: nrUat, error: e3 }] = await Promise.all([
+        supabase.from('red_proiecte').select('versiune').eq('id', id).maybeSingle(),
+        supabase.from('red_uat').select('id', { count: 'exact', head: true }).eq('proiect_id', id),
+      ])
+      if (!curent()) return
+      descarcaBlob(blob, `Cerere_imputernicire_${proiectProaspat.cod}.docx`)
+      const neverificat = !!(e2 || e3) || !prDupa || nrUat == null
+      const schimbat = !neverificat && (prDupa.versiune !== proiectProaspat.versiune || nrUat !== uatsProaspete.length)
+      if (neverificat) show('Document generat, dar NU am putut verifica dacă proiectul s-a schimbat între timp. Reîncarcă și generează din nou înainte de a-l folosi. Nu pleacă nicăieri automat.', 'error')
+      else if (schimbat) show('Atenție: proiectul sau UAT-urile s-au schimbat în timpul generării. Documentul poate avea date vechi — generează din nou. Nu pleacă nicăieri automat.', 'error')
+      else show('Document generat pentru verificare. Nu pleacă nicăieri automat.', 'success')
     } catch (e) { if (curent()) show('Generare cerere: ' + msgEroare(e), 'error') }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }

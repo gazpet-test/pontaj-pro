@@ -46,14 +46,15 @@ export async function genereazaCerereImputernicire({ proiect, uats, nrDocument, 
   dataDocument = aziBucuresti(), antreprenor = ANTREPRENOR, strict = true }) {
   const lipsuri = verificaDateCerereImputernicire({ proiect, uats })
   if (lipsuri.length) throw new Error(lipsuri.join('; '))
+  const t = v => String(v ?? '').trim()   // Gemini f3a r1 P3: spațiile de la capete nu intră în document
   const campuri = {
     nr_document: nrDocument?.trim() || '___', data: formatDataRo(dataDocument),
-    beneficiar: proiect.beneficiar, reprezentant_tgz: proiect.reprezentant_tgz_nume,
-    contract_nr: proiect.contract_nr, contract_data: formatDataRo(proiect.contract_data),
-    proiect_denumire: proiect.denumire, antreprenor,
+    beneficiar: t(proiect.beneficiar), reprezentant_tgz: t(proiect.reprezentant_tgz_nume),
+    contract_nr: t(proiect.contract_nr), contract_data: formatDataRo(proiect.contract_data),
+    proiect_denumire: t(proiect.denumire), antreprenor: t(antreprenor),
     uat_lista: uats.map(u => u.nume.trim()).sort((a, b) => a.localeCompare(b, 'ro')).join(', '),
-    contact_email: proiect.contact_email, reprezentant_gazpet: proiect.reprezentant_gazpet_nume,
-    functie: proiect.reprezentant_gazpet_functie,
+    contact_email: t(proiect.contact_email), reprezentant_gazpet: t(proiect.reprezentant_gazpet_nume),
+    functie: t(proiect.reprezentant_gazpet_functie),
   }
   const blob = await completeazaDocx(templateArrayBuffer, campuri, { strict })
   return { blob, hash: await hashBlob(blob), campuri }

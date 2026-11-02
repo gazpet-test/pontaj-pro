@@ -240,15 +240,22 @@ describe('ecranul Setări proiect', () => {
   })
   it('cererea: blocheaza imediat dublul click si ignora fetch dupa unmount', async () => {
     const h = harness(), toast = vi.fn()
-    const props = { proiect: { ...proiect, beneficiar: 'Beneficiar FICTIV', contract_nr: 'TEST-1', contract_data: '2025-01-22', reprezentant_tgz_nume: 'Delegat FICTIV', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator' }, uats, nivel: 'admin', show: toast }
+    const props = { proiect: { ...proiect, versiune: 1, beneficiar: 'Beneficiar FICTIV', contract_nr: 'TEST-1', contract_data: '2025-01-22', reprezentant_tgz_nume: 'Delegat FICTIV', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator' }, uats, nivel: 'admin', show: toast }
     let rezolva
     const fetchMock = vi.fn(() => new Promise(r => { rezolva = r }))
     vi.stubGlobal('fetch', fetchMock)
     try {
       const tree = h.render(SetariProiect, props)
       const buton = elemente(tree, 'button').find(b => b.props.children === 'Genereaza cererea (DOCX)')
+      await new Promise(r => setTimeout(r, 0))   // citirea executie_proiecte din efect (await pe thenable = microtask) consuma intai paginile implicite
+      // Copilot f3a r1 P2: UAT-urile se citesc din BD la click (keyset: o pagina + una goala) — paginile se pun INAINTE de click
+      raspunsuri.liste.push({ data: uats.map(u => ({ id: u.id, nume: u.nume })), error: null }, { data: [], error: null })
       const pending = buton.props.onClick()
       await buton.props.onClick()
+      // apoi proiectul (maybeSingle), abia apoi sablonul: fluxul citeste intai proiectul (maybeSingle) si UAT-urile (keyset: o pagina + una goala) din BD, abia apoi sablonul
+      for (let i = 0; i < 5 && !raspunsuri.singure.length; i++) await Promise.resolve()
+      raspunsuri.singure[0]({ data: { ...props.proiect, versiune: props.proiect.versiune ?? 1 }, error: null })
+      for (let i = 0; i < 20 && fetchMock.mock.calls.length === 0; i++) await new Promise(r => setTimeout(r, 0))
       expect(fetchMock).toHaveBeenCalledTimes(1)
       expect(elemente(h.render(SetariProiect, props), 'input').every(n => n.props.disabled)).toBe(true)
       h.unmount()
