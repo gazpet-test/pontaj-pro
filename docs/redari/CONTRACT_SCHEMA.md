@@ -18,8 +18,8 @@ migrare față de textul inițial sunt marcate mai jos cu **[mig]**; completări
 proiect existent; red_parcele → UAT-ul aparține proiectului parcelei; red_detinatori → parcelă activă (`sters_la IS NULL`); contact / token /
 convocări / răspunsuri → deținător existent; red_raspunsuri_meta → răspuns existent; red_procese_verbale: tip A ⇒ `detinator_id` NOT NULL,
 deținătorul e pe `parcela_id`, `uat_id` = UAT-ul parcelei; tip B ⇒ `parcela_id` NOT NULL, `detinator_id` NULL, `uat_id` = UAT-ul parcelei;
-tip C ⇒ `parcela_id` NULL, `detinator_id` NULL, `tronson` și `uat_id` NOT NULL. **[r3]** red_parcele la INSERT: `id_parcela ~ '^T{tronson}-{uat3}-[0-9]{4}$'`
-(uat3 din red_uat). Coloanele `proiect_id, uat_id, parcela_id, detinator_id, raspuns_id, seq` **[r3]** și `red_parcele.id_parcela / tronson` sunt
+tip C ⇒ `parcela_id` NULL, `detinator_id` NULL, `tronson` și `uat_id` NOT NULL. **[r3]** red_parcele la INSERT: `id_parcela ~ '^{uat3}-[0-9]{4}$'`
+(uat3 din red_uat). Coloanele `proiect_id, uat_id, parcela_id, detinator_id, raspuns_id, seq` **[r3]** și `red_parcele.id_parcela` sunt
 IMUTABILE după insert (23514) — o corecție = rând nou + soft delete pe cel vechi (soft delete-ul unei parcele cu deținători și convocări active
 trece; un deținător nou pe parcela ștearsă e refuzat; parcela ștearsă iese din vederi). Erori: 23503 (legătură lipsă), 23514 (coerență / imutabilitate).
 **[r3] Validarea răspunsurilor și pentru operatori** (trigger `fn_red_raspunsuri_valideaza`, BEFORE INSERT/UPDATE pe red_raspunsuri): `particip` ⇒
@@ -75,8 +75,8 @@ sate_zi1 text, sate_zi2 text, sate_zi3 text` **[r3]** (satele / tarlalele progra
 `afisare_pv_nr, afisare_data_start date, afisare_data_end date, created_at`.
 
 ### red_parcele
-`id, proiect_id FK, uat_id FK, id_parcela text NOT NULL` (UNIQUE (proiect_id, id_parcela), format `T{tronson}-{uat3}-{nnnn}`),
-`tronson int CHECK 1..11, km_de_la numeric, km_pana_la numeric, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp numeric,
+`id, proiect_id FK, uat_id FK, id_parcela text NOT NULL` (UNIQUE (proiect_id, id_parcela), format `{uat3}-{nnnn}`),
+`tronson int NULL CHECK 1..11, km_de_la numeric, km_pana_la numeric, sat, tarla, nr_cadastral, poz_hg, suprafata_temporara_mp numeric,
 categoria_folosinta, articol_deviz, cantitate numeric, valoare_lei numeric` (vizibilă doar admin — vezi §4), `observatii,
 cheie_sursa text` **[r1]** (identitatea stabilă a rândului din Excel-ul TGZ: `{uat3}|{poz_hg}|{nr_cadastral}|{tarla}`, majuscule, fără
 diacritice / spații duble; NULL dacă poz_hg, nr_cadastral și tarla sunt toate goale; CHECK majuscule; UNIQUE parțial
@@ -163,27 +163,12 @@ la meta; NULL la red_numere). **[r2] Fără copia PII (P2-6)**: pe `red_detinato
 câmpurile schimbate (la insert: toate cele nenule), ca nume: **[r3]** `{"telefon":"modificat","adresa_strada":"modificat"}` — niciodată valorile și
 nici hash-uri (sha256 pe telefon / adresă e reversibil prin dicționar — Copilot r2 P2-01); `date_vechi` are aceleași nume de câmpuri.
 
-### red_numere  (numerotare fără refolosire)
-`cheie text PK` (ex. `C`, `PVA-HUS`, `PVB-HUS`, `PVC-T3`), `ultimul int NOT NULL default 0`.
-`public.fn_red_numar_document(p_tip text, p_uat3 text, p_tronson int) RETURNS text` — SECURITY DEFINER, UPDATE … RETURNING
-cu lock pe rând, EXECUTE doar authenticated (verifică `fn_red_nivel() IN ('admin','editor')` înăuntru). Formate: `C-0001`,
-`PVA-HUS-0001`, `PVB-HUS-0001`, `PVC-T3-0001`. **[r2]** Peste 9999 → `RAISE EXCEPTION` (nu număr trunchiat); la fel la rezervarea parcelelor.
-**[r2] Limită cunoscută, NU se repară (Copilot P2-03)**: rezervarea e COMISĂ la apelul RPC (PostgREST = autocommit), ÎNAINTE de orice
-document; un număr comunicat / tipărit și apoi neutilizat rămâne consumat (gol în numerotare, fără refolosire) — în fluxul UI nu se reface.
-În teste / batch-uri, numerele se rezervă în afara tranzacției de probă (DRY-ul își pierde numerele la ROLLBACK).
-
-### red_import_loturi
-`id, proiect_id FK, versiune_lista_tgz text NOT NULL, sursa text` (TGZ / ANEXA7), `fisier_nume, randuri_total int,
-parcele_noi int, detinatori_noi int, dubluri int, neidentificati int, diferente jsonb, stare text CHECK IN ('in_curs','finalizat','esuat')
-default 'in_curs', eroare text` **[r1]** (UI-ul creează lotul la început și îl închide la final — reluarea unui lot eșuat e vizibilă),
-`created_by, created_at`.
-
-### red_numere — completare **[r1]**
-`public.fn_red_rezerva_numere_parcele(p_uat3 text, p_tronson int, p_n int) RETURNS int` — rezervă un bloc de `p_n` numere (1..5000) pe
-cheia `P-T{tronson}-{uat3}` și întoarce PRIMUL număr din bloc; `id_parcela = T{tronson}-{uat3}-{lpad(nr, 4, '0')}`. Pornește de la
-max(nnnn) deja existent în red_parcele pe (tronson, uat3) (import anterior fără rezervare), sigură la concurență (UPDATE sub lock de rând),
-SECURITY DEFINER, EXECUTE authenticated, cer nivel admin/editor; peste 9999 → eroare.
-
+### red_numere - completare 8a
+public.fn_red_rezerva_numere_parcele(p_uat3 text, p_n int) RETURNS int:
+rezerva 1..5000 numere pe cheia P-{uat3} si intoarce primul numar.
+id_parcela = {uat3}-{nnnn}, imutabil; baza max(nnnn) pe UAT3, inclusiv
+parcele sterse. Peste 9999: eroare. SECURITY DEFINER, search_path
+public, pg_temp; EXECUTE authenticated/service_role; admin/editor prin fn_red_nivel.
 ### red_rate_limit  (contor pentru RPC-urile publice; fără acces authenticated/anon)
 `cheie text PK` (`ip:<ip>` sau `t:<sha256 hex al tokenului>` — tokenul nu se stochează în clar), `fereastra_start timestamptz, numar int`.
 **[r2]** NU e tabelă de business; formatul tokenului (exact 43 caractere `[A-Za-z0-9_-]`) se verifică ÎNAINTE de orice scriere în contor.
@@ -290,8 +275,8 @@ Excel TGZ: o foaie, antetul pe rândul 3, coloane: `Nr.Crt., Nr.Poz.Hg., UAT, Ju
 Temporar, Categorie Folosință, Tarla/Nr. Topo, Nr. cadastral/Parcelă, Regim juridic`. Reguli: `Nr.Crt.` de forma `x/y` →
 coproprietari (rânduri separate pe aceeași parcelă; `x` = parcela, `y` = indexul persoanei); nume care conține „neidentificat”
 → `calitate='neidentificat'`, `adresa_cunoscuta=false`; `nume_normalizat` pentru deduplicare; tronsonul se dă manual per UAT la
-import (până la corelarea km); **[r1]** `id_parcela = T{tronson}-{uat3}-{nnnn}` cu `nnnn` rezervat server-side prin
-`fn_red_rezerva_numere_parcele(uat3, tronson, n)` (un bloc per lot / UAT; primul număr întors, apoi consecutiv), nu calculat în client;
+import (până la corelarea km); **[r1]** `id_parcela = {uat3}-{nnnn}` cu `nnnn` rezervat server-side prin
+`fn_red_rezerva_numere_parcele(uat3, n)` (un bloc per lot / UAT; primul număr întors, apoi consecutiv), nu calculat în client;
 `cheie_sursa` se calculează pe fiecare rând și se trimite la INSERT — un rând cu cheie deja existentă pe proiect e „dublură” (se leagă de
 parcela existentă, nu creează alta). Lotul se deschide (`red_import_loturi.stare = 'in_curs'`) înainte de scriere și se închide la final
 (`finalizat` / `esuat` + `eroare`).
@@ -426,3 +411,35 @@ Revenirea armata refuza orice PV C existent, inclusiv anulat/sters, si restaurea
 Limita: lock-ul serializeaza crearile C prin RPC; nu ingheata modificarile concurente ale
 parcelelor sau PV A/B. PV C reprezinta verificarea la crearea/generarea lui, nu un snapshot SQL durabil.
 PV C se scoate prin anulare; garda refuza schimbarea sters_la, inclusiv reactivarea.
+
+### 8a - Tronson optional si atribuire HG (02.11.2026)
+
+Contractul de mai sus este actualizat de 20261129g (versiune 20261129120600).
+Importul nu mai cere tronson: id_parcela = UAT3-nnnn, fara prefix T; tronson
+NULL inseamna neatribuit. Numerotarea este per UAT3 (cheie P-UAT3), globala
+pentru codul UAT3; unicitatea existenta (proiect_id,id_parcela) ramane.
+Tronson poate fi modificat dupa insert; triggerul refuza 23514 daca exista
+PV C activ in proiect pe tronsonul vechi sau nou. Activ = tip C,
+stare <> anulat, sters_la IS NULL. Identitatea parcelei ramane imutabila.
+
+fn_red_seteaza_tronson(p_proiect_id uuid,p_uat_id uuid,p_hg_de_la integer,
+p_hg_pana_la integer,p_tronson integer) RETURNS integer: SECURITY DEFINER,
+search_path public, pg_temp; EXECUTE authenticated; exclusiv admin/owner.
+NULL p_uat_id = toate UAT-urile proiectului; UAT strain/inexistent = 23503.
+Interval inclusiv, limite >=1 si ordonate, tronson 1..11; invalid = 22023.
+Numai parcele active; prefixul initial de cifre din poz_hg (12A -> 12).
+Fara prefix numeric: ramane neatins; atribuirea individuala vine in 8b.
+Conversia este numeric pentru a evita overflow int pe text liber.
+Blocare PV table -> parcel table -> randuri ORDER BY id; refuz P0001
+daca sursa sau destinatia are PV C activ; returneaza randurile actualizate,
+inclusiv cele care aveau deja aceeasi valoare. UPDATE direct si RPC cer
+READ COMMITTED (25001 altfel), pentru a nu valida pe snapshot vechi.
+
+fn_red_pv_c_creeaza pastreaza semnatura/ACL/lock_timeout existente; dupa
+lock-uri refuza P0001 daca proiectul are orice parcela activa cu tronson
+NULL, chiar daca este din alt UAT/tronson. Nu schimba red_v_tronson,
+fn_red_pv_creeaza sau red_pv_b_semnare; 20261129f poate lipsi din main.
+8a nu modifica UI/importul. Regula noua priveste crearea C; semnarea si
+adaugarea ulterioara a unor parcele neatribuite raman in contractele existente.
+Migrarea refuza tabel red_parcele nevid. Revenirea armata blocheaza intai
+tabelele si refuza orice parcela cu ID nou/NULL tronson, inclusiv stearsa.

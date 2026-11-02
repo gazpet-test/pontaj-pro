@@ -702,3 +702,72 @@ Raport L01-L25 (referinte la functii/teste, nu rezultate de teste executate):
 | L23 | paginiExport: cursor unic, order + range 0..499 pana la pagina goala, duplicate refuzate; inLoturi maximum 100 ID-uri. Test pagina scurta continuata. |
 | L24 | ExportEcran key proiect.id, cleanup generatie, bucle abandonate, verificare curent inainte de Blob/descarcare/setState; fara rezultat vechi aplicat. |
 | L25 | exportXlsx.test.js: fixture-uri fictive, expected literale si antete din SABLOANE independent; roundtrip real XLSX pregatit. Executia, browser/BD/RLS/build NERULATE aici. |
+### 4.1m Faza 2, felia 8a - tronson optional (BD)
+
+Livrare locala: 20261129g, versiune 20261129120600. ID imutabil UAT3-nnnn,
+numar per UAT3; tronson NULL la import si modificabil ulterior. Admin atribuie
+pe interval inclusiv al prefixului numeric poz_hg. PV C activ protejeaza
+tronsonul sursa si destinatie inclusiv la UPDATE direct. Crearea PV C cere
+zero parcele active neatribuite in intreg proiectul. Fara modificari src/.
+
+Fisiere:
+- supabase/migrations/20261129g_redari_tronson_optional.sql
+- supabase/revenire/20261129g_redari_tronson_optional_ROLLBACK.sql
+- supabase/tests/20261129g_redari_tronson_optional_dryrun.sql
+- docs/redari/CONTRACT_SCHEMA.md
+- docs/redari/README.md (acest raport; nu exista fisier suplimentar)
+
+Runnerul trebuie sa furnizeze o singura tranzactie pentru apply/post/DRY.
+Armare apply: gazpet.livrare_migrare =
+20261129g_redari_tronson_optional:<txid_current()>.
+Armare revenire: gazpet.revenire_20261129g =
+REDARI_TRONSON_OPT_SCOASA:<txid_current()>.
+Nu se modifica date existente; apply cere tabel gol; revenirea refuza
+parcele in format nou sau tronson NULL inclusiv sterse. Counterele rezervate
+raman consumate. Nu sunt modificate obiectele excluse din 20261129f.
+
+Decizii tehnice: pastreaza EXECUTE service_role al rezervarii vechi, pe langa
+authenticated. Prefix HG convertit numeric, nu int, evita overflow pe text.
+Schimbarea tronsonului cere READ COMMITTED, inclusiv UPDATE direct (25001).
+Corpurile vechi sunt copiate din 20261126a/29d; fragmentele nemodificate,
+inclusiv comentariile Unicode, raman exacte. Aceasta este singura exceptie
+de la ASCII pentru fisierele SQL noi, ceruta de copierea caracter cu caracter.
+Textul nou este ASCII; toate fisierele sunt UTF-8 fara BOM.
+
+Raport L01-L25 (referinte la functii/teste SCRISE, nu rezultate runtime):
+
+| Regula | Aplicare / dovada |
+|---|---|
+| L01 | seteaza_tronson: lock PV/parcele inainte de selectie/verificare PV; randuri FOR UPDATE; rezerva: advisory inainte de max/UPSERT. |
+| L02 | Setul de parcele este actualizat atomic intr-un RPC; numar + contor atomic. |
+| L03 | n/a |
+| L04 | n/a - fara bani/cantitati/mail; rezervarile consuma numere, retry nu are garantie idempotenta noua. |
+| L05 | n/a - fara client/retry/fallback in aceasta felie. |
+| L06 | Comentarii ordine lock in seteaza_tronson, legaturi si rezerva; PV C pastreaza ordinea 29d. Concurenta reala nerulata. |
+| L07 | legaturi aplica garda sursa/destinatie si UPDATE direct; DRY TEST4/6. Politicile nu se schimba. |
+| L08 | RPC-uri auth.uid + fn_red_nivel; niciun user primit ca parametru. GUC JWT numai in harness ca 29d. |
+| L09 | seteaza_tronson valideaza proiect/UAT si filtreaza fiecare parcela prin UAT/proiect; fn_red_nivel pe modul redari. |
+| L10 | n/a |
+| L11 | n/a - prefixul HG este regula de selectie aprobata, nu dovada extrasa de AI. |
+| L12 | Fara prefix HG ramane neatins, documentat; selectie fara LIMIT si return rowcount. |
+| L13 | ID si UAT3 regex ancorate; prefix HG ancorat la inceput, conform contract; DRY TEST1/3 si caz fara prefix. |
+| L14 | Runner unic obligatoriu, pre tabel gol sub lock/post; revenire sub lock refuza date noi. Apply/revenire/reapply nerulate. |
+| L15 | Pre/post amprenta politici pe ambele tabele, ACL C identic, secdef/search_path/anon/PUBLIC verificate; nu este audit tranzitiv complet. |
+| L16 | UNIQUE existent (proiect_id,id_parcela) pastrat; red_numere cheie PK + UPSERT si advisory. |
+| L17 | Prefix numeric evita overflow int; limite explicite incluzive, date fixture literale; PV C pastreaza Europe/Bucharest. |
+| L18 | NULL parametri refuzati explicit; nullable tronson are sens neatribuit; guard C numara explicit, fara NULL=zero. |
+| L19 | Regula PV C este in trigger pentru toate UPDATE-urile; RPC preflight repeta inevitabil pentru P0001 atomic; DRY TEST6 verifica ambele cai. |
+| L20 | DRY TEST1..7: ID valid/vechi/UAT gresit, NULL, admin/editor/anon, prefix 12A, creare C, protectie sursa/destinatie. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | n/a - fara UI/citiri PostgREST. SQL nu limiteaza selectia. |
+| L24 | n/a |
+| L25 | DRY identitati owner/editor existente, SET LOCAL ROLE authenticated/anon, FK/CHECK si PV A semnat ca postgres; asteptari literale. NERULAT. |
+
+Verificat aici numai static: corpurile sursa si ACL 26a/29d, schema fixture,
+obiectele excluse, UTF-8 fara BOM; rollback copiaza exact corpurile sursa.
+NU am rulat DRY, Postgres, API, teste de concurenta doua sesiuni, aplicare/
+revenire/reaplicare, npm/npx/node/vitest/build. Fara node_modules, conform brief.
+Claude trebuie sa ruleze aceste verificari si regresiile 26a/29d, adaptand
+fixture-urile vechi la noul format ID. Nicio garantie runtime declarata.
+Fara Git/commit/push, credentiale, BD sau deploy; scrieri numai in worktree.
