@@ -278,8 +278,12 @@ export const textGdprPentruUat = (text, numeUat, linkInformare) => {
   const baza = String(text ?? '').replace(/\{uat\}|\[UAT\]/gi, () => numeUat ?? '')
   // Fără link configurat, propoziția juridică se omite. Restul textului rămâne intact.
   if (linkInformare === undefined) return baza
-  const fara = baza.replace(/Informarea completă:[ \t]*(?:\[[^\]]*\]|https?:\/\/[^\s]+)[.]?/gi, '').trim()
-  return linkInformare ? `${fara}\nInformarea completă: ${linkInformare}` : fara
+  // Gemini f2b r1 P2: dacă propoziția există deja în text (cu [link] sau cu un URL), se înlocuiește PE LOC, oriunde ar fi;
+  // se adaugă la final doar când lipsește; fără link se scoate (și spațiul dublu rămas).
+  const RX_INFO = /Informarea completă:[ \t]*(?:\[[^\]]*\]|https?:\/\/[^\s]+)[.]?/gi
+  if (!linkInformare) return baza.replace(RX_INFO, '').replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').trim()
+  const nou = `Informarea completă: ${linkInformare}`
+  return RX_INFO.test(baza) ? baza.replace(RX_INFO, nou) : `${baza}\nInformarea completă: ${linkInformare}`
 }
 
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
@@ -571,7 +575,7 @@ export async function genereazaAdresaUat({ proiect = {}, uat = {}, parcele = [],
     campuri[`sate_zi${i}`] = uat[`sate_zi${i}`] ?? ''
     if (i !== prima && sesiuni.includes(i) && uat[`program_zi${i}`] && uat[`program_zi${i}`] !== uat[`program_zi${prima}`]) {
       // Programul poate avea o descriere liberă; nu inventăm o oră dacă nu este un interval.
-      const final = /(?:–|—|-)[ \t]*(\d{2}:\d{2})(?:[ \t]|$)/.exec(uat[`program_zi${i}`])?.[1]
+      const final = /^[ \t]*\d{2}:\d{2}[ \t]*(?:–|—|-)[ \t]*(\d{2}:\d{2})[ \t]*$/.exec(uat[`program_zi${i}`])?.[1]   // Gemini f2b r1 P3: doar un interval simplu
       campuri.program_text += final ? `, ziua ${i} până la ${final}` : `, ziua ${i}: ${uat[`program_zi${i}`]}`
     }
   }

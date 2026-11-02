@@ -84,14 +84,14 @@ export default function UatEcran({ proiect, uats, nivel, show, onSchimbat }) {
           </table>
         </div>
       )}
-      {editat && <ModalUat key={editat.id} proiect={proiect} uat={editat} uats={uats} numarator={numaratori[editat.id]} esteAdmin={esteAdmin} show={show}
+      {editat && <ModalUat key={editat.id} proiect={proiect} uat={editat} uats={uats} numarator={numaratori[editat.id]} esteAdmin={esteAdmin} poateDescarca={['admin', 'editor'].includes(nivel)} show={show}
         onClose={() => setEditat(null)} onGata={() => { setEditat(null); onSchimbat() }} />}
       {nou && <ModalUatNou proiect={proiect} uats={uats} show={show} onClose={() => setNou(false)} onGata={() => { setNou(false); onSchimbat() }} />}
     </div>
   )
 }
 
-export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
+export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescarca = esteAdmin, show, onClose, onGata }) {
   const [form, setForm] = useState(() => ({ ...uat }))
   const [cod, setCod] = useState(uat.uat3)
   const [lucru, setLucru] = useState(false)
@@ -105,8 +105,10 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, show, onClo
   const lipsuriAdresa = verificaDateAdresaUat({ proiect, uat, nrDocument: uat.adresa_nr || 'AU-rezervat-la-generare' })
   const nesalvat = schimbate.length > 0 || codSchimbat
   const adresa = async (doarDescarca = false) => {
-    if (!esteAdmin || ocupat.current || lucru) return
-    if (!doarDescarca && (nesalvat || lipsuriAdresa.length)) return
+    if (ocupat.current || lucru) return
+    // Gemini f2b r1 P2: descărcarea e pentru admin + editor (bucket-ul are SELECT doar pentru ei — red_storage_sel), generarea doar admin
+    if (doarDescarca && !poateDescarca) return
+    if (!doarDescarca && (!esteAdmin || nesalvat || lipsuriAdresa.length)) return
     if (!doarDescarca && uat.adresa_nr && !window.confirm(`Regenerezi ${uat.adresa_nr}? Numărul rămâne același; se creează o versiune nouă.`)) return
     ocupat.current = true
     setLucru(true) // înainte de primul await, inclusiv înainte de citirea parcelelor
@@ -222,13 +224,12 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, show, onClo
       </div>
       <FormularCampuri campuri={CAMPURI_UAT} form={form} doarCitire={!esteAdmin} blocat={lucru} schimbate={schimbate}
         onChange={(k, v) => { if (!lucru) setForm(f => ({ ...f, [k]: v })) }} />
-      {esteAdmin && <div style={{ marginTop: 14 }}>
-        {uat.adresa_nr ? <>
-          <button style={S.btnS} disabled={lucru} onClick={() => adresa(true)}>Descarcă adresa</button>{' '}
-          <button style={S.btnS} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Regenerează</button>
-        </> : <button style={S.btnP} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Generează adresa UAT</button>}
-        {nesalvat && <div style={{ color: G.yellow }}>Salvează modificările înainte de generarea adresei.</div>}
-        {lipsuriAdresa.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>{lipsuriAdresa.join('; ')}</div>}
+      {(esteAdmin || (poateDescarca && uat.adresa_nr)) && <div style={{ marginTop: 14 }}>
+        {poateDescarca && uat.adresa_nr && <button style={S.btnS} disabled={lucru} onClick={() => adresa(true)}>Descarcă adresa {uat.adresa_nr}</button>}
+        {esteAdmin && uat.adresa_nr && <>{' '}<button style={S.btnS} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Regenerează</button></>}
+        {esteAdmin && !uat.adresa_nr && <button style={S.btnP} disabled={lucru || nesalvat || lipsuriAdresa.length > 0} onClick={() => adresa()}>Generează adresa UAT</button>}
+        {esteAdmin && nesalvat && <div style={{ color: G.yellow }}>Salvează modificările înainte de generarea adresei.</div>}
+        {esteAdmin && lipsuriAdresa.length > 0 && <div style={{ color: G.yellow, fontSize: 12 }}>{lipsuriAdresa.join('; ')}</div>}
       </div>}
       {erori.length > 0 && (
         <div style={{ marginTop: 12, padding: 10, borderRadius: 7, background: G.redDim, color: G.red, fontSize: 12.5 }}>

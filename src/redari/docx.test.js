@@ -581,7 +581,14 @@ describe('Model 4: adresă UAT', () => {
   it('GDPR: omite propoziția fără link și păstrează UAT-ul; link configurat', () => {
     const text = 'Operator {uat}. Informarea completă: [link]'
     expect(textGdprPentruUat(text, 'UAT TEST', null)).toBe('Operator UAT TEST.')
-    expect(textGdprPentruUat(text, 'UAT TEST', 'https://example.invalid')).toBe('Operator UAT TEST.\nInformarea completă: https://example.invalid')
+    expect(textGdprPentruUat(text, 'UAT TEST', 'https://example.invalid')).toBe('Operator UAT TEST. Informarea completă: https://example.invalid')   // pe loc, unde era [link]
+    expect(textGdprPentruUat('Operator {uat}.', 'UAT TEST', 'https://example.invalid')).toBe('Operator UAT TEST.\nInformarea completă: https://example.invalid')   // lipsea → la final
+    // Gemini f2b r1 P2: propoziția existentă (cu [link] sau URL vechi) se înlocuiește PE LOC, nu se dublează la final
+    const mijloc = 'Operatori: X. Informarea completă: [link]. Drepturi: acces.'
+    expect(textGdprPentruUat(mijloc, 'U', 'https://a.b/gdpr')).toBe('Operatori: X. Informarea completă: https://a.b/gdpr Drepturi: acces.')
+    expect(textGdprPentruUat('A. Informarea completă: https://vechi.ro/x. B.', 'U', 'https://nou.ro/y')).toBe('A. Informarea completă: https://nou.ro/y B.')
+    expect(textGdprPentruUat(mijloc, 'U', null)).toBe('Operatori: X. Drepturi: acces.')
+    expect((textGdprPentruUat(mijloc, 'U', 'https://a.b/gdpr').match(/Informarea completă/g) || []).length).toBe(1)
   })
   it('calea este validată și folosește _v', () => {
     expect(caleAdresaUat({ proiectCod: 'TEST', uat3: 'TST', nrDocument: 'AU-0001', versiune: 3 })).toBe('TEST/TST/adresa/AU-0001_v3.docx')

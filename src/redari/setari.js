@@ -82,7 +82,10 @@ export function normalizeazaValoare(v) {
 /** Obiectul de UPDATE: doar cheile din `campuri`, normalizate. */
 export function normalizeaza(form, campuri) {
   const out = {}
-  for (const c of campuri) out[c.cheie] = normalizeazaValoare(form?.[c.cheie])
+  for (const c of campuri) {
+    const v = normalizeazaValoare(form?.[c.cheie])
+    out[c.cheie] = c.tip === 'executie' && v !== null && /^[1-9][0-9]*$/.test(v) ? Number(v) : v   // bigint → număr, nu text (Gemini f2b r1 P3)
+  }
   return out
 }
 

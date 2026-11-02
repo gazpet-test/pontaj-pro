@@ -108,7 +108,7 @@ describe('felia 2: legătură Execuție și URL GDPR', () => {
     expect(COL_PROIECT.split(', ')).toContain('link_informare_gdpr')
     expect(CAMPURI_PROIECT.find(c => c.cheie === 'link_informare_gdpr').tip).toBe('url')
     const n = normalizeaza({ executie_proiect_id: 12, link_informare_gdpr: ' https://example.invalid ' }, CAMPURI_PROIECT)
-    expect(n.executie_proiect_id).toBe('12')
+    expect(n.executie_proiect_id).toBe(12)
     expect(n.link_informare_gdpr).toBe('https://example.invalid')
   })
   it.each([null, '', 'https://example.invalid', 'https://' + 'x'.repeat(292)])('URL legitim %s', url => {
