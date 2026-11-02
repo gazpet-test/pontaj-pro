@@ -702,3 +702,65 @@ Raport L01-L25 (referinte la functii/teste, nu rezultate de teste executate):
 | L23 | paginiExport: cursor unic, order + range 0..499 pana la pagina goala, duplicate refuzate; inLoturi maximum 100 ID-uri. Test pagina scurta continuata. |
 | L24 | ExportEcran key proiect.id, cleanup generatie, bucle abandonate, verificare curent inainte de Blob/descarcare/setState; fara rezultat vechi aplicat. |
 | L25 | exportXlsx.test.js: fixture-uri fictive, expected literale si antete din SABLOANE independent; roundtrip real XLSX pregatit. Executia, browser/BD/RLS/build NERULATE aici. |
+### 4.1l Faza 2, felia 7 - PV B pentru coproprietarul absent (02.11.2026)
+
+PV B este permis daca alt coproprietar are PV A semnat. Documentul enumera numai
+nesemnatarii activi si trimite la toate PV-urile A semnate active ale parcelei (numar,
+data, fara nume). Convocarile si raspunsurile semnatarilor sunt excluse. O verificare
+ulterioara ultimei primiri a unui PV A este marcata ca verificare noua. Daca fiecare
+detinator activ are PV A semnat, crearea/generarea PV B sunt dezactivate cu mesaj.
+
+Fisiere: supabase/migrations/20261129f_redari_pvb_coproprietari.sql,
+supabase/revenire/20261129f_redari_pvb_coproprietari_ROLLBACK.sql,
+supabase/tests/20261129f_redari_pvb_coproprietari_dryrun.sql,
+src/redari/pv.js, src/redari/pv.test.js, src/redari/ui/ModalPv.jsx,
+docs/redari/CONTRACT_SCHEMA.md, SABLOANE.md sectiunea 2.3 si acest README.
+Migrarea 20261129120500 schimba doar vederea: A cere minimum un detinator activ si
+PV A semnat activ pentru FIECARE; altfel B activ, altfel NULL. Pastreaza obiectiile,
+coloanele, ACL si RPC-urile PV C; apply/revenire cer armare pe tranzactia curenta.
+Runner-ul trebuie sa asigure o singura tranzactie; DRY-ul se executa in tranzactie
+de proba si se abandoneaza de runner. Nu executati DRY pe o migrare deja comisa.
+
+Raport: revizie statica, verificare UTF-8 fara BOM si ASCII pentru adaugiri.
+Teste SCRISE, NERULATE: referinte zero/unu/doua, PV anulat/sters/strain,
+verificare anterioara/egala/ulterioara, rezerva data_pv, excludere semnatar,
+refuz toti semnatari, zero detinatori, DOCX real fara placeholder ramas si 78 chei.
+DRY: TEST1 partial -> NULL; TEST2 + B -> B; TEST3 toti A fara B activ -> A;
+TEST4 un detinator semnat -> A; TEST5 RPC C refuza cu P0001 si numar 1;
+TEST6 detinator nou nesemnat conteaza, sters logic nu conteaza; creare C legitima.
+Claude trebuie sa ruleze vitest, DRY, apply/revenire/re-apply, build, browser si
+PostgREST/RLS. Nu am accesat BD, credentiale, deploy; nu am rulat Git sau pachete.
+Citirile UI nu sunt un snapshot tranzactional; reverificarea existenta dupa upload
+include acum si PV-urile A. Nu am modificat lock-urile RPC C: o modificare concurenta
+a detinatorilor necesita verificare separata pe PostgreSQL real.
+
+Raport L01-L25 (dovezi in cod/teste scrise, fara pretentia executiei):
+
+| Regula | Respectare / dovada |
+|---|---|
+| L01 | ModalPv.creeaza/genereaza recitesc sursele; CAS-ul existent de legare este pastrat. Migrare/revenire: lock inainte de baseline. |
+| L02 | n/a - fara operatii persistente noi in client sau RPC nou. |
+| L03 | ModalPv.genereaza: compararea surselor inainte/dupa upload include pvs; tokenul generatie existent este pastrat. |
+| L04 | n/a - fara bani/cantitati/mail sau claim nou. |
+| L05 | ModalPv: reconcilierea crearii si pastrarea fisierelor la rezultat ambiguu sunt pastrate. |
+| L06 | n/a - niciun RPC/trigger de lock modificat; DDL ia numai lock-ul vederii si dependentele sale. |
+| L07 | Regula de completitudine este in red_v_tronson, folosita server-side de ambele RPC C; security_invoker explicit. |
+| L08 | Garda DDL verifica postgres, exceptie explicita de runner; nicio identitate UI injectata. |
+| L09 | ModalPv.citeste pastreaza verificarea proiect/parcela; noua citire A filtreaza parcela_id exact. |
+| L10 | referintaPvA nu foloseste nume/contacte; testul cu NUME SECRET verifica textul exact. |
+| L11 | n/a - fara extragere de dovezi. |
+| L12 | SQL cere minimum un detinator si absenta oricarui nesemnatar; zero detinatori nu implica A. Test JS zero + DRY partial. |
+| L13 | n/a - fara parser/regex nou in produs. |
+| L14 | Migrare noua + revenire armata; runner tranzactional obligatoriu, postconditii coloane/ACL/invoker/RPC; fara backfill. Ciclul apply/revenire/re-apply nerulat. |
+| L15 | Pre/post compara atribute inclusiv tip/ordine/ACL coloane, owner/ACL vedere si corpurile/ACL ambelor RPC C; fara schimbari de politici/functii. Nu este audit tranzitiv complet. |
+| L16 | n/a - fara chei sau constrangeri noi. |
+| L17 | referintaPvA: compara date calendaristice ISO fara Date/UTC; afiseaza prin formatDataRo existent. Teste strict dupa/egal si rezerva. |
+| L18 | ModalPv: erorile citirii A raman propagate de citestePaginat; fara fallback lista goala la eroare. |
+| L19 | pvsASemnate si detinatoriFaraPvA comune referintei, validarii, generatorului si modalului; scenariile partial/toti/sters/zero acoperite JS si SQL. |
+| L20 | pv.test.js: semnat, anulat, sters, alta parcela, toti si zero; DRY TEST1-6 plus creare C legitima. |
+| L21 | n/a - fara AI. |
+| L22 | n/a - fara AI/apeluri platite. |
+| L23 | ModalPv.citeste: pvs A prin citestePaginat, cheie id, filtre parcela/tip/stare/sters server-side; detinatorii erau deja paginati. |
+| L24 | ModalPv: citirea noua refoloseste curent/token generatie, verificari inainte de aplicare si dupa awaits; fara state async nou. |
+| L25 | pv.test.js compara cu texte literale si DOCX real; DRY semnate inserate ca postgres, vedere/RPC ca authenticated owner existent. Executia si concurenta reala nerulate. |
+Verificare statica executata: toate cele 9 fisiere sunt UTF-8 fara BOM; cele 3 SQL noi sunt ASCII; definitia vederii din revenire este identica textual cu 20261126a (exceptand CREATE OR REPLACE); cele 78 de chei CHEI_PV_B coincid cu placeholder-ele citite direct din XML-urile sablonului DOCX prin ZipArchive. Aceasta verificare nu executa generatorul sau SQL-ul.

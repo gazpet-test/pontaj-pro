@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
-import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
+import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, detinatoriFaraPvA, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan, verificaDatePvC, genereazaPvC } from '../pv.js'
 import { Modal, Camp, S, msgEroare, citestePaginat, COL_RASPUNS } from './comune.jsx'
 
 const COMISIE = ['verificare_data','verificare_de_gazpet','verificare_de_tgz']
@@ -67,8 +67,9 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
       d.adresa_cunoscuta = cont.data?.adresa_cunoscuta ?? false
       convocari.push(...conv); raspunsuri.push(...ras)
     }
-    const semnate = await citestePaginat(() => supabase.from('red_procese_verbale').select('id').eq('parcela_id',parcelaId).eq('tip','A').eq('stare','semnat').is('sters_la',null),opt)
-    return {parcela,detinator,proiect,uat,pv:rasp.data,detinatori,convocari,raspunsuri,areASemnat:semnate.length > 0}
+    const semnate = await citestePaginat(() => supabase.from('red_procese_verbale').select('id,parcela_id,detinator_id,tip,stare,sters_la,nr_pv,data_pv,semnat_primit_data').eq('parcela_id',parcelaId).eq('tip','A').eq('stare','semnat').is('sters_la',null),opt)
+    return {parcela,detinator,proiect,uat,pv:rasp.data,detinatori,convocari,raspunsuri,pvs:semnate,areASemnat:semnate.length > 0,
+      totiAuASemnat:detinatori.length > 0 && !detinatoriFaraPvA({detinatori,pvs:semnate,parcela}).length}
   }
   const aplica = s => { setSursa(s); setForm(dinSesiune && s.pv?.tip === 'A' && !['semnat','anulat'].includes(s.pv?.stare) && s.pv?.constatare_mod == null ? { ...forma(s), constatare_mod: 'sediu' } : forma(s)); setComisie(Object.fromEntries(COMISIE.map(k=>[k,s.parcela[k] ?? null]))) }
   useEffect(() => {
@@ -92,8 +93,8 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     if (!poateScrie) return
     const proaspat=await citeste(curent)
     if (!curent()) return
-    // Copilot f4c r1 P2-01: regula se aplica doar PV B (PV A e unic per detinator, nu per parcela)
-    if (tip==='B' && proaspat.areASemnat) throw new Error('Exista PV A semnat pe parcela; PV B nu se creeaza.')
+    // PV B covers only active owners without a signed PV A.
+    if (tip==='B' && proaspat.totiAuASemnat) throw new Error('Toti detinatorii au PV A semnat; PV B nu se creeaza.')
     const {data,error}=await supabase.rpc('fn_red_pv_creeaza',{p_tip:tip,p_parcela_id:parcelaId,p_detinator_id:tip==='A'?detinatorId:null,p_tronson:null})
     if (!curent()) return
     // Reconcile ambiguous errors; never repeat creation automatically.
@@ -129,7 +130,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     if(!curent()) return
     if(!s.pv || s.pv.id!==sursa.pv.id) throw conflict()
     if(!egal(s,sursa) && !window.confirm('Datele s-au schimbat. Generez cu datele actuale din baza?')) return
-    if (tip==='B' && s.areASemnat) throw new Error('Exista PV A semnat pe parcela; PV B nu se genereaza.')
+    if (tip==='B' && s.totiAuASemnat) throw new Error('Toti detinatorii au PV A semnat; PV B nu se genereaza.')
     if (['semnat','anulat'].includes(s.pv.stare)) throw conflict()
     const lipsuri=(tip==='C'?verificaDatePvC:tip==='B'?verificaDatePvB:verificaDatePvA)(s)
     if(lipsuri.length) throw new Error('Lipsesc: '+lipsuri.join('; '))
@@ -208,7 +209,9 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
   return <Modal titlu={sursa?.pv?.nr_pv || 'PV '+tip} latime={760} onClose={()=>{if(!ocupat.current)onClose()}}>
     {mesaj && <p role="alert">{mesaj}</p>}
     <button style={S.btnS} disabled={lucru} onClick={reload}>Reincarca</button>
-    {sursa && !sursa.pv && poateScrie && <button style={S.btnP} disabled={lucru||(tip==='B'&&sursa.areASemnat)} onClick={creeaza}>Creeaza PV {tip}</button>}
+    {tip==='B' && sursa?.areASemnat && <p>Exista PV A semnat pe parcela; PV B priveste doar coproprietarii fara PV A.</p>}
+    {tip==='B' && sursa?.totiAuASemnat && <p>Toti detinatorii au PV A semnat; crearea si generarea PV B sunt dezactivate.</p>}
+    {sursa && !sursa.pv && poateScrie && <button style={S.btnP} disabled={lucru||(tip==='B'&&sursa.totiAuASemnat)} onClick={creeaza}>Creeaza PV {tip}</button>}
     {sursa?.pv && <>
       <p>{sursa.detinator?.nume || (tip==='C'?'PV C (tronson)':'PV B (parcela)')} - {sursa.pv.stare}</p>
       <fieldset disabled={lucru || !poateScrie || final}>
@@ -236,7 +239,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
       </fieldset>
       {poateScrie && <button style={S.btnS} disabled={lucru||final||!comSchimbate.length} onClick={()=>salveaza(true)}>Salveaza verificarea parcelei</button>}</>}
       <p>Salveaza toate modificarile inainte de generare.</p>
-      {poateScrie && <button style={S.btnP} disabled={lucru||final||!!schimbate.length||!!comSchimbate.length} onClick={genereaza}>{sursa.pv.fisier_generat_path?'Regenereaza':'Genereaza DOCX'}</button>}
+      {poateScrie && <button style={S.btnP} disabled={lucru||final||!!schimbate.length||!!comSchimbate.length||(tip==='B'&&sursa.totiAuASemnat)} onClick={genereaza}>{sursa.pv.fisier_generat_path?'Regenereaza':'Genereaza DOCX'}</button>}
       <button style={S.btnS} disabled={lucru||!sursa.pv.fisier_generat_path} onClick={()=>descarca()}>Descarca</button>
       {sursa.pv.fisier_semnat_path && <button style={S.btnS} disabled={lucru} onClick={()=>descarca(true)}>Descarca scanul semnat</button>}
       {poateScrie && !final && <fieldset disabled={lucru||!!schimbate.length||!!comSchimbate.length}><legend>Stare PV</legend>

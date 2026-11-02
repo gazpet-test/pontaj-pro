@@ -150,7 +150,7 @@ PV B are detinator_id NULL. Motivul explicit este obligatoriu; nu se deduce din 
 | Placeholder / grup | Sursa finala |
 | --- | --- |
 | antet, parcela, lucrari, stare teren, plan, foto | Aceiasi constructori de campuri ca PV A |
-| nume | Detinatorii activi, ordonati dupa id, uniti cu "; "; gol = neidentificat |
+| nume | Numai detinatorii activi FARA PV A semnat activ, ordonati dupa id, uniti cu "; "; zero detinatori = neidentificat |
 | bifa_neidentificat, bifa_fara_adresa | Calitate neidentificat (inclusiv zero detinatori), respectiv adresa_cunoscuta false; lipsa contactului = false |
 | conv_data_expediere, conv_nr_tracking, conv_data_confirmare, conv_retur | Ultima convocare activa posta, non-reluare, dupa created_at si id; nu se concateneaza |
 | bifa_conv_primita, bifa_conv_returnata | Confirmare, respectiv retur nevid pe aceeasi convocare |
@@ -168,7 +168,15 @@ PV B are detinator_id NULL. Motivul explicit este obligatoriu; nu se deduce din 
 | semnatar_gazpet/tgz | red_proiecte.reprezentant_*_nume + functie |
 | semnatar_apm | red_proiecte.apm_nume |
 
-Generarea reciteste toate sursele, blocheaza modificarile nesalvate si PV A semnat pe parcela.
+`pv_a_referinta`: referintaPvA din src/redari/pv.js, din PV-urile A semnate active ale aceleiasi parcele,
+recitite paginat la generare: numar + data_pv pentru fiecare, fara nume de persoane; gol daca nu exista.
+Textul precizeaza ca PV B priveste numai detinatorii fara PV A semnat. Daca verificare_data este strict
+ulterioara celei mai recente semnat_primit_data (rezerva: data_pv), adauga "Verificare noua a terenului"
+cu data verificarii. CHEI_PV_B ramane 78; sablonul nu se modifica.
+Convocarile, raspunsurile si bifele aferente folosesc numai detinatorii nesemnatari inclusi in PV B.
+Generarea reciteste toate sursele, blocheaza modificarile nesalvate si cazul in care TOTI detinatorii
+activi au PV A semnat. Un alt coproprietar cu PV A semnat nu blocheaza PV B; modalul afiseaza nota.
+Constatarea nu poate contrazice PV A; schimbarea terenului cere verificare noua datata, nu o presupunere.
 Reprezentantul UAT semneaza numai PV B. Prezenta/refuzul nu se inventeaza din starea agregata.
 
 ### 2.4 `adresa_uat.docx` (Model 4) — per UAT, 43 placeholder-e (adresa + Anexa 2 + Anexa 3)
