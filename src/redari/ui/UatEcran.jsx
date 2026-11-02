@@ -115,6 +115,7 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
     const token = ++generatie.current
     const id = uat.id
     const curent = () => generatie.current === token && id === uat.id
+    let rezervat = false   // Copilot f2b r2 P3-01: după o rezervare reușită, orice eșec ulterior reîncarcă lista (UAT-ul are numărul → „Regenerează”)
     try {
       if (doarDescarca) {
         const max = await versiuneMaximaInBucket(supabase, { proiectCod: proiect.cod, uat3: uat.uat3, idParcela: 'adresa', nrDocument: uat.adresa_nr, adresa: true }, { esteCurent: curent })
@@ -137,23 +138,44 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       if (!curent()) return
       // Copilot f2b r1 P2-1: numărul se rezervă ȘI se scrie pe UAT într-un singur RPC (FOR UPDATE + CAS pe versiune), ÎNAINTE de generare.
       // Un eșec ulterior (șablon, upload) lasă numărul pe UAT; reluarea = „Regenerează” pe același număr. Fără numere pierdute, fără fișiere orfane.
-      let uatCurent = uat
+      // Copilot f2b r2 P2-01: documentul se face din UAT-ul și proiectul PROASPETE (nu din rândurile deschise în fereastră); dacă UAT-ul s-a
+      // schimbat între timp (altă versiune), adminul confirmă; după upload se reverifică versiunea — dacă s-a schimbat în timpul generării,
+      // fișierul (versionat, imutabil) rămâne, dar utilizatorul e avertizat să regenereze. Rezervarea (RPC) rămâne atomică și idempotentă.
+      const [{ data: uatProaspat, error: eu }, { data: proiectProaspat, error: ep }] = await Promise.all([
+        supabase.from('red_uat').select(COL_UAT).eq('id', id).maybeSingle(),
+        supabase.from('red_proiecte').select('*').eq('id', proiect.id).maybeSingle(),
+      ])
+      if (!curent()) return
+      if (eu || ep) throw eu || ep
+      if (!uatProaspat || !proiectProaspat) throw new Error('UAT-ul sau proiectul nu mai sunt vizibile (fără drept pe modul?)')
+      if (uatProaspat.versiune !== uat.versiune && !window.confirm(
+        `UAT-ul a fost modificat între timp de altcineva (versiunea ${uatProaspat.versiune}, tu ai deschis versiunea ${uat.versiune}).\nGenerez adresa cu datele ACTUALE din bază?`)) return
+      const lipsuriProaspete = verificaDateAdresaUat({ proiect: proiectProaspat, uat: uatProaspat, nrDocument: uatProaspat.adresa_nr || 'AU-rezervat-la-generare' })
+      if (lipsuriProaspete.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuriProaspete.join('; '))
+      let uatCurent = uatProaspat
       if (!uatCurent.adresa_nr) {
-        const { data, error } = await supabase.rpc('fn_red_adresa_uat_rezerva', { p_uat_id: id, p_versiune: uat.versiune })
+        const { data, error } = await supabase.rpc('fn_red_adresa_uat_rezerva', { p_uat_id: id, p_versiune: uatProaspat.versiune })
         if (!curent()) return
         if (error || !data?.adresa_nr) throw new Error('Rezervarea numărului adresei a eșuat: ' + (error?.message || 'răspuns gol') + '. Reîncarcă UAT-ul: dacă numărul a fost rezervat, e deja pe UAT și se reia cu „Regenerează”.')
         uatCurent = data
+        rezervat = true
       }
       const nrDocument = uatCurent.adresa_nr
       const dataDocument = uatCurent.adresa_data || aziBucuresti()
-      const { blob } = await genereazaAdresaUat({ proiect, uat: uatCurent, parcele, nrDocument, templateArrayBuffer, dataDocument })
+      const { blob } = await genereazaAdresaUat({ proiect: proiectProaspat, uat: uatCurent, parcele, nrDocument, templateArrayBuffer, dataDocument })
       if (!curent()) return
-      await salveazaAdresaUat(supabase, { blob, proiectCod: proiect.cod, uat: uatCurent, nrDocument, esteCurent: curent })
+      const { path } = await salveazaAdresaUat(supabase, { blob, proiectCod: proiectProaspat.cod, uat: uatCurent, nrDocument, esteCurent: curent })
+      if (!curent()) return
+      const { data: dupa } = await supabase.from('red_uat').select('versiune').eq('id', id).maybeSingle()
+      if (!curent()) return
+      if (dupa && dupa.versiune !== uatCurent.versiune) {
+        show(`Atenție: UAT-ul a fost modificat în timpul generării (${path}). Fișierul e salvat, dar poate avea date vechi — apasă „Regenerează”.`, 'error')
+      }
       if (!curent()) return
       descarcaBlob(blob, `${nrDocument}.docx`)
       show(`Adresa ${nrDocument} salvată.`, 'success')
       onGata()
-    } catch (err) { if (curent()) show('Adresă UAT: ' + msgEroare(err), 'error') }
+    } catch (err) { if (curent()) { show('Adresă UAT: ' + msgEroare(err), 'error'); if (rezervat) onGata() } }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
 

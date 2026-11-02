@@ -288,10 +288,11 @@ export const textGdprPentruUat = (text, numeUat, linkInformare) => {
   if (linkInformare === undefined) return baza
   // Gemini f2b r1 P2: dacă propoziția există deja în text (cu [link] sau cu un URL), se înlocuiește PE LOC, oriunde ar fi;
   // se adaugă la final doar când lipsește; fără link se scoate (și spațiul dublu rămas).
-  const RX_INFO = /Informarea completă:[ \t]*(?:\[[^\]]*\]|https?:\/\/[^\s]+)[.]?/gi
+  // [link] sau un URL (fără punctul final, care rămâne al frazei — Copilot f2b r2 P3-02); grupul 1 = punctul, păstrat la înlocuire
+  const RX_INFO = /Informarea completă:[ \t]*(?:\[[^\]]*\]|https?:\/\/\S+?)([.])?(?=[ \t\n]|$)/gi
   if (!linkInformare) return baza.replace(RX_INFO, '').replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').trim()
-  const nou = `Informarea completă: ${linkInformare}`
-  return RX_INFO.test(baza) ? baza.replace(RX_INFO, nou) : `${baza}\nInformarea completă: ${linkInformare}`
+  const exista = new RegExp(RX_INFO.source, 'i').test(baza)
+  return exista ? baza.replace(RX_INFO, (m, punct) => `Informarea completă: ${linkInformare}${punct || ''}`) : `${baza}\nInformarea completă: ${linkInformare}`
 }
 
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
