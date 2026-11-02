@@ -13,7 +13,7 @@ Asta respectă fișa a–e din CLAUDE.md pct. 7: orice citește conținut extern
 ## Redări teren
 | # | Ce | Stare | Ce cere de la tine |
 |---|---|---|---|
-| R1 | **Borderou / confirmări poștale → convocări** (expediere + AWB, AR, retur) din CSV/Excel, asociere după nr. convocare sau AWB | **în lucru azi-noapte** (felia 9, fără migrare, totul cu confirmare în ecranul „📮 Poștă”) | un borderou real de la poștă / FAN, ca să verificăm maparea coloanelor |
+| R1 | **Borderou / confirmări poștale → convocări** (expediere + AWB, AR, retur) din CSV/Excel, asociere după nr. convocare sau AWB | **LIVE** (PR #942, tab „✉️ Poștă”, fără migrare, totul cu confirmare) | un borderou real de la poștă / FAN, ca să verificăm maparea coloanelor |
 | R2 | Scanuri AR / retururi (cartonașe) de pe NAS → propuneri de AR/retur | propunere | unde ajung fizic cartonașele scanate (folder NAS) |
 | R3 | Mailuri către redari@ → răspunsuri propuse (opțiune, parcelă), editorul confirmă identitatea | propunere | decizia pe forward-ul redari@ (azi merge la tine) |
 | R4 | Scanuri PV A/B/C semnate (NAS/mail) → asociere automată după nr. PV / QR, editorul confirmă | propunere | folderul NAS pentru scanuri PV |
@@ -28,6 +28,11 @@ Asta respectă fișa a–e din CLAUDE.md pct. 7: orice citește conținut extern
 | 3 | **Raport carduri carburant (Rompetrol) din mail → lot de import** (importatorul există deja; se automatizează aducerea) + corelare cu EvoGPS | Jakarinos #2, Gemini #3 | câteva ore/lună + detecție abateri |
 
 Alte propuneri (după pilot): certificate furnizor → dosarul comenzii / CTC; documente service → fișa utilajului; buletine metrologice → AMC; polițe și acte de prelungire → registru; bilete la ordin scanate; extras bancar → propuneri de încasare (cere tabel nou); notă vocală de la șeful de șantier → ciornă raport zilnic; PV probă de presiune → registrul probelor; confirmarea furnizorului → termene pe repere.
+
+## Verificări făcute în noapte (după consultare)
+- **e-Factura primite NU e integrată**: în BD nu există tabel de facturi primite din SPV; edge-urile existente doar emit/trimit facturi (`send-factura-email`, `financiar-verifica-factura`), iar `productie_facturi` are 1 rând (mailurile [PRODUCTIE]). Pilotul #1 cere întâi **integrarea OAuth ANAF (SPV) cu certificatul firmei** — decizie + acces de la tine. Până atunci, ordinea realistă: **#2 aviz → recepție** (extractorul `ocr-packing-list` există) înaintea lui #1.
+- **Rapoartele de carduri Rompetrol NU vin pe mail**: de la rompetrol.com vin doar cereri de ofertă (licitații). Fișierul de carduri se descarcă probabil din portalul Rompetrol → #3 înseamnă fie un export programat din portal (dacă îl oferă), fie Playwright pe serverul AI; de verificat cu Mitrache / Oancea.
+- **Redări R1 e LIVE** (PR #942, tab ✉️ Poștă): de testat cu primul borderou real. Decizie cerută: un plic per convocare sau plic comun pentru mai multe parcele ale aceluiași om? (de ea depinde dacă AWB-ul devine unic în BD).
 
 ## Ce au semnalat la automatizările existente (de decis, nu am oprit nimic)
 - **Redirecționarea codurilor hub.mai.gov.ro** — redistribuie coduri de autentificare; candidat la suspendare dacă nu mai e nevoie.
