@@ -9,13 +9,19 @@ BEGIN
   PERFORM set_config('gazpet.r29d_policies',(SELECT md5(coalesce(string_agg(policyname || '|' || permissive || '|' || cmd || '|' || roles::text || '|' || coalesce(qual,'') || '|' || coalesce(with_check,''), E'\n' ORDER BY policyname),'')) FROM pg_policies WHERE schemaname='public' AND tablename='red_procese_verbale'),true);
 END $pre$;
 CREATE FUNCTION public.fn_red_pv_c_creeaza(p_proiect_id uuid,p_tronson int)
-RETURNS public.red_procese_verbale LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+RETURNS public.red_procese_verbale LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s' AS $fn$
 DECLARE ancora uuid; lipsa bigint; r public.red_procese_verbale;
 BEGIN
   -- Order: advisory project/tronson -> counter -> INSERT/FK locks. No child row locks.
   PERFORM pg_advisory_xact_lock(hashtextextended('red_pv_c|'||p_proiect_id::text||'|'||p_tronson::text,0));
   IF auth.uid() IS NULL OR public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN RAISE EXCEPTION 'redari: PV C doar admin' USING ERRCODE='42501'; END IF;
   IF p_proiect_id IS NULL OR p_tronson IS NULL OR p_tronson NOT BETWEEN 1 AND 11 THEN RAISE EXCEPTION 'redari: proiect/tronson invalid' USING ERRCODE='22023'; END IF;
+  -- Copilot f4d r1 P2-01: eligibilitatea (parcelele tronsonului + acoperirea A/B) ramane stabila pana la COMMIT.
+  -- SHARE pe parcele blocheaza INSERT/UPDATE concurente pe parcele; SHARE ROW EXCLUSIVE pe PV blocheaza
+  -- anularea/crearea concurenta de PV si serializeaza crearile PV C (actiune rara de admin; lock_timeout 5s).
+  -- Ordine: advisory -> red_parcele -> red_procese_verbale -> contor; fn_red_pv_creeaza ia parcela (ROW SHARE, compatibil) apoi PV.
+  LOCK TABLE public.red_parcele IN SHARE MODE;
+  LOCK TABLE public.red_procese_verbale IN SHARE ROW EXCLUSIVE MODE;
   -- PV C is per tronson; uat_id is only the anchor required by the schema.
   SELECT u.id INTO ancora FROM public.red_parcele p JOIN public.red_uat u ON u.id=p.uat_id AND u.proiect_id=p.proiect_id
     WHERE p.proiect_id=p_proiect_id AND p.tronson=p_tronson AND p.sters_la IS NULL
@@ -73,6 +79,11 @@ BEGIN
     IF auth.uid() IS NULL OR public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN RAISE EXCEPTION 'redari: PV C doar admin' USING ERRCODE='42501'; END IF;
     IF TG_OP='UPDATE' THEN
       IF NEW.sters_la IS DISTINCT FROM OLD.sters_la THEN RAISE EXCEPTION 'PV C: foloseste anularea, nu stergerea/reactivarea' USING ERRCODE='23514'; END IF;
+      -- Gemini f4d r1 P2: la semnare eligibilitatea tronsonului se reverifica (parcele noi / PV B anulat dupa creare).
+      IF NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat' AND EXISTS(SELECT 1 FROM public.red_v_tronson t JOIN public.red_uat u ON u.proiect_id=t.proiect_id
+        WHERE u.id=NEW.uat_id AND t.tronson=NEW.tronson AND t.tip_pv IS NULL) THEN
+        RAISE EXCEPTION 'PV C: tronsonul are din nou parcele fara PV A semnat sau PV B; nu se poate semna' USING ERRCODE='23514';
+      END IF;
     END IF;
     -- RPC executes as postgres; authenticated INSERT must use the RPC with its lock/checks.
     IF TG_OP='INSERT' AND current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'PV C: foloseste fn_red_pv_c_creeaza' USING ERRCODE='42501'; END IF;
@@ -88,7 +99,7 @@ BEGIN
   IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.red_procese_verbale'::regclass AND tgname='red_pv_c_garda' AND tgenabled='O' AND tgtype=23 AND tgfoid='public.fn_red_pv_c_garda()'::regprocedure)
     OR NOT EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.fn_red_pv_c_garda()'::regprocedure AND NOT prosecdef AND 'search_path=public, pg_temp'=ANY(proconfig)) THEN RAISE EXCEPTION '20261129d: garda C lipsa/invalida'; END IF;
   IF (SELECT coalesce(proacl::text,'NULL') FROM pg_proc WHERE oid='public.fn_red_pv_creeaza(text,uuid,uuid,integer)'::regprocedure) IS DISTINCT FROM current_setting('gazpet.r29d_acl',true) THEN RAISE EXCEPTION '20261129d: ACL vechi schimbat'; END IF;
-  IF NOT EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.fn_red_pv_c_creeaza(uuid,integer)'::regprocedure AND prosecdef AND 'search_path=public, pg_temp'=ANY(proconfig) AND prorettype='public.red_procese_verbale'::regtype)
+  IF NOT EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.fn_red_pv_c_creeaza(uuid,integer)'::regprocedure AND prosecdef AND 'search_path=public, pg_temp'=ANY(proconfig) AND 'lock_timeout=5s'=ANY(proconfig) AND prorettype='public.red_procese_verbale'::regtype)
     OR has_function_privilege('anon','public.fn_red_pv_c_creeaza(uuid,integer)','EXECUTE')
     OR NOT has_function_privilege('authenticated','public.fn_red_pv_c_creeaza(uuid,integer)','EXECUTE')
     OR EXISTS(SELECT 1 FROM pg_proc p,LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid='public.fn_red_pv_c_creeaza(uuid,integer)'::regprocedure AND a.grantee=0 AND a.privilege_type='EXECUTE')

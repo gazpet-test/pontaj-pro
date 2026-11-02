@@ -212,7 +212,7 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     {sursa?.pv && <>
       <p>{sursa.detinator?.nume || (tip==='C'?'PV C (tronson)':'PV B (parcela)')} - {sursa.pv.stare}</p>
       <fieldset disabled={lucru || !poateScrie || final}>
-        {text('data_pv','date')}{text('locul')}
+        {text('data_pv','date')}{tip!=='C' && text('locul')}
         {tip==='B' && <Camp eticheta="Motiv PV B (obligatoriu)"><select style={S.input} value={form.motiv_pv_b??''} onChange={e=>schimba('motiv_pv_b',e.target.value||null)}><option value="">Alege</option>{MOTIVE_PV_B.map(k=><option key={k} value={k}>{k}</option>)}</select></Camp>}
         {tip==='A' && <Camp eticheta="Constatare"><select style={S.input} value={form.constatare_mod??''} onChange={e=>schimba('constatare_mod',e.target.value||null)}>
           <option value="">Alege</option><option value="sediu">Sediu</option><option value="teren">Teren</option></select></Camp>}
@@ -226,9 +226,9 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
             : <label key={k} style={{display:'block'}}><input type="checkbox" checked={form[grup]?.[k]===true} onChange={e=>schimba(grup,{...form[grup],[k]:e.target.checked})}/>{k}</label>)}
         </fieldset>)}
         {text('foto_nr','number')}{text('termen_remediere','date')}{text('reverificare_la','date')}
-        </>}{(tip==='C'?['alte_observatii']:['obiectii_text','alte_observatii']).map(k=><Camp key={k} eticheta={k}><textarea style={S.input} value={form[k]??''} onChange={e=>schimba(k,e.target.value||null)}/></Camp>)}
+        </>}{(tip==='C'?[]:['obiectii_text','alte_observatii']).map(k=><Camp key={k} eticheta={k}><textarea style={S.input} value={form[k]??''} onChange={e=>schimba(k,e.target.value||null)}/></Camp>)}
       </fieldset>
-      <fieldset disabled={lucru||!poateScrie}>{text('remediat_la','date')}</fieldset>
+      {tip!=='C' && <fieldset disabled={lucru||!poateScrie}>{text('remediat_la','date')}</fieldset>}
       {poateScrie && <button style={S.btnP} disabled={lucru||!schimbate.length} onClick={()=>salveaza()}>Salveaza PV</button>}
       {tip!=='C' && <><fieldset disabled={lucru||!poateScrie||final}><legend>Verificare parcela (obligatorie PV B; salvare separata)</legend>
         {COMISIE.map(k=><Camp key={k} eticheta={k}><input style={S.input} type={k==='verificare_data'?'date':'text'} value={comisie[k]??''}

@@ -211,11 +211,13 @@ export function totaluriPvC(randuriTronson, pvs) {
   }
   return Object.fromEntries(Object.entries(grupe).flatMap(([k,rs]) => {
     const suma = rs.reduce((n,r) => {
-      const v = r.suprafata_temporara_mp == null ? 0 : Number(r.suprafata_temporara_mp)
+      // Copilot f4d r1 P2-02: suprafata lipsa NU devine 0 intr-un act de receptie (verificaDatePvC o blocheaza)
+      if (r.suprafata_temporara_mp == null || r.suprafata_temporara_mp === '') throw new Error('Suprafata lipsa pentru parcela '+(r.id_parcela??r.parcela_id))
+      const v = Number(r.suprafata_temporara_mp)
       if (!Number.isFinite(v)) throw new Error('Suprafata invalida pentru PV C')
       return n+v
     },0)
-    return [[k+'_nr',rs.length],[k+'_mp',formatNumarRo(suma)]]
+    return [[k+'_nr',rs.length],[k+'_mp',formatNumarRo(Math.round(suma*100)/100)]]
   }))
 }
 export function verificaDatePvC({proiect={},pv={},randuriTronson=[]}) {
@@ -224,6 +226,8 @@ export function verificaDatePvC({proiect={},pv={},randuriTronson=[]}) {
   if(!Number.isInteger(pv.tronson) || pv.tronson<1 || pv.tronson>11) lipsuri.push('tronson')
   if(!randuriTronson.length) lipsuri.push('cel putin o parcela')
   if(randuriTronson.some(r=>r.tip_pv == null)) lipsuri.push('parcele fara PV A semnat sau PV B')
+  const faraMp=randuriTronson.filter(r=>r.suprafata_temporara_mp == null || r.suprafata_temporara_mp === '').length
+  if(faraMp) lipsuri.push('suprafata temporara lipsa la '+faraMp+' parcele')
   return lipsuri
 }
 export async function genereazaPvC(date) {
@@ -237,6 +241,9 @@ export async function genereazaPvC(date) {
     return valori.length?formatNumarRo(fn(...valori)):''
   }
   const ids=new Set(randuriTronson.map(r=>r.uat_id))
+  // Copilot f4d r1 P3-01: fiecare UAT al tronsonului trebuie sa fie citit, altfel lista din PV ar fi incompleta
+  const lipsaUat=[...ids].filter(id=>!uats.some(u=>u.id===id))
+  if(lipsaUat.length) throw new Error('UAT-uri necitite pentru tronson: '+lipsaUat.length+'; reincarca.')
   const campuri={...totaluriPvC(randuriTronson,pvs),contract_nr:proiect.contract_nr??'',contract_data:formatDataRo(proiect.contract_data),
     proiect_denumire:proiect.denumire??'',nr_pv:pv.nr_pv??'',data_pv:formatDataRo(pv.data_pv),tronson:pv.tronson??'',
     km_de_la:limita('km_de_la',Math.min),km_pana_la:limita('km_pana_la',Math.max),numar_parcele:randuriTronson.length,

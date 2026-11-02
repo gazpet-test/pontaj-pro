@@ -89,6 +89,22 @@ BEGIN
   IF NOT mesaj THEN RAISE EXCEPTION 'Uncovered accepted/wrong message'; END IF;
   RAISE NOTICE 'TEST3 OK uncovered';
 END $t$;
+DO $t$ BEGIN
+  -- Gemini f4d r1 P3: ramurile garzii si ca admin
+  IF NOT pg_temp.r29d_refuza(format('INSERT INTO public.red_procese_verbale(tip,uat_id,tronson,nr_pv,data_pv) VALUES(''C'',%L,5,''PVC-T5-9998'',''2026-11-02'')',pg_temp.r29d_g('u')),'42501') THEN RAISE EXCEPTION 'Admin direct INSERT accepted'; END IF;
+  IF NOT pg_temp.r29d_refuza(format('UPDATE public.red_procese_verbale SET sters_la=now() WHERE tip=''C'' AND uat_id=%L',pg_temp.r29d_g('u')),'23514') THEN RAISE EXCEPTION 'Admin soft delete accepted'; END IF;
+  RAISE NOTICE 'TEST3b OK admin direct insert / soft delete refuzate';
+END $t$;
+SELECT pg_temp.r29d_ca(NULL,'postgres');
+DO $t$ BEGIN
+  INSERT INTO public.red_parcele(proiect_id,uat_id,id_parcela,tronson) VALUES(pg_temp.r29d_g('pr')::uuid,pg_temp.r29d_g('u')::uuid,'T5-ZXD-0009',5);
+END $t$;
+SELECT pg_temp.r29d_ca(pg_temp.r29d_g('owner')::uuid,'authenticated');
+DO $t$ BEGIN
+  -- Gemini f4d r1 P2: parcela noua fara PV dupa crearea PV C -> semnarea PV C refuzata
+  IF NOT pg_temp.r29d_refuza(format('UPDATE public.red_procese_verbale SET stare=''semnat'',semnat_primit_data=''2026-11-02'',fisier_semnat_path=''TEST/c.pdf'' WHERE tip=''C'' AND tronson=5 AND uat_id=%L',pg_temp.r29d_g('u')),'23514') THEN RAISE EXCEPTION 'Semnare PV C pe tronson neacoperit acceptata'; END IF;
+  RAISE NOTICE 'TEST3c OK semnare PV C reverifica tronsonul';
+END $t$;
 SELECT pg_temp.r29d_ca(pg_temp.r29d_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
   IF NOT pg_temp.r29d_refuza(format('SELECT public.fn_red_pv_c_creeaza(%L,5)',pg_temp.r29d_g('pr')),'42501') THEN RAISE EXCEPTION 'Editor accepted'; END IF;

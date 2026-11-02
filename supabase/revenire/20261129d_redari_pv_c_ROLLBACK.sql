@@ -9,7 +9,9 @@ BEGIN
 END $pre$;
 DROP TRIGGER red_pv_c_garda ON public.red_procese_verbale;
 DROP FUNCTION public.fn_red_pv_c_garda();
-DROP FUNCTION public.fn_red_pv_c_creeaza(uuid,integer);CREATE OR REPLACE FUNCTION public.fn_red_pv_creeaza(p_tip text, p_parcela_id uuid, p_detinator_id uuid, p_tronson int)
+DROP FUNCTION public.fn_red_pv_c_creeaza(uuid,integer);
+
+CREATE OR REPLACE FUNCTION public.fn_red_pv_creeaza(p_tip text, p_parcela_id uuid, p_detinator_id uuid, p_tronson int)
 RETURNS public.red_procese_verbale
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE p public.red_parcele; d public.red_detinatori; r public.red_procese_verbale; cod text;
@@ -44,7 +46,8 @@ BEGIN
 END $fn$;
 DO $post$
 BEGIN
-  IF to_regprocedure('public.fn_red_pv_c_creeaza(uuid,integer)') IS NOT NULL THEN RAISE EXCEPTION 'Revenire incompleta'; END IF;
+  IF to_regprocedure('public.fn_red_pv_c_creeaza(uuid,integer)') IS NOT NULL OR to_regprocedure('public.fn_red_pv_c_garda()') IS NOT NULL
+    OR EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.red_procese_verbale'::regclass AND tgname='red_pv_c_garda') THEN RAISE EXCEPTION 'Revenire incompleta'; END IF;
   IF to_regclass('supabase_migrations.schema_migrations') IS NOT NULL THEN
     DELETE FROM supabase_migrations.schema_migrations WHERE version='20261129120300';
   END IF;

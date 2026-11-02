@@ -209,10 +209,20 @@ describe('PV C',()=>{
     expect(r.pva_sesiune_nr).toBe(s);expect(r.pva_corespondenta_nr).toBe(c)
     expect(r.pvb_nr).toBe(1);expect(r.total_nr).toBe(2);expect(r.total_mp).toBe('150');expect(r.obiectii_deschise_mp).toBe('50')
   })
-  it('coproprietari: o parcela o singura data; null mp este zero',()=>{
-    const d=dateC();d.pvs.push({...d.pvs[0]});d.randuriTronson[0].suprafata_temporara_mp=null
+  it('coproprietari: o parcela o singura data; mp lipsa blocheaza (Copilot f4d r1 P2-02)',()=>{
+    const d=dateC();d.pvs.push({...d.pvs[0]})
     expect(totaluriPvC(d.randuriTronson,d.pvs).pva_sesiune_nr).toBe(1)
-    expect(totaluriPvC(d.randuriTronson,d.pvs).pva_sesiune_mp).toBe('0')
+    d.randuriTronson[0].suprafata_temporara_mp=null
+    expect(()=>totaluriPvC(d.randuriTronson,d.pvs)).toThrow('Suprafata lipsa')
+    expect(verificaDatePvC(d)).toContain('suprafata temporara lipsa la 1 parcele')
+  })
+  it('suma mp rotunjita la 2 zecimale',()=>{
+    const d=dateC();d.randuriTronson[0].suprafata_temporara_mp=10.1;d.randuriTronson[1].suprafata_temporara_mp=20.2
+    expect(totaluriPvC(d.randuriTronson,d.pvs).total_mp).toBe('30,3')
+  })
+  it('UAT necitit refuza generarea (Copilot f4d r1 P3-01)',async()=>{
+    const d=dateC();d.randuriTronson[1].uat_id='v'
+    await expect(genereazaPvC({...d,templateArrayBuffer:readFileSync('public/redari/sabloane/pv_c.docx')})).rejects.toThrow('UAT-uri necitite')
   })
   it('obiectiile nu blocheaza, lipsa PV blocheaza',()=>{
     const d=dateC();expect(verificaDatePvC(d)).toEqual([])
