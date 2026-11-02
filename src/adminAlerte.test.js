@@ -60,6 +60,7 @@ describe('Termene, stări și excluderi', () => {
   it('date lipsă rămâne distinct de critic și valid', () => {
     expect(alerteFirma([{ id: 1, activ: true }], today)[0].priority).toBe('missing')
     expect(alerteHr([{ id: 2 }], today)[0].priority).toBe('missing')
+    expect(alerteHr([{ id: 3, data_expirare: '2026-01-01', inlocuita_de_id: 9 }], today)).toEqual([])   // înlocuită → fără alertă
   })
   it('verifică viza RSVTI și când autorizația este fără expirare', () => {
     const result = alerteHr([{ id: 1, fara_expirare: true, necesita_confirmare_rsvti: true, rsvti_urmatoarea_confirmare: '2026-09-21' }], today)
