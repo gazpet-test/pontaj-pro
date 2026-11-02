@@ -191,7 +191,7 @@ const frunzeUnite = (radacina, cuChei = false, saraIndici = true, sep = '') => {
   while (stiva.length) {
     const o = stiva.pop()
     if (typeof o === 'number' && Number.isFinite(o)) { const t = String(o); if (!saraIndici || !(t.length <= 2 || /^\d{1,3}$/.test(t))) out.push(t); continue }   // r45 P1-02: fragmentele numerice participa (indicii mici nu)
-    if (typeof o === 'string') { if (!saraIndici || !(o.length <= 2 || /^\d{1,3}$/.test(o))) out.push(o); continue }   // r45 P1-01: indicii-sir scurti nu intrerup
+    if (typeof o === 'string') { if (!saraIndici || !(o.length <= 2 || /^\d{1,3}$/.test(o))) { const f = formele(o); out.push(cuUnicode(f[f.length - 1])) }; continue }   // r49 (Jak r48 P1-04): frunza in forma DECODATA   // r45 P1-01: indicii-sir scurti nu intrerup
     if (!o || typeof o !== 'object' || vaz.has(o)) continue
     vaz.add(o)
     if (Array.isArray(o)) { for (let i = o.length - 1; i >= 0; i--) stiva.push(o[i]); continue }
@@ -206,8 +206,9 @@ const texteScheletFormeazaIdentificator = (sk) => {
   for (const x of (sk.exception?.values || [])) { texte.push(x?.type, x?.value) }
   const tot = texte.filter(t => typeof t === 'string').join(' ')
   for (const f of [tot, cuUnicode(tot), ...formele(tot)]) {
-    const runs = f.match(/[A-Za-z0-9_-]{12,}/g) || []
-    if (RX_RUN43.test(runs.join(''))) return true
+    // r49 (Jak r48 P2-01): doar secventele care ARATA a bucata de identificator aleator (litere SI cifre); identificatorii de cod (camelCase, doar litere) nu
+    const unit = (f.match(/[A-Za-z0-9_-]{12,}/g) || []).join('')
+    if (RX_RUN43.test(unit) && /[A-Za-z]/.test(unit) && /[0-9]/.test(unit)) return true   // conditia litere+cifre pe TEXTUL UNIT (o bucata poate fi doar litere)
   }
   return false
 }
@@ -452,10 +453,14 @@ export function doarCampurileSigure(event) {
   const e = event
   const out = {}
   // r48 (Jak r47 P1-01): fara `tags` (cheile pot purta fragmente), fara logger/server_name/dist — scheletul e minim
-  for (const k of ['event_id', 'timestamp', 'platform', 'level', 'release', 'environment', 'type', 'start_timestamp']) if (k in e && (typeof e[k] === 'number' || sirScurt(e[k]))) out[k] = e[k]
+  // r49 (Jak r48 P1-01): fara `release`/`sdk` (pot purta fragmente); `environment` doar din lista cunoscuta; `platform`/`level`/`type` doar valori cunoscute
+  for (const k of ['event_id', 'timestamp', 'start_timestamp']) if (k in e && (typeof e[k] === 'number' || (sirScurt(e[k], 40) && /^[0-9a-f-]+$/i.test(e[k])))) out[k] = e[k]
+  if (['production', 'development', 'preview', 'test'].includes(e.environment)) out.environment = e.environment
+  if (['javascript', 'node'].includes(e.platform)) out.platform = e.platform
+  if (['fatal', 'error', 'warning', 'log', 'info', 'debug'].includes(e.level)) out.level = e.level
+  if (['error', 'transaction', 'default'].includes(e.type)) out.type = e.type
   if (sirScurt(e.message, 2000)) out.message = e.message
   if (sirScurt(e.transaction, 500)) out.transaction = e.transaction
-  if (e.sdk && typeof e.sdk === 'object') out.sdk = { name: sirScurt(e.sdk.name) ? e.sdk.name : undefined, version: sirScurt(e.sdk.version) ? e.sdk.version : undefined }
   if (e.request && typeof e.request === 'object') { out.request = {}; if (sirScurt(e.request.url, 2000)) out.request.url = e.request.url; if (sirScurt(e.request.method, 10)) out.request.method = e.request.method }
   const vals = e.exception?.values
   if (Array.isArray(vals)) out.exception = { values: vals.filter(x => x && typeof x === 'object').map(x => ({

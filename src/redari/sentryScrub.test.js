@@ -855,6 +855,20 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     const ok2 = { message: 'Refresh failed', extra: { token_cache: { provider: 'identity-provider', status: 'temporarily-unavailable', operation: 'refresh' } } }
     expect(scrubSentryEvent(ok2)).toEqual(ok2)
   })
+  it('r48 (Jakarinos): release/environment/sdk nu mai sunt canale; mesaje legitime camelCase trec; fragment %-codificat in lista sub cheie sensibila', () => {
+    // P1-01 [context]: release/sdk dispar, environment doar din lista
+    const r1 = scrubSentryEvent({ transaction: '/redari', release: T.slice(0, 20), environment: T.slice(20), sdk: { name: T.slice(0, 20), version: T.slice(20) } })
+    expect(r1 === null || (r1.release === undefined && r1.environment === undefined && r1.sdk === undefined)).toBe(true)
+    expect(scrubSentryEvent({ transaction: '/redari', environment: 'production', platform: 'javascript', level: 'error', message: 'x' })).toEqual({ transaction: '/redari', environment: 'production', platform: 'javascript', level: 'error', message: 'x' })
+    // P2-01 [context]: mesaj legitim cu identificatori camelCase lungi (doar litere) TRECE
+    const m = 'refreshAuthenticationCredentials failed while initializingApplicationConfiguration'
+    expect(scrubSentryEvent({ transaction: '/redari', message: m })?.message).toBe(m)
+    // dar fragmente cu litere SI cifre (bucati de identificator aleator) unite -> null
+    expect(scrubSentryEvent({ transaction: '/redari', message: 'prima: ' + T.slice(0, 20), exception: { values: [{ type: 'Error', value: 'ultima: ' + T.slice(20) }] } })).toBeNull()
+    // P1-04 [in afara]: fragment %-codificat in lista sub cheia sensibila
+    const r4 = scrubSentryEvent({ message: 'ok', extra: { token: [T.slice(0, 20), '%' + T.charCodeAt(20).toString(16) + T.slice(21)] } })
+    expect(r4 === null || !JSON.stringify(r4).replace(/[^A-Za-z0-9_-]+/g, '').includes(T.slice(21))).toBe(true)
+  })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }
     expect(scrubSentryEvent(ev)).toEqual({ message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } })
