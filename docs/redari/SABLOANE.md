@@ -142,28 +142,34 @@ Operatorul confirma prin salvarea PV; generatorul foloseste exclusiv lucrari per
 PV atesta constatarea, nu executia presupusa din deviz. Categoria initiala ramane cea din baza TGZ.
 PV A are trei semnatari (detinator, TGZ, Gazpet); reprezentantul UAT este pe PV B.
 
-### 2.3 `pv_b.docx` (Model 3) — per parcelă, 77 placeholder-e
+### 2.3 pv_b.docx (Model 3) - per parcela, 77 chei distincte
 
-| placeholder | sursă în BD | oblig. | observații |
-|---|---|---|---|
-| antet + `{{nr_pv}}` (`PVB-{uat3}-{nnnn}`), `{{data_pv}}`, `{{locul}}` | ca la PV A | da | |
-| tabel parcelă (7) | ca la PV A | | |
-| `{{nume}}` | calcul: toți deținătorii activi ai parcelei, „; ” — sau „neidentificat” | da | PV B e pe parcelă (detinator_id NULL) |
-| `{{bifa_neidentificat}}`, `{{bifa_fara_adresa}}` | calcul: calitate = 'neidentificat' / adresa_cunoscuta = false | da | |
-| `{{conv_data_expediere}}`, `{{conv_nr_tracking}}`, `{{conv_data_confirmare}}`, `{{bifa_conv_primita}}`, `{{bifa_conv_returnata}}`, `{{conv_retur}}` | red_convocari (activă, canal 'posta') | nu | mai multe convocări pe parcelă → concatenate cu `\n` în celulă |
-| `{{afisare_data_start}}` ×2, `{{afisare_data_end}}`, `{{afisare_pv_nr}}` | red_uat.afisare_* | nu | |
-| `{{raspuns_data}}`, `{{raspuns_canal}}`, `{{bifa_fara_raspuns}}`, `{{bifa_raspuns_fara_obiectii}}`, `{{bifa_alt_raspuns}}`, `{{raspuns_alt_text}}` | red_raspunsuri (ultimul) | nu | canalele din model: online / SMS / e-mail / telefonic / scris (contractul are și `sms`, `email` — consecvent) |
-| `{{zi1..3}}`, `{{bifa_neprezentat}}` | red_uat; **prezența nu are sursă** (§3 `prezent`) | nu | celula „Data” a rândului Sesiuni a rămas goală intenționat |
-| `{{reluare_data}}`, `{{reluare_adresa_tgz_nr}}`, `{{reluare_nr_tracking}}`, `{{bifa_reluare_nu_e_cazul}}`, `{{bifa_reluare_fara_raspuns}}`, `{{bifa_reluare_raspuns}}`, `{{reluare_raspuns_text}}` | **FĂRĂ SURSĂ** (rând nou v5): reluarea convocării după date corectate de TGZ → a doua red_convocari pe deținător (cu `versiune_lista_tgz` nouă) + `red_convocari.adresa_tgz_nr text` (adresa Beneficiarului cu datele corectate) | nu | „Dacă Beneficiarul comunică date de contact corectate, convocarea se reia o singură dată” (pct. 6) |
-| `{{bifa_sit_declaratie}}`, `{{bifa_sit_neprezentat}}`, `{{bifa_sit_neidentificat}}`, `{{bifa_sit_refuz}}` | calcul din stare (stare.js) + răspuns; **refuz** fără sursă (§3) | da | pct. 4 |
-| bifele lucrărilor + `{{lucrari_altele}}` | ca la PV A | nu | |
-| `{{categoria_initiala}}`, bifele `{{bifa_st_*}}` + `{{stare_teren_alta}}` | ca la PV A | da | |
-| `{{verificare_data}}`, `{{verificare_de_gazpet}}`, `{{verificare_de_tgz}}` | **FĂRĂ SURSĂ** → red_parcele.verificare_data, verificare_de_gazpet, verificare_de_tgz | da (PV B cere verificare efectivă) | |
-| `{{jurnal_santier}}` | **FĂRĂ SURSĂ** → red_parcele.jurnal_santier_ref text (zile lucrate pe parcelă; legătură cu jurnalul de șantier din Execuție, de decis) | nu | |
-| `{{bifa_plan_da}}`, `{{bifa_plan_nu}}`, `{{bifa_foto_da}}`, `{{bifa_foto_nu}}`, `{{foto_nr}}` | ca la PV A | nu | |
-| `{{uat}}` ×2, `{{reprezentant_uat_nume}}` | red_uat.nume, .reprezentant_uat_nume | da | „Primăria {{uat}} – reprezentant nominalizat: …” |
-| `{{semnatar_tgz}}`, `{{semnatar_gazpet}}`, `{{semnatar_uat}}` | red_proiecte / red_uat | nu | |
-| `{{semnatar_apm}}` | **FĂRĂ SURSĂ** → red_proiecte.apm_nume (sau gol, de mână) | nu | |
+Generator: src/redari/pv.js; CHEI_PV_B verificat pe sablonul real in pv.test.js.
+PV B are detinator_id NULL. Motivul explicit este obligatoriu; nu se deduce din absenta raspunsului.
+
+| Placeholder / grup | Sursa finala |
+| --- | --- |
+| antet, parcela, lucrari, stare teren, plan, foto | Aceiasi constructori de campuri ca PV A |
+| nume | Detinatorii activi, ordonati dupa id, uniti cu "; "; gol = neidentificat |
+| bifa_neidentificat, bifa_fara_adresa | Calitate neidentificat (inclusiv zero detinatori), respectiv adresa_cunoscuta false; lipsa contactului = false |
+| conv_data_expediere, conv_nr_tracking, conv_data_confirmare, conv_retur | Ultima convocare activa posta, non-reluare, dupa created_at si id; nu se concateneaza |
+| bifa_conv_primita, bifa_conv_returnata | Confirmare, respectiv retur nevid pe aceeasi convocare |
+| afisare_data_start/end, afisare_pv_nr, zi1/2/3 | red_uat.afisare_*, sesiune_zi1/2/3 |
+| raspuns_data/canal, raspuns_alt_text | ultimulRaspuns din stare.js: data, seq, created_at; text obiectii sau optiune |
+| bifa_fara_raspuns, bifa_raspuns_fara_obiectii, bifa_alt_raspuns | Absenta raspunsului / optiune nu_particip_fara_obiectii / alta optiune |
+| bifa_neprezentat | motiv_pv_b = neprezentat |
+| reluare_data, reluare_adresa_tgz_nr, reluare_nr_tracking | Ultima convocare activa reluare=true: data_expediere, adresa_tgz_nr, nr_tracking |
+| bifa_reluare_nu_e_cazul | Nicio reluare activa |
+| bifa_reluare_fara_raspuns, bifa_reluare_raspuns, reluare_raspuns_text | Raspunsul aceluiasi detinator, data >= data expedierii reluarii; fara data expedierii nu se atribuie un raspuns |
+| bifa_sit_declaratie/neprezentat/neidentificat/refuz | Exclusiv motiv_pv_b explicit, una singura bifata |
+| verificare_data, verificare_de_gazpet/tgz | red_parcele, obligatoriu data + minimum un verificator nevid |
+| jurnal_santier | red_parcele.jurnal_santier_ref |
+| reprezentant_uat_nume, semnatar_uat | red_uat.reprezentant_uat_nume, obligatoriu |
+| semnatar_gazpet/tgz | red_proiecte.reprezentant_*_nume + functie |
+| semnatar_apm | red_proiecte.apm_nume |
+
+Generarea reciteste toate sursele, blocheaza modificarile nesalvate si PV A semnat pe parcela.
+Reprezentantul UAT semneaza numai PV B. Prezenta/refuzul nu se inventeaza din starea agregata.
 
 ### 2.4 `adresa_uat.docx` (Model 4) — per UAT, 43 placeholder-e (adresa + Anexa 2 + Anexa 3)
 
