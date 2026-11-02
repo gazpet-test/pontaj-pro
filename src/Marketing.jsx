@@ -146,7 +146,7 @@ export default function Marketing() {
       .then(({ data, error }) => setStatus(error ? { error: error.message } : (data?.error ? { error: data.error } : data)))
   }, [])
 
-  const siteNume = (id) => sites.find(s => s.id === id)?.name || `site ${id}`
+  const siteNume = (id) => id == null ? 'General / fără șantier' : sites.find(s => s.id === id)?.name || `Șantier #${id}`
   const postabile = useMemo(() => sites.filter(s => mk[s.id]?.postabil), [sites, mk])
 
   // ── Șantiere postabile ──

@@ -6,17 +6,17 @@ import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 describe('UPS server AI', () => {
-  it('culori la praguri si pe retea; date incomplete nu devin pe retea', () => {
+  it('culori la praguri si pe retea; date incomplete nu devin pe rețea', () => {
     for (const pct of [0, 20, 24.9, 25, 49.9]) expect(nivelUps(pct, true)).toBe('error')
     for (const pct of [50, 80, 100]) expect(nivelUps(pct, true)).toBe('warning')
     for (const pct of [0, 20, 100]) expect(nivelUps(pct, false)).toBe('ok')
     for (const pct of [null, undefined, '92', NaN, -1, 101]) expect(nivelUps(pct, true)).toBe('lipsa')
     expect(nivelUps(92, undefined)).toBe('lipsa')
-    expect(textUps({ ups_pct: 92 })).toBe('UPS: 92% - stare necunoscuta')
+    expect(textUps({ ups_pct: 92 })).toBe('UPS: 92% - stare necunoscută')
   })
   it('model din meta, runtime optional inclusiv zero; fara procent nu apare', () => {
-    expect(textUps({ ups_pct: 92, ups_pe_baterie: false }, 'njoy Echo Pro 2000')).toBe('UPS njoy Echo Pro 2000: 92% - pe retea')
-    expect(textUps({ ups_pct: 40, ups_pe_baterie: true, ups_runtime_min: 12 })).toBe('UPS: 40% - pe baterie - autonomie estimata 12 min')
+    expect(textUps({ ups_pct: 92, ups_pe_baterie: false }, 'njoy Echo Pro 2000')).toBe('UPS njoy Echo Pro 2000: 92% - pe rețea')
+    expect(textUps({ ups_pct: 40, ups_pe_baterie: true, ups_runtime_min: 12 })).toBe('UPS: 40% - pe baterie - autonomie estimată 12 min')
     expect(textUps({ ups_pct: 80, ups_pe_baterie: true, ups_runtime_min: 0 })).toContain('0 min')
     expect(textUps({ ups_pct: 80, ups_pe_baterie: true, ups_runtime_min: null })).not.toContain('min')
     expect(textUps({})).toBe('')
