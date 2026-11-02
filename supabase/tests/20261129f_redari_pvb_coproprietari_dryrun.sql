@@ -10,6 +10,7 @@ BEGIN
     WHERE a.module='redari' AND a.access_level='editor' AND pp.is_owner IS NOT TRUE ORDER BY a.id LIMIT 1),true);
   IF current_setting('r29f.editor',true) IS NULL OR current_setting('r29f.editor',true)='' THEN RAISE EXCEPTION 'DRY: editor non-owner lipsa'; END IF;
   IF proprietar IS NULL THEN RAISE EXCEPTION 'DRY: owner lipsa'; END IF;
+  PERFORM set_config('r29f.owner',proprietar::text,true);
   INSERT INTO public.red_proiecte(cod,denumire) VALUES('TEST-29F','Fictiv coproprietari') RETURNING id INTO pr;
   INSERT INTO public.red_uat(proiect_id,nume,uat3,judet) VALUES(pr,'Fictiv','ZXF','Test') RETURNING id INTO u;
   INSERT INTO public.red_parcele(proiect_id,uat_id,id_parcela,tronson) VALUES(pr,u,'T7-ZXF-0001',7) RETURNING id INTO p;
@@ -85,6 +86,7 @@ BEGIN
   RAISE NOTICE 'TEST8 OK semnare PV B refuzata, anulare permisa';
 END $t$;
 RESET ROLE;
+SELECT set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('r29f.owner'),'role','authenticated')::text,true);
 -- A new active owner without PV A must count; deleting that owner logically must restore A.
 DO $t$
 DECLARE d uuid;
