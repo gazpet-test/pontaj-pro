@@ -7,8 +7,10 @@ import { Modal, Camp, S, msgEroare } from './comune.jsx'
 const COMISIE = ['verificare_data','verificare_de_gazpet','verificare_de_tgz']
 const CAMPURI = ['data_pv','locul','constatare_mod','identitate_verificata','lucrari','stare_teren','plan_situatie',
   'foto_nr','obiectii_redare','obiectii_text','termen_remediere','reverificare_la','alte_observatii']
-const egal = (a,b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
-const cas = (q, vechi, chei) => chei.reduce((r,k) => vechi[k] == null ? r.is(k,null) : r.eq(k,typeof vechi[k] === 'object' ? JSON.stringify(vechi[k]) : vechi[k]),q)
+// Gemini f4b r1 P2: jsonb reordonează cheile -> comparăm forma canonică (chei sortate), nu JSON.stringify brut
+const canonic = v => v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v).sort().reduce((o,k)=>(o[k]=canonic(v[k]),o),{}) : v
+const egal = (a,b) => JSON.stringify(canonic(a ?? null)) === JSON.stringify(canonic(b ?? null))
+const cas = (q, vechi, chei) => chei.reduce((r,k) => vechi[k] == null ? r.is(k,null) : r.eq(k,typeof vechi[k] === 'object' ? JSON.stringify(canonic(vechi[k])) : vechi[k]),q)
 const forma = s => s ? { ...s.pv, lucrari: s.pv?.lucrari ?? propuneLucrari(s.parcela.articol_deviz), stare_teren: s.pv?.stare_teren ?? {} } : {}
 const conflict = () => new Error('Modificat de altcineva, reincarca.')
 export default function ModalPv({ parcelaId, detinatorId, proiectId, nivel, show, onClose, onGata }) {
@@ -123,7 +125,8 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, nivel, show
   })
   const schimba=(k,v)=>{if(!ocupat.current)setForm(f=>({...f,[k]:v}))}
   const text=(k,tip='text')=><Camp key={k} eticheta={k}><input style={S.input} type={tip} value={form[k]??''}
-    onChange={e=>schimba(k,tip==='number'?(e.target.value===''?null:Number(e.target.value)):(e.target.value||null))} min={tip==='number'?0:undefined}/></Camp>
+    step={tip==='number'?1:undefined}
+    onChange={e=>{ if(tip==='number'){ const v=e.target.value; if(v===''){schimba(k,null);return} const n=Number(v); if(Number.isInteger(n)&&n>=0) schimba(k,n); return } schimba(k,e.target.value||null) }} min={tip==='number'?0:undefined}/></Camp>
   return <Modal titlu={sursa?.pv?.nr_pv || 'PV A'} latime={760} onClose={()=>{if(!ocupat.current)onClose()}}>
     {mesaj && <p role="alert">{mesaj}</p>}
     <button style={S.btnS} disabled={lucru} onClick={reload}>Reincarca</button>

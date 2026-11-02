@@ -84,6 +84,9 @@ describe('storage PV imutabil',()=>{
     expect(r).toEqual({path:'TEST/ZZZ/pv/PVA-ZZZ-0001_v5.docx',versiune:5})
     expect(upload.mock.calls[0][2].upsert).toBe(false)
     expect(list).toHaveBeenCalledTimes(2)
+    // Copilot f4b r1 P2-01: listarea se face în ACELAȘI folder în care se încarcă (TEST/ZZZ/pv), nu în cel al adreselor
+    expect(list.mock.calls[0][0]).toBe('TEST/ZZZ/pv')
+    expect(upload.mock.calls[0][0].startsWith('TEST/ZZZ/pv/')).toBe(true)
   })
   it('eroare ambigua nu reincearca automat',async()=>{
     const {s,upload}=client([{statusCode:500,message:'indisponibil'}])
