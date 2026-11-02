@@ -506,6 +506,57 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
 
 // Felia 2: sursele așteptate sunt șablonul real și valorile explicite ale fixture-ului.
 import { repetaRand, verificaDateAdresaUat, genereazaAdresaUat, CHEI_ADRESA_UAT, caleAdresaUat, salveazaAdresaUat, zileSesiuneText, aziBucuresti } from './docx.js'
+import { CHEI_CERERE_IMPUTERNICIRE, ANTREPRENOR, verificaDateCerereImputernicire, genereazaCerereImputernicire } from './docx.js'
+
+const PR_CERERE = {
+  beneficiar: 'Beneficiar FICTIV', reprezentant_tgz_nume: 'Delegat FICTIV', contract_nr: 'TEST-1',
+  contract_data: '2025-01-22', denumire: 'Proiect FICTIV', reprezentant_gazpet_nume: 'Semnatar FICTIV',
+  reprezentant_gazpet_functie: 'coordonator', contact_email: 'test@example.invalid',
+}
+const sablonCerere = () => readFileSync(resolve(process.cwd(), 'public/redari/sabloane/cerere_imputernicire.docx'))
+describe('cererea de imputernicire', () => {
+  it('sablonul real are exact cele 12 chei, textul Juridic integral si zero relatii externe', async () => {
+    const zip = await JSZip.loadAsync(sablonCerere())
+    const xml = await zip.file('word/document.xml').async('string')
+    const chei = [...new Set([...xml.matchAll(/\{\{([\w.]+)\}\}/g)].map(m => m[1]))].sort()
+    expect(chei).toHaveLength(12)
+    expect([...CHEI_CERERE_IMPUTERNICIRE].sort()).toEqual(chei)
+    const sursa = readFileSync(resolve(process.cwd(), 'docs/redari/TEXT_CERERE_IMPUTERNICIRE.md'), 'utf8').split(/^---[ \t]*\r?$/m)[1]
+    const texte = [...xml.matchAll(/<w:t[^>]*>(.*?)<\/w:t>/g)].map(m => m[1])
+    expect(texte).toEqual(sursa.split(/\r?\n/).map(l => l.trim()).filter(Boolean))
+    for (const f of Object.keys(zip.files).filter(f => f.endsWith('.rels'))) expect(await zip.file(f).async('string')).not.toContain('TargetMode="External"')
+  })
+  it.each(Object.keys(PR_CERERE))('lipsa sau spatii in %s blocheaza', async cheie => {
+    for (const valoare of [null, '', '   ']) {
+      const proiect = { ...PR_CERERE, [cheie]: valoare }
+      expect(verificaDateCerereImputernicire({ proiect, uats: [{ nume: 'Test' }] })).toHaveLength(1)
+      await expect(genereazaCerereImputernicire({ proiect, uats: [{ nume: 'Test' }] })).rejects.toThrow('Lipseste')
+    }
+  })
+  it('fara UAT sau cu nume lipsa blocheaza; nr documentului este optional', () => {
+    expect(verificaDateCerereImputernicire({ proiect: PR_CERERE, uats: [] })).toHaveLength(1)
+    expect(verificaDateCerereImputernicire({ proiect: PR_CERERE, uats: [{ nume: ' ' }] })).toHaveLength(1)
+    expect(verificaDateCerereImputernicire({ proiect: PR_CERERE, uats: [{ nume: 'Test' }] })).toEqual([])
+  })
+  it.each([undefined, '   ', ' REG-7 '])('genereaza real, sorteaza RO fara mutare, nr %s', async nrDocument => {
+    const uats = [{ nume: 'Zorile' }, { nume: 'Șimian' }, { nume: 'Alba' }]
+    const r = await genereazaCerereImputernicire({ proiect: PR_CERERE, uats, nrDocument, dataDocument: '2026-11-02', templateArrayBuffer: sablonCerere() })
+    const { xml } = await xmlDin(r.blob, 'word/document.xml')
+    expect(xml).not.toContain('{{')
+    expect(r.hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(r.campuri).toEqual({ nr_document: nrDocument?.trim() || '___', data: '02.11.2026', beneficiar: 'Beneficiar FICTIV', reprezentant_tgz: 'Delegat FICTIV', contract_nr: 'TEST-1', contract_data: '22.01.2025', proiect_denumire: 'Proiect FICTIV', antreprenor: 'GAZPET INSTAL S.R.L.', uat_lista: 'Alba, Șimian, Zorile', contact_email: 'test@example.invalid', reprezentant_gazpet: 'Semnatar FICTIV', functie: 'coordonator' })
+    expect(ANTREPRENOR).toBe('GAZPET INSTAL S.R.L.')
+    expect(xml).toContain('Alba, Șimian, Zorile')
+    expect(xml).toContain(nrDocument?.trim() || '___')
+    expect(uats[0].nume).toBe('Zorile')
+  })
+  it('spațiile de la capetele valorilor nu intră în document (Gemini f3a r1 P3)', async () => {
+    const r = await genereazaCerereImputernicire({ proiect: { ...PR_CERERE, beneficiar: '  Beneficiar FICTIV  ', contract_nr: ' TEST-1 ' }, uats: [{ nume: ' Alba ' }], dataDocument: '2026-11-02', templateArrayBuffer: sablonCerere() })
+    expect(r.campuri.beneficiar).toBe('Beneficiar FICTIV')
+    expect(r.campuri.contract_nr).toBe('TEST-1')
+    expect(r.campuri.uat_lista).toBe('Alba')
+  })
+})
 const PR_ADRESA = { contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: 'TEST-IMP', imputernicire_data: '2026-11-01', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator', contact_email: 'test@example.invalid' }
 const UAT_ADRESA = { id: 'uat-fictiv', nume: 'UAT FICTIV', uat3: 'TST', judet: 'Test', versiune: 7, sesiune_zi1: '2026-12-10', sesiune_zi2: '2026-12-11', sesiune_zi3: '2026-12-12', program_zi1: '09:00 – 16:00', program_zi2: '09:00 – 19:00', program_zi3: '09:00 – 16:00', afisare_data_start: '2026-11-10', afisare_data_end: '2026-12-12', termen_confirmare: '2026-12-01', afisare_ora: '09:30' }
 const sablonAdresa = () => readFileSync(resolve(process.cwd(), 'public/redari/sabloane/adresa_uat.docx'))
