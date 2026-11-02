@@ -123,10 +123,10 @@ metadatele răspunsurilor, `valoare_lei` și nu scrie nimic. Migrarea NU acordă
   + borderou CSV, formularul public cu token, scrub Sentry pentru token.
 - Șabloanele Model_1..5 v5 cu placeholder-e în repo (verificate, 0 rupte) și harta completă a câmpurilor (`SABLOANE.md`).
 
-### 4.1b Faza 2, felia 1 — UAT + Setări proiect (branch `feat/redari-faza2-uat`, 02.11.2026)
+### 4.1b Faza 2, felia 1 — UAT + Setări proiect (PR #918, 02.11.2026)
 Deciziile lui Răzvan (02.11, chat): ordinea = UAT + Setări întâi; `link_afisare` scos din adresa UAT; refuzul la PV B = motiv pe PV (felia PV);
 adresele UAT pe seria `AU-0001`.
-- Migrarea `20261127a_redari_uat_setari`: `red_uat` + `reprezentant_uat_telefon`, `termen_confirmare`, `afisare_ora`, `afisare_reprezentant_gazpet`,
+- Migrarea `20261127a_redari_uat_setari` (**APLICATĂ pe prod 02.11 ~08:15**, regula #1877: Jakarinos r4 GO, Copilot r4 GO cu observații, DRY de poartă verde): `red_uat` + `reprezentant_uat_telefon`, `termen_confirmare`, `afisare_ora`, `afisare_reprezentant_gazpet`,
   `adresa_nr` (unic, `AU-nnnn`), `adresa_data`; `red_proiecte.apm_nume`; CHECK-uri: zilele de sesiune în ordine (zi2 cere zi1, strict crescător),
   termenul de confirmare < ziua 1, afișarea ordonată, formate (ora, telefon); cheia `AU` în `fn_red_numar_document`. Fără politici sau drepturi noi.
   Blocare optimistă: coloana `versiune` pe `red_proiecte` / `red_uat`, crescută de `trg_red_versiune` la fiecare UPDATE; ecranele salvează cu
@@ -137,6 +137,7 @@ adresele UAT pe seria `AU-0001`.
 - Ecrane: **🏛️ UAT-uri** (tabel + „gata de convocare?”, editare admin, cod UAT blocat după primele parcele, avertisment la schimbarea zilelor când
   există convocați) și **⚙️ Setări proiect** (contract, împuternicire, reprezentanți, contact, texte GDPR / declarație cu confirmare la schimbare).
   Editor și viewer văd în citire (RLS: scrie doar admin). Logica: `src/redari/setari.js` (+ teste), randare: `src/redari/ui/setariRender.test.jsx`.
+- Rămas pentru felia 2 (P3 Copilot r4): fereastra „UAT nou” nu blochează câmpurile cât rulează inserarea.
 
 ### 4.2 NU e făcut (faza următoare, după brief §8 „apoi”)
 - PV A / B / C (generare din `pv_a` / `pv_b` / `pv_c.docx`, numerotare PVA/PVB/PVC, stările trimis/semnat, upload scan semnat) — doar schema există.
