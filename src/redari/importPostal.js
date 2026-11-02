@@ -226,7 +226,7 @@ export async function aplica(supabase, aplicabile, { esteCurent = () => true } =
         // Unicitatea în BD (index) e o decizie de business în așteptare: un plic poate conține legitim mai multe convocări ale aceluiași om.
         if (a.patch.nr_tracking) {
           const { data: alte, error: eT } = await supabase.from('red_convocari').select('id').eq('nr_tracking', a.patch.nr_tracking).neq('id', a.conv_id).limit(1)
-          if (eT) throw eT
+          if (eT) { rezultat.erori.push({ ...a, motiv: 'Recitirea AWB-ului a eșuat; nimic nu s-a scris pentru acest rând.' }); consecutive++; continue }   // Copilot f9 r3 P3-02
           if (alte?.length) { rezultat.conflicte.push({ ...a, motiv: 'AWB-ul a fost înregistrat între timp pe altă convocare; verifică manual.' }); consecutive = 0; continue }
         }
         let q = supabase.from('red_convocari').update(a.patch).eq('id', a.conv_id)
