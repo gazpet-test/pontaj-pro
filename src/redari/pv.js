@@ -54,7 +54,9 @@ function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator = {}, p
     semnatar_gazpet: [proiect.reprezentant_gazpet_nume, proiect.reprezentant_gazpet_functie].filter(Boolean).join(', '),
     semnatar_tgz: [proiect.reprezentant_tgz_nume, proiect.reprezentant_tgz_functie].filter(Boolean).join(', '),
   })
-  for (const k of ['sat','tarla','nr_cadastral','poz_hg','categoria_folosinta','tronson']) campuri[k] = parcela[k] ?? ''
+  for (const k of ['sat','tarla','nr_cadastral','poz_hg','categoria_folosinta']) campuri[k] = parcela[k] ?? ''
+  // Copilot f8a r3 P3: tronsonul din PV A/B e cel inghetat pe randul PV (pe el se sprijina garda BD), nu cel curent al parcelei
+  campuri.tronson = pv.tronson ?? ''
   for (const k of LUCRARI) campuri['bifa_' + k] = bifa(k === 'altele' ? plin(pv.lucrari?.altele) : pv.lucrari?.[k])
   for (const k of STARI_TEREN) campuri['bifa_st_' + k] = bifa(k === 'alta' ? plin(pv.stare_teren?.alta) : pv.stare_teren?.[k])
   Object.assign(campuri, {

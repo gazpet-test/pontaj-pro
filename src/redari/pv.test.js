@@ -86,6 +86,14 @@ it('PV A si B accepta parcela fara tronson si lasa campul DOCX gol',async()=>{
   expect((await genereazaPvA({...a,templateArrayBuffer:sablon()})).campuri.tronson).toBe('')
   expect((await genereazaPvB({...b,templateArrayBuffer:sablonB()})).campuri.tronson).toBe('')
 })
+it('PV A/B: tronsonul din document e cel de pe randul PV, nu cel curent al parcelei (Copilot f8a r3)',async()=>{
+  const a=date(), b=dateB()
+  a.parcela.tronson=5;b.parcela.tronson=5;a.pv={...a.pv,tronson:null};b.pv={...b.pv,tronson:null}
+  expect((await genereazaPvA({...a,templateArrayBuffer:sablon()})).campuri.tronson).toBe('')
+  expect((await genereazaPvB({...b,templateArrayBuffer:sablonB()})).campuri.tronson).toBe('')
+  a.pv.tronson=4
+  expect((await genereazaPvA({...a,templateArrayBuffer:sablon()})).campuri.tronson).toBe(4)
+})
 describe('PV B',()=>{
   it('78 chei din sablonul independent, inclusiv antete',async()=>{
     const z=await JSZip.loadAsync(sablonB()), chei=new Set()
