@@ -202,12 +202,14 @@ const frunzeUnite = (radacina, cuChei = false, saraIndici = true, sep = '') => {
 }
 // r48: textele scheletului (dupa allow-list) — secventele de >=12 unite formeaza un identificator?
 const texteScheletFormeazaIdentificator = (sk) => {
-  const texte = [sk.message, sk.transaction, sk.request?.url]
+  // r50 (Jak r49 P2-01): fara request.url (UUID-urile din query sunt normale, iar URL-ul formularului public e DROP oricum) si fara
+  // secventele de forma UUID/hex (`550e8400-e29b-...`) — altfel UUID (36) + `nume_normalizat` (15) ar forma fals un „identificator"
+  const texte = [sk.message, sk.transaction]
   for (const x of (sk.exception?.values || [])) { texte.push(x?.type, x?.value) }
   const tot = texte.filter(t => typeof t === 'string').join(' ')
   for (const f of [tot, cuUnicode(tot), ...formele(tot)]) {
     // r49 (Jak r48 P2-01): doar secventele care ARATA a bucata de identificator aleator (litere SI cifre); identificatorii de cod (camelCase, doar litere) nu
-    const unit = (f.match(/[A-Za-z0-9_-]{12,}/g) || []).join('')
+    const unit = (f.match(/[A-Za-z0-9_-]{12,}/g) || []).filter(r => !/^[0-9a-f-]+$/i.test(r)).join('')
     if (RX_RUN43.test(unit) && /[A-Za-z]/.test(unit) && /[0-9]/.test(unit)) return true   // conditia litere+cifre pe TEXTUL UNIT (o bucata poate fi doar litere)
   }
   return false
