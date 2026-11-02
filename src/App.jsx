@@ -250,6 +250,9 @@ tr:hover td{background:#1C2128}
 /* tabletă / ecran îngust (<1100 px): zona din dreapta nu mai încape -> toată bara se derulează (ca înainte), fără să lățească pagina */
 @media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{flex:0 0 auto;-webkit-mask-image:none;mask-image:none}}
 @media (max-width:719px){.navscroll{display:none}}
+/* Panou PontajPRO (audit UI 02.11): grilele se reașază pe ecrane înguste, pagina nu se mai lățește */
+@media (max-width:1099px){.panou-kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))!important}.panou-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media (max-width:759px){.panou-grid{grid-template-columns:minmax(0,1fr)!important}}
 @media (max-width:719px){.nl{display:none}}
 .nl:hover,.nl.active{background:#21262D;color:#E6EDF3}
 .nl.active{color:#58A6FF;background:#1F6FEB15}
@@ -1498,7 +1501,7 @@ function DashboardPage() {
         <div style={{fontSize:11,color:G.orange+'99'}}>Verificați în Pontaj dacă diurnele sunt corect bifate.</div></div>
       </div>}
 
-      <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:13,marginBottom:20}}>
+      <div className="panou-kpi" style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(0,1fr))',gap:13,marginBottom:20}}>
         {[{l:'Total Angajați',v:stats.total,i:'👥',c:G.blue,s:'activi'},{l:'Prezenți Azi',v:stats.present,i:'✅',c:G.green,s:`din ${stats.total}`},{l:'Au Plecat',v:stats.checkedOut,i:'🚪',c:G.yellow,s:'ieșire'},{l:'Medie Ore',v:minsToHM(stats.avgMins),i:'⏱',c:G.purple,s:'azi'},{l:'Cu Diurnă',v:stats.diurna,i:'💰',c:stats.diurna>stats.present?G.red:G.orange,s:'azi'}].map(x=>(
           <div key={x.l} style={{...S.card,padding:'16px 18px'}}>
             <div style={{display:'flex',justifyContent:'space-between'}}>
@@ -1511,7 +1514,7 @@ function DashboardPage() {
         ))}
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16}}>
+      <div className="panou-grid" style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:16}}>
         {/* Prezenta pe departamente - mereu vizibil */}
         <div style={{...S.card,padding:20}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:16}}>Prezență pe Departamente</div>
