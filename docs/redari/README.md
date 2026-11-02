@@ -6,8 +6,14 @@ Juridic). Contractul tehnic obligatoriu: `CONTRACT_SCHEMA.md`. Șabloanele și h
 r6 GO (P1=0, P2=0), Copilot r6 GO cu observații (P1=0), DRY r1–r6 verzi pe prod, apply prin `scripts/livrare_migrare.sh` (versiune
 `20261126120000`, sha256 `9fcc00c2…d955`, GATE 0e = 0). Sanity după aplicare: 14 tabele `red_*`, 22 funcții `fn_red_*`, 32 politici, bucket
 `redari` privat, cele 3 RPC publice/`fn_red_nivel` sunt SECURITY DEFINER cu `search_path = public, pg_temp`. **Niciun drept acordat** (vezi §5).
-Frontend-ul: Jakarinos r6 NO-GO (2 P1 Sentry + 1 P2) → runda 9 UI (Sentry DROP pe formularul public + verificare finală; generație în Registru)
-integrată în `feat/redari-teren` (commit `b8b4c32e`, build + 150 teste verzi); Jakarinos r7 + Copilot FE r1 în curs. PR-ul nu e deschis.
+Frontend-ul: **LIVRAT pe main** — PR #916 (squash `e9b8f3bb`, 02.11.2026 02:22) după Jakarinos r49/r50 **GO cu observații** (niciun P1
+„accidental”) și Copilot FE r43/r44 **GO cu observații**; 209 teste `src/redari` verzi, build OK; Vercel deployează automat. Telemetria Sentry
+(`src/redari/sentryScrub.js`, ~50 de runde): formularul public = DROP total; evenimentele din contextul modulului (URL `/redari`, `rpc/fn_red_*`,
+breadcrumbs) păstrează doar câmpurile sigure (allow-list: message/transaction/exception + stack fără `vars`; fără extra/contexts/breadcrumbs/user/
+corp/tags/release/sdk); INP oprit, `tracesSampler` 0 pe formular, `beforeSendSpan` golește; restul ERP-ului = euristici de apărare în adâncime.
+**Model de amenințare**: scurgere accidentală (cod/SDK), nu adversar care deține deja identificatorul (fragmentare în texte libere = rezidual
+asumat). **De confirmat de Răzvan**: (1) în text neparcurs hash ≡ identificator → evenimentul se pierde (cost global, rar); (2) rezidualul adversarial.
+`Referrer-Policy: no-referrer` + noindex + no-store pe `/redari/raspuns/*` (vercel.json) + meta; `scripts/redari_sabloane_verifica.mjs` verifică și relațiile externe.
 
 ## 1. Scop
 
