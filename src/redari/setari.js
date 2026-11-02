@@ -8,6 +8,8 @@ export const MAX_TEXT_LUNG = 4000
 
 // tip: 'text' | 'date' | 'ora' | 'tel' | 'email' | 'textarea'; span = coloane în grila de 2
 export const CAMPURI_PROIECT = [
+  { grup: 'Proiect de montaj (Execuție)', cheie: 'executie_proiect_id', eticheta: 'Proiect de montaj', tip: 'executie' },
+  { grup: 'Texte (confirmate de Juridic)', cheie: 'link_informare_gdpr', eticheta: 'Informarea GDPR completă (HTTPS, opțional)', tip: 'url', span: 2 },
   { grup: 'Proiect', cheie: 'denumire', eticheta: 'Denumire', tip: 'text', span: 2 },
   { grup: 'Proiect', cheie: 'beneficiar', eticheta: 'Beneficiar', tip: 'text', span: 2 },
   { grup: 'Contract', cheie: 'contract_nr', eticheta: 'Nr. contract', tip: 'text' },
@@ -95,6 +97,8 @@ function verificaFormat(c, v, erori) {
   if (c.tip === 'date' && !dataValida(s)) erori.push(`${c.eticheta}: dată invalidă`)
   else if (c.tip === 'ora' && !RX_ORA.test(s)) erori.push(`${c.eticheta}: format HH:MM (00:00–23:59)`)
   else if (c.tip === 'email' && !RX_EMAIL.test(s)) erori.push(`${c.eticheta}: adresă de e-mail invalidă`)
+  else if (c.tip === 'url' && (!s.startsWith('https://') || s.length > 300)) erori.push(`${c.eticheta}: începe cu https://, maximum 300 caractere`)
+  else if (c.tip === 'executie' && (!/^[1-9][0-9]*$/.test(s) || !Number.isSafeInteger(Number(s)))) erori.push(`${c.eticheta}: identificator invalid`)   // executie_proiecte.id e bigint
   else if (c.tip === 'tel' && s.length > MAX_TELEFON) erori.push(`${c.eticheta}: maximum ${MAX_TELEFON} caractere`)
   else if (c.tip === 'textarea' && s.length > MAX_TEXT_LUNG) erori.push(`${c.eticheta}: maximum ${MAX_TEXT_LUNG} caractere`)
   else if ((c.tip === 'text') && s.length > MAX_TEXT_SCURT) erori.push(`${c.eticheta}: maximum ${MAX_TEXT_SCURT} caractere`)

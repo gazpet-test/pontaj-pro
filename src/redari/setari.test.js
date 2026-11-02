@@ -29,7 +29,7 @@ describe('setari — normalizare', () => {
     expect(new Set(COL_PROIECT.split(', ')).size).toBe(COL_PROIECT.split(', ').length)
   })
   it('link_afisare nu există în câmpuri (decizia 02.11: scos din adresa UAT)', () => {
-    expect([...CAMPURI_UAT, ...CAMPURI_PROIECT].some(c => /link/.test(c.cheie))).toBe(false)
+    expect([...CAMPURI_UAT, ...CAMPURI_PROIECT].some(c => c.cheie === 'link_afisare')).toBe(false)
   })
 })
 
@@ -99,5 +99,22 @@ describe('setari — proiect, lipsuri, rezumat', () => {
   it('rezumatZile', () => {
     expect(rezumatZile(uatBun())).toBe('10.12 · 11.12')
     expect(rezumatZile({})).toBe('-')
+  })
+})
+
+describe('felia 2: legătură Execuție și URL GDPR', () => {
+  it('coloanele noi intră în proiecție și patch', () => {
+    expect(COL_PROIECT.split(', ')).toContain('executie_proiect_id')
+    expect(COL_PROIECT.split(', ')).toContain('link_informare_gdpr')
+    expect(CAMPURI_PROIECT.find(c => c.cheie === 'link_informare_gdpr').tip).toBe('url')
+    const n = normalizeaza({ executie_proiect_id: 12, link_informare_gdpr: ' https://example.invalid ' }, CAMPURI_PROIECT)
+    expect(n.executie_proiect_id).toBe('12')
+    expect(n.link_informare_gdpr).toBe('https://example.invalid')
+  })
+  it.each([null, '', 'https://example.invalid', 'https://' + 'x'.repeat(292)])('URL legitim %s', url => {
+    expect(valideazaProiect({ text_gdpr: 'Test', text_declaratie: 'Test', link_informare_gdpr: url })).toEqual([])
+  })
+  it.each(['http://x', 'HTTPS://x', 'https://' + 'x'.repeat(293)])('URL refuzat %s', url => {
+    expect(valideazaProiect({ text_gdpr: 'Test', text_declaratie: 'Test', link_informare_gdpr: url })).toContain('Informarea GDPR completă (HTTPS, opțional): începe cu https://, maximum 300 caractere')
   })
 })

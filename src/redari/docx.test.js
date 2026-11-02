@@ -1,5 +1,5 @@
 // Redări teren — teste pentru src/redari/docx.js (contract §6 + §8). Date fictive, fără persoane reale.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import JSZip from 'jszip'
@@ -435,8 +435,8 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const a = fake({ caleCurenta: null, existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`, `${BAZA}-v1.pdf`, 'LOT1-PRUNISOR-JUPA/HUS/T3-HUS-0001/C-0002-v9.docx'] })
     const r = await reincarcaConvocator(a.supabase, argRe)
     expect(r).toEqual({ path: `${BAZA}-v3.docx`, convocareId: 'uuid-vechi', versiune: 3 })
-    expect(a.apeluri.map(x => x.tip)).toEqual(['select', 'list', 'upload', 'update'])
-    expect(a.apeluri[2].path).toBe(`${BAZA}-v3.docx`) // un singur upload, fără bâjbâit pe v1/v2; C-0002 și .pdf nu contează
+    expect(a.apeluri.map(x => x.tip)).toEqual(['select', 'list', 'list', 'upload', 'update'])
+    expect(a.apeluri.find(x => x.tip === 'upload').path).toBe(`${BAZA}-v3.docx`) // un singur upload, fără bâjbâit pe v1/v2; C-0002 și .pdf nu contează
     expect(a.apeluri.at(-1).rand.fisier_convocator_path).toBe(`${BAZA}-v3.docx`)
     // rândul spune v5 dar bucket-ul are max v2 → câștigă maximul dintre ele (v6)
     const b = fake({ caleCurenta: `${BAZA}-v5.docx`, existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`] })
@@ -450,12 +450,12 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const cheie = { proiectCod: arg.proiectCod, uat3: arg.uat3, idParcela: arg.idParcela, nrDocument: arg.nrDocument }
     expect(await versiuneMaximaInBucket(a.supabase, cheie)).toBe(7)
     const listari = a.apeluri.filter(x => x.tip === 'list')
-    expect(listari.map(x => [x.o.limit, x.o.offset])).toEqual([[1000, 0], [1000, 1000]]) // a doua pagină (3 obiecte) e incompletă → stop
+    expect(listari.map(x => [x.o.limit, x.o.offset])).toEqual([[1000, 0], [1000, 1000], [1000, 1003]]) // până la pagina goală, inclusiv când serverul plafonează
     // și prin reincarcaConvocator: direct pe v8, un singur upload
     const b = fake({ caleCurenta: null, existente })
     const r = await reincarcaConvocator(b.supabase, argRe)
     expect(r.versiune).toBe(8)
-    expect(b.apeluri.filter(x => x.tip === 'list')).toHaveLength(2)
+    expect(b.apeluri.filter(x => x.tip === 'list')).toHaveLength(3)
     expect(b.apeluri.filter(x => x.tip === 'upload').map(x => x.path)).toEqual([`${BAZA}-v8.docx`])
     // pagină mică (3) cu exact 6 obiecte: a treia pagină vine goală și oprește bucla; maximul tot real
     const c = fake({ existente: [`${BAZA}-v1.docx`, `${BAZA}-v2.docx`, `${BAZA}-v3.docx`, `${BAZA}-v4.docx`, `${BAZA}-v5.docx`, `${BAZA}-v6.docx`] })
@@ -501,5 +501,164 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
     const e = await salveazaConvocator(a.supabase, arg).catch(x => x)
     expect(e).toMatchObject({ convocareId: 'uuid-fictiv-1', path: PATH, pas: 'upload' })
     expect(a.apeluri.map(x => x.tip)).toEqual(['insert', 'upload'])
+  })
+})
+
+// Felia 2: sursele așteptate sunt șablonul real și valorile explicite ale fixture-ului.
+import { repetaRand, verificaDateAdresaUat, genereazaAdresaUat, CHEI_ADRESA_UAT, caleAdresaUat, salveazaAdresaUat, zileSesiuneText, aziBucuresti } from './docx.js'
+const PR_ADRESA = { contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: 'TEST-IMP', imputernicire_data: '2026-11-01', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator', contact_email: 'test@example.invalid' }
+const UAT_ADRESA = { id: 'uat-fictiv', nume: 'UAT FICTIV', uat3: 'TST', judet: 'Test', versiune: 7, sesiune_zi1: '2026-12-10', sesiune_zi2: '2026-12-11', sesiune_zi3: '2026-12-12', program_zi1: '09:00 – 16:00', program_zi2: '09:00 – 19:00', program_zi3: '09:00 – 16:00', afisare_data_start: '2026-11-10', afisare_data_end: '2026-12-12', termen_confirmare: '2026-12-01', afisare_ora: '09:30' }
+const sablonAdresa = () => readFileSync(resolve(process.cwd(), 'public/redari/sabloane/adresa_uat.docx'))
+const pTest = i => ({ id_parcela: `T1-TST-000${i}`, sat: `Sat ${i} <&>`, tarla: `Tarla ${i}`, nr_cadastral: `CAD-${i}`, poz_hg: `HG-${i}`, tronson: 1, sters_la: null })
+
+describe('Model 4: adresă UAT', () => {
+  it('CHEI_ADRESA_UAT coincide exact cu cele 43 de chei din șablonul real; fără link și relații externe', async () => {
+    const zip = await JSZip.loadAsync(sablonAdresa())
+    const xml = await zip.file('word/document.xml').async('string')
+    const chei = [...new Set([...xml.matchAll(/\{\{([\w.]+)\}\}/g)].map(m => m[1]))].sort()
+    expect(chei).toHaveLength(43)
+    expect([...CHEI_ADRESA_UAT].sort()).toEqual(chei)
+    expect(xml).not.toContain('link_afisare')
+    for (const f of Object.keys(zip.files).filter(f => f.endsWith('.rels'))) expect(await zip.file(f).async('string')).not.toContain('TargetMode="External"')
+  })
+  it.each([0, 1, 3])('repetaRand %i rânduri, escapare XML și câmp simplu păstrat', async n => {
+    const tr = '<w:tr><w:tc><w:p><w:r><w:t>{{rand.nr}} {{rand.sat}} {{uat}}</w:t></w:r></w:p></w:tc></w:tr>'
+    const xml = repetaRand(`<w:tbl>${tr}</w:tbl>`, Array.from({ length: n }, (_, i) => ({ nr: i + 1, sat: '<&>' })))
+    expect((xml.match(/<w:tr>/g) || []).length).toBe(n || 1)
+    expect(xml.includes('(nicio parcela importata)')).toBe(n === 0)
+    if (n) { expect(xml).toContain('&lt;&amp;&gt;'); expect(xml.match(/\{\{uat\}\}/g)).toHaveLength(n) }
+    expect(xml).not.toContain('{{rand.')
+    const zip = new JSZip()
+    zip.file('word/document.xml', `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tbl><w:tr><w:tc><w:p><w:r><w:t>{{uat}}</w:t></w:r></w:p></w:tc></w:tr>${tr}</w:tbl></w:document>`)
+    const blob = await completeazaDocx(await zip.generateAsync({ type: 'uint8array' }), { uat: 'UAT FICTIV' }, { randuri: { rand: Array.from({ length: n }, (_, i) => ({ nr: i + 1, sat: '<&>' })) }, strict: true })
+    const { xml: complet } = await xmlDin(blob, 'word/document.xml')
+    expect(complet.match(/UAT FICTIV/g)).toHaveLength(n + 1)
+    expect(complet).not.toContain('{{')
+  })
+  it('strict refuză rand.* necompletat, inclusiv cheie de rând necunoscută', async () => {
+    const z = new JSZip()
+    z.file('word/document.xml', '<w:document><w:tbl><w:tr><w:tc><w:p><w:r><w:t>{{rand.necunoscut}}</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:document>')
+    const b = await z.generateAsync({ type: 'uint8array' })
+    await expect(completeazaDocx(b, {}, { strict: true })).rejects.toThrow('rand.necunoscut')
+    await expect(completeazaDocx(b, {}, { randuri: { rand: [{ nr: 1 }] }, strict: true })).rejects.toThrow('rand.necunoscut')
+  })
+  it.each([0, 1, 3])('generează șablonul real cu %i parcele și zip recitibil', async n => {
+    const { blob, hash, campuri } = await genereazaAdresaUat({ proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: Array.from({ length: n }, (_, i) => pTest(n - i)), nrDocument: 'AU-0001', templateArrayBuffer: sablonAdresa() })
+    const { xml } = await xmlDin(blob, 'word/document.xml')
+    expect(hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(xml).not.toContain('{{')
+    expect(campuri.numar_parcele).toBe(n)
+    expect(campuri.zile_sesiune_text).toBe('10, 11 și 12 decembrie 2026')
+    expect(campuri.program_text).toBe('09:00 – 16:00, ziua 2 până la 19:00')
+    expect(campuri.contract_data).toBe('22.01.2025')
+    expect(campuri.termen_confirmare).toBe('01.12.2026')
+    expect(campuri.afisare_ora).toBe('09:30')
+    expect(campuri.reprezentant_gazpet).toBe('Semnatar FICTIV, coordonator')
+    expect(campuri.semnatar_uat).toBe('')
+    if (n) expect(xml).toContain('Sat 1 &lt;&amp;&gt;')
+    if (n === 3) expect(xml.indexOf('CAD-1')).toBeLessThan(xml.indexOf('CAD-3'))
+  })
+  it('parcelele șterse nu intră în număr sau tabel', async () => {
+    const r = await genereazaAdresaUat({ proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: [{ ...pTest(1), sters_la: '2026-11-01T00:00:00Z' }], nrDocument: 'AU-0001', templateArrayBuffer: sablonAdresa() })
+    expect(r.campuri.numar_parcele).toBe(0)
+    expect((await xmlDin(r.blob, 'word/document.xml')).xml).not.toContain('CAD-1')
+  })
+  it('fără parcele este legitim; toate lipsurile obligatorii blochează, împuternicirea inclusă', () => {
+    const complet = { proiect: PR_ADRESA, uat: UAT_ADRESA, parcele: [], nrDocument: 'AU-0001' }
+    expect(verificaDateAdresaUat(complet)).toEqual([])
+    for (const k of ['contract_nr', 'contract_data', 'imputernicire_nr', 'imputernicire_data', 'reprezentant_gazpet_nume', 'contact_email']) {
+      expect(verificaDateAdresaUat({ ...complet, proiect: { ...PR_ADRESA, [k]: '' } }).length, k).toBeGreaterThan(0)
+    }
+    for (const k of ['nume', 'judet', 'afisare_data_start', 'afisare_data_end', 'termen_confirmare']) {
+      expect(verificaDateAdresaUat({ ...complet, uat: { ...UAT_ADRESA, [k]: '' } }).length, k).toBeGreaterThan(0)
+    }
+    expect(verificaDateAdresaUat({ ...complet, nrDocument: null })).toContain('Lipsește nr. documentului')
+    expect(verificaDateAdresaUat({ ...complet, uat: {} })).toContain('Lipsește o zi de sesiune cu program')
+  })
+  it('zile din luni/ani diferiți sunt explicite', () => {
+    expect(zileSesiuneText({ sesiune_zi1: '2026-12-31', sesiune_zi2: '2027-01-02' })).toBe('31 decembrie 2026 și 2 ianuarie 2027')
+  })
+  it('GDPR: omite propoziția fără link și păstrează UAT-ul; link configurat', () => {
+    const text = 'Operator {uat}. Informarea completă: [link]'
+    expect(textGdprPentruUat(text, 'UAT TEST', null)).toBe('Operator UAT TEST.')
+    expect(textGdprPentruUat(text, 'UAT TEST', 'https://example.invalid')).toBe('Operator UAT TEST.\nInformarea completă: https://example.invalid')
+  })
+  it('calea este validată și folosește _v', () => {
+    expect(caleAdresaUat({ proiectCod: 'TEST', uat3: 'TST', nrDocument: 'AU-0001', versiune: 3 })).toBe('TEST/TST/adresa/AU-0001_v3.docx')
+    expect(() => caleAdresaUat({ proiectCod: '../TEST', uat3: 'TST', nrDocument: 'AU-0001' })).toThrow()
+  })
+})
+
+function storageAdresa({ conflict = false, eroareUpdate = false, coliziune = false, eroareUpload = false, eroareListare = false, plafon = 1000 } = {}) {
+  const apeluri = []
+  const fisiere = new Set(['AU-0001_v1.docx', 'AU-0001_v3.docx', 'AU-0002_v90.docx'])
+  let colizionat = false
+  const client = {
+    storage: { from: bucket => ({
+      list: async (folder, { offset, limit }) => {
+        apeluri.push(['list', folder, offset])
+        return eroareListare ? { error: { message: 'Test eroare' } } : { data: [...fisiere].sort().slice(offset, offset + Math.min(limit, plafon)).map(name => ({ name })), error: null }
+      },
+      upload: async (path, blob, opt) => {
+        apeluri.push(['upload', path, opt])
+        if (eroareUpload) return { error: { statusCode: '500' } }
+        if (coliziune && !colizionat) { colizionat = true; return { error: { statusCode: '409' } } }
+        fisiere.add(path.split('/').at(-1)); return { error: null }
+      },
+      remove: () => { throw new Error('Nu se șterg fișierele') },
+    }) },
+    from: tabel => ({ update: patch => {
+      apeluri.push(['update', tabel, patch])
+      const q = { eq: (k, v) => { apeluri.push(['eq', k, v]); return q }, select: async col => {
+        apeluri.push(['select', col])
+        return { data: conflict ? [] : [{ ...UAT_ADRESA, ...patch, versiune: 8 }], error: eroareUpdate ? { message: 'Rețea' } : null }
+      } }
+      return q
+    } }),
+  }
+  return { client, apeluri, fisiere }
+}
+const argAdresa = { blob: new Blob(['DOCX FICTIV']), proiectCod: 'TEST', uat: UAT_ADRESA, nrDocument: 'AU-0001', dataDocument: '2026-11-02' }
+describe('salvarea adresei: versiuni + CAS', () => {
+  it('maxim real pe pagini plafonate; upload fără upsert, apoi CAS cu RETURNING', async () => {
+    const f = storageAdresa({ plafon: 1 })
+    const r = await salveazaAdresaUat(f.client, argAdresa)
+    expect(r.path).toBe('TEST/TST/adresa/AU-0001_v4.docx')
+    expect(r.uat.versiune).toBe(8)
+    expect(f.apeluri.filter(x => x[0] === 'list').map(x => x[2])).toEqual([0, 1, 2, 3])
+    expect(f.apeluri.find(x => x[0] === 'upload')[2].upsert).toBe(false)
+    expect(f.apeluri).toContainEqual(['eq', 'versiune', 7])
+    expect(f.apeluri).toContainEqual(['eq', 'id', 'uat-fictiv'])
+    expect(f.apeluri.find(x => x[0] === 'select')[1]).toContain('adresa_nr')
+    expect(f.apeluri.findIndex(x => x[0] === 'upload')).toBeLessThan(f.apeluri.findIndex(x => x[0] === 'update'))
+  })
+  it('coliziune deterministă: încearcă următoarea versiune cu același AU', async () => {
+    const f = storageAdresa({ coliziune: true })
+    expect((await salveazaAdresaUat(f.client, argAdresa)).path).toBe('TEST/TST/adresa/AU-0001_v5.docx')
+  })
+  it.each([{ conflict: true }, { eroareUpdate: true }])('conflict/eroare de scriere: păstrează fișierul deja încărcat %j', async opt => {
+    const f = storageAdresa(opt)
+    await expect(salveazaAdresaUat(f.client, argAdresa)).rejects.toThrow('Fișierul rămâne în storage')
+    expect(f.fisiere.has('AU-0001_v4.docx')).toBe(true)
+  })
+  it.each([{ eroareListare: true }, { eroareUpload: true }])('eroarea oprește scrierea BD, fără fallback pe răspuns ambiguu %j', async opt => {
+    const f = storageAdresa(opt)
+    await expect(salveazaAdresaUat(f.client, argAdresa)).rejects.toThrow()
+    expect(f.apeluri.some(x => x[0] === 'update')).toBe(false)
+    expect(f.apeluri.filter(x => x[0] === 'upload').length).toBe(opt.eroareListare ? 0 : 1)
+  })
+  it('operație expirată: abandonează înainte de upload și BD', async () => {
+    const f = storageAdresa()
+    await expect(salveazaAdresaUat(f.client, { ...argAdresa, esteCurent: () => false })).rejects.toThrow('abandonată')
+    expect(f.apeluri.some(x => ['upload', 'update'].includes(x[0]))).toBe(false)
+  })
+  it('data civilă Europe/Bucharest la miezul nopții, iarnă și vară', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-11-02T22:30:00Z'))
+      expect(aziBucuresti()).toBe('2026-11-03')
+      vi.setSystemTime(new Date('2026-07-02T21:30:00Z'))
+      expect(aziBucuresti()).toBe('2026-07-03')
+    } finally { vi.useRealTimers() }
   })
 })

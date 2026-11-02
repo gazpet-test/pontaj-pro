@@ -21,6 +21,7 @@
 
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
+import { COL_UAT } from './setari.js'
 
 export const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 export const BUCKET_REDARI = 'redari'
@@ -29,7 +30,7 @@ const EMU_PER_CM = 360000
 const DATA_FIXA_ZIP = new Date(Date.UTC(2026, 0, 1, 0, 0, 0)) // intrări în zip cu dată fixă → același conținut ⇒ același hash
 const OPT_ZIP = { date: DATA_FIXA_ZIP, createFolders: false } // fără intrări de director (ar primi data curentă)
 
-const RX_PLACEHOLDER = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g
+const RX_PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g
 // paragraf „frunză”: nu conține alt <w:p ...> înăuntru (casetele text se tratează prin paragrafele lor interioare)
 const RX_PARAGRAF = /<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g
 // <w:t ...>text</w:t> sau <w:t/>; nu prinde <w:tab/>, <w:tc>, <w:tbl>, <w:tr> (după „<w:t” urmează spațiu, „>” sau „/>”)
@@ -130,6 +131,23 @@ const textParagrafeConcatenate = (xml) => {
   return t
 }
 
+/** Repetă numai rândul cu rand.*, păstrând celelalte celule și placeholder-ele simple. */
+export function repetaRand(xml, randuri) {
+  if (!Array.isArray(randuri)) throw new Error('Lista de parcele trebuie să fie un tablou')
+  return xml.replace(/<w:tr(?:\s[^>]*)?>(?:(?!<w:tr[\s>])[\s\S])*?<\/w:tr>/g, rand => {
+    if (!/\{\{\s*rand\./.test(textParagrafeConcatenate(rand))) return rand
+    if (!randuri.length) return '<w:tr><w:tc><w:tcPr><w:gridSpan w:val="6"/></w:tcPr><w:p><w:r><w:t>(nicio parcela importata)</w:t></w:r></w:p></w:tc></w:tr>'
+    return randuri.map(valori => {
+      const chei = Object.fromEntries(Object.entries(valori).map(([k, v]) => [`rand.${k}`, v]))
+      // Cele simple sunt păstrate literal pentru pasul următor; cheile de rând necunoscute rămân pentru strict.
+      for (const m of textParagrafeConcatenate(rand).matchAll(RX_PLACEHOLDER)) {
+        if (!(m[1] in chei)) chei[m[1]] = `{{${m[1]}}}`
+      }
+      return rand.replace(RX_PARAGRAF, p => completeazaParagraf(p, chei, new Set()))
+    }).join('')
+  })
+}
+
 /**
  * Completează un șablon DOCX: {{camp}} → campuri[camp], în document + antete + subsoluri.
  * @param {ArrayBuffer|Uint8Array|Blob} templateArrayBuffer
@@ -139,7 +157,7 @@ const textParagrafeConcatenate = (xml) => {
  *   strict = true → Error dacă un placeholder nu are cheie în `campuri` sau rămâne necompletat în XML (altfel → șir gol).
  * @returns {Promise<Blob>} DOCX completat
  */
-export async function completeazaDocx(templateArrayBuffer, campuri = {}, { imagini, strict = false } = {}) {
+export async function completeazaDocx(templateArrayBuffer, campuri = {}, { imagini, randuri, strict = false } = {}) {
   const sursa = templateArrayBuffer instanceof Blob ? await templateArrayBuffer.arrayBuffer() : templateArrayBuffer
   const zip = await JSZip.loadAsync(sursa, { createFolders: false })
   if (!zip.file('word/document.xml')) throw new Error('Fișierul nu este un DOCX valid (lipsește word/document.xml)')
@@ -153,7 +171,8 @@ export async function completeazaDocx(templateArrayBuffer, campuri = {}, { imagi
 
   for (const partPath of parti) {
     const f = zip.file(partPath)
-    const xml = await f.async('string')
+    const original = await f.async('string')
+    const xml = randuri?.rand ? repetaRand(original, randuri.rand) : original
     if (!xml.includes('{{')) continue
     let rId = null
     if (qrDataUrl && /\{\{\s*qr\s*\}\}/.test(textParagrafeConcatenate(xml))) {
@@ -255,7 +274,13 @@ export const adresaDetinator = (c) => !c ? '' :
   [c.adresa_strada, c.adresa_sat, c.adresa_comuna, c.adresa_judet, c.cod_postal].map(v => plin(v) ? String(v).trim() : '').filter(Boolean).join(', ')
 
 /** Textul GDPR din proiect cu marcajul `{uat}` / `[UAT]` înlocuit cu numele UAT-ului. */
-export const textGdprPentruUat = (text, numeUat) => String(text ?? '').replace(/\{uat\}|\[UAT\]/gi, numeUat ?? '')
+export const textGdprPentruUat = (text, numeUat, linkInformare) => {
+  const baza = String(text ?? '').replace(/\{uat\}|\[UAT\]/gi, () => numeUat ?? '')
+  // Fără link configurat, propoziția juridică se omite. Restul textului rămâne intact.
+  if (linkInformare === undefined) return baza
+  const fara = baza.replace(/Informarea completă:[ \t]*(?:\[[^\]]*\]|https?:\/\/[^\s]+)[.]?/gi, '').trim()
+  return linkInformare ? `${fara}\nInformarea completă: ${linkInformare}` : fara
+}
 
 const contactDet = (detinator, contactDetinator) => contactDetinator ?? detinator?.contact ?? detinator?.red_detinatori_contact ?? null
 
@@ -336,7 +361,7 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
     contact_nume: c.nume ?? pr.contact_nume ?? '',
     contact_telefon: c.telefon ?? pr.contact_telefon ?? '',
     contact_email: c.email ?? pr.contact_email ?? '',
-    text_gdpr: textGdprPentruUat(pr.text_gdpr, u.nume),
+    text_gdpr: textGdprPentruUat(pr.text_gdpr, u.nume, pr.link_informare_gdpr ?? null),
     reprezentant_tgz: semnatarTgz,
     reprezentant_tgz_telefon: pr.reprezentant_tgz_telefon ?? '',
     semnatar_gazpet: semnatarGazpet,
@@ -417,20 +442,24 @@ const MAX_PAGINI_LISTARE = 100 // plafon de siguranță: 100.000 de obiecte înt
 
 /**
  * Cea mai mare versiune `{nrDocument}-v{n}.docx` existentă în folderul parcelei (listare storage PAGINATĂ, limit + offset,
- * până la o pagină incompletă — maximul e real și peste 1000 de obiecte); null dacă vreo pagină eșuează.
+ * până la pagina goală — maximul e real și peste 1000 de obiecte); null dacă vreo pagină eșuează.
  * Fișierele orfane (încărcate, dar nelegate de rând) contează — așa nu mai bâjbâim versiune cu versiune.
  */
-export async function versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument }, { pagina = PAGINA_LISTARE_STORAGE } = {}) {
+export async function versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela, nrDocument, adresa = false }, { pagina = PAGINA_LISTARE_STORAGE, esteCurent = () => true } = {}) {
   const folder = `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/${segment(idParcela, 'id_parcela')}`
   const nr = segment(nrDocument, 'nr_document')
-  const rx = new RegExp(`^${nr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-v(\\d+)\\.docx$`)
+  const rx = new RegExp(`^${nr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}${adresa ? '_' : '-'}v(\\d+)\\.docx$`)
   try {
     let max = 0
+    let offset = 0
     for (let p = 0; p < MAX_PAGINI_LISTARE; p++) {
-      const { data, error } = await supabase.storage.from(BUCKET_REDARI).list(folder, { limit: pagina, offset: p * pagina })
+      if (!esteCurent()) return null
+      const { data, error } = await supabase.storage.from(BUCKET_REDARI).list(folder, { limit: pagina, offset, sortBy: { column: 'name', order: 'asc' } })
+      if (!esteCurent()) return null
       if (error || !Array.isArray(data)) return null
       for (const f of data) { const m = rx.exec(f?.name || ''); if (m) max = Math.max(max, parseInt(m[1], 10)) }
-      if (data.length < pagina) return max // pagină incompletă = ultima
+      if (data.length === 0) return max // continuăm și când serverul plafonează pagina sub limita cerută
+      offset += data.length
     }
     return null // prea multe pagini: nu ne bazăm pe un maxim parțial → cad pe încercări succesive
   } catch { return null }
@@ -465,4 +494,116 @@ export async function reincarcaConvocator(supabase, { convocareId, blob, hash, p
   }
   const r = await leagaDeRand(supabase, { convocareId, path, hash })
   return { ...r, versiune }
+}
+
+// Adresa UAT (Model 4): lista este comparată cu șablonul real în docx.test.js.
+export const CHEI_ADRESA_UAT = [
+  'contract_nr', 'contract_data', 'proiect_denumire', 'uat', 'judet', 'nr_document', 'data',
+  'imputernicire_nr', 'imputernicire_data', 'zi1', 'zi2', 'zi3', 'program1', 'program2', 'program3',
+  'sate_zi1', 'sate_zi2', 'sate_zi3', 'afisare_data_start', 'afisare_data_end', 'afisare_pv_nr',
+  'termen_confirmare', 'contact_nume', 'contact_telefon', 'contact_email', 'reprezentant_tgz',
+  'reprezentant_tgz_telefon', 'reprezentant_gazpet', 'zile_sesiune_text', 'program_text',
+  'rand.nr', 'rand.sat', 'rand.tarla', 'rand.nr_cadastral', 'rand.poz_hg', 'rand.tronson',
+  'reprezentant_uat_nume', 'reprezentant_uat_functie', 'reprezentant_gazpet_nume', 'afisare_ora',
+  'numar_parcele', 'semnatar_uat', 'semnatar_gazpet',
+]
+
+export function verificaDateAdresaUat({ proiect = {}, uat = {}, nrDocument } = {}) {
+  const lipsuri = []
+  const cere = (v, mesaj) => { if (!plin(v)) lipsuri.push(mesaj) }
+  cere(nrDocument, 'Lipsește nr. documentului')
+  cere(proiect.contract_nr, 'Lipsește nr. contractului')
+  cere(proiect.contract_data, 'Lipsește data contractului')
+  cere(proiect.imputernicire_nr, 'Lipsește nr. împuternicirii Transgaz')
+  cere(proiect.imputernicire_data, 'Lipsește data împuternicirii Transgaz')
+  if (![1, 2, 3].some(i => plin(uat[`sesiune_zi${i}`]) && plin(uat[`program_zi${i}`]))) lipsuri.push('Lipsește o zi de sesiune cu program')
+  cere(uat.afisare_data_start, 'Lipsește data începerii afișării')
+  cere(uat.afisare_data_end, 'Lipsește data încheierii afișării')
+  cere(uat.termen_confirmare, 'Lipsește termenul de confirmare')
+  cere(proiect.reprezentant_gazpet_nume, 'Lipsește reprezentantul Gazpet')
+  if (!['contact_nume', 'contact_telefon', 'contact_email'].some(k => plin(proiect[k]))) lipsuri.push('Lipsește contactul Gazpet (nume, telefon sau e-mail)')
+  cere(uat.nume, 'Lipsește numele UAT-ului')
+  cere(uat.judet, 'Lipsește județul UAT-ului')
+  return lipsuri
+}
+
+/** Data civilă a documentului în România, inclusiv la miezul nopții UTC. */
+export function aziBucuresti() {
+  const parti = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
+  const p = Object.fromEntries(parti.map(x => [x.type, x.value]))
+  return `${p.year}-${p.month}-${p.day}`
+}
+
+export function zileSesiuneText(uat) {
+  const zile = [1, 2, 3].map(i => uat[`sesiune_zi${i}`]).filter(Boolean)
+  if (!zile.length) return ''
+  const luni = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
+  const aceeasiLuna = zile.every(z => z.slice(0, 7) === zile[0].slice(0, 7))
+  const texte = zile.map(z => `${Number(z.slice(8, 10))}${aceeasiLuna ? '' : ` ${luni[Number(z.slice(5, 7)) - 1]} ${z.slice(0, 4)}`}`)
+  const lista = texte.length > 1 ? `${texte.slice(0, -1).join(', ')} și ${texte.at(-1)}` : texte[0]
+  return aceeasiLuna ? `${lista} ${luni[Number(zile[0].slice(5, 7)) - 1]} ${zile[0].slice(0, 4)}` : lista
+}
+
+export async function genereazaAdresaUat({ proiect = {}, uat = {}, parcele = [], nrDocument, templateArrayBuffer, strict = true, dataDocument = aziBucuresti() }) {
+  const lipsuri = verificaDateAdresaUat({ proiect, uat, nrDocument })
+  if (strict && lipsuri.length) throw new Error(lipsuri.join('; '))
+  const active = parcele.filter(p => p.sters_la == null).slice().sort((a, b) => a.id_parcela.localeCompare(b.id_parcela))
+  const campuri = Object.fromEntries(CHEI_ADRESA_UAT.filter(k => !k.startsWith('rand.')).map(k => [k, '']))
+  Object.assign(campuri, {
+    contract_nr: proiect.contract_nr ?? '', contract_data: formatDataRo(proiect.contract_data), proiect_denumire: proiect.denumire ?? '',
+    uat: uat.nume ?? '', judet: uat.judet ?? '', nr_document: nrDocument ?? '', data: formatDataRo(dataDocument),
+    imputernicire_nr: proiect.imputernicire_nr ?? '', imputernicire_data: formatDataRo(proiect.imputernicire_data),
+    afisare_data_start: formatDataRo(uat.afisare_data_start), afisare_data_end: formatDataRo(uat.afisare_data_end), afisare_pv_nr: uat.afisare_pv_nr ?? '',
+    termen_confirmare: formatDataRo(uat.termen_confirmare), afisare_ora: uat.afisare_ora ?? '',
+    reprezentant_gazpet: [proiect.reprezentant_gazpet_nume, proiect.reprezentant_gazpet_functie].filter(Boolean).join(', '),
+    reprezentant_gazpet_nume: proiect.reprezentant_gazpet_nume ?? '', reprezentant_tgz: proiect.reprezentant_tgz_nume ?? '',
+    reprezentant_tgz_telefon: proiect.reprezentant_tgz_telefon ?? '', reprezentant_uat_nume: uat.reprezentant_uat_nume ?? '',
+    reprezentant_uat_functie: uat.reprezentant_uat_functie ?? '', semnatar_uat: uat.reprezentant_uat_nume ?? '', semnatar_gazpet: proiect.reprezentant_gazpet_nume ?? '',
+    contact_nume: proiect.contact_nume ?? '', contact_telefon: proiect.contact_telefon ?? '', contact_email: proiect.contact_email ?? '',
+    numar_parcele: active.length, zile_sesiune_text: zileSesiuneText(uat),
+  })
+  const sesiuni = [1, 2, 3].filter(i => uat[`sesiune_zi${i}`])
+  const prima = sesiuni[0]
+  campuri.program_text = prima ? uat[`program_zi${prima}`] ?? '' : ''
+  for (const i of [1, 2, 3]) {
+    campuri[`zi${i}`] = formatDataRo(uat[`sesiune_zi${i}`])
+    campuri[`program${i}`] = uat[`program_zi${i}`] ?? ''
+    campuri[`sate_zi${i}`] = uat[`sate_zi${i}`] ?? ''
+    if (i !== prima && sesiuni.includes(i) && uat[`program_zi${i}`] && uat[`program_zi${i}`] !== uat[`program_zi${prima}`]) {
+      // Programul poate avea o descriere liberă; nu inventăm o oră dacă nu este un interval.
+      const final = /(?:–|—|-)[ \t]*(\d{2}:\d{2})(?:[ \t]|$)/.exec(uat[`program_zi${i}`])?.[1]
+      campuri.program_text += final ? `, ziua ${i} până la ${final}` : `, ziua ${i}: ${uat[`program_zi${i}`]}`
+    }
+  }
+  const rand = active.map((p, index) => ({ nr: index + 1, sat: p.sat ?? '', tarla: p.tarla ?? '', nr_cadastral: p.nr_cadastral ?? '', poz_hg: p.poz_hg ?? '', tronson: p.tronson ?? '' }))
+  const blob = await completeazaDocx(templateArrayBuffer, campuri, { randuri: { rand }, strict })
+  return { blob, hash: await hashBlob(blob), campuri }
+}
+
+export const caleAdresaUat = ({ proiectCod, uat3, nrDocument, versiune = 1 }) => {
+  if (!Number.isInteger(versiune) || versiune < 1) throw new Error('Versiune invalidă pentru adresă')
+  return `${segment(proiectCod, 'proiect_cod')}/${segment(uat3, 'uat3')}/adresa/${segment(nrDocument, 'nr_document')}_v${versiune}.docx`
+}
+
+/** Upload imutabil; o eroare ambiguă sau un conflict CAS păstrează fișierul, pentru reconciliere. */
+export async function salveazaAdresaUat(supabase, { blob, proiectCod, uat, nrDocument, dataDocument, colUat = COL_UAT, esteCurent = () => true }) {
+  const cheie = { proiectCod, uat3: uat.uat3, nrDocument, idParcela: 'adresa', adresa: true }
+  caleAdresaUat(cheie)
+  const max = await versiuneMaximaInBucket(supabase, cheie, { esteCurent })
+  if (!esteCurent()) throw new Error('Operație abandonată: UAT-ul s-a schimbat')
+  if (max === null) throw new Error('Nu pot lista versiunile adresei; reîncarcă și verifică starea înainte de reluare')
+  let versiune = max + 1
+  let path
+  for (let i = 0; i < MAX_INCERCARI_VERSIUNE; i++, versiune++) {
+    if (!esteCurent()) throw new Error('Operație abandonată: UAT-ul s-a schimbat')
+    path = caleAdresaUat({ ...cheie, versiune })
+    const { error } = await incarca(supabase, path, blob)
+    if (!error) break
+    if (!eExistaDeja(error) || i === MAX_INCERCARI_VERSIUNE - 1) throw new Error('Încărcarea adresei a eșuat; verifică starea înainte de reluare. ' + (error.message || 'Storage indisponibil'))
+  }
+  if (!esteCurent()) throw new Error(`Operație abandonată; fișierul rămâne în storage (${path})`)
+  const { data, error } = await supabase.from('red_uat').update({ adresa_nr: nrDocument, adresa_data: dataDocument })
+    .eq('id', uat.id).eq('versiune', uat.versiune).select(colUat)
+  if (error || data?.length !== 1) throw new Error(`Fișierul rămâne în storage (${path}), dar adresa nu a fost salvată. Reîncarcă UAT-ul și verifică starea înainte de reluare.`)
+  return { path, versiune, uat: data[0] }
 }

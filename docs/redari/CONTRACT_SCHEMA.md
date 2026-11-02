@@ -52,6 +52,12 @@ convocari, procese_verbale. Politicile de DELETE lipsesc pe toate tabelele (nu e
 nici UPDATE pentru nimeni (REVOKE UPDATE, DELETE, TRUNCATE de la authenticated, anon, service_role, PUBLIC).
 
 ### red_proiecte
+**Faza 2, felia 2 — 20261128a (pregătită, neaplicată aici):** `executie_proiect_id bigint NULL REFERENCES public.executie_proiecte(id)` (tipul PK-ului din Execuție);
+index unic parțial `red_proiecte_executie_uq WHERE executie_proiect_id IS NOT NULL` (un montaj are cel mult un proiect Redări).
+`link_informare_gdpr text NULL`: CHECK NULL sau prefix exact `https://` și lungime ≤ 300. Fără politici sau GRANT-uri noi.
+Contractul rămâne copiat în Redări; preluarea din Execuție este opțională, numai în formular, urmată de salvare explicită cu CAS.
+Lipsa accesului Execuție nu blochează citirea copiilor Redări. Linkul gol omite propoziția „Informarea completă” din convocator.
+
 `id, cod text UNIQUE NOT NULL` (ex. `LOT1-PRUNISOR-JUPA`), `denumire, beneficiar, contract_nr, contract_data date,
 imputernicire_nr, imputernicire_data date, reprezentant_tgz_nume, reprezentant_tgz_functie, reprezentant_tgz_telefon` **[r3]**, `reprezentant_gazpet_nume,
 reprezentant_gazpet_functie, contact_nume, contact_telefon, contact_email` (ex. redari@gazpet.ro), `text_gdpr text,

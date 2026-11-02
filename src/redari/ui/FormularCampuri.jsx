@@ -2,7 +2,7 @@
 import React from 'react'
 import { G, S, Camp, fmtDate } from './comune.jsx'
 
-const TIP_INPUT = { date: 'date', email: 'email', tel: 'tel', ora: 'text', text: 'text' }
+const TIP_INPUT = { date: 'date', email: 'email', tel: 'tel', ora: 'text', text: 'text', url: 'url' }
 
 // blocat = editabil, dar înghețat cât rulează o salvare (Jakarinos f2 r2 P2: nimic tastat în timpul cererii nu se poate pierde)
 export default function FormularCampuri({ campuri, form, onChange, doarCitire, blocat = false, schimbate = [] }) {

@@ -14,6 +14,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
+import LegaturaExecutie from './redari/ui/LegaturaExecutie.jsx'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
@@ -325,6 +326,7 @@ function ProiectContextView({ proiectId, tab, onBack, canEdit }) {
             )}
           </div>
         )}
+        <LegaturaExecutie proiectId={proiectId} />
       </div>
 
       {/* Tab content cu proiectId prop */}

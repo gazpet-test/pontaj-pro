@@ -11,8 +11,7 @@
 //  4. caută text variabil rămas în afara placeholder-elor („____”, „zz.ll.aaaa”, „[...]”, „Nume Prenume”, „(exemplu)”) și îl
 //     împarte în „intenționat” (linii de semnătură olografă, bife completate de mână de destinatar — lista INTENTIONATE)
 //     și „de corectat”;
-//  5. semnalează placeholder-ele de rând-șablon {{rand.camp}} (tabel cu rânduri repetate): docx.js NU le cunoaște încă
-//     (RX_PLACEHOLDER nu acceptă punctul) — le tratează viitoarea funcție repetaRand (SABLOANE.md).
+//  5. listează placeholder-ele de rând-șablon {{rand.camp}}, procesate de repetaRand înaintea câmpurilor simple.
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +21,7 @@ const RADACINA = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DIR = resolve(RADACINA, 'public/redari/sabloane')
 const TOATE = process.argv.includes('--toate')
 
-// aceleași expresii ca în src/redari/docx.js (RX_PLACEHOLDER de acolo nu acceptă „.”; aici îl acceptăm ca să vedem rand.*)
+// aceleași expresii ca în src/redari/docx.js, inclusiv punctul din rand.*
 const RX_PLACEHOLDER = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g
 const RX_PARAGRAF = /<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g
 const RX_WT = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:t(?:\s[^>]*)?\/>/g
@@ -107,7 +106,8 @@ for (const f of fisiere) {
   const eroriResturi = r.resturi.filter(x => !x.intentionat)
   // relații externe: hyperlink-urile (deschise doar la clic) se acceptă; orice altceva (imagine/OLE/etc. externă) e problemă
   const externeRele = r.externe.filter(x => x.tip !== 'hyperlink')
-  const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0
+  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 43 && !nume.includes('link_afisare') && r.externe.length === 0)
+  const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0 && adresaCorecta
   if (!ok) probleme += 1
   console.log(`## ${f} — ${ok ? 'OK' : 'PROBLEME'}`)
   console.log(`- părți citite: ${r.parti.join(', ')}; paragrafe cu text: ${r.paragrafe}`)
@@ -116,7 +116,7 @@ for (const f of fisiere) {
   if (r.qrSingur !== null) console.log(`- {{qr}} singur în paragraf: ${r.qrSingur ? 'da' : 'NU — nu devine imagine'}`)
   console.log(`- relații externe (.rels TargetMode=External): ${r.externe.length ? r.externe.map(x => `${x.tip}→${scurt(x.target, 60)}`).join('; ') : 'niciuna'}`)
   for (const x of externeRele) console.log(`- EXTERN NEPERMIS: ${x.tip} „${x.target}” în ${x.rel}`)
-  if (rand.length) console.log(`- rând-șablon (de repetat cu viitoarea \`repetaRand\`, docx.js nu le cunoaște azi): ${rand.map(n => `\`{{${n}}}\``).join(' ')}`)
+  if (rand.length) console.log(`- rând-șablon (repetat de \`repetaRand\` înaintea câmpurilor simple): ${rand.map(n => `\`{{${n}}}\``).join(' ')}`)
   for (const x of r.rupte) console.log(`- RUPT: {{${x.nume}}} în „${scurt(x.text)}”`)
   const intent = r.resturi.filter(x => x.intentionat)
   if (intent.length) {
