@@ -546,3 +546,83 @@ inclusiv regresiile 4b (asteptarea veche 'felia 4e' trebuie adaptata de harness)
 DRY cere identitati owner/editor/viewer existente si contor PVC-T5 nefolosit; nu modifica drepturi.
 Testele se ruleaza numai in tranzactia de proba a migrarii, fara commit.
 Limitele de concurenta si acces Storage viewer sunt descrise in CONTRACT_SCHEMA.md.
+### 4.1j Faza 2, felia 5 - Sesiune tableta si Dashboard
+
+Sesiune: select UAT si zi (implicit azi / urmatoarea / ultima), cautare fara
+majuscule/diacritice, doar nesemnate, rezumat pe intreaga lista UAT, carduri
+intr-o coloana, controale de minimum 44px si font 16px. Viewer citeste;
+admin/editor pot marca Prezent si deschide PV A. Prezenta este pe detinator,
+nu pe ziua selectata: azi inseamna ziua inregistrarii, ziua selectata este
+zi_sesiune_aleasa. Fara zile configurate, Prezent este indisponibil.
+ModalPv primeste dinSesiune: bifa Semnat la sesiune initial activa si sediu
+propus numai in formular cand constatare_mod lipseste; operatorul salveaza.
+
+Dashboard este primul tab; Registrul ramane ecranul initial existent.
+Tronsoane / PV C este dupa Fisa parcelei. Dashboard este doar citire pentru
+toate rolurile: UAT + TOTAL (perechi parcela/detinator), apoi tronsoane
+(parcele). Totalul UAT nu aduna total_uat repetat; procentul TOTAL este
+ponderat. Inchise = PV_A_SEMNAT + PV_B_CONSTATARE, conform vederii existente.
+UAT-urile fara perechi nu sunt returnate de vedere si nu pot fi inventate
+din acea sursa; sursa goala produce TOTAL zero. Testul acopera si UAT zero.
+
+Surse: red_uat, red_v_stare_parcela, red_raspunsuri,
+red_v_centralizator_uat, red_v_tronson; clientul Supabase existent, RLS existent.
+Citiri keyset cu range(0,499) pana la pagina goala; prezente in loturi de 100
+ID-uri. Centralizator: cursor compus (uat_id,stare); tronsoane: parcela_id;
+sesiune: detinator_id; raspunsuri/UAT: id. Paginile scurte nu opresc citirea.
+Diferenta fata de brief: schema din 20261126a, linia 213, declara data
+TIMESTAMPTZ, nu DATE. Prezentele se citesc pe [miezul noptii local, urmatorul
+miez local), Europe/Bucharest, fara offset fix; teste DST 23/25 ore.
+Payload-ul randPrezenta pastreaza data: azi cerut de brief.
+
+Nu exista trimiteri mail/SMS, migrari, modificari de schema/RPC/politici sau
+biblioteci noi. INSERT-ul de prezenta este o singura scriere; recitire chiar
+la eroare, fara retry automat. Daca recitirea esueaza, lista se invalideaza
+si actiunile cer reincarcare. Nu exista unicitate noua: doi operatori pot
+inregistra simultan raspunsuri de prezenta; UI previne dublul click local,
+nu garanteaza unicitate globala. Nu este un snapshot tranzactional intre
+pagini sau intre cele doua vederi ale Dashboard-ului.
+
+Fisiere: src/redari/sesiune.js, sesiune.test.js,
+src/redari/ui/SesiuneEcran.jsx, DashboardEcran.jsx,
+ModalPv.jsx (doar comportamentul dinSesiune), src/Redari.jsx (taburi/montare),
+docs/redari/README.md (aceasta sectiune si raport).
+
+Raport L01-L25 (referinte la functii/teste; testele sunt SCRISE, NERULATE):
+
+| Regula | Aplicare / dovada |
+|---|---|
+| L01 | SesiuneEcran.ListaSesiune.prezent: ocupat ref + setLucru inainte de await. Fara UPDATE nou; fara lock/garantie globala pentru prezenta. |
+| L02 | prezent: un singur INSERT; recitirea nu este o a doua scriere de business. |
+| L03 | SesiuneEcran si DashboardEcran: generatie curenta inainte de aplicarea rezultatelor; fara cache/derivat persistent nou. |
+| L04 | n/a - fara bani, cantitati sau trimiteri. |
+| L05 | prezent: recitire inclusiv la eroare/timeout, fara INSERT repetat; rezultat necunoscut afisat, reincarcare obligatorie daca reconcilierea esueaza. |
+| L06 | n/a - fara lock/RPC nou. |
+| L07 | SesiuneEcran: poateScrie admin/editor in randare si handler; query-uri prin clientul autentificat existent, vederi invoker/RLS existente, fara drepturi noi. Verificare RLS runtime nerulata. |
+| L08 | randPrezenta nu trimite autor/created_by; identitatea ramane DEFAULT auth.uid() existent. |
+| L09 | SesiuneEcran.citeste: proiect_id + uat_id; ID-urile de prezenta provin numai din vederea filtrata; Dashboard filtreaza ambele vederi pe proiect_id. |
+| L10 | n/a - fara secrete, date de contact sau autentificare noua; erorile triggerului raman vizibile conform brief. |
+| L11 | n/a - fara extragere de dovezi. |
+| L12 | Ambele pagini: citire pana la gol, refuz lista invalida, invalidare afisaj la esec; nu se afiseaza partial ca succes. |
+| L13 | sesiune.js normal: eliminare numai semne combinante Unicode; sesiune.test.js cazuri pozitive/negative de cautare. Fara parser extern. |
+| L14 | n/a - fara migrari. |
+| L15 | n/a - fara schema/politici/RPC modificate. |
+| L16 | n/a - fara dedup/cheie noua; prezenta nu primeste garantie de unicitate globala. |
+| L17 | aziBucuresti si formatDataRo existente; intervalZiBucuresti foloseste fusul IANA; teste explicite iarna, trecere vara si iarna. |
+| L18 | pagini verifica error si Array.isArray inainte de gol; agregaCentralizator refuza numar invalid; eroarea vizibila nu devine zero rezultate. |
+| L19 | sesiune.js pentru filtre/rezumat/agregari; etichete STARI/TagStare existente; tip_pv deja clasificat de red_v_tronson, fara recalculare in UI. |
+| L20 | sesiune.test.js: zile lipsa/goluri, inainte/in/dupa interval, cautare cu si fara diacritice, semnat vs generat vs lipsa PV, impartire la zero, numar invalid. |
+| L21 | n/a - fara AI. |
+| L22 | n/a - fara apeluri platite. |
+| L23 | SesiuneEcran.pagini si DashboardEcran.pagini: cursor unic simplu/compus, range 500 pana la gol, garda progres; loturi IN de 100. Filtrarea locala este ceruta explicit de brief. |
+| L24 | Ambele ecrane: generatie useRef invalidata la cleanup; bucle oprite; ListaSesiune key proiect/UAT; reload explicit dupa actiune/PV; timer zi Bucuresti cu cleanup. |
+| L25 | sesiune.test.js: asteptari literale independente, fixture-uri sintetice, total ponderat 2/4=50%, zero si DST. Fara pretentie de verificare RLS/PostgREST/concurenta executata. |
+
+Verificat aici numai static: coloane si semantica vederilor din migrarile
+existente, legarea taburilor/props, ASCII pentru fisierele noi si UTF-8 fara
+BOM. Nu s-au rulat npm/npx/node/vitest, build, browser, PostgREST sau teste
+RLS. Claude trebuie sa ruleze sesiune.test.js, regresiile existente, build
+si fluxul real editor/viewer, paginare peste 500/1000, cursor compus, schimbare
+UAT/proiect in timpul cererii, eroare trigger si reconciliere timeout.
+Skill-ul Supabase nu a putut fi citit: acces refuzat de mediul local.
+Nu s-au rulat Git/commit/push, acces la credentiale, BD sau deploy.
