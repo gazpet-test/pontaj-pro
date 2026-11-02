@@ -331,6 +331,67 @@ Lectii L01-L25 (referintele de mai jos sunt la cod/teste scrise, nu rezultate PA
 | L24 | n/a - fara flux UI nou. |
 | L25 | Antet din XLSX real in testul parserului, asteptari explicite; DRY authenticated non-owner si FK/CHECK reale; executia delegata lui Claude, NERULATA aici. |
 
+### 4.1g Faza 2, felia 4b - PV A per detinator (02.11.2026)
+
+Pregatit, NEAPLICAT: migrare 20261129b_redari_pv_creare (versiune 20261129120100),
+revenire armata, DRY, pv.js/pv.test.js, ModalPv.jsx; FisaParcela numai import, buton si montare.
+SABLOANE 2.2 descrie cele 54 de chei, bifele Unicode prin escape JS si confirmarea propunerii.
+RPC A/B: parcela FOR UPDATE, detinator FOR UPDATE pentru A, numar+INSERT atomic;
+C refuzat cu mesajul felia 4e. Indexurile partiale red_pv_a_activ_uq/red_pv_b_activ_uq
+impun unicitatea si pentru INSERT/UPDATE direct, nu numai prin RPC. Politicile raman intacte.
+Revenirea elimina numai functia/indexurile si evidenta versiunii, pastrand toate PV-urile.
+
+Formular cu drepturi admin/editor, viewer citire, CAS created_at + valorile vechi ale
+cheilor modificate, NULL prin is(). PV si comisia parcelei au butoane separate de salvare
+pentru a evita un succes aparent atomic intre doua randuri. Nesalvatele blocheaza generarea.
+DOCX: cinci surse proaspete, confirmare la schimbare, upload imutabil versionat, reverificare
+surse dupa upload si dupa CAS al caii, un mesaj final. Nicio tranzitie de stare sau trimitere.
+Reconcilierea crearii dupa eroare citeste PV-ul existent; nu repeta automat RPC-ul.
+
+Verificat efectiv: citire lectii/model/schema, extractie XML din pv_a.docx prin .NET
+(54 chei distincte), compararea statica a multimii cu CHEI_PV_A, control ASCII/BOM pentru
+fisierele noi. Fisierele existente isi pastreaza diacriticele; toate adaugarile sunt ASCII.
+Teste SCRISE, NERULATE: pv.test.js (chei reale, 8 texte deviz, fiecare lipsa, generare reala,
+bife, XML/newline, cale, coliziuni, eroare ambigua); DRY cu identitati reale owner/editor/viewer,
+SET LOCAL ROLE authenticated/anon, fixture-uri fictive, numere, duplicate, FK, jurnal.
+Nu s-au rulat npm/npx/node/vitest, DRY, build, Postgres, PostgREST, Storage sau browser.
+Claude trebuie sa verifice apply -> revenire -> re-apply si concurenta in doua sesiuni.
+Fara Git/commit/push, credentale, BD sau deploy. Nu s-au creat fisiere in afara listei.
+
+Limite: citirile multiple din browser nu formeaza un snapshot tranzactional; verificarile
+detecteaza modificari observabile, nu garanteaza absenta unei schimbari imediat dupa ultima
+citire. Nu se pretinde atomicitate intre Storage si BD. Fisierul imutabil ramane in bucket
+la conflict/eroare de legare; se reincarca starea inainte de reluare. Teste React noi nu au
+fost adaugate: lista de fisiere permite numai pv.test.js; fluxul UI necesita review/browser.
+
+| Regula | Respectare / dovada (testele sunt scrise, nu PASS) |
+| --- | --- |
+| L01 | fn_red_pv_creeaza: lock parcela inainte de duplicate; ModalPv cas(): created_at + valori vechi + select, zero randuri conflict. |
+| L02 | Numar si INSERT in acelasi RPC; jurnal trigger existent; salvarea comisiei este actiune distincta, explicit etichetata. |
+| L03 | ModalPv genereaza: surse proaspete, verificare dupa upload, CAS continut PV si cale, verificare finala; limita snapshot documentata. |
+| L04 | n/a - brief cere refuz explicit la al doilea apel, fara cantitati/bani/mail; duplicatele sunt serialize sub lock. |
+| L05 | ModalPv creeaza reciteste dupa eroare; salveazaPv nu reincearca 5xx; obiectele nu se sterg la eroare. |
+| L06 | RPC: comentariu parcela -> detinator -> contor; migrare/revenire: lock red_procese_verbale. |
+| L07 | RPC verifica nivel pe server; indexurile partiale acopera si scriere directa; RLS/triggerele existente nu se modifica. |
+| L08 | RPC refuza auth.uid NULL si foloseste fn_red_nivel; GUC JWT numai in harness pg_temp existent ca model. |
+| L09 | Modul redari verificat server-side prin fn_red_nivel (acces global pe modul); detinator/parcela/UAT/proiect corelate explicit. |
+| L10 | Fara acte/secrete noi; act_identitate/act_doveditor goale; fixture fictiv. |
+| L11 | n/a - devizul produce numai propuneri etichetate, nu dovezi automate. |
+| L12 | CHEI_PV_A comparat cu cele 54 chei independente din DOCX; completeazaDocx strict refuza necunoscute. |
+| L13 | Cale validata prin caleAdresaUat; teste segmente invalide; listarea reutilizeaza regex ancorat din docx.js. |
+| L14 | Runner tranzactie unica + garda pre/post; indexurile valideaza datele sub lock; revenire pastreaza datele; ciclul real NERULAT. |
+| L15 | Amprenta politici calculata in pre si comparata in post; secdef/search_path/ACL verificate; nu se pretinde audit tranzitiv nou. |
+| L16 | Doua indexuri UNIQUE partiale pe cheia completa a PV activ; hashBlob pe continut; test hash si duplicate DRY. |
+| L17 | Data SQL Europe/Bucharest; formatDataRo/formatNumarRo existente; fara conversie Date din YYYY-MM-DD. |
+| L18 | Erori citire/listare separate de gol; NULL plan/foto nu devine NU; true explicit pentru bife; 0 randuri CAS = conflict. |
+| L19 | calePv reutilizeaza validarea existenta; salveazaPv reutilizeaza versiuneMaximaInBucket; validator comun UI/generator. |
+| L20 | pv.test.js cai valide/invalide, strict, NULL/false; DRY admin/editor succes si viewer/anon/FK/duplicat/C refuz. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | Query PV filtrat pe cheia exacta cu maybeSingle (duplicatele dau eroare); Storage listat pana la pagina goala prin helper existent. |
+| L24 | ModalPv generatie useRef + cleanup + key parcela/detinator/proiect; ocupat sincron inainte de await; updatere tolerante la null. |
+| L25 | Sablon real si expected explicite; DRY rol authenticated/anon si CHECK/FK reale; runtime/concurenta/React neexecutate, declarate ca limite. |
+
 ### 4.2 NU e făcut (faza următoare, după brief §8 „apoi”)
 - PV A / B / C (generare din `pv_a` / `pv_b` / `pv_c.docx`, numerotare PVA/PVB/PVC, stările trimis/semnat, upload scan semnat) — doar schema există.
 - Evidența ulterioară a afișării și semnării PV de afișare; documentul Model 4 se generează în 4.1c.

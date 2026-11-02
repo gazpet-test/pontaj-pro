@@ -2,6 +2,7 @@
 // (convocări, răspunsuri, PV, jurnal), fișiere cu link semnat, editare câmpuri de bază, soft delete cu motiv.
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { supabase } from '../../lib/supabase.js'
+import ModalPv from './ModalPv.jsx'
 import { normalizeazaNume } from '../idParcela.js'
 import { genereazaConvocator, reincarcaConvocator } from '../docx.js'
 import { G, S, fmtDate, fmtDateTime, fmtNum, msgEroare, Modal, Camp, Gol, CALITATI, etichetaOptiune, etichetaRetur,
@@ -160,7 +161,9 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
 
   return (
     <div>
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, flexWrap:'wrap' }}>
+ 
+      {modal?.tip === 'pv' && <ModalPv key={parcelaId + ':' + modal.det.id + ':' + proiect.id} parcelaId={parcelaId} detinatorId={modal.det.id} proiectId={proiect.id} nivel={nivel} show={show} onClose={() => setModal(null)} onGata={() => { incarca(); onSchimbat?.() }} />}
+     <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, flexWrap:'wrap' }}>
         <button style={S.btnS} onClick={onInapoi}>‹ Registru</button>
         <div style={{ fontSize:17, fontWeight:700, ...S.mono }}>{parcela.id_parcela}</div>
         <span style={{ color:G.muted, fontSize:13 }}>{uat ? `${uat.nume} (${uat.uat3})` : ''} · tronson {parcela.tronson ?? '-'}</span>
@@ -200,6 +203,7 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
                   {d.cota && <span style={{ color:G.muted, fontSize:12 }}>cota {d.cota}</span>}
                   {d.sters_la && <span style={{ ...S.tag, background:G.redDim, color:G.red }}>șters · {d.sters_motiv}</span>}
                   <div style={{ flex:1 }} />
+                  {!d.sters_la && !parcela.sters_la && (poateScrie || pvs.some(p => p.tip === 'A' && p.detinator_id === d.id && p.stare !== 'anulat' && !p.sters_la)) && <button style={S.btnX} onClick={() => setModal({ tip:'pv', det: d })}>PV A</button>}
                   {poateScrie && !d.sters_la && <button style={S.btnX} onClick={() => setModal({ tip:'detinator', det: d, contact: c })}>✎</button>}
                   {poateScrie && !d.sters_la && <button style={{ ...S.btnX, color:G.red }} onClick={() => setModal({ tip:'sterge', tabela:'red_detinatori', id: d.id, ce:`deținătorul ${d.nume}` })}>Șterge</button>}
                 </div>
