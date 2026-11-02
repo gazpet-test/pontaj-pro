@@ -849,7 +849,7 @@ Adminul confirma intervalul HG si UAT-ul optional, apoi apeleaza atomic
 fn_red_seteaza_tronson. Mesajul final include numarul intors de RPC sau
 codul si mesajul erorii. Daca reincarcarea pica dupa succes, mesajul pastreaza
 succesul scrierii si arata separat eroarea citirii; nu reapeleaza automat RPC-ul.
-FisaParcela.jsx permite admin/editor schimbarea tronsonului, inclusiv gol,
+FisaParcela.jsx permite DOAR adminului schimbarea tronsonului, inclusiv gol,
 cu CAS pe valoarea veche si RETURNING id,tronson. Conflictul reincarca valoarea;
 23514 se afiseaza cu mesajul serverului. Identitatea parcelei nu se modifica.
 PV A/B accepta tronson NULL si lasa placeholder-ul gol; PV C ramane neschimbat.
@@ -898,7 +898,7 @@ Raport L01-L25 (dovezi de implementare, nu rezultate de executie):
 | L14 | n/a |
 | L15 | n/a |
 | L16 | Cheie_sursa si deduplicarea existente sunt pastrate; ID-ul se rezerva per UAT, test cu tronsoane diferite. |
-| L17 | Interval HG: intreg sigur, non-negativ, ordonat, limita integer SQL; tronsonOptional refuza boolean si token partial. |
+| L17 | Interval HG: intreg sigur, pozitiv (>= 1, ca in BD), ordonat, limita integer SQL; tronsonOptional refuza boolean si token partial. |
 | L18 | Erorile RPC/UPDATE se verifica inainte de succes; rezultat invalid nu devine zero; codurile SQL se pastreaza. |
 | L19 | idParcela/idParcelaProvizoriu/tronsonOptional comune TGZ si Anexa 7; PV B mosteneste validarea comuna din PV A. |
 | L20 | importTgz.test.js: NULL, explicit valid, valori invalide, limite ID; pv.test.js: A/B legitime fara tronson. UI/BD de verificat de Claude. |

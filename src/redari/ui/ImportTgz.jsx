@@ -44,7 +44,7 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
   const [subTab, setSubTab] = useState('parcele')
 
   // uats pot veni după primul render — nu atribuie implicit tronsonul
-  const tronsoane = useMemo(() => ({ ...tronsonPeUat }), [uats, tronsonPeUat])
+  const tronsoane = useMemo(() => ({ ...tronsonPeUat }), [tronsonPeUat])
 
   // P2-7: orice schimbare a intrărilor (fișier, versiune, sursă, tronson) golește previzualizarea — altfel s-ar importa altceva decât s-a văzut
   const invalideaza = (motiv) => { if (preview) { setPreview(null); setNota(`Previzualizarea a fost golită (${motiv}). Apasă din nou „Previzualizează”.`) } }
