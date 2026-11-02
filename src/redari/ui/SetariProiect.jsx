@@ -72,8 +72,9 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
       if (!curent()) return
       if (ep) throw ep
       if (!proiectProaspat) throw new Error('Proiectul nu mai e vizibil (fără drept pe modul?)')
+      // Gemini f3a r2 P3: referința e versiunea formularului (baza), nu props-ul care poate fi deja reîncărcat
       if (proiectProaspat.versiune !== baza.versiune && !window.confirm(
-        `Proiectul a fost modificat între timp de altcineva (versiunea ${proiectProaspat.versiune}, tu vezi versiunea ${baza.versiune}).   // Gemini f3a r2 P3: referința e formularul (baza)\nGenerez cererea cu datele ACTUALE din bază?`)) return
+        `Proiectul a fost modificat între timp de altcineva (versiunea ${proiectProaspat.versiune}, tu vezi versiunea ${baza.versiune}).\nGenerez cererea cu datele ACTUALE din bază?`)) return
       const lipsuri = verificaDateCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete })
       if (lipsuri.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuri.join('; '))
       const raspuns = await fetch('/redari/sabloane/cerere_imputernicire.docx')
