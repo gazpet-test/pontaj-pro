@@ -34,6 +34,10 @@ BEGIN
   PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET stare=''trimis_spre_semnare'' WHERE id=%L',a.id));
   UPDATE public.red_procese_verbale SET stare='trimis_spre_semnare',trimis_spre_semnare_data='2026-11-02' WHERE id=a.id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Trimitere fara rand'; END IF;
+  -- f4c r1: cerinta starii la orice UPDATE + identitatea fixa si in starile nefinale
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET trimis_spre_semnare_data=NULL WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET nr_pv=''PVA-ZXC-9999'' WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET tronson=4 WHERE id=%L',a.id));
   PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET stare=''semnat'',semnat_primit_data=''2026-11-02'' WHERE id=%L',a.id));
   PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET stare=''semnat'',fisier_semnat_path=''TEST/scan.pdf'' WHERE id=%L',a.id));
   UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-02',fisier_semnat_path='TEST/scan.pdf' WHERE id=a.id;
@@ -42,6 +46,16 @@ BEGIN
   PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET obiectii_text=''Schimbat'' WHERE id=%L',a.id));
   UPDATE public.red_procese_verbale SET remediat_la='2026-11-03' WHERE id=a.id;
   IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM public.red_procese_verbale WHERE id=a.id AND stare='semnat' AND remediat_la='2026-11-03') THEN RAISE EXCEPTION 'Remediere refuzata'; END IF;
+  -- Copilot f4c r1 P1-01: dupa semnat nimic altceva nu se schimba (scan, date, sesiune, identitate, stergere)
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET fisier_semnat_path=''alta/cale/scan.pdf'' WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET semnat_primit_data=''2026-11-04'' WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET semnat_la_sesiune=true WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET semnat_fizic=true WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET identitate_verificata=true WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET trimis_spre_semnare_data=''2026-11-01'' WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET nr_pv=''PVA-ZXC-9998'' WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET parcela_id=NULL WHERE id=%L',a.id));
+  PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET sters_la=now() WHERE id=%L',a.id));
   b:=public.fn_red_pv_creeaza('B',p,NULL,NULL);
   PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET stare=''semnat'',semnat_primit_data=''2026-11-02'',fisier_semnat_path=''TEST/b.pdf'' WHERE id=%L',b.id));
   PERFORM pg_temp.r29c_refuza(format('UPDATE public.red_procese_verbale SET stare=''anulat'' WHERE id=%L',b.id));

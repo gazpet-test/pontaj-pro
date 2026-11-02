@@ -154,6 +154,14 @@ export function extensieScan(blob) {
   if (!ext || !blob.size || blob.size > 25 * 1024 * 1024) throw new Error('Scanul trebuie sa fie PDF/JPEG/PNG, maximum 25 MB.')
   return ext
 }
+// Copilot f4c r1 P3-01: continutul trebuie sa corespunda tipului declarat (semnatura PDF / JPEG / PNG)
+const SEMNATURI = { pdf:[0x25,0x50,0x44,0x46,0x2d], jpg:[0xff,0xd8,0xff], png:[0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a] }
+export async function verificaContinutScan(blob) {
+  const ext = extensieScan(blob)
+  const cap = new Uint8Array(await blob.slice(0, 8).arrayBuffer())
+  if (!SEMNATURI[ext].every((b, i) => cap[i] === b)) throw new Error('Fisierul nu este un ' + ext.toUpperCase() + ' valid (continutul nu corespunde tipului).')
+  return ext
+}
 async function maximScan(supabase, cheie, esteCurent) {
   const folder = calePv(cheie).split('/').slice(0,-1).join('/')
   const prefix = cheie.nrPv + '_semnat_v'

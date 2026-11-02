@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob, aziBucuresti } from '../docx.js'
-import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv } from '../pv.js'
+import { LUCRARI, STARI_TEREN, MOTIVE_PV_B, propuneLucrari, verificaDatePvA, genereazaPvA, verificaDatePvB, genereazaPvB, salveazaPv, verificaContinutScan } from '../pv.js'
 import { Modal, Camp, S, msgEroare, citestePaginat, COL_RASPUNS } from './comune.jsx'
 
 const COMISIE = ['verificare_data','verificare_de_gazpet','verificare_de_tgz']
@@ -75,7 +75,8 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
     if (!poateScrie) return
     const proaspat=await citeste(curent)
     if (!curent()) return
-    if (proaspat.areASemnat) throw new Error('Exista PV A semnat pe parcela; PV B nu se creeaza.')
+    // Copilot f4c r1 P2-01: regula se aplica doar PV B (PV A e unic per detinator, nu per parcela)
+    if (tip==='B' && proaspat.areASemnat) throw new Error('Exista PV A semnat pe parcela; PV B nu se creeaza.')
     const {data,error}=await supabase.rpc('fn_red_pv_creeaza',{p_tip:tip,p_parcela_id:parcelaId,p_detinator_id:tip==='A'?detinatorId:null,p_tronson:null})
     if (!curent()) return
     // Reconcile ambiguous errors; never repeat creation automatically.
@@ -111,12 +112,12 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
     if(!curent()) return
     if(!s.pv || s.pv.id!==sursa.pv.id) throw conflict()
     if(!egal(s,sursa) && !window.confirm('Datele s-au schimbat. Generez cu datele actuale din baza?')) return
-    if (s.areASemnat) throw new Error('Exista PV A semnat pe parcela; PV B nu se genereaza.')
+    if (tip==='B' && s.areASemnat) throw new Error('Exista PV A semnat pe parcela; PV B nu se genereaza.')
     if (['semnat','anulat'].includes(s.pv.stare)) throw conflict()
     const lipsuri=(tip==='B'?verificaDatePvB:verificaDatePvA)(s)
     if(lipsuri.length) throw new Error('Lipsesc: '+lipsuri.join('; '))
     const r=await fetch('/redari/sabloane/pv_'+tip.toLowerCase()+'.docx')
-    if(!r.ok) throw new Error('Sablonul PV A nu poate fi citit.')
+    if(!r.ok) throw new Error('Sablonul PV '+tip+' nu poate fi citit.')
     const templateArrayBuffer=await r.arrayBuffer()
     if(!curent()) return
     const {blob}=await (tip==='B'?genereazaPvB:genereazaPvA)({...s,templateArrayBuffer})
@@ -137,14 +138,16 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
     aplica({...s,pv:data[0]});descarcaBlob(blob,s.pv.nr_pv+'.docx')
     show(verificat ? 'PV '+tip+' salvat si descarcat.' : 'PV salvat, surse schimbate sau neverificate. Reincarca si regenereaza.',verificat?'success':'error');onGata?.()
   })
-  const descarca = () => ruleaza(async curent => {
+  // Gemini f4c r1 P2: si scanul semnat se descarca din modal (inclusiv viewer)
+  const descarca = (semnat=false) => ruleaza(async curent => {
     const s=await citeste(curent)
     if(!curent()) return
-    if(!s.pv?.fisier_generat_path) throw new Error('PV fara fisier generat.')
-    const {data,error}=await supabase.storage.from('redari').download(s.pv.fisier_generat_path)
+    const cale=semnat?s.pv?.fisier_semnat_path:s.pv?.fisier_generat_path
+    if(!cale) throw new Error(semnat?'PV fara scan semnat.':'PV fara fisier generat.')
+    const {data,error}=await supabase.storage.from('redari').download(cale)
     if(!curent()) return
     if(error) throw error
-    descarcaBlob(data,s.pv.nr_pv+'.docx')
+    descarcaBlob(data,cale.split('/').pop())
   })
   const tranzitie = stare => ruleaza(async curent => {
     if (!poateScrie || final || schimbate.length || comSchimbate.length) return
@@ -162,9 +165,15 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
       if (stare==='trimis_spre_semnare') patch.trimis_spre_semnare_data=dataStare
       else {
         if (!scan) throw new Error('Alege scanul semnat.')
+        await verificaContinutScan(scan)
+        if (!curent()) return
         const r=await salveazaPv(supabase,{blob:scan,semnat:true,proiectCod:s.proiect.cod,uat3:s.uat.uat3,nrPv:s.pv.nr_pv,esteCurent:curent})
         path=r.path
         if (!curent()) return
+        // Copilot f4c r1 P2-02: dupa upload recitim sursele; daca s-au schimbat, nu legam scanul (il raportam separat)
+        const dupa=await citeste(curent)
+        if (!curent()) return
+        if (!dupa.pv || !egal(dupa,s)) throw new Error('Scan pastrat la '+path+', dar datele PV-ului s-au schimbat in timpul incarcarii; semnarea NU s-a facut. Reincarca si reia.')
         Object.assign(patch,{semnat_primit_data:dataStare,fisier_semnat_path:path,semnat_fizic:fizic,semnat_la_sesiune:sesiune})
       }
     }
@@ -182,7 +191,7 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
   return <Modal titlu={sursa?.pv?.nr_pv || 'PV '+tip} latime={760} onClose={()=>{if(!ocupat.current)onClose()}}>
     {mesaj && <p role="alert">{mesaj}</p>}
     <button style={S.btnS} disabled={lucru} onClick={reload}>Reincarca</button>
-    {sursa && !sursa.pv && poateScrie && <button style={S.btnP} disabled={lucru||sursa.areASemnat} onClick={creeaza}>Creeaza PV {tip}</button>}
+    {sursa && !sursa.pv && poateScrie && <button style={S.btnP} disabled={lucru||(tip==='B'&&sursa.areASemnat)} onClick={creeaza}>Creeaza PV {tip}</button>}
     {sursa?.pv && <>
       <p>{sursa.detinator?.nume || 'PV B (parcela)'} - {sursa.pv.stare}</p>
       <fieldset disabled={lucru || !poateScrie || final}>
@@ -211,7 +220,8 @@ export default function ModalPv({ parcelaId, detinatorId, proiectId, tip = 'A', 
       {poateScrie && <button style={S.btnS} disabled={lucru||final||!comSchimbate.length} onClick={()=>salveaza(true)}>Salveaza verificarea parcelei</button>}
       <p>Salveaza toate modificarile inainte de generare.</p>
       {poateScrie && <button style={S.btnP} disabled={lucru||final||!!schimbate.length||!!comSchimbate.length} onClick={genereaza}>{sursa.pv.fisier_generat_path?'Regenereaza':'Genereaza DOCX'}</button>}
-      <button style={S.btnS} disabled={lucru||!sursa.pv.fisier_generat_path} onClick={descarca}>Descarca</button>
+      <button style={S.btnS} disabled={lucru||!sursa.pv.fisier_generat_path} onClick={()=>descarca()}>Descarca</button>
+      {sursa.pv.fisier_semnat_path && <button style={S.btnS} disabled={lucru} onClick={()=>descarca(true)}>Descarca scanul semnat</button>}
       {poateScrie && !final && <fieldset disabled={lucru||!!schimbate.length||!!comSchimbate.length}><legend>Stare PV</legend>
         <Camp eticheta="Data trimiterii / primirii"><input style={S.input} type="date" value={dataStare} onChange={e=>setDataStare(e.target.value)}/></Camp>
         {sursa.pv.stare==='generat' && <button style={S.btnS} onClick={()=>tranzitie('trimis_spre_semnare')}>Marcheaza trimis spre semnare</button>}

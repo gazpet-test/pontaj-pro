@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
 import { BIFA_DA, BIFA_NU, CHEI_PV_A, propuneLucrari, verificaDatePvA, genereazaPvA, calePv, salveazaPv } from './pv.js'
-import { CHEI_PV_B, verificaDatePvB, genereazaPvB, extensieScan } from './pv.js'
+import { CHEI_PV_B, verificaDatePvB, genereazaPvB, extensieScan, verificaContinutScan } from './pv.js'
 const sablon = () => readFileSync('public/redari/sabloane/pv_a.docx')
 const date = () => ({
   proiect: { contract_nr:'CTR & <1>', contract_data:'2026-11-02', denumire:'Test', reprezentant_gazpet_nume:'FICTIV G', reprezentant_tgz_nume:'FICTIV T' },
@@ -133,6 +133,13 @@ describe('PV B',()=>{
     expect(()=>extensieScan({type:'application/pdf',size:25*1024*1024+1})).toThrow('25 MB')
     expect(()=>extensieScan(new Blob(['x'],{type:'text/plain'}))).toThrow()
     expect(calePv({...cheie,extensieSemnat:'pdf',versiune:2})).toBe('TEST/ZZZ/pv/PVA-ZZZ-0001_semnat_v2.pdf')
+  })
+  it('scan: continutul trebuie sa corespunda tipului (Copilot f4c r1 P3-01)',async()=>{
+    await expect(verificaContinutScan(new Blob(['%PDF-1.7 x'],{type:'application/pdf'}))).resolves.toBe('pdf')
+    await expect(verificaContinutScan(new Blob([new Uint8Array([0xff,0xd8,0xff,0xe0,1])],{type:'image/jpeg'}))).resolves.toBe('jpg')
+    await expect(verificaContinutScan(new Blob([new Uint8Array([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0])],{type:'image/png'}))).resolves.toBe('png')
+    await expect(verificaContinutScan(new Blob(['nu e pdf'],{type:'application/pdf'}))).rejects.toThrow('PDF valid')
+    await expect(verificaContinutScan(new Blob(['%PDF-'],{type:'image/png'}))).rejects.toThrow('PNG valid')
   })
   it('scan versionat intre extensii, include orfani si reincearca doar coliziunile',async()=>{
     const list=vi.fn().mockResolvedValueOnce({data:[{name:'PVA-ZZZ-0001_semnat_v7.png'},{name:'PVA-ZZZ-0001_v99.docx'}]}).mockResolvedValue({data:[]})
