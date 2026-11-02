@@ -3,15 +3,23 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import * as Sentry from '@sentry/react'
 import App from './App.jsx'
+// Redări teren (01.11.2026, review Jakarinos P1-4 / P2-3): tokenul public din /redari/raspuns/<token> NU ajunge în telemetrie —
+// src/redari/sentryScrub.js (testat în sentryScrub.test.js) redactează URL-uri, variante %2F, `p_token`, chei, la orice adâncime.
+import { scrubSentryEvent, scrubSentrySpan, esteDinFormularulPublic } from './redari/sentryScrub.js'
 
 // Forțează tema întunecată pentru controalele native (dropdown-uri select,
 // scrollbars, input-uri) pe tot ERP-ul, indiferent de setarea OS light/dark.
 document.documentElement.style.colorScheme = 'dark'
 
 Sentry.init({
+  beforeSend: scrubSentryEvent,
+  beforeSendTransaction: scrubSentryEvent,
+  // Jakarinos r7 P1-1: spanurile INP sunt envelope-uri separate care ocolesc beforeSend* și nu pot fi eliminate din beforeSendSpan →
+  // INP oprit; fără tracing pe formularul public; beforeSendSpan redactează ce mai trece (spanuri copil ale tranzacțiilor)
+  beforeSendSpan: scrubSentrySpan,
   dsn: 'https://78d9760da35bcd9f1271f8d782682e4f@o4511469034864640.ingest.de.sentry.io/4511469069729872',
-  integrations: [Sentry.browserTracingIntegration()],
-  tracesSampleRate: 0.1,
+  integrations: [Sentry.browserTracingIntegration({ enableInp: false })],
+  tracesSampler: () => (esteDinFormularulPublic(null) ? 0 : 0.1),
   environment: import.meta.env.MODE,
   enabled: import.meta.env.PROD,
   // 08.09.2026: zgomot din browserele in-app (Facebook/Instagram/TikTok injectează scripturi proprii — „Java object is gone”,
