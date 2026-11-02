@@ -241,8 +241,13 @@ td{padding:9px 12px;font-size:13px;border-bottom:1px solid #161B22;vertical-alig
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#1C2128}
 .nl{background:none;border:none;cursor:pointer;padding:7px 13px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#8B949E;transition:all .2s;white-space:nowrap;flex-shrink:0}
-.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
-.topbar::-webkit-scrollbar{display:none}
+/* Audit UI 02.11.2026: pe desktop se derulează DOAR taburile de module; logo + zona din dreapta (Chat, 🔔, Ieșire) rămân mereu vizibile */
+.topbar{overflow:visible}
+.navscroll{display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent)}
+.navscroll::-webkit-scrollbar{display:none}
+/* sub 1800 px: în zona din dreapta rămân iconițele + contoarele, textul apare în tooltip */
+@media (max-width:1799px){.topbar .tb-txt{display:none}}
+@media (max-width:719px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{display:none}}
 @media (max-width:719px){.nl{display:none}}
 .nl:hover,.nl.active{background:#21262D;color:#E6EDF3}
 .nl.active{color:#58A6FF;background:#1F6FEB15}
@@ -443,7 +448,7 @@ function ChatNavButton() {
       onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)' }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
     >
-      {open ? '✕' : '💬'} Chat
+      {open ? '✕' : '💬'} <span className="tb-txt">Chat</span>
       {!open && unread > 0 && (
         <span style={{
           background: G.red,
@@ -797,7 +802,10 @@ function Layout({ children }) {
           <div style={{width:28,height:28,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>⏱</div>
           <span style={{fontWeight:800,fontSize:14,letterSpacing:'-.3px'}}>PontajPRO</span>
         </div>
-        {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+        {/* taburile de module: zonă proprie derulabilă (rotița mouse-ului derulează pe orizontală) */}
+        <div className="navscroll" onWheel={e=>{ if (Math.abs(e.deltaY)>Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY }}>
+          {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+        </div>
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
           {/* ℹ️ Noutăți modul — anunțuri per modul, reminder la 12 h până la „Am citit" (08.09.2026) */}
           <ModulNoutati modul={(loc.pathname.split('/')[1] || '').toLowerCase() || null} profile={profile} />
@@ -824,7 +832,7 @@ function Layout({ children }) {
               onMouseEnter={e => { e.currentTarget.style.background = '#E3B341' + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
               onMouseLeave={e => { e.currentTarget.style.background = '#E3B341' + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
             >
-              🚚 Cere transport
+              🚚 <span className="tb-txt">Cere transport</span>
             </button>
           )}
           {!esteExtern && (<>
@@ -848,7 +856,7 @@ function Layout({ children }) {
             onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
             onMouseLeave={e => { e.currentTarget.style.background = G.purple + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
           >
-            🎫 Tichete
+            🎫 <span className="tb-txt">Tichete</span>
           </button>
           {/* Ale mele — popover split */}
           <div style={{ position:'relative' }}>
@@ -868,7 +876,7 @@ function Layout({ children }) {
               onMouseEnter={e => { e.currentTarget.style.background = (ticheteMele.deConfirmat>0?G.green:G.purple)+'33'; e.currentTarget.style.color = ticheteMele.deConfirmat>0?G.green:G.purple; e.currentTarget.style.borderColor = ticheteMele.deConfirmat>0?G.green:G.purple }}
               onMouseLeave={e => { const tot = ticheteMele.deschise+ticheteMele.asignate; const c = ticheteMele.deConfirmat>0?G.green:G.purple; e.currentTarget.style.background = ticheteMele.deConfirmat>0?c+'33':tot>0?c+'33':G.bg; e.currentTarget.style.color = (ticheteMele.deConfirmat>0||tot>0)?c:G.dim; e.currentTarget.style.borderColor = (ticheteMele.deConfirmat>0||tot>0)?c:G.border }}
             >
-              Ale mele
+              📋 <span className="tb-txt">Ale mele</span>
               {ticheteMele.deConfirmat > 0 && (
                 <span style={{ background:G.green, color:'#fff', borderRadius:10, padding:'1px 6px', fontSize:10, fontWeight:800, animation:'nb-pulse 1.5s infinite' }}>
                   🎉 {ticheteMele.deConfirmat}
@@ -977,11 +985,11 @@ function Layout({ children }) {
           <NotificationBell excludeModul="Ofertare" />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
-            <div style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
+            <div className="tb-txt" style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
           </div>
           <div style={{width:1,height:28,background:G.border}}/>
-          <Avatar name={profile?.name} id={1} size={28}/>
-          <div>
+          <span title={profile?.name||profile?.email||''}><Avatar name={profile?.name} id={1} size={28}/></span>
+          <div className="tb-txt">
             <div style={{fontSize:12,fontWeight:600,lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
             <RoleBadge role={profile?.role} size="small"/>
           </div>
