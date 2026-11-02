@@ -81,6 +81,8 @@ BEGIN
   -- fn_red_pv_creeaza), apoi verificarea vede tot ce s-a comis inainte (READ COMMITTED: snapshot nou pe instructiune).
   IF NEW.tip IN ('A','B') AND NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat' AND NEW.parcela_id IS NOT NULL THEN
     PERFORM 1 FROM public.red_parcele WHERE id=NEW.parcela_id FOR UPDATE;
+    -- Copilot f7 r3 P3: fara lock nu continuam (de ex. parcela invizibila sub RLS)
+    IF NOT FOUND THEN RAISE EXCEPTION 'PV: parcela indisponibila pentru blocare' USING ERRCODE='42501'; END IF;
   END IF;
   IF NEW.tip='B' AND NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat'
      AND EXISTS (SELECT 1 FROM public.red_detinatori x WHERE x.parcela_id=NEW.parcela_id AND x.sters_la IS NULL)
