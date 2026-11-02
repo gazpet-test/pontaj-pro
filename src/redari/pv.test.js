@@ -33,7 +33,7 @@ describe('PV A', () => {
   })
   it.each([
     ['proiect','contract_nr','numarul contractului'],['proiect','contract_data','data contractului'],
-    ['uat','nume','UAT'],['parcela','tronson','tronson'],['detinator','nume','numele detinatorului'],
+    ['uat','nume','UAT'],['detinator','nume','numele detinatorului'],
     ['pv','data_pv','data PV'],['pv','locul','locul'],['pv','constatare_mod','modul constatarii'],
     ['pv','stare_teren','starea terenului'],['pv','obiectii_text','textul obiectiilor'],
   ])('refuza lipsa %s.%s', (grup,k,mesaj)=>{
@@ -78,6 +78,14 @@ const dateB = () => {
   return d
 }
 const sablonB=()=>readFileSync('public/redari/sabloane/pv_b.docx')
+it('PV A si B accepta parcela fara tronson si lasa campul DOCX gol',async()=>{
+  const a=date(), b=dateB()
+  a.parcela.tronson=null;b.parcela.tronson=null
+  expect(verificaDatePvA(a)).toEqual([])
+  expect(verificaDatePvB(b)).toEqual([])
+  expect((await genereazaPvA({...a,templateArrayBuffer:sablon()})).campuri.tronson).toBe('')
+  expect((await genereazaPvB({...b,templateArrayBuffer:sablonB()})).campuri.tronson).toBe('')
+})
 describe('PV B',()=>{
   it('78 chei din sablonul independent, inclusiv antete',async()=>{
     const z=await JSZip.loadAsync(sablonB()), chei=new Set()
@@ -87,7 +95,7 @@ describe('PV B',()=>{
   })
   it.each([
     ['proiect','contract_nr','numarul contractului'],['proiect','contract_data','data contractului'],
-    ['uat','nume','UAT'],['parcela','tronson','tronson'],['pv','data_pv','data PV'],['pv','locul','locul'],
+    ['uat','nume','UAT'],['pv','data_pv','data PV'],['pv','locul','locul'],
     ['pv','motiv_pv_b','motivul PV B'],['parcela','verificare_data','data verificarii pe teren'],
     ['uat','reprezentant_uat_nume','reprezentantul UAT'],['pv','stare_teren','starea terenului'],
   ])('refuza lipsa %s.%s',(grup,k,mesaj)=>{

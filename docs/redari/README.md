@@ -833,3 +833,78 @@ Raport L01-L25 (dovezi in cod/teste scrise, fara pretentia executiei):
 | L24 | ModalPv: citirea noua refoloseste curent/token generatie, verificari inainte de aplicare si dupa awaits; fara state async nou. |
 | L25 | pv.test.js compara cu texte literale si DOCX real; DRY semnate inserate ca postgres, vedere/RPC ca authenticated owner existent. Executia si concurenta reala nerulate. |
 Verificare statica executata: toate cele 9 fisiere sunt UTF-8 fara BOM; cele 3 SQL noi sunt ASCII; definitia vederii din revenire este identica textual cu 20261126a (exceptand CREATE OR REPLACE); cele 78 de chei CHEI_PV_B coincid cu placeholder-ele citite direct din XML-urile sablonului DOCX prin ZipArchive. Aceasta verificare nu executa generatorul sau SQL-ul.
+
+### 4.1n - Felia 8b: import fara tronson si atribuire din UI
+
+TGZ si Anexa 7 accepta importul fara tronsonPeUat: tronson NULL,
+ID provizoriu HUS-????. Optiunea explicita 1..11 ramane disponibila.
+Importul rezerva un bloc per UAT prin fn_red_rezerva_numere_parcele
+cu p_uat3 si p_n; ID final HUS-0001, independent de tronson.
+Reluarea, cheie_sursa, loturile si raportarea erorilor raman pe calea existenta.
+
+ImportTgz.jsx porneste cu toate tronsoanele neatribuite. TronsoaneEcran.jsx
+numara parcelele active fara tronson prin red_v_parcele, paginare keyset id
+pana la pagina goala. NULL nu devine un tronson in lista.
+Adminul confirma intervalul HG si UAT-ul optional, apoi apeleaza atomic
+fn_red_seteaza_tronson. Mesajul final include numarul intors de RPC sau
+codul si mesajul erorii. Daca reincarcarea pica dupa succes, mesajul pastreaza
+succesul scrierii si arata separat eroarea citirii; nu reapeleaza automat RPC-ul.
+FisaParcela.jsx permite admin/editor schimbarea tronsonului, inclusiv gol,
+cu CAS pe valoarea veche si RETURNING id,tronson. Conflictul reincarca valoarea;
+23514 se afiseaza cu mesajul serverului. Identitatea parcelei nu se modifica.
+PV A/B accepta tronson NULL si lasa placeholder-ul gol; PV C ramane neschimbat.
+
+Fisiere: src/redari/importTgz.js, importAnexa7.js, importTgz.test.js,
+importScriere.test.js, importAnexa7.test.js, pv.js, pv.test.js;
+src/redari/ui/ImportTgz.jsx, TronsoaneEcran.jsx, FisaParcela.jsx;
+docs/redari/README.md (aceasta sectiune, inclusiv raportul).
+Helperul legacy src/redari/idParcela.js nu a fost modificat: nu este permis
+de brief. Importatoarele folosesc helperii noi comuni exportati din importTgz.js.
+
+Teste scrise, NERULATE: importTgz.test.js acopera lipsa tronsonului, optiunea
+explicita, limitele ID, rezervarea cu exact p_uat3/p_n si un singur bloc per
+UAT cu tronsoane diferite. importAnexa7.test.js actualizeaza ID-ul si lipsa
+tronsonului. importScriere.test.js actualizeaza fixture-ul de ID existent.
+pv.test.js verifica validarea si generarea reala DOCX A/B cu tronson gol.
+Nu am rulat npm/npx/vitest/node, build, PostgREST sau teste BD; lipsesc
+node_modules, iar brief-ul rezerva executia pentru Claude. Nu am folosit Git,
+secrete, migrari, baza de date sau deploy.
+
+De verificat de Claude: testele de import si PV, build; API real pe contractul
+8a: admin/editor/viewer, 42501/22023/P0001/23514, blocare PV C pe tronson vechi
+si nou, CAS concurent inclusiv NULL, interval HG cu prefix numeric, zero
+actualizari, peste 1000 parcele, schimbare proiect/unmount in timpul cererilor,
+timeout urmat de reincarcare. Protectiile BD depind de 8a; nu sunt dovedite aici.
+Fluxurile async vechi ale importului/incarcarii generale a fisei nu au fost
+rescrise; tokenul adaugat protejeaza actiunea noua de schimbare a tronsonului.
+
+Raport L01-L25 (dovezi de implementare, nu rezultate de executie):
+
+| Regula | Respectare / dovada |
+|---|---|
+| L01 | FisaParcela.schimbaTronson: CAS eq/is tronson vechi, select id,tronson; zero randuri = conflict si recitire. |
+| L02 | TronsoaneEcran.atribuie: un singur RPC pentru atribuirea intervalului; fara bucla UPDATE client. |
+| L03 | n/a |
+| L04 | n/a |
+| L05 | Actiunile noi nu au retry automat/fallback; eroarea de retea ramane vizibila, reincarcarea permite reconcilierea. |
+| L06 | n/a |
+| L07 | UI foloseste RPC-ul/UPDATE protejate de contractul 8a; nu dubleaza in client protectia PV C. Verificarea BD ramane la Claude. |
+| L08 | Nu trimite identitate/rol in RPC; admin/editor sunt doar porti UI, serverul autorizeaza conform 8a. |
+| L09 | Atribuirea trimite proiect_id; CAS si recitirea filtreaza id si proiect_id; serverul verifica UAT-ul conform 8a. |
+| L10 | n/a |
+| L11 | n/a |
+| L12 | Citirea noua de parcele neatribuite nu trunchiaza la max-rows; erorile raman vizibile. |
+| L13 | importTgz: regex ancorat pentru UAT3 si tronson optional; teste pozitive/negative in importTgz.test.js. |
+| L14 | n/a |
+| L15 | n/a |
+| L16 | Cheie_sursa si deduplicarea existente sunt pastrate; ID-ul se rezerva per UAT, test cu tronsoane diferite. |
+| L17 | Interval HG: intreg sigur, non-negativ, ordonat, limita integer SQL; tronsonOptional refuza boolean si token partial. |
+| L18 | Erorile RPC/UPDATE se verifica inainte de succes; rezultat invalid nu devine zero; codurile SQL se pastreaza. |
+| L19 | idParcela/idParcelaProvizoriu/tronsonOptional comune TGZ si Anexa 7; PV B mosteneste validarea comuna din PV A. |
+| L20 | importTgz.test.js: NULL, explicit valid, valori invalide, limite ID; pv.test.js: A/B legitime fara tronson. UI/BD de verificat de Claude. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | TronsoaneEcran.citeste: red_v_parcele cu filtre pe server, citestePaginat cheie id pana la pagina goala. |
+| L24 | TronsoaneEcran: token generatie, cleanup, reset proiect, ocupat/setLucru inainte de await. Fisa: token pentru actiunea noua, cleanup/reset la proiect/parcela, updater tolerant la null. |
+| L25 | Expected literale in testele noi, DOCX real in testele PV; mock-ul verifica argumentele RPC exact. Teste runtime, RLS si concurenta reala NERULATE. |
+Verificare statica executata pentru 8b: toate cele 11 fisiere sunt UTF-8 fara BOM; importatoarele nu mai contin p_tronson, ID provizoriu T3-HUS sau refuzul pentru tronson lipsa.

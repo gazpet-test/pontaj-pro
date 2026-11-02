@@ -1,7 +1,7 @@
 // Anexa 7: antet dupa continut, identitate comuna cu TGZ, fara Nr.Crt.
 import * as XLSX from 'xlsx-js-style'
-import { cheie, text, numar, cheieSursa } from './importTgz.js'
-import { normalizeazaNume, idParcelaProvizoriu } from './idParcela.js'
+import { cheie, text, numar, cheieSursa, idParcelaProvizoriu, tronsonOptional } from './importTgz.js'
+import { normalizeazaNume } from './idParcela.js'
 
 const ANTETE = [
   ['uat', 'UAT'], ['sat', 'Sat'], ['tarla', 'Tarla'], ['nr_cadastral', 'Nr. cadastral / parcela'],
@@ -76,8 +76,7 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
     const s = st.pe_uat[uat.uat3] ??= { parcele: 0, detinatori: 0, dubluri: 0, neidentificati: 0, fara_cheie: 0, ambigue: 0, erori: 0 }
     const refuza = motiv => { eroare(rand, motiv, context); s.erori++ }
     if (!v('nume')) { refuza('Nume detinator gol'); continue }
-    const tronson = Number(tronsonPeUat[uat.uat3])
-    if (!Number.isInteger(tronson) || tronson < 1 || tronson > 11) { refuza('Tronson lipsa sau invalid'); continue }
+    const tronson = tronsonOptional(tronsonPeUat?.[uat.uat3])
     const suprafata = v('suprafata') ? numar(brut('suprafata')) : null
     if (v('suprafata') && (suprafata == null || suprafata < 0)) { refuza('Suprafata invalida'); continue }
     const cheieS = cheieSursa(uat.uat3, v('poz_hg'), v('nr_cadastral'), v('tarla'))
@@ -86,7 +85,7 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
     let p = parcele.get(cheieP)
     if (!p) {
       contoare.set(uat.uat3, (contoare.get(uat.uat3) || 0) + 1)
-      p = { cheie: cheieP, cheie_sursa: cheieS, ambigua: false, motiv_ambiguitate: null, nr_crt: null, uat_id: uat.id ?? null, uat3: uat.uat3, tronson, id_parcela: idParcelaProvizoriu(tronson, uat.uat3), nr_provizoriu: contoare.get(uat.uat3), ...atribute, observatii: null, note: [], rand, randuri: [], nr_detinatori: 0 }
+      p = { cheie: cheieP, cheie_sursa: cheieS, ambigua: false, motiv_ambiguitate: null, nr_crt: null, uat_id: uat.id ?? null, uat3: uat.uat3, tronson, id_parcela: idParcelaProvizoriu(uat.uat3), nr_provizoriu: contoare.get(uat.uat3), ...atribute, observatii: null, note: [], rand, randuri: [], nr_detinatori: 0 }
       parcele.set(cheieP, p); rez.parcele.push(p); s.parcele++
       if (!cheieS) st.parcele_fara_cheie++
     } else {
@@ -99,7 +98,8 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
         if (difera) p.note.push(`Rand ${rand}: ${camp} contradictoriu (${atribute[camp]}); pastrat primul (${p[camp]})`)
       }
     }
-    if (v('tronson') && !p.note.some(n => n.endsWith(`Tronson / km din fisier: ${v('tronson')} (configurare: T${tronson})`))) p.note.push(`Rand ${rand}: Tronson / km din fisier: ${v('tronson')} (configurare: T${tronson})`)   // o dată per valoare (Gemini f3b r1 P2)
+    const configurareTronson = tronson == null ? 'neatribuit' : `T${tronson}`
+    if (v('tronson') && !p.note.some(n => n.endsWith(`Tronson / km din fisier: ${v('tronson')} (configurare: ${configurareTronson})`))) p.note.push(`Rand ${rand}: Tronson / km din fisier: ${v('tronson')} (configurare: ${configurareTronson})`)
     p.observatii = p.note.join('; ') || null
     p.randuri.push({ rand, nr_crt: null, nume: v('nume') })
     const numeNorm = normalizeazaNume(v('nume'))

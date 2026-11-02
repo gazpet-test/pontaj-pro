@@ -27,7 +27,7 @@ export function propuneLucrari(articolDeviz) {
 export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const lipsuri = []
   for (const [v, et] of [[proiect.contract_nr,'numarul contractului'],[proiect.contract_data,'data contractului'],
-    [uat.nume,'UAT'],[parcela.tronson,'tronson'],[detinator.nume,'numele detinatorului'],[pv.data_pv,'data PV'],[pv.locul,'locul']]) {
+    [uat.nume,'UAT'],[detinator.nume,'numele detinatorului'],[pv.data_pv,'data PV'],[pv.locul,'locul']]) {
     if (!plin(v)) lipsuri.push(et)
   }
   if (!['sediu','teren'].includes(pv.constatare_mod)) lipsuri.push('modul constatarii')

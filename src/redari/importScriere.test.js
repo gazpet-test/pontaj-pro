@@ -21,7 +21,7 @@ function client() {
             if (tabela === 'red_import_loturi') data = { id: 'lot-test' }
             if (tabela === 'red_detinatori') for (const [i, d] of payload.entries()) persoane.push({ ...d, id: `det-${i}` })
           } else if (operatie === 'select' && start === 0) {
-            if (tabela === 'red_parcele') data = [{ id: 'parcela-test', id_parcela: 'T3-TST-0001', cheie_sursa: 'TST|HG1|CF1|' }]
+            if (tabela === 'red_parcele') data = [{ id: 'parcela-test', id_parcela: 'TST-0001', cheie_sursa: 'TST|HG1|CF1|' }]
             if (tabela === 'red_detinatori') data = [...persoane]
           }
           return Promise.resolve({ data, error: null }).then(resolve, reject)

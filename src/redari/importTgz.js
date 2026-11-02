@@ -11,7 +11,22 @@
 // Upsert-ul de atribute (Anexa 7) NU e în felia asta: parcelele/deținătorii existenți nu se modifică.
 
 import * as XLSX from 'xlsx-js-style'
-import { faraDiacritice, idParcela, idParcelaProvizoriu, normalizeazaNume } from './idParcela.js'
+import { faraDiacritice, normalizeazaNume } from './idParcela.js'
+
+// Contract 8a: identitatea nu depinde de tronson; helperul legacy ramane in afara feliei.
+export function idParcela(cod3, n) {
+  if (!/^[A-Z]{3}$/.test(cod3)) throw new Error('idParcela: uat3 invalid')
+  if (!Number.isInteger(n) || n < 1 || n > 9999) throw new Error('idParcela: numar invalid (1..9999)')
+  return `${cod3}-${String(n).padStart(4, '0')}`
+}
+export function idParcelaProvizoriu(cod3) {
+  if (!/^[A-Z]{3}$/.test(cod3)) throw new Error('idParcelaProvizoriu: uat3 invalid')
+  return `${cod3}-????`
+}
+export function tronsonOptional(v) {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^(?:[1-9]|10|11)$/.test(v) ? Number(v) : null
+  return Number.isInteger(n) && n >= 1 && n <= 11 ? n : null
+}
 
 export const LOT = 200          // mărimea unui lot la INSERT
 export const LOT_CITIRE = 100   // max id-uri per .in() la citiri
@@ -129,11 +144,11 @@ function mapeazaColoane(chei, cStart) {
 /**
  * parseazaTgz(arrayBuffer, { uats, tronsonPeUat, versiune, sursa })
  *  - uats: [{ id, nume, uat3 }] — UAT-urile proiectului (potrivire pe nume normalizat sau pe uat3)
- *  - tronsonPeUat: { HUS: 3, ... } — tronsonul dat manual per UAT (obligatoriu pentru UAT-urile din fișier)
+ *  - tronsonPeUat: { HUS: 3, ... } — tronson optional per UAT; nu participa la identitate
  *  - idStart: IGNORAT (compatibilitate) — numerele se rezervă server-side la commit
  * → { parcele, detinatori, contacte, dubluri, neidentificati, fara_cheie, ambigue, erori, statistici, antet }
  * Parcela e cheiată intern pe (uat3, Nr.Crt. x) = `cheie` ('HUS:7'); `cheie_sursa` (uat3|poz_hg|nr_cadastral|tarla, sau null) e identitatea
- * între importuri; `ambigua: true` când altă parcelă din fișier are aceeași cheie_sursa. `id_parcela` e PROVIZORIU ('T3-HUS-????').
+ * între importuri; `ambigua: true` când altă parcelă din fișier are aceeași cheie_sursa. `id_parcela` e PROVIZORIU ('HUS-????').
  * Deținătorii poartă `cheie_parcela`, contactele `cheie_detinator`. `fara_cheie` / `ambigue` = rândurile (deținătorii) care NU se vor comite.
  */
 export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiune = null, sursa = 'TGZ' } = {}) {
@@ -205,10 +220,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
     const uat = uatDupa.get(normalizeazaNume(uatBrut)) || uatDupa.get(uatBrut.toUpperCase())
     if (!uat) { erori.push({ rand: randExcel, motiv: `UAT necunoscut „${uatBrut}”`, uat: uatBrut, nume: numeBrut }); continue }
     const s = statUat(uat.uat3)
-    const tronson = Number(tronsonPeUat[uat.uat3])
-    if (!Number.isInteger(tronson) || tronson < 1 || tronson > 11) {
-      erori.push({ rand: randExcel, motiv: `Tronson lipsă sau invalid pentru UAT ${uat.uat3}`, uat: uatBrut, nume: numeBrut }); s.erori++; continue
-    }
+    const tronson = tronsonOptional(tronsonPeUat?.[uat.uat3])
 
     // parcela: cheiată pe (uat3, Nr.Crt. x). Atributele și cheie_sursa se CONSOLIDEAZĂ pe tot grupul după buclă (P1-2 r7):
     // valoarea unui câmp = unica valoare nevidă din grup; mai multe valori distincte ⇒ parcelă ambiguă.
@@ -224,7 +236,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
         nr_crt: nrCrt.x,
         uat_id: uat.id ?? null,
         uat3: uat.uat3,
-        id_parcela: idParcelaProvizoriu(tronson, uat.uat3),
+        id_parcela: idParcelaProvizoriu(uat.uat3),
         nr_provizoriu: nrProvizoriu[uat.uat3],
         tronson,
         poz_hg: null, suprafata_temporara_mp: null, categoria_folosinta: null, tarla: null, nr_cadastral: null, observatii: null,
@@ -386,7 +398,7 @@ function primulNumar(data) {
  * scrieImport(supabase, preview, { proiectId, versiune, sursa, fisierNume, onProgress, pagina, lotCitire })
  *  → { lotId, parceleNoi, parceleRefolosite, detinatoriNoi, detinatoriExistenti, contacteNoi, existente, fara_cheie, ambigue }
  * Ordinea: INSERT red_import_loturi (stare 'in_curs') → select parcele existente pe (proiect_id, cheie_sursa) [≤100 chei per .in(), .range() paginat]
- * → rezervare numere prin RPC per (uat3, tronson) [dacă blocul ar depăși 9999 → eroare ÎNAINTE de orice INSERT] → INSERT parcele noi
+ * → rezervare numere prin RPC per uat3 [dacă blocul ar depăși 9999 → eroare ÎNAINTE de orice INSERT] → INSERT parcele noi
  * (loturi de 200; după FIECARE lot UPDATE lot parcele_noi) → id-uri înapoi → deținătorii lipsă (select pe parcela_id + nume_normalizat,
  * sters_la null) → INSERT (după fiecare lot UPDATE detinatori_noi) → contactele lipsă (select pe detinator_id) → INSERT (după fiecare lot
  * UPDATE diferente.contacte_noi — tabela n-are coloana) → UPDATE lot 'finalizat'.
@@ -445,24 +457,24 @@ export async function scrieImport(supabase, preview, { proiectId, versiune, surs
     const parceleNoi = parcele.filter(p => !parcelaDupaCheie.has(p.cheie))
     const parceleRefolosite = parcele.filter(p => parcelaDupaCheie.has(p.cheie))
 
-    // 2. rezervare numere per (uat3, tronson) + id_parcela final
+    // 2. rezervare numere per uat3 + id_parcela final
     const grupuri = new Map()
-    for (const p of parceleNoi) { const g = `${p.uat3}|${p.tronson}`; if (!grupuri.has(g)) grupuri.set(g, []); grupuri.get(g).push(p) }
+    for (const p of parceleNoi) { const g = p.uat3; if (!grupuri.has(g)) grupuri.set(g, []); grupuri.get(g).push(p) }
     const randuriParcele = []
     for (const [, grup] of grupuri) {
-      const { uat3, tronson } = grup[0]
-      const start = primulNumar(verifica(await supabase.rpc(RPC_REZERVA_NUMERE, { p_uat3: uat3, p_tronson: tronson, p_n: grup.length }), 'rezervare numere parcele'))
+      const { uat3 } = grup[0]
+      const start = primulNumar(verifica(await supabase.rpc(RPC_REZERVA_NUMERE, { p_uat3: uat3, p_n: grup.length }), 'rezervare numere parcele'))
       // P2-8: formatul are fix 4 cifre — dacă blocul ar depăși 9999 ne oprim AICI, înainte de orice INSERT (lotul rămâne cu 0 scrieri)
       const ultim = start + grup.length - 1
-      if (ultim > MAX_NUMAR_PARCELA) throw new Error(`Numerotarea parcelelor pentru UAT ${uat3} / tronson T${tronson} ar depăși ${MAX_NUMAR_PARCELA} (${grup.length} parcele noi de la ${start} → ${ultim}); nimic nu a fost scris`)
-      grup.forEach((p, i) => randuriParcele.push({ p, id_parcela: idParcela(tronson, uat3, start + i) }))
+      if (ultim > MAX_NUMAR_PARCELA) throw new Error(`Numerotarea parcelelor pentru UAT ${uat3} ar depasi ${MAX_NUMAR_PARCELA} (${grup.length} parcele noi de la ${start}); nimic nu a fost scris`)
+      grup.forEach((p, i) => randuriParcele.push({ p, id_parcela: idParcela(uat3, start + i) }))
     }
 
     // 3. INSERT parcele noi + id-uri înapoi
     let facut = 0
     for (const lotP of loturi(randuriParcele)) {
       const randuri = lotP.map(({ p, id_parcela }) => ({
-        proiect_id: proiectId, uat_id: p.uat_id, id_parcela, cheie_sursa: p.cheie_sursa, tronson: p.tronson,
+        proiect_id: proiectId, uat_id: p.uat_id, id_parcela, cheie_sursa: p.cheie_sursa, tronson: p.tronson ?? null,
         sat: p.sat ?? null, tarla: p.tarla ?? null, nr_cadastral: p.nr_cadastral ?? null, poz_hg: p.poz_hg ?? null,
         suprafata_temporara_mp: p.suprafata_temporara_mp ?? null, categoria_folosinta: p.categoria_folosinta ?? null,
         observatii: p.observatii ?? null,
