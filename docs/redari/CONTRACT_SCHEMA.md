@@ -373,3 +373,26 @@ Coloane/obiecte NOI necesare (fără sursă în §2; propuneri, de confirmat de 
 - Decizii deschise: `link_afisare` (pagină publică pe UAT fără token sau se scoate din Anexa 2), `act_identitate`/`act_doveditor`
   (rămân de mână, nu se stochează), `pva_sesiune` vs `pva_corespondenta` (calcul pe `trimis_spre_semnare_data`), tabelul de
   parcele/articole din PV C (nu există în Model_5; anexa = export xlsx din registru).
+# Schema PV - DECIS 02.11.2026, felia 4a (20261129a)
+
+Schema pregatita, neaplicata aici. Coloanele sunt nullable, fara default, cu exceptia reluare.
+
+| Tabel | Coloane noi / contract |
+| --- | --- |
+| red_procese_verbale | lucrari jsonb, stare_teren jsonb: NULL sau obiect; bife confirmate de operator, structura interna definita de UI ulterior |
+| red_procese_verbale | plan_situatie boolean, foto_nr integer >= 0: anexe pe PV, nu pe parcela |
+| red_procese_verbale | constatare_mod text: sediu/teren explicit; reverificare_la date; alte_observatii text |
+| red_procese_verbale | motiv_pv_b text: declaratie/neprezentat/neidentificat/refuz, numai tip B; refuzul nu schimba formularul public |
+| red_procese_verbale | semnat_la_sesiune boolean explicit pentru agregarea PV C; NULL = necunoscut, nu se deduce din data trimiterii |
+| red_procese_verbale | identitate_verificata boolean: doar confirmarea verificarii; actul de identitate NU se stocheaza |
+| red_parcele | verificare_data date, verificare_de_gazpet text, verificare_de_tgz text, jurnal_santier_ref text: comisia verifica o data inaintea sesiunii; referinta libera, Executie ulterior |
+| red_detinatori | act_doveditor_cunoscut boolean: Anexa 7 col.12 DA=true, NU=false, altfel NULL; continutul actului nu este stocat |
+| red_convocari | adresa_tgz_nr text; reluare boolean NOT NULL DEFAULT false; UNIQUE partial detinator_id WHERE reluare AND stare <> 'anulat' AND sters_la IS NULL |
+| red_uat | responsabil_id uuid FK profiles(id): responsabil Gazpet pe primarie, Model 6 AL |
+
+Cele 4 coloane ale parcelei au GRANT SELECT/INSERT/UPDATE explicit pentru authenticated si sunt adaugate la finalul
+red_v_parcele. Vederea pastreaza optiunile, owner-ul si ACL. valoare_lei ramane exclusa.
+Politicile/RLS si fn_red_jurnal nu se modifica; pre/post verifica amprenta celor 15 politici.
+Importul nou persista decedat prin d.decedat === true si act_doveditor_cunoscut inclusiv false/NULL.
+Nu modifica detinatorii deja existenti. Aceasta precizare inlocuieste limita istorica din felia 3b.
+

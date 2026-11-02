@@ -237,15 +237,15 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `reprezentant_tgz_telefon` | convocator, adresa_uat | `red_proiecte.reprezentant_tgz_telefon text` | — |
 | `reprezentant_uat_telefon` | (nominalizare v5, Model 4 pct. 3) | `red_uat.reprezentant_uat_telefon text` (20261127a) | — |
 | `text_gdpr` cu UAT + link | convocator | `{uat}` înlocuit de cod; `red_proiecte.link_informare_gdpr` (20261128a) | **D4 DECIS**: gol → propoziția „Informarea completă” se omite; HTTPS → link configurat |
-| `act_identitate`, `act_doveditor` | pv_a | NU se stochează (GDPR); rămân goale → de mână la sesiune | confirmare |
-| maparea articol_deviz → bife lucrări + `lucrari_altele` | pv_a, pv_b | constantă `articol_deviz → {sol_fertil, nivelare, arat, discuit, insamantare, gard, drum}`; sau `red_procese_verbale.lucrari jsonb` bifat de operator | automat sau manual |
-| starea terenului ca bife (`bifa_st_*`, `stare_teren_alta`) | pv_a, pv_b | contractul are `stare_teren_text`; v5 cere 4 bife + „alta” → `red_procese_verbale.stare_teren jsonb` (sau 4 bool + text) | — |
-| `plan_situatie` (DA/NU), `foto_nr` | pv_a, pv_b | `red_procese_verbale.plan_situatie bool, foto_nr int` | sau pe parcelă (dosarul parcelei) |
-| `constatare_mod` (sediu / teren) | pv_a | `red_procese_verbale.constatare_mod text CHECK ('sediu','teren')` sau derivat din `locul` | — |
-| `verificare_data`, `verificare_de` / `verificare_de_gazpet`, `verificare_de_tgz`, `jurnal_santier` | pv_a, pv_b | pe PARCELĂ (verificarea comisiei pe teren se face înainte de sesiune, o dată): `red_parcele.verificare_data date, verificare_de_gazpet text, verificare_de_tgz text, jurnal_santier_ref text` | legătura cu jurnalul de șantier din Execuție |
-| `reverificare_la` | pv_a | `red_procese_verbale.reverificare_la date` | — |
-| `alte_observatii` | pv_a | `red_procese_verbale.alte_observatii text` | — |
-| reluarea convocării (`reluare_*`) | pv_b | a doua `red_convocari` pe deținător după date corectate + `red_convocari.adresa_tgz_nr text` (adresa TGZ cu corecturi); starea nu se schimbă (CONVOCARE_RETURNATĂ → după reluare, logica existentă pe „convocare activă ulterioară”) | — |
+| `act_identitate`, `act_doveditor` | pv_a | DECIS 02.11: actul de identitate NU se stocheaza; `red_procese_verbale.identitate_verificata boolean`; actul doveditor = `red_detinatori.act_doveditor_cunoscut boolean` DA/NU/NULL, fara continutul actului | 20261129a |
+| lucrari, lucrari_altele | pv_a, pv_b | DECIS 02.11: `red_procese_verbale.lucrari jsonb`, obiect confirmat de operator; propunerea din articol_deviz se face ulterior in UI | 20261129a |
+| stare_teren | pv_a, pv_b | DECIS 02.11: `red_procese_verbale.stare_teren jsonb`, obiect cu 4 bife si alta text; structura interna definita ulterior in UI | 20261129a |
+| plan_situatie, foto_nr | pv_a, pv_b | DECIS 02.11: pe PV, boolean si integer >= 0; NULL = lipsa informatiei | 20261129a |
+| constatare_mod | pv_a | DECIS 02.11: coloana explicita pe PV, sediu/teren; nu derivata din locul | 20261129a |
+| verificare_data, verificare_de_gazpet, verificare_de_tgz, jurnal_santier | pv_a, pv_b | DECIS 02.11: pe parcela, verificarea comisiei inainte de sesiune; `jurnal_santier_ref text` liber | 20261129a; legatura Executie ulterior |
+| reverificare_la | pv_a | DECIS 02.11: `red_procese_verbale.reverificare_la date` | 20261129a |
+| alte_observatii | pv_a | DECIS 02.11: `red_procese_verbale.alte_observatii text` | 20261129a |
+| reluare, adresa_tgz_nr | pv_b | DECIS 02.11: `red_convocari.reluare boolean NOT NULL DEFAULT false`, `adresa_tgz_nr text`; unica reluare activa per detinator; anulat/soft-delete elibereaza cheia | 20261129a |
 | `semnatar_apm` | pv_b, pv_c | `red_proiecte.apm_nume text` (20261127a), gol = de mână | — |
 | `nr_document` pentru adresa UAT | adresa_uat | **DECIS 02.11: serie proprie `AU-0001`** — `fn_red_numar_document('AU')` + `red_uat.adresa_nr` (unic), `adresa_data` (20261127a) | — |
 | `termen_confirmare` | adresa_uat | `red_uat.termen_confirmare date` (20261127a), introdus de operator, CHECK < zi1 | N pentru o eventuală propunere automată |
@@ -253,11 +253,11 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `link_afisare` | adresa_uat | **DECIS / SCOS 02.11 (Răzvan)** — pe afișare rămân telefonul și e-mailul; nu există pagină publică pe UAT | implementat în felia 2 |
 | `reprezentant_gazpet_nume` la PV afișare | adresa_uat | cine afișează fizic → `red_uat.afisare_reprezentant_gazpet` (20261127a) | — |
 | `prezent` (bifa „nu s-a prezentat”; Model 6 col. AA) | pv_b, registru | `red_raspunsuri` cu `canal='sesiune'` ⇒ prezent; sau `red_detinatori.prezent_la_sesiune date` | — |
-| refuz nemotivat (`bifa_sit_refuz`) | pv_b | **DECIS 02.11: motiv pe PV B** — `red_procese_verbale.motiv_pv_b text CHECK (declaratie/neprezentat/neidentificat/refuz)`; opțiunile formularului public NU se schimbă | — (felia PV) |
-| `pva_sesiune` vs `pva_corespondenta` | pv_c | calcul pe `trimis_spre_semnare_data` (NULL = la sesiune) — de confirmat; alternativ `semnat_la_sesiune bool` | — |
+| motiv_pv_b | pv_b | DECIS 02.11: declaratie/neprezentat/neidentificat/refuz, numai tip B; formularul public ramane neschimbat | 20261129a |
+| pva_sesiune vs pva_corespondenta | pv_c | DECIS 02.11: `red_procese_verbale.semnat_la_sesiune boolean` explicit; NULL necunoscut; nu dedus din data trimiterii | 20261129a |
 | `km_de_la`, `km_pana_la` pe tronson | pv_c | MIN/MAX din red_parcele sau tabel `red_tronsoane` | — |
 | `id_parcela` în documente | toate | modelele nu îl afișează; de decis dacă îl adăugăm | — |
-| `responsabil_gazpet` (Model 6 col. AL) | registru | `red_uat.responsabil_id` sau `red_parcele.responsabil text` | — |
+| responsabil_gazpet | registru Model 6 AL | DECIS 02.11: `red_uat.responsabil_id uuid REFERENCES profiles(id)` | 20261129a |
 | „constatare pe teren cerută? (data)” (Model 6 col. AB) | registru | v5 spune „la data stabilită de comisie” → data vine din comisie, nu de la deținător: `red_raspunsuri.constatare_teren_data` (setată de operator) | — |
 | conținut fix de parametrizat la alt proiect | toate | A.P.M. Mehedinți, Acordul de mediu, „Lider al Asocierii …”, Prunișor–Jupa în corp | nu acum (Lot 1) |
 

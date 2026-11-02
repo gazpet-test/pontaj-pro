@@ -275,6 +275,62 @@ Reguli L01-L25 (lectiile citite inaintea implementarii):
 | L23 | n/a - fara citiri paginabile noi |
 | L24 | n/a - parser sincron; ciclul async existent al UI nu a fost extins |
 | L25 | Antet independent din XLSX real, expected explicite si date fictive; testele sunt scrise, NU declarate trecute; fara BD/RLS in aceasta felie |
+### 4.1f Faza 2, felia 4a - schema PV A/B/C (02.11.2026)
+
+Pregatit, NEAPLICAT: 20261129a_redari_pv_schema; 18 coloane, 6 CHECK-uri PV,
+FK responsabil UAT, index unic pentru reluarea activa. Fara DML in migrare sau politici/RLS noi.
+Vederea primeste cele 4 coloane ale comisiei la final, cu GRANT explicit pe coloanele parcelei;
+valoare_lei ramane exclusa. Revenire armata cu lock inainte de verificarea datelor si GUC de forta.
+Generarea PV si UI-ul raman pentru felia urmatoare.
+
+Fisiere:
+- supabase/migrations/20261129a_redari_pv_schema.sql
+- supabase/revenire/20261129a_redari_pv_schema_ROLLBACK.sql
+- supabase/tests/20261129a_redari_pv_schema_dryrun.sql
+- src/redari/importTgz.js: numai obiectul INSERT din scrieImport, decedat si act_doveditor_cunoscut.
+- src/redari/importAnexa7.js: mapare conditionala autorizata de brief, col.12 DA/NU/NULL;
+  completeaza lipsa pe dublura; valorile nerecunoscute si contradictiile raman in note.
+- src/redari/importScriere.test.js si src/redari/importAnexa7.test.js.
+- docs/redari/CONTRACT_SCHEMA.md, SABLOANE.md sectiunea 3 si acest raport.
+
+Teste SCRISE, NERULATE: DRY TEST0-5 (identitati reale, date fictive, SQLSTATE exact,
+editor/viewer ca authenticated, vedere, reluare/anulare, FK si jurnal), mock INSERT pentru
+true/false/lipsa decedat si true/false/NULL act; parser DA/NU/gol/valoare necunoscuta/dublura.
+Verificare efectuata: citirea codului si control static ASCII/BOM pe fisierele noi.
+Nu s-au rulat npm/npx/node/vitest, nu s-au instalat pachete. Claude ruleaza testele,
+DRY si apply -> revenire -> re-apply pe Postgres real. Nicio validare BD/PostgREST,
+RLS real, concurenta in doua sesiuni sau deploy efectuata. Fara Git/commit/push/secrete.
+
+Lectii L01-L25 (referintele de mai jos sunt la cod/teste scrise, nu rezultate PASS):
+
+| Regula | Respectare / n/a |
+| --- | --- |
+| L01 | Migrare/revenire: lock inainte de verificarea datelor; index UNIQUE pentru reluari concurente. |
+| L02 | DDL si pre/post in tranzactia unica a runner-ului; scrieImport pastreaza fluxul existent, fara pasi noi. |
+| L03 | n/a |
+| L04 | n/a |
+| L05 | n/a - nu se schimba tratarea retelei/importului existent. |
+| L06 | Ordinea red_uat, red_parcele, red_detinatori, red_convocari, red_procese_verbale documentata identic in apply/revenire. |
+| L07 | CHECK/FK/UNIQUE in BD; GRANT numai pe cele 4 coloane; DRY TEST2 editor/viewer si refuz valoare_lei. |
+| L08 | Nu se adauga functii de autentificare; TEST0 foloseste identitati reale, JWT/SET LOCAL ROLE doar in harness pg_temp. |
+| L09 | n/a - fara DEFINER/edge nou. |
+| L10 | Date fictive in toate fixture-urile, fara acte de identitate sau secrete. |
+| L11 | importAnexa7.js: col.12 identificata prin antet existent unic; numai token complet DA/NU. |
+| L12 | Act necunoscut ramane NULL si in note; dublura pastreaza continutul in sursa_date. |
+| L13 | Test parser DA/NU pozitiv si DA partial negativ; fara regex nou. |
+| L14 | Preflight sub lock, pre/post, garda tranzactiei; revenire refuza date/istoric nou fara forta, fara CASCADE; ciclul real NERULAT. |
+| L15 | Amprenta baseline a celor 15 politici in pre/post; vedere optiuni/owner/ACL comparate; nu se modifica functii/triggere. |
+| L16 | red_convocari_reluare_uq pe detinator_id NOT NULL si predicatul exact al randurilor vii; DRY TEST3. |
+| L17 | n/a - date explicite in fixture-uri, fara conversii numerice/temporale noi. |
+| L18 | Coloane nullable fara default ascuns (exceptia reluare ceruta); act necunoscut NULL, false pastrat prin ??; garzi IS DISTINCT FROM. |
+| L19 | Nu se introduce pereche JS/SQL de reguli; parserul foloseste normalizarea existenta. |
+| L20 | DRY cai valide/invalide, anulare si convocari obisnuite multiple; teste import false/NULL si compatibilitate TGZ. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | n/a - citirile existente paginabile nu se modifica. |
+| L24 | n/a - fara flux UI nou. |
+| L25 | Antet din XLSX real in testul parserului, asteptari explicite; DRY authenticated non-owner si FK/CHECK reale; executia delegata lui Claude, NERULATA aici. |
+
 ### 4.2 NU e făcut (faza următoare, după brief §8 „apoi”)
 - PV A / B / C (generare din `pv_a` / `pv_b` / `pv_c.docx`, numerotare PVA/PVB/PVC, stările trimis/semnat, upload scan semnat) — doar schema există.
 - Evidența ulterioară a afișării și semnării PV de afișare; documentul Model 4 se generează în 4.1c.
