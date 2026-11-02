@@ -56,6 +56,30 @@ DO $t$ BEGIN
   RAISE NOTICE 'TEST3 OK';
 END $t$;
 RESET ROLE;
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE refuz boolean:=false;
+BEGIN
+  BEGIN PERFORM public.fn_red_pv_creeaza('B',current_setting('r29f.p')::uuid,NULL,NULL);
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN refuz:=SQLERRM LIKE '%PV B nu este necesar%'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'TEST7 FAIL creare B cu toti PV A'; END IF;
+  RAISE NOTICE 'TEST7 OK creare PV B refuzata cand toti au PV A';
+END $t$;
+RESET ROLE;
+INSERT INTO public.red_procese_verbale(tip,parcela_id,uat_id,tronson,nr_pv,data_pv,stare,motiv_pv_b)
+  VALUES('B',current_setting('r29f.p')::uuid,current_setting('r29f.u')::uuid,7,'PVB-ZXF-0002','2026-11-02','generat','neprezentat');
+SET LOCAL ROLE authenticated;
+DO $t$
+DECLARE refuz boolean:=false;
+BEGIN
+  BEGIN UPDATE public.red_procese_verbale SET stare='semnat',semnat_primit_data='2026-11-03',fisier_semnat_path='TEST/b.pdf' WHERE nr_pv='PVB-ZXF-0002';
+  EXCEPTION WHEN check_violation THEN refuz:=SQLERRM LIKE 'PV B nu se mai poate semna%'; END;
+  IF NOT refuz THEN RAISE EXCEPTION 'TEST8 FAIL semnare B cu toti PV A'; END IF;
+  UPDATE public.red_procese_verbale SET stare='anulat',motiv_anulare='toti au PV A' WHERE nr_pv='PVB-ZXF-0002';
+  IF NOT FOUND THEN RAISE EXCEPTION 'TEST8 FAIL anulare'; END IF;
+  RAISE NOTICE 'TEST8 OK semnare PV B refuzata, anulare permisa';
+END $t$;
+RESET ROLE;
 -- A new active owner without PV A must count; deleting that owner logically must restore A.
 DO $t$
 DECLARE d uuid;
