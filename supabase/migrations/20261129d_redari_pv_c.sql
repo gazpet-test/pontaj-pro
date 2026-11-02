@@ -19,9 +19,10 @@ BEGIN
   -- Copilot f4d r1 P2-01: eligibilitatea (parcelele tronsonului + acoperirea A/B) ramane stabila pana la COMMIT.
   -- SHARE pe parcele blocheaza INSERT/UPDATE concurente pe parcele; SHARE ROW EXCLUSIVE pe PV blocheaza
   -- anularea/crearea concurenta de PV si serializeaza crearile PV C (actiune rara de admin; lock_timeout 5s).
-  -- Ordine: advisory -> red_parcele -> red_procese_verbale -> contor; fn_red_pv_creeaza ia parcela (ROW SHARE, compatibil) apoi PV.
-  LOCK TABLE public.red_parcele IN SHARE MODE;
+  -- Ordine (Copilot f4d r3 P3): advisory -> red_procese_verbale -> red_parcele -> contor, aceeasi ca la semnare
+  -- (unde UPDATE-ul detine deja PV), deci fara ciclu creare/semnare; fn_red_pv_creeaza: parcela (ROW SHARE) apoi PV.
   LOCK TABLE public.red_procese_verbale IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_parcele IN SHARE MODE;
   -- PV C is per tronson; uat_id is only the anchor required by the schema.
   SELECT u.id INTO ancora FROM public.red_parcele p JOIN public.red_uat u ON u.id=p.uat_id AND u.proiect_id=p.proiect_id
     WHERE p.proiect_id=p_proiect_id AND p.tronson=p_tronson AND p.sters_la IS NULL
@@ -80,8 +81,8 @@ CREATE FUNCTION public.fn_red_pv_c_neacoperite(p_uat_id uuid, p_tronson int) RET
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s' AS $n$
 BEGIN
   IF auth.uid() IS NULL OR public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN RAISE EXCEPTION 'redari: PV C doar admin' USING ERRCODE='42501'; END IF;
-  LOCK TABLE public.red_parcele IN SHARE MODE;
   LOCK TABLE public.red_procese_verbale IN SHARE ROW EXCLUSIVE MODE;
+  LOCK TABLE public.red_parcele IN SHARE MODE;
   RETURN (SELECT count(*) FROM public.red_v_tronson t JOIN public.red_uat u ON u.proiect_id=t.proiect_id
     WHERE u.id=p_uat_id AND t.tronson=p_tronson AND t.tip_pv IS NULL);
 END $n$;
