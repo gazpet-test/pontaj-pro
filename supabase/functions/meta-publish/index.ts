@@ -153,23 +153,34 @@ Deno.serve(async (req: Request) => {
         let st: Record<string, number | null> = { fb_reach: ps.fb_reach, fb_impresii: ps.fb_impresii, fb_reactii: ps.fb_reactii, fb_comentarii: ps.fb_comentarii, fb_distribuiri: ps.fb_distribuiri };
         const vechi = !ps.fb_stats_la || (Date.now() - new Date(ps.fb_stats_la).getTime()) > 6 * 3600e3;
         if (vechi || body.forta) {
-          // audit 02.11 #17: interactiunile si insights-urile se cer SEPARAT — o metrica retrasa de Meta (impresiile pe Pages) facea sa pice tot apelul,
-          // iar eroarea era inghitita (fb_stats_la a ramas NULL la toate postarile). Erorile se intorc acum in raspuns (doar mesajul Graph, fara token).
+          // audit 02.11 #17: interactiunile si insights-urile se cer SEPARAT si independent — o metrica retrasa de Meta (impresiile pe Pages)
+          // facea sa pice tot apelul, iar eroarea era inghitita (fb_stats_la a ramas NULL la toate postarile). Ce nu se poate citi pastreaza
+          // valoarea veche; fb_stats_la se pune doar daca macar o parte s-a citit si UPDATE-ul a reusit. Erorile se intorc in raspuns (doar mesajul Graph).
+          const nou: Record<string, number | null> = {}
+          let interOk = false
           try {
             const f = await graph(`${ps.fb_post_id}?fields=reactions.summary(true).limit(0),comments.summary(true).limit(0),shares`, { tok: PT });
-            st = { ...st, fb_reactii: f.reactions?.summary?.total_count ?? 0, fb_comentarii: f.comments?.summary?.total_count ?? 0, fb_distribuiri: f.shares?.count ?? 0 };
-            const ins: Record<string, number> = {};
-            for (const metrici of ['post_impressions_unique,post_impressions', 'post_total_media_view_unique,post_media_view']) {
-              try {
-                const r = await graph(`${ps.fb_post_id}/insights?metric=${metrici}`, { tok: PT });
-                for (const m of r.data || []) ins[m.name] = Number(m.values?.[0]?.value ?? 0);
-                if (Object.keys(ins).length) break;
-              } catch (e) { erori.add(`insights (${metrici.split(',')[0]}): ${String((e as Error)?.message || e).slice(0, 160)}`); }
-            }
-            st.fb_reach = ins.post_impressions_unique ?? ins.post_total_media_view_unique ?? null;
-            st.fb_impresii = ins.post_impressions ?? ins.post_media_view ?? null;
-            await db.from('marketing_postari').update({ ...st, fb_stats_la: new Date().toISOString() }).eq('id', ps.id);
-          } catch (e) { erori.add(`interactiuni: ${String((e as Error)?.message || e).slice(0, 160)}`); /* pastram ce aveam */ }
+            Object.assign(nou, { fb_reactii: f.reactions?.summary?.total_count ?? 0, fb_comentarii: f.comments?.summary?.total_count ?? 0, fb_distribuiri: f.shares?.count ?? 0 });
+            interOk = true
+          } catch (e) { erori.add(`interactiuni: ${String((e as Error)?.message || e).slice(0, 160)}`); }
+          const ins: Record<string, number> = {}, eroriIns: string[] = [];
+          for (const metrici of ['post_impressions_unique,post_impressions', 'post_total_media_view_unique,post_media_view']) {
+            try {
+              const r = await graph(`${ps.fb_post_id}/insights?metric=${metrici}`, { tok: PT });
+              for (const m of r.data || []) ins[m.name] = Number(m.values?.[0]?.value ?? 0);
+              if (Object.keys(ins).length) break;
+            } catch (e) { eroriIns.push(`insights (${metrici.split(',')[0]}): ${String((e as Error)?.message || e).slice(0, 160)}`); }
+          }
+          if (Object.keys(ins).length) {
+            // rezerva (vizualizari media) nu e identica semantic cu reach/impresii — o folosim doar cand metricile vechi lipsesc
+            nou.fb_reach = ins.post_impressions_unique ?? ins.post_total_media_view_unique ?? st.fb_reach ?? null;
+            nou.fb_impresii = ins.post_impressions ?? ins.post_media_view ?? st.fb_impresii ?? null;
+          } else eroriIns.forEach(x => erori.add(x));   // eroare raportata doar daca nicio varianta n-a mers
+          if (Object.keys(nou).length) {
+            const { error: eu } = await db.from('marketing_postari').update(interOk ? { ...nou, fb_stats_la: new Date().toISOString() } : nou)   // fara interactiuni nu marcam postarea ca proaspata.eq('id', ps.id);
+            if (eu) erori.add(`salvare: ${String(eu.message).slice(0, 160)}`);
+            else st = { ...st, ...nou };
+          }
         }
         out.push({ id: ps.id, site_id: ps.site_id, publicat_la: ps.publicat_la, ...st });
       }
