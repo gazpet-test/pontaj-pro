@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
 import { BIFA_DA, BIFA_NU, CHEI_PV_A, propuneLucrari, verificaDatePvA, genereazaPvA, calePv, salveazaPv } from './pv.js'
-import { CHEI_PV_B, verificaDatePvB, genereazaPvB, extensieScan, verificaContinutScan } from './pv.js'
+import { CHEI_PV_B, verificaDatePvB, genereazaPvB, extensieScan, verificaContinutScan, referintaPvA, detinatoriFaraPvA } from './pv.js'
 const sablon = () => readFileSync('public/redari/sabloane/pv_a.docx')
 const date = () => ({
   proiect: { contract_nr:'CTR & <1>', contract_data:'2026-11-02', denumire:'Test', reprezentant_gazpet_nume:'FICTIV G', reprezentant_tgz_nume:'FICTIV T' },
@@ -236,5 +236,59 @@ describe('PV C',()=>{
     expect(r.campuri.semnatar_apm).toBe('APM TEST');expect(Object.keys(r.campuri).sort()).toEqual([...CHEI_PV_C].sort())
     const z=await JSZip.loadAsync(await r.blob.arrayBuffer());expect(await z.file('word/document.xml').async('string')).not.toContain('{{')
     d.parcele=[];const gol=await genereazaPvC({...d,templateArrayBuffer:readFileSync('public/redari/sabloane/pv_c.docx')});expect(gol.campuri.km_de_la).toBe('')
+  })
+})
+const aSemnat = (campuri = {}) => ({id:'a1',parcela_id:'p',detinator_id:'d1',tip:'A',stare:'semnat',
+  nr_pv:'PVA-ZZZ-0001',data_pv:'2026-11-12',semnat_primit_data:'2026-11-13',...campuri})
+const textReferinta = 'Pe aceasta parcela exista PV A semnat: PVA-ZZZ-0001 din 12.11.2026. Prezentul PV B priveste numai detinatorii fara PV A semnat.'
+describe('PV B coproprietari - felia 7',()=>{
+  it('fara PV A semnat activ pe parcela: referinta goala',()=>{
+    expect(referintaPvA({parcela:{id:'p'},pvs:[]})).toBe('')
+    for(const schimbare of [{stare:'anulat'},{stare:'generat'},{sters_la:'2026-11-14'},{tip:'B'},{parcela_id:'alta'}])
+      expect(referintaPvA({parcela:{id:'p'},pvs:[aSemnat(schimbare)]})).toBe('')
+  })
+  it('un PV A: numar si data documentului, fara nume',()=>{
+    expect(referintaPvA({parcela:{id:'p'},detinatori:[{id:'d1',nume:'NUME SECRET'}],pvs:[aSemnat()]})).toBe(textReferinta)
+  })
+  it('doua PV A, ordonare stabila, ignora anulate/sterse, compara cu cea mai recenta primire',()=>{
+    const d={parcela:{id:'p',verificare_data:'2026-11-15'},pvs:[
+      aSemnat({id:'a2',detinator_id:'d2',nr_pv:'PVA-ZZZ-0002',data_pv:'2026-11-14',semnat_primit_data:'2026-11-16'}),
+      aSemnat(),aSemnat({nr_pv:'ANULAT',stare:'anulat'}),aSemnat({nr_pv:'STERS',sters_la:'2026-11-14'})]}
+    expect(referintaPvA(d)).toBe('Pe aceasta parcela exista PV A semnat: PVA-ZZZ-0001 din 12.11.2026, PVA-ZZZ-0002 din 14.11.2026. Prezentul PV B priveste numai detinatorii fara PV A semnat.')
+    d.parcela.verificare_data='2026-11-17'
+    expect(referintaPvA(d)).toContain(' Verificare noua a terenului la data de 17.11.2026.')
+  })
+  it.each([['2026-11-12',false],['2026-11-13',false],['2026-11-14',true]])('verificare %s, noua: %s',(verificare_data,noua)=>{
+    expect(referintaPvA({parcela:{id:'p',verificare_data},pvs:[aSemnat()]}))
+      .toBe(textReferinta+(noua?' Verificare noua a terenului la data de 14.11.2026.':''))
+  })
+  it('data_pv este rezerva cand data primirii lipseste',()=>{
+    expect(referintaPvA({parcela:{id:'p',verificare_data:'2026-11-13'},pvs:[aSemnat({semnat_primit_data:null})]}))
+      .toBe(textReferinta+' Verificare noua a terenului la data de 13.11.2026.')
+  })
+  it('numai activi nesemnatari; zero detinatori nu inseamna toti semnatari',()=>{
+    const d=dateB();d.parcela.id='p';d.pvs=[aSemnat()]
+    expect(detinatoriFaraPvA(d).map(x=>x.id)).toEqual(['d2'])
+    expect(verificaDatePvB(d)).toEqual([])
+    d.pvs.push(aSemnat({id:'a2',detinator_id:'d2'}))
+    expect(verificaDatePvB(d)).toContain('toti detinatorii au PV A semnat')
+    d.detinatori=[]
+    expect(verificaDatePvB(d)).not.toContain('toti detinatorii au PV A semnat')
+  })
+  it('sablon real: doar absentii, referinta completata, 78 chei consumate',async()=>{
+    const d=dateB();d.parcela.id='p';d.pvs=[aSemnat()]
+    d.convocari=[{id:'c1',detinator_id:'d1',stare:'activ',canal:'posta',nr_tracking:'DOAR-SEMNATAR',created_at:'2026-11-14'}]
+    d.raspunsuri=[{detinator_id:'d1',data:'2026-11-14',seq:1,optiune:'particip'}]
+    const r=await genereazaPvB({...d,templateArrayBuffer:sablonB()})
+    expect(r.campuri.nume).toBe('FICTIV DOI')
+    expect(r.campuri.pv_a_referinta).toBe(textReferinta)
+    expect(r.campuri.conv_nr_tracking).toBe('')
+    expect(r.campuri.bifa_fara_raspuns).toBe(BIFA_DA)
+    expect(Object.keys(r.campuri).sort()).toEqual([...CHEI_PV_B].sort())
+    const z=await JSZip.loadAsync(await r.blob.arrayBuffer())
+    for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name))) expect(await f.async('string')).not.toContain('{{')
+    expect(await z.file('word/document.xml').async('string')).toContain(textReferinta)
+    d.pvs.push(aSemnat({id:'a2',detinator_id:'d2'}))
+    await expect(genereazaPvB({...d,templateArrayBuffer:sablonB()})).rejects.toThrow('toti detinatorii au PV A semnat')
   })
 })

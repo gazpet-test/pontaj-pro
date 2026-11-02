@@ -230,7 +230,7 @@ procentul se repetă pe fiecare rând al UAT-ului).
 
 ### red_v_tronson
 `proiect_id, tronson, uat_id, uat3, parcela_id, id_parcela, suprafata_temporara_mp, articol_deviz, cantitate, tip_pv text NULL`
-(A dacă există PV A semnat, B dacă există PV B, altfel NULL), `obiectii_deschise bool`.
+(A numai daca exista minimum un detinator activ si fiecare detinator activ are PV A semnat activ; altfel B daca exista PV B activ, altfel NULL), `obiectii_deschise bool`.
 
 ## 4. RLS (rezumat)
 - SELECT pe red_proiecte/uat/parcele/detinatori/convocari/raspunsuri/procese_verbale/jurnal/import_loturi/numere: `fn_red_nivel() IS NOT NULL`.
@@ -426,3 +426,5 @@ Revenirea armata refuza orice PV C existent, inclusiv anulat/sters, si restaurea
 Limita: lock-ul serializeaza crearile C prin RPC; nu ingheata modificarile concurente ale
 parcelelor sau PV A/B. PV C reprezinta verificarea la crearea/generarea lui, nu un snapshot SQL durabil.
 PV C se scoate prin anulare; garda refuza schimbarea sters_la, inclusiv reactivarea.
+
+Felia 7, migrarea 20261129f (20261129120500): red_v_tronson pastreaza lista/ordinea/tipurile coloanelor, security_invoker si ACL. Detinator activ = sters_la IS NULL; PV A semnat activ = stare semnat si sters_la IS NULL; PV B activ = stare <> anulat si sters_la IS NULL. Zero detinatori activi nu produce A: numai B activ poate acoperi parcela. Obiectiile deschise raman neschimbate. RPC-urile PV C folosesc aceasta vedere fara modificari.
