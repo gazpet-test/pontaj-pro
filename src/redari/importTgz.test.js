@@ -84,5 +84,8 @@ describe('randuri de tratat (export fara nume)', () => {
     // CSV injection: valori care incep cu = + - @ primesc apostrof
     const inj = csvRanduriDeTratat([{ rand: 1, categorie: 'eroare', uat: '=HYPERLINK(1)', nr_crt: '+2', cheie_sursa: '-3', motiv: '@x', detaliu: 'ok' }])
     expect(inj).toContain("'=HYPERLINK(1);'+2;'-3;'@x;ok")
+    const inj2 = csvRanduriDeTratat([{ rand: 1, categorie: 'eroare', uat: '  =A1', nr_crt: '\t=B1', cheie_sursa: '\n=C1', motiv: 'm', detaliu: '' }])
+    expect(inj2).toContain("'  =A1;'")
+    expect(inj2).toContain("\"'\n=C1\"")
   })
 })

@@ -607,7 +607,8 @@ export function randuriDeTratat(preview) {
 
 export function csvRanduriDeTratat(randuri) {
   // Copilot r1 P2-01: valorile vin dintr-un fișier extern și CSV-ul se deschide în Excel → = + - @ (și tab/CR) la început se neutralizează cu apostrof
-  const q = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`; return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+  // r2: și după spații / linii noi la început
+  const q = v => { let t = String(v ?? ''); if (/^\s*[=+\-@]/.test(t) || /^[\t\r\n]/.test(t)) t = `'${t}`; return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
   const cap = ['Rând Excel', 'Categorie', 'UAT', 'Nr.Crt.', 'Cheie (UAT|HG|cadastru|tarla)', 'Motiv', 'Detaliu']
   return '\uFEFF' + [cap, ...randuri.map(r => [r.rand ?? '', r.categorie, r.uat, r.nr_crt, r.cheie_sursa, r.motiv, r.detaliu])].map(l => l.map(q).join(';')).join('\r\n')
 }
