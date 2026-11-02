@@ -216,24 +216,24 @@ describe('FormularCampuri', () => {
 describe('ecranul Setări proiect', () => {
   it('cererea: admin vede sectiunea si lipsurile ca indiciu (butonul NU e blocat de ele — Copilot f3a r2 P3-01); editor/viewer nu o vad', () => {
     const html = renderToString(<SetariProiect proiect={proiect} uats={[]} nivel="admin" show={show} />)
-    expect(html).toContain('Cerere de imputernicire catre Beneficiar')
-    expect(html).toContain('Nr. inregistrare (optional)')
+    expect(html).toContain('Cerere de împuternicire către Beneficiar')
+    expect(html).toContain('Nr. înregistrare (opțional)')
     expect(html).toContain('Lipseste beneficiarul')
     expect(html).toContain('cel putin un UAT')
     expect(html).toContain('la generare se verifică datele actuale')
-    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Genereaza cererea \(DOCX\)<\/button>/)   // validarea reală e pe datele proaspete, la click
-    expect(html).toMatch(/<button[^>]*>Genereaza cererea \(DOCX\)<\/button>/)
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>📄 Generează cererea \(DOCX\)<\/button>/)   // validarea reală e pe datele proaspete, la click
+    expect(html).toMatch(/<button[^>]*>📄 Generează cererea \(DOCX\)<\/button>/)
     for (const nivel of ['editor', 'viewer']) {
       const h = renderToString(<SetariProiect proiect={proiect} uats={uats} nivel={nivel} show={show} />)
-      expect(h).not.toContain('Cerere de imputernicire catre Beneficiar')
-      expect(h).not.toContain('Genereaza cererea')
+      expect(h).not.toContain('Cerere de împuternicire către Beneficiar')
+      expect(h).not.toContain('Generează cererea')
     }
   })
   it('cererea: proiect complet permite generare, modificarile nesalvate o blocheaza', () => {
     const h = harness()
     const props = { proiect: { ...proiect, beneficiar: 'Beneficiar FICTIV', contract_nr: 'TEST-1', contract_data: '2025-01-22', reprezentant_tgz_nume: 'Delegat FICTIV', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator' }, uats, nivel: 'admin', show }
     let tree = h.render(SetariProiect, props)
-    const buton = t => elemente(t, 'button').find(b => b.props.children === 'Genereaza cererea (DOCX)')
+    const buton = t => elemente(t, 'button').find(b => b.props.children === '📄 Generează cererea (DOCX)')
     expect(buton(tree).props.disabled).toBe(false)
     elemente(tree, FormularCampuri)[0].props.onChange('contract_nr', 'EDITAT')
     tree = h.render(SetariProiect, props)
@@ -248,7 +248,7 @@ describe('ecranul Setări proiect', () => {
     vi.stubGlobal('fetch', fetchMock)
     try {
       const tree = h.render(SetariProiect, props)
-      const buton = elemente(tree, 'button').find(b => b.props.children === 'Genereaza cererea (DOCX)')
+      const buton = elemente(tree, 'button').find(b => b.props.children === '📄 Generează cererea (DOCX)')
       await new Promise(r => setTimeout(r, 0))   // citirea executie_proiecte din efect (await pe thenable = microtask) consuma intai paginile implicite
       // Copilot f3a r1 P2: UAT-urile se citesc din BD la click (keyset: o pagina + una goala) — paginile se pun INAINTE de click
       raspunsuri.liste.push({ data: uats.map(u => ({ id: u.id, nume: u.nume })), error: null }, { data: [], error: null })
