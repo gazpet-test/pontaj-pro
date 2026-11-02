@@ -13,11 +13,11 @@ const egal = (a,b) => JSON.stringify(canonic(a ?? null)) === JSON.stringify(cano
 const cas = (q, vechi, chei) => chei.reduce((r,k) => vechi[k] == null ? r.is(k,null) : r.eq(k,typeof vechi[k] === 'object' ? JSON.stringify(canonic(vechi[k])) : vechi[k]),q)
 const forma = s => !s ? {} : (s.pv?.tip === 'C' || ['semnat','anulat'].includes(s.pv?.stare)) ? {...s.pv} : { ...s.pv, lucrari: s.pv?.lucrari ?? propuneLucrari(s.parcela?.articol_deviz), stare_teren: s.pv?.stare_teren ?? {} }
 const conflict = () => new Error('Modificat de altcineva, reincarca.')
-export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiectId, tip = 'A', nivel, show, onClose, onGata }) {
+export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiectId, tip = 'A', nivel, show, onClose, onGata, dinSesiune = false }) {
   const [sursa,setSursa] = useState(null), [form,setForm] = useState({}), [comisie,setComisie] = useState({})
   const [lucru,setLucru] = useState(false), [mesaj,setMesaj] = useState('')
   const [dataStare,setDataStare] = useState(aziBucuresti), [motivAnulare,setMotivAnulare] = useState('')
-  const [scan,setScan] = useState(null), [fizic,setFizic] = useState(false), [sesiune,setSesiune] = useState(false)
+  const [scan,setScan] = useState(null), [fizic,setFizic] = useState(false), [sesiune,setSesiune] = useState(dinSesiune)
   const generatie = useRef(0), ocupat = useRef(false)
   const poateScrie = nivel === 'admin' || (tip !== 'C' && nivel === 'editor')
   const final = ['semnat','anulat'].includes(sursa?.pv?.stare)
@@ -70,15 +70,15 @@ export default function ModalPv({ pvId, tronson, parcelaId, detinatorId, proiect
     const semnate = await citestePaginat(() => supabase.from('red_procese_verbale').select('id').eq('parcela_id',parcelaId).eq('tip','A').eq('stare','semnat').is('sters_la',null),opt)
     return {parcela,detinator,proiect,uat,pv:rasp.data,detinatori,convocari,raspunsuri,areASemnat:semnate.length > 0}
   }
-  const aplica = s => { setSursa(s); setForm(forma(s)); setComisie(Object.fromEntries(COMISIE.map(k=>[k,s.parcela[k] ?? null]))) }
+  const aplica = s => { setSursa(s); setForm(dinSesiune && s.pv?.tip === 'A' && !['semnat','anulat'].includes(s.pv?.stare) && s.pv?.constatare_mod == null ? { ...forma(s), constatare_mod: 'sediu' } : forma(s)); setComisie(Object.fromEntries(COMISIE.map(k=>[k,s.parcela[k] ?? null]))) }
   useEffect(() => {
     const token = ++generatie.current
-    ocupat.current = true; setLucru(true); setSursa(null); setMesaj(''); setScan(null); setMotivAnulare(''); setDataStare(aziBucuresti()); setFizic(false); setSesiune(false)
+    ocupat.current = true; setLucru(true); setSursa(null); setMesaj(''); setScan(null); setMotivAnulare(''); setDataStare(aziBucuresti()); setFizic(false); setSesiune(dinSesiune)
     citeste(() => generatie.current === token).then(s => { if (generatie.current === token) aplica(s) })
       .catch(e => { if (generatie.current === token) setMesaj(msgEroare(e)) })
       .finally(() => { if (generatie.current === token) { ocupat.current=false; setLucru(false) } })
     return () => { generatie.current++ }
-  }, [parcelaId,detinatorId,proiectId,tip,pvId,tronson])
+  }, [parcelaId,detinatorId,proiectId,tip,pvId,tronson,dinSesiune])
   const ruleaza = async f => {
     if (ocupat.current) return
     ocupat.current=true; setLucru(true); setMesaj('')
