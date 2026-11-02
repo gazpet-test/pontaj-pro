@@ -72,6 +72,22 @@ BEGIN
   RETURNING * INTO r;
   RETURN r;
 END $fn$;
+-- Copilot f4d r2 P2: semnarea PV C reverifica eligibilitatea sub ACELEASI lock-uri ca la creare.
+-- Apelata din garda (SECURITY INVOKER, admin); ea insasi SECURITY DEFINER ca sa poata lua LOCK TABLE.
+-- Doar admin (altfel oricine autentificat ar putea bloca tabelele). Tranzactia semnarii detine deja
+-- ROW EXCLUSIVE pe PV; doua semnari PV C simultane pot da deadlock detectat (una esueaza, se reia).
+CREATE FUNCTION public.fn_red_pv_c_neacoperite(p_uat_id uuid, p_tronson int) RETURNS bigint
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s' AS $n$
+BEGIN
+  IF auth.uid() IS NULL OR public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN RAISE EXCEPTION 'redari: PV C doar admin' USING ERRCODE='42501'; END IF;
+  LOCK TABLE public.red_parcele IN SHARE MODE;
+  LOCK TABLE public.red_procese_verbale IN SHARE ROW EXCLUSIVE MODE;
+  RETURN (SELECT count(*) FROM public.red_v_tronson t JOIN public.red_uat u ON u.proiect_id=t.proiect_id
+    WHERE u.id=p_uat_id AND t.tronson=p_tronson AND t.tip_pv IS NULL);
+END $n$;
+REVOKE EXECUTE ON FUNCTION public.fn_red_pv_c_neacoperite(uuid,integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.fn_red_pv_c_neacoperite(uuid,integer) TO authenticated;
+
 -- Keep existing policies unchanged, but close direct PostgREST write bypasses.
 CREATE FUNCTION public.fn_red_pv_c_garda() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $g$
 BEGIN
@@ -80,8 +96,7 @@ BEGIN
     IF TG_OP='UPDATE' THEN
       IF NEW.sters_la IS DISTINCT FROM OLD.sters_la THEN RAISE EXCEPTION 'PV C: foloseste anularea, nu stergerea/reactivarea' USING ERRCODE='23514'; END IF;
       -- Gemini f4d r1 P2: la semnare eligibilitatea tronsonului se reverifica (parcele noi / PV B anulat dupa creare).
-      IF NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat' AND EXISTS(SELECT 1 FROM public.red_v_tronson t JOIN public.red_uat u ON u.proiect_id=t.proiect_id
-        WHERE u.id=NEW.uat_id AND t.tronson=NEW.tronson AND t.tip_pv IS NULL) THEN
+      IF NEW.stare='semnat' AND OLD.stare IS DISTINCT FROM 'semnat' AND public.fn_red_pv_c_neacoperite(NEW.uat_id,NEW.tronson) > 0 THEN
         RAISE EXCEPTION 'PV C: tronsonul are din nou parcele fara PV A semnat sau PV B; nu se poate semna' USING ERRCODE='23514';
       END IF;
     END IF;
@@ -99,6 +114,8 @@ BEGIN
   IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.red_procese_verbale'::regclass AND tgname='red_pv_c_garda' AND tgenabled='O' AND tgtype=23 AND tgfoid='public.fn_red_pv_c_garda()'::regprocedure)
     OR NOT EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.fn_red_pv_c_garda()'::regprocedure AND NOT prosecdef AND 'search_path=public, pg_temp'=ANY(proconfig)) THEN RAISE EXCEPTION '20261129d: garda C lipsa/invalida'; END IF;
   IF (SELECT coalesce(proacl::text,'NULL') FROM pg_proc WHERE oid='public.fn_red_pv_creeaza(text,uuid,uuid,integer)'::regprocedure) IS DISTINCT FROM current_setting('gazpet.r29d_acl',true) THEN RAISE EXCEPTION '20261129d: ACL vechi schimbat'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.fn_red_pv_c_neacoperite(uuid,integer)'::regprocedure AND prosecdef AND 'search_path=public, pg_temp'=ANY(proconfig) AND 'lock_timeout=5s'=ANY(proconfig))
+    OR has_function_privilege('anon','public.fn_red_pv_c_neacoperite(uuid,integer)','EXECUTE') THEN RAISE EXCEPTION '20261129d: neacoperite incorecta'; END IF;
   IF NOT EXISTS(SELECT 1 FROM pg_proc WHERE oid='public.fn_red_pv_c_creeaza(uuid,integer)'::regprocedure AND prosecdef AND 'search_path=public, pg_temp'=ANY(proconfig) AND 'lock_timeout=5s'=ANY(proconfig) AND prorettype='public.red_procese_verbale'::regtype)
     OR has_function_privilege('anon','public.fn_red_pv_c_creeaza(uuid,integer)','EXECUTE')
     OR NOT has_function_privilege('authenticated','public.fn_red_pv_c_creeaza(uuid,integer)','EXECUTE')

@@ -108,6 +108,7 @@ END $t$;
 SELECT pg_temp.r29d_ca(pg_temp.r29d_g('editor')::uuid,'authenticated');
 DO $t$ BEGIN
   IF NOT pg_temp.r29d_refuza(format('SELECT public.fn_red_pv_c_creeaza(%L,5)',pg_temp.r29d_g('pr')),'42501') THEN RAISE EXCEPTION 'Editor accepted'; END IF;
+  IF NOT pg_temp.r29d_refuza(format('SELECT public.fn_red_pv_c_neacoperite(%L,5)',pg_temp.r29d_g('u')),'42501') THEN RAISE EXCEPTION 'Editor lock helper accepted'; END IF;
   IF NOT pg_temp.r29d_refuza(format('UPDATE public.red_procese_verbale SET locul=''editor'' WHERE tip=''C'' AND uat_id=%L',pg_temp.r29d_g('u')),'42501') THEN RAISE EXCEPTION 'Editor direct UPDATE accepted'; END IF;
   IF NOT pg_temp.r29d_refuza(format('INSERT INTO public.red_procese_verbale(tip,uat_id,tronson,nr_pv,data_pv) VALUES(''C'',%L,5,''PVC-T5-9999'',''2026-11-02'')',pg_temp.r29d_g('u')),'42501') THEN RAISE EXCEPTION 'Editor direct INSERT accepted'; END IF;
   RAISE NOTICE 'TEST4 OK editor RPC and direct writes';
