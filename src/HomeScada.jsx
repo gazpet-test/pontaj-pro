@@ -114,10 +114,14 @@ function GazpetEmblem() {
 
 export default function HomeScada({ profile, modules, onOpen }) {
   const [counts, setCounts] = useState({})
+  // Audit UI 02.11.2026: HomeDashboard se redesenează în fiecare secundă (ceasul din antet) și reconstruiește `modules`;
+  // efectul depindea de referința array-ului => 12 numărări Supabase / secundă (~43k cereri / oră / tab).
+  // Dependența e acum lista de rute (string stabil), deci numărările rulează doar când se schimbă modulele vizibile.
+  const cheieModule = modules.map(m => m.path).join('|')
   useEffect(() => {
     let dead = false
     ;(async () => {
-      const paths = modules.map(m => m.path).filter(p => COUNT_DEFS[p])
+      const paths = cheieModule.split('|').filter(p => COUNT_DEFS[p])
       const res = await Promise.allSettled(paths.map(p => COUNT_DEFS[p].q(supabase)))
       if (dead) return
       const out = {}
@@ -125,7 +129,7 @@ export default function HomeScada({ profile, modules, onOpen }) {
       setCounts(out)
     })()
     return () => { dead = true }
-  }, [modules])
+  }, [cheieModule])
 
   const prenume = profile?.name ? profile.name.split(' ')[0] : ''
   const azi = new Date().toLocaleDateString('ro-RO', { weekday:'long', day:'numeric', month:'long' })
