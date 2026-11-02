@@ -32,6 +32,11 @@ BEGIN
       RAISE EXCEPTION 'redari: coloanele de legatura (proiect_id / uat_id / parcela_id / detinator_id / raspuns_id / seq; id_parcela) sunt imutabile pe %', TG_TABLE_NAME USING ERRCODE = '23514';
     END IF;
     IF TG_TABLE_NAME = 'red_parcele' AND (to_jsonb(NEW) ->> 'tronson') IS DISTINCT FROM (to_jsonb(OLD) ->> 'tronson') THEN
+      -- Copilot f8a r1 P1-01: tronsonul se schimba DOAR de admin (direct sau prin fn_red_seteaza_tronson);
+      -- fara utilizator autentificat (auth.uid() NULL) = mentenanta postgres/service, permisa.
+      IF auth.uid() IS NOT NULL AND public.fn_red_nivel() IS DISTINCT FROM 'admin' THEN
+        RAISE EXCEPTION 'redari: tronsonul il schimba doar administratorul' USING ERRCODE='42501';
+      END IF;
       -- UPDATE already holds ROW EXCLUSIVE on red_parcele: PV C creation's SHARE waits.
       -- No PV row locks here; RPC order is PV table -> parcel table -> parcel rows.
       IF current_setting('transaction_isolation') <> 'read committed' THEN
@@ -145,9 +150,9 @@ BEGIN
   IF current_setting('transaction_isolation') <> 'read committed' THEN
     RAISE EXCEPTION 'redari: atribuire tronson doar in READ COMMITTED' USING ERRCODE='25001';
   END IF;
-  -- Same order as PV C: PV table -> parcel table -> parcel rows ORDER BY id.
-  -- PV lock serializes with creation/cancellation; parcel lock precedes eligibility checks.
-  LOCK TABLE public.red_procese_verbale IN SHARE ROW EXCLUSIVE MODE;
+  -- Copilot f8a r1 P2-01: FARA lock pe tabelul PV (ordinea inversa fata de fn_red_pv_creeaza dadea deadlock).
+  -- Ordinea: ROW EXCLUSIVE pe red_parcele (conflict cu SHARE-ul luat de crearea PV C) -> randurile parcelelor ORDER BY id.
+  -- PV C creat concurent: fie asteapta acest UPDATE, fie il vede triggerul fn_red_legaturi la fiecare rand (refuz 23514).
   LOCK TABLE public.red_parcele IN ROW EXCLUSIVE MODE;
   IF p_proiect_id IS NULL OR NOT EXISTS(SELECT 1 FROM public.red_proiecte WHERE id=p_proiect_id)
     OR (p_uat_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.red_uat WHERE id=p_uat_id AND proiect_id=p_proiect_id)) THEN
@@ -165,7 +170,8 @@ BEGIN
       AND (v.tronson=p_tronson OR EXISTS(SELECT 1 FROM public.red_parcele p WHERE p.id=ANY(v_ids) AND p.tronson=v.tronson))) THEN
     RAISE EXCEPTION 'redari: interval sau destinatie cu PV C activ' USING ERRCODE='P0001';
   END IF;
-  UPDATE public.red_parcele SET tronson=p_tronson WHERE id=ANY(v_ids);
+  -- P3-01: se numara doar parcelele al caror tronson se schimba efectiv
+  UPDATE public.red_parcele SET tronson=p_tronson WHERE id=ANY(v_ids) AND tronson IS DISTINCT FROM p_tronson;
   GET DIAGNOSTICS v_n=ROW_COUNT;
   RETURN v_n;
 END $fn$;

@@ -44,6 +44,9 @@ BEGIN
   RAISE NOTICE 'TEST1 OK';
   IF NOT pg_temp.r29g_refuza(format('SELECT public.fn_red_seteaza_tronson(%L,NULL,10,12,3)',pg_temp.r29g_g('pr')),'42501') THEN RAISE EXCEPTION 'TEST2 FAIL'; END IF;
   RAISE NOTICE 'TEST2 OK';
+  -- Copilot f8a r1 P1-01: editorul nu poate schimba tronsonul nici prin UPDATE direct
+  IF NOT pg_temp.r29g_refuza(format('UPDATE public.red_parcele SET tronson=5 WHERE proiect_id=%L',pg_temp.r29g_g('pr')),'42501') THEN RAISE EXCEPTION 'TEST2b FAIL editor UPDATE tronson'; END IF;
+  RAISE NOTICE 'TEST2b OK editor UPDATE tronson refuzat';
 END $t$;
 SELECT pg_temp.r29g_ca(pg_temp.r29g_g('owner')::uuid,'authenticated');
 DO $t$
