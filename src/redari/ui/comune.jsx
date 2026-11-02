@@ -88,7 +88,7 @@ export const G = { bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#
   greenDim:'#1A3A1A', redDim:'#3A1A1A', yellowDim:'#3A2A0A', blueDim:'#1A2A3A' }
 
 export const S = {
-  page:  { padding:'20px 24px', minHeight:'calc(100vh - 60px)', background:G.bg, color:G.text, fontFamily:'-apple-system,BlinkMacSystemFont,Inter,sans-serif' },
+  page:  { padding:'20px 24px', minHeight:'calc(100vh - 60px)', background:G.bg, color:G.text, fontFamily:"'Barlow',-apple-system,BlinkMacSystemFont,Inter,sans-serif" },   // audit #11: același font ca restul ERP (Barlow vine din Layout)
   card:  { background:G.surface, borderRadius:10, border:`1px solid ${G.border}`, padding:14 },
   input: { background:G.bg, border:`1px solid ${G.border2}`, color:G.text, borderRadius:7, padding:'7px 10px', fontFamily:'inherit', fontSize:13, outline:'none', width:'100%', boxSizing:'border-box' },
   select:{ background:G.bg, border:`1px solid ${G.border2}`, color:G.text, borderRadius:7, padding:'7px 10px', fontFamily:'inherit', fontSize:13, outline:'none' },

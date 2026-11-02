@@ -197,7 +197,8 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
     try {
       let q = supabase.from('red_v_stare_parcela').select('*', { count:'exact' }).eq('proiect_id', proiect.id)
       if (fUat) q = q.eq('uat_id', fUat)
-      if (fTronson) q = q.eq('tronson', Number(fTronson))
+      if (fTronson === 'fara') q = q.is('tronson', null)   // parcelele încă neatribuite (după importul fără tronson)
+      else if (fTronson) q = q.eq('tronson', Number(fTronson))
       if (fStare) q = q.eq('stare', fStare)
       if (cautareAplicata) {
         const t = cautareAplicata.replace(/[%,()]/g, ' ').trim()
@@ -274,6 +275,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
         </select>
         <select value={fTronson} onChange={e => setFTronson(e.target.value)} style={S.select}>
           <option value="">Toate tronsoanele</option>
+          <option value="fara">Fără tronson</option>
           {tronsoane.map(t => <option key={t} value={t}>Tronson {t}</option>)}
         </select>
         <select value={fStare} onChange={e => setFStare(e.target.value)} style={S.select}>
