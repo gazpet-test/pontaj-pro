@@ -56,7 +56,8 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
   }
   if (lipsa.length) { eroare(antet.rand + 1, `Coloane lipsa sau ambigue: ${lipsa.join(', ')}`); return rez }
   const dupaUat = new Map(); const ambigue = new Set()   // Copilot f3b r1 P3-02: chei care duc la mai multe UAT-uri → refuz explicit
-  const pune = (k, u) => { if (!k) return; const e = dupaUat.get(k); if (e && e.id !== u.id) ambigue.add(k); else dupaUat.set(k, u) }
+  const idUat = u => u.id ?? u.uat3 ?? u.nume   // Gemini f3b r2 P3: identitatea nu depinde de prezența id-ului
+  const pune = (k, u) => { if (!k) return; const e = dupaUat.get(k); if (e && idUat(e) !== idUat(u)) ambigue.add(k); else dupaUat.set(k, u) }
   for (const u of uats) if (u) { if (u.nume) pune(normalizeazaNume(u.nume), u); if (u.uat3) pune(normalizeazaNume(u.uat3), u) }
   const parcele = new Map(); const detinatori = new Map(); const contoare = new Map()
   for (let r = antet.rand + 1; r <= range.e.r; r++) {
@@ -111,11 +112,16 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
       // Gemini f3b r1 P2: contactul de pe rândul-dublură nu se pierde dacă primul rând nu avea contact; cota / decedat se completează dacă lipseau
       if (!d0.cota && v('cota')) d0.cota = v('cota')
       if (!d0.decedat && normalizeazaNume(v('decedat')) === 'DA') d0.decedat = true
-      const areContact = ['strada', 'sat_adresa', 'comuna', 'judet', 'cod_postal', 'telefon', 'email'].some(c => v(c))
-      if (areContact && !rez.contacte.some(c => c.cheie_detinator === cheieD)) {
-        const adresaCunoscutaDublura = d0.calitate !== 'neidentificat' && !!(v('strada') || v('comuna'))
-        rez.contacte.push({ cheie_detinator: cheieD, adresa_strada: v('strada') || null, adresa_sat: v('sat_adresa') || null, adresa_comuna: v('comuna') || null, adresa_judet: v('judet') || uat.judet || null, cod_postal: v('cod_postal') || null, telefon: v('telefon') || null, email: v('email') || null, adresa_cunoscuta: adresaCunoscutaDublura })
-        if (adresaCunoscutaDublura) d0.adresa_cunoscuta = true
+      const campuriContact = { adresa_strada: 'strada', adresa_sat: 'sat_adresa', adresa_comuna: 'comuna', adresa_judet: 'judet', cod_postal: 'cod_postal', telefon: 'telefon', email: 'email' }
+      if (Object.values(campuriContact).some(c => v(c))) {
+        // Copilot f3b r2 P2-01: contactul existent (chiar parțial, ex. doar telefon) se COMPLETEAZĂ cu câmpurile lipsă de pe dublură;
+        // valorile deja prezente nu se suprascriu (diferențele rămân în sursa_date); adresa_cunoscuta se recalculează pe contactul consolidat
+        let c0 = rez.contacte.find(c => c.cheie_detinator === cheieD)
+        if (!c0) { c0 = { cheie_detinator: cheieD, adresa_strada: null, adresa_sat: null, adresa_comuna: null, adresa_judet: null, cod_postal: null, telefon: null, email: null, adresa_cunoscuta: false }; rez.contacte.push(c0) }
+        for (const [camp, col] of Object.entries(campuriContact)) if (!c0[camp] && v(col)) c0[camp] = v(col)
+        if (!c0.adresa_judet) c0.adresa_judet = uat.judet || null
+        c0.adresa_cunoscuta = d0.calitate !== 'neidentificat' && !!(c0.adresa_strada || c0.adresa_comuna)
+        d0.adresa_cunoscuta = c0.adresa_cunoscuta
       }
       continue
     }

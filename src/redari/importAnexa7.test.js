@@ -109,6 +109,18 @@ describe('parseazaAnexa7', () => {
     expect(pv.contacte).toEqual([expect.objectContaining({ cheie_detinator: pv.detinatori[0].cheie, adresa_strada: 'Str. Dublura 1', telefon: '0000 000 000', adresa_cunoscuta: true })])
   })
 
+  it('contact partial pe primul rand (doar telefon) se completeaza cu adresa de pe dublura (Copilot f3b r2 P2-01)', () => {
+    const pv = parseazaAnexa7(excel([
+      rand({ 17: '0000 000 000' }),
+      rand({ 8: 'POPESCU TEST ION', 12: 'Str. Completata 9', 14: 'Comuna Test', 17: '0000 999 999', 18: 'test@example.invalid' }),
+    ]), opt)
+    expect(pv.detinatori).toHaveLength(1)
+    expect(pv.contacte).toHaveLength(1)
+    expect(pv.contacte[0]).toMatchObject({ telefon: '0000 000 000', adresa_strada: 'Str. Completata 9', adresa_comuna: 'Comuna Test', email: 'test@example.invalid', adresa_cunoscuta: true })   // telefonul existent nu e suprascris
+    expect(pv.detinatori[0].adresa_cunoscuta).toBe(true)
+    expect(pv.detinatori[0].sursa_date).toContain('0000 999 999')   // valoarea diferita ramane in sursa_date
+  })
+
   it('foloseste cheia TGZ completa: aceeasi HG cu cadastru diferit ramane parcela diferita', () => {
     const pv = parseazaAnexa7(excel([rand(), rand({ 3: 'CF101' })]), opt)
     expect(pv.parcele.map(p => p.cheie_sursa)).toEqual([cheieSursa('HUS', '10', 'CF100', 'T12'), cheieSursa('HUS', '10', 'CF101', 'T12')])
