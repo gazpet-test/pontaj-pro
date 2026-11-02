@@ -250,7 +250,8 @@ tr:hover td{background:#1C2128}
 /* tabletă / ecran îngust (<1100 px): zona din dreapta nu mai încape -> toată bara se derulează (ca înainte), fără să lățească pagina */
 @media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{flex:0 0 auto;-webkit-mask-image:none;mask-image:none}}
 @media (max-width:719px){.navscroll{display:none}}
-@media (max-width:1199px){.home-header{flex-wrap:wrap;gap:12px!important;padding:12px 20px!important}.home-account{flex-wrap:wrap;margin-left:auto!important}.home-account>div{min-width:0;overflow-wrap:anywhere}}
+.home-account>div{min-width:0;overflow-wrap:anywhere}
+@media (max-width:1349px){.home-header{flex-wrap:wrap;gap:12px!important;padding:12px 20px!important}.home-account{flex-wrap:wrap;margin-left:auto!important}}
 /* Panou PontajPRO (audit UI 02.11): grilele se reașază pe ecrane înguste, pagina nu se mai lățește */
 @media (max-width:1099px){.panou-kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))!important}.panou-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media (max-width:759px){.panou-grid{grid-template-columns:minmax(0,1fr)!important}}
