@@ -104,33 +104,43 @@ Rămân de mână (intenționat): opțiunile cu ☐ („ziua ____ / intervalul _
 destinatarul la răspunsul scris; liniile de semnătură. Dispărute față de contract §8: `{{id_parcela}}` (modelul NU afișează
 ID-ul intern — de decis dacă îl adăugăm, ex. lângă „Nr. convocare”, pentru corelare cu registrul și formularul public).
 
-### 2.2 `pv_a.docx` (Model 2) — per deținător, 54 placeholder-e
+### 2.2 pv_a.docx (Model 2) - per detinator, 54 chei distincte
 
-| placeholder | sursă în BD | oblig. | observații |
-|---|---|---|---|
-| antet: `{{contract_nr}}` ×2, `{{contract_data}}` ×2, `{{proiect_denumire}}` | red_proiecte | da | a doua apariție: „conform devizului … din contractul nr. …” |
-| `{{nr_pv}}` (`PVA-{uat3}-{nnnn}`), `{{data_pv}}`, `{{locul}}` | red_procese_verbale.nr_pv, .data_pv, .locul | da | |
-| `{{uat}}`, `{{sat}}`, `{{tarla}}`, `{{nr_cadastral}}`, `{{poz_hg}}`, `{{suprafata}}`, `{{categoria_folosinta}}`, `{{tronson}}` ×2 | red_uat.nume / red_parcele | da (uat, tronson) | tabel parcelă; tronsonul și în „Refaceri amplasamente – tronson …” |
-| `{{nume}}` | red_detinatori.nume | da | |
-| `{{calitate_cota}}` | calcul: calitate + („, cotă ” + cota dacă există) | da | |
-| `{{act_identitate}}`, `{{act_doveditor}}` | **FĂRĂ SURSĂ** — rămân goale, de mână la sesiune (nu stocăm acte de identitate) | nu | Model_7 cere TGZ doar „Act doveditor cunoscut (DA/NU)” |
-| `{{bifa_sol_fertil}}`, `{{bifa_nivelare}}`, `{{bifa_arat}}`, `{{bifa_discuit}}`, `{{bifa_insamantare}}`, `{{bifa_gard}}`, `{{bifa_drum}}`, `{{bifa_altele}}`, `{{lucrari_altele}}` | calcul din red_parcele.articol_deviz (maparea articol → bifă e **de definit**) + text liber | nu | pct. 3 |
-| `{{bifa_da}}`, `{{bifa_da_cu_obiectii}}` | calcul: NOT / obiectii_redare | da | pct. 4 |
-| `{{categoria_initiala}}` | red_parcele.categoria_folosinta (din baza TGZ) | da | „conform bazei de date a Beneficiarului” |
-| `{{bifa_st_nivelat}}`, `{{bifa_st_strat_vegetal}}`, `{{bifa_st_insamantat}}`, `{{bifa_st_gard_drum}}`, `{{bifa_st_alta}}`, `{{stare_teren_alta}}` | red_procese_verbale.stare_teren_text → **de restructurat**: bife + text „alta” (ex. `stare_teren jsonb` sau 5 bool + text) | da | „Starea terenului la data constatării” |
-| `{{bifa_plan_da}}`, `{{bifa_plan_nu}}` | **FĂRĂ SURSĂ** → red_procese_verbale.plan_situatie bool | nu | |
-| `{{bifa_foto_da}}`, `{{bifa_foto_nu}}`, `{{foto_nr}}` | **FĂRĂ SURSĂ** → red_procese_verbale.foto_nr int (0 = NU) | nu | „Fotografii actuale datate anexate” |
-| `{{bifa_constatare_sediu}}`, `{{bifa_constatare_teren}}` | calcul din red_procese_verbale.locul / **FĂRĂ SURSĂ** → `constatare_mod text CHECK (sediu, teren)` | da | |
-| `{{verificare_data}}`, `{{verificare_de}}` | **FĂRĂ SURSĂ** → red_parcele.verificare_data date, verificare_de text (verificarea comisiei pe teren, înainte de sesiune) | nu | |
-| `{{bifa_fara_obiectii}}`, `{{bifa_cu_obiectii}}`, `{{obiectii_text}}` | red_procese_verbale.obiectii_redare, .obiectii_text | da | `\n` → rând nou |
-| `{{termen_remediere}}` | red_procese_verbale.termen_remediere | nu | |
-| `{{reverificare_la}}` | **FĂRĂ SURSĂ** → red_procese_verbale.reverificare_la date | nu | |
-| `{{alte_observatii}}` | **FĂRĂ SURSĂ** → red_procese_verbale.alte_observatii text | nu | pct. 6 (nu privesc redarea; merg la TGZ) |
-| `{{semnatar_detinator}}` | calcul: nume + calitate | nu | |
-| `{{semnatar_tgz}}`, `{{semnatar_gazpet}}` | red_proiecte (sau red_procese_verbale.semnatari jsonb) | nu | |
+Generator: src/redari/pv.js, CHEI_PV_A comparat cu sablonul real in pv.test.js.
+BIFA_DA = "\u2612" (caseta bifata), BIFA_NU = "\u2610" (caseta goala).
+Sablonul are placeholder-e pentru bife; nu are caractere proprii de bifa.
 
-Divergență față de brief §4.2: brief-ul cere și „reprezentant UAT nominalizat” pe PV A — Model 2 v5 are tot 3 semnatari
-(deținător, TGZ, Gazpet); reprezentantul UAT apare doar pe PV B.
+| Placeholder / grup | Sursa finala |
+| --- | --- |
+| contract_nr, contract_data, proiect_denumire | red_proiecte.contract_nr, contract_data (RO), denumire |
+| nr_pv, data_pv, locul | red_procese_verbale; numar atomic fn_red_pv_creeaza, data RO |
+| uat | red_uat.nume |
+| sat, tarla, nr_cadastral, poz_hg, tronson, categoria_folosinta | red_parcele, aceleasi coloane |
+| suprafata | red_parcele.suprafata_temporara_mp, formatNumarRo |
+| nume | red_detinatori.nume |
+| calitate_cota | eticheta calitate + ", cota " + cota daca exista |
+| act_identitate, act_doveditor | goale, completate de mana; actele NU se stocheaza |
+| bifa_sol_fertil/nivelare/arat/discuit/insamantare/gard/drum | red_procese_verbale.lucrari jsonb, true explicit |
+| bifa_altele, lucrari_altele | lucrari.altele text nevid / text integral |
+| bifa_da, bifa_da_cu_obiectii | obiectii_redare false / true |
+| categoria_initiala | red_parcele.categoria_folosinta |
+| bifa_st_nivelat/strat_vegetal/insamantat/gard_drum | red_procese_verbale.stare_teren jsonb, true explicit |
+| bifa_st_alta, stare_teren_alta | stare_teren.alta text nevid / text integral |
+| bifa_plan_da, bifa_plan_nu | plan_situatie true / false; NULL = ambele goale |
+| bifa_foto_da, bifa_foto_nu, foto_nr | foto_nr > 0 / = 0 / numar; NULL = ambele goale |
+| bifa_constatare_sediu, bifa_constatare_teren | constatare_mod = sediu / teren |
+| verificare_data, verificare_de | parcela.verificare_data (RO), verificare_de_gazpet + " (TGZ: verificare_de_tgz)" |
+| bifa_fara_obiectii, bifa_cu_obiectii, obiectii_text | obiectii_redare false / true; text cu newline pastrat |
+| termen_remediere, reverificare_la, alte_observatii | red_procese_verbale, date RO si text integral |
+| semnatar_detinator | nume + calitate |
+| semnatar_gazpet, semnatar_tgz | proiect.reprezentant_gazpet/tgz_nume + functie |
+
+Lucrarile din deviz sunt NUMAI propuneri la prima deschidere (lucrari IS NULL).
+fertil/decopert -> sol_fertil; nivel -> nivelare; arat -> arat; discu -> discuit;
+insamant/semanat -> insamantare; gard -> gard; drum -> drum. Normalizare fara diacritice.
+Operatorul confirma prin salvarea PV; generatorul foloseste exclusiv lucrari persistate.
+PV atesta constatarea, nu executia presupusa din deviz. Categoria initiala ramane cea din baza TGZ.
+PV A are trei semnatari (detinator, TGZ, Gazpet); reprezentantul UAT este pe PV B.
 
 ### 2.3 `pv_b.docx` (Model 3) — per parcelă, 77 placeholder-e
 
