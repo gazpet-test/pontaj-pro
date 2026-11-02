@@ -6,8 +6,9 @@ import { supabase } from '../../lib/supabase.js'
 import { G, S, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
 import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente, contractDinExecutie } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
+import { verificaDateCerereImputernicire, genereazaCerereImputernicire, descarcaBlob } from '../docx.js'
 
-export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
+export default function SetariProiect({ proiect, uats = [], nivel, show, onSchimbat }) {
   const esteAdmin = nivel === 'admin'
   // Jakarinos f2 r1 P2: modificările se calculează față de BAZA formularului (rândul la deschidere / după propria salvare), nu față de
   // `proiect` reîncărcat — altfel o schimbare făcută între timp de alt admin ar apărea ca „modificare” și ar fi rescrisă cu valoarea veche.
@@ -19,8 +20,13 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
   const [eroareMontaj, setEroareMontaj] = useState('')
   const generatie = useRef(0)
   const ocupat = useRef(false)
+  const [nrDocument, setNrDocument] = useState('')
+  const proiectCurent = useRef(proiect.id)
+  proiectCurent.current = proiect.id
   useEffect(() => {
     const token = ++generatie.current
+    ocupat.current = false; setLucru(false); setNrDocument('')
+    setBaza({ ...proiect }); setForm({ ...proiect }); setErori([])
     setMontaj(null); setEroareMontaj('')
     const curent = () => generatie.current === token
     citestePaginat(() => supabase.from('executie_proiecte').select('id, nume, cod_intern').eq('activ', true), { cheie: 'id', esteCurent: curent })
@@ -49,6 +55,26 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
   const schimbate = cheiSchimbate(baza, form, CAMPURI_PROIECT)
+  const lipsuriCerere = verificaDateCerereImputernicire({ proiect, uats })
+  const genereazaCererea = async () => {
+    if (!esteAdmin || lucru || ocupat.current || schimbate.length || lipsuriCerere.length) return
+    ocupat.current = true
+    setLucru(true)
+    const token = generatie.current, id = proiect.id
+    const curent = () => generatie.current === token && proiectCurent.current === id
+    try {
+      const raspuns = await fetch('/redari/sabloane/cerere_imputernicire.docx')
+      if (!curent()) return
+      if (!raspuns.ok) throw new Error('Sablonul cererii nu poate fi descarcat')
+      const templateArrayBuffer = await raspuns.arrayBuffer()
+      if (!curent()) return
+      const { blob } = await genereazaCerereImputernicire({ proiect, uats, nrDocument, templateArrayBuffer })
+      if (!curent()) return
+      descarcaBlob(blob, `Cerere_imputernicire_${proiect.cod}.docx`)
+      show('Document generat pentru verificare. Nu pleaca nicaieri automat.', 'success')
+    } catch (e) { if (curent()) show('Generare cerere: ' + msgEroare(e), 'error') }
+    finally { if (curent()) { ocupat.current = false; setLucru(false) } }
+  }
   // alt admin a salvat între timp: versiunea din părinte e mai nouă decât baza (propria salvare crește baza imediat — Copilot f2 r2 P3)
   const altaVersiune = (proiect.versiune ?? 0) > (baza.versiune ?? 0)
   // ce lipsește la nivel de proiect pentru convocator (UAT-ul fictiv „complet” izolează doar cerințele proiectului)
@@ -135,6 +161,19 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
           </div>
         )}
       </div>
+      {esteAdmin && <div style={{ ...S.card, marginTop: 12 }}>
+        <h3>Cerere de imputernicire catre Beneficiar (anexa la scrisoarea catre TGZ)</h3>
+        <p style={{ color: G.muted }}>DRAFT Juridic, de validat de avocat. Documentul se descarca pentru verificare.</p>
+        <label>Nr. inregistrare (optional){' '}
+          <input style={S.input} value={nrDocument} disabled={lucru} onChange={e => { if (!lucru) setNrDocument(e.target.value) }} />
+        </label>
+        {lipsuriCerere.length > 0 && <div style={{ color: G.yellow, marginTop: 10 }}>
+          {lipsuriCerere.map(l => <div key={l}>{l}</div>)}
+        </div>}
+        {schimbate.length > 0 && <p style={{ color: G.yellow }}>Salveaza modificarile inainte de generare.</p>}
+        <button style={{ ...S.btnS, marginTop: 10 }} disabled={lucru || schimbate.length > 0 || lipsuriCerere.length > 0}
+          onClick={genereazaCererea}>Genereaza cererea (DOCX)</button>
+      </div>}
     </div>
   )
 }

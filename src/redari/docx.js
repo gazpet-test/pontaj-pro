@@ -23,6 +23,42 @@ import JSZip from 'jszip'
 import QRCode from 'qrcode'
 import { COL_UAT } from './setari.js'
 
+// Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
+export const ANTREPRENOR = 'GAZPET INSTAL S.R.L.'
+export const CHEI_CERERE_IMPUTERNICIRE = [
+  'nr_document', 'data', 'beneficiar', 'reprezentant_tgz', 'contract_nr', 'contract_data',
+  'proiect_denumire', 'antreprenor', 'uat_lista', 'contact_email', 'reprezentant_gazpet', 'functie',
+]
+
+export function verificaDateCerereImputernicire({ proiect = {}, uats = [] } = {}) {
+  const lipsuri = []
+  for (const [cheie, eticheta] of [
+    ['beneficiar', 'beneficiarul'], ['reprezentant_tgz_nume', 'reprezentantul TGZ'],
+    ['contract_nr', 'numarul contractului'], ['contract_data', 'data contractului'],
+    ['denumire', 'denumirea proiectului'], ['reprezentant_gazpet_nume', 'reprezentantul Gazpet'],
+    ['reprezentant_gazpet_functie', 'functia reprezentantului Gazpet'], ['contact_email', 'e-mailul de contact'],
+  ]) if (!String(proiect?.[cheie] ?? '').trim()) lipsuri.push(`Lipseste ${eticheta}`)
+  if (!uats?.length || uats.some(u => !u?.nume?.trim())) lipsuri.push('Este necesar cel putin un UAT, cu numele completat pentru fiecare UAT')
+  return lipsuri
+}
+
+export async function genereazaCerereImputernicire({ proiect, uats, nrDocument, templateArrayBuffer,
+  dataDocument = aziBucuresti(), antreprenor = ANTREPRENOR, strict = true }) {
+  const lipsuri = verificaDateCerereImputernicire({ proiect, uats })
+  if (lipsuri.length) throw new Error(lipsuri.join('; '))
+  const campuri = {
+    nr_document: nrDocument?.trim() || '___', data: formatDataRo(dataDocument),
+    beneficiar: proiect.beneficiar, reprezentant_tgz: proiect.reprezentant_tgz_nume,
+    contract_nr: proiect.contract_nr, contract_data: formatDataRo(proiect.contract_data),
+    proiect_denumire: proiect.denumire, antreprenor,
+    uat_lista: uats.map(u => u.nume.trim()).sort((a, b) => a.localeCompare(b, 'ro')).join(', '),
+    contact_email: proiect.contact_email, reprezentant_gazpet: proiect.reprezentant_gazpet_nume,
+    functie: proiect.reprezentant_gazpet_functie,
+  }
+  const blob = await completeazaDocx(templateArrayBuffer, campuri, { strict })
+  return { blob, hash: await hashBlob(blob), campuri }
+}
+
 export const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 export const BUCKET_REDARI = 'redari'
 const QR_CM = 3

@@ -155,6 +155,77 @@ adresele UAT pe seria `AU-0001`.
 - Verificări și limitări: `RAPORT_20261128a.md`. Nu s-au verificat BD/PostgREST/RLS/Storage reale, concurența între sesiuni,
   aspectul în Word sau browserul pe conturi reale. Cererea către TGZ, PV, Sesiune, Dashboard, Anexa 7, xlsx, e-mail/SMS rămân în afara feliei.
 
+### 4.1d Faza 2, felia 3a - cerere de imputernicire (02.11.2026)
+
+Facut: cerere DOCX ca anexa la scrisoarea TGZ, exclusiv descarcare locala din Setari proiect pentru admin.
+DRAFT Juridic, de validat de avocat. Numar optional (`___` daca lipseste), data Europe/Bucharest,
+12 campuri, UAT-uri sortate romaneste. Lipsurile si modificarile nesalvate blocheaza generarea.
+Generatorul verifica aceleasi lipsuri ca UI; garda ocupat precede primul await; tokenul si id-ul proiectului
+opresc descarcarea/toasturile vechi. Nicio trimitere automata.
+
+Fisiere atinse:
+- `src/redari/docx.js`: constanta Antreprenor/lider, chei, validare si generare cu hash pe continut.
+- `src/redari/docx.test.js`: fiecare camp lipsa/null/spatii, UAT lipsa, sablon real, text integral,
+  chei, relatii externe, generare, numar optional si sortare fara mutarea listei.
+- `src/redari/ui/SetariProiect.jsx`: sectiunea admin, numar optional, blocari, fetch si descarcare.
+- `src/redari/ui/setariRender.test.jsx`: vizibilitate admin/editor/viewer, lipsuri, modificari nesalvate,
+  dublu click si unmount in timpul fetch.
+- `src/Redari.jsx`: exclusiv prop-ul `uats={uats}` la montarea SetariProiect.
+- `public/redari/sabloane/cerere_imputernicire.docx`: sablon nou, A4, Times New Roman 12.
+- `scripts/redari_sablon_cerere_imputernicire.mjs`: generare idempotenta din text, date ZIP fixe.
+- `docs/redari/TEXT_CERERE_IMPUTERNICIRE.md`: copie identica a sursei Juridic.
+- `docs/redari/SABLOANE.md` si acest README: mapare 2.6 si raportul feliei.
+
+Verificari efectuate si limite:
+- In acest worktree NU exista `node_modules`. Nu s-au instalat dependinte si nu s-au creat fisiere temporare.
+- `node scripts/redari_sablon_cerere_imputernicire.mjs` si
+  `node scripts/redari_sabloane_verifica.mjs`: exit 1, `ERR_MODULE_NOT_FOUND: Cannot find package 'jszip'`.
+- DOCX-ul a fost totusi produs din XML-ul scriptului: executie in memorie cu un colector de intrari
+  in loc de JSZip, apoi arhivare ZIP .NET. Scriptul salvat ramane cel cu node + jszip.
+- Verificare alternativa XML .NET: toate partile XML valide, textul paragrafelor identic cu sursa,
+  12 chei distincte, fiecare placeholder intreg intr-un singur run, zero relatii externe.
+- Logica verificatorului existent a fost executata in memorie cu citire ZIP .NET in loc de JSZip,
+  fara modificarea fisierului verificatorului: exit 0, toate cele 6 sabloane OK.
+  Iesire relevanta: `cerere_imputernicire.docx - OK`; 16 paragrafe; 12 placeholder-e distincte,
+  15 aparitii; 0 rupte intre run-uri; relatii externe: niciuna.
+- Comanda ceruta: `npx vitest run src/redari/docx.test.js src/redari/setari.test.js` nu a pornit:
+  PowerShell blocheaza npx.ps1. Incercarea prin npx.cmd, offline si --no-install, s-a oprit in npm
+  cu `uv_os_homedir returned ENOMEM`, exit 1. **Niciun rezultat vitest PASS nu este declarat.**
+- `setariRender.test.jsx` a fost extins, dar nu a fost rulat: brief-ul autorizeaza exclusiv cele doua
+  fisiere vitest de mai sus. Claude trebuie sa ruleze si testele UI la verificare.
+- Nu s-au verificat integrarea jszip reala, aspectul in Word/LibreOffice, descarcarea in browser,
+  UI pe conturi reale sau build-ul Vite (il face Claude). Fara Git/commit/push, BD, deploy sau secrete.
+
+Reguli L01-L25 (dovezile de test de mai jos sunt scrise, dar vitest NU a putut fi rulat):
+
+| Regula | Respectare / dovada |
+|---|---|
+| L01 | `SetariProiect.jsx`, genereazaCererea: ocupat sincron inainte de primul await; test dublu click in setariRender.test.jsx. Fara UPDATE nou. |
+| L02 | n/a |
+| L03 | `SetariProiect.jsx`: token + proiectCurent verificate dupa fiecare await, inainte de descarcare/toast. |
+| L04 | Scriptul rescrie acelasi sablon, date ZIP fixe; operatia UI doar descarca, fara bani/mail/cantitati. |
+| L05 | n/a |
+| L06 | n/a |
+| L07 | n/a - generare locala din date deja accesibile, fara operatii server sau drepturi noi. |
+| L08 | n/a |
+| L09 | n/a |
+| L10 | n/a - fara secrete sau loguri de date personale introduse. |
+| L11 | n/a |
+| L12 | Scriptul refuza structura sursa necunoscuta/numar diferit de 12 chei; testul compara fiecare paragraf cu textul sursa. Verificarea alternativa a trecut. |
+| L13 | Scriptul separa pe delimitatoare ancorate, valideaza sectiunea finala si antetul; escapare XML explicita. |
+| L14 | n/a |
+| L15 | n/a |
+| L16 | `docx.js`: reutilizeaza hashBlob pe continutul DOCX. Fara deduplicare sau unicitate BD noua. |
+| L17 | `genereazaCerereImputernicire`: aziBucuresti si formatDataRo existente; teste de data explicita si regresii de fus orar existente in docx.test.js. |
+| L18 | Lipsurile blocheaza si in generator; fetch verifica ok, eroarea produce toast; fara succes la eroare sau rezultat vechi. |
+| L19 | verificaDateCerereImputernicire este apelata identic din UI si generator; nu exista reguli JS/SQL noi. |
+| L20 | docx.test.js: fiecare camp null/gol/spatii, UAT lipsa si succes cu numar optional; setariRender.test.jsx: admin/editor/viewer si formular modificat. |
+| L21 | n/a |
+| L22 | n/a |
+| L23 | n/a - foloseste lista uats deja citita in parinte, fara query nou. |
+| L24 | SetariProiect.jsx: generatie + id proiect, reset la schimbarea proiectului, cleanup la unmount; test fetch rezolvat dupa unmount. |
+| L25 | Asteptari explicite pe fixture-uri fictive si textul Juridic/sablonul real; verificari XML efective. Testele vitest sunt nerulate din motivele de mai sus. |
+
 ### 4.2 NU e făcut (faza următoare, după brief §8 „apoi”)
 - PV A / B / C (generare din `pv_a` / `pv_b` / `pv_c.docx`, numerotare PVA/PVB/PVC, stările trimis/semnat, upload scan semnat) — doar schema există.
 - Evidența ulterioară a afișării și semnării PV de afișare; documentul Model 4 se generează în 4.1c.

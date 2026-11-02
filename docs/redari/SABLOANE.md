@@ -209,6 +209,26 @@ de „listează parcelele” — Model 5 NU are niciun tabel de parcele sau de a
 `{{rand.id_parcela}} {{rand.nr_pv}} {{rand.tip_pv}}` / `{{rand.articol_deviz}} {{rand.cantitate}}`, iar anexa se face ca
 export xlsx din registru (§5).
 
+### 2.6 cerere_imputernicire.docx (anexa la scrisoarea TGZ) - 12 placeholder-e
+
+DRAFT Juridic, de validat de avocat. Nu se trimite automat. Adminul descarca DOCX-ul din Setari proiect pentru verificare.
+Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_sablon_cerere_imputernicire.mjs` (jszip existent in dependintele proiectului).
+
+| Placeholder | Sursa |
+|---|---|
+| `nr_document` | Numar introdus de admin, optional; gol = `___` |
+| `data` | Azi in Europe/Bucharest, formatDataRo |
+| `beneficiar` | red_proiecte.beneficiar |
+| `reprezentant_tgz` | red_proiecte.reprezentant_tgz_nume |
+| `contract_nr` | red_proiecte.contract_nr |
+| `contract_data` | red_proiecte.contract_data, formatDataRo |
+| `proiect_denumire` | red_proiecte.denumire |
+| `antreprenor` | ANTREPRENOR = GAZPET INSTAL S.R.L.; denumirea liderului se modifica in cod daca Asocierea este alta |
+| `uat_lista` | red_uat.nume, sortare localeCompare('ro'), separate prin virgula |
+| `contact_email` | red_proiecte.contact_email |
+| `reprezentant_gazpet` | red_proiecte.reprezentant_gazpet_nume |
+| `functie` | red_proiecte.reprezentant_gazpet_functie |
+
 ## 3. Câmpuri FĂRĂ sursă în contract — de adăugat în schemă / de decis
 
 | câmp (placeholder) | șablon | propunere | de decis |
