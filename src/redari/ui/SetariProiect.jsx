@@ -6,8 +6,9 @@ import { supabase } from '../../lib/supabase.js'
 import { G, S, msgEroare, motivBlocareConvocator, citestePaginat } from './comune.jsx'
 import { CAMPURI_PROIECT, COL_PROIECT, normalizeaza, cheiSchimbate, valideazaProiect, conflicteConcurente, contractDinExecutie } from '../setari.js'
 import FormularCampuri from './FormularCampuri.jsx'
+import { verificaDateCerereImputernicire, genereazaCerereImputernicire, descarcaBlob } from '../docx.js'
 
-export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
+export default function SetariProiect({ proiect, uats = [], nivel, show, onSchimbat }) {
   const esteAdmin = nivel === 'admin'
   // Jakarinos f2 r1 P2: modificările se calculează față de BAZA formularului (rândul la deschidere / după propria salvare), nu față de
   // `proiect` reîncărcat — altfel o schimbare făcută între timp de alt admin ar apărea ca „modificare” și ar fi rescrisă cu valoarea veche.
@@ -19,8 +20,13 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
   const [eroareMontaj, setEroareMontaj] = useState('')
   const generatie = useRef(0)
   const ocupat = useRef(false)
+  const [nrDocument, setNrDocument] = useState('')
+  const proiectCurent = useRef(proiect.id)
+  proiectCurent.current = proiect.id
   useEffect(() => {
     const token = ++generatie.current
+    ocupat.current = false; setLucru(false); setNrDocument('')
+    setBaza({ ...proiect }); setForm({ ...proiect }); setErori([])
     setMontaj(null); setEroareMontaj('')
     const curent = () => generatie.current === token
     citestePaginat(() => supabase.from('executie_proiecte').select('id, nume, cod_intern').eq('activ', true), { cheie: 'id', esteCurent: curent })
@@ -49,6 +55,57 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }
   const schimbate = cheiSchimbate(baza, form, CAMPURI_PROIECT)
+  const lipsuriCerere = verificaDateCerereImputernicire({ proiect, uats })
+  const genereazaCererea = async () => {
+    if (!esteAdmin || lucru || ocupat.current || schimbate.length) return   // lipsurile se verifică pe datele PROASPETE, mai jos (Copilot f3a r2 P3-01)
+    ocupat.current = true
+    setLucru(true)
+    const token = generatie.current, id = proiect.id
+    const curent = () => generatie.current === token && proiectCurent.current === id
+    try {
+      // Copilot f3a r1 P2-01/P2-02 + Gemini P2: documentul se face din rândul PROASPĂT al proiectului și din lista ACTUALĂ a UAT-urilor
+      // (nu din props, care pot fi în urmă față de alt admin); la altă versiune a proiectului se cere confirmare, ca la adresa UAT.
+      const [{ data: proiectProaspat, error: ep }, uatsProaspete] = await Promise.all([
+        supabase.from('red_proiecte').select(COL_PROIECT).eq('id', id).maybeSingle(),
+        citestePaginat(() => supabase.from('red_uat').select('id, nume').eq('proiect_id', id), { cheie: 'id', esteCurent: curent }),
+      ])
+      if (!curent()) return
+      if (ep) throw ep
+      if (!proiectProaspat) throw new Error('Proiectul nu mai e vizibil (fără drept pe modul?)')
+      // Gemini f3a r2 P3: referința e versiunea formularului (baza), nu props-ul care poate fi deja reîncărcat
+      if (proiectProaspat.versiune !== baza.versiune && !window.confirm(
+        `Proiectul a fost modificat între timp de altcineva (versiunea ${proiectProaspat.versiune}, tu vezi versiunea ${baza.versiune}).\nGenerez cererea cu datele ACTUALE din bază?`)) return
+      const lipsuri = verificaDateCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete })
+      if (lipsuri.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuri.join('; '))
+      const raspuns = await fetch('/redari/sabloane/cerere_imputernicire.docx')
+      if (!curent()) return
+      if (!raspuns.ok) throw new Error('Sablonul cererii nu poate fi descarcat')
+      const templateArrayBuffer = await raspuns.arrayBuffer()
+      if (!curent()) return
+      const { blob } = await genereazaCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete, nrDocument, templateArrayBuffer })
+      if (!curent()) return
+      // Copilot f3a r1 P3-01: recitire finală — un singur mesaj: succes SAU „generat, dar datele s-au schimbat între timp”
+      // Copilot f3a r2 P2-01: se recitesc ACELEAȘI rânduri red_uat (id, nume) și se compară lista normalizată cu cea folosită la generare
+      const semnaturaUat = lista => lista.map(u => `${u.id}|${String(u.nume ?? '').trim()}`).sort().join('\n')
+      let prDupa = null, uatsDupa = null, eroareFinala = null
+      try {
+        const rez = await Promise.all([
+          supabase.from('red_proiecte').select('versiune').eq('id', id).maybeSingle(),
+          citestePaginat(() => supabase.from('red_uat').select('id, nume').eq('proiect_id', id), { cheie: 'id', esteCurent: curent }),
+        ])
+        if (rez[0].error) throw rez[0].error
+        prDupa = rez[0].data; uatsDupa = rez[1]
+      } catch (e) { eroareFinala = e }
+      if (!curent()) return
+      descarcaBlob(blob, `Cerere_imputernicire_${proiectProaspat.cod}.docx`)
+      const neverificat = !!eroareFinala || !prDupa || !Array.isArray(uatsDupa)
+      const schimbat = !neverificat && (prDupa.versiune !== proiectProaspat.versiune || semnaturaUat(uatsDupa) !== semnaturaUat(uatsProaspete))
+      if (neverificat) show('Document generat, dar NU am putut verifica dacă proiectul s-a schimbat între timp. Reîncarcă și generează din nou înainte de a-l folosi. Nu pleacă nicăieri automat.', 'error')
+      else if (schimbat) show('Atenție: proiectul sau UAT-urile s-au schimbat în timpul generării. Documentul poate avea date vechi — generează din nou. Nu pleacă nicăieri automat.', 'error')
+      else show('Document generat pentru verificare. Nu pleacă nicăieri automat.', 'success')
+    } catch (e) { if (curent()) show('Generare cerere: ' + msgEroare(e), 'error') }
+    finally { if (curent()) { ocupat.current = false; setLucru(false) } }
+  }
   // alt admin a salvat între timp: versiunea din părinte e mai nouă decât baza (propria salvare crește baza imediat — Copilot f2 r2 P3)
   const altaVersiune = (proiect.versiune ?? 0) > (baza.versiune ?? 0)
   // ce lipsește la nivel de proiect pentru convocator (UAT-ul fictiv „complet” izolează doar cerințele proiectului)
@@ -135,6 +192,20 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
           </div>
         )}
       </div>
+      {esteAdmin && <div style={{ ...S.card, marginTop: 12 }}>
+        <h3>Cerere de imputernicire catre Beneficiar (anexa la scrisoarea catre TGZ)</h3>
+        <p style={{ color: G.muted }}>DRAFT Juridic, de validat de avocat. Documentul se descarca pentru verificare.</p>
+        <label>Nr. inregistrare (optional){' '}
+          <input style={S.input} value={nrDocument} disabled={lucru} onChange={e => { if (!lucru) setNrDocument(e.target.value) }} />
+        </label>
+        {lipsuriCerere.length > 0 && <div style={{ color: G.yellow, marginTop: 10 }}>
+          <div style={{ fontSize: 12 }}>Pe datele afișate lipsesc (la generare se verifică datele actuale din bază):</div>
+          {lipsuriCerere.map(l => <div key={l}>{l}</div>)}
+        </div>}
+        {schimbate.length > 0 && <p style={{ color: G.yellow }}>Salveaza modificarile inainte de generare.</p>}
+        <button style={{ ...S.btnS, marginTop: 10 }} disabled={lucru || schimbate.length > 0}
+          onClick={genereazaCererea}>Genereaza cererea (DOCX)</button>
+      </div>}
     </div>
   )
 }

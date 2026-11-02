@@ -214,6 +214,60 @@ describe('FormularCampuri', () => {
 })
 
 describe('ecranul Setări proiect', () => {
+  it('cererea: admin vede sectiunea si lipsurile ca indiciu (butonul NU e blocat de ele — Copilot f3a r2 P3-01); editor/viewer nu o vad', () => {
+    const html = renderToString(<SetariProiect proiect={proiect} uats={[]} nivel="admin" show={show} />)
+    expect(html).toContain('Cerere de imputernicire catre Beneficiar')
+    expect(html).toContain('Nr. inregistrare (optional)')
+    expect(html).toContain('Lipseste beneficiarul')
+    expect(html).toContain('cel putin un UAT')
+    expect(html).toContain('la generare se verifică datele actuale')
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Genereaza cererea \(DOCX\)<\/button>/)   // validarea reală e pe datele proaspete, la click
+    expect(html).toMatch(/<button[^>]*>Genereaza cererea \(DOCX\)<\/button>/)
+    for (const nivel of ['editor', 'viewer']) {
+      const h = renderToString(<SetariProiect proiect={proiect} uats={uats} nivel={nivel} show={show} />)
+      expect(h).not.toContain('Cerere de imputernicire catre Beneficiar')
+      expect(h).not.toContain('Genereaza cererea')
+    }
+  })
+  it('cererea: proiect complet permite generare, modificarile nesalvate o blocheaza', () => {
+    const h = harness()
+    const props = { proiect: { ...proiect, beneficiar: 'Beneficiar FICTIV', contract_nr: 'TEST-1', contract_data: '2025-01-22', reprezentant_tgz_nume: 'Delegat FICTIV', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator' }, uats, nivel: 'admin', show }
+    let tree = h.render(SetariProiect, props)
+    const buton = t => elemente(t, 'button').find(b => b.props.children === 'Genereaza cererea (DOCX)')
+    expect(buton(tree).props.disabled).toBe(false)
+    elemente(tree, FormularCampuri)[0].props.onChange('contract_nr', 'EDITAT')
+    tree = h.render(SetariProiect, props)
+    expect(buton(tree).props.disabled).toBe(true)
+    h.unmount()
+  })
+  it('cererea: blocheaza imediat dublul click si ignora fetch dupa unmount', async () => {
+    const h = harness(), toast = vi.fn()
+    const props = { proiect: { ...proiect, versiune: 1, beneficiar: 'Beneficiar FICTIV', contract_nr: 'TEST-1', contract_data: '2025-01-22', reprezentant_tgz_nume: 'Delegat FICTIV', reprezentant_gazpet_nume: 'Semnatar FICTIV', reprezentant_gazpet_functie: 'coordonator' }, uats, nivel: 'admin', show: toast }
+    let rezolva
+    const fetchMock = vi.fn(() => new Promise(r => { rezolva = r }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const tree = h.render(SetariProiect, props)
+      const buton = elemente(tree, 'button').find(b => b.props.children === 'Genereaza cererea (DOCX)')
+      await new Promise(r => setTimeout(r, 0))   // citirea executie_proiecte din efect (await pe thenable = microtask) consuma intai paginile implicite
+      // Copilot f3a r1 P2: UAT-urile se citesc din BD la click (keyset: o pagina + una goala) — paginile se pun INAINTE de click
+      raspunsuri.liste.push({ data: uats.map(u => ({ id: u.id, nume: u.nume })), error: null }, { data: [], error: null })
+      const pending = buton.props.onClick()
+      await buton.props.onClick()
+      // apoi proiectul (maybeSingle), abia apoi sablonul: fluxul citeste intai proiectul (maybeSingle) si UAT-urile (keyset: o pagina + una goala) din BD, abia apoi sablonul
+      for (let i = 0; i < 5 && !raspunsuri.singure.length; i++) await Promise.resolve()
+      raspunsuri.singure[0]({ data: { ...props.proiect, versiune: props.proiect.versiune ?? 1 }, error: null })
+      for (let i = 0; i < 20 && fetchMock.mock.calls.length === 0; i++) await new Promise(r => setTimeout(r, 0))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(elemente(h.render(SetariProiect, props), 'input').every(n => n.props.disabled)).toBe(true)
+      h.unmount()
+      const arrayBuffer = vi.fn()
+      rezolva({ ok: true, arrayBuffer })
+      await pending
+      expect(arrayBuffer).not.toHaveBeenCalled()
+      expect(toast).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
   it('admin: câmpuri editabile + butonul Salvează + lipsurile pentru convocator', () => {
     const h = renderToString(<SetariProiect proiect={proiect} nivel="admin" show={show} onSchimbat={() => {}} />)
     expect(h).toContain('TEST-PR')
