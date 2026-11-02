@@ -36,6 +36,7 @@ describe('import 8b - identitate fara tronson',()=>{
     expect(p.parcele).toHaveLength(0)
     expect(p.erori).toHaveLength(2)
     expect(p.erori[0].motiv).toMatch(/Tronson invalid pentru UAT HUS/)
+    expect(p.statistici.pe_uat.HUS.erori).toBe(2)
   })
   it('rezerva un singur bloc per UAT, inclusiv tronsoane diferite',async()=>{
     const apeluri=[], scrise=[]

@@ -224,7 +224,7 @@ export function parseazaTgz(arrayBuffer, { uats = [], tronsonPeUat = {}, versiun
     const uat = uatDupa.get(normalizeazaNume(uatBrut)) || uatDupa.get(uatBrut.toUpperCase())
     if (!uat) { erori.push({ rand: randExcel, motiv: `UAT necunoscut „${uatBrut}”`, uat: uatBrut, nume: numeBrut }); continue }
     const s = statUat(uat.uat3)
-    if (tronsonDatInvalid(tronsonPeUat?.[uat.uat3])) { erori.push({ rand: randExcel, motiv: `Tronson invalid pentru UAT ${uat.uat3} (1..11 sau gol)`, uat: uatBrut, nume: numeBrut }); continue }
+    if (tronsonDatInvalid(tronsonPeUat?.[uat.uat3])) { erori.push({ rand: randExcel, motiv: `Tronson invalid pentru UAT ${uat.uat3} (1..11 sau gol)`, uat: uatBrut, nume: numeBrut }); s.erori++; continue }
     const tronson = tronsonOptional(tronsonPeUat?.[uat.uat3])
 
     // parcela: cheiată pe (uat3, Nr.Crt. x). Atributele și cheie_sursa se CONSOLIDEAZĂ pe tot grupul după buclă (P1-2 r7):
