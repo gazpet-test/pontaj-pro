@@ -288,6 +288,31 @@ parcela existentă, nu creează alta). Lotul se deschide (`red_import_loturi.sta
 Rezultatul previzualizării: `{parcele: [...], detinatori: [...], contacte: [...], dubluri, neidentificati, erori}`; commit-ul
 scrie în ordinea parcele → detinatori → contact → red_import_loturi, în loturi de 200 (ținta: 2.728 parcele sub 1 minut).
 
+### Anexa 7 (faza 2, felia 3b)
+`src/redari/importAnexa7.js`: `parseazaAnexa7(arrayBuffer, {uats, tronsonPeUat, versiune, sursa='ANEXA7'})`.
+Antetul se cauta dupa continut (normalizare comuna TGZ), nu dupa numarul randului; tipizatul Model 7 are 30 de coloane pe randul 5.
+Cele doua coloane Sat se disting prin pozitia fata de Nume / Adresa; coloanele lipsa sau duplicate ambigue refuza fisierul explicit.
+Un rand = parcela + detinator, fara Nr.Crt. Identitatea este exact helperul TGZ `cheieSursa(uat3, poz_hg, nr_cadastral, tarla)`;
+aceeasi cheie valida reuneste detinatorii. HG identic cu cadastru/tarla diferite NU inseamna aceeasi cheie.
+Fara HG si cadastru, fiecare rand ramane parcela separata in `fara_cheie`, exclusa de scrierea existenta.
+Contradictiile de sat/suprafata/categorie pastreaza prima valoare si sunt notate in observatiile parcelei; `ambigue=0`.
+UAT se potriveste dupa nume normalizat sau cod; necunoscut, nume gol, tronson invalid ori suprafata invalida = eroare pe rand, rand sarit.
+Tronsonul vine numai din configurare; Tronson / km din fisier se pastreaza in observatii. Suprafata foloseste helperul numeric TGZ;
+textul de forma `1.234` este semnalat drept ambiguu in `sursa_date` (interpretarea helperului: 1234); nu se inventeaza zero pentru lipsa.
+Calitatea se mapeaza prin prefix normalizat la cele sase valori CALITATI; necunoscuta = proprietar cu nota de verificare.
+Neidentificat=DA impune calitatea neidentificat si adresa necunoscuta. Decedat=DA produce `decedat=true` in preview.
+Cota ramane text; actul, mostenitorii/sursa lor, utilizatorul cunoscut, reprezentantul/mandatul, despagubirea, stadiul, observatiile
+si data actualizarii se pastreaza ca note in `sursa_date`, dupa sursa din coloana 29 (rezerva ANEXA7). Nu se creeaza persoane din note.
+Deduplicarea este pe parcela + nume normalizat; randurile duplicate sunt raportate si continutul lor se pastreaza in `sursa_date`.
+Contactul apare numai daca exista cel putin un camp de contact in fisier; adresa vine direct din coloanele 13-17,
+judetul lipsa se ia din UAT; telefon/e-mail din 18-19. Adresa cunoscuta necesita strada sau comuna si detinator identificat.
+Preview-ul are aceleasi colectii si contoare ca TGZ, inclusiv contoarele eligibile `*_de_importat`; `antet={rand,chei}` foloseste
+index 0-based (4 pentru tipizat), spre deosebire de antetul istoric TGZ. ID-urile sunt provizorii pana la RPC-ul existent.
+UI selecteaza parserul dupa sursa si trimite `sursa='ANEXA7'` catre `scrieImport`, care ramane neschimbat.
+**Limita existenta:** `scrieImport` nu include coloana booleana `decedat` la INSERT; valoarea este disponibila in preview si pastrata
+textual in `sursa_date`, dar NU devine `red_detinatori.decedat=true` prin acest flux. Corectarea scrierii necesita felie separata.
+Nu se actualizeaza atributele persoanelor/parcelelor deja existente. Importul real nu a fost rulat.
+
 ## 8. Documente (client-side, `src/redari/docx.js`, 4A + 5A)
 - `completeazaDocx(templateArrayBuffer, campuri) → Blob`: deschide DOCX cu jszip, înlocuiește `{{camp}}` în `word/document.xml`
   (și headers/footers), inclusiv când placeholder-ul e rupt între mai multe `<w:r>` (se reunesc run-urile unui paragraf înainte
@@ -343,7 +368,7 @@ Coloane/obiecte NOI necesare (fără sursă în §2; propuneri, de confirmat de 
 - `red_raspunsuri`: sursă pentru prezența la sesiune (`canal='sesiune'` = prezent) și `constatare_teren_data date`
   (data stabilită de comisie).
 - `red_detinatori` (din Model_7): `act_doveditor_cunoscut bool`, `reprezentant_mandat text`, `despagubire_doc text`,
-  `stadiu_verificare text`; parser nou în `importTgz.js` pentru formatul Anexa 7 (antet pe rândul 5, 30 de coloane).
+  `stadiu_verificare text`; parserul Anexa 7 exista separat in `importAnexa7.js` (vezi sectiunea 7); aceste informatii raman note, fara coloane noi.
 - `red_numere`: cheie `AU` (adrese UAT) dacă se numerotează în ERP.
 - Decizii deschise: `link_afisare` (pagină publică pe UAT fără token sau se scoate din Anexa 2), `act_identitate`/`act_doveditor`
   (rămân de mână, nu se stochează), `pva_sesiune` vs `pva_corespondenta` (calcul pe `trimis_spre_semnare_data`), tabelul de

@@ -25,7 +25,7 @@ export const MAX_NUMAR_PARCELA = 9999   // id_parcela are fix 4 cifre
 const MAX_RAND_ANTET = 30       // căutăm antetul în primele 30 de rânduri
 
 // Cheie de potrivire pentru antet: fără diacritice, litere mici, doar [a-z0-9].
-const cheie = s => faraDiacritice(s).toLowerCase().replace(/[^a-z0-9]/g, '')
+export const cheie = s => faraDiacritice(s).toLowerCase().replace(/[^a-z0-9]/g, '')
 
 // Coloanele din §7, în ordinea în care se încearcă potrivirea (prima regulă care se potrivește ia coloana).
 const COLOANE = [
@@ -43,9 +43,9 @@ const COLOANE = [
 ]
 const OBLIGATORII = ['nr_crt', 'uat', 'nume']
 
-const text = v => (v == null ? '' : String(v).replace(/\s+/g, ' ').trim())
+export const text = v => (v == null ? '' : String(v).replace(/\s+/g, ' ').trim())
 
-function numar(v) {
+export function numar(v) {
   if (v == null || v === '') return null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
   const s = String(v).trim().replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.')

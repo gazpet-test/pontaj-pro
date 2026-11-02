@@ -226,11 +226,60 @@ Reguli L01-L25 (dovezile de test de mai jos sunt scrise, dar vitest NU a putut f
 | L24 | SetariProiect.jsx: generatie + id proiect, reset la schimbarea proiectului, cleanup la unmount; test fetch rezolvat dupa unmount. |
 | L25 | Asteptari explicite pe fixture-uri fictive si textul Juridic/sablonul real; verificari XML efective. Testele vitest sunt nerulate din motivele de mai sus. |
 
+### 4.1e Faza 2, felia 3b - parser Anexa 7 (02.11.2026)
+- Facut: parser separat, antet dupa continut, 30 de coloane, identitate prin helperul TGZ, gruparea coproprietarilor,
+  note pentru contradictii, contacte pe coloane, calitati, decedat in preview, sursa/versiune si statistici compatibile.
+  Selectorul Sursa alege parserul; importul primeste ANEXA7. TGZ are numai trei exporturi de helperi in plus, fara schimbari de logica.
+- NU: schema/RPC/scriere modificate, actualizari pe persoane existente, import real, Git, instalari, deploy.
+  Limita: scrieImport nu persista booleanul decedat; informatia se pastreaza textual in sursa_date (CONTRACT_SCHEMA sectiunea 7).
+- NETESTAT: Vitest (node_modules lipseste), build (il face Claude), browser, PostgREST/BD si importul real.
+
+Raport felia 3b (in acest fisier, fara raport suplimentar in afara listei permise):
+- Fisiere atinse: `src/redari/importAnexa7.js`, `src/redari/importAnexa7.test.js` (noi), `src/redari/importTgz.js`
+  (export cheie/text/numar), `src/redari/ui/ImportTgz.jsx` (selectie parser, eticheta/ajutor si judet UAT),
+  `docs/redari/CONTRACT_SCHEMA.md`, `docs/redari/README.md`.
+- Teste scrise: 8 cazuri Vitest; antet citit din Model 7 real, fixture fictiv cu 8 randuri, verificari pe numere, contacte,
+  coproprietari/mostenitor/neidentificat, deduplicare, contradictii, cheie incompleta/completa, antet mutat sau invalid,
+  tronson invalid, calitate necunoscuta si paritate cu CALITATI din UI.
+- Iesirea Vitest: **nu a fost rulat**, dependentele lipsesc din worktree; nu s-a incercat instalarea.
+  XML-ul randului 5 al XLSX a fost citit cu .NET ZipFile: toate cele 30 de antete corespund maparii.
+  `node --check` pentru importAnexa7.js, importAnexa7.test.js si importTgz.js: exit 0, fara output.
+  Node a fost apelat prin calea absoluta din Program Files (nu este in PATH). Date externe tratate exclusiv ca date.
+
+Reguli L01-L25 (lectiile citite inaintea implementarii):
+
+| Regula | Cum a fost respectata / n/a |
+| --- | --- |
+| L01 | n/a - fara scrieri sau lock-uri noi |
+| L02 | n/a - scrieImport si RPC-urile nemodificate |
+| L03 | n/a - fara cache sau rezultate derivate persistate |
+| L04 | n/a - fara intentii de scriere noi |
+| L05 | n/a - fara operatii de retea noi |
+| L06 | n/a - fara lock-uri |
+| L07 | n/a - fara modificari de acces/schema |
+| L08 | n/a - fara autentificare/provenienta server modificata |
+| L09 | n/a - fara DEFINER/edge/service_role |
+| L10 | Fixture exclusiv fictiv in importAnexa7.test.js; fara secrete, erori de citire Excel generice |
+| L11 | ANTETE si maparea din importAnexa7.js cer o coloana unica; Sat distinct prin pozitie; testul antetului mutat/ambiguu |
+| L12 | Erori pe rand, dubluri raportate cu continut pastrat, fara_cheie separate, contradictii in observatii; testele de fixture si deduplicare |
+| L13 | Coloana inexistenta/ambigua opreste parsarea; suprafata invalida/tronson invalid dau erori; teste pozitive si negative |
+| L14 | n/a - fara migrari |
+| L15 | n/a - fara schema |
+| L16 | Cheia completa foloseste cheieSursa TGZ, deduplicarea parcela+nume ca scrierea existenta; test HG identic cu cadastru diferit; fara unicitate BD noua |
+| L17 | Helper numeric TGZ exportat, nu duplicat; 12,5 / 12.25 / 7.25 si ambiguitatea 1.234 in teste; data actualizarii ramane nota, fara conversii de fus |
+| L18 | Suprafata invalida nu devine zero/null tacit; antet invalid, nume gol, UAT necunoscut si tronson invalid raportate explicit in teste |
+| L19 | cheieSursa, cheie, text, numar si normalizeazaNume reutilizate; lista calitatilor are test de paritate cu comune.jsx |
+| L20 | Cale valida si exceptii in importAnexa7.test.js; test neidentificat=DA versus NU si calitate necunoscuta |
+| L21 | n/a - fara AI |
+| L22 | n/a - fara AI/costuri |
+| L23 | n/a - fara citiri paginabile noi |
+| L24 | n/a - parser sincron; ciclul async existent al UI nu a fost extins |
+| L25 | Antet independent din XLSX real, expected explicite si date fictive; testele sunt scrise, NU declarate trecute; fara BD/RLS in aceasta felie |
 ### 4.2 NU e făcut (faza următoare, după brief §8 „apoi”)
 - PV A / B / C (generare din `pv_a` / `pv_b` / `pv_c.docx`, numerotare PVA/PVB/PVC, stările trimis/semnat, upload scan semnat) — doar schema există.
 - Evidența ulterioară a afișării și semnării PV de afișare; documentul Model 4 se generează în 4.1c.
 - Sesiune (mod tabletă), Dashboard (centralizator pe UAT), configurarea șabloanelor.
-- Import Anexa 7 (Model_7, antet pe rândul 5, 30 de coloane) — `red_import_loturi.sursa = 'ANEXA7'` există, parserul nu.
+- Validarea in browser si importul real Anexa 7 (parserul si selectia sursei sunt implementate in 4.1e).
 - Export registru xlsx (Model_6) și centralizator „fără date personale” pentru TGZ.
 - Email (Gmail API `redari@gazpet.ro`), SMS (SMSLink), FAN Courier — niciun canal automat; totul manual (decizia 6).
 - Câmpurile fără sursă din `SABLOANE.md` §3 (bifele stării terenului, verificarea pe teren, reluarea convocării, `semnatar_apm`, numerotarea

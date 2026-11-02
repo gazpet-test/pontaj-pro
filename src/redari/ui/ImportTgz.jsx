@@ -4,6 +4,7 @@
 import React, { useMemo, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { parseazaTgz, scrieImport } from '../importTgz.js'
+import { parseazaAnexa7 } from '../importAnexa7.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
 
 const TRONSOANE = Array.from({ length: 11 }, (_, i) => i + 1)
@@ -56,7 +57,8 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
     try {
       const ab = await fisier.arrayBuffer()
       // fără idStart: numerele finale se rezervă server-side la import; previzualizarea arată id-uri provizorii
-      const rez = parseazaTgz(ab, { uats: uats.map(u => ({ id: u.id, nume: u.nume, uat3: u.uat3 })), tronsonPeUat: tronsoane, versiune: versiune.trim(), sursa })
+      const parser = sursa === 'ANEXA7' ? parseazaAnexa7 : parseazaTgz
+      const rez = parser(ab, { uats: uats.map(u => ({ id: u.id, nume: u.nume, uat3: u.uat3, judet: u.judet })), tronsonPeUat: tronsoane, versiune: versiune.trim(), sursa })
       setPreview(rez)
       const sarite = (rez.fara_cheie?.length || 0) + (rez.ambigue?.length || 0)
       if (rez.erori?.length) show(`${rez.erori.length} rânduri cu erori — vezi tab-ul „Erori”.`, 'error')
@@ -121,11 +123,11 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
       <div style={{ ...S.card, marginBottom:12 }}>
         <div style={{ fontWeight:700, marginBottom:10 }}>1. Fișierul și versiunea listei</div>
         <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:10, alignItems:'end' }}>
-          <Camp eticheta="Excel TGZ (.xlsx) — antet pe rândul 3">
+          <Camp eticheta={sursa === 'ANEXA7' ? 'Excel Anexa 7 (.xlsx)' : 'Excel TGZ (.xlsx) — antet pe rândul 3'}>
             <input type="file" accept=".xlsx,.xls" onChange={e => { setFisier(e.target.files?.[0] || null); setRaport(null); invalideaza('alt fișier') }} style={{ ...S.input, padding:5 }} disabled={lucru} />
           </Camp>
           <Camp eticheta="Versiunea listei (obligatoriu)"><input value={versiune} onChange={e => { setVersiune(e.target.value); invalideaza('versiunea s-a schimbat') }} style={S.input} placeholder="ex. TGZ 13.07.2026" disabled={lucru} /></Camp>
-          <Camp eticheta="Sursa"><select value={sursa} onChange={e => { setSursa(e.target.value); invalideaza('sursa s-a schimbat') }} style={{ ...S.select, width:'100%' }} disabled={lucru}><option value="TGZ">TGZ</option><option value="ANEXA7">ANEXA7</option></select></Camp>
+          <Camp eticheta="Sursa"><select value={sursa} onChange={e => { setSursa(e.target.value); invalideaza('sursa s-a schimbat') }} style={{ ...S.select, width:'100%' }} disabled={lucru}><option value="TGZ">TGZ</option><option value="ANEXA7">Anexa 7 - tipizat Beneficiar</option></select><div style={{ fontSize:12, color:G.muted, marginTop:4 }}>{sursa === 'ANEXA7' ? 'Model 7: 30 de coloane, antet pe randul 5; adresa pe coloane separate.' : 'Format TGZ vechi: Nr.Crt., Nume Detinator si adresa intr-o singura coloana.'}</div></Camp>
         </div>
         <div style={{ fontWeight:700, margin:'14px 0 8px' }}>2. Tronsonul per UAT (manual, până la corelarea pe km)</div>
         {uats.length === 0 ? <Gol text="Proiectul nu are UAT-uri." /> : (
