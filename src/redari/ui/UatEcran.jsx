@@ -10,6 +10,19 @@ import FormularCampuri from './FormularCampuri.jsx'
 
 const CHEI_SESIUNE = [...ZILE_SESIUNE, 'program_zi1', 'program_zi2', 'program_zi3']
 
+// parcele = active (afișare); parceleToate = inclusiv șterse logic (garda codului: trigger-ul BD le numără pe toate — Jakarinos f2 r1 P3)
+async function numaraUat(uatId) {
+  const [p, t, c] = await Promise.all([
+    supabase.from('red_parcele').select('id', { count: 'exact', head: true }).eq('uat_id', uatId).is('sters_la', null),
+    supabase.from('red_parcele').select('id', { count: 'exact', head: true }).eq('uat_id', uatId),
+    supabase.from('red_v_stare_parcela').select('parcela_id', { count: 'exact', head: true }).eq('uat_id', uatId).not('ultima_convocare_data', 'is', null),
+  ])
+  const err = p.error || t.error || c.error
+  if (err) throw err
+  if (p.count == null || t.count == null || c.count == null) throw new Error('numărătoare indisponibilă')
+  return { parcele: p.count, parceleToate: t.count, convocati: c.count }
+}
+
 export default function UatEcran({ proiect, uats, nivel, show, onSchimbat }) {
   const esteAdmin = nivel === 'admin'
   const [numaratori, setNumaratori] = useState({})   // uat_id → { parcele, convocati }
@@ -19,12 +32,8 @@ export default function UatEcran({ proiect, uats, nivel, show, onSchimbat }) {
   const incarcaNumaratori = useCallback(async () => {
     const rez = {}
     for (const u of uats) {
-      const [p, c] = await Promise.all([
-        supabase.from('red_parcele').select('id', { count: 'exact', head: true }).eq('uat_id', u.id).is('sters_la', null),
-        supabase.from('red_v_stare_parcela').select('parcela_id', { count: 'exact', head: true }).eq('uat_id', u.id).not('ultima_convocare_data', 'is', null),
-      ])
-      if (p.error || c.error) { show('Numărători UAT: ' + msgEroare(p.error || c.error), 'error'); return }
-      rez[u.id] = { parcele: p.count || 0, convocati: c.count || 0 }
+      try { rez[u.id] = await numaraUat(u.id) }
+      catch (e) { show('Numărători UAT: ' + msgEroare(e), 'error'); return }
     }
     setNumaratori(rez)
   }, [uats, show])
@@ -85,7 +94,7 @@ function ModalUat({ uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
   const [erori, setErori] = useState([])
   const schimbate = cheiSchimbate(uat, form, CAMPURI_UAT)
   const codSchimbat = cod !== uat.uat3
-  const poateSchimbaCod = esteAdmin && numarator && numarator.parcele === 0
+  const poateSchimbaCod = esteAdmin && numarator && numarator.parceleToate === 0
 
   const salveaza = async () => {
     const e = valideazaUat(form)
@@ -98,8 +107,15 @@ function ModalUat({ uat, uats, numarator, esteAdmin, show, onClose, onGata }) {
     if (e.length) return
     if (!schimbate.length && !codSchimbat) { show('Nimic de salvat.', 'info'); return }
     const atingeSesiuni = schimbate.some(k => CHEI_SESIUNE.includes(k))
-    if (atingeSesiuni && numarator?.convocati > 0 && !window.confirm(
-      `UAT-ul ${uat.nume} are ${numarator.convocati} deținători deja convocați cu zilele vechi.\n` +
+    // Jakarinos f2 r1 P2: numărătoarea se citește PROASPĂT la salvare; dacă nu se poate citi, nu salvăm (necunoscut ≠ zero convocați)
+    let proaspat = null
+    if (atingeSesiuni || codSchimbat) {
+      try { proaspat = await numaraUat(uat.id) }
+      catch (err) { show('Nu pot verifica convocările UAT-ului, nu salvez: ' + msgEroare(err), 'error'); return }
+      if (codSchimbat && proaspat.parceleToate > 0) { setErori(['Codul UAT nu se mai schimbă: UAT-ul are parcele (codul e în id_parcela)']); return }
+    }
+    if (atingeSesiuni && proaspat.convocati > 0 && !window.confirm(
+      `UAT-ul ${uat.nume} are ${proaspat.convocati} deținători deja convocați cu zilele vechi.\n` +
       'Convocatoarele trimise NU se modifică, iar răspunsurile noi se vor raporta la zilele noi. Expirarea linkurilor se recalculează automat.\n\nContinui?')) return
     const tot = normalizeaza(form, CAMPURI_UAT)
     const patch = Object.fromEntries(schimbate.map(k => [k, tot[k]]))

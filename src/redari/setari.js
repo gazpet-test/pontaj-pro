@@ -63,6 +63,12 @@ const RX_ORA = /^([01][0-9]|2[0-3]):[0-5][0-9]$/
 const RX_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const gol = (v) => v === null || v === undefined || String(v).trim() === ''
+// 'AAAA-LL-ZZ' care există în calendar (JS normalizează 2026-02-30 la 2 martie; Postgres o respinge) — Jakarinos f2 r1 P3
+export function dataValida(s) {
+  if (!RX_DATA.test(s)) return false
+  const d = new Date(s + 'T00:00:00Z')
+  return !isNaN(d) && d.toISOString().slice(0, 10) === s
+}
 
 /** Valoarea pentru BD: text tăiat la capete, '' → null; datele rămân 'AAAA-LL-ZZ'. */
 export function normalizeazaValoare(v) {
@@ -86,7 +92,7 @@ export function cheiSchimbate(vechi, nou, campuri) {
 function verificaFormat(c, v, erori) {
   if (gol(v)) { if (c.obligatoriu) erori.push(`${c.eticheta}: obligatoriu`); return }
   const s = String(v).trim()
-  if (c.tip === 'date' && (!RX_DATA.test(s) || isNaN(new Date(s + 'T00:00:00Z')))) erori.push(`${c.eticheta}: dată invalidă`)
+  if (c.tip === 'date' && !dataValida(s)) erori.push(`${c.eticheta}: dată invalidă`)
   else if (c.tip === 'ora' && !RX_ORA.test(s)) erori.push(`${c.eticheta}: format HH:MM (00:00–23:59)`)
   else if (c.tip === 'email' && !RX_EMAIL.test(s)) erori.push(`${c.eticheta}: adresă de e-mail invalidă`)
   else if (c.tip === 'tel' && s.length > MAX_TELEFON) erori.push(`${c.eticheta}: maximum ${MAX_TELEFON} caractere`)

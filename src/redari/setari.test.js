@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CAMPURI_PROIECT, CAMPURI_UAT, COL_PROIECT, COL_UAT, normalizeaza, normalizeazaValoare, cheiSchimbate, valideazaUat, valideazaProiect,
-  lipsuriUat, rezumatZile } from './setari.js'
+  lipsuriUat, rezumatZile, dataValida } from './setari.js'
 
 const uatBun = () => ({ nume: 'Test UAT', sesiune_zi1: '2026-12-10', program_zi1: '09:00 – 16:00', sesiune_zi2: '2026-12-11', program_zi2: '09:00 – 19:00',
   termen_confirmare: '2026-11-28', afisare_data_start: '2026-11-20', afisare_data_end: '2026-12-12', afisare_ora: '09:30', reprezentant_uat_nume: 'Repr. test' })
@@ -54,6 +54,12 @@ describe('setari — valideazaUat (oglinda CHECK-urilor din BD)', () => {
     expect(valideazaUat({ ...uatBun(), afisare_data_end: '2026-11-19' })).toContain('Afișarea se termină înainte să înceapă')
     expect(valideazaUat({ ...uatBun(), afisare_ora: '25:00' })).toContain('Ora afișării (HH:MM): format HH:MM (00:00–23:59)')
     expect(valideazaUat({ ...uatBun(), afisare_ora: '9:30' })).toHaveLength(1)
+  })
+  it('data inexistentă în calendar e respinsă (Jakarinos f2 r1 P3)', () => {
+    expect(dataValida('2026-02-30')).toBe(false)
+    expect(dataValida('2028-02-29')).toBe(true)
+    expect(dataValida('2026-2-03')).toBe(false)
+    expect(valideazaUat({ nume: 'X', sesiune_zi1: '2026-02-30' })).toContain('Ziua 1: dată invalidă')
   })
   it('dată invalidă, e-mail invalid, telefon prea lung', () => {
     expect(valideazaUat({ ...uatBun(), sesiune_zi1: '2026-13-40' }).some(e => /Ziua 1: dată invalidă/.test(e))).toBe(true)

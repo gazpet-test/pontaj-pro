@@ -28,6 +28,12 @@ BEGIN
     RAISE EXCEPTION '20261127a: coloanele noi exista deja (migrarea a rulat?)';
   END IF;
   IF EXISTS (SELECT 1 FROM public.red_numere WHERE cheie = 'AU') THEN RAISE EXCEPTION '20261127a: cheia AU exista deja in red_numere'; END IF;
+  -- Copilot f2 r1 P2-04: politicile red_uat / red_proiecte sunt EXACT cele din 20261126a (6 politici: sel = nivel nenul; ins/upd = admin).
+  -- Amprenta (tabelă|politică|cmd|roluri|USING|WITH CHECK, sortat) citită de pe prod 02.11.2026; orice abatere = refuz.
+  IF (SELECT md5(string_agg(tablename || '|' || policyname || '|' || cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''), E'\n' ORDER BY tablename, policyname)) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('red_uat', 'red_proiecte')) IS DISTINCT FROM '5522f827069f68dfedd4b0a0c4c83e1d' THEN
+    RAISE EXCEPTION '20261127a: politicile red_uat / red_proiecte difera de 20261126a — refuz';
+  END IF;
+  PERFORM set_config('gazpet.r27_fn_amprenta', (SELECT pg_get_userbyid(proowner) || '|' || prosecdef::text || '|' || coalesce(proacl::text, '') || '|' || coalesce(array_to_string(proconfig, ','), '') FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure), true);
   -- zilele de sesiune: constrângerea nouă e validată pe rândurile existente; dacă un UAT are deja zile în altă ordine, migrarea refuză explicit
   IF EXISTS (SELECT 1 FROM public.red_uat WHERE (sesiune_zi2 IS NOT NULL AND (sesiune_zi1 IS NULL OR sesiune_zi2 <= sesiune_zi1))
                                            OR (sesiune_zi3 IS NOT NULL AND (sesiune_zi2 IS NULL OR sesiune_zi3 <= sesiune_zi2))) THEN
@@ -105,6 +111,11 @@ BEGIN
         AND conname IN ('red_uat_zile_ordonate', 'red_uat_termen_inainte', 'red_uat_afisare_ordonata', 'red_uat_adresa_nr_fmt', 'red_uat_afisare_ora_fmt', 'red_uat_repr_tel_len', 'red_uat_afisare_repr_len')) <> 7 THEN
     RAISE EXCEPTION 'Postconditie: constrangerile red_uat lipsesc';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.red_proiecte'::regclass AND conname = 'red_proiecte_apm_len')
+     OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'red_uat' AND indexname = 'red_uat_adresa_nr_uq'
+                      AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%WHERE (adresa_nr IS NOT NULL)%') THEN
+    RAISE EXCEPTION 'Postconditie: red_proiecte_apm_len / indexul unic red_uat_adresa_nr_uq lipsesc';
+  END IF;
   IF position('''AU''' IN (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure)) = 0 THEN
     RAISE EXCEPTION 'Postconditie: fn_red_numar_document fara ramura AU';
   END IF;
@@ -113,8 +124,10 @@ BEGIN
      OR NOT has_function_privilege('authenticated', 'public.fn_red_numar_document(text,text,integer)', 'EXECUTE') THEN
     RAISE EXCEPTION 'Postconditie: drepturile pe fn_red_numar_document s-au schimbat';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('red_uat', 'red_proiecte')
-               AND policyname NOT IN ('red_uat_sel', 'red_uat_ins', 'red_uat_upd', 'red_proiecte_sel', 'red_proiecte_ins', 'red_proiecte_upd')) THEN
-    RAISE EXCEPTION 'Postconditie: politici neasteptate pe red_uat / red_proiecte';
+  IF (SELECT md5(string_agg(tablename || '|' || policyname || '|' || cmd || '|' || roles::text || '|' || coalesce(qual, '') || '|' || coalesce(with_check, ''), E'\n' ORDER BY tablename, policyname)) FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('red_uat', 'red_proiecte')) IS DISTINCT FROM '5522f827069f68dfedd4b0a0c4c83e1d' THEN
+    RAISE EXCEPTION 'Postconditie: politicile red_uat / red_proiecte s-au schimbat';
+  END IF;
+  IF (SELECT pg_get_userbyid(proowner) || '|' || prosecdef::text || '|' || coalesce(proacl::text, '') || '|' || coalesce(array_to_string(proconfig, ','), '') FROM pg_proc WHERE oid = 'public.fn_red_numar_document(text,text,integer)'::regprocedure) IS DISTINCT FROM current_setting('gazpet.r27_fn_amprenta', true) THEN
+    RAISE EXCEPTION 'Postconditie: owner / SECURITY DEFINER / ACL / search_path ale fn_red_numar_document s-au schimbat';
   END IF;
 END $post$;

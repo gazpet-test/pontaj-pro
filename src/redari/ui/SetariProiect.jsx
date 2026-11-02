@@ -9,10 +9,14 @@ import FormularCampuri from './FormularCampuri.jsx'
 
 export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
   const esteAdmin = nivel === 'admin'
+  // Jakarinos f2 r1 P2: modificările se calculează față de BAZA formularului (rândul la deschidere / după propria salvare), nu față de
+  // `proiect` reîncărcat — altfel o schimbare făcută între timp de alt admin ar apărea ca „modificare” și ar fi rescrisă cu valoarea veche.
+  const [baza, setBaza] = useState(() => ({ ...proiect }))
   const [form, setForm] = useState(() => ({ ...proiect }))
   const [lucru, setLucru] = useState(false)
   const [erori, setErori] = useState([])
-  const schimbate = cheiSchimbate(proiect, form, CAMPURI_PROIECT)
+  const schimbate = cheiSchimbate(baza, form, CAMPURI_PROIECT)
+  const altaVersiune = cheiSchimbate(baza, proiect, CAMPURI_PROIECT).length > 0   // alt admin a salvat între timp
   // ce lipsește la nivel de proiect pentru convocator (UAT-ul fictiv „complet” izolează doar cerințele proiectului)
   const lipsaProiect = motivBlocareConvocator(proiect, { sesiune_zi1: 'x', program_zi1: 'x' }, null)
 
@@ -31,6 +35,7 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
       const { data, error } = await supabase.from('red_proiecte').update(patch).eq('id', proiect.id).select(COL_PROIECT)
       if (error) throw error
       if (!data?.length) throw new Error('Modificarea nu s-a salvat (fără drept de administrator pe modul?)')
+      setBaza({ ...data[0] }); setForm({ ...data[0] })
       show('Setările proiectului au fost salvate.', 'success')
       onSchimbat()
     } catch (err) { show('Salvare proiect: ' + msgEroare(err), 'error') }
@@ -47,6 +52,12 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
         </div>
       </div>
       {!esteAdmin && <div style={{ fontSize: 12.5, color: G.muted, marginBottom: 10 }}>Doar administratorul modifică setările proiectului.</div>}
+      {esteAdmin && altaVersiune && (
+        <div style={{ fontSize: 12.5, color: G.yellow, marginBottom: 10 }}>
+          Proiectul a fost modificat între timp de altcineva. Salvarea ta scrie doar câmpurile pe care le-ai schimbat tu.{' '}
+          <button onClick={() => { setBaza({ ...proiect }); setForm(f => ({ ...proiect, ...Object.fromEntries(schimbate.map(k => [k, f[k]])) })) }} style={S.btnX}>Preia versiunea nouă</button>
+        </div>
+      )}
       <div style={S.card}>
         <FormularCampuri campuri={CAMPURI_PROIECT} form={form} doarCitire={!esteAdmin} schimbate={schimbate}
           onChange={(k, v) => setForm(f => ({ ...f, [k]: v }))} />
@@ -57,7 +68,7 @@ export default function SetariProiect({ proiect, nivel, show, onSchimbat }) {
         )}
         {esteAdmin && (
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
-            <button onClick={() => { setForm({ ...proiect }); setErori([]) }} disabled={!schimbate.length || lucru} style={S.btnS}>Anulează modificările</button>
+            <button onClick={() => { setForm({ ...baza }); setErori([]) }} disabled={!schimbate.length || lucru} style={S.btnS}>Anulează modificările</button>
             <button onClick={salveaza} disabled={lucru || !schimbate.length} style={{ ...S.btnP, opacity: lucru || !schimbate.length ? 0.6 : 1 }}>
               {lucru ? 'Se salvează…' : `Salvează${schimbate.length ? ` (${schimbate.length})` : ''}`}
             </button>

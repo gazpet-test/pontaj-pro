@@ -1,7 +1,7 @@
 -- DRY 20261127a_redari_uat_setari — rulat de chat ÎN ACEEAȘI TRANZACȚIE cu migrarea, după ea, apoi ROLLBACK (ca la 20261126a):
 --   BEGIN;  SELECT set_config('gazpet.livrare_migrare', '20261127a_redari_uat_setari:' || txid_current(), true);
 --   \i supabase/migrations/20261127a_redari_uat_setari.sql     \i supabase/tests/20261127a_redari_uat_setari_dryrun.sql     ROLLBACK;
--- TEST0 refuză să ruleze pe o migrare deja comisă. Identități REALE (owner-ul, un editor și un viewer din user_module_access 'redari'),
+-- TEST0 refuză să ruleze fără marcajul tranzacției curente și dacă versiunea 20261127120000 e deja în istoricul migrărilor (Jakarinos f2 r1 P3). Identități REALE (owner-ul, un editor și un viewer din user_module_access 'redari'),
 -- date fictive (proiect TEST-27A, UAT „Test UAT” / TST), dispar la ROLLBACK. Fiecare bloc: RAISE NOTICE 'TESTn OK' sau RAISE EXCEPTION 'TESTn FAIL'.
 
 CREATE FUNCTION pg_temp.r27_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
@@ -28,6 +28,10 @@ DECLARE v_owner uuid; v_editor uuid; v_viewer uuid;
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261127a_redari_uat_setari:' || txid_current() THEN
     RAISE EXCEPTION 'TEST0 FAIL: marcajul migrarii nu e al tranzactiei curente — DRY-ul ruleaza doar in tranzactia de proba';
+  END IF;
+  IF to_regclass('supabase_migrations.schema_migrations') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261127120000') THEN
+    RAISE EXCEPTION 'TEST0 FAIL: migrarea 20261127a e deja comisa (schema_migrations) — DRY-ul nu se ruleaza pe ea';
   END IF;
   SELECT id INTO v_owner FROM public.profiles WHERE is_owner AND email = 'razvan.trusu@gazpet.ro';
   SELECT u.profile_id INTO v_editor FROM public.user_module_access u JOIN public.profiles p ON p.id = u.profile_id
@@ -167,6 +171,38 @@ BEGIN
     RAISE EXCEPTION 'TEST6 FAIL: anon citeste red_uat';
   END IF;
   RAISE NOTICE 'TEST6 OK anon';
+END $t$;
+SELECT pg_temp.r27_ca(NULL, 'postgres');
+
+-- ── TEST8 (Copilot f2 r1): trigger-ele din 20261126a cu schema nouă — uat3 blocat după parcele (inclusiv șterse logic),
+--    expirarea tokenului recalculată la schimbarea zilelor ─────────────────────────────────────────────────────────────
+SELECT pg_temp.r27_ca(pg_temp.r27_g('owner')::uuid, 'authenticated');
+DO $t$
+DECLARE v_par uuid; v_det uuid; v_exp1 timestamptz; v_exp2 timestamptz; u uuid := pg_temp.r27_g('uat')::uuid;
+BEGIN
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.r27_g('pr')::uuid, u, 'T1-TST-0001', 1) RETURNING id INTO v_par;
+  IF pg_temp.r27_refuza(format('UPDATE public.red_uat SET uat3 = ''TSX'' WHERE id = %L', u), '23514') IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'TEST8 FAIL: uat3 schimbat cu parcela activa';
+  END IF;
+  UPDATE public.red_parcele SET sters_la = now(), sters_motiv = 'test' WHERE id = v_par;
+  IF pg_temp.r27_refuza(format('UPDATE public.red_uat SET uat3 = ''TSX'' WHERE id = %L', u), '23514') IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'TEST8 FAIL: uat3 schimbat cu parcela stearsa logic (UI-ul presupune ca trigger-ul le numara pe toate)';
+  END IF;
+  UPDATE public.red_parcele SET sters_la = NULL, sters_motiv = NULL WHERE id = v_par;
+  INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (v_par, 'POPESCU TEST', 'POPESCU TEST', 'proprietar') RETURNING id INTO v_det;
+  RESET ROLE;   -- tokenul se citește ca postgres (SELECT doar admin/editor; aici verificăm valoarea, nu dreptul)
+  SELECT token_expira_la INTO v_exp1 FROM public.red_detinatori_token WHERE detinator_id = v_det;
+  IF v_exp1 IS DISTINCT FROM ((DATE '2026-12-12' + 30) + time '23:59:59') AT TIME ZONE 'Europe/Bucharest' THEN
+    RAISE EXCEPTION 'TEST8 FAIL: expirarea initiala = %', v_exp1;
+  END IF;
+  PERFORM pg_temp.r27_ca(pg_temp.r27_g('owner')::uuid, 'authenticated');
+  UPDATE public.red_uat SET sesiune_zi3 = DATE '2026-12-15' WHERE id = u;
+  RESET ROLE;
+  SELECT token_expira_la INTO v_exp2 FROM public.red_detinatori_token WHERE detinator_id = v_det;
+  IF v_exp2 IS DISTINCT FROM ((DATE '2026-12-15' + 30) + time '23:59:59') AT TIME ZONE 'Europe/Bucharest' THEN
+    RAISE EXCEPTION 'TEST8 FAIL: expirarea dupa schimbarea zilei 3 = %', v_exp2;
+  END IF;
+  RAISE NOTICE 'TEST8 OK uat3 blocat + expirare token';
 END $t$;
 SELECT pg_temp.r27_ca(NULL, 'postgres');
 
