@@ -96,7 +96,7 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
     let confirmat = false
     try {
       const { data: inserat, error } = await supabase.from('red_raspunsuri')
-        .insert(randPrezenta({ detinatorId: rand.detinator_id, zi, azi })).select('id').single()
+        .insert(randPrezenta({ detinatorId: rand.detinator_id, zi, acum: new Date().toISOString() })).select('id').single()
       if (!curent()) return
       confirmat = !error && !!inserat?.id
       // Reconciliere inclusiv la timeout; niciodata INSERT repetat automat.
@@ -104,7 +104,9 @@ function ListaSesiune({ proiectId, uat, nivel, show }) {
       const nou = await citeste(curent)
       if (!curent()) return
       setDate(nou)
-      if (error) setMesaj(msgEroare(error) + (nou.prezenti.has(rand.detinator_id) ? ' Prezenta exista la recitire.' : ' Prezenta neconfirmata; verifica inainte de reluare.'))
+      // Copilot f5 r1 P2-02: a doua tableta primeste 23505 de la indexul unic -> prezenta exista deja
+      if (error?.code === '23505') setMesaj('Prezenta era deja inregistrata (alta tableta).')
+      else if (error) setMesaj(msgEroare(error) + (nou.prezenti.has(rand.detinator_id) ? ' Prezenta exista la recitire.' : ' Prezenta neconfirmata; verifica inainte de reluare.'))
       else if (!confirmat) setMesaj('Scriere neconfirmata; verifica prezentele reincarcate.')
       else setMesaj('Prezenta inregistrata.')
     } catch (e) {

@@ -28,8 +28,10 @@ export function rezumatSesiune(randuri, prezentiAzi = new Set()) {
   }
 }
 
-export const randPrezenta = ({ detinatorId, zi, azi }) => ({
-  detinator_id: detinatorId, canal: 'sesiune', optiune: 'particip', zi_sesiune_aleasa: zi, data: azi,
+// Gemini f5 r1: data e timestamptz -> momentul real al prezentei (audit), nu miezul noptii UTC.
+// Unicitatea pe detinator + zi Bucuresti o impune indexul red_raspunsuri_prezenta_uq (20261129e).
+export const randPrezenta = ({ detinatorId, zi, acum }) => ({
+  detinator_id: detinatorId, canal: 'sesiune', optiune: 'particip', zi_sesiune_aleasa: zi, data: acum,
 })
 
 // Schema existenta are data timestamptz. Miezul noptii local, inclusiv DST.

@@ -626,3 +626,7 @@ si fluxul real editor/viewer, paginare peste 500/1000, cursor compus, schimbare
 UAT/proiect in timpul cererii, eroare trigger si reconciliere timeout.
 Skill-ul Supabase nu a putut fi citit: acces refuzat de mediul local.
 Nu s-au rulat Git/commit/push, acces la credentiale, BD sau deploy.
+**4.1j-bis (review felia 5, 02.11):** prezența la sesiune e una pe deținător și zi calendaristică (București), impusă de
+indexul unic `red_raspunsuri_prezenta_uq` (migrarea 20261129e, canal `sesiune` + opțiune `particip`); a doua tabletă
+primește „Prezența era deja înregistrată”. `data` = momentul real al prezenței; ziua de sesiune aleasă rămâne în
+`zi_sesiune_aleasa`. Indicatorul „Prezent azi” urmărește ziua fizică (decizie: prezența se înregistrează o dată pe zi).

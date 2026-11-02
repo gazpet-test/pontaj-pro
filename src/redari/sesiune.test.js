@@ -49,8 +49,8 @@ describe('lista si prezenta', () => {
     expect(rezumatSesiune([])).toEqual({ total: 0, semnate: 0, trimise: 0, fara_pv: 0, prezenti_azi: 0 })
   })
   it('rand prezenta: ziua aleasa si data inregistrarii pot fi diferite', () => {
-    expect(randPrezenta({ detinatorId: 'd1', zi: '2026-11-05', azi: '2026-11-03' })).toEqual({
-      detinator_id: 'd1', canal: 'sesiune', optiune: 'particip', zi_sesiune_aleasa: '2026-11-05', data: '2026-11-03',
+    expect(randPrezenta({ detinatorId: 'd1', zi: '2026-11-05', acum: '2026-11-03T08:15:00.000Z' })).toEqual({
+      detinator_id: 'd1', canal: 'sesiune', optiune: 'particip', zi_sesiune_aleasa: '2026-11-05', data: '2026-11-03T08:15:00.000Z',
     })
   })
 })

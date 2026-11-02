@@ -38,7 +38,7 @@ export default function DashboardEcran({ proiect }) {
     const token = ++generatie.current, curent = () => token === generatie.current
     setDate(null); setMesaj('')
     Promise.all([
-      pagini(() => supabase.from('red_v_centralizator_uat').select('uat_id,uat3,uat_nume,stare,numar,total_uat,procent_inchise')
+      pagini(() => supabase.from('red_v_centralizator_uat').select('uat_id,uat3,uat_nume,stare,numar,total_uat,procent_inchise').not('stare','is',null)
         .eq('proiect_id', proiect.id), ['uat_id', 'stare'], curent),
       pagini(() => supabase.from('red_v_tronson').select('parcela_id,tronson,tip_pv,obiectii_deschise')
         .eq('proiect_id', proiect.id), ['parcela_id'], curent),
