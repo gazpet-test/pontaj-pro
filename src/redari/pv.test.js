@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
 import { BIFA_DA, BIFA_NU, CHEI_PV_A, propuneLucrari, verificaDatePvA, genereazaPvA, calePv, salveazaPv } from './pv.js'
+import { CHEI_PV_B, verificaDatePvB, genereazaPvB, extensieScan, verificaContinutScan } from './pv.js'
 const sablon = () => readFileSync('public/redari/sabloane/pv_a.docx')
 const date = () => ({
   proiect: { contract_nr:'CTR & <1>', contract_data:'2026-11-02', denumire:'Test', reprezentant_gazpet_nume:'FICTIV G', reprezentant_tgz_nume:'FICTIV T' },
@@ -67,6 +68,96 @@ describe('PV A', () => {
   })
 })
 const cheie={proiectCod:'TEST',uat3:'ZZZ',nrPv:'PVA-ZZZ-0001'}
+
+const dateB = () => {
+  const d=date()
+  d.uat.reprezentant_uat_nume='FICTIV U'
+  d.parcela.verificare_data='2026-11-01'
+  d.pv.motiv_pv_b='refuz'
+  d.detinatori=[{id:'d1',nume:'FICTIV UNU'},{id:'d2',nume:'FICTIV DOI',adresa_cunoscuta:false},{id:'d3',nume:'STERS',sters_la:'2026-01-01'}]
+  return d
+}
+const sablonB=()=>readFileSync('public/redari/sabloane/pv_b.docx')
+describe('PV B',()=>{
+  it('77 chei din sablonul independent, inclusiv antete',async()=>{
+    const z=await JSZip.loadAsync(sablonB()), chei=new Set()
+    for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name)))
+      for(const m of (await f.async('string')).matchAll(/\{\{([^}]+)\}\}/g)) chei.add(m[1])
+    expect([...CHEI_PV_B].sort()).toEqual([...chei].sort());expect(chei.size).toBe(77)
+  })
+  it.each([
+    ['proiect','contract_nr','numarul contractului'],['proiect','contract_data','data contractului'],
+    ['uat','nume','UAT'],['parcela','tronson','tronson'],['pv','data_pv','data PV'],['pv','locul','locul'],
+    ['pv','motiv_pv_b','motivul PV B'],['parcela','verificare_data','data verificarii pe teren'],
+    ['uat','reprezentant_uat_nume','reprezentantul UAT'],['pv','stare_teren','starea terenului'],
+  ])('refuza lipsa %s.%s',(grup,k,mesaj)=>{
+    for(const gol of [null,'',' ']) {const d=dateB();d[grup][k]=gol;expect(verificaDatePvB(d)).toContain(mesaj)}
+  })
+  it('cere macar un verificator, admite TGZ singur si stare alta',()=>{
+    const d=dateB();d.parcela.verificare_de_gazpet=' ';d.parcela.verificare_de_tgz=null
+    expect(verificaDatePvB(d)).toContain('comisia de verificare')
+    d.parcela.verificare_de_tgz='T';d.pv.stare_teren={alta:'Refacut'}
+    expect(verificaDatePvB(d)).toEqual([])
+    d.pv.motiv_pv_b='necunoscut';expect(verificaDatePvB(d)).toContain('motivul PV B')
+  })
+  it.each(['declaratie','neprezentat','neidentificat','refuz'])('genereaza real situatia %s',async motiv=>{
+    const d=dateB();d.pv.motiv_pv_b=motiv
+    const r=await genereazaPvB({...d,templateArrayBuffer:sablonB()})
+    const z=await JSZip.loadAsync(await r.blob.arrayBuffer())
+    for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name))) expect(await f.async('string')).not.toContain('{{')
+    expect(r.campuri.nume).toBe('FICTIV UNU; FICTIV DOI')
+    expect(r.campuri.bifa_fara_adresa).toBe(BIFA_DA)
+    expect(r.campuri.bifa_reluare_nu_e_cazul).toBe(BIFA_DA)
+    for(const k of ['declaratie','neprezentat','neidentificat','refuz']) expect(r.campuri['bifa_sit_'+k]).toBe(k===motiv?BIFA_DA:BIFA_NU)
+    expect(r.campuri.semnatar_uat).toBe('FICTIV U');expect(r.hash).toMatch(/^[a-f0-9]{64}$/)
+  })
+  it('neidentificat si convocari: ultima activa, reluare separata, raspuns cu seq',async()=>{
+    const d=dateB();d.detinatori=[{id:'d1',calitate:'neidentificat'}]
+    d.convocari=[
+      {id:'1',detinator_id:'d1',stare:'activ',canal:'posta',created_at:'2026-10-01',nr_tracking:'VECHI'},
+      {id:'2',detinator_id:'d1',stare:'activ',canal:'posta',created_at:'2026-10-02',nr_tracking:'CORECT',data_expediere:'2026-10-02',retur:'refuz'},
+      {id:'3',detinator_id:'d1',stare:'anulat',canal:'posta',created_at:'2026-10-05',nr_tracking:'ANULAT'},
+      {id:'4',detinator_id:'d1',stare:'activ',canal:'posta',reluare:true,created_at:'2026-10-06',data_expediere:'2026-10-06',adresa_tgz_nr:'TGZ-2',nr_tracking:'REL'},
+    ]
+    d.raspunsuri=[{detinator_id:'d1',data:'2026-10-07',seq:1,optiune:'particip'},
+      {detinator_id:'d1',data:'2026-10-07',seq:2,optiune:'nu_particip_fara_obiectii',canal:'scris'}]
+    const {campuri:c}=await genereazaPvB({...d,templateArrayBuffer:sablonB()})
+    expect(c.nume).toBe('neidentificat');expect(c.bifa_neidentificat).toBe(BIFA_DA)
+    expect(c.conv_nr_tracking).toBe('CORECT');expect(c.bifa_conv_returnata).toBe(BIFA_DA)
+    expect(c.reluare_adresa_tgz_nr).toBe('TGZ-2');expect(c.reluare_nr_tracking).toBe('REL')
+    expect(c.bifa_reluare_raspuns).toBe(BIFA_DA);expect(c.bifa_raspuns_fara_obiectii).toBe(BIFA_DA)
+    d.detinatori=[];expect((await genereazaPvB({...d,templateArrayBuffer:sablonB()})).campuri.nume).toBe('neidentificat')
+  })
+  it('scan: formate, limita si cale separate',()=>{
+    expect(extensieScan(new Blob(['x'],{type:'image/jpeg'}))).toBe('jpg')
+    expect(()=>extensieScan({type:'application/pdf',size:25*1024*1024+1})).toThrow('25 MB')
+    expect(()=>extensieScan(new Blob(['x'],{type:'text/plain'}))).toThrow()
+    expect(calePv({...cheie,extensieSemnat:'pdf',versiune:2})).toBe('TEST/ZZZ/pv/PVA-ZZZ-0001_semnat_v2.pdf')
+  })
+  it('scan: continutul trebuie sa corespunda tipului (Copilot f4c r1 P3-01)',async()=>{
+    await expect(verificaContinutScan(new Blob(['%PDF-1.7 x'],{type:'application/pdf'}))).resolves.toBe('pdf')
+    await expect(verificaContinutScan(new Blob([new Uint8Array([0xff,0xd8,0xff,0xe0,1])],{type:'image/jpeg'}))).resolves.toBe('jpg')
+    await expect(verificaContinutScan(new Blob([new Uint8Array([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0])],{type:'image/png'}))).resolves.toBe('png')
+    await expect(verificaContinutScan(new Blob(['nu e pdf'],{type:'application/pdf'}))).rejects.toThrow('PDF valid')
+    await expect(verificaContinutScan(new Blob(['%PDF-'],{type:'image/png'}))).rejects.toThrow('PNG valid')
+  })
+  it('scan versionat intre extensii, include orfani si reincearca doar coliziunile',async()=>{
+    const list=vi.fn().mockResolvedValueOnce({data:[{name:'PVA-ZZZ-0001_semnat_v7.png'},{name:'PVA-ZZZ-0001_v99.docx'}]}).mockResolvedValue({data:[]})
+    const upload=vi.fn().mockResolvedValueOnce({error:{statusCode:409}}).mockResolvedValue({error:null})
+    const s={storage:{from:()=>({list,upload})}}
+    expect(await salveazaPv(s,{...cheie,blob:new Blob(['scan'],{type:'application/pdf'}),semnat:true}))
+      .toEqual({path:'TEST/ZZZ/pv/PVA-ZZZ-0001_semnat_v9.pdf',versiune:9})
+    expect(list.mock.calls[0][0]).toBe('TEST/ZZZ/pv')
+    expect(upload.mock.calls[0][2]).toEqual({contentType:'application/pdf',upsert:false})
+    upload.mockReset().mockResolvedValue({error:{statusCode:500}})
+    await expect(salveazaPv(s,{...cheie,blob:new Blob(['scan'],{type:'image/png'}),semnat:true})).rejects.toThrow('verifica starea')
+    expect(upload).toHaveBeenCalledTimes(1)
+  })
+  it('generatorul B strict refuza motiv lipsa',async()=>{
+    const d=dateB();d.pv.motiv_pv_b=null
+    await expect(genereazaPvB({...d,templateArrayBuffer:sablonB()})).rejects.toThrow('motivul PV B')
+  })
+})
 describe('storage PV imutabil',()=>{
   it('cale valida si segmente/versiuni invalide',()=>{
     expect(calePv({...cheie,versiune:2})).toBe('TEST/ZZZ/pv/PVA-ZZZ-0001_v2.docx')

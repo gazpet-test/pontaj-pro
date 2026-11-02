@@ -418,6 +418,62 @@ fost adaugate: lista de fisiere permite numai pv.test.js; fluxul UI necesita rev
   (Copilot r3 P2-01); fără antet cheia e `ip:necunoscut`.
 - Concurența reală (două sesiuni) pe `fn_red_numar_document` / `fn_red_rezerva_numere_parcele` — doar raționament (UPDATE sub lock de rând).
 
+### 4.1h Faza 2, felia 4c - PV B si starile PV A/B
+
+Pregatit, NEAPLICAT: 20261129c_redari_pv_stari.sql (20261129120200),
+supabase/revenire/20261129c_redari_pv_stari_ROLLBACK.sql si
+supabase/tests/20261129c_redari_pv_stari_dryrun.sql. Runner-ul asigura tranzactia unica.
+Apply: gazpet.livrare_migrare = 20261129c_redari_pv_stari:<txid>.
+Revenire: gazpet.revenire_20261129c = REDARI_PV_STARI_SCOASA:<txid>.
+Revenirea elimina triggerul/functia si versiunea, pastrand datele si istoricul.
+
+Fisiere: pv.js (constructor comun A/B, 77 chei B, validare si upload scan),
+pv.test.js (sablon real, lipsuri, situatii, reluare, scan), ModalPv.jsx
+(citire proaspata, motiv B, tranzitii CAS), FisaParcela.jsx (buton/montare B),
+SABLOANE.md 2.3 (surse finale), CONTRACT_SCHEMA.md (tranzitii).
+
+Admin/editor: trimitere cu data, scan PDF/JPEG/PNG <=25 MB, anulare cu motiv
+si confirmare. Scan imutabil: {cod}/{uat3}/pv/{nrPv}_semnat_v{n}.{ext}.
+Versiunea maxima include toate extensiile acceptate si fisierele orfane.
+Semnat/anulat: formular read-only, exceptie remediat_la. Erori 23514 vizibile.
+
+Raport L01-L25:
+
+| Regula | Dovada / limita |
+| --- | --- |
+| L01 | ModalPv: salveaza/tranzitie/genereaza au CAS pe id, created_at, stare si valorile citite; select('*') + exact un rand. Crearea reutilizeaza RPC 4b. |
+| L02 | Stare + scan path + data + bife intr-un UPDATE; upload anterior, fara stergere automata. |
+| L03 | genereaza reciteste sursele inainte/dupa upload si dupa legare; token de generatie; CAS. Nu exista snapshot atomic peste tabele; modificarea surselor intre ultima citire si UPDATE ramane detectabila ulterior, nu exclusa. |
+| L04 | n/a - fara bani/cantitati/mail; numerotare existenta in RPC 4b. |
+| L05 | salveazaPv reincearca numai 409; scanurile orfane raman; legare neconfirmata cere reincarcare. |
+| L06 | Trigger fara lock-uri pe alte tabele; ordinea RPC existenta nu se modifica. |
+| L07 | Tranzitii/continut final in BEFORE UPDATE, inclusiv PATCH direct. Motiv/verificare teren si absenta A semnat la generarea B sunt validate in generator/UI; nu sunt o poarta atomica intre tabele in BD in aceasta felie. |
+| L08 | Trigger INVOKER, fara identitate furnizata de client sau drepturi noi; GUC de armare numai in migrare/revenire. |
+| L09 | n/a - fara DEFINER/edge nou; RLS si RPC existente pastrate. |
+| L10 | n/a - fara secrete sau integrare noua. |
+| L11 | n/a - fara extragere de dovezi. |
+| L12 | Liste paginate pana la pagina goala, eroare la lista invalida; 77 chei comparate cu DOCX independent. |
+| L13 | calePv valideaza segmentele prin helper existent; sufix scan ancorat; test pozitiv/negativ. |
+| L14 | Runner tranzactie unica, lock preflight, postconditii; rollback armat elimina numai obiectele noi, fara pierdere de date. Apply/revenire/re-apply NERULATE. |
+| L15 | Migrare: amprenta tuturor politicilor PV in pre/post, trigger tgfoid/tgenabled/tgtype, invoker/search_path. Fara schimbari RLS/ACL de tabel. |
+| L16 | Indexurile de unicitate A/B din 4b sunt reutilizate; scanul nu introduce dedup semantic. |
+| L17 | aziBucuresti existent pentru datele actiunilor; formatDataRo existent pentru DOCX. |
+| L18 | Erorile citirilor/storage propagate, lipsa listei nu devine lista goala; trigger cu IS DISTINCT FROM si text nevid. |
+| L19 | campuriComune/documentPv pentru A/B, ultimulRaspuns din stare.js, salveazaPv pentru DOCX si scan; bifele situatiei sunt motiv explicit, nu o copie a ierarhiei starii. |
+| L20 | DRY include tranzitii legitime, lipsa datei/scanului/motivului, stari finale, remediere; pv.test.js include exceptii si succes. |
+| L21 | n/a - fara AI. |
+| L22 | n/a - fara apeluri platite. |
+| L23 | ModalPv: citestePaginat keyset id pentru detinatori/convocari/raspunsuri/PV A semnate; storage pana la pagina goala, plafon explicit cu eroare. |
+| L24 | ModalPv: generatie useRef, curent la aplicare si in bucle, reset la parcela/detinator/proiect/tip; ocupat/setLucru inainte de await. |
+| L25 | pv.test.js compara cheile cu XML DOCX real, asteptari explicite; DRY fixture owner, actiuni authenticated editor non-owner. NERULATE. |
+
+Verificat aici numai static: citirea XML-ului real pv_b.docx cu .NET, 77 chei;
+inspectia schemei/grant-urilor/politicilor existente si controlul fisierelor UTF-8 fara BOM.
+Nu s-au rulat npm/npx/vitest/node, DRY, build, Postgres, API real sau browser.
+Claude trebuie sa ruleze regresiile A, testele B/scan, DRY, apply/revenire/re-apply,
+build si fluxul PostgREST/Storage real. Nu exista rezultat runtime confirmat.
+Nu s-au rulat Git, commit, push, acces la credentiale, BD sau deploy.
+
 ## 5. Ce așteaptă „da”-ul lui Răzvan (pct. 3 și 10 din CLAUDE.md — nu se fac din tichet, poke sau brief)
 1. **Aplicarea migrării `20261126a`** pe producție — după GO Jakarinos + Copilot pe r4 și DRY verde pe prod (regula #1877, decizia 2A).
 2. **Acordarea rolurilor** în `user_module_access` (modul `redari`), exact lista din brief §2 RLS: admin = Răzvan (owner, implicit) + Răzvan Toma;

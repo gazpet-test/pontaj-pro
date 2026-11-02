@@ -1,5 +1,6 @@
 import { completeazaDocx, hashBlob, formatDataRo, formatNumarRo, ETICHETA_CALITATE,
   caleAdresaUat, versiuneMaximaInBucket, MIME_DOCX, MAX_INCERCARI_VERSIUNE } from './docx.js'
+import { ultimulRaspuns } from './stare.js'
 
 export const BIFA_DA = "\u2612"
 export const BIFA_NU = "\u2610"
@@ -34,9 +35,7 @@ export function verificaDatePvA({ proiect = {}, uat = {}, parcela = {}, detinato
   if (pv.obiectii_redare && !plin(pv.obiectii_text)) lipsuri.push('textul obiectiilor')
   return lipsuri
 }
-export async function genereazaPvA({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {}, templateArrayBuffer, strict = true }) {
-  const lipsuri = verificaDatePvA({ proiect, uat, parcela, detinator, pv })
-  if (strict && lipsuri.length) throw new Error('Lipsesc: ' + lipsuri.join('; '))
+function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator = {}, pv = {} }) {
   const campuri = Object.fromEntries(CHEI_PV_A.map(k => [k, '']))
   const calitate = ETICHETA_CALITATE[detinator.calitate] ?? detinator.calitate ?? ''
   Object.assign(campuri, {
@@ -65,24 +64,132 @@ export async function genereazaPvA({ proiect = {}, uat = {}, parcela = {}, detin
     bifa_foto_da: bifa(pv.foto_nr > 0), bifa_foto_nu: bifa(pv.foto_nr === 0),
     bifa_constatare_sediu: bifa(pv.constatare_mod === 'sediu'), bifa_constatare_teren: bifa(pv.constatare_mod === 'teren'),
   })
+  return campuri
+}
+async function documentPv(campuri, templateArrayBuffer, strict) {
   const blob = await completeazaDocx(templateArrayBuffer, campuri, { strict })
   return { blob, hash: await hashBlob(blob), campuri }
 }
-export function calePv({ proiectCod, uat3, nrPv, versiune = 1 }) {
+export async function genereazaPvA(date) {
+  const lipsuri = verificaDatePvA(date)
+  if (date.strict !== false && lipsuri.length) throw new Error('Lipsesc: ' + lipsuri.join('; '))
+  return documentPv(campuriComune(date), date.templateArrayBuffer, date.strict !== false)
+}
+export const MOTIVE_PV_B = ['declaratie','neprezentat','neidentificat','refuz']
+export const CHEI_PV_B = [
+  'afisare_data_end','afisare_data_start','afisare_pv_nr','bifa_alt_raspuns','bifa_altele','bifa_arat',
+  'bifa_conv_primita','bifa_conv_returnata','bifa_discuit','bifa_drum','bifa_fara_adresa','bifa_fara_raspuns',
+  'bifa_foto_da','bifa_foto_nu','bifa_gard','bifa_insamantare','bifa_neidentificat','bifa_neprezentat',
+  'bifa_nivelare','bifa_plan_da','bifa_plan_nu','bifa_raspuns_fara_obiectii','bifa_reluare_fara_raspuns',
+  'bifa_reluare_nu_e_cazul','bifa_reluare_raspuns','bifa_sit_declaratie','bifa_sit_neidentificat',
+  'bifa_sit_neprezentat','bifa_sit_refuz','bifa_sol_fertil','bifa_st_alta','bifa_st_gard_drum',
+  'bifa_st_insamantat','bifa_st_nivelat','bifa_st_strat_vegetal','categoria_folosinta','categoria_initiala',
+  'contract_data','contract_nr','conv_data_confirmare','conv_data_expediere','conv_nr_tracking','conv_retur',
+  'data_pv','foto_nr','jurnal_santier','locul','lucrari_altele','nr_cadastral','nr_pv','nume','poz_hg',
+  'proiect_denumire','raspuns_alt_text','raspuns_canal','raspuns_data','reluare_adresa_tgz_nr','reluare_data',
+  'reluare_nr_tracking','reluare_raspuns_text','reprezentant_uat_nume','sat','semnatar_apm','semnatar_gazpet',
+  'semnatar_tgz','semnatar_uat','stare_teren_alta','suprafata','tarla','tronson','uat','verificare_data',
+  'verificare_de_gazpet','verificare_de_tgz','zi1','zi2','zi3',
+]
+export function verificaDatePvB({ proiect = {}, uat = {}, parcela = {}, pv = {} }) {
+  const lipsuri = verificaDatePvA({proiect,uat,parcela,pv,detinator:{nume:'B'}})
+    .filter(k => k !== 'modul constatarii')
+  if (!MOTIVE_PV_B.includes(pv.motiv_pv_b)) lipsuri.push('motivul PV B')
+  if (!plin(parcela.verificare_data)) lipsuri.push('data verificarii pe teren')
+  if (![parcela.verificare_de_gazpet,parcela.verificare_de_tgz].some(plin)) lipsuri.push('comisia de verificare')
+  if (!plin(uat.reprezentant_uat_nume)) lipsuri.push('reprezentantul UAT')
+  return lipsuri
+}
+export async function genereazaPvB(date) {
+  const { proiect = {}, uat = {}, parcela = {}, pv = {}, detinatori = [], convocari = [], raspunsuri = [] } = date
+  const lipsuri = verificaDatePvB(date)
+  if (date.strict !== false && lipsuri.length) throw new Error('Lipsesc: ' + lipsuri.join('; '))
+  const comune = campuriComune(date)
+  const campuri = Object.fromEntries(CHEI_PV_B.map(k => [k, comune[k] ?? '']))
+  const activi = detinatori.filter(d => d.sters_la == null)
+  const ids = new Set(activi.map(d => d.id))
+  const active = convocari.filter(c => ids.has(c.detinator_id) && c.sters_la == null && c.stare === 'activ')
+  const ultima = lista => lista.slice().sort((a,b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')) || String(b.id).localeCompare(String(a.id)))[0]
+  const conv = ultima(active.filter(c => c.canal === 'posta' && c.reluare !== true))
+  const rel = ultima(active.filter(c => c.reluare === true))
+  const rasp = ultimulRaspuns(raspunsuri.filter(r => ids.has(r.detinator_id)))
+  // A response to a resending must belong to that recipient and follow its dispatch.
+  const raspRel = rel && rel.data_expediere ? ultimulRaspuns(raspunsuri.filter(r => r.detinator_id === rel.detinator_id && r.data >= rel.data_expediere)) : null
+  Object.assign(campuri, {
+    nume: activi.map(d => d.nume).filter(plin).join('; ') || 'neidentificat',
+    bifa_neidentificat:bifa(!activi.length || activi.some(d => d.calitate === 'neidentificat')),
+    bifa_fara_adresa:bifa(activi.some(d => d.adresa_cunoscuta === false)),
+    conv_data_expediere:formatDataRo(conv?.data_expediere), conv_nr_tracking:conv?.nr_tracking ?? '',
+    conv_data_confirmare:formatDataRo(conv?.data_confirmare_primire), conv_retur:conv?.retur ?? '',
+    bifa_conv_primita:bifa(plin(conv?.data_confirmare_primire)), bifa_conv_returnata:bifa(plin(conv?.retur)),
+    raspuns_data:formatDataRo(rasp?.data), raspuns_canal:rasp?.canal ?? '',
+    raspuns_alt_text:rasp?.obiectii_text || rasp?.optiune || '',
+    bifa_fara_raspuns:bifa(!rasp), bifa_raspuns_fara_obiectii:bifa(rasp?.optiune === 'nu_particip_fara_obiectii'),
+    bifa_alt_raspuns:bifa(!!rasp && rasp.optiune !== 'nu_particip_fara_obiectii'),
+    bifa_neprezentat:bifa(pv.motiv_pv_b === 'neprezentat'),
+    reluare_data:formatDataRo(rel?.data_expediere), reluare_adresa_tgz_nr:rel?.adresa_tgz_nr ?? '',
+    reluare_nr_tracking:rel?.nr_tracking ?? '', bifa_reluare_nu_e_cazul:bifa(!rel),
+    bifa_reluare_fara_raspuns:bifa(!!rel?.data_expediere && !raspRel), bifa_reluare_raspuns:bifa(!!raspRel),
+    reluare_raspuns_text:raspRel?.obiectii_text || raspRel?.optiune || '',
+    verificare_de_gazpet:parcela.verificare_de_gazpet ?? '', verificare_de_tgz:parcela.verificare_de_tgz ?? '',
+    jurnal_santier:parcela.jurnal_santier_ref ?? '', reprezentant_uat_nume:uat.reprezentant_uat_nume ?? '',
+    semnatar_uat:uat.reprezentant_uat_nume ?? '', semnatar_apm:proiect.apm_nume ?? '',
+  })
+  for (const k of MOTIVE_PV_B) campuri['bifa_sit_' + k] = bifa(pv.motiv_pv_b === k)
+  for (const k of ['afisare_data_start','afisare_data_end']) campuri[k] = formatDataRo(uat[k])
+  campuri.afisare_pv_nr = uat.afisare_pv_nr ?? ''
+  for (const i of [1,2,3]) campuri['zi'+i] = formatDataRo(uat['sesiune_zi'+i])
+  return documentPv(campuri, date.templateArrayBuffer, date.strict !== false)
+}
+export function calePv({ proiectCod, uat3, nrPv, versiune = 1, extensieSemnat }) {
   // Reuse segment/version validation; replace only the fixed directory.
   const parti = caleAdresaUat({ proiectCod, uat3, nrDocument: nrPv, versiune }).split('/')
   parti[2] = 'pv'
-  return parti.join('/')
+  const path = parti.join('/')
+  if (extensieSemnat && !['pdf','jpg','png'].includes(extensieSemnat)) throw new Error('Format scan invalid')
+  return extensieSemnat ? path.replace(/_v\d+\.docx$/, `_semnat_v${versiune}.${extensieSemnat}`) : path
 }
-export async function salveazaPv(supabase, { blob, proiectCod, uat3, nrPv, esteCurent = () => true }) {
-  calePv({ proiectCod, uat3, nrPv })
-  const max = await versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela: 'pv', nrDocument: nrPv, adresa: true }, { esteCurent })
+export function extensieScan(blob) {
+  const ext = {'application/pdf':'pdf','image/jpeg':'jpg','image/png':'png'}[blob?.type]
+  if (!ext || !blob.size || blob.size > 25 * 1024 * 1024) throw new Error('Scanul trebuie sa fie PDF/JPEG/PNG, maximum 25 MB.')
+  return ext
+}
+// Copilot f4c r1 P3-01: continutul trebuie sa corespunda tipului declarat (semnatura PDF / JPEG / PNG)
+const SEMNATURI = { pdf:[0x25,0x50,0x44,0x46,0x2d], jpg:[0xff,0xd8,0xff], png:[0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a] }
+export async function verificaContinutScan(blob) {
+  const ext = extensieScan(blob)
+  const cap = new Uint8Array(await blob.slice(0, 8).arrayBuffer())
+  if (!SEMNATURI[ext].every((b, i) => cap[i] === b)) throw new Error('Fisierul nu este un ' + ext.toUpperCase() + ' valid (continutul nu corespunde tipului).')
+  return ext
+}
+async function maximScan(supabase, cheie, esteCurent) {
+  const folder = calePv(cheie).split('/').slice(0,-1).join('/')
+  const prefix = cheie.nrPv + '_semnat_v'
+  let max = 0, offset = 0
+  for (let p=0; p<100; p++) {
+    if (!esteCurent()) throw new Error('Operatie abandonata: PV schimbat')
+    const {data,error} = await supabase.storage.from('redari').list(folder,{limit:1000,offset,sortBy:{column:'name',order:'asc'}})
+    if (error || !Array.isArray(data)) throw new Error('Nu pot lista versiunile scanului; reincarca.')
+    if (!data.length) return max
+    for (const f of data) if (f.name?.startsWith(prefix)) {
+      const m = /^(\d+)\.(pdf|jpg|png)$/.exec(f.name.slice(prefix.length))
+      if (m) max = Math.max(max, Number(m[1]))
+    }
+    offset += data.length
+  }
+  throw new Error('Listarea scanurilor este incompleta.')
+}
+export async function salveazaPv(supabase, { blob, proiectCod, uat3, nrPv, semnat = false, esteCurent = () => true }) {
+  const extensieSemnat = semnat ? extensieScan(blob) : undefined
+  const cheie = {proiectCod,uat3,nrPv,extensieSemnat}
+  calePv(cheie)
+  const max = semnat ? await maximScan(supabase,cheie,esteCurent) : await versiuneMaximaInBucket(supabase, { proiectCod, uat3, idParcela: 'pv', nrDocument: nrPv, adresa: true }, { esteCurent })
   if (max == null) throw new Error('Nu pot lista versiunile PV; reincarca si verifica starea.')
   for (let i = 1; i <= MAX_INCERCARI_VERSIUNE; i++) {
     if (!esteCurent()) throw new Error('Operatie abandonata: PV schimbat')
     const versiune = max + i
-    const path = calePv({ proiectCod, uat3, nrPv, versiune })
-    const { error } = await supabase.storage.from('redari').upload(path, blob, { contentType: MIME_DOCX, upsert: false })
+    const path = calePv({ ...cheie, versiune })
+    const { error } = await supabase.storage.from('redari').upload(path, blob, { contentType: semnat ? blob.type : MIME_DOCX, upsert: false })
     if (!error) return { path, versiune }
     const coliziune = String(error.statusCode ?? error.status) === '409' || /already exists|duplicate/i.test(error.message ?? '')
     if (!coliziune) throw new Error('Incarcarea PV a esuat; verifica starea inainte de reluare. ' + (error.message ?? 'Storage indisponibil'))

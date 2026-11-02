@@ -162,7 +162,8 @@ export default function FisaParcela({ parcelaId, proiect, uats, nivel, profile, 
   return (
     <div>
  
-      {modal?.tip === 'pv' && <ModalPv key={parcelaId + ':' + modal.det.id + ':' + proiect.id} parcelaId={parcelaId} detinatorId={modal.det.id} proiectId={proiect.id} nivel={nivel} show={show} onClose={() => setModal(null)} onGata={() => { incarca(); onSchimbat?.() }} />}
+      {modal?.tip === 'pv' && <ModalPv key={parcelaId + ':' + (modal.det?.id || 'B') + ':' + proiect.id} parcelaId={parcelaId} detinatorId={modal.det?.id} tip={modal.det?'A':'B'} proiectId={proiect.id} nivel={nivel} show={show} onClose={() => setModal(null)} onGata={() => { incarca(); onSchimbat?.() }} />}
+      {(poateScrie || pvs.some(p => p.tip === 'B' && p.stare !== 'anulat' && !p.sters_la)) && <button style={S.btnP} onClick={() => setModal({tip:'pv'})}>PV B (parcela)</button>}
      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12, flexWrap:'wrap' }}>
         <button style={S.btnS} onClick={onInapoi}>‹ Registru</button>
         <div style={{ fontSize:17, fontWeight:700, ...S.mono }}>{parcela.id_parcela}</div>

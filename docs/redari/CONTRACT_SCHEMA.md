@@ -134,6 +134,16 @@ admin/editor (sau RPC-ul public, SECURITY DEFINER); fără UPDATE/DELETE. Jurnal
 `raspuns_id`; viewer-ul nu le vede.
 
 ### red_procese_verbale
+Felia 4c, 20261129c (versiune 20261129120200): trigger BEFORE UPDATE,
+SECURITY INVOKER, search_path public, pg_temp. Generat -> trimis_spre_semnare /
+semnat / anulat; trimis_spre_semnare -> semnat / anulat. Semnat si anulat sunt finale.
+Cerintele starii se verifica la fiecare UPDATE, nu doar la tranzitie: starea trimis cere
+trimis_spre_semnare_data; semnat cere semnat_primit_data si fisier_semnat_path nevid (la B si
+motiv_pv_b); anulat cere motiv_anulare nevid. Identitatea PV-ului (id, tip, nr_pv, parcela_id,
+detinator_id, uat_id, tronson, created_by, created_at) nu se schimba in nicio stare. Dupa starea
+finala randul e inghetat integral (inclusiv scanul, datele, semnat_la_sesiune si stergerea logica);
+singura exceptie e remediat_la (review f4c r1). Refuzurile au SQLSTATE 23514. Politicile nu se modifica.
+
 `id, parcela_id FK NULL` (NULL la tip C), `detinator_id FK NULL` (NULL la B/C), `uat_id FK, tronson int NULL` (tip C),
 `tip text CHECK IN ('A','B','C'), nr_pv text UNIQUE` (`PVA-{uat3}-{nnnn}`, `PVB-{uat3}-{nnnn}`, `PVC-T{n}-{nnnn}`),
 `data_pv date, locul, stare_teren_text, obiectii_redare bool default false, obiectii_text, termen_remediere date,
