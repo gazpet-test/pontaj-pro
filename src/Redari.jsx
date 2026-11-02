@@ -13,6 +13,7 @@ import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CA
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator, citesteIn } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
+import ImportPostal from './redari/ui/ImportPostal.jsx'
 import UatEcran from './redari/ui/UatEcran.jsx'
 import SetariProiect from './redari/ui/SetariProiect.jsx'
 import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
@@ -122,6 +123,7 @@ export default function Redari() {
     { cod:'fisa', eticheta:'📄 Fișa parcelei', dezactivat: !parcelaFisa },
     { cod:'tronsoane', eticheta:'🛤️ Tronsoane / PV C' },
     { cod:'import', eticheta:'📥 Import TGZ' },
+    ...(['admin', 'editor'].includes(nivel) ? [{ cod:'posta', eticheta:'✉️ Poștă' }] : []),
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
   ]
@@ -160,6 +162,7 @@ export default function Redari() {
           {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
+          {tab === 'posta' && ['admin', 'editor'].includes(nivel) && <ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'uat' && <UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
         </div>
