@@ -166,14 +166,19 @@ export function ModalUat({ proiect, uat, uats, numarator, esteAdmin, poateDescar
       if (!curent()) return
       const { path } = await salveazaAdresaUat(supabase, { blob, proiectCod: proiectProaspat.cod, uat: uatCurent, nrDocument, esteCurent: curent })
       if (!curent()) return
-      const { data: dupa } = await supabase.from('red_uat').select('versiune').eq('id', id).maybeSingle()
+      // Copilot f2b r3 P2-01: după upload se reverifică ȘI UAT-ul ȘI proiectul (ambele intră în document); o recitire eșuată NU e succes
+      // (fail-closed: avertisment, nu „salvată”); P3-01: un singur mesaj final — succes SAU „salvat cu avertisment, regenerează”.
+      const [{ data: uatDupa, error: e1 }, { data: prDupa, error: e2 }] = await Promise.all([
+        supabase.from('red_uat').select('versiune').eq('id', id).maybeSingle(),
+        supabase.from('red_proiecte').select('versiune').eq('id', proiect.id).maybeSingle(),
+      ])
       if (!curent()) return
-      if (dupa && dupa.versiune !== uatCurent.versiune) {
-        show(`Atenție: UAT-ul a fost modificat în timpul generării (${path}). Fișierul e salvat, dar poate avea date vechi — apasă „Regenerează”.`, 'error')
-      }
-      if (!curent()) return
-      descarcaBlob(blob, `${nrDocument}.docx`)
-      show(`Adresa ${nrDocument} salvată.`, 'success')
+      const neverificat = !!(e1 || e2) || !uatDupa || !prDupa
+      const schimbat = !neverificat && (uatDupa.versiune !== uatCurent.versiune || prDupa.versiune !== proiectProaspat.versiune)
+      descarcaBlob(blob, `${nrDocument}.docx`)   // fișierul e deja în bucket (imutabil, versionat), indiferent de verdictul verificării
+      if (neverificat) show(`Adresa ${nrDocument} e salvată (${path}), dar NU am putut verifica dacă UAT-ul sau proiectul s-au schimbat între timp. Reîncarcă și, dacă e cazul, apasă „Regenerează”.`, 'error')
+      else if (schimbat) show(`Atenție: UAT-ul sau proiectul au fost modificate în timpul generării (${path}). Fișierul e salvat, dar poate avea date vechi — apasă „Regenerează”.`, 'error')
+      else show(`Adresa ${nrDocument} salvată.`, 'success')
       onGata()
     } catch (err) { if (curent()) { show('Adresă UAT: ' + msgEroare(err), 'error'); if (rezervat) onGata() } }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
