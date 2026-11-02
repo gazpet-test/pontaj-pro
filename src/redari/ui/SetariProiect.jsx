@@ -79,7 +79,7 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
       if (lipsuri.length) throw new Error('Datele actuale nu permit generarea: ' + lipsuri.join('; '))
       const raspuns = await fetch('/redari/sabloane/cerere_imputernicire.docx')
       if (!curent()) return
-      if (!raspuns.ok) throw new Error('Sablonul cererii nu poate fi descarcat')
+      if (!raspuns.ok) throw new Error('Șablonul cererii nu poate fi descărcat')
       const templateArrayBuffer = await raspuns.arrayBuffer()
       if (!curent()) return
       const { blob } = await genereazaCerereImputernicire({ proiect: proiectProaspat, uats: uatsProaspete, nrDocument, templateArrayBuffer })
@@ -193,18 +193,18 @@ export default function SetariProiect({ proiect, uats = [], nivel, show, onSchim
         )}
       </div>
       {esteAdmin && <div style={{ ...S.card, marginTop: 12 }}>
-        <h3>Cerere de imputernicire catre Beneficiar (anexa la scrisoarea catre TGZ)</h3>
-        <p style={{ color: G.muted }}>DRAFT Juridic, de validat de avocat. Documentul se descarca pentru verificare.</p>
-        <label>Nr. inregistrare (optional){' '}
+        <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 4px' }}>Cerere de împuternicire către Beneficiar (anexă la scrisoarea către TGZ)</h3>
+        <p style={{ color: G.muted }}>DRAFT Juridic, de validat de avocat. Documentul se descarcă pentru verificare.</p>
+        <label>Nr. înregistrare (opțional){' '}
           <input style={S.input} value={nrDocument} disabled={lucru} onChange={e => { if (!lucru) setNrDocument(e.target.value) }} />
         </label>
         {lipsuriCerere.length > 0 && <div style={{ color: G.yellow, marginTop: 10 }}>
           <div style={{ fontSize: 12 }}>Pe datele afișate lipsesc (la generare se verifică datele actuale din bază):</div>
           {lipsuriCerere.map(l => <div key={l}>{l}</div>)}
         </div>}
-        {schimbate.length > 0 && <p style={{ color: G.yellow }}>Salveaza modificarile inainte de generare.</p>}
+        {schimbate.length > 0 && <p style={{ color: G.yellow }}>Salvează modificările înainte de generare.</p>}
         <button style={{ ...S.btnS, marginTop: 10 }} disabled={lucru || schimbate.length > 0}
-          onClick={genereazaCererea}>Genereaza cererea (DOCX)</button>
+          onClick={genereazaCererea}>📄 Generează cererea (DOCX)</button>
       </div>}
     </div>
   )
