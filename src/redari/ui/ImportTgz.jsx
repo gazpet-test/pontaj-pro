@@ -3,7 +3,7 @@
 // previzualizarea arată id-uri provizorii (HUS-????), iar scrieImport le rezervă server-side (fn_red_rezerva_numere_parcele).
 import React, { useMemo, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
-import { parseazaTgz, scrieImport } from '../importTgz.js'
+import { parseazaTgz, scrieImport, randuriDeTratat, csvRanduriDeTratat } from '../importTgz.js'
 import { parseazaAnexa7 } from '../importAnexa7.js'
 import { G, S, fmtNum, msgEroare, Camp, Gol } from './comune.jsx'
 
@@ -192,6 +192,11 @@ export default function ImportTgz({ proiect, uats, nivel, show, onImportat }) {
             {poateScrie && <button style={S.btnP} onClick={importa} disabled={lucru || !cifreDeImportat(preview).parcele}>{lucru ? 'Import în curs…' : `📥 Importă ${cifreDeImportat(preview).parcele} parcele / ${cifreDeImportat(preview).detinatori} deținători`}</button>}
           </div>
           {preview.erori?.length > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ Rândurile cu erori nu intră în import; corectează fișierul sau continuă fără ele.</div>}
+          {randuriDeTratat(preview).length > 0 && <button style={{ ...S.btnS, marginTop:8 }} onClick={() => {
+            // fără nume / adrese / contacte — doar rândul din Excel, UAT, Nr.Crt., cheia parcelei și motivul (pentru corectarea fișierului)
+            const url = URL.createObjectURL(new Blob([csvRanduriDeTratat(randuriDeTratat(preview))], { type:'text/csv;charset=utf-8' }))
+            const a = document.createElement('a'); a.href = url; a.download = `randuri-de-tratat-${(versiune || 'tgz').trim().replace(/[^\w.-]+/g, '_')}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
+          }}>⬇ Descarcă rândurile de tratat ({randuriDeTratat(preview).length}, fără nume)</button>}
           {((preview.fara_cheie?.length || 0) + (preview.ambigue?.length || 0)) > 0 && <div style={{ fontSize:12, color:G.yellow, marginTop:6 }}>⚠ {preview.fara_cheie?.length || 0} rânduri fără cheie și {preview.ambigue?.length || 0} ambigue NU se importă — {SUGESTIE_SARITE}</div>}
         </div>
       )}
