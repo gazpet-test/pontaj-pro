@@ -825,7 +825,8 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
   })
   it('r46 (Jakarinos): in context Redari identificatorii se colecteaza INAINTE de allow-list; textele pastrate se verifica decodat; context din breadcrumb.message; cost liniar', () => {
     // P1-01: sursa (extra.token) dispare, dar fragmentele din tags/message/exception.value raman cunoscute -> eliminat
-    expect(scrubSentryEvent({ transaction: '/redari', extra: { token: T }, tags: { a: T.slice(0, 20), b: T.slice(20) } })).toBeNull()
+    const rt = scrubSentryEvent({ transaction: '/redari', extra: { token: T }, tags: { a: T.slice(0, 20), b: T.slice(20) } })
+    expect(rt === null || (rt.tags === undefined && !JSON.stringify(rt).includes(T.slice(0, 20)))).toBe(true)   // r48: tags nu mai exista in schelet
     expect(scrubSentryEvent({ transaction: '/redari', extra: { token: T }, message: 'x ' + T.slice(0, 20), exception: { values: [{ type: 'E', value: T.slice(20) }] } })).toBeNull()
     // P1-02: un singur caracter %-codificat in message, in context Redari -> nu trece in schelet
     const r2 = scrubSentryEvent({ transaction: '/redari', message: T.slice(0, 20) + '%' + T.charCodeAt(20).toString(16) + T.slice(21) })
@@ -837,6 +838,22 @@ describe('scrubSentryEvent / scrubSentrySpan — r7 (Jakarinos): token codificat
     // P2-02: lant adanc sub cheie sensibila — rapid (reunirea doar la radacina subarborelui)
     let lant = { v: 'x' }; const rad = lant; for (let i = 0; i < 3000; i++) { lant.next = { v: 'y' + i }; lant = lant.next }
     const t0 = Date.now(); const r4 = scrubSentryEvent({ message: 'ok', extra: { token_cache: rad } }); expect(Date.now() - t0).toBeLessThan(2000); expect(r4).not.toBeNull()
+  })
+  it('r47 (Jakarinos): chei tags cu fragmente; etichete intre fragmente; lista imbricata cu eticheta sub cheie sensibila; eveniment normal in context trece', () => {
+    // P1-01: tags nu mai exista in schelet
+    const r1 = scrubSentryEvent({ transaction: '/redari', tags: { [T.slice(0, 20)]: '!', [T.slice(20)]: '!' } })
+    expect(r1 === null || r1.tags === undefined).toBe(true)
+    // P1-02: etichete scurte intre fragmente in textele scheletului -> secventele >=12 unite = identificator -> null
+    expect(scrubSentryEvent({ transaction: '/redari', message: 'prima: ' + T.slice(0, 20), exception: { values: [{ type: 'Error', value: 'ultima: ' + T.slice(20) }] } })).toBeNull()
+    // P1-03 [in afara contextului]: lista imbricata cu eticheta sub cheia sensibila
+    const r3 = scrubSentryEvent({ message: 'ok', extra: { token: { label: 'prefix ', nested: [T.slice(0, 20), T.slice(20)] } } })
+    expect(r3 === null || !JSON.stringify(r3).replace(/[^A-Za-z0-9_-]+/g, '').includes(T)).toBe(true)
+    // P2-01: eveniment normal in context (event_id hex 32 + timestamp + platform) TRECE
+    const ok = { event_id: 'a'.repeat(32), timestamp: 1762041600, platform: 'javascript', level: 'error', transaction: '/redari', message: 'TypeError: x', exception: { values: [{ type: 'TypeError', value: 'Cannot read properties of undefined (reading nume_normalizat)', stacktrace: { frames: [{ filename: 'app://src/Redari.jsx', function: 'incarcaDetinatoriParcela', lineno: 1 }, { filename: 'app://src/redari/ui/FisaParcela.jsx', function: 'reincarcaConvocatorVersiuneNoua', lineno: 2 }] } }] } }
+    const rok = scrubSentryEvent(ok); expect(rok).not.toBeNull(); expect(rok.message).toBe('TypeError: x'); expect(rok.exception.values[0].stacktrace.frames.length).toBe(2)
+    // r45 P2-01 ramane: cuvinte legitime unite nu inventeaza identificatori
+    const ok2 = { message: 'Refresh failed', extra: { token_cache: { provider: 'identity-provider', status: 'temporarily-unavailable', operation: 'refresh' } } }
+    expect(scrubSentryEvent(ok2)).toEqual(ok2)
   })
   it('r9 P2-2 (Jakarinos): eveniment legitim cu `tokenuri_cumparate` în corp + hash de 43 NU se pierde', () => {
     const ev = { message: 'TypeError: factura indisponibila', request: { url: 'https://example.test/facturi', data: { tokenuri_cumparate: 12 } }, extra: { hash: 'a'.repeat(43) } }

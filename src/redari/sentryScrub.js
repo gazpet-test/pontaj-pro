@@ -185,7 +185,8 @@ const numaraChei = (radacina) => {
 // pe calea sensibilă — vizitatele țin nivelul (false → true), deci fiecare obiect e parcurs cel mult de două ori (ciclurile se termină).
 // Jakarinos r44 P1-01: toate FRUNZELE-sir ale unui subarbore, in ordinea parcurgerii, unite (fragmente in obiecte/liste imbricate)
 // r47 (Copilot r40 P1-02): `saraIndici` — fragmentele de 1-2 caractere pot fi chiar bucati din identificator; se verifica AMBELE variante
-const frunzeUnite = (radacina, cuChei = false, saraIndici = true) => {
+const RX_T43_ORIUNDE_G = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g
+const frunzeUnite = (radacina, cuChei = false, saraIndici = true, sep = '') => {
   const vaz = new WeakSet(); const stiva = [radacina]; const out = []
   while (stiva.length) {
     const o = stiva.pop()
@@ -197,7 +198,18 @@ const frunzeUnite = (radacina, cuChei = false, saraIndici = true) => {
     const chei = Object.keys(o)
     for (let i = chei.length - 1; i >= 0; i--) { stiva.push(o[chei[i]]); if (cuChei) stiva.push(chei[i]) }
   }
-  return out.join('')
+  return out.join(sep)
+}
+// r48: textele scheletului (dupa allow-list) — secventele de >=12 unite formeaza un identificator?
+const texteScheletFormeazaIdentificator = (sk) => {
+  const texte = [sk.message, sk.transaction, sk.request?.url]
+  for (const x of (sk.exception?.values || [])) { texte.push(x?.type, x?.value) }
+  const tot = texte.filter(t => typeof t === 'string').join(' ')
+  for (const f of [tot, cuUnicode(tot), ...formele(tot)]) {
+    const runs = f.match(/[A-Za-z0-9_-]{12,}/g) || []
+    if (RX_RUN43.test(runs.join(''))) return true
+  }
+  return false
 }
 function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
   if (radacina === null || typeof radacina !== 'object') return radacina
@@ -227,7 +239,9 @@ function parcurge(radacina, fn, fnCheie = null, sensibilInitial = false) {
       if (v && typeof v === 'object') {
         stiva.push([v, sensibilCopil])
         // Jakarinos r44 P1-01: `token: { a: T[0:20], b: T[20:] }` / `token: [[..],[..]]` — subarborele sensibil se judeca si cu frunzele unite
-        if (sensibilCopil && !sensibil) { for (const unit of [frunzeUnite(v), frunzeUnite(v, false, false)]) if (RX_T43.test(unit)) fn(obj, cheie, unit, true) }   // r47: doar la radacina subarborelui sensibil (cost liniar)
+        // r48 (Jak r47 P1-03): in uniune se cauta o secventa de EXACT 43 delimitata (`prefix ` + T), nu uniunea intreaga; cuvintele legitime unite
+        // (47 fara delimitare la 43) tot nu inventeaza candidati (r45 P2-01)
+        if (sensibilCopil && !sensibil) { for (const unit of [frunzeUnite(v), frunzeUnite(v, false, false), frunzeUnite(v, false, true, ' '), frunzeUnite(v, false, false, ' ')]) { const m = unit.match(RX_T43_ORIUNDE_G); if (m) for (const t of m) fn(obj, cheie, t, true) } }
       }
       else vNou = fn(obj, cheie, v, sensibilCopil)
       if (cheieNoua !== cheie || vNou !== v) obj[cheieNoua] = vNou
@@ -437,12 +451,12 @@ const sirScurt = (v, n = 200) => typeof v === 'string' && v.length <= n && !form
 export function doarCampurileSigure(event) {
   const e = event
   const out = {}
-  for (const k of ['event_id', 'timestamp', 'platform', 'level', 'logger', 'release', 'dist', 'environment', 'server_name', 'type', 'start_timestamp']) if (k in e && (typeof e[k] === 'number' || sirScurt(e[k]))) out[k] = e[k]
+  // r48 (Jak r47 P1-01): fara `tags` (cheile pot purta fragmente), fara logger/server_name/dist — scheletul e minim
+  for (const k of ['event_id', 'timestamp', 'platform', 'level', 'release', 'environment', 'type', 'start_timestamp']) if (k in e && (typeof e[k] === 'number' || sirScurt(e[k]))) out[k] = e[k]
   if (sirScurt(e.message, 2000)) out.message = e.message
   if (sirScurt(e.transaction, 500)) out.transaction = e.transaction
   if (e.sdk && typeof e.sdk === 'object') out.sdk = { name: sirScurt(e.sdk.name) ? e.sdk.name : undefined, version: sirScurt(e.sdk.version) ? e.sdk.version : undefined }
   if (e.request && typeof e.request === 'object') { out.request = {}; if (sirScurt(e.request.url, 2000)) out.request.url = e.request.url; if (sirScurt(e.request.method, 10)) out.request.method = e.request.method }
-  if (e.tags && typeof e.tags === 'object') { out.tags = {}; for (const [k, v] of Object.entries(e.tags)) if (sirScurt(k, 64) && (typeof v === 'number' || sirScurt(v, 64))) out.tags[k] = v }
   const vals = e.exception?.values
   if (Array.isArray(vals)) out.exception = { values: vals.filter(x => x && typeof x === 'object').map(x => ({
     type: sirScurt(x.type, 200) ? x.type : undefined, value: sirScurt(x.value, 2000) ? x.value : undefined, mechanism: x.mechanism && typeof x.mechanism === 'object' ? { type: sirScurt(x.mechanism.type) ? x.mechanism.type : undefined, handled: typeof x.mechanism.handled === 'boolean' ? x.mechanism.handled : undefined } : undefined,
@@ -461,7 +475,10 @@ export function scrubSentryEvent(event) {
       event = doarCampurileSigure(event)
       // r47 (Copilot r40 P1-01): fragmente FARA sursa, raspandite intre campurile permise (message + exception.value) — frunzele scheletului
       // unite in ordine nu au voie sa formeze o secventa de >=43 (scheletul are putine campuri, toate scurte; concatenarea lor nu e un caz legitim)
-      if ([frunzeUnite(event), frunzeUnite(event, false, false)].some(u => RX_RUN43.test(u) || RX_RUN43.test(cuUnicode(u)) || formele(u).some(f => RX_RUN43.test(f)))) return null
+      // r48 (Jak r47 P1-02 / P2-01): se unesc DOAR textele scheletului (message, transaction, exception.type/value, request.url) si din ele
+      // doar secventele de >=12 [A-Za-z0-9_-] (etichetele scurte dintre fragmente — `prima: `, `ultima: ` — nu intrerup); id-urile hex,
+      // timestamp-ul, platform NU participa (Jak r47 P2-01). O secventa de 43 formata asa => evenimentul nu se trimite.
+      if (texteScheletFormeazaIdentificator(event)) return null
     }
     const tokenuri = colecteazaTokenuriEveniment(event)   // ÎNAINTE de ștergerea corpului — colectează și din request.data/body
     if (tokOrig) { for (const t of tokOrig) tokenuri.add(t); if (tokOrig.refuzat) tokenuri.refuzat = true; if (tokOrig.ambiguu) tokenuri.ambiguu = true }
