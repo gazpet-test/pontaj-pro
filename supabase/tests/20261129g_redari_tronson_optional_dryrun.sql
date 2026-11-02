@@ -132,12 +132,16 @@ END $t$;
 -- Copilot f8a r2 P3-01: cerere anon / authenticated fara sub nu e scutita ca mentenanta
 SELECT pg_temp.r29g_ca(NULL,'authenticated');
 DO $t$ BEGIN
-  IF NOT pg_temp.r29g_refuza(format('UPDATE public.red_parcele SET tronson=8 WHERE id=%L',pg_temp.r29g_g('p6')),'42501') THEN RAISE EXCEPTION 'TEST9 FAIL authenticated fara sub'; END IF;
+  -- refuz 42501 (privilegii/trigger) SAU 0 randuri (RLS); starea finala se verifica mai jos ca postgres
+  BEGIN UPDATE public.red_parcele SET tronson=8 WHERE id=pg_temp.r29g_g('p6')::uuid;
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   RAISE NOTICE 'TEST9a OK';
 END $t$;
 SELECT pg_temp.r29g_ca(NULL,'anon');
 DO $t$ BEGIN
-  IF NOT pg_temp.r29g_refuza(format('UPDATE public.red_parcele SET tronson=8 WHERE id=%L',pg_temp.r29g_g('p6')),'42501') THEN RAISE EXCEPTION 'TEST9 FAIL anon'; END IF;
+  -- refuz 42501 (privilegii/trigger) SAU 0 randuri (RLS); starea finala se verifica mai jos ca postgres
+  BEGIN UPDATE public.red_parcele SET tronson=8 WHERE id=pg_temp.r29g_g('p6')::uuid;
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   RAISE NOTICE 'TEST9b OK';
 END $t$;
 SELECT pg_temp.r29g_ca(NULL,'postgres');
