@@ -49,12 +49,12 @@ BEGIN
         RAISE EXCEPTION 'redari: tronson protejat de PV C activ' USING ERRCODE='23514';
       END IF;
       -- Copilot f8a r2 P2: un PV A/B neanulat care poarta deja un tronson ramane coerent cu parcela (documentul emis nu se rescrie).
-      -- Mutarea cere intai anularea PV-ului. PV A/B emis fara tronson (NULL) nu afirma niciun tronson: atribuirea initiala e permisa.
+      -- Generat/trimis: se anuleaza intai; semnat: inghetat (20261129c), deci tronsonul parcelei ramane definitiv. PV A/B emis fara tronson (NULL) nu afirma niciun tronson: atribuirea initiala e permisa.
       -- PV-ul nou blocheaza parcela FOR UPDATE inainte de INSERT; aici randul parcelei e deja blocat de UPDATE -> se vede PV-ul comis.
       IF EXISTS (SELECT 1 FROM public.red_procese_verbale v
         WHERE v.parcela_id=(to_jsonb(NEW) ->> 'id')::uuid AND v.tip IN ('A','B') AND v.stare<>'anulat' AND v.sters_la IS NULL
           AND v.tronson IS NOT NULL AND v.tronson IS DISTINCT FROM (to_jsonb(NEW) ->> 'tronson')::int) THEN
-        RAISE EXCEPTION 'redari: parcela % are PV A/B emis pe alt tronson; anuleaza-l inainte de mutare', to_jsonb(NEW) ->> 'id_parcela' USING ERRCODE='23514';
+        RAISE EXCEPTION 'redari: parcela % are PV A/B emis pe alt tronson (semnat = definitiv; generat/trimis se anuleaza intai)', to_jsonb(NEW) ->> 'id_parcela' USING ERRCODE='23514';
       END IF;
     END IF;
     -- uat3 intra in id_parcela: nu se mai schimba cat exista parcele pe UAT (numele ramane editabil); randul UAT e deja blocat FOR UPDATE de
@@ -184,7 +184,7 @@ BEGIN
     WHERE v.parcela_id=ANY(v_ids) AND v.tip IN ('A','B') AND v.stare<>'anulat' AND v.sters_la IS NULL
       AND v.tronson IS NOT NULL AND v.tronson IS DISTINCT FROM p_tronson;
   IF v_n>0 THEN
-    RAISE EXCEPTION 'redari: % parcele din interval au PV A/B emis pe alt tronson; anuleaza-le inainte de mutare', v_n USING ERRCODE='P0001';
+    RAISE EXCEPTION 'redari: % parcele din interval au PV A/B emis pe alt tronson (semnat = definitiv; generat/trimis se anuleaza intai)', v_n USING ERRCODE='P0001';
   END IF;
   -- P3-01: se numara doar parcelele al caror tronson se schimba efectiv
   UPDATE public.red_parcele SET tronson=p_tronson WHERE id=ANY(v_ids) AND tronson IS DISTINCT FROM p_tronson;
