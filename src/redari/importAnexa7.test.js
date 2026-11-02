@@ -121,6 +121,17 @@ describe('parseazaAnexa7', () => {
     expect(pv.detinatori[0].sursa_date).toContain('0000 999 999')   // valoarea diferita ramane in sursa_date
   })
 
+  it('judetul explicit de pe dublura bate judetul implicit al UAT-ului (Copilot f3b r3 P2-01)', () => {
+    const pv = parseazaAnexa7(excel([
+      rand({ 17: '0000 000 000' }),
+      rand({ 8: 'POPESCU TEST ION', 12: 'Str. Test 1', 15: 'Alt Judet Explicit' }),
+      rand({ 3: 'CF500', 4: '50', 8: 'FARA JUDET TEST', 12: 'Str. Test 2' }),
+    ]), opt)
+    expect(pv.contacte).toHaveLength(2)
+    expect(pv.contacte[0]).toMatchObject({ adresa_judet: 'Alt Judet Explicit', adresa_strada: 'Str. Test 1', telefon: '0000 000 000' })
+    expect(pv.contacte[1].adresa_judet).toBe('Judet Test')   // implicit, din UAT, doar unde nimeni nu a dat judet
+  })
+
   it('foloseste cheia TGZ completa: aceeasi HG cu cadastru diferit ramane parcela diferita', () => {
     const pv = parseazaAnexa7(excel([rand(), rand({ 3: 'CF101' })]), opt)
     expect(pv.parcele.map(p => p.cheie_sursa)).toEqual([cheieSursa('HUS', '10', 'CF100', 'T12'), cheieSursa('HUS', '10', 'CF101', 'T12')])

@@ -60,6 +60,7 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
   const pune = (k, u) => { if (!k) return; const e = dupaUat.get(k); if (e && idUat(e) !== idUat(u)) ambigue.add(k); else dupaUat.set(k, u) }
   for (const u of uats) if (u) { if (u.nume) pune(normalizeazaNume(u.nume), u); if (u.uat3) pune(normalizeazaNume(u.uat3), u) }
   const parcele = new Map(); const detinatori = new Map(); const contoare = new Map()
+  const judetDet = new Map()   // cheie detinator → județul UAT-ului (implicit, aplicat la final — Copilot f3b r3 P2-01)
   for (let r = antet.rand + 1; r <= range.e.r; r++) {
     const rand = r + 1
     const brut = camp => sheet[XLSX.utils.encode_cell({ r, c: col[camp] })]?.v
@@ -119,7 +120,6 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
         let c0 = rez.contacte.find(c => c.cheie_detinator === cheieD)
         if (!c0) { c0 = { cheie_detinator: cheieD, adresa_strada: null, adresa_sat: null, adresa_comuna: null, adresa_judet: null, cod_postal: null, telefon: null, email: null, adresa_cunoscuta: false }; rez.contacte.push(c0) }
         for (const [camp, col] of Object.entries(campuriContact)) if (!c0[camp] && v(col)) c0[camp] = v(col)
-        if (!c0.adresa_judet) c0.adresa_judet = uat.judet || null
         c0.adresa_cunoscuta = d0.calitate !== 'neidentificat' && !!(c0.adresa_strada || c0.adresa_comuna)
         d0.adresa_cunoscuta = c0.adresa_cunoscuta
       }
@@ -138,13 +138,16 @@ export function parseazaAnexa7(arrayBuffer, { uats = [], tronsonPeUat = {}, vers
     const adresaCunoscuta = !neidentificat && !!(v('strada') || v('comuna'))
     const d = { cheie: cheieD, cheie_parcela: cheieP, id_parcela: p.id_parcela, nr_crt: null, nume: v('nume'), nume_normalizat: numeNorm, calitate, cota: v('cota') || null, decedat: normalizeazaNume(v('decedat')) === 'DA', adresa_cunoscuta: adresaCunoscuta, sursa_date: [v('sursa') || sursa, ...note].join('; '), versiune_lista_tgz: versiune, rand }
     detinatori.set(cheieD, d); rez.detinatori.push(d); p.nr_detinatori++; s.detinatori++
+    judetDet.set(cheieD, uat.judet || null)
     const intrare = { rand, nr_crt: null, nume: d.nume, cheie_parcela: cheieP }
     if (neidentificat) { rez.neidentificati.push(intrare); s.neidentificati++ }
     if (!cheieS) { rez.fara_cheie.push(intrare); s.fara_cheie++ }
     if (['strada', 'sat_adresa', 'comuna', 'judet', 'cod_postal', 'telefon', 'email'].some(c => v(c))) {
-      rez.contacte.push({ cheie_detinator: cheieD, adresa_strada: v('strada') || null, adresa_sat: v('sat_adresa') || null, adresa_comuna: v('comuna') || null, adresa_judet: v('judet') || uat.judet || null, cod_postal: v('cod_postal') || null, telefon: v('telefon') || null, email: v('email') || null, adresa_cunoscuta: adresaCunoscuta })
+      rez.contacte.push({ cheie_detinator: cheieD, adresa_strada: v('strada') || null, adresa_sat: v('sat_adresa') || null, adresa_comuna: v('comuna') || null, adresa_judet: v('judet') || null, cod_postal: v('cod_postal') || null, telefon: v('telefon') || null, email: v('email') || null, adresa_cunoscuta: adresaCunoscuta })
     }
   }
+  // Județul implicit (al UAT-ului) intră doar unde niciun rând (nici dublura) nu a dat un județ explicit (Copilot f3b r3 P2-01)
+  for (const c of rez.contacte) if (!c.adresa_judet) c.adresa_judet = judetDet.get(c.cheie_detinator) ?? null
   for (const camp of ['parcele', 'detinatori', 'contacte', 'dubluri', 'neidentificati', 'fara_cheie']) st[camp] = rez[camp].length
   const eligibile = new Set(rez.parcele.filter(p => p.cheie_sursa).map(p => p.cheie))
   const detEligibili = rez.detinatori.filter(d => eligibile.has(d.cheie_parcela))
