@@ -746,15 +746,17 @@ migrare în acest PR) e în descrierea PR-ului.
 
 Decizia lui Răzvan din 03.11.2026 („varianta A”): convocatorul se tipărește față-verso pe o foaie A4 — pe față convocatorul,
 pe verso informarea GDPR completă (PR #939, separat). Se schimbă **doar formatarea**; textul juridic rămâne identic, cuvânt cu
-cuvânt: `construieste()` din `scripts/redari_sabloane_din_modele.mjs` refuză orice pas de formatare care schimbă textul
-concatenat din `<w:t>`, iar `src/redari/sabloaneA4.test.js` compară amprenta SHA-256 a acestui text cu cea a șabloanelor de
+cuvânt: `construieste()` din `scripts/redari_sabloane_din_modele.mjs` ia textul de referință înainte de orice pas de formatare și îl
+compară după fiecare pas (refuză pasul care schimbă textul concatenat din `<w:t>`), iar `src/redari/sabloaneA4.test.js` compară amprenta SHA-256 a acestui text cu cea a șabloanelor de
 dinainte (main @ `ac7afa7c`), pe toate 5.
 
 **Ce era**: modelele Final_v2 sunt salvate pe **Letter** (12240×15840 twips), iar convocatorul ocupa 2 pagini (`docProps/app.xml`;
 Word marca trecerea la pagina 2 înainte de „În lipsa participării…”, ceea ce estimarea de mai jos reproduce).
 
-**Excepția (6), toate 5 șabloanele**: `w:pgSz` → A4 (11906×16838). Lățimile tabelelor (`w:gridCol`, `w:tcW` dxa) se scalează cu
-raportul lățimilor utile, ca tabelele să rămână între margini (PV A, PV B, PV C, adresa UAT: marginile din model, 1,8 / 2 cm,
+**Excepția (6), toate 5 șabloanele**: `w:pgSz` → A4 (11906×16838). Lățimile tabelelor (`w:gridCol`, `w:tcW` dxa, `w:tblW` dxa
+unde există) se scalează cu raportul lățimilor utile, ca tabelele să rămână între margini; baza e cea mai mare dintre lățimea
+utilă veche și sumele din tabele (în PV A / PV B unele rânduri depășeau cu 1 twip), iar testul cere `tblW`, suma `gridCol` și
+suma `tcW` pe fiecare rând ≤ lățimea utilă A4 (PV A, PV B, PV C, adresa UAT: marginile din model, 1,8 / 2 cm,
 lățimea tabelelor ×0,966). `cerere_imputernicire.docx` era deja A4 și nu e atins.
 
 **Excepția (7), doar convocatorul** (`CONVOCATOR_FORMAT` în generator):

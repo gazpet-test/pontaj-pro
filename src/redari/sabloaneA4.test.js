@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import JSZip from 'jszip'
+import { completeazaDocx, genereazaQr, CHEI_CONVOCATOR } from './docx.js'
 
 // sha256 + lungimea textului concatenat din <w:t> (word/document.xml), ÎNAINTE de trecerea pe A4 (main @ ac7afa7c)
 const TEXT_INAINTE = {
@@ -26,7 +27,7 @@ const textWt = xml => [...xml.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(
 const atribut = (tag, a) => Number(new RegExp(`w:${a}="(\\d+)"`).exec(tag)?.[1])
 
 describe('șabloanele pe A4', () => {
-  it.each(Object.keys(TEXT_INAINTE))('%s: o singură secțiune, pagină A4 portret, tabelele încap între margini', async nume => {
+  it.each(Object.keys(TEXT_INAINTE))('%s: o singură secțiune, pagină A4 portret, tabelele încap între margini (tblW, gridCol, tcW)', async nume => {
     const { doc } = await citeste(nume)
     const sect = doc.match(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g)
     expect(sect).toHaveLength(1)
@@ -35,9 +36,26 @@ describe('șabloanele pe A4', () => {
     expect(pgSz).not.toMatch(/orient="landscape"/)
     const pgMar = /<w:pgMar [^>]*\/>/.exec(sect[0])[0]
     const util = A4.w - atribut(pgMar, 'left') - atribut(pgMar, 'right')
-    for (const g of doc.matchAll(/<w:tblGrid>([\s\S]*?)<\/w:tblGrid>/g)) {
-      const suma = [...g[1].matchAll(/w:w="(\d+)"/g)].reduce((a, m) => a + Number(m[1]), 0)
-      expect(suma).toBeLessThanOrEqual(util)
+    const tabele = [...doc.matchAll(/<w:tbl>[\s\S]*?<\/w:tbl>/g)].map(m => m[0])
+    expect(tabele.length).toBeGreaterThan(0)
+    for (const tbl of tabele) {
+      // fără tabele imbricate: rândurile de mai jos aparțin acestui tabel
+      expect(tbl.slice(7)).not.toMatch(/<w:tbl>/)
+      // w:tblW: auto / nil acceptate; dxa ≤ lățimea utilă; pct ≤ 100% (5000)
+      const tblW = /<w:tblW w:w="(\d+)" w:type="(\w+)"\/>/.exec(tbl)
+      expect(tblW).not.toBeNull()
+      expect(['auto', 'nil', 'dxa', 'pct']).toContain(tblW[2])
+      if (tblW[2] === 'dxa') expect(Number(tblW[1])).toBeLessThanOrEqual(util)
+      if (tblW[2] === 'pct') expect(Number(tblW[1])).toBeLessThanOrEqual(5000)
+      const grid = /<w:tblGrid>([\s\S]*?)<\/w:tblGrid>/.exec(tbl)[1]
+      expect([...grid.matchAll(/w:w="(\d+)"/g)].reduce((a, m) => a + Number(m[1]), 0)).toBeLessThanOrEqual(util)
+      // fiecare rând: suma w:tcW (toate în dxa) ≤ lățimea utilă
+      for (const tr of tbl.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)) {
+        const tcW = [...tr[0].matchAll(/<w:tcW w:w="(\d+)" w:type="(\w+)"\/>/g)]
+        expect(tcW.length).toBeGreaterThan(0)
+        expect(tcW.every(m => m[2] === 'dxa')).toBe(true)
+        expect(tcW.reduce((a, m) => a + Number(m[1]), 0)).toBeLessThanOrEqual(util)
+      }
     }
   })
 
@@ -88,6 +106,32 @@ describe('convocatorul: fața pe o pagină A4', () => {
     expect(cadru).toMatch(/w:wrap="around"/)
     expect(atribut(cadru, 'w')).toBeGreaterThanOrEqual(3 * CM)
     expect(readFileSync('src/redari/docx.js', 'utf8')).toMatch(/const QR_CM = 3\b/)
+  })
+
+  it('convocatorul completat (completeazaDocx, strict, date fictive): cadrul rămâne, QR-ul e desen inline cu relație validă, fără placeholder-e', async () => {
+    const campuri = Object.fromEntries(CHEI_CONVOCATOR.filter(k => k !== 'qr').map(k => [k, `TEST ${k}`]))
+    const qr = await genereazaQr('https://example.invalid/redari/raspuns/TEST0000fictiv')
+    const blob = await completeazaDocx(readFileSync('public/redari/sabloane/convocator.docx'), campuri, { imagini: { qr }, strict: true })
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer())
+    const doc = await zip.file('word/document.xml').async('string')
+    const cuDesen = [...doc.matchAll(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g)].map(m => m[0]).filter(p => p.includes('<w:drawing>'))
+    expect(cuDesen).toHaveLength(1)
+    // cadrul din șablon rămâne pe paragraful imaginii
+    expect(cuDesen[0]).toMatch(/<w:pPr><w:framePr [^>]*w:xAlign="right"[^>]*\/>/)
+    // desen inline (nu ancorat), 3 cm × 3 cm
+    expect(cuDesen[0]).toMatch(/<wp:inline[\s>]/)
+    expect(cuDesen[0]).not.toMatch(/<wp:anchor[\s>]/)
+    expect(cuDesen[0]).toContain('<wp:extent cx="1080000" cy="1080000"/>')
+    // relația imaginii: r:embed → word/_rels/document.xml.rels → media/qr.png, fișier prezent în zip
+    const rId = /r:embed="([^"]+)"/.exec(cuDesen[0])[1]
+    const rels = await zip.file('word/_rels/document.xml.rels').async('string')
+    const rel = new RegExp(`<Relationship [^>]*Id="${rId}"[^>]*/>`).exec(rels)?.[0]
+    expect(rel).toMatch(/Target="media\/qr\.png"/)
+    expect(rel).toMatch(/relationships\/image"/)
+    expect(zip.file('word/media/qr.png')).not.toBeNull()
+    // niciun placeholder rămas
+    expect(textWt(doc)).not.toMatch(/\{\{|\}\}/)
+    expect(textWt(doc)).toContain('TEST nr_document')
   })
 
   it('fără marcajul de pagină vechi (lastRenderedPageBreak) și fără sfârșit de pagină forțat pe față', async () => {

@@ -126,7 +126,7 @@ function paragrafDupa(xml, text, paragrafNou) {
 }
 
 // excepția (6), decizia Răzvan 03.11 („varianta A”): toate șabloanele trec de pe Letter (12240×15840) pe A4 (11906×16838);
-// lățimile din tabele (w:gridCol, w:tcW dxa) se scalează cu raportul lățimilor utile, ca tabelele să rămână în margini.
+// lățimile din tabele (w:gridCol, w:tcW dxa, w:tblW dxa) se scalează cu raportul lățimilor utile, ca tabelele să rămână în margini.
 // Se schimbă doar formatarea; textul din <w:t> rămâne identic (verificat la construire și în src/redari/sabloaneA4.test.js).
 const LETTER = { w: 12240, h: 15840 }
 const A4 = { w: 11906, h: 16838 }
@@ -139,13 +139,21 @@ function paginaA4(xml, margini = null) {
   const m = RX_MAR.exec(sect[0])
   asigura(m, 'w:pgMar în altă formă decât cea știută')
   const [top, right, bottom, left] = margini ? [margini.sus, margini.dreapta, margini.jos, margini.stanga] : [m[1], m[2], m[3], m[4]].map(Number)
-  const factor = (A4.w - left - right) / (LETTER.w - Number(m[4]) - Number(m[2]))
+  // baza = cea mai mare dintre lățimea utilă veche, suma unui tblGrid și suma w:tcW a unui rând (în modele unele rânduri
+  // depășesc cu 1 twip lățimea utilă); așa, după scalare, nicio sumă nu trece de lățimea utilă A4
+  const suma = s => [...s.matchAll(/w:w="(\d+)"/g)].reduce((a, x) => a + Number(x[1]), 0)
+  const sumeGrid = [...xml.matchAll(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/g)].map(g => suma(g[0]))
+  const sumeRand = [...xml.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(r => suma([...r[0].matchAll(/<w:tcW w:w="\d+" w:type="dxa"\/>/g)].join('')))
+  const tblWDxa = [...xml.matchAll(/<w:tblW w:w="(\d+)" w:type="dxa"\/>/g)].map(x => Number(x[1]))
+  const baza = Math.max(LETTER.w - Number(m[4]) - Number(m[2]), ...sumeGrid, ...sumeRand, ...tblWDxa)
+  const factor = (A4.w - left - right) / baza
   const nouSect = sect[0].replace(pgSz, `<w:pgSz w:w="${A4.w}" w:h="${A4.h}"/>`)
     .replace(RX_MAR, `<w:pgMar w:top="${top}" w:right="${right}" w:bottom="${bottom}" w:left="${left}"$5/>`)
   const scal = v => String(Math.floor(Number(v) * factor))
   return xml.replace(sect[0], () => nouSect)
     .replace(/<w:gridCol w:w="(\d+)"\/>/g, (t, v) => `<w:gridCol w:w="${scal(v)}"/>`)
     .replace(/<w:tcW w:w="(\d+)" w:type="dxa"\/>/g, (t, v) => `<w:tcW w:w="${scal(v)}" w:type="dxa"/>`)
+    .replace(/<w:tblW w:w="(\d+)" w:type="dxa"\/>/g, (t, v) => `<w:tblW w:w="${scal(v)}" w:type="dxa"/>`)
 }
 
 // excepția (7), tot 03.11: fața convocatorului pe O pagină A4 (pe verso se tipărește informarea GDPR completă, PR #939).
@@ -194,6 +202,13 @@ function latimiColoane(xml, antet, proportii) {
     return r
   })
   return xml.slice(0, t.index) + nou + xml.slice(t.index + t[0].length)
+}
+
+// paragraful {{qr}} inserat de excepția (1); pasul `cadruQr` îi dă poziția (cadru la dreapta, CONVOCATOR_FORMAT.cadruQr)
+const PARAGRAF_QR = '<w:p><w:r><w:t>{{qr}}</w:t></w:r></w:p>'
+function cadruQr(xml) {
+  asigura(xml.split(PARAGRAF_QR).length === 2, 'paragraful {{qr}} nu e unic sau are altă formă')
+  return xml.replace(PARAGRAF_QR, () => `<w:p><w:pPr>${CONVOCATOR_FORMAT.cadruQr}<w:spacing w:after="0"/><w:jc w:val="right"/></w:pPr><w:r><w:t>{{qr}}</w:t></w:r></w:p>`)
 }
 
 // paragrafele fără text (fără <w:t>, <w:br/> sau imagine) primesc marcajul de paragraf la `sz` jumătăți de punct
@@ -253,24 +268,30 @@ const RETETE = {
       for (const i of [1, 2, 3]) x = celulaGoala(x, `Ziua ${i}`, 3, `{{sate_zi${i}}}`)
       const link = 'Prin formularul online de la adresa ______________________ (sau scanând codul QR alăturat), la telefon ______________ sau prin răspuns scris la adresa de mai jos. Puteți alege una dintre opțiunile:'
       x = inWt(x, link, [['adresa ______________________ (sau scanând codul QR alăturat)', 'adresa {{link}} (sau scanând codul QR de mai jos)'], ['telefon ______________', 'telefon {{contact_telefon}}']])
-      // excepția (1): paragraf nou, centrat, doar cu {{qr}}, imediat după paragraful cu {{link}}
-      // excepția (7): paragraful e un cadru la dreapta (CONVOCATOR_FORMAT.cadruQr), nu un rând centrat de 3 cm
+      // excepția (1): paragraf nou, doar cu {{qr}}, imediat după paragraful cu {{link}}
+      // poziția lui (cadrul la dreapta) e un pas de formatare, mai jos în `formatare`
       x = paragrafDupa(x, link.replace('adresa ______________________ (sau scanând codul QR alăturat)', 'adresa {{link}} (sau scanând codul QR de mai jos)').replace('telefon ______________', 'telefon {{contact_telefon}}'),
-        `<w:p><w:pPr>${CONVOCATOR_FORMAT.cadruQr}<w:spacing w:after="0"/><w:jc w:val="right"/></w:pPr><w:r><w:t>{{qr}}</w:t></w:r></w:p>`)
+        PARAGRAF_QR)
       // informarea GDPR: tot paragraful de sub „Date personale” = {{text_gdpr}} (textul rămâne cel din ERP, red_proiecte.text_gdpr)
       x = uneste(x, ['Transgaz folosește datele dumneavoastră ca să organizeze verificarea terenului după lucrările la conducta de gaze. Gazpet', ' Instal',
         ' vă trimite această convocare în numele Transgaz. Datele nu sunt folosite pentru reclamă. Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră (inclusiv temeiurile legale); le găsiți și scanând codul QR sau la [link scurt].'], '{{text_gdpr}}')
       x = inlocuiesteWt(x, 'Contact GAZPET INSTAL: Ramona Brehui, tel. ______________, e-mail redari@gazpet.ro', 'Contact GAZPET INSTAL: {{contact_nume}}, tel. {{contact_telefon}}, e-mail {{contact_email}}')
       x = uneste(x, ['Contact TRANSGAZ (DRFT / ofițer de legătură): _______________________, tel. ', '______________'], 'Contact TRANSGAZ (DRFT / ofițer de legătură): {{reprezentant_tgz}}, tel. {{reprezentant_tgz_telefon}}')
       x = inlocuiesteWt(x, NCD, ['{{semnatar_gazpet}}', '{{semnatar_tgz}}'])
-      // excepția (7): marcajul de pagină salvat de Word în model (unde cădea pagina 2) nu mai corespunde paginării noi
-      asigura(x.split('<w:lastRenderedPageBreak/>').length === 2, 'convocator: marcajul lastRenderedPageBreak nu mai e unic')
-      x = x.replace('<w:lastRenderedPageBreak/>', '')
-      x = paragrafeGoaleMici(x, CONVOCATOR_FORMAT.golMic, CONVOCATOR_FORMAT.golAsteptate)
-      x = latimiColoane(x, 'Suprafață afectată temporar (mp)', CONVOCATOR_FORMAT.coloaneParcela)
-      x = latimiColoane(x, 'Sate / tarlale programate', CONVOCATOR_FORMAT.coloaneProgram)
       return x
     },
+    // excepția (7): pașii de formatare; după FIECARE, construieste() cere textul din <w:t> neschimbat
+    formatare: [
+      // marcajul de pagină salvat de Word în model (unde cădea pagina 2) nu mai corespunde paginării noi
+      ['lastRenderedPageBreak', x => {
+        asigura(x.split('<w:lastRenderedPageBreak/>').length === 2, 'convocator: marcajul lastRenderedPageBreak nu mai e unic')
+        return x.replace('<w:lastRenderedPageBreak/>', '')
+      }],
+      ['paragrafe goale', x => paragrafeGoaleMici(x, CONVOCATOR_FORMAT.golMic, CONVOCATOR_FORMAT.golAsteptate)],
+      ['coloane parcelă', x => latimiColoane(x, 'Suprafață afectată temporar (mp)', CONVOCATOR_FORMAT.coloaneParcela)],
+      ['coloane program', x => latimiColoane(x, 'Sate / tarlale programate', CONVOCATOR_FORMAT.coloaneProgram)],
+      ['cadru QR', cadruQr],
+    ],
     margini: CONVOCATOR_FORMAT.margini,
     stiluri: stiluriConvocator,
   },
@@ -400,13 +421,19 @@ const RETETE = {
 // textul concatenat din <w:t> (comparația „textul nu s-a schimbat” la pașii de formatare)
 const textWt = xml => [...xml.matchAll(RX_WT)].map(m => m[1]).join('')
 
-async function construieste(sablon, { model, pasi, margini, stiluri }) {
+async function construieste(sablon, { model, pasi, formatare = [], margini, stiluri }) {
   const zip = await JSZip.loadAsync(readFileSync(resolve(REF, model)), { createFolders: false })
   const doc = await zip.file('word/document.xml').async('string')
   const cuText = pasi(doc)
-  // excepția (6): A4 pe toate (cu marginile proprii doar la convocator); pasul nu are voie să atingă textul
-  const nou = paginaA4(cuText, margini)
-  asigura(textWt(nou) === textWt(cuText), `${sablon}: formatarea A4 a schimbat textul din <w:t>`)
+  // textul de referință se ia ÎNAINTE de orice pas de formatare și se compară după FIECARE pas
+  const referinta = textWt(cuText)
+  // excepția (6): A4 pe toate (cu marginile proprii doar la convocator), ultimul pas
+  const pasiFormatare = [...formatare, ['A4', x => paginaA4(x, margini)]]
+  let nou = cuText
+  for (const [nume, pas] of pasiFormatare) {
+    nou = pas(nou)
+    asigura(textWt(nou) === referinta, `${sablon}: pasul de formatare „${nume}” a schimbat textul din <w:t>`)
+  }
   asigura(!/\{\{(?![A-Za-z0-9_.]+\}\})/.test(nou), `${sablon}: acoladă malformată`)
   zip.file('word/document.xml', nou, { date: DATA_FIXA, createFolders: false })
   // excepția (7): stilurile convocatorului (spațiere, interlinie, corp de literă)
