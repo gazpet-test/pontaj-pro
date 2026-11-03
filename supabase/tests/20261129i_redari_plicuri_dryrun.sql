@@ -28,7 +28,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.red_numere WHERE cheie IN ('PL-ZXH','PP')) OR EXISTS (SELECT 1 FROM public.red_uat WHERE uat3='ZXH') THEN RAISE EXCEPTION 'TEST0 FAIL: ZXH/PP folosite'; END IF;
   INSERT INTO public.red_proiecte(cod,denumire) VALUES('TEST-29I','FICTIV plicuri') RETURNING id INTO pr;   -- fara imputernicire (TEST2e)
   INSERT INTO public.red_uat(proiect_id,nume,uat3,judet) VALUES(pr,'FICTIV ZXH','ZXH','Test') RETURNING id INTO u;
-  FOR i IN 1..6 LOOP
+  FOR i IN 1..7 LOOP
     INSERT INTO public.red_parcele(proiect_id,uat_id,id_parcela,poz_hg) VALUES(pr,u,'ZXH-000'||i,(10+i)::text) RETURNING id INTO d;
     par := par || d;
   END LOOP;
@@ -47,6 +47,10 @@ BEGIN
   INSERT INTO public.red_detinatori(parcela_id,nume,nume_normalizat,calitate) VALUES(par[6],'FICTIV A','FICTIV A','proprietar') RETURNING id INTO d;
   INSERT INTO public.red_detinatori_contact(detinator_id,adresa_strada,adresa_comuna,adresa_judet,adresa_cunoscuta) VALUES(d,'Str. Test A','Comuna Test','Test',true);
   PERFORM set_config('r29i.dA3',d::text,true);
+  -- E: acelasi nume ca A, pe parcela 7, FARA contact, cu convocare postala (pentru „intrarea” in identitatea lui A prin INSERT de contact)
+  INSERT INTO public.red_detinatori(parcela_id,nume,nume_normalizat,calitate) VALUES(par[7],'FICTIV A','FICTIV A','proprietar') RETURNING id INTO d;
+  INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(d,'posta','C-T29I-E','activ');
+  PERFORM set_config('r29i.dE',d::text,true);
   PERFORM set_config('r29i.owner',own::text,true); PERFORM set_config('r29i.editor',ed::text,true); PERFORM set_config('r29i.viewer',vw::text,true);
   PERFORM set_config('r29i.pr',pr::text,true);
   RAISE NOTICE 'TEST0 OK';
@@ -69,6 +73,12 @@ DO $t$ DECLARE pl public.red_plicuri; BEGIN
   -- r3 P1: nume / adresa / stergerea parcelei pentru un membru al plicului neexpediat -> refuz din aplicatie
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_detinatori_contact SET adresa_strada='Str. Alta' WHERE detinator_id=%L$q$,pg_temp.r29i_g('dA2')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: adresa schimbata cu plic'; END IF;
   IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_detinatori SET nume_normalizat='ALT NUME' WHERE id=%L$q$,pg_temp.r29i_g('dA1')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: nume schimbat cu plic'; END IF;
+  -- r4 P1: D (cu convocare eligibila) intra in identitatea lui A: numele -> permis (alta adresa), apoi adresa -> refuz; revenire la nume
+  UPDATE public.red_detinatori SET nume_normalizat='FICTIV A' WHERE id=pg_temp.r29i_g('dD')::uuid;
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_detinatori_contact SET adresa_strada='Str. Test A' WHERE detinator_id=%L$q$,pg_temp.r29i_g('dD')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: intrare in identitate prin adresa'; END IF;
+  UPDATE public.red_detinatori SET nume_normalizat='FICTIV D' WHERE id=pg_temp.r29i_g('dD')::uuid;
+  -- r4 P1: E (acelasi nume ca A, fara contact, cu convocare eligibila) primeste contactul cu adresa lui A -> refuz la INSERT
+  IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_detinatori_contact(detinator_id,adresa_strada,adresa_comuna,adresa_judet,adresa_cunoscuta) VALUES(%L,'Str. Test A','Comuna Test','Test',true)$q$,pg_temp.r29i_g('dE')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: intrare in identitate prin INSERT contact'; END IF;
   PERFORM set_config('r29i.plA',pl.id::text,true);
   -- r2 P1: convocare postala noua pentru aceeasi persoana, cat plicul e neexpediat -> refuz
   IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(%L,'posta','C-T29I-A3','activ')$q$,pg_temp.r29i_g('dA3')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: convocare noua cu plic neexpediat'; END IF;

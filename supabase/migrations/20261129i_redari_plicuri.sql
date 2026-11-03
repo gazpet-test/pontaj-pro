@@ -108,14 +108,20 @@ ALTER TABLE public.red_plic_sare ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.red_plic_sare FROM PUBLIC, anon, authenticated, service_role;
 INSERT INTO public.red_plic_sare (sare) VALUES (encode(gen_random_bytes(32), 'hex'));
 
--- Cheia persoanei: numele normalizat + adresa de corespondență normalizată, cu sare. Fără nume sau fără adresă cunoscută = fără plic (NULL).
+-- Cheia persoanei: numele normalizat + adresa de corespondență normalizată, cu sare. Fără nume sau fără adresă cunoscută = NULL (fără plic).
+-- fn_red_cheie_calc lucrează pe valori explicite (garda de identitate o cheamă cu valorile NOI ale rândului modificat).
+CREATE FUNCTION public.fn_red_cheie_calc(p_nume text, p_strada text, p_sat text, p_comuna text, p_judet text, p_cod text, p_cunoscuta boolean) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT CASE WHEN p_cunoscuta IS TRUE AND length(btrim(coalesce(p_nume, ''))) > 0
+              AND length(btrim(coalesce(p_strada, '') || coalesce(p_sat, '') || coalesce(p_comuna, ''))) > 0
+    THEN md5((SELECT s.sare FROM public.red_plic_sare s) || '|' || lower(btrim(p_nume)) || '|' || lower(regexp_replace(btrim(coalesce(p_strada, '')) || '|' || btrim(coalesce(p_sat, '')) || '|'
+             || btrim(coalesce(p_comuna, '')) || '|' || btrim(coalesce(p_judet, '')) || '|' || btrim(coalesce(p_cod, '')), '\s+', ' ', 'g')))
+    ELSE NULL END;
+$fn$;
+REVOKE EXECUTE ON FUNCTION public.fn_red_cheie_calc(text, text, text, text, text, text, boolean) FROM PUBLIC, anon, authenticated;
 CREATE FUNCTION public.fn_red_cheie_persoana(p_detinator uuid) RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-  SELECT CASE WHEN c.adresa_cunoscuta IS TRUE AND length(btrim(coalesce(d.nume_normalizat, ''))) > 0
-              AND length(btrim(coalesce(c.adresa_strada, '') || coalesce(c.adresa_sat, '') || coalesce(c.adresa_comuna, ''))) > 0
-    THEN md5((SELECT s.sare FROM public.red_plic_sare s) || '|' || lower(btrim(d.nume_normalizat)) || '|' || lower(regexp_replace(btrim(coalesce(c.adresa_strada, '')) || '|' || btrim(coalesce(c.adresa_sat, '')) || '|'
-             || btrim(coalesce(c.adresa_comuna, '')) || '|' || btrim(coalesce(c.adresa_judet, '')) || '|' || btrim(coalesce(c.cod_postal, '')), '\s+', ' ', 'g')))
-    ELSE NULL END
+  SELECT public.fn_red_cheie_calc(d.nume_normalizat, c.adresa_strada, c.adresa_sat, c.adresa_comuna, c.adresa_judet, c.cod_postal, c.adresa_cunoscuta)
   FROM public.red_detinatori d LEFT JOIN public.red_detinatori_contact c ON c.detinator_id = d.id
   WHERE d.id = p_detinator AND d.sters_la IS NULL;
 $fn$;
@@ -224,6 +230,7 @@ BEGIN
     END IF;
     -- Jakarinos r2 P1/P2: la expediere se reverifica, sub acelasi advisory lock, ca plicul e complet si identitatea postala neschimbata
     PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || NEW.uat_id::text || ':' || NEW.cheie_persoana, 0));
+    PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR SHARE;
     PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE;
     PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY k.detinator_id FOR SHARE;
     -- Jakarinos r3 P2: fiecare membru reverificat pe TOT criteriul de eligibilitate (parcela nestearsa, acelasi proiect si UAT), blocat FOR SHARE
@@ -321,30 +328,73 @@ REVOKE EXECUTE ON FUNCTION public.fn_red_lot_reguli() FROM PUBLIC, anon, authent
 -- din aplicatie: plicul se anuleaza intai (si se reface). Mentenanta postgres fara JWT ramane permisa (expedierea reverifica oricum).
 CREATE FUNCTION public.fn_red_plic_identitate_garda() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_det uuid[]; v_nr text;
+-- Jakarinos r3 P1 / r4 P1: protocol comun pentru identitate. Pentru fiecare detinator atins: cheia VECHE si cheia NOUA, advisory lock pe ambele
+-- (aceeasi forma ca plicuirea / expedierea, ordonat), apoi refuz daca: (a) detinatorul e intr-un plic activ neexpediat si identitatea / stergerea
+-- se schimba; (b) detinatorul are o convocare postala eligibila si intra (cheie noua sau reactivare) intr-o identitate care are deja plic neexpediat.
+DECLARE v_det uuid; v_uat uuid; v_veche text; v_noua text; v_nr text; v_k text; v_chei text[]; v_reactivat boolean := false;
+        v_nume text; v_c public.red_detinatori_contact;
 BEGIN
   IF session_user = 'postgres' AND coalesce(current_setting('request.jwt.claims', true), '') = '' THEN RETURN NEW; END IF;
+  IF TG_TABLE_NAME = 'red_parcele' THEN
+    IF NEW.sters_la IS NOT DISTINCT FROM OLD.sters_la THEN RETURN NEW; END IF;
+    v_reactivat := NEW.sters_la IS NULL;
+    FOR v_det IN SELECT d.id FROM public.red_detinatori d WHERE d.parcela_id = OLD.id AND d.sters_la IS NULL ORDER BY d.id LOOP
+      v_k := public.fn_red_cheie_persoana(v_det);
+      IF v_k IS NOT NULL THEN PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || OLD.uat_id::text || ':' || v_k, 0)); END IF;
+      SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
+       WHERE c.detinator_id = v_det AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
+      IF v_nr IS NULL AND v_reactivat AND v_k IS NOT NULL THEN
+        SELECT nr_plic INTO v_nr FROM public.red_plicuri WHERE uat_id = OLD.uat_id AND cheie_persoana = v_k AND stare = 'activ' AND data_expediere IS NULL LIMIT 1;
+      END IF;
+      IF v_nr IS NOT NULL THEN
+        RAISE EXCEPTION 'redari: parcela atinge plicul neexpediat %; anuleaza intai plicul', v_nr USING ERRCODE = '23514';
+      END IF;
+    END LOOP;
+    RETURN NEW;
+  END IF;
   IF TG_TABLE_NAME = 'red_detinatori' THEN
     IF (NEW.nume_normalizat, NEW.sters_la, NEW.parcela_id) IS NOT DISTINCT FROM (OLD.nume_normalizat, OLD.sters_la, OLD.parcela_id) THEN RETURN NEW; END IF;
-    v_det := ARRAY[OLD.id];
-  ELSIF TG_TABLE_NAME = 'red_detinatori_contact' THEN
-    IF (NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta)
+    v_det := OLD.id;
+    SELECT * INTO v_c FROM public.red_detinatori_contact WHERE detinator_id = v_det;
+    v_veche := CASE WHEN OLD.sters_la IS NULL THEN public.fn_red_cheie_calc(OLD.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
+    v_noua := CASE WHEN NEW.sters_la IS NULL THEN public.fn_red_cheie_calc(NEW.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
+    v_reactivat := OLD.sters_la IS NOT NULL AND NEW.sters_la IS NULL;
+  ELSE   -- red_detinatori_contact (INSERT / UPDATE)
+    IF TG_OP = 'UPDATE' AND (NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta)
        IS NOT DISTINCT FROM (OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) THEN RETURN NEW; END IF;
-    v_det := ARRAY[OLD.detinator_id];
-  ELSE   -- red_parcele
-    IF NEW.sters_la IS NOT DISTINCT FROM OLD.sters_la THEN RETURN NEW; END IF;
-    SELECT array_agg(d.id) INTO v_det FROM public.red_detinatori d WHERE d.parcela_id = OLD.id;
+    v_det := NEW.detinator_id;
+    SELECT d.nume_normalizat INTO v_nume FROM public.red_detinatori d WHERE d.id = v_det AND d.sters_la IS NULL;
+    v_veche := CASE WHEN TG_OP = 'UPDATE' THEN public.fn_red_cheie_calc(v_nume, OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) END;
+    v_noua := public.fn_red_cheie_calc(v_nume, NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta);
   END IF;
-  SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
-   WHERE c.detinator_id = ANY(v_det) AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
-  IF v_nr IS NOT NULL THEN
-    RAISE EXCEPTION 'redari: detinatorul e in plicul neexpediat %; anuleaza intai plicul (numele / adresa / stergerea schimba plicuirea)', v_nr USING ERRCODE = '23514';
+  SELECT p.uat_id INTO v_uat FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = v_det;
+  -- advisory lock pe cheile veche si noua, in ordine (fara deadlock intre doua schimbari incrucisate)
+  SELECT array_agg(DISTINCT k ORDER BY k) INTO v_chei FROM unnest(ARRAY[v_veche, v_noua]) k WHERE k IS NOT NULL;
+  IF v_uat IS NOT NULL AND v_chei IS NOT NULL THEN
+    FOREACH v_k IN ARRAY v_chei LOOP PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || v_uat::text || ':' || v_k, 0)); END LOOP;
+  END IF;
+  -- (a) membru al unui plic neexpediat: identitatea / stergerea nu se schimba
+  IF v_veche IS DISTINCT FROM v_noua OR (TG_TABLE_NAME = 'red_detinatori' AND NEW.parcela_id IS DISTINCT FROM OLD.parcela_id) THEN
+    SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
+     WHERE c.detinator_id = v_det AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
+    IF v_nr IS NOT NULL THEN
+      RAISE EXCEPTION 'redari: detinatorul e in plicul neexpediat %; anuleaza intai plicul (numele / adresa / stergerea schimba plicuirea)', v_nr USING ERRCODE = '23514';
+    END IF;
+  END IF;
+  -- (b) intrarea intr-o identitate care are deja plic neexpediat (cheie noua diferita sau reactivare), cu convocare postala eligibila
+  IF v_noua IS NOT NULL AND v_uat IS NOT NULL AND (v_noua IS DISTINCT FROM v_veche OR v_reactivat)
+     AND EXISTS (SELECT 1 FROM public.red_convocari c WHERE c.detinator_id = v_det AND c.canal = 'posta' AND c.stare = 'activ'
+                   AND c.sters_la IS NULL AND c.plic_id IS NULL AND c.data_expediere IS NULL) THEN
+    SELECT nr_plic INTO v_nr FROM public.red_plicuri WHERE uat_id = v_uat AND cheie_persoana = v_noua AND stare = 'activ' AND data_expediere IS NULL LIMIT 1;
+    IF v_nr IS NOT NULL THEN
+      RAISE EXCEPTION 'redari: noua identitate (nume + adresa) are deja plicul neexpediat %; anuleaza-l si refa-l cu toate convocarile', v_nr USING ERRCODE = '23514';
+    END IF;
   END IF;
   RETURN NEW;
 END $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_red_plic_identitate_garda() FROM PUBLIC, anon, authenticated;
 CREATE TRIGGER trg_red_plic_identitate BEFORE UPDATE ON public.red_detinatori FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_identitate_garda();
-CREATE TRIGGER trg_red_plic_identitate BEFORE UPDATE ON public.red_detinatori_contact FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_identitate_garda();
+CREATE TRIGGER trg_red_plic_identitate BEFORE INSERT OR UPDATE ON public.red_detinatori_contact FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_identitate_garda();
 CREATE TRIGGER trg_red_plic_identitate BEFORE UPDATE ON public.red_parcele FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_identitate_garda();
 
 CREATE TRIGGER trg_red_plic_reguli BEFORE INSERT OR UPDATE ON public.red_plicuri FOR EACH ROW EXECUTE FUNCTION public.fn_red_plic_reguli();
@@ -382,6 +432,8 @@ BEGIN
   -- (o schimbare de nume/adresa asteapta, apoi e refuzata de garda de identitate fiindca persoana are plic)
   PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY d.id FOR SHARE;
   PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.id = ANY(p_convocari)) ORDER BY k.detinator_id FOR SHARE;
+  -- Jakarinos r4 P2: si parcelele, inainte de validarea eligibilitatii (o stergere logica concurenta asteapta si apoi e refuzata de garda)
+  PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.id = ANY(p_convocari)) ORDER BY p.id FOR SHARE;
   SELECT count(*), min(p.uat_id::text)::uuid, count(DISTINCT p.uat_id), array_agg(DISTINCT coalesce(public.fn_red_cheie_persoana(c.detinator_id), '<fara>'))
     INTO v_gasite, v_uat, v_n, v_chei
     FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id

@@ -39,6 +39,7 @@ BEGIN
   DROP FUNCTION public.fn_red_plic_creeaza(uuid, uuid[]);
   DROP FUNCTION public.fn_red_lot_plicuire_creeaza(uuid, uuid[], date);
   DROP FUNCTION public.fn_red_cheie_persoana(uuid);
+  DROP FUNCTION public.fn_red_cheie_calc(text, text, text, text, text, text, boolean);
   DROP FUNCTION public.fn_red_plic_reguli();
   DROP FUNCTION public.fn_red_plic_propaga();
   DROP FUNCTION public.fn_red_lot_reguli();
