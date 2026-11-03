@@ -7,8 +7,10 @@ BEGIN
 END $h$;
 CREATE FUNCTION pg_temp.r29i_refuza(p_sql text,p_stare text) RETURNS boolean LANGUAGE plpgsql AS $h$
 BEGIN
-  EXECUTE p_sql; RETURN false;
-EXCEPTION WHEN OTHERS THEN RETURN SQLSTATE=p_stare;
+  EXECUTE p_sql; RAISE NOTICE 'r29i_refuza: a trecut fara eroare: %', left(p_sql,120); RETURN false;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLSTATE<>p_stare THEN RAISE NOTICE 'r29i_refuza: asteptat %, primit % (%)', p_stare, SQLSTATE, left(SQLERRM,160); END IF;
+  RETURN SQLSTATE=p_stare;
 END $h$;
 CREATE FUNCTION pg_temp.r29i_g(p text) RETURNS text LANGUAGE sql STABLE AS $h$ SELECT nullif(current_setting('r29i.'||p,true),''); $h$;
 GRANT EXECUTE ON FUNCTION pg_temp.r29i_ca(uuid,text),pg_temp.r29i_refuza(text,text),pg_temp.r29i_g(text) TO authenticated,anon,service_role;
