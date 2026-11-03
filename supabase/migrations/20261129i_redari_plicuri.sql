@@ -127,6 +127,18 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_red_cheie_persoana(uuid) FROM PUBLIC, anon, authenticated;
 
+-- Jakarinos r5 P2: gărzile (care țin deja rândul deținătorului) NU așteaptă lock-ul persoanei: îl încearcă; dacă o plicuire / expediere îl ține,
+-- tranzacția primește o eroare reîncercabilă (55P03) în loc de deadlock. Plicuirea și expedierea iau lock-ul persoanei ÎNAINTE de rânduri.
+CREATE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid, p_cheie text) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF p_uat IS NULL OR p_cheie IS NULL THEN RETURN; END IF;
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('red_plic:' || p_uat::text || ':' || p_cheie, 0)) THEN
+    RAISE EXCEPTION 'redari: o plicuire / expediere e in curs pentru aceasta persoana; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+  END IF;
+END $fn$;
+REVOKE EXECUTE ON FUNCTION public.fn_red_plic_incearca_lock(uuid, text) FROM PUBLIC, anon, authenticated;
+
 -- Jakarinos r2 P1: o convocare poștală care devine eligibilă (inserare / reactivare) pentru o persoană cu plic activ neexpediat e refuzată,
 -- sub același advisory lock ca plicuirea (serializare); plicul se anulează și se reface complet. Apelată din garda convocărilor (INVOKER),
 -- deci are EXECUTE pentru authenticated; nu întoarce date (doar refuză).
@@ -134,10 +146,13 @@ CREATE FUNCTION public.fn_red_plic_garda_persoana(p_detinator uuid) RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_cheie text; v_uat uuid; v_nr text;
 BEGIN
+  -- Jakarinos r5 P1: serializare pe DETINATOR inainte de citirea identitatii (si cand cheia e NULL): un INSERT de contact concurent
+  -- ia acelasi lock de rand in garda lui, deci una dintre operatii o vede pe cealalta comisa
+  PERFORM 1 FROM public.red_detinatori d WHERE d.id = p_detinator FOR UPDATE;
   v_cheie := public.fn_red_cheie_persoana(p_detinator);
   IF v_cheie IS NULL THEN RETURN; END IF;
   SELECT p.uat_id INTO v_uat FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = p_detinator;
-  PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || v_uat::text || ':' || v_cheie, 0));
+  PERFORM public.fn_red_plic_incearca_lock(v_uat, v_cheie);
   SELECT nr_plic INTO v_nr FROM public.red_plicuri WHERE uat_id = v_uat AND cheie_persoana = v_cheie AND stare = 'activ' AND data_expediere IS NULL LIMIT 1;
   IF v_nr IS NOT NULL THEN
     RAISE EXCEPTION 'redari: persoana are plicul neexpediat %; anuleaza-l si refa-l cu toate convocarile', v_nr USING ERRCODE = '23514';
@@ -338,9 +353,9 @@ BEGIN
   IF TG_TABLE_NAME = 'red_parcele' THEN
     IF NEW.sters_la IS NOT DISTINCT FROM OLD.sters_la THEN RETURN NEW; END IF;
     v_reactivat := NEW.sters_la IS NULL;
-    FOR v_det IN SELECT d.id FROM public.red_detinatori d WHERE d.parcela_id = OLD.id AND d.sters_la IS NULL ORDER BY d.id LOOP
+    FOR v_det IN SELECT d.id FROM public.red_detinatori d WHERE d.parcela_id = OLD.id AND d.sters_la IS NULL ORDER BY d.id FOR UPDATE LOOP
       v_k := public.fn_red_cheie_persoana(v_det);
-      IF v_k IS NOT NULL THEN PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || OLD.uat_id::text || ':' || v_k, 0)); END IF;
+      PERFORM public.fn_red_plic_incearca_lock(OLD.uat_id, v_k);
       SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
        WHERE c.detinator_id = v_det AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
       IF v_nr IS NULL AND v_reactivat AND v_k IS NOT NULL THEN
@@ -354,7 +369,7 @@ BEGIN
   END IF;
   IF TG_TABLE_NAME = 'red_detinatori' THEN
     IF (NEW.nume_normalizat, NEW.sters_la, NEW.parcela_id) IS NOT DISTINCT FROM (OLD.nume_normalizat, OLD.sters_la, OLD.parcela_id) THEN RETURN NEW; END IF;
-    v_det := OLD.id;
+    v_det := OLD.id;   -- randul e deja blocat de UPDATE-ul curent; contactul se citeste DUPA blocare (valori stabilizate)
     SELECT * INTO v_c FROM public.red_detinatori_contact WHERE detinator_id = v_det;
     v_veche := CASE WHEN OLD.sters_la IS NULL THEN public.fn_red_cheie_calc(OLD.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
     v_noua := CASE WHEN NEW.sters_la IS NULL THEN public.fn_red_cheie_calc(NEW.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
@@ -364,15 +379,16 @@ BEGIN
     IF TG_OP = 'UPDATE' AND (NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta)
        IS NOT DISTINCT FROM (OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) THEN RETURN NEW; END IF;
     v_det := NEW.detinator_id;
-    SELECT d.nume_normalizat INTO v_nume FROM public.red_detinatori d WHERE d.id = v_det AND d.sters_la IS NULL;
+    -- Jakarinos r5 P1: blocam detinatorul inainte de citirea numelui; o schimbare concurenta de nume / o convocare noua asteapta sau e asteptata
+    SELECT d.nume_normalizat INTO v_nume FROM public.red_detinatori d WHERE d.id = v_det AND d.sters_la IS NULL FOR UPDATE;
     v_veche := CASE WHEN TG_OP = 'UPDATE' THEN public.fn_red_cheie_calc(v_nume, OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) END;
     v_noua := public.fn_red_cheie_calc(v_nume, NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta);
   END IF;
   SELECT p.uat_id INTO v_uat FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = v_det;
-  -- advisory lock pe cheile veche si noua, in ordine (fara deadlock intre doua schimbari incrucisate)
+  -- lock-ul persoanei pe cheile veche si noua, in ordine, FARA asteptare (try-lock) — fara deadlock cu plicuirea / expedierea
   SELECT array_agg(DISTINCT k ORDER BY k) INTO v_chei FROM unnest(ARRAY[v_veche, v_noua]) k WHERE k IS NOT NULL;
   IF v_uat IS NOT NULL AND v_chei IS NOT NULL THEN
-    FOREACH v_k IN ARRAY v_chei LOOP PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || v_uat::text || ':' || v_k, 0)); END LOOP;
+    FOREACH v_k IN ARRAY v_chei LOOP PERFORM public.fn_red_plic_incearca_lock(v_uat, v_k); END LOOP;
   END IF;
   -- (a) membru al unui plic neexpediat: identitatea / stergerea nu se schimba
   IF v_veche IS DISTINCT FROM v_noua OR v_mutat THEN
