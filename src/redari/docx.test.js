@@ -350,6 +350,10 @@ describe('genereazaConvocator', () => {
       ['Detalii la https://dataprotection.ro.example.com/x.', EXTERNE],
       ['Detalii la xhttps://dataprotection.ro/x.', EXTERNE],
       ['Detalii la https://dataprotection.ro/a:b.', EXTERNE],
+      // #970 r9: URL lipit de un e-mail cu virgulă / punct și virgulă
+      ['Site: www.gazpet.ro,contact@example.com', PROPRII],
+      ['Site: www.exemplu.ro,contact@example.com', EXTERNE],
+      ['Site: www.gazpet.ro;a@b.ro', PROPRII],
     ]
     for (const [text_gdpr, eroare] of refuzate) {
       for (const permiteIncomplet of [false, true]) await expect(gen(text_gdpr, permiteIncomplet), `${text_gdpr} ${permiteIncomplet}`).rejects.toThrow(eroare)
@@ -357,6 +361,7 @@ describe('genereazaConvocator', () => {
     const permise = [
       'Întrebări la redari@gazpet.ro sau la ion.popescu@portal.gazpet.ro.',
       'Întrebări la redari@www.gazpet.ro sau la ion@www.dataprotection.ro.',
+      'Contact: contact@example.com',
       'Aveți dreptul să depuneți plângere la ANSPDCP (www.dataprotection.ro) sau la https://www.dataprotection.ro.',
       'Plângere la ANSPDCP: HTTPS://WWW.DATAPROTECTION.RO sau https://dataprotection.ro/index.jsp?page=plangeri.',
       'Plângere la http://www.dataprotection.ro, „https://dataprotection.ro”; detalii: www.dataprotection.ro/legislatie!',
@@ -381,6 +386,13 @@ describe('genereazaConvocator', () => {
     expect(adresaWebNepermisa('https://dataprotection.ro:443/x')).toEqual({ adresa: '://', categorie: 'neaprobata' })
     expect(adresaWebNepermisa('https://ion@dataprotection.ro/x')).toEqual({ adresa: '://', categorie: 'neaprobata' })
     expect(adresaWebNepermisa('www.gazpet.ro')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
+    // #970 r9 (Jakarinos P2): e-mailul strict nu mai înghite un URL lipit cu virgulă / punct și virgulă
+    expect(adresaWebNepermisa('Site: www.gazpet.ro,contact@example.com')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
+    expect(adresaWebNepermisa('www.exemplu.ro,contact@example.com')).toEqual({ adresa: 'www.', categorie: 'neaprobata' })
+    expect(adresaWebNepermisa('www.gazpet.ro;a@b.ro')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
+    expect(adresaWebNepermisa('Scrieți la www.x@exemplu.ro')).toEqual({ adresa: 'www.', categorie: 'neaprobata' })
+    expect(adresaWebNepermisa('contact@example.com')).toBeNull()
+    expect(adresaWebNepermisa('Scrieți la (contact@example.com), „redari@gazpet.ro”; ion@www.dataprotection.ro.')).toBeNull()
     // pe textul concatenat (doarProprii) contează doar adresele proprii
     expect(adresaWebNepermisa('https://exemplu.com', { doarProprii: true })).toBeNull()
     expect(adresaWebNepermisa('https://redari.gazpet.ro', { doarProprii: true })).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })

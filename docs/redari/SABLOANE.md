@@ -91,8 +91,10 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
     dublare).
 - **Regula LITERALĂ a adreselor web pe documentul completat (r8)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
   strict și la previzualizare; constantele unice `URL_EXTERNE_PERMISE`, `MARCAJE_PROPRII` din `docx.js`), în 3 pași:
-  1. se scot adresele de e-mail (partea locală și domeniul fără spații, `@`, `:` sau `/`): `redari@gazpet.ro`,
-     `redari@www.gazpet.ro`, `ion@www.dataprotection.ro` nu declanșează nimic;
+  1. se scot adresele de e-mail, cu regex STRICT (r9): partea locală `[A-Za-z0-9._%+-]+` (nu începe cu `www.`), domeniul
+     `[A-Za-z0-9.-]+.tld`, cu limite de cuvânt; virgula, `;`, ghilimelele, parantezele, `:` și `/` nu intră în e-mail.
+     `redari@gazpet.ro`, `redari@www.gazpet.ro`, `ion@www.dataprotection.ro` nu declanșează nimic, dar
+     `www.gazpet.ro,contact@example.com` lasă `www.gazpet.ro` de verificat (refuzat);
   2. se scot excepțiile permise, LITERAL și fără deosebire de majuscule: `https://www.dataprotection.ro`,
      `http://www.dataprotection.ro`, `https://dataprotection.ro`, `www.dataprotection.ro` (ANSPDCP), nelipite în stânga de alt
      text, urmate cel mult de `/` și o cale fără spații, `@` sau `:`, apoi de spațiu alb, final, paranteză / ghilimele sau

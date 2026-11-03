@@ -397,9 +397,11 @@ export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat, {
 // Calea informării e scrisă escapat, ca în domeniuPublic.js (ruta vine cu PR #939, iar pe main nicio sursă nu o conține literal).
 export const URL_EXTERNE_PERMISE = ['https://www.dataprotection.ro', 'http://www.dataprotection.ro', 'https://dataprotection.ro', 'www.dataprotection.ro']
 export const MARCAJE_PROPRII = [/gazpet\.ro/i, /vercel\.app/i, /pontaj-pro/i, /\/redari\/raspuns/i, /\/redari\/informare/i]
-// pasul 1: partea locală și domeniul fără spații, `@`, `:` sau `/` — altfel „https://ion@dataprotection.ro” ar fi luat drept
-// e-mail întreg și ar dispărea cu schemă cu tot
-const RX_EMAIL = /[^\s@:/]+@[^\s@:/]+\.[a-z]{2,}/gi
+// pasul 1 (#970 r9): e-mail STRICT — partea locală [A-Za-z0-9._%+-]+ (nu începe cu „www.”), domeniul [A-Za-z0-9.-]+.tld, cu
+// limite: nu e lipit în stânga de un caracter de e-mail și nu continuă în dreapta. Virgula, punctul și virgula, ghilimelele,
+// parantezele, „:” și „/” nu intră în e-mail, deci „www.gazpet.ro,contact@example.com” lasă „www.gazpet.ro” de verificat, iar
+// „https://ion@dataprotection.ro” lasă „https://” (refuzat)
+const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9-])/gi
 const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 // pasul 2: excepțiile, cea mai lungă întâi; nu lipite de alt text în stânga
 const RX_PERMISE = new RegExp(`(?<![\\w.+\\-/:@])(?:${[...URL_EXTERNE_PERMISE].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@:]*)?(?=$|[\\s\\u00a0)\\]"'”»]|[.,;!?](?:[\\s\\u00a0]|$))`, 'gi')
