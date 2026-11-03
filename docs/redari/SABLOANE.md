@@ -68,19 +68,36 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   pe A4, cu lățimile tabelelor scalate; (7) convocatorul are formatarea strânsă ca fața să încapă pe o pagină A4 (ambele §9);
   (8) **convocatorul doar cu QR** (decizia Răzvan 03.11 seara: „dacă trimitem link-ul, trimitem degeaba, nu o să-l deschidă
   nimeni”): convocatorul pleacă prin poștă, deci adresa web de răspuns nu se mai tipărește și `{{link}}` dispare din șablon.
-  Singura reformulare a textului juridic din model, declarată în `CONVOCATOR_DOAR_QR` (generator):
+  Singura reformulare a textului juridic din ȘABLON (modelul necompletat), declarată în `CONVOCATOR_DOAR_QR` (generator):
   „Prin formularul online de la adresa ______________________ (sau scanând codul QR alăturat), la telefon …” →
   „Prin formularul online, scanând cu telefonul codul QR de mai jos, la telefon {{contact_telefon}} …”. QR-ul duce în continuare
   la formularul de răspuns (`https://redari.gazpet.ro/redari/raspuns/<token>`); generatorul refuză un convocator care mai are
   `{{link}}` sau o adresă web în text, iar `src/redari/sabloaneA4.test.js` cere schimbarea exact o dată și, refăcută înapoi,
-  amprenta textului de dinainte (nimic altceva schimbat). Tot din (8), pe documentul completat: `{{text_gdpr}}` de pe față
-  nu primește linkul informării (`textGdprFataConvocator` din `docx.js`: marcajul „Informarea completă: <URL | [link]>” devine
-  „Informarea completă se află pe verso.”, adăugată la final când proiectul are `link_informare_gdpr` și textul n-o are;
-  `text_gdpr` din BD nu se schimbă), iar `genereazaConvocator` refuză documentul completat dacă textul lui conține o adresă
-  a NOASTRĂ (`ADRESE_PROPRII_INTERZISE`: `redari.gazpet.ro`, `*.vercel.app`, `pontaj-pro`, căile de răspuns și de informare);
-  trimiterile la autorități (ex. „ANSPDCP (www.dataprotection.ro)”) rămân permise (#970 r3). QR-ul e imagine, nu text. Unde modelul a rupt un câmp în mai
+  amprenta textului de dinainte (nimic altceva schimbat în șablon). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
+- **Documentul COMPLETAT (tot excepția (8), #970 r2–r6)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
+  (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`:
+  - `VERSO_INFORMARE_INCLUS = false` (main; versoul cu informarea completă vine cu PR #939): propoziția
+    „Informarea completă: <URL | [link …]>” se SCOATE întreagă și nu se adaugă nicio trimitere la verso, nici când proiectul are
+    `link_informare_gdpr`; o trimitere „Informarea completă se află pe verso.” deja scrisă în text se scoate și ea (ar fi falsă);
+  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): marcajul devine „Informarea completă se află
+    pe verso.”, adăugată la final dacă proiectul are `link_informare_gdpr` și textul n-o are deja (comparație fără diacritice,
+    litere mici, spații comprimate — fără dublare).
+- **Politica adreselor web pe documentul completat** (`genereazaConvocator`, strict și la previzualizare; constantele unice
+  `DOMENII_PROPRII`, `MARCAJE_PROPRII`, `URL_EXTERNE_PERMISE` din `docx.js`):
+  - interzise: `gazpet.ro` și orice subdomeniu (`www.`, `redari.`, `portal.` …), `*.vercel.app`, `pontaj-pro`, calea de răspuns
+    și cea de informare;
+  - permise: adresele de e-mail (ex. `redari@gazpet.ro` nu e adresă web) și URL-urile externe din lista albă (`dataprotection.ro`,
+    ANSPDCP); orice alt URL extern (cu `http(s)://` / `www.` sau pe terminațiile `.ro .com .eu .net .org .app .io .info .gov
+    .online .site`) e refuzat;
+  - mesajul de eroare are doar partea DOCX și domeniul găsit, fără text din document (PII);
+  - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
+    `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare: fluxul exterior cu casetele de text
+    (`w:txbxContent`, `mc:Fallback`, `w:pict`) scoase, fiecare casetă separat și textul complet (acesta doar pentru adresele
+    proprii); run-urile se lipesc, paragrafele se despart. Un DOCX cu `w:altChunk` e refuzat. **Limite declarate**: nu se
+    verifică glosarul (`word/glossary/*`), obiectele / diagramele încorporate, textul din imagini și câmpurile calculate de Word
+    la deschidere; șabloanele convocatorului nu au asemenea structuri.
 - Fiecare placeholder stă întreg într-un singur `<w:t>` → `docx.js` înlocuiește local, fără consolidare de run-uri (limita 1).
 - Antetul de firmă (adresă, CUI, telefon, „Lider al Asocierii …”) rămâne text fix; din antet s-au parametrizat doar
   `Contract Transgaz nr. {{contract_nr}}/{{contract_data}}` și `{{proiect_denumire}}` (convocator, PV A, PV B, PV C; adresa UAT nu
@@ -134,7 +151,7 @@ există în contract (strânse în §3). „Oblig.” = obligatoriu la generarea
 | `{{qr}}` | imagine `genereazaQr(linkRaspuns(red_detinatori.token_raspuns))`, mereu pe `https://redari.gazpet.ro` | da | paragraf nou, singur; linkul NU se tipărește (excepția (8)), `genereazaConvocator` îl întoarce doar în rezultat (`link`) |
 | `{{contact_telefon}}` ×2 | red_proiecte.contact_telefon | da | „la telefon …” + contact Gazpet (în model telefonul era gol) |
 | `{{contact_nume}}`, `{{contact_email}}` | red_proiecte.contact_nume, .contact_email | da | în model „Ramona Brehui” / „redari@gazpet.ro” = valorile de pus în red_proiecte |
-| `{{text_gdpr}}` | red_proiecte.text_gdpr | da | TOT paragraful de sub titlul „Date personale” (Final_v2). În Model_1 v6 aici e „TEXTUL SCURT” din `A3_Informare_GDPR_Lot1_v3_final` („Transgaz folosește datele … Pe verso găsiți informațiile complete …”); ERP-ul păstrează textul din BD până la aprobarea Transgaz (PR #939). Istoric v5: textul din Model_1 v5 = valoarea implicită; conține „Destinatari: Primăria ____” și „Informarea completă: ____” → **de decis**: textul din BD ține UAT-ul generic („Primăria comunei pe raza căreia se află parcela”) sau codul înlocuiește un marcaj `{uat}` în text; linkul informării complete intră în text |
+| `{{text_gdpr}}` | red_proiecte.text_gdpr | da | TOT paragraful de sub titlul „Date personale” (Final_v2). În Model_1 v6 aici e „TEXTUL SCURT” din `A3_Informare_GDPR_Lot1_v3_final` („Transgaz folosește datele … Pe verso găsiți informațiile complete …”); ERP-ul păstrează textul din BD până la aprobarea Transgaz (PR #939). **Regula actuală (03.11 seara, §1 excepția (8))**: pe față NU se tipărește niciun link; propoziția „Informarea completă: …” se scoate, iar trimiterea la verso apare doar cu `VERSO_INFORMARE_INCLUS` (PR #939). **Istoric** (înlocuit de regula actuală), v5: textul din Model_1 v5 = valoarea implicită; conține „Destinatari: Primăria ____” și „Informarea completă: ____” → **de decis**: textul din BD ține UAT-ul generic („Primăria comunei pe raza căreia se află parcela”) sau codul înlocuiește un marcaj `{uat}` în text; linkul informării complete intra în text (istoric, nu mai e valabil) |
 | `{{reprezentant_tgz}}` | calcul: red_proiecte.reprezentant_tgz_nume + _functie | nu | „Contact TRANSGAZ (DRFT / ofițer de legătură)” |
 | `{{reprezentant_tgz_telefon}}` | **FĂRĂ SURSĂ** → red_proiecte.reprezentant_tgz_telefon | nu | |
 | `{{semnatar_gazpet}}` | calcul: red_proiecte.reprezentant_gazpet_nume + _functie | nu | sub semnătura Antreprenor |
@@ -301,7 +318,7 @@ Text integral: `TEXT_CERERE_IMPUTERNICIRE.md`. Regenerare: `node scripts/redari_
 | `sate_zi1..3` | convocator, adresa_uat | `red_uat.sate_zi1, sate_zi2, sate_zi3 text` | — |
 | `reprezentant_tgz_telefon` | convocator, adresa_uat | `red_proiecte.reprezentant_tgz_telefon text` | — |
 | `reprezentant_uat_telefon` | (nominalizare v5, Model 4 pct. 3) | `red_uat.reprezentant_uat_telefon text` (20261127a) | — |
-| `text_gdpr` cu UAT + link | convocator | `{uat}` înlocuit de cod; `red_proiecte.link_informare_gdpr` (20261128a) | **D4 DECIS**: gol → propoziția „Informarea completă” se omite; HTTPS → link configurat |
+| `text_gdpr` cu UAT + link | convocator | `{uat}` înlocuit de cod; `red_proiecte.link_informare_gdpr` (20261128a) | **D4 DECIS** pentru `textGdprPentruUat` (gol → propoziția „Informarea completă” se omite; HTTPS → link configurat); **pe fața convocatorului poștal** linkul nu se tipărește (03.11 seara, §1 excepția (8), `textGdprFataConvocator`) |
 | `act_identitate`, `act_doveditor` | pv_a | DECIS 02.11: actul de identitate NU se stocheaza; `red_procese_verbale.identitate_verificata boolean`; actul doveditor = `red_detinatori.act_doveditor_cunoscut boolean` DA/NU/NULL, fara continutul actului | 20261129a |
 | lucrari, lucrari_altele | pv_a, pv_b | DECIS 02.11: `red_procese_verbale.lucrari jsonb`, obiect confirmat de operator; propunerea din articol_deviz se face ulterior in UI | 20261129a |
 | stare_teren | pv_a, pv_b | DECIS 02.11: `red_procese_verbale.stare_teren jsonb`, obiect cu 4 bife si alta text; structura interna definita ulterior in UI | 20261129a |
@@ -792,7 +809,7 @@ semnătură (două rânduri libere), mărimea QR-ului. Marginile sunt sub sugest
 rândului = 1,2207 × corpul × interlinia, rândurile tabelelor = cea mai înaltă celulă + bordura, QR-ul 85 pt în cadru (textul de
 lângă el pe lățimea utilă minus 3,5 cm). Calibrare: pe modelul Letter, estimarea pune trecerea la pagina 2 exact unde a pus-o
 Word. Previzualizarea e completată cu `completeazaDocx` (date fictive, QR real); textul GDPR de pe față = textul scurt din
-Model_1 + „Informarea completă: <link>” (cazul cel mai lung din `textGdprPentruUat`).
+Model_1 + „Informarea completă: <link>” (cazul cel mai lung din `textGdprPentruUat`; istoric: din 03.11 seara propoziția nu se mai tipărește pe față, deci textul real e mai scurt).
 
 | Date fictive | Conținut | Înălțime utilă A4 | Umplere | Rezervă | Cu lățimi +5% |
 |---|---|---|---|---|---|

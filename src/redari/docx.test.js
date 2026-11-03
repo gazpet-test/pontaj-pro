@@ -7,7 +7,7 @@ import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
   reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, linkRaspunsCu, adresaDetinator, textGdprPentruUat,
-  textGdprFataConvocator, TRIMITERE_VERSO_GDPR, adresaProprieInDocx,
+  textGdprFataConvocator, TRIMITERE_VERSO_GDPR, VERSO_INFORMARE_INCLUS, adresaProprieInDocx,
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
@@ -262,106 +262,144 @@ describe('genereazaConvocator', () => {
     }
   }, 10000)
 
-  // Jakarinos #970 r2 P2: cu informarea completă configurată, fața poștală tot nu tipărește URL (trimiterea e la verso, PR #939)
-  it('link_informare_gdpr setat: convocatorul nu conține URL, paragraful GDPR se termină cu trimiterea la verso, QR-ul e același', async () => {
+  // #970 r2 + r6 (Copilot P2-02): fața poștală nu tipărește linkul informării; pe main (VERSO_INFORMARE_INCLUS = false)
+  // nici nu trimite la un verso care nu se generează
+  it('VERSO_INFORMARE_INCLUS = false pe main: cu link_informare_gdpr setat, marcajul se scoate, fără trimitere la verso; QR-ul e același', async () => {
+    expect(VERSO_INFORMARE_INCLUS).toBe(false)
     const asteptat = 'https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk'
     const qrAsteptat = (await genereazaQr(asteptat)).split(',')[1]
     const baza = complet()
-    const texte = [baza.proiect.text_gdpr, 'Operatori: Gazpet și Primăria {uat}. Informarea completă: [link scurt].', 'Operatori: Gazpet. Informarea completă: https://example.invalid/gdpr.']
-    for (const text_gdpr of texte) {
-      const r = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr, link_informare_gdpr: 'https://example.invalid/informare' }, templateArrayBuffer: citesteSablon() })
-      expect(r.link).toBe(asteptat)
-      expect(r.campuri.text_gdpr, text_gdpr).toMatch(/Informarea completă se află pe verso\.$/)
-      expect(r.campuri.text_gdpr).not.toMatch(/https?:\/\/|www\.|\[link/)
-      const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
-      expect(textDin(xml)).not.toMatch(/https?:\/\/|www\.|redari\.gazpet\.ro/)
-      expect(await zip.file('word/media/qr.png').async('base64')).toBe(qrAsteptat)
-    }
-    // fără informare configurată și fără marcaj: textul rămâne cel din BD (doar UAT-ul înlocuit)
-    expect(textGdprFataConvocator('Operatori: Primăria {uat}.', 'Godeanu', null)).toBe('Operatori: Primăria Godeanu.')
-    // marcajul din mijlocul textului se înlocuiește pe loc, fără punct dublu
-    expect(textGdprFataConvocator('A. Informarea completă: https://x.invalid/a. B.', 'G', '')).toBe(`A. ${TRIMITERE_VERSO_GDPR} B.`)
-  }, 10000)
-
-  it('garda pe documentul completat: o adresă a NOASTRĂ în corpul text_gdpr e refuzată cu mesaj clar', async () => {
-    const baza = complet()
     const cazuri = [
-      ['Răspuns la https://redari.gazpet.ro/redari/raspuns/abc oricând.', 'redari.gazpet.ro'],
-      ['Detalii la https://pontaj-pro-sooty.vercel.app/redari/informare/x.', 'vercel.app'],
-      ['Vezi alt-proiect.vercel.app pentru detalii.', '.vercel.app'],
-      ['Formular: https://exemplu.invalid/redari/raspuns/tok.', '/redari/raspuns/'],
-      ['Informare: exemplu.invalid/redari/informare.', '/redari/informare'],
-      ['Sistem pontaj-pro intern.', 'pontaj-pro'],
+      [baza.proiect.text_gdpr, 'Operatori: Gazpet și Primăria Husnicioara.\nDestinatari: Primăria Husnicioara.'],
+      ['Operatori: Gazpet și Primăria {uat}. Informarea completă: [link scurt]. Drepturi: acces.', 'Operatori: Gazpet și Primăria Husnicioara. Drepturi: acces.'],
+      ['Operatori: Gazpet. Informarea completă: https://example.invalid/gdpr.', 'Operatori: Gazpet.'],
+      ['Operatori: Gazpet. Informarea completă se află pe verso.', 'Operatori: Gazpet.'],
     ]
-    for (const [text_gdpr, gasit] of cazuri) {
-      const p = genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })
-      await expect(p, text_gdpr).rejects.toThrow(/Convocatorul poștal nu poate tipări adrese web proprii/)
-      await expect(genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })).rejects.toThrow(gasit)
+    for (const [text_gdpr, fata] of cazuri) {
+      for (const permiteIncomplet of [false, true]) {
+        const r = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr, link_informare_gdpr: 'https://example.invalid/informare' }, templateArrayBuffer: citesteSablon(), permiteIncomplet })
+        expect(r.link).toBe(asteptat)
+        expect(r.campuri.text_gdpr, text_gdpr).toBe(fata)
+        const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
+        expect(textDin(xml)).not.toMatch(/https?:\/\/|www\.|redari\.gazpet\.ro|verso\./)
+        expect(await zip.file('word/media/qr.png').async('base64')).toBe(qrAsteptat)
+      }
     }
-    // și la previzualizare
-    const prev = genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr: 'x https://redari.gazpet.ro/y' }, templateArrayBuffer: citesteSablon(), permiteIncomplet: true })
-    await expect(prev).rejects.toThrow(/adrese web proprii/)
-  }, 10000)
+    // fără marcaj: textul rămâne cel din BD (doar UAT-ul înlocuit)
+    expect(textGdprFataConvocator('Operatori: Primăria {uat}.', 'Godeanu', 'https://x.invalid')).toBe('Operatori: Primăria Godeanu.')
+  }, 20000)
 
-  // #970 r3: trimiterile la autorități (ANSPDCP) din informarea GDPR rămân permise și neschimbate
-  it('text_gdpr cu „(www.dataprotection.ro)” trece, iar textul rămâne neschimbat (cu și fără link_informare_gdpr)', async () => {
+  it('versoInclus = true (#939): marcajul devine trimiterea la verso, adăugată la final doar cu informarea configurată, fără dublare', () => {
+    const v = { versoInclus: true }
+    expect(textGdprFataConvocator('A. Informarea completă: https://x.invalid/a. B.', 'G', '', v)).toBe(`A. ${TRIMITERE_VERSO_GDPR} B.`)
+    expect(textGdprFataConvocator('A. Informarea completă: [link].', 'G', null, v)).toBe(`A. ${TRIMITERE_VERSO_GDPR}`)
+    expect(textGdprFataConvocator('Operatori: {uat}.', 'G', 'https://x.invalid', v)).toBe(`Operatori: G.\n${TRIMITERE_VERSO_GDPR}`)
+    expect(textGdprFataConvocator('Operatori: {uat}.', 'G', null, v)).toBe('Operatori: G.')
+    // P3-01: trimiterea deja scrisă (și fără diacritice, cu alte spații / litere) nu se dublează
+    expect(textGdprFataConvocator(`A. ${TRIMITERE_VERSO_GDPR}`, 'G', 'https://x.invalid', v)).toBe(`A. ${TRIMITERE_VERSO_GDPR}`)
+    expect(textGdprFataConvocator('A. informarea  completa se afla pe verso.', 'G', 'https://x.invalid', v)).toBe('A. informarea  completa se afla pe verso.')
+    expect(textGdprFataConvocator(`A. ${TRIMITERE_VERSO_GDPR} Informarea completă: https://x.invalid.`, 'G', 'https://x.invalid', v)).toBe(`A. ${TRIMITERE_VERSO_GDPR}`)
+  })
+
+  // #970 r6 (Copilot P2-01): politica adreselor web, prin genereazaConvocator, strict și cu permiteIncomplet
+  it('politica adreselor: gazpet.ro și subdomeniile, vercel.app, căile noastre și URL-urile externe neaprobate refuzate; e-mailul și dataprotection.ro permise', async () => {
     const baza = complet()
-    const text_gdpr = 'Aveți dreptul să depuneți plângere la ANSPDCP (www.dataprotection.ro) sau la https://www.dataprotection.ro.'
-    const r = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() })
-    expect(r.campuri.text_gdpr).toBe(text_gdpr)
-    const { xml } = await xmlDin(r.blob, 'word/document.xml')
-    expect(textDin(xml)).toContain(text_gdpr)
-    const cuInfo = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr, link_informare_gdpr: 'https://example.invalid/i' }, templateArrayBuffer: citesteSablon() })
-    expect(cuInfo.campuri.text_gdpr).toBe(`${text_gdpr}\n${TRIMITERE_VERSO_GDPR}`)
+    const gen = (text_gdpr, permiteIncomplet) => genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon(), permiteIncomplet })
+    const refuzate = [
+      ['Detalii: gazpet.ro/gdpr oricând.', /adrese web proprii.*„gazpet\.ro”, în word\/document\.xml/],
+      ['Detalii: www.gazpet.ro/x.', /adrese web proprii.*„gazpet\.ro”/],
+      ['Documente pe portal.gazpet.ro.', /adrese web proprii.*„portal\.gazpet\.ro”/],
+      ['Răspuns la https://redari.gazpet.ro/redari/raspuns/abc.', /adrese web proprii.*„redari\.gazpet\.ro”/],
+      ['Detalii la https://pontaj-pro-sooty.vercel.app/x.', /adrese web proprii.*„pontaj-pro-sooty\.vercel\.app”/],
+      ['Vezi alt-proiect.vercel.app.', /adrese web proprii.*„alt-proiect\.vercel\.app”/],
+      ['Formular: https://exemplu.invalid/redari/raspuns/tok.', /adrese web proprii.*„exemplu\.invalid”/],
+      ['Informare: exemplu.invalid/redari/informare.', /adrese web proprii.*„\/redari\/informare”/],
+      ['Sistem pontaj-pro intern.', /adrese web proprii.*„pontaj-pro”/],
+      ['Detalii la https://exemplu.com.', /adrese web externe neaprobate.*„exemplu\.com”.*permise doar: dataprotection\.ro/],
+      ['Detalii la www.alt-site.ro.', /adrese web externe neaprobate.*„alt-site\.ro”/],
+    ]
+    for (const [text_gdpr, eroare] of refuzate) {
+      for (const permiteIncomplet of [false, true]) await expect(gen(text_gdpr, permiteIncomplet), `${text_gdpr} ${permiteIncomplet}`).rejects.toThrow(eroare)
+    }
+    const permise = [
+      'Întrebări la redari@gazpet.ro sau la ion.popescu@portal.gazpet.ro.',
+      'Aveți dreptul să depuneți plângere la ANSPDCP (www.dataprotection.ro) sau la https://www.dataprotection.ro.',
+      'Operatori: S.N.T.G.N. Transgaz S.A. și Gazpet Instal S.R.L., art. 6 alin. (1) lit. c din Regulamentul (UE) 2016/679.',
+    ]
+    for (const text_gdpr of permise) {
+      for (const permiteIncomplet of [false, true]) {
+        const r = await gen(text_gdpr, permiteIncomplet)
+        // fără marcaj „Informarea completă”, textul rămâne neschimbat
+        expect(r.campuri.text_gdpr).toBe(text_gdpr)
+        const { xml } = await xmlDin(r.blob, 'word/document.xml')
+        expect(textDin(xml)).toContain(text_gdpr)
+      }
+    }
+  }, 30000)
+
+  it('P3-03: mesajul de eroare nu conține text din document, doar partea și domeniul', async () => {
+    const baza = complet()
+    const text_gdpr = 'Date fictive POPESCU ION, CNP-fictiv 000, detalii la https://redari.gazpet.ro/redari/raspuns/tokenSecret.'
+    const e = await genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon() }).catch(x => x)
+    expect(e.message).toMatch(/„redari\.gazpet\.ro”, în word\/document\.xml/)
+    expect(e.message).not.toMatch(/POPESCU|CNP|tokenSecret|raspuns/)
   }, 10000)
 
-  // #970 r4 (Jakarinos P2): garda citește textul decodat și reunit pe paragraf, în toate părțile tipăribile
+  // #970 r4 / r5 / r6: garda citește textul decodat și reunit pe paragraf, în toate părțile tipăribile, și casetele de text
   const sablonCu = async (parti) => {
     const zip = await JSZip.loadAsync(citesteSablon())
     for (const [cale, f] of Object.entries(parti)) zip.file(cale, f(await zip.file(cale)?.async('string')))
     return zip.generateAsync({ type: 'arraybuffer' })
   }
   const NS_W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
-  // fiecare run luat separat nu conține nicio adresă proprie; reunite pe paragraf dau https://redari.gazpet.ro/redari/raspuns/abc
+  const inainteDeSect = p => x => x.replace(/<w:sectPr[\s>]/, m => p + m)
+  // fiecare run luat separat nu conține nicio adresă; reunite pe paragraf dau https://redari.gazpet.ro/redari/raspuns/abc
   const P_SPART = '<w:p><w:r><w:t>Răspuns: https://redari.</w:t></w:r><w:r><w:t>gazpet.ro/redari/</w:t></w:r><w:r><w:t>raspuns/abc</w:t></w:r></w:p>'
+  const caseta = text => `<w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>`
 
-  it('garda: adresă proprie spartă în 3 run-uri în corp → refuzată (și găsită de adresaProprieInDocx)', async () => {
-    const t = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => P_SPART + m) })
-    expect(await adresaProprieInDocx(t)).toMatchObject({ parte: 'word/document.xml', adresa: 'redari.gazpet.ro', paragraf: 'Răspuns: https://redari.gazpet.ro/redari/raspuns/abc' })
+  it('garda: adresă proprie spartă în 3 run-uri în corp → refuzată (și găsită de adresaProprieInDocx); entitățile XML se decodează', async () => {
+    const t = await sablonCu({ 'word/document.xml': inainteDeSect(P_SPART) })
+    expect(await adresaProprieInDocx(t)).toEqual({ parte: 'word/document.xml', adresa: 'redari.gazpet.ro', categorie: 'proprie' })
     await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t })).rejects.toThrow(/adrese web proprii.*redari\.gazpet\.ro.*word\/document\.xml/)
-    // entitățile XML se decodează înainte de verificare
-    const ent = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => '<w:p><w:r><w:t>pontaj&#45;pro</w:t></w:r></w:p>' + m) })
+    const ent = await sablonCu({ 'word/document.xml': inainteDeSect('<w:p><w:r><w:t>pontaj&#45;pro</w:t></w:r></w:p>') })
     expect((await adresaProprieInDocx(ent))?.adresa).toBe('pontaj-pro')
   }, 10000)
 
-  // #970 r5: paragraf exterior cu adresă proprie + casetă de text imbricată (RX_PARAGRAF nu izolează paragraful exterior)
-  const pCuCaseta = (textExterior) => '<w:p><w:r><w:t>' + textExterior + '</w:t></w:r><w:r><w:pict><v:shape><v:textbox><w:txbxContent>' +
-    '<w:p><w:r><w:t>Text caseta</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>'
-  it('garda: paragraf exterior cu adresă proprie și casetă de text imbricată → refuzat; www.dataprotection.ro în același loc trece', async () => {
-    const t = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => pCuCaseta('Răspuns: https://redari.gazpet.ro/x') + m) })
-    expect(await adresaProprieInDocx(t)).toEqual({ parte: 'word/document.xml', adresa: 'redari.gazpet.ro', paragraf: null })
-    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t })).rejects.toThrow(/adrese web proprii.*redari\.gazpet\.ro.*word\/document\.xml/)
-    const ok = await sablonCu({ 'word/document.xml': x => x.replace(/<w:sectPr[\s>]/, m => pCuCaseta('Plângere la ANSPDCP (www.dataprotection.ro)') + m) })
+  it('garda: casete de text — paragraf exterior cu adresă + casetă, adresă spartă ÎN JURUL casetei, adresă în casetă → refuzate; dataprotection.ro trece', async () => {
+    const refuzate = [
+      ['<w:p><w:r><w:t>Răspuns: https://redari.gazpet.ro/x</w:t></w:r>' + caseta('Text caseta') + '</w:p>', 'redari.gazpet.ro'],
+      // Jakarinos r5: https://redari.gaz + caseta + pet.ro/x (concatenarea completă dă „gazText casetapet.ro”)
+      ['<w:p><w:r><w:t>https://redari.gaz</w:t></w:r>' + caseta('Text caseta') + '<w:r><w:t>pet.ro/x</w:t></w:r></w:p>', 'redari.gazpet.ro'],
+      ['<w:p><w:r><w:t>Text exterior</w:t></w:r>' + caseta('Vezi portal.gazpet.ro') + '</w:p>', 'portal.gazpet.ro'],
+    ]
+    for (const [p, adresa] of refuzate) {
+      const t = await sablonCu({ 'word/document.xml': inainteDeSect(p) })
+      expect(await adresaProprieInDocx(t), p).toEqual({ parte: 'word/document.xml', adresa, categorie: 'proprie' })
+      await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t })).rejects.toThrow(/adrese web proprii.*word\/document\.xml/)
+    }
+    const ok = await sablonCu({ 'word/document.xml': inainteDeSect('<w:p><w:r><w:t>Plângere la ANSPDCP (www.data</w:t></w:r>' + caseta('Text caseta') + '<w:r><w:t>protection.ro)</w:t></w:r></w:p>') })
     expect(await adresaProprieInDocx(ok)).toBeNull()
-    const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: ok })
-    expect(r.blob.size).toBeGreaterThan(0)
+    expect((await genereazaConvocator({ ...complet(), templateArrayBuffer: ok })).blob.size).toBeGreaterThan(0)
   }, 10000)
 
-  it('garda: adresă proprie în antet (prin câmp, completeazaDocx) și în notele de subsol (genereazaConvocator) → găsită / refuzată', async () => {
+  it('garda: antet (prin câmp, completeazaDocx), subsol, note și comentarii → găsite / refuzate; altChunk → refuzat', async () => {
     // antet completat printr-un câmp, pe un șablon de test construit în memorie
     const zip = new JSZip()
     zip.file('word/document.xml', `<w:document ${NS_W}><w:body><w:p><w:r><w:t>Corp curat</w:t></w:r></w:p></w:body></w:document>`)
     zip.file('word/header1.xml', `<w:hdr ${NS_W}><w:p><w:r><w:t>{{adresa_web}}</w:t></w:r></w:p></w:hdr>`)
     const completat = await completeazaDocx(await zip.generateAsync({ type: 'arraybuffer' }), { adresa_web: 'https://pontaj-pro-sooty.vercel.app/x' }, { strict: true })
-    expect(await adresaProprieInDocx(completat)).toMatchObject({ parte: 'word/header1.xml', adresa: 'pontaj-pro' })
+    expect(await adresaProprieInDocx(completat)).toEqual({ parte: 'word/header1.xml', adresa: 'pontaj-pro-sooty.vercel.app', categorie: 'proprie' })
     const curat = await completeazaDocx(await zip.generateAsync({ type: 'arraybuffer' }), { adresa_web: 'www.dataprotection.ro' }, { strict: true })
     expect(await adresaProprieInDocx(curat)).toBeNull()
-    // subsol și note de subsol pe convocatorul real: genereazaConvocator refuză și numește partea
-    for (const parte of ['word/footer1.xml', 'word/footnotes.xml', 'word/endnotes.xml']) {
+    // subsol, note de subsol / final și comentarii pe convocatorul real: genereazaConvocator refuză și numește partea
+    for (const parte of ['word/footer1.xml', 'word/footnotes.xml', 'word/endnotes.xml', 'word/comments.xml']) {
       const t = await sablonCu({ [parte]: () => `<w:ftr ${NS_W}>${P_SPART}</w:ftr>` })
       await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t }), parte).rejects.toThrow(new RegExp(`adrese web proprii.*${parte.replace(/[./]/g, '\\$&')}`))
     }
-  }, 10000)
+    const alt = await sablonCu({ 'word/document.xml': inainteDeSect('<w:altChunk r:id="rIdX"/>') })
+    expect((await adresaProprieInDocx(alt))?.categorie).toBe('neverificat')
+    await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: alt })).rejects.toThrow(/nu poate fi verificat.*altChunk/)
+  }, 20000)
 
   it('construiește toate cele 35 de chei (SABLOANE.md §2.1), QR (linkul doar în rezultat), hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
     const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: citesteSablon() })
