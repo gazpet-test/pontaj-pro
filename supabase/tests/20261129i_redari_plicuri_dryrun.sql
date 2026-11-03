@@ -242,9 +242,14 @@ DO $t$ BEGIN
   IF NOT pg_temp.r29i_refuza(format($q$DELETE FROM public.red_loturi_plicuire WHERE id=%L$q$,pg_temp.r29i_g('lot')),'42501') THEN RAISE EXCEPTION 'TEST6 FAIL: service_role sterge lot'; END IF;
   RAISE NOTICE 'TEST6c OK';
 END $t$;
--- TEST7: celelalte canale raman cu evidenta directa; jurnalul a primit plicurile si lotul
+-- TEST7: celelalte canale raman cu evidenta directa (editorul scrie expedierea pe SMS); jurnalul a primit plicurile si lotul; lock-urile UAT nu sunt apelabile
+SELECT pg_temp.r29i_ca(NULL,'postgres');
+INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(pg_temp.r29i_g('dD')::uuid,'sms','C-T29I-S1','activ');
+SELECT pg_temp.r29i_ca(pg_temp.r29i_g('editor')::uuid,'authenticated');
+UPDATE public.red_convocari SET data_expediere='2026-11-03', nr_tracking='SMS-1' WHERE nr_document='C-T29I-S1';
 SELECT pg_temp.r29i_ca(NULL,'postgres');
 DO $t$ BEGIN
+  IF (SELECT data_expediere FROM public.red_convocari WHERE nr_document='C-T29I-S1') IS DISTINCT FROM '2026-11-03'::date THEN RAISE EXCEPTION 'TEST7 FAIL: canal sms fara evidenta directa'; END IF;
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_plicuri') < 3 OR (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_loturi_plicuire') < 2 THEN RAISE EXCEPTION 'TEST7 FAIL: jurnal'; END IF;
   IF has_function_privilege('authenticated','public.fn_red_plic_incearca_lock(uuid)','EXECUTE') OR has_function_privilege('authenticated','public.fn_red_plic_incearca_lock_detinator(uuid)','EXECUTE')
      OR has_function_privilege('authenticated','public.fn_red_plic_uat_detinator(uuid)','EXECUTE') THEN RAISE EXCEPTION 'TEST7 FAIL: lock UAT apelabil din aplicatie'; END IF;

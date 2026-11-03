@@ -128,7 +128,8 @@ $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_red_cheie_persoana(uuid) FROM PUBLIC, anon, authenticated;
 
 -- Jakarinos r6 (P1 + P2) — PROTOCOLUL DE CONCURENȚĂ, simplificat: UN SINGUR lock de serializare pe UAT ('red_plic_uat:<uat>').
---  * plicuirea (fn_red_plic_creeaza) și expedierea (fn_red_plic_reguli) îl iau ÎNTÂI, cu așteptare, înainte de orice blocare de rânduri;
+--  * plicuirea (fn_red_plic_creeaza, RPC: nicio blocare de rând înainte) îl ia ÎNTÂI, cu așteptare (lock_timeout 5s), înainte de rânduri;
+--  * expedierea (fn_red_plic_reguli, trigger: rândul plicului e deja blocat de UPDATE) îl ÎNCEARCĂ fără așteptare (Jakarinos r7 P2-01);
 --  * toate gărzile care pot schimba apartenența la plic (convocare poștală nouă / reactivată, nume, adresă, ștergere / mutare de deținător,
 --    ștergere / reactivare de parcelă) îl ÎNCEARCĂ fără așteptare, indiferent de starea rândului (și pentru deținători șterși), și abia apoi
 --    citesc identitatea; dacă e ținut, eroare reîncercabilă 55P03. Gărzile nu mai așteaptă niciun lock de rând -> fără cicluri de așteptare.
@@ -267,7 +268,9 @@ BEGIN
       RAISE EXCEPTION 'redari: PV-ul de plicuire nu e finalizat (PV semnat atasat, 2 semnatari) sau expedierea e inaintea plicuirii' USING ERRCODE = '23514';
     END IF;
     -- Jakarinos r2 P1/P2: la expediere se reverifica, sub acelasi advisory lock, ca plicul e complet si identitatea postala neschimbata
-    PERFORM pg_advisory_xact_lock(hashtextextended('red_plic_uat:' || NEW.uat_id::text, 0));   -- r6: lock-ul UAT-ului (vezi protocolul)
+    -- Jakarinos r7 P2-01: executorul a blocat deja randul plicului inaintea triggerului, deci aici lock-ul UAT se INCEARCA (nu se asteapta):
+    -- doua expedieri / o expediere si o plicuire in acelasi UAT nu pot forma ciclu; cea care pierde primeste 55P03 si reincearca
+    PERFORM public.fn_red_plic_incearca_lock(NEW.uat_id);
     PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR SHARE;
     PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY k.detinator_id FOR SHARE;
     PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE;
