@@ -50,30 +50,42 @@ COMMENT ON TABLE public.red_corespondenta IS 'Redări: corespondența de trimis 
 -- Regulile de stare. BEFORE INSERT OR UPDATE; SECURITY DEFINER doar pentru a citi profiles.is_owner (aceeași sursă ca fn_red_nivel).
 CREATE FUNCTION public.fn_red_corespondenta_reguli() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE v_owner boolean; v_era_aprobat boolean;
+DECLARE v_owner boolean; v_mentenanta boolean; v_era_aprobat boolean; v_continut boolean;
 BEGIN
-  -- owner = is_owner; sau mentenanta postgres (runner) fara JWT de aplicatie (aplicatia are mereu JWT)
-  v_owner := (auth.uid() IS NULL AND coalesce(auth.role(), '') NOT IN ('anon', 'authenticated'))
-             OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner);
+  -- Jakarinos r1 P1-02: mentenanta = sesiune SQL directa ca postgres (session_user nu se schimba in SECURITY DEFINER; PostgREST are session_user
+  -- „authenticator”) si FARA claims JWT. service_role / anon / authenticated prin API nu sunt mentenanta.
+  v_mentenanta := session_user = 'postgres' AND coalesce(nullif(current_setting('request.jwt.claims', true), ''), '') = '';
+  v_owner := EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner);
   IF TG_OP = 'UPDATE' THEN
     IF NEW.proiect_id IS DISTINCT FROM OLD.proiect_id OR NEW.cod IS DISTINCT FROM OLD.cod OR NEW.created_by IS DISTINCT FROM OLD.created_by
        OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
       RAISE EXCEPTION 'redari: proiectul, codul si autorul unei corespondente nu se schimba' USING ERRCODE = '23514';
     END IF;
     NEW.updated_at := now();
+    NEW.aprobat_de := OLD.aprobat_de; NEW.aprobat_la := OLD.aprobat_la;   -- le pune doar triggerul
+  ELSE
+    -- Jakarinos r1 P2-03: autorul il pune triggerul (din aplicatie nu se poate falsifica)
+    IF NOT v_mentenanta THEN NEW.created_by := auth.uid(); END IF;
+    NEW.aprobat_de := NULL; NEW.aprobat_la := NULL; NEW.created_at := now(); NEW.updated_at := now(); NEW.versiune := 1;
   END IF;
-  v_era_aprobat := TG_OP = 'UPDATE' AND OLD.aprobat_la IS NOT NULL;
-  -- aprobat_de / aprobat_la le pune doar triggerul; din UI nu se pot scrie
-  IF TG_OP = 'INSERT' THEN NEW.aprobat_de := NULL; NEW.aprobat_la := NULL; NEW.created_at := now(); NEW.updated_at := now(); NEW.versiune := 1;
-  ELSE NEW.aprobat_de := OLD.aprobat_de; NEW.aprobat_la := OLD.aprobat_la; END IF;
-  IF NEW.stare = 'aprobat' AND (TG_OP = 'INSERT' OR OLD.stare IS DISTINCT FROM 'aprobat') THEN
-    IF NOT v_owner THEN RAISE EXCEPTION 'redari: doar Razvan (owner) aproba o corespondenta' USING ERRCODE = '42501'; END IF;
+  -- Jakarinos r1 P1-01: aprobarea e pe CONTINUT. Daca se schimba destinatarul, ce se trimite, expeditorul sau documentele, aprobarea cade;
+  -- cu continut schimbat randul poate ramane doar in draft / la avocat / anulat (altfel ar pleca ceva neaprobat).
+  v_continut := TG_OP = 'UPDATE' AND (NEW.destinatar, NEW.subiect, NEW.expeditor, NEW.documente) IS DISTINCT FROM (OLD.destinatar, OLD.subiect, OLD.expeditor, OLD.documente);
+  IF v_continut AND OLD.aprobat_la IS NOT NULL THEN
+    IF NEW.stare NOT IN ('draft', 'la_avocat', 'anulat') THEN
+      RAISE EXCEPTION 'redari: continutul s-a schimbat dupa aprobare; treci randul in draft si cere din nou aprobarea' USING ERRCODE = '23514';
+    END IF;
+    NEW.aprobat_de := NULL; NEW.aprobat_la := NULL;
+  END IF;
+  v_era_aprobat := NEW.aprobat_la IS NOT NULL;
+  IF NEW.stare = 'aprobat' AND (TG_OP = 'INSERT' OR OLD.stare IS DISTINCT FROM 'aprobat' OR NEW.aprobat_la IS NULL) THEN
+    IF NOT (v_owner OR v_mentenanta) THEN RAISE EXCEPTION 'redari: doar Razvan (owner) aproba o corespondenta' USING ERRCODE = '42501'; END IF;
     NEW.aprobat_de := auth.uid(); NEW.aprobat_la := now(); v_era_aprobat := true;
   END IF;
   IF NEW.stare IN ('trimis', 'raspuns_primit') AND NOT v_era_aprobat THEN
     RAISE EXCEPTION 'redari: o corespondenta se marcheaza trimisa doar dupa aprobarea owner-ului' USING ERRCODE = '23514';
   END IF;
-  -- revenirea din aprobat/trimis la draft/la_avocat sterge aprobarea (textul s-a schimbat => alt „da”)
+  -- revenirea din aprobat/trimis la draft/la_avocat sterge aprobarea (alt „da” la urmatoarea trimitere)
   IF NEW.stare IN ('draft', 'la_avocat') THEN NEW.aprobat_de := NULL; NEW.aprobat_la := NULL; END IF;
   RETURN NEW;
 END $fn$;

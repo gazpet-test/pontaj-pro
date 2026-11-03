@@ -8,7 +8,10 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
   IF to_regclass('public.red_corespondenta') IS NULL THEN RAISE EXCEPTION '20261129h revenire: migrarea lipseste'; END IF;
   LOCK TABLE public.red_corespondenta IN ACCESS EXCLUSIVE MODE;
-  IF EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') OR (SELECT count(*) FROM public.red_corespondenta) <> 10 THEN
+  -- Jakarinos r1 P2-04: „nefolosit” = in jurnal exista DOAR cele 10 inserari ale migrarii (fara utilizator); orice update / delete / insert din aplicatie = folosit
+  IF EXISTS (SELECT 1 FROM public.red_corespondenta WHERE versiune > 1 OR stare <> 'draft') OR (SELECT count(*) FROM public.red_corespondenta) <> 10
+     OR EXISTS (SELECT 1 FROM public.red_jurnal WHERE tabela = 'red_corespondenta' AND (actiune <> 'insert' OR user_id IS NOT NULL))
+     OR (SELECT count(*) FROM public.red_jurnal WHERE tabela = 'red_corespondenta') <> 10 THEN
     RAISE EXCEPTION '20261129h revenire: evidenta a fost folosita — refuz (exporta intai randurile)';
   END IF;
 END $pre$;
