@@ -78,30 +78,36 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   celelalte se golesc (aceeași formatare).
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r7)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`:
-  - `VERSO_INFORMARE_INCLUS = false` (main; versoul cu informarea completă vine cu PR #939): propoziția
-    „Informarea completă: <URL | [link …]>” se SCOATE întreagă și nu se adaugă nicio trimitere la verso, nici când proiectul are
-    `link_informare_gdpr`. **Regula pe propoziție (r7)**: se scoate ORICE propoziție din `text_gdpr` care conține cuvântul
-    „verso” (după normalizare: fără diacritice, litere mici, spații albe — inclusiv `\n`, `\r`, NBSP — comprimate), ex.
-    „Informarea completă se află pe verso.”, „Pe verso găsiți informațiile complete …”, „Detalii pe verso.”. `text_gdpr` e
-    paragraful „Date personale”, deci orice mențiune a versoului de acolo se referă la informare. Propoziția se termină DOAR la
-    `.` `!` `?` URMAT de spațiu alb sau de finalul textului (r8): punctele din domenii („dataprotection.ro”) sau din abrevierile
-    lipite nu o încheie, iar un rând nou fără punct nu o încheie nici el;
-  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): marcajul devine „Informarea completă se află
-    pe verso.”, adăugată la final dacă proiectul are `link_informare_gdpr` și textul n-o are deja (comparație normalizată, fără
-    dublare).
-- **Regula LITERALĂ a adreselor web pe documentul completat (r8)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
-  strict și la previzualizare; constantele unice `URL_EXTERNE_PERMISE`, `MARCAJE_PROPRII` din `docx.js`), în 3 pași:
+  - `VERSO_INFORMARE_INCLUS = false` (main; versoul cu informarea completă vine cu PR #939): se scoate PROPOZIȚIA ÎNTREAGĂ care
+    conține marcajul „Informarea completă: <URL | www. | [link …]>” (r10; și cu rând nou după „:”, și cu text după link) și nu
+    se adaugă nicio trimitere la verso, nici când proiectul are `link_informare_gdpr`. **Regula pe propoziție (r7)**: se scoate
+    și ORICE propoziție din `text_gdpr` care conține cuvântul „verso” (după normalizare: fără diacritice, litere mici, spații
+    albe — inclusiv `\n`, `\r`, NBSP — comprimate), ex. „Informarea completă se află pe verso.”, „Pe verso găsiți informațiile
+    complete …”, „Detalii pe verso.”. `text_gdpr` e paragraful „Date personale”, deci orice mențiune a versoului de acolo se
+    referă la informare. Propoziția se termină DOAR la `.` `!` `?` URMAT de spațiu alb sau de finalul textului (r8): punctele
+    din domenii („dataprotection.ro”) sau din abrevierile lipite nu o încheie, iar un rând nou fără punct nu o încheie nici el;
+  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): prima propoziție cu marcaj devine
+    „Informarea completă se află pe verso.” (celelalte se scot); fără marcaj, trimiterea se adaugă la final dacă proiectul are
+    `link_informare_gdpr`. Dacă textul pomenește deja versoul, în orice formulare (r10), nu se mai adaugă nimic.
+- **Regula LITERALĂ a adreselor web pe documentul completat (r8–r10)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
+  strict și la previzualizare; constantele unice `URL_EXTERNE_PERMISE`, `DOMENII_PERMISE_FARA_PREFIX`, `MARCAJE_PROPRII` din
+  `docx.js`), în 5 pași:
   1. se scot adresele de e-mail, cu regex STRICT (r9): partea locală `[A-Za-z0-9._%+-]+` (nu începe cu `www.`), domeniul
      `[A-Za-z0-9.-]+.tld`, cu limite de cuvânt; virgula, `;`, ghilimelele, parantezele, `:` și `/` nu intră în e-mail.
      `redari@gazpet.ro`, `redari@www.gazpet.ro`, `ion@www.dataprotection.ro` nu declanșează nimic, dar
      `www.gazpet.ro,contact@example.com` lasă `www.gazpet.ro` de verificat (refuzat);
-  2. se scot excepțiile permise, LITERAL și fără deosebire de majuscule: `https://www.dataprotection.ro`,
+  2. (r10) se caută adresele PROPRII (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns, calea de informare) ÎNAINTE de
+     excepții, ca să nu se ascundă în calea unui URL permis (`https://dataprotection.ro/redari.gazpet.ro/x`) → refuz;
+  3. se scot excepțiile permise, LITERAL și fără deosebire de majuscule: `https://www.dataprotection.ro`,
      `http://www.dataprotection.ro`, `https://dataprotection.ro`, `www.dataprotection.ro` (ANSPDCP), nelipite în stânga de alt
      text, urmate cel mult de `/` și o cale fără spații, `@` sau `:`, apoi de spațiu alb, final, paranteză / ghilimele sau
      punctuație urmată de spațiu / final;
-  3. dacă în ce rămâne apare `://`, `www.` sau o adresă proprie (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns,
-     calea de informare), documentul e refuzat. Fără analiză de URL și fără listă de terminații: orice altă formă (alt domeniu,
-     IP, port, utilizator, altă schemă precum `ftp://`) e refuzată;
+  4. dacă în ce rămâne apare `://` sau `www.` → refuz (alt domeniu, IP, port, utilizator, altă schemă precum `ftp://`);
+  5. (r10) un domeniu fără schemă (`[a-z0-9-]{2,}(.[a-z0-9-]{2,})*.(ro|com|eu|net|org|info|io|app)`, cu limite de cuvânt,
+     ex. `exemplu.ro/pagina`, `portal.transgaz.ro/gdpr`), altul decât `dataprotection.ro` → refuz. Etichetele de cel puțin
+     2 caractere țin deoparte textul juridic („S.N.T.G.N.”, „S.R.L.”, „lit. c”, „art. 6”, „Nr. 123/2026”, „A.P.M.”), verificat în
+     teste împreună cu default-ul `text_gdpr` din migrare și textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD
+     (LOT1, TEST-RAZVAN) nu au fost citite aici; o alarmă falsă pe ele apare ca refuz clar la generare;
   - mesajul de eroare are doar partea DOCX și marcajul găsit (`gazpet.ro`, `://` …), fără text din document (PII);
   - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
     `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare se verifică TOATE textele: fluxul exterior cu
