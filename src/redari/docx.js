@@ -408,8 +408,10 @@ const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 // pasul 3: excepțiile, cea mai lungă întâi; nu lipite de alt text în stânga
 const RX_PERMISE = new RegExp(`(?<![\\w.+\\-/:@])(?:${[...URL_EXTERNE_PERMISE].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@:]*)?(?=$|[\\s\\u00a0)\\]"'”»]|[.,;!?](?:[\\s\\u00a0]|$))`, 'gi')
 const RX_WEB = /:\/\/|www\./i
-// pasul 5: grupul 1 = domeniul (fără cale)
-const RX_DOMENIU_FARA_PREFIX = /(?<![\w.@/-])([a-z0-9-]{2,}(?:\.[a-z0-9-]{2,})*\.(?:ro|com|eu|net|org|info|io|app))(?:\/\S*)?(?![\w-])/gi
+// pasul 5: grupul 1 = domeniul ÎNTREG (fără cale), comparat EXACT cu lista albă. #970 r11: etichete de cel puțin 1 caracter
+// („dataprotection.ro.a.com” e un singur domeniu, nu „dataprotection.ro” + rest), iar domeniul nu se poate opri înaintea
+// unui „.” + literă / cifră (altfel „dataprotection.ro.xyz” ar fi recunoscut ca „dataprotection.ro”)
+const RX_DOMENIU_FARA_PREFIX = /(?<![\w.@/-])([a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:ro|com|eu|net|org|info|io|app))(?:\/\S*)?(?![\w-]|\.[a-z0-9])/gi
 
 /**
  * Prima adresă web nepermisă dintr-un text: `{ adresa, categorie: 'proprie' | 'neaprobata' }` sau null. `adresa` = doar
@@ -429,6 +431,18 @@ export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
   for (const m of ramas.matchAll(RX_DOMENIU_FARA_PREFIX)) {
     const domeniu = m[1].toLowerCase()
     if (!DOMENII_PERMISE_FARA_PREFIX.includes(domeniu)) return { adresa: domeniu, categorie: 'neaprobata' }
+  }
+  // #970 r11: orice apariție a unui domeniu din lista albă trebuie să fie domeniul ÎNTREG — tokenul de domeniu din jurul ei
+  // (litere, cifre, „.”, „-”, fără punctul final de frază) se compară exact, ca „dataprotection.ro.xyz” să nu treacă
+  for (const permis of DOMENII_PERMISE_FARA_PREFIX) {
+    for (const m of ramas.matchAll(new RegExp(escRx(permis), 'gi'))) {
+      let s = m.index
+      while (s > 0 && /[a-z0-9.-]/i.test(ramas[s - 1])) s -= 1
+      let e = m.index + m[0].length
+      while (e < ramas.length && /[a-z0-9.-]/i.test(ramas[e])) e += 1
+      const token = ramas.slice(s, e).toLowerCase().replace(/\.+$/, '')
+      if (!DOMENII_PERMISE_FARA_PREFIX.includes(token)) return { adresa: token, categorie: 'neaprobata' }
+    }
   }
   return null
 }

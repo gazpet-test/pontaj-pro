@@ -413,6 +413,20 @@ describe('genereazaConvocator', () => {
     expect(adresaWebNepermisa('Detalii: anpc.gov.ro, sau site.info')).toEqual({ adresa: 'anpc.gov.ro', categorie: 'neaprobata' })
     expect(adresaWebNepermisa('Detalii la site.info')).toEqual({ adresa: 'site.info', categorie: 'neaprobata' })
     expect(adresaWebNepermisa('Plângere la ANSPDCP (dataprotection.ro).')).toBeNull()
+    // #970 r11 (Jakarinos P2): lista albă doar pentru domeniul ÎNTREG; etichete de o literă prinse
+    const refuzateR11 = [
+      ['Detalii la dataprotection.ro.a.com/gdpr.', 'dataprotection.ro.a.com'], ['Detalii la dataprotection.ro.xyz/gdpr.', 'dataprotection.ro.xyz'], ['Detalii la evil-dataprotection.ro.', 'evil-dataprotection.ro'],
+      ['Detalii la www.dataprotection.ro.evil.com', 'www.'], ['Detalii la https://dataprotection.ro.x.ro/', '://'],
+      ['Detalii la a.ro', 'a.ro'], ['Detalii la x.y.com', 'x.y.com'], ['Detalii la dataprotection.ro-evil.ro', 'dataprotection.ro-evil.ro'],
+    ]
+    for (const [t, adresa] of refuzateR11) {
+      const g = adresaWebNepermisa(t)
+      expect(g?.categorie, t).toBe('neaprobata')
+      if (adresa !== '://') expect(g.adresa, t).toBe(adresa)
+    }
+    for (const t of ['(dataprotection.ro)', 'Plângere la dataprotection.ro.', 'Plângere la dataprotection.ro', 'Vezi www.dataprotection.ro/legislatie', 'Vezi dataprotection.ro/legislatie, apoi acces.']) {
+      expect(adresaWebNepermisa(t), t).toBeNull()
+    }
     // fără alarme false pe textul juridic: abrevieri, articole, numere, „Primăria Comunei X.”, default-ul text_gdpr din BD
     // (migrarea 20261126a) și textul scurt din Model_1 v6
     const juridic = [

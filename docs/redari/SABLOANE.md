@@ -103,10 +103,13 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
      text, urmate cel mult de `/` și o cale fără spații, `@` sau `:`, apoi de spațiu alb, final, paranteză / ghilimele sau
      punctuație urmată de spațiu / final;
   4. dacă în ce rămâne apare `://` sau `www.` → refuz (alt domeniu, IP, port, utilizator, altă schemă precum `ftp://`);
-  5. (r10) un domeniu fără schemă (`[a-z0-9-]{2,}(.[a-z0-9-]{2,})*.(ro|com|eu|net|org|info|io|app)`, cu limite de cuvânt,
-     ex. `exemplu.ro/pagina`, `portal.transgaz.ro/gdpr`), altul decât `dataprotection.ro` → refuz. Etichetele de cel puțin
-     2 caractere țin deoparte textul juridic („S.N.T.G.N.”, „S.R.L.”, „lit. c”, „art. 6”, „Nr. 123/2026”, „A.P.M.”), verificat în
-     teste împreună cu default-ul `text_gdpr` din migrare și textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD
+  5. (r10–r11) un domeniu fără schemă (`[a-z0-9-]+(.[a-z0-9-]+)*.(ro|com|eu|net|org|info|io|app)`, cu limite de cuvânt, ÎNTREG —
+     nu se oprește înaintea unui „.” + literă / cifră; ex. `exemplu.ro/pagina`, `portal.transgaz.ro/gdpr`, `a.ro`), altul
+     decât `dataprotection.ro` → refuz. În plus, orice apariție a lui `dataprotection.ro` trebuie să fie domeniul întreg
+     (tokenul de litere / cifre / `.` / `-` din jur, fără punctul de final, comparat exact): `dataprotection.ro.a.com`,
+     `dataprotection.ro.xyz`, `evil-dataprotection.ro` → refuz. Textul juridic („S.N.T.G.N.”, „S.R.L.”, „lit. c”, „art. 6”,
+     „Nr. 123/2026”, „A.P.M.”) nu se termină în terminațiile de mai sus, deci nu dă alarme; verificat în teste împreună cu
+     default-ul `text_gdpr` din migrare și textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD
      (LOT1, TEST-RAZVAN) nu au fost citite aici; o alarmă falsă pe ele apare ca refuz clar la generare;
   - mesajul de eroare are doar partea DOCX și marcajul găsit (`gazpet.ro`, `://` …), fără text din document (PII);
   - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
