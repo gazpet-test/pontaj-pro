@@ -78,43 +78,45 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   celelalte se golesc (aceeași formatare).
 - **Documentul COMPLETAT (tot excepția (8), #970 r2–r7)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
   (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`:
-  - `VERSO_INFORMARE_INCLUS = false` (main; versoul cu informarea completă vine cu PR #939): se scoate PROPOZIȚIA ÎNTREAGĂ care
-    conține marcajul „Informarea completă: <URL | www. | [link …]>” (r10; și cu rând nou după „:”, și cu text după link) și nu
-    se adaugă nicio trimitere la verso, nici când proiectul are `link_informare_gdpr`. **Regula pe propoziție (r7)**: se scoate
-    și ORICE propoziție din `text_gdpr` care conține cuvântul „verso” (după normalizare: fără diacritice, litere mici, spații
-    albe — inclusiv `\n`, `\r`, NBSP — comprimate), ex. „Informarea completă se află pe verso.”, „Pe verso găsiți informațiile
-    complete …”, „Detalii pe verso.”. `text_gdpr` e paragraful „Date personale”, deci orice mențiune a versoului de acolo se
-    referă la informare. Propoziția se termină DOAR la `.` `!` `?` URMAT de spațiu alb sau de finalul textului (r8): punctele
-    din domenii („dataprotection.ro”) sau din abrevierile lipite nu o încheie, iar un rând nou fără punct nu o încheie nici el;
-  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): prima propoziție cu marcaj devine
+  - `VERSO_INFORMARE_INCLUS = false` (main; versoul cu informarea completă vine cu PR #939): se scoate UNITATEA întreagă care
+    conține marcajul „Informarea completă:”, ORICE ar urma (r15: orice adresă, inclusiv `dataprotection.ro`, `[link …]`, text
+    sau nimic; și cu adresa pe rândul următor), și nu se adaugă nicio trimitere la verso, nici când proiectul are
+    `link_informare_gdpr`. Se scoate și ORICE unitate care conține cuvântul „verso” (după normalizare: fără diacritice, litere
+    mici, spații albe — inclusiv `\n`, `\r`, NBSP — comprimate), ex. „Informarea completă se află pe verso.”, „Pe verso găsiți
+    informațiile complete …”. `text_gdpr` e paragraful „Date personale”, deci orice mențiune a versoului de acolo se referă la
+    informare. **Unitatea (r15)** se termină la `.` `!` `?` URMAT de spațiu alb sau de final (punctele din domenii și din
+    abrevierile lipite nu o încheie) SAU la un rând nou (`\n`, `\r\n`), ca un text scris pe rânduri, fără punct, să nu fie o
+    singură „propoziție”; un rând fără punct final urmat de un rând cu literă mică continuă aceeași unitate. **Postcondiție
+    (r15)**: dacă `text_gdpr` era nevid și filtrarea l-a golit, generarea e refuzată, cu mesaj clar;
+  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): prima unitate cu marcaj devine
     „Informarea completă se află pe verso.” (celelalte se scot); fără marcaj, trimiterea se adaugă la final dacă proiectul are
     `link_informare_gdpr`. Dacă textul pomenește deja versoul, în orice formulare (r10), nu se mai adaugă nimic.
-- **Adresele web pe documentul completat: clasificare pe TOKENURI (r12–r14)** (`adresaWebNepermisa`, apelată de
-  `genereazaConvocator`, strict și la previzualizare; constantele unice `GAZDE_PERMISE`, `MARCAJE_PROPRII` din `docx.js`):
+- **Adresele web pe documentul completat: regula LITERALĂ (r15)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
+  strict și la previzualizare; constantele unice `EXCEPTII_WEB`, `MARCAJE_PROPRII` din `docx.js`), fără interpretare de tokenuri:
   1. adresele PROPRII (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns, calea de informare) se caută ca subșir pe
-     text, după scoaterea e-mailurilor (regex strict r9: partea locală `[A-Za-z0-9._%+-]+`, care nu începe cu `www.`, domeniul
-     `[A-Za-z0-9.-]+.tld`, cu limite) și ÎNAINTEA oricărei excepții, ca să nu se ascundă în calea unui URL permis
-     (`https://dataprotection.ro/redari.gazpet.ro/x`) → refuz; `www.gazpet.ro,contact@example.com` lasă `www.gazpet.ro` → refuz;
-  2. textul se împarte la spații albe (inclusiv rândurile noi și taburile din paragraf, `<w:br/>` / `<w:tab/>`); fiecare token
-     pierde punctuația de la margini (`()[]{}«»„”“"'`, iar la dreapta și `.,;:!?`); un token care e în întregime un e-mail
-     valid (același regex, ancorat) e permis: `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`;
-  3. (r14) token cu `://`: URL-ul începe la schema (literele lipite) dinaintea primului `://`; ce e înainte (ex. `Info:`) e
-     etichetă. Autoritatea = de după `://` până la primul `/`, `?` sau `#`: cu `@` sau `:` (utilizator, parolă, port) → refuz;
-     altfel gazda trebuie să fie exact `dataprotection.ro` / `www.dataprotection.ro` și schema `http` / `https`. Calea,
-     query-ul și fragmentul NU se analizează (`https://dataprotection.ro/legislatie/art:exemplu.ro` e permis);
-  4. (r14) altfel, `www.` înaintea primului `/`, `?` sau `#`: URL-ul începe la `www.`, aceleași verificări ale autorității
-     (`Info:(www.dataprotection.ro)` permis, `Site:www.exemplu.ro` refuzat);
-  5. (r14) altfel: partea dinainte de primul `/`, `?` sau `#`; dacă are `:` neurmat de cifră, contează ce e după ultimul
-     (eticheta `Site:`). E gazdă web dacă (fără `user@` și `:port`) are un punct și ultima etichetă are 2–24 litere — atunci e
-     permisă doar exact din lista albă, fără `@` sau `:` (`Site:exemplu.ro`, `exemplu.ro?formular=1`, `exemplu.ro#informare`,
-     `dataprotection.ro:443/x` refuzate; `Plângere:dataprotection.ro.` permis). „Data:03.11.2026”, „Tel:0244”, „ora:13.00”,
-     „Nr.:12” nu sunt gazde web. Orice altă gazdă web e refuzată: `exemplu.ro.xyz`, `portal.com.uk`, `dataprotection.ro.a.com`,
-     `a.ro`, `x.y.com`;
-  - textul juridic nu dă alarme: „S.N.T.G.N.”, „S.R.L.”, „lit.c”, „art.6”, „H.G. nr. 1.234/2022”, „pct. 5.2”, „A.P.M.”,
-    „Nr. 123/2026”, „Data:03.11.2026” nu au ultima etichetă alfabetică de 2+ litere; verificat în teste împreună cu default-ul
-    `text_gdpr` din migrare și textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD (LOT1, TEST-RAZVAN) nu au fost
-    citite aici; o alarmă falsă pe ele apare ca refuz clar la generare (de ex. un punct fără spațiu după el: „Primăria.Comuna”);
-  - mesajul de eroare are doar partea DOCX și marcajul propriu sau gazda găsită (fără utilizator, cale sau text din document — PII);
+     textul cu e-mailurile scoase → refuz (înaintea oricărei excepții, ca să nu se ascundă în calea unui URL permis);
+  2. e-mailurile se înlocuiesc cu un spațiu (regex strict: partea locală `[A-Za-z0-9._%+-]+`, care nu începe cu `www.`, domeniul
+     `[A-Za-z0-9.-]+.tld`, cu limite; după domeniu nu poate urma `/`, `@`, `-`, alfanumeric sau „.alfanumeric”, deci
+     `user@www.dataprotection.ro/x` nu e e-mail). Etichetele lipite (`E-mail:redari@gazpet.ro`, `Contact:ion@exemplu.ro`) nu
+     dau alarme;
+  3. excepțiile literale, fără deosebire de majuscule — `https://www.dataprotection.ro`, `http://www.dataprotection.ro`,
+     `https://dataprotection.ro`, `http://dataprotection.ro`, `www.dataprotection.ro`, `dataprotection.ro` — urmate opțional de
+     o cale `/…` fără spații și fără `@`, se înlocuiesc cu un spațiu, doar cu margini stricte: la stânga început de text sau un
+     caracter care NU e literă, cifră, `.`, `-`, `@`, `:` sau `/`; la dreapta final, spațiu alb sau o înșiruire de
+     `.,;!?)]»”"'` urmată de spațiu alb / final;
+  4. pe ce rămâne, refuz dacă apare `://`, `www` sau un caracter alfanumeric / `-` urmat de `.` și cel puțin 2 litere (`x.ro`,
+     `x.com`, „Primăria.Comuna”). Refuzate, de ex.: `evil.www.dataprotection.ro/x`, `evilwww.dataprotection.ro`,
+     `user@www.dataprotection.ro/x`, `https://dataprotection.ro:parola@exemplu.ro`, `https://dataprotection.ro:443/x`,
+     `exemplu.ro:dataprotection.ro`, `exemplu.ro:detalii`, `exemplu.ro?x`, `Site:www.exemplu.ro`, `dataprotection.ro.a.com`,
+     `portal.com.uk`, și (margini stricte) `Plângere:dataprotection.ro.` lipit de „:”. Permise: `(www.dataprotection.ro)`,
+     `Plângere: www.dataprotection.ro.`, `https://dataprotection.ro/legislatie/art:exemplu.ro`, `HTTPS://WWW.DATAPROTECTION.RO`,
+     `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`;
+  - textul juridic nu dă alarme: abrevierile au o singură literă sau cifre după punct (S.R.L., S.N.T.G.N., A.P.M., H.G.,
+    lit.c, art.6, pct.5.2, Nr.:12, 03.11.2026, 13.00); verificat în teste împreună cu default-ul `text_gdpr` din migrare și
+    textul scurt din Model_1 v6. Textele `text_gdpr` reale din BD (LOT1, TEST-RAZVAN) nu au fost citite aici; o alarmă falsă
+    pe ele apare ca refuz clar la generare (de ex. un punct fără spațiu după el: „Primăria.Comuna”);
+  - mesajul de eroare are doar partea DOCX și marcajul găsit (adresa proprie, `://`, `www` sau fragmentul de domeniu), fără alt
+    text din document (PII);
   - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
     `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare se verifică TOATE textele: fluxul exterior cu
     casetele de text (`w:txbxContent`), `mc:Fallback` și `w:pict` scoase; fiecare casetă, fiecare `mc:Fallback` și fiecare

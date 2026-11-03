@@ -306,6 +306,17 @@ describe('genereazaConvocator', () => {
       ['Operatori: Gazpet. Informarea completă: [link scurt] poate fi consultată la primărie. Drepturi: acces.', 'Operatori: Gazpet. Drepturi: acces.'],
       ['Operatori: Gazpet. Informarea completă:\nhttps://x.invalid/a. Drepturi: acces.', 'Operatori: Gazpet. Drepturi: acces.'],
       ['Operatori: Gazpet.\nInformarea completă: www.x.invalid/gdpr, disponibilă oricând.\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
+      // #970 r15 (Copilot P2-02): textul pe rânduri, fără punct — se scoate doar rândul cu referința
+      ['Operatori: Transgaz și Gazpet\nScop: organizarea convocării\nPe verso găsiți informarea completă.', 'Operatori: Transgaz și Gazpet\nScop: organizarea convocării'],
+      ['Operatori: Transgaz\nInformarea completă: [link scurt]\nDrepturi: acces și opoziție.', 'Operatori: Transgaz\nDrepturi: acces și opoziție.'],
+      ['Operatori: Transgaz\r\nInformarea completă: [link scurt]\r\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
+      // #970 r15 (Copilot P2-03): „Informarea completă:” scoate unitatea oricare ar fi adresa (și de pe lista albă) sau nimic
+      ['Operatori: Transgaz. Informarea completă: dataprotection.ro. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
+      ['Operatori: Transgaz. Informarea completă: www.dataprotection.ro. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
+      ['Operatori: Transgaz. Informarea completă: https://www.dataprotection.ro/x. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
+      ['Operatori: Transgaz. Informarea completă: [link]. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
+      ['Operatori: Transgaz.\nInformarea completă:\nwww.dataprotection.ro\nDrepturi: acces.', 'Operatori: Transgaz.\nDrepturi: acces.'],
+      ['Operatori: Transgaz. Informarea completă: la sediu. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
     ]
     for (const [text, fata] of cazuri) expect(textGdprFataConvocator(text, 'G', 'https://x.invalid'), text).toBe(fata)
     // „versoul” / „Versoix” nu sunt cuvântul „verso”; textul fără verso rămâne identic (inclusiv rândurile)
@@ -346,8 +357,8 @@ describe('genereazaConvocator', () => {
       ['Formular: https://exemplu.invalid/redari/raspuns/tok.', /adrese web proprii.*„\/redari\/raspuns”/],
       ['Informare: exemplu.invalid/redari/informare.', /adrese web proprii.*„\/redari\/informare”/],
       ['Sistem pontaj-pro intern.', /adrese web proprii.*„pontaj-pro”/],
-      ['Detalii la https://exemplu.com.', /adrese web externe neaprobate.*„exemplu\.com”/],
-      ['Detalii la www.alt-site.ro.', /adrese web externe neaprobate.*„alt-site\.ro”/],
+      ['Detalii la https://exemplu.com.', /adrese web externe neaprobate.*„:\/\/”/],
+      ['Detalii la www.alt-site.ro.', /adrese web externe neaprobate.*„www”/],
       // #970 r8 (Jakarinos P2-01 + P2-02): schemă, port, utilizator, IP, userinfo, domeniu lipit după excepție
       ['Detalii la ftp://dataprotection.ro/x.', EXTERNE],
       ['Detalii la custom://dataprotection.ro/x.', EXTERNE],
@@ -355,7 +366,8 @@ describe('genereazaConvocator', () => {
       ['Detalii la https://www.dataprotection.ro:8443/x.', EXTERNE],
       ['Detalii la https://ion@dataprotection.ro/x.', EXTERNE],
       ['Detalii la https://192.168.1.10/x.', EXTERNE],
-      ['Detalii la https://gazpet.ro@example.com/x.', EXTERNE],
+      // r15: urmat de cale nu e e-mail, deci „gazpet.ro” e adresă proprie
+      ['Detalii la https://gazpet.ro@example.com/x.', PROPRII],
       ['Detalii la https://dataprotection.ro.example.com/x.', EXTERNE],
       ['Detalii la xhttps://dataprotection.ro/x.', EXTERNE],
       // #970 r12: tokenuri — URL-uri externe fără schemă, terminații oarecare
@@ -398,69 +410,48 @@ describe('genereazaConvocator', () => {
     }
   }, 30000)
 
-  it('adresaWebNepermisa (regula literală r8): pașii 1–3 pe text simplu', () => {
-    expect(adresaWebNepermisa('ion@www.dataprotection.ro')).toBeNull()
-    expect(adresaWebNepermisa('redari@www.gazpet.ro')).toBeNull()
-    expect(adresaWebNepermisa('HTTPS://WWW.DATAPROTECTION.RO')).toBeNull()
-    expect(adresaWebNepermisa('https://dataprotection.ro/index.jsp?page=plangeri')).toBeNull()
-    expect(adresaWebNepermisa('https://dataprotection.ro:443/x')).toEqual({ adresa: 'dataprotection.ro', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('https://ion@dataprotection.ro/x')).toEqual({ adresa: 'dataprotection.ro', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('www.gazpet.ro')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
-    // #970 r9 (Jakarinos P2): e-mailul strict nu mai înghite un URL lipit cu virgulă / punct și virgulă
-    expect(adresaWebNepermisa('Site: www.gazpet.ro,contact@example.com')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
-    expect(adresaWebNepermisa('www.exemplu.ro,contact@example.com')).toEqual({ adresa: 'example.com', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('www.gazpet.ro;a@b.ro')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
-    expect(adresaWebNepermisa('Scrieți la www.x@exemplu.ro')).toEqual({ adresa: 'exemplu.ro', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('contact@example.com')).toBeNull()
-    expect(adresaWebNepermisa('Scrieți la (contact@example.com), „redari@gazpet.ro”; ion@www.dataprotection.ro.')).toBeNull()
-    // #970 r10 (Copilot P2-01): adresa proprie ascunsă în calea unui URL permis
-    for (const t of ['https://dataprotection.ro/redari.gazpet.ro/x', 'Vezi https://dataprotection.ro/redirect?next=www.gazpet.ro pentru informare.', 'https://dataprotection.ro/redari/raspuns/abc', 'www.dataprotection.ro/x/pontaj-pro']) {
+  it('adresaWebNepermisa (regula literală r15): proprii, e-mailuri, excepții cu margini stricte, apoi „://” / „www” / domeniu', () => {
+    // adresele proprii: subșir pe textul fără e-mailuri, înaintea excepțiilor (și în calea unui URL permis)
+    for (const t of ['www.gazpet.ro', 'Site: www.gazpet.ro,contact@example.com', 'www.gazpet.ro;a@b.ro', 'https://dataprotection.ro/redari.gazpet.ro/x',
+      'Vezi https://dataprotection.ro/redirect?next=www.gazpet.ro pentru informare.', 'https://dataprotection.ro/redari/raspuns/abc', 'www.dataprotection.ro/x/pontaj-pro',
+      'Detalii la https://pontaj-pro-sooty.vercel.app/x']) {
       expect(adresaWebNepermisa(t)?.categorie, t).toBe('proprie')
     }
-    // #970 r10 (Copilot P2-02): domenii externe fără schemă / www.; dataprotection.ro fără schemă rămâne permis
-    expect(adresaWebNepermisa('Politica la portal.transgaz.ro/gdpr.')).toEqual({ adresa: 'portal.transgaz.ro', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('Vezi exemplu.ro/pagina')).toEqual({ adresa: 'exemplu.ro', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('Vezi EXEMPLU.COM.')).toEqual({ adresa: 'exemplu.com', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('Detalii: anpc.gov.ro, sau site.info')).toEqual({ adresa: 'anpc.gov.ro', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('Detalii la site.info')).toEqual({ adresa: 'site.info', categorie: 'neaprobata' })
-    expect(adresaWebNepermisa('Plângere la ANSPDCP (dataprotection.ro).')).toBeNull()
-    // #970 r11 (Jakarinos P2): lista albă doar pentru domeniul ÎNTREG; etichete de o literă prinse
-    const refuzateR11 = [
-      ['Detalii la dataprotection.ro.a.com/gdpr.', 'dataprotection.ro.a.com'], ['Detalii la dataprotection.ro.xyz/gdpr.', 'dataprotection.ro.xyz'], ['Detalii la evil-dataprotection.ro.', 'evil-dataprotection.ro'],
-      ['Detalii la www.dataprotection.ro.evil.com', 'dataprotection.ro.evil.com'], ['Detalii la https://dataprotection.ro.x.ro/', 'dataprotection.ro.x.ro'],
-      ['Detalii la exemplu.ro.xyz/gdpr', 'exemplu.ro.xyz'], ['Detalii la portal.com.uk/gdpr', 'portal.com.uk'],
-      ['Detalii la https://192.168.1.10/x', '192.168.1.10'], ['Detalii la ftp://dataprotection.ro/x', 'dataprotection.ro'],
-      ['Detalii la https://gazpet.ro@example.com/x', 'example.com'], ['Detalii la http://[::1]/x', '(URL neanalizabil)'],
-      // #970 r13 (Jakarinos P2-01 + P2-02): gazda se oprește la ? / #; `:` fără `//` desparte bucăți
-      ['Detalii la exemplu.ro?formular=1', 'exemplu.ro'], ['Detalii la exemplu.ro#informare', 'exemplu.ro'],
-      ['Site:www.exemplu.ro', 'exemplu.ro'], ['Site:exemplu.ro', 'exemplu.ro'], ['Info:https://exemplu.ro', 'exemplu.ro'],
-      ['Detalii la https://dataprotection.ro:443/x', 'dataprotection.ro'], ['Detalii la dataprotection.ro:443/x', 'dataprotection.ro'],
-      ['Info:www.dataprotection.ro.evil.com', 'dataprotection.ro.evil.com'],
-      // #970 r14 (Jakarinos P2): parolă / utilizator în autoritate; schemă lipită de etichetă
-      ['Detalii la https://dataprotection.ro:parola@exemplu.ro', 'exemplu.ro'], ['Detalii la https://dataprotection.ro:parola@dataprotection.ro/x', 'dataprotection.ro'],
-      ['Detalii la Info:xhttps://dataprotection.ro/x', 'dataprotection.ro'], ['Detalii la www.dataprotection.ro:8080', 'dataprotection.ro'],
-      ['Detalii la www.ion@dataprotection.ro/x', 'dataprotection.ro'],
-      ['Detalii la a.ro', 'a.ro'], ['Detalii la x.y.com', 'x.y.com'], ['Detalii la dataprotection.ro-evil.ro', 'dataprotection.ro-evil.ro'],
+    expect(adresaWebNepermisa('www.gazpet.ro')).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
+    // refuzate (r8–r15): orice altă adresă web, inclusiv lista albă cu margini nepermise
+    const refuzate = [
+      // r15 (Jakarinos): „www” lipit, utilizator, parolă, port, etichetă lipită de domeniu
+      'evil.www.dataprotection.ro/x', 'evilwww.dataprotection.ro', 'user@www.dataprotection.ro/x', 'https://dataprotection.ro:parola@exemplu.ro',
+      'https://dataprotection.ro:443/x', 'exemplu.ro:dataprotection.ro', 'exemplu.ro:detalii', 'exemplu.ro?x', 'Site:www.exemplu.ro',
+      'dataprotection.ro.a.com', 'portal.com.uk',
+      // rundele anterioare
+      'https://ion@dataprotection.ro/x', 'https://gazpet.ro@example.com/x', 'https://192.168.1.10/x', 'ftp://dataprotection.ro/x', 'custom://dataprotection.ro/x',
+      'http://[::1]/x', 'https://dataprotection.ro:parola@dataprotection.ro/x', 'Info:xhttps://dataprotection.ro/x', 'www.dataprotection.ro:8080', 'www.ion@dataprotection.ro/x',
+      'dataprotection.ro.xyz/gdpr.', 'evil-dataprotection.ro.', 'www.dataprotection.ro.evil.com', 'https://dataprotection.ro.x.ro/', 'exemplu.ro.xyz/gdpr',
+      'exemplu.ro?formular=1', 'exemplu.ro#informare', 'Site:exemplu.ro', 'Info:https://exemplu.ro', 'dataprotection.ro:443/x', 'Info:www.dataprotection.ro.evil.com',
+      'Politica la portal.transgaz.ro/gdpr.', 'Vezi exemplu.ro/pagina', 'Vezi EXEMPLU.COM.', 'Detalii: anpc.gov.ro', 'Detalii la site.info', 'a.ro', 'x.y.com',
+      'dataprotection.ro-evil.ro', 'www.exemplu.ro,contact@example.com', 'Scrieți la www.x@exemplu.ro', 'Primăria.Comuna',
+      // margini stricte (r15): lipite de „:” — nu e un caz real în textul GDPR, se scrie cu spațiu după „:”
+      'Plângere:dataprotection.ro.', 'Vezi Info:https://www.dataprotection.ro/a#b:c.ro',
     ]
-    for (const [t, adresa] of refuzateR11) {
-      const g = adresaWebNepermisa(t)
-      expect(g?.categorie, t).toBe('neaprobata')
-      if (adresa !== '://') expect(g.adresa, t).toBe(adresa)
-    }
-    for (const t of ['(dataprotection.ro)', 'Plângere la dataprotection.ro.', 'Plângere la dataprotection.ro', 'Vezi www.dataprotection.ro/legislatie', 'Vezi dataprotection.ro/legislatie, apoi acces.',
-      // #970 r12: calea nu se clasifică drept domeniu
-      'Vezi dataprotection.ro/legislatie/dataprotection.ro.pdf.', 'Vezi https://dataprotection.ro/a:b/x.y.com', 'HTTPS://WWW.DATAPROTECTION.RO', 'redari@www.gazpet.ro', 'ion@www.dataprotection.ro',
-      // fără alarmă pe textul juridic, inclusiv lipit („lit.c”, „art.6”) și rânduri cu „Data:03.11.2026”
-      'S.N.T.G.N. S.R.L. lit.c art.6 H.G. nr. 1.234/2022 pct. 5.2 A.P.M. Nr. 123/2026 Data:03.11.2026 ora 09:00 13.00–16.00 ș.a. [UAT].',
-      // #970 r13: „:” urmat de cifră nu desparte; permise după „:”
-      'Data:03.11.2026 Tel:0244 435 005 ora:13.00 Nr.:12', 'Info:(www.dataprotection.ro)', 'Plângere: www.dataprotection.ro', 'Plângere:dataprotection.ro.',
-      // #970 r14: calea / query-ul unui URL permis nu se analizează
-      'Vezi https://dataprotection.ro/legislatie/art:exemplu.ro', 'Vezi https://dataprotection.ro/?referinta=art:exemplu.ro', 'Vezi Info:https://www.dataprotection.ro/a#b:c.ro']) {
-      expect(adresaWebNepermisa(t), t).toBeNull()
-    }
-    // fără alarme false pe textul juridic: abrevieri, articole, numere, „Primăria Comunei X.”, default-ul text_gdpr din BD
-    // (migrarea 20261126a) și textul scurt din Model_1 v6
+    // refuzate: neaprobate sau proprii („https://gazpet.ro@example.com/x” — nu e e-mail, deci „gazpet.ro” e adresă proprie)
+    for (const t of refuzate) expect(adresaWebNepermisa(t), t).not.toBeNull()
+    // permise
+    const permise = [
+      '(www.dataprotection.ro)', 'Plângere: www.dataprotection.ro.', 'https://dataprotection.ro/legislatie/art:exemplu.ro', 'HTTPS://WWW.DATAPROTECTION.RO',
+      'redari@www.gazpet.ro', 'ion@www.dataprotection.ro', 'contact@example.com', 'https://dataprotection.ro/index.jsp?page=plangeri',
+      'Scrieți la (contact@example.com), „redari@gazpet.ro”; ion@www.dataprotection.ro.', 'Plângere la ANSPDCP (dataprotection.ro).', 'Plângere la dataprotection.ro',
+      'Vezi www.dataprotection.ro/legislatie', 'Vezi dataprotection.ro/legislatie, apoi acces.', 'Vezi dataprotection.ro/legislatie/dataprotection.ro.pdf.',
+      'Vezi https://dataprotection.ro/?referinta=art:exemplu.ro', 'Info:(www.dataprotection.ro)', 'Plângere la ANSPDCP (www.dataprotection.ro).',
+      // r15 (Copilot P3-01): etichete lipite de un e-mail valid
+      'E-mail:redari@gazpet.ro', 'Email:redari@gazpet.ro', 'Contact:ion@exemplu.ro', 'E-mail:contact@example.com',
+    ]
+    for (const t of permise) expect(adresaWebNepermisa(t), t).toBeNull()
+    // fără alarme false pe textul juridic: abrevieri, articole, numere, default-ul text_gdpr din BD (migrarea 20261126a) și
+    // textul scurt din Model_1 v6
     const juridic = [
+      'S.N.T.G.N. S.R.L. A.P.M. H.G. lit.c art.6 pct.5.2 Nr.:12 03.11.2026 13.00 13.00–16.00 ș.a. [UAT].',
+      'Data:03.11.2026 Tel:0244 435 005 ora:13.00 Nr.:12',
       'Operatori: S.N.T.G.N. TRANSGAZ S.A. și GAZPET INSTAL S.R.L., art. 6 alin. (1) lit. c din Regulamentul (UE) 2016/679.',
       'Nr. 123/2026 din 03.11.2026; Primăria Comunei X. A.P.M. Mehedinți; lit.c; art.6; H.G. nr. 1.234/2022; pct. 5.2.',
       'Operatori: S.N.T.G.N. TRANSGAZ S.A. (inițiatorul proiectului) și GAZPET INSTAL S.R.L. (împuternicit pentru organizarea convocării). Scop: constatarea readucerii terenului la starea inițială. Temei: Legea nr. 185/2016, art. 11 alin. (4), și interesul public al proiectului de importanță națională. Sursa datelor: baza de date a TRANSGAZ privind deținătorii de teren. Destinatari: Primăria [UAT], A.P.M. Mehedinți. Păstrare: pe durata contractului și a termenelor legale de arhivare. Drepturi: acces, rectificare, opoziție, plângere la ANSPDCP (www.dataprotection.ro).',
@@ -471,6 +462,17 @@ describe('genereazaConvocator', () => {
     expect(adresaWebNepermisa('https://exemplu.com', { doarProprii: true })).toBeNull()
     expect(adresaWebNepermisa('https://redari.gazpet.ro', { doarProprii: true })).toEqual({ adresa: 'gazpet.ro', categorie: 'proprie' })
   })
+
+  // #970 r15 (Copilot P2-02): postcondiție — un text_gdpr nevid care ar dispărea întreg prin filtrare oprește generarea
+  it('postcondiție: text_gdpr nevid golit de filtrare → generarea e refuzată (strict și la previzualizare)', async () => {
+    const baza = complet()
+    for (const text_gdpr of ['Pe verso găsiți informarea completă.', 'Informarea completă: [link scurt]', 'Informarea completă: dataprotection.ro.\nDetalii pe verso.']) {
+      for (const permiteIncomplet of [false, true]) {
+        await expect(genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon(), permiteIncomplet }), text_gdpr)
+          .rejects.toThrow(/textul GDPR de pe proiect \(text_gdpr\) rămâne gol/)
+      }
+    }
+  }, 10000)
 
   it('P3-03: mesajul de eroare nu conține text din document, doar partea și domeniul', async () => {
     const baza = complet()
@@ -506,7 +508,7 @@ describe('genereazaConvocator', () => {
     const alternativ = text => '<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wps:txbx><w:txbxContent><w:p><w:r><w:t>Text curat</w:t></w:r></w:p></w:txbxContent></wps:txbx></w:drawing></mc:Choice>' +
       `<mc:Fallback><w:pict><v:shape><w:r><w:t>${text}</w:t></w:r></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>`
     const doarPict = text => `<w:p><w:r><w:pict><v:shape><w:r><w:t>${text}</w:t></w:r></v:shape></w:pict></w:r></w:p>`
-    for (const [p, adresa, categorie] of [[alternativ('Vezi https://exemplu.com/x'), 'exemplu.com', 'neaprobata'], [alternativ('Vezi portal.gazpet.ro'), 'gazpet.ro', 'proprie'], [doarPict('Vezi https://exemplu.com/x'), 'exemplu.com', 'neaprobata']]) {
+    for (const [p, adresa, categorie] of [[alternativ('Vezi https://exemplu.com/x'), '://', 'neaprobata'], [alternativ('Vezi portal.gazpet.ro'), 'gazpet.ro', 'proprie'], [doarPict('Vezi https://exemplu.com/x'), '://', 'neaprobata']]) {
       const t = await sablonCu({ 'word/document.xml': inainteDeSect(p) })
       expect(await adresaProprieInDocx(t), p).toEqual({ parte: 'word/document.xml', adresa, categorie })
       await expect(genereazaConvocator({ ...complet(), templateArrayBuffer: t })).rejects.toThrow(/Convocatorul poștal nu poate tipări adrese web/)
