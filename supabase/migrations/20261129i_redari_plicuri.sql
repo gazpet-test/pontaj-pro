@@ -271,7 +271,7 @@ BEGIN
       RAISE EXCEPTION 'redari: PV-ul de plicuire nu e finalizat (PV semnat atasat, 2 semnatari) sau expedierea e inaintea plicuirii' USING ERRCODE = '23514';
     END IF;
     EXCEPTION WHEN lock_not_available THEN
-      RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+      RAISE EXCEPTION 'redari: un rand implicat (proiect / UAT / lot / plic / convocare / detinator / contact / parcela) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
     END;
     -- Jakarinos r2 P1/P2: la expediere se reverifica, sub acelasi advisory lock, ca plicul e complet si identitatea postala neschimbata
     -- Jakarinos r7 P2-01: executorul a blocat deja randul plicului inaintea triggerului, deci aici lock-ul UAT se INCEARCA (nu se asteapta):
@@ -282,7 +282,7 @@ BEGIN
     PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY k.detinator_id FOR SHARE NOWAIT;
     PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE NOWAIT;
     EXCEPTION WHEN lock_not_available THEN
-      RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+      RAISE EXCEPTION 'redari: un rand implicat (proiect / UAT / lot / plic / convocare / detinator / contact / parcela) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
     END;
     -- Jakarinos r3 P2: fiecare membru reverificat pe TOT criteriul de eligibilitate (parcela nestearsa, acelasi proiect si UAT), blocat FOR SHARE
     IF EXISTS (SELECT 1 FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
@@ -333,7 +333,7 @@ BEGIN
     BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
     PERFORM 1 FROM public.red_convocari WHERE plic_id = NEW.id ORDER BY id FOR UPDATE NOWAIT;
     EXCEPTION WHEN lock_not_available THEN
-      RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+      RAISE EXCEPTION 'redari: un rand implicat (proiect / UAT / lot / plic / convocare / detinator / contact / parcela) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
     END;
   END IF;
   IF NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL THEN
@@ -348,7 +348,7 @@ BEGIN
       BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
       PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR UPDATE NOWAIT;
       EXCEPTION WHEN lock_not_available THEN
-        RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+        RAISE EXCEPTION 'redari: un rand implicat (proiect / UAT / lot / plic / convocare / detinator / contact / parcela) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
       END;
       UPDATE public.red_detinatori d SET decedat = true
         WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) AND d.decedat IS NOT TRUE;
@@ -518,7 +518,7 @@ BEGIN
   -- Jakarinos r4 P2: si parcelele, inainte de validarea eligibilitatii (o stergere logica concurenta asteapta si apoi e refuzata de garda)
   PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.id = ANY(p_convocari)) ORDER BY p.id FOR SHARE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
-    RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+    RAISE EXCEPTION 'redari: un rand implicat (proiect / UAT / lot / plic / convocare / detinator / contact / parcela) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
   END;
   SELECT count(*), min(p.uat_id::text)::uuid, count(DISTINCT p.uat_id), array_agg(DISTINCT coalesce(public.fn_red_cheie_persoana(c.detinator_id), '<fara>'))
     INTO v_gasite, v_uat, v_n, v_chei
@@ -551,7 +551,7 @@ BEGIN
   BEGIN   -- Jakarinos r8 P2-01
     SELECT u.uat3 INTO v_uat3 FROM public.red_uat u WHERE u.id = v_uat AND u.proiect_id = p_proiect_id FOR SHARE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
-    RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+    RAISE EXCEPTION 'redari: un rand implicat (proiect / UAT / lot / plic / convocare / detinator / contact / parcela) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
   END;
   IF v_uat3 IS NULL THEN RAISE EXCEPTION 'redari: UAT inexistent in proiect' USING ERRCODE = '23503'; END IF;
   SELECT d.nume INTO v_nume FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.id = p_convocari[1];
@@ -579,7 +579,7 @@ BEGIN
   BEGIN   -- harness conc29i S6 (r10): nicio blocare de rand din plicuire / expediere / propagare nu asteapta (NOWAIT) -> fara cicluri cu UPDATE-uri multi-rand
   PERFORM 1 FROM public.red_plicuri WHERE id = ANY(p_plicuri) ORDER BY id FOR UPDATE NOWAIT;
   EXCEPTION WHEN lock_not_available THEN
-    RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+    RAISE EXCEPTION 'redari: un rand implicat (proiect / UAT / lot / plic / convocare / detinator / contact / parcela) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
   END;
   SELECT count(*) INTO v_gasite FROM public.red_plicuri
    WHERE id = ANY(p_plicuri) AND proiect_id = p_proiect_id AND stare = 'activ' AND lot_id IS NULL AND data_expediere IS NULL;
