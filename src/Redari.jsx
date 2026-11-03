@@ -21,7 +21,8 @@ import SetariProiect from './redari/ui/SetariProiect.jsx'
 import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
-import RedariSmsButon from './sms/RedariSmsButon.jsx'   // 📱 SMS proprietari (owner; blocat in BD pana la autorizarea Transgaz)
+// 📱 SMS proprietari (owner; blocat in BD pana la autorizarea Transgaz)
+import RedariSmsButon from './sms/RedariSmsButon.jsx'
 
 const PAGINA = 100
 // Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2). text_gdpr / text_declaratie / contact_email NU se trimit:

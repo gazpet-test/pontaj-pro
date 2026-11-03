@@ -17,7 +17,8 @@ const SOURCE_LINK_LABELS = { ofertare: 'licitația', hr: 'autorizația', flota: 
 const sourceById = Object.fromEntries(SURSE_ADMIN.map(s => [s.id, s]))
 const AdministratorAutomatizari = lazy(() => import('./AdministratorAutomatizari.jsx'))
 const AdministratorCostAI = lazy(() => import('./AdministratorCostAI.jsx'))
-const SmsPagina = lazy(() => import('./sms/SmsPagina.jsx'))   // 📱 SMS (03.11.2026): owner-only, docs/sms/
+// 📱 SMS (03.11.2026): owner-only, docs/sms/
+const SmsPagina = lazy(() => import('./sms/SmsPagina.jsx'))
 const fmtDate = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('ro-RO') : 'Necunoscut'
 const fmtTime = value => value ? new Date(value).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Bucharest' }) : '—'
 const money = row => Number.isFinite(row.amount) ? `${row.amount.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${row.currency || 'monedă neprecizată'}` : 'Valoare necunoscută'

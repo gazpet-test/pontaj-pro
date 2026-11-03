@@ -2,6 +2,8 @@
 // BD-ul refuză oricum crearea / aprobarea / trimiterea unui lot `redari` cât timp sms_setari.redari_autorizat = false.
 // Lotul se construiește din convocările ACTIVE ale proiectului (sau ale UAT-ului din filtru), către telefoanele din contactul deținătorului.
 // Aici doar se previzualizează și se creează lotul (draft); aprobarea și trimiterea sunt în Administrator → 📱 SMS.
+// r2 (Jakarinos r1 P1): după creare se afișează lista FIXATĂ în lot (fn_sms_lot_destinatari: nume + telefon mascat) — aceeași listă și
+// aceeași versiune pe care owner-ul le aprobă apoi din Istoric.
 import { useEffect, useState } from 'react'
 import { G, S, Modal } from '../redari/ui/comune.jsx'
 import { smsApi, mesajEroare } from './smsApi.js'
@@ -13,6 +15,7 @@ export function RedariSmsFereastra({ proiect, uats, uatInitial, onClose, show })
   const [preview, setPreview] = useState(null)
   const [lucru, setLucru] = useState(false)
   const [eroare, setEroare] = useState('')
+  const [creat, setCreat] = useState(null)
   const c = contorText(text)
   useEffect(() => { setPreview(null) }, [text, uatId])
   const previzualizeaza = async () => {
@@ -26,11 +29,22 @@ export function RedariSmsFereastra({ proiect, uats, uatInitial, onClose, show })
     setLucru(true); setEroare('')
     try {
       const j = await smsApi.creeazaRedari({ text, proiectId: proiect.id, uatId, preview: false })
-      show?.(`Lot Redări creat (draft, ${j.nr_destinatari} destinatari). Aprobarea: Administrator → 📱 SMS.`, 'success')
-      onClose()
+      show?.(`Lot Redări creat (draft, ${j.nr_destinatari} destinatari). Aprobarea: Administrator → 📱 SMS → Istoric.`, 'success')
+      setCreat(await smsApi.destinatariLot(j.lot_id))
     } catch (e) { setEroare(mesajEroare(e)) }
     finally { setLucru(false) }
   }
+  if (creat) return <Modal titlu={`📱 Lot Redări creat (draft) — ${proiect.cod}`} onClose={onClose} latime={620}>
+    <p style={{ fontSize: 12.5, color: G.muted, marginTop: 0 }}>Lista e FIXATĂ în lot (versiunea {creat.versiune}). Aprobarea și trimiterea: Administrator → 📱 SMS → Istoric, pe aceeași listă.</p>
+    <div style={{ fontSize: 13 }}><b>Textul trimis:</b> {creat.text}</div>
+    <div style={{ fontSize: 13, marginTop: 4 }}><b>{(creat.destinatari || []).length}</b> proprietari · {creat.segmente} SMS fiecare · cost estimat <b>{fmtEur(creat.cost_estimat_eur)}</b></div>
+    <div style={{ ...S.card, marginTop: 10, maxHeight: 260, overflow: 'auto', padding: 0 }}>
+      {(creat.destinatari || []).map(d => <div key={d.mesaj_id} style={{ display: 'flex', gap: 10, padding: '5px 10px', borderBottom: `1px solid ${G.border}`, fontSize: 13 }}>
+        <span style={{ flex: 1 }}>{d.nume}</span><span style={{ color: G.muted }}>{d.telefon_mascat}</span>
+      </div>)}
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}><button onClick={onClose} style={S.btnS}>Închide</button></div>
+  </Modal>
   return <Modal titlu={`📱 SMS proprietari — ${proiect.cod}`} onClose={onClose} latime={620}>
     <p style={{ fontSize: 12.5, color: G.muted, marginTop: 0 }}>Informare, nu convocare: SMS-ul NU înlocuiește convocarea scrisă cu confirmare de primire. Pleacă doar între 08:00 și 20:00, după aprobarea ta.</p>
     <label style={{ fontSize: 13, fontWeight: 600 }}>UAT</label>

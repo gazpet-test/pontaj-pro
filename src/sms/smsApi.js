@@ -15,6 +15,8 @@ export const smsApi = {
     date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview })),
   creeazaRedari: async ({ text, proiectId, uatId, preview }) =>
     date(await supabase.rpc('fn_sms_lot_redari_creeaza', { p_text: text, p_proiect_id: proiectId, p_uat_id: uatId || null, p_doar_preview: preview })),
+  // lista FIXATĂ în lot (nume + telefon mascat + text + segmente + cost + versiune), afișată înainte de aprobare
+  destinatariLot: async lotId => date(await supabase.rpc('fn_sms_lot_destinatari', { p_lot_id: lotId })),
   aproba: async (lotId, versiune) => date(await supabase.rpc('fn_sms_lot_aproba', { p_lot_id: lotId, p_versiune: versiune })),
   anuleaza: async (lotId, motiv) => date(await supabase.rpc('fn_sms_lot_anuleaza', { p_lot_id: lotId, p_motiv: motiv || null })),
   salveazaSetari: async ({ killSwitch, plafonZi, plafonLuna, versiune }) =>

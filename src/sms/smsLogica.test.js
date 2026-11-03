@@ -2,8 +2,27 @@
 import { describe, expect, it } from 'vitest'
 import {
   contorText, argumenteIntern, departamente, filtreazaAngajati, zileLaPlafon, poateAproba, poateTrimite, poateAnula,
-  motivBlocareRedari, valideazaAutorizare, valideazaPlafoane, motivTrimitere, costEstimat, fmtEur,
+  motivBlocareRedari, valideazaAutorizare, valideazaPlafoane, motivTrimitere, costEstimat, fmtEur, rezumatMesaje, mesajAnulare, STARI_LOT,
 } from './smsLogica.js'
+
+describe('lotul nu are stare „trimis” (Copilot r1 P2-01)', () => {
+  it('coada golită + rezultatul pe mesaje', () => {
+    expect(STARI_LOT.trimis).toBeUndefined()
+    expect(STARI_LOT.coada_golita[0]).toMatch(/Coada golită/)
+    expect(rezumatMesaje({ n_livrat: 5, n_esuat: 1, n_necunoscut: 2, n_anulat: 1, n_trimis: 0, n_in_coada: 0 }))
+      .toBe('livrat 5 · eșuat 1 · necunoscut 2 · anulat 1')
+    expect(rezumatMesaje({ n_livrat: 0, n_trimis: 3, n_in_coada: 4 })).toBe('livrat 0 · eșuat 0 · necunoscut 0 · anulat 0 · predat, fără raport încă 3 · în coadă 4')
+    expect(motivTrimitere('lot_coada_golita')).toMatch(/goală/)
+    expect(motivTrimitere('gata')).toMatch(/pe mesaje/)
+  })
+  it('anularea separă ce nu mai pleacă de ce era deja predat (Copilot r1 P3-02)', () => {
+    expect(mesajAnulare({ mesaje_anulate: 4, deja_predate: 0 })).toBe('Lot anulat: 4 mesaje scoase din coadă (nu mai pleacă).')
+    const m = mesajAnulare({ mesaje_anulate: 2, deja_predate: 3, deja_rezervate_necunoscut: 1, deja_trimise: 1, deja_livrate: 1, deja_esuate: 0 })
+    expect(m).toContain('2 mesaje scoase din coadă')
+    expect(m).toContain('3 erau deja predate furnizorului și NU se pot opri')
+    expect(m).toContain('necunoscut 1 · trimis 1 · livrat 1 · eșuat 0')
+  })
+})
 
 describe('contorText', () => {
   it('eticheta și textul trimis (transliterat)', () => {

@@ -8,7 +8,7 @@ export const STARI_LOT = {
   draft: ['Draft — așteaptă aprobarea', '#946B20'],
   aprobat: ['Aprobat — gata de trimis', '#24778B'],
   in_trimitere: ['În trimitere', '#24778B'],
-  trimis: ['Trimis', '#38765A'],
+  coada_golita: ['Coada golită — rezultatul e pe mesaje', '#38765A'],
   anulat: ['Anulat', '#617282'],
 }
 export const STARI_MESAJ = {
@@ -16,7 +16,7 @@ export const STARI_MESAJ = {
 }
 // Motivul cu care se oprește o trimitere (fn_sms_rezerva / sms-trimite) → text pentru Razvan
 export const MOTIVE_TRIMITERE = {
-  gata: 'Toate mesajele lotului au fost predate furnizorului.',
+  gata: 'Coada lotului s-a golit: toate mesajele au fost predate furnizorului. Rezultatul real e pe mesaje (livrat / eșuat / necunoscut).',
   ok: 'Runda s-a încheiat; mai sunt mesaje — apasă din nou „Trimite”.',
   kill_switch: 'Trimiterea e OPRITĂ (kill-switch). Pornește-o din Setări.',
   plafon_zi: 'S-a atins plafonul zilnic. Restul pleacă după ce îl mărești sau mâine.',
@@ -27,12 +27,29 @@ export const MOTIVE_TRIMITERE = {
   timp: 'Runda a atins limita de timp; apasă din nou „Trimite” pentru rest.',
   max_runde: 'Runda maximă (300 de mesaje) s-a încheiat; apasă din nou „Trimite” pentru rest.',
   fara_lot: 'Niciun lot aprobat de trimis.',
-  lot_trimis: 'Lotul e deja trimis.',
+  lot_coada_golita: 'Coada lotului e deja goală: nu mai e nimic de trimis.',
   lot_anulat: 'Lotul e anulat.',
   lot_draft: 'Lotul nu e aprobat.',
   eroare_rezervare: 'Rezervarea în BD a fost refuzată — reîncarcă și verifică starea lotului.',
 }
 export const motivTrimitere = m => MOTIVE_TRIMITERE[m] || `Oprit: ${m || 'motiv necunoscut'}.`
+
+/** Rezultatul pe mesaje al unui lot (din sms_v_loturi): lotul nu are stare „trimis”, adevărul e pe mesaje (Copilot r1 P2-01). */
+export function rezumatMesaje(l) {
+  const n = k => Number(l?.[k]) || 0
+  const parti = [`livrat ${n('n_livrat')}`, `eșuat ${n('n_esuat')}`, `necunoscut ${n('n_necunoscut')}`, `anulat ${n('n_anulat')}`]
+  if (n('n_trimis')) parti.push(`predat, fără raport încă ${n('n_trimis')}`)
+  if (n('n_in_coada')) parti.push(`în coadă ${n('n_in_coada')}`)
+  return parti.join(' · ')
+}
+
+/** Mesajul de după anulare: ce NU mai pleacă, separat de ce era deja predat furnizorului (Copilot r1 P3-02). */
+export function mesajAnulare(r) {
+  const n = k => Number(r?.[k]) || 0
+  const baza = `Lot anulat: ${n('mesaje_anulate')} mesaje scoase din coadă (nu mai pleacă).`
+  if (!n('deja_predate')) return baza
+  return `${baza} ${n('deja_predate')} erau deja predate furnizorului și NU se pot opri (necunoscut ${n('deja_rezervate_necunoscut')} · trimis ${n('deja_trimise')} · livrat ${n('deja_livrate')} · eșuat ${n('deja_esuate')}); rămân în istoric.`
+}
 
 /** Contorul de sub câmpul de text: „43/160 caractere GSM-7 · 1 SMS” + avertismente. */
 export function contorText(text) {

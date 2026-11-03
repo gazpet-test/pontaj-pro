@@ -1,12 +1,16 @@
 // Administrator › 📱 SMS (MVP 03.11.2026, decizii Razvan). DOAR owner-ul: RLS + RPC-urile din 20261130a_sms_mvp verifică is_owner în BD,
 // edge-ul sms-trimite îl verifică din nou în cod. Flux: Compune → Previzualizează (RPC, nu scrie) → Creează lot (draft) → Aprobă (owner,
 // pe versiunea văzută) → Trimite (edge; kill-switch + plafoane verificate atomic în BD). Telefoanele apar doar mascate (07** *** 123).
+// r2 (Jakarinos r1 P1): înainte de „Aprobă” owner-ul vede lista FIXATĂ în lot (fn_sms_lot_destinatari: nume + telefon mascat, text,
+// segmente, cost) și aprobă exact versiunea afișată; dacă lotul s-a schimbat → 40001 în BD, lista se reîncarcă. Copilot r1 P2-01: lotul
+// nu are stare „trimis” — „coada golită”, iar rezultatul real e pe mesaje (livrat / eșuat / necunoscut / anulat).
 // SMS-ul NU înlocuiește convocarea scrisă din Redări — e doar informare.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { smsApi, mesajEroare } from './smsApi.js'
 import {
   STARI_LOT, STARI_MESAJ, motivTrimitere, contorText, argumenteIntern, departamente, filtreazaAngajati, zileLaPlafon,
   poateAproba, poateTrimite, poateAnula, valideazaAutorizare, valideazaPlafoane, fmtEur, fmtData, mascheazaTelefon,
+  rezumatMesaje, mesajAnulare,
 } from './smsLogica.js'
 
 const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20' }
@@ -82,7 +86,7 @@ function Compune({ panou, onCreat, setMesaj }) {
     setLucru(true)
     try {
       const j = await smsApi.creeazaIntern({ ...args(), preview: false })
-      setMesaj({ tip: 'ok', text: `Lot creat (draft): ${j.nr_destinatari} destinatari. Îl aprobi din Istoric.` })
+      setMesaj({ tip: 'ok', text: `Lot creat (draft): ${j.nr_destinatari} destinatari. Verifică lista fixată în lot și aprobă-l.` })
       setText(''); setPreview(null); setSelectati(new Set())
       onCreat?.(j.lot_id)
     } catch (e) { setMesaj({ tip: 'eroare', text: mesajEroare(e) }) }
@@ -146,9 +150,52 @@ function Compune({ panou, onCreat, setMesaj }) {
   </section>
 }
 
+// ── Revizia înainte de aprobare: lista FIXATĂ în lot (din sms_mesaje), aprobarea pe versiunea afișată ─────────────────────────
+export function RevizieLot({ lotId, onAprobat, onInchide, detaliiInitiale = null }) {
+  const [det, setDet] = useState(detaliiInitiale)
+  const [eroare, setEroare] = useState('')
+  const [bifat, setBifat] = useState(false)
+  const [lucru, setLucru] = useState(false)
+  const incarca = useCallback(async () => {
+    setDet(null); setBifat(false)
+    try { setDet(await smsApi.destinatariLot(lotId)) } catch (e) { setEroare(mesajEroare(e)) }
+  }, [lotId])
+  useEffect(() => { if (!detaliiInitiale) incarca() }, [incarca, detaliiInitiale])
+  const aproba = async () => {
+    setLucru(true); setEroare('')
+    try { await smsApi.aproba(det.lot_id, det.versiune); onAprobat?.() }
+    catch (e) {
+      if (e?.code === '40001') { await incarca(); setEroare('Lotul s-a schimbat între timp: am reîncărcat lista — verific-o din nou înainte de aprobare.') }
+      else setEroare(mesajEroare(e))
+    } finally { setLucru(false) }
+  }
+  if (!det) return <div style={{ ...S.panel, marginTop: 8 }}><span style={S.small}>{eroare || 'Se încarcă lista fixată în lot…'}</span></div>
+  const lista = det.destinatari || []
+  return <div style={{ ...S.panel, marginTop: 8, borderColor: G.blue }} aria-label="Revizia lotului înainte de aprobare">
+    <div style={{ fontWeight: 600, marginBottom: 6 }}>Ce aprobi (fixat în lot, versiunea {det.versiune})</div>
+    <p style={{ fontSize: 13, margin: '4px 0', padding: 10, background: G.bg, borderRadius: 7 }}><b>Textul trimis:</b> {det.text}</p>
+    <p style={{ fontSize: 13, margin: '4px 0' }}><b>{lista.length}</b> destinatari · {det.lungime}/160 caractere · {det.segmente} SMS fiecare · cost estimat <b>{fmtEur(det.cost_estimat_eur)}</b>
+      {det.categorie === 'redari' ? ' · 🌾 Redări (extern): informare, nu convocare; pleacă doar 08:00–20:00' : ''}</p>
+    {lista.length !== det.nr_destinatari && <p style={{ ...S.small, color: G.red }}>Lista are {lista.length} mesaje, lotul declară {det.nr_destinatari}: aprobarea va fi refuzată — anulează lotul.</p>}
+    <div style={{ maxHeight: 300, overflow: 'auto', border: `1px solid ${G.border}`, borderRadius: 7, margin: '8px 0' }}>
+      {lista.map(d => <div key={d.mesaj_id} style={{ ...S.row, gap: 8, padding: '5px 10px', borderBottom: `1px solid ${G.border}`, fontSize: 13 }}>
+        <span style={{ flex: 1 }}>{d.nume}</span><span style={S.small}>{d.telefon_mascat}</span>
+        {d.stare !== 'in_coada' && <span style={{ ...S.small, color: G.yellow }}>{STARI_MESAJ[d.stare] || d.stare}</span>}
+      </div>)}
+    </div>
+    {eroare && <p role="alert" style={{ ...S.small, color: G.red }}>{eroare}</p>}
+    <label style={{ ...S.row, gap: 6, fontSize: 13 }}><input type="checkbox" checked={bifat} onChange={e => setBifat(e.target.checked)} />Am verificat lista de {lista.length} destinatari și textul</label>
+    <div style={{ ...S.row, marginTop: 8 }}>
+      <button type="button" style={{ ...S.primar, opacity: bifat && det.stare === 'draft' ? 1 : 0.5 }} disabled={lucru || !bifat || det.stare !== 'draft'} onClick={aproba}>✔ Aprob acest lot (versiunea {det.versiune})</button>
+      <button type="button" style={S.button} disabled={lucru} onClick={onInchide}>Renunță</button>
+    </div>
+  </div>
+}
+
 // ── Istoric: loturi + aprobare / trimitere / anulare + mesajele unui lot ───────────────────────────────────────────────────
 function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
   const [loturi, setLoturi] = useState(null)
+  const [revizie, setRevizie] = useState(evidentiat || null)
   const [deschis, setDeschis] = useState(null)
   const [mesaje, setMesaje] = useState(null)
   const [lucru, setLucru] = useState(false)
@@ -169,19 +216,19 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
     catch (e) { setMesaj({ tip: 'eroare', text: mesajEroare(e) }) }
     finally { setLucru(false); await incarca(); reincarcaPanou(); if (deschis) setMesaje(await smsApi.mesaje(deschis).catch(() => null)) }
   }
-  const aproba = l => {
-    const extra = l.categorie === 'redari' ? '\n\nREDĂRI (extern): SMS-ul NU înlocuiește convocarea scrisă. Se trimite doar între 08:00 și 20:00.' : ''
-    if (!window.confirm(`Aprob lotul ${l.categorie === 'redari' ? 'REDĂRI' : 'intern'}?\n\n${l.nr_destinatari} destinatari · cost estimat ${fmtEur(l.cost_estimat_eur)}\n\nTextul:\n${l.text}${extra}`)) return
-    actiune(() => smsApi.aproba(l.id, l.versiune), () => 'Lot aprobat. Apasă „Trimite” când vrei să plece.')
+  const dupaAprobare = async () => {
+    setRevizie(null)
+    setMesaj({ tip: 'ok', text: 'Lot aprobat (lista fixată, versiunea verificată). Apasă „Trimite” când vrei să plece.' })
+    await incarca(); reincarcaPanou()
   }
   const trimite = l => {
     if (!window.confirm(`Trimit ACUM lotul aprobat (${l.n_in_coada} mesaje în coadă)?\nPlafon rămas azi: ${Math.max(0, (panou?.plafon_zi ?? 0) - (panou?.consum_zi ?? 0))}.`)) return
     actiune(() => smsApi.trimite(l.id), r => `Trimise: ${r?.trimise ?? 0} · eșuate: ${r?.esuate ?? 0} · necunoscute: ${r?.necunoscute ?? 0}. ${motivTrimitere(r?.motiv)}`)
   }
   const anuleaza = l => {
-    const motiv = window.prompt('Motivul anulării (opțional). Mesajele din coadă nu mai pleacă; cele deja trimise rămân în istoric.', '')
+    const motiv = window.prompt('Motivul anulării (opțional). Mesajele din coadă nu mai pleacă; cele deja predate furnizorului nu se pot opri și rămân în istoric.', '')
     if (motiv === null) return
-    actiune(() => smsApi.anuleaza(l.id, motiv), r => `Lot anulat (${r?.mesaje_anulate ?? 0} mesaje scoase din coadă).`)
+    actiune(() => smsApi.anuleaza(l.id, motiv), r => mesajAnulare(r))
   }
 
   if (!loturi) return <p style={S.small}>Se încarcă loturile…</p>
@@ -192,18 +239,19 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
       return <article key={l.id} style={{ padding: '14px 16px', borderBottom: `1px solid ${G.border}`, background: l.id === evidentiat ? '#E9F1F5' : undefined }}>
         <div style={{ ...S.row, justifyContent: 'space-between' }}>
           <div style={S.row}><Badge color={culoare}>{eticheta}</Badge><Badge color={l.categorie === 'redari' ? G.yellow : G.blue}>{l.categorie === 'redari' ? '🌾 Redări (extern)' : '👷 Intern'}</Badge></div>
-          <span style={S.small}>creat {fmtData(l.creat_la)}{l.aprobat_la ? ` · aprobat ${fmtData(l.aprobat_la)}` : ''}{l.trimis_la ? ` · încheiat ${fmtData(l.trimis_la)}` : ''}</span>
+          <span style={S.small}>creat {fmtData(l.creat_la)}{l.aprobat_la ? ` · aprobat ${fmtData(l.aprobat_la)}` : ''}{l.coada_golita_la ? ` · coada golită ${fmtData(l.coada_golita_la)}` : ''}</span>
         </div>
         <p style={{ fontSize: 13, margin: '8px 0 4px' }}>{l.text}</p>
-        <div style={S.small}>{l.nr_destinatari} destinatari · {fmtEur(l.cost_estimat_eur)} · în coadă {l.n_in_coada} · necunoscut {l.n_necunoscut} · trimis {l.n_trimis} · livrat {l.n_livrat} · eșuat {l.n_esuat} · anulat {l.n_anulat}
+        <div style={S.small}>{l.nr_destinatari} destinatari · {fmtEur(l.cost_estimat_eur)} · <b>{rezumatMesaje(l)}</b>
           {l.aprobat_autorizare_nr ? ` · autorizare TGZ ${l.aprobat_autorizare_nr} / ${l.aprobat_autorizare_data}` : ''}{l.motiv_anulare ? ` · motiv anulare: ${l.motiv_anulare}` : ''}</div>
         <div style={{ ...S.row, marginTop: 8 }}>
-          {poateAproba(l) && <button type="button" style={S.primar} disabled={lucru} onClick={() => aproba(l)}>✔ Aprobă</button>}
+          {poateAproba(l) && <button type="button" style={S.primar} disabled={lucru} aria-expanded={revizie === l.id} onClick={() => setRevizie(r => r === l.id ? null : l.id)}>🔍 Verifică lista și aprobă</button>}
           {(l.stare === 'aprobat' || l.stare === 'in_trimitere') && <button type="button" style={{ ...S.primar, opacity: poateTrimite(l, panou) ? 1 : 0.5 }} disabled={lucru || !poateTrimite(l, panou)}
             title={poateTrimite(l, panou) ? '' : 'Trimiterea e oprită (kill-switch) — pornește-o din Setări'} onClick={() => trimite(l)}>📤 Trimite</button>}
           {poateAnula(l) && <button type="button" style={{ ...S.button, color: G.red }} disabled={lucru} onClick={() => anuleaza(l)}>Anulează</button>}
           <button type="button" style={{ ...S.button, border: 'none', color: G.blue, background: 'transparent' }} aria-expanded={deschis === l.id} onClick={() => setDeschis(d => d === l.id ? null : l.id)}>{deschis === l.id ? 'Închide mesajele' : 'Mesajele lotului'}</button>
         </div>
+        {revizie === l.id && poateAproba(l) && <RevizieLot lotId={l.id} onAprobat={dupaAprobare} onInchide={() => setRevizie(null)} />}
         {deschis === l.id && <div style={{ marginTop: 8, maxHeight: 260, overflow: 'auto', background: G.bg, borderRadius: 7, padding: 8 }}>
           {!mesaje ? <span style={S.small}>Se încarcă…</span> : mesaje.map(m => <div key={m.id} style={{ ...S.row, fontSize: 12, padding: '3px 0' }}>
             <span style={{ minWidth: 110 }}>{mascheazaTelefon(m.telefon)}</span><span style={{ minWidth: 170 }}>{STARI_MESAJ[m.stare] || m.stare}</span>
