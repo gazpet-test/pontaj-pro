@@ -1,4 +1,5 @@
--- Revenire 20261129j_redari_plicuri_0e: corpurile din 20261129i + UPDATE pe tabel (reintroduce constatarea 0e; doar la urgenta). Nu atinge date.
+-- Revenire 20261129j_redari_plicuri_0e: corpurile din 20261129i, FAIL-CLOSED (Jakarinos 29j r1 P3-01): privilegiile pe coloane din 29j raman, RPC-ul de lot
+-- nu mai are EXECUTE pentru aplicatie (crearea loturilor indisponibila), deci poarta 0e ramane verde. Doar la urgenta. Nu atinge date.
 DO $pre$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.revenire_20261129j', true) IS DISTINCT FROM 'REDARI_PLICURI_0E_SCOASA:' || txid_current() THEN

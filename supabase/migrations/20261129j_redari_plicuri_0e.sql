@@ -2,8 +2,8 @@
 -- 20261129j_redari_plicuri_0e — urmare la 20261129i (aplicata 03.11.2026): poarta permanenta 0e a gasit fn_red_lot_plicuire_creeaza (expusa,
 -- SECURITY DEFINER) cu set_config (marca „vine din RPC” pentru lot_id). Remediere: lot_id iese din dreptul de UPDATE al aplicatiei (privilegii pe
 -- coloane), marca dispare. Plus Jakarinos 29i r9 P2-02: plicuirea, expedierea si garzile cer izolarea READ COMMITTED.
--- Nu atinge date. Revenire: supabase/revenire/20261129j_redari_plicuri_0e_ROLLBACK.sql (corpurile din 29i + UPDATE pe tabel; RPC-ul de lot fara
--- EXECUTE pentru aplicatie = fail-closed, poarta 0e ramane verde). Contract: aceste operatii cer izolarea READ COMMITTED (si pentru mentenanta).
+-- Nu atinge date. Revenire: supabase/revenire/20261129j_redari_plicuri_0e_ROLLBACK.sql (corpurile din 29i; privilegiile pe coloane RAMAN; RPC-ul de
+-- lot fara EXECUTE pentru aplicatie = fail-closed, poarta 0e ramane verde). Contract: aceste operatii cer izolarea READ COMMITTED (si pentru mentenanta).
 DO $pre$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261129j_redari_plicuri_0e:' || txid_current() THEN
