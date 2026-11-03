@@ -2,7 +2,8 @@
 -- 20261129j_redari_plicuri_0e — urmare la 20261129i (aplicata 03.11.2026): poarta permanenta 0e a gasit fn_red_lot_plicuire_creeaza (expusa,
 -- SECURITY DEFINER) cu set_config (marca „vine din RPC” pentru lot_id). Remediere: lot_id iese din dreptul de UPDATE al aplicatiei (privilegii pe
 -- coloane), marca dispare. Plus Jakarinos 29i r9 P2-02: plicuirea, expedierea si garzile cer izolarea READ COMMITTED.
--- Nu atinge date. Revenire: supabase/revenire/20261129j_redari_plicuri_0e_ROLLBACK.sql (corpurile din 29i + UPDATE pe tabel).
+-- Nu atinge date. Revenire: supabase/revenire/20261129j_redari_plicuri_0e_ROLLBACK.sql (corpurile din 29i + UPDATE pe tabel; RPC-ul de lot fara
+-- EXECUTE pentru aplicatie = fail-closed, poarta 0e ramane verde). Contract: aceste operatii cer izolarea READ COMMITTED (si pentru mentenanta).
 DO $pre$
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' OR current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261129j_redari_plicuri_0e:' || txid_current() THEN
@@ -40,7 +41,11 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 -- (fara PV) din acelasi proiect; mentenanta (sesiune postgres fara JWT) ramane permisa.
 DECLARE v_mentenanta boolean := (session_user = 'postgres' AND coalesce(current_setting('request.jwt.claims', true), '') = '');
 BEGIN
-  IF TG_OP = 'INSERT' THEN NEW.created_at := now(); NEW.updated_at := now(); NEW.versiune := 1; RETURN NEW; END IF;
+  IF TG_OP = 'INSERT' THEN
+    -- Copilot 29j r1 P2-01: un plic nou nu vine cu lot (lotul se atribuie doar prin fn_red_lot_plicuire_creeaza, dupa creare)
+    IF NEW.lot_id IS NOT NULL AND NOT v_mentenanta THEN RAISE EXCEPTION 'redari: plicul nou nu are lot; lotul se atribuie prin PV-ul de plicuire' USING ERRCODE = '23514'; END IF;
+    NEW.created_at := now(); NEW.updated_at := now(); NEW.versiune := 1; RETURN NEW;
+  END IF;
   NEW.updated_at := now();
   IF (NEW.proiect_id, NEW.uat_id, NEW.nr_plic, NEW.cheie_persoana, NEW.destinatar_nume, NEW.created_by, NEW.created_at)
      IS DISTINCT FROM (OLD.proiect_id, OLD.uat_id, OLD.nr_plic, OLD.cheie_persoana, OLD.destinatar_nume, OLD.created_by, OLD.created_at) THEN
@@ -239,11 +244,17 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_proc WHERE oid IN ('public.fn_red_plic_incearca_lock(uuid)'::regprocedure, 'public.fn_red_plic_reguli()'::regprocedure, 'public.fn_red_plic_creeaza(uuid,uuid[])'::regprocedure, 'public.fn_red_lot_plicuire_creeaza(uuid,uuid[],date)'::regprocedure) AND prosrc ~ 'set_config') THEN
     RAISE EXCEPTION '20261129j: set_config ramas';
   END IF;
-  IF has_column_privilege('authenticated', 'public.red_plicuri', 'lot_id', 'UPDATE') OR has_column_privilege('service_role', 'public.red_plicuri', 'lot_id', 'UPDATE')
-     OR has_column_privilege('authenticated', 'public.red_plicuri', 'cheie_persoana', 'UPDATE') OR has_column_privilege('authenticated', 'public.red_plicuri', 'nr_plic', 'UPDATE')
-     OR has_table_privilege('authenticated', 'public.red_plicuri', 'UPDATE')
-     OR NOT has_column_privilege('authenticated', 'public.red_plicuri', 'awb', 'UPDATE') OR NOT has_column_privilege('authenticated', 'public.red_plicuri', 'stare', 'UPDATE') THEN
-    RAISE EXCEPTION '20261129j: privilegii pe coloane gresite';
+  -- Copilot 29j r1 P2-02: pentru FIECARE rol si FIECARE coloana: UPDATE exact pe lista alba (authenticated, service_role), nimic pentru anon,
+  -- niciun INSERT pe coloane; niciun UPDATE / INSERT / DELETE / TRUNCATE la nivel de tabel
+  IF EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r, information_schema.columns c
+              WHERE c.table_schema = 'public' AND c.table_name = 'red_plicuri'
+                AND (has_column_privilege(r, 'public.red_plicuri', c.column_name, 'UPDATE')
+                       IS DISTINCT FROM (r <> 'anon' AND c.column_name = ANY (string_to_array(replace('stare, motiv_anulare, opis_path, awb, data_expediere, data_ar, ar_scan_path, ar_primit_de, ar_mentiune, retur, retur_detaliu, retur_data, retur_scan_path', ' ', ''), ',')))
+                     OR has_column_privilege(r, 'public.red_plicuri', c.column_name, 'INSERT')))
+     OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) r, unnest(ARRAY['UPDATE', 'INSERT', 'DELETE', 'TRUNCATE']) pr
+                 WHERE has_table_privilege(r, 'public.red_plicuri', pr))
+     OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_plicuri') <> 24 THEN
+    RAISE EXCEPTION '20261129j: privilegii pe coloane gresite (lista alba)';
   END IF;
   IF has_function_privilege('authenticated', 'public.fn_red_plic_incearca_lock(uuid)', 'EXECUTE') OR NOT has_function_privilege('authenticated', 'public.fn_red_lot_plicuire_creeaza(uuid,uuid[],date)', 'EXECUTE') THEN
     RAISE EXCEPTION '20261129j: drepturi pe functii';

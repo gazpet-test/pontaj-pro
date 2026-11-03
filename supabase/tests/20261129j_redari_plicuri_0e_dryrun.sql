@@ -269,5 +269,14 @@ DO $t$ DECLARE ok boolean := false; BEGIN
   BEGIN
     PERFORM public.fn_red_plic_incearca_lock(gen_random_uuid());
   EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'TEST8 FAIL: READ COMMITTED refuzat: %', SQLERRM; END;
-  RAISE NOTICE 'TEST8 OK (READ COMMITTED acceptat; REPEATABLE READ se verifica in harness-ul de concurenta)';
+  -- Copilot 29j r1 P2-01: un INSERT cu lot_id (din context cu JWT, ca in RPC-uri) e refuzat de trigger
+  PERFORM set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-000000000000","role":"authenticated"}', true);
+  BEGIN
+    INSERT INTO public.red_plicuri(proiect_id,uat_id,nr_plic,cheie_persoana,destinatar_nume,lot_id)
+      SELECT p.proiect_id, p.uat_id, 'PL-ZXH-0097', 'x', 'y', (SELECT id FROM public.red_loturi_plicuire LIMIT 1) FROM public.red_plicuri p LIMIT 1;
+    RAISE EXCEPTION 'TEST8 FAIL: INSERT cu lot_id acceptat';
+  EXCEPTION WHEN check_violation THEN ok := true; END;
+  PERFORM set_config('request.jwt.claims', '', true);
+  IF NOT ok THEN RAISE EXCEPTION 'TEST8 FAIL'; END IF;
+  RAISE NOTICE 'TEST8 OK (READ COMMITTED acceptat; INSERT cu lot_id refuzat)';
 END $t$;
