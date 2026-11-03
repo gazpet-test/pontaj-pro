@@ -7,7 +7,7 @@ import { Document, Packer, Paragraph, TextRun, Header } from 'docx'
 import {
   completeazaDocx, genereazaQr, hashBlob, borderouCsv, celulaCsv, genereazaConvocator, verificaDateConvocator, salveazaConvocator,
   reincarcaConvocator, caleConvocator, versiuneDinCale, versiuneMaximaInBucket, formatDataRo, formatNumarRo, linkRaspuns, linkRaspunsCu, adresaDetinator, textGdprPentruUat,
-  textGdprFataConvocator, TRIMITERE_VERSO_GDPR, VERSO_INFORMARE_INCLUS, adresaProprieInDocx, adresaWebNepermisa,
+  textGdprFataConvocator, TRIMITERE_VERSO_GDPR, VERSO_INFORMARE_INCLUS, FRAZE_VERSO, EroareTrimitereGdpr, adresaProprieInDocx, adresaWebNepermisa,
   MIME_DOCX, COLOANE_BORDEROU, CHEI_CONVOCATOR, ETICHETA_CALITATE,
 } from './docx.js'
 
@@ -262,17 +262,16 @@ describe('genereazaConvocator', () => {
     }
   }, 10000)
 
-  // #970 r2 + r6 (Copilot P2-02): fața poștală nu tipărește linkul informării; pe main (VERSO_INFORMARE_INCLUS = false)
-  // nici nu trimite la un verso care nu se generează
-  it('VERSO_INFORMARE_INCLUS = false pe main: cu link_informare_gdpr setat, marcajul se scoate, fără trimitere la verso; QR-ul e același', async () => {
+  // #970 r2 + r6 + r18: fața poștală nu tipărește linkul informării; pe main (VERSO_INFORMARE_INCLUS = false) nici nu trimite la un
+  // verso care nu se generează. r18: regula literală — se scot doar frazele din FRAZE_VERSO, orice altă trimitere oprește generarea
+  it('VERSO_INFORMARE_INCLUS = false pe main: frazele cunoscute se scot, fără trimitere la verso; QR-ul e același', async () => {
     expect(VERSO_INFORMARE_INCLUS).toBe(false)
     const asteptat = 'https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk'
     const qrAsteptat = (await genereazaQr(asteptat)).split(',')[1]
     const baza = complet()
     const cazuri = [
       [baza.proiect.text_gdpr, 'Operatori: Gazpet și Primăria Husnicioara.\nDestinatari: Primăria Husnicioara.'],
-      ['Operatori: Gazpet și Primăria {uat}. Informarea completă: [link scurt]. Drepturi: acces.', 'Operatori: Gazpet și Primăria Husnicioara. Drepturi: acces.'],
-      ['Operatori: Gazpet. Informarea completă: https://example.invalid/gdpr.', 'Operatori: Gazpet.'],
+      [`Operatori: Gazpet și Primăria {uat}. ${FRAZE_VERSO[0]} Drepturi: acces.`, 'Operatori: Gazpet și Primăria Husnicioara. Drepturi: acces.'],
       ['Operatori: Gazpet. Informarea completă se află pe verso.', 'Operatori: Gazpet.'],
     ]
     for (const [text_gdpr, fata] of cazuri) {
@@ -281,79 +280,59 @@ describe('genereazaConvocator', () => {
         expect(r.link).toBe(asteptat)
         expect(r.campuri.text_gdpr, text_gdpr).toBe(fata)
         const { zip, xml } = await xmlDin(r.blob, 'word/document.xml')
-        expect(textDin(xml)).not.toMatch(/https?:\/\/|www\.|redari\.gazpet\.ro|verso\./)
+        expect(textDin(xml)).not.toMatch(/https?:\/\/|www\.|redari\.gazpet\.ro|verso/)
         expect(await zip.file('word/media/qr.png').async('base64')).toBe(qrAsteptat)
       }
     }
-    // fără marcaj: textul rămâne cel din BD (doar UAT-ul înlocuit)
+    // fără frază cunoscută: textul rămâne cel din BD (doar UAT-ul înlocuit)
     expect(textGdprFataConvocator('Operatori: Primăria {uat}.', 'Godeanu', 'https://x.invalid')).toBe('Operatori: Primăria Godeanu.')
   }, 20000)
 
-  // #970 r7 (Jakarinos P2-02): cu versoul neinclus, orice propoziție care pomenește versoul se scoate (pe mai multe rânduri, NBSP)
-  it('VERSO_INFORMARE_INCLUS = false: propozițiile cu „verso” se scot în toate formulările; restul textului rămâne', () => {
+  // #970 r18: frazele cunoscute se recunosc literal (majuscule, diacritice, spații albe), restul textului rămâne NEATINS
+  it('r18: frazele din FRAZE_VERSO se scot exact; câmpurile GDPR din jur rămân (pe rânduri, cu e-mailuri, cu litere mici)', () => {
     const cazuri = [
-      ['Operatori: Gazpet. Informarea completă se află pe verso.', 'Operatori: Gazpet.'],
-      ['Operatori: Gazpet. Informarea completă se află\npe verso. Drepturi: acces.', 'Operatori: Gazpet. Drepturi: acces.'],
-      ['Operatori: Gazpet.\r\nInformarea completă se află pe\r\nverso.', 'Operatori: Gazpet.'],
-      ['Operatori: Gazpet. Pe verso găsiți informațiile complete despre folosirea datelor (inclusiv temeiurile legale); le găsiți și scanând codul QR sau la [link scurt]. Drepturi: acces.', 'Operatori: Gazpet. Drepturi: acces.'],
-      ['Detalii pe verso. Drepturi: acces.', 'Drepturi: acces.'],
-      ['Operatori: S.N.T.G.N. Transgaz S.A. și Gazpet. Informații despre date: PE VERSO!', 'Operatori: S.N.T.G.N. Transgaz S.A. și Gazpet.'],
-      ['Operatori: Gazpet. Informarea completa se afla pe verso', 'Operatori: Gazpet.'],
-      // #970 r8 (Jakarinos P2-03): punctele din domeniu nu încheie propoziția; se scoate toată, cu URL cu tot
-      ['Operatori: Primaria. Pe verso sunt detalii la https://dataprotection.ro. Drepturi: acces.', 'Operatori: Primaria. Drepturi: acces.'],
-      ['Operatori: Primaria. Pe verso, detalii la www.dataprotection.ro/a.b și S.A.R.L. Drepturi: acces.', 'Operatori: Primaria. Drepturi: acces.'],
-      // #970 r10 (Copilot P2-03): propoziția cu marcajul „Informarea completă:” se scoate ÎNTREAGĂ, și cu rând nou după „:”
-      ['Operatori: Gazpet. Informarea completă: [link scurt] poate fi consultată la primărie. Drepturi: acces.', 'Operatori: Gazpet. Drepturi: acces.'],
-      ['Operatori: Gazpet. Informarea completă:\nhttps://x.invalid/a. Drepturi: acces.', 'Operatori: Gazpet. Drepturi: acces.'],
-      ['Operatori: Gazpet.\nInformarea completă: www.x.invalid/gdpr, disponibilă oricând.\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
-      // #970 r15 (Copilot P2-02): textul pe rânduri, fără punct — se scoate doar rândul cu referința
-      ['Operatori: Transgaz și Gazpet\nScop: organizarea convocării\nPe verso găsiți informarea completă.', 'Operatori: Transgaz și Gazpet\nScop: organizarea convocării'],
-      ['Operatori: Transgaz\nInformarea completă: [link scurt]\nDrepturi: acces și opoziție.', 'Operatori: Transgaz\nDrepturi: acces și opoziție.'],
-      ['Operatori: Transgaz\r\nInformarea completă: [link scurt]\r\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
-      // #970 r15 (Copilot P2-03): „Informarea completă:” scoate unitatea oricare ar fi adresa (și de pe lista albă) sau nimic
-      ['Operatori: Transgaz. Informarea completă: dataprotection.ro. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
-      ['Operatori: Transgaz. Informarea completă: www.dataprotection.ro. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
-      ['Operatori: Transgaz. Informarea completă: https://www.dataprotection.ro/x. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
-      ['Operatori: Transgaz. Informarea completă: [link]. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
-      ['Operatori: Transgaz.\nInformarea completă:\nwww.dataprotection.ro\nDrepturi: acces.', 'Operatori: Transgaz.\nDrepturi: acces.'],
-      ['Operatori: Transgaz. Informarea completă: la sediu. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
-      // #970 r16 (Jakarinos P2-02): marcajul gol nu înghite rândul următor care e un câmp GDPR independent
-      ['Operatori: Transgaz\nInformarea completă:\nDrepturi: acces și opoziție.', 'Operatori: Transgaz\nDrepturi: acces și opoziție.'],
-      ['Operatori: Transgaz\nScop: convocarea\nInformarea completă:\nScop secundar: arhivare\nDrepturi: acces.', 'Operatori: Transgaz\nScop: convocarea\nScop secundar: arhivare\nDrepturi: acces.'],
-      ['Operatori: Transgaz\nInformarea completă:\n[link scurt]\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
-      ['Operatori: Transgaz\nInformarea completă:\nhttps://x.invalid/a\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
-      // #970 r17 (Jakarinos / Copilot P2-02): câmp GDPR cu literă mică sau între paranteze drepte după marcajul gol rămâne
-      ['Operatori: Transgaz\nInformarea completă:\ndrepturi: acces și opoziție.', 'Operatori: Transgaz\ndrepturi: acces și opoziție.'],
-      ['Operatori: Transgaz\nInformarea completă:\nscop: convocarea\nDrepturi: acces.', 'Operatori: Transgaz\nscop: convocarea\nDrepturi: acces.'],
-      ['Operatori: Transgaz\nInformarea completă:\n[UAT] Destinatari: primăria\nDrepturi: acces.', 'Operatori: Transgaz\nG Destinatari: primăria\nDrepturi: acces.'],
-      ['Operatori: Transgaz\nInformarea completă:\n[Drepturi] acces și opoziție.', 'Operatori: Transgaz\n[Drepturi] acces și opoziție.'],
-      ['Operatori: Transgaz\nInformarea completă:\nPlângere: www.dataprotection.ro', 'Operatori: Transgaz\nPlângere: www.dataprotection.ro'],
-      // #970 r17 (Copilot P2-03): rândul care continuă marcajul gol cu o adresă (și permisă) se scoate împreună cu el
-      ['Operatori: Gazpet.\nInformarea completă:\nConsultați www.dataprotection.ro pentru informare.\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
-      ['Operatori: Gazpet.\nInformarea completă:\nConsultați pagina: https://exemplu.ro/gdpr\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
-      ['Operatori: Gazpet.\nInformarea completă:\nla 192.168.1.10/gdpr\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
+      [`Operatori: Transgaz\n${FRAZE_VERSO[0]}\nDrepturi: acces și opoziție.`, 'Operatori: Transgaz\nDrepturi: acces și opoziție.'],
+      ['Operatori: Transgaz. PE VERSO GASITI INFORMATIILE COMPLETE DESPRE FOLOSIREA DATELOR SI DREPTURILE DUMNEAVOASTRA. drepturi: acces.', 'Operatori: Transgaz. drepturi: acces.'],
+      ['Operatori: Transgaz.\r\nPe verso găsiți informațiile\r\ncomplete despre folosirea datelor și drepturile dumneavoastră.\r\nContact DPO: dpo@exemplu.ro', 'Operatori: Transgaz.\nContact DPO: dpo@exemplu.ro'],
+      ['Operatori: Transgaz. Informarea  completă se află pe verso. scop: convocarea.', 'Operatori: Transgaz. scop: convocarea.'],
+      ['Operatori: Transgaz. Informarea completa se afla pe verso.', 'Operatori: Transgaz.'],
+      // fără frază: identic, inclusiv rândurile și „Versoix” (nu e cuvântul „verso”)
+      ['Operatori: Gazpet.\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
+      ['Sediul: Versoix. Drepturi: acces.', 'Sediul: Versoix. Drepturi: acces.'],
     ]
     for (const [text, fata] of cazuri) expect(textGdprFataConvocator(text, 'G', 'https://x.invalid'), text).toBe(fata)
-    // „versoul” / „Versoix” nu sunt cuvântul „verso”; textul fără verso rămâne identic (inclusiv rândurile)
-    expect(textGdprFataConvocator('Operatori: Gazpet.\nDrepturi: acces.', 'G', null)).toBe('Operatori: Gazpet.\nDrepturi: acces.')
-    expect(textGdprFataConvocator('Sediul: Versoix. Drepturi: acces.', 'G', null)).toBe('Sediul: Versoix. Drepturi: acces.')
   })
 
-  it('versoInclus = true (#939): marcajul devine trimiterea la verso, adăugată la final doar cu informarea configurată, fără dublare', () => {
+  it('r18: orice altă trimitere la verso / la „Informarea completă” oprește generarea (nimic nu se taie pe ghicite)', async () => {
+    const refuzate = [
+      'Operatori: Gazpet. Informarea completă: https://x.invalid/a. Drepturi: acces.',
+      'Operatori: Transgaz\nInformarea completă:\ndrepturi: acces și opoziție.',
+      'Operatori: Transgaz\nInformarea completă:\nContact DPO: dpo@exemplu.ro\nDrepturi: acces.',
+      'Operatori: Gazpet.\nInformarea completă:\nConsultați www.dataprotection.ro pentru informare.',
+      'Operatori: Gazpet. Informarea completă: [link scurt] poate fi consultată la primărie.',
+      'Operatori: Gazpet. Pe verso găsiți informațiile complete.',
+      'Operatori: Gazpet. Informații despre date: PE VERSO!',
+      'Operatori: Gazpet. Informarea completă se află\npe verso, la pagina 2.',
+      `Operatori: Gazpet. ${FRAZE_VERSO[0]}x`,
+    ]
+    for (const text of refuzate) {
+      expect(() => textGdprFataConvocator(text, 'G', null), text).toThrow(EroareTrimitereGdpr)
+      expect(() => textGdprFataConvocator(text, 'G', null, { versoInclus: true }), text).toThrow(/trimite la informarea completă sau la verso/)
+    }
+    const baza = complet()
+    for (const permiteIncomplet of [false, true]) {
+      await expect(genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr: refuzate[1] }, templateArrayBuffer: citesteSablon(), permiteIncomplet }))
+        .rejects.toThrow(/Scoateți fraza din text/)
+    }
+  }, 10000)
+
+  it('versoInclus = true (#939): trimiterea la verso se adaugă o singură dată, la final, cu fraza cunoscută sau cu informarea configurată', () => {
     const v = { versoInclus: true }
-    expect(textGdprFataConvocator('A. Informarea completă: https://x.invalid/a. B.', 'G', '', v)).toBe(`A. ${TRIMITERE_VERSO_GDPR} B.`)
-    expect(textGdprFataConvocator('A. Informarea completă: [link].', 'G', null, v)).toBe(`A. ${TRIMITERE_VERSO_GDPR}`)
+    expect(textGdprFataConvocator(`A. ${FRAZE_VERSO[0]} B.`, 'G', null, v)).toBe(`A. B.\n${TRIMITERE_VERSO_GDPR}`)
     expect(textGdprFataConvocator('Operatori: {uat}.', 'G', 'https://x.invalid', v)).toBe(`Operatori: G.\n${TRIMITERE_VERSO_GDPR}`)
     expect(textGdprFataConvocator('Operatori: {uat}.', 'G', null, v)).toBe('Operatori: G.')
-    // P3-01: trimiterea deja scrisă (și fără diacritice, cu alte spații / litere) nu se dublează
-    expect(textGdprFataConvocator(`A. ${TRIMITERE_VERSO_GDPR}`, 'G', 'https://x.invalid', v)).toBe(`A. ${TRIMITERE_VERSO_GDPR}`)
-    expect(textGdprFataConvocator('A. informarea  completa se afla pe verso.', 'G', 'https://x.invalid', v)).toBe('A. informarea  completa se afla pe verso.')
-    expect(textGdprFataConvocator(`A. ${TRIMITERE_VERSO_GDPR} Informarea completă: https://x.invalid.`, 'G', 'https://x.invalid', v)).toBe(`A. ${TRIMITERE_VERSO_GDPR}`)
-    // #970 r10 (Copilot P3-01): orice formulare existentă cu „verso” oprește adăugarea (fără și cu marcaj)
-    expect(textGdprFataConvocator('A. Pe verso găsiți informațiile complete.', 'G', 'https://x.invalid', v)).toBe('A. Pe verso găsiți informațiile complete.')
-    expect(textGdprFataConvocator('A. Pe verso găsiți informațiile complete. Informarea completă: [link]. B.', 'G', 'https://x.invalid', v)).toBe('A. Pe verso găsiți informațiile complete. B.')
-    // marcaj cu text după link: propoziția întreagă devine trimiterea la verso
-    expect(textGdprFataConvocator('A. Informarea completă: [link scurt] poate fi consultată la primărie. B.', 'G', null, v)).toBe(`A. ${TRIMITERE_VERSO_GDPR} B.`)
+    expect(textGdprFataConvocator(`A. ${TRIMITERE_VERSO_GDPR}`, 'G', 'https://x.invalid', v)).toBe(`A.\n${TRIMITERE_VERSO_GDPR}`)
+    expect(textGdprFataConvocator(TRIMITERE_VERSO_GDPR, 'G', null, v)).toBe(TRIMITERE_VERSO_GDPR)
   })
 
   // #970 r6–r8: politica adreselor web (regula literală din r8), prin genereazaConvocator, strict și cu permiteIncomplet
@@ -452,6 +431,8 @@ describe('genereazaConvocator', () => {
       'user@www.exemplu.ro:8080/x', 'user@www.exemplu.ro?formular=1', 'user@www.exemplu.ro#informare', 'a@exemplu.ro:443', 'a@exemplu.ro).x',
       // r17 (Copilot P2-01): IPv4 fără schemă
       'Detalii la 192.168.1.10/gdpr.', '10.0.0.1', 'Vezi 255.255.255.255:8080', '(8.8.8.8)',
+      // r18 (Copilot r17 P2-02): domenii internaționalizate fără schemă
+      'Detalii la primărie.ro/gdpr', 'Vezi пример.рф', 'Detalii: exemplu.ελ.', 'Vezi ex.ăîș',
     ]
     // refuzate: neaprobate sau proprii („https://gazpet.ro@example.com/x” — nu e e-mail, deci „gazpet.ro” e adresă proprie)
     for (const t of refuzate) expect(adresaWebNepermisa(t), t).not.toBeNull()
@@ -487,7 +468,8 @@ describe('genereazaConvocator', () => {
   // #970 r15 (Copilot P2-02): postcondiție — un text_gdpr nevid care ar dispărea întreg prin filtrare oprește generarea
   it('postcondiție: text_gdpr nevid golit de filtrare → generarea e refuzată (strict și la previzualizare)', async () => {
     const baza = complet()
-    for (const text_gdpr of ['Pe verso găsiți informarea completă.', 'Informarea completă: [link scurt]', 'Informarea completă: dataprotection.ro.\nDetalii pe verso.']) {
+    for (const text_gdpr of [FRAZE_VERSO[0], TRIMITERE_VERSO_GDPR, `${FRAZE_VERSO[0]}
+${TRIMITERE_VERSO_GDPR}`]) {
       for (const permiteIncomplet of [false, true]) {
         await expect(genereazaConvocator({ ...baza, proiect: { ...baza.proiect, text_gdpr }, templateArrayBuffer: citesteSablon(), permiteIncomplet }), text_gdpr)
           .rejects.toThrow(/textul GDPR de pe proiect \(text_gdpr\) rămâne gol/)
@@ -720,7 +702,7 @@ describe('salveazaConvocator / reincarcaConvocator (fake supabase)', () => {
       uat: { nume: 'Husnicioara', sesiune_zi1: '2026-11-20', program_zi1: '09:00 – 16:00' },
       proiect: { cod: 'LOT1-PRUNISOR-JUPA', denumire: 'Lot 1 (fictiv)', contract_nr: '30', contract_data: '2025-01-22', imputernicire_nr: '1', imputernicire_data: '2026-10-01', contact_nume: 'Operator', contact_email: 'redari@exemplu.test',
         reprezentant_tgz_nume: 'Reprezentant', link_informare_gdpr: 'https://example.invalid/informare',
-        text_gdpr: 'Operatori: Transgaz și Primăria {uat}. Informarea completă: https://example.invalid/informare. Pe verso găsiți informațiile complete. Drepturi: plângere la ANSPDCP (www.dataprotection.ro).' },
+        text_gdpr: 'Operatori: Transgaz și Primăria {uat}. Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră. Drepturi: plângere la ANSPDCP (www.dataprotection.ro).' },
       token, templateArrayBuffer: citesteSablon(),
     }
     const qrAsteptat = (await genereazaQr(`https://redari.gazpet.ro/redari/raspuns/${token}`)).split(',')[1]

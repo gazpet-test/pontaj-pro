@@ -76,21 +76,19 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
   amprenta textului de dinainte (nimic altceva schimbat în șablon). Unde modelul a rupt un câmp în mai
   multe `<w:t>` (ex. „la data de __|_._|__.2026”, „Contact TRANSGAZ … tel. |____”), textul întreg ajunge în primul `<w:t>`, iar
   celelalte se golesc (aceeași formatare).
-- **Documentul COMPLETAT (tot excepția (8), #970 r2–r7)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
-  (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`:
-  - `VERSO_INFORMARE_INCLUS = false` (main; versoul cu informarea completă vine cu PR #939): se scoate UNITATEA întreagă care
-    conține marcajul „Informarea completă:”, ORICE ar urma (r15: orice adresă, inclusiv `dataprotection.ro`, `[link …]`, text
-    sau nimic; și cu adresa pe rândul următor), și nu se adaugă nicio trimitere la verso, nici când proiectul are
-    `link_informare_gdpr`. Se scoate și ORICE unitate care conține cuvântul „verso” (după normalizare: fără diacritice, litere
-    mici, spații albe — inclusiv `\n`, `\r`, NBSP — comprimate), ex. „Informarea completă se află pe verso.”, „Pe verso găsiți
-    informațiile complete …”. `text_gdpr` e paragraful „Date personale”, deci orice mențiune a versoului de acolo se referă la
-    informare. **Unitatea (r15)** se termină la `.` `!` `?` URMAT de spațiu alb sau de final (punctele din domenii și din
-    abrevierile lipite nu o încheie) SAU la un rând nou (`\n`, `\r\n`), ca un text scris pe rânduri, fără punct, să nu fie o
-    singură „propoziție”; un rând fără punct final urmat de un rând cu literă mică continuă aceeași unitate. **Postcondiție
-    (r15)**: dacă `text_gdpr` era nevid și filtrarea l-a golit, generarea e refuzată, cu mesaj clar;
-  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): prima unitate cu marcaj devine
-    „Informarea completă se află pe verso.” (celelalte se scot); fără marcaj, trimiterea se adaugă la final dacă proiectul are
-    `link_informare_gdpr`. Dacă textul pomenește deja versoul, în orice formulare (r10), nu se mai adaugă nimic.
+- **Documentul COMPLETAT (tot excepția (8), #970 r2–r18)**. În plus față de șablon, se schimbă DECLARAT textul GDPR tipărit pe față
+  (`text_gdpr` din BD rămâne neschimbat), prin `textGdprFataConvocator` din `docx.js`. **Regula LITERALĂ (r18)**, în locul
+  decupajului pe propoziții din r7–r17 (unde fiecare rundă găsea alt caz în care se pierdea un câmp GDPR):
+  - se scot DOAR frazele cunoscute din `FRAZE_VERSO` („Pe verso găsiți informațiile complete despre folosirea datelor și drepturile
+    dumneavoastră.” — textul real LOT1 — și „Informarea completă se află pe verso.”), exact: fără deosebire de majuscule, cu sau
+    fără diacritice, cu orice spațiu alb între cuvinte (`\n`, `\r\n`, NBSP), cu margini de cuvânt;
+  - dacă după aceea textul mai pomenește cuvântul „verso” sau „Informarea completă” (orice formulare, inclusiv
+    „Informarea completă: <link>”), generarea se OPREȘTE (`EroareTrimitereGdpr`, strict și la previzualizare), cu mesaj clar:
+    textul se corectează pe proiect. Nimic nu se taie pe ghicite;
+  - `VERSO_INFORMARE_INCLUS = false` (main; versoul vine cu PR #939): nu se adaugă nicio trimitere la verso;
+  - `VERSO_INFORMARE_INCLUS = true` (îl comută #939): „Informarea completă se află pe verso.” se adaugă o singură dată, la final,
+    dacă textul avea o frază cunoscută sau proiectul are `link_informare_gdpr`;
+  - **Postcondiție (r15)**: dacă `text_gdpr` era nevid și a rămas gol după scoaterea frazelor, generarea e refuzată, cu mesaj clar.
 - **Adresele web pe documentul completat: regula LITERALĂ (r15)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
   strict și la previzualizare; constantele unice `EXCEPTII_WEB`, `MARCAJE_PROPRII` din `docx.js`), fără interpretare de tokenuri:
   1. adresele PROPRII (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns, calea de informare) se caută ca subșir pe

@@ -344,74 +344,46 @@ export const TRIMITERE_VERSO_GDPR = 'Informarea completă se află pe verso.'
 export const VERSO_INFORMARE_INCLUS = false
 // pentru comparații: fără diacritice, litere mici, orice spațiu alb (inclusiv \n, \r, NBSP) comprimat într-un spațiu
 const normalizeazaText = t => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[\s ]+/g, ' ').trim()
-// după o propoziție scoasă: fără spații duble, fără spațiu înainte de rând nou, fără rânduri goale
+// după o frază scoasă: fără spații duble, fără spațiu înainte / după rând nou, fără rânduri goale
 const curataDupaScoatere = t => t.replace(/\r\n?/g, '\n').replace(/[ \t ]{2,}/g, ' ').replace(/[ \t ]+\n/g, '\n').replace(/\n[ \t ]+/g, '\n').replace(/\n{2,}/g, '\n').trim()
-// #970 r8 + r15 (Copilot P2-02): textul se împarte în UNITĂȚI — o unitate se termină la . ! ? urmat de spațiu alb sau final
-// (punctele din domenii și din abrevierile lipite nu o încheie) SAU la un rând nou (`\n`, `\r\n`): un text scris pe rânduri,
-// fără punct, nu mai e o singură „propoziție”. Excepții (lipire cu rândul următor): o unitate care se termină cu „Informarea
-// completă:” (adresa e pe rândul următor), ca marcajul să fie scos cu adresă cu tot, și un rând fără punct final urmat de
-// un rând care începe cu literă mică (aceeași propoziție, ruptă pe două rânduri).
-// #970 r16 + r17 (Jakarinos / Copilot P2-02, P2-03): după un marcaj gol „Informarea completă:” se lipește rândul următor DOAR dacă
-// nu începe un câmp GDPR independent (CAMPURI_GDPR, oricum scris: „Drepturi:”, „scop:”) și CONȚINE o adresă (`://`, `www.`, `x.ro`,
-// IPv4) sau începe cu un substituent de link (`[link …]`, `[http…]`, `[www…]`); altfel marcajul se scoate singur, iar rândul rămâne.
-// Decizia e EXCLUSIV a acestei funcții: regula generală „continuare cu literă mică” nu se aplică marcajului gol.
-const CAMPURI_GDPR = ['operatori', 'operator', 'scop', 'scopul', 'temei', 'temeiul', 'sursa datelor', 'sursa', 'destinatari', 'pastrare',
-  'durata', 'drepturi', 'drepturile', 'plangere', 'contact', 'categorii', 'date', 'transfer', 'responsabil', 'dpo']
-const eCampGdpr = urm => { const m = /^([^:]{1,40}):(?!\/\/)/.exec(normalizeazaText(urm)); return !!m && CAMPURI_GDPR.includes(m[1].trim()) }
-const continuaCuAdresa = urm => !eCampGdpr(urm) &&
-  (/^[\s ]*\[(?:link|https?|www)/i.test(urm) || /:\/\/|www\.|[A-Za-z0-9-]\.[A-Za-z]{2,}/i.test(urm) || RX_IPV4.test(urm))
-const imparteInPropozitii = t => {
-  const bucati = String(t).split(/(?<=[.!?])(?=[\s\u00a0])|(?<!\r)(?=\r?\n)/)
-  const unitati = []
-  for (let i = 0; i < bucati.length; i += 1) {
-    let u = bucati[i]
-    // un rând fără punct final urmat de un rând care începe cu literă mică continuă aceeași propoziție („se află\npe verso.”);
-    // un rând nou care începe cu majusculă („Scop:”, „Drepturi:”) e unitate nouă
-    while (i + 1 < bucati.length) {
-      const marcajGol = /informarea completa:$/.test(normalizeazaText(u))
-      if (marcajGol ? !continuaCuAdresa(bucati[i + 1]) : (/[.!?][\s ]*$/.test(u) || !/^\r?\n[\s ]*\p{Ll}/u.test(bucati[i + 1]))) break
-      u += bucati[++i]
-    }
-    unitati.push(u)
-  }
-  return unitati
-}
-// #970 r10 + r15 (Copilot P2-03): unitatea cu marcajul „Informarea completă:”, oricare ar fi ce urmează (orice adresă, inclusiv
-// de pe lista albă, `[link …]` sau nimic)
-const eMarcajInformare = p => /informarea completa:/.test(normalizeazaText(p))
-// #970 r7 (Jakarinos P2-02): propoziția care pomenește versoul (cuvântul „verso”, după normalizare)
-const ePropozitieVerso = p => /\bverso\b/.test(normalizeazaText(p))
-const spatiuInitial = p => /^[\s\u00a0]*/.exec(p)[0]
+// #970 r18: regula LITERALĂ pentru trimiterile la informarea completă / la verso, în locul decupajului pe propoziții (r7–r17, unde
+// fiecare rundă găsea alt caz în care se pierdea un câmp GDPR): se scot DOAR frazele cunoscute din FRAZE_VERSO, exact (fără
+// deosebire de majuscule, cu sau fără diacritice, cu orice spațiu alb între cuvinte, cu margini de cuvânt). Dacă după aceea textul
+// mai pomenește „verso” sau „Informarea completă”, generarea se OPREȘTE (EroareTrimitereGdpr): textul se corectează pe proiect,
+// nimic nu se taie pe ghicite.
+export const FRAZE_VERSO = [
+  'Pe verso găsiți informațiile complete despre folosirea datelor și drepturile dumneavoastră.', // text_gdpr real (LOT1, 04.11)
+  TRIMITERE_VERSO_GDPR,
+]
+const LITERE_DIACRITICE = { a: '[aăâ]', i: '[iî]', s: '[sșş]', t: '[tțţ]' }
+const escRxFraza = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+const rxFraza = f => new RegExp('(?<![\\p{L}\\p{N}])' + f.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().split(/\s+/)
+  .map(cuv => escRxFraza(cuv).replace(/[aist]/gi, ch => LITERE_DIACRITICE[ch.toLowerCase()])).join('[\\s\\u00a0]+') + '(?![\\p{L}\\p{N}])', 'giu')
+const RX_FRAZE_VERSO = FRAZE_VERSO.map(rxFraza)
+const pomenesteVersoSauInformarea = t => /\bverso\b|informarea completa/.test(normalizeazaText(t))
+
+export class EroareTrimitereGdpr extends Error {}
+const MESAJ_TRIMITERE_GDPR = 'Convocatorul nu poate fi generat: textul GDPR de pe proiect (text_gdpr) trimite la informarea completă sau la verso într-o formulare pe care generatorul nu o recunoaște. Pe convocatorul poștal nu se tipărește niciun link. Scoateți fraza din text (Redări → Setări proiect) sau folosiți formularea: „' + FRAZE_VERSO[0] + '”.'
 
 /**
  * Textul GDPR de pe FAȚA convocatorului poștal (decizia 03.11 seara: fără niciun link tipărit). `{uat}` / `[UAT]` → UAT-ul.
- * `text_gdpr` din BD nu se modifică; se schimbă doar textul tipărit pe față, pe PROPOZIȚII (imparteInPropozitii):
- *  - versoInclus = false (main): se scoate întreaga propoziție cu marcajul „Informarea completă: <URL | [link]>” (r10) și orice
- *    propoziție care pomenește versoul (`text_gdpr` e paragraful „Date personale”, deci versoul de acolo e cel al informării);
- *    nu se adaugă nicio trimitere la verso, nici cu `link_informare_gdpr` setat;
- *  - versoInclus = true (#939): prima propoziție cu marcaj devine TRIMITERE_VERSO_GDPR, celelalte se scot; fără marcaj, dar cu
- *    informarea configurată, trimiterea se adaugă la final. Dacă textul pomenește DEJA versoul (orice formulare, r10 P3-01),
- *    nu se mai adaugă nimic (marcajele se scot).
+ * `text_gdpr` din BD nu se modifică. Regula literală (r18):
+ *  - frazele din FRAZE_VERSO se scot (toate aparițiile); dacă textul mai pomenește apoi „verso” sau „Informarea completă” (orice
+ *    formulare, inclusiv „Informarea completă: <link>”) → EroareTrimitereGdpr, la generare și la previzualizare;
+ *  - versoInclus = false (main): nu se adaugă nicio trimitere la verso;
+ *  - versoInclus = true (#939): se adaugă la final TRIMITERE_VERSO_GDPR, o singură dată, dacă textul avea o frază din FRAZE_VERSO
+ *    sau proiectul are informarea configurată (`link_informare_gdpr`).
  */
 export const textGdprFataConvocator = (text, numeUat, linkInformareConfigurat, { versoInclus = VERSO_INFORMARE_INCLUS } = {}) => {
-  const baza = textGdprPentruUat(text, numeUat)
-  const propozitii = imparteInPropozitii(baza)
-  if (!versoInclus) {
-    const ramase = propozitii.filter(p => !eMarcajInformare(p) && !ePropozitieVerso(p))
-    return ramase.length === propozitii.length ? baza : curataDupaScoatere(ramase.join(''))
-  }
-  const areVerso = propozitii.some(p => ePropozitieVerso(p) && !eMarcajInformare(p))
-  if (propozitii.some(eMarcajInformare)) {
-    let deAdaugat = !areVerso
-    const nou = propozitii.map(p => {
-      if (!eMarcajInformare(p)) return p
-      if (!deAdaugat) return ''
-      deAdaugat = false
-      return spatiuInitial(p) + TRIMITERE_VERSO_GDPR
-    })
-    return curataDupaScoatere(nou.join(''))
-  }
-  return plin(linkInformareConfigurat) && !areVerso ? `${baza}\n${TRIMITERE_VERSO_GDPR}` : baza
+  const brut = textGdprPentruUat(text, numeUat)
+  const baza = brut.normalize('NFC')
+  let curat = baza
+  for (const rx of RX_FRAZE_VERSO) curat = curat.replace(rx, ' ')
+  const aveaFraza = curat !== baza
+  if (pomenesteVersoSauInformarea(curat)) throw new EroareTrimitereGdpr(MESAJ_TRIMITERE_GDPR)
+  const rezultat = aveaFraza ? curataDupaScoatere(curat) : brut
+  if (!versoInclus || !(aveaFraza || plin(linkInformareConfigurat))) return rezultat
+  return rezultat ? `${rezultat}\n${TRIMITERE_VERSO_GDPR}` : TRIMITERE_VERSO_GDPR
 }
 
 // #970 r15: regula LITERALĂ a adreselor web pe convocatorul completat (adresaWebNepermisa), fără interpretare de tokenuri:
@@ -436,7 +408,8 @@ export const MARCAJE_PROPRII = [/gazpet\.ro/i, /vercel\.app/i, /pontaj-pro/i, /\
 const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=$|\s|[.,;:!?)\]»”"']+(?:\s|$))/gi
 const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 const RX_EXCEPTII = new RegExp(`(?<![A-Za-z0-9.\\-@:/])(?:${[...EXCEPTII_WEB].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@]*)?(?=$|\\s|[.,;!?)\\]»”"']+(?:\\s|$))`, 'gi')
-const RX_DOMENIU = /[A-Za-z0-9-]\.[A-Za-z]{2,}/
+// r18 (Copilot r17 P2-02): și domenii internaționalizate (litere Unicode, ex. „primărie.ro”, „пример.рф”)
+const RX_DOMENIU = /[\p{L}\p{N}-]\.\p{L}{2,}/u
 // #970 r17 (Copilot P2-01): adresă IPv4 fără schemă (patru octeți 0–255; datele „03.11.2026” au trei grupuri, deci nu dau alarme)
 const RX_IPV4 = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d]|\.\d)/
 
@@ -461,9 +434,9 @@ export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
   if (!d) return null
   // fragmentul de domeniu din jur, doar din litere / cifre / „.” / „-” (fără alt text din document), scurtat
   let s = d.index
-  while (s > 0 && /[A-Za-z0-9.-]/.test(ramas[s - 1])) s -= 1
+  while (s > 0 && /[\p{L}\p{N}.-]/u.test(ramas[s - 1])) s -= 1
   let e = d.index + d[0].length
-  while (e < ramas.length && /[A-Za-z0-9.-]/.test(ramas[e])) e += 1
+  while (e < ramas.length && /[\p{L}\p{N}.-]/u.test(ramas[e])) e += 1
   return { adresa: ramas.slice(s, e).replace(/\.+$/, '').toLowerCase().slice(0, 60), categorie: 'neaprobata' }
 }
 
