@@ -134,8 +134,9 @@ CREATE FUNCTION public.fn_red_plic_reguli() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 -- lot_id se schimbă doar din fn_red_lot_plicuire_creeaza: RPC-ul pune o marcă în tranzacție (GUC local), pe care aplicația nu o poate seta
 -- (PostgREST nu expune set_config). Mentenanța (sesiune postgres fără JWT) e și ea permisă.
-DECLARE v_din_rpc boolean := current_setting('gazpet.red_lot_rpc', true) = txid_current()::text
-                            OR (session_user = 'postgres' AND coalesce(nullif(current_setting('request.jwt.claims', true), ''), '') = '');
+-- coalesce: GUC-ul nesetat intoarce NULL, iar NOT NULL nu ar declansa refuzul (prins de DRY TEST2)
+DECLARE v_din_rpc boolean := coalesce(current_setting('gazpet.red_lot_rpc', true), '') = txid_current()::text
+                            OR (session_user = 'postgres' AND coalesce(current_setting('request.jwt.claims', true), '') = '');
 BEGIN
   IF TG_OP = 'INSERT' THEN NEW.created_at := now(); NEW.updated_at := now(); NEW.versiune := 1; RETURN NEW; END IF;
   NEW.updated_at := now();
