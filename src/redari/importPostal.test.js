@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx-js-style'
 import { citesteFisierPostal, ghicesteMaparea, parseazaData, clasificaEveniment, motivRetur, propune, aplica } from './importPostal.js'
 
 const mapare = { nr_document: 'doc', nr_tracking: 'awb', data: 'data', eveniment: 'status', motiv: 'motiv' }
-const plic = (extra = {}) => ({ id: 'plic-fictiv-1', proiect_id: 'proiect-fictiv', nr_plic: 'PL-HUS-0001', lot_id: 'lot-fictiv', awb: null,
+const plic = (extra = {}) => ({ id: 'plic-fictiv-1', proiect_id: 'proiect-fictiv', nr_plic: 'PL-HUS-0001', lot_id: 'lot-fictiv', opis_path: 'plicuri/plic-fictiv-1/opis-1.docx', awb: null,
   data_expediere: null, data_ar: null, retur: null, retur_data: null, stare: 'activ', versiune: 3, ...extra })
 const rand = (extra = {}) => ({ doc: 'PL-HUS-0001', awb: 'AB123', data: '02.11.2026', __rand: 7, ...extra })
 const propunere = (r = {}, p = {}, mod = 'expediere') => propune([rand(r)], mapare, mod, [plic(p)])
@@ -77,6 +77,8 @@ describe('propune pe plicuri', () => {
       conditii: { versiune: 3, proiect_id: 'proiect-fictiv', lot_id: 'lot-fictiv', awb: null, data_expediere: null },
     })
     expect(propunere({}, { lot_id: null }).exceptii[0].motiv).toBe('plicul nu are PV de plicuire (lot)')
+    expect(propunere({}, { opis_path: null }).exceptii[0].motiv).toMatch(/opisul atașat la dosar/)
+    expect(propune([rand()], mapare, 'expediere', [plic()], { imputernicire: false }).exceptii[0].motiv).toMatch(/împuternicirea Beneficiarului/)
     expect(propunere({ awb: '' }).exceptii[0].motiv).toMatch(/AWB obligatoriu/)
     expect(propunere({}, { stare: 'anulat' }).exceptii[0].motiv).toBe('plic anulat')
     expect(propunere({}, { versiune: null }).exceptii[0].motiv).toMatch(/snapshot incomplet/)
@@ -145,7 +147,7 @@ describe('aplica CAS pe plic', () => {
     expect(r.conflicte).toHaveLength(1)
     expect(db.calls[0]).toMatchObject({ table: 'red_plicuri', select: 'id', patch: { awb: 'AB123', data_expediere: '2026-11-02' } })
     expect(db.calls[0].filtre).toEqual(expect.arrayContaining([
-      ['eq', 'id', 'plic-fictiv-1'], ['eq', 'proiect_id', 'proiect-fictiv'], ['eq', 'lot_id', 'lot-fictiv'], ['eq', 'versiune', 3],
+      ['eq', 'id', 'plic-fictiv-1'], ['eq', 'proiect_id', 'proiect-fictiv'], ['eq', 'lot_id', 'lot-fictiv'], ['eq', 'versiune', 3], ['eq', 'opis_path', 'plicuri/plic-fictiv-1/opis-1.docx'],
       ['eq', 'stare', 'activ'], ['is', 'awb', null], ['is', 'data_expediere', null], ['is', 'data_ar', null], ['is', 'retur', null],
     ]))
   })

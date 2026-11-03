@@ -7,7 +7,7 @@ const document = v => {
   const s = tracking(v), m = s.match(/^C-?(\d{1,4})$/)
   return m ? `C-${m[1].padStart(4, '0')}` : s
 }
-const CAMPURI = ['proiect_id', 'lot_id', 'versiune', 'awb', 'data_expediere', 'data_ar', 'retur', 'retur_data']
+const CAMPURI = ['proiect_id', 'lot_id', 'versiune', 'opis_path', 'awb', 'data_expediere', 'data_ar', 'retur', 'retur_data']
 
 // CSV strict: quoted separators/newlines, physical source line numbers, no silent truncation.
 function csv(s, sep) {
@@ -128,7 +128,8 @@ export function motivRetur(v) {
   return null
 }
 
-export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = false } = {}) {
+// Gemini f10 r1 P2: aceleași precondiții ca BD și ca ecranul Plicuri — împuternicirea proiectului și opisul de la dosar (altfel excepții clare, nu erori la aplicare)
+export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = false, imputernicire = true } = {}) {
   if (!['expediere', 'ar', 'retur'].includes(modImplicit)) throw new Error('Mod implicit invalid.')
   if ((!mapare.nr_document && !mapare.nr_tracking) || !mapare.data) throw new Error('Mapează numărul plicului sau AWB-ul și data.')
   const rezultat = { aplicabile: [], deja: [], exceptii: [] }, docs = new Map(), tracks = new Map()
@@ -159,6 +160,8 @@ export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = fals
     if (p.stare !== 'activ') return exceptie('plic anulat')
     if (nr_tracking && (tracks.get(nr_tracking) || []).some(x => x.id !== p.id)) return exceptie('AWB-ul aparține altui plic')
     if (!p.lot_id) return exceptie('plicul nu are PV de plicuire (lot)')
+    if (!imputernicire) return exceptie('proiectul nu are încă împuternicirea Beneficiarului; plicurile nu pleacă')
+    if (!p.opis_path) return exceptie('plicul nu are opisul atașat la dosar (Plicuri → Opis)')
     const data = parseazaData(r[mapare.data], { date1904 })
     if (!data) return exceptie('dată lipsă sau invalidă (2025–2030)')
     const awb = nr_tracking || tracking(p.awb)
@@ -194,7 +197,7 @@ export async function aplica(supabase, aplicabile, { esteCurent = () => true } =
   for (; i < aplicabile.length && consecutive < 5 && esteCurent(); i++) {
     const a = aplicabile[i]
     try {
-      if (a.tip !== 'expediere' || !a.patch?.awb || !a.patch?.data_expediere || !a.conditii?.lot_id || a.conditii.versiune == null || !a.conditii.proiect_id) throw new Error('Propunere nevalidă.')
+      if (a.tip !== 'expediere' || !a.patch?.awb || !a.patch?.data_expediere || !a.conditii?.lot_id || !a.conditii.opis_path || a.conditii.versiune == null || !a.conditii.proiect_id) throw new Error('Propunere nevalidă.')
       const { data: alte, error: eT } = await supabase.from('red_plicuri').select('id').eq('awb', a.patch.awb).neq('id', a.plic_id).limit(1)
       if (eT || !Array.isArray(alte)) throw new Error('Recitire AWB eșuată.')
       if (!esteCurent()) break

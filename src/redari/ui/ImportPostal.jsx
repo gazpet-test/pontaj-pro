@@ -10,7 +10,7 @@ const CAMPURI = { nr_document: 'Nr. plic (PL-XXX-nnnn)', nr_tracking: 'Tracking'
 // Only project-scoped IDs, keyset to EMPTY page, at most 100 IDs per URL.
 export async function citesteConvocariPostal(client, proiectId, esteCurent) {
   return citestePaginat(() => client.from('red_plicuri')
-    .select('id,proiect_id,nr_plic,lot_id,awb,data_expediere,data_ar,retur,retur_data,stare,versiune')
+    .select('id,proiect_id,nr_plic,lot_id,opis_path,awb,data_expediere,data_ar,retur,retur_data,stare,versiune')
     .eq('proiect_id', proiectId), { cheie: 'id', esteCurent })
 }
 function schimbari(patch) {
@@ -75,7 +75,7 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
       let convocari
       try { convocari = await citesteConvocariPostal(supabase, proiect.id, curent) }
       catch { throw new Error('Nu s-au putut citi toate plicurile. Previzualizarea nu a fost creată.') }
-      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari, { date1904: !!fisier.date1904 }))
+      if (curent()) setPreview(propune(fisier.randuri, mapare, mod, convocari, { date1904: !!fisier.date1904, imputernicire: !!(String(proiect?.imputernicire_nr || '').trim() && proiect?.imputernicire_data) }))
     } catch (e) { if (curent()) setMesaj(msgEroare(e)) }
     finally { if (curent()) { ocupat.current = false; setLucru(false) } }
   }

@@ -50,7 +50,7 @@ export async function citesteDatePlicuri(client, proiectId, poateScrie, esteCure
 async function actualizeaza(tabel, rand, patch, esteCurent) {
   if (!esteCurent()) throw new Error('Operație abandonată.')
   let q = supabase.from(tabel).update(patch).eq('id', rand.id).eq('proiect_id', rand.proiect_id).eq('versiune', rand.versiune)
-  const campuri = tabel === 'red_plicuri' ? ['stare', 'lot_id', 'awb', 'data_expediere', 'data_ar', 'ar_scan_path', 'retur', 'retur_data', 'retur_scan_path'] : ['pv_path']
+  const campuri = tabel === 'red_plicuri' ? ['stare', 'lot_id', 'opis_path', 'awb', 'data_expediere', 'data_ar', 'ar_scan_path', 'retur', 'retur_data', 'retur_scan_path'] : ['pv_path', 'semnatar1_id', 'semnatar2_id']   // Gemini f10 r1 P3
   for (const k of campuri) q = rand[k] == null ? q.is(k, null) : q.eq(k, rand[k])
   const { data, error } = await q.select('id')
   if (error) throw error
