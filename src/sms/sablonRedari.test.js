@@ -1,7 +1,7 @@
 // Șablonul SMS Redări (20261130c). Textele așteptate sunt scrise de mână (sursă independentă de cod); aceleași cazuri (P1–P15) sunt
 // verificate pe oglinda SQL fn_sms_redari_sablon_calc în supabase/tests/20261130c_sms_redari_sablon_dryrun.sql (TEST2). Date fictive.
 import { describe, expect, it } from 'vitest'
-import { SABLON_REDARI, completeazaSablon, oraStart, telefonContact, ziSesiune, aziBucuresti, oraBucuresti } from './sablonRedari.js'
+import { SABLON_REDARI, SABLON_REDARI_VERSIUNE, completeazaSablon, oraStart, telefonContact, ziSesiune, aziBucuresti, oraBucuresti } from './sablonRedari.js'
 
 const AZI = '2026-11-10'
 const ORA = '08:00'
@@ -39,6 +39,9 @@ export const CAZURI = [
 ]
 
 describe('șablonul SMS Redări — completarea', () => {
+  it('versiunea textului: provizoriu, aceeași ca fn_sms_redari_sablon_versiune() din DRY (TEST23)', () => {
+    expect(SABLON_REDARI_VERSIUNE).toBe('provizoriu-2026-11-03')
+  })
   it('constanta unică (textul provizoriu, înaintea formulării Juridicului)', () => {
     expect(SABLON_REDARI).toBe('Gazpet pt Transgaz: sesiune redare teren la Primaria {COMUNA}, {ZI} ora {ORA}. Raspuns si online, cu QR-ul din scrisoare. Tel {TEL}')
   })

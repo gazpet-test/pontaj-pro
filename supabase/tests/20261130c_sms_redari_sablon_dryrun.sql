@@ -17,6 +17,8 @@
 -- consumul pe clock_timestamp (TEST20), raspuns pe un rand arhivat al persoanei (TEST21).
 -- r6 (NO-GO Jakarinos pe r5): un singur reper de timp pe apel, limitele zi / luna calculate o data (TEST22, aproape de miezul noptii).
 -- r7 (NO-GO Jakarinos pe r6): in fn_sms_rezerva reperul final v_acum vine dupa revalidare, iar dupa el nu se mai asteapta lock-uri (TEST22).
+-- r8 (NO-GO Copilot pe r7): sesiunea mutata pe aceeasi ZZ.LL din alt an = sesiune_schimbata (TEST23); raspuns pe un rand decedat al
+-- persoanei = a raspuns (TEST24); versiunea sablonului (TEST23).
 CREATE FUNCTION pg_temp.s3c_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -957,6 +959,86 @@ BEGIN
   END IF;
   RAISE NOTICE 'TEST22 OK un reper pe apel: ceasul doar in atribuiri; in rezervare v_acum final dupa revalidare (opt-out / ne_eligibil / duplicat_persoana), apoi motiv, fereastra, consum, buget si rezervarea SKIP LOCKED; la 30.11 23:59:59.95 se numara 2 / 2, la 01.12 00:00:00.5 doar 1 / 1 (zi / luna si bugetul de test)';
 END $t$;
+
+-- ── TEST23 (r8 P2-01): sesiunea mutata pe 12.11 din anul urmator (text identic) -> sesiune_schimbata; versiunea sablonului in lot ─
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+DO $t$
+DECLARE v_u uuid; v_p uuid; v_id uuid;
+BEGIN
+  IF public.fn_sms_redari_sablon_versiune() IS DISTINCT FROM 'provizoriu-2026-11-03' THEN RAISE EXCEPTION 'TEST23 FAIL: versiunea sablonului'; END IF;
+  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet, sesiune_zi1, program_zi1)
+  VALUES (pg_temp.s3c_g('pr')::uuid, 'Anul', 'TSN', 'Test', pg_temp.s3c_g('azi')::date + 3, '10:00') RETURNING id INTO v_u;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.s3c_g('pr')::uuid, v_u, 'TSN-0001', 1) RETURNING id INTO v_p;
+  INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (v_p, 'Test Sms C Anul', 'TEST SMS C ANUL', 'proprietar') RETURNING id INTO v_id;
+  INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta, telefon)
+  VALUES (v_id, 'Strada Test 34', 'Sat Test', 'Testeni', 'Test', '000000', true, '0700000234');
+  INSERT INTO public.red_convocari (detinator_id, canal) VALUES (v_id, 'telefon');
+  PERFORM pg_temp.s3c_s('un', v_u::text);
+END $t$;
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('ured')::uuid, 'authenticated');
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('un')::uuid, NULL, NULL, true);
+  IF j->>'sablon_versiune' IS DISTINCT FROM 'provizoriu-2026-11-03' THEN RAISE EXCEPTION 'TEST23 FAIL: versiunea in previzualizare'; END IF;
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('un')::uuid, j->>'text_final', j->>'set_hash', false);
+  PERFORM pg_temp.s3c_s('L8', j->>'lot_id'); PERFORM pg_temp.s3c_s('t_l8', j->>'text_final');
+END $t$;
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+-- aceeasi ZZ.LL si aceeasi ora, alt an: textul recalculat e identic, sesiunea nu
+UPDATE public.red_uat SET sesiune_zi1 = (pg_temp.s3c_g('azi')::date + 3 + interval '1 year')::date WHERE id = pg_temp.s3c_g('un')::uuid;
+DO $t$
+DECLARE l public.sms_loturi; j jsonb;
+BEGIN
+  SELECT * INTO l FROM public.sms_loturi WHERE id = pg_temp.s3c_g('L8')::uuid;
+  IF l.filtru->>'sablon_versiune' IS DISTINCT FROM 'provizoriu-2026-11-03' THEN RAISE EXCEPTION 'TEST23 FAIL: versiunea in filtru'; END IF;
+  j := public.fn_sms_redari_sablon_calc('Anul', ARRAY[(pg_temp.s3c_g('azi')::date + 3 + interval '1 year')::date, NULL, NULL], ARRAY['10:00', NULL, NULL],
+                                        '0700 000 199', now() AT TIME ZONE 'Europe/Bucharest');
+  IF j->>'text' IS DISTINCT FROM l.text THEN RAISE EXCEPTION 'TEST23 FAIL: pregatire (textul trebuia sa ramana identic)'; END IF;
+  IF public.fn_sms_redari_lot_motiv(l) IS DISTINCT FROM 'sesiune_schimbata' THEN RAISE EXCEPTION 'TEST23 FAIL: motivul %', public.fn_sms_redari_lot_motiv(l); END IF;
+END $t$;
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('ured')::uuid, 'authenticated');
+DO $t$
+DECLARE e text;
+BEGIN
+  e := pg_temp.s3c_eroare(format('SELECT public.fn_sms_lot_aproba(%L, %s)', pg_temp.s3c_g('L8'),
+         (public.fn_sms_lot_destinatari(pg_temp.s3c_g('L8')::uuid)->>'versiune')::integer));
+  IF e IS NULL OR e NOT LIKE '22023%sesiune_schimbata%' THEN RAISE EXCEPTION 'TEST23 FAIL: aprobarea cu sesiunea mutata (%)', e; END IF;
+  RAISE NOTICE 'TEST23 OK sesiunea mutata pe aceeasi zi din anul urmator (text identic) = sesiune_schimbata la aprobare; versiunea sablonului provizoriu-2026-11-03 in lot';
+END $t$;
+
+-- ── TEST24 (r8 P2-02): raspuns pe un rand DECEDAT al aceleiasi persoane din UAT -> persoana exclusa (a_raspuns) ───────────────────
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+DO $t$
+DECLARE v_u uuid; p1 uuid; p2 uuid; v_id uuid;
+BEGIN
+  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet, sesiune_zi1, program_zi1)
+  VALUES (pg_temp.s3c_g('pr')::uuid, 'Decedat', 'TSP', 'Test', pg_temp.s3c_g('azi')::date + 3, '10:00') RETURNING id INTO v_u;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.s3c_g('pr')::uuid, v_u, 'TSP-0001', 1) RETURNING id INTO p1;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.s3c_g('pr')::uuid, v_u, 'TSP-0002', 1) RETURNING id INTO p2;
+  INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (p1, 'Test Sms C Dec', 'TEST SMS C DEC', 'proprietar') RETURNING id INTO v_id;
+  INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta, telefon)
+  VALUES (v_id, 'Strada Test 35', 'Sat Test', 'Testeni', 'Test', '000000', true, '0700000235');
+  INSERT INTO public.red_convocari (detinator_id, canal) VALUES (v_id, 'telefon');
+  -- aceeasi cheie de persoana pe un rand marcat decedat, care are un raspuns
+  INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate, decedat) VALUES (p2, 'Test Sms C Dec', 'TEST SMS C DEC', 'proprietar', true) RETURNING id INTO v_id;
+  INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta, telefon)
+  VALUES (v_id, 'Strada Test 35', 'Sat Test', 'Testeni', 'Test', '000000', true, '0700000236');
+  INSERT INTO public.red_convocari (detinator_id, canal) VALUES (v_id, 'telefon');
+  INSERT INTO public.red_raspunsuri (detinator_id, canal, optiune) VALUES (v_id, 'scris', 'nu_particip_fara_obiectii');
+  PERFORM pg_temp.s3c_s('up', v_u::text);
+END $t$;
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('ured')::uuid, 'authenticated');
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('up')::uuid, NULL, NULL, true);
+  IF (j->>'candidati')::integer <> 1 OR (j->>'excluse_a_raspuns')::integer <> 1 OR (j->>'nr_destinatari')::integer <> 0 THEN
+    RAISE EXCEPTION 'TEST24 FAIL: raspunsul de pe randul decedat %', j - 'text_final';
+  END IF;
+  RAISE NOTICE 'TEST24 OK raspuns pe un rand decedat al aceleiasi persoane (UAT) = a raspuns, 0 SMS; randul decedat nu creeaza destinatari';
+END $t$;
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
 
 -- ── TEST14: comutatorul Redari oprit = creare (si previzualizare) refuzata, ca inainte, si pentru owner ─────────────────────────
 SELECT pg_temp.s3c_ca(pg_temp.s3c_g('own')::uuid, 'authenticated');

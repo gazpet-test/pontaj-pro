@@ -7,6 +7,9 @@ import { verificaText } from '../../supabase/functions/_shared/smsText.mjs'
 
 // Textul PROVIZORIU, singura sursă din UI; se înlocuiește după formularea Juridicului (și, în aceeași livrare, fn_sms_redari_sablon_model).
 export const SABLON_REDARI = 'Gazpet pt Transgaz: sesiune redare teren la Primaria {COMUNA}, {ZI} ora {ORA}. Raspuns si online, cu QR-ul din scrisoare. Tel {TEL}'
+// Marcajul de versiune al textului (oglinda fn_sms_redari_sablon_versiune() din SQL, scris si in filtru.sablon_versiune al lotului).
+// provizoriu-* = textul NU e aprobat: comutatorul Redari nu se porneste (docs/sms/ACTIVARE_SMS_REDARI.md).
+export const SABLON_REDARI_VERSIUNE = 'provizoriu-2026-11-03'
 
 const RX_DATA = /^\d{4}-\d{2}-\d{2}$/
 // ora de început la începutul programului: HH:MM sau H:MM (și cu punct), urmată de altceva decât o cifră; „24:00” sau „9” nu trec
