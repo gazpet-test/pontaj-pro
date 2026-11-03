@@ -351,6 +351,11 @@ const curataDupaScoatere = t => t.replace(/\r\n?/g, '\n').replace(/[ \t ]{2,}/g
 // fără punct, nu mai e o singură „propoziție”. Excepții (lipire cu rândul următor): o unitate care se termină cu „Informarea
 // completă:” (adresa e pe rândul următor), ca marcajul să fie scos cu adresă cu tot, și un rând fără punct final urmat de
 // un rând care începe cu literă mică (aceeași propoziție, ruptă pe două rânduri).
+// #970 r16 (Jakarinos P2-02): după un marcaj gol „Informarea completă:” se lipește rândul următor DOAR dacă începe cu o adresă
+// (`[link …]`, `://`, `www.`, `x.ro`) și nu e un câmp GDPR independent („Drepturi: …”, „Scop: …”); altfel marcajul se scoate
+// singur, iar rândul rămâne (dacă are totuși o adresă, o oprește garda adresaWebNepermisa)
+const continuaCuAdresa = urm => !/^[\s ]*\p{L}[\p{L}\p{M} -]{0,40}:(?!\/\/)/u.test(urm) &&
+  /^[\s ]*(?:\[|\S*(?::\/\/|www\.|[A-Za-z0-9-]\.[A-Za-z]{2,}))/i.test(urm)
 const imparteInPropozitii = t => {
   const bucati = String(t).split(/(?<=[.!?])(?=[\s\u00a0])|(?<!\r)(?=\r?\n)/)
   const unitati = []
@@ -358,7 +363,7 @@ const imparteInPropozitii = t => {
     let u = bucati[i]
     // un rând fără punct final urmat de un rând care începe cu literă mică continuă aceeași propoziție („se află\npe verso.”);
     // un rând nou care începe cu majusculă („Scop:”, „Drepturi:”) e unitate nouă
-    while (i + 1 < bucati.length && (/informarea completa:$/.test(normalizeazaText(u)) ||
+    while (i + 1 < bucati.length && ((/informarea completa:$/.test(normalizeazaText(u)) && continuaCuAdresa(bucati[i + 1])) ||
       (!/[.!?][\s ]*$/.test(u) && /^\r?\n[\s ]*\p{Ll}/u.test(bucati[i + 1])))) u += bucati[++i]
     unitati.push(u)
   }
@@ -419,7 +424,9 @@ export const MARCAJE_PROPRII = [/gazpet\.ro/i, /vercel\.app/i, /pontaj-pro/i, /\
 // #970 r9 + r15: e-mail STRICT — partea locală [A-Za-z0-9._%+-]+ (nu începe cu „www.”), domeniul [A-Za-z0-9.-]+.tld, cu limite
 // la stânga și la dreapta. r15: după domeniu nu poate urma `/`, `@`, `-`, alfanumeric sau „.alfanumeric” — un e-mail urmat de o
 // cale nu e e-mail („user@www.dataprotection.ro/x” rămâne întreg și e refuzat la pasul 4, pe „www”)
-const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9\-/@]|\.[A-Za-z0-9])/gi
+// r16 (Jakarinos P2-01): margine dreaptă STRICTĂ — după e-mail doar final, spațiu alb sau o înșiruire de `.,;:!?)]»”"'` urmată
+// de spațiu alb / final; „user@www.exemplu.ro:8080/x”, „…ro?formular=1”, „…ro#informare” nu mai sunt e-mailuri (rămân întregi)
+const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=$|\s|[.,;:!?)\]»”"']+(?:\s|$))/gi
 const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 const RX_EXCEPTII = new RegExp(`(?<![A-Za-z0-9.\\-@:/])(?:${[...EXCEPTII_WEB].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@]*)?(?=$|\\s|[.,;!?)\\]»”"']+(?:\\s|$))`, 'gi')
 const RX_DOMENIU = /[A-Za-z0-9-]\.[A-Za-z]{2,}/

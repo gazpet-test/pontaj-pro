@@ -317,6 +317,11 @@ describe('genereazaConvocator', () => {
       ['Operatori: Transgaz. Informarea completă: [link]. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
       ['Operatori: Transgaz.\nInformarea completă:\nwww.dataprotection.ro\nDrepturi: acces.', 'Operatori: Transgaz.\nDrepturi: acces.'],
       ['Operatori: Transgaz. Informarea completă: la sediu. Drepturi: acces.', 'Operatori: Transgaz. Drepturi: acces.'],
+      // #970 r16 (Jakarinos P2-02): marcajul gol nu înghite rândul următor care e un câmp GDPR independent
+      ['Operatori: Transgaz\nInformarea completă:\nDrepturi: acces și opoziție.', 'Operatori: Transgaz\nDrepturi: acces și opoziție.'],
+      ['Operatori: Transgaz\nScop: convocarea\nInformarea completă:\nScop secundar: arhivare\nDrepturi: acces.', 'Operatori: Transgaz\nScop: convocarea\nScop secundar: arhivare\nDrepturi: acces.'],
+      ['Operatori: Transgaz\nInformarea completă:\n[link scurt]\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
+      ['Operatori: Transgaz\nInformarea completă:\nhttps://x.invalid/a\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
     ]
     for (const [text, fata] of cazuri) expect(textGdprFataConvocator(text, 'G', 'https://x.invalid'), text).toBe(fata)
     // „versoul” / „Versoix” nu sunt cuvântul „verso”; textul fără verso rămâne identic (inclusiv rândurile)
@@ -433,6 +438,8 @@ describe('genereazaConvocator', () => {
       'dataprotection.ro-evil.ro', 'www.exemplu.ro,contact@example.com', 'Scrieți la www.x@exemplu.ro', 'Primăria.Comuna',
       // margini stricte (r15): lipite de „:” — nu e un caz real în textul GDPR, se scrie cu spațiu după „:”
       'Plângere:dataprotection.ro.', 'Vezi Info:https://www.dataprotection.ro/a#b:c.ro',
+      // r16 (Jakarinos P2-01): e-mail urmat de port / interogare / ancoră nu mai e e-mail
+      'user@www.exemplu.ro:8080/x', 'user@www.exemplu.ro?formular=1', 'user@www.exemplu.ro#informare', 'a@exemplu.ro:443', 'a@exemplu.ro).x',
     ]
     // refuzate: neaprobate sau proprii („https://gazpet.ro@example.com/x” — nu e e-mail, deci „gazpet.ro” e adresă proprie)
     for (const t of refuzate) expect(adresaWebNepermisa(t), t).not.toBeNull()
@@ -445,6 +452,8 @@ describe('genereazaConvocator', () => {
       'Vezi https://dataprotection.ro/?referinta=art:exemplu.ro', 'Info:(www.dataprotection.ro)', 'Plângere la ANSPDCP (www.dataprotection.ro).',
       // r15 (Copilot P3-01): etichete lipite de un e-mail valid
       'E-mail:redari@gazpet.ro', 'Email:redari@gazpet.ro', 'Contact:ion@exemplu.ro', 'E-mail:contact@example.com',
+      // r16: e-mail urmat de semne de punctuație și spațiu / final rămâne e-mail
+      'Scrieți la ion@exemplu.ro: luni-vineri.', 'Scrieți la ion@exemplu.ro?', '(ion@exemplu.ro).', '„ion@exemplu.ro”, apoi', 'ion@exemplu.ro!',
     ]
     for (const t of permise) expect(adresaWebNepermisa(t), t).toBeNull()
     // fără alarme false pe textul juridic: abrevieri, articole, numere, default-ul text_gdpr din BD (migrarea 20261126a) și
