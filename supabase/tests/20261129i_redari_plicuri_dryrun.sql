@@ -82,6 +82,8 @@ DO $t$ DECLARE pl public.red_plicuri; BEGIN
   PERFORM set_config('r29i.plA',pl.id::text,true);
   -- r2 P1: convocare postala noua pentru aceeasi persoana, cat plicul e neexpediat -> refuz
   IF NOT pg_temp.r29i_refuza(format($q$INSERT INTO public.red_convocari(detinator_id,canal,nr_document,stare) VALUES(%L,'posta','C-T29I-A3','activ')$q$,pg_temp.r29i_g('dA3')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: convocare noua cu plic neexpediat'; END IF;
+  -- r6: contactul nu se muta pe alt detinator; lock-urile de UAT nu sunt apelabile din aplicatie
+  IF NOT pg_temp.r29i_refuza(format($q$UPDATE public.red_detinatori_contact SET detinator_id=%L WHERE detinator_id=%L$q$,pg_temp.r29i_g('dE'),pg_temp.r29i_g('dD')),'23514') THEN RAISE EXCEPTION 'TEST1 FAIL: contact mutat'; END IF;
   RAISE NOTICE 'TEST1 OK';
 END $t$;
 
@@ -244,5 +246,7 @@ END $t$;
 SELECT pg_temp.r29i_ca(NULL,'postgres');
 DO $t$ BEGIN
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_plicuri') < 3 OR (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_loturi_plicuire') < 2 THEN RAISE EXCEPTION 'TEST7 FAIL: jurnal'; END IF;
+  IF has_function_privilege('authenticated','public.fn_red_plic_incearca_lock(uuid)','EXECUTE') OR has_function_privilege('authenticated','public.fn_red_plic_incearca_lock_detinator(uuid)','EXECUTE')
+     OR has_function_privilege('authenticated','public.fn_red_plic_uat_detinator(uuid)','EXECUTE') THEN RAISE EXCEPTION 'TEST7 FAIL: lock UAT apelabil din aplicatie'; END IF;
   RAISE NOTICE 'TEST7 OK';
 END $t$;

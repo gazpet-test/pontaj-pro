@@ -127,17 +127,43 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 $fn$;
 REVOKE EXECUTE ON FUNCTION public.fn_red_cheie_persoana(uuid) FROM PUBLIC, anon, authenticated;
 
--- Jakarinos r5 P2: gărzile (care țin deja rândul deținătorului) NU așteaptă lock-ul persoanei: îl încearcă; dacă o plicuire / expediere îl ține,
--- tranzacția primește o eroare reîncercabilă (55P03) în loc de deadlock. Plicuirea și expedierea iau lock-ul persoanei ÎNAINTE de rânduri.
-CREATE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid, p_cheie text) RETURNS void
+-- Jakarinos r6 (P1 + P2) — PROTOCOLUL DE CONCURENȚĂ, simplificat: UN SINGUR lock de serializare pe UAT ('red_plic_uat:<uat>').
+--  * plicuirea (fn_red_plic_creeaza) și expedierea (fn_red_plic_reguli) îl iau ÎNTÂI, cu așteptare, înainte de orice blocare de rânduri;
+--  * toate gărzile care pot schimba apartenența la plic (convocare poștală nouă / reactivată, nume, adresă, ștergere / mutare de deținător,
+--    ștergere / reactivare de parcelă) îl ÎNCEARCĂ fără așteptare, indiferent de starea rândului (și pentru deținători șterși), și abia apoi
+--    citesc identitatea; dacă e ținut, eroare reîncercabilă 55P03. Gărzile nu mai așteaptă niciun lock de rând -> fără cicluri de așteptare.
+--  Două gărzi pe același UAT se serializează între ele; plicuirea / expedierea văd starea comisă a oricărei gărzi (sau gărzile le văd pe ele).
+--  Tranzacțiile din aplicație sunt scurte (o cerere = o tranzacție), deci coliziunile sunt rare; eroarea cere doar reîncercarea.
+CREATE FUNCTION public.fn_red_plic_incearca_lock(p_uat uuid) RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 BEGIN
-  IF p_uat IS NULL OR p_cheie IS NULL THEN RETURN; END IF;
-  IF NOT pg_try_advisory_xact_lock(hashtextextended('red_plic:' || p_uat::text || ':' || p_cheie, 0)) THEN
-    RAISE EXCEPTION 'redari: o plicuire / expediere e in curs pentru aceasta persoana; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+  IF p_uat IS NULL THEN RETURN; END IF;
+  IF NOT pg_try_advisory_xact_lock(hashtextextended('red_plic_uat:' || p_uat::text, 0)) THEN
+    RAISE EXCEPTION 'redari: o plicuire / expediere sau o modificare de deținători e în curs în acest UAT; reîncercați peste câteva secunde' USING ERRCODE = '55P03';
   END IF;
 END $fn$;
-REVOKE EXECUTE ON FUNCTION public.fn_red_plic_incearca_lock(uuid, text) FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.fn_red_plic_incearca_lock(uuid) FROM PUBLIC, anon, authenticated;
+
+-- UAT-ul curent al unui deținător (și când e șters logic); NULL dacă nu există
+CREATE FUNCTION public.fn_red_plic_uat_detinator(p_detinator uuid) RETURNS uuid
+LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT p.uat_id FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = p_detinator;
+$fn$;
+REVOKE EXECUTE ON FUNCTION public.fn_red_plic_uat_detinator(uuid) FROM PUBLIC, anon, authenticated;
+
+-- lock pe UAT-ul deținătorului (try), apoi verificare că deținătorul nu s-a mutat între citire și lock
+CREATE FUNCTION public.fn_red_plic_incearca_lock_detinator(p_detinator uuid) RETURNS uuid
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_uat uuid;
+BEGIN
+  v_uat := public.fn_red_plic_uat_detinator(p_detinator);
+  PERFORM public.fn_red_plic_incearca_lock(v_uat);
+  IF public.fn_red_plic_uat_detinator(p_detinator) IS DISTINCT FROM v_uat THEN
+    RAISE EXCEPTION 'redari: deținătorul a fost mutat între timp; reîncercați' USING ERRCODE = '55P03';
+  END IF;
+  RETURN v_uat;
+END $fn$;
+REVOKE EXECUTE ON FUNCTION public.fn_red_plic_incearca_lock_detinator(uuid) FROM PUBLIC, anon, authenticated;
 
 -- Jakarinos r2 P1: o convocare poștală care devine eligibilă (inserare / reactivare) pentru o persoană cu plic activ neexpediat e refuzată,
 -- sub același advisory lock ca plicuirea (serializare); plicul se anulează și se reface complet. Apelată din garda convocărilor (INVOKER),
@@ -146,13 +172,10 @@ CREATE FUNCTION public.fn_red_plic_garda_persoana(p_detinator uuid) RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_cheie text; v_uat uuid; v_nr text;
 BEGIN
-  -- Jakarinos r5 P1: serializare pe DETINATOR inainte de citirea identitatii (si cand cheia e NULL): un INSERT de contact concurent
-  -- ia acelasi lock de rand in garda lui, deci una dintre operatii o vede pe cealalta comisa
-  PERFORM 1 FROM public.red_detinatori d WHERE d.id = p_detinator FOR UPDATE;
+  -- Jakarinos r6: lock-ul UAT-ului ÎNAINTE de citirea identității, și când deținătorul e șters / fără adresă (cheia NULL)
+  v_uat := public.fn_red_plic_incearca_lock_detinator(p_detinator);
   v_cheie := public.fn_red_cheie_persoana(p_detinator);
-  IF v_cheie IS NULL THEN RETURN; END IF;
-  SELECT p.uat_id INTO v_uat FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = p_detinator;
-  PERFORM public.fn_red_plic_incearca_lock(v_uat, v_cheie);
+  IF v_cheie IS NULL OR v_uat IS NULL THEN RETURN; END IF;
   SELECT nr_plic INTO v_nr FROM public.red_plicuri WHERE uat_id = v_uat AND cheie_persoana = v_cheie AND stare = 'activ' AND data_expediere IS NULL LIMIT 1;
   IF v_nr IS NOT NULL THEN
     RAISE EXCEPTION 'redari: persoana are plicul neexpediat %; anuleaza-l si refa-l cu toate convocarile', v_nr USING ERRCODE = '23514';
@@ -244,10 +267,10 @@ BEGIN
       RAISE EXCEPTION 'redari: PV-ul de plicuire nu e finalizat (PV semnat atasat, 2 semnatari) sau expedierea e inaintea plicuirii' USING ERRCODE = '23514';
     END IF;
     -- Jakarinos r2 P1/P2: la expediere se reverifica, sub acelasi advisory lock, ca plicul e complet si identitatea postala neschimbata
-    PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || NEW.uat_id::text || ':' || NEW.cheie_persoana, 0));
+    PERFORM pg_advisory_xact_lock(hashtextextended('red_plic_uat:' || NEW.uat_id::text, 0));   -- r6: lock-ul UAT-ului (vezi protocolul)
     PERFORM 1 FROM public.red_detinatori d WHERE d.id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY d.id FOR SHARE;
-    PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE;
     PERFORM 1 FROM public.red_detinatori_contact k WHERE k.detinator_id IN (SELECT c.detinator_id FROM public.red_convocari c WHERE c.plic_id = NEW.id) ORDER BY k.detinator_id FOR SHARE;
+    PERFORM 1 FROM public.red_parcele p WHERE p.id IN (SELECT d.parcela_id FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.plic_id = NEW.id) ORDER BY p.id FOR SHARE;
     -- Jakarinos r3 P2: fiecare membru reverificat pe TOT criteriul de eligibilitate (parcela nestearsa, acelasi proiect si UAT), blocat FOR SHARE
     IF EXISTS (SELECT 1 FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
                 WHERE c.plic_id = NEW.id
@@ -343,19 +366,22 @@ REVOKE EXECUTE ON FUNCTION public.fn_red_lot_reguli() FROM PUBLIC, anon, authent
 -- din aplicatie: plicul se anuleaza intai (si se reface). Mentenanta postgres fara JWT ramane permisa (expedierea reverifica oricum).
 CREATE FUNCTION public.fn_red_plic_identitate_garda() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
--- Jakarinos r3 P1 / r4 P1: protocol comun pentru identitate. Pentru fiecare detinator atins: cheia VECHE si cheia NOUA, advisory lock pe ambele
--- (aceeasi forma ca plicuirea / expedierea, ordonat), apoi refuz daca: (a) detinatorul e intr-un plic activ neexpediat si identitatea / stergerea
+-- Jakarinos r3 P1 / r4 P1 / r6: protocol comun pentru identitate. Lock-ul UAT-ului (vechi + nou, ordonat, fara asteptare) se ia ÎNTÂI,
+-- apoi se citesc / calculeaza cheile VECHE si NOUA, apoi refuz daca: (a) detinatorul e intr-un plic activ neexpediat si identitatea / stergerea
 -- se schimba; (b) detinatorul are o convocare postala eligibila si intra (cheie noua sau reactivare) intr-o identitate care are deja plic neexpediat.
-DECLARE v_det uuid; v_uat uuid; v_veche text; v_noua text; v_nr text; v_k text; v_chei text[]; v_reactivat boolean := false;
-        v_nume text; v_c public.red_detinatori_contact; v_mutat boolean := false;
+DECLARE v_det uuid; v_uat uuid; v_veche text; v_noua text; v_nr text; v_k text; v_reactivat boolean := false;
+        v_nume text; v_sters timestamptz; v_c public.red_detinatori_contact; v_mutat boolean := false; v_u uuid;
 BEGIN
   IF session_user = 'postgres' AND coalesce(current_setting('request.jwt.claims', true), '') = '' THEN RETURN NEW; END IF;
   IF TG_TABLE_NAME = 'red_parcele' THEN
     IF NEW.sters_la IS NOT DISTINCT FROM OLD.sters_la THEN RETURN NEW; END IF;
     v_reactivat := NEW.sters_la IS NULL;
-    FOR v_det IN SELECT d.id FROM public.red_detinatori d WHERE d.parcela_id = OLD.id AND d.sters_la IS NULL ORDER BY d.id FOR UPDATE LOOP
+    -- r6: lock-ul UAT-ului înaintea citirii deținătorilor (fără blocări de rând în gardă)
+    FOREACH v_u IN ARRAY (SELECT coalesce(array_agg(DISTINCT u ORDER BY u), ARRAY[]::uuid[]) FROM unnest(ARRAY[OLD.uat_id, NEW.uat_id]) u WHERE u IS NOT NULL) LOOP
+      PERFORM public.fn_red_plic_incearca_lock(v_u);
+    END LOOP;
+    FOR v_det IN SELECT d.id FROM public.red_detinatori d WHERE d.parcela_id = OLD.id AND d.sters_la IS NULL ORDER BY d.id LOOP
       v_k := public.fn_red_cheie_persoana(v_det);
-      PERFORM public.fn_red_plic_incearca_lock(OLD.uat_id, v_k);
       SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
        WHERE c.detinator_id = v_det AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
       IF v_nr IS NULL AND v_reactivat AND v_k IS NOT NULL THEN
@@ -369,26 +395,29 @@ BEGIN
   END IF;
   IF TG_TABLE_NAME = 'red_detinatori' THEN
     IF (NEW.nume_normalizat, NEW.sters_la, NEW.parcela_id) IS NOT DISTINCT FROM (OLD.nume_normalizat, OLD.sters_la, OLD.parcela_id) THEN RETURN NEW; END IF;
-    v_det := OLD.id;   -- randul e deja blocat de UPDATE-ul curent; contactul se citeste DUPA blocare (valori stabilizate)
+    v_det := OLD.id;   -- randul e blocat de UPDATE-ul curent; r6: lock-ul UAT-ului vechi + nou (ordonat), apoi contactul se citeste
+    FOREACH v_u IN ARRAY (SELECT coalesce(array_agg(DISTINCT p.uat_id ORDER BY p.uat_id), ARRAY[]::uuid[]) FROM public.red_parcele p WHERE p.id IN (OLD.parcela_id, NEW.parcela_id)) LOOP
+      PERFORM public.fn_red_plic_incearca_lock(v_u);
+    END LOOP;
+    SELECT p.uat_id INTO v_uat FROM public.red_parcele p WHERE p.id = NEW.parcela_id;
     SELECT * INTO v_c FROM public.red_detinatori_contact WHERE detinator_id = v_det;
     v_veche := CASE WHEN OLD.sters_la IS NULL THEN public.fn_red_cheie_calc(OLD.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
     v_noua := CASE WHEN NEW.sters_la IS NULL THEN public.fn_red_cheie_calc(NEW.nume_normalizat, v_c.adresa_strada, v_c.adresa_sat, v_c.adresa_comuna, v_c.adresa_judet, v_c.cod_postal, v_c.adresa_cunoscuta) END;
     v_reactivat := OLD.sters_la IS NOT NULL AND NEW.sters_la IS NULL;
     v_mutat := NEW.parcela_id IS DISTINCT FROM OLD.parcela_id;
   ELSE   -- red_detinatori_contact (INSERT / UPDATE)
+    IF TG_OP = 'UPDATE' AND NEW.detinator_id IS DISTINCT FROM OLD.detinator_id THEN
+      RAISE EXCEPTION 'redari: contactul nu se muta pe alt detinator' USING ERRCODE = '23514';
+    END IF;
     IF TG_OP = 'UPDATE' AND (NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta)
        IS NOT DISTINCT FROM (OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) THEN RETURN NEW; END IF;
     v_det := NEW.detinator_id;
-    -- Jakarinos r5 P1: blocam detinatorul inainte de citirea numelui; o schimbare concurenta de nume / o convocare noua asteapta sau e asteptata
-    SELECT d.nume_normalizat INTO v_nume FROM public.red_detinatori d WHERE d.id = v_det AND d.sters_la IS NULL FOR UPDATE;
+    -- Jakarinos r6 P1: lock-ul UAT-ului ÎNAINTE de citirea numelui, și pentru deținătorii șterși logic (reactivarea concurentă ia același lock)
+    v_uat := public.fn_red_plic_incearca_lock_detinator(v_det);
+    SELECT d.nume_normalizat, d.sters_la INTO v_nume, v_sters FROM public.red_detinatori d WHERE d.id = v_det;
+    IF v_sters IS NOT NULL THEN v_nume := NULL; END IF;   -- deținător șters: fără identitate poștală (reactivarea trece prin garda deținătorului)
     v_veche := CASE WHEN TG_OP = 'UPDATE' THEN public.fn_red_cheie_calc(v_nume, OLD.adresa_strada, OLD.adresa_sat, OLD.adresa_comuna, OLD.adresa_judet, OLD.cod_postal, OLD.adresa_cunoscuta) END;
     v_noua := public.fn_red_cheie_calc(v_nume, NEW.adresa_strada, NEW.adresa_sat, NEW.adresa_comuna, NEW.adresa_judet, NEW.cod_postal, NEW.adresa_cunoscuta);
-  END IF;
-  SELECT p.uat_id INTO v_uat FROM public.red_detinatori d JOIN public.red_parcele p ON p.id = d.parcela_id WHERE d.id = v_det;
-  -- lock-ul persoanei pe cheile veche si noua, in ordine, FARA asteptare (try-lock) — fara deadlock cu plicuirea / expedierea
-  SELECT array_agg(DISTINCT k ORDER BY k) INTO v_chei FROM unnest(ARRAY[v_veche, v_noua]) k WHERE k IS NOT NULL;
-  IF v_uat IS NOT NULL AND v_chei IS NOT NULL THEN
-    FOREACH v_k IN ARRAY v_chei LOOP PERFORM public.fn_red_plic_incearca_lock(v_uat, v_k); END LOOP;
   END IF;
   -- (a) membru al unui plic neexpediat: identitatea / stergerea nu se schimba
   IF v_veche IS DISTINCT FROM v_noua OR v_mutat THEN
@@ -435,14 +464,18 @@ BEGIN
     RAISE EXCEPTION 'redari: lista de convocari invalida (1..200)' USING ERRCODE = '22023';
   END IF;
   IF (SELECT count(DISTINCT x) FROM unnest(p_convocari) x) <> cardinality(p_convocari) THEN RAISE EXCEPTION 'redari: convocari duplicate in lista' USING ERRCODE = '22023'; END IF;
-  -- r1 P1: serializare pe persoana + UAT (advisory lock pe cheie), inainte de blocarea randurilor; doua plicuiri pe aceeasi persoana se asteapta
+  -- r1 P1 / r6: serializare pe UAT (advisory lock), inainte de blocarea randurilor; doua plicuiri in acelasi UAT se asteapta
   SELECT public.fn_red_cheie_persoana(c.detinator_id), p.uat_id INTO v_cheie0, v_uat0
     FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
    WHERE c.id = p_convocari[1];
   IF v_cheie0 IS NULL OR v_uat0 IS NULL THEN
     RAISE EXCEPTION 'redari: convocarea nu are o persoana cu adresa cunoscuta (nume + adresa)' USING ERRCODE = 'P0001';
   END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended('red_plic:' || v_uat0::text || ':' || v_cheie0, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended('red_plic_uat:' || v_uat0::text, 0));   -- r6: lock-ul UAT-ului (vezi protocolul)
+  -- după lock, cheia și UAT-ul primei convocări se recitesc (o gardă comisă între timp e acum vizibilă)
+  SELECT public.fn_red_cheie_persoana(c.detinator_id), p.uat_id INTO v_cheie0, v_uat0
+    FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id JOIN public.red_parcele p ON p.id = d.parcela_id
+   WHERE c.id = p_convocari[1];
   -- blocare în ordine fixă (id), ca două plicuiri concurente să nu se blocheze reciproc
   PERFORM 1 FROM public.red_convocari WHERE id = ANY(p_convocari) ORDER BY id FOR UPDATE;
   -- Jakarinos r3 P1: identitatea (nume + adresa) se stabilizeaza: detinatorii si contactele lor blocate FOR SHARE pana la commit

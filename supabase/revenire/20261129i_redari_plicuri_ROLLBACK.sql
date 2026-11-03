@@ -47,7 +47,9 @@ BEGIN
   DROP FUNCTION public.fn_red_convocari_posta_garda();
   DROP FUNCTION public.fn_red_plic_garda_persoana(uuid);
   DROP FUNCTION public.fn_red_plic_identitate_garda();
-  DROP FUNCTION public.fn_red_plic_incearca_lock(uuid, text);
+  DROP FUNCTION public.fn_red_plic_incearca_lock_detinator(uuid);
+  DROP FUNCTION public.fn_red_plic_uat_detinator(uuid);
+  DROP FUNCTION public.fn_red_plic_incearca_lock(uuid);
   EXECUTE format('ALTER TABLE public.red_plic_sare SET SCHEMA %I', v_schema);   -- sarea pleaca odata cu cheile (arhiva fara drepturi)
   IF to_regclass('public.red_plicuri') IS NOT NULL OR to_regclass(format('%I.red_plicuri', v_schema)) IS NULL
      OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'red_convocari' AND column_name IN ('plic_id', 'retur_detaliu')) THEN
