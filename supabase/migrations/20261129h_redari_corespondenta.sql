@@ -129,7 +129,8 @@ FROM public.red_proiecte p, (VALUES
   ('D2', 2, 'Răzvan Toma (intern)', 'Funcția și telefonul lui Adrian Someșan (reprezentant A.P.M.), telefon contact convocări', 'Claude (claude@gazpet.ro)', 'Cerut de Răzvan în chat 02.11.')
 ) AS v(cod, ordine, destinatar, subiect, expeditor, observatii)
 WHERE p.cod = 'LOT1-PRUNISOR-JUPA';
-UPDATE public.red_corespondenta SET stare = 'trimis', trimis_la = DATE '2026-11-02' WHERE cod IN ('D1', 'D2');
+UPDATE public.red_corespondenta SET stare = 'trimis', trimis_la = DATE '2026-11-02'
+  WHERE cod IN ('D1', 'D2') AND proiect_id = (SELECT id FROM public.red_proiecte WHERE cod = 'LOT1-PRUNISOR-JUPA');
 
 DO $post$
 BEGIN

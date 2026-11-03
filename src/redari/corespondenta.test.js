@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp, sesiuneEcran } from './corespondenta.js'
+import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp, sesiuneEcran, stariInFormular } from './corespondenta.js'
 
 describe('corespondenta de trimis', () => {
   it('trimis / raspuns primit apar doar dupa aprobare; aprobat nu se alege din lista', () => {
@@ -37,5 +37,11 @@ describe('corespondenta de trimis', () => {
     expect(veche()).toBe(true); expect(noua()).toBe(false)
     ses.noua()                           // demontare
     expect(noua()).toBe(true)
+  })
+  it('formular: rand aprobat cu continut schimbat -> doar draft / la avocat / anulat', () => {
+    const r = { stare: 'aprobat', aprobat_la: '2026-11-03T08:00:00Z', destinatar: 'TGZ', subiect: 'x', expeditor: 'C', documente: 'd' }
+    expect(stariInFormular(r, { ...r })).toContain('trimis')
+    expect(stariInFormular(r, { ...r, destinatar: 'alt' })).toEqual(['draft', 'la_avocat', 'anulat'])
+    expect(stariInFormular(null, {})).toEqual(['draft', 'la_avocat'])
   })
 })

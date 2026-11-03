@@ -23,6 +23,15 @@ export function stariPermise(rand) {
     .concat(rand?.stare === 'aprobat' ? ['aprobat'] : [])
 }
 
+// Gemini r1 P3: dacă în formular s-a schimbat conținutul unui rând aprobat, aprobarea cade (BD) → oferim doar stările permise atunci.
+export const CAMPURI_CONTINUT = ['destinatar', 'subiect', 'expeditor', 'documente']
+export const continutSchimbat = (rand, f) => !!rand && CAMPURI_CONTINUT.some(k => String(rand[k] ?? '').trim() !== String(f?.[k] ?? '').trim())
+export function stariInFormular(rand, f) {
+  if (!rand) return ['draft', 'la_avocat']
+  if (rand.aprobat_la && continutSchimbat(rand, f)) return ['draft', 'la_avocat', 'anulat']
+  return stariPermise(rand)
+}
+
 export const poateAproba = (rand, esteOwner) => !!esteOwner && ['draft', 'la_avocat'].includes(rand?.stare)
 
 // Următorul pas: primul rând (după ordine) care nu e încheiat. Rândurile `aprobat` sunt „de trimis acum”.

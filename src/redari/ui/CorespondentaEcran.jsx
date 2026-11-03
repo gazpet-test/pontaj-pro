@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate } from './comune.jsx'
 import { STARI_CORESPONDENTA, etichetaStareCoresp, culoareStareCoresp, COL_CORESPONDENTA, stariPermise, poateAproba, urmatorul,
-  valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran } from '../corespondenta.js'
+  valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran, stariInFormular } from '../corespondenta.js'
 
 const GOL = { cod: '', ordine: '', destinatar: '', subiect: '', expeditor: '', documente: '', depinde_de: '', stare: 'draft', trimis_la: '', nr_inregistrare: '', observatii: '' }
 
@@ -127,7 +127,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
             <Camp eticheta="Ce se trimite" span={2}><input style={S.input} value={f.subiect} onChange={e => set('subiect', e.target.value)} maxLength={500} /></Camp>
             <Camp eticheta="Expeditor"><input style={S.input} value={f.expeditor} onChange={e => set('expeditor', e.target.value)} maxLength={200} /></Camp>
             <Camp eticheta="Stare"><select style={{ ...S.select, width:'100%' }} value={f.stare} onChange={e => set('stare', e.target.value)}>
-              {(editat.rand ? stariPermise(editat.rand) : ['draft', 'la_avocat']).map(c => <option key={c} value={c}>{etichetaStareCoresp(c)}</option>)}
+              {stariInFormular(editat.rand, f).map(c => <option key={c} value={c}>{etichetaStareCoresp(c)}</option>)}
             </select></Camp>
             <Camp eticheta="Documente (fișiere / unde se generează)" span={2}><input style={S.input} value={f.documente} onChange={e => set('documente', e.target.value)} maxLength={2000} /></Camp>
             <Camp eticheta="Depinde de" span={2}><input style={S.input} value={f.depinde_de} onChange={e => set('depinde_de', e.target.value)} maxLength={1000} /></Camp>
