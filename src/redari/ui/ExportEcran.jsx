@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob } from '../docx.js'
 import { randuriRegistru, foaieCentralizator, construiesteWorkbook, numeFisier } from '../exportXlsx.js'
 import { S, msgEroare } from './comune.jsx'
+import { COL_PLIC_AR, atasezaMentiuniAr } from '../arMentiune.js'
 
 // Views without id use their unique composite key; no offset truncation at max-rows.
 export async function paginiExport(fabrica, chei, curent) {
@@ -52,7 +53,10 @@ export async function citesteDateExport(client, proiectId, tip, curent) {
   const detinatori = await inLoturi(() => client.from('red_detinatori').select('id,parcela_id,nume,calitate,cota,sursa_date,versiune_lista_tgz').is('sters_la', null), 'parcela_id', parcele.map(p => p.id), ['id'], curent)
   const ids = detinatori.map(d => d.id)
   const contacte = await inLoturi(() => client.from('red_detinatori_contact').select(tip === 'TGZ' ? 'detinator_id,adresa_cunoscuta' : 'detinator_id,adresa_cunoscuta,telefon'), 'detinator_id', ids, ['detinator_id'], curent)
-  const convocari = await inLoturi(() => client.from('red_convocari').select('id,detinator_id,nr_document,data_expediere,nr_tracking,data_confirmare_primire,retur,stare,sters_la,created_at').eq('stare','activ').is('sters_la', null), 'detinator_id', ids, ['id'], curent)
+  const convocariBrute = await inLoturi(() => client.from('red_convocari').select('id,detinator_id,plic_id,nr_document,data_expediere,nr_tracking,data_confirmare_primire,retur,stare,sters_la,created_at').eq('stare','activ').is('sters_la', null), 'detinator_id', ids, ['id'], curent)
+  // juridic#021: mențiunea „primit de altă persoană” de pe plic
+  const plicuriAr = await inLoturi(() => client.from('red_plicuri').select(COL_PLIC_AR), 'id', convocariBrute.map(c => c.plic_id), ['id'], curent)
+  const convocari = atasezaMentiuniAr(convocariBrute, plicuriAr)
   const raspunsuri = await inLoturi(() => client.from('red_raspunsuri').select('id,detinator_id,canal,data,optiune,zi_sesiune_aleasa,obiectii_text,created_at,seq'), 'detinator_id', ids, ['id'], curent)
   const pvs = await inLoturi(() => client.from('red_procese_verbale').select('id,tip,parcela_id,detinator_id,nr_pv,data_pv,obiectii_redare,termen_remediere,remediat_la,trimis_spre_semnare_data,semnat_primit_data,stare,sters_la,created_at').is('sters_la', null).neq('stare','anulat'), 'parcela_id', parcele.map(p => p.id), ['id'], curent)
   const stari = await inLoturi(() => client.from('red_v_stare_parcela').select('parcela_id,detinator_id,stare').eq('proiect_id', proiectId), 'parcela_id', parcele.map(p => p.id), ['parcela_id', 'detinator_id'], curent)

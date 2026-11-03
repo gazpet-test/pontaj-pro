@@ -52,6 +52,10 @@ describe('Model_6', () => {
     // datele si AWB-ul nu sunt confundate cu telefoane in varianta TGZ
     const cu = {...baza(), convocari:[conv('c1','2026-02-01',{nr_tracking:'RO123456789RO', data_confirmare_primire:'2026-02-05'})]}
     expect(randuriRegistru([cu],{pentruTgz:true})[0]).toMatchObject({ Q:'01.02.2026', R:'RO123456789RO', S:'05.02.2026' })
+    // juridic#021: AR semnat de altă persoană — mențiunea în registru; către TGZ fără textul liber
+    const alt = {...baza(), convocari:[conv('c1','2026-02-01',{data_confirmare_primire:'2026-02-05', ar_alta_persoana:'membru de familie'})]}
+    expect(randuriRegistru([alt])[0].S).toBe('05.02.2026 (primit de altă persoană: membru de familie)')
+    expect(randuriRegistru([alt],{pentruTgz:true})[0].S).toBe('05.02.2026 (primit de altă persoană)')
     // Copilot f6 r1 P3-01: abrevierile de adresa in coloanele text ramase
     for (const t of ['Str. Lalelelor 7','Bd. Unirii 3','Aleea Rozelor','sos. Nationala']) {
       const x = {...baza(), detinator:{...baza().detinator, cota:t}}

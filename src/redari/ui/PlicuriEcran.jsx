@@ -168,7 +168,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       patch = { stare: 'anulat', motiv_anulare: f.detaliu.trim() }
     } else if (tip === 'expediere') {
       // Aceeași regulă și aceeași recitire AWB ca la CSV; nu avem o a doua cale de expediere.
-      const preview = propune([{ doc: r.nr_plic, awb: f.awb, data: f.data }], { nr_document: 'doc', nr_tracking: 'awb', data: 'data' }, 'expediere', plicuri)
+      const preview = propune([{ doc: r.nr_plic, awb: f.awb, data: f.data }], { nr_document: 'doc', nr_tracking: 'awb', data: 'data' }, 'expediere', plicuri, { imputernicire })   // Gemini f10 r2 P3
       if (preview.exceptii.length) invalid(preview.exceptii.map(e => e.motiv).join('; '))
       if (preview.deja.length) { if (curent()) setModal(null); return 'Expedierea este deja înregistrată.' }
       const raport = await aplica(supabase, preview.aplicabile, { esteCurent: curent })
