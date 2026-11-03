@@ -16,11 +16,11 @@ desi Copilot nu are legatura cu sandbox-ul cdx. Rezervele din v4.6.1 doar amana 
    prefix sau doua taburi = refuz); titlul + gizmo se citesc din backend
    (`GET /backend-api/conversation/<uuid>` in pagina; tokenul nu iese din ea), nu din `document.title`.
 4. Trimiterea foloseste ACELASI obiect pagina verificat; imediat inainte de inserarea textului si
-   inainte de Enter se reverifica URL-ul (acelasi uuid complet). Abatere = `PAW_EROARE
-   cop_conversatie_refuzata`, fara trimitere. Uuid-ul complet + titlul intra in paw_runs.log.
+   inainte de Enter se reverifica destinatia INTREAGA (schema https, host exact chatgpt.com, cale GPT
+   /g/g-2DQzU5UZl-*/c/, acelasi uuid complet). Abatere = `PAW_EROARE cop_conversatie_refuzata`,
+   fara trimitere. Uuid-ul complet + titlul intra in paw_runs.log.
 5. Varianta respinsa: fisier de config separat cu lista (ACL admin) - tot cere admin la fiecare rotire.
-   Daca `run_paw.ps1` ramane legat de cdx, v4.7 e ultima recertificare pentru Copilot
-   (separat, de decis: canalele cop/gem intr-un fisier nelegat de cdx).
+   v4.7 = ultima recertificare pentru Copilot (de decis separat: cop/gem intr-un fisier nelegat de cdx).
 
 **Riscuri.**
 - Se pierde autorizarea administrativa per conversatie: backend-ul confirma metadatele (titlu,
@@ -33,8 +33,8 @@ desi Copilot nu are legatura cu sandbox-ul cdx. Rezervele din v4.6.1 doar amana 
 
 **Ce se testeaza.**
 - Harness (stub, fara browser): ID invalid/majuscule; zero taburi; doua taburi cu acelasi uuid;
-  doua uuid-uri cu acelasi prefix; titlu/gizmo/host gresit; tab schimbat intre verificare si
-  trimitere -> refuz fara text in compozitor; caz bun -> trimite.
+  doua uuid-uri cu acelasi prefix; titlu/gizmo/host gresit; pagina navigata intre verificare si
+  trimitere (alt uuid, sau alt host/schema cu acelasi uuid in URL) -> refuz fara text; caz bun -> trimite.
 - Live: conversatie noua redenumita -> PAW_GATA fara instalare; titlu automat -> refuz;
   `document.title` schimbat local (devtools) cu titlu backend gresit -> refuz.
 - Review Jakarinos + Copilot + Gemini pe diff; apoi Install + Run/Seal cdx o singura data.

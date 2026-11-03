@@ -14,12 +14,12 @@ orice schimbare cere Install + Run/Seal r6. Pana la Seal, cdx este indisponibil;
 jak/cop/gem functioneaza dupa Install.
 
 Blocurile marcate "v46 sect. x" se ruleaza NESCHIMBATE din
-`docs/paw/run_paw_v46/RUNBOOK_RAZVAN.md`, in aceeasi consola, dupa preambulul de mai jos
-(aceleasi nume de variabile). Hash-urile vin din raportul de review, nu din acest fisier.
+`docs/paw/run_paw_v46/RUNBOOK_RAZVAN.md`, in aceeasi consola, dupa 1a (si 1b, o singura data,
+inainte de instalare); aceleasi nume de variabile. Hash-urile vin din raportul de review, nu din acest fisier.
 Livrare: folderul din commit-ul PR-ului ajunge in `$Source` (ex. `git archive` al commit-ului
 aprobat, dezarhivat in `C:\Users\Public\livrare\run_paw_v461`); verificarea de mai jos decide.
 
-## 1. Preambul (A si N)
+## 1a. Variabile (A si N, in orice consola noua, inclusiv la rollback)
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -33,6 +33,14 @@ $ManifestHash = 'INLOCUIESTE_CU_HASH_MANIFEST_DIN_RAPORT'
 $LegacyHash = 'INLOCUIESTE_CU_HASH_CGPT_PW_DIN_RAPORT'
 $Operator = "$env:COMPUTERNAME\Gazpet-Ai"
 $ReaderSid = (New-Object Security.Principal.NTAccount($Operator)).Translate([Security.Principal.SecurityIdentifier]).Value
+```
+
+## 1b. Verificari inainte de instalare (A, o data, inainte de pasul 2; NU dupa Install, NU la rollback)
+
+Dupa Install `bin\run_paw.ps1` = cel nou, deci comparatia de mai jos ar pica; nu o relua.
+Blocul defineste si `$manifest`, folosit de v46 sect. 2.
+
+```powershell
 if ($ManifestHash -notmatch '^[A-Fa-f0-9]{64}$' -or $LegacyHash -notmatch '^[A-Fa-f0-9]{64}$') { throw 'Pune hash-urile din raport' }
 if ((Get-FileHash -LiteralPath "$Source\SHA256.json").Hash -ine $ManifestHash) { throw 'Alt pachet' }
 $manifest = Get-Content -LiteralPath "$Source\SHA256.json" -Raw | ConvertFrom-Json
@@ -107,7 +115,7 @@ WFP instalate la pasul 3 si markerul Gemini raman valabile pentru v4.6. Rollback
 doar swap-ul de `bin`, fara RemoveCdxWfp, fara Revoke engine, fara mutarea markerului Gemini.
 
 ```powershell
-# A, proces nou, dupa preambul
+# A, proces nou, numai dupa 1a (variabilele); 1b NU se ruleaza la rollback
 . "$Bin\cdx_security.ps1"
 $PAW_ROOT = $PawRoot
 $paths = Get-Content -LiteralPath "$Audit\install_paths.json" -Raw | ConvertFrom-Json
@@ -132,8 +140,21 @@ try {
 } finally { $barrier.Dispose() }
 ```
 
-Apoi in N, proces nou: blocul `GetCdxBinding` din v46 sect. 3a (trebuie sa treaca: WFP-ul
-si grant-ul engine au ramas) si smoke-ul de la pasul 4 cu `6ae06a05` in loc de `6ae9964e`.
+Apoi in N, proces nou, dupa 1a: blocul `GetCdxBinding` din v46 sect. 3a (trebuie sa treaca:
+WFP-ul si grant-ul engine au ramas), apoi smoke-ul v4.6 (lista restaurata NU contine 6ae9964e):
+
+```powershell
+$Id = Get-Date -Format 'yyyyMMdd-HHmmss'
+$B = "C:\Users\Public\paw-data\brief\smoke-v46-rollback-$Id.md"
+'Raspunde exact: PAW_TEST_OK' | Set-Content -LiteralPath $B -Encoding ASCII
+& "$Bin\run_paw.cmd" cop $B "C:\Users\Public\paw-data\out\smoke-v46-rb-cop-$Id.log" 6ae06a05
+& "$Bin\run_paw.cmd" cop $B "C:\Users\Public\paw-data\out\smoke-v46-rb-neg-$Id.log" 6ae9964e
+& "$Bin\run_paw.cmd" jak $B "C:\Users\Public\paw-data\out\smoke-v46-rb-jak-$Id.log"
+& "$Bin\run_paw.cmd" gem $B "C:\Users\Public\paw-data\out\smoke-v46-rb-gem-$Id.log" argon
+```
+
+Asteptat: cop 6ae06a05 `PAW_GATA` (un mesaj de test in conversatia Ofertare); cop 6ae9964e
+`PAW_EROARE ... model/tinta nepermis(a)`; jak `PAW_GATA`; gem `PAW_GATA`.
 Dupa rollback cdx ramane NECERTIFICAT: `certificate-retired.json` din `$Audit` nu se
 restaureaza automat; Run/Seal nou (v46 sect. 7) sau decizie separata cu review.
 
