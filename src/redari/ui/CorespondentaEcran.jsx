@@ -84,7 +84,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:10 }}>
         <div style={{ fontSize:13, color:G.muted, flex:1, minWidth:260 }}>
           Ce pleacă, în ce ordine și în ce stare. <b>Evidență</b> — ERP-ul nu trimite nimic. „Aprobat” îl pune doar Răzvan; „Trimis” se poate marca doar după aprobare.
-          Ordinea comunicărilor e descrisă și în planul de verificare (capitolul „Succesiunea comunicărilor”).
+          Ordinea comunicărilor: Planul de verificare, cap. 6 „Succesiunea comunicărilor”. Evidența se ține numai aici (decizia Răzvan 03.11).
         </div>
         <button style={S.btnS} onClick={incarca} disabled={lucru}>↻ Reîncarcă</button>
         {poateScrie && <button style={S.btnP} onClick={() => deschide(null)} disabled={lucru}>＋ Adaugă</button>}

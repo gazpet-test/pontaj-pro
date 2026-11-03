@@ -23,7 +23,7 @@ BEGIN
     WHERE a.module='redari' AND a.access_level='viewer' AND p.is_owner IS NOT TRUE ORDER BY a.id LIMIT 1;
   IF own IS NULL OR ed IS NULL OR vw IS NULL THEN RAISE EXCEPTION 'TEST0 FAIL: identitati lipsa'; END IF;
   PERFORM set_config('r29h.owner',own::text,true); PERFORM set_config('r29h.editor',ed::text,true); PERFORM set_config('r29h.viewer',vw::text,true);
-  IF (SELECT count(*) FROM public.red_corespondenta WHERE stare='draft' AND aprobat_la IS NULL) <> 10 THEN RAISE EXCEPTION 'TEST0 FAIL: lista initiala'; END IF;
+  IF (SELECT count(*) FROM public.red_corespondenta WHERE stare='draft' AND aprobat_la IS NULL) <> 10 OR (SELECT count(*) FROM public.red_corespondenta WHERE cod IN ('D1','D2') AND stare='trimis' AND aprobat_la IS NOT NULL AND trimis_la='2026-11-02') <> 2 THEN RAISE EXCEPTION 'TEST0 FAIL: lista initiala'; END IF;
   RAISE NOTICE 'TEST0 OK';
 END $t$;
 -- (TEST5 retras: revenirea nu mai sterge date — muta tabelul in arhiva; runnerul ruleaza revenirea dupa teste si verifica starea finala)
@@ -78,7 +78,7 @@ END $t$;
 -- TEST3: viewer citeste dar nu scrie (RLS: 0 randuri sau refuz); anon nu vede nimic
 SELECT pg_temp.r29h_ca(pg_temp.r29h_g('viewer')::uuid,'authenticated');
 DO $t$ DECLARE n integer; BEGIN
-  IF (SELECT count(*) FROM public.red_corespondenta) <> 11 THEN RAISE EXCEPTION 'TEST3 FAIL: viewer nu vede lista'; END IF;
+  IF (SELECT count(*) FROM public.red_corespondenta) <> 13 THEN RAISE EXCEPTION 'TEST3 FAIL: viewer nu vede lista'; END IF;
   BEGIN UPDATE public.red_corespondenta SET observatii='viewer' WHERE cod='B1'; GET DIAGNOSTICS n=ROW_COUNT;
   EXCEPTION WHEN insufficient_privilege THEN n:=0; END;
   IF n <> 0 THEN RAISE EXCEPTION 'TEST3 FAIL: viewer a scris'; END IF;
@@ -98,7 +98,7 @@ END $t$;
 -- TEST4: jurnalul a primit randurile (insert initial + update-uri)
 SELECT pg_temp.r29h_ca(NULL,'postgres');
 DO $t$ BEGIN
-  IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta' AND actiune='insert') < 10 THEN RAISE EXCEPTION 'TEST4 FAIL: jurnal insert'; END IF;
+  IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta' AND actiune='insert') < 12 THEN RAISE EXCEPTION 'TEST4 FAIL: jurnal insert'; END IF;
   IF (SELECT count(*) FROM public.red_jurnal WHERE tabela='red_corespondenta' AND actiune='update') < 5 THEN RAISE EXCEPTION 'TEST4 FAIL: jurnal update'; END IF;
   RAISE NOTICE 'TEST4 OK';
 

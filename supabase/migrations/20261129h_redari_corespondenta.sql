@@ -104,26 +104,36 @@ CREATE POLICY red_corespondenta_ins ON public.red_corespondenta FOR INSERT TO au
 CREATE POLICY red_corespondenta_upd ON public.red_corespondenta FOR UPDATE TO authenticated
   USING (public.fn_red_nivel() IN ('admin', 'editor')) WITH CHECK (public.fn_red_nivel() IN ('admin', 'editor'));
 
--- Lista inițială (CHECKLIST_MAILURI_REDARI.md, 02.11.2026), toate în `draft`. D1/D2 (mesaje interne către Ramona / R. Toma, deja trimise) nu intră: aici e doar corespondența externă.
+-- Lista inițială (CHECKLIST_MAILURI_REDARI.md, 02.11.2026): rândurile externe în `draft`, cu starea checklist-ului în observații.
 INSERT INTO public.red_corespondenta (proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, observatii)
 SELECT p.id, v.cod, v.ordine, v.destinatar, v.subiect, v.expeditor, v.documente, v.depinde_de, 'draft', v.observatii
 FROM public.red_proiecte p, (VALUES
-  ('A4', 10, 'Transgaz — DCC Prunișor–Jupa (dccprunisorjupa@transgaz.ro)', 'Solicitare fișier parcele afectate Lot 1 (poziție HG / km, DWG/SHP/KML)', 'Cristina Dumitrescu (CC office@)', 'Mail_A4_Cerere_DCC_fisier_parcele_Lot1_DE_TRIMIS_v2', 'independent — poate pleca primul', 'Necesar pentru atribuirea tronsoanelor (PV C).'),
-  ('A1', 20, 'Transgaz', 'Scrisoarea cu planul de verificare a redărilor Lot 1 (+ ISC/DAJ)', 'Cristina Dumitrescu (CC office@)', 'Scrisoare_Transgaz_plan_verificare_Lot1 rev9 + Plan_verificare_redari_Lot1 rev48', 'avizul avocatului', NULL),
+  ('A4', 10, 'Transgaz — DCC Prunișor–Jupa (dccprunisorjupa@transgaz.ro)', 'Solicitare fișier parcele afectate Lot 1 (poziție HG / km, DWG/SHP/KML)', 'Cristina Dumitrescu (CC office@)', 'Mail_A4_Cerere_DCC_fisier_parcele_Lot1_DE_TRIMIS_v2', 'independent — poate pleca primul', 'PREGĂTIT (checklist 02.11): de trimis 03.11 de Cristina, după „da”-ul lui Răzvan. Necesar pentru atribuirea tronsoanelor (PV C).'),
+  ('A1', 20, 'Transgaz', 'Scrisoarea cu planul de verificare a redărilor Lot 1 (+ ISC/DAJ)', 'Cristina Dumitrescu (CC office@)', 'Scrisoare_Transgaz_plan_verificare_Lot1 rev9 + Plan_verificare_redari_Lot1 rev48', 'avizul avocatului', 'Checklist 02.11: DRAFT → la avocat (plan corectat rev48 → rev49 cu cap. 6).'),
   ('A2', 21, 'Transgaz', 'Cererea de împuternicire către Beneficiar (anexă la A1)', 'Cristina Dumitrescu (CC office@)', 'ERP: Redări → Setări proiect → „Generează cererea (DOCX)”', 'A1', NULL),
   ('A3', 22, 'Transgaz (DPO)', 'Acord de prelucrare (art. 28 GDPR) + aprobarea informării GDPR', 'Cristina Dumitrescu (CC office@)', 'Adresa_TGZ_acord_prelucrare_si_aprobare_informare v1 + Informare_GDPR_Lot1 v3', 'avizul avocatului; poate pleca odată cu A1', 'După aprobare se publică pagina /redari/informare (PR #939).'),
   ('B1', 30, 'ISC Mehedinți', 'Documente de calitate pentru redare / recepție', 'de stabilit (office@ sau Cristina)', 'Adresa_ISC_carte_tehnica_redare_teren v2', 'avizul avocatului', NULL),
   ('B2', 31, 'DAJ Mehedinți', 'Cerere informații de interes public (L544/2001)', 'de stabilit (office@ sau Cristina)', 'Adresa_DAJ_Mehedinti_1_Cerere_L544 v2', 'avizul avocatului', NULL),
   ('B3', 32, 'DAJ Mehedinți', 'Fond funciar — punct de vedere privind redarea în circuitul agricol', 'de stabilit (office@ sau Cristina)', 'Adresa_DAJ_Mehedinti_2_Punct_de_vedere v2', 'avizul avocatului', NULL),
   ('A5', 40, 'Transgaz → Gazpet', 'Primirea împuternicirii și a listei actualizate a deținătorilor (tipizat Anexa 7)', NULL, 'cerută prin A2 (Model_7_Anexa7_Tipizat v5)', 'A1/A2 aprobate de Transgaz', 'Pas de primire, nu de trimitere.'),
-  ('C1', 50, 'Primăriile celor 7 UAT-uri', 'Adresa pentru afișare, programul sesiunilor și sala', 'de stabilit', 'ERP: Redări → UAT-uri → „Generează adresa UAT”', 'A5 (împuternicirea primită); datele primăriilor (Ramona, termen 04.11); zilele de sesiune', NULL),
-  ('C2', 60, 'Proprietarii / deținătorii', 'Convocări (poștă cu confirmare de primire + QR / link formular)', 'de stabilit', 'ERP: Redări → Registru / Fișa parcelei', 'C1; A5', 'Import TGZ făcut 02.11 (2443 parcele / 2548 deținători); 150 ambigue + 182 erori de tratat. Decizie deschisă: plic per convocare sau plic comun.')
+  ('C1', 50, 'Primăriile celor 7 UAT-uri', 'Adresa pentru afișare, programul sesiunilor și sala', 'de stabilit', 'ERP: Redări → UAT-uri → „Generează adresa UAT”', 'A5 (împuternicirea primită); datele primăriilor (Ramona, termen 04.11); zilele de sesiune', 'Afișarea la primărie: minimum 10 zile înainte de sesiune, în paralel cu expedierea (plan cap. 6).'),
+  ('C2', 60, 'Proprietarii / deținătorii', 'Convocări (poștă cu confirmare de primire + QR / link formular)', 'de stabilit', 'ERP: Redări → Registru / Fișa parcelei', 'C1; A5; cu minimum 10 zile înainte de sesiune (plan cap. 6)', 'Un plic pe deținător și UAT (juridic#018), recomandată cu AR; opis + conținutul pretipărit pe AR. Import TGZ făcut 02.11 (2443 parcele / 2548 deținători); 150 ambigue + 182 erori de tratat. Decizie deschisă: plic per convocare sau plic comun.')
 ) AS v(cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, observatii)
 WHERE p.cod = 'LOT1-PRUNISOR-JUPA';
+-- D1/D2 (juridic#020, decizia lui Răzvan 03.11: tot checklist-ul trece în ERP, cu starea de azi): mesaje interne deja trimise 02.11 la cererea lui
+-- Răzvan în chat. Mentenanța (runner, fără JWT) le trece prin `aprobat` → `trimis`, ca regula „trimis doar după aprobare” să rămână adevărată.
+INSERT INTO public.red_corespondenta (proiect_id, cod, ordine, destinatar, subiect, expeditor, documente, depinde_de, stare, observatii)
+SELECT p.id, v.cod, v.ordine, v.destinatar, v.subiect, v.expeditor, NULL, NULL, 'aprobat', v.observatii
+FROM public.red_proiecte p, (VALUES
+  ('D1', 1, 'Ramona Brehui (intern)', 'Datele celor 7 primării (telefon, e-mail, adresă, persoana desemnată)', 'Claude (claude@gazpet.ro)', 'Cerut de Răzvan în chat 02.11 (+ corectură pe același fir); termen 04.11.'),
+  ('D2', 2, 'Răzvan Toma (intern)', 'Funcția și telefonul lui Adrian Someșan (reprezentant A.P.M.), telefon contact convocări', 'Claude (claude@gazpet.ro)', 'Cerut de Răzvan în chat 02.11.')
+) AS v(cod, ordine, destinatar, subiect, expeditor, observatii)
+WHERE p.cod = 'LOT1-PRUNISOR-JUPA';
+UPDATE public.red_corespondenta SET stare = 'trimis', trimis_la = DATE '2026-11-02' WHERE cod IN ('D1', 'D2');
 
 DO $post$
 BEGIN
-  IF (SELECT count(*) FROM public.red_corespondenta) <> 10 THEN RAISE EXCEPTION '20261129h: lista initiala incompleta'; END IF;
+  IF (SELECT count(*) FROM public.red_corespondenta) <> 12 OR (SELECT count(*) FROM public.red_corespondenta WHERE stare = 'trimis') <> 2 THEN RAISE EXCEPTION '20261129h: lista initiala incompleta'; END IF;
   IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'red_corespondenta') <> 3 THEN RAISE EXCEPTION '20261129h: politici'; END IF;
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.red_corespondenta'::regclass) THEN RAISE EXCEPTION '20261129h: RLS oprit'; END IF;
   IF has_table_privilege('anon', 'public.red_corespondenta', 'SELECT') OR has_table_privilege('authenticated', 'public.red_corespondenta', 'DELETE') THEN
