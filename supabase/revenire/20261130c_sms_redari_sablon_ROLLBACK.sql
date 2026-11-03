@@ -1,12 +1,13 @@
 -- Revenire 20261130c_sms_redari_sablon. Runner: o tranzactie, GUC gazpet.revenire_20261130c = 'SMS_SABLON_SCOS:'||txid_current().
 -- Fail-closed:
---   * fn_sms_loturi_reguli si fn_sms_rezerva revin EXACT la corpurile 20261130b (copiate din supabase/migrations/20261130b_sms_acces_modul.sql
---     de generator, nu de mana; md5 verificat la final); CREATE OR REPLACE pastreaza drepturile;
---   * cele 6 functii noi (sablonul, eligibilitatea, valabilitatea lotului, crearea) se scot (DROP);
+--   * fn_sms_loturi_reguli, fn_sms_rezerva, fn_sms_mesaje_reguli, fn_sms_test_consum_zi revin EXACT la corpurile 20261130b, iar
+--     fn_sms_consum la corpul 20261130a (copiate de generator, nu de mana; md5 verificat la final); CREATE OR REPLACE pastreaza drepturile;
+--   * cele 7 functii noi (sablonul, eligibilitatea, valabilitatea lotului, fereastra, crearea) se scot (DROP);
 --   * fn_sms_lot_redari_creeaza (textul liber) NU se redeschide: dupa revenire nimeni nu mai creeaza loturi Redari din aplicatie,
 --     pana la o migrare noua. Loturile interne, aprobarea, trimiterea si istoricul raman exact ca in 20261130b.
 -- NU sterge date: loturile Redari deja create din sablon raman in sms_loturi (filtru->>'sablon' = 'redari_v1'), cu mesajele lor.
--- Refuza daca exista loturi din sablon inca ACTIVE (draft / aprobat / in_trimitere): se anuleaza intai din 📱 SMS -> Istoric
+-- Refuza daca exista loturi din sablon inca ACTIVE (draft / aprobat / in_trimitere, sau coada_golita cu mesaje inca necunoscut; aceeasi
+-- definitie ca la creare, r5 P3-01): se anuleaza / se asteapta intai din 📱 SMS -> Istoric
 -- (tabela e blocata inainte de verificare, ca sa nu apara unul nou intre verificare si DROP).
 DO $pre$
 BEGIN
@@ -19,13 +20,17 @@ BEGIN
      OR to_regprocedure('public.fn_sms_redari_sablon_calc(text,date[],text[],text,timestamp)') IS NULL
      OR to_regprocedure('public.fn_sms_redari_sablon_model()') IS NULL OR to_regprocedure('public.fn_sms_redari_persoane(uuid,uuid)') IS NULL
      OR to_regprocedure('public.fn_sms_redari_lot_motiv(public.sms_loturi)') IS NULL OR to_regclass('public.sms_loturi') IS NULL
-     OR to_regprocedure('public.fn_sms_redari_lot_motiv_la(public.sms_loturi,timestamptz)') IS NULL THEN
+     OR to_regprocedure('public.fn_sms_redari_lot_motiv_la(public.sms_loturi,timestamptz)') IS NULL
+     OR to_regprocedure('public.fn_sms_fereastra_externa(timestamptz)') IS NULL THEN
     RAISE EXCEPTION '20261130c revenire: migrarea 20261130c lipseste';
   END IF;
   -- corpurile de acum sunt cele din 20261130c (altceva = schimbat de altcineva intre timp: nu suprascriem orb)
-  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '06e942cb552fb0cb26e17151a6cd9dc2'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'f8d93924d16a0d0568c1f78d156be87c' THEN
-    RAISE EXCEPTION '20261130c revenire: fn_sms_loturi_reguli / fn_sms_rezerva nu sunt cele din 20261130c';
+  IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '8aa147ed61db466ebef5a8500176a951'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'e2247722e1b8bee24ddb7578e2e08b68'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure), chr(13), '')) <> '15ac579d87cd38f650a4b3181b0b50d1'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure), chr(13), '')) <> 'e004e5f05184fa0a43c2add057302a8a'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure), chr(13), '')) <> '491335c03706a356cdb7ed8804bd5910' THEN
+    RAISE EXCEPTION '20261130c revenire: corpurile inlocuite nu sunt cele din 20261130c';
   END IF;
 END $pre$;
 
@@ -36,9 +41,10 @@ DO $date$
 DECLARE v_n integer;
 BEGIN
   SELECT count(*) INTO v_n FROM public.sms_loturi
-   WHERE categorie = 'redari' AND filtru->>'sablon' = 'redari_v1' AND stare IN ('draft', 'aprobat', 'in_trimitere');
+   WHERE categorie = 'redari' AND filtru->>'sablon' = 'redari_v1' AND (stare IN ('draft', 'aprobat', 'in_trimitere')
+          OR (stare = 'coada_golita' AND EXISTS (SELECT 1 FROM public.sms_mesaje m WHERE m.lot_id = sms_loturi.id AND m.stare = 'necunoscut')));
   IF v_n > 0 THEN
-    RAISE EXCEPTION '20261130c revenire: % loturi Redari din sablon sunt inca active (draft / aprobat / in_trimitere); anuleaza-le intai', v_n;
+    RAISE EXCEPTION '20261130c revenire: % loturi Redari din sablon sunt inca active (draft / aprobat / in_trimitere / mesaje necunoscut); anuleaza-le intai', v_n;
   END IF;
 END $date$;
 
@@ -215,12 +221,124 @@ BEGIN
     'text', l.text, 'mesaje', v_arr, 'ramase', v_ram);
 END $fn$;
 
+CREATE OR REPLACE FUNCTION public.fn_sms_mesaje_reguli() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE l public.sms_loturi; s public.sms_setari; v_cd uuid; v_cn text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'sms: mesajele nu se sterg (sunt jurnalul trimiterii)' USING ERRCODE = '42501'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    -- r3: ordinea lock-urilor cont de test -> lot (ca la aprobare); contul fara asteptare (in RPC lock-ul e deja luat)
+    SELECT x.creat_de, x.creat_nivel INTO v_cd, v_cn FROM public.sms_loturi x WHERE x.id = NEW.lot_id;
+    IF v_cn = 'test' THEN PERFORM public.fn_sms_test_coada_lock(v_cd, false); END IF;
+    -- 20261130b r2 (P3-01): randul lotului blocat FOR UPDATE inainte de numarare: inserturile concurente in acelasi lot se serializeaza.
+    -- r4 (P3-02): fara asteptare (SKIP LOCKED): RPC-ul care a creat lotul il tine deja (nu e sarit); alta tranzactie => 55P03 imediat
+    SELECT * INTO l FROM public.sms_loturi x WHERE x.id = NEW.lot_id FOR UPDATE SKIP LOCKED;
+    IF NOT FOUND AND EXISTS (SELECT 1 FROM public.sms_loturi x WHERE x.id = NEW.lot_id) THEN
+      RAISE EXCEPTION 'sms: lotul e modificat chiar acum de altcineva; scrierea directa nu asteapta (reincearca)' USING ERRCODE = '55P03';
+    END IF;
+    IF l.stare IS DISTINCT FROM 'draft' THEN
+      RAISE EXCEPTION 'sms: mesajele se adauga doar la crearea lotului (draft)' USING ERRCODE = '23514';
+    END IF;
+    -- 20261130b: lotul unui cont de test are cel mult 5 mesaje (si la scriere directa, ocolind RPC-ul)
+    IF 'test' IN (coalesce(l.creat_nivel, ''), coalesce(l.aprobat_nivel, ''))
+       AND (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = NEW.lot_id) >= 5 THEN
+      RAISE EXCEPTION 'sms test: maximum 5 destinatari intr-un lot' USING ERRCODE = '42501';
+    END IF;
+    -- r3: fiecare mesaj nou intra in coada contului de test (cel mult fn_sms_test_coada_max() nerezervate)
+    IF l.creat_nivel = 'test' THEN
+      IF v_cn IS DISTINCT FROM 'test' THEN PERFORM public.fn_sms_test_coada_lock(l.creat_de, false); END IF;
+      PERFORM public.fn_sms_test_coada_cere(l.creat_de, 1);
+    END IF;
+    IF NEW.stare IS DISTINCT FROM 'in_coada' THEN RAISE EXCEPTION 'sms: un mesaj nou e mereu in_coada' USING ERRCODE = '23514'; END IF;
+    NEW.furnizor := NULL; NEW.furnizor_id := NULL; NEW.cod_eroare := NULL;
+    NEW.rezervat_la := NULL; NEW.trimis_la := NULL; NEW.livrat_la := NULL;
+    NEW.creat_la := now(); NEW.actualizat_la := now(); NEW.versiune := 1;
+    RETURN NEW;
+  END IF;
+  IF (NEW.id, NEW.lot_id, NEW.telefon, NEW.destinatar_tip, NEW.destinatar_id, NEW.segmente, NEW.creat_la)
+     IS DISTINCT FROM (OLD.id, OLD.lot_id, OLD.telefon, OLD.destinatar_tip, OLD.destinatar_id, OLD.segmente, OLD.creat_la) THEN
+    RAISE EXCEPTION 'sms: destinatarul unui mesaj nu se schimba' USING ERRCODE = '23514';
+  END IF;
+  IF (OLD.furnizor IS NOT NULL AND NEW.furnizor IS DISTINCT FROM OLD.furnizor)
+     OR (OLD.furnizor_id IS NOT NULL AND NEW.furnizor_id IS DISTINCT FROM OLD.furnizor_id) THEN
+    RAISE EXCEPTION 'sms: furnizorul si id-ul de la furnizor se scriu o singura data' USING ERRCODE = '23514';
+  END IF;
+  NEW.rezervat_la := OLD.rezervat_la; NEW.trimis_la := OLD.trimis_la; NEW.livrat_la := OLD.livrat_la;
+  IF OLD.stare = 'in_coada' AND NEW.stare = 'necunoscut' THEN
+    -- rezervarea: din lot in trimitere, cu trimiterea pornita, Redari doar autorizat, fara opt-out, fara id inca
+    SELECT * INTO l FROM public.sms_loturi WHERE id = NEW.lot_id;
+    SELECT * INTO s FROM public.sms_setari WHERE id;
+    IF l.stare IS DISTINCT FROM 'in_trimitere' THEN RAISE EXCEPTION 'sms: mesajul pleaca doar dintr-un lot aprobat, in trimitere' USING ERRCODE = '23514'; END IF;
+    IF coalesce(s.kill_switch, true) THEN RAISE EXCEPTION 'sms: trimiterea e oprita (kill-switch)' USING ERRCODE = '42501'; END IF;
+    IF l.categorie = 'redari' AND NOT coalesce(s.redari_autorizat, false) THEN
+      RAISE EXCEPTION 'sms redari: blocat - asteapta autorizarea scrisa Transgaz (comutatorul redari_autorizat e oprit)' USING ERRCODE = '42501';
+    END IF;
+    -- 20261130b: lotul unui cont de test pleaca doar intern, cu maximum 5 destinatari
+    IF 'test' IN (coalesce(l.creat_nivel, ''), coalesce(l.aprobat_nivel, ''))
+       AND NOT public.fn_sms_lot_permis('test', false, true, l.categorie, l.nr_destinatari, true) THEN
+      RAISE EXCEPTION 'sms test: lotul unui cont de test pleaca doar intern, cu maximum 5 destinatari' USING ERRCODE = '42501';
+    END IF;
+    IF l.creat_nivel = 'test' THEN
+      -- r3 (P2-01 a) / r4: creatorul trebuie sa aiba INCA un drept SMS (test, utilizator sau owner); limitele lotului raman cele de test
+      IF public.fn_sms_nivel_cont(l.creat_de) IS NULL THEN
+        RAISE EXCEPTION 'sms test: creatorul lotului de test nu mai are niciun drept SMS; lotul nu mai pleaca' USING ERRCODE = '42501';
+      END IF;
+      -- r3 (P3-01 Jakarinos): bugetul se verifica sub acelasi lock ca fn_sms_rezerva (randul de setari). Din fn_sms_rezerva lock-ul e deja
+      -- al tranzactiei (SKIP LOCKED nu il sare); la o scriere directa privilegiata nu se asteapta niciodata (55P03), deci nu exista ciclu
+      PERFORM 1 FROM public.sms_setari x WHERE x.id FOR UPDATE SKIP LOCKED;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'sms: o rezervare e in curs; scrierea directa nu asteapta (reincearca)' USING ERRCODE = '55P03';
+      END IF;
+      -- 20261130b r2 (P2-01): bugetul zilnic al contului de test, si la scriere directa (randurile deja rezervate in aceeasi comanda se vad)
+      IF public.fn_sms_test_consum_zi(l.creat_de) + NEW.segmente > public.fn_sms_test_buget_zi() THEN
+        RAISE EXCEPTION 'sms test: bugetul zilnic al contului de test (% SMS) e atins', public.fn_sms_test_buget_zi() USING ERRCODE = '42501';
+      END IF;
+    END IF;
+    IF NEW.furnizor IS NULL OR NEW.furnizor_id IS NOT NULL THEN RAISE EXCEPTION 'sms: rezervarea cere furnizorul, fara id' USING ERRCODE = '23514'; END IF;
+    IF EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = NEW.telefon AND o.activ) THEN
+      RAISE EXCEPTION 'sms: numarul are opt-out' USING ERRCODE = '23514';
+    END IF;
+    NEW.rezervat_la := now();
+  ELSIF OLD.stare = 'in_coada' AND NEW.stare = 'anulat' THEN
+    NULL;
+  ELSIF OLD.stare = 'necunoscut' AND NEW.stare = 'trimis' THEN
+    IF NEW.furnizor_id IS NULL THEN RAISE EXCEPTION 'sms: trimis cere id-ul de la furnizor' USING ERRCODE = '23514'; END IF;
+    NEW.trimis_la := now();
+  ELSIF OLD.stare = 'necunoscut' AND NEW.stare IN ('esuat', 'necunoscut') THEN
+    IF NEW.furnizor_id IS NOT NULL THEN RAISE EXCEPTION 'sms: id-ul de la furnizor vine doar cu trimis' USING ERRCODE = '23514'; END IF;
+    IF NEW.cod_eroare IS NULL THEN RAISE EXCEPTION 'sms: esecul / necunoscutul cer un cod' USING ERRCODE = '23514'; END IF;
+  ELSIF OLD.stare = 'trimis' AND NEW.stare IN ('livrat', 'esuat') THEN
+    IF NEW.stare = 'livrat' THEN NEW.livrat_la := now(); END IF;
+  ELSE
+    RAISE EXCEPTION 'sms: trecere de stare nepermisa pentru mesaj: % -> %', OLD.stare, NEW.stare USING ERRCODE = '23514';
+  END IF;
+  NEW.actualizat_la := now(); NEW.versiune := OLD.versiune + 1;
+  RETURN NEW;
+END $fn$;
+
+CREATE OR REPLACE FUNCTION public.fn_sms_consum(OUT zi integer, OUT luna integer)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT coalesce(sum(m.segmente) FILTER (WHERE m.rezervat_la >= (date_trunc('day', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest')), 0)::integer,
+         coalesce(sum(m.segmente), 0)::integer
+    FROM public.sms_mesaje m
+   WHERE m.rezervat_la >= (date_trunc('month', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest')
+$fn$;
+
+CREATE OR REPLACE FUNCTION public.fn_sms_test_consum_zi(p_uid uuid) RETURNS integer
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  SELECT coalesce(sum(m.segmente), 0)::integer
+    FROM public.sms_mesaje m JOIN public.sms_loturi l ON l.id = m.lot_id
+   WHERE p_uid IS NOT NULL AND l.creat_de = p_uid AND l.creat_nivel = 'test'
+     AND m.rezervat_la >= (date_trunc('day', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest')
+$fn$;
+
 DROP FUNCTION public.fn_sms_lot_redari_sablon_creeaza(uuid, uuid, text, text, boolean);
 DROP FUNCTION public.fn_sms_redari_lot_motiv(public.sms_loturi);
 DROP FUNCTION public.fn_sms_redari_lot_motiv_la(public.sms_loturi, timestamptz);
 DROP FUNCTION public.fn_sms_redari_persoane(uuid, uuid);
 DROP FUNCTION public.fn_sms_redari_sablon_calc(text, date[], text[], text, timestamp);
 DROP FUNCTION public.fn_sms_redari_sablon_model();
+DROP FUNCTION public.fn_sms_fereastra_externa(timestamptz);
 
 DO $post$
 DECLARE v_o oid;
@@ -229,7 +347,12 @@ BEGIN
     RAISE EXCEPTION '20261130c revenire: functiile fn_sms_* nu sunt cele 40 din 20261130b';
   END IF;
   IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '0ecde5e2b8aaa8a6dcd74c857ec920e4'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> '5c53f8f306c213f8d5037bac0aca920b' THEN
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> '5c53f8f306c213f8d5037bac0aca920b'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure), chr(13), '')) <> 'b3785d4b157a5ec18f5b8e23965e6e5d'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure), chr(13), '')) <> '5ea88d56e11ed99307a6c53fcbd18c4e'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure), chr(13), '')) <> 'ba7fbcf800adcea8c733f195e72dab9e'
+     OR (SELECT provolatile FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure) <> 's'
+     OR (SELECT provolatile FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure) <> 's' THEN
     RAISE EXCEPTION '20261130c revenire: corpurile nu sunt cele din 20261130b';
   END IF;
   -- fail-closed: textul liber ramane inchis pentru aplicatie
