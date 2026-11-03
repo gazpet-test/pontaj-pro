@@ -243,13 +243,20 @@ tr:hover td{background:#1C2128}
 .nl{background:none;border:none;cursor:pointer;padding:7px 13px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#8B949E;transition:all .2s;white-space:nowrap;flex-shrink:0}
 /* Audit UI 02.11.2026: pe desktop se derulează DOAR taburile de module; logo + zona din dreapta (Chat, 🔔, Ieșire) rămân mereu vizibile */
 .topbar{overflow:visible}
-.navscroll{display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent)}
+.navwrap{display:flex;align-items:center;flex:1 1 auto;min-width:0;gap:2px}
+.navscroll{display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+/* TKT-2026-0373: estomparea arată pe ce parte mai sunt taburi ascunse (stânga și/sau dreapta) */
+.navscroll.dr{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent)}
+.navscroll.st{-webkit-mask-image:linear-gradient(90deg,transparent,#000 28px,#000 100%);mask-image:linear-gradient(90deg,transparent,#000 28px,#000 100%)}
+.navscroll.st.dr{-webkit-mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+.navsag{background:#21262D;border:1px solid #30363D;color:#E6EDF3;border-radius:6px;width:24px;height:28px;cursor:pointer;flex-shrink:0;font-size:15px;line-height:1;padding:0}
+.navsag:hover{background:#30363D}
 .navscroll::-webkit-scrollbar{display:none}
 /* sub 1800 px: în zona din dreapta rămân iconițele + contoarele, textul apare în tooltip */
 @media (max-width:1799px){.topbar .tb-txt{display:none}}
 /* tabletă / ecran îngust (<1100 px): zona din dreapta nu mai încape -> toată bara se derulează (ca înainte), fără să lățească pagina */
-@media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{flex:0 0 auto;-webkit-mask-image:none;mask-image:none}}
-@media (max-width:719px){.navscroll{display:none}}
+@media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navwrap,.navscroll{flex:0 0 auto}.navscroll,.navscroll.st,.navscroll.dr{-webkit-mask-image:none;mask-image:none}.navsag{display:none}}
+@media (max-width:719px){.navwrap{display:none}}
 .home-account>div{min-width:0;overflow-wrap:anywhere}
 @media (max-width:1349px){.home-header{flex-wrap:wrap;gap:12px!important;padding:12px 20px!important}.home-account{flex-wrap:wrap;margin-left:auto!important}}
 /* Panou PontajPRO (audit UI 02.11): grilele se reașază pe ecrane înguste, pagina nu se mai lățește */
@@ -780,6 +787,22 @@ function Layout({ children }) {
     const t = setInterval(load, 60000)
     return () => clearInterval(t)
   }, [profile?.id])
+  // TKT-2026-0373: banda de taburi nu mai ascunde taburi fără semn — tabul paginii curente e adus în vedere, săgețile ‹ › apar
+  // când mai sunt taburi ascunse pe o parte, iar rotița mouse-ului nu mai derulează banda (de acolo „dispăreau” Acasă/Panou/Pontaj)
+  const navRef = useRef(null)
+  const [navAscuns, setNavAscuns] = useState({ st: false, dr: false })
+  const masoaraNav = useCallback(() => {
+    const el = navRef.current; if (!el) return
+    const st = el.scrollLeft > 2, dr = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+    setNavAscuns(v => (v.st === st && v.dr === dr) ? v : { st, dr })
+  }, [])
+  useEffect(() => {
+    const el = navRef.current
+    if (el) { el.querySelector('.nl.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); masoaraNav() }
+    window.addEventListener('resize', masoaraNav)
+    return () => window.removeEventListener('resize', masoaraNav)
+  }, [loc.pathname, profile?.id, profile?.email, profile?.role, masoaraNav])   // email/rol schimbă lista de taburi (Gemini P3)
+  const deruleazaNav = sens => { const el = navRef.current; if (el) el.scrollBy({ left: sens * Math.max(160, el.clientWidth * 0.7), behavior: 'smooth' }) }
   // Externii (email non-@gazpet.ro, ex. partenerul Adrom Evolution) nu văd Tichete/Consumabile
   const esteExtern = !(profile?.email || '').toLowerCase().endsWith('@gazpet.ro')
   const navItems = [
@@ -809,9 +832,13 @@ function Layout({ children }) {
           <div style={{width:28,height:28,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>⏱</div>
           <span style={{fontWeight:800,fontSize:14,letterSpacing:'-.3px'}}>PontajPRO</span>
         </div>
-        {/* taburile de module: zonă proprie derulabilă (rotița mouse-ului derulează pe orizontală) */}
-        <div className="navscroll" onWheel={e=>{ if (Math.abs(e.deltaY)>Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY }}>
-          {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+        {/* taburile de module: zonă proprie derulabilă; săgețile ‹ › apar doar când mai sunt taburi ascunse (TKT-2026-0373) */}
+        <div className="navwrap">
+          {navAscuns.st && <button type="button" className="navsag" title="Taburile din stânga" aria-label="Taburile din stânga" onClick={()=>deruleazaNav(-1)}>‹</button>}
+          <div ref={navRef} className={`navscroll${navAscuns.st?' st':''}${navAscuns.dr?' dr':''}`} onScroll={masoaraNav}>
+            {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+          </div>
+          {navAscuns.dr && <button type="button" className="navsag" title="Taburile din dreapta" aria-label="Taburile din dreapta" onClick={()=>deruleazaNav(1)}>›</button>}
         </div>
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
           {/* ℹ️ Noutăți modul — anunțuri per modul, reminder la 12 h până la „Am citit" (08.09.2026) */}
