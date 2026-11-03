@@ -331,8 +331,8 @@ raport + commit). Restul (Dashboard, UAT, Sesiune, Setări, PV A/B/C) = după. P
 ruta `/redari/raspuns/:token` fără login.
 
 ## 10. Șabloane reale (Model_1..7, v5 din 01.11.2026 după review R3) — adăugat 01.11.2026, branch `redari/sabloane`
-Harta completă placeholder → sursă: `docs/redari/SABLOANE.md`. Originalele: `docs/redari/referinta/` (Model_1..5 .docx v5,
-Model_6 registru .xlsx și cele 3 PDF-uri din pachetul v3, Model_7 tipizat Anexa 7 .xlsx v5). Șabloanele cu placeholder-e,
+Harta completă placeholder → sursă: `docs/redari/SABLOANE.md`. Originalele: `docs/redari/referinta/` (Model_1..5 .docx Final_v2 din
+03.11.2026 — înlocuiesc v5, Model_6 registru .xlsx și cele 3 PDF-uri din pachetul v3, Model_7 tipizat Anexa 7 .xlsx v5 și v6). Șabloanele cu placeholder-e,
 verificate cu `node scripts/redari_sabloane_verifica.mjs` (0 placeholder-e rupte) și completate de probă cu `completeazaDocx`
 strict: `public/redari/sabloane/convocator.docx` (Model 1, 36 placeholder-e), `pv_a.docx` (Model 2, 54), `pv_b.docx`
 (Model 3, 77), `adresa_uat.docx` (Model 4, 44, inclusiv rândul-șablon `{{rand.*}}`), `pv_c.docx` (Model 5, 23).

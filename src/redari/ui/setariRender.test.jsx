@@ -177,6 +177,17 @@ describe('ecranul UAT', () => {
     expect(h).not.toContain('UAT nou')
     expect(h).toContain('Doar administratorul modifică UAT-urile')
   })
+  it('termenul de 10 zile (plan pct. 4.3): avertisment în modal și în tabel, fără să blocheze; în termen nu apare nimic', () => {
+    const tarziu = { ...uats[0], afisare_data_start: '2026-12-01', afisare_data_end: '2026-12-12' }
+    const modal = renderToString(<ModalUat proiect={proiect} uat={tarziu} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
+    expect(modal).toContain('Afișarea la primărie începe pe 01.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026)')
+    expect(modal).toContain('cel târziu pe 30.11.2026')
+    expect(modal).toMatch(/<button[^>]*>Salvează/)
+    const tabel = renderToString(<UatEcran proiect={proiect} uats={[tarziu]} nivel="admin" show={show} onSchimbat={() => {}} />)
+    expect(tabel).toContain('afișarea începe după 30.11.2026')
+    const inTermen = renderToString(<ModalUat proiect={proiect} uat={{ ...tarziu, afisare_data_start: '2026-11-30' }} uats={uats} esteAdmin show={show} onClose={() => {}} onGata={() => {}} />)
+    expect(inTermen).not.toContain('Afișarea la primărie începe pe')
+  })
   it('fără UAT-uri: mesaj gol', () => {
     expect(renderToString(<UatEcran proiect={proiect} uats={[]} nivel="admin" show={show} onSchimbat={() => {}} />)).toContain('Proiectul nu are UAT-uri')
   })

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
 import { grupeazaPentruPlicuri, textAR, docxSimplu, genereazaOpis, genereazaPvPlicuire, csvEtichete } from './plicuri.js'
+import { termenExpediere, textTermenExpediere, avertismentExpediere } from './plicuri.js'
 
 // Exclusiv date fictive, fără identificatori de persoane reale.
 const conv = extra => ({ conv_id: 'conv-fictiva-1', nr_document: 'C-0012', uat_id: 'uat-fictiv-1', uat3: 'ABC', uat_nume: 'Comuna Fictivă',
@@ -94,5 +95,31 @@ describe('csvEtichete', () => {
     }
     expect(csvEtichete([{ ...plic, destinatar_nume: 'Fictiv "Test"', proiect: { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'T', imputernicire_data: '2026-11-01' } }], { [plic.id]: [conv()] })).toContain('Fictiv ""Test""')
     expect(() => csvEtichete([plic], { [plic.id]: [conv()] })).toThrow()   // fără împuternicire nu se generează AR
+  })
+})
+
+// Plan A1 rev49 pct. 4.2: recomandata se expediază „cu cel puțin 10 zile înainte de prima zi de sesiune” (zile calendaristice).
+// Datele așteptate sunt numărate în calendar, nu calculate cu funcția testată.
+describe('termenul de expediere (plan pct. 4.2)', () => {
+  const uat = { nume: 'Comuna Fictivă', sesiune_zi1: '2026-12-10' }
+  it('data-limită = ziua 1 minus 10 zile; pe limită e în termen, a doua zi e după termen', () => {
+    expect(termenExpediere(uat)).toEqual({ limita: '2026-11-30', depasit: false })
+    expect(termenExpediere(uat, '2026-11-30').depasit).toBe(false)
+    expect(termenExpediere(uat, '2026-11-02').depasit).toBe(false)
+    expect(termenExpediere(uat, '2026-12-01').depasit).toBe(true)
+    expect(termenExpediere({ sesiune_zi1: '2027-01-05' }, '2026-12-27')).toEqual({ limita: '2026-12-26', depasit: true })
+  })
+  it('fără ziua 1 sau cu dată invalidă nu se judecă (nu inventăm termenul)', () => {
+    expect(termenExpediere({}, '2026-12-01')).toEqual({ limita: null, depasit: false })
+    expect(termenExpediere(undefined, '2026-12-01')).toEqual({ limita: null, depasit: false })
+    expect(termenExpediere(uat, '01.12.2026').depasit).toBe(false)
+    expect(termenExpediere(uat, '').depasit).toBe(false)
+  })
+  it('textul afișat și avertismentul vizibil', () => {
+    expect(textTermenExpediere(uat)).toBe('expediați până la 30.11.2026')
+    expect(textTermenExpediere({ nume: 'Fără zile' })).toBe('termen de expediere necunoscut (ziua 1 de sesiune necompletată)')
+    expect(avertismentExpediere(uat, '2026-11-30')).toBeNull()
+    expect(avertismentExpediere(uat, '2026-12-03')).toBe('Data expedierii (03.12.2026) e după termen: pentru Comuna Fictivă convocările trebuie expediate cu cel puțin 10 zile înainte de ziua 1 (10.12.2026), adică până la 30.11.2026 (plan pct. 4.2).')
+    expect(avertismentExpediere({}, '2026-12-03')).toBeNull()
   })
 })

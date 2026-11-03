@@ -1,4 +1,5 @@
 import JSZip from 'jszip'
+import { TERMEN_CONVOCARE_ZILE, dataLimitaConvocare } from './setari.js'
 
 // Validat de Juridic (juridic#021, 03.11.2026; validarea finală a formulărilor rămâne la avocat). Textele AR sunt centralizate aici.
 // Pe AR apar MEREU: nr. plicului, nr. de convocări (N) și UAT-ul. Numerele convocărilor: până la 6 enumerate, sau ca interval când sunt consecutive;
@@ -29,6 +30,27 @@ const CAMPURI_ADRESA = ['strada', 'sat', 'comuna', 'judet', 'cod_postal']
 export const adresaPlic = a => CAMPURI_ADRESA.map(k => txt(a?.[k])).filter(Boolean).join(', ')
 export const dataBucuresti = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 const dataText = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d.split('-').reverse().join('.') : txt(d)
+
+/** Termenul de expediere al convocărilor unui UAT (plan pct. 4.2: recomandata se expediază „cu cel puțin 10 zile înainte de prima
+ *  zi de sesiune”). `limita` = ziua 1 − TERMEN_CONVOCARE_ZILE ('AAAA-LL-ZZ', null fără ziua 1); `depasit` = data dată e după limită.
+ *  Avertisment, nu blocaj: data expedierii e un fapt (borderoul Poștei) și se înregistrează așa cum e. */
+export function termenExpediere(uat, data) {
+  const limita = dataLimitaConvocare(uat?.sesiune_zi1)
+  const d = txt(data)
+  return { limita, depasit: !!(limita && /^\d{4}-\d{2}-\d{2}$/.test(d) && d > limita) }
+}
+/** „expediați până la ZZ.LL.AAAA” pentru UAT-ul dat; fără ziua 1, spune că termenul nu se poate calcula. */
+export function textTermenExpediere(uat) {
+  const { limita } = termenExpediere(uat)
+  return limita ? `expediați până la ${dataText(limita)}` : 'termen de expediere necunoscut (ziua 1 de sesiune necompletată)'
+}
+/** Avertismentul pentru o expediere după limită (modalul de expediere, confirmarea la salvare). */
+export function avertismentExpediere(uat, data) {
+  const { limita, depasit } = termenExpediere(uat, data)
+  if (!depasit) return null
+  return `Data expedierii (${dataText(txt(data))}) e după termen: pentru ${uat?.nume || 'UAT'} convocările trebuie expediate cu cel puțin ` +
+    `${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 (${dataText(txt(uat?.sesiune_zi1))}), adică până la ${dataText(limita)} (plan pct. 4.2).`
+}
 
 export function grupeazaPentruPlicuri(randuri) {
   const pe = new Map(), fara_adresa = []

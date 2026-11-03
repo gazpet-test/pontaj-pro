@@ -20,7 +20,7 @@ describe('PV A', () => {
       for(const m of xml.matchAll(/\{\{([^}]+)\}\}/g)) chei.add(m[1])
     }
     expect([...chei].sort()).toEqual([...CHEI_PV_A].sort())
-    expect(chei.size).toBe(54)
+    expect(chei.size).toBe(51)
   })
   it.each([
     ['Decopertare pamant fertil','sol_fertil'],['Nivelare teren','nivelare'],
@@ -55,7 +55,9 @@ describe('PV A', () => {
     expect(r.campuri.bifa_nivelare).toBe('\u2612')
     expect(r.campuri.bifa_arat).toBe('\u2610')
     expect(r.campuri.bifa_plan_nu).toBe(BIFA_DA)
-    expect(r.campuri.bifa_foto_da).toBe(BIFA_NU)
+    // Final_v2: fara fotografii in PV A (camp scos din sablon si din generator)
+    expect(r.campuri).not.toHaveProperty('bifa_foto_da')
+    expect(r.campuri).not.toHaveProperty('foto_nr')
     expect(r.campuri.calitate_cota).toBe('coproprietar, cota 1/2')
     expect(r.campuri.act_identitate).toBe('')
     expect(r.campuri.act_doveditor).toBe('')
@@ -116,11 +118,11 @@ it('PV A/B: tronsonul din document e cel de pe randul PV, nu cel curent al parce
   expect((await genereazaPvA({...a,templateArrayBuffer:sablon()})).campuri.tronson).toBe(4)
 })
 describe('PV B',()=>{
-  it('78 chei din sablonul independent, inclusiv antete',async()=>{
+  it('72 chei din sablonul independent, inclusiv antete',async()=>{
     const z=await JSZip.loadAsync(sablonB()), chei=new Set()
     for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name)))
       for(const m of (await f.async('string')).matchAll(/\{\{([^}]+)\}\}/g)) chei.add(m[1])
-    expect([...CHEI_PV_B].sort()).toEqual([...chei].sort());expect(chei.size).toBe(78)
+    expect([...CHEI_PV_B].sort()).toEqual([...chei].sort());expect(chei.size).toBe(72)
   })
   it.each([
     ['proiect','contract_nr','numarul contractului'],['proiect','contract_data','data contractului'],
@@ -312,7 +314,7 @@ describe('PV B coproprietari - felia 7',()=>{
     d.detinatori=[]
     expect(verificaDatePvB(d)).not.toContain('toti detinatorii au PV A semnat')
   })
-  it('sablon real: doar absentii, referinta completata, 78 chei consumate',async()=>{
+  it('sablon real: doar absentii, referinta completata, 72 chei consumate',async()=>{
     const d=dateB();d.parcela.id='p';d.pvs=[aSemnat()]
     d.convocari=[{id:'c1',detinator_id:'d1',stare:'activ',canal:'posta',nr_tracking:'DOAR-SEMNATAR',created_at:'2026-11-14'}]
     d.raspunsuri=[{detinator_id:'d1',data:'2026-11-14',seq:1,optiune:'particip'}]

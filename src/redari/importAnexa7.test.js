@@ -190,6 +190,20 @@ describe('parseazaAnexa7', () => {
     expect(pv.detinatori[0].sursa_date).toContain('DA?')
   })
 
+  it('tipizatul Final_v2 (Model_7 v6, 03.11.2026) are acelasi antet ca v5; ambele fisiere reale se citesc fara erori', () => {
+    const cale = n => new URL(`../../docs/redari/referinta/${n}`, import.meta.url)
+    const v6 = XLSX.read(readFileSync(cale('Model_7_Anexa7_Tipizat_v6_final.xlsx')), { type: 'buffer' })
+    const foaie6 = v6.Sheets[v6.SheetNames[0]]
+    // randul 5 (antetul) al v6, comparat celula cu celula cu v5 (independent de parser)
+    expect(Array.from({ length: 30 }, (_, c) => foaie6[XLSX.utils.encode_cell({ r: 4, c })]?.v ?? '')).toEqual(antet)
+    for (const n of ['Model_7_Anexa7_Tipizat_date_detinatori_TGZ.xlsx', 'Model_7_Anexa7_Tipizat_v6_final.xlsx']) {
+      const pv = parseazaAnexa7(readFileSync(cale(n)), opt)
+      expect(pv.erori, n).toEqual([])
+      expect(pv.antet.rand, n).toBe(4)
+      expect(pv.statistici.randuri_total, n).toBe(0)
+    }
+  })
+
   it('mentine paritatea calitatilor cu UI fara a importa React', () => {
     const comune = readFileSync(new URL('./ui/comune.jsx', import.meta.url), 'utf8')
     const declaratie = comune.match(/export const CALITATI = (\[[^\]]+\])/)[1]
