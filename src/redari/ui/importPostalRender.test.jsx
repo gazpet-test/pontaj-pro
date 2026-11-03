@@ -6,6 +6,8 @@ import { renderToString } from 'react-dom/server'
 
 const hooks = vi.hoisted(() => ({ current: null }))
 const apeluri = vi.hoisted(() => [])
+// red_uat recitit la „Aplică” (Copilot f-v2 r4 P2): lista întoarsă pe prima pagină (keyset: pagina cu .gt() e goală) sau eroare
+const bd = vi.hoisted(() => ({ uats: null, eroareUat: null }))
 vi.mock('react', async original => {
   const real = await original()
   return { ...real,
@@ -16,11 +18,15 @@ vi.mock('react', async original => {
 })
 vi.mock('../../lib/supabase.js', () => ({ supabase: { from: tabel => {
   apeluri.push(tabel)
-  const q = { then: (ok, ko) => Promise.resolve({ data: [], error: null }).then(ok, ko) }
-  for (const op of ['select', 'eq', 'neq', 'is', 'limit', 'update', 'order', 'gt', 'in']) q[op] = () => q
+  let pagina2 = false
+  const raspuns = () => tabel !== 'red_uat' ? { data: [], error: null }
+    : bd.eroareUat ? { data: null, error: bd.eroareUat } : { data: pagina2 ? [] : bd.uats, error: null }
+  const q = { then: (ok, ko) => Promise.resolve(raspuns()).then(ok, ko) }
+  for (const op of ['select', 'eq', 'neq', 'is', 'limit', 'update', 'order', 'in']) q[op] = () => q
+  q.gt = () => { pagina2 = true; return q }
   return q
 } } }))
-afterEach(() => { hooks.current = null; apeluri.length = 0; vi.unstubAllGlobals() })
+afterEach(() => { hooks.current = null; apeluri.length = 0; bd.uats = null; bd.eroareUat = null; vi.unstubAllGlobals() })
 
 import ImportPostal from './ImportPostal.jsx'
 import { propune } from '../importPostal.js'
@@ -85,13 +91,59 @@ describe('ImportPostal — termenul de 10 zile', () => {
     if (nrConfirmari === 2) expect(confirm.mock.calls[1][0]).toMatch(/^1 din 2 expedieri sunt DUPĂ termenul de convocare/)
     expect(apeluri).toEqual([])
   })
-  it('ambele confirmări acceptate → se aplică (cererile pleacă spre red_plicuri)', async () => {
+  it('ambele confirmări acceptate, ziua 1 neschimbată la recitire → se aplică (întâi red_uat, apoi red_plicuri)', async () => {
+    bd.uats = uats
     const confirm = vi.fn(() => true)
     vi.stubGlobal('window', { confirm })
     const { tree } = ecranCuPrevizualizare()
     await elemente(tree, 'button').find(b => textButon(b).startsWith('4. Aplică')).props.onClick()
     expect(confirm).toHaveBeenCalledTimes(2)
-    expect(apeluri.length).toBeGreaterThan(0)
-    expect(new Set(apeluri)).toEqual(new Set(['red_plicuri']))
+    expect(apeluri[0]).toBe('red_uat')
+    expect(apeluri).toContain('red_plicuri')
+  })
+})
+
+// Copilot f-v2 r4 P2: alt admin mută ziua 1 între previzualizare și „Aplică”; recitirea se face imediat înainte de aplicare
+describe('ImportPostal — ziua 1 mutată între previzualizare și aplicare', () => {
+  const aplica = async () => {
+    const { h, props, tree } = ecranCuPrevizualizare()
+    await elemente(tree, 'button').find(b => textButon(b).startsWith('4. Aplică')).props.onClick()
+    return { h, props }
+  }
+  it('mutată mai devreme (01.12 → limita 21.11): a treia confirmare, pe valoarea nouă; refuz = nimic aplicat, previzualizarea arată termenul nou', async () => {
+    bd.uats = [{ ...uats[0], sesiune_zi1: '2026-12-01' }]
+    const raspunsuri = [true, true, false]
+    const confirm = vi.fn(() => raspunsuri.shift())
+    vi.stubGlobal('window', { confirm })
+    const { h, props } = await aplica()
+    expect(confirm).toHaveBeenCalledTimes(3)
+    expect(confirm.mock.calls[2][0]).toMatch(/^Ziua 1 de sesiune s-a schimbat între timp/)
+    expect(confirm.mock.calls[2][0]).toContain('1 din 2 expedieri')
+    expect(confirm.mock.calls[2][0]).toContain('ziua 1 (01.12.2026), adică până la 21.11.2026')
+    expect(new Set(apeluri)).toEqual(new Set(['red_uat']))
+    expect(h.valori[6]).toMatch(/nu s-a aplicat nimic/)
+    const html = renderToString(h.render(ImportPostal, props)).replace(/<!-- -->/g, '')
+    expect(html).toContain('ziua 1 (01.12.2026)')
+    expect(html).not.toContain('ziua 1 (10.12.2026)')
+  })
+  it('mutată mai târziu (20.12): termenul e acum respectat, dar se cere totuși confirmarea pe valorile noi; acceptată → se aplică', async () => {
+    bd.uats = [{ ...uats[0], sesiune_zi1: '2026-12-20' }]
+    const confirm = vi.fn(() => true)
+    vi.stubGlobal('window', { confirm })
+    await aplica()
+    expect(confirm).toHaveBeenCalledTimes(3)
+    expect(confirm.mock.calls[2][0]).toContain('0 din 2 expedieri')
+    expect(apeluri[0]).toBe('red_uat')
+    expect(apeluri).toContain('red_plicuri')
+  })
+  it.each([['eroare de citire', { error: { message: 'retea' } }], ['UAT-ul plicului lipsește din recitire', { uats: [] }]])('%s → nu se aplică nimic și se arată eroarea', async (_, stare) => {
+    if (stare.error) bd.eroareUat = stare.error
+    else bd.uats = stare.uats
+    const confirm = vi.fn(() => true)
+    vi.stubGlobal('window', { confirm })
+    const { h } = await aplica()
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(apeluri).not.toContain('red_plicuri')
+    expect(h.valori[6]).toMatch(/nu s-a aplicat nimic/)
   })
 })

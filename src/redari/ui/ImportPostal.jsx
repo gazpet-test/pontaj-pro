@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { descarcaBlob } from '../docx.js'
-import { citesteFisierPostal, ghicesteMaparea, propune, aplica, confirmariAplicare } from '../importPostal.js'
+import { citesteFisierPostal, ghicesteMaparea, propune, aplica, confirmariAplicare, reevalueazaTermene, confirmareTermeneSchimbate } from '../importPostal.js'
 import { G, S, Camp, Gol, msgEroare, fmtDate, MOTIVE_RETUR, etichetaRetur, citestePaginat } from './comune.jsx'
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 
@@ -91,7 +91,20 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     for (const m of confirmariAplicare(preview, proiect.cod)) if (!window.confirm(m)) return
     const curent = incepe()
     try {
-      const r = await aplica(supabase, preview.aplicabile, { esteCurent: curent })
+      // Copilot f-v2 r4 P2: ziua 1 se recitește imediat înainte de aplicare; dacă termenele diferă de previzualizare,
+      // confirmarea se cere pe valorile de acum; recitire eșuată = nu se aplică nimic
+      let uatsAcum
+      try { uatsAcum = await citesteUatPostal(supabase, proiect.id, curent) }
+      catch { if (curent()) setMesaj('Nu pot reciti zilele de sesiune ale UAT-urilor; nu s-a aplicat nimic. Reîncearcă.'); return }
+      if (!curent()) return
+      let reevaluat
+      try { reevaluat = reevalueazaTermene(preview.aplicabile, uatsAcum) }
+      catch (e) { setMesaj(msgEroare(e)); return }
+      if (reevaluat.schimbat) {
+        setPreview(p => (p ? { ...p, aplicabile: reevaluat.aplicabile } : p))
+        if (!window.confirm(confirmareTermeneSchimbate(reevaluat.aplicabile))) { setMesaj('Ziua 1 de sesiune s-a schimbat între timp; nu s-a aplicat nimic. Previzualizarea arată termenele de acum.'); return }
+      }
+      const r = await aplica(supabase, reevaluat.aplicabile, { esteCurent: curent })
       if (!curent()) return
       setRaport(r)
       setMesaj(`Aplicate: ${r.aplicate.length}; conflicte: ${r.conflicte.length}; erori cu rezultat neconfirmat: ${r.erori.length}; neprocesate: ${r.neprocesate.length}. Verifică în Plicuri înainte de reluare.`)

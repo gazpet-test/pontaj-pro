@@ -53,6 +53,17 @@ export function avertismentExpediere(uat, data) {
     `${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 (${dataText(txt(uat?.sesiune_zi1))}), adică până la ${dataText(limita)} (plan pct. 4.2).`
 }
 
+/** Copilot f-v2 r4 P2: modalul de expediere recitește UAT-ul din BD imediat înainte de salvare (alt admin poate fi mutat ziua 1)
+ *  și cere confirmarea pe valoarea RECITITĂ. Citire eșuată sau UAT invizibil = eroare, nu se salvează nimic.
+ *  @returns {Promise<{ ok: boolean, avertisment: string|null }>} ok=false = operatorul a refuzat. */
+export async function confirmaExpediereRecitita(client, { uatId, data, confirm }) {
+  const { data: uat, error } = await client.from('red_uat').select('id,nume,sesiune_zi1').eq('id', uatId).maybeSingle()
+  if (error || !uat) throw { code: 'P0001', message: 'Nu pot reciti ziua 1 de sesiune a UAT-ului; expedierea nu s-a salvat. Reîncearcă.' }
+  const avertisment = avertismentExpediere(uat, data)
+  if (!avertisment) return { ok: true, avertisment: null }
+  return { ok: !!confirm(`${avertisment}\n\nÎnregistrezi totuși expedierea cu această dată?`), avertisment }
+}
+
 export function grupeazaPentruPlicuri(randuri) {
   const pe = new Map(), fara_adresa = []
   for (const r of randuri) {

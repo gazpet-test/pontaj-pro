@@ -171,7 +171,7 @@ export function propune(randuri, mapare, modImplicit, plicuri, { date1904 = fals
     if (!data) return exceptie('dată lipsă sau invalidă (2025–2030)')
     const awb = nr_tracking || tracking(p.awb)
     if (!awb) return exceptie('AWB obligatoriu pentru expediere')
-    const item = { ...baza, nr_document: p.nr_plic, plic_id: p.id, tip }
+    const item = { ...baza, nr_document: p.nr_plic, plic_id: p.id, uat_id: p.uat_id ?? null, tip }
     if (p.data_expediere != null) {
       if (p.data_expediere === data && tracking(p.awb) === awb) return valide.push({ fel: 'deja', item, baza })
       return exceptie('conflict: plic deja expediat cu altă dată sau alt AWB')
@@ -206,6 +206,31 @@ export function confirmariAplicare(preview, proiectCod) {
       `${tardive.map(a => a.nr_document).join(', ')}.\nSe înregistrează cu data reală, dar termenul nu e respectat. Le înregistrezi totuși?`)
   }
   return mesaje
+}
+
+/** Copilot f-v2 r4 P2: avertismentele de termen recalculate pe UAT-urile recitite din BD imediat înainte de aplicare (alt admin poate
+ *  fi mutat ziua 1 după previzualizare). `schimbat` = cel puțin un rând are alt avertisment decât în previzualizare; un UAT implicat
+ *  care lipsește din recitire = eroare (nu se judecă pe date necunoscute, nu se aplică nimic). */
+export function reevalueazaTermene(aplicabile, uats) {
+  const uatPe = new Map((uats || []).map(u => [u.id, u]))
+  if (aplicabile.some(a => a.uat_id != null && !uatPe.has(a.uat_id))) throw new Error('UAT-urile plicurilor nu au putut fi recitite integral; nu s-a aplicat nimic. Reîncearcă.')
+  let schimbat = false
+  const noi = aplicabile.map(a => {
+    const avertisment = avertismentExpediere(uatPe.get(a.uat_id), a.patch?.data_expediere)
+    if ((avertisment || null) !== (a.avertisment || null)) schimbat = true
+    const rest = { ...a }
+    delete rest.avertisment
+    return avertisment ? { ...rest, avertisment } : rest
+  })
+  return { aplicabile: noi, schimbat }
+}
+
+/** Confirmarea cerută când recitirea a schimbat termenele: se judecă pe valorile de ACUM. */
+export function confirmareTermeneSchimbate(aplicabile) {
+  const tardive = aplicabile.filter(a => a.avertisment)
+  return `Ziua 1 de sesiune s-a schimbat între timp pentru UAT-urile acestor plicuri. Pe valorile de acum, ${tardive.length} din ${aplicabile.length} expedieri ` +
+    `sunt DUPĂ termenul de convocare (cu cel puțin ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1, plan pct. 4.2)${tardive.length ? `: ${tardive.map(a => a.nr_document).join(', ')}` : ''}.` +
+    `\n${tardive.map(a => a.avertisment).join('\n')}\n\nAplici totuși?`
 }
 
 export async function aplica(supabase, aplicabile, { esteCurent = () => true } = {}) {

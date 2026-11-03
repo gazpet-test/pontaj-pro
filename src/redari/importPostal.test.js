@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx-js-style'
 import { citesteFisierPostal, ghicesteMaparea, parseazaData, clasificaEveniment, motivRetur, propune, aplica } from './importPostal.js'
 import { confirmariAplicare } from './importPostal.js'
+import { reevalueazaTermene, confirmareTermeneSchimbate } from './importPostal.js'
 
 const mapare = { nr_document: 'doc', nr_tracking: 'awb', data: 'data', eveniment: 'status', motiv: 'motiv' }
 const plic = (extra = {}) => ({ id: 'plic-fictiv-1', proiect_id: 'proiect-fictiv', nr_plic: 'PL-HUS-0001', lot_id: 'lot-fictiv', opis_path: 'plicuri/plic-fictiv-1/opis-1.docx', awb: null,
@@ -171,6 +172,17 @@ describe('termenul de expediere la import', () => {
     expect(m[1]).toMatch(/^1 din 4 expedieri sunt DUPĂ termenul de convocare \(cu cel puțin 10 zile înainte de ziua 1, plan pct\. 4\.2\): PL-HUS-0002\./)
     const inTermen = propune([fisier[0], fisier[2]], mapare, 'expediere', plicuri, { uats })
     expect(confirmariAplicare(inTermen, 'TEST-PR')).toHaveLength(1)
+  })
+  it('recitirea înainte de aplicare (Copilot f-v2 r4 P2): termene recalculate pe ziua 1 de acum, schimbarea semnalată, UAT lipsă = eroare', () => {
+    const r = propune(fisier, mapare, 'expediere', plicuri, { uats })
+    expect(reevalueazaTermene(r.aplicabile, uats).schimbat).toBe(false)
+    // ziua 1 mutată la 05.12 → limita 25.11: 30.11 și 02.12 devin tardive; patch-urile nu se schimbă
+    const mutat = reevalueazaTermene(r.aplicabile, [{ ...uats[0], sesiune_zi1: '2026-12-05' }, uats[1]])
+    expect(mutat.schimbat).toBe(true)
+    expect(mutat.aplicabile.filter(a => a.avertisment).map(a => a.nr_document)).toEqual(['PL-HUS-0002', 'PL-HUS-0003'])
+    expect(mutat.aplicabile.map(a => a.patch)).toEqual(r.aplicabile.map(a => a.patch))
+    expect(confirmareTermeneSchimbate(mutat.aplicabile)).toContain('2 din 4 expedieri')
+    expect(() => reevalueazaTermene(r.aplicabile, [uats[0]])).toThrow(/nu s-a aplicat nimic/)
   })
   it('fără UAT-uri transmise (ecranul Plicuri, care are propriul avertisment) nu se inventează termenul', () => {
     expect(propune(fisier, mapare, 'expediere', plicuri).aplicabile.some(a => a.avertisment)).toBe(false)

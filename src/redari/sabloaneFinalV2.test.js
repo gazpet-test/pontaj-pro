@@ -33,6 +33,12 @@ const DETECTORI = [
   new RegExp(String.raw`\b(?:consider|interpret|socot|reput)\w*.{0,60}${ACORD}`),
   // „în lipsa unui răspuns … de acord”, „nerăspunsul reprezintă acceptare”, „tăcerea … acord”, „fără răspuns … acceptat”
   new RegExp(String.raw`\b(?:lipsa|absenta|neraspuns\w*|nerespuns\w*|tacere\w*|fara (?:un |niciun )?raspuns)\b.{0,160}${ACORD}`),
+  // condiționale (Copilot f-v2 r4 P3): „dacă nu răspundeți, sunteți de acord”, „dacă nu vă prezentați … acceptați”,
+  // „în cazul în care nu transmiteți obiecții … acceptată”; verbul după „nu” e o acțiune a deținătorului, deci
+  // „dacă nu sunteți de acord, formulați obiecții” (dezacord explicit) rămâne nemarcat
+  new RegExp(String.raw`\b(?:daca|in cazul in care|cand|atunci cand) nu (?:va |ne |ni |se |le )?(?:(?:puteti|poti|doriti|veti|mai) )?(?:raspund|prezent|semn|transmit|comunic|formul|depun|contest|opun|trimit|return|participa|veni)\w*\b.{0,120}${ACORD}`),
+  // substantivele negate (Copilot f-v2 r4 P3): „nesemnarea înseamnă acord”, „neprezentarea valorează acceptare”, „necontestarea …”
+  new RegExp(String.raw`\bne(?:semn|prezent|contest|formul|opun|transmit|depun|participa|returna)\w*\b.{0,80}${ACORD}`),
 ]
 function gasesteAcord(text) {
   let t = normalizeaza(text)
@@ -116,6 +122,15 @@ describe('detectorul „lipsa răspunsului = acord” (mutanți)', () => {
     // negația nu acoperă ce vine după ea
     'Această constatare nu reprezintă acceptarea tacită; tăcerea valorează acord.',
     'Această constatare nu reprezintă acceptarea tacită, ci acord tacit.',
+    // condiționale (Copilot f-v2 r4 P3)
+    'Dacă nu răspundeți, sunteți de acord.',
+    'Dacă nu vă prezentați la sesiune, sunteți de acord cu procesul-verbal.',
+    'Dacă nu vă prezentați, acceptați constatarea comisiei.',
+    'Dacă nu vă puteți prezenta, sunteți de acord cu starea terenului.',
+    'În cazul în care nu transmiteți obiecții, starea terenului este acceptată.',
+    'Nesemnarea procesului-verbal înseamnă acord.',
+    'Neprezentarea la sesiune valorează acceptare.',
+    'În absența unei obiecții scrise, procesul-verbal este acceptat.',
   ]
   it.each(MUTANTI)('prinde: %s', m => { expect(gasesteAcord(m)).not.toBeNull() })
   it.each(['convocator', 'adresa_uat', 'pv_b'])('mutant injectat într-un paragraf real din %s → detectorul pică șablonul', async nume => {
@@ -130,6 +145,10 @@ describe('detectorul „lipsa răspunsului = acord” (mutanți)', () => {
     'Afișarea e publicitate suplimentară; nu valorează acceptare tacită.',
     '☐ Nu particip. Nu am obiecții privind starea terenului și sunt de acord să primesc procesul-verbal completat, spre semnare, prin poștă / electronic.',
     'Sunt de acord ca procesul-verbal să fie întocmit în lipsa mea.',
+    'Dacă nu sunteți de acord cu starea terenului, formulați obiecții la sesiune.',
+    'Dacă nu vă puteți prezenta, ne puteți răspunde la telefon 0000 000 000, pe e-mail la test@example.invalid.',
+    '☐ deținătorul nu s-a prezentat după convocare și afișare',
+    'Neprezentarea nu oprește procedura: parcela se finalizează prin procesul-verbal de constatare tehnică (tip B).',
     'potrivit Acordului de mediu nr. 4/18.07.2022 recepția lor se face cu proprietarii',
     'În lipsa participării sau a unui răspuns, reprezentanții Beneficiarului, ai Antreprenorului și ai Primăriei pot efectua o constatare tehnică documentată a stării terenului.',
   ])('excepție / text legitim, NU e marcat: %s', t => { expect(gasesteAcord(t)).toBeNull() })

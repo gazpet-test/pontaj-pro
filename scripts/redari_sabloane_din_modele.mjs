@@ -320,16 +320,22 @@ if (VERIFICA) {
   // Limita (Windows, 5 fișiere): fiecare rename e atomic, dar cele 5 nu formează o tranzacție; un eșec la pasul (2) (fișier
   // deschis în Word / blocat de antivirus) e raportat cu lista celor deja publicate, iar `--verifica` arată ce a rămas vechi.
   const temporar = sablon => resolve(OUT, `.${sablon}.tmp-${process.pid}`)
-  const scrise = []
+  // curățenie pe TOATE cele 5 temporare (și unul scris parțial, înainte de eșec); o ștergere eșuată nu ascunde eroarea inițială
+  const stergeTemporare = (pastreaza = []) => {
+    const ramase = []
+    for (const { sablon } of construite) {
+      if (pastreaza.includes(sablon)) continue
+      try { rmSync(temporar(sablon), { force: true }) } catch { ramase.push(temporar(sablon)) }
+    }
+    return ramase.length ? ` Temporare care nu s-au putut șterge: ${ramase.join(', ')}.` : ''
+  }
   try {
     for (const { sablon, buf } of construite) {
       writeFileSync(temporar(sablon), buf)
-      scrise.push(sablon)
       asigura(Buffer.compare(readFileSync(temporar(sablon)), buf) === 0, `${sablon}: fișierul temporar nu corespunde`)
     }
   } catch (e) {
-    for (const s of scrise) rmSync(temporar(s), { force: true })
-    throw new Error(`Nimic publicat (șabloanele au rămas cele vechi): ${e.message}`)
+    throw new Error(`Nimic publicat (șabloanele au rămas cele vechi): ${e.message}.${stergeTemporare()}`)
   }
   const publicate = []
   try {
@@ -339,7 +345,6 @@ if (VERIFICA) {
       console.log(`scris ${sablon} (${buf.length} octeți, ${chei.length} placeholder-e distincte)  ←  ${reteta.model}`)
     }
   } catch (e) {
-    for (const { sablon } of construite) if (!publicate.includes(sablon)) rmSync(temporar(sablon), { force: true })
-    throw new Error(`Publicare parțială: ${publicate.join(', ') || 'niciunul'} sunt noi, restul au rămas vechi (${e.message}). Rulează din nou scriptul.`)
+    throw new Error(`Publicare parțială: ${publicate.join(', ') || 'niciunul'} sunt noi, restul au rămas vechi (${e.message}). Rulează din nou scriptul.${stergeTemporare(publicate)}`)
   }
 }

@@ -4,7 +4,7 @@ import { descarcaBlob } from '../docx.js'
 import { sesiuneEcran } from '../corespondenta.js'
 import { propune, aplica } from '../importPostal.js'
 import { grupeazaPentruPlicuri, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire,
-  termenExpediere, textTermenExpediere, avertismentExpediere } from '../plicuri.js'
+  termenExpediere, textTermenExpediere, avertismentExpediere, confirmaExpediereRecitita } from '../plicuri.js'
 import { TERMEN_CONVOCARE_ZILE } from '../setari.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
 import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
@@ -195,6 +195,10 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       const preview = propune([{ doc: r.nr_plic, awb: f.awb, data: f.data }], { nr_document: 'doc', nr_tracking: 'awb', data: 'data' }, 'expediere', plicuri, { imputernicire })   // Gemini f10 r2 P3
       if (preview.exceptii.length) invalid(preview.exceptii.map(e => e.motiv).join('; '))
       if (preview.deja.length) { if (curent()) setModal(null); return 'Expedierea este deja înregistrată.' }
+      // Copilot f-v2 r4 P2: ziua 1 recitită din BD chiar acum; confirmarea termenului de 10 zile se calculează pe valoarea recitită
+      const termen = await confirmaExpediereRecitita(supabase, { uatId: r.uat_id, data: f.data, confirm: m => window.confirm(m) })
+      if (!curent()) return
+      if (!termen.ok) return 'Expedierea nu s-a salvat: este după termenul de 10 zile și nu ai confirmat.'
       const raport = await aplica(supabase, preview.aplicabile, { esteCurent: curent })
       if (!curent()) return
       if (raport.erori.length || raport.neprocesate.length) throw new Error('Expediere neconfirmată.')
@@ -298,12 +302,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
         {modal.tip === 'semnatari' && <>{[['semnatar1_id', 'Semnatar 1 — plicuiește'], ['semnatar2_id', 'Semnatar 2 — verifică']].map(([k, et]) => <Camp key={k} eticheta={et}><select style={S.select} disabled={lucru} value={f[k]} onChange={e => camp(k, e.target.value)}><option value="">—</option>{utilizatori.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Camp>)}
           <Camp eticheta="Observații"><input disabled={lucru} style={S.input} value={f.observatii} onChange={e => camp('observatii', e.target.value)} /></Camp></>}
         {f.path && <p>Fișier încărcat. La rezultat neconfirmat, reîncarcă și verifică înregistrarea înainte de reluare.</p>}
-        {btn('Salvează', () => {
-          // expedierea după termen se înregistrează (e un fapt), dar numai după confirmare explicită
-          const avert = modal.tip === 'expediere' ? avertismentExpediere(uatDe(modal.rand.uat_id), f.data) : null
-          if (avert && !window.confirm(`${avert}\n\nÎnregistrezi totuși expedierea cu această dată?`)) return
-          executa(salveaza, true)
-        })}
+        {btn('Salvează', () => executa(salveaza, true))}
       </div>
     </Modal>}
   </div>
