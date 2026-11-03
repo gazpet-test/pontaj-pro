@@ -1,0 +1,221 @@
+// ARHIVĂ — NU SE DEPLOYEAZĂ. Codul notify-whatsapp v29 (deployat 16.05.2026, retras 03.11.2026), copiat din funcția live înainte de retragere.
+// Problema (docs/SECURITATE_MATRICE_ACCES_2026-09-30.md §5.3): verify_jwt=true lasă să treacă și cheia anon publică; codul nu verifică
+// rolul apelantului și rulează cu service_role -> `force=true` trimitea un șablon WhatsApp către orice număr, iar `dry_run` întorcea
+// telefonul + numele oricărui profil după UUID. O versiune nouă: poartă de rol în cod (owner / service_role), fără force, fără PII în dry_run.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// notify-whatsapp Edge Function
+// Trimite notificări WhatsApp prin Meta Cloud API folosind template messages aprobate.
+// Folosește 3 secrets: META_TOKEN, META_PHONE_NUMBER_ID, (auto: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+const META_API_VERSION = 'v22.0';
+
+interface NotifyRequest {
+  template_name: string;
+  recipient_user_id?: string;
+  recipient_phone?: string;
+  params?: Record<string, string | number>;
+  force?: boolean;            // bypass test_mode + tier check (doar pentru testing)
+  dry_run?: boolean;          // simulează fără să trimită efectiv (pentru testing)
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+
+  const META_PHONE_NUMBER_ID = Deno.env.get('META_PHONE_NUMBER_ID');
+  const META_TOKEN = Deno.env.get('META_TOKEN');
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+  if (!META_PHONE_NUMBER_ID || !META_TOKEN) {
+    return new Response(JSON.stringify({
+      error: 'Missing secrets',
+      detail: 'Set META_PHONE_NUMBER_ID and META_TOKEN in Supabase Dashboard > Edge Functions > Secrets'
+    }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+  let bodyJson: NotifyRequest;
+  try {
+    bodyJson = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  const { template_name, recipient_user_id, recipient_phone, params = {}, force = false, dry_run = false } = bodyJson;
+
+  if (!template_name) {
+    return new Response(JSON.stringify({ error: 'template_name required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+  if (!recipient_user_id && !recipient_phone) {
+    return new Response(JSON.stringify({ error: 'recipient_user_id or recipient_phone required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  try {
+    // 1. Fetch template
+    const { data: template, error: tErr } = await supabase
+      .from('notification_templates')
+      .select('*')
+      .eq('name', template_name)
+      .eq('active', true)
+      .maybeSingle();
+
+    if (tErr) throw new Error(`DB error fetching template: ${tErr.message}`);
+    if (!template) throw new Error(`Template '${template_name}' not found or inactive`);
+    if (template.meta_template_status !== 'approved' && !force) {
+      throw new Error(`Template '${template_name}' not approved by Meta yet (status: ${template.meta_template_status}). Use force=true to bypass for testing.`);
+    }
+
+    // 2. Resolve recipient
+    let phone = recipient_phone || '';
+    let userId: string | null = recipient_user_id || null;
+    let userName: string | null = null;
+    let userTier: string | null = null;
+    let isOwner = false;
+
+    if (userId) {
+      const { data: user, error: uErr } = await supabase
+        .from('profiles')
+        .select('id, name, phone_whatsapp, whatsapp_enabled, whatsapp_tier, is_owner')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (uErr) throw new Error(`DB error fetching user: ${uErr.message}`);
+      if (!user) throw new Error(`User ${userId} not found in profiles`);
+      if (!user.phone_whatsapp) throw new Error(`User ${user.name} has no phone_whatsapp configured`);
+      if (!user.whatsapp_enabled && !force) {
+        throw new Error(`WhatsApp notifications disabled for ${user.name}. Enable in Admin > Editează Manager.`);
+      }
+      if (user.whatsapp_tier === 'info' && !force) {
+        throw new Error(`User ${user.name} is on tier 'info' (UI only, no WhatsApp). Change tier in Admin.`);
+      }
+      if (!template.tiers_targeted.includes(user.whatsapp_tier) && !force) {
+        throw new Error(`User tier '${user.whatsapp_tier}' not targeted by template '${template_name}' (targets: ${template.tiers_targeted.join(',')})`);
+      }
+
+      phone = user.phone_whatsapp;
+      userName = user.name;
+      userTier = user.whatsapp_tier;
+      isOwner = !!user.is_owner;
+    }
+
+    // 3. test_mode check
+    if (template.test_mode && !force && !isOwner) {
+      throw new Error(`Template '${template_name}' is in TEST mode (only owners receive). User ${userName} is not owner.`);
+    }
+
+    // 4. Render body cu params (pentru log + display)
+    let renderedBody: string = template.body_template;
+    for (const [key, val] of Object.entries(params)) {
+      renderedBody = renderedBody.replaceAll(`{{${key}}}`, String(val ?? ''));
+    }
+
+    // 5. Build Meta API payload
+    // Meta uses positional {{1}}, {{2}}, ... in templates. Our DB uses {{nume}}.
+    // Map order: params_required[] → positional params for Meta.
+    const positionalParams = (template.params_required || []).map((paramName: string) => ({
+      type: 'text',
+      text: String(params[paramName] ?? '[lipsă]'),
+    }));
+
+    const metaPayload: any = {
+      messaging_product: 'whatsapp',
+      to: phone.replace(/^\+/, ''),
+      type: 'template',
+      template: {
+        name: template.meta_template_name || template.name,
+        language: { code: template.meta_template_language || 'ro' },
+      },
+    };
+    if (positionalParams.length > 0) {
+      metaPayload.template.components = [{ type: 'body', parameters: positionalParams }];
+    }
+
+    // 6. DRY RUN check (testing fără să trimită)
+    if (dry_run) {
+      return new Response(JSON.stringify({
+        success: true,
+        dry_run: true,
+        recipient: { phone, name: userName, tier: userTier },
+        template: template_name,
+        meta_payload: metaPayload,
+        rendered_body: renderedBody,
+        note: 'DRY RUN — no actual message sent. Set dry_run=false to send.'
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // 7. Send to Meta
+    const metaRes = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/${META_PHONE_NUMBER_ID}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${META_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(metaPayload),
+      }
+    );
+
+    const metaData = await metaRes.json();
+    const messageId: string | undefined = metaData?.messages?.[0]?.id;
+    const success = metaRes.ok && !!messageId;
+
+    // 8. Log
+    await supabase.from('notification_logs').insert({
+      recipient_user_id: userId,
+      recipient_phone: phone,
+      template_name,
+      params,
+      rendered_body: renderedBody,
+      status: success ? 'sent' : 'failed',
+      meta_message_id: messageId || null,
+      error_message: success ? null : JSON.stringify(metaData),
+      sent_at: success ? new Date().toISOString() : null,
+      failed_at: success ? null : new Date().toISOString(),
+    });
+
+    return new Response(JSON.stringify({
+      success,
+      message_id: messageId,
+      meta_response: metaData,
+      recipient: { phone, name: userName, tier: userTier },
+    }), {
+      status: success ? 200 : 502,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  } catch (err: any) {
+    // Log eșec inițial (parametri invalizi, user fără telefon, etc.)
+    try {
+      await supabase.from('notification_logs').insert({
+        recipient_user_id: recipient_user_id || null,
+        recipient_phone: recipient_phone || 'unknown',
+        template_name: template_name || 'unknown',
+        params,
+        rendered_body: '',
+        status: 'failed',
+        error_message: err?.message || String(err),
+        failed_at: new Date().toISOString(),
+      });
+    } catch {}
+
+    return new Response(JSON.stringify({
+      error: err?.message || String(err),
+      stack: err?.stack,
+    }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+});
