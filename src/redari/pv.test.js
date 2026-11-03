@@ -80,11 +80,24 @@ const dateB = () => {
 const sablonB=()=>readFileSync('public/redari/sabloane/pv_b.docx')
 it('PV B: conv_retur prezent și mențiunea AR doar scurtă (fără textul liber, către TGZ) — regresie Copilot/Jakarinos f10 r2',async()=>{
   const b=dateB()
-  b.convocari=[{id:'c1',detinator_id:'d1',canal:'posta',stare:'activ',sters_la:null,created_at:'2026-11-01',data_expediere:'2026-11-02',data_confirmare_primire:'2026-11-05',retur:'decedat',ar_alta_persoana:'membru de familie'}]
+  b.convocari=[{id:'c1',detinator_id:'d1',canal:'posta',stare:'activ',sters_la:null,created_at:'2026-11-01',data_expediere:'2026-11-02',data_confirmare_primire:'2026-11-05',retur:'decedat',ar_alta_persoana:'FICTIV text liber'}]
   const {campuri}=await genereazaPvB({...b,templateArrayBuffer:sablonB()})
   expect(campuri.conv_retur).toBe('decedat')
   expect(campuri.conv_data_confirmare).toBe('05.11.2026 (primit de altă persoană)')
-  expect(JSON.stringify(campuri)).not.toContain('membru de familie')
+  expect(JSON.stringify(campuri)).not.toContain('FICTIV text liber')
+})
+it('PV B (juridic#026): calitatea primitorului da, textul liber de pe AR nu',async()=>{
+  const b=dateB()
+  b.convocari=[{id:'c1',detinator_id:'d1',canal:'posta',stare:'activ',sters_la:null,created_at:'2026-11-01',data_expediere:'2026-11-02',data_confirmare_primire:'2026-11-05',
+    ar_alta_persoana:'FICTIV text liber',ar_alta_calitate:'membru_familie'}]
+  const {campuri}=await genereazaPvB({...b,templateArrayBuffer:sablonB()})
+  expect(campuri.conv_data_confirmare).toBe('05.11.2026 (primit de altă persoană: membru de familie)')
+  expect(JSON.stringify(campuri)).not.toContain('FICTIV text liber')
+  // cod necunoscut: fara calitate, tot fara textul liber
+  b.convocari[0].ar_alta_calitate='FICTIV NUME'
+  const {campuri:c2}=await genereazaPvB({...b,templateArrayBuffer:sablonB()})
+  expect(c2.conv_data_confirmare).toBe('05.11.2026 (primit de altă persoană)')
+  expect(JSON.stringify(c2)).not.toMatch(/FICTIV NUME|FICTIV text liber/)
 })
 it('PV A si B accepta parcela fara tronson si lasa campul DOCX gol',async()=>{
   const a=date(), b=dateB()

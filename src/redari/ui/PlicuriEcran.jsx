@@ -5,8 +5,9 @@ import { sesiuneEcran } from '../corespondenta.js'
 import { propune, aplica } from '../importPostal.js'
 import { grupeazaPentruPlicuri, textAR, genereazaOpis, genereazaPvPlicuire, csvEtichete, dataBucuresti, adresaPlic, areImputernicire } from '../plicuri.js'
 import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePaginat } from './comune.jsx'
+import { CALITATI_AR, descriereArPlic } from '../arMentiune.js'
 
-const COL_PLIC = 'id,proiect_id,uat_id,nr_plic,destinatar_nume,lot_id,awb,data_expediere,data_ar,ar_scan_path,ar_primit_de,ar_mentiune,opis_path,retur,retur_detaliu,retur_data,retur_scan_path,stare,motiv_anulare,versiune'
+const COL_PLIC = 'id,proiect_id,uat_id,nr_plic,destinatar_nume,lot_id,awb,data_expediere,data_ar,ar_scan_path,ar_primit_de,ar_primit_calitate,ar_mentiune,opis_path,retur,retur_detaliu,retur_data,retur_scan_path,stare,motiv_anulare,versiune'
 const COL_LOT = 'id,proiect_id,nr_lot,data_plicuire,semnatar1_id,semnatar2_id,pv_path,observatii,versiune'
 const starea = p => p.stare === 'anulat' ? 'anulat' : p.data_ar ? 'AR' : p.retur ? 'retur' : p.data_expediere ? 'expediat' : p.lot_id ? 'in_lot' : 'fara_lot'
 // Jakarinos + Copilot f10 UI P2: 55P03 (operație concurentă, din protocolul pe UAT) are mesajul lui, separat de rezultatul neconfirmat (rețea)
@@ -106,7 +107,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
     catch (e) { if (curent()) setMesaj(eroareScriere(e)) }
     finally { if (curent()) { ocupat.current = false; setLucru(false); if (scriere) { setReload(n => n + 1); onSchimbat?.() } } }
   }
-  function deschide(tip, rand) { setModal({ tip, rand }); setF({ data: dataBucuresti(), awb: '', motiv: MOTIVE_RETUR[0].cod, detaliu: '', semnatar1_id: rand?.semnatar1_id || '', semnatar2_id: rand?.semnatar2_id || '', observatii: rand?.observatii || '', primit_de: 'destinatar', mentiune: '' }) }
+  function deschide(tip, rand) { setModal({ tip, rand }); setF({ data: dataBucuresti(), awb: '', motiv: MOTIVE_RETUR[0].cod, detaliu: '', semnatar1_id: rand?.semnatar1_id || '', semnatar2_id: rand?.semnatar2_id || '', observatii: rand?.observatii || '', primit_de: 'destinatar', calitate: '', mentiune: '' }) }
   const camp = (k, v) => setF(x => ({ ...x, [k]: v }))
   const btn = (titlu, fn, disabled = false) => <button style={S.btnX} disabled={lucru || incarcare || disabled} onClick={fn}>{titlu}</button>
   async function creeaza(curent) {
@@ -192,7 +193,9 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       if (tip !== 'pv_semnat' && (r.stare !== 'activ' || !r.data_expediere || r.data_ar || r.retur)) invalid('AR sau retur se înregistrează o singură dată, pe un plic activ expediat, fără AR și fără retur.')
       if (tip !== 'pv_semnat' && (!f.data || f.data < r.data_expediere)) invalid('Data AR/retur trebuie să fie cel puțin data expedierii.')
       if (tip === 'retur' && (!MOTIVE_RETUR.some(m => m.cod === f.motiv) || (f.motiv === 'altul' && !f.detaliu.trim()))) invalid('Alege motivul; pentru „Altul” completează detaliul.')
-      if (tip === 'ar' && (!['destinatar', 'alta_persoana'].includes(f.primit_de) || (f.primit_de === 'alta_persoana' && !f.mentiune.trim()))) invalid('Alege cine a semnat AR-ul; pentru „altă persoană” completează mențiunea de pe cartonaș.')
+      if (tip === 'ar' && !['destinatar', 'alta_persoana'].includes(f.primit_de)) invalid('Alege cine a semnat AR-ul.')
+      // juridic#026 pct. 1: la „altă persoană” calitatea (din listă) și mențiunea de pe cartonaș sunt obligatorii
+      if (tip === 'ar' && f.primit_de === 'alta_persoana' && (!CALITATI_AR.some(c => c.cod === f.calitate) || !f.mentiune.trim())) invalid('Pentru „altă persoană” alege calitatea primitorului și completează mențiunea de pe cartonaș.')
       if (tip === 'pv_semnat' && (!r.semnatar1_id || !r.semnatar2_id)) invalid('Alege întâi cei doi semnatari ai PV-ului de plicuire.')
       const ext = verificaFisier(f.fisier)
       const folder = tip === 'pv_semnat' ? `plicuire/${r.id}/pv` : `plicuri/${r.id}/${tip}`
@@ -203,7 +206,10 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
         if (!curent()) return
         setF(x => ({ ...x, path }))
       }
-      patch = tip === 'pv_semnat' ? { pv_path: path } : tip === 'ar' ? { data_ar: f.data, ar_scan_path: path, ar_primit_de: f.primit_de, ar_mentiune: f.primit_de === 'alta_persoana' ? f.mentiune.trim() : null }
+      // juridic#026: ar_primit_calitate se trimite doar la „altă persoană” (la destinatar rămâne NULL, cum cere BD-ul)
+      const alta = f.primit_de === 'alta_persoana'
+      patch = tip === 'pv_semnat' ? { pv_path: path }
+        : tip === 'ar' ? { data_ar: f.data, ar_scan_path: path, ar_primit_de: f.primit_de, ar_mentiune: alta ? f.mentiune.trim() : null, ...(alta ? { ar_primit_calitate: f.calitate } : {}) }
         : { retur: f.motiv, retur_data: f.data, retur_scan_path: path, retur_detaliu: f.detaliu.trim() || null }
     }
     if (!curent()) return
@@ -233,7 +239,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
       {plicuri.filter(p => (!uatId || p.uat_id === uatId) && (!filtru || starea(p) === filtru)).map(p => <tr key={p.id}>
         <td style={S.td}>{poateScrie && starea(p) === 'fara_lot' && <input type="checkbox" disabled={lucru} checked={selectate.includes(p.id)} onChange={e => setSelectate(a => e.target.checked ? [...a, p.id] : a.filter(id => id !== p.id))} />}</td>
         {[p.nr_plic, p.uat_nume, p.destinatar_nume, (pePlic[p.id] || []).length, loturi.find(l => l.id === p.lot_id)?.nr_lot || '-', `${p.awb || '-'} / ${fmtDate(p.data_expediere)}`,
-          p.data_ar ? `${fmtDate(p.data_ar)}${p.ar_primit_de === 'alta_persoana' ? ` · semnat de altă persoană: ${p.ar_mentiune}` : ''}` : '-', p.retur || '-', `${starea(p)}${p.opis_path ? '' : ' · fără opis la dosar'}`].map((v, i) => <td key={i} style={S.td}>{v}</td>)}
+          p.data_ar ? `${fmtDate(p.data_ar)}${descriereArPlic(p)}` : '-', p.retur || '-', `${starea(p)}${p.opis_path ? '' : ' · fără opis la dosar'}`].map((v, i) => <td key={i} style={S.td}>{v}</td>)}
         <td style={S.td}>
           {btn(p.opis_path ? 'Opis (DOCX)' : 'Opis (DOCX) + exemplar la dosar', () => executa(c => document('opis', p, c), !p.opis_path), !poateScrie || !(pePlic[p.id]?.length))}
           {btn('Text AR', () => executa(async curent => { const t = textAR(p, pePlic[p.id] || [], { proiect }); setArText(t); try { await navigator.clipboard.writeText(t); return curent() ? 'Text AR copiat.' : '' } catch { return 'Textul AR este afișat pentru copiere manuală.' } }), !(pePlic[p.id]?.length) || !imputernicire)}
@@ -265,7 +271,8 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
         {(modal.tip === 'anulare' || modal.tip === 'retur') && <Camp eticheta="Motiv / detaliu"><textarea style={S.input} disabled={lucru} value={f.detaliu} onChange={e => camp('detaliu', e.target.value)} /></Camp>}
         {['ar', 'retur', 'pv_semnat'].includes(modal.tip) && <Camp eticheta="Un singur fișier PDF / JPG / PNG, maximum 15 MB (față-verso într-un PDF)"><input disabled={lucru} type="file" accept="application/pdf,image/jpeg,image/png" onChange={e => setF(x => ({ ...x, fisier: e.target.files?.[0], path: null }))} /></Camp>}
         {modal.tip === 'ar' && <><Camp eticheta="Primit de (de pe cartonaș)"><select style={S.select} disabled={lucru} value={f.primit_de} onChange={e => camp('primit_de', e.target.value)}><option value="destinatar">Destinatarul</option><option value="alta_persoana">Altă persoană</option></select></Camp>
-          {f.primit_de === 'alta_persoana' && <Camp eticheta="Mențiunea de pe cartonaș (ex. membru de familie)"><input style={S.input} disabled={lucru} maxLength={500} value={f.mentiune} onChange={e => camp('mentiune', e.target.value)} /></Camp>}</>}
+          {f.primit_de === 'alta_persoana' && <><Camp eticheta="Calitatea primitorului (ajunge în registrul pentru Transgaz și în PV B)"><select style={S.select} disabled={lucru} value={f.calitate} onChange={e => camp('calitate', e.target.value)}><option value="">— alege —</option>{CALITATI_AR.map(c => <option key={c.cod} value={c.cod}>{c.eticheta}</option>)}</select></Camp>
+            <Camp eticheta="Mențiunea de pe cartonaș (text liber, rămâne doar în registrul intern)"><input style={S.input} disabled={lucru} maxLength={500} value={f.mentiune} onChange={e => camp('mentiune', e.target.value)} /></Camp></>}</>}
         {modal.tip === 'semnatari' && <>{[['semnatar1_id', 'Semnatar 1 — plicuiește'], ['semnatar2_id', 'Semnatar 2 — verifică']].map(([k, et]) => <Camp key={k} eticheta={et}><select style={S.select} disabled={lucru} value={f[k]} onChange={e => camp(k, e.target.value)}><option value="">—</option>{utilizatori.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></Camp>)}
           <Camp eticheta="Observații"><input disabled={lucru} style={S.input} value={f.observatii} onChange={e => camp('observatii', e.target.value)} /></Camp></>}
         {f.path && <p>Fișier încărcat. La rezultat neconfirmat, reîncarcă și verifică înregistrarea înainte de reluare.</p>}
