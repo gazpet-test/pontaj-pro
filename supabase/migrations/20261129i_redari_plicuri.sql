@@ -259,16 +259,20 @@ BEGIN
   IF NEW.data_expediere IS NOT NULL AND OLD.data_expediere IS NULL THEN
     IF NEW.lot_id IS NULL THEN RAISE EXCEPTION 'redari: plicul se expediaza doar dupa PV-ul de plicuire (lot)' USING ERRCODE = '23514'; END IF;
     -- juridic#021: fara imputernicire nu pleaca nimic (pasul 4 din planul de verificare, cap. 6); opisul de la dosar e atasat
-    -- Jakarinos r3 P2: proiectul citit si blocat FOR SHARE (retragerea concurenta a imputernicirii asteapta sau e vazuta)
-    IF NOT EXISTS (SELECT 1 FROM public.red_proiecte pr WHERE pr.id = NEW.proiect_id AND length(btrim(coalesce(pr.imputernicire_nr, ''))) > 0 AND pr.imputernicire_data IS NOT NULL FOR SHARE) THEN
+    BEGIN   -- Jakarinos r8 P2-01: proiectul si lotul se blocheaza NOWAIT (nicio asteptare inaintea lock-ului UAT)
+    -- Jakarinos r3 P2: proiectul citit si blocat FOR SHARE (retragerea concurenta a imputernicirii cedeaza sau e vazuta)
+    IF NOT EXISTS (SELECT 1 FROM public.red_proiecte pr WHERE pr.id = NEW.proiect_id AND length(btrim(coalesce(pr.imputernicire_nr, ''))) > 0 AND pr.imputernicire_data IS NOT NULL FOR SHARE NOWAIT) THEN
       RAISE EXCEPTION 'redari: proiectul nu are inca imputernicirea Beneficiarului (nr. + data); plicurile nu pleaca' USING ERRCODE = '23514';
     END IF;
     IF NEW.opis_path IS NULL THEN RAISE EXCEPTION 'redari: atasati intai opisul plicului (exemplarul de la dosar)' USING ERRCODE = '23514'; END IF;
     -- Jakarinos r1 P1-02 / Gemini r1: lotul trebuie finalizat (PV semnat atasat, ambii semnatari) si datat inainte de expediere; blocat FOR SHARE
     IF NOT EXISTS (SELECT 1 FROM public.red_loturi_plicuire l WHERE l.id = NEW.lot_id AND l.pv_path IS NOT NULL
-                     AND l.semnatar1_id IS NOT NULL AND l.semnatar2_id IS NOT NULL AND l.data_plicuire <= NEW.data_expediere FOR SHARE) THEN
+                     AND l.semnatar1_id IS NOT NULL AND l.semnatar2_id IS NOT NULL AND l.data_plicuire <= NEW.data_expediere FOR SHARE NOWAIT) THEN
       RAISE EXCEPTION 'redari: PV-ul de plicuire nu e finalizat (PV semnat atasat, 2 semnatari) sau expedierea e inaintea plicuirii' USING ERRCODE = '23514';
     END IF;
+    EXCEPTION WHEN lock_not_available THEN
+      RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+    END;
     -- Jakarinos r2 P1/P2: la expediere se reverifica, sub acelasi advisory lock, ca plicul e complet si identitatea postala neschimbata
     -- Jakarinos r7 P2-01: executorul a blocat deja randul plicului inaintea triggerului, deci aici lock-ul UAT se INCEARCA (nu se asteapta):
     -- doua expedieri / o expediere si o plicuire in acelasi UAT nu pot forma ciclu; cea care pierde primeste 55P03 si reincearca
@@ -407,7 +411,9 @@ BEGIN
       v_k := public.fn_red_cheie_persoana(v_det);
       SELECT pl.nr_plic INTO v_nr FROM public.red_convocari c JOIN public.red_plicuri pl ON pl.id = c.plic_id
        WHERE c.detinator_id = v_det AND pl.stare = 'activ' AND pl.data_expediere IS NULL LIMIT 1;
-      IF v_nr IS NULL AND v_reactivat AND v_k IS NOT NULL THEN
+      -- Jakarinos r8 P2-02: reactivarea refuza doar daca detinatorul are o convocare postala eligibila (altfel nu schimba componenta niciunui plic)
+      IF v_nr IS NULL AND v_reactivat AND v_k IS NOT NULL AND EXISTS (SELECT 1 FROM public.red_convocari c WHERE c.detinator_id = v_det AND c.canal = 'posta'
+           AND c.stare = 'activ' AND c.sters_la IS NULL AND c.plic_id IS NULL AND c.data_expediere IS NULL) THEN
         SELECT nr_plic INTO v_nr FROM public.red_plicuri WHERE uat_id = OLD.uat_id AND cheie_persoana = v_k AND stare = 'activ' AND data_expediere IS NULL LIMIT 1;
       END IF;
       IF v_nr IS NOT NULL THEN
@@ -542,7 +548,11 @@ BEGIN
   IF v_exista IS NOT NULL THEN
     RAISE EXCEPTION 'redari: persoana are deja plicul neexpediat %; anuleaza-l si refa-l cu toate convocarile', v_exista USING ERRCODE = 'P0001';
   END IF;
-  SELECT u.uat3 INTO v_uat3 FROM public.red_uat u WHERE u.id = v_uat AND u.proiect_id = p_proiect_id FOR SHARE;
+  BEGIN   -- Jakarinos r8 P2-01
+    SELECT u.uat3 INTO v_uat3 FROM public.red_uat u WHERE u.id = v_uat AND u.proiect_id = p_proiect_id FOR SHARE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'redari: un rand implicat (convocare / detinator / contact / parcela / plic) e modificat chiar acum de altcineva; reincercati peste cateva secunde' USING ERRCODE = '55P03';
+  END;
   IF v_uat3 IS NULL THEN RAISE EXCEPTION 'redari: UAT inexistent in proiect' USING ERRCODE = '23503'; END IF;
   SELECT d.nume INTO v_nume FROM public.red_convocari c JOIN public.red_detinatori d ON d.id = c.detinator_id WHERE c.id = p_convocari[1];
   INSERT INTO public.red_numere (cheie, ultimul) VALUES ('PL-' || v_uat3, 1)
