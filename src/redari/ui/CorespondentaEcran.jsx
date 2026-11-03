@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase.js'
 import { G, S, Modal, Camp, Gol, fmtDate } from './comune.jsx'
 import { STARI_CORESPONDENTA, etichetaStareCoresp, culoareStareCoresp, COL_CORESPONDENTA, stariPermise, poateAproba, urmatorul,
-  valideazaCorespondenta, mesajEroareCoresp } from '../corespondenta.js'
+  valideazaCorespondenta, mesajEroareCoresp, sesiuneEcran } from '../corespondenta.js'
 
 const GOL = { cod: '', ordine: '', destinatar: '', subiect: '', expeditor: '', documente: '', depinde_de: '', stare: 'draft', trimis_la: '', nr_inregistrare: '', observatii: '' }
 
@@ -17,8 +17,12 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
   const [editat, setEditat] = useState(null)   // { rand|null, f }
   const [lucru, setLucru] = useState(false)
   const generatie = useRef(0)
-  // Jakarinos r2 P2-01: proiectul curent într-un ref — o salvare pornită pe alt proiect nu mai reîncarcă / nu mai anunță peste proiectul nou
+  // Jakarinos r2/r3 P2-01: proiectul curent + un token de SESIUNE a ecranului, invalidat la orice schimbare de proiect (inclusiv A→B→A) și la demontare.
+  // O operație veche (salvare / aprobare) verifică tokenul după fiecare await, în catch și în finally: nu mai închide formulare noi, nu mai deblochează
+  // alte operații, nu mai anunță și nu mai reîncarcă. Separat de `generatie` (citirile), care crește la fiecare incarca().
   const proiectCurent = useRef(proiect.id)
+  const sesiune = useRef(null)
+  if (!sesiune.current) sesiune.current = sesiuneEcran()
 
   const incarca = async () => {
     const token = ++generatie.current, curent = () => token === generatie.current
@@ -32,8 +36,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       if (curent()) setRanduri(data)
     } catch (e) { if (curent()) { setRanduri([]); setEroare(mesajEroareCoresp(e)) } }
   }
-  useEffect(() => { proiectCurent.current = proiect.id; setRanduri(null); setEditat(null); setLucru(false); incarca(); return () => { generatie.current++ } }, [proiect.id])
-  const peAltProiect = pid => proiectCurent.current !== pid
+  useEffect(() => { proiectCurent.current = proiect.id; sesiune.current.noua(); setRanduri(null); setEditat(null); setLucru(false); incarca(); return () => { generatie.current++; sesiune.current.noua() } }, [proiect.id])
 
   const deschide = rand => setEditat({ rand, f: rand ? { ...GOL, ...Object.fromEntries(Object.entries(rand).map(([k, v]) => [k, v ?? ''])) } : { ...GOL } })
 
@@ -42,7 +45,7 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
     const nou = !editat.rand
     const { erori, valori } = valideazaCorespondenta(editat.f, { nou })
     if (erori.length) { show(erori.join(' '), 'error'); return }
-    const pid = proiect.id
+    const pid = proiect.id, expirat = sesiune.current.captureaza()
     setLucru(true)
     try {
       if (nou) {
@@ -51,27 +54,27 @@ export default function CorespondentaEcran({ proiect, nivel, profile, show }) {
       } else {
         const { data, error } = await supabase.from('red_corespondenta').update(valori).eq('id', editat.rand.id).eq('versiune', editat.rand.versiune).select('id')
         if (error) throw error
-        if (peAltProiect(pid)) return
+        if (expirat()) return
         if (!data?.length) { show('Rândul a fost modificat între timp de altcineva — l-am reîncărcat, verifică și salvează din nou.', 'error'); setEditat(null); await incarca(); return }
       }
-      if (peAltProiect(pid)) return
+      if (expirat()) return
       show(nou ? 'Corespondența a fost adăugată.' : 'Corespondența a fost salvată.', 'success'); setEditat(null); await incarca()
-    } catch (e) { if (!peAltProiect(pid)) show(mesajEroareCoresp(e), 'error') } finally { if (!peAltProiect(pid)) setLucru(false) }
+    } catch (e) { if (!expirat()) show(mesajEroareCoresp(e), 'error') } finally { if (!expirat()) setLucru(false) }
   }
 
   const aproba = async rand => {
     if (lucru || !poateAproba(rand, esteOwner)) return
     if (!window.confirm(`Aprobi trimiterea ${rand.cod} — ${rand.subiect}\nCătre: ${rand.destinatar}\nDe la: ${rand.expeditor || '-'}?\n\nAprobarea doar înregistrează „da”-ul tău; ERP-ul nu trimite nimic.`)) return
-    const pid = proiect.id
+    const pid = proiect.id, expirat = sesiune.current.captureaza()
     setLucru(true)
     try {
       const { data, error } = await supabase.from('red_corespondenta').update({ stare: 'aprobat' }).eq('id', rand.id).eq('versiune', rand.versiune).select('id')
       if (error) throw error
-      if (peAltProiect(pid)) return
+      if (expirat()) return
       if (!data?.length) show('Rândul a fost modificat între timp — reîncarc.', 'error')
       else show(`${rand.cod} aprobat.`, 'success')
       await incarca()
-    } catch (e) { if (!peAltProiect(pid)) show(mesajEroareCoresp(e), 'error') } finally { if (!peAltProiect(pid)) setLucru(false) }
+    } catch (e) { if (!expirat()) show(mesajEroareCoresp(e), 'error') } finally { if (!expirat()) setLucru(false) }
   }
 
   const urm = urmatorul(randuri)

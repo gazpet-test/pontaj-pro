@@ -66,3 +66,10 @@ export function mesajEroareCoresp(e) {
   if (e?.code === '23505') return 'Codul există deja în proiect.'
   return m || 'Eroare la salvare.'
 }
+
+// Token de sesiune a ecranului (Jakarinos r2/r3 P2-01): `noua()` la fiecare schimbare de proiect și la demontare; o operație pornită
+// își ia `expirat = captureaza()` și verifică după fiecare await (inclusiv în catch / finally). A→B→A = două sesiuni noi → operația veche e expirată.
+export function sesiuneEcran() {
+  let n = 0
+  return { noua() { n++ }, captureaza() { const s = n; return () => s !== n } }
+}

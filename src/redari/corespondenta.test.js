@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp } from './corespondenta.js'
+import { stariPermise, poateAproba, urmatorul, valideazaCorespondenta, mesajEroareCoresp, etichetaStareCoresp, sesiuneEcran } from './corespondenta.js'
 
 describe('corespondenta de trimis', () => {
   it('trimis / raspuns primit apar doar dupa aprobare; aprobat nu se alege din lista', () => {
@@ -27,5 +27,15 @@ describe('corespondenta de trimis', () => {
     expect(etichetaStareCoresp('la_avocat')).toBe('La avocat')
     expect(mesajEroareCoresp({ code: '42501', message: 'new row violates row-level security policy' })).toMatch(/Nu ai drept de scriere/)
     expect(mesajEroareCoresp({ code: '23514', message: 'redari: continutul s-a schimbat dupa aprobare; treci randul in draft' })).toMatch(/cere din nou aprobarea/)
+  })
+  it('sesiunea ecranului: operatia veche expira la A->B->A si la demontare; cea noua nu', () => {
+    const ses = sesiuneEcran()
+    ses.noua()                           // montare pe A
+    const veche = ses.captureaza()       // salvare pornita pe A
+    ses.noua(); ses.noua()               // A -> B -> A
+    const noua = ses.captureaza()        // formular / salvare noua pe A
+    expect(veche()).toBe(true); expect(noua()).toBe(false)
+    ses.noua()                           // demontare
+    expect(noua()).toBe(true)
   })
 })
