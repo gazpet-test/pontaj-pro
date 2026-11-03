@@ -63,6 +63,8 @@ const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner 
 const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
 const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
 const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
+// 📱 SMS (20261130b): ruta proprie /sms pentru owner și modulul 'sms' (utilizator / test); nivelul real îl dă BD-ul (fn_sms_nivel)
+const SmsPagina = lazy(() => import('./sms/SmsPagina.jsx'))
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
@@ -820,6 +822,7 @@ function Layout({ children }) {
       { p:'/consumabile', i:'🛒', l:'Consumabile' },
     ]),
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
+    ...(hasModuleAccess(profile, 'sms') ? [{p:'/sms',i:'📱',l:'SMS'}] : []),
     ...(hasModuleAccess(profile, ADMIN_ALERTE_KEY) ? [{p:'/administrator',i:'🔔',l:'Administrator'}] : []),
     ...(isSuperAdmin || profile?.can_modify_employees === true ? [{p:'/admin',i:'⚙️',l:'Admin'}] : []),
   ]
@@ -1076,6 +1079,7 @@ function HomeDashboard() {
     { path:'/marketing', icon:'📣', label:'Marketing',   color:'#1877F2', desc:'Postări Facebook · din rapoartele de șantier', active:true, requireModule:'marketing' },
     { path:'/cladire',   icon:'🏢', label:'Clădire',     color:'#E4261E', desc:'Sediu · centrală · termostate · meteo · alerte', active:true, requireModule:'cladire' },
     { path:'/mesaj-vocal', icon:'🎙', label:'Mesaj vocal', color:'#A371F7', desc:'Text → voce (Aoede) · MP3 pentru WhatsApp', active:true, requireModule:'mesaj_vocal' },
+    { path:'/sms', icon:'📱', label:'SMS', color:'#24778B', desc:'Mesaje către angajați · aprobare · istoric', active:true, requireModule:'sms' },
     // TEMPORAR (17.09.2026): se șterge cu tot cu rută când organigrama propriu-zisă e gata
     { path:'/organigrama-propuneri', icon:'🧩', label:'Organigramă (propuneri)', color:'#56D4DD', desc:'Departamente · funcții · rol la licitații · PROVIZORIU', active:true },
     // TEMPORAR (24.08.2026): se șterge împreună cu ruta + InventarCorectii.jsx la finalul proiectului de aliniere
@@ -8910,6 +8914,17 @@ function MesajVocalRoute() {
   return <Suspense fallback={<LoadingScreen />}><MesajVocal profile={profile} /></Suspense>
 }
 
+// 📱 SMS: profilul din AuthContext; pagina cere nivelul din BD (owner / utilizator / test) și ascunde Setările pentru non-owner
+function SmsRoute() {
+  const { profile } = useAuth()
+  return <Suspense fallback={<LoadingScreen />}>
+    <main style={{ colorScheme: 'light', background: '#F1F5F9', color: '#263642', borderRadius: 10, padding: '18px clamp(12px, 3vw, 28px)', fontFamily: 'Arial, sans-serif', minHeight: '60vh', boxSizing: 'border-box', overflowWrap: 'anywhere' }}>
+      <h1 style={{ fontSize: 20, margin: '0 0 14px' }}>📱 SMS</h1>
+      <SmsPagina profile={profile} />
+    </main>
+  </Suspense>
+}
+
 // CHATBOT GATE - afișează ChatbotWidget DOAR pentru useri logați (cu profile)
 // ════════════════════════════════════════════════════════════════════════════
 function ChatbotWidgetGate() {
@@ -8993,6 +9008,7 @@ export default function App() {
         <Route path="/marketing" element={<ProtectedRoute requireModule="marketing"><Marketing/></ProtectedRoute>}/>
         <Route path="/cladire" element={<ProtectedRoute requireModule="cladire"><Cladire/></ProtectedRoute>}/>
         <Route path="/mesaj-vocal" element={<ProtectedRoute requireModule="mesaj_vocal"><MesajVocalRoute/></ProtectedRoute>}/>
+        <Route path="/sms" element={<ProtectedRoute requireModule="sms"><Layout><SmsRoute/></Layout></ProtectedRoute>}/>
         <Route path="/integrari/:tab" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="/integrari" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>

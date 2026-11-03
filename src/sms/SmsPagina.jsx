@@ -1,8 +1,11 @@
-// Administrator › 📱 SMS (MVP 03.11.2026, decizii Razvan). DOAR owner-ul: RLS + RPC-urile din 20261130a_sms_mvp verifică is_owner în BD,
-// edge-ul sms-trimite îl verifică din nou în cod. Flux: Compune → Previzualizează (RPC, nu scrie) → Creează lot (draft) → Aprobă (owner,
-// pe versiunea văzută) → Trimite (edge; kill-switch + plafoane verificate atomic în BD). Telefoanele apar doar mascate (07** *** 123).
-// r2 (Jakarinos r1 P1): înainte de „Aprobă” owner-ul vede lista FIXATĂ în lot (fn_sms_lot_destinatari: nume + telefon mascat, text,
-// segmente, cost) și aprobă exact versiunea afișată; dacă lotul s-a schimbat → 40001 în BD, lista se reîncarcă. Copilot r1 P2-01: lotul
+// 📱 SMS (MVP 03.11.2026, decizii Razvan) — ruta proprie /sms (modulul `sms`) + tab-ul din Administrator (owner).
+// Niveluri (20261130b, decizia lui Razvan din 03.11.2026): owner = tot; utilizator (modulul `sms` editor / admin) și test (modulul `sms`
+// viewer, contul AI) compun, previzualizează, creează loturi interne, văd lista fixată, aprobă și trimit; test = maximum 5 destinatari,
+// fără Redări; Setările și Opt-out-ul = doar owner. BD-ul decide (fn_sms_nivel, RLS, RPC-uri, triggere), edge-ul sms-trimite verifică din
+// nou nivelul. Flux: Compune → Previzualizează (RPC, nu scrie) → Creează lot (draft) → Aprobă (pe versiunea văzută) → Trimite (edge;
+// kill-switch + plafoane verificate atomic în BD). Telefoanele apar doar mascate (07** *** 123).
+// r2 (Jakarinos r1 P1): înainte de „Aprobă” se vede lista FIXATĂ în lot (fn_sms_lot_destinatari: nume + telefon mascat, text,
+// segmente, cost) și se aprobă exact versiunea afișată; dacă lotul s-a schimbat → 40001 în BD, lista se reîncarcă. Copilot r1 P2-01: lotul
 // nu are stare „trimis” — „coada golită”, iar rezultatul real e pe mesaje (livrat / eșuat / necunoscut / anulat).
 // SMS-ul NU înlocuiește convocarea scrisă din Redări — e doar informare.
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -10,7 +13,7 @@ import { smsApi, mesajEroare } from './smsApi.js'
 import {
   STARI_LOT, STARI_MESAJ, motivTrimitere, contorText, argumenteIntern, departamente, filtreazaAngajati, zileLaPlafon,
   poateAproba, poateTrimite, poateAnula, valideazaAutorizare, valideazaPlafoane, fmtEur, fmtData, mascheazaTelefon,
-  rezumatMesaje, mesajAnulare,
+  rezumatMesaje, mesajAnulare, poateActiona, notaNivel, areModulSms, NIVELURI, MAX_TEST,
 } from './smsLogica.js'
 
 const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20' }
@@ -32,25 +35,30 @@ function Mesaj({ m }) {
   return <div role={m.tip === 'eroare' ? 'alert' : 'status'} style={{ ...S.panel, marginBottom: 14, color: m.tip === 'eroare' ? G.red : m.tip === 'ok' ? G.green : G.text }}>{m.text}</div>
 }
 
-// ── Banda de sus: starea trimiterii, consumul, Redări ─────────────────────────────────────────────────────────────────────
+// ── Banda de sus: starea trimiterii, consumul (owner) / cât mai pleacă azi (ceilalți), Redări ─────────────────────────────────
 function StarePanou({ panou }) {
   if (!panou) return null
+  const owner = panou.nivel === 'owner'
   return <section aria-label="Starea trimiterii" style={{ ...S.panel, ...S.row, justifyContent: 'space-between', marginBottom: 14 }}>
     <div style={S.row}>
       {panou.kill_switch ? <Badge color={G.red}>⛔ Trimiterea e OPRITĂ</Badge> : <Badge color={G.green}>✅ Trimiterea e pornită</Badge>}
-      {panou.kill_switch && panou.kill_motiv && <span style={S.small}>{panou.kill_motiv}</span>}
+      {owner && panou.kill_switch && panou.kill_motiv && <span style={S.small}>{panou.kill_motiv}</span>}
+      {!owner && <Badge color={G.blue}>{NIVELURI[panou.nivel] || panou.nivel}</Badge>}
     </div>
     <div style={S.row}>
-      <span style={S.small}>Azi: <b>{panou.consum_zi}</b> / {panou.plafon_zi} · Luna: <b>{panou.consum_luna}</b> / {panou.plafon_luna}</span>
-      <Badge color={panou.redari_autorizat ? G.green : G.yellow}>{panou.redari_autorizat ? `Redări autorizat (${panou.redari_autorizare_nr})` : 'Redări: așteaptă autorizarea Transgaz'}</Badge>
+      {owner
+        ? <span style={S.small}>Azi: <b>{panou.consum_zi}</b> / {panou.plafon_zi} · Luna: <b>{panou.consum_luna}</b> / {panou.plafon_luna}</span>
+        : <span style={S.small}>Mai pot pleca azi: <b>{panou.ramas_zi ?? '—'}</b> SMS{panou.buget_test_zi ? ` (bugetul contului de test: ${panou.buget_test_zi} / zi)` : ''}</span>}
+      {(owner || panou.redari_modul === true) && <Badge color={panou.redari_autorizat ? G.green : G.yellow}>{panou.redari_autorizat ? `Redări autorizat${owner && panou.redari_autorizare_nr ? ` (${panou.redari_autorizare_nr})` : ''}` : 'Redări: așteaptă autorizarea Transgaz'}</Badge>}
     </div>
   </section>
 }
 
 // ── Compune: text + destinatari → previzualizare din BD → lot draft ────────────────────────────────────────────────────────
 function Compune({ panou, onCreat, setMesaj }) {
+  const test = panou?.nivel === 'test'
   const [text, setText] = useState('')
-  const [mod, setMod] = useState('toti')
+  const [mod, setMod] = useState(test ? 'selectie' : 'toti')
   const [angajati, setAngajati] = useState(null)
   const [depAlese, setDepAlese] = useState([])
   const [selectati, setSelectati] = useState(() => new Set())
@@ -71,6 +79,8 @@ function Compune({ panou, onCreat, setMesaj }) {
   const listaDep = useMemo(() => departamente(angajati), [angajati])
   const vizibili = useMemo(() => filtreazaAngajati(angajati, { departament: filtruDep, cauta }), [angajati, filtruDep, cauta])
   const cuMobil = (angajati || []).filter(a => a.telefon_mascat && !a.optout).length
+  // contul de test: cel mult MAX_TEST bifați (BD-ul refuză oricum un lot mai mare, la creare, aprobare și trimitere)
+  const plin = test && selectati.size >= MAX_TEST
   const comuta = id => setSelectati(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const args = () => ({ text, ...argumenteIntern(mod, { departamente: depAlese, selectati: [...selectati] }) })
 
@@ -107,6 +117,7 @@ function Compune({ panou, onCreat, setMesaj }) {
     </div>
     <div style={S.panel}>
       <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Destinatari</div>
+      {test && <p style={{ ...S.small, color: G.yellow, margin: '0 0 8px' }}>Cont de test: maximum {MAX_TEST} destinatari într-un lot, doar angajați (fără Redări).</p>}
       <div role="radiogroup" aria-label="Destinatari" style={S.row}>
         {[['toti', `Toți angajații activi cu mobil (${angajati ? cuMobil : '…'})`], ['departament', 'Pe departament'], ['selectie', 'Selecție manuală']].map(([k, l]) =>
           <label key={k} style={{ ...S.row, gap: 6, fontSize: 13 }}><input type="radio" name="sms-mod" checked={mod === k} onChange={() => setMod(k)} />{l}</label>)}
@@ -126,7 +137,7 @@ function Compune({ panou, onCreat, setMesaj }) {
         </div>
         <div style={{ maxHeight: 280, overflow: 'auto', marginTop: 8, border: `1px solid ${G.border}`, borderRadius: 7 }}>
           {vizibili.map(a => <label key={a.id} style={{ ...S.row, gap: 8, padding: '6px 10px', borderBottom: `1px solid ${G.border}`, fontSize: 13, opacity: a.telefon_mascat && !a.optout ? 1 : 0.5 }}>
-            <input type="checkbox" disabled={!a.telefon_mascat || a.optout} checked={selectati.has(a.id)} onChange={() => comuta(a.id)} />
+            <input type="checkbox" disabled={!a.telefon_mascat || a.optout || (plin && !selectati.has(a.id))} checked={selectati.has(a.id)} onChange={() => comuta(a.id)} />
             <span style={{ flex: 1 }}>{a.nume}</span><span style={S.small}>{a.departament}</span>
             <span style={S.small}>{a.optout ? 'opt-out' : a.telefon_mascat || 'fără mobil valid'}</span>
           </label>)}
@@ -143,10 +154,13 @@ function Compune({ panou, onCreat, setMesaj }) {
       <div style={{ fontWeight: 600, marginBottom: 6 }}>Previzualizare</div>
       <p style={{ margin: '4px 0', fontSize: 13 }}><b>{preview.nr_destinatari}</b> destinatari · {preview.segmente} SMS fiecare · cost estimat <b>{fmtEur(preview.cost_estimat_eur)}</b> (0,049 EUR/SMS, fără TVA)</p>
       <p style={{ ...S.small, margin: '4px 0' }}>Excluși: {preview.excluse_fara_mobil} fără mobil RO valid · {preview.excluse_optout} cu opt-out · {preview.excluse_duplicat} telefon dublat (din {preview.candidati} angajați în selecție)</p>
-      {preview.depaseste_plafon_zi && <p style={{ ...S.small, color: G.yellow, margin: '4px 0' }}>Peste plafonul zilnic ({preview.plafon_zi}): lotul pleacă în ~{zileLaPlafon(preview.nr_destinatari, preview.plafon_zi)} zile, dacă nu mărești plafonul.</p>}
+      {preview.depaseste_plafon_zi && (preview.plafon_zi != null
+        ? <p style={{ ...S.small, color: G.yellow, margin: '4px 0' }}>Peste plafonul zilnic ({preview.plafon_zi}): lotul pleacă în ~{zileLaPlafon(preview.nr_destinatari, preview.plafon_zi)} zile, dacă nu mărești plafonul.</p>
+        : <p style={{ ...S.small, color: G.yellow, margin: '4px 0' }}>Peste plafonul zilnic: lotul pleacă în mai multe zile (plafonul îl stabilește owner-ul).</p>)}
+      {preview.coada_libera != null && <p style={{ ...S.small, color: preview.coada_libera < preview.nr_destinatari ? G.red : G.muted, margin: '4px 0' }}>Coada contului de test: mai încap {preview.coada_libera} mesaje în așteptare{preview.coada_libera < preview.nr_destinatari ? ' — lotul nu se poate crea până nu trimiți sau anulezi din cele în așteptare.' : '.'}</p>}
       <p style={{ fontSize: 13, margin: '6px 0 0', padding: 10, background: G.bg, borderRadius: 7 }}><b>Textul trimis (din BD):</b> {preview.text_final}</p>
     </div>}
-    {panou?.kill_switch && <p style={S.small}>Trimiterea e oprită: poți crea și aproba loturi, dar nu pleacă nimic până nu o pornești din Setări.</p>}
+    {panou?.kill_switch && <p style={S.small}>Trimiterea e oprită: poți crea și aproba loturi, dar nu pleacă nimic până nu {panou?.nivel === 'owner' ? 'o pornești din Setări' : 'o pornește owner-ul'}.</p>}
   </section>
 }
 
@@ -171,6 +185,8 @@ export function RevizieLot({ lotId, onAprobat, onInchide, detaliiInitiale = null
   }
   if (!det) return <div style={{ ...S.panel, marginTop: 8 }}><span style={S.small}>{eroare || 'Se încarcă lista fixată în lot…'}</span></div>
   const lista = det.destinatari || []
+  // nivelul contului permite aprobarea? (BD-ul o refuză oricum; test = doar interne de maximum 5)
+  const permis = det.actiune_permisa !== false
   return <div style={{ ...S.panel, marginTop: 8, borderColor: G.blue }} aria-label="Revizia lotului înainte de aprobare">
     <div style={{ fontWeight: 600, marginBottom: 6 }}>Ce aprobi (fixat în lot, versiunea {det.versiune})</div>
     <p style={{ fontSize: 13, margin: '4px 0', padding: 10, background: G.bg, borderRadius: 7 }}><b>Textul trimis:</b> {det.text}</p>
@@ -184,9 +200,10 @@ export function RevizieLot({ lotId, onAprobat, onInchide, detaliiInitiale = null
       </div>)}
     </div>
     {eroare && <p role="alert" style={{ ...S.small, color: G.red }}>{eroare}</p>}
-    <label style={{ ...S.row, gap: 6, fontSize: 13 }}><input type="checkbox" checked={bifat} onChange={e => setBifat(e.target.checked)} />Am verificat lista de {lista.length} destinatari și textul</label>
+    {!permis && <p role="alert" style={{ ...S.small, color: G.red }}>Nivelul tău nu poate aproba acest lot{det.nivel === 'test' ? ` (contul de test: doar loturi interne de maximum ${MAX_TEST} destinatari)` : ''}.</p>}
+    <label style={{ ...S.row, gap: 6, fontSize: 13 }}><input type="checkbox" checked={bifat} disabled={!permis} onChange={e => setBifat(e.target.checked)} />Am verificat lista de {lista.length} destinatari și textul</label>
     <div style={{ ...S.row, marginTop: 8 }}>
-      <button type="button" style={{ ...S.primar, opacity: bifat && det.stare === 'draft' ? 1 : 0.5 }} disabled={lucru || !bifat || det.stare !== 'draft'} onClick={aproba}>✔ Aprob acest lot (versiunea {det.versiune})</button>
+      <button type="button" style={{ ...S.primar, opacity: permis && bifat && det.stare === 'draft' ? 1 : 0.5 }} disabled={lucru || !permis || !bifat || det.stare !== 'draft'} onClick={aproba}>✔ Aprob acest lot (versiunea {det.versiune})</button>
       <button type="button" style={S.button} disabled={lucru} onClick={onInchide}>Renunță</button>
     </div>
   </div>
@@ -222,7 +239,7 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
     await incarca(); reincarcaPanou()
   }
   const trimite = l => {
-    if (!window.confirm(`Trimit ACUM lotul aprobat (${l.n_in_coada} mesaje în coadă)?\nPlafon rămas azi: ${Math.max(0, (panou?.plafon_zi ?? 0) - (panou?.consum_zi ?? 0))}.`)) return
+    if (!window.confirm(`Trimit ACUM lotul aprobat (${l.n_in_coada} mesaje în coadă)?\nPlafon rămas azi: ${panou?.ramas_zi ?? '—'}.`)) return
     actiune(() => smsApi.trimite(l.id), r => `Trimise: ${r?.trimise ?? 0} · eșuate: ${r?.esuate ?? 0} · necunoscute: ${r?.necunoscute ?? 0}. ${motivTrimitere(r?.motiv)}`)
   }
   const anuleaza = l => {
@@ -236,6 +253,10 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
   return <section aria-label="Istoric loturi" style={{ ...S.panel, padding: 0 }}>
     {loturi.map(l => {
       const [eticheta, culoare] = STARI_LOT[l.stare] || [l.stare, G.muted]
+      // butoanele de acțiune doar unde nivelul are voie: actiune_permisa vine din BD (fn_sms_loturi_lista); BD-ul refuză oricum
+      const permis = typeof l.actiune_permisa === 'boolean' ? l.actiune_permisa : poateActiona(l, panou, true)
+      const cine = [l.creat_nivel && `creat: ${NIVELURI[l.creat_nivel] || l.creat_nivel}`, l.aprobat_nivel && `aprobat: ${NIVELURI[l.aprobat_nivel] || l.aprobat_nivel}`,
+        l.anulat_nivel && `anulat: ${NIVELURI[l.anulat_nivel] || l.anulat_nivel}`].filter(Boolean).join(' · ')
       return <article key={l.id} style={{ padding: '14px 16px', borderBottom: `1px solid ${G.border}`, background: l.id === evidentiat ? '#E9F1F5' : undefined }}>
         <div style={{ ...S.row, justifyContent: 'space-between' }}>
           <div style={S.row}><Badge color={culoare}>{eticheta}</Badge><Badge color={l.categorie === 'redari' ? G.yellow : G.blue}>{l.categorie === 'redari' ? '🌾 Redări (extern)' : '👷 Intern'}</Badge></div>
@@ -243,18 +264,20 @@ function Istoric({ panou, reincarcaPanou, evidentiat, setMesaj }) {
         </div>
         <p style={{ fontSize: 13, margin: '8px 0 4px' }}>{l.text}</p>
         <div style={S.small}>{l.nr_destinatari} destinatari · {fmtEur(l.cost_estimat_eur)} · <b>{rezumatMesaje(l)}</b>
-          {l.aprobat_autorizare_nr ? ` · autorizare TGZ ${l.aprobat_autorizare_nr} / ${l.aprobat_autorizare_data}` : ''}{l.motiv_anulare ? ` · motiv anulare: ${l.motiv_anulare}` : ''}</div>
+          {l.aprobat_autorizare_nr ? ` · autorizare TGZ ${l.aprobat_autorizare_nr} / ${l.aprobat_autorizare_data}` : ''}{l.motiv_anulare ? ` · motiv anulare: ${l.motiv_anulare}` : ''}
+          {cine ? ` · ${cine}` : ''}</div>
+        {!permis && poateAnula(l) && <p style={{ ...S.small, color: G.yellow, margin: '6px 0 0' }}>Nivelul tău doar vede acest lot{panou?.nivel === 'test' ? ` (contul de test acționează doar pe loturile lui interne, de maximum ${MAX_TEST} destinatari)` : ''}.</p>}
         <div style={{ ...S.row, marginTop: 8 }}>
-          {poateAproba(l) && <button type="button" style={S.primar} disabled={lucru} aria-expanded={revizie === l.id} onClick={() => setRevizie(r => r === l.id ? null : l.id)}>🔍 Verifică lista și aprobă</button>}
-          {(l.stare === 'aprobat' || l.stare === 'in_trimitere') && <button type="button" style={{ ...S.primar, opacity: poateTrimite(l, panou) ? 1 : 0.5 }} disabled={lucru || !poateTrimite(l, panou)}
-            title={poateTrimite(l, panou) ? '' : 'Trimiterea e oprită (kill-switch) — pornește-o din Setări'} onClick={() => trimite(l)}>📤 Trimite</button>}
-          {poateAnula(l) && <button type="button" style={{ ...S.button, color: G.red }} disabled={lucru} onClick={() => anuleaza(l)}>Anulează</button>}
+          {permis && poateAproba(l) && <button type="button" style={S.primar} disabled={lucru} aria-expanded={revizie === l.id} onClick={() => setRevizie(r => r === l.id ? null : l.id)}>🔍 Verifică lista și aprobă</button>}
+          {permis && (l.stare === 'aprobat' || l.stare === 'in_trimitere') && <button type="button" style={{ ...S.primar, opacity: poateTrimite(l, panou) ? 1 : 0.5 }} disabled={lucru || !poateTrimite(l, panou)}
+            title={poateTrimite(l, panou) ? '' : 'Trimiterea e oprită (kill-switch) — o pornește owner-ul din Setări'} onClick={() => trimite(l)}>📤 Trimite</button>}
+          {permis && poateAnula(l) && <button type="button" style={{ ...S.button, color: G.red }} disabled={lucru} onClick={() => anuleaza(l)}>Anulează</button>}
           <button type="button" style={{ ...S.button, border: 'none', color: G.blue, background: 'transparent' }} aria-expanded={deschis === l.id} onClick={() => setDeschis(d => d === l.id ? null : l.id)}>{deschis === l.id ? 'Închide mesajele' : 'Mesajele lotului'}</button>
         </div>
-        {revizie === l.id && poateAproba(l) && <RevizieLot lotId={l.id} onAprobat={dupaAprobare} onInchide={() => setRevizie(null)} />}
+        {revizie === l.id && permis && poateAproba(l) && <RevizieLot lotId={l.id} onAprobat={dupaAprobare} onInchide={() => setRevizie(null)} />}
         {deschis === l.id && <div style={{ marginTop: 8, maxHeight: 260, overflow: 'auto', background: G.bg, borderRadius: 7, padding: 8 }}>
-          {!mesaje ? <span style={S.small}>Se încarcă…</span> : mesaje.map(m => <div key={m.id} style={{ ...S.row, fontSize: 12, padding: '3px 0' }}>
-            <span style={{ minWidth: 110 }}>{mascheazaTelefon(m.telefon)}</span><span style={{ minWidth: 170 }}>{STARI_MESAJ[m.stare] || m.stare}</span>
+          {!mesaje ? <span style={S.small}>Se încarcă…</span> : mesaje.map(m => <div key={m.mesaj_id} style={{ ...S.row, fontSize: 12, padding: '3px 0' }}>
+            <span style={{ minWidth: 110 }}>{m.telefon_mascat}</span><span style={{ minWidth: 170 }}>{STARI_MESAJ[m.stare] || m.stare}</span>
             <span style={S.small}>{m.cod_eroare || ''} {m.livrat_la ? `livrat ${fmtData(m.livrat_la)}` : m.trimis_la ? `trimis ${fmtData(m.trimis_la)}` : ''}</span>
           </div>)}
         </div>}
@@ -362,29 +385,40 @@ function Optout({ setMesaj }) {
   </section>
 }
 
-export default function SmsPagina({ profile }) {
+// panouInitial: doar pentru teste (randare fără rețea)
+export default function SmsPagina({ profile, panouInitial = null }) {
   const [tab, setTab] = useState('compune')
-  const [panou, setPanou] = useState(null)
+  const [panou, setPanou] = useState(panouInitial)
+  const [faraAcces, setFaraAcces] = useState(false)
   const [mesaj, setMesaj] = useState(null)
   const [evidentiat, setEvidentiat] = useState(null)
-  const owner = profile?.is_owner === true
+  const areModul = areModulSms(profile)
   const reincarcaPanou = useCallback(() => {
-    smsApi.panou().then(setPanou).catch(e => setMesaj({ tip: 'eroare', text: 'Setări SMS: ' + mesajEroare(e) }))
+    smsApi.panou().then(p => { setPanou(p); setFaraAcces(false) }).catch(e => {
+      if (e?.code === '42501') setFaraAcces(true)
+      else setMesaj({ tip: 'eroare', text: 'Starea SMS: ' + mesajEroare(e) })
+    })
   }, [])
-  useEffect(() => { if (owner) reincarcaPanou() }, [owner, reincarcaPanou])
+  useEffect(() => { if (areModul && !panouInitial) reincarcaPanou() }, [areModul, panouInitial, reincarcaPanou])
 
-  if (!owner) return <p style={{ ...S.panel, ...S.small }}>📱 SMS e vizibil doar owner-ului.</p>
+  if (!areModul || faraAcces) return <p style={{ ...S.panel, ...S.small }}>📱 SMS: nu ai acces la modul. Îl acordă Razvan (nivel utilizator sau test).</p>
+  if (!panou) return <div style={{ color: G.text }}><Mesaj m={mesaj} /><p style={S.small}>Se încarcă starea SMS…</p></div>
+  // Setările și Opt-out-ul: doar owner-ul (în BD sunt oricum doar ale lui)
+  const owner = panou.nivel === 'owner'
+  const sectiuni = [['compune', '✍ Compune'], ['istoric', '📋 Istoric loturi'], ...(owner ? [['setari', '⚙ Setări'], ['optout', '🚫 Opt-out']] : [])]
+  const nota = notaNivel(panou)
   return <div style={{ color: G.text }}>
     <StarePanou panou={panou} />
+    {nota && <p role="note" style={{ ...S.panel, ...S.small, color: panou.nivel === 'test' ? G.yellow : G.muted, marginBottom: 14 }}>{panou.nivel === 'test' ? '🧪 ' : ''}{nota}</p>}
     <nav aria-label="Secțiuni SMS" style={{ ...S.row, marginBottom: 14 }}>
-      {[['compune', '✍️ Compune'], ['istoric', '📋 Istoric loturi'], ['setari', '⚙️ Setări'], ['optout', '🚫 Opt-out']].map(([k, l]) =>
+      {sectiuni.map(([k, l]) =>
         <button key={k} type="button" aria-pressed={tab === k} onClick={() => { setTab(k); setMesaj(null) }} style={{ ...S.button, fontWeight: 600, color: tab === k ? G.blue : G.muted, borderColor: tab === k ? G.blue : G.border }}>{l}</button>)}
     </nav>
     <Mesaj m={mesaj} />
     {tab === 'compune' && <Compune panou={panou} setMesaj={setMesaj} onCreat={id => { setEvidentiat(id); setTab('istoric') }} />}
     {tab === 'istoric' && <Istoric panou={panou} reincarcaPanou={reincarcaPanou} evidentiat={evidentiat} setMesaj={setMesaj} />}
-    {tab === 'setari' && <Setari panou={panou} reincarcaPanou={reincarcaPanou} setMesaj={setMesaj} />}
-    {tab === 'optout' && <Optout setMesaj={setMesaj} />}
+    {owner && tab === 'setari' && <Setari panou={panou} reincarcaPanou={reincarcaPanou} setMesaj={setMesaj} />}
+    {owner && tab === 'optout' && <Optout setMesaj={setMesaj} />}
     <p style={{ ...S.small, marginTop: 18 }}>Furnizor: SMSLink (adaptor unic în edge). Fără date personale în texte. SMS-ul nu înlocuiește convocarea scrisă din Redări — e doar informare.</p>
   </div>
 }

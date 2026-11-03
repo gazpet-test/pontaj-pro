@@ -1,4 +1,4 @@
-// Apelurile ecranului 📱 SMS: doar RPC-urile owner-only din migrarea 20261130a_sms_mvp + edge-ul sms-trimite.
+// Apelurile ecranului 📱 SMS: RPC-urile din 20261130a_sms_mvp + 20261130b_sms_acces_modul (nivelul owner / utilizator / test îl verifică BD-ul) + edge-ul sms-trimite.
 // UI-ul nu vorbește niciodată cu furnizorul și nu scrie direct în tabele (n-are drept): schimbarea furnizorului nu atinge ecranele.
 import { supabase } from '../lib/supabase.js'
 
@@ -7,9 +7,10 @@ const date = ({ data, error }) => { if (error) throw error; return data }
 export const smsApi = {
   panou: async () => date(await supabase.rpc('fn_sms_panou')),
   angajati: async () => date(await supabase.rpc('fn_sms_angajati_lista')) || [],
-  loturi: async () => date(await supabase.from('sms_v_loturi').select('*').order('creat_la', { ascending: false }).limit(50)) || [],
-  mesaje: async lotId => date(await supabase.from('sms_mesaje').select('id, telefon, destinatar_tip, stare, cod_eroare, rezervat_la, trimis_la, livrat_la')
-    .eq('lot_id', lotId).order('creat_la').order('id').limit(5000)) || [],
+  // r2 (P1): istoricul și mesajele vin DOAR prin RPC-uri (loturile pe care nivelul le vede, numărători, telefon mascat);
+  // citirea directă a sms_mesaje / sms_v_loturi rămâne a owner-ului în BD, iar ecranul nu o mai folosește deloc
+  loturi: async () => date(await supabase.rpc('fn_sms_loturi_lista', { p_limit: 50 })) || [],
+  mesaje: async lotId => (date(await supabase.rpc('fn_sms_lot_destinatari', { p_lot_id: lotId })) || {}).destinatari || [],
   optout: async () => date(await supabase.from('sms_optout').select('telefon, activ, motiv, actualizat_la').order('actualizat_la', { ascending: false })) || [],
   creeazaIntern: async ({ text, p_departamente, p_angajati, preview }) =>
     date(await supabase.rpc('fn_sms_lot_intern_creeaza', { p_text: text, p_departamente, p_angajati, p_doar_preview: preview })),
@@ -24,7 +25,7 @@ export const smsApi = {
   autorizareRedari: async ({ autorizat, nr, data, versiune }) =>
     date(await supabase.rpc('fn_sms_redari_autorizare_seteaza', { p_autorizat: autorizat, p_nr: nr || null, p_data: data || null, p_versiune: versiune })),
   seteazaOptout: async (telefon, activ, motiv) => date(await supabase.rpc('fn_sms_optout_seteaza', { p_telefon: telefon, p_activ: activ, p_motiv: motiv || null })),
-  // edge-ul verifică din nou că apelantul e owner (JWT + profiles.is_owner); plafonul / kill-switch-ul / aprobarea le verifică BD-ul
+  // edge-ul verifică din nou nivelul (JWT + fn_sms_nivel cu JWT-ul contului); plafonul / kill-switch-ul / aprobarea / limita contului de test le verifică BD-ul
   trimite: async lotId => {
     const { data, error } = await supabase.functions.invoke('sms-trimite', { body: { lot_id: lotId } })
     if (error) throw error

@@ -18,7 +18,7 @@ export const STARI_MESAJ = {
 export const MOTIVE_TRIMITERE = {
   gata: 'Coada lotului s-a golit: toate mesajele au fost predate furnizorului. Rezultatul real e pe mesaje (livrat / eșuat / necunoscut).',
   ok: 'Runda s-a încheiat; mai sunt mesaje — apasă din nou „Trimite”.',
-  kill_switch: 'Trimiterea e OPRITĂ (kill-switch). Pornește-o din Setări.',
+  kill_switch: 'Trimiterea e OPRITĂ (kill-switch). O pornește owner-ul din Setări.',
   plafon_zi: 'S-a atins plafonul zilnic. Restul pleacă după ce îl mărești sau mâine.',
   plafon_luna: 'S-a atins plafonul lunar.',
   redari_neautorizat: 'Redări: autorizarea scrisă Transgaz nu e setată — nu pleacă nimic.',
@@ -31,8 +31,46 @@ export const MOTIVE_TRIMITERE = {
   lot_anulat: 'Lotul e anulat.',
   lot_draft: 'Lotul nu e aprobat.',
   eroare_rezervare: 'Rezervarea în BD a fost refuzată — reîncarcă și verifică starea lotului.',
+  acces_refuzat: 'Nivelul tău nu permite trimiterea acestui lot (contul de test: doar loturile lui interne, de maximum 5 destinatari; Redări: cere și modulul Redări).',
+  buget_test_zi: 'Contul de test și-a atins bugetul de SMS pe ziua de azi (nu se eliberează prin anulare). Restul pleacă mâine.',
+  creator_fara_drept: 'Lotul e al unui cont de test care nu mai are dreptul SMS: nu mai pleacă. Anulează-l.',
 }
 export const motivTrimitere = m => MOTIVE_TRIMITERE[m] || `Oprit: ${m || 'motiv necunoscut'}.`
+
+// ── Niveluri (20261130b): owner = tot; utilizator (modulul `sms` editor / admin); test (modulul `sms` viewer, contul AI) ─────────
+// BD-ul decide (fn_sms_nivel, RLS, RPC-uri, triggere); aici doar ce arată ecranul.
+export const MAX_TEST = 5
+export const NIVELURI = {
+  owner: 'Owner',
+  utilizator: 'Utilizator SMS',
+  test: 'Cont de test SMS',
+}
+
+/** Meniul 📱 SMS: owner sau orice drept pe modulul `sms` (nivelul real îl dă BD-ul la încărcare). */
+export const areModulSms = profile =>
+  profile?.is_owner === true || (profile?.module_access || []).some(m => m === 'sms' || String(m).startsWith('sms.'))
+
+/** Ce poate nivelul pe un lot — oglinda lui fn_sms_lot_acces din BD (BD-ul trimite oricum actiune_permisa în istoric).
+ *  actiune = false: vede lotul; true: aprobă / trimite / anulează. test: doar loturile create de el (al_meu + creat_nivel test);
+ *  utilizator: Redări doar cu modulul Redări și comutatorul pornit. */
+export function poateActiona(lot, panou, actiune = true) {
+  const nivel = panou?.nivel
+  if (nivel === 'owner') return true
+  if (nivel === 'utilizator') return lot?.categorie === 'intern' || (lot?.categorie === 'redari' && panou?.redari_modul === true && panou?.redari_autorizat === true)
+  if (nivel === 'test') {
+    // r3: limita de 1–5 destinatari și la vedere (un lot de test inconsistent, de peste 5, nu se vede)
+    const nr = Number(lot?.nr_destinatari)
+    return lot?.categorie === 'intern' && lot?.al_meu === true && lot?.creat_nivel === 'test' && nr >= 1 && nr <= MAX_TEST
+  }
+  return false
+}
+
+/** Banda de sub titlu, pe nivel (null = nimic de spus). */
+export function notaNivel(panou) {
+  if (panou?.nivel === 'test') return `Cont de test: maximum ${MAX_TEST} destinatari într-un lot, doar intern (fără Redări), doar loturile create de tine, cel mult ${panou?.buget_test_zi || 10} SMS pe zi și cel mult ${panou?.coada_test_max || 10} mesaje în așteptare. Setările, plafoanele și opt-out-ul le gestionează owner-ul.`
+  if (panou?.nivel === 'utilizator') return 'Setările (kill-switch, plafoane, autorizarea Redări, opt-out) le gestionează owner-ul.'
+  return null
+}
 
 /** Rezultatul pe mesaje al unui lot (din sms_v_loturi): lotul nu are stare „trimis”, adevărul e pe mesaje (Copilot r1 P2-01). */
 export function rezumatMesaje(l) {
@@ -91,6 +129,8 @@ export const poateAnula = lot => ['draft', 'aprobat', 'in_trimitere'].includes(l
 /** Redări: de ce e blocat butonul (null = se poate crea un lot). */
 export function motivBlocareRedari(panou) {
   if (!panou) return 'Se verifică setările SMS…'
+  if (panou.nivel === 'test') return 'Contul de test nu face loturi Redări'
+  if (panou.nivel !== 'owner' && panou.redari_modul !== true) return 'Cere și modulul Redări (editor / admin)'
   if (panou.redari_autorizat !== true) return 'Așteaptă autorizarea scrisă Transgaz'
   return null
 }

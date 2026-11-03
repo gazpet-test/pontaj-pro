@@ -1,7 +1,9 @@
-// Redări › Registru › „📱 SMS proprietari” (MVP 03.11.2026). Doar owner-ul îl vede (Redari.jsx îl montează cu profile.is_owner);
-// BD-ul refuză oricum crearea / aprobarea / trimiterea unui lot `redari` cât timp sms_setari.redari_autorizat = false.
+// Redări › Registru › „📱 SMS proprietari” (MVP 03.11.2026). Redari.jsx îl montează pentru owner și pentru Redări editor / admin; butonul
+// se arată doar dacă BD-ul (fn_sms_panou) dă un nivel SMS care poate lucra cu Redări: owner, sau utilizator SMS cu modulul Redări
+// (20261130b). Contul de test SMS și conturile fără nivel SMS nu îl văd. BD-ul refuză oricum crearea / aprobarea / trimiterea unui lot
+// `redari` cât timp sms_setari.redari_autorizat = false sau nivelul nu permite.
 // Lotul se construiește din convocările ACTIVE ale proiectului (sau ale UAT-ului din filtru), către telefoanele din contactul deținătorului.
-// Aici doar se previzualizează și se creează lotul (draft); aprobarea și trimiterea sunt în Administrator → 📱 SMS.
+// Aici doar se previzualizează și se creează lotul (draft); aprobarea și trimiterea sunt în 📱 SMS → Istoric (ruta /sms).
 // r2 (Jakarinos r1 P1): după creare se afișează lista FIXATĂ în lot (fn_sms_lot_destinatari: nume + telefon mascat) — aceeași listă și
 // aceeași versiune pe care owner-ul le aprobă apoi din Istoric.
 import { useEffect, useState } from 'react'
@@ -25,17 +27,17 @@ export function RedariSmsFereastra({ proiect, uats, uatInitial, onClose, show })
     finally { setLucru(false) }
   }
   const creeaza = async () => {
-    if (!preview || !window.confirm(`Creez lotul Redări (draft) pentru ${preview.nr_destinatari} proprietari, cost estimat ${fmtEur(preview.cost_estimat_eur)}?\n\nTextul:\n${preview.text_final}\n\nNu pleacă nimic până nu îl aprobi și îl trimiți din Administrator → 📱 SMS.`)) return
+    if (!preview || !window.confirm(`Creez lotul Redări (draft) pentru ${preview.nr_destinatari} proprietari, cost estimat ${fmtEur(preview.cost_estimat_eur)}?\n\nTextul:\n${preview.text_final}\n\nNu pleacă nimic până nu îl aprobi și îl trimiți din 📱 SMS → Istoric.`)) return
     setLucru(true); setEroare('')
     try {
       const j = await smsApi.creeazaRedari({ text, proiectId: proiect.id, uatId, preview: false })
-      show?.(`Lot Redări creat (draft, ${j.nr_destinatari} destinatari). Aprobarea: Administrator → 📱 SMS → Istoric.`, 'success')
+      show?.(`Lot Redări creat (draft, ${j.nr_destinatari} destinatari). Aprobarea: 📱 SMS → Istoric.`, 'success')
       setCreat(await smsApi.destinatariLot(j.lot_id))
     } catch (e) { setEroare(mesajEroare(e)) }
     finally { setLucru(false) }
   }
   if (creat) return <Modal titlu={`📱 Lot Redări creat (draft) — ${proiect.cod}`} onClose={onClose} latime={620}>
-    <p style={{ fontSize: 12.5, color: G.muted, marginTop: 0 }}>Lista e FIXATĂ în lot (versiunea {creat.versiune}). Aprobarea și trimiterea: Administrator → 📱 SMS → Istoric, pe aceeași listă.</p>
+    <p style={{ fontSize: 12.5, color: G.muted, marginTop: 0 }}>Lista e FIXATĂ în lot (versiunea {creat.versiune}). Aprobarea și trimiterea: 📱 SMS → Istoric, pe aceeași listă.</p>
     <div style={{ fontSize: 13 }}><b>Textul trimis:</b> {creat.text}</div>
     <div style={{ fontSize: 13, marginTop: 4 }}><b>{(creat.destinatari || []).length}</b> proprietari · {creat.segmente} SMS fiecare · cost estimat <b>{fmtEur(creat.cost_estimat_eur)}</b></div>
     <div style={{ ...S.card, marginTop: 10, maxHeight: 260, overflow: 'auto', padding: 0 }}>
@@ -80,10 +82,12 @@ export default function RedariSmsButon({ proiect, uats, uatId, show, panouInitia
   useEffect(() => {
     if (panouInitial) return
     let activ = true
-    smsApi.panou().then(p => { if (activ) setPanou(p) }).catch(() => { if (activ) setPanou({ redari_autorizat: false }) })
+    // 42501 = fără nivel SMS: butonul nu apare; altă eroare = buton blocat, cu motivul
+    smsApi.panou().then(p => { if (activ) setPanou(p) }).catch(e => { if (activ) setPanou(e?.code === '42501' ? { fara_acces: true } : { eroare: true }) })
     return () => { activ = false }
   }, [panouInitial])
-  const motiv = motivBlocareRedari(panou)
+  if (panou?.fara_acces || panou?.nivel === 'test' || (panou?.nivel && panou.nivel !== 'owner' && panou.redari_modul !== true)) return null
+  const motiv = panou?.eroare ? 'Nu s-a putut verifica starea SMS' : motivBlocareRedari(panou)
   return <>
     <button onClick={() => !motiv && setDeschis(true)} disabled={!!motiv} title={motiv || 'Lot SMS către proprietarii cu convocare activă'}
       style={{ ...S.btnS, opacity: motiv ? 0.5 : 1, cursor: motiv ? 'not-allowed' : 'pointer' }}>📱 SMS proprietari{motiv ? ` — ${motiv}` : ''}</button>

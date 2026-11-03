@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   contorText, argumenteIntern, departamente, filtreazaAngajati, zileLaPlafon, poateAproba, poateTrimite, poateAnula,
   motivBlocareRedari, valideazaAutorizare, valideazaPlafoane, motivTrimitere, costEstimat, fmtEur, rezumatMesaje, mesajAnulare, STARI_LOT,
+  poateActiona, areModulSms, notaNivel, NIVELURI, MAX_TEST,
 } from './smsLogica.js'
 
 describe('lotul nu are stare „trimis” (Copilot r1 P2-01)', () => {
@@ -77,9 +78,65 @@ describe('regulile butoanelor', () => {
     expect(['draft', 'aprobat', 'in_trimitere', 'trimis', 'anulat'].map(s => poateAnula({ stare: s }))).toEqual([true, true, true, false, false])
   })
   it('Redări: blocat cu mesajul cerut cât comutatorul e oprit', () => {
-    expect(motivBlocareRedari({ redari_autorizat: false })).toBe('Așteaptă autorizarea scrisă Transgaz')
+    expect(motivBlocareRedari({ nivel: 'owner', redari_autorizat: false })).toBe('Așteaptă autorizarea scrisă Transgaz')
     expect(motivBlocareRedari(null)).toMatch(/verifică/)
-    expect(motivBlocareRedari({ redari_autorizat: true })).toBeNull()
+    expect(motivBlocareRedari({ nivel: 'owner', redari_autorizat: true })).toBeNull()
+    expect(motivBlocareRedari({ nivel: 'utilizator', redari_modul: true, redari_autorizat: true })).toBeNull()
+  })
+  it('Redări (20261130b): contul de test nu face Redări; utilizatorul cere și modulul Redări; fără nivel = blocat', () => {
+    expect(motivBlocareRedari({ nivel: 'test', redari_autorizat: true })).toMatch(/test/)
+    expect(motivBlocareRedari({ nivel: 'utilizator', redari_modul: false, redari_autorizat: true })).toMatch(/modulul Redări/)
+    expect(motivBlocareRedari({ redari_autorizat: true })).toMatch(/modulul Redări/)
+  })
+})
+
+describe('niveluri SMS (20261130b r2) — oglinda lui fn_sms_lot_acces', () => {
+  const intern = (n, o = {}) => ({ categorie: 'intern', nr_destinatari: n, ...o })
+  const alMeu = n => intern(n, { al_meu: true, creat_nivel: 'test' })
+  const redari = { categorie: 'redari', nr_destinatari: 2 }
+  it('owner: tot', () => {
+    expect(poateActiona(intern(5000), { nivel: 'owner' })).toBe(true)
+    expect(poateActiona(redari, { nivel: 'owner' })).toBe(true)
+  })
+  it('utilizator: intern fără limită (și loturile conturilor de test); Redări doar cu modulul Redări ȘI comutatorul pornit (P2-03)', () => {
+    expect(poateActiona(intern(800), { nivel: 'utilizator' })).toBe(true)
+    expect(poateActiona(alMeu(3), { nivel: 'utilizator' })).toBe(true)
+    expect(poateActiona(redari, { nivel: 'utilizator', redari_modul: false, redari_autorizat: true })).toBe(false)
+    expect(poateActiona(redari, { nivel: 'utilizator', redari_modul: true, redari_autorizat: false })).toBe(false)
+    expect(poateActiona(redari, { nivel: 'utilizator', redari_modul: true, redari_autorizat: true })).toBe(true)
+  })
+  it('test: doar loturile LUI (P2-02), interne, 1–5 destinatari și la vedere (r3); niciodată Redări', () => {
+    expect([0, 1, 5, 6].map(n => poateActiona(alMeu(n), { nivel: 'test' }))).toEqual([false, true, true, false])
+    expect(poateActiona(alMeu(6), { nivel: 'test' }, false)).toBe(false)
+    expect(poateActiona(alMeu(5), { nivel: 'test' }, false)).toBe(true)
+    expect(poateActiona(intern(3), { nivel: 'test' })).toBe(false)
+    expect(poateActiona(intern(3), { nivel: 'test' }, false)).toBe(false)
+    expect(poateActiona(intern(3, { al_meu: true, creat_nivel: 'utilizator' }), { nivel: 'test' })).toBe(false)
+    expect(poateActiona(intern(3, { al_meu: false, creat_nivel: 'test' }), { nivel: 'test' })).toBe(false)
+    expect(poateActiona({ ...redari, al_meu: true, creat_nivel: 'test' }, { nivel: 'test', redari_modul: true, redari_autorizat: true })).toBe(false)
+    expect(MAX_TEST).toBe(5)
+  })
+  it('fără nivel / nivel necunoscut: nimic', () => {
+    expect(poateActiona(intern(1), null)).toBe(false)
+    expect(poateActiona(intern(1), { nivel: 'admin' })).toBe(false)
+  })
+  it('meniul: owner sau modulul sms (și sub-chei sms.*)', () => {
+    expect(areModulSms({ is_owner: true })).toBe(true)
+    expect(areModulSms({ is_owner: false, module_access: ['sms'] })).toBe(true)
+    expect(areModulSms({ is_owner: false, module_access: ['smsx', 'redari'] })).toBe(false)
+    expect(areModulSms(null)).toBe(false)
+  })
+  it('nota pe nivel și motivul de refuz al trimiterii', () => {
+    expect(notaNivel({ nivel: 'test' })).toMatch(/maximum 5 destinatari/)
+    expect(notaNivel({ nivel: 'test' })).toMatch(/fără Redări/)
+    expect(notaNivel({ nivel: 'test', buget_test_zi: 10 })).toMatch(/create de tine, cel mult 10 SMS pe zi/)
+    expect(motivTrimitere('buget_test_zi')).toMatch(/bugetul/)
+    expect(notaNivel({ nivel: 'test', coada_test_max: 10 })).toMatch(/cel mult 10 mesaje în așteptare/)
+    expect(motivTrimitere('creator_fara_drept')).toMatch(/nu mai are dreptul SMS/)
+    expect(notaNivel({ nivel: 'utilizator' })).toMatch(/owner/)
+    expect(notaNivel({ nivel: 'owner' })).toBeNull()
+    expect(NIVELURI.test).toMatch(/test/)
+    expect(motivTrimitere('acces_refuzat')).toMatch(/maximum 5/)
   })
 })
 

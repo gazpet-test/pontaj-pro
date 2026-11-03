@@ -21,7 +21,7 @@ import SetariProiect from './redari/ui/SetariProiect.jsx'
 import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
-// 📱 SMS proprietari (owner; blocat in BD pana la autorizarea Transgaz)
+// 📱 SMS proprietari (owner sau utilizator SMS cu Redari editor / admin, 20261130b; blocat in BD pana la autorizarea Transgaz)
 import RedariSmsButon from './sms/RedariSmsButon.jsx'
 
 const PAGINA = 100
@@ -296,7 +296,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
         <div style={{ flex:1 }} />
         {/* r7 P2-1: blocat și cât se încarcă rândurile filtrului curent — altfel borderoul ar lua rândurile filtrului anterior */}
         {poateScrie && <button onClick={borderou} disabled={lucru || loading} style={S.btnS} title="CSV pentru Poștă: selecția sau rândurile afișate">📮 Borderou CSV {selectie.size ? `(${selectie.size})` : ''}</button>}
-        {profile?.is_owner === true && <RedariSmsButon proiect={proiect} uats={uats} uatId={fUat} show={show} />}
+        {(profile?.is_owner === true || poateScrie) && <RedariSmsButon proiect={proiect} uats={uats} uatId={fUat} show={show} />}
         <button onClick={incarca} style={S.btnS} title="Reîncarcă">↻</button>
       </div>
 
