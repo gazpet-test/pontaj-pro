@@ -15,7 +15,7 @@ describe('grupeazaPentruPlicuri', () => {
     const a = conv(), b = conv({ conv_id: 'conv-fictiva-2', id_parcela: 'ABC-0002', nr_document: 'C-0013', nume_normalizat: ' persoana fictiva ',
       adresa: { ...a.adresa, strada: '  strada   fictivă 1 ' } })
     const r = grupeazaPentruPlicuri([a, b])
-    expect(r.grupuri).toHaveLength(1); expect(r.grupuri[0].convocari).toHaveLength(2); expect(r.fara_adresa).toEqual([])
+    expect(r.grupuri).toHaveLength(1); expect(r.grupuri[0].convocari).toHaveLength(2); expect(r.fara_adresa).toEqual([]); expect(r.prea_mari).toEqual([])
   })
   it('adrese diferite, persoană diferită și alt UAT nu se unesc', () => {
     const a = conv()
@@ -25,18 +25,18 @@ describe('grupeazaPentruPlicuri', () => {
   })
   it('adresă necunoscută sau goală nu devine plic', () => {
     const rs = [conv({ adresa: { cunoscuta: false } }), conv({ adresa: { cunoscuta: true, strada: ' ' } }), conv({ adresa: null })]
-    expect(grupeazaPentruPlicuri(rs)).toEqual({ grupuri: [], fara_adresa: rs })
+    expect(grupeazaPentruPlicuri(rs)).toEqual({ grupuri: [], fara_adresa: rs, prea_mari: [] })
   })
-  it('401 convocări devin 200 + 200 + 1, cu chei distincte, fără pierderi', () => {
-    const rs = Array.from({ length: 401 }, (_, i) => conv({ conv_id: `fictiv-${i}`, nr_document: `C-${String(i + 1).padStart(4, '0')}` }))
-    const gs = grupeazaPentruPlicuri(rs).grupuri
-    expect(gs.map(g => g.convocari.length)).toEqual([200, 200, 1]); expect(new Set(gs.map(g => g.cheie)).size).toBe(3)
-    expect(new Set(gs.flatMap(g => g.convocari.map(c => c.conv_id))).size).toBe(401)
+  it('200 convocări = un plic; 201 = blocaj explicit (fără împărțire, serverul refuză plicurile parțiale)', () => {
+    const fa = n => Array.from({ length: n }, (_, i) => conv({ conv_id: `fictiv-${i}`, nr_document: `C-${String(i + 1).padStart(4, '0')}` }))
+    expect(grupeazaPentruPlicuri(fa(200)).grupuri.map(g => g.convocari.length)).toEqual([200])
+    const r = grupeazaPentruPlicuri(fa(201))
+    expect(r.grupuri).toEqual([]); expect(r.prea_mari).toHaveLength(1); expect(r.prea_mari[0].convocari).toHaveLength(201)
   })
 })
 
 describe('textAR (juridic#021)', () => {
-  const pr = { imputernicire_nr: 'TEST-1', imputernicire_data: '2026-11-01' }
+  const pr = { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'TEST-1', imputernicire_data: '2026-11-01' }
   const p = { nr_plic: 'PL-ABC-0001', uat_nume: 'Comuna Fictivă' }
   const cs = (nume) => nume.map(n => ({ nr_document: n, id_parcela: 'ABC-0001' }))
   const coada = 'pentru constatarea readucerii terenului la starea inițială, UAT Comuna Fictivă – conducta Prunișor–Jupa, Lot 1'
@@ -44,6 +44,7 @@ describe('textAR (juridic#021)', () => {
   it('fără împuternicire nu se generează AR', () => {
     expect(() => textAR(p, cs(['C-0001']), { proiect: {} })).toThrow()
     expect(() => textAR(p, cs(['C-0001']), { proiect: { imputernicire_nr: 'X' } })).toThrow()
+    expect(() => textAR(p, cs(['C-0001']), { proiect: { cod: 'ALT-PROIECT', imputernicire_nr: 'X', imputernicire_data: '2026-11-01' } })).toThrow(/nu e validat/)
   })
   it('până la 6 convocări: enumerate, cu N, UAT și plicul', () => {
     expect(textAR(p, cs(['C-0003', 'C-0001']), { proiect: pr })).toBe(`Conține: 2 convocări (nr. C-0001, C-0003) ${coada}. Plic PL-ABC-0001. ${exp}`)
@@ -59,7 +60,7 @@ describe('textAR (juridic#021)', () => {
 
 describe('documente DOCX', () => {
   it('ZIP valid, relație și content types, escape XML pentru toate metacaracterele și rânduri cu borduri', async () => {
-    const blob = await docxSimplu({ titlu: `A&B <C> "D" 'E'`, paragrafe: ['Paragraf'], tabel: { cap: ['Col 1', 'Col 2'], randuri: [['r1', 'x&y'], ['r2', '<z>']] }, semnaturi: ['Semnătură'] })
+    const blob = await docxSimplu({ titlu: `A&B <C> "D" 'E'\u000B\u0001`, paragrafe: ['Paragraf'], tabel: { cap: ['Col 1', 'Col 2'], randuri: [['r1', 'x&y'], ['r2', '<z>']] }, semnaturi: ['Semnătură'] })
     const zip = await JSZip.loadAsync(await blob.arrayBuffer())
     expect(Object.keys(zip.files)).toEqual(expect.arrayContaining(['[Content_Types].xml', '_rels/.rels', 'word/document.xml']))
     const xml = await zip.file('word/document.xml').async('string')
@@ -87,11 +88,11 @@ describe('documente DOCX', () => {
 describe('csvEtichete', () => {
   it('BOM, separator ;, ghilimele escapate și formule neutralizate inclusiv după whitespace', () => {
     for (const s of ['=1+1', '+SUM(A1)', '-1', '@cmd', ' \t\n=1']) {
-      const csv = csvEtichete([{ ...plic, destinatar_nume: s, proiect: { imputernicire_nr: 'T', imputernicire_data: '2026-11-01' } }], { [plic.id]: [conv()] })
+      const csv = csvEtichete([{ ...plic, destinatar_nume: s, proiect: { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'T', imputernicire_data: '2026-11-01' } }], { [plic.id]: [conv()] })
       expect(csv.charCodeAt(0)).toBe(0xFEFF); expect(csv).toContain(`;"'${s}";`)
       expect(csv).toContain('Text AR'); expect(csv).toContain('Strada Fictivă 1')
     }
-    expect(csvEtichete([{ ...plic, destinatar_nume: 'Fictiv "Test"', proiect: { imputernicire_nr: 'T', imputernicire_data: '2026-11-01' } }], { [plic.id]: [conv()] })).toContain('Fictiv ""Test""')
+    expect(csvEtichete([{ ...plic, destinatar_nume: 'Fictiv "Test"', proiect: { cod: 'LOT1-PRUNISOR-JUPA', imputernicire_nr: 'T', imputernicire_data: '2026-11-01' } }], { [plic.id]: [conv()] })).toContain('Fictiv ""Test""')
     expect(() => csvEtichete([plic], { [plic.id]: [conv()] })).toThrow()   // fără împuternicire nu se generează AR
   })
 })

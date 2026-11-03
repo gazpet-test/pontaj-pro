@@ -9,7 +9,9 @@ import { G, S, Camp, Gol, Modal, MOTIVE_RETUR, msgEroare, fmtDate, citestePagina
 const COL_PLIC = 'id,proiect_id,uat_id,nr_plic,destinatar_nume,lot_id,awb,data_expediere,data_ar,ar_scan_path,ar_primit_de,ar_mentiune,opis_path,retur,retur_detaliu,retur_data,retur_scan_path,stare,motiv_anulare,versiune'
 const COL_LOT = 'id,proiect_id,nr_lot,data_plicuire,semnatar1_id,semnatar2_id,pv_path,observatii,versiune'
 const starea = p => p.stare === 'anulat' ? 'anulat' : p.data_ar ? 'AR' : p.retur ? 'retur' : p.data_expediere ? 'expediat' : p.lot_id ? 'in_lot' : 'fara_lot'
-const eroareScriere = e => e?.code === '42501' ? 'Accesul de scriere a fost refuzat.' : e?.code === 'P0001' || e?.code === '23514' || e?.code === '22023' ? msgEroare(e) : 'Rezultat neconfirmat. Reîncarcă și verifică starea înainte de reluare.'
+// Jakarinos + Copilot f10 UI P2: 55P03 (operație concurentă, din protocolul pe UAT) are mesajul lui, separat de rezultatul neconfirmat (rețea)
+const eroareScriere = e => e?.code === '42501' ? 'Accesul de scriere a fost refuzat.' : e?.code === '55P03' ? `Operație concurentă: ${msgEroare(e)} Reîncarcă datele și reîncearcă.`
+  : e?.code === 'P0001' || e?.code === '23514' || e?.code === '22023' || e?.code === '0A000' ? msgEroare(e) : 'Rezultat neconfirmat. Reîncarcă și verifică starea înainte de reluare.'
 
 export async function citesteDatePlicuri(client, proiectId, poateScrie, esteCurent) {
   const pagini = (t, c, filtru = q => q, cheie = 'id') => citestePaginat(() => filtru(client.from(t).select(c)), { cheie, esteCurent })
@@ -125,19 +127,27 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
   async function document(tip, rand, curent) {
     const lista = plicuri.filter(p => p.lot_id === rand.id)
     if (tip === 'csv' && !imputernicire) throw { code: '23514', message: 'Fără împuternicirea Beneficiarului nu se generează textele AR (etichete).' }
+    // Jakarinos + Copilot f10 UI P2: opisul atașat la dosar se descarcă EXACT cum e arhivat (fără regenerare), ca exemplarul din plic să fie identic
+    if (tip === 'opis' && rand.opis_path) {
+      const { data: arhivat, error } = await supabase.storage.from('redari').download(rand.opis_path)
+      if (error || !arhivat) throw new Error('Exemplarul de la dosar nu poate fi citit; nu se regenerează un opis diferit. Reîncearcă sau verifică în Storage.')
+      if (curent()) descarcaBlob(arhivat, `${rand.nr_plic}-opis.docx`)
+      return 'Opis descărcat (exemplarul arhivat la dosar).'
+    }
     const blob = tip === 'opis' ? await genereazaOpis(rand, pePlic[rand.id] || [], { proiect, uat: uats.find(u => u.id === rand.uat_id) })
       : tip === 'pv' ? await genereazaPvPlicuire(rand, lista, pePlic, { proiect }) : new Blob([csvEtichete(lista.filter(p => p.stare === 'activ'), pePlic)], { type: 'text/csv;charset=utf-8' })
-    if (curent()) descarcaBlob(blob, `${rand.nr_plic || rand.nr_lot}-${tip}.${tip === 'csv' ? 'csv' : 'docx'}`)
-    // juridic#021 pct. 3: opisul în 2 exemplare — unul în plic (descărcat), unul la dosar (atașat pe plic, o singură dată; necesar la expediere)
-    if (tip === 'opis' && poateScrie && !rand.opis_path && rand.stare === 'activ' && !rand.data_expediere) {
+    // juridic#021 pct. 3: opisul în 2 exemplare — ACELAȘI fișier: întâi se atașează la dosar, apoi se descarcă pentru plic (o singură generare)
+    if (tip === 'opis' && poateScrie && rand.stare === 'activ' && !rand.data_expediere) {
       if (!curent()) return
       const path = `plicuri/${rand.id}/opis-${stampila()}.docx`
       const { error } = await supabase.storage.from('redari').upload(path, blob, { upsert: false, contentType: blob.type })
-      if (error) throw new Error('Opisul s-a descărcat, dar exemplarul de la dosar nu s-a încărcat. Reîncearcă „Opis”.')
+      if (error) throw new Error('Exemplarul de la dosar nu s-a încărcat; opisul NU s-a descărcat. Reîncearcă „Opis”.')
       if (!curent()) return
       await actualizeaza('red_plicuri', rand, { opis_path: path }, curent)
-      return 'Opis descărcat (exemplarul pentru plic); exemplarul de la dosar a fost atașat la plic.'
+      if (curent()) descarcaBlob(blob, `${rand.nr_plic}-opis.docx`)
+      return 'Exemplarul de la dosar a fost atașat la plic; același opis s-a descărcat pentru plic.'
     }
+    if (curent()) descarcaBlob(blob, `${rand.nr_plic || rand.nr_lot}-${tip}.${tip === 'csv' ? 'csv' : 'docx'}`)
     return tip === 'csv' ? `Etichete descărcate pentru ${lista.filter(p => p.stare === 'activ').length} plicuri active; anulate excluse: ${lista.filter(p => p.stare === 'anulat').length}.` : 'Document descărcat.'
   }
   async function salveaza(curent) {
@@ -205,6 +215,7 @@ export default function PlicuriEcran({ proiect, uats = [], nivel, reloadKey = 0,
     <h3>Plicuri de făcut</h3>
     {poateScrie ? <>
       <p>{grupare.grupuri.length} plicuri propuse. Maximum 200 de convocări într-un plic.</p>
+      {grupare.prea_mari?.length > 0 && <p style={{ color: G.yellow }}>Peste 200 de convocări la aceeași persoană în același UAT (nu se împart, serverul cere un singur plic complet): {grupare.prea_mari.map(g => `${g.destinatar} (${g.convocari.length})`).join('; ')}. Necesită o decizie separată.</p>}
       {grupare.grupuri.map(g => <details key={g.cheie} style={{ marginBottom: 8 }}><summary>{g.uat3} · {g.destinatar} · {adresaPlic(g.convocari[0]?.adresa)} · {g.convocari.length} convocări</summary><p>{g.convocari.map(c => `${c.nr_document} (${c.id_parcela})`).join('; ')}</p></details>)}
       {btn(`Creează ${grupare.grupuri.length} plicuri`, () => { if (window.confirm(`Creează ${grupare.grupuri.length} plicuri în ${proiect.cod}?`)) executa(creeaza, true) }, !date || !grupare.grupuri.length)}
       <p>Fără adresă (afișare): {grupare.fara_adresa.length}</p>

@@ -108,7 +108,7 @@ export default function ImportPostal({ proiect, nivel, onSchimbat }) {
     <div style={{ ...S.card, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
       <Camp eticheta="1. Fișier poștal (XLSX / XLS / CSV UTF-8)"><input ref={input} style={S.input} type="file" accept=".xlsx,.xls,.csv" disabled={lucru} onChange={alege} /></Camp>
       <Camp eticheta="Mod implicit"><select style={S.select} disabled={lucru} value={mod} onChange={e => { reset(); setMod(e.target.value) }}>
-        {Object.entries(TIPURI).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        {Object.entries(TIPURI).filter(([k]) => k === 'expediere').map(([k, v]) => <option key={k} value={k}>{v}</option>)}   {/* AR / retur doar în Plicuri, cu scan (Copilot f10 UI P3-03) */}
       </select></Camp>
     </div>
     {fisier && <div style={{ ...S.card, marginTop: 12 }}>

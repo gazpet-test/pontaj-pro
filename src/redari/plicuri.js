@@ -8,7 +8,11 @@ export const TEXTE_AR = {
   lucrare: 'conducta Prunișor–Jupa, Lot 1',
   expeditor: 'Expeditor: Gazpet Instal SRL, pentru S.N.T.G.N. Transgaz S.A.',
   maxEnumerate: 6,
+  // Copilot f10 UI P3-01: textul (lucrarea, beneficiarul) e validat juridic DOAR pentru aceste proiecte; alt proiect = alt text validat, nu reutilizare
+  proiecte: ['LOT1-PRUNISOR-JUPA'],
 }
+// fn_red_plic_creeaza primește cel mult 200 de convocări și cere TOATE convocările persoanei din UAT într-un singur plic
+export const MAX_CONVOCARI_PLIC = 200
 export const areImputernicire = proiect => !!(txt(proiect?.imputernicire_nr) && proiect?.imputernicire_data)
 const numarConvocare = c => { const m = /^C-(\d{1,6})$/.exec(txt(c.nr_document)); return m ? Number(m[1]) : null }
 export function numereConvocari(convocari) {
@@ -34,16 +38,20 @@ export function grupeazaPentruPlicuri(randuri) {
     if (!pe.has(cheie)) pe.set(cheie, { cheie, uat_id: r.uat_id, uat3: r.uat3, destinatar: r.detinator_nume, convocari: [] })
     pe.get(cheie).convocari.push(r)
   }
+  const prea_mari = []
   const grupuri = [...pe.values()].sort((a, b) => txt(a.uat3).localeCompare(txt(b.uat3), 'ro') || txt(a.destinatar).localeCompare(txt(b.destinatar), 'ro'))
     .flatMap(g => {
       const conv = [...g.convocari].sort((a, b) => txt(a.nr_document).localeCompare(txt(b.nr_document)) || txt(a.conv_id).localeCompare(txt(b.conv_id)))
-      return Array.from({ length: Math.ceil(conv.length / 200) }, (_, i) => ({ ...g, cheie: `${g.cheie}/${i}`, convocari: conv.slice(i * 200, (i + 1) * 200) }))
+      // Copilot f10 UI P2-01: NU se împarte (serverul refuză plicurile parțiale) — peste limită = blocaj explicit, decizie separată
+      if (conv.length > MAX_CONVOCARI_PLIC) { prea_mari.push({ ...g, convocari: conv }); return [] }
+      return [{ ...g, convocari: conv }]
     })
-  return { grupuri, fara_adresa }
+  return { grupuri, fara_adresa, prea_mari }
 }
 
 export function textAR(plic, convocari, { proiect } = {}) {
   if (!areImputernicire(proiect)) throw { code: '23514', message: 'Fără împuternicirea Beneficiarului (nr. + data în Setări proiect) nu se generează AR-uri.' }
+  if (!TEXTE_AR.proiecte.includes(proiect?.cod)) throw { code: '23514', message: 'Textul AR nu e validat juridic pentru acest proiect.' }
   if (!convocari.length) throw { code: '23514', message: 'Plicul nu are convocări.' }
   const n = convocari.length, uat = plic.uat_nume || convocari[0]?.uat_nume || ''
   const cuv = n === 1 ? 'convocare' : 'convocări'
@@ -53,7 +61,8 @@ export function textAR(plic, convocari, { proiect } = {}) {
   return `${TEXTE_AR.inceput} ${n} ${cuv} ${TEXTE_AR.scop}, UAT ${uat} – ${TEXTE_AR.lucrare}, enumerate în opisul plicului ${plic.nr_plic}. ${TEXTE_AR.expeditor}`
 }
 
-const xml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]))
+// Copilot f10 UI P3-02: caracterele de control interzise în XML 1.0 se elimină (altfel DOCX-ul devine invalid)
+const xml = v => String(v ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]))
 const paragraf = s => `<w:p><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="22"/></w:rPr><w:t xml:space="preserve">${xml(s)}</w:t></w:r></w:p>`
 export async function docxSimplu({ titlu, paragrafe = [], tabel, semnaturi = [] }) {
   const zip = new JSZip()

@@ -210,8 +210,12 @@ export async function aplica(supabase, aplicabile, { esteCurent = () => true } =
       if (data.length) rezultat.aplicate.push(a)
       else rezultat.conflicte.push({ ...a, motiv: 'Modificat între timp sau inaccesibil; reîncarcă previzualizarea.' })
       consecutive = 0
-    } catch {
-      rezultat.erori.push({ ...a, motiv: 'Scriere neconfirmată; verifică în Plicuri înainte de reluare.' }); consecutive++
+    } catch (e) {
+      // Jakarinos + Copilot f10 UI P2: codul BD rămâne vizibil — 55P03 = operație concurentă (reîncearcă), 23514 / P0001 = refuz cu motiv
+      const motiv = e?.code === '55P03' ? 'Operație concurentă în același UAT; reîncarcă și reîncearcă peste câteva secunde (rândurile deja aplicate se recunosc).'
+        : (e?.code === '23514' || e?.code === 'P0001') ? `Refuzat: ${String(e?.message || '').replace(/^redari:\s*/, '')}`
+        : e?.code === '42501' ? 'Acces de scriere refuzat.' : 'Scriere neconfirmată; verifică în Plicuri înainte de reluare.'
+      rezultat.erori.push({ ...a, motiv, cod: e?.code || null }); consecutive++
     }
   }
   rezultat.neprocesate = aplicabile.slice(i)
