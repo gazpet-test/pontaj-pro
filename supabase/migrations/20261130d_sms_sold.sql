@@ -43,6 +43,10 @@
 --     ca /rest/v1 nu da acces la net.* (asteptat: PGRST106 / 4xx).
 --   * P3-03 (documentat): modul STRICT al filtrului IP din sms-dlr cere validarea reala a infrastructurii (DLR-uri reale + proba de
 --     falsificare a antetului din retea); testele unitare valideaza doar parserul si decizia.
+-- r4 (#971, NO-GO Jakarinos + Copilot r3, acelasi P2): simulatorul suprima alertele DOAR cat timp furnizor_la e proaspat (< 36 h, ca
+--   citirea veche). Cu furnizor_la vechi (cronul oprit, sau configuratia mutata pe SMSLink fara niciun apel reusit), apare normal
+--   alerta „monitorizare oprita” / „citire veche”, oricare ar fi furnizor_ultim (momentul ei: max(furnizor_la, citit_la) + 36 h, in UI).
+--   Copilot r3 P3-01: SMS_FURNIZOR lipsa / necunoscut -> furnizor_ultim = 'necunoscut', fara sold, eroarea furnizor_neconfigurat, cu alerta.
 -- Fara mail, fara SMS, fara date reale atinse (doar randul nou din sms_sold). Ordinea de livrare: deploy edge sms-sold (NO_JWT), apoi
 -- migrarea (pana la primul deploy cronul ar primi 404 — fara efect). Revenire: supabase/revenire/20261130d_sms_sold_ROLLBACK.sql.
 -- DRY: supabase/tests/20261130d_sms_sold_dryrun.sql. Izolare: READ COMMITTED (ca PostgREST).
@@ -104,7 +108,7 @@ CREATE TABLE public.sms_sold (
   citit_la timestamptz,
   eroare text CHECK (eroare IS NULL OR eroare ~ '^[a-z0-9_]{1,40}$'),
   eroare_la timestamptz,
-  furnizor_ultim text CHECK (furnizor_ultim IS NULL OR furnizor_ultim IN ('smslink', 'simulator')),
+  furnizor_ultim text CHECK (furnizor_ultim IS NULL OR furnizor_ultim IN ('smslink', 'simulator', 'necunoscut')),
   furnizor_la timestamptz,
   CONSTRAINT sms_sold_citire CHECK ((credit IS NULL) = (citit_la IS NULL)),
   CONSTRAINT sms_sold_eroare CHECK ((eroare IS NULL) = (eroare_la IS NULL)),
@@ -127,23 +131,30 @@ CREATE FUNCTION public.fn_sold_sms_stare() RETURNS jsonb
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
   SELECT jsonb_build_object('credit', x.credit, 'citit_la', x.citit_la, 'eroare', x.eroare, 'eroare_la', x.eroare_la, 'prag', x.prag,
            'furnizor_ultim', x.furnizor_ultim, 'furnizor_la', x.furnizor_la, 'simulator', x.sim,
+           'furnizor_neconfigurat', x.furnizor_ultim IS NOT DISTINCT FROM 'necunoscut', 'monitorizare_oprita', x.oprita,
            'sub_prag', x.sub_prag AND NOT x.sim, 'citire_veche', x.veche AND NOT x.sim, 'eroare_dupa_citire', x.err AND NOT x.sim,
-           'alerta', (x.sub_prag OR x.veche OR x.err) AND NOT x.sim)
+           'alerta', (x.sub_prag OR x.veche OR x.err OR x.oprita) AND NOT x.sim)
     FROM (SELECT s.credit, s.citit_la, s.eroare, s.eroare_la, s.furnizor_ultim, s.furnizor_la, public.fn_sold_sms_prag() AS prag,
-                 (s.furnizor_ultim IS NOT DISTINCT FROM 'simulator') AS sim,
+                 -- r4: simulatorul suprima alertele DOAR cat timp e confirmat recent (acelasi prag de 36 h ca citirea veche)
+                 (s.furnizor_ultim IS NOT DISTINCT FROM 'simulator' AND s.furnizor_la >= now() - interval '36 hours') AS sim,
+                 (s.furnizor_la IS NOT NULL AND s.furnizor_la < now() - interval '36 hours') AS oprita,
                  (s.credit IS NOT NULL AND s.credit < public.fn_sold_sms_prag()) AS sub_prag,
                  (s.citit_la IS NULL OR s.citit_la < now() - interval '36 hours') AS veche,
                  (s.eroare_la IS NOT NULL AND (s.citit_la IS NULL OR s.eroare_la > s.citit_la)) AS err
             FROM public.sms_sold s WHERE s.id) x
 $fn$;
-COMMENT ON FUNCTION public.fn_sold_sms_stare() IS 'SMS (intern, fara drept de apel): starea soldului + SINGURA definitie a alertei: sub_prag (credit < fn_sold_sms_prag()), citire_veche (nicio citire buna in ultimele 36 h), eroare_dupa_citire (ultima incercare a esuat). alerta = oricare. r3: cu furnizor_ultim = simulator, soldul ramas e doar „ultimul cunoscut” si toate flagurile de alerta sunt false (simulator = true).';
+COMMENT ON FUNCTION public.fn_sold_sms_stare() IS 'SMS (intern, fara drept de apel): starea soldului + SINGURA definitie a alertei: sub_prag (credit < fn_sold_sms_prag()), citire_veche (nicio citire buna in ultimele 36 h), eroare_dupa_citire (ultima incercare a esuat), monitorizare_oprita (niciun apel sms-sold in ultimele 36 h). alerta = oricare. r3/r4: simulator = furnizor_ultim simulator confirmat in ultimele 36 h -> soldul ramas e doar „ultimul cunoscut” si flagurile de alerta sunt false; confirmarea veche NU mai suprima nimic. furnizor_ultim necunoscut = SMS_FURNIZOR lipsa / necunoscut (eroare de configurare, cu alerta).';
 
 CREATE FUNCTION public.fn_sold_sms_inregistreaza(p_credit integer, p_eroare text, p_inceput timestamptz, p_furnizor text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE v_n integer; v_gasit boolean;
 BEGIN
-  IF p_furnizor IS NULL OR p_furnizor NOT IN ('smslink', 'simulator') THEN
+  IF p_furnizor IS NULL OR p_furnizor NOT IN ('smslink', 'simulator', 'necunoscut') THEN
     RAISE EXCEPTION 'sms sold: furnizor necunoscut' USING ERRCODE = '22023';
+  END IF;
+  -- r4 (Copilot r3 P3-01): SMS_FURNIZOR lipsa / necunoscut = furnizor 'necunoscut', FARA sold, cu eroarea furnizor_neconfigurat
+  IF p_furnizor = 'necunoscut' AND (p_credit IS NOT NULL OR p_eroare IS DISTINCT FROM 'furnizor_neconfigurat') THEN
+    RAISE EXCEPTION 'sms sold: furnizorul necunoscut are doar eroarea furnizor_neconfigurat' USING ERRCODE = '22023';
   END IF;
   IF p_furnizor = 'simulator' AND (p_credit IS NOT NULL OR p_eroare IS NOT NULL) THEN
     RAISE EXCEPTION 'sms sold: simulatorul nu are sold si nici eroare de sold' USING ERRCODE = '22023';
@@ -197,7 +208,8 @@ CREATE VIEW public.v_sms_sold WITH (security_invoker = on) AS
 SELECT true AS id, (x.s->>'credit')::integer AS credit, (x.s->>'citit_la')::timestamptz AS citit_la, x.s->>'eroare' AS eroare,
        (x.s->>'eroare_la')::timestamptz AS eroare_la, (x.s->>'prag')::integer AS prag, (x.s->>'sub_prag')::boolean AS sub_prag,
        (x.s->>'citire_veche')::boolean AS citire_veche, (x.s->>'eroare_dupa_citire')::boolean AS eroare_dupa_citire, (x.s->>'alerta')::boolean AS alerta,
-       x.s->>'furnizor_ultim' AS furnizor_ultim, (x.s->>'furnizor_la')::timestamptz AS furnizor_la, (x.s->>'simulator')::boolean AS simulator
+       x.s->>'furnizor_ultim' AS furnizor_ultim, (x.s->>'furnizor_la')::timestamptz AS furnizor_la, (x.s->>'simulator')::boolean AS simulator,
+       (x.s->>'monitorizare_oprita')::boolean AS monitorizare_oprita, (x.s->>'furnizor_neconfigurat')::boolean AS furnizor_neconfigurat
   FROM (SELECT public.fn_sold_sms_citeste() AS s) x;
 COMMENT ON VIEW public.v_sms_sold IS 'SMS: soldul SMSLink + alerta, un rand, din fn_sold_sms_citeste() (VOLATILE: doar owner, altfel 42501 la orice citire). security_invoker. Sursa SMS sold din Administrator -> Alerte. 20261130d.';
 REVOKE ALL ON public.v_sms_sold FROM PUBLIC, anon, authenticated, service_role;
@@ -282,8 +294,8 @@ BEGIN
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sold!_sms!_%' ESCAPE '!'),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
        FROM cron.job j WHERE j.jobname = 'sms_sold_zilnic'))) INTO v_amprenta;
-  IF v_amprenta IS DISTINCT FROM '33cbff5fea50460503f200095b4eb370' THEN
-    RAISE EXCEPTION '20261130d: amprenta obiectelor = % (asteptat 33cbff5fea50460503f200095b4eb370)', v_amprenta;
+  IF v_amprenta IS DISTINCT FROM 'ca6bea51bb735c76c1f8b32733a07534' THEN
+    RAISE EXCEPTION '20261130d: amprenta obiectelor = % (asteptat ca6bea51bb735c76c1f8b32733a07534)', v_amprenta;
   END IF;
 END $post$;
 

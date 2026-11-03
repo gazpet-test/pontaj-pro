@@ -12,7 +12,7 @@ B="${PG_BIN:-/c/Users/Public/pgsql/bin}"
 L=$(mktemp -d)
 D="$L/pg"; P=5983
 export PGCLIENTENCODING=UTF8
-TESTE_DRY=10
+TESTE_DRY=11
 # copie LF (continutul canonic din git; checkout-ul Windows are CRLF, iar md5-urile 30b sunt pe LF)
 R="$L/repo"
 for f in supabase/migrations/20261130a_sms_mvp.sql supabase/migrations/20261130b_sms_acces_modul.sql supabase/migrations/20261130d_sms_sold.sql \
@@ -84,7 +84,7 @@ MUTANTI=(
   "ALTER FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz, text) SECURITY INVOKER;"
   "ALTER FUNCTION public.fn_sold_sms_stare() SET search_path = public;"
   "GRANT SELECT ON public.v_sms_sold TO anon;"
-  "CREATE OR REPLACE VIEW public.v_sms_sold WITH (security_invoker = on) AS SELECT true AS id, 1 AS credit, now() AS citit_la, NULL::text AS eroare, now() AS eroare_la, 150 AS prag, false AS sub_prag, false AS citire_veche, false AS eroare_dupa_citire, false AS alerta, 'smslink'::text AS furnizor_ultim, now() AS furnizor_la, false AS simulator;"
+  "CREATE OR REPLACE VIEW public.v_sms_sold WITH (security_invoker = on) AS SELECT true AS id, 1 AS credit, now() AS citit_la, NULL::text AS eroare, now() AS eroare_la, 150 AS prag, false AS sub_prag, false AS citire_veche, false AS eroare_dupa_citire, false AS alerta, 'smslink'::text AS furnizor_ultim, now() AS furnizor_la, false AS simulator, false AS monitorizare_oprita, false AS furnizor_neconfigurat;"
   # r3 (Jakarinos P3): privilegiu pe coloana si STRICT (cu STRICT, orice apel cu un argument NULL nu mai executa corpul)
   "GRANT SELECT (credit) ON public.sms_sold TO authenticated;"
   "ALTER FUNCTION public.fn_sold_sms_inregistreaza(integer, text, timestamptz, text) STRICT;"

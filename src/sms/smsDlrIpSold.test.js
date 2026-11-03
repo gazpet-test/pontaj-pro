@@ -229,6 +229,17 @@ describe('sms-sold — poarta (cron intern sau owner) și scrierea', () => {
     const r2 = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sbSold({ eroareRpc: true }), { env: { SMS_FURNIZOR: 'simulator' } }))
     expect(r2.status).toBe(500)
   })
+  it('r4 P3-01: SMS_FURNIZOR lipsă / necunoscut → nicio cerere spre SMSLink, furnizorul în BD = necunoscut (nu smslink), eroarea furnizor_neconfigurat', async () => {
+    for (const valoare of [undefined, 'twilio']) {
+      const sb = sbSold(), f = fetchFals({ json: { credit: 1 } })
+      const r = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sb, { env: { SMS_FURNIZOR: valoare }, fetch: f }))
+      expect(r.status).toBe(200)
+      expect(await r.json()).toMatchObject({ ok: false, furnizor: 'necunoscut', eroare: 'furnizor_neconfigurat' })
+      expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza'))
+        .toEqual([['fn_sold_sms_inregistreaza', { p_credit: null, p_eroare: 'furnizor_neconfigurat', p_inceput: '2026-11-04T05:10:00.000Z', p_furnizor: 'necunoscut' }]])
+      expect(f.cereri).toHaveLength(0)
+    }
+  })
   it('owner-ul (nivelul cerut cu JWT-ul lui) → poate citi acum; nivelul nu se cere cu service_role', async () => {
     const sb = sbSold({ user: UID_O, nivel: 'owner' })
     expect(await poartaSold(postSold({ Authorization: 'Bearer eyJ.o.x' }), depsSold(sb))).toBe('owner')
@@ -286,6 +297,23 @@ describe('soldul în UI', () => {
     expect(a.timestamp).toBe('2026-11-04T05:10:00Z')
     expect(a.reference).toBe('Ultimul sold cunoscut 120 SMS (la 30.10.2026, 07:10)')
   })
+  it('r4 P2: simulator neconfirmat de 36 h (BD: simulator=false, monitorizare_oprita) → alertă „monitorizare oprită”, ora = max(furnizor_la, citit_la) + 36 h', () => {
+    const [a] = alerteSmsSold({ credit: 900, prag: 150, citire_veche: true, monitorizare_oprita: true, simulator: false, alerta: true,
+      citit_la: '2026-10-20T05:10:00Z', furnizor_ultim: 'simulator', furnizor_la: '2026-10-25T05:10:00Z' })
+    expect(a.title).toBe('Monitorizarea soldului SMSLink e oprită (niciun apel sms-sold de peste 36 de ore)')
+    expect(a.timestamp).toBe('2026-10-26T17:10:00.000Z')
+    expect(a.impact).toContain('Ultimul apel sms-sold: 25.10.2026, 07:10 (simulator)')
+    expect(a.reference).toBe('Ultimul sold cunoscut 900 SMS (la 20.10.2026, 08:10)')
+  })
+  it('r4 P3-01: furnizor neconfigurat → alertă de configurare (nu sold SMSLink activ); panoul spune „furnizor neconfigurat”', () => {
+    const st = { credit: 500, prag: 150, citit_la: '2026-11-04T05:10:00Z', eroare: 'furnizor_neconfigurat', eroare_la: '2026-11-04T06:10:00Z',
+      eroare_dupa_citire: true, alerta: true, furnizor_ultim: 'necunoscut', furnizor_neconfigurat: true, simulator: false }
+    const [a] = alerteSmsSold(st)
+    expect(a.title).toBe('SMS: furnizorul nu e configurat (SMS_FURNIZOR) — soldul SMSLink nu se citește')
+    expect(a.impact).toContain('SMS_FURNIZOR lipsește sau are o valoare necunoscută')
+    expect(a.timestamp).toBe('2026-11-04T06:10:00Z')
+    expect(textSold(st)).toBe('Sold SMSLink: furnizor neconfigurat (SMS_FURNIZOR) · ultimul cunoscut: 500 la 04.11 07:10')
+  })
   it('r3 P3-01: cronul oprit (citire veche, fără eroare nouă) → ora alertei = citit_la + 36 h, nu ora ultimei citiri', () => {
     const [a] = alerteSmsSold({ credit: 900, prag: 150, citire_veche: true, alerta: true, citit_la: '2026-10-25T05:10:00Z' })
     expect(a.timestamp).toBe('2026-10-26T17:10:00.000Z')
@@ -311,7 +339,7 @@ describe('soldul în UI', () => {
     const r = await incarcaSursaAdmin(client({ id: true, credit: 80, prag: 150, sub_prag: true, alerta: true, citit_la: '2026-11-04T05:10:00Z' }), s, owner)
     expect(r.state).toBe('ok')
     expect(r.rows.map(x => x.id)).toEqual(['sms_sold:sold'])
-    expect(cereri[0]).toEqual(['v_sms_sold', 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta,furnizor_ultim,furnizor_la,simulator', { count: 'exact' }])
+    expect(cereri[0]).toEqual(['v_sms_sold', 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta,furnizor_ultim,furnizor_la,simulator,monitorizare_oprita,furnizor_neconfigurat', { count: 'exact' }])
     const e = Object.assign(new Error('doar owner'), { code: '42501' })
     expect((await incarcaSursaAdmin(client(e), s, owner)).state).toBe('denied')
   })

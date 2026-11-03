@@ -307,7 +307,7 @@ export const SELECT_ADMIN = {
   logistica_comenzi_transport: 'id,numar_comanda,data_transport,status',
   v_admin_conturi_alerte: 'id,cod,profile_id,email,tip_cont,is_owner,employee_id,employee_name,employee_active,termination_date,banned_until,jurnal_id,inchis_la,candidati,alocari',
   executie_proiecte: 'id,nume,cod_intern,eticheta_gmail,activ',
-  v_sms_sold: 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta,furnizor_ultim,furnizor_la,simulator',
+  v_sms_sold: 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta,furnizor_ultim,furnizor_la,simulator,monitorizare_oprita,furnizor_neconfigurat',
 }
 
 // Proiect activ fără etichetă Gmail: corespondența lui rămâne nesortată (sau ajunge în coada „de repartizat”).
@@ -323,34 +323,40 @@ export function alerteGmail(proiecte) {
   }))
 }
 
-// Soldul SMSLink: alerta o decide BD-ul (fn_sold_sms_stare: sub_prag / citire_veche / eroare_dupa_citire); aici doar textul.
-// r2 (#971, Copilot P2-07): O alertă combinată, cu TOATE motivele active; un sold vechi e „ultimul sold cunoscut”, nu sold curent;
-// ora de sortare = evenimentul relevant (eroarea, dacă e mai nouă decât citirea). P3-02: ora cronului 05:10 UTC (07:10 / 08:10 RO).
+// Soldul SMSLink: alerta o decide BD-ul (fn_sold_sms_stare: sub_prag / citire_veche / eroare_dupa_citire / monitorizare_oprita); aici
+// doar textul. r2 (#971, Copilot P2-07): O alertă combinată, cu TOATE motivele active; un sold vechi e „ultimul sold cunoscut”;
+// ora de sortare = evenimentul relevant. P3-02: ora cronului 05:10 UTC (07:10 / 08:10 RO).
+// r4: simulatorul suprimă alerta doar când BD-ul îl confirmă recent (simulator = true doar cu furnizor_la < 36 h); monitorizare oprită
+// (niciun apel sms-sold de 36 h, oricare ar fi furnizorul) și furnizorul neconfigurat (SMS_FURNIZOR) au text propriu.
 export function alerteSmsSold(st) {
-  // r3 (Copilot r2 P2-01): în modul simulator BD-ul nu dă alertă (soldul rămas e doar „ultimul cunoscut”); dublat aici, explicit
   if (!st || st.alerta !== true || st.simulator === true) return []
   const credit = Number.isInteger(st.credit) ? st.credit : null
   const fmt = v => new Date(v).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' })
   const sub = st.sub_prag === true, veche = st.citire_veche === true, err = st.eroare_dupa_citire === true
-  const sold = credit == null ? null : `${veche || err ? 'ultimul sold cunoscut' : 'sold'} ${credit} SMS${st.citit_la ? ` (la ${fmt(st.citit_la)})` : ''}`
+  const oprita = st.monitorizare_oprita === true, neconf = st.furnizor_neconfigurat === true || st.eroare === 'furnizor_neconfigurat'
+  const sold = credit == null ? null : `${veche || err || oprita ? 'ultimul sold cunoscut' : 'sold'} ${credit} SMS${st.citit_la ? ` (la ${fmt(st.citit_la)})` : ''}`
   const titlu = sub
-    ? `Sold SMSLink sub prag (${st.prag}): ${sold}${veche || err ? ' — neactualizat' : ''}`
-    : err ? `Soldul SMSLink nu s-a putut citi (${st.eroare || 'eroare'})`
-      : credit == null ? 'Soldul SMSLink nu a fost citit încă' : 'Soldul SMSLink nu a mai fost citit de peste 36 de ore'
+    ? `Sold SMSLink sub prag (${st.prag}): ${sold}${veche || err || oprita ? ' — neactualizat' : ''}`
+    : neconf && err ? 'SMS: furnizorul nu e configurat (SMS_FURNIZOR) — soldul SMSLink nu se citește'
+      : err ? `Soldul SMSLink nu s-a putut citi (${st.eroare || 'eroare'})`
+        : oprita ? 'Monitorizarea soldului SMSLink e oprită (niciun apel sms-sold de peste 36 de ore)'
+          : credit == null ? 'Soldul SMSLink nu a fost citit încă' : 'Soldul SMSLink nu a mai fost citit de peste 36 de ore'
   const impact = [
     sub && 'Reîncarcă creditul în contul SMSLink. La credit 0 trimiterea se oprește automat (eroarea 8).',
-    err && `Ultima încercare a eșuat (${st.eroare || 'eroare'}${st.eroare_la ? `, ${fmt(st.eroare_la)}` : ''}): verifică conexiunea ERP-PROD (connection_id / parolă / IP) și secretele SMSLINK_* din Edge Secrets.`,
-    veche && 'Nicio citire reușită în ultimele 36 de ore: verifică jobul sms_sold_zilnic (05:10 UTC = 07:10 iarna / 08:10 vara, ora României) și funcția edge sms-sold.',
+    err && neconf && 'SMS_FURNIZOR lipsește sau are o valoare necunoscută în Edge Secrets (așteptat: smslink sau simulator).',
+    err && !neconf && `Ultima încercare a eșuat (${st.eroare || 'eroare'}${st.eroare_la ? `, ${fmt(st.eroare_la)}` : ''}): verifică conexiunea ERP-PROD (connection_id / parolă / IP) și secretele SMSLINK_* din Edge Secrets.`,
+    (veche || oprita) && `${oprita ? `Ultimul apel sms-sold: ${st.furnizor_la ? fmt(st.furnizor_la) : '—'}${st.furnizor_ultim ? ` (${st.furnizor_ultim})` : ''}. ` : ''}Nicio citire reușită în ultimele 36 de ore: verifică jobul sms_sold_zilnic (05:10 UTC = 07:10 iarna / 08:10 vara, ora României) și funcția edge sms-sold.`,
   ].filter(Boolean).join(' ')
+  // r3/r4 (Copilot P3-01): fără eroare nouă, momentul = max(furnizor_la, citit_la) + 36 h (apariția problemei), nu ultima citire
+  const repere = [st.furnizor_la, st.citit_la].filter(Boolean).map(v => Date.parse(v)).filter(Number.isFinite)
+  const timestamp = err ? (st.eroare_la || null)
+    : (veche || oprita) && repere.length ? new Date(Math.max(...repere) + 36 * 3600 * 1000).toISOString()
+      : (st.citit_la || st.eroare_la || null)
   return [alerta('sms_sold', 'sold', {
     title: titlu,
     reference: sold ? sold[0].toUpperCase() + sold.slice(1) : 'Nicio citire reușită încă',
     priority: sub ? (credit === 0 ? 'critical' : 'week') : 'missing',
-    // r3 (Copilot r2 P3-01): fără citire de 36 h și fără eroare nouă (cronul nu mai rulează) = momentul apariției problemei,
-    // citit_la + 36 h, nu momentul ultimei citiri
-    timestamp: err ? (st.eroare_la || null)
-      : veche && st.citit_la ? new Date(Date.parse(st.citit_la) + 36 * 3600 * 1000).toISOString()
-        : (st.citit_la || st.eroare_la || null),
+    timestamp,
     owner: 'Owner · cont SMSLink',
     impact,
     reason: 'Calculat în BD (fn_sold_sms_stare) din ultima citire mode=Credit a cronului zilnic. Nu se trimite nimic automat.',

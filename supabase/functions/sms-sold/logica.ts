@@ -68,8 +68,10 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     console.log('sms-sold', { apelant, furnizor: 'simulator' })
     return json(200, { ok: true, apelant, furnizor: 'simulator', sold: null })
   }
-  const args = s.ok ? { p_credit: s.credit, p_eroare: null, p_inceput: inceput, p_furnizor: 'smslink' }
-    : { p_credit: null, p_eroare: s.eroare, p_inceput: inceput, p_furnizor: 'smslink' }
+  // r4 (Copilot r3 P3-01): SMS_FURNIZOR lipsă / necunoscut NU se înregistrează ca SMSLink, ci ca furnizor 'necunoscut' (eroare de configurare)
+  const furnizor = !s.ok && s.eroare === 'furnizor_neconfigurat' ? 'necunoscut' : 'smslink'
+  const args = s.ok ? { p_credit: s.credit, p_eroare: null, p_inceput: inceput, p_furnizor: furnizor }
+    : { p_credit: null, p_eroare: s.eroare, p_inceput: inceput, p_furnizor: furnizor }
   const { data, error } = await deps.sb.rpc('fn_sold_sms_inregistreaza', args)
   if (error) {
     console.error('sms-sold: sold nescris', { cod: error.code ?? null })
@@ -78,5 +80,5 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const subPrag = typeof data?.sub_prag === 'boolean' ? data.sub_prag : null
   const scris = data?.scris === true
   console.log('sms-sold', { apelant, ok: s.ok, eroare: s.ok ? null : s.eroare, sub_prag: subPrag, scris })
-  return json(200, { ok: s.ok, apelant, furnizor: 'smslink', ...(s.ok ? { credit: s.credit } : { eroare: s.eroare }), scris, prag: data?.prag ?? null, sub_prag: subPrag })
+  return json(200, { ok: s.ok, apelant, furnizor, ...(s.ok ? { credit: s.credit } : { eroare: s.eroare }), scris, prag: data?.prag ?? null, sub_prag: subPrag })
 }

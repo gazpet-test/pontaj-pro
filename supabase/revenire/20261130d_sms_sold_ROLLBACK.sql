@@ -40,7 +40,7 @@ BEGIN
        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sold!_sms!_%' ESCAPE '!'),
     (SELECT string_agg(format('%s:%s:%s:%s:%s', j.jobname, j.schedule, md5(replace(j.command, chr(13), '')), j.active, j.username), ';' ORDER BY j.jobid)
        FROM cron.job j WHERE j.jobname = 'sms_sold_zilnic'))) INTO v_amprenta;
-  IF v_amprenta IS DISTINCT FROM '33cbff5fea50460503f200095b4eb370' THEN
+  IF v_amprenta IS DISTINCT FROM 'ca6bea51bb735c76c1f8b32733a07534' THEN
     RAISE EXCEPTION '20261130d revenire: obiectele nu mai sunt exact cele din 20261130d (amprenta %)', v_amprenta;
   END IF;
   IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'fn!_sold!_sms!_%' ESCAPE '!') <> 4

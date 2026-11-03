@@ -6,7 +6,7 @@
 --   ROLLBACK;
 -- Identitati reale prin helperii pg_temp, cu JWT-ul fiecarui cont: own = un owner (profiles.is_owner), alt = un cont non-owner;
 -- plus anon si service_role. Date: niciuna reala scrisa (doar randul sms_sold din tranzactia anulata); niciun furnizor apelat,
--- nicio cerere pg_net (jobul doar se programeaza, in tranzactia anulata). NOTICE-uri asteptate: TEST1 OK … TEST10 OK.
+-- nicio cerere pg_net (jobul doar se programeaza, in tranzactia anulata). NOTICE-uri asteptate: TEST1 OK … TEST11 OK.
 -- now() e acelasi in toata tranzactia: momentele de start ale citirilor sunt pg_temp.s3d_t(k) = now() - 10 min + k secunde.
 CREATE FUNCTION pg_temp.s3d_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
@@ -210,6 +210,41 @@ BEGIN
   RAISE NOTICE 'TEST7 OK citirea mai veche de 36 h = alerta (vazuta de owner prin fn_sold_sms_citeste si v_sms_sold)';
 END $t$;
 SELECT pg_temp.s3d_ca(NULL, 'postgres');
+
+-- ── TEST11 (r4): simulatorul suprima alertele DOAR cu furnizor_la proaspat; furnizorul necunoscut = eroare de configurare, cu alerta ─
+DO $t$
+DECLARE v jsonb;
+BEGIN
+  -- simulator proaspat (1 h) = fara alerta, chiar daca citirea buna e veche si sub prag
+  UPDATE public.sms_sold SET credit = 100, citit_la = now() - interval '5 days', eroare = NULL, eroare_la = NULL,
+         furnizor_ultim = 'simulator', furnizor_la = now() - interval '1 hour' WHERE id;
+  v := public.fn_sold_sms_stare();
+  IF NOT (v->>'simulator')::boolean OR (v->>'alerta')::boolean OR (v->>'monitorizare_oprita')::boolean THEN RAISE EXCEPTION 'TEST11 FAIL: simulator proaspat %', v; END IF;
+  -- simulator vechi de 37 h (cronul oprit) = alerta normala: monitorizare oprita + citire veche + sub prag pe ultimul sold cunoscut
+  UPDATE public.sms_sold SET furnizor_la = now() - interval '37 hours' WHERE id;
+  v := public.fn_sold_sms_stare();
+  IF (v->>'simulator')::boolean OR NOT (v->>'alerta')::boolean OR NOT (v->>'monitorizare_oprita')::boolean OR NOT (v->>'citire_veche')::boolean THEN
+    RAISE EXCEPTION 'TEST11 FAIL: simulator vechi %', v;
+  END IF;
+  -- simulator, apoi configuratia trece pe smslink fara niciun apel reusit: la 35 h inca suprimat, la 36 h + 1 min alerta
+  UPDATE public.sms_sold SET furnizor_la = now() - interval '35 hours' WHERE id;
+  IF (public.fn_sold_sms_stare()->>'alerta')::boolean THEN RAISE EXCEPTION 'TEST11 FAIL: 35 h'; END IF;
+  UPDATE public.sms_sold SET furnizor_la = now() - interval '36 hours 1 minute' WHERE id;
+  v := public.fn_sold_sms_stare();
+  IF NOT (v->>'alerta')::boolean OR (v->>'simulator')::boolean THEN RAISE EXCEPTION 'TEST11 FAIL: 36 h fara apel %', v; END IF;
+  -- furnizor necunoscut: doar eroarea furnizor_neconfigurat, fara sold; alerta vizibila
+  IF NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(5, NULL, now(), ''necunoscut'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, ''smslink_7'', now(), ''necunoscut'')', '22023')
+     OR NOT pg_temp.s3d_refuza('SELECT public.fn_sold_sms_inregistreaza(NULL, NULL, now(), ''necunoscut'')', '22023') THEN
+    RAISE EXCEPTION 'TEST11 FAIL: validarea furnizorului necunoscut';
+  END IF;
+  v := public.fn_sold_sms_inregistreaza(NULL, 'furnizor_neconfigurat', pg_temp.s3d_t(60), 'necunoscut');
+  IF v->>'furnizor_ultim' IS DISTINCT FROM 'necunoscut' OR NOT (v->>'furnizor_neconfigurat')::boolean OR (v->>'simulator')::boolean
+     OR NOT (v->>'eroare_dupa_citire')::boolean OR NOT (v->>'alerta')::boolean OR (v->>'credit')::integer <> 100 THEN
+    RAISE EXCEPTION 'TEST11 FAIL: furnizor necunoscut %', v;
+  END IF;
+  RAISE NOTICE 'TEST11 OK simulator proaspat = fara alerta; simulator vechi 37 h / simulator apoi smslink fara apel peste 36 h = alerta; furnizor necunoscut = eroare de configurare cu alerta';
+END $t$;
 
 -- ── TEST8: revenirea scoate tot (job, vedere, functii, tabela), apoi migrarea se re-aplica in aceeasi tranzactie ──────────────
 SELECT set_config('gazpet.revenire_20261130d', 'SMS_SOLD_SCOS:' || txid_current(), true) IS NOT NULL AS garda_revenire;
