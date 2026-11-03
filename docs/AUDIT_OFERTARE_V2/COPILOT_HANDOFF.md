@@ -13,6 +13,11 @@
 | 5 | 27.10 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6ae06a9c-de74-83eb-a8f5-b09a3c760120 | activă după instalarea Paw v4.5 — „Copilot - Chat si module - 27.10” (chat, Izometrie, OCR, Clădire; înlocuiește conv. 2) |
 | 8 | 03.11 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6ae9964e-9f20-83ed-b673-bc6416a74d93 | „Copilot - chat - 03.11” — înlocuiește conv. 5 (6ae06a9c, **plină** 03.11 dimineața: compozitorul dispare, trimiterea pică cu exit=1). Test de canal OK. **NU e încă în lista `cop` a lansatorului**: certificarea cdx fixează hash-ul `run_paw.ps1`, deci adăugarea cere o fereastră de mentenanță (admin + recertificare cdx) cu Răzvan. Până atunci: porți Jakarinos + Gemini, cu acordul lui Răzvan pe caz (03.11, migrarea 20261129h). |
 | 6 | 27.10 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6ae06a54-05c8-83eb-b2ee-97825daaa792 | activă după instalarea Paw v4.5 — „Copilot - Juridic - 27.10” (Cercetare juridic-normativă) |
+| R1 | 03.11 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6ae9a74f-75d8-83ed-ab2f-81034f1fce5c | REZERVĂ — „Copilot - rezerva 1 - 03.11” (test de canal OK). Intră în lista `cop` a lansatorului cu Paw v4.6.1 (PR #954); la folosire se redenumește „Copilot - <rol> - ZZ.LL” |
+| R2 | 03.11 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6ae9a76d-297c-83eb-ac6e-176488345d45 | REZERVĂ — „Copilot - rezerva 2 - 03.11” (test de canal OK), idem |
+| R3 | 03.11 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6ae9a789-d8ec-83eb-b470-3ca0fda3e306 | REZERVĂ — „Copilot - rezerva 3 - 03.11” (test de canal OK), idem |
+
+**Rezerve (Răzvan 03.11.2026, măsura A):** 3 conversații deschise dinainte, puse în lista certificată a lansatorului, ca rotirea să nu mai ceară reinstalare + recertificare cdx. La rotire: se ia prima rezervă liberă, se redenumește, pack integral. Când rămâne o singură rezervă, se pregătesc altele la următoarea instalare. Măsura B (v4.7, propunere): regulă de titlu în loc de listă fixă — `docs/paw/PROPUNERE_V47_COPILOT_TITLU.md`.
 
 **Handoff-ul final din conversația 1** (scris de Copilot, text integral): `COPILOT_HANDOFF_CONV1_FINAL.md` — trimis integral în conversația 2 pe 29.09. Ce avea în plus e integrat mai jos.
 
