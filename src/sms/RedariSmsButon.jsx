@@ -13,20 +13,22 @@ import { useEffect, useRef, useState } from 'react'
 import { G, S, Modal } from '../redari/ui/comune.jsx'
 import { smsApi, mesajEroare } from './smsApi.js'
 import { motivBlocareRedari, fmtEur, zileLaPlafon } from './smsLogica.js'
-import { completeazaSablon, aziBucuresti } from './sablonRedari.js'
+import { completeazaSablon, aziBucuresti, oraBucuresti } from './sablonRedari.js'
 import { MAX_GSM } from '../../supabase/functions/_shared/smsText.mjs'
 
 /** Ce blochează crearea după previzualizare (null = se poate crea). */
 export function motivBlocareCreare(sablon, preview) {
   if (!preview) return 'Previzualizează întâi'
   if (preview.text_final !== sablon?.text) return 'Textul din BD diferă de cel afișat (setările UAT / proiectului s-au schimbat între timp): închide și redeschide fereastra'
-  if (preview.lot_activ_uat) return 'UAT-ul are deja un lot activ (draft / aprobat / în trimitere): anulează-l sau așteaptă-l din 📱 SMS → Istoric'
+  if (preview.lot_activ_uat) return 'UAT-ul are deja un lot activ (draft / aprobat / în trimitere / mesaje în curs): anulează-l sau așteaptă-l din 📱 SMS → Istoric'
+  if (preview.campanie_existenta) return 'Pentru acest UAT și această zi de sesiune există deja un lot (neanulat): nu se trimite de două ori'
+  if (!preview.set_hash) return 'Previzualizarea nu a fixat lista de destinatari: previzualizează din nou'
   if (!(Number(preview.nr_destinatari) > 0)) return 'Niciun proprietar de anunțat în acest UAT'
   return null
 }
 
-// aziInitial și previewInitial: doar pentru teste (ziua fixă, randare fără rețea)
-export function RedariSmsFereastra({ proiect, uats, uatInitial, onClose, show, aziInitial = null, previewInitial = null }) {
+// aziInitial / oraInitial și previewInitial: doar pentru teste (momentul fix, randare fără rețea)
+export function RedariSmsFereastra({ proiect, uats, uatInitial, onClose, show, aziInitial = null, oraInitial = null, previewInitial = null }) {
   const [uatId, setUatId] = useState(uatInitial || '')
   const [preview, setPreview] = useState(previewInitial)
   const [lucru, setLucru] = useState(false)
@@ -36,7 +38,8 @@ export function RedariSmsFereastra({ proiect, uats, uatInitial, onClose, show, a
   const gen = useRef(0)
   const primaRandare = useRef(true)
   const uat = (uats || []).find(u => u.id === uatId) || null
-  const sablon = uat ? completeazaSablon({ uat, proiect, azi: aziInitial || aziBucuresti() }) : null
+  // momentul de acum la București: o sesiune de azi deja începută nu se mai alege (aceeași regulă ca BD-ul)
+  const sablon = uat ? completeazaSablon({ uat, proiect, azi: aziInitial || aziBucuresti(), oraAcum: oraInitial || (aziInitial ? '00:00' : oraBucuresti()) }) : null
   useEffect(() => {
     if (primaRandare.current) { primaRandare.current = false; return }
     gen.current += 1; setPreview(null); setEroare(''); setLucru(false)
@@ -60,7 +63,7 @@ export function RedariSmsFereastra({ proiect, uats, uatInitial, onClose, show, a
     const g = ++gen.current
     setLucru(true); setEroare('')
     try {
-      const j = await smsApi.creeazaRedariSablon({ proiectId: proiect.id, uatId, textAfisat: preview.text_final, preview: false })
+      const j = await smsApi.creeazaRedariSablon({ proiectId: proiect.id, uatId, textAfisat: preview.text_final, setHash: preview.set_hash, preview: false })
       show?.(`Lot Redări creat (draft, ${j.nr_destinatari} destinatari). Aprobarea: 📱 SMS → Istoric.`, 'success')
       const lista = await smsApi.destinatariLot(j.lot_id)
       if (g === gen.current) setCreat(lista)

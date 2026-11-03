@@ -34,16 +34,16 @@ describe('smsApi — istoricul și mesajele prin RPC', () => {
 describe('smsApi — lotul Redări din șablon (20261130c)', () => {
   it('previzualizarea: RPC-ul șablonului, fără text (îl face BD-ul), UAT obligatoriu trimis', async () => {
     await smsApi.creeazaRedariSablon({ proiectId: 'p1', uatId: 'u1', textAfisat: 'ignorat', preview: true })
-    expect(apeluri).toContainEqual(['rpc', 'fn_sms_lot_redari_sablon_creeaza', { p_proiect_id: 'p1', p_uat_id: 'u1', p_text_afisat: null, p_doar_preview: true }])
+    expect(apeluri).toContainEqual(['rpc', 'fn_sms_lot_redari_sablon_creeaza', { p_proiect_id: 'p1', p_uat_id: 'u1', p_text_afisat: null, p_set_hash: null, p_doar_preview: true }])
   })
-  it('crearea: trimite textul afișat, ca BD-ul să refuze dacă s-a schimbat', async () => {
-    const j = await smsApi.creeazaRedariSablon({ proiectId: 'p1', uatId: 'u1', textAfisat: 'Gazpet pt Transgaz: ...', preview: false })
+  it('crearea: trimite textul afișat și set_hash-ul listei, ca BD-ul să refuze dacă s-a schimbat', async () => {
+    const j = await smsApi.creeazaRedariSablon({ proiectId: 'p1', uatId: 'u1', textAfisat: 'Gazpet pt Transgaz: ...', setHash: 'h1', preview: false })
     expect(j.preview).toBe(false)
-    expect(apeluri).toContainEqual(['rpc', 'fn_sms_lot_redari_sablon_creeaza', { p_proiect_id: 'p1', p_uat_id: 'u1', p_text_afisat: 'Gazpet pt Transgaz: ...', p_doar_preview: false }])
+    expect(apeluri).toContainEqual(['rpc', 'fn_sms_lot_redari_sablon_creeaza', { p_proiect_id: 'p1', p_uat_id: 'u1', p_text_afisat: 'Gazpet pt Transgaz: ...', p_set_hash: 'h1', p_doar_preview: false }])
   })
   it('fără preview explicit = previzualizare (fail-closed); textul liber nu mai există în API', async () => {
     await smsApi.creeazaRedariSablon({ proiectId: 'p1', uatId: 'u2' })
-    expect(apeluri).toContainEqual(['rpc', 'fn_sms_lot_redari_sablon_creeaza', { p_proiect_id: 'p1', p_uat_id: 'u2', p_text_afisat: null, p_doar_preview: true }])
+    expect(apeluri).toContainEqual(['rpc', 'fn_sms_lot_redari_sablon_creeaza', { p_proiect_id: 'p1', p_uat_id: 'u2', p_text_afisat: null, p_set_hash: null, p_doar_preview: true }])
     expect(smsApi.creeazaRedari).toBeUndefined()
     expect(apeluri.some(([, fn]) => fn === 'fn_sms_lot_redari_creeaza')).toBe(false)
   })

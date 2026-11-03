@@ -13,6 +13,7 @@ const RX_DATA = /^\d{4}-\d{2}-\d{2}$/
 const RX_ORA = /^(2[0-3]|[01]?[0-9])[:.]([0-5][0-9])([^0-9]|$)/
 // telefonul de contact: doar cifre, spații, + ( ) . / -, între 6 și 15 cifre
 const RX_TEL = /^[-0-9+ ()./]{6,40}$/
+const RX_ORA_ACUM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/
 
 const faraSpatiiCapete = s => String(s ?? '').replace(/^[ \t]+|[ \t]+$/g, '')
 
@@ -21,6 +22,13 @@ export function aziBucuresti(ms = Date.now()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' })
     .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
   return `${p.year}-${p.month}-${p.day}`
+}
+
+/** Ora de acum la București, 'HH:MM' (oglinda now() AT TIME ZONE 'Europe/Bucharest', la minut). */
+export function oraBucuresti(ms = Date.now()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return `${p.hour}:${p.minute}`
 }
 
 /** Ora de început din „09:00 – 16:00” → '09:00'; fără oră validă la început → null. */
@@ -37,37 +45,42 @@ export function telefonContact(t) {
   return cifre >= 6 && cifre <= 15 ? s : null
 }
 
-/** Prima zi de sesiune de azi încolo (ziua de azi contează), în ordinea datelor: { nr: 1..3, zi: 'AAAA-LL-ZZ' } sau null. */
-export function ziSesiune(uat, azi) {
-  const zile = [1, 2, 3].map(nr => ({ nr, zi: faraSpatiiCapete(uat?.[`sesiune_zi${nr}`]) }))
+/**
+ * Prima zi de sesiune care NU a început (ora României), în ordinea datelor: { nr: 1..3, zi: 'AAAA-LL-ZZ', ora: 'HH:MM' | null } sau null.
+ * O zi de azi cu ora de început <= oraAcum a început deja → următoarea; o zi de azi fără oră de început se alege (lipsă program, blocat).
+ * Oglinda buclei din fn_sms_redari_sablon_calc. oraAcum lipsă = '00:00'.
+ */
+export function ziSesiune(uat, azi, oraAcum = '00:00') {
+  const acum = RX_ORA_ACUM.test(String(oraAcum ?? '')) ? oraAcum : '00:00'
+  const zile = [1, 2, 3].map(nr => ({ nr, zi: faraSpatiiCapete(uat?.[`sesiune_zi${nr}`]), ora: oraStart(uat?.[`program_zi${nr}`]) }))
     .filter(z => RX_DATA.test(z.zi) && z.zi >= azi)
     .sort((a, b) => (a.zi < b.zi ? -1 : a.zi > b.zi ? 1 : a.nr - b.nr))
-  return zile[0] || null
+  return zile.find(z => !(z.zi === azi && z.ora && z.ora <= acum)) || null
 }
 
 const zzll = zi => `${zi.slice(8, 10)}.${zi.slice(5, 7)}`
 
 export const MESAJ_LIPSA = {
   uat_nume: 'numele UAT-ului (Redări → UAT → Setări UAT)',
-  zi_sesiune: 'o zi de sesiune de azi încolo (Ziua 1 / 2 / 3 în Setări UAT)',
+  zi_sesiune: 'o zi de sesiune care nu a început încă (Ziua 1 / 2 / 3 în Setări UAT)',
   program_zi: 'ora de început (HH:MM) în programul zilei de sesiune (Setări UAT)',
   telefon_contact: 'telefonul de contact Gazpet al proiectului (Setări proiect → Contact pe convocări)',
 }
 
 /**
- * completeazaSablon({ uat, proiect, azi }) → { ok, text, lungime, ramase, lipsuri: [{ cod, mesaj }], motiv, zi, ziNr, ora }
- *  - {COMUNA} = uat.nume; {ZI} = prima zi de sesiune >= azi (ZZ.LL); {ORA} = începutul programului acelei zile; {TEL} = proiect.contact_telefon
+ * completeazaSablon({ uat, proiect, azi, oraAcum }) → { ok, text, lungime, ramase, lipsuri: [{ cod, mesaj }], motiv, zi, ziNr, ora }
+ *  - {COMUNA} = uat.nume; {ZI} = prima zi de sesiune care nu a început la azi + oraAcum (ZZ.LL); {ORA} = începutul programului acelei zile;
+ *    {TEL} = proiect.contact_telefon
  *  - lipsește ceva → ok = false, text = null, lipsuri spune exact ce
  *  - textul trece prin verificaText (GSM-7, fără diacritice, max 160): peste 160 → ok = false, motiv 'prea_lung', lungimea reală
  */
-export function completeazaSablon({ uat, proiect, azi }) {
+export function completeazaSablon({ uat, proiect, azi, oraAcum = '00:00' }) {
   const lipsuri = []
   const comuna = faraSpatiiCapete(uat?.nume)
   if (!comuna) lipsuri.push('uat_nume')
-  const z = RX_DATA.test(String(azi ?? '')) ? ziSesiune(uat, azi) : null
+  const z = RX_DATA.test(String(azi ?? '')) ? ziSesiune(uat, azi, oraAcum) : null
   if (!z) lipsuri.push('zi_sesiune')
-  const program = z ? uat?.[`program_zi${z.nr}`] : null
-  const ora = z ? oraStart(program) : null
+  const ora = z ? z.ora : null
   if (z && !ora) lipsuri.push('program_zi')
   const tel = telefonContact(proiect?.contact_telefon)
   if (!tel) lipsuri.push('telefon_contact')

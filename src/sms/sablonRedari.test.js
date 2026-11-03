@@ -1,14 +1,15 @@
-// Șablonul SMS Redări (20261130c). Textele așteptate sunt scrise de mână (sursă independentă de cod); aceleași cazuri (P1–P12) sunt
+// Șablonul SMS Redări (20261130c). Textele așteptate sunt scrise de mână (sursă independentă de cod); aceleași cazuri (P1–P15) sunt
 // verificate pe oglinda SQL fn_sms_redari_sablon_calc în supabase/tests/20261130c_sms_redari_sablon_dryrun.sql (TEST2). Date fictive.
 import { describe, expect, it } from 'vitest'
-import { SABLON_REDARI, completeazaSablon, oraStart, telefonContact, ziSesiune, aziBucuresti } from './sablonRedari.js'
+import { SABLON_REDARI, completeazaSablon, oraStart, telefonContact, ziSesiune, aziBucuresti, oraBucuresti } from './sablonRedari.js'
 
 const AZI = '2026-11-10'
+const ORA = '08:00'
 const T = (comuna, zi, ora, tel) =>
   `Gazpet pt Transgaz: sesiune redare teren la Primaria ${comuna}, ${zi} ora ${ora}. Raspuns si online, cu QR-ul din scrisoare. Tel ${tel}`
 const LUNG = 'Comuna Foarte Lunga De Test Fictiv Cu Nume Compus Din Multe Cuvinte'
 
-// [cod, uat, proiect, așteptat: text | lipsuri | { prea_lung: text }]
+// [cod, uat, proiect, așteptat: text | lipsuri | { prea_lung: text }, oraAcum (implicit 08:00)]
 export const CAZURI = [
   ['P1', { nume: 'Prunișor', sesiune_zi1: '2026-11-12', program_zi1: '09:00 – 16:00' }, { contact_telefon: '0700 000 111' },
     T('Prunisor', '12.11', '09:00', '0700 000 111')],
@@ -28,15 +29,22 @@ export const CAZURI = [
   ['P11', { nume: 'Test', sesiune_zi1: '2026-11-12', program_zi1: '  9:05 – 12:00' }, { contact_telefon: '0700000121' },
     T('Test', '12.11', '09:05', '0700000121')],
   ['P12', { nume: 'Test', sesiune_zi1: '2026-11-12', program_zi1: '9 - 16' }, { contact_telefon: '0700000122' }, ['program_zi']],
+  // r2 (P2): sesiunea de azi deja începută (10:00 la 10:00) → ziua următoare; încă neîncepută (10:00 la 09:59) → azi; azi fără oră → lipsă
+  ['P13', { nume: 'Test', sesiune_zi1: '2026-11-10', program_zi1: '10:00 - 16:00', sesiune_zi2: '2026-11-11', program_zi2: '08:30' }, { contact_telefon: '0700000123' },
+    T('Test', '11.11', '08:30', '0700000123'), '10:00'],
+  ['P14', { nume: 'Test', sesiune_zi1: '2026-11-10', program_zi1: '10:00 - 16:00', sesiune_zi2: '2026-11-11', program_zi2: '08:30' }, { contact_telefon: '0700000124' },
+    T('Test', '10.11', '10:00', '0700000124'), '09:59'],
+  ['P15', { nume: 'Test', sesiune_zi1: '2026-11-10', program_zi1: null, sesiune_zi2: '2026-11-11', program_zi2: '08:30' }, { contact_telefon: '0700000125' },
+    ['program_zi'], '23:00'],
 ]
 
 describe('șablonul SMS Redări — completarea', () => {
   it('constanta unică (textul provizoriu, înaintea formulării Juridicului)', () => {
     expect(SABLON_REDARI).toBe('Gazpet pt Transgaz: sesiune redare teren la Primaria {COMUNA}, {ZI} ora {ORA}. Raspuns si online, cu QR-ul din scrisoare. Tel {TEL}')
   })
-  for (const [cod, uat, proiect, astept] of CAZURI) {
+  for (const [cod, uat, proiect, astept, oraAcum = ORA] of CAZURI) {
     it(`${cod}`, () => {
-      const r = completeazaSablon({ uat, proiect, azi: AZI })
+      const r = completeazaSablon({ uat, proiect, azi: AZI, oraAcum })
       if (typeof astept === 'string') {
         expect(r).toMatchObject({ ok: true, text: astept, lungime: astept.length, lipsuri: [], motiv: null })
         expect(astept.length).toBeLessThanOrEqual(160)
@@ -52,9 +60,11 @@ describe('șablonul SMS Redări — completarea', () => {
       }
     })
   }
-  it('ziua 1 trecută → următoarea zi de sesiune viitoare; ziua de azi contează', () => {
-    expect(ziSesiune({ sesiune_zi1: '2026-11-09', sesiune_zi2: '2026-11-11', sesiune_zi3: '2026-11-12' }, AZI)).toEqual({ nr: 2, zi: '2026-11-11' })
-    expect(ziSesiune({ sesiune_zi1: '2026-11-10' }, AZI)).toEqual({ nr: 1, zi: '2026-11-10' })
+  it('ziua 1 trecută → următoarea zi de sesiune viitoare; ziua de azi contează doar până la ora de început', () => {
+    expect(ziSesiune({ sesiune_zi1: '2026-11-09', sesiune_zi2: '2026-11-11', sesiune_zi3: '2026-11-12' }, AZI)).toEqual({ nr: 2, zi: '2026-11-11', ora: null })
+    expect(ziSesiune({ sesiune_zi1: '2026-11-10', program_zi1: '09:00' }, AZI, '08:59')).toEqual({ nr: 1, zi: '2026-11-10', ora: '09:00' })
+    expect(ziSesiune({ sesiune_zi1: '2026-11-10', program_zi1: '09:00' }, AZI, '09:00')).toBeNull()
+    expect(ziSesiune({ sesiune_zi1: '2026-11-10' }, AZI, '23:00')).toEqual({ nr: 1, zi: '2026-11-10', ora: null })
     expect(ziSesiune({ sesiune_zi1: '2026-11-09' }, AZI)).toBeNull()
   })
   it('lipsa programului spune ziua aleasă', () => {
@@ -78,5 +88,7 @@ describe('șablonul SMS Redări — completarea', () => {
   it('azi la București, nu UTC (22:30 UTC pe 09.11 = 10.11 la București)', () => {
     expect(aziBucuresti(Date.UTC(2026, 10, 9, 22, 30))).toBe('2026-11-10')
     expect(aziBucuresti(Date.UTC(2026, 10, 9, 21, 30))).toBe('2026-11-09')
+    expect(oraBucuresti(Date.UTC(2026, 10, 9, 22, 30))).toBe('00:30')
+    expect(oraBucuresti(Date.UTC(2026, 6, 1, 6, 5))).toBe('09:05')
   })
 })

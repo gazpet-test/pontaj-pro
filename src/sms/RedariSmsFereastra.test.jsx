@@ -34,6 +34,13 @@ describe('RedariSmsFereastra — șablonul fix', () => {
     expect(butonDezactivat(html, '🔍 Previzualizează')).toBe(false)
     expect(butonDezactivat(html, '＋ Creează lot')).toBe(true)
   })
+  it('r2: sesiunea de azi deja începută (09:00 la 10:00) → textul ia ziua următoare; înainte de 09:00 → azi', () => {
+    const u = { ...uatOk, sesiune_zi1: '2026-11-10', program_zi1: '09:00 - 12:00' }
+    const dupa = renderToStaticMarkup(<RedariSmsFereastra proiect={proiect} uats={[u]} uatInitial="u1" aziInitial="2026-11-10" oraInitial="10:00" onClose={() => {}} />)
+    expect(dupa).toContain(TEXT)
+    const inainte = renderToStaticMarkup(<RedariSmsFereastra proiect={proiect} uats={[u]} uatInitial="u1" aziInitial="2026-11-10" oraInitial="08:59" onClose={() => {}} />)
+    expect(inainte).toContain('Primaria Testeni, 10.11 ora 09:00.')
+  })
   it('câmp lipsă: spune exact ce lipsește, cu trimitere la Setări UAT; nimic nu se poate crea', () => {
     const html = randeaza({ uatInitial: 'u2' })
     expect(html).toContain('Nu se poate crea lotul. Lipsește:')
@@ -58,7 +65,7 @@ describe('RedariSmsFereastra — șablonul fix', () => {
   })
   it('previzualizarea: câți primesc, câți sunt excluși și de ce, costul; crearea activă', () => {
     const preview = { text_final: TEXT, nr_destinatari: 2, candidati: 9, excluse_a_raspuns: 2, excluse_pv_semnat: 2, excluse_fara_mobil: 1, excluse_optout: 1,
-      excluse_duplicat: 1, cost_estimat_eur: 0.098, depaseste_plafon_zi: false, lot_activ_uat: null }
+      excluse_duplicat: 1, cost_estimat_eur: 0.098, depaseste_plafon_zi: false, lot_activ_uat: null, campanie_existenta: null, set_hash: 'h' }
     const html = randeaza({ uatInitial: 'u1', previewInitial: preview })
     for (const t of ['<b>2</b> proprietari primesc SMS-ul', 'Din 9 proprietari convocați în UAT', '2 au răspuns', '2 cu PV semnat', '1 fără mobil RO', '1 opt-out', '1 telefon dublat', 'Textul trimis (din BD):'])
       expect(html).toContain(t)
@@ -66,11 +73,14 @@ describe('RedariSmsFereastra — șablonul fix', () => {
   })
   it('blocarea creării: text BD diferit, lot activ pe UAT, zero destinatari', () => {
     const s = { ok: true, text: TEXT }
+    const p = { text_final: TEXT, nr_destinatari: 2, set_hash: 'h' }
     expect(motivBlocareCreare(s, null)).toBe('Previzualizează întâi')
-    expect(motivBlocareCreare(s, { text_final: TEXT + 'x', nr_destinatari: 2 })).toMatch(/diferă de cel afișat/)
-    expect(motivBlocareCreare(s, { text_final: TEXT, nr_destinatari: 2, lot_activ_uat: 'l1' })).toMatch(/lot activ/)
-    expect(motivBlocareCreare(s, { text_final: TEXT, nr_destinatari: 0 })).toMatch(/Niciun proprietar/)
-    expect(motivBlocareCreare(s, { text_final: TEXT, nr_destinatari: 2 })).toBeNull()
+    expect(motivBlocareCreare(s, { ...p, text_final: TEXT + 'x' })).toMatch(/diferă de cel afișat/)
+    expect(motivBlocareCreare(s, { ...p, lot_activ_uat: 'l1' })).toMatch(/lot activ/)
+    expect(motivBlocareCreare(s, { ...p, campanie_existenta: 'l0' })).toMatch(/această zi de sesiune există deja/)
+    expect(motivBlocareCreare(s, { ...p, set_hash: null })).toMatch(/nu a fixat lista/)
+    expect(motivBlocareCreare(s, { ...p, nr_destinatari: 0 })).toMatch(/Niciun proprietar/)
+    expect(motivBlocareCreare(s, p)).toBeNull()
     const html = randeaza({ uatInitial: 'u1', previewInitial: { text_final: TEXT, nr_destinatari: 3, candidati: 3, lot_activ_uat: 'l1' } })
     expect(html).toContain('UAT-ul are deja un lot activ')
     expect(butonDezactivat(html, '＋ Creează lot')).toBe(true)
