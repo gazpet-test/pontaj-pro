@@ -83,22 +83,24 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
     `link_informare_gdpr`. **Regula pe propoziție (r7)**: se scoate ORICE propoziție din `text_gdpr` care conține cuvântul
     „verso” (după normalizare: fără diacritice, litere mici, spații albe — inclusiv `\n`, `\r`, NBSP — comprimate), ex.
     „Informarea completă se află pe verso.”, „Pe verso găsiți informațiile complete …”, „Detalii pe verso.”. `text_gdpr` e
-    paragraful „Date personale”, deci orice mențiune a versoului de acolo se referă la informare. Propoziția = textul până la
-    `.` `!` `?` urmat de spațiu alb sau final (un rând nou fără punct nu o încheie); o abreviere („S.A.”) scurtează propoziția,
-    deci se scoate mai puțin, niciodată mai mult;
+    paragraful „Date personale”, deci orice mențiune a versoului de acolo se referă la informare. Propoziția se termină DOAR la
+    `.` `!` `?` URMAT de spațiu alb sau de finalul textului (r8): punctele din domenii („dataprotection.ro”) sau din abrevierile
+    lipite nu o încheie, iar un rând nou fără punct nu o încheie nici el;
   - `VERSO_INFORMARE_INCLUS = true` (îl comută #939, odată cu generarea versoului): marcajul devine „Informarea completă se află
     pe verso.”, adăugată la final dacă proiectul are `link_informare_gdpr` și textul n-o are deja (comparație normalizată, fără
     dublare).
-- **Regula STRICTĂ a adreselor web pe documentul completat (r7)** (`genereazaConvocator`, strict și la previzualizare;
-  constantele unice `URL_EXTERNE_PERMISE`, `DOMENII_PROPRII`, `MARCAJE_PROPRII` din `docx.js`):
-  - ORICE apariție de `://` sau `www.` (fără deosebire de majuscule) e un URL: tokenul (până la spațiu alb, paranteză, ghilimele)
-    se analizează cu `new URL(…)` (`www.` primește `http://`). Se acceptă DOAR gazda exact `dataprotection.ro` /
-    `www.dataprotection.ro` (ANSPDCP), fără utilizator, parolă sau port. Orice altceva e refuzat: IP-uri, `user@gazdă`,
-    alt domeniu, altă schemă, URL neanalizabil;
-  - fără prefix se caută doar domeniile și marcajele PROPRII: `gazpet.ro` și `vercel.app` cu subdomeniile lor, `pontaj-pro`,
-    calea de răspuns și cea de informare;
-  - adresele de e-mail (ex. `redari@gazpet.ro`) nu sunt adrese web și sunt permise;
-  - mesajul de eroare are doar partea DOCX și gazda găsită, fără text din document (PII);
+- **Regula LITERALĂ a adreselor web pe documentul completat (r8)** (`adresaWebNepermisa`, apelată de `genereazaConvocator`,
+  strict și la previzualizare; constantele unice `URL_EXTERNE_PERMISE`, `MARCAJE_PROPRII` din `docx.js`), în 3 pași:
+  1. se scot adresele de e-mail (partea locală și domeniul fără spații, `@`, `:` sau `/`): `redari@gazpet.ro`,
+     `redari@www.gazpet.ro`, `ion@www.dataprotection.ro` nu declanșează nimic;
+  2. se scot excepțiile permise, LITERAL și fără deosebire de majuscule: `https://www.dataprotection.ro`,
+     `http://www.dataprotection.ro`, `https://dataprotection.ro`, `www.dataprotection.ro` (ANSPDCP), nelipite în stânga de alt
+     text, urmate cel mult de `/` și o cale fără spații, `@` sau `:`, apoi de spațiu alb, final, paranteză / ghilimele sau
+     punctuație urmată de spațiu / final;
+  3. dacă în ce rămâne apare `://`, `www.` sau o adresă proprie (`gazpet.ro`, `vercel.app`, `pontaj-pro`, calea de răspuns,
+     calea de informare), documentul e refuzat. Fără analiză de URL și fără listă de terminații: orice altă formă (alt domeniu,
+     IP, port, utilizator, altă schemă precum `ftp://`) e refuzată;
+  - mesajul de eroare are doar partea DOCX și marcajul găsit (`gazpet.ro`, `://` …), fără text din document (PII);
   - părțile verificate, EXACT: `word/document.xml`, `word/header*.xml`, `word/footer*.xml`, `word/footnotes.xml`,
     `word/endnotes.xml`, `word/comments.xml` (cele care există). Pe fiecare se verifică TOATE textele: fluxul exterior cu
     casetele de text (`w:txbxContent`), `mc:Fallback` și `w:pict` scoase; fiecare casetă, fiecare `mc:Fallback` și fiecare
