@@ -8,7 +8,7 @@ BEGIN
      OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_red_plic_incearca_lock(uuid)'::regprocedure)) IS DISTINCT FROM 'af77d2e7c85bdea490f76b12eb18dff1'
      OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_red_plic_reguli()'::regprocedure)) IS DISTINCT FROM 'cda947fbd65187a73b7929b59c74f2fb'
      OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_red_plic_creeaza(uuid,uuid[])'::regprocedure)) IS DISTINCT FROM '3ecc79e23de600a3b29235abed0a5c1c'
-     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_red_lot_plicuire_creeaza(uuid,uuid[],date)'::regprocedure)) IS DISTINCT FROM '08b4f10e97fd3530a70bec56bcbaa954' THEN
+     OR md5((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_red_lot_plicuire_creeaza(uuid,uuid[],date)'::regprocedure)) IS DISTINCT FROM 'dcbf64c067838520d069c2e13fa7da4a' THEN
     RAISE EXCEPTION '20261129j revenire: functiile nu sunt cele din 29j';
   END IF;
 END $pre$;
@@ -217,8 +217,7 @@ BEGIN
   RETURN v_lot;
 END $fn$;
 
-REVOKE UPDATE ON public.red_plicuri FROM authenticated, service_role;
-GRANT UPDATE ON public.red_plicuri TO authenticated, service_role;
+-- Copilot 29j r2 P3-01: privilegiile pe coloane din 29j RAMAN (lot_id fara UPDATE pentru aplicatie); mentenanta postgres nu e afectata
 -- Copilot 29j r1 P2-03: FAIL-CLOSED — corpul din 29i al RPC-ului de lot (cu marca GUC) nu ramane expus aplicatiei, deci poarta 0e ramane verde;
 -- crearea loturilor de plicuire e indisponibila din aplicatie pana la o remediere noua (expedierea plicurilor deja in lot nu e afectata)
 REVOKE EXECUTE ON FUNCTION public.fn_red_lot_plicuire_creeaza(uuid, uuid[], date) FROM PUBLIC, anon, authenticated, service_role;

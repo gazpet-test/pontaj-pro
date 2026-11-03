@@ -213,6 +213,10 @@ CREATE OR REPLACE FUNCTION public.fn_red_lot_plicuire_creeaza(p_proiect_id uuid,
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp SET lock_timeout = '5s' AS $fn$
 DECLARE v_gasite integer; v_nr integer; v_lot public.red_loturi_plicuire;
 BEGIN
+  -- Jakarinos 29i r9 P2-02: protocolul (lock UAT + recitirea starii comise) presupune READ COMMITTED; alta izolare ar citi un snapshot vechi
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'redari: plicuirea si garzile plicurilor cer izolarea READ COMMITTED' USING ERRCODE = '0A000';
+  END IF;
   IF auth.uid() IS NULL OR coalesce(public.fn_red_nivel(), '') NOT IN ('admin', 'editor') THEN RAISE EXCEPTION 'redari: fara drept de plicuire' USING ERRCODE = '42501'; END IF;
   IF p_proiect_id IS NULL OR p_data IS NULL OR p_plicuri IS NULL OR cardinality(p_plicuri) = 0 OR cardinality(p_plicuri) > 2000 THEN
     RAISE EXCEPTION 'redari: lot invalid (1..2000 plicuri, data obligatorie)' USING ERRCODE = '22023';
