@@ -16,6 +16,7 @@
 -- r5 (NO-GO Copilot pe r3): numarul inghetat schimbat / sters / opt-out (TEST18), lot Redari vechi fara sablon (TEST19), fereastra 08-20 /
 -- consumul pe clock_timestamp (TEST20), raspuns pe un rand arhivat al persoanei (TEST21).
 -- r6 (NO-GO Jakarinos pe r5): un singur reper de timp pe apel, limitele zi / luna calculate o data (TEST22, aproape de miezul noptii).
+-- r7 (NO-GO Jakarinos pe r6): in fn_sms_rezerva reperul final v_acum vine dupa revalidare, iar dupa el nu se mai asteapta lock-uri (TEST22).
 CREATE FUNCTION pg_temp.s3c_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -904,6 +905,7 @@ SELECT pg_temp.s3c_ca(NULL, 'postgres');
 DO $t$
 DECLARE v_o oid; v_rez text := (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure);
   t1 timestamptz := '2026-11-30 23:59:59.95+02'; t2 timestamptz := '2026-12-01 00:00:00.5+02'; a1 record; a2 record; b1 record; b2 record;
+  v_p1 integer; v_fin integer; v_rest text;
   q1 integer; q2 integer; r1 integer; r2 integer; v_lot uuid;
 BEGIN
   -- prin constructie: ceasul doar in atribuiri; calculul pe moment dat nu citeste ceasul; rezervarea paseaza reperul ei
@@ -921,6 +923,18 @@ BEGIN
      OR strpos(v_rez, 'public.fn_sms_test_consum_zi_la(x.creat_de, v_acum)') = 0 OR strpos(v_rez, 'public.fn_sms_redari_lot_motiv_la(x, v_acum)') = 0
      OR strpos(v_rez, 'public.fn_sms_fereastra_externa(v_acum)') = 0 OR strpos(v_rez, 'fn_sms_consum()') > 0 OR v_rez ~ 'fn_sms_test_consum_zi[(]' THEN
     RAISE EXCEPTION 'TEST22 FAIL: rezervarea nu foloseste un singur reper';
+  END IF;
+  -- r7: ordinea lock-uri -> revalidare -> v_acum final -> verificari -> rezervare; dupa v_acum: niciun UPDATE de anulare, doar SKIP LOCKED
+  v_p1 := strpos(v_rez, 'v_acum := clock_timestamp();');
+  v_fin := v_p1 + strpos(substr(v_rez, v_p1 + 1), 'v_acum := clock_timestamp();');
+  v_rest := substr(v_rez, v_fin);
+  IF v_fin = v_p1 OR v_fin < strpos(v_rez, 'WHERE x.id = p_lot_id FOR UPDATE;') OR v_fin < strpos(v_rez, 'cod_eroare = ''optout''')
+     OR v_fin < strpos(v_rez, 'cod_eroare = ''ne_eligibil''') OR v_fin < strpos(v_rez, 'cod_eroare = ''duplicat_persoana''')
+     OR v_rest ~ 'SET stare = ''anulat''' OR strpos(v_rest, 'fn_sms_redari_lot_motiv_la(l, v_acum)') = 0 OR strpos(v_rest, 'fn_sms_fereastra_externa(v_acum)') = 0
+     OR strpos(v_rest, 'fn_sms_consum_la(v_acum)') = 0 OR strpos(v_rest, 'fn_sms_test_consum_zi_la(l.creat_de, v_acum)') = 0
+     OR (length(v_rest) - length(replace(v_rest, 'FOR UPDATE', ''))) / 10 <> (length(v_rest) - length(replace(v_rest, 'FOR UPDATE SKIP LOCKED', ''))) / 22
+     OR strpos(v_rest, 'FOR UPDATE SKIP LOCKED') = 0 THEN
+    RAISE EXCEPTION 'TEST22 FAIL: reperul final v_acum nu vine dupa revalidare / dupa el se mai asteapta lock-uri';
   END IF;
   -- moment fix: doua mesaje fictive (contul de test), rezervate la 23:59:59.9 pe 30.11 si 00:00:00.1 pe 01.12 (ora Romaniei)
   SELECT * INTO a1 FROM public.fn_sms_consum_la(t1); SELECT * INTO a2 FROM public.fn_sms_consum_la(t2);
@@ -941,7 +955,7 @@ BEGIN
   IF b1.zi - a1.zi <> 2 OR b1.luna - a1.luna <> 2 OR b2.zi - a2.zi <> 1 OR b2.luna - a2.luna <> 1 OR r1 - q1 <> 2 OR r2 - q2 <> 1 THEN
     RAISE EXCEPTION 'TEST22 FAIL: limitele zi / luna la moment fix (% % % % % %)', b1.zi - a1.zi, b1.luna - a1.luna, b2.zi - a2.zi, b2.luna - a2.luna, r1 - q1, r2 - q2;
   END IF;
-  RAISE NOTICE 'TEST22 OK un reper pe apel: ceasul doar in atribuiri, rezervarea paseaza v_acum (fereastra, motiv, consum, buget); la 30.11 23:59:59.95 se numara 2 / 2, la 01.12 00:00:00.5 doar 1 / 1 (zi / luna si bugetul de test)';
+  RAISE NOTICE 'TEST22 OK un reper pe apel: ceasul doar in atribuiri; in rezervare v_acum final dupa revalidare (opt-out / ne_eligibil / duplicat_persoana), apoi motiv, fereastra, consum, buget si rezervarea SKIP LOCKED; la 30.11 23:59:59.95 se numara 2 / 2, la 01.12 00:00:00.5 doar 1 / 1 (zi / luna si bugetul de test)';
 END $t$;
 
 -- ── TEST14: comutatorul Redari oprit = creare (si previzualizare) refuzata, ca inainte, si pentru owner ─────────────────────────

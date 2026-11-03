@@ -45,6 +45,9 @@
 --     (fn_sms_fereastra_externa, imediat inainte de rezervare), consumul zi / luna (fn_sms_consum), bugetul contului de test
 --     (fn_sms_test_consum_zi) si rezervat_la (fn_sms_mesaje_reguli); loturile interne raman la fel, doar cu acest reper;
 --   * fn_sms_lot_redari_creeaza (text liber) ramane in BD, fara drept de apel pentru aplicatie.
+-- Ordinea in fn_sms_rezerva (r7, Jakarinos P2): lock-uri (setari FOR UPDATE -> lot FOR UPDATE) -> revalidarea mesajelor (opt-out,
+-- ne_eligibil, duplicat_persoana: singurele UPDATE-uri care pot astepta randuri) -> v_acum (reperul final, clock_timestamp) -> verificari
+-- (motivul lotului, fereastra 08-20, consum, plafon, buget de test) -> rezervare (FOR UPDATE SKIP LOCKED); dupa v_acum nimic nu asteapta.
 -- Ordinea lock-urilor (r5, P3-02: mecanismul real, neschimbat fata de 20261130b in afara de lock-ul UAT-ului):
 --   * aprobarea (fn_sms_lot_aproba): setari FOR SHARE -> contul de test (lock consultativ, doar loturi de test) -> lot FOR UPDATE ->
 --     UPDATE-ul lotului (triggerul fn_sms_loturi_reguli cheama fn_sms_redari_lot_motiv);
@@ -512,7 +515,8 @@ BEGIN
   IF s.kill_switch THEN RETURN jsonb_build_object('motiv', 'kill_switch', 'mesaje', '[]'::jsonb); END IF;
   -- 20261130c r5 (Copilot P2-03) / r6 (Jakarinos P2): UN singur reper de timp pentru toata rezervarea, v_acum = momentul efectiv
   -- (clock_timestamp, nu inceputul tranzactiei), luat dupa lock-ul pe setari si reluat o singura data dupa lock-ul pe lot; fereastra,
-  -- motivul lotului, consumul zi / luna si bugetul de test il primesc ca parametru (niciun ceas in predicate)
+  -- motivul lotului, consumul zi / luna si bugetul de test il primesc ca parametru (niciun ceas in predicate); r7: reperul de aici
+  -- serveste doar selectia cronului; reperul final se ia dupa revalidare
   v_acum := clock_timestamp();
   v_ora := extract(hour FROM v_acum AT TIME ZONE 'Europe/Bucharest')::integer;
   -- cron intern (fara lot): cel mai vechi lot aprobat care poate pleca acum (niciodata un lot de test in afara limitelor sau cu
@@ -531,8 +535,6 @@ BEGIN
     SELECT * INTO l FROM public.sms_loturi x WHERE x.id = p_lot_id FOR UPDATE;
   END IF;
   IF NOT FOUND THEN RETURN jsonb_build_object('motiv', 'fara_lot', 'mesaje', '[]'::jsonb); END IF;
-  -- 20261130c r6: reperul se reia o singura data, dupa lock-ul pe lot (asteptarea la lot nu intinereste momentul); de aici doar v_acum
-  v_acum := clock_timestamp();
   -- 20261130b: nivelul apelantului pe lotul cerut (un lot pe care nu il vede = ca inexistent; vazut, dar nepermis = refuz).
   -- r2: testul vede doar loturile create de el; utilizatorul vede Redari doar cu modulul Redari si comutatorul pornit.
   IF p_apelant IS NOT NULL THEN
@@ -555,26 +557,25 @@ BEGIN
   END IF;
   IF l.stare NOT IN ('aprobat', 'in_trimitere') THEN RETURN jsonb_build_object('motiv', 'lot_' || l.stare, 'lot_id', l.id, 'mesaje', '[]'::jsonb); END IF;
   IF l.categorie = 'redari' AND NOT s.redari_autorizat THEN RETURN jsonb_build_object('motiv', 'redari_neautorizat', 'lot_id', l.id, 'mesaje', '[]'::jsonb); END IF;
-  -- 20261130c: lotul Redari pleaca doar din sablon (lot_vechi_fara_sablon), inainte de inceputul sesiunii si cu textul inca valabil,
-  -- la fiecare transa (pe reperul rezervarii v_acum, luat dupa lock-urile pe setari si pe lot)
-  v_motiv := public.fn_sms_redari_lot_motiv_la(l, v_acum);
-  IF v_motiv IS NOT NULL THEN RETURN jsonb_build_object('motiv', v_motiv, 'lot_id', l.id, 'mesaje', '[]'::jsonb); END IF;
+  -- 20261130c r7 (Jakarinos P2): ORDINEA FINALA: lock-uri (setari, lot) -> revalidarea mesajelor (UPDATE-urile care pot astepta randuri)
+  -- -> v_acum (reperul final) -> verificari (motivul lotului, fereastra, consum, plafon, buget) -> rezervare (SKIP LOCKED); dupa v_acum
+  -- nimic nu mai asteapta un lock (lotul e deja al tranzactiei, rezervarea sare randurile blocate)
+  -- revalidare 1 (toate loturile): opt-out-ul verificat din nou la trimitere: numarul iese din lot (anulat 'optout'), nu pleaca; adus aici
+  -- din 20261130b (era dupa verificari); pentru loturile din sablon, si inaintea regruparii (r4): opt-out-ul nu ocupa locul persoanei
+  UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'optout'
+   WHERE m.lot_id = l.id AND m.stare = 'in_coada' AND EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = m.telefon AND o.activ);
   IF l.categorie = 'redari' AND l.filtru->>'sablon' = 'redari_v1' THEN
-    -- r4 (Jakarinos P2): intai opt-out-ul (acelasi UPDATE ca mai jos, adus inainte pentru loturile din sablon): mesajul cu opt-out
-    -- pastreaza motivul real 'optout' si nu ocupa locul persoanei la regrupare
-    UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'optout'
-     WHERE m.lot_id = l.id AND m.stare = 'in_coada' AND EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = m.telefon AND o.activ);
-    -- r5 (Copilot P2-01): pleaca doar daca persoana e INCA eligibila (fn_sms_redari_persoane: exclus NULL, aceeasi regula ca la creare)
-    -- SI numarul inghetat in mesaj e inca pe un rand deschis al ei (mobil RO normalizat, fara opt-out); altfel anulat / ne_eligibil,
-    -- fara sa se inlocuiasca numarul cu cel nou
+    -- revalidare 2 (r5, Copilot P2-01): pleaca doar daca persoana e INCA eligibila (fn_sms_redari_persoane: exclus NULL, aceeasi regula ca
+    -- la creare) SI numarul inghetat in mesaj e inca pe un rand deschis al ei (mobil RO normalizat, fara opt-out); altfel anulat /
+    -- ne_eligibil, fara sa se inlocuiasca numarul cu cel nou
     WITH e AS MATERIALIZED (
       SELECT unnest(p.dets) AS det, p.tels FROM public.fn_sms_redari_persoane(l.proiect_id, l.uat_id) p WHERE p.exclus IS NULL
     )
     UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'ne_eligibil'
      WHERE m.lot_id = l.id AND m.stare = 'in_coada'
        AND NOT EXISTS (SELECT 1 FROM e WHERE e.det = m.destinatar_id AND m.telefon = ANY (e.tels));
-    -- r3: cel mult UN mesaj pe persoana, regrupat pe cheia ACTUALA (nume / adresa corectate dupa creare): ramane cel deja plecat
-    -- (orice stare in afara de anulat si in_coada), altfel primul in ordinea creat_la, id; restul din coada -> duplicat_persoana
+    -- revalidare 3 (r3): cel mult UN mesaj pe persoana, regrupat pe cheia ACTUALA (nume / adresa corectate dupa creare): ramane cel deja
+    -- plecat (orice stare in afara de anulat si in_coada), altfel primul in ordinea creat_la, id; restul din coada -> duplicat_persoana
     WITH k AS MATERIALIZED (
       SELECT m.id, m.stare,
              row_number() OVER (PARTITION BY coalesce(public.fn_red_cheie_persoana(
@@ -586,7 +587,13 @@ BEGIN
     UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'duplicat_persoana'
       FROM k WHERE m.id = k.id AND k.rang > 1 AND k.stare = 'in_coada';
   END IF;
-  -- 20261130c r5 / r6: fereastra 08-20 pe reperul rezervarii (v_acum, luat dupa lock-urile pe setari si pe lot)
+  -- reperul FINAL al rezervarii, dupa toate UPDATE-urile de revalidare: de aici doar v_acum, fara asteptari
+  v_acum := clock_timestamp();
+  -- 20261130c: lotul Redari pleaca doar din sablon (lot_vechi_fara_sablon), inainte de inceputul sesiunii si cu textul inca valabil,
+  -- la fiecare transa
+  v_motiv := public.fn_sms_redari_lot_motiv_la(l, v_acum);
+  IF v_motiv IS NOT NULL THEN RETURN jsonb_build_object('motiv', v_motiv, 'lot_id', l.id, 'mesaje', '[]'::jsonb); END IF;
+  -- 20261130c r5 / r6 / r7: fereastra 08-20 pe reperul final al rezervarii (v_acum, luat dupa lock-uri si dupa revalidare)
   IF l.categorie = 'redari' AND NOT public.fn_sms_fereastra_externa(v_acum) THEN RETURN jsonb_build_object('motiv', 'in_afara_orelor', 'lot_id', l.id, 'mesaje', '[]'::jsonb); END IF;
   SELECT * INTO c FROM public.fn_sms_consum_la(v_acum);
   IF c.luna >= s.plafon_luna THEN RETURN jsonb_build_object('motiv', 'plafon_luna', 'lot_id', l.id, 'consum_luna', c.luna, 'mesaje', '[]'::jsonb); END IF;
@@ -604,9 +611,7 @@ BEGIN
     v_n := least(v_n, v_test / l.segmente);
   END IF;
   IF l.stare = 'aprobat' THEN UPDATE public.sms_loturi SET stare = 'in_trimitere' WHERE id = l.id; END IF;
-  -- opt-out verificat din nou la trimitere: numarul iese din lot (anulat), nu pleaca
-  UPDATE public.sms_mesaje m SET stare = 'anulat', cod_eroare = 'optout'
-   WHERE m.lot_id = l.id AND m.stare = 'in_coada' AND EXISTS (SELECT 1 FROM public.sms_optout o WHERE o.telefon = m.telefon AND o.activ);
+  -- 20261130c r7: opt-out-ul verificat din nou la trimitere e aplicat mai sus, in revalidare (inainte de reperul final v_acum)
   WITH x AS (
     SELECT m.id FROM public.sms_mesaje m WHERE m.lot_id = l.id AND m.stare = 'in_coada' ORDER BY m.creat_la, m.id LIMIT v_n FOR UPDATE SKIP LOCKED
   ), u AS (
@@ -745,7 +750,7 @@ GRANT EXECUTE ON FUNCTION public.fn_sms_lot_redari_sablon_creeaza(uuid, uuid, te
 REVOKE EXECUTE ON FUNCTION public.fn_sms_lot_redari_creeaza(text, uuid, uuid, boolean) FROM PUBLIC, anon, authenticated, service_role;
 
 DO $post$
-DECLARE v_o oid; v_n integer; v_j jsonb;
+DECLARE v_o oid; v_n integer; v_j jsonb; v_src text; v_p1 integer; v_fin integer; v_rest text;
   v_expuse regprocedure[] := ARRAY['public.fn_sms_e_owner()', 'public.fn_sms_nivel()', 'public.fn_sms_loturi_lista(integer)', 'public.fn_sms_panou()',
     'public.fn_sms_angajati_lista()', 'public.fn_sms_lot_intern_creeaza(text,text[],integer[],boolean)',
     'public.fn_sms_lot_redari_sablon_creeaza(uuid,uuid,text,text,boolean)', 'public.fn_sms_lot_destinatari(uuid)', 'public.fn_sms_lot_aproba(uuid,integer)',
@@ -771,6 +776,18 @@ BEGIN
       RAISE EXCEPTION '20261130c: clock_timestamp() in afara unei atribuiri in %', v_o::regprocedure;
     END IF;
   END LOOP;
+  -- r7: reperul final al rezervarii e atribuit dupa ultimul UPDATE de revalidare; dupa el, niciun UPDATE de anulare si niciun lock fara
+  -- SKIP LOCKED (doar rezervarea, cu SKIP LOCKED)
+  v_src := (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure);
+  v_p1 := strpos(v_src, 'v_acum := clock_timestamp();');
+  v_fin := v_p1 + strpos(substr(v_src, v_p1 + 1), 'v_acum := clock_timestamp();');
+  v_rest := substr(v_src, v_fin);
+  IF v_p1 = 0 OR v_fin = v_p1 OR v_fin < strpos(v_src, 'WHERE x.id = p_lot_id FOR UPDATE;')
+     OR v_fin < strpos(v_src, 'cod_eroare = ''optout''') OR v_fin < strpos(v_src, 'cod_eroare = ''ne_eligibil''')
+     OR v_fin < strpos(v_src, 'cod_eroare = ''duplicat_persoana''') OR v_rest ~ 'SET stare = ''anulat'''
+     OR (length(v_rest) - length(replace(v_rest, 'FOR UPDATE', ''))) / 10 <> (length(v_rest) - length(replace(v_rest, 'FOR UPDATE SKIP LOCKED', ''))) / 22 THEN
+    RAISE EXCEPTION '20261130c: in fn_sms_rezerva reperul final v_acum nu vine dupa revalidare / dupa el se mai asteapta lock-uri';
+  END IF;
   IF (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum_la(timestamptz)'::regprocedure) ~ 'clock_timestamp|now[(]'
      OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi_la(uuid,timestamptz)'::regprocedure) ~ 'clock_timestamp|now[(]' THEN
     RAISE EXCEPTION '20261130c: calculul pe moment dat nu trebuie sa citeasca ceasul';
@@ -804,7 +821,7 @@ BEGIN
   END IF;
   -- corpurile inlocuite sunt exact cele generate (20261130b + blocurile 20261130c)
   IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '8aa147ed61db466ebef5a8500176a951'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> '6eb5039c34a3fd97be68502164151780'
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> 'c9a1d180dd01da8484338c911579b92b'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_mesaje_reguli()'::regprocedure), chr(13), '')) <> '15ac579d87cd38f650a4b3181b0b50d1'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_consum()'::regprocedure), chr(13), '')) <> '6c1c05fade70afc21fc9bc4508be5a3c'
      OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_test_consum_zi(uuid)'::regprocedure), chr(13), '')) <> 'ff5ade8a377dba2ca7be28efa3c8f999' THEN
