@@ -64,6 +64,8 @@ const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voc
 const Redari = lazy(() => import('./Redari.jsx'))   // 🌾 Redări teren (Lot 1 Transgaz) — docs/redari/CONTRACT_SCHEMA.md; modulul 'redari'
 const RedariRaspunsPublic = lazy(() => import('./RedariRaspunsPublic.jsx'))   // formular public de răspuns cu token, fără login
 const RedariInformarePublic = lazy(() => import('./RedariInformarePublic.jsx'))   // informarea GDPR completă (țintă QR/link din convocator), fără login
+// 📱 SMS (20261130b): ruta proprie /sms pentru owner și modulul 'sms' (utilizator / test); nivelul real îl dă BD-ul (fn_sms_nivel)
+const SmsPagina = lazy(() => import('./sms/SmsPagina.jsx'))
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
@@ -244,13 +246,22 @@ tr:hover td{background:#1C2128}
 .nl{background:none;border:none;cursor:pointer;padding:7px 13px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#8B949E;transition:all .2s;white-space:nowrap;flex-shrink:0}
 /* Audit UI 02.11.2026: pe desktop se derulează DOAR taburile de module; logo + zona din dreapta (Chat, 🔔, Ieșire) rămân mereu vizibile */
 .topbar{overflow:visible}
-.navscroll{display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent)}
+.navwrap{display:flex;align-items:center;flex:1 1 auto;min-width:0;gap:2px}
+.navscroll{display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+/* TKT-2026-0373: estomparea arată pe ce parte mai sunt taburi ascunse (stânga și/sau dreapta) */
+.navscroll.dr{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 28px),transparent)}
+.navscroll.st{-webkit-mask-image:linear-gradient(90deg,transparent,#000 28px,#000 100%);mask-image:linear-gradient(90deg,transparent,#000 28px,#000 100%)}
+.navscroll.st.dr{-webkit-mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
+.navsag{background:#21262D;border:1px solid #30363D;color:#E6EDF3;border-radius:6px;width:24px;height:28px;cursor:pointer;flex-shrink:0;font-size:15px;line-height:1;padding:0}
+.navsag:hover{background:#30363D}
 .navscroll::-webkit-scrollbar{display:none}
 /* sub 1800 px: în zona din dreapta rămân iconițele + contoarele, textul apare în tooltip */
 @media (max-width:1799px){.topbar .tb-txt{display:none}}
 /* tabletă / ecran îngust (<1100 px): zona din dreapta nu mai încape -> toată bara se derulează (ca înainte), fără să lățească pagina */
-@media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navscroll{flex:0 0 auto;-webkit-mask-image:none;mask-image:none}}
-@media (max-width:719px){.navscroll{display:none}}
+@media (max-width:1099px){.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.topbar::-webkit-scrollbar{display:none}.navwrap,.navscroll{flex:0 0 auto}.navscroll,.navscroll.st,.navscroll.dr{-webkit-mask-image:none;mask-image:none}.navsag{display:none}}
+@media (max-width:719px){.navwrap{display:none}}
+.home-account>div{min-width:0;overflow-wrap:anywhere}
+@media (max-width:1349px){.home-header{flex-wrap:wrap;gap:12px!important;padding:12px 20px!important}.home-account{flex-wrap:wrap;margin-left:auto!important}}
 /* Panou PontajPRO (audit UI 02.11): grilele se reașază pe ecrane înguste, pagina nu se mai lățește */
 @media (max-width:1099px){.panou-kpi{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))!important}.panou-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media (max-width:759px){.panou-grid{grid-template-columns:minmax(0,1fr)!important}}
@@ -779,6 +790,22 @@ function Layout({ children }) {
     const t = setInterval(load, 60000)
     return () => clearInterval(t)
   }, [profile?.id])
+  // TKT-2026-0373: banda de taburi nu mai ascunde taburi fără semn — tabul paginii curente e adus în vedere, săgețile ‹ › apar
+  // când mai sunt taburi ascunse pe o parte, iar rotița mouse-ului nu mai derulează banda (de acolo „dispăreau” Acasă/Panou/Pontaj)
+  const navRef = useRef(null)
+  const [navAscuns, setNavAscuns] = useState({ st: false, dr: false })
+  const masoaraNav = useCallback(() => {
+    const el = navRef.current; if (!el) return
+    const st = el.scrollLeft > 2, dr = el.scrollLeft + el.clientWidth < el.scrollWidth - 2
+    setNavAscuns(v => (v.st === st && v.dr === dr) ? v : { st, dr })
+  }, [])
+  useEffect(() => {
+    const el = navRef.current
+    if (el) { el.querySelector('.nl.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); masoaraNav() }
+    window.addEventListener('resize', masoaraNav)
+    return () => window.removeEventListener('resize', masoaraNav)
+  }, [loc.pathname, profile?.id, profile?.email, profile?.role, masoaraNav])   // email/rol schimbă lista de taburi (Gemini P3)
+  const deruleazaNav = sens => { const el = navRef.current; if (el) el.scrollBy({ left: sens * Math.max(160, el.clientWidth * 0.7), behavior: 'smooth' }) }
   // Externii (email non-@gazpet.ro, ex. partenerul Adrom Evolution) nu văd Tichete/Consumabile
   const esteExtern = !(profile?.email || '').toLowerCase().endsWith('@gazpet.ro')
   const navItems = [
@@ -796,6 +823,7 @@ function Layout({ children }) {
       { p:'/consumabile', i:'🛒', l:'Consumabile' },
     ]),
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
+    ...(hasModuleAccess(profile, 'sms') ? [{p:'/sms',i:'📱',l:'SMS'}] : []),
     ...(hasModuleAccess(profile, ADMIN_ALERTE_KEY) ? [{p:'/administrator',i:'🔔',l:'Administrator'}] : []),
     ...(isSuperAdmin || profile?.can_modify_employees === true ? [{p:'/admin',i:'⚙️',l:'Admin'}] : []),
   ]
@@ -808,9 +836,13 @@ function Layout({ children }) {
           <div style={{width:28,height:28,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>⏱</div>
           <span style={{fontWeight:800,fontSize:14,letterSpacing:'-.3px'}}>PontajPRO</span>
         </div>
-        {/* taburile de module: zonă proprie derulabilă (rotița mouse-ului derulează pe orizontală) */}
-        <div className="navscroll" onWheel={e=>{ if (Math.abs(e.deltaY)>Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY }}>
-          {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+        {/* taburile de module: zonă proprie derulabilă; săgețile ‹ › apar doar când mai sunt taburi ascunse (TKT-2026-0373) */}
+        <div className="navwrap">
+          {navAscuns.st && <button type="button" className="navsag" title="Taburile din stânga" aria-label="Taburile din stânga" onClick={()=>deruleazaNav(-1)}>‹</button>}
+          <div ref={navRef} className={`navscroll${navAscuns.st?' st':''}${navAscuns.dr?' dr':''}`} onScroll={masoaraNav}>
+            {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+          </div>
+          {navAscuns.dr && <button type="button" className="navsag" title="Taburile din dreapta" aria-label="Taburile din dreapta" onClick={()=>deruleazaNav(1)}>›</button>}
         </div>
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
           {/* ℹ️ Noutăți modul — anunțuri per modul, reminder la 12 h până la „Am citit" (08.09.2026) */}
@@ -862,7 +894,7 @@ function Layout({ children }) {
             onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
             onMouseLeave={e => { e.currentTarget.style.background = G.purple + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
           >
-            🎫 <span className="tb-txt">Tichete</span>
+            ⚡ <span className="tb-txt">Tichet rapid</span>
           </button>
           {/* Ale mele — popover split */}
           <div style={{ position:'relative' }}>
@@ -1048,6 +1080,7 @@ function HomeDashboard() {
     { path:'/marketing', icon:'📣', label:'Marketing',   color:'#1877F2', desc:'Postări Facebook · din rapoartele de șantier', active:true, requireModule:'marketing' },
     { path:'/cladire',   icon:'🏢', label:'Clădire',     color:'#E4261E', desc:'Sediu · centrală · termostate · meteo · alerte', active:true, requireModule:'cladire' },
     { path:'/mesaj-vocal', icon:'🎙', label:'Mesaj vocal', color:'#A371F7', desc:'Text → voce (Aoede) · MP3 pentru WhatsApp', active:true, requireModule:'mesaj_vocal' },
+    { path:'/sms', icon:'📱', label:'SMS', color:'#24778B', desc:'Mesaje către angajați · aprobare · istoric', active:true, requireModule:'sms' },
     // TEMPORAR (17.09.2026): se șterge cu tot cu rută când organigrama propriu-zisă e gata
     { path:'/organigrama-propuneri', icon:'🧩', label:'Organigramă (propuneri)', color:'#56D4DD', desc:'Departamente · funcții · rol la licitații · PROVIZORIU', active:true },
     // TEMPORAR (24.08.2026): se șterge împreună cu ruta + InventarCorectii.jsx la finalul proiectului de aliniere
@@ -1066,17 +1099,17 @@ function HomeDashboard() {
   })
 
   return (
-    <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column'}}>
+    <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column',fontFamily:"'Barlow',sans-serif"}}>
       <style>{css}</style>
       {/* Header */}
-      <div style={{background:'#161B22',borderBottom:'1px solid #30363D',padding:'0 32px',height:60,display:'flex',alignItems:'center',gap:16,position:'sticky',top:0,zIndex:100}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,flex:1}}>
+      <div className="home-header" style={{background:'#161B22',borderBottom:'1px solid #30363D',padding:'0 32px',minHeight:60,display:'flex',alignItems:'center',gap:16,position:'sticky',top:0,zIndex:100,minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}}>
           <div style={{width:32,height:32,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>⏱</div>
           <span style={{fontWeight:800,fontSize:16,letterSpacing:'-.3px',color:'#E6EDF3'}}>Gazpet</span>
           <span style={{fontWeight:300,fontSize:16,color:'#8B949E'}}>ERP</span>
         </div>
         <MeteoSediu style={{marginRight:12}} />
-        <div style={{textAlign:'right',marginRight:16}}>
+        <div style={{textAlign:'right',marginRight:16,whiteSpace:'nowrap',flexShrink:0}}>
           <div style={{fontSize:18,fontWeight:800,color:'#58A6FF',fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
           <div style={{fontSize:11,color:'#8B949E'}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}</div>
         </div>
@@ -1099,7 +1132,7 @@ function HomeDashboard() {
           }}>
           🎫 Tichete
         </button>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginLeft:10}}>
+        <div className="home-account" style={{display:'flex',alignItems:'center',gap:10,marginLeft:10,minWidth:0}}>
           <Avatar name={profile?.name} id={1} size={32}/>
           <div>
             <div style={{fontSize:13,fontWeight:600,color:'#E6EDF3',lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
@@ -8882,6 +8915,17 @@ function MesajVocalRoute() {
   return <Suspense fallback={<LoadingScreen />}><MesajVocal profile={profile} /></Suspense>
 }
 
+// 📱 SMS: profilul din AuthContext; pagina cere nivelul din BD (owner / utilizator / test) și ascunde Setările pentru non-owner
+function SmsRoute() {
+  const { profile } = useAuth()
+  return <Suspense fallback={<LoadingScreen />}>
+    <main style={{ colorScheme: 'light', background: '#F1F5F9', color: '#263642', borderRadius: 10, padding: '18px clamp(12px, 3vw, 28px)', fontFamily: 'Arial, sans-serif', minHeight: '60vh', boxSizing: 'border-box', overflowWrap: 'anywhere' }}>
+      <h1 style={{ fontSize: 20, margin: '0 0 14px' }}>📱 SMS</h1>
+      <SmsPagina profile={profile} />
+    </main>
+  </Suspense>
+}
+
 // CHATBOT GATE - afișează ChatbotWidget DOAR pentru useri logați (cu profile)
 // ════════════════════════════════════════════════════════════════════════════
 function ChatbotWidgetGate() {
@@ -8966,6 +9010,7 @@ export default function App() {
         <Route path="/marketing" element={<ProtectedRoute requireModule="marketing"><Marketing/></ProtectedRoute>}/>
         <Route path="/cladire" element={<ProtectedRoute requireModule="cladire"><Cladire/></ProtectedRoute>}/>
         <Route path="/mesaj-vocal" element={<ProtectedRoute requireModule="mesaj_vocal"><MesajVocalRoute/></ProtectedRoute>}/>
+        <Route path="/sms" element={<ProtectedRoute requireModule="sms"><Layout><SmsRoute/></Layout></ProtectedRoute>}/>
         <Route path="/integrari/:tab" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="/integrari" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>

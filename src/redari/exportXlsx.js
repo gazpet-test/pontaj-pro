@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx-js-style'
 import { STARI, etichetaStare, ultimulRaspuns } from './stare.js'
 import { ETICHETA_CALITATE, formatDataRo, aziBucuresti } from './docx.js'
 import { etichetaOptiune, etichetaRetur } from './ui/comune.jsx'
+import { mentiuneAr, scurteazaMentiuneAr } from './arMentiune.js'
 
 // ASCII in source; Unicode escapes preserve the exact Model_6 headings.
 export const COLOANE_REGISTRU = [
@@ -46,7 +47,7 @@ export function randRegistru({ parcela = {}, uat = {}, detinator = {}, contact =
     F: text(parcela.nr_cadastral), G: text(parcela.poz_hg), H: text(parcela.suprafata_temporara_mp), I: text(parcela.categoria_folosinta),
     J: text(detinator.nume), K: ETICHETA_CALITATE[detinator.calitate] ?? text(detinator.calitate), L: text(detinator.cota),
     M: daNu(contact.adresa_cunoscuta), N: [detinator.sursa_date, detinator.versiune_lista_tgz].filter(Boolean).join(' '), O: text(contact.telefon),
-    P: text(conv.nr_document), Q: formatDataRo(conv.data_expediere), R: text(conv.nr_tracking), S: formatDataRo(conv.data_confirmare_primire),
+    P: text(conv.nr_document), Q: formatDataRo(conv.data_expediere), R: text(conv.nr_tracking), S: formatDataRo(conv.data_confirmare_primire) + mentiuneAr(conv),
     T: conv.retur ? etichetaRetur(conv.retur) : '', U: text(uat.afisare_pv_nr), V: CANALE[r.canal] ?? text(r.canal), W: dataRo(r.data),
     X: r.optiune ? etichetaOptiune(r.optiune) : '', Y: text(r.obiectii_text), Z: formatDataRo(r.zi_sesiune_aleasa),
     AA: rasp.some(x => x.canal === 'sesiune') ? 'DA' : '', AB: r.optiune === 'constatare_teren' ? dataRo(r.data) : '',
@@ -63,7 +64,7 @@ const LIBERE_TGZ = new Set(['N', 'Y', 'AM'])
 // de document si codurile raman (altfel datele si AWB-ul ar fi golite - gasit de chat la verificarea feliei 6).
 const EURISTIC_TGZ = new Set(['D', 'E', 'I', 'J', 'K', 'L', 'AL'])
 const randTgz = r => Object.fromEntries(COLOANE_REGISTRU.filter(c => c.col !== 'O').map(({ col }) => {
-  const v = r[col] ?? ''
+  const v = col === 'S' ? scurteazaMentiuneAr(r[col] ?? '') : (r[col] ?? '')   // juridic#021: către TGZ fără textul liber de pe AR
   return [col, LIBERE_TGZ.has(col) || (EURISTIC_TGZ.has(col) && typeof v === 'string' && /(?:\+?\d[\d ().-]{7,}\d|@|\b(?:strada|bulevard|adresa|aleea|calea|soseaua)\b|\b(?:str|bd|bdul|sos|al)\.)/i.test(v)) ? '' : v]
 }))
 export function randuriRegistru(date, { pentruTgz = false } = {}) {

@@ -563,11 +563,11 @@ const sablonAdresa = () => readFileSync(resolve(process.cwd(), 'public/redari/sa
 const pTest = i => ({ id_parcela: `T1-TST-000${i}`, sat: `Sat ${i} <&>`, tarla: `Tarla ${i}`, nr_cadastral: `CAD-${i}`, poz_hg: `HG-${i}`, tronson: 1, sters_la: null })
 
 describe('Model 4: adresă UAT', () => {
-  it('CHEI_ADRESA_UAT coincide exact cu cele 43 de chei din șablonul real; fără link și relații externe', async () => {
+  it('CHEI_ADRESA_UAT coincide exact cu cele 40 de chei din șablonul real (Final_v2, fără antet); fără link și relații externe', async () => {
     const zip = await JSZip.loadAsync(sablonAdresa())
     const xml = await zip.file('word/document.xml').async('string')
     const chei = [...new Set([...xml.matchAll(/\{\{([\w.]+)\}\}/g)].map(m => m[1]))].sort()
-    expect(chei).toHaveLength(43)
+    expect(chei).toHaveLength(40)
     expect([...CHEI_ADRESA_UAT].sort()).toEqual(chei)
     expect(xml).not.toContain('link_afisare')
     for (const f of Object.keys(zip.files).filter(f => f.endsWith('.rels'))) expect(await zip.file(f).async('string')).not.toContain('TargetMode="External"')
@@ -625,6 +625,14 @@ describe('Model 4: adresă UAT', () => {
     }
     expect(verificaDateAdresaUat({ ...complet, nrDocument: null })).toContain('Lipsește nr. documentului')
     expect(verificaDateAdresaUat({ ...complet, uat: {} })).toContain('Lipsește o zi de sesiune cu program')
+  })
+  it('plan pct. 4.3: adresa nu se generează cu afișarea sub 10 zile înainte de ziua 1 (textul ei promite „cel puțin 10 zile”)', async () => {
+    const complet = { proiect: PR_ADRESA, parcele: [], nrDocument: 'AU-0001' }
+    // ziua 1 = 10.12.2026 → afișarea începe cel târziu pe 30.11.2026 (numărat în calendar)
+    expect(verificaDateAdresaUat({ ...complet, uat: { ...UAT_ADRESA, afisare_data_start: '2026-11-30' } })).toEqual([])
+    const tarziu = { ...UAT_ADRESA, afisare_data_start: '2026-12-01' }
+    expect(verificaDateAdresaUat({ ...complet, uat: tarziu })).toEqual(['Afișarea la primărie începe pe 01.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026): trebuie să înceapă cel târziu pe 30.11.2026 (plan pct. 4.3)'])
+    await expect(genereazaAdresaUat({ ...complet, uat: tarziu, templateArrayBuffer: sablonAdresa() })).rejects.toThrow('cel târziu pe 30.11.2026')
   })
   it('zile din luni/ani diferiți sunt explicite', () => {
     expect(zileSesiuneText({ sesiune_zi1: '2026-12-31', sesiune_zi2: '2027-01-02' })).toBe('31 decembrie 2026 și 2 ianuarie 2027')

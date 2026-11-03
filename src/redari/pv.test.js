@@ -20,7 +20,7 @@ describe('PV A', () => {
       for(const m of xml.matchAll(/\{\{([^}]+)\}\}/g)) chei.add(m[1])
     }
     expect([...chei].sort()).toEqual([...CHEI_PV_A].sort())
-    expect(chei.size).toBe(54)
+    expect(chei.size).toBe(51)
   })
   it.each([
     ['Decopertare pamant fertil','sol_fertil'],['Nivelare teren','nivelare'],
@@ -55,7 +55,9 @@ describe('PV A', () => {
     expect(r.campuri.bifa_nivelare).toBe('\u2612')
     expect(r.campuri.bifa_arat).toBe('\u2610')
     expect(r.campuri.bifa_plan_nu).toBe(BIFA_DA)
-    expect(r.campuri.bifa_foto_da).toBe(BIFA_NU)
+    // Final_v2: fara fotografii in PV A (camp scos din sablon si din generator)
+    expect(r.campuri).not.toHaveProperty('bifa_foto_da')
+    expect(r.campuri).not.toHaveProperty('foto_nr')
     expect(r.campuri.calitate_cota).toBe('coproprietar, cota 1/2')
     expect(r.campuri.act_identitate).toBe('')
     expect(r.campuri.act_doveditor).toBe('')
@@ -78,6 +80,27 @@ const dateB = () => {
   return d
 }
 const sablonB=()=>readFileSync('public/redari/sabloane/pv_b.docx')
+it('PV B: conv_retur prezent și mențiunea AR doar scurtă (fără textul liber, către TGZ) — regresie Copilot/Jakarinos f10 r2',async()=>{
+  const b=dateB()
+  b.convocari=[{id:'c1',detinator_id:'d1',canal:'posta',stare:'activ',sters_la:null,created_at:'2026-11-01',data_expediere:'2026-11-02',data_confirmare_primire:'2026-11-05',retur:'decedat',ar_alta_persoana:'FICTIV text liber'}]
+  const {campuri}=await genereazaPvB({...b,templateArrayBuffer:sablonB()})
+  expect(campuri.conv_retur).toBe('decedat')
+  expect(campuri.conv_data_confirmare).toBe('05.11.2026 (primit de altă persoană)')
+  expect(JSON.stringify(campuri)).not.toContain('FICTIV text liber')
+})
+it('PV B (juridic#026): calitatea primitorului da, textul liber de pe AR nu',async()=>{
+  const b=dateB()
+  b.convocari=[{id:'c1',detinator_id:'d1',canal:'posta',stare:'activ',sters_la:null,created_at:'2026-11-01',data_expediere:'2026-11-02',data_confirmare_primire:'2026-11-05',
+    ar_alta_persoana:'FICTIV text liber',ar_alta_calitate:'membru_familie'}]
+  const {campuri}=await genereazaPvB({...b,templateArrayBuffer:sablonB()})
+  expect(campuri.conv_data_confirmare).toBe('05.11.2026 (primit de altă persoană: membru de familie)')
+  expect(JSON.stringify(campuri)).not.toContain('FICTIV text liber')
+  // cod necunoscut: fara calitate, tot fara textul liber
+  b.convocari[0].ar_alta_calitate='FICTIV NUME'
+  const {campuri:c2}=await genereazaPvB({...b,templateArrayBuffer:sablonB()})
+  expect(c2.conv_data_confirmare).toBe('05.11.2026 (primit de altă persoană)')
+  expect(JSON.stringify(c2)).not.toMatch(/FICTIV NUME|FICTIV text liber/)
+})
 it('PV A si B accepta parcela fara tronson si lasa campul DOCX gol',async()=>{
   const a=date(), b=dateB()
   a.parcela.tronson=null;b.parcela.tronson=null
@@ -95,11 +118,11 @@ it('PV A/B: tronsonul din document e cel de pe randul PV, nu cel curent al parce
   expect((await genereazaPvA({...a,templateArrayBuffer:sablon()})).campuri.tronson).toBe(4)
 })
 describe('PV B',()=>{
-  it('78 chei din sablonul independent, inclusiv antete',async()=>{
+  it('72 chei din sablonul independent, inclusiv antete',async()=>{
     const z=await JSZip.loadAsync(sablonB()), chei=new Set()
     for(const f of Object.values(z.files).filter(f=>/^word\/.*\.xml$/.test(f.name)))
       for(const m of (await f.async('string')).matchAll(/\{\{([^}]+)\}\}/g)) chei.add(m[1])
-    expect([...CHEI_PV_B].sort()).toEqual([...chei].sort());expect(chei.size).toBe(78)
+    expect([...CHEI_PV_B].sort()).toEqual([...chei].sort());expect(chei.size).toBe(72)
   })
   it.each([
     ['proiect','contract_nr','numarul contractului'],['proiect','contract_data','data contractului'],
@@ -291,7 +314,7 @@ describe('PV B coproprietari - felia 7',()=>{
     d.detinatori=[]
     expect(verificaDatePvB(d)).not.toContain('toti detinatorii au PV A semnat')
   })
-  it('sablon real: doar absentii, referinta completata, 78 chei consumate',async()=>{
+  it('sablon real: doar absentii, referinta completata, 72 chei consumate',async()=>{
     const d=dateB();d.parcela.id='p';d.pvs=[aSemnat()]
     d.convocari=[{id:'c1',detinator_id:'d1',stare:'activ',canal:'posta',nr_tracking:'DOAR-SEMNATAR',created_at:'2026-11-14'}]
     d.raspunsuri=[{detinator_id:'d1',data:'2026-11-14',seq:1,optiune:'particip'}]

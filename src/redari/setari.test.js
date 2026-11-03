@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { CAMPURI_PROIECT, CAMPURI_UAT, COL_PROIECT, COL_UAT, normalizeaza, normalizeazaValoare, cheiSchimbate, valideazaUat, valideazaProiect,
   lipsuriUat, rezumatZile, dataValida, conflicteConcurente, contractDinExecutie } from './setari.js'
+import { TERMEN_CONVOCARE_ZILE, dataLimitaConvocare, termenAfisare, avertismenteUat } from './setari.js'
 
 const uatBun = () => ({ nume: 'Test UAT', sesiune_zi1: '2026-12-10', program_zi1: '09:00 – 16:00', sesiune_zi2: '2026-12-11', program_zi2: '09:00 – 19:00',
   termen_confirmare: '2026-11-28', afisare_data_start: '2026-11-20', afisare_data_end: '2026-12-12', afisare_ora: '09:30', reprezentant_uat_nume: 'Repr. test' })
@@ -134,5 +135,43 @@ describe('felia 2: legătură Execuție și URL GDPR', () => {
   })
   it.each(['http://x', 'HTTPS://x', 'https://' + 'x'.repeat(293)])('URL refuzat %s', url => {
     expect(valideazaProiect({ text_gdpr: 'Test', text_declaratie: 'Test', link_informare_gdpr: url })).toContain('Informarea GDPR completă (HTTPS, opțional): începe cu https://, maximum 300 caractere')
+  })
+})
+
+// Plan de verificare A1 rev49 (03.11.2026), pct. 4.2 și 4.3: expediere + afișare „cu cel puțin 10 zile înainte de prima zi de sesiune”.
+// Datele așteptate sunt numărate în calendar, nu calculate cu funcția testată.
+describe('termenul de 10 zile (plan pct. 4.2 și 4.3)', () => {
+  it('data-limită = ziua 1 minus 10 zile calendaristice, peste lună, an, 29 februarie și schimbarea orei', () => {
+    expect(TERMEN_CONVOCARE_ZILE).toBe(10)
+    expect(dataLimitaConvocare('2026-12-10')).toBe('2026-11-30')
+    expect(dataLimitaConvocare('2026-12-05')).toBe('2026-11-25')
+    expect(dataLimitaConvocare('2027-01-05')).toBe('2026-12-26')
+    expect(dataLimitaConvocare('2028-03-05')).toBe('2028-02-24')
+    expect(dataLimitaConvocare('2026-04-02')).toBe('2026-03-23')
+    expect(dataLimitaConvocare('2026-11-01')).toBe('2026-10-22')
+    expect(dataLimitaConvocare(' 2026-12-10 ')).toBe('2026-11-30')
+    for (const v of [null, undefined, '', '  ', '2026-02-30', '10.12.2026', '2026-12-1']) expect(dataLimitaConvocare(v)).toBeNull()
+  })
+  it('afișarea: pe data-limită sau înainte = în termen; o zi după = depășit; fără una dintre date nu se judecă', () => {
+    const u = { sesiune_zi1: '2026-12-10' }
+    expect(termenAfisare({ ...u, afisare_data_start: '2026-11-30' })).toMatchObject({ depasit: false, limita: '2026-11-30' })
+    expect(termenAfisare({ ...u, afisare_data_start: '2026-11-20' }).depasit).toBe(false)
+    expect(termenAfisare({ ...u, afisare_data_start: '2026-12-01' })).toMatchObject({ depasit: true, limita: '2026-11-30' })
+    expect(termenAfisare({ ...u, afisare_data_start: '2026-12-10' }).depasit).toBe(true)
+    expect(termenAfisare(u).depasit).toBe(false)
+    expect(termenAfisare({ afisare_data_start: '2026-12-01' })).toMatchObject({ depasit: false, limita: null })
+    expect(termenAfisare({ ...u, afisare_data_start: '2026-12-40' }).depasit).toBe(false)
+    expect(termenAfisare(null).depasit).toBe(false)
+  })
+  it('avertisment, NU eroare: salvarea nu se blochează (valideazaUat rămâne oglinda CHECK-urilor din BD)', () => {
+    const tarziu = { ...uatBun(), afisare_data_start: '2026-12-01' }
+    expect(valideazaUat(tarziu)).toEqual([])
+    expect(avertismenteUat(tarziu)).toEqual(['Afișarea la primărie începe pe 01.12.2026, sub 10 zile înainte de ziua 1 (10.12.2026): trebuie să înceapă cel târziu pe 30.11.2026 (plan pct. 4.3)'])
+    expect(avertismenteUat(uatBun())).toEqual([])
+    expect(avertismenteUat({})).toEqual([])
+  })
+  it('lista „Gata de convocare?” arată termenul depășit', () => {
+    expect(lipsuriUat({ ...uatBun(), afisare_data_start: '2026-12-01' })).toEqual(['afișarea începe după 30.11.2026 (sub 10 zile înainte de ziua 1)'])
+    expect(lipsuriUat({ ...uatBun(), afisare_data_start: '2026-11-30' })).toEqual([])
   })
 })

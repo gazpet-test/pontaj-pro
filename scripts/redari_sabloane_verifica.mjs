@@ -106,7 +106,8 @@ for (const f of fisiere) {
   const eroriResturi = r.resturi.filter(x => !x.intentionat)
   // relații externe: hyperlink-urile (deschise doar la clic) se acceptă; orice altceva (imagine/OLE/etc. externă) e problemă
   const externeRele = r.externe.filter(x => x.tip !== 'hyperlink')
-  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 43 && !nume.includes('link_afisare') && r.externe.length === 0)
+  // Final_v2 (03.11.2026): Model_4 nu mai are antetul firmei → 40 de chei (fără contract_nr / contract_data / proiect_denumire)
+  const adresaCorecta = f !== 'adresa_uat.docx' || (nume.length === 40 && !nume.includes('link_afisare') && r.externe.length === 0)
   const ok = r.rupte.length === 0 && eroriResturi.length === 0 && r.qrSingur !== false && externeRele.length === 0 && adresaCorecta
   if (!ok) probleme += 1
   console.log(`## ${f} — ${ok ? 'OK' : 'PROBLEME'}`)

@@ -127,7 +127,43 @@ export function contractDinExecutie(rand) {
   }
 }
 
-/** Erorile unui UAT (în română), aceleași reguli ca CHECK-urile din BD: zile în ordine, termen înaintea zilei 1, afișare ordonată. */
+// Planul de verificare a redărilor (A1 rev49, 03.11.2026), pct. 4.2 și 4.3: convocatorul se EXPEDIAZĂ prin recomandată cu AR și
+// afișarea la primărie ÎNCEPE „cu cel puțin 10 zile înainte de prima zi de sesiune”. Zile calendaristice: planul nu spune „lucrătoare”.
+// Constanta e singura sursă a termenului: avertisment în UAT, blocaj la adresa UAT (docx.js), data-limită la plicuri (plicuri.js).
+export const TERMEN_CONVOCARE_ZILE = 10
+const dataRo = (s) => String(s).split('-').reverse().join('.')
+
+/** Data-limită 'AAAA-LL-ZZ' = ziua 1 minus TERMEN_CONVOCARE_ZILE zile calendaristice; null dacă ziua 1 lipsește sau e invalidă.
+ *  Aritmetică pe data civilă (UTC la miezul nopții, fără fus orar și fără „azi”), deci aceeași în orice fus. */
+export function dataLimitaConvocare(zi1) {
+  const z = normalizeazaValoare(zi1)
+  if (!z || !dataValida(z)) return null
+  const d = new Date(z + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() - TERMEN_CONVOCARE_ZILE)
+  return d.toISOString().slice(0, 10)
+}
+
+/** Termenul afișării la primărie (plan pct. 4.3): `depasit` = afișarea începe DUPĂ data-limită. Fără ambele date nu se judecă. */
+export function termenAfisare(uat) {
+  const zi1 = normalizeazaValoare(uat?.sesiune_zi1), start = normalizeazaValoare(uat?.afisare_data_start)
+  const limita = dataLimitaConvocare(zi1)
+  return { zi1, start, limita, depasit: !!(limita && start && dataValida(start) && start > limita) }
+}
+
+/** Mesajul complet pentru un termen de afișare depășit (formularul UAT, adresa UAT). */
+export function mesajTermenAfisare(t) {
+  return `Afișarea la primărie începe pe ${dataRo(t.start)}, sub ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1 (${dataRo(t.zi1)}): ` +
+    `trebuie să înceapă cel târziu pe ${dataRo(t.limita)} (plan pct. 4.3)`
+}
+
+/** Avertismentele unui UAT: NU blochează salvarea (data afișării e un fapt, consemnat în PV de afișare); se confirmă la salvare. */
+export function avertismenteUat(form) {
+  const t = termenAfisare(form)
+  return t.depasit ? [mesajTermenAfisare(t)] : []
+}
+
+/** Erorile unui UAT (în română), aceleași reguli ca CHECK-urile din BD: zile în ordine, termen înaintea zilei 1, afișare ordonată.
+ *  Termenul de 10 zile NU e aici (nu are CHECK în BD): e avertisment, vezi avertismenteUat. */
 export function valideazaUat(form) {
   const erori = []
   for (const c of CAMPURI_UAT) verificaFormat(c, form?.[c.cheie], erori)
@@ -159,6 +195,8 @@ export function lipsuriUat(uat) {
   const l = []
   if (![1, 2, 3].some(i => !gol(uat?.[`sesiune_zi${i}`]) && !gol(uat?.[`program_zi${i}`]))) l.push('nicio zi de sesiune cu program')
   if (gol(uat?.reprezentant_uat_nume)) l.push('fără reprezentant nominalizat de primărie')
+  const t = termenAfisare(uat)
+  if (t.depasit) l.push(`afișarea începe după ${dataRo(t.limita)} (sub ${TERMEN_CONVOCARE_ZILE} zile înainte de ziua 1)`)
   return l
 }
 

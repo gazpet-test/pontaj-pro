@@ -13,11 +13,16 @@ import { G, S, fmtDate, azi, msgEroare, useToast, Modal, Camp, Gol, TagStare, CA
   SABLON_CONVOCATOR, COL_DETINATOR, COL_CONVOCARE, citesteTokenRaspuns, motivBlocareConvocator, citesteIn } from './redari/ui/comune.jsx'
 import FisaParcela from './redari/ui/FisaParcela.jsx'
 import ImportTgz from './redari/ui/ImportTgz.jsx'
+import ImportPostal from './redari/ui/ImportPostal.jsx'
+import PlicuriEcran from './redari/ui/PlicuriEcran.jsx'
+import CorespondentaEcran from './redari/ui/CorespondentaEcran.jsx'
 import UatEcran from './redari/ui/UatEcran.jsx'
 import SetariProiect from './redari/ui/SetariProiect.jsx'
 import TronsoaneEcran from './redari/ui/TronsoaneEcran.jsx'
 import SesiuneEcran from './redari/ui/SesiuneEcran.jsx'
 import DashboardEcran from './redari/ui/DashboardEcran.jsx'
+// 📱 SMS proprietari (owner sau utilizator SMS cu Redari editor / admin, 20261130b; blocat in BD pana la autorizarea Transgaz)
+import RedariSmsButon from './sms/RedariSmsButon.jsx'
 
 const PAGINA = 100
 // Proiectul LOT1 + cele 7 UAT-uri din brief (docs/redari/BRIEF_2026-11-01.md §2). text_gdpr / text_declaratie / contact_email NU se trimit:
@@ -122,6 +127,8 @@ export default function Redari() {
     { cod:'fisa', eticheta:'📄 Fișa parcelei', dezactivat: !parcelaFisa },
     { cod:'tronsoane', eticheta:'🛤️ Tronsoane / PV C' },
     { cod:'import', eticheta:'📥 Import TGZ' },
+    { cod:'posta', eticheta:'✉️ Poștă' },
+    { cod:'corespondenta', eticheta:'📨 Corespondență' },
     { cod:'uat', eticheta:'🏛️ UAT-uri' },
     { cod:'setari', eticheta:'⚙️ Setări proiect' },
   ]
@@ -160,6 +167,8 @@ export default function Redari() {
           {tab === 'registru' && <Registru key={reload} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onDeschideFisa={deschideFisa} />}
           {tab === 'fisa' && parcelaFisa && <FisaParcela parcelaId={parcelaFisa} proiect={proiect} uats={uats} nivel={nivel} profile={profile} show={show} onInapoi={inapoiLaRegistru} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'import' && <ImportTgz proiect={proiect} uats={uats} nivel={nivel} show={show} onImportat={() => setReload(r => r + 1)} />}
+          {tab === 'posta' && <><ImportPostal proiect={proiect} nivel={nivel} onSchimbat={() => setReload(r => r + 1)} /><PlicuriEcran key={proiect.id + nivel} proiect={proiect} uats={uats} nivel={nivel} reloadKey={reload} onSchimbat={() => setReload(r => r + 1)} /></>}
+          {tab === 'corespondenta' && <CorespondentaEcran proiect={proiect} nivel={nivel} profile={profile} show={show} />}
           {tab === 'uat' && <UatEcran proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={() => setReload(r => r + 1)} />}
           {tab === 'setari' && <SetariProiect key={proiect.id} proiect={proiect} uats={uats} nivel={nivel} show={show} onSchimbat={incarcaProiecte} />}
         </div>
@@ -194,7 +203,8 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
     try {
       let q = supabase.from('red_v_stare_parcela').select('*', { count:'exact' }).eq('proiect_id', proiect.id)
       if (fUat) q = q.eq('uat_id', fUat)
-      if (fTronson) q = q.eq('tronson', Number(fTronson))
+      if (fTronson === 'fara') q = q.is('tronson', null)   // parcelele încă neatribuite (după importul fără tronson)
+      else if (fTronson) q = q.eq('tronson', Number(fTronson))
       if (fStare) q = q.eq('stare', fStare)
       if (cautareAplicata) {
         const t = cautareAplicata.replace(/[%,()]/g, ' ').trim()
@@ -271,6 +281,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
         </select>
         <select value={fTronson} onChange={e => setFTronson(e.target.value)} style={S.select}>
           <option value="">Toate tronsoanele</option>
+          <option value="fara">Fără tronson</option>
           {tronsoane.map(t => <option key={t} value={t}>Tronson {t}</option>)}
         </select>
         <select value={fStare} onChange={e => setFStare(e.target.value)} style={S.select}>
@@ -285,6 +296,7 @@ function Registru({ proiect, uats, nivel, profile, show, onDeschideFisa }) {
         <div style={{ flex:1 }} />
         {/* r7 P2-1: blocat și cât se încarcă rândurile filtrului curent — altfel borderoul ar lua rândurile filtrului anterior */}
         {poateScrie && <button onClick={borderou} disabled={lucru || loading} style={S.btnS} title="CSV pentru Poștă: selecția sau rândurile afișate">📮 Borderou CSV {selectie.size ? `(${selectie.size})` : ''}</button>}
+        {(profile?.is_owner === true || poateScrie) && <RedariSmsButon proiect={proiect} uats={uats} uatId={fUat} show={show} />}
         <button onClick={incarca} style={S.btnS} title="Reîncarcă">↻</button>
       </div>
 
@@ -458,6 +470,12 @@ function ModalExpediat({ rand, show, onClose, onGata }) {
   const [lucru, setLucru] = useState(false)
   useEffect(() => { if (lista && !convId) setConvId((lista.find(c => !c.data_expediere) || lista[0])?.id || '') }, [lista, convId])
 
+  if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
+    <Modal titlu="Înregistrare poștală" onClose={onClose}>
+      <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
+      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+    </Modal>
+  )
   const salveaza = async () => {
     if (!convId) { show('Alege o convocare.', 'error'); return }
     if (!data) { show('Data expedierii e obligatorie.', 'error'); return }
@@ -496,6 +514,12 @@ function ModalArRetur({ mod, rand, show, onClose, onGata }) {
   const conv = lista?.find(c => c.id === convId)
   const arDupaRetur = mod === 'ar' && !!conv?.retur   // P2-10: se permite, dar explicit
 
+  if (lista?.find(c => c.id === convId)?.canal === 'posta') return (
+    <Modal titlu="Înregistrare poștală" onClose={onClose}>
+      <Camp eticheta="Convocare"><select value={convId} onChange={e => setConvId(e.target.value)} style={S.select}>{lista.map(c => <option key={c.id} value={c.id}>{etichetaConvocare(c)}</option>)}</select></Camp>
+      <p>Se înregistrează pe plic: Redări -&gt; Poștă -&gt; Plicuri</p>
+    </Modal>
+  )
   const salveaza = async () => {
     if (!convId) { show('Alege o convocare.', 'error'); return }
     if (!data) { show('Data e obligatorie.', 'error'); return }

@@ -1,18 +1,21 @@
 import { completeazaDocx, hashBlob, formatDataRo, formatNumarRo, ETICHETA_CALITATE,
   caleAdresaUat, versiuneMaximaInBucket, MIME_DOCX, MAX_INCERCARI_VERSIUNE } from './docx.js'
 import { ultimulRaspuns } from './stare.js'
+import { mentiuneAr } from './arMentiune.js'
 
 export const BIFA_DA = "\u2612"
 export const BIFA_NU = "\u2610"
 export const LUCRARI = ['sol_fertil', 'nivelare', 'arat', 'discuit', 'insamantare', 'gard', 'drum', 'altele']
 export const STARI_TEREN = ['nivelat', 'strat_vegetal', 'insamantat', 'gard_drum', 'alta']
+// Modelele Final_v2 (03.11.2026): fără fotografii în PV A și PV B; PV B fără topo / plan de situație și fără jurnal de șantier.
+// foto_nr, plan_situatie și jurnal_santier_ref rămân în BD, dar nu mai apar în documente (lista = cheile din șablon, pv.test.js).
 export const CHEI_PV_A = [
   'act_doveditor','act_identitate','alte_observatii','bifa_altele','bifa_arat','bifa_constatare_sediu',
   'bifa_constatare_teren','bifa_cu_obiectii','bifa_da','bifa_da_cu_obiectii','bifa_discuit','bifa_drum',
-  'bifa_fara_obiectii','bifa_foto_da','bifa_foto_nu','bifa_gard','bifa_insamantare','bifa_nivelare',
+  'bifa_fara_obiectii','bifa_gard','bifa_insamantare','bifa_nivelare',
   'bifa_plan_da','bifa_plan_nu','bifa_sol_fertil','bifa_st_alta','bifa_st_gard_drum','bifa_st_insamantat',
   'bifa_st_nivelat','bifa_st_strat_vegetal','calitate_cota','categoria_folosinta','categoria_initiala',
-  'contract_data','contract_nr','data_pv','foto_nr','locul','lucrari_altele','nr_cadastral','nr_pv','nume',
+  'contract_data','contract_nr','data_pv','locul','lucrari_altele','nr_cadastral','nr_pv','nume',
   'obiectii_text','poz_hg','proiect_denumire','reverificare_la','sat','semnatar_detinator','semnatar_gazpet',
   'semnatar_tgz','stare_teren_alta','suprafata','tarla','termen_remediere','tronson','uat','verificare_data','verificare_de',
 ]
@@ -45,7 +48,7 @@ function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator = {}, p
     calitate_cota: calitate + (plin(detinator.cota) ? ', cota ' + detinator.cota : ''),
     suprafata: formatNumarRo(parcela.suprafata_temporara_mp),
     categoria_initiala: parcela.categoria_folosinta ?? '', lucrari_altele: pv.lucrari?.altele ?? '',
-    stare_teren_alta: pv.stare_teren?.alta ?? '', foto_nr: pv.foto_nr ?? '',
+    stare_teren_alta: pv.stare_teren?.alta ?? '',
     verificare_data: formatDataRo(parcela.verificare_data),
     verificare_de: [parcela.verificare_de_gazpet, parcela.verificare_de_tgz ? '(TGZ: ' + parcela.verificare_de_tgz + ')' : ''].filter(Boolean).join(' '),
     obiectii_text: pv.obiectii_text ?? '', termen_remediere: formatDataRo(pv.termen_remediere),
@@ -63,7 +66,6 @@ function campuriComune({ proiect = {}, uat = {}, parcela = {}, detinator = {}, p
     bifa_da: bifa(pv.obiectii_redare === false), bifa_da_cu_obiectii: bifa(pv.obiectii_redare),
     bifa_fara_obiectii: bifa(pv.obiectii_redare === false), bifa_cu_obiectii: bifa(pv.obiectii_redare),
     bifa_plan_da: bifa(pv.plan_situatie === true), bifa_plan_nu: bifa(pv.plan_situatie === false),
-    bifa_foto_da: bifa(pv.foto_nr > 0), bifa_foto_nu: bifa(pv.foto_nr === 0),
     bifa_constatare_sediu: bifa(pv.constatare_mod === 'sediu'), bifa_constatare_teren: bifa(pv.constatare_mod === 'teren'),
   })
   return campuri
@@ -81,13 +83,13 @@ export const MOTIVE_PV_B = ['declaratie','neprezentat','neidentificat','refuz']
 export const CHEI_PV_B = [
   'afisare_data_end','afisare_data_start','afisare_pv_nr','bifa_alt_raspuns','bifa_altele','bifa_arat',
   'bifa_conv_primita','bifa_conv_returnata','bifa_discuit','bifa_drum','bifa_fara_adresa','bifa_fara_raspuns',
-  'bifa_foto_da','bifa_foto_nu','bifa_gard','bifa_insamantare','bifa_neidentificat','bifa_neprezentat',
-  'bifa_nivelare','bifa_plan_da','bifa_plan_nu','bifa_raspuns_fara_obiectii','bifa_reluare_fara_raspuns',
+  'bifa_gard','bifa_insamantare','bifa_neidentificat','bifa_neprezentat',
+  'bifa_nivelare','bifa_raspuns_fara_obiectii','bifa_reluare_fara_raspuns',
   'bifa_reluare_nu_e_cazul','bifa_reluare_raspuns','bifa_sit_declaratie','bifa_sit_neidentificat',
   'bifa_sit_neprezentat','bifa_sit_refuz','bifa_sol_fertil','bifa_st_alta','bifa_st_gard_drum',
   'bifa_st_insamantat','bifa_st_nivelat','bifa_st_strat_vegetal','categoria_folosinta','categoria_initiala',
   'contract_data','contract_nr','conv_data_confirmare','conv_data_expediere','conv_nr_tracking','conv_retur',
-  'data_pv','foto_nr','jurnal_santier','locul','lucrari_altele','nr_cadastral','nr_pv','nume','poz_hg',
+  'data_pv','locul','lucrari_altele','nr_cadastral','nr_pv','nume','poz_hg',
   'proiect_denumire','pv_a_referinta','raspuns_alt_text','raspuns_canal','raspuns_data','reluare_adresa_tgz_nr','reluare_data',
   'reluare_nr_tracking','reluare_raspuns_text','reprezentant_uat_nume','sat','semnatar_apm','semnatar_gazpet',
   'semnatar_tgz','semnatar_uat','stare_teren_alta','suprafata','tarla','tronson','uat','verificare_data',
@@ -142,7 +144,8 @@ export async function genereazaPvB(date) {
     bifa_neidentificat:bifa(!activi.length || activi.some(d => d.calitate === 'neidentificat')),
     bifa_fara_adresa:bifa(activi.some(d => d.adresa_cunoscuta === false)),
     conv_data_expediere:formatDataRo(conv?.data_expediere), conv_nr_tracking:conv?.nr_tracking ?? '',
-    conv_data_confirmare:formatDataRo(conv?.data_confirmare_primire), conv_retur:conv?.retur ?? '',
+    // PV B ajunge la TGZ: fără textul liber de pe AR (Jakarinos f10 UI P2-1); comentariul stă pe rândul lui (Copilot + Jakarinos r2: înghițea conv_retur)
+    conv_data_confirmare:formatDataRo(conv?.data_confirmare_primire) + mentiuneAr(conv, { detaliat: false }), conv_retur:conv?.retur ?? '',
     bifa_conv_primita:bifa(plin(conv?.data_confirmare_primire)), bifa_conv_returnata:bifa(plin(conv?.retur)),
     raspuns_data:formatDataRo(rasp?.data), raspuns_canal:rasp?.canal ?? '',
     raspuns_alt_text:rasp?.obiectii_text || rasp?.optiune || '',
@@ -154,7 +157,7 @@ export async function genereazaPvB(date) {
     bifa_reluare_fara_raspuns:bifa(!!rel?.data_expediere && !raspRel), bifa_reluare_raspuns:bifa(!!raspRel),
     reluare_raspuns_text:raspRel?.obiectii_text || raspRel?.optiune || '',
     verificare_de_gazpet:parcela.verificare_de_gazpet ?? '', verificare_de_tgz:parcela.verificare_de_tgz ?? '',
-    jurnal_santier:parcela.jurnal_santier_ref ?? '', reprezentant_uat_nume:uat.reprezentant_uat_nume ?? '',
+    reprezentant_uat_nume:uat.reprezentant_uat_nume ?? '',
     semnatar_uat:uat.reprezentant_uat_nume ?? '', semnatar_apm:proiect.apm_nume ?? '',
   })
   for (const k of MOTIVE_PV_B) campuri['bifa_sit_' + k] = bifa(pv.motiv_pv_b === k)
