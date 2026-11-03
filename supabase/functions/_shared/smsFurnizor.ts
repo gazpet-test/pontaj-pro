@@ -5,15 +5,18 @@
 //   SMS_DLR_SECRET (≥ 32 caractere, în URL-ul DLR), opțional SMSLINK_SENDER (gol = număr scurt) și SMSLINK_TEST ('1' = răspuns simulat de SMSLink).
 // Reguli: textul se re-normalizează aici (GSM-7, max 160) și orice abatere oprește trimiterea ÎNAINTE de rețea; din răspunsul SMSLink se
 //   păstrează DOAR codul (response_message NU se citește: eroarea 7 conține parola); timeout după ce cererea a plecat = 'necunoscut',
-//   fără retrimitere (idempotency nedocumentat → am plăti o dublură); doar eroarea 16 (tranzitorie) se reîncearcă, de max. 3 ori.
-import { verificaText, telefonNational, clasificaSmslink, egalTimpConstant, codSigur } from './smsText.mjs'
+//   fără retrimitere (idempotency nedocumentat → am plăti o dublură).
+// r2 (Jakarinos r1 P1): SINGURA retrimitere = codul 16 SMSLink („eroare la trimitere”, documentat ca neplecat), explicit, max. 3 încercări;
+//   orice cod nou / nedocumentat = 'necunoscut', fără reîncercare. Copilot r1 P3-01: `inainteDeApel` (ex. fereastra 08–20 la Redări) se
+//   verifică imediat înaintea FIECĂREI cereri HTTP, inclusiv a reîncercărilor; fals → nu pleacă nimic, rezultat 'in_afara_orelor'.
+import { verificaText, telefonNational, clasificaSmslink, egalTimpConstant, codSigur, SMSLINK_COD_REINCERCABIL } from './smsText.mjs'
 
 export type Clasa = 'permanent' | 'config' | 'credit' | 'tranzitoriu' | 'necunoscut'
 export type Rezultat =
   | { ok: true; furnizor_id: string; segmente: number }
   | { ok: false; clasa: Clasa; eroare: string; segmente: number }
 export type Dlr = { furnizor_id: string; livrat: boolean; raportat_la: string | null }
-export type Cerere = { to: string; text: string; ref: string }
+export type Cerere = { to: string; text: string; ref: string; inainteDeApel?: () => boolean }
 export interface Furnizor {
   nume: 'smslink' | 'simulator'
   trimite(c: Cerere): Promise<Rezultat>
@@ -26,7 +29,9 @@ export type Optiuni = { fetch?: typeof fetch; sleep?: (ms: number) => Promise<vo
 
 export const SMSLINK_API = 'https://secure.smslink.ro/sms/gateway/communicate/json.php'
 export const LUNGIME_MIN_SECRET_DLR = 32
-const INCERCARI_TRANZITORIU = 3
+export const EROARE_IN_AFARA_ORELOR = 'in_afara_orelor'
+export const INCERCARI_COD_16 = 3
+const EROARE_REINCERCABILA = `smslink_${SMSLINK_COD_REINCERCABIL}`
 
 const dormi = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
@@ -37,6 +42,12 @@ function pregateste(c: Cerere): { ok: true; nat: string; text: string; segmente:
   const nat = telefonNational(c?.to)
   if (!nat) return { ok: false, r: { ok: false, clasa: 'permanent', eroare: 'telefon_invalid', segmente: v.segmente } }
   return { ok: true, nat, text: v.text, segmente: v.segmente }
+}
+
+/** Garda de dinaintea unui apel: lipsă = permis; fals sau excepție = nu pleacă (fail closed). */
+function poatePleca(c: Cerere): boolean {
+  if (!c.inainteDeApel) return true
+  try { return c.inainteDeApel() === true } catch (_) { return false }
 }
 
 /** Secretul DLR din URL (?k=…), comparat în timp constant; doar POST. Secret neconfigurat / scurt → false. */
@@ -73,7 +84,8 @@ function smslink(env: Env, o: Optiuni): Furnizor {
     try {
       r = await f(SMSLINK_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) })
     } catch (_) {
-      return { ok: false, clasa: 'necunoscut', eroare: 'retea_timeout', segmente }   // cererea poate fi plecat: NU se retrimite
+      // cererea poate fi plecat: NU se retrimite
+      return { ok: false, clasa: 'necunoscut', eroare: 'retea_timeout', segmente }
     }
     let j: Record<string, unknown> | null = null
     try { j = await r.json() } catch (_) { j = null }
@@ -82,11 +94,13 @@ function smslink(env: Env, o: Optiuni): Furnizor {
       return { ok: true, furnizor_id: String(j.message_id), segmente }
     }
     if (j.response_type === 'ERROR') {
-      const cod = Number(j.response_id)   // response_message NU se citește (eroarea 7 conține parola în clar)
+      // response_message NU se citește (eroarea 7 conține parola în clar); orice cod nedocumentat → necunoscut (clasificaSmslink)
+      const cod = Number(j.response_id)
       if (!Number.isInteger(cod) || cod < 0 || cod > 999) return { ok: false, clasa: 'necunoscut', eroare: 'smslink_raspuns', segmente }
       return { ok: false, clasa: clasificaSmslink(cod), eroare: `smslink_${cod}`, segmente }
     }
-    return { ok: false, clasa: 'necunoscut', eroare: 'smslink_raspuns', segmente }   // răspuns neașteptat: poate a plecat
+    // răspuns neașteptat: poate a plecat
+    return { ok: false, clasa: 'necunoscut', eroare: 'smslink_raspuns', segmente }
   }
   return {
     nume: 'smslink',
@@ -94,14 +108,18 @@ function smslink(env: Env, o: Optiuni): Furnizor {
       const p = pregateste(c)
       if (!p.ok) return p.r
       if (!env('SMSLINK_CONNECTION_ID') || !env('SMSLINK_PASSWORD')) return { ok: false, clasa: 'config', eroare: 'smslink_neconfigurat', segmente: p.segmente }
+      if (!poatePleca(c)) return { ok: false, clasa: 'permanent', eroare: EROARE_IN_AFARA_ORELOR, segmente: p.segmente }
       let rez = await oData(p.nat, p.text, p.segmente)
-      for (let i = 1; i < INCERCARI_TRANZITORIU && !rez.ok && rez.clasa === 'tranzitoriu'; i++) {
+      // reîncercare DOAR pe codul 16 (SMS-ul nu a plecat), explicit, maximum INCERCARI_COD_16 cereri în total
+      for (let i = 1; i < INCERCARI_COD_16 && !rez.ok && rez.eroare === EROARE_REINCERCABILA; i++) {
         await sleep(1000 * 2 ** (i - 1))
+        if (!poatePleca(c)) return { ok: false, clasa: 'permanent', eroare: EROARE_IN_AFARA_ORELOR, segmente: p.segmente }
         rez = await oData(p.nat, p.text, p.segmente)
       }
       return rez
     },
-    async status(_id) { return { suportat: false as const } },   // SMSLink nu are interogare publică de stare: doar DLR prin webhook
+    // SMSLink nu are interogare publică de stare: doar DLR prin webhook
+    async status(_id) { return { suportat: false as const } },
     verificaDlr(req, p) {
       const cid = env('SMSLINK_CONNECTION_ID') ?? ''
       return secretDlrValid(req, env) && cid.length > 0 && egalTimpConstant(p.get('connection_id') ?? '', cid)
@@ -116,13 +134,14 @@ function smslink(env: Env, o: Optiuni): Furnizor {
 }
 
 // Simulator (SMS_FURNIZOR=simulator): nu iese nimic în rețea. Rezultat determinist după ultima cifră a numărului (numere fictive 0700…):
-//   …7 = respins permanent, …8 = timeout (necunoscut), …9 = eroare tranzitorie; restul = trimis, cu id 'sim-<uuid>'.
+//   …7 = respins permanent, …8 = timeout (necunoscut), …9 = eroare tranzitorie (fără reîncercare aici); restul = trimis, cu id 'sim-<uuid>'.
 function simulator(env: Env): Furnizor {
   return {
     nume: 'simulator',
     async trimite(c) {
       const p = pregateste(c)
       if (!p.ok) return p.r
+      if (!poatePleca(c)) return { ok: false, clasa: 'permanent', eroare: EROARE_IN_AFARA_ORELOR, segmente: p.segmente }
       const ultima = p.nat.slice(-1)
       if (ultima === '7') return { ok: false, clasa: 'permanent', eroare: 'sim_respins', segmente: p.segmente }
       if (ultima === '8') return { ok: false, clasa: 'necunoscut', eroare: 'sim_timeout', segmente: p.segmente }

@@ -3,12 +3,15 @@
 // de transliterare și aceleași seturi GSM-7; cazurile de test sunt identice în src/sms/smsText.test.js și în DRY-ul SQL (TEST3).
 // Fără dependențe, fără rețea, fără Deno/DOM: se importă din Node (vitest), din browser (Vite) și din Deno.
 
-export const MAX_GSM = 160            // MVP: un singur SMS (concatenarea oprită; SMSLink întoarce eroarea 12 peste 160)
-export const PAS_CONCATENAT = 152     // SMSLink taxează un SMS concatenat la fiecare 152 de caractere
-export const TARIF_EUR = 0.049        // decizia lui Razvan (03.11.2026): 0,049 EUR / SMS, tranșa 1–1.000 / lună
+// MVP: un singur SMS (concatenarea oprită; SMSLink întoarce eroarea 12 peste 160)
+export const MAX_GSM = 160
+// SMSLink taxează un SMS concatenat la fiecare 152 de caractere
+export const PAS_CONCATENAT = 152
+// decizia lui Razvan (03.11.2026): 0,049 EUR / SMS, tranșa 1–1.000 / lună
+export const TARIF_EUR = 0.049
 
 // ș ş Ș Ş ț ţ Ț Ţ ă Ă â Â î Î | „ ” “ « » " | ’ ‘ ‚ ` ´ | – — | CR LF TAB NBSP  (31 → 31, poziție cu poziție)
-const DIN = 'șşȘŞțţȚŢăĂâÂîÎ„”“«»"’‘‚`´–—\r\n\t '
+const DIN = 'șşȘŞțţȚŢăĂâÂîÎ„”“«»"’‘‚`´–—\r\n\t\u00a0'
 const IN = "ssSSttTTaAaAiI'''''''''''--    "
 const HARTA = new Map(Array.from(DIN).map((c, i) => [c, IN[i]]))
 
@@ -61,7 +64,7 @@ export function costEstimat(nrDestinatari, seg = 1) {
 
 /** Mobil RO → E.164 (+407xxxxxxxx); acceptă 07…, 7…, 407…, +407…, 00407…, cu spații / - . / : ; ( ). Altceva → null. */
 export function normalizeazaTelefon(s) {
-  const t = String(s ?? '').replace(/[ \-./:;()\t ]/g, '')
+  const t = String(s ?? '').replace(/[ \-./:;()\t\u00a0]/g, '')
   if (/^\+407[0-9]{8}$/.test(t)) return t
   if (/^00407[0-9]{8}$/.test(t)) return '+' + t.slice(2)
   if (/^407[0-9]{8}$/.test(t)) return '+' + t
@@ -81,16 +84,35 @@ export function mascheazaTelefon(s) {
   return t ? '07** *** ' + t.slice(-3) : null
 }
 
-// Codurile de eroare SMSLink (response_id la response_type = ERROR), docs/sms/RAPORT_SMSLINK_API_2026-11-03.md §2
-const SMSLINK_PERMANENT = new Set([1, 9, 10, 11, 12, 13, 14, 15, 17])   // respins, fără reîncercare
-const SMSLINK_CONFIG = new Set([2, 3, 4, 5, 6, 7])                       // cont / parolă / IP: oprește coada + alertă
-/** permanent | config | credit | tranzitoriu (16 și orice cod nou = tranzitoriu: reîncercare limitată). */
+// Codurile de eroare SMSLink (response_id la response_type = ERROR), docs/sms/RAPORT_SMSLINK_API_2026-11-03.md §2.
+// Respins, fără reîncercare:
+const SMSLINK_PERMANENT = new Set([1, 9, 10, 11, 12, 13, 14, 15, 17])
+// Cont / parolă / IP: oprește coada + alertă:
+const SMSLINK_CONFIG = new Set([2, 3, 4, 5, 6, 7])
+// Singura eroare documentată ca „eroare la trimitere” (SMS-ul nu a plecat) — SINGURA care se reîncearcă (max. 3, în adaptor):
+export const SMSLINK_COD_REINCERCABIL = 16
+/** permanent | config | credit | tranzitoriu (DOAR codul 16) | necunoscut (orice cod nou / nedocumentat: fără reîncercare,
+ *  mesajul rămâne `necunoscut` — poate a plecat; Jakarinos r1 P1: o reîncercare pe un cod necunoscut ar putea dubla SMS-ul). */
 export function clasificaSmslink(cod) {
   const n = Number(cod)
   if (SMSLINK_PERMANENT.has(n)) return 'permanent'
   if (SMSLINK_CONFIG.has(n)) return 'config'
   if (n === 8) return 'credit'
-  return 'tranzitoriu'
+  if (n === SMSLINK_COD_REINCERCABIL) return 'tranzitoriu'
+  return 'necunoscut'
+}
+
+// Fereastra pentru SMS-ul extern (Redări): 08:00–20:00 ora României — aceeași regulă ca fn_sms_rezerva (ora între 8 și 19 inclusiv).
+export const ORA_START_EXTERN = 8
+export const ORA_STOP_EXTERN = 20
+const ORA_RO = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', hour: '2-digit', hourCycle: 'h23' })
+/** Ora (0–23) la București pentru un moment în milisecunde. */
+export function oraBucuresti(ms) {
+  return Number(ORA_RO.format(new Date(ms)))
+}
+export function inFereastraExterna(ms) {
+  const h = oraBucuresti(ms)
+  return h >= ORA_START_EXTERN && h < ORA_STOP_EXTERN
 }
 
 /** Comparație în timp constant (nu se oprește la primul caracter diferit). Gol → false (fail closed). */

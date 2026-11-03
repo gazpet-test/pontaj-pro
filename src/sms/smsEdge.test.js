@@ -3,7 +3,7 @@
 // oprirea automată și DLR-ul (doar fn_sms_dlr_aplica, niciodată o trimitere).
 import { describe, expect, it } from 'vitest'
 import { handler as trimite, LOT_RUNDA } from '../../supabase/functions/sms-trimite/logica.ts'
-import { handler as dlr } from '../../supabase/functions/sms-dlr/logica.ts'
+import { handler as dlr, citesteCorpLimitat } from '../../supabase/functions/sms-dlr/logica.ts'
 
 const LOT = '11111111-2222-4333-8444-555555555555'
 const SECRET_DLR = 'D'.repeat(40)
@@ -81,7 +81,8 @@ describe('sms-trimite — flux', () => {
     expect(scrise[0].p_furnizor_id).toMatch(/^sim-/)
     expect(scrise[1]).toMatchObject({ p_mesaj_id: 'm2', p_ok: false, p_clasa: 'permanent', p_cod_eroare: 'sim_respins' })
     expect(scrise[2]).toMatchObject({ p_mesaj_id: 'm3', p_ok: false, p_clasa: 'necunoscut', p_cod_eroare: 'sim_timeout' })
-    expect(JSON.stringify(j)).not.toContain('+4070')   // răspunsul nu conține telefoane
+    // răspunsul nu conține telefoane
+    expect(JSON.stringify(j)).not.toContain('+4070')
   })
   it('kill-switch în BD → nimic trimis, motivul întors', async () => {
     const sb = clientFals({ user: 'o1', owner: true, rezervari: [{ motiv: 'kill_switch', mesaje: [] }] })
@@ -113,6 +114,31 @@ describe('sms-trimite — flux', () => {
     expect(j).toMatchObject({ ok: true, apelant: 'cron', motiv: 'fara_lot' })
     expect(sb.apeluri.find(([fn]) => fn === 'fn_sms_rezerva')[1].p_lot_id).toBeNull()
   })
+  it('Redări după 20:00 (ora României): nicio cerere la SMSLink, mesajele eșuate cu in_afara_orelor, lotul oprit (Copilot r1 P3-01)', async () => {
+    let cereri = 0
+    const f = async () => { cereri++; return { status: 200, json: async () => ({ response_type: 'MESSAGE', message_id: 1 }) } }
+    const sb = clientFals({ user: 'o1', owner: true, rezervari: [
+      { motiv: 'ok', categorie: 'redari', text: 'Test fictiv', mesaje: [mesaj('m1', '+40700000001'), mesaj('m2', '+40700000002')] },
+      { motiv: 'ok', categorie: 'redari', text: 'Test fictiv', mesaje: [mesaj('m3', '+40700000003')] },
+    ] })
+    const d = { ...deps(sb, { env: { SMS_FURNIZOR: 'smslink', SMSLINK_PASSWORD: 'fictiva' }, fetch: f }), acum: () => Date.parse('2026-11-03T18:30:00Z') }
+    const j = await (await trimite(post({ lot_id: LOT }, { Authorization: 'Bearer eyJ.o.x' }), d)).json()
+    expect(cereri).toBe(0)
+    expect(j).toMatchObject({ trimise: 0, esuate: 2, motiv: 'in_afara_orelor', runde: 1 })
+    expect(sb.apeluri.filter(([fn]) => fn === 'fn_sms_rezultat').map(([, a]) => a.p_cod_eroare)).toEqual(['in_afara_orelor', 'in_afara_orelor'])
+    expect(sb.apeluri.filter(([fn]) => fn === 'fn_sms_rezerva')).toHaveLength(1)
+  })
+  it('Redări la 19:59 → pleacă; lotul intern nu are fereastră', async () => {
+    let cereri = 0
+    const f = async () => { cereri++; return { status: 200, json: async () => ({ response_type: 'MESSAGE', message_id: cereri }) } }
+    const sb = clientFals({ user: 'o1', owner: true, rezervari: [{ motiv: 'ok', categorie: 'redari', text: 'Test', mesaje: [mesaj('m1', '+40700000001')] }] })
+    const d = { ...deps(sb, { env: { SMS_FURNIZOR: 'smslink', SMSLINK_PASSWORD: 'fictiva' }, fetch: f }), acum: () => Date.parse('2026-11-03T17:59:00Z') }
+    expect(await (await trimite(post({ lot_id: LOT }, { Authorization: 'Bearer eyJ.o.x' }), d)).json()).toMatchObject({ trimise: 1 })
+    const sb2 = clientFals({ user: 'o1', owner: true, rezervari: [{ motiv: 'ok', categorie: 'intern', text: 'Test', mesaje: [mesaj('m1', '+40700000001')] }] })
+    const d2 = { ...deps(sb2, { env: { SMS_FURNIZOR: 'smslink', SMSLINK_PASSWORD: 'fictiva' }, fetch: f }), acum: () => Date.parse('2026-11-03T22:00:00Z') }
+    expect(await (await trimite(post({ lot_id: LOT }, { Authorization: 'Bearer eyJ.o.x' }), d2)).json()).toMatchObject({ trimise: 1 })
+    expect(cereri).toBe(2)
+  })
 })
 
 describe('sms-dlr', () => {
@@ -131,6 +157,18 @@ describe('sms-dlr', () => {
     expect((await dlr(new Request(url(SECRET_DLR), { method: 'POST', body: form({ message_id: '1', status: '1', connection_id: 'ALTA' }) }), deps(sb, { env: envLink }))).status).toBe(401)
     expect((await dlr(new Request(url(SECRET_DLR), { method: 'POST', body: 'x'.repeat(5000) }), deps(sb, { env: envLink }))).status).toBe(413)
     expect(sb.apeluri).toHaveLength(0)
+  })
+  it('corp chunked FĂRĂ Content-Length: citit cu limită de octeți — peste MAX_CORP → 413, sub → procesat (Gemini r1 P3-2)', async () => {
+    const flux = (bucati) => new ReadableStream({ start(c) { for (const b of bucati) c.enqueue(new TextEncoder().encode(b)); c.close() } })
+    const cerere = (bucati) => new Request(url(SECRET_DLR), { method: 'POST', body: flux(bucati), duplex: 'half' })
+    expect(cerere(['a']).headers.get('content-length')).toBeNull()
+    const sb = clientFals()
+    expect((await dlr(cerere(Array(5).fill('x'.repeat(1000))), deps(sb, { env: envLink }))).status).toBe(413)
+    expect(sb.apeluri).toHaveLength(0)
+    expect(await citesteCorpLimitat(cerere(['ab', 'cd']), 3)).toBeNull()
+    expect(await citesteCorpLimitat(cerere(['ab', 'cd']), 4)).toBe('abcd')
+    expect((await dlr(cerere(['message_id=77&sta', 'tus=1&connection_id=CONN-TEST']), deps(sb, { env: envLink }))).status).toBe(200)
+    expect(sb.apeluri).toEqual([['fn_sms_dlr_aplica', { p_furnizor: 'smslink', p_furnizor_id: '77', p_livrat: true, p_raportat_la: null }]])
   })
   it('DLR valid (form POST) → doar fn_sms_dlr_aplica, 200; niciodată rezervare / trimitere', async () => {
     const sb = clientFals()

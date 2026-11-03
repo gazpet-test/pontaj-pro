@@ -69,6 +69,32 @@ describe('SMSLink — trimite', () => {
     expect(await creeazaFurnizor(envDe(), { fetch: g, sleep: nuDormi }).trimite({ to: '+40700000001', text: 'x', ref: 'r' })).toMatchObject({ ok: true, furnizor_id: '77' })
     expect(g.cereri).toHaveLength(2)
   })
+  it('cod nou / nedocumentat (ex. 99) → necunoscut, O SINGURĂ cerere (Jakarinos r1 P1: fără retrimitere, risc de dublură)', async () => {
+    for (const cod of [99, 0, 18]) {
+      const f = fetchFals([{ json: { response_type: 'ERROR', response_id: cod } }, { json: { response_type: 'MESSAGE', message_id: 1 } }])
+      const r = await creeazaFurnizor(envDe(), { fetch: f, sleep: nuDormi }).trimite({ to: '+40700000001', text: 'x', ref: 'r' })
+      expect(r).toEqual({ ok: false, clasa: 'necunoscut', eroare: `smslink_${cod}`, segmente: 1 })
+      expect(f.cereri).toHaveLength(1)
+    }
+  })
+  it('16 apoi un cod necunoscut → se oprește imediat (doar 16 se reîncearcă)', async () => {
+    const f = fetchFals([{ json: { response_type: 'ERROR', response_id: 16 } }, { json: { response_type: 'ERROR', response_id: 99 } }, { json: { response_type: 'MESSAGE', message_id: 3 } }])
+    expect(await creeazaFurnizor(envDe(), { fetch: f, sleep: nuDormi }).trimite({ to: '+40700000001', text: 'x', ref: 'r' })).toMatchObject({ clasa: 'necunoscut', eroare: 'smslink_99' })
+    expect(f.cereri).toHaveLength(2)
+  })
+  it('garda inainteDeApel (fereastra Redări): falsă → nicio cerere; devenită falsă între reîncercări → oprire', async () => {
+    const f = fetchFals([{ json: { response_type: 'ERROR', response_id: 16 } }])
+    const sl = creeazaFurnizor(envDe(), { fetch: f, sleep: nuDormi })
+    expect(await sl.trimite({ to: '+40700000001', text: 'x', ref: 'r', inainteDeApel: () => false })).toMatchObject({ ok: false, clasa: 'permanent', eroare: 'in_afara_orelor' })
+    expect(f.cereri).toHaveLength(0)
+    let apeluri = 0
+    expect(await sl.trimite({ to: '+40700000001', text: 'x', ref: 'r', inainteDeApel: () => ++apeluri === 1 })).toMatchObject({ eroare: 'in_afara_orelor' })
+    expect(f.cereri).toHaveLength(1)
+    expect(await sl.trimite({ to: '+40700000001', text: 'x', ref: 'r', inainteDeApel: () => { throw new Error('ceas') } })).toMatchObject({ eroare: 'in_afara_orelor' })
+    expect(f.cereri).toHaveLength(1)
+    const sim = creeazaFurnizor(envDe({ SMS_FURNIZOR: 'simulator' }))
+    expect(await sim.trimite({ to: '+40700000001', text: 'x', ref: 'r', inainteDeApel: () => false })).toMatchObject({ eroare: 'in_afara_orelor' })
+  })
   it('timeout / rețea după plecarea cererii → necunoscut, O SINGURĂ cerere (fără retrimitere)', async () => {
     const f = fetchFals([new Error('timeout')])
     const r = await creeazaFurnizor(envDe(), { fetch: f, sleep: nuDormi }).trimite({ to: '+40700000001', text: 'x', ref: 'r' })

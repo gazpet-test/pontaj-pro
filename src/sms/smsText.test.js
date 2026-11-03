@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   textFinal, lungimeGsm, segmente, nepermise, verificaText, costEstimat, normalizeazaTelefon, telefonNational, mascheazaTelefon,
-  clasificaSmslink, egalTimpConstant, codSigur, MAX_GSM, TARIF_EUR, GSM_EXT,
+  clasificaSmslink, egalTimpConstant, codSigur, MAX_GSM, TARIF_EUR, GSM_EXT, SMSLINK_COD_REINCERCABIL, oraBucuresti, inFereastraExterna,
 } from '../../supabase/functions/_shared/smsText.mjs'
 
 describe('textFinal (transliterare, ca fn_sms_text_final)', () => {
@@ -19,13 +19,13 @@ describe('textFinal (transliterare, ca fn_sms_text_final)', () => {
     expect(textFinal('„”“«»"’‘‚`´')).toBe("'".repeat(11))
   })
   it('CR LF TAB NBSP → spațiu; null / undefined → gol', () => {
-    expect(textFinal('a\r\nb c')).toBe('a b c')
+    expect(textFinal('a\r\nb\u00a0c')).toBe('a b c')
     expect(textFinal(null)).toBe('')
     expect(textFinal(undefined)).toBe('')
   })
   it('alte spații Unicode NU se taie (rămân de raportat ca nepermise, ca în SQL btrim)', () => {
-    expect(textFinal(' x')).toBe(' x')
-    expect(nepermise(textFinal(' x'))).toEqual([' '])
+    expect(textFinal('\u2009x')).toBe('\u2009x')
+    expect(nepermise(textFinal('\u2009x'))).toEqual(['\u2009'])
   })
 })
 
@@ -92,13 +92,29 @@ describe('telefon (ca fn_sms_tel_normalizat)', () => {
 })
 
 describe('clasificarea erorilor SMSLink', () => {
-  it('permanent / config / credit / tranzitoriu', () => {
+  it('permanent / config / credit; tranzitoriu = DOAR codul 16', () => {
     for (const c of [1, 9, 10, 11, 12, 13, 14, 15, 17]) expect(clasificaSmslink(c)).toBe('permanent')
     for (const c of [2, 3, 4, 5, 6, 7]) expect(clasificaSmslink(c)).toBe('config')
     expect(clasificaSmslink(8)).toBe('credit')
     expect(clasificaSmslink(16)).toBe('tranzitoriu')
+    expect(SMSLINK_COD_REINCERCABIL).toBe(16)
     expect(clasificaSmslink('7')).toBe('config')
-    expect(clasificaSmslink(99)).toBe('tranzitoriu')
+  })
+  it('orice cod nou / nedocumentat = necunoscut (fără reîncercare: poate a plecat)', () => {
+    for (const c of [0, 18, 99, 500, 'x', null]) expect(clasificaSmslink(c)).toBe('necunoscut')
+  })
+})
+
+describe('fereastra externă 08–20 (ora României)', () => {
+  it('iarna (UTC+2) și vara (UTC+3)', () => {
+    expect(oraBucuresti(Date.parse('2026-11-03T06:00:00Z'))).toBe(8)
+    expect(inFereastraExterna(Date.parse('2026-11-03T05:59:00Z'))).toBe(false)
+    expect(inFereastraExterna(Date.parse('2026-11-03T06:00:00Z'))).toBe(true)
+    expect(inFereastraExterna(Date.parse('2026-11-03T17:59:59Z'))).toBe(true)
+    expect(inFereastraExterna(Date.parse('2026-11-03T18:00:00Z'))).toBe(false)
+    expect(inFereastraExterna(Date.parse('2026-07-01T05:00:00Z'))).toBe(true)
+    expect(inFereastraExterna(Date.parse('2026-07-01T17:00:00Z'))).toBe(false)
+    expect(oraBucuresti(Date.parse('2026-11-03T22:30:00Z'))).toBe(0)
   })
 })
 
