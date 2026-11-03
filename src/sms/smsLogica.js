@@ -33,6 +33,7 @@ export const MOTIVE_TRIMITERE = {
   eroare_rezervare: 'Rezervarea în BD a fost refuzată — reîncarcă și verifică starea lotului.',
   acces_refuzat: 'Nivelul tău nu permite trimiterea acestui lot (contul de test: doar loturile lui interne, de maximum 5 destinatari; Redări: cere și modulul Redări).',
   buget_test_zi: 'Contul de test și-a atins bugetul de SMS pe ziua de azi (nu se eliberează prin anulare). Restul pleacă mâine.',
+  creator_fara_drept: 'Lotul e al unui cont de test care nu mai are dreptul SMS: nu mai pleacă. Anulează-l.',
 }
 export const motivTrimitere = m => MOTIVE_TRIMITERE[m] || `Oprit: ${m || 'motiv necunoscut'}.`
 
@@ -57,15 +58,16 @@ export function poateActiona(lot, panou, actiune = true) {
   if (nivel === 'owner') return true
   if (nivel === 'utilizator') return lot?.categorie === 'intern' || (lot?.categorie === 'redari' && panou?.redari_modul === true && panou?.redari_autorizat === true)
   if (nivel === 'test') {
+    // r3: limita de 1–5 destinatari și la vedere (un lot de test inconsistent, de peste 5, nu se vede)
     const nr = Number(lot?.nr_destinatari)
-    return lot?.categorie === 'intern' && lot?.al_meu === true && lot?.creat_nivel === 'test' && (!actiune || (nr >= 1 && nr <= MAX_TEST))
+    return lot?.categorie === 'intern' && lot?.al_meu === true && lot?.creat_nivel === 'test' && nr >= 1 && nr <= MAX_TEST
   }
   return false
 }
 
 /** Banda de sub titlu, pe nivel (null = nimic de spus). */
 export function notaNivel(panou) {
-  if (panou?.nivel === 'test') return `Cont de test: maximum ${MAX_TEST} destinatari într-un lot, doar intern (fără Redări), doar loturile create de tine, cel mult ${panou?.buget_test_zi || 10} SMS pe zi. Setările, plafoanele și opt-out-ul le gestionează owner-ul.`
+  if (panou?.nivel === 'test') return `Cont de test: maximum ${MAX_TEST} destinatari într-un lot, doar intern (fără Redări), doar loturile create de tine, cel mult ${panou?.buget_test_zi || 10} SMS pe zi și cel mult ${panou?.coada_test_max || 10} mesaje în așteptare. Setările, plafoanele și opt-out-ul le gestionează owner-ul.`
   if (panou?.nivel === 'utilizator') return 'Setările (kill-switch, plafoane, autorizarea Redări, opt-out) le gestionează owner-ul.'
   return null
 }

@@ -105,9 +105,10 @@ describe('niveluri SMS (20261130b r2) — oglinda lui fn_sms_lot_acces', () => {
     expect(poateActiona(redari, { nivel: 'utilizator', redari_modul: true, redari_autorizat: false })).toBe(false)
     expect(poateActiona(redari, { nivel: 'utilizator', redari_modul: true, redari_autorizat: true })).toBe(true)
   })
-  it('test: doar loturile LUI (P2-02), interne, acțiuni pe 1–5; niciodată Redări', () => {
+  it('test: doar loturile LUI (P2-02), interne, 1–5 destinatari și la vedere (r3); niciodată Redări', () => {
     expect([0, 1, 5, 6].map(n => poateActiona(alMeu(n), { nivel: 'test' }))).toEqual([false, true, true, false])
-    expect(poateActiona(alMeu(6), { nivel: 'test' }, false)).toBe(true)
+    expect(poateActiona(alMeu(6), { nivel: 'test' }, false)).toBe(false)
+    expect(poateActiona(alMeu(5), { nivel: 'test' }, false)).toBe(true)
     expect(poateActiona(intern(3), { nivel: 'test' })).toBe(false)
     expect(poateActiona(intern(3), { nivel: 'test' }, false)).toBe(false)
     expect(poateActiona(intern(3, { al_meu: true, creat_nivel: 'utilizator' }), { nivel: 'test' })).toBe(false)
@@ -130,6 +131,8 @@ describe('niveluri SMS (20261130b r2) — oglinda lui fn_sms_lot_acces', () => {
     expect(notaNivel({ nivel: 'test' })).toMatch(/fără Redări/)
     expect(notaNivel({ nivel: 'test', buget_test_zi: 10 })).toMatch(/create de tine, cel mult 10 SMS pe zi/)
     expect(motivTrimitere('buget_test_zi')).toMatch(/bugetul/)
+    expect(notaNivel({ nivel: 'test', coada_test_max: 10 })).toMatch(/cel mult 10 mesaje în așteptare/)
+    expect(motivTrimitere('creator_fara_drept')).toMatch(/nu mai are dreptul SMS/)
     expect(notaNivel({ nivel: 'utilizator' })).toMatch(/owner/)
     expect(notaNivel({ nivel: 'owner' })).toBeNull()
     expect(NIVELURI.test).toMatch(/test/)

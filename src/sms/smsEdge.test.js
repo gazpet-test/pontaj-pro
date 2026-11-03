@@ -110,6 +110,37 @@ describe('sms-trimite — poarta', () => {
   })
 })
 
+describe('sms-trimite — acceptanță: identitatea vine DOAR din auth.getUser (r3, Copilot P3-02)', () => {
+  const corpStrain = { lot_id: LOT, p_apelant: UID_O, user_id: UID_O, apelant: 'owner', nivel: 'owner', uid: UID_O }
+  it('cheia anon + uuid-ul unui owner în corp → 401, nicio rezervare, niciun fn_sms_nivel', async () => {
+    const sb = clientFals({ user: null, nivel: 'owner' })
+    const r = await trimite(post(corpStrain, { Authorization: 'Bearer eyJ.anon.key' }), deps(sb))
+    expect(r.status).toBe(401)
+    expect(nuARezervat(sb)).toBe(true)
+    expect(sb.apeluri.some(([fn]) => fn === 'utilizator:fn_sms_nivel')).toBe(false)
+  })
+  it('JWT valid de test + p_apelant / user_id străin în corp: p_apelant = uid-ul din auth.getUser, câmpurile din corp ignorate', async () => {
+    const sb = clientFals({ user: UID_U, nivel: 'test', rezervari: [{ motiv: 'buget_test_zi', mesaje: [] }] })
+    const j = await (await trimite(post(corpStrain, { Authorization: 'Bearer eyJ.test.x' }), deps(sb))).json()
+    expect(j).toMatchObject({ ok: true, apelant: 'test', motiv: 'buget_test_zi' })
+    const rez = sb.apeluri.filter(([fn]) => fn === 'fn_sms_rezerva').map(([, a]) => a)
+    expect(rez).toHaveLength(1)
+    expect(rez[0]).toEqual({ p_lot_id: LOT, p_max: LOT_RUNDA, p_furnizor: 'simulator', p_apelant: UID_U })
+    expect(JSON.stringify(sb.apeluri)).not.toContain(UID_O)
+  })
+  it('ruta de cron rămâne separată: secretul intern => apelant cron, p_apelant null, fără getUser / fn_sms_nivel, chiar dacă vine și un JWT + uid în corp', async () => {
+    const sb = clientFals({ user: UID_U, nivel: 'test', rezervari: [{ motiv: 'fara_lot', mesaje: [] }] })
+    const j = await (await trimite(post(corpStrain, { 'x-intern-secret': SECRET_INTERN, Authorization: 'Bearer eyJ.test.x' }), deps(sb))).json()
+    expect(j).toMatchObject({ ok: true, apelant: 'cron' })
+    expect(sb.apeluri.find(([fn]) => fn === 'fn_sms_rezerva')[1]).toMatchObject({ p_lot_id: LOT, p_apelant: null })
+    expect(sb.apeluri.some(([fn]) => fn === 'getUser' || fn === 'utilizator:fn_sms_nivel')).toBe(false)
+    // secret greșit + corp cu uid de owner, fără JWT → 401 (cronul nu se poate pretinde prin corp)
+    const sb2 = clientFals()
+    expect((await trimite(post({ ...corpStrain, cron: true }, { 'x-intern-secret': 'f'.repeat(64) }), deps(sb2))).status).toBe(401)
+    expect(nuARezervat(sb2)).toBe(true)
+  })
+})
+
 describe('sms-trimite — flux', () => {
   it('owner: rezervă câte LOT_RUNDA, trimite prin simulator, scrie rezultatele; se oprește la motivul din BD', async () => {
     const sb = clientFals({ user: UID_O, owner: true, rezervari: [
