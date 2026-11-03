@@ -1,4 +1,5 @@
 // sms-dlr — entrypoint. Poarta (POST + secret în URL comparat în timp constant + connection_id) și logica sunt în logica.ts.
+// v2 (20261130d): + filtrul de IP (cf-connecting-ip față de IP_SMSLINK): observare implicit, blocare 403 cu secretul SMS_DLR_IP_STRICT=1.
 // Publicare: verify_jwt=false (în NO_JWT din .github/workflows/deploy-edge-function.yml): furnizorul de SMS nu are JWT.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { handler } from './logica.ts'

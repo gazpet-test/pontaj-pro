@@ -160,6 +160,44 @@ function simulator(env: Env): Furnizor {
   }
 }
 
+// ── Soldul (20261130d, 03.11.2026): mode=Credit, corp JSON cu connection_id + password (form-urlencoded → „Insufficient arguments”) ──
+// Din răspuns se păstrează DOAR `credit` (întreg ≥ 0) sau codul de eroare: response_message NU se citește (eroarea 7 conține parola),
+// iar răspunsul brut nu se loghează și nu se salvează. Nu trimite nimic, nu consumă credit.
+export type Sold = { ok: true; credit: number } | { ok: false; eroare: string }
+export const SOLD_MAX = 10_000_000
+export const SOLD_SIMULATOR = 1000
+
+export async function citesteSold(env: Env, o: Optiuni = {}): Promise<Sold> {
+  const nume = (env('SMS_FURNIZOR') ?? '').trim()
+  if (nume === 'simulator') return { ok: true, credit: SOLD_SIMULATOR }
+  if (nume !== 'smslink') return { ok: false, eroare: 'furnizor_neconfigurat' }
+  if (!env('SMSLINK_CONNECTION_ID') || !env('SMSLINK_PASSWORD')) return { ok: false, eroare: 'smslink_neconfigurat' }
+  const f = o.fetch ?? fetch
+  let r: Response
+  try {
+    r = await f(`${SMSLINK_API}?mode=Credit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connection_id: env('SMSLINK_CONNECTION_ID'), password: env('SMSLINK_PASSWORD'), mode: 'Credit' }),
+      signal: AbortSignal.timeout(o.timeoutMs ?? 20_000),
+    })
+  } catch (_) {
+    return { ok: false, eroare: 'retea_timeout' }
+  }
+  let j: Record<string, unknown> | null = null
+  try { j = await r.json() } catch (_) { j = null }
+  if (!j || typeof j !== 'object') return { ok: false, eroare: codSigur(`http_${r.status}`) }
+  if (j.response_type === 'ERROR') {
+    const cod = Number(j.response_id)
+    return Number.isInteger(cod) && cod >= 0 && cod <= 999 ? { ok: false, eroare: `smslink_${cod}` } : { ok: false, eroare: 'smslink_raspuns' }
+  }
+  // `credit` = numărul de SMS-uri disponibile (număr sau text zecimal; fracțiunea se taie în jos, ca alerta să nu întârzie);
+  // altă formă (lipsă, negativ, uriaș, text) = răspuns neașteptat, NU 0
+  const brut = typeof j.credit === 'number' ? j.credit
+    : typeof j.credit === 'string' && /^[0-9]{1,8}(\.[0-9]{1,4})?$/.test(j.credit.trim()) ? Number(j.credit.trim()) : NaN
+  if (!Number.isFinite(brut) || brut < 0 || brut > SOLD_MAX) return { ok: false, eroare: 'smslink_raspuns' }
+  return { ok: true, credit: Math.floor(brut) }
+}
+
 /** Furnizorul configurat sau null (SMS_FURNIZOR lipsă / necunoscut → nimic nu pleacă). */
 export function creeazaFurnizor(env: Env, o: Optiuni = {}): Furnizor | null {
   const nume = (env('SMS_FURNIZOR') ?? '').trim()

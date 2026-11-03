@@ -13,6 +13,8 @@ export const SURSE_ADMIN = [
   { id: 'conturi', label: 'Conturi platformă', module: 'admin_alerte', ownerOnly: true, path: '/admin?tab=managers' },
   // 13.10.2026: proiecte active fără etichetă Gmail → corespondența lor nu intră automat în ERP (scriptul Ingestie Corespondența)
   { id: 'gmail', label: 'Proiecte fără etichetă Gmail', module: 'executie', ownerOnly: true, path: '/executie' },
+  // 04.11.2026 (20261130d): soldul SMSLink sub prag / citire veche / eroare — vederea v_sms_sold (din fn_sold_sms_citeste: doar owner, și în BD)
+  { id: 'sms_sold', label: 'SMS · sold SMSLink', module: 'sms', ownerOnly: true, path: '/admin?tab=sms' },
 ]
 
 // Cheia transversală este explicită inclusiv pentru owner. Nu moștenește dreptul HR.
@@ -305,6 +307,7 @@ export const SELECT_ADMIN = {
   logistica_comenzi_transport: 'id,numar_comanda,data_transport,status',
   v_admin_conturi_alerte: 'id,cod,profile_id,email,tip_cont,is_owner,employee_id,employee_name,employee_active,termination_date,banned_until,jurnal_id,inchis_la,candidati,alocari',
   executie_proiecte: 'id,nume,cod_intern,eticheta_gmail,activ',
+  v_sms_sold: 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta',
 }
 
 // Proiect activ fără etichetă Gmail: corespondența lui rămâne nesortată (sau ajunge în coada „de repartizat”).
@@ -320,6 +323,27 @@ export function alerteGmail(proiecte) {
   }))
 }
 
+// Soldul SMSLink: alerta o decide BD-ul (fn_sold_sms_stare: sub_prag / citire_veche / eroare_dupa_citire); aici doar textul.
+export function alerteSmsSold(st) {
+  if (!st || st.alerta !== true) return []
+  const credit = Number.isInteger(st.credit) ? st.credit : null
+  const la = st.citit_la ? new Date(st.citit_la).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' }) : null
+  const motiv = st.sub_prag === true ? 'sub_prag' : st.eroare_dupa_citire === true ? 'eroare' : 'veche'
+  return [alerta('sms_sold', motiv, {
+    title: motiv === 'sub_prag' ? `Sold SMSLink sub prag: ${credit} SMS (prag ${st.prag})`
+      : motiv === 'eroare' ? `Soldul SMSLink nu s-a putut citi (${st.eroare || 'eroare'})` : 'Soldul SMSLink nu a mai fost citit de peste 36 de ore',
+    reference: credit != null ? `Ultima citire: ${credit} SMS${la ? ` · ${la}` : ''}` : 'Nicio citire reușită încă',
+    priority: motiv === 'sub_prag' ? (credit === 0 ? 'critical' : 'week') : 'missing',
+    timestamp: st.citit_la || st.eroare_la || null,
+    owner: 'Owner · cont SMSLink',
+    impact: motiv === 'sub_prag' ? 'Reîncarcă creditul în contul SMSLink. La credit 0 trimiterea se oprește automat (eroarea 8).'
+      : motiv === 'eroare' ? 'Verifică conexiunea ERP-PROD (connection_id / parolă / IP) și secretele SMSLINK_* din Edge Secrets.'
+        : 'Verifică jobul sms_sold_zilnic (07:10) și funcția edge sms-sold.',
+    reason: 'Calculat în BD (fn_sold_sms_stare) din ultima citire mode=Credit a cronului zilnic. Nu se trimite nimic automat.',
+    locator: 'sms_sold · fn_sold_sms_citeste',
+  })]
+}
+
 export async function incarcaSursaAdmin(client, source, profile, { signal, now = new Date() } = {}) {
   if (!areAccesSursa(profile, source)) return { state: 'denied', rows: [], message: 'Acces neacordat la modulul sursă.' }
   const today = ziBucuresti(now)
@@ -329,6 +353,7 @@ export async function incarcaSursaAdmin(client, source, profile, { signal, now =
     if (source.id === 'ofertare') rows = alerteOfertare(await read('ofertare_licitatii', q => q.in('status', ['identificata', 'analiza', 'go', 'in_lucru'])), now)
     if (source.id === 'hr') rows = alerteHr(await read('v_hr_autorizatii_status'), today)
     if (source.id === 'conturi') rows = alerteConturi(await read('v_admin_conturi_alerte'), today)
+    if (source.id === 'sms_sold') rows = alerteSmsSold((await read('v_sms_sold'))[0] ?? null)
     if (source.id === 'gmail') rows = alerteGmail(await read('executie_proiecte', q => q.eq('activ', true)))
     if (source.id === 'firma') rows = alerteFirma(await read('documente_firma', q => q.eq('activ', true)), today)
     if (source.id === 'flota') {

@@ -50,6 +50,14 @@ describe('📱 SMS — acces pe nivel (ruta /sms și Administrator)', () => {
     for (const t of ['Compune', 'Istoric loturi', '>⚙ Setări<', '>🚫 Opt-out<', 'Previzualizează', 'Creează lot (draft)', 'Azi: <b>0</b> / 200']) expect(html).toContain(t)
     expect(html).toContain('nu înlocuiește convocarea scrisă')
   })
+  it('owner: soldul SMSLink în banda de sus (20261130d), marcat sub prag; ceilalți nu îl văd', () => {
+    const sold = { credit: 120, citit_la: '2026-11-04T05:10:00Z', prag: 150, sub_prag: true, alerta: true }
+    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: true }} panouInitial={panouOwner} soldInitial={sold} />)
+    expect(html).toContain('Sold SMSLink: 120 (la 04.11 07:10) ⚠')
+    expect(html).toContain('Sub pragul de 150 SMS')
+    const u = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} soldInitial={sold} />)
+    expect(u).not.toContain('Sold SMSLink')
+  })
   it('utilizator: compune / istoric, fără Setări și Opt-out, fără plafoane', () => {
     const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} />)
     for (const t of ['Compune', 'Istoric loturi', 'Previzualizează', 'Utilizator SMS', 'le gestionează owner-ul', 'Mai pot pleca azi']) expect(html).toContain(t)

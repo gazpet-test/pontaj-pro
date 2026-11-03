@@ -6,10 +6,39 @@
 //   rezervă nimic, nu poate porni o trimitere (service_role are EXECUTE doar pe cele 3 RPC-uri de edge, fără drepturi pe tabele).
 // Conținut extern: parametrii DLR sunt date, nu instrucțiuni; nu se păstrează payload-ul brut și nu se loghează nimic din el.
 // r2 (Gemini r1 P3-2): corpul se citește din stream cu limită de octeți (și fără Content-Length, la transfer chunked) — peste MAX_CORP → 413.
+// v2 (20261130d, 03.11.2026): filtrul de IP = a DOUA barieră, după secretul din URL (și înaintea connection_id-ului din corp).
+//   IP-ul clientului = antetul `cf-connecting-ip`: hostul *.supabase.co e servit prin Cloudflare, care îl SUPRASCRIE la fiecare cerere
+//   (o valoare trimisă de client nu trece). `x-forwarded-for` NU se folosește: Cloudflare doar ADAUGĂ la lista primită, deci primul
+//   element îl poate scrie oricine. Modul implicit = OBSERVARE: IP străin / antet lipsă → DLR-ul se procesează (secretul + connection_id
+//   rămân poarta) + un avertisment fără PII (doar IP-ul, dacă are format IPv4, și motivul). SMS_DLR_IP_STRICT=1 → BLOCARE (403, nimic
+//   citit sau scris). Avertismentul apare doar după secretul valid: scanările fără secret rămân 401, fără zgomot în loguri.
+//   Înainte de STRICT=1: în modul observare, DLR-urile reale trebuie să apară fără avertismente (confirmă și antetul ales).
 import { creeazaFurnizor, secretDlrValid, type Env } from '../_shared/smsFurnizor.ts'
 
 // deno-lint-ignore no-explicit-any
-export type Deps = { sb: any; env: Env }
+export type Deps = { sb: any; env: Env; avertizeaza?: (mesaj: string, ctx: Record<string, unknown>) => void }
+
+// IP-urile din care SMSLink trimite DLR-urile: comunicate de SMSLink pe 03.11.2026 (sursa: mesajul suportului, transmis de Razvan).
+// La o schimbare la ei: se actualizează lista aici (PR), nu prin secret.
+export const IP_SMSLINK: readonly string[] = Object.freeze([
+  '146.70.213.194', '146.70.213.195', '146.70.213.200',
+  '89.33.246.226', '89.33.246.227', '89.33.246.228', '89.33.246.234',
+])
+export const ANTET_IP = 'cf-connecting-ip'
+const IPV4 = /^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$/
+
+export type VerdictIp = { permis: boolean; ip: string | null; motiv: 'ok' | 'antet_lipsa' | 'ip_invalid' | 'ip_strain' }
+
+/** IP-ul clientului (din ANTET_IP) față de IP_SMSLINK. IPv4 canonic (fără zerouri în față); forma IPv6 mapată ::ffff:a.b.c.d e acceptată. */
+export function verificaIp(req: Request): VerdictIp {
+  const brut = (req.headers.get(ANTET_IP) ?? '').trim()
+  if (!brut) return { permis: false, ip: null, motiv: 'antet_lipsa' }
+  const ip = brut.toLowerCase().startsWith('::ffff:') ? brut.slice(7) : brut
+  if (!IPV4.test(ip)) return { permis: false, ip: null, motiv: 'ip_invalid' }
+  return IP_SMSLINK.includes(ip) ? { permis: true, ip, motiv: 'ok' } : { permis: false, ip, motiv: 'ip_strain' }
+}
+
+export const ipStrict = (env: Env) => (env('SMS_DLR_IP_STRICT') ?? '').trim() === '1'
 
 export const MAX_CORP = 4096
 const CAMPURI = ['message_id', 'status', 'timestamp', 'connection_id', 'network_id', 'network_type', 'message_count']
@@ -60,6 +89,13 @@ function parametri(corp: string, url: string): URLSearchParams {
 export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (req.method !== 'POST') return json(405, { ok: false })
   if (!secretDlrValid(req, deps.env)) return json(401, { ok: false })
+  const v = verificaIp(req)
+  if (!v.permis) {
+    const strict = ipStrict(deps.env)
+    const avertizeaza = deps.avertizeaza ?? ((m: string, c: Record<string, unknown>) => console.warn(m, c))
+    avertizeaza('sms-dlr: IP in afara listei SMSLink', { ip: v.ip, motiv: v.motiv, mod: strict ? 'blocare' : 'observare' })
+    if (strict) return json(403, { ok: false })
+  }
   const furnizor = creeazaFurnizor(deps.env)
   if (!furnizor) return json(500, { ok: false, error: 'furnizor_neconfigurat' })
   if (Number(req.headers.get('content-length') || 0) > MAX_CORP) return json(413, { ok: false })

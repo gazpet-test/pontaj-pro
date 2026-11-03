@@ -156,5 +156,15 @@ export function valideazaPlafoane(zi, luna) {
   return null
 }
 
+/** Rândul de sold din panoul owner-ului: „Sold SMSLink: N (la ZZ.LL HH:MM)”; alerta o decide BD-ul (fn_sold_sms_stare). */
+export function textSold(st) {
+  if (!st) return 'Sold SMSLink: —'
+  if (!Number.isInteger(st.credit) || !st.citit_la) return 'Sold SMSLink: încă necitit'
+  const d = new Date(st.citit_la)
+  const p = Object.fromEntries(new Intl.DateTimeFormat('ro-RO', { timeZone: 'Europe/Bucharest', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(d).map(x => [x.type, x.value]))
+  return `Sold SMSLink: ${st.credit} (la ${p.day}.${p.month} ${p.hour}:${p.minute})`
+}
+
 export const fmtEur = n => `${(Number(n) || 0).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} EUR`
 export const fmtData = v => (v ? new Date(v).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' }) : '—')
