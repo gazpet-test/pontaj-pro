@@ -801,7 +801,7 @@ function Layout({ children }) {
     if (el) { el.querySelector('.nl.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); masoaraNav() }
     window.addEventListener('resize', masoaraNav)
     return () => window.removeEventListener('resize', masoaraNav)
-  }, [loc.pathname, profile?.id, masoaraNav])
+  }, [loc.pathname, profile?.id, profile?.email, profile?.role, masoaraNav])   // email/rol schimbă lista de taburi (Gemini P3)
   const deruleazaNav = sens => { const el = navRef.current; if (el) el.scrollBy({ left: sens * Math.max(160, el.clientWidth * 0.7), behavior: 'smooth' }) }
   // Externii (email non-@gazpet.ro, ex. partenerul Adrom Evolution) nu văd Tichete/Consumabile
   const esteExtern = !(profile?.email || '').toLowerCase().endsWith('@gazpet.ro')
@@ -834,11 +834,11 @@ function Layout({ children }) {
         </div>
         {/* taburile de module: zonă proprie derulabilă; săgețile ‹ › apar doar când mai sunt taburi ascunse (TKT-2026-0373) */}
         <div className="navwrap">
-          {navAscuns.st && <button className="navsag" title="Taburile din stânga" aria-label="Taburile din stânga" onClick={()=>deruleazaNav(-1)}>‹</button>}
+          {navAscuns.st && <button type="button" className="navsag" title="Taburile din stânga" aria-label="Taburile din stânga" onClick={()=>deruleazaNav(-1)}>‹</button>}
           <div ref={navRef} className={`navscroll${navAscuns.st?' st':''}${navAscuns.dr?' dr':''}`} onScroll={masoaraNav}>
             {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
           </div>
-          {navAscuns.dr && <button className="navsag" title="Taburile din dreapta" aria-label="Taburile din dreapta" onClick={()=>deruleazaNav(1)}>›</button>}
+          {navAscuns.dr && <button type="button" className="navsag" title="Taburile din dreapta" aria-label="Taburile din dreapta" onClick={()=>deruleazaNav(1)}>›</button>}
         </div>
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
           {/* ℹ️ Noutăți modul — anunțuri per modul, reminder la 12 h până la „Am citit" (08.09.2026) */}
