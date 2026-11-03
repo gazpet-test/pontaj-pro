@@ -99,9 +99,45 @@ Get-Content -LiteralPath 'C:\Users\Public\cgpt_pw_out.txt'
 Taburile 6ae06a05, 6ae06a54, 6ae9964e si cele 3 rezerve trebuie sa fie deschise
 (lipsa unui tab = deschizi URL-ul conversatiei, fara reload la celelalte).
 
-## Rollback la v4.6
+## Rollback la v4.6 (NU v46 sect. 8)
 
-**v46 sect. 8**, cu `$Audit` de mai sus; sectiunea "marker Gemini v45" NU se aplica
-(markerul Gemini nu s-a schimbat). Revoke-ul cu receipt-ul nou este no-op la
-`added=false` (ACE-ul v4.6 ramane, corect pentru v4.6). Dupa rollback cdx ramane
-necertificat pana la un Run/Seal nou.
+v46 sect. 8 era pentru v45: sterge filtrele WFP si retrage markerul Gemini. Aici nu:
+`cdx_wfp.ps1`/`cdx_wfp.cs` si `gemini_pw.py` sunt identice in v4.6 si v4.6.1, deci filtrele
+WFP instalate la pasul 3 si markerul Gemini raman valabile pentru v4.6. Rollback-ul este
+doar swap-ul de `bin`, fara RemoveCdxWfp, fara Revoke engine, fara mutarea markerului Gemini.
+
+```powershell
+# A, proces nou, dupa preambul
+. "$Bin\cdx_security.ps1"
+$PAW_ROOT = $PawRoot
+$paths = Get-Content -LiteralPath "$Audit\install_paths.json" -Raw | ConvertFrom-Json
+$RetiredBin = [IO.Path]::GetFullPath([string]$paths.retired_bin)
+if ((Split-Path $RetiredBin -Parent) -ine $PawRoot -or (Split-Path $RetiredBin -Leaf) -notmatch '^bin-retired-\d{8}-\d{6}-\d{4}$') { throw 'Tinta rollback invalida' }
+[void](AssertCdxPath $RetiredBin)
+$barrier = OpenCdxInstallBarrier $true
+try {
+    $marker = Join-Path $Bin 'cdx_sandbox_validat.json'
+    if (Test-Path -LiteralPath $marker) {
+        AssertCdxSingleFile $marker; AssertCdxAdminAcl $marker
+        Move-Item -LiteralPath $marker -Destination ("$Audit\certificate-v461-retired-" + [guid]::NewGuid().ToString('N') + '.json')
+    }
+    if (Test-Path -LiteralPath "$RetiredBin\cdx_sandbox_validat.json") { throw 'Marker in bin vechi; nu restaura automat' }
+    AssertCdxAdminAcl $RetiredBin
+    AssertCdxHashes (GetCdxTreeHashes $RetiredBin) (Get-Content -LiteralPath "$Audit\old_bin_hashes.json" -Raw | ConvertFrom-Json)
+    $FailedBin = Join-Path $PawRoot ('bin-audit-rollback-' + [guid]::NewGuid().ToString('N'))
+    if ([IO.Path]::GetFullPath($Bin) -ine 'C:\ProgramData\Gazpet\Paw\bin') { throw 'Cale bin invalida' }
+    Move-Item -LiteralPath $Bin -Destination $FailedBin
+    try { Move-Item -LiteralPath $RetiredBin -Destination $Bin }
+    catch { Move-Item -LiteralPath $FailedBin -Destination $Bin; throw }
+} finally { $barrier.Dispose() }
+```
+
+Apoi in N, proces nou: blocul `GetCdxBinding` din v46 sect. 3a (trebuie sa treaca: WFP-ul
+si grant-ul engine au ramas) si smoke-ul de la pasul 4 cu `6ae06a05` in loc de `6ae9964e`.
+Dupa rollback cdx ramane NECERTIFICAT: `certificate-retired.json` din `$Audit` nu se
+restaureaza automat; Run/Seal nou (v46 sect. 7) sau decizie separata cu review.
+
+**Install esuat la pasul 3.2:** installerul reface singur swap-ul si sterge filtrul pe care
+l-a pus, deci `bin` ramane v4.6, dar filtrele WFP Paw lipsesc (scoase la 3.1) si cdx e
+indisponibil; jak/cop/gem merg (nu depind de WFP). STOP, pastreaza `$Audit\install.log`,
+fara reincercari improvizate.
