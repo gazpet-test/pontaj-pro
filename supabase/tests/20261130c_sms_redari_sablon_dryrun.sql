@@ -11,6 +11,8 @@
 -- r2 (NO-GO Jakarinos + Copilot pe r1): regula pe persoana (raspuns pe oricare parcela exclude; PV doar pe unele parcele = primeste),
 -- sesiunea inceputa (creare / aprobare / intre transe / cron), ne_eligibil la rezervare, coada_golita + campania, set_hash (TEST2-TEST13).
 -- Starile „in timp” (sesiune trecuta, transa deja plecata, coada_golita) se scriu cu triggerele oprite, doar in tranzactia de proba.
+-- r3 (NO-GO Jakarinos pe r2): expirarea pe clock_timestamp() dupa lock-uri (TEST15), un mesaj pe persoana la rezervare dupa ce doua
+-- persoane devin una (TEST16).
 CREATE FUNCTION pg_temp.s3c_ca(p_uid uuid, p_rol text) RETURNS void LANGUAGE plpgsql AS $h$
 BEGIN
   IF p_rol = 'postgres' THEN EXECUTE 'RESET ROLE'; PERFORM set_config('request.jwt.claims', '', true); RETURN; END IF;
@@ -90,6 +92,8 @@ BEGIN
      OR has_function_privilege('authenticated', 'public.fn_sms_redari_sablon_calc(text,date[],text[],text,timestamp)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_sms_redari_persoane(uuid,uuid)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_sms_redari_lot_motiv(public.sms_loturi)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.fn_sms_redari_lot_motiv_la(public.sms_loturi,timestamptz)', 'EXECUTE')
+     OR has_function_privilege('service_role', 'public.fn_sms_redari_lot_motiv_la(public.sms_loturi,timestamptz)', 'EXECUTE')
      OR has_function_privilege('service_role', 'public.fn_sms_redari_persoane(uuid,uuid)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.fn_sms_rezerva(uuid,integer,text,uuid)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_sms_rezerva(uuid,integer,text,uuid)', 'EXECUTE')
@@ -599,6 +603,91 @@ BEGIN
   j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('ud')::uuid, j->>'text_final', j->>'set_hash', false);
   IF j->>'lot_id' IS NULL THEN RAISE EXCEPTION 'TEST13 FAIL: campania dupa anulare %', j; END IF;
   RAISE NOTICE 'TEST13 OK coada_golita cu mesaj necunoscut = lot activ (23505); livrat = campania exista (23505); dupa anulare se reface';
+END $t$;
+
+-- ── TEST15 (r3 P2): expirarea pe momentul efectiv (clock_timestamp), decisa DUPA lock-uri; momentul ca parametru testabil ──────────
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+DO $t$
+DECLARE l public.sms_loturi; v_start timestamptz; v_rez text := (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure);
+  v_apr text := (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_lot_aproba(uuid,integer)'::regprocedure);
+BEGIN
+  SELECT * INTO l FROM public.sms_loturi WHERE id = pg_temp.s3c_g('lot')::uuid;
+  v_start := ((l.filtru->>'zi')::date + (l.filtru->>'ora')::time) AT TIME ZONE 'Europe/Bucharest';
+  -- o tranzactie care a inceput inainte de sesiune si a obtinut lock-urile dupa: decide momentul de dupa lock, nu inceputul
+  IF public.fn_sms_redari_lot_motiv_la(l, v_start - interval '1 second') IS NOT NULL
+     OR public.fn_sms_redari_lot_motiv_la(l, v_start) IS DISTINCT FROM 'sesiune_expirata'
+     OR public.fn_sms_redari_lot_motiv_la(l, v_start + interval '2 seconds') IS DISTINCT FROM 'sesiune_expirata'
+     OR public.fn_sms_redari_lot_motiv_la(l, NULL) IS DISTINCT FROM 'sesiune_expirata' THEN
+    RAISE EXCEPTION 'TEST15 FAIL: fn_sms_redari_lot_motiv_la in jurul inceputului sesiunii';
+  END IF;
+  -- prin constructie: fn_sms_redari_lot_motiv = _la(lot, clock_timestamp()), VOLATILE; nicio decizie pe now(); in fn_sms_rezerva
+  -- verificarea vine dupa lock-ul pe setari si pe lot; aprobarea blocheaza lotul inainte de UPDATE-ul care porneste triggerul
+  IF (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_redari_lot_motiv(public.sms_loturi)'::regprocedure) !~ 'fn_sms_redari_lot_motiv_la[(]p_lot, clock_timestamp[(][)][)]'
+     OR (SELECT provolatile FROM pg_proc WHERE oid = 'public.fn_sms_redari_lot_motiv(public.sms_loturi)'::regprocedure) <> 'v'
+     OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_redari_lot_motiv_la(public.sms_loturi,timestamptz)'::regprocedure) ~ 'now[(][)]'
+     OR strpos(v_rez, 'v_motiv := public.fn_sms_redari_lot_motiv(l);') <= strpos(v_rez, 'SELECT * INTO l FROM public.sms_loturi x WHERE x.id = p_lot_id FOR UPDATE;')
+     OR strpos(v_rez, 'SELECT * INTO s FROM public.sms_setari WHERE id FOR UPDATE;') >= strpos(v_rez, 'v_motiv := public.fn_sms_redari_lot_motiv(l);')
+     OR strpos(v_apr, 'SELECT * INTO l FROM public.sms_loturi WHERE id = p_lot_id FOR UPDATE;') >= strpos(v_apr, 'UPDATE public.sms_loturi SET stare = ''aprobat''') THEN
+    RAISE EXCEPTION 'TEST15 FAIL: expirarea nu e decisa pe clock_timestamp dupa lock-uri';
+  END IF;
+  -- clock_timestamp avanseaza in tranzactie, now() nu: dupa o asteptare (pg_sleep) momentul folosit e cel de dupa
+  PERFORM pg_sleep(0.05);
+  IF NOT (clock_timestamp() > now() + interval '40 milliseconds') THEN RAISE EXCEPTION 'TEST15 FAIL: clock_timestamp nu avanseaza'; END IF;
+  RAISE NOTICE 'TEST15 OK expirarea: _la(start - 1s) valabil, _la(start) / _la(start + 2s) / _la(NULL) = sesiune_expirata; fn_sms_redari_lot_motiv = _la(clock_timestamp()), apelata dupa lock-urile pe setari / lot';
+END $t$;
+
+-- ── TEST16 (r3 P2): doua persoane cu telefoane diferite devin aceeasi persoana dupa creare -> la rezervare pleaca UN singur mesaj ──
+DO $t$
+DECLARE v_u uuid; p1 uuid; p2 uuid; v_id uuid; d record;
+BEGIN
+  INSERT INTO public.red_uat (proiect_id, nume, uat3, judet, sesiune_zi1, program_zi1)
+  VALUES (pg_temp.s3c_g('pr')::uuid, 'Dublura', 'TSJ', 'Test', pg_temp.s3c_g('azi')::date + 3, '10:00') RETURNING id INTO v_u;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.s3c_g('pr')::uuid, v_u, 'TSJ-0001', 1) RETURNING id INTO p1;
+  INSERT INTO public.red_parcele (proiect_id, uat_id, id_parcela, tronson) VALUES (pg_temp.s3c_g('pr')::uuid, v_u, 'TSJ-0002', 1) RETURNING id INTO p2;
+  FOR d IN SELECT * FROM (VALUES ('D24', p1, 'Test Sms C Dup Unu', '0700000224', 'Strada Test 24'),
+                                 ('D25', p2, 'Test Sms C Dup Doi', '0700000225', 'Strada Test 25')) AS x(k, parcela, nume, tel, strada) LOOP
+    INSERT INTO public.red_detinatori (parcela_id, nume, nume_normalizat, calitate) VALUES (d.parcela, d.nume, upper(d.nume), 'proprietar') RETURNING id INTO v_id;
+    INSERT INTO public.red_detinatori_contact (detinator_id, adresa_strada, adresa_sat, adresa_comuna, adresa_judet, cod_postal, adresa_cunoscuta, telefon)
+    VALUES (v_id, d.strada, 'Sat Test', 'Testeni', 'Test', '000000', true, d.tel);
+    INSERT INTO public.red_convocari (detinator_id, canal) VALUES (v_id, 'telefon');
+    PERFORM pg_temp.s3c_s(d.k, v_id::text);
+  END LOOP;
+  PERFORM pg_temp.s3c_s('uj', v_u::text);
+END $t$;
+SELECT pg_temp.s3c_ca(pg_temp.s3c_g('ured')::uuid, 'authenticated');
+DO $t$
+DECLARE j jsonb;
+BEGIN
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('uj')::uuid, NULL, NULL, true);
+  j := public.fn_sms_lot_redari_sablon_creeaza(pg_temp.s3c_g('pr')::uuid, pg_temp.s3c_g('uj')::uuid, j->>'text_final', j->>'set_hash', false);
+  IF (j->>'nr_destinatari')::integer <> 2 THEN RAISE EXCEPTION 'TEST16 FAIL: lotul L5 (2 persoane) %', j; END IF;
+  PERFORM pg_temp.s3c_s('L5', j->>'lot_id');
+  j := public.fn_sms_lot_aproba((j->>'lot_id')::uuid, (public.fn_sms_lot_destinatari((j->>'lot_id')::uuid)->>'versiune')::integer);
+  IF j->>'stare' <> 'aprobat' THEN RAISE EXCEPTION 'TEST16 FAIL: aprobarea L5'; END IF;
+END $t$;
+-- dupa aprobare se corecteaza numele si adresa lui D25: e aceeasi persoana ca D24 (aceeasi cheie fn_red_cheie_persoana), alt telefon
+SELECT pg_temp.s3c_ca(NULL, 'postgres');
+UPDATE public.red_detinatori SET nume = 'Test Sms C Dup Unu', nume_normalizat = 'TEST SMS C DUP UNU' WHERE id = pg_temp.s3c_g('D25')::uuid;
+UPDATE public.red_detinatori_contact SET adresa_strada = 'Strada Test 24' WHERE detinator_id = pg_temp.s3c_g('D25')::uuid;
+DO $t$
+DECLARE j jsonb; v_lot uuid := pg_temp.s3c_g('L5')::uuid;
+BEGIN
+  IF public.fn_red_cheie_persoana(pg_temp.s3c_g('D24')::uuid) IS DISTINCT FROM public.fn_red_cheie_persoana(pg_temp.s3c_g('D25')::uuid) THEN
+    RAISE EXCEPTION 'TEST16 FAIL: pregatire (cheile persoanei difera)';
+  END IF;
+  j := public.fn_sms_rezerva(v_lot, 50, 'simulator', pg_temp.s3c_g('ured')::uuid);
+  IF j->>'motiv' NOT IN ('ok', 'gata', 'in_afara_orelor') THEN RAISE EXCEPTION 'TEST16 FAIL: rezervarea L5 %', j->>'motiv'; END IF;
+  IF (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = v_lot AND m.stare = 'anulat' AND m.cod_eroare = 'duplicat_persoana') <> 1
+     OR (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = v_lot AND m.stare <> 'anulat') <> 1
+     OR jsonb_array_length(j->'mesaje') > 1 THEN
+    RAISE EXCEPTION 'TEST16 FAIL: aceeasi persoana pe doua telefoane';
+  END IF;
+  -- o a doua transa nu reinvie mesajul anulat si nu trimite al doilea
+  j := public.fn_sms_rezerva(v_lot, 50, 'simulator', pg_temp.s3c_g('ured')::uuid);
+  IF (SELECT count(*) FROM public.sms_mesaje m WHERE m.lot_id = v_lot AND m.stare <> 'anulat') <> 1 OR jsonb_array_length(coalesce(j->'mesaje', '[]')) > 1 THEN
+    RAISE EXCEPTION 'TEST16 FAIL: a doua transa';
+  END IF;
+  RAISE NOTICE 'TEST16 OK doua persoane unite dupa corectarea numelui / adresei: la rezervare pleaca 1 mesaj, celalalt anulat / duplicat_persoana (si la transa urmatoare)';
 END $t$;
 
 -- ── TEST14: comutatorul Redari oprit = creare (si previzualizare) refuzata, ca inainte, si pentru owner ─────────────────────────

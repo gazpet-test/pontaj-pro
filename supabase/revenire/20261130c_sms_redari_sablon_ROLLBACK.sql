@@ -2,7 +2,7 @@
 -- Fail-closed:
 --   * fn_sms_loturi_reguli si fn_sms_rezerva revin EXACT la corpurile 20261130b (copiate din supabase/migrations/20261130b_sms_acces_modul.sql
 --     de generator, nu de mana; md5 verificat la final); CREATE OR REPLACE pastreaza drepturile;
---   * cele 5 functii noi (sablonul, eligibilitatea, valabilitatea lotului, crearea) se scot (DROP);
+--   * cele 6 functii noi (sablonul, eligibilitatea, valabilitatea lotului, crearea) se scot (DROP);
 --   * fn_sms_lot_redari_creeaza (textul liber) NU se redeschide: dupa revenire nimeni nu mai creeaza loturi Redari din aplicatie,
 --     pana la o migrare noua. Loturile interne, aprobarea, trimiterea si istoricul raman exact ca in 20261130b.
 -- NU sterge date: loturile Redari deja create din sablon raman in sms_loturi (filtru->>'sablon' = 'redari_v1'), cu mesajele lor.
@@ -18,12 +18,13 @@ BEGIN
   IF to_regprocedure('public.fn_sms_lot_redari_sablon_creeaza(uuid,uuid,text,text,boolean)') IS NULL
      OR to_regprocedure('public.fn_sms_redari_sablon_calc(text,date[],text[],text,timestamp)') IS NULL
      OR to_regprocedure('public.fn_sms_redari_sablon_model()') IS NULL OR to_regprocedure('public.fn_sms_redari_persoane(uuid,uuid)') IS NULL
-     OR to_regprocedure('public.fn_sms_redari_lot_motiv(public.sms_loturi)') IS NULL OR to_regclass('public.sms_loturi') IS NULL THEN
+     OR to_regprocedure('public.fn_sms_redari_lot_motiv(public.sms_loturi)') IS NULL OR to_regclass('public.sms_loturi') IS NULL
+     OR to_regprocedure('public.fn_sms_redari_lot_motiv_la(public.sms_loturi,timestamptz)') IS NULL THEN
     RAISE EXCEPTION '20261130c revenire: migrarea 20261130c lipseste';
   END IF;
   -- corpurile de acum sunt cele din 20261130c (altceva = schimbat de altcineva intre timp: nu suprascriem orb)
   IF md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_loturi_reguli()'::regprocedure), chr(13), '')) <> '06e942cb552fb0cb26e17151a6cd9dc2'
-     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> '2eca284977adca8bb64cfe57dd6c6189' THEN
+     OR md5(replace((SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_sms_rezerva(uuid,integer,text,uuid)'::regprocedure), chr(13), '')) <> '3a518ba51fc177946ddee662167e8827' THEN
     RAISE EXCEPTION '20261130c revenire: fn_sms_loturi_reguli / fn_sms_rezerva nu sunt cele din 20261130c';
   END IF;
 END $pre$;
@@ -216,6 +217,7 @@ END $fn$;
 
 DROP FUNCTION public.fn_sms_lot_redari_sablon_creeaza(uuid, uuid, text, text, boolean);
 DROP FUNCTION public.fn_sms_redari_lot_motiv(public.sms_loturi);
+DROP FUNCTION public.fn_sms_redari_lot_motiv_la(public.sms_loturi, timestamptz);
 DROP FUNCTION public.fn_sms_redari_persoane(uuid, uuid);
 DROP FUNCTION public.fn_sms_redari_sablon_calc(text, date[], text[], text, timestamp);
 DROP FUNCTION public.fn_sms_redari_sablon_model();
