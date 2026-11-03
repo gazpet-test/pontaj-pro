@@ -13,7 +13,7 @@ import { smsApi, mesajEroare } from './smsApi.js'
 import {
   STARI_LOT, STARI_MESAJ, motivTrimitere, contorText, argumenteIntern, departamente, filtreazaAngajati, zileLaPlafon,
   poateAproba, poateTrimite, poateAnula, valideazaAutorizare, valideazaPlafoane, fmtEur, fmtData, mascheazaTelefon,
-  rezumatMesaje, mesajAnulare, poateActiona, notaNivel, areModulSms, NIVELURI, MAX_TEST,
+  rezumatMesaje, mesajAnulare, poateActiona, notaNivel, areModulSms, NIVELURI, MAX_TEST, textSold,
 } from './smsLogica.js'
 
 const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20' }
@@ -35,8 +35,38 @@ function Mesaj({ m }) {
   return <div role={m.tip === 'eroare' ? 'alert' : 'status'} style={{ ...S.panel, marginBottom: 14, color: m.tip === 'eroare' ? G.red : m.tip === 'ok' ? G.green : G.text }}>{m.text}</div>
 }
 
+// ── Soldul SMSLink (20261130d): doar owner-ul (fn_sold_sms_citeste refuză în BD pe oricine altcineva) ──────────────────────────
+// r3 (Copilot r2 P2-01): modul simulator vine din BD (sold.simulator = furnizor_ultim simulator, scris de sms-sold la fiecare apel),
+// deci e corect și la încărcarea paginii, fără click; flagurile de alertă sunt deja false în BD în modul simulator.
+export function SoldSmslink({ soldInitial = null }) {
+  const [sold, setSold] = useState(soldInitial)
+  const [eroare, setEroare] = useState('')
+  const [lucru, setLucru] = useState(false)
+  useEffect(() => {
+    if (soldInitial) return
+    let activ = true
+    smsApi.sold().then(s => { if (activ) { setSold(s); setEroare('') } }).catch(e => { if (activ) setEroare(mesajEroare(e)) })
+    return () => { activ = false }
+  }, [soldInitial])
+  const citesteAcum = async () => {
+    setLucru(true); setEroare('')
+    try { await smsApi.citesteSold(); setSold(await smsApi.sold()) } catch (e) { setEroare(mesajEroare(e)) } finally { setLucru(false) }
+  }
+  const simulator = sold?.simulator === true
+  // r5 (Copilot r4 P2-01): sub prag „activ” doar cu monitorizarea pornită și furnizorul configurat; altfel soldul e istoric
+  const istoric = sold?.monitorizare_oprita === true || sold?.furnizor_neconfigurat === true || sold?.citire_veche === true || sold?.eroare_dupa_citire === true
+  const subActiv = !simulator && !istoric && sold?.sub_prag === true
+  const culoare = simulator ? G.muted : subActiv ? G.red : sold?.alerta ? G.yellow : G.muted
+  return <span style={{ ...S.row, gap: 6 }}>
+    <span style={{ ...S.small, color: culoare }} title={simulator ? 'SMS_FURNIZOR = simulator: soldul SMSLink nu se citește; valoarea e doar ultima cunoscută' : istoric ? 'Soldul nu mai e actualizat: valoarea e doar ultima cunoscută' : subActiv ? `Sub pragul de ${sold.prag} SMS: reîncarcă creditul` : sold?.eroare_dupa_citire ? `Ultima citire a eșuat (${sold.eroare})` : ''}>
+      {eroare ? `Sold SMSLink: eroare (${eroare})` : textSold(sold)}{subActiv ? ' ⚠' : ''}
+    </span>
+    <button type="button" style={{ ...S.button, minHeight: 28, padding: '3px 8px', fontSize: 12 }} aria-label="Citește soldul SMSLink acum" title="Citește soldul acum" disabled={lucru} onClick={citesteAcum}>{lucru ? '…' : '↻'}</button>
+  </span>
+}
+
 // ── Banda de sus: starea trimiterii, consumul (owner) / cât mai pleacă azi (ceilalți), Redări ─────────────────────────────────
-function StarePanou({ panou }) {
+function StarePanou({ panou, soldInitial }) {
   if (!panou) return null
   const owner = panou.nivel === 'owner'
   return <section aria-label="Starea trimiterii" style={{ ...S.panel, ...S.row, justifyContent: 'space-between', marginBottom: 14 }}>
@@ -49,6 +79,7 @@ function StarePanou({ panou }) {
       {owner
         ? <span style={S.small}>Azi: <b>{panou.consum_zi}</b> / {panou.plafon_zi} · Luna: <b>{panou.consum_luna}</b> / {panou.plafon_luna}</span>
         : <span style={S.small}>Mai pot pleca azi: <b>{panou.ramas_zi ?? '—'}</b> SMS{panou.buget_test_zi ? ` (bugetul contului de test: ${panou.buget_test_zi} / zi)` : ''}</span>}
+      {owner && <SoldSmslink soldInitial={soldInitial} />}
       {(owner || panou.redari_modul === true) && <Badge color={panou.redari_autorizat ? G.green : G.yellow}>{panou.redari_autorizat ? `Redări autorizat${owner && panou.redari_autorizare_nr ? ` (${panou.redari_autorizare_nr})` : ''}` : 'Redări: așteaptă autorizarea Transgaz'}</Badge>}
     </div>
   </section>
@@ -386,7 +417,7 @@ function Optout({ setMesaj }) {
 }
 
 // panouInitial: doar pentru teste (randare fără rețea)
-export default function SmsPagina({ profile, panouInitial = null }) {
+export default function SmsPagina({ profile, panouInitial = null, soldInitial = null }) {
   const [tab, setTab] = useState('compune')
   const [panou, setPanou] = useState(panouInitial)
   const [faraAcces, setFaraAcces] = useState(false)
@@ -408,7 +439,7 @@ export default function SmsPagina({ profile, panouInitial = null }) {
   const sectiuni = [['compune', '✍ Compune'], ['istoric', '📋 Istoric loturi'], ...(owner ? [['setari', '⚙ Setări'], ['optout', '🚫 Opt-out']] : [])]
   const nota = notaNivel(panou)
   return <div style={{ color: G.text }}>
-    <StarePanou panou={panou} />
+    <StarePanou panou={panou} soldInitial={soldInitial} />
     {nota && <p role="note" style={{ ...S.panel, ...S.small, color: panou.nivel === 'test' ? G.yellow : G.muted, marginBottom: 14 }}>{panou.nivel === 'test' ? '🧪 ' : ''}{nota}</p>}
     <nav aria-label="Secțiuni SMS" style={{ ...S.row, marginBottom: 14 }}>
       {sectiuni.map(([k, l]) =>

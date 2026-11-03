@@ -156,5 +156,32 @@ export function valideazaPlafoane(zi, luna) {
   return null
 }
 
+/** Rândul de sold din panoul owner-ului: „Sold SMSLink: N (la ZZ.LL HH:MM)”; alerta o decide BD-ul (fn_sold_sms_stare). */
+// r2 (#971): simulatorul nu are sold (P2-01, implicit); un sold vechi / după o citire eșuată e marcat „neactualizat” (P2-07).
+// r3 (Copilot r2 P2-01): modul simulator vine din BD (st.simulator = furnizor_ultim simulator), nu doar după un click; soldul rămas
+// e „ultimul cunoscut”, nu sold activ.
+const laRo = v => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('ro-RO', { timeZone: 'Europe/Bucharest', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date(v)).map(x => [x.type, x.value]))
+  return `${p.day}.${p.month} ${p.hour}:${p.minute}`
+}
+export function textSold(st, { simulator = false } = {}) {
+  const areSold = !!st && Number.isInteger(st.credit) && !!st.citit_la
+  if (simulator || st?.simulator === true) {
+    return `simulator — sold SMSLink necitit${areSold ? ` (ultimul cunoscut: ${st.credit} la ${laRo(st.citit_la)})` : ''}`
+  }
+  if (!st) return 'Sold SMSLink: —'
+  // r4 (Copilot r3 P3-01): SMS_FURNIZOR lipsă / necunoscut = eroare de configurare, nu sold SMSLink activ
+  if (st.furnizor_neconfigurat === true) return `Sold SMSLink: furnizor neconfigurat (SMS_FURNIZOR)${areSold ? ` · ultimul cunoscut: ${st.credit} la ${laRo(st.citit_la)}` : ''}`
+  // r5 (Copilot r4 P2-01): monitorizarea oprită (inclusiv simulatorul expirat) = soldul e doar istoric, nu sold SMSLink activ
+  if (st.monitorizare_oprita === true) {
+    const sim = st.furnizor_ultim === 'simulator' ? ' (ultimul furnizor: simulator)' : ''
+    return `Sold SMSLink: monitorizare oprită${sim}; ${areSold ? `ultimul sold cunoscut: ${st.credit} la ${laRo(st.citit_la)}` : 'niciun sold cunoscut'}`
+  }
+  if (!areSold) return 'Sold SMSLink: încă necitit'
+  const vechi = st.citire_veche === true || st.eroare_dupa_citire === true
+  return `Sold SMSLink: ${st.credit} (la ${laRo(st.citit_la)})${vechi ? ' · neactualizat' : ''}`
+}
+
 export const fmtEur = n => `${(Number(n) || 0).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} EUR`
 export const fmtData = v => (v ? new Date(v).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' }) : '—')

@@ -6,6 +6,13 @@ const date = ({ data, error }) => { if (error) throw error; return data }
 
 export const smsApi = {
   panou: async () => date(await supabase.rpc('fn_sms_panou')),
+  // 20261130d: soldul SMSLink (doar owner, și în BD); „Citește acum” = edge-ul sms-sold (poarta owner verificată din nou acolo)
+  sold: async () => date(await supabase.rpc('fn_sold_sms_citeste')),
+  citesteSold: async () => {
+    const { data, error } = await supabase.functions.invoke('sms-sold', { body: {} })
+    if (error) throw error
+    return data
+  },
   angajati: async () => date(await supabase.rpc('fn_sms_angajati_lista')) || [],
   // r2 (P1): istoricul și mesajele vin DOAR prin RPC-uri (loturile pe care nivelul le vede, numărători, telefon mascat);
   // citirea directă a sms_mesaje / sms_v_loturi rămâne a owner-ului în BD, iar ecranul nu o mai folosește deloc
