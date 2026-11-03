@@ -322,6 +322,16 @@ describe('genereazaConvocator', () => {
       ['Operatori: Transgaz\nScop: convocarea\nInformarea completă:\nScop secundar: arhivare\nDrepturi: acces.', 'Operatori: Transgaz\nScop: convocarea\nScop secundar: arhivare\nDrepturi: acces.'],
       ['Operatori: Transgaz\nInformarea completă:\n[link scurt]\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
       ['Operatori: Transgaz\nInformarea completă:\nhttps://x.invalid/a\nDrepturi: acces.', 'Operatori: Transgaz\nDrepturi: acces.'],
+      // #970 r17 (Jakarinos / Copilot P2-02): câmp GDPR cu literă mică sau între paranteze drepte după marcajul gol rămâne
+      ['Operatori: Transgaz\nInformarea completă:\ndrepturi: acces și opoziție.', 'Operatori: Transgaz\ndrepturi: acces și opoziție.'],
+      ['Operatori: Transgaz\nInformarea completă:\nscop: convocarea\nDrepturi: acces.', 'Operatori: Transgaz\nscop: convocarea\nDrepturi: acces.'],
+      ['Operatori: Transgaz\nInformarea completă:\n[UAT] Destinatari: primăria\nDrepturi: acces.', 'Operatori: Transgaz\nG Destinatari: primăria\nDrepturi: acces.'],
+      ['Operatori: Transgaz\nInformarea completă:\n[Drepturi] acces și opoziție.', 'Operatori: Transgaz\n[Drepturi] acces și opoziție.'],
+      ['Operatori: Transgaz\nInformarea completă:\nPlângere: www.dataprotection.ro', 'Operatori: Transgaz\nPlângere: www.dataprotection.ro'],
+      // #970 r17 (Copilot P2-03): rândul care continuă marcajul gol cu o adresă (și permisă) se scoate împreună cu el
+      ['Operatori: Gazpet.\nInformarea completă:\nConsultați www.dataprotection.ro pentru informare.\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
+      ['Operatori: Gazpet.\nInformarea completă:\nConsultați pagina: https://exemplu.ro/gdpr\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
+      ['Operatori: Gazpet.\nInformarea completă:\nla 192.168.1.10/gdpr\nDrepturi: acces.', 'Operatori: Gazpet.\nDrepturi: acces.'],
     ]
     for (const [text, fata] of cazuri) expect(textGdprFataConvocator(text, 'G', 'https://x.invalid'), text).toBe(fata)
     // „versoul” / „Versoix” nu sunt cuvântul „verso”; textul fără verso rămâne identic (inclusiv rândurile)
@@ -440,6 +450,8 @@ describe('genereazaConvocator', () => {
       'Plângere:dataprotection.ro.', 'Vezi Info:https://www.dataprotection.ro/a#b:c.ro',
       // r16 (Jakarinos P2-01): e-mail urmat de port / interogare / ancoră nu mai e e-mail
       'user@www.exemplu.ro:8080/x', 'user@www.exemplu.ro?formular=1', 'user@www.exemplu.ro#informare', 'a@exemplu.ro:443', 'a@exemplu.ro).x',
+      // r17 (Copilot P2-01): IPv4 fără schemă
+      'Detalii la 192.168.1.10/gdpr.', '10.0.0.1', 'Vezi 255.255.255.255:8080', '(8.8.8.8)',
     ]
     // refuzate: neaprobate sau proprii („https://gazpet.ro@example.com/x” — nu e e-mail, deci „gazpet.ro” e adresă proprie)
     for (const t of refuzate) expect(adresaWebNepermisa(t), t).not.toBeNull()

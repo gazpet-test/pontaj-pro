@@ -351,11 +351,15 @@ const curataDupaScoatere = t => t.replace(/\r\n?/g, '\n').replace(/[ \t ]{2,}/g
 // fără punct, nu mai e o singură „propoziție”. Excepții (lipire cu rândul următor): o unitate care se termină cu „Informarea
 // completă:” (adresa e pe rândul următor), ca marcajul să fie scos cu adresă cu tot, și un rând fără punct final urmat de
 // un rând care începe cu literă mică (aceeași propoziție, ruptă pe două rânduri).
-// #970 r16 (Jakarinos P2-02): după un marcaj gol „Informarea completă:” se lipește rândul următor DOAR dacă începe cu o adresă
-// (`[link …]`, `://`, `www.`, `x.ro`) și nu e un câmp GDPR independent („Drepturi: …”, „Scop: …”); altfel marcajul se scoate
-// singur, iar rândul rămâne (dacă are totuși o adresă, o oprește garda adresaWebNepermisa)
-const continuaCuAdresa = urm => !/^[\s ]*\p{L}[\p{L}\p{M} -]{0,40}:(?!\/\/)/u.test(urm) &&
-  /^[\s ]*(?:\[|\S*(?::\/\/|www\.|[A-Za-z0-9-]\.[A-Za-z]{2,}))/i.test(urm)
+// #970 r16 + r17 (Jakarinos / Copilot P2-02, P2-03): după un marcaj gol „Informarea completă:” se lipește rândul următor DOAR dacă
+// nu începe un câmp GDPR independent (CAMPURI_GDPR, oricum scris: „Drepturi:”, „scop:”) și CONȚINE o adresă (`://`, `www.`, `x.ro`,
+// IPv4) sau începe cu un substituent de link (`[link …]`, `[http…]`, `[www…]`); altfel marcajul se scoate singur, iar rândul rămâne.
+// Decizia e EXCLUSIV a acestei funcții: regula generală „continuare cu literă mică” nu se aplică marcajului gol.
+const CAMPURI_GDPR = ['operatori', 'operator', 'scop', 'scopul', 'temei', 'temeiul', 'sursa datelor', 'sursa', 'destinatari', 'pastrare',
+  'durata', 'drepturi', 'drepturile', 'plangere', 'contact', 'categorii', 'date', 'transfer', 'responsabil', 'dpo']
+const eCampGdpr = urm => { const m = /^([^:]{1,40}):(?!\/\/)/.exec(normalizeazaText(urm)); return !!m && CAMPURI_GDPR.includes(m[1].trim()) }
+const continuaCuAdresa = urm => !eCampGdpr(urm) &&
+  (/^[\s ]*\[(?:link|https?|www)/i.test(urm) || /:\/\/|www\.|[A-Za-z0-9-]\.[A-Za-z]{2,}/i.test(urm) || RX_IPV4.test(urm))
 const imparteInPropozitii = t => {
   const bucati = String(t).split(/(?<=[.!?])(?=[\s\u00a0])|(?<!\r)(?=\r?\n)/)
   const unitati = []
@@ -363,8 +367,11 @@ const imparteInPropozitii = t => {
     let u = bucati[i]
     // un rând fără punct final urmat de un rând care începe cu literă mică continuă aceeași propoziție („se află\npe verso.”);
     // un rând nou care începe cu majusculă („Scop:”, „Drepturi:”) e unitate nouă
-    while (i + 1 < bucati.length && ((/informarea completa:$/.test(normalizeazaText(u)) && continuaCuAdresa(bucati[i + 1])) ||
-      (!/[.!?][\s ]*$/.test(u) && /^\r?\n[\s ]*\p{Ll}/u.test(bucati[i + 1])))) u += bucati[++i]
+    while (i + 1 < bucati.length) {
+      const marcajGol = /informarea completa:$/.test(normalizeazaText(u))
+      if (marcajGol ? !continuaCuAdresa(bucati[i + 1]) : (/[.!?][\s ]*$/.test(u) || !/^\r?\n[\s ]*\p{Ll}/u.test(bucati[i + 1]))) break
+      u += bucati[++i]
+    }
     unitati.push(u)
   }
   return unitati
@@ -430,6 +437,8 @@ const RX_EMAIL = /(?<![A-Za-z0-9._%+@-])(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]
 const escRx = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 const RX_EXCEPTII = new RegExp(`(?<![A-Za-z0-9.\\-@:/])(?:${[...EXCEPTII_WEB].sort((a, b) => b.length - a.length).map(escRx).join('|')})(?:\\/[^\\s@]*)?(?=$|\\s|[.,;!?)\\]»”"']+(?:\\s|$))`, 'gi')
 const RX_DOMENIU = /[A-Za-z0-9-]\.[A-Za-z]{2,}/
+// #970 r17 (Copilot P2-01): adresă IPv4 fără schemă (patru octeți 0–255; datele „03.11.2026” au trei grupuri, deci nu dau alarme)
+const RX_IPV4 = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d]|\.\d)/
 
 /**
  * Prima adresă web nepermisă dintr-un text: `{ adresa, categorie: 'proprie' | 'neaprobata' }` sau null. `adresa` = marcajul
@@ -446,6 +455,8 @@ export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
   const ramas = faraEmail.replace(RX_EXCEPTII, ' ')
   if (ramas.includes('://')) return { adresa: '://', categorie: 'neaprobata' }
   if (/www/i.test(ramas)) return { adresa: 'www', categorie: 'neaprobata' }
+  const ip = RX_IPV4.exec(ramas)
+  if (ip) return { adresa: ip[0], categorie: 'neaprobata' }
   const d = RX_DOMENIU.exec(ramas)
   if (!d) return null
   // fragmentul de domeniu din jur, doar din litere / cifre / „.” / „-” (fără alt text din document), scurtat
