@@ -408,6 +408,8 @@ const RX_EMAIL_INTREG = /^(?!www\.)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,
 const RX_MARGINE_STANGA = /^[()[\]{}«»„”“"']+/
 const RX_MARGINE_DREAPTA = /[()[\]{}«»„”“"'.,;:!?]+$/
 const RX_ETICHETA_WEB = /^[a-z]{2,24}$/i
+// `:` care desparte un token în bucăți: nu face parte dintr-un `://` și nu e urmat de o cifră (port, oră, dată, telefon)
+const RX_DOUA_PUNCTE = /:(?!\/\/)(?!\d)/
 
 /** Clasifică un token (deja curățat de margini): null = permis / nu e adresă web; altfel { adresa, categorie: 'neaprobata' }. */
 function clasificaToken(token) {
@@ -419,7 +421,8 @@ function clasificaToken(token) {
     schema = token.slice(0, iSchema).toLowerCase()
     gazda = token.slice(iSchema + 3).split(/[/?#]/)[0]
   } else {
-    const inainte = token.split('/')[0]
+    // #970 r13: gazda se termină la primul `/`, `?` sau `#` și fără schemă („exemplu.ro?formular=1”, „exemplu.ro#informare”)
+    const inainte = token.split(/[/?#]/)[0]
     if (/^www\./i.test(token) || inainte.includes('.')) gazda = inainte
   }
   if (gazda === null) return null
@@ -447,9 +450,15 @@ export function adresaWebNepermisa(text, { doarProprii = false } = {}) {
     if (m) return { adresa: m[0].toLowerCase(), categorie: 'proprie' }
   }
   if (doarProprii) return null
+  const curata = s => s.replace(RX_MARGINE_STANGA, '').replace(RX_MARGINE_DREAPTA, '')
   for (const brut of t.split(/[\s ]+/)) {
-    const gasit = clasificaToken(brut.replace(RX_MARGINE_STANGA, '').replace(RX_MARGINE_DREAPTA, ''))
-    if (gasit) return gasit
+    // #970 r13: tokenul se împarte și la `:` care NU e începutul unui `://` și NU e urmat de o cifră („Site:www.exemplu.ro” →
+    // „Site” + „www.exemplu.ro”); „:cifră” rămâne lipit, ca portul („dataprotection.ro:443”) să fie văzut și refuzat, iar
+    // „Data:03.11.2026”, „Tel:0244”, „ora:13.00” să nu devină bucăți separate
+    for (const bucata of curata(brut).split(RX_DOUA_PUNCTE)) {
+      const gasit = clasificaToken(curata(bucata))
+      if (gasit) return gasit
+    }
   }
   return null
 }

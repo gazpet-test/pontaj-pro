@@ -363,6 +363,10 @@ describe('genereazaConvocator', () => {
       ['Detalii la portal.com.uk/gdpr.', EXTERNE],
       ['Detalii la dataprotection.ro.a.com/gdpr.', EXTERNE],
       ['Detalii la a.ro și x.y.com.', EXTERNE],
+      // #970 r13
+      ['Detalii la exemplu.ro?formular=1 sau exemplu.ro#informare.', EXTERNE],
+      ['Site:www.exemplu.ro', EXTERNE],
+      ['Info:https://exemplu.ro', EXTERNE],
       // #970 r9: URL lipit de un e-mail cu virgulă / punct și virgulă
       ['Site: www.gazpet.ro,contact@example.com', PROPRII],
       ['Site: www.exemplu.ro,contact@example.com', EXTERNE],
@@ -424,6 +428,11 @@ describe('genereazaConvocator', () => {
       ['Detalii la exemplu.ro.xyz/gdpr', 'exemplu.ro.xyz'], ['Detalii la portal.com.uk/gdpr', 'portal.com.uk'],
       ['Detalii la https://192.168.1.10/x', '192.168.1.10'], ['Detalii la ftp://dataprotection.ro/x', 'dataprotection.ro'],
       ['Detalii la https://gazpet.ro@example.com/x', 'example.com'], ['Detalii la http://[::1]/x', '(URL neanalizabil)'],
+      // #970 r13 (Jakarinos P2-01 + P2-02): gazda se oprește la ? / #; `:` fără `//` desparte bucăți
+      ['Detalii la exemplu.ro?formular=1', 'exemplu.ro'], ['Detalii la exemplu.ro#informare', 'exemplu.ro'],
+      ['Site:www.exemplu.ro', 'exemplu.ro'], ['Site:exemplu.ro', 'exemplu.ro'], ['Info:https://exemplu.ro', 'exemplu.ro'],
+      ['Detalii la https://dataprotection.ro:443/x', 'dataprotection.ro'], ['Detalii la dataprotection.ro:443/x', 'dataprotection.ro'],
+      ['Info:www.dataprotection.ro.evil.com', 'dataprotection.ro.evil.com'],
       ['Detalii la a.ro', 'a.ro'], ['Detalii la x.y.com', 'x.y.com'], ['Detalii la dataprotection.ro-evil.ro', 'dataprotection.ro-evil.ro'],
     ]
     for (const [t, adresa] of refuzateR11) {
@@ -435,7 +444,9 @@ describe('genereazaConvocator', () => {
       // #970 r12: calea nu se clasifică drept domeniu
       'Vezi dataprotection.ro/legislatie/dataprotection.ro.pdf.', 'Vezi https://dataprotection.ro/a:b/x.y.com', 'HTTPS://WWW.DATAPROTECTION.RO', 'redari@www.gazpet.ro', 'ion@www.dataprotection.ro',
       // fără alarmă pe textul juridic, inclusiv lipit („lit.c”, „art.6”) și rânduri cu „Data:03.11.2026”
-      'S.N.T.G.N. S.R.L. lit.c art.6 H.G. nr. 1.234/2022 pct. 5.2 A.P.M. Nr. 123/2026 Data:03.11.2026 ora 09:00 13.00–16.00 ș.a. [UAT].']) {
+      'S.N.T.G.N. S.R.L. lit.c art.6 H.G. nr. 1.234/2022 pct. 5.2 A.P.M. Nr. 123/2026 Data:03.11.2026 ora 09:00 13.00–16.00 ș.a. [UAT].',
+      // #970 r13: „:” urmat de cifră nu desparte; permise după „:”
+      'Data:03.11.2026 Tel:0244 435 005 ora:13.00 Nr.:12', 'Info:(www.dataprotection.ro)', 'Plângere: www.dataprotection.ro', 'Plângere:dataprotection.ro.']) {
       expect(adresaWebNepermisa(t), t).toBeNull()
     }
     // fără alarme false pe textul juridic: abrevieri, articole, numere, „Primăria Comunei X.”, default-ul text_gdpr din BD

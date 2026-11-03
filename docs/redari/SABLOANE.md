@@ -97,9 +97,12 @@ de sesiuni”, e-mailul de răspuns în convocarea afișată.
      (`https://dataprotection.ro/redari.gazpet.ro/x`) → refuz; `www.gazpet.ro,contact@example.com` lasă `www.gazpet.ro` → refuz;
   2. textul se împarte la spații albe (inclusiv rândurile noi și taburile din paragraf, `<w:br/>` / `<w:tab/>`); fiecare token
      pierde punctuația de la margini (`()[]{}«»„”“"'`, iar la dreapta și `.,;:!?`); un token care e în întregime un e-mail
-     valid (același regex, ancorat) e permis: `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`;
+     valid (același regex, ancorat) e permis: `redari@www.gazpet.ro`, `ion@www.dataprotection.ro`. (r13) Tokenul se împarte
+     și la `:` care nu face parte dintr-un `://` și nu e urmat de o cifră: `Site:www.exemplu.ro` → `Site` + `www.exemplu.ro`;
+     „:cifră” rămâne lipit, deci portul (`dataprotection.ro:443`) e văzut și refuzat, iar „Data:03.11.2026”, „Tel:0244”,
+     „ora:13.00”, „Nr.:12” nu dau alarme;
   3. gazda: cu `://`, partea dintre `://` și primul `/`, `?` sau `#`; altfel, dacă tokenul începe cu `www.` sau partea dinainte
-     de primul `/` are un punct, acea parte. Ce e în cale (după primul `/`) NU se clasifică drept domeniu
+     de primul `/`, `?` sau `#` (r13) are un punct, acea parte. Ce e în cale (după primul `/`) NU se clasifică drept domeniu
      (`dataprotection.ro/legislatie/dataprotection.ro.pdf` e permis);
   4. gazda e „web” dacă tokenul are `://` sau începe cu `www.`, ori dacă gazda (fără `user@` și `:port`) are un punct și ultima
      etichetă e alfabetică, de 2–24 litere. O gazdă web e permisă DOAR dacă e exact `dataprotection.ro` sau
