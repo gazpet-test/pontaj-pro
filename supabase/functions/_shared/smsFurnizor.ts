@@ -163,13 +163,35 @@ function simulator(env: Env): Furnizor {
 // ── Soldul (20261130d, 03.11.2026): mode=Credit, corp JSON cu connection_id + password (form-urlencoded → „Insufficient arguments”) ──
 // Din răspuns se păstrează DOAR `credit` (întreg ≥ 0) sau codul de eroare: response_message NU se citește (eroarea 7 conține parola),
 // iar răspunsul brut nu se loghează și nu se salvează. Nu trimite nimic, nu consumă credit.
-export type Sold = { ok: true; credit: number } | { ok: false; eroare: string }
+// r2 (#971, Jakarinos P2 + Copilot P2-03 / P3-04 / P2-01): un HTTP non-2xx e eroare (http_<status>) chiar dacă JSON-ul are `credit`;
+//   `response_type` e acceptat doar lipsă (forma documentată a mode=Credit: credit + timestamp) sau MESSAGE — altceva = smslink_raspuns;
+//   corpul se citește cu plafon (MAX_RASPUNS_SOLD octeți); simulatorul NU are sold (nu se scrie nimic, nu e „citire reușită”).
+export type Sold = { ok: true; credit: number } | { ok: false; eroare: string } | { ok: false; simulator: true }
 export const SOLD_MAX = 10_000_000
-export const SOLD_SIMULATOR = 1000
+export const MAX_RASPUNS_SOLD = 4096
+
+/** Corpul unui răspuns ca text, citit cu plafon de octeți; peste plafon / fără corp lizibil → null. */
+async function textLimitat(r: Response, max: number): Promise<string | null> {
+  if (!r.body) return null
+  const cititor = r.body.getReader()
+  const bucati: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await cititor.read()
+    if (done) break
+    total += value.byteLength
+    if (total > max) { await cititor.cancel().catch(() => undefined); return null }
+    bucati.push(value)
+  }
+  const tot = new Uint8Array(total)
+  let poz = 0
+  for (const b of bucati) { tot.set(b, poz); poz += b.byteLength }
+  return new TextDecoder().decode(tot)
+}
 
 export async function citesteSold(env: Env, o: Optiuni = {}): Promise<Sold> {
   const nume = (env('SMS_FURNIZOR') ?? '').trim()
-  if (nume === 'simulator') return { ok: true, credit: SOLD_SIMULATOR }
+  if (nume === 'simulator') return { ok: false, simulator: true }
   if (nume !== 'smslink') return { ok: false, eroare: 'furnizor_neconfigurat' }
   if (!env('SMSLINK_CONNECTION_ID') || !env('SMSLINK_PASSWORD')) return { ok: false, eroare: 'smslink_neconfigurat' }
   const f = o.fetch ?? fetch
@@ -183,13 +205,19 @@ export async function citesteSold(env: Env, o: Optiuni = {}): Promise<Sold> {
   } catch (_) {
     return { ok: false, eroare: 'retea_timeout' }
   }
+  if (!r.ok) { await r.body?.cancel().catch(() => undefined); return { ok: false, eroare: codSigur(`http_${r.status}`) } }
   let j: Record<string, unknown> | null = null
-  try { j = await r.json() } catch (_) { j = null }
-  if (!j || typeof j !== 'object') return { ok: false, eroare: codSigur(`http_${r.status}`) }
+  try {
+    const t = await textLimitat(r, MAX_RASPUNS_SOLD)
+    const p = t === null ? null : JSON.parse(t)
+    j = p && typeof p === 'object' && !Array.isArray(p) ? p : null
+  } catch (_) { j = null }
+  if (!j) return { ok: false, eroare: 'smslink_raspuns' }
   if (j.response_type === 'ERROR') {
     const cod = Number(j.response_id)
     return Number.isInteger(cod) && cod >= 0 && cod <= 999 ? { ok: false, eroare: `smslink_${cod}` } : { ok: false, eroare: 'smslink_raspuns' }
   }
+  if (j.response_type !== undefined && j.response_type !== 'MESSAGE') return { ok: false, eroare: 'smslink_raspuns' }
   // `credit` = numărul de SMS-uri disponibile (număr sau text zecimal; fracțiunea se taie în jos, ca alerta să nu întârzie);
   // altă formă (lipsă, negativ, uriaș, text) = răspuns neașteptat, NU 0
   const brut = typeof j.credit === 'number' ? j.credit

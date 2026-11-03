@@ -13,13 +13,14 @@
 //     fn_sms_nivel() la poarta owner-ului. Credențialele SMSLink stau în Edge Secrets (SMSLINK_CONNECTION_ID / SMSLINK_PASSWORD).
 // (d) Cine pornește: pg_cron (jobul sms_sold_zilnic) cu x-intern-secret din Vault (_shared/poartaIntern.ts) SAU owner-ul (JWT verificat
 //     cu auth.getUser + fn_sms_nivel() = 'owner' cerut CU JWT-ul lui). verify_jwt nu ajunge (cheia anon e un JWT valid, PR #318).
+// r2 (#971): simulatorul nu scrie sold (P2-01); scrierea e CAS pe momentul de start al citirii (P2-04); răspunsul are `scris`.
 // (e) Confirmare umană: niciuna necesară (citire la furnizor + scriere pe rândul propriu); reîncărcarea creditului o face Razvan în cont.
 import { esteApelIntern } from '../_shared/poartaIntern.ts'
 import { citesteSold, type Env, type Sold } from '../_shared/smsFurnizor.ts'
 
 // deno-lint-ignore no-explicit-any
 type Client = any
-export type Deps = { sb: Client; sbUtilizator: (jwt: string) => Client; env: Env; fetch: typeof fetch }
+export type Deps = { sb: Client; sbUtilizator: (jwt: string) => Client; env: Env; fetch: typeof fetch; acum?: () => number }
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -51,16 +52,24 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const apelant = await poartaSold(req, deps)
   if (!apelant) return json(401, { ok: false, error: 'neautorizat' })
 
-  // cererea nu are parametri: corpul nu se citește
+  // cererea nu are parametri: corpul nu se citește. Momentul de START al citirii merge în BD (CAS, r2 P2-04): o citire începută mai
+  // devreme și terminată mai târziu (cron + „Citește acum” în paralel) nu poate suprascrie rezultatul uneia începute ulterior.
+  const inceput = new Date(deps.acum ? deps.acum() : Date.now()).toISOString()
   let s: Sold
   try { s = await citesteSold(deps.env, { fetch: deps.fetch }) } catch (_) { s = { ok: false, eroare: 'adaptor_exceptie' } }
-  const args = s.ok ? { p_credit: s.credit, p_eroare: null } : { p_credit: null, p_eroare: s.eroare }
+  // r2 (P2-01, implicit): simulatorul nu are sold — nu se scrie nimic (nici „citire reușită”, nici eroare)
+  if ('simulator' in s) {
+    console.log('sms-sold', { apelant, furnizor: 'simulator' })
+    return json(200, { ok: true, apelant, furnizor: 'simulator', sold: null })
+  }
+  const args = s.ok ? { p_credit: s.credit, p_eroare: null, p_inceput: inceput } : { p_credit: null, p_eroare: s.eroare, p_inceput: inceput }
   const { data, error } = await deps.sb.rpc('fn_sold_sms_inregistreaza', args)
   if (error) {
     console.error('sms-sold: sold nescris', { cod: error.code ?? null })
     return json(500, { ok: false, error: 'scriere_bd' })
   }
   const subPrag = typeof data?.sub_prag === 'boolean' ? data.sub_prag : null
-  console.log('sms-sold', { apelant, ok: s.ok, eroare: s.ok ? null : s.eroare, sub_prag: subPrag })
-  return json(200, { ok: s.ok, apelant, ...(s.ok ? { credit: s.credit } : { eroare: s.eroare }), prag: data?.prag ?? null, sub_prag: subPrag })
+  const scris = data?.scris === true
+  console.log('sms-sold', { apelant, ok: s.ok, eroare: s.ok ? null : s.eroare, sub_prag: subPrag, scris })
+  return json(200, { ok: s.ok, apelant, furnizor: 'smslink', ...(s.ok ? { credit: s.credit } : { eroare: s.eroare }), scris, prag: data?.prag ?? null, sub_prag: subPrag })
 }

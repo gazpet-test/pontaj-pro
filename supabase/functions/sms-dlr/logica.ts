@@ -10,9 +10,15 @@
 //   IP-ul clientului = antetul `cf-connecting-ip`: hostul *.supabase.co e servit prin Cloudflare, care îl SUPRASCRIE la fiecare cerere
 //   (o valoare trimisă de client nu trece). `x-forwarded-for` NU se folosește: Cloudflare doar ADAUGĂ la lista primită, deci primul
 //   element îl poate scrie oricine. Modul implicit = OBSERVARE: IP străin / antet lipsă → DLR-ul se procesează (secretul + connection_id
-//   rămân poarta) + un avertisment fără PII (doar IP-ul, dacă are format IPv4, și motivul). SMS_DLR_IP_STRICT=1 → BLOCARE (403, nimic
-//   citit sau scris). Avertismentul apare doar după secretul valid: scanările fără secret rămân 401, fără zgomot în loguri.
-//   Înainte de STRICT=1: în modul observare, DLR-urile reale trebuie să apară fără avertismente (confirmă și antetul ales).
+//   rămân poarta) + un avertisment cu doar IP-ul validat (IPv4, altfel null), primul element din x-forwarded-for (tot doar IPv4, pentru
+//   comparație) și motivul — fără URL, corp sau telefon. IP-ul poate fi dată personală: retenția = cea a logurilor Supabase Edge.
+//   SMS_DLR_IP_STRICT=1 → BLOCARE (403, nimic citit sau scris). Jurnalul apare doar după secretul valid: scanările fără secret rămân
+//   401, fără zgomot în loguri.
+// r2 (#971, Copilot P2-02, implicit): în OBSERVARE se jurnalizează și DLR-urile din listă („IP observat”, cu cf-connecting-ip și
+//   x-forwarded-for), ca antetul să se valideze pe date reale. Trecerea pe STRICT=1 (decizia lui Razvan) doar după ce: (1) DLR-urile
+//   reale SMSLink vin, câteva zile, numai din cele 7 IP-uri, cu cf-connecting-ip prezent și egal cu primul element XFF; (2) o cerere de
+//   probă din alt IP, cu cf-connecting-ip falsificat (un IP din listă), ajunge în funcție cu IP-ul REAL (nu cu cel falsificat), pe
+//   toate hostname-urile publice ale funcției. Altfel antetul nu e factor de încredere și filtrul rămâne în observare.
 import { creeazaFurnizor, secretDlrValid, type Env } from '../_shared/smsFurnizor.ts'
 
 // deno-lint-ignore no-explicit-any
@@ -36,6 +42,13 @@ export function verificaIp(req: Request): VerdictIp {
   const ip = brut.toLowerCase().startsWith('::ffff:') ? brut.slice(7) : brut
   if (!IPV4.test(ip)) return { permis: false, ip: null, motiv: 'ip_invalid' }
   return IP_SMSLINK.includes(ip) ? { permis: true, ip, motiv: 'ok' } : { permis: false, ip, motiv: 'ip_strain' }
+}
+
+/** Primul element din x-forwarded-for, DOAR pentru comparație în jurnal (nu decide nimic): IPv4 valid sau null. */
+export function primulXff(req: Request): string | null {
+  const p = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim()
+  const ip = p.toLowerCase().startsWith('::ffff:') ? p.slice(7) : p
+  return IPV4.test(ip) ? ip : null
 }
 
 export const ipStrict = (env: Env) => (env('SMS_DLR_IP_STRICT') ?? '').trim() === '1'
@@ -90,11 +103,12 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (req.method !== 'POST') return json(405, { ok: false })
   if (!secretDlrValid(req, deps.env)) return json(401, { ok: false })
   const v = verificaIp(req)
-  if (!v.permis) {
-    const strict = ipStrict(deps.env)
-    const avertizeaza = deps.avertizeaza ?? ((m: string, c: Record<string, unknown>) => console.warn(m, c))
-    avertizeaza('sms-dlr: IP in afara listei SMSLink', { ip: v.ip, motiv: v.motiv, mod: strict ? 'blocare' : 'observare' })
-    if (strict) return json(403, { ok: false })
+  const strict = ipStrict(deps.env)
+  if (!v.permis || !strict) {
+    const jurnal = deps.avertizeaza ?? ((m: string, c: Record<string, unknown>) => (v.permis ? console.log : console.warn)(m, c))
+    jurnal(v.permis ? 'sms-dlr: IP observat' : 'sms-dlr: IP in afara listei SMSLink',
+      { ip: v.ip, xff_prim: primulXff(req), motiv: v.motiv, mod: strict ? 'blocare' : 'observare' })
+    if (!v.permis && strict) return json(403, { ok: false })
   }
   const furnizor = creeazaFurnizor(deps.env)
   if (!furnizor) return json(500, { ok: false, error: 'furnizor_neconfigurat' })

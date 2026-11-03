@@ -157,13 +157,16 @@ export function valideazaPlafoane(zi, luna) {
 }
 
 /** Rândul de sold din panoul owner-ului: „Sold SMSLink: N (la ZZ.LL HH:MM)”; alerta o decide BD-ul (fn_sold_sms_stare). */
-export function textSold(st) {
+// r2 (#971): simulatorul nu are sold (P2-01, implicit); un sold vechi / după o citire eșuată e marcat „neactualizat” (P2-07).
+export function textSold(st, { simulator = false } = {}) {
+  if (simulator) return 'Sold SMSLink: simulator, fără sold'
   if (!st) return 'Sold SMSLink: —'
   if (!Number.isInteger(st.credit) || !st.citit_la) return 'Sold SMSLink: încă necitit'
   const d = new Date(st.citit_la)
   const p = Object.fromEntries(new Intl.DateTimeFormat('ro-RO', { timeZone: 'Europe/Bucharest', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
     .formatToParts(d).map(x => [x.type, x.value]))
-  return `Sold SMSLink: ${st.credit} (la ${p.day}.${p.month} ${p.hour}:${p.minute})`
+  const vechi = st.citire_veche === true || st.eroare_dupa_citire === true
+  return `Sold SMSLink: ${st.credit} (la ${p.day}.${p.month} ${p.hour}:${p.minute})${vechi ? ' · neactualizat' : ''}`
 }
 
 export const fmtEur = n => `${(Number(n) || 0).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} EUR`

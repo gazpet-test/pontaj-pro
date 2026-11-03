@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { handler as dlr, verificaIp, IP_SMSLINK, ANTET_IP } from '../../supabase/functions/sms-dlr/logica.ts'
 import { handler as sold, poartaSold } from '../../supabase/functions/sms-sold/logica.ts'
-import { citesteSold, SMSLINK_API } from '../../supabase/functions/_shared/smsFurnizor.ts'
+import { citesteSold, SMSLINK_API, MAX_RASPUNS_SOLD } from '../../supabase/functions/_shared/smsFurnizor.ts'
 import { textSold } from './smsLogica.js'
 import { alerteSmsSold, SURSE_ADMIN, areAccesSursa, incarcaSursaAdmin } from '../adminAlerte.js'
 
@@ -35,34 +35,42 @@ describe('sms-dlr — filtrul de IP (a doua barieră după secret)', () => {
     expect([...IP_SMSLINK].sort()).toEqual([...LISTA_BRIEF].sort())
     expect(ANTET_IP).toBe('cf-connecting-ip')
   })
-  it('IP din listă → procesat, fără avertisment (în ambele moduri)', async () => {
-    for (const env of [{}, { SMS_DLR_IP_STRICT: '1' }]) {
-      for (const ip of LISTA_BRIEF) {
-        const { r, sb, avertismente } = await rulareDlr({ 'cf-connecting-ip': ip }, env)
-        expect(r.status).toBe(200)
-        expect(sb.apeluri.map(([fn]) => fn)).toEqual(['fn_sms_dlr_aplica'])
-        expect(avertismente).toHaveLength(0)
-      }
+  it('IP din listă → procesat; în OBSERVARE jurnal „IP observat” (cu XFF pentru comparație), în STRICT nimic', async () => {
+    for (const ip of LISTA_BRIEF) {
+      const o = await rulareDlr({ 'cf-connecting-ip': ip, 'x-forwarded-for': `${ip}, 10.0.0.1` })
+      expect(o.r.status).toBe(200)
+      expect(o.sb.apeluri.map(([fn]) => fn)).toEqual(['fn_sms_dlr_aplica'])
+      expect(o.avertismente).toEqual([['sms-dlr: IP observat', { ip, xff_prim: ip, motiv: 'ok', mod: 'observare' }]])
+      const s = await rulareDlr({ 'cf-connecting-ip': ip }, { SMS_DLR_IP_STRICT: '1' })
+      expect(s.r.status).toBe(200)
+      expect(s.sb.apeluri).toHaveLength(1)
+      expect(s.avertismente).toHaveLength(0)
     }
   })
-  it('IP străin în OBSERVARE (implicit) → procesat + avertisment fără PII (doar IP-ul și motivul)', async () => {
+  it('IP străin în OBSERVARE (implicit) → procesat + avertisment doar cu IP-ul validat, primul XFF și motivul', async () => {
     for (const env of [{}, { SMS_DLR_IP_STRICT: '0' }, { SMS_DLR_IP_STRICT: 'da' }]) {
       const { r, sb, avertismente } = await rulareDlr({ 'cf-connecting-ip': '203.0.113.9' }, env)
       expect(r.status).toBe(200)
       expect(sb.apeluri).toHaveLength(1)
-      expect(avertismente).toEqual([['sms-dlr: IP in afara listei SMSLink', { ip: '203.0.113.9', motiv: 'ip_strain', mod: 'observare' }]])
+      expect(avertismente).toEqual([['sms-dlr: IP in afara listei SMSLink', { ip: '203.0.113.9', xff_prim: null, motiv: 'ip_strain', mod: 'observare' }]])
     }
+  })
+  it('primul element XFF apare în jurnal doar dacă e IPv4 (altfel null), și nu decide nimic', async () => {
+    const a = await rulareDlr({ 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': 'text <x>, 1.2.3.4' })
+    expect(a.avertismente[0][1].xff_prim).toBeNull()
+    const b = await rulareDlr({ 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': ' 146.70.213.194 ,10.0.0.1' })
+    expect(b.avertismente[0][1]).toMatchObject({ ip: '203.0.113.9', xff_prim: '146.70.213.194', motiv: 'ip_strain' })
   })
   it('IP străin în STRICT (SMS_DLR_IP_STRICT=1) → 403, nimic scris', async () => {
     const { r, sb, avertismente } = await rulareDlr({ 'cf-connecting-ip': '146.70.213.196' }, { SMS_DLR_IP_STRICT: '1' })
     expect(r.status).toBe(403)
     expect(sb.apeluri).toHaveLength(0)
-    expect(avertismente[0][1]).toEqual({ ip: '146.70.213.196', motiv: 'ip_strain', mod: 'blocare' })
+    expect(avertismente[0][1]).toEqual({ ip: '146.70.213.196', xff_prim: null, motiv: 'ip_strain', mod: 'blocare' })
   })
   it('antet lipsă: observare → procesat + avertisment antet_lipsa; strict → 403', async () => {
     const o = await rulareDlr({})
     expect(o.r.status).toBe(200)
-    expect(o.avertismente[0][1]).toEqual({ ip: null, motiv: 'antet_lipsa', mod: 'observare' })
+    expect(o.avertismente[0][1]).toEqual({ ip: null, xff_prim: null, motiv: 'antet_lipsa', mod: 'observare' })
     const s = await rulareDlr({}, { SMS_DLR_IP_STRICT: '1' })
     expect(s.r.status).toBe(403)
     expect(s.sb.apeluri).toHaveLength(0)
@@ -75,7 +83,7 @@ describe('sms-dlr — filtrul de IP (a doua barieră după secret)', () => {
   it('valoare care nu e IPv4 → motiv ip_invalid, IP-ul NU se loghează (poate fi orice text)', async () => {
     const { r, avertismente } = await rulareDlr({ 'cf-connecting-ip': '0700123456 <script>' })
     expect(r.status).toBe(200)
-    expect(avertismente[0][1]).toEqual({ ip: null, motiv: 'ip_invalid', mod: 'observare' })
+    expect(avertismente[0][1]).toEqual({ ip: null, xff_prim: null, motiv: 'ip_invalid', mod: 'observare' })
   })
   it('forma IPv6 mapată ::ffff:a.b.c.d e acceptată; zerourile în față / IPv6 pur nu', () => {
     const v = h => verificaIp(new Request('https://x.invalid/', { headers: { 'cf-connecting-ip': h } }))
@@ -100,13 +108,16 @@ describe('sms-dlr — filtrul de IP (a doua barieră după secret)', () => {
   })
 })
 
+
 // ── citesteSold (mode=Credit) ──────────────────────────────────────────────────────────────────────────────────────────────
+// fetch simulat cu Response REAL (status / ok / corp ca stream), ca la apelantul real
 function fetchFals(raspuns) {
   const cereri = []
   const f = async (url, init) => {
     cereri.push({ url, init, body: JSON.parse(init.body) })
     if (raspuns instanceof Error) throw raspuns
-    return { status: raspuns.status ?? 200, json: async () => { if (raspuns.json === undefined) throw new Error('fara json'); return raspuns.json } }
+    const corp = raspuns.text !== undefined ? raspuns.text : raspuns.json !== undefined ? JSON.stringify(raspuns.json) : null
+    return new Response(corp, { status: raspuns.status ?? 200 })
   }
   f.cereri = cereri
   return f
@@ -124,27 +135,39 @@ describe('citesteSold — mode=Credit, corp JSON, doar creditul sau codul', () =
     expect(f.cereri[0].init.headers['Content-Type']).toBe('application/json')
     expect(f.cereri[0].body).toMatchObject({ connection_id: 'CONN-TEST', password: PAROLA })
   })
-  it('credit ca text zecimal → întreg tăiat în jos; 0 rămâne 0', async () => {
+  it('credit ca text zecimal → întreg tăiat în jos; 0 rămâne 0; response_type MESSAGE acceptat', async () => {
     expect(await citesteSold(envLink(), { fetch: fetchFals({ json: { credit: '149.90' } }) })).toEqual({ ok: true, credit: 149 })
     expect(await citesteSold(envLink(), { fetch: fetchFals({ json: { credit: 0 } }) })).toEqual({ ok: true, credit: 0 })
+    expect(await citesteSold(envLink(), { fetch: fetchFals({ json: { response_type: 'MESSAGE', credit: 300 } }) })).toEqual({ ok: true, credit: 300 })
   })
   it('eroarea 7 (cu parola în response_message) → doar codul, parola nu apare nicăieri în rezultat', async () => {
     const r = await citesteSold(envLink(), { fetch: fetchFals({ json: { response_type: 'ERROR', response_id: 7, response_message: `Password '${PAROLA}' is not approved!` } }) })
     expect(r).toEqual({ ok: false, eroare: 'smslink_7' })
     expect(JSON.stringify(r)).not.toContain(PAROLA)
   })
-  it('răspunsuri neașteptate → eroare, NU credit 0 (lipsă, negativ, text, uriaș, non-JSON, timeout)', async () => {
-    for (const j of [{}, { credit: -5 }, { credit: 'mult' }, { credit: 1e9 }, { credit: null }, { response_type: 'ERROR', response_id: 'x' }]) {
+  it('r2 (Jakarinos P2 / Copilot P2-03): HTTP non-2xx = eroare http_<status> chiar dacă JSON-ul are credit; response_type necunoscut = eroare', async () => {
+    expect(await citesteSold(envLink(), { fetch: fetchFals({ status: 503, json: { response_type: 'UNKNOWN', credit: 1000 } }) })).toEqual({ ok: false, eroare: 'http_503' })
+    expect(await citesteSold(envLink(), { fetch: fetchFals({ status: 502, json: { credit: 500 } }) })).toEqual({ ok: false, eroare: 'http_502' })
+    expect(await citesteSold(envLink(), { fetch: fetchFals({ status: 200, json: { response_type: 'UNKNOWN', credit: 1000 } }) })).toEqual({ ok: false, eroare: 'smslink_raspuns' })
+  })
+  it('r2 (P3-04): corp peste MAX_RASPUNS_SOLD → eroare, nu se parsează', async () => {
+    expect(MAX_RASPUNS_SOLD).toBe(4096)
+    const mare = JSON.stringify({ credit: 999, umplutura: 'x'.repeat(5000) })
+    expect(await citesteSold(envLink(), { fetch: fetchFals({ text: mare }) })).toEqual({ ok: false, eroare: 'smslink_raspuns' })
+  })
+  it('răspunsuri neașteptate → eroare, NU credit 0 (lipsă, negativ, text, uriaș, non-JSON, listă, timeout)', async () => {
+    for (const j of [{}, { credit: -5 }, { credit: 'mult' }, { credit: 1e9 }, { credit: null }, { response_type: 'ERROR', response_id: 'x' }, [1]]) {
       expect((await citesteSold(envLink(), { fetch: fetchFals({ json: j }) })).ok).toBe(false)
     }
+    expect(await citesteSold(envLink(), { fetch: fetchFals({ text: 'nu e json' }) })).toEqual({ ok: false, eroare: 'smslink_raspuns' })
     expect(await citesteSold(envLink(), { fetch: fetchFals({ status: 502 }) })).toEqual({ ok: false, eroare: 'http_502' })
     expect(await citesteSold(envLink(), { fetch: fetchFals(new Error('timeout')) })).toEqual({ ok: false, eroare: 'retea_timeout' })
   })
-  it('neconfigurat → eroare fără rețea; simulatorul nu iese în rețea', async () => {
+  it('neconfigurat → eroare fără rețea; simulatorul nu are sold (r2 P2-01) și nu iese în rețea', async () => {
     const f = fetchFals({ json: { credit: 1 } })
     expect(await citesteSold(envLink({ SMSLINK_PASSWORD: undefined }), { fetch: f })).toEqual({ ok: false, eroare: 'smslink_neconfigurat' })
     expect(await citesteSold(k => (k === 'SMS_FURNIZOR' ? 'twilio' : undefined), { fetch: f })).toEqual({ ok: false, eroare: 'furnizor_neconfigurat' })
-    expect((await citesteSold(k => (k === 'SMS_FURNIZOR' ? 'simulator' : undefined), { fetch: f })).ok).toBe(true)
+    expect(await citesteSold(k => (k === 'SMS_FURNIZOR' ? 'simulator' : undefined), { fetch: f })).toEqual({ ok: false, simulator: true })
     expect(f.cereri).toHaveLength(0)
   })
 })
@@ -159,13 +182,14 @@ function sbSold({ user = null, nivel = null, eroareRpc = false } = {}) {
       apeluri.push([fn, args])
       if (fn === 'fn_verifica_secret') return { data: args.p_secret === SECRET_INTERN, error: null }
       if (fn === 'fn_sold_sms_inregistreaza') return eroareRpc ? { data: null, error: { code: 'XX000' } }
-        : { data: { credit: args.p_credit, prag: 150, sub_prag: args.p_credit != null && args.p_credit < 150 }, error: null }
+        : { data: { credit: args.p_credit, prag: 150, sub_prag: args.p_credit != null && args.p_credit < 150, scris: true }, error: null }
       return { data: null, error: { code: '42883' } }
     },
     caUtilizator: jwt => ({ rpc: async fn => { apeluri.push(['utilizator:' + fn, jwt]); return fn === 'fn_sms_nivel' ? { data: nivel, error: null } : { data: null, error: { code: '42501' } } } }),
   }
 }
-const depsSold = (sb, o = {}) => ({ sb, sbUtilizator: sb.caUtilizator, env: envLink(o.env), fetch: o.fetch ?? fetchFals({ json: { credit: 120 } }) })
+const ACUM = Date.parse('2026-11-04T05:10:00Z')
+const depsSold = (sb, o = {}) => ({ sb, sbUtilizator: sb.caUtilizator, env: envLink(o.env), fetch: o.fetch ?? fetchFals({ json: { credit: 120 } }), acum: () => ACUM })
 const postSold = (h = {}) => new Request('https://x.invalid/functions/v1/sms-sold', { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: '{}' })
 const nuAScris = sb => !sb.apeluri.some(([fn]) => fn === 'fn_sold_sms_inregistreaza')
 
@@ -185,12 +209,21 @@ describe('sms-sold — poarta (cron intern sau owner) și scrierea', () => {
     expect((await sold(new Request('https://x.invalid/', { method: 'GET' }), depsSold(sb))).status).toBe(405)
     expect((await sold(new Request('https://x.invalid/', { method: 'OPTIONS' }), depsSold(sb))).status).toBe(200)
   })
-  it('cronul (x-intern-secret) → citește creditul și îl scrie prin fn_sold_sms_inregistreaza; sub prag raportat din BD', async () => {
+  it('cronul → citește creditul și îl scrie cu momentul de START al citirii (CAS în BD, r2 P2-04)', async () => {
     const sb = sbSold()
     const r = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sb))
     expect(r.status).toBe(200)
-    expect(await r.json()).toEqual({ ok: true, apelant: 'cron', credit: 120, prag: 150, sub_prag: true })
-    expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza')).toEqual([['fn_sold_sms_inregistreaza', { p_credit: 120, p_eroare: null }]])
+    expect(await r.json()).toEqual({ ok: true, apelant: 'cron', furnizor: 'smslink', credit: 120, scris: true, prag: 150, sub_prag: true })
+    expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza'))
+      .toEqual([['fn_sold_sms_inregistreaza', { p_credit: 120, p_eroare: null, p_inceput: '2026-11-04T05:10:00.000Z' }]])
+  })
+  it('r2 P2-01 (implicit): simulatorul → nimic scris, { furnizor: simulator, sold: null }', async () => {
+    const sb = sbSold(), f = fetchFals({ json: { credit: 1 } })
+    const r = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sb, { env: { SMS_FURNIZOR: 'simulator' }, fetch: f }))
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ ok: true, apelant: 'cron', furnizor: 'simulator', sold: null })
+    expect(nuAScris(sb)).toBe(true)
+    expect(f.cereri).toHaveLength(0)
   })
   it('owner-ul (nivelul cerut cu JWT-ul lui) → poate citi acum; nivelul nu se cere cu service_role', async () => {
     const sb = sbSold({ user: UID_O, nivel: 'owner' })
@@ -206,7 +239,8 @@ describe('sms-sold — poarta (cron intern sau owner) și scrierea', () => {
     expect(r.status).toBe(200)
     expect(JSON.parse(corp)).toMatchObject({ ok: false, eroare: 'smslink_7' })
     expect(corp).not.toContain(PAROLA)
-    expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza')).toEqual([['fn_sold_sms_inregistreaza', { p_credit: null, p_eroare: 'smslink_7' }]])
+    expect(sb.apeluri.filter(([fn]) => fn === 'fn_sold_sms_inregistreaza'))
+      .toEqual([['fn_sold_sms_inregistreaza', { p_credit: null, p_eroare: 'smslink_7', p_inceput: '2026-11-04T05:10:00.000Z' }]])
   })
   it('RPC-ul de scriere eșuează → 500 (nu „ok”)', async () => {
     const r = await sold(postSold({ 'x-intern-secret': SECRET_INTERN }), depsSold(sbSold({ eroareRpc: true })))
@@ -216,10 +250,12 @@ describe('sms-sold — poarta (cron intern sau owner) și scrierea', () => {
 
 // ── UI: textul din panou și alerta din Administrator ──────────────────────────────────────────────────────────────────────
 describe('soldul în UI', () => {
-  it('panoul owner-ului: „Sold SMSLink: N (la ZZ.LL HH:MM)” în ora României', () => {
+  it('panoul owner-ului: „Sold SMSLink: N (la ZZ.LL HH:MM)” în ora României; vechi = „neactualizat”; simulator explicit', () => {
     expect(textSold({ credit: 842, citit_la: '2026-11-04T05:10:30Z' })).toBe('Sold SMSLink: 842 (la 04.11 07:10)')
+    expect(textSold({ credit: 842, citit_la: '2026-11-04T05:10:30Z', citire_veche: true })).toBe('Sold SMSLink: 842 (la 04.11 07:10) · neactualizat')
     expect(textSold({ credit: null, citit_la: null })).toBe('Sold SMSLink: încă necitit')
     expect(textSold(null)).toBe('Sold SMSLink: —')
+    expect(textSold(null, { simulator: true })).toBe('Sold SMSLink: simulator, fără sold')
   })
   it('Administrator → Alerte: sursa e doar a owner-ului; alerta apare doar când BD-ul spune alerta', () => {
     const s = SURSE_ADMIN.find(x => x.id === 'sms_sold')
@@ -229,10 +265,21 @@ describe('soldul în UI', () => {
     expect(alerteSmsSold({ credit: 900, alerta: false, prag: 150 })).toEqual([])
     expect(alerteSmsSold(null)).toEqual([])
     const [sub] = alerteSmsSold({ credit: 120, prag: 150, sub_prag: true, alerta: true, citit_la: '2026-11-04T05:10:00Z' })
-    expect(sub).toMatchObject({ id: 'sms_sold:sub_prag', priority: 'week', title: 'Sold SMSLink sub prag: 120 SMS (prag 150)' })
+    expect(sub).toMatchObject({ id: 'sms_sold:sold', priority: 'week' })
+    expect(sub.title).toBe('Sold SMSLink sub prag (150): sold 120 SMS (la 04.11.2026, 07:10)')
     expect(alerteSmsSold({ credit: 0, prag: 150, sub_prag: true, alerta: true })[0].priority).toBe('critical')
-    expect(alerteSmsSold({ credit: 500, prag: 150, eroare_dupa_citire: true, eroare: 'smslink_7', alerta: true })[0]).toMatchObject({ id: 'sms_sold:eroare', priority: 'missing' })
-    expect(alerteSmsSold({ credit: null, prag: 150, citire_veche: true, alerta: true })[0]).toMatchObject({ id: 'sms_sold:veche', reference: 'Nicio citire reușită încă' })
+    expect(alerteSmsSold({ credit: 500, prag: 150, eroare_dupa_citire: true, eroare: 'smslink_7', alerta: true })[0]).toMatchObject({ priority: 'missing', title: 'Soldul SMSLink nu s-a putut citi (smslink_7)' })
+    expect(alerteSmsSold({ credit: null, prag: 150, citire_veche: true, alerta: true })[0]).toMatchObject({ reference: 'Nicio citire reușită încă', title: 'Soldul SMSLink nu a fost citit încă' })
+  })
+  it('r2 P2-07: sub prag + vechi + eroare → O alertă cu TOATE motivele, „ultimul sold cunoscut”, ora = eroarea (mai nouă)', () => {
+    const [a] = alerteSmsSold({ credit: 120, prag: 150, sub_prag: true, citire_veche: true, eroare_dupa_citire: true, eroare: 'http_502',
+      alerta: true, citit_la: '2026-10-30T05:10:00Z', eroare_la: '2026-11-04T05:10:00Z' })
+    expect(a.title).toBe('Sold SMSLink sub prag (150): ultimul sold cunoscut 120 SMS (la 30.10.2026, 07:10) — neactualizat')
+    expect(a.impact).toContain('Reîncarcă creditul')
+    expect(a.impact).toContain('Ultima încercare a eșuat (http_502')
+    expect(a.impact).toContain('05:10 UTC = 07:10 iarna / 08:10 vara')
+    expect(a.timestamp).toBe('2026-11-04T05:10:00Z')
+    expect(a.reference).toBe('Ultimul sold cunoscut 120 SMS (la 30.10.2026, 07:10)')
   })
   it('sursa citește vederea v_sms_sold (fără rpc), cu proiecția explicită; 42501 din BD → „Acces insuficient”', async () => {
     const cereri = []
@@ -242,7 +289,7 @@ describe('soldul în UI', () => {
     const s = SURSE_ADMIN.find(x => x.id === 'sms_sold')
     const r = await incarcaSursaAdmin(client({ id: true, credit: 80, prag: 150, sub_prag: true, alerta: true, citit_la: '2026-11-04T05:10:00Z' }), s, owner)
     expect(r.state).toBe('ok')
-    expect(r.rows.map(x => x.id)).toEqual(['sms_sold:sub_prag'])
+    expect(r.rows.map(x => x.id)).toEqual(['sms_sold:sold'])
     expect(cereri[0]).toEqual(['v_sms_sold', 'id,credit,citit_la,eroare,eroare_la,prag,sub_prag,citire_veche,eroare_dupa_citire,alerta', { count: 'exact' }])
     const e = Object.assign(new Error('doar owner'), { code: '42501' })
     expect((await incarcaSursaAdmin(client(e), s, owner)).state).toBe('denied')

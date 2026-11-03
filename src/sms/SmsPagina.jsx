@@ -36,10 +36,11 @@ function Mesaj({ m }) {
 }
 
 // ── Soldul SMSLink (20261130d): doar owner-ul (fn_sold_sms_citeste refuză în BD pe oricine altcineva) ──────────────────────────
-export function SoldSmslink({ soldInitial = null }) {
+export function SoldSmslink({ soldInitial = null, simulatorInitial = false }) {
   const [sold, setSold] = useState(soldInitial)
   const [eroare, setEroare] = useState('')
   const [lucru, setLucru] = useState(false)
+  const [simulator, setSimulator] = useState(simulatorInitial)
   useEffect(() => {
     if (soldInitial) return
     let activ = true
@@ -48,12 +49,17 @@ export function SoldSmslink({ soldInitial = null }) {
   }, [soldInitial])
   const citesteAcum = async () => {
     setLucru(true); setEroare('')
-    try { await smsApi.citesteSold(); setSold(await smsApi.sold()) } catch (e) { setEroare(mesajEroare(e)) } finally { setLucru(false) }
+    try {
+      const r = await smsApi.citesteSold()
+      // simulatorul nu are sold (nu se scrie nimic în BD): se spune explicit, nu „încă necitit”
+      setSimulator(r?.furnizor === 'simulator')
+      setSold(await smsApi.sold())
+    } catch (e) { setEroare(mesajEroare(e)) } finally { setLucru(false) }
   }
-  const culoare = sold?.sub_prag ? G.red : sold?.alerta ? G.yellow : G.muted
+  const culoare = simulator ? G.muted : sold?.sub_prag ? G.red : sold?.alerta ? G.yellow : G.muted
   return <span style={{ ...S.row, gap: 6 }}>
     <span style={{ ...S.small, color: culoare }} title={sold?.sub_prag ? `Sub pragul de ${sold.prag} SMS: reîncarcă creditul` : sold?.eroare_dupa_citire ? `Ultima citire a eșuat (${sold.eroare})` : ''}>
-      {eroare ? `Sold SMSLink: eroare (${eroare})` : textSold(sold)}{sold?.sub_prag ? ' ⚠' : ''}
+      {eroare ? `Sold SMSLink: eroare (${eroare})` : textSold(sold, { simulator })}{!simulator && sold?.sub_prag ? ' ⚠' : ''}
     </span>
     <button type="button" style={{ ...S.button, minHeight: 28, padding: '3px 8px', fontSize: 12 }} aria-label="Citește soldul SMSLink acum" title="Citește soldul acum" disabled={lucru} onClick={citesteAcum}>{lucru ? '…' : '↻'}</button>
   </span>

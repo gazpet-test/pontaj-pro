@@ -324,21 +324,30 @@ export function alerteGmail(proiecte) {
 }
 
 // Soldul SMSLink: alerta o decide BD-ul (fn_sold_sms_stare: sub_prag / citire_veche / eroare_dupa_citire); aici doar textul.
+// r2 (#971, Copilot P2-07): O alertă combinată, cu TOATE motivele active; un sold vechi e „ultimul sold cunoscut”, nu sold curent;
+// ora de sortare = evenimentul relevant (eroarea, dacă e mai nouă decât citirea). P3-02: ora cronului 05:10 UTC (07:10 / 08:10 RO).
 export function alerteSmsSold(st) {
   if (!st || st.alerta !== true) return []
   const credit = Number.isInteger(st.credit) ? st.credit : null
-  const la = st.citit_la ? new Date(st.citit_la).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' }) : null
-  const motiv = st.sub_prag === true ? 'sub_prag' : st.eroare_dupa_citire === true ? 'eroare' : 'veche'
-  return [alerta('sms_sold', motiv, {
-    title: motiv === 'sub_prag' ? `Sold SMSLink sub prag: ${credit} SMS (prag ${st.prag})`
-      : motiv === 'eroare' ? `Soldul SMSLink nu s-a putut citi (${st.eroare || 'eroare'})` : 'Soldul SMSLink nu a mai fost citit de peste 36 de ore',
-    reference: credit != null ? `Ultima citire: ${credit} SMS${la ? ` · ${la}` : ''}` : 'Nicio citire reușită încă',
-    priority: motiv === 'sub_prag' ? (credit === 0 ? 'critical' : 'week') : 'missing',
-    timestamp: st.citit_la || st.eroare_la || null,
+  const fmt = v => new Date(v).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' })
+  const sub = st.sub_prag === true, veche = st.citire_veche === true, err = st.eroare_dupa_citire === true
+  const sold = credit == null ? null : `${veche || err ? 'ultimul sold cunoscut' : 'sold'} ${credit} SMS${st.citit_la ? ` (la ${fmt(st.citit_la)})` : ''}`
+  const titlu = sub
+    ? `Sold SMSLink sub prag (${st.prag}): ${sold}${veche || err ? ' — neactualizat' : ''}`
+    : err ? `Soldul SMSLink nu s-a putut citi (${st.eroare || 'eroare'})`
+      : credit == null ? 'Soldul SMSLink nu a fost citit încă' : 'Soldul SMSLink nu a mai fost citit de peste 36 de ore'
+  const impact = [
+    sub && 'Reîncarcă creditul în contul SMSLink. La credit 0 trimiterea se oprește automat (eroarea 8).',
+    err && `Ultima încercare a eșuat (${st.eroare || 'eroare'}${st.eroare_la ? `, ${fmt(st.eroare_la)}` : ''}): verifică conexiunea ERP-PROD (connection_id / parolă / IP) și secretele SMSLINK_* din Edge Secrets.`,
+    veche && 'Nicio citire reușită în ultimele 36 de ore: verifică jobul sms_sold_zilnic (05:10 UTC = 07:10 iarna / 08:10 vara, ora României) și funcția edge sms-sold.',
+  ].filter(Boolean).join(' ')
+  return [alerta('sms_sold', 'sold', {
+    title: titlu,
+    reference: sold ? sold[0].toUpperCase() + sold.slice(1) : 'Nicio citire reușită încă',
+    priority: sub ? (credit === 0 ? 'critical' : 'week') : 'missing',
+    timestamp: (err ? st.eroare_la : st.citit_la) || st.eroare_la || st.citit_la || null,
     owner: 'Owner · cont SMSLink',
-    impact: motiv === 'sub_prag' ? 'Reîncarcă creditul în contul SMSLink. La credit 0 trimiterea se oprește automat (eroarea 8).'
-      : motiv === 'eroare' ? 'Verifică conexiunea ERP-PROD (connection_id / parolă / IP) și secretele SMSLINK_* din Edge Secrets.'
-        : 'Verifică jobul sms_sold_zilnic (07:10) și funcția edge sms-sold.',
+    impact,
     reason: 'Calculat în BD (fn_sold_sms_stare) din ultima citire mode=Credit a cronului zilnic. Nu se trimite nimic automat.',
     locator: 'sms_sold · fn_sold_sms_citeste',
   })]

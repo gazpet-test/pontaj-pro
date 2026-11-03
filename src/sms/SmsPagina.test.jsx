@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../lib/supabase.js', () => ({ supabase: {} }))
-import SmsPagina, { RevizieLot } from './SmsPagina.jsx'
+import SmsPagina, { RevizieLot, SoldSmslink } from './SmsPagina.jsx'
 import RedariSmsButon from './RedariSmsButon.jsx'
 
 describe('Revizia înainte de aprobare (Jakarinos r1 P1)', () => {
@@ -57,6 +57,11 @@ describe('📱 SMS — acces pe nivel (ruta /sms și Administrator)', () => {
     expect(html).toContain('Sub pragul de 150 SMS')
     const u = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} soldInitial={sold} />)
     expect(u).not.toContain('Sold SMSLink')
+  })
+  it('r2 P2-01: cu simulatorul, banda spune „simulator, fără sold” (nu un sold, nu ⚠)', () => {
+    const html = renderToStaticMarkup(<SoldSmslink soldInitial={{ credit: 120, citit_la: '2026-11-04T05:10:00Z', sub_prag: true, prag: 150 }} simulatorInitial />)
+    expect(html).toContain('Sold SMSLink: simulator, fără sold')
+    expect(html).not.toContain('⚠')
   })
   it('utilizator: compune / istoric, fără Setări și Opt-out, fără plafoane', () => {
     const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} />)
