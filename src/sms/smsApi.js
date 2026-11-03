@@ -1,4 +1,4 @@
-// Apelurile ecranului 📱 SMS: doar RPC-urile owner-only din migrarea 20261130a_sms_mvp + edge-ul sms-trimite.
+// Apelurile ecranului 📱 SMS: RPC-urile din 20261130a_sms_mvp + 20261130b_sms_acces_modul (nivelul owner / utilizator / test îl verifică BD-ul) + edge-ul sms-trimite.
 // UI-ul nu vorbește niciodată cu furnizorul și nu scrie direct în tabele (n-are drept): schimbarea furnizorului nu atinge ecranele.
 import { supabase } from '../lib/supabase.js'
 
@@ -24,7 +24,7 @@ export const smsApi = {
   autorizareRedari: async ({ autorizat, nr, data, versiune }) =>
     date(await supabase.rpc('fn_sms_redari_autorizare_seteaza', { p_autorizat: autorizat, p_nr: nr || null, p_data: data || null, p_versiune: versiune })),
   seteazaOptout: async (telefon, activ, motiv) => date(await supabase.rpc('fn_sms_optout_seteaza', { p_telefon: telefon, p_activ: activ, p_motiv: motiv || null })),
-  // edge-ul verifică din nou că apelantul e owner (JWT + profiles.is_owner); plafonul / kill-switch-ul / aprobarea le verifică BD-ul
+  // edge-ul verifică din nou nivelul (JWT + fn_sms_nivel cu JWT-ul contului); plafonul / kill-switch-ul / aprobarea / limita contului de test le verifică BD-ul
   trimite: async lotId => {
     const { data, error } = await supabase.functions.invoke('sms-trimite', { body: { lot_id: lotId } })
     if (error) throw error

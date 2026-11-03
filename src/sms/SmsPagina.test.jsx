@@ -24,29 +24,64 @@ describe('Revizia înainte de aprobare (Jakarinos r1 P1)', () => {
   })
 })
 
-describe('Administrator › 📱 SMS', () => {
-  it('non-owner: nu randează nimic din modul', () => {
-    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: false }} />)
-    expect(html).toContain('vizibil doar owner-ului')
+describe('Revizia — nivelul contului (20261130b)', () => {
+  const det = { lot_id: 'l6', categorie: 'intern', stare: 'draft', versiune: 1, text: 'Test', lungime: 4, segmente: 1, nr_destinatari: 6, cost_estimat_eur: 0.294,
+    nivel: 'test', actiune_permisa: false, destinatari: [] }
+  it('contul de test pe un lot de 6: mesaj clar, aprobarea blocată', () => {
+    const html = renderToStaticMarkup(<RevizieLot lotId="l6" detaliiInitiale={det} />)
+    expect(html).toContain('Nivelul tău nu poate aproba acest lot')
+    expect(html).toContain('maximum 5 destinatari')
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>✔ Aprob acest lot/)
+  })
+})
+
+const panouOwner = { nivel: 'owner', kill_switch: true, plafon_zi: 200, plafon_luna: 1500, consum_zi: 0, consum_luna: 0, ramas_zi: 200, redari_autorizat: false, redari_modul: true, versiune: 1, max_destinatari: 5000 }
+const panouUtilizator = { nivel: 'utilizator', kill_switch: false, ramas_zi: 150, redari_autorizat: false, redari_modul: false, max_destinatari: 5000 }
+const panouTest = { nivel: 'test', kill_switch: false, ramas_zi: 150, redari_autorizat: true, redari_modul: false, max_destinatari: 5 }
+
+describe('📱 SMS — acces pe nivel (ruta /sms și Administrator)', () => {
+  it('fără modulul sms și fără owner: nu randează nimic din modul', () => {
+    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: false, module_access: ['redari'] }} />)
+    expect(html).toContain('nu ai acces la modul')
     expect(html).not.toContain('Compune')
   })
-  it('owner: secțiunile și nota despre convocarea scrisă', () => {
-    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: true }} />)
-    for (const t of ['Compune', 'Istoric loturi', 'Setări', 'Opt-out', 'Previzualizează', 'Creează lot (draft)']) expect(html).toContain(t)
+  it('owner: toate secțiunile (inclusiv Setări, Opt-out) și nota despre convocarea scrisă', () => {
+    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'x', is_owner: true }} panouInitial={panouOwner} />)
+    for (const t of ['Compune', 'Istoric loturi', '>⚙ Setări<', '>🚫 Opt-out<', 'Previzualizează', 'Creează lot (draft)', 'Azi: <b>0</b> / 200']) expect(html).toContain(t)
     expect(html).toContain('nu înlocuiește convocarea scrisă')
+  })
+  it('utilizator: compune / istoric, fără Setări și Opt-out, fără plafoane', () => {
+    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 'u', is_owner: false, module_access: ['sms'] }} panouInitial={panouUtilizator} />)
+    for (const t of ['Compune', 'Istoric loturi', 'Previzualizează', 'Utilizator SMS', 'le gestionează owner-ul', 'Mai pot pleca azi']) expect(html).toContain(t)
+    for (const t of ['>⚙ Setări<', '>🚫 Opt-out<', 'Plafon / zi', '/ 200']) expect(html).not.toContain(t)
+  })
+  it('test: mesajul „maximum 5 destinatari, fără Redări”, fără Setări / Opt-out, selecție manuală implicită', () => {
+    const html = renderToStaticMarkup(<SmsPagina profile={{ id: 't', is_owner: false, module_access: ['sms'] }} panouInitial={panouTest} />)
+    expect(html).toContain('Cont de test: maximum 5 destinatari într-un lot, doar intern (fără Redări)')
+    expect(html).toContain('Cont de test SMS')
+    for (const t of ['>⚙ Setări<', '>🚫 Opt-out<']) expect(html).not.toContain(t)
+    expect(html).toMatch(/<input type="radio" name="sms-mod" checked=""\/>Selecție manuală/)
   })
 })
 
 describe('Redări › 📱 SMS proprietari', () => {
   const proiect = { id: 'p1', cod: 'TEST-PROIECT' }
-  it('blocat cu mesajul „Așteaptă autorizarea scrisă Transgaz” cât comutatorul e oprit', () => {
-    const html = renderToStaticMarkup(<RedariSmsButon proiect={proiect} uats={[]} panouInitial={{ redari_autorizat: false }} />)
+  it('owner: blocat cu mesajul „Așteaptă autorizarea scrisă Transgaz” cât comutatorul e oprit', () => {
+    const html = renderToStaticMarkup(<RedariSmsButon proiect={proiect} uats={[]} panouInitial={{ nivel: 'owner', redari_autorizat: false }} />)
     expect(html).toContain('Așteaptă autorizarea scrisă Transgaz')
     expect(html).toContain('disabled')
   })
-  it('activ după autorizare', () => {
-    const html = renderToStaticMarkup(<RedariSmsButon proiect={proiect} uats={[]} panouInitial={{ redari_autorizat: true }} />)
-    expect(html).not.toContain('Așteaptă autorizarea')
-    expect(html).not.toContain('disabled')
+  it('owner / utilizator cu Redări: activ după autorizare', () => {
+    for (const p of [{ nivel: 'owner', redari_autorizat: true }, { nivel: 'utilizator', redari_modul: true, redari_autorizat: true }]) {
+      const html = renderToStaticMarkup(<RedariSmsButon proiect={proiect} uats={[]} panouInitial={p} />)
+      expect(html).toContain('SMS proprietari')
+      expect(html).not.toContain('Așteaptă autorizarea')
+      expect(html).not.toContain('disabled')
+    }
+  })
+  it('contul de test, utilizatorul fără Redări și contul fără nivel SMS nu văd butonul', () => {
+    for (const p of [{ nivel: 'test', redari_autorizat: true }, { nivel: 'utilizator', redari_modul: false, redari_autorizat: true }, { fara_acces: true }]) {
+      expect(renderToStaticMarkup(<RedariSmsButon proiect={proiect} uats={[]} panouInitial={p} />)).toBe('')
+    }
   })
 })
