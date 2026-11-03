@@ -22,6 +22,7 @@
 import JSZip from 'jszip'
 import QRCode from 'qrcode'
 import { COL_UAT, termenAfisare, mesajTermenAfisare } from './setari.js'
+import { ORIGINE_PUBLICA_REDARI } from './domeniuPublic.js'
 
 // Denumirea Antreprenorului/liderului; se modifica in cod daca Asocierea este alta.
 export const ANTREPRENOR = 'GAZPET INSTAL S.R.L.'
@@ -306,8 +307,8 @@ export const formatNumarRo = (n) => {
   return isNaN(x) ? String(n) : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 2 }).format(x)
 }
 
-/** Linkul public de răspuns (contract §8). */
-export const linkRaspuns = (origin, token) => `${String(origin || '').replace(/\/+$/, '')}/redari/raspuns/${token}`
+/** Linkul public de răspuns (contract §8). Implicit pe redari.gazpet.ro; `origin` se dă doar în teste. */
+export const linkRaspuns = (origin, token) => `${String(origin ?? ORIGINE_PUBLICA_REDARI).replace(/\/+$/, '')}/redari/raspuns/${token}`
 
 const plin = (v) => v !== null && v !== undefined && String(v).trim() !== ''
 
@@ -382,7 +383,8 @@ export async function genereazaConvocator({ detinator, contactDetinator, contact
   if (lipsuri.length && !permiteIncomplet) throw new Error(`Convocatorul nu poate fi generat — lipsesc: ${lipsuri.join('; ')}`)
   if (!plin(token) && permiteIncomplet) throw new Error('Deținătorul nu are token de răspuns — nici previzualizarea nu are link/QR')
   const p = parcela || {}, u = uat || {}, pr = proiect || {}, c = contact || {}, d = detinator || {}
-  const link = linkRaspuns(origin ?? (typeof window !== 'undefined' ? window.location.origin : ''), token)
+  // Linkul și QR-ul merg mereu pe domeniul public, nu pe window.location.origin (operatorul poate lucra de pe alt domeniu)
+  const link = linkRaspuns(origin, token)
   const semnatarTgz = [pr.reprezentant_tgz_nume, pr.reprezentant_tgz_functie].filter(plin).join(', ')
   const semnatarGazpet = [pr.reprezentant_gazpet_nume, pr.reprezentant_gazpet_functie].filter(plin).join(', ')
   const campuri = {

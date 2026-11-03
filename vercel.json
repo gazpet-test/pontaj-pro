@@ -45,6 +45,19 @@
       ]
     }
   ],
+  "redirects": [
+    {
+      "source": "/:path((?!redari/raspuns/[^/]+/?$|redari/informare/?$|assets/|icon-192\\.png$|icon-512\\.png$|icon-maskable-512\\.png$|apple-touch-icon\\.png$|manifest\\.webmanifest$|favicon\\.ico$).*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "redari.gazpet.ro"
+        }
+      ],
+      "destination": "https://pontaj-pro-sooty.vercel.app/:path*",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/((?!api/).*)",

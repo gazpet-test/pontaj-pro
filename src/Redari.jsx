@@ -411,7 +411,7 @@ function ModalConvocator({ rand, proiect, uats, show, onClose, onGata }) {
       const rs = await fetch(SABLON_CONVOCATOR)
       if (!rs.ok) throw new Error(`Șablonul convocatorului lipsește (${rs.status}).`)
       const templateArrayBuffer = await rs.arrayBuffer()
-      const intrare = { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect, token, origin: window.location.origin, templateArrayBuffer }
+      const intrare = { detinator: det, contactDetinator: contactDetinator || null, contact: null, parcela, uat, proiect, token, templateArrayBuffer }
       setPas('Rezerv numărul de document…')
       const { data: nrDocument, error: eNr } = await supabase.rpc('fn_red_numar_document', { p_tip:'C', p_uat3: rand.uat3, p_tronson: rand.tronson ?? null })
       if (eNr) throw eNr

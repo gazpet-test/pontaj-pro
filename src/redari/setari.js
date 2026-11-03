@@ -2,6 +2,8 @@
    20261126a / 20261127a). Fără React, fără Supabase — testabil cu vitest. Deciziile Răzvan 02.11.2026: link_afisare scos din adresa UAT,
    adresele UAT pe seria AU-0001, refuzul la PV B = motiv pe PV (felia PV). */
 
+import { LINK_INFORMARE_REDARI } from './domeniuPublic.js'
+
 export const MAX_TEXT_SCURT = 200
 export const MAX_TELEFON = 40
 export const MAX_TEXT_LUNG = 4000
@@ -9,7 +11,7 @@ export const MAX_TEXT_LUNG = 4000
 // tip: 'text' | 'date' | 'ora' | 'tel' | 'email' | 'textarea'; span = coloane în grila de 2
 export const CAMPURI_PROIECT = [
   { grup: 'Proiect de montaj (Execuție)', cheie: 'executie_proiect_id', eticheta: 'Proiect de montaj', tip: 'executie' },
-  { grup: 'Texte (confirmate de Juridic)', cheie: 'link_informare_gdpr', eticheta: 'Informarea GDPR completă (HTTPS, opțional)', tip: 'url', span: 2 },
+  { grup: 'Texte (confirmate de Juridic)', cheie: 'link_informare_gdpr', eticheta: 'Informarea GDPR completă (HTTPS, opțional)', tip: 'url', span: 2, exemplu: LINK_INFORMARE_REDARI },
   { grup: 'Proiect', cheie: 'denumire', eticheta: 'Denumire', tip: 'text', span: 2 },
   { grup: 'Proiect', cheie: 'beneficiar', eticheta: 'Beneficiar', tip: 'text', span: 2 },
   { grup: 'Contract', cheie: 'contract_nr', eticheta: 'Nr. contract', tip: 'text' },

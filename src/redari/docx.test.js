@@ -210,6 +210,10 @@ describe('formatări + link', () => {
   it('linkRaspuns taie slash-ul final', () => {
     expect(linkRaspuns('https://pontaj-pro-sooty.vercel.app/', 'tok')).toBe('https://pontaj-pro-sooty.vercel.app/redari/raspuns/tok')
   })
+  it('linkRaspuns fără origin → domeniul public redari.gazpet.ro', () => {
+    expect(linkRaspuns(undefined, 'tok')).toBe('https://redari.gazpet.ro/redari/raspuns/tok')
+    expect(linkRaspuns(null, 'tok')).toBe('https://redari.gazpet.ro/redari/raspuns/tok')
+  })
 })
 
 describe('genereazaConvocator', () => {
@@ -227,6 +231,26 @@ describe('genereazaConvocator', () => {
     },
     nrDocument: 'C-0001', token: 'tokenfictiv1234567890abcdefghijk', origin: 'https://exemplu.test', dataDocument: '2026-11-02',
   })
+
+  it('fără origin: linkul și QR-ul sunt pe https://redari.gazpet.ro, chiar dacă window.location.origin e alt domeniu', async () => {
+    const vechi = globalThis.window
+    globalThis.window = { location: { origin: 'https://pontaj-pro-sooty.vercel.app', hostname: 'pontaj-pro-sooty.vercel.app' } }
+    try {
+      const { origin, ...faraOrigin } = complet()
+      const r = await genereazaConvocator({ ...faraOrigin, templateArrayBuffer: citesteSablon() })
+      const asteptat = 'https://redari.gazpet.ro/redari/raspuns/tokenfictiv1234567890abcdefghijk'
+      expect(r.link).toBe(asteptat)
+      expect(r.campuri.link).toBe(asteptat)
+      // QR-ul din document = QR-ul generat independent pentru linkul așteptat (nu pentru window.location.origin)
+      const { zip } = await xmlDin(r.blob, 'word/document.xml')
+      const pngDoc = await zip.file('word/media/qr.png').async('base64')
+      expect(pngDoc).toBe((await genereazaQr(asteptat)).split(',')[1])
+      expect(pngDoc).not.toBe((await genereazaQr('https://pontaj-pro-sooty.vercel.app/redari/raspuns/tokenfictiv1234567890abcdefghijk')).split(',')[1])
+    } finally {
+      if (vechi === undefined) delete globalThis.window
+      else globalThis.window = vechi
+    }
+  }, 10000)
 
   it('construiește toate cele 36 de chei (SABLOANE.md §2.1), link + QR, hash; șablonul real completat strict, 0 placeholder-e rămase', async () => {
     const r = await genereazaConvocator({ ...complet(), templateArrayBuffer: citesteSablon() })
